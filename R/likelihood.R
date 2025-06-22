@@ -38,6 +38,229 @@ log_likelihood_race <- function(pars,dadm,model,min_ll=log(1e-10))
 }
 
 
+log_likelihood_race_cens_trunc <- function(pars, dadm, model, min_ll = log(1e-10)) {
+  # Hardcoded censoring and truncation values for now
+  LT <- 0.1 # Lower Truncation
+  LC <- 0.2 # Lower Censoring Cutoff
+  UC <- 2.5 # Upper Censoring Cutoff
+  UT <- 3.0 # Upper Truncation
+
+  if (any(names(dadm) == "RACE")) {
+    pars[as.numeric(dadm$lR) > as.numeric(as.character(dadm$RACE)), ] <- NA
+  }
+
+  ok_params <- if (!is.null(attr(pars, "ok"))) attr(pars, "ok") else rep(TRUE, dim(pars)[1])
+
+  n_unique_trials <- dim(dadm)[1]
+
+  # Determine n_acc (number of accumulators)
+  if (is.factor(dadm$R)) {
+    n_acc <- length(levels(dadm$R))
+  } else if (!is.null(dadm$lR) && is.factor(dadm$lR)) {
+    n_acc <- length(levels(dadm$lR))
+  } else if (nrow(pars) > 0 && n_unique_trials > 0 && nrow(pars) %% n_unique_trials == 0) {
+    n_acc <- nrow(pars) / n_unique_trials
+  } else {
+    stop("Cannot reliably determine n_acc from dadm or pars structure.")
+  }
+  if (n_acc <= 0) stop("n_acc must be positive.")
+
+  ll_unique <- numeric(n_unique_trials)
+
+  f_race_integrand <- function(t, p_trial_this_winner_first, model_funcs) {
+    p_winner <- p_trial_this_winner_first[1, , drop = FALSE]
+
+    pdf_winner <- model_funcs$dfun(rt = t, pars = p_winner)
+    pdf_winner[is.na(pdf_winner) | !is.finite(pdf_winner) | pdf_winner < 0] <- 0
+
+    if (nrow(p_trial_this_winner_first) > 1) {
+      survivor_losers <- 1
+      for (i in 2:nrow(p_trial_this_winner_first)) {
+        p_loser_i <- p_trial_this_winner_first[i, , drop = FALSE]
+        s_loser_i <- (1 - model_funcs$pfun(rt = t, pars = p_loser_i))
+        s_loser_i[is.na(s_loser_i) | !is.finite(s_loser_i) | s_loser_i < 0] <- 0
+        s_loser_i[s_loser_i > 1] <- 1
+        survivor_losers <- survivor_losers * s_loser_i
+      }
+      out_val <- pdf_winner * survivor_losers
+    } else {
+      out_val <- pdf_winner
+    }
+    out_val[is.na(out_val) | !is.finite(out_val) | out_val < 0] <- 0
+    return(out_val)
+  }
+
+  for (j in 1:n_unique_trials) {
+    current_trial_par_indices <- ((j - 1) * n_acc + 1):(j * n_acc)
+
+    if (!all(ok_params[current_trial_par_indices])) {
+      ll_unique[j] <- min_ll
+      next
+    }
+
+    pars_condition_j_all_acc <- pars[current_trial_par_indices, , drop = FALSE]
+
+    rt_j <- dadm$rt[j]
+    R_j_idx <- as.integer(dadm$R[j])
+
+    current_ll_j <- min_ll
+
+    order_pars_for_winner <- function(p_all_acc, k_idx) {
+      if (is.na(k_idx) || k_idx < 1 || k_idx > nrow(p_all_acc)) {
+        # This can happen if R_j_idx is NA (response unknown) and we are iterating for observed RT
+        # For observed RT, winner must be known.
+        stop(paste("Invalid k_idx in order_pars_for_winner: ", k_idx, " for unique trial ", j))
+      }
+      return(rbind(p_all_acc[k_idx, , drop=FALSE], p_all_acc[-k_idx, , drop=FALSE]))
+    }
+
+    integrate_for_kth_winner <- function(k_winner_idx, p_all_acc, low, upp, model_f) {
+      if (low >= upp) return(0)
+      if (is.na(k_winner_idx) || k_winner_idx < 1 || k_winner_idx > nrow(p_all_acc) ) return(0)
+
+      pars_ordered <- order_pars_for_winner(p_all_acc, k_winner_idx)
+
+      # Basic check on integrand before calling integrate
+      # Test point can be tricky if low/upp are Inf.
+      test_t <- if (is.finite(low) && is.finite(upp)) (low + upp) / 2 else if (is.finite(low)) low + 1 else if (is.finite(upp)) upp -1 else 1
+      if (test_t < 0 && low == 0) test_t <- 1e-6 # Avoid negative if low is 0
+      if (test_t < low && low >= 0) test_t <- low + 1e-6 # Ensure test_t is within bounds or sensible
+      if (test_t > upp && upp >= 0) test_t <- upp - 1e-6
+
+      integrand_val_at_test_t <- f_race_integrand(t = test_t, p_trial_this_winner_first = pars_ordered, model_funcs = model_f)
+      if (is.na(integrand_val_at_test_t) || !is.finite(integrand_val_at_test_t) || integrand_val_at_test_t < 0) {
+          # If integrand is already bad, no point integrating
+          # This might happen due to bad parameters leading to NA/Inf in dfun/pfun
+      }
+
+      res <- suppressWarnings(try(stats::integrate(f_race_integrand,
+                                                   lower = low, upper = upp,
+                                                   p_trial_this_winner_first = pars_ordered,
+                                                   model_funcs = model_f,
+                                                   rel.tol = .Machine$double.eps^0.4
+                                                   )$value, silent = TRUE))
+      if (inherits(res, "try-error") || is.na(res) || !is.finite(res) || res < 0) return(0)
+      return(res)
+    }
+
+    get_trunc_corr_factor_for_kth_winner <- function(k_winner_idx, p_all_acc, model_f) {
+        if (!(LT > 0 || UT < Inf)) return(1.0)
+        if (is.na(k_winner_idx)) return(NA_real_)
+
+        prob_untruncated <- integrate_for_kth_winner(k_winner_idx, p_all_acc, 0, Inf, model_f)
+        prob_truncated_interval <- integrate_for_kth_winner(k_winner_idx, p_all_acc, LT, UT, model_f)
+
+        if (prob_truncated_interval > 1e-12) {
+            if(is.na(prob_untruncated) || prob_untruncated < 0) return(NA_real_)
+            return(prob_untruncated / prob_truncated_interval)
+        } else {
+            if (prob_untruncated > 1e-12) return(NA_real_)
+            return(1.0)
+        }
+    }
+
+    prob_density_or_mass <- 0
+
+    if (!is.na(rt_j) && rt_j > 0 && rt_j != -Inf && rt_j != Inf) {
+      if (!is.na(R_j_idx)) {
+        if (rt_j < LT || rt_j > UT) {
+          prob_density_or_mass <- 0
+        } else {
+          pars_ordered_obs <- order_pars_for_winner(pars_condition_j_all_acc, R_j_idx)
+          prob_density_or_mass <- f_race_integrand(t = rt_j, p_trial_this_winner_first = pars_ordered_obs, model_funcs = model)
+        }
+        if (prob_density_or_mass > 0) {
+          trunc_cf <- get_trunc_corr_factor_for_kth_winner(R_j_idx, pars_condition_j_all_acc, model)
+          if (is.na(trunc_cf) || !is.finite(trunc_cf) || trunc_cf < 0) prob_density_or_mass <- 0
+          else prob_density_or_mass <- prob_density_or_mass * trunc_cf
+        }
+      } else { prob_density_or_mass <- 0 } # Observed RT but R_j_idx is NA: should not happen
+
+    } else if (!is.na(rt_j) && rt_j == -Inf) {
+      if (!is.na(R_j_idx)) {
+        prob_density_or_mass <- integrate_for_kth_winner(R_j_idx, pars_condition_j_all_acc, LT, LC, model)
+        if (prob_density_or_mass > 0) {
+            trunc_cf <- get_trunc_corr_factor_for_kth_winner(R_j_idx, pars_condition_j_all_acc, model)
+            if (is.na(trunc_cf) || !is.finite(trunc_cf) || trunc_cf < 0) prob_density_or_mass <- 0
+            else prob_density_or_mass <- prob_density_or_mass * trunc_cf
+        }
+      } else {
+        current_sum_prob <- 0
+        for (k_winner_loopvar in 1:n_acc) {
+          p_k <- integrate_for_kth_winner(k_winner_loopvar, pars_condition_j_all_acc, LT, LC, model)
+          if (p_k > 0) {
+            trunc_cf_k <- get_trunc_corr_factor_for_kth_winner(k_winner_loopvar, pars_condition_j_all_acc, model)
+            if (!is.na(trunc_cf_k) && is.finite(trunc_cf_k) && trunc_cf_k >=0) current_sum_prob <- current_sum_prob + (p_k * trunc_cf_k)
+          }
+        }
+        prob_density_or_mass <- current_sum_prob
+      }
+    } else if (!is.na(rt_j) && rt_j == Inf) {
+      if (!is.na(R_j_idx)) {
+        prob_density_or_mass <- integrate_for_kth_winner(R_j_idx, pars_condition_j_all_acc, UC, UT, model)
+         if (prob_density_or_mass > 0) {
+            trunc_cf <- get_trunc_corr_factor_for_kth_winner(R_j_idx, pars_condition_j_all_acc, model)
+            if (is.na(trunc_cf) || !is.finite(trunc_cf) || trunc_cf < 0) prob_density_or_mass <- 0
+            else prob_density_or_mass <- prob_density_or_mass * trunc_cf
+        }
+      } else {
+        current_sum_prob <- 0
+        for (k_winner_loopvar in 1:n_acc) {
+          p_k <- integrate_for_kth_winner(k_winner_loopvar, pars_condition_j_all_acc, UC, UT, model)
+          if (p_k > 0) {
+            trunc_cf_k <- get_trunc_corr_factor_for_kth_winner(k_winner_loopvar, pars_condition_j_all_acc, model)
+            if (!is.na(trunc_cf_k) && is.finite(trunc_cf_k) && trunc_cf_k >=0) current_sum_prob <- current_sum_prob + (p_k * trunc_cf_k)
+          }
+        }
+        prob_density_or_mass <- current_sum_prob
+      }
+    } else if (is.na(rt_j)) {
+      if (!is.na(R_j_idx)) {
+        prob_L <- integrate_for_kth_winner(R_j_idx, pars_condition_j_all_acc, LT, LC, model)
+        prob_U <- integrate_for_kth_winner(R_j_idx, pars_condition_j_all_acc, UC, UT, model)
+        prob_density_or_mass <- prob_L + prob_U
+        if (prob_density_or_mass > 0) {
+            trunc_cf <- get_trunc_corr_factor_for_kth_winner(R_j_idx, pars_condition_j_all_acc, model)
+            if (is.na(trunc_cf) || !is.finite(trunc_cf) || trunc_cf < 0) prob_density_or_mass <- 0
+            else prob_density_or_mass <- prob_density_or_mass * trunc_cf
+        }
+      } else {
+        current_sum_prob <- 0
+        for (k_winner_loopvar in 1:n_acc) {
+          prob_L_k <- integrate_for_kth_winner(k_winner_loopvar, pars_condition_j_all_acc, LT, LC, model)
+          prob_U_k <- integrate_for_kth_winner(k_winner_loopvar, pars_condition_j_all_acc, UC, UT, model)
+          p_k_sum <- prob_L_k + prob_U_k
+          if (p_k_sum > 0) {
+             trunc_cf_k <- get_trunc_corr_factor_for_kth_winner(k_winner_loopvar, pars_condition_j_all_acc, model)
+             if (!is.na(trunc_cf_k) && is.finite(trunc_cf_k) && trunc_cf_k >=0) current_sum_prob <- current_sum_prob + (p_k_sum * trunc_cf_k)
+          }
+        }
+        prob_density_or_mass <- current_sum_prob
+      }
+    }
+
+    prob_density_or_mass <- max(0, prob_density_or_mass)
+
+    if (prob_density_or_mass > .Machine$double.eps) {
+      current_ll_j <- log(prob_density_or_mass)
+    } else {
+      current_ll_j <- min_ll
+    }
+
+    ll_unique[j] <- max(min_ll, current_ll_j)
+  }
+
+  if (!is.null(dadm$N) && length(dadm$N) == n_unique_trials) {
+    total_ll <- sum(ll_unique * dadm$N)
+  } else if (!is.null(attr(dadm, "expand"))) {
+    total_ll <- sum(ll_unique[attr(dadm, "expand")])
+  } else {
+    total_ll <- sum(ll_unique)
+  }
+
+  return(total_ll)
+}
+
 
 log_likelihood_ddm <- function(pars,dadm,model,min_ll=log(1e-10))
   # DDM summed log likelihood, with protection against numerical issues
