@@ -5,8 +5,9 @@
 #include "utility_functions.h" // For any existing utilities we might use
 
 // Function pointer types for model's dfun and pfun
-typedef Rcpp::NumericVector (*RacePdfFun)(Rcpp::NumericVector rt, Rcpp::NumericMatrix pars, bool log_p);
-typedef Rcpp::NumericVector (*RaceCdfFun)(Rcpp::NumericVector rt, Rcpp::NumericMatrix pars, bool log_p);
+// Adding void* model_specific_context to pass through necessary arguments like min_lik_for_pdf
+typedef Rcpp::NumericVector (*RacePdfFun)(Rcpp::NumericVector rt, Rcpp::NumericMatrix pars, bool log_p, void* model_specific_context);
+typedef Rcpp::NumericVector (*RaceCdfFun)(Rcpp::NumericVector rt, Rcpp::NumericMatrix pars, bool log_p, void* model_specific_context);
 
 // Forward declaration for the main exported function
 // Returns a single double: the total log-likelihood for one particle.
@@ -18,7 +19,8 @@ double c_log_likelihood_race_cens_trunc(
     double min_ll,
     const Rcpp::LogicalVector& ok_params,   // Parameter validity for this particle's pars matrix
     int n_acc,                              // Number of accumulators in the race
-    const Rcpp::IntegerVector& expand_vec   // Vector for expanding unique LLs to full trial count
+    const Rcpp::IntegerVector& expand_vec,  // Vector for expanding unique LLs to full trial count
+    void* model_context_for_funcs           // Context for model_dfun/model_pfun
 );
 
 
@@ -47,7 +49,8 @@ double integrate_for_kth_winner_cpp(
     RacePdfFun model_dfun,
     RaceCdfFun model_pfun,
     int n_acc,
-    double epsilon // Added epsilon for integration tolerance
+    double epsilon, // Added epsilon for integration tolerance
+    void* model_specific_context // New: context for model_dfun/pfun
 );
 
 // Truncation correction factor helper
@@ -59,7 +62,8 @@ double get_trunc_corr_factor_for_kth_winner_cpp(
     RaceCdfFun model_pfun,
     double LT, double UT,
     int n_acc,
-    double epsilon // Added epsilon
+    double epsilon, // Added epsilon
+    void* model_specific_context // New: context for model_dfun/pfun
 );
 
 // Helper to order parameters (winner first)
