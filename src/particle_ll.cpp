@@ -487,6 +487,58 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
 
 // ---- START: New code for censored/truncated race models ----
 #include "model_race_cens_trunc.h" // Include the new header
+#include <gsl/gsl_integration.h>
+#include <gsl/gsl_errno.h> // For GSL error handling
+
+// Struct to pass parameters to GSL integrand
+struct gsl_race_params {
+    const Rcpp::NumericMatrix* p_trial_this_winner_first;
+    RacePdfFun model_dfun;
+    RaceCdfFun model_pfun;
+    int n_acc;
+};
+
+// GSL-compatible adapter for f_race_integrand_cpp
+double gsl_f_race_adapter(double t, void *p) {
+    gsl_race_params* params = static_cast<gsl_race_params*>(p);
+    // Call the actual integrand logic, now using the members of the struct
+    // The f_race_integrand_cpp logic will be effectively moved/called here.
+    // For simplicity, let's assume f_race_integrand_cpp is refactored slightly
+    // or its core logic is used directly here.
+    // Original f_race_integrand_cpp signature:
+    // double f_race_integrand_cpp(double t, const Rcpp::NumericMatrix& p_trial_this_winner_first,
+    //                             RacePdfFun model_dfun, RaceCdfFun model_pfun, int n_acc)
+
+    if (t < 0) return 0.0;
+
+    Rcpp::NumericVector t_vec(1);
+    t_vec[0] = t;
+
+    const Rcpp::NumericMatrix& p_mat = *(params->p_trial_this_winner_first);
+    Rcpp::NumericMatrix p_winner = p_mat(Rcpp::Range(0,0), Rcpp::_);
+
+    Rcpp::NumericVector pdf_winner_vec = params->model_dfun(t_vec, p_winner, false);
+    double pdf_winner = pdf_winner_vec[0];
+
+    if (!R_finite(pdf_winner) || pdf_winner < 0) pdf_winner = 0.0;
+
+    if (params->n_acc > 1) {
+        double survivor_losers = 1.0;
+        for (int i = 1; i < params->n_acc; ++i) {
+            Rcpp::NumericMatrix p_loser_i = p_mat(Rcpp::Range(i,i), Rcpp::_);
+            Rcpp::NumericVector cdf_loser_i_vec = params->model_pfun(t_vec, p_loser_i, false);
+            double cdf_loser_i = cdf_loser_i_vec[0];
+
+            double s_loser_i = 1.0 - cdf_loser_i;
+            if (!R_finite(s_loser_i) || s_loser_i < 0) s_loser_i = 0.0;
+            if (s_loser_i > 1.0) s_loser_i = 1.0;
+            survivor_losers *= s_loser_i;
+        }
+        pdf_winner *= survivor_losers;
+    }
+    return (R_finite(pdf_winner) && pdf_winner > 0) ? pdf_winner : 0.0;
+}
+
 
 // Actual model functions will be passed by R, need to get them from SEXP
 // For now, these are placeholders for where we'd extract them.
@@ -562,77 +614,7 @@ double f_race_integrand_cpp(
     return (R_finite(pdf_winner) && pdf_winner > 0) ? pdf_winner : 0.0;
 }
 
-
-// --- Basic adaptive Simpson for integration (Placeholder) ---
-// This is a simplified adaptive Simpson's rule.
-// For production, a more robust library (like GSL or Boost.Math) would be better.
-// Or call back to R's integrate if performance allows and complexity is an issue.
-typedef double (*integrand_func_ptr)(double, const Rcpp::NumericMatrix&, RacePdfFun, RaceCdfFun, int);
-
-double adaptive_simpson_recursive(
-    integrand_func_ptr f,
-    const Rcpp::NumericMatrix& p, RacePdfFun dfun, RaceCdfFun pfun, int n_acc,
-    double a, double b, double epsilon, double S, double fa, double fb, double fc, int depth) {
-
-    if (depth > 20) { // Max depth to prevent infinite recursion
-      // Rcpp::warning("Max recursion depth reached in adaptive_simpson_recursive.");
-      return S; // Return current best estimate
-    }
-    double c = (a + b) / 2.0;
-    double h = b - a;
-    double fd = f( (a + c) / 2.0, p, dfun, pfun, n_acc);
-    double fe = f( (c + b) / 2.0, p, dfun, pfun, n_acc);
-    double Sleft = (h/12.0) * (fa + 4.0*fd + fc);
-    double Sright = (h/12.0) * (fc + 4.0*fe + fb);
-    double S2 = Sleft + Sright;
-    if (std::abs(S2 - S) <= 15.0 * epsilon || h < 1e-5) { // 1e-5 is an arbitrary small h
-        return S2 + (S2 - S) / 15.0;
-    }
-    return adaptive_simpson_recursive(f, p, dfun, pfun, n_acc, a, c, epsilon/2.0, Sleft, fa, fc, fd, depth+1) +
-           adaptive_simpson_recursive(f, p, dfun, pfun, n_acc, c, b, epsilon/2.0, Sright, fc, fb, fe, depth+1);
-}
-
-double adaptive_simpson_cpp(
-    integrand_func_ptr f,
-    const Rcpp::NumericMatrix& p_trial_this_winner_first, // Parameters for integrand
-    RacePdfFun model_dfun, RaceCdfFun model_pfun, int n_acc, // Args for f
-    double a, double b,
-    double epsilon = 1e-7) { // Tolerance
-
-    if (a == b) return 0.0;
-    if (a > b) std::swap(a,b); // Ensure a < b
-    if (!R_finite(a) || !R_finite(b)) {
-      // Rcpp::Rcout << "Warning: Non-finite integration bounds: " << a << ", " << b << std::endl;
-      // Attempt to handle common cases like integrating to Inf
-      if (R_finite(a) && b == R_PosInf) {
-          // Transform integral (0, inf) to (0, 1) using t = x / (1-x)
-          // This requires changing the function f and dx accordingly.
-          // For now, if Inf, use a large number or return error.
-          // This placeholder integration does not handle Inf bounds well.
-          b = a + 50; // Arbitrary large upper bound if original was Inf
-          if (a == 0 && b == R_PosInf) b = 50; // if 0 to Inf
-      } else if (!R_finite(a) && R_finite(b)) {
-          a = b - 50;
-      } else if (!R_finite(a) && !R_finite(b)){ // both non-finite
-          return 0.0; // Or handle as error
-      }
-    }
-    if (a >=b) return 0.0;
-
-
-    double c = (a + b) / 2.0;
-    double h = b - a;
-    double fa = f(a, p_trial_this_winner_first, model_dfun, model_pfun, n_acc);
-    double fb = f(b, p_trial_this_winner_first, model_dfun, model_pfun, n_acc);
-    double fc = f(c, p_trial_this_winner_first, model_dfun, model_pfun, n_acc);
-    double S = (h/6.0)*(fa + 4.0*fc + fb);
-    return adaptive_simpson_recursive(f, p_trial_this_winner_first, model_dfun, model_pfun, n_acc,
-                                      a, b, epsilon, S, fa, fb, fc, 1);
-}
-// --- End of Placeholder Integration ---
-
-
-// Numerical integration helper
+// Numerical integration helper using GSL
 double integrate_for_kth_winner_cpp(
     int k_winner_idx, // 1-based
     const Rcpp::NumericMatrix& p_all_acc,
@@ -641,21 +623,66 @@ double integrate_for_kth_winner_cpp(
     RacePdfFun model_dfun,
     RaceCdfFun model_pfun,
     int n_acc,
-    double epsilon = 1e-7) { // Added tolerance parameter
+    double epsilon = 1e-7) {
 
-    if (low >= upp) return 0.0;
+    if (low >= upp && !(low == 0 && upp == R_PosInf)) return 0.0; // Allow 0 to Inf even if upp becomes finite internally
     if (k_winner_idx < 1 || k_winner_idx > n_acc) {
-      // Rcpp::Rcout << "Warning: Invalid k_winner_idx in integrate_for_kth_winner_cpp: " << k_winner_idx << std::endl;
-      return 0.0; // Should not happen with proper R_j_idx handling
+      Rcpp::Rcerr << "Warning: Invalid k_winner_idx in integrate_for_kth_winner_cpp: " << k_winner_idx << std::endl;
+      return 0.0;
     }
     Rcpp::NumericMatrix pars_ordered = order_pars_for_winner_cpp(p_all_acc, k_winner_idx, n_acc);
 
-    double res = adaptive_simpson_cpp(f_race_integrand_cpp, pars_ordered, model_dfun, model_pfun, n_acc, low, upp, epsilon);
+    gsl_integration_workspace* w = gsl_integration_workspace_alloc(1000);
+    double result, error;
 
-    return (res > 0 && R_finite(res)) ? res : 0.0;
+    gsl_function F;
+    gsl_race_params params_struct;
+    params_struct.p_trial_this_winner_first = &pars_ordered;
+    params_struct.model_dfun = model_dfun;
+    params_struct.model_pfun = model_pfun;
+    params_struct.n_acc = n_acc;
+
+    F.function = &gsl_f_race_adapter;
+    F.params = &params_struct;
+
+    // Store current GSL error handler
+    gsl_error_handler_t* old_handler = gsl_set_error_handler_off();
+
+    int status;
+    if (upp == R_PosInf) { // Integral from low to +Inf
+        if (low < 0) { // QAGIU requires a >= 0 if integrating f(x)
+                       // Or use QAGI for (-inf, inf), but our RTs are typically > 0
+            Rcpp::Rcerr << "Warning: lower bound for QAGIU is negative: " << low << ". Truncating to 0." << std::endl;
+            // This might not be correct for all model types if they can have density < 0
+            // but for RTs, this is a safe assumption.
+             if (low < 0) low = 0;
+        }
+        if (low >= R_PosInf) { // effectively low is Inf
+             result = 0; status = GSL_SUCCESS;
+        } else {
+            status = gsl_integration_qagiu(&F, low, 0, epsilon, 1000, w, &result, &error);
+        }
+    } else { // Finite interval [low, upp]
+        status = gsl_integration_qags(&F, low, upp, 0, epsilon, 1000, w, &result, &error);
+    }
+
+    // Restore old GSL error handler
+    gsl_set_error_handler(old_handler);
+    gsl_integration_workspace_free(w);
+
+    if (status != GSL_SUCCESS) {
+        // Rcpp::Rcerr << "GSL integration failed with status: " << gsl_strerror(status)
+        //             << " for interval [" << low << ", " << upp << "]"
+        //             << " k_winner: " << k_winner_idx << std::endl;
+        // Potentially print parameters from pars_ordered for debugging if needed
+        return 0.0; // Or handle error appropriately
+    }
+
+    return (result > 0 && R_finite(result)) ? result : 0.0;
+    return (result > 0 && R_finite(result)) ? result : 0.0;
 }
 
-// Truncation correction factor helper
+// Truncation correction factor helper - uses GSL via integrate_for_kth_winner_cpp
 double get_trunc_corr_factor_for_kth_winner_cpp(
     int k_winner_idx, // 1-based
     const Rcpp::NumericMatrix& p_all_acc,
@@ -665,24 +692,27 @@ double get_trunc_corr_factor_for_kth_winner_cpp(
     int n_acc,
     double epsilon = 1e-7) {
 
-    if (!(LT > 0 || UT < R_PosInf)) return 1.0; // No truncation active
+    if (!(LT > 0 || UT < R_PosInf)) return 1.0;
     if (k_winner_idx < 1 || k_winner_idx > n_acc) return NA_REAL;
 
-
+    // Integral from 0 to Inf
     double prob_untruncated = integrate_for_kth_winner_cpp(k_winner_idx, p_all_acc, 0, R_PosInf, model_dfun, model_pfun, n_acc, epsilon);
+    // Integral over [LT, UT]
     double prob_truncated_interval = integrate_for_kth_winner_cpp(k_winner_idx, p_all_acc, LT, UT, model_dfun, model_pfun, n_acc, epsilon);
 
     if (prob_truncated_interval > 1e-12) {
-        if (!R_finite(prob_untruncated) || prob_untruncated < 0) return NA_REAL;
+        if (!R_finite(prob_untruncated) || prob_untruncated < 0) return NA_REAL; // Problem with untruncated integral
         return prob_untruncated / prob_truncated_interval;
-    } else {
-        if (prob_untruncated > 1e-12) return NA_REAL; // Density outside but not inside truncation
-        return 1.0; // No density anywhere, or only outside [LT,UT] (and also outside [0,Inf] effectively if prob_untruncated is also 0)
+    } else { // Denominator is effectively zero
+        // If numerator is also zero, factor is undefined but effectively 1 (0/0 case for prob).
+        // If numerator is positive, then density exists only outside [LT,UT], implies infinite correction factor, problem.
+        if (prob_untruncated > 1e-12) return NA_REAL;
+        return 1.0;
     }
 }
 
 
-// Main C++ function for censored/truncated race likelihood calculation
+// Main C++ function for censored/truncated race likelihood calculation (remains the same structure)
 // Returns a single double: the total log-likelihood for one particle.
 double c_log_likelihood_race_cens_trunc(
     Rcpp::NumericMatrix pars,               // Parameters for one particle, all unique trial conditions
