@@ -132,18 +132,18 @@ log_likelihood_joint <- function(proposals, dadms, model_list, component = NULL)
 }
 
 # Likelihood function for a redundant target race model.
+# Vectorized version.
 #
 # Assumes dadm is structured with 4 rows per original trial, where each row
 # corresponds to one of four conceptual accumulators.
-# - dadm$accumulator_role: A factor column identifying the role of each row
-#   (e.g., levels "S1D", "S2D", "S1A", "S2A").
+# - dadm$accumulator_role: A factor column identifying the role of each row.
+#   Expected levels are "S1D", "S2D", "S1A", "S2A". The order of these levels
+#   in the factor is not critical, as the code explicitly extracts by name.
 # - dadm$observed_response: A column containing the actual observed response
 #   ("yes" or "no") for the original trial, replicated across the 4 rows.
 # - dadm$rt: The observed RT, replicated across the 4 rows.
 # - pars: Matrix aligned with dadm, rows providing base parameters (e.g., "v", "b")
 #   for the accumulator specified in dadm$accumulator_role.
-#
-# The order S1D, S2D, S1A, S2A is used internally for f1, f2, f3, f4.
 log_likelihood_redundant_target_race <- function(pars, dadm, model, min_ll = log(1e-10))
 {
   # --- Input Validations ---
@@ -155,108 +155,97 @@ log_likelihood_redundant_target_race <- function(pars, dadm, model, min_ll = log
     stop("nrow(dadm) must be a multiple of 4 (4 accumulator rows per original trial).")
   }
 
-  # --- PDF and CDF Calculation ---
-  # f_all and F_all will have one value per row in dadm (i.e., per accumulator-trial)
-  f_all <- model$dfun(dadm$rt, pars)
-  F_all <- model$pfun(dadm$rt, pars)
-
-  n_blocks <- nrow(dadm) / 4 # Number of original trials represented in dadm
-  ll_block_values <- numeric(n_blocks) # Stores one LL value per original trial
-
-  # --- Define Fixed Internal Mapping for Formulas ---
-  # The code will map dadm$accumulator_role levels to these fixed slots:
-  # Slot 1: S1D (Stimulus 1 Detect)
-  # Slot 2: S2D (Stimulus 2 Detect)
-  # Slot 3: S1A (Stimulus 1 Absent/Non-Detect)
-  # Slot 4: S2A (Stimulus 2 Absent/Non-Detect)
+  # Expected accumulator roles for internal mapping
   internal_role_order <- c("S1D", "S2D", "S1A", "S2A")
-
-  # Check if all required roles are present in dadm$accumulator_role levels
-  # This ensures the user's factor levels align with what the function expects.
   if (!all(internal_role_order %in% levels(as.factor(dadm$accumulator_role)))) {
     missing_roles <- internal_role_order[!internal_role_order %in% levels(as.factor(dadm$accumulator_role))]
     stop(paste("dadm$accumulator_role is missing expected levels:", paste(missing_roles, collapse=", "),
                ". Expected levels are S1D, S2D, S1A, S2A."))
   }
 
-  f_vec <- numeric(4) # To store f values for S1D, S2D, S1A, S2A for the current block
-  F_vec <- numeric(4) # To store F values for S1D, S2D, S1A, S2A for the current block
+  # --- PDF and CDF Calculation (once for all rows) ---
+  f_all <- model$dfun(dadm$rt, pars)
+  F_all <- model$pfun(dadm$rt, pars)
 
-  # --- Loop Through Each Original Trial (Block of 4 Rows) ---
-  for (i in 1:n_blocks) {
-    row_indices <- ((i - 1) * 4 + 1):(i * 4) # Get row indices for the current block
+  n_blocks <- nrow(dadm) / 4 # Number of original trials
 
-    # Extract f, F, and accumulator roles for the current block
-    f_block_unsorted <- f_all[row_indices]
-    F_block_unsorted <- F_all[row_indices]
-    # Roles for the current block, ensuring it's character for matching
-    roles_in_block_char <- as.character(dadm$accumulator_role[row_indices])
+  # --- Extract f/F values for each role into vectors of length n_blocks ---
+  # This assumes that dadm is structured such that filtering by accumulator_role
+  # results in vectors of length n_blocks, correctly ordered by original trial.
+  # This typically means dadm should be sorted by an original trial ID,
+  # then by accumulator_role (or this extraction order matches such a sort).
 
-    # Populate f_vec and F_vec according to the fixed internal_role_order
-    for (k in 1:4) {
-      current_role_to_find <- internal_role_order[k]
-      idx_in_block <- match(current_role_to_find, roles_in_block_char)
+  f1 <- f_all[dadm$accumulator_role == "S1D"]; F1 <- F_all[dadm$accumulator_role == "S1D"]
+  f2 <- f_all[dadm$accumulator_role == "S2D"]; F2 <- F_all[dadm$accumulator_role == "S2D"]
+  f3 <- f_all[dadm$accumulator_role == "S1A"]; F3 <- F_all[dadm$accumulator_role == "S1A"]
+  f4 <- f_all[dadm$accumulator_role == "S2A"]; F4 <- F_all[dadm$accumulator_role == "S2A"]
 
-      if (is.na(idx_in_block)) {
-        stop(paste0("Expected accumulator role '", current_role_to_find,
-                    "' not found in block ", i, ". Roles found: ",
-                    paste(roles_in_block_char, collapse=", ")))
-      }
-      f_vec[k] <- f_block_unsorted[idx_in_block]
-      F_vec[k] <- F_block_unsorted[idx_in_block]
-    }
-
-    # Assign to f1-f4 and F1-F4 based on the fixed internal order
-    f1 <- f_vec[1]; F1 <- F_vec[1] # S1D
-    f2 <- f_vec[2]; F2 <- F_vec[2] # S2D
-    f3 <- f_vec[3]; F3 <- F_vec[3] # S1A
-    f4 <- f_vec[4]; F4 <- F_vec[4] # S2A
-
-    # Get the observed response for this original trial (replicated across the 4 rows)
-    observed_response_trial <- dadm$observed_response[row_indices[1]]
-
-    # --- Apply Likelihood Formula Based on Observed Response ---
-    if (observed_response_trial == "yes") {
-      # Formula: (fS1D*(1-FS2D) + fS2D*(1-FS1D)) * (1 - FS1A*FS2A)
-      # This is P(first of S1D,S2D finishes at t) * P(NOT(S1A finishes by t AND S2A finishes by t))
-      term1_yes <- f1 * (1 - F2) + f2 * (1 - F1)
-      term2_yes <- 1 - (F3 * F4)
-
-      # Numerical stability: ensure terms are not negative before log
-      term1_yes <- pmax(term1_yes, .Machine$double.eps)
-      term2_yes <- pmax(term2_yes, .Machine$double.eps)
-
-      ll_block_values[i] <- log(term1_yes) + log(term2_yes)
-    } else if (observed_response_trial == "no") {
-      # Formula: (fS1A*FS2A + fS2A*FS1A) * (1-FS1D) * (1-FS2D)
-      # This is P(Max(S1A,S2A) finishes at t) * P(S1D not finished by t) * P(S2D not finished by t)
-      term1_no <- f3 * F4 + f4 * F3
-      term2_no <- (1 - F1)
-      term3_no <- (1 - F2)
-
-      # Numerical stability
-      term1_no <- pmax(term1_no, .Machine$double.eps)
-      term2_no <- pmax(term2_no, .Machine$double.eps)
-      term3_no <- pmax(term3_no, .Machine$double.eps)
-
-      ll_block_values[i] <- log(term1_no) + log(term2_no) + log(term3_no)
-    } else {
-      stop(paste("Invalid dadm$observed_response value:'", observed_response_trial,
-                 "' in block ", i, ". Must be 'yes' or 'no'."))
-    }
-  } # End of loop through blocks
-
-  # --- Final Summation ---
-  # ll_block_values has one LL per original trial (block).
-  # Replicate these values for each constituent row in dadm to use attr(dadm, "expand").
-  ll_for_dadm_rows <- numeric(nrow(dadm))
-  for (i in 1:n_blocks) {
-    row_indices <- ((i - 1) * 4 + 1):(i * 4)
-    ll_for_dadm_rows[row_indices] <- ll_block_values[i]
+  # Validation: Check if all extracted vectors have the correct length (n_blocks)
+  expected_len <- n_blocks
+  if (any(sapply(list(f1, F1, f2, F2, f3, F3, f4, F4), length) != expected_len)) {
+    stop("Length mismatch after extracting role-specific f/F values. Check dadm structure and accumulator_role factor.")
   }
 
+  # --- Get Observed Responses (one per original trial/block) ---
+  # Taking from the first row of each conceptual 4-row block.
+  # This assumes dadm is grouped by original trial, so seq(1, nrow(dadm), by = 4) picks these first rows.
+  # If not, a more robust way might be needed if an original_trial_id column exists.
+  # For now, this is consistent with the loop version's row_indices[1].
+  observed_responses_per_block <- dadm$observed_response[seq(1, nrow(dadm), by = 4)]
+  if (length(observed_responses_per_block) != n_blocks) {
+      stop("Could not correctly extract one observed_response per trial block.")
+  }
+
+
+  ll_block_values <- numeric(n_blocks) # Stores one LL value per original trial
+  is_yes_response <- observed_responses_per_block == "yes"
+  is_no_response <- observed_responses_per_block == "no"
+
+  # --- Apply Formulas Vectorially ---
+  if (any(is_yes_response)) {
+    term1_yes <- f1[is_yes_response] * (1 - F2[is_yes_response]) + f2[is_yes_response] * (1 - F1[is_yes_response])
+    term2_yes <- 1 - (F3[is_yes_response] * F4[is_yes_response])
+
+    term1_yes <- pmax(term1_yes, .Machine$double.eps)
+    term2_yes <- pmax(term2_yes, .Machine$double.eps)
+    ll_block_values[is_yes_response] <- log(term1_yes) + log(term2_yes)
+  }
+
+  if (any(is_no_response)) {
+    term1_no <- f3[is_no_response] * F4[is_no_response] + f4[is_no_response] * F3[is_no_response]
+    term2_no <- (1 - F1[is_no_response])
+    term3_no <- (1 - F2[is_no_response])
+
+    term1_no <- pmax(term1_no, .Machine$double.eps)
+    term2_no <- pmax(term2_no, .Machine$double.eps)
+    term3_no <- pmax(term3_no, .Machine$double.eps)
+    ll_block_values[is_no_response] <- log(term1_no) + log(term2_no) + log(term3_no)
+  }
+
+  # Handle any responses that were not 'yes' or 'no'
+  unhandled_responses <- !(is_yes_response | is_no_response)
+  if (any(unhandled_responses)) {
+      original_indices_unhandled <- which(unhandled_responses)
+      first_row_in_dadm_unhandled <- (original_indices_unhandled - 1) * 4 + 1
+      problematic_values <- unique(dadm$observed_response[first_row_in_dadm_unhandled])
+      warning(paste("Unhandled dadm$observed_response values found:", paste(problematic_values, collapse=", "),
+                  ". Corresponding log-likelihoods will be NA, then min_ll."))
+      ll_block_values[unhandled_responses] <- NA # Will become min_ll later
+  }
+
+
+  # --- Final Summation (same logic as before) ---
+  ll_for_dadm_rows <- numeric(nrow(dadm))
+  # Replicate the block's LL to its constituent rows.
+  # rep(ll_block_values, each=4) works if dadm is perfectly sorted by block, then accumulator within block.
+  # A loop is safer if that order isn't strictly guaranteed for attr(dadm,"expand")'s sake.
+  # However, the extraction of f1-f4 and observed_responses_per_block *does* assume a certain usable order.
+  # Given that, rep should be fine if the upstream extraction is robust.
+  # For max safety in this step, retain loop or use a more robust replication:
+  original_trial_idx_for_row <- rep(1:n_blocks, each = 4) # Assuming dadm is sorted by block
+  ll_for_dadm_rows <- ll_block_values[original_trial_idx_for_row]
+
   final_ll_values <- pmax(min_ll, ll_for_dadm_rows[attr(dadm, "expand")])
-  # Ensure any NAs that might arise (e.g. if a log term was NA despite pmax) become min_ll
   final_ll_values[is.na(final_ll_values)] <- min_ll
 
   return(sum(final_ll_values))
