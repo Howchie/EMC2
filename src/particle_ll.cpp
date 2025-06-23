@@ -732,15 +732,33 @@ double c_log_likelihood_race_cens_trunc(
     const Rcpp::IntegerVector& expand_vec,  // Vector for expanding unique LLs to full trial count
     void* model_context_for_funcs           // Context for model_dfun/model_pfun
 ) {
-    // Hardcoded censoring and truncation values
-    double LT = 0.1;
-    double LC = 0.2;
-    double UC = 2.5;
-    double UT = 3.0;
+    // Fetch censoring and truncation values from dadm attributes
+    double LT = 0.0, UT = R_PosInf, LC = 0.0, UC = R_PosInf; // Defaults
+    if (dadm.hasAttribute("LT") && !Rf_isNull(dadm.attr("LT"))) {
+        LT = Rcpp::as<double>(dadm.attr("LT"));
+    }
+    if (dadm.hasAttribute("UT") && !Rf_isNull(dadm.attr("UT"))) {
+        UT = Rcpp::as<double>(dadm.attr("UT"));
+    }
+    if (dadm.hasAttribute("LC") && !Rf_isNull(dadm.attr("LC"))) {
+        LC = Rcpp::as<double>(dadm.attr("LC"));
+    }
+    if (dadm.hasAttribute("UC") && !Rf_isNull(dadm.attr("UC"))) {
+        UC = Rcpp::as<double>(dadm.attr("UC"));
+    }
+
     double integration_epsilon = 1e-7; // Tolerance for integration
 
     Rcpp::IntegerVector R_col = Rcpp::as<Rcpp::IntegerVector>(dadm["R"]);
     Rcpp::NumericVector rt_col = Rcpp::as<Rcpp::NumericVector>(dadm["rt"]);
+    // R_col contains 1-based factor levels from R. NA is represented by R_NaInt.
+    // We need to access the R value corresponding to the unique trial, not just R_col[j].
+    // This should be from the first row of the block of accumulators for that unique trial.
+    Rcpp::IntegerVector R_values_for_unique_trials(dadm.nrows() / n_acc);
+    for(int i=0; i < dadm.nrows() / n_acc; ++i) {
+        R_values_for_unique_trials[i] = R_col[i * n_acc];
+    }
+
 
     int n_unique_trials = dadm.nrows()/n_acc;
     // n_acc is now passed as an argument, ensure it's valid.
@@ -781,9 +799,10 @@ double c_log_likelihood_race_cens_trunc(
 
         Rcpp::NumericMatrix pars_condition_j_all_acc = pars(current_trial_par_indices, Rcpp::_);
 
-        double rt_j = rt_col[j];
-        // R_col contains 1-based factor levels. NA is represented by R_NaInt.
-        int R_j_idx = (R_col[j] == NA_INTEGER) ? NA_INTEGER : R_col[j];
+        // Access rt from the first row of the block of accumulators for unique trial j
+        double rt_j = rt_col[j * n_acc];
+        // Access R from the pre-extracted R_values_for_unique_trials for unique trial j
+        int R_j_idx = (R_values_for_unique_trials[j] == NA_INTEGER) ? NA_INTEGER : R_values_for_unique_trials[j];
 
         double current_prob_val = 0;
 
