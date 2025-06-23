@@ -1,7 +1,8 @@
 make_missing <- function(data,LT=0,UT=Inf,LC=0,UC=Inf,
                          LCresponse=TRUE,UCresponse=TRUE,LCdirection=TRUE,UCdirection=TRUE)
 {
-
+  std <- c("names", "row.names", "class", "dim")
+  custom_attrs <- attributes(data)[setdiff(names(attributes(data)), std)]
   censor <- function(data,L=0,U=Inf,Ld=TRUE,Ud=TRUE,Lr=TRUE,Ur=TRUE)
   {
     if (Ld) Ld <- -Inf else Ld <- NA
@@ -25,10 +26,15 @@ make_missing <- function(data,LT=0,UT=Inf,LC=0,UC=Inf,
   pick <- is.infinite(data$rt) | (data$rt>LT & data$rt<UT)
   pick[is.na(pick)] <- TRUE
   out <- censor(data[pick,],L=LC,U=UC,Lr=LCresponse,Ur=UCresponse,Ld=LCdirection,Ud=UCdirection)
-  if (LC != 0) attr(out,"LC") <- LC
-  if (UC != Inf) attr(out,"UC") <- UC
-  if (LT != 0) attr(out,"LT") <- LT
-  if (UT != Inf) attr(out,"UT") <- UT
+  attributes(out)[names(custom_attrs)] <- custom_attrs
+  #if (LC != 0) 
+    attr(out,"LC") <- LC
+  #if (UC != Inf) 
+    attr(out,"UC") <- UC
+  #if (LT != 0) 
+    attr(out,"LT") <- LT
+  #if (UT != Inf) 
+    attr(out,"UT") <- UT
   out
 }
 
@@ -116,8 +122,8 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
   UCresponse<-TRUE
   LCdirection<-TRUE
   UCdirection<-TRUE
-  force_direction<-FALSE
-  force_response<-FALSE
+  force_direction<-TRUE
+  force_response<-TRUE
   rtContaminantNA<-FALSE
   return_Ffunctions <- FALSE
   optionals <- list(...)
@@ -228,8 +234,8 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
   if ( any(dimnames(pars)[[2]]=="pContaminant") && any(pars[,"pContaminant"]>0) )
     pc <- pars[data$lR==levels(data$lR)[1],"pContaminant"] else pc <- NULL
   if (expand>1) {
-    data <- cbind(rep=rep(1:expand,each=dim(data)[1]),
-                  data.frame(lapply(data,rep,times=expand)))
+    data$rep <- rep(1:expand, each = nrow(data))
+    data <- data[ , c("rep", setdiff(names(data), "rep")) ] 
     pars <- apply(pars,2,rep,times=expand)
   }
   if (!is.null(staircase)) {
@@ -242,10 +248,14 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
   if (!return_Ffunctions && !is.null(design$Ffunctions))
     dropNames <- c(dropNames,names(design$Ffunctions))
   if(!is.null(data$lR)) data <- data[data$lR == levels(data$lR)[1],]
-  data <- data[,!(names(data) %in% dropNames)]
+  std <- c("names", "row.names", "class", "dim")
+  custom_attrs <- attributes(data)[setdiff(names(attributes(data)), std)]
+  data <- data[, !(names(data) %in% dropNames)]
+  attributes(data)[names(custom_attrs)] <- custom_attrs
   for (i in dimnames(Rrt)[[2]]) data[[i]] <- Rrt[,i]
   data <- make_missing(data[,names(data)!="winner"],LT,UT,LC,UC,
     LCresponse,UCresponse,LCdirection,UCdirection)
+  #attributes(data)[names(custom_attrs)] <- custom_attrs
   if ( !is.null(pc) ) {
     if (!any(is.infinite(data$rt)) & any(is.na(data$R)))
       stop("Cannot have contamination and censoring with no direction and response")

@@ -383,6 +383,10 @@ compress_dadm <- function(da,designs,Fcov,Ffun)
     # out keeps only unique rows in terms of all parameters design matrices
     # R, lR and rt (at given resolution) from full data set
   {
+  LT <- attr(da,"LT"); if (is.null(LT)) LT <- 0
+  UT <- attr(da,"UT"); if (is.null(UT)) UT <- Inf
+  LC <- attr(da,"LC"); if (is.null(LC)) LC <- 0
+  UC <- attr(da,"UC"); if (is.null(UC)) UC <- Inf
     nacc <- length(unique(da$lR))
     # contract output
     cells <- paste(
@@ -447,20 +451,24 @@ compress_dadm <- function(da,designs,Fcov,Ffun)
     #    levels=unique(cells_nortR)))[as.numeric(factor(cells,levels=unique(cells)))]
 
     # Lower censor
-    # if (!any(is.na(out$rt))) { # Not a choice only model
-    #   winner <- out$lR==levels(out$lR)[[1]]
-    #   ok <- out$rt[winner]==-Inf
-    #   if (any(ok)) {
-    #     ok[ok] <- 1:sum(ok)
-    #     attr(out,"expand_lc") <- ok[attr(out,"expand_winner")] + 1
-    #   }
-    #   # Upper censor
-    #   ok <- out$rt[winner]==Inf
-    #   if (any(ok)) {
-    #     ok[ok] <- 1:sum(ok)
-    #     attr(out,"expand_uc") <- ok[attr(out,"expand_winner")] + 1
-    #   }
-    # }
+    if (!any(is.na(out$rt))) { # Not a choice only model
+      winner <- out$lR==levels(out$lR)[[1]]
+      ok <- out$rt[winner]==-Inf
+      if (any(ok)) {
+        ok[ok] <- 1:sum(ok)
+        attr(out,"expand_lc") <- ok[attr(out,"expand_winner")] + 1
+      }
+      # Upper censor
+      ok <- out$rt[winner]==Inf
+      if (any(ok)) {
+        ok[ok] <- 1:sum(ok)
+        attr(out,"expand_uc") <- ok[attr(out,"expand_winner")] + 1
+      }
+    }
+    attr(out,"LC") <- LC
+    attr(out,"UC") <- UC
+    attr(out,"LT") <- LT
+    attr(out,"UT") <- UT
     out
 }
 
@@ -534,6 +542,10 @@ design_model <- function(data,design,model=NULL,
                          add_acc=TRUE,rt_resolution=0.02,verbose=TRUE,
                          compress=TRUE,rt_check=TRUE, add_da = FALSE, all_cells_dm = FALSE)
 {
+  LT <- attr(data,"LT"); if (is.null(LT)) LT <- 0
+  UT <- attr(data,"UT"); if (is.null(UT)) UT <- Inf
+  LC <- attr(data,"LC"); if (is.null(LC)) LC <- 0
+  UC <- attr(data,"UC"); if (is.null(UC)) UC <- Inf
   if (is.null(model)) {
     if (is.null(design$model))
       stop("Model must be supplied if it has not been added to design")
@@ -596,6 +608,11 @@ design_model <- function(data,design,model=NULL,
   out <- lapply(design$Flist,make_dm,da=da,Fcovariates=design$Fcovariates, add_da = add_da, all_cells_dm = all_cells_dm)
   if (!is.null(rt_resolution) & !is.null(da$rt)) da$rt <- round(da$rt/rt_resolution)*rt_resolution
   if (compress){
+    attr(da,"LC") <- LC
+    attr(da,"UC") <- UC
+    attr(da,"LT") <- LT
+    attr(da,"UT") <- UT
+
     dadm <- compress_dadm(da,designs=out, Fcov=design$Fcovariates,Ffun=names(design$Ffunctions))
     # Change expansion names
     # attr(dadm,"expand_all") <- attr(dadm,"expand")
@@ -730,12 +747,10 @@ make_dm <- function(form,da,Clist=NULL,Fcovariates=NULL, add_da = FALSE, all_cel
 # data generation
 
 # Used in make_data and make_emc
-add_trials <- function(dat)
-  # Add trials column, 1:n for each subject
-{
+add_trials <- function(dat) {
   n <- table(dat$subjects)
-  if (!any(names(dat)=="trials")) dat <- cbind.data.frame(dat,trials=NA)
-  for (i in names(n)) dat$trials[dat$subjects==i] <- 1:n[i]
+  if (!"trials" %in% names(dat)) dat$trials <- NA
+  for (i in names(n)) dat$trials[dat$subjects == i] <- seq_len(n[i])
   dat
 }
 

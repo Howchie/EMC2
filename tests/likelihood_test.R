@@ -19,16 +19,19 @@ min_ll_test <- log(1e-10)
 n_acc <- 2 # Number of accumulators
 
 data = data.frame(rt=c(1,1.5),R=factor(c("left","right")),S=factor(c("left","right")),subjects=factor(c(1,1)))
+attr(data,"UC")=2.5
 matchfun <- function(d)as.character(d$S) == tolower(as.character(d$lR))
 design <- design(data=data,model=LBA,matchfun = matchfun,
                  formula=list(v~1,sv~1,B~1,A~1,t0~1))
 p_vector = sampled_pars(design)
-p_vector["v"] = 2.5
+p_vector["v"] = 1.5
 p_vector["B"] = log(1)
 p_vector["A"] = log(1)
 p_vector["sv"] = log(1)
 p_vector["t0"] = log(0.1)
-sim_data = make_data(p_vector,design=design, n_trials=1)
+sim_data = make_data(p_vector,design=design, n_trials=100, ntrials=100)
+attr(sim_data,"UC")=2.5
+sim_data = make_data(p_vector,design=design, data=sim_data)
 sim_data$rt[2]=Inf
 attr(sim_data,"UC")=2.5
 fit_data = make_emc(sim_data,design,type="single")
@@ -120,6 +123,7 @@ log_likelihood_race_missing <- function(pars,dadm,model,min_ll=log(1e-10))
   if (any(names(dadm)=="RACE")){ # Some accumulators not present
     pars[as.numeric(dadm$lR)>as.numeric(as.character(dadm$RACE)),] <- NA
   }
+  browser()
   if (is.null(attr(pars,"ok"))) {
     
     f <- function(t,p,dfun,pfun) {
@@ -375,7 +379,7 @@ for (i in 1:n_unique_trials) {
   
   
   current_pars <- pars_test[indices, , drop = FALSE]
-  attr(current_pars, "ok") <- attr(pars_test, "ok")[par_indices]
+  attr(current_pars, "ok") <- attr(pars_test, "ok")[indices]
   
   cat("dadm:
 "); print(current_dadm)
@@ -429,7 +433,7 @@ for (i in 1:n_unique_trials) {
   #   # The current C++ wrapper returns a vector of ll_unique. Let's test it that way.
   #   # This call is to the C++ code, which has its own hardcoded LT/LC/UC/UT for now.
   cpp_output_vector <- EMC2:::test_c_loglik_cens_trunc_wrapper_R(
-    pars = current_pars, # Full pars matrix for all unique trials
+    pars = cbind(current_pars[,"t0"],current_pars[,"A"],current_pars[,"b"], current_pars[,"v"], current_pars[,"sv"]), # Full pars matrix for all unique trials
     dadm = current_dadm,  # Full dadm for all unique trials
     model_type_str = "LBA_test", 
     min_ll = min_ll_test,

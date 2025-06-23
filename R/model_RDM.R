@@ -415,3 +415,31 @@ RDM <- function(){
       log_likelihood_race(pars=pars, dadm = dadm, model = model, min_ll = min_ll)
   )
 }
+
+Mrdm <- function(){
+  list(
+    type="RACE",
+    c_name = NULL, # must be NULL to use calc_ll_R
+    # p_vector transform, sets sv as a scaling parameter
+    p_types=c("v" = 1,"s" = log(1),"B" = log(1),"A" = log(0),"t0" = log(0)),
+    transform=list(func=c(v = "log",s = "exp", B = "exp", A = "exp",t0 = "exp")),
+    bound=list(minmax=cbind(v=c(0,Inf),s = c(0, Inf), A=c(1e-4,Inf),B=c(0,Inf),t0=c(0.01,Inf)),
+               exception=c(A=0)),
+    # Transform to natural scale
+    # Trial dependent parameter transform
+    Ttransform = function(pars,dadm) {
+      pars <- cbind(pars,b=pars[,"B"] + pars[,"A"])
+      pars
+    },
+    # Random function for racing accumulators
+    rfun=function(data=NULL,pars)  rRDM(data$lR,pars,ok=attr(pars, "ok")),
+    # Density function (PDF) for single accumulator
+    dfun=function(rt,pars) dRDM(rt,pars),
+    # Probability function (CDF) for single accumulator
+    pfun=function(rt,pars) pRDM(rt,pars),
+    # Race likelihood combining pfun and dfun
+    log_likelihood=function(pars,dadm,model){
+      log_likelihood_race_cens_trunc(pars=pars, dadm=dadm, model=model, min_ll=log(1e-10))
+    }
+  )
+}

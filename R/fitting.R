@@ -708,6 +708,8 @@ make_emc <- function(data,design,model=NULL,
     attr(d,"UT") <- UT
     d
   })
+  std <- c("names", "row.names", "class", "dim")
+  custom_attrs <- attributes(data)[setdiff(names(attributes(data)), std)]
   if (!is.null(names(design)[1]) && names(design)[1]=="Flist"){
     design <- list(design)
   }
@@ -749,7 +751,7 @@ make_emc <- function(data,design,model=NULL,
 
   prior_in <- prior(design, type, update = prior_in, group_design = group_design, ...)
   attr(dadm_list[[1]], "prior") <- prior_in
-
+###HERE
   # if(!is.null(subject_covariates)) attr(dadm_list, "subject_covariates") <- subject_covariates
   if (type %in% c("single", "infnt_factor", "diagonal-gamma")) {
     out <- pmwgs(dadm_list, type, nuisance = nuisance,
@@ -803,6 +805,10 @@ make_emc <- function(data,design,model=NULL,
   # Only for joint models we need to keep a list of functions
   if(length(out$model) == 1) out$model <- out$model[[1]]
   out <- check_duplicate_designs(out)
+  attr(out$data,"LC") <- LC
+  attr(out$data,"UC") <- UC
+  attr(out$data,"LT") <- LT
+  attr(out$data,"UT") <- UT
   # replicate chains
   dadm_lists <- rep(list(out),n_chains)
   # For post predict

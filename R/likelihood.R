@@ -40,10 +40,10 @@ log_likelihood_race <- function(pars,dadm,model,min_ll=log(1e-10))
 
 log_likelihood_race_cens_trunc <- function(pars, dadm, model, min_ll = log(1e-10)) {
   # Hardcoded censoring and truncation values for now
-  LT <- 0.1 # Lower Truncation
-  LC <- 0.2 # Lower Censoring Cutoff
-  UC <- 2.5 # Upper Censoring Cutoff
-  UT <- 3.0 # Upper Truncation
+  LT <- attr(dadm,"LT"); if (is.null(LT)) LT <- 0
+  UT <- attr(dadm,"UT"); if (is.null(UT)) UT <- Inf
+  LC <- attr(dadm,"LC"); if (is.null(LC)) LC <- 0
+  UC <- attr(dadm,"UC"); if (is.null(UC)) UC <- Inf
 
   if (any(names(dadm) == "RACE")) {
     pars[as.numeric(dadm$lR) > as.numeric(as.character(dadm$RACE)), ] <- NA
