@@ -742,7 +742,7 @@ double c_log_likelihood_race_cens_trunc(
     Rcpp::IntegerVector R_col = Rcpp::as<Rcpp::IntegerVector>(dadm["R"]);
     Rcpp::NumericVector rt_col = Rcpp::as<Rcpp::NumericVector>(dadm["rt"]);
 
-    int n_unique_trials = dadm.nrows();
+    int n_unique_trials = dadm.nrows()/n_acc;
     // n_acc is now passed as an argument, ensure it's valid.
     if (n_acc <= 0) Rcpp::stop("c_log_likelihood_race_cens_trunc: n_acc must be positive.");
     if (pars.nrow() != (n_unique_trials * n_acc)) {

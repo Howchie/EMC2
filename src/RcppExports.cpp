@@ -438,8 +438,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // calc_ll
-NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector constants, List designs, String type, List bounds, List transforms, List pretransforms, CharacterVector p_types, double min_ll, List trend);
-RcppExport SEXP _EMC2_calc_ll(SEXP p_matrixSEXP, SEXP dataSEXP, SEXP constantsSEXP, SEXP designsSEXP, SEXP typeSEXP, SEXP boundsSEXP, SEXP transformsSEXP, SEXP pretransformsSEXP, SEXP p_typesSEXP, SEXP min_llSEXP, SEXP trendSEXP) {
+NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector constants, List designs, String type_rcpp, List bounds, List transforms, List pretransforms, CharacterVector p_types, double min_ll, List trend);
+RcppExport SEXP _EMC2_calc_ll(SEXP p_matrixSEXP, SEXP dataSEXP, SEXP constantsSEXP, SEXP designsSEXP, SEXP type_rcppSEXP, SEXP boundsSEXP, SEXP transformsSEXP, SEXP pretransformsSEXP, SEXP p_typesSEXP, SEXP min_llSEXP, SEXP trendSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -447,14 +447,30 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< DataFrame >::type data(dataSEXP);
     Rcpp::traits::input_parameter< NumericVector >::type constants(constantsSEXP);
     Rcpp::traits::input_parameter< List >::type designs(designsSEXP);
-    Rcpp::traits::input_parameter< String >::type type(typeSEXP);
+    Rcpp::traits::input_parameter< String >::type type_rcpp(type_rcppSEXP);
     Rcpp::traits::input_parameter< List >::type bounds(boundsSEXP);
     Rcpp::traits::input_parameter< List >::type transforms(transformsSEXP);
     Rcpp::traits::input_parameter< List >::type pretransforms(pretransformsSEXP);
     Rcpp::traits::input_parameter< CharacterVector >::type p_types(p_typesSEXP);
     Rcpp::traits::input_parameter< double >::type min_ll(min_llSEXP);
     Rcpp::traits::input_parameter< List >::type trend(trendSEXP);
-    rcpp_result_gen = Rcpp::wrap(calc_ll(p_matrix, data, constants, designs, type, bounds, transforms, pretransforms, p_types, min_ll, trend));
+    rcpp_result_gen = Rcpp::wrap(calc_ll(p_matrix, data, constants, designs, type_rcpp, bounds, transforms, pretransforms, p_types, min_ll, trend));
+    return rcpp_result_gen;
+END_RCPP
+}
+// test_c_loglik_cens_trunc_wrapper_R
+Rcpp::NumericVector test_c_loglik_cens_trunc_wrapper_R(Rcpp::NumericMatrix pars, Rcpp::DataFrame dadm, std::string model_type_str, double min_ll, Rcpp::LogicalVector ok_params, int n_acc);
+RcppExport SEXP _EMC2_test_c_loglik_cens_trunc_wrapper_R(SEXP parsSEXP, SEXP dadmSEXP, SEXP model_type_strSEXP, SEXP min_llSEXP, SEXP ok_paramsSEXP, SEXP n_accSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< Rcpp::NumericMatrix >::type pars(parsSEXP);
+    Rcpp::traits::input_parameter< Rcpp::DataFrame >::type dadm(dadmSEXP);
+    Rcpp::traits::input_parameter< std::string >::type model_type_str(model_type_strSEXP);
+    Rcpp::traits::input_parameter< double >::type min_ll(min_llSEXP);
+    Rcpp::traits::input_parameter< Rcpp::LogicalVector >::type ok_params(ok_paramsSEXP);
+    Rcpp::traits::input_parameter< int >::type n_acc(n_accSEXP);
+    rcpp_result_gen = Rcpp::wrap(test_c_loglik_cens_trunc_wrapper_R(pars, dadm, model_type_str, min_ll, ok_params, n_acc));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -499,6 +515,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_build_hrf_kernel", (DL_FUNC) &_EMC2_build_hrf_kernel, 10},
     {"_EMC2_construct_design_matrix", (DL_FUNC) &_EMC2_construct_design_matrix, 13},
     {"_EMC2_calc_ll", (DL_FUNC) &_EMC2_calc_ll, 11},
+    {"_EMC2_test_c_loglik_cens_trunc_wrapper_R", (DL_FUNC) &_EMC2_test_c_loglik_cens_trunc_wrapper_R, 6},
     {"_EMC2_c_add_charvectors", (DL_FUNC) &_EMC2_c_add_charvectors, 2},
     {NULL, NULL, 0}
 };

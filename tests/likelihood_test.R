@@ -374,7 +374,7 @@ for (i in 1:n_unique_trials) {
   current_dadm <- dadm_test[i:(i+1), , drop = FALSE]
   attr(current_dadm, "expand") <- 1 # This trial expands to itself once
   
-  par_indices <- ((i - 1) * n_acc + 1)#:(i * n_acc)
+  par_indices <- ((i - 1) * n_acc + 1):(i * n_acc)
   current_pars <- pars_test[par_indices, , drop = FALSE]
   attr(current_pars, "ok") <- attr(pars_test, "ok")[par_indices]
   
@@ -384,34 +384,7 @@ for (i in 1:n_unique_trials) {
 "); print(current_pars)
   
   # A. Standard EMC2::log_likelihood_race (only for observed, non-censored/truncated)
-  ll_standard <- NA
-  if (is.finite(current_dadm$rt) && current_dadm$rt > 0) {
-    # log_likelihood_race needs 'winner' attribute in dadm (logical, overall rows of pars)
-    # and specific 'pars' structure (all accs for the trial, then next trial etc.)
-    # This direct call is tricky because log_likelihood_race expects dadm to have all trial accumulators data
-    # and pars to be structured accordingly.
-    # For a single unique trial, we can construct a temporary full dadm for it.
-    
-    # Create a 'winner' logical vector for this single trial condition for 'pars'
-    # It has n_acc elements.
-    winner_vec_trial <- rep(FALSE, n_acc)
-    if (!is.na(current_dadm$R)) {
-      winner_vec_trial[as.integer(current_dadm$R)] <- TRUE
-    }
-    
-    # For log_likelihood_race, dadm needs to be structured differently if called directly.
-    # It usually gets a 'dadm' where each row is an accumulator for a trial.
-    # And 'pars' where rows correspond to dadm rows.
-    # This comparison is easiest if we adapt the input to what log_likelihood_race expects
-    # or if we only compare the *new* functions against each other and against your original.
-    
-    # Simplification for this test: If rt is normal, call standard race
-    # but ensure inputs are massaged if its internal assumptions differ.
-    # The most straightforward comparison for non-censored is:
-    # If LT=0, UT=Inf, LC=0, UC=Inf (i.e. no effective censoring/truncation in new func)
-    # then output of log_likelihood_race_cens_trunc should match log_likelihood_race.
-    # This will be tested by setting LT/LC/UC/UT in new func to non-restrictive values.
-  }
+
   # B. Your original log_likelihood_race_missing
   ll_original_missing <- NA
   if (exists("log_likelihood_race_missing")) {
@@ -430,13 +403,13 @@ for (i in 1:n_unique_trials) {
   }
   cat("Original Censored LL (To be filled by user):", ll_original_missing, "
 ")
-  current_dadm$winner = winner_vec_trial[1]
+  
   # C. New R version: log_likelihood_race_cens_trunc
   # Make sure the actual function definition is available
   ll_old_R <- EMC2:::log_likelihood_race(
     pars = current_pars,
     dadm = current_dadm,
-    model = EMC2::LBA, 
+    model = EMC2::LBA(), 
     min_ll = min_ll_test
   )
   ll_new_R <- EMC2:::log_likelihood_race_cens_trunc(

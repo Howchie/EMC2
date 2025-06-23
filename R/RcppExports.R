@@ -105,8 +105,12 @@ construct_design_matrix <- function(frame_times, events, has_derivative, min_ons
     .Call(`_EMC2_construct_design_matrix`, frame_times, events, has_derivative, min_onset, oversampling, time_length, onset, delay, undershoot, dispersion, u_dispersion, ratio, add_intercept)
 }
 
-calc_ll <- function(p_matrix, data, constants, designs, type, bounds, transforms, pretransforms, p_types, min_ll, trend) {
-    .Call(`_EMC2_calc_ll`, p_matrix, data, constants, designs, type, bounds, transforms, pretransforms, p_types, min_ll, trend)
+calc_ll <- function(p_matrix, data, constants, designs, type_rcpp, bounds, transforms, pretransforms, p_types, min_ll, trend) {
+    .Call(`_EMC2_calc_ll`, p_matrix, data, constants, designs, type_rcpp, bounds, transforms, pretransforms, p_types, min_ll, trend)
+}
+
+test_c_loglik_cens_trunc_wrapper_R <- function(pars, dadm, model_type_str, min_ll, ok_params, n_acc) {
+    .Call(`_EMC2_test_c_loglik_cens_trunc_wrapper_R`, pars, dadm, model_type_str, min_ll, ok_params, n_acc)
 }
 
 c_add_charvectors <- function(x, y) {
