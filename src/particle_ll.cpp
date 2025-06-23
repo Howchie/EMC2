@@ -819,22 +819,90 @@ double c_log_likelihood_race_cens_trunc(
                     obs_params_struct.model_pfun = model_pfun;
                     obs_params_struct.n_acc = n_acc;
                     obs_params_struct.model_specific_context = model_context_for_funcs;
-                    current_prob_val = gsl_f_race_adapter(rt_j, &obs_params_struct);
+                    // current_prob_val = gsl_f_race_adapter(rt_j, &obs_params_struct); // Old way: product of probabilities
+
+                    // New way: sum of log-probabilities for numerical stability
+                    double current_log_lik_val = 0.0;
+                    Rcpp::NumericVector t_vec(1); t_vec[0] = rt_j;
+
+                    // Winner's log PDF
+                    Rcpp::NumericMatrix p_winner_mat(1, pars_ordered_obs.ncol());
+                    p_winner_mat.row(0) = pars_ordered_obs.row(0);
+                    Rcpp::NumericVector pdf_winner_vec = model_dfun(t_vec, p_winner_mat, false, model_context_for_funcs);
+                    double pdf_winner = pdf_winner_vec[0];
+
+                    if (R_FINITE(pdf_winner) && pdf_winner > std::numeric_limits<double>::epsilon()) {
+                        current_log_lik_val += std::log(pdf_winner);
+                    } else {
+                        current_log_lik_val = min_ll; // Or accumulate min_ll; if one part is min_ll, whole thing might be
+                    }
+
+                    // Losers' log Survivor functions
+                    if (current_log_lik_val > min_ll -1.0) { // Only proceed if winner PDF was not already min_ll inducing
+                        for (int loser_idx = 1; loser_idx < n_acc; ++loser_idx) {
+                            Rcpp::NumericMatrix p_loser_mat(1, pars_ordered_obs.ncol());
+                            p_loser_mat.row(0) = pars_ordered_obs.row(loser_idx);
+                            Rcpp::NumericVector cdf_loser_vec = model_pfun(t_vec, p_loser_mat, false, model_context_for_funcs);
+                            double cdf_loser = cdf_loser_vec[0];
+                            double s_loser = 1.0 - cdf_loser;
+
+                            if (R_FINITE(s_loser) && s_loser > std::numeric_limits<double>::epsilon()) {
+                                current_log_lik_val += std::log(s_loser);
+                            } else {
+                                current_log_lik_val = min_ll; // If any loser has zero/bad survivor, trial is min_ll
+                                break;
+                            }
+                        }
+                    }
+                    // current_prob_val is now actually a log-likelihood (before truncation correction)
+                    // The variable name ll_unique[j] will store this.
+                    // Truncation correction will be applied to this log-likelihood later.
+                    // For now, we set ll_unique[j] directly.
+                    ll_unique[j] = current_log_lik_val; // This is pre-truncation loglik
+                    // We need to apply truncation factor next.
+                    // The old current_prob_val logic needs to be bypassed for this path.
+                    // We will handle the truncation factor application after this block.
                 }
-                if (current_prob_val > 0) {
+                // Truncation correction for observed RT path (moved outside the density calculation)
+                // This applies if ll_unique[j] is not already min_ll from density calculation
+                if (ll_unique[j] > min_ll - 1.0) { // Check if not already set to min_ll by bad density/survivor
                     double trunc_cf = get_trunc_corr_factor_for_kth_winner_cpp(R_j_idx, pars_condition_j_all_acc, model_dfun, model_pfun, LT, UT, n_acc, integration_epsilon, model_context_for_funcs);
-                    if (ISNAN(trunc_cf) || !R_FINITE(trunc_cf) || trunc_cf < 0) current_prob_val = 0;
-                    else current_prob_val *= trunc_cf;
+                    if (ISNAN(trunc_cf) || !R_FINITE(trunc_cf) || trunc_cf <= 0) { // If CF is bad or non-positive
+                        ll_unique[j] = min_ll;
+                    } else {
+                        ll_unique[j] += std::log(trunc_cf); // Add log of CF
+                    }
                 }
-            } else { current_prob_val = 0; } // Should not happen: observed RT but unknown response
+                 // Ensure it's not better than min_ll if it was already min_ll, or became min_ll
+                if (current_log_lik_val < min_ll +1.0 && ll_unique[j] > min_ll) {
+                    // This case can happen if current_log_lik_val was min_ll, but trunc_cf made it positive
+                    // This means density was zero, but trunc_cf based on integrals was non-zero, which is odd.
+                    // However, robustly: if density part was min_ll, final should also be min_ll or worse.
+                    // This specific check might need refinement based on how min_ll interacts with log(trunc_cf)
+                }
+
+
+            } else {
+                // Observed RT but R_j_idx is NA (unknown response) - should not happen.
+                ll_unique[j] = min_ll;
+            }
+            // Bypass the old current_prob_val logic for this path
+            goto end_of_trial_likelihood_processing; // Skip to common processing for ll_unique[j]
 
         } else if (R_FINITE(rt_j) && rt_j == R_NegInf) { // Case 2: Lower Censored
+            // This part calculates a probability, not a log-probability directly from components
+            // So current_prob_val is appropriate here.
             if (R_j_idx != NA_INTEGER) { // Response known
                 current_prob_val = integrate_for_kth_winner_cpp(R_j_idx, pars_condition_j_all_acc, LT, LC, model_dfun, model_pfun, n_acc, integration_epsilon, model_context_for_funcs);
-                if (current_prob_val > 0) {
+                if (current_prob_val > std::numeric_limits<double>::epsilon()) { // Check if prob > 0 before applying CF
                     double trunc_cf = get_trunc_corr_factor_for_kth_winner_cpp(R_j_idx, pars_condition_j_all_acc, model_dfun, model_pfun, LT, UT, n_acc, integration_epsilon, model_context_for_funcs);
-                    if (ISNAN(trunc_cf) || !R_FINITE(trunc_cf) || trunc_cf < 0) current_prob_val = 0;
-                    else current_prob_val *= trunc_cf;
+                    if (ISNAN(trunc_cf) || !R_FINITE(trunc_cf) || trunc_cf <= 0) {
+                        current_prob_val = 0; // Invalid CF makes prob zero
+                    } else {
+                        current_prob_val *= trunc_cf;
+                    }
+                } else {
+                    current_prob_val = 0; // Initial integral was zero or too small
                 }
             } else { // Response unknown
                 double sum_p = 0;
@@ -890,11 +958,19 @@ double c_log_likelihood_race_cens_trunc(
                 current_prob_val = sum_total_p;
             }
         }
-        // All other rt_j values (e.g. 0 or negative if not Inf) would result in current_prob_val = 0
+        // All other rt_j values (e.g. 0 or negative if not Inf) would result in current_prob_val = 0 for paths that use it.
 
-        current_prob_val = std::max(0.0, current_prob_val); // Ensure non-negative
-        ll_unique[j] = (current_prob_val > std::numeric_limits<double>::epsilon()) ? std::log(current_prob_val) : min_ll;
-        ll_unique[j] = std::max(min_ll, ll_unique[j]); // Ensure not less than min_ll
+end_of_trial_likelihood_processing:; // Label for goto
+
+        // For paths that calculated current_prob_val (censored, NA RTs)
+        // The observed RT path sets ll_unique[j] directly with a log-likelihood.
+        // So, this conversion is only for other paths.
+        if (!(R_FINITE(rt_j) && rt_j > 0 && R_j_idx != NA_INTEGER)) { // If not the observed RT path that sets ll_unique[j] directly
+            current_prob_val = std::max(0.0, current_prob_val); // Ensure non-negative probability
+            ll_unique[j] = (current_prob_val > std::numeric_limits<double>::epsilon()) ? std::log(current_prob_val) : min_ll;
+        }
+
+        ll_unique[j] = std::max(min_ll, ll_unique[j]); // Ensure not less than min_ll for all paths
     }
 
     // The return type is Rcpp::NumericVector for easier debugging from R if this function
