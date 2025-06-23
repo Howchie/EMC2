@@ -200,12 +200,23 @@
 dRDM <- function(rt,pars)
   # density for single accumulator
 {
+  if (is.null(dim(pars))) { # Check if pars is a vector
+    original_names <- names(pars)
+    pars <- matrix(pars, nrow = 1, dimnames = list(NULL, original_names))
+  }
   out <- numeric(length(rt))
-  ok <- rt > pars[,"t0"] & !pars[,"v"] < 0  # code handles rate zero case
+  # Applying drop=FALSE for subsetting pars for robustness, though t0 and v are single columns
+  ok <- rt > pars[,"t0",drop=FALSE] & !pars[,"v",drop=FALSE] < 0  # code handles rate zero case
   ok[is.na(ok)] <- FALSE
-  if (any(dimnames(pars)[[2]]=="s")) # rescale
-    pars[ok,c("A","B","v")] <- pars[ok,c("A","B","v")]/pars[ok,"s"]
-  out[ok] <- dWald(rt[ok],v=pars[ok,"v"],B=pars[ok,"B"],A=pars[ok,"A"],t0=pars[ok,"t0"])
+  if (any(ok)){
+    if (any(dimnames(pars)[[2]]=="s")) { # rescale
+      # Ensure pars[ok,] remains a matrix even if sum(ok)==1
+      pars_ok <- pars[ok,,drop=FALSE]
+      pars_ok[,c("A","B","v")] <- pars_ok[,c("A","B","v")]/pars_ok[,"s"]
+      pars[ok,] <- pars_ok
+    }
+    out[ok] <- dWald(rt[ok],v=pars[ok,"v",drop=FALSE],B=pars[ok,"B",drop=FALSE],A=pars[ok,"A",drop=FALSE],t0=pars[ok,"t0",drop=FALSE])
+  }
   out
 }
 
@@ -213,12 +224,21 @@ dRDM <- function(rt,pars)
 pRDM <- function(rt,pars)
   # cumulative density for single accumulator
 {
+  if (is.null(dim(pars))) { # Check if pars is a vector
+    original_names <- names(pars)
+    pars <- matrix(pars, nrow = 1, dimnames = list(NULL, original_names))
+  }
   out <- numeric(length(rt))
-  ok <- rt > pars[,"t0"] & !pars[,"v"] < 0  # code handles rate zero case
+  ok <- rt > pars[,"t0",drop=FALSE] & !pars[,"v",drop=FALSE] < 0  # code handles rate zero case
   ok[is.na(ok)] <- FALSE
-  if (any(dimnames(pars)[[2]]=="s")) # rescale
-    pars[ok,c("A","B","v")] <- pars[ok,c("A","B","v")]/pars[ok,"s"]
-  out[ok] <- pWald(rt[ok],v=pars[ok,"v"],B=pars[ok,"B"],A=pars[ok,"A"],t0=pars[ok,"t0"])
+  if (any(ok)){
+    if (any(dimnames(pars)[[2]]=="s")) { # rescale
+      pars_ok <- pars[ok,,drop=FALSE]
+      pars_ok[,c("A","B","v")] <- pars_ok[,c("A","B","v")]/pars_ok[,"s"]
+      pars[ok,] <- pars_ok
+    }
+    out[ok] <- pWald(rt[ok],v=pars[ok,"v",drop=FALSE],B=pars[ok,"B",drop=FALSE],A=pars[ok,"A",drop=FALSE],t0=pars[ok,"t0",drop=FALSE])
+  }
   out
 }
 

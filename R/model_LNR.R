@@ -1,21 +1,32 @@
 
 dLNR <- function(rt,pars){
-  rt <- rt - pars[,"t0"]
+  if (is.null(dim(pars))) { # Check if pars is a vector
+    original_names <- names(pars)
+    pars <- matrix(pars, nrow = 1, dimnames = list(NULL, original_names))
+  }
+  rt <- rt - pars[,"t0",drop=FALSE]
   out <- numeric(length(rt))
   ok <- rt > 0
   ok[is.na(ok) | is.infinite(rt)] <- FALSE
-  out[ok] <- stats::dlnorm(rt[ok],meanlog=pars[ok,"m"],sdlog=pars[ok,"s"])
+  if (any(ok)) {
+    out[ok] <- stats::dlnorm(rt[ok],meanlog=pars[ok,"m",drop=FALSE],sdlog=pars[ok,"s",drop=FALSE])
+  }
   out
 }
 
 pLNR <- function(rt,pars){
-  rt <- rt - pars[,"t0"]
+  if (is.null(dim(pars))) { # Check if pars is a vector
+    original_names <- names(pars)
+    pars <- matrix(pars, nrow = 1, dimnames = list(NULL, original_names))
+  }
+  rt <- rt - pars[,"t0",drop=FALSE]
   out <- numeric(length(rt))
   ok <- rt > 0
   ok[is.na(ok) | is.infinite(rt)] <- FALSE
-  out[ok] <- stats::plnorm(rt[ok],meanlog=pars[ok,"m"],sdlog=pars[ok,"s"])
+  if (any(ok)) {
+    out[ok] <- stats::plnorm(rt[ok],meanlog=pars[ok,"m",drop=FALSE],sdlog=pars[ok,"s",drop=FALSE])
+  }
   out
-
 }
 
 rLNR <- function(lR,pars,p_types=c("m","s","t0"),ok=rep(TRUE,dim(pars)[1])){

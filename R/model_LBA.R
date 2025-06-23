@@ -101,13 +101,19 @@ dLBA <- function (rt, pars, posdrift = TRUE)
   # posdrift = truncated positive normal rates
   # robust slower, deals with extreme rate values
 {
+  if (is.null(dim(pars))) { # Check if pars is a vector
+    original_names <- names(pars)
+    pars <- matrix(pars, nrow = 1, dimnames = list(NULL, original_names))
+  }
   dt <- rt - pars[,"t0"]
   ok <- (dt>0) & (pars[,"b"] >= pars[,"A"])
   ok[is.na(ok) | !is.finite(dt)] <- FALSE
   out <- numeric(length(dt))
-  out[ok] <- dlba(t = dt[ok], A = pars[ok,"A"], b = pars[ok,"b"],
-                         v = pars[ok,"v"], sv = pars[ok,"sv"],
-                         posdrift = posdrift)
+  if (any(ok)) {
+    out[ok] <- dlba(t = dt[ok], A = pars[ok,"A",drop=FALSE], b = pars[ok,"b",drop=FALSE],
+                           v = pars[ok,"v",drop=FALSE], sv = pars[ok,"sv",drop=FALSE],
+                           posdrift = posdrift)
+  }
   out
 }
 
@@ -115,13 +121,19 @@ pLBA <- function (rt, pars, posdrift = TRUE)
   # posdrift = truncated positive normal rates
   # robust slower, deals with extreme rate values
 {
+  if (is.null(dim(pars))) { # Check if pars is a vector
+    original_names <- names(pars)
+    pars <- matrix(pars, nrow = 1, dimnames = list(NULL, original_names))
+  }
   dt <- rt - pars[,"t0"]
   ok <- (dt>0) & (pars[,"b"] >= pars[,"A"])
   ok[is.na(ok) | !is.finite(dt)] <- FALSE
   out <- numeric(length(dt))
-  out[ok] <- plba(t = dt[ok], A = pars[ok,"A"], b = pars[ok,"b"],
-                         v = pars[ok,"v"], sv = pars[ok,"sv"],
-                         posdrift = posdrift)
+  if (any(ok)) {
+    out[ok] <- plba(t = dt[ok], A = pars[ok,"A",drop=FALSE], b = pars[ok,"b",drop=FALSE],
+                           v = pars[ok,"v",drop=FALSE], sv = pars[ok,"sv",drop=FALSE],
+                           posdrift = posdrift)
+  }
   out
 }
 
