@@ -284,6 +284,19 @@ contr.anova <- function(n) {
 add_accumulators <- function(data,matchfun=NULL,simulate=FALSE, type = "RACE", Fcovariates=NULL) {
   if(is.null(type) || !type %in% c("RACE", "SDT", "MT", "TC")) return(data)
   if (!is.factor(data$R)) stop("data must have a factor R")
+
+  # Get all attributes from the input data
+  all_input_attrs <- attributes(data)
+  # Define standard attributes to exclude
+  standard_attrs <- c("names", "row.names", "class")
+  # Filter to get only custom attributes
+  custom_attrs_to_preserve <- list()
+  for (attr_name in names(all_input_attrs)) {
+    if (!attr_name %in% standard_attrs) {
+      custom_attrs_to_preserve[[attr_name]] <- all_input_attrs[[attr_name]]
+    }
+  }
+
   factors <- names(data)[!names(data) %in% c("R","rt","trials",Fcovariates)]
   if (type %in% c("RACE","SDT")) {
     nacc <- length(levels(data$R))
@@ -338,6 +351,14 @@ add_accumulators <- function(data,matchfun=NULL,simulate=FALSE, type = "RACE", F
     if (type %in% c("MT","TC")) datar$winner <- NA else
       datar$winner <- datar$lR==R
   }
+
+  # Re-attach preserved custom attributes
+  if (length(custom_attrs_to_preserve) > 0) {
+    for (attr_name in names(custom_attrs_to_preserve)) {
+      attr(datar, attr_name) <- custom_attrs_to_preserve[[attr_name]]
+    }
+  }
+
   datar
 }
 
