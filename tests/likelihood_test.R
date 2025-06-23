@@ -1,4 +1,5 @@
 #### RACE LBA ----
+devtools::load_all()
 RNGkind("L'Ecuyer-CMRG")
 set.seed(123)
 matchfun <- function(d) as.numeric(d$S)==as.numeric(d$lR) |
@@ -30,8 +31,8 @@ dat <- make_data(p_vector,designLBA,data=template)
 # Check likelihood
 dadmLBA <- EMC2:::design_model(dat,designLBA)
 dadmMLBA <- EMC2:::design_model(dat,designMLBA)
-pars <- EMC2:::get_pars_matrix(p_vector, dadm, model = attr(dadm, "model")())
-EMC2:::log_likelihood_race_cens_trunc(pars,dadm,attr(dadm, "model")())
+pars <- EMC2:::get_pars_matrix(p_vector, dadmLBA, model = attr(dadmLBA, "model")())
+#EMC2:::log_likelihood_race_cens_trunc(pars,dadm,attr(dadm, "model")())
 
 
 lfun <- function(i, x, p_vector, pname, dadm, use_c, censor=FALSE) {
@@ -136,7 +137,7 @@ profile_plot_test(dat,designLBA,p_vector,n_cores=1,layout=c(2,2),use_c=TRUE, cen
 profile_plot_test(dat,designMLBA,p_vector,n_cores=1,layout=c(2,2),use_c=TRUE, censor=TRUE) # ?
 
 
-emc <- make_emc(dat,designLBA,type="single")
-emc <- fit(emc,cores_per_chain = 3)
-recovery(emc,p_vector)
+# emc <- make_emc(dat,designLBA,type="single")
+# emc <- fit(emc,cores_per_chain = 3)
+# recovery(emc,p_vector)
 

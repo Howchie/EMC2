@@ -800,7 +800,7 @@ double c_log_likelihood_race_cens_trunc(
         Rcpp::NumericMatrix pars_condition_j_all_acc = pars(current_trial_par_indices, Rcpp::_);
 
         // Access rt from the first row of the block of accumulators for unique trial j
-        double rt_j = rt_col[j * n_acc];
+        double rt_j = rt_col[j * n_acc]; 
         // Access R from the pre-extracted R_values_for_unique_trials for unique trial j
         int R_j_idx = (R_values_for_unique_trials[j] == NA_INTEGER) ? NA_INTEGER : R_values_for_unique_trials[j];
 
@@ -813,15 +813,6 @@ double c_log_likelihood_race_cens_trunc(
                 } else {
                     Rcpp::NumericMatrix pars_ordered_obs = order_pars_for_winner_cpp(pars_condition_j_all_acc, R_j_idx, n_acc);
 
-                    gsl_race_params obs_params_struct;
-                    obs_params_struct.p_trial_this_winner_first = &pars_ordered_obs;
-                    obs_params_struct.model_dfun = model_dfun;
-                    obs_params_struct.model_pfun = model_pfun;
-                    obs_params_struct.n_acc = n_acc;
-                    obs_params_struct.model_specific_context = model_context_for_funcs;
-                    // current_prob_val = gsl_f_race_adapter(rt_j, &obs_params_struct); // Old way: product of probabilities
-
-                    // New way: sum of log-probabilities for numerical stability
                     double current_log_lik_val = 0.0;
                     Rcpp::NumericVector t_vec(1); t_vec[0] = rt_j;
 
@@ -850,7 +841,7 @@ double c_log_likelihood_race_cens_trunc(
                                 current_log_lik_val += std::log(s_loser);
                             } else {
                                 current_log_lik_val = min_ll; // If any loser has zero/bad survivor, trial is min_ll
-                                break;
+                                break; 
                             }
                         }
                     }
@@ -868,23 +859,15 @@ double c_log_likelihood_race_cens_trunc(
                 if (ll_unique[j] > min_ll - 1.0) { // Check if not already set to min_ll by bad density/survivor
                     double trunc_cf = get_trunc_corr_factor_for_kth_winner_cpp(R_j_idx, pars_condition_j_all_acc, model_dfun, model_pfun, LT, UT, n_acc, integration_epsilon, model_context_for_funcs);
                     if (ISNAN(trunc_cf) || !R_FINITE(trunc_cf) || trunc_cf <= 0) { // If CF is bad or non-positive
-                        ll_unique[j] = min_ll;
+                        ll_unique[j] = min_ll; 
                     } else {
                         ll_unique[j] += std::log(trunc_cf); // Add log of CF
                     }
                 }
-                 // Ensure it's not better than min_ll if it was already min_ll, or became min_ll
-                if (current_log_lik_val < min_ll +1.0 && ll_unique[j] > min_ll) {
-                    // This case can happen if current_log_lik_val was min_ll, but trunc_cf made it positive
-                    // This means density was zero, but trunc_cf based on integrals was non-zero, which is odd.
-                    // However, robustly: if density part was min_ll, final should also be min_ll or worse.
-                    // This specific check might need refinement based on how min_ll interacts with log(trunc_cf)
-                }
 
-
-            } else {
+            } else { 
                 // Observed RT but R_j_idx is NA (unknown response) - should not happen.
-                ll_unique[j] = min_ll;
+                ll_unique[j] = min_ll; 
             }
             // Bypass the old current_prob_val logic for this path
             goto end_of_trial_likelihood_processing; // Skip to common processing for ll_unique[j]
@@ -969,7 +952,7 @@ end_of_trial_likelihood_processing:; // Label for goto
             current_prob_val = std::max(0.0, current_prob_val); // Ensure non-negative probability
             ll_unique[j] = (current_prob_val > std::numeric_limits<double>::epsilon()) ? std::log(current_prob_val) : min_ll;
         }
-
+        
         ll_unique[j] = std::max(min_ll, ll_unique[j]); // Ensure not less than min_ll for all paths
     }
 
