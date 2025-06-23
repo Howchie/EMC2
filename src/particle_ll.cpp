@@ -6,6 +6,7 @@
 #include "model_DDM.h"
 #include "model_MRI.h"
 #include "trend.h"
+#include "model_race_cens_trunc.h" // Moved here
 
 // ---- START: Context Structs and Static Adapters for Model Functions ----
 
@@ -392,7 +393,7 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
   CharacterVector mm_names = colnames(minmax);
   std::vector<PreTransformSpec> p_specs;
   std::vector<BoundSpec> bound_specs;
-  std::string type_std = Rcpp::as<std::string>(type_rcpp); // Convert Rcpp::String to std::string
+  std::string type_std(type_rcpp); // Convert Rcpp::String to std::string
 
   if(type_std == "DDM"){
     IntegerVector expand = data.attr("expand");
@@ -522,7 +523,7 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
 
 
 // ---- START: New code for censored/truncated race models ----
-#include "model_race_cens_trunc.h" // Include the new header
+// #include "model_race_cens_trunc.h" // Include the new header // MOVED TO TOP
 #include <gsl/gsl_integration.h>
 #include <gsl/gsl_errno.h> // For GSL error handling
 
