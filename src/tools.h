@@ -168,8 +168,9 @@ double gsl_ran_ugaussian_tail(const double a);
 int gsl_sf_erfc_e(double, gsl_sf_result *);
 double gsl_sf_erfc(double);
 
-typedef void gsl_error_handler_t (const char * reason, const char * file,
-                                  int line, int gsl_errno);
+// Removed typedef for gsl_error_handler_t as it's provided by GSL headers
+// typedef void gsl_error_handler_t (const char * reason, const char * file,
+//                                   int line, int gsl_errno);
 
 #define EVAL_RESULT(fn) \
    gsl_sf_result result; \

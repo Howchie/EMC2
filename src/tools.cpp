@@ -549,25 +549,9 @@ static cheb_series erfc_x510_cs = {
   12
 };
 
-gsl_error_handler_t * gsl_error_handler = NULL;
-
-/* modified gsl_error */
-void gsl_error (const char * reason, const char * file, int line, int gsl_errno)
-{
-  if (gsl_error_handler)
-    {
-      (*gsl_error_handler) (reason, file, line, gsl_errno);
-      return ;
-    }
-
-  Rprintf ("ERROR");
-
-  //fflush (stdout);
-  Rprintf ("Default GSL error handler invoked.\n");
-  //fflush (stderr);
-
-  //abort ();
-}
+// Removed gsl_error_handler_t * gsl_error_handler = NULL; definition
+// Removed void gsl_error (...) function definition
+// The GSL library's own error handler and gsl_error function will be used.
 
 static double erfc8_sum(double x)
 {

@@ -793,9 +793,14 @@ double c_log_likelihood_race_cens_trunc(
                     current_prob_val = 0;
                 } else {
                     Rcpp::NumericMatrix pars_ordered_obs = order_pars_for_winner_cpp(pars_condition_j_all_acc, R_j_idx, n_acc);
-                    // Note: f_race_integrand_cpp itself doesn't use model_context_for_funcs directly,
-                    // but model_dfun/model_pfun called by it will.
-                    current_prob_val = f_race_integrand_cpp(rt_j, pars_ordered_obs, model_dfun, model_pfun, n_acc);
+
+                    gsl_race_params obs_params_struct;
+                    obs_params_struct.p_trial_this_winner_first = &pars_ordered_obs;
+                    obs_params_struct.model_dfun = model_dfun;
+                    obs_params_struct.model_pfun = model_pfun;
+                    obs_params_struct.n_acc = n_acc;
+                    obs_params_struct.model_specific_context = model_context_for_funcs;
+                    current_prob_val = gsl_f_race_adapter(rt_j, &obs_params_struct);
                 }
                 if (current_prob_val > 0) {
                     double trunc_cf = get_trunc_corr_factor_for_kth_winner_cpp(R_j_idx, pars_condition_j_all_acc, model_dfun, model_pfun, LT, UT, n_acc, integration_epsilon, model_context_for_funcs);
