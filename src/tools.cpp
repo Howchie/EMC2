@@ -2,6 +2,7 @@
 // Chair of Social Psychology, University of Freiburg
 // Authors: Christoph Klauer and Raphael Hartmann
 #define R_NO_REMAP
+#include <gsl/gsl_errno.h> // For GSL error codes like GSL_SUCCESS
 //#include <cmath>
 #include <mutex>
 #include "tools.h"
