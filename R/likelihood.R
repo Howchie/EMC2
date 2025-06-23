@@ -50,20 +50,8 @@ log_likelihood_race_cens_trunc <- function(pars, dadm, model, min_ll = log(1e-10
   }
 
   ok_params <- if (!is.null(attr(pars, "ok"))) attr(pars, "ok") else rep(TRUE, dim(pars)[1])
-
-  n_unique_trials <- dim(dadm)[1]
-
-  # Determine n_acc (number of accumulators)
-  if (is.factor(dadm$R)) {
-    n_acc <- length(levels(dadm$R))
-  } else if (!is.null(dadm$lR) && is.factor(dadm$lR)) {
-    n_acc <- length(levels(dadm$lR))
-  } else if (nrow(pars) > 0 && n_unique_trials > 0 && nrow(pars) %% n_unique_trials == 0) {
-    n_acc <- nrow(pars) / n_unique_trials
-  } else {
-    stop("Cannot reliably determine n_acc from dadm or pars structure.")
-  }
-  if (n_acc <= 0) stop("n_acc must be positive.")
+  n_acc <- length(levels(dadm$R))
+  n_unique_trials <- dim(dadm)[1]/n_acc
 
   ll_unique <- numeric(n_unique_trials)
 
