@@ -136,20 +136,20 @@ log_likelihood_joint <- function(proposals, dadms, model_list, component = NULL)
 #
 # Assumes dadm is structured with 4 rows per original trial, where each row
 # corresponds to one of four conceptual accumulators.
-# - dadm$accumulator_role: A factor column identifying the role of each row.
+# - dadm$lR: A factor column identifying the role of each row (accumulator role).
 #   Expected levels are "S1D", "S2D", "S1A", "S2A". The order of these levels
 #   in the factor is not critical, as the code explicitly extracts by name.
-# - dadm$observed_response: A column containing the actual observed response
-#   ("yes" or "no") for the original trial, replicated across the 4 rows.
+# - dadm$R: A column containing the actual observed response ("yes" or "no")
+#   for the original trial, replicated across the 4 rows.
 # - dadm$rt: The observed RT, replicated across the 4 rows.
 # - pars: Matrix aligned with dadm, rows providing base parameters (e.g., "v", "b")
-#   for the accumulator specified in dadm$accumulator_role.
+#   for the accumulator specified in dadm$lR.
 log_likelihood_redundant_target_race <- function(pars, dadm, model, min_ll = log(1e-10))
 {
   # --- Input Validations ---
   if (is.null(dadm$rt)) stop("dadm$rt is missing.")
-  if (is.null(dadm$accumulator_role)) stop("dadm$accumulator_role (factor identifying S1D, S2D, S1A, S2A) is missing.")
-  if (is.null(dadm$observed_response)) stop("dadm$observed_response ('yes'/'no') is missing.")
+  if (is.null(dadm$lR)) stop("dadm$lR (factor identifying accumulator roles S1D, S2D, S1A, S2A) is missing.")
+  if (is.null(dadm$R)) stop("dadm$R (observed 'yes'/'no' response) is missing.")
   if (is.null(attr(dadm, "expand"))) stop("attr(dadm, 'expand') is missing.")
   if (nrow(dadm) %% 4 != 0) {
     stop("nrow(dadm) must be a multiple of 4 (4 accumulator rows per original trial).")
@@ -157,9 +157,9 @@ log_likelihood_redundant_target_race <- function(pars, dadm, model, min_ll = log
 
   # Expected accumulator roles for internal mapping
   internal_role_order <- c("S1D", "S2D", "S1A", "S2A")
-  if (!all(internal_role_order %in% levels(as.factor(dadm$accumulator_role)))) {
-    missing_roles <- internal_role_order[!internal_role_order %in% levels(as.factor(dadm$accumulator_role))]
-    stop(paste("dadm$accumulator_role is missing expected levels:", paste(missing_roles, collapse=", "),
+  if (!all(internal_role_order %in% levels(as.factor(dadm$lR)))) { # Check dadm$lR
+    missing_roles <- internal_role_order[!internal_role_order %in% levels(as.factor(dadm$lR))]
+    stop(paste("dadm$lR is missing expected levels for accumulator roles:", paste(missing_roles, collapse=", "),
                ". Expected levels are S1D, S2D, S1A, S2A."))
   }
 
@@ -170,32 +170,25 @@ log_likelihood_redundant_target_race <- function(pars, dadm, model, min_ll = log
   n_blocks <- nrow(dadm) / 4 # Number of original trials
 
   # --- Extract f/F values for each role into vectors of length n_blocks ---
-  # This assumes that dadm is structured such that filtering by accumulator_role
+  # This assumes that dadm is structured such that filtering by dadm$lR
   # results in vectors of length n_blocks, correctly ordered by original trial.
-  # This typically means dadm should be sorted by an original trial ID,
-  # then by accumulator_role (or this extraction order matches such a sort).
-
-  f1 <- f_all[dadm$accumulator_role == "S1D"]; F1 <- F_all[dadm$accumulator_role == "S1D"]
-  f2 <- f_all[dadm$accumulator_role == "S2D"]; F2 <- F_all[dadm$accumulator_role == "S2D"]
-  f3 <- f_all[dadm$accumulator_role == "S1A"]; F3 <- F_all[dadm$accumulator_role == "S1A"]
-  f4 <- f_all[dadm$accumulator_role == "S2A"]; F4 <- F_all[dadm$accumulator_role == "S2A"]
+  f1 <- f_all[dadm$lR == "S1D"]; F1 <- F_all[dadm$lR == "S1D"]
+  f2 <- f_all[dadm$lR == "S2D"]; F2 <- F_all[dadm$lR == "S2D"]
+  f3 <- f_all[dadm$lR == "S1A"]; F3 <- F_all[dadm$lR == "S1A"]
+  f4 <- f_all[dadm$lR == "S2A"]; F4 <- F_all[dadm$lR == "S2A"]
 
   # Validation: Check if all extracted vectors have the correct length (n_blocks)
   expected_len <- n_blocks
   if (any(sapply(list(f1, F1, f2, F2, f3, F3, f4, F4), length) != expected_len)) {
-    stop("Length mismatch after extracting role-specific f/F values. Check dadm structure and accumulator_role factor.")
+    stop("Length mismatch after extracting role-specific f/F values. Check dadm structure and lR factor.")
   }
 
   # --- Get Observed Responses (one per original trial/block) ---
-  # Taking from the first row of each conceptual 4-row block.
-  # This assumes dadm is grouped by original trial, so seq(1, nrow(dadm), by = 4) picks these first rows.
-  # If not, a more robust way might be needed if an original_trial_id column exists.
-  # For now, this is consistent with the loop version's row_indices[1].
-  observed_responses_per_block <- dadm$observed_response[seq(1, nrow(dadm), by = 4)]
+  # Taking from the first row of each conceptual 4-row block using dadm$R.
+  observed_responses_per_block <- dadm$R[seq(1, nrow(dadm), by = 4)] # dadm$R holds "yes"/"no"
   if (length(observed_responses_per_block) != n_blocks) {
-      stop("Could not correctly extract one observed_response per trial block.")
+      stop("Could not correctly extract one observed response per trial block from dadm$R.")
   }
-
 
   ll_block_values <- numeric(n_blocks) # Stores one LL value per original trial
   is_yes_response <- observed_responses_per_block == "yes"
@@ -222,26 +215,19 @@ log_likelihood_redundant_target_race <- function(pars, dadm, model, min_ll = log
     ll_block_values[is_no_response] <- log(term1_no) + log(term2_no) + log(term3_no)
   }
 
-  # Handle any responses that were not 'yes' or 'no'
   unhandled_responses <- !(is_yes_response | is_no_response)
   if (any(unhandled_responses)) {
       original_indices_unhandled <- which(unhandled_responses)
-      first_row_in_dadm_unhandled <- (original_indices_unhandled - 1) * 4 + 1
-      problematic_values <- unique(dadm$observed_response[first_row_in_dadm_unhandled])
-      warning(paste("Unhandled dadm$observed_response values found:", paste(problematic_values, collapse=", "),
+      # Get the problematic dadm$R values that correspond to these unhandled blocks
+      # Need to index observed_responses_per_block or dadm$R at block level
+      problematic_values <- unique(observed_responses_per_block[unhandled_responses])
+      warning(paste("Unhandled values in dadm$R (observed response) found:", paste(problematic_values, collapse=", "),
                   ". Corresponding log-likelihoods will be NA, then min_ll."))
-      ll_block_values[unhandled_responses] <- NA # Will become min_ll later
+      ll_block_values[unhandled_responses] <- NA
   }
 
-
   # --- Final Summation (same logic as before) ---
-  ll_for_dadm_rows <- numeric(nrow(dadm))
   # Replicate the block's LL to its constituent rows.
-  # rep(ll_block_values, each=4) works if dadm is perfectly sorted by block, then accumulator within block.
-  # A loop is safer if that order isn't strictly guaranteed for attr(dadm,"expand")'s sake.
-  # However, the extraction of f1-f4 and observed_responses_per_block *does* assume a certain usable order.
-  # Given that, rep should be fine if the upstream extraction is robust.
-  # For max safety in this step, retain loop or use a more robust replication:
   original_trial_idx_for_row <- rep(1:n_blocks, each = 4) # Assuming dadm is sorted by block
   ll_for_dadm_rows <- ll_block_values[original_trial_idx_for_row]
 
