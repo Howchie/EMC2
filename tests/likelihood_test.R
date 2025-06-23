@@ -29,12 +29,14 @@ p_vector["A"] = log(1)
 p_vector["sv"] = log(1)
 p_vector["t0"] = log(0.1)
 sim_data = make_data(p_vector,design=design, n_trials=1)
+sim_data$rt[2]=Inf
+attr(sim_data,"UC")=2.5
 fit_data = make_emc(sim_data,design,type="single")
 # Hardcoded censoring/truncation values (matching those in the likelihood functions for now)
 LT_test <- 0.1 
-LC_test <- 0.2 
+LC_test <- 0.2
 UC_test <- 2.5 
-UT_test <- 3.0
+UT_test <- 3
 
 # --- 3. Create Dummy 'dadm' (Unique Trial Conditions) ---
 # Each row is a unique trial type.
@@ -115,9 +117,9 @@ attr(pars_test, "ok") <- rep(TRUE, nrow(pars_test))
 log_likelihood_race_missing <- function(pars,dadm,model,min_ll=log(1e-10))
   # Race model summed log likelihood
 {
-  if (any(names(dadm)=="RACE")) # Some accumulators not present
+  if (any(names(dadm)=="RACE")){ # Some accumulators not present
     pars[as.numeric(dadm$lR)>as.numeric(as.character(dadm$RACE)),] <- NA
-  
+  }
   if (is.null(attr(pars,"ok"))) {
     
     f <- function(t,p,dfun,pfun) {
@@ -177,8 +179,8 @@ log_likelihood_race_missing <- function(pars,dadm,model,min_ll=log(1e-10))
   if (is.null(UT)) UT <- Inf
   
   # Calculate censoring
-  LC <- 0#attr(dadm,"LC")
-  UC <- 2.5#attr(dadm,"UC")
+  LC <- attr(dadm,"LC")
+  UC <- attr(dadm,"UC")
   
   # Response known
   # Fast
@@ -343,21 +345,17 @@ log_likelihood_race_missing <- function(pars,dadm,model,min_ll=log(1e-10))
     if (any(badfix)) lds[badfix] <- min_ll
   }
   
-  
-  lds <- lds[attr(dadm,"expand")] # decompress
+  lds[is.na(lds) | !ok] <- min_ll
   if (n_acc>1) {
-    winner <- dadm$winner[attr(dadm,"expand")]
-    ll <- lds[winner]
+    ll <- lds[dadm$winner]
     if (n_acc==2) {
-      ll <- ll + lds[!winner]
+      ll <- ll + lds[!dadm$winner]
     } else {
-      ll <- ll + apply(matrix(lds[!winner],nrow=n_acc-1),2,sum)
+      ll <- ll + apply(matrix(lds[!dadm$winner],nrow=n_acc-1),2,sum)
     }
-    
-    ll[is.na(ll) | is.nan(ll)] <- min_ll
-    
-    return(sum(pmax(min_ll,ll)))
-  } else return(sum(pmax(min_ll,lds)))
+    ll[is.na(ll)] <- min_ll
+    return(sum(pmax(min_ll,ll[attr(dadm,"expand")])))
+  } else return(sum(pmax(min_ll,lds[attr(dadm,"expand")])))
 }
 
 
@@ -371,11 +369,12 @@ results <- list()
 for (i in 1:n_unique_trials) {
   cat("--- Testing Unique Trial Condition:", i, "---
 ")
-  current_dadm <- dadm_test[i:(i+1), , drop = FALSE]
+  indices <- ((i - 1) * n_acc + 1):(i * n_acc)
+  current_dadm <- dadm_test[indices, , drop = FALSE]
   attr(current_dadm, "expand") <- 1 # This trial expands to itself once
   
-  par_indices <- ((i - 1) * n_acc + 1):(i * n_acc)
-  current_pars <- pars_test[par_indices, , drop = FALSE]
+  
+  current_pars <- pars_test[indices, , drop = FALSE]
   attr(current_pars, "ok") <- attr(pars_test, "ok")[par_indices]
   
   cat("dadm:
@@ -430,22 +429,21 @@ for (i in 1:n_unique_trials) {
   #   # The current C++ wrapper returns a vector of ll_unique. Let's test it that way.
   #   # This call is to the C++ code, which has its own hardcoded LT/LC/UC/UT for now.
   cpp_output_vector <- EMC2:::test_c_loglik_cens_trunc_wrapper_R(
-    pars = pars_test, # Full pars matrix for all unique trials
-    dadm = dadm_test,  # Full dadm for all unique trials
+    pars = current_pars, # Full pars matrix for all unique trials
+    dadm = current_dadm,  # Full dadm for all unique trials
     model_type_str = "LBA_test", 
     min_ll = min_ll_test,
-    ok_params = attr(pars_test, "ok"),
+    ok_params = attr(current_pars, "ok"),
     n_acc = n_acc
   )
-  ll_new_Cpp <- cpp_output_vector[i] # Get the result for the j-th unique trial
+  ll_new_Cpp <- cpp_output_vector # Get the result for the j-th unique trial
   # }
   cat("New C++ Censored LL (via wrapper):", ll_new_Cpp, "
 
 ")
   
   results[[paste0("trial_", i)]] <- list(
-    dadm = current_dadm,
-    pars = current_pars,
+    ll_standard_race = ll_old_R,
     ll_original_missing = ll_original_missing,
     ll_new_R = ll_new_R,
     ll_new_Cpp = ll_new_Cpp
@@ -498,4 +496,4 @@ cat("New R (with non-restrictive bounds - manual change needed) for Scen1:",
     results$trial_1$ll_new_R, "(ensure bounds were 0,Inf,0,Inf)
 ")
 
-# print(results)
+print(results)
