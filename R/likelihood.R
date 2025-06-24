@@ -100,13 +100,13 @@ log_likelihood_race_cens_trunc <- function(pars, dadm, model, min_ll = log(1e-10
     if (test_t < low && low >= 0) test_t <- low + 1e-6 # Ensure test_t is within bounds or sensible
     if (test_t > upp && upp >= 0) test_t <- upp - 1e-6
     
-    integrand_val_at_test_t <- f_race_integrand(t = test_t, p_trial_this_winner_first = pars_ordered, model = model)
+    integrand_val_at_test_t <- f_race_integrand_single(t = test_t, p_trial_this_winner_first = pars_ordered, model = model)
     if (is.na(integrand_val_at_test_t) || !is.finite(integrand_val_at_test_t) || integrand_val_at_test_t < 0) {
       # If integrand is already bad, no point integrating
       # This might happen due to bad parameters leading to NA/Inf in dfun/pfun
     }
     
-    res <- suppressWarnings(try(stats::integrate(f_race_integrand,
+    res <- suppressWarnings(try(stats::integrate(f_race_integrand_single,
                                                  lower = low, upper = upp,
                                                  p_trial_this_winner_first = pars_ordered,
                                                  model = model,

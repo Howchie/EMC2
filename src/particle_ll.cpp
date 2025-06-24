@@ -186,6 +186,78 @@ NumericMatrix c_do_transform(NumericMatrix pars,
   return pars;
 }
 
+// Batched version of f_race_integrand_cpp for finite RT trials
+// rts_batch: vector of RTs for the batch
+// pars_all_trials_ordered: A List of NumericMatrix, where each element is an ordered parameter matrix
+//                          for a trial (winner first), matching the order in rts_batch.
+// model_dfun, model_pfun: function pointers to the model's density and CDF
+// n_acc: number of accumulators
+// model_specific_context: context pointer for model functions
+Rcpp::NumericVector f_race_integrand_batch_cpp(
+    const Rcpp::NumericVector& rts_batch,
+    const Rcpp::List& pars_all_trials_ordered, // List of NumericMatrix, each n_acc x n_params
+    RacePdfFun model_dfun,
+    RaceCdfFun model_pfun,
+    int n_acc,
+    void* model_specific_context) {
+
+    int n_batch_trials = rts_batch.size();
+    if (n_batch_trials == 0) {
+        return Rcpp::NumericVector(0);
+    }
+    if (pars_all_trials_ordered.size() != n_batch_trials) {
+        Rcpp::stop("f_race_integrand_batch_cpp: rts_batch size and pars_all_trials_ordered size mismatch.");
+    }
+
+    Rcpp::NumericVector results(n_batch_trials);
+
+    for (int i = 0; i < n_batch_trials; ++i) {
+        double t = rts_batch[i];
+        Rcpp::NumericMatrix p_trial_this_winner_first = Rcpp::as<Rcpp::NumericMatrix>(pars_all_trials_ordered[i]);
+
+        if (p_trial_this_winner_first.nrow() != n_acc) {
+             Rcpp::stop("f_race_integrand_batch_cpp: Parameter matrix for a trial has incorrect number of rows for n_acc.");
+        }
+
+        // Calculate PDF for the winner
+        Rcpp::NumericMatrix p_winner = p_trial_this_winner_first.row(0);
+        Rcpp::NumericVector pdf_winner_vec = model_dfun(Rcpp::NumericVector::create(t), p_winner, Rcpp::LogicalVector::create(true), false, model_specific_context);
+        double pdf_winner = pdf_winner_vec[0];
+
+        if (R_IsNA(pdf_winner) || !R_finite(pdf_winner) || pdf_winner < 0) {
+            results[i] = 0.0;
+            continue;
+        }
+
+        double survivor_losers = 1.0;
+        if (n_acc > 1) {
+            for (int k = 1; k < n_acc; ++k) { // Losers are in rows 1 to n_acc-1
+                Rcpp::NumericMatrix p_loser_k = p_trial_this_winner_first.row(k);
+                Rcpp::NumericVector cdf_loser_k_vec = model_pfun(Rcpp::NumericVector::create(t), p_loser_k, Rcpp::LogicalVector::create(true), false, model_specific_context);
+                double cdf_loser_k = cdf_loser_k_vec[0];
+
+                if (R_IsNA(cdf_loser_k) || !R_finite(cdf_loser_k)) {
+                    survivor_losers = 0.0; // If any CDF is problematic, product becomes zero
+                    break;
+                }
+                double s_loser_k = 1.0 - cdf_loser_k;
+                s_loser_k = (s_loser_k < 0.0) ? 0.0 : s_loser_k; // Clamp at 0
+                s_loser_k = (s_loser_k > 1.0) ? 1.0 : s_loser_k; // Clamp at 1 (should not be needed for 1-CDF if CDF is valid)
+                survivor_losers *= s_loser_k;
+                if (survivor_losers == 0.0) break; // Optimization
+            }
+        }
+
+        double final_val = pdf_winner * survivor_losers;
+        if (R_IsNA(final_val) || !R_finite(final_val) || final_val < 0) {
+            results[i] = 0.0;
+        } else {
+            results[i] = final_val;
+        }
+    }
+    return results;
+}
+
 
 NumericMatrix c_map_p(NumericVector p_vector,
                       CharacterVector p_types,
@@ -705,7 +777,6 @@ double integrate_for_kth_winner_cpp(
     }
 
     return (result > 0 && R_finite(result)) ? result : 0.0;
-    return (result > 0 && R_finite(result)) ? result : 0.0;
 }
 
 // Truncation correction factor helper - uses GSL via integrate_for_kth_winner_cpp
@@ -997,8 +1068,212 @@ double c_log_likelihood_race_cens_trunc(
         // This part might need to check for dadm["N"] if that's an alternative expansion mode
         // For now, sum unique likelihoods directly if no expansion.
         // This is consistent if each unique trial happens only once.
-        for (int i = 0; i < ll_unique.size(); ++i) {
-            total_ll += ll_unique[i];
+    // Rewriting the main loop with batching:
+
+    Rcpp::NumericVector rts_dadm = dadm["rt"]; // All RTs from dadm
+    Rcpp::IntegerVector R_idxs_dadm = dadm["R"]; // All R indices from dadm
+
+    int n_total_dadm_rows = dadm.nrows();
+    if (n_total_dadm_rows == 0) return 0.0;
+    if (n_acc <= 0) Rcpp::stop("c_log_likelihood_race_cens_trunc: n_acc must be positive.");
+    if (n_total_dadm_rows % n_acc != 0) Rcpp::stop("c_log_likelihood_race_cens_trunc: dadm nrows not a multiple of n_acc.");
+
+    n_unique_trials = n_total_dadm_rows / n_acc;
+    ll_unique.assign(n_unique_trials, min_ll); // Re-initialize with correct size and min_ll
+
+    if (pars.nrow() != n_total_dadm_rows) {
+      Rcpp::Rcout << "pars.nrow(): " << pars.nrow() << ", n_total_dadm_rows: " << n_total_dadm_rows << std::endl;
+      Rcpp::stop("c_log_likelihood_race_cens_trunc: pars matrix dimensions do not match total dadm rows.");
+        }
+    if (ok_params.size() != pars.nrow()) {
+       Rcpp::stop("c_log_likelihood_race_cens_trunc: ok_params size does not match pars matrix rows.");
+    }
+
+    std::vector<int> finite_rt_unique_trial_indices;
+    std::vector<int> other_unique_trial_indices; // For NA, Inf, -Inf RTs
+
+    for (int j = 0; j < n_unique_trials; ++j) {
+        int first_row_in_dadm_for_trial = j * n_acc;
+        // Parameter validity check for the whole block of accumulators for this unique trial
+        bool params_ok_for_this_unique_trial = true;
+        for (int k_acc = 0; k_acc < n_acc; ++k_acc) {
+            if (!ok_params[first_row_in_dadm_for_trial + k_acc]) {
+                params_ok_for_this_unique_trial = false;
+                break;
+            }
+        }
+        if (!params_ok_for_this_unique_trial) {
+            ll_unique[j] = min_ll; // Set for this unique trial and skip to next
+            continue;
+        }
+
+        double rt_j = rts_dadm[first_row_in_dadm_for_trial];
+        if (R_FINITE(rt_j) && rt_j > 0 && rt_j >= LT && rt_j <= UT) { // Finite, positive, and within truncation bounds
+            int R_j_idx = R_idxs_dadm[first_row_in_dadm_for_trial];
+            if (R_j_idx != NA_INTEGER) { // Winner must be known for finite RT
+                 finite_rt_unique_trial_indices.push_back(j);
+            } else { // Finite RT but no winner -> problematic, treat as "other" or assign min_ll
+                 ll_unique[j] = min_ll;
+            }
+        } else { // Handles NA, Inf, -Inf, or outside truncation bounds
+            other_unique_trial_indices.push_back(j);
+        }
+    }
+
+    // --- Part 1: Batch process finite RT trials (Observed RTs within truncation bounds) ---
+    if (!finite_rt_unique_trial_indices.empty()) {
+        Rcpp::NumericVector batch_rts(finite_rt_unique_trial_indices.size());
+        Rcpp::List batch_pars_ordered(finite_rt_unique_trial_indices.size());
+        std::vector<int> batch_R_idxs(finite_rt_unique_trial_indices.size());
+        std::vector<Rcpp::NumericMatrix> batch_pars_unord(finite_rt_unique_trial_indices.size());
+
+
+        for (size_t i = 0; i < finite_rt_unique_trial_indices.size(); ++i) {
+            int unique_trial_idx = finite_rt_unique_trial_indices[i];
+            int first_row_in_dadm = unique_trial_idx * n_acc;
+
+            batch_rts[i] = rts_dadm[first_row_in_dadm];
+            batch_R_idxs[i] = R_idxs_dadm[first_row_in_dadm]; // Store original 1-based R index
+
+            Rcpp::NumericMatrix p_all_acc_for_trial(n_acc, pars.ncol());
+            for(int k_acc=0; k_acc < n_acc; ++k_acc) {
+                p_all_acc_for_trial.row(k_acc) = pars.row(first_row_in_dadm + k_acc);
+            }
+            batch_pars_unord[i] = p_all_acc_for_trial; // Store for truncation correction
+            batch_pars_ordered[i] = order_pars_for_winner_cpp(p_all_acc_for_trial, batch_R_idxs[i], n_acc);
+        }
+
+        Rcpp::NumericVector batch_prob_densities = f_race_integrand_batch_cpp(
+            batch_rts, batch_pars_ordered, model_dfun, model_pfun, n_acc, model_context_for_funcs
+        );
+
+        for (size_t i = 0; i < finite_rt_unique_trial_indices.size(); ++i) {
+            int unique_trial_idx = finite_rt_unique_trial_indices[i];
+            double prob_density = batch_prob_densities[i];
+
+            if (prob_density > std::numeric_limits<double>::epsilon()) {
+                double trunc_cf = get_trunc_corr_factor_for_kth_winner_cpp(
+                    batch_R_idxs[i], batch_pars_unord[i], model_dfun, model_pfun,
+                    LT, UT, n_acc, integration_epsilon, model_context_for_funcs
+                );
+                if (ISNAN(trunc_cf) || !R_FINITE(trunc_cf) || trunc_cf <= 0) {
+                    ll_unique[unique_trial_idx] = min_ll;
+                } else {
+                    ll_unique[unique_trial_idx] = std::log(prob_density) + std::log(trunc_cf);
+                }
+            } else {
+                ll_unique[unique_trial_idx] = min_ll;
+            }
+             ll_unique[unique_trial_idx] = std::max(min_ll, ll_unique[unique_trial_idx]);
+        }
+    }
+
+    // --- Part 2: Process other trials (Infinite RTs, NA RTs, or finite RTs outside truncation) ---
+    for (int unique_trial_idx : other_unique_trial_indices) {
+        // If ll_unique[unique_trial_idx] was already set due to bad params, skip.
+        // This check is implicitly handled because bad param trials are not added to other_unique_trial_indices
+        // if they were caught in the initial loop. However, if a trial was added to `other` because
+        // it was finite but outside truncation, its params are ok.
+
+        int first_row_in_dadm = unique_trial_idx * n_acc;
+        Rcpp::NumericMatrix pars_condition_j_all_acc(n_acc, pars.ncol());
+        for(int k_acc=0; k_acc < n_acc; ++k_acc) {
+            pars_condition_j_all_acc.row(k_acc) = pars.row(first_row_in_dadm + k_acc);
+        }
+
+        double rt_j = rts_dadm[first_row_in_dadm];
+        int R_j_idx = R_idxs_dadm[first_row_in_dadm];
+        double current_prob_val = 0.0;
+
+        if (R_FINITE(rt_j) && rt_j > 0 && (rt_j < LT || rt_j > UT)) { // Finite RT but outside truncation
+             current_prob_val = 0; // Density is 0 if outside truncation window
+        } else if (rt_j == R_NegInf) { // Fast censoring
+            if (R_j_idx != NA_INTEGER) {
+                current_prob_val = integrate_for_kth_winner_cpp(R_j_idx, pars_condition_j_all_acc, LT, LC, model_dfun, model_pfun, n_acc, integration_epsilon, model_context_for_funcs);
+                if (current_prob_val > 0) {
+                    double trunc_cf = get_trunc_corr_factor_for_kth_winner_cpp(R_j_idx, pars_condition_j_all_acc, model_dfun, model_pfun, LT, UT, n_acc, integration_epsilon, model_context_for_funcs);
+                    if (ISNAN(trunc_cf) || !R_FINITE(trunc_cf) || trunc_cf <= 0) current_prob_val = 0; else current_prob_val *= trunc_cf;
+                }
+            } else {
+                for (int k_win = 1; k_win <= n_acc; ++k_win) {
+                    double p_k = integrate_for_kth_winner_cpp(k_win, pars_condition_j_all_acc, LT, LC, model_dfun, model_pfun, n_acc, integration_epsilon, model_context_for_funcs);
+                    if (p_k > 0) {
+                        double trunc_cf_k = get_trunc_corr_factor_for_kth_winner_cpp(k_win, pars_condition_j_all_acc, model_dfun, model_pfun, LT, UT, n_acc, integration_epsilon, model_context_for_funcs);
+                        if (!ISNAN(trunc_cf_k) && R_FINITE(trunc_cf_k) && trunc_cf_k >=0) current_prob_val += (p_k * trunc_cf_k);
+                    }
+                }
+            }
+        } else if (rt_j == R_PosInf) { // Slow censoring
+             if (R_j_idx != NA_INTEGER) {
+                current_prob_val = integrate_for_kth_winner_cpp(R_j_idx, pars_condition_j_all_acc, UC, UT, model_dfun, model_pfun, n_acc, integration_epsilon, model_context_for_funcs);
+                 if (current_prob_val > 0) {
+                    double trunc_cf = get_trunc_corr_factor_for_kth_winner_cpp(R_j_idx, pars_condition_j_all_acc, model_dfun, model_pfun, LT, UT, n_acc, integration_epsilon, model_context_for_funcs);
+                    if (ISNAN(trunc_cf) || !R_FINITE(trunc_cf) || trunc_cf <= 0) current_prob_val = 0; else current_prob_val *= trunc_cf;
+                }
+            } else {
+                for (int k_win = 1; k_win <= n_acc; ++k_win) {
+                    double p_k = integrate_for_kth_winner_cpp(k_win, pars_condition_j_all_acc, UC, UT, model_dfun, model_pfun, n_acc, integration_epsilon, model_context_for_funcs);
+                     if (p_k > 0) {
+                        double trunc_cf_k = get_trunc_corr_factor_for_kth_winner_cpp(k_win, pars_condition_j_all_acc, model_dfun, model_pfun, LT, UT, n_acc, integration_epsilon, model_context_for_funcs);
+                        if (!ISNAN(trunc_cf_k) && R_FINITE(trunc_cf_k) && trunc_cf_k >=0) current_prob_val += (p_k * trunc_cf_k);
+                    }
+                }
+            }
+        } else if (ISNAN(rt_j)) { // Missing RT (NA)
+            if (R_j_idx != NA_INTEGER) {
+                double p_L = integrate_for_kth_winner_cpp(R_j_idx, pars_condition_j_all_acc, LT, LC, model_dfun, model_pfun, n_acc, integration_epsilon, model_context_for_funcs);
+                double p_U = integrate_for_kth_winner_cpp(R_j_idx, pars_condition_j_all_acc, UC, UT, model_dfun, model_pfun, n_acc, integration_epsilon, model_context_for_funcs);
+                current_prob_val = p_L + p_U;
+                 if (current_prob_val > 0) {
+                    double trunc_cf = get_trunc_corr_factor_for_kth_winner_cpp(R_j_idx, pars_condition_j_all_acc, model_dfun, model_pfun, LT, UT, n_acc, integration_epsilon, model_context_for_funcs);
+                    if (ISNAN(trunc_cf) || !R_FINITE(trunc_cf) || trunc_cf <= 0) current_prob_val = 0; else current_prob_val *= trunc_cf;
+                }
+            } else {
+                for (int k_win = 1; k_win <= n_acc; ++k_win) {
+                    double p_L_k = integrate_for_kth_winner_cpp(k_win, pars_condition_j_all_acc, LT, LC, model_dfun, model_pfun, n_acc, integration_epsilon, model_context_for_funcs);
+                    double p_U_k = integrate_for_kth_winner_cpp(k_win, pars_condition_j_all_acc, UC, UT, model_dfun, model_pfun, n_acc, integration_epsilon, model_context_for_funcs);
+                    double p_k_sum = p_L_k + p_U_k;
+                    if (p_k_sum > 0) {
+                        double trunc_cf_k = get_trunc_corr_factor_for_kth_winner_cpp(k_win, pars_condition_j_all_acc, model_dfun, model_pfun, LT, UT, n_acc, integration_epsilon, model_context_for_funcs);
+                        if (!ISNAN(trunc_cf_k) && R_FINITE(trunc_cf_k) && trunc_cf_k >=0) current_prob_val += (p_k_sum * trunc_cf_k);
+                    }
+                }
+            }
+        }
+        // Else: rt_j is 0 or negative finite, current_prob_val remains 0.
+
+        current_prob_val = std::max(0.0, current_prob_val);
+        ll_unique[unique_trial_idx] = (current_prob_val > std::numeric_limits<double>::epsilon()) ? std::log(current_prob_val) : min_ll;
+        ll_unique[unique_trial_idx] = std::max(min_ll, ll_unique[unique_trial_idx]);
+    }
+
+    // --- Summation ---
+    total_ll = 0; // Reset total_ll before summing
+    if (expand_vec.length() > 0) {
+        for (int i = 0; i < expand_vec.length(); ++i) {
+            int unique_idx = expand_vec[i] - 1;
+            if (unique_idx >= 0 && unique_idx < n_unique_trials) { // ll_unique is size n_unique_trials
+                total_ll += ll_unique[unique_idx];
+            } else {
+                // Rcpp::Rcerr << "Warning: expand_vec index out of bounds: " << unique_idx + 1 << std::endl;
+                total_ll += min_ll; // Invalid index in expand_vec
+            }
+        }
+    } else if (dadm.containsElementNamed("N")) { // Check if dadm has an "N" column for weights
+        Rcpp::NumericVector trial_Ns_dadm = dadm["N"]; // Get N column from dadm
+        if (trial_Ns_dadm.length() == n_unique_trials) {
+            for (int j = 0; j < n_unique_trials; ++j) {
+                total_ll += ll_unique[j] * trial_Ns_dadm[j];
+            }
+        } else {
+             // Rcpp::Rcerr << "Warning: dadm['N'] length does not match n_unique_trials. Summing ll_unique directly." << std::endl;
+             for (int j = 0; j < n_unique_trials; ++j) { // Fallback
+                total_ll += ll_unique[j];
+            }
+        }
+    } else { // Default: sum ll_unique directly if no expand_vec and no N column
+        for (int j = 0; j < n_unique_trials; ++j) {
+            total_ll += ll_unique[j];
         }
     }
     return total_ll;
