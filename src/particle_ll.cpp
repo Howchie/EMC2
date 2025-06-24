@@ -557,21 +557,23 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
                 p_specs = make_pretransform_specs(p_vector, pretransforms);
             }
             // get_pars_matrix applies p_vector attributes, constants, pretransforms, maps to design, applies transforms and trends
-            Rcpp::NumericMatrix current_pars = get_pars_matrix(p_vector, constants, transforms, p_specs, p_types, designs, n_trials, data, trend);
+            pars = get_pars_matrix(p_vector, constants, transforms, p_specs, p_types, designs, n_trials, data, trend); // Reverted to 'pars'
 
-            Rcpp::LogicalVector current_is_ok(current_pars.nrow());
-            if (i == 0 || bound_specs.empty()) { // bound_specs depends on colnames of current_pars, make once.
-                                                 // Or if current_pars structure changes per particle (it shouldn't much beyond values)
-                bound_specs = make_bound_specs(minmax, mm_names, current_pars, bounds);
+            is_ok.resize(pars.nrow()); // Ensure is_ok has the correct size for current 'pars'
+            if (i == 0 || bound_specs.empty()) { // bound_specs depends on colnames of pars, make once.
+                bound_specs = make_bound_specs(minmax, mm_names, pars, bounds);
             }
-            current_is_ok = c_do_bound(current_pars, bound_specs);
+            is_ok = c_do_bound(pars, bound_specs);
             // lr_all might be needed if model specific checks are required, like DDM. For generic race, maybe not here.
-            current_is_ok = lr_all(current_is_ok, n_acc); // This was for old race, check if needed.
-            // For now, assume c_do_bound is sufficient for parameter validity passed to c_log_likelihood_race_cens_trunc.
+            // For _CENS_TRUNC models, n_acc accumulators are expected per unique trial in 'pars'.
+            // The 'is_ok' vector from c_do_bound will be n_trials long (n_unique_trials * n_acc).
+            // c_log_likelihood_race_cens_trunc itself will handle interpreting this based on its internal loop over unique trials.
+            // No explicit lr_all(is_ok, n_acc) call here, as individual accumulator parameters are checked by c_do_bound.
+            // The c_log_likelihood_race_cens_trunc function receives the full is_ok vector.
 
-            lls[i] = c_log_likelihood_race_cens_trunc(current_pars, data,
+            lls[i] = c_log_likelihood_race_cens_trunc(pars, data, // Use 'pars' and 'is_ok'
                                                       cens_model_dfun_ptr, cens_model_pfun_ptr,
-                                                      min_ll, current_is_ok, n_acc, expand,
+                                                      min_ll, is_ok, n_acc, expand,
                                                       &current_model_ctx); // Pass pointer to context
         }
 
@@ -1121,59 +1123,72 @@ double c_log_likelihood_race_cens_trunc(
     }
 
     // --- Part 1: Batch process finite RT trials (Observed RTs within truncation bounds) ---
+    // This section handles trials where RT is finite, positive, within truncation bounds (LT, UT),
+    // and the response (winner) is known. These are suitable for batch calculation of densities.
     if (!finite_rt_unique_trial_indices.empty()) {
         Rcpp::NumericVector batch_rts(finite_rt_unique_trial_indices.size());
-        Rcpp::List batch_pars_ordered(finite_rt_unique_trial_indices.size());
-        std::vector<int> batch_R_idxs(finite_rt_unique_trial_indices.size());
-        std::vector<Rcpp::NumericMatrix> batch_pars_unord(finite_rt_unique_trial_indices.size());
+        Rcpp::List batch_pars_ordered(finite_rt_unique_trial_indices.size()); // For f_race_integrand_batch_cpp
+        std::vector<int> batch_R_idxs(finite_rt_unique_trial_indices.size()); // To store 1-based winner indices for the batch
+        std::vector<Rcpp::NumericMatrix> batch_pars_unord(finite_rt_unique_trial_indices.size()); // To store original (unordered) params for truncation correction
 
-
+        // Collect data for batch processing
         for (size_t i = 0; i < finite_rt_unique_trial_indices.size(); ++i) {
-            int unique_trial_idx = finite_rt_unique_trial_indices[i];
-            int first_row_in_dadm = unique_trial_idx * n_acc;
+            int unique_trial_idx = finite_rt_unique_trial_indices[i]; // Original index of the unique trial
+            int first_row_in_dadm = unique_trial_idx * n_acc; // Starting row in dadm/pars for this unique trial
 
-            batch_rts[i] = rts_dadm[first_row_in_dadm];
-            batch_R_idxs[i] = R_idxs_dadm[first_row_in_dadm]; // Store original 1-based R index
+            batch_rts[i] = rts_dadm[first_row_in_dadm]; // RT for this trial
+            batch_R_idxs[i] = R_idxs_dadm[first_row_in_dadm]; // Winner index (1-based)
 
+            // Extract all accumulator parameters for this unique trial
             Rcpp::NumericMatrix p_all_acc_for_trial(n_acc, pars.ncol());
             for(int k_acc=0; k_acc < n_acc; ++k_acc) {
                 p_all_acc_for_trial.row(k_acc) = pars.row(first_row_in_dadm + k_acc);
             }
-            batch_pars_unord[i] = p_all_acc_for_trial; // Store for truncation correction
-            batch_pars_ordered[i] = order_pars_for_winner_cpp(p_all_acc_for_trial, batch_R_idxs[i], n_acc);
+            batch_pars_unord[i] = p_all_acc_for_trial; // Store unordered params
+            batch_pars_ordered[i] = order_pars_for_winner_cpp(p_all_acc_for_trial, batch_R_idxs[i], n_acc); // Store params ordered by winner
         }
 
+        // Calculate probability densities for the entire batch of finite RT trials
         Rcpp::NumericVector batch_prob_densities = f_race_integrand_batch_cpp(
             batch_rts, batch_pars_ordered, model_dfun, model_pfun, n_acc, model_context_for_funcs
         );
 
+        // Apply truncation correction and calculate log-likelihood for each trial in the batch
         for (size_t i = 0; i < finite_rt_unique_trial_indices.size(); ++i) {
-            int unique_trial_idx = finite_rt_unique_trial_indices[i];
+            int unique_trial_idx = finite_rt_unique_trial_indices[i]; // Original index
             double prob_density = batch_prob_densities[i];
 
-            if (prob_density > std::numeric_limits<double>::epsilon()) {
+            if (prob_density > std::numeric_limits<double>::epsilon()) { // If density is valid
+                // Calculate truncation correction factor using the unordered parameters
                 double trunc_cf = get_trunc_corr_factor_for_kth_winner_cpp(
                     batch_R_idxs[i], batch_pars_unord[i], model_dfun, model_pfun,
                     LT, UT, n_acc, integration_epsilon, model_context_for_funcs
                 );
-                if (ISNAN(trunc_cf) || !R_FINITE(trunc_cf) || trunc_cf <= 0) {
+
+                if (ISNAN(trunc_cf) || !R_FINITE(trunc_cf) || trunc_cf <= 0) { // If correction factor is invalid
                     ll_unique[unique_trial_idx] = min_ll;
                 } else {
+                    // Combine density and correction factor, then take log
                     ll_unique[unique_trial_idx] = std::log(prob_density) + std::log(trunc_cf);
                 }
-            } else {
+            } else { // Density was too small or zero
                 ll_unique[unique_trial_idx] = min_ll;
             }
+            // Ensure the calculated log-likelihood is not less than min_ll
              ll_unique[unique_trial_idx] = std::max(min_ll, ll_unique[unique_trial_idx]);
         }
     }
 
     // --- Part 2: Process other trials (Infinite RTs, NA RTs, or finite RTs outside truncation) ---
+    // These trials require individual processing, often involving numerical integration for censored intervals.
     for (int unique_trial_idx : other_unique_trial_indices) {
-        // If ll_unique[unique_trial_idx] was already set due to bad params, skip.
-        // This check is implicitly handled because bad param trials are not added to other_unique_trial_indices
-        // if they were caught in the initial loop. However, if a trial was added to `other` because
-        // it was finite but outside truncation, its params are ok.
+        // If ll_unique[unique_trial_idx] was already set to min_ll due to bad parameters
+        // (i.e., !ok_params_unique_trial[unique_trial_idx]), it would have been excluded
+        // from other_unique_trial_indices if that list was filtered by ok_params_unique_trial.
+        // Assuming other_unique_trial_indices contains trials with valid parameters but non-standard RTs.
+        // The initial loop for categorizing trials should ensure ll_unique[unique_trial_idx] is already min_ll
+        // if parameters were bad, so we don't need to re-check ok_params here if other_unique_trial_indices
+        // only contains parametrically valid trials.
 
         int first_row_in_dadm = unique_trial_idx * n_acc;
         Rcpp::NumericMatrix pars_condition_j_all_acc(n_acc, pars.ncol());
@@ -1185,16 +1200,19 @@ double c_log_likelihood_race_cens_trunc(
         int R_j_idx = R_idxs_dadm[first_row_in_dadm];
         double current_prob_val = 0.0;
 
-        if (R_FINITE(rt_j) && rt_j > 0 && (rt_j < LT || rt_j > UT)) { // Finite RT but outside truncation
-             current_prob_val = 0; // Density is 0 if outside truncation window
-        } else if (rt_j == R_NegInf) { // Fast censoring
-            if (R_j_idx != NA_INTEGER) {
+        // Case 1: Finite RT but outside truncation bounds (LT, UT).
+        // These trials have zero probability mass/density within the truncated likelihood.
+        if (R_FINITE(rt_j) && rt_j > 0 && (rt_j < LT || rt_j > UT)) {
+             current_prob_val = 0;
+        // Case 2: Fast censoring (RT = -Inf). Probability is integral from LT to LC.
+        } else if (rt_j == R_NegInf) {
+            if (R_j_idx != NA_INTEGER) { // Response (winner) is known
                 current_prob_val = integrate_for_kth_winner_cpp(R_j_idx, pars_condition_j_all_acc, LT, LC, model_dfun, model_pfun, n_acc, integration_epsilon, model_context_for_funcs);
-                if (current_prob_val > 0) {
+                if (current_prob_val > 0) { // Apply truncation correction if probability is non-zero
                     double trunc_cf = get_trunc_corr_factor_for_kth_winner_cpp(R_j_idx, pars_condition_j_all_acc, model_dfun, model_pfun, LT, UT, n_acc, integration_epsilon, model_context_for_funcs);
                     if (ISNAN(trunc_cf) || !R_FINITE(trunc_cf) || trunc_cf <= 0) current_prob_val = 0; else current_prob_val *= trunc_cf;
                 }
-            } else {
+            } else { // Response (winner) is unknown; sum probabilities over all possible winners
                 for (int k_win = 1; k_win <= n_acc; ++k_win) {
                     double p_k = integrate_for_kth_winner_cpp(k_win, pars_condition_j_all_acc, LT, LC, model_dfun, model_pfun, n_acc, integration_epsilon, model_context_for_funcs);
                     if (p_k > 0) {
@@ -1203,14 +1221,15 @@ double c_log_likelihood_race_cens_trunc(
                     }
                 }
             }
-        } else if (rt_j == R_PosInf) { // Slow censoring
-             if (R_j_idx != NA_INTEGER) {
+        // Case 3: Slow censoring (RT = Inf). Probability is integral from UC to UT.
+        } else if (rt_j == R_PosInf) {
+             if (R_j_idx != NA_INTEGER) { // Response (winner) is known
                 current_prob_val = integrate_for_kth_winner_cpp(R_j_idx, pars_condition_j_all_acc, UC, UT, model_dfun, model_pfun, n_acc, integration_epsilon, model_context_for_funcs);
-                 if (current_prob_val > 0) {
+                 if (current_prob_val > 0) { // Apply truncation correction
                     double trunc_cf = get_trunc_corr_factor_for_kth_winner_cpp(R_j_idx, pars_condition_j_all_acc, model_dfun, model_pfun, LT, UT, n_acc, integration_epsilon, model_context_for_funcs);
                     if (ISNAN(trunc_cf) || !R_FINITE(trunc_cf) || trunc_cf <= 0) current_prob_val = 0; else current_prob_val *= trunc_cf;
                 }
-            } else {
+            } else { // Response (winner) is unknown; sum probabilities over all possible winners
                 for (int k_win = 1; k_win <= n_acc; ++k_win) {
                     double p_k = integrate_for_kth_winner_cpp(k_win, pars_condition_j_all_acc, UC, UT, model_dfun, model_pfun, n_acc, integration_epsilon, model_context_for_funcs);
                      if (p_k > 0) {
@@ -1219,16 +1238,17 @@ double c_log_likelihood_race_cens_trunc(
                     }
                 }
             }
-        } else if (ISNAN(rt_j)) { // Missing RT (NA)
-            if (R_j_idx != NA_INTEGER) {
+        // Case 4: Missing RT (NA). Probability is sum of integral from LT to LC and UC to UT (i.e., outside the observation window but within truncation).
+        } else if (ISNAN(rt_j)) {
+            if (R_j_idx != NA_INTEGER) { // Response (winner) is known
                 double p_L = integrate_for_kth_winner_cpp(R_j_idx, pars_condition_j_all_acc, LT, LC, model_dfun, model_pfun, n_acc, integration_epsilon, model_context_for_funcs);
                 double p_U = integrate_for_kth_winner_cpp(R_j_idx, pars_condition_j_all_acc, UC, UT, model_dfun, model_pfun, n_acc, integration_epsilon, model_context_for_funcs);
                 current_prob_val = p_L + p_U;
-                 if (current_prob_val > 0) {
+                 if (current_prob_val > 0) { // Apply truncation correction
                     double trunc_cf = get_trunc_corr_factor_for_kth_winner_cpp(R_j_idx, pars_condition_j_all_acc, model_dfun, model_pfun, LT, UT, n_acc, integration_epsilon, model_context_for_funcs);
                     if (ISNAN(trunc_cf) || !R_FINITE(trunc_cf) || trunc_cf <= 0) current_prob_val = 0; else current_prob_val *= trunc_cf;
                 }
-            } else {
+            } else { // Response (winner) is unknown; sum probabilities over all possible winners
                 for (int k_win = 1; k_win <= n_acc; ++k_win) {
                     double p_L_k = integrate_for_kth_winner_cpp(k_win, pars_condition_j_all_acc, LT, LC, model_dfun, model_pfun, n_acc, integration_epsilon, model_context_for_funcs);
                     double p_U_k = integrate_for_kth_winner_cpp(k_win, pars_condition_j_all_acc, UC, UT, model_dfun, model_pfun, n_acc, integration_epsilon, model_context_for_funcs);
