@@ -101,14 +101,14 @@ dLBA <- function (rt, pars, posdrift = TRUE)
   # posdrift = truncated positive normal rates
   # robust slower, deals with extreme rate values
 {
-  if (is.null(dim(pars))) { # Check if pars is a vector
-    original_names <- names(pars)
-    pars <- matrix(pars, nrow = 1, dimnames = list(NULL, original_names))
+  if (is.null(dim(pars)) || (dim(pars)[1]==1 & length(rt>1)) ) { # Check if pars is a vector
+    original_names <- names(pars); if (is.null(original_names)) {original_names = colnames(pars)}
+    pars <- matrix(pars, nrow = length(rt), ncol=length(pars), dimnames = list(NULL, original_names),byrow=TRUE)
   }
   dt <- rt - pars[,"t0"]
-  ok <- (dt>0) & (pars[,"b"] >= pars[,"A"])
-  ok[is.na(ok) | !is.finite(dt)] <- FALSE
-  out <- numeric(length(dt))
+  ok <- pars[,"b"] >= pars[,"A"]
+  ok[is.na(ok)] <- FALSE
+  out=rep(NaN, length(dt))
   if (any(ok)) {
     out[ok] <- dlba(t = dt[ok], A = pars[ok,"A",drop=FALSE], b = pars[ok,"b",drop=FALSE],
                            v = pars[ok,"v",drop=FALSE], sv = pars[ok,"sv",drop=FALSE],
@@ -121,14 +121,15 @@ pLBA <- function (rt, pars, posdrift = TRUE)
   # posdrift = truncated positive normal rates
   # robust slower, deals with extreme rate values
 {
-  if (is.null(dim(pars))) { # Check if pars is a vector
-    original_names <- names(pars)
-    pars <- matrix(pars, nrow = 1, dimnames = list(NULL, original_names))
+  if (is.null(dim(pars)) || (dim(pars)[1]==1 & length(rt>1)) ) { # Check if pars is a vector
+    original_names <- names(pars); if (is.null(original_names)) {original_names = colnames(pars)}
+    pars <- matrix(pars, nrow = length(rt), ncol=length(pars), dimnames = list(NULL, original_names),byrow=TRUE)
   }
   dt <- rt - pars[,"t0"]
-  ok <- (dt>0) & (pars[,"b"] >= pars[,"A"])
-  ok[is.na(ok) | !is.finite(dt)] <- FALSE
-  out <- numeric(length(dt))
+  ok <- pars[,"b"] >= pars[,"A"]
+  ok[is.na(ok)] <- FALSE
+  out=rep(NaN, length(dt))
+  
   if (any(ok)) {
     out[ok] <- plba(t = dt[ok], A = pars[ok,"A",drop=FALSE], b = pars[ok,"b",drop=FALSE],
                            v = pars[ok,"v",drop=FALSE], sv = pars[ok,"sv",drop=FALSE],

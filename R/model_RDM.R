@@ -200,11 +200,11 @@
 dRDM <- function(rt,pars)
   # density for single accumulator
 {
-  if (is.null(dim(pars))) { # Check if pars is a vector
-    original_names <- names(pars)
-    pars <- matrix(pars, nrow = 1, dimnames = list(NULL, original_names))
+  if (is.null(dim(pars)) || (dim(pars)[1]==1 & length(rt>1)) ) { # Check if pars is a vector
+    original_names <- names(pars); if (is.null(original_names)) {original_names = colnames(pars)}
+    pars <- matrix(pars, nrow = length(rt), ncol=length(pars), dimnames = list(NULL, original_names),byrow=TRUE)
   }
-  out <- numeric(length(rt))
+  out=rep(NaN, length(rt))
   # Applying drop=FALSE for subsetting pars for robustness, though t0 and v are single columns
   ok <- rt > pars[,"t0",drop=FALSE] & !pars[,"v",drop=FALSE] < 0  # code handles rate zero case
   ok[is.na(ok)] <- FALSE
@@ -224,11 +224,11 @@ dRDM <- function(rt,pars)
 pRDM <- function(rt,pars)
   # cumulative density for single accumulator
 {
-  if (is.null(dim(pars))) { # Check if pars is a vector
-    original_names <- names(pars)
-    pars <- matrix(pars, nrow = 1, dimnames = list(NULL, original_names))
+  if (is.null(dim(pars)) || (dim(pars)[1]==1 & length(rt>1)) ) { # Check if pars is a vector
+    original_names <- names(pars); if (is.null(original_names)) {original_names = colnames(pars)}
+    pars <- matrix(pars, nrow = length(rt), ncol=length(pars), dimnames = list(NULL, original_names),byrow=TRUE)
   }
-  out <- numeric(length(rt))
+  out=rep(NaN, length(rt))
   ok <- rt > pars[,"t0",drop=FALSE] & !pars[,"v",drop=FALSE] < 0  # code handles rate zero case
   ok[is.na(ok)] <- FALSE
   if (any(ok)){

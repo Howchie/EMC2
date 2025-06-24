@@ -5,7 +5,7 @@ dLNR <- function(rt,pars){
     pars <- matrix(pars, nrow = 1, dimnames = list(NULL, original_names))
   }
   rt <- rt - pars[,"t0",drop=FALSE]
-  out <- numeric(length(rt))
+  out=rep(NaN, length(rt))
   ok <- rt > 0
   ok[is.na(ok) | is.infinite(rt)] <- FALSE
   if (any(ok)) {
@@ -20,7 +20,7 @@ pLNR <- function(rt,pars){
     pars <- matrix(pars, nrow = 1, dimnames = list(NULL, original_names))
   }
   rt <- rt - pars[,"t0",drop=FALSE]
-  out <- numeric(length(rt))
+  out=rep(NaN, length(rt))
   ok <- rt > 0
   ok[is.na(ok) | is.infinite(rt)] <- FALSE
   if (any(ok)) {

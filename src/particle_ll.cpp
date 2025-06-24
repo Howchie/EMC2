@@ -795,11 +795,11 @@ double c_log_likelihood_race_cens_trunc(
     Rcpp::NumericVector ll_unique(n_unique_trials);
 
     for (int j = 0; j < n_unique_trials; ++j) {
-        Rcpp::Range current_trial_par_indices((j * n_acc), (j * n_acc) + n_acc - 1);
+        Rcpp::Range current_trial_par_indices((j * n_acc), (j * n_acc)+1);
 
         bool params_ok_for_trial = true;
         for(int k_in_block = 0; k_in_block < n_acc; ++k_in_block) {
-            int pars_matrix_row_idx = (j * n_acc) + k_in_block;
+            int pars_matrix_row_idx = current_trial_par_indices[0] + k_in_block;
             // Bounds check for ok_params access
             if (pars_matrix_row_idx >= ok_params.size()) {
                 Rcpp::Rcerr << "Warning: ok_params index out of bounds in c_log_likelihood_race_cens_trunc. Index: "
@@ -820,9 +820,9 @@ double c_log_likelihood_race_cens_trunc(
         Rcpp::NumericMatrix pars_condition_j_all_acc = pars(current_trial_par_indices, Rcpp::_);
 
         // Access rt from the first row of the block of accumulators for unique trial j
-        double rt_j = rt_col[j * n_acc]; 
+        double rt_j = rt_col[current_trial_par_indices[0]]; 
         // Access R from the pre-extracted R_values_for_unique_trials for unique trial j
-        int R_j_idx = (R_values_for_unique_trials[j] == NA_INTEGER) ? NA_INTEGER : R_values_for_unique_trials[j];
+        int R_j_idx = R_values_for_unique_trials[j];
 
         double current_prob_val = 0;
 
@@ -894,7 +894,7 @@ double c_log_likelihood_race_cens_trunc(
             // Bypass the old current_prob_val logic for this path
             goto end_of_trial_likelihood_processing; // Skip to common processing for ll_unique[j]
 
-        } else if (R_FINITE(rt_j) && rt_j == R_NegInf) { // Case 2: Lower Censored
+        } else if (rt_j == R_NegInf) { // Case 2: Lower Censored
             // This part calculates a probability, not a log-probability directly from components
             // So current_prob_val is appropriate here.
             if (R_j_idx != NA_INTEGER) { // Response known
@@ -920,7 +920,7 @@ double c_log_likelihood_race_cens_trunc(
                 }
                 current_prob_val = sum_p;
             }
-        } else if (R_FINITE(rt_j) && rt_j == R_PosInf) { // Case 3: Upper Censored
+        } else if (rt_j == R_PosInf) { // Case 3: Upper Censored
              if (R_j_idx != NA_INTEGER) { // Response known
                 current_prob_val = integrate_for_kth_winner_cpp(R_j_idx, pars_condition_j_all_acc, UC, UT, model_dfun, model_pfun, n_acc, integration_epsilon, model_context_for_funcs);
                 if (current_prob_val > 0) {
@@ -970,11 +970,8 @@ end_of_trial_likelihood_processing:; // Label for goto
         // For paths that calculated current_prob_val (censored, NA RTs)
         // The observed RT path sets ll_unique[j] directly with a log-likelihood.
         // So, this conversion is only for other paths.
-        if (!(R_FINITE(rt_j) && rt_j > 0 && R_j_idx != NA_INTEGER)) { // If not the observed RT path that sets ll_unique[j] directly
-            current_prob_val = std::max(0.0, current_prob_val); // Ensure non-negative probability
-            ll_unique[j] = (current_prob_val > std::numeric_limits<double>::epsilon()) ? std::log(current_prob_val) : min_ll;
-        }
-        
+        current_prob_val = std::max(0.0, current_prob_val); // Ensure non-negative probability
+        ll_unique[j] = (current_prob_val > std::numeric_limits<double>::epsilon()) ? std::log(current_prob_val) : min_ll;
         ll_unique[j] = std::max(min_ll, ll_unique[j]); // Ensure not less than min_ll for all paths
     }
 

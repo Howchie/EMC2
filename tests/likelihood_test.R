@@ -6,20 +6,20 @@ matchfun <- function(d) as.numeric(d$S)==as.numeric(d$lR) |
   (d$lR=="pm" & as.numeric(d$S)>2)
 designLBA <- design(
   factors=list(subjects=1,S=c("left","right")),
-  Rlevels=c("left","right","pm"),
+  Rlevels=c("left","right"),
   matchfun=matchfun,
-  model=LBA,constants=c(sv=log(0.2)),
+  model=LBA,constants=c(sv=1),
   formula=list(v~1,B~1,t0~1,A~1,sv~1),
 )
 designMLBA <- design(
   factors=list(subjects=1,S=c("left","right")),
-  Rlevels=c("left","right","pm"),
+  Rlevels=c("left","right"),
   matchfun=matchfun,
-  model=Mlba,constants=c(sv=log(0.2)),
+  model=Mlba,constants=c(sv=1),
   formula=list(v~1,B~1,t0~1,A~1,sv~1),
 )
 p_vector <- sampled_pars(designLBA,doMap = FALSE)
-p_vector[1:length(p_vector)] <- c(log(2), log(2), log(2),log(2))
+p_vector[1:length(p_vector)] <- c(1, log(2), log(.2),log(1))
 
 # Make square data so can remove pm in RACE = 2
 template <- make_data(p_vector,designLBA,n_trials=1000)
@@ -49,17 +49,17 @@ lfun <- function(i, x, p_vector, pname, dadm, use_c, censor=FALSE) {
     constants <- attr(dadm,"constants")
     if (is.null(constants)) constants <- NA
     if(censor) {
-      EMC2:::calc_ll(p_matrix, dadm, constants,designs,"LBA_CENS_TRUNC",
+      EMC2:::calc_ll(p_matrix, dadm, constants,designs,model$c_name,
                      model$bound,model$transform,model$pre_transform,p_types,log(1e-10),model$trend)
     } else {
-      EMC2:::calc_ll(p_matrix, dadm, constants,designs,"LBA",
+      EMC2:::calc_ll(p_matrix, dadm, constants,designs,model$c_name,
                      model$bound,model$transform,model$pre_transform,p_types,log(1e-10),model$trend)
     }
   } else {
     if(censor) {
-      EMC2:::calc_ll_R(p_vector, attr(dadmLBA, "model")(), dadm)
+      EMC2:::calc_ll_R(p_vector, attr(dadm, "model")(), dadm)
     } else {
-      EMC2:::calc_ll_R(p_vector, attr(dadmMLBA, "model")(), dadm)
+      EMC2:::calc_ll_R(p_vector, attr(dadm, "model")(), dadm)
     }
   }
 }
@@ -119,7 +119,6 @@ profile_plot_test <- function (data, design, p_vector, range = 0.5, layout = NA,
                             censor=censor,
                             x = x, p_vector = p_vector, pname = cur_name,
                             mc.cores = n_cores))
-      print(ll)
       do.call(plot, c(list(x, ll), EMC2:::fix_dots_plot(EMC2:::add_defaults(dots,
                                                                             type = "l", xlab = cur_name, ylab = "LL"))))
       do.call(abline, c(list(v = cur_par), EMC2:::fix_dots_plot(EMC2:::add_defaults(true_args,
