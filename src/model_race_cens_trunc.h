@@ -5,9 +5,17 @@
 #include "utility_functions.h" // For any existing utilities we might use
 
 // Function pointer types for model's dfun and pfun
-// Adding void* model_specific_context to pass through necessary arguments like min_lik_for_pdf
-typedef Rcpp::NumericVector (*RacePdfFun)(Rcpp::NumericVector rt, Rcpp::NumericMatrix pars, bool log_p, void* model_specific_context);
-typedef Rcpp::NumericVector (*RaceCdfFun)(Rcpp::NumericVector rt, Rcpp::NumericMatrix pars, bool log_p, void* model_specific_context);
+// Added LogicalVector is_ok for bound checking and void* context for extra args
+typedef Rcpp::NumericVector (*RacePdfFun)(Rcpp::NumericVector rt,
+                                          Rcpp::NumericMatrix pars,
+                                          Rcpp::LogicalVector is_ok,
+                                          bool log_p,
+                                          void* model_specific_context);
+typedef Rcpp::NumericVector (*RaceCdfFun)(Rcpp::NumericVector rt,
+                                          Rcpp::NumericMatrix pars,
+                                          Rcpp::LogicalVector is_ok,
+                                          bool log_p,
+                                          void* model_specific_context);
 
 // Forward declaration for the main exported function
 // Returns a single double: the total log-likelihood for one particle.

@@ -8,18 +8,18 @@ designLBA <- design(
   factors=list(subjects=1,S=c("left","right")),
   Rlevels=c("left","right","pm"),
   matchfun=matchfun,
-  model=LBA,constants=c(sv=1),
+  model=LBA,constants=c(sv=log(0.2)),
   formula=list(v~1,B~1,t0~1,A~1,sv~1),
 )
 designMLBA <- design(
   factors=list(subjects=1,S=c("left","right")),
   Rlevels=c("left","right","pm"),
   matchfun=matchfun,
-  model=Mlba,constants=c(sv=1),
+  model=Mlba,constants=c(sv=log(0.2)),
   formula=list(v~1,B~1,t0~1,A~1,sv~1),
 )
 p_vector <- sampled_pars(designLBA,doMap = FALSE)
-p_vector[1:length(p_vector)] <- c(log(2), log(2), log(0.2),log(.5))
+p_vector[1:length(p_vector)] <- c(log(2), log(2), log(2),log(2))
 
 # Make square data so can remove pm in RACE = 2
 template <- make_data(p_vector,designLBA,n_trials=1000)
@@ -119,6 +119,7 @@ profile_plot_test <- function (data, design, p_vector, range = 0.5, layout = NA,
                             censor=censor,
                             x = x, p_vector = p_vector, pname = cur_name,
                             mc.cores = n_cores))
+      print(ll)
       do.call(plot, c(list(x, ll), EMC2:::fix_dots_plot(EMC2:::add_defaults(dots,
                                                                             type = "l", xlab = cur_name, ylab = "LL"))))
       do.call(abline, c(list(v = cur_par), EMC2:::fix_dots_plot(EMC2:::add_defaults(true_args,
