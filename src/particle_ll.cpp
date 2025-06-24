@@ -18,51 +18,69 @@ struct ContextForRaceModels {
 // For LNR, context might be simpler or could reuse above if only min_lik_for_pdf is needed.
 
 // Static adapter for LBA dfun
-static Rcpp::NumericVector lba_dfun_adapter(Rcpp::NumericVector rt, Rcpp::NumericMatrix pars, bool log_p, void* context) {
+static Rcpp::NumericVector lba_dfun_adapter(Rcpp::NumericVector rt,
+                                            Rcpp::NumericMatrix pars,
+                                            Rcpp::LogicalVector is_ok,
+                                            bool log_p,
+                                            void* context) {
     ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context);
     Rcpp::LogicalVector posdrift_default(pars.nrow(), true); // LBA default
-    Rcpp::LogicalVector log_on_default(1, log_p);
-    return dlba_c(rt, pars, posdrift_default, ctx->min_lik_for_pdf, log_on_default);
+    return dlba_c(rt, pars, posdrift_default, ctx->min_lik_for_pdf, is_ok);
 }
 
 // Static adapter for LBA pfun
-static Rcpp::NumericVector lba_pfun_adapter(Rcpp::NumericVector rt, Rcpp::NumericMatrix pars, bool log_p, void* context) {
+static Rcpp::NumericVector lba_pfun_adapter(Rcpp::NumericVector rt,
+                                            Rcpp::NumericMatrix pars,
+                                            Rcpp::LogicalVector is_ok,
+                                            bool log_p,
+                                            void* context) {
     ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context);
     Rcpp::LogicalVector posdrift_default(pars.nrow(), true); // LBA default
-    Rcpp::LogicalVector log_on_default(1, log_p);
-    return plba_c(rt, pars, posdrift_default, ctx->min_lik_for_pdf, log_on_default);
+    return plba_c(rt, pars, posdrift_default, ctx->min_lik_for_pdf, is_ok);
 }
 
 // Static adapter for RDM dfun
-static Rcpp::NumericVector rdm_dfun_adapter(Rcpp::NumericVector rt, Rcpp::NumericMatrix pars, bool log_p, void* context) {
+static Rcpp::NumericVector rdm_dfun_adapter(Rcpp::NumericVector rt,
+                                            Rcpp::NumericMatrix pars,
+                                            Rcpp::LogicalVector is_ok,
+                                            bool log_p,
+                                            void* context) {
     ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context);
-    Rcpp::LogicalVector posdrift_default(pars.nrow(), true); // RDM default, typically
-    Rcpp::LogicalVector log_on_default(1, log_p);
-    return drdm_c(rt, pars, posdrift_default, ctx->min_lik_for_pdf, log_on_default);
+    Rcpp::LogicalVector posdrift_default(pars.nrow(), true); // RDM default
+    return drdm_c(rt, pars, posdrift_default, ctx->min_lik_for_pdf, is_ok);
 }
 
 // Static adapter for RDM pfun
-static Rcpp::NumericVector rdm_pfun_adapter(Rcpp::NumericVector rt, Rcpp::NumericMatrix pars, bool log_p, void* context) {
+static Rcpp::NumericVector rdm_pfun_adapter(Rcpp::NumericVector rt,
+                                            Rcpp::NumericMatrix pars,
+                                            Rcpp::LogicalVector is_ok,
+                                            bool log_p,
+                                            void* context) {
     ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context);
-    Rcpp::LogicalVector posdrift_default(pars.nrow(), true); // RDM default, typically
-    Rcpp::LogicalVector log_on_default(1, log_p);
-    return prdm_c(rt, pars, posdrift_default, ctx->min_lik_for_pdf, log_on_default);
+    Rcpp::LogicalVector posdrift_default(pars.nrow(), true); // RDM default
+    return prdm_c(rt, pars, posdrift_default, ctx->min_lik_for_pdf, is_ok);
 }
 
 // Static adapter for LNR dfun
-static Rcpp::NumericVector lnr_dfun_adapter(Rcpp::NumericVector rt, Rcpp::NumericMatrix pars, bool log_p, void* context) {
+static Rcpp::NumericVector lnr_dfun_adapter(Rcpp::NumericVector rt,
+                                            Rcpp::NumericMatrix pars,
+                                            Rcpp::LogicalVector is_ok,
+                                            bool log_p,
+                                            void* context) {
     ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context); // Reusing same context struct
     Rcpp::LogicalVector posdrift_ignored; // LNR's dlnr_c doesn't use posdrift
-    Rcpp::LogicalVector log_on_default(1, log_p);
-    return dlnr_c(rt, pars, posdrift_ignored, ctx->min_lik_for_pdf, log_on_default);
+    return dlnr_c(rt, pars, posdrift_ignored, ctx->min_lik_for_pdf, is_ok);
 }
 
 // Static adapter for LNR pfun
-static Rcpp::NumericVector lnr_pfun_adapter(Rcpp::NumericVector rt, Rcpp::NumericMatrix pars, bool log_p, void* context) {
+static Rcpp::NumericVector lnr_pfun_adapter(Rcpp::NumericVector rt,
+                                            Rcpp::NumericMatrix pars,
+                                            Rcpp::LogicalVector is_ok,
+                                            bool log_p,
+                                            void* context) {
     ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context); // Reusing same context struct
     Rcpp::LogicalVector posdrift_ignored;
-    Rcpp::LogicalVector log_on_default(1, log_p);
-    return plnr_c(rt, pars, posdrift_ignored, ctx->min_lik_for_pdf, log_on_default);
+    return plnr_c(rt, pars, posdrift_ignored, ctx->min_lik_for_pdf, is_ok);
 }
 
 // ---- END: Context Structs and Static Adapters ----
@@ -557,8 +575,9 @@ double gsl_f_race_adapter(double t, void *p) {
     Rcpp::NumericMatrix p_winner_mat(1, p_mat.ncol());
     p_winner_mat.row(0) = p_mat.row(0); // Extract first row (winner) into a new 1-row matrix
 
+    Rcpp::LogicalVector ok_win(1, true);
     // Pass the model_specific_context to the model functions
-    Rcpp::NumericVector pdf_winner_vec = params->model_dfun(t_vec, p_winner_mat, false, params->model_specific_context);
+    Rcpp::NumericVector pdf_winner_vec = params->model_dfun(t_vec, p_winner_mat, ok_win, false, params->model_specific_context);
     double pdf_winner = pdf_winner_vec[0];
 
     if (!R_finite(pdf_winner) || pdf_winner < 0) pdf_winner = 0.0;
@@ -567,9 +586,10 @@ double gsl_f_race_adapter(double t, void *p) {
         double survivor_losers = 1.0;
         for (int i = 1; i < params->n_acc; ++i) { // Losers are in rows 1 to n_acc-1 of p_mat
             Rcpp::NumericMatrix p_loser_i_mat(1, p_mat.ncol());
-            p_loser_i_mat.row(0) = p_mat.row(i); // Extract i-th row (a loser) into a new 1-row matrix
+            p_loser_i_mat.row(0) = p_mat.row(i); // Extract i-th row (a loser)
+            Rcpp::LogicalVector ok_los(1, true);
             // Pass the model_specific_context to the model functions
-            Rcpp::NumericVector cdf_loser_i_vec = params->model_pfun(t_vec, p_loser_i_mat, false, params->model_specific_context);
+            Rcpp::NumericVector cdf_loser_i_vec = params->model_pfun(t_vec, p_loser_i_mat, ok_los, false, params->model_specific_context);
             double cdf_loser_i = cdf_loser_i_vec[0];
 
             double s_loser_i = 1.0 - cdf_loser_i;
@@ -819,7 +839,8 @@ double c_log_likelihood_race_cens_trunc(
                     // Winner's log PDF
                     Rcpp::NumericMatrix p_winner_mat(1, pars_ordered_obs.ncol());
                     p_winner_mat.row(0) = pars_ordered_obs.row(0);
-                    Rcpp::NumericVector pdf_winner_vec = model_dfun(t_vec, p_winner_mat, false, model_context_for_funcs);
+                    Rcpp::LogicalVector ok_win(1, true);
+                    Rcpp::NumericVector pdf_winner_vec = model_dfun(t_vec, p_winner_mat, ok_win, false, model_context_for_funcs);
                     double pdf_winner = pdf_winner_vec[0];
 
                     if (R_FINITE(pdf_winner) && pdf_winner > std::numeric_limits<double>::epsilon()) {
@@ -833,7 +854,8 @@ double c_log_likelihood_race_cens_trunc(
                         for (int loser_idx = 1; loser_idx < n_acc; ++loser_idx) {
                             Rcpp::NumericMatrix p_loser_mat(1, pars_ordered_obs.ncol());
                             p_loser_mat.row(0) = pars_ordered_obs.row(loser_idx);
-                            Rcpp::NumericVector cdf_loser_vec = model_pfun(t_vec, p_loser_mat, false, model_context_for_funcs);
+                            Rcpp::LogicalVector ok_los(1, true);
+                            Rcpp::NumericVector cdf_loser_vec = model_pfun(t_vec, p_loser_mat, ok_los, false, model_context_for_funcs);
                             double cdf_loser = cdf_loser_vec[0];
                             double s_loser = 1.0 - cdf_loser;
 
