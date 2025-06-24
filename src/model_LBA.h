@@ -81,10 +81,10 @@ NumericVector dlba_c(NumericVector rts, NumericMatrix pars, LogicalVector idx, d
   NumericVector out(n);
   int k = 0;
   for(int i = 0; i < rts.length(); i++){
-    if(idx[i] == TRUE){
+    if(idx[i]){
       if(NumericVector::is_na(pars(i,0))){
         out[k] = 0;
-      } else if((rts[i] - pars(i,4) > 0) && (is_ok[i] == TRUE)){
+      } else if((rts[i] - pars(i,4) > 0) && (is_ok[i])){
         out[k] = dlba_norm(rts[i] - pars(i,4), pars(i,3), pars(i,2) + pars(i,3), pars(i,0), pars(i,1), true);
       } else{
         out[k] = min_ll;
@@ -101,10 +101,10 @@ NumericVector plba_c(NumericVector rts, NumericMatrix pars, LogicalVector idx, d
   NumericVector out(n);
   int k = 0;
   for(int i = 0; i < rts.length(); i++){
-    if(idx[i] == TRUE){
+    if(idx[i]){
       if(NumericVector::is_na(pars(i,0))){
         out[k] = 0;
-      } else if((rts[i] - pars(i,4) > 0) && (is_ok[i] == TRUE)){
+      } else if((rts[i] - pars(i,4) > 0) && (is_ok[i])){
         out[k] = plba_norm(rts[i] - pars(i,4), pars(i,3), pars(i,2) + pars(i,3), pars(i,0), pars(i,1), true);
       } else{
         out[k] = min_ll;

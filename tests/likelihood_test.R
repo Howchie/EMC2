@@ -23,7 +23,7 @@ p_vector[1:length(p_vector)] <- c(1, log(2), log(.2),log(1))
 
 # Make square data so can remove pm in RACE = 2
 template <- make_data(p_vector,designLBA,n_trials=1000)
-attr(template,"UC")=Inf
+attr(template,"UC")=2.5
 dat <- make_data(p_vector,designLBA,data=template)
 # dadm <- EMC2:::design_model(dat,designLBA,compress=FALSE)
 

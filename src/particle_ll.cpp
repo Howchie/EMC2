@@ -24,8 +24,8 @@ static Rcpp::NumericVector lba_dfun_adapter(Rcpp::NumericVector rt,
                                             bool log_p,
                                             void* context) {
     ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context);
-    Rcpp::LogicalVector posdrift_default(pars.nrow(), true); // LBA default
-    return dlba_c(rt, pars, posdrift_default, ctx->min_lik_for_pdf, is_ok);
+    Rcpp::LogicalVector idx(pars.nrow(), true); // LBA default
+    return dlba_c(rt, pars, idx, ctx->min_lik_for_pdf, is_ok);
 }
 
 // Static adapter for LBA pfun
@@ -35,8 +35,8 @@ static Rcpp::NumericVector lba_pfun_adapter(Rcpp::NumericVector rt,
                                             bool log_p,
                                             void* context) {
     ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context);
-    Rcpp::LogicalVector posdrift_default(pars.nrow(), true); // LBA default
-    return plba_c(rt, pars, posdrift_default, ctx->min_lik_for_pdf, is_ok);
+    Rcpp::LogicalVector idx(pars.nrow(), true); // LBA default
+    return plba_c(rt, pars, idx, ctx->min_lik_for_pdf, is_ok);
 }
 
 // Static adapter for RDM dfun
@@ -46,8 +46,8 @@ static Rcpp::NumericVector rdm_dfun_adapter(Rcpp::NumericVector rt,
                                             bool log_p,
                                             void* context) {
     ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context);
-    Rcpp::LogicalVector posdrift_default(pars.nrow(), true); // RDM default
-    return drdm_c(rt, pars, posdrift_default, ctx->min_lik_for_pdf, is_ok);
+    Rcpp::LogicalVector idx(pars.nrow(), true); // RDM default
+    return drdm_c(rt, pars, idx, ctx->min_lik_for_pdf, is_ok);
 }
 
 // Static adapter for RDM pfun
@@ -57,8 +57,8 @@ static Rcpp::NumericVector rdm_pfun_adapter(Rcpp::NumericVector rt,
                                             bool log_p,
                                             void* context) {
     ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context);
-    Rcpp::LogicalVector posdrift_default(pars.nrow(), true); // RDM default
-    return prdm_c(rt, pars, posdrift_default, ctx->min_lik_for_pdf, is_ok);
+    Rcpp::LogicalVector idx(pars.nrow(), true); // RDM default
+    return prdm_c(rt, pars, idx, ctx->min_lik_for_pdf, is_ok);
 }
 
 // Static adapter for LNR dfun
@@ -494,7 +494,7 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
             }
             current_is_ok = c_do_bound(current_pars, bound_specs);
             // lr_all might be needed if model specific checks are required, like DDM. For generic race, maybe not here.
-            // current_is_ok = lr_all(current_is_ok, n_acc); // This was for old race, check if needed.
+            current_is_ok = lr_all(current_is_ok, n_acc); // This was for old race, check if needed.
             // For now, assume c_do_bound is sufficient for parameter validity passed to c_log_likelihood_race_cens_trunc.
 
             lls[i] = c_log_likelihood_race_cens_trunc(current_pars, data,
@@ -795,8 +795,7 @@ double c_log_likelihood_race_cens_trunc(
     Rcpp::NumericVector ll_unique(n_unique_trials);
 
     for (int j = 0; j < n_unique_trials; ++j) {
-        Rcpp::Range current_trial_par_indices((j * n_acc), (j * n_acc)+1);
-
+        Rcpp::Range current_trial_par_indices((j * n_acc), (j + 1) * n_acc - 1);
         bool params_ok_for_trial = true;
         for(int k_in_block = 0; k_in_block < n_acc; ++k_in_block) {
             int pars_matrix_row_idx = current_trial_par_indices[0] + k_in_block;
@@ -892,7 +891,7 @@ double c_log_likelihood_race_cens_trunc(
                 ll_unique[j] = min_ll; 
             }
             // Bypass the old current_prob_val logic for this path
-            goto end_of_trial_likelihood_processing; // Skip to common processing for ll_unique[j]
+            continue; 
 
         } else if (rt_j == R_NegInf) { // Case 2: Lower Censored
             // This part calculates a probability, not a log-probability directly from components
@@ -964,8 +963,6 @@ double c_log_likelihood_race_cens_trunc(
             }
         }
         // All other rt_j values (e.g. 0 or negative if not Inf) would result in current_prob_val = 0 for paths that use it.
-
-end_of_trial_likelihood_processing:; // Label for goto
 
         // For paths that calculated current_prob_val (censored, NA RTs)
         // The observed RT path sets ll_unique[j] directly with a log-likelihood.
