@@ -2,11 +2,14 @@
 % Please edit documentation in R/model_LBA.R
 \name{MIlba}
 \alias{MIlba}
-\title{MIlbaB}
+\title{MIlbaB
+LBA model accommodating missing values (truncation and censoring) and
+assuming unbounded rates (i.e., allows intrinsic omissions)}
 \usage{
 MIlba()
 }
 \description{
+MIlbaB
 LBA model accommodating missing values (truncation and censoring) and
 assuming unbounded rates (i.e., allows intrinsic omissions)
 }

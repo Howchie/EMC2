@@ -270,6 +270,8 @@ LBA <- function(){
 #' Mlba_B
 #' LBA model accommodating missing values (truncation and censoring) and
 #' assuming positive rates (i.e., no intrinsic omissions)
+#' @export
+
 Mlba <- function(){
   list(
     type="RACE",
@@ -299,9 +301,10 @@ Mlba <- function(){
 }
 
 #' MIlbaB
-#'
 #' LBA model accommodating missing values (truncation and censoring) and
 #' assuming unbounded rates (i.e., allows intrinsic omissions)
+#' @export
+
 MIlba <- function(){
   list(
     type="RACE",
