@@ -1,4 +1,4 @@
-#include <RcppArmadillo.h> // Changed from Rcpp.h
+#include <RcppArmadillo.h>
 #include "utility_functions.h"
 #include "model_lnr.h"
 #include "model_LBA.h"
@@ -6,14 +6,14 @@
 #include "model_DDM.h"
 #include "model_MRI.h"
 #include "trend.h"
-#include "model_race_cens_trunc.h" // Moved here
+#include "model_race_cens_trunc.h"
 
 // ---- START: Context Structs and Static Adapters for Model Functions ----
 
 // Context struct for LBA & RDM (can be shared if context is similar)
 struct ContextForRaceModels {
     double min_lik_for_pdf;
-    // bool default_posdrift; // Could add if posdrift needs to be dynamic via context
+    bool use_posdrift; // Added for LBA models, true by default or for non-LBA models
 };
 // For LNR, context might be simpler or could reuse above if only min_lik_for_pdf is needed.
 
@@ -25,7 +25,8 @@ static Rcpp::NumericVector lba_dfun_adapter(Rcpp::NumericVector rt,
                                             void* context) {
     ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context);
     Rcpp::LogicalVector idx(pars.nrow(), true); // LBA default
-    return dlba_c(rt, pars, idx, ctx->min_lik_for_pdf, is_ok);
+    // Pass use_posdrift from context to dlba_c
+    return dlba_c(rt, pars, idx, ctx->min_lik_for_pdf, is_ok, ctx->use_posdrift);
 }
 
 // Static adapter for LBA pfun
@@ -36,7 +37,8 @@ static Rcpp::NumericVector lba_pfun_adapter(Rcpp::NumericVector rt,
                                             void* context) {
     ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context);
     Rcpp::LogicalVector idx(pars.nrow(), true); // LBA default
-    return plba_c(rt, pars, idx, ctx->min_lik_for_pdf, is_ok);
+    // Pass use_posdrift from context to plba_c
+    return plba_c(rt, pars, idx, ctx->min_lik_for_pdf, is_ok, ctx->use_posdrift);
 }
 
 // Static adapter for RDM dfun
@@ -186,78 +188,6 @@ NumericMatrix c_do_transform(NumericMatrix pars,
   return pars;
 }
 
-// Batched version of f_race_integrand_cpp for finite RT trials
-// rts_batch: vector of RTs for the batch
-// pars_all_trials_ordered: A List of NumericMatrix, where each element is an ordered parameter matrix
-//                          for a trial (winner first), matching the order in rts_batch.
-// model_dfun, model_pfun: function pointers to the model's density and CDF
-// n_acc: number of accumulators
-// model_specific_context: context pointer for model functions
-Rcpp::NumericVector f_race_integrand_batch_cpp(
-    const Rcpp::NumericVector& rts_batch,
-    const Rcpp::List& pars_all_trials_ordered, // List of NumericMatrix, each n_acc x n_params
-    RacePdfFun model_dfun,
-    RaceCdfFun model_pfun,
-    int n_acc,
-    void* model_specific_context) {
-
-    int n_batch_trials = rts_batch.size();
-    if (n_batch_trials == 0) {
-        return Rcpp::NumericVector(0);
-    }
-    if (pars_all_trials_ordered.size() != n_batch_trials) {
-        Rcpp::stop("f_race_integrand_batch_cpp: rts_batch size and pars_all_trials_ordered size mismatch.");
-    }
-
-    Rcpp::NumericVector results(n_batch_trials);
-
-    for (int i = 0; i < n_batch_trials; ++i) {
-        double t = rts_batch[i];
-        Rcpp::NumericMatrix p_trial_this_winner_first = Rcpp::as<Rcpp::NumericMatrix>(pars_all_trials_ordered[i]);
-
-        if (p_trial_this_winner_first.nrow() != n_acc) {
-             Rcpp::stop("f_race_integrand_batch_cpp: Parameter matrix for a trial has incorrect number of rows for n_acc.");
-        }
-
-        // Calculate PDF for the winner
-        Rcpp::NumericMatrix p_winner = p_trial_this_winner_first.row(0);
-        Rcpp::NumericVector pdf_winner_vec = model_dfun(Rcpp::NumericVector::create(t), p_winner, Rcpp::LogicalVector::create(true), false, model_specific_context);
-        double pdf_winner = pdf_winner_vec[0];
-
-        if (R_IsNA(pdf_winner) || !R_finite(pdf_winner) || pdf_winner < 0) {
-            results[i] = 0.0;
-            continue;
-        }
-
-        double survivor_losers = 1.0;
-        if (n_acc > 1) {
-            for (int k = 1; k < n_acc; ++k) { // Losers are in rows 1 to n_acc-1
-                Rcpp::NumericMatrix p_loser_k = p_trial_this_winner_first.row(k);
-                Rcpp::NumericVector cdf_loser_k_vec = model_pfun(Rcpp::NumericVector::create(t), p_loser_k, Rcpp::LogicalVector::create(true), false, model_specific_context);
-                double cdf_loser_k = cdf_loser_k_vec[0];
-
-                if (R_IsNA(cdf_loser_k) || !R_finite(cdf_loser_k)) {
-                    survivor_losers = 0.0; // If any CDF is problematic, product becomes zero
-                    break;
-                }
-                double s_loser_k = 1.0 - cdf_loser_k;
-                s_loser_k = (s_loser_k < 0.0) ? 0.0 : s_loser_k; // Clamp at 0
-                s_loser_k = (s_loser_k > 1.0) ? 1.0 : s_loser_k; // Clamp at 1 (should not be needed for 1-CDF if CDF is valid)
-                survivor_losers *= s_loser_k;
-                if (survivor_losers == 0.0) break; // Optimization
-            }
-        }
-
-        double final_val = pdf_winner * survivor_losers;
-        if (R_IsNA(final_val) || !R_finite(final_val) || final_val < 0) {
-            results[i] = 0.0;
-        } else {
-            results[i] = final_val;
-        }
-    }
-    return results;
-}
-
 
 NumericMatrix c_map_p(NumericVector p_vector,
                       CharacterVector p_types,
@@ -368,7 +298,7 @@ NumericMatrix get_pars_matrix(NumericVector p_vector, NumericVector constants, L
   bool posttransform = false;
   // If trend has these flags
   if (has_trend) {
-    pretransform = trend.attr("pretransform");
+    pretransform = trend.attr("premap"); // Note: R code used trend.attr("premap") for pretransform flag. Keeping consistent.
     posttransform = trend.attr("posttransform");
   }
   NumericVector p_vector_updtd(clone(p_vector));
@@ -407,60 +337,66 @@ double c_log_likelihood_DDM(NumericMatrix pars, DataFrame data,
   return(sum(lls_exp));
 }
 
+// This is the old standard race likelihood - will be commented out after refactor
 double c_log_likelihood_race(NumericMatrix pars, DataFrame data,
-                             NumericVector (*dfun)(NumericVector, NumericMatrix, LogicalVector, double, LogicalVector),
-                             NumericVector (*pfun)(NumericVector, NumericMatrix, LogicalVector, double, LogicalVector),
+                             NumericVector (*dfun)(NumericVector, NumericMatrix, LogicalVector, double, LogicalVector, bool), // Added bool for posdrift
+                             NumericVector (*pfun)(NumericVector, NumericMatrix, LogicalVector, double, LogicalVector, bool), // Added bool for posdrift
                              const int n_trials, LogicalVector winner, IntegerVector expand,
-                             double min_ll, LogicalVector is_ok){
+                             double min_ll, LogicalVector is_ok, bool use_posdrift_arg = true){ // Added use_posdrift_arg
   const int n_out = expand.length();
   NumericVector lds(n_trials);
   NumericVector rts = data["rt"];
-  CharacterVector R = data["R"];
-  NumericVector lR = data["lR"];
+  CharacterVector R = data["R"]; // Not directly used for R factor levels, but for n_acc via levels(dadm$R) in R
+  NumericVector lR = data["lR"]; // Factor indicating accumulator index
   NumericVector lds_exp(n_out);
   const int n_acc = unique(lR).length();
-  if(sum(contains(data.names(), "RACE")) == 1){
+
+  if(sum(contains(data.names(), "RACE")) == 1){ // Handling for subset of accumulators
     NumericVector NACC = data["RACE"];
     CharacterVector vals_NACC = NACC.attr("levels");
     for(int x = 0; x < pars.nrow(); x++){
-      // subtract 1 because R is 1 coded
-      if(lR[x] > atoi(vals_NACC[NACC[x]-1])){
-        pars(x,0) = NA_REAL;
+      if(lR[x] > atoi(vals_NACC[NACC[x]-1])){ // -1 because NACC values are 1-based R factor levels
+        pars(x,0) = NA_REAL; // Mark parameters for non-existent accumulators as NA
       }
     }
   }
-  NumericVector win = log(dfun(rts, pars, winner, exp(min_ll), is_ok)); //first for compressed
+  // For LBA, dfun/pfun are dlba_c/plba_c which now take use_posdrift_arg
+  // For RDM/LNR, their dfun/pfun (e.g. drdm_c) don't take use_posdrift_arg.
+  // This path needs to be smarter or dfun/pfun need a uniform signature (e.g. via adapters or optional args)
+  // For now, assuming this function is primarily for LBA if posdrift is relevant.
+  // This whole function will be commented out.
+  NumericVector win = log(dfun(rts, pars, winner, exp(min_ll), is_ok, use_posdrift_arg));
   lds[winner] = win;
   if(n_acc > 1){
-    NumericVector loss = log(1- pfun(rts, pars, !winner, exp(min_ll), is_ok)); //cdfs
+    NumericVector loss = log(1- pfun(rts, pars, !winner, exp(min_ll), is_ok, use_posdrift_arg));
     loss[is_na(loss)] = min_ll;
-    loss[loss == log(1 - exp(min_ll))] = min_ll;
+    loss[loss == log(1 - exp(min_ll))] = min_ll; // Avoid -Inf from log(0) if pfun result was min_ll for CDF
     lds[!winner] = loss;
   }
-  lds[is_na(lds)] = min_ll;
+  lds[is_na(lds)] = min_ll; // Catch any other NAs
 
   if(n_acc > 1){
-    // LogicalVector winner_exp = c_bool_expand(winner, expand);
-    NumericVector ll_out = lds[winner];
-    NumericVector lds_los = lds[!winner];
+    NumericVector ll_out = lds[winner]; // Likelihoods for winning accumulators
+    NumericVector lds_los = lds[!winner]; // Likelihoods for losing accumulators
     if(n_acc == 2){
-      ll_out = ll_out + lds_los;
+      ll_out = ll_out + lds_los; // Simple sum if only one loser
     } else{
-      for(int z = 0; z < ll_out.length(); z++){
-        ll_out[z] = ll_out[z] + sum(lds_los[seq( z * (n_acc -1), (z+1) * (n_acc -1) -1)]);
+      // Summing log-likelihoods of (n_acc-1) losers for each winning accumulator's trial
+      for(int z = 0; z < ll_out.length(); z++){ // ll_out.length() is n_unique_trials if winner is per unique trial
+        ll_out[z] = ll_out[z] + sum(lds_los[Rcpp::Range( z * (n_acc -1), (z+1) * (n_acc -1) -1)]);
       }
     }
 
     ll_out[is_na(ll_out)] = min_ll;
     ll_out[is_infinite(ll_out)] = min_ll;
     ll_out[ll_out < min_ll] = min_ll;
-    ll_out = c_expand(ll_out, expand); // decompress
+    ll_out = c_expand(ll_out, expand); // Decompress to full trial count
     return(sum(ll_out));
-  } else{
+  } else{ // Single accumulator case
+    lds_exp = c_expand(lds, expand); // Decompress
     lds_exp[is_na(lds_exp)] = min_ll;
     lds_exp[is_infinite(lds_exp)] = min_ll;
     lds_exp[lds_exp < min_ll] = min_ll;
-    lds_exp = c_expand(lds, expand); // decompress
     return(sum(lds_exp));
   }
 }
@@ -468,22 +404,21 @@ double c_log_likelihood_race(NumericMatrix pars, DataFrame data,
 // [[Rcpp::export]]
 NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector constants,
             List designs, String type_rcpp, List bounds, List transforms, List pretransforms,
-            CharacterVector p_types, double min_ll, List trend){
+            CharacterVector p_types, double min_ll, List trend, SEXP model_r_object = R_NilValue){
   const int n_particles = p_matrix.nrow();
-  const int n_trials = data.nrow();
+  const int n_trials = data.nrow(); // Total rows in dadm (n_unique_trials * n_accumulators)
   NumericVector lls(n_particles);
   NumericVector p_vector(p_matrix.ncol());
   CharacterVector p_names = colnames(p_matrix);
   p_vector.names() = p_names;
-  NumericMatrix pars(n_trials, p_types.length());
-  LogicalVector is_ok(n_trials);
+  NumericMatrix pars(n_trials, p_types.length()); // Will be resized per particle if n_trials changes (it shouldn't here)
+  LogicalVector is_ok(n_trials);                 // Same as above
 
-  // Once (outside the main loop over particles):
   NumericMatrix minmax = bounds["minmax"];
   CharacterVector mm_names = colnames(minmax);
   std::vector<PreTransformSpec> p_specs;
   std::vector<BoundSpec> bound_specs;
-  std::string type_std(type_rcpp); // Convert Rcpp::String to std::string
+  std::string type_std(type_rcpp);
 
   if(type_std == "DDM"){
     IntegerVector expand = data.attr("expand");
@@ -493,8 +428,7 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
         p_specs = make_pretransform_specs(p_vector, pretransforms);
       }
       pars = get_pars_matrix(p_vector, constants, transforms, p_specs, p_types, designs, n_trials, data, trend);
-      // Precompute specs
-      if (i == 0) {                            // first particle only, just to get colnames
+      if (i == 0) {
         bound_specs = make_bound_specs(minmax,mm_names,pars,bounds);
       }
       is_ok = c_do_bound(pars, bound_specs);
@@ -509,8 +443,7 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
         p_specs = make_pretransform_specs(p_vector, pretransforms);
       }
       pars = get_pars_matrix(p_vector, constants, transforms, p_specs, p_types, designs, n_trials, data, trend);
-      // Precompute specs
-      if (i == 0) {                            // first particle only, just to get colnames
+      if (i == 0) {
         bound_specs = make_bound_specs(minmax,mm_names,pars,bounds);
       }
       is_ok = c_do_bound(pars, bound_specs);
@@ -520,99 +453,209 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
         lls[i] = c_log_likelihood_MRI_white(pars, y, is_ok, n_trials, n_pars, min_ll);
       }
     }
-  } else{ // Handles standard race models and new censored/truncated race models
-    IntegerVector expand = data.attr("expand"); // Used by both race likelihoods
+  } else { // This block now handles ALL race models (LBA, RDM, LNR) using the _CENS_TRUNC machinery
+    IntegerVector expand = data.attr("expand");
+    std::string base_model_type = type_std;
+    bool is_cens_trunc_explicitly = false;
+    if (type_std.length() > 11 && type_std.substr(type_std.length() - 11) == "_CENS_TRUNC") {
+        base_model_type = type_std.substr(0, type_std.find("_CENS_TRUNC"));
+        is_cens_trunc_explicitly = true; // Flag if it was originally a _CENS_TRUNC type
+    }
 
-    if (type_std.find("_CENS_TRUNC") != std::string::npos) {
-        // --- New Censored/Truncated Race Model Logic ---
-        std::string base_model_type = type_std.substr(0, type_std.find("_CENS_TRUNC"));
-        RacePdfFun cens_model_dfun_ptr = nullptr;
-        RaceCdfFun cens_model_pfun_ptr = nullptr;
-        ContextForRaceModels current_model_ctx; // Using the defined struct
-        current_model_ctx.min_lik_for_pdf = exp(min_ll);
-        // current_model_ctx.default_posdrift = true; // If this was part of the context
+    // Check if the base_model_type is one of the known race models
+    if (base_model_type != "LBA" && base_model_type != "RDM" && base_model_type != "LNR") {
+        Rcpp::stop("Unsupported model type in race model block: " + type_std);
+    }
 
-        if (base_model_type == "LBA") {
-            cens_model_dfun_ptr = &lba_dfun_adapter;
-            cens_model_pfun_ptr = &lba_pfun_adapter;
-        } else if (base_model_type == "RDM") {
-            cens_model_dfun_ptr = &rdm_dfun_adapter;
-            cens_model_pfun_ptr = &rdm_pfun_adapter;
-        } else if (base_model_type == "LNR") {
-            cens_model_dfun_ptr = &lnr_dfun_adapter;
-            cens_model_pfun_ptr = &lnr_pfun_adapter;
-        } else {
-            Rcpp::stop("Unsupported base model type for _CENS_TRUNC: " + base_model_type);
-        }
+    RacePdfFun model_dfun_ptr = nullptr;
+    RaceCdfFun model_pfun_ptr = nullptr;
+    ContextForRaceModels current_model_ctx;
+    current_model_ctx.min_lik_for_pdf = exp(min_ll);
+    current_model_ctx.use_posdrift = true; // Default to true, override for LBA if specified in model object
 
-        Rcpp::NumericVector lR_unique_vals = data["lR"];
-        int n_acc = Rcpp::unique(lR_unique_vals).size(); // Determine n_acc
-        if (n_acc == 0 && pars.nrow() > 0 && n_trials > 0) n_acc = pars.nrow() / n_trials; // Fallback if lR is not helpful
-        if (n_acc == 0) Rcpp::stop("calc_ll: Could not determine n_acc for _CENS_TRUNC model.");
-
-
-        for (int i = 0; i < n_particles; ++i) {
-            p_vector = p_matrix(i, Rcpp::_);
-            if (i == 0) { // Only need to make p_specs once
-                p_specs = make_pretransform_specs(p_vector, pretransforms);
+    if (base_model_type == "LBA") {
+        model_dfun_ptr = &lba_dfun_adapter;
+        model_pfun_ptr = &lba_pfun_adapter;
+        if (model_r_object != R_NilValue) {
+            Rcpp::List model_props(model_r_object);
+            if (model_props.containsElementNamed("posdrift")) {
+                current_model_ctx.use_posdrift = Rcpp::as<bool>(model_props["posdrift"]);
+            } else {
+                // Rcpp::Rcout << "Warning: LBA model from R object does not contain 'posdrift' element. Defaulting to true." << std::endl;
             }
-            // get_pars_matrix applies p_vector attributes, constants, pretransforms, maps to design, applies transforms and trends
-            pars = get_pars_matrix(p_vector, constants, transforms, p_specs, p_types, designs, n_trials, data, trend); // Reverted to 'pars'
-
-            is_ok.resize(pars.nrow()); // Ensure is_ok has the correct size for current 'pars'
-            if (i == 0 || bound_specs.empty()) { // bound_specs depends on colnames of pars, make once.
-                bound_specs = make_bound_specs(minmax, mm_names, pars, bounds);
-            }
-            is_ok = c_do_bound(pars, bound_specs);
-            // lr_all might be needed if model specific checks are required, like DDM. For generic race, maybe not here.
-            // For _CENS_TRUNC models, n_acc accumulators are expected per unique trial in 'pars'.
-            // The 'is_ok' vector from c_do_bound will be n_trials long (n_unique_trials * n_acc).
-            // c_log_likelihood_race_cens_trunc itself will handle interpreting this based on its internal loop over unique trials.
-            // No explicit lr_all(is_ok, n_acc) call here, as individual accumulator parameters are checked by c_do_bound.
-            // The c_log_likelihood_race_cens_trunc function receives the full is_ok vector.
-
-            lls[i] = c_log_likelihood_race_cens_trunc(pars, data, // Use 'pars' and 'is_ok'
-                                                      cens_model_dfun_ptr, cens_model_pfun_ptr,
-                                                      min_ll, is_ok, n_acc, expand,
-                                                      &current_model_ctx); // Pass pointer to context
+        } else if (is_cens_trunc_explicitly || type_std == "LBA") { // Only warn if we expected to find it
+             // Rcpp::Rcout << "Warning: R model object not passed to calc_ll for LBA model type '" << type_std << "'. Defaulting posdrift to true." << std::endl;
         }
+    } else if (base_model_type == "RDM") {
+        model_dfun_ptr = &rdm_dfun_adapter;
+        model_pfun_ptr = &rdm_pfun_adapter;
+    } else if (base_model_type == "LNR") {
+        model_dfun_ptr = &lnr_dfun_adapter;
+        model_pfun_ptr = &lnr_pfun_adapter;
+    }
+    // No else needed here due to the check above
 
-    } else {
-        // --- Existing Race Model Logic (LBA, RDM, LNR) ---
-        LogicalVector winner = data["winner"];
-        NumericVector (*dfun)(NumericVector, NumericMatrix, LogicalVector, double, LogicalVector);
-        NumericVector (*pfun)(NumericVector, NumericMatrix, LogicalVector, double, LogicalVector);
-        if(type_std == "LBA"){ // Use type_std here
-          dfun = dlba_c;
-          pfun = plba_c;
-        } else if(type_std == "RDM"){ // Use type_std here
-          dfun = drdm_c;
-          pfun = prdm_c;
-        } else{ // LNR - default for non-censored race if not LBA or RDM
-          dfun = dlnr_c;
-          pfun = plnr_c;
-        }
-        Rcpp::NumericVector lR_col = data["lR"];
-        int n_lR_val = Rcpp::unique(lR_col).size(); // Changed from n_lR to n_lR_val
-
-        for (int i = 0; i < n_particles; ++i) {
-          p_vector = p_matrix(i, Rcpp::_);
-          if(i == 0){
-            p_specs = make_pretransform_specs(p_vector, pretransforms);
-          }
-          pars = get_pars_matrix(p_vector, constants, transforms, p_specs, p_types, designs, n_trials, data, trend);
-          if (i == 0) {
-            bound_specs = make_bound_specs(minmax,mm_names,pars,bounds);
-          }
-          is_ok = c_do_bound(pars, bound_specs);
-          is_ok = lr_all(is_ok, n_lR_val); // n_lR_val instead of n_lR
-          lls[i] = c_log_likelihood_race(pars, data, dfun, pfun, n_trials, winner, expand, min_ll, is_ok);
+    int n_acc = 0;
+    if (data.containsElementNamed("lR")) {
+        Rcpp::NumericVector lR_col = data["lR"]; // Use NumericVector for lR as in c_log_likelihood_race
+        if (lR_col.length() > 0) {
+            Rcpp::NumericVector lR_unique_vals = Rcpp::unique(lR_col);
+            n_acc = lR_unique_vals.size();
         }
     }
+    if (n_acc == 0 && data.nrows() > 0) { // Fallback or error if n_acc couldn't be determined
+         Rcpp::Rcerr << "Warning: calc_ll could not determine n_acc from data[\"lR\"] for model type " << type_std
+                  << ". This may lead to errors or incorrect likelihoods." << std::endl;
+         // Setting n_acc to 1 if completely undetermined and data exists, as a last resort, though likely wrong.
+         // A better approach might be to stop if n_acc is vital and cannot be found.
+         // For now, this matches the old fallback logic's spirit if it were to use data.nrows() / unique_conditions.
+         // If n_trials is total rows in dadm, and dadm has n_unique_cond * n_acc rows,
+         // then n_acc = n_trials / n_unique_cond. This is hard to get here without n_unique_cond.
+         // The c_log_likelihood_race_cens_trunc will re-calculate n_acc based on data["lR"] or stop.
+         // So, we can pass a placeholder or let it be determined inside.
+         // Let's ensure n_acc is determined before the loop or c_log_likelihood_race_cens_trunc will handle it.
+         // The c_log_likelihood_race_cens_trunc has its own n_acc determination.
+    }
+    // n_acc determination is primarily handled inside c_log_likelihood_race_cens_trunc now.
+    // We pass a placeholder n_acc (e.g. 0 or a guess) if needed, or rely on its internal logic.
+    // The n_acc argument to c_log_likelihood_race_cens_trunc is critical.
+    // Let's re-evaluate n_acc for the call:
+    if (data.containsElementNamed("lR")) {
+        Rcpp::NumericVector lR_col_for_nacc = data["lR"];
+        if (lR_col_for_nacc.length() > 0) {
+            n_acc = Rcpp::unique(lR_col_for_nacc).size();
+        }
+    }
+    if (n_acc == 0 && data.nrows() > 0) { // If still zero
+        Rcpp::stop("calc_ll: Failed to determine n_acc for race model from 'lR' column.");
+    }
+
+
+    for (int i = 0; i < n_particles; ++i) {
+        p_vector = p_matrix(i, Rcpp::_);
+        if (i == 0) {
+            p_specs = make_pretransform_specs(p_vector, pretransforms);
+        }
+        pars = get_pars_matrix(p_vector, constants, transforms, p_specs, p_types, designs, n_trials, data, trend);
+
+        is_ok.resize(pars.nrow());
+        if (i == 0 || bound_specs.empty()) {
+            bound_specs = make_bound_specs(minmax, mm_names, pars, bounds);
+        }
+        is_ok = c_do_bound(pars, bound_specs);
+
+        lls[i] = c_log_likelihood_race_cens_trunc(pars, data,
+                                                  model_dfun_ptr, model_pfun_ptr,
+                                                  min_ll, is_ok, n_acc, expand, // Pass determined n_acc
+                                                  &current_model_ctx);
+    }
+
+    /* // Old standard race model block - now commented out
+    } else { // This was the original "else" for standard LBA/RDM/LNR
+        LogicalVector winner = data["winner"];
+        // The function pointers for dfun/pfun in the old c_log_likelihood_race did not take a context or a separate posdrift.
+        // Their C++ implementations (dlba_c etc.) would need to be adapted or wrapped if we were to keep this path.
+        // For LBA, posdrift would need to be passed.
+        bool model_use_posdrift_std = true;
+        if (type_std == "LBA" && model_r_object != R_NilValue) {
+            Rcpp::List model_props(model_r_object);
+            if (model_props.containsElementNamed("posdrift")) {
+                model_use_posdrift_std = Rcpp::as<bool>(model_props["posdrift"]);
+            }
+        }
+
+        // Original function pointers for c_log_likelihood_race
+        // These would need to be updated to match the new signatures if this block were active
+        // e.g., dlba_c now needs a posdrift argument.
+        // NumericVector (*dfun_std)(NumericVector, NumericMatrix, LogicalVector, double, LogicalVector, bool);
+        // NumericVector (*pfun_std)(NumericVector, NumericMatrix, LogicalVector, double, LogicalVector, bool);
+
+        // This block is complex to adapt due to differing function signatures for LBA vs RDM/LNR regarding posdrift.
+        // The unified path using adapters and context is cleaner.
+        // ... (original logic for selecting dfun/pfun and calling c_log_likelihood_race) ...
+        // For example, for LBA:
+        // if(type_std == "LBA"){
+        //   lls[i] = c_log_likelihood_race(pars, data, dlba_c, plba_c, n_trials, winner, expand, min_ll, is_ok, model_use_posdrift_std);
+        // } else if ...
+        // This demonstrates why unifying is simpler.
+    }
+    */
   }
   return(lls);
 }
 
+
+// Batched version of f_race_integrand_cpp for finite RT trials
+// rts_batch: vector of RTs for the batch
+// pars_all_trials_ordered: A List of NumericMatrix, where each element is an ordered parameter matrix
+//                          for a trial (winner first), matching the order in rts_batch.
+// model_dfun, model_pfun: function pointers to the model's density and CDF
+// n_acc: number of accumulators
+// model_specific_context: context pointer for model functions
+Rcpp::NumericVector f_race_integrand_batch_cpp(
+    const Rcpp::NumericVector& rts_batch,
+    const Rcpp::List& pars_all_trials_ordered, // List of NumericMatrix, each n_acc x n_params
+    RacePdfFun model_dfun,
+    RaceCdfFun model_pfun,
+    int n_acc,
+    void* model_specific_context) {
+
+    int n_batch_trials = rts_batch.size();
+    if (n_batch_trials == 0) {
+        return Rcpp::NumericVector(0);
+    }
+    if (pars_all_trials_ordered.size() != n_batch_trials) {
+        Rcpp::stop("f_race_integrand_batch_cpp: rts_batch size and pars_all_trials_ordered size mismatch.");
+    }
+
+    Rcpp::NumericVector results(n_batch_trials);
+
+    for (int i = 0; i < n_batch_trials; ++i) {
+        double t = rts_batch[i];
+        Rcpp::NumericMatrix p_trial_this_winner_first = Rcpp::as<Rcpp::NumericMatrix>(pars_all_trials_ordered[i]);
+
+        if (p_trial_this_winner_first.nrow() != n_acc) {
+             Rcpp::stop("f_race_integrand_batch_cpp: Parameter matrix for a trial has incorrect number of rows for n_acc.");
+        }
+
+        // Calculate PDF for the winner
+        Rcpp::NumericMatrix p_winner = p_trial_this_winner_first.row(0);
+        Rcpp::NumericVector pdf_winner_vec = model_dfun(Rcpp::NumericVector::create(t), p_winner, Rcpp::LogicalVector::create(true), false, model_specific_context);
+        double pdf_winner = pdf_winner_vec[0];
+
+        if (R_IsNA(pdf_winner) || !R_finite(pdf_winner) || pdf_winner < 0) {
+            results[i] = 0.0;
+            continue;
+        }
+
+        double survivor_losers = 1.0;
+        if (n_acc > 1) {
+            for (int k = 1; k < n_acc; ++k) { // Losers are in rows 1 to n_acc-1
+                Rcpp::NumericMatrix p_loser_k = p_trial_this_winner_first.row(k);
+                Rcpp::NumericVector cdf_loser_k_vec = model_pfun(Rcpp::NumericVector::create(t), p_loser_k, Rcpp::LogicalVector::create(true), false, model_specific_context);
+                double cdf_loser_k = cdf_loser_k_vec[0];
+
+                if (R_IsNA(cdf_loser_k) || !R_finite(cdf_loser_k)) {
+                    survivor_losers = 0.0; // If any CDF is problematic, product becomes zero
+                    break;
+                }
+                double s_loser_k = 1.0 - cdf_loser_k;
+                s_loser_k = (s_loser_k < 0.0) ? 0.0 : s_loser_k; // Clamp at 0
+                s_loser_k = (s_loser_k > 1.0) ? 1.0 : s_loser_k; // Clamp at 1 (should not be needed for 1-CDF if CDF is valid)
+                survivor_losers *= s_loser_k;
+                if (survivor_losers == 0.0) break; // Optimization
+            }
+        }
+
+        double final_val = pdf_winner * survivor_losers;
+        if (R_IsNA(final_val) || !R_finite(final_val) || final_val < 0) {
+            results[i] = 0.0;
+        } else {
+            results[i] = final_val;
+        }
+    }
+    return results;
+}
 
 // ---- START: New code for censored/truncated race models ----
 // #include "model_race_cens_trunc.h" // Include the new header // MOVED TO TOP
@@ -631,26 +674,18 @@ struct gsl_race_params {
 // GSL-compatible adapter for f_race_integrand_cpp
 double gsl_f_race_adapter(double t, void *p) {
     gsl_race_params* params = static_cast<gsl_race_params*>(p);
-    // Call the actual integrand logic, now using the members of the struct
-    // The f_race_integrand_cpp logic will be effectively moved/called here.
-    // For simplicity, let's assume f_race_integrand_cpp is refactored slightly
-    // or its core logic is used directly here.
-    // Original f_race_integrand_cpp signature:
-    // double f_race_integrand_cpp(double t, const Rcpp::NumericMatrix& p_trial_this_winner_first,
-    //                             RacePdfFun model_dfun, RaceCdfFun model_pfun, int n_acc)
 
-    if (t < 0) return 0.0;
+    if (t < 0) return 0.0; // RTs are non-negative
 
-    Rcpp::NumericVector t_vec(1);
+    Rcpp::NumericVector t_vec(1); // model_dfun/pfun expect NumericVector for rt
     t_vec[0] = t;
 
-    const Rcpp::NumericMatrix& p_mat = *(params->p_trial_this_winner_first); // p_mat is the ordered parameter matrix for the trial (winner first)
+    const Rcpp::NumericMatrix& p_mat = *(params->p_trial_this_winner_first);
 
     Rcpp::NumericMatrix p_winner_mat(1, p_mat.ncol());
-    p_winner_mat.row(0) = p_mat.row(0); // Extract first row (winner) into a new 1-row matrix
+    p_winner_mat.row(0) = p_mat.row(0);
 
-    Rcpp::LogicalVector ok_win(1, true);
-    // Pass the model_specific_context to the model functions
+    Rcpp::LogicalVector ok_win(1, true); // Assuming parameters passed here are valid for this specific call context
     Rcpp::NumericVector pdf_winner_vec = params->model_dfun(t_vec, p_winner_mat, ok_win, false, params->model_specific_context);
     double pdf_winner = pdf_winner_vec[0];
 
@@ -658,30 +693,23 @@ double gsl_f_race_adapter(double t, void *p) {
 
     if (params->n_acc > 1) {
         double survivor_losers = 1.0;
-        for (int i = 1; i < params->n_acc; ++i) { // Losers are in rows 1 to n_acc-1 of p_mat
+        for (int i = 1; i < params->n_acc; ++i) {
             Rcpp::NumericMatrix p_loser_i_mat(1, p_mat.ncol());
-            p_loser_i_mat.row(0) = p_mat.row(i); // Extract i-th row (a loser)
+            p_loser_i_mat.row(0) = p_mat.row(i);
             Rcpp::LogicalVector ok_los(1, true);
-            // Pass the model_specific_context to the model functions
             Rcpp::NumericVector cdf_loser_i_vec = params->model_pfun(t_vec, p_loser_i_mat, ok_los, false, params->model_specific_context);
             double cdf_loser_i = cdf_loser_i_vec[0];
 
             double s_loser_i = 1.0 - cdf_loser_i;
             if (!R_finite(s_loser_i) || s_loser_i < 0) s_loser_i = 0.0;
-            if (s_loser_i > 1.0) s_loser_i = 1.0;
+            if (s_loser_i > 1.0) s_loser_i = 1.0; // Should not happen with valid CDF
             survivor_losers *= s_loser_i;
+            if (survivor_losers == 0) break; // Optimization
         }
         pdf_winner *= survivor_losers;
     }
     return (R_finite(pdf_winner) && pdf_winner > 0) ? pdf_winner : 0.0;
 }
-
-
-// Actual model functions will be passed by R, need to get them from SEXP
-// For now, these are placeholders for where we'd extract them.
-// In c_log_likelihood_race_cens_trunc, we'll get them from R_model_list.
-// RacePdfFun current_model_dfun = nullptr;
-// RaceCdfFun current_model_pfun = nullptr;
 
 
 // Helper to order parameters (winner first)
@@ -695,18 +723,12 @@ Rcpp::NumericMatrix order_pars_for_winner_cpp(
     }
 
     Rcpp::NumericMatrix ordered_pars(n_acc, p_all_acc.ncol());
-    // Copy winner to the first row
-    for (int j = 0; j < p_all_acc.ncol(); ++j) {
-        ordered_pars(0, j) = p_all_acc(k_idx - 1, j);
-    }
-    // Copy losers
+    ordered_pars.row(0) = p_all_acc.row(k_idx - 1);
+
     int current_row = 1;
     for (int i = 0; i < n_acc; ++i) {
         if (i == (k_idx - 1)) continue;
-        for (int j = 0; j < p_all_acc.ncol(); ++j) {
-            ordered_pars(current_row, j) = p_all_acc(i, j);
-        }
-        current_row++;
+        ordered_pars.row(current_row++) = p_all_acc.row(i);
     }
     return ordered_pars;
 }
@@ -722,11 +744,11 @@ double integrate_for_kth_winner_cpp(
     RaceCdfFun model_pfun,
     int n_acc,
     double epsilon = 1e-7,
-    void* model_specific_context = nullptr) { // Added context, default to nullptr if not provided by older callers
+    void* model_specific_context = nullptr) {
 
-    if (low >= upp && !(low == 0 && upp == R_PosInf)) return 0.0; // Allow 0 to Inf even if upp becomes finite internally
+    if (low >= upp && !(low == 0 && upp == R_PosInf)) return 0.0;
     if (k_winner_idx < 1 || k_winner_idx > n_acc) {
-      Rcpp::Rcerr << "Warning: Invalid k_winner_idx in integrate_for_kth_winner_cpp: " << k_winner_idx << std::endl;
+      // Rcpp::Rcerr << "Warning: Invalid k_winner_idx in integrate_for_kth_winner_cpp: " << k_winner_idx << std::endl;
       return 0.0;
     }
     Rcpp::NumericMatrix pars_ordered = order_pars_for_winner_cpp(p_all_acc, k_winner_idx, n_acc);
@@ -740,44 +762,31 @@ double integrate_for_kth_winner_cpp(
     params_struct.model_dfun = model_dfun;
     params_struct.model_pfun = model_pfun;
     params_struct.n_acc = n_acc;
-    params_struct.model_specific_context = model_specific_context; // Assign context here
+    params_struct.model_specific_context = model_specific_context;
 
     F.function = &gsl_f_race_adapter;
     F.params = &params_struct;
 
-    // Store current GSL error handler
     gsl_error_handler_t* old_handler = gsl_set_error_handler_off();
-
     int status;
-    if (upp == R_PosInf) { // Integral from low to +Inf
-        if (low < 0) { // QAGIU requires a >= 0 if integrating f(x)
-                       // Or use QAGI for (-inf, inf), but our RTs are typically > 0
-            Rcpp::Rcerr << "Warning: lower bound for QAGIU is negative: " << low << ". Truncating to 0." << std::endl;
-            // This might not be correct for all model types if they can have density < 0
-            // but for RTs, this is a safe assumption.
-             if (low < 0) low = 0;
-        }
-        if (low >= R_PosInf) { // effectively low is Inf
+    if (upp == R_PosInf) {
+        if (low < 0) low = 0; // QAGIU requires a >= 0
+        if (low >= R_PosInf) {
              result = 0; status = GSL_SUCCESS;
         } else {
             status = gsl_integration_qagiu(&F, low, 0, epsilon, 1000, w, &result, &error);
         }
-    } else { // Finite interval [low, upp]
+    } else {
         status = gsl_integration_qags(&F, low, upp, 0, epsilon, 1000, w, &result, &error);
     }
 
-    // Restore old GSL error handler
     gsl_set_error_handler(old_handler);
     gsl_integration_workspace_free(w);
 
     if (status != GSL_SUCCESS) {
-        // Rcpp::Rcerr << "GSL integration failed with status: " << gsl_strerror(status)
-        //             << " for interval [" << low << ", " << upp << "]"
-        //             << " k_winner: " << k_winner_idx << std::endl;
-        // Potentially print parameters from pars_ordered for debugging if needed
-        return 0.0; // Or handle error appropriately
+        // Rcpp::Rcerr << "GSL integration failed: " << gsl_strerror(status) << std::endl;
+        return 0.0;
     }
-
     return (result > 0 && R_finite(result)) ? result : 0.0;
 }
 
@@ -790,313 +799,78 @@ double get_trunc_corr_factor_for_kth_winner_cpp(
     double LT, double UT,
     int n_acc,
     double epsilon = 1e-7,
-    void* model_specific_context = nullptr) { // Added context
+    void* model_specific_context = nullptr) {
 
-    if (!(LT > 0 || UT < R_PosInf)) return 1.0;
-    if (k_winner_idx < 1 || k_winner_idx > n_acc) return NA_REAL;
+    if (!(LT > 0 || UT < R_PosInf)) return 1.0; // No truncation if LT=0 and UT=Inf
+    if (k_winner_idx < 1 || k_winner_idx > n_acc) return NA_REAL; // Invalid winner
 
-    // Integral from 0 to Inf
     double prob_untruncated = integrate_for_kth_winner_cpp(k_winner_idx, p_all_acc, 0, R_PosInf, model_dfun, model_pfun, n_acc, epsilon, model_specific_context);
-    // Integral over [LT, UT]
     double prob_truncated_interval = integrate_for_kth_winner_cpp(k_winner_idx, p_all_acc, LT, UT, model_dfun, model_pfun, n_acc, epsilon, model_specific_context);
 
     if (prob_truncated_interval > 1e-12) {
-        if (!R_finite(prob_untruncated) || prob_untruncated < 0) return NA_REAL; // Problem with untruncated integral
+        if (!R_finite(prob_untruncated) || prob_untruncated < 0) return NA_REAL;
         return prob_untruncated / prob_truncated_interval;
-    } else { // Denominator is effectively zero
-        // If numerator is also zero, factor is undefined but effectively 1 (0/0 case for prob).
-        // If numerator is positive, then density exists only outside [LT,UT], implies infinite correction factor, problem.
-        if (prob_untruncated > 1e-12) return NA_REAL;
-        return 1.0;
+    } else {
+        if (prob_untruncated > 1e-12) return NA_REAL; // Density exists but not in [LT,UT] -> infinite correction
+        return 1.0; // Both are zero or negligible
     }
 }
 
 
-// Main C++ function for censored/truncated race likelihood calculation (remains the same structure)
-// Returns a single double: the total log-likelihood for one particle.
+// Main C++ function for censored/truncated race likelihood calculation
+// This function is now the unified entry point for all race models (LBA, RDM, LNR),
+// whether they are standard or explicitly handling censoring/truncation.
+// It uses batching for finite RTs and iterative processing for others (censored/NA RTs).
 double c_log_likelihood_race_cens_trunc(
-    Rcpp::NumericMatrix pars,               // Parameters for one particle, all unique trial conditions
-    Rcpp::DataFrame dadm,                   // Data for unique trial conditions
-    RacePdfFun model_dfun,                  // Pointer to the model's C++ PDF
-    RaceCdfFun model_pfun,                  // Pointer to the model's C++ CDF
-    double min_ll,
-    const Rcpp::LogicalVector& ok_params,   // Parameter validity for this particle's pars matrix
-    int n_acc,                              // Number of accumulators in the race
+    Rcpp::NumericMatrix pars,               // Parameters for one particle, covering all dadm rows for that particle
+    Rcpp::DataFrame dadm,                   // Data for unique trial conditions, structured for all accumulators
+    RacePdfFun model_dfun,                  // Pointer to the model's PDF adapter function
+    RaceCdfFun model_pfun,                  // Pointer to the model's CDF adapter function
+    double min_ll,                          // Minimum log-likelihood value
+    const Rcpp::LogicalVector& ok_params,   // Parameter validity for each row in 'pars' matrix
+    int n_acc,                              // Number of accumulators in the race (must be > 0 if data exists)
     const Rcpp::IntegerVector& expand_vec,  // Vector for expanding unique LLs to full trial count
-    void* model_context_for_funcs           // Context for model_dfun/model_pfun
+    void* model_context_for_funcs           // Context for model_dfun/model_pfun (e.g., contains posdrift for LBA)
 ) {
-    // Fetch censoring and truncation values from dadm attributes
-    double LT = 0.0, UT = R_PosInf, LC = 0.0, UC = R_PosInf; // Defaults
-    if (dadm.hasAttribute("LT") && !Rf_isNull(dadm.attr("LT"))) {
-        LT = Rcpp::as<double>(dadm.attr("LT"));
-    }
-    if (dadm.hasAttribute("UT") && !Rf_isNull(dadm.attr("UT"))) {
-        UT = Rcpp::as<double>(dadm.attr("UT"));
-    }
-    if (dadm.hasAttribute("LC") && !Rf_isNull(dadm.attr("LC"))) {
-        LC = Rcpp::as<double>(dadm.attr("LC"));
-    }
-    if (dadm.hasAttribute("UC") && !Rf_isNull(dadm.attr("UC"))) {
-        UC = Rcpp::as<double>(dadm.attr("UC"));
-    }
+    // Fetch censoring and truncation values from dadm attributes, with defaults
+    double LT = 0.0, UT = R_PosInf, LC = 0.0, UC = R_PosInf;
+    if (dadm.hasAttribute("LT") && !Rf_isNull(dadm.attr("LT"))) LT = Rcpp::as<double>(dadm.attr("LT"));
+    if (dadm.hasAttribute("UT") && !Rf_isNull(dadm.attr("UT"))) UT = Rcpp::as<double>(dadm.attr("UT"));
+    if (dadm.hasAttribute("LC") && !Rf_isNull(dadm.attr("LC"))) LC = Rcpp::as<double>(dadm.attr("LC"));
+    if (dadm.hasAttribute("UC") && !Rf_isNull(dadm.attr("UC"))) UC = Rcpp::as<double>(dadm.attr("UC"));
 
-    double integration_epsilon = 1e-7; // Tolerance for integration
+    double integration_epsilon = 1e-7; // Tolerance for GSL integration
 
-    Rcpp::IntegerVector R_col = Rcpp::as<Rcpp::IntegerVector>(dadm["R"]);
-    Rcpp::NumericVector rt_col = Rcpp::as<Rcpp::NumericVector>(dadm["rt"]);
-    // R_col contains 1-based factor levels from R. NA is represented by R_NaInt.
-    // We need to access the R value corresponding to the unique trial, not just R_col[j].
-    // This should be from the first row of the block of accumulators for that unique trial.
-    Rcpp::IntegerVector R_values_for_unique_trials(dadm.nrows() / n_acc);
-    for(int i=0; i < dadm.nrows() / n_acc; ++i) {
-        R_values_for_unique_trials[i] = R_col[i * n_acc];
-    }
-
-
-    int n_unique_trials = dadm.nrows()/n_acc;
-    // n_acc is now passed as an argument, ensure it's valid.
-    if (n_acc <= 0) Rcpp::stop("c_log_likelihood_race_cens_trunc: n_acc must be positive.");
-    if (pars.nrow() != (n_unique_trials * n_acc)) {
-      Rcpp::Rcout << "pars.nrow(): " << pars.nrow() << ", n_unique_trials: " << n_unique_trials << ", n_acc: " << n_acc << std::endl;
-      Rcpp::stop("c_log_likelihood_race_cens_trunc: pars matrix dimensions do not match n_unique_trials * n_acc.");
-    }
-    if (ok_params.size() != pars.nrow()) {
-       Rcpp::stop("c_log_likelihood_race_cens_trunc: ok_params size does not match pars matrix rows.");
-    }
-
-
-    Rcpp::NumericVector ll_unique(n_unique_trials);
-
-    for (int j = 0; j < n_unique_trials; ++j) {
-        Rcpp::Range current_trial_par_indices((j * n_acc), (j + 1) * n_acc - 1);
-        bool params_ok_for_trial = true;
-        for(int k_in_block = 0; k_in_block < n_acc; ++k_in_block) {
-            int pars_matrix_row_idx = current_trial_par_indices[0] + k_in_block;
-            // Bounds check for ok_params access
-            if (pars_matrix_row_idx >= ok_params.size()) {
-                Rcpp::Rcerr << "Warning: ok_params index out of bounds in c_log_likelihood_race_cens_trunc. Index: "
-                            << pars_matrix_row_idx << ", size: " << ok_params.size() << std::endl;
-                params_ok_for_trial = false;
-                break;
-            }
-            if (!ok_params[pars_matrix_row_idx]) {
-                params_ok_for_trial = false;
-                break;
-            }
-        }
-        if (!params_ok_for_trial) {
-            ll_unique[j] = min_ll;
-            continue;
-        }
-
-        Rcpp::NumericMatrix pars_condition_j_all_acc = pars(current_trial_par_indices, Rcpp::_);
-
-        // Access rt from the first row of the block of accumulators for unique trial j
-        double rt_j = rt_col[current_trial_par_indices[0]]; 
-        // Access R from the pre-extracted R_values_for_unique_trials for unique trial j
-        int R_j_idx = R_values_for_unique_trials[j];
-
-        double current_prob_val = 0;
-
-        if (R_FINITE(rt_j) && rt_j > 0) { // Case 1: Observed RT
-            if (R_j_idx != NA_INTEGER) {
-                if (rt_j < LT || rt_j > UT) {
-                    current_prob_val = 0;
-                } else {
-                    Rcpp::NumericMatrix pars_ordered_obs = order_pars_for_winner_cpp(pars_condition_j_all_acc, R_j_idx, n_acc);
-
-                    double current_log_lik_val = 0.0;
-                    Rcpp::NumericVector t_vec(1); t_vec[0] = rt_j;
-
-                    // Winner's log PDF
-                    Rcpp::NumericMatrix p_winner_mat(1, pars_ordered_obs.ncol());
-                    p_winner_mat.row(0) = pars_ordered_obs.row(0);
-                    Rcpp::LogicalVector ok_win(1, true);
-                    Rcpp::NumericVector pdf_winner_vec = model_dfun(t_vec, p_winner_mat, ok_win, false, model_context_for_funcs);
-                    double pdf_winner = pdf_winner_vec[0];
-
-                    if (R_FINITE(pdf_winner) && pdf_winner > std::numeric_limits<double>::epsilon()) {
-                        current_log_lik_val += std::log(pdf_winner);
-                    } else {
-                        current_log_lik_val = min_ll; // Or accumulate min_ll; if one part is min_ll, whole thing might be
-                    }
-
-                    // Losers' log Survivor functions
-                    if (current_log_lik_val > min_ll -1.0) { // Only proceed if winner PDF was not already min_ll inducing
-                        for (int loser_idx = 1; loser_idx < n_acc; ++loser_idx) {
-                            Rcpp::NumericMatrix p_loser_mat(1, pars_ordered_obs.ncol());
-                            p_loser_mat.row(0) = pars_ordered_obs.row(loser_idx);
-                            Rcpp::LogicalVector ok_los(1, true);
-                            Rcpp::NumericVector cdf_loser_vec = model_pfun(t_vec, p_loser_mat, ok_los, false, model_context_for_funcs);
-                            double cdf_loser = cdf_loser_vec[0];
-                            double s_loser = 1.0 - cdf_loser;
-
-                            if (R_FINITE(s_loser) && s_loser > std::numeric_limits<double>::epsilon()) {
-                                current_log_lik_val += std::log(s_loser);
-                            } else {
-                                current_log_lik_val = min_ll; // If any loser has zero/bad survivor, trial is min_ll
-                                break; 
-                            }
-                        }
-                    }
-                    // current_prob_val is now actually a log-likelihood (before truncation correction)
-                    // The variable name ll_unique[j] will store this.
-                    // Truncation correction will be applied to this log-likelihood later.
-                    // For now, we set ll_unique[j] directly.
-                    ll_unique[j] = current_log_lik_val; // This is pre-truncation loglik
-                    // We need to apply truncation factor next.
-                    // The old current_prob_val logic needs to be bypassed for this path.
-                    // We will handle the truncation factor application after this block.
-                }
-                // Truncation correction for observed RT path (moved outside the density calculation)
-                // This applies if ll_unique[j] is not already min_ll from density calculation
-                if (ll_unique[j] > min_ll - 1.0) { // Check if not already set to min_ll by bad density/survivor
-                    double trunc_cf = get_trunc_corr_factor_for_kth_winner_cpp(R_j_idx, pars_condition_j_all_acc, model_dfun, model_pfun, LT, UT, n_acc, integration_epsilon, model_context_for_funcs);
-                    if (ISNAN(trunc_cf) || !R_FINITE(trunc_cf) || trunc_cf <= 0) { // If CF is bad or non-positive
-                        ll_unique[j] = min_ll; 
-                    } else {
-                        ll_unique[j] += std::log(trunc_cf); // Add log of CF
-                    }
-                }
-
-            } else { 
-                // Observed RT but R_j_idx is NA (unknown response) - should not happen.
-                ll_unique[j] = min_ll; 
-            }
-            // Bypass the old current_prob_val logic for this path
-            continue; 
-
-        } else if (rt_j == R_NegInf) { // Case 2: Lower Censored
-            // This part calculates a probability, not a log-probability directly from components
-            // So current_prob_val is appropriate here.
-            if (R_j_idx != NA_INTEGER) { // Response known
-                current_prob_val = integrate_for_kth_winner_cpp(R_j_idx, pars_condition_j_all_acc, LT, LC, model_dfun, model_pfun, n_acc, integration_epsilon, model_context_for_funcs);
-                if (current_prob_val > std::numeric_limits<double>::epsilon()) { // Check if prob > 0 before applying CF
-                    double trunc_cf = get_trunc_corr_factor_for_kth_winner_cpp(R_j_idx, pars_condition_j_all_acc, model_dfun, model_pfun, LT, UT, n_acc, integration_epsilon, model_context_for_funcs);
-                    if (ISNAN(trunc_cf) || !R_FINITE(trunc_cf) || trunc_cf <= 0) {
-                        current_prob_val = 0; // Invalid CF makes prob zero
-                    } else {
-                        current_prob_val *= trunc_cf;
-                    }
-                } else {
-                    current_prob_val = 0; // Initial integral was zero or too small
-                }
-            } else { // Response unknown
-                double sum_p = 0;
-                for (int k_w = 1; k_w <= n_acc; ++k_w) {
-                    double p_k = integrate_for_kth_winner_cpp(k_w, pars_condition_j_all_acc, LT, LC, model_dfun, model_pfun, n_acc, integration_epsilon, model_context_for_funcs);
-                    if (p_k > 0) {
-                        double trunc_cf_k = get_trunc_corr_factor_for_kth_winner_cpp(k_w, pars_condition_j_all_acc, model_dfun, model_pfun, LT, UT, n_acc, integration_epsilon, model_context_for_funcs);
-                        if (!ISNAN(trunc_cf_k) && R_FINITE(trunc_cf_k) && trunc_cf_k >=0) sum_p += (p_k * trunc_cf_k);
-                    }
-                }
-                current_prob_val = sum_p;
-            }
-        } else if (rt_j == R_PosInf) { // Case 3: Upper Censored
-             if (R_j_idx != NA_INTEGER) { // Response known
-                current_prob_val = integrate_for_kth_winner_cpp(R_j_idx, pars_condition_j_all_acc, UC, UT, model_dfun, model_pfun, n_acc, integration_epsilon, model_context_for_funcs);
-                if (current_prob_val > 0) {
-                    double trunc_cf = get_trunc_corr_factor_for_kth_winner_cpp(R_j_idx, pars_condition_j_all_acc, model_dfun, model_pfun, LT, UT, n_acc, integration_epsilon, model_context_for_funcs);
-                    if (ISNAN(trunc_cf) || !R_FINITE(trunc_cf) || trunc_cf < 0) current_prob_val = 0;
-                    else current_prob_val *= trunc_cf;
-                }
-            } else { // Response unknown
-                double sum_p = 0;
-                for (int k_w = 1; k_w <= n_acc; ++k_w) {
-                    double p_k = integrate_for_kth_winner_cpp(k_w, pars_condition_j_all_acc, UC, UT, model_dfun, model_pfun, n_acc, integration_epsilon, model_context_for_funcs);
-                     if (p_k > 0) {
-                        double trunc_cf_k = get_trunc_corr_factor_for_kth_winner_cpp(k_w, pars_condition_j_all_acc, model_dfun, model_pfun, LT, UT, n_acc, integration_epsilon, model_context_for_funcs);
-                        if (!ISNAN(trunc_cf_k) && R_FINITE(trunc_cf_k) && trunc_cf_k >=0) sum_p += (p_k * trunc_cf_k);
-                    }
-                }
-                current_prob_val = sum_p;
-            }
-        } else if (ISNAN(rt_j)) { // Case 4 & 5: NA RT (interval censoring)
-            if (R_j_idx != NA_INTEGER) { // Response known
-                double p_L = integrate_for_kth_winner_cpp(R_j_idx, pars_condition_j_all_acc, LT, LC, model_dfun, model_pfun, n_acc, integration_epsilon, model_context_for_funcs);
-                double p_U = integrate_for_kth_winner_cpp(R_j_idx, pars_condition_j_all_acc, UC, UT, model_dfun, model_pfun, n_acc, integration_epsilon, model_context_for_funcs);
-                current_prob_val = p_L + p_U;
-                if (current_prob_val > 0) {
-                    double trunc_cf = get_trunc_corr_factor_for_kth_winner_cpp(R_j_idx, pars_condition_j_all_acc, model_dfun, model_pfun, LT, UT, n_acc, integration_epsilon, model_context_for_funcs);
-                    if (ISNAN(trunc_cf) || !R_FINITE(trunc_cf) || trunc_cf < 0) current_prob_val = 0;
-                    else current_prob_val *= trunc_cf;
-                }
-            } else { // Response unknown
-                double sum_total_p = 0;
-                for (int k_w = 1; k_w <= n_acc; ++k_w) {
-                    double p_L_k = integrate_for_kth_winner_cpp(k_w, pars_condition_j_all_acc, LT, LC, model_dfun, model_pfun, n_acc, integration_epsilon, model_context_for_funcs);
-                    double p_U_k = integrate_for_kth_winner_cpp(k_w, pars_condition_j_all_acc, UC, UT, model_dfun, model_pfun, n_acc, integration_epsilon, model_context_for_funcs);
-                    double p_k_sum = p_L_k + p_U_k;
-                    if (p_k_sum > 0) {
-                        double trunc_cf_k = get_trunc_corr_factor_for_kth_winner_cpp(k_w, pars_condition_j_all_acc, model_dfun, model_pfun, LT, UT, n_acc, integration_epsilon, model_context_for_funcs);
-                        if (!ISNAN(trunc_cf_k) && R_FINITE(trunc_cf_k) && trunc_cf_k >=0) sum_total_p += (p_k_sum * trunc_cf_k);
-                    }
-                }
-                current_prob_val = sum_total_p;
-            }
-        }
-        // All other rt_j values (e.g. 0 or negative if not Inf) would result in current_prob_val = 0 for paths that use it.
-
-        // For paths that calculated current_prob_val (censored, NA RTs)
-        // The observed RT path sets ll_unique[j] directly with a log-likelihood.
-        // So, this conversion is only for other paths.
-        current_prob_val = std::max(0.0, current_prob_val); // Ensure non-negative probability
-        ll_unique[j] = (current_prob_val > std::numeric_limits<double>::epsilon()) ? std::log(current_prob_val) : min_ll;
-        ll_unique[j] = std::max(min_ll, ll_unique[j]); // Ensure not less than min_ll for all paths
-    }
-
-    // The return type is Rcpp::NumericVector for easier debugging from R if this function
-    // is exported and called directly. For integration into calc_ll, this should be changed
-    // to return a single double (the sum of ll_unique, possibly after expansion).
-    // calc_ll handles expansion, so this function should return the sum for the *unique* trials,
-    // or the vector ll_unique if calc_ll expects that.
-    // Given c_log_likelihood_race returns a double (summed over expanded trials),
-    // this function should eventually do the same.
-    // Summing logic based on expand_vec
-    double total_ll = 0;
-    if (expand_vec.length() > 0) {
-        for (int i = 0; i < expand_vec.length(); ++i) {
-            // expand_vec is 1-based index from R, convert to 0-based for C++ vector
-            int unique_idx = expand_vec[i] - 1;
-            if (unique_idx >= 0 && unique_idx < ll_unique.size()) {
-                total_ll += ll_unique[unique_idx];
-            } else {
-                // This case should ideally not happen if expand_vec is correct
-                total_ll += min_ll;
-            }
-        }
-    } else {
-        // Fallback if expand_vec is not provided or empty (e.g. dadm$N was used in R)
-        // This part might need to check for dadm["N"] if that's an alternative expansion mode
-        // For now, sum unique likelihoods directly if no expansion.
-        // This is consistent if each unique trial happens only once.
-    // Rewriting the main loop with batching:
-
-    Rcpp::NumericVector rts_dadm = dadm["rt"]; // All RTs from dadm
-    Rcpp::IntegerVector R_idxs_dadm = dadm["R"]; // All R indices from dadm
+    Rcpp::NumericVector rts_dadm = dadm["rt"];
+    Rcpp::IntegerVector R_idxs_dadm = dadm["R"];
 
     int n_total_dadm_rows = dadm.nrows();
-    if (n_total_dadm_rows == 0) return 0.0;
-    if (n_acc <= 0) Rcpp::stop("c_log_likelihood_race_cens_trunc: n_acc must be positive.");
+    if (n_total_dadm_rows == 0) return 0.0; // No data, no likelihood
+
+    if (n_acc <= 0) Rcpp::stop("c_log_likelihood_race_cens_trunc: n_acc must be positive and correctly determined before this call.");
     if (n_total_dadm_rows % n_acc != 0) Rcpp::stop("c_log_likelihood_race_cens_trunc: dadm nrows not a multiple of n_acc.");
 
-    n_unique_trials = n_total_dadm_rows / n_acc;
-    ll_unique.assign(n_unique_trials, min_ll); // Re-initialize with correct size and min_ll
+    int n_unique_trials = n_total_dadm_rows / n_acc;
+    Rcpp::NumericVector ll_unique(n_unique_trials);
+    ll_unique.fill(min_ll); // Initialize all to min_ll
 
+    // Parameter matrix and validity vector checks
     if (pars.nrow() != n_total_dadm_rows) {
       Rcpp::Rcout << "pars.nrow(): " << pars.nrow() << ", n_total_dadm_rows: " << n_total_dadm_rows << std::endl;
       Rcpp::stop("c_log_likelihood_race_cens_trunc: pars matrix dimensions do not match total dadm rows.");
-        }
+    }
     if (ok_params.size() != pars.nrow()) {
        Rcpp::stop("c_log_likelihood_race_cens_trunc: ok_params size does not match pars matrix rows.");
     }
 
-    std::vector<int> finite_rt_unique_trial_indices;
-    std::vector<int> other_unique_trial_indices; // For NA, Inf, -Inf RTs
+    std::vector<int> finite_rt_unique_trial_indices; // Stores original indices of unique trials for batching
+    std::vector<int> other_unique_trial_indices;   // Stores original indices for iterative processing
 
+    // Categorize unique trials based on RT properties and parameter validity
     for (int j = 0; j < n_unique_trials; ++j) {
-        int first_row_in_dadm_for_trial = j * n_acc;
-        // Parameter validity check for the whole block of accumulators for this unique trial
+        int first_row_in_dadm_for_trial = j * n_acc; // Starting row in dadm/pars for this unique trial
+
+        // Check parameter validity for the entire block of accumulators for this unique trial
         bool params_ok_for_this_unique_trial = true;
         for (int k_acc = 0; k_acc < n_acc; ++k_acc) {
             if (!ok_params[first_row_in_dadm_for_trial + k_acc]) {
@@ -1105,20 +879,18 @@ double c_log_likelihood_race_cens_trunc(
             }
         }
         if (!params_ok_for_this_unique_trial) {
-            ll_unique[j] = min_ll; // Set for this unique trial and skip to next
+            // ll_unique[j] is already min_ll by initialization, so just continue
             continue;
         }
 
-        double rt_j = rts_dadm[first_row_in_dadm_for_trial];
-        if (R_FINITE(rt_j) && rt_j > 0 && rt_j >= LT && rt_j <= UT) { // Finite, positive, and within truncation bounds
-            int R_j_idx = R_idxs_dadm[first_row_in_dadm_for_trial];
-            if (R_j_idx != NA_INTEGER) { // Winner must be known for finite RT
-                 finite_rt_unique_trial_indices.push_back(j);
-            } else { // Finite RT but no winner -> problematic, treat as "other" or assign min_ll
-                 ll_unique[j] = min_ll;
-            }
-        } else { // Handles NA, Inf, -Inf, or outside truncation bounds
-            other_unique_trial_indices.push_back(j);
+        double rt_j = rts_dadm[first_row_in_dadm_for_trial]; // RT for this unique trial
+        int R_j_idx = R_idxs_dadm[first_row_in_dadm_for_trial]; // Winner index (1-based from R factor)
+
+        // Criteria for batch processing: finite, positive RT, within truncation bounds [LT, UT], and known winner
+        if (R_FINITE(rt_j) && rt_j > 0 && rt_j >= LT && rt_j <= UT && R_j_idx != NA_INTEGER) {
+            finite_rt_unique_trial_indices.push_back(j);
+        } else {
+            other_unique_trial_indices.push_back(j); // All other cases (NA, Inf, -Inf, outside bounds, or unknown winner with finite RT)
         }
     }
 
@@ -1127,25 +899,24 @@ double c_log_likelihood_race_cens_trunc(
     // and the response (winner) is known. These are suitable for batch calculation of densities.
     if (!finite_rt_unique_trial_indices.empty()) {
         Rcpp::NumericVector batch_rts(finite_rt_unique_trial_indices.size());
-        Rcpp::List batch_pars_ordered(finite_rt_unique_trial_indices.size()); // For f_race_integrand_batch_cpp
-        std::vector<int> batch_R_idxs(finite_rt_unique_trial_indices.size()); // To store 1-based winner indices for the batch
-        std::vector<Rcpp::NumericMatrix> batch_pars_unord(finite_rt_unique_trial_indices.size()); // To store original (unordered) params for truncation correction
+        Rcpp::List batch_pars_ordered(finite_rt_unique_trial_indices.size());
+        std::vector<int> batch_R_idxs(finite_rt_unique_trial_indices.size());
+        std::vector<Rcpp::NumericMatrix> batch_pars_unord(finite_rt_unique_trial_indices.size());
 
         // Collect data for batch processing
         for (size_t i = 0; i < finite_rt_unique_trial_indices.size(); ++i) {
-            int unique_trial_idx = finite_rt_unique_trial_indices[i]; // Original index of the unique trial
-            int first_row_in_dadm = unique_trial_idx * n_acc; // Starting row in dadm/pars for this unique trial
+            int unique_trial_idx = finite_rt_unique_trial_indices[i];
+            int first_row_in_dadm = unique_trial_idx * n_acc;
 
-            batch_rts[i] = rts_dadm[first_row_in_dadm]; // RT for this trial
-            batch_R_idxs[i] = R_idxs_dadm[first_row_in_dadm]; // Winner index (1-based)
+            batch_rts[i] = rts_dadm[first_row_in_dadm];
+            batch_R_idxs[i] = R_idxs_dadm[first_row_in_dadm];
 
-            // Extract all accumulator parameters for this unique trial
             Rcpp::NumericMatrix p_all_acc_for_trial(n_acc, pars.ncol());
             for(int k_acc=0; k_acc < n_acc; ++k_acc) {
                 p_all_acc_for_trial.row(k_acc) = pars.row(first_row_in_dadm + k_acc);
             }
-            batch_pars_unord[i] = p_all_acc_for_trial; // Store unordered params
-            batch_pars_ordered[i] = order_pars_for_winner_cpp(p_all_acc_for_trial, batch_R_idxs[i], n_acc); // Store params ordered by winner
+            batch_pars_unord[i] = p_all_acc_for_trial;
+            batch_pars_ordered[i] = order_pars_for_winner_cpp(p_all_acc_for_trial, batch_R_idxs[i], n_acc);
         }
 
         // Calculate probability densities for the entire batch of finite RT trials
@@ -1155,26 +926,23 @@ double c_log_likelihood_race_cens_trunc(
 
         // Apply truncation correction and calculate log-likelihood for each trial in the batch
         for (size_t i = 0; i < finite_rt_unique_trial_indices.size(); ++i) {
-            int unique_trial_idx = finite_rt_unique_trial_indices[i]; // Original index
+            int unique_trial_idx = finite_rt_unique_trial_indices[i];
             double prob_density = batch_prob_densities[i];
 
-            if (prob_density > std::numeric_limits<double>::epsilon()) { // If density is valid
-                // Calculate truncation correction factor using the unordered parameters
+            if (prob_density > std::numeric_limits<double>::epsilon()) {
                 double trunc_cf = get_trunc_corr_factor_for_kth_winner_cpp(
                     batch_R_idxs[i], batch_pars_unord[i], model_dfun, model_pfun,
                     LT, UT, n_acc, integration_epsilon, model_context_for_funcs
                 );
 
-                if (ISNAN(trunc_cf) || !R_FINITE(trunc_cf) || trunc_cf <= 0) { // If correction factor is invalid
+                if (ISNAN(trunc_cf) || !R_FINITE(trunc_cf) || trunc_cf <= 0) {
                     ll_unique[unique_trial_idx] = min_ll;
                 } else {
-                    // Combine density and correction factor, then take log
                     ll_unique[unique_trial_idx] = std::log(prob_density) + std::log(trunc_cf);
                 }
-            } else { // Density was too small or zero
+            } else {
                 ll_unique[unique_trial_idx] = min_ll;
             }
-            // Ensure the calculated log-likelihood is not less than min_ll
              ll_unique[unique_trial_idx] = std::max(min_ll, ll_unique[unique_trial_idx]);
         }
     }
@@ -1182,13 +950,8 @@ double c_log_likelihood_race_cens_trunc(
     // --- Part 2: Process other trials (Infinite RTs, NA RTs, or finite RTs outside truncation) ---
     // These trials require individual processing, often involving numerical integration for censored intervals.
     for (int unique_trial_idx : other_unique_trial_indices) {
-        // If ll_unique[unique_trial_idx] was already set to min_ll due to bad parameters
-        // (i.e., !ok_params_unique_trial[unique_trial_idx]), it would have been excluded
-        // from other_unique_trial_indices if that list was filtered by ok_params_unique_trial.
-        // Assuming other_unique_trial_indices contains trials with valid parameters but non-standard RTs.
-        // The initial loop for categorizing trials should ensure ll_unique[unique_trial_idx] is already min_ll
-        // if parameters were bad, so we don't need to re-check ok_params here if other_unique_trial_indices
-        // only contains parametrically valid trials.
+        // Parameters for these trials are already deemed valid if they are in other_unique_trial_indices
+        // (because bad param trials were skipped in the categorization loop, ll_unique[j] remains min_ll for them).
 
         int first_row_in_dadm = unique_trial_idx * n_acc;
         Rcpp::NumericMatrix pars_condition_j_all_acc(n_acc, pars.ncol());
@@ -1200,8 +963,8 @@ double c_log_likelihood_race_cens_trunc(
         int R_j_idx = R_idxs_dadm[first_row_in_dadm];
         double current_prob_val = 0.0;
 
-        // Case 1: Finite RT but outside truncation bounds (LT, UT).
-        // These trials have zero probability mass/density within the truncated likelihood.
+        // Case 1: Finite RT but strictly outside truncation bounds (LT, UT).
+        // These trials have zero probability density according to the truncated distribution.
         if (R_FINITE(rt_j) && rt_j > 0 && (rt_j < LT || rt_j > UT)) {
              current_prob_val = 0;
         // Case 2: Fast censoring (RT = -Inf). Probability is integral from LT to LC.
@@ -1260,38 +1023,36 @@ double c_log_likelihood_race_cens_trunc(
                 }
             }
         }
-        // Else: rt_j is 0 or negative finite, current_prob_val remains 0.
+        // Else: rt_j is 0 or negative finite (but not -Inf), current_prob_val remains 0.
 
-        current_prob_val = std::max(0.0, current_prob_val);
+        current_prob_val = std::max(0.0, current_prob_val); // Ensure probability is not negative
         ll_unique[unique_trial_idx] = (current_prob_val > std::numeric_limits<double>::epsilon()) ? std::log(current_prob_val) : min_ll;
-        ll_unique[unique_trial_idx] = std::max(min_ll, ll_unique[unique_trial_idx]);
+        ll_unique[unique_trial_idx] = std::max(min_ll, ll_unique[unique_trial_idx]); // Ensure not less than min_ll
     }
 
-    // --- Summation ---
-    total_ll = 0; // Reset total_ll before summing
-    if (expand_vec.length() > 0) {
+    // --- Summation of log-likelihoods for all unique trials ---
+    double total_ll = 0;
+    if (expand_vec.length() > 0) { // If an expansion vector is provided (e.g. from non-compressed dadm)
         for (int i = 0; i < expand_vec.length(); ++i) {
-            int unique_idx = expand_vec[i] - 1;
-            if (unique_idx >= 0 && unique_idx < n_unique_trials) { // ll_unique is size n_unique_trials
+            int unique_idx = expand_vec[i] - 1; // expand_vec is 1-based from R
+            if (unique_idx >= 0 && unique_idx < n_unique_trials) {
                 total_ll += ll_unique[unique_idx];
-            } else {
-                // Rcpp::Rcerr << "Warning: expand_vec index out of bounds: " << unique_idx + 1 << std::endl;
-                total_ll += min_ll; // Invalid index in expand_vec
+            } else { // Should not happen with valid expand_vec
+                total_ll += min_ll;
             }
         }
-    } else if (dadm.containsElementNamed("N")) { // Check if dadm has an "N" column for weights
-        Rcpp::NumericVector trial_Ns_dadm = dadm["N"]; // Get N column from dadm
+    } else if (dadm.containsElementNamed("N")) { // Alternative: if dadm has trial counts 'N' per unique condition
+        Rcpp::NumericVector trial_Ns_dadm = dadm["N"];
         if (trial_Ns_dadm.length() == n_unique_trials) {
             for (int j = 0; j < n_unique_trials; ++j) {
                 total_ll += ll_unique[j] * trial_Ns_dadm[j];
             }
-        } else {
-             // Rcpp::Rcerr << "Warning: dadm['N'] length does not match n_unique_trials. Summing ll_unique directly." << std::endl;
-             for (int j = 0; j < n_unique_trials; ++j) { // Fallback
+        } else { // Fallback if N column size doesn't match (should not happen with correct dadm)
+             for (int j = 0; j < n_unique_trials; ++j) {
                 total_ll += ll_unique[j];
             }
         }
-    } else { // Default: sum ll_unique directly if no expand_vec and no N column
+    } else { // Default: sum ll_unique directly (each unique trial counted once)
         for (int j = 0; j < n_unique_trials; ++j) {
             total_ll += ll_unique[j];
         }
@@ -1302,74 +1063,73 @@ double c_log_likelihood_race_cens_trunc(
 
 // ---- Rcpp Exported Wrapper for Testing ----
 // This wrapper is for testing the c_log_likelihood_race_cens_trunc from R.
-// This wrapper is for testing the c_log_likelihood_race_cens_trunc from R.
 // It will use existing C++ pdf/cdf functions for a known model (e.g., LBA)
-// as a simplification, since passing arbitrary C++ function pointers from R
-// directly to a C++ function not designed as a generic callback host is non-trivial.
 // The true integration will be calc_ll calling c_log_likelihood_race_cens_trunc directly
-// with proper C++ function pointers.
-
+// with proper C++ function pointers and context derived from the R model object.
 // [[Rcpp::export]]
 Rcpp::NumericVector test_c_loglik_cens_trunc_wrapper_R(
-    Rcpp::NumericMatrix pars,      // Parameters for one particle, all unique trial conditions
-    Rcpp::DataFrame dadm,          // Data for unique trial conditions
+    Rcpp::NumericMatrix pars,
+    Rcpp::DataFrame dadm,
     std::string model_type_str,    // e.g., "LBA", "RDM", "LNR" to select hardcoded C++ funcs
     double min_ll,
-    Rcpp::LogicalVector ok_params, // Parameter validity for this particle's pars matrix
-    int n_acc                      // Number of accumulators
+    Rcpp::LogicalVector ok_params,
+    int n_acc,
+    Rcpp::List R_model_obj_list // Pass the R model list for posdrift extraction
 ) {
     RacePdfFun model_dfun_ptr = nullptr;
     RaceCdfFun model_pfun_ptr = nullptr;
     void* current_model_context_ptr = nullptr;
-    ContextForRaceModels test_model_ctx; // Define a context struct instance
+    ContextForRaceModels test_model_ctx;
 
-    // Setup for the test (e.g. LBA)
-    if (model_type_str == "LBA_test") {
-        test_model_ctx.min_lik_for_pdf = exp(min_ll);
-        // test_model_ctx.default_posdrift = true; // if it were part of context
-        current_model_context_ptr = &test_model_ctx;
+    test_model_ctx.min_lik_for_pdf = exp(min_ll);
+    test_model_ctx.use_posdrift = true; // Default
+
+    if (model_type_str == "LBA") { // Renamed from LBA_test for clarity
         model_dfun_ptr = &lba_dfun_adapter;
         model_pfun_ptr = &lba_pfun_adapter;
-    } else if (model_type_str == "RDM_test") {
-        test_model_ctx.min_lik_for_pdf = exp(min_ll);
-        current_model_context_ptr = &test_model_ctx;
+        if (R_model_obj_list.containsElementNamed("posdrift")) {
+            test_model_ctx.use_posdrift = Rcpp::as<bool>(R_model_obj_list["posdrift"]);
+        }
+    } else if (model_type_str == "RDM") { // Renamed from RDM_test
         model_dfun_ptr = &rdm_dfun_adapter;
         model_pfun_ptr = &rdm_pfun_adapter;
-    } else if (model_type_str == "LNR_test") {
-        test_model_ctx.min_lik_for_pdf = exp(min_ll);
-        current_model_context_ptr = &test_model_ctx;
+        // RDM doesn't use posdrift, context.use_posdrift is ignored
+    } else if (model_type_str == "LNR") { // Renamed from LNR_test
         model_dfun_ptr = &lnr_dfun_adapter;
         model_pfun_ptr = &lnr_pfun_adapter;
+        // LNR doesn't use posdrift
     }
-    // Add more model types or a "TEST_UNIFORM" case here if stub functions are created
     else {
-        Rcpp::warning("Model type '%s' not recognized for C++ test wrapper. Likelihood calculation will likely fail or use min_ll.", model_type_str.c_str());
-        // Allow to proceed with nullptrs, c_log_likelihood_race_cens_trunc should handle this (return min_ll)
-    }
-
-    if (model_dfun_ptr == nullptr || model_pfun_ptr == nullptr) {
-         Rcpp::warning("No valid model functions selected for '%s' in test wrapper. Returning min_ll.", model_type_str.c_str());
-        // If function pointers are null, c_log_likelihood_race_cens_trunc will use min_ll.
-        // To be consistent, this wrapper should also ensure a proper sum of min_ll if that's the case.
-        // Construct a dummy expand_vec for sum calculation
-        Rcpp::IntegerVector expand_vec_dummy(dadm.nrows());
-        if (dadm.nrows() > 0) { // only if dadm has rows
-          for(int i=0; i < dadm.nrows(); ++i) expand_vec_dummy[i] = i + 1;
-        }
+        Rcpp::warning("Model type '%s' not recognized for C++ test wrapper. Likelihood calculation will likely fail.", model_type_str.c_str());
+        // Return sum of min_ll for all trials indicated by expand_vec or dadm structure
+        Rcpp::IntegerVector expand_vec_dummy;
+        if (dadm.hasAttribute("expand")) expand_vec_dummy = dadm.attr("expand");
+        else expand_vec_dummy = Rcpp::seq(1, dadm.nrows() / (n_acc > 0 ? n_acc : 1) ); // Simplistic fallback for expand
 
         double total_min_ll = 0;
         if (expand_vec_dummy.length() > 0) {
-            for (int i = 0; i < expand_vec_dummy.length(); ++i) total_min_ll += min_ll;
-        } else if (dadm.nrows() > 0) { // If no expand_vec but dadm has rows
-             total_min_ll = min_ll * dadm.nrows();
-        } // else total_min_ll remains 0 if dadm.nrows is 0
+             for (int i = 0; i < expand_vec_dummy.length(); ++i) total_min_ll += min_ll;
+        } else if (dadm.nrows() > 0 && n_acc > 0) {
+             total_min_ll = min_ll * (dadm.nrows()/n_acc) ;
+        } else if (dadm.nrows() == 0) {
+            total_min_ll = 0; // No data, no likelihood
+        } else { // dadm.nrows > 0 but n_acc = 0 (error case)
+            total_min_ll = R_NaN; // Indicate error
+        }
         return Rcpp::NumericVector::create(total_min_ll);
     }
+    current_model_context_ptr = &test_model_ctx;
 
-    // Construct a simple expand_vec for testing (each unique trial expands to itself once)
-    Rcpp::IntegerVector expand_vec_test(dadm.nrows());
-    if (dadm.nrows() > 0) {
-       for(int i=0; i < dadm.nrows(); ++i) expand_vec_test[i] = i + 1; // 1-based index
+
+    Rcpp::IntegerVector expand_vec_test;
+    if (dadm.hasAttribute("expand")) {
+      expand_vec_test = dadm.attr("expand");
+    } else { // Create a simple 1-to-N unique trials expand_vec if not present
+      if (n_acc > 0 && dadm.nrows() > 0) {
+        int n_unique_for_test = dadm.nrows() / n_acc;
+        expand_vec_test = Rcpp::seq(1, n_unique_for_test);
+      }
+      // if n_acc is 0 or no rows, expand_vec_test remains empty, handled by c_log_likelihood_race_cens_trunc
     }
 
 
@@ -1377,8 +1137,8 @@ Rcpp::NumericVector test_c_loglik_cens_trunc_wrapper_R(
         pars, dadm,
         model_dfun_ptr, model_pfun_ptr,
         min_ll, ok_params, n_acc,
-        expand_vec_test, // Pass the dummy expand_vec
-        current_model_context_ptr // Pass the context pointer
+        expand_vec_test,
+        current_model_context_ptr
     );
     return Rcpp::NumericVector::create(result_ll);
 }
