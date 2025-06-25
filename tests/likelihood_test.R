@@ -23,7 +23,7 @@ p_vector[1:length(p_vector)] <- c(log(2), log(4), log(1), log(2), log(0.2),log(.
 
 # Make square data so can remove pm in RACE = 2
 template <- make_data(p_vector,designLBA,n_trials=1000)
-attr(template,"UC")=2.5
+attr(template,"UC")=Inf
 template <- template[!(template$RACE==2 & (template$S %in% c("leftpm","rightpm"))),]
 dat <- make_data(p_vector,designLBA,data=template)
 Cfun <- function(d) as.numeric(d$S)==as.numeric(d$R) | (d$R=="pm" & as.numeric(d$S)>2)
