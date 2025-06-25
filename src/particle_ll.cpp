@@ -476,30 +476,22 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
 
     // Determine adapter functions and specific LBA posdrift setting based on type_std
     // The type_std string is expected to be e.g. "LBA", "LBA_IO", "RDM", "LNR".
-    // "_CENS_TRUNC" suffix is not used for dispatch here, as all use c_log_likelihood_race_cens_trunc.
-    std::string effective_type = type_std;
-    size_t cens_trunc_suffix_pos = type_std.find("_CENS_TRUNC");
-    if (cens_trunc_suffix_pos != std::string::npos) {
-        effective_type = type_std.substr(0, cens_trunc_suffix_pos);
-    }
 
-    if (effective_type.find("LBA") != std::string::npos) {
+    if (type_std.find("LBA") != std::string::npos) {
         model_dfun_ptr = &lba_dfun_adapter;
         model_pfun_ptr = &lba_pfun_adapter;
         // Check for the 'IO' (Implicit Omissions / no posdrift) flag in the original type_std
         if (type_std.find("IO") != std::string::npos) {
             current_model_ctx.use_posdrift = false;
-        } else {
-            current_model_ctx.use_posdrift = true;
         }
-    } else if (effective_type.find("RDM") != std::string::npos) {
+    } else if (type_std.find("RDM") != std::string::npos) {
         model_dfun_ptr = &rdm_dfun_adapter;
         model_pfun_ptr = &rdm_pfun_adapter;
-    } else if (effective_type.find("LNR") != std::string::npos) {
+    } else if (type_std.find("LNR") != std::string::npos) {
         model_dfun_ptr = &lnr_dfun_adapter;
         model_pfun_ptr = &lnr_pfun_adapter;
     } else {
-        Rcpp::stop("Unsupported race model type string in calc_ll: " + type_std + " (effective type: " + effective_type + ")");
+        Rcpp::stop("Unsupported race model type string in calc_ll: " + type_std);
     }
 
     int n_acc = 0;
@@ -528,16 +520,15 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
             bound_specs = make_bound_specs(minmax, mm_names, pars, bounds);
         }
         is_ok = c_do_bound(pars, bound_specs);
-
+        is_ok = lr_all(is_ok, n_acc);
         // n_acc for the call to c_log_likelihood_race_cens_trunc should be the one determined above.
         // If data.nrows() is 0, then n_trials will be 0, and the loops inside c_log_likelihood_race_cens_trunc
         // (based on n_unique_trials = n_total_dadm_rows / n_acc) won't run, returning 0, which is correct.
         // So, n_acc can be 0 if there's no data.
-        int current_n_acc_for_call = (data.nrows() > 0) ? n_acc : 0;
 
         lls[i] = c_log_likelihood_race_cens_trunc(pars, data,
                                                   model_dfun_ptr, model_pfun_ptr,
-                                                  min_ll, is_ok, current_n_acc_for_call, expand,
+                                                  min_ll, is_ok, n_acc, expand,
                                                   &current_model_ctx);
     }
   }
@@ -552,7 +543,8 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
 // model_dfun, model_pfun: function pointers to the model's density and CDF
 // n_acc: number of accumulators
 // model_specific_context: context pointer for model functions
-Rcpp::NumericVector f_race_integrand_batch_cpp(
+// [[Rcpp::export]]
+NumericVector f_race_integrand_batch_vec_cpp(
     const Rcpp::NumericVector& rts_batch,
     const Rcpp::List& pars_all_trials_ordered, // List of NumericMatrix, each n_acc x n_params
     RacePdfFun model_dfun,
@@ -561,61 +553,57 @@ Rcpp::NumericVector f_race_integrand_batch_cpp(
     void* model_specific_context) {
 
     int n_batch_trials = rts_batch.size();
-    if (n_batch_trials == 0) {
-        return Rcpp::NumericVector(0);
-    }
+    if (n_batch_trials == 0) return Rcpp::NumericVector(0);
     if (pars_all_trials_ordered.size() != n_batch_trials) {
-        Rcpp::stop("f_race_integrand_batch_cpp: rts_batch size and pars_all_trials_ordered size mismatch.");
+        Rcpp::stop("f_race_integrand_batch_vec_cpp: rts_batch size and pars_all_trials_ordered size mismatch.");
     }
 
-    Rcpp::NumericVector results(n_batch_trials);
-
+    // Combine all winner rows for batch
+    int n_params = Rcpp::as<Rcpp::NumericMatrix>(pars_all_trials_ordered[0]).ncol();
+    Rcpp::NumericMatrix winner_pars(n_batch_trials, n_params);
     for (int i = 0; i < n_batch_trials; ++i) {
-        double t = rts_batch[i];
-        Rcpp::NumericMatrix p_trial_this_winner_first = Rcpp::as<Rcpp::NumericMatrix>(pars_all_trials_ordered[i]);
+        Rcpp::NumericMatrix pm = Rcpp::as<Rcpp::NumericMatrix>(pars_all_trials_ordered[i]);
+        winner_pars.row(i) = pm.row(0);
+    }
 
-        if (p_trial_this_winner_first.nrow() != n_acc) {
-             Rcpp::stop("f_race_integrand_batch_cpp: Parameter matrix for a trial has incorrect number of rows for n_acc.");
-        }
+    // Compute winner PDFs in a vectorized call
+    Rcpp::NumericVector pdf_winner_vec = model_dfun(rts_batch, winner_pars, Rcpp::LogicalVector(n_batch_trials, true), false, model_specific_context);
 
-        // Calculate PDF for the winner
-        Rcpp::NumericMatrix p_winner = p_trial_this_winner_first.row(0);
-        Rcpp::NumericVector pdf_winner_vec = model_dfun(Rcpp::NumericVector::create(t), p_winner, Rcpp::LogicalVector::create(true), false, model_specific_context);
-        double pdf_winner = pdf_winner_vec[0];
-
-        if (R_IsNA(pdf_winner) || !R_finite(pdf_winner) || pdf_winner < 0) {
-            results[i] = 0.0;
-            continue;
-        }
-
-        double survivor_losers = 1.0;
-        if (n_acc > 1) {
-            for (int k = 1; k < n_acc; ++k) { // Losers are in rows 1 to n_acc-1
-                Rcpp::NumericMatrix p_loser_k = p_trial_this_winner_first.row(k);
-                Rcpp::NumericVector cdf_loser_k_vec = model_pfun(Rcpp::NumericVector::create(t), p_loser_k, Rcpp::LogicalVector::create(true), false, model_specific_context);
-                double cdf_loser_k = cdf_loser_k_vec[0];
-
-                if (R_IsNA(cdf_loser_k) || !R_finite(cdf_loser_k)) {
-                    survivor_losers = 0.0; // If any CDF is problematic, product becomes zero
-                    break;
-                }
-                double s_loser_k = 1.0 - cdf_loser_k;
-                s_loser_k = (s_loser_k < 0.0) ? 0.0 : s_loser_k; // Clamp at 0
-                s_loser_k = (s_loser_k > 1.0) ? 1.0 : s_loser_k; // Clamp at 1 (should not be needed for 1-CDF if CDF is valid)
-                survivor_losers *= s_loser_k;
-                if (survivor_losers == 0.0) break; // Optimization
+    // Prepare survivor functions for losers, one matrix per accumulator
+    Rcpp::NumericVector survivor_losers(n_batch_trials, 1.0);
+    if (n_acc > 1) {
+        for (int k = 1; k < n_acc; ++k) {
+            // Gather all loser k rows for batch
+            Rcpp::NumericMatrix loser_pars(n_batch_trials, n_params);
+            for (int i = 0; i < n_batch_trials; ++i) {
+                Rcpp::NumericMatrix pm = Rcpp::as<Rcpp::NumericMatrix>(pars_all_trials_ordered[i]);
+                loser_pars.row(i) = pm.row(k);
+            }
+            // Compute CDFs for all trials at once for loser k
+            Rcpp::NumericVector cdf_loser_k_vec = model_pfun(rts_batch, loser_pars, Rcpp::LogicalVector(n_batch_trials, true), false, model_specific_context);
+            // Survivor: 1 - CDF
+            for (int i = 0; i < n_batch_trials; ++i) {
+                double s_loser_k = 1.0 - cdf_loser_k_vec[i];
+                s_loser_k = (R_IsNA(s_loser_k) || !R_finite(s_loser_k) || s_loser_k < 0) ? 0.0 : ((s_loser_k > 1.0) ? 1.0 : s_loser_k);
+                survivor_losers[i] *= s_loser_k;
             }
         }
+    }
 
-        double final_val = pdf_winner * survivor_losers;
-        if (R_IsNA(final_val) || !R_finite(final_val) || final_val < 0) {
+    // Final value: winner PDF * all survivors
+    Rcpp::NumericVector results(n_batch_trials);
+    for (int i = 0; i < n_batch_trials; ++i) {
+        double pdf_winner = pdf_winner_vec[i];
+        double surv = survivor_losers[i];
+        if (R_IsNA(pdf_winner) || !R_finite(pdf_winner) || pdf_winner < 0 || R_IsNA(surv) || !R_finite(surv) || surv < 0) {
             results[i] = 0.0;
         } else {
-            results[i] = final_val;
+            results[i] = pdf_winner * surv;
         }
     }
     return results;
 }
+
 
 // ---- START: New code for censored/truncated race models ----
 // #include "model_race_cens_trunc.h" // Include the new header // MOVED TO TOP
