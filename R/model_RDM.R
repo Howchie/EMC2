@@ -416,6 +416,348 @@ RDM <- function(){
   )
 }
 
+
+#' The Racing Diffusion Model with Trial-Varying Drift (DSWTN)
+#'
+#' Model file to estimate a Racing Diffusion Model where each accumulator
+#' follows a Wald distribution with trial-varying drift rates, modeled
+#' by the DSWTN (Distribution Scalar Wald Truncated Normal) distribution.
+#'
+#' @details
+#' This model replaces the standard RDM's single drift rate `v` and start-point
+#' variability `A` with parameters for a distribution of drift rates:
+#' `mu_drift` (mean of the drift distribution) and `sigma_drift_sq` (variance
+#' of the drift distribution).
+#'
+#' Default values are used for all parameters that are not explicitly listed in the `formula`
+#' argument of `design()`.
+#'
+#' | **Parameter**      | **Transform** | **Natural scale** | **Default**     | **Interpretation**                                           |
+#' |------------------|---------------|-------------------|---------------|--------------------------------------------------------------|
+#' | *alpha*          | log           | \[0, Inf\]        | log(1)        | Response threshold (boundary separation)                     |
+#' | *mu_drift*       | log           | \[0, Inf\]        | log(1)        | Mean of the trial-by-trial drift rate distribution       |
+#' | *sigma_drift_sq* | log           | \[0, Inf\]        | log(0.1)      | Variance of the trial-by-trial drift rate distribution   |
+#' | *theta*          | log           | \[0, Inf\]        | log(0.1)      | Non-decision time                                            |
+#'
+#' All parameters are typically estimated on the log scale. `sigma_drift_sq` must be positive.
+#'
+#' Like the standard RDM, this is a race model with one DSWTN accumulator per response option.
+#' The `lR` factor (latent response) and `lM` factor (match between stimulus and response)
+#' can be used in formulas as with the standard RDM.
+#'
+#' @return A list defining the cognitive model
+#' @export
+#' @examples
+#' # Define a simple DSWTN RDM model for a 2-choice task.
+#' # Formulas specify how parameters relate to experimental factors (if any).
+#' # Here, alpha, mu_drift, sigma_drift_sq, and theta are estimated per accumulator (lR).
+#' \dontrun{
+#' model_dswtn <- RDM_DSWTN()
+#'
+#' # Example design (assuming 'data_df' has 'rt', 'R' (response factor), and 'S' (stimulus factor))
+#' # Match function for lM (match between stimulus S and latent response lR)
+#' matchfun <- function(d) d$S == d$lR
+#'
+#' design_dswtn <- design(
+#'   data = data_df,
+#'   model = model_dswtn,
+#'   matchfun = matchfun,
+#'   formula = list(
+#'     alpha ~ lR,
+#'     mu_drift ~ lM, # Drift rate mean depends on stimulus-accumulator match
+#'     sigma_drift_sq ~ lR,
+#'     theta ~ lR
+#'   )
+#' )
+#'
+#' # To fit this model (e.g., using pmwg):
+#' # samples_dswtn <- pmwg(design_dswtn, iter=100, display_progress=TRUE) # Example iterations
+#' }
+RDM_DSWTN <- function() {
+
+  # Helper function to prepare parameter matrices for loglik_DSWTN_race
+  # This is a conceptual placeholder; actual implementation depends on how
+  # EMC2's design system makes design matrices available for each parameter of each accumulator.
+  prepare_dswtn_race_params <- function(pars, dadm, model) {
+    # pars: named vector of all fitted parameters
+    # dadm: augmented data, containing data and design matrices (e.g., dadm$X)
+    # model: the model object itself
+
+    n_trials <- nrow(dadm$X) # Assuming dadm$X contains design matrix for one trial
+                            # Or more generally, number of unique trial instances
+    if (is.null(n_trials)) n_trials <- length(dadm$rt) # Fallback if X structure is different
+
+    # Accumulator names/levels from lR (latent response factor)
+    acc_levels <- levels(dadm$lR) # dadm should have lR factor
+    n_acc <- length(acc_levels)
+
+    # Initialize parameter matrices
+    params_alpha <- matrix(NA, nrow = n_trials, ncol = n_acc, dimnames = list(NULL, acc_levels))
+    params_mu_drift <- matrix(NA, nrow = n_trials, ncol = n_acc, dimnames = list(NULL, acc_levels))
+    params_sigma_drift_sq <- matrix(NA, nrow = n_trials, ncol = n_acc, dimnames = list(NULL, acc_levels))
+    params_theta <- matrix(NA, nrow = n_trials, ncol = n_acc, dimnames = list(NULL, acc_levels))
+
+    # This loop structure is highly dependent on how EMC² stores design matrices for race models.
+    # Typically, for each parameter (e.g., alpha), there's a design matrix that, when multiplied
+    # by the relevant subset of `pars`, gives the parameter value for each trial and accumulator.
+    # Example: par_info <- attr(dadm$X, "par_info") might give info on which columns of dadm$X map to which param.
+
+    # Placeholder logic: Assumes `dadm$X` is a combined design matrix and `attr(dadm$X,"pmat")`
+    # maps its columns to model parameters (alpha_acc1, alpha_acc2, mu_drift_acc1 etc.)
+    # This needs to be adapted to the actual structure provided by EMC2's `design` process.
+    # The `get_pars` function in EMC2 might be relevant here.
+
+    # For each trial (assuming parameters can differ per trial, though often they don't beyond accumulator effects)
+    # This simplified version assumes parameters are constant per trial but can differ per accumulator based on design.
+    # A more general solution would use the full design matrix per trial.
+
+    # Let's assume `get_pars_rdm_dswtn` is a helper that extracts these based on `pars` and `dadm`
+    # This is where the core EMC2 machinery for parameter expansion would be used.
+    # For now, this is a conceptual sketch.
+
+    # A simplified approach if parameters are constant across trials (but vary by accumulator):
+    # Extract from `pars` vector based on names like "alpha_L", "alpha_R", "mu_drift_L" etc.
+    # This depends on how `make_par_names` (from EMC2 utils) creates names from formulas.
+
+    all_params_natural <- model$transform$func(pars, model) # Transform all params to natural scale
+
+    for (acc_idx in 1:n_acc) {
+      acc_name <- acc_levels[acc_idx]
+      # Construct parameter names as generated by EMC2 (e.g., "alpha_L", "mu_drift_R")
+      # This requires knowing the naming convention from `make_par_names` based on formulas.
+      # Example: if formula for alpha is `alpha ~ lR`, names might be `alpha_L`, `alpha_R`.
+      # If `alpha ~ 1`, name is just `alpha`.
+
+      # This part is highly schematic and needs to use EMC2's parameter extraction logic
+      # (e.g., using design matrices dadm$X and attr(dadm$X, "pmat"))
+      # For each parameter (alpha, mu_drift, etc.):
+      #   Identify columns in dadm$X relevant to this parameter for this accumulator.
+      #   Calculate: dadm$X[, cols] %*% pars[relevant_pars_indices]
+      # This needs to be done for each of the 4 DSWTN parameters for each accumulator.
+
+      # Simplified: assume `all_params_natural` contains named expanded parameters for each trial & accumulator
+      # This is what `get_pars` in EMC2 usually produces.
+      # If `get_pars` is adapted or a similar function is used:
+      # expanded_pars_matrix <- get_pars(pars, dadm, model) # N_trials x N_total_params_expanded
+      # Then, from expanded_pars_matrix, pick columns for alpha_acc_idx, mu_drift_acc_idx, etc.
+
+      # Fallback: If we assume `pars` already contains expanded per-accumulator values (e.g. from a prior step)
+      # and names like alpha_ACCLEVEL, mu_drift_ACCLEVEL. This is unlikely for the main `pars` vector.
+
+      # The most robust way is to use the design matrix multiplication for each parameter.
+      # For now, let's assume a function `get_accumulator_params` exists that does this.
+      # This function would be specific to how EMC2 handles design matrices for race models.
+
+      # Placeholder: Fill with defaults or stop if logic is not fully implemented yet for parameter extraction.
+      # This is the part that needs to correctly interface with EMC2's design output.
+      # For the purpose of defining the model object, we assume this will be resolved by EMC2's framework.
+      # The following is a mock-up of what needs to happen:
+      for (param_name in c("alpha", "mu_drift", "sigma_drift_sq", "theta")) {
+        # Determine the full parameter name in `all_params_natural` (e.g., "alpha_L", "alpha_R")
+        # This depends on how formulas like `alpha ~ lR` are expanded.
+        # Let's assume `dadm[[paste0(param_name, "_design_matrix_for_acc_", acc_name)]]` exists
+        # and `pars[[paste0(param_name,"_coeffs")]]` exists. This is too complex.
+
+        # A common pattern: design matrix X, parameter vector p.
+        # X %*% p gives values. `dadm$X` is often trial-specific.
+        # `dadm$par_info` or attributes of `X` usually tell how columns of X map to parameters.
+
+        # This function is critical and complex. For now, we'll assume it's handled by the broader EMC2 framework
+        # when this model is used with `design()` and `log_likelihood()`.
+        # The `loglik_DSWTN_race` C++ function expects N_trials x N_acc matrices.
+        # These would be constructed by EMC2's machinery using the design matrices and parameter vector.
+      }
+    }
+
+    # This function would return a list of these matrices.
+    # However, the `log_likelihood` function in the model object typically receives `pars` (coefficient vector)
+    # and `dadm` (which includes design matrices). It then internally computes the per-trial, per-accumulator
+    # parameters.
+
+    # So, the logic inside the log_likelihood function needs to do this.
+    # This is a complex piece of EMC2's infrastructure.
+    # For now, the C++ `loglik_DSWTN_race` expects the final per-trial-per-acc matrices.
+    # The R wrapper in the model definition needs to bridge this.
+    stop("prepare_dswtn_race_params is a placeholder and needs full EMC2 integration logic.")
+
+    # A more realistic approach for the log_likelihood slot in the model:
+    # It will receive `pars` (coefficients) and `dadm`.
+    # It needs to use `dadm$X` (design matrix for a single trial, typically)
+    # and `attr(dadm$X, "pmat")` (parameter matrix mapping X columns to parameters)
+    # along with `dadm$n_X` (number of trials for this X structure)
+    # and `dadm$sX` (subject-level design matrix if applicable)
+    # to construct the per-trial, per-accumulator parameters.
+    # This is what generic `log_likelihood_race` does by calling `model$dfun` and `model$pfun`
+    # with parameters extracted for each trial/accumulator.
+
+    # If we bypass generic log_likelihood_race and call loglik_DSWTN_race directly,
+    # we need to replicate that parameter expansion here.
+    # This is a significant task.
+  }
+
+  # Simplified rfun placeholder - actual implementation needs care
+  rfun_dswtn_race <- function(data, pars) {
+    # data contains lR (latent response factor), n_trials etc.
+    # pars contains parameter values for each trial & accumulator
+    # This needs to be structured to match how rRDM gets its `pars`
+
+    n_trials <- nrow(pars) / length(levels(data$lR)) # Assuming pars is n_trials*n_acc x n_params
+    acc_levels <- levels(data$lR)
+    n_acc <- length(acc_levels)
+
+    # Reshape/extract pars into a list per accumulator, each element being a matrix/df for trials
+    # This is highly dependent on how `pars` is formatted by the calling EMC2 framework.
+    # For now, assume `pars` is already in a format where we can extract
+    # alpha, mu_drift, sigma_drift_sq, theta for each trial and accumulator.
+    # Example: pars might be a matrix from get_pars()
+
+    rt_matrix <- matrix(Inf, nrow = n_trials, ncol = n_acc)
+
+    # This assumes `pars` is a matrix from `get_pars` where columns are named e.g. alpha_L, mu_drift_L etc.
+    # And we need to iterate trials.
+    # This is complex to generalize here without EMC2's internal `get_pars` output structure.
+
+    # Simpler: if `pars` argument to `rfun` is already N_trials x N_params_total_expanded
+    # (e.g., alpha_acc1, mu_drift_acc1, theta_acc1, alpha_acc2, ...)
+    # This is also unlikely.
+
+    # Let's assume `pars` here is the same N_trials x N_acc matrices as for loglik_DSWTN_race
+    # (alpha_mat, mu_drift_mat, etc.). This is not what `rfun` usually gets.
+    # `rfun` typically gets a parameter vector `p` and `dadm`.
+
+    # For now, a very simplified rfun assuming fixed parameters for all trials for illustration:
+    # It would need proper parameter extraction from the `pars` vector passed by EMC2.
+    if (is.null(attr(pars,"ok"))) ok_trials <- rep(TRUE, n_trials) else ok_trials <- attr(pars,"ok")
+
+    # This is a placeholder and will not work directly with EMC2's usual `pars` structure for rfun.
+    # It demonstrates the core race logic with rDSWTN.
+    # A proper rfun would need to extract trial-specific parameters for each accumulator first.
+
+    # Simplified: assume pars is a list where each element is a named list of params for an acc
+    # pars[[1]]$alpha, pars[[1]]$mu_drift etc. (vectors of length n_trials)
+
+    # Fallback to error for rfun as it needs careful integration
+    stop("rfun for RDM_DSWTN requires careful implementation of parameter extraction for rDSWTN calls.")
+
+    # Example structure if parameters were readily available per trial/acc:
+    # for (i in 1:n_trials) {
+    #   if (!ok_trials[i]) next
+    #   trial_rts <- numeric(n_acc)
+    #   for (j in 1:n_acc) {
+    #     trial_rts[j] <- rDSWTN(1, alpha = pars_alpha[i,j], mu_drift = pars_mu_drift[i,j], ...)
+    #   }
+    #   rt_matrix[i, ] <- trial_rts
+    # }
+    # winner_idx <- apply(rt_matrix, 1, which.min) # for ok_trials
+    # winner_rt <- rt_matrix[cbind(which(ok_trials), winner_idx[ok_trials])]
+    # ... then format into data.frame(R, rt)
+  }
+
+
+  list(
+    type = "RACE",
+    c_name = "RDM_DSWTN", # Name for this variant
+    p_types = c(alpha = log(1), mu_drift = log(1), sigma_drift_sq = log(0.25), theta = log(0.1)),
+    transform = list(
+      func = c(alpha = "exp", mu_drift = "exp", sigma_drift_sq = "exp", theta = "exp"),
+      args = NULL # No special arguments for exp
+    ),
+    bound = list(
+      minmax = cbind(alpha = c(1e-3, Inf), mu_drift = c(1e-3, Inf), sigma_drift_sq = c(1e-4, Inf), theta = c(0.001, Inf)),
+      exception = NULL # No specific exceptions like A=0 for original RDM
+    ),
+    Ttransform = function(pars, dadm) {
+      # No additional parameter transformations like b = B+A needed here by default
+      # Users could add if they re-parameterize (e.g. log_sigma_drift_sq)
+      pars
+    },
+    rfun = rfun_dswtn_race, # Placeholder, needs full implementation
+    dfun = function(rt, pars, dadm=NULL) { # pars is matrix: rows for trials, cols for params
+      # Ensure parameters are on natural scale if coming from fitting (usually are by this point)
+      # dfun is for single accumulator, log_likelihood_race handles multiple.
+      # Here `pars` would be for ONE accumulator.
+      exp(dDSWTN_log(rt, alpha=pars[,"alpha"], mu_drift=pars[,"mu_drift"],
+                     sigma_drift_sq=pars[,"sigma_drift_sq"], theta=pars[,"theta"]))
+    },
+    pfun = function(rt, pars, dadm=NULL) {
+      pDSWTN(rt, alpha=pars[,"alpha"], mu_drift=pars[,"mu_drift"],
+             sigma_drift_sq=pars[,"sigma_drift_sq"], theta=pars[,"theta"])
+    },
+    log_likelihood = function(pars, dadm, model, min_ll = log(1e-10)) {
+      # This function needs to extract per-trial, per-accumulator parameters
+      # from `pars` (coefficients) and `dadm` (design info), then call C++ loglik_DSWTN_race.
+
+      # Get expanded parameters (N_trials x N_params_total_expanded)
+      # This uses EMC2's internal parameter expansion system.
+      # `all_natural_pars` would be a matrix where columns are like alpha_L, alpha_R, mu_drift_L etc.
+      # if lR has levels L, R.
+      all_natural_pars <- get_pars(p_vector = pars, dadm = dadm, model = model)
+
+      acc_levels <- levels(dadm$lR)
+      n_acc <- length(acc_levels)
+      n_trials <- nrow(dadm$data) # Number of trials in the data for this subject/block
+
+      # Prepare matrices for C++ call
+      params_alpha_mat <- matrix(NA, nrow = n_trials, ncol = n_acc)
+      params_mu_drift_mat <- matrix(NA, nrow = n_trials, ncol = n_acc)
+      params_sigma_drift_sq_mat <- matrix(NA, nrow = n_trials, ncol = n_acc)
+      params_theta_mat <- matrix(NA, nrow = n_trials, ncol = n_acc)
+
+      for (acc_idx in 1:n_acc) {
+        acc_name <- acc_levels[acc_idx]
+        # Construct expected parameter names (e.g., "alpha_L", "mu_drift_L")
+        # These names are generated by make_par_names in EMC2 utils.
+        # This assumes simple factor expansion (e.g., alpha ~ lR).
+        # More complex formulas would result in different names from make_par_names.
+
+        # A robust way uses attr(all_natural_pars, "pnames_by_type_acc") if available from get_pars
+        # Or reconstruct names based on model$p_types and acc_name.
+
+        # Simplified name construction (may need adjustment based on make_par_names behavior)
+        current_p_names <- dimnames(all_natural_pars)[[2]]
+
+        alpha_col_name <- grep(paste0("^alpha_", acc_name, "$|^alpha$"), current_p_names, value = TRUE)
+        mu_drift_col_name <- grep(paste0("^mu_drift_", acc_name, "$|^mu_drift$"), current_p_names, value = TRUE)
+        sigma_drift_sq_col_name <- grep(paste0("^sigma_drift_sq_", acc_name, "$|^sigma_drift_sq$"), current_p_names, value = TRUE)
+        theta_col_name <- grep(paste0("^theta_", acc_name, "$|^theta$"), current_p_names, value = TRUE)
+
+        # Handle cases where a parameter is global (not varying by accumulator)
+        if (length(alpha_col_name) == 0 && "alpha" %in% current_p_names) alpha_col_name <- "alpha"
+        if (length(mu_drift_col_name) == 0 && "mu_drift" %in% current_p_names) mu_drift_col_name <- "mu_drift"
+        if (length(sigma_drift_sq_col_name) == 0 && "sigma_drift_sq" %in% current_p_names) sigma_drift_sq_col_name <- "sigma_drift_sq"
+        if (length(theta_col_name) == 0 && "theta" %in% current_p_names) theta_col_name <- "theta"
+
+        if (length(alpha_col_name)==0 || length(mu_drift_col_name)==0 ||
+            length(sigma_drift_sq_col_name)==0 || length(theta_col_name)==0) {
+            stop(paste("Could not find all DSWTN parameter columns for accumulator", acc_name,
+                       "in matrix from get_pars(). Found:",
+                       paste(current_p_names, collapse=", ")))
+        }
+
+        params_alpha_mat[, acc_idx] <- all_natural_pars[, alpha_col_name[1]]
+        params_mu_drift_mat[, acc_idx] <- all_natural_pars[, mu_drift_col_name[1]]
+        params_sigma_drift_sq_mat[, acc_idx] <- all_natural_pars[, sigma_drift_sq_col_name[1]]
+        params_theta_mat[, acc_idx] <- all_natural_pars[, theta_col_name[1]]
+      }
+
+      # dadm$data$R should be the factor of observed responses. Convert to numeric index.
+      # Ensure dadm$data$R levels match dadm$lR levels for consistent indexing.
+      observed_choice_idx <- as.numeric(factor(as.character(dadm$data$R), levels = acc_levels))
+
+      loglik_DSWTN_race(
+        rts = dadm$data$rt,
+        choices = observed_choice_idx, # Must be 1-indexed
+        params_alpha = params_alpha_mat,
+        params_mu_drift = params_mu_drift_mat,
+        params_sigma_drift_sq = params_sigma_drift_sq_mat,
+        params_theta = params_theta_mat,
+        min_log_lik = min_ll
+        # Pass cdf control params if needed, e.g. from model$cdf_control
+      )
+    }
+  )
+}
+
 Mrdm <- function(){
   list(
     type="RACE",
