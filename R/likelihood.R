@@ -15,13 +15,13 @@ log_likelihood_race <- function(pars,dadm,model,min_ll=log(1e-10))
   if (any(names(dadm)=="RACE")){# Some accumulators not present
     pars[as.numeric(dadm$lR)>as.numeric(as.character(dadm$RACE)),] <- NA
   }
-
+  
   if (is.null(attr(pars,"ok"))){
     ok <- !logical(dim(pars)[1])
   } else ok <- attr(pars,"ok")
   lds <- numeric(dim(dadm)[1]) # log pdf (winner) or survivor (losers)
   lds[dadm$winner] <- log(model$dfun(rt=dadm$rt[dadm$winner],
-                                                    pars=pars[dadm$winner,]))
+                                     pars=pars[dadm$winner,]))
   n_acc <- length(levels(dadm$R))
   if (n_acc>1) lds[!dadm$winner] <- log(1-model$pfun(rt=dadm$rt[!dadm$winner],pars=pars[!dadm$winner,]))
   lds[!ok] <- min_ll
@@ -44,7 +44,7 @@ log_likelihood_race_cens_trunc <- function(pars, dadm, model, min_ll = log(1e-10
   UT <- attr(dadm,"UT"); if (is.null(UT)) UT <- Inf
   LC <- attr(dadm,"LC"); if (is.null(LC)) LC <- 0
   UC <- attr(dadm,"UC"); if (is.null(UC)) UC <- Inf
-  
+  cn=colnames(pars)
   if (any(names(dadm) == "RACE")) {
     pars[as.numeric(dadm$lR) > as.numeric(as.character(dadm$RACE)), ] <- NA
   }
@@ -67,7 +67,7 @@ log_likelihood_race_cens_trunc <- function(pars, dadm, model, min_ll = log(1e-10
         p_loser_i <- p_trial_this_winner_first[i, , drop = FALSE]
         s_loser_i <- (1 - model$pfun(rt = t, pars = p_loser_i))
         s_loser_i[s_loser_i > 1] <- 1
-        if(is.na(s_loser_i) | !is.finite(s_loser_i) | s_loser_i < 0){
+        if(any((is.na(s_loser_i) | !is.finite(s_loser_i) | s_loser_i < 0))){
           next # don't set ll to 0 (mucks up RACE)
         }
         survivor_losers <- survivor_losers * s_loser_i
@@ -134,9 +134,147 @@ log_likelihood_race_cens_trunc <- function(pars, dadm, model, min_ll = log(1e-10
     }
   }
   
+  # Separate unique trials into those that can be batched and those that need iteration
+  observed_finite_rt_trial_indices <- integer(0)
+  other_rt_trial_indices <- integer(0)
+  
+  # Store data for batch processing
+  # These will be populated only for trials in observed_finite_rt_trial_indices
+  batch_rts_list <- list()
+  batch_pars_ordered_list <- list() # List of parameter matrices (winner first)
+  batch_pars_unord_list <- list()   # List of original parameter matrices (for truncation)
+  batch_R_j_idx_list <- list()      # List of winner indices
+  
   for (j in 1:n_unique_trials) {
     current_trial_par_indices <- ((j - 1) * n_acc + 1):(j * n_acc)
     
+    if (!all(ok_params[current_trial_par_indices])) {
+      ll_unique[j] <- min_ll # Already initialized to min_ll, but explicit
+      next # Skip to next unique trial if params are not ok
+    }
+    
+    rt_j <- dadm$rt[current_trial_par_indices[1]]
+    R_j_idx <- as.integer(dadm$R[current_trial_par_indices[1]]) # Ensure it's integer
+    
+    # Criteria for batching: finite RT, positive, known winner, within truncation bounds
+    if (is.finite(rt_j) && rt_j > 0 && !is.na(R_j_idx) && rt_j >= LT && rt_j <= UT) {
+      observed_finite_rt_trial_indices <- c(observed_finite_rt_trial_indices, j)
+      # Store necessary info for batch processing later
+      # Note: actual parameter extraction will happen once we know the size of the batch
+    } else {
+      other_rt_trial_indices <- c(other_rt_trial_indices, j)
+    }
+  }
+  
+  # --- Batch process observed finite RT trials ---
+  if (length(observed_finite_rt_trial_indices) > 0) {
+    num_batch_trials <- length(observed_finite_rt_trial_indices)
+    
+    # Prepare data structures for vectorized calls
+    batch_rts <- numeric(num_batch_trials)
+    # For parameters, we need to handle them carefully for dfun/pfun
+    # model$dfun and model$pfun expect pars to be a matrix where rows correspond to rt entries
+    
+    # Winner parameters: matrix [num_batch_trials x num_params]
+    # Loser parameters: a list of matrices, or perhaps combine them carefully
+    # For now, let's assume model$dfun and model$pfun can take a matrix of parameters
+    # where each row corresponds to an element in the rt vector.
+    
+    # It's simpler to build up the parameter matrices for winners and each loser position
+    first_par_matrix <- pars[((observed_finite_rt_trial_indices[1] - 1) * n_acc + 1), , drop = FALSE]
+    n_params_model <- ncol(first_par_matrix)
+    
+    winner_pars_batch <- matrix(NA_real_, nrow = num_batch_trials, ncol = n_params_model,dimnames=list(NULL,cn))
+    loser_pars_batch_list <- list() # list of lists/matrices: loser_pars_batch_list[[k_loser]][trial_idx, param_val]
+    if (n_acc > 1) {
+      for (k_loser in 1:(n_acc - 1)) {
+        loser_pars_batch_list[[k_loser]] <- matrix(NA_real_, nrow = num_batch_trials, ncol = n_params_model,dimnames=list(NULL,cn))
+      }
+    }
+    
+    pars_unord_for_trunc_batch <- vector("list", num_batch_trials) # To store original pars for truncation calc
+    R_j_indices_batch <- integer(num_batch_trials)
+    
+    for (i in 1:num_batch_trials) {
+      unique_trial_idx <- observed_finite_rt_trial_indices[i]
+      current_trial_par_indices <- ((unique_trial_idx - 1) * n_acc + 1):(unique_trial_idx * n_acc)
+      pars_condition_j_all_acc <- pars[current_trial_par_indices, , drop = FALSE]
+      
+      rt_j <- dadm$rt[current_trial_par_indices[1]]
+      R_j_idx <- as.integer(dadm$R[current_trial_par_indices[1]])
+      
+      batch_rts[i] <- rt_j
+      R_j_indices_batch[i] <- R_j_idx
+      pars_unord_for_trunc_batch[[i]] <- pars_condition_j_all_acc # Store for truncation
+      
+      # Order parameters for this trial (winner first)
+      # This is what f_race_integrand expects for its 'p_trial_this_winner_first'
+      # We need to extract the winner's parameters and losers' parameters separately for batching
+      
+      winner_pars_batch[i, ] <- pars_condition_j_all_acc[R_j_idx, ]
+      if (n_acc > 1) {
+        loser_idx_count <- 1
+        for (k_acc_orig in 1:n_acc) {
+          if (k_acc_orig != R_j_idx) {
+            loser_pars_batch_list[[loser_idx_count]][i, ] <- pars_condition_j_all_acc[k_acc_orig, ]
+            loser_idx_count <- loser_idx_count + 1
+          }
+        }
+      }
+    }
+    
+    # Vectorized call for winner PDFs
+    # Assuming model$dfun can handle a vector of rts and a matrix of corresponding parameters
+    pdf_winner_batch <- model$dfun(rt = batch_rts, pars = winner_pars_batch)
+    pdf_winner_batch[is.na(pdf_winner_batch) | !is.finite(pdf_winner_batch) | pdf_winner_batch < 0] <- 0
+    
+    # Calculate survivor probabilities for losers
+    survivor_losers_batch <- rep(1.0, num_batch_trials) # Initialize with 1s
+    if (n_acc > 1) {
+      for (k_loser in 1:(n_acc - 1)) {
+        # Vectorized call for loser CDFs
+        cdf_loser_k_batch <- model$pfun(rt = batch_rts, pars = loser_pars_batch_list[[k_loser]])
+        s_loser_k_batch <- (1 - cdf_loser_k_batch)
+        ok<-!is.na(s_loser_k_batch) & is.finite(s_loser_k_batch) & s_loser_k_batch >= 0 & s_loser_k_batch <= 1
+        s_loser_k_batch[s_loser_k_batch > 1] <- 1
+        survivor_losers_batch[ok] <- survivor_losers_batch[ok] * s_loser_k_batch[ok]
+      }
+    }
+    
+    # Combine for final probability density for each trial in the batch
+    prob_density_batch <- pdf_winner_batch * survivor_losers_batch
+    prob_density_batch[is.na(prob_density_batch) | !is.finite(prob_density_batch) | prob_density_batch < 0] <- 0
+    
+    # Apply truncation correction (iteratively for now) and calculate log-likelihood
+    for (i in 1:num_batch_trials) {
+      unique_trial_idx <- observed_finite_rt_trial_indices[i]
+      current_prob_density <- prob_density_batch[i]
+      
+      if (current_prob_density > .Machine$double.eps) {
+        # Use the stored un-ordered parameters for this specific trial for truncation
+        pars_for_this_trial_trunc <- pars_unord_for_trunc_batch[[i]]
+        R_j_for_this_trial_trunc <- R_j_indices_batch[i]
+        
+        trunc_cf <- get_trunc_corr_factor_for_kth_winner(R_j_for_this_trial_trunc, pars_for_this_trial_trunc, model)
+        if (is.na(trunc_cf) || !is.finite(trunc_cf) || trunc_cf < 0) {
+          ll_unique[unique_trial_idx] <- min_ll
+        } else {
+          final_prob_val <- current_prob_density * trunc_cf
+          if (final_prob_val > .Machine$double.eps) {
+            ll_unique[unique_trial_idx] <- log(final_prob_val)
+          } else {
+            ll_unique[unique_trial_idx] <- min_ll
+          }
+        }
+      } else {
+        ll_unique[unique_trial_idx] <- min_ll
+      }
+      ll_unique[unique_trial_idx] <- max(min_ll, ll_unique[unique_trial_idx])
+    }
+  }
+  
+  for (j in other_rt_trial_indices) {
+    current_trial_par_indices <- ((j - 1) * n_acc + 1):(j * n_acc)
     # Make sure parameters are valid
     if (!all(ok_params[current_trial_par_indices])) {
       ll_unique[j] <- min_ll
@@ -150,24 +288,7 @@ log_likelihood_race_cens_trunc <- function(pars, dadm, model, min_ll = log(1e-10
     
     current_ll_j <- min_ll
     prob_density_or_mass <- 0
-    
-    # If RT is observed
-    if (is.finite(rt_j) && rt_j > 0) {
-      if (!is.na(R_j_idx)) {
-        if (rt_j < LT || rt_j > UT) {
-          prob_density_or_mass <- 0
-        } else {
-          pars_ordered_obs <- order_pars_for_winner(pars_condition_j_all_acc, R_j_idx)
-          prob_density_or_mass <- f_race_integrand(t = rt_j, p_trial_this_winner_first = pars_ordered_obs, model = model)
-        }
-        if (prob_density_or_mass > 0) {
-          trunc_cf <- get_trunc_corr_factor_for_kth_winner(R_j_idx, pars_condition_j_all_acc, model)
-          if (is.na(trunc_cf) || !is.finite(trunc_cf) || trunc_cf < 0) prob_density_or_mass <- 0
-          else prob_density_or_mass <- prob_density_or_mass * trunc_cf
-        }
-      } else { prob_density_or_mass <- 0 } # Observed RT but R_j_idx is NA: should not happen
-      
-    } else if (rt_j == -Inf) { # fast censoring
+    if (rt_j == -Inf) { # fast censoring
       if (!is.na(R_j_idx)) {
         prob_density_or_mass <- integrate_for_kth_winner(R_j_idx, pars_condition_j_all_acc, LT, LC, model)
         if (prob_density_or_mass > 0) {
@@ -241,6 +362,7 @@ log_likelihood_race_cens_trunc <- function(pars, dadm, model, min_ll = log(1e-10
     ll_unique[j] <- max(min_ll, current_ll_j)
   }
   
+  
   if (!is.null(dadm$N) && length(dadm$N) == n_unique_trials) {
     total_ll <- sum(ll_unique * dadm$N)
   } else if (!is.null(attr(dadm, "expand"))) {
@@ -260,7 +382,7 @@ log_likelihood_ddm <- function(pars,dadm,model,min_ll=log(1e-10))
   like <- numeric(dim(dadm)[1])
   if (any(attr(pars,"ok")))
     like[attr(pars,"ok")] <- model$dfun(dadm$rt[attr(pars,"ok")],dadm$R[attr(pars,"ok")],
-                                                       pars[attr(pars,"ok"),,drop=FALSE])
+                                        pars[attr(pars,"ok"),,drop=FALSE])
   like[attr(pars,"ok")][is.na(like[attr(pars,"ok")])] <- 0
   sum(pmax(min_ll,log(like[attr(dadm,"expand")])))
 }
@@ -277,7 +399,7 @@ log_likelihood_ddmgng <- function(pars,dadm,model,min_ll=log(1e-10))
     ok <- attr(pars,"ok") & isna
     like[ok] <- # dont terminate on go boundary before timeout
       pmax(0,pmin(1,(1-model$pfun(dadm$TIMEOUT[ok],dadm$Rgo[ok],pars[ok,,drop=FALSE]))))
-
+    
   }
   like[attr(pars,"ok")][is.na(like[attr(pars,"ok")])] <- 0
   sum(pmax(min_ll,log(like[attr(dadm,"expand")])))
@@ -369,7 +491,7 @@ log_likelihood_redundant_target_race <- function(pars, dadm, model, min_ll = log
   if (nrow(dadm) %% 4 != 0) {
     stop("nrow(dadm) must be a multiple of 4 (4 accumulator rows per original trial).")
   }
-
+  
   # Expected accumulator roles for internal mapping
   internal_role_order <- c("S1D", "S2D", "S1A", "S2A")
   if (!all(internal_role_order %in% levels(as.factor(dadm$lR)))) { # Check dadm$lR
@@ -377,13 +499,13 @@ log_likelihood_redundant_target_race <- function(pars, dadm, model, min_ll = log
     stop(paste("dadm$lR is missing expected levels for accumulator roles:", paste(missing_roles, collapse=", "),
                ". Expected levels are S1D, S2D, S1A, S2A."))
   }
-
+  
   # --- PDF and CDF Calculation (once for all rows) ---
   f_all <- model$dfun(dadm$rt, pars)
   F_all <- model$pfun(dadm$rt, pars)
-
+  
   n_blocks <- nrow(dadm) / 4 # Number of original trials
-
+  
   # --- Extract f/F values for each role into vectors of length n_blocks ---
   # This assumes that dadm is structured such that filtering by dadm$lR
   # results in vectors of length n_blocks, correctly ordered by original trial.
@@ -391,64 +513,64 @@ log_likelihood_redundant_target_race <- function(pars, dadm, model, min_ll = log
   f2 <- f_all[dadm$lR == "S2D"]; F2 <- F_all[dadm$lR == "S2D"]
   f3 <- f_all[dadm$lR == "S1A"]; F3 <- F_all[dadm$lR == "S1A"]
   f4 <- f_all[dadm$lR == "S2A"]; F4 <- F_all[dadm$lR == "S2A"]
-
+  
   # Validation: Check if all extracted vectors have the correct length (n_blocks)
   expected_len <- n_blocks
   if (any(sapply(list(f1, F1, f2, F2, f3, F3, f4, F4), length) != expected_len)) {
     stop("Length mismatch after extracting role-specific f/F values. Check dadm structure and lR factor.")
   }
-
+  
   # --- Get Observed Responses (one per original trial/block) ---
   # Taking from the first row of each conceptual 4-row block using dadm$R.
   observed_responses_per_block <- dadm$R[seq(1, nrow(dadm), by = 4)] # dadm$R holds "yes"/"no"
   if (length(observed_responses_per_block) != n_blocks) {
-      stop("Could not correctly extract one observed response per trial block from dadm$R.")
+    stop("Could not correctly extract one observed response per trial block from dadm$R.")
   }
-
+  
   ll_block_values <- numeric(n_blocks) # Stores one LL value per original trial
   is_yes_response <- observed_responses_per_block == "yes"
   is_no_response <- observed_responses_per_block == "no"
-
+  
   # --- Apply Formulas Vectorially ---
   if (any(is_yes_response)) {
     term1_yes <- f1[is_yes_response] * (1 - F2[is_yes_response]) + f2[is_yes_response] * (1 - F1[is_yes_response])
     term2_yes <- 1 - (F3[is_yes_response] * F4[is_yes_response])
-
+    
     term1_yes <- pmax(term1_yes, .Machine$double.eps)
     term2_yes <- pmax(term2_yes, .Machine$double.eps)
     ll_block_values[is_yes_response] <- log(term1_yes) + log(term2_yes)
   }
-
+  
   if (any(is_no_response)) {
     term1_no <- f3[is_no_response] * F4[is_no_response] + f4[is_no_response] * F3[is_no_response]
     term2_no <- (1 - F1[is_no_response])
     term3_no <- (1 - F2[is_no_response])
-
+    
     term1_no <- pmax(term1_no, .Machine$double.eps)
     term2_no <- pmax(term2_no, .Machine$double.eps)
     term3_no <- pmax(term3_no, .Machine$double.eps)
     ll_block_values[is_no_response] <- log(term1_no) + log(term2_no) + log(term3_no)
   }
-
+  
   unhandled_responses <- !(is_yes_response | is_no_response)
   if (any(unhandled_responses)) {
-      original_indices_unhandled <- which(unhandled_responses)
-      # Get the problematic dadm$R values that correspond to these unhandled blocks
-      # Need to index observed_responses_per_block or dadm$R at block level
-      problematic_values <- unique(observed_responses_per_block[unhandled_responses])
-      warning(paste("Unhandled values in dadm$R (observed response) found:", paste(problematic_values, collapse=", "),
+    original_indices_unhandled <- which(unhandled_responses)
+    # Get the problematic dadm$R values that correspond to these unhandled blocks
+    # Need to index observed_responses_per_block or dadm$R at block level
+    problematic_values <- unique(observed_responses_per_block[unhandled_responses])
+    warning(paste("Unhandled values in dadm$R (observed response) found:", paste(problematic_values, collapse=", "),
                   ". Corresponding log-likelihoods will be NA, then min_ll."))
-      ll_block_values[unhandled_responses] <- NA
+    ll_block_values[unhandled_responses] <- NA
   }
-
+  
   # --- Final Summation (same logic as before) ---
   # Replicate the block's LL to its constituent rows.
   original_trial_idx_for_row <- rep(1:n_blocks, each = 4) # Assuming dadm is sorted by block
   ll_for_dadm_rows <- ll_block_values[original_trial_idx_for_row]
-
+  
   final_ll_values <- pmax(min_ll, ll_for_dadm_rows[attr(dadm, "expand")])
   final_ll_values[is.na(final_ll_values)] <- min_ll
-
+  
   return(sum(final_ll_values))
 }
 
