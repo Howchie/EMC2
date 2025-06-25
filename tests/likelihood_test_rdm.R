@@ -2,8 +2,7 @@
 devtools::load_all()
 RNGkind("L'Ecuyer-CMRG")
 set.seed(123)
-matchfun <- function(d) as.numeric(d$S)==as.numeric(d$lR) |
-  (d$lR=="pm" & as.numeric(d$S)>2)
+matchfun <- function(d) as.numeric(d$S)==as.numeric(d$lR)
 designRDM <- design(
   factors=list(subjects=1,S=c("left","right")),
   Rlevels=c("left","right"),
@@ -22,16 +21,16 @@ p_vector <- sampled_pars(designRDM,doMap = FALSE)
 p_vector[1:length(p_vector)] <- c(1, log(2), log(.2),log(1))
 
 # Make square data so can remove pm in RACE = 2
-template <- make_data(p_vector,designLBA,n_trials=1000)
+template <- make_data(p_vector,designRDM,n_trials=1000)
 attr(template,"UC")=2.5
-dat <- make_data(p_vector,designLBA,data=template)
+dat <- make_data(p_vector,designRDM,data=template)
 # dadm <- EMC2:::design_model(dat,designLBA,compress=FALSE)
 
 
 # Check likelihood
 dadmRDM <- EMC2:::design_model(dat,designRDM)
 dadmMRDM <- EMC2:::design_model(dat,designMRDM)
-pars <- EMC2:::get_pars_matrix(p_vector, dadmLBA, model = attr(dadmRDM, "model")())
+pars <- EMC2:::get_pars_matrix(p_vector, dadmRDM, model = attr(dadmRDM, "model")())
 #EMC2:::log_likelihood_race_cens_trunc(pars,dadm,attr(dadm, "model")())
 
 
@@ -49,10 +48,10 @@ lfun <- function(i, x, p_vector, pname, dadm, use_c) {
     constants <- attr(dadm,"constants")
     if (is.null(constants)) constants <- NA
     calc_ll(p_matrix, dadm, constants,designs,model$c_name,
-                     model$bound,model$transform,model$pre_transform,p_types,log(1e-10),model$trend)
-
+            model$bound,model$transform,model$pre_transform,p_types,log(1e-10),model$trend)
+    
   } else {
-      EMC2:::calc_ll_R(p_vector, attr(dadm, "model")(), dadm)
+    EMC2:::calc_ll_R(p_vector, attr(dadm, "model")(), dadm)
     
   }
 }
@@ -133,4 +132,3 @@ profile_plot_test(dat,designMRDM,p_vector,n_cores=1,layout=c(2,2),use_c=TRUE) # 
 # emc <- make_emc(dat,designLBA,type="single")
 # emc <- fit(emc,cores_per_chain = 3)
 # recovery(emc,p_vector)
-

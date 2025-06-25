@@ -458,22 +458,6 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
-// f_race_integrand_batch_vec_cpp
-NumericVector f_race_integrand_batch_vec_cpp(const Rcpp::NumericVector& rts_batch, const Rcpp::List& pars_all_trials_ordered, RacePdfFun model_dfun, RaceCdfFun model_pfun, int n_acc, void* model_specific_context);
-RcppExport SEXP _EMC2_f_race_integrand_batch_vec_cpp(SEXP rts_batchSEXP, SEXP pars_all_trials_orderedSEXP, SEXP model_dfunSEXP, SEXP model_pfunSEXP, SEXP n_accSEXP, SEXP model_specific_contextSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type rts_batch(rts_batchSEXP);
-    Rcpp::traits::input_parameter< const Rcpp::List& >::type pars_all_trials_ordered(pars_all_trials_orderedSEXP);
-    Rcpp::traits::input_parameter< RacePdfFun >::type model_dfun(model_dfunSEXP);
-    Rcpp::traits::input_parameter< RaceCdfFun >::type model_pfun(model_pfunSEXP);
-    Rcpp::traits::input_parameter< int >::type n_acc(n_accSEXP);
-    Rcpp::traits::input_parameter< void* >::type model_specific_context(model_specific_contextSEXP);
-    rcpp_result_gen = Rcpp::wrap(f_race_integrand_batch_vec_cpp(rts_batch, pars_all_trials_ordered, model_dfun, model_pfun, n_acc, model_specific_context));
-    return rcpp_result_gen;
-END_RCPP
-}
 // test_c_loglik_cens_trunc_wrapper_R
 Rcpp::NumericVector test_c_loglik_cens_trunc_wrapper_R(Rcpp::NumericMatrix pars, Rcpp::DataFrame dadm, std::string model_type_str, double min_ll, Rcpp::LogicalVector ok_params, int n_acc, Rcpp::List R_model_obj_list);
 RcppExport SEXP _EMC2_test_c_loglik_cens_trunc_wrapper_R(SEXP parsSEXP, SEXP dadmSEXP, SEXP model_type_strSEXP, SEXP min_llSEXP, SEXP ok_paramsSEXP, SEXP n_accSEXP, SEXP R_model_obj_listSEXP) {
@@ -532,7 +516,6 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_build_hrf_kernel", (DL_FUNC) &_EMC2_build_hrf_kernel, 10},
     {"_EMC2_construct_design_matrix", (DL_FUNC) &_EMC2_construct_design_matrix, 13},
     {"_EMC2_calc_ll", (DL_FUNC) &_EMC2_calc_ll, 11},
-    {"_EMC2_f_race_integrand_batch_vec_cpp", (DL_FUNC) &_EMC2_f_race_integrand_batch_vec_cpp, 6},
     {"_EMC2_test_c_loglik_cens_trunc_wrapper_R", (DL_FUNC) &_EMC2_test_c_loglik_cens_trunc_wrapper_R, 7},
     {"_EMC2_c_add_charvectors", (DL_FUNC) &_EMC2_c_add_charvectors, 2},
     {NULL, NULL, 0}

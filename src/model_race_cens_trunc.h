@@ -34,7 +34,7 @@ double f_race_integrand_cpp(
     void* model_specific_context // Added context
 );
 
-double f_race_integrand_batch_vec_cpp(
+Rcpp::NumericVector f_race_integrand_batch_cpp(
     const Rcpp::NumericVector& rts_batch,
     const Rcpp::List& pars_all_trials_ordered, // List of NumericMatrix, each n_acc x n_params
     RacePdfFun model_dfun,
@@ -43,7 +43,17 @@ double f_race_integrand_batch_vec_cpp(
     void* model_specific_context // Added context
 );
 
-
+double c_log_likelihood_race_cens_trunc(
+    Rcpp::NumericMatrix pars,               // Parameters for one particle, covering all dadm rows for that particle
+    Rcpp::DataFrame dadm,                   // Data for unique trial conditions, structured for all accumulators
+    RacePdfFun model_dfun,                  // Pointer to the model's PDF adapter function
+    RaceCdfFun model_pfun,                  // Pointer to the model's CDF adapter function
+    double min_ll,                          // Minimum log-likelihood value
+    const Rcpp::LogicalVector& ok_params,   // Parameter validity for each row in 'pars' matrix
+    int n_acc,                              // Number of accumulators in the race (must be > 0 if data exists)
+    const Rcpp::IntegerVector& expand_vec,  // Vector for expanding unique LLs to full trial count
+    void* model_context_for_funcs           // Context for model_dfun/model_pfun (e.g., contains posdrift for LBA)
+);
 // Numerical integration helper
 // k_winner_idx: 1-based index of the accumulator treated as winner
 // p_all_acc: parameters for all accumulators for the current trial condition

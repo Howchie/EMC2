@@ -515,7 +515,7 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
         }
         pars = get_pars_matrix(p_vector, constants, transforms, p_specs, p_types, designs, n_trials, data, trend);
 
-        is_ok.resize(pars.nrow());
+        Rcpp::LogicalVector current_is_ok(pars.nrow());
         if (i == 0 || bound_specs.empty()) {
             bound_specs = make_bound_specs(minmax, mm_names, pars, bounds);
         }
@@ -543,8 +543,7 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
 // model_dfun, model_pfun: function pointers to the model's density and CDF
 // n_acc: number of accumulators
 // model_specific_context: context pointer for model functions
-// [[Rcpp::export]]
-NumericVector f_race_integrand_batch_vec_cpp(
+NumericVector f_race_integrand_batch_cpp(
     const Rcpp::NumericVector& rts_batch,
     const Rcpp::List& pars_all_trials_ordered, // List of NumericMatrix, each n_acc x n_params
     RacePdfFun model_dfun,

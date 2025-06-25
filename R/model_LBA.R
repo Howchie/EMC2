@@ -275,7 +275,7 @@ LBA <- function(){
 Mlba <- function(){
   list(
     type="RACE",
-    c_name = "LBA_CENS_TRUNC", # must be NULL to use calc_ll_R
+    c_name = "MLBA", # must be NULL to use calc_ll_R, IO
     # p_vector transform, sets sv as a scaling parameter
     p_types=c("v" = 1,"sv" = log(1),"B" = log(1),"A" = log(0),"t0" = log(0)),
     transform=list(func=c(v = "identity",sv = "exp", B = "exp", A = "exp",t0 = "exp")),
@@ -300,15 +300,15 @@ Mlba <- function(){
   )
 }
 
-#' MIlbaB
+#' LBAIO
 #' LBA model accommodating missing values (truncation and censoring) and
 #' assuming unbounded rates (i.e., allows intrinsic omissions)
 #' @export
 
-MIlba <- function(){
+LBAIO <- function(){
   list(
     type="RACE",
-    c_name = NULL, # must be NULL to use calc_ll_R
+    c_name = "LBAIO", # must be NULL to use calc_ll_R
     # p_vector transform, sets sv as a scaling parameter
     p_types=c("v" = 1,"sv" = log(1),"B" = log(1),"A" = log(0),"t0" = log(0)),
     transform=list(func=c(v = "identity",sv = "exp", B = "exp", A = "exp",t0 = "exp")),
@@ -332,6 +332,3 @@ MIlba <- function(){
     }
   )
 }
-
-
-

@@ -44,326 +44,212 @@ log_likelihood_race_cens_trunc <- function(pars, dadm, model, min_ll = log(1e-10
   UT <- attr(dadm,"UT"); if (is.null(UT)) UT <- Inf
   LC <- attr(dadm,"LC"); if (is.null(LC)) LC <- 0
   UC <- attr(dadm,"UC"); if (is.null(UC)) UC <- Inf
-
+  
   if (any(names(dadm) == "RACE")) {
     pars[as.numeric(dadm$lR) > as.numeric(as.character(dadm$RACE)), ] <- NA
   }
-
+  
   ok_params <- if (!is.null(attr(pars, "ok"))) attr(pars, "ok") else rep(TRUE, dim(pars)[1])
-  n_acc <- length(levels(dadm$R)) # Number of accumulators
-  n_unique_trials <- dim(dadm)[1]/n_acc # Number of unique trial conditions
-
-  ll_unique <- numeric(n_unique_trials) # Initialize vector to store log-likelihoods for each unique trial
-
-  # Original single-trial integrand function (remains for use by stats::integrate)
-  # t: time point
-  # p_trial_this_winner_first: parameter matrix for a single trial, ordered with winner first
-  # model: model object containing dfun (density) and pfun (CDF)
-  f_race_integrand_single <- function(t, p_trial_this_winner_first, model) {
-    p_winner <- p_trial_this_winner_first[1, , drop = FALSE] # Winner's parameters
-
-    pdf_winner <- model$dfun(rt = t, pars = p_winner) # Density for winner
+  n_acc <- length(levels(dadm$R))
+  n_unique_trials <- dim(dadm)[1]/n_acc
+  
+  ll_unique <- numeric(n_unique_trials)
+  
+  f_race_integrand <- function(t, p_trial_this_winner_first, model) {
+    p_winner <- p_trial_this_winner_first[1, , drop = FALSE]
+    
+    pdf_winner <- model$dfun(rt = t, pars = p_winner)
     pdf_winner[is.na(pdf_winner) | !is.finite(pdf_winner) | pdf_winner < 0] <- 0
-
-    if (nrow(p_trial_this_winner_first) > 1) { # If there are losers
+    
+    if (nrow(p_trial_this_winner_first) > 1) {
       survivor_losers <- 1
-      for (i in 2:nrow(p_trial_this_winner_first)) { # Iterate over losers
+      for (i in 2:nrow(p_trial_this_winner_first)) {
         p_loser_i <- p_trial_this_winner_first[i, , drop = FALSE]
-        s_loser_i <- (1 - model$pfun(rt = t, pars = p_loser_i)) # Survivor function for loser i
+        s_loser_i <- (1 - model$pfun(rt = t, pars = p_loser_i))
         s_loser_i[is.na(s_loser_i) | !is.finite(s_loser_i) | s_loser_i < 0] <- 0
-        s_loser_i[s_loser_i > 1] <- 1 # Clamp survivor function (should not be >1 if CDF is valid)
+        s_loser_i[s_loser_i > 1] <- 1
         survivor_losers <- survivor_losers * s_loser_i
-        if (survivor_losers == 0) break # Optimization
       }
-      out_val <- pdf_winner * survivor_losers # Product of winner's PDF and losers' survivor functions
-    } else { # Only one accumulator
+      out_val <- pdf_winner * survivor_losers
+    } else {
       out_val <- pdf_winner
     }
-    out_val[is.na(out_val) | !is.finite(out_val) | out_val < 0] <- 0 # Ensure non-negative finite output
+    out_val[is.na(out_val) | !is.finite(out_val) | out_val < 0] <- 0
     return(out_val)
   }
-
-  # Batch integrand function for finite RTs
-  # rts_vec: a vector of RTs for the batch
-  # pars_list_ordered: a list of parameter matrices, each ordered (winner first), corresponding to rts_vec
-  # model: model object
-  # n_acc: number of accumulators
-  f_race_integrand_R_batch <- function(rts_vec, pars_list_ordered, model, n_acc) {
-    n_trials_batch <- length(rts_vec)
-    if (n_trials_batch == 0) return(numeric(0))
-    if (length(pars_list_ordered) != n_trials_batch) {
-      stop("Length of rts_vec and pars_list_ordered must match in f_race_integrand_R_batch.")
-    }
-
-    out_vals <- numeric(n_trials_batch) # Initialize results vector
-
-    # Loop through the batch (vectorization across trials with varying params is complex at this level)
-    for (i in 1:n_trials_batch) {
-      t_i <- rts_vec[i] # Current RT
-      p_trial_i_ordered <- pars_list_ordered[[i]] # Current trial's ordered parameters
-
-      p_winner_i <- p_trial_i_ordered[1, , drop = FALSE]
-      pdf_winner_i <- model$dfun(rt = t_i, pars = p_winner_i) # Assumes model$dfun handles single t_i
-      pdf_winner_i[is.na(pdf_winner_i) | !is.finite(pdf_winner_i) | pdf_winner_i < 0] <- 0
-
-      if (n_acc > 1) { # If there are loser accumulators
-        survivor_losers_i <- 1
-        for (k_loser in 2:n_acc) { # Iterate over losers
-          p_loser_k <- p_trial_i_ordered[k_loser, , drop = FALSE]
-          s_loser_k <- (1 - model$pfun(rt = t_i, pars = p_loser_k)) # Assumes model$pfun handles single t_i
-          s_loser_k[is.na(s_loser_k) | !is.finite(s_loser_k) | s_loser_k < 0] <- 0
-          s_loser_k[s_loser_k > 1] <- 1
-          survivor_losers_i <- survivor_losers_i * s_loser_k
-          if (survivor_losers_i == 0) break # Optimization
-        }
-        out_vals[i] <- pdf_winner_i * survivor_losers_i
-      } else { # Only one accumulator
-        out_vals[i] <- pdf_winner_i
-      }
-    }
-    out_vals[is.na(out_vals) | !is.finite(out_vals) | out_vals < 0] <- 0 # Ensure non-negative finite output
-    return(out_vals)
-  }
   
-  # Helper to order parameters: winner first, then losers
-  order_pars_for_winner <- function(p_all_acc, k_idx, unique_trial_id_for_error = NA) {
+  order_pars_for_winner <- function(p_all_acc, k_idx) {
     if (is.na(k_idx) || k_idx < 1 || k_idx > nrow(p_all_acc)) {
-      err_msg <- "Invalid k_idx in order_pars_for_winner"
-      if (!is.na(unique_trial_id_for_error)) {
-        err_msg <- paste0(err_msg, ": ", k_idx, " for unique trial ", unique_trial_id_for_error)
-      } else {
-        err_msg <- paste0(err_msg, ": ", k_idx)
-      }
-      stop(err_msg)
+      # This can happen if R_j_idx is NA (response unknown) and we are iterating for observed RT
+      # For observed RT, winner must be known.
+      stop(paste("Invalid k_idx in order_pars_for_winner: ", k_idx, " for unique trial ", j))
     }
     return(rbind(p_all_acc[k_idx, , drop=FALSE], p_all_acc[-k_idx, , drop=FALSE]))
   }
   
-  # Helper for numerical integration for a k_th winner
-  integrate_for_kth_winner <- function(k_winner_idx, p_all_acc, low, upp, model, unique_trial_id_for_error = NA) {
-    if (low >= upp) return(0) # Integral over zero or negative range is 0
-    if (is.na(k_winner_idx) || k_winner_idx < 1 || k_winner_idx > nrow(p_all_acc) ) return(0) # Invalid winner index
+  integrate_for_kth_winner <- function(k_winner_idx, p_all_acc, low, upp, model) {
+    if (low >= upp) return(0)
+    if (is.na(k_winner_idx) || k_winner_idx < 1 || k_winner_idx > nrow(p_all_acc) ) return(0)
     
-    pars_ordered <- order_pars_for_winner(p_all_acc, k_winner_idx, unique_trial_id_for_error)
+    pars_ordered <- order_pars_for_winner(p_all_acc, k_winner_idx)
     
-    # Test integrand at a point to catch immediate issues (e.g., from bad parameters)
+    # Basic check on integrand before calling integrate
+    # Test point can be tricky if low/upp are Inf.
     test_t <- if (is.finite(low) && is.finite(upp)) (low + upp) / 2 else if (is.finite(low)) low + 1 else if (is.finite(upp)) upp -1 else 1
-    if (test_t < 0 && low == 0) test_t <- 1e-6
-    if (test_t < low && low >= 0) test_t <- low + 1e-6
+    if (test_t < 0 && low == 0) test_t <- 1e-6 # Avoid negative if low is 0
+    if (test_t < low && low >= 0) test_t <- low + 1e-6 # Ensure test_t is within bounds or sensible
     if (test_t > upp && upp >= 0) test_t <- upp - 1e-6
     
-    integrand_val_at_test_t <- f_race_integrand_single(t = test_t, p_trial_this_winner_first = pars_ordered, model = model)
+    integrand_val_at_test_t <- f_race_integrand(t = test_t, p_trial_this_winner_first = pars_ordered, model = model)
     if (is.na(integrand_val_at_test_t) || !is.finite(integrand_val_at_test_t) || integrand_val_at_test_t < 0) {
-      # message(paste("Integrand is bad at test point for trial", unique_trial_id_for_error, "k_winner", k_winner_idx))
+      # If integrand is already bad, no point integrating
+      # This might happen due to bad parameters leading to NA/Inf in dfun/pfun
     }
     
-    # Perform numerical integration
-    res <- suppressWarnings(try(stats::integrate(f_race_integrand_single,
+    res <- suppressWarnings(try(stats::integrate(f_race_integrand,
                                                  lower = low, upper = upp,
                                                  p_trial_this_winner_first = pars_ordered,
                                                  model = model,
                                                  rel.tol = .Machine$double.eps^0.4
     )$value, silent = TRUE))
-    if (inherits(res, "try-error") || is.na(res) || !is.finite(res) || res < 0) return(0) # Handle integration errors
+    if (inherits(res, "try-error") || is.na(res) || !is.finite(res) || res < 0) return(0)
     return(res)
   }
   
-  # Helper to calculate truncation correction factor
-  get_trunc_corr_factor_for_kth_winner <- function(k_winner_idx, p_all_acc, model, unique_trial_id_for_error = NA) {
-    if (!(LT > 0 || UT < Inf)) return(1.0) # No truncation if bounds are 0 to Inf
-    if (is.na(k_winner_idx)) return(NA_real_) # Cannot calculate if winner is unknown
+  get_trunc_corr_factor_for_kth_winner <- function(k_winner_idx, p_all_acc, model) {
+    if (!(LT > 0 || UT < Inf)) return(1.0)
+    if (is.na(k_winner_idx)) return(NA_real_)
     
-    # Integral over [0, Inf) - total probability for this winner without truncation
-    prob_untruncated <- integrate_for_kth_winner(k_winner_idx, p_all_acc, 0, Inf, model, unique_trial_id_for_error)
-    # Integral over [LT, UT] - probability within the truncation interval
-    prob_truncated_interval <- integrate_for_kth_winner(k_winner_idx, p_all_acc, LT, UT, model, unique_trial_id_for_error)
+    prob_untruncated <- integrate_for_kth_winner(k_winner_idx, p_all_acc, 0, Inf, model)
+    prob_truncated_interval <- integrate_for_kth_winner(k_winner_idx, p_all_acc, LT, UT, model)
     
-    if (prob_truncated_interval > 1e-12) { # If probability in truncated interval is non-negligible
+    if (prob_truncated_interval > 1e-12) {
       if(is.na(prob_untruncated) || prob_untruncated < 0) return(NA_real_)
-      return(prob_untruncated / prob_truncated_interval) # Correction factor
-    } else { # Denominator (prob_truncated_interval) is effectively zero
-      if (prob_untruncated > 1e-12) return(NA_real_) # Numerator is positive, but interval prob is zero -> issue
-      return(1.0) # Both are zero, implies no density; effectively factor is 1 (or issue with params)
+      return(prob_untruncated / prob_truncated_interval)
+    } else {
+      if (prob_untruncated > 1e-12) return(NA_real_)
+      return(1.0)
     }
   }
-
-  # --- Main Likelihood Calculation ---
-
-  # Prepare RTs and Response indices for all unique trials
-  unique_trial_first_row_indices <- seq(1, nrow(dadm), by = n_acc)
-  unique_trial_rts <- dadm$rt[unique_trial_first_row_indices]
-  unique_trial_Rs <- as.integer(dadm$R[unique_trial_first_row_indices])
-
-  ll_unique[] <- min_ll # Initialize all log-likelihoods to min_ll
-
-  # Determine parameter validity for each unique trial block
-  ok_params_unique_trial <- sapply(1:n_unique_trials, function(j) {
-    all(ok_params[((j - 1) * n_acc + 1):(j * n_acc)])
-  })
-
-  # Identify indices for finite RT trials suitable for batching
-  # These trials must have valid parameters, finite positive RT within truncation bounds, and a known winner.
-  finite_rt_indices <- which(ok_params_unique_trial &
-                             is.finite(unique_trial_rts) &
-                             unique_trial_rts > 0 &
-                             unique_trial_rts >= LT &
-                             unique_trial_rts <= UT &
-                             !is.na(unique_trial_Rs))
-
-  # Identify other trials: those with bad parameters or not meeting finite_rt_indices criteria
-  all_valid_param_indices <- which(ok_params_unique_trial)
-  other_indices <- setdiff(all_valid_param_indices, finite_rt_indices)
-
-  # --- Batch Processing for Finite RT Trials ---
-  if (length(finite_rt_indices) > 0) {
-    batch_rts_values <- unique_trial_rts[finite_rt_indices]
-    batch_Rs_values <- unique_trial_Rs[finite_rt_indices]
-
-    # Prepare lists of parameter matrices for the batch
-    batch_pars_list_ordered <- vector("list", length(finite_rt_indices)) # For integrand calculation
-    batch_pars_list_unord <- vector("list", length(finite_rt_indices))   # For truncation correction
-
-    for (i in seq_along(finite_rt_indices)) {
-      j_unique <- finite_rt_indices[i] # Original unique trial index
-      current_trial_par_indices_map <- ((j_unique - 1) * n_acc + 1):(j_unique * n_acc)
-
-      pars_j_all_acc <- pars[current_trial_par_indices_map, , drop = FALSE]
-      batch_pars_list_unord[[i]] <- pars_j_all_acc
-      batch_pars_list_ordered[[i]] <- order_pars_for_winner(pars_j_all_acc, batch_Rs_values[i], j_unique)
+  
+  for (j in 1:n_unique_trials) {
+    current_trial_par_indices <- ((j - 1) * n_acc + 1):(j * n_acc)
+    
+    # Make sure parameters are valid
+    if (!all(ok_params[current_trial_par_indices])) {
+      ll_unique[j] <- min_ll
+      next
     }
     
-    if (length(batch_rts_values) > 0) {
-      # Calculate probability densities for the batch
-      prob_densities_batch <- f_race_integrand_R_batch(batch_rts_values, batch_pars_list_ordered, model, n_acc)
-
-      # Calculate truncation correction factors for the batch
-      trunc_cfs_batch <- sapply(seq_along(finite_rt_indices), function(i) {
-          j_unique <- finite_rt_indices[i]
-          get_trunc_corr_factor_for_kth_winner(batch_Rs_values[i], batch_pars_list_unord[[i]], model, j_unique)
-      })
-
-      # Calculate log-likelihood for each trial in the batch
-      for (k in seq_along(batch_rts_values)) {
-        original_j_idx <- finite_rt_indices[k] # Map back to original unique trial index
-        pd_k <- prob_densities_batch[k]
-        tc_k <- trunc_cfs_batch[k]
-
-        if (pd_k > .Machine$double.eps && !is.na(tc_k) && is.finite(tc_k) && tc_k > 0) {
-          final_prob_k <- pd_k * tc_k
-          ll_unique[original_j_idx] <- log(final_prob_k)
-        } else {
-          ll_unique[original_j_idx] <- min_ll
-        }
-        ll_unique[original_j_idx] <- max(min_ll, ll_unique[original_j_idx]) # Ensure not below min_ll
-      }
-    }
-  }
-
-  # --- Iterative Processing for Other Trials ---
-  # (NA/Inf RTs, finite RTs outside truncation, or trials with issues not caught above but still valid params)
-  if (length(other_indices) > 0) {
-    for (j in other_indices) { # j is an original unique trial index with valid parameters
-      # Parameters are already confirmed valid for trials in other_indices (which came from all_valid_param_indices)
-      current_trial_par_indices_map <- ((j - 1) * n_acc + 1):(j * n_acc)
-      pars_condition_j_all_acc <- pars[current_trial_par_indices_map, , drop = FALSE]
-      rt_j <- unique_trial_rts[j]
-      R_j_idx <- unique_trial_Rs[j]
-
-      prob_density_or_mass <- 0 # Initialize probability for the current trial
-
-      # Case 1: Finite RT but strictly outside truncation bounds (LT, UT).
-      # These trials have zero probability density according to the truncated distribution.
-      if (is.finite(rt_j) && rt_j > 0 && (rt_j < LT || rt_j > UT)) {
+    pars_condition_j_all_acc <- pars[current_trial_par_indices, , drop = FALSE]
+    
+    rt_j <- dadm$rt[current_trial_par_indices[1]]
+    R_j_idx <- as.integer(dadm$R[current_trial_par_indices[1]])
+    
+    current_ll_j <- min_ll
+    prob_density_or_mass <- 0
+    
+    # If RT is observed
+    if (is.finite(rt_j) && rt_j > 0) {
+      if (!is.na(R_j_idx)) {
+        if (rt_j < LT || rt_j > UT) {
           prob_density_or_mass <- 0
-      # Case 2: Fast censoring (RT = -Inf). Integral over [LT, LC].
-      } else if (rt_j == -Inf) {
-        if (!is.na(R_j_idx)) { # Winner known
-          prob_density_or_mass <- integrate_for_kth_winner(R_j_idx, pars_condition_j_all_acc, LT, LC, model, j)
-          if (prob_density_or_mass > 0) { # Apply truncation correction if probability is non-zero
-              trunc_cf <- get_trunc_corr_factor_for_kth_winner(R_j_idx, pars_condition_j_all_acc, model, j)
-              if (is.na(trunc_cf) || !is.finite(trunc_cf) || trunc_cf < 0) prob_density_or_mass <- 0
-              else prob_density_or_mass <- prob_density_or_mass * trunc_cf
-          }
-        } else { # Winner unknown: sum over all possible winners
-          current_sum_prob <- 0
-          for (k_winner_loopvar in 1:n_acc) {
-            p_k <- integrate_for_kth_winner(k_winner_loopvar, pars_condition_j_all_acc, LT, LC, model, j)
-            if (p_k > 0) {
-              trunc_cf_k <- get_trunc_corr_factor_for_kth_winner(k_winner_loopvar, pars_condition_j_all_acc, model, j)
-              if (!is.na(trunc_cf_k) && is.finite(trunc_cf_k) && trunc_cf_k >=0) current_sum_prob <- current_sum_prob + (p_k * trunc_cf_k)
-            }
-          }
-          prob_density_or_mass <- current_sum_prob
+        } else {
+          pars_ordered_obs <- order_pars_for_winner(pars_condition_j_all_acc, R_j_idx)
+          prob_density_or_mass <- f_race_integrand(t = rt_j, p_trial_this_winner_first = pars_ordered_obs, model = model)
         }
-      # Case 3: Slow censoring (RT = Inf). Integral over [UC, UT].
-      } else if (rt_j == Inf) {
-        if (!is.na(R_j_idx)) { # Winner known
-          prob_density_or_mass <- integrate_for_kth_winner(R_j_idx, pars_condition_j_all_acc, UC, UT, model, j)
-           if (prob_density_or_mass > 0) { # Apply truncation correction
-              trunc_cf <- get_trunc_corr_factor_for_kth_winner(R_j_idx, pars_condition_j_all_acc, model, j)
-              if (is.na(trunc_cf) || !is.finite(trunc_cf) || trunc_cf < 0) prob_density_or_mass <- 0
-              else prob_density_or_mass <- prob_density_or_mass * trunc_cf
-          }
-        } else { # Winner unknown: sum over all possible winners
-          current_sum_prob <- 0
-          for (k_winner_loopvar in 1:n_acc) {
-            p_k <- integrate_for_kth_winner(k_winner_loopvar, pars_condition_j_all_acc, UC, UT, model, j)
-            if (p_k > 0) {
-              trunc_cf_k <- get_trunc_corr_factor_for_kth_winner(k_winner_loopvar, pars_condition_j_all_acc, model, j)
-              if (!is.na(trunc_cf_k) && is.finite(trunc_cf_k) && trunc_cf_k >=0) current_sum_prob <- current_sum_prob + (p_k * trunc_cf_k)
-            }
-          }
-          prob_density_or_mass <- current_sum_prob
+        if (prob_density_or_mass > 0) {
+          trunc_cf <- get_trunc_corr_factor_for_kth_winner(R_j_idx, pars_condition_j_all_acc, model)
+          if (is.na(trunc_cf) || !is.finite(trunc_cf) || trunc_cf < 0) prob_density_or_mass <- 0
+          else prob_density_or_mass <- prob_density_or_mass * trunc_cf
         }
-      # Case 4: Missing RT (is.na(rt_j)). Sum of integrals over [LT, LC] and [UC, UT].
-      } else if (is.na(rt_j)) {
-        if (!is.na(R_j_idx)) { # Winner known
-          prob_L <- integrate_for_kth_winner(R_j_idx, pars_condition_j_all_acc, LT, LC, model, j)
-          prob_U <- integrate_for_kth_winner(R_j_idx, pars_condition_j_all_acc, UC, UT, model, j)
-          prob_density_or_mass <- prob_L + prob_U
-          if (prob_density_or_mass > 0) { # Apply truncation correction
-              trunc_cf <- get_trunc_corr_factor_for_kth_winner(R_j_idx, pars_condition_j_all_acc, model, j)
-              if (is.na(trunc_cf) || !is.finite(trunc_cf) || trunc_cf < 0) prob_density_or_mass <- 0
-              else prob_density_or_mass <- prob_density_or_mass * trunc_cf
-          }
-        } else { # Winner unknown: sum over all possible winners
-          current_sum_prob <- 0
-          for (k_winner_loopvar in 1:n_acc) {
-            prob_L_k <- integrate_for_kth_winner(k_winner_loopvar, pars_condition_j_all_acc, LT, LC, model, j)
-            prob_U_k <- integrate_for_kth_winner(k_winner_loopvar, pars_condition_j_all_acc, UC, UT, model, j)
-            p_k_sum <- prob_L_k + prob_U_k
-            if (p_k_sum > 0) {
-               trunc_cf_k <- get_trunc_corr_factor_for_kth_winner(k_winner_loopvar, pars_condition_j_all_acc, model, j)
-               if (!is.na(trunc_cf_k) && is.finite(trunc_cf_k) && trunc_cf_k >=0) current_sum_prob <- current_sum_prob + (p_k_sum * trunc_cf_k)
-            }
-          }
-          prob_density_or_mass <- current_sum_prob
+      } else { prob_density_or_mass <- 0 } # Observed RT but R_j_idx is NA: should not happen
+      
+    } else if (rt_j == -Inf) { # fast censoring
+      if (!is.na(R_j_idx)) {
+        prob_density_or_mass <- integrate_for_kth_winner(R_j_idx, pars_condition_j_all_acc, LT, LC, model)
+        if (prob_density_or_mass > 0) {
+          trunc_cf <- get_trunc_corr_factor_for_kth_winner(R_j_idx, pars_condition_j_all_acc, model)
+          if (is.na(trunc_cf) || !is.finite(trunc_cf) || trunc_cf < 0) prob_density_or_mass <- 0
+          else prob_density_or_mass <- prob_density_or_mass * trunc_cf
         }
-      }
-      # All other conditions (e.g. rt_j is 0 or negative finite) result in prob_density_or_mass = 0.
-
-      # Convert final probability to log-likelihood
-      prob_density_or_mass <- max(0, prob_density_or_mass, na.rm = TRUE) # Ensure non-negative
-      if (prob_density_or_mass > .Machine$double.eps) {
-        ll_unique[j] <- log(prob_density_or_mass)
       } else {
-        ll_unique[j] <- min_ll
+        current_sum_prob <- 0
+        for (k_winner_loopvar in 1:n_acc) {
+          p_k <- integrate_for_kth_winner(k_winner_loopvar, pars_condition_j_all_acc, LT, LC, model)
+          if (p_k > 0) {
+            trunc_cf_k <- get_trunc_corr_factor_for_kth_winner(k_winner_loopvar, pars_condition_j_all_acc, model)
+            if (!is.na(trunc_cf_k) && is.finite(trunc_cf_k) && trunc_cf_k >=0) current_sum_prob <- current_sum_prob + (p_k * trunc_cf_k)
+          }
+        }
+        prob_density_or_mass <- current_sum_prob
       }
-      ll_unique[j] <- max(min_ll, ll_unique[j]) # Ensure not less than min_ll
+    } else if (rt_j == Inf) { # Slow censoring
+      if (!is.na(R_j_idx)) {
+        prob_density_or_mass <- integrate_for_kth_winner(R_j_idx, pars_condition_j_all_acc, UC, UT, model)
+        if (prob_density_or_mass > 0) {
+          trunc_cf <- get_trunc_corr_factor_for_kth_winner(R_j_idx, pars_condition_j_all_acc, model)
+          if (is.na(trunc_cf) || !is.finite(trunc_cf) || trunc_cf < 0) prob_density_or_mass <- 0
+          else prob_density_or_mass <- prob_density_or_mass * trunc_cf
+        }
+      } else {
+        current_sum_prob <- 0
+        for (k_winner_loopvar in 1:n_acc) {
+          p_k <- integrate_for_kth_winner(k_winner_loopvar, pars_condition_j_all_acc, UC, UT, model)
+          if (p_k > 0) {
+            trunc_cf_k <- get_trunc_corr_factor_for_kth_winner(k_winner_loopvar, pars_condition_j_all_acc, model)
+            if (!is.na(trunc_cf_k) && is.finite(trunc_cf_k) && trunc_cf_k >=0) current_sum_prob <- current_sum_prob + (p_k * trunc_cf_k)
+          }
+        }
+        prob_density_or_mass <- current_sum_prob
+      }
+    } else if (is.na(rt_j)) {
+      if (!is.na(R_j_idx)) {
+        prob_L <- integrate_for_kth_winner(R_j_idx, pars_condition_j_all_acc, LT, LC, model)
+        prob_U <- integrate_for_kth_winner(R_j_idx, pars_condition_j_all_acc, UC, UT, model)
+        prob_density_or_mass <- prob_L + prob_U
+        if (prob_density_or_mass > 0) {
+          trunc_cf <- get_trunc_corr_factor_for_kth_winner(R_j_idx, pars_condition_j_all_acc, model)
+          if (is.na(trunc_cf) || !is.finite(trunc_cf) || trunc_cf < 0) prob_density_or_mass <- 0
+          else prob_density_or_mass <- prob_density_or_mass * trunc_cf
+        }
+      } else {
+        current_sum_prob <- 0
+        for (k_winner_loopvar in 1:n_acc) {
+          prob_L_k <- integrate_for_kth_winner(k_winner_loopvar, pars_condition_j_all_acc, LT, LC, model)
+          prob_U_k <- integrate_for_kth_winner(k_winner_loopvar, pars_condition_j_all_acc, UC, UT, model)
+          p_k_sum <- prob_L_k + prob_U_k
+          if (p_k_sum > 0) {
+            trunc_cf_k <- get_trunc_corr_factor_for_kth_winner(k_winner_loopvar, pars_condition_j_all_acc, model)
+            if (!is.na(trunc_cf_k) && is.finite(trunc_cf_k) && trunc_cf_k >=0) current_sum_prob <- current_sum_prob + (p_k_sum * trunc_cf_k)
+          }
+        }
+        prob_density_or_mass <- current_sum_prob
+      }
     }
+    
+    prob_density_or_mass <- max(0, prob_density_or_mass)
+    
+    if (prob_density_or_mass > .Machine$double.eps) {
+      current_ll_j <- log(prob_density_or_mass)
+    } else {
+      current_ll_j <- min_ll
+    }
+    
+    ll_unique[j] <- max(min_ll, current_ll_j)
   }
-
-  # Final summation of log-likelihoods
-  if (!is.null(dadm$N) && length(dadm$N) == n_unique_trials) { # If trial counts (N) are provided
+  
+  if (!is.null(dadm$N) && length(dadm$N) == n_unique_trials) {
     total_ll <- sum(ll_unique * dadm$N)
-  } else if (!is.null(attr(dadm, "expand"))) { # If an expansion vector is provided
+  } else if (!is.null(attr(dadm, "expand"))) {
     total_ll <- sum(ll_unique[attr(dadm, "expand")])
-  } else { # Default: sum unique likelihoods (each counted once)
+  } else {
     total_ll <- sum(ll_unique)
   }
-
+  
   return(total_ll)
 }
+
 
 
 log_likelihood_ddm <- function(pars,dadm,model,min_ll=log(1e-10))

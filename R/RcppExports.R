@@ -109,10 +109,6 @@ calc_ll <- function(p_matrix, data, constants, designs, type_rcpp, bounds, trans
     .Call(`_EMC2_calc_ll`, p_matrix, data, constants, designs, type_rcpp, bounds, transforms, pretransforms, p_types, min_ll, trend)
 }
 
-f_race_integrand_batch_vec_cpp <- function(rts_batch, pars_all_trials_ordered, model_dfun, model_pfun, n_acc, model_specific_context) {
-    .Call(`_EMC2_f_race_integrand_batch_vec_cpp`, rts_batch, pars_all_trials_ordered, model_dfun, model_pfun, n_acc, model_specific_context)
-}
-
 test_c_loglik_cens_trunc_wrapper_R <- function(pars, dadm, model_type_str, min_ll, ok_params, n_acc, R_model_obj_list) {
     .Call(`_EMC2_test_c_loglik_cens_trunc_wrapper_R`, pars, dadm, model_type_str, min_ll, ok_params, n_acc, R_model_obj_list)
 }

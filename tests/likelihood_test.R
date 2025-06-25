@@ -2,8 +2,7 @@
 devtools::load_all()
 RNGkind("L'Ecuyer-CMRG")
 set.seed(123)
-matchfun <- function(d) as.numeric(d$S)==as.numeric(d$lR) |
-  (d$lR=="pm" & as.numeric(d$S)>2)
+matchfun <- function(d) as.numeric(d$S)==as.numeric(d$lR)
 designLBA <- design(
   factors=list(subjects=1,S=c("left","right")),
   Rlevels=c("left","right"),
