@@ -660,6 +660,10 @@ make_emc <- function(data,design,model=NULL,
                           prior_list = NULL, group_design = NULL,
                           par_groups=NULL, ...){
   # arguments for future compatibility
+  LT <- attr(data,"LT"); if (is.null(LT)) LT <- 0
+  UT <- attr(data,"UT"); if (is.null(UT)) UT <- Inf
+  LC <- attr(data,"LC"); if (is.null(LC)) LC <- 0
+  UC <- attr(data,"UC"); if (is.null(UC)) UC <- Inf
   n_factors <- NULL
   formula <- NULL
   Lambda_mat <- NULL

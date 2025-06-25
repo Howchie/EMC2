@@ -2,28 +2,32 @@
 devtools::load_all()
 RNGkind("L'Ecuyer-CMRG")
 set.seed(123)
-matchfun <- function(d) as.numeric(d$S)==as.numeric(d$lR)
+matchfun <- function(d) as.numeric(d$S)==as.numeric(d$lR) |
+  (d$lR=="pm" & as.numeric(d$S)>2)
 designLBA <- design(
-  factors=list(subjects=1,S=c("left","right"),RACE=2),
-  Rlevels=c("left","right"),
+  factors=list(subjects=1,S=c("left","right","leftpm","rightpm"),RACE=2:3),
+  Rlevels=c("left","right","pm"),
   matchfun=matchfun,
-  model=LBA,constants=c(sv=1),
-  formula=list(v~1,B~1,t0~1,A~1,sv~1),
+  model=LBA,constants=c(v_RACE3=0,sv=log(1)),
+  formula=list(v~RACE*lM,B~1,t0~1,A~1,sv~1),
 )
 designMLBA <- design(
-  factors=list(subjects=1,S=c("left","right"),RACE=2),
-  Rlevels=c("left","right"),
+  factors=list(subjects=1,S=c("left","right","leftpm","rightpm"),RACE=2:3),
+  Rlevels=c("left","right","pm"),
   matchfun=matchfun,
-  model=Mlba,constants=c(sv=1),
-  formula=list(v~1,B~1,t0~1,A~1,sv~1),
+  model=Mlba,constants=c(v_RACE3=0,sv=log(1)),
+  formula=list(v~RACE*lM,B~1,t0~1,A~1,sv~1),
 )
 p_vector <- sampled_pars(designLBA,doMap = FALSE)
-p_vector[1:length(p_vector)] <- c(1, log(2), log(.2),log(1))
+p_vector[1:length(p_vector)] <- c(log(2), log(4), log(1), log(2), log(0.2),log(.5))
 
 # Make square data so can remove pm in RACE = 2
 template <- make_data(p_vector,designLBA,n_trials=1000)
 attr(template,"UC")=2.5
+template <- template[!(template$RACE==2 & (template$S %in% c("leftpm","rightpm"))),]
 dat <- make_data(p_vector,designLBA,data=template)
+Cfun <- function(d) as.numeric(d$S)==as.numeric(d$R) | (d$R=="pm" & as.numeric(d$S)>2)
+tapply(Cfun(dat),dat[,c("S","RACE")],mean)
 # dadm <- EMC2:::design_model(dat,designLBA,compress=FALSE)
 
 
@@ -31,10 +35,9 @@ dat <- make_data(p_vector,designLBA,data=template)
 dadmLBA <- EMC2:::design_model(dat,designLBA)
 dadmMLBA <- EMC2:::design_model(dat,designMLBA)
 pars <- EMC2:::get_pars_matrix(p_vector, dadmLBA, model = attr(dadmLBA, "model")())
-#EMC2:::log_likelihood_race_cens_trunc(pars,dadm,attr(dadm, "model")())
 
 
-lfun <- function(i, x, p_vector, pname, dadm, use_c, censor=FALSE) {
+lfun <- function(i, x, p_vector, pname, dadm, use_c) {
   p_vector[pname] <- x[i]
   if (use_c) {
     p_matrix <- matrix(p_vector,nrow=1)
@@ -47,25 +50,16 @@ lfun <- function(i, x, p_vector, pname, dadm, use_c, censor=FALSE) {
     }
     constants <- attr(dadm,"constants")
     if (is.null(constants)) constants <- NA
-    if(censor) {
       EMC2:::calc_ll(p_matrix, dadm, constants,designs,model$c_name,
                      model$bound,model$transform,model$pre_transform,p_types,log(1e-10),model$trend)
-    } else {
-      EMC2:::calc_ll(p_matrix, dadm, constants,designs,model$c_name,
-                     model$bound,model$transform,model$pre_transform,p_types,log(1e-10),model$trend)
-    }
   } else {
-    if(censor) {
       EMC2:::calc_ll_R(p_vector, attr(dadm, "model")(), dadm)
-    } else {
-      EMC2:::calc_ll_R(p_vector, attr(dadm, "model")(), dadm)
-    }
   }
 }
 
 
 profile_plot_test <- function (data, design, p_vector, range = 0.5, layout = NA, p_min = NULL,
-                               p_max = NULL, use_par = NULL, n_point = 100, n_cores = 1,use_c = FALSE,censor=FALSE,
+                               p_max = NULL, use_par = NULL, n_point = 100, n_cores = 1,use_c = FALSE,
                                round = 3, true_args = list(), ...)
 {
   oldpar <- par(no.readonly = TRUE)
@@ -115,7 +109,6 @@ profile_plot_test <- function (data, design, p_vector, range = 0.5, layout = NA,
       x <- c(x, cur_par)
       x <- unique(sort(x))
       ll <- unlist(mclapply(1:length(x), lfun, dadm = dadm, use_c = use_c,
-                            censor=censor,
                             x = x, p_vector = p_vector, pname = cur_name,
                             mc.cores = n_cores))
       do.call(plot, c(list(x, ll), EMC2:::fix_dots_plot(EMC2:::add_defaults(dots,
@@ -130,10 +123,10 @@ profile_plot_test <- function (data, design, p_vector, range = 0.5, layout = NA,
 }
 
 library(parallel)
-profile_plot_test(dat,designLBA,p_vector,n_cores=1,layout=c(2,2), censor=FALSE) # good
-profile_plot_test(dat,designMLBA,p_vector,n_cores=1,layout=c(2,2), censor=TRUE) # good
-profile_plot_test(dat,designLBA,p_vector,n_cores=1,layout=c(2,2),use_c=TRUE, censor=FALSE) # ?
-profile_plot_test(dat,designMLBA,p_vector,n_cores=1,layout=c(2,2),use_c=TRUE, censor=TRUE) # ?
+profile_plot_test(dat,designLBA,p_vector,n_cores=1,layout=c(2,3)) # good
+profile_plot_test(dat,designMLBA,p_vector,n_cores=1,layout=c(2,3)) # good
+profile_plot_test(dat,designLBA,p_vector,n_cores=1,layout=c(2,3),use_c=TRUE) # ?
+profile_plot_test(dat,designMLBA,p_vector,n_cores=1,layout=c(2,3),use_c=TRUE) # ?
 
 
 # emc <- make_emc(dat,designLBA,type="single")

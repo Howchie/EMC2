@@ -66,8 +66,10 @@ log_likelihood_race_cens_trunc <- function(pars, dadm, model, min_ll = log(1e-10
       for (i in 2:nrow(p_trial_this_winner_first)) {
         p_loser_i <- p_trial_this_winner_first[i, , drop = FALSE]
         s_loser_i <- (1 - model$pfun(rt = t, pars = p_loser_i))
-        s_loser_i[is.na(s_loser_i) | !is.finite(s_loser_i) | s_loser_i < 0] <- 0
         s_loser_i[s_loser_i > 1] <- 1
+        if(is.na(s_loser_i) | !is.finite(s_loser_i) | s_loser_i < 0){
+          next # don't set ll to 0 (mucks up RACE)
+        }
         survivor_losers <- survivor_losers * s_loser_i
       }
       out_val <- pdf_winner * survivor_losers

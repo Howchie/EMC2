@@ -664,12 +664,12 @@ Rcpp::NumericMatrix order_pars_for_winner_cpp(
     const Rcpp::NumericMatrix& p_all_acc,
     int k_idx, // 1-based index
     int n_acc) {
-
     if (k_idx < 1 || k_idx > n_acc) {
         Rcpp::stop("order_pars_for_winner_cpp: k_idx out of bounds.");
     }
 
     Rcpp::NumericMatrix ordered_pars(n_acc, p_all_acc.ncol());
+	std::fill(ordered_pars.begin(), ordered_pars.end(), NA_REAL);
     ordered_pars.row(0) = p_all_acc.row(k_idx - 1);
 
     int current_row = 1;
@@ -791,6 +791,7 @@ double c_log_likelihood_race_cens_trunc(
     Rcpp::NumericVector rts_dadm = dadm["rt"];
     Rcpp::IntegerVector R_idxs_dadm = dadm["R"];
     Rcpp::IntegerVector lR_dadm = dadm["lR"];
+	Rcpp::LogicalVector winner = dadm["winner"];
 	// If a RACE column exists, set parameters of accumulators not present on a
     // given trial to NA so the density functions return zero for them. This
     // mirrors logic from the old c_log_likelihood_race implementation.
@@ -799,7 +800,6 @@ double c_log_likelihood_race_cens_trunc(
 		Rcpp::IntegerVector race_idx = dadm["RACE"];
 		// character levels (“2”, “3”, …)
 		Rcpp::CharacterVector race_levels = race_idx.attr("levels");
-		const int n_col = pars.ncol();
 
 		for (int row = 0; row < pars.nrow(); ++row) {
 
@@ -811,8 +811,7 @@ double c_log_likelihood_race_cens_trunc(
 			// lR_dadm is the (1-based) index of *this* accumulator on the trial
 			if (lR_dadm[row] > n_acc_this_trial) {
 				// accumulator not present → blank its parameter row
-				Rcpp::Rcout << "RACE triggered";
-				std::fill_n( pars.begin() + row * n_col, n_col, NA_REAL );
+				std::fill(pars.row(row).begin(), pars.row(row).end(), NA_REAL);
 			}
 		}
 	}
@@ -824,7 +823,7 @@ double c_log_likelihood_race_cens_trunc(
 
     int n_unique_trials = n_total_dadm_rows / n_acc;
     Rcpp::NumericVector ll_unique(n_unique_trials);
-    ll_unique.fill(min_ll); // Initialize all to min_ll
+    //ll_unique.fill(min_ll); // Initialize all to min_ll
 
     // Parameter matrix and validity vector checks
     if (pars.nrow() != n_total_dadm_rows) {
@@ -851,7 +850,7 @@ double c_log_likelihood_race_cens_trunc(
             }
         }
         if (!params_ok_for_this_unique_trial) {
-            // ll_unique[j] is already min_ll by initialization, so just continue
+            ll_unique[j]=min_ll;
             continue;
         }
 
