@@ -82,7 +82,7 @@ NumericVector dlba_c(NumericVector rts, NumericMatrix pars, LogicalVector idx, d
   int k = 0;
   for(int i = 0; i < rts.length(); i++){
     if(idx[i]){
-      if(NumericVector::is_na(pars(i,0))){
+      if(NumericVector::is_na(pars(i,0))){ // for RACE
         out[k] = 0;
       } else if((rts[i] - pars(i,4) > 0) && (is_ok[i])){
         // Pass use_posdrift to dlba_norm
@@ -103,7 +103,7 @@ NumericVector plba_c(NumericVector rts, NumericMatrix pars, LogicalVector idx, d
   int k = 0;
   for(int i = 0; i < rts.length(); i++){
     if(idx[i]){
-      if(NumericVector::is_na(pars(i,0))){
+      if(NumericVector::is_na(pars(i,0))){ // for RACE
         out[k] = 0;
       } else if((rts[i] - pars(i,4) > 0) && (is_ok[i])){
         // Pass use_posdrift to plba_norm

@@ -12,8 +12,8 @@ NumericVector plnr_c(NumericVector rts, NumericMatrix pars, LogicalVector idx, d
   NumericVector out(n);
   int k = 0;
   for(int i = 0; i < rts.length(); i++){
-    if(idx[i] == TRUE){
-      if(NumericVector::is_na(pars(i,0))){
+    if(idx[i]){
+      if(NumericVector::is_na(pars(i,0))){ // for RACE
         out[k] = 0; // This is a bit tricky, but helps with assigning missing values a zero (instead of min_ll value)
         // which is important for RACE
       } else if((rts[i] - pars(i,2) > 0) && (is_ok[i] == TRUE)){
@@ -33,8 +33,8 @@ NumericVector dlnr_c(NumericVector rts, NumericMatrix pars, LogicalVector idx, d
   NumericVector out(n);
   int k = 0;
   for(int i = 0; i < rts.length(); i++){
-    if(idx[i] == TRUE){
-      if(NumericVector::is_na(pars(i,0))){
+    if(idx[i]){
+      if(NumericVector::is_na(pars(i,0))){ // for RACE
         out[k] = 0; // This is a bit tricky, but helps with assigning missing values a zero (instead of min_ll value)
         // which is important for RACE
       } else if((rts[i] - pars(i,2) > 0) && (is_ok[i] == TRUE)){

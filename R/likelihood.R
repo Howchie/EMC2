@@ -24,17 +24,17 @@ log_likelihood_race <- function(pars,dadm,model,min_ll=log(1e-10))
                                                     pars=pars[dadm$winner,]))
   n_acc <- length(levels(dadm$R))
   if (n_acc>1) lds[!dadm$winner] <- log(1-model$pfun(rt=dadm$rt[!dadm$winner],pars=pars[!dadm$winner,]))
-  lds[is.na(lds) | !ok] <- min_ll
+  lds[!ok] <- min_ll
   if (n_acc>1) {
     ll <- lds[dadm$winner]
     if (n_acc==2) {
-      ll <- ll + lds[!dadm$winner]
+      ll <- rowSums(cbind(ll, lds[!dadm$winner]), na.rm=TRUE)
     } else {
-      ll <- ll + apply(matrix(lds[!dadm$winner],nrow=n_acc-1),2,sum)
+      ll <- ll + apply(matrix(lds[!dadm$winner],nrow=n_acc-1),2,function(x){sum(x,na.rm = TRUE)})
     }
     ll[is.na(ll)] <- min_ll
-    return(sum(pmax(min_ll,ll[attr(dadm,"expand")])))
-  } else return(sum(pmax(min_ll,lds[attr(dadm,"expand")])))
+    return(sum(pmax(min_ll,ll[attr(dadm,"expand")]),na.rm = TRUE))
+  } else return(sum(pmax(min_ll,lds[attr(dadm,"expand")]),na.rm = TRUE))
 }
 
 
@@ -449,3 +449,5 @@ log_likelihood_redundant_target_race <- function(pars, dadm, model, min_ll = log
 
   return(sum(final_ll_values))
 }
+
+

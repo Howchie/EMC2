@@ -7,7 +7,7 @@
 #include "model_MRI.h"
 #include "trend.h"
 #include "model_race_cens_trunc.h"
-
+#include <string>
 // ---- START: Context Structs and Static Adapters for Model Functions ----
 
 // Context struct for LBA & RDM (can be shared if context is similar)
@@ -24,7 +24,7 @@ static Rcpp::NumericVector lba_dfun_adapter(Rcpp::NumericVector rt,
                                             bool log_p,
                                             void* context) {
     ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context);
-    Rcpp::LogicalVector idx(pars.nrow(), true); // LBA default
+    Rcpp::LogicalVector idx(pars.nrow(), true); 
     // Pass use_posdrift from context to dlba_c
     return dlba_c(rt, pars, idx, ctx->min_lik_for_pdf, is_ok, ctx->use_posdrift);
 }
@@ -36,7 +36,7 @@ static Rcpp::NumericVector lba_pfun_adapter(Rcpp::NumericVector rt,
                                             bool log_p,
                                             void* context) {
     ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context);
-    Rcpp::LogicalVector idx(pars.nrow(), true); // LBA default
+    Rcpp::LogicalVector idx(pars.nrow(), true); 
     // Pass use_posdrift from context to plba_c
     return plba_c(rt, pars, idx, ctx->min_lik_for_pdf, is_ok, ctx->use_posdrift);
 }
@@ -48,7 +48,7 @@ static Rcpp::NumericVector rdm_dfun_adapter(Rcpp::NumericVector rt,
                                             bool log_p,
                                             void* context) {
     ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context);
-    Rcpp::LogicalVector idx(pars.nrow(), true); // RDM default
+    Rcpp::LogicalVector idx(pars.nrow(), true); 
     return drdm_c(rt, pars, idx, ctx->min_lik_for_pdf, is_ok);
 }
 
@@ -59,7 +59,7 @@ static Rcpp::NumericVector rdm_pfun_adapter(Rcpp::NumericVector rt,
                                             bool log_p,
                                             void* context) {
     ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context);
-    Rcpp::LogicalVector idx(pars.nrow(), true); // RDM default
+    Rcpp::LogicalVector idx(pars.nrow(), true); 
     return prdm_c(rt, pars, idx, ctx->min_lik_for_pdf, is_ok);
 }
 
@@ -70,8 +70,8 @@ static Rcpp::NumericVector lnr_dfun_adapter(Rcpp::NumericVector rt,
                                             bool log_p,
                                             void* context) {
     ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context); // Reusing same context struct
-    Rcpp::LogicalVector posdrift_ignored; // LNR's dlnr_c doesn't use posdrift
-    return dlnr_c(rt, pars, posdrift_ignored, ctx->min_lik_for_pdf, is_ok);
+    Rcpp::LogicalVector idx(pars.nrow(), true);
+    return dlnr_c(rt, pars, idx, ctx->min_lik_for_pdf, is_ok);
 }
 
 // Static adapter for LNR pfun
@@ -81,8 +81,8 @@ static Rcpp::NumericVector lnr_pfun_adapter(Rcpp::NumericVector rt,
                                             bool log_p,
                                             void* context) {
     ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context); // Reusing same context struct
-    Rcpp::LogicalVector posdrift_ignored;
-    return plnr_c(rt, pars, posdrift_ignored, ctx->min_lik_for_pdf, is_ok);
+    Rcpp::LogicalVector idx(pars.nrow(), true);
+    return plnr_c(rt, pars, idx, ctx->min_lik_for_pdf, is_ok);
 }
 
 // ---- END: Context Structs and Static Adapters ----
@@ -790,7 +790,32 @@ double c_log_likelihood_race_cens_trunc(
 
     Rcpp::NumericVector rts_dadm = dadm["rt"];
     Rcpp::IntegerVector R_idxs_dadm = dadm["R"];
+    Rcpp::IntegerVector lR_dadm = dadm["lR"];
+	// If a RACE column exists, set parameters of accumulators not present on a
+    // given trial to NA so the density functions return zero for them. This
+    // mirrors logic from the old c_log_likelihood_race implementation.
+	if (dadm.containsElementNamed("RACE")) {
+		// factor codes (1-based) for each row
+		Rcpp::IntegerVector race_idx = dadm["RACE"];
+		// character levels (“2”, “3”, …)
+		Rcpp::CharacterVector race_levels = race_idx.attr("levels");
+		const int n_col = pars.ncol();
 
+		for (int row = 0; row < pars.nrow(); ++row) {
+
+			// how many accumulators for this trial
+			int n_acc_this_trial = std::stoi(
+				Rcpp::as<std::string>(race_levels[ race_idx[row] - 1 ])
+			);
+
+			// lR_dadm is the (1-based) index of *this* accumulator on the trial
+			if (lR_dadm[row] > n_acc_this_trial) {
+				// accumulator not present → blank its parameter row
+				Rcpp::Rcout << "RACE triggered";
+				std::fill_n( pars.begin() + row * n_col, n_col, NA_REAL );
+			}
+		}
+	}
     int n_total_dadm_rows = dadm.nrows();
     if (n_total_dadm_rows == 0) return 0.0; // No data, no likelihood
 

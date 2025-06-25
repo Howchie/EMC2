@@ -4,14 +4,14 @@ RNGkind("L'Ecuyer-CMRG")
 set.seed(123)
 matchfun <- function(d) as.numeric(d$S)==as.numeric(d$lR)
 designLBA <- design(
-  factors=list(subjects=1,S=c("left","right")),
+  factors=list(subjects=1,S=c("left","right"),RACE=2),
   Rlevels=c("left","right"),
   matchfun=matchfun,
   model=LBA,constants=c(sv=1),
   formula=list(v~1,B~1,t0~1,A~1,sv~1),
 )
 designMLBA <- design(
-  factors=list(subjects=1,S=c("left","right")),
+  factors=list(subjects=1,S=c("left","right"),RACE=2),
   Rlevels=c("left","right"),
   matchfun=matchfun,
   model=Mlba,constants=c(sv=1),
@@ -140,3 +140,8 @@ profile_plot_test(dat,designMLBA,p_vector,n_cores=1,layout=c(2,2),use_c=TRUE, ce
 # emc <- fit(emc,cores_per_chain = 3)
 # recovery(emc,p_vector)
 
+data=dat
+design=designLBA
+dadm <- EMC2:::design_model(data, design, verbose = FALSE)
+model=attr(dadm, "model")()
+pars <- get_pars_matrix(p_vector, dadm, model)
