@@ -31,6 +31,38 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// dWald_tnorm
+NumericVector dWald_tnorm(NumericVector t, NumericVector mu, NumericVector sd2, NumericVector B, NumericVector A, NumericVector t0);
+RcppExport SEXP _EMC2_dWald_tnorm(SEXP tSEXP, SEXP muSEXP, SEXP sd2SEXP, SEXP BSEXP, SEXP ASEXP, SEXP t0SEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type t(tSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type mu(muSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type sd2(sd2SEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type B(BSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type A(ASEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type t0(t0SEXP);
+    rcpp_result_gen = Rcpp::wrap(dWald_tnorm(t, mu, sd2, B, A, t0));
+    return rcpp_result_gen;
+END_RCPP
+}
+// pWald_tnorm
+NumericVector pWald_tnorm(NumericVector t, NumericVector mu, NumericVector sd2, NumericVector B, NumericVector A, NumericVector t0);
+RcppExport SEXP _EMC2_pWald_tnorm(SEXP tSEXP, SEXP muSEXP, SEXP sd2SEXP, SEXP BSEXP, SEXP ASEXP, SEXP t0SEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type t(tSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type mu(muSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type sd2(sd2SEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type B(BSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type A(ASEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type t0(t0SEXP);
+    rcpp_result_gen = Rcpp::wrap(pWald_tnorm(t, mu, sd2, B, A, t0));
+    return rcpp_result_gen;
+END_RCPP
+}
 // calculate_subject_means
 arma::mat calculate_subject_means(const Rcpp::List& group_designs, const arma::colvec& params, const int n_subjects, const int n_pars);
 RcppExport SEXP _EMC2_calculate_subject_means(SEXP group_designsSEXP, SEXP paramsSEXP, SEXP n_subjectsSEXP, SEXP n_parsSEXP) {
@@ -495,6 +527,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_plba", (DL_FUNC) &_EMC2_plba, 6},
     {"_EMC2_dWald", (DL_FUNC) &_EMC2_dWald, 5},
     {"_EMC2_pWald", (DL_FUNC) &_EMC2_pWald, 5},
+    {"_EMC2_dWald_tnorm", (DL_FUNC) &_EMC2_dWald_tnorm, 6},
+    {"_EMC2_pWald_tnorm", (DL_FUNC) &_EMC2_pWald_tnorm, 6},
     {"_EMC2_pEXG", (DL_FUNC) &_EMC2_pEXG, 6},
     {"_EMC2_dEXG", (DL_FUNC) &_EMC2_dEXG, 5},
     {"_EMC2_dEXGrace", (DL_FUNC) &_EMC2_dEXGrace, 4},

@@ -109,6 +109,67 @@ double digt(double t, double k = 1., double l = 1., double a = .1, double thresh
   return pdf;
 }
 
+// Wald density with drift sampled from a truncated normal distribution
+double digt_tnorm(double t, double k = 1., double mu = 1., double sd2 = 1.,
+                  double a = .1, double threshold = 1e-10){
+  if (t <= 0.){
+    return 0.;
+  }
+  // ignore start point variability if smaller than threshold
+  if (a < threshold){
+    double lambda = 1.;
+    double denom = R::pnorm(mu / std::sqrt(sd2), 0., 1., true, false);
+    if (denom == 0.) return 0.;
+    double num = k * std::sqrt(lambda / (2. * M_PI * std::pow(t,3) * (lambda * t * sd2 + 1.)));
+    double exp_term = std::exp(- (lambda * std::pow(mu * t - k,2)) /
+                          (2. * t * (lambda * t * sd2 + 1.)));
+    double pn = R::pnorm((lambda * k * sd2 + mu) /
+                         std::sqrt(lambda * t * sd2 * sd2 + sd2), 0., 1., true, false);
+    return num / denom * exp_term * pn;
+  } else {
+    // crude numerical integration over start point variability
+    int steps = 10;
+    double h = (2. * a) / steps;
+    double sum = 0.;
+    for(int i = 0; i <= steps; i++){
+      double alpha = k - a + h * i;
+      double lambda = 1.;
+      double denom = R::pnorm(mu / std::sqrt(sd2), 0., 1., true, false);
+      if (denom == 0.) continue;
+      double num = alpha * std::sqrt(lambda / (2. * M_PI * std::pow(t,3) * (lambda * t * sd2 + 1.)));
+      double exp_term = std::exp(- (lambda * std::pow(mu * t - alpha,2)) /
+                            (2. * t * (lambda * t * sd2 + 1.)));
+      double pn = R::pnorm((lambda * alpha * sd2 + mu) /
+                           std::sqrt(lambda * t * sd2 * sd2 + sd2), 0., 1., true, false);
+      double weight = (i==0 || i==steps) ? 0.5 : 1.0;
+      sum += weight * (num / denom * exp_term * pn);
+    }
+  return h * sum / (2. * a);
+  }
+}
+
+// numerical cdf based on digt_tnorm
+double pigt_tnorm(double t, double k = 1., double mu = 1., double sd2 = 1.,
+                  double a = .1, int steps = 100){
+  if (t <= 0.) return 0.;
+  double h = t / steps;
+  double sum = 0.;
+  for(int i = 0; i <= steps; i++){
+    double ti = h * i;
+    double weight = (i==0 || i==steps) ? 0.5 : 1.0;
+    sum += weight * digt_tnorm(ti, k, mu, sd2, a);
+  }
+  return h * sum;
+}
+
+// prototypes for truncated normal drift wrappers
+NumericVector dWald_tnorm(NumericVector t, NumericVector mu,
+                          NumericVector sd2, NumericVector B,
+                          NumericVector A, NumericVector t0);
+NumericVector pWald_tnorm(NumericVector t, NumericVector mu,
+                          NumericVector sd2, NumericVector B,
+                          NumericVector A, NumericVector t0);
+
 
 NumericVector drdm_c(NumericVector rts, NumericMatrix pars, LogicalVector idx, double min_ll, LogicalVector is_ok){
   //v = 0, B = 1, A = 2, t0 = 3, s = 4
