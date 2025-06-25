@@ -19,6 +19,7 @@ design(
   custom_p_vector = NULL,
   transform = NULL,
   bound = NULL,
+  fixed_accumulator_roles = NULL,
   ...
 )
 }
