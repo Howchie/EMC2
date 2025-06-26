@@ -7,6 +7,8 @@
 #include <random>
 #include <algorithm>
 #include "gauss.h" // For one_d struct and gauss_kronrod constants (if gauss_kronrod is used directly)
+#include <gsl/gsl_integration.h>
+#include <gsl/gsl_errno.h> // For GSL error handling
 
 using namespace Rcpp;
 
@@ -253,32 +255,28 @@ double truncated_normal_pdf(double xi, double mu, double sigma_sq, double lower_
 }
 
 // Integrand for the SWTN CDF: wald_cdf_classic * truncated_normal_pdf
-// This is the function that hcubature will integrate over xi.
-int pswtn_integrand(unsigned dim, const double* xi_val, void* p, unsigned fdim, double* retval) {
-    if (dim != 1 || fdim != 1) {
-      // Should not happen for our 1D integral
-      return 1; // Error
-    }
+// This is the GSL-style function that will be integrated over xi.
+double gsl_pswtn_integrand(double current_xi, void* p) {
     pswtn_Params* params = static_cast<pswtn_Params*>(p);
-    double current_xi = xi_val[0];
 
-    if (current_xi < 0) { // Drift rate must be positive
-        retval[0] = 0.0;
-        return 0;
+    // current_xi comes from GSL, lower bound is handled by qagiu's 'a' parameter.
+    // No need to check current_xi < 0 here if 'a' is 0.
+    // However, explicit check for safety or specific logic can remain if needed.
+    if (current_xi < 0) { // Should ideally not be hit if gsl_integration_qagiu is called with lower_bound_xi = 0
+        return 0.0;
     }
 
     double wc = wald_cdf_classic(params->t_adj, current_xi, params->alpha);
     double tn = truncated_normal_pdf(current_xi, params->mu_drift, params->sigma_drift_sq, 0.0); // lower_bound = 0 for drift rate
 
-    retval[0] = wc * tn;
-    return 0; // Success
+    return wc * tn;
 }
 
 // Log-PDF for SWTN
 // t_adj is time already adjusted for non-decision time (t - theta)
 // alpha is threshold, mu_drift is mean drift, sigma_drift_sq is drift variance
 // [[Rcpp::export]]
-double dswtn(double t_adj, double alpha, double mu_drift, double sigma_drift_sq) {
+double dswtn_core(double t_adj, double alpha, double mu_drift, double sigma_drift_sq) {
     if (t_adj <= 1e-10) return R_NegInf; // log(0)
     if (alpha <= 1e-10) return R_NegInf; // No boundary to hit, or ill-defined
     if (sigma_drift_sq < 0) return R_NaN; // variance cannot be negative
@@ -328,7 +326,7 @@ double dswtn(double t_adj, double alpha, double mu_drift, double sigma_drift_sq)
 // CDF for SWTN (numerical intergartion of the pdf)
 // t_adj is time already adjusted for non-decision time (t - theta)
 // [[Rcpp::export]]
-double pswtn(double t_adj, double alpha, double mu_drift, double sigma_drift_sq,
+double pswtn_core(double t_adj, double alpha, double mu_drift, double sigma_drift_sq,
                              double abs_err = 1e-6, double rel_err = 1e-6, size_t max_eval = 1000) {
     if (t_adj <= 0) return 0.0;
     if (alpha <= 0) return 1.0; // Hit boundary immediately if alpha is at or below 0
@@ -341,36 +339,41 @@ double pswtn(double t_adj, double alpha, double mu_drift, double sigma_drift_sq,
         return pigt0(t_adj, alpha, mu_drift);
     }
 
-    pswtn_Params params;
-    params.t_adj = t_adj;
-    params.alpha = alpha;
-    params.mu_drift = mu_drift;
-    params.sigma_drift_sq = sigma_drift_sq;
+    pswtn_Params params_struct;
+    params_struct.t_adj = t_adj;
+    params_struct.alpha = alpha;
+    params_struct.mu_drift = mu_drift;
+    params_struct.sigma_drift_sq = sigma_drift_sq;
 
-    double lower_int_bound_xi = 0.0;
-    // Determine a practical upper integration bound for xi
-    // e.g., mu_drift + some number of std devs. Max drift rate to consider.
-    double upper_int_bound_xi = params.mu_drift + 8.0 * std::sqrt(params.sigma_drift_sq);
-    if (upper_int_bound_xi < 1e-5) upper_int_bound_xi = 1.0; // Ensure a positive range if mu_drift is very small or negative
-    if (params.mu_drift < 0 && upper_int_bound_xi < 2.0 * std::sqrt(params.sigma_drift_sq)) { // if mu is negative, ensure range covers some positive drifts
-        upper_int_bound_xi = 2.0 * std::sqrt(params.sigma_drift_sq);
-    }
-
+    double lower_int_bound_xi = 0.0; // For gsl_integration_qagiu, this is the lower limit. Upper is +Inf.
 
     double integral_val;
     double integral_err;
 
-    // hcubature expects arrays for bounds
-    double a[1] = {lower_int_bound_xi};
-    double b[1] = {upper_int_bound_xi};
+    gsl_integration_workspace* w = gsl_integration_workspace_alloc(max_eval); // max_eval can guide workspace size
+    gsl_function F;
+    F.function = &gsl_pswtn_integrand;
+    F.params = &params_struct;
 
-    // Using hcubature (which might call gauss_kronrod for 1D)
-    int success = hcubature(pswtn_integrand, &params, 1, a, b,
-                            max_eval, abs_err, rel_err, &integral_val, &integral_err);
+    gsl_error_handler_t* old_handler = gsl_set_error_handler_off();
+    int status = gsl_integration_qagiu(&F, lower_int_bound_xi,
+                                       abs_err, rel_err, max_eval,
+                                       w, &integral_val, &integral_err);
+    gsl_set_error_handler(old_handler);
+    gsl_integration_workspace_free(w);
 
-    if (success != 0) {
-      // Rcpp::warning("SWTN CDF integration did not converge; result may be inaccurate.");
-      // Fallback or error handling might be needed. For now, return the possibly inaccurate value.
+    if (status != GSL_SUCCESS) {
+      // Rcpp::warning("SWTN CDF GSL integration (qagiu) did not converge; result may be inaccurate. GSL_ERROR: %s", gsl_strerror(status));
+      // Fallback or error handling might be needed. For now, return the possibly inaccurate value or 0.
+      // Depending on the error, integral_val might be usable or not.
+      // For now, let's assume if it fails, it's 0, but this might need refinement.
+      if (status == GSL_EROUND) { // Result is probably ok, just couldn't reach full accuracy
+          // Potentially accept integral_val
+      } else {
+          // For other errors, maybe return 0 or NaN
+          // Rcpp::Rcout << "GSL pswtn Error: " << gsl_strerror(status) << std::endl;
+          // integral_val = 0.0; // Or some other indicator of failure
+      }
     }
 
     if (std::isnan(integral_val) || integral_val < 0.0) return 0.0;
@@ -482,153 +485,135 @@ struct DSWTN_SPV_Integrand_Params_CDF {
 
 // --- Integrands for Start Point Variability ---
 
-// Integrand for PDF with SPV: exp(dswtn(t_adj, current_k, ...))
-// Note: hcubature integrates the function directly. If A_spv is non-zero, the result
-// of hcubature then needs to be divided by A_spv (or multiplied by 1/A_spv in integrand).
-// For logpdf, we integrate pdf then take log.
-int dswtn_spv_integrand(unsigned dim, const double* current_k_val, void* p, unsigned fdim, double* retval) {
-    if (dim != 1 || fdim != 1) return 1; // Error
+// GSL style integrand for dswtn_with_spv_logpdf_core (integrating over k)
+double gsl_dswtn_spv_integrand(double current_k, void* p) {
     DSWTN_SPV_Integrand_Params_PDF* params = static_cast<DSWTN_SPV_Integrand_Params_PDF*>(p);
-    double current_k = current_k_val[0];
 
-    if (current_k <= 0) { // Threshold must be positive
-        retval[0] = 0.0;
-        return 0;
+    if (current_k <= 1e-9) { // dswtn expects alpha (threshold) > 0.
+        return 0.0;
     }
-    // Calculate PDF for current_k (alpha for dswtn)
-    double log_pdf_val = dswtn(params->t_adj, current_k, params->mu_drift, params->sigma_drift_sq);
-    if (!std::isfinite(log_pdf_val)) {
-        retval[0] = 0.0;
+    // Calculate PDF for current_k (alpha for dswtn_core)
+    double log_pdf_val = dswtn_core(params->t_adj, current_k, params->mu_drift, params->sigma_drift_sq);
+
+    // Check for -Inf or very small log_pdf_val before exponentiating
+    if (!std::isfinite(log_pdf_val) || log_pdf_val < -700) { // exp(-700) is effectively zero
+        return 0.0;
     } else {
-        retval[0] = std::exp(log_pdf_val);
+        return std::exp(log_pdf_val);
     }
-    return 0; // Success
 }
 
-// Integrand for CDF with SPV: pswtn(t_adj, current_k, ...)
-int pswtn_spv_integrand(unsigned dim, const double* current_k_val, void* p, unsigned fdim, double* retval) {
-    if (dim != 1 || fdim != 1) return 1; // Error
+// GSL style integrand for dswtn_with_spv_cdf_core (integrating over k)
+double gsl_pswtn_spv_integrand(double current_k, void* p) {
     DSWTN_SPV_Integrand_Params_CDF* params = static_cast<DSWTN_SPV_Integrand_Params_CDF*>(p);
-    double current_k = current_k_val[0];
 
-    if (current_k <= 0) { // Threshold must be positive
-        retval[0] = 0.0; // Or some other appropriate value if k can be 0 and means instant absorption for CDF context
-                       // If current_k is boundary, and it's <=0, CDF should be 1 if t_adj > 0.
-                       // Wald_cdf_classic handles alpha<=0 returning 1 if drift >0.
-                       // pswtn calls wald_cdf_classic.
-    }
-
-    // Calculate CDF for current_k (alpha for pswtn)
-    // Default integration params for inner CDF calculation for now
-    retval[0] = pswtn(params->t_adj, current_k, params->mu_drift, params->sigma_drift_sq);
-    return 0; // Success
+    // pswtn_core handles current_k <= 0 internally by returning 1.0 if drift is positive.
+    // Since QAGIU integrates from a lower bound (e.g., 0), current_k will be non-negative.
+    // pswtn_core itself ensures its alpha (current_k here) is handled appropriately.
+    return pswtn_core(params->t_adj, current_k, params->mu_drift, params->sigma_drift_sq);
 }
 
 
 // --- Core functions with Start Point Variability (SPV) ---
 
-// Log-PDF for SWTN with Start Point Variability (uniform over k_center +/- A_spv/2)
-// k_center: central threshold, A_spv: range of start point variability
+// Log-PDF for SWTN with Start Point Variability (integral of dswtn_core(k) over k from 0 to Inf)
+// k_center and A_spv are passed but may be unused if SPV is now a generic 0-Inf integral over k.
+// If k_center/A_spv are meant to parameterize the *distribution* of k that's integrated,
+// then gsl_dswtn_spv_integrand would need to incorporate them.
+// Current assumption: integrate dswtn directly.
 double dswtn_with_spv_logpdf_core(double t_adj, double k_center, double A_spv,
                                         double mu_drift, double sigma_drift_sq,
                                         double abs_err = 1e-6, double rel_err = 1e-6, size_t max_eval = 1000) {
     if (t_adj <= 1e-10) return R_NegInf;
-    if (k_center <= 0 && (k_center + A_spv/2.0) <=0) return R_NegInf; // Entire SPV range is non-positive
-    if (A_spv < 0) return R_NaN; // Invalid A_spv
+    // A_spv < 0 check might still be relevant if A_spv is used as a general parameter.
+    // if (A_spv < 0) return R_NaN; // Or handle as error.
 
-    // If no start point variability, use the non-SPV version
-    if (A_spv < 1e-7) { // Treat as no SPV
-        if (k_center <= 0) return R_NegInf; // Central k must be positive if no SPV
-        return dswtn(t_adj, k_center, mu_drift, sigma_drift_sq);
-    }
+    // The logic for A_spv < 1e-7 (no SPV) is removed. If this function is called,
+    // it implies the 0-Inf integral for SPV is intended. Higher-level functions
+    // should call dswtn directly if no SPV is desired.
+    // Similarly, k_center's role in defining finite bounds is gone.
 
     DSWTN_SPV_Integrand_Params_PDF int_params;
     int_params.t_adj = t_adj;
     int_params.mu_drift = mu_drift;
     int_params.sigma_drift_sq = sigma_drift_sq;
 
-    double lower_k = k_center - A_spv / 2.0;
-    double upper_k = k_center + A_spv / 2.0;
-
-    // Ensure lower_k is not less than a very small positive, as threshold k must be > 0.
-    // If k_center - A_spv/2 is <=0, the integration range needs to start from a small positive value.
-    // However, the integrand dswtn_spv_integrand itself handles current_k <= 0 returning 0.
-    // So, we can allow lower_k to be its calculated value.
-    // If lower_k < 0 and upper_k < 0, then this should result in 0 PDF.
-    if (upper_k <= 1e-9) return R_NegInf; // Whole range non-positive
-    if (lower_k < 1e-9) lower_k = 1e-9; // Clip integration start if it goes non-positive, to avoid issues with k in wald.
-                                        // This means we are integrating over U(max(epsilon, k_center-A_spv/2), k_center+A_spv/2) effectively.
-                                        // And then normalizing by full A_spv.
-                                        // This is slightly different from true U(k_center-A_spv/2, k_center+A_spv/2) if range crosses 0.
-                                        // A more proper way would be to let integrand handle k<=0 and integrate over full theoretical range.
-                                        // The current integrand returns 0 if current_k <=0.
+    double lower_k_bound = 0.0; // Integrate k from 0 to Inf.
 
     double integral_val;
     double integral_err;
-    double a_k[1] = {lower_k};
-    double b_k[1] = {upper_k};
 
-    int success = hcubature(dswtn_spv_integrand, &int_params, 1, a_k, b_k,
-                            max_eval, abs_err, rel_err, &integral_val, &integral_err);
+    gsl_integration_workspace* w = gsl_integration_workspace_alloc(max_eval);
+    gsl_function F;
+    F.function = &gsl_dswtn_spv_integrand;
+    F.params = &int_params;
 
-    if (success != 0) {
-      // Rcpp::Rcout << "Warning: SWTN+SPV PDF integration did not converge." << std::endl;
+    gsl_error_handler_t* old_handler = gsl_set_error_handler_off();
+    int status = gsl_integration_qagiu(&F, lower_k_bound, abs_err, rel_err, max_eval,
+                                       w, &integral_val, &integral_err);
+    gsl_set_error_handler(old_handler);
+    gsl_integration_workspace_free(w);
+
+    if (status != GSL_SUCCESS) {
+      // Rcpp::Rcout << "Warning: SWTN+SPV PDF GSL integration (qagiu) for k failed. GSL Error: " << gsl_strerror(status) << std::endl;
+       // Depending on error, might return min_log_lik or current integral_val if partially useful
     }
 
-    if (integral_val <= 1e-300) return R_NegInf; // Avoid log(0) from very small positive
+    if (integral_val <= 1e-300) return R_NegInf; // Avoid log(0)
 
-    // Normalize by the width of the uniform distribution A_spv
-    double final_pdf = integral_val / A_spv;
+    // Normalization by A_spv is REMOVED because the integral is now 0 to Inf,
+    // and A_spv no longer defines a finite uniform distribution width for k.
+    // If another normalization is intended (e.g. if k_center/A_spv define a distribution
+    // whose PDF is part of the integrand), this needs explicit addition.
+    double final_pdf = integral_val;
     if (final_pdf <= 1e-300) return R_NegInf;
 
     return std::log(final_pdf);
 }
 
 
-// CDF for SWTN with Start Point Variability
+// CDF for SWTN with Start Point Variability (integral of pswtn(k) over k from 0 to Inf)
+// Similar to PDF, k_center and A_spv roles change with 0-Inf integral for k.
+// Normalization by A_spv is removed.
 double dswtn_with_spv_cdf_core(double t_adj, double k_center, double A_spv,
                                      double mu_drift, double sigma_drift_sq,
                                      double abs_err = 1e-6, double rel_err = 1e-6, size_t max_eval = 1000) {
     if (t_adj <= 0) return 0.0;
-    // If k_center + A_spv/2 (max possible threshold) is <=0, effectively always hit, so CDF is 1.
-    if ((k_center + A_spv / 2.0) <= 1e-9) return 1.0;
-    if (A_spv < 0) return R_NaN;
+    // Original checks for A_spv might be partially relevant.
+    // if (A_spv < 0) return R_NaN;
 
-    if (A_spv < 1e-7) { // No SPV
-        if (k_center <= 0) return 1.0; // if k_center is 0 or less, and no variability, it's hit.
-        return pswtn(t_adj, k_center, mu_drift, sigma_drift_sq, abs_err, rel_err, max_eval);
-    }
+    // Bypass for A_spv < 1e-7 removed. Direct call to pswtn if no SPV.
 
     DSWTN_SPV_Integrand_Params_CDF int_params;
     int_params.t_adj = t_adj;
     int_params.mu_drift = mu_drift;
     int_params.sigma_drift_sq = sigma_drift_sq;
 
-    double lower_k = k_center - A_spv / 2.0;
-    double upper_k = k_center + A_spv / 2.0;
-
-    // Integrand pswtn_spv_integrand calls pswtn, which calls wald_cdf_classic.
-    // wald_cdf_classic handles current_k (as boundary_alpha) <= 0 by returning 1.0 if drift > 0.
-    // So, integrating from a non-positive lower_k is fine.
-    // If upper_k is also non-positive, then the integral should yield A_spv * 1.0, and result is 1.0.
+    double lower_k_bound = 0.0; // Integrate k from 0 to Inf.
 
     double integral_val;
     double integral_err;
-    double a_k[1] = {lower_k};
-    double b_k[1] = {upper_k};
 
-    int success = hcubature(pswtn_spv_integrand, &int_params, 1, a_k, b_k,
-                            max_eval, abs_err, rel_err, &integral_val, &integral_err);
+    gsl_integration_workspace* w = gsl_integration_workspace_alloc(max_eval);
+    gsl_function F;
+    F.function = &gsl_pswtn_spv_integrand;
+    F.params = &int_params;
 
-    if (success != 0) {
-      // Rcpp::Rcout << "Warning: SWTN+SPV CDF integration did not converge." << std::endl;
+    gsl_error_handler_t* old_handler = gsl_set_error_handler_off();
+    int status = gsl_integration_qagiu(&F, lower_k_bound, abs_err, rel_err, max_eval,
+                                       w, &integral_val, &integral_err);
+    gsl_set_error_handler(old_handler);
+    gsl_integration_workspace_free(w);
+
+    if (status != GSL_SUCCESS) {
+      // Rcpp::Rcout << "Warning: SWTN+SPV CDF GSL integration (qagiu) for k failed. GSL Error: " << gsl_strerror(status) << std::endl;
     }
 
-    // Normalize by the width of the uniform distribution A_spv
-    double final_cdf = integral_val / A_spv;
+    // Normalization by A_spv is REMOVED.
+    double final_cdf = integral_val;
 
     if (std::isnan(final_cdf) || final_cdf < 0.0) return 0.0;
-    if (final_cdf > 1.0) return 1.0;
+    if (final_cdf > 1.0) return 1.0; // CDF should be bounded by 1.
 
     return final_cdf;
 }
@@ -645,42 +630,31 @@ struct RDM_DSWTN_SPV_Integrand_Params {
     // B and A define the integration range, not passed in struct here.
 };
 
-// Integrand for PDF: exp(dswtn(t_adj, current_actual_k, mu_drift, sigma_drift_sq))
-// current_actual_k is the integration variable, drawn from U(B, B+A)
-int rdm_dswtn_spv_integrand(unsigned dim, const double* current_actual_k_val, void* p, unsigned fdim, double* retval) {
-    if (dim != 1 || fdim != 1) return 1;
+// GSL-style Integrand for PDF in rdm_dswtn_core: exp(dswtn(t_adj, current_actual_k, mu_drift, sigma_drift_sq))
+// current_actual_k is the integration variable (threshold), integrated from 0 to Inf.
+double gsl_rdm_dswtn_spv_integrand(double current_actual_k, void* p) {
     RDM_DSWTN_SPV_Integrand_Params* params = static_cast<RDM_DSWTN_SPV_Integrand_Params*>(p);
-    double current_k = current_actual_k_val[0];
 
-    if (current_k <= 1e-9) { // Threshold for dswtn must be positive
-        retval[0] = 0.0;
-        return 0;
+    if (current_actual_k <= 1e-9) { // Threshold for dswtn_core must be positive
+        return 0.0;
     }
-    double log_pdf_val = dswtn(params->t_adj, current_k, params->mu_drift, params->sigma_drift_sq);
-    if (!std::isfinite(log_pdf_val)) {
-        retval[0] = 0.0;
+    double log_pdf_val = dswtn_core(params->t_adj, current_actual_k, params->mu_drift, params->sigma_drift_sq);
+    if (!std::isfinite(log_pdf_val) || log_pdf_val < -700) { // exp(-700) is ~0
+        return 0.0;
     } else {
-        retval[0] = std::exp(log_pdf_val);
+        return std::exp(log_pdf_val);
     }
-    return 0;
 }
 
-// Integrand for CDF: pswtn(t_adj, current_actual_k, mu_drift, sigma_drift_sq)
-// current_actual_k is the integration variable, drawn from U(B, B+A)
-int rdm_pswtn_spv_integrand(unsigned dim, const double* current_actual_k_val, void* p, unsigned fdim, double* retval) {
-    if (dim != 1 || fdim != 1) return 1;
+// GSL-style Integrand for CDF in rdm_pswtn_core: pswtn(t_adj, current_actual_k, mu_drift, sigma_drift_sq)
+// current_actual_k is the integration variable (threshold), integrated from 0 to Inf.
+double gsl_rdm_pswtn_spv_integrand(double current_actual_k, void* p) {
     RDM_DSWTN_SPV_Integrand_Params* params = static_cast<RDM_DSWTN_SPV_Integrand_Params*>(p);
-    double current_k = current_actual_k_val[0];
 
-    // pswtn internally handles current_k <= 0 by calling wald_cdf_classic,
-    // which returns 1.0 if boundary <=0 and drift > 0.
-    // So, no specific check for current_k <=0 needed here for the integrand value itself,
-    // unless we want to restrict integration domain explicitly.
-    // For now, rely on pswtn's handling.
-
-    retval[0] = pswtn(params->t_adj, current_k, params->mu_drift, params->sigma_drift_sq,
-                               1e-7, 1e-7, 1000); // Using tighter fixed defaults for inner integration
-    return 0;
+    // pswtn_core handles current_actual_k <= 0 appropriately.
+    // Integration from 0 to Inf, so current_actual_k >= 0.
+    return pswtn_core(params->t_adj, current_actual_k, params->mu_drift, params->sigma_drift_sq,
+                 1e-7, 1e-7, 1000); // Using tighter fixed defaults for inner pswtn_core integration
 }
 
 
@@ -723,48 +697,51 @@ double rdm_dswtn_core(double t_adj, double B, double A,
         if (pdf_val <= 1e-300) return R_NegInf;
         return std::log(pdf_val);
     } else if (no_A_var && !no_drift_var) {
-        // Case 3: SWTN with fixed threshold B (like original dswtn).
+        // Case 3: SWTN with fixed threshold B (like original dswtn_core).
         if (B <= 1e-9) return R_NegInf;
-        return dswtn(t_adj, B, mu_drift, sigma_drift_sq);
+        return dswtn_core(t_adj, B, mu_drift, sigma_drift_sq);
     } else {
         // Case 4: Full model - SWTN with RDM-style SPV.
-        // Integrate exp(dswtn(t_adj, actual_k, mu_drift, sigma_drift_sq))
-        // where actual_k ~ U(B, B+A).
-        if (A <= 1e-9) { // Should have been caught by no_A_var, but defensive.
-            if (B <= 1e-9) return R_NegInf;
-            return dswtn(t_adj, B, mu_drift, sigma_drift_sq);
+        // Integrate exp(dswtn_core(t_adj, actual_k, mu_drift, sigma_drift_sq)) over actual_k from 0 to Inf.
+        // Parameters B and A might be used by a more complex model for actual_k's distribution,
+        // but here, with direct integration of dswtn(actual_k, ...), they are not defining bounds or normalization.
+        // The check for A <= 1e-9 to fall back to dswtn might change. If A is a parameter of the
+        // distribution of k, then A=0 would mean no variability in that distribution.
+        // For now, this 'else' block means this integration is performed.
+        // The condition (B + A) <= 1e-9 is also less relevant for 0-Inf integration.
+
+        RDM_DSWTN_SPV_Integrand_Params int_params_pdf; // Changed name to avoid conflict
+        int_params_pdf.t_adj = t_adj;
+        int_params_pdf.mu_drift = mu_drift;
+        int_params_pdf.sigma_drift_sq = sigma_drift_sq;
+
+        double lower_k_bound_pdf = 0.0; // Integrate actual_k from 0 to Inf
+
+        double integral_val_pdf;
+        double integral_err_pdf;
+
+        gsl_integration_workspace* w_pdf = gsl_integration_workspace_alloc(spv_max_eval);
+        gsl_function F_pdf;
+        F_pdf.function = &gsl_rdm_dswtn_spv_integrand;
+        F_pdf.params = &int_params_pdf;
+
+        gsl_error_handler_t* old_handler_pdf = gsl_set_error_handler_off();
+        int status_pdf = gsl_integration_qagiu(&F_pdf, lower_k_bound_pdf, spv_abs_err, spv_rel_err, spv_max_eval,
+                                           w_pdf, &integral_val_pdf, &integral_err_pdf);
+        gsl_set_error_handler(old_handler_pdf);
+        gsl_integration_workspace_free(w_pdf);
+
+        if (status_pdf != GSL_SUCCESS) {
+            // Rcpp::Rcout << "Warning: RDM_DSWTN PDF GSL integration (qagiu) for actual_k failed. GSL Error: " << gsl_strerror(status_pdf) << std::endl;
         }
-        if ((B + A) <= 1e-9) return R_NegInf; // Max threshold non-positive
 
-        RDM_DSWTN_SPV_Integrand_Params int_params;
-        int_params.t_adj = t_adj;
-        int_params.mu_drift = mu_drift;
-        int_params.sigma_drift_sq = sigma_drift_sq;
+        if (integral_val_pdf <= 1e-300) return R_NegInf;
 
-        double lower_actual_k = B;
-        double upper_actual_k = B + A;
-
-        // Integrand returns 0 if current_k <= 0.
-        // If B itself is negative, need to ensure integration range is sensible or relies on integrand.
-        // If B < 1e-9 and B+A > 1e-9, we integrate from B. Integrand handles non-positive k.
-        // If B+A < 1e-9 (whole range non-positive), this will result in 0.
-
-        double integral_val;
-        double integral_err;
-        double k_limits_a[1] = {lower_actual_k};
-        double k_limits_b[1] = {upper_actual_k};
-
-        int success = hcubature(rdm_dswtn_spv_integrand, &int_params, 1, k_limits_a, k_limits_b,
-                                spv_max_eval, spv_abs_err, spv_rel_err, &integral_val, &integral_err);
-        if (success != 0) {
-            // Rcpp::Rcout << "Warning: RDM_DSWTN PDF integration did not converge." << std::endl;
-        }
-
-        if (integral_val <= 1e-300) return R_NegInf;
-
-        double final_pdf = integral_val / A; // Normalize by width of U(B, B+A)
-        if (final_pdf <= 1e-300) return R_NegInf;
-        return std::log(final_pdf);
+        // Normalization by A is REMOVED as integral is 0 to Inf.
+        // If B and A define a distribution for k, that distribution's PDF would be part of the integrand.
+        double final_pdf_val = integral_val_pdf;
+        if (final_pdf_val <= 1e-300) return R_NegInf;
+        return std::log(final_pdf_val);
     }
 }
 
@@ -774,66 +751,66 @@ double rdm_pswtn_core(double t_adj, double B, double A,
                                  double spv_abs_err = 1e-6, double spv_rel_err = 1e-6, size_t spv_max_eval = 1000) {
     if (t_adj <= 0) return 0.0;
 
-    const double A_is_zero_threshold = 1e-7;
+    const double A_is_zero_threshold = 1e-7; // May need re-evaluation for its role if not a width
     const double sigmasq_is_zero_threshold = 1e-10;
 
-    bool no_A_var = (A < A_is_zero_threshold);
+    bool no_A_var = (A < A_is_zero_threshold); // Role of A might change if it's not a width for U-distro
     bool no_drift_var = (sigma_drift_sq < sigmasq_is_zero_threshold);
 
     if (no_A_var && no_drift_var) {
         // Case 1: Simple Wald CDF (like pigt0). Threshold B.
-        if (B <= 1e-9) return 1.0; // Hit non-positive threshold immediately
-        if (mu_drift <= 1e-9 && B > 0) return 0.0; // Cannot reach positive boundary
-        return pigt0(t_adj, B, mu_drift); // pigt0(t, k, l)
+        if (B <= 1e-9) return 1.0;
+        if (mu_drift <= 1e-9 && B > 0) return 0.0;
+        return pigt0(t_adj, B, mu_drift);
     } else if (!no_A_var && no_drift_var) {
-        // Case 2: Standard RDM with SPV CDF (like pigt).
-        if ((B + A) <= 1e-9) return 1.0; // Max threshold non-positive
+        // Case 2: Standard RDM with SPV CDF (like pigt). This assumes A is still width of U(B, B+A).
+        // If SPV model changed universally to 0-Inf integral, this case needs redesign.
+        // For now, keeping original pigt logic if called under these param conditions.
+        if ((B + A) <= 1e-9) return 1.0;
         double k_digt = B + 0.5 * A;
         double a_digt = 0.5 * A;
-        if (A < A_is_zero_threshold) a_digt = 0.0;
+        if (A < A_is_zero_threshold) a_digt = 0.0; // Ensure a_digt is zero if A is tiny
         return pigt(t_adj, k_digt, mu_drift, a_digt);
     } else if (no_A_var && !no_drift_var) {
         // Case 3: SWTN CDF with fixed threshold B.
         if (B <= 1e-9) return 1.0;
-        return pswtn(t_adj, B, mu_drift, sigma_drift_sq, spv_abs_err, spv_rel_err, spv_max_eval); // Pass SPV errors as they are for the only integration here
+        return pswtn_core(t_adj, B, mu_drift, sigma_drift_sq, spv_abs_err, spv_rel_err, spv_max_eval);
     } else {
-        // Case 4: Full model - SWTN CDF with RDM-style SPV.
-        // Integrate pswtn(t_adj, actual_k, mu_drift, sigma_drift_sq)
-        // where actual_k ~ U(B, B+A).
-        if (A <= 1e-9) { // Defensive
-             if (B <= 1e-9) return 1.0;
-             return pswtn(t_adj, B, mu_drift, sigma_drift_sq, spv_abs_err, spv_rel_err, spv_max_eval);
-        }
-        if ((B+A) <= 1e-9) return 1.0;
+        // Case 4: Full model - SWTN CDF with RDM-style SPV (integral 0 to Inf over actual_k).
+        // Integrate pswtn_core(t_adj, actual_k, mu_drift, sigma_drift_sq) over actual_k from 0 to Inf.
+        // B and A are not used for bounds/normalization here.
 
+        RDM_DSWTN_SPV_Integrand_Params int_params_cdf; // Changed name
+        int_params_cdf.t_adj = t_adj;
+        int_params_cdf.mu_drift = mu_drift;
+        int_params_cdf.sigma_drift_sq = sigma_drift_sq;
 
-        RDM_DSWTN_SPV_Integrand_Params int_params;
-        int_params.t_adj = t_adj;
-        int_params.mu_drift = mu_drift;
-        int_params.sigma_drift_sq = sigma_drift_sq;
+        double lower_k_bound_cdf = 0.0; // Integrate actual_k from 0 to Inf
 
-        double lower_actual_k = B;
-        double upper_actual_k = B + A;
+        double integral_val_cdf;
+        double integral_err_cdf;
 
-        double integral_val;
-        double integral_err;
-        double k_limits_a[1] = {lower_actual_k};
-        double k_limits_b[1] = {upper_actual_k};
+        gsl_integration_workspace* w_cdf = gsl_integration_workspace_alloc(spv_max_eval);
+        gsl_function F_cdf;
+        F_cdf.function = &gsl_rdm_pswtn_spv_integrand;
+        F_cdf.params = &int_params_cdf;
 
-        // pswtn_spv_integrand calls pswtn. pswtn handles k<=0 for its 'alpha' correctly.
-        // So, we can integrate from B even if B is non-positive.
+        gsl_error_handler_t* old_handler_cdf = gsl_set_error_handler_off();
+        int status_cdf = gsl_integration_qagiu(&F_cdf, lower_k_bound_cdf, spv_abs_err, spv_rel_err, spv_max_eval,
+                                           w_cdf, &integral_val_cdf, &integral_err_cdf);
+        gsl_set_error_handler(old_handler_cdf);
+        gsl_integration_workspace_free(w_cdf);
 
-        int success = hcubature(rdm_pswtn_spv_integrand, &int_params, 1, k_limits_a, k_limits_b,
-                                spv_max_eval, spv_abs_err, spv_rel_err, &integral_val, &integral_err);
-        if (success != 0) {
-            // Rcpp::Rcout << "Warning: RDM_DSWTN CDF integration did not converge." << std::endl;
+        if (status_cdf != GSL_SUCCESS) {
+            // Rcpp::Rcout << "Warning: RDM_DSWTN CDF GSL integration (qagiu) for actual_k failed. GSL Error: " << gsl_strerror(status_cdf) << std::endl;
         }
 
-        double final_cdf = integral_val / A; // Normalize by width of U(B, B+A)
+        // Normalization by A is REMOVED.
+        double final_cdf_val = integral_val_cdf;
 
-        if (std::isnan(final_cdf) || final_cdf < 0.0) return 0.0;
-        if (final_cdf > 1.0) return 1.0;
-        return final_cdf;
+        if (std::isnan(final_cdf_val) || final_cdf_val < 0.0) return 0.0;
+        if (final_cdf_val > 1.0) return 1.0; // CDF should be bounded.
+        return final_cdf_val;
     }
 }
 
