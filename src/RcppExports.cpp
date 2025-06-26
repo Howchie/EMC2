@@ -122,6 +122,19 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// wald_cdf_classic
+double wald_cdf_classic(double t, double drift_rate_xi, double boundary_alpha);
+RcppExport SEXP _EMC2_wald_cdf_classic(SEXP tSEXP, SEXP drift_rate_xiSEXP, SEXP boundary_alphaSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< double >::type t(tSEXP);
+    Rcpp::traits::input_parameter< double >::type drift_rate_xi(drift_rate_xiSEXP);
+    Rcpp::traits::input_parameter< double >::type boundary_alpha(boundary_alphaSEXP);
+    rcpp_result_gen = Rcpp::wrap(wald_cdf_classic(t, drift_rate_xi, boundary_alpha));
+    return rcpp_result_gen;
+END_RCPP
+}
 // digt0
 double digt0(double t, double k, double l);
 RcppExport SEXP _EMC2_digt0(SEXP tSEXP, SEXP kSEXP, SEXP lSEXP) {
@@ -225,19 +238,6 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
-// wald_cdf_classic
-double wald_cdf_classic(double t, double drift_rate_xi, double boundary_alpha);
-RcppExport SEXP _EMC2_wald_cdf_classic(SEXP tSEXP, SEXP drift_rate_xiSEXP, SEXP boundary_alphaSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< double >::type t(tSEXP);
-    Rcpp::traits::input_parameter< double >::type drift_rate_xi(drift_rate_xiSEXP);
-    Rcpp::traits::input_parameter< double >::type boundary_alpha(boundary_alphaSEXP);
-    rcpp_result_gen = Rcpp::wrap(wald_cdf_classic(t, drift_rate_xi, boundary_alpha));
-    return rcpp_result_gen;
-END_RCPP
-}
 // truncated_normal_pdf
 double truncated_normal_pdf(double xi, double mu, double sigma_sq, double lower_bound);
 RcppExport SEXP _EMC2_truncated_normal_pdf(SEXP xiSEXP, SEXP muSEXP, SEXP sigma_sqSEXP, SEXP lower_boundSEXP) {
@@ -252,9 +252,9 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
-// dswtn_logpdf_core
-double dswtn_logpdf_core(double t_adj, double alpha, double mu_drift, double sigma_drift_sq);
-RcppExport SEXP _EMC2_dswtn_logpdf_core(SEXP t_adjSEXP, SEXP alphaSEXP, SEXP mu_driftSEXP, SEXP sigma_drift_sqSEXP) {
+// dswtn_core
+double dswtn_core(double t_adj, double alpha, double mu_drift, double sigma_drift_sq);
+RcppExport SEXP _EMC2_dswtn_core(SEXP t_adjSEXP, SEXP alphaSEXP, SEXP mu_driftSEXP, SEXP sigma_drift_sqSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -262,13 +262,13 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< double >::type alpha(alphaSEXP);
     Rcpp::traits::input_parameter< double >::type mu_drift(mu_driftSEXP);
     Rcpp::traits::input_parameter< double >::type sigma_drift_sq(sigma_drift_sqSEXP);
-    rcpp_result_gen = Rcpp::wrap(dswtn_logpdf_core(t_adj, alpha, mu_drift, sigma_drift_sq));
+    rcpp_result_gen = Rcpp::wrap(dswtn_core(t_adj, alpha, mu_drift, sigma_drift_sq));
     return rcpp_result_gen;
 END_RCPP
 }
-// dswtn_cdf_core
-double dswtn_cdf_core(double t_adj, double alpha, double mu_drift, double sigma_drift_sq, double abs_err, double rel_err, size_t max_eval);
-RcppExport SEXP _EMC2_dswtn_cdf_core(SEXP t_adjSEXP, SEXP alphaSEXP, SEXP mu_driftSEXP, SEXP sigma_drift_sqSEXP, SEXP abs_errSEXP, SEXP rel_errSEXP, SEXP max_evalSEXP) {
+// pswtn_core
+double pswtn_core(double t_adj, double alpha, double mu_drift, double sigma_drift_sq, double abs_err, double rel_err, size_t max_eval);
+RcppExport SEXP _EMC2_pswtn_core(SEXP t_adjSEXP, SEXP alphaSEXP, SEXP mu_driftSEXP, SEXP sigma_drift_sqSEXP, SEXP abs_errSEXP, SEXP rel_errSEXP, SEXP max_evalSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -279,7 +279,7 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< double >::type abs_err(abs_errSEXP);
     Rcpp::traits::input_parameter< double >::type rel_err(rel_errSEXP);
     Rcpp::traits::input_parameter< size_t >::type max_eval(max_evalSEXP);
-    rcpp_result_gen = Rcpp::wrap(dswtn_cdf_core(t_adj, alpha, mu_drift, sigma_drift_sq, abs_err, rel_err, max_eval));
+    rcpp_result_gen = Rcpp::wrap(pswtn_core(t_adj, alpha, mu_drift, sigma_drift_sq, abs_err, rel_err, max_eval));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -786,6 +786,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_dlba_vec", (DL_FUNC) &_EMC2_dlba_vec, 6},
     {"_EMC2_plba_vec", (DL_FUNC) &_EMC2_plba_vec, 6},
     {"_EMC2_pigt0", (DL_FUNC) &_EMC2_pigt0, 3},
+    {"_EMC2_wald_cdf_classic", (DL_FUNC) &_EMC2_wald_cdf_classic, 3},
     {"_EMC2_digt0", (DL_FUNC) &_EMC2_digt0, 3},
     {"_EMC2_pigt", (DL_FUNC) &_EMC2_pigt, 5},
     {"_EMC2_digt", (DL_FUNC) &_EMC2_digt, 5},
@@ -793,10 +794,9 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_prdm_c", (DL_FUNC) &_EMC2_prdm_c, 5},
     {"_EMC2_dWald", (DL_FUNC) &_EMC2_dWald, 5},
     {"_EMC2_pWald", (DL_FUNC) &_EMC2_pWald, 5},
-    {"_EMC2_wald_cdf_classic", (DL_FUNC) &_EMC2_wald_cdf_classic, 3},
     {"_EMC2_truncated_normal_pdf", (DL_FUNC) &_EMC2_truncated_normal_pdf, 4},
-    {"_EMC2_dswtn_logpdf_core", (DL_FUNC) &_EMC2_dswtn_logpdf_core, 4},
-    {"_EMC2_dswtn_cdf_core", (DL_FUNC) &_EMC2_dswtn_cdf_core, 7},
+    {"_EMC2_dswtn_core", (DL_FUNC) &_EMC2_dswtn_core, 4},
+    {"_EMC2_pswtn_core", (DL_FUNC) &_EMC2_pswtn_core, 7},
     {"_EMC2_rtnorm_rng_positive", (DL_FUNC) &_EMC2_rtnorm_rng_positive, 2},
     {"_EMC2_rinvgauss_rng", (DL_FUNC) &_EMC2_rinvgauss_rng, 2},
     {"_EMC2_rswtn_core", (DL_FUNC) &_EMC2_rswtn_core, 4},

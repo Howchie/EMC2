@@ -29,6 +29,10 @@ pigt0 <- function(t, k = 1., l = 1.) {
     .Call(`_EMC2_pigt0`, t, k, l)
 }
 
+wald_cdf_classic <- function(t, drift_rate_xi, boundary_alpha) {
+    .Call(`_EMC2_wald_cdf_classic`, t, drift_rate_xi, boundary_alpha)
+}
+
 digt0 <- function(t, k = 1., l = 1.) {
     .Call(`_EMC2_digt0`, t, k, l)
 }
@@ -57,20 +61,16 @@ pWald <- function(t, v, B, A, t0) {
     .Call(`_EMC2_pWald`, t, v, B, A, t0)
 }
 
-wald_cdf_classic <- function(t, drift_rate_xi, boundary_alpha) {
-    .Call(`_EMC2_wald_cdf_classic`, t, drift_rate_xi, boundary_alpha)
-}
-
-truncated_normal_pdf <- function(xi, mu, sigma_sq, lower_bound) {
+truncated_normal_pdf <- function(xi, mu, sigma_sq, lower_bound = 0) {
     .Call(`_EMC2_truncated_normal_pdf`, xi, mu, sigma_sq, lower_bound)
 }
 
-dswtn_logpdf_core <- function(t_adj, alpha, mu_drift, sigma_drift_sq) {
-    .Call(`_EMC2_dswtn_logpdf_core`, t_adj, alpha, mu_drift, sigma_drift_sq)
+dswtn_core <- function(t_adj, alpha, mu_drift, sigma_drift_sq) {
+    .Call(`_EMC2_dswtn_core`, t_adj, alpha, mu_drift, sigma_drift_sq)
 }
 
-dswtn_cdf_core <- function(t_adj, alpha, mu_drift, sigma_drift_sq, abs_err = 1e-6, rel_err = 1e-6, max_eval = 1000L) {
-    .Call(`_EMC2_dswtn_cdf_core`, t_adj, alpha, mu_drift, sigma_drift_sq, abs_err, rel_err, max_eval)
+pswtn_core <- function(t_adj, alpha, mu_drift, sigma_drift_sq, abs_err = 1e-6, rel_err = 1e-6, max_eval = 1000L) {
+    .Call(`_EMC2_pswtn_core`, t_adj, alpha, mu_drift, sigma_drift_sq, abs_err, rel_err, max_eval)
 }
 
 rtnorm_rng_positive <- function(mu, sigma_sq) {
