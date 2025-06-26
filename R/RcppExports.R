@@ -65,12 +65,12 @@ truncated_normal_pdf <- function(xi, mu, sigma_sq, lower_bound = 0) {
     .Call(`_EMC2_truncated_normal_pdf`, xi, mu, sigma_sq, lower_bound)
 }
 
-dswtn_core <- function(t_adj, alpha, mu_drift, sigma_drift_sq) {
-    .Call(`_EMC2_dswtn_core`, t_adj, alpha, mu_drift, sigma_drift_sq)
+dswtn <- function(t_adj, alpha, mu_drift, sigma_drift_sq) {
+    .Call(`_EMC2_dswtn`, t_adj, alpha, mu_drift, sigma_drift_sq)
 }
 
-pswtn_core <- function(t_adj, alpha, mu_drift, sigma_drift_sq, abs_err = 1e-6, rel_err = 1e-6, max_eval = 1000L) {
-    .Call(`_EMC2_pswtn_core`, t_adj, alpha, mu_drift, sigma_drift_sq, abs_err, rel_err, max_eval)
+pswtn <- function(t_adj, alpha, mu_drift, sigma_drift_sq, abs_err = 1e-6, rel_err = 1e-6, max_eval = 1000L) {
+    .Call(`_EMC2_pswtn`, t_adj, alpha, mu_drift, sigma_drift_sq, abs_err, rel_err, max_eval)
 }
 
 rtnorm_rng_positive <- function(mu, sigma_sq) {
@@ -81,8 +81,24 @@ rinvgauss_rng <- function(mu_ig, lambda_ig) {
     .Call(`_EMC2_rinvgauss_rng`, mu_ig, lambda_ig)
 }
 
-rswtn_core <- function(alpha, mu_drift, sigma_drift_sq, theta) {
-    .Call(`_EMC2_rswtn_core`, alpha, mu_drift, sigma_drift_sq, theta)
+rswtn <- function(alpha, mu_drift, sigma_drift_sq, theta) {
+    .Call(`_EMC2_rswtn`, alpha, mu_drift, sigma_drift_sq, theta)
+}
+
+dswtn_spv_logpdf <- function(t_adj, k_center, A_spv, mu_drift, sigma_drift_sq, abs_err = 1e-6, rel_err = 1e-6, max_eval = 1000L) {
+    .Call(`_EMC2_dswtn_spv_logpdf`, t_adj, k_center, A_spv, mu_drift, sigma_drift_sq, abs_err, rel_err, max_eval)
+}
+
+dswtn_spv_cdf <- function(t_adj, k_center, A_spv, mu_drift, sigma_drift_sq, abs_err = 1e-6, rel_err = 1e-6, max_eval = 1000L) {
+    .Call(`_EMC2_dswtn_spv_cdf`, t_adj, k_center, A_spv, mu_drift, sigma_drift_sq, abs_err, rel_err, max_eval)
+}
+
+rdm_dswtn <- function(t_adj, B, A, mu_drift, sigma_drift_sq, spv_abs_err = 1e-6, spv_rel_err = 1e-6, spv_max_eval = 1000L) {
+    .Call(`_EMC2_rdm_dswtn`, t_adj, B, A, mu_drift, sigma_drift_sq, spv_abs_err, spv_rel_err, spv_max_eval)
+}
+
+rdm_pswtn <- function(t_adj, B, A, mu_drift, sigma_drift_sq, spv_abs_err = 1e-6, spv_rel_err = 1e-6, spv_max_eval = 1000L) {
+    .Call(`_EMC2_rdm_pswtn`, t_adj, B, A, mu_drift, sigma_drift_sq, spv_abs_err, spv_rel_err, spv_max_eval)
 }
 
 dRDM_DSWTN_log <- function(t, B, A, mu_drift, sigma_drift_sq, t0, s) {
