@@ -5,6 +5,8 @@
 #include <unordered_set>
 #include <vector>
 #include <functional>
+#include <cmath>
+#include <boost/math/special_functions/erf.hpp>
 using namespace Rcpp;
 
 LogicalVector contains(CharacterVector sv, std::string txt) {
@@ -537,6 +539,57 @@ std::vector<PreTransformSpec> make_pretransform_specs(NumericVector p_vector, Li
   return specs;
 }
 
+inline void  recycle_vec(NumericVector& v, int n,
+                    double deflt,               // value to use if v is length-0
+                    const char* what)
+{
+  if (v.size() == 0)          // argument omitted in R
+    v = NumericVector(n, deflt);
+  else if (v.size() == 1)     // scalar supplied in R
+    v = NumericVector(n, v[0]);
+  else if (v.size() != n)     // anything else is an error
+    stop("%s length (%d) is not 1 or %d", what, v.size(), n);
+}
+
+NumericVector dnorm_vec(NumericVector x, NumericVector mean = NumericVector::create(0.0), NumericVector sd = NumericVector::create(1.0),  bool log = false) {
+    const double inv_sqrt_2pi = 1.0 / std::sqrt(2.0 * M_PI);
+	int n = x.size();
+	recycle_vec(mean, n, 0.0,"mean");
+    recycle_vec(sd,   n, 1.0,"sd");
+	NumericVector out(n);
+    NumericVector z = (x - mean) / sd;
+    // Use Rcpp's vectorized pow and exp
+    out = inv_sqrt_2pi / sd * Rcpp::exp(-0.5 * Rcpp::pow(z, 2.0));
+    if (log) {
+        return Rcpp::log(out);
+    } else {
+        return out;
+    }
+}
+
+NumericVector pnorm_vec(NumericVector x, NumericVector mean = NumericVector::create(0.0), NumericVector sd = NumericVector::create(1.0),
+                            bool lower = true, bool log_p = false) {
+    int n = x.size();
+    recycle_vec(mean, n, 0.0,"mean");
+    recycle_vec(sd,   n, 1.0,"sd");
+    NumericVector out(n);
+    const double sqrt2 = std::sqrt(2.0);
+
+	 NumericVector z = (x - mean) / sd;
+	 for (int i = 0; i < n; ++i) {
+		 if (sd[i]>1e-10) {
+		out[i] = boost::math::erfc(-z[i] / sqrt2) / 2.0;
+		 } else {out[i]=NA_REAL;}		
+     }
+	 // Handle tail and log options
+	 if (!lower) {
+		 out = 1.0 - out;
+	 }
+	 if (log_p) {
+        out = Rcpp::log(out);
+    }
+	return out;
+}
 #endif
 
 

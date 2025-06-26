@@ -1,5 +1,7 @@
 #### RACE LBA ----
 devtools::load_all()
+library(tictoc)
+tic()
 RNGkind("L'Ecuyer-CMRG")
 set.seed(123)
 matchfun <- function(d) as.numeric(d$S)==as.numeric(d$lR) |
@@ -127,7 +129,7 @@ profile_plot_test(dat,designLBA,p_vector,n_cores=1,layout=c(2,3)) # good
 profile_plot_test(dat,designMLBA,p_vector,n_cores=1,layout=c(2,3)) # good
 profile_plot_test(dat,designLBA,p_vector,n_cores=1,layout=c(2,3),use_c=TRUE) # ?
 profile_plot_test(dat,designMLBA,p_vector,n_cores=1,layout=c(2,3),use_c=TRUE) # ?
-
+toc()
 
 # emc <- make_emc(dat,designLBA,type="single")
 # emc <- fit(emc,cores_per_chain = 3)
