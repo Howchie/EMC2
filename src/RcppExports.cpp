@@ -77,6 +77,38 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// dlba_vec
+NumericVector dlba_vec(NumericVector t, NumericVector A, NumericVector b, NumericVector v, NumericVector sv, bool posdrift);
+RcppExport SEXP _EMC2_dlba_vec(SEXP tSEXP, SEXP ASEXP, SEXP bSEXP, SEXP vSEXP, SEXP svSEXP, SEXP posdriftSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type t(tSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type A(ASEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type b(bSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type v(vSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type sv(svSEXP);
+    Rcpp::traits::input_parameter< bool >::type posdrift(posdriftSEXP);
+    rcpp_result_gen = Rcpp::wrap(dlba_vec(t, A, b, v, sv, posdrift));
+    return rcpp_result_gen;
+END_RCPP
+}
+// plba_vec
+NumericVector plba_vec(NumericVector t, NumericVector A, NumericVector b, NumericVector v, NumericVector sv, bool posdrift);
+RcppExport SEXP _EMC2_plba_vec(SEXP tSEXP, SEXP ASEXP, SEXP bSEXP, SEXP vSEXP, SEXP svSEXP, SEXP posdriftSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type t(tSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type A(ASEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type b(bSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type v(vSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type sv(svSEXP);
+    Rcpp::traits::input_parameter< bool >::type posdrift(posdriftSEXP);
+    rcpp_result_gen = Rcpp::wrap(plba_vec(t, A, b, v, sv, posdrift));
+    return rcpp_result_gen;
+END_RCPP
+}
 // dWald
 NumericVector dWald(NumericVector t, NumericVector v, NumericVector B, NumericVector A, NumericVector t0);
 RcppExport SEXP _EMC2_dWald(SEXP tSEXP, SEXP vSEXP, SEXP BSEXP, SEXP ASEXP, SEXP t0SEXP) {
@@ -493,6 +525,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_calculate_subject_means", (DL_FUNC) &_EMC2_calculate_subject_means, 4},
     {"_EMC2_dlba", (DL_FUNC) &_EMC2_dlba, 6},
     {"_EMC2_plba", (DL_FUNC) &_EMC2_plba, 6},
+    {"_EMC2_dlba_vec", (DL_FUNC) &_EMC2_dlba_vec, 6},
+    {"_EMC2_plba_vec", (DL_FUNC) &_EMC2_plba_vec, 6},
     {"_EMC2_dWald", (DL_FUNC) &_EMC2_dWald, 5},
     {"_EMC2_pWald", (DL_FUNC) &_EMC2_pWald, 5},
     {"_EMC2_pEXG", (DL_FUNC) &_EMC2_pEXG, 6},

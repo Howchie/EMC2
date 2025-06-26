@@ -577,9 +577,9 @@ NumericVector pnorm_vec(NumericVector x, NumericVector mean = NumericVector::cre
 
 	 NumericVector z = (x - mean) / sd;
 	 for (int i = 0; i < n; ++i) {
-		 if (sd[i]>1e-10) {
-		out[i] = boost::math::erfc(-z[i] / sqrt2) / 2.0;
-		 } else {out[i]=NA_REAL;}		
+		 if (sd[i]<1e-10 || NumericVector::is_na(mean[i]) || NumericVector::is_na(sd[i]) || NumericVector::is_na(x[i])) {
+			out[i]=NA_REAL;
+		 } else {out[i] = boost::math::erfc(-z[i] / sqrt2) / 2.0;} 
      }
 	 // Handle tail and log options
 	 if (!lower) {

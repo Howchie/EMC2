@@ -535,7 +535,6 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
   return(lls);
 }
 
-
 // Batched version of f_race_integrand_cpp for finite RT trials
 // rts_batch: vector of RTs for the batch
 // pars_all_trials_ordered: A List of NumericMatrix, where each element is an ordered parameter matrix
@@ -583,7 +582,7 @@ NumericVector f_race_integrand_batch_cpp(
             // Survivor: 1 - CDF
             for (int i = 0; i < n_batch_trials; ++i) {
                 double s_loser_k = 1.0 - cdf_loser_k_vec[i];
-                s_loser_k = (R_IsNA(s_loser_k) || !R_finite(s_loser_k) || s_loser_k < 0) ? 0.0 : ((s_loser_k > 1.0) ? 1.0 : s_loser_k);
+                s_loser_k = (Rcpp::traits::is_na<REALSXP>(s_loser_k) || Rcpp::traits::is_infinite<REALSXP>(s_loser_k) || s_loser_k < 0) ? 0.0 : ((s_loser_k > 1.0) ? 1.0 : s_loser_k);
                 survivor_losers[i] *= s_loser_k;
             }
         }
@@ -594,7 +593,7 @@ NumericVector f_race_integrand_batch_cpp(
     for (int i = 0; i < n_batch_trials; ++i) {
         double pdf_winner = pdf_winner_vec[i];
         double surv = survivor_losers[i];
-        if (R_IsNA(pdf_winner) || !R_finite(pdf_winner) || pdf_winner < 0 || R_IsNA(surv) || !R_finite(surv) || surv < 0) {
+        if (Rcpp::traits::is_na<REALSXP>(pdf_winner) || Rcpp::traits::is_infinite<REALSXP>(pdf_winner) || pdf_winner < 0 || Rcpp::traits::is_na<REALSXP>(surv) || Rcpp::traits::is_infinite<REALSXP>(surv) || surv < 0) {
             results[i] = 0.0;
         } else {
             results[i] = pdf_winner * surv;
@@ -906,7 +905,7 @@ double c_log_likelihood_race_cens_trunc(
                     LT, UT, n_acc, integration_epsilon, model_context_for_funcs
                 );
 
-                if (ISNAN(trunc_cf) || !R_FINITE(trunc_cf) || trunc_cf <= 0) {
+                if (NumericVector::is_na(trunc_cf) || !R_FINITE(trunc_cf) || trunc_cf <= 0) {
                     ll_unique[unique_trial_idx] = min_ll;
                 } else {
                     ll_unique[unique_trial_idx] = std::log(prob_density) + std::log(trunc_cf);
@@ -944,14 +943,14 @@ double c_log_likelihood_race_cens_trunc(
                 current_prob_val = integrate_for_kth_winner_cpp(R_j_idx, pars_condition_j_all_acc, LT, LC, model_dfun, model_pfun, n_acc, integration_epsilon, model_context_for_funcs);
                 if (current_prob_val > 0) { // Apply truncation correction if probability is non-zero
                     double trunc_cf = get_trunc_corr_factor_for_kth_winner_cpp(R_j_idx, pars_condition_j_all_acc, model_dfun, model_pfun, LT, UT, n_acc, integration_epsilon, model_context_for_funcs);
-                    if (ISNAN(trunc_cf) || !R_FINITE(trunc_cf) || trunc_cf <= 0) current_prob_val = 0; else current_prob_val *= trunc_cf;
+                    if (NumericVector::is_na(trunc_cf) || !R_FINITE(trunc_cf) || trunc_cf <= 0) current_prob_val = 0; else current_prob_val *= trunc_cf;
                 }
             } else { // Response (winner) is unknown; sum probabilities over all possible winners
                 for (int k_win = 1; k_win <= n_acc; ++k_win) {
                     double p_k = integrate_for_kth_winner_cpp(k_win, pars_condition_j_all_acc, LT, LC, model_dfun, model_pfun, n_acc, integration_epsilon, model_context_for_funcs);
                     if (p_k > 0) {
                         double trunc_cf_k = get_trunc_corr_factor_for_kth_winner_cpp(k_win, pars_condition_j_all_acc, model_dfun, model_pfun, LT, UT, n_acc, integration_epsilon, model_context_for_funcs);
-                        if (!ISNAN(trunc_cf_k) && R_FINITE(trunc_cf_k) && trunc_cf_k >=0) current_prob_val += (p_k * trunc_cf_k);
+                        if (!NumericVector::is_na(trunc_cf_k) && R_FINITE(trunc_cf_k) && trunc_cf_k >=0) current_prob_val += (p_k * trunc_cf_k);
                     }
                 }
             }
@@ -961,26 +960,26 @@ double c_log_likelihood_race_cens_trunc(
                 current_prob_val = integrate_for_kth_winner_cpp(R_j_idx, pars_condition_j_all_acc, UC, UT, model_dfun, model_pfun, n_acc, integration_epsilon, model_context_for_funcs);
                  if (current_prob_val > 0) { // Apply truncation correction
                     double trunc_cf = get_trunc_corr_factor_for_kth_winner_cpp(R_j_idx, pars_condition_j_all_acc, model_dfun, model_pfun, LT, UT, n_acc, integration_epsilon, model_context_for_funcs);
-                    if (ISNAN(trunc_cf) || !R_FINITE(trunc_cf) || trunc_cf <= 0) current_prob_val = 0; else current_prob_val *= trunc_cf;
+                    if (NumericVector::is_na(trunc_cf) || !R_FINITE(trunc_cf) || trunc_cf <= 0) current_prob_val = 0; else current_prob_val *= trunc_cf;
                 }
             } else { // Response (winner) is unknown; sum probabilities over all possible winners
                 for (int k_win = 1; k_win <= n_acc; ++k_win) {
                     double p_k = integrate_for_kth_winner_cpp(k_win, pars_condition_j_all_acc, UC, UT, model_dfun, model_pfun, n_acc, integration_epsilon, model_context_for_funcs);
                      if (p_k > 0) {
                         double trunc_cf_k = get_trunc_corr_factor_for_kth_winner_cpp(k_win, pars_condition_j_all_acc, model_dfun, model_pfun, LT, UT, n_acc, integration_epsilon, model_context_for_funcs);
-                        if (!ISNAN(trunc_cf_k) && R_FINITE(trunc_cf_k) && trunc_cf_k >=0) current_prob_val += (p_k * trunc_cf_k);
+                        if (!NumericVector::is_na(trunc_cf_k) && R_FINITE(trunc_cf_k) && trunc_cf_k >=0) current_prob_val += (p_k * trunc_cf_k);
                     }
                 }
             }
         // Case 4: Missing RT (NA). Probability is sum of integral from LT to LC and UC to UT (i.e., outside the observation window but within truncation).
-        } else if (ISNAN(rt_j)) {
+        } else if (NumericVector::is_na(rt_j)) {
             if (R_j_idx != NA_INTEGER) { // Response (winner) is known
                 double p_L = integrate_for_kth_winner_cpp(R_j_idx, pars_condition_j_all_acc, LT, LC, model_dfun, model_pfun, n_acc, integration_epsilon, model_context_for_funcs);
                 double p_U = integrate_for_kth_winner_cpp(R_j_idx, pars_condition_j_all_acc, UC, UT, model_dfun, model_pfun, n_acc, integration_epsilon, model_context_for_funcs);
                 current_prob_val = p_L + p_U;
                  if (current_prob_val > 0) { // Apply truncation correction
                     double trunc_cf = get_trunc_corr_factor_for_kth_winner_cpp(R_j_idx, pars_condition_j_all_acc, model_dfun, model_pfun, LT, UT, n_acc, integration_epsilon, model_context_for_funcs);
-                    if (ISNAN(trunc_cf) || !R_FINITE(trunc_cf) || trunc_cf <= 0) current_prob_val = 0; else current_prob_val *= trunc_cf;
+                    if (NumericVector::is_na(trunc_cf) || !R_FINITE(trunc_cf) || trunc_cf <= 0) current_prob_val = 0; else current_prob_val *= trunc_cf;
                 }
             } else { // Response (winner) is unknown; sum probabilities over all possible winners
                 for (int k_win = 1; k_win <= n_acc; ++k_win) {
@@ -989,7 +988,7 @@ double c_log_likelihood_race_cens_trunc(
                     double p_k_sum = p_L_k + p_U_k;
                     if (p_k_sum > 0) {
                         double trunc_cf_k = get_trunc_corr_factor_for_kth_winner_cpp(k_win, pars_condition_j_all_acc, model_dfun, model_pfun, LT, UT, n_acc, integration_epsilon, model_context_for_funcs);
-                        if (!ISNAN(trunc_cf_k) && R_FINITE(trunc_cf_k) && trunc_cf_k >=0) current_prob_val += (p_k_sum * trunc_cf_k);
+                        if (!NumericVector::is_na(trunc_cf_k) && R_FINITE(trunc_cf_k) && trunc_cf_k >=0) current_prob_val += (p_k_sum * trunc_cf_k);
                     }
                 }
             }

@@ -2,24 +2,153 @@
 #define lba_h
 
 #include <Rcpp.h>
-#include "utility_functions.h" // Assuming this provides ifelse or similar if needed
+#include "utility_functions.h"
 
 using namespace Rcpp;
 
-// Scalar versions (can be kept for reference or specific uses if any)
-// Or remove if dlba_norm_vec and plba_norm_vec fully supersede their usage
-double pnormP_scalar(double q, double mean = 0.0, double sd = 1.0,
-                     bool lower = true, bool log = false){
+double pnormP(double q, double mean = 0.0, double sd = 1.0,
+              bool lower = true, bool log = false){
   return R::pnorm(q, mean, sd, lower, log);
 }
 
-double dnormP_scalar(double x, double mean = 0.0, double sd = 1.0,
-                     bool log = false){
+double dnormP(double x, double mean = 0.0, double sd = 1.0,
+              bool log = false){
   return R::dnorm(x, mean, sd, log);
 }
 
+double plba_norm(double t, double A, double b, double v, double sv,
+                 bool posdrift = true){
+  double denom = 1.;
+  if (posdrift) {
+    denom = pnormP(v / sv, 0., 1., true, false);
+    if (denom < 1e-10)
+      denom = 1e-10;
+  }
 
-NumericVector plba_norm(NumericVector t, NumericVector A, NumericVector b, // b is B+A from original
+  double cdf;
+
+  if (A > 1e-10){
+    double zs = t * sv;
+    double cmz = b - t * v;
+    double xx = cmz - A;
+    double cz = cmz / zs;
+    double cz_max = xx / zs;
+    cdf = (1. + (zs * (dnormP(cz_max, 0., 1., false) - dnormP(cz, 0., 1., false))
+                   + xx * pnormP(cz_max, 0., 1., true, false) - cmz * pnormP(cz, 0., 1., true, false))/A) / denom;
+  } else {
+    cdf = pnormP(b / t, v, sv, false, false) / denom;
+  }
+
+  if (cdf < 0.) {
+    return 0.;
+  } else if (cdf > 1.){
+    return 1.;
+  }
+  return cdf;
+}
+
+double dlba_norm(double t, double A,double b, double v, double sv,
+                 bool posdrift = true){
+  double denom = 1.;
+  if (posdrift) {
+    denom = pnormP(v / sv, 0., 1., true, false);
+    if (denom < 1e-10)
+      denom = 1e-10;
+  }
+
+  double pdf;
+
+  if (A > 1e-10){
+    double zs = t * sv;
+    double cmz = b - t * v;;
+    double cz = cmz / zs;
+    double cz_max = (cmz - A) / zs;
+    pdf = (v * (pnormP(cz, 0., 1., true, false) - pnormP(cz_max, 0., 1., true, false)) +
+      sv * (dnormP(cz_max, 0., 1., false) - dnormP(cz, 0., 1., false))) / (A * denom);
+  } else {
+    pdf = dnormP(b / t, v, sv, false) * b / (t * t * denom);
+  }
+
+  if (pdf < 0.) {
+    return 0.;
+  }
+  return pdf;
+}
+
+NumericVector dlba_c(NumericVector rts, NumericMatrix pars, LogicalVector idx, double min_ll, LogicalVector is_ok, bool use_posdrift = true){ // Added use_posdrift
+  //v = 0, sv = 1, B = 2, A = 3, t0 = 4
+  int n = sum(idx);
+  NumericVector out(n);
+  int k = 0;
+  for(int i = 0; i < rts.length(); i++){
+    if(idx[i]){
+      if(NumericVector::is_na(pars(i,0))){ // for RACE
+        out[k] = 0;
+      } else if((rts[i] - pars(i,4) > 0) && (is_ok[i])){
+        // Pass use_posdrift to dlba_norm
+        out[k] = dlba_norm(rts[i] - pars(i,4), pars(i,3), pars(i,2) + pars(i,3), pars(i,0), pars(i,1), use_posdrift);
+      } else{
+        out[k] = min_ll;
+      }
+      k++;
+    }
+  }
+  return(out);
+}
+
+NumericVector plba_c(NumericVector rts, NumericMatrix pars, LogicalVector idx, double min_ll, LogicalVector is_ok, bool use_posdrift = true){ // Added use_posdrift
+  //v = 0, sv = 1, B = 2, A = 3, t0 = 4
+  int n = sum(idx);
+  NumericVector out(n);
+  int k = 0;
+  for(int i = 0; i < rts.length(); i++){
+    if(idx[i]){
+      if(NumericVector::is_na(pars(i,0))){ // for RACE
+        out[k] = 0;
+      } else if((rts[i] - pars(i,4) > 0) && (is_ok[i])){
+        // Pass use_posdrift to plba_norm
+        out[k] = plba_norm(rts[i] - pars(i,4), pars(i,3), pars(i,2) + pars(i,3), pars(i,0), pars(i,1), use_posdrift);
+      } else{
+        out[k] = min_ll;
+      }
+      k++;
+    }
+  }
+  return(out);
+}
+
+// [[Rcpp::export]]
+NumericVector dlba(NumericVector t,
+                   NumericVector A, NumericVector b, NumericVector v, NumericVector sv,
+                   bool posdrift = true)
+
+{
+  int n = t.size();
+  NumericVector pdf(n);
+
+  for (int i = 0; i < n; i++){
+    pdf[i] = dlba_norm(t[i], A[i], b[i], v[i], sv[i], posdrift);
+  }
+  return pdf;
+}
+
+// [[Rcpp::export]]
+NumericVector plba(NumericVector t,
+                   NumericVector A, NumericVector b, NumericVector v, NumericVector sv,
+                   bool posdrift = true)
+
+{
+  int n = t.size();
+  NumericVector cdf(n);
+
+  for (int i = 0; i < n; i++){
+    cdf[i] = plba_norm(t[i], A[i], b[i], v[i], sv[i], posdrift);
+  }
+  return cdf;
+}
+
+// Added vectorised versions but they're slower??
+NumericVector plba_norm_vec(NumericVector t, NumericVector A, NumericVector b, // b is B+A from original
                             NumericVector v, NumericVector sv, bool posdrift = true) {
   int n = t.size();
   NumericVector denom(n, 1.0);
@@ -79,8 +208,7 @@ NumericVector plba_norm(NumericVector t, NumericVector A, NumericVector b, // b 
   return cdf;
 }
 
-
-NumericVector dlba_norm(NumericVector t, NumericVector A, NumericVector b, // b is B+A from original
+NumericVector dlba_norm_vec(NumericVector t, NumericVector A, NumericVector b, // b is B+A from original
                             NumericVector v, NumericVector sv, bool posdrift = true) {
   int n = t.size();
   NumericVector denom(n, 1.0);
@@ -126,81 +254,28 @@ NumericVector dlba_norm(NumericVector t, NumericVector A, NumericVector b, // b 
   return pdf;
 }
 
-
-// Keep scalar versions if they are used elsewhere or for clarity/testing
-/* double plba_norm(double t, double A, double b, double v, double sv,
-                 bool posdrift = true){
-  double denom = 1.;
-  if (posdrift) {
-    denom = pnormP_scalar(v / sv, 0., 1., true, false);
-    if (denom < 1e-10)
-      denom = 1e-10;
-  }
-
-  double cdf;
-
-  if (A > 1e-10){
-    double zs = t * sv;
-    double cmz = b - t * v; // b here is B+A
-    double xx = cmz - A;    // xx is (B+A)-A = B
-    double cz = cmz / zs;
-    double cz_max = xx / zs;
-    cdf = (1. + (zs * (dnormP_scalar(cz_max, 0., 1., false) - dnormP_scalar(cz, 0., 1., false))
-                   + xx * pnormP_scalar(cz_max, 0., 1., true, false) - cmz * pnormP_scalar(cz, 0., 1., true, false))/A) / denom;
-  } else {
-    cdf = pnormP_scalar(b / t, v, sv, false, false) / denom; // b here is B+A
-  }
-
-  if (cdf < 0.) {
-    return 0.;
-  } else if (cdf > 1.){
-    return 1.;
-  }
-  return cdf;
-} */
-
-/* double dlba_norm(double t, double A,double b, double v, double sv, // b here is B+A
-                 bool posdrift = true){
-  double denom = 1.;
-  if (posdrift) {
-    denom = pnormP_scalar(v / sv, 0., 1., true, false);
-    if (denom < 1e-10)
-      denom = 1e-10;
-  }
-
-  double pdf;
-
-  if (A > 1e-10){
-    double zs = t * sv;
-    double cmz = b - t * v; // b is B+A
-    double cz = cmz / zs;
-    double cz_max = (cmz - A) / zs; // (B+A-A)/zs = B/zs
-    pdf = (v * (pnormP_scalar(cz, 0., 1., true, false) - pnormP_scalar(cz_max, 0., 1., true, false)) +
-      sv * (dnormP_scalar(cz_max, 0., 1., false) - dnormP_scalar(cz, 0., 1., false))) / (A * denom);
-  } else {
-    pdf = dnormP_scalar(b / t, v, sv, false) * b / (t * t * denom); // b is B+A
-  }
-
-  if (pdf < 0.) {
-    return 0.;
-  }
-  return pdf;
-} */
-
-
-NumericVector dlba_c(NumericVector rts, NumericMatrix pars, LogicalVector idx, double min_ll, LogicalVector is_ok, bool use_posdrift = true){
+NumericVector dlba_c_vec(NumericVector rts, NumericMatrix pars, LogicalVector idx, double min_ll, LogicalVector is_ok, bool use_posdrift = true){
   //v = 0, sv = 1, B = 2, A = 3, t0 = 4
   int n_rts = rts.length();
   NumericVector out(n_rts);
   std::fill(out.begin(), out.end(), NA_REAL); // pre-fill NA_REAL for probs
 
-  NumericVector arg_t = rts-pars(_, 4);
-  NumericVector arg_A = pars(_, 3);
-  NumericVector arg_b = pars(_, 2)+pars(_, 3); // This will be B + A
-  NumericVector arg_v = pars(_, 0);
-  NumericVector arg_sv = pars(_, 1);
-  Rcout<<arg_t<<arg_v;
-  NumericVector computed_values = dlba_norm(arg_t, arg_A, arg_b, arg_v, arg_sv, use_posdrift);
+  // Extract columns from pars matrix
+  NumericVector t0_col = pars(_, 4);
+  NumericVector A_col  = pars(_, 3);
+  NumericVector B_col  = pars(_, 2);
+  NumericVector v_col  = pars(_, 0);
+  NumericVector sv_col = pars(_, 1);
+
+  // Create arguments for dlba_norm
+  // Ensure these are new vectors, not just proxies or results of operations on proxies.
+  NumericVector arg_t = rts - t0_col; 
+  NumericVector arg_A = NumericVector(A_col); // Explicitly convert/copy
+  NumericVector arg_b = NumericVector(B_col) + NumericVector(A_col); // B + A
+  NumericVector arg_v = NumericVector(v_col);   // Explicitly convert/copy
+  NumericVector arg_sv = NumericVector(sv_col); // Explicitly convert/copy
+
+  NumericVector computed_values = dlba_norm_vec(arg_t, arg_A, arg_b, arg_v, arg_sv, use_posdrift);
   for(int i = 0; i < n_rts; i++){
     if(idx[i]){
       if(NumericVector::is_na(pars(i,0))){
@@ -215,19 +290,28 @@ NumericVector dlba_c(NumericVector rts, NumericMatrix pars, LogicalVector idx, d
   return out;
 }
 
-NumericVector plba_c(NumericVector rts, NumericMatrix pars, LogicalVector idx, double min_ll, LogicalVector is_ok, bool use_posdrift = true){
+NumericVector plba_c_vec(NumericVector rts, NumericMatrix pars, LogicalVector idx, double min_ll, LogicalVector is_ok, bool use_posdrift = true){
   //v = 0, sv = 1, B = 2, A = 3, t0 = 4
   int n_rts = rts.length();
   NumericVector out(n_rts);
   std::fill(out.begin(), out.end(), NA_REAL); // pre-fill NA_REAL for probs
 
-  NumericVector arg_t = rts-pars(_, 4);
-  NumericVector arg_A = pars(_, 3);
-  NumericVector arg_b = pars(_, 2)+pars(_, 3); // This will be B + A
-  NumericVector arg_v = pars(_, 0);
-  NumericVector arg_sv = pars(_, 1);
-  Rcout<<arg_t<<arg_v;
-  NumericVector computed_values = plba_norm(arg_t, arg_A, arg_b, arg_v, arg_sv, use_posdrift);
+  // Extract columns from pars matrix
+  NumericVector t0_col = pars(_, 4);
+  NumericVector A_col  = pars(_, 3);
+  NumericVector B_col  = pars(_, 2);
+  NumericVector v_col  = pars(_, 0);
+  NumericVector sv_col = pars(_, 1);
+
+  // Create arguments for dlba_norm
+  // Ensure these are new vectors, not just proxies or results of operations on proxies.
+  NumericVector arg_t = rts - t0_col; 
+  NumericVector arg_A = NumericVector(A_col); // Explicitly convert/copy
+  NumericVector arg_b = NumericVector(B_col) + NumericVector(A_col); // B + A
+  NumericVector arg_v = NumericVector(v_col);   // Explicitly convert/copy
+  NumericVector arg_sv = NumericVector(sv_col); // Explicitly convert/copy
+  
+  NumericVector computed_values = plba_norm_vec(arg_t, arg_A, arg_b, arg_v, arg_sv, use_posdrift);
   for(int i = 0; i < n_rts; i++){
     if(idx[i]){
       if(NumericVector::is_na(pars(i,0))){
@@ -243,24 +327,23 @@ NumericVector plba_c(NumericVector rts, NumericMatrix pars, LogicalVector idx, d
 }
 
 // [[Rcpp::export]]
-NumericVector dlba(NumericVector t,
+NumericVector dlba_vec(NumericVector t,
                    NumericVector A, NumericVector b, NumericVector v, NumericVector sv, // Here 'b' is B+A for consistency with dlba_norm
                    bool posdrift = true)
 {
 
   if (t.length() == 0) return NumericVector(0);
-  return dlba_norm(t, A, b, v, sv, posdrift);
+  return dlba_norm_vec(t, A, b, v, sv, posdrift);
 }
 
 // [[Rcpp::export]]
-NumericVector plba(NumericVector t,
+NumericVector plba_vec(NumericVector t,
                    NumericVector A, NumericVector b, NumericVector v, NumericVector sv, // Here 'b' is B+A
                    bool posdrift = true)
 {
 
   if (t.length() == 0) return NumericVector(0);
-  return plba_norm(t, A, b, v, sv, posdrift);
+  return plba_norm_vec(t, A, b, v, sv, posdrift);
 }
-
 #endif
 

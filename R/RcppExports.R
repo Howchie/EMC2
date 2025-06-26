@@ -17,6 +17,14 @@ plba <- function(t, A, b, v, sv, posdrift = TRUE) {
     .Call(`_EMC2_plba`, t, A, b, v, sv, posdrift)
 }
 
+dlba_vec <- function(t, A, b, v, sv, posdrift = TRUE) {
+    .Call(`_EMC2_dlba_vec`, t, A, b, v, sv, posdrift)
+}
+
+plba_vec <- function(t, A, b, v, sv, posdrift = TRUE) {
+    .Call(`_EMC2_plba_vec`, t, A, b, v, sv, posdrift)
+}
+
 dWald <- function(t, v, B, A, t0) {
     .Call(`_EMC2_dWald`, t, v, B, A, t0)
 }

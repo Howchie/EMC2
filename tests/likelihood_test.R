@@ -1,7 +1,7 @@
 #### RACE LBA ----
 devtools::load_all()
 library(tictoc)
-tic()
+
 RNGkind("L'Ecuyer-CMRG")
 set.seed(123)
 matchfun <- function(d) as.numeric(d$S)==as.numeric(d$lR) |
@@ -125,6 +125,7 @@ profile_plot_test <- function (data, design, p_vector, range = 0.5, layout = NA,
 }
 
 library(parallel)
+tic()
 profile_plot_test(dat,designLBA,p_vector,n_cores=1,layout=c(2,3)) # good
 profile_plot_test(dat,designMLBA,p_vector,n_cores=1,layout=c(2,3)) # good
 profile_plot_test(dat,designLBA,p_vector,n_cores=1,layout=c(2,3),use_c=TRUE) # ?
@@ -136,7 +137,25 @@ toc()
 # recovery(emc,p_vector)
 
 data=dat
-design=designLBA
+design=designMLBA
 dadm <- EMC2:::design_model(data, design, verbose = FALSE)
 model=attr(dadm, "model")()
 pars <- get_pars_matrix(p_vector, dadm, model)
+
+i=0
+tic()
+while(i<1000) {
+  tmp=plba(dadm$rt,pars[,"A"],pars[,"b"], pars[, "v"], pars[,"sv"],TRUE)
+  tmp=dlba(dadm$rt,pars[,"A"],pars[,"b"], pars[, "v"], pars[,"sv"],TRUE)
+i=i+1
+}
+toc()
+
+i=0
+tic()
+while(i<1000) {
+  tmp=plba_vec(dadm$rt,pars[,"A"],pars[,"b"], pars[, "v"], pars[,"sv"],TRUE)
+  tmp=dlba_vec(dadm$rt,pars[,"A"],pars[,"b"], pars[, "v"], pars[,"sv"],TRUE)
+  i=i+1
+}
+toc()
