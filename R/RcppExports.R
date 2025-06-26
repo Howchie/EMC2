@@ -25,12 +25,80 @@ plba_vec <- function(t, A, b, v, sv, posdrift = TRUE) {
     .Call(`_EMC2_plba_vec`, t, A, b, v, sv, posdrift)
 }
 
+pigt0 <- function(t, k = 1., l = 1.) {
+    .Call(`_EMC2_pigt0`, t, k, l)
+}
+
+digt0 <- function(t, k = 1., l = 1.) {
+    .Call(`_EMC2_digt0`, t, k, l)
+}
+
+pigt <- function(t, k = 1, l = 1, a = .1, threshold = 1e-10) {
+    .Call(`_EMC2_pigt`, t, k, l, a, threshold)
+}
+
+digt <- function(t, k = 1., l = 1., a = .1, threshold = 1e-10) {
+    .Call(`_EMC2_digt`, t, k, l, a, threshold)
+}
+
+drdm_c <- function(rts, pars, idx, min_ll, is_ok) {
+    .Call(`_EMC2_drdm_c`, rts, pars, idx, min_ll, is_ok)
+}
+
+prdm_c <- function(rts, pars, idx, min_ll, is_ok) {
+    .Call(`_EMC2_prdm_c`, rts, pars, idx, min_ll, is_ok)
+}
+
 dWald <- function(t, v, B, A, t0) {
     .Call(`_EMC2_dWald`, t, v, B, A, t0)
 }
 
 pWald <- function(t, v, B, A, t0) {
     .Call(`_EMC2_pWald`, t, v, B, A, t0)
+}
+
+wald_cdf_classic <- function(t, drift_rate_xi, boundary_alpha) {
+    .Call(`_EMC2_wald_cdf_classic`, t, drift_rate_xi, boundary_alpha)
+}
+
+truncated_normal_pdf <- function(xi, mu, sigma_sq, lower_bound) {
+    .Call(`_EMC2_truncated_normal_pdf`, xi, mu, sigma_sq, lower_bound)
+}
+
+dswtn_logpdf_core <- function(t_adj, alpha, mu_drift, sigma_drift_sq) {
+    .Call(`_EMC2_dswtn_logpdf_core`, t_adj, alpha, mu_drift, sigma_drift_sq)
+}
+
+dswtn_cdf_core <- function(t_adj, alpha, mu_drift, sigma_drift_sq, abs_err = 1e-6, rel_err = 1e-6, max_eval = 1000L) {
+    .Call(`_EMC2_dswtn_cdf_core`, t_adj, alpha, mu_drift, sigma_drift_sq, abs_err, rel_err, max_eval)
+}
+
+rtnorm_rng_positive <- function(mu, sigma_sq) {
+    .Call(`_EMC2_rtnorm_rng_positive`, mu, sigma_sq)
+}
+
+rinvgauss_rng <- function(mu_ig, lambda_ig) {
+    .Call(`_EMC2_rinvgauss_rng`, mu_ig, lambda_ig)
+}
+
+rswtn_core <- function(alpha, mu_drift, sigma_drift_sq, theta) {
+    .Call(`_EMC2_rswtn_core`, alpha, mu_drift, sigma_drift_sq, theta)
+}
+
+dRDM_DSWTN_log <- function(t, B, A, mu_drift, sigma_drift_sq, t0, s) {
+    .Call(`_EMC2_dRDM_DSWTN_log`, t, B, A, mu_drift, sigma_drift_sq, t0, s)
+}
+
+pRDM_DSWTN <- function(t, B, A, mu_drift, sigma_drift_sq, t0, s, spv_abs_err = 1e-6, spv_rel_err = 1e-6, spv_max_eval = 1000L) {
+    .Call(`_EMC2_pRDM_DSWTN`, t, B, A, mu_drift, sigma_drift_sq, t0, s, spv_abs_err, spv_rel_err, spv_max_eval)
+}
+
+rRDM_DSWTN <- function(n_samples, B, A, mu_drift, sigma_drift_sq, t0, s = 1.0) {
+    .Call(`_EMC2_rRDM_DSWTN`, n_samples, B, A, mu_drift, sigma_drift_sq, t0, s)
+}
+
+loglik_RDM_DSWTN_race <- function(rts, choices, params_B, params_A, params_mu_drift, params_sigma_drift_sq, params_t0, params_s, min_log_lik = -1e10, spv_abs_err = 1e-6, spv_rel_err = 1e-6, spv_max_eval = 1000L) {
+    .Call(`_EMC2_loglik_RDM_DSWTN_race`, rts, choices, params_B, params_A, params_mu_drift, params_sigma_drift_sq, params_t0, params_s, min_log_lik, spv_abs_err, spv_rel_err, spv_max_eval)
 }
 
 pEXG <- function(q, mu = 5., sigma = 1., tau = 1., lower_tail = TRUE, log_p = FALSE) {

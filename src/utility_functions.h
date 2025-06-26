@@ -6,7 +6,7 @@
 #include <vector>
 #include <functional>
 #include <cmath>
-#include <boost/math/special_functions/erf.hpp>
+//#include <boost/math/special_functions/erf.hpp>
 using namespace Rcpp;
 
 LogicalVector contains(CharacterVector sv, std::string txt) {
@@ -579,7 +579,7 @@ NumericVector pnorm_vec(NumericVector x, NumericVector mean = NumericVector::cre
 	 for (int i = 0; i < n; ++i) {
 		 if (sd[i]<1e-10 || NumericVector::is_na(mean[i]) || NumericVector::is_na(sd[i]) || NumericVector::is_na(x[i])) {
 			out[i]=NA_REAL;
-		 } else {out[i] = boost::math::erfc(-z[i] / sqrt2) / 2.0;} 
+		 } else {out[i] = std::erfc(-z[i] / sqrt2) / 2.0;} 
      }
 	 // Handle tail and log options
 	 if (!lower) {
