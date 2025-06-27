@@ -247,7 +247,11 @@ pRDM <- function(rt,pars)
 rWald <- function(n,B,v,A)
   # random function for single accumulator
 {
-
+  if (n>1 & all(length(A)==1,length(v)==1,length(B)==1)) {
+    A=rep(A,n)
+    B=rep(B,n)
+    v=rep(v,n)
+  }
   rwaldt <- function(n,k,l,tiny=1e-6) {
     # random sample of n from a Wald (or Inverse Gaussian)
     # k = criterion, l = rate, assumes sigma=1 Browninan motion
@@ -299,7 +303,10 @@ rRDM <- function(lR,pars,p_types=c("v","B","A","t0"),ok=rep(TRUE,dim(pars)[1]))
   # test
   # pars=cbind(B=c(1,2),v=c(1,1),A=c(0,0),t0=c(.2,.2)); lR=factor(c(1,2))
 {
-
+  if (is.null(dim(pars)) || (dim(pars)[1]==1 & length(rt>1)) ) { # Check if pars is a vector
+    original_names <- names(pars); if (is.null(original_names)) {original_names = colnames(pars)}
+    pars <- matrix(pars, nrow = length(rt), ncol=length(pars), dimnames = list(NULL, original_names),byrow=TRUE)
+  }
   if (!all(p_types %in% dimnames(pars)[[2]]))
     stop("pars must have columns ",paste(p_types,collapse = " "))
   if (any(dimnames(pars)[[2]]=="s")) # rescale
@@ -427,6 +434,10 @@ rRDM_SWTN <- function(lR,pars,p_types=c("v","B","A","t0","sv"),ok=rep(TRUE,dim(p
   # test
   # pars=cbind(B=c(1,2),v=c(1,1),A=c(0,0),t0=c(.2,.2)); lR=factor(c(1,2))
 {
+  if (is.null(dim(pars)) || (dim(pars)[1]==1 & length(rt>1)) ) { # Check if pars is a vector
+    original_names <- names(pars); if (is.null(original_names)) {original_names = colnames(pars)}
+    pars <- matrix(pars, nrow = length(rt), ncol=length(pars), dimnames = list(NULL, original_names),byrow=TRUE)
+  }
   if (!all(p_types %in% dimnames(pars)[[2]]))
     stop("pars must have columns ",paste(p_types,collapse = " "))
   if (any(dimnames(pars)[[2]]=="s")) # rescale
@@ -454,6 +465,12 @@ rSWTN <- function(n,B,v,A,sv)
   # random function for single accumulator
 {
   out=numeric(n)
+  if (n>1 & all(length(A)==1,length(v)==1,length(B)==1,length(sv==1))) {
+    A=rep(A,n)
+    B=rep(B,n)
+    v=rep(v,n)
+    sv=rep(sv,n)
+  }
   b = ifelse(A==0,B,runif(n,B, B + A)) # adjust for spv
   l = ifelse(sv==0,v,truncnorm::rtruncnorm(n,a=0,b=Inf,mean=v,sd=sv)) # between trial variability
   

@@ -685,9 +685,9 @@ double prdmswtn(double t_adj, double B, double mu_drift, double A,
         // Case 4: Full model - SWTN CDF with RDM-style SPV (uniform over U(B, B+A)).
         // A is not zero here.
 
-        // If max threshold B+A is non-positive, effectively an immediate hit.
+        // If max threshold B+A is non-positive, effectively an immediate hit. (check this..)
         if ((B + A) <= 1e-9) {
-             return pswtn(t_adj, B + A, mu_drift, sigma_drift, spv_abs_err, spv_rel_err, spv_max_eval);
+             return 1.0;
         }
 
         RDM_SWTN_SPV_Integrand_Params int_params_cdf;
@@ -892,7 +892,7 @@ NumericVector drdmswtn_c(NumericVector rts, NumericMatrix pars, LogicalVector id
       if(NumericVector::is_na(pars(i,0))){ // for RACE
         out[k] = 0;
       } else if((rts[i] - pars(i,3) > 0) && (is_ok[i] == TRUE)){
-        out[k] = digt(rts[i] - pars(i,3), pars(i,1)/pars(i,4) + .5 * pars(i,2)/pars(i,4), pars(i,0)/pars(i,4), .5*pars(i,2)/pars(i,4), pars(i,5));
+        out[k] = drdmswtn(rts[i] - pars(i,3), pars(i,1)/pars(i,4), pars(i,0)/pars(i,4), pars(i,2)/pars(i,4), pars(i,5));
       } else{
         out[k] = min_ll;
       }
@@ -913,7 +913,7 @@ NumericVector prdmswtn_c(NumericVector rts, NumericMatrix pars, LogicalVector id
       if(NumericVector::is_na(pars(i,0))){ // for RACE
         out[k] = 0;
       } else if((rts[i] - pars(i,3) > 0) && (is_ok[i] == TRUE)){
-        out[k] = pigt(rts[i] - pars(i,3), pars(i,1)/pars(i,4) + .5 * pars(i,2)/pars(i,4), pars(i,0)/pars(i,4), .5*pars(i,2)/pars(i,4), pars(i,5));
+        out[k] = prdmswtn(rts[i] - pars(i,3), pars(i,1)/pars(i,4), pars(i,0)/pars(i,4), pars(i,2)/pars(i,4), pars(i,5));
       } else{
         out[k] = min_ll;
       }

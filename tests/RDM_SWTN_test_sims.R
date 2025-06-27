@@ -9,35 +9,48 @@ matchfun <- function(d) as.numeric(d$S)==as.numeric(d$lR) |
 designRDM <- design(
   factors=list(subjects=1,S=c("left"),RACE=1),Rlevels=c("left"),
   matchfun=matchfun,
-  model=RDM,constants=c(s=log(1)),
+  model=RDM,constants=c(),
   formula=list(v~1,B~1,t0~1,A~1,s~1),
 )
 designRDMSWTN <- design(
   factors=list(subjects=1,S=c("left"),RACE=1),Rlevels=c("left"),
   matchfun=matchfun,
-  model=RDM_SWTN,constants=c(s=log(1),sv=log(0.5)),
+  model=RDM_SWTN,constants=c(),
   formula=list(v~1,B~1,t0~1,A~1,s~1,sv~1),
 )
-p_vector <- sampled_pars(designRDM,doMap = FALSE)
-p_vector[1:length(p_vector)] <- c(log(2), log(2), log(1), log(0.2))
-p_vector2 <- sampled_pars(designRDMSWTN,doMap = FALSE)
-p_vector2[1:length(p_vector2)] <- c(log(2), log(2), log(1), log(0.2))
+p_vector <- c("v"=log(1),"A"=log(1),"B"=log(1),"t0"=log(0.15),"s"=log(1))
+p_vector2 <- c("v"=log(1),"A"=log(1),"B"=log(1),"t0"=log(0.15),"s"=log(1), "sv" = log(0.1))
+
 # Make square data so can remove pm in RACE = 2
 template <- make_data(p_vector,designRDM,n_trials=10000)
-template2 <- make_data(p_vector,designRDMSWTN,n_trials=10000)
-attr(template,"UC")=Inf
-template <- template[!(template$RACE==2 & (template$S %in% c("leftpm","rightpm"))),]
-dat <- make_data(p_vector,designLBA,data=template)
-Cfun <- function(d) as.numeric(d$S)==as.numeric(d$R) | (d$R=="pm" & as.numeric(d$S)>2)
-tapply(Cfun(dat),dat[,c("S","RACE")],mean)
-# dadm <- EMC2:::design_model(dat,designLBA,compress=FALSE)
-
+template2 <- make_data(p_vector2,designRDMSWTN,n_trials=10000)
 
 # Check likelihood
 dadmRDMSWTN <- EMC2:::design_model(template2,designRDMSWTN)
-dadmMLBA <- EMC2:::design_model(dat,designMLBA)
-pars <- EMC2:::get_pars_matrix(p_vector, dadmRDMSWTN, model = attr(dadmRDMSWTN, "model")())
+dadmRDM <- EMC2:::design_model(template,designRDM)
+pars2 <- EMC2:::get_pars_matrix(p_vector2, dadmRDMSWTN, model = attr(dadmRDMSWTN, "model")())
+pars <- EMC2:::get_pars_matrix(p_vector, dadmRDM, model = attr(dadmRDM, "model")())
 
+par(mfrow=c(2,2))
+plot(dadmRDM$rt,designRDM$model()$dfun(dadmRDM$rt,pars), col='blue', xlim=c(0,10))
+plot(dadmRDM$rt,designRDM$model()$pfun(dadmRDM$rt,pars), col='blue', xlim=c(0,10))
+plot(dadmRDMSWTN$rt,designRDMSWTN$model()$dfun(dadmRDMSWTN$rt,pars2), col='red', xlim=c(0,10))
+plot(dadmRDMSWTN$rt,designRDMSWTN$model()$pfun(dadmRDMSWTN$rt,pars2), col='red', xlim=c(0,10))
+
+data=data.frame(rt=rSWTN(10000,exp(p_vector2["B"]),exp(p_vector2["v"]),exp(p_vector2["A"]),
+                         exp(p_vector2["sv"]))+exp(p_vector2["t0"]),
+                S=rep("yes",10000),R=factor(rep("yes",10000)),subjects=rep(1:10,1000))
+
+designRDMSWTN <- design(data=data,
+  model=RDM_SWTN,constants=c(s=log(1)),
+  formula=list(v~1,B~1,t0~1,A~1,s~1,sv~1),
+)
+## TODO -- fix random effects 0-mean
+#pars=make_random_effects(designRDMSWTN,group_means = c(p_vector2["v"],p_vector2["B"],p_vector2["t0"],
+#                         p_vector2["A"],p_vector2["sv"]),n_subj = 100, variance_proportion =0.3)
+fitRDMSWTN = make_emc(data,designRDMSWTN,rt_resolution = 0.02)
+fitRDMSWTN = fit(fitRDMSWTN)
+plot_pars(fitRDMSWTN,true_pars = c("v"=log(1),"A"=log(1),"B"=log(1),"t0"=log(0.15), "sv" = log(0.1)))
 
 lfun <- function(i, x, p_vector, pname, dadm, use_c) {
   p_vector[pname] <- x[i]
