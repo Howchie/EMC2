@@ -93,7 +93,8 @@ design <- function(formula = NULL,factors = NULL,Rlevels = NULL,model,data=NULL,
   if(any(names(factors) %in% c("trial", "R", "rt", "lR", "lM"))){
     stop("Please do not use any of the following names within factors argument: trial, R, rt, lR, lM")
   }
-
+  if (!"subjects" %in% names(factors)) factors$subjects <- 1 # ZH: ensure subjects is added to factors when there's no data, for make_data to work properly
+  factors <- factors <- setNames(lapply(factors, function(x) if (!is.factor(x)) factor(x) else x),names(factors)) # factors were being passed even if not factor types, which is inconsistent with the case where data is passed
   if(any(grepl("_", names(factors)))){
     stop("_ in variable names detected. Please refrain from using any underscores.")
   }
@@ -112,6 +113,7 @@ design <- function(formula = NULL,factors = NULL,Rlevels = NULL,model,data=NULL,
     return(design)
   }
   if (!is.null(data)) {
+    if(!"R" %in% colnames(data)) stop("make sure R is specified in data")
     if(!"subjects" %in% colnames(data)) stop("make sure subjects identifier is present in data")
     data$subjects <- factor(data$subjects)
     facs <- lapply(data,levels)
@@ -127,7 +129,7 @@ design <- function(formula = NULL,factors = NULL,Rlevels = NULL,model,data=NULL,
       if(length(covariates) == 0) covariates <- NULL
     }
     # factors <- factors[names(factors) %in% c(all_preds, "subjects")]
-  }
+  } else {if(is.null(Rlevels)) stop("make sure Rlevels is specified")} # this check wasn't present - would break accumulator logic
   if (!is.null(trend)) {
     formula <- check_trend(trend,covariates, model, formula)
   }
@@ -589,6 +591,7 @@ design_model <- function(data,design,model=NULL,
                          add_acc=TRUE,rt_resolution=0.02,verbose=TRUE,
                          compress=TRUE,rt_check=TRUE, add_da = FALSE, all_cells_dm = FALSE)
 {
+  #browser()
   LT <- attr(data,"LT"); if (is.null(LT)) LT <- 0
   UT <- attr(data,"UT"); if (is.null(UT)) UT <- Inf
   LC <- attr(data,"LC"); if (is.null(LC)) LC <- 0
@@ -744,7 +747,6 @@ make_full_dm <- function(form, Clist, da) {
   }
 
   out <- stats::model.matrix(form, da)
-
   if (dim(out)[2] == 1) {
     dimnames(out)[[2]] <- as.character(pnam)
   } else {
@@ -762,7 +764,6 @@ make_full_dm <- function(form, Clist, da) {
 make_dm <- function(form,da,Clist=NULL,Fcovariates=NULL, add_da = FALSE, all_cells_dm = FALSE)
   # Makes a design matrix based on formula form from augmented data frame da
 {
-
   compress_dm <- function(dm, da = NULL, all_cells_dm = FALSE)
     # out keeps only unique rows, out[attr(out,"expand"),] gets back original.
   {

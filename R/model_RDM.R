@@ -299,6 +299,7 @@ rRDM <- function(lR,pars,p_types=c("v","B","A","t0"),ok=rep(TRUE,dim(pars)[1]))
   # test
   # pars=cbind(B=c(1,2),v=c(1,1),A=c(0,0),t0=c(.2,.2)); lR=factor(c(1,2))
 {
+
   if (!all(p_types %in% dimnames(pars)[[2]]))
     stop("pars must have columns ",paste(p_types,collapse = " "))
   if (any(dimnames(pars)[[2]]=="s")) # rescale
@@ -310,7 +311,7 @@ rRDM <- function(lR,pars,p_types=c("v","B","A","t0"),ok=rep(TRUE,dim(pars)[1]))
   nr <- length(levels(lR))
   dt <- matrix(Inf,nrow=nr,ncol=nrow(pars)/nr)
   t0 <- pars[,"t0"]
-  pars <- pars[ok,]
+  pars <- pars[ok,,drop=FALSE]
   dt[ok] <- rWald(sum(ok),B=pars[,"B"],v=pars[,"v"],A=pars[,"A"])
   R <- apply(dt,2,which.min)
   pick <- cbind(R,1:dim(dt)[2]) # Matrix to pick winner
@@ -416,6 +417,120 @@ RDM <- function(){
   )
 }
 
+
+rRDM_SWTN <- function(lR,pars,p_types=c("v","B","A","t0","sv"),ok=rep(TRUE,dim(pars)[1])) 
+  # lR is an empty latent response factor lR with one level for each accumulator.
+  # pars is a matrix of corresponding parameter values named as in p_types
+  # pars must be sorted so accumulators and parameter for each trial are in
+  # contiguous rows. "s" parameter will be used but can be ommitted
+  #
+  # test
+  # pars=cbind(B=c(1,2),v=c(1,1),A=c(0,0),t0=c(.2,.2)); lR=factor(c(1,2))
+{
+  if (!all(p_types %in% dimnames(pars)[[2]]))
+    stop("pars must have columns ",paste(p_types,collapse = " "))
+  if (any(dimnames(pars)[[2]]=="s")) # rescale
+    pars[,c("A","B","v")] <- pars[,c("A","B","v")]/pars[,"s"]
+  pars[,"B"][pars[,"B"]<0] <- 0 # Protection for negatives
+  pars[,"A"][pars[,"A"]<0] <- 0
+  bad <- rep(NA, length(lR)/length(levels(lR)))
+  out <- data.frame(R = bad, rt = bad)
+  nr <- length(levels(lR))
+  dt <- matrix(Inf,nrow=nr,ncol=nrow(pars)/nr)
+  t0 <- pars[,"t0"]
+  pars <- pars[ok,,drop=FALSE]
+  dt[ok] <- rSWTN(sum(ok),B=pars[,"B"],v=pars[,"v"],A=pars[,"A"],sv=pars[,"sv"])
+  R <- apply(dt,2,which.min)
+  pick <- cbind(R,1:dim(dt)[2]) # Matrix to pick winner
+  # Any t0 difference with lR due to response production time (no effect on race)
+  rt <- matrix(t0,nrow=nr)[pick] + dt[pick]
+  out$R <- levels(lR)[R]
+  out$R <- factor(out$R,levels=levels(lR))
+  out$rt <- rt
+  out
+}
+
+rSWTN <- function(n,B,v,A,sv)
+  # random function for single accumulator
+{
+  out=numeric(n)
+  b = ifelse(A==0,B,runif(n,B, B + A)) # adjust for spv
+  l = ifelse(sv==0,v,truncnorm::rtruncnorm(n,a=0,b=Inf,mean=v,sd=sv)) # between trial variability
+  
+  ok <- !l<0
+  nok <- sum(ok)
+  bs <- runif(nok,B[ok],B[ok]+A[ok])
+  out[ok] <- statmod::rinvgauss(nok,mean=b/l,shape=b^2)
+  out[!ok] <- Inf
+  out  
+  
+}
+
+#' The Racing Diffusion Model with Trial-Varying Drift (DSWTN)
+#'
+#' Model file to estimate a Racing Diffusion Model where each accumulator
+#' follows a Wald distribution with trial-varying drift rates, modeled
+#' by the DSWTN (Distribution Scalar Wald Truncated Normal) distribution.
+#'
+#' @details
+#' This model replaces the standard RDM's single drift rate `v` and start-point
+#' variability `A` with parameters for a distribution of drift rates:
+#' `mu_drift` (mean of the drift distribution) and `sigma_drift_sq` (variance
+#' of the drift distribution).
+#'
+#' Default values are used for all parameters that are not explicitly listed in the `formula`
+#' argument of `design()`.
+#'
+#'#' Default values are used for all parameters that are not explicitly listed in the `formula`
+#' argument of `design()`.They can also be accessed with `RDM()$p_types`.
+#'
+#' | **Parameter** | **Transform** | **Natural scale** | **Default**   | **Mapping**          | **Interpretation**                                                |
+#' |-----------|-----------|---------------|-----------|------------------|---------------------------------------------------------------|
+#' | *v*       | log       | \[0, Inf\]      | log(1)    |                  | Evidence-accumulation rate (drift rate)                        |
+#' | *A*       | log       | \[0, Inf\]      | log(0)    |                  | Between-trial variation (range) in start point                 |
+#' | *B*       | log       | \[0, Inf\]      | log(1)    | *b* = *B* + *A*  | Distance from *A* to *b* (response threshold)                  |
+#' | *t0*      | log       | \[0, Inf\]      | log(0)    |                  | Non-decision time                                             |
+#' | *s*       | log       | \[0, Inf\]      | log(1)    |                  | Within-trial standard deviation of drift rate                 |
+#' | *sv*      | log       | \[0, Inf\]      | log(0.1)  |                  | Standard deviation of the trial-by-trial drift rate distribution   |
+#'
+#' All parameters are typically estimated on the log scale. `A` (start-point variability range)
+#' and `sv` (drift rate between trial variance) can be zero.
+#' * If `A=0` and `sv=0`, the model reduces to a simple Wald distribution with threshold `B` and drift `v`.
+#' * If `sv=0` (and `A > 0`), the model reduces to the standard RDM (with start-point variability `A` and fixed drift `v`).
+#' * If `A=0` (and `sv > 0`), the model reduces to a SWTN with a fixed threshold `B`.
+#' `B` should generally be positive, especially if `A=0`.
+#'
+#' Like the standard RDM, this is a race model with one SWTN-spv accumulator per response option.
+
+#' @export
+#' 
+RDM_SWTN <- function(){
+  list(
+    type="RACE",
+    c_name = "RDM_SWTN",
+    p_types=c("v" = log(1),"B" = log(1),"A" = log(0),"t0" = log(0),"s" = log(1),"sv" = 0),
+    transform=list(func=c(v = "exp", B = "exp", A = "exp",t0 = "exp", s = "exp", sv="exp")),
+    bound=list(minmax=cbind(v=c(1e-3,Inf), B=c(0,Inf), A=c(1e-4,Inf),t0=c(0.05,Inf), s=c(0,Inf), sv=c(0,Inf)),
+               exception=c(A=0, v=0, sv=0)),
+    # Trial dependent parameter transform
+    Ttransform = function(pars,dadm) {
+      pars <- cbind(pars,b=pars[,"B"] + pars[,"A"])
+      pars
+    },
+    # Random function for racing accumulators
+    rfun=function(data=NULL,pars)  rRDM_SWTN(data$lR,pars,ok=attr(pars, "ok")),
+    # Density function (PDF) for single accumulator
+    dfun=function(rt,pars) dRDM_SWTN(rt,pars),
+    # Probability function (CDF) for single accumulator
+    pfun=function(rt,pars) pRDM_SWTN(rt,pars),
+    # Race likelihood combining pfun and dfun
+    log_likelihood=function(pars,dadm,model,min_ll=log(1e-10))
+      log_likelihood_race(pars=pars, dadm = dadm, model = model, min_ll = min_ll)
+  )
+}
+
+#' @export
+#'
 Mrdm <- function(){
   list(
     type="RACE",

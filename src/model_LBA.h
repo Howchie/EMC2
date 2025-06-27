@@ -147,6 +147,7 @@ NumericVector plba(NumericVector t,
   return cdf;
 }
 
+/*
 // Added vectorised versions but they're slower??
 NumericVector plba_norm_vec(NumericVector t, NumericVector A, NumericVector b, // b is B+A from original
                             NumericVector v, NumericVector sv, bool posdrift = true) {
@@ -345,5 +346,6 @@ NumericVector plba_vec(NumericVector t,
   if (t.length() == 0) return NumericVector(0);
   return plba_norm_vec(t, A, b, v, sv, posdrift);
 }
+*/
 #endif
 

@@ -20,7 +20,7 @@ rDDM <- function(R,pars,ok=rep(TRUE,length(R)), precision=5e-3)
   bad <- rep(NA,nrow(pars))
   out <- data.frame(response=bad,rt=bad)
   out_ok <- out[ok,]
-  pars <- pars[ok,]
+  pars <- pars[ok,,drop=FALSE]
   R <- R[ok]
   pars <- as.matrix(pars);
   idx <- find_duplicate_indices(pars)
