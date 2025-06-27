@@ -6,86 +6,13 @@
 #include "model_DDM.h"
 #include "model_MRI.h"
 #include "trend.h"
-#include "model_race_cens_trunc.h"
+#include "utils.h"
+#include <gsl/gsl_integration.h>
+#include <gsl/gsl_errno.h> // For GSL error handling
 #include <string>
-// ---- START: Context Structs and Static Adapters for Model Functions ----
 
-// Context struct for LBA & RDM (can be shared if context is similar)
-struct ContextForRaceModels {
-    double min_lik_for_pdf;
-    bool use_posdrift; // Added for LBA models, true by default or for non-LBA models
-};
 // For LNR, context might be simpler or could reuse above if only min_lik_for_pdf is needed.
 
-// Static adapter for LBA dfun
-static Rcpp::NumericVector lba_dfun_adapter(Rcpp::NumericVector rt,
-                                            Rcpp::NumericMatrix pars,
-                                            Rcpp::LogicalVector is_ok,
-                                            bool log_p,
-                                            void* context) {
-    ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context);
-    Rcpp::LogicalVector idx(pars.nrow(), true); 
-    // Pass use_posdrift from context to dlba_c
-    return dlba_c(rt, pars, idx, ctx->min_lik_for_pdf, is_ok, ctx->use_posdrift);
-}
-
-// Static adapter for LBA pfun
-static Rcpp::NumericVector lba_pfun_adapter(Rcpp::NumericVector rt,
-                                            Rcpp::NumericMatrix pars,
-                                            Rcpp::LogicalVector is_ok,
-                                            bool log_p,
-                                            void* context) {
-    ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context);
-    Rcpp::LogicalVector idx(pars.nrow(), true); 
-    // Pass use_posdrift from context to plba_c
-    return plba_c(rt, pars, idx, ctx->min_lik_for_pdf, is_ok, ctx->use_posdrift);
-}
-
-// Static adapter for RDM dfun
-static Rcpp::NumericVector rdm_dfun_adapter(Rcpp::NumericVector rt,
-                                            Rcpp::NumericMatrix pars,
-                                            Rcpp::LogicalVector is_ok,
-                                            bool log_p,
-                                            void* context) {
-    ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context);
-    Rcpp::LogicalVector idx(pars.nrow(), true); 
-    return drdm_c(rt, pars, idx, ctx->min_lik_for_pdf, is_ok);
-}
-
-// Static adapter for RDM pfun
-static Rcpp::NumericVector rdm_pfun_adapter(Rcpp::NumericVector rt,
-                                            Rcpp::NumericMatrix pars,
-                                            Rcpp::LogicalVector is_ok,
-                                            bool log_p,
-                                            void* context) {
-    ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context);
-    Rcpp::LogicalVector idx(pars.nrow(), true); 
-    return prdm_c(rt, pars, idx, ctx->min_lik_for_pdf, is_ok);
-}
-
-// Static adapter for LNR dfun
-static Rcpp::NumericVector lnr_dfun_adapter(Rcpp::NumericVector rt,
-                                            Rcpp::NumericMatrix pars,
-                                            Rcpp::LogicalVector is_ok,
-                                            bool log_p,
-                                            void* context) {
-    ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context); // Reusing same context struct
-    Rcpp::LogicalVector idx(pars.nrow(), true);
-    return dlnr_c(rt, pars, idx, ctx->min_lik_for_pdf, is_ok);
-}
-
-// Static adapter for LNR pfun
-static Rcpp::NumericVector lnr_pfun_adapter(Rcpp::NumericVector rt,
-                                            Rcpp::NumericMatrix pars,
-                                            Rcpp::LogicalVector is_ok,
-                                            bool log_p,
-                                            void* context) {
-    ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context); // Reusing same context struct
-    Rcpp::LogicalVector idx(pars.nrow(), true);
-    return plnr_c(rt, pars, idx, ctx->min_lik_for_pdf, is_ok);
-}
-
-// ---- END: Context Structs and Static Adapters ----
 
 using namespace Rcpp;
 
@@ -484,9 +411,12 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
         if (type_std.find("IO") != std::string::npos) {
             current_model_ctx.use_posdrift = false;
         }
-    } else if (type_std.find("RDM") != std::string::npos) {
+    } else if (type_std=="RDM") {
         model_dfun_ptr = &rdm_dfun_adapter;
         model_pfun_ptr = &rdm_pfun_adapter;
+    } else if (type_std=="RDM_SWTN") {
+        model_dfun_ptr = &rdmswtn_dfun_adapter;
+        model_pfun_ptr = &rdmswtn_pfun_adapter;
     } else if (type_std.find("LNR") != std::string::npos) {
         model_dfun_ptr = &lnr_dfun_adapter;
         model_pfun_ptr = &lnr_pfun_adapter;
@@ -601,21 +531,6 @@ NumericVector f_race_integrand_batch_cpp(
     }
     return results;
 }
-
-
-// ---- START: New code for censored/truncated race models ----
-// #include "model_race_cens_trunc.h" // Include the new header // MOVED TO TOP
-#include <gsl/gsl_integration.h>
-#include <gsl/gsl_errno.h> // For GSL error handling
-
-// Struct to pass parameters to GSL integrand
-struct gsl_race_params {
-    const Rcpp::NumericMatrix* p_trial_this_winner_first;
-    RacePdfFun model_dfun;
-    RaceCdfFun model_pfun;
-    int n_acc;
-    void* model_specific_context; // To pass context to model_dfun/model_pfun
-};
 
 // GSL-compatible adapter for f_race_integrand_cpp
 double gsl_f_race_adapter(double t, void *p) {

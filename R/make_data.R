@@ -288,8 +288,8 @@ RACE_rfun <- function(data, pars, model){
     pick <- data$RACE==i
     data_in <- data[pick & ok,]
     data_in$lR <- factor(data$lR[pick & ok])
-    tmp <- pars[pick & ok,]
-    attr(tmp, "ok") <- rep(T, nrow(tmp))
+    tmp <- pars[pick & ok,, drop=FALSE]
+    attr(tmp, "ok") <- rep(T, ifelse(is.null(dim(tmp)),1,nrow(tmp)))
     Rrti <- model()$rfun(data_in,tmp)
     Rrti$R <- as.numeric(Rrti$R)
     Rrt[RACE==i,] <- as.matrix(Rrti)

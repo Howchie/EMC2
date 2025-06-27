@@ -299,6 +299,7 @@ rRDM <- function(lR,pars,p_types=c("v","B","A","t0"),ok=rep(TRUE,dim(pars)[1]))
   # test
   # pars=cbind(B=c(1,2),v=c(1,1),A=c(0,0),t0=c(.2,.2)); lR=factor(c(1,2))
 {
+
   if (!all(p_types %in% dimnames(pars)[[2]]))
     stop("pars must have columns ",paste(p_types,collapse = " "))
   if (any(dimnames(pars)[[2]]=="s")) # rescale
@@ -310,7 +311,7 @@ rRDM <- function(lR,pars,p_types=c("v","B","A","t0"),ok=rep(TRUE,dim(pars)[1]))
   nr <- length(levels(lR))
   dt <- matrix(Inf,nrow=nr,ncol=nrow(pars)/nr)
   t0 <- pars[,"t0"]
-  pars <- pars[ok,]
+  pars <- pars[ok,,drop=FALSE]
   dt[ok] <- rWald(sum(ok),B=pars[,"B"],v=pars[,"v"],A=pars[,"A"])
   R <- apply(dt,2,which.min)
   pick <- cbind(R,1:dim(dt)[2]) # Matrix to pick winner
@@ -417,6 +418,54 @@ RDM <- function(){
 }
 
 
+rRDM_SWTN <- function(lR,pars,p_types=c("v","B","A","t0","sv"),ok=rep(TRUE,dim(pars)[1])) 
+  # lR is an empty latent response factor lR with one level for each accumulator.
+  # pars is a matrix of corresponding parameter values named as in p_types
+  # pars must be sorted so accumulators and parameter for each trial are in
+  # contiguous rows. "s" parameter will be used but can be ommitted
+  #
+  # test
+  # pars=cbind(B=c(1,2),v=c(1,1),A=c(0,0),t0=c(.2,.2)); lR=factor(c(1,2))
+{
+  if (!all(p_types %in% dimnames(pars)[[2]]))
+    stop("pars must have columns ",paste(p_types,collapse = " "))
+  if (any(dimnames(pars)[[2]]=="s")) # rescale
+    pars[,c("A","B","v")] <- pars[,c("A","B","v")]/pars[,"s"]
+  pars[,"B"][pars[,"B"]<0] <- 0 # Protection for negatives
+  pars[,"A"][pars[,"A"]<0] <- 0
+  bad <- rep(NA, length(lR)/length(levels(lR)))
+  out <- data.frame(R = bad, rt = bad)
+  nr <- length(levels(lR))
+  dt <- matrix(Inf,nrow=nr,ncol=nrow(pars)/nr)
+  t0 <- pars[,"t0"]
+  pars <- pars[ok,,drop=FALSE]
+  dt[ok] <- rSWTN(sum(ok),B=pars[,"B"],v=pars[,"v"],A=pars[,"A"],sv=pars[,"sv"])
+  R <- apply(dt,2,which.min)
+  pick <- cbind(R,1:dim(dt)[2]) # Matrix to pick winner
+  # Any t0 difference with lR due to response production time (no effect on race)
+  rt <- matrix(t0,nrow=nr)[pick] + dt[pick]
+  out$R <- levels(lR)[R]
+  out$R <- factor(out$R,levels=levels(lR))
+  out$rt <- rt
+  out
+}
+
+rSWTN <- function(n,B,v,A,sv)
+  # random function for single accumulator
+{
+  out=numeric(n)
+  b = ifelse(A==0,B,runif(n,B, B + A)) # adjust for spv
+  l = ifelse(sv==0,v,truncnorm::rtruncnorm(n,a=0,b=Inf,mean=v,sd=sv)) # between trial variability
+  
+  ok <- !l<0
+  nok <- sum(ok)
+  bs <- runif(nok,B[ok],B[ok]+A[ok])
+  out[ok] <- statmod::rinvgauss(nok,mean=b/l,shape=b^2)
+  out[!ok] <- Inf
+  out  
+  
+}
+
 #' The Racing Diffusion Model with Trial-Varying Drift (DSWTN)
 #'
 #' Model file to estimate a Racing Diffusion Model where each accumulator
@@ -432,237 +481,56 @@ RDM <- function(){
 #' Default values are used for all parameters that are not explicitly listed in the `formula`
 #' argument of `design()`.
 #'
-#' | **Parameter**      | **Transform** | **Natural scale** | **Default**     | **Interpretation**                                           |
-#' |------------------|---------------|-------------------|---------------|--------------------------------------------------------------|
-#' | *alpha*          | log           | \[0, Inf\]        | log(1)        | Response threshold (boundary separation)                     |
-#' | *mu_drift*       | log           | \[0, Inf\]        | log(1)        | Mean of the trial-by-trial drift rate distribution       |
-#' | *sigma_drift_sq* | log           | \[0, Inf\]        | log(0.1)      | Variance of the trial-by-trial drift rate distribution   |
-#' | *theta*          | log           | \[0, Inf\]        | log(0.1)      | Non-decision time                                            |
+#'#' Default values are used for all parameters that are not explicitly listed in the `formula`
+#' argument of `design()`.They can also be accessed with `RDM()$p_types`.
 #'
-#' | **Parameter**      | **Transform** | **Natural scale** | **Default**     | **Interpretation**                                           |
-#' |------------------|---------------|-------------------|---------------|--------------------------------------------------------------|
-#' | *k_center*       | log           | \[0, Inf\]        | log(1)        | Central threshold (boundary separation)                      |
-#' | *A_spv*          | log           | \[0, Inf\]        | log(0)        | Range of uniform start-point variability (k_center +/- A_spv/2) |
-#' | *mu_drift*       | log           | \[0, Inf\]        | log(1)        | Mean of the trial-by-trial drift rate distribution       |
-#' | *sigma_drift_sq* | log           | \[0, Inf\]        | log(0.1)      | Variance of the trial-by-trial drift rate distribution   |
-#' | *B*              | log           | \[0, Inf\]        | log(1)        | Base threshold (e.g., lower bound of U(B,B+A) for threshold) |
-#' | *A*              | log           | \[0, Inf\]        | log(0)        | Range of start-point variability (threshold from U(B,B+A))|
-#' | *mu_drift*       | log           | \[0, Inf\]        | log(1)        | Mean of the trial-by-trial drift rate (replaces RDM's `v`) |
-#' | *sigma_drift_sq* | log           | \[0, Inf\]        | log(0.1)      | Variance of the trial-by-trial drift rate distribution   |
-#' | *t0*             | log           | \[0, Inf\]        | log(0.1)      | Non-decision time                                            |
-#' | *s*              | log           | \[0, Inf\]        | log(1)        | Overall scaling parameter (noise SD, usually fixed to 1)   |
+#' | **Parameter** | **Transform** | **Natural scale** | **Default**   | **Mapping**          | **Interpretation**                                                |
+#' |-----------|-----------|---------------|-----------|------------------|---------------------------------------------------------------|
+#' | *v*       | log       | \[0, Inf\]      | log(1)    |                  | Evidence-accumulation rate (drift rate)                        |
+#' | *A*       | log       | \[0, Inf\]      | log(0)    |                  | Between-trial variation (range) in start point                 |
+#' | *B*       | log       | \[0, Inf\]      | log(1)    | *b* = *B* + *A*  | Distance from *A* to *b* (response threshold)                  |
+#' | *t0*      | log       | \[0, Inf\]      | log(0)    |                  | Non-decision time                                             |
+#' | *s*       | log       | \[0, Inf\]      | log(1)    |                  | Within-trial standard deviation of drift rate                 |
+#' | *sv*      | log       | \[0, Inf\]      | log(0.1)  |                  | Standard deviation of the trial-by-trial drift rate distribution   |
 #'
 #' All parameters are typically estimated on the log scale. `A` (start-point variability range)
-#' and `sigma_drift_sq` (drift rate variance) can be zero.
-#' * If `A=0` and `sigma_drift_sq=0`, the model reduces to a simple Wald distribution with threshold `B` and drift `mu_drift`.
-#' * If `sigma_drift_sq=0` (and `A > 0`), the model reduces to the standard RDM (with start-point variability `A` and fixed drift `mu_drift`).
-#' * If `A=0` (and `sigma_drift_sq > 0`), the model reduces to a DSWTN with a fixed threshold `B`.
+#' and `sv` (drift rate between trial variance) can be zero.
+#' * If `A=0` and `sv=0`, the model reduces to a simple Wald distribution with threshold `B` and drift `v`.
+#' * If `sv=0` (and `A > 0`), the model reduces to the standard RDM (with start-point variability `A` and fixed drift `v`).
+#' * If `A=0` (and `sv > 0`), the model reduces to a SWTN with a fixed threshold `B`.
 #' `B` should generally be positive, especially if `A=0`.
 #'
-#' Like the standard RDM, this is a race model with one DSWTN accumulator per response option.
-#' The `lR` factor (latent response) and `lM` factor (match between stimulus and response)
-#' can be used in formulas as with the standard RDM.
-#' @return A list defining the cognitive model
+#' Like the standard RDM, this is a race model with one SWTN-spv accumulator per response option.
+
 #' @export
-#' @examples
-#' # Define a simple DSWTN RDM model for a 2-choice task.
-#' # Formulas specify how parameters relate to experimental factors (if any).
-#' # Here, alpha, mu_drift, sigma_drift_sq, and theta are estimated per accumulator (lR).
-#' \dontrun{
-#' model_dswtn <- RDM_DSWTN()
-#'
-#' # Example design (assuming 'data_df' has 'rt', 'R' (response factor), and 'S' (stimulus factor))
-#' # Match function for lM (match between stimulus S and latent response lR)
-#' matchfun <- function(d) d$S == d$lR
-#'
-#' design_dswtn <- design(
-#'   data = data_df,
-#'   model = model_dswtn,
-#'   matchfun = matchfun,
-#'   formula = list(
-#'     B ~ lR,        # Base threshold varies by response accumulator
-#'     A ~ 1,         # Start-point variability is constant
-#'     mu_drift ~ lM, # Mean drift rate depends on stimulus-accumulator match
-#'     sigma_drift_sq ~ 1, # Drift variance is constant
-#'     t0 ~ 1,        # Non-decision time is constant
-#'     s = log(1)     # Overall scaling fixed to 1 (on log scale)
-#'   ),
-#'   constants = c(s = log(1)) # Fix s to 1 (log(1)=0)
-#' )
-#'
-#' # To fit this model (e.g., using pmwg):
-#' # samples_dswtn <- pmwg(design_dswtn, iter=100, display_progress=TRUE) # Example iterations
-#' }
-RDM_DSWTN <- function() {
-  # This rfun is for the model object and would be called by EMC² framework.
-  rfun_rdm_dswtn_race <- function(data, pars, model) {
-    all_natural_pars <- get_pars(p_vector = pars, dadm = data, model = model)
-
-    acc_levels <- levels(data$lR)
-    n_acc <- length(acc_levels)
-    n_trials <- nrow(data$data)
-
-    sim_rts <- matrix(NA, nrow = n_trials, ncol = n_acc)
-
-    # Extract parameter matrices first (trial x acc)
-    # This is similar to log_likelihood but we need all params for rRDM_DSWTN
-    params_B_mat <- matrix(NA, nrow = n_trials, ncol = n_acc)
-    params_A_mat <- matrix(NA, nrow = n_trials, ncol = n_acc)
-    params_mu_drift_mat <- matrix(NA, nrow = n_trials, ncol = n_acc)
-    params_sigma_drift_sq_mat <- matrix(NA, nrow = n_trials, ncol = n_acc)
-    params_t0_mat <- matrix(NA, nrow = n_trials, ncol = n_acc)
-    params_s_mat <- matrix(NA, nrow = n_trials, ncol = n_acc)
-
-    current_p_names <- dimnames(all_natural_pars)[[2]]
-    find_col_base <- function(par_base_name, acc_name_local) { # Renamed to avoid conflict
-        col_name <- grep(paste0("^", par_base_name, "_", acc_name_local, "$|^", par_base_name, "$"), current_p_names, value = TRUE)
-        if (length(col_name) == 0 && par_base_name %in% current_p_names) col_name <- par_base_name
-        if (length(col_name) == 0) stop(paste("rfun: Could not find", par_base_name, "for accumulator", acc_name_local))
-        col_name[1]
-    }
-
-    for (j_acc in 1:n_acc) {
-        acc_name_loop <- acc_levels[j_acc]
-        params_B_mat[, j_acc] <- all_natural_pars[, find_col_base("B", acc_name_loop)]
-        params_A_mat[, j_acc] <- all_natural_pars[, find_col_base("A", acc_name_loop)]
-        params_mu_drift_mat[, j_acc] <- all_natural_pars[, find_col_base("mu_drift", acc_name_loop)]
-        params_sigma_drift_sq_mat[, j_acc] <- all_natural_pars[, find_col_base("sigma_drift_sq", acc_name_loop)]
-        params_t0_mat[, j_acc] <- all_natural_pars[, find_col_base("t0", acc_name_loop)]
-        params_s_mat[, j_acc] <- all_natural_pars[, find_col_base("s", acc_name_loop)]
-    }
-
-    for (i_trial in 1:n_trials) {
-      if (!is.null(attr(all_natural_pars, "ok")) && !attr(all_natural_pars, "ok")[i_trial]) {
-         next
-      }
-      for (j_acc in 1:n_acc) {
-        sim_rts[i_trial, j_acc] <- rRDM_DSWTN(1,
-                                     B = params_B_mat[i_trial, j_acc],
-                                     A = params_A_mat[i_trial, j_acc],
-                                     mu_drift = params_mu_drift_mat[i_trial, j_acc],
-                                     sigma_drift_sq = params_sigma_drift_sq_mat[i_trial, j_acc],
-                                     t0 = params_t0_mat[i_trial, j_acc],
-                                     s = params_s_mat[i_trial, j_acc])
-      }
-    }
-
-    # Exclude rows that were not "ok" if that attribute exists and was used
-    if (!is.null(attr(all_natural_pars, "ok"))) {
-      ok_rows <- attr(all_natural_pars, "ok")
-      sim_rts_ok <- sim_rts[ok_rows, , drop=FALSE]
-      if (nrow(sim_rts_ok) == 0) { # No OK trials to simulate
-         return(data.frame(R=factor(levels=acc_levels), rt=numeric(0)))
-      }
-      winner_idx_ok <- apply(sim_rts_ok, 1, which.min)
-      winner_rt_ok <- sim_rts_ok[cbind(1:nrow(sim_rts_ok), winner_idx_ok)]
-
-      # Create full-size factor for R, then subset
-      R_factor_full <- factor(levels=acc_levels, x=rep(NA, n_trials))
-      R_factor_full[ok_rows] <- acc_levels[winner_idx_ok]
-
-      rt_full <- rep(NA_real_, n_trials)
-      rt_full[ok_rows] <- winner_rt_ok
-
-      out_df <- data.frame(R = R_factor_full, rt = rt_full)
-    } else {
-      winner_idx <- apply(sim_rts, 1, which.min)
-      winner_rt <- sim_rts[cbind(1:n_trials, winner_idx)]
-      out_df <- data.frame(R = factor(acc_levels[winner_idx], levels = acc_levels), rt = winner_rt)
-    }
-
-    if (!is.null(data$data$S)) out_df$S <- data$data$S
-    return(out_df)
-  }
-
+#' 
+RDM_SWTN <- function(){
   list(
-    type = "RACE",
-    c_name = "RDM_DSWTN",
-    p_types = c(B = log(1), A = log(0), mu_drift = log(1), sigma_drift_sq = log(0.1), t0 = log(0.1), s = log(1)),
-    transform = list(
-      func = c(B = "exp", A = "exp", mu_drift = "exp", sigma_drift_sq = "exp", t0 = "exp", s = "exp"),
-      args = NULL
-    ),
-    bound = list(
-      minmax = cbind(B = c(0, Inf), A = c(0, Inf), # B can be 0 if A > 0. A can be 0.
-                     mu_drift = c(1e-3, Inf), sigma_drift_sq = c(0, Inf), # sigma_drift_sq can be 0
-                     t0 = c(0.001, Inf), s = c(1e-3, Inf)),
-      exception = c(A = 0, sigma_drift_sq = 0)
-    ),
-    Ttransform = function(pars, dadm) {
-      # Original RDM defines b = B+A. Here, B is the lower bound of U(B, B+A) for threshold.
-      # No further transformation needed by default for these parameters.
+    type="RACE",
+    c_name = "RDM_SWTN",
+    p_types=c("v" = log(1),"B" = log(1),"A" = log(0),"t0" = log(0),"s" = log(1),"sv" = 0),
+    transform=list(func=c(v = "exp", B = "exp", A = "exp",t0 = "exp", s = "exp", sv="exp")),
+    bound=list(minmax=cbind(v=c(1e-3,Inf), B=c(0,Inf), A=c(1e-4,Inf),t0=c(0.05,Inf), s=c(0,Inf), sv=c(0,Inf)),
+               exception=c(A=0, v=0, sv=0)),
+    # Trial dependent parameter transform
+    Ttransform = function(pars,dadm) {
+      pars <- cbind(pars,b=pars[,"B"] + pars[,"A"])
       pars
     },
-    rfun = rfun_rdm_dswtn_race,
-    dfun = function(rt, pars, dadm=NULL) {
-      # pars matrix for ONE accumulator: B, A, mu_drift, sigma_drift_sq, t0, s
-      exp(dRDM_DSWTN_log(rt, B=pars[,"B"], A=pars[,"A"],
-                         mu_drift=pars[,"mu_drift"], sigma_drift_sq=pars[,"sigma_drift_sq"],
-                         t0=pars[,"t0"], s=pars[,"s"]))
-    },
-    pfun = function(rt, pars, dadm=NULL) {
-      pRDM_DSWTN(rt, B=pars[,"B"], A=pars[,"A"],
-                 mu_drift=pars[,"mu_drift"], sigma_drift_sq=pars[,"sigma_drift_sq"],
-                 t0=pars[,"t0"], s=pars[,"s"])
-    },
-    log_likelihood = function(pars, dadm, model, min_ll = log(1e-10)) {
-      all_natural_pars <- get_pars(p_vector = pars, dadm = dadm, model = model)
-
-      acc_levels <- levels(dadm$lR)
-      n_acc <- length(acc_levels)
-      n_trials <- nrow(dadm$data)
-
-      params_B_mat <- matrix(NA, nrow = n_trials, ncol = n_acc)
-      params_A_mat <- matrix(NA, nrow = n_trials, ncol = n_acc)
-      params_mu_drift_mat <- matrix(NA, nrow = n_trials, ncol = n_acc)
-      params_sigma_drift_sq_mat <- matrix(NA, nrow = n_trials, ncol = n_acc)
-      params_t0_mat <- matrix(NA, nrow = n_trials, ncol = n_acc)
-      params_s_mat <- matrix(NA, nrow = n_trials, ncol = n_acc)
-
-      current_p_names <- dimnames(all_natural_pars)[[2]]
-
-      find_col <- function(par_base_name_local, acc_name_local) { # Renamed to avoid conflict
-          col_name <- grep(paste0("^", par_base_name_local, "_", acc_name_local, "$|^", par_base_name_local, "$"), current_p_names, value = TRUE)
-          if (length(col_name) == 0 && par_base_name_local %in% current_p_names) col_name <- par_base_name_local
-          if (length(col_name) == 0) stop(paste("log_likelihood: Could not find", par_base_name_local, "parameter for accumulator", acc_name_local))
-          col_name[1]
-      }
-
-      for (acc_idx_loop in 1:n_acc) { # Renamed loop var
-        acc_name_iter <- acc_levels[acc_idx_loop] # Renamed loop var
-
-        params_B_mat[, acc_idx_loop] <- all_natural_pars[, find_col("B", acc_name_iter)]
-        params_A_mat[, acc_idx_loop] <- all_natural_pars[, find_col("A", acc_name_iter)]
-        params_mu_drift_mat[, acc_idx_loop] <- all_natural_pars[, find_col("mu_drift", acc_name_iter)]
-        params_sigma_drift_sq_mat[, acc_idx_loop] <- all_natural_pars[, find_col("sigma_drift_sq", acc_name_iter)]
-        params_t0_mat[, acc_idx_loop] <- all_natural_pars[, find_col("t0", acc_name_iter)]
-        params_s_mat[, acc_idx_loop] <- all_natural_pars[, find_col("s", acc_name_iter)]
-      }
-
-      observed_choice_idx <- as.numeric(factor(as.character(dadm$data$R), levels = acc_levels))
-
-      cdf_ctrl_spv <- model$cdf_control_spv %||% list(abs_err = 1e-6, rel_err = 1e-6, max_eval = 1000)
-      # Inner drift integration control is not exposed from C++ loglik_RDM_DSWTN_race currently,
-      # it uses defaults or inherits from spv control.
-
-      loglik_RDM_DSWTN_race(
-        rts = dadm$data$rt,
-        choices = observed_choice_idx,
-        params_B = params_B_mat,
-        params_A = params_A_mat,
-        params_mu_drift = params_mu_drift_mat,
-        params_sigma_drift_sq = params_sigma_drift_sq_mat,
-        params_t0 = params_t0_mat,
-        params_s = params_s_mat,
-        min_log_lik = min_ll,
-        spv_abs_err = cdf_ctrl_spv$abs_err,
-        spv_rel_err = cdf_ctrl_spv$rel_err,
-        spv_max_eval = cdf_ctrl_spv$max_eval
-      )
-    }
+    # Random function for racing accumulators
+    rfun=function(data=NULL,pars)  rRDM_SWTN(data$lR,pars,ok=attr(pars, "ok")),
+    # Density function (PDF) for single accumulator
+    dfun=function(rt,pars) dRDM_SWTN(rt,pars),
+    # Probability function (CDF) for single accumulator
+    pfun=function(rt,pars) pRDM_SWTN(rt,pars),
+    # Race likelihood combining pfun and dfun
+    log_likelihood=function(pars,dadm,model,min_ll=log(1e-10))
+      log_likelihood_race(pars=pars, dadm = dadm, model = model, min_ll = min_ll)
   )
 }
 
+#' @export
+#'
 Mrdm <- function(){
   list(
     type="RACE",

@@ -129,7 +129,7 @@ design <- function(formula = NULL,factors = NULL,Rlevels = NULL,model,data=NULL,
       if(length(covariates) == 0) covariates <- NULL
     }
     # factors <- factors[names(factors) %in% c(all_preds, "subjects")]
-  } else {if(!"Rlevels" %in% names(factors)) stop("make sure Rlevels is specified in factors")} # this check wasn't present - would break accumulator logic
+  } else {if(is.null(Rlevels)) stop("make sure Rlevels is specified")} # this check wasn't present - would break accumulator logic
   if (!is.null(trend)) {
     formula <- check_trend(trend,covariates, model, formula)
   }
@@ -591,6 +591,7 @@ design_model <- function(data,design,model=NULL,
                          add_acc=TRUE,rt_resolution=0.02,verbose=TRUE,
                          compress=TRUE,rt_check=TRUE, add_da = FALSE, all_cells_dm = FALSE)
 {
+  #browser()
   LT <- attr(data,"LT"); if (is.null(LT)) LT <- 0
   UT <- attr(data,"UT"); if (is.null(UT)) UT <- Inf
   LC <- attr(data,"LC"); if (is.null(LC)) LC <- 0
@@ -746,7 +747,6 @@ make_full_dm <- function(form, Clist, da) {
   }
 
   out <- stats::model.matrix(form, da)
-
   if (dim(out)[2] == 1) {
     dimnames(out)[[2]] <- as.character(pnam)
   } else {
@@ -764,7 +764,6 @@ make_full_dm <- function(form, Clist, da) {
 make_dm <- function(form,da,Clist=NULL,Fcovariates=NULL, add_da = FALSE, all_cells_dm = FALSE)
   # Makes a design matrix based on formula form from augmented data frame da
 {
-
   compress_dm <- function(dm, da = NULL, all_cells_dm = FALSE)
     # out keeps only unique rows, out[attr(out,"expand"),] gets back original.
   {

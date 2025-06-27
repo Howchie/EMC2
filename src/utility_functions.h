@@ -539,6 +539,7 @@ std::vector<PreTransformSpec> make_pretransform_specs(NumericVector p_vector, Li
   return specs;
 }
 
+/*
 inline void  recycle_vec(NumericVector& v, int n,
                     double deflt,               // value to use if v is length-0
                     const char* what)
@@ -590,6 +591,7 @@ NumericVector pnorm_vec(NumericVector x, NumericVector mean = NumericVector::cre
     }
 	return out;
 }
+*/
 #endif
 
 
