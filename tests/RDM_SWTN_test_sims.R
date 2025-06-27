@@ -22,7 +22,7 @@ designRDM <- design(
 designRDMSWTN <- design(
   factors=list(subjects=1,S=c("left"),RACE=1),Rlevels=c("left"),
   matchfun=matchfun,
-  model=RDM_SWTN,constants=c(s=log(1),sv=log(0)),
+  model=RDM_SWTN,constants=c(s=log(1),sv=log(0.5)),
   formula=list(v~1,B~1,t0~1,A~1,s~1,sv~1),
 )
 p_vector <- sampled_pars(designRDM,doMap = FALSE)
