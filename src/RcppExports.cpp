@@ -122,16 +122,29 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
-// wald_cdf_classic
-double wald_cdf_classic(double t, double drift_rate_xi, double boundary_alpha);
-RcppExport SEXP _EMC2_wald_cdf_classic(SEXP tSEXP, SEXP drift_rate_xiSEXP, SEXP boundary_alphaSEXP) {
+// dwald
+double dwald(double t, double boundary_alpha, double drift_rate_xi);
+RcppExport SEXP _EMC2_dwald(SEXP tSEXP, SEXP boundary_alphaSEXP, SEXP drift_rate_xiSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
     Rcpp::traits::input_parameter< double >::type t(tSEXP);
-    Rcpp::traits::input_parameter< double >::type drift_rate_xi(drift_rate_xiSEXP);
     Rcpp::traits::input_parameter< double >::type boundary_alpha(boundary_alphaSEXP);
-    rcpp_result_gen = Rcpp::wrap(wald_cdf_classic(t, drift_rate_xi, boundary_alpha));
+    Rcpp::traits::input_parameter< double >::type drift_rate_xi(drift_rate_xiSEXP);
+    rcpp_result_gen = Rcpp::wrap(dwald(t, boundary_alpha, drift_rate_xi));
+    return rcpp_result_gen;
+END_RCPP
+}
+// pwald
+double pwald(double t, double boundary_alpha, double drift_rate_xi);
+RcppExport SEXP _EMC2_pwald(SEXP tSEXP, SEXP boundary_alphaSEXP, SEXP drift_rate_xiSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< double >::type t(tSEXP);
+    Rcpp::traits::input_parameter< double >::type boundary_alpha(boundary_alphaSEXP);
+    Rcpp::traits::input_parameter< double >::type drift_rate_xi(drift_rate_xiSEXP);
+    rcpp_result_gen = Rcpp::wrap(pwald(t, boundary_alpha, drift_rate_xi));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -321,9 +334,9 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
-// dswtn_spv_logpdf
-double dswtn_spv_logpdf(double t_adj, double k_center, double A_spv, double mu_drift, double sigma_drift_sq, double abs_err, double rel_err, size_t max_eval);
-RcppExport SEXP _EMC2_dswtn_spv_logpdf(SEXP t_adjSEXP, SEXP k_centerSEXP, SEXP A_spvSEXP, SEXP mu_driftSEXP, SEXP sigma_drift_sqSEXP, SEXP abs_errSEXP, SEXP rel_errSEXP, SEXP max_evalSEXP) {
+// swtn_spv_logpdf
+double swtn_spv_logpdf(double t_adj, double k_center, double A_spv, double mu_drift, double sigma_drift_sq, double abs_err, double rel_err, size_t max_eval);
+RcppExport SEXP _EMC2_swtn_spv_logpdf(SEXP t_adjSEXP, SEXP k_centerSEXP, SEXP A_spvSEXP, SEXP mu_driftSEXP, SEXP sigma_drift_sqSEXP, SEXP abs_errSEXP, SEXP rel_errSEXP, SEXP max_evalSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -335,13 +348,13 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< double >::type abs_err(abs_errSEXP);
     Rcpp::traits::input_parameter< double >::type rel_err(rel_errSEXP);
     Rcpp::traits::input_parameter< size_t >::type max_eval(max_evalSEXP);
-    rcpp_result_gen = Rcpp::wrap(dswtn_spv_logpdf(t_adj, k_center, A_spv, mu_drift, sigma_drift_sq, abs_err, rel_err, max_eval));
+    rcpp_result_gen = Rcpp::wrap(swtn_spv_logpdf(t_adj, k_center, A_spv, mu_drift, sigma_drift_sq, abs_err, rel_err, max_eval));
     return rcpp_result_gen;
 END_RCPP
 }
-// dswtn_spv_cdf
-double dswtn_spv_cdf(double t_adj, double k_center, double A_spv, double mu_drift, double sigma_drift_sq, double abs_err, double rel_err, size_t max_eval);
-RcppExport SEXP _EMC2_dswtn_spv_cdf(SEXP t_adjSEXP, SEXP k_centerSEXP, SEXP A_spvSEXP, SEXP mu_driftSEXP, SEXP sigma_drift_sqSEXP, SEXP abs_errSEXP, SEXP rel_errSEXP, SEXP max_evalSEXP) {
+// swtn_spv_cdf
+double swtn_spv_cdf(double t_adj, double k_center, double A_spv, double mu_drift, double sigma_drift_sq, double abs_err, double rel_err, size_t max_eval);
+RcppExport SEXP _EMC2_swtn_spv_cdf(SEXP t_adjSEXP, SEXP k_centerSEXP, SEXP A_spvSEXP, SEXP mu_driftSEXP, SEXP sigma_drift_sqSEXP, SEXP abs_errSEXP, SEXP rel_errSEXP, SEXP max_evalSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -353,13 +366,13 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< double >::type abs_err(abs_errSEXP);
     Rcpp::traits::input_parameter< double >::type rel_err(rel_errSEXP);
     Rcpp::traits::input_parameter< size_t >::type max_eval(max_evalSEXP);
-    rcpp_result_gen = Rcpp::wrap(dswtn_spv_cdf(t_adj, k_center, A_spv, mu_drift, sigma_drift_sq, abs_err, rel_err, max_eval));
+    rcpp_result_gen = Rcpp::wrap(swtn_spv_cdf(t_adj, k_center, A_spv, mu_drift, sigma_drift_sq, abs_err, rel_err, max_eval));
     return rcpp_result_gen;
 END_RCPP
 }
-// rdm_dswtn
-double rdm_dswtn(double t_adj, double B, double A, double mu_drift, double sigma_drift_sq, double spv_abs_err, double spv_rel_err, size_t spv_max_eval);
-RcppExport SEXP _EMC2_rdm_dswtn(SEXP t_adjSEXP, SEXP BSEXP, SEXP ASEXP, SEXP mu_driftSEXP, SEXP sigma_drift_sqSEXP, SEXP spv_abs_errSEXP, SEXP spv_rel_errSEXP, SEXP spv_max_evalSEXP) {
+// drdmswtn
+double drdmswtn(double t_adj, double B, double A, double mu_drift, double sigma_drift_sq, double spv_abs_err, double spv_rel_err, size_t spv_max_eval);
+RcppExport SEXP _EMC2_drdmswtn(SEXP t_adjSEXP, SEXP BSEXP, SEXP ASEXP, SEXP mu_driftSEXP, SEXP sigma_drift_sqSEXP, SEXP spv_abs_errSEXP, SEXP spv_rel_errSEXP, SEXP spv_max_evalSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -371,13 +384,13 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< double >::type spv_abs_err(spv_abs_errSEXP);
     Rcpp::traits::input_parameter< double >::type spv_rel_err(spv_rel_errSEXP);
     Rcpp::traits::input_parameter< size_t >::type spv_max_eval(spv_max_evalSEXP);
-    rcpp_result_gen = Rcpp::wrap(rdm_dswtn(t_adj, B, A, mu_drift, sigma_drift_sq, spv_abs_err, spv_rel_err, spv_max_eval));
+    rcpp_result_gen = Rcpp::wrap(drdmswtn(t_adj, B, A, mu_drift, sigma_drift_sq, spv_abs_err, spv_rel_err, spv_max_eval));
     return rcpp_result_gen;
 END_RCPP
 }
-// rdm_pswtn
-double rdm_pswtn(double t_adj, double B, double A, double mu_drift, double sigma_drift_sq, double spv_abs_err, double spv_rel_err, size_t spv_max_eval);
-RcppExport SEXP _EMC2_rdm_pswtn(SEXP t_adjSEXP, SEXP BSEXP, SEXP ASEXP, SEXP mu_driftSEXP, SEXP sigma_drift_sqSEXP, SEXP spv_abs_errSEXP, SEXP spv_rel_errSEXP, SEXP spv_max_evalSEXP) {
+// prdmswtn
+double prdmswtn(double t_adj, double B, double A, double mu_drift, double sigma_drift_sq, double spv_abs_err, double spv_rel_err, size_t spv_max_eval);
+RcppExport SEXP _EMC2_prdmswtn(SEXP t_adjSEXP, SEXP BSEXP, SEXP ASEXP, SEXP mu_driftSEXP, SEXP sigma_drift_sqSEXP, SEXP spv_abs_errSEXP, SEXP spv_rel_errSEXP, SEXP spv_max_evalSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -389,13 +402,13 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< double >::type spv_abs_err(spv_abs_errSEXP);
     Rcpp::traits::input_parameter< double >::type spv_rel_err(spv_rel_errSEXP);
     Rcpp::traits::input_parameter< size_t >::type spv_max_eval(spv_max_evalSEXP);
-    rcpp_result_gen = Rcpp::wrap(rdm_pswtn(t_adj, B, A, mu_drift, sigma_drift_sq, spv_abs_err, spv_rel_err, spv_max_eval));
+    rcpp_result_gen = Rcpp::wrap(prdmswtn(t_adj, B, A, mu_drift, sigma_drift_sq, spv_abs_err, spv_rel_err, spv_max_eval));
     return rcpp_result_gen;
 END_RCPP
 }
-// dRDM_DSWTN_log
-NumericVector dRDM_DSWTN_log(NumericVector t, NumericVector B, NumericVector A, NumericVector mu_drift, NumericVector sigma_drift_sq, NumericVector t0, NumericVector s);
-RcppExport SEXP _EMC2_dRDM_DSWTN_log(SEXP tSEXP, SEXP BSEXP, SEXP ASEXP, SEXP mu_driftSEXP, SEXP sigma_drift_sqSEXP, SEXP t0SEXP, SEXP sSEXP) {
+// dRDM_SWTN
+NumericVector dRDM_SWTN(NumericVector t, NumericVector B, NumericVector A, NumericVector mu_drift, NumericVector sigma_drift_sq, NumericVector t0, NumericVector s);
+RcppExport SEXP _EMC2_dRDM_SWTN(SEXP tSEXP, SEXP BSEXP, SEXP ASEXP, SEXP mu_driftSEXP, SEXP sigma_drift_sqSEXP, SEXP t0SEXP, SEXP sSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -406,13 +419,13 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< NumericVector >::type sigma_drift_sq(sigma_drift_sqSEXP);
     Rcpp::traits::input_parameter< NumericVector >::type t0(t0SEXP);
     Rcpp::traits::input_parameter< NumericVector >::type s(sSEXP);
-    rcpp_result_gen = Rcpp::wrap(dRDM_DSWTN_log(t, B, A, mu_drift, sigma_drift_sq, t0, s));
+    rcpp_result_gen = Rcpp::wrap(dRDM_SWTN(t, B, A, mu_drift, sigma_drift_sq, t0, s));
     return rcpp_result_gen;
 END_RCPP
 }
-// pRDM_DSWTN
-NumericVector pRDM_DSWTN(NumericVector t, NumericVector B, NumericVector A, NumericVector mu_drift, NumericVector sigma_drift_sq, NumericVector t0, NumericVector s, double spv_abs_err, double spv_rel_err, int spv_max_eval);
-RcppExport SEXP _EMC2_pRDM_DSWTN(SEXP tSEXP, SEXP BSEXP, SEXP ASEXP, SEXP mu_driftSEXP, SEXP sigma_drift_sqSEXP, SEXP t0SEXP, SEXP sSEXP, SEXP spv_abs_errSEXP, SEXP spv_rel_errSEXP, SEXP spv_max_evalSEXP) {
+// pRDM_SWTN
+NumericVector pRDM_SWTN(NumericVector t, NumericVector B, NumericVector A, NumericVector mu_drift, NumericVector sigma_drift_sq, NumericVector t0, NumericVector s, double spv_abs_err, double spv_rel_err, int spv_max_eval);
+RcppExport SEXP _EMC2_pRDM_SWTN(SEXP tSEXP, SEXP BSEXP, SEXP ASEXP, SEXP mu_driftSEXP, SEXP sigma_drift_sqSEXP, SEXP t0SEXP, SEXP sSEXP, SEXP spv_abs_errSEXP, SEXP spv_rel_errSEXP, SEXP spv_max_evalSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -426,13 +439,13 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< double >::type spv_abs_err(spv_abs_errSEXP);
     Rcpp::traits::input_parameter< double >::type spv_rel_err(spv_rel_errSEXP);
     Rcpp::traits::input_parameter< int >::type spv_max_eval(spv_max_evalSEXP);
-    rcpp_result_gen = Rcpp::wrap(pRDM_DSWTN(t, B, A, mu_drift, sigma_drift_sq, t0, s, spv_abs_err, spv_rel_err, spv_max_eval));
+    rcpp_result_gen = Rcpp::wrap(pRDM_SWTN(t, B, A, mu_drift, sigma_drift_sq, t0, s, spv_abs_err, spv_rel_err, spv_max_eval));
     return rcpp_result_gen;
 END_RCPP
 }
-// rRDM_DSWTN
-NumericVector rRDM_DSWTN(int n_samples, double B, double A, double mu_drift, double sigma_drift_sq, double t0, double s);
-RcppExport SEXP _EMC2_rRDM_DSWTN(SEXP n_samplesSEXP, SEXP BSEXP, SEXP ASEXP, SEXP mu_driftSEXP, SEXP sigma_drift_sqSEXP, SEXP t0SEXP, SEXP sSEXP) {
+// rRDM_SWTN
+NumericVector rRDM_SWTN(int n_samples, double B, double A, double mu_drift, double sigma_drift_sq, double t0, double s);
+RcppExport SEXP _EMC2_rRDM_SWTN(SEXP n_samplesSEXP, SEXP BSEXP, SEXP ASEXP, SEXP mu_driftSEXP, SEXP sigma_drift_sqSEXP, SEXP t0SEXP, SEXP sSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -443,29 +456,7 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< double >::type sigma_drift_sq(sigma_drift_sqSEXP);
     Rcpp::traits::input_parameter< double >::type t0(t0SEXP);
     Rcpp::traits::input_parameter< double >::type s(sSEXP);
-    rcpp_result_gen = Rcpp::wrap(rRDM_DSWTN(n_samples, B, A, mu_drift, sigma_drift_sq, t0, s));
-    return rcpp_result_gen;
-END_RCPP
-}
-// loglik_RDM_DSWTN_race
-NumericVector loglik_RDM_DSWTN_race(NumericVector rts, IntegerVector choices, NumericMatrix params_B, NumericMatrix params_A, NumericMatrix params_mu_drift, NumericMatrix params_sigma_drift_sq, NumericMatrix params_t0, NumericMatrix params_s, double min_log_lik, double spv_abs_err, double spv_rel_err, int spv_max_eval);
-RcppExport SEXP _EMC2_loglik_RDM_DSWTN_race(SEXP rtsSEXP, SEXP choicesSEXP, SEXP params_BSEXP, SEXP params_ASEXP, SEXP params_mu_driftSEXP, SEXP params_sigma_drift_sqSEXP, SEXP params_t0SEXP, SEXP params_sSEXP, SEXP min_log_likSEXP, SEXP spv_abs_errSEXP, SEXP spv_rel_errSEXP, SEXP spv_max_evalSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< NumericVector >::type rts(rtsSEXP);
-    Rcpp::traits::input_parameter< IntegerVector >::type choices(choicesSEXP);
-    Rcpp::traits::input_parameter< NumericMatrix >::type params_B(params_BSEXP);
-    Rcpp::traits::input_parameter< NumericMatrix >::type params_A(params_ASEXP);
-    Rcpp::traits::input_parameter< NumericMatrix >::type params_mu_drift(params_mu_driftSEXP);
-    Rcpp::traits::input_parameter< NumericMatrix >::type params_sigma_drift_sq(params_sigma_drift_sqSEXP);
-    Rcpp::traits::input_parameter< NumericMatrix >::type params_t0(params_t0SEXP);
-    Rcpp::traits::input_parameter< NumericMatrix >::type params_s(params_sSEXP);
-    Rcpp::traits::input_parameter< double >::type min_log_lik(min_log_likSEXP);
-    Rcpp::traits::input_parameter< double >::type spv_abs_err(spv_abs_errSEXP);
-    Rcpp::traits::input_parameter< double >::type spv_rel_err(spv_rel_errSEXP);
-    Rcpp::traits::input_parameter< int >::type spv_max_eval(spv_max_evalSEXP);
-    rcpp_result_gen = Rcpp::wrap(loglik_RDM_DSWTN_race(rts, choices, params_B, params_A, params_mu_drift, params_sigma_drift_sq, params_t0, params_s, min_log_lik, spv_abs_err, spv_rel_err, spv_max_eval));
+    rcpp_result_gen = Rcpp::wrap(rRDM_SWTN(n_samples, B, A, mu_drift, sigma_drift_sq, t0, s));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -858,7 +849,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_dlba_vec", (DL_FUNC) &_EMC2_dlba_vec, 6},
     {"_EMC2_plba_vec", (DL_FUNC) &_EMC2_plba_vec, 6},
     {"_EMC2_pigt0", (DL_FUNC) &_EMC2_pigt0, 3},
-    {"_EMC2_wald_cdf_classic", (DL_FUNC) &_EMC2_wald_cdf_classic, 3},
+    {"_EMC2_dwald", (DL_FUNC) &_EMC2_dwald, 3},
+    {"_EMC2_pwald", (DL_FUNC) &_EMC2_pwald, 3},
     {"_EMC2_digt0", (DL_FUNC) &_EMC2_digt0, 3},
     {"_EMC2_pigt", (DL_FUNC) &_EMC2_pigt, 5},
     {"_EMC2_digt", (DL_FUNC) &_EMC2_digt, 5},
@@ -872,14 +864,13 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_rtnorm_rng_positive", (DL_FUNC) &_EMC2_rtnorm_rng_positive, 2},
     {"_EMC2_rinvgauss_rng", (DL_FUNC) &_EMC2_rinvgauss_rng, 2},
     {"_EMC2_rswtn", (DL_FUNC) &_EMC2_rswtn, 4},
-    {"_EMC2_dswtn_spv_logpdf", (DL_FUNC) &_EMC2_dswtn_spv_logpdf, 8},
-    {"_EMC2_dswtn_spv_cdf", (DL_FUNC) &_EMC2_dswtn_spv_cdf, 8},
-    {"_EMC2_rdm_dswtn", (DL_FUNC) &_EMC2_rdm_dswtn, 8},
-    {"_EMC2_rdm_pswtn", (DL_FUNC) &_EMC2_rdm_pswtn, 8},
-    {"_EMC2_dRDM_DSWTN_log", (DL_FUNC) &_EMC2_dRDM_DSWTN_log, 7},
-    {"_EMC2_pRDM_DSWTN", (DL_FUNC) &_EMC2_pRDM_DSWTN, 10},
-    {"_EMC2_rRDM_DSWTN", (DL_FUNC) &_EMC2_rRDM_DSWTN, 7},
-    {"_EMC2_loglik_RDM_DSWTN_race", (DL_FUNC) &_EMC2_loglik_RDM_DSWTN_race, 12},
+    {"_EMC2_swtn_spv_logpdf", (DL_FUNC) &_EMC2_swtn_spv_logpdf, 8},
+    {"_EMC2_swtn_spv_cdf", (DL_FUNC) &_EMC2_swtn_spv_cdf, 8},
+    {"_EMC2_drdmswtn", (DL_FUNC) &_EMC2_drdmswtn, 8},
+    {"_EMC2_prdmswtn", (DL_FUNC) &_EMC2_prdmswtn, 8},
+    {"_EMC2_dRDM_SWTN", (DL_FUNC) &_EMC2_dRDM_SWTN, 7},
+    {"_EMC2_pRDM_SWTN", (DL_FUNC) &_EMC2_pRDM_SWTN, 10},
+    {"_EMC2_rRDM_SWTN", (DL_FUNC) &_EMC2_rRDM_SWTN, 7},
     {"_EMC2_pEXG", (DL_FUNC) &_EMC2_pEXG, 6},
     {"_EMC2_dEXG", (DL_FUNC) &_EMC2_dEXG, 5},
     {"_EMC2_dEXGrace", (DL_FUNC) &_EMC2_dEXGrace, 4},

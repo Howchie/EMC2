@@ -29,8 +29,12 @@ pigt0 <- function(t, k = 1., l = 1.) {
     .Call(`_EMC2_pigt0`, t, k, l)
 }
 
-wald_cdf_classic <- function(t, drift_rate_xi, boundary_alpha) {
-    .Call(`_EMC2_wald_cdf_classic`, t, drift_rate_xi, boundary_alpha)
+dwald <- function(t, boundary_alpha, drift_rate_xi) {
+    .Call(`_EMC2_dwald`, t, boundary_alpha, drift_rate_xi)
+}
+
+pwald <- function(t, boundary_alpha, drift_rate_xi) {
+    .Call(`_EMC2_pwald`, t, boundary_alpha, drift_rate_xi)
 }
 
 digt0 <- function(t, k = 1., l = 1.) {
@@ -85,36 +89,32 @@ rswtn <- function(alpha, mu_drift, sigma_drift_sq, theta) {
     .Call(`_EMC2_rswtn`, alpha, mu_drift, sigma_drift_sq, theta)
 }
 
-dswtn_spv_logpdf <- function(t_adj, k_center, A_spv, mu_drift, sigma_drift_sq, abs_err = 1e-6, rel_err = 1e-6, max_eval = 1000L) {
-    .Call(`_EMC2_dswtn_spv_logpdf`, t_adj, k_center, A_spv, mu_drift, sigma_drift_sq, abs_err, rel_err, max_eval)
+swtn_spv_logpdf <- function(t_adj, k_center, A_spv, mu_drift, sigma_drift_sq, abs_err = 1e-6, rel_err = 1e-6, max_eval = 1000L) {
+    .Call(`_EMC2_swtn_spv_logpdf`, t_adj, k_center, A_spv, mu_drift, sigma_drift_sq, abs_err, rel_err, max_eval)
 }
 
-dswtn_spv_cdf <- function(t_adj, k_center, A_spv, mu_drift, sigma_drift_sq, abs_err = 1e-6, rel_err = 1e-6, max_eval = 1000L) {
-    .Call(`_EMC2_dswtn_spv_cdf`, t_adj, k_center, A_spv, mu_drift, sigma_drift_sq, abs_err, rel_err, max_eval)
+swtn_spv_cdf <- function(t_adj, k_center, A_spv, mu_drift, sigma_drift_sq, abs_err = 1e-6, rel_err = 1e-6, max_eval = 1000L) {
+    .Call(`_EMC2_swtn_spv_cdf`, t_adj, k_center, A_spv, mu_drift, sigma_drift_sq, abs_err, rel_err, max_eval)
 }
 
-rdm_dswtn <- function(t_adj, B, A, mu_drift, sigma_drift_sq, spv_abs_err = 1e-6, spv_rel_err = 1e-6, spv_max_eval = 1000L) {
-    .Call(`_EMC2_rdm_dswtn`, t_adj, B, A, mu_drift, sigma_drift_sq, spv_abs_err, spv_rel_err, spv_max_eval)
+drdmswtn <- function(t_adj, B, A, mu_drift, sigma_drift_sq, spv_abs_err = 1e-6, spv_rel_err = 1e-6, spv_max_eval = 1000L) {
+    .Call(`_EMC2_drdmswtn`, t_adj, B, A, mu_drift, sigma_drift_sq, spv_abs_err, spv_rel_err, spv_max_eval)
 }
 
-rdm_pswtn <- function(t_adj, B, A, mu_drift, sigma_drift_sq, spv_abs_err = 1e-6, spv_rel_err = 1e-6, spv_max_eval = 1000L) {
-    .Call(`_EMC2_rdm_pswtn`, t_adj, B, A, mu_drift, sigma_drift_sq, spv_abs_err, spv_rel_err, spv_max_eval)
+prdmswtn <- function(t_adj, B, A, mu_drift, sigma_drift_sq, spv_abs_err = 1e-6, spv_rel_err = 1e-6, spv_max_eval = 1000L) {
+    .Call(`_EMC2_prdmswtn`, t_adj, B, A, mu_drift, sigma_drift_sq, spv_abs_err, spv_rel_err, spv_max_eval)
 }
 
-dRDM_DSWTN_log <- function(t, B, A, mu_drift, sigma_drift_sq, t0, s) {
-    .Call(`_EMC2_dRDM_DSWTN_log`, t, B, A, mu_drift, sigma_drift_sq, t0, s)
+dRDM_SWTN <- function(t, B, A, mu_drift, sigma_drift_sq, t0, s) {
+    .Call(`_EMC2_dRDM_SWTN`, t, B, A, mu_drift, sigma_drift_sq, t0, s)
 }
 
-pRDM_DSWTN <- function(t, B, A, mu_drift, sigma_drift_sq, t0, s, spv_abs_err = 1e-6, spv_rel_err = 1e-6, spv_max_eval = 1000L) {
-    .Call(`_EMC2_pRDM_DSWTN`, t, B, A, mu_drift, sigma_drift_sq, t0, s, spv_abs_err, spv_rel_err, spv_max_eval)
+pRDM_SWTN <- function(t, B, A, mu_drift, sigma_drift_sq, t0, s, spv_abs_err = 1e-6, spv_rel_err = 1e-6, spv_max_eval = 1000L) {
+    .Call(`_EMC2_pRDM_SWTN`, t, B, A, mu_drift, sigma_drift_sq, t0, s, spv_abs_err, spv_rel_err, spv_max_eval)
 }
 
-rRDM_DSWTN <- function(n_samples, B, A, mu_drift, sigma_drift_sq, t0, s = 1.0) {
-    .Call(`_EMC2_rRDM_DSWTN`, n_samples, B, A, mu_drift, sigma_drift_sq, t0, s)
-}
-
-loglik_RDM_DSWTN_race <- function(rts, choices, params_B, params_A, params_mu_drift, params_sigma_drift_sq, params_t0, params_s, min_log_lik = -1e10, spv_abs_err = 1e-6, spv_rel_err = 1e-6, spv_max_eval = 1000L) {
-    .Call(`_EMC2_loglik_RDM_DSWTN_race`, rts, choices, params_B, params_A, params_mu_drift, params_sigma_drift_sq, params_t0, params_s, min_log_lik, spv_abs_err, spv_rel_err, spv_max_eval)
+rRDM_SWTN <- function(n_samples, B, A, mu_drift, sigma_drift_sq, t0, s = 1.0) {
+    .Call(`_EMC2_rRDM_SWTN`, n_samples, B, A, mu_drift, sigma_drift_sq, t0, s)
 }
 
 pEXG <- function(q, mu = 5., sigma = 1., tau = 1., lower_tail = TRUE, log_p = FALSE) {

@@ -14,17 +14,16 @@ designLBA <- design(
   formula=list(v~RACE*lM,B~1,t0~1,A~1,sv~1),
 )
 designMLBA <- design(
-  factors=list(subjects=1,S=c("left","right","leftpm","rightpm"),RACE=2:3),
-  Rlevels=c("left","right","pm"),
+  factors=list(subjects=1,S=c("left"),RACE=1),
   matchfun=matchfun,
-  model=Mlba,constants=c(v_RACE3=0,sv=log(1)),
-  formula=list(v~RACE*lM,B~1,t0~1,A~1,sv~1),
+  model=Mlba,constants=c(sv=log(1)),
+  formula=list(v~1,B~1,t0~1,A~1,sv~1),
 )
-p_vector <- sampled_pars(designLBA,doMap = FALSE)
+p_vector <- sampled_pars(designMLBA,doMap = FALSE)
 p_vector[1:length(p_vector)] <- c(log(2), log(4), log(1), log(2), log(0.2),log(.5))
 
 # Make square data so can remove pm in RACE = 2
-template <- make_data(p_vector,designLBA,n_trials=1000)
+template <- make_data(p_vector,designMLBA,n_trials=1)
 attr(template,"UC")=Inf
 template <- template[!(template$RACE==2 & (template$S %in% c("leftpm","rightpm"))),]
 dat <- make_data(p_vector,designLBA,data=template)

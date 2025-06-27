@@ -6,38 +6,25 @@ library(testthat)
 # library(EMC2) # Or have it available in testing environment
 
 # Helper to numerically integrate PDF to get CDF for comparison
-numeric_cdf_rdm_dswtn <- function(t_val, B, A, mu_drift, sigma_drift_sq, t0, s = 1.0) {
+numeric_cdf_rdm_swtn <- function(t_val, B, A, mu_drift, sigma_drift_sq, t0, s = 1.0) {
   if (t_val <= t0) return(0)
   tryCatch({
     stats::integrate(function(x_vals) {
       exp(dRDM_DSWTN_log(x_vals, B, A, mu_drift, sigma_drift_sq, t0, s))
     }, lower = t0, upper = t_val, subdivisions = 500, rel.tol = 1e-4)$value
   }, error = function(e) {
-    # message(paste("Integration error for numeric_cdf_rdm_dswtn:", e$message))
+    # message(paste("Integration error for numeric_cdf_rdm_swtn:", e$message))
     NA_real_
   })
 }
 
 # Access to standard RDM model for comparison (if EMC2 is available)
-standard_RDM_model_obj <- NULL
-can_test_vs_standard_RDM <- FALSE
-if (requireNamespace("EMC2", quietly = TRUE) && "RDM" %in% ls(getNamespace("EMC2"))) {
-  standard_RDM_model_obj <- EMC2::RDM()
-  can_test_vs_standard_RDM <- TRUE
-} else {
-  # Create a mock RDM if EMC2 not available, for some basic structure
-  # This mock won't have working C++ calls for dfun/pfun
-  standard_RDM_model_obj <- list(
-    type="RACE",
-    p_types=c("v" = log(1),"B" = log(1),"A" = log(0),"t0" = log(0),"s" = log(1)),
-    dfun=function(rt,pars){ message("Mock RDM dfun called"); rep(NA_real_, length(rt))},
-    pfun=function(rt,pars){ message("Mock RDM pfun called"); rep(NA_real_, length(rt))}
-  )
-  message("EMC2::RDM() not found or EMC2 not installed. Some comparison tests will be skipped or will use mock.")
-}
+
+standard_RDM_model_obj <- EMC2::RDM()
+can_test_vs_standard_RDM <- TRUE
 
 
-test_that("dRDM_DSWTN_log basic properties and reduction cases", {
+test_that("dRDM_SWTN_log basic properties and reduction cases", {
   B_val <- 1.0
   A_val <- 0.2
   mu_drift_val <- 1.5
@@ -116,7 +103,7 @@ test_that("pRDM_DSWTN basic properties and reduction cases", {
   }
 
   t_test <- t0 + 0.5
-  cdf_num_int <- numeric_cdf_rdm_dswtn(t_test, B, A, mu_drift, sigma_drift_sq, t0, s)
+  cdf_num_int <- numeric_cdf_rdm_swtn(t_test, B, A, mu_drift, sigma_drift_sq, t0, s)
   cdf_direct <- pRDM_DSWTN(t_test, B, A, mu_drift, sigma_drift_sq, t0, s)
   if (!is.na(cdf_num_int)) {
     expect_equal(cdf_direct, cdf_num_int, tolerance = 2e-3) # Wider tolerance for double integral

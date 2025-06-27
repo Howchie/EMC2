@@ -138,8 +138,12 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
 
   # Make sure parameters are in the right format, either matrix or vector
   sampled_p_names <- names(sampled_pars(design))
+  # ZH added transform for single vector pars to be 1-row matrix, preventing crash on single trial simulation
   if(is.null(dim(parameters))){
-    if(is.null(names(parameters))) names(parameters) <- sampled_p_names
+    par_names <- names(parameters)
+    parameters <- matrix(parameters, nrow = ifelse(is.null(design$Ffactors$subjects),1,length(design$Ffactors$subjects)), 
+                         ncol=length(parameters), dimnames = list(ifelse(is.null(design$Ffactors$subjects),"1",as.character(seq(length(design$Ffactors$subjects)))), par_names),byrow=TRUE)
+    if(is.null(colnames(parameters))) colnames(parameters) <- sampled_p_names
   } else{
     if(length(rownames(parameters)) != length(design$Ffactors$subjects)){
       stop("input parameter matrix must have number of rows equal to number of subjects specified in design")
