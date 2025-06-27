@@ -6,13 +6,6 @@ RNGkind("L'Ecuyer-CMRG")
 set.seed(123)
 matchfun <- function(d) as.numeric(d$S)==as.numeric(d$lR) |
   (d$lR=="pm" & as.numeric(d$S)>2)
-designLBA <- design(
-  factors=list(subjects=1,S=c("left","right","leftpm","rightpm"),RACE=2:3),
-  Rlevels=c("left","right","pm"),
-  matchfun=matchfun,
-  model=LBA,constants=c(v_RACE3=0,sv=log(1)),
-  formula=list(v~RACE*lM,B~1,t0~1,A~1,sv~1),
-)
 designRDM <- design(
   factors=list(subjects=1,S=c("left"),RACE=1),Rlevels=c("left"),
   matchfun=matchfun,
@@ -41,9 +34,9 @@ tapply(Cfun(dat),dat[,c("S","RACE")],mean)
 
 
 # Check likelihood
-dadmLBA <- EMC2:::design_model(dat,designLBA)
+dadmRDMSWTN <- EMC2:::design_model(template2,designRDMSWTN)
 dadmMLBA <- EMC2:::design_model(dat,designMLBA)
-pars <- EMC2:::get_pars_matrix(p_vector, dadmLBA, model = attr(dadmLBA, "model")())
+pars <- EMC2:::get_pars_matrix(p_vector, dadmRDMSWTN, model = attr(dadmRDMSWTN, "model")())
 
 
 lfun <- function(i, x, p_vector, pname, dadm, use_c) {

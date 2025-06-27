@@ -466,6 +466,51 @@ rSWTN <- function(n,B,v,A,sv)
   
 }
 
+dRDM_SWTN <- function(rt,pars)
+  # density for single accumulator
+{
+  if (is.null(dim(pars)) || (dim(pars)[1]==1 & length(rt>1)) ) { # Check if pars is a vector
+    original_names <- names(pars); if (is.null(original_names)) {original_names = colnames(pars)}
+    pars <- matrix(pars, nrow = length(rt), ncol=length(pars), dimnames = list(NULL, original_names),byrow=TRUE)
+  }
+  out=rep(NaN, length(rt))
+  # Applying drop=FALSE for subsetting pars for robustness, though t0 and v are single columns
+  ok <- rt > pars[,"t0",drop=FALSE] & !pars[,"v",drop=FALSE] < 0  # code handles rate zero case
+  ok[is.na(ok)] <- FALSE
+  if (any(ok)){
+    if (any(dimnames(pars)[[2]]=="s")) { # rescale
+      # Ensure pars[ok,] remains a matrix even if sum(ok)==1
+      pars_ok <- pars[ok,,drop=FALSE]
+      pars_ok[,c("A","B","v")] <- pars_ok[,c("A","B","v")]/pars_ok[,"s"]
+      pars[ok,] <- pars_ok
+    }
+    out[ok] <- dSWTNspv(rt[ok],B=pars[ok,"B",drop=FALSE],v=pars[ok,"v",drop=FALSE],A=pars[ok,"A",drop=FALSE],t0=pars[ok,"t0",drop=FALSE],sv=pars[ok,"sv",drop=FALSE])
+  }
+  out
+}
+
+
+pRDM_SWTN <- function(rt,pars)
+  # cumulative density for single accumulator
+{
+  if (is.null(dim(pars)) || (dim(pars)[1]==1 & length(rt>1)) ) { # Check if pars is a vector
+    original_names <- names(pars); if (is.null(original_names)) {original_names = colnames(pars)}
+    pars <- matrix(pars, nrow = length(rt), ncol=length(pars), dimnames = list(NULL, original_names),byrow=TRUE)
+  }
+  out=rep(NaN, length(rt))
+  ok <- rt > pars[,"t0",drop=FALSE] & !pars[,"v",drop=FALSE] < 0  # code handles rate zero case
+  ok[is.na(ok)] <- FALSE
+  if (any(ok)){
+    if (any(dimnames(pars)[[2]]=="s")) { # rescale
+      pars_ok <- pars[ok,,drop=FALSE]
+      pars_ok[,c("A","B","v")] <- pars_ok[,c("A","B","v")]/pars_ok[,"s"]
+      pars[ok,] <- pars_ok
+    }
+    out[ok] <- pSWTNspv(rt[ok],B=pars[ok,"B",drop=FALSE],v=pars[ok,"v",drop=FALSE],A=pars[ok,"A",drop=FALSE],t0=pars[ok,"t0",drop=FALSE],sv=pars[ok,"sv",drop=FALSE])
+  }
+  out
+}
+
 #' The Racing Diffusion Model with Trial-Varying Drift (DSWTN)
 #'
 #' Model file to estimate a Racing Diffusion Model where each accumulator
@@ -508,7 +553,7 @@ RDM_SWTN <- function(){
   list(
     type="RACE",
     c_name = "RDM_SWTN",
-    p_types=c("v" = log(1),"B" = log(1),"A" = log(0),"t0" = log(0),"s" = log(1),"sv" = 0),
+    p_types=c("v" = log(1),"B" = log(1),"A" = log(0),"t0" = log(0),"s" = log(1),"sv" = log(0)),
     transform=list(func=c(v = "exp", B = "exp", A = "exp",t0 = "exp", s = "exp", sv="exp")),
     bound=list(minmax=cbind(v=c(1e-3,Inf), B=c(0,Inf), A=c(1e-4,Inf),t0=c(0.05,Inf), s=c(0,Inf), sv=c(0,Inf)),
                exception=c(A=0, v=0, sv=0)),

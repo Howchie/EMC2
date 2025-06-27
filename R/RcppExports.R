@@ -85,12 +85,12 @@ prdmswtn <- function(t_adj, B, mu_drift, A, sigma_drift, spv_abs_err = 1e-6, spv
     .Call(`_EMC2_prdmswtn`, t_adj, B, mu_drift, A, sigma_drift, spv_abs_err, spv_rel_err, spv_max_eval)
 }
 
-dRDM_SWTN <- function(t, B, mu_drift, A, t0, s, sigma_drift) {
-    .Call(`_EMC2_dRDM_SWTN`, t, B, mu_drift, A, t0, s, sigma_drift)
+dSWTNspv <- function(t, B, v, A, t0, sv) {
+    .Call(`_EMC2_dSWTNspv`, t, B, v, A, t0, sv)
 }
 
-pRDM_SWTN <- function(t, B, mu_drift, A, t0, s, sigma_drift, spv_abs_err = 1e-6, spv_rel_err = 1e-6, spv_max_eval = 1000L) {
-    .Call(`_EMC2_pRDM_SWTN`, t, B, mu_drift, A, t0, s, sigma_drift, spv_abs_err, spv_rel_err, spv_max_eval)
+pSWTNspv <- function(t, B, v, A, t0, sv, spv_abs_err = 1e-6, spv_rel_err = 1e-6, spv_max_eval = 1000L) {
+    .Call(`_EMC2_pSWTNspv`, t, B, v, A, t0, sv, spv_abs_err, spv_rel_err, spv_max_eval)
 }
 
 rRDM_SWTN <- function(n_samples, B, mu_drift, A, t0, s = 1.0, sigma_drift = 0.0) {
