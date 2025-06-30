@@ -2,29 +2,105 @@ do_transform <- function(pars, transform)
 {
   isexp    <- transform$func[colnames(pars)] == "exp"
   isprobit <- transform$func[colnames(pars)] == "pnorm"
-
+  
   ## exp link:  lower + exp(real)
   pars[, isexp] <- sweep(
     exp(pars[, isexp, drop = FALSE]), 2,
     transform$lower[colnames(pars)[isexp]], "+")
-
+  
   ## probit link: lower + (upper‑lower) * pnorm(real)
   pars[, isprobit] <- sweep(
-    sweep(pnorm(pars[, isprobit, drop = FALSE]), 2,
+    sweep(qnorm(pars[, isprobit, drop = FALSE]), 2,
           transform$upper[colnames(pars)[isprobit]] -
             transform$lower[colnames(pars)[isprobit]], "*"),
     2, transform$lower[colnames(pars)[isprobit]], "+")
   pars
 }
 
+do_reverse_transform <- function(pars, transform)
+{
+  islog    <- transform$func[colnames(pars)] == "exp"
+  isqnorm <- transform$func[colnames(pars)] == "pnorm"
+  
+  ## exp link:  lower + exp(real)
+  # residual on the natural scale
+  pars[, islog] <- ifelse(pars[, islog] <= transform$lower[colnames(pars)[islog]] | is.na(pars[, islog]),  # illegal or undefined
+                          transform$lower[colnames(pars)[islog]],                                      # clamp to bound
+                          log(pars[, islog])                        # valid inverse
+  )
+  
+  ## probit link: lower + (upper‑lower) * pnorm(real)
+  pars[, isprobit] <- pnorm(sweep(
+    sweep(pars[, isprobit, drop = FALSE], 2,
+          transform$lower[colnames(pars)[isprobit]], "-"),
+    2, transform$upper[colnames(pars)[isprobit]] -
+      transform$lower[colnames(pars)[isprobit]], "/"))
+  pars
+  pars
+}
+
+do_reverse_transform_variance <- function(mu_nat, var_prop, transform)
+{ # input both mu and variance on the natural scale
+  # ZH significant edits -- this function takes in natural scale params (through the transform pipeline) and returns the appropriate mean and variance for the mvtnorm call to sample on the TRANSFORMED scale (using variance_prop on the natural scale)
+  islog    <- transform$func[colnames(mu_nat)] == "exp"
+  isqnorm <- transform$func[colnames(mu_nat)] == "pnorm"
+  
+  
+  var_transformed=matrix(0,ncol=ncol(mu_nat),nrow=ncol(mu_nat)) # square
+  par_transformed=matrix(NA,ncol=ncol(mu_nat),nrow=nrow(mu_nat))
+  ## exp link:  lower + exp(real)
+  # residual on the natural scale
+  var_transformed[, islog] <- log(1 + var_prop[, islog]/mu_nat[,islog]) # log transform based on coefficient of variation
+  par_transformed[, islog] <- ifelse(mu_nat[, islog] <= transform$lower[colnames(mu_nat)[islog]] | is.na(mu_nat[, islog]),  # illegal or undefined
+                                     transform$lower[colnames(mu_nat)[islog]],                                      # clamp to bound
+                                     log(mu_nat[, islog]) - 0.5*var_transformed[, islog]                        # valid inverse
+  )
+  ## probit link - to get variance we need a root finder (this probably needs to be thoroughly checked by someone not ZH)
+  var_nat=diag(as.vector(mu_nat),ncol=ncol(mu_nat))*var_prop
+  make_root <- function(mu, target_var, lower, upper) {
+    #target_var <- pmin(target_var, 0.999 * mu * (1 - mu))
+    W <- upper - lower
+    p <- (mu - lower) / W
+    if (any(p <= 0) || any(p >= 1))          stop("mean outside (lower, upper)")
+    vmax <- W^2 * p * (1 - p)
+    if (target_var > vmax)          stop(paste("target variance for some parameters unattainable"))
+    
+    a <- qnorm(p)                   # STANDARD-NORMAL CUT-POINT, nothing fancy
+    function(sig2) {
+      rho <- sig2 / (1 + sig2)      # yes, σ² /(1+σ²). Full stop.
+      W^2 * (pbivnorm::pbivnorm(a, a, rho) - p^2) - target_var
+    }
+  }
+  for (j in 1:ncol(var_nat)) {
+    if(isqnorm[j]) {
+      W <- upper - lower
+      p <- (mu - lower) / W
+      if (any(p <= 0) || any(p >= 1))          stop("mean outside (lower, upper)")
+      a <- qnorm(p)                   # STANDARD-NORMAL CUT-POINT, nothing fancy
+      
+      for (i in 1:nrow(var_nat)) {
+        if(!var_nat[i,j]==0) {
+          var_transformed[i, j] <- uniroot(make_root(mu_nat[j], var_nat[i,j], 
+                                                     transform$lower[colnames(mu_nat)[j]], transform$upper[colnames(mu_nat)[j]]),
+                                           c(-1e-6, 50))$root
+          par_transformed[i, j] = a*sqrt(1+var_transformed[i,j])
+        }
+      }
+    }
+  }
+  
+
+out = list(pars=par_transformed,var=var_transformed)
+}
+
 do_pre_transform <- function(p_vector, transform)
 {
   isexp    <- transform$func[names(p_vector)] == "exp"
   isprobit <- transform$func[names(p_vector)] == "pnorm"
-
+  
   ## exp link
   p_vector[isexp] <- transform$lower[names(p_vector)[isexp]] + exp(p_vector[isexp])
-
+  
   ## probit link
   p_vector[isprobit] <- transform$lower[names(p_vector)[isprobit]] +
     (transform$upper[names(p_vector)[isprobit]] -
@@ -65,7 +141,7 @@ map_p <- function(p,dadm,model)
   # p is either a vector or a matrix (ncol = number of subjects) of p_vectors
   # dadm is a design matrix with attributes containing model information
 {
-
+  
   # Check if p is a matrix and validate column names match parameter names
   if ( is.matrix(p) ) {
     if (!all(sort(dimnames(p)[[2]])==sort(attr(dadm,"p_names"))))
@@ -75,11 +151,11 @@ map_p <- function(p,dadm,model)
     p <- p[dadm$subjects,,drop=FALSE]
   } else if (!all(sort(names(p))==sort(attr(dadm,"p_names")))) # If p is vector, check names
     stop("p names must be: ",paste(attr(dadm,"p_names"),collapse=", "))
-
+  
   # Get parameter names from model and create output matrix
   do_p <- names(model$p_types)
   pars <- matrix(nrow=nrow(dadm),ncol=length(do_p),dimnames=list(NULL,do_p))
-
+  
   # If there are any trends do these first, they might be used later in mapping
   # Otherwise we're not applying the trend premap, but we are doing it pre-transform
   # So these trend parameters are post-map, pre-transform and have to be included in the pars output
@@ -107,7 +183,7 @@ map_p <- function(p,dadm,model)
       pm <- t(as.matrix(p[colnames(cur_design)]))
       pm <- pm[rep(1,nrow(pars)),,drop=FALSE]
     } else pm <- p[,colnames(cur_design),drop=FALSE]
-
+    
     # Apply pre-mapped trends if they exist
     if (!is.null(model$trend) && attr(model$trend, "premap")) {
       trend <- model$trend
@@ -121,7 +197,7 @@ map_p <- function(p,dadm,model)
         }
       }
     }
-
+    
     # Apply design matrix and sum parameter effects
     tmp <- pm*cur_design[attr(cur_design,"expand"),,drop=FALSE]
     tmp[is.nan(tmp)] <- 0 # Handle 0 weight x Inf parameter cases
@@ -157,7 +233,7 @@ get_pars_matrix <- function(p_vector,dadm,model) {
   # # - apply trends and remove trend pars from pars matrix
   # 7 trial-wise transform
   # 8 bound
-
+  
   # Niek should constants be included in pre_transform? I think not?
   p_vector <- do_pre_transform(p_vector, model$pre_transform)
   # If there's any premap trends, they're done in map_p
@@ -182,7 +258,7 @@ make_pmat <- function(p_vector,design)
 {
   ss <- design$Ffactors$subjects
   out <- matrix(rep(p_vector,each=length(ss)),nrow=length(ss),
-         dimnames=list(ss,names(p_vector)))
+                dimnames=list(ss,names(p_vector)))
   if(is.null(colnames(out))){
     colnames(out) <- names(sampled_pars(design))
   }
@@ -200,7 +276,7 @@ add_constants <- function(p,constants)
   } else{
     return(c(p,constants))
   }
-
+  
 }
 
 add_recalculated_pars <- function(pmat, model, cnams){
@@ -211,7 +287,7 @@ add_recalculated_pars <- function(pmat, model, cnams){
   counts <- lapply(par_table, function(x) return(1:x))
   combn <- do.call(expand.grid, counts)
   colnames(combn) <- names(par_table)
-
+  
   out <- list()
   modfs <- list()
   for(r in 1:nrow(combn)){
@@ -291,7 +367,7 @@ fill_transform <- function(transform, model, p_vector,
   filled_func[names(transform$func)] <- transform$func
   filled_lower[names(transform$lower)] <- transform$lower
   filled_upper[names(transform$upper)] <- transform$upper
-
+  
   # Now fill in remainers
   filled_func[is.na(filled_func)] <- "identity"
   filled_lower[is.na(filled_lower) & (filled_func %in% has_lower)] <- 0
@@ -341,7 +417,7 @@ generate_design_equations <- function(design_matrix,
       sapply(design_matrix, is.numeric)
     ]
   }
-
+  
   # 2. Build the "equation" strings from numeric cols
   make_equation_string <- function(row_i) {
     eq_terms <- c()
@@ -356,7 +432,7 @@ generate_design_equations <- function(design_matrix,
       val <- as.numeric(row_i[[colname]])
       # Skip zeros
       if (abs(val) < 1e-15) next
-
+      
       # If val is exactly +1 or -1, skip numeric part:
       if (abs(val - 1) < 1e-15) {
         # val == +1
@@ -371,12 +447,12 @@ generate_design_equations <- function(design_matrix,
       }
       eq_terms <- c(eq_terms, term_str)
     }
-
+    
     if (length(eq_terms) == 0) {
       # If everything was zero
       return("0")
     }
-
+    
     # Combine eq_terms
     eq_string <- paste(eq_terms, collapse = " ")
     # Remove the leading '+ ' if present
@@ -384,19 +460,19 @@ generate_design_equations <- function(design_matrix,
   }
   # 3. Compute the equation string for each row
   eq_strings <- apply(design_matrix, 1, make_equation_string)
-
+  
   # 4. Determine the widths needed for each factor column
   #    so everything lines up in columns nicely.
   col_widths <- sapply(factor_cols, function(fc) {
     # The width must accommodate either the column name or the largest factor level
     max(nchar(fc), max(nchar(as.character(design_matrix[[fc]])), na.rm = TRUE))
   })
-
+  
   # We'll label the final column as "Equation"
   eq_header <- ""
   # We don't necessarily need to align the entire equation column itself
   # (since it may vary in length), but let's keep a short label for the header.
-
+  
   # 5. Print the header row
   #    E.g. if factor_cols = c("S", "E"), we do:
   #    " S     E    : Equation"
@@ -404,14 +480,14 @@ generate_design_equations <- function(design_matrix,
     sprintf("%-*s", w, fc)   # left-justify the column name
   }, factor_cols, col_widths),
   collapse = "  ")
-
+  
   cat("  ", factor_header_str, "  ", eq_header, "\n", sep="")
-
+  
   # Optionally, add a simple "rule" line or blank line:
   # (Uncomment if you like to separate header from rows)
   # cat(" ", paste(rep("-", nchar(factor_header_str) + nchar(eq_header) + 5),
   #               collapse=""), "\n", sep="")
-
+  
   # 6. Print each row: factor columns in their spaces, then ": <equation>"
   for (i in seq_len(nrow(design_matrix))) {
     row_factor_str <- paste(mapply(function(fc, w) {
@@ -424,7 +500,7 @@ generate_design_equations <- function(design_matrix,
     } else{
       cat(" ", row_factor_str, "  : ", transform, "(", eq_strings[i], ")", "\n", sep="")
     }
-
+    
   }
 }
 

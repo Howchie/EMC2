@@ -562,7 +562,7 @@ rt_check_function <- function(data){
       attr(data,"UC") <- stats::setNames(rep(attr(data,"UC"),length(levels(data$subjects))),
                                          levels(data$subjects))
     check_rt(attr(data,"UC"),data)
-    if (!is.null(attr(data,"UT")) && attr(data,"UT") < attr(data,"UC"))
+    if (!is.null(attr(data,"UT")) && any(attr(data,"UT") < attr(data,"UC")))
       stop("Upper censor must be less than upper truncation")
   }
   if (!is.null(attr(data,"LC"))) {
@@ -571,7 +571,7 @@ rt_check_function <- function(data){
                                          levels(data$subjects))
     if (any(attr(data,"LC")<0)) stop("Lower censor cannot be negative")
     check_rt(attr(data,"LC"),data,upper=FALSE)
-    if (!is.null(attr(data,"LT")) && attr(data,"LT") > attr(data,"LC"))
+    if (!is.null(attr(data,"LT")) && any(attr(data,"LT") > attr(data,"LC")))
       stop("Lower censor must be greater than lower truncation")
   }
   if (any(data$rt[!is.na(data$rt)]==-Inf) & is.null(attr(data,"LC")))

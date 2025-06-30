@@ -200,7 +200,7 @@
 dRDM <- function(rt,pars)
   # density for single accumulator
 {
-  if (is.null(dim(pars)) || (dim(pars)[1]==1 & length(rt>1)) ) { # Check if pars is a vector
+  if (is.null(dim(pars)) || (dim(pars)[1]==1 & length(rt)>1) ) { # Check if pars is a vector
     original_names <- names(pars); if (is.null(original_names)) {original_names = colnames(pars)}
     pars <- matrix(pars, nrow = length(rt), ncol=length(pars), dimnames = list(NULL, original_names),byrow=TRUE)
   }
@@ -224,7 +224,7 @@ dRDM <- function(rt,pars)
 pRDM <- function(rt,pars)
   # cumulative density for single accumulator
 {
-  if (is.null(dim(pars)) || (dim(pars)[1]==1 & length(rt>1)) ) { # Check if pars is a vector
+  if (is.null(dim(pars)) || (dim(pars)[1]==1 & length(rt)>1) ) { # Check if pars is a vector
     original_names <- names(pars); if (is.null(original_names)) {original_names = colnames(pars)}
     pars <- matrix(pars, nrow = length(rt), ncol=length(pars), dimnames = list(NULL, original_names),byrow=TRUE)
   }
@@ -303,7 +303,7 @@ rRDM <- function(lR,pars,p_types=c("v","B","A","t0"),ok=rep(TRUE,dim(pars)[1]))
   # test
   # pars=cbind(B=c(1,2),v=c(1,1),A=c(0,0),t0=c(.2,.2)); lR=factor(c(1,2))
 {
-  if (is.null(dim(pars)) || (dim(pars)[1]==1 & length(rt>1)) ) { # Check if pars is a vector
+  if (is.null(dim(pars)) || (dim(pars)[1]==1 & length(rt)>1) ) { # Check if pars is a vector
     original_names <- names(pars); if (is.null(original_names)) {original_names = colnames(pars)}
     pars <- matrix(pars, nrow = length(rt), ncol=length(pars), dimnames = list(NULL, original_names),byrow=TRUE)
   }
@@ -434,9 +434,9 @@ rRDM_SWTN <- function(lR,pars,p_types=c("v","B","A","t0","sv"),ok=rep(TRUE,dim(p
   # test
   # pars=cbind(B=c(1,2),v=c(1,1),A=c(0,0),t0=c(.2,.2)); lR=factor(c(1,2))
 {
-  if (is.null(dim(pars)) || (dim(pars)[1]==1 & length(rt>1)) ) { # Check if pars is a vector
+  if (is.null(dim(pars)) || (dim(pars)[1]==1 & length(lR)>1) ) { # Check if pars is a vector
     original_names <- names(pars); if (is.null(original_names)) {original_names = colnames(pars)}
-    pars <- matrix(pars, nrow = length(rt), ncol=length(pars), dimnames = list(NULL, original_names),byrow=TRUE)
+    pars <- matrix(pars, nrow = length(lR), ncol=length(pars), dimnames = list(NULL, original_names),byrow=TRUE)
   }
   if (!all(p_types %in% dimnames(pars)[[2]]))
     stop("pars must have columns ",paste(p_types,collapse = " "))
@@ -476,7 +476,6 @@ rSWTN <- function(n,B,v,A,sv)
   
   ok <- !l<0
   nok <- sum(ok)
-  bs <- runif(nok,B[ok],B[ok]+A[ok])
   out[ok] <- statmod::rinvgauss(nok,mean=b/l,shape=b^2)
   out[!ok] <- Inf
   out  
@@ -486,7 +485,7 @@ rSWTN <- function(n,B,v,A,sv)
 dRDM_SWTN <- function(rt,pars)
   # density for single accumulator
 {
-  if (is.null(dim(pars)) || (dim(pars)[1]==1 & length(rt>1)) ) { # Check if pars is a vector
+  if (is.null(dim(pars)) || (dim(pars)[1]==1 & length(rt)>1) ) { # Check if pars is a vector
     original_names <- names(pars); if (is.null(original_names)) {original_names = colnames(pars)}
     pars <- matrix(pars, nrow = length(rt), ncol=length(pars), dimnames = list(NULL, original_names),byrow=TRUE)
   }
@@ -510,7 +509,7 @@ dRDM_SWTN <- function(rt,pars)
 pRDM_SWTN <- function(rt,pars)
   # cumulative density for single accumulator
 {
-  if (is.null(dim(pars)) || (dim(pars)[1]==1 & length(rt>1)) ) { # Check if pars is a vector
+  if (is.null(dim(pars)) || (dim(pars)[1]==1 & length(rt)>1) ) { # Check if pars is a vector
     original_names <- names(pars); if (is.null(original_names)) {original_names = colnames(pars)}
     pars <- matrix(pars, nrow = length(rt), ncol=length(pars), dimnames = list(NULL, original_names),byrow=TRUE)
   }

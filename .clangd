@@ -1,0 +1,17 @@
+CompileFlags:
+  Add: [-I./src, -IC:/Program Files/R/R-4.5.0/include,
+      -IC:/Program Files/R/R-4.5.0/include,
+      -IC:/Program Files/R/R-4.5.0/library/Rcpp/include,
+      -IC:/rtools45/x86_64-w64-mingw32.static.posix/include,
+      -IC:/Program Files/R/R-4.5.0/library/RcppArmadillo/include,
+      -std=c++17,-DRCPP_DEFAULT_INCLUDE_CALL=1,
+    -DRCPP_USE_GLOBAL_ROSTREAM=1]
+Diagnostics:
+  Suppress: [
+    excess-initializers,
+    invalid-offsetof,
+    invalid-constexpr,
+    unparseable-template,
+    type-safety,
+    unused-template,
+  ]

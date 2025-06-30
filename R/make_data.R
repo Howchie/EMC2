@@ -346,10 +346,39 @@ make_random_effects <- function(design, group_means, n_subj = NULL, variance_pro
     subnames <- as.character(1:n_subj)
   }
   if(length(group_means) != length(sampled_pars(design))) stop("You must specify as many means as parameters in your design")
-  if(is.null(covariances)) covariances <- diag(abs(group_means)*variance_proportion)
-  random_effects <- mvtnorm::rmvnorm(n_subj,mean=group_means,sigma=covariances)
-  colnames(random_effects) <- names(sampled_pars(design))
-  rownames(random_effects) <- subnames
+  if (is.null(dim(group_means))) { # Check if pars is a vector
+    original_names <- names(group_means)
+    group_means <- matrix(group_means, nrow = 1, ncol=length(group_means), dimnames = list(NULL, original_names),byrow=TRUE)
+  }
+  # re-order pars
+  reordered_means = matrix(NA,nrow=nrow(group_means),ncol=ncol(group_means), dimnames = list(NULL, names(sampled_pars(design))))
+  for (p in names(sampled_pars(design))) {
+    reordered_means[,p] = group_means[,p]
+  }
+  model=design$model()
+  reordered_means <- t(apply(reordered_means, 1, do_pre_transform, model$pre_transform))
+  if(!is.null(model$trend) && attr(model$trend, "pretransform")){
+    # This runs the trend and afterwards removes the trend parameters
+    group_means <- prep_trend(design, model$trend, reordered_means)
+  }
+  reordered_means <- do_transform(reordered_means, model$transform)
+  if(!is.null(model$trend) && attr(model$trend, "posttransform")){
+    # This runs the trend and afterwards removes the trend parameters
+    reordered_means <- prep_trend(design, model$trend, reordered_means)
+  }
+  
+  if(is.null(covariances)) { # ZH modified so that variance is transformed to natural scale (e.g. 0.2*natural_scale_mu) then back-converted for transformed mvtnorm. I found the original code (a) was broken for group_means of zero (zero variance) but also estimates were more varied than expected due to the conversions
+    tmp = do_reverse_transform_variance(reordered_means,diag(rep(variance_proportion, ncol(reordered_means))),model$transform)
+    #covariances <- diag(tmp$vars)
+    random_effects <- mvtnorm::rmvnorm(n_subj,mean=tmp$pars,sigma=tmp$var)
+    colnames(random_effects) <- colnames(reordered_means)
+    rownames(random_effects) <- subnames
+  } else { # ZH - i didn't change this part so nested in an else statement
+      random_effects <- mvtnorm::rmvnorm(n_subj,mean=group_means,sigma=covariances)
+      colnames(random_effects) <- names(sampled_pars(design))
+      rownames(random_effects) <- subnames
+  #random_effects <- do_reverse_transform(random_effects,model$transform)
+  }
   return(random_effects)
 }
 

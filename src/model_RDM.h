@@ -126,6 +126,7 @@ double pigt(double t, double k = 1, double l = 1, double a = .1, double threshol
 
 // [[Rcpp::export]]
 double digt(double t, double k = 1., double l = 1., double a = .1, double threshold= 1e-10){
+  
   if (t <= 0.){
     return 0.;
   }
@@ -240,35 +241,6 @@ struct pswtn_Params {
     double sigma_drift; // Variance of the drift rate distribution
 };
 
-// PDF of a normal distribution N(mu, sigma) truncated at lower_bound (typically 0)
-// xi is the value at which to evaluate the PDF
-/*
- [[Rcpp::export]]
-double truncated_normal_pdf(double xi, double mu, double sigma, double lower_bound=0) {
-    if (xi < lower_bound) return 0.0;
-    if (sigma <= 1e-10) { // Effectively zero variance
-        if (xi >= lower_bound && std::fabs(xi - mu) < 1e-7) return R_PosInf; // Spike at mu if mu is valid
-        return 0.0;
-    }
-    double sigma = std::sqrt(sigma);
-
-    // Prob that X > lower_bound, where X ~ N(mu, sigma)
-    double prob_above_lower = R::pnorm(lower_bound, mu, sigma, false, false); // P(X > lower_bound)
-                                                                           // same as 1.0 - R::pnorm(lower_bound, mu, sigma, true, false)
-                                                                           // or R::pnorm((mu - lower_bound)/sigma, 0, 1, true, false)
-
-    if (prob_above_lower < 1e-10) { // If virtually no mass above lower_bound
-      // if mu is very far below lower_bound, dnorm will be tiny, division by tiny prob_above_lower could be huge
-      // Check if xi is close to mu and mu is close to lower_bound in such a case.
-      // This case is tricky. If mu < lower_bound and sigma is small, density is practically 0.
-      return 0.0;
-    }
-
-    double pdf_val = R::dnorm(xi, mu, sigma, false) / prob_above_lower;
-    return pdf_val;
-}
- */
-
 // Integrand for the SWTN CDF: dwald * truncated_normal_a_pdf (from library)
 // This is the GSL-style function that will be integrated over xi.
 double pswtn_integrand(double current_xi, void* p) {
@@ -339,7 +311,7 @@ double dswtn(double t_adj, double alpha, double mu_drift, double sigma_drift) {
 // t_adj is time already adjusted for non-decision time (t - theta)
 // [[Rcpp::export]]
 double pswtn(double t_adj, double alpha, double mu_drift, double sigma_drift,
-                             double abs_err = 1e-6, double rel_err = 1e-6, size_t max_eval = 1000) {
+                             double abs_err = 1e-8, double rel_err = 1e-8, size_t max_eval = 10000) {
     if (t_adj <= 0) return 0.0;
     if (alpha <= 0) return 1.0; // Hit boundary immediately if alpha is at or below 0
     if (sigma_drift < 0) return R_NaN;
@@ -568,8 +540,7 @@ double gsl_rdm_pswtn_spv_integrand(double current_actual_k, void* p) {
 // [[Rcpp::export]]
 double drdmswtn(double t_adj, double B, double mu_drift, double A,
                                     double sigma_drift,
-                                    double spv_abs_err = 1e-6, double spv_rel_err = 1e-6, size_t spv_max_eval = 1000) {
-
+                                    double spv_abs_err = 1e-8, double spv_rel_err = 1e-8, size_t spv_max_eval = 10000) {
     if (t_adj <= 1e-10) return R_NegInf;
 
     bool no_A_var = (A < 1e-7);
@@ -643,7 +614,7 @@ double drdmswtn(double t_adj, double B, double mu_drift, double A,
         gsl_integration_workspace_free(w_pdf);
 
         if (status_pdf != GSL_SUCCESS) {
-            // Rcpp::Rcout << "Warning: RDM_SWTN PDF GSL integration (qags) for actual_k failed. GSL Error: " << gsl_strerror(status_pdf) << std::endl;
+            Rcpp::Rcout << "Warning: RDM_SWTN PDF GSL integration (qags) for actual_k failed. GSL Error: " << gsl_strerror(status_pdf) << std::endl;
         }
 
         if (integral_val_pdf <= 0) return R_NegInf; // Integral should be positive
@@ -659,7 +630,7 @@ double drdmswtn(double t_adj, double B, double mu_drift, double A,
 // [[Rcpp::export]]
 double prdmswtn(double t_adj, double B, double mu_drift, double A,
                                  double sigma_drift,
-                                 double spv_abs_err = 1e-6, double spv_rel_err = 1e-6, size_t spv_max_eval = 1000) {
+                                 double spv_abs_err = 1e-8, double spv_rel_err = 1e-8, size_t spv_max_eval = 10000) {
     if (t_adj <= 0) return 0.0;
 
     bool no_A_var = (A < 1e-7);
@@ -752,7 +723,8 @@ double prdmswtn(double t_adj, double B, double mu_drift, double A,
 #'      distribution N(v/s, sigma_drift), truncated at 0.
 #'   Handles vectorization of parameters. */
 // [[Rcpp::export]]
-NumericVector dSWTNspv(NumericVector t, NumericVector B, NumericVector v, NumericVector A, NumericVector t0, NumericVector sv) {
+NumericVector dSWTNspv(NumericVector t, NumericVector B, NumericVector v, NumericVector A, NumericVector t0, NumericVector sv,
+                         double spv_abs_err = 1e-8, double spv_rel_err = 1e-8, int spv_max_eval = 10000) {
     int n = t.size();
 	NumericVector t_adj = t - t0;
     // Vector recycling
@@ -764,7 +736,8 @@ NumericVector dSWTNspv(NumericVector t, NumericVector B, NumericVector v, Numeri
 
     NumericVector pdf(n);
     for (int i = 0; i < n; ++i) {
-        pdf[i] = drdmswtn(t_adj[i], B[i], v[i], A[i], sv[i]);
+        pdf[i] = drdmswtn(t_adj[i], B[i], v[i], A[i], sv[i],
+                                        spv_abs_err, spv_rel_err, static_cast<size_t>(spv_max_eval));
     }
     return pdf;
 }
@@ -787,7 +760,7 @@ NumericVector dSWTNspv(NumericVector t, NumericVector B, NumericVector v, Numeri
 #' @details Parameters are handled similarly to `dRDM_SWTN`, including scaling by `s`. */
 // [[Rcpp::export]]
 NumericVector pSWTNspv(NumericVector t, NumericVector B, NumericVector v, NumericVector A, NumericVector t0, NumericVector sv, 
-                         double spv_abs_err = 1e-6, double spv_rel_err = 1e-6, int spv_max_eval = 1000
+                         double spv_abs_err = 1e-8, double spv_rel_err = 1e-8, int spv_max_eval = 10000
                          ) { 
                          // To add finer control for inner drift integration, params for pswtn could be exposed
                          // For now, prdmswtn passes spv_abs_err etc. to pswtn if it's Case 3 (no SPV)
@@ -829,7 +802,7 @@ NumericVector pSWTNspv(NumericVector t, NumericVector B, NumericVector v, Numeri
 #'   If `sigma_drift` is zero, samples from standard RDM with SPV.
 #'   If `A` is zero, samples from SWTN with fixed threshold `B_scaled`.
 #'   If both are zero, samples from simple Wald. */
-// [[Rcpp::export]]
+/*
 NumericVector rRDM_SWTN(int n_samples, double B, double mu_drift, double A, double t0, double s = 1.0, double sigma_drift=0.0) {
     NumericVector samples(n_samples);
     Rcpp::RNGScope scope;
@@ -880,7 +853,7 @@ NumericVector rRDM_SWTN(int n_samples, double B, double mu_drift, double A, doub
         }
     }
     return samples;
-}
+}*/
 
 // [[Rcpp::export]]
 NumericVector drdmswtn_c(NumericVector rts, NumericMatrix pars, LogicalVector idx, double min_ll, LogicalVector is_ok){
@@ -905,7 +878,7 @@ NumericVector drdmswtn_c(NumericVector rts, NumericMatrix pars, LogicalVector id
 
 // [[Rcpp::export]]
 NumericVector prdmswtn_c(NumericVector rts, NumericMatrix pars, LogicalVector idx, double min_ll, LogicalVector is_ok){
-  //v = 0, B = 1, A = 2, t0 = 3, s = 4
+  //v = 0, B = 1, A = 2, t0 = 3, s = 4, sv=5
   NumericVector out(sum(idx));
   int k = 0;
   for(int i = 0; i < rts.length(); i++){
@@ -924,151 +897,4 @@ NumericVector prdmswtn_c(NumericVector rts, NumericMatrix pars, LogicalVector id
   return(out);
 }
 
-// It would be good to adapt drdm_c and prdm_c or create new versions
-// that can select between the original RDM and this SWTN variant.
-// This would require adding a model type parameter and dispatching.
-// For now, these are standalone functions for the SWTN.
-
-// --- RDM Race Model using SWTN ---
-// Calculates log-likelihood for multiple trials for an N-accumulator race model
-// where each accumulator is a SWTN process.
-// Parameters can vary per trial and per accumulator.
-/*
-#' Log-likelihood for an N-accumulator RDM_SWTN race model
-#'
-#' Calculates the log-likelihood for multiple trials of an N-accumulator race model,
-#' where each accumulator follows the RDM_SWTN model (RDM-style start-point
-#' variability combined with SWTN-style trial-varying drift rates).
-#'
-#' @param rts Vector of observed reaction times for each trial.
-#' @param choices Vector of observed choices for each trial, as integers from 1 to N_acc.
-#' @param params_B Matrix (N_trials x N_acc) of base threshold (B) parameters.
-#' @param params_A Matrix (N_trials x N_acc) of start-point variability range (A) parameters.
-#' @param params_mu_drift Matrix (N_trials x N_acc) of mean drift rate parameters.
-#' @param params_sigma_drift Matrix (N_trials x N_acc) of drift rate variance parameters.
-#' @param params_t0 Matrix (N_trials x N_acc) of non-decision time (t0) parameters.
-#' @param params_s Matrix (N_trials x N_acc) of overall scaling (s) parameters.
-#' @param min_log_lik Minimum log-likelihood value to return for invalid inputs or numerical issues.
-#' @param cdf_abs_err Desired absolute error for the internal CDF calculations.
-#' @param cdf_rel_err Desired relative error for the internal CDF calculations.
-#' @param cdf_max_eval Maximum evaluations for internal CDF calculations.
-#' @return A numeric vector of log-likelihood values for each trial.
-#' @details This function computes the likelihood of observing each RT and choice pair,
-#'   given the parameters for N SWTN accumulators racing independently. Parameters can
-#'   vary per trial and per accumulator. 
-// [[Rcpp::export]]
-NumericVector loglik_RDM_SWTN_race(
-    NumericVector rts,
-    IntegerVector choices,
-    NumericMatrix params_B,
-    NumericMatrix params_A,
-    NumericMatrix params_mu_drift,
-    NumericMatrix params_sigma_drift,
-    NumericMatrix params_t0,
-    NumericMatrix params_s,
-    double min_log_lik = -1e10,
-    double spv_abs_err = 1e-6,
-    double spv_rel_err = 1e-6,
-    int    spv_max_eval = 1000
-) { 
-    // Note: Inner drift variability integration errors are currently fixed in rdm_pswtn_spv_integrand's call to pswtn
-    // or inherited from spv_abs_err in rdm_swtn/cdf Case 3. This could be further parameterized if needed.
-    int n_trials = rts.size();
-    if (n_trials == 0) return NumericVector(0);
-
-    // Dimension checks
-    if (choices.size() != n_trials || params_B.nrow() != n_trials ||
-        params_A.nrow() != n_trials || params_mu_drift.nrow() != n_trials ||
-        params_sigma_drift.nrow() != n_trials || params_t0.nrow() != n_trials ||
-        params_s.nrow() != n_trials) {
-        Rcpp::stop("Input vector/matrix dimensions do not match number of trials.");
-    }
-
-    int n_acc = params_B.ncol();
-    if (n_acc == 0) {
-        if (n_trials > 0) Rcpp::stop("Number of accumulators (ncol of param matrices) is zero.");
-        return NumericVector(n_trials);
-    }
-    if (params_A.ncol() != n_acc || params_mu_drift.ncol() != n_acc ||
-        params_sigma_drift.ncol() != n_acc || params_t0.ncol() != n_acc ||
-        params_s.ncol() != n_acc) {
-        Rcpp::stop("Parameter matrices must have the same number of columns (accumulators).");
-    }
-
-    NumericVector trial_log_likelihoods(n_trials);
-
-    for (int i = 0; i < n_trials; ++i) {
-        double rt = rts[i];
-        int winning_acc_idx = choices[i] - 1;
-
-        if (winning_acc_idx < 0 || winning_acc_idx >= n_acc) {
-            trial_log_likelihoods[i] = min_log_lik;
-            continue;
-        }
-
-        // Winner parameters
-        double s_winner = params_s(i, winning_acc_idx);
-        if (s_winner <= 1e-10) { trial_log_likelihoods[i] = min_log_lik; continue; }
-        double B_winner_scaled = params_B(i, winning_acc_idx) / s_winner;
-        double A_winner_scaled = params_A(i, winning_acc_idx) / s_winner;
-        double mu_drift_winner_scaled = params_mu_drift(i, winning_acc_idx) / s_winner;
-        double t0_winner = params_t0(i, winning_acc_idx);
-        double t_adj_winner = rt - t0_winner;
-
-        if (t_adj_winner <= 1e-10) {
-            trial_log_likelihoods[i] = min_log_lik;
-            continue;
-        }
-
-        double current_log_lik = drdmswtn(
-            t_adj_winner, B_winner_scaled, A_winner_scaled,
-            mu_drift_winner_scaled, sigma_drift_winner,
-            spv_abs_err, spv_rel_err, static_cast<size_t>(spv_max_eval)
-        );
-
-        if (!std::isfinite(current_log_lik) || current_log_lik < min_log_lik -100) {
-             trial_log_likelihoods[i] = min_log_lik;
-             continue;
-        }
-
-        // Loser parameters and survivor functions
-        for (int j = 0; j < n_acc; ++j) {
-            if (j == winning_acc_idx) continue;
-
-            double s_loser = params_s(i, j);
-            if (s_loser <= 1e-10) { current_log_lik = min_log_lik; break; } // If s_loser is 0, implies problem
-            double B_loser_scaled = params_B(i, j) / s_loser;
-            double A_loser_scaled = params_A(i, j) / s_loser;
-            double mu_drift_loser_scaled = params_mu_drift(i, j) / s_loser;
-            double sigma_drift_sq_loser_scaled = params_sigma_drift_sq(i, j) / (s_loser * s_loser);
-            double t0_loser = params_t0(i, j);
-            double t_adj_loser = rt - t0_loser;
-
-            if (t_adj_loser <= 1e-10) {
-                // CDF is 0, Survivor is 1, log(Survivor) is 0. No change.
-                continue;
-            }
-
-            double cdf_loser = prdmswtn(
-                t_adj_loser, B_loser_scaled, A_loser_scaled,
-                mu_drift_loser_scaled, sigma_drift_sq_loser_scaled,
-                spv_abs_err, spv_rel_err, static_cast<size_t>(spv_max_eval)
-            );
-
-            double survivor_loser = 1.0 - cdf_loser;
-
-            if (survivor_loser <= 1e-10) {
-                current_log_lik = min_log_lik;
-                break;
-            }
-            current_log_lik += std::log(survivor_loser);
-             if (!std::isfinite(current_log_lik) || current_log_lik < min_log_lik -100) {
-                 current_log_lik = min_log_lik;
-                 break;
-            }
-        }
-        trial_log_likelihoods[i] = std::max(current_log_lik, min_log_lik);
-    }
-    return trial_log_likelihoods;
-}*/
 #endif

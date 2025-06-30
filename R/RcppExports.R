@@ -61,7 +61,7 @@ dswtn <- function(t_adj, alpha, mu_drift, sigma_drift) {
     .Call(`_EMC2_dswtn`, t_adj, alpha, mu_drift, sigma_drift)
 }
 
-pswtn <- function(t_adj, alpha, mu_drift, sigma_drift, abs_err = 1e-6, rel_err = 1e-6, max_eval = 1000L) {
+pswtn <- function(t_adj, alpha, mu_drift, sigma_drift, abs_err = 1e-8, rel_err = 1e-8, max_eval = 10000L) {
     .Call(`_EMC2_pswtn`, t_adj, alpha, mu_drift, sigma_drift, abs_err, rel_err, max_eval)
 }
 
@@ -77,24 +77,20 @@ rswtn <- function(alpha, mu_drift, sigma_drift, theta) {
     .Call(`_EMC2_rswtn`, alpha, mu_drift, sigma_drift, theta)
 }
 
-drdmswtn <- function(t_adj, B, mu_drift, A, sigma_drift, spv_abs_err = 1e-6, spv_rel_err = 1e-6, spv_max_eval = 1000L) {
+drdmswtn <- function(t_adj, B, mu_drift, A, sigma_drift, spv_abs_err = 1e-8, spv_rel_err = 1e-8, spv_max_eval = 10000L) {
     .Call(`_EMC2_drdmswtn`, t_adj, B, mu_drift, A, sigma_drift, spv_abs_err, spv_rel_err, spv_max_eval)
 }
 
-prdmswtn <- function(t_adj, B, mu_drift, A, sigma_drift, spv_abs_err = 1e-6, spv_rel_err = 1e-6, spv_max_eval = 1000L) {
+prdmswtn <- function(t_adj, B, mu_drift, A, sigma_drift, spv_abs_err = 1e-8, spv_rel_err = 1e-8, spv_max_eval = 10000L) {
     .Call(`_EMC2_prdmswtn`, t_adj, B, mu_drift, A, sigma_drift, spv_abs_err, spv_rel_err, spv_max_eval)
 }
 
-dSWTNspv <- function(t, B, v, A, t0, sv) {
-    .Call(`_EMC2_dSWTNspv`, t, B, v, A, t0, sv)
+dSWTNspv <- function(t, B, v, A, t0, sv, spv_abs_err = 1e-8, spv_rel_err = 1e-8, spv_max_eval = 10000L) {
+    .Call(`_EMC2_dSWTNspv`, t, B, v, A, t0, sv, spv_abs_err, spv_rel_err, spv_max_eval)
 }
 
-pSWTNspv <- function(t, B, v, A, t0, sv, spv_abs_err = 1e-6, spv_rel_err = 1e-6, spv_max_eval = 1000L) {
+pSWTNspv <- function(t, B, v, A, t0, sv, spv_abs_err = 1e-8, spv_rel_err = 1e-8, spv_max_eval = 10000L) {
     .Call(`_EMC2_pSWTNspv`, t, B, v, A, t0, sv, spv_abs_err, spv_rel_err, spv_max_eval)
-}
-
-rRDM_SWTN <- function(n_samples, B, mu_drift, A, t0, s = 1.0, sigma_drift = 0.0) {
-    .Call(`_EMC2_rRDM_SWTN`, n_samples, B, mu_drift, A, t0, s, sigma_drift)
 }
 
 drdmswtn_c <- function(rts, pars, idx, min_ll, is_ok) {
@@ -187,10 +183,6 @@ construct_design_matrix <- function(frame_times, events, has_derivative, min_ons
 
 calc_ll <- function(p_matrix, data, constants, designs, type_rcpp, bounds, transforms, pretransforms, p_types, min_ll, trend) {
     .Call(`_EMC2_calc_ll`, p_matrix, data, constants, designs, type_rcpp, bounds, transforms, pretransforms, p_types, min_ll, trend)
-}
-
-test_c_loglik_cens_trunc_wrapper_R <- function(pars, dadm, model_type_str, min_ll, ok_params, n_acc, R_model_obj_list) {
-    .Call(`_EMC2_test_c_loglik_cens_trunc_wrapper_R`, pars, dadm, model_type_str, min_ll, ok_params, n_acc, R_model_obj_list)
 }
 
 truncated_normal_a_cdf <- function(x, mu, sigma, a) {

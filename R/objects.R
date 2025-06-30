@@ -399,19 +399,122 @@ get_pars <- function(emc,selection= "mu", stage=get_last_stage(emc),thin=1,filte
                       emc = emc)
   }
   if(flatten) remove_dup <- TRUE
-  if(!is.null(true_pars)){ # Kluge to make sure the right object dimensions/filtering is performed on simulated parameters
-    samples <- samples[1]
-    if(length(dim(samples[[1]])) > 2){
-      if(is.vector(true_pars)){
-        samples[[1]][,,1] <- true_pars
-      } else if(ncol(true_pars) == nrow(samples[[1]])){
-        samples[[1]][,,1] <- t(true_pars)
-      } else{
-        samples[[1]][,,1] <- true_pars
+  if (!is.null(true_pars) && !is(true_pars, "emc")) { # Kluge to make sure the right object dimensions/filtering is performed on simulated parameters
+    # This section handles when true_pars is a vector, aiming to align it by name.
+    samples <- samples[1] # Work with the first chain's structure as a template.
+    template_sample_obj <- samples[[1]]
+    
+    expected_par_names <- NULL
+    is_3d_template <- length(dim(template_sample_obj)) > 2
+    
+    if (is_3d_template) {
+      # Handles 3D cases like (parameter_dim1, parameter_dim2, iterations) or (parameter, subject, iterations)
+      # The exact dimension for names depends on 'selection' and whether 'flatten' was used.
+      # This logic assumes that if flattened, rownames will hold combined parameter names.
+      # If not flattened, typically the first dimension holds the primary parameter names.
+      if (flatten && !is.null(rownames(template_sample_obj))) { # Usually (par_pair x iter) after flatten
+        expected_par_names <- rownames(template_sample_obj)
+      } else if (!is.null(dimnames(template_sample_obj)[[1]])) { # Default for 3D, (par x something x iter)
+        expected_par_names <- dimnames(template_sample_obj)[[1]]
+        if (!is.null(names(true_pars)) && length(true_pars) != length(expected_par_names) && selection %in% c("variance", "covariance", "correlation") && !flatten) {
+          warning(paste("Named true_pars vector provided for unflattened 3D selection '", selection, 
+                        "'. This scenario is complex. Length of true_pars (", length(true_pars), 
+                        ") does not match length of first dim of template (", length(expected_par_names),
+                        "). Consider flattening or providing a matrix true_pars. Using positional assignment for safety.", sep=""), call. = FALSE)
+          # Fallback to direct assignment for this complex unhandled case to avoid breaking matrix true_pars
+          template_sample_obj[,,1] <- true_pars 
+          samples[[1]] <- template_sample_obj
+          # Early exit from this specific true_pars handling block
+          if(selection == "alpha"){
+            flatten <- FALSE
+            subnames <- colnames(samples[[1]])
+          } else{
+            subnames <- names(emc[[1]]$data)
+          }
+          if(length(dim(samples[[1]])) > 2 & flatten){
+            if(is.null(rownames(samples[[1]]))){
+              pnams <- colnames(samples[[1]])
+            } else{
+              pnams <- c(outer(rownames(samples[[1]]), colnames(samples[[1]]), paste, sep = "."))
+            }
+            samples <- lapply(samples, function(x) out <- apply(x,3,function(y){c(y)}))
+            samples <- lapply(samples, function(x) {rownames(x) <- pnams; return(x)})
+          }
+          samples <- filter_const_and_dup(samples, remove_dup, remove_constants)
+          samples <- lapply(samples, filter_sub_and_par, subject, subnames, use_par)
+          samples <- lapply(samples, filter_emc, thin, length.out, filter)
+          if(!is.null(chain)){
+            if(any(!(chain %in% 1:length(samples)))) stop("chain selection exceeds number of chains")
+            samples <- samples[chain]
+          }
+          if(merge_chains){
+            if(length(dim(samples[[1]])) == 2){
+              samples <- do.call(cbind, samples)
+            } else{
+              samples <- do.call(abind, samples)
+            }
+            if(return_mcmc) samples <- list(samples)
+          }
+          if(!return_mcmc) return(samples)
+          if(length(dim(samples[[1]])) > 2){
+            is_sub_idx <- sapply(dimnames(samples[[1]]), FUN = function(x) any(x %in% subnames))
+            if(any(is_sub_idx) & by_subject){
+              samples <- make_3dim_mcmc(samples, which(is_sub_idx))
+            } else if(any(is_sub_idx)){
+              samples <- make_3dim_mcmc(samples, which(!is_sub_idx)[1])
+            } else{
+              samples <- make_3dim_mcmc(samples, 2)
+            }
+          } else{
+            samples <- list(coda::as.mcmc.list(lapply(samples, FUN = function(x) coda::mcmc(t(x)))))
+            names(samples) <- selection
+          }
+          # This is a critical part of the original true_pars kludge, ensure it's replicated before returning
+          samples <- lapply(samples, FUN = function(x) return(list(x[[1]][1,, drop = F])))
+          return(samples)
+        }
       }
-    } else{
-      samples[[1]][,1] <- true_pars
+    } else { # 2D template (parameters x iterations)
+      if (!is.null(rownames(template_sample_obj))) {
+        expected_par_names <- rownames(template_sample_obj)
+      }
+      # Add more checks if parameters could be in colnames for 2D
     }
+    
+    if (is.null(expected_par_names)) {
+      warning("Could not determine parameter names from sample structure for aligning true_pars. Using positional assignment.", call. = FALSE)
+      if (is_3d_template) template_sample_obj[,,1] <- true_pars else template_sample_obj[,1] <- true_pars
+    } else {
+      num_params_template <- length(expected_par_names)
+      aligned_true_pars <- setNames(rep(NA_real_, num_params_template), expected_par_names)
+      
+      if (!is.null(names(true_pars))) { # true_pars is named
+        for (p_name in names(true_pars)) {
+          if (p_name %in% expected_par_names) {
+            aligned_true_pars[p_name] <- true_pars[p_name]
+          } else {
+            warning(paste("Parameter '", p_name, "' in true_pars not found in expected parameters. Ignoring."), call. = FALSE)
+          }
+        }
+        # Inform about parameters in template not set by true_pars (will be NA)
+        unassigned_in_template <- expected_par_names[!expected_par_names %in% names(true_pars)]
+        if (length(unassigned_in_template) > 0) {
+           message(paste("Note: The following expected parameters were not in named true_pars and are set to NA:", paste(unassigned_in_template, collapse=", ")))
+        }
+      } else { # true_pars is not named
+        warning("true_pars vector is not named. Using positional assignment. Ensure order and length match expected parameters.", call. = FALSE)
+        if (length(true_pars) == num_params_template) {
+          aligned_true_pars <- true_pars
+        } else {
+          warning(paste("Length of unnamed true_pars (", length(true_pars), ") does not match expected (", num_params_template, "). Filling positionally and padding/truncating with NAs."), call. = FALSE)
+          len_to_copy <- min(length(true_pars), num_params_template)
+          aligned_true_pars[1:len_to_copy] <- true_pars[1:len_to_copy]
+        }
+      }
+      
+      if (is_3d_template) template_sample_obj[,,1] <- aligned_true_pars else template_sample_obj[,1] <- aligned_true_pars
+    }
+    samples[[1]] <- template_sample_obj
   }
   if(selection == "alpha"){
     flatten <- FALSE

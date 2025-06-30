@@ -1,68 +1,43 @@
-#### RACE LBA ----
-devtools::load_all(reset = TRUE)
+#### RACE RDM_SWTN ----
+devtools::load_all()
 library(tictoc)
 options(error=recover)
 RNGkind("L'Ecuyer-CMRG")
 set.seed(123)
-matchfun <- function(d) as.numeric(d$S)==as.numeric(d$lR)
+matchfun <- function(d) as.numeric(d$S)==as.numeric(d$lR) |
+  (d$lR=="pm" & as.numeric(d$S)>2)
+designRDM_SWTN <- design(
+  factors=list(subjects=1,S=c("left")),
+  Rlevels=c("left"),
+  matchfun=matchfun,
+  model=RDM_SWTN,constants=c(s=log(1)),
+  formula=list(v~1,B~1,t0~1,A~1,sv~1),
+)
 designRDM <- design(
-  factors=list(subjects=1:20,S=rep("yes","no",10)),Rlevels=c("yes","no"),
+  factors=list(subjects=1,S=c("left")),
+  Rlevels=c("left"),
   matchfun=matchfun,
   model=RDM,constants=c(s=log(1)),
-  formula=list(v~lM,B~1,t0~1,A~1,s~1),
+  formula=list(v~1,B~1,t0~1,A~1,s~1),
 )
-designRDMSWTN <- design(
-  factors=list(subjects=1:20,S=rep("yes","no",10)),Rlevels=c("yes","no"),
-  matchfun=matchfun,
-  model=RDM_SWTN,constants=c(s=log(1)),
-  formula=list(v~lM,B~1,t0~1,A~1,s~1,sv~1),
-)
-p_vector <- c("v"=log(2),"v_lMTRUE"=log(3),"A"=log(2),"B"=log(3),"t0"=log(0.15))#,"s"=log(1))
-p_vector2 <- c("v"=log(2),"v_lMTRUE"=log(3),,"sv"=log(1),"B"=log(3),"t0"=log(.2), "A" = log(1))
+p_vector <- sampled_pars(designRDM,doMap = FALSE)
+p_vector[1:length(p_vector)] <- c(log(5), log(2), log(0.2),log(.5))
 
-re1 = make_random_effects(design = designRDM, group_means = p_vector,n_subj=20, variance_proportion = 0.05)
-re2 = make_random_effects(design = designRDMSWTN, group_means = p_vector2,n_subj=20, variance_proportion = 0.05)
 # Make square data so can remove pm in RACE = 2
-template <- make_data(re1,designRDM,n_trials=100)
-template2 <- make_data(re2,designRDMSWTN,n_trials=100)
+template <- make_data(p_vector,designRDM,n_trials=1000)
+#attr(template,"UC")=Inf
+#template <- template[!(template$RACE==2 & (template$S %in% c("leftpm","rightpm"))),]
+dat <- make_data(p_vector,designRDM,data=template)
+#Cfun <- function(d) as.numeric(d$S)==as.numeric(d$R) | (d$R=="pm" & as.numeric(d$S)>2)
+#tapply(Cfun(dat),dat[,c("S","RACE")],mean)
+# dadm <- EMC2:::design_model(dat,designRDM_SWTN,compress=FALSE)
+
 
 # Check likelihood
-dadmRDMSWTN <- EMC2:::design_model(template2,designRDMSWTN)
-dadmRDM <- EMC2:::design_model(template,designRDM)
-pars2 <- EMC2:::get_pars_matrix(re2, dadmRDMSWTN, model = attr(dadmRDMSWTN, "model")())
-pars <- EMC2:::get_pars_matrix(re1, dadmRDM, model = attr(dadmRDM, "model")())
+dadmRDM_SWTN <- EMC2:::design_model(dat,designRDM_SWTN)
+dadmRDM <- EMC2:::design_model(dat,designRDM)
+pars <- EMC2:::get_pars_matrix(p_vector, dadmRDM, model = attr(dadmRDM, "model")())
 
-par(mfrow=c(2,2))
-plot(dadmRDM$rt,designRDM$model()$dfun(dadmRDM$rt,pars), col='blue', xlim=c(0,5))
-plot(dadmRDM$rt,designRDM$model()$pfun(dadmRDM$rt,pars), col='blue', xlim=c(0,5))
-plot(dadmRDMSWTN$rt,designRDMSWTN$model()$dfun(dadmRDMSWTN$rt,pars2), col='red', xlim=c(0,5))
-plot(dadmRDMSWTN$rt,designRDMSWTN$model()$pfun(dadmRDMSWTN$rt,pars2), col='red', xlim=c(0,5))
-
-#data=data.frame(rt=rSWTN(10000,exp(p_vector2["B"]),exp(p_vector2["v"]),exp(p_vector2["A"]),
-#                         exp(p_vector2["sv"]))+exp(p_vector2["t0"]),
-#                S=rep("yes",10000),R=factor(rep("yes",10000)),subjects=rep(1:10,1000))
-
-designRDMSWTN <- design(data=template,
-  model=RDM_SWTN,constants=c(s=log(1)),
-  formula=list(v~lM,B~1,t0~1,A~1,s~1,sv~1),
-)
-designRDM <- design(data=template,
-                        model=RDM,constants=c(s=log(1)),
-                        formula=list(v~lM,B~1,t0~1,A~1,s~1),
-)
-## TODO -- fix random effects 0-mean
-#pars=make_random_effects(designRDMSWTN,group_means = c(p_vector2["v"],p_vector2["B"],p_vector2["t0"],
-#                         p_vector2["A"],p_vector2["sv"]),n_subj = 100, variance_proportion =0.3)
-fitRDMSWTN = make_emc(template,designRDMSWTN,rt_resolution = 0.02)
-fitRDMSWTN = fit(fitRDMSWTN)
-plot_pars(fitRDMSWTN,true_pars = c("v"=log(5),"B"=log(3),"t0"=log(.2), "A"=log(2), "sv"=0))
-plot(dadmRDM$rt,designRDMSWTN$model()$dfun(dadmRDM$rt,p_vec), col='red', xlim=c(0,5))
-plot(dadmRDM$rt,designRDMSWTN$model()$pfun(dadmRDM$rt,p_vec), col='red', xlim=c(0,5))
-
-prior_Model = prior(designRDM,mu_mean=p_vector2,mu_sd=0.1)
-fitRDM = make_emc(template,designRDM,rt_resolution = 0.02, prior=prior_Model)
-fitRDM = fit(fitRDM)
-plot_pars(fitRDM,true_pars = c("v"=log(5),"B"=log(3),"t0"=log(.2), "A"=log(2)))
 
 lfun <- function(i, x, p_vector, pname, dadm, use_c) {
   p_vector[pname] <- x[i]
@@ -151,18 +126,18 @@ profile_plot_test <- function (data, design, p_vector, range = 0.5, layout = NA,
 
 library(parallel)
 tic()
-profile_plot_test(dat,designLBA,p_vector,n_cores=1,layout=c(2,3)) # good
-profile_plot_test(dat,designMLBA,p_vector,n_cores=1,layout=c(2,3)) # good
-profile_plot_test(dat,designLBA,p_vector,n_cores=1,layout=c(2,3),use_c=TRUE) # ?
-profile_plot_test(dat,designMLBA,p_vector,n_cores=1,layout=c(2,3),use_c=TRUE) # ?
+profile_plot_test(dat,designRDM_SWTN,c(p_vector,"sv"=log(1)),n_cores=1,layout=c(2,3)) # good
+profile_plot_test(dat,designRDM,p_vector,n_cores=1,layout=c(2,3)) # good
+profile_plot_test(dat,designRDM_SWTN,c(p_vector,"sv"=log(1)),n_cores=1,layout=c(2,3),use_c=TRUE) # ?
+profile_plot_test(dat,designRDM,p_vector,n_cores=1,layout=c(2,3),use_c=TRUE) # ?
 toc()
 
-# emc <- make_emc(dat,designLBA,type="single")
+# emc <- make_emc(dat,designRDM_SWTN,type="single")
 # emc <- fit(emc,cores_per_chain = 3)
 # recovery(emc,p_vector)
 
 data=dat
-design=designMLBA
+design=designRDM
 dadm <- EMC2:::design_model(data, design, verbose = FALSE)
 model=attr(dadm, "model")()
 pars <- get_pars_matrix(p_vector, dadm, model)
@@ -170,8 +145,8 @@ pars <- get_pars_matrix(p_vector, dadm, model)
 i=0
 tic()
 while(i<1000) {
-  tmp=plba(dadm$rt,pars[,"A"],pars[,"b"], pars[, "v"], pars[,"sv"],TRUE)
-  tmp=dlba(dadm$rt,pars[,"A"],pars[,"b"], pars[, "v"], pars[,"sv"],TRUE)
+  tmp=pRDM_SWTN(dadm$rt,pars[,"A"],pars[,"b"], pars[, "v"], pars[,"sv"],TRUE)
+  tmp=dRDM_SWTN(dadm$rt,pars[,"A"],pars[,"b"], pars[, "v"], pars[,"sv"],TRUE)
 i=i+1
 }
 toc()
@@ -179,9 +154,8 @@ toc()
 i=0
 tic()
 while(i<1000) {
-  tmp=plba_vec(dadm$rt,pars[,"A"],pars[,"b"], pars[, "v"], pars[,"sv"],TRUE)
-  tmp=dlba_vec(dadm$rt,pars[,"A"],pars[,"b"], pars[, "v"], pars[,"sv"],TRUE)
+  tmp=pRDM_SWTN_vec(dadm$rt,pars[,"A"],pars[,"b"], pars[, "v"], pars[,"sv"],TRUE)
+  tmp=dRDM_SWTN_vec(dadm$rt,pars[,"A"],pars[,"b"], pars[, "v"], pars[,"sv"],TRUE)
   i=i+1
 }
 toc()
-

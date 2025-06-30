@@ -666,6 +666,7 @@ calc_ll_manager <- function(proposals, dadm, model, component = NULL){
   if(!is.data.frame(dadm)){
     lls <- log_likelihood_joint(proposals, dadm, model, component)
   } else{
+    browser()
     model <- model()
     if(is.null(model$c_name)){ # use the R implementation
       lls <- apply(proposals,1, calc_ll_R, model, dadm = dadm)

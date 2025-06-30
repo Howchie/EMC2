@@ -442,7 +442,6 @@ plot_pars <- function(emc,layout=NA, selection="mu", show_chains = FALSE, plot_p
     true_pars <- NULL
     if(is.null(dots$lwd)) dots$lwd <- .3
   }
-
   MCMC_samples <- do.call(get_pars, c(list(emc, selection = selection), fix_dots(dots, get_pars)))
   if(all_subjects) {
     MCMC_samples <- list(lapply(MCMC_samples, function(x) do.call(rbind, x)))
