@@ -1,40 +1,42 @@
 do_transform <- function(pars, transform)
 {
-  isexp    <- transform$func[colnames(pars)] == "exp"
-  isprobit <- transform$func[colnames(pars)] == "pnorm"
+  ptypes <- get_p_types(colnames(pars))
+  isexp    <- transform$func[ptypes] == "exp"
+  isprobit <- transform$func[ptypes] == "pnorm"
   
   ## exp link:  lower + exp(real)
   pars[, isexp] <- sweep(
     exp(pars[, isexp, drop = FALSE]), 2,
-    transform$lower[colnames(pars)[isexp]], "+")
+    transform$lower[ptypes[isexp]], "+")
   
   ## probit link: lower + (upper‑lower) * pnorm(real)
   pars[, isprobit] <- sweep(
     sweep(qnorm(pars[, isprobit, drop = FALSE]), 2,
-          transform$upper[colnames(pars)[isprobit]] -
-            transform$lower[colnames(pars)[isprobit]], "*"),
-    2, transform$lower[colnames(pars)[isprobit]], "+")
+          transform$upper[ptypes[isprobit]] -
+            transform$lower[ptypes[isprobit]], "*"),
+    2, transform$lower[ptypes[isprobit]], "+")
   pars
 }
 
 do_reverse_transform <- function(pars, transform)
 {
-  islog    <- transform$func[colnames(pars)] == "exp"
-  isqnorm <- transform$func[colnames(pars)] == "pnorm"
+  ptypes <- get_p_types(colnames(pars))
+  islog    <- transform$func[ptypes] == "exp"
+  isqnorm <- transform$func[ptypes] == "pnorm"
   
   ## exp link:  lower + exp(real)
   # residual on the natural scale
-  pars[, islog] <- ifelse(pars[, islog] <= transform$lower[colnames(pars)[islog]] | is.na(pars[, islog]),  # illegal or undefined
-                          transform$lower[colnames(pars)[islog]],                                      # clamp to bound
+  pars[, islog] <- ifelse(pars[, islog] <= transform$lower[ptypes[islog]] | is.na(pars[, islog]),  # illegal or undefined
+                          transform$lower[ptypes[islog]],                                      # clamp to bound
                           log(pars[, islog])                        # valid inverse
   )
   
   ## probit link: lower + (upper‑lower) * pnorm(real)
   pars[, isprobit] <- pnorm(sweep(
     sweep(pars[, isprobit, drop = FALSE], 2,
-          transform$lower[colnames(pars)[isprobit]], "-"),
-    2, transform$upper[colnames(pars)[isprobit]] -
-      transform$lower[colnames(pars)[isprobit]], "/"))
+          transform$lower[ptypes[isprobit]], "-"),
+    2, transform$upper[ptypes[isprobit]] -
+      transform$lower[ptypes[isprobit]], "/"))
   pars
   pars
 }
@@ -42,8 +44,9 @@ do_reverse_transform <- function(pars, transform)
 do_reverse_transform_variance <- function(mu_nat, var_prop, transform)
 { # input both mu and variance on the natural scale
   # ZH significant edits -- this function takes in natural scale params (through the transform pipeline) and returns the appropriate mean and variance for the mvtnorm call to sample on the TRANSFORMED scale (using variance_prop on the natural scale)
-  islog    <- transform$func[colnames(mu_nat)] == "exp"
-  isqnorm <- transform$func[colnames(mu_nat)] == "pnorm"
+  ptypes <- get_p_types(colnames(mu_nat))
+  islog    <- transform$func[ptypes] == "exp"
+  isqnorm <- transform$func[ptypes] == "pnorm"
   
   
   var_transformed=matrix(0,ncol=ncol(mu_nat),nrow=ncol(mu_nat)) # square
@@ -51,8 +54,8 @@ do_reverse_transform_variance <- function(mu_nat, var_prop, transform)
   ## exp link:  lower + exp(real)
   # residual on the natural scale
   var_transformed[, islog] <- log(1 + var_prop[, islog]/mu_nat[,islog]) # log transform based on coefficient of variation
-  par_transformed[, islog] <- ifelse(mu_nat[, islog] <= transform$lower[colnames(mu_nat)[islog]] | is.na(mu_nat[, islog]),  # illegal or undefined
-                                     transform$lower[colnames(mu_nat)[islog]],                                      # clamp to bound
+  par_transformed[, islog] <- ifelse(mu_nat[, islog] <= transform$lower[ptypes[islog]] | is.na(mu_nat[, islog]),  # illegal or undefined
+                                     transform$lower[ptypes[islog]],                                      # clamp to bound
                                      log(mu_nat[, islog]) - 0.5*var_transformed[, islog]                        # valid inverse
   )
   ## probit link - to get variance we need a root finder (this probably needs to be thoroughly checked by someone not ZH)
@@ -81,7 +84,7 @@ do_reverse_transform_variance <- function(mu_nat, var_prop, transform)
       for (i in 1:nrow(var_nat)) {
         if(!var_nat[i,j]==0) {
           var_transformed[i, j] <- uniroot(make_root(mu_nat[j], var_nat[i,j], 
-                                                     transform$lower[colnames(mu_nat)[j]], transform$upper[colnames(mu_nat)[j]]),
+                                                     transform$lower[ptypes[j]], transform$upper[ptypes[j]]),
                                            c(-1e-6, 50))$root
           par_transformed[i, j] = a*sqrt(1+var_transformed[i,j])
         }
@@ -95,16 +98,17 @@ out = list(pars=par_transformed,var=var_transformed)
 
 do_pre_transform <- function(p_vector, transform)
 {
-  isexp    <- transform$func[names(p_vector)] == "exp"
-  isprobit <- transform$func[names(p_vector)] == "pnorm"
+  ptypes <- get_p_types(names(p_vector))
+  isexp    <- transform$func[ptypes] == "exp"
+  isprobit <- transform$func[ptypes] == "pnorm"
   
   ## exp link
-  p_vector[isexp] <- transform$lower[names(p_vector)[isexp]] + exp(p_vector[isexp])
+  p_vector[isexp] <- transform$lower[ptypes[isexp]] + exp(p_vector[isexp])
   
   ## probit link
-  p_vector[isprobit] <- transform$lower[names(p_vector)[isprobit]] +
-    (transform$upper[names(p_vector)[isprobit]] -
-       transform$lower[names(p_vector)[isprobit]]) *
+  p_vector[isprobit] <- transform$lower[ptypes[isprobit]] +
+    (transform$upper[ptypes[isprobit]] -
+       transform$lower[ptypes[isprobit]]) *
     pnorm(p_vector[isprobit])
   p_vector
 }

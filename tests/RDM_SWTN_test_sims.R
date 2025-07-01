@@ -18,7 +18,7 @@ designRDMSWTN <- design(
   formula=list(v~lM,B~1,t0~1,A~1,s~1,sv~1),
 )
 p_vector <- c("v"=log(2),"v_lMTRUE"=log(3),"A"=log(2),"B"=log(3),"t0"=log(0.15))#,"s"=log(1))
-p_vector2 <- c("v"=log(2),"v_lMTRUE"=log(3),,"sv"=log(1),"B"=log(3),"t0"=log(.2), "A" = log(1))
+p_vector2 <- c("v"=log(2),"v_lMTRUE"=log(3),"sv"=log(1),"B"=log(3),"t0"=log(.2), "A" = log(1))
 
 re1 = make_random_effects(design = designRDM, group_means = p_vector,n_subj=20, variance_proportion = 0.05)
 re2 = make_random_effects(design = designRDMSWTN, group_means = p_vector2,n_subj=20, variance_proportion = 0.05)

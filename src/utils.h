@@ -9,13 +9,11 @@ typedef Rcpp::NumericVector (*RacePdfFun)(Rcpp::NumericVector rt,
                                           Rcpp::NumericMatrix pars,
 										  Rcpp::LogicalVector winner,
 										  Rcpp::LogicalVector is_ok,
-                                          bool log_p,
                                           void* model_specific_context);
 typedef Rcpp::NumericVector (*RaceCdfFun)(Rcpp::NumericVector rt,
                                           Rcpp::NumericMatrix pars,
 										  Rcpp::LogicalVector winner,
 										  Rcpp::LogicalVector is_ok,
-										  bool log_p,
                                           void* model_specific_context);
 
 
@@ -47,7 +45,7 @@ double c_log_likelihood_race_cens_trunc(
     RaceCdfFun model_pfun,                  // Pointer to the model's CDF adapter function
 	const int n_trials,
 	const Rcpp::LogicalVector winner,
-	const Rcpp::IntegerVector expand_vec,  // Vector for expanding unique LLs to full trial count
+	const Rcpp::IntegerVector expand,  // Vector for expanding unique LLs to full trial count
     double min_ll,                          // Minimum log-likelihood value
     const Rcpp::LogicalVector ok_params,   // Parameter validity for each row in 'pars' matrix
     int n_acc,                              // Number of accumulators in the race (must be > 0 if data exists)
@@ -85,37 +83,31 @@ Rcpp::NumericVector lba_dfun_adapter(Rcpp::NumericVector rt,
                                      Rcpp::NumericMatrix pars,
                                      Rcpp::LogicalVector is_ok,
                                      Rcpp::LogicalVector winner,
-                                     bool log_p,
                                      void* context);
 Rcpp::NumericVector lba_pfun_adapter(Rcpp::NumericVector rt,
                                      Rcpp::NumericMatrix pars,
                                      Rcpp::LogicalVector is_ok,
                                      Rcpp::LogicalVector winner,
-                                     bool log_p,
                                      void* context);
 Rcpp::NumericVector rdm_dfun_adapter(Rcpp::NumericVector rt,
                                      Rcpp::NumericMatrix pars,
                                      Rcpp::LogicalVector is_ok,
                                      Rcpp::LogicalVector winner,
-                                     bool log_p,
                                      void* context);
 Rcpp::NumericVector rdm_pfun_adapter(Rcpp::NumericVector rt,
                                      Rcpp::NumericMatrix pars,
                                      Rcpp::LogicalVector is_ok,
                                      Rcpp::LogicalVector winner,
-                                     bool log_p,
                                      void* context);
 Rcpp::NumericVector lnr_dfun_adapter(Rcpp::NumericVector rt,
                                      Rcpp::NumericMatrix pars,
                                      Rcpp::LogicalVector is_ok,
                                      Rcpp::LogicalVector winner,
-                                     bool log_p,
                                      void* context);
 Rcpp::NumericVector lnr_pfun_adapter(Rcpp::NumericVector rt,
                                      Rcpp::NumericMatrix pars,
                                      Rcpp::LogicalVector is_ok,
                                      Rcpp::LogicalVector winner,
-                                     bool log_p,
                                      void* context);
 									 
 									 // Static adapter for LBA dfun
@@ -123,10 +115,8 @@ Rcpp::NumericVector lba_dfun_adapter(Rcpp::NumericVector rt,
                                             Rcpp::NumericMatrix pars,
                                             Rcpp::LogicalVector is_ok,
                                             Rcpp::LogicalVector winner,
-                                            bool log_p,
                                             void* context) {
     ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context);
-    Rcpp::LogicalVector idx(pars.nrow(), true); 
     // Pass use_posdrift from context to dlba_c
     return dlba_c(rt, pars, winner, ctx->min_lik_for_pdf, is_ok, ctx->use_posdrift);
 }
@@ -136,11 +126,8 @@ Rcpp::NumericVector lba_pfun_adapter(Rcpp::NumericVector rt,
                                             Rcpp::NumericMatrix pars,
                                             Rcpp::LogicalVector is_ok,
                                             Rcpp::LogicalVector winner,
-											bool log_p,
-											
                                             void* context) {
     ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context);
-    Rcpp::LogicalVector idx(pars.nrow(), true); 
     // Pass use_posdrift from context to plba_c
     return plba_c(rt, pars, winner, ctx->min_lik_for_pdf, is_ok, ctx->use_posdrift);
 }
@@ -150,10 +137,8 @@ Rcpp::NumericVector rdm_dfun_adapter(Rcpp::NumericVector rt,
                                             Rcpp::NumericMatrix pars,
                                             Rcpp::LogicalVector is_ok,
                                             Rcpp::LogicalVector winner,
-                                            bool log_p,
                                             void* context) {
     ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context);
-    Rcpp::LogicalVector idx(pars.nrow(), true); 
     return drdm_c(rt, pars, winner, ctx->min_lik_for_pdf, is_ok);
 }
 
@@ -162,10 +147,8 @@ Rcpp::NumericVector rdm_pfun_adapter(Rcpp::NumericVector rt,
                                             Rcpp::NumericMatrix pars,
                                             Rcpp::LogicalVector is_ok,
                                             Rcpp::LogicalVector winner,
-                                            bool log_p,
                                             void* context) {
     ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context);
-    Rcpp::LogicalVector idx(pars.nrow(), true); 
     return prdm_c(rt, pars, winner, ctx->min_lik_for_pdf, is_ok);
 }
 // Static adapter for RDM dfun
@@ -173,10 +156,8 @@ Rcpp::NumericVector rdmswtn_dfun_adapter(Rcpp::NumericVector rt,
                                             Rcpp::NumericMatrix pars,
                                             Rcpp::LogicalVector is_ok,
                                             Rcpp::LogicalVector winner,
-                                            bool log_p,
                                             void* context) {
     ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context);
-    Rcpp::LogicalVector idx(pars.nrow(), true); 
     return drdmswtn_c(rt, pars, winner, ctx->min_lik_for_pdf, is_ok);
 }
 
@@ -185,10 +166,8 @@ Rcpp::NumericVector rdmswtn_pfun_adapter(Rcpp::NumericVector rt,
                                             Rcpp::NumericMatrix pars,
                                             Rcpp::LogicalVector is_ok,
                                             Rcpp::LogicalVector winner,
-                                            bool log_p,
                                             void* context) {
     ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context);
-    Rcpp::LogicalVector idx(pars.nrow(), true); 
     return prdmswtn_c(rt, pars, winner, ctx->min_lik_for_pdf, is_ok);
 }
 
@@ -197,10 +176,8 @@ Rcpp::NumericVector lnr_dfun_adapter(Rcpp::NumericVector rt,
                                             Rcpp::NumericMatrix pars,
                                             Rcpp::LogicalVector is_ok,
                                             Rcpp::LogicalVector winner,
-                                            bool log_p,
                                             void* context) {
     ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context); // Reusing same context struct
-    Rcpp::LogicalVector idx(pars.nrow(), true);
     return dlnr_c(rt, pars, winner, ctx->min_lik_for_pdf, is_ok);
 }
 
@@ -209,10 +186,8 @@ Rcpp::NumericVector lnr_pfun_adapter(Rcpp::NumericVector rt,
                                             Rcpp::NumericMatrix pars,
                                             Rcpp::LogicalVector is_ok,
                                             Rcpp::LogicalVector winner,
-                                            bool log_p,
                                             void* context) {
     ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context); // Reusing same context struct
-    Rcpp::LogicalVector idx(pars.nrow(), true);
     return plnr_c(rt, pars, winner, ctx->min_lik_for_pdf, is_ok);
 }
 
