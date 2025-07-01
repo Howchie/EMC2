@@ -176,7 +176,6 @@ get_startpoints_standard <- function(pmwgs, start_mu, start_var){
   # If no starting point for group var just sample some
   if (is.null(start_var)) start_var <- riwish(n_pars * 3, diag(n_pars))
   start_a_half <- 1 / rgamma(n = n_pars, shape = 2, rate = 1)
-
   # Calculate subject-specific means using design matrices
   group_designs <- add_group_design(pmwgs$par_names, pmwgs$group_designs, pmwgs$n_subjects)
   subj_mu <- calculate_subject_means(group_designs, start_mu, pmwgs$n_subjects, n_pars)

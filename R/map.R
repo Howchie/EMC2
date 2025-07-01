@@ -1,5 +1,6 @@
-do_transform <- function(pars, transform)
+do_transform <- function(pars, model)
 {
+  transform=model$transform
   ptypes <- get_p_types(colnames(pars))
   isexp    <- transform$func[ptypes] == "exp"
   isprobit <- transform$func[ptypes] == "pnorm"
@@ -7,43 +8,45 @@ do_transform <- function(pars, transform)
   ## exp link:  lower + exp(real)
   pars[, isexp] <- sweep(
     exp(pars[, isexp, drop = FALSE]), 2,
-    transform$lower[ptypes[isexp]], "+")
+    model$bound$minmax[1,ptypes[isexp]], "+")
   
   ## probit link: lower + (upper‑lower) * pnorm(real)
   pars[, isprobit] <- sweep(
     sweep(qnorm(pars[, isprobit, drop = FALSE]), 2,
-          transform$upper[ptypes[isprobit]] -
-            transform$lower[ptypes[isprobit]], "*"),
-    2, transform$lower[ptypes[isprobit]], "+")
+          model$bound$minmax[2,ptypes[isprobit]] -
+            model$bound$minmax[1,ptypes[isprobit]], "*"),
+    2, model$bound$minmax[1,ptypes[isprobit]], "+")
   pars
 }
 
-do_reverse_transform <- function(pars, transform)
+do_reverse_transform <- function(pars, model)
 {
+  transform=model$transform
   ptypes <- get_p_types(colnames(pars))
   islog    <- transform$func[ptypes] == "exp"
   isqnorm <- transform$func[ptypes] == "pnorm"
   
   ## exp link:  lower + exp(real)
   # residual on the natural scale
-  pars[, islog] <- ifelse(pars[, islog] <= transform$lower[ptypes[islog]] | is.na(pars[, islog]),  # illegal or undefined
-                          transform$lower[ptypes[islog]],                                      # clamp to bound
+  pars[, islog] <- ifelse(pars[, islog] <= model$bound$minmax[1,ptypes[islog]] | is.na(pars[, islog]),  # illegal or undefined
+                          model$bound$minmax[1,ptypes[islog]],                                      # clamp to bound
                           log(pars[, islog])                        # valid inverse
   )
   
   ## probit link: lower + (upper‑lower) * pnorm(real)
   pars[, isprobit] <- pnorm(sweep(
     sweep(pars[, isprobit, drop = FALSE], 2,
-          transform$lower[ptypes[isprobit]], "-"),
-    2, transform$upper[ptypes[isprobit]] -
-      transform$lower[ptypes[isprobit]], "/"))
+          model$bound$minmax[1,ptypes[isprobit]], "-"),
+    2, model$bound$minmax[2,ptypes[isprobit]] -
+      model$bound$minmax[1,ptypes[isprobit]], "/"))
   pars
   pars
 }
 
-do_reverse_transform_variance <- function(mu_nat, var_prop, transform)
+do_reverse_transform_variance <- function(mu_nat, var_prop, model)
 { # input both mu and variance on the natural scale
   # ZH significant edits -- this function takes in natural scale params (through the transform pipeline) and returns the appropriate mean and variance for the mvtnorm call to sample on the TRANSFORMED scale (using variance_prop on the natural scale)
+  transform=model$transform
   ptypes <- get_p_types(colnames(mu_nat))
   islog    <- transform$func[ptypes] == "exp"
   isqnorm <- transform$func[ptypes] == "pnorm"
@@ -54,8 +57,8 @@ do_reverse_transform_variance <- function(mu_nat, var_prop, transform)
   ## exp link:  lower + exp(real)
   # residual on the natural scale
   var_transformed[, islog] <- log(1 + var_prop[, islog]/mu_nat[,islog]) # log transform based on coefficient of variation
-  par_transformed[, islog] <- ifelse(mu_nat[, islog] <= transform$lower[ptypes[islog]] | is.na(mu_nat[, islog]),  # illegal or undefined
-                                     transform$lower[ptypes[islog]],                                      # clamp to bound
+  par_transformed[, islog] <- ifelse(mu_nat[, islog] <= model$bound$minmax[1,ptypes[islog]] | is.na(mu_nat[, islog]),  # illegal or undefined
+                                     model$bound$minmax[1,ptypes[islog]],                                      # clamp to bound
                                      log(mu_nat[, islog]) - 0.5*var_transformed[, islog]                        # valid inverse
   )
   ## probit link - to get variance we need a root finder (this probably needs to be thoroughly checked by someone not ZH)
@@ -84,7 +87,7 @@ do_reverse_transform_variance <- function(mu_nat, var_prop, transform)
       for (i in 1:nrow(var_nat)) {
         if(!var_nat[i,j]==0) {
           var_transformed[i, j] <- uniroot(make_root(mu_nat[j], var_nat[i,j], 
-                                                     transform$lower[ptypes[j]], transform$upper[ptypes[j]]),
+                                                     model$bound$minmax[1,ptypes[j]], model$bound$minmax[2,ptypes[j]]),
                                            c(-1e-6, 50))$root
           par_transformed[i, j] = a*sqrt(1+var_transformed[i,j])
         }
@@ -96,19 +99,20 @@ do_reverse_transform_variance <- function(mu_nat, var_prop, transform)
 out = list(pars=par_transformed,var=var_transformed)
 }
 
-do_pre_transform <- function(p_vector, transform)
+do_pre_transform <- function(p_vector, model)
 {
+  transform=model$pre_transform
   ptypes <- get_p_types(names(p_vector))
   isexp    <- transform$func[ptypes] == "exp"
   isprobit <- transform$func[ptypes] == "pnorm"
   
   ## exp link
-  p_vector[isexp] <- transform$lower[ptypes[isexp]] + exp(p_vector[isexp])
+  p_vector[isexp] <- model$bound$minmax[1,ptypes[isexp]] + exp(p_vector[isexp])
   
   ## probit link
-  p_vector[isprobit] <- transform$lower[ptypes[isprobit]] +
-    (transform$upper[ptypes[isprobit]] -
-       transform$lower[ptypes[isprobit]]) *
+  p_vector[isprobit] <- model$bound$minmax[1,ptypes[isprobit]] +
+    (model$bound$minmax[2,ptypes[isprobit]] -
+       model$bound$minmax[1,ptypes[isprobit]]) *
     pnorm(p_vector[isprobit])
   p_vector
 }
@@ -211,7 +215,7 @@ map_p <- function(p,dadm,model)
     if(k <= sum(pretrend_idx)){
       tmp <- as.matrix(tmp)
       colnames(tmp) <- i
-      tmp <- do_transform(tmp, model$transform)
+      tmp <- do_transform(tmp, model)
     }
     k <- k + 1
     pars[,i] <- tmp
@@ -239,14 +243,16 @@ get_pars_matrix <- function(p_vector,dadm,model) {
   # 8 bound
   
   # Niek should constants be included in pre_transform? I think not?
-  p_vector <- do_pre_transform(p_vector, model$pre_transform)
+  if (is.null(dim(p_vector))) { # Check if pars is a vector
+    p_vector <- do_pre_transform(p_vector, model)
+  } else{p_vector <- t(apply(p_vector, 1, do_pre_transform, model))}
   # If there's any premap trends, they're done in map_p
   pars <- map_p(add_constants(p_vector,attr(dadm,"constants")),dadm, model)
   if(!is.null(model$trend) && attr(model$trend, "pretransform")){
     # This runs the trend and afterwards removes the trend parameters
     pars <- prep_trend(dadm, model$trend, pars)
   }
-  pars <- do_transform(pars, model$transform)
+  pars <- do_transform(pars, model)
   if(!is.null(model$trend) && attr(model$trend, "posttransform")){
     # This runs the trend and afterwards removes the trend parameters
     pars <- prep_trend(dadm, model$trend, pars)
@@ -527,6 +533,25 @@ verbal_dm <- function(design){
   }
 }
 
-
+#' Call the C++ version of `get_pars_matrix`
+#'
+#' This helper allows inspection of the parameter matrix generated on the C++
+#' side using the same steps as `calc_ll()`.
+#' @param p_vector Numeric vector of parameters.
+#' @param dadm Data frame used when mapping parameters.
+#' @param model Model object as produced by `design$model()`.
+#' @return Numeric matrix of parameters after mapping and transformations.
+#' @export
+get_pars_matrix_cpp <- function(p_vector, dadm, model) {
+  get_pars_matrix_rcpp(p_vector,
+                       attr(dadm, "constants"),
+                       model$transform,
+                       model$pre_transform,
+                       model$p_types,
+                       model$design,
+                       nrow(dadm),
+                       dadm,
+                       model$trend)
+}
 
 

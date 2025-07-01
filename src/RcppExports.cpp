@@ -722,6 +722,25 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// get_pars_matrix_rcpp
+NumericMatrix get_pars_matrix_rcpp(NumericVector p_vector, NumericVector constants, List transforms, List pretransforms, CharacterVector p_types, List designs, int n_trials, DataFrame data, List trend);
+RcppExport SEXP _EMC2_get_pars_matrix_rcpp(SEXP p_vectorSEXP, SEXP constantsSEXP, SEXP transformsSEXP, SEXP pretransformsSEXP, SEXP p_typesSEXP, SEXP designsSEXP, SEXP n_trialsSEXP, SEXP dataSEXP, SEXP trendSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type p_vector(p_vectorSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type constants(constantsSEXP);
+    Rcpp::traits::input_parameter< List >::type transforms(transformsSEXP);
+    Rcpp::traits::input_parameter< List >::type pretransforms(pretransformsSEXP);
+    Rcpp::traits::input_parameter< CharacterVector >::type p_types(p_typesSEXP);
+    Rcpp::traits::input_parameter< List >::type designs(designsSEXP);
+    Rcpp::traits::input_parameter< int >::type n_trials(n_trialsSEXP);
+    Rcpp::traits::input_parameter< DataFrame >::type data(dataSEXP);
+    Rcpp::traits::input_parameter< List >::type trend(trendSEXP);
+    rcpp_result_gen = Rcpp::wrap(get_pars_matrix_rcpp(p_vector, constants, transforms, pretransforms, p_types, designs, n_trials, data, trend));
+    return rcpp_result_gen;
+END_RCPP
+}
 // calc_ll
 NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector constants, List designs, String type_rcpp, List bounds, List transforms, List pretransforms, CharacterVector p_types, double min_ll, List trend);
 RcppExport SEXP _EMC2_calc_ll(SEXP p_matrixSEXP, SEXP dataSEXP, SEXP constantsSEXP, SEXP designsSEXP, SEXP type_rcppSEXP, SEXP boundsSEXP, SEXP transformsSEXP, SEXP pretransformsSEXP, SEXP p_typesSEXP, SEXP min_llSEXP, SEXP trendSEXP) {
@@ -898,6 +917,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_compute_time_derivative", (DL_FUNC) &_EMC2_compute_time_derivative, 10},
     {"_EMC2_build_hrf_kernel", (DL_FUNC) &_EMC2_build_hrf_kernel, 10},
     {"_EMC2_construct_design_matrix", (DL_FUNC) &_EMC2_construct_design_matrix, 13},
+    {"_EMC2_get_pars_matrix_rcpp", (DL_FUNC) &_EMC2_get_pars_matrix_rcpp, 9},
     {"_EMC2_calc_ll", (DL_FUNC) &_EMC2_calc_ll, 11},
     {"_EMC2_truncated_normal_a_cdf", (DL_FUNC) &_EMC2_truncated_normal_a_cdf, 4},
     {"_EMC2_truncated_normal_a_cdf_inv", (DL_FUNC) &_EMC2_truncated_normal_a_cdf_inv, 4},

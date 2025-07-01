@@ -217,13 +217,13 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
     add_accumulators(data,design$matchfun,simulate=TRUE,type=model()$type,Fcovariates=design$Fcovariates),
     design,model,add_acc=FALSE,compress=FALSE,verbose=FALSE,
     rt_check=FALSE)
-  pars <- t(apply(parameters, 1, do_pre_transform, model()$pre_transform))
+  pars <- t(apply(parameters, 1, do_pre_transform, model()))
   pars <- map_p(add_constants(pars,design$constants),data, model())
   if(!is.null(model()$trend) && attr(model()$trend, "pretransform")){
     # This runs the trend and afterwards removes the trend parameters
     pars <- prep_trend(data, model()$trend, pars)
   }
-  pars <- do_transform(pars, model()$transform)
+  pars <- do_transform(pars, model())
   if(!is.null(model()$trend) && attr(model()$trend, "posttransform")){
     # This runs the trend and afterwards removes the trend parameters
     pars <- prep_trend(data, model()$trend, pars)
@@ -356,19 +356,19 @@ make_random_effects <- function(design, group_means, n_subj = NULL, variance_pro
     reordered_means[,p] = group_means[,p]
   }
   model=design$model()
-  reordered_means <- t(apply(reordered_means, 1, do_pre_transform, model$pre_transform))
+  reordered_means <- t(apply(reordered_means, 1, do_pre_transform, model))
   if(!is.null(model$trend) && attr(model$trend, "pretransform")){
     # This runs the trend and afterwards removes the trend parameters
     group_means <- prep_trend(design, model$trend, reordered_means)
   }
-  reordered_means <- do_transform(reordered_means, model$transform)
+  reordered_means <- do_transform(reordered_means, model)
   if(!is.null(model$trend) && attr(model$trend, "posttransform")){
     # This runs the trend and afterwards removes the trend parameters
     reordered_means <- prep_trend(design, model$trend, reordered_means)
   }
   
   if(is.null(covariances)) { # ZH modified so that variance is transformed to natural scale (e.g. 0.2*natural_scale_mu) then back-converted for transformed mvtnorm. I found the original code (a) was broken for group_means of zero (zero variance) but also estimates were more varied than expected due to the conversions
-    tmp = do_reverse_transform_variance(reordered_means,diag(rep(variance_proportion, ncol(reordered_means))),model$transform)
+    tmp = do_reverse_transform_variance(reordered_means,diag(rep(variance_proportion, ncol(reordered_means))),model)
     #covariances <- diag(tmp$vars)
     random_effects <- mvtnorm::rmvnorm(n_subj,mean=tmp$pars,sigma=tmp$var)
     colnames(random_effects) <- colnames(reordered_means)

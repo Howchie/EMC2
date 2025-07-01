@@ -233,6 +233,7 @@ NumericMatrix get_pars_matrix(NumericVector p_vector, NumericVector constants, L
   p_vector_updtd = c_do_pre_transform(p_vector_updtd, p_specs);
   p_vector_updtd = c_add_vectors(p_vector_updtd, constants);
   NumericMatrix pars = c_map_p(p_vector_updtd, p_types, designs, n_trials, data, trend, transforms);
+  Rcpp::Rcout<<pars<<p_types;
   // // Check if pretransform trend applies
   if(pretransform){ // automatically only applies if trend
     pars = prep_trend(data, trend, pars);
@@ -246,6 +247,17 @@ NumericMatrix get_pars_matrix(NumericVector p_vector, NumericVector constants, L
   // ok is calculated afterwards and Ttransform applied in the function
   return(pars);
 }
+
+// [[Rcpp::export]]
+NumericMatrix get_pars_matrix_rcpp(NumericVector p_vector, NumericVector constants,
+                                   List transforms, List pretransforms,
+                                   CharacterVector p_types, List designs,
+                                   int n_trials, DataFrame data, List trend) {
+  std::vector<PreTransformSpec> p_specs = make_pretransform_specs(p_vector, pretransforms);
+  return get_pars_matrix(p_vector, constants, transforms, p_specs,
+                         p_types, designs, n_trials, data, trend);
+}
+
 
 double c_log_likelihood_DDM(NumericMatrix pars, DataFrame data,
                             const int n_trials, IntegerVector expand,
@@ -348,9 +360,12 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
   const int n_trials = data.nrow(); // Total rows in dadm (n_unique_trials * n_accumulators)
   NumericVector lls(n_particles);
   NumericVector p_vector(p_matrix.ncol());
+  
   CharacterVector p_names = colnames(p_matrix);
   p_vector.names() = p_names;
+  Rcout<<"p_vector: "<<p_vector<<"p_names"<<p_names<<std::endl;
   Rcpp::NumericMatrix pars(n_trials, p_types.length());
+  Rcout<<"pars: "<<pars<<std::endl;
   LogicalVector is_ok(n_trials);
 
   NumericMatrix minmax = bounds["minmax"];
@@ -444,7 +459,7 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
             p_specs = make_pretransform_specs(p_vector, pretransforms);
         }
         pars = get_pars_matrix(p_vector, constants, transforms, p_specs, p_types, designs, n_trials, data, trend);
-
+		Rcout<<"pars after get_pars: "<<pars<<std::endl;
         Rcpp::LogicalVector current_is_ok(pars.nrow());
         if (i == 0 || bound_specs.empty()) {
             bound_specs = make_bound_specs(minmax, mm_names, pars, bounds);
@@ -455,6 +470,7 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
                                                   model_dfun_ptr, model_pfun_ptr,n_trials,
                                                   winner, expand, min_ll, is_ok, n_acc, 
                                                   &current_model_ctx);
+		Rcout<<"ll: "<<lls<<std::endl;
     }
   }
   return(lls);

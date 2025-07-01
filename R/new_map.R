@@ -117,7 +117,7 @@ do_map <- function(draws, design, add_recalculated = FALSE, ...) {
     if (!is.null(cur_des$constants)) {
       cur_draws <- cur_draws[, !colnames(cur_draws) %in% names(cur_des$constants), drop = FALSE]
     }
-    cur_draws <- t(apply(cur_draws, 1, do_pre_transform, cur_des$model()$pre_transform))
+    cur_draws <- t(apply(cur_draws, 1, do_pre_transform, cur_des$model()))
     if(!is.null(cur_des$constants)){
       constants <- matrix(rep(cur_des$constants, each = nrow(cur_draws)), nrow = nrow(cur_draws), dimnames = list(NULL, names(cur_des$constants)))
       cur_draws <- cbind(cur_draws, constants)
@@ -222,7 +222,7 @@ do_map <- function(draws, design, add_recalculated = FALSE, ...) {
                                         sep = ""), which = "right")
       tmp_mat <- map_mat
       colnames(tmp_mat) <- rep(par, ncol(tmp_mat))
-      map_mat[] <- do_transform(tmp_mat, cur_des$model()$transform)
+      map_mat[] <- do_transform(tmp_mat, cur_des$model())
       mapped_list[[par]] <- map_mat
     }
 
@@ -237,7 +237,7 @@ do_map <- function(draws, design, add_recalculated = FALSE, ...) {
       colnames(tmp) <- get_p_types(map_names)
       tmp <- add_constants(tmp, cur_des$constants)
       tmp[,colnames(tmp) %in% names(cur_des$constants)] <-
-        do_transform(tmp[,colnames(tmp) %in% names(cur_des$constants), drop = F], cur_des$model()$transform)
+        do_transform(tmp[,colnames(tmp) %in% names(cur_des$constants), drop = F], cur_des$model())
       extra <- add_recalculated_pars(tmp, cur_des$model, map_names)
       out <- cbind(out, extra)
     }

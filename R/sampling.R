@@ -272,6 +272,7 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
                           parameters, model = NULL, stage,
                           type, tune)
 {
+  
   group_pars <- get_group_level(parameters, s, type)
   unq_components <- unique(tune$components)
   proposal_out <- numeric(length(group_pars$mu))
@@ -666,7 +667,6 @@ calc_ll_manager <- function(proposals, dadm, model, component = NULL){
   if(!is.data.frame(dadm)){
     lls <- log_likelihood_joint(proposals, dadm, model, component)
   } else{
-    browser()
     model <- model()
     if(is.null(model$c_name)){ # use the R implementation
       lls <- apply(proposals,1, calc_ll_R, model, dadm = dadm)

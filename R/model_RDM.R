@@ -303,9 +303,9 @@ rRDM <- function(lR,pars,p_types=c("v","B","A","t0"),ok=rep(TRUE,dim(pars)[1]))
   # test
   # pars=cbind(B=c(1,2),v=c(1,1),A=c(0,0),t0=c(.2,.2)); lR=factor(c(1,2))
 {
-  if (is.null(dim(pars)) || (dim(pars)[1]==1 & length(rt)>1) ) { # Check if pars is a vector
+  if (is.null(dim(pars)) || (dim(pars)[1]==1 & length(lR)>1) ) { # Check if pars is a vector
     original_names <- names(pars); if (is.null(original_names)) {original_names = colnames(pars)}
-    pars <- matrix(pars, nrow = length(rt), ncol=length(pars), dimnames = list(NULL, original_names),byrow=TRUE)
+    pars <- matrix(pars, nrow = length(lR), ncol=length(pars), dimnames = list(NULL, original_names),byrow=TRUE)
   }
   if (!all(p_types %in% dimnames(pars)[[2]]))
     stop("pars must have columns ",paste(p_types,collapse = " "))
@@ -319,7 +319,7 @@ rRDM <- function(lR,pars,p_types=c("v","B","A","t0"),ok=rep(TRUE,dim(pars)[1]))
   dt <- matrix(Inf,nrow=nr,ncol=nrow(pars)/nr)
   t0 <- pars[,"t0"]
   pars <- pars[ok,,drop=FALSE]
-  dt[ok] <- rWald(sum(ok),B=pars[,"B"],v=pars[,"v"],A=pars[,"A"])
+  dt[ok] <- rWald(sum(ok),B=pars[ok,"B"],v=pars[ok,"v"],A=pars[ok,"A"])
   R <- apply(dt,2,which.min)
   pick <- cbind(R,1:dim(dt)[2]) # Matrix to pick winner
   # Any t0 difference with lR due to response production time (no effect on race)
@@ -450,7 +450,7 @@ rRDM_SWTN <- function(lR,pars,p_types=c("v","B","A","t0","sv"),ok=rep(TRUE,dim(p
   dt <- matrix(Inf,nrow=nr,ncol=nrow(pars)/nr)
   t0 <- pars[,"t0"]
   pars <- pars[ok,,drop=FALSE]
-  dt[ok] <- rSWTN(sum(ok),B=pars[,"B"],v=pars[,"v"],A=pars[,"A"],sv=pars[,"sv"])
+  dt[ok] <- rSWTN(sum(ok),B=pars[ok,"B"],v=pars[ok,"v"],A=pars[ok,"A"],sv=pars[ok,"sv"])
   R <- apply(dt,2,which.min)
   pick <- cbind(R,1:dim(dt)[2]) # Matrix to pick winner
   # Any t0 difference with lR due to response production time (no effect on race)
@@ -568,7 +568,7 @@ pRDM_SWTN <- function(rt,pars)
 RDM_SWTN <- function(){
   list(
     type="RACE",
-    c_name = "RDM_SWTN",
+    c_name = NULL, #"RDM_SWTN",
     p_types=c("v" = log(1),"B" = log(1),"A" = log(0),"t0" = log(0),"s" = log(1),"sv" = log(0)),
     transform=list(func=c(v = "exp", B = "exp", A = "exp",t0 = "exp", s = "exp", sv="exp")),
     bound=list(minmax=cbind(v=c(1e-3,Inf), B=c(0,Inf), A=c(1e-4,Inf),t0=c(0.05,Inf), s=c(0,Inf), sv=c(0,Inf)),

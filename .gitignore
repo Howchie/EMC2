@@ -9,3 +9,5 @@ docs
 .vscode
 settings.json
 paper
+forceSerial_TEST.R
+samples.RData

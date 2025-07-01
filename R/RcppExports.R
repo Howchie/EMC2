@@ -181,6 +181,10 @@ construct_design_matrix <- function(frame_times, events, has_derivative, min_ons
     .Call(`_EMC2_construct_design_matrix`, frame_times, events, has_derivative, min_onset, oversampling, time_length, onset, delay, undershoot, dispersion, u_dispersion, ratio, add_intercept)
 }
 
+get_pars_matrix_rcpp <- function(p_vector, constants, transforms, pretransforms, p_types, designs, n_trials, data, trend) {
+    .Call(`_EMC2_get_pars_matrix_rcpp`, p_vector, constants, transforms, pretransforms, p_types, designs, n_trials, data, trend)
+}
+
 calc_ll <- function(p_matrix, data, constants, designs, type_rcpp, bounds, transforms, pretransforms, p_types, min_ll, trend) {
     .Call(`_EMC2_calc_ll`, p_matrix, data, constants, designs, type_rcpp, bounds, transforms, pretransforms, p_types, min_ll, trend)
 }
