@@ -1,4 +1,4 @@
-#### RACE LBA ----
+#### RACE RDMSWTN ----
 devtools::load_all()
 library(tictoc)
 
@@ -6,36 +6,38 @@ RNGkind("L'Ecuyer-CMRG")
 set.seed(123)
 matchfun <- function(d) as.numeric(d$S)==as.numeric(d$lR) |
   (d$lR=="pm" & as.numeric(d$S)>2)
-designLBA <- design(
+designRDMSWTN <- design(
   factors=list(subjects=1,S=c("left","right","leftpm","rightpm"),RACE=2:3),
   Rlevels=c("left","right","pm"),
   matchfun=matchfun,
-  model=LBA,constants=c(v_RACE3=0,sv=log(1)),
-  formula=list(v~RACE*lM,B~1,t0~1,A~1,sv~1),
+  model=RDM_SWTN,constants=c(v_RACE3=0,s=log(1),sv=log(0.15)),
+  formula=list(v~RACE*lM,B~1,t0~1,A~1,s~1,sv~1),
 )
-designMLBA <- design(
-  factors=list(subjects=1,S=c("left"),RACE=1),
+designRDM <- design(
+  factors=list(subjects=1,S=c("left","right","leftpm","rightpm"),RACE=2:3),
+  Rlevels=c("left","right","pm"),
   matchfun=matchfun,
-  model=Mlba,constants=c(sv=log(1)),
-  formula=list(v~1,B~1,t0~1,A~1,sv~1),
+  model=RDM_SWTN,constants=c(v_RACE3=0,s=log(1)),
+  formula=list(v~RACE*lM,B~1,t0~1,A~1,s~1),
 )
-p_vector <- sampled_pars(designMLBA,doMap = FALSE)
+
+p_vector <- sampled_pars(designRDM,doMap = FALSE)
 p_vector[1:length(p_vector)] <- c(log(2), log(4), log(1), log(2), log(0.2),log(.5))
 
 # Make square data so can remove pm in RACE = 2
-template <- make_data(p_vector,designMLBA,n_trials=1)
+template <- make_data(p_vector,designRDM,n_trials=1000)
 attr(template,"UC")=Inf
 template <- template[!(template$RACE==2 & (template$S %in% c("leftpm","rightpm"))),]
-dat <- make_data(p_vector,designLBA,data=template)
+dat <- make_data(p_vector,designRDM,data=template)
 Cfun <- function(d) as.numeric(d$S)==as.numeric(d$R) | (d$R=="pm" & as.numeric(d$S)>2)
 tapply(Cfun(dat),dat[,c("S","RACE")],mean)
-# dadm <- EMC2:::design_model(dat,designLBA,compress=FALSE)
+# dadm <- EMC2:::design_model(dat,designRDMSWTN,compress=FALSE)
 
 
 # Check likelihood
-dadmLBA <- EMC2:::design_model(dat,designLBA)
-dadmMLBA <- EMC2:::design_model(dat,designMLBA)
-pars <- EMC2:::get_pars_matrix(p_vector, dadmLBA, model = attr(dadmLBA, "model")())
+dadRDMSWTN <- EMC2:::design_model(dat,designRDMSWTN)
+dadmRDM <- EMC2:::design_model(dat,designRDM)
+pars <- EMC2:::get_pars_matrix(p_vector, dadRDM, model = attr(dadRDM, "model")())
 
 
 lfun <- function(i, x, p_vector, pname, dadm, use_c) {
@@ -125,36 +127,12 @@ profile_plot_test <- function (data, design, p_vector, range = 0.5, layout = NA,
 
 library(parallel)
 tic()
-profile_plot_test(dat,designLBA,p_vector,n_cores=1,layout=c(2,3)) # good
-profile_plot_test(dat,designMLBA,p_vector,n_cores=1,layout=c(2,3)) # good
-profile_plot_test(dat,designLBA,p_vector,n_cores=1,layout=c(2,3),use_c=TRUE) # ?
-profile_plot_test(dat,designMLBA,p_vector,n_cores=1,layout=c(2,3),use_c=TRUE) # ?
+profile_plot_test(dat,designRDM,p_vector,n_cores=1,layout=c(2,3)) # good
+profile_plot_test(dat,designRDM,p_vector,n_cores=1,layout=c(2,3),use_c=TRUE) # ?
+profile_plot_test(dat,designRDMSWTN,p_vector,n_cores=1,layout=c(2,3)) # good
+profile_plot_test(dat,designRDMSWTN,p_vector,n_cores=1,layout=c(2,3),use_c=TRUE) # ?
 toc()
 
-# emc <- make_emc(dat,designLBA,type="single")
+# emc <- make_emc(dat,designRDMSWTN,type="single")
 # emc <- fit(emc,cores_per_chain = 3)
 # recovery(emc,p_vector)
-
-data=dat
-design=designMLBA
-dadm <- EMC2:::design_model(data, design, verbose = FALSE)
-model=attr(dadm, "model")()
-pars <- get_pars_matrix(p_vector, dadm, model)
-
-i=0
-tic()
-while(i<1000) {
-  tmp=plba(dadm$rt,pars[,"A"],pars[,"b"], pars[, "v"], pars[,"sv"],TRUE)
-  tmp=dlba(dadm$rt,pars[,"A"],pars[,"b"], pars[, "v"], pars[,"sv"],TRUE)
-i=i+1
-}
-toc()
-
-i=0
-tic()
-while(i<1000) {
-  tmp=plba_vec(dadm$rt,pars[,"A"],pars[,"b"], pars[, "v"], pars[,"sv"],TRUE)
-  tmp=dlba_vec(dadm$rt,pars[,"A"],pars[,"b"], pars[, "v"], pars[,"sv"],TRUE)
-  i=i+1
-}
-toc()

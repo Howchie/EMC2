@@ -21,7 +21,7 @@ designRDM <- design(
   formula=list(v~1,B~1,t0~1,A~1,s~1),
 )
 p_vector <- sampled_pars(designRDM,doMap = FALSE)
-p_vector[1:length(p_vector)] <- c(log(5), log(2), log(0.2),log(.5))
+p_vector[1:length(p_vector)] <- c(log(2), log(2), log(0.2),log(.5))
 
 # Make square data so can remove pm in RACE = 2
 template <- make_data(p_vector,designRDM,n_trials=1000)
@@ -34,7 +34,7 @@ dat <- make_data(p_vector,designRDM,data=template)
 
 
 # Check likelihood
-dadmRDM_SWTN <- EMC2:::design_model(dat,designRDM_SWTN)
+dadmRDM_SWTN <- EMC2:::design_model(template,designRDM_SWTN)
 dadmRDM <- EMC2:::design_model(dat,designRDM)
 pars <- EMC2:::get_pars_matrix(p_vector, dadmRDM, model = attr(dadmRDM, "model")())
 

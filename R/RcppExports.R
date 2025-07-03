@@ -185,8 +185,8 @@ get_pars_matrix_rcpp <- function(p_vector, constants, transforms, pretransforms,
     .Call(`_EMC2_get_pars_matrix_rcpp`, p_vector, constants, transforms, pretransforms, p_types, designs, n_trials, data, trend)
 }
 
-calc_ll <- function(p_matrix, data, constants, designs, type_rcpp, bounds, transforms, pretransforms, p_types, min_ll, trend) {
-    .Call(`_EMC2_calc_ll`, p_matrix, data, constants, designs, type_rcpp, bounds, transforms, pretransforms, p_types, min_ll, trend)
+calc_ll <- function(p_matrix, data, constants, designs, type, bounds, transforms, pretransforms, p_types, min_ll, trend) {
+    .Call(`_EMC2_calc_ll`, p_matrix, data, constants, designs, type, bounds, transforms, pretransforms, p_types, min_ll, trend)
 }
 
 truncated_normal_a_cdf <- function(x, mu, sigma, a) {

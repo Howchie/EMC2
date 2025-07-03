@@ -94,7 +94,12 @@ design <- function(formula = NULL,factors = NULL,Rlevels = NULL,model,data=NULL,
     stop("Please do not use any of the following names within factors argument: trial, R, rt, lR, lM")
   }
   if (!"subjects" %in% names(factors)) factors$subjects <- 1 # ZH: ensure subjects is added to factors when there's no data, for make_data to work properly
-  factors <- factors <- setNames(lapply(factors, function(x) if (!is.factor(x)) factor(x) else x),names(factors)) # factors were being passed even if not factor types, which is inconsistent with the case where data is passed
+  factors <- setNames(
+    lapply(factors, function(x)
+      if (!is.factor(x)) factor(x, levels = unique(x)) else x
+    ),
+    names(factors)
+  ) # factors were being passed even if not factor types, which is inconsistent with the case where data is passed
   if(any(grepl("_", names(factors)))){
     stop("_ in variable names detected. Please refrain from using any underscores.")
   }

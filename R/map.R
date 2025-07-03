@@ -8,14 +8,14 @@ do_transform <- function(pars, model)
   ## exp link:  lower + exp(real)
   pars[, isexp] <- sweep(
     exp(pars[, isexp, drop = FALSE]), 2,
-    model$bound$minmax[1,ptypes[isexp]], "+")
+    transform$lower[ptypes[isexp]], "+")
   
   ## probit link: lower + (upper‑lower) * pnorm(real)
   pars[, isprobit] <- sweep(
     sweep(qnorm(pars[, isprobit, drop = FALSE]), 2,
-          model$bound$minmax[2,ptypes[isprobit]] -
-            model$bound$minmax[1,ptypes[isprobit]], "*"),
-    2, model$bound$minmax[1,ptypes[isprobit]], "+")
+          transform$upper[ptypes[isprobit]] -
+            transform$lower[ptypes[isprobit]], "*"),
+    2, transform$lower[ptypes[isprobit]], "+")
   pars
 }
 
@@ -29,16 +29,16 @@ do_reverse_transform <- function(pars, model)
   ## exp link:  lower + exp(real)
   # residual on the natural scale
   pars[, islog] <- ifelse(pars[, islog] <= model$bound$minmax[1,ptypes[islog]] | is.na(pars[, islog]),  # illegal or undefined
-                          model$bound$minmax[1,ptypes[islog]],                                      # clamp to bound
+                          log(model$bound$minmax[1,ptypes[islog]]),                                      # clamp to bound
                           log(pars[, islog])                        # valid inverse
   )
   
   ## probit link: lower + (upper‑lower) * pnorm(real)
   pars[, isprobit] <- pnorm(sweep(
     sweep(pars[, isprobit, drop = FALSE], 2,
-          model$bound$minmax[1,ptypes[isprobit]], "-"),
-    2, model$bound$minmax[2,ptypes[isprobit]] -
-      model$bound$minmax[1,ptypes[isprobit]], "/"))
+          transform$lower[ptypes[isprobit]], "-"),
+    2, transform$upper[ptypes[isprobit]] -
+      transform$lower[ptypes[isprobit]], "/"))
   pars
   pars
 }
@@ -58,7 +58,7 @@ do_reverse_transform_variance <- function(mu_nat, var_prop, model)
   # residual on the natural scale
   var_transformed[, islog] <- log(1 + var_prop[, islog]/mu_nat[,islog]) # log transform based on coefficient of variation
   par_transformed[, islog] <- ifelse(mu_nat[, islog] <= model$bound$minmax[1,ptypes[islog]] | is.na(mu_nat[, islog]),  # illegal or undefined
-                                     model$bound$minmax[1,ptypes[islog]],                                      # clamp to bound
+                                     log(model$bound$minmax[1,ptypes[islog]]),                                      # clamp to bound
                                      log(mu_nat[, islog]) - 0.5*var_transformed[, islog]                        # valid inverse
   )
   ## probit link - to get variance we need a root finder (this probably needs to be thoroughly checked by someone not ZH)
@@ -102,17 +102,17 @@ out = list(pars=par_transformed,var=var_transformed)
 do_pre_transform <- function(p_vector, model)
 {
   transform=model$pre_transform
-  ptypes <- get_p_types(names(p_vector))
+  ptypes <- names(p_vector)
   isexp    <- transform$func[ptypes] == "exp"
   isprobit <- transform$func[ptypes] == "pnorm"
   
   ## exp link
-  p_vector[isexp] <- model$bound$minmax[1,ptypes[isexp]] + exp(p_vector[isexp])
+  p_vector[isexp] <- transform$lower[ptypes[isexp]] + exp(p_vector[isexp])
   
   ## probit link
-  p_vector[isprobit] <- model$bound$minmax[1,ptypes[isprobit]] +
-    (model$bound$minmax[2,ptypes[isprobit]] -
-       model$bound$minmax[1,ptypes[isprobit]]) *
+  p_vector[isprobit] <- transform$lower[ptypes[isprobit]] +
+    (transform$upper[ptypes[isprobit]] -
+       transform$lower[ptypes[isprobit]]) *
     pnorm(p_vector[isprobit])
   p_vector
 }

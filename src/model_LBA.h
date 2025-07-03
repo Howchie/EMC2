@@ -75,6 +75,48 @@ double dlba_norm(double t, double A,double b, double v, double sv,
   return pdf;
 }
 
+NumericVector dlba_c(NumericVector rts, NumericMatrix pars, LogicalVector idx, double min_ll, LogicalVector is_ok){ // Added use_posdrift
+  //v = 0, sv = 1, B = 2, A = 3, t0 = 4
+  int n = sum(idx);
+  NumericVector out(n);
+  int k = 0;
+  for(int i = 0; i < rts.length(); i++){
+    if(idx[i]){
+      if(NumericVector::is_na(pars(i,0))){ // for RACE
+        out[k] = 0;
+      } else if((rts[i] - pars(i,4) > 0) && (is_ok[i])){
+        // Pass use_posdrift to dlba_norm
+        out[k] = dlba_norm(rts[i] - pars(i,4), pars(i,3), pars(i,2) + pars(i,3), pars(i,0), pars(i,1), true);
+      } else{
+        out[k] = min_ll;
+      }
+      k++;
+    }
+  }
+  return(out);
+}
+
+NumericVector plba_c(NumericVector rts, NumericMatrix pars, LogicalVector idx, double min_ll, LogicalVector is_ok){ // Added use_posdrift
+  //v = 0, sv = 1, B = 2, A = 3, t0 = 4
+  int n = sum(idx);
+  NumericVector out(n);
+  int k = 0;
+  for(int i = 0; i < rts.length(); i++){
+    if(idx[i]){
+      if(NumericVector::is_na(pars(i,0))){ // for RACE
+        out[k] = 0;
+      } else if((rts[i] - pars(i,4) > 0) && (is_ok[i])){
+        // Pass use_posdrift to plba_norm
+        out[k] = plba_norm(rts[i] - pars(i,4), pars(i,3), pars(i,2) + pars(i,3), pars(i,0), pars(i,1), true);
+      } else{
+        out[k] = min_ll;
+      }
+      k++;
+    }
+  }
+  return(out);
+}
+/*
 NumericVector dlba_c(NumericVector rts, NumericMatrix pars, LogicalVector idx, double min_ll, LogicalVector is_ok, bool use_posdrift = true){ // Added use_posdrift
   //v = 0, sv = 1, B = 2, A = 3, t0 = 4
   int n = sum(idx);
@@ -116,6 +158,7 @@ NumericVector plba_c(NumericVector rts, NumericMatrix pars, LogicalVector idx, d
   }
   return(out);
 }
+*/
 
 // [[Rcpp::export]]
 NumericVector dlba(NumericVector t,

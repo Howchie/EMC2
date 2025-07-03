@@ -233,7 +233,6 @@ NumericMatrix get_pars_matrix(NumericVector p_vector, NumericVector constants, L
   p_vector_updtd = c_do_pre_transform(p_vector_updtd, p_specs);
   p_vector_updtd = c_add_vectors(p_vector_updtd, constants);
   NumericMatrix pars = c_map_p(p_vector_updtd, p_types, designs, n_trials, data, trend, transforms);
-  Rcpp::Rcout<<pars<<p_types;
   // // Check if pretransform trend applies
   if(pretransform){ // automatically only applies if trend
     pars = prep_trend(data, trend, pars);
@@ -275,83 +274,157 @@ double c_log_likelihood_DDM(NumericMatrix pars, DataFrame data,
   return(sum(lls_exp));
 }
 
-/* // Old standard race likelihood - now commented out as all race models use c_log_likelihood_race_cens_trunc
 double c_log_likelihood_race(NumericMatrix pars, DataFrame data,
-                             NumericVector (*dfun)(NumericVector, NumericMatrix, LogicalVector, double, LogicalVector, bool),
-                             NumericVector (*pfun)(NumericVector, NumericMatrix, LogicalVector, double, LogicalVector, bool),
+                             NumericVector (*dfun)(NumericVector, NumericMatrix, LogicalVector, double, LogicalVector),
+                             NumericVector (*pfun)(NumericVector, NumericMatrix, LogicalVector, double, LogicalVector),
                              const int n_trials, LogicalVector winner, IntegerVector expand,
-                             double min_ll, LogicalVector is_ok, bool use_posdrift_arg = true){
+                             double min_ll, LogicalVector is_ok){
   const int n_out = expand.length();
   NumericVector lds(n_trials);
   NumericVector rts = data["rt"];
+  CharacterVector R = data["R"];
   NumericVector lR = data["lR"];
   NumericVector lds_exp(n_out);
   const int n_acc = unique(lR).length();
-
   if(sum(contains(data.names(), "RACE")) == 1){
     NumericVector NACC = data["RACE"];
     CharacterVector vals_NACC = NACC.attr("levels");
     for(int x = 0; x < pars.nrow(); x++){
+      // subtract 1 because R is 1 coded
       if(lR[x] > atoi(vals_NACC[NACC[x]-1])){
         pars(x,0) = NA_REAL;
       }
     }
   }
-
-  NumericVector win_pars_is_ok = is_ok[winner]; // Subset is_ok for winners
-  NumericVector loss_pars_is_ok = is_ok[!winner]; // Subset is_ok for losers
-
-  NumericVector win_rt = rts[winner];
-  NumericMatrix win_params = pars(winner, R_NilValue); // Using R_NilValue to get all columns for selected rows
-
-  NumericVector loss_rt = rts[!winner];
-  NumericMatrix loss_params = pars(!winner, R_NilValue);
-
-
-  // This direct call to dfun/pfun needs to align with their actual signatures.
-  // dlba_c/plba_c take (rt, pars, idx, min_ll_double, is_ok_vector, use_posdrift_bool)
-  // drdm_c/plrdm_c and dlnr_c/plnr_c take (rt, pars, idx, min_ll_double, is_ok_vector)
-  // This commented out block would need significant adaptation if revived.
-  // For simplicity, assuming a generic signature for this placeholder:
-  //   NumericVector win_call_result = dfun(win_rt, win_params, LogicalVector(win_params.nrow(), true), exp(min_ll), win_pars_is_ok, use_posdrift_arg);
-  //   lds[winner] = log(win_call_result);
-  //
-  //   if(n_acc > 1){
-  //     NumericVector loss_call_result = pfun(loss_rt, loss_params, LogicalVector(loss_params.nrow(), true), exp(min_ll), loss_pars_is_ok, use_posdrift_arg);
-  //     NumericVector loss_log_val = log(1.0 - loss_call_result);
-  //     loss_log_val[is_na(loss_log_val)] = min_ll;
-  //     loss_log_val[loss_log_val == log(1.0 - exp(min_ll))] = min_ll;
-  //     lds[!winner] = loss_log_val;
-  //   }
-  // lds[is_na(lds)] = min_ll;
+  NumericVector win = log(dfun(rts, pars, winner, exp(min_ll), is_ok)); //first for compressed
+  lds[winner] = win;
+  if(n_acc > 1){
+    NumericVector loss = log(1- pfun(rts, pars, !winner, exp(min_ll), is_ok)); //cdfs
+    loss[is_na(loss)] = min_ll;
+    loss[loss == log(1 - exp(min_ll))] = min_ll;
+    lds[!winner] = loss;
+  }
+  lds[is_na(lds)] = min_ll;
 
   if(n_acc > 1){
+    // LogicalVector winner_exp = c_bool_expand(winner, expand);
     NumericVector ll_out = lds[winner];
     NumericVector lds_los = lds[!winner];
     if(n_acc == 2){
       ll_out = ll_out + lds_los;
     } else{
       for(int z = 0; z < ll_out.length(); z++){
-        ll_out[z] = ll_out[z] + sum(lds_los[Rcpp::Range( z * (n_acc -1), (z+1) * (n_acc -1) -1)]);
+        ll_out[z] = ll_out[z] + sum(lds_los[seq( z * (n_acc -1), (z+1) * (n_acc -1) -1)]);
       }
     }
 
     ll_out[is_na(ll_out)] = min_ll;
     ll_out[is_infinite(ll_out)] = min_ll;
     ll_out[ll_out < min_ll] = min_ll;
-    ll_out = c_expand(ll_out, expand);
+    ll_out = c_expand(ll_out, expand); // decompress
     return(sum(ll_out));
   } else{
-    lds_exp = c_expand(lds, expand);
     lds_exp[is_na(lds_exp)] = min_ll;
     lds_exp[is_infinite(lds_exp)] = min_ll;
     lds_exp[lds_exp < min_ll] = min_ll;
+    lds_exp = c_expand(lds, expand); // decompress
     return(sum(lds_exp));
   }
 }
-*/
 
+// [[Rcpp::export]]
+NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector constants,
+            List designs, String type, List bounds, List transforms, List pretransforms,
+            CharacterVector p_types, double min_ll, List trend){
+  const int n_particles = p_matrix.nrow();
+  const int n_trials = data.nrow();
+  NumericVector lls(n_particles);
+  NumericVector p_vector(p_matrix.ncol());
+  CharacterVector p_names = colnames(p_matrix);
+  p_vector.names() = p_names;
+  NumericMatrix pars(n_trials, p_types.length());
+  LogicalVector is_ok(n_trials);
 
+  // Once (outside the main loop over particles):
+  NumericMatrix minmax = bounds["minmax"];
+  CharacterVector mm_names = colnames(minmax);
+  std::vector<PreTransformSpec> p_specs;
+  std::vector<BoundSpec> bound_specs;
+
+  if(type == "DDM"){
+    IntegerVector expand = data.attr("expand");
+    for(int i = 0; i < n_particles; i++){
+      p_vector = p_matrix(i, _);
+      if(i == 0){
+        p_specs = make_pretransform_specs(p_vector, pretransforms);
+      }
+      pars = get_pars_matrix(p_vector, constants, transforms, p_specs, p_types, designs, n_trials, data, trend);
+      // Precompute specs
+      if (i == 0) {                            // first particle only, just to get colnames
+        bound_specs = make_bound_specs(minmax,mm_names,pars,bounds);
+      }
+      is_ok = c_do_bound(pars, bound_specs);
+      lls[i] = c_log_likelihood_DDM(pars, data, n_trials, expand, min_ll, is_ok);
+    }
+  } else if(type == "MRI" || type == "MRI_AR1"){
+    int n_pars = p_types.length();
+    NumericVector y = extract_y(data);
+    for(int i = 0; i < n_particles; i++){
+      p_vector = p_matrix(i, _);
+      if(i == 0){
+        p_specs = make_pretransform_specs(p_vector, pretransforms);
+      }
+      pars = get_pars_matrix(p_vector, constants, transforms, p_specs, p_types, designs, n_trials, data, trend);
+      // Precompute specs
+      if (i == 0) {                            // first particle only, just to get colnames
+        bound_specs = make_bound_specs(minmax,mm_names,pars,bounds);
+      }
+      is_ok = c_do_bound(pars, bound_specs);
+      if(type == "MRI"){
+        lls[i] = c_log_likelihood_MRI(pars, y, is_ok, n_trials, n_pars, min_ll);
+      } else{
+        lls[i] = c_log_likelihood_MRI_white(pars, y, is_ok, n_trials, n_pars, min_ll);
+      }
+    }
+  } else{
+    IntegerVector expand = data.attr("expand");
+    LogicalVector winner = data["winner"];
+    // Love me some good old ugly but fast c++ pointers
+    NumericVector (*dfun)(NumericVector, NumericMatrix, LogicalVector, double, LogicalVector);
+    NumericVector (*pfun)(NumericVector, NumericMatrix, LogicalVector, double, LogicalVector);
+    if(type == "LBA"){
+      dfun = dlba_c;
+      pfun = plba_c;
+    } else if(type == "RDM"){
+      dfun = drdm_c;
+      pfun = prdm_c;
+    } else if(type == "RDM_SWTN"){
+      dfun = drdmswtn_c;
+      pfun = prdmswtn_c;
+    } else{
+      dfun = dlnr_c;
+      pfun = plnr_c;
+    }
+    NumericVector lR = data["lR"];
+    int n_lR = unique(lR).length();
+    for (int i = 0; i < n_particles; ++i) {
+      p_vector = p_matrix(i, _);
+      if(i == 0){
+        p_specs = make_pretransform_specs(p_vector, pretransforms);
+      }
+      pars = get_pars_matrix(p_vector, constants, transforms, p_specs, p_types, designs, n_trials, data, trend);
+      if (i == 0) {                            // first particle only, just to get colnames
+        bound_specs = make_bound_specs(minmax,mm_names,pars,bounds);
+      }
+      is_ok = c_do_bound(pars, bound_specs);
+      is_ok = lr_all(is_ok, n_lR);
+      lls[i] = c_log_likelihood_race(pars, data, dfun, pfun, n_trials, winner, expand, min_ll, is_ok);
+    }
+  }
+  return(lls);
+}
+
+/*
 // [[Rcpp::export]]
 NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector constants,
             List designs, String type_rcpp, List bounds, List transforms, List pretransforms,
@@ -362,10 +435,8 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
   NumericVector p_vector(p_matrix.ncol());
   
   CharacterVector p_names = colnames(p_matrix);
+  NumericMatrix pars(n_trials, p_types.length());
   p_vector.names() = p_names;
-  Rcout<<"p_vector: "<<p_vector<<"p_names"<<p_names<<std::endl;
-  Rcpp::NumericMatrix pars(n_trials, p_types.length());
-  Rcout<<"pars: "<<pars<<std::endl;
   LogicalVector is_ok(n_trials);
 
   NumericMatrix minmax = bounds["minmax"];
@@ -459,8 +530,6 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
             p_specs = make_pretransform_specs(p_vector, pretransforms);
         }
         pars = get_pars_matrix(p_vector, constants, transforms, p_specs, p_types, designs, n_trials, data, trend);
-		Rcout<<"pars after get_pars: "<<pars<<std::endl;
-        Rcpp::LogicalVector current_is_ok(pars.nrow());
         if (i == 0 || bound_specs.empty()) {
             bound_specs = make_bound_specs(minmax, mm_names, pars, bounds);
         }
@@ -470,12 +539,11 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
                                                   model_dfun_ptr, model_pfun_ptr,n_trials,
                                                   winner, expand, min_ll, is_ok, n_acc, 
                                                   &current_model_ctx);
-		Rcout<<"ll: "<<lls<<std::endl;
     }
   }
   return(lls);
 }
-
+*/
 
 
 // GSL-compatible adapter for f_race_integrand_cpp

@@ -31,6 +31,22 @@ double pigt0(double t, double k = 1., double l = 1.){
   return std::exp(2.0 * lambda / mu + std::log(p1)) + p2;
 }
 
+// [[Rcpp::export]]
+double digt0(double t, double k = 1., double l = 1.){
+  //if (t <= 0.) {
+  //  return 0.;
+  //}
+  double lambda = k * k;
+  double e;
+  if (l == 0.) {
+    e = -.5 * lambda / t;
+  } else {
+    double mu = k / l;
+    e = - (lambda / (2. * t)) * ((t * t) / (mu * mu) - 2. * t / mu + 1.);
+  }
+  return std::exp(e + .5 * std::log(lambda) - .5 * std::log(2. * t * t * t * M_PI));
+}
+
 // Standard Wald PDF: f(t | drift_rate_xi, boundary_alpha) equivalent to pigt0 but with threshold/drift directly parameterized
 // t must be > 0
 // [[Rcpp::export]]
@@ -67,22 +83,6 @@ double pwald(double t, double boundary_alpha, double drift_rate_xi) {
 }
 
 // [[Rcpp::export]]
-double digt0(double t, double k = 1., double l = 1.){
-  //if (t <= 0.) {
-  //  return 0.;
-  //}
-  double lambda = k * k;
-  double e;
-  if (l == 0.) {
-    e = -.5 * lambda / t;
-  } else {
-    double mu = k / l;
-    e = - (lambda / (2. * t)) * ((t * t) / (mu * mu) - 2. * t / mu + 1.);
-  }
-  return std::exp(e + .5 * std::log(lambda) - .5 * std::log(2. * t * t * t * M_PI));
-}
-
-// [[Rcpp::export]]
 double pigt(double t, double k = 1, double l = 1, double a = .1, double threshold = 1e-10){
   if (t <= 0.){
     return 0.;
@@ -90,7 +90,7 @@ double pigt(double t, double k = 1, double l = 1, double a = .1, double threshol
   if (a < threshold){
     return pigt0(t, k, l); // uses the standard wald pdf (threshold, drift) for ease of interpretation
   }
-	Rcout << "--- Debug: pigt called." << l<< k<< a<< std::endl;
+	//Rcout << "--- Debug: pigt called. drift: " << l<<" threshold: "<< k<<"spv: "<< a<< std::endl;
   double sqt = std::sqrt(t);
   double lgt = std::log(t);
   double cdf;
@@ -126,7 +126,7 @@ double pigt(double t, double k = 1, double l = 1, double a = .1, double threshol
 
 // [[Rcpp::export]]
 double digt(double t, double k = 1., double l = 1., double a = .1, double threshold= 1e-10){
-	Rcout << "--- Debug: digt called." << l<< k<< a<< std::endl;
+	//Rcout << "--- Debug: digt called. drift: " << l<<" threshold: "<< k<<"spv: "<< a<< std::endl;
   if (t <= 0.){
     return 0.;
   }
@@ -266,7 +266,7 @@ double dswtn(double t_adj, double alpha, double mu_drift, double sigma_drift) {
     if (t_adj <= 1e-10) return R_NegInf; // log(0)
     if (alpha <= 1e-10) return R_NegInf; // No boundary to hit, or ill-defined
     if (sigma_drift < 0) return R_NaN; // standard deviation cannot be negative
-	Rcout << "--- Debug: dswtn called." << mu_drift<< alpha<< sigma_drift<< std::endl;
+	//Rcout << "--- Debug: dswtn called. drift: " << mu_drift<<" threshold: "<< alpha<<" sv: "<< sigma_drift<< std::endl;
     // Handle sigma_drift_sq == 0 case (becomes standard Wald)
     if (sigma_drift <= 1e-10) {
         if (mu_drift <= 1e-10) return R_NegInf; // No positive drift
@@ -314,7 +314,7 @@ double pswtn(double t_adj, double alpha, double mu_drift, double sigma_drift,
     if (t_adj <= 0) return 0.0;
     if (alpha <= 0) return 1.0; // Hit boundary immediately if alpha is at or below 0
     if (sigma_drift < 0) return R_NaN;
-	Rcout << "--- Debug: pswtn called." << mu_drift<< alpha<< sigma_drift<< std::endl;
+	//Rcout << "--- Debug: pswtn called. drift: " << mu_drift<<" threshold: "<< alpha<<" sv: "<< sigma_drift<< std::endl;
     // Handle sigma_drift == 0 case (becomes standard Wald CDF)
     if (sigma_drift <= 1e-10) {
         if (mu_drift <= 1e-10) return 0.0; // No positive drift
@@ -540,7 +540,7 @@ double gsl_rdm_pswtn_spv_integrand(double current_actual_k, void* p) {
 double drdmswtn(double t_adj, double B, double mu_drift, double A,
                                     double sigma_drift,
                                     double spv_abs_err = 1e-8, double spv_rel_err = 1e-8, size_t spv_max_eval = 10000) {
-	Rcout << "--- Debug: drdmswtn called." << mu_drift<< B<< A<< sigma_drift<< std::endl;
+	//Rcout << "--- Debug: drdmswtn called. drift: " << mu_drift<<" threshold: "<< B<<" spv: "<< A<<" sv: "<< sigma_drift<< std::endl;
     bool no_A_var = (A < 1e-7);
     bool no_drift_var = (sigma_drift < 1e-10);
 
@@ -619,7 +619,7 @@ double prdmswtn(double t_adj, double B, double mu_drift, double A,
                                  double sigma_drift,
                                  double spv_abs_err = 1e-8, double spv_rel_err = 1e-8, size_t spv_max_eval = 10000) {
     if (t_adj <= 0) return 0.0;
-	Rcout << "--- Debug: prdmswtn called." << mu_drift<< B<< A<< sigma_drift<< std::endl;
+	//Rcout << "--- Debug: prdmswtn called. drift: " << mu_drift<<" threshold: "<< B<<" spv: "<< A<<" sv: "<< sigma_drift<< std::endl;
     bool no_A_var = (A < 1e-7);
     bool no_drift_var = (sigma_drift < 1e-10);
 
@@ -710,14 +710,13 @@ double prdmswtn(double t_adj, double B, double mu_drift, double A,
 NumericVector dSWTNspv(NumericVector t, NumericVector B, NumericVector v, NumericVector A, NumericVector t0, NumericVector sv,
                          double spv_abs_err = 1e-8, double spv_rel_err = 1e-8, int spv_max_eval = 10000) {
     int n = t.size();
-	NumericVector t_adj = t - t0;
     // Vector recycling
     if (B.size() == 1) B = rep(B, n);
     if (A.size() == 1) A = rep(A, n);
     if (v.size() == 1) v = rep(v, n);
     if (sv.size() == 1) sv = rep(sv, n);
     if (t0.size() == 1) t0 = rep(t0, n);
-
+	NumericVector t_adj = t - t0;
     NumericVector pdf(n);
     for (int i = 0; i < n; ++i) {
         pdf[i] = drdmswtn(t_adj[i], B[i], v[i], A[i], sv[i],
@@ -864,7 +863,7 @@ NumericVector drdmswtn_c(NumericVector rts, NumericMatrix pars, LogicalVector id
 NumericVector prdmswtn_c(NumericVector rts, NumericMatrix pars, LogicalVector idx, double min_ll, LogicalVector is_ok){
   //v = 0, B = 1, A = 2, t0 = 3, s = 4, sv=5
   NumericVector out(sum(idx));
-  Rcout << "--- Debug: drdmswtn_c called." << std::endl;
+  //Rcout << "--- Debug: drdmswtn_c called." << std::endl;
   int k = 0;
   for(int i = 0; i < rts.length(); i++){
     if(idx[i] == TRUE){

@@ -366,7 +366,6 @@ make_random_effects <- function(design, group_means, n_subj = NULL, variance_pro
     # This runs the trend and afterwards removes the trend parameters
     reordered_means <- prep_trend(design, model$trend, reordered_means)
   }
-  
   if(is.null(covariances)) { # ZH modified so that variance is transformed to natural scale (e.g. 0.2*natural_scale_mu) then back-converted for transformed mvtnorm. I found the original code (a) was broken for group_means of zero (zero variance) but also estimates were more varied than expected due to the conversions
     tmp = do_reverse_transform_variance(reordered_means,diag(rep(variance_proportion, ncol(reordered_means))),model)
     #covariances <- diag(tmp$vars)
