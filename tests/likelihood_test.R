@@ -1,5 +1,8 @@
 #### RACE RDMSWTN ----
-devtools::load_all()
+#devtools::load_all()
+devtools::install(upgrade = "never")  # rebuild & install
+## then, in every run
+library(EMC2)          # now workers load the same code automatically
 library(tictoc)
 #Sys.setenv(PAR_DEBUG = "1")   # turn serial mode on
 #source("forceSerial_TEST.R")         # your breakpoints now trigger
@@ -11,19 +14,19 @@ designRDMSWTN <- design(
   factors=list(subjects=1,S=c("left","right","leftpm","rightpm"),RACE=2:3),
   Rlevels=c("left","right","pm"),
   matchfun=matchfun,
-  model=RDMSWTN,constants=c(v_RACE3=0,v=log(2),"v_RACE3:lMTRUE"=log(2),s=log(1),sv=log(0),A=log(.5),t0=log(0.2)),
+  model=RDMSWTN,constants=c(v_RACE3=0,s=log(1),sv=log(0)),
   formula=list(v~RACE*lM,B~1,t0~1,A~1,s~1,sv~1),
 )
 designRDM <- design(
   factors=list(subjects=1,S=c("left","right","leftpm","rightpm"),RACE=2:3),
   Rlevels=c("left","right","pm"),
   matchfun=matchfun,
-  model=RDM,constants=c(v_RACE3=0,v=log(2),"v_RACE3:lMTRUE"=log(2),s=log(1),A=log(.5),t0=log(0.2)),
+  model=RDM,constants=c(v_RACE3=0,s=log(1)),
   formula=list(v~RACE*lM,B~1,t0~1,A~1,s~1),
 )
 
 p_vector <- sampled_pars(designRDM,doMap = FALSE)
-p_vector[1:length(p_vector)] <- c(log(2), log(1))
+p_vector[1:length(p_vector)] <- c(log(1), log(2), log(1),log(2),log(0.2),log(0.5))
 
 # Make square data so can remove pm in RACE = 2
 template <- make_data(p_vector,designRDM,n_trials=1000)
