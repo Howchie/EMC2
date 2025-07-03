@@ -398,7 +398,7 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
     } else if(type == "RDM"){
       dfun = drdm_c;
       pfun = prdm_c;
-    } else if(type == "RDM_SWTN"){
+    } else if(type == "RDMSWTN"){
       dfun = drdmswtn_c;
       pfun = prdmswtn_c;
     } else{

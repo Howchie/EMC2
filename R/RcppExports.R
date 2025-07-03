@@ -21,16 +21,16 @@ pigt0 <- function(t, k = 1., l = 1.) {
     .Call(`_EMC2_pigt0`, t, k, l)
 }
 
+digt0 <- function(t, k = 1., l = 1.) {
+    .Call(`_EMC2_digt0`, t, k, l)
+}
+
 dwald <- function(t, boundary_alpha, drift_rate_xi) {
     .Call(`_EMC2_dwald`, t, boundary_alpha, drift_rate_xi)
 }
 
 pwald <- function(t, boundary_alpha, drift_rate_xi) {
     .Call(`_EMC2_pwald`, t, boundary_alpha, drift_rate_xi)
-}
-
-digt0 <- function(t, k = 1., l = 1.) {
-    .Call(`_EMC2_digt0`, t, k, l)
 }
 
 pigt <- function(t, k = 1, l = 1, a = .1, threshold = 1e-10) {
@@ -85,12 +85,12 @@ prdmswtn <- function(t_adj, B, mu_drift, A, sigma_drift, spv_abs_err = 1e-8, spv
     .Call(`_EMC2_prdmswtn`, t_adj, B, mu_drift, A, sigma_drift, spv_abs_err, spv_rel_err, spv_max_eval)
 }
 
-dSWTNspv <- function(t, B, v, A, t0, sv, spv_abs_err = 1e-8, spv_rel_err = 1e-8, spv_max_eval = 10000L) {
-    .Call(`_EMC2_dSWTNspv`, t, B, v, A, t0, sv, spv_abs_err, spv_rel_err, spv_max_eval)
+dSWTNspv <- function(t, v, B, A, t0, sv, spv_abs_err = 1e-8, spv_rel_err = 1e-8, spv_max_eval = 10000L) {
+    .Call(`_EMC2_dSWTNspv`, t, v, B, A, t0, sv, spv_abs_err, spv_rel_err, spv_max_eval)
 }
 
-pSWTNspv <- function(t, B, v, A, t0, sv, spv_abs_err = 1e-8, spv_rel_err = 1e-8, spv_max_eval = 10000L) {
-    .Call(`_EMC2_pSWTNspv`, t, B, v, A, t0, sv, spv_abs_err, spv_rel_err, spv_max_eval)
+pSWTNspv <- function(t, v, B, A, t0, sv, spv_abs_err = 1e-8, spv_rel_err = 1e-8, spv_max_eval = 10000L) {
+    .Call(`_EMC2_pSWTNspv`, t, v, B, A, t0, sv, spv_abs_err, spv_rel_err, spv_max_eval)
 }
 
 drdmswtn_c <- function(rts, pars, idx, min_ll, is_ok) {

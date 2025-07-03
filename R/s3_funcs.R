@@ -986,7 +986,7 @@ get_data.emc <- function(emc) {
         return(cur[expand,])
       }))
       row.names(tmp) <- NULL
-      tmp <- tmp[,!(colnames(tmp) %in% c("trials","lR","lM", "winner", "SlR", "RACE", names(design$Ffunctions)))]
+      tmp <- tmp[,!(colnames(tmp) %in% c("trials","lR","lM", "winner", "SlR", names(design$Ffunctions)))]
       dat[[i]] <- tmp
     }
     names(dat) <- get_joint_names(emc)
@@ -1003,7 +1003,7 @@ get_data.emc <- function(emc) {
       return(x[expand,])
     }))
     row.names(dat) <- NULL
-    dat <- dat[,!(colnames(dat) %in% c("trials","lR","lM","winner", "SlR", "RACE", names(design$Ffunctions)))]
+    dat <- dat[,!(colnames(dat) %in% c("trials","lR","lM","winner", "SlR", names(design$Ffunctions)))] # ZH: Removed RACE from this list, was causing issues?
   }
   return(dat)
 }

@@ -1,28 +1,29 @@
 #### RACE RDMSWTN ----
 devtools::load_all()
 library(tictoc)
-
-RNGkind("L'Ecuyer-CMRG")
-set.seed(123)
+#Sys.setenv(PAR_DEBUG = "1")   # turn serial mode on
+#source("forceSerial_TEST.R")         # your breakpoints now trigger
+#RNGkind("L'Ecuyer-CMRG")
+#set.seed(123)
 matchfun <- function(d) as.numeric(d$S)==as.numeric(d$lR) |
   (d$lR=="pm" & as.numeric(d$S)>2)
 designRDMSWTN <- design(
   factors=list(subjects=1,S=c("left","right","leftpm","rightpm"),RACE=2:3),
   Rlevels=c("left","right","pm"),
   matchfun=matchfun,
-  model=RDM_SWTN,constants=c(v_RACE3=0,s=log(1),sv=log(0.15)),
+  model=RDMSWTN,constants=c(v_RACE3=0,v=log(2),"v_RACE3:lMTRUE"=log(2),s=log(1),sv=log(0),A=log(.5),t0=log(0.2)),
   formula=list(v~RACE*lM,B~1,t0~1,A~1,s~1,sv~1),
 )
 designRDM <- design(
   factors=list(subjects=1,S=c("left","right","leftpm","rightpm"),RACE=2:3),
   Rlevels=c("left","right","pm"),
   matchfun=matchfun,
-  model=RDM_SWTN,constants=c(v_RACE3=0,s=log(1)),
+  model=RDM,constants=c(v_RACE3=0,v=log(2),"v_RACE3:lMTRUE"=log(2),s=log(1),A=log(.5),t0=log(0.2)),
   formula=list(v~RACE*lM,B~1,t0~1,A~1,s~1),
 )
 
 p_vector <- sampled_pars(designRDM,doMap = FALSE)
-p_vector[1:length(p_vector)] <- c(log(2), log(4), log(1), log(2), log(0.2),log(.5))
+p_vector[1:length(p_vector)] <- c(log(2), log(1))
 
 # Make square data so can remove pm in RACE = 2
 template <- make_data(p_vector,designRDM,n_trials=1000)
@@ -35,9 +36,9 @@ tapply(Cfun(dat),dat[,c("S","RACE")],mean)
 
 
 # Check likelihood
-dadRDMSWTN <- EMC2:::design_model(dat,designRDMSWTN)
+dadmRDMSWTN <- EMC2:::design_model(dat,designRDMSWTN)
 dadmRDM <- EMC2:::design_model(dat,designRDM)
-pars <- EMC2:::get_pars_matrix(p_vector, dadRDM, model = attr(dadRDM, "model")())
+pars <- EMC2:::get_pars_matrix(p_vector, dadmRDM, model = attr(dadmRDM, "model")())
 
 
 lfun <- function(i, x, p_vector, pname, dadm, use_c) {
@@ -133,6 +134,7 @@ profile_plot_test(dat,designRDMSWTN,p_vector,n_cores=1,layout=c(2,3)) # good
 profile_plot_test(dat,designRDMSWTN,p_vector,n_cores=1,layout=c(2,3),use_c=TRUE) # ?
 toc()
 
-# emc <- make_emc(dat,designRDMSWTN,type="single")
-# emc <- fit(emc,cores_per_chain = 3)
-# recovery(emc,p_vector)
+emc <- make_emc(dat,designRDMSWTN,type="single")
+emc <- fit(emc,cores_for_chains = 2,fileName = 'samples.RData')
+#recovery(emc,p_vector)
+plot_pars(emc)

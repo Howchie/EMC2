@@ -311,7 +311,7 @@ dRDMSWTN <- function(rt,pars)
       pars[ok,] <- pars_ok
     }
     # dSWTN is a C++ wrapper which takes vectorized input and feeds drdmswtn (the sequential likelihood function in C++)
-    out[ok] <- dSWTNspv(rt[ok],B=pars[ok,"B",drop=FALSE],v=pars[ok,"v",drop=FALSE],A=pars[ok,"A",drop=FALSE],t0=pars[ok,"t0",drop=FALSE],sv=pars[ok,"sv",drop=FALSE])
+    out[ok] <- dSWTNspv(rt[ok],v=pars[ok,"v",drop=FALSE],B=pars[ok,"B",drop=FALSE],A=pars[ok,"A",drop=FALSE],t0=pars[ok,"t0",drop=FALSE],sv=pars[ok,"sv",drop=FALSE])
   }
   out
 }
@@ -333,7 +333,7 @@ pRDMSWTN <- function(rt,pars)
       pars[ok,] <- pars_ok
     }
     # pSWTN is a C++ wrapper which takes vectorized input and feeds prdmswtn (the sequential likelihood function in C++)
-    out[ok] <- pSWTNspv(rt[ok],B=pars[ok,"B",drop=FALSE],v=pars[ok,"v",drop=FALSE],A=pars[ok,"A",drop=FALSE],t0=pars[ok,"t0",drop=FALSE],sv=pars[ok,"sv",drop=FALSE])
+    out[ok] <- pSWTNspv(rt[ok],v=pars[ok,"v",drop=FALSE],B=pars[ok,"B",drop=FALSE],A=pars[ok,"A",drop=FALSE],t0=pars[ok,"t0",drop=FALSE],sv=pars[ok,"sv",drop=FALSE])
   }
   out
 }

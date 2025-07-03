@@ -90,6 +90,19 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// digt0
+double digt0(double t, double k, double l);
+RcppExport SEXP _EMC2_digt0(SEXP tSEXP, SEXP kSEXP, SEXP lSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< double >::type t(tSEXP);
+    Rcpp::traits::input_parameter< double >::type k(kSEXP);
+    Rcpp::traits::input_parameter< double >::type l(lSEXP);
+    rcpp_result_gen = Rcpp::wrap(digt0(t, k, l));
+    return rcpp_result_gen;
+END_RCPP
+}
 // dwald
 double dwald(double t, double boundary_alpha, double drift_rate_xi);
 RcppExport SEXP _EMC2_dwald(SEXP tSEXP, SEXP boundary_alphaSEXP, SEXP drift_rate_xiSEXP) {
@@ -113,19 +126,6 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< double >::type boundary_alpha(boundary_alphaSEXP);
     Rcpp::traits::input_parameter< double >::type drift_rate_xi(drift_rate_xiSEXP);
     rcpp_result_gen = Rcpp::wrap(pwald(t, boundary_alpha, drift_rate_xi));
-    return rcpp_result_gen;
-END_RCPP
-}
-// digt0
-double digt0(double t, double k, double l);
-RcppExport SEXP _EMC2_digt0(SEXP tSEXP, SEXP kSEXP, SEXP lSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< double >::type t(tSEXP);
-    Rcpp::traits::input_parameter< double >::type k(kSEXP);
-    Rcpp::traits::input_parameter< double >::type l(lSEXP);
-    rcpp_result_gen = Rcpp::wrap(digt0(t, k, l));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -325,40 +325,40 @@ BEGIN_RCPP
 END_RCPP
 }
 // dSWTNspv
-NumericVector dSWTNspv(NumericVector t, NumericVector B, NumericVector v, NumericVector A, NumericVector t0, NumericVector sv, double spv_abs_err, double spv_rel_err, int spv_max_eval);
-RcppExport SEXP _EMC2_dSWTNspv(SEXP tSEXP, SEXP BSEXP, SEXP vSEXP, SEXP ASEXP, SEXP t0SEXP, SEXP svSEXP, SEXP spv_abs_errSEXP, SEXP spv_rel_errSEXP, SEXP spv_max_evalSEXP) {
+NumericVector dSWTNspv(NumericVector t, NumericVector v, NumericVector B, NumericVector A, NumericVector t0, NumericVector sv, double spv_abs_err, double spv_rel_err, int spv_max_eval);
+RcppExport SEXP _EMC2_dSWTNspv(SEXP tSEXP, SEXP vSEXP, SEXP BSEXP, SEXP ASEXP, SEXP t0SEXP, SEXP svSEXP, SEXP spv_abs_errSEXP, SEXP spv_rel_errSEXP, SEXP spv_max_evalSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
     Rcpp::traits::input_parameter< NumericVector >::type t(tSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type B(BSEXP);
     Rcpp::traits::input_parameter< NumericVector >::type v(vSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type B(BSEXP);
     Rcpp::traits::input_parameter< NumericVector >::type A(ASEXP);
     Rcpp::traits::input_parameter< NumericVector >::type t0(t0SEXP);
     Rcpp::traits::input_parameter< NumericVector >::type sv(svSEXP);
     Rcpp::traits::input_parameter< double >::type spv_abs_err(spv_abs_errSEXP);
     Rcpp::traits::input_parameter< double >::type spv_rel_err(spv_rel_errSEXP);
     Rcpp::traits::input_parameter< int >::type spv_max_eval(spv_max_evalSEXP);
-    rcpp_result_gen = Rcpp::wrap(dSWTNspv(t, B, v, A, t0, sv, spv_abs_err, spv_rel_err, spv_max_eval));
+    rcpp_result_gen = Rcpp::wrap(dSWTNspv(t, v, B, A, t0, sv, spv_abs_err, spv_rel_err, spv_max_eval));
     return rcpp_result_gen;
 END_RCPP
 }
 // pSWTNspv
-NumericVector pSWTNspv(NumericVector t, NumericVector B, NumericVector v, NumericVector A, NumericVector t0, NumericVector sv, double spv_abs_err, double spv_rel_err, int spv_max_eval);
-RcppExport SEXP _EMC2_pSWTNspv(SEXP tSEXP, SEXP BSEXP, SEXP vSEXP, SEXP ASEXP, SEXP t0SEXP, SEXP svSEXP, SEXP spv_abs_errSEXP, SEXP spv_rel_errSEXP, SEXP spv_max_evalSEXP) {
+NumericVector pSWTNspv(NumericVector t, NumericVector v, NumericVector B, NumericVector A, NumericVector t0, NumericVector sv, double spv_abs_err, double spv_rel_err, int spv_max_eval);
+RcppExport SEXP _EMC2_pSWTNspv(SEXP tSEXP, SEXP vSEXP, SEXP BSEXP, SEXP ASEXP, SEXP t0SEXP, SEXP svSEXP, SEXP spv_abs_errSEXP, SEXP spv_rel_errSEXP, SEXP spv_max_evalSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
     Rcpp::traits::input_parameter< NumericVector >::type t(tSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type B(BSEXP);
     Rcpp::traits::input_parameter< NumericVector >::type v(vSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type B(BSEXP);
     Rcpp::traits::input_parameter< NumericVector >::type A(ASEXP);
     Rcpp::traits::input_parameter< NumericVector >::type t0(t0SEXP);
     Rcpp::traits::input_parameter< NumericVector >::type sv(svSEXP);
     Rcpp::traits::input_parameter< double >::type spv_abs_err(spv_abs_errSEXP);
     Rcpp::traits::input_parameter< double >::type spv_rel_err(spv_rel_errSEXP);
     Rcpp::traits::input_parameter< int >::type spv_max_eval(spv_max_evalSEXP);
-    rcpp_result_gen = Rcpp::wrap(pSWTNspv(t, B, v, A, t0, sv, spv_abs_err, spv_rel_err, spv_max_eval));
+    rcpp_result_gen = Rcpp::wrap(pSWTNspv(t, v, B, A, t0, sv, spv_abs_err, spv_rel_err, spv_max_eval));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -877,9 +877,9 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_dlba", (DL_FUNC) &_EMC2_dlba, 6},
     {"_EMC2_plba", (DL_FUNC) &_EMC2_plba, 6},
     {"_EMC2_pigt0", (DL_FUNC) &_EMC2_pigt0, 3},
+    {"_EMC2_digt0", (DL_FUNC) &_EMC2_digt0, 3},
     {"_EMC2_dwald", (DL_FUNC) &_EMC2_dwald, 3},
     {"_EMC2_pwald", (DL_FUNC) &_EMC2_pwald, 3},
-    {"_EMC2_digt0", (DL_FUNC) &_EMC2_digt0, 3},
     {"_EMC2_pigt", (DL_FUNC) &_EMC2_pigt, 5},
     {"_EMC2_digt", (DL_FUNC) &_EMC2_digt, 5},
     {"_EMC2_drdm_c", (DL_FUNC) &_EMC2_drdm_c, 5},

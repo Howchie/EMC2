@@ -1,7 +1,7 @@
 ### Test implementation of RDMSWTN
 devtools::load_all(reset = TRUE)
-#Sys.setenv(PAR_DEBUG = "1")   # turn serial mode on
-#source("forceSerial_TEST.R")         # your breakpoints now trigger
+Sys.setenv(PAR_DEBUG = "1")   # turn serial mode on
+source("forceSerial_TEST.R")         # your breakpoints now trigger
 #Sys.unsetenv("PAR_DEBUG")     # remove when finished
 options(error=recover)
 RNGkind("L'Ecuyer-CMRG")

@@ -533,7 +533,6 @@ double gsl_rdm_pswtn_spv_integrand(double current_actual_k, void* p) {
                  1e-7, 1e-7, 1000); // Using tighter fixed defaults for inner pswtn integration
 }
 
-
 // Top-level Log-PDF for RDM_SWTN model
 // Parameters B, A, mu_drift, are assumed to be already scaled by s if applicable.
 // [[Rcpp::export]]
@@ -707,23 +706,22 @@ double prdmswtn(double t_adj, double B, double mu_drift, double A,
 #'      distribution N(v/s, sigma_drift), truncated at 0.
 #'   Handles vectorization of parameters. */
 // [[Rcpp::export]]
-NumericVector dSWTNspv(NumericVector t, NumericVector B, NumericVector v, NumericVector A, NumericVector t0, NumericVector sv,
+NumericVector dSWTNspv(NumericVector t, NumericVector v, NumericVector B, NumericVector A, NumericVector t0, NumericVector sv,
                          double spv_abs_err = 1e-8, double spv_rel_err = 1e-8, int spv_max_eval = 10000) {
     int n = t.size();
-    // Vector recycling
-    if (B.size() == 1) B = rep(B, n);
-    if (A.size() == 1) A = rep(A, n);
-    if (v.size() == 1) v = rep(v, n);
-    if (sv.size() == 1) sv = rep(sv, n);
-    if (t0.size() == 1) t0 = rep(t0, n);
-	NumericVector t_adj = t - t0;
     NumericVector pdf(n);
     for (int i = 0; i < n; ++i) {
-        pdf[i] = drdmswtn(t_adj[i], B[i], v[i], A[i], sv[i],
+		t[i] = t[i] - t0[i];
+		if (t[i] <= 0){
+			pdf[i] = 0.;
+		} else { 
+			pdf[i] = drdmswtn(t[i], B[i], v[i], A[i], sv[i],
                                         spv_abs_err, spv_rel_err, static_cast<size_t>(spv_max_eval));
-    }
+		}
+	}
     return pdf;
 }
+
 /*
 #' Cumulative distribution function for the RDM_SWTN model
 #'
@@ -741,7 +739,7 @@ NumericVector dSWTNspv(NumericVector t, NumericVector B, NumericVector v, Numeri
 #' @return A numeric vector of CDF values.
 #' @details Parameters are handled similarly to `dRDM_SWTN`, including scaling by `s`. */
 // [[Rcpp::export]]
-NumericVector pSWTNspv(NumericVector t, NumericVector B, NumericVector v, NumericVector A, NumericVector t0, NumericVector sv, 
+NumericVector pSWTNspv(NumericVector t, NumericVector v, NumericVector B, NumericVector A, NumericVector t0, NumericVector sv, 
                          double spv_abs_err = 1e-8, double spv_rel_err = 1e-8, int spv_max_eval = 10000
                          ) { 
                          // To add finer control for inner drift integration, params for pswtn could be exposed
@@ -749,93 +747,18 @@ NumericVector pSWTNspv(NumericVector t, NumericVector B, NumericVector v, Numeri
                          // or uses fixed defaults if SPV is active (Case 4 integrand call to pswtn).
                          // This can be refined if needed.
     int n = t.size();
-	NumericVector t_adj = t - t0;
-    // Vector recycling
-    if (B.size() == 1) B = rep(B, n);
-    if (A.size() == 1) A = rep(A, n);
-    if (v.size() == 1) v = rep(v, n);
-    if (sv.size() == 1) sv = rep(sv, n);
-    if (t0.size() == 1) t0 = rep(t0, n);
-
-    NumericVector cdf_val(n);
-    for (int i = 0; i < n; ++i) {
-        
-        cdf_val[i] = prdmswtn(t_adj[i], B[i], v[i], A[i], sv[i],
+    NumericVector cdf(n);
+    for (int i = 0; i < n; i++){
+		t[i] = t[i] - t0[i];
+		if (t[i] <= 0){
+		cdf[i] = 0.;
+		} else {
+			cdf[i] = prdmswtn(t[i], B[i], v[i], A[i], sv[i],
                                         spv_abs_err, spv_rel_err, static_cast<size_t>(spv_max_eval));
-    }
-    return cdf_val;
+		}
+	}
+    return cdf;
 }
-
-/*
-#' Random number generation for the RDM_SWTN model
-#'
-#' Generates random samples from the RDM_SWTN model.
-#'
-#' @param n_samples The number of samples to generate.
-#' @param B Base threshold parameter.
-#' @param A Start-point variability range.
-#' @param mu_drift Mean drift rate.
-#' @param sigma_drift Variance of drift rate.
-#' @param t0 Non-decision time.
-#' @param s Overall scaling parameter (default 1.0).
-#' @return A numeric vector of random samples.
-#' @details Scaled parameters `B/s`, `A/s`, `mu_drift/s`, `sigma_drift/(s*s)` are used.
-#'   A start point `actual_k` is sampled from `U(B_scaled, B_scaled + A_scaled)`.
-#'   If `sigma_drift` is zero, samples from standard RDM with SPV.
-#'   If `A` is zero, samples from SWTN with fixed threshold `B_scaled`.
-#'   If both are zero, samples from simple Wald.
-
-NumericVector rRDM_SWTN(int n_samples, double B, double mu_drift, double A, double t0, double s = 1.0, double sigma_drift=0.0) {
-    NumericVector samples(n_samples);
-    Rcpp::RNGScope scope;
-
-    if (s <= 1e-10) { // effectively infinite drift or zero threshold
-        for(int i=0; i<n_samples; ++i) samples[i] = t0; // or R_PosInf if B > 0
-        return samples;
-    }
-
-    double B_scaled = B / s;
-    double A_scaled = A / s;
-    double mu_drift_scaled = mu_drift / s;
-
-    bool no_A_var = (A_scaled < 1e-7); // Use scaled A for this check
-    bool no_drift_var = (sigma_drift < 1e-10);
-
-
-    for (int i = 0; i < n_samples; ++i) {
-        double current_k_for_wald; // This is the threshold for the (potentially drift-varying) Wald process
-
-        if (no_A_var) {
-            current_k_for_wald = B_scaled;
-        } else {
-            current_k_for_wald = R::runif(B_scaled, B_scaled + A_scaled);
-        }
-
-        if (current_k_for_wald <= 1e-9) { // Threshold is effectively non-positive
-             samples[i] = t0; // Instant hit at non-decision time
-             continue;
-        }
-
-        if (no_drift_var) {
-            // Case 1 (A=0, sigmasq=0) or Case 2 (A>0, sigmasq=0)
-            // Both reduce to sampling from a simple Wald distribution with threshold = current_k_for_wald
-            // and drift = mu_drift_scaled.
-            // Need a simple Wald RNG here. rinvgauss_rng(mu_ig, lambda_ig, rng)
-            // mu_ig = current_k_for_wald / mu_drift_scaled
-            // lambda_ig = current_k_for_wald^2
-            if (mu_drift_scaled <= 1e-9) { // No positive drift
-                 samples[i] = R_PosInf; // Cannot reach positive boundary
-                 continue;
-            }
-            samples[i] = rinvgauss_rng(current_k_for_wald / mu_drift_scaled, std::pow(current_k_for_wald,2)) + t0;
-        } else {
-            // Case 3 (A=0, sigmasq > 0) or Case 4 (A>0, sigmasq > 0)
-            // Both use rswtn with threshold = current_k_for_wald
-            samples[i] = rswtn(current_k_for_wald, mu_drift_scaled, sigma_drift, t0);
-        }
-    }
-    return samples;
-}*/
 
 // [[Rcpp::export]]
 NumericVector drdmswtn_c(NumericVector rts, NumericMatrix pars, LogicalVector idx, double min_ll, LogicalVector is_ok){

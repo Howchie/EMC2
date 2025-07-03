@@ -272,7 +272,6 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
                           parameters, model = NULL, stage,
                           type, tune)
 {
-  
   group_pars <- get_group_level(parameters, s, type)
   unq_components <- unique(tune$components)
   proposal_out <- numeric(length(group_pars$mu))
