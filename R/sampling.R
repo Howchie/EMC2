@@ -3,6 +3,7 @@ pmwgs <- function(dadm, type, pars = NULL, prior = NULL,
   if(is.data.frame(dadm)) dadm <- list(dadm)
   if(is.null(pars)) pars <- names(sampled_pars(attr(dadm[[1]], "prior")))
   if(is.null(prior)) prior <- attr(dadm[[1]], "prior")
+
   dadm <- extractDadms(dadm)
 
   dadm_list <-dadm$dadm_list

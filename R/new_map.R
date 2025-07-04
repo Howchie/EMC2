@@ -1,6 +1,7 @@
 minimal_design <- function(design, covariates = NULL, drop_subjects = TRUE,
                            n_trials = 1, add_acc = TRUE, drop_R = TRUE,
-                           drop_R_levels = TRUE, do_functions = TRUE, ...) {
+                           drop_R_levels = TRUE, do_functions = TRUE, LT=0,LC=0,UC=Inf,UT=Inf,...) {
+  ##TODO add censoring/trunc
   dots <- add_defaults(list(...), verbose = TRUE)
   if(!is.null(design$Ffactors)) design <- list(design)
   out <- list()
@@ -75,7 +76,15 @@ minimal_design <- function(design, covariates = NULL, drop_subjects = TRUE,
         fac_df[[nm]] <- res
       }
     }
-
+    snams <- levels(fac_df$subjects)
+    if(length(LT)==1) LT <- setNames(rep(LT,length(snams)), snams)
+    if(length(UT)==1) UT <- setNames(rep(UT,length(snams)), snams)
+    if(length(LC)==1) LC <- setNames(rep(LC,length(snams)), snams)
+    if(length(UC)==1) UC <- setNames(rep(UC,length(snams)), snams)
+    fac_df$LT <- LT[as.character(fac_df$subjects)]
+    fac_df$UT <- UT[as.character(fac_df$subjects)]
+    fac_df$LC <- LC[as.character(fac_df$subjects)]
+    fac_df$UC <- UC[as.character(fac_df$subjects)]
     out[[i]] <- fac_df
   }
   if(length(out) == 1) out <- out[[1]]

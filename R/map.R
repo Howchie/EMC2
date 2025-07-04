@@ -43,26 +43,34 @@ do_reverse_transform <- function(pars, model)
   pars
 }
 
-do_reverse_transform_variance <- function(mu_nat, var_prop, model)
+do_reverse_transform_variance <- function(mu_nat, var, model, prop=TRUE)
 { # input both mu and variance on the natural scale
-  # ZH significant edits -- this function takes in natural scale params (through the transform pipeline) and returns the appropriate mean and variance for the mvtnorm call to sample on the TRANSFORMED scale (using variance_prop on the natural scale)
-  transform=model$transform
-  ptypes <- get_p_types(colnames(mu_nat))
-  islog    <- transform$func[ptypes] == "exp"
-  isqnorm <- transform$func[ptypes] == "pnorm"
+  if (!prop) {var_prop = var/mu_nat} else {var_prop=var} # defaults to specifying variance as a proportion of the mean on natural scale but also allows for natural scale mu/var
+  vec_input <- is.null(dim(mu_nat))            # remember original shape
+  mu_nat    <- to_matrix(mu_nat)
+  var_prop  <- to_matrix(var_prop)
+  if(ncol(var_prop)==1) {var_prop=rep(var_prop,ncol(mu_nat))}
+  ## -- pre-compute flags ------------------------------------------------------
+  ptypes   <- get_p_types(colnames(mu_nat))
+  trf      <- model$transform$func[ptypes]
+  is_log   <- trf == "exp"
+  is_qnorm <- trf == "pnorm"
   
-  
-  var_transformed=matrix(0,ncol=ncol(mu_nat),nrow=ncol(mu_nat)) # square
-  par_transformed=matrix(NA,ncol=ncol(mu_nat),nrow=nrow(mu_nat))
+  ## -- allocate outputs -------------------------------------------------------
+  var_tr  <- matrix(0,  ncol = ncol(mu_nat), nrow = nrow(mu_nat))
+  par_tr  <- matrix(NA, ncol = ncol(mu_nat), nrow = nrow(mu_nat))
   ## exp link:  lower + exp(real)
   # residual on the natural scale
-  var_transformed[, islog] <- log(1 + var_prop[, islog]/mu_nat[,islog]) # log transform based on coefficient of variation
-  par_transformed[, islog] <- ifelse(mu_nat[, islog] <= model$bound$minmax[1,ptypes[islog]] | is.na(mu_nat[, islog]),  # illegal or undefined
-                                     log(model$bound$minmax[1,ptypes[islog]]),                                      # clamp to bound
-                                     log(mu_nat[, islog]) - 0.5*var_transformed[, islog]                        # valid inverse
+  var_tr[, is_log] <- log1p(var_prop[, is_log, drop = FALSE] /
+                              mu_nat  [, is_log, drop = FALSE])
+  par_tr[, is_log] <- ifelse(
+    mu_nat[, is_log, drop = FALSE] <= model$bound$minmax[1, ptypes[is_log]] |
+      is.na(mu_nat[, is_log, drop = FALSE]),
+    log(model$bound$minmax[1, ptypes[is_log]]),
+    log(mu_nat[, is_log, drop = FALSE]) - 0.5 * var_tr[, is_log, drop = FALSE]
   )
   ## probit link - to get variance we need a root finder (this probably needs to be thoroughly checked by someone not ZH)
-  var_nat=diag(as.vector(mu_nat),ncol=ncol(mu_nat))*var_prop
+  var_nat=diag(as.vector(mu_nat),ncol=ncol(mu_nat))*var_prop[1,]
   make_root <- function(mu, target_var, lower, upper) {
     #target_var <- pmin(target_var, 0.999 * mu * (1 - mu))
     W <- upper - lower
@@ -78,7 +86,7 @@ do_reverse_transform_variance <- function(mu_nat, var_prop, model)
     }
   }
   for (j in 1:ncol(var_nat)) {
-    if(isqnorm[j]) {
+    if(is_qnorm[j]) {
       W <- upper - lower
       p <- (mu - lower) / W
       if (any(p <= 0) || any(p >= 1))          stop("mean outside (lower, upper)")
@@ -86,17 +94,17 @@ do_reverse_transform_variance <- function(mu_nat, var_prop, model)
       
       for (i in 1:nrow(var_nat)) {
         if(!var_nat[i,j]==0) {
-          var_transformed[i, j] <- uniroot(make_root(mu_nat[j], var_nat[i,j], 
+          var_tr[i, j] <- uniroot(make_root(mu_nat[j], var_nat[i,j], 
                                                      model$bound$minmax[1,ptypes[j]], model$bound$minmax[2,ptypes[j]]),
                                            c(-1e-6, 50))$root
-          par_transformed[i, j] = a*sqrt(1+var_transformed[i,j])
+          par_tr[i, j] = a*sqrt(1+var_tr[i,j])
         }
       }
     }
   }
   
 
-out = list(pars=par_transformed,var=var_transformed)
+out = data.frame(pars=par_tr[1,],var=var_tr[1,],row.names = names(mu_nat))
 }
 
 do_pre_transform <- function(p_vector, model)

@@ -275,10 +275,10 @@ double c_log_likelihood_DDM(NumericMatrix pars, DataFrame data,
 }
 
 double c_log_likelihood_race(NumericMatrix pars, DataFrame data,
-                             NumericVector (*dfun)(NumericVector, NumericMatrix, LogicalVector, double, LogicalVector),
-                             NumericVector (*pfun)(NumericVector, NumericMatrix, LogicalVector, double, LogicalVector),
+                             RacePdfFun dfun,                  // Pointer to the model's PDF adapter function
+							 RaceCdfFun pfun,
                              const int n_trials, LogicalVector winner, IntegerVector expand,
-                             double min_ll, LogicalVector is_ok){
+                             double min_ll, LogicalVector is_ok,void* model_context_for_funcs){
   const int n_out = expand.length();
   NumericVector lds(n_trials);
   NumericVector rts = data["rt"];
@@ -296,10 +296,10 @@ double c_log_likelihood_race(NumericMatrix pars, DataFrame data,
       }
     }
   }
-  NumericVector win = log(dfun(rts, pars, winner, exp(min_ll), is_ok)); //first for compressed
+  NumericVector win = log(dfun(rts, pars, is_ok, winner, model_context_for_funcs)); //first for compressed
   lds[winner] = win;
   if(n_acc > 1){
-    NumericVector loss = log(1- pfun(rts, pars, !winner, exp(min_ll), is_ok)); //cdfs
+    NumericVector loss = log(1- pfun(rts, pars, is_ok, !winner, model_context_for_funcs)); //cdfs
     loss[is_na(loss)] = min_ll;
     loss[loss == log(1 - exp(min_ll))] = min_ll;
     lds[!winner] = loss;
@@ -332,6 +332,7 @@ double c_log_likelihood_race(NumericMatrix pars, DataFrame data,
   }
 }
 
+/*
 // [[Rcpp::export]]
 NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector constants,
             List designs, String type, List bounds, List transforms, List pretransforms,
@@ -401,10 +402,13 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
     } else if(type == "RDMSWTN"){
       dfun = drdmswtn_c;
       pfun = prdmswtn_c;
-    } else{
-      dfun = dlnr_c;
-      pfun = plnr_c;
-    }
+    } else if(type == "LNR") {
+	  dfun = dlnr_c;
+	  pfun = plnr_c;
+	} else {
+	// Crash the program with an error message
+	stop("Unknown model type: " + type);
+	}
     NumericVector lR = data["lR"];
     int n_lR = unique(lR).length();
     for (int i = 0; i < n_particles; ++i) {
@@ -423,8 +427,9 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
   }
   return(lls);
 }
+*/
 
-/*
+
 // [[Rcpp::export]]
 NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector constants,
             List designs, String type_rcpp, List bounds, List transforms, List pretransforms,
@@ -500,7 +505,7 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
     } else if (type_std=="RDM") {
         model_dfun_ptr = &rdm_dfun_adapter;
         model_pfun_ptr = &rdm_pfun_adapter;
-    } else if (type_std=="RDM_SWTN") {
+    } else if (type_std=="RDMSWTN") {
         model_dfun_ptr = &rdmswtn_dfun_adapter;
         model_pfun_ptr = &rdmswtn_pfun_adapter;
     } else if (type_std.find("LNR") != std::string::npos) {
@@ -535,15 +540,17 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
         }
         is_ok = c_do_bound(pars, bound_specs);
         is_ok = lr_all(is_ok, n_acc);
-        lls[i] = c_log_likelihood_race_cens_trunc(pars, data,
+        //lls[i] = c_log_likelihood_race_cens_trunc(pars, data,
+        //                                         model_dfun_ptr, model_pfun_ptr,n_trials,
+        //                                          winner, expand, min_ll, is_ok, n_acc, 
+        //                                          &current_model_ctx);
+		lls[i] = c_log_likelihood_race(pars, data,
                                                   model_dfun_ptr, model_pfun_ptr,n_trials,
-                                                  winner, expand, min_ll, is_ok, n_acc, 
-                                                  &current_model_ctx);
+                                                  winner, expand, min_ll, is_ok,&current_model_ctx);
     }
   }
   return(lls);
 }
-*/
 
 
 // GSL-compatible adapter for f_race_integrand_cpp
@@ -716,6 +723,7 @@ double get_trunc_normaliser_cpp(
 // This function is now the unified entry point for all race models (LBA, RDM, LNR),
 // whether they are standard or explicitly handling censoring/truncation.
 // It uses batching for finite RTs and iterative processing for others (censored/NA RTs).
+// needs unbatching?
 double c_log_likelihood_race_cens_trunc(
     Rcpp::NumericMatrix pars,               // Parameters for one particle, covering all dadm rows for that particle
     Rcpp::DataFrame dadm,                   // Data for unique trial conditions, structured for all accumulators
@@ -729,12 +737,36 @@ double c_log_likelihood_race_cens_trunc(
     int n_acc,                              // Number of accumulators in the race (must be > 0 if data exists)
     void* model_context_for_funcs           // Context for model_dfun/model_pfun (e.g., contains posdrift for LBA)
 ) {
-    // Fetch censoring and truncation values from dadm attributes, with defaults
+    // Fetch censoring and truncation values from dadm attributes, with defaults. Check columns first, then attributes as fallback.
     double LT = 0.0, UT = R_PosInf, LC = 0.0, UC = R_PosInf;
-    if (dadm.hasAttribute("LT") && !Rf_isNull(dadm.attr("LT"))) LT = Rcpp::as<double>(dadm.attr("LT"));
-    if (dadm.hasAttribute("UT") && !Rf_isNull(dadm.attr("UT"))) UT = Rcpp::as<double>(dadm.attr("UT"));
-    if (dadm.hasAttribute("LC") && !Rf_isNull(dadm.attr("LC"))) LC = Rcpp::as<double>(dadm.attr("LC"));
-    if (dadm.hasAttribute("UC") && !Rf_isNull(dadm.attr("UC"))) UC = Rcpp::as<double>(dadm.attr("UC"));
+	if (dadm.containsElementNamed("LT")) {
+        Rcpp::NumericVector tmp = dadm["LT"];
+        if(tmp.size() > 0) LT = tmp[0];
+    } else if (dadm.hasAttribute("LT") && !Rf_isNull(dadm.attr("LT"))) {
+        Rcpp::NumericVector tmp = dadm.attr("LT");
+        if(tmp.size() > 0) LT = tmp[0];
+    }
+    if (dadm.containsElementNamed("UT")) {
+        Rcpp::NumericVector tmp = dadm["UT"];
+        if(tmp.size() > 0) UT = tmp[0];
+    } else if (dadm.hasAttribute("UT") && !Rf_isNull(dadm.attr("UT"))) {
+        Rcpp::NumericVector tmp = dadm.attr("UT");
+        if(tmp.size() > 0) UT = tmp[0];
+    }
+    if (dadm.containsElementNamed("LC")) {
+        Rcpp::NumericVector tmp = dadm["LC"];
+        if(tmp.size() > 0) LC = tmp[0];
+    } else if (dadm.hasAttribute("LC") && !Rf_isNull(dadm.attr("LC"))) {
+        Rcpp::NumericVector tmp = dadm.attr("LC");
+        if(tmp.size() > 0) LC = tmp[0];
+    }
+    if (dadm.containsElementNamed("UC")) {
+        Rcpp::NumericVector tmp = dadm["UC"];
+        if(tmp.size() > 0) UC = tmp[0];
+    } else if (dadm.hasAttribute("UC") && !Rf_isNull(dadm.attr("UC"))) {
+        Rcpp::NumericVector tmp = dadm.attr("UC");
+        if(tmp.size() > 0) UC = tmp[0];
+    }
 
     double integration_epsilon = 1e-8; // Tolerance for GSL integration
 	

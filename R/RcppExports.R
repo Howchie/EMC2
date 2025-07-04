@@ -25,12 +25,12 @@ digt0 <- function(t, k = 1., l = 1.) {
     .Call(`_EMC2_digt0`, t, k, l)
 }
 
-dwald <- function(t, boundary_alpha, drift_rate_xi) {
-    .Call(`_EMC2_dwald`, t, boundary_alpha, drift_rate_xi)
+dwald_classic <- function(t, boundary_alpha, drift_rate_xi) {
+    .Call(`_EMC2_dwald_classic`, t, boundary_alpha, drift_rate_xi)
 }
 
-pwald <- function(t, boundary_alpha, drift_rate_xi) {
-    .Call(`_EMC2_pwald`, t, boundary_alpha, drift_rate_xi)
+pwald_classic <- function(t, boundary_alpha, drift_rate_xi) {
+    .Call(`_EMC2_pwald_classic`, t, boundary_alpha, drift_rate_xi)
 }
 
 pigt <- function(t, k = 1, l = 1, a = .1, threshold = 1e-10) {
@@ -63,18 +63,6 @@ dswtn <- function(t_adj, alpha, mu_drift, sigma_drift) {
 
 pswtn <- function(t_adj, alpha, mu_drift, sigma_drift, abs_err = 1e-8, rel_err = 1e-8, max_eval = 10000L) {
     .Call(`_EMC2_pswtn`, t_adj, alpha, mu_drift, sigma_drift, abs_err, rel_err, max_eval)
-}
-
-rtnorm <- function(mu, sigma) {
-    .Call(`_EMC2_rtnorm`, mu, sigma)
-}
-
-rinvgauss_rng <- function(mu_ig, lambda_ig) {
-    .Call(`_EMC2_rinvgauss_rng`, mu_ig, lambda_ig)
-}
-
-rswtn <- function(alpha, mu_drift, sigma_drift, theta) {
-    .Call(`_EMC2_rswtn`, alpha, mu_drift, sigma_drift, theta)
 }
 
 drdmswtn <- function(t_adj, B, mu_drift, A, sigma_drift, spv_abs_err = 1e-8, spv_rel_err = 1e-8, spv_max_eval = 10000L) {
@@ -185,8 +173,8 @@ get_pars_matrix_rcpp <- function(p_vector, constants, transforms, pretransforms,
     .Call(`_EMC2_get_pars_matrix_rcpp`, p_vector, constants, transforms, pretransforms, p_types, designs, n_trials, data, trend)
 }
 
-calc_ll <- function(p_matrix, data, constants, designs, type, bounds, transforms, pretransforms, p_types, min_ll, trend) {
-    .Call(`_EMC2_calc_ll`, p_matrix, data, constants, designs, type, bounds, transforms, pretransforms, p_types, min_ll, trend)
+calc_ll <- function(p_matrix, data, constants, designs, type_rcpp, bounds, transforms, pretransforms, p_types, min_ll, trend) {
+    .Call(`_EMC2_calc_ll`, p_matrix, data, constants, designs, type_rcpp, bounds, transforms, pretransforms, p_types, min_ll, trend)
 }
 
 truncated_normal_a_cdf <- function(x, mu, sigma, a) {

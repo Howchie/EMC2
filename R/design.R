@@ -76,7 +76,7 @@
 design <- function(formula = NULL,factors = NULL,Rlevels = NULL,model,data=NULL,
                        contrasts=NULL,matchfun=NULL,constants=NULL,covariates=NULL,
                        functions=NULL,report_p_vector=TRUE, custom_p_vector = NULL,
-                   transform = NULL, bound = NULL, fixed_accumulator_roles = NULL, ...){
+                   transform = NULL, bound = NULL, fixed_accumulator_roles = NULL, LT=NULL,LC=NULL,UC=NULL,UT=NULL,...){
 
   optionals <- list(...)
   if(!is.null(optionals$trend)){
@@ -133,7 +133,10 @@ design <- function(formula = NULL,factors = NULL,Rlevels = NULL,model,data=NULL,
       # covariates <- covariates[covariates %in% all_preds]
       if(length(covariates) == 0) covariates <- NULL
     }
-    # factors <- factors[names(factors) %in% c(all_preds, "subjects")]
+    if(is.null(LT)){if("LT"%in%colnames(data))LT=data$LT else{LT <- attr(data,"LT"); if (is.null(LT)) LT <- 0}}
+    if(is.null(UT)){if("UT"%in%colnames(data))UT=data$UT else{UT <- attr(data,"UT"); if (is.null(UT)) UT <- Inf}}
+    if(is.null(LC)){if("LC"%in%colnames(data))LC=data$LC else{LC <- attr(data,"LC"); if (is.null(LC)) LC <- 0}}
+    if(is.null(UC)){if("UC"%in%colnames(data))UC=data$UC else{UC <- attr(data,"UC"); if (is.null(UC)) UC <- Inf}}
   } else {if(is.null(Rlevels)) stop("make sure Rlevels is specified")} # this check wasn't present - would break accumulator logic
   if (!is.null(trend)) {
     formula <- check_trend(trend,covariates, model, formula)
@@ -437,10 +440,10 @@ compress_dadm <- function(da,designs,Fcov,Ffun)
     # out keeps only unique rows in terms of all parameters design matrices
     # R, lR and rt (at given resolution) from full data set
   {
-  LT <- attr(da,"LT"); if (is.null(LT)) LT <- 0
-  UT <- attr(da,"UT"); if (is.null(UT)) UT <- Inf
-  LC <- attr(da,"LC"); if (is.null(LC)) LC <- 0
-  UC <- attr(da,"UC"); if (is.null(UC)) UC <- Inf
+  if("LT"%in%colnames(da))LT=da$LT else{LT <- attr(da,"LT"); if (is.null(LT)) LT <- 0}
+  if("UT"%in%colnames(da))UT=da$UT else{UT <- attr(da,"UT"); if (is.null(UT)) UT <- Inf}
+  if("LC"%in%colnames(da))LC=da$LC else{LC <- attr(da,"LC"); if (is.null(LC)) LC <- 0}
+  if("UC"%in%colnames(da))UC=da$UC else{UC <- attr(da,"UC"); if (is.null(UC)) UC <- Inf}
     nacc <- length(unique(da$lR))
     # contract output
     cells <- paste(
@@ -519,74 +522,53 @@ compress_dadm <- function(da,designs,Fcov,Ffun)
         attr(out,"expand_uc") <- ok[attr(out,"expand_winner")] + 1
       }
     }
-    attr(out,"LC") <- LC
-    attr(out,"UC") <- UC
-    attr(out,"LT") <- LT
-    attr(out,"UT") <- UT
     out
 }
 
 check_rt <- function(b,d,upper=TRUE)
   # Check bounds respected if present
 {
-  if (!all(sort(levels(d$subjects))==sort(names(b))))
-    stop("Bound vector must have same names as subjects")
-  d <- d[!is.na(d$rt),]
-  d <- d[is.finite(d$rt),]
-  bound <- d$subjects
-  levels(bound) <- unlist(b)[levels(bound)]
+  idx = !is.na(d) & is.finite(d)
+  d <- d[idx]
+  b <- b[idx]
   if (upper)
-    ok <- all(d$rt < as.numeric(as.character(bound))) else
-      ok <- all(d$rt > as.numeric(as.character(bound)))
+    ok <- all(d < as.numeric(b)) else
+      ok <- all(d > as.numeric(b))
   if (!all(ok)) stop("Bound not respected in data")
 }
 
 rt_check_function <- function(data){
   # Truncation
-  if (!is.null(attr(data,"UT"))) {
-    if (length(attr(data,"UT"))==1 && is.null(names(attr(data,"UT"))))
-      attr(data,"UT") <- stats::setNames(rep(attr(data,"UT"),length(levels(data$subjects))),
-                                         levels(data$subjects))
-    check_rt(attr(data,"UT"),data)
+  if ("UT"%in%colnames(data)) {
+    check_rt(data$UC,data$rt)
   }
-  if (!is.null(attr(data,"LT"))) {
-    if (length(attr(data,"LT"))==1 && is.null(names(attr(data,"LT"))))
-      attr(data,"LT") <- stats::setNames(rep(attr(data,"LT"),length(levels(data$subjects))),
-                                         levels(data$subjects))
-    if (any(attr(data,"LT")<0)) stop("Lower truncation cannot be negative")
-    check_rt(attr(data,"LT"),data,upper=FALSE)
+  if ("LT"%in%colnames(data)) {
+    if (any(data$LT<0)) stop("Lower truncation cannot be negative")
+    check_rt(data$LT,data$rt,upper=FALSE)
   }
-  if (!is.null(attr(data,"UT")) & !is.null(attr(data,"LT"))) {
-    DT <- attr(data,"UT") - attr(data,"LT")
+  if ("UT"%in%colnames(data) & "LT"%in%colnames(data)) {
+    DT <- data$UT - data$LT
     if (!is.null(DT) && any(DT<0)) stop("UT must be greater than LT")
   }
 
   # Censoring
-  if (!is.null(attr(data,"UC"))) {
-    if (length(attr(data,"UC"))==1 && is.null(names(attr(data,"UC"))))
-      attr(data,"UC") <- stats::setNames(rep(attr(data,"UC"),length(levels(data$subjects))),
-                                         levels(data$subjects))
-    check_rt(attr(data,"UC"),data)
-    if (!is.null(attr(data,"UT")) && any(attr(data,"UT") < attr(data,"UC")))
+  if ("UC"%in%colnames(data)) {
+    check_rt(data$UC,data$rt)
+    if ("UT"%in%colnames(data) && any(data$UT < data$UC))
       stop("Upper censor must be less than upper truncation")
   }
-  if (!is.null(attr(data,"LC"))) {
-    if (length(attr(data,"LC"))==1 && is.null(names(attr(data,"LC"))))
-      attr(data,"LC") <- stats::setNames(rep(attr(data,"LC"),length(levels(data$subjects))),
-                                         levels(data$subjects))
-    if (any(attr(data,"LC")<0)) stop("Lower censor cannot be negative")
-    check_rt(attr(data,"LC"),data,upper=FALSE)
-    if (!is.null(attr(data,"LT")) && any(attr(data,"LT") > attr(data,"LC")))
+  if ("LC"%in%colnames(data)) {
+    if (any(data$LC<0)) stop("Lower censor cannot be negative")
+    check_rt(data$LC,data$rt,upper=FALSE)
+    if ("LT"%in%colnames(data) && any(data$LT<data$LC))
       stop("Lower censor must be greater than lower truncation")
   }
-  if (any(data$rt[!is.na(data$rt)]==-Inf) & is.null(attr(data,"LC")))
+  if (any(data$rt[!is.na(data$rt)]==-Inf) & !("LC"%in%colnames(data)))
     stop("Data must have an LC attribute if any rt = -Inf")
-  if (any(data$rt[!is.na(data$rt)]==Inf) & is.null(attr(data,"UC")))
+  if (any(data$rt[!is.na(data$rt)]==Inf) & !("UC"%in%colnames(data)))
     stop("Data must have an UC attribute if any rt = Inf")
-  if (!is.null(attr(data,"UC"))) check_rt(attr(data,"UC"),data)
-  if (!is.null(attr(data,"LC"))) check_rt(attr(data,"LC"),data,upper=FALSE)
-  if (!is.null(attr(data,"UC")) & !is.null(attr(data,"LC"))) {
-    DC <- attr(data,"UC") - attr(data,"LC")
+  if ("UC"%in%colnames(data) & "LC"%in%colnames(data)) {
+    DC <- data$UC - data$LC
     if (!is.null(DC) && any(DC<0)) stop("UC must be greater than LC")
   }
 }
@@ -597,10 +579,10 @@ design_model <- function(data,design,model=NULL,
                          compress=TRUE,rt_check=TRUE, add_da = FALSE, all_cells_dm = FALSE)
 {
   #browser()
-  LT <- attr(data,"LT"); if (is.null(LT)) LT <- 0
-  UT <- attr(data,"UT"); if (is.null(UT)) UT <- Inf
-  LC <- attr(data,"LC"); if (is.null(LC)) LC <- 0
-  UC <- attr(data,"UC"); if (is.null(UC)) UC <- Inf
+  if("LT"%in%colnames(data))LT=data$LT else{LT <- attr(data,"LT"); if (is.null(LT)) LT <- 0}
+  if("UT"%in%colnames(data))UT=data$UT else{UT <- attr(data,"UT"); if (is.null(UT)) UT <- Inf}
+  if("LC"%in%colnames(data))LC=data$LC else{LC <- attr(data,"LC"); if (is.null(LC)) LC <- 0}
+  if("UC"%in%colnames(data))UC=data$UC else{UC <- attr(data,"UC"); if (is.null(UC)) UC <- Inf}
   if (is.null(model)) {
     if (is.null(design$model))
       stop("Model must be supplied if it has not been added to design")
@@ -640,7 +622,17 @@ design_model <- function(data,design,model=NULL,
     newF <- stats::setNames(data.frame(design$Ffunctions[[i]](da)),i)
     da <- cbind.data.frame(da,newF)
   }
-
+  # Ensure bound columns persist after accumulator expansion
+  snams <- da$subjects
+  if(length(LT)==1) {LT <- setNames(rep(LT,length(snams)), snams);da$LT <- LT[as.character(da$subjects)]}
+  else{da$LT=LT}
+  if(length(UT)==1) {UT <- setNames(rep(UT,length(snams)), snams);da$UT <- UT[as.character(da$subjects)]}
+  else{da$UT=UT}
+  if(length(LC)==1) {LC <- setNames(rep(LC,length(snams)), snams);da$LC <- LC[as.character(da$subjects)]}
+  else{da$LC=LC}
+  if(length(UC)==1) {UC <- setNames(rep(UC,length(snams)), snams);da$UC <- UC[as.character(da$subjects)]}
+  else{da$UC=UC}
+  
   if (is.null(model()$p_types) | is.null(model()$Ttransform))
     stop("p_types and Ttransform must be supplied")
   if (!all(unlist(lapply(design$Flist,class))=="formula"))
@@ -672,7 +664,6 @@ design_model <- function(data,design,model=NULL,
     attr(da,"UC") <- UC
     attr(da,"LT") <- LT
     attr(da,"UT") <- UT
-
     dadm <- compress_dadm(da,designs=out, Fcov=design$Fcovariates,Ffun=names(design$Ffunctions))
     # Change expansion names
     # attr(dadm,"expand_all") <- attr(dadm,"expand")
@@ -823,7 +814,16 @@ dm_list <- function(dadm)
       x
     })
 
-
+  if("LT"%in%colnames(dadm))LT=dadm$LT else{LT <- attr(dadm,"LT"); if (is.null(LT)) LT <- 0}
+  if("UT"%in%colnames(dadm))UT=dadm$UT else{UT <- attr(dadm,"UT"); if (is.null(UT)) UT <- Inf}
+  if("LC"%in%colnames(dadm))LC=dadm$LC else{LC <- attr(dadm,"LC"); if (is.null(LC)) LC <- 0}
+  if("UC"%in%colnames(dadm))UC=dadm$UC else{UC <- attr(dadm,"UC"); if (is.null(UC)) UC <- Inf}
+  snams <- dadm$subjects
+  if(length(LT)==1) LT <- setNames(rep(LT,length(snams)), snams)
+  if(length(UT)==1) UT <- setNames(rep(UT,length(snams)), snams)
+  if(length(LC)==1) LC <- setNames(rep(LC,length(snams)), snams)
+  if(length(UC)==1) UC <- setNames(rep(UC,length(snams)), snams)
+  
   model <- attr(dadm,"model")
   p_names <- attr(dadm,"p_names")
   sampled_p_names <- attr(dadm,"sampled_p_names")
@@ -878,21 +878,8 @@ dm_list <- function(dadm)
       attr(dl[[i]], "expand_nort") <- NULL
       attr(dl[[i]], "expand_nortR") <- NULL
 
-      if (!is.null(attr(dadm,"LT"))){
-        attr(dl[[i]],"LT") <- attr(dadm,"LT")[names(attr(dadm,"LT"))==i]
-      }
-      if (!is.null(attr(dadm,"UT"))){
-        attr(dl[[i]],"UT") <- attr(dadm,"UT")[names(attr(dadm,"UT"))==i]
-      }
-      if (!is.null(attr(dadm,"LC"))){
-        attr(dl[[i]],"LC") <- attr(dadm,"LC")[names(attr(dadm,"LC"))==i]
-      }
-      if (!is.null(attr(dadm,"UC"))){
-        attr(dl[[i]],"UC") <- attr(dadm,"UC")[names(attr(dadm,"UC"))==i]
-      }
     }
   }
-
 
   return(dl)
 }

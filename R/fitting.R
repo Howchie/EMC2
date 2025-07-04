@@ -660,10 +660,10 @@ make_emc <- function(data,design,model=NULL,
                           prior_list = NULL, group_design = NULL,
                           par_groups=NULL, ...){
   # arguments for future compatibility
-  LT <- attr(data,"LT"); if (is.null(LT)) LT <- 0
-  UT <- attr(data,"UT"); if (is.null(UT)) UT <- Inf
-  LC <- attr(data,"LC"); if (is.null(LC)) LC <- 0
-  UC <- attr(data,"UC"); if (is.null(UC)) UC <- Inf
+  if("LT"%in%colnames(data))LT=data$LT else{LT <- attr(data,"LT"); if (is.null(LT)) LT <- 0}
+  if("UT"%in%colnames(data))UT=data$UT else{UT <- attr(data,"UT"); if (is.null(UT)) UT <- Inf}
+  if("LC"%in%colnames(data))LC=data$LC else{LC <- attr(data,"LC"); if (is.null(LC)) LC <- 0}
+  if("UC"%in%colnames(data))UC=data$UC else{UC <- attr(data,"UC"); if (is.null(UC)) UC <- Inf}
   n_factors <- NULL
   formula <- NULL
   Lambda_mat <- NULL
@@ -701,15 +701,20 @@ make_emc <- function(data,design,model=NULL,
   data <- lapply(data,function(d){
     d$subjects <- factor(d$subjects)
     d <- d[order(d$subjects),]
-    LC <- attr(d,"LC")
-    UC <- attr(d,"UC")
-    LT <- attr(d,"LT")
-    UT <- attr(d,"UT")
     d <- add_trials(d)
     attr(d,"LC") <- LC
     attr(d,"UC") <- UC
     attr(d,"LT") <- LT
     attr(d,"UT") <- UT
+    snams <- d$subjects
+    if(length(LT)==1) {LT <- setNames(rep(LT,length(snams)), snams);d$LT <- LT[as.character(d$subjects)]}
+    else{d$LT=LT}
+    if(length(UT)==1) {UT <- setNames(rep(UT,length(snams)), snams);d$UT <- UT[as.character(d$subjects)]}
+    else{d$UT=UT}
+    if(length(LC)==1) {LC <- setNames(rep(LC,length(snams)), snams);d$LC <- LC[as.character(d$subjects)]}
+    else{d$LC=LC}
+    if(length(UC)==1) {UC <- setNames(rep(UC,length(snams)), snams);d$UC <- UC[as.character(d$subjects)]}
+    else{d$UC=UC}
     d
   })
   std <- c("names", "row.names", "class", "dim")
@@ -813,6 +818,7 @@ make_emc <- function(data,design,model=NULL,
   attr(out$data,"UC") <- UC
   attr(out$data,"LT") <- LT
   attr(out$data,"UT") <- UT
+  
   # replicate chains
   dadm_lists <- rep(list(out),n_chains)
   # For post predict

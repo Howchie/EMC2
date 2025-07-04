@@ -118,7 +118,7 @@ Rcpp::NumericVector lba_dfun_adapter(Rcpp::NumericVector rt,
                                             void* context) {
     ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context);
     // Pass use_posdrift from context to dlba_c
-    return dlba_c(rt, pars, winner, ctx->min_lik_for_pdf, is_ok);
+    return dlba_c(rt, pars, winner, ctx->min_lik_for_pdf, is_ok, ctx->use_posdrift);
 }
 
 // Static adapter for LBA pfun
@@ -129,7 +129,7 @@ Rcpp::NumericVector lba_pfun_adapter(Rcpp::NumericVector rt,
                                             void* context) {
     ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context);
     // Pass use_posdrift from context to plba_c
-    return plba_c(rt, pars, winner, ctx->min_lik_for_pdf, is_ok);
+    return plba_c(rt, pars, winner, ctx->min_lik_for_pdf, is_ok, ctx->use_posdrift);
 }
 
 // Static adapter for RDM dfun

@@ -12,6 +12,10 @@ make_data(
   expand = 1,
   staircase = NULL,
   functions = NULL,
+  LT = NULL,
+  LC = NULL,
+  UT = NULL,
+  UC = NULL,
   ...
 )
 }
