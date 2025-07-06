@@ -65,7 +65,6 @@ prior <- function(design, type = NULL, group_design = NULL, update = NULL,
   if(!is.null(args$mu_sd)) args$theta_mu_var <- args$mu_sd^2
   # Initialize updated_flags
   updated_flags <- lapply(input, make_prior_idx)
-
   # First, update 'input' with the 'update' list
   result <- update_prior_input(input, update, updated_flags)
   input <- result$input

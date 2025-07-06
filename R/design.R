@@ -133,10 +133,10 @@ design <- function(formula = NULL,factors = NULL,Rlevels = NULL,model,data=NULL,
       # covariates <- covariates[covariates %in% all_preds]
       if(length(covariates) == 0) covariates <- NULL
     }
-    if(is.null(LT)){if("LT"%in%colnames(data))LT=data$LT else{LT <- attr(data,"LT"); if (is.null(LT)) LT <- 0}}
-    if(is.null(UT)){if("UT"%in%colnames(data))UT=data$UT else{UT <- attr(data,"UT"); if (is.null(UT)) UT <- Inf}}
-    if(is.null(LC)){if("LC"%in%colnames(data))LC=data$LC else{LC <- attr(data,"LC"); if (is.null(LC)) LC <- 0}}
-    if(is.null(UC)){if("UC"%in%colnames(data))UC=data$UC else{UC <- attr(data,"UC"); if (is.null(UC)) UC <- Inf}}
+    if(is.null(LT)){if("LT"%in%colnames(data))LT=data$LT} else{LT <- attr(data,"LT")}; if (is.null(LT)) LT <- 0
+    if(is.null(UT)){if("UT"%in%colnames(data))UT=data$UT} else{UT <- attr(data,"UT")}; if (is.null(UT)) UT <- Inf
+    if(is.null(LC)){if("LC"%in%colnames(data))LC=data$LC} else{LC <- attr(data,"LC")}; if (is.null(LC)) LC <- 0
+    if(is.null(UC)){if("UC"%in%colnames(data))UC=data$UC} else{UC <- attr(data,"UC")}; if (is.null(UC)) UC <- Inf
   } else {if(is.null(Rlevels)) stop("make sure Rlevels is specified")} # this check wasn't present - would break accumulator logic
   if (!is.null(trend)) {
     formula <- check_trend(trend,covariates, model, formula)
@@ -440,10 +440,10 @@ compress_dadm <- function(da,designs,Fcov,Ffun)
     # out keeps only unique rows in terms of all parameters design matrices
     # R, lR and rt (at given resolution) from full data set
   {
-  if("LT"%in%colnames(da))LT=da$LT else{LT <- attr(da,"LT"); if (is.null(LT)) LT <- 0}
-  if("UT"%in%colnames(da))UT=da$UT else{UT <- attr(da,"UT"); if (is.null(UT)) UT <- Inf}
-  if("LC"%in%colnames(da))LC=da$LC else{LC <- attr(da,"LC"); if (is.null(LC)) LC <- 0}
-  if("UC"%in%colnames(da))UC=da$UC else{UC <- attr(da,"UC"); if (is.null(UC)) UC <- Inf}
+  if("LT"%in%colnames(da))LT=da$LT else{LT <- attr(da,"LT")}; if (is.null(LT)) LT <- 0
+  if("UT"%in%colnames(da))UT=da$UT else{UT <- attr(da,"UT")}; if (is.null(UT)) UT <- Inf
+  if("LC"%in%colnames(da))LC=da$LC else{LC <- attr(da,"LC")}; if (is.null(LC)) LC <- 0
+  if("UC"%in%colnames(da))UC=da$UC else{UC <- attr(da,"UC")}; if (is.null(UC)) UC <- Inf
     nacc <- length(unique(da$lR))
     # contract output
     cells <- paste(
@@ -579,10 +579,10 @@ design_model <- function(data,design,model=NULL,
                          compress=TRUE,rt_check=TRUE, add_da = FALSE, all_cells_dm = FALSE)
 {
   #browser()
-  if("LT"%in%colnames(data))LT=data$LT else{LT <- attr(data,"LT"); if (is.null(LT)) LT <- 0}
-  if("UT"%in%colnames(data))UT=data$UT else{UT <- attr(data,"UT"); if (is.null(UT)) UT <- Inf}
-  if("LC"%in%colnames(data))LC=data$LC else{LC <- attr(data,"LC"); if (is.null(LC)) LC <- 0}
-  if("UC"%in%colnames(data))UC=data$UC else{UC <- attr(data,"UC"); if (is.null(UC)) UC <- Inf}
+  if("LT"%in%colnames(data))LT=data$LT else{LT <- attr(data,"LT")}; if (is.null(LT)) LT <- 0
+  if("UT"%in%colnames(data))UT=data$UT else{UT <- attr(data,"UT")}; if (is.null(UT)) UT <- Inf
+  if("LC"%in%colnames(data))LC=data$LC else{LC <- attr(data,"LC")}; if (is.null(LC)) LC <- 0
+  if("UC"%in%colnames(data))UC=data$UC else{UC <- attr(data,"UC")}; if (is.null(UC)) UC <- Inf
   if (is.null(model)) {
     if (is.null(design$model))
       stop("Model must be supplied if it has not been added to design")
@@ -814,10 +814,10 @@ dm_list <- function(dadm)
       x
     })
 
-  if("LT"%in%colnames(dadm))LT=dadm$LT else{LT <- attr(dadm,"LT"); if (is.null(LT)) LT <- 0}
-  if("UT"%in%colnames(dadm))UT=dadm$UT else{UT <- attr(dadm,"UT"); if (is.null(UT)) UT <- Inf}
-  if("LC"%in%colnames(dadm))LC=dadm$LC else{LC <- attr(dadm,"LC"); if (is.null(LC)) LC <- 0}
-  if("UC"%in%colnames(dadm))UC=dadm$UC else{UC <- attr(dadm,"UC"); if (is.null(UC)) UC <- Inf}
+  if("LT"%in%colnames(dadm))LT=dadm$LT else{LT <- attr(dadm,"LT")}; if (is.null(LT)) LT <- 0
+  if("UT"%in%colnames(dadm))UT=dadm$UT else{UT <- attr(dadm,"UT")}; if (is.null(UT)) UT <- Inf
+  if("LC"%in%colnames(dadm))LC=dadm$LC else{LC <- attr(dadm,"LC")}; if (is.null(LC)) LC <- 0
+  if("UC"%in%colnames(dadm))UC=dadm$UC else{UC <- attr(dadm,"UC")}; if (is.null(UC)) UC <- Inf
   snams <- dadm$subjects
   if(length(LT)==1) LT <- setNames(rep(LT,length(snams)), snams)
   if(length(UT)==1) UT <- setNames(rep(UT,length(snams)), snams)

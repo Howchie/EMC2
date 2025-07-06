@@ -20,6 +20,10 @@ design(
   transform = NULL,
   bound = NULL,
   fixed_accumulator_roles = NULL,
+  LT = NULL,
+  LC = NULL,
+  UC = NULL,
+  UT = NULL,
   ...
 )
 }

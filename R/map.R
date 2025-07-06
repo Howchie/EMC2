@@ -18,7 +18,8 @@ do_transform <- function(pars, model)
     2, transform$lower[ptypes[isprobit]], "+")
   pars
 }
-
+#' @export
+#' 
 do_reverse_transform <- function(pars, model)
 {
   transform=model$transform
@@ -42,7 +43,8 @@ do_reverse_transform <- function(pars, model)
   pars
   pars
 }
-
+#' @export
+#' 
 do_reverse_transform_variance <- function(mu_nat, var, model, prop=TRUE)
 { # input both mu and variance on the natural scale
   if (!prop) {var_prop = var/mu_nat} else {var_prop=var} # defaults to specifying variance as a proportion of the mean on natural scale but also allows for natural scale mu/var
@@ -102,9 +104,8 @@ do_reverse_transform_variance <- function(mu_nat, var, model, prop=TRUE)
       }
     }
   }
-  
 
-out = data.frame(pars=par_tr[1,],var=var_tr[1,],row.names = names(mu_nat))
+out = data.frame(pars=par_tr[1,],var=var_tr[1,],row.names = colnames(mu_nat))
 }
 
 do_pre_transform <- function(p_vector, model)

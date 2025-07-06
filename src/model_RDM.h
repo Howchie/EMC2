@@ -339,11 +339,10 @@ double dswtn(double t_adj, double alpha, double mu_drift, double sigma_drift) {
 // t_adj is time already adjusted for non-decision time (t - theta)
 // [[Rcpp::export]]
 double pswtn(double t_adj, double alpha, double mu_drift, double sigma_drift,
-                             double abs_err = 1e-8, double rel_err = 1e-8, size_t max_eval = 10000) {
+                             double abs_err = 1e-5, double rel_err = 1e-5, size_t max_eval = 10000) {
     if (t_adj <= 1e-10) return 0.0; // Never hits boundary
     if (alpha <= 1e-10) return 1.0; // Hit boundary immediately if alpha is at or below 0
     if (sigma_drift < 0) return R_NaN; // Variance can't be negative (should be bounded in EMC anyway)
-	//Rcout << "--- Debug: pswtn called. drift: " << mu_drift<<" threshold: "<< alpha<<" sv: "<< sigma_drift<< std::endl;
     // Handle sigma_drift == 0 case (becomes standard Wald CDF)
     if (sigma_drift <= 1e-10) {
         if (mu_drift <= 1e-10) return 0.0; // No positive drift
@@ -391,7 +390,7 @@ double pswtn(double t_adj, double alpha, double mu_drift, double sigma_drift,
 
     if (std::isnan(integral_val) || integral_val < 0.0) return 0.0;
     if (integral_val > 1.0) return 1.0;
-
+	//Rcout << "--- Debug: pswtn called. adj_t= "<<t_adj<<" drift: " << mu_drift<<" threshold: "<< alpha<<" sv: "<< sigma_drift<< "integral: "<<integral_val<< std::endl;
     return integral_val;
 }
 
@@ -512,7 +511,7 @@ double gsl_pswtn_spv_integrand(double current_k, void* p) {
     // pswtn handles current_k <= 0 internally by returning 1.0 if drift is positive.
     // Since QAGIU integrates from a lower bound (e.g., 0), current_k will be non-negative.
     // pswtn itself ensures its alpha (current_k here) is handled appropriately.
-    return pswtn(params->t_adj, current_k, params->mu_drift, params->sigma_drift,1e-9, 1e-9, 1000); // Using tighter fixed defaults for inner pswtn integration
+    return pswtn(params->t_adj, current_k, params->mu_drift, params->sigma_drift,1e-5, 1e-5, 1000); // Using tighter fixed defaults for inner pswtn integration
 }
 
 // Top-level PDF for RDM_SWTN model
@@ -520,7 +519,7 @@ double gsl_pswtn_spv_integrand(double current_k, void* p) {
 // [[Rcpp::export]]
 double drdmswtn(double t_adj, double B, double mu_drift, double A,
                                     double sigma_drift,
-                                    double spv_abs_err = 1e-8, double spv_rel_err = 1e-8, size_t spv_max_eval = 10000) {
+                                    double spv_abs_err = 1e-5, double spv_rel_err = 1e-5, size_t spv_max_eval = 10000) {
 
     if (t_adj <= 1e-10) return 0.0;
 	bool no_A_var = (A < 1e-7); // setting them quite low so the reduction logic only triggers if the user has genuinely fixed the value to zero (the lower bound in EMC2 is ~1e-4 so this should never be triggered during sampling)
@@ -578,7 +577,7 @@ double drdmswtn(double t_adj, double B, double mu_drift, double A,
             Rcpp::Rcerr << "drdmswtn (SPV) GSL_ERROR: " << gsl_strerror(status_pdf) << " (code " << status_pdf << ")\n"
                         << "  Inputs: t_adj=" << t_adj << ", B=" << B << ", A=" << A 
                         << ", mu_drift=" << mu_drift << ", sigma_drift=" << sigma_drift << std::endl;
-            return R_NegInf; // 0? Or NaN to indicate error
+            return 0.0; // 0? Or NaN to indicate error
         }
 
         if (integral_val_pdf <= 0) return R_NegInf; // Integral should be positive
@@ -593,7 +592,7 @@ double drdmswtn(double t_adj, double B, double mu_drift, double A,
 // [[Rcpp::export]]
 double prdmswtn(double t_adj, double B, double mu_drift, double A,
                                  double sigma_drift,
-                                 double spv_abs_err = 1e-8, double spv_rel_err = 1e-8, size_t spv_max_eval = 10000) {
+                                 double spv_abs_err = 1e-5, double spv_rel_err = 1e-5, size_t spv_max_eval = 10000) {
     if (t_adj <= 0) return 0.0;
 	//Rcout << "--- Debug: prdmswtn called. drift: " << mu_drift<<" threshold: "<< B<<" spv: "<< A<<" sv: "<< sigma_drift<< std::endl;
     bool no_A_var = (A < 1e-7);
@@ -647,7 +646,7 @@ double prdmswtn(double t_adj, double B, double mu_drift, double A,
              Rcpp::Rcerr << "prdmswtn (SPV) GSL_ERROR: " << gsl_strerror(status_cdf) << " (code " << status_cdf << ")\n"
                         << "  Inputs: t_adj=" << t_adj << ", B=" << B << ", A=" << A 
                         << ", mu_drift=" << mu_drift << ", sigma_drift=" << sigma_drift << std::endl;
-            return R_NaN; // Indicate failure
+            return 0.0; // Indicate failure
         }
 
 		// Normalization by A (width of the uniform distribution U(B, B+A))
@@ -678,7 +677,7 @@ double prdmswtn(double t_adj, double B, double mu_drift, double A,
 #'   Handles vectorization of parameters. */
 // [[Rcpp::export]]
 NumericVector dSWTNspv(NumericVector t, NumericVector v, NumericVector B, NumericVector A, NumericVector t0, NumericVector sv,
-                         double spv_abs_err = 1e-8, double spv_rel_err = 1e-8, int spv_max_eval = 10000) {
+                         double spv_abs_err = 1e-5, double spv_rel_err = 1e-5, int spv_max_eval = 10000) {
     int n = t.size();
     NumericVector pdf(n);
     for (int i = 0; i < n; ++i) {
@@ -735,7 +734,6 @@ NumericVector pSWTNspv(NumericVector t, NumericVector v, NumericVector B, Numeri
 NumericVector drdmswtn_c(NumericVector rts, NumericMatrix pars, LogicalVector idx, double min_ll, LogicalVector is_ok){
   //v = 0, B = 1, A = 2, t0 = 3, s = 4, sv=5
 	NumericVector out(sum(idx));
-
   int k = 0;
   for(int i = 0; i < rts.length(); i++){
     if(idx[i] == TRUE){
@@ -757,7 +755,6 @@ NumericVector drdmswtn_c(NumericVector rts, NumericMatrix pars, LogicalVector id
 NumericVector prdmswtn_c(NumericVector rts, NumericMatrix pars, LogicalVector idx, double min_ll, LogicalVector is_ok){
   //v = 0, B = 1, A = 2, t0 = 3, s = 4, sv=5
   NumericVector out(sum(idx));
-  //Rcout << "--- Debug: drdmswtn_c called." << std::endl;
   int k = 0;
   for(int i = 0; i < rts.length(); i++){
     if(idx[i] == TRUE){

@@ -19,6 +19,7 @@ log_likelihood_race <- function(pars,dadm,model,min_ll=log(1e-10))
   if (is.null(attr(pars,"ok"))){
     ok <- !logical(dim(pars)[1])
   } else ok <- attr(pars,"ok")
+
   lds <- numeric(dim(dadm)[1]) # log pdf (winner) or survivor (losers)
   lds[dadm$winner] <- log(model$dfun(rt=dadm$rt[dadm$winner],
                                      pars=pars[dadm$winner,]))

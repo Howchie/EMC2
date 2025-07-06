@@ -158,6 +158,7 @@ run_stages <- function(sampler, stage = "preburn", iter=0, verbose = TRUE, verbo
   if (!sampler$init) {
     sampler <- init(sampler, n_cores = n_cores)
   }
+  
   if (iter == 0) return(sampler)
   tune <- list(search_width = search_width)
   sampler <- run_stage(sampler, stage = stage,iter = iter, particles = particles,

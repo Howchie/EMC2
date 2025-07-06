@@ -121,10 +121,10 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
   # #' number of rows as the data or a list of functions specifying covariates for
   # #' each trial. Must have names specified in the design Fcovariates argument.
   check_bounds <- FALSE
-  if(is.null(LT)){if("LT"%in%colnames(data))LT=data$LT} else{LT <- attr(data,"LT"); if (is.null(LT)) LT <- 0}
-  if(is.null(UT)){if("UT"%in%colnames(data))UT=data$UT} else{UT <- attr(data,"UT"); if (is.null(UT)) UT <- Inf}
-  if(is.null(LC)){if("LC"%in%colnames(data))LC=data$LC} else{LC <- attr(data,"LC"); if (is.null(LC)) LC <- 0}
-  if(is.null(UC)){if("UC"%in%colnames(data))UC=data$UC} else{UC <- attr(data,"UC"); if (is.null(UC)) UC <- Inf}
+  if(is.null(LT)){if("LT"%in%colnames(data))LT=data$LT} else{LT <- attr(data,"LT")}; if (is.null(LT)) LT <- 0
+  if(is.null(UT)){if("UT"%in%colnames(data))UT=data$UT} else{UT <- attr(data,"UT")}; if (is.null(UT)) UT <- Inf
+  if(is.null(LC)){if("LC"%in%colnames(data))LC=data$LC} else{LC <- attr(data,"LC")}; if (is.null(LC)) LC <- 0
+  if(is.null(UC)){if("UC"%in%colnames(data))UC=data$UC} else{UC <- attr(data,"UC")}; if (is.null(UC)) UC <- Inf
 
   # if(!is.null(LCresponse)){LCresponse<-TRUE}
   # if(!is.null(UCresponse)){UCresponse<-TRUE}

@@ -1,11 +1,11 @@
 #### RACE RDMSWTN ----
 devtools::load_all()
-devtools::document()
-roxygen2::roxygenise()
-devtools::install(upgrade = "never")  # rebuild & install
+#devtools::document()
+#roxygen2::roxygenise()
+#devtools::install(upgrade = "never")  # rebuild & install
 ## then, in every run
-library(EMC2)          # now workers load the same code automatically
-library(tictoc)
+#library(EMC2)          # now workers load the same code automatically
+#library(tictoc)
 #source("test_likelihood_plotfuns.R")
 #Sys.setenv(PAR_DEBUG = "1")   # turn serial mode on
 #source("forceSerial_TEST.R")         # your breakpoints now trigger
@@ -74,7 +74,14 @@ s_vector[regexpr("^v.*FALSE",names(p_vector))==1] <- 1
 s_vector[which(names(s_vector)=="v")]<-1
 prior_pars=do_reverse_transform_variance(p_vector,s_vector,designRDMSWTN$model(),FALSE)
 priorRDMSWTN = prior(designRDMSWTN,mu_mean=prior_pars$pars,mu_sd=sqrt(prior_pars$var),type="single")
+designRDMSWTN <- design(
+  factors=list(subjects=1,S=c("left","right","leftpm","rightpm"),RACE=2:3),
+  Rlevels=c("left","right","pm"),
+  matchfun=matchfun,
+  model=RDMSWTN,constants=c(v_RACE3=0,s=log(1)),
+  formula=list(v~RACE*lM,B~1,t0~1,A~1,s~1,sv~1),
+)
 emc <- make_emc(dat,designRDMSWTN,type="single",prior=priorRDMSWTN)
-emc <- fit(emc,cores_for_chains = 1,fileName = 'samples.RData')
+emc <- fit(emc,cores_for_chains = 3,fileName = 'samples.RData')
 #recovery(emc,p_vector)
 plot_pars(emc)
