@@ -1,3 +1,8 @@
-PKG_CPPFLAGS = $(RCPP_ARMA_CXXFLAGS)
+PKG_CPPFLAGS = $(RCPP_ARMA_CXXFLAGS) -Isrc/approxcdf
 PKG_LIBS = $(LAPACK_LIBS) $(BLAS_LIBS) $(FLIBS) -lgsl -lgslcblas
+PKG_SOURCES += $(wildcard /approxcdf/*.cpp) $(wildcard /*.cpp)
 //CXX_STD = C++11
+APPROXCDF_LIB = $(shell "$(R_HOME)/bin/Rscript" -e "cat(system.file('libs', package='approxcdf'))")
+PKG_CPPFLAGS = -I$(srcdir)/approxcdf  $(RCPP_ARMA_CXXFLAGS)
+PKG_LIBS += $(LAPACK_LIBS) $(BLAS_LIBS) $(FLIBS) -lgsl -lgslcblas $(APPROXCDF_LIB)/approxcdf.dll
+CXX_STD = CXX17            # or CXX14 if you prefer/need

@@ -12,6 +12,7 @@
 #include "utility_functions.h"
 #include "truncated_normal.hpp"
 #include <string>
+
 using namespace Rcpp;
 
 const double L_PI = std::log(M_PI);
@@ -284,25 +285,36 @@ double pswtn(double t_adj, double alpha, double mu_drift, double sigma_drift) {
 	// first Φ2
 	double h1 =  (mu_drift*t_adj - alpha)/denom;
 	double k1 =  mu_drift / sigma_drift;
-	NumericVector upper1 = NumericVector::create(h1, k1);
+	/*NumericVector upper1 = NumericVector::create(h1, k1);
     NumericMatrix corr1(2, 2);
     corr1(0, 0) = 1.0; corr1(0, 1) = rho;
     corr1(1, 0) = rho; corr1(1, 1) = 1.0;
     NumericVector term1v = pmvnorm_cpp(upper1, corr1);
-	double term1 = term1v[0];
+	double term1 = term1v[0];*/
 	//double term1 = pbivnorm_fast(h1,k1,rho);
-	
+	double term1;
+    if (std::fabs(rho) < 0.97) {
+        term1 = norm_cdf_2d_vfast(h1, k1, rho);
+    } else {
+        term1 = norm_cdf_2d_fast(h1, k1, rho);
+    }
 	// second Φ2 (reflected drift)
 	double mu_p = mu_drift + 2*alpha*v;
 	double h2 = (-mu_p*t_adj - alpha)/denom;
 	double k2 = mu_p/sigma_drift;
-	NumericVector upper2 = NumericVector::create(h2, k2);
+	/*NumericVector upper2 = NumericVector::create(h2, k2);
     NumericMatrix corr2(2, 2);
     corr2(0, 0) = 1.0; corr2(0, 1) = -rho;
     corr2(1, 0) = -rho; corr2(1, 1) = 1.0;
     NumericVector term2v = pmvnorm_cpp(upper2, corr2);
-    double term2 = term2v[0];
+    double term2 = term2v[0];*/
 	//double term2 = pbivnorm_fast(h2,k2,-rho);
+	double term2;
+    if (std::fabs(rho) < 0.97) {
+        term2 = norm_cdf_2d_vfast(h2, k2, -rho);
+    } else {
+        term2 = norm_cdf_2d_fast(h2, k2, -rho);
+    }
 	double cdf_val  = (term1 + std::exp(2*alpha*mu_drift + 2*std::pow(alpha,2)*v)*term2) / prob_d_gt_0;
 	
 	if (std::isnan(cdf_val) || cdf_val < 0.0) return 0.0;
@@ -658,6 +670,7 @@ double rswtn(double alpha, double mu_drift, double sigma_drift, double theta) {
 }
 */
 
+/*
 // START OF SWTN IMPLEMENTATION
 // Helper struct for CDF integration parameters
 struct pswtn_Params {
@@ -931,6 +944,6 @@ double prdmswtn_numeric_integral(double t_adj, double B, double mu_drift, double
         return integral_val_cdf / A;
     }
 }
-
+*/
 
 #endif

@@ -2,7 +2,7 @@
 devtools::load_all()
 devtools::document()
 roxygen2::roxygenise()
-devtools::install(upgrade = "never")  # rebuild & install
+devtools::install(upgrade = "never"remotes)  # rebuild & install
 ## then, in every run
 library(EMC2)          # now workers load the same code automatically
 #library(tictoc)

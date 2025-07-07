@@ -807,6 +807,45 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// pbvn_tvpack
+double pbvn_tvpack(double h, double k, double rho);
+RcppExport SEXP _EMC2_pbvn_tvpack(SEXP hSEXP, SEXP kSEXP, SEXP rhoSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< double >::type h(hSEXP);
+    Rcpp::traits::input_parameter< double >::type k(kSEXP);
+    Rcpp::traits::input_parameter< double >::type rho(rhoSEXP);
+    rcpp_result_gen = Rcpp::wrap(pbvn_tvpack(h, k, rho));
+    return rcpp_result_gen;
+END_RCPP
+}
+// pbvn_tsay
+double pbvn_tsay(double h, double k, double rho);
+RcppExport SEXP _EMC2_pbvn_tsay(SEXP hSEXP, SEXP kSEXP, SEXP rhoSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< double >::type h(hSEXP);
+    Rcpp::traits::input_parameter< double >::type k(kSEXP);
+    Rcpp::traits::input_parameter< double >::type rho(rhoSEXP);
+    rcpp_result_gen = Rcpp::wrap(pbvn_tsay(h, k, rho));
+    return rcpp_result_gen;
+END_RCPP
+}
+// pbvn_drezner
+double pbvn_drezner(double h, double k, double rho);
+RcppExport SEXP _EMC2_pbvn_drezner(SEXP hSEXP, SEXP kSEXP, SEXP rhoSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< double >::type h(hSEXP);
+    Rcpp::traits::input_parameter< double >::type k(kSEXP);
+    Rcpp::traits::input_parameter< double >::type rho(rhoSEXP);
+    rcpp_result_gen = Rcpp::wrap(pbvn_drezner(h, k, rho));
+    return rcpp_result_gen;
+END_RCPP
+}
 // c_add_charvectors
 CharacterVector c_add_charvectors(CharacterVector x, CharacterVector y);
 RcppExport SEXP _EMC2_c_add_charvectors(SEXP xSEXP, SEXP ySEXP) {
@@ -897,6 +936,9 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_truncated_normal_a_pdf", (DL_FUNC) &_EMC2_truncated_normal_a_pdf, 4},
     {"_EMC2_truncated_normal_a_sample", (DL_FUNC) &_EMC2_truncated_normal_a_sample, 4},
     {"_EMC2_truncated_normal_a_variance", (DL_FUNC) &_EMC2_truncated_normal_a_variance, 3},
+    {"_EMC2_pbvn_tvpack", (DL_FUNC) &_EMC2_pbvn_tvpack, 3},
+    {"_EMC2_pbvn_tsay", (DL_FUNC) &_EMC2_pbvn_tsay, 3},
+    {"_EMC2_pbvn_drezner", (DL_FUNC) &_EMC2_pbvn_drezner, 3},
     {"_EMC2_c_add_charvectors", (DL_FUNC) &_EMC2_c_add_charvectors, 2},
     {"_EMC2_pmvnorm_cpp", (DL_FUNC) &_EMC2_pmvnorm_cpp, 2},
     {"_EMC2_pbivnorm_fast", (DL_FUNC) &_EMC2_pbivnorm_fast, 3},

@@ -205,6 +205,18 @@ truncated_normal_a_variance <- function(mu, sigma, a) {
     .Call(`_EMC2_truncated_normal_a_variance`, mu, sigma, a)
 }
 
+pbvn_tvpack <- function(h, k, rho) {
+    .Call(`_EMC2_pbvn_tvpack`, h, k, rho)
+}
+
+pbvn_tsay <- function(h, k, rho) {
+    .Call(`_EMC2_pbvn_tsay`, h, k, rho)
+}
+
+pbvn_drezner <- function(h, k, rho) {
+    .Call(`_EMC2_pbvn_drezner`, h, k, rho)
+}
+
 c_add_charvectors <- function(x, y) {
     .Call(`_EMC2_c_add_charvectors`, x, y)
 }

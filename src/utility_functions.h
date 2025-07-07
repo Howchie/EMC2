@@ -2,13 +2,28 @@
 #define utility_h
 #pragma once
 #include <Rcpp.h>
-#include <unordered_set>
+#include "approxcdf.h"
 #include <vector>
 #include <functional>
 #include <cmath>
 #include <limits>
 //#include <boost/math/special_functions/erf.hpp>
 using namespace Rcpp;
+
+// [[Rcpp::export]]
+double pbvn_tvpack(double h, double k, double rho) {
+    return norm_cdf_2d(h, k, rho);
+}
+
+// [[Rcpp::export]]
+double pbvn_tsay(double h, double k, double rho) {
+    return norm_cdf_2d_vfast(h, k, rho);
+}
+
+// [[Rcpp::export]]
+double pbvn_drezner(double h, double k, double rho) {
+    return norm_cdf_2d_fast(h, k, rho);
+}
 
 LogicalVector contains(CharacterVector sv, std::string txt) {
   LogicalVector res(sv.size());
@@ -585,58 +600,51 @@ inline double norm_cdf(double z) noexcept
 // Calculates P(X < h, Y < k) for a bivariate normal distribution with
 // mean (0,0), variance (1,1), and correlation rho.
 //[[Rcpp::export]]
-double pbivnorm_fast(double h, double k, double rho) {
-    // Handle trivial cases
-    if (rho == 0.0) {
-        return R::pnorm(h, 0.0, 1.0, true, false) * R::pnorm(k, 0.0, 1.0, true, false);
-    }
-    if (rho == 1.0) {
-        return R::pnorm(std::min(h, k), 0.0, 1.0, true, false);
-    }
-    if (rho == -1.0) {
-        return std::max(0.0, R::pnorm(h, 0.0, 1.0, true, false) + R::pnorm(k, 0.0, 1.0, true, false) - 1.0);
-    }
-    
-    // Symmetries to simplify the integration range
-    if (rho < 0) {
-        return R::pnorm(h, 0.0, 1.0, true, false) - pbivnorm_fast(h, -k, -rho);
-    }
-    if (h + k < 0) {
-        return pbivnorm_fast(-h, -k, rho);
-    }
-    
-    // Gauss-Legendre quadrature nodes and weights for [-1, 1]
-    // Using 10 points for high accuracy. 6 is often sufficient, but 10 is safer.
-    const int N_GAUSS = 10;
-    const double x_gauss[] = {
-        -0.973906528517172, -0.865063366688985, -0.679409568299024, -0.433395394129247, -0.148874338981631,
-         0.148874338981631,  0.433395394129247,  0.679409568299024,  0.865063366688985,  0.973906528517172
-    };
-    const double w_gauss[] = {
-        0.066671344308688, 0.149451349150581, 0.219086362515982, 0.269266719309996, 0.295524224714753,
-        0.295524224714753, 0.269266719309996, 0.219086362515982, 0.149451349150581, 0.066671344308688
-    };
+double pbivnorm_fast(double h, double k, double rho)
+{
+    const double eps = 1e-12;
+    if (std::fabs(rho) < eps)                      // rho ≈ 0
+        return R::pnorm(h,0,1,1,0)*R::pnorm(k,0,1,1,0);
+    if (rho >  1.0-eps)                            // rho →  1
+        return R::pnorm(std::min(h,k),0,1,1,0);
+    if (rho < -1.0+eps)                            // rho → -1
+        return std::max(0.0,
+               R::pnorm(h,0,1,1,0)+R::pnorm(k,0,1,1,0)-1.0);
 
-    double h_sq = h * h;
-    double k_sq = k * k;
-    double integral_sum = 0.0;
-    
-    for (int i = 0; i < N_GAUSS; ++i) {
-        // Transform node z from [-1, 1] to integration variable r in [0, rho]
-        double r = 0.5 * rho * (1.0 + x_gauss[i]);
-        double r_sq = r * r;
-        double denom = 2.0 * (1.0 - r_sq);
-        double num = h_sq - 2.0 * h * k * r + k_sq;
-        
-        integral_sum += w_gauss[i] * std::exp(-num / denom);
-    }
-    
-    // The integral result needs to be scaled by rho/(4*pi)
-    double result = R::pnorm(h, 0.0, 1.0, true, false) * R::pnorm(k, 0.0, 1.0, true, false);
-    result += (rho / (4.0 * M_PI)) * integral_sum;
+    if (rho < 0.0)
+        return R::pnorm(h,0,1,1,0) -
+               pbivnorm_fast(h,-k,-rho);
 
-    return result;
+    if (h + k < 0.0)
+        return pbivnorm_fast(-h,-k,rho);
+
+    /* positive rho, h+k ≥ 0 */
+    constexpr int N = 10;
+    constexpr double x[N] = { -0.973906528517172, -0.865063366688985,
+        -0.679409568299024, -0.433395394129247, -0.148874338981631,
+         0.148874338981631,  0.433395394129247,  0.679409568299024,
+         0.865063366688985,  0.973906528517172 };
+    constexpr double w[N] = { 0.066671344308688, 0.149451349150581,
+        0.219086362515982, 0.269266719309996, 0.295524224714753,
+        0.295524224714753, 0.269266719309996, 0.219086362515982,
+        0.149451349150581, 0.066671344308688 };
+
+    const double h2 = h*h, k2 = k*k;
+    double sum = 0.0;
+
+    for (int i = 0; i < N; ++i) {
+        const double r  = 0.5 * rho * (1.0 + x[i]);   // map [-1,1] → [0,ρ]
+        const double r2 = r*r;
+        const double one_minus_r2 = 1.0 - r2;
+        const double exponent =
+            -(h2 - 2.0*r*h*k + k2) / (2.0*one_minus_r2);
+        sum += w[i] * std::exp(exponent) / std::sqrt(one_minus_r2);
+    }
+
+    const double integral = (rho / (4.0 * M_PI)) * sum;
+    return R::pnorm(h,0,1,1,0)*R::pnorm(k,0,1,1,0) + integral;
 }
+
 
 /*
 inline void  recycle_vec(NumericVector& v, int n,
