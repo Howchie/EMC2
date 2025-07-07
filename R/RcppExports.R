@@ -213,3 +213,7 @@ pmvnorm_cpp <- function(upper, corr) {
     .Call(`_EMC2_pmvnorm_cpp`, upper, corr)
 }
 
+pbivnorm_fast <- function(h, k, rho) {
+    .Call(`_EMC2_pbivnorm_fast`, h, k, rho)
+}
+

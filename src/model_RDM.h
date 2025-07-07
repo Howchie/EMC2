@@ -290,6 +290,7 @@ double pswtn(double t_adj, double alpha, double mu_drift, double sigma_drift) {
     corr1(1, 0) = rho; corr1(1, 1) = 1.0;
     NumericVector term1v = pmvnorm_cpp(upper1, corr1);
 	double term1 = term1v[0];
+	//double term1 = pbivnorm_fast(h1,k1,rho);
 	
 	// second Φ2 (reflected drift)
 	double mu_p = mu_drift + 2*alpha*v;
@@ -301,6 +302,7 @@ double pswtn(double t_adj, double alpha, double mu_drift, double sigma_drift) {
     corr2(1, 0) = -rho; corr2(1, 1) = 1.0;
     NumericVector term2v = pmvnorm_cpp(upper2, corr2);
     double term2 = term2v[0];
+	//double term2 = pbivnorm_fast(h2,k2,-rho);
 	double cdf_val  = (term1 + std::exp(2*alpha*mu_drift + 2*std::pow(alpha,2)*v)*term2) / prob_d_gt_0;
 	
 	if (std::isnan(cdf_val) || cdf_val < 0.0) return 0.0;
@@ -654,6 +656,7 @@ double rswtn(double alpha, double mu_drift, double sigma_drift, double theta) {
 
     return rt_sample + theta;
 }
+*/
 
 // START OF SWTN IMPLEMENTATION
 // Helper struct for CDF integration parameters
@@ -928,6 +931,6 @@ double prdmswtn_numeric_integral(double t_adj, double B, double mu_drift, double
         return integral_val_cdf / A;
     }
 }
-*/
+
 
 #endif
