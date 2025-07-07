@@ -499,8 +499,8 @@ NumericVector drdmswtn_c(NumericVector rts, NumericMatrix pars, LogicalVector id
       if(NumericVector::is_na(pars(i,0))){ // for RACE
         out[k] = 0;
       } else if((rts[i] - pars(i,3) > 0) && (is_ok[i] == TRUE)){
-		double sv = pars(i,0)*pars(i,5); // convert coefficient of variation to standard deviation
-        out[k] = drdmswtn(rts[i] - pars(i,3), pars(i,1)/pars(i,4), pars(i,0)/pars(i,4), pars(i,2)/pars(i,4), sv);
+		//double sv = pars(i,0)*pars(i,5); // convert coefficient of variation to standard deviation
+        out[k] = drdmswtn(rts[i] - pars(i,3), pars(i,1)/pars(i,4), pars(i,0)/pars(i,4), pars(i,2)/pars(i,4), pars(i,5));
       } else{
         out[k] = min_ll;
       }
@@ -521,8 +521,8 @@ NumericVector prdmswtn_c(NumericVector rts, NumericMatrix pars, LogicalVector id
       if(NumericVector::is_na(pars(i,0))){ // for RACE
         out[k] = 0;
       } else if((rts[i] - pars(i,3) > 0) && (is_ok[i] == TRUE)){
-		double sv = pars(i,0)*pars(i,5); // convert coefficient of variation to standard deviation
-        out[k] = prdmswtn(rts[i] - pars(i,3), pars(i,1)/pars(i,4), pars(i,0)/pars(i,4), pars(i,2)/pars(i,4), sv);
+		//double sv = pars(i,0)*pars(i,5); // convert coefficient of variation to standard deviation
+        out[k] = prdmswtn(rts[i] - pars(i,3), pars(i,1)/pars(i,4), pars(i,0)/pars(i,4), pars(i,2)/pars(i,4), pars(i,5));
       } else{
         out[k] = min_ll;
       }
@@ -864,7 +864,7 @@ double drdmswtn_numeric_integral(double t_adj, double B, double mu_drift, double
 }
 
 
-OLD NUMERIC INTEGRATION STUFF
+// OLD NUMERIC INTEGRATION STUFF
 // Top-level CDF for RDM_SWTN model
 // [[Rcpp::export]]
 double prdmswtn_numeric_integral(double t_adj, double B, double mu_drift, double A,

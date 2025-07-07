@@ -270,13 +270,13 @@ RDMSWTN <- function(){
   list(
     type="RACE",
     c_name = "RDMSWTN",
-    p_types=c("v" = log(1),"B" = log(1),"A" = log(0),"t0" = log(0),"s" = log(1),"cv" = log(0)),
-    transform=list(func=c(v = "exp", B = "exp", A = "exp",t0 = "exp", s = "exp", cv="exp")),
-    bound=list(minmax=cbind(v=c(1e-3,Inf), B=c(0,Inf), A=c(1e-4,Inf),t0=c(0.05,Inf), s=c(0,Inf), cv=c(0,Inf)),
-               exception=c(A=0, v=0, cv=0)),
+    p_types=c("v" = log(1),"B" = log(1),"A" = log(0),"t0" = log(0),"s" = log(1),"sv" = log(0)),
+    transform=list(func=c(v = "exp", B = "exp", A = "exp",t0 = "exp", s = "exp", sv="exp")),
+    bound=list(minmax=cbind(v=c(1e-3,Inf), B=c(0,Inf), A=c(1e-4,Inf),t0=c(0.05,Inf), s=c(0,Inf), sv=c(0,Inf)),
+               exception=c(A=0, v=0, sv=0)),
     # Trial dependent parameter transform
     Ttransform = function(pars,dadm) {
-      pars <- cbind(pars,b=pars[,"B"] + pars[,"A"],sv=pars[,"cv"]*pars[,"v"])
+      pars <- cbind(pars,b=pars[,"B"] + pars[,"A"])#,sv=pars[,"cv"]*pars[,"v"])
       pars
     },
     # Random function for racing accumulators
