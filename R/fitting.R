@@ -703,10 +703,6 @@ make_emc <- function(data,design,model=NULL,
     d$subjects <- factor(d$subjects)
     d <- d[order(d$subjects),]
     d <- add_trials(d)
-    attr(d,"LC") <- LC
-    attr(d,"UC") <- UC
-    attr(d,"LT") <- LT
-    attr(d,"UT") <- UT
     snams <- d$subjects
     if(length(LT)==1) {LT <- setNames(rep(LT,length(snams)), snams);d$LT <- LT[as.character(d$subjects)]}
     else{d$LT=LT}
@@ -815,10 +811,6 @@ make_emc <- function(data,design,model=NULL,
   # Only for joint models we need to keep a list of functions
   if(length(out$model) == 1) out$model <- out$model[[1]]
   out <- check_duplicate_designs(out)
-  attr(out$data,"LC") <- LC
-  attr(out$data,"UC") <- UC
-  attr(out$data,"LT") <- LT
-  attr(out$data,"UT") <- UT
   
   # replicate chains
   dadm_lists <- rep(list(out),n_chains)

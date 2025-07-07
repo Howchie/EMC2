@@ -538,6 +538,29 @@ std::vector<PreTransformSpec> make_pretransform_specs(NumericVector p_vector, Li
   }
   return specs;
 }
+static const Rcpp::Environment mvtnorm = Rcpp::Environment::namespace_env("mvtnorm");
+// Make pmvnorm available from R package, used for RDMSWTN
+// [[Rcpp::export]]
+NumericVector pmvnorm_cpp(NumericVector upper, NumericMatrix corr) {
+  Function pmvnorm = mvtnorm["pmvnorm"];
+  
+  int n = upper.length();
+  NumericVector lower(n, R_NegInf);      // Lower: -Inf for each dimension
+  NumericVector mean(n, 0.0);            // Mean: 0 for each dimension
+
+  NumericVector res = pmvnorm(_["lower"] = lower,
+                              _["upper"] = upper,
+                              _["mean"] = mean,
+                              _["corr"] = corr);
+  return res;
+}
+// 1-liner that loads the namespace if necessary and returns it
+static const Rcpp::Environment statmodNS = Rcpp::Environment::namespace_env("statmod");
+
+// Function object lives for the life-time of the DLL
+static const Rcpp::Function gauss_quad = statmodNS["gauss.quad"];
+
+static Rcpp::List gl = gauss_quad(20, "legendre");
 
 /*
 inline void  recycle_vec(NumericVector& v, int n,

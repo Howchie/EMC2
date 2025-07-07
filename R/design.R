@@ -660,10 +660,6 @@ design_model <- function(data,design,model=NULL,
   out <- lapply(design$Flist,make_dm,da=da,Fcovariates=design$Fcovariates, add_da = add_da, all_cells_dm = all_cells_dm)
   if (!is.null(rt_resolution) & !is.null(da$rt)) da$rt <- round(da$rt/rt_resolution)*rt_resolution
   if (compress){
-    attr(da,"LC") <- LC
-    attr(da,"UC") <- UC
-    attr(da,"LT") <- LT
-    attr(da,"UT") <- UT
     dadm <- compress_dadm(da,designs=out, Fcov=design$Fcovariates,Ffun=names(design$Ffunctions))
     # Change expansion names
     # attr(dadm,"expand_all") <- attr(dadm,"expand")

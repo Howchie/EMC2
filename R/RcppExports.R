@@ -49,36 +49,36 @@ prdm_c <- function(rts, pars, idx, min_ll, is_ok) {
     .Call(`_EMC2_prdm_c`, rts, pars, idx, min_ll, is_ok)
 }
 
-dWald <- function(t, v, B, A, t0) {
-    .Call(`_EMC2_dWald`, t, v, B, A, t0)
+dRDM_c <- function(t, v, B, A, t0) {
+    .Call(`_EMC2_dRDM_c`, t, v, B, A, t0)
 }
 
-pWald <- function(t, v, B, A, t0) {
-    .Call(`_EMC2_pWald`, t, v, B, A, t0)
+pRDM_c <- function(t, v, B, A, t0) {
+    .Call(`_EMC2_pRDM_c`, t, v, B, A, t0)
 }
 
 dswtn <- function(t_adj, alpha, mu_drift, sigma_drift) {
     .Call(`_EMC2_dswtn`, t_adj, alpha, mu_drift, sigma_drift)
 }
 
-pswtn <- function(t_adj, alpha, mu_drift, sigma_drift, abs_err = 1e-5, rel_err = 1e-5, max_eval = 10000L) {
-    .Call(`_EMC2_pswtn`, t_adj, alpha, mu_drift, sigma_drift, abs_err, rel_err, max_eval)
+pswtn <- function(t_adj, alpha, mu_drift, sigma_drift) {
+    .Call(`_EMC2_pswtn`, t_adj, alpha, mu_drift, sigma_drift)
 }
 
-drdmswtn <- function(t_adj, B, mu_drift, A, sigma_drift, spv_abs_err = 1e-5, spv_rel_err = 1e-5, spv_max_eval = 10000L) {
-    .Call(`_EMC2_drdmswtn`, t_adj, B, mu_drift, A, sigma_drift, spv_abs_err, spv_rel_err, spv_max_eval)
+drdmswtn <- function(t_adj, B, mu_drift, A, sigma_drift, n_gauss_nodes = 20L) {
+    .Call(`_EMC2_drdmswtn`, t_adj, B, mu_drift, A, sigma_drift, n_gauss_nodes)
 }
 
-prdmswtn <- function(t_adj, B, mu_drift, A, sigma_drift, spv_abs_err = 1e-5, spv_rel_err = 1e-5, spv_max_eval = 10000L) {
-    .Call(`_EMC2_prdmswtn`, t_adj, B, mu_drift, A, sigma_drift, spv_abs_err, spv_rel_err, spv_max_eval)
+prdmswtn <- function(t_adj, B, mu_drift, A, sigma_drift, n_gauss_nodes = 20L) {
+    .Call(`_EMC2_prdmswtn`, t_adj, B, mu_drift, A, sigma_drift, n_gauss_nodes)
 }
 
-dSWTNspv <- function(t, v, B, A, t0, sv, spv_abs_err = 1e-5, spv_rel_err = 1e-5, spv_max_eval = 10000L) {
-    .Call(`_EMC2_dSWTNspv`, t, v, B, A, t0, sv, spv_abs_err, spv_rel_err, spv_max_eval)
+dSWTNspv <- function(t, v, B, A, t0, sv) {
+    .Call(`_EMC2_dSWTNspv`, t, v, B, A, t0, sv)
 }
 
-pSWTNspv <- function(t, v, B, A, t0, sv, spv_abs_err = 1e-8, spv_rel_err = 1e-8, spv_max_eval = 10000L) {
-    .Call(`_EMC2_pSWTNspv`, t, v, B, A, t0, sv, spv_abs_err, spv_rel_err, spv_max_eval)
+pSWTNspv <- function(t, v, B, A, t0, sv) {
+    .Call(`_EMC2_pSWTNspv`, t, v, B, A, t0, sv)
 }
 
 drdmswtn_c <- function(rts, pars, idx, min_ll, is_ok) {
@@ -207,5 +207,9 @@ truncated_normal_a_variance <- function(mu, sigma, a) {
 
 c_add_charvectors <- function(x, y) {
     .Call(`_EMC2_c_add_charvectors`, x, y)
+}
+
+pmvnorm_cpp <- function(upper, corr) {
+    .Call(`_EMC2_pmvnorm_cpp`, upper, corr)
 }
 

@@ -27,13 +27,8 @@ make_missing <- function(data,LT=0,UT=Inf,LC=0,UC=Inf,
   pick[is.na(pick)] <- TRUE
   out <- censor(data[pick,],L=LC,U=UC,Lr=LCresponse,Ur=UCresponse,Ld=LCdirection,Ud=UCdirection)
   attributes(out)[names(custom_attrs)] <- custom_attrs
-  # Preserve bounds as attributes
-  attr(out,"LC") <- LC
-  attr(out,"UC") <- UC
-  attr(out,"LT") <- LT
-  attr(out,"UT") <- UT
   
-  # Also store bounds as explicit columns to avoid attribute loss
+  # Store bounds as explicit columns to avoid attribute loss
   snams <- out$subjects
   if(length(LT)==1) {LT <- setNames(rep(LT,length(snams)), snams);out$LT <- LT[as.character(out$subjects)]}
   else{out$LT=LT}
@@ -274,13 +269,10 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
     dropNames <- c(dropNames,names(design$Ffunctions))
   if(!is.null(data$lR)) data <- data[data$lR == levels(data$lR)[1],]
   std <- c("names", "row.names", "class", "dim")
-  custom_attrs <- attributes(data)[setdiff(names(attributes(data)), std)]
   data <- data[, !(names(data) %in% dropNames)]
-  attributes(data)[names(custom_attrs)] <- custom_attrs
   for (i in dimnames(Rrt)[[2]]) data[[i]] <- Rrt[,i]
   data <- make_missing(data[,names(data)!="winner"],LT,UT,LC,UC,
     LCresponse,UCresponse,LCdirection,UCdirection)
-  #attributes(data)[names(custom_attrs)] <- custom_attrs
   if ( !is.null(pc) ) {
     if (!any(is.infinite(data$rt)) & any(is.na(data$R)))
       stop("Cannot have contamination and censoring with no direction and response")

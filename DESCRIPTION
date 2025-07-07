@@ -64,9 +64,11 @@ Imports:
     psych,
     utils,
     lpSolve,
-    WienR
+    WienR,
+	truncnorm,
+	statmod
 LinkingTo: 
-    Rcpp, RcppArmadillo
+    Rcpp, RcppArmadillo,mvtnorm
 Depends: 
     R (>= 3.5.0)
 LazyData: true
