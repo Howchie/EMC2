@@ -6,24 +6,8 @@
 #include <memory>
 #include <cassert>
 
-/* For marking functions to export */
-#if defined(FOR_R) || defined(FOR_PYTHON)
-    #define APPROXCDF_EXPORTED 
-#else
-    #if defined(_WIN32)
-        #ifdef APPROXCDF_COMPILE_TIME
-            #define APPROXCDF_EXPORTED __declspec(dllexport)
-        #else
-            #define APPROXCDF_EXPORTED __declspec(dllimport)
-        #endif
-    #else
-        #if defined(EXPLICITLTY_EXPORT_SYMBOLS) && defined(APPROXCDF_COMPILE_TIME)
-            #define APPROXCDF_EXPORTED [[gnu::visibility("default")]]
-        #else
-            #define APPROXCDF_EXPORTED 
-        #endif
-    #endif
-#endif
+/* For marking functions to export - simplified for direct compilation into the package */
+#define APPROXCDF_EXPORTED 
 
 /* 'restrict' qualifier from C, if supported */
 #if defined(__GNUG__) || defined(__GNUC__) || defined(_MSC_VER) || defined(__clang__) || \

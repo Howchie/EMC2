@@ -11,6 +11,45 @@ Rcpp::Rostream<true>&  Rcpp::Rcout = Rcpp::Rcpp_cout_get();
 Rcpp::Rostream<false>& Rcpp::Rcerr = Rcpp::Rcpp_cerr_get();
 #endif
 
+// pbvn_tsay
+double pbvn_tsay(double h, double k, double rho);
+RcppExport SEXP _EMC2_pbvn_tsay(SEXP hSEXP, SEXP kSEXP, SEXP rhoSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< double >::type h(hSEXP);
+    Rcpp::traits::input_parameter< double >::type k(kSEXP);
+    Rcpp::traits::input_parameter< double >::type rho(rhoSEXP);
+    rcpp_result_gen = Rcpp::wrap(pbvn_tsay(h, k, rho));
+    return rcpp_result_gen;
+END_RCPP
+}
+// pbvn_tvpack
+double pbvn_tvpack(double h, double k, double rho);
+RcppExport SEXP _EMC2_pbvn_tvpack(SEXP hSEXP, SEXP kSEXP, SEXP rhoSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< double >::type h(hSEXP);
+    Rcpp::traits::input_parameter< double >::type k(kSEXP);
+    Rcpp::traits::input_parameter< double >::type rho(rhoSEXP);
+    rcpp_result_gen = Rcpp::wrap(pbvn_tvpack(h, k, rho));
+    return rcpp_result_gen;
+END_RCPP
+}
+// pbvn_drezner
+double pbvn_drezner(double h, double k, double rho);
+RcppExport SEXP _EMC2_pbvn_drezner(SEXP hSEXP, SEXP kSEXP, SEXP rhoSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< double >::type h(hSEXP);
+    Rcpp::traits::input_parameter< double >::type k(kSEXP);
+    Rcpp::traits::input_parameter< double >::type rho(rhoSEXP);
+    rcpp_result_gen = Rcpp::wrap(pbvn_drezner(h, k, rho));
+    return rcpp_result_gen;
+END_RCPP
+}
 // sp_new
 Rcpp::List sp_new(const int iter, const arma::cube& lambda_varimax, const int q, const int p, const int dim_all_c, const arma::mat& all_c, const arma::mat& lambda_hat, const arma::uvec& st, arma::mat cost_matrix, arma::mat perm);
 RcppExport SEXP _EMC2_sp_new(SEXP iterSEXP, SEXP lambda_varimaxSEXP, SEXP qSEXP, SEXP pSEXP, SEXP dim_all_cSEXP, SEXP all_cSEXP, SEXP lambda_hatSEXP, SEXP stSEXP, SEXP cost_matrixSEXP, SEXP permSEXP) {
@@ -807,45 +846,6 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
-// pbvn_tvpack
-double pbvn_tvpack(double h, double k, double rho);
-RcppExport SEXP _EMC2_pbvn_tvpack(SEXP hSEXP, SEXP kSEXP, SEXP rhoSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< double >::type h(hSEXP);
-    Rcpp::traits::input_parameter< double >::type k(kSEXP);
-    Rcpp::traits::input_parameter< double >::type rho(rhoSEXP);
-    rcpp_result_gen = Rcpp::wrap(pbvn_tvpack(h, k, rho));
-    return rcpp_result_gen;
-END_RCPP
-}
-// pbvn_tsay
-double pbvn_tsay(double h, double k, double rho);
-RcppExport SEXP _EMC2_pbvn_tsay(SEXP hSEXP, SEXP kSEXP, SEXP rhoSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< double >::type h(hSEXP);
-    Rcpp::traits::input_parameter< double >::type k(kSEXP);
-    Rcpp::traits::input_parameter< double >::type rho(rhoSEXP);
-    rcpp_result_gen = Rcpp::wrap(pbvn_tsay(h, k, rho));
-    return rcpp_result_gen;
-END_RCPP
-}
-// pbvn_drezner
-double pbvn_drezner(double h, double k, double rho);
-RcppExport SEXP _EMC2_pbvn_drezner(SEXP hSEXP, SEXP kSEXP, SEXP rhoSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< double >::type h(hSEXP);
-    Rcpp::traits::input_parameter< double >::type k(kSEXP);
-    Rcpp::traits::input_parameter< double >::type rho(rhoSEXP);
-    rcpp_result_gen = Rcpp::wrap(pbvn_drezner(h, k, rho));
-    return rcpp_result_gen;
-END_RCPP
-}
 // c_add_charvectors
 CharacterVector c_add_charvectors(CharacterVector x, CharacterVector y);
 RcppExport SEXP _EMC2_c_add_charvectors(SEXP xSEXP, SEXP ySEXP) {
@@ -870,21 +870,11 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
-// pbivnorm_fast
-double pbivnorm_fast(double h, double k, double rho);
-RcppExport SEXP _EMC2_pbivnorm_fast(SEXP hSEXP, SEXP kSEXP, SEXP rhoSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< double >::type h(hSEXP);
-    Rcpp::traits::input_parameter< double >::type k(kSEXP);
-    Rcpp::traits::input_parameter< double >::type rho(rhoSEXP);
-    rcpp_result_gen = Rcpp::wrap(pbivnorm_fast(h, k, rho));
-    return rcpp_result_gen;
-END_RCPP
-}
 
 static const R_CallMethodDef CallEntries[] = {
+    {"_EMC2_pbvn_tsay", (DL_FUNC) &_EMC2_pbvn_tsay, 3},
+    {"_EMC2_pbvn_tvpack", (DL_FUNC) &_EMC2_pbvn_tvpack, 3},
+    {"_EMC2_pbvn_drezner", (DL_FUNC) &_EMC2_pbvn_drezner, 3},
     {"_EMC2_sp_new", (DL_FUNC) &_EMC2_sp_new, 10},
     {"_EMC2_calculate_subject_means", (DL_FUNC) &_EMC2_calculate_subject_means, 4},
     {"_EMC2_dlba", (DL_FUNC) &_EMC2_dlba, 6},
@@ -936,12 +926,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_truncated_normal_a_pdf", (DL_FUNC) &_EMC2_truncated_normal_a_pdf, 4},
     {"_EMC2_truncated_normal_a_sample", (DL_FUNC) &_EMC2_truncated_normal_a_sample, 4},
     {"_EMC2_truncated_normal_a_variance", (DL_FUNC) &_EMC2_truncated_normal_a_variance, 3},
-    {"_EMC2_pbvn_tvpack", (DL_FUNC) &_EMC2_pbvn_tvpack, 3},
-    {"_EMC2_pbvn_tsay", (DL_FUNC) &_EMC2_pbvn_tsay, 3},
-    {"_EMC2_pbvn_drezner", (DL_FUNC) &_EMC2_pbvn_drezner, 3},
     {"_EMC2_c_add_charvectors", (DL_FUNC) &_EMC2_c_add_charvectors, 2},
     {"_EMC2_pmvnorm_cpp", (DL_FUNC) &_EMC2_pmvnorm_cpp, 2},
-    {"_EMC2_pbivnorm_fast", (DL_FUNC) &_EMC2_pbivnorm_fast, 3},
     {NULL, NULL, 0}
 };
 

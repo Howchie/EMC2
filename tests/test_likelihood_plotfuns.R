@@ -19,7 +19,7 @@ lfun <- function(i, x, p_vector, pname, dadm, use_c) {
 }
 
 
-profile_plot_test <- function (data, design, p_vector, range = 0.5, layout = NA, p_min = NULL,
+profile_plot_test <- function (data, design, p_vector, range = 1.5, layout = NA, p_min = NULL,
                                p_max = NULL, use_par = NULL, n_point = 100, n_cores = 1,use_c = FALSE,
                                round = 3, true_args = list(), ...)
 {

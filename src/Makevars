@@ -1,7 +1,5 @@
-GSL_CFLAGS = $(shell gsl-config --cflags 2>/dev/null)
-GSL_LIBS   = $(shell gsl-config --libs   2>/dev/null)
-PKG_CPPFLAGS = -I$(srcdir)/approxcdf $(GSL_CFLAGS) $(RCPP_ARMA_CXXFLAGS)
-APPROXCDF_LIB = $(shell "$(R_HOME)/bin/Rscript" -e "cat(system.file('libs', package='approxcdf'))")
-PKG_SOURCES += $(wildcard /*.cpp) $(wildcard /approxcdf/*.cpp)
-PKG_LIBS += $(RCPP_ARMA_LIBS) $(GSL_LIBS) $(APPROXCDF_LIB)/approxcdf.so
-CXX_STD = CXX17            # or CXX14 if you prefer/need
+GSL_CFLAGS = $(shell gsl-config --cflags)
+GSL_LIBS = $(shell gsl-config --libs)
+PKG_CPPFLAGS = $(RCPP_ARMA_CXXFLAGS) $(GSL_CFLAGS)
+PKG_LIBS     = $(RCPP_ARMA_LIBS) $(GSL_LIBS)
+CXX_STD      = C++11      # uncomment only if you need to force C++11

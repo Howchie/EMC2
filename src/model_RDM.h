@@ -11,6 +11,7 @@
 #include <gsl/gsl_errno.h> // For GSL error handling
 #include "utility_functions.h"
 #include "truncated_normal.hpp"
+#include "bivnorm.h"
 #include <string>
 
 using namespace Rcpp;
@@ -293,11 +294,11 @@ double pswtn(double t_adj, double alpha, double mu_drift, double sigma_drift) {
 	double term1 = term1v[0];*/
 	//double term1 = pbivnorm_fast(h1,k1,rho);
 	double term1;
-    if (std::fabs(rho) < 0.97) {
-        term1 = norm_cdf_2d_vfast(h1, k1, rho);
-    } else {
+    //if (std::fabs(rho) < 0.97) {
+    //    term1 = norm_cdf_2d_vfast(h1, k1, rho);
+    //} else {
         term1 = norm_cdf_2d_fast(h1, k1, rho);
-    }
+    //}
 	// second Φ2 (reflected drift)
 	double mu_p = mu_drift + 2*alpha*v;
 	double h2 = (-mu_p*t_adj - alpha)/denom;
@@ -310,11 +311,11 @@ double pswtn(double t_adj, double alpha, double mu_drift, double sigma_drift) {
     double term2 = term2v[0];*/
 	//double term2 = pbivnorm_fast(h2,k2,-rho);
 	double term2;
-    if (std::fabs(rho) < 0.97) {
-        term2 = norm_cdf_2d_vfast(h2, k2, -rho);
-    } else {
+    //if (std::fabs(rho) < 0.97) {
+    //    term2 = norm_cdf_2d_vfast(h2, k2, -rho);
+    //} else {
         term2 = norm_cdf_2d_fast(h2, k2, -rho);
-    }
+    //}
 	double cdf_val  = (term1 + std::exp(2*alpha*mu_drift + 2*std::pow(alpha,2)*v)*term2) / prob_d_gt_0;
 	
 	if (std::isnan(cdf_val) || cdf_val < 0.0) return 0.0;
@@ -503,7 +504,7 @@ NumericVector pSWTNspv(NumericVector t, NumericVector v, NumericVector B, Numeri
 
 // [[Rcpp::export]]
 NumericVector drdmswtn_c(NumericVector rts, NumericMatrix pars, LogicalVector idx, double min_ll, LogicalVector is_ok){
-  //v = 0, B = 1, A = 2, t0 = 3, s = 4, cv=5
+  //v = 0, B = 1, A = 2, t0 = 3, s = 4, sv=5
 	NumericVector out(sum(idx));
   int k = 0;
   for(int i = 0; i < rts.length(); i++){
