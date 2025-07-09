@@ -270,13 +270,13 @@ RDMSWTN <- function(){
   list(
     type="RACE",
     c_name = "RDMSWTN",
-    p_types=c("v" = log(1),"B" = log(1),"A" = log(0),"t0" = log(0),"s" = log(1),"sv" = log(0)),
-    transform=list(func=c(v = "exp", B = "exp", A = "exp",t0 = "exp", s = "exp", sv="exp")),
-    bound=list(minmax=cbind(v=c(1e-3,Inf), B=c(0,Inf), A=c(1e-4,Inf),t0=c(0.05,Inf), s=c(0,Inf), sv=c(0,Inf)),
-               exception=c(A=0, v=0, sv=0)),
-    # Trial dependent parameter transform
+    p_types=c("v" = log(1),"B" = log(1),"A" = log(0),"t0" = log(0),"s" = log(1),"cv" = log(0)),
+    transform=list(func=c(v = "exp", B = "exp", A = "exp",t0 = "exp", s = "exp", cv="exp")),
+    bound=list(minmax=cbind(v=c(1e-3,Inf), B=c(0,Inf), A=c(1e-4,Inf),t0=c(0.05,Inf), s=c(0,Inf), cv=c(1e-3,Inf)),
+               exception=c(A=0, v=0, cv=0)),
+    # Trial dependent parameter transform. sv is sampled as a coefficient of variance and transformed to standard deviation of drift, tying its magnitude to the mean_drift.
     Ttransform = function(pars,dadm) {
-      pars <- cbind(pars,b=pars[,"B"] + pars[,"A"])#,sv=pars[,"cv"]*pars[,"v"])
+      pars <- cbind(pars,b=pars[,"B"] + pars[,"A"],sv=pars[,"cv"]*pars[,"v"])
       pars
     },
     # Random function for racing accumulators
@@ -307,7 +307,7 @@ dRDMSWTN <- function(rt,pars)
     if (any(dimnames(pars)[[2]]=="s")) { # rescale
       # Ensure pars[ok,] remains a matrix even if sum(ok)==1
       pars_ok <- pars[ok,,drop=FALSE]
-      pars_ok[,c("A","B","v")] <- pars_ok[,c("A","B","v")]/pars_ok[,"s"]
+      pars_ok[,c("A","B","v","sv")] <- pars_ok[,c("A","B","v","sv")]/pars_ok[,"s"]
       pars[ok,] <- pars_ok
     }
     # dSWTN is a C++ wrapper which takes vectorized input and feeds drdmswtn (the sequential likelihood function in C++)
@@ -329,7 +329,7 @@ pRDMSWTN <- function(rt,pars)
   if (any(ok)){
     if (any(dimnames(pars)[[2]]=="s")) { # rescale
       pars_ok <- pars[ok,,drop=FALSE]
-      pars_ok[,c("A","B","v")] <- pars_ok[,c("A","B","v")]/pars_ok[,"s"]
+      pars_ok[,c("A","B","v","sv")] <- pars_ok[,c("A","B","v","sv")]/pars_ok[,"s"]
       pars[ok,] <- pars_ok
     }
     # pSWTN is a C++ wrapper which takes vectorized input and feeds prdmswtn (the sequential likelihood function in C++)
@@ -355,7 +355,7 @@ rRDMSWTN <- function(lR,pars,p_types=c("v","B","A","t0","sv"),ok=rep(TRUE,dim(pa
   if (!all(p_types %in% dimnames(pars)[[2]]))
     stop("pars must have columns ",paste(p_types,collapse = " "))
   if (any(dimnames(pars)[[2]]=="s")) # rescale
-    pars[,c("A","B","v")] <- pars[,c("A","B","v")]/pars[,"s"]
+    pars[,c("A","B","v","sv")] <- pars[,c("A","B","v","sv")]/pars[,"s"]
   pars[,"B"][pars[,"B"]<0] <- 0 # Protection for negatives
   pars[,"A"][pars[,"A"]<0] <- 0
   bad <- rep(NA, length(lR)/length(levels(lR)))

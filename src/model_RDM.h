@@ -10,7 +10,7 @@
 #include <gsl/gsl_integration.h>
 #include <gsl/gsl_errno.h> // For GSL error handling
 #include "utility_functions.h"
-#include "truncated_normal.hpp"
+#include "truncated_normal.h"
 #include "bivnorm.h"
 #include <string>
 
@@ -247,16 +247,15 @@ double dswtn(double t_adj, double alpha, double mu_drift, double sigma_drift) {
         return dwald_classic(t_adj, alpha, mu_drift);
     }
 
-    double d = mu_drift;
-    double v = std::pow(sigma_drift,2); // parameterize the RDM with std but formula uses variance
-	double prob_d_gt_0 = R::pnorm(d / std::sqrt(v), 0.0, 1.0, true, false);
+    double sigma_2 = std::pow(sigma_drift,2); // parameterize the RDM with std but formula uses variance
+	double prob_d_gt_0 = R::pnorm(mu_drift / sigma_drift, 0.0, 1.0, true, false);
 	if (std::isinf(prob_d_gt_0) || prob_d_gt_0 < 0) return R_NegInf; // if P(xi > 0) is zero
 	
 	double term1 = alpha;
-	double term2 = std::sqrt((2 * M_PI * std::pow(t_adj,3))*((t_adj*v)+1));
+	double term2 = std::sqrt((2 * M_PI * std::pow(t_adj,3))*((t_adj*sigma_2)+1));
 	double term3 = 1 / prob_d_gt_0; // This is 1/P(xi>0)
-    double term4 = std::exp( - (std::pow(d * t_adj - alpha, 2)) / ((2 * t_adj) * (t_adj * v + 1)) );
-    double term5 = R::pnorm( (alpha * v + d) /(std::sqrt(t_adj * std::pow(v, 2) + v) ), 0.0, 1.0, true, false);
+    double term4 = std::exp( - (std::pow(mu_drift * t_adj - alpha, 2)) / ((2 * t_adj) * (t_adj * sigma_2 + 1)) );
+    double term5 = R::pnorm( (alpha * sigma_2 + mu_drift) /(std::sqrt(t_adj * std::pow(sigma_2, 2) + sigma_2) ), 0.0, 1.0, true, false);
 	double pdf_val = (term1/term2) * term3 * term4 * term5;
 
     if (std::isnan(pdf_val)) return R_NegInf; // Should be caught by specific parameter checks earlier
@@ -277,46 +276,34 @@ double pswtn(double t_adj, double alpha, double mu_drift, double sigma_drift) {
         return pwald_classic(t_adj, alpha, mu_drift);
     }
 
-    double v = std::pow(sigma_drift,2); // parameterize the RDM with std but formula uses variance
+    double sigma_2 = std::pow(sigma_drift,2); 
+	double alpha_2 = std::pow(alpha,2); 
 	double prob_d_gt_0 = R::pnorm(mu_drift / sigma_drift, 0.0, 1.0, true, false);
 	if (std::isinf(prob_d_gt_0) || prob_d_gt_0 < 0) return R_NegInf; // if P(xi > 0) is zero
 	
-	double denom = std::sqrt(t_adj*(1+t_adj*v));
+	double denom = std::sqrt(t_adj*(1+t_adj*sigma_2));
 	double rho = (sigma_drift*t_adj)/denom;
 	// first Φ2
 	double h1 =  (mu_drift*t_adj - alpha)/denom;
 	double k1 =  mu_drift / sigma_drift;
-	/*NumericVector upper1 = NumericVector::create(h1, k1);
-    NumericMatrix corr1(2, 2);
-    corr1(0, 0) = 1.0; corr1(0, 1) = rho;
-    corr1(1, 0) = rho; corr1(1, 1) = 1.0;
-    NumericVector term1v = pmvnorm_cpp(upper1, corr1);
-	double term1 = term1v[0];*/
-	//double term1 = pbivnorm_fast(h1,k1,rho);
 	double term1;
-    //if (std::fabs(rho) < 0.97) {
-    //    term1 = norm_cdf_2d_vfast(h1, k1, rho);
-    //} else {
-        term1 = norm_cdf_2d_fast(h1, k1, rho);
-    //}
+    if (std::fabs(rho) > 0.97 || std::fabs(h1)>8.0 || std::fabs(k1)>8.0) {
+        term1 = norm_cdf_2d(h1, k1, rho); // Genz when in the tails
+    } else {
+        term1 = norm_cdf_2d_fast(h1, k1, rho); // Faster Drezner/West algorithm otherwise
+    }
 	// second Φ2 (reflected drift)
-	double mu_p = mu_drift + 2*alpha*v;
+	double mu_p = mu_drift + 2*alpha*sigma_2;
 	double h2 = (-mu_p*t_adj - alpha)/denom;
 	double k2 = mu_p/sigma_drift;
-	/*NumericVector upper2 = NumericVector::create(h2, k2);
-    NumericMatrix corr2(2, 2);
-    corr2(0, 0) = 1.0; corr2(0, 1) = -rho;
-    corr2(1, 0) = -rho; corr2(1, 1) = 1.0;
-    NumericVector term2v = pmvnorm_cpp(upper2, corr2);
-    double term2 = term2v[0];*/
-	//double term2 = pbivnorm_fast(h2,k2,-rho);
+
 	double term2;
-    //if (std::fabs(rho) < 0.97) {
-    //    term2 = norm_cdf_2d_vfast(h2, k2, -rho);
-    //} else {
-        term2 = norm_cdf_2d_fast(h2, k2, -rho);
-    //}
-	double cdf_val  = (term1 + std::exp(2*alpha*mu_drift + 2*std::pow(alpha,2)*v)*term2) / prob_d_gt_0;
+    if (std::fabs(rho) > 0.97 || std::fabs(h2)>8.0 || std::fabs(k2)>8.0) {
+        term2 = norm_cdf_2d(h2, k2, -rho); // Genz when in the tails
+    } else {
+        term2 = norm_cdf_2d_fast(h2, k2, -rho); // Faster Drezner/West algorithm otherwise
+    }
+	double cdf_val  = (term1 + std::exp(2*alpha*mu_drift + 2*alpha_2*sigma_2)*term2) / prob_d_gt_0;
 	
 	if (std::isnan(cdf_val) || cdf_val < 0.0) return 0.0;
     if (cdf_val > 1.0) return 1.0;
@@ -512,8 +499,8 @@ NumericVector drdmswtn_c(NumericVector rts, NumericMatrix pars, LogicalVector id
       if(NumericVector::is_na(pars(i,0))){ // for RACE
         out[k] = 0;
       } else if((rts[i] - pars(i,3) > 0) && (is_ok[i] == TRUE)){
-		//double sv = pars(i,0)*pars(i,5); // convert coefficient of variation to standard deviation
-        out[k] = drdmswtn(rts[i] - pars(i,3), pars(i,1)/pars(i,4), pars(i,0)/pars(i,4), pars(i,2)/pars(i,4), pars(i,5));
+		double sv = (pars(i,0)/pars(i,4))*pars(i,5); // convert coefficient of variation to standard deviation
+        out[k] = drdmswtn(rts[i] - pars(i,3), pars(i,1)/pars(i,4), pars(i,0)/pars(i,4), pars(i,2)/pars(i,4), sv);
       } else{
         out[k] = min_ll;
       }
@@ -534,8 +521,8 @@ NumericVector prdmswtn_c(NumericVector rts, NumericMatrix pars, LogicalVector id
       if(NumericVector::is_na(pars(i,0))){ // for RACE
         out[k] = 0;
       } else if((rts[i] - pars(i,3) > 0) && (is_ok[i] == TRUE)){
-		//double sv = pars(i,0)*pars(i,5); // convert coefficient of variation to standard deviation
-        out[k] = prdmswtn(rts[i] - pars(i,3), pars(i,1)/pars(i,4), pars(i,0)/pars(i,4), pars(i,2)/pars(i,4), pars(i,5));
+		double sv = (pars(i,0)/pars(i,4))*pars(i,5); // convert coefficient of variation to standard deviation
+        out[k] = prdmswtn(rts[i] - pars(i,3), pars(i,1)/pars(i,4), pars(i,0)/pars(i,4), pars(i,2)/pars(i,4), sv);
       } else{
         out[k] = min_ll;
       }

@@ -133,10 +133,10 @@ design <- function(formula = NULL,factors = NULL,Rlevels = NULL,model,data=NULL,
       # covariates <- covariates[covariates %in% all_preds]
       if(length(covariates) == 0) covariates <- NULL
     }
-    if(is.null(LT)){if("LT"%in%colnames(data))LT=data$LT} else{LT <- attr(data,"LT")}; if (is.null(LT)) LT <- 0
-    if(is.null(UT)){if("UT"%in%colnames(data))UT=data$UT} else{UT <- attr(data,"UT")}; if (is.null(UT)) UT <- Inf
-    if(is.null(LC)){if("LC"%in%colnames(data))LC=data$LC} else{LC <- attr(data,"LC")}; if (is.null(LC)) LC <- 0
-    if(is.null(UC)){if("UC"%in%colnames(data))UC=data$UC} else{UC <- attr(data,"UC")}; if (is.null(UC)) UC <- Inf
+    if(is.null(LT)){if("LT"%in%colnames(data)) LT=data$LT else{LT <- attr(data,"LT")}}; if (is.null(LT)) LT <- 0
+    if(is.null(UT)){if("UT"%in%colnames(data)) UT=data$UT else{UT <- attr(data,"UT")}}; if (is.null(UT)) UT <- Inf
+    if(is.null(LC)){if("LC"%in%colnames(data)) LC=data$LC else{LC <- attr(data,"LC")}}; if (is.null(LC)) LC <- 0
+    if(is.null(UC)){if("UC"%in%colnames(data)) UC=data$UC else{UC <- attr(data,"UC")}}; if (is.null(UC)) UC <- Inf
   } else {if(is.null(Rlevels)) stop("make sure Rlevels is specified")} # this check wasn't present - would break accumulator logic
   if (!is.null(trend)) {
     formula <- check_trend(trend,covariates, model, formula)
@@ -440,10 +440,10 @@ compress_dadm <- function(da,designs,Fcov,Ffun)
     # out keeps only unique rows in terms of all parameters design matrices
     # R, lR and rt (at given resolution) from full data set
   {
-  if("LT"%in%colnames(da))LT=da$LT else{LT <- attr(da,"LT")}; if (is.null(LT)) LT <- 0
-  if("UT"%in%colnames(da))UT=da$UT else{UT <- attr(da,"UT")}; if (is.null(UT)) UT <- Inf
-  if("LC"%in%colnames(da))LC=da$LC else{LC <- attr(da,"LC")}; if (is.null(LC)) LC <- 0
-  if("UC"%in%colnames(da))UC=da$UC else{UC <- attr(da,"UC")}; if (is.null(UC)) UC <- Inf
+  if("LT"%in%colnames(da)) LT=da$LT else{LT <- attr(da,"LT")}; if (is.null(LT)) LT <- 0
+  if("UT"%in%colnames(da)) UT=da$UT else{UT <- attr(da,"UT")}; if (is.null(UT)) UT <- Inf
+  if("LC"%in%colnames(da)) LC=da$LC else{LC <- attr(da,"LC")}; if (is.null(LC)) LC <- 0
+  if("UC"%in%colnames(da)) UC=da$UC else{UC <- attr(da,"UC")}; if (is.null(UC)) UC <- Inf
     nacc <- length(unique(da$lR))
     # contract output
     cells <- paste(
@@ -623,14 +623,13 @@ design_model <- function(data,design,model=NULL,
     da <- cbind.data.frame(da,newF)
   }
   # Ensure bound columns persist after accumulator expansion
-  snams <- da$subjects
-  if(length(LT)==1) {LT <- setNames(rep(LT,length(snams)), snams);da$LT <- LT[as.character(da$subjects)]}
+  if(length(LT)==1) {da$LT = rep(LT,nrow(da))}
   else{da$LT=LT}
-  if(length(UT)==1) {UT <- setNames(rep(UT,length(snams)), snams);da$UT <- UT[as.character(da$subjects)]}
+  if(length(UT)==1) {da$UT = rep(UT,nrow(da))}
   else{da$UT=UT}
-  if(length(LC)==1) {LC <- setNames(rep(LC,length(snams)), snams);da$LC <- LC[as.character(da$subjects)]}
+  if(length(LC)==1) {da$LC = rep(LC,nrow(da))}
   else{da$LC=LC}
-  if(length(UC)==1) {UC <- setNames(rep(UC,length(snams)), snams);da$UC <- UC[as.character(da$subjects)]}
+  if(length(UC)==1) {da$UC = rep(UC,nrow(da))}
   else{da$UC=UC}
   
   if (is.null(model()$p_types) | is.null(model()$Ttransform))
@@ -814,12 +813,14 @@ dm_list <- function(dadm)
   if("UT"%in%colnames(dadm))UT=dadm$UT else{UT <- attr(dadm,"UT")}; if (is.null(UT)) UT <- Inf
   if("LC"%in%colnames(dadm))LC=dadm$LC else{LC <- attr(dadm,"LC")}; if (is.null(LC)) LC <- 0
   if("UC"%in%colnames(dadm))UC=dadm$UC else{UC <- attr(dadm,"UC")}; if (is.null(UC)) UC <- Inf
-  snams <- dadm$subjects
-  if(length(LT)==1) LT <- setNames(rep(LT,length(snams)), snams)
-  if(length(UT)==1) UT <- setNames(rep(UT,length(snams)), snams)
-  if(length(LC)==1) LC <- setNames(rep(LC,length(snams)), snams)
-  if(length(UC)==1) UC <- setNames(rep(UC,length(snams)), snams)
-  
+  if(length(LT)==1) {dadm$LT = rep(LT,nrow(dadm))}
+  else{dadm$LT=LT}
+  if(length(UT)==1) {dadm$UT = rep(UT,nrow(dadm))}
+  else{dadm$UT=UT}
+  if(length(LC)==1) {dadm$LC = rep(LC,nrow(dadm))}
+  else{dadm$LC=LC}
+  if(length(UC)==1) {dadm$UC = rep(UC,nrow(dadm))}
+  else{dadm$UC=UC}
   model <- attr(dadm,"model")
   p_names <- attr(dadm,"p_names")
   sampled_p_names <- attr(dadm,"sampled_p_names")

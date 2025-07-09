@@ -1,3 +1,6 @@
+// Functions distributed in this file taken from https://github.com/david-cortes/approxcdf
+// Copyright 2022 David Cortes under BSD-3 license
+
 #pragma once
 #include <Rcpp.h>
 #include <vector>
@@ -8,8 +11,7 @@
 #include <numeric>
 #include <memory>
 #include <cassert>
-//#include <boost/math/
-/* https://bugs.r-project.org/show_bug.cgi?id=15620 */
+
 
 #ifndef likely
 #   if defined(__GNUC__) || defined(__clang__)
@@ -66,7 +68,6 @@ constexpr static const double GL8_x[] = {
     0.9602898564975363, 0.7966664774136267,
     0.5255324099163290, 0.1834346424956498
 };
-
 
 constexpr static const double GL12_w[] = {
     0.0471753363865118, 0.1069393259953184, 0.1600783285433462,
@@ -154,7 +155,6 @@ constexpr static const double GL48_x[] = {
 };
 
 enum GLApprox {GL6=3, GL8=4, GL12=6, GL16=8, GL20=10, GL24=12, GL32=16}; 
-
 
 constexpr static const double GL32_w_div4pi[] = {
     GL32_w[0] / (4. * M_PI), GL32_w[1] / (4. * M_PI), GL32_w[2] / (4. * M_PI),
@@ -330,6 +330,12 @@ double norm_logcdf_1d(double a)
     return log_LHS + std::log(right_hand_side);
 }
 
+/* Bivariate normal CDF.
+   Algorithm:  Drezner (1978) 5-point GL with the ρ-split
+               refined by Drezner & Wesolowsky (1990);
+               parameter cut-off as in West (2004).
+   Expected accuracy ≈ 1e-6.
+*/
 double norm_lcdf_2d_fast(double x1, double x2, double rho)
 {
     double x12 = 0.5 * (x1*x1 + x2*x2);

@@ -193,28 +193,8 @@ truncated_normal_a_cdf <- function(x, mu, sigma, a) {
     .Call(`_EMC2_truncated_normal_a_cdf`, x, mu, sigma, a)
 }
 
-truncated_normal_a_cdf_inv <- function(cdf, mu, sigma, a) {
-    .Call(`_EMC2_truncated_normal_a_cdf_inv`, cdf, mu, sigma, a)
-}
-
-truncated_normal_a_mean <- function(mu, sigma, a) {
-    .Call(`_EMC2_truncated_normal_a_mean`, mu, sigma, a)
-}
-
-truncated_normal_a_moment <- function(order, mu, sigma, a) {
-    .Call(`_EMC2_truncated_normal_a_moment`, order, mu, sigma, a)
-}
-
 truncated_normal_a_pdf <- function(x, mu, sigma, a) {
     .Call(`_EMC2_truncated_normal_a_pdf`, x, mu, sigma, a)
-}
-
-truncated_normal_a_sample <- function(mu, sigma, a, seed) {
-    .Call(`_EMC2_truncated_normal_a_sample`, mu, sigma, a, seed)
-}
-
-truncated_normal_a_variance <- function(mu, sigma, a) {
-    .Call(`_EMC2_truncated_normal_a_variance`, mu, sigma, a)
 }
 
 c_add_charvectors <- function(x, y) {

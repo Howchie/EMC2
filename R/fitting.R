@@ -704,13 +704,13 @@ make_emc <- function(data,design,model=NULL,
     d <- d[order(d$subjects),]
     d <- add_trials(d)
     snams <- d$subjects
-    if(length(LT)==1) {LT <- setNames(rep(LT,length(snams)), snams);d$LT <- LT[as.character(d$subjects)]}
+    if(length(LT)==1) {d$LT = rep(LT,nrow(d))}
     else{d$LT=LT}
-    if(length(UT)==1) {UT <- setNames(rep(UT,length(snams)), snams);d$UT <- UT[as.character(d$subjects)]}
+    if(length(UT)==1) {d$UT = rep(UT,nrow(d))}
     else{d$UT=UT}
-    if(length(LC)==1) {LC <- setNames(rep(LC,length(snams)), snams);d$LC <- LC[as.character(d$subjects)]}
+    if(length(LC)==1) {d$LC = rep(LC,nrow(d))}
     else{d$LC=LC}
-    if(length(UC)==1) {UC <- setNames(rep(UC,length(snams)), snams);d$UC <- UC[as.character(d$subjects)]}
+    if(length(UC)==1) {d$UC = rep(UC,nrow(d))}
     else{d$UC=UC}
     d
   })

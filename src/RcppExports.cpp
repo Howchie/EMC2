@@ -764,47 +764,6 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
-// truncated_normal_a_cdf_inv
-double truncated_normal_a_cdf_inv(double cdf, double mu, double sigma, double a);
-RcppExport SEXP _EMC2_truncated_normal_a_cdf_inv(SEXP cdfSEXP, SEXP muSEXP, SEXP sigmaSEXP, SEXP aSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< double >::type cdf(cdfSEXP);
-    Rcpp::traits::input_parameter< double >::type mu(muSEXP);
-    Rcpp::traits::input_parameter< double >::type sigma(sigmaSEXP);
-    Rcpp::traits::input_parameter< double >::type a(aSEXP);
-    rcpp_result_gen = Rcpp::wrap(truncated_normal_a_cdf_inv(cdf, mu, sigma, a));
-    return rcpp_result_gen;
-END_RCPP
-}
-// truncated_normal_a_mean
-double truncated_normal_a_mean(double mu, double sigma, double a);
-RcppExport SEXP _EMC2_truncated_normal_a_mean(SEXP muSEXP, SEXP sigmaSEXP, SEXP aSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< double >::type mu(muSEXP);
-    Rcpp::traits::input_parameter< double >::type sigma(sigmaSEXP);
-    Rcpp::traits::input_parameter< double >::type a(aSEXP);
-    rcpp_result_gen = Rcpp::wrap(truncated_normal_a_mean(mu, sigma, a));
-    return rcpp_result_gen;
-END_RCPP
-}
-// truncated_normal_a_moment
-double truncated_normal_a_moment(int order, double mu, double sigma, double a);
-RcppExport SEXP _EMC2_truncated_normal_a_moment(SEXP orderSEXP, SEXP muSEXP, SEXP sigmaSEXP, SEXP aSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< int >::type order(orderSEXP);
-    Rcpp::traits::input_parameter< double >::type mu(muSEXP);
-    Rcpp::traits::input_parameter< double >::type sigma(sigmaSEXP);
-    Rcpp::traits::input_parameter< double >::type a(aSEXP);
-    rcpp_result_gen = Rcpp::wrap(truncated_normal_a_moment(order, mu, sigma, a));
-    return rcpp_result_gen;
-END_RCPP
-}
 // truncated_normal_a_pdf
 double truncated_normal_a_pdf(double x, double mu, double sigma, double a);
 RcppExport SEXP _EMC2_truncated_normal_a_pdf(SEXP xSEXP, SEXP muSEXP, SEXP sigmaSEXP, SEXP aSEXP) {
@@ -816,33 +775,6 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< double >::type sigma(sigmaSEXP);
     Rcpp::traits::input_parameter< double >::type a(aSEXP);
     rcpp_result_gen = Rcpp::wrap(truncated_normal_a_pdf(x, mu, sigma, a));
-    return rcpp_result_gen;
-END_RCPP
-}
-// truncated_normal_a_sample
-double truncated_normal_a_sample(double mu, double sigma, double a, int& seed);
-RcppExport SEXP _EMC2_truncated_normal_a_sample(SEXP muSEXP, SEXP sigmaSEXP, SEXP aSEXP, SEXP seedSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< double >::type mu(muSEXP);
-    Rcpp::traits::input_parameter< double >::type sigma(sigmaSEXP);
-    Rcpp::traits::input_parameter< double >::type a(aSEXP);
-    Rcpp::traits::input_parameter< int& >::type seed(seedSEXP);
-    rcpp_result_gen = Rcpp::wrap(truncated_normal_a_sample(mu, sigma, a, seed));
-    return rcpp_result_gen;
-END_RCPP
-}
-// truncated_normal_a_variance
-double truncated_normal_a_variance(double mu, double sigma, double a);
-RcppExport SEXP _EMC2_truncated_normal_a_variance(SEXP muSEXP, SEXP sigmaSEXP, SEXP aSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< double >::type mu(muSEXP);
-    Rcpp::traits::input_parameter< double >::type sigma(sigmaSEXP);
-    Rcpp::traits::input_parameter< double >::type a(aSEXP);
-    rcpp_result_gen = Rcpp::wrap(truncated_normal_a_variance(mu, sigma, a));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -920,12 +852,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_get_pars_matrix_rcpp", (DL_FUNC) &_EMC2_get_pars_matrix_rcpp, 9},
     {"_EMC2_calc_ll", (DL_FUNC) &_EMC2_calc_ll, 11},
     {"_EMC2_truncated_normal_a_cdf", (DL_FUNC) &_EMC2_truncated_normal_a_cdf, 4},
-    {"_EMC2_truncated_normal_a_cdf_inv", (DL_FUNC) &_EMC2_truncated_normal_a_cdf_inv, 4},
-    {"_EMC2_truncated_normal_a_mean", (DL_FUNC) &_EMC2_truncated_normal_a_mean, 3},
-    {"_EMC2_truncated_normal_a_moment", (DL_FUNC) &_EMC2_truncated_normal_a_moment, 4},
     {"_EMC2_truncated_normal_a_pdf", (DL_FUNC) &_EMC2_truncated_normal_a_pdf, 4},
-    {"_EMC2_truncated_normal_a_sample", (DL_FUNC) &_EMC2_truncated_normal_a_sample, 4},
-    {"_EMC2_truncated_normal_a_variance", (DL_FUNC) &_EMC2_truncated_normal_a_variance, 3},
     {"_EMC2_c_add_charvectors", (DL_FUNC) &_EMC2_c_add_charvectors, 2},
     {"_EMC2_pmvnorm_cpp", (DL_FUNC) &_EMC2_pmvnorm_cpp, 2},
     {NULL, NULL, 0}

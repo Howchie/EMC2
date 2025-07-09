@@ -2,41 +2,37 @@ make_missing <- function(data,LT=0,UT=Inf,LC=0,UC=Inf,
                          LCresponse=TRUE,UCresponse=TRUE,LCdirection=TRUE,UCdirection=TRUE)
 {
   std <- c("names", "row.names", "class", "dim")
-  custom_attrs <- attributes(data)[setdiff(names(attributes(data)), std)]
   censor <- function(data,L=0,U=Inf,Ld=TRUE,Ud=TRUE,Lr=TRUE,Ur=TRUE)
   {
     if (Ld) Ld <- -Inf else Ld <- NA
     if (Ud) Ud <- Inf else Ud <- NA
     snams <- levels(data$subjects)
-    if (length(L)==1) L <- setNames(rep(L,length(snams)),snams)
-    if (length(U)==1) U <- setNames(rep(U,length(snams)),snams)
-    for (i in snams) {
-      pick <- data$subjects==i & data$rt < L[i]
-      pick[is.na(pick)] <- FALSE
-      data$rt[pick] <- Ld
-      if (!Lr) data$R[pick] <- NA
-      pick <- data$subjects==i & data$rt > U[i]
-      pick[is.na(pick)] <- FALSE
-      data$rt[pick] <- Ud
-      if (!Ur) data$R[pick] <- NA
-    }
+    if (length(L)==1) L <- rep(L,nrow(data))
+    if (length(U)==1) U <- rep(U,nrow(data))
+    pick <- data$rt < L
+    pick[is.na(pick)] <- FALSE
+    data$rt[pick] <- Ld
+    if (!Lr) data$R[pick] <- NA
+    pick <- data$rt > U
+    pick[is.na(pick)] <- FALSE
+    data$rt[pick] <- Ud
+    if (!Ur) data$R[pick] <- NA
+    
     data
   }
 
   pick <- is.infinite(data$rt) | (data$rt>LT & data$rt<UT)
   pick[is.na(pick)] <- TRUE
   out <- censor(data[pick,],L=LC,U=UC,Lr=LCresponse,Ur=UCresponse,Ld=LCdirection,Ud=UCdirection)
-  attributes(out)[names(custom_attrs)] <- custom_attrs
   
   # Store bounds as explicit columns to avoid attribute loss
-  snams <- out$subjects
-  if(length(LT)==1) {LT <- setNames(rep(LT,length(snams)), snams);out$LT <- LT[as.character(out$subjects)]}
+  if(length(LT)==1) {out$LT = rep(LT,nrow(out))}
   else{out$LT=LT}
-  if(length(UT)==1) {UT <- setNames(rep(UT,length(snams)), snams);out$UT <- UT[as.character(out$subjects)]}
+  if(length(UT)==1) {out$UT = rep(UT,nrow(out))}
   else{out$UT=UT}
-  if(length(LC)==1) {LC <- setNames(rep(LC,length(snams)), snams);out$LC <- LC[as.character(out$subjects)]}
+  if(length(LC)==1) {out$LC = rep(LC,nrow(out))}
   else{out$LC=LC}
-  if(length(UC)==1) {UC <- setNames(rep(UC,length(snams)), snams);out$UC <- UC[as.character(out$subjects)]}
+  if(length(UC)==1) {out$UC = rep(UC,nrow(out))}
   else{out$UC=UC}
   out
 }
@@ -112,15 +108,16 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
   if (!is.null(staircase)){
     staircase <- check_staircase(staircase)
   }
+  
   # #' @param Fcovariates either a data frame of covariate values with the same
   # #' number of rows as the data or a list of functions specifying covariates for
   # #' each trial. Must have names specified in the design Fcovariates argument.
   check_bounds <- FALSE
-  if(is.null(LT)){if("LT"%in%colnames(data))LT=data$LT} else{LT <- attr(data,"LT")}; if (is.null(LT)) LT <- 0
-  if(is.null(UT)){if("UT"%in%colnames(data))UT=data$UT} else{UT <- attr(data,"UT")}; if (is.null(UT)) UT <- Inf
-  if(is.null(LC)){if("LC"%in%colnames(data))LC=data$LC} else{LC <- attr(data,"LC")}; if (is.null(LC)) LC <- 0
-  if(is.null(UC)){if("UC"%in%colnames(data))UC=data$UC} else{UC <- attr(data,"UC")}; if (is.null(UC)) UC <- Inf
-
+  
+  if(is.null(LT)){if("LT"%in%colnames(data)) LT=data$LT else{LT <- attr(data,"LT")}}; if (is.null(LT)) LT <- 0
+  if(is.null(UT)){if("UT"%in%colnames(data)) UT=data$UT else{UT <- attr(data,"UT")}}; if (is.null(UT)) UT <- Inf
+  if(is.null(LC)){if("LC"%in%colnames(data)) LC=data$LC else{LC <- attr(data,"LC")}}; if (is.null(LC)) LC <- 0
+  if(is.null(UC)){if("UC"%in%colnames(data)) UC=data$UC else{UC <- attr(data,"UC")}}; if (is.null(UC)) UC <- Inf
   # if(!is.null(LCresponse)){LCresponse<-TRUE}
   # if(!is.null(UCresponse)){UCresponse<-TRUE}
   # if(!is.null(LCdirection)){LCdirection<-TRUE}
@@ -186,15 +183,13 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
                            drop_R = F,UC=UC,UT=UT,LC=LC,LT=LT)
 
   } else {
-    snams <- data$subjects
-   
-    if(length(LT)==1) {LT <- setNames(rep(LT,length(snams)), snams);data$LT <- LT[as.character(data$subjects)]}
+    if(length(LT)==1) {data$LT = rep(LT,nrow(data))}
     else{data$LT=LT}
-    if(length(UT)==1) {UT <- setNames(rep(UT,length(snams)), snams);data$UT <- UT[as.character(data$subjects)]}
+    if(length(UT)==1) {data$UT = rep(UT,nrow(data))}
     else{data$UT=UT}
-    if(length(LC)==1) {LC <- setNames(rep(LC,length(snams)), snams);data$LC <- LC[as.character(data$subjects)]}
+    if(length(LC)==1) {data$LC = rep(LC,nrow(data))}
     else{data$LC=LC}
-    if(length(UC)==1) {UC <- setNames(rep(UC,length(snams)), snams);data$UC <- UC[as.character(data$subjects)]}
+    if(length(UC)==1) {data$UC = rep(UC,nrow(data))}
     else{data$UC=UC}
 
     if (!force_direction) {
@@ -228,7 +223,6 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
     if ( is.null(model()$p_types) ) stop("model()$p_types must be specified")
     if ( is.null(model()$Ttransform) ) stop("model()$Ttransform must be specified")
   }
-
   data <- design_model(
     add_accumulators(data,design$matchfun,simulate=TRUE,type=model()$type,Fcovariates=design$Fcovariates),
     design,model,add_acc=FALSE,compress=FALSE,verbose=FALSE,
