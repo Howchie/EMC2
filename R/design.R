@@ -554,7 +554,7 @@ rt_check_function <- function(data){
   # Censoring
   if ("UC"%in%colnames(data)) {
     check_rt(data$UC,data$rt)
-    if ("UT"%in%colnames(data) && any(data$UT < data$UC))
+    if ("UT"%in%colnames(data) && any( is.finite(data$UC) & (data$UC < data$UT)) )
       stop("Upper censor must be less than upper truncation")
   }
   if ("LC"%in%colnames(data)) {

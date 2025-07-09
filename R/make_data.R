@@ -23,17 +23,8 @@ make_missing <- function(data,LT=0,UT=Inf,LC=0,UC=Inf,
 
   pick <- is.infinite(data$rt) | (data$rt>LT & data$rt<UT)
   pick[is.na(pick)] <- TRUE
-  out <- censor(data[pick,],L=LC,U=UC,Lr=LCresponse,Ur=UCresponse,Ld=LCdirection,Ud=UCdirection)
-  
-  # Store bounds as explicit columns to avoid attribute loss
-  if(length(LT)==1) {out$LT = rep(LT,nrow(out))}
-  else{out$LT=LT}
-  if(length(UT)==1) {out$UT = rep(UT,nrow(out))}
-  else{out$UT=UT}
-  if(length(LC)==1) {out$LC = rep(LC,nrow(out))}
-  else{out$LC=LC}
-  if(length(UC)==1) {out$UC = rep(UC,nrow(out))}
-  else{out$UC=UC}
+  out <- censor(data[pick,],L=LC[pick],U=UC[pick],Lr=LCresponse,Ur=UCresponse,Ld=LCdirection,Ud=UCdirection)
+
   out
 }
 

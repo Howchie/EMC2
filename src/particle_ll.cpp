@@ -559,19 +559,18 @@ double gsl_f_race_adapter(double t, void *p) {
 	// ① get the params block
     // ② recover the model-specific context
     ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(params->model_specific_context);
-	const int min_ll = ctx->min_lik_for_pdf;
+	const double min_ll = ctx->min_lik_for_pdf;
     if (t < 0) return 0.0; // RTs are non-negative
-	double n_acc=params->n_acc;
+	int n_acc=params->n_acc;
 	NumericVector t_vec = Rcpp::rep(t, n_acc);
 
     const NumericMatrix& p_mat = *(params->p_trial);
 	const LogicalVector& winner = params->winner;
 	const LogicalVector& isok = params->isok;
 	NumericVector pp(n_acc);
-	NumericVector pp_out(n_acc);
     NumericVector win = params->model_dfun(t_vec, p_mat, isok, winner, ctx);
 	pp[winner]=win;
-	double prod = 0.0;
+	double prod = 1.0;
     if (params->n_acc > 1) {
         Rcpp::NumericVector loss = 1-params->model_pfun(t_vec, p_mat, isok, !winner, ctx);
 		pp[!winner] = loss;
@@ -905,7 +904,6 @@ double c_log_likelihood_race_cens_trunc(
     for (size_t i = 0; i < other_unique_trial_indices.size(); ++i) {
 		int unique_trial_idx = other_unique_trial_indices[i];
 		int start_row_idx = unique_trial_idx*n_acc;
-		Rcpp::Rcout<<"Index: "<<start_row_idx<<std::endl;
 		Rcpp::NumericMatrix p_all_acc_for_trial = pars(Rcpp::Range(start_row_idx, start_row_idx + n_acc - 1), Rcpp::_);
         Rcpp::LogicalVector isok_for_trial = isok[Rcpp::Range(start_row_idx, start_row_idx + n_acc - 1)];
 		Rcpp::LogicalVector winner_for_trial = winner[Rcpp::Range(start_row_idx, start_row_idx + n_acc - 1)];
@@ -918,12 +916,10 @@ double c_log_likelihood_race_cens_trunc(
 			double upper_for_trial = LC[start_row_idx];
             if (R_j_idx != NA_INTEGER) { // Response (winner) is known
                 current_prob_val = integrate_for_kth_winner_cpp(R_j_idx, p_all_acc_for_trial, isok_for_trial, lower_for_trial, upper_for_trial, model_dfun, model_pfun, n_acc, integration_epsilon, model_context_for_funcs);
-				Rcpp::Rcout<<"censored integral prob= "<<current_prob_val<<std::endl;
             } else { // Response (winner) is unknown; sum probabilities over all possible winners
                 for (int k_win = 1; k_win <= n_acc; ++k_win) {
                     double p_k = integrate_for_kth_winner_cpp(k_win, p_all_acc_for_trial, isok_for_trial, lower_for_trial, upper_for_trial, model_dfun, model_pfun, n_acc, integration_epsilon, model_context_for_funcs);
 					current_prob_val += p_k; 
-					Rcpp::Rcout<<"censored integral prob= "<<current_prob_val<<std::endl;
 					}
             }
         // Case 3: Slow censoring (RT = Inf). Probability is integral from UC to UT.
@@ -932,12 +928,10 @@ double c_log_likelihood_race_cens_trunc(
 			double upper_for_trial = UT[start_row_idx];
             if (R_j_idx != NA_INTEGER) { // Response (winner) is known
                 current_prob_val = integrate_for_kth_winner_cpp(R_j_idx, p_all_acc_for_trial, isok_for_trial, lower_for_trial, upper_for_trial, model_dfun, model_pfun, n_acc, integration_epsilon, model_context_for_funcs);
-				Rcpp::Rcout<<"censored integral prob= "<<current_prob_val<<std::endl;
             } else { // Response (winner) is unknown; sum probabilities over all possible winners
                 for (int k_win = 1; k_win <= n_acc; ++k_win) {
                     double p_k = integrate_for_kth_winner_cpp(k_win, p_all_acc_for_trial, isok_for_trial, lower_for_trial, upper_for_trial, model_dfun, model_pfun, n_acc, integration_epsilon, model_context_for_funcs);
 					current_prob_val += p_k;
-				Rcpp::Rcout<<"censored integral prob= "<<current_prob_val<<std::endl;
                 }
 			}
         // Case 4: Missing RT (NA). Probability is sum of integral from LT to LC and UC to UT (i.e., outside the observation window but within truncation).
@@ -951,14 +945,12 @@ double c_log_likelihood_race_cens_trunc(
                 double p_L = integrate_for_kth_winner_cpp(R_j_idx, p_all_acc_for_trial, isok_for_trial, lower_for_trial1, upper_for_trial1, model_dfun, model_pfun, n_acc, integration_epsilon, model_context_for_funcs);
                 double p_U = integrate_for_kth_winner_cpp(R_j_idx, p_all_acc_for_trial, isok_for_trial, lower_for_trial2, upper_for_trial2, model_dfun, model_pfun, n_acc, integration_epsilon, model_context_for_funcs);
                 current_prob_val = p_L + p_U;
-				Rcpp::Rcout<<"censored integral prob= "<<current_prob_val<<std::endl;
             } else { // Response (winner) is unknown; sum probabilities over all possible winners
                 for (int k_win = 1; k_win <= n_acc; ++k_win) {
                     double p_L_k = integrate_for_kth_winner_cpp(k_win, p_all_acc_for_trial, isok_for_trial, lower_for_trial1, upper_for_trial1, model_dfun, model_pfun, n_acc, integration_epsilon, model_context_for_funcs);
                     double p_U_k = integrate_for_kth_winner_cpp(k_win, p_all_acc_for_trial, isok_for_trial, lower_for_trial2, upper_for_trial2, model_dfun, model_pfun, n_acc, integration_epsilon, model_context_for_funcs);
                     double p_k_sum = p_L_k + p_U_k;
                     current_prob_val += p_k_sum; 
-					Rcpp::Rcout<<"censored integral prob= "<<current_prob_val<<std::endl;
                 }
             }
         }
