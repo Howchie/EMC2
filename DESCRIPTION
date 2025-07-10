@@ -67,7 +67,8 @@ Imports:
     WienR,
 	truncnorm,
 	statmod,
-	Rcpp
+	Rcpp,
+	pracma
 LinkingTo: 
     Rcpp, RcppArmadillo,mvtnorm
 Depends: 

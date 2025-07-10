@@ -386,7 +386,7 @@ rSWTN <- function(n,B,v,A,sv)
     sv=rep(sv,n)
   }
   b = ifelse(A==0,B,runif(n,B, B + A)) # adjust for spv
-  l = ifelse(sv==0,v,truncnorm::rtruncnorm(n,a=0,b=Inf,mean=v,sd=sv)) # between trial variability
+  l = ifelse(sv==0,v,msm::rtnorm(n,mean=v,sd=sv,lower=0,upper=Inf)) # between trial variability
   
   ok <- !l<0
   nok <- sum(ok)

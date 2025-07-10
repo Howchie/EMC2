@@ -304,249 +304,188 @@ log_likelihood_race <- function(pars,dadm,model,min_ll=log(1e-10))
 #   return(total_ll)
 # }
 
-log_likelihood_race_cens_trunc <- function(pars,dadm,model,min_ll=log(1e-10))
-  # Race model summed log likelihood
-{
-  if (any(names(dadm)=="RACE")) # Some accumulators not present
-    pars[as.numeric(dadm$lR)>as.numeric(as.character(dadm$RACE)),] <- NA
-  
-  if (is.null(attr(pars,"ok"))) {
-    
-    f <- function(t,p,dfun,pfun) {
-      # Called by integrate to get race density for vector of times t given
-      # matrix of parameters where first row is the winner.
-      
-      out <- dfun(t,
-                  matrix(rep(p[1,],each=length(t)),nrow=length(t),dimnames=list(NULL,dimnames(p)[[2]])))
-      if (dim(p)[1]>1) for (i in 2:dim(p)[1])
-        out <- out*(1-pfun(t,
-                           matrix(rep(p[i,],each=length(t)),nrow=length(t),dimnames=list(NULL,dimnames(p)[[2]]))))
-      out
+# ──────────────────────────────────────────────────────────────────────────────
+# Helpers ---------------------------------------------------------------------
+
+## create a string key that uniquely identifies the parameter set + bounds
+.make_key <- function(lower, upper, pars_mat)
+  paste0(
+    formatC(lower, digits = 12, width = 0, format = "fg"), "_",
+    formatC(upper, digits = 12, width = 0, format = "fg"), "_",
+    paste(formatC(as.numeric(pars_mat), digits = 12, width = 0, format = "fg"),
+          collapse = "_")
+  )
+
+## integrate the joint density for the *k-th winner* on (lower, upper)
+.integrate_kth_winner <- function(k, pars_mat, lower, upper, model,
+                                  rel.tol = 1e-7, ...) {
+  n_acc <- nrow(pars_mat)
+  if (any(is.na(pars_mat[k,]))) return(0)
+  idx_los <- setdiff(seq_len(n_acc), k)
+  idx_los <- idx_los[ rowSums(is.na(pars_mat[idx_los, , drop=FALSE])) == 0L ]
+  integrand <- function(t) {
+    dk <- model$dfun(t, pars = pars_mat[k, , drop = FALSE])
+    if (length(idx_los) > 0) {
+      Sl <- 1 - model$pfun(t, pars = pars_mat[idx_los, , drop = FALSE])
+      dk * prod(Sl,na.rm=TRUE)
     }
-    
-    pr_pt <- function(LT,UT,ps,dadm)
-      # p(untrucated response)/p(truncated response), > 1, multiplicative truncation correction
-    {
-      pr <- try(integrate(f,lower=0,upper=Inf,p=ps,
-                          dfun=model$dfun,pfun=model$pfun),silent=TRUE)
-      if (inherits(pr, "try-error") || suppressWarnings(is.nan(pr$value))) return(NA)
-      if (pr$value==0) return(0)
-      pt <- try(integrate(f,lower=LT,upper=UT,p=ps,
-                          dfun=model$dfun,pfun=model$pfun),silent=TRUE)
-      if (inherits(pt, "try-error") || suppressWarnings(is.nan(pt$value)) || pt$value==0) return(NA)
-      out <- pmax(0,pmin(pr$value,1))/pmax(0,pmin(pt$value,1))
-      if (is.infinite(out)) return(NA)
-      out
-    }
-    
-    pLU <- function(LT,LC,UC,UT,ps,dadm)
-      # Probability from LT-LC + UC-UT
-    {
-      pL <- try(integrate(f,lower=LT,upper=LC,p=ps,
-                          dfun=model$dfun,pfun=model$pfun),silent=TRUE)
-      if (inherits(pL,"try-error") || suppressWarnings(is.nan(pL$value))) return(NA)
-      pU <- try(integrate(f,lower=UC,upper=UT,p=ps,
-                          dfun=model$dfun,pfun=model$pfun),silent=TRUE)
-      if (inherits(pU,"try-error") || suppressWarnings(is.nan(pU$value))) return(NA)
-      pmax(0,pmin(pL$value,1))+pmax(0,pmin(pU$value,1))
-    }
-    
-    ok <- !logical(dim(pars)[1])
-  } else{ ok <- attr(pars,"ok") }
-  
-  lds <- numeric(dim(dadm)[1]) # log pdf (winner) or survivor (losers)
-  lds[dadm$winner] <- log(model$dfun(rt=dadm$rt[dadm$winner],
-                                     pars=pars[dadm$winner,]))
-  n_acc <- length(levels(dadm$R))
-  if (n_acc>1) lds[!dadm$winner] <- log(1-model$pfun(rt=dadm$rt[!dadm$winner],pars=pars[!dadm$winner,]))
-  lds[is.na(lds) | !ok] <- min_ll
-  
-  # Calculate truncation?
-  LT <- dadm$LT
-  UT <- dadm$UT
-  dotrunc <- any(LT>0 | !is.infinite(UT))
-  LC <- dadm$LC
-  UC <- dadm$UC
-  
-  # Response known
-  # Fast
-  nort <- dadm$rt==-Inf; nort[is.na(nort)] <- FALSE; nort <- nort & !is.na(dadm$R)
-  if ( any(nort) ) {
-    mpars <- array(pars[nort,,drop=FALSE],dim=c(n_acc,sum(nort)/n_acc,ncol(pars)),
-                   dimnames = list(NULL,NULL,colnames(pars)))
-    winner <- matrix(dadm$winner[nort],nrow=n_acc)
-    tofix <- dadm$winner & nort
-    for (i in 1:dim(mpars)[2]) {
-      tmp <- try(integrate(f,lower=LT[nort],upper=LC[nort],p=mpars[,i,][order(!winner[,i]),],
-                           dfun=model$dfun,pfun=model$pfun),silent=TRUE)
-      if ( !inherits(tmp, "try-error") && suppressWarnings(!is.nan(log(tmp$value))) )
-        lds[tofix][i] <- log(pmax(0,pmin(tmp$value,1)))
-    }
+    dk
   }
-  # Slow
-  nort <- dadm$rt==Inf; nort[is.na(nort)] <- FALSE; nort <- nort & !is.na(dadm$R)
-  if ( any(nort) ) {
-    mpars <- array(pars[nort,,drop=FALSE],dim=c(n_acc,sum(nort)/n_acc,ncol(pars)),
-                   dimnames = list(NULL,NULL,colnames(pars)))
-    winner <- matrix(dadm$winner[nort],nrow=n_acc)
-    tofix <- dadm$winner & nort
-    for (i in 1:dim(mpars)[2]) {
-      tmp <- try(integrate(f,lower=UC[nort],upper=UT[nort],p=mpars[,i,][order(!winner[,i]),],
-                           dfun=model$dfun,pfun=model$pfun),silent=TRUE)
-      if (!inherits(tmp, "try-error") && suppressWarnings(!is.nan(log(tmp$value))))
-        lds[tofix][i] <- log(pmax(0,pmin(tmp$value,1)))
-    }
-  }
-  # No direction
-  nort <- is.na(dadm$rt) & !is.na(dadm$R)
-  if ( any(nort) ) {
-    mpars <- array(pars[nort,,drop=FALSE],dim=c(n_acc,sum(nort)/n_acc,ncol(pars)),
-                   dimnames = list(NULL,NULL,colnames(pars)))
-    winner <- matrix(dadm$winner[nort],nrow=n_acc)
-    tofix <- dadm$winner & nort
-    for (i in 1:dim(mpars)[2]) {
-      tmp <- try(integrate(f,lower=LT[nort],upper=LC[nort],p=mpars[,i,][order(!winner[,i]),],
-                           dfun=model$dfun,pfun=model$pfun),silent=TRUE)
-      if ( !inherits(tmp,"try-error") && suppressWarnings(!is.nan(tmp$value)) ) {
-        p <- tmp$value
-        tmp <- try(integrate(f,lower=UC[nort],upper=UT[nort],p=mpars[,i,][order(!winner[,i]),],
-                             dfun=model$dfun,pfun=model$pfun),silent=TRUE)
-        if ( !inherits(tmp,"try-error") && suppressWarnings(!is.nan(tmp$value)) )
-          p <- p + tmp$value else p <- 0
-      } else p <- 0
-      lds[tofix][i] <- log(pmax(0,pmin(p,1)))
-    }
-  }
-  
-  # Response unknown
-  # Fast
-  nort <- dadm$rt==-Inf; nort[is.na(nort)] <- FALSE; nort <- nort & is.na(dadm$R)
-  if ( any(nort) ) {
-    mpars <- array(pars[nort,,drop=FALSE],dim=c(n_acc,sum(nort)/n_acc,ncol(pars)),
-                   dimnames = list(NULL,NULL,colnames(pars)))
-    winner <- matrix(dadm$winner[nort],nrow=n_acc)
-    tofixfast <- dadm$winner & nort
-    for (i in 1:dim(mpars)[2]) {
-      pc <- try(integrate(f,lower=LT[nort],upper=LC[nort],p=mpars[,i,],
-                          dfun=model$dfun,pfun=model$pfun),silent=TRUE)
-      if (inherits(pc, "try-error") || suppressWarnings(is.nan(pc$value)))
-        p <- NA else p <- pmax(0,pmin(pc$value,1))
-        if (!is.na(p)) {
-          if (p != 0 && !(LT==0 & UT==Inf))  cf <- pr_pt(LT,UT,mpars[,i,],dadm) else cf <- 1
-          if (!is.na(cf)) p <- p*cf
-        }
-        if (!is.na(p) & n_acc>1) for (j in 2:n_acc) {
-          pc <- try(integrate(f,lower=LT,upper=LC,p=mpars[,i,][c(j,c(1:n_acc)[-j]),],
-                              dfun=model$dfun,pfun=model$pfun),silent=TRUE)
-          if (inherits(pc, "try-error") || suppressWarnings(is.nan(pc$value))) {
-            p <- NA; break
-          }
-          if (pc$value != 0 & !(LT==0 & UT==Inf))
-            cf <- pr_pt(LT,UT,mpars[,i,][c(j,c(1:n_acc)[-j]),],dadm) else cf <- 1
-            if (!is.na(cf)) p <- p + pc$value*cf
-        }
-        lp <- log(p)
-        if (!is.nan(lp) & !is.na(lp)) lds[tofixfast][i] <- lp else lds[tofixfast][i] <- -Inf
-    }
-  } else tofixfast <- NA
-  # Slow
-  nort <- dadm$rt==Inf; nort[is.na(nort)] <- FALSE; nort <- nort & is.na(dadm$R)
-  if ( any(nort) ) {
-    mpars <- array(pars[nort,,drop=FALSE],dim=c(n_acc,sum(nort)/n_acc,ncol(pars)),
-                   dimnames = list(NULL,NULL,colnames(pars)))
-    winner <- matrix(dadm$winner[nort],nrow=n_acc)
-    tofixslow <- dadm$winner & nort
-    for (i in 1:dim(mpars)[2]) {
-      pc <- try(integrate(f,lower=UC,upper=UT,p=mpars[,i,],
-                          dfun=model$dfun,pfun=model$pfun),silent=TRUE)
-      if (inherits(pc, "try-error") || suppressWarnings(is.nan(pc$value)))
-        p <- NA else p <- pmax(0,pmin(pc$value,1))
-        if (!is.na(p)) {
-          if (p != 0 && !(LT==0 & UT==Inf))  cf <- pr_pt(LT,UT,mpars[,i,],dadm) else cf <- 1
-          if (!is.na(cf)) p <- p*cf
-        }
-        if (!is.na(p) & n_acc>1) for (j in 2:n_acc) {
-          pc <- try(integrate(f,lower=UC,upper=UT,p=mpars[,i,][c(j,c(1:n_acc)[-j]),],
-                              dfun=model$dfun,pfun=model$pfun),silent=TRUE)
-          if (inherits(pc, "try-error") || suppressWarnings(is.nan(pc$value))) {
-            p <- NA; break
-          }
-          if (pc$value != 0 & !(LT==0 & UT==Inf))
-            cf <- pr_pt(LT,UT,mpars[,i,][c(j,c(1:n_acc)[-j]),],dadm) else cf <- 1
-            if (!is.na(cf)) p <- p + pc$value*cf
-        }
-        lp <- log(p)
-        if (!is.nan(lp) & !is.na(lp)) lds[tofixslow][i] <- lp else lds[tofixslow][i] <- -Inf
-    }
-  } else tofixslow <- NA
-  # no direction
-  nort <- is.na(dadm$rt) & is.na(dadm$R)
-  if ( any(nort) ) {
-    mpars <- array(pars[nort,,drop=FALSE],dim=c(n_acc,sum(nort)/n_acc,ncol(pars)),
-                   dimnames = list(NULL,NULL,colnames(pars)))
-    winner <- matrix(dadm$winner[nort],nrow=n_acc)
-    tofix <- dadm$winner & nort
-    for (i in 1:dim(mpars)[2]) {
-      pc <- pLU(LT,LC,UC,UT,mpars[,i,],dadm)
-      if (is.na(pc)) p <- NA else {
-        if (pc!=0 & !(LT==0 & UT==Inf)) cf <- pr_pt(LT,UT,mpars[,i,],dadm) else cf <- 1
-        if (!is.na(cf)) p <- pc*cf else p <- NA
-        if (!is.na(p) & n_acc>1) for (j in 2:n_acc) {
-          pc <- pLU(LT,LC,UC,UT,mpars[,i,][c(j,c(1:n_acc)[-j]),],dadm)
-          if (is.na(pc)) {
-            p <- NA; break
-          }
-          if (pc!=0 & !(LT==0 & UT==Inf))
-            cf <- pr_pt(LT,UT,mpars[,i,][c(j,c(1:n_acc)[-j]),],dadm) else cf <- 1
-            if (is.na(cf)) {
-              p <- NA; break
-            } else p <- p +  pc*cf
-        }
-      }
-      lp <- log(pmax(0,pmin(p,1)))
-      if (!is.nan(lp) & !is.na(lp)) lds[tofix][i] <- lp
-    }
-  }
-  
-  
-  # Truncation where not censored or censored and response known
-  ok <- is.finite(lds[attr(dadm,"unique_nort") & dadm$winner])
-  alreadyfixed <- is.na(dadm$R[attr(dadm,"unique_nort") & dadm$winner])
-  ok <- ok & !alreadyfixed
-  if ( dotrunc & any(ok) ) {
-    tpars <- pars[attr(dadm,"unique_nort"),]
-    tpars <- array(tpars[,,drop=FALSE],dim=c(n_acc,nrow(tpars)/n_acc,ncol(tpars)),
-                   dimnames = list(NULL,NULL,colnames(tpars)))[,,,drop=FALSE]
-    winner <- matrix(dadm$winner[attr(dadm,"unique_nort")],nrow=n_acc)[,,drop=FALSE]
-    cf <- rep(NA,length(ok))
-    for (i in 1:length(ok)) if (ok[i]) {
-      cf[i] <- pr_pt(LT,UT,tpars[,i,][order(!winner[,i]),],dadm)
-    }
-    cf <- rep(log(cf),each=n_acc)[attr(dadm,"expand_nort")]
-    fix <- dadm$winner & !is.na(cf) & !is.nan(cf) & is.finite(cf)
-    if (any(fix)) lds[fix] <- lds[fix] + cf[fix]
-    badfix <- dadm$winner & (is.na(cf) | is.nan(cf) | is.infinite(cf))
-    if (!all(is.na(tofixfast))) badfix <- badfix & !tofixfast
-    if (!all(is.na(tofixslow))) badfix <- badfix & !tofixslow
-    if (any(badfix)) lds[badfix] <- min_ll
-  }
-  
-  
-  lds <- lds[attr(dadm,"expand")] # decompress
-  if (n_acc>1) {
-    winner <- dadm$winner[attr(dadm,"expand")]
-    ll <- lds[winner]
-    if (n_acc==2) {
-      ll <- ll + lds[!winner]
-    } else {
-      ll <- ll + apply(matrix(lds[!winner],nrow=n_acc-1),2,sum)
-    }
-    
-    ll[is.na(ll) | is.nan(ll)] <- min_ll
-    
-    return(sum(pmax(min_ll,ll)))
-  } else return(sum(pmax(min_ll,lds)))
+  pracma::quadinf(integrand, lower, upper, tol = rel.tol)$Q
 }
+
+## probability of *any* observable response in (lower, upper)
+.truncation_normaliser <- function(pars_mat, lower, upper, model, rel.tol = 1e-5, ...) {
+
+  present <- which(rowSums(is.na(pars_mat)) == 0L)
+  n_acc <- length(present)
+  p_tot <- 0
+  for (k in present) {
+    if (any(is.na(pars_mat[k,]))) {next}
+    p_tot <- p_tot +
+    .integrate_kth_winner(k, pars_mat[present,], lower, upper, model,
+                          rel.tol = rel.tol)
+  }
+  
+  max(p_tot, .Machine$double.eps)             # guard against 0
+}
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Main likelihood -------------------------------------------------------------
+
+log_likelihood_race_cens_trunc <- function(pars,dadm,model,min_ll=log(1e-10)) {
+  cache_env <- new.env(parent = emptyenv())
+  posdrift = ifelse(model$c_name=="LBAIO",FALSE,TRUE)
+  ## ── basic dimensions ──────────────────────────────────────────────────────
+  n_trials <- nrow(dadm)
+  n_acc    <- length(levels(dadm$R))
+  stopifnot(n_trials %% n_acc == 0L)          # one row per acc. per trial
+  n_unique <- n_trials / n_acc
+  
+  if (any(names(dadm)=="RACE")){# Some accumulators not present
+    pars[as.numeric(dadm$lR)>as.numeric(as.character(dadm$RACE)),] <- NA
+  }
+  
+  if (is.null(attr(pars,"ok"))){
+    ok <- !logical(dim(pars)[1])
+  } else ok <- attr(pars,"ok")
+  
+  ## ── convenience column refs ───────────────────────────────────────────────
+  RT <- dadm$rt;  LT <- dadm$LT;  UT <- dadm$UT
+  LC <- dadm$LC;  UC <- dadm$UC;  R_idx <- dadm$R
+  
+  ## ── initialise per-row log densities ──────────────────────────────────────
+  lds <- rep(min_ll, n_trials)
+  ll_unique <- numeric(n_unique)
+  ## ── batch: finite RT, in-bounds, known winner ────────────────────────────
+  finite_mask <- is.finite(RT) & RT > 0 &
+    RT >= LT & RT <= UT & !is.na(R_idx) & !as.numeric(dadm$lR)>as.numeric(as.character(dadm$RACE))
+  
+  if (any(finite_mask)) {
+    
+    # pdf for winners
+    lds[dadm$winner & finite_mask] <-
+      log(model$dfun(rt   = RT[dadm$winner & finite_mask],
+                     pars = pars[dadm$winner & finite_mask, , drop = FALSE]))
+    
+    # survivor for losers
+    if (n_acc > 1L) {
+      loss <- 1 - model$pfun(rt   = RT[!dadm$winner & finite_mask],
+                             pars = pars[!dadm$winner & finite_mask, , drop = FALSE])
+      lds[!dadm$winner & finite_mask] <- log(pmax(loss, 0))
+    }
+    
+    # truncate-window correction, cached by unique trial
+    for (j in seq_len(n_unique)[rowSums(matrix(finite_mask, n_acc)) > 0]) {
+      idx  <- ((j - 1L) * n_acc + 1L):(j * n_acc)
+      n_acc_j = dadm$RACE[idx[1]]
+      idx=idx[1:n_acc_j]
+      if (!(LT[idx[1]] == 0 && UT[idx[1]] == Inf)){
+      key <- .make_key(LT[idx[1]], UT[idx[1]], pars[idx, , drop = FALSE])
+      invZ <- cache_env[[key]]
+      if (is.null(invZ)) {
+        invZ <- 1 / .truncation_normaliser(pars[idx, , drop = FALSE],
+                                LT[idx[1]], UT[idx[1]], model,
+                                rel.tol = 1e-7)
+        cache_env[[key]] <- invZ
+      }
+      lds[idx] <- lds[idx] + log(invZ)
+    }
+      present <- idx[which(rowSums(is.na(pars[idx, , drop=FALSE])) == 0L)]
+      ll_j <- sum(lds[present])
+      ll_unique[j] <- max(min_ll, ll_j)
+    }
+  }
+  
+  ## ── process other trials one-by-one (-Inf, +Inf, NA) ─────────────────────
+  
+
+  for (j in seq_len(n_unique)[rowSums(matrix(finite_mask, n_acc)) == 0]) {
+    
+    idx  <- ((j - 1L) * n_acc + 1L):(j * n_acc)
+    rt   <- RT[idx[1]]          # all rows of a trial share RT
+    Rj   <- R_idx[idx[1]]
+    pval <- 0
+    
+    prob_win <- function(k, lo, hi) {
+      .integrate_kth_winner(k, pars[idx, , drop = FALSE],
+                            lo, hi, model, rel.tol = 1e-5)
+    }
+    n_acc_j = dadm$RACE[idx[1]]
+    idx=idx[1:n_acc_j]
+    if (identical(rt, -Inf)) {                       # fast censor
+      lo <- LT[idx[1]]; hi <- LC[idx[1]]
+      ks <- if (!is.na(Rj)) Rj else seq_len(n_acc_j)
+      pval <- sum(vapply(ks, prob_win, numeric(1), lo, hi))
+      if (posdrift && is.na(Rj)) {                   # intrinsic omission
+        v  <- pars[idx, 1]; sv <- pars[idx, 2]
+        pI <- prod(pnorm(0, v, sv),na.rm=TRUE)
+        pval <- pval + pI
+      }
+      
+    } else if (identical(rt, Inf)) {                 # slow censor
+      lo <- UC[idx[1]]; hi <- UT[idx[1]]
+      ks <- if (!is.na(Rj)) Rj else seq_len(n_acc_j)
+      pval <- sum(vapply(ks, prob_win, numeric(1), lo, hi))
+      if (posdrift && is.na(Rj)) {
+        v  <- pars[idx, "v"]; sv <- pars[idx, "sv"]
+        pI <- prod(pnorm(0, v, sv),na.rm=TRUE)
+        pval <- pval + pI
+      }
+      
+    } else if (is.na(rt)) {                          # missing RT
+      ks <- if (!is.na(Rj)) Rj else seq_len(n_acc_j)
+      lo1 <- LT[idx[1]]; hi1 <- LC[idx[1]]
+      lo2 <- UC[idx[1]]; hi2 <- UT[idx[1]]
+      pval <- sum(vapply(ks, function(k)
+        prob_win(k, lo1, hi1) + prob_win(k, lo2, hi2), numeric(1)))
+      if (posdrift && is.na(Rj)) {
+        v  <- pars[idx, 1]; sv <- pars[idx, 2]
+        pI <- prod(pnorm(0, v, sv),na.rm=TRUE)
+        pval <- pval + pI
+      }
+    }                                               # 0 or negative RT ⇒ prob 0
+    
+    ## truncation correction (if RT unobserved)
+    if (!(LT[idx[1]] == 0 && UT[idx[1]] == Inf) && pval > 0) {
+      key  <- .make_key(LT[idx[1]], UT[idx[1]], pars[idx, , drop = FALSE])
+      invZ <- cache_env[[key]]
+      if (is.null(invZ)) {
+        invZ <- 1 / .truncation_normaliser(pars[idx, , drop = FALSE],
+                                LT[idx[1]], UT[idx[1]], model,
+                                rel.tol = 1e-5, posdrift = posdrift)
+        cache_env[[key]] <- invZ
+      }
+      pval <- pval * invZ
+    }
+    
+    ll_unique[j] <- if (pval > .Machine$double.eps) log(pval) else min_ll
+  }
+  
+  ## ── aggregate over copies (expand) or N column ───────────────────────────
+  return(sum(pmax(min_ll,ll_unique[attr(dadm,"expand")]),na.rm = TRUE))
+}
+
 
 
 log_likelihood_ddm <- function(pars,dadm,model,min_ll=log(1e-10))

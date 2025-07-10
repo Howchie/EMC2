@@ -554,13 +554,13 @@ rt_check_function <- function(data){
   # Censoring
   if ("UC"%in%colnames(data)) {
     check_rt(data$UC,data$rt)
-    if ("UT"%in%colnames(data) && any( is.finite(data$UC) & (data$UC < data$UT)) )
+    if ("UT"%in%colnames(data) && any( is.finite(data$UC) & (data$UC > data$UT)) )
       stop("Upper censor must be less than upper truncation")
   }
   if ("LC"%in%colnames(data)) {
     if (any(data$LC<0)) stop("Lower censor cannot be negative")
     check_rt(data$LC,data$rt,upper=FALSE)
-    if ("LT"%in%colnames(data) && any(data$LT<data$LC))
+    if ("LT"%in%colnames(data) && any(data$LT>data$LC))
       stop("Lower censor must be greater than lower truncation")
   }
   if (any(data$rt[!is.na(data$rt)]==-Inf) & !("LC"%in%colnames(data)))

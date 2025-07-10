@@ -10,6 +10,9 @@
 #include <gsl/gsl_integration.h>
 #include <gsl/gsl_errno.h> // For GSL error handling
 #include <string>
+#include <unordered_map>
+#include <sstream>
+#include <iomanip>
 
 // For LNR, context might be simpler or could reuse above if only min_lik_for_pdf is needed.
 
@@ -274,6 +277,7 @@ double c_log_likelihood_DDM(NumericMatrix pars, DataFrame data,
   return(sum(lls_exp));
 }
 
+/*
 double c_log_likelihood_race(NumericMatrix pars, DataFrame data,
                              RacePdfFun dfun,                  // Pointer to the model's PDF adapter function
 							 RaceCdfFun pfun,
@@ -332,7 +336,6 @@ double c_log_likelihood_race(NumericMatrix pars, DataFrame data,
   }
 }
 
-/*
 // [[Rcpp::export]]
 NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector constants,
             List designs, String type, List bounds, List transforms, List pretransforms,
@@ -611,6 +614,12 @@ Rcpp::NumericMatrix order_pars_for_winner_cpp(
     return ordered_pars;
 } */
 
+bool row_is_finite(const Rcpp::NumericMatrix& mat, int row) {
+    for (int j = 0; j < mat.ncol(); ++j) {
+        if (!R_finite(mat(row, j))) return false;
+    }
+    return true;
+}
 
 // Numerical integration helper using GSL
 // TODO - reinstate ordering - this one shouldn't use the winner vec
@@ -622,18 +631,18 @@ double integrate_for_kth_winner_cpp(
     double upp,
     RacePdfFun model_dfun,
     RaceCdfFun model_pfun,
-    int n_acc,
+    int n_acc_j,
     double epsilon = 1e-5,
     void* model_specific_context = nullptr) {
 
-	LogicalVector winner(isok.size(), false);           // initialise all FALSE
-    winner[k_winner_idx-1] = true; 
+	Rcpp::LogicalVector winner(n_acc_j,false);
+	winner[k_winner_idx-1] = true; 
     if (low >= upp && !(low == 0 && upp == R_PosInf)) return 0.0;
-    if (k_winner_idx < 1 || k_winner_idx > n_acc) {
-      // Rcpp::Rcerr << "Warning: Invalid k_winner_idx in integrate_for_kth_winner_cpp: " << k_winner_idx << std::endl;
+    if (k_winner_idx < 1 || k_winner_idx > (n_acc_j)) {
+      Rcpp::Rcerr << "Warning: Invalid k_winner_idx in integrate_for_kth_winner_cpp: " << k_winner_idx << std::endl;
       return 0.0;
     }
-
+	
     gsl_integration_workspace* w = gsl_integration_workspace_alloc(1000);
     double result, error;
 
@@ -644,7 +653,7 @@ double integrate_for_kth_winner_cpp(
 	params_struct.isok = isok;
     params_struct.model_dfun = model_dfun;
     params_struct.model_pfun = model_pfun;
-    params_struct.n_acc = n_acc;
+    params_struct.n_acc = n_acc_j;
     params_struct.model_specific_context = model_specific_context;
 
     F.function = &gsl_f_race_adapter;
@@ -668,7 +677,7 @@ double integrate_for_kth_winner_cpp(
 
     if (status != GSL_SUCCESS) {
         Rcpp::Rcerr << "GSL_ERROR: " << gsl_strerror(status) << " (code " << status << ")\n"
-                        << "  Inputs: " << p_all_acc << std::endl;
+                        << "  Inputs: " << p_all_acc << n_acc_j << std::endl;
             return 0.0; // 0? Or NaN to indicate error
         return 0.0;
     }
@@ -718,6 +727,31 @@ double get_trunc_normaliser_cpp(
     return (mass>0.0) ? 1.0/mass : NA_REAL;
 }
 
+// Helper function to cache unique parameter combinations
+static inline std::string make_key(int start_row,
+                                   const Rcpp::NumericVector &LT,
+                                   const Rcpp::NumericVector &UT,
+                                   const Rcpp::NumericMatrix &pars,
+                                   int n_acc, int n_par)
+{
+    std::ostringstream oss;
+    oss.setf(std::ios::scientific);        // fixed precision
+    oss << std::setprecision(17);
+
+    oss << LT[start_row] << '|' << UT[start_row] << '|';
+
+    for (int r = 0; r < n_acc; ++r) {
+        for (int c = 0; c < n_par; ++c) {
+            double v = pars(start_row + r, c);
+            if (Rcpp::NumericVector::is_na(v)) oss << "NA";
+            else                               oss << v;
+            oss << ',';
+        }
+        oss << '|';
+    }
+    return oss.str();
+}
+
 // Main C++ function for censored/truncated race likelihood calculation
 // This function is now the unified entry point for all race models (LBA, RDM, LNR),
 // whether they are standard or explicitly handling censoring/truncation.
@@ -736,14 +770,14 @@ double c_log_likelihood_race_cens_trunc(
     int n_acc,                              // Number of accumulators in the race (must be > 0 if data exists)
     void* model_context_for_funcs           // Context for model_dfun/model_pfun (e.g., contains posdrift for LBA)
 ) {
-    // Fetch censoring and truncation values from dadm columns.
+    // Fetch censoring and truncation values from dadm columns. These are passed across all rows for ease of access, but should be identical at least at the subject level as they don't correspond to a data entry. Attributes probably a better fit here but clunky.
     Rcpp::NumericVector LT = dadm["LT"];
 	Rcpp::NumericVector UT = dadm["UT"]; 
 	Rcpp::NumericVector LC = dadm["LC"];    
 	Rcpp::NumericVector UC = dadm["UC"];
-    
-    double integration_epsilon = 1e-8; // Tolerance for GSL integration
-	
+    static std::unordered_map<std::string,double> inv_Z_cache; // for truncation caching
+    double integration_epsilon = 1e-7; // Tolerance for GSL integration
+	int n_acc_j = n_acc;
 	const int n_out = expand.length();
     Rcpp::NumericVector rts_dadm = dadm["rt"];
     Rcpp::IntegerVector R_idxs_dadm = dadm["R"];
@@ -753,6 +787,8 @@ double c_log_likelihood_race_cens_trunc(
 	// If a RACE column exists, set parameters of accumulators not present on a
     // given trial to NA so the density functions return zero for them. This
     // mirrors logic from the old c_log_likelihood_race implementation.
+	NumericVector RACE(n_trials);
+	Rcpp::LogicalVector RACE_mask(n_trials, true); // Mask for all dadm rows
 	if (dadm.containsElementNamed("RACE")) {
 		// factor codes (1-based) for each row
 		Rcpp::IntegerVector race_idx = dadm["RACE"];
@@ -765,11 +801,12 @@ double c_log_likelihood_race_cens_trunc(
 			int n_acc_this_trial = std::stoi(
 				Rcpp::as<std::string>(race_levels[ race_idx[row] - 1 ])
 			);
-
+			RACE[row]=n_acc_this_trial;
 			// lR_dadm is the (1-based) index of *this* accumulator on the trial
 			if (lR_dadm[row] > n_acc_this_trial) {
 				// accumulator not present → blank its parameter row
 				std::fill(pars.row(row).begin(), pars.row(row).end(), NA_REAL);
+				RACE_mask[row]=false;
 			}
 		}
 	}
@@ -797,8 +834,13 @@ double c_log_likelihood_race_cens_trunc(
     Rcpp::LogicalVector finite_rt_mask(n_trials, false); // Mask for all dadm rows
 	std::vector<int> finite_dadm_rows_indices; // Stores actual dadm/pars row indices for finite RTs
     finite_dadm_rows_indices.reserve(n_trials); // Reserve space
-	// Common truncation factor, compute once -- seems WRONG
-	double inv_Z = 1;  // Default inv_Z if no truncation
+	double inv_Z_this = 1;  // Default inv_Z if no truncation. Should never be used but here as a precaution.
+	double lower_for_trial = 0; 
+	double upper_for_trial = R_PosInf;
+	ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(model_context_for_funcs);
+    // If posdrift=true we'll add the probability of an intrinsic omission in relevant sections
+    bool posdrift=ctx->use_posdrift;
+	// Batch process finite rt trials
 	std::vector<int> finite_rt_unique_trial_indices; // Stores *unique trial* indices for finite RTs
 	std::vector<int> other_unique_trial_indices;   // Stores *unique trial* indices for other cases
     finite_rt_unique_trial_indices.reserve(n_unique_trials);
@@ -809,10 +851,11 @@ double c_log_likelihood_race_cens_trunc(
         int unique_trial_idx = j * n_acc; // Starting row in dadm/pars for this unique trial
         double rt_j = rts_dadm[unique_trial_idx]; // RT for this unique trial
         int R_j_idx = R_idxs_dadm[unique_trial_idx]; // Winner index (1-based from R factor)
+		int n_acc_j = RACE[unique_trial_idx];
         // Criteria for batch processing: finite, positive RT, within truncation bounds [LT, UT], and known winner
         if (R_FINITE(rt_j) && rt_j > 0 && rt_j >= LT[unique_trial_idx] && rt_j <= UT[unique_trial_idx] && R_j_idx != NA_INTEGER) {
 			finite_rt_unique_trial_indices.push_back(j); // Store unique trial index
-            for(int k_acc = 0; k_acc < n_acc; ++k_acc) {
+            for(int k_acc = 0; k_acc < n_acc_j; ++k_acc) {
                 int dadm_row_idx = unique_trial_idx + k_acc;
 				finite_rt_mask[dadm_row_idx] = true;
                 finite_dadm_rows_indices.push_back(dadm_row_idx);
@@ -867,32 +910,33 @@ double c_log_likelihood_race_cens_trunc(
         for (size_t i = 0; i < finite_rt_unique_trial_indices.size(); ++i) {
             int unique_trial_idx = finite_rt_unique_trial_indices[i];
 			int start_row_idx = unique_trial_idx*(n_acc);
-            Rcpp::NumericMatrix p_all_acc_for_trial = pars(Rcpp::Range(start_row_idx, start_row_idx + n_acc - 1), Rcpp::_);
-            Rcpp::LogicalVector isok_for_trial = isok[Rcpp::Range(start_row_idx, start_row_idx + n_acc - 1)];
-			double lower_for_trial = LT[start_row_idx];
-			double upper_for_trial = UT[start_row_idx];
-			if (LT[start_row_idx]!=0 || UT[start_row_idx] != R_PosInf) {
-						inv_Z = get_trunc_normaliser_cpp(p_all_acc_for_trial,model_dfun, model_pfun,isok_for_trial,lower_for_trial, upper_for_trial, n_acc,integration_epsilon,model_context_for_funcs);
+			n_acc_j = RACE[start_row_idx];
+            Rcpp::NumericMatrix p_all_acc_for_trial = pars(Rcpp::Range(start_row_idx, start_row_idx + n_acc_j - 1), Rcpp::_);
+            Rcpp::LogicalVector isok_for_trial = isok[Rcpp::Range(start_row_idx, start_row_idx + n_acc_j - 1)];
+			lower_for_trial = LT[start_row_idx];
+			upper_for_trial = UT[start_row_idx];
+			if (LT[start_row_idx]!=0 || UT[start_row_idx] != R_PosInf) { // if truncation
+				std::string key = make_key(start_row_idx, LT, UT, pars, n_acc_j, pars.ncol());
+				auto hit = inv_Z_cache.find(key);
+				if (hit != inv_Z_cache.end()) { // check if we've integrated this exact parameter set already and re-use result if we have
+					inv_Z_this = hit->second;
+				} else { // otherwise compute the integral and cache it
+					inv_Z_this  = get_trunc_normaliser_cpp(p_all_acc_for_trial,model_dfun, model_pfun,isok_for_trial,lower_for_trial, upper_for_trial, n_acc_j,integration_epsilon,model_context_for_funcs);
+					inv_Z_cache.emplace(std::move(key), inv_Z_this);
+				}
 			}
 			double current_trial_ll_sum = 0.0;
-			bool any_valid_component = false;
-			for(int k=0; k < n_acc; ++k) {
+			for(int k=0; k < n_acc_j; ++k) {
 				int dadm_row_idx = start_row_idx + k; // Correct index into lds
-				if (lds[dadm_row_idx] > min_ll - 1.0) { // Check if component is not essentially min_ll
-					any_valid_component = true;
-				}
 				current_trial_ll_sum += lds[dadm_row_idx];
 			}
 
-            if (!any_valid_component) { // All components were min_ll or less
-                 ll_unique[unique_trial_idx] = min_ll;
-			} 
-			else if ((LT[start_row_idx] != 0 || UT[start_row_idx] != R_PosInf) && (NumericVector::is_na(inv_Z) || !R_FINITE(inv_Z) || inv_Z <= 0)) {
-                    // If truncation active but inv_Z is bad, probability is effectively zero
+			if ((LT[start_row_idx] != 0 || UT[start_row_idx] != R_PosInf) && (NumericVector::is_na(inv_Z_this) || !R_FINITE(inv_Z_this) || inv_Z_this <= 0)) {
+                    // If truncation active but inv_Z is bad, probability is effectively zero. Could mean the probability of observing an untruncated RT is zero, which would be bad.
                     ll_unique[unique_trial_idx] = min_ll;
 			} 
 			else if (LT[start_row_idx] != 0 || UT[start_row_idx] != R_PosInf) { // Truncation active and inv_Z is good
-                        current_trial_ll_sum += std::log(inv_Z);
+						current_trial_ll_sum += std::log(inv_Z_this);
 			}
 			// If no truncation, inv_Z is not added.
 			ll_unique[unique_trial_idx] = current_trial_ll_sum;
@@ -901,38 +945,60 @@ double c_log_likelihood_race_cens_trunc(
 	}
     // --- Process other trials (Infinite RTs, NA RTs, or finite RTs outside truncation) ---
     // These trials require individual processing, often involving numerical integration for censored intervals.
+	double current_prob_val;
     for (size_t i = 0; i < other_unique_trial_indices.size(); ++i) {
 		int unique_trial_idx = other_unique_trial_indices[i];
 		int start_row_idx = unique_trial_idx*n_acc;
-		Rcpp::NumericMatrix p_all_acc_for_trial = pars(Rcpp::Range(start_row_idx, start_row_idx + n_acc - 1), Rcpp::_);
-        Rcpp::LogicalVector isok_for_trial = isok[Rcpp::Range(start_row_idx, start_row_idx + n_acc - 1)];
-		Rcpp::LogicalVector winner_for_trial = winner[Rcpp::Range(start_row_idx, start_row_idx + n_acc - 1)];
+		n_acc_j = RACE[start_row_idx];
+		Rcpp::NumericMatrix p_all_acc_for_trial = pars(Rcpp::Range(start_row_idx, start_row_idx + n_acc_j - 1), Rcpp::_);
+        Rcpp::LogicalVector isok_for_trial = isok[Rcpp::Range(start_row_idx, start_row_idx + n_acc_j - 1)];
+		Rcpp::LogicalVector winner_for_trial = winner[Rcpp::Range(start_row_idx, start_row_idx + n_acc_j - 1)];
         double rt_j = rts_dadm[start_row_idx];
         int R_j_idx = R_idxs_dadm[start_row_idx];
-        double current_prob_val = 0.0;
+        current_prob_val = 0.0;
         // Case 2: Fast censoring (RT=-Inf). Probability is integral from LT to LC.
         if (rt_j == R_NegInf) {
-			double lower_for_trial = LT[start_row_idx];
-			double upper_for_trial = LC[start_row_idx];
+			lower_for_trial = LT[start_row_idx];
+			upper_for_trial = LC[start_row_idx];
             if (R_j_idx != NA_INTEGER) { // Response (winner) is known
-                current_prob_val = integrate_for_kth_winner_cpp(R_j_idx, p_all_acc_for_trial, isok_for_trial, lower_for_trial, upper_for_trial, model_dfun, model_pfun, n_acc, integration_epsilon, model_context_for_funcs);
+                current_prob_val = integrate_for_kth_winner_cpp(R_j_idx, p_all_acc_for_trial, isok_for_trial, lower_for_trial, upper_for_trial, model_dfun, model_pfun, n_acc_j, integration_epsilon, model_context_for_funcs);
             } else { // Response (winner) is unknown; sum probabilities over all possible winners
-                for (int k_win = 1; k_win <= n_acc; ++k_win) {
-                    double p_k = integrate_for_kth_winner_cpp(k_win, p_all_acc_for_trial, isok_for_trial, lower_for_trial, upper_for_trial, model_dfun, model_pfun, n_acc, integration_epsilon, model_context_for_funcs);
-					current_prob_val += p_k; 
+                for (int k_win = 1; k_win <= n_acc_j; ++k_win) {
+                    double p_k = integrate_for_kth_winner_cpp(k_win, p_all_acc_for_trial, isok_for_trial, lower_for_trial, upper_for_trial, model_dfun, model_pfun, n_acc_j, integration_epsilon, model_context_for_funcs);
+					current_prob_val += p_k;
 					}
+				if (!posdrift) { // should only ever bet set for LBAIO modeldouble 
+					double pI = 1.0;
+					for (int k = 0; k < n_acc_j; ++k) {
+						double v   = p_all_acc_for_trial(k, 0);   // mean drift for kth acc
+						double sv  = p_all_acc_for_trial(k, 1);   // its s.d.
+						double p_neg = R::pnorm(0.0, v, sv, 1,0); // (same as 1-pnorm(v/sv,0,1)
+						pI *= p_neg; // we multiply to get the probability that EVERY accumulator was negative
+					}
+					current_prob_val += pI; // add intrinsic-omission probability
+				}
             }
         // Case 3: Slow censoring (RT = Inf). Probability is integral from UC to UT.
         } else if (rt_j == R_PosInf) {
-			double lower_for_trial = UC[start_row_idx];
-			double upper_for_trial = UT[start_row_idx];
+			lower_for_trial = UC[start_row_idx];
+			upper_for_trial = UT[start_row_idx];
             if (R_j_idx != NA_INTEGER) { // Response (winner) is known
-                current_prob_val = integrate_for_kth_winner_cpp(R_j_idx, p_all_acc_for_trial, isok_for_trial, lower_for_trial, upper_for_trial, model_dfun, model_pfun, n_acc, integration_epsilon, model_context_for_funcs);
+                current_prob_val = integrate_for_kth_winner_cpp(R_j_idx, p_all_acc_for_trial, isok_for_trial, lower_for_trial, upper_for_trial, model_dfun, model_pfun, n_acc_j, integration_epsilon, model_context_for_funcs);
             } else { // Response (winner) is unknown; sum probabilities over all possible winners
-                for (int k_win = 1; k_win <= n_acc; ++k_win) {
-                    double p_k = integrate_for_kth_winner_cpp(k_win, p_all_acc_for_trial, isok_for_trial, lower_for_trial, upper_for_trial, model_dfun, model_pfun, n_acc, integration_epsilon, model_context_for_funcs);
+                for (int k_win = 1; k_win <= n_acc_j; ++k_win) {
+                    double p_k = integrate_for_kth_winner_cpp(k_win, p_all_acc_for_trial, isok_for_trial, lower_for_trial, upper_for_trial, model_dfun, model_pfun, n_acc_j, integration_epsilon, model_context_for_funcs);
 					current_prob_val += p_k;
                 }
+				if (!posdrift) { // should only ever bet set for LBAIO modeldouble 
+					double pI = 1.0;
+					for (int k = 0; k < n_acc_j; ++k) {
+						double v   = p_all_acc_for_trial(k, 0);   // mean drift for kth acc
+						double sv  = p_all_acc_for_trial(k, 1);   // its s.d.
+						double p_neg = R::pnorm(0.0, v, sv, 1,0); // (same as 1-pnorm(v/sv,0,1)
+						pI *= p_neg; // we multiply to get the probability that EVERY accumulator was negative
+					}
+					current_prob_val += pI; // add intrinsic-omission probability
+				}
 			}
         // Case 4: Missing RT (NA). Probability is sum of integral from LT to LC and UC to UT (i.e., outside the observation window but within truncation).
         } else if (NumericVector::is_na(rt_j)) {
@@ -942,28 +1008,44 @@ double c_log_likelihood_race_cens_trunc(
 			double upper_for_trial2 = UT[start_row_idx];
 			Rcpp::Rcout<<"start case 4"<<std::endl;
             if (R_j_idx != NA_INTEGER) { // Response (winner) is known
-                double p_L = integrate_for_kth_winner_cpp(R_j_idx, p_all_acc_for_trial, isok_for_trial, lower_for_trial1, upper_for_trial1, model_dfun, model_pfun, n_acc, integration_epsilon, model_context_for_funcs);
-                double p_U = integrate_for_kth_winner_cpp(R_j_idx, p_all_acc_for_trial, isok_for_trial, lower_for_trial2, upper_for_trial2, model_dfun, model_pfun, n_acc, integration_epsilon, model_context_for_funcs);
+                double p_L = integrate_for_kth_winner_cpp(R_j_idx, p_all_acc_for_trial, isok_for_trial, lower_for_trial1, upper_for_trial1, model_dfun, model_pfun, n_acc_j, integration_epsilon, model_context_for_funcs);
+                double p_U = integrate_for_kth_winner_cpp(R_j_idx, p_all_acc_for_trial, isok_for_trial, lower_for_trial2, upper_for_trial2, model_dfun, model_pfun, n_acc_j, integration_epsilon, model_context_for_funcs);
                 current_prob_val = p_L + p_U;
             } else { // Response (winner) is unknown; sum probabilities over all possible winners
-                for (int k_win = 1; k_win <= n_acc; ++k_win) {
-                    double p_L_k = integrate_for_kth_winner_cpp(k_win, p_all_acc_for_trial, isok_for_trial, lower_for_trial1, upper_for_trial1, model_dfun, model_pfun, n_acc, integration_epsilon, model_context_for_funcs);
-                    double p_U_k = integrate_for_kth_winner_cpp(k_win, p_all_acc_for_trial, isok_for_trial, lower_for_trial2, upper_for_trial2, model_dfun, model_pfun, n_acc, integration_epsilon, model_context_for_funcs);
+                for (int k_win = 1; k_win <= n_acc_j; ++k_win) {
+                    double p_L_k = integrate_for_kth_winner_cpp(k_win, p_all_acc_for_trial, isok_for_trial, lower_for_trial1, upper_for_trial1, model_dfun, model_pfun, n_acc_j, integration_epsilon, model_context_for_funcs);
+                    double p_U_k = integrate_for_kth_winner_cpp(k_win, p_all_acc_for_trial, isok_for_trial, lower_for_trial2, upper_for_trial2, model_dfun, model_pfun, n_acc_j, integration_epsilon, model_context_for_funcs);
                     double p_k_sum = p_L_k + p_U_k;
                     current_prob_val += p_k_sum; 
                 }
+				if (!posdrift) { // should only ever bet set for LBAIO modeldouble 
+					double pI = 1.0;
+					for (int k = 0; k < n_acc_j; ++k) {
+						double v   = p_all_acc_for_trial(k, 0);   // mean drift for kth acc
+						double sv  = p_all_acc_for_trial(k, 1);   // its s.d.
+						double p_neg = R::pnorm(0.0, v, sv, 1,0); // (same as 1-pnorm(v/sv,0,1)
+						pI *= p_neg; // we multiply to get the probability that EVERY accumulator was negative
+					}
+					current_prob_val += pI; // add intrinsic-omission probability
+				}
             }
         }
-		double lower_for_trial = LT[start_row_idx];
-		double upper_for_trial = UT[start_row_idx];
+		lower_for_trial = LT[start_row_idx];
+		upper_for_trial = UT[start_row_idx];
         // Else: rt_j is 0 or negative finite (but not -Inf), current_prob_val remains 0.
 		// Apply trial-level truncation-correction i.e. probability of observing ANY trial in the truncation window
 		if (current_prob_val > 0 && (LT[start_row_idx]!=0 || UT[start_row_idx] != R_PosInf) ) {
-			inv_Z = get_trunc_normaliser_cpp(p_all_acc_for_trial,model_dfun, model_pfun,isok_for_trial,lower_for_trial, upper_for_trial, n_acc,integration_epsilon,model_context_for_funcs);
-			if (!NumericVector::is_na(inv_Z) && R_FINITE(inv_Z) && inv_Z >=0){current_prob_val *= inv_Z;}
+			std::string key = make_key(start_row_idx, LT, UT, pars, n_acc_j, pars.ncol());
+			auto hit = inv_Z_cache.find(key);
+			if (hit != inv_Z_cache.end()) { // fast path check if we've integrated this exact parameter set already and re-use result if we have
+				inv_Z_this = hit->second;
+			} else { // otherwise compute the integral and cache it
+				inv_Z_this  = get_trunc_normaliser_cpp(p_all_acc_for_trial,model_dfun, model_pfun,isok_for_trial,lower_for_trial, upper_for_trial, n_acc_j,integration_epsilon,model_context_for_funcs);
+				inv_Z_cache.emplace(std::move(key), inv_Z_this);
+			}
+			
+			if (!NumericVector::is_na(inv_Z_this) && R_FINITE(inv_Z_this) && inv_Z_this >=0){current_prob_val *= inv_Z_this;}
 		}
-        
-        
 		current_prob_val = std::max(0.0, current_prob_val); // Ensure probability is not negative
         ll_unique[unique_trial_idx] = (current_prob_val > std::numeric_limits<double>::epsilon()) ? std::log(current_prob_val) : min_ll;
         ll_unique[unique_trial_idx] = std::max(min_ll, ll_unique[unique_trial_idx]); // Ensure not less than min_ll
