@@ -355,17 +355,17 @@ log_likelihood_race <- function(pars,dadm,model,min_ll=log(1e-10))
 
 log_likelihood_race_cens_trunc <- function(pars,dadm,model,min_ll=log(1e-10)) {
   cache_env <- new.env(parent = emptyenv())
-  posdrift = ifelse(model$c_name=="LBAIO",FALSE,TRUE)
+  posdrift = ifelse(model$c_name=="LBAIO",TRUE,FALSE)
   ## ── basic dimensions ──────────────────────────────────────────────────────
   n_trials <- nrow(dadm)
   n_acc    <- length(levels(dadm$R))
   stopifnot(n_trials %% n_acc == 0L)          # one row per acc. per trial
   n_unique <- n_trials / n_acc
-  
+  dadm$RACE_num <- if("RACE" %in% names(dadm)) as.numeric(as.character(dadm$RACE)) else rep(n_acc, n_trials)
   if (any(names(dadm)=="RACE")){# Some accumulators not present
     pars[as.numeric(dadm$lR)>as.numeric(as.character(dadm$RACE)),] <- NA
   }
-  
+  #dadm = dadm[dadm$RACE_num<=as.numeric(dadm$lR),] # drop missing accumulator rows
   if (is.null(attr(pars,"ok"))){
     ok <- !logical(dim(pars)[1])
   } else ok <- attr(pars,"ok")
@@ -375,12 +375,12 @@ log_likelihood_race_cens_trunc <- function(pars,dadm,model,min_ll=log(1e-10)) {
   LC <- dadm$LC;  UC <- dadm$UC;  R_idx <- dadm$R
   
   ## ── initialise per-row log densities ──────────────────────────────────────
-  lds <- rep(min_ll, n_trials)
+  lds <- rep(NA, n_trials)
   ll_unique <- numeric(n_unique)
   ## ── batch: finite RT, in-bounds, known winner ────────────────────────────
   finite_mask <- is.finite(RT) & RT > 0 &
-    RT >= LT & RT <= UT & !is.na(R_idx) & !as.numeric(dadm$lR)>as.numeric(as.character(dadm$RACE))
-  
+    RT >= LT & RT <= UT & !is.na(R_idx) & (as.numeric(dadm$lR) <= dadm$RACE_num)
+  trunc_cens_mask = !(is.finite(RT)) & (as.numeric(dadm$lR) <= dadm$RACE_num)
   if (any(finite_mask)) {
     
     # pdf for winners
@@ -396,46 +396,48 @@ log_likelihood_race_cens_trunc <- function(pars,dadm,model,min_ll=log(1e-10)) {
     }
     
     # truncate-window correction, cached by unique trial
-    for (j in seq_len(n_unique)[rowSums(matrix(finite_mask, n_acc)) > 0]) {
+    for (j in seq_len(n_unique)) {
       idx  <- ((j - 1L) * n_acc + 1L):(j * n_acc)
-      n_acc_j = dadm$RACE[idx[1]]
+      if (finite_mask[idx[1]]) {
+      n_acc_j = dadm$RACE_num[idx[1]]
       idx=idx[1:n_acc_j]
       if (!(LT[idx[1]] == 0 && UT[idx[1]] == Inf)){
-      key <- .make_key(LT[idx[1]], UT[idx[1]], pars[idx, , drop = FALSE])
-      invZ <- cache_env[[key]]
-      if (is.null(invZ)) {
-        invZ <- 1 / .truncation_normaliser(pars[idx, , drop = FALSE],
-                                LT[idx[1]], UT[idx[1]], model,
-                                rel.tol = 1e-7)
-        cache_env[[key]] <- invZ
+        key <- .make_key(LT[idx[1]], UT[idx[1]], pars[idx, , drop = FALSE])
+        invZ <- cache_env[[key]]
+        if (is.null(invZ)) {
+          invZ <- 1 / .truncation_normaliser(pars[idx, , drop = FALSE],
+                                  LT[idx[1]], UT[idx[1]], model,
+                                  rel.tol = 1e-7)
+          cache_env[[key]] <- invZ
+        }
+        lds[idx] <- lds[idx] + log(invZ)
+        }
+        present <- idx[which(rowSums(is.na(pars[idx, , drop=FALSE])) == 0L)]
+        ll_j <- sum(lds[present])
+        ll_unique[j] <- max(min_ll, ll_j)
       }
-      lds[idx] <- lds[idx] + log(invZ)
-    }
-      present <- idx[which(rowSums(is.na(pars[idx, , drop=FALSE])) == 0L)]
-      ll_j <- sum(lds[present])
-      ll_unique[j] <- max(min_ll, ll_j)
     }
   }
   
   ## ── process other trials one-by-one (-Inf, +Inf, NA) ─────────────────────
-  
+  prob_win <- function(k, lo, hi) {
+    .integrate_kth_winner(k, pars[idx, , drop = FALSE],
+                          lo, hi, model, rel.tol = 1e-5)
+  }
 
-  for (j in seq_len(n_unique)[rowSums(matrix(finite_mask, n_acc)) == 0]) {
-    
+  for (j in seq_len(n_unique)) {
+    if (!trunc_cens_mask[j]) {next}
     idx  <- ((j - 1L) * n_acc + 1L):(j * n_acc)
     rt   <- RT[idx[1]]          # all rows of a trial share RT
     Rj   <- R_idx[idx[1]]
     pval <- 0
     
-    prob_win <- function(k, lo, hi) {
-      .integrate_kth_winner(k, pars[idx, , drop = FALSE],
-                            lo, hi, model, rel.tol = 1e-5)
-    }
-    n_acc_j = dadm$RACE[idx[1]]
+    
+    n_acc_j = dadm$RACE_num[idx[1]]
     idx=idx[1:n_acc_j]
+    if(is.na(Rj)){ks = 1:n_acc_j}else{ks = Rj}
     if (identical(rt, -Inf)) {                       # fast censor
       lo <- LT[idx[1]]; hi <- LC[idx[1]]
-      ks <- if (!is.na(Rj)) Rj else seq_len(n_acc_j)
       pval <- sum(vapply(ks, prob_win, numeric(1), lo, hi))
       if (posdrift && is.na(Rj)) {                   # intrinsic omission
         v  <- pars[idx, 1]; sv <- pars[idx, 2]
@@ -445,7 +447,6 @@ log_likelihood_race_cens_trunc <- function(pars,dadm,model,min_ll=log(1e-10)) {
       
     } else if (identical(rt, Inf)) {                 # slow censor
       lo <- UC[idx[1]]; hi <- UT[idx[1]]
-      ks <- if (!is.na(Rj)) Rj else seq_len(n_acc_j)
       pval <- sum(vapply(ks, prob_win, numeric(1), lo, hi))
       if (posdrift && is.na(Rj)) {
         v  <- pars[idx, "v"]; sv <- pars[idx, "sv"]
@@ -454,7 +455,6 @@ log_likelihood_race_cens_trunc <- function(pars,dadm,model,min_ll=log(1e-10)) {
       }
       
     } else if (is.na(rt)) {                          # missing RT
-      ks <- if (!is.na(Rj)) Rj else seq_len(n_acc_j)
       lo1 <- LT[idx[1]]; hi1 <- LC[idx[1]]
       lo2 <- UC[idx[1]]; hi2 <- UT[idx[1]]
       pval <- sum(vapply(ks, function(k)
