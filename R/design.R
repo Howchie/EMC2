@@ -158,7 +158,7 @@ design <- function(formula = NULL,factors = NULL,Rlevels = NULL,model,data=NULL,
   design <- list(Flist=formula,Ffactors=factors,Rlevels=Rlevels,
                  Clist=contrasts,matchfun=matchfun,constants=constants,
                  Fcovariates=covariates,Ffunctions=functions,model=model,
-                 fixed_accumulator_roles=fixed_accumulator_roles) # Added new argument here
+                 fixed_accumulator_roles=fixed_accumulator_roles) # ZH Added new argument here to support logical rules models
   class(design) <- "emc.design"
   if (!is.null(trend)) {
     model <- update_model_trend(trend, model)
@@ -295,7 +295,6 @@ contr.anova <- function(n) {
 add_accumulators <- function(data,matchfun=NULL,simulate=FALSE, type = "RACE", Fcovariates=NULL, fixed_accumulator_roles = NULL) {
   if(is.null(type) || !type %in% c("RACE", "SDT", "MT", "TC")) return(data)
   if (!is.factor(data$R)) stop("data must have a factor R")
-
   # Get all attributes from the input data
   all_input_attrs <- attributes(data)
   # Define standard attributes to exclude
@@ -312,25 +311,27 @@ add_accumulators <- function(data,matchfun=NULL,simulate=FALSE, type = "RACE", F
 
   if (!is.null(fixed_accumulator_roles)) {
     # New logic branch for fixed accumulator roles
-    if (!is.character(fixed_accumulator_roles) || length(fixed_accumulator_roles) == 0) {
-      stop("fixed_accumulator_roles must be a character vector with at least one role name.")
+    if (!is.factor(fixed_accumulator_roles) || length(fixed_accumulator_roles) == 0) {
+      stop("fixed_accumulator_roles must be a factor with at least one role name and ordered levels.")
     }
     if (!"R" %in% names(data)) {
       stop("Input 'data' must contain an 'R' column with observed 'yes'/'no' responses when using fixed_accumulator_roles.")
     }
     # It's good practice to ensure data$R is a factor if it's not already for consistency,
     # though the likelihood will check its values.
-    if (!is.factor(data$R)) data$R <- factor(data$R)
-
-
+    
     nacc <- length(fixed_accumulator_roles)
     datar <- do.call(rbind, lapply(1:nacc, function(x) data))
-
+    datar <- cbind(do.call(rbind,lapply(1:nacc,function(x){data})),
+                   lR=factor(rep(levels(fixed_accumulator_roles),each=dim(data)[1]),levels=levels(fixed_accumulator_roles)))
+    datar <- datar[order(rep(1:dim(data)[1],nacc),datar$lR),]
     # datar$R already contains the replicated observed "yes"/"no" responses from the original data$R.
     # Create datar$lR as the accumulator role factor
-    datar$lR <- factor(rep(fixed_accumulator_roles, each = nrow(data)),
-                       levels = fixed_accumulator_roles)
-
+    datar$lR <- factor(
+      rep(fixed_accumulator_roles, length.out = nrow(datar)),
+      levels = fixed_accumulator_roles
+    )
+  
     if (!is.null(matchfun)) {
       lM_values <- matchfun(datar) # matchfun sees d$R as "yes/no", d$lR as role
       if (!is.factor(lM_values)) {
@@ -352,9 +353,8 @@ add_accumulators <- function(data,matchfun=NULL,simulate=FALSE, type = "RACE", F
     # Existing logic for add_accumulators
     if(is.null(type) || !type %in% c("RACE", "SDT", "MT", "TC")) return(data)
     if (!is.factor(data$R)) stop("data must have a factor R (for traditional accumulator setup).")
-    factors <- names(data)[!names(data) %in% c("R","rt","trials",Fcovariates)] # This might need adjustment if fixed_accumulator_roles changes things.
-                                                                            # However, this 'factors' is only used for the lSmagnitude part below,
-                                                                            # which is specific to the old RACE/SDT logic.
+    factors <- names(data)[!names(data) %in% c("R","rt","trials","fixed_accumulator_roles",Fcovariates)] # This might need adjustment if fixed_accumulator_roles changes things.
+                                                                            
     if (type %in% c("RACE","SDT")) {
     nacc <- length(levels(data$R))
     datar <- cbind(do.call(rbind,lapply(1:nacc,function(x){data})),
@@ -578,7 +578,6 @@ design_model <- function(data,design,model=NULL,
                          add_acc=TRUE,rt_resolution=0.02,verbose=TRUE,
                          compress=TRUE,rt_check=TRUE, add_da = FALSE, all_cells_dm = FALSE)
 {
-  #browser()
   if("LT"%in%colnames(data))LT=data$LT else{LT <- attr(data,"LT")}; if (is.null(LT)) LT <- 0
   if("UT"%in%colnames(data))UT=data$UT else{UT <- attr(data,"UT")}; if (is.null(UT)) UT <- Inf
   if("LC"%in%colnames(data))LC=data$LC else{LC <- attr(data,"LC")}; if (is.null(LC)) LC <- 0
@@ -590,7 +589,6 @@ design_model <- function(data,design,model=NULL,
   }
   # Retrieve fixed_accumulator_roles from the design object
   fixed_accumulator_roles <- design$fixed_accumulator_roles # Defaults to NULL if not present
-
   if (model()$type=="SDT") rt_check <- FALSE
   if(grepl("MRI", model()$type)){
     dadm <- data

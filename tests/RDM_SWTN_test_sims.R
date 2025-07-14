@@ -1,15 +1,19 @@
-### Test implementation of RDMSWTN
-devtools::load_all(reset = TRUE)
-Sys.setenv(PAR_DEBUG = "1")   # turn serial mode on
-source("forceSerial_TEST.R")         # your breakpoints now trigger
-#Sys.unsetenv("PAR_DEBUG")     # remove when finished
 ## Script to simulate from, and test recovery of, RDMSWTN
 library(EMC2)
+devtools::load_all(reset = TRUE)
 RNGkind("L'Ecuyer-CMRG")
 set.seed(123)
-
+# Sys.setenv(PAR_DEBUG = "1")   # turn serial mode on
+# if (identical(Sys.getenv("PAR_DEBUG"), "1")) {      # opt-in via env-var
+#   env <- asNamespace("parallel")
+#   unlockBinding("parLapply", env)                   # temporarily unlock
+#   assign("parLapply", function(cl, X, FUN, ...) {
+#     lapply(X, FUN, ...)                             # <- runs in master R
+#   }, envir = env)
+#   lockBinding("parLapply", env)
+# }
 ## Set simulation parameters:
-nsubs=10; ntrials=500
+nsubs=1; ntrials=200
 ## For maximum testing purposes we'll simulate from a model with varying n_acc
 matchfun <- function(d) as.numeric(d$S)==as.numeric(d$lR) |
   (d$lR=="pm" & as.numeric(d$S)>2)
@@ -56,9 +60,9 @@ s_vector[regexpr("^v.*TRUE",names(p_vector))==1] <- 1
 s_vector[regexpr("^v.*FALSE",names(p_vector))==1] <- 1
 s_vector[which(names(s_vector)=="v")]<-1
 prior_pars=do_reverse_transform_variance(p_vector,s_vector,designRDMSWTN$model(),FALSE)
-priorRDMSWTN = prior(designRDMSWTN,mu_mean=prior_pars$pars,mu_sd=sqrt(prior_pars$var),type="standard")
+priorRDMSWTN = prior(designRDMSWTN,mu_mean=prior_pars$pars,mu_sd=sqrt(prior_pars$var),type="single")
 
-emc <- make_emc(dat,designRDMSWTN,type="standard",prior=priorRDMSWTN)
+emc <- make_emc(dat,designRDMSWTN,type="single",prior=priorRDMSWTN)
 emc <- fit(emc,cores_for_chains = 1,cores_per_chain=1,fileName = 'samples.RData')
 #recovery(emc,p_vector)
 plot_pars(emc)

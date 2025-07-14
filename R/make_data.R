@@ -297,6 +297,26 @@ RACE_rfun <- function(data, pars, model){
   return(Rrt)
 }
 
+OR_rfun <- function(data, pars, model){
+  Rrt <- matrix(ncol=2,nrow=dim(data)[1]/length(levels(data$lR)),
+                dimnames=list(NULL,c("R","rt")))
+  RACE <- data[data$lR==levels(data$lR)[1],"RACE"]
+  ok <- as.numeric(data$lR) <= as.numeric(as.character(data$RACE))
+  for (i in levels(RACE)) {
+    pick <- data$RACE==i
+    data_in <- data[pick & ok,]
+    data_in$lR <- factor(data$lR[pick & ok])
+    tmp <- pars[pick & ok,, drop=FALSE]
+    attr(tmp, "ok") <- rep(T, ifelse(is.null(dim(tmp)),1,nrow(tmp)))
+    Rrti <- model()$rfun(data_in,tmp)
+    Rrti$R <- as.numeric(Rrti$R)
+    Rrt[RACE==i,] <- as.matrix(Rrti)
+  }
+  Rrt <- data.frame(Rrt)
+  Rrt$R <- factor(Rrt$R, labels = levels(data$lR), levels = 1:length(levels(data$lR)))
+  return(Rrt)
+}
+
 add_Ffunctions <- function(data,design)
   # Adds columns created by Ffunctions (if not already there)
 {

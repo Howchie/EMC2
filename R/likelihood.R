@@ -583,7 +583,7 @@ log_likelihood_joint <- function(proposals, dadms, model_list, component = NULL)
 # Assumes dadm is structured with 4 rows per original trial, where each row
 # corresponds to one of four conceptual accumulators.
 # - dadm$lR: A factor column identifying the role of each row (accumulator role).
-#   Expected levels are "S1D", "S2D", "S1A", "S2A". The order of these levels
+#   Expected levels are "A", "B", "n_A", "n_B". The order of these levels
 #   in the factor is not critical, as the code explicitly extracts by name.
 # - dadm$R: A column containing the actual observed response ("yes" or "no")
 #   for the original trial, replicated across the 4 rows.
@@ -594,7 +594,7 @@ log_likelihood_redundant_target_race <- function(pars, dadm, model, min_ll = log
 {
   # --- Input Validations ---
   if (is.null(dadm$rt)) stop("dadm$rt is missing.")
-  if (is.null(dadm$lR)) stop("dadm$lR (factor identifying accumulator roles S1D, S2D, S1A, S2A) is missing.")
+  if (is.null(dadm$lR)) stop("dadm$lR (factor identifying accumulator roles A, B, n_A, n_B) is missing.")
   if (is.null(dadm$R)) stop("dadm$R (observed 'yes'/'no' response) is missing.")
   if (is.null(attr(dadm, "expand"))) stop("attr(dadm, 'expand') is missing.")
   if (nrow(dadm) %% 4 != 0) {
@@ -602,11 +602,11 @@ log_likelihood_redundant_target_race <- function(pars, dadm, model, min_ll = log
   }
   
   # Expected accumulator roles for internal mapping
-  internal_role_order <- c("S1D", "S2D", "S1A", "S2A")
+  internal_role_order <- c("A", "n_A", "B", "n_B")
   if (!all(internal_role_order %in% levels(as.factor(dadm$lR)))) { # Check dadm$lR
     missing_roles <- internal_role_order[!internal_role_order %in% levels(as.factor(dadm$lR))]
     stop(paste("dadm$lR is missing expected levels for accumulator roles:", paste(missing_roles, collapse=", "),
-               ". Expected levels are S1D, S2D, S1A, S2A."))
+               ". Expected levels are A, B, n_A, n_B."))
   }
   
   # --- PDF and CDF Calculation (once for all rows) ---
@@ -618,10 +618,10 @@ log_likelihood_redundant_target_race <- function(pars, dadm, model, min_ll = log
   # --- Extract f/F values for each role into vectors of length n_blocks ---
   # This assumes that dadm is structured such that filtering by dadm$lR
   # results in vectors of length n_blocks, correctly ordered by original trial.
-  f1 <- f_all[dadm$lR == "S1D"]; F1 <- F_all[dadm$lR == "S1D"]
-  f2 <- f_all[dadm$lR == "S2D"]; F2 <- F_all[dadm$lR == "S2D"]
-  f3 <- f_all[dadm$lR == "S1A"]; F3 <- F_all[dadm$lR == "S1A"]
-  f4 <- f_all[dadm$lR == "S2A"]; F4 <- F_all[dadm$lR == "S2A"]
+  f1 <- f_all[dadm$lR == "A"]; F1 <- F_all[dadm$lR == "A"]
+  f2 <- f_all[dadm$lR == "B"]; F2 <- F_all[dadm$lR == "B"]
+  f3 <- f_all[dadm$lR == "n_A"]; F3 <- F_all[dadm$lR == "n_A"]
+  f4 <- f_all[dadm$lR == "n_B"]; F4 <- F_all[dadm$lR == "n_B"]
   
   # Validation: Check if all extracted vectors have the correct length (n_blocks)
   expected_len <- n_blocks
@@ -651,14 +651,12 @@ log_likelihood_redundant_target_race <- function(pars, dadm, model, min_ll = log
   }
   
   if (any(is_no_response)) {
-    term1_no <- f3[is_no_response] * F4[is_no_response] + f4[is_no_response] * F3[is_no_response]
-    term2_no <- (1 - F1[is_no_response])
-    term3_no <- (1 - F2[is_no_response])
+    term1_no <- (f3[is_no_response] * F4[is_no_response]) + (f4[is_no_response] * F3[is_no_response])
+    term2_no <- (1 - F1[is_no_response])*(1 - F2[is_no_response])
     
     term1_no <- pmax(term1_no, .Machine$double.eps)
     term2_no <- pmax(term2_no, .Machine$double.eps)
-    term3_no <- pmax(term3_no, .Machine$double.eps)
-    ll_block_values[is_no_response] <- log(term1_no) + log(term2_no) + log(term3_no)
+    ll_block_values[is_no_response] <- log(term1_no) + log(term2_no)
   }
   
   unhandled_responses <- !(is_yes_response | is_no_response)
@@ -674,10 +672,7 @@ log_likelihood_redundant_target_race <- function(pars, dadm, model, min_ll = log
   
   # --- Final Summation (same logic as before) ---
   # Replicate the block's LL to its constituent rows.
-  original_trial_idx_for_row <- rep(1:n_blocks, each = 4) # Assuming dadm is sorted by block
-  ll_for_dadm_rows <- ll_block_values[original_trial_idx_for_row]
-  
-  final_ll_values <- pmax(min_ll, ll_for_dadm_rows[attr(dadm, "expand")])
+  final_ll_values <- pmax(min_ll, ll_block_values[attr(dadm, "expand")])
   final_ll_values[is.na(final_ll_values)] <- min_ll
   
   return(sum(final_ll_values))
