@@ -543,10 +543,17 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
         }
         is_ok = c_do_bound(pars, bound_specs);
         is_ok = lr_all(is_ok, n_acc);
-        lls[i] = c_log_likelihood_race_cens_trunc(pars, data,
-                                                 model_dfun_ptr, model_pfun_ptr,n_trials,
-                                                  winner, expand, min_ll, is_ok, n_acc, 
-                                                  &current_model_ctx);
+        if(type_std == "LBAOR") {
+            lls[i] = c_log_likelihood_redundant_target_race(pars, data,
+                                                           model_dfun_ptr, model_pfun_ptr, n_trials,
+                                                           expand, min_ll, is_ok,
+                                                           &current_model_ctx);
+        } else {
+            lls[i] = c_log_likelihood_race_cens_trunc(pars, data,
+                                                     model_dfun_ptr, model_pfun_ptr, n_trials,
+                                                     winner, expand, min_ll, is_ok, n_acc,
+                                                     &current_model_ctx);
+        }
 		//lls[i] = c_log_likelihood_race(pars, data,
         //                                          model_dfun_ptr, model_pfun_ptr,n_trials,
         //                                          winner, expand, min_ll, is_ok,&current_model_ctx);
@@ -1063,3 +1070,68 @@ double c_log_likelihood_race_cens_trunc(
 }
 
 // ---- END: New code for censored/truncated race models ----
+
+double c_log_likelihood_redundant_target_race(
+    Rcpp::NumericMatrix pars,
+    Rcpp::DataFrame dadm,
+    RacePdfFun model_dfun,
+    RaceCdfFun model_pfun,
+    const int n_trials,
+    const Rcpp::IntegerVector expand,
+    double min_ll,
+    const Rcpp::LogicalVector ok_params,
+    void* model_specific_context) {
+
+    if (n_trials % 4 != 0) Rcpp::stop("c_log_likelihood_redundant_target_race: dadm rows must be multiple of 4");
+
+    Rcpp::NumericVector rts = dadm["rt"];
+    Rcpp::CharacterVector role = dadm["lR"];
+    Rcpp::CharacterVector resp = dadm["R"];
+
+    Rcpp::LogicalVector all_idx(n_trials, true);
+    Rcpp::NumericVector f_all = model_dfun(rts, pars, all_idx, ok_params, model_specific_context);
+    Rcpp::NumericVector F_all = model_pfun(rts, pars, all_idx, ok_params, model_specific_context);
+
+    int n_blocks = n_trials / 4;
+    Rcpp::NumericVector ll_unique(n_blocks);
+
+    for(int j=0; j<n_blocks; ++j){
+        int start = j*4;
+        double fA=NA_REAL, fB=NA_REAL, fnA=NA_REAL, fnB=NA_REAL;
+        double FA=NA_REAL, FB=NA_REAL, FnA=NA_REAL, FnB=NA_REAL;
+        for(int k=0;k<4;++k){
+            int idx = start+k;
+            std::string r = Rcpp::as<std::string>(role[idx]);
+            if(r == "A"){ fA = f_all[idx]; FA = F_all[idx]; }
+            else if(r == "B"){ fB = f_all[idx]; FB = F_all[idx]; }
+            else if(r == "n_A"){ fnA = f_all[idx]; FnA = F_all[idx]; }
+            else if(r == "n_B"){ fnB = f_all[idx]; FnB = F_all[idx]; }
+        }
+
+        std::string r_obs = Rcpp::as<std::string>(resp[start]);
+        double ll_val = NA_REAL;
+        if(r_obs == "yes"){
+            double term1 = fA*(1.0-FB) + fB*(1.0-FA);
+            double term2 = 1.0 - (FnA*FnB);
+            term1 = std::max(term1, std::numeric_limits<double>::epsilon());
+            term2 = std::max(term2, std::numeric_limits<double>::epsilon());
+            ll_val = std::log(term1) + std::log(term2);
+        } else if(r_obs == "no"){
+            double term1 = fnA*FnB + fnB*FnA;
+            double term2 = (1.0-FA)*(1.0-FB);
+            term1 = std::max(term1, std::numeric_limits<double>::epsilon());
+            term2 = std::max(term2, std::numeric_limits<double>::epsilon());
+            ll_val = std::log(term1) + std::log(term2);
+        }
+        ll_unique[j] = ll_val;
+    }
+
+    Rcpp::NumericVector ll_exp = c_expand(ll_unique, expand);
+    double sum_ll = 0.0;
+    for(int i=0;i<ll_exp.size();++i){
+        double val = ll_exp[i];
+        if(!R_FINITE(val) || Rcpp::NumericVector::is_na(val) || val < min_ll) val = min_ll;
+        sum_ll += val;
+    }
+    return sum_ll;
+}
