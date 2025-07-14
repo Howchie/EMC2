@@ -1054,17 +1054,6 @@ double c_log_likelihood_race_cens_trunc(
     double total_ll = 0;
     if (expand.length() > 0) { // If an expansion vector is provided (e.g. from non-compressed dadm)
         total_ll = sum(c_expand(ll_unique,expand));
-    } else if (dadm.containsElementNamed("N")) { // Alternative: if dadm has trial counts 'N' per unique condition
-        Rcpp::NumericVector trial_Ns_dadm = dadm["N"];
-        if (trial_Ns_dadm.length() == n_unique_trials) {
-            for (int j = 0; j < n_unique_trials; ++j) {
-                total_ll += ll_unique[j] * trial_Ns_dadm[j];
-            }
-        } else { // Fallback if N column size doesn't match (should not happen with correct dadm)
-             for (int j = 0; j < n_unique_trials; ++j) {
-                total_ll += ll_unique[j];
-            }
-        }
     } else { // Default: sum ll_unique directly (each unique trial counted once)
         for (int j = 0; j < n_unique_trials; ++j) {
             total_ll += ll_unique[j];

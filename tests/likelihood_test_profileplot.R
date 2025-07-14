@@ -22,7 +22,7 @@ p_vector <- sampled_pars(designLBA,doMap = FALSE)
 p_vector[1:length(p_vector)] <- c(log(0.5), log(4), log(1),log(1.5),log(0.2),log(0.5))
 
 # Make square data so can remove pm in RACE = 2
-template <- make_data(p_vector,designLBA,n_trials=1000,UC=3)
+template <- make_data(p_vector,designLBA,n_trials=1000)
 template <- template[!(template$RACE==2 & (template$S %in% c("leftpm","rightpm"))),]
 dat <- make_data(p_vector,designLBA,data=template)
 Cfun <- function(d) as.numeric(d$S)==as.numeric(d$R) | (d$R=="pm" & as.numeric(d$S)>2)
@@ -36,3 +36,5 @@ pars <- EMC2:::get_pars_matrix(p_vector, dadmLBA, model = attr(dadmLBA, "model")
 profile_plot_test(dat,designLBA,p_vector,n_cores=1,layout=c(2,3)) # good
 profile_plot_test(dat,designLBA,p_vector,n_cores=1,layout=c(2,3),use_c=TRUE) # ?
 
+#data=dat;design=designLBA;n_point=100;range=0.5;dadm=design_model(data, design, verbose = FALSE);min_ll=log(1e-10)
+#model=attr(dadm, "model")();pars <- get_pars_matrix(p_vector, dadm, model)
