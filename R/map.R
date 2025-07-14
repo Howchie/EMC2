@@ -47,6 +47,7 @@ do_reverse_transform <- function(pars, model)
 #' 
 do_reverse_transform_variance <- function(mu_nat, var, model, prop=TRUE)
 { # input both mu and variance on the natural scale
+  # doesn't handle a covariance matrix yet
   if (!prop) {var_prop = var/mu_nat} else {var_prop=var} # defaults to specifying variance as a proportion of the mean on natural scale but also allows for natural scale mu/var
   vec_input <- is.null(dim(mu_nat))            # remember original shape
   mu_nat    <- to_matrix(mu_nat)
@@ -63,8 +64,8 @@ do_reverse_transform_variance <- function(mu_nat, var, model, prop=TRUE)
   par_tr  <- matrix(NA, ncol = ncol(mu_nat), nrow = nrow(mu_nat))
   ## exp link:  lower + exp(real)
   # residual on the natural scale
-  var_tr[, is_log] <- log1p(var_prop[, is_log, drop = FALSE] /
-                              mu_nat  [, is_log, drop = FALSE])
+  var_tr[1:nrow(mu_nat), is_log] <- diag(log1p(var_prop[, is_log, drop = FALSE] /
+                              mu_nat  [1:nrow(mu_nat), is_log]))
   par_tr[, is_log] <- ifelse(
     mu_nat[, is_log, drop = FALSE] <= model$bound$minmax[1, ptypes[is_log]] |
       is.na(mu_nat[, is_log, drop = FALSE]),

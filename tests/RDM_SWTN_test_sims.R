@@ -15,16 +15,20 @@ designRDM <- design(
   formula=list(v~lM,B~1,t0~1,A~1,s~1),
 )
 designRDMSWTN <- design(
-  factors=list(subjects=1:nsubs,S=rep("yes","no",nsubs/2)),Rlevels=c("yes","no"),
+  factors=list(subjects=1,S=c("left","right","leftpm","rightpm"),RACE=2:3),
+  Rlevels=c("left","right","pm"),
   matchfun=matchfun,
-  model=RDM_SWTN,constants=c(s=log(1),A=log(2),B=log(2),t0=log(0.05), sv=log(0)),
-  formula=list(v~0+lM,B~1,t0~1,A~1,s~1,sv~1),
+  model=RDMSWTN,constants=c(v_RACE3=0,s=log(1)),
+  formula=list(v~RACE*lM,B~1,t0~1,A~1,s~1,cv~1),
 )
+p_vector <- sampled_pars(designRDMSWTN,doMap = FALSE)
+p_vector[1:length(p_vector)] <- c(log(1), log(1.5), log(2),log(2),log(0.2),log(0.5),log(0.14))
+
 p_vector_RDM <- c("v_lMFALSE"=log(2),"v_lMTRUE"=log(4))
 p_vector_RDMSWTN <- c("v_lMFALSE"=log(2),"v_lMTRUE"=log(4))
 
 reRDM = make_random_effects(design = designRDM, group_means = p_vector_RDM,n_subj=nsubs, variance_proportion = 0.05)
-reRDMSWTN = make_random_effects(design = designRDMSWTN, group_means = p_vector_RDMSWTN,n_subj=nsubs, variance_proportion = 0.05)
+reRDMSWTN = make_random_effects(design = designRDMSWTN, group_means = p_vector,n_subj=nsubs, variance_proportion = 0.05)
 # Make square data so can remove pm in RACE = 2
 dataRDM <- make_data(reRDM,designRDM,n_trials=ntrials)
 dataRDMSWTN <- make_data(reRDMSWTN,designRDMSWTN,n_trials=ntrials)

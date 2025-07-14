@@ -367,7 +367,7 @@ make_random_effects <- function(design, group_means, n_subj = NULL, variance_pro
   if(is.null(covariances)) { # ZH modified so that variance is transformed to natural scale (e.g. 0.2*natural_scale_mu) then back-converted for transformed mvtnorm. I found the original code (a) was broken for group_means of zero (zero variance) but also estimates were more varied than expected due to the conversions
     tmp = do_reverse_transform_variance(reordered_means,diag(rep(variance_proportion, ncol(reordered_means))),model)
     #covariances <- diag(tmp$vars)
-    random_effects <- mvtnorm::rmvnorm(n_subj,mean=tmp$pars,sigma=tmp$var)
+    random_effects <- mvtnorm::rmvnorm(n_subj,mean=tmp$pars,sigma=diag(tmp$var,length(tmp$pars),length(tmp$pars)))
     colnames(random_effects) <- colnames(reordered_means)
     rownames(random_effects) <- subnames
   } else { # ZH - i didn't change this part so nested in an else statement
