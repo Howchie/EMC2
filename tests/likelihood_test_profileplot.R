@@ -1,8 +1,8 @@
 #### RACE LBA ----
 devtools::load_all()
-#devtools::document()
-#roxygen2::roxygenise()
-#devtools::install(upgrade = "never")  # rebuild & install
+devtools::document()
+roxygen2::roxygenise()
+devtools::install(upgrade = "never")  # rebuild & install
 ## then, in every run
 #library(EMC2)          # now workers load the same code automatically
 source("tests/test_likelihood_plotfuns.R")

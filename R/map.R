@@ -51,7 +51,9 @@ do_reverse_transform_variance <- function(mu_nat, var, model, prop=TRUE)
   if (!prop) {var_prop = var/mu_nat} else {var_prop=var} # defaults to specifying variance as a proportion of the mean on natural scale but also allows for natural scale mu/var
   vec_input <- is.null(dim(mu_nat))            # remember original shape
   mu_nat    <- to_matrix(mu_nat)
-  var_prop  <- to_matrix(var_prop)
+  if(is.null(dim(var_prop)) & length(var_prop==ncol(mu_nat))){
+    var_prop = diag(var, ncol(mu_nat))
+  } else {var_prop  <- to_matrix(var_prop)}
   if(ncol(var_prop)==1) {var_prop=rep(var_prop,ncol(mu_nat))}
   ## -- pre-compute flags ------------------------------------------------------
   ptypes   <- get_p_types(colnames(mu_nat))
@@ -105,7 +107,6 @@ do_reverse_transform_variance <- function(mu_nat, var, model, prop=TRUE)
       }
     }
   }
-
 out = data.frame(pars=par_tr[1,],var=var_tr[1,],row.names = colnames(mu_nat))
 }
 
