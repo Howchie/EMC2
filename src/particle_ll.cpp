@@ -277,19 +277,18 @@ double c_log_likelihood_DDM(NumericMatrix pars, DataFrame data,
   return(sum(lls_exp));
 }
 
-/*
+
 double c_log_likelihood_race(NumericMatrix pars, DataFrame data,
                              RacePdfFun dfun,                  // Pointer to the model's PDF adapter function
 							 RaceCdfFun pfun,
                              const int n_trials, LogicalVector winner, IntegerVector expand,
-                             double min_ll, LogicalVector is_ok,void* model_context_for_funcs){
+                             double min_ll, LogicalVector is_ok,int n_acc, void* model_context_for_funcs){
   const int n_out = expand.length();
   NumericVector lds(n_trials);
   NumericVector rts = data["rt"];
   CharacterVector R = data["R"];
   NumericVector lR = data["lR"];
   NumericVector lds_exp(n_out);
-  const int n_acc = unique(lR).length();
   if(sum(contains(data.names(), "RACE")) == 1){
     NumericVector NACC = data["RACE"];
     CharacterVector vals_NACC = NACC.attr("levels");
@@ -336,6 +335,7 @@ double c_log_likelihood_race(NumericMatrix pars, DataFrame data,
   }
 }
 
+/*
 // [[Rcpp::export]]
 NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector constants,
             List designs, String type, List bounds, List transforms, List pretransforms,
@@ -431,7 +431,6 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
   return(lls);
 }
 */
-
 
 // [[Rcpp::export]]
 NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector constants,
@@ -562,7 +561,6 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
   return(lls);
 }
 
-
 // GSL-compatible adapter for f_race_integrand_cpp
 double gsl_f_race_adapter(double t, void *p) {
     gsl_race_params* params = static_cast<gsl_race_params*>(p);
@@ -686,33 +684,6 @@ double integrate_for_kth_winner_cpp(
     return (result > 0 && R_finite(result)) ? result : 0.0;
 }
 
-/* Deprecated
-// Truncation correction factor helper - uses GSL via integrate_for_kth_winner_cpp
-double get_trunc_corr_factor_for_kth_winner_cpp(
-    int k_winner_idx, // 1-based
-    const Rcpp::NumericMatrix& p_all_acc,
-    RacePdfFun model_dfun,
-    RaceCdfFun model_pfun,
-    double LT, double UT,
-    int n_acc,
-    double epsilon = 1e-7,
-    void* model_specific_context = nullptr) {
-
-    if (!(LT > 0 || UT < R_PosInf)) return 1.0; // No truncation if LT=0 and UT=Inf
-    if (k_winner_idx < 1 || k_winner_idx > n_acc) return NA_REAL; // Invalid winner
-
-    double prob_untruncated = integrate_for_kth_winner_cpp(k_winner_idx, p_all_acc, 0, R_PosInf, model_dfun, model_pfun, n_acc, epsilon, model_specific_context);
-    double prob_truncated_interval = integrate_for_kth_winner_cpp(k_winner_idx, p_all_acc, LT, UT, model_dfun, model_pfun, n_acc, epsilon, model_specific_context);
-
-    if (prob_truncated_interval > 1e-12) {
-        if (!R_finite(prob_untruncated) || prob_untruncated < 0) return NA_REAL;
-        return prob_untruncated / prob_truncated_interval;
-    } else {
-        if (prob_untruncated > 1e-12) return NA_REAL; // Density exists but not in [LT,UT] -> infinite correction
-        return 1.0; // Both are zero or negligible
-    }
-} */
-
 // New common normaliser (ZH: I think the normalise by kth-winner is wrong?)
 double get_trunc_normaliser_cpp(
     const Rcpp::NumericMatrix& p_all_acc,
@@ -789,16 +760,14 @@ double c_log_likelihood_race_cens_trunc(
 	// If a RACE column exists, set parameters of accumulators not present on a
     // given trial to NA so the density functions return zero for them. This
     // mirrors logic from the old c_log_likelihood_race implementation.
-	NumericVector RACE(n_trials);
+	IntegerVector RACE(n_trials, n_acc);
 	Rcpp::LogicalVector RACE_mask(n_trials, true); // Mask for all dadm rows
 	if (dadm.containsElementNamed("RACE")) {
 		// factor codes (1-based) for each row
 		Rcpp::IntegerVector race_idx = dadm["RACE"];
 		// character levels (“2”, “3”, …)
 		Rcpp::CharacterVector race_levels = race_idx.attr("levels");
-
 		for (int row = 0; row < pars.nrow(); ++row) {
-
 			// how many accumulators for this trial
 			int n_acc_this_trial = std::stoi(
 				Rcpp::as<std::string>(race_levels[ race_idx[row] - 1 ])
@@ -850,15 +819,15 @@ double c_log_likelihood_race_cens_trunc(
     // Categorize unique trials based on RT properties and parameter validity
 
     for (int j = 0; j < n_unique_trials; ++j) {
-        int unique_trial_idx = j * n_acc; // Starting row in dadm/pars for this unique trial
-        double rt_j = rts_dadm[unique_trial_idx]; // RT for this unique trial
-        int R_j_idx = R_idxs_dadm[unique_trial_idx]; // Winner index (1-based from R factor)
-		int n_acc_j = RACE[unique_trial_idx];
+        int start_row_idx = j * n_acc; // Starting row in dadm/pars for this unique trial
+        double rt_j = rts_dadm[start_row_idx]; // RT for this unique trial
+        int R_j_idx = R_idxs_dadm[start_row_idx]; // Winner index (1-based from R factor)
+		int n_acc_j = RACE[start_row_idx];
         // Criteria for batch processing: finite, positive RT, within truncation bounds [LT, UT], and known winner
-        if (R_FINITE(rt_j) && rt_j > 0 && rt_j >= LT[unique_trial_idx] && rt_j <= UT[unique_trial_idx] && R_j_idx != NA_INTEGER) {
+        if (R_FINITE(rt_j) && rt_j > 0 && rt_j >= LT[start_row_idx] && rt_j <= UT[start_row_idx] && R_j_idx != NA_INTEGER) {
 			finite_rt_unique_trial_indices.push_back(j); // Store unique trial index
             for(int k_acc = 0; k_acc < n_acc_j; ++k_acc) {
-                int dadm_row_idx = unique_trial_idx + k_acc;
+                int dadm_row_idx = start_row_idx + k_acc;
 				finite_rt_mask[dadm_row_idx] = true;
                 finite_dadm_rows_indices.push_back(dadm_row_idx);
 			}
