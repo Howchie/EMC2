@@ -76,6 +76,7 @@ Rcpp::NumericMatrix order_pars_for_winner_cpp(
 struct ContextForRaceModels {
     double min_lik_for_pdf;
     bool use_posdrift;
+	std::string LogicalRule;
 };
 
 // Adapter prototypes
@@ -244,6 +245,17 @@ double integrate_for_kth_winner_cpp(int k_winner_idx,
                                     int n_acc,
                                     double epsilon,
                                     void* model_specific_context);
+
+double c_log_likelihood_redundant_target_race(
+    Rcpp::NumericMatrix pars,
+    Rcpp::DataFrame dadm,
+    RacePdfFun model_dfun,
+    RaceCdfFun model_pfun,
+    const int n_trials,
+    const Rcpp::IntegerVector expand,
+    double min_ll,
+    const Rcpp::LogicalVector ok_params,
+    void* model_specific_context);
 
 double get_trunc_corr_factor_for_kth_winner_cpp(int k_winner_idx,
                                                 const Rcpp::NumericMatrix& p_all_acc,

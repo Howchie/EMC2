@@ -77,3 +77,4 @@ mapped_pars(designLBA,p_vector)
 
 
 profile_plot_test(data,designLBA,p_vector,n_cores=1,layout=c(2,3)) # good
+profile_plot_test(data,designLBA,p_vector,n_cores=1,layout=c(2,3),use_c=TRUE) # good

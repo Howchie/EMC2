@@ -337,13 +337,11 @@ log_likelihood_race <- function(pars,dadm,model,min_ll=log(1e-10))
 ## probability of *any* observable response in (lower, upper)
 .truncation_normaliser <- function(pars_mat, lower, upper, model, rel.tol = 1e-5, ...) {
 
-  present <- which(rowSums(is.na(pars_mat)) == 0L)
-  n_acc <- length(present)
+  n_acc <- nrow(pars_mat)
   p_tot <- 0
-  for (k in present) {
-    if (any(is.na(pars_mat[k,]))) {next}
+  for (k in 1:n_acc) {
     p_tot <- p_tot +
-    .integrate_kth_winner(k, pars_mat[present,], lower, upper, model,
+    .integrate_kth_winner(k, pars_mat, lower, upper, model,
                           rel.tol = rel.tol)
   }
   
@@ -400,19 +398,19 @@ log_likelihood_race_cens_trunc <- function(pars,dadm,model,min_ll=log(1e-10)) {
       if (finite_mask[idx[1]]) {
         n_acc_j = dadm$RACE_num[idx[1]]
         idx=idx[1:n_acc_j]
+        ll_j <- sum(lds[idx])
+        ll_unique[j] <- max(min_ll, ll_j)
         if (!(LT[idx[1]] == 0 && UT[idx[1]] == Inf)){
           key <- .make_key(LT[idx[1]], UT[idx[1]], pars[idx, , drop = FALSE])
           invZ <- cache_env[[key]]
           if (is.null(invZ)) {
             invZ <- 1 / .truncation_normaliser(pars[idx, , drop = FALSE],
-                                    LT[idx[1]], UT[idx[1]], model,
-                                    rel.tol = 1e-7)
+                                               LT[idx[1]], UT[idx[1]], model,
+                                               rel.tol = 1e-7)
             cache_env[[key]] <- invZ
           }
-          lds[idx] <- lds[idx] + log(invZ)
+          ll_unique[j] <- ll_unique[j] + log(invZ)
         }
-        ll_j <- sum(lds[idx])
-        ll_unique[j] <- max(min_ll, ll_j)
       }
     }
   }
@@ -436,32 +434,23 @@ log_likelihood_race_cens_trunc <- function(pars,dadm,model,min_ll=log(1e-10)) {
     if(is.na(Rj)){ks = 1:n_acc_j}else{ks = Rj}
     if (identical(rt, -Inf)) {                       # fast censor
       lo <- LT[idx[1]]; hi <- LC[idx[1]]
+      if (hi==0) {stop("LC must be non-zero if rt==Inf")}
       pval <- sum(vapply(ks, prob_win, numeric(1), lo, hi))
-      if (!posdrift && is.na(Rj)) {                   # intrinsic omission
-        v  <- pars[idx, "v"]; sv <- pars[idx, "sv"]
-        pI <- prod(pnorm(0, v, sv),na.rm=TRUE)
-        pval <- pval + pI
-      }
-      
     } else if (identical(rt, Inf)) {                 # slow censor
       lo <- UC[idx[1]]; hi <- UT[idx[1]]
-      pval <- sum(vapply(ks, prob_win, numeric(1), lo, hi))
-      if (!posdrift && is.na(Rj)) {
-        v  <- pars[idx, "v"]; sv <- pars[idx, "sv"]
-        pI <- prod(pnorm(0, v, sv),na.rm=TRUE)
-        pval <- pval + pI
-      }
-      
-    } else if (is.na(rt)) {                          # missing RT
+      if (lo==Inf) {stop("UC must be finite if rt==Inf")}
+      if (length(idx)==1) {
+        pval = 1 - (model$pfun(lo,pars[idx,,drop=FALSE])) # if a single acccumulator, design omissions are just 1-F(t)
+      } else {
+          pval <- sum(vapply(ks, prob_win, numeric(1), lo, hi))
+        }
+    } else if (is.na(rt)) {
+      # missing RT
+      if (lo2==Inf) {stop("UC must be finite if rt==NA")}
       lo1 <- LT[idx[1]]; hi1 <- LC[idx[1]]
       lo2 <- UC[idx[1]]; hi2 <- UT[idx[1]]
       pval <- sum(vapply(ks, function(k)
         prob_win(k, lo1, hi1) + prob_win(k, lo2, hi2), numeric(1)))
-      if (!posdrift && is.na(Rj)) {
-        v  <- pars[idx, "v"]; sv <- pars[idx, "sv"]
-        pI <- prod(pnorm(0, v, sv),na.rm=TRUE)
-        pval <- pval + pI
-      }
     }                                               # 0 or negative RT ⇒ prob 0
     
     ## truncation correction (if RT unobserved)
@@ -475,6 +464,13 @@ log_likelihood_race_cens_trunc <- function(pars,dadm,model,min_ll=log(1e-10)) {
         cache_env[[key]] <- invZ
       }
       pval <- pval * invZ
+    }
+    
+    ## Add in probability of intrinsic omission AFTER truncation correction
+    if (!posdrift && is.na(Rj)) {
+      v  <- pars[idx, "v"]; sv <- pars[idx, "sv"]
+      pI <- prod(pnorm(0, v, sv),na.rm=TRUE)
+      pval <- pval + pI
     }
     
     ll_unique[j] <- if (pval > .Machine$double.eps) log(pval) else min_ll

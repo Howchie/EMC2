@@ -494,7 +494,7 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
     ContextForRaceModels current_model_ctx;
     current_model_ctx.min_lik_for_pdf = exp(min_ll);
     current_model_ctx.use_posdrift = true; // Default: LBA uses posdrift, RDM/LNR ignore this context field.
-
+	current_model_ctx.LogicalRule = "OR";
     // Determine adapter functions and specific LBA posdrift setting based on type_std
     // The type_std string is expected to be e.g. "LBA", "LBA_IO", "RDM", "LNR".
 
@@ -504,6 +504,9 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
         // Check for the 'IO' (Implicit Omissions / no posdrift) flag in the original type_std
         if (type_std.find("IO") != std::string::npos) {
             current_model_ctx.use_posdrift = false;
+        }
+		if (type_std.find("AND") != std::string::npos) {
+            current_model_ctx.LogicalRule = "AND";
         }
     } else if (type_std=="RDM") {
         model_dfun_ptr = &rdm_dfun_adapter;
@@ -543,13 +546,17 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
         }
         is_ok = c_do_bound(pars, bound_specs);
         is_ok = lr_all(is_ok, n_acc);
-        lls[i] = c_log_likelihood_race_cens_trunc(pars, data,
-                                                 model_dfun_ptr, model_pfun_ptr,n_trials,
-                                                  winner, expand, min_ll, is_ok, n_acc, 
-                                                  &current_model_ctx);
-		//lls[i] = c_log_likelihood_race(pars, data,
-        //                                          model_dfun_ptr, model_pfun_ptr,n_trials,
-        //                                          winner, expand, min_ll, is_ok,&current_model_ctx);
+        if( (type_std == "LBAOR") | (type_std=="LBAAND") ) {
+            lls[i] = c_log_likelihood_redundant_target_race(pars, data,
+                                                           model_dfun_ptr, model_pfun_ptr, n_trials,
+                                                           expand, min_ll, is_ok,
+                                                           &current_model_ctx);
+        } else {
+            lls[i] = c_log_likelihood_race_cens_trunc(pars, data,
+                                                     model_dfun_ptr, model_pfun_ptr, n_trials,
+                                                     winner, expand, min_ll, is_ok, n_acc,
+                                                     &current_model_ctx);
+        }
     }
   }
   return(lls);
@@ -562,7 +569,6 @@ double gsl_f_race_adapter(double t, void *p) {
 	// ① get the params block
     // ② recover the model-specific context
     ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(params->model_specific_context);
-	const double min_ll = ctx->min_lik_for_pdf;
     if (t < 0) return 0.0; // RTs are non-negative
 	int n_acc=params->n_acc;
 	NumericVector t_vec = Rcpp::rep(t, n_acc);
@@ -579,11 +585,7 @@ double gsl_f_race_adapter(double t, void *p) {
 		pp[!winner] = loss;
     }
 	for (int i = 0; i < n_acc; ++i) {
-        double term;
-        term = pp[i];
-        if (Rcpp::NumericVector::is_na(term) || term <= 0.0) {
-            term = std::exp(min_ll);                  // floor for log-lik
-		}
+        double term = pp[i];
         prod *= term;
     }
 
@@ -632,7 +634,7 @@ double integrate_for_kth_winner_cpp(
     RacePdfFun model_dfun,
     RaceCdfFun model_pfun,
     int n_acc_j,
-    double epsilon = 1e-5,
+    double epsilon = 1e-7,
     void* model_specific_context = nullptr) {
 
 	Rcpp::LogicalVector winner(n_acc_j,false);
@@ -967,37 +969,24 @@ double c_log_likelihood_race_cens_trunc(
                     double p_k = integrate_for_kth_winner_cpp(k_win, p_all_acc_for_trial, isok_for_trial, lower_for_trial, upper_for_trial, model_dfun, model_pfun, n_acc_j, integration_epsilon, model_context_for_funcs);
 					current_prob_val += p_k;
 					}
-				if (!posdrift) { // should only ever bet set for LBAIO modeldouble 
-					double pI = 1.0;
-					for (int k = 0; k < n_acc_j; ++k) {
-						double v   = p_all_acc_for_trial(k, 0);   // mean drift for kth acc
-						double sv  = p_all_acc_for_trial(k, 1);   // its s.d.
-						double p_neg = R::pnorm(0.0, v, sv, 1,0); // (same as 1-pnorm(v/sv,0,1)
-						pI *= p_neg; // we multiply to get the probability that EVERY accumulator was negative
-					}
-					current_prob_val += pI; // add intrinsic-omission probability
-				}
             }
         // Case 3: Slow censoring (RT = Inf). Probability is integral from UC to UT.
         } else if (rt_j == R_PosInf) {
 			lower_for_trial = UC[start_row_idx];
 			upper_for_trial = UT[start_row_idx];
-            if (R_j_idx != NA_INTEGER) { // Response (winner) is known
-                current_prob_val = integrate_for_kth_winner_cpp(R_j_idx, p_all_acc_for_trial, isok_for_trial, lower_for_trial, upper_for_trial, model_dfun, model_pfun, n_acc_j, integration_epsilon, model_context_for_funcs);
-            } else { // Response (winner) is unknown; sum probabilities over all possible winners
-                for (int k_win = 1; k_win <= n_acc_j; ++k_win) {
-                    double p_k = integrate_for_kth_winner_cpp(k_win, p_all_acc_for_trial, isok_for_trial, lower_for_trial, upper_for_trial, model_dfun, model_pfun, n_acc_j, integration_epsilon, model_context_for_funcs);
-					current_prob_val += p_k;
-                }
-				if (!posdrift) { // should only ever bet set for LBAIO modeldouble 
-					double pI = 1.0;
-					for (int k = 0; k < n_acc_j; ++k) {
-						double v   = p_all_acc_for_trial(k, 0);   // mean drift for kth acc
-						double sv  = p_all_acc_for_trial(k, 1);   // its s.d.
-						double p_neg = R::pnorm(0.0, v, sv, 1,0); // (same as 1-pnorm(v/sv,0,1)
-						pI *= p_neg; // we multiply to get the probability that EVERY accumulator was negative
+            if (n_acc_j == 1) {
+                // Simplified case for single accumulator
+                Rcpp::NumericVector t_vec = Rcpp::NumericVector::create(lower_for_trial);
+                Rcpp::NumericVector p_vec = model_pfun(t_vec, p_all_acc_for_trial, isok_for_trial, winner_for_trial, model_context_for_funcs);
+                current_prob_val = 1.0 - p_vec[0]; // LBA with posdrift=false already correctly handles this case, no need to adjust
+            } else {
+				if (R_j_idx != NA_INTEGER) { // Response (winner) is known
+					current_prob_val = integrate_for_kth_winner_cpp(R_j_idx, p_all_acc_for_trial, isok_for_trial, lower_for_trial, upper_for_trial, model_dfun, model_pfun, n_acc_j, integration_epsilon, model_context_for_funcs);
+				} else { // Response (winner) is unknown; sum probabilities over all possible winners
+					for (int k_win = 1; k_win <= n_acc_j; ++k_win) {
+						double p_k = integrate_for_kth_winner_cpp(k_win, p_all_acc_for_trial, isok_for_trial, lower_for_trial, upper_for_trial, model_dfun, model_pfun, n_acc_j, integration_epsilon, model_context_for_funcs);
+						current_prob_val += p_k;
 					}
-					current_prob_val += pI; // add intrinsic-omission probability
 				}
 			}
         // Case 4: Missing RT (NA). Probability is sum of integral from LT to LC and UC to UT (i.e., outside the observation window but within truncation).
@@ -1018,16 +1007,6 @@ double c_log_likelihood_race_cens_trunc(
                     double p_k_sum = p_L_k + p_U_k;
                     current_prob_val += p_k_sum; 
                 }
-				if (!posdrift) { // should only ever bet set for LBAIO modeldouble 
-					double pI = 1.0;
-					for (int k = 0; k < n_acc_j; ++k) {
-						double v   = p_all_acc_for_trial(k, 0);   // mean drift for kth acc
-						double sv  = p_all_acc_for_trial(k, 1);   // its s.d.
-						double p_neg = R::pnorm(0.0, v, sv, 1,0); // (same as 1-pnorm(v/sv,0,1)
-						pI *= p_neg; // we multiply to get the probability that EVERY accumulator was negative
-					}
-					current_prob_val += pI; // add intrinsic-omission probability
-				}
             }
         }
 		lower_for_trial = LT[start_row_idx];
@@ -1046,6 +1025,18 @@ double c_log_likelihood_race_cens_trunc(
 			
 			if (!NumericVector::is_na(inv_Z_this) && R_FINITE(inv_Z_this) && inv_Z_this >=0){current_prob_val *= inv_Z_this;}
 		}
+		
+		// Intrinsic Omissions Correction Comes AFTER the truncation adjustment (because that adjustment assumes a response would have been recorded)
+		if (!posdrift) { // should only ever be false for LBAIO model
+			double pI = 1.0;
+			for (int k = 0; k < n_acc_j; ++k) {
+				double v   = p_all_acc_for_trial(k, 0);   // mean drift for kth acc
+				double sv  = p_all_acc_for_trial(k, 1);   // its s.d.
+				double p_neg = R::pnorm(0.0, v, sv, 1,0); // (same as 1-pnorm(v/sv,0,1)
+				pI *= p_neg; // we multiply to get the probability that EVERY accumulator was negative
+			}
+			current_prob_val += pI; // add intrinsic-omission probability
+		}
 		current_prob_val = std::max(0.0, current_prob_val); // Ensure probability is not negative
         ll_unique[unique_trial_idx] = (current_prob_val > std::numeric_limits<double>::epsilon()) ? std::log(current_prob_val) : min_ll;
         ll_unique[unique_trial_idx] = std::max(min_ll, ll_unique[unique_trial_idx]); // Ensure not less than min_ll
@@ -1062,4 +1053,68 @@ double c_log_likelihood_race_cens_trunc(
     return total_ll;
 }
 
-// ---- END: New code for censored/truncated race models ----
+double c_log_likelihood_redundant_target_race(
+    Rcpp::NumericMatrix pars,
+    Rcpp::DataFrame dadm,
+    RacePdfFun model_dfun,
+    RaceCdfFun model_pfun,
+    const int n_trials,
+    const Rcpp::IntegerVector expand,
+    double min_ll,
+    const Rcpp::LogicalVector ok_params,
+    void* model_specific_context) {
+
+    if (n_trials % 4 != 0) Rcpp::stop("c_log_likelihood_redundant_target_race: dadm rows must be multiple of 4");
+
+    Rcpp::NumericVector rts = dadm["rt"];
+    Rcpp::CharacterVector role = dadm["lR"];
+    Rcpp::CharacterVector resp = dadm["R"];
+
+    Rcpp::LogicalVector all_idx(n_trials, true); // No such thing as "winner" in the normal context
+    Rcpp::NumericVector f_all = model_dfun(rts, pars, all_idx, ok_params, model_specific_context);
+    Rcpp::NumericVector F_all = model_pfun(rts, pars, all_idx, ok_params, model_specific_context);
+
+	ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(model_specific_context);
+	std::string LogicalRule = ctx->LogicalRule;
+    int n_unique_trials = n_trials / 4;
+    Rcpp::NumericVector ll_unique(n_unique_trials);
+
+    for(int j=0; j<n_unique_trials; ++j){
+        int start = j*4;
+        double fA=NA_REAL, fB=NA_REAL, fnA=NA_REAL, fnB=NA_REAL;
+        double FA=NA_REAL, FB=NA_REAL, FnA=NA_REAL, FnB=NA_REAL;
+        for(int k=0;k<4;++k){
+            int idx = start+k;
+            std::string r = Rcpp::as<std::string>(role[idx]);
+            if(r == "A"){ fA = f_all[idx]; FA = F_all[idx]; }
+            else if(r == "B"){ fB = f_all[idx]; FB = F_all[idx]; }
+            else if(r == "n_A"){ fnA = f_all[idx]; FnA = F_all[idx]; }
+            else if(r == "n_B"){ fnB = f_all[idx]; FnB = F_all[idx]; }
+        }
+
+        std::string r_obs = Rcpp::as<std::string>(resp[start]);
+		// TODO: Incorporate AND logic by flipping the r_obs check here conditionally
+        if (LogicalRule=="OR") {
+			if(r_obs == "yes"){
+				ll_unique[j] = std::log((fA*(1.0-FB) + fB*(1.0-FA)) * (1.0 - (FnA*FnB)));
+			} else if(r_obs == "no"){
+				ll_unique[j] = std::log((fnA*FnB + fnB*FnA) * ((1.0-FA)*(1.0-FB)));
+			}
+		} else if (LogicalRule=="AND") {
+			if(r_obs == "no"){
+				ll_unique[j] = std::log((fnA*(1.0-FnB) + fnB*(1.0-FnA)) * (1.0 - (FA*FB)));
+			} else if(r_obs == "yes"){
+				ll_unique[j] = std::log((fA*FB + fB*FA) * ((1.0-FnA)*(1.0-FnB)));
+			}
+		}
+    }
+
+    Rcpp::NumericVector ll_exp = c_expand(ll_unique, expand);
+    double sum_ll = 0.0;
+    for(int i=0;i<ll_exp.size();++i){
+        double val = ll_exp[i];
+        if(!R_FINITE(val) || Rcpp::NumericVector::is_na(val) || val < min_ll) val = min_ll;
+        sum_ll += val;
+    }
+    return sum_ll;
+}

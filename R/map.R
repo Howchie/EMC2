@@ -60,14 +60,16 @@ do_reverse_transform_variance <- function(mu_nat, var, model, prop=TRUE)
   trf      <- model$transform$func[ptypes]
   is_log   <- trf == "exp"
   is_qnorm <- trf == "pnorm"
-  
+  is_nat   <- trf == "identity"
   ## -- allocate outputs -------------------------------------------------------
-  var_tr  <- matrix(0,  ncol = ncol(mu_nat), nrow = nrow(mu_nat))
+  var_tr  <- matrix(NA,  ncol = ncol(mu_nat), nrow = nrow(mu_nat))
   par_tr  <- matrix(NA, ncol = ncol(mu_nat), nrow = nrow(mu_nat))
+  var_tr[1:nrow(mu_nat), is_nat] <- diag(var_prop)[is_nat]
+  par_tr[, is_nat] <- mu_nat[, is_nat, drop = FALSE]
   ## exp link:  lower + exp(real)
   # residual on the natural scale
-  var_tr[1:nrow(mu_nat), is_log] <- diag(log1p(var_prop[, is_log, drop = FALSE] /
-                              mu_nat  [1:nrow(mu_nat), is_log]))
+  var_tr[1:nrow(mu_nat), is_log] <- log1p(diag(var_prop)[is_log] /
+                              mu_nat  [1:nrow(mu_nat), is_log])
   par_tr[, is_log] <- ifelse(
     mu_nat[, is_log, drop = FALSE] <= model$bound$minmax[1, ptypes[is_log]] |
       is.na(mu_nat[, is_log, drop = FALSE]),
