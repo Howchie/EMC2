@@ -40,7 +40,7 @@ pwald_classic_R <- function(t, boundary_alpha, drift_rate_xi) {
 #' @param mu_drift Mean of the (untruncated) drift rate distribution
 #' @param sigma_drift SD of the drift rate distribution
 #' @return The cumulative probability, P(RT < t_adj)
-pswtn_analytic_R <- function(t_adj, alpha, mu_drift, sigma_drift) {
+pswtn_Genz <- function(t_adj, alpha, mu_drift, sigma_drift) {
   
   # --- 1. Handle edge cases ---
   if (t_adj <= 1e-10) return(0.0)
@@ -65,43 +65,32 @@ pswtn_analytic_R <- function(t_adj, alpha, mu_drift, sigma_drift) {
   if (prob_xi_gt_0 < 1e-100) return(0.0)
   
   # Pre-calculate terms for correlations and denominators
-  common_denom_part <- sqrt(t * (1 + t * sigma_sq))
+  denom <- sqrt(t * (1 + t * sigma_sq))
   
   # --- Term 1 Calculation ---
   # Corresponds to P(Z < (ξt - α)/√t, ξ > 0)
   
   # Upper bounds for the standardized bivariate normal P(X<h, Y<k)
-  h1 <- (mu * t - alpha) / common_denom_part
+  h1 <- (mu * t - alpha) / denom
   k1 <- mu / sigma
   
   # Correlation for the first bivariate normal
-  rho1 <- (sigma * t) / common_denom_part
+  rho1 <- (sigma * t) / denom
   
-  corr_matrix1 <- matrix(c(1, rho1, rho1, 1), nrow = 2)
-  term1_prob <- mvtnorm::pmvnorm(
-    upper = c(h1, k1),
-    mean = c(0, 0),
-    corr = corr_matrix1
-  )[1]
-  
+  term1_prob <- pbvn_tvpack(h1, k1,rho1)
   
   # --- Term 2 Calculation ---
   # Corresponds to exp(...) * P(Z < -(ξt+α)/√t, ξ > 0), where ξ~N(μ', σ²)
   mu_prime <- mu + 2.0 * alpha * sigma_sq
   
   # Upper bounds for the second bivariate normal
-  h2 <- (-mu_prime * t - alpha) / common_denom_part
+  h2 <- (-mu_prime * t - alpha) / denom
   k2 <- mu_prime / sigma
   
   # Correlation for the second bivariate normal
   rho2 <- -rho1 # Correlation has opposite sign
   
-  corr_matrix2 <- matrix(c(1, rho2, rho2, 1), nrow = 2)
-  term2_prob <- mvtnorm::pmvnorm(
-    upper = c(h2, k2),
-    mean = c(0, 0),
-    corr = corr_matrix2
-  )[1]
+  term2_prob = pbvn_tvpack(h2, k2,rho2)
   
   
   # --- Combine terms ---
@@ -114,7 +103,96 @@ pswtn_analytic_R <- function(t_adj, alpha, mu_drift, sigma_drift) {
   
   return(cdf_val)
 }
+pswtn_fast <- function(t_adj, alpha, mu_drift, sigma_drift) {
+  
+  # --- 1. Handle edge cases ---
+  if (t_adj <= 1e-10) return(0.0)
+  if (alpha <= 1e-10) return(1.0)
+  if (sigma_drift < 0) return(NaN)
+  
+  # --- 2. Handle special case: No drift variability -> standard Wald ---
+  if (sigma_drift <= 1e-10) {
+    return(pwald_classic_R(t = t_adj, boundary_alpha = alpha, drift_rate_xi = mu_drift))
+  }
+  
+  # --- 3. Main Analytic Calculation (Corrected) ---
+  
+  # Convenience variables
+  t <- t_adj
+  mu <- mu_drift
+  sigma <- sigma_drift
+  sigma_sq <- sigma^2
+  
+  # Normalization constant for truncated normal drift rate: P(xi > 0)
+  prob_xi_gt_0 <- pnorm(mu / sigma)
+  if (prob_xi_gt_0 < 1e-100) return(0.0)
+  
+  # Pre-calculate terms for correlations and denominators
+  denom <- sqrt(t * (1 + t * sigma_sq))
+  
+  # --- Term 1 Calculation ---
+  # Corresponds to P(Z < (ξt - α)/√t, ξ > 0)
+  
+  # Upper bounds for the standardized bivariate normal P(X<h, Y<k)
+  h1 <- (mu * t - alpha) / denom
+  k1 <- mu / sigma
+  
+  # Correlation for the first bivariate normal
+  rho1 <- (sigma * t) / denom
+  term1_prob <- pbvn_drezner(h1, k1,rho1)
+  
+  # --- Term 2 Calculation ---
+  # Corresponds to exp(...) * P(Z < -(ξt+α)/√t, ξ > 0), where ξ~N(μ', σ²)
+  mu_prime <- mu + 2.0 * alpha * sigma_sq
+  
+  # Upper bounds for the second bivariate normal
+  h2 <- (-mu_prime * t - alpha) / denom
+  k2 <- mu_prime / sigma
+  
+  # Correlation for the second bivariate normal
+  rho2 <- -rho1 # Correlation has opposite sign
+  
+  term2_prob = pbvn_drezner(h2, k2,rho2)
+  
+  
+  # --- Combine terms ---
+  exp_term <- exp(2.0 * alpha * mu + 2.0 * alpha * alpha * sigma_sq)
+  
+  cdf_val <- (term1_prob + exp_term * term2_prob) / prob_xi_gt_0
+  
+  # Final checks for numerical stability
+  cdf_val <- max(0, min(1, cdf_val))
+  
+  return(cdf_val)
+}
+swt_cdf_GH <- function(t, a, mu, sigma, n = 40) {
+  gh   <- gauss.quad.prob(n, "normal")          # N(0,1) nodes/weights
+  x    <- mu + sigma * gh$nodes                 # drift grid
+  keep <- x > 0                                 # **truncate here**
+  if (!any(keep)) return(0)                     # all mass left of zero
+  
+  fw   <- wald_cdf(t, a, x[keep])               # Wald CDF at positive drifts
+  w    <- gh$weights[keep]
+  ppos <- pnorm(mu / sigma)                     # P(ξ > 0)
+  
+  sum(w * fw) / ppos
+}
+pars <- expand.grid(mu = c( 1, 2, 4 ),
+                    cv = c( 0.05,0.1,0.2,0.4, 0.6, 0.8, 0.99 ),
+                    alpha = c( 0.5, 1, 1.5, 3 ),
+                    t = c( .1, .3, .6, 1, 2 ))
 
+f.ref  <- function(t, a, mu, sigma) pswtn_numeric_integral(t,a,mu,sigma)  # every time
+f.fast <- function(t, a, mu, sigma) pswtn_Genz(t,a,mu,sigma) # with your switch
+
+err <- mapply(function(t, alpha, mu, cv) {
+  sigma <- cv * mu          # σ = CV · μ
+  f.fast(t, alpha, mu, sigma) -
+    f.ref (t, alpha, mu, sigma)
+},
+pars$t, pars$alpha, pars$mu, pars$cv)
+range(err)         # look for |err| > 1e-8
+pars$err=err
 
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # 3. For Verification: A Numerical Integration Version

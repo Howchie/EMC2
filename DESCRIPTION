@@ -68,7 +68,8 @@ Imports:
 	truncnorm,
 	statmod,
 	Rcpp,
-	pracma
+	pracma,
+	pbivnorm
 LinkingTo: 
     Rcpp, RcppArmadillo,mvtnorm
 Depends: 

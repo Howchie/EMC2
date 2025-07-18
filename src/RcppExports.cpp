@@ -380,6 +380,59 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// pswtn_numeric_integral
+double pswtn_numeric_integral(double t_adj, double alpha, double mu_drift, double sigma_drift, double abs_err, double rel_err, size_t max_eval);
+RcppExport SEXP _EMC2_pswtn_numeric_integral(SEXP t_adjSEXP, SEXP alphaSEXP, SEXP mu_driftSEXP, SEXP sigma_driftSEXP, SEXP abs_errSEXP, SEXP rel_errSEXP, SEXP max_evalSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< double >::type t_adj(t_adjSEXP);
+    Rcpp::traits::input_parameter< double >::type alpha(alphaSEXP);
+    Rcpp::traits::input_parameter< double >::type mu_drift(mu_driftSEXP);
+    Rcpp::traits::input_parameter< double >::type sigma_drift(sigma_driftSEXP);
+    Rcpp::traits::input_parameter< double >::type abs_err(abs_errSEXP);
+    Rcpp::traits::input_parameter< double >::type rel_err(rel_errSEXP);
+    Rcpp::traits::input_parameter< size_t >::type max_eval(max_evalSEXP);
+    rcpp_result_gen = Rcpp::wrap(pswtn_numeric_integral(t_adj, alpha, mu_drift, sigma_drift, abs_err, rel_err, max_eval));
+    return rcpp_result_gen;
+END_RCPP
+}
+// drdmswtn_numeric_integral
+double drdmswtn_numeric_integral(double t_adj, double B, double mu_drift, double A, double sigma_drift, double spv_abs_err, double spv_rel_err, size_t spv_max_eval);
+RcppExport SEXP _EMC2_drdmswtn_numeric_integral(SEXP t_adjSEXP, SEXP BSEXP, SEXP mu_driftSEXP, SEXP ASEXP, SEXP sigma_driftSEXP, SEXP spv_abs_errSEXP, SEXP spv_rel_errSEXP, SEXP spv_max_evalSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< double >::type t_adj(t_adjSEXP);
+    Rcpp::traits::input_parameter< double >::type B(BSEXP);
+    Rcpp::traits::input_parameter< double >::type mu_drift(mu_driftSEXP);
+    Rcpp::traits::input_parameter< double >::type A(ASEXP);
+    Rcpp::traits::input_parameter< double >::type sigma_drift(sigma_driftSEXP);
+    Rcpp::traits::input_parameter< double >::type spv_abs_err(spv_abs_errSEXP);
+    Rcpp::traits::input_parameter< double >::type spv_rel_err(spv_rel_errSEXP);
+    Rcpp::traits::input_parameter< size_t >::type spv_max_eval(spv_max_evalSEXP);
+    rcpp_result_gen = Rcpp::wrap(drdmswtn_numeric_integral(t_adj, B, mu_drift, A, sigma_drift, spv_abs_err, spv_rel_err, spv_max_eval));
+    return rcpp_result_gen;
+END_RCPP
+}
+// prdmswtn_numeric_integral
+double prdmswtn_numeric_integral(double t_adj, double B, double mu_drift, double A, double sigma_drift, double spv_abs_err, double spv_rel_err, size_t spv_max_eval);
+RcppExport SEXP _EMC2_prdmswtn_numeric_integral(SEXP t_adjSEXP, SEXP BSEXP, SEXP mu_driftSEXP, SEXP ASEXP, SEXP sigma_driftSEXP, SEXP spv_abs_errSEXP, SEXP spv_rel_errSEXP, SEXP spv_max_evalSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< double >::type t_adj(t_adjSEXP);
+    Rcpp::traits::input_parameter< double >::type B(BSEXP);
+    Rcpp::traits::input_parameter< double >::type mu_drift(mu_driftSEXP);
+    Rcpp::traits::input_parameter< double >::type A(ASEXP);
+    Rcpp::traits::input_parameter< double >::type sigma_drift(sigma_driftSEXP);
+    Rcpp::traits::input_parameter< double >::type spv_abs_err(spv_abs_errSEXP);
+    Rcpp::traits::input_parameter< double >::type spv_rel_err(spv_rel_errSEXP);
+    Rcpp::traits::input_parameter< size_t >::type spv_max_eval(spv_max_evalSEXP);
+    rcpp_result_gen = Rcpp::wrap(prdmswtn_numeric_integral(t_adj, B, mu_drift, A, sigma_drift, spv_abs_err, spv_rel_err, spv_max_eval));
+    return rcpp_result_gen;
+END_RCPP
+}
 // pEXG
 NumericVector pEXG(NumericVector q, double mu, double sigma, double tau, bool lower_tail, bool log_p);
 RcppExport SEXP _EMC2_pEXG(SEXP qSEXP, SEXP muSEXP, SEXP sigmaSEXP, SEXP tauSEXP, SEXP lower_tailSEXP, SEXP log_pSEXP) {
@@ -829,6 +882,9 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_pSWTNspv", (DL_FUNC) &_EMC2_pSWTNspv, 6},
     {"_EMC2_drdmswtn_c", (DL_FUNC) &_EMC2_drdmswtn_c, 5},
     {"_EMC2_prdmswtn_c", (DL_FUNC) &_EMC2_prdmswtn_c, 5},
+    {"_EMC2_pswtn_numeric_integral", (DL_FUNC) &_EMC2_pswtn_numeric_integral, 7},
+    {"_EMC2_drdmswtn_numeric_integral", (DL_FUNC) &_EMC2_drdmswtn_numeric_integral, 8},
+    {"_EMC2_prdmswtn_numeric_integral", (DL_FUNC) &_EMC2_prdmswtn_numeric_integral, 8},
     {"_EMC2_pEXG", (DL_FUNC) &_EMC2_pEXG, 6},
     {"_EMC2_dEXG", (DL_FUNC) &_EMC2_dEXG, 5},
     {"_EMC2_dEXGrace", (DL_FUNC) &_EMC2_dEXGrace, 4},

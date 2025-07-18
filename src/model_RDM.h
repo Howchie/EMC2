@@ -258,7 +258,7 @@ double dswtn(double t_adj, double alpha, double mu_drift, double sigma_drift) {
     double term5 = R::pnorm( (alpha * sigma_2 + mu_drift) /(std::sqrt(t_adj * std::pow(sigma_2, 2) + sigma_2) ), 0.0, 1.0, true, false);
 	double pdf_val = (term1/term2) * term3 * term4 * term5;
 
-    if (std::isnan(pdf_val)) return R_NegInf; // Should be caught by specific parameter checks earlier
+    if (std::isnan(pdf_val) || pdf_val < 0.0) return 0.0; // Should be caught by specific parameter checks earlier
     return pdf_val;
 }
 
@@ -280,7 +280,8 @@ double pswtn(double t_adj, double alpha, double mu_drift, double sigma_drift) {
 	double alpha_2 = std::pow(alpha,2); 
 	double prob_d_gt_0 = R::pnorm(mu_drift / sigma_drift, 0.0, 1.0, true, false);
 	if (std::isinf(prob_d_gt_0) || prob_d_gt_0 < 0) return R_NegInf; // if P(xi > 0) is zero
-	
+	double log_prob_d_gt_0 = R::pnorm(mu_drift / sigma_drift, 0.0, 1.0, true, true); // log.p = TRUE
+    if (std::isinf(log_prob_d_gt_0)) return R_NegInf;
 	double denom = std::sqrt(t_adj*(1+t_adj*sigma_2));
 	double rho = (sigma_drift*t_adj)/denom;
 	// first Φ2
@@ -292,6 +293,7 @@ double pswtn(double t_adj, double alpha, double mu_drift, double sigma_drift) {
     } else {
         term1 = norm_cdf_2d_fast(h1, k1, rho); // Faster Drezner/West algorithm otherwise
     }
+	double log_A = (term1 > 1e-300) ? std::log(term1) : R_NegInf; // Avoid log(0)
 	// second Φ2 (reflected drift)
 	double mu_p = mu_drift + 2*alpha*sigma_2;
 	double h2 = (-mu_p*t_adj - alpha)/denom;
@@ -303,8 +305,16 @@ double pswtn(double t_adj, double alpha, double mu_drift, double sigma_drift) {
     } else {
         term2 = norm_cdf_2d_fast(h2, k2, -rho); // Faster Drezner/West algorithm otherwise
     }
-	double cdf_val  = (term1 + std::exp(2*alpha*mu_drift + 2*alpha_2*sigma_2)*term2) / prob_d_gt_0;
-	
+	double log_term2 = (term2 > 1e-300) ? std::log(term2) : R_NegInf; // Avoid log(0)
+	double log_exp_term = 2 * alpha * mu_drift + 2 * alpha_2 * sigma_2;
+	double log_B = log_exp_term + log_term2;
+    // --- Combine using log-sum-exp ---
+    double log_numerator = log_sum_exp(log_A, log_B);
+    
+    // Final log CDF
+    double log_cdf_val = log_numerator - log_prob_d_gt_0;
+	//double cdf_val  = (term1 + std::exp(2*alpha*mu_drift + 2*alpha_2*sigma_2)*term2) / prob_d_gt_0;
+	double cdf_val = std::exp(log_cdf_val);
 	if (std::isnan(cdf_val) || cdf_val < 0.0) return 0.0;
     if (cdf_val > 1.0) return 1.0;
 	return cdf_val;
@@ -362,12 +372,10 @@ double drdmswtn(double t_adj, double B, double mu_drift, double A,
 			integral      += weights[j] * pdf_val;
 		}
 		// Scale for Gauss-Legendre over [B, B+A] and divide by A (uniform pdf)
-		// This reduces to integral * 0.5 but it's handy to see it writtent out properly
+		// This reduces to integral * 0.5 but it's handy to see it written out properly
 		double out = (integral * (A / 2.0)) / A;
 
-		// Normalization by A (width of the uniform distribution U(B, B+A))
-        if (std::isnan(out) || out < 0) return R_NegInf; // Integral should be positive;
-		if (out > 1.0) return 1.0;
+        if (std::isnan(out) || out < 0) return 0; // Integral should be positive;
 		return out;
     }
 }
@@ -415,7 +423,7 @@ double prdmswtn(double t_adj, double B, double mu_drift, double A,
 			integral      += weights[j] * cdf_val;
 		}
 		// Scale for Gauss-Legendre over [B, B+A] and divide by A (uniform pdf)
-		// This reduces to integral * 0.5 but it's handy to see it writtent out properly
+		// This reduces to integral * 0.5 but it's handy to see it written out properly
 		double out = (integral * (A / 2.0)) / A;
 				// Defensive clipping
 		// Normalization by A (width of the uniform distribution U(B, B+A))
@@ -491,7 +499,7 @@ NumericVector pSWTNspv(NumericVector t, NumericVector v, NumericVector B, Numeri
 
 // [[Rcpp::export]]
 NumericVector drdmswtn_c(NumericVector rts, NumericMatrix pars, LogicalVector idx, double min_ll, LogicalVector is_ok){
-  //v = 0, B = 1, A = 2, t0 = 3, s = 4, sv=5
+  //v = 0, B = 1, A = 2, t0 = 3, s = 4, cv=5
 	NumericVector out(sum(idx));
   int k = 0;
   for(int i = 0; i < rts.length(); i++){
@@ -500,7 +508,8 @@ NumericVector drdmswtn_c(NumericVector rts, NumericMatrix pars, LogicalVector id
         out[k] = 0;
       } else if((rts[i] - pars(i,3) > 0) && (is_ok[i] == TRUE)){
 		double sv = (pars(i,0)/pars(i,4))*pars(i,5); // convert coefficient of variation to standard deviation
-        out[k] = drdmswtn(rts[i] - pars(i,3), pars(i,1)/pars(i,4), pars(i,0)/pars(i,4), pars(i,2)/pars(i,4), sv);
+        double A = pars(i,1) * pars(i,2); // convert zA to A
+		out[k] = drdmswtn(rts[i] - pars(i,3), pars(i,1)/pars(i,4), pars(i,0)/pars(i,4), A/pars(i,4), sv);
       } else{
         out[k] = min_ll;
       }
@@ -513,7 +522,7 @@ NumericVector drdmswtn_c(NumericVector rts, NumericMatrix pars, LogicalVector id
 
 // [[Rcpp::export]]
 NumericVector prdmswtn_c(NumericVector rts, NumericMatrix pars, LogicalVector idx, double min_ll, LogicalVector is_ok){
-  //v = 0, B = 1, A = 2, t0 = 3, s = 4, sv=5
+  //v = 0, B = 1, A = 2, t0 = 3, s = 4, cv=5
   NumericVector out(sum(idx));
   int k = 0;
   for(int i = 0; i < rts.length(); i++){
@@ -522,7 +531,8 @@ NumericVector prdmswtn_c(NumericVector rts, NumericMatrix pars, LogicalVector id
         out[k] = 0;
       } else if((rts[i] - pars(i,3) > 0) && (is_ok[i] == TRUE)){
 		double sv = (pars(i,0)/pars(i,4))*pars(i,5); // convert coefficient of variation to standard deviation
-        out[k] = prdmswtn(rts[i] - pars(i,3), pars(i,1)/pars(i,4), pars(i,0)/pars(i,4), pars(i,2)/pars(i,4), sv);
+        double A = pars(i,1) * pars(i,2); // convert zA to A
+		out[k] = prdmswtn(rts[i] - pars(i,3), pars(i,1)/pars(i,4), pars(i,0)/pars(i,4), A/pars(i,4), sv);
       } else{
         out[k] = min_ll;
       }
@@ -658,7 +668,7 @@ double rswtn(double alpha, double mu_drift, double sigma_drift, double theta) {
 }
 */
 
-/*
+
 // START OF SWTN IMPLEMENTATION
 // Helper struct for CDF integration parameters
 struct pswtn_Params {
@@ -932,6 +942,6 @@ double prdmswtn_numeric_integral(double t_adj, double B, double mu_drift, double
         return integral_val_cdf / A;
     }
 }
-*/
+
 
 #endif

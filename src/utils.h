@@ -295,6 +295,4 @@ double get_trunc_normaliser_cpp(
     double epsilon = 1e-8,
     void* model_specific_context = nullptr);
 
-
-
 #endif

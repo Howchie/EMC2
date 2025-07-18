@@ -12,7 +12,7 @@ do_transform <- function(pars, model)
   
   ## probit link: lower + (upper‑lower) * pnorm(real)
   pars[, isprobit] <- sweep(
-    sweep(qnorm(pars[, isprobit, drop = FALSE]), 2,
+    sweep(pnorm(pars[, isprobit, drop = FALSE]), 2,
           transform$upper[ptypes[isprobit]] -
             transform$lower[ptypes[isprobit]], "*"),
     2, transform$lower[ptypes[isprobit]], "+")
@@ -35,7 +35,7 @@ do_reverse_transform <- function(pars, model)
   )
   
   ## probit link: lower + (upper‑lower) * pnorm(real)
-  pars[, isprobit] <- pnorm(sweep(
+  pars[, isprobit] <- qnorm(sweep(
     sweep(pars[, isprobit, drop = FALSE], 2,
           transform$lower[ptypes[isprobit]], "-"),
     2, transform$upper[ptypes[isprobit]] -
@@ -62,22 +62,22 @@ do_reverse_transform_variance <- function(mu_nat, var, model, prop=TRUE)
   is_qnorm <- trf == "pnorm"
   is_nat   <- trf == "identity"
   ## -- allocate outputs -------------------------------------------------------
-  var_tr  <- matrix(NA,  ncol = ncol(mu_nat), nrow = nrow(mu_nat))
+  var_tr  <- matrix(NA,  ncol = ncol(mu_nat), nrow = nrow(var_prop))
   par_tr  <- matrix(NA, ncol = ncol(mu_nat), nrow = nrow(mu_nat))
-  var_tr[1:nrow(mu_nat), is_nat] <- diag(var_prop)[is_nat]
+  diag(var_tr)[is_nat] <- diag(var_prop)[is_nat]
   par_tr[, is_nat] <- mu_nat[, is_nat, drop = FALSE]
   ## exp link:  lower + exp(real)
   # residual on the natural scale
-  var_tr[1:nrow(mu_nat), is_log] <- log1p(diag(var_prop)[is_log] /
+  diag(var_tr)[is_log] <- log1p(diag(var_prop)[is_log] /
                               mu_nat  [1:nrow(mu_nat), is_log])
-  par_tr[, is_log] <- ifelse(
+  par_tr[1:nrow(mu_nat), is_log] <- ifelse(
     mu_nat[, is_log, drop = FALSE] <= model$bound$minmax[1, ptypes[is_log]] |
       is.na(mu_nat[, is_log, drop = FALSE]),
     log(model$bound$minmax[1, ptypes[is_log]]),
-    log(mu_nat[, is_log, drop = FALSE]) - 0.5 * var_tr[, is_log, drop = FALSE]
+    log(mu_nat[, is_log, drop = FALSE]) - 0.5 * diag(var_tr)[is_log]
   )
   ## probit link - to get variance we need a root finder (this probably needs to be thoroughly checked by someone not ZH)
-  var_nat=diag(as.vector(mu_nat),ncol=ncol(mu_nat))*var_prop[1,]
+  var_nat=diag(as.vector(mu_nat),ncol=ncol(mu_nat))*var_prop
   make_root <- function(mu, target_var, lower, upper) {
     #target_var <- pmin(target_var, 0.999 * mu * (1 - mu))
     W <- upper - lower
@@ -94,8 +94,10 @@ do_reverse_transform_variance <- function(mu_nat, var, model, prop=TRUE)
   }
   for (j in 1:ncol(var_nat)) {
     if(is_qnorm[j]) {
+      lower=model$bound$minmax[1,ptypes[j]]
+      upper=model$bound$minmax[2,ptypes[j]]
       W <- upper - lower
-      p <- (mu - lower) / W
+      p <- (mu_nat[j] - lower) / W
       if (any(p <= 0) || any(p >= 1))          stop("mean outside (lower, upper)")
       a <- qnorm(p)                   # STANDARD-NORMAL CUT-POINT, nothing fancy
       
@@ -104,12 +106,12 @@ do_reverse_transform_variance <- function(mu_nat, var, model, prop=TRUE)
           var_tr[i, j] <- uniroot(make_root(mu_nat[j], var_nat[i,j], 
                                                      model$bound$minmax[1,ptypes[j]], model$bound$minmax[2,ptypes[j]]),
                                            c(-1e-6, 50))$root
-          par_tr[i, j] = a*sqrt(1+var_tr[i,j])
+          par_tr[1, j] = a*sqrt(1+var_tr[i,j])
         }
       }
     }
   }
-out = data.frame(pars=par_tr[1,],var=var_tr[1,],row.names = colnames(mu_nat))
+out = data.frame(pars=par_tr[1,],var=diag(var_tr),row.names = colnames(mu_nat))
 }
 
 do_pre_transform <- function(p_vector, model)

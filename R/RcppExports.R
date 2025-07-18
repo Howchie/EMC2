@@ -101,6 +101,18 @@ prdmswtn_c <- function(rts, pars, idx, min_ll, is_ok) {
     .Call(`_EMC2_prdmswtn_c`, rts, pars, idx, min_ll, is_ok)
 }
 
+pswtn_numeric_integral <- function(t_adj, alpha, mu_drift, sigma_drift, abs_err = 1e-8, rel_err = 1e-8, max_eval = 10000L) {
+    .Call(`_EMC2_pswtn_numeric_integral`, t_adj, alpha, mu_drift, sigma_drift, abs_err, rel_err, max_eval)
+}
+
+drdmswtn_numeric_integral <- function(t_adj, B, mu_drift, A, sigma_drift, spv_abs_err = 1e-8, spv_rel_err = 1e-8, spv_max_eval = 10000L) {
+    .Call(`_EMC2_drdmswtn_numeric_integral`, t_adj, B, mu_drift, A, sigma_drift, spv_abs_err, spv_rel_err, spv_max_eval)
+}
+
+prdmswtn_numeric_integral <- function(t_adj, B, mu_drift, A, sigma_drift, spv_abs_err = 1e-8, spv_rel_err = 1e-8, spv_max_eval = 10000L) {
+    .Call(`_EMC2_prdmswtn_numeric_integral`, t_adj, B, mu_drift, A, sigma_drift, spv_abs_err, spv_rel_err, spv_max_eval)
+}
+
 pEXG <- function(q, mu = 5., sigma = 1., tau = 1., lower_tail = TRUE, log_p = FALSE) {
     .Call(`_EMC2_pEXG`, q, mu, sigma, tau, lower_tail, log_p)
 }

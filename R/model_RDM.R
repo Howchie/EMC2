@@ -217,7 +217,7 @@ rRDM <- function(lR,pars,p_types=c("v","B","A","t0"),ok=rep(TRUE,dim(pars)[1]))
   dt <- matrix(Inf,nrow=nr,ncol=nrow(pars)/nr)
   t0 <- pars[,"t0"]
   pars <- pars[ok,,drop=FALSE]
-  dt[ok] <- rWald(sum(ok),B=pars[ok,"B"],v=pars[ok,"v"],A=pars[ok,"A"])
+  dt[ok] <- rWald(sum(ok),B=pars[,"B"],v=pars[,"v"],A=pars[,"A"])
   R <- apply(dt,2,which.min)
   pick <- cbind(R,1:dim(dt)[2]) # Matrix to pick winner
   # Any t0 difference with lR due to response production time (no effect on race)
@@ -270,13 +270,14 @@ RDMSWTN <- function(){
   list(
     type="RACE",
     c_name = "RDMSWTN",
-    p_types=c("v" = log(1),"B" = log(1),"A" = log(0),"t0" = log(0),"s" = log(1),"cv" = log(0)),
-    transform=list(func=c(v = "exp", B = "exp", A = "exp",t0 = "exp", s = "exp", cv="exp")),
-    bound=list(minmax=cbind(v=c(1e-3,Inf), B=c(0,Inf), A=c(1e-4,Inf),t0=c(0.05,Inf), s=c(0,Inf), cv=c(1e-3,Inf)),
-               exception=c(A=0, v=0, cv=0)),
+    p_types=c("v" = log(1),"B" = log(1),"zA" = qnorm(0),"t0" = log(0),"s" = log(1),"cv" = qnorm(0)),
+    transform=list(func=c(v = "exp", B = "exp", zA = "pnorm",t0 = "exp", s = "exp", cv="pnorm")),
+    bound=list(minmax=cbind(v=c(1e-3,Inf), B=c(0,Inf), zA=c(0.01,0.99),t0=c(0.05,Inf), s=c(0,Inf), cv=c(0.01,0.99)),
+               exception=c(zA=0, v=0, cv=0)),
     # Trial dependent parameter transform. sv is sampled as a coefficient of variance and transformed to standard deviation of drift, tying its magnitude to the mean_drift.
     Ttransform = function(pars,dadm) {
-      pars <- cbind(pars,b=pars[,"B"] + pars[,"A"],sv=pars[,"cv"]*pars[,"v"])
+      #pars <- cbind(pars,b=pars[,"B"] + pars[,"A"])#,sv=pars[,"cv"]*pars[,"v"])
+      pars <- cbind(pars,A=pars[,"B"] * pars[,"zA"],sv=pars[,"cv"]*pars[,"v"])
       pars
     },
     # Random function for racing accumulators
@@ -348,6 +349,7 @@ rRDMSWTN <- function(lR,pars,p_types=c("v","B","A","t0","sv"),ok=rep(TRUE,dim(pa
   # test
   # pars=cbind(B=c(1,2),v=c(1,1),A=c(0,0),t0=c(.2,.2)); lR=factor(c(1,2))
 {
+  if (!is.null(attr(pars,"ok"))) {ok=attr(pars,"ok")}
   if (is.null(dim(pars)) || (dim(pars)[1]==1 & length(lR)>1) ) { # Check if pars is a vector
     original_names <- names(pars); if (is.null(original_names)) {original_names = colnames(pars)}
     pars <- matrix(pars, nrow = length(lR), ncol=length(pars), dimnames = list(NULL, original_names),byrow=TRUE)
@@ -364,7 +366,7 @@ rRDMSWTN <- function(lR,pars,p_types=c("v","B","A","t0","sv"),ok=rep(TRUE,dim(pa
   dt <- matrix(Inf,nrow=nr,ncol=nrow(pars)/nr)
   t0 <- pars[,"t0"]
   pars <- pars[ok,,drop=FALSE]
-  dt[ok] <- rSWTN(sum(ok),B=pars[ok,"B"],v=pars[ok,"v"],A=pars[ok,"A"],sv=pars[ok,"sv"])
+  dt[ok] <- rSWTN(sum(ok),B=pars[,"B"],v=pars[,"v"],A=pars[,"A"],sv=pars[,"sv"])
   R <- apply(dt,2,which.min)
   pick <- cbind(R,1:dim(dt)[2]) # Matrix to pick winner
   # Any t0 difference with lR due to response production time (no effect on race)
