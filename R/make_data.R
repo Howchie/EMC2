@@ -115,9 +115,9 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
   # if(!is.null(UCdirection)){UCdirection<-TRUE}
   # if(!is.null(force_direction)){force_direction<-TRUE}
   # if(!is.null(force_response)){force_response<-TRUE}
-  LCresponse<-TRUE
-  UCresponse<-TRUE
-  LCdirection<-TRUE
+  LCresponse<-FALSE
+  UCresponse<-FALSE
+  LCdirection<-FALSE
   UCdirection<-TRUE
   force_direction<-TRUE
   force_response<-TRUE
@@ -262,13 +262,13 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
   if ( !is.null(pc) ) {
     if (!any(is.infinite(data$rt)) & any(is.na(data$R)))
       stop("Cannot have contamination and censoring with no direction and response")
-    contam <- runif(length(pc)) < pc
+    contam <- rbinom(length(pc),1,pc)==1
     data[contam,"R"] <- NA
-    if ( LC!=0 | is.finite(UC) ) { # censoring
+    if ( any(LC!=0) | any(is.finite(UC)) ) { # censoring
       if ( (LCdirection & UCdirection) &  !rtContaminantNA)
         stop("Cannot have contamination with a mixture of censor directions")
-      if (rtContaminantNA & ((is.finite(LC) & !LCresponse & !LCdirection) |
-                              (is.finite(UC) & !UCresponse & !UCdirection)))
+      if (rtContaminantNA & ((any(is.finite(LC)) & !LCresponse & !LCdirection) |
+                              (any(is.finite(UC)) & !UCresponse & !UCdirection)))
         stop("Cannot have contamination and censoring with no direction and response")
       if (rtContaminantNA | (!LCdirection & !UCdirection)) data[contam,"rt"] <- NA else
         if (LCdirection) data[contam,"rt"] <- -Inf  else data[contam,"rt"] <- Inf
@@ -357,7 +357,10 @@ add_Ffunctions <- function(data,design)
 #' make_data(subj_pars, design_DDMaE, n_trials = 10)
 #' @export
 
-make_random_effects <- function(design, group_means, n_subj = NULL, variance_proportion = .2, covariances = NULL){
+make_random_effects <- function(design, group_means, n_subj = NULL, variance_proportion = .2, covariances = NULL,covariance_prop=FALSE){
+  ## ZH edits -- covariances and variance prop now influence parameters on their NATURAL SCALE, bounded correctly
+  # variance prop can be a scalar, or a vector length group_means
+  
   if(is.null(n_subj)){
     n_subj <- length(design$Ffactors$subjects)
     subnames <- design$Ffactors$subjects
@@ -365,6 +368,7 @@ make_random_effects <- function(design, group_means, n_subj = NULL, variance_pro
     subnames <- as.character(1:n_subj)
   }
   if(length(group_means) != length(sampled_pars(design))) stop("You must specify as many means as parameters in your design")
+  if(!length(variance_proportion)==1 && !length(variance_proportion)==length(group_means)) stop ("variance proportion must be a scalar or exactly one value per group mean")
   if (is.null(dim(group_means))) { # Check if pars is a vector
     original_names <- names(group_means)
     group_means <- matrix(group_means, nrow = 1, ncol=length(group_means), dimnames = list(NULL, original_names),byrow=TRUE)
@@ -373,6 +377,9 @@ make_random_effects <- function(design, group_means, n_subj = NULL, variance_pro
   reordered_means = matrix(NA,nrow=nrow(group_means),ncol=ncol(group_means), dimnames = list(NULL, names(sampled_pars(design))))
   for (p in names(sampled_pars(design))) {
     reordered_means[,p] = group_means[,p]
+  }
+  if(is.null(covariances)&length(variance_proportion )==1) {
+    variance_proportion =rep(variance_proportion ,ncol(reordered_means))
   }
   model=design$model()
   reordered_means <- t(apply(reordered_means, 1, do_pre_transform, model))
@@ -385,18 +392,29 @@ make_random_effects <- function(design, group_means, n_subj = NULL, variance_pro
     # This runs the trend and afterwards removes the trend parameters
     reordered_means <- prep_trend(design, model$trend, reordered_means)
   }
+  # From here ZH has edited functionality
+  # If variance_prop and no covariances, multiply natural-scale mean * variance prop
+  # perform rmvnorm on natural scale
+  # transform (and bound check post-hoc)
   if(is.null(covariances)) { # ZH modified so that variance is transformed to natural scale (e.g. 0.2*natural_scale_mu) then back-converted for transformed mvtnorm. I found the original code (a) was broken for group_means of zero (zero variance) but also estimates were more varied than expected due to the conversions
-    tmp = do_reverse_transform_variance(reordered_means,diag(rep(variance_proportion, ncol(reordered_means))),model)
-    #covariances <- diag(tmp$vars)
-    random_effects <- mvtnorm::rmvnorm(n_subj,mean=tmp$pars,sigma=diag(tmp$var,length(tmp$pars),length(tmp$pars)))
-    colnames(random_effects) <- colnames(reordered_means)
-    rownames(random_effects) <- subnames
-  } else { # ZH - i didn't change this part so nested in an else statement
-      random_effects <- mvtnorm::rmvnorm(n_subj,mean=group_means,sigma=covariances)
-      colnames(random_effects) <- names(sampled_pars(design))
-      rownames(random_effects) <- subnames
-  #random_effects <- do_reverse_transform(random_effects,model$transform)
+    covariances = matrix(0,nrow=ncol(reordered_means),ncol = ncol(reordered_means))
+    diag(covariances)=as.numeric(reordered_means)*variance_proportion
+  } 
+  else if (covariance_prop) { # if covariance matrix is specified, is the diagonal to be treated like variance_proportion?
+    diag(covariances)=diag(covariances)*as.numeric(reordered_means)
   }
+  # If covariances specified, assume it is on natural scale
+  # diag(covariances) = natural-scale mean * diag(covariances)
+  # perform rmvnorm on natural scale
+  # transform (and bound check post-hoc)
+  # Use truncated mnvorm to respect bounds
+  random_effects <- tmvtnorm::rtmvnorm(n_subj,mean=as.numeric(reordered_means),sigma=covariances,
+                                       lower=as.numeric(model$bound$minmax[1, get_p_types(colnames(reordered_means))]),
+                                       upper=as.numeric(model$bound$minmax[2, get_p_types(colnames(reordered_means))]),
+                                                                algorithm="rejection")
+  colnames(random_effects) <- colnames(reordered_means)
+  rownames(random_effects) <- subnames
+  random_effects <- do_reverse_transform(random_effects,model)
   return(random_effects)
 }
 

@@ -29,76 +29,76 @@ plba <- function(t, A, b, v, sv, posdrift = TRUE) {
     .Call(`_EMC2_plba`, t, A, b, v, sv, posdrift)
 }
 
-pigt0 <- function(t, k = 1., l = 1.) {
-    .Call(`_EMC2_pigt0`, t, k, l)
+pigt0 <- function(t, k = 1.0, l = 1.0, log_out = FALSE) {
+    .Call(`_EMC2_pigt0`, t, k, l, log_out)
 }
 
-digt0 <- function(t, k = 1., l = 1.) {
-    .Call(`_EMC2_digt0`, t, k, l)
+digt0 <- function(t, k = 1.0, l = 1.0, log_out = FALSE) {
+    .Call(`_EMC2_digt0`, t, k, l, log_out)
 }
 
-dwald_classic <- function(t, boundary_alpha, drift_rate_xi) {
-    .Call(`_EMC2_dwald_classic`, t, boundary_alpha, drift_rate_xi)
+dwald_classic <- function(t, boundary_alpha, drift_rate_xi, log_out = FALSE) {
+    .Call(`_EMC2_dwald_classic`, t, boundary_alpha, drift_rate_xi, log_out)
 }
 
-pwald_classic <- function(t, boundary_alpha, drift_rate_xi) {
-    .Call(`_EMC2_pwald_classic`, t, boundary_alpha, drift_rate_xi)
+pwald_classic <- function(t, boundary_alpha, drift_rate_xi, log_out = FALSE) {
+    .Call(`_EMC2_pwald_classic`, t, boundary_alpha, drift_rate_xi, log_out)
 }
 
-pigt <- function(t, k = 1, l = 1, a = .1, threshold = 1e-10) {
-    .Call(`_EMC2_pigt`, t, k, l, a, threshold)
+pigt <- function(t, k = 1, l = 1, a = .1, threshold = 1e-10, log_out = FALSE) {
+    .Call(`_EMC2_pigt`, t, k, l, a, threshold, log_out)
 }
 
-digt <- function(t, k = 1., l = 1., a = .1, threshold = 1e-10) {
-    .Call(`_EMC2_digt`, t, k, l, a, threshold)
+digt <- function(t, k = 1., l = 1., a = .1, threshold = 1e-10, log_out = FALSE) {
+    .Call(`_EMC2_digt`, t, k, l, a, threshold, log_out)
 }
 
-drdm_c <- function(rts, pars, idx, min_ll, is_ok) {
-    .Call(`_EMC2_drdm_c`, rts, pars, idx, min_ll, is_ok)
+drdm_c <- function(rts, pars, idx, min_ll, is_ok, log_out = FALSE) {
+    .Call(`_EMC2_drdm_c`, rts, pars, idx, min_ll, is_ok, log_out)
 }
 
-prdm_c <- function(rts, pars, idx, min_ll, is_ok) {
-    .Call(`_EMC2_prdm_c`, rts, pars, idx, min_ll, is_ok)
+prdm_c <- function(rts, pars, idx, min_ll, is_ok, log_out = FALSE) {
+    .Call(`_EMC2_prdm_c`, rts, pars, idx, min_ll, is_ok, log_out)
 }
 
-dRDM_c <- function(t, v, B, A, t0) {
-    .Call(`_EMC2_dRDM_c`, t, v, B, A, t0)
+dRDM_c <- function(t, v, B, A, t0, log_out = FALSE) {
+    .Call(`_EMC2_dRDM_c`, t, v, B, A, t0, log_out)
 }
 
-pRDM_c <- function(t, v, B, A, t0) {
-    .Call(`_EMC2_pRDM_c`, t, v, B, A, t0)
+pRDM_c <- function(t, v, B, A, t0, log_out = FALSE) {
+    .Call(`_EMC2_pRDM_c`, t, v, B, A, t0, log_out)
 }
 
-dswtn <- function(t_adj, alpha, mu_drift, sigma_drift) {
-    .Call(`_EMC2_dswtn`, t_adj, alpha, mu_drift, sigma_drift)
+dswtn <- function(t_adj, alpha, mu_drift, sigma_drift, log_out = FALSE) {
+    .Call(`_EMC2_dswtn`, t_adj, alpha, mu_drift, sigma_drift, log_out)
 }
 
-pswtn <- function(t_adj, alpha, mu_drift, sigma_drift) {
-    .Call(`_EMC2_pswtn`, t_adj, alpha, mu_drift, sigma_drift)
+pswtn <- function(t_adj, alpha, mu_drift, sigma_drift, log_out = FALSE) {
+    .Call(`_EMC2_pswtn`, t_adj, alpha, mu_drift, sigma_drift, log_out)
 }
 
-drdmswtn <- function(t_adj, B, mu_drift, A, sigma_drift, n_gauss_nodes = 20L) {
-    .Call(`_EMC2_drdmswtn`, t_adj, B, mu_drift, A, sigma_drift, n_gauss_nodes)
+drdmswtn <- function(t_adj, B, mu_drift, A, sigma_drift, n_gauss_nodes = 20L, log_out = FALSE) {
+    .Call(`_EMC2_drdmswtn`, t_adj, B, mu_drift, A, sigma_drift, n_gauss_nodes, log_out)
 }
 
-prdmswtn <- function(t_adj, B, mu_drift, A, sigma_drift, n_gauss_nodes = 20L) {
-    .Call(`_EMC2_prdmswtn`, t_adj, B, mu_drift, A, sigma_drift, n_gauss_nodes)
+prdmswtn <- function(t_adj, B, mu_drift, A, sigma_drift, n_gauss_nodes = 20L, log_out = FALSE) {
+    .Call(`_EMC2_prdmswtn`, t_adj, B, mu_drift, A, sigma_drift, n_gauss_nodes, log_out)
 }
 
-dSWTNspv <- function(t, v, B, A, t0, sv) {
-    .Call(`_EMC2_dSWTNspv`, t, v, B, A, t0, sv)
+dSWTNspv <- function(t, v, B, A, t0, sv, log_out = FALSE) {
+    .Call(`_EMC2_dSWTNspv`, t, v, B, A, t0, sv, log_out)
 }
 
-pSWTNspv <- function(t, v, B, A, t0, sv) {
-    .Call(`_EMC2_pSWTNspv`, t, v, B, A, t0, sv)
+pSWTNspv <- function(t, v, B, A, t0, sv, log_out = FALSE) {
+    .Call(`_EMC2_pSWTNspv`, t, v, B, A, t0, sv, log_out)
 }
 
-drdmswtn_c <- function(rts, pars, idx, min_ll, is_ok) {
-    .Call(`_EMC2_drdmswtn_c`, rts, pars, idx, min_ll, is_ok)
+drdmswtn_c <- function(rts, pars, idx, min_ll, is_ok, log_out = FALSE) {
+    .Call(`_EMC2_drdmswtn_c`, rts, pars, idx, min_ll, is_ok, log_out)
 }
 
-prdmswtn_c <- function(rts, pars, idx, min_ll, is_ok) {
-    .Call(`_EMC2_prdmswtn_c`, rts, pars, idx, min_ll, is_ok)
+prdmswtn_c <- function(rts, pars, idx, min_ll, is_ok, log_out = FALSE) {
+    .Call(`_EMC2_prdmswtn_c`, rts, pars, idx, min_ll, is_ok, log_out)
 }
 
 pswtn_numeric_integral <- function(t_adj, alpha, mu_drift, sigma_drift, abs_err = 1e-8, rel_err = 1e-8, max_eval = 10000L) {

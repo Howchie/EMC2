@@ -9,7 +9,8 @@ make_random_effects(
   group_means,
   n_subj = NULL,
   variance_proportion = 0.2,
-  covariances = NULL
+  covariances = NULL,
+  covariance_prop = FALSE
 )
 }
 \arguments{

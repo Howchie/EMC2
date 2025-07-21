@@ -76,6 +76,7 @@ Rcpp::NumericMatrix order_pars_for_winner_cpp(
 struct ContextForRaceModels {
     double min_lik_for_pdf;
     bool use_posdrift;
+	bool log_out=false;
 	std::string LogicalRule;
 };
 
@@ -119,7 +120,7 @@ Rcpp::NumericVector lba_dfun_adapter(Rcpp::NumericVector rt,
                                             void* context) {
     ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context);
     // Pass use_posdrift from context to dlba_c
-    return dlba_c(rt, pars, winner, ctx->min_lik_for_pdf, is_ok, ctx->use_posdrift);
+    return dlba_c(rt, pars, winner, ctx->min_lik_for_pdf, is_ok, ctx->use_posdrift,ctx->log_out);
 }
 
 // Static adapter for LBA pfun
@@ -130,7 +131,7 @@ Rcpp::NumericVector lba_pfun_adapter(Rcpp::NumericVector rt,
                                             void* context) {
     ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context);
     // Pass use_posdrift from context to plba_c
-    return plba_c(rt, pars, winner, ctx->min_lik_for_pdf, is_ok, ctx->use_posdrift);
+    return plba_c(rt, pars, winner, ctx->min_lik_for_pdf, is_ok, ctx->use_posdrift,ctx->log_out);
 }
 
 // Static adapter for RDM dfun
@@ -140,7 +141,7 @@ Rcpp::NumericVector rdm_dfun_adapter(Rcpp::NumericVector rt,
                                             Rcpp::LogicalVector winner,
                                             void* context) {
     ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context);
-    return drdm_c(rt, pars, winner, ctx->min_lik_for_pdf, is_ok);
+    return drdm_c(rt, pars, winner, ctx->min_lik_for_pdf, is_ok,ctx->log_out);
 }
 
 // Static adapter for RDM pfun
@@ -150,7 +151,7 @@ Rcpp::NumericVector rdm_pfun_adapter(Rcpp::NumericVector rt,
                                             Rcpp::LogicalVector winner,
                                             void* context) {
     ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context);
-    return prdm_c(rt, pars, winner, ctx->min_lik_for_pdf, is_ok);
+    return prdm_c(rt, pars, winner, ctx->min_lik_for_pdf, is_ok,ctx->log_out);
 }
 // Static adapter for RDM dfun
 Rcpp::NumericVector rdmswtn_dfun_adapter(Rcpp::NumericVector rt,
@@ -159,7 +160,7 @@ Rcpp::NumericVector rdmswtn_dfun_adapter(Rcpp::NumericVector rt,
                                             Rcpp::LogicalVector winner,
                                             void* context) {
     ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context);
-    return drdmswtn_c(rt, pars, winner, ctx->min_lik_for_pdf, is_ok);
+    return drdmswtn_c(rt, pars, winner, ctx->min_lik_for_pdf, is_ok,ctx->log_out);
 }
 
 // Static adapter for RDM pfun
@@ -169,7 +170,7 @@ Rcpp::NumericVector rdmswtn_pfun_adapter(Rcpp::NumericVector rt,
                                             Rcpp::LogicalVector winner,
                                             void* context) {
     ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context);
-    return prdmswtn_c(rt, pars, winner, ctx->min_lik_for_pdf, is_ok);
+    return prdmswtn_c(rt, pars, winner, ctx->min_lik_for_pdf, is_ok,ctx->log_out);
 }
 
 // Static adapter for LNR dfun
@@ -179,7 +180,7 @@ Rcpp::NumericVector lnr_dfun_adapter(Rcpp::NumericVector rt,
                                             Rcpp::LogicalVector winner,
                                             void* context) {
     ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context); // Reusing same context struct
-    return dlnr_c(rt, pars, winner, ctx->min_lik_for_pdf, is_ok);
+    return dlnr_c(rt, pars, winner, ctx->min_lik_for_pdf, is_ok,ctx->log_out);
 }
 
 // Static adapter for LNR pfun
@@ -189,7 +190,7 @@ Rcpp::NumericVector lnr_pfun_adapter(Rcpp::NumericVector rt,
                                             Rcpp::LogicalVector winner,
                                             void* context) {
     ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context); // Reusing same context struct
-    return plnr_c(rt, pars, winner, ctx->min_lik_for_pdf, is_ok);
+    return plnr_c(rt, pars, winner, ctx->min_lik_for_pdf, is_ok,ctx->log_out);
 }
 
 // ---- END: Context Structs and Static Adapters ----

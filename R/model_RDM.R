@@ -75,10 +75,10 @@ RDM <- function(){
   list(
     type="RACE",
     c_name = "RDM",
-    p_types=c("v" = log(1),"B" = log(1),"A" = log(0),"t0" = log(0),"s" = log(1)),
-    transform=list(func=c(v = "exp", B = "exp", A = "exp",t0 = "exp", s = "exp")),
-    bound=list(minmax=cbind(v=c(1e-3,Inf), B=c(0,Inf), A=c(1e-4,Inf),t0=c(0.05,Inf), s=c(0,Inf)),
-               exception=c(A=0, v=0)),
+    p_types=c("v" = log(1),"B" = log(1),"A" = log(0),"t0" = log(0),"s" = log(1), "pContaminant"=qnorm(0)),
+    transform=list(func=c(v = "exp", B = "exp", A = "exp",t0 = "exp", s = "exp",pContaminant="pnorm")),
+    bound=list(minmax=cbind(v=c(1e-3,Inf), B=c(0,Inf), A=c(1e-4,Inf),t0=c(0.05,Inf), s=c(0,Inf),pContaminant=c(0.001,0.999)),
+               exception=c(A=0, v=0,pContaminant=0)),
     # Trial dependent parameter transform
     Ttransform = function(pars,dadm) {
       pars <- cbind(pars,b=pars[,"B"] + pars[,"A"])
@@ -270,10 +270,10 @@ RDMSWTN <- function(){
   list(
     type="RACE",
     c_name = "RDMSWTN",
-    p_types=c("v" = log(1),"B" = log(1),"zA" = qnorm(0),"t0" = log(0),"s" = log(1),"cv" = qnorm(0)),
-    transform=list(func=c(v = "exp", B = "exp", zA = "pnorm",t0 = "exp", s = "exp", cv="pnorm")),
-    bound=list(minmax=cbind(v=c(1e-3,Inf), B=c(0,Inf), zA=c(0.01,0.99),t0=c(0.05,Inf), s=c(0,Inf), cv=c(0.01,0.99)),
-               exception=c(zA=0, v=0, cv=0)),
+    p_types=c("v" = log(1),"B" = log(1),"zA" = qnorm(0),"t0" = log(0),"s" = log(1),"cv" = qnorm(0), "pContaminant"=qnorm(0)),
+    transform=list(func=c(v = "exp", B = "exp", zA = "pnorm",t0 = "exp", s = "exp", cv="pnorm",pContaminant="pnorm")),
+    bound=list(minmax=cbind(v=c(1e-3,Inf), B=c(0,Inf), zA=c(0.01,0.99),t0=c(0.05,Inf), s=c(0,Inf), cv=c(0.01,0.99),pContaminant=c(0.001,0.999)),
+               exception=c(zA=0, v=0, cv=0,pContaminant=0)),
     # Trial dependent parameter transform. sv is sampled as a coefficient of variance and transformed to standard deviation of drift, tying its magnitude to the mean_drift.
     Ttransform = function(pars,dadm) {
       #pars <- cbind(pars,b=pars[,"B"] + pars[,"A"])#,sv=pars[,"cv"]*pars[,"v"])

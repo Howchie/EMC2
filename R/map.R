@@ -27,21 +27,30 @@ do_reverse_transform <- function(pars, model)
   islog    <- transform$func[ptypes] == "exp"
   isqnorm <- transform$func[ptypes] == "pnorm"
   
-  ## exp link:  lower + exp(real)
+  ## Log link:
   # residual on the natural scale
-  pars[, islog] <- ifelse(pars[, islog] <= model$bound$minmax[1,ptypes[islog]] | is.na(pars[, islog]),  # illegal or undefined
-                          log(model$bound$minmax[1,ptypes[islog]]),                                      # clamp to bound
-                          log(pars[, islog])                        # valid inverse
+  pars[, islog] <- mapply(
+    function(x, b) ifelse(x <= b | is.na(x), log(b), log(x)),
+    as.data.frame(pars[, islog, drop = FALSE]),
+    as.numeric(model$bound$minmax[1, ptypes[islog]])
   )
   
-  ## probit link: lower + (upper‑lower) * pnorm(real)
-  pars[, isprobit] <- qnorm(sweep(
-    sweep(pars[, isprobit, drop = FALSE], 2,
-          transform$lower[ptypes[isprobit]], "-"),
-    2, transform$upper[ptypes[isprobit]] -
-      transform$lower[ptypes[isprobit]], "/"))
+  # Probit link:
+  # Get lower and upper bounds per column
+  lower <- model$bound$minmax[1, ptypes[isqnorm]]
+  upper <- model$bound$minmax[2, ptypes[isqnorm]]
+  
+  # Clamp the values in pars to [lower, upper] per column
+  clamped <- sweep(
+    pmin(pmax(pars[, isqnorm, drop = FALSE], rep(lower, each = nrow(pars))),
+         rep(upper, each = nrow(pars))),
+    2, lower, "-"
+  )
+  scaled <- sweep(clamped, 2, upper - lower, "/")
+  
+  pars[, isqnorm] <- qnorm(scaled)
   pars
-  pars
+
 }
 #' @export
 #' 

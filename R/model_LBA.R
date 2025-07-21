@@ -1,102 +1,3 @@
-#### Standard LBA ----
-# # Moved to C+_ in model_LBA.cpp
-#
-# pnormP <- function (x, mean = 0, sd = 1, lower.tail = TRUE)
-#       ifelse(abs(x) < 7, pnorm(x, mean = mean, sd = sd, lower.tail = lower.tail),
-#              ifelse(x < 0, 0, 1))
-#
-# dnormP <- function (x, mean = 0, sd = 1)
-#       ifelse(abs(x) < 7, dnorm(x, mean = mean, sd = sd), 0)
-#
-#
-# dlba_norm <- function (dt,A,b,v,sv,posdrift=TRUE,robust=FALSE)
-#     # like dlba_norm_core but t0 dealt with outside (removed from dt)
-# {
-#
-#
-#     if (robust) {
-#       pnorm1 <- pnormP
-#       dnorm1 <- dnormP
-#     } else {
-#       pnorm1 <- pnorm
-#       dnorm1 <- dnorm
-#     }
-#
-#     if (posdrift)
-#       denom <- pmax(pnorm1(v/sv), 1e-10) else
-#         denom <- rep(1, length(t))
-#
-#     A_small <- A < 1e-10
-#     if (any(A_small)) {
-#       out <- numeric(length(dt))
-#       out[A_small] <- pmax(0, ((b[A_small]/dt[A_small]^2) *
-#                                  dnorm1(b[A_small]/dt[A_small],v[A_small], sd = sv[A_small]))/denom[A_small])
-#       zs <- dt[!A_small] * sv[!A_small]
-#       zu <- dt[!A_small] * v[!A_small]
-#       chiminuszu <- b[!A_small] - zu
-#       chizu <- chiminuszu/zs
-#       chizumax <- (chiminuszu - A[!A_small])/zs
-#       out[!A_small] <- pmax(0, (v[!A_small] * (pnorm1(chizu) -
-#                                                  pnorm1(chizumax)) + sv[!A_small] * (dnorm1(chizumax) -
-#                                                                                        dnorm1(chizu)))/(A[!A_small] * denom[!A_small]))
-#       return(out)
-#     } else {
-#       zs <- dt * sv
-#       zu <- dt * v
-#       chiminuszu <- b - zu
-#       chizu <- chiminuszu/zs
-#       chizumax <- (chiminuszu - A)/zs
-#       return(pmax(0, (v * (pnorm1(chizu) - pnorm1(chizumax)) +
-#                         sv * (dnorm1(chizumax) - dnorm1(chizu)))/(A * denom)))
-#     }
-# }
-#
-#
-# plba_norm <- function (dt,A,b,v,sv,posdrift=TRUE,robust=FALSE)
-#     # like plba_norm_core but t0 dealt with outside (removed from dt)
-# {
-#
-#     if (robust) {
-#       pnorm1 <- pnormP
-#       dnorm1 <- dnormP
-#     } else {
-#       pnorm1 <- pnorm
-#       dnorm1 <- dnorm
-#     }
-#     if (posdrift)
-#       denom <- pmax(pnorm1(v/sv), 1e-10) else
-#         denom <- 1
-#     A_small <- A < 1e-10
-#     if (any(A_small)) {
-#       out <- numeric(length(dt))
-#       out[A_small] <- pmin(1, pmax(0, (pnorm1(b[A_small]/dt[A_small],
-#                                               mean = v[A_small], sd = sv[A_small],
-#                                               lower.tail = FALSE))/denom[A_small]))
-#       zs <- dt[!A_small] * sv[!A_small]
-#       zu <- dt[!A_small] * v[!A_small]
-#       chiminuszu <- b[!A_small] - zu
-#       xx <- chiminuszu - A[!A_small]
-#       chizu <- chiminuszu/zs
-#       chizumax <- xx/zs
-#       tmp1 <- zs * (dnorm1(chizumax) - dnorm1(chizu))
-#       tmp2 <- xx * pnorm1(chizumax) - chiminuszu * pnorm1(chizu)
-#       out[!A_small] <- pmin(pmax(0, (1 + (tmp1 + tmp2)/A[!A_small])/denom[!A_small]),1)
-#       return(out)
-#     } else {
-#       zs <- dt * sv
-#       zu <- dt * v
-#       chiminuszu <- b - zu
-#       xx <- chiminuszu - A
-#       chizu <- chiminuszu/zs
-#       chizumax <- xx/zs
-#       tmp1 <- zs * (dnorm1(chizumax) - dnorm1(chizu))
-#       tmp2 <- xx * pnorm1(chizumax) - chiminuszu * pnorm1(chizu)
-#       return(pmin(pmax(0, (1 + (tmp1 + tmp2)/A)/denom), 1))
-#     }
-# }
-#
-#
-
 dLBA <- function (rt, pars, posdrift = TRUE)
   # posdrift = truncated positive normal rates
   # robust slower, deals with extreme rate values
@@ -248,10 +149,10 @@ LBA <- function(){
     type="RACE",
     c_name = "LBA",
     # p_vector transform, sets sv as a scaling parameter
-    p_types=c("v" = 1,"sv" = log(1),"B" = log(1),"A" = log(0),"t0" = log(0)),
-    transform=list(func=c(v = "identity",sv = "exp", B = "exp", A = "exp",t0 = "exp")),
-    bound=list(minmax=cbind(v=c(-Inf,Inf),sv = c(0, Inf), A=c(1e-4,Inf),B=c(0,Inf),t0=c(0.05,Inf)),
-               exception=c(A=0)),
+    p_types=c("v" = 1,"sv" = log(1),"B" = log(1),"A" = log(0),"t0" = log(0), "pContaminant"=qnorm(0)),
+    transform=list(func=c(v = "identity",sv = "exp", B = "exp", A = "exp",t0 = "exp",pContaminant="pnorm")),
+    bound=list(minmax=cbind(v=c(-Inf,Inf),sv = c(0, Inf), A=c(1e-4,Inf),B=c(1e-4,Inf),t0=c(0.05,Inf),pContaminant=c(0.001,0.999)),
+               exception=c(A=0,pContaminant=0)),
     # Transform to natural scale
     # Trial dependent parameter transform
     Ttransform = function(pars,dadm) {
@@ -271,39 +172,6 @@ LBA <- function(){
   )
 }
 
-#' Mlba_B
-#' LBA model accommodating missing values (truncation and censoring) and
-#' assuming positive rates (i.e., no intrinsic omissions)
-#' @export
-
-Mlba <- function(){
-  list(
-    type="RACE",
-    c_name = "MLBA", # must be NULL to use calc_ll_R, IO
-    # p_vector transform, sets sv as a scaling parameter
-    p_types=c("v" = 1,"sv" = log(1),"B" = log(1),"A" = log(0),"t0" = log(0)),
-    transform=list(func=c(v = "identity",sv = "exp", B = "exp", A = "exp",t0 = "exp")),
-    bound=list(minmax=cbind(v=c(-Inf,Inf),sv = c(0, Inf), A=c(1e-4,Inf),B=c(0,Inf),t0=c(0.01,Inf)),
-               exception=c(A=0)),
-    # Transform to natural scale
-    # Trial dependent parameter transform
-    Ttransform = function(pars,dadm) {
-      pars <- cbind(pars,b=pars[,"B"] + pars[,"A"])
-      pars
-    },
-    # Random function for racing accumulator
-    rfun=function(data,pars) rLBA(data$lR,pars,posdrift=TRUE,ok = attr(pars, "ok")),
-    # Density function (PDF) for single accumulator
-    dfun=function(rt,pars) dLBA(rt,pars,posdrift = TRUE),
-    # Probability function (CDF) for single accumulator
-    pfun=function(rt,pars) pLBA(rt,pars,posdrift = TRUE),
-    # Race likelihood combining pfun and dfun
-    log_likelihood=function(pars,dadm,model){
-      log_likelihood_race_cens_trunc(pars=pars, dadm=dadm, model=model, min_ll=log(1e-10))
-    }
-  )
-}
-
 #' LBAIO
 #' LBA model accommodating missing values (truncation and censoring) and
 #' assuming unbounded rates (i.e., allows intrinsic omissions)
@@ -314,10 +182,10 @@ LBAIO <- function(){
     type="RACE",
     c_name = "LBAIO", # must be NULL to use calc_ll_R
     # p_vector transform, sets sv as a scaling parameter
-    p_types=c("v" = 1,"sv" = log(1),"B" = log(1),"A" = log(0),"t0" = log(0)),
-    transform=list(func=c(v = "identity",sv = "exp", B = "exp", A = "exp",t0 = "exp")),
-    bound=list(minmax=cbind(v=c(-Inf,Inf),sv = c(0, Inf), A=c(1e-4,Inf),B=c(0,Inf),t0=c(0.01,Inf)),
-               exception=c(A=0)),
+    p_types=c("v" = 1,"sv" = log(1),"B" = log(1),"A" = log(0),"t0" = log(0), "pContaminant"=qnorm(0)),
+    transform=list(func=c(v = "identity",sv = "exp", B = "exp", A = "exp",t0 = "exp",pContaminant="pnorm")),
+    bound=list(minmax=cbind(v=c(-Inf,Inf),sv = c(0, Inf), A=c(1e-4,Inf),B=c(1e-4,Inf),t0=c(0.05,Inf),pContaminant=c(0.001,0.999)),
+               exception=c(A=0,pContaminant=0)),
     # Transform to natural scale
     # Trial dependent parameter transform
     Ttransform = function(pars,dadm) {

@@ -277,161 +277,6 @@ double c_log_likelihood_DDM(NumericMatrix pars, DataFrame data,
   return(sum(lls_exp));
 }
 
-
-double c_log_likelihood_race(NumericMatrix pars, DataFrame data,
-                             RacePdfFun dfun,                  // Pointer to the model's PDF adapter function
-							 RaceCdfFun pfun,
-                             const int n_trials, LogicalVector winner, IntegerVector expand,
-                             double min_ll, LogicalVector is_ok,int n_acc, void* model_context_for_funcs){
-  const int n_out = expand.length();
-  NumericVector lds(n_trials);
-  NumericVector rts = data["rt"];
-  CharacterVector R = data["R"];
-  NumericVector lR = data["lR"];
-  NumericVector lds_exp(n_out);
-  if(sum(contains(data.names(), "RACE")) == 1){
-    NumericVector NACC = data["RACE"];
-    CharacterVector vals_NACC = NACC.attr("levels");
-    for(int x = 0; x < pars.nrow(); x++){
-      // subtract 1 because R is 1 coded
-      if(lR[x] > atoi(vals_NACC[NACC[x]-1])){
-        pars(x,0) = NA_REAL;
-      }
-    }
-  }
-  NumericVector win = log(dfun(rts, pars, is_ok, winner, model_context_for_funcs)); //first for compressed
-  lds[winner] = win;
-  if(n_acc > 1){
-    NumericVector loss = log(1- pfun(rts, pars, is_ok, !winner, model_context_for_funcs)); //cdfs
-    loss[is_na(loss)] = min_ll;
-    loss[loss == log(1 - exp(min_ll))] = min_ll;
-    lds[!winner] = loss;
-  }
-  lds[is_na(lds)] = min_ll;
-
-  if(n_acc > 1){
-    // LogicalVector winner_exp = c_bool_expand(winner, expand);
-    NumericVector ll_out = lds[winner];
-    NumericVector lds_los = lds[!winner];
-    if(n_acc == 2){
-      ll_out = ll_out + lds_los;
-    } else{
-      for(int z = 0; z < ll_out.length(); z++){
-        ll_out[z] = ll_out[z] + sum(lds_los[seq( z * (n_acc -1), (z+1) * (n_acc -1) -1)]);
-      }
-    }
-
-    ll_out[is_na(ll_out)] = min_ll;
-    ll_out[is_infinite(ll_out)] = min_ll;
-    ll_out[ll_out < min_ll] = min_ll;
-    ll_out = c_expand(ll_out, expand); // decompress
-    return(sum(ll_out));
-  } else{
-    lds_exp[is_na(lds_exp)] = min_ll;
-    lds_exp[is_infinite(lds_exp)] = min_ll;
-    lds_exp[lds_exp < min_ll] = min_ll;
-    lds_exp = c_expand(lds, expand); // decompress
-    return(sum(lds_exp));
-  }
-}
-
-/*
-// [[Rcpp::export]]
-NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector constants,
-            List designs, String type, List bounds, List transforms, List pretransforms,
-            CharacterVector p_types, double min_ll, List trend){
-  const int n_particles = p_matrix.nrow();
-  const int n_trials = data.nrow();
-  NumericVector lls(n_particles);
-  NumericVector p_vector(p_matrix.ncol());
-  CharacterVector p_names = colnames(p_matrix);
-  p_vector.names() = p_names;
-  NumericMatrix pars(n_trials, p_types.length());
-  LogicalVector is_ok(n_trials);
-
-  // Once (outside the main loop over particles):
-  NumericMatrix minmax = bounds["minmax"];
-  CharacterVector mm_names = colnames(minmax);
-  std::vector<PreTransformSpec> p_specs;
-  std::vector<BoundSpec> bound_specs;
-
-  if(type == "DDM"){
-    IntegerVector expand = data.attr("expand");
-    for(int i = 0; i < n_particles; i++){
-      p_vector = p_matrix(i, _);
-      if(i == 0){
-        p_specs = make_pretransform_specs(p_vector, pretransforms);
-      }
-      pars = get_pars_matrix(p_vector, constants, transforms, p_specs, p_types, designs, n_trials, data, trend);
-      // Precompute specs
-      if (i == 0) {                            // first particle only, just to get colnames
-        bound_specs = make_bound_specs(minmax,mm_names,pars,bounds);
-      }
-      is_ok = c_do_bound(pars, bound_specs);
-      lls[i] = c_log_likelihood_DDM(pars, data, n_trials, expand, min_ll, is_ok);
-    }
-  } else if(type == "MRI" || type == "MRI_AR1"){
-    int n_pars = p_types.length();
-    NumericVector y = extract_y(data);
-    for(int i = 0; i < n_particles; i++){
-      p_vector = p_matrix(i, _);
-      if(i == 0){
-        p_specs = make_pretransform_specs(p_vector, pretransforms);
-      }
-      pars = get_pars_matrix(p_vector, constants, transforms, p_specs, p_types, designs, n_trials, data, trend);
-      // Precompute specs
-      if (i == 0) {                            // first particle only, just to get colnames
-        bound_specs = make_bound_specs(minmax,mm_names,pars,bounds);
-      }
-      is_ok = c_do_bound(pars, bound_specs);
-      if(type == "MRI"){
-        lls[i] = c_log_likelihood_MRI(pars, y, is_ok, n_trials, n_pars, min_ll);
-      } else{
-        lls[i] = c_log_likelihood_MRI_white(pars, y, is_ok, n_trials, n_pars, min_ll);
-      }
-    }
-  } else{
-    IntegerVector expand = data.attr("expand");
-    LogicalVector winner = data["winner"];
-    // Love me some good old ugly but fast c++ pointers
-    NumericVector (*dfun)(NumericVector, NumericMatrix, LogicalVector, double, LogicalVector);
-    NumericVector (*pfun)(NumericVector, NumericMatrix, LogicalVector, double, LogicalVector);
-    if(type == "LBA"){
-      dfun = dlba_c;
-      pfun = plba_c;
-    } else if(type == "RDM"){
-      dfun = drdm_c;
-      pfun = prdm_c;
-    } else if(type == "RDMSWTN"){
-      dfun = drdmswtn_c;
-      pfun = prdmswtn_c;
-    } else if(type == "LNR") {
-	  dfun = dlnr_c;
-	  pfun = plnr_c;
-	} else {
-	// Crash the program with an error message
-	stop("Unknown model type: " + type);
-	}
-    NumericVector lR = data["lR"];
-    int n_lR = unique(lR).length();
-    for (int i = 0; i < n_particles; ++i) {
-      p_vector = p_matrix(i, _);
-      if(i == 0){
-        p_specs = make_pretransform_specs(p_vector, pretransforms);
-      }
-      pars = get_pars_matrix(p_vector, constants, transforms, p_specs, p_types, designs, n_trials, data, trend);
-      if (i == 0) {                            // first particle only, just to get colnames
-        bound_specs = make_bound_specs(minmax,mm_names,pars,bounds);
-      }
-      is_ok = c_do_bound(pars, bound_specs);
-      is_ok = lr_all(is_ok, n_lR);
-      lls[i] = c_log_likelihood_race(pars, data, dfun, pfun, n_trials, winner, expand, min_ll, is_ok);
-    }
-  }
-  return(lls);
-}
-*/
-
 // [[Rcpp::export]]
 NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector constants,
             List designs, String type_rcpp, List bounds, List transforms, List pretransforms,
@@ -491,7 +336,7 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
     RacePdfFun model_dfun_ptr = nullptr;
     RaceCdfFun model_pfun_ptr = nullptr;
     ContextForRaceModels current_model_ctx;
-    current_model_ctx.min_lik_for_pdf = exp(min_ll);
+    current_model_ctx.min_lik_for_pdf = min_ll;
     current_model_ctx.use_posdrift = true; // Default: LBA uses posdrift, RDM/LNR ignore this context field.
 	current_model_ctx.LogicalRule = "OR";
     // Determine adapter functions and specific LBA posdrift setting based on type_std
@@ -797,9 +642,43 @@ double c_log_likelihood_race_cens_trunc(
     if (n_acc <= 0) Rcpp::stop("c_log_likelihood_race_cens_trunc: n_acc must be positive and correctly determined before this call.");
     if (n_trials % n_acc != 0) Rcpp::stop("c_log_likelihood_race_cens_trunc: dadm nrows not a multiple of n_acc.");
 
+	// Here we check for a pC parameter corresponding to probability of contaminant OMISSION.
+	// Index the column (if it exists)
+	bool use_pC = false;
+    int pc_col = -1;
+	Rcpp::List dimnames = pars.attr("dimnames");
+	Rcpp::CharacterVector colnames = as<Rcpp::CharacterVector>(dimnames[1]);
+    for (int j = 0; j < colnames.size(); ++j) {
+      if (as<std::string>(colnames[j]) == "pContaminant") {
+        pc_col = j;
+        use_pC = true;
+        break;
+      }
+    }
+	// Also check that pC is not all zeroes (i.e. a model that has pC optional but is not using it here)
+    if (use_pC) {
+      bool all_zero = true;
+      for (int i = 0; i < pars.nrow(); ++i) {
+        if (pars(i, pc_col) != 0.0) {
+          all_zero = false;
+          break;
+        }
+      }
+      if (all_zero) {
+        use_pC = false;
+      }
+    }
+
+
     int n_unique_trials = n_trials / n_acc;
     Rcpp::NumericVector ll_unique(n_unique_trials);
     //ll_unique.fill(min_ll); // Initialize all to min_ll
+	Rcpp::NumericVector pC_values(n_unique_trials);
+    if (use_pC) {
+		for (int j = 0; j < n_unique_trials; ++j) {
+			pC_values[j] = pars(j * n_acc, pc_col);
+		}
+    }
 
     // Parameter matrix and validity vector checks
     if (pars.nrow() != n_trials) {
@@ -932,6 +811,18 @@ double c_log_likelihood_race_cens_trunc(
 			else if (LT[start_row_idx] != 0 || UT[start_row_idx] != R_PosInf) { // Truncation active and inv_Z is good
 						current_trial_ll_sum -=  log_Z_this;
 			}
+			// Intrinsic Omissions Correction Comes AFTER the truncation adjustment (because that adjustment assumes a response would have been recorded)
+			if (!posdrift) { // should only ever be false for LBAIO model
+				double p_I = 1.0;
+				for (int k = 0; k < n_acc_j; ++k) {
+					double v   = p_all_acc_for_trial(k, 0);   // mean drift for kth acc
+					double sv  = p_all_acc_for_trial(k, 1);   // its s.d.
+					double p_neg = R::pnorm(0.0, v, sv, 1,0); // (same as 1-pnorm(v/sv,0,1)
+					p_I *= p_neg; // we multiply to get the probability that EVERY accumulator was negative
+				}
+				
+				current_trial_ll_sum += std::log1p(-p_I); // log(1-pI)
+			}
 			// If no truncation, inv_Z is not added.
 			ll_unique[unique_trial_idx] = current_trial_ll_sum;
 			ll_unique[unique_trial_idx] = std::max(min_ll, ll_unique[unique_trial_idx]);
@@ -992,7 +883,6 @@ double c_log_likelihood_race_cens_trunc(
 			double upper_for_trial1 = LC[start_row_idx];			
 			double lower_for_trial2 = UC[start_row_idx];
 			double upper_for_trial2 = UT[start_row_idx];
-			Rcpp::Rcout<<"start case 4"<<std::endl;
             if (R_j_idx != NA_INTEGER) { // Response (winner) is known
                 double ll_L = integrate_for_kth_winner_cpp(R_j_idx, p_all_acc_for_trial, isok_for_trial, lower_for_trial1, upper_for_trial1, model_dfun, model_pfun, n_acc_j, integration_epsilon, model_context_for_funcs);
                 double ll_U = integrate_for_kth_winner_cpp(R_j_idx, p_all_acc_for_trial, isok_for_trial, lower_for_trial2, upper_for_trial2, model_dfun, model_pfun, n_acc_j, integration_epsilon, model_context_for_funcs);
@@ -1032,7 +922,7 @@ double c_log_likelihood_race_cens_trunc(
 				double p_neg = R::pnorm(0.0, v, sv, 1,1); // (same as 1-pnorm(v/sv,0,1)
 				ll_I += p_neg; // we multiply to get the probability that EVERY accumulator was negative
 			}
-			current_ll_val = log_sum_exp(current_ll_val,ll_I); // add intrinsic-omission probability
+			current_ll_val = log_sum_exp(ll_I, current_ll_val);
 		}
 		current_ll_val = std::max(min_ll, current_ll_val); // Ensure probability is not negative
         ll_unique[unique_trial_idx] = current_ll_val;
@@ -1041,9 +931,39 @@ double c_log_likelihood_race_cens_trunc(
     // --- Summation of log-likelihoods for all unique trials ---
     double total_ll = 0;
     if (expand.length() > 0) { // If an expansion vector is provided (e.g. from non-compressed dadm)
+		if (use_pC) { // multiply all likelihoods by the appropriate pC adjustment if it's present
+            for (int j = 0; j < n_unique_trials; ++j) {
+                double pC = pC_values[j];
+                double log1m_pC = std::log1p(-pC); // log(1-pC)
+                int start_row_idx = j * n_acc;
+                double rt_j = rts_dadm[start_row_idx];
+
+                if (R_FINITE(rt_j)) {
+                    ll_unique[j] = log1m_pC + ll_unique[j]; // pRT * 1-pC
+                } else {
+                    double term1 = std::log(pC);
+                    double term2 = log1m_pC + ll_unique[j];
+                    ll_unique[j] = log_sum_exp(term1, term2); // pC * pIO * pCens
+                }
+            }
+        }
         total_ll = sum(c_expand(ll_unique,expand));
     } else { // Default: sum ll_unique directly (each unique trial counted once)
         for (int j = 0; j < n_unique_trials; ++j) {
+			if (use_pC) {
+                double pC = pC_values[j];
+                double log1m_pC = std::log1p(-pC);
+                int start_row_idx = j * n_acc;
+                double rt_j = rts_dadm[start_row_idx];
+
+                if (R_FINITE(rt_j)) {
+                    ll_unique[j] = log1m_pC + ll_unique[j];
+                } else {
+                    double term1 = std::log(pC);
+                    double term2 = log1m_pC + ll_unique[j];
+                    ll_unique[j] = log_sum_exp(term1, term2);
+                }
+            }
             total_ll += ll_unique[j];
         }
     }
@@ -1115,3 +1035,62 @@ double c_log_likelihood_redundant_target_race(
     }
     return sum_ll;
 }
+
+/*
+double c_log_likelihood_race(NumericMatrix pars, DataFrame data,
+                             RacePdfFun dfun,                  // Pointer to the model's PDF adapter function
+							 RaceCdfFun pfun,
+                             const int n_trials, LogicalVector winner, IntegerVector expand,
+                             double min_ll, LogicalVector is_ok,int n_acc, void* model_context_for_funcs){
+  const int n_out = expand.length();
+  NumericVector lds(n_trials);
+  NumericVector rts = data["rt"];
+  CharacterVector R = data["R"];
+  NumericVector lR = data["lR"];
+  NumericVector lds_exp(n_out);
+  if(sum(contains(data.names(), "RACE")) == 1){
+    NumericVector NACC = data["RACE"];
+    CharacterVector vals_NACC = NACC.attr("levels");
+    for(int x = 0; x < pars.nrow(); x++){
+      // subtract 1 because R is 1 coded
+      if(lR[x] > atoi(vals_NACC[NACC[x]-1])){
+        pars(x,0) = NA_REAL;
+      }
+    }
+  }
+  NumericVector win = log(dfun(rts, pars, is_ok, winner, model_context_for_funcs)); //first for compressed
+  lds[winner] = win;
+  if(n_acc > 1){
+    NumericVector loss = log(1- pfun(rts, pars, is_ok, !winner, model_context_for_funcs)); //cdfs
+    loss[is_na(loss)] = min_ll;
+    loss[loss == log(1 - exp(min_ll))] = min_ll;
+    lds[!winner] = loss;
+  }
+  lds[is_na(lds)] = min_ll;
+
+  if(n_acc > 1){
+    // LogicalVector winner_exp = c_bool_expand(winner, expand);
+    NumericVector ll_out = lds[winner];
+    NumericVector lds_los = lds[!winner];
+    if(n_acc == 2){
+      ll_out = ll_out + lds_los;
+    } else{
+      for(int z = 0; z < ll_out.length(); z++){
+        ll_out[z] = ll_out[z] + sum(lds_los[seq( z * (n_acc -1), (z+1) * (n_acc -1) -1)]);
+      }
+    }
+
+    ll_out[is_na(ll_out)] = min_ll;
+    ll_out[is_infinite(ll_out)] = min_ll;
+    ll_out[ll_out < min_ll] = min_ll;
+    ll_out = c_expand(ll_out, expand); // decompress
+    return(sum(ll_out));
+  } else{
+    lds_exp[is_na(lds_exp)] = min_ll;
+    lds_exp[is_infinite(lds_exp)] = min_ll;
+    lds_exp[lds_exp < min_ll] = min_ll;
+    lds_exp = c_expand(lds, expand); // decompress
+    return(sum(lds_exp));
+  }
+}
+*/

@@ -69,7 +69,8 @@ Imports:
 	statmod,
 	Rcpp,
 	pracma,
-	pbivnorm
+	pbivnorm,
+	tmvtnorm
 LinkingTo: 
     Rcpp, RcppArmadillo,mvtnorm
 Depends: 
