@@ -70,7 +70,8 @@ Imports:
 	Rcpp,
 	pracma,
 	pbivnorm,
-	tmvtnorm
+	tmvtnorm,
+	dplyr
 LinkingTo: 
     Rcpp, RcppArmadillo,mvtnorm
 Depends: 

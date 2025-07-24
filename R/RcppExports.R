@@ -77,20 +77,20 @@ pswtn <- function(t_adj, alpha, mu_drift, sigma_drift, log_out = FALSE) {
     .Call(`_EMC2_pswtn`, t_adj, alpha, mu_drift, sigma_drift, log_out)
 }
 
-drdmswtn <- function(t_adj, B, mu_drift, A, sigma_drift, n_gauss_nodes = 20L, log_out = FALSE) {
-    .Call(`_EMC2_drdmswtn`, t_adj, B, mu_drift, A, sigma_drift, n_gauss_nodes, log_out)
+drdmswtn <- function(t_adj, b, mu_drift, A, sigma_drift, n_gauss_nodes = 20L, log_out = FALSE) {
+    .Call(`_EMC2_drdmswtn`, t_adj, b, mu_drift, A, sigma_drift, n_gauss_nodes, log_out)
 }
 
-prdmswtn <- function(t_adj, B, mu_drift, A, sigma_drift, n_gauss_nodes = 20L, log_out = FALSE) {
-    .Call(`_EMC2_prdmswtn`, t_adj, B, mu_drift, A, sigma_drift, n_gauss_nodes, log_out)
+prdmswtn <- function(t_adj, b, mu_drift, A, sigma_drift, n_gauss_nodes = 20L, log_out = FALSE) {
+    .Call(`_EMC2_prdmswtn`, t_adj, b, mu_drift, A, sigma_drift, n_gauss_nodes, log_out)
 }
 
-dSWTNspv <- function(t, v, B, A, t0, sv, log_out = FALSE) {
-    .Call(`_EMC2_dSWTNspv`, t, v, B, A, t0, sv, log_out)
+dSWTNspv <- function(t, v, b, A, t0, sv, log_out = FALSE) {
+    .Call(`_EMC2_dSWTNspv`, t, v, b, A, t0, sv, log_out)
 }
 
-pSWTNspv <- function(t, v, B, A, t0, sv, log_out = FALSE) {
-    .Call(`_EMC2_pSWTNspv`, t, v, B, A, t0, sv, log_out)
+pSWTNspv <- function(t, v, b, A, t0, sv, log_out = FALSE) {
+    .Call(`_EMC2_pSWTNspv`, t, v, b, A, t0, sv, log_out)
 }
 
 drdmswtn_c <- function(rts, pars, idx, min_ll, is_ok, log_out = FALSE) {
@@ -105,12 +105,12 @@ pswtn_numeric_integral <- function(t_adj, alpha, mu_drift, sigma_drift, abs_err 
     .Call(`_EMC2_pswtn_numeric_integral`, t_adj, alpha, mu_drift, sigma_drift, abs_err, rel_err, max_eval)
 }
 
-drdmswtn_numeric_integral <- function(t_adj, B, mu_drift, A, sigma_drift, spv_abs_err = 1e-8, spv_rel_err = 1e-8, spv_max_eval = 10000L) {
-    .Call(`_EMC2_drdmswtn_numeric_integral`, t_adj, B, mu_drift, A, sigma_drift, spv_abs_err, spv_rel_err, spv_max_eval)
+drdmswtn_numeric_integral <- function(t_adj, b, mu_drift, A, sigma_drift, spv_abs_err = 1e-8, spv_rel_err = 1e-8, spv_max_eval = 10000L) {
+    .Call(`_EMC2_drdmswtn_numeric_integral`, t_adj, b, mu_drift, A, sigma_drift, spv_abs_err, spv_rel_err, spv_max_eval)
 }
 
-prdmswtn_numeric_integral <- function(t_adj, B, mu_drift, A, sigma_drift, spv_abs_err = 1e-8, spv_rel_err = 1e-8, spv_max_eval = 10000L) {
-    .Call(`_EMC2_prdmswtn_numeric_integral`, t_adj, B, mu_drift, A, sigma_drift, spv_abs_err, spv_rel_err, spv_max_eval)
+prdmswtn_numeric_integral <- function(t_adj, b, mu_drift, A, sigma_drift, spv_abs_err = 1e-8, spv_rel_err = 1e-8, spv_max_eval = 10000L) {
+    .Call(`_EMC2_prdmswtn_numeric_integral`, t_adj, b, mu_drift, A, sigma_drift, spv_abs_err, spv_rel_err, spv_max_eval)
 }
 
 pEXG <- function(q, mu = 5., sigma = 1., tau = 1., lower_tail = TRUE, log_p = FALSE) {

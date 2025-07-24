@@ -247,20 +247,20 @@ rRDM <- function(lR,pars,p_types=c("v","B","A","t0"),ok=rep(TRUE,dim(pars)[1]))
 #' argument of `design()`.They can also be accessed with `RDM()$p_types`.
 #'
 #' | **Parameter** | **Transform** | **Natural scale** | **Default**   | **Mapping**          | **Interpretation**                                                |
-#' |-----------|-----------|---------------|-----------|------------------|---------------------------------------------------------------|
+#' |-----------|-----------|--------------  -|-----------|------------------|---------------------------------------------------------------|
 #' | *v*       | log       | \[0, Inf\]      | log(1)    |                  | Evidence-accumulation rate (drift rate)                        |
-#' | *A*       | log       | \[0, Inf\]      | log(0)    |                  | Between-trial variation (range) in start point                 |
-#' | *B*       | log       | \[0, Inf\]      | log(1)    | *b* = *B* + *A*  | Distance from *A* to *b* (response threshold)                  |
+#' | *zA*       | qnorm     | \[0, 1\]        | log(0)    |                  | Between-trial variation (range) in start point as a proportion of b (threshold)                 |
+#' | *b*       | log       | \[0, Inf\]      | log(1)    |                  | Response threshold                  |
 #' | *t0*      | log       | \[0, Inf\]      | log(0)    |                  | Non-decision time                                             |
 #' | *s*       | log       | \[0, Inf\]      | log(1)    |                  | Within-trial standard deviation of drift rate                 |
-#' | *sv*      | log       | \[0, Inf\]      | log(0.1)  |                  | Standard deviation of the trial-by-trial drift rate distribution   |
+#' | *cv*      | log       | \[0, Inf\]      | log(0.1)  |                  | Standard deviation of the trial-by-trial drift rate distribution, expressed as a coefficient of variation in terms of the corresponding drift rate   |
 #'
 #' All parameters are typically estimated on the log scale. `A` (start-point variability range)
 #' and `sv` (drift rate between trial variance) can be zero.
-#' * If `A=0` and `sv=0`, the model reduces to a simple Wald distribution with threshold `B` and drift `v`.
-#' * If `sv=0` (and `A > 0`), the model reduces to the standard RDM (with start-point variability `A` and fixed drift `v`).
-#' * If `A=0` (and `sv > 0`), the model reduces to a SWTN with a fixed threshold `B`.
-#' `B` should generally be positive, especially if `A=0`.
+#' * If `zA=0` and `cv=0`, the model reduces to a simple Wald distribution with threshold `B` and drift `v`.
+#' * If `cv=0` (and `zA > 0`), the model reduces to the standard RDM (with start-point variability `A` and fixed drift `v`).
+#' * If `zA=0` (and `cv > 0`), the model reduces to a SWTN with a fixed threshold `B`.
+#' `b` should generally be positive, especially if `zA=0`.
 #'
 #' Like the standard RDM, this is a race model with one SWTN-spv accumulator per response option.
 
@@ -270,14 +270,13 @@ RDMSWTN <- function(){
   list(
     type="RACE",
     c_name = "RDMSWTN",
-    p_types=c("v" = log(1),"B" = log(1),"zA" = qnorm(0),"t0" = log(0),"s" = log(1),"cv" = qnorm(0), "pContaminant"=qnorm(0)),
-    transform=list(func=c(v = "exp", B = "exp", zA = "pnorm",t0 = "exp", s = "exp", cv="pnorm",pContaminant="pnorm")),
-    bound=list(minmax=cbind(v=c(1e-3,Inf), B=c(0,Inf), zA=c(0.01,0.99),t0=c(0.05,Inf), s=c(0,Inf), cv=c(0.01,0.99),pContaminant=c(0.001,0.999)),
+    p_types=c("v" = log(1),"b" = log(1),"zA" = qnorm(0),"t0" = log(0),"s" = log(1),"cv" = qnorm(0), "pContaminant"=qnorm(0)),
+    transform=list(func=c(v = "exp", b = "exp", zA = "pnorm",t0 = "exp", s = "exp", cv="pnorm",pContaminant="pnorm")),
+    bound=list(minmax=cbind(v=c(1e-3,Inf), b=c(0,Inf), zA=c(0.01,0.99),t0=c(0.05,Inf), s=c(0,Inf), cv=c(0.01,0.99),pContaminant=c(0.001,0.999)),
                exception=c(zA=0, v=0, cv=0,pContaminant=0)),
     # Trial dependent parameter transform. sv is sampled as a coefficient of variance and transformed to standard deviation of drift, tying its magnitude to the mean_drift.
     Ttransform = function(pars,dadm) {
-      #pars <- cbind(pars,b=pars[,"B"] + pars[,"A"])#,sv=pars[,"cv"]*pars[,"v"])
-      pars <- cbind(pars,A=pars[,"B"] * pars[,"zA"],sv=pars[,"cv"]*pars[,"v"])
+      pars <- cbind(pars,A=pars[,"b"] * pars[,"zA"],sv=pars[,"cv"]*pars[,"v"])
       pars
     },
     # Random function for racing accumulators
@@ -308,11 +307,11 @@ dRDMSWTN <- function(rt,pars)
     if (any(dimnames(pars)[[2]]=="s")) { # rescale
       # Ensure pars[ok,] remains a matrix even if sum(ok)==1
       pars_ok <- pars[ok,,drop=FALSE]
-      pars_ok[,c("A","B","v","sv")] <- pars_ok[,c("A","B","v","sv")]/pars_ok[,"s"]
+      pars_ok[,c("A","b","v","sv")] <- pars_ok[,c("A","b","v","sv")]/pars_ok[,"s"]
       pars[ok,] <- pars_ok
     }
     # dSWTN is a C++ wrapper which takes vectorized input and feeds drdmswtn (the sequential likelihood function in C++)
-    out[ok] <- dSWTNspv(rt[ok],v=pars[ok,"v",drop=FALSE],B=pars[ok,"B",drop=FALSE],A=pars[ok,"A",drop=FALSE],t0=pars[ok,"t0",drop=FALSE],sv=pars[ok,"sv",drop=FALSE])
+    out[ok] <- dSWTNspv(rt[ok],v=pars[ok,"v",drop=FALSE],b=pars[ok,"b",drop=FALSE],A=pars[ok,"A",drop=FALSE],t0=pars[ok,"t0",drop=FALSE],sv=pars[ok,"sv",drop=FALSE])
   }
   out
 }
@@ -330,17 +329,17 @@ pRDMSWTN <- function(rt,pars)
   if (any(ok)){
     if (any(dimnames(pars)[[2]]=="s")) { # rescale
       pars_ok <- pars[ok,,drop=FALSE]
-      pars_ok[,c("A","B","v","sv")] <- pars_ok[,c("A","B","v","sv")]/pars_ok[,"s"]
+      pars_ok[,c("A","b","v","sv")] <- pars_ok[,c("A","b","v","sv")]/pars_ok[,"s"]
       pars[ok,] <- pars_ok
     }
     # pSWTN is a C++ wrapper which takes vectorized input and feeds prdmswtn (the sequential likelihood function in C++)
-    out[ok] <- pSWTNspv(rt[ok],v=pars[ok,"v",drop=FALSE],B=pars[ok,"B",drop=FALSE],A=pars[ok,"A",drop=FALSE],t0=pars[ok,"t0",drop=FALSE],sv=pars[ok,"sv",drop=FALSE])
+    out[ok] <- pSWTNspv(rt[ok],v=pars[ok,"v",drop=FALSE],b=pars[ok,"b",drop=FALSE],A=pars[ok,"A",drop=FALSE],t0=pars[ok,"t0",drop=FALSE],sv=pars[ok,"sv",drop=FALSE])
   }
   out
 }
 
 
-rRDMSWTN <- function(lR,pars,p_types=c("v","B","A","t0","sv"),ok=rep(TRUE,dim(pars)[1])) 
+rRDMSWTN <- function(lR,pars,p_types=c("v","b","A","t0","sv"),ok=rep(TRUE,dim(pars)[1])) 
   # lR is an empty latent response factor lR with one level for each accumulator.
   # pars is a matrix of corresponding parameter values named as in p_types
   # pars must be sorted so accumulators and parameter for each trial are in
@@ -357,8 +356,8 @@ rRDMSWTN <- function(lR,pars,p_types=c("v","B","A","t0","sv"),ok=rep(TRUE,dim(pa
   if (!all(p_types %in% dimnames(pars)[[2]]))
     stop("pars must have columns ",paste(p_types,collapse = " "))
   if (any(dimnames(pars)[[2]]=="s")) # rescale
-    pars[,c("A","B","v","sv")] <- pars[,c("A","B","v","sv")]/pars[,"s"]
-  pars[,"B"][pars[,"B"]<0] <- 0 # Protection for negatives
+    pars[,c("A","b","v","sv")] <- pars[,c("A","b","v","sv")]/pars[,"s"]
+  pars[,"b"][pars[,"b"]<0] <- 0 # Protection for negatives
   pars[,"A"][pars[,"A"]<0] <- 0
   bad <- rep(NA, length(lR)/length(levels(lR)))
   out <- data.frame(R = bad, rt = bad)
@@ -366,7 +365,7 @@ rRDMSWTN <- function(lR,pars,p_types=c("v","B","A","t0","sv"),ok=rep(TRUE,dim(pa
   dt <- matrix(Inf,nrow=nr,ncol=nrow(pars)/nr)
   t0 <- pars[,"t0"]
   pars <- pars[ok,,drop=FALSE]
-  dt[ok] <- rSWTN(sum(ok),B=pars[,"B"],v=pars[,"v"],A=pars[,"A"],sv=pars[,"sv"])
+  dt[ok] <- rSWTN(sum(ok),B=pars[,"b"],v=pars[,"v"],A=pars[,"A"],sv=pars[,"sv"])
   R <- apply(dt,2,which.min)
   pick <- cbind(R,1:dim(dt)[2]) # Matrix to pick winner
   # Any t0 difference with lR due to response production time (no effect on race)
@@ -377,17 +376,17 @@ rRDMSWTN <- function(lR,pars,p_types=c("v","B","A","t0","sv"),ok=rep(TRUE,dim(pa
   out
 }
 
-rSWTN <- function(n,B,v,A,sv)
+rSWTN <- function(n,b,v,A,sv)
   # random function for single accumulator
 {
   out=numeric(n)
-  if (n>1 & all(length(A)==1,length(v)==1,length(B)==1,length(sv==1))) {
+  if (n>1 & all(length(A)==1,length(v)==1,length(b)==1,length(sv==1))) {
     A=rep(A,n)
-    B=rep(B,n)
+    b=rep(b,n)
     v=rep(v,n)
     sv=rep(sv,n)
   }
-  b = ifelse(A==0,B,runif(n,B, B + A)) # adjust for spv
+  b = ifelse(A==0,b,runif(n,b, b + A)) # adjust for spv U[0,A]
   l = ifelse(sv==0,v,msm::rtnorm(n,mean=v,sd=sv,lower=0,upper=Inf)) # between trial variability
   
   ok <- !l<0

@@ -338,7 +338,6 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
     ContextForRaceModels current_model_ctx;
     current_model_ctx.min_lik_for_pdf = min_ll;
     current_model_ctx.use_posdrift = true; // Default: LBA uses posdrift, RDM/LNR ignore this context field.
-	current_model_ctx.LogicalRule = "OR";
     // Determine adapter functions and specific LBA posdrift setting based on type_std
     // The type_std string is expected to be e.g. "LBA", "LBA_IO", "RDM", "LNR".
 
@@ -348,9 +347,6 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
         // Check for the 'IO' (Implicit Omissions / no posdrift) flag in the original type_std
         if (type_std.find("IO") != std::string::npos) {
             current_model_ctx.use_posdrift = false;
-        }
-		if (type_std.find("AND") != std::string::npos) {
-            current_model_ctx.LogicalRule = "AND";
         }
     } else if (type_std=="RDM") {
         model_dfun_ptr = &rdm_dfun_adapter;
@@ -390,7 +386,7 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
         }
         is_ok = c_do_bound(pars, bound_specs);
         is_ok = lr_all(is_ok, n_acc);
-        if( (type_std == "LBAOR") | (type_std=="LBAAND") ) {
+        if( type_std.find("LogicalRules") != std::string::npos) {
             lls[i] = c_log_likelihood_redundant_target_race(pars, data,
                                                            model_dfun_ptr, model_pfun_ptr, n_trials,
                                                            expand, min_ll, is_ok,
@@ -986,18 +982,53 @@ double c_log_likelihood_redundant_target_race(
     Rcpp::NumericVector rts = dadm["rt"];
     Rcpp::CharacterVector role = dadm["lR"];
     Rcpp::CharacterVector resp = dadm["R"];
-
+	Rcpp::CharacterVector LogicalRule = dadm["LogicalRule"];
     Rcpp::LogicalVector all_idx(n_trials, true); // No such thing as "winner" in the normal context
     Rcpp::NumericVector f_all = model_dfun(rts, pars, all_idx, ok_params, model_specific_context);
     Rcpp::NumericVector F_all = model_pfun(rts, pars, all_idx, ok_params, model_specific_context);
 
-	ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(model_specific_context);
-	std::string LogicalRule = ctx->LogicalRule;
+	//ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(model_specific_context);
+	//std::string LogicalRule = ctx->LogicalRule;
     int n_unique_trials = n_trials / 4;
     Rcpp::NumericVector ll_unique(n_unique_trials);
-
+	
+	// Here we check for a rule-following parameter (p) corresponding to probability of processing only a single channel with probability q.
+	// Index the column (if it exists)
+	bool use_rulebreak = false;
+    int rulebreak_col = -1;
+	int q_col = -1;
+	Rcpp::List dimnames = pars.attr("dimnames");
+	Rcpp::CharacterVector colnames = as<Rcpp::CharacterVector>(dimnames[1]);
+    for (int j = 0; j < colnames.size(); ++j) {
+      if (as<std::string>(colnames[j]) == "p") {
+        rulebreak_col = j;
+        use_rulebreak = true;
+        break;
+      }
+    }
+	// If we're rulebreaking, find the index of column q, then also check that the rulebreak probability isn't hardcoded to zero
+    if (use_rulebreak) {
+		for (int j = 0; j < colnames.size(); ++j) {
+			if (as<std::string>(colnames[j]) == "q") {
+				q_col = j;
+				break;
+			}
+		}
+      bool all_one = true;
+      for (int i = 0; i < pars.nrow(); ++i) {
+        if (pars(i, rulebreak_col) != 1.0) {
+          all_one = false;
+          break;
+        }
+      }
+      if (all_one) {
+        use_rulebreak = false;
+      }
+    }
+	double pp_j;
     for(int j=0; j<n_unique_trials; ++j){
         int start = j*4;
+		pp_j = 0;
         double fA=NA_REAL, fB=NA_REAL, fnA=NA_REAL, fnB=NA_REAL;
         double FA=NA_REAL, FB=NA_REAL, FnA=NA_REAL, FnB=NA_REAL;
         for(int k=0;k<4;++k){
@@ -1008,22 +1039,40 @@ double c_log_likelihood_redundant_target_race(
             else if(r == "n_A"){ fnA = f_all[idx]; FnA = F_all[idx]; }
             else if(r == "n_B"){ fnB = f_all[idx]; FnB = F_all[idx]; }
         }
-
         std::string r_obs = Rcpp::as<std::string>(resp[start]);
-		// TODO: Incorporate AND logic by flipping the r_obs check here conditionally
-        if (LogicalRule=="OR") {
+		
+		double p = pars(start, rulebreak_col);
+		double q = pars(start, q_col);
+        if (LogicalRule[start]=="OR") {
 			if(r_obs == "yes"){
-				ll_unique[j] = std::log((fA*(1.0-FB) + fB*(1.0-FA)) * (1.0 - (FnA*FnB)));
+				pp_j = (fA*(1.0-FB) + fB*(1.0-FA)) * (1.0 - (FnA*FnB));
+				if(use_rulebreak & !std::isnan(p)) {				
+					double p_rulebreak = (q * fB*(1.0-FnB)) + ((1-q)*fA*(1.0-FnA));
+					pp_j=p*pp_j + (1-p)*p_rulebreak;
+				}
 			} else if(r_obs == "no"){
-				ll_unique[j] = std::log((fnA*FnB + fnB*FnA) * ((1.0-FA)*(1.0-FB)));
+				pp_j = (fnA*FnB + fnB*FnA) * ((1.0-FA)*(1.0-FB));
+				if(use_rulebreak & !std::isnan(p)) {					
+					double p_rulebreak = (q * fnB*(1.0-FB)) + ((1-q)*fnA*(1.0-FA));
+					pp_j=p*pp_j + (1-p)*p_rulebreak;
+				}
 			}
-		} else if (LogicalRule=="AND") {
+		} else if (LogicalRule[start]=="AND") {
 			if(r_obs == "no"){
-				ll_unique[j] = std::log((fnA*(1.0-FnB) + fnB*(1.0-FnA)) * (1.0 - (FA*FB)));
+				pp_j = (fnA*(1.0-FnB) + fnB*(1.0-FnA)) * (1.0 - (FA*FB));
+				if(use_rulebreak & !std::isnan(p)) {
+					double p_rulebreak = (q * fnB*(1.0-FB)) + ((1-q)*fnA*(1.0-FA));
+					pp_j=p*pp_j + (1-p)*p_rulebreak;
+				}
 			} else if(r_obs == "yes"){
-				ll_unique[j] = std::log((fA*FB + fB*FA) * ((1.0-FnA)*(1.0-FnB)));
+				pp_j = (fA*FB + fB*FA) * ((1.0-FnA)*(1.0-FnB));
+				if(use_rulebreak & !std::isnan(p)) {
+					double p_rulebreak = (q * fB*(1.0-FnB)) + ((1-q)*fA*(1.0-FnA));
+					pp_j=p*pp_j + (1-p)*p_rulebreak;
+				}
 			}
 		}
+		ll_unique[j] = std::log(pp_j);
     }
 
     Rcpp::NumericVector ll_exp = c_expand(ll_unique, expand);

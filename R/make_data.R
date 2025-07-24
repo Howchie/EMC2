@@ -132,13 +132,12 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
     if(is.null(data)) data <- get_data(parameters)
     parameters <- do.call(rbind, credint(parameters, probs = 0.5, selection = "alpha", by_subject = TRUE))
   }
-
   # Make sure parameters are in the right format, either matrix or vector
   sampled_p_names <- names(sampled_pars(design))
   # ZH added transform for single vector pars to be 1-row matrix, preventing crash on single trial simulation
   if(is.null(dim(parameters))){
     par_names <- names(parameters)
-    nsubs = ifelse(is.null(design$Ffactors$subjects),1,length(design$Ffactors$subjects))
+    nsubs = ifelse(is.null(design$Ffactors$subjects),1,length(unique(design$Ffactors$subjects)))
     parameters <- matrix(parameters, nrow = nsubs, 
                          ncol=length(parameters), dimnames = list(as.character(seq(nsubs)), par_names),byrow=TRUE)
     if(is.null(colnames(parameters))) colnames(parameters) <- sampled_p_names
@@ -170,10 +169,10 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
       stop("If data is not provided need to specify number of trials")
     design_in <- design
     design_in$Fcovariates <- design_in$Fcovariates[!design$Fcovariates %in% names(functions)]
+    
     data <- minimal_design(design_in, covariates = list(...)$covariates,
                              drop_subjects = F, n_trials = n_trials, add_acc=F,
                            drop_R = F,UC=UC,UT=UT,LC=LC,LT=LT)
-
   } else {
     if(length(LT)==1) {data$LT = rep(LT,nrow(data))}
     else{data$LT=LT}
@@ -216,9 +215,9 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
     if ( is.null(model()$Ttransform) ) stop("model()$Ttransform must be specified")
   }
   data <- design_model(
-    add_accumulators(data,design$matchfun,simulate=TRUE,type=model()$type,Fcovariates=design$Fcovariates),
-    design,model,add_acc=FALSE,compress=FALSE,verbose=FALSE,
-    rt_check=FALSE)
+      add_accumulators(data,design$matchfun,simulate=TRUE,type=model()$type,Fcovariates=design$Fcovariates,fixed_accumulator_roles = design$fixed_accumulator_roles),
+      design,model,add_acc=FALSE,compress=FALSE,verbose=FALSE,
+      rt_check=FALSE)
   pars <- t(apply(parameters, 1, do_pre_transform, model()))
   pars <- map_p(add_constants(pars,design$constants),data, model())
   if(!is.null(model()$trend) && attr(model()$trend, "pretransform")){
@@ -249,6 +248,8 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
   }
   if (any(names(data)=="RACE")) {
     Rrt <- RACE_rfun(data, pars, model)
+  } else if (any(names(data)=="LogicalRule")) {
+    Rrt <- LogicalRules_rfun(data, pars, model)
   } else Rrt <- model()$rfun(data,pars)
   dropNames <- c("lR","lM","lSmagnitude")
   if (!return_Ffunctions && !is.null(design$Ffunctions))
@@ -285,9 +286,9 @@ RACE_rfun <- function(data, pars, model){
   ok <- as.numeric(data$lR) <= as.numeric(as.character(data$RACE))
   for (i in levels(RACE)) {
     pick <- data$RACE==i
-    data_in <- data[pick & ok,]
+    data_in <- data[pick,]
     data_in$lR <- factor(data$lR[pick & ok])
-    tmp <- pars[pick & ok,, drop=FALSE]
+    tmp <- pars[pick,, drop=FALSE]
     attr(tmp, "ok") <- rep(T, ifelse(is.null(dim(tmp)),1,nrow(tmp)))
     Rrti <- model()$rfun(data_in,tmp)
     Rrti$R <- as.numeric(Rrti$R)
@@ -298,23 +299,47 @@ RACE_rfun <- function(data, pars, model){
   return(Rrt)
 }
 
-OR_rfun <- function(data, pars, model){
-  Rrt <- matrix(ncol=2,nrow=dim(data)[1]/length(levels(data$lR)),
-                dimnames=list(NULL,c("R","rt")))
-  RACE <- data[data$lR==levels(data$lR)[1],"RACE"]
-  ok <- as.numeric(data$lR) <= as.numeric(as.character(data$RACE))
-  for (i in levels(RACE)) {
-    pick <- data$RACE==i
-    data_in <- data[pick & ok,]
-    data_in$lR <- factor(data$lR[pick & ok])
-    tmp <- pars[pick & ok,, drop=FALSE]
+LogicalRules_rfun <- function(data, pars, model){
+  
+  Rrti <- matrix(ncol=length(levels(data$lR)),nrow=dim(data)[1]/length(levels(data$lR)),
+                 dimnames=list(NULL,levels(data$lR)))
+  RACE <- levels(data$lR) # should be 4 unless using a non-standard implementation
+  df = data.frame(LogicalRule = data$LogicalRule[data$lR==levels(data$lR)[1]],
+                  RuleFollow = rbinom(dim(data)[1]/length(levels(data$lR)),1,pars[data$lR==levels(data$lR)[1],"p"])==1,
+                  ChannelA = rbinom(dim(data)[1]/length(levels(data$lR)),1,pars[data$lR==levels(data$lR)[1],"q"])==1)
+  for (i in RACE) {
+    pick <- data$lR==i
+    data_in <- data[pick,]
+    data_in$lR <- factor(data$lR[pick])
+    tmp <- pars[pick,, drop=FALSE]
     attr(tmp, "ok") <- rep(T, ifelse(is.null(dim(tmp)),1,nrow(tmp)))
-    Rrti <- model()$rfun(data_in,tmp)
-    Rrti$R <- as.numeric(Rrti$R)
-    Rrt[RACE==i,] <- as.matrix(Rrti)
+    Rrti[,i] <- model()$rfun(data_in,tmp)$rt
   }
-  Rrt <- data.frame(Rrt)
-  Rrt$R <- factor(Rrt$R, labels = levels(data$lR), levels = 1:length(levels(data$lR)))
+  Rrt = Rrti %>%
+    as.data.frame() %>%
+    dplyr::mutate(R = case_when (df$RuleFollow & df$LogicalRule=="OR" & Rrti[,"A"]<Rrti[,"B"] & (Rrti[,"n_A"]>Rrti[,"A"] | Rrti[,"n_B"]>Rrti[,"A"]) ~ "yes", # target finishes before at least one absent
+                                 df$RuleFollow & df$LogicalRule=="OR" & Rrti[,"B"]<Rrti[,"A"] & (Rrti[,"n_A"]>Rrti[,"B"] | Rrti[,"n_B"]>Rrti[,"B"]) ~ "yes", # target finishes before at least one absent
+                                 df$RuleFollow & df$LogicalRule=="OR" & Rrti[,"n_A"]<Rrti[,"A"] & Rrti[,"n_B"]<Rrti[,"A"] & Rrti[,"n_A"]<Rrti[,"B"] & Rrti[,"n_B"]<Rrti[,"B"] ~ "no",
+                                 df$RuleFollow & df$LogicalRule=="AND" & Rrti[,"n_A"]<Rrti[,"n_B"] & (Rrti[,"A"]>Rrti[,"n_A"] | Rrti[,"B"]>Rrti[,"n_A"]) ~ "no", # absent finishes before at least one target
+                                 df$RuleFollow & df$LogicalRule=="AND" & Rrti[,"n_B"]<Rrti[,"n_A"] & (Rrti[,"A"]>Rrti[,"n_B"] | Rrti[,"B"]>Rrti[,"n_B"]) ~ "no", # absent finishes before at least one target
+                                 df$RuleFollow & df$LogicalRule=="AND" & Rrti[,"A"]<Rrti[,"n_A"] & Rrti[,"A"]<Rrti[,"n_B"] & Rrti[,"B"]<Rrti[,"n_A"] & Rrti[,"B"]<Rrti[,"n_B"]  ~ "yes",
+                                 !df$RuleFollow & df$ChannelA & Rrti[,"A"]<Rrti[,"n_A"] ~ "yes",
+                                 !df$RuleFollow & df$ChannelA & Rrti[,"n_A"]<Rrti[,"A"] ~ "no",
+                                 !df$RuleFollow & !df$ChannelA & Rrti[,"B"]<Rrti[,"n_B"] ~ "yes",
+                                 !df$RuleFollow & !df$ChannelA & Rrti[,"n_B"]<Rrti[,"B"] ~ "no"),
+           rt = case_when (df$RuleFollow & df$LogicalRule=="OR" & Rrti[,"A"]<Rrti[,"B"] & (Rrti[,"n_A"]>Rrti[,"A"] | Rrti[,"n_B"]>Rrti[,"A"]) ~ Rrti[,"A"], # target finishes before at least one absent
+                           df$RuleFollow & df$LogicalRule=="OR" & Rrti[,"B"]<Rrti[,"A"] & (Rrti[,"n_A"]>Rrti[,"B"] | Rrti[,"n_B"]>Rrti[,"B"]) ~ Rrti[,"B"], # target finishes before at least one absent
+                           df$RuleFollow & df$LogicalRule=="OR" & (Rrti[,"n_A"]<Rrti[,"A"] & Rrti[,"n_B"]<Rrti[,"A"] & Rrti[,"n_A"]<Rrti[,"B"] & Rrti[,"n_B"]<Rrti[,"B"])  ~ pmax(Rrti[,"n_A"],Rrti[,"n_B"]),
+                           df$RuleFollow & df$LogicalRule=="AND" & Rrti[,"n_A"]<Rrti[,"n_B"] & (Rrti[,"A"]>Rrti[,"n_A"] | Rrti[,"B"]>Rrti[,"n_A"]) ~ Rrti[,"n_A"], # absent finishes before at least one target
+                           df$RuleFollow & df$RuleFollow & df$LogicalRule=="AND" & Rrti[,"n_B"]<Rrti[,"n_A"] & (Rrti[,"A"]>Rrti[,"n_B"] | Rrti[,"B"]>Rrti[,"n_B"]) ~ Rrti[,"n_B"], # absent finishes before at least one target
+                           df$RuleFollow & df$LogicalRule=="AND" & (Rrti[,"A"]<Rrti[,"n_A"] & Rrti[,"A"]<Rrti[,"n_B"] & Rrti[,"B"]<Rrti[,"n_A"] & Rrti[,"B"]<Rrti[,"n_B"])  ~ pmax(Rrti[,"A"],Rrti[,"B"]),
+                           !df$RuleFollow & df$ChannelA & Rrti[,"A"]<Rrti[,"n_A"] ~ Rrti[,"A"],
+                           !df$RuleFollow & df$ChannelA & Rrti[,"n_A"]<Rrti[,"A"] ~ Rrti[,"n_A"],
+                           !df$RuleFollow & !df$ChannelA & Rrti[,"B"]<Rrti[,"n_B"] ~ Rrti[,"B"],
+                           !df$RuleFollow & !df$ChannelA & Rrti[,"n_B"]<Rrti[,"B"] ~ Rrti[,"n_B"])) %>%
+    dplyr::select(R,rt)
+           
+  Rrt$R <- factor(Rrt$R,levels=c("no","yes"))
   return(Rrt)
 }
 

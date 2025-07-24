@@ -19,7 +19,7 @@ lfun <- function(i, x, p_vector, pname, dadm, use_c) {
 }
 
 
-profile_plot_test <- function (data, design, p_vector, range = 1.5, layout = NA, p_min = NULL,
+profile_plot_test <- function (data, design, p_vector, range = 0.5, layout = NA, p_min = NULL,
                                p_max = NULL, use_par = NULL, n_point = 100, n_cores = 1,use_c = FALSE,
                                round = 3, true_args = list(), ...)
 {
@@ -54,8 +54,8 @@ profile_plot_test <- function (data, design, p_vector, range = 1.5, layout = NA,
     cur_name <- names(p_vector)[p]
     if (cur_name %in% use_par) {
       cur_par <- p_vector[p]
-      pmax_cur <- cur_par + range/2
-      pmin_cur <- cur_par - range/2
+      pmax_cur <- cur_par + ((range/2)*p_vector[p])
+      pmin_cur <- cur_par - ((range/2)*p_vector[p])
       if (!is.null(p_min)) {
         if (!is.na(p_min[cur_name])) {
           pmin_cur <- p_min[cur_name]

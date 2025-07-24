@@ -298,39 +298,6 @@ double dswtn(double t_adj, double alpha, double mu_drift, double sigma_drift, bo
     return log_out ? log_pdf_val : std::exp(log_pdf_val);
 }
 
-/* DEPRECATED for numerical stability purposes
-// PDF for SWTN -- expressed in natural scale terms and tested to ensure it gives the same output as Steingrover 2021 log_pdf JAGS implementation
-// t_adj is time already adjusted for non-decision time (t - theta)
-// alpha is threshold, mu_drift is mean drift, sigma_drift is drift standard deviation
-// [[Rcpp::export]]
-double dswtn(double t_adj, double alpha, double mu_drift, double sigma_drift, bool log_out=false) {
-    if (t_adj <= 1e-10) return R_NegInf; // log(0)
-    if (alpha <= 1e-10) return R_NegInf; // No boundary to hit, or ill-defined
-    if (sigma_drift < 0) return R_NaN; // standard deviation cannot be negative
-    // Handle sigma_drift == 0 case (becomes standard Wald)
-    if (sigma_drift <= 1e-10) {
-        if (mu_drift <= 1e-10) return R_NegInf; // No positive drift
-        return dwald_classic(t_adj, alpha, mu_drift, log_out);
-    }
-
-    double sigma_2 = std::pow(sigma_drift,2); // parameterize the RDM with std but formula uses variance
-	double prob_d_gt_0 = R::pnorm(mu_drift / sigma_drift, 0.0, 1.0, true, false);
-	if (std::isinf(prob_d_gt_0) || prob_d_gt_0 < 0) return R_NegInf; // if P(xi > 0) is zero
-	
-	double term1 = alpha;
-	double term2 = std::sqrt((2 * M_PI * std::pow(t_adj,3))*((t_adj*sigma_2)+1));
-	double term3 = 1 / prob_d_gt_0; // This is 1/P(xi>0)
-    double term4 = std::exp( - (std::pow(mu_drift * t_adj - alpha, 2)) / ((2 * t_adj) * (t_adj * sigma_2 + 1)) );
-    double term5 = R::pnorm( (alpha * sigma_2 + mu_drift) /(std::sqrt(t_adj * std::pow(sigma_2, 2) + sigma_2) ), 0.0, 1.0, true, false);
-	double pdf_val = (term1/term2) * term3 * term4 * term5;
-
-    if (pdf_val < 0.0 || std::isnan(pdf_val)) {
-		return log_out ? R_NegInf : 0;
-	}
-    return log_out ? std::log(pdf_val) : pdf_val;
-}
-*/
-
 // CDF for SWTN -- derived from the above PDF using a substitutuion with bivariate normals
 // t_adj is time already adjusted for non-decision time (t - theta)
 // alpha is threshold, mu_drift is mean drift, sigma_drift is drift standard deviation
@@ -394,57 +361,50 @@ double pswtn(double t_adj, double alpha, double mu_drift, double sigma_drift, bo
 }
 
 // Top-level PDF for RDM_SWTN model
-// Parameters B, A, mu_drift, sv are assumed to be already scaled by s if applicable. This integrates the dswtn function across B->B+A using a 20-point Gauss-Legendre approximation.
+// Parameters b, A, mu_drift, sv are assumed to be already scaled by s if applicable. This integrates the dswtn function across b->b+A using a 20-point Gauss-Legendre approximation.
 // [[Rcpp::export]]
-double drdmswtn(double t_adj, double B, double mu_drift, double A,
+double drdmswtn(double t_adj, double b, double mu_drift, double A,
                                     double sigma_drift,int n_gauss_nodes  = 20, bool log_out=false) {
 
     if (t_adj <= 1e-10) return 0.0;
+	if (b <= 1e-7) return R_NegInf; // Max threshold non-positive
 	bool no_A_var = (A < 1e-7); // setting them quite low so the reduction logic only triggers if the user has genuinely fixed the value to zero (the lower bound in EMC2 is ~1e-4 so this should never be triggered during sampling)
     bool no_drift_var = (sigma_drift < 1e-7);
 	
     if (no_A_var && no_drift_var) {
-        // Case 1: Simple Wald (like dwald_classic). Threshold is B. Drift is mu_drift.
-        if (mu_drift <= 1e-10 || B <= 1e-10) return R_NegInf; // No positive drift to positive boundary
-        return dwald_classic(t_adj, B, mu_drift,log_out); // dwald_classic(t, k, l)
+        // Case 1: Simple Wald (like dwald_classic). Threshold is b. Drift is mu_drift.
+        if (mu_drift <= 1e-10 || b <= 1e-10) return R_NegInf; // No positive drift to positive boundary
+        return dwald_classic(t_adj, b, mu_drift,log_out); // dwald_classic(t, k, l)
     } else if (!no_A_var && no_drift_var) {
         // Case 2: Standard RDM with SPV (like digt). Drift is mu_drift.
-        // dWald calls digt(t_adj, B + 0.5*A, mu_drift, 0.5*A) i.e. k-center +- half-width of A
-        // So, k_for_digt = B + 0.5*A, a_for_digt = 0.5*A
-        if ((B + A) <= 1e-9) return R_NegInf; // Max threshold non-positive
-        double k_digt = B + 0.5 * A;
+        // dWald calls digt(t_adj, B + 0.5*A, mu_drift, 0.5*A) i.e. k-center +- half-width of A where B is the DIFFERENCE between A and threshold
+		// We've use b (i.e., B+A) here, so we back-transform and use the digt function.
+        double k_digt = b - 0.5 * A;
         double a_digt = 0.5 * A;
         return digt(t_adj, k_digt, mu_drift, a_digt,log_out);
     } else if (no_A_var && !no_drift_var) {
-        // Case 3: SWTN with fixed threshold B (like original dswtn). Use Steingrover et al (2021) derivation of the Shifted-Wald with Truncated Normal drift-variability.
-        if (B <= 1e-9) return R_NegInf;
-        return dswtn(t_adj, B, mu_drift, sigma_drift,log_out);
+        // Case 3: SWTN with fixed threshold b (like original dswtn). Use Steingrover et al (2021) derivation of the Shifted-Wald with Truncated Normal drift-variability.
+        return dswtn(t_adj, b, mu_drift, sigma_drift,log_out);
     } else {
         // Case 4: Full model - SWTN with RDM-style SPV.
         // Integrate dswtn(t_adj, actual_k, mu_drift, sigma_drift)
-        // where actual_k ~ U(B, B+A).
+        // where actual_k ~ U(b-A, b).
         // Note: 1e-7 has already confirmed A is not zero for this 'else' block.
         // So, no_A_var is false here.
-
-        // If max threshold B+A is non-positive, result is -Inf. Shouldn't be possible.
-        if ((B + A) <= 1e-9) return R_NegInf;
-
+        // If max threshold b is non-positive, result is -Inf. Shouldn't be possible.
         //Get Gauss-Legendre 20-point nodes/weights from statmod (static so it only calls once)
 		const Rcpp::NumericVector& nodes   = gl["nodes"];
 		const Rcpp::NumericVector& weights = gl["weights"];
 	
-		// Map nodes to [B, B+A]
-		Rcpp::NumericVector k_nodes = B + 0.5 * A * (nodes + 1.0);
-	
+		// Map nodes to [b, b+A]
+		Rcpp::NumericVector k_nodes = b - 0.5 * A + 0.5*A*nodes;
 		// 3. Evaluate CDF at each (t, k) pair and integrate
-	
 		double integral = 0.0;
-
 		for (int j = 0; j < n_gauss_nodes; ++j) {
 			double pdf_val = dswtn(t_adj, k_nodes[j], mu_drift, sigma_drift,false); // integral cannot take log_pdf
 			integral      += weights[j] * pdf_val;
 		}
-		// Scale for Gauss-Legendre over [B, B+A] and divide by A (uniform pdf)
+		// Scale for Gauss-Legendre over [b, b+A] and divide by A (uniform pdf)
 		// This reduces to integral * 0.5 but it's handy to see it written out properly
 		double out = (integral * (A / 2.0)) / A;
 
@@ -456,48 +416,46 @@ double drdmswtn(double t_adj, double B, double mu_drift, double A,
 }
 
 // Top-level CDF for RDM_SWTN model
-// Parameters B, A, mu_drift, sv are assumed to be already scaled by s if applicable. This integrates the pswtn function across B->B+A using a 20-point Gauss-Legendre approximation.
+// Parameters b, A, mu_drift, sv are assumed to be already scaled by s if applicable. This integrates the pswtn function across b->b+A using a 20-point Gauss-Legendre approximation.
 // [[Rcpp::export]]
-double prdmswtn(double t_adj, double B, double mu_drift, double A,
+double prdmswtn(double t_adj, double b, double mu_drift, double A,
                                     double sigma_drift,int n_gauss_nodes  = 20, bool log_out=false)
 {
     if (t_adj <= 1e-10) return 0.0;
+	if ((b) <= 1e-7) return 1.0;
 	bool no_A_var = (A < 1e-7); // setting them quite low so the reduction logic only triggers if the user has genuinely fixed the value to zero (the lower bound in EMC2 is ~1e-4 so this should never be triggered during sampling)
     bool no_drift_var = (sigma_drift < 1e-7);
 
     if (no_A_var && no_drift_var) {
         // Case 1 standard Wald (neither variability parameter)
-        if (B <= 1e-7) return 1.0;
-        if (mu_drift <= 1e-7 && B > 0) return 0.0;
-        return pwald_classic(t_adj, B, mu_drift,log_out);
+        if (mu_drift <= 1e-7 && b > 0) return 0.0;
+        return pwald_classic(t_adj, b, mu_drift,log_out);
     } else if (!no_A_var && no_drift_var) {
         // Case 2 if (A < 1e-7) a_digt = 0.0; // A is not zero here due to !no_A_var
-        if ((B + A) <= 1e-7) return 1.0;
-        double k_pigt = B + 0.5 * A;
+		// pWald calls pigt(t_adj, B + 0.5*A, mu_drift, 0.5*A) i.e. k-center +- half-width of A where B is the DIFFERENCE between A and threshold
+		// We've use b (i.e., B+A) here, so we back-transform and use the pigt function.
+        double k_pigt = b - 0.5 * A;
         double a_pigt = 0.5 * A;
         return pigt(t_adj, k_pigt, mu_drift, a_pigt,log_out);
     } else if (no_A_var && !no_drift_var) {
-        // Case 3: SWTN with fixed threshold B (like original dswtn). Starts with Steingrover et al's (2021) derivation of the Shifted-Wald with Truncated Normal drift-variability - but they derived only the pdf with a fixed mu_drift so here we're integrating that numerically with mu_drift =0->Inf
-        if (B <= 1e-9 && mu_drift>1e-9) return 1.0;
-        return pswtn(t_adj, B, mu_drift, sigma_drift,log_out);
+        // Case 3: SWTN with fixed threshold b (like original dswtn). Starts with Steingrover et al's (2021) derivation of the Shifted-Wald with Truncated Normal drift-variability - but they derived only the pdf with a fixed mu_drift so here we're integrating that numerically with mu_drift =0->Inf
+        if (b <= 1e-9 && mu_drift>1e-9) return 1.0;
+        return pswtn(t_adj, b, mu_drift, sigma_drift,log_out);
     } else {
 
 		//Get Gauss-Legendre 20-point nodes/weights from statmod (static so it only calls once)
 		const Rcpp::NumericVector& nodes   = gl["nodes"];
 		const Rcpp::NumericVector& weights = gl["weights"];
 	
-		// Map nodes to [B, B+A]
-		Rcpp::NumericVector k_nodes = B + 0.5 * A * (nodes + 1.0);
-	
+		// Map nodes to [b, b+A]
+		Rcpp::NumericVector k_nodes = b - 0.5 * A + 0.5*A*nodes;
 		// 3. Evaluate CDF at each (t, k) pair and integrate
-	
 		double integral = 0.0;
-
 		for (int j = 0; j < n_gauss_nodes; ++j) {
 			double cdf_val = pswtn(t_adj, k_nodes[j], mu_drift, sigma_drift,false); // integral cannot take log_cdf
 			integral      += weights[j] * cdf_val;
 		}
-		// Scale for Gauss-Legendre over [B, B+A] and divide by A (uniform pdf)
+		// Scale for Gauss-Legendre over [b, b+A] and divide by A (uniform pdf)
 		// This reduces to integral * 0.5 but it's handy to see it written out properly
 		double out = (integral * (A / 2.0)) / A;
 
@@ -518,19 +476,19 @@ double prdmswtn(double t_adj, double B, double mu_drift, double A,
 #' mixed with Truncated Normal drift rates).
 #'
 #' @param t Vector of reaction times.
-#' @param B Vector of base threshold parameters (lower bound of SPV uniform range).
-#' @param A Vector of start-point variability range parameters (width of SPV uniform range, actual_k ~ U(B, B+A)). Must be non-negative.
+#' @param b Vector of base threshold parameters (lower bound of SPV uniform range).
+#' @param A Vector of start-point variability range parameters (width of SPV uniform range, actual_k ~ U(b, b+A)). Must be non-negative.
 #' @param v Vector of mean drift rate parameters.
 #' @param sv Vector of standard-deviation parameters for the drift rate distribution. Must be non-negative.
 #' @param t0 Vector of non-decision time parameters.
 #' @return A numeric vector of log-density values.
 #' @details This function models RTs based on a Wald process where:
-#'   1. The start-point (threshold `k`) varies from trial to trial, uniformly distributed over `[B/s, (B+A)/s]`.
+#'   1. The start-point (threshold `k`) varies from trial to trial, uniformly distributed over `[b/s, (b+A)/s]`.
 #'   2. The drift rate (`xi`) varies from trial to trial, drawn from a normal
 #'      distribution N(v/s, sigma_drift), truncated at 0.
 #'   Handles vectorization of parameters. */
 // [[Rcpp::export]]
-NumericVector dSWTNspv(NumericVector t, NumericVector v, NumericVector B, NumericVector A, NumericVector t0, NumericVector sv, bool log_out=false) {
+NumericVector dSWTNspv(NumericVector t, NumericVector v, NumericVector b, NumericVector A, NumericVector t0, NumericVector sv, bool log_out=false) {
     int n = t.size();
     NumericVector pdf(n);
     for (int i = 0; i < n; ++i) {
@@ -538,7 +496,7 @@ NumericVector dSWTNspv(NumericVector t, NumericVector v, NumericVector B, Numeri
 		if (t[i] <= 0){
 			pdf[i] = 0.;
 		} else { 
-			pdf[i] = drdmswtn(t[i], B[i], v[i], A[i], sv[i],log_out);
+			pdf[i] = drdmswtn(t[i], b[i], v[i], A[i], sv[i],log_out);
 		}
 	}
     return pdf;
@@ -551,7 +509,7 @@ NumericVector dSWTNspv(NumericVector t, NumericVector v, NumericVector B, Numeri
 #' start-point variability and SWTN-style trial-varying drift rates.
 #'
 #' @param t Vector of reaction times.
-#' @param B Vector of base threshold parameters.
+#' @param b Vector of base threshold parameters.
 #' @param A Vector of start-point variability range parameters.
 #' @param v Vector of mean drift rate parameters.
 #' @param sv Vector of variance parameters for drift rate.
@@ -561,7 +519,7 @@ NumericVector dSWTNspv(NumericVector t, NumericVector v, NumericVector B, Numeri
 #' @return A numeric vector of CDF values.
 #' @details Parameters are handled similarly to `dRDM_SWTN`, including scaling by `s`. */
 // [[Rcpp::export]]
-NumericVector pSWTNspv(NumericVector t, NumericVector v, NumericVector B, NumericVector A, NumericVector t0, NumericVector sv, bool log_out=false) { 
+NumericVector pSWTNspv(NumericVector t, NumericVector v, NumericVector b, NumericVector A, NumericVector t0, NumericVector sv, bool log_out=false) { 
     int n = t.size();
     NumericVector cdf(n);
     for (int i = 0; i < n; i++){
@@ -569,7 +527,7 @@ NumericVector pSWTNspv(NumericVector t, NumericVector v, NumericVector B, Numeri
 		if (t[i] <= 0){
 		cdf[i] = 0.;
 		} else {
-			cdf[i] = prdmswtn(t[i], B[i], v[i], A[i], sv[i],log_out);
+			cdf[i] = prdmswtn(t[i], b[i], v[i], A[i], sv[i],log_out);
 		}
 	}
     return cdf;
@@ -577,7 +535,7 @@ NumericVector pSWTNspv(NumericVector t, NumericVector v, NumericVector B, Numeri
 
 // [[Rcpp::export]]
 NumericVector drdmswtn_c(NumericVector rts, NumericMatrix pars, LogicalVector idx, double min_ll, LogicalVector is_ok, bool log_out=false){
-  //v = 0, B = 1, A = 2, t0 = 3, s = 4, cv=5
+  //v = 0, b = 1, A = 2, t0 = 3, s = 4, cv=5
 	NumericVector out(sum(idx));
   int k = 0;
   for(int i = 0; i < rts.length(); i++){
@@ -586,8 +544,8 @@ NumericVector drdmswtn_c(NumericVector rts, NumericMatrix pars, LogicalVector id
         out[k] = log_out ? R_NegInf : 0; 
       } else if((rts[i] - pars(i,3) > 0) && (is_ok[i] == TRUE)){
 		double sv = (pars(i,0)/pars(i,4))*pars(i,5); // convert coefficient of variation to standard deviation
-        double A = pars(i,1) * pars(i,2); // convert zA to A
-		out[k] = drdmswtn(rts[i] - pars(i,3), pars(i,1)/pars(i,4), pars(i,0)/pars(i,4), A/pars(i,4), sv,log_out);
+        double A = (pars(i,1)/pars(i,4)) * pars(i,2); // convert zA to A
+		out[k] = drdmswtn(rts[i] - pars(i,3), pars(i,1)/pars(i,4), pars(i,0)/pars(i,4), A, sv,log_out);
       } else{
         out[k] = log_out ? min_ll : std::exp(min_ll);
       }
@@ -600,7 +558,7 @@ NumericVector drdmswtn_c(NumericVector rts, NumericMatrix pars, LogicalVector id
 
 // [[Rcpp::export]]
 NumericVector prdmswtn_c(NumericVector rts, NumericMatrix pars, LogicalVector idx, double min_ll, LogicalVector is_ok, bool log_out=false){
-  //v = 0, B = 1, A = 2, t0 = 3, s = 4, cv=5
+  //v = 0, b = 1, A = 2, t0 = 3, s = 4, cv=5
   NumericVector out(sum(idx));
   int k = 0;
   for(int i = 0; i < rts.length(); i++){
@@ -609,8 +567,8 @@ NumericVector prdmswtn_c(NumericVector rts, NumericMatrix pars, LogicalVector id
         out[k] = log_out ? R_NegInf : 0; 
       } else if((rts[i] - pars(i,3) > 0) && (is_ok[i] == TRUE)){
 		double sv = (pars(i,0)/pars(i,4))*pars(i,5); // convert coefficient of variation to standard deviation
-        double A = pars(i,1) * pars(i,2); // convert zA to A
-		out[k] = prdmswtn(rts[i] - pars(i,3), pars(i,1)/pars(i,4), pars(i,0)/pars(i,4), A/pars(i,4), sv,log_out);
+        double A = (pars(i,1)/pars(i,4)) * pars(i,2); // convert zA to A
+		out[k] = prdmswtn(rts[i] - pars(i,3), pars(i,1)/pars(i,4), pars(i,0)/pars(i,4), A, sv,log_out);
       } else{
         out[k] = log_out ? min_ll : std::exp(min_ll);
       }
@@ -720,12 +678,12 @@ double pswtn_numeric_integral(double t_adj, double alpha, double mu_drift, doubl
 // These are the new top-level core functions.
 // They will use dswtn and pswtn as the "inner" functions
 // when drift variability is present.
-// Parameters for the integrand when integrating over RDM-style SPV U(B, B+A)
+// Parameters for the integrand when integrating over RDM-style SPV U(b, b+A)
 struct RDM_SWTN_SPV_Integrand_Params {
     double t_adj;
     double mu_drift;
     double sigma_drift;
-    // B and A define the integration range, not passed in struct here.
+    // b and A define the integration range, not passed in struct here.
 };
 
 // --- Integrands for Start Point Variability ---
@@ -754,9 +712,9 @@ double gsl_pswtn_spv_integrand(double current_k, void* p) {
 }
 
 // Top-level PDF for RDM_SWTN model
-// Parameters B, A, mu_drift, sv are assumed to be already scaled by s if applicable.
+// Parameters b, A, mu_drift, sv are assumed to be already scaled by s if applicable.
 // [[Rcpp::export]]
-double drdmswtn_numeric_integral(double t_adj, double B, double mu_drift, double A,
+double drdmswtn_numeric_integral(double t_adj, double b, double mu_drift, double A,
                                     double sigma_drift,
                                     double spv_abs_err = 1e-8, double spv_rel_err = 1e-8, size_t spv_max_eval = 10000) {
 
@@ -765,38 +723,38 @@ double drdmswtn_numeric_integral(double t_adj, double B, double mu_drift, double
     bool no_drift_var = (sigma_drift < 1e-7);
 	
     if (no_A_var && no_drift_var) {
-        // Case 1: Simple Wald (like dwald_classic). Threshold is B. Drift is mu_drift.
-        if (mu_drift <= 1e-10 || B <= 1e-10) return R_NegInf; // No positive drift to positive boundary
-        return dwald_classic(t_adj, B, mu_drift); // dwald_classic(t, k, l)
+        // Case 1: Simple Wald (like dwald_classic). Threshold is b. Drift is mu_drift.
+        if (mu_drift <= 1e-10 || b <= 1e-10) return R_NegInf; // No positive drift to positive boundary
+        return dwald_classic(t_adj, b, mu_drift); // dwald_classic(t, k, l)
     } else if (!no_A_var && no_drift_var) {
         // Case 2: Standard RDM with SPV (like digt). Drift is mu_drift.
-        // dWald calls digt(t_adj, B + 0.5*A, mu_drift, 0.5*A) i.e. k-center +- half-width of A
-        // So, k_for_digt = B + 0.5*A, a_for_digt = 0.5*A
-        if ((B + A) <= 1e-9) return R_NegInf; // Max threshold non-positive
-        double k_digt = B + 0.5 * A;
+        // dWald calls digt(t_adj, b + 0.5*A, mu_drift, 0.5*A) i.e. k-center +- half-width of A
+        // So, k_for_digt = b + 0.5*A, a_for_digt = 0.5*A
+        if ((b + A) <= 1e-9) return R_NegInf; // Max threshold non-positive
+        double k_digt = b + 0.5 * A;
         double a_digt = 0.5 * A;
         return digt(t_adj, k_digt, mu_drift, a_digt);
     } else if (no_A_var && !no_drift_var) {
-        // Case 3: SWTN with fixed threshold B (like original dswtn). Use Steingrover et al (2021) derivation of the Shifted-Wald with Truncated Normal drift-variability.
-        if (B <= 1e-9) return R_NegInf;
-        return dswtn(t_adj, B, mu_drift, sigma_drift);
+        // Case 3: SWTN with fixed threshold b (like original dswtn). Use Steingrover et al (2021) derivation of the Shifted-Wald with Truncated Normal drift-variability.
+        if (b <= 1e-9) return R_NegInf;
+        return dswtn(t_adj, b, mu_drift, sigma_drift);
     } else {
         // Case 4: Full model - SWTN with RDM-style SPV.
         // Integrate dswtn(t_adj, actual_k, mu_drift, sigma_drift)
-        // where actual_k ~ U(B, B+A).
+        // where actual_k ~ U(b, b+A).
         // Note: 1e-7 has already confirmed A is not zero for this 'else' block.
         // So, no_A_var is false here.
 
-        // If max threshold B+A is non-positive, result is -Inf. Shouldn't be possible.
-        if ((B + A) <= 1e-9) return R_NegInf;
+        // If max threshold b+A is non-positive, result is -Inf. Shouldn't be possible.
+        if ((b + A) <= 1e-9) return R_NegInf;
 
         RDM_SWTN_SPV_Integrand_Params int_params_pdf;
         int_params_pdf.t_adj = t_adj;
         int_params_pdf.mu_drift = mu_drift;
         int_params_pdf.sigma_drift = sigma_drift;
 
-        double lower_k_bound_pdf = B;
-        double upper_k_bound_pdf = B + A;
+        double lower_k_bound_pdf = b;
+        double upper_k_bound_pdf = b + A;
 
         double integral_val_pdf = 0.0;
         double integral_err_pdf = 0.0;
@@ -814,14 +772,14 @@ double drdmswtn_numeric_integral(double t_adj, double B, double mu_drift, double
 
         if (status_pdf != GSL_SUCCESS) {
             Rcpp::Rcerr << "drdmswtn (SPV) GSL_ERROR: " << gsl_strerror(status_pdf) << " (code " << status_pdf << ")\n"
-                        << "  Inputs: t_adj=" << t_adj << ", B=" << B << ", A=" << A 
+                        << "  Inputs: t_adj=" << t_adj << ", b=" << b << ", A=" << A 
                         << ", mu_drift=" << mu_drift << ", sigma_drift=" << sigma_drift << std::endl;
             return 0.0; // 0? Or NaN to indicate error
         }
 
         if (integral_val_pdf <= 0) return R_NegInf; // Integral should be positive
 
-        // Normalization by A (width of the uniform distribution U(B, B+A))
+        // Normalization by A (width of the uniform distribution U(b, b+A))
         if (std::isnan(integral_val_pdf)) return 0.0;
         return integral_val_pdf / A;
     }
@@ -831,33 +789,33 @@ double drdmswtn_numeric_integral(double t_adj, double B, double mu_drift, double
 // OLD NUMERIC INTEGRATION STUFF
 // Top-level CDF for RDM_SWTN model
 // [[Rcpp::export]]
-double prdmswtn_numeric_integral(double t_adj, double B, double mu_drift, double A,
+double prdmswtn_numeric_integral(double t_adj, double b, double mu_drift, double A,
                                  double sigma_drift,
                                  double spv_abs_err = 1e-8, double spv_rel_err = 1e-8, size_t spv_max_eval = 10000) {
     if (t_adj <= 0) return 0.0;
-	//Rcout << "--- Debug: prdmswtn called. drift: " << mu_drift<<" threshold: "<< B<<" spv: "<< A<<" sv: "<< sigma_drift<< std::endl;
+	//Rcout << "--- Debug: prdmswtn called. drift: " << mu_drift<<" threshold: "<< b<<" spv: "<< A<<" sv: "<< sigma_drift<< std::endl;
     bool no_A_var = (A < 1e-7);
     bool no_drift_var = (sigma_drift < 1e-7);
 
     if (no_A_var && no_drift_var) {
         // Case 1 standard Wald (neither variability parameter)
-        if (B <= 1e-7) return 1.0;
-        if (mu_drift <= 1e-7 && B > 0) return 0.0;
-        return pwald_classic(t_adj, B, mu_drift);
+        if (b <= 1e-7) return 1.0;
+        if (mu_drift <= 1e-7 && b > 0) return 0.0;
+        return pwald_classic(t_adj, b, mu_drift);
     } else if (!no_A_var && no_drift_var) {
         // Case 2 if (A < 1e-7) a_digt = 0.0; // A is not zero here due to !no_A_var
-        if ((B + A) <= 1e-7) return 1.0;
-        double k_pigt = B + 0.5 * A;
+        if ((b + A) <= 1e-7) return 1.0;
+        double k_pigt = b + 0.5 * A;
         double a_pigt = 0.5 * A;
         return pigt(t_adj, k_pigt, mu_drift, a_pigt);
     } else if (no_A_var && !no_drift_var) {
-        // Case 3: SWTN with fixed threshold B (like original dswtn). Starts with Steingrover et al's (2021) derivation of the Shifted-Wald with Truncated Normal drift-variability - but they derived only the pdf with a fixed mu_drift so here we're integrating that numerically with mu_drift =0->Inf
-        if (B <= 1e-9 && mu_drift>1e-9) return 1.0;
-        return pswtn(t_adj, B, mu_drift, sigma_drift);
+        // Case 3: SWTN with fixed threshold b (like original dswtn). Starts with Steingrover et al's (2021) derivation of the Shifted-Wald with Truncated Normal drift-variability - but they derived only the pdf with a fixed mu_drift so here we're integrating that numerically with mu_drift =0->Inf
+        if (b <= 1e-9 && mu_drift>1e-9) return 1.0;
+        return pswtn(t_adj, b, mu_drift, sigma_drift);
     } else {
-        // Case 4: Full model - SWTN CDF with RDM-style SPV (uniform over U(B, B+A)).
-        // If max threshold B+A is non-positive, effectively an immediate hit. (check this..)
-        if ((B + A) <= 1e-9) {
+        // Case 4: Full model - SWTN CDF with RDM-style SPV (uniform over U(b, b+A)).
+        // If max threshold b+A is non-positive, effectively an immediate hit. (check this..)
+        if ((b + A) <= 1e-9) {
              return 1.0;
         }
 
@@ -866,8 +824,8 @@ double prdmswtn_numeric_integral(double t_adj, double B, double mu_drift, double
         int_params_cdf.mu_drift = mu_drift;
         int_params_cdf.sigma_drift = sigma_drift;
 
-        double lower_k_bound_cdf = B;
-        double upper_k_bound_cdf = B + A;
+        double lower_k_bound_cdf = b;
+        double upper_k_bound_cdf = b + A;
 
         double integral_val_cdf = 0.0;
         double integral_err_cdf = 0.0;
@@ -885,16 +843,49 @@ double prdmswtn_numeric_integral(double t_adj, double B, double mu_drift, double
 
         if (status_cdf != GSL_SUCCESS) {
              Rcpp::Rcerr << "prdmswtn (SPV) GSL_ERROR: " << gsl_strerror(status_cdf) << " (code " << status_cdf << ")\n"
-                        << "  Inputs: t_adj=" << t_adj << ", B=" << B << ", A=" << A 
+                        << "  Inputs: t_adj=" << t_adj << ", b=" << b << ", A=" << A 
                         << ", mu_drift=" << mu_drift << ", sigma_drift=" << sigma_drift << std::endl;
             return 0.0; // Indicate failure
         }
 
-		// Normalization by A (width of the uniform distribution U(B, B+A))
+		// Normalization by A (width of the uniform distribution U(b, b+A))
         if (std::isnan(integral_val_cdf) || integral_val_cdf < 0) return 0.0;
         return integral_val_cdf / A;
     }
 }
 
+
+/* DEPRECATED for numerical stability purposes
+// PDF for SWTN -- expressed in natural scale terms and tested to ensure it gives the same output as Steingrover 2021 log_pdf JAGS implementation
+// t_adj is time already adjusted for non-decision time (t - theta)
+// alpha is threshold, mu_drift is mean drift, sigma_drift is drift standard deviation
+// [[Rcpp::export]]
+double dswtn(double t_adj, double alpha, double mu_drift, double sigma_drift, bool log_out=false) {
+    if (t_adj <= 1e-10) return R_NegInf; // log(0)
+    if (alpha <= 1e-10) return R_NegInf; // No boundary to hit, or ill-defined
+    if (sigma_drift < 0) return R_NaN; // standard deviation cannot be negative
+    // Handle sigma_drift == 0 case (becomes standard Wald)
+    if (sigma_drift <= 1e-10) {
+        if (mu_drift <= 1e-10) return R_NegInf; // No positive drift
+        return dwald_classic(t_adj, alpha, mu_drift, log_out);
+    }
+
+    double sigma_2 = std::pow(sigma_drift,2); // parameterize the RDM with std but formula uses variance
+	double prob_d_gt_0 = R::pnorm(mu_drift / sigma_drift, 0.0, 1.0, true, false);
+	if (std::isinf(prob_d_gt_0) || prob_d_gt_0 < 0) return R_NegInf; // if P(xi > 0) is zero
+	
+	double term1 = alpha;
+	double term2 = std::sqrt((2 * M_PI * std::pow(t_adj,3))*((t_adj*sigma_2)+1));
+	double term3 = 1 / prob_d_gt_0; // This is 1/P(xi>0)
+    double term4 = std::exp( - (std::pow(mu_drift * t_adj - alpha, 2)) / ((2 * t_adj) * (t_adj * sigma_2 + 1)) );
+    double term5 = R::pnorm( (alpha * sigma_2 + mu_drift) /(std::sqrt(t_adj * std::pow(sigma_2, 2) + sigma_2) ), 0.0, 1.0, true, false);
+	double pdf_val = (term1/term2) * term3 * term4 * term5;
+
+    if (pdf_val < 0.0 || std::isnan(pdf_val)) {
+		return log_out ? R_NegInf : 0;
+	}
+    return log_out ? std::log(pdf_val) : pdf_val;
+}
+*/
 
 #endif

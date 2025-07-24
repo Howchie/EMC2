@@ -1,7 +1,6 @@
 minimal_design <- function(design, covariates = NULL, drop_subjects = TRUE,
                            n_trials = 1, add_acc = TRUE, drop_R = TRUE,
                            drop_R_levels = TRUE, do_functions = TRUE, LT=NULL,LC=NULL,UC=NULL,UT=NULL,...) {
-  ##TODO add censoring/trunc
   dots <- add_defaults(list(...), verbose = TRUE)
   if(!is.null(design$Ffactors)) design <- list(design)
   out <- list()
@@ -28,7 +27,7 @@ minimal_design <- function(design, covariates = NULL, drop_subjects = TRUE,
     } else if(n_trials > 1){
       fac_df$trials <- 1:nrow(fac_df)
     }
-
+  
     ## 2.  Add covariates (if requested)
     if (!is.null(cur_des$Fcovariates)) {
       for (cv in cur_des$Fcovariates) {
@@ -65,7 +64,7 @@ minimal_design <- function(design, covariates = NULL, drop_subjects = TRUE,
     }
 
     ## 4.  Derive additional columns via Ffunctions (if any)
-    if (!is.null(cur_des$Ffunctions) & do_functions) {
+    if (!is.null(cur_des$Ffunctions) & do_functions & add_acc) {
       funs <- cur_des$Ffunctions
       if (!is.list(funs)) funs <- list(funs)
 
@@ -75,17 +74,18 @@ minimal_design <- function(design, covariates = NULL, drop_subjects = TRUE,
         fac_df[[nm]] <- res
       }
     }
-    snams <- fac_df$subjects
-    if(!is.null(LT)&!is.null(LC)&!is.null(UT)&!is.null(UC)){
-      if(length(LT)==1) LT <- setNames(rep(LT,length(snams)), snams)
-      if(length(UT)==1) UT <- setNames(rep(UT,length(snams)), snams)
-      if(length(LC)==1) LC <- setNames(rep(LC,length(snams)), snams)
-      if(length(UC)==1) UC <- setNames(rep(UC,length(snams)), snams)
-      fac_df$LT <- LT[as.character(fac_df$subjects)]
-      fac_df$UT <- UT[as.character(fac_df$subjects)]
-      fac_df$LC <- LC[as.character(fac_df$subjects)]
-      fac_df$UC <- UC[as.character(fac_df$subjects)]
-    }
+  if("LT"%in%colnames(fac_df))LT=fac_df$LT else{LT <- attr(fac_df,"LT")}; if (is.null(LT)) LT <- 0
+  if("UT"%in%colnames(fac_df))UT=fac_df$UT else{UT <- attr(fac_df,"UT")}; if (is.null(UT)) UT <- Inf
+  if("LC"%in%colnames(fac_df))LC=fac_df$LC else{LC <- attr(fac_df,"LC")}; if (is.null(LC)) LC <- 0
+  if("UC"%in%colnames(fac_df))UC=fac_df$UC else{UC <- attr(fac_df,"UC")}; if (is.null(UC)) UC <- Inf
+  if(length(LT)==1) {fac_df$LT = rep(LT,nrow(fac_df))}
+  else{fac_df$LT=LT}
+  if(length(UT)==1) {fac_df$UT = rep(UT,nrow(fac_df))}
+  else{fac_df$UT=UT}
+  if(length(LC)==1) {fac_df$LC = rep(LC,nrow(fac_df))}
+  else{fac_df$LC=LC}
+  if(length(UC)==1) {fac_df$UC = rep(UC,nrow(fac_df))}
+  else{fac_df$UC=UC}
     out[[i]] <- fac_df
   }
   if(length(out) == 1) out <- out[[1]]

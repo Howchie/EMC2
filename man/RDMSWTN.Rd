@@ -21,24 +21,24 @@ Default values are used for all parameters that are not explicitly listed in the
 argument of \code{design()}.
 
 #' Default values are used for all parameters that are not explicitly listed in the \code{formula}
-argument of \code{design()}.They can also be accessed with \code{RDM()$p_types}.\tabular{llllll}{
-   \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Mapping} \tab \strong{Interpretation} \cr
-   \emph{v} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Evidence-accumulation rate (drift rate) \cr
-   \emph{A} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Between-trial variation (range) in start point \cr
-   \emph{B} \tab log \tab [0, Inf] \tab log(1) \tab \emph{b} = \emph{B} + \emph{A} \tab Distance from \emph{A} to \emph{b} (response threshold) \cr
-   \emph{t0} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Non-decision time \cr
-   \emph{s} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Within-trial standard deviation of drift rate \cr
-   \emph{sv} \tab log \tab [0, Inf] \tab log(0.1) \tab  \tab Standard deviation of the trial-by-trial drift rate distribution \cr
-}
+argument of \code{design()}.They can also be accessed with \code{RDM()$p_types}.
 
+| \strong{Parameter} | \strong{Transform} | \strong{Natural scale} | \strong{Default}   | \strong{Mapping}          | \strong{Interpretation}                                                |
+|-----------|-----------|--------------  -|-----------|------------------|---------------------------------------------------------------|
+| \emph{v}       | log       | [0, Inf]      | log(1)    |                  | Evidence-accumulation rate (drift rate)                        |
+| \emph{zA}       | qnorm     | [0, 1]        | log(0)    |                  | Between-trial variation (range) in start point as a proportion of b (threshold)                 |
+| \emph{b}       | log       | [0, Inf]      | log(1)    |                  | Response threshold                  |
+| \emph{t0}      | log       | [0, Inf]      | log(0)    |                  | Non-decision time                                             |
+| \emph{s}       | log       | [0, Inf]      | log(1)    |                  | Within-trial standard deviation of drift rate                 |
+| \emph{cv}      | log       | [0, Inf]      | log(0.1)  |                  | Standard deviation of the trial-by-trial drift rate distribution, expressed as a coefficient of variation in terms of the corresponding drift rate   |
 
 All parameters are typically estimated on the log scale. \code{A} (start-point variability range)
 and \code{sv} (drift rate between trial variance) can be zero.
 \itemize{
-\item If \code{A=0} and \code{sv=0}, the model reduces to a simple Wald distribution with threshold \code{B} and drift \code{v}.
-\item If \code{sv=0} (and \code{A > 0}), the model reduces to the standard RDM (with start-point variability \code{A} and fixed drift \code{v}).
-\item If \code{A=0} (and \code{sv > 0}), the model reduces to a SWTN with a fixed threshold \code{B}.
-\code{B} should generally be positive, especially if \code{A=0}.
+\item If \code{zA=0} and \code{cv=0}, the model reduces to a simple Wald distribution with threshold \code{B} and drift \code{v}.
+\item If \code{cv=0} (and \code{zA > 0}), the model reduces to the standard RDM (with start-point variability \code{A} and fixed drift \code{v}).
+\item If \code{zA=0} (and \code{cv > 0}), the model reduces to a SWTN with a fixed threshold \code{B}.
+\code{b} should generally be positive, especially if \code{zA=0}.
 }
 
 Like the standard RDM, this is a race model with one SWTN-spv accumulator per response option.
