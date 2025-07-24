@@ -366,6 +366,7 @@ rRDMSWTN <- function(lR,pars,p_types=c("v","b","A","t0","sv"),ok=rep(TRUE,dim(pa
   t0 <- pars[,"t0"]
   pars <- pars[ok,,drop=FALSE]
   dt[ok] <- rSWTN(sum(ok),b=pars[,"b"],v=pars[,"v"],A=pars[,"A"],sv=pars[,"sv"])
+  
   R <- apply(dt,2,which.min)
   pick <- cbind(R,1:dim(dt)[2]) # Matrix to pick winner
   # Any t0 difference with lR due to response production time (no effect on race)
@@ -379,6 +380,7 @@ rRDMSWTN <- function(lR,pars,p_types=c("v","b","A","t0","sv"),ok=rep(TRUE,dim(pa
 rSWTN <- function(n,b,v,A,sv)
   # random function for single accumulator
 {
+  
   out=numeric(n)
   if (n>1 & all(length(A)==1,length(v)==1,length(b)==1,length(sv==1))) {
     A=rep(A,n)
@@ -386,7 +388,7 @@ rSWTN <- function(n,b,v,A,sv)
     v=rep(v,n)
     sv=rep(sv,n)
   }
-  b = ifelse(A==0,b,runif(n,b, b + A)) # adjust for spv U[0,A]
+  b = ifelse(A==0,b,runif(n,b-A, b)) # adjust for spv U[0,A]
   l = ifelse(sv==0,v,msm::rtnorm(n,mean=v,sd=sv,lower=0,upper=Inf)) # between trial variability
   
   ok <- !l<0

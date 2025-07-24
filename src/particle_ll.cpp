@@ -420,14 +420,14 @@ double gsl_f_race_adapter(double t, void *p) {
 	ll[winner]=win;
 	double ll_out = 0.0;
     if (params->n_acc > 1) {
-        Rcpp::NumericVector loss_cdfs = log(params->model_pfun(t_vec, p_mat, isok, !winner, ctx));
+        Rcpp::NumericVector loss_cdfs = params->model_pfun(t_vec, p_mat, isok, !winner, ctx);
 		Rcpp::NumericVector loss(loss_cdfs.size());
 		for (int j = 0; j < loss_cdfs.size(); ++j) {
-			double log_cdf = loss_cdfs[j];
-			if (log_cdf > -1e-9) { // Safety check: if cdf is basically 1
+			double cdf = loss_cdfs[j];
+			if (cdf > -1e-9) { // Safety check: if cdf is basically 1
 				loss[j] = R_NegInf; // log(0)
 			} else {
-				loss[j] = std::log1p(-std::exp(log_cdf));
+				loss[j] = std::log1p(-cdf);
 			}
 		}
 		ll[!winner] = loss;
@@ -984,9 +984,9 @@ double c_log_likelihood_redundant_target_race(
     Rcpp::CharacterVector resp = dadm["R"];
 	Rcpp::CharacterVector LogicalRule = dadm["LogicalRule"];
     Rcpp::LogicalVector all_idx(n_trials, true); // No such thing as "winner" in the normal context
-    Rcpp::NumericVector f_all = model_dfun(rts, pars, all_idx, ok_params, model_specific_context);
-    Rcpp::NumericVector F_all = model_pfun(rts, pars, all_idx, ok_params, model_specific_context);
-
+    Rcpp::NumericVector f_all = model_dfun(rts, pars, ok_params, all_idx, model_specific_context);
+    Rcpp::NumericVector F_all = model_pfun(rts, pars, ok_params, all_idx, model_specific_context);
+	
 	//ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(model_specific_context);
 	//std::string LogicalRule = ctx->LogicalRule;
     int n_unique_trials = n_trials / 4;
@@ -1026,6 +1026,8 @@ double c_log_likelihood_redundant_target_race(
       }
     }
 	double pp_j;
+	double p;
+	double q;
     for(int j=0; j<n_unique_trials; ++j){
         int start = j*4;
 		pp_j = 0;
@@ -1039,40 +1041,51 @@ double c_log_likelihood_redundant_target_race(
             else if(r == "n_A"){ fnA = f_all[idx]; FnA = F_all[idx]; }
             else if(r == "n_B"){ fnB = f_all[idx]; FnB = F_all[idx]; }
         }
+		double one_m_FB = std::max(1e-12, 1.0 - FB);
+		double one_m_FA = std::max(1e-12, 1.0 - FA);
+		double one_m_FnB = std::max(1e-12, 1.0 - FnB);
+		double one_m_FnA = std::max(1e-12, 1.0 - FnA);
+		double one_m_FnAFnB = std::max(1e-12, 1.0 - FnA * FnB);
+		double one_m_FAFB = std::max(1e-12, 1.0 - FA * FB);
         std::string r_obs = Rcpp::as<std::string>(resp[start]);
-		
-		double p = pars(start, rulebreak_col);
-		double q = pars(start, q_col);
+		if (use_rulebreak) {
+			p = pars(start, rulebreak_col);
+			q = pars(start, q_col);
+		}
         if (LogicalRule[start]=="OR") {
 			if(r_obs == "yes"){
-				pp_j = (fA*(1.0-FB) + fB*(1.0-FA)) * (1.0 - (FnA*FnB));
-				if(use_rulebreak & !std::isnan(p)) {				
-					double p_rulebreak = (q * fB*(1.0-FnB)) + ((1-q)*fA*(1.0-FnA));
+				pp_j = (fA*one_m_FB + fB*one_m_FA) * one_m_FnAFnB;
+				if(use_rulebreak && !std::isnan(p) && q_col) {				
+					double p_rulebreak = (q * fB*one_m_FnB) + ((1-q)*fA*one_m_FA);
 					pp_j=p*pp_j + (1-p)*p_rulebreak;
 				}
 			} else if(r_obs == "no"){
-				pp_j = (fnA*FnB + fnB*FnA) * ((1.0-FA)*(1.0-FB));
-				if(use_rulebreak & !std::isnan(p)) {					
-					double p_rulebreak = (q * fnB*(1.0-FB)) + ((1-q)*fnA*(1.0-FA));
+				pp_j = (fnA*FnB + fnB*FnA) * (one_m_FA*one_m_FB);
+				if(use_rulebreak && !std::isnan(p) && q_col) {					
+					double p_rulebreak = (q * fnB*one_m_FnB) + ((1-q)*fnA*one_m_FA);
 					pp_j=p*pp_j + (1-p)*p_rulebreak;
 				}
 			}
 		} else if (LogicalRule[start]=="AND") {
 			if(r_obs == "no"){
-				pp_j = (fnA*(1.0-FnB) + fnB*(1.0-FnA)) * (1.0 - (FA*FB));
-				if(use_rulebreak & !std::isnan(p)) {
-					double p_rulebreak = (q * fnB*(1.0-FB)) + ((1-q)*fnA*(1.0-FA));
+				pp_j = (fnA*one_m_FnB + fnB*one_m_FnA) * one_m_FAFB;
+				if(use_rulebreak && !std::isnan(p) && q_col) {
+					double p_rulebreak = (q * fnB*one_m_FnB) + ((1-q)*fnA*one_m_FA);
 					pp_j=p*pp_j + (1-p)*p_rulebreak;
 				}
 			} else if(r_obs == "yes"){
-				pp_j = (fA*FB + fB*FA) * ((1.0-FnA)*(1.0-FnB));
-				if(use_rulebreak & !std::isnan(p)) {
-					double p_rulebreak = (q * fB*(1.0-FnB)) + ((1-q)*fA*(1.0-FnA));
+				pp_j = (fA*FB + fB*FA) * (one_m_FnA*one_m_FnB);
+				if(use_rulebreak && !std::isnan(p) && q_col>-1) {
+					double p_rulebreak = (q * fB*one_m_FnB) + ((1-q)*fA*one_m_FA);
 					pp_j=p*pp_j + (1-p)*p_rulebreak;
 				}
 			}
 		}
-		ll_unique[j] = std::log(pp_j);
+		if (pp_j <= 0.0 || !R_FINITE(pp_j)) {
+			ll_unique[j] = min_ll;
+		} else {
+			ll_unique[j] = std::log(pp_j);
+		}
     }
 
     Rcpp::NumericVector ll_exp = c_expand(ll_unique, expand);

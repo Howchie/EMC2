@@ -535,7 +535,7 @@ NumericVector pSWTNspv(NumericVector t, NumericVector v, NumericVector b, Numeri
 
 // [[Rcpp::export]]
 NumericVector drdmswtn_c(NumericVector rts, NumericMatrix pars, LogicalVector idx, double min_ll, LogicalVector is_ok, bool log_out=false){
-  //v = 0, b = 1, A = 2, t0 = 3, s = 4, cv=5
+  //v = 0, b = 1, zA = 2, t0 = 3, s = 4, cv=5
 	NumericVector out(sum(idx));
   int k = 0;
   for(int i = 0; i < rts.length(); i++){
@@ -558,7 +558,7 @@ NumericVector drdmswtn_c(NumericVector rts, NumericMatrix pars, LogicalVector id
 
 // [[Rcpp::export]]
 NumericVector prdmswtn_c(NumericVector rts, NumericMatrix pars, LogicalVector idx, double min_ll, LogicalVector is_ok, bool log_out=false){
-  //v = 0, b = 1, A = 2, t0 = 3, s = 4, cv=5
+  //v = 0, b = 1, zA = 2, t0 = 3, s = 4, cv=5
   NumericVector out(sum(idx));
   int k = 0;
   for(int i = 0; i < rts.length(); i++){

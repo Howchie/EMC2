@@ -141,6 +141,7 @@ start_proposals <- function(s, parameters, n_particles, pmwgs, type){
                         model = pmwgs$model)
   weight <- exp(lw - max(lw))
   idx <- sample(x = n_particles, size = 1, prob = weight)
+  
   return(list(proposal = proposals[idx,], ll = lw[idx]))
 }
 
@@ -679,7 +680,7 @@ calc_ll_manager <- function(proposals, dadm, model, component = NULL){
       }
       constants <- attr(dadm, "constants")
       if(is.null(constants)) constants <- NA
-      lls <- calc_ll(proposals, dadm, constants = constants, designs = designs, type = model$c_name,
+      lls = calc_ll(proposals, dadm, constants = constants, designs = designs, type = model$c_name,
                      model$bound, model$transform, model$pre_transform, p_types = p_types, min_ll = log(1e-10),
                      model$trend)
     }
