@@ -365,7 +365,7 @@ rRDMSWTN <- function(lR,pars,p_types=c("v","b","A","t0","sv"),ok=rep(TRUE,dim(pa
   dt <- matrix(Inf,nrow=nr,ncol=nrow(pars)/nr)
   t0 <- pars[,"t0"]
   pars <- pars[ok,,drop=FALSE]
-  dt[ok] <- rSWTN(sum(ok),B=pars[,"b"],v=pars[,"v"],A=pars[,"A"],sv=pars[,"sv"])
+  dt[ok] <- rSWTN(sum(ok),b=pars[,"b"],v=pars[,"v"],A=pars[,"A"],sv=pars[,"sv"])
   R <- apply(dt,2,which.min)
   pick <- cbind(R,1:dim(dt)[2]) # Matrix to pick winner
   # Any t0 difference with lR due to response production time (no effect on race)
