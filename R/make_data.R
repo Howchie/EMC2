@@ -317,7 +317,7 @@ LogicalRules_rfun <- function(data, pars, model){
   }
   Rrt = Rrti %>%
     as.data.frame() %>%
-    dplyr::mutate(R = case_when (df$RuleFollow & df$LogicalRule=="OR" & Rrti[,"A"]<Rrti[,"B"] & (Rrti[,"n_A"]>Rrti[,"A"] | Rrti[,"n_B"]>Rrti[,"A"]) ~ "yes", # target finishes before at least one absent
+    dplyr::mutate(R = dplyr::case_when (df$RuleFollow & df$LogicalRule=="OR" & Rrti[,"A"]<Rrti[,"B"] & (Rrti[,"n_A"]>Rrti[,"A"] | Rrti[,"n_B"]>Rrti[,"A"]) ~ "yes", # target finishes before at least one absent
                                  df$RuleFollow & df$LogicalRule=="OR" & Rrti[,"B"]<Rrti[,"A"] & (Rrti[,"n_A"]>Rrti[,"B"] | Rrti[,"n_B"]>Rrti[,"B"]) ~ "yes", # target finishes before at least one absent
                                  df$RuleFollow & df$LogicalRule=="OR" & Rrti[,"n_A"]<Rrti[,"A"] & Rrti[,"n_B"]<Rrti[,"A"] & Rrti[,"n_A"]<Rrti[,"B"] & Rrti[,"n_B"]<Rrti[,"B"] ~ "no",
                                  df$RuleFollow & df$LogicalRule=="AND" & Rrti[,"n_A"]<Rrti[,"n_B"] & (Rrti[,"A"]>Rrti[,"n_A"] | Rrti[,"B"]>Rrti[,"n_A"]) ~ "no", # absent finishes before at least one target
@@ -327,7 +327,7 @@ LogicalRules_rfun <- function(data, pars, model){
                                  !df$RuleFollow & df$ChannelA & Rrti[,"n_A"]<Rrti[,"A"] ~ "no",
                                  !df$RuleFollow & !df$ChannelA & Rrti[,"B"]<Rrti[,"n_B"] ~ "yes",
                                  !df$RuleFollow & !df$ChannelA & Rrti[,"n_B"]<Rrti[,"B"] ~ "no"),
-           rt = case_when (df$RuleFollow & df$LogicalRule=="OR" & Rrti[,"A"]<Rrti[,"B"] & (Rrti[,"n_A"]>Rrti[,"A"] | Rrti[,"n_B"]>Rrti[,"A"]) ~ Rrti[,"A"], # target finishes before at least one absent
+           rt = dplyr::case_when (df$RuleFollow & df$LogicalRule=="OR" & Rrti[,"A"]<Rrti[,"B"] & (Rrti[,"n_A"]>Rrti[,"A"] | Rrti[,"n_B"]>Rrti[,"A"]) ~ Rrti[,"A"], # target finishes before at least one absent
                            df$RuleFollow & df$LogicalRule=="OR" & Rrti[,"B"]<Rrti[,"A"] & (Rrti[,"n_A"]>Rrti[,"B"] | Rrti[,"n_B"]>Rrti[,"B"]) ~ Rrti[,"B"], # target finishes before at least one absent
                            df$RuleFollow & df$LogicalRule=="OR" & (Rrti[,"n_A"]<Rrti[,"A"] & Rrti[,"n_B"]<Rrti[,"A"] & Rrti[,"n_A"]<Rrti[,"B"] & Rrti[,"n_B"]<Rrti[,"B"])  ~ pmax(Rrti[,"n_A"],Rrti[,"n_B"]),
                            df$RuleFollow & df$LogicalRule=="AND" & Rrti[,"n_A"]<Rrti[,"n_B"] & (Rrti[,"A"]>Rrti[,"n_A"] | Rrti[,"B"]>Rrti[,"n_A"]) ~ Rrti[,"n_A"], # absent finishes before at least one target
