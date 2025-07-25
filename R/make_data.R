@@ -306,7 +306,7 @@ LogicalRules_rfun <- function(data, pars, model){
   RACE <- levels(data$lR) # should be 4 unless using a non-standard implementation
   df = data.frame(LogicalRule = data$LogicalRule[data$lR==levels(data$lR)[1]],
                   RuleFollow = rbinom(dim(data)[1]/length(levels(data$lR)),1,pars[data$lR==levels(data$lR)[1],"p"])==1,
-                  ChannelA = rbinom(dim(data)[1]/length(levels(data$lR)),1,pars[data$lR==levels(data$lR)[1],"q"])==1)
+                  ChannelA = rbinom(dim(data)[1]/length(levels(data$lR)),1,1-pars[data$lR==levels(data$lR)[1],"q"])==1)
   for (i in RACE) {
     pick <- data$lR==i
     data_in <- data[pick,]
