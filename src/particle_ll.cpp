@@ -1056,13 +1056,13 @@ double c_log_likelihood_redundant_target_race(
 			if(r_obs == "yes"){
 				pp_j = (fA*one_m_FB + fB*one_m_FA) * one_m_FnAFnB;
 				if(use_rulebreak && !std::isnan(p) && q_col) {				
-					double p_rulebreak = (q * fB*one_m_FnB) + ((1-q)*fA*one_m_FA);
+					double p_rulebreak = (q * fB*one_m_FnB) + ((1-q)*fA*one_m_FnA);
 					pp_j=p*pp_j + (1-p)*p_rulebreak;
 				}
 			} else if(r_obs == "no"){
 				pp_j = (fnA*FnB + fnB*FnA) * (one_m_FA*one_m_FB);
 				if(use_rulebreak && !std::isnan(p) && q_col) {					
-					double p_rulebreak = (q * fnB*one_m_FnB) + ((1-q)*fnA*one_m_FA);
+					double p_rulebreak = (q * fnB*one_m_FB) + ((1-q)*fnA*one_m_FA);
 					pp_j=p*pp_j + (1-p)*p_rulebreak;
 				}
 			}
@@ -1070,13 +1070,13 @@ double c_log_likelihood_redundant_target_race(
 			if(r_obs == "no"){
 				pp_j = (fnA*one_m_FnB + fnB*one_m_FnA) * one_m_FAFB;
 				if(use_rulebreak && !std::isnan(p) && q_col) {
-					double p_rulebreak = (q * fnB*one_m_FnB) + ((1-q)*fnA*one_m_FA);
+					double p_rulebreak = (q * fnB*one_m_FB) + ((1-q)*fnA*one_m_FA);
 					pp_j=p*pp_j + (1-p)*p_rulebreak;
 				}
 			} else if(r_obs == "yes"){
 				pp_j = (fA*FB + fB*FA) * (one_m_FnA*one_m_FnB);
 				if(use_rulebreak && !std::isnan(p) && q_col>-1) {
-					double p_rulebreak = (q * fB*one_m_FnB) + ((1-q)*fA*one_m_FA);
+					double p_rulebreak = (q * fB*one_m_FnB) + ((1-q)*fA*one_m_FnA);
 					pp_j=p*pp_j + (1-p)*p_rulebreak;
 				}
 			}
