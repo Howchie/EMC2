@@ -16,6 +16,7 @@ double dnormP(double x, double mean = 0.0, double sd = 1.0,
   return R::dnorm(x, mean, sd, log_out);
 }
 
+// [[Rcpp::export]]
 double plba_norm(double t, double A, double b, double v, double sv,
                  bool posdrift = true, bool log_out=false){
   double denom = 1.0;
@@ -48,6 +49,7 @@ double plba_norm(double t, double A, double b, double v, double sv,
 	return log_out ? std::log(cdf_val) : cdf_val;
 }
 
+// [[Rcpp::export]]
 double dlba_norm(double t, double A,double b, double v, double sv,
                  bool posdrift = true, bool log_out=false){
   double denom = 1.0;
@@ -76,6 +78,7 @@ double dlba_norm(double t, double A,double b, double v, double sv,
   return log_out ? std::log(pdf_val) : pdf_val;
 }
 
+// [[Rcpp::export]]
 NumericVector dlba_c(NumericVector rts, NumericMatrix pars, LogicalVector idx, double min_ll, LogicalVector is_ok, bool use_posdrift = true, bool log_out=false){ // Added use_posdrift
   //v = 0, sv = 1, B = 2, A = 3, t0 = 4
   int n = sum(idx);
@@ -97,6 +100,7 @@ NumericVector dlba_c(NumericVector rts, NumericMatrix pars, LogicalVector idx, d
   return(out);
 }
 
+// [[Rcpp::export]]
 NumericVector plba_c(NumericVector rts, NumericMatrix pars, LogicalVector idx, double min_ll, LogicalVector is_ok, bool use_posdrift = true, bool log_out=false){ // Added use_posdrift
   //v = 0, sv = 1, B = 2, A = 3, t0 = 4
   int n = sum(idx);

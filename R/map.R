@@ -4,7 +4,7 @@ do_transform <- function(pars, model)
   ptypes <- get_p_types(colnames(pars))
   isexp    <- transform$func[ptypes] == "exp"
   isprobit <- transform$func[ptypes] == "pnorm"
-  
+  islogis <- transform$func[ptypes] == "plogit"
   ## exp link:  lower + exp(real)
   pars[, isexp] <- sweep(
     exp(pars[, isexp, drop = FALSE]), 2,
@@ -16,6 +16,13 @@ do_transform <- function(pars, model)
           transform$upper[ptypes[isprobit]] -
             transform$lower[ptypes[isprobit]], "*"),
     2, transform$lower[ptypes[isprobit]], "+")
+  
+  ## logis link: lower + (upper‑lower) * plogis(real)
+  pars[, islogis] <- sweep(
+    sweep(plogis(pars[, islogis, drop = FALSE]), 2,
+          transform$upper[ptypes[islogis]] -
+            transform$lower[ptypes[islogis]], "*"),
+    2, transform$lower[ptypes[islogis]], "+")
   pars
 }
 #' @export
@@ -26,7 +33,7 @@ do_reverse_transform <- function(pars, model)
   ptypes <- get_p_types(colnames(pars))
   islog    <- transform$func[ptypes] == "exp"
   isqnorm <- transform$func[ptypes] == "pnorm"
-  
+  isqlogit <- transform$func[ptypes] == "plogit"
   ## Log link:
   # residual on the natural scale
   pars[, islog] <- mapply(
@@ -47,8 +54,22 @@ do_reverse_transform <- function(pars, model)
     2, lower, "-"
   )
   scaled <- sweep(clamped, 2, upper - lower, "/")
-  
   pars[, isqnorm] <- qnorm(scaled)
+  
+  # Logis link:
+  # Get lower and upper bounds per column
+  lower <- model$bound$minmax[1, ptypes[isqlogit]]
+  upper <- model$bound$minmax[2, ptypes[isqlogit]]
+  
+  # Clamp the values in pars to [lower, upper] per column
+  clamped <- sweep(
+    pmin(pmax(pars[, isqlogit, drop = FALSE], rep(lower, each = nrow(pars))),
+         rep(upper, each = nrow(pars))),
+    2, lower, "-"
+  )
+  scaled <- sweep(clamped, 2, upper - lower, "/")
+  pars[, isqlogit] <- qlogis(scaled)
+  
   pars
 
 }
@@ -69,6 +90,7 @@ do_reverse_transform_variance <- function(mu_nat, var, model, prop=TRUE)
   trf      <- model$transform$func[ptypes]
   is_log   <- trf == "exp"
   is_qnorm <- trf == "pnorm"
+  is_qlogis<- trf == "plogis"
   is_nat   <- trf == "identity"
   ## -- allocate outputs -------------------------------------------------------
   var_tr  <- matrix(NA,  ncol = ncol(mu_nat), nrow = nrow(var_prop))
@@ -110,16 +132,58 @@ do_reverse_transform_variance <- function(mu_nat, var, model, prop=TRUE)
       if (any(p <= 0) || any(p >= 1))          stop("mean outside (lower, upper)")
       a <- qnorm(p)                   # STANDARD-NORMAL CUT-POINT, nothing fancy
       
-      for (i in 1:nrow(var_nat)) {
-        if(!var_nat[i,j]==0) {
-          var_tr[i, j] <- uniroot(make_root(mu_nat[j], var_nat[i,j], 
+
+      if(!var_nat[j,j]==0) {
+        var_tr[j, j] <- uniroot(make_root(mu_nat[j], var_nat[j,j], 
                                                      model$bound$minmax[1,ptypes[j]], model$bound$minmax[2,ptypes[j]]),
                                            c(-1e-6, 50))$root
-          par_tr[1, j] = a*sqrt(1+var_tr[i,j])
-        }
+        par_tr[1, j] = a*sqrt(1+var_tr[j,j])
       }
     }
   }
+  
+  # Logis has no analytic solution so combine integration and root finding
+  # Mean of plogis(N(mu, sigma^2))
+  logit_mean <- function(mu, sigma) {
+    integrand <- function(x) plogis(x) * dnorm(x, mean = mu, sd = sigma)
+    integrate(integrand, -20, 20)$value
+  }
+  
+  # Variance of plogis(N(mu, sigma^2))
+  logit_var <- function(mu, sigma) {
+    m <- logit_mean(mu, sigma)
+    integrand <- function(x) plogis(x)^2 * dnorm(x, mean = mu, sd = sigma)
+    integrate(integrand, -20, 20)$value - m^2
+  }
+  find_mu_logit <- function(target_mean, sigma) {
+    uniroot(function(mu) logit_mean(mu, sigma) - target_mean, c(-10, 10))$root
+  }
+  
+  find_sigma_logit <- function(target_var, mu) {
+    uniroot(function(sigma) logit_var(mu, sigma) - target_var, c(1e-6, 10))$root
+  }
+  for (j in 1:ncol(var_nat)) {
+    if (is_qlogis[j]) {
+      lower = model$bound$minmax[1, ptypes[j]]
+      upper = model$bound$minmax[2, ptypes[j]]
+      W <- upper - lower
+      target_mean = (mu_nat[j] - lower) / W
+      target_var = var_nat[1, j] / W^2
+      # Step 1: Fix sigma (start with 1), find mu such that mean matches
+      sigma0 = 1
+      mu0 = find_mu_logit(target_mean, sigma0)
+      
+      # Step 2: Now root-find sigma for the target variance
+      sigma = find_sigma_logit(target_var, mu0)
+      
+      # Step 3: Re-solve for mu at the found sigma
+      mu = find_mu_logit(target_mean, sigma)
+      
+      var_tr[j, j] = sigma^2
+      par_tr[1, j] = mu
+      }
+  }
+  
 out = data.frame(pars=par_tr[1,],var=diag(var_tr),row.names = colnames(mu_nat))
 }
 

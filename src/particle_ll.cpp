@@ -986,7 +986,9 @@ double c_log_likelihood_redundant_target_race(
     Rcpp::LogicalVector all_idx(n_trials, true); // No such thing as "winner" in the normal context
     Rcpp::NumericVector f_all = model_dfun(rts, pars, ok_params, all_idx, model_specific_context);
     Rcpp::NumericVector F_all = model_pfun(rts, pars, ok_params, all_idx, model_specific_context);
-	
+	double rt_min = Rcpp::min(rts);
+	double rt_max = Rcpp::max(rts);
+	double u_density = 1.0 / std::max(1e-12, rt_max - rt_min);
 	//ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(model_specific_context);
 	//std::string LogicalRule = ctx->LogicalRule;
     int n_unique_trials = n_trials / 4;
@@ -995,8 +997,10 @@ double c_log_likelihood_redundant_target_race(
 	// Here we check for a rule-following parameter (p) corresponding to probability of processing only a single channel with probability q.
 	// Index the column (if it exists)
 	bool use_rulebreak = false;
+	bool use_guess = false;
     int rulebreak_col = -1;
 	int q_col = -1;
+	int guess_col =-1;
 	Rcpp::List dimnames = pars.attr("dimnames");
 	Rcpp::CharacterVector colnames = as<Rcpp::CharacterVector>(dimnames[1]);
     for (int j = 0; j < colnames.size(); ++j) {
@@ -1006,6 +1010,14 @@ double c_log_likelihood_redundant_target_race(
         break;
       }
     }
+	// Same for guesses
+	for (int j = 0; j < colnames.size(); ++j) {
+		if (as<std::string>(colnames[j]) == "r") {
+			guess_col = j;
+			use_guess = true;
+			break;
+		}
+	}
 	// If we're rulebreaking, find the index of column q, then also check that the rulebreak probability isn't hardcoded to zero
     if (use_rulebreak) {
 		for (int j = 0; j < colnames.size(); ++j) {
@@ -1028,6 +1040,7 @@ double c_log_likelihood_redundant_target_race(
 	double pp_j;
 	double p;
 	double q;
+	double r;
     for(int j=0; j<n_unique_trials; ++j){
         int start = j*4;
 		pp_j = 0;
@@ -1055,13 +1068,13 @@ double c_log_likelihood_redundant_target_race(
         if (LogicalRule[start]=="OR") {
 			if(r_obs == "yes"){
 				pp_j = (fA*one_m_FB + fB*one_m_FA) * one_m_FnAFnB;
-				if(use_rulebreak && !std::isnan(p) && q_col) {				
+				if(use_rulebreak && !std::isnan(p) && q_col>-1) {				
 					double p_rulebreak = (q * fB*one_m_FnB) + ((1-q)*fA*one_m_FnA);
 					pp_j=p*pp_j + (1-p)*p_rulebreak;
 				}
 			} else if(r_obs == "no"){
 				pp_j = (fnA*FnB + fnB*FnA) * (one_m_FA*one_m_FB);
-				if(use_rulebreak && !std::isnan(p) && q_col) {					
+				if(use_rulebreak && !std::isnan(p) && q_col>-1) {					
 					double p_rulebreak = (q * fnB*one_m_FB) + ((1-q)*fnA*one_m_FA);
 					pp_j=p*pp_j + (1-p)*p_rulebreak;
 				}
@@ -1069,7 +1082,7 @@ double c_log_likelihood_redundant_target_race(
 		} else if (LogicalRule[start]=="AND") {
 			if(r_obs == "no"){
 				pp_j = (fnA*one_m_FnB + fnB*one_m_FnA) * one_m_FAFB;
-				if(use_rulebreak && !std::isnan(p) && q_col) {
+				if(use_rulebreak && !std::isnan(p) && q_col>-1) {
 					double p_rulebreak = (q * fnB*one_m_FB) + ((1-q)*fnA*one_m_FA);
 					pp_j=p*pp_j + (1-p)*p_rulebreak;
 				}
@@ -1080,6 +1093,12 @@ double c_log_likelihood_redundant_target_race(
 					pp_j=p*pp_j + (1-p)*p_rulebreak;
 				}
 			}
+		}
+		if (use_guess) {
+			r = pars(start, guess_col);
+			// guess_pdf is RT-uniform and response-uniform (0.5 each)
+			double guess_pdf = 0.5 * u_density;
+			pp_j = (1.0 - r) * pp_j + r * guess_pdf;
 		}
 		if (pp_j <= 0.0 || !R_FINITE(pp_j)) {
 			ll_unique[j] = min_ll;

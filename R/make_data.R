@@ -338,7 +338,6 @@ LogicalRules_rfun <- function(data, pars, model){
                            !df$RuleFollow & !df$ChannelA & Rrti[,"B"]<Rrti[,"n_B"] ~ Rrti[,"B"],
                            !df$RuleFollow & !df$ChannelA & Rrti[,"n_B"]<Rrti[,"B"] ~ Rrti[,"n_B"])) %>%
     dplyr::select(R,rt)
-           
   Rrt$R <- factor(Rrt$R,levels=c("no","yes"))
   return(Rrt)
 }

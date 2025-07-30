@@ -21,6 +21,22 @@ calculate_subject_means <- function(group_designs, params, n_subjects, n_pars) {
     .Call(`_EMC2_calculate_subject_means`, group_designs, params, n_subjects, n_pars)
 }
 
+plba_norm <- function(t, A, b, v, sv, posdrift = TRUE, log_out = FALSE) {
+    .Call(`_EMC2_plba_norm`, t, A, b, v, sv, posdrift, log_out)
+}
+
+dlba_norm <- function(t, A, b, v, sv, posdrift = TRUE, log_out = FALSE) {
+    .Call(`_EMC2_dlba_norm`, t, A, b, v, sv, posdrift, log_out)
+}
+
+dlba_c <- function(rts, pars, idx, min_ll, is_ok, use_posdrift = TRUE, log_out = FALSE) {
+    .Call(`_EMC2_dlba_c`, rts, pars, idx, min_ll, is_ok, use_posdrift, log_out)
+}
+
+plba_c <- function(rts, pars, idx, min_ll, is_ok, use_posdrift = TRUE, log_out = FALSE) {
+    .Call(`_EMC2_plba_c`, rts, pars, idx, min_ll, is_ok, use_posdrift, log_out)
+}
+
 dlba <- function(t, A, b, v, sv, posdrift = TRUE) {
     .Call(`_EMC2_dlba`, t, A, b, v, sv, posdrift)
 }

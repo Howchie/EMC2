@@ -84,6 +84,74 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// plba_norm
+double plba_norm(double t, double A, double b, double v, double sv, bool posdrift, bool log_out);
+RcppExport SEXP _EMC2_plba_norm(SEXP tSEXP, SEXP ASEXP, SEXP bSEXP, SEXP vSEXP, SEXP svSEXP, SEXP posdriftSEXP, SEXP log_outSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< double >::type t(tSEXP);
+    Rcpp::traits::input_parameter< double >::type A(ASEXP);
+    Rcpp::traits::input_parameter< double >::type b(bSEXP);
+    Rcpp::traits::input_parameter< double >::type v(vSEXP);
+    Rcpp::traits::input_parameter< double >::type sv(svSEXP);
+    Rcpp::traits::input_parameter< bool >::type posdrift(posdriftSEXP);
+    Rcpp::traits::input_parameter< bool >::type log_out(log_outSEXP);
+    rcpp_result_gen = Rcpp::wrap(plba_norm(t, A, b, v, sv, posdrift, log_out));
+    return rcpp_result_gen;
+END_RCPP
+}
+// dlba_norm
+double dlba_norm(double t, double A, double b, double v, double sv, bool posdrift, bool log_out);
+RcppExport SEXP _EMC2_dlba_norm(SEXP tSEXP, SEXP ASEXP, SEXP bSEXP, SEXP vSEXP, SEXP svSEXP, SEXP posdriftSEXP, SEXP log_outSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< double >::type t(tSEXP);
+    Rcpp::traits::input_parameter< double >::type A(ASEXP);
+    Rcpp::traits::input_parameter< double >::type b(bSEXP);
+    Rcpp::traits::input_parameter< double >::type v(vSEXP);
+    Rcpp::traits::input_parameter< double >::type sv(svSEXP);
+    Rcpp::traits::input_parameter< bool >::type posdrift(posdriftSEXP);
+    Rcpp::traits::input_parameter< bool >::type log_out(log_outSEXP);
+    rcpp_result_gen = Rcpp::wrap(dlba_norm(t, A, b, v, sv, posdrift, log_out));
+    return rcpp_result_gen;
+END_RCPP
+}
+// dlba_c
+NumericVector dlba_c(NumericVector rts, NumericMatrix pars, LogicalVector idx, double min_ll, LogicalVector is_ok, bool use_posdrift, bool log_out);
+RcppExport SEXP _EMC2_dlba_c(SEXP rtsSEXP, SEXP parsSEXP, SEXP idxSEXP, SEXP min_llSEXP, SEXP is_okSEXP, SEXP use_posdriftSEXP, SEXP log_outSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type rts(rtsSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type pars(parsSEXP);
+    Rcpp::traits::input_parameter< LogicalVector >::type idx(idxSEXP);
+    Rcpp::traits::input_parameter< double >::type min_ll(min_llSEXP);
+    Rcpp::traits::input_parameter< LogicalVector >::type is_ok(is_okSEXP);
+    Rcpp::traits::input_parameter< bool >::type use_posdrift(use_posdriftSEXP);
+    Rcpp::traits::input_parameter< bool >::type log_out(log_outSEXP);
+    rcpp_result_gen = Rcpp::wrap(dlba_c(rts, pars, idx, min_ll, is_ok, use_posdrift, log_out));
+    return rcpp_result_gen;
+END_RCPP
+}
+// plba_c
+NumericVector plba_c(NumericVector rts, NumericMatrix pars, LogicalVector idx, double min_ll, LogicalVector is_ok, bool use_posdrift, bool log_out);
+RcppExport SEXP _EMC2_plba_c(SEXP rtsSEXP, SEXP parsSEXP, SEXP idxSEXP, SEXP min_llSEXP, SEXP is_okSEXP, SEXP use_posdriftSEXP, SEXP log_outSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type rts(rtsSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type pars(parsSEXP);
+    Rcpp::traits::input_parameter< LogicalVector >::type idx(idxSEXP);
+    Rcpp::traits::input_parameter< double >::type min_ll(min_llSEXP);
+    Rcpp::traits::input_parameter< LogicalVector >::type is_ok(is_okSEXP);
+    Rcpp::traits::input_parameter< bool >::type use_posdrift(use_posdriftSEXP);
+    Rcpp::traits::input_parameter< bool >::type log_out(log_outSEXP);
+    rcpp_result_gen = Rcpp::wrap(plba_c(rts, pars, idx, min_ll, is_ok, use_posdrift, log_out));
+    return rcpp_result_gen;
+END_RCPP
+}
 // dlba
 NumericVector dlba(NumericVector t, NumericVector A, NumericVector b, NumericVector v, NumericVector sv, bool posdrift);
 RcppExport SEXP _EMC2_dlba(SEXP tSEXP, SEXP ASEXP, SEXP bSEXP, SEXP vSEXP, SEXP svSEXP, SEXP posdriftSEXP) {
@@ -880,6 +948,10 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_pbvn_drezner", (DL_FUNC) &_EMC2_pbvn_drezner, 3},
     {"_EMC2_sp_new", (DL_FUNC) &_EMC2_sp_new, 10},
     {"_EMC2_calculate_subject_means", (DL_FUNC) &_EMC2_calculate_subject_means, 4},
+    {"_EMC2_plba_norm", (DL_FUNC) &_EMC2_plba_norm, 7},
+    {"_EMC2_dlba_norm", (DL_FUNC) &_EMC2_dlba_norm, 7},
+    {"_EMC2_dlba_c", (DL_FUNC) &_EMC2_dlba_c, 7},
+    {"_EMC2_plba_c", (DL_FUNC) &_EMC2_plba_c, 7},
     {"_EMC2_dlba", (DL_FUNC) &_EMC2_dlba, 6},
     {"_EMC2_plba", (DL_FUNC) &_EMC2_plba, 6},
     {"_EMC2_pigt0", (DL_FUNC) &_EMC2_pigt0, 4},
