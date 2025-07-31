@@ -389,7 +389,7 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
         if( type_std.find("LogicalRules") != std::string::npos) {
             lls[i] = c_log_likelihood_redundant_target_race(pars, data,
                                                            model_dfun_ptr, model_pfun_ptr, n_trials,
-                                                           expand, min_ll, is_ok,
+                                                           expand, min_ll, is_ok,n_acc,
                                                            &current_model_ctx);
         } else {
             lls[i] = c_log_likelihood_race_cens_trunc(pars, data,
@@ -975,9 +975,10 @@ double c_log_likelihood_redundant_target_race(
     const Rcpp::IntegerVector expand,
     double min_ll,
     const Rcpp::LogicalVector ok_params,
+	int n_acc,
     void* model_specific_context) {
 
-    if (n_trials % 4 != 0) Rcpp::stop("c_log_likelihood_redundant_target_race: dadm rows must be multiple of 4");
+    if (n_trials % n_acc != 0) Rcpp::stop("c_log_likelihood_redundant_target_race: dadm rows must be multiple of 4");
 
     Rcpp::NumericVector rts = dadm["rt"];
     Rcpp::CharacterVector role = dadm["lR"];
@@ -989,13 +990,13 @@ double c_log_likelihood_redundant_target_race(
 	double rt_min = Rcpp::min(rts);
 	double rt_max = Rcpp::max(rts);
 	double u_density = 1.0 / std::max(1e-12, rt_max - rt_min);
-	//ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(model_specific_context);
-	//std::string LogicalRule = ctx->LogicalRule;
     int n_unique_trials = n_trials / 4;
     Rcpp::NumericVector ll_unique(n_unique_trials);
 	
 	// Here we check for a rule-following parameter (p) corresponding to probability of processing only a single channel with probability q.
 	// Index the column (if it exists)
+	ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(model_specific_context);
+	bool posdrift=ctx->use_posdrift;
 	bool use_rulebreak = false;
 	bool use_guess = false;
     int rulebreak_col = -1;
@@ -1037,27 +1038,31 @@ double c_log_likelihood_redundant_target_race(
         use_rulebreak = false;
       }
     }
-	double pp_j;
-	double p;
-	double q;
-	double r;
+	
+	// set up parameters
+	double p_j; double p_guess;double p_process; double p_rulebreak;
+	double p;double q;double r;
+	double vA_T;double vA_N;double vB_T;double vB_N;double svA_T;double svA_N;double svB_T;double svB_N; double vG; double svG;
+	
     for(int j=0; j<n_unique_trials; ++j){
-        int start = j*4;
-		pp_j = 0;
-        double fA=NA_REAL, fB=NA_REAL, fnA=NA_REAL, fnB=NA_REAL;
-        double FA=NA_REAL, FB=NA_REAL, FnA=NA_REAL, FnB=NA_REAL;
-        for(int k=0;k<4;++k){
+        int start = j*n_acc;
+		p_j = 0;
+        double fA=NA_REAL, fB=NA_REAL, fnA=NA_REAL, fnB=NA_REAL, fG=0;
+        double FA=NA_REAL, FB=NA_REAL, FnA=NA_REAL, FnB=NA_REAL, FG=1;
+        for(int k=0;k<n_acc;++k){
             int idx = start+k;
             std::string r = Rcpp::as<std::string>(role[idx]);
-            if(r == "A"){ fA = f_all[idx]; FA = F_all[idx]; }
-            else if(r == "B"){ fB = f_all[idx]; FB = F_all[idx]; }
-            else if(r == "n_A"){ fnA = f_all[idx]; FnA = F_all[idx]; }
-            else if(r == "n_B"){ fnB = f_all[idx]; FnB = F_all[idx]; }
+            if(r == "A"){ fA = f_all[idx]; FA = F_all[idx]; vA_T=pars(idx,0); svA_T=pars(idx,1);}
+            else if(r == "B"){ fB = f_all[idx]; FB = F_all[idx];  vA_N=pars(idx,0); svA_N=pars(idx,1);}
+            else if(r == "n_A"){ fnA = f_all[idx]; FnA = F_all[idx];  vB_T=pars(idx,0); svB_T=pars(idx,1);}
+            else if(r == "n_B"){ fnB = f_all[idx]; FnB = F_all[idx];  vB_N=pars(idx,0); svB_N=pars(idx,1);}
+			else if(r == "guess"){ fG = f_all[idx]; FG = F_all[idx];  vG=pars(idx,0); svG=pars(idx,1);}
         }
 		double one_m_FB = std::max(1e-12, 1.0 - FB);
 		double one_m_FA = std::max(1e-12, 1.0 - FA);
 		double one_m_FnB = std::max(1e-12, 1.0 - FnB);
 		double one_m_FnA = std::max(1e-12, 1.0 - FnA);
+		double one_m_FG = std::max(1e-12, 1.0 - FG);
 		double one_m_FnAFnB = std::max(1e-12, 1.0 - FnA * FnB);
 		double one_m_FAFB = std::max(1e-12, 1.0 - FA * FB);
         std::string r_obs = Rcpp::as<std::string>(resp[start]);
@@ -1067,43 +1072,55 @@ double c_log_likelihood_redundant_target_race(
 		}
         if (LogicalRule[start]=="OR") {
 			if(r_obs == "yes"){
-				pp_j = (fA*one_m_FB + fB*one_m_FA) * one_m_FnAFnB;
+				p_process = one_m_FG*((fA*one_m_FB + fB*one_m_FA) * one_m_FnAFnB);
 				if(use_rulebreak && !std::isnan(p) && q_col>-1) {				
-					double p_rulebreak = (q * fB*one_m_FnB) + ((1-q)*fA*one_m_FnA);
-					pp_j=p*pp_j + (1-p)*p_rulebreak;
+					p_rulebreak = (q * fB*one_m_FnB) + ((1-q)*fA*one_m_FnA);
+					p_process=p*p_process + (1-p)*p_rulebreak;
 				}
+				p_guess = fG * one_m_FA * one_m_FA * one_m_FnA * one_m_FnB;
+				p_j = p_guess+p_process;
+			/*if(!posdrift) {
+				double gA = R::pnorm(0.0, vA_T, sv,1, 0) * R::pnorm(0.0, vA_N, sv, 1, 0); // P(both drifts ≤ 0 in A)
+				double gB = R::pnorm(0.0, vB_T, sv, 1, 0) * R::pnorm(0.0, vB_N, sv, 1, 0); // P(both drifts ≤ 0 in B)
+				double pp_Aonly   = fA * one_m_FnA; // B dead, A alive
+				double pp_Bonly   = fB * one_m_FnB; // A dead, B alive
+			}*/
 			} else if(r_obs == "no"){
-				pp_j = (fnA*FnB + fnB*FnA) * (one_m_FA*one_m_FB);
+				p_process = one_m_FG*((fnA*FnB + fnB*FnA) * (one_m_FA*one_m_FB));
 				if(use_rulebreak && !std::isnan(p) && q_col>-1) {					
-					double p_rulebreak = (q * fnB*one_m_FB) + ((1-q)*fnA*one_m_FA);
-					pp_j=p*pp_j + (1-p)*p_rulebreak;
+					p_rulebreak = (q * fnB*one_m_FB) + ((1-q)*fnA*one_m_FA);
+					p_process=p*p_process + (1-p)*p_rulebreak;
 				}
+				p_j = p_process;
 			}
 		} else if (LogicalRule[start]=="AND") {
 			if(r_obs == "no"){
-				pp_j = (fnA*one_m_FnB + fnB*one_m_FnA) * one_m_FAFB;
+				p_process = one_m_FG*((fnA*one_m_FnB + fnB*one_m_FnA) * one_m_FAFB);
 				if(use_rulebreak && !std::isnan(p) && q_col>-1) {
-					double p_rulebreak = (q * fnB*one_m_FB) + ((1-q)*fnA*one_m_FA);
-					pp_j=p*pp_j + (1-p)*p_rulebreak;
+					p_rulebreak = (q * fnB*one_m_FB) + ((1-q)*fnA*one_m_FA);
+					p_process=p*p_process + (1-p)*p_rulebreak;
 				}
+				p_guess = fG * one_m_FA * one_m_FA * one_m_FnA * one_m_FnB;
+				p_j = p_guess+p_process;
 			} else if(r_obs == "yes"){
-				pp_j = (fA*FB + fB*FA) * (one_m_FnA*one_m_FnB);
+				p_process = one_m_FG*((fA*FB + fB*FA) * (one_m_FnA*one_m_FnB));
 				if(use_rulebreak && !std::isnan(p) && q_col>-1) {
-					double p_rulebreak = (q * fB*one_m_FnB) + ((1-q)*fA*one_m_FnA);
-					pp_j=p*pp_j + (1-p)*p_rulebreak;
+					p_rulebreak = (q * fB*one_m_FnB) + ((1-q)*fA*one_m_FnA);
+					p_process=p*p_process + (1-p)*p_rulebreak;
 				}
+				p_j = p_process;
 			}
 		}
 		if (use_guess) {
 			r = pars(start, guess_col);
 			// guess_pdf is RT-uniform and response-uniform (0.5 each)
 			double guess_pdf = 0.5 * u_density;
-			pp_j = (1.0 - r) * pp_j + r * guess_pdf;
+			p_j = (1.0 - r) * p_j + r * guess_pdf;
 		}
-		if (pp_j <= 0.0 || !R_FINITE(pp_j)) {
+		if (p_j <= 0.0 || !R_FINITE(p_j)) {
 			ll_unique[j] = min_ll;
 		} else {
-			ll_unique[j] = std::log(pp_j);
+			ll_unique[j] = std::log(p_j);
 		}
     }
 

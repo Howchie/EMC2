@@ -256,6 +256,7 @@ double c_log_likelihood_redundant_target_race(
     const Rcpp::IntegerVector expand,
     double min_ll,
     const Rcpp::LogicalVector ok_params,
+	int nacc,
     void* model_specific_context);
 
 double get_trunc_corr_factor_for_kth_winner_cpp(int k_winner_idx,
