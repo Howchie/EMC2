@@ -990,7 +990,7 @@ double c_log_likelihood_redundant_target_race(
 	double rt_min = Rcpp::min(rts);
 	double rt_max = Rcpp::max(rts);
 	double u_density = 1.0 / std::max(1e-12, rt_max - rt_min);
-    int n_unique_trials = n_trials / 4;
+    int n_unique_trials = n_trials / n_acc;
     Rcpp::NumericVector ll_unique(n_unique_trials);
 	
 	// Here we check for a rule-following parameter (p) corresponding to probability of processing only a single channel with probability q.
