@@ -1077,7 +1077,7 @@ double c_log_likelihood_redundant_target_race(
 					p_rulebreak = (q * fB*one_m_FnB) + ((1-q)*fA*one_m_FnA);
 					p_process=p*p_process + (1-p)*p_rulebreak;
 				}
-				p_guess = fG * one_m_FA * one_m_FA * one_m_FnA * one_m_FnB;
+				p_guess = fG * one_m_FA * one_m_FB * one_m_FnAFnB;
 				p_j = p_guess+p_process;
 			/*if(!posdrift) {
 				double gA = R::pnorm(0.0, vA_T, sv,1, 0) * R::pnorm(0.0, vA_N, sv, 1, 0); // P(both drifts ≤ 0 in A)
@@ -1100,7 +1100,7 @@ double c_log_likelihood_redundant_target_race(
 					p_rulebreak = (q * fnB*one_m_FB) + ((1-q)*fnA*one_m_FA);
 					p_process=p*p_process + (1-p)*p_rulebreak;
 				}
-				p_guess = fG * one_m_FA * one_m_FA * one_m_FnA * one_m_FnB;
+				p_guess = fG * one_m_FnA * one_m_FnB * one_m_FAFB;
 				p_j = p_guess+p_process;
 			} else if(r_obs == "yes"){
 				p_process = one_m_FG*((fA*FB + fB*FA) * (one_m_FnA*one_m_FnB));
