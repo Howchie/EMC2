@@ -208,15 +208,15 @@ LBAIO <- function(){
 #' @export
 #'
 
-LogicalRules <- function(){
+LogicalRulesLBA <- function(){
   list(
     type="RACE",
     c_name = "LBA_LogicalRules",
     # p_vector transform, sets sv as a scaling parameter
     p_types=c("v" = 1,"sv" = log(1),"B" = log(1),"A" = log(0),"t0" = log(0), "p"=qnorm(1),"q"=qnorm(0.5), "r"=qnorm(1)),
     transform=list(func=c(v = "identity",sv = "exp", B = "exp", A = "exp",t0 = "exp",p="pnorm",q="pnorm", r="pnorm")),
-    bound=list(minmax=cbind(v=c(-Inf,Inf),sv = c(0, Inf), A=c(1e-4,Inf),B=c(0,Inf),t0=c(0.05,Inf),p=c(0.01,0.99),q=c(0.01,0.99),r=c(0.01,0.99)),
-               exception=c(A=0,p=1,r=1)),
+    bound=list(minmax=cbind(v=c(-Inf,Inf),sv = c(0, Inf), A=c(1e-4,Inf),B=c(0,Inf),t0=c(0.05,Inf),p=c(0.01,0.99),q=c(0.01,0.99),r=c(0.0,0.99)),
+               exception=c(A=0,p=1,r=0)),
     # Transform to natural scale
     # Trial dependent parameter transform
     Ttransform = function(pars,dadm) {

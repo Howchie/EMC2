@@ -142,11 +142,11 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
                          ncol=length(parameters), dimnames = list(as.character(seq(nsubs)), par_names),byrow=TRUE)
     if(is.null(colnames(parameters))) colnames(parameters) <- sampled_p_names
   } else{
-    if(length(rownames(parameters)) != length(design$Ffactors$subjects)){
+    if(!(nrow(parameters) == length(unique(design$Ffactors$subjects)))){
       stop("input parameter matrix must have number of rows equal to number of subjects specified in design")
     }
     if(is.null(colnames(parameters))) colnames(parameters) <- sampled_p_names
-    rownames(parameters) <- design$Ffactors$subjects
+    if(is.null(rownames(parameters))) rownames(parameters) <-1:length(unique(design$Ffactors$subjects))
   }
 
   if(!is.null(attr(design, "custom_ll"))){
@@ -317,7 +317,7 @@ LogicalRules_rfun <- function(data, pars, model){
   }
   Rrt = Rrti %>%
     as.data.frame() %>%
-    dplyr::mutate(R = dplyr::case_when (df$RuleFollow & df$LogicalRule=="OR" & Rrti[,"A"]<Rrti[,"B"] & (Rrti[,"n_A"]>Rrti[,"A"] | Rrti[,"n_B"]>Rrti[,"A"]) ~ "yes", # target finishes before at least one absent
+    dplyr::mutate(R = dplyr::case_when(df$RuleFollow & df$LogicalRule=="OR" & Rrti[,"A"]<Rrti[,"B"] & (Rrti[,"n_A"]>Rrti[,"A"] | Rrti[,"n_B"]>Rrti[,"A"]) ~ "yes", # target finishes before at least one absent
                                  df$RuleFollow & df$LogicalRule=="OR" & Rrti[,"B"]<Rrti[,"A"] & (Rrti[,"n_A"]>Rrti[,"B"] | Rrti[,"n_B"]>Rrti[,"B"]) ~ "yes", # target finishes before at least one absent
                                  df$RuleFollow & df$LogicalRule=="OR" & Rrti[,"n_A"]<Rrti[,"A"] & Rrti[,"n_B"]<Rrti[,"A"] & Rrti[,"n_A"]<Rrti[,"B"] & Rrti[,"n_B"]<Rrti[,"B"] ~ "no",
                                  df$RuleFollow & df$LogicalRule=="AND" & Rrti[,"n_A"]<Rrti[,"n_B"] & (Rrti[,"A"]>Rrti[,"n_A"] | Rrti[,"B"]>Rrti[,"n_A"]) ~ "no", # absent finishes before at least one target
@@ -326,10 +326,8 @@ LogicalRules_rfun <- function(data, pars, model){
                                  !df$RuleFollow & df$ChannelA & Rrti[,"A"]<Rrti[,"n_A"] ~ "yes",
                                  !df$RuleFollow & df$ChannelA & Rrti[,"n_A"]<Rrti[,"A"] ~ "no",
                                  !df$RuleFollow & !df$ChannelA & Rrti[,"B"]<Rrti[,"n_B"] ~ "yes",
-                                 !df$RuleFollow & !df$ChannelA & Rrti[,"n_B"]<Rrti[,"B"] ~ "no",
-                                 df$LogicalRule=="OR" & Rrti[,"guess"]<Rrti[,"A"] & Rrti[,"guess"]<Rrti[,"B"] & (Rrti[,"n_A"]>Rrti[,"guess"] | Rrti[,"n_B"]>Rrti[,"guess"]) ~ "yes", # guess finishes before either target and at least one absent,
-                                 df$LogicalRule=="AND" & Rrti[,"guess"]<Rrti[,"n_A"] & Rrti[,"guess"]<Rrti[,"n_B"] & (Rrti[,"A"]>Rrti[,"guess"] | Rrti[,"B"]>Rrti[,"guess"]) ~ "no"), # guess finishes before either absent and at least one target),
-           rt = dplyr::case_when (df$RuleFollow & df$LogicalRule=="OR" & Rrti[,"A"]<Rrti[,"B"] & (Rrti[,"n_A"]>Rrti[,"A"] | Rrti[,"n_B"]>Rrti[,"A"]) ~ Rrti[,"A"], # target finishes before at least one absent
+                                 !df$RuleFollow & !df$ChannelA & Rrti[,"n_B"]<Rrti[,"B"] ~ "no"),
+           rt = dplyr::case_when(df$RuleFollow & df$LogicalRule=="OR" & Rrti[,"A"]<Rrti[,"B"] & (Rrti[,"n_A"]>Rrti[,"A"] | Rrti[,"n_B"]>Rrti[,"A"]) ~ Rrti[,"A"], # target finishes before at least one absent
                            df$RuleFollow & df$LogicalRule=="OR" & Rrti[,"B"]<Rrti[,"A"] & (Rrti[,"n_A"]>Rrti[,"B"] | Rrti[,"n_B"]>Rrti[,"B"]) ~ Rrti[,"B"], # target finishes before at least one absent
                            df$RuleFollow & df$LogicalRule=="OR" & (Rrti[,"n_A"]<Rrti[,"A"] & Rrti[,"n_B"]<Rrti[,"A"] & Rrti[,"n_A"]<Rrti[,"B"] & Rrti[,"n_B"]<Rrti[,"B"])  ~ pmax(Rrti[,"n_A"],Rrti[,"n_B"]),
                            df$RuleFollow & df$LogicalRule=="AND" & Rrti[,"n_A"]<Rrti[,"n_B"] & (Rrti[,"A"]>Rrti[,"n_A"] | Rrti[,"B"]>Rrti[,"n_A"]) ~ Rrti[,"n_A"], # absent finishes before at least one target
@@ -338,10 +336,15 @@ LogicalRules_rfun <- function(data, pars, model){
                            !df$RuleFollow & df$ChannelA & Rrti[,"A"]<Rrti[,"n_A"] ~ Rrti[,"A"],
                            !df$RuleFollow & df$ChannelA & Rrti[,"n_A"]<Rrti[,"A"] ~ Rrti[,"n_A"],
                            !df$RuleFollow & !df$ChannelA & Rrti[,"B"]<Rrti[,"n_B"] ~ Rrti[,"B"],
-                           !df$RuleFollow & !df$ChannelA & Rrti[,"n_B"]<Rrti[,"B"] ~ Rrti[,"n_B"],
-                           df$LogicalRule=="OR" & Rrti[,"guess"]<Rrti[,"A"] & Rrti[,"guess"]<Rrti[,"B"] & (Rrti[,"n_A"]>Rrti[,"guess"] | Rrti[,"n_B"]>Rrti[,"guess"]) ~ Rrti[,"guess"], # guess finishes before either target and at least one absent
-                           df$LogicalRule=="AND" & Rrti[,"guess"]<Rrti[,"n_A"] & Rrti[,"guess"]<Rrti[,"n_B"] & (Rrti[,"A"]>Rrti[,"guess"] | Rrti[,"B"]>Rrti[,"guess"]) ~ Rrti[,"guess"])) %>% # guess finishes before either absent and at least one target
+                           !df$RuleFollow & !df$ChannelA & Rrti[,"n_B"]<Rrti[,"B"] ~ Rrti[,"n_B"])) %>%
     dplyr::select(R,rt)
+  if ("guess"%in%RACE) {
+    Rrt = Rrt %>% 
+      dplyr::mutate(R = dplyr::case_when(df$LogicalRule=="OR" & Rrti[,"guess"]<Rrti[,"A"] & Rrti[,"guess"]<Rrti[,"B"] & (Rrti[,"n_A"]>Rrti[,"guess"] | Rrti[,"n_B"]>Rrti[,"guess"]) ~ "yes", # guess finishes before either target and at least one absent,
+                                          df$LogicalRule=="AND" & Rrti[,"guess"]<Rrti[,"n_A"] & Rrti[,"guess"]<Rrti[,"n_B"] & (Rrti[,"A"]>Rrti[,"guess"] | Rrti[,"B"]>Rrti[,"guess"]) ~ "no", TRUE~R), # guess finishes before either absent and at least one target),
+                    rt = dplyr::case_when(df$LogicalRule=="OR" & Rrti[,"guess"]<Rrti[,"A"] & Rrti[,"guess"]<Rrti[,"B"] & (Rrti[,"n_A"]>Rrti[,"guess"] | Rrti[,"n_B"]>Rrti[,"guess"]) ~ Rrti[,"guess"], # guess finishes before either target and at least one absent
+                                           df$LogicalRule=="AND" & Rrti[,"guess"]<Rrti[,"n_A"] & Rrti[,"guess"]<Rrti[,"n_B"] & (Rrti[,"A"]>Rrti[,"guess"] | Rrti[,"B"]>Rrti[,"guess"]) ~ Rrti[,"guess"],TRUE~rt))# guess finishes before either absent and at least one target
+  }
   Rrt$R <- factor(Rrt$R,levels=c("no","yes"))
   return(Rrt)
 }

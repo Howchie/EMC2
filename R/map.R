@@ -1,5 +1,6 @@
 do_transform <- function(pars, model)
 {
+  pars=to_matrix(pars)
   transform=model$transform
   ptypes <- get_p_types(colnames(pars))
   isexp    <- transform$func[ptypes] == "exp"
@@ -29,6 +30,7 @@ do_transform <- function(pars, model)
 #' 
 do_reverse_transform <- function(pars, model)
 {
+  pars=to_matrix(pars)
   transform=model$transform
   ptypes <- get_p_types(colnames(pars))
   islog    <- transform$func[ptypes] == "exp"
@@ -208,6 +210,7 @@ do_pre_transform <- function(p_vector, model)
 
 # This form used in random number generation
 do_bound <- function(pars,bound, lR = NULL) {
+  pars=to_matrix(pars)
   tpars <- t(pars[,colnames(bound$minmax),drop=FALSE])
   ok <- tpars > bound$minmax[1,] & tpars < bound$minmax[2,]
   if (!is.null(bound$exception)) ok[names(bound$exception),] <-
@@ -223,6 +226,7 @@ do_bound <- function(pars,bound, lR = NULL) {
 
 # This form used in get_pars
 add_bound <- function(pars,bound, lR = NULL) {
+  pars=to_matrix(pars)
   attr(pars, "ok") <- do_bound(pars,bound, lR = lR)
   pars
 }

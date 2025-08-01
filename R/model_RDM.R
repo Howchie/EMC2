@@ -402,7 +402,7 @@ rSWTN <- function(n,b,v,A,sv)
 #' @export
 #'
 
-LogicalRules <- function(){
+LogicalRulesRDMSWTN <- function(){
   list(
     type="RACE",
     c_name = "RDMSWTN_LogicalRules",
@@ -410,7 +410,7 @@ LogicalRules <- function(){
     p_types=c("v" = log(1),"b" = log(1),"zA" = qnorm(0),"t0" = log(0),"s" = log(1),"cv" = qnorm(0), "p"=qnorm(1),"q"=qnorm(0.5), "r"=qnorm(1)),
     transform=list(func=c(v = "exp", b = "exp", zA = "pnorm",t0 = "exp", s = "exp", cv="pnorm",p="pnorm",q="pnorm", r="pnorm")),
     bound=list(minmax=cbind(v=c(1e-3,Inf), b=c(0,Inf), zA=c(0.01,0.99),t0=c(0.05,Inf), s=c(0,Inf), cv=c(0.01,0.99),p=c(0.01,0.99),q=c(0.01,0.99),r=c(0.01,0.99)),
-               exception=c(zA=0, v=0, cv=0,p=1,r=1)),
+               exception=c(zA=0, v=0, cv=0,p=1,r=0)),
     # Transform to natural scale
     Ttransform = function(pars,dadm) {
       pars <- cbind(pars,A=pars[,"b"] * pars[,"zA"],sv=pars[,"cv"]*pars[,"v"])

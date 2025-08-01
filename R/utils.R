@@ -27,6 +27,10 @@
 #   out <- which(da[,cname]==typei)
 #   c(out,rep(NA,maxn-length(out)))
 # }
+
+#' @export
+#'
+
 to_matrix <- function(x) {
   if (is.null(dim(x))) {                     # vector → 1-row matrix
     matrix(x, nrow = 1L,
