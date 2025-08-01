@@ -1079,7 +1079,6 @@ double c_log_likelihood_redundant_target_race(
 				}
 				p_guess = fG * one_m_FA * one_m_FB * one_m_FnAFnB;
 				p_j = p_guess+p_process;
-				Rcout<<"Process: "<<p_process<<" Guess: "<<p_guess<<std::endl;
 			} else if(r_obs == "no"){
 				p_process = one_m_FG*((fnA*FnB + fnB*FnA) * (one_m_FA*one_m_FB));
 				if(use_rulebreak && !std::isnan(p) && q_col>-1) {					
@@ -1097,7 +1096,6 @@ double c_log_likelihood_redundant_target_race(
 				}
 				p_guess = fG * one_m_FnA * one_m_FnB * one_m_FAFB;
 				p_j = p_guess+p_process;
-				Rcout<<"Process: "<<p_process<<" Guess: "<<p_guess<<std::endl;
 			} else if(r_obs == "yes"){
 				p_process = one_m_FG*((fA*FB + fB*FA) * (one_m_FnA*one_m_FnB));
 				if(use_rulebreak && !std::isnan(p) && q_col>-1) {
