@@ -4,15 +4,15 @@ devtools::load_all(reset = TRUE)
 library(EMC2)
 RNGkind("L'Ecuyer-CMRG")
 set.seed(123)
-# Sys.setenv(PAR_DEBUG = "1")   # turn serial mode on
-# if (identical(Sys.getenv("PAR_DEBUG"), "1")) {      # opt-in via env-var
-#   env <- asNamespace("parallel")
-#   unlockBinding("parLapply", env)                   # temporarily unlock
-#   assign("parLapply", function(cl, X, FUN, ...) {
-#     lapply(X, FUN, ...)                             # <- runs in master R
-#   }, envir = env)
-#   lockBinding("parLapply", env)
-# }
+Sys.setenv(PAR_DEBUG = "1")   # turn serial mode on
+if (identical(Sys.getenv("PAR_DEBUG"), "1")) {      # opt-in via env-var
+  env <- asNamespace("parallel")
+  unlockBinding("parLapply", env)                   # temporarily unlock
+  assign("parLapply", function(cl, X, FUN, ...) {
+    lapply(X, FUN, ...)                             # <- runs in master R
+  }, envir = env)
+  lockBinding("parLapply", env)
+}
 ## Set simulation parameters:
 nsubs=10; ntrials=200
 ## For maximum testing purposes we'll simulate from a model with varying n_acc
