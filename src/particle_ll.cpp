@@ -1048,7 +1048,7 @@ double c_log_likelihood_redundant_target_race(
         int start = j*n_acc;
 		p_j = 0;
         double fA=NA_REAL, fB=NA_REAL, fnA=NA_REAL, fnB=NA_REAL, fG=0;
-        double FA=NA_REAL, FB=NA_REAL, FnA=NA_REAL, FnB=NA_REAL, FG=1;
+        double FA=NA_REAL, FB=NA_REAL, FnA=NA_REAL, FnB=NA_REAL, FG=0;
         for(int k=0;k<n_acc;++k){
             int idx = start+k;
             std::string r = Rcpp::as<std::string>(role[idx]);
