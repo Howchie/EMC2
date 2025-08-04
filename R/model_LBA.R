@@ -256,7 +256,7 @@ LogicalRulesLBA_negdrift <- function(){
       pars
     },
     # Random function for racing accumulator
-    rfun=function(data,pars) rLBA(data$lR,pars,posdrift=FALSE,ok = attr(pars, "ok")),
+    rfun=function(data,pars,posdrift) rLBA(data$lR,pars,posdrift=posdrift,ok = attr(pars, "ok")),
     # Density function (PDF) for single accumulator
     dfun=function(rt,pars) dLBA(rt,pars,posdrift = TRUE),
     # Probability function (CDF) for single accumulator
