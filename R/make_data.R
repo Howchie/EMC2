@@ -356,7 +356,6 @@ LogicalRules_negdrift_rfun <- function(data, pars, model){
   Rrti <- matrix(ncol=length(levels(data$lR)),nrow=dim(data)[1]/length(levels(data$lR)),
                  dimnames=list(NULL,levels(data$lR)))
   RACE <- levels(data$lR) # should be 4 unless using a non-standard implementation
-  model=LogicalRulesLBA_negdrift
   for (i in RACE) {
     pick <- data$lR==i
     data_in <- data[pick,]
