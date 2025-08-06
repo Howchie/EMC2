@@ -986,7 +986,7 @@ double c_log_likelihood_redundant_target_race(
 	int n_acc,
     void* model_specific_context) {
 
-    if (n_trials % n_acc != 0) Rcpp::stop("c_log_likelihood_redundant_target_race: dadm rows must be multiple of 4");
+    if (n_trials % n_acc != 0) Rcpp::stop("c_log_likelihood_redundant_target_race: dadm rows must be multiple of n_acc");
 
     Rcpp::NumericVector rts = dadm["rt"];
     Rcpp::CharacterVector role = dadm["lR"];
@@ -1061,10 +1061,10 @@ double c_log_likelihood_redundant_target_race(
             int idx = start+k;
             std::string r = Rcpp::as<std::string>(role[idx]);
             if(r == "A"){ fA = f_all[idx]; FA = F_all[idx]; vA_T=pars(idx,0); svA_T=pars(idx,1);}
-            else if(r == "B"){ fB = f_all[idx]; FB = F_all[idx];  vA_N=pars(idx,0); svA_N=pars(idx,1);}
-            else if(r == "n_A"){ fnA = f_all[idx]; FnA = F_all[idx];  vB_T=pars(idx,0); svB_T=pars(idx,1);}
-            else if(r == "n_B"){ fnB = f_all[idx]; FnB = F_all[idx];  vB_N=pars(idx,0); svB_N=pars(idx,1);}
-			else if(r == "guess"){ fG = f_all[idx]; FG = F_all[idx];  vG=pars(idx,0); svG=pars(idx,1);}
+            else if(r == "B"){ fB = f_all[idx]; FB = F_all[idx]; vB_T=pars(idx,0); svB_T=pars(idx,1); }
+            else if(r == "n_A"){ fnA = f_all[idx]; FnA = F_all[idx]; vA_N=pars(idx,0); svA_N=pars(idx,1);}
+            else if(r == "n_B"){ fnB = f_all[idx]; FnB = F_all[idx]; vB_N=pars(idx,0); svB_N=pars(idx,1);}
+			else if(r == "guess"){ fG = f_all[idx]; FG = F_all[idx]; vG=pars(idx,0); svG=pars(idx,1);}
         }
 		double one_m_FB = std::max(1e-12, 1.0 - FB);
 		double one_m_FA = std::max(1e-12, 1.0 - FA);
@@ -1148,7 +1148,7 @@ double c_log_likelihood_redundant_target_race_failure(
 	int n_acc,
     void* model_specific_context) {
 
-    if (n_trials % n_acc != 0) Rcpp::stop("c_log_likelihood_redundant_target_race: dadm rows must be multiple of 4");
+    if (n_trials % n_acc != 0) Rcpp::stop("c_log_likelihood_redundant_target_race: dadm rows must be multiple of n_acc");
 
     Rcpp::NumericVector rts = dadm["rt"];
     Rcpp::CharacterVector role = dadm["lR"];
@@ -1175,12 +1175,13 @@ double c_log_likelihood_redundant_target_race_failure(
             int idx = start+k;
             std::string r = Rcpp::as<std::string>(role[idx]);
             if(r == "A"){ fA = f_all[idx]; FA = F_all[idx]; vA_T=pars(idx,0); svA_T=pars(idx,1);}
-            else if(r == "B"){ fB = f_all[idx]; FB = F_all[idx];}
-            else if(r == "n_A"){ fnA = f_all[idx]; FnA = F_all[idx]; vB_T=pars(idx,0); svB_T=pars(idx,1);}
+            else if(r == "B"){ fB = f_all[idx]; FB = F_all[idx]; vB_T=pars(idx,0); svB_T=pars(idx,1);}
+            else if(r == "n_A"){ fnA = f_all[idx]; FnA = F_all[idx];}
             else if(r == "n_B"){ fnB = f_all[idx]; FnB = F_all[idx];}
 			else if(r == "n_A_flip"){ fnA_flip = f_all[idx]; FnA_flip = F_all[idx];  vA_N_flip=pars(idx,0); svA_N_flip=pars(idx,1);}
 			else if(r == "n_B_flip"){ fnB_flip = f_all[idx]; FnB_flip = F_all[idx];  vB_N_flip=pars(idx,0); svB_N_flip=pars(idx,1);}
         }
+		p_negA = R::pnorm(0.0, vA_T, svA_T, 1,0); p_negB = R::pnorm(0.0, vB_T, svB_T, 1,0); 
 		double one_m_FB = std::max(1e-12, 1.0 - FB);
 		double one_m_FA = std::max(1e-12, 1.0 - FA);
 		double one_m_FnB = std::max(1e-12, 1.0 - FnB);
@@ -1199,7 +1200,6 @@ double c_log_likelihood_redundant_target_race_failure(
 		// If a target accumulator "fails" we substitute the corresponding "absence" accumulator with the vTRUE-Absent in some cases this won't change it, e.g. trials where the target actually wasn't there -- this is mathematically the same as just the usual race
 		// When a target "fails" (has negative drift) it can't finish thus drops out of the likelihood for those cases
 		// When both targets fail, OR "yes" is impossible. When either target fails, AND "yes" is impossible.
-		p_negA = R::pnorm(0.0, vA_T, svA_T, 1,0); p_negB = R::pnorm(0.0, vB_T, svB_T, 1,0); 
         if (LogicalRule[start]=="OR") {
 			if(r_obs == "yes"){
 				p_process = No_fail*((fA*one_m_FB + fB*one_m_FA) * one_m_FnAFnB);
