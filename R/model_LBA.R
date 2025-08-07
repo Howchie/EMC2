@@ -320,7 +320,7 @@ LogicalRulesLBA_substitution <- function(){
     # Transform to natural scale
     # Trial dependent parameter transform
     Ttransform = function(pars,dadm) {
-      pars <- cbind(pars,b=pars[,"B"] + pars[,"A"],adj_sv = sqrt( (pars[,"sv"]^2) + (v^2)*pars[,"tau"] ), adj_v = pars[,"v"]*pars[,"capacity"])
+      pars <- cbind(pars,b=pars[,"B"] + pars[,"A"],adj_sv = sqrt( (pars[,"sv"]^2) + (pars[,"v"]^2)*pars[,"tau"] ), adj_v = pars[,"v"]*pars[,"capacity"])
       pars
     },
     # Random function for racing accumulator

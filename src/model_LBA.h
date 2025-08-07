@@ -124,7 +124,7 @@ NumericVector plba_c(NumericVector rts, NumericMatrix pars, LogicalVector idx, d
 
 // [[Rcpp::export]]
 NumericVector dlba_joint_c(NumericVector rts, NumericMatrix pars, LogicalVector idx, double min_ll, LogicalVector is_ok, bool use_posdrift = true, bool log_out=false){ // Added use_posdrift
-  //v = 0, sv = 1, B = 2, A = 3, t0 = 4, sigma_g = 5, capacity = 6
+  //v = 0, sv = 1, B = 2, A = 3, t0 = 4, tau = 5, capacity = 6
   int n = sum(idx);
   NumericVector out(n);
   int k = 0;

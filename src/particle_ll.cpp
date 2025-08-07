@@ -1280,7 +1280,7 @@ double c_log_likelihood_redundant_target_race_substitution(
     Rcpp::CharacterVector resp = dadm["R"];
 	Rcpp::CharacterVector LogicalRule = dadm["LogicalRule"];
     Rcpp::LogicalVector all_idx(n_trials, true); // No such thing as "winner" in the normal context
-    Rcpp::NumericVector f_all = model_dfun(rts, pars, ok_params, all_idx, model_specific_context);
+	Rcpp::NumericVector f_all = model_dfun(rts, pars, ok_params, all_idx, model_specific_context);
     Rcpp::NumericVector F_all = model_pfun(rts, pars, ok_params, all_idx, model_specific_context);
     int n_unique_trials = n_trials / n_acc;
     Rcpp::NumericVector ll_unique(n_unique_trials);
@@ -1289,35 +1289,35 @@ double c_log_likelihood_redundant_target_race_substitution(
 	Rcpp::List dimnames = pars.attr("dimnames");
 	
 	// set up parameters
-	double vA_T, vB_T, svA_T, svB_T, vA_N_flip, vB_N_flip, svA_N_flip, svB_N_flip, p_negA, p_negB, p_A_Fail, p_B_Fail, p_AB_Fail, p_process, p_j;
+	double vA_T, vA_T_eff, vB_T, vB_T_eff, svA_T, svA_eff, svB_T, svB_eff, tau, p_negA, p_negB, p_A_Fail, p_B_Fail, p_AB_Fail, p_process, p_j;
 	
     for(int j=0; j<n_unique_trials; ++j){
         int start = j*n_acc;
 		p_j = 0;
-		double sigma_g = pars(start,5);
-		double svA_eff = std::sqrt( svA_T*svA_T + sigma_g * vA_T*vB_T );
-		double svB_eff = std::sqrt( svB_T*svB_T + sigma_g * vA_T*vB_T );
         double fA=NA_REAL, fB=NA_REAL, fnA=NA_REAL, fnB=NA_REAL, fnA_flip=0, fnB_flip=0;
         double FA=NA_REAL, FB=NA_REAL, FnA=NA_REAL, FnB=NA_REAL, FnA_flip=0, FnB_flip=0;
         for(int k=0;k<n_acc;++k){
             int idx = start+k;
             std::string r = Rcpp::as<std::string>(role[idx]);
-            if(r == "A"){ fA = f_all[idx]; FA = F_all[idx]; vA_T=pars(idx,0); svA_T=pars(idx,1);}
-            else if(r == "B"){ fB = f_all[idx]; FB = F_all[idx]; vB_T=pars(idx,0); svB_T=pars(idx,1);}
+			tau = pars(start,5);
+            if(r == "A"){vA_T_eff=pars(idx,0)*pars(idx,6); svA_T=pars(idx,1); svA_eff = std::sqrt( svA_T*svA_T + tau * vA_T*vB_T ); fA = f_all[idx]; FA = F_all[idx];}
+            else if(r == "B"){vB_T_eff=pars(idx,0)*pars(idx,6); svB_T=pars(idx,1); svB_eff = std::sqrt( svB_T*svB_T + tau * vA_T*vB_T ); fB = f_all[idx]; FB = F_all[idx];}
             else if(r == "n_A"){ fnA = f_all[idx]; FnA = F_all[idx];}
             else if(r == "n_B"){ fnB = f_all[idx]; FnB = F_all[idx];}
 			else if(r == "n_A_flip"){ fnA_flip = f_all[idx]; FnA_flip = F_all[idx];}
 			else if(r == "n_B_flip"){ fnB_flip = f_all[idx]; FnB_flip = F_all[idx];}
+			
         }
-		double zA   = -vA_T / svA_eff;
-		double zB   = -vB_T / svB_eff;
-		double rho  = (sigma_g * vA_T * vB_T) / (svA_eff * svB_eff);   // correlation
+		double zA   = -vA_T_eff / svA_eff;
+		double zB   = -vB_T_eff / svB_eff;
+		double rho  = (tau * vA_T_eff * vB_T_eff) / (svA_eff * svB_eff);   // correlation
 		double negA  = R::pnorm(zA, 0.0, 1.0, 1, 0);
 		double negB  = R::pnorm(zB, 0.0, 1.0, 1, 0);
 		double negAB = norm_cdf_2d(zA, zB, rho);
 		double A_fail  = negA - negAB;
 		double B_fail  = negB - negAB;
 		double No_fail = 1.0 - negA - negB + negAB;
+		//Rcout<<"NegA: "<<negA<<" NegB: "<<negB<<" NegAB: "<<negAB<<" Rho: "<<rho<<" tau: "<<tau<<std::endl;
 		double one_m_FB = std::max(1e-12, 1.0 - FB);
 		double one_m_FA = std::max(1e-12, 1.0 - FA);
 		double one_m_FnB = std::max(1e-12, 1.0 - FnB);
