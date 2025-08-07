@@ -1289,7 +1289,7 @@ double c_log_likelihood_redundant_target_race_substitution(
 	Rcpp::List dimnames = pars.attr("dimnames");
 	
 	// set up parameters
-	double vA_T, vA_T_eff, vB_T, vB_T_eff, svA_T, svA_eff, svB_T, svB_eff, tau, p_negA, p_negB, p_A_Fail, p_B_Fail, p_AB_Fail, p_process, p_j;
+	double vA_T, vA_T_eff, vB_T, vB_T_eff, svA_T, svA_eff, svB_T, svB_eff, tau, p_A_Fail, p_B_Fail, p_AB_Fail, p_process, p_j;
 	
     for(int j=0; j<n_unique_trials; ++j){
         int start = j*n_acc;
@@ -1300,14 +1300,16 @@ double c_log_likelihood_redundant_target_race_substitution(
             int idx = start+k;
             std::string r = Rcpp::as<std::string>(role[idx]);
 			tau = pars(start,5);
-            if(r == "A"){vA_T_eff=pars(idx,0)*pars(idx,6); svA_T=pars(idx,1); svA_eff = std::sqrt( svA_T*svA_T + tau * vA_T*vB_T ); fA = f_all[idx]; FA = F_all[idx];}
-            else if(r == "B"){vB_T_eff=pars(idx,0)*pars(idx,6); svB_T=pars(idx,1); svB_eff = std::sqrt( svB_T*svB_T + tau * vA_T*vB_T ); fB = f_all[idx]; FB = F_all[idx];}
+            if(r == "A"){vA_T_eff=pars(idx,0)*pars(idx,6); svA_T=pars(idx,1); fA = f_all[idx]; FA = F_all[idx];}
+            else if(r == "B"){vB_T_eff=pars(idx,0)*pars(idx,6); svB_T=pars(idx,1); fB = f_all[idx]; FB = F_all[idx];}
             else if(r == "n_A"){ fnA = f_all[idx]; FnA = F_all[idx];}
             else if(r == "n_B"){ fnB = f_all[idx]; FnB = F_all[idx];}
 			else if(r == "n_A_flip"){ fnA_flip = f_all[idx]; FnA_flip = F_all[idx];}
 			else if(r == "n_B_flip"){ fnB_flip = f_all[idx]; FnB_flip = F_all[idx];}
 			
         }
+		svA_eff = std::sqrt( svA_T*svA_T + tau * vA_T_eff*vB_T_eff ); 
+		svB_eff = std::sqrt( svB_T*svB_T + tau * vA_T_eff*vB_T_eff ); 
 		double zA   = -vA_T_eff / svA_eff;
 		double zB   = -vB_T_eff / svB_eff;
 		double rho  = (tau * vA_T_eff * vB_T_eff) / (svA_eff * svB_eff);   // correlation
@@ -1324,8 +1326,6 @@ double c_log_likelihood_redundant_target_race_substitution(
 		double one_m_FnA = std::max(1e-12, 1.0 - FnA);
 		double one_m_FnB_flip = std::max(1e-12, 1.0 - FnB_flip);
 		double one_m_FnA_flip = std::max(1e-12, 1.0 - FnA_flip);
-		double one_m_p_negA = std::max(1e-12, 1.0 - p_negA);
-		double one_m_p_negB = std::max(1e-12, 1.0 - p_negB);
 		double one_m_FnAFnB = std::max(1e-12, 1.0 - FnA * FnB);
 		double one_m_FnA_flipFnB = std::max(1e-12, 1.0 - FnA_flip * FnB);
 		double one_m_FnAFnB_flip = std::max(1e-12, 1.0 - FnA * FnB_flip);
