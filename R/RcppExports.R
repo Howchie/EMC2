@@ -37,6 +37,14 @@ plba_c <- function(rts, pars, idx, min_ll, is_ok, use_posdrift = TRUE, log_out =
     .Call(`_EMC2_plba_c`, rts, pars, idx, min_ll, is_ok, use_posdrift, log_out)
 }
 
+dlba_joint_c <- function(rts, pars, idx, min_ll, is_ok, use_posdrift = TRUE, log_out = FALSE) {
+    .Call(`_EMC2_dlba_joint_c`, rts, pars, idx, min_ll, is_ok, use_posdrift, log_out)
+}
+
+plba_joint_c <- function(rts, pars, idx, min_ll, is_ok, use_posdrift = TRUE, log_out = FALSE) {
+    .Call(`_EMC2_plba_joint_c`, rts, pars, idx, min_ll, is_ok, use_posdrift, log_out)
+}
+
 dlba <- function(t, A, b, v, sv, posdrift = TRUE) {
     .Call(`_EMC2_dlba`, t, A, b, v, sv, posdrift)
 }

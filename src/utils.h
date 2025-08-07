@@ -91,6 +91,16 @@ Rcpp::NumericVector lba_pfun_adapter(Rcpp::NumericVector rt,
                                      Rcpp::LogicalVector is_ok,
                                      Rcpp::LogicalVector winner,
                                      void* context);
+Rcpp::NumericVector lba_joint_dfun_adapter(Rcpp::NumericVector rt,
+                                     Rcpp::NumericMatrix pars,
+                                     Rcpp::LogicalVector is_ok,
+                                     Rcpp::LogicalVector winner,
+                                     void* context);
+Rcpp::NumericVector lba_joint_pfun_adapter(Rcpp::NumericVector rt,
+                                     Rcpp::NumericMatrix pars,
+                                     Rcpp::LogicalVector is_ok,
+                                     Rcpp::LogicalVector winner,
+                                     void* context);									 
 Rcpp::NumericVector rdm_dfun_adapter(Rcpp::NumericVector rt,
                                      Rcpp::NumericMatrix pars,
                                      Rcpp::LogicalVector is_ok,
@@ -132,6 +142,27 @@ Rcpp::NumericVector lba_pfun_adapter(Rcpp::NumericVector rt,
     ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context);
     // Pass use_posdrift from context to plba_c
     return plba_c(rt, pars, winner, ctx->min_lik_for_pdf, is_ok, ctx->use_posdrift,ctx->log_out);
+}
+
+Rcpp::NumericVector lba_joint_dfun_adapter(Rcpp::NumericVector rt,
+                                            Rcpp::NumericMatrix pars,
+                                            Rcpp::LogicalVector is_ok,
+                                            Rcpp::LogicalVector winner,
+                                            void* context) {
+    ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context);
+    // Pass use_posdrift from context to dlba_c
+    return dlba_joint_c(rt, pars, winner, ctx->min_lik_for_pdf, is_ok, ctx->use_posdrift,ctx->log_out);
+}
+
+// Static adapter for LBA pfun
+Rcpp::NumericVector lba_joint_pfun_adapter(Rcpp::NumericVector rt,
+                                            Rcpp::NumericMatrix pars,
+                                            Rcpp::LogicalVector is_ok,
+                                            Rcpp::LogicalVector winner,
+                                            void* context) {
+    ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context);
+    // Pass use_posdrift from context to plba_c
+    return plba_joint_c(rt, pars, winner, ctx->min_lik_for_pdf, is_ok, ctx->use_posdrift,ctx->log_out);
 }
 
 // Static adapter for RDM dfun
@@ -271,7 +302,19 @@ double c_log_likelihood_redundant_target_race_negdrift(
 	int nacc,
     void* model_specific_context);
 	
-	double c_log_likelihood_redundant_target_race_substitution(
+double c_log_likelihood_redundant_target_race_substitution(
+    Rcpp::NumericMatrix pars,
+    Rcpp::DataFrame dadm,
+    RacePdfFun model_dfun,
+    RaceCdfFun model_pfun,
+    const int n_trials,
+    const Rcpp::IntegerVector expand,
+    double min_ll,
+    const Rcpp::LogicalVector ok_params,
+	int nacc,
+    void* model_specific_context);
+
+double c_log_likelihood_redundant_target_race_miss(
     Rcpp::NumericMatrix pars,
     Rcpp::DataFrame dadm,
     RacePdfFun model_dfun,
