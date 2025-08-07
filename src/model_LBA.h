@@ -124,7 +124,7 @@ NumericVector plba_c(NumericVector rts, NumericMatrix pars, LogicalVector idx, d
 
 // [[Rcpp::export]]
 NumericVector dlba_joint_c(NumericVector rts, NumericMatrix pars, LogicalVector idx, double min_ll, LogicalVector is_ok, bool use_posdrift = true, bool log_out=false){ // Added use_posdrift
-  //v = 0, sv = 1, B = 2, A = 3, t0 = 4, sigma_g = 5
+  //v = 0, sv = 1, B = 2, A = 3, t0 = 4, sigma_g = 5, capacity = 6
   int n = sum(idx);
   NumericVector out(n);
   int k = 0;
@@ -134,8 +134,9 @@ NumericVector dlba_joint_c(NumericVector rts, NumericMatrix pars, LogicalVector 
         out[k] = log_out ? R_NegInf : 0; 
       } else if((rts[i] - pars(i,4) > 0) && (is_ok[i])){
         // Pass use_posdrift to dlba_norm
-		double adj_sv = std::sqrt( std::pow(pars(i,1),2) + (pars(i,5)*std::pow(pars(i,0),2)) );
-        out[k] = dlba_norm(rts[i] - pars(i,4), pars(i,3), pars(i,2) + pars(i,3), pars(i,0), adj_sv, use_posdrift,log_out);
+		double adj_v = pars(i,0)*pars(i,6);
+		double adj_sv = std::sqrt( std::pow(pars(i,1),2) + (pars(i,5)*std::pow(adj_v,2)) );
+        out[k] = dlba_norm(rts[i] - pars(i,4), pars(i,3), pars(i,2) + pars(i,3), adj_v, adj_sv, use_posdrift,log_out);
       } else{
         out[k] = log_out ? min_ll : std::exp(min_ll);
       }
@@ -147,7 +148,7 @@ NumericVector dlba_joint_c(NumericVector rts, NumericMatrix pars, LogicalVector 
 
 // [[Rcpp::export]]
 NumericVector plba_joint_c(NumericVector rts, NumericMatrix pars, LogicalVector idx, double min_ll, LogicalVector is_ok, bool use_posdrift = true, bool log_out=false){ // Added use_posdrift
-  //v = 0, sv = 1, B = 2, A = 3, t0 = 4, sigma_g = 5
+  //v = 0, sv = 1, B = 2, A = 3, t0 = 4, tau = 5, capacity = 6
   int n = sum(idx);
   NumericVector out(n);
   int k = 0;
@@ -157,8 +158,9 @@ NumericVector plba_joint_c(NumericVector rts, NumericMatrix pars, LogicalVector 
         out[k] = log_out ? R_NegInf : 0; 
       } else if((rts[i] - pars(i,4) > 0) && (is_ok[i])){
         // Pass use_posdrift to plba_norm
-		double adj_sv = std::sqrt( std::pow(pars(i,1),2) + (pars(i,5)*std::pow(pars(i,0),2)) );
-        out[k] = plba_norm(rts[i] - pars(i,4), pars(i,3), pars(i,2) + pars(i,3), pars(i,0), adj_sv, use_posdrift,log_out);
+		double adj_v = pars(i,0)*pars(i,6);
+		double adj_sv = std::sqrt( std::pow(pars(i,1),2) + (pars(i,5)*std::pow(adj_v,2)) );
+        out[k] = plba_norm(rts[i] - pars(i,4), pars(i,3), pars(i,2) + pars(i,3), adj_v, adj_sv, use_posdrift,log_out);
       } else{
         out[k] = log_out ? min_ll : std::exp(min_ll);
       }
