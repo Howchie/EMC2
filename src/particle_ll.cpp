@@ -388,11 +388,17 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
         is_ok = lr_all(is_ok, n_acc);
 		if( type_std.find("LogicalRules") != std::string::npos) {
 			if( type_std.find("negdrift") != std::string::npos) {
-				lls[i] = c_log_likelihood_redundant_target_race_failure(pars, data,
+				lls[i] = c_log_likelihood_redundant_target_race_negdrift(pars, data,
                                                            model_dfun_ptr, model_pfun_ptr, n_trials,
                                                            expand, min_ll, is_ok,n_acc,
                                                            &current_model_ctx);
-			} 
+			}
+			if( type_std.find("substitution") != std::string::npos) {
+				lls[i] = c_log_likelihood_redundant_target_race_substitution(pars, data,
+                                                           model_dfun_ptr, model_pfun_ptr, n_trials,
+                                                           expand, min_ll, is_ok,n_acc,
+                                                           &current_model_ctx);
+			} 			
 			else {
 				lls[i] = c_log_likelihood_redundant_target_race(pars, data,
                                                            model_dfun_ptr, model_pfun_ptr, n_trials,
@@ -974,6 +980,14 @@ double c_log_likelihood_race_cens_trunc(
     return total_ll;
 }
 
+// Utility to compute log(1 - exp(log_p)) while avoiding -Inf
+inline double safe_log1mexp(double log_p) {
+    double res = std::log1p(-std::exp(log_p));
+    if (!R_FINITE(res)) res = std::log(1e-12);
+    return res;
+}
+
+
 double c_log_likelihood_redundant_target_race(
     Rcpp::NumericMatrix pars,
     Rcpp::DataFrame dadm,
@@ -1136,7 +1150,107 @@ double c_log_likelihood_redundant_target_race(
     return sum_ll;
 }
 
-double c_log_likelihood_redundant_target_race_failure(
+double c_log_likelihood_redundant_target_race_negdrift(
+    Rcpp::NumericMatrix pars,
+    Rcpp::DataFrame dadm,
+    RacePdfFun model_dfun,
+    RaceCdfFun model_pfun,
+    const int n_trials,
+    const Rcpp::IntegerVector expand,
+    double min_ll,
+    const Rcpp::LogicalVector ok_params,
+	int n_acc,
+    void* model_specific_context) {
+
+    if (n_trials % n_acc != 0) Rcpp::stop("c_log_likelihood_redundant_target_race: dadm rows must be multiple of n_acc");
+
+    Rcpp::NumericVector rts = dadm["rt"];
+    Rcpp::CharacterVector role = dadm["lR"];
+    Rcpp::CharacterVector resp = dadm["R"];
+	Rcpp::CharacterVector LogicalRule = dadm["LogicalRule"];
+    Rcpp::LogicalVector all_idx(n_trials, true); // No such thing as "winner" in the normal context
+    Rcpp::NumericVector f_all = model_dfun(rts, pars, ok_params, all_idx, model_specific_context);
+    Rcpp::NumericVector F_all = model_pfun(rts, pars, ok_params, all_idx, model_specific_context);
+    int n_unique_trials = n_trials / n_acc;
+    Rcpp::NumericVector ll_unique(n_unique_trials);
+	
+	ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(model_specific_context);
+	Rcpp::List dimnames = pars.attr("dimnames");
+	
+	// set up parameters
+	double vA_T, vB_T, svA_T, svB_T, p_negA, p_negB, p_A_Fail, p_B_Fail, p_AB_Fail, p_process, p_j;
+	
+    for(int j=0; j<n_unique_trials; ++j){
+        int start = j*n_acc;
+		p_j = 0;
+        double fA=NA_REAL, fB=NA_REAL, fnA=NA_REAL, fnB=NA_REAL;
+        double FA=NA_REAL, FB=NA_REAL, FnA=NA_REAL, FnB=NA_REAL;
+        for(int k=0;k<n_acc;++k){
+            int idx = start+k;
+            std::string r = Rcpp::as<std::string>(role[idx]);
+            if(r == "A"){ fA = f_all[idx]; FA = F_all[idx]; vA_T=pars(idx,0); svA_T=pars(idx,1);}
+            else if(r == "B"){ fB = f_all[idx]; FB = F_all[idx]; vB_T=pars(idx,0); svB_T=pars(idx,1);}
+            else if(r == "n_A"){ fnA = f_all[idx]; FnA = F_all[idx];}
+            else if(r == "n_B"){ fnB = f_all[idx]; FnB = F_all[idx];}
+        }
+		p_negA = R::pnorm(0.0, vA_T, svA_T, 1,0); p_negB = R::pnorm(0.0, vB_T, svB_T, 1,0); 
+		double one_m_FB = std::max(1e-12, 1.0 - FB);
+		double one_m_FA = std::max(1e-12, 1.0 - FA);
+		double one_m_FnB = std::max(1e-12, 1.0 - FnB);
+		double one_m_FnA = std::max(1e-12, 1.0 - FnA);
+		double one_m_p_negA = std::max(1e-12, 1.0 - p_negA);
+		double one_m_p_negB = std::max(1e-12, 1.0 - p_negB);
+		double one_m_FnAFnB = std::max(1e-12, 1.0 - FnA * FnB);
+		double No_fail = std::max(1e-12, one_m_p_negA * one_m_p_negB);
+		double one_m_FAFB = std::max(1e-12, 1.0 - FA * FB);
+        std::string r_obs = Rcpp::as<std::string>(resp[start]);
+		// We're building a likelihood allowing drift rates to go negative only for TARGET accumulators
+		// If a target accumulator "fails" we substitute the corresponding "absence" accumulator with the vTRUE-Absent in some cases this won't change it, e.g. trials where the target actually wasn't there -- this is mathematically the same as just the usual race
+		// When a target "fails" (has negative drift) it can't finish thus drops out of the likelihood for those cases
+		// When both targets fail, OR "yes" is impossible. When either target fails, AND "yes" is impossible.
+        if (LogicalRule[start]=="OR") {
+			if(r_obs == "yes"){
+				p_process = No_fail*((fA*one_m_FB + fB*one_m_FA) * one_m_FnAFnB);
+				p_A_Fail = (p_negA*one_m_p_negB) * (fB*one_m_FnAFnB); // A failed but B didn't and B beat at least one absence
+				p_B_Fail = (p_negB*one_m_p_negA) * (fA*one_m_FnAFnB); // B failed but A didn't and A beat at least one absence
+				p_j = p_process+p_A_Fail+p_B_Fail;
+			} else if(r_obs == "no"){
+				p_process = No_fail*((fnA*FnB + fnB*FnA) * (one_m_FA*one_m_FB));
+				p_A_Fail = (p_negA*one_m_p_negB) * (fnA*FnB + fnB*FnA) * one_m_FB; // A failed but B didn't
+				p_B_Fail = (p_negB*one_m_p_negA) * (fnA*FnB + fnB*FnA) * one_m_FA; // A failed but B didn't
+				p_AB_Fail = (p_negA*p_negB) * (fnA*FnB + fnB*FnA); // Both failed
+				p_j = p_process+p_A_Fail+p_B_Fail+p_AB_Fail;
+			}
+		} else if (LogicalRule[start]=="AND") {
+			if(r_obs == "no"){
+				p_process = No_fail*((fnA*one_m_FnB + fnB*one_m_FnA) * one_m_FAFB);
+				p_A_Fail = (p_negA*one_m_p_negB) * (fnB*one_m_FnA + fnA*one_m_FnB); // A failed but B didn't
+				p_B_Fail = (p_negB*one_m_p_negA) * (fnB*one_m_FnA + fnA*one_m_FnB); // A failed but B didn't
+				p_AB_Fail = (p_negA*p_negB) * (fnB*one_m_FnA + fnA*one_m_FnB); // Both failed
+				p_j = p_process+p_A_Fail+p_B_Fail+p_AB_Fail;
+			} else if(r_obs == "yes"){
+				p_process = No_fail*((fA*FB + fB*FA) * (one_m_FnA*one_m_FnB));
+				p_j = p_process;
+			}
+		}
+		if (p_j <= 0.0 || !R_FINITE(p_j)) {
+			ll_unique[j] = min_ll;
+		} else {
+			ll_unique[j] = std::log(p_j);
+		}
+    }
+
+    Rcpp::NumericVector ll_exp = c_expand(ll_unique, expand);
+    double sum_ll = 0.0;
+    for(int i=0;i<ll_exp.size();++i){
+        double val = ll_exp[i];
+        if(!R_FINITE(val) || Rcpp::NumericVector::is_na(val) || val < min_ll) val = min_ll;
+        sum_ll += val;
+    }
+    return sum_ll;
+}
+
+double c_log_likelihood_redundant_target_race_substitution(
     Rcpp::NumericMatrix pars,
     Rcpp::DataFrame dadm,
     RacePdfFun model_dfun,

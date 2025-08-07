@@ -259,7 +259,19 @@ double c_log_likelihood_redundant_target_race(
 	int nacc,
     void* model_specific_context);
 	
-double c_log_likelihood_redundant_target_race_failure(
+double c_log_likelihood_redundant_target_race_negdrift(
+    Rcpp::NumericMatrix pars,
+    Rcpp::DataFrame dadm,
+    RacePdfFun model_dfun,
+    RaceCdfFun model_pfun,
+    const int n_trials,
+    const Rcpp::IntegerVector expand,
+    double min_ll,
+    const Rcpp::LogicalVector ok_params,
+	int nacc,
+    void* model_specific_context);
+	
+	double c_log_likelihood_redundant_target_race_substitution(
     Rcpp::NumericMatrix pars,
     Rcpp::DataFrame dadm,
     RacePdfFun model_dfun,
