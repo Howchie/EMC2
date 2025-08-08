@@ -998,7 +998,7 @@ inline double safe_log1mexp(double log_p) {
     return res;
 }
 
-
+// This is the Bushmakin et al (2017) model
 double c_log_likelihood_redundant_target_race(
     Rcpp::NumericMatrix pars,
     Rcpp::DataFrame dadm,
@@ -1073,9 +1073,9 @@ double c_log_likelihood_redundant_target_race(
     }
 	
 	// set up parameters
-	double p_j; double p_guess;double p_process; double p_rulebreak;
-	double p;double q;double r;
-	double vA_T;double vA_N;double vB_T;double vB_N;double svA_T;double svA_N;double svB_T;double svB_N; double vG; double svG;
+	double p_j, p_guess, p_process, p_rulebreak;
+	double p, q, r;
+	double vA_T, vB_T, svA_T, svB_T, vG, svG;
 	
     for(int j=0; j<n_unique_trials; ++j){
         int start = j*n_acc;
@@ -1087,8 +1087,8 @@ double c_log_likelihood_redundant_target_race(
             std::string r = Rcpp::as<std::string>(role[idx]);
             if(r == "A"){ fA = f_all[idx]; FA = F_all[idx]; vA_T=pars(idx,0); svA_T=pars(idx,1);}
             else if(r == "B"){ fB = f_all[idx]; FB = F_all[idx]; vB_T=pars(idx,0); svB_T=pars(idx,1); }
-            else if(r == "n_A"){ fnA = f_all[idx]; FnA = F_all[idx]; vA_N=pars(idx,0); svA_N=pars(idx,1);}
-            else if(r == "n_B"){ fnB = f_all[idx]; FnB = F_all[idx]; vB_N=pars(idx,0); svB_N=pars(idx,1);}
+            else if(r == "n_A"){ fnA = f_all[idx]; FnA = F_all[idx];}
+            else if(r == "n_B"){ fnB = f_all[idx]; FnB = F_all[idx];}
 			else if(r == "guess"){ fG = f_all[idx]; FG = F_all[idx]; vG=pars(idx,0); svG=pars(idx,1);}
         }
 		double one_m_FB = std::max(1e-12, 1.0 - FB);
@@ -1161,6 +1161,7 @@ double c_log_likelihood_redundant_target_race(
     return sum_ll;
 }
 
+// This models allows for target processes to "fail" with negative drift, but the other racer remains the "incorrect absence" (assuming the target was presented)
 double c_log_likelihood_redundant_target_race_negdrift(
     Rcpp::NumericMatrix pars,
     Rcpp::DataFrame dadm,
@@ -1261,6 +1262,9 @@ double c_log_likelihood_redundant_target_race_negdrift(
     return sum_ll;
 }
 
+// This is the new model. We allow negative rates on target accumulators -- but importantly, we interpret these as "failure to view stimulus"
+// This means on those trials, we flip the drift rate of the "absence" racer to be as if it were the correct accumulator (for logisitcal reasons I added this as two new racers but they have the same parameters as vlMTRUE)
+// We also have parameters kappa and tau, which represent a multiplier on BOTH drift rates. Kappa (capacity) influences the means, while tau represents the variance of a distribution centered on kappa (=1 by default), from which a general perceptual effort/efficiency is drawn. This influences both target accumulators. One benefit of this is allowing covariance on sv in DT trials, such that the failure rates m(negative drifts) become correlated.
 double c_log_likelihood_redundant_target_race_substitution(
     Rcpp::NumericMatrix pars,
     Rcpp::DataFrame dadm,
@@ -1289,9 +1293,10 @@ double c_log_likelihood_redundant_target_race_substitution(
 	Rcpp::List dimnames = pars.attr("dimnames");
 	
 	// set up parameters
-	double vA_T, vA_T_eff, vB_T, vB_T_eff, svA_T, svA_eff, svB_T, svB_eff, tau, p_A_Fail, p_B_Fail, p_AB_Fail, p_process, p_j;
+	double vA_T_eff, vB_T_eff, svA_T, svA_eff, svB_T, svB_eff, p_A_Fail, p_B_Fail, p_AB_Fail, p_process, p_j;
 	
     for(int j=0; j<n_unique_trials; ++j){
+		double tau =0; double kappa=1; // initialise these to avoid re-using stale values from previous trials
         int start = j*n_acc;
 		p_j = 0;
         double fA=NA_REAL, fB=NA_REAL, fnA=NA_REAL, fnB=NA_REAL, fnA_flip=0, fnB_flip=0;
@@ -1299,27 +1304,26 @@ double c_log_likelihood_redundant_target_race_substitution(
         for(int k=0;k<n_acc;++k){
             int idx = start+k;
             std::string r = Rcpp::as<std::string>(role[idx]);
-			tau = pars(start,5);
-            if(r == "A"){vA_T_eff=pars(idx,0)*pars(idx,6); svA_T=pars(idx,1); fA = f_all[idx]; FA = F_all[idx];}
-            else if(r == "B"){vB_T_eff=pars(idx,0)*pars(idx,6); svB_T=pars(idx,1); fB = f_all[idx]; FB = F_all[idx];}
+            if(r == "A"){tau = pars(idx,5); kappa=pars(idx,6);vA_T_eff=pars(idx,0)*kappa; svA_T=pars(idx,1); fA = f_all[idx]; FA = F_all[idx];}
+            else if(r == "B"){tau = pars(idx,5); kappa=pars(idx,6);vB_T_eff=pars(idx,0)*kappa; svB_T=pars(idx,1); fB = f_all[idx]; FB = F_all[idx];}
             else if(r == "n_A"){ fnA = f_all[idx]; FnA = F_all[idx];}
             else if(r == "n_B"){ fnB = f_all[idx]; FnB = F_all[idx];}
 			else if(r == "n_A_flip"){ fnA_flip = f_all[idx]; FnA_flip = F_all[idx];}
 			else if(r == "n_B_flip"){ fnB_flip = f_all[idx]; FnB_flip = F_all[idx];}
 			
         }
-		svA_eff = std::sqrt( svA_T*svA_T + tau * vA_T_eff*vB_T_eff ); 
-		svB_eff = std::sqrt( svB_T*svB_T + tau * vA_T_eff*vB_T_eff ); 
+		svA_eff = std::sqrt( svA_T*svA_T + tau * vA_T_eff*vA_T_eff ); 
+		svB_eff = std::sqrt( svB_T*svB_T + tau * vB_T_eff*vB_T_eff ); 
 		double zA   = -vA_T_eff / svA_eff;
 		double zB   = -vB_T_eff / svB_eff;
 		double rho  = (tau * vA_T_eff * vB_T_eff) / (svA_eff * svB_eff);   // correlation
+		rho = std::max(-0.999999, std::min(0.999999, rho)); // numerical safety
 		double negA  = R::pnorm(zA, 0.0, 1.0, 1, 0);
 		double negB  = R::pnorm(zB, 0.0, 1.0, 1, 0);
 		double negAB = norm_cdf_2d(zA, zB, rho);
 		double A_fail  = negA - negAB;
 		double B_fail  = negB - negAB;
 		double No_fail = 1.0 - negA - negB + negAB;
-		//Rcout<<"NegA: "<<negA<<" NegB: "<<negB<<" NegAB: "<<negAB<<" Rho: "<<rho<<" tau: "<<tau<<std::endl;
 		double one_m_FB = std::max(1e-12, 1.0 - FB);
 		double one_m_FA = std::max(1e-12, 1.0 - FA);
 		double one_m_FnB = std::max(1e-12, 1.0 - FnB);
@@ -1360,6 +1364,7 @@ double c_log_likelihood_redundant_target_race_substitution(
 				p_j = p_process;
 			}
 		}
+		//Rcout<<"p_process: "<<p_process<<" p_A: "<<p_A_Fail<<" p_B: "<<p_B_Fail<<" p_j: "<<p_j<<std::endl; 
 		if (p_j <= 0.0 || !R_FINITE(p_j)) {
 			ll_unique[j] = min_ll;
 		} else {

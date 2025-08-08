@@ -6,10 +6,12 @@ do_transform <- function(pars, model)
   isexp    <- transform$func[ptypes] == "exp"
   isprobit <- transform$func[ptypes] == "pnorm"
   islogis <- transform$func[ptypes] == "plogit"
+
   ## exp link:  lower + exp(real)
   pars[, isexp] <- sweep(
     exp(pars[, isexp, drop = FALSE]), 2,
     transform$lower[ptypes[isexp]], "+")
+  
   
   ## probit link: lower + (upper‑lower) * pnorm(real)
   pars[, isprobit] <- sweep(
@@ -102,13 +104,14 @@ do_reverse_transform_variance <- function(mu_nat, var, model, prop=TRUE)
   ## exp link:  lower + exp(real)
   # residual on the natural scale
   diag(var_tr)[is_log] <- log1p(diag(var_prop)[is_log] /
-                              mu_nat  [1:nrow(mu_nat), is_log])
+                              mu_nat[1:nrow(mu_nat), is_log])
   par_tr[1:nrow(mu_nat), is_log] <- ifelse(
     mu_nat[, is_log, drop = FALSE] <= model$bound$minmax[1, ptypes[is_log]] |
       is.na(mu_nat[, is_log, drop = FALSE]),
     log(model$bound$minmax[1, ptypes[is_log]]),
     log(mu_nat[, is_log, drop = FALSE]) - 0.5 * diag(var_tr)[is_log]
   )
+  
   ## probit link - to get variance we need a root finder (this probably needs to be thoroughly checked by someone not ZH)
   var_nat=diag(as.vector(mu_nat),ncol=ncol(mu_nat))*var_prop
   make_root <- function(mu, target_var, lower, upper) {
@@ -432,8 +435,8 @@ get_p_types <- function(nams, reverse = FALSE){
 }
 
 fill_transform <- function(transform, model, p_vector,
-                           supported=c("identity","exp","pnorm"),
-                           has_lower=c("exp","pnorm"),has_upper=c("pnorm"),
+                           supported=c("identity","exp","pnorm","plogis"),
+                           has_lower=c("exp","pnorm","plogis"),has_upper=c("pnorm","plogis"),
                            is_pre = FALSE){
   if(!is.null(transform)){
     if (!all(transform$func %in% supported)){

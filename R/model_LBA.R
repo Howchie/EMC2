@@ -315,8 +315,8 @@ LogicalRulesLBA_substitution <- function(){
     # p_vector transform, sets sv as a scaling parameter
     p_types=c("v" = 1,"sv" = log(1),"B" = log(1),"A" = log(0),"t0" = log(0),"tau"=log(0),"capacity"=log(1)),
     transform=list(func=c(v = "identity",sv = "exp", B = "exp", A = "exp",t0 = "exp",tau="exp",capacity="exp")),
-    bound=list(minmax=cbind(v=c(-Inf,Inf),sv = c(0, Inf), A=c(1e-4,Inf),B=c(0,Inf),t0=c(0.05,Inf),tau=c(0,Inf),capacity=c(1e-4,Inf)),
-               exception=c(A=0)),
+    bound=list(minmax=cbind(v=c(-Inf,Inf),sv = c(0, Inf), A=c(1e-4,Inf),B=c(0,Inf),t0=c(0.05,Inf),tau=c(1e-4,Inf),capacity=c(1e-4,Inf)),
+               exception=c(A=0,tau=0)),
     # Transform to natural scale
     # Trial dependent parameter transform
     Ttransform = function(pars,dadm) {
