@@ -77,7 +77,7 @@ rLBA <- function(lR,pars,p_types=c("v","sv","b","A","t0"),posdrift = TRUE,
   out
 }
 
-rLBA_joint <- function(lR,pars,p_types=c("adj_v","adj_sv","b","A","t0"),posdrift = TRUE,
+rLBA_joint <- function(lR,S,pars,p_types=c("adj_v","b","A","t0"),posdrift = TRUE,
                  ok=rep(TRUE,length(lR)))
   # lR is an empty latent response factor lR with one level for each accumulator.
   # pars is a matrix of corresponding parameter values named as in p_types
@@ -97,7 +97,7 @@ rLBA_joint <- function(lR,pars,p_types=c("adj_v","adj_sv","b","A","t0"),posdrift
   if (!all(p_types %in% dimnames(pars)[[2]]))
     stop("pars must have columns ",paste(p_types,collapse = " "))
   dt[ok] <- (pars[,"b"]-pars[,"A"]*runif(dim(pars)[1]))/
-    msm::rtnorm(dim(pars)[1],pars[,"adj_v"],pars[,"adj_sv"],ifelse(posdrift,0,-Inf))
+    pars[,"adj_v"]
   dt[dt<0] <- Inf
   bad <- apply(dt,2,function(x){all(is.infinite(x))})
   R <- apply(dt,2,which.min)
@@ -324,7 +324,7 @@ LogicalRulesLBA_substitution <- function(){
       pars
     },
     # Random function for racing accumulator
-    rfun=function(data,pars,posdrift) rLBA_joint(data$lR,pars,posdrift=posdrift,ok = attr(pars, "ok")),
+    rfun=function(data,pars,posdrift) rLBA_joint(data$lR,data$S,pars,posdrift=posdrift,ok = attr(pars, "ok")),
     # Density function (PDF) for single accumulator
     dfun=function(rt,pars) dLBA(rt,pars,posdrift = TRUE),
     # Probability function (CDF) for single accumulator

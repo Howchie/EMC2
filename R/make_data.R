@@ -416,10 +416,22 @@ LogicalRules_negdrift_rfun <- function(data, pars, model){
   return(Rrt)
 }
 
+## Important - due to the correlated drift rates in this function I sample the actual drifts inside here, and the corresponding LBA rfun just uses them directly
 LogicalRules_substitution_rfun <- function(data, pars, model){
   Rrti <- matrix(ncol=length(levels(data$lR)),nrow=dim(data)[1]/length(levels(data$lR)),
                  dimnames=list(NULL,levels(data$lR)))
   RACE <- levels(data$lR) # should be 4 unless using a non-standard implementation
+  accs = levels(data$lR); lower=numeric(length=length(accs));names(lower)=accs;lower["A"]=-Inf;lower["B"]=-Inf
+  for (i in unique(data$trials)) {
+    vars = pars[data$trials==i,"adj_sv"]^2; vs = pars[data$trials==i,"adj_v"]
+    covariances=matrix(0,nrow=length(accs),ncol=length(accs),dimnames=list(accs,accs))
+    diag(covariances)=vars
+    tauA=pars[data$trials==i&data$lR=="A","tau"];tauB=pars[data$trials==i&data$lR=="B","tau"]
+    muvA=pars[data$trials==i&data$lR=="A","adj_v"];muvB=pars[data$trials==i&data$lR=="B","adj_v"]
+    if(tauA==tauB){tau=tauA}else{stop("tau parameter mismatch")}
+    covariances["A","B"] = tau*muvA*muvB;covariances["B","A"] = tau*muvA*muvB
+    pars[data$trials==i,"adj_v"]=tmvtnorm::rtmvnorm(1,mean=vs,sigma=covariances,lower=lower)
+  }
   for (i in RACE) {
     pick <- data$lR==i
     data_in <- data[pick,]
