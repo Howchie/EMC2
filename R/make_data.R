@@ -250,10 +250,7 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
   if (any(names(data)=="RACE")) {
     Rrt <- RACE_rfun(data, pars, model)
   } else if (any(names(data)=="LogicalRule")) {
-    if (grepl("negdrift",model()$c_name)){
-      Rrt <- LogicalRules_negdrift_rfun(data, pars, model)
-    } 
-    else if (grepl("substitution",model()$c_name)){
+    if (grepl("substitution",model()$c_name)){
       Rrt <- LogicalRules_substitution_rfun(data, pars, model)
     } else {Rrt <- LogicalRules_rfun(data, pars, model)}
   } else {Rrt <- model()$rfun(data,pars)}
