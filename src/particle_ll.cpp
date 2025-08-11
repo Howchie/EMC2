@@ -1320,13 +1320,13 @@ double c_log_likelihood_redundant_target_race_substitution(
 		Rcpp::LogicalVector ok_trial = ok_params[Rcpp::Range(start, start + n_acc - 1)];
 		// initialise parameters
         double tau = 0, kappa = 1;
-		double f_nA, f_nB, F_nA, F_nB, f_nA_flip, f_nB_flip, F_nA_flip, F_nB_flip;
+		double f_A=0, f_B=0, F_A=0, F_B=0, f_nA=0, f_nB=0, F_nA=0, F_nB=0, f_nA_flip=0, f_nB_flip=0, F_nA_flip=0, F_nB_flip=0;
         double v_base_A=0, v_base_B=0, sv_A=0, sv_B=0;
         int A_idx=-1, B_idx=-1;
 		
 		auto compute_ff = [&](int idx_row, double mu_scale, double& fout, double& Fout){
 			// build a 1-row view with mu scaled and call model_* once
-			Rcpp::NumericVector rts1(1, rts[idx_row]);    // same t for this trial
+			Rcpp::NumericVector rts1(1, rts[start]);    // same t for this trial
 			Rcpp::LogicalVector ok1(1, true);
 			Rcpp::NumericMatrix one(1, p_trial.ncol());
 			one.row(0) = p_trial.row(idx_row);
@@ -1340,68 +1340,112 @@ double c_log_likelihood_redundant_target_race_substitution(
         for(int k=0; k<n_acc; ++k) {
 			idx = start+k;
             std::string r = Rcpp::as<std::string>(role[start + k]);
-            if (r == "A") { tau = p_trial(k, 5); kappa = p_trial(k, 6); v_base_A = p_trial(k, 0); sv_A = p_trial(k, 1); A_idx=k;}
-            else if (r == "B") { v_base_B = p_trial(k, 0); sv_B = p_trial(k, 1); B_idx=k;}
+            if (r == "A") { tau = p_trial(k, 5); kappa = p_trial(k, 6); v_base_A = p_trial(k, 0); sv_A = p_trial(k, 1); A_idx=k; f_A = f_all[idx]; F_A = F_all[idx]; }
+            else if (r == "B") { v_base_B = p_trial(k, 0); sv_B = p_trial(k, 1); B_idx=k; f_B = f_all[idx]; F_B = F_all[idx]; }
             else if (r == "n_A") {f_nA = f_all[idx]; F_nA = F_all[idx]; } else if (r == "n_B") { f_nB = f_all[idx]; F_nB = F_all[idx];}
             else if (r == "n_A_flip") { f_nA_flip = f_all[idx]; F_nA_flip = F_all[idx]; } else if (r == "n_B_flip") { f_nB_flip = f_all[idx]; F_nB_flip = F_all[idx];} 
         }
 		// initialise log likelihood
 		double total_lk = 0;
 		Rcpp::NumericVector f(4); Rcpp::NumericVector F(4);
-		// Here we loop through the Gauss-Hermite nodes. This will approximate the integration across the distribution g~N(kappa,tau)
-        for (int i=0; i < n_nodes; ++i) {
-            double g = kappa + gh_nodes[i] * sqrt(2.0) * tau; // transform to the right form for GH math
-            double v_eff_A = g * v_base_A;
-            double v_eff_B = g * v_base_B;
-			double fA=0, FA=0, fB=0, FB=0;
-			compute_ff(A_idx, g, fA, FA);
-			compute_ff(B_idx, g, fB, FB);
-            double p_negA = R::pnorm(0, v_eff_A, sv_A, 1, 0);
-            double p_negB = R::pnorm(0, v_eff_B, sv_B, 1, 0);
-
-            double p_ok_ok = (1-p_negA)*(1-p_negB);
-            double p_fail_ok = p_negA*(1-p_negB);
-            double p_ok_fail = (1-p_negA)*p_negB;
-            double p_fail_fail = p_negA*p_negB;
-
-            double lk_node = 0;
-            std::string r_obs = Rcpp::as<std::string>(resp[start]);
-            std::string rule = Rcpp::as<std::string>(LogicalRule[start]);
-            double rt = rts[start];
-
-            // Case 1: A ok, B ok
+		std::string r_obs = Rcpp::as<std::string>(resp[start]);
+        std::string rule = Rcpp::as<std::string>(LogicalRule[start]);
+        double rt = rts[start];
+		if (tau==0) {
+			double lk = 0;
+			double v_eff_A = kappa * v_base_A;
+			double v_eff_B = kappa * v_base_B;
+			double p_negA = R::pnorm(0, v_eff_A, sv_A, 1, 0);
+			double p_negB = R::pnorm(0, v_eff_B, sv_B, 1, 0);
+	
+			double p_ok_ok = (1-p_negA)*(1-p_negB);
+			double p_fail_ok = p_negA*(1-p_negB);
+			double p_ok_fail = (1-p_negA)*p_negB;
+			double p_fail_fail = p_negA*p_negB;
+			// Case 1: A ok, B ok
             if (p_ok_ok > 1e-12) {
-                f[0]=fA; f[1]=fB; f[2]=f_nA; f[3]=f_nB;
-				F[0]=FA; F[1]=FB; F[2]=F_nA; F[3]=F_nB;
-                lk_node += p_ok_ok * get_logical_race_lk(rt, r_obs, rule, f,F);
+                f[0]=f_A; f[1]=f_B; f[2]=f_nA; f[3]=f_nB;
+				F[0]=F_A; F[1]=F_B; F[2]=F_nA; F[3]=F_nB;
+                lk += p_ok_ok * get_logical_race_lk(rt, r_obs, rule, f,F);
             }
             // Case 2: A fail, B ok
             if (p_fail_ok > 1e-12) {
-                f[0]=0; f[1]=fB; f[2]=f_nA_flip; f[3]=f_nB;
-				F[0]=0; F[1]=FB; F[2]=F_nA_flip; F[3]=F_nB;
-                lk_node += p_fail_ok * get_logical_race_lk(rt, r_obs, rule, f,F);
+                f[0]=0; f[1]=f_B; f[2]=f_nA_flip; f[3]=f_nB;
+				F[0]=0; F[1]=F_B; F[2]=F_nA_flip; F[3]=F_nB;
+                lk += p_fail_ok * get_logical_race_lk(rt, r_obs, rule, f,F);
             }
             // Case 3: A ok, B fail
             if (p_ok_fail > 1e-12) {
-                f[0]=fA; f[1]=0; f[2]=f_nA; f[3]=f_nB_flip;
-				F[0]=FA; F[1]=0; F[2]=F_nA; F[3]=F_nB_flip;
-                lk_node += p_ok_fail * get_logical_race_lk(rt, r_obs, rule, f,F);
+                f[0]=f_A; f[1]=0; f[2]=f_nA; f[3]=f_nB_flip;
+				F[0]=F_A; F[1]=0; F[2]=F_nA; F[3]=F_nB_flip;
+                lk += p_ok_fail * get_logical_race_lk(rt, r_obs, rule, f,F);
             }
             // Case 4: A fail, B fail
             if (p_fail_fail > 1e-12) {
                 f[0]=0; f[1]=0; f[2]=f_nA_flip; f[3]=f_nB_flip;
 				F[0]=0; F[1]=0; F[2]=F_nA_flip; F[3]=F_nB_flip;
-                lk_node += p_fail_fail * get_logical_race_lk(rt, r_obs, rule, f,F);
+                lk += p_fail_fail * get_logical_race_lk(rt, r_obs, rule, f,F);
             }
-            total_lk += gh_weights[i] * lk_node;
-        }
-        
-        total_lk /= sqrt(M_PI); // adjustment for GH
+			if (lk <= 0.0 || !R_FINITE(lk)) {
+				ll_unique[j] = min_ll;
+			} else {
+				ll_unique[j] = std::log(lk);
+			}
+		} else{
+			// Here we loop through the Gauss-Hermite nodes. This will approximate the integration across the distribution g~N(kappa,tau)
+			for (int i=0; i < n_nodes; ++i) {
+				double g = kappa + gh_nodes[i] * sqrt(2.0) * tau; // transform to the right form for GH math
+				double v_eff_A = g * v_base_A;
+				double v_eff_B = g * v_base_B;
+				double f_A=0, F_A=0, f_B=0, F_B=0;
+				compute_ff(A_idx, g, f_A, F_A);
+				compute_ff(B_idx, g, f_B, F_B);
+				double p_negA = R::pnorm(0, v_eff_A, sv_A, 1, 0);
+				double p_negB = R::pnorm(0, v_eff_B, sv_B, 1, 0);
+	
+				double p_ok_ok = (1-p_negA)*(1-p_negB);
+				double p_fail_ok = p_negA*(1-p_negB);
+				double p_ok_fail = (1-p_negA)*p_negB;
+				double p_fail_fail = p_negA*p_negB;
+	
+				double lk_node = 0;
+            
 
-		if (total_lk <= 0.0 || !R_FINITE(total_lk)) {
-			ll_unique[j] = min_ll;
-		} else {
-			ll_unique[j] = std::log(total_lk);
+				// Case 1: A ok, B ok
+				if (p_ok_ok > 1e-12) {
+					f[0]=f_A; f[1]=f_B; f[2]=f_nA; f[3]=f_nB;
+					F[0]=F_A; F[1]=F_B; F[2]=F_nA; F[3]=F_nB;
+					lk_node += p_ok_ok * get_logical_race_lk(rt, r_obs, rule, f,F);
+				}
+				// Case 2: A fail, B ok
+				if (p_fail_ok > 1e-12) {
+					f[0]=0; f[1]=f_B; f[2]=f_nA_flip; f[3]=f_nB;
+					F[0]=0; F[1]=F_B; F[2]=F_nA_flip; F[3]=F_nB;
+					lk_node += p_fail_ok * get_logical_race_lk(rt, r_obs, rule, f,F);
+				}
+				// Case 3: A ok, B fail
+				if (p_ok_fail > 1e-12) {
+					f[0]=f_A; f[1]=0; f[2]=f_nA; f[3]=f_nB_flip;
+					F[0]=F_A; F[1]=0; F[2]=F_nA; F[3]=F_nB_flip;
+					lk_node += p_ok_fail * get_logical_race_lk(rt, r_obs, rule, f,F);
+				}
+				// Case 4: A fail, B fail
+				if (p_fail_fail > 1e-12) {
+					f[0]=0; f[1]=0; f[2]=f_nA_flip; f[3]=f_nB_flip;
+					F[0]=0; F[1]=0; F[2]=F_nA_flip; F[3]=F_nB_flip;
+					lk_node += p_fail_fail * get_logical_race_lk(rt, r_obs, rule, f,F);
+				}
+				total_lk += gh_weights[i] * lk_node;
+			}
+		
+        
+			total_lk /= sqrt(M_PI); // adjustment for GH
+
+			if (total_lk <= 0.0 || !R_FINITE(total_lk)) {
+				ll_unique[j] = min_ll;
+			} else {
+				ll_unique[j] = std::log(total_lk);
+			}
 		}
     }
 
