@@ -1252,29 +1252,11 @@ double c_log_likelihood_redundant_target_race_negdrift(
 
 // Helper to calculate race likelihood for a specific set of active accumulators
 double get_logical_race_lk(double rt, const std::string& r_obs, const std::string& logical_rule,
-                   const Rcpp::CharacterVector& acc_names, const Rcpp::NumericMatrix& race_pars,const Rcpp::LogicalVector& ok_params,
-                   RacePdfFun model_dfun, RaceCdfFun model_pfun, void* ctx)
+                   const Rcpp::NumericVector& f,const Rcpp::NumericVector& F)
 {
-    int n_acc_race = race_pars.nrow();
-    if (n_acc_race == 0) return 0.0; // No race, probability is 0.
+    double fA = f[0], fB = f[1], fnA = f[2], fnB = f[3];
+    double FA = F[0], FB = F[1], FnA = F[2], FnB = F[3];
 
-    Rcpp::NumericVector rts(n_acc_race, rt);
-    Rcpp::LogicalVector all_idx(n_acc_race, true);
-
-    Rcpp::NumericVector f = model_dfun(rts, race_pars, ok_params, all_idx, ctx);
-    Rcpp::NumericVector F = model_pfun(rts, race_pars, ok_params, all_idx, ctx);
-
-    double fA = 0, fB = 0, fnA = 0, fnB = 0;
-    double FA = 1, FB = 1, FnA = 1, FnB = 1;
-
-    for (int i=0; i < n_acc_race; ++i) {
-        std::string name = Rcpp::as<std::string>(acc_names[i]);
-        if (name == "A") { fA = f[i]; FA = F[i]; }
-        else if (name == "B") { fB = f[i]; FB = F[i]; }
-        else if (name == "n_A" || name == "n_A_flip") { fnA = f[i]; FnA = F[i]; }
-        else if (name == "n_B" || name == "n_B_flip") { fnB = f[i]; FnB = F[i]; }
-    }
-	
 	double one_m_FB = std::max(1e-12, 1.0 - FB);
 	double one_m_FA = std::max(1e-12, 1.0 - FA);
 	double one_m_FnB = std::max(1e-12, 1.0 - FnB);
@@ -1326,34 +1308,54 @@ double c_log_likelihood_redundant_target_race_substitution(
 	const int n_nodes = gh_nodes.length();
     int n_unique_trials = n_trials / n_acc;
     Rcpp::NumericVector ll_unique(n_unique_trials);
-	
-	
-    for(int j=0; j<n_unique_trials; ++j){
+	Rcpp::LogicalVector all_idx(n_trials, true); // No such thing as "winner" in the normal context
+	Rcpp::NumericVector f_all = model_dfun(rts, pars, ok_params, all_idx, model_specific_context);
+    Rcpp::NumericVector F_all = model_pfun(rts, pars, ok_params, all_idx, model_specific_context);
 
+    for(int j=0; j<n_unique_trials; ++j){
+		int idx=0;
         int start = j*n_acc;
 		// extract pars for this trial (all accumulators)
         Rcpp::NumericMatrix p_trial = pars(Rcpp::Range(start, start + n_acc - 1), Rcpp::_);
 		Rcpp::LogicalVector ok_trial = ok_params[Rcpp::Range(start, start + n_acc - 1)];
 		// initialise parameters
         double tau = 0, kappa = 1;
+		double f_nA, f_nB, F_nA, F_nB, f_nA_flip, f_nB_flip, F_nA_flip, F_nB_flip;
         double v_base_A=0, v_base_B=0, sv_A=0, sv_B=0;
-        int A_idx=-1, B_idx=-1, nA_idx=-1, nB_idx=-1, nA_flip_idx=-1, nB_flip_idx=-1;
+        int A_idx=-1, B_idx=-1;
+		
+		auto compute_ff = [&](int idx_row, double mu_scale, double& fout, double& Fout){
+			// build a 1-row view with mu scaled and call model_* once
+			Rcpp::NumericVector rts1(1, rts[idx_row]);    // same t for this trial
+			Rcpp::LogicalVector ok1(1, true);
+			Rcpp::NumericMatrix one(1, p_trial.ncol());
+			one.row(0) = p_trial.row(idx_row);
+			// scale mean by mu_scale (sv unchanged)
+			one(0,0) *= mu_scale;                       // column 0 is mean drift
+			Rcpp::NumericVector f1 = model_dfun(rts1, one, ok1, ok1, model_specific_context);
+			Rcpp::NumericVector F1 = model_pfun(rts1, one, ok1, ok1, model_specific_context);
+			fout = f1[0];  Fout = F1[0];
+		};
+		
         for(int k=0; k<n_acc; ++k) {
+			idx = start+k;
             std::string r = Rcpp::as<std::string>(role[start + k]);
             if (r == "A") { tau = p_trial(k, 5); kappa = p_trial(k, 6); v_base_A = p_trial(k, 0); sv_A = p_trial(k, 1); A_idx=k;}
             else if (r == "B") { v_base_B = p_trial(k, 0); sv_B = p_trial(k, 1); B_idx=k;}
-            else if (r == "n_A") nA_idx = k; else if (r == "n_B") nB_idx = k;
-            else if (r == "n_A_flip") nA_flip_idx = k; else if (r == "n_B_flip") nB_flip_idx = k;
+            else if (r == "n_A") {f_nA = f_all[idx]; F_nA = F_all[idx]; } else if (r == "n_B") { f_nB = f_all[idx]; F_nB = F_all[idx];}
+            else if (r == "n_A_flip") { f_nA_flip = f_all[idx]; F_nA_flip = F_all[idx]; } else if (r == "n_B_flip") { f_nB_flip = f_all[idx]; F_nB_flip = F_all[idx];} 
         }
 		// initialise log likelihood
 		double total_lk = 0;
-		
+		Rcpp::NumericVector f(4); Rcpp::NumericVector F(4);
 		// Here we loop through the Gauss-Hermite nodes. This will approximate the integration across the distribution g~N(kappa,tau)
         for (int i=0; i < n_nodes; ++i) {
             double g = kappa + gh_nodes[i] * sqrt(2.0) * tau; // transform to the right form for GH math
             double v_eff_A = g * v_base_A;
             double v_eff_B = g * v_base_B;
-
+			double fA=0, FA=0, fB=0, FB=0;
+			compute_ff(A_idx, g, fA, FA);
+			compute_ff(B_idx, g, fB, FB);
             double p_negA = R::pnorm(0, v_eff_A, sv_A, 1, 0);
             double p_negB = R::pnorm(0, v_eff_B, sv_B, 1, 0);
 
@@ -1369,37 +1371,27 @@ double c_log_likelihood_redundant_target_race_substitution(
 
             // Case 1: A ok, B ok
             if (p_ok_ok > 1e-12) {
-                Rcpp::CharacterVector current_accs = Rcpp::CharacterVector::create("A", "B", "n_A", "n_B");
-                Rcpp::NumericMatrix current_pars(current_accs.length(), p_trial.ncol());
-                current_pars.row(0) = p_trial.row(A_idx); current_pars.row(1) = p_trial.row(B_idx);
-                current_pars.row(2) = p_trial.row(nA_idx); current_pars.row(3) = p_trial.row(nB_idx);
-                lk_node += p_ok_ok * get_logical_race_lk(rt, r_obs, rule, current_accs, current_pars, ok_trial, model_dfun, model_pfun, model_specific_context);
+                f[0]=fA; f[1]=fB; f[2]=f_nA; f[3]=f_nB;
+				F[0]=FA; F[1]=FB; F[2]=F_nA; F[3]=F_nB;
+                lk_node += p_ok_ok * get_logical_race_lk(rt, r_obs, rule, f,F);
             }
             // Case 2: A fail, B ok
             if (p_fail_ok > 1e-12) {
-                Rcpp::CharacterVector current_accs = Rcpp::CharacterVector::create("B", "n_A_flip", "n_B");
-                Rcpp::NumericMatrix current_pars(current_accs.length(), p_trial.ncol());
-                current_pars.row(0) = p_trial.row(B_idx); 
-                current_pars.row(1) = p_trial.row(nA_flip_idx); 
-                current_pars.row(2) = p_trial.row(nB_idx);
-                lk_node += p_fail_ok * get_logical_race_lk(rt, r_obs, rule, current_accs, current_pars, ok_trial, model_dfun, model_pfun, model_specific_context);
+                f[0]=0; f[1]=fB; f[2]=f_nA_flip; f[3]=f_nB;
+				F[0]=0; F[1]=FB; F[2]=F_nA_flip; F[3]=F_nB;
+                lk_node += p_fail_ok * get_logical_race_lk(rt, r_obs, rule, f,F);
             }
             // Case 3: A ok, B fail
             if (p_ok_fail > 1e-12) {
-                Rcpp::CharacterVector current_accs = Rcpp::CharacterVector::create("A", "n_A", "n_B_flip");
-                Rcpp::NumericMatrix current_pars(current_accs.length(), p_trial.ncol());
-                current_pars.row(0) = p_trial.row(A_idx); 
-                current_pars.row(1) = p_trial.row(nA_idx); 
-                current_pars.row(2) = p_trial.row(nB_flip_idx);
-                lk_node += p_ok_fail * get_logical_race_lk(rt, r_obs, rule, current_accs, current_pars, ok_trial, model_dfun, model_pfun, model_specific_context);
+                f[0]=fA; f[1]=0; f[2]=f_nA; f[3]=f_nB_flip;
+				F[0]=FA; F[1]=0; F[2]=F_nA; F[3]=F_nB_flip;
+                lk_node += p_ok_fail * get_logical_race_lk(rt, r_obs, rule, f,F);
             }
             // Case 4: A fail, B fail
             if (p_fail_fail > 1e-12) {
-                 Rcpp::CharacterVector current_accs = Rcpp::CharacterVector::create("n_A_flip", "n_B_flip");
-                Rcpp::NumericMatrix current_pars(current_accs.length(), p_trial.ncol());
-                current_pars.row(0) = p_trial.row(nA_flip_idx); 
-                current_pars.row(1) = p_trial.row(nB_flip_idx);
-                lk_node += p_fail_fail * get_logical_race_lk(rt, r_obs, rule, current_accs, current_pars, ok_trial, model_dfun, model_pfun, model_specific_context);
+                f[0]=0; f[1]=0; f[2]=f_nA_flip; f[3]=f_nB_flip;
+				F[0]=0; F[1]=0; F[2]=F_nA_flip; F[3]=F_nB_flip;
+                lk_node += p_fail_fail * get_logical_race_lk(rt, r_obs, rule, f,F);
             }
             total_lk += gh_weights[i] * lk_node;
         }
