@@ -422,7 +422,7 @@ LogicalRules_substitution_rfun <- function(data, pars, model){
   
   # 
   lower=numeric(length=length(accs));names(lower)=accs
-  if(grepl("negdrift",model$c_name)){
+  if(grepl("negdrift",model()$c_name)){
     lower["A"]=-Inf;lower["B"]=-Inf
   }
   sampled_v=numeric(length(pars))
