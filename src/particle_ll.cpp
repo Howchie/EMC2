@@ -1275,7 +1275,7 @@ double get_logical_race_lk(double rt, const std::string& r_obs, const std::strin
         if (r_obs == "no") {
             p_j = (fnA * one_m_FnB + fnB * one_m_FnA) * one_m_FAFB;
         } else { // "yes"
-            p_j = (fA * one_m_FB + fB * one_m_FA) *  one_m_FnA * one_m_FnB;
+            p_j = (fA * FB + fB * FA) *  one_m_FnA * one_m_FnB;
         }
     }
     return p_j > 0 ? p_j : 0;
