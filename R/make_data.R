@@ -446,7 +446,11 @@ LogicalRules_substitution_rfun <- function(data, pars, model){
     data_in$lR <- factor(data$lR[pick])
     tmp <- pars[pick,, drop=FALSE]
     attr(tmp, "ok") <- rep(T, ifelse(is.null(dim(tmp)),1,nrow(tmp)))
-    Rrti[,i] <- model()$rfun(data_in,tmp)$rt
+    if (i=="A" | i=="B"){
+      Rrti[,i] <- model()$rfun(data_in,tmp,FALSE)$rt
+    } else {
+      Rrti[,i] <- model()$rfun(data_in,tmp,TRUE)$rt
+    }
   }
   df = data.frame(LogicalRule = data$LogicalRule[data$lR==levels(data$lR)[1]],
                   AFail=is.infinite(Rrti[,"A"]),
