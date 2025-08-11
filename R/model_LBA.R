@@ -77,7 +77,7 @@ rLBA <- function(lR,pars,p_types=c("v","sv","b","A","t0"),posdrift = TRUE,
   out
 }
 
-rLBA_joint <- function(lR,S,pars,p_types=c("adj_v","b","A","t0"),posdrift = TRUE,
+rLBA_joint <- function(lR,S,pars,p_types=c("sampled_v","b","A","t0"),
                  ok=rep(TRUE,length(lR)))
   # lR is an empty latent response factor lR with one level for each accumulator.
   # pars is a matrix of corresponding parameter values named as in p_types
@@ -97,7 +97,7 @@ rLBA_joint <- function(lR,S,pars,p_types=c("adj_v","b","A","t0"),posdrift = TRUE
   if (!all(p_types %in% dimnames(pars)[[2]]))
     stop("pars must have columns ",paste(p_types,collapse = " "))
   dt[ok] <- (pars[,"b"]-pars[,"A"]*runif(dim(pars)[1]))/
-    pars[,"adj_v"]
+    pars[,"sampled_v"]
   dt[dt<0] <- Inf
   bad <- apply(dt,2,function(x){all(is.infinite(x))})
   R <- apply(dt,2,which.min)
@@ -308,23 +308,23 @@ LogicalRulesLBA_negdrift <- function(){
 #' @export
 #'
 
-LogicalRulesLBA_substitution <- function(){
+LogicalRulesLBA_substitution_negdrift <- function(){
   list(
     type="RACE",
-    c_name = "LBA_LogicalRules_substitution",
+    c_name = "LBA_LogicalRules_substitution_negdrift",
     # p_vector transform, sets sv as a scaling parameter
-    p_types=c("v" = 1,"sv" = log(1),"B" = log(1),"A" = log(0),"t0" = log(0),"tau"=log(0),"capacity"=log(1)),
-    transform=list(func=c(v = "identity",sv = "exp", B = "exp", A = "exp",t0 = "exp",tau="exp",capacity="exp")),
-    bound=list(minmax=cbind(v=c(-Inf,Inf),sv = c(0, Inf), A=c(1e-4,Inf),B=c(0,Inf),t0=c(0.05,Inf),tau=c(1e-4,Inf),capacity=c(1e-4,Inf)),
+    p_types=c("v" = 1,"sv" = log(1),"B" = log(1),"A" = log(0),"t0" = log(0),"tau"=log(0),"k"=log(1)),
+    transform=list(func=c(v = "identity",sv = "exp", B = "exp", A = "exp",t0 = "exp",tau="exp",k="exp")),
+    bound=list(minmax=cbind(v=c(-Inf,Inf),sv = c(0, Inf), A=c(1e-4,Inf),B=c(0,Inf),t0=c(0.05,Inf),tau=c(1e-4,Inf),k=c(1e-4,Inf)),
                exception=c(A=0,tau=0)),
     # Transform to natural scale
     # Trial dependent parameter transform
     Ttransform = function(pars,dadm) {
-      pars <- cbind(pars,b=pars[,"B"] + pars[,"A"],adj_sv = sqrt( (pars[,"sv"]^2) + (pars[,"v"]^2)*pars[,"tau"] ), adj_v = pars[,"v"]*pars[,"capacity"])
+      pars <- cbind(pars,b=pars[,"B"] + pars[,"A"],adj_v = pars[,"v"]*pars[,"k"],adj_sv = sqrt( (pars[,"sv"]^2) + ((pars[,"v"]^2)*(pars[,"tau"]^2))) )
       pars
     },
     # Random function for racing accumulator
-    rfun=function(data,pars,posdrift) rLBA_joint(data$lR,data$S,pars,posdrift=posdrift,ok = attr(pars, "ok")),
+    rfun=function(data,pars) rLBA_joint(data$lR,data$S,pars,ok = attr(pars, "ok")),
     # Density function (PDF) for single accumulator
     dfun=function(rt,pars) dLBA(rt,pars,posdrift = TRUE),
     # Probability function (CDF) for single accumulator
@@ -336,26 +336,27 @@ LogicalRulesLBA_substitution <- function(){
   )
 }
 
+
 #' @export
 #'
 
-LogicalRulesLBA_miss <- function(){
+LogicalRulesLBA_substitution_posdrift <- function(){
   list(
     type="RACE",
-    c_name = "LBA_LogicalRules_miss",
+    c_name = "LBA_LogicalRules_substitution_posdrift",
     # p_vector transform, sets sv as a scaling parameter
-    p_types=c("v" = 1,"sv" = log(1),"B" = log(1),"A" = log(0),"t0" = log(0),"p"=qnorm(1)),
-    transform=list(func=c(v = "identity",sv = "exp", B = "exp", A = "exp",t0 = "exp",p="pnorm")),
-    bound=list(minmax=cbind(v=c(-Inf,Inf),sv = c(0, Inf), A=c(1e-4,Inf),B=c(0,Inf),t0=c(0.05,Inf),p=c()),
-               exception=c(A=0)),
+    p_types=c("v" = 1,"sv" = log(1),"B" = log(1),"A" = log(0),"t0" = log(0),"tau"=log(0),"k"=log(1)),
+    transform=list(func=c(v = "identity",sv = "exp", B = "exp", A = "exp",t0 = "exp",tau="exp",k="exp")),
+    bound=list(minmax=cbind(v=c(-Inf,Inf),sv = c(0, Inf), A=c(1e-4,Inf),B=c(0,Inf),t0=c(0.05,Inf),tau=c(1e-4,Inf),k=c(1e-4,Inf)),
+               exception=c(A=0,tau=0)),
     # Transform to natural scale
     # Trial dependent parameter transform
     Ttransform = function(pars,dadm) {
-      pars <- cbind(pars,b=pars[,"B"] + pars[,"A"])
+      pars <- cbind(pars,b=pars[,"B"] + pars[,"A"],adj_v = pars[,"v"]*pars[,"k"],adj_sv = sqrt( (pars[,"sv"]^2) + ((pars[,"v"]^2)*(pars[,"tau"]^2))))
       pars
     },
     # Random function for racing accumulator
-    rfun=function(data,pars,posdrift) rLBA(data$lR,pars,posdrift=posdrift,ok = attr(pars, "ok")),
+    rfun=function(data,pars) rLBA_joint(data$lR,data$S,pars,ok = attr(pars, "ok")),
     # Density function (PDF) for single accumulator
     dfun=function(rt,pars) dLBA(rt,pars,posdrift = TRUE),
     # Probability function (CDF) for single accumulator

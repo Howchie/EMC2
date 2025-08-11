@@ -71,7 +71,8 @@ Imports:
 	pracma,
 	pbivnorm,
 	tmvtnorm,
-	dplyr
+	dplyr,
+	fastGHQuad
 LinkingTo: 
     Rcpp, RcppArmadillo,mvtnorm
 Depends: 

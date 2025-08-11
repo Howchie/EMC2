@@ -563,6 +563,7 @@ static const Rcpp::Environment statmodNS = Rcpp::Environment::namespace_env("sta
 static const Rcpp::Function gauss_quad = statmodNS["gauss.quad"];
 
 static Rcpp::List gl = gauss_quad(20, "legendre");
+static Rcpp::List gh = gauss_quad(5, "legendre");
 
 // Numerically stable log(e^a + e^b)
 double log_sum_exp(double a, double b) {

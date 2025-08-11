@@ -421,28 +421,32 @@ LogicalRules_substitution_rfun <- function(data, pars, model){
   Rrti <- matrix(ncol=length(levels(data$lR)),nrow=dim(data)[1]/length(levels(data$lR)),
                  dimnames=list(NULL,levels(data$lR)))
   RACE <- levels(data$lR) # should be 4 unless using a non-standard implementation
-  accs = levels(data$lR); lower=numeric(length=length(accs));names(lower)=accs;lower["A"]=-Inf;lower["B"]=-Inf
-  for (i in unique(data$trials)) {
-    vars = pars[data$trials==i,"adj_sv"]^2; vs = pars[data$trials==i,"adj_v"]
-    covariances=matrix(0,nrow=length(accs),ncol=length(accs),dimnames=list(accs,accs))
-    diag(covariances)=vars
-    tauA=pars[data$trials==i&data$lR=="A","tau"];tauB=pars[data$trials==i&data$lR=="B","tau"]
-    muvA=pars[data$trials==i&data$lR=="A","adj_v"];muvB=pars[data$trials==i&data$lR=="B","adj_v"]
-    if(tauA==tauB){tau=tauA}else{stop("tau parameter mismatch")}
-    covariances["A","B"] = tau*muvA*muvB;covariances["B","A"] = tau*muvA*muvB
-    pars[data$trials==i,"adj_v"]=tmvtnorm::rtmvnorm(1,mean=vs,sigma=covariances,lower=lower)
+  accs = levels(data$lR); 
+  
+  # 
+  lower=numeric(length=length(accs));names(lower)=accs
+  if(grepl("negdrift",model$c_name)){
+    lower["A"]=-Inf;lower["B"]=-Inf
   }
+  sampled_v=numeric(length(pars))
+  for (i in unique(data$trials)) {
+    adj_vars = pars[data$trials==i,"adj_sv"]^2; adj_vs=pars[data$trials==i,"adj_v"]
+    covariances=matrix(0,nrow=length(accs),ncol=length(accs),dimnames=list(accs,accs))
+    diag(covariances)=adj_vars
+    tauA=pars[data$trials==i&data$lR=="A","tau"];tauB=pars[data$trials==i&data$lR=="B","tau"]
+    muvA=pars[data$trials==i&data$lR=="A","v"];muvB=pars[data$trials==i&data$lR=="B","v"]
+    if(tauA==tauB){tau2=tauA^2}else{stop("tau parameter mismatch")}
+    covariances["A","B"] = (tau2)*muvA*muvB;covariances["B","A"] = (tau2)*muvA*muvB
+    sampled_v[data$trials==i]=tmvtnorm::rtmvnorm(1,mean=adj_vs,sigma=covariances,lower=lower)
+  }
+  pars=cbind(pars,"sampled_v"=sampled_v)
   for (i in RACE) {
     pick <- data$lR==i
     data_in <- data[pick,]
     data_in$lR <- factor(data$lR[pick])
     tmp <- pars[pick,, drop=FALSE]
     attr(tmp, "ok") <- rep(T, ifelse(is.null(dim(tmp)),1,nrow(tmp)))
-    if (i=="A" | i=="B"){
-      Rrti[,i] <- model()$rfun(data_in,tmp,FALSE)$rt
-    } else {
-      Rrti[,i] <- model()$rfun(data_in,tmp,TRUE)$rt
-    }
+    Rrti[,i] <- model()$rfun(data_in,tmp)$rt
   }
   df = data.frame(LogicalRule = data$LogicalRule[data$lR==levels(data$lR)[1]],
                   AFail=is.infinite(Rrti[,"A"]),

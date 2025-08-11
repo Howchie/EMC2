@@ -11,7 +11,6 @@
 #include <gsl/gsl_errno.h> // For GSL error handling
 #include "utility_functions.h"
 #include "truncated_normal.h"
-#include "bivnorm.h"
 #include <string>
 
 using namespace Rcpp;
@@ -392,17 +391,17 @@ double drdmswtn(double t_adj, double b, double mu_drift, double A,
         // Note: 1e-7 has already confirmed A is not zero for this 'else' block.
         // So, no_A_var is false here.
         // If max threshold b is non-positive, result is -Inf. Shouldn't be possible.
-        //Get Gauss-Legendre 20-point nodes/weights from statmod (static so it only calls once)
-		const Rcpp::NumericVector& nodes   = gl["nodes"];
-		const Rcpp::NumericVector& weights = gl["weights"];
+        //Get Gauss-Legendre 20-point gl_nodes/gl_weights from statmod (static so it only calls once)
+		const Rcpp::NumericVector& gl_nodes   = gl["nodes"];
+		const Rcpp::NumericVector& gl_weights = gl["weights"];
 	
-		// Map nodes to [b, b+A]
-		Rcpp::NumericVector k_nodes = b - 0.5 * A + 0.5*A*nodes;
+		// Map gl_nodes to [b, b+A]
+		Rcpp::NumericVector k_nodes = b - 0.5 * A + 0.5*A*gl_nodes;
 		// 3. Evaluate CDF at each (t, k) pair and integrate
 		double integral = 0.0;
 		for (int j = 0; j < n_gauss_nodes; ++j) {
 			double pdf_val = dswtn(t_adj, k_nodes[j], mu_drift, sigma_drift,false); // integral cannot take log_pdf
-			integral      += weights[j] * pdf_val;
+			integral      += gl_weights[j] * pdf_val;
 		}
 		// Scale for Gauss-Legendre over [b, b+A] and divide by A (uniform pdf)
 		// This reduces to integral * 0.5 but it's handy to see it written out properly
@@ -443,17 +442,17 @@ double prdmswtn(double t_adj, double b, double mu_drift, double A,
         return pswtn(t_adj, b, mu_drift, sigma_drift,log_out);
     } else {
 
-		//Get Gauss-Legendre 20-point nodes/weights from statmod (static so it only calls once)
-		const Rcpp::NumericVector& nodes   = gl["nodes"];
-		const Rcpp::NumericVector& weights = gl["weights"];
+		//Get Gauss-Legendre 20-point gl_nodes/gl_weights from statmod (static so it only calls once)
+		const Rcpp::NumericVector& gl_nodes   = gl["nodes"];
+		const Rcpp::NumericVector& gl_weights = gl["gl_weights"];
 	
-		// Map nodes to [b, b+A]
-		Rcpp::NumericVector k_nodes = b - 0.5 * A + 0.5*A*nodes;
+		// Map gl_nodes to [b, b+A]
+		Rcpp::NumericVector k_nodes = b - 0.5 * A + 0.5*A*gl_nodes;
 		// 3. Evaluate CDF at each (t, k) pair and integrate
 		double integral = 0.0;
 		for (int j = 0; j < n_gauss_nodes; ++j) {
 			double cdf_val = pswtn(t_adj, k_nodes[j], mu_drift, sigma_drift,false); // integral cannot take log_cdf
-			integral      += weights[j] * cdf_val;
+			integral      += gl_weights[j] * cdf_val;
 		}
 		// Scale for Gauss-Legendre over [b, b+A] and divide by A (uniform pdf)
 		// This reduces to integral * 0.5 but it's handy to see it written out properly
