@@ -698,18 +698,18 @@ standard_subj_ll <- function(theta_var, theta_mu, alpha, n_subj, group_designs)
   N <- dim(theta_var)[3];  p <- nrow(theta_mu)
   log2pi <- log(2*pi)
 
-  # pre‑allocate
+  # pre-allocate
   ll <- numeric(N)
 
   for (i in seq_len(N)) {
 
     Sigma <- theta_var[,,i]
-    U     <- chol(Sigma)              # will error if non‑PD
+    U     <- chol(Sigma)              # will error if non-PD
     rooti <- backsolve(U, diag(p))
     log_const <- sum(log(diag(rooti))) - 0.5 * p * log2pi
 
     mu  <- calculate_subject_means(group_designs, theta_mu[,i], n_subj, p)
-    z   <- t(alpha[,,i] - mu) %*% rooti      # n_subj × p
+    z   <- t(alpha[,,i] - mu) %*% rooti      # n_subj * p
     ll[i] <- -0.5 * sum(z^2) + n_subj*log_const
   }
   ll

@@ -165,12 +165,12 @@ do_map <- function(draws, design, add_recalculated = FALSE, ...) {
       ## covariates that this formula actually uses -------------------------
       par_covs <- intersect(covariate_cols, all.vars(fmls[[par]]))
 
-      ## model‑matrix template (1 dummy row just to grab column names) -------
+      ## model-matrix template (1 dummy row just to grab column names) -------
       X <- make_full_dm(fmls[[par]], cur_des$Clist, design_df)
       if (!ncol(X)) next                                  # nothing to map
       beta <- cur_draws[, colnames(X), drop = FALSE]
 
-      ## -- build factor‑only matrix to detect unique cells -----------------
+      ## -- build factor-only matrix to detect unique cells -----------------
       ##  -- build factor-only matrix & find unique cells ------------------------
       zero_df <- base_cells
 
@@ -193,7 +193,7 @@ do_map <- function(draws, design, add_recalculated = FALSE, ...) {
 
       ## --- mapping --------------------------------------------------------
       if (length(par_covs)) {
-        ## covariates ARE in this formula → sample per draw
+        ## covariates ARE in this formula - sample per draw
         for (d in seq_len(n_draws)) {
           z <- cov_source[sample.int(n_cov_rows, 1L), par_covs, drop = FALSE]
 
@@ -205,7 +205,7 @@ do_map <- function(draws, design, add_recalculated = FALSE, ...) {
           map_mat[d, ] <- beta[d, ] %*% t(mm_full[, mm_order, drop = FALSE])
         }
       } else {
-        ## no covariates in formula → vectorised multiply
+        ## no covariates in formula - vectorised multiply
         mm_full <- make_full_dm(fmls[[par]], cur_des$Clist, u_df)
         colnames(mm_full) <- colnames(X)
         map_mat[,] <- beta %*% t(mm_full[, mm_order, drop = FALSE])

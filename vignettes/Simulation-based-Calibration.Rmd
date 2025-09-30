@@ -160,7 +160,7 @@ The approach to running hierarchical SBC is very similar to running non-hierarch
 
 Although in the paper we rely on the prior structure defined by @Huang2013Jun, which is also the default in *EMC2*, this prior structure has a lot of mass near zero for the group-level variance parameters (a half*-t* distribution). From a Bayesian posterior view these prior structures are attractive [@Gelman2006Sep], since they do not artificially increase the variance estimates and thus err on the safe side. However, in SBC data-generation this means we sample many data-sets with no individual differences. Unfortunately, for numerical reasons *EMC2* cannot recover a true zero on group-level variances. Thus, *EMC2* will struggle to converge and will identify some level of individual differences, although they may be very small. Therefore, the `type = "standard"` prior structure results in biased SBC variance estimates. Therefore, in SBC we recommend using `type = "diagonal-gamma"`, which as the name suggests uses gamma distributions for the variance parameters, which have less mass at zero.
 
-Nevertheless we believe the standard prior is not problematic in real data, since it will always contain at least some degree of individual differences (only a true zero cannot be recovered). Therefore it will remain the default prior in EMC2 as of now, though the type “diagonal-gamma” is available to the user as well.
+Nevertheless we believe the standard prior is not problematic in real data, since it will always contain at least some degree of individual differences (only a true zero cannot be recovered). Therefore it will remain the default prior in EMC2 as of now, though the type "diagonal-gamma" is available to the user as well.
 
 ### LBA
 

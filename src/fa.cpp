@@ -49,29 +49,29 @@ static uvec hungarian(const mat& cost)
   uvec assign(n);
   for (unsigned int j = 1; j <= n; ++j) {
     unsigned int i = p(j);
-    assign(i - 1) = j - 1;   // 0‑based
+    assign(i - 1) = j - 1;   // 0-based
   }
   return assign;
 }
 
 //--------------------------------------------------------------------
-// sp_new_cpp : drop‑in replacement for original R sp_new() helper
+// sp_new_cpp : drop-in replacement for original R sp_new() helper
 //--------------------------------------------------------------------
 // [[Rcpp::export]]
-Rcpp::List sp_new(const int        iter,            // 1‑based MCMC slice index
-                      const arma::cube& lambda_varimax, // p × q × M
+Rcpp::List sp_new(const int        iter,            // 1-based MCMC slice index
+                      const arma::cube& lambda_varimax, // p * q * M
                       const int        q,               // # factors (cols)
                       const int        p,               // # variables (rows)
                       const int        dim_all_c,       // 2^q   (rows of all_c)
-                      const arma::mat& all_c,           // dim_all_c × q  sign grid
-                      const arma::mat& lambda_hat,      // p × q centroid
+                      const arma::mat& all_c,           // dim_all_c * q  sign grid
+                      const arma::mat& lambda_hat,      // p * q centroid
                       const arma::uvec& st,             // *unused* (kept for sig.)
-                      arma::mat       cost_matrix,      // q × q scratch  (ignored)
-                      arma::mat       perm)             // dim_all_c × q scratch (ignored)
+                      arma::mat       cost_matrix,      // q * q scratch  (ignored)
+                      arma::mat       perm)             // dim_all_c * q scratch (ignored)
 {
   // -----------------------------------------------------------------
   // Extract current loading matrix
-  mat lambda = lambda_varimax.slice(iter - 1);          // 0‑based slice
+  mat lambda = lambda_varimax.slice(iter - 1);          // 0-based slice
 
   double best_cost = std::numeric_limits<double>::infinity();
   rowvec best_c(q, fill::ones);
@@ -86,7 +86,7 @@ Rcpp::List sp_new(const int        iter,            // 1‑based MCMC slice inde
   for (int idx = 0; idx < dim_all_c; ++idx) {
     rowvec c_vec = all_c.row(idx);
 
-    // apply sign flip to centroid: column‑wise multiplication
+    // apply sign flip to centroid: column-wise multiplication
     switch_centroid = lambda_hat;                      // copy
     for (int j = 0; j < q; ++j) switch_centroid.col(j) *= c_vec(j);
 
@@ -115,7 +115,7 @@ Rcpp::List sp_new(const int        iter,            // 1‑based MCMC slice inde
     best_switch.col(j) = best_c(j) * lambda.col(best_perm(j));
   }
 
-  // Convert permutation to 1‑based for R side
+  // Convert permutation to 1-based for R side
   IntegerVector min_perm(q);
   for (int j = 0; j < q; ++j) min_perm[j] = best_perm(j) + 1;
 

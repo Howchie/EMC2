@@ -26,7 +26,7 @@
 #define LOW_RHO 1e-9
 constexpr const static double HIGH_RHO = 1. - 1e-3;
 /*-------------------------------------------------------*
- *  numeric constants (inline ⇒ one definition per TU)
+ *  numeric constants (inline - one definition per TU)
  *-------------------------------------------------------*/
 inline constexpr double inv_sqrt2_pi      = 1.0 / std::sqrt(2.0 * M_PI);
 inline constexpr double neg_inv_sqrt2     = -1.0 / std::sqrt(2.0);
@@ -331,10 +331,10 @@ double norm_logcdf_1d(double a)
 }
 
 /* Bivariate normal CDF.
-   Algorithm:  Drezner (1978) 5-point GL with the ρ-split
+   Algorithm:  Drezner (1978) 5-point GL with the p-split
                refined by Drezner & Wesolowsky (1990);
                parameter cut-off as in West (2004).
-   Expected accuracy ≈ 1e-6.
+   Expected accuracy ~ 1e-6.
 */
 double norm_lcdf_2d_fast(double x1, double x2, double rho)
 {

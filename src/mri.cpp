@@ -73,7 +73,7 @@ int search_sorted(const NumericVector &x, double v) {
 }
 
 // ---------------------------------------------------------
-// Helper: generate a sequence of n equally‐spaced numbers
+// Helper: generate a sequence of n equally spaced numbers
 // ---------------------------------------------------------
 NumericVector seq_lin(double start, double end, int n) {
   NumericVector out(n);
@@ -176,7 +176,7 @@ NumericVector resample_vector(const NumericVector &orig_x, const NumericVector &
 }
 
 // ---------------------------------------------------------
-// Helper: resample a matrix column‐by‐column.
+// Helper: resample a matrix column-by-column.
 // ---------------------------------------------------------
 NumericMatrix resample_matrix(const NumericMatrix &Y, const NumericVector &orig_x, const NumericVector &new_x) {
   int n_new = new_x.size();
@@ -242,7 +242,7 @@ NumericVector compute_gamma_diff_hrf(double tr, int oversampling, double time_le
     time_stamps[i] -= onset;
   }
 
-  // 4) Nilearn’s gamma.pdf(...) calls actually do:
+  // 4) Nilearn's gamma.pdf(...) calls actually do:
   //    shape = (delay / dispersion), loc = (dt / dispersion), scale = 1
   //    shape = (undershoot / u_dispersion), loc = (dt / u_dispersion), scale = 1
   //    We must manually shift t by loc and use scale=1 in R's dgamma().
@@ -549,7 +549,7 @@ DataFrame construct_design_matrix(NumericVector frame_times, DataFrame events,
 //
 // // This function groups the events by condition and, for each condition,
 // // computes the exp_condition matrix (onset, duration, modulation) and precomputes
-// // the FFT of the zero‑padded high-resolution event regressor. It stores only the
+// // the FFT of the zero-padded high-resolution event regressor. It stores only the
 // // TR, condition name, exp_condition, and regressor_fft in the cache.
 //
 // // [[Rcpp::export]]

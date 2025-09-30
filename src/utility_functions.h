@@ -318,7 +318,7 @@ LogicalVector lr_all(LogicalVector ok, int n_side)
 
     int state = TRUE;                 // optimistic
 
-    // inspect one “column”
+    // inspect one "column"
     for (int j = 0; j < n_side; ++j) {
       const int v = x[i + j];
       if (v == FALSE) {             // any FALSE trumps everything

@@ -301,7 +301,7 @@ single_DDM_plot <- function(
   base_line_y <- y_lim[1]-0.05
   arrows(x0=0, x1=x_lim[2], y0=base_line_y, y1=base_line_y, lwd=3, length=0.1)
 
-  #### (D) ±b lines
+  #### (D)+-b lines
   for (bn in names(b_vals)) {
     b_here <- b_vals[bn]
     segments(0,+b_here, x_lim[2], +b_here, lwd=1.5, col="black")
@@ -653,7 +653,7 @@ single_race_plot <- function(
   }
 
   # (H) v lines + optional noise
-  #### (H) Race drift lines => skip duplicates if (abs,value,sign,color) match, ratio≥0.85, etc.
+  #### (H) Race drift lines => skip duplicates if (abs,value,sign,color) match, ratio>=0.85, etc.
   # 1) build df of (idx, v_orig, color_lbl, v_abs, v_sign)
   min_b_sub<- if(length(b_vals)) min(b_vals) else 0
 

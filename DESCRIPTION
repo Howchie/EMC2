@@ -6,7 +6,7 @@ Authors@R:
            role = c("aut", "cre"), comment = c(ORCID = "0000-0003-3206-7544")),
       person("Michelle", "Donzallaz", role = c("aut")),
       person("Andrew", "Heathcote", role = c("aut")),
-      person("Steven", "Miletić", role = c("ctb")),
+      person("Steven", "Miletic", role = c("ctb")),
       person("Raphael", "Hartmann", role = c("ctb")),
       person("Karl C.", "Klauer", role=c("ctb")),
       person("Steven G.", "Johnson", role=c("ctb")),
@@ -35,7 +35,7 @@ URL: https://ampl-psych.github.io/EMC2/, https://github.com/ampl-psych/EMC2
 BugReports: https://github.com/ampl-psych/EMC2/issues 
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
-RoxygenNote: 7.3.2
+RoxygenNote: 7.3.3
 VignetteBuilder: knitr
 Suggests: 
     testthat (>= 3.0.0),
@@ -58,6 +58,7 @@ Imports:
     stats,
     Matrix,
     Rcpp,
+	RcppArmadillo,
     Brobdingnag,
     corrplot,
     colorspace,
@@ -67,14 +68,15 @@ Imports:
     WienR,
 	truncnorm,
 	statmod,
-	Rcpp,
 	pracma,
 	pbivnorm,
 	tmvtnorm,
 	dplyr,
-	fastGHQuad
+	fastGHQuad,
+	BH,
+	RcppEigen
 LinkingTo: 
-    Rcpp, RcppArmadillo,mvtnorm
+    Rcpp, RcppArmadillo,mvtnorm,BH,RcppEigen
 Depends: 
     R (>= 3.5.0)
 LazyData: true

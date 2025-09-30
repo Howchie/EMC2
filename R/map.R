@@ -13,14 +13,14 @@ do_transform <- function(pars, model)
     transform$lower[ptypes[isexp]], "+")
   
   
-  ## probit link: lower + (upper‑lower) * pnorm(real)
+  ## probit link: lower + (upper lower) * pnorm(real)
   pars[, isprobit] <- sweep(
     sweep(pnorm(pars[, isprobit, drop = FALSE]), 2,
           transform$upper[ptypes[isprobit]] -
             transform$lower[ptypes[isprobit]], "*"),
     2, transform$lower[ptypes[isprobit]], "+")
   
-  ## logis link: lower + (upper‑lower) * plogis(real)
+  ## logis link: lower + (upper lower) * plogis(real)
   pars[, islogis] <- sweep(
     sweep(plogis(pars[, islogis, drop = FALSE]), 2,
           transform$upper[ptypes[islogis]] -
@@ -124,7 +124,7 @@ do_reverse_transform_variance <- function(mu_nat, var, model, prop=TRUE)
     
     a <- qnorm(p)                   # STANDARD-NORMAL CUT-POINT, nothing fancy
     function(sig2) {
-      rho <- sig2 / (1 + sig2)      # yes, σ² /(1+σ²). Full stop.
+      rho <- sig2 / (1 + sig2)      
       W^2 * (pbivnorm::pbivnorm(a, a, rho) - p^2) - target_var
     }
   }

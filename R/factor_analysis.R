@@ -206,9 +206,9 @@ align_loadings <- function (emc = NULL, lambda = NULL, n_cores = 1, verbose = TR
 rearrange_loadings <- function(lambda, metric = c("ssq", "absmean"))
 {
   metric <- match.arg(metric)
-  # ----- collapse MCMC draws to a single p × q summary -----------------
+  # ----- collapse MCMC draws to a single p * q summary -----------------
   if (length(dim(lambda)) == 3L) {
-    lambda_hat <- apply(lambda, 1:2, mean)           # p × q
+    lambda_hat <- apply(lambda, 1:2, mean)           # p * q
   } else {
     lambda_hat <- lambda
     lambda      <- array(lambda, dim = c(dim(lambda), 1L))  # unify shape
@@ -219,9 +219,9 @@ rearrange_loadings <- function(lambda, metric = c("ssq", "absmean"))
                   ssq     = colSums(lambda_hat^2),
                   absmean = colMeans(abs(lambda_hat)))
 
-  ord <- order(score, decreasing = TRUE)             # strongest → first
+  ord <- order(score, decreasing = TRUE)             # strongest first
 
-  # ----- sign-flip so column mean ≥ 0 -----------------------------------
+  # ----- sign-flip so column mean >= 0 -----------------------------------
   sign_flip <- sign(colMeans(lambda_hat[, ord, drop = F]))
   sign_flip[sign_flip == 0] <- 1                     # treat exact zeros as +
 

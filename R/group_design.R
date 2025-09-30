@@ -22,7 +22,7 @@
 #' warning. For some unbalanced designs, this is unavoidable and the warning can be ignored.
 #'
 #' @examples
-#' # Create subject-level design 
+#' # Create subject-level design
 #' subj_design <- design(data = forstmann, model = DDM,
 #'                       formula = list(v ~ S, a ~ E, t0 ~ 1),
 #'                       contrasts = list(S = contr.helmert))
@@ -267,7 +267,7 @@ build_design <- function(formula, data, contrasts.arg = NULL) {
     if (!is.call(term)) return(term)
     as.call(c(term[[1]], lapply(as.list(term)[-1], nobars)))
   }
-  bars_to_plus <- function(term) {                            # (a|g) → a + g
+  bars_to_plus <- function(term) {                            # (a|g) a + g
     if (is_bar(term))
       return(as.call(list(quote(`+`), bars_to_plus(term[[2]]), bars_to_plus(term[[3]]))))
     if (!is.call(term)) return(term)
@@ -276,7 +276,7 @@ build_design <- function(formula, data, contrasts.arg = NULL) {
   find_bars <- function(term) if (is_bar(term)) list(term) else
     if (is.call(term)) unlist(lapply(as.list(term)[-1], find_bars), FALSE)
 
-  ## ---------- 0. pre‑filter contrasts ----------------------------------
+  ## ---------- 0. pre-filter contrasts ----------------------------------
   if (!is.null(contrasts.arg)) {
     keep <- intersect(names(contrasts.arg), names(data))
     contrasts.arg <- if (length(keep)) contrasts.arg[keep] else NULL
@@ -286,14 +286,14 @@ build_design <- function(formula, data, contrasts.arg = NULL) {
   rhs_safe <- bars_to_plus(formula[[3]])
   mf <- model.frame(as.formula(call("~", rhs_safe)), data, na.action = NULL)
 
-  ## ---------- 2. fixed‑effect matrix -----------------------------------
+  ## ---------- 2. fixed-effect matrix -----------------------------------
   rhs_fixed <- nobars(formula[[3]])
   tt_fixed  <- terms(as.formula(call("~", rhs_fixed)))
   fml_fixed <- reformulate(attr(tt_fixed, "term.labels"),
                            intercept = attr(tt_fixed, "intercept"))
   X <- suppressWarnings(model.matrix(fml_fixed, mf, contrasts.arg = contrasts.arg))
 
-  ## ---------- 3. random‑effect matrix ----------------------------------
+  ## ---------- 3. random-effect matrix ----------------------------------
   Z_parts <- list()
   for (bar in find_bars(formula[[3]])) {
 
@@ -301,7 +301,7 @@ build_design <- function(formula, data, contrasts.arg = NULL) {
     gname <- deparse(bar[[3]])
     g     <- as.factor(mf[[gname]])
     J     <- model.matrix(~0 + g)
-    colnames(J) <- paste0(gname, levels(g))              # idA, idB, …
+    colnames(J) <- paste0(gname, levels(g))              # idA, idB
 
     ## -- 3b. slope design ---------------------------------------------
     lhs <- bar[[2]]
@@ -325,7 +325,7 @@ build_design <- function(formula, data, contrasts.arg = NULL) {
                            function(k) sweep(J, 1, mm[, k], `*`)))
       colnames(Zs) <- outer(paste0(gname, levels(g)),
                             colnames(mm),
-                            paste, sep = ":")            # idA:x, …
+                            paste, sep = ":")            # idA:x
       Z <- if (is.null(Z)) Zs else cbind(Z, Zs)
     }
     Z_parts[[length(Z_parts) + 1]] <- Z

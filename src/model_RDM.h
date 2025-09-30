@@ -272,8 +272,8 @@ double dswtn(double t_adj, double alpha, double mu_drift, double sigma_drift, bo
     //double lambda = 1.0; // Matches SWTN.cc
     double v = std::pow(sigma_drift,2); // parameterize the RDM with std but formula uses variance
     // Pre-compute for numerical stability
-    const double tv  = t_adj * v;            // t σ²
-    const double log1p_tv = std::log1p(tv);  // log(1 + t σ²)
+    const double tv  = t_adj * v;            // tsigma^2
+    const double log1p_tv = std::log1p(tv);  // log(1 + tsigma^2)
     // Log of the normalization constant for the drift rate xi ~ TN(mu_drift, v, lower=0)
     // log(1 / P(xi > 0)) = -log(P(xi > 0))
     // P(xi > 0) = pnorm(mu_drift/sqrt(v), 0, 1, true, false) if mu_drift > 0 is assumed for TN's mode.
@@ -319,7 +319,7 @@ double pswtn(double t_adj, double alpha, double mu_drift, double sigma_drift, bo
     if (std::isinf(log_prob_d_gt_0)) return R_NegInf;
 	double denom = std::sqrt(t_adj*(1+t_adj*sigma_2));
 	double rho = (sigma_drift*t_adj)/denom;
-	// first Φ2
+	// first phi2
 	double h1 =  (mu_drift*t_adj - alpha)/denom;
 	double k1 =  mu_drift / sigma_drift;
 	double term1;
@@ -329,7 +329,7 @@ double pswtn(double t_adj, double alpha, double mu_drift, double sigma_drift, bo
         term1 = norm_cdf_2d_fast(h1, k1, rho); // Faster Drezner/West algorithm otherwise
     }
 	double log_A = (term1 > 1e-300) ? std::log(term1) : R_NegInf; // Avoid log(0)
-	// second Φ2 (reflected drift)
+	// second phi2 (reflected drift)
 	double mu_p = mu_drift + 2*alpha*sigma_2;
 	double h2 = (-mu_p*t_adj - alpha)/denom;
 	double k2 = mu_p/sigma_drift;

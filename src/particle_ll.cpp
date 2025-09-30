@@ -5,6 +5,7 @@
 #include "model_RDM.h"
 #include "model_DDM.h"
 #include "model_MRI.h"
+#include "model_OU_Volterra.h"
 #include "trend.h"
 #include "utils.h"
 #include <gsl/gsl_integration.h>
@@ -14,7 +15,6 @@
 #include <sstream>
 #include <iomanip>
 #include "bivnorm.h"
-// For LNR, context might be simpler or could reuse above if only min_lik_for_pdf is needed.
 
 
 using namespace Rcpp;
@@ -66,7 +66,7 @@ NumericVector c_do_pre_transform(NumericVector p_vector,
     }
     case PTF_PNORM: {
       double range = s.upper - s.lower;
-      // lower + range * Φ(real)
+      // lower + range * phi(real)
       p_vector[s.index] = s.lower +
         range * R::pnorm(val, 0.0, 1.0, /*lower_tail=*/1, /*log_p=*/0);
       break;
@@ -102,7 +102,7 @@ NumericMatrix c_do_transform(NumericMatrix pars,
     case PNORM: {
       double range = up - lw;
       for (int i = 0; i < nrow; i++) {
-        // lower + range * Φ(real)
+        // lower + range * phi(real)
         pars(i, col_idx) = lw +
           range * R::pnorm(pars(i, col_idx), 0.0, 1.0,
                            /*lower_tail=*/1, /*log_p=*/0);
@@ -419,8 +419,8 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
 // GSL-compatible adapter for f_race_integrand_cpp
 double gsl_f_race_adapter(double t, void *p) {
     gsl_race_params* params = static_cast<gsl_race_params*>(p);
-	// ① get the params block
-    // ② recover the model-specific context
+	// 1. get the params block
+    // 2. recover the model-specific context
     ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(params->model_specific_context);
     if (t < 0) return 0.0; // RTs are non-negative
 	int n_acc=params->n_acc;
@@ -595,7 +595,6 @@ static inline std::string make_key(int start_row,
 // This function is now the unified entry point for all race models (LBA, RDM, LNR),
 // whether they are standard or explicitly handling censoring/truncation.
 // It uses batching for finite RTs and iterative processing for others (censored/NA RTs).
-// needs unbatching?
 double c_log_likelihood_race_cens_trunc(
     Rcpp::NumericMatrix pars,               // Parameters for one particle, covering all dadm rows for that particle
     Rcpp::DataFrame dadm,                   // Data for unique trial conditions, structured for all accumulators
@@ -631,7 +630,7 @@ double c_log_likelihood_race_cens_trunc(
 	if (dadm.containsElementNamed("RACE")) {
 		// factor codes (1-based) for each row
 		Rcpp::IntegerVector race_idx = dadm["RACE"];
-		// character levels (“2”, “3”, …)
+		// character levels ("2", "3", ...)
 		Rcpp::CharacterVector race_levels = race_idx.attr("levels");
 		for (int row = 0; row < pars.nrow(); ++row) {
 			// how many accumulators for this trial
@@ -641,7 +640,7 @@ double c_log_likelihood_race_cens_trunc(
 			RACE[row]=n_acc_this_trial;
 			// lR_dadm is the (1-based) index of *this* accumulator on the trial
 			if (lR_dadm[row] > n_acc_this_trial) {
-				// accumulator not present → blank its parameter row
+				// accumulator not present - blank its parameter row
 				std::fill(pars.row(row).begin(), pars.row(row).end(), NA_REAL);
 				RACE_mask[row]=false;
 			}

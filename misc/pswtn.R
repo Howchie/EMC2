@@ -68,7 +68,7 @@ pswtn_Genz <- function(t_adj, alpha, mu_drift, sigma_drift) {
   denom <- sqrt(t * (1 + t * sigma_sq))
   
   # --- Term 1 Calculation ---
-  # Corresponds to P(Z < (ξt - α)/√t, ξ > 0)
+  # Corresponds to P(Z < (xit - alpha)/sqrt t, xi > 0)
   
   # Upper bounds for the standardized bivariate normal P(X<h, Y<k)
   h1 <- (mu * t - alpha) / denom
@@ -80,7 +80,7 @@ pswtn_Genz <- function(t_adj, alpha, mu_drift, sigma_drift) {
   term1_prob <- pbvn_tvpack(h1, k1,rho1)
   
   # --- Term 2 Calculation ---
-  # Corresponds to exp(...) * P(Z < -(ξt+α)/√t, ξ > 0), where ξ~N(μ', σ²)
+  # Corresponds to exp(...) * P(Z < -(xit+alpha)/sqrt t, xi > 0), where xi~N(mu',sigma^2)
   mu_prime <- mu + 2.0 * alpha * sigma_sq
   
   # Upper bounds for the second bivariate normal
@@ -131,7 +131,7 @@ pswtn_fast <- function(t_adj, alpha, mu_drift, sigma_drift) {
   denom <- sqrt(t * (1 + t * sigma_sq))
   
   # --- Term 1 Calculation ---
-  # Corresponds to P(Z < (ξt - α)/√t, ξ > 0)
+  # Corresponds to P(Z < (xit - alpha)/sqrt t, xi > 0)
   
   # Upper bounds for the standardized bivariate normal P(X<h, Y<k)
   h1 <- (mu * t - alpha) / denom
@@ -142,7 +142,7 @@ pswtn_fast <- function(t_adj, alpha, mu_drift, sigma_drift) {
   term1_prob <- pbvn_drezner(h1, k1,rho1)
   
   # --- Term 2 Calculation ---
-  # Corresponds to exp(...) * P(Z < -(ξt+α)/√t, ξ > 0), where ξ~N(μ', σ²)
+  # Corresponds to exp(...) * P(Z < -(xit+alpha)/sqrt t, xi > 0), where xi~N(mu',sigma^2)
   mu_prime <- mu + 2.0 * alpha * sigma_sq
   
   # Upper bounds for the second bivariate normal
@@ -173,7 +173,7 @@ swt_cdf_GH <- function(t, a, mu, sigma, n = 40) {
   
   fw   <- wald_cdf(t, a, x[keep])               # Wald CDF at positive drifts
   w    <- gh$weights[keep]
-  ppos <- pnorm(mu / sigma)                     # P(ξ > 0)
+  ppos <- pnorm(mu / sigma)                     # P(xi > 0)
   
   sum(w * fw) / ppos
 }
@@ -186,7 +186,7 @@ f.ref  <- function(t, a, mu, sigma) pswtn_numeric_integral(t,a,mu,sigma)  # ever
 f.fast <- function(t, a, mu, sigma) pswtn_Genz(t,a,mu,sigma) # with your switch
 
 err <- mapply(function(t, alpha, mu, cv) {
-  sigma <- cv * mu          # σ = CV · μ
+  sigma <- cv * mu          #sigma = CV * mu
   f.fast(t, alpha, mu, sigma) -
     f.ref (t, alpha, mu, sigma)
 },
@@ -230,13 +230,13 @@ cdf_swtn <- function(t_adj, alpha, mu_xi, sigma_xi){
   s      <- sqrt(t_adj*(1 + t_adj*sigma_xi^2))
   rho    <-  (sigma_xi*t_adj)/s
   
-  # first Φ₂
+  # first phi2
   h1 <-  (mu*t_adj - alpha)/s
   k1 <-  mu / sigma_xi
   term1 <- pmvnorm(upper=c(h1,k1),
                    corr=matrix(c(1,rho,rho,1),2))[1]
   
-  # second Φ₂ (reflected drift)
+  # second phi2 (reflected drift)
   mu_p <- mu + 2*alpha*sigma_xi^2
   h2   <- (-mu_p*t_adj - alpha)/s
   k2   <-  mu_p / sigma_xi
@@ -338,13 +338,13 @@ prdmswtn_analytic_R <- function(t_adj, B, mu, sigma, A = 0.0, n_gauss_nodes = 20
     s      <- sqrt(t_adj*(1 + t_adj*sigma^2))
     rho    <-  (sigma*t_adj)/s
     
-    # first Φ₂
+    # first phi2
     h1 <-  (mu*t_adj - alpha)/s
     k1 <-  mu / sigma
     term1 <- pmvnorm(upper=c(h1,k1),
                      corr=matrix(c(1,rho,rho,1),2))[1]
     
-    # second Φ₂ (reflected drift)
+    # second phi2 (reflected drift)
     mu_p <- mu + 2*alpha*sigma^2
     h2   <- (-mu_p*t_adj - alpha)/s
     k2   <-  mu_p / sigma
@@ -378,7 +378,7 @@ prdmswtn_analytic_R <- function(t_adj, B, mu, sigma, A = 0.0, n_gauss_nodes = 20
     integral_val <- cdf_matrix %*% gl$weights * (A / 2)
     
     # The PDF of the uniform start point is 1/A.
-    # The expected value E[CDF(t,k)] is ∫ CDF(t,k) * (1/A) dk
+    # The expected value E[CDF(t,k)] is integral CDF(t,k) * (1/A) dk
     return(as.vector(integral_val / A))
   }
 }
@@ -429,7 +429,7 @@ drdmswtn_analytic_R <- function(t, B, mu, A = 0.0, sigma = 0.0, n_gauss_nodes = 
     v <- sigma^2 # The formula uses variance
     
     # Denominator of the normalization constant for the truncated normal drift
-    # This is P(drift > 0), which is Φ(μ/σ)
+    # This is P(drift > 0), which is phi(mu/sigma)
     prob_xi_gt_0 <- pnorm(mu / sigma)
     # Avoid division by zero if drift is certainly negative
     prob_xi_gt_0[prob_xi_gt_0 < 1e-100] <- 1e-100 
@@ -480,9 +480,9 @@ drdmswtn_analytic_R <- function(t, B, mu, A = 0.0, sigma = 0.0, n_gauss_nodes = 
                          function(k) d_single_bound(t_vec, alpha = k, mu = mu, sigma = sigma),
                          numeric(length(t_vec)))
     
-    # The integral ∫ f(k) dk over [B, B+A] is approximated by:
+    # The integral integral f(k) dk over [B, B+A] is approximated by:
     # (A/2) * sum(weights * f(k_nodes))
-    # We want the *average* value, which is (1/A) * ∫ f(k) dk.
+    # We want the *average* value, which is (1/A) * integral f(k) dk.
     # The 'A' terms cancel, leaving (1/2) * sum(...)
     integral_avg <- (pdf_matrix %*% gl$weights) * 0.5
     

@@ -1149,7 +1149,7 @@ unique_rows_by_index <- function(df, columns) {
   valid_columns <- intersect(columns, names(df))
 
   if (length(valid_columns) == 0) {
-    # No valid columns to check uniqueness — return first row
+    # No valid columns to check uniqueness return first row
     return(df[1, , drop = FALSE])
   }
 

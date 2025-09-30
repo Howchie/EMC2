@@ -304,7 +304,6 @@ log_likelihood_race <- function(pars,dadm,model,min_ll=log(1e-10))
 #   return(total_ll)
 # }
 
-# ──────────────────────────────────────────────────────────────────────────────
 # Helpers ---------------------------------------------------------------------
 
 ## create a string key that uniquely identifies the parameter set + bounds
@@ -348,13 +347,12 @@ log_likelihood_race <- function(pars,dadm,model,min_ll=log(1e-10))
   max(p_tot, .Machine$double.eps)             # guard against 0
 }
 
-# ──────────────────────────────────────────────────────────────────────────────
 # Main likelihood -------------------------------------------------------------
 
 log_likelihood_race_cens_trunc <- function(pars,dadm,model,min_ll=log(1e-10)) {
   cache_env <- new.env(parent = emptyenv())
   posdrift = ifelse(model$c_name=="LBAIO",FALSE,TRUE)
-  ## ── basic dimensions ──────────────────────────────────────────────────────
+  ## basic dimensions
   n_trials <- nrow(dadm)
   n_acc    <- length(levels(dadm$R))
   stopifnot(n_trials %% n_acc == 0L)          # one row per acc. per trial
@@ -368,14 +366,14 @@ log_likelihood_race_cens_trunc <- function(pars,dadm,model,min_ll=log(1e-10)) {
     ok <- !logical(dim(pars)[1])
   } else ok <- attr(pars,"ok")
   
-  ## ── convenience column refs ───────────────────────────────────────────────
+  ## convenience column refs
   RT <- dadm$rt;  LT <- dadm$LT;  UT <- dadm$UT
   LC <- dadm$LC;  UC <- dadm$UC;  R_idx <- dadm$R
   
-  ## ── initialise per-row log densities ──────────────────────────────────────
+  ## initialise per-row log densities
   lds <- rep(NA, n_trials)
   ll_unique <- rep(NA,n_unique)
-  ## ── batch: finite RT, in-bounds, known winner ────────────────────────────
+  ## batch: finite RT, in-bounds, known winner
   finite_mask <- is.finite(RT) & RT > 0 &
     RT >= LT & RT <= UT & !is.na(R_idx) & (as.numeric(dadm$lR) <= dadm$RACE_num)
   trunc_cens_mask = !(is.finite(RT)) & (as.numeric(dadm$lR) <= dadm$RACE_num)
@@ -415,7 +413,7 @@ log_likelihood_race_cens_trunc <- function(pars,dadm,model,min_ll=log(1e-10)) {
     }
   }
   
-  ## ── process other trials one-by-one (-Inf, +Inf, NA) ─────────────────────
+  ## process other trials one-by-one (-Inf, +Inf, NA)
   prob_win <- function(k, lo, hi) {
     .integrate_kth_winner(k, pars[idx, , drop = FALSE],
                           lo, hi, model, rel.tol = 1e-7)
@@ -451,7 +449,7 @@ log_likelihood_race_cens_trunc <- function(pars,dadm,model,min_ll=log(1e-10)) {
       lo2 <- UC[idx[1]]; hi2 <- UT[idx[1]]
       pval <- sum(vapply(ks, function(k)
         prob_win(k, lo1, hi1) + prob_win(k, lo2, hi2), numeric(1)))
-    }                                               # 0 or negative RT ⇒ prob 0
+    }                                               # 0 or negative RT prob 0
     
     ## truncation correction (if RT unobserved)
     if (!(LT[idx[1]] == 0 && UT[idx[1]] == Inf) && pval > 0) {
@@ -475,7 +473,7 @@ log_likelihood_race_cens_trunc <- function(pars,dadm,model,min_ll=log(1e-10)) {
     
     ll_unique[j] <- if (pval > .Machine$double.eps) log(pval) else min_ll
   }
-  ## ── aggregate over copies (expand) or N column ───────────────────────────
+  ## aggregate over copies (expand) or N column
   return(sum(pmax(min_ll,ll_unique[attr(dadm,"expand")]),na.rm = TRUE))
 }
 

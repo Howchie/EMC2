@@ -32,7 +32,7 @@
 #'
 
 to_matrix <- function(x) {
-  if (is.null(dim(x))) {                     # vector → 1-row matrix
+  if (is.null(dim(x))) {                     # vector - 1-row matrix
     matrix(x, nrow = 1L,
            dimnames = list(NULL, names(x)))  # keep names as colnames
   } else {
