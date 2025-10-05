@@ -21,6 +21,14 @@ calculate_subject_means <- function(group_designs, params, n_subjects, n_pars) {
     .Call(`_EMC2_calculate_subject_means`, group_designs, params, n_subjects, n_pars)
 }
 
+bm_fht_pdf_vec <- function(t, mu, sigma, z0, b0, binf, tau, pow, num_steps = 200L) {
+    .Call(`_EMC2_bm_fht_pdf_vec`, t, mu, sigma, z0, b0, binf, tau, pow, num_steps)
+}
+
+bm_fht_cdf_vec <- function(t, mu, sigma, z0, b0, binf, tau, pow, num_steps = 200L) {
+    .Call(`_EMC2_bm_fht_cdf_vec`, t, mu, sigma, z0, b0, binf, tau, pow, num_steps)
+}
+
 plba_norm <- function(t, A, b, v, sv, posdrift = TRUE, log_out = FALSE) {
     .Call(`_EMC2_plba_norm`, t, A, b, v, sv, posdrift, log_out)
 }
@@ -53,92 +61,24 @@ plba <- function(t, A, b, v, sv, posdrift = TRUE) {
     .Call(`_EMC2_plba`, t, A, b, v, sv, posdrift)
 }
 
-kernel_backward <- function(v, vp, b) {
-    .Call(`_EMC2_kernel_backward`, v, vp, b)
+ou_fht_cdf <- function(t, lambda, theta, sigma, z0, b0, binf, tau, p, num_steps) {
+    .Call(`_EMC2_ou_fht_cdf`, t, lambda, theta, sigma, z0, b0, binf, tau, p, num_steps)
 }
 
-solve_nu_b_on_grid <- function(v_grid, b) {
-    .Call(`_EMC2_solve_nu_b_on_grid`, v_grid, b)
+ou_fht_pdf_forward <- function(t, lambda, theta, sigma, z0, b0, binf, tau, p, num_steps) {
+    .Call(`_EMC2_ou_fht_pdf_forward`, t, lambda, theta, sigma, z0, b0, binf, tau, p, num_steps)
 }
 
-abel_approx_nu_b <- function(v, b) {
-    .Call(`_EMC2_abel_approx_nu_b`, v, b)
+ou_fht_pdf_forward_vec <- function(t, lambda, theta, sigma, z0, b0, binf, tau, pow, num_steps = 200L) {
+    .Call(`_EMC2_ou_fht_pdf_forward_vec`, t, lambda, theta, sigma, z0, b0, binf, tau, pow, num_steps)
 }
 
-solve_nu_b_block_by_block <- function(v_max, b, num_steps, v_grid, F, k0_seeded) {
-    .Call(`_EMC2_solve_nu_b_block_by_block`, v_max, b, num_steps, v_grid, F, k0_seeded)
+ou_fht_cdf_vec <- function(t, lambda, theta, sigma, z0, b0, binf, tau, pow, num_steps = 200L) {
+    .Call(`_EMC2_ou_fht_cdf_vec`, t, lambda, theta, sigma, z0, b0, binf, tau, pow, num_steps)
 }
 
-abel_approx_nu_f <- function(theta, z, b) {
-    .Call(`_EMC2_abel_approx_nu_f`, theta, z, b)
-}
-
-kernel_forward_tau <- function(tau, tau_p, b) {
-    .Call(`_EMC2_kernel_forward_tau`, tau, tau_p, b)
-}
-
-kernel_forward_theta <- function(theta, theta_p, b) {
-    .Call(`_EMC2_kernel_forward_theta`, theta, theta_p, b)
-}
-
-g_term_forward_tau <- function(tau, z, b) {
-    .Call(`_EMC2_g_term_forward_tau`, tau, z, b)
-}
-
-g_term_forward_theta <- function(theta, z, b) {
-    .Call(`_EMC2_g_term_forward_theta`, theta, z, b)
-}
-
-solve_nu_f_block_by_block <- function(t_max, z, b, num_steps, use_theta, t_grid, F, k0_seeded) {
-    .Call(`_EMC2_solve_nu_f_block_by_block`, t_max, z, b, num_steps, use_theta, t_grid, F, k0_seeded)
-}
-
-integrate_pdf_forward_theta_u <- function(theta_max, theta_grid, nu_f_vals, b_scaled) {
-    .Call(`_EMC2_integrate_pdf_forward_theta_u`, theta_max, theta_grid, nu_f_vals, b_scaled)
-}
-
-integrate_pdf_forward <- function(tau, tau_grid, nu_f_vals, b_scaled, lp, K_sub = 256L) {
-    .Call(`_EMC2_integrate_pdf_forward`, tau, tau_grid, nu_f_vals, b_scaled, lp, K_sub)
-}
-
-integrate_pdf_forward_u_robust <- function(tau, tau_grid, nu_f_vals, b_scaled) {
-    .Call(`_EMC2_integrate_pdf_forward_u_robust`, tau, tau_grid, nu_f_vals, b_scaled)
-}
-
-ou_fht_cdf <- function(t, lambda, theta, sigma, z0, b_level, num_steps) {
-    .Call(`_EMC2_ou_fht_cdf`, t, lambda, theta, sigma, z0, b_level, num_steps)
-}
-
-ou_fht_pdf_forward <- function(t, lambda, theta, sigma, z0, b_level, num_steps) {
-    .Call(`_EMC2_ou_fht_pdf_forward`, t, lambda, theta, sigma, z0, b_level, num_steps)
-}
-
-ou_fht_pdf_forward_debug <- function(t, lambda, theta, sigma, z0, b_level, num_steps) {
-    .Call(`_EMC2_ou_fht_pdf_forward_debug`, t, lambda, theta, sigma, z0, b_level, num_steps)
-}
-
-ou_fht_pdf_forward_vec <- function(t, lambda, theta, sigma, z0, b_level, num_steps = 200L) {
-    .Call(`_EMC2_ou_fht_pdf_forward_vec`, t, lambda, theta, sigma, z0, b_level, num_steps)
-}
-
-ou_fht_cdf_vec <- function(t, lambda, theta, sigma, z0, b_level, num_steps = 200L) {
-    .Call(`_EMC2_ou_fht_cdf_vec`, t, lambda, theta, sigma, z0, b_level, num_steps)
-}
-
-simulate_ou_hit_times_std <- function(n, lambda, theta, sigma, z0, b_level, dt = 1e-3, t_max = 10.0) {
-    .Call(`_EMC2_simulate_ou_hit_times_std`, n, lambda, theta, sigma, z0, b_level, dt, t_max)
-}
-
-ou_fht_pdf_from_cdf <- function(t, lambda, theta, sigma, z0, b_level, num_steps = 200L, eps = 1e-5) {
-    .Call(`_EMC2_ou_fht_pdf_from_cdf`, t, lambda, theta, sigma, z0, b_level, num_steps, eps)
-}
-
-ou_fht_pdf_from_cdf_regularized <- function(t, lambda, theta, sigma, z0, b_level, num_steps = 200L) {
-    .Call(`_EMC2_ou_fht_pdf_from_cdf_regularized`, t, lambda, theta, sigma, z0, b_level, num_steps)
-}
-
-ou_fht_pdf_from_cdf_regularized_vec <- function(t, lambda, theta, sigma, z0, b_level, num_steps = 200L) {
-    .Call(`_EMC2_ou_fht_pdf_from_cdf_regularized_vec`, t, lambda, theta, sigma, z0, b_level, num_steps)
+simulate_ou_hit_times_std <- function(n, lambda, theta, sigma, z0, b0, binf, tau = 1.0, p = 1.0, dt = 1e-3, t_max = 10.0) {
+    .Call(`_EMC2_simulate_ou_hit_times_std`, n, lambda, theta, sigma, z0, b0, binf, tau, p, dt, t_max)
 }
 
 pigt0 <- function(t, k = 1.0, l = 1.0, log_out = FALSE) {
@@ -327,5 +267,9 @@ c_add_charvectors <- function(x, y) {
 
 pmvnorm_cpp <- function(upper, corr) {
     .Call(`_EMC2_pmvnorm_cpp`, upper, corr)
+}
+
+exp_decay <- function(t, x0, xinf, tau, p) {
+    .Call(`_EMC2_exp_decay`, t, x0, xinf, tau, p)
 }
 

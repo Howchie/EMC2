@@ -6,6 +6,7 @@
 #include "model_DDM.h"
 #include "model_MRI.h"
 #include "model_OU_Volterra.h"
+#include "model_BM_Volterra.h"
 #include "trend.h"
 #include "utils.h"
 #include <gsl/gsl_integration.h>

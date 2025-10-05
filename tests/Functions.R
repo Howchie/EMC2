@@ -225,3 +225,25 @@ diagnose_prefactor <- function(t, A, B, C, g_emp, k) {
   )
 }
 
+# b(t) = b_inf + (b0 - b_inf) * exp(-(t/tau)^p)
+# - Vectorized over t
+# - Stable for large t via log-power trick and clipping
+decay_bound <- function(t, b0, b_inf = 0, tau, p = 1) {
+  if (!is.numeric(t)) stop("t must be numeric (vector ok).")
+  if (!(is.numeric(b0) && is.numeric(b_inf) && is.numeric(tau) && is.numeric(p))) {
+    stop("b0, b_inf, tau, p must be numeric scalars.")
+  }
+  if (tau <= 0 || p <= 0) stop("tau and p must be > 0.")
+  
+  t <- pmax(t, 0)                 # guard negative times
+  amp <- b0 - b_inf
+  # y = p*(log t - log tau); handle t=0 separately; clip to avoid overflow
+  y <- ifelse(t == 0, -Inf, p * (log(t) - log(tau)))
+  y <- pmin(y, 700)               # prevents exp(y) overflow (~exp(709) is near double limit)
+  s <- ifelse(is.infinite(y), 0, exp(y))  # s = (t/tau)^p; s=0 when t==0
+  exp_term <- exp(-s)
+  b_inf + amp * exp_term
+}
+
+# Example:
+# decay_bound(c(0, 0.1, 0.5, 1, 2, 5), b0 = 1.0, b_inf = 0.2, tau = 1.5, p = 1.2)

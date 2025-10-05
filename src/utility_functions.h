@@ -575,6 +575,61 @@ double log_sum_exp(double a, double b) {
         return b + std::log1p(std::exp(a - b));
     }
 }
+
+// Standard normal CDF
+double normal_cdf(double x) { return 0.5 * std::erfc(-x / std::sqrt(2.0)); }
+
+double normal_pdf(double x) {
+  return std::exp(-0.5 * x * x) / std::sqrt(2.0 * M_PI);
+}
+
+double sqrt_pos(double x) {
+  return std::sqrt(x > 0.0 ? x : 0.0);
+}
+
+double safe_exp(double x) {
+  // avoid denormals/overflow
+  if (x < -745.0) return 0.0;
+  if (x >  709.0) return std::exp(709.0);
+  return std::exp(x);
+}
+double safe_div(double num, double den) {
+  if (!std::isfinite(num) || !std::isfinite(den) || den <= 0.0) return 0.0;
+  return num / den;
+}
+
+
+// Exponential decay function
+inline double exp_decay_scalar(double t, double x0, double xinf, double tau, double p) {
+  if (tau <= 0.0 || p <= 0.0) return xinf;
+  x0 = std::abs(x0);
+  xinf = std::abs(xinf);
+  const double amp = x0 - xinf;
+  if (!std::isfinite(t) || t <= 0.0) {
+    return xinf + amp;
+  }
+  double y = p * (std::log(t) - std::log(tau));
+  double s = safe_exp(y);
+  double exp_term = safe_exp(-s);
+  return xinf + amp * exp_term;
+}
+
+// [[Rcpp::export]]
+NumericVector exp_decay(NumericVector t, double x0, double xinf, double tau, double p) {
+  if (tau <= 0.0 || p <= 0.0) stop("tau and p must be > 0.");
+  int n = t.size();
+  NumericVector out(n);
+  for (int i = 0; i < n; ++i) {
+    double ti = t[i];
+    if (NumericVector::is_na(ti)) {
+      out[i] = NA_REAL;
+    } else {
+      out[i] = exp_decay_scalar(ti, x0, xinf, tau, p);
+    }
+  }
+  return out;
+}
+
 #endif
 
 
