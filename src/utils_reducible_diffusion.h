@@ -11,22 +11,44 @@
 #include <functional>
 #include <limits>
 #include <cstddef>
+#include <utility>
 #include <Rcpp.h>
 #include <quadmath.h>
 using namespace Rcpp;
 
-// Prepare and scale parameters for the OU hitting time problem.
-struct RD_Params {
-  double b0, t_scaled, z_scaled, b_scaled, binf, c, lambda, theta, tau, pow, omega, beta_prime;
-  double mu, sigma, z0;
-  bool fixed_b, sp_var;
-};
+struct RD_Params;
 
 using KernelFn = std::function<double(double,double,const RD_Params&)>;
 using ForcingFn = std::function<double(double,const RD_Params&)>;
 using AbelFn = std::function<double(double,const RD_Params&)>;
-
 using BoundaryDecayFn = std::function<double(double, const RD_Params &)>;
+
+// Prepare and scale parameters for the OU hitting time problem.
+struct RD_Params {
+  double b0, t_scaled, zL_scaled, zU_scaled, b_scaled, binf, c, lambda, theta, tau, pow, omega, beta_prime;
+  double mu, sigma, z0, v_max, theta_max;
+  bool fixed_b, sp_var;
+  BoundaryDecayFn boundary_fn;
+  std::vector<double> boundary_params;
+};
+
+inline double default_boundary_decay(double t, const RD_Params& pars) {
+  return exp_decay_scalar(t, pars.b0, pars.binf, pars.tau, pars.pow);
+}
+
+inline double fixed_boundary_decay(double, const RD_Params& pars) {
+  return pars.b0;
+}
+
+inline double evaluate_boundary_decay(double t, const RD_Params& pars) {
+  if (pars.boundary_fn) {
+    return pars.boundary_fn(t, pars);
+  }
+  if (pars.fixed_b) {
+    return pars.b0;
+  }
+  return default_boundary_decay(t, pars);
+}
 
 // Threshold for switching to Abel approximation, based on the scaled time.
 // The paper notes solutions are "visually indistinguishable" up to t=0.02.
@@ -505,6 +527,38 @@ double integrate_density(const std::vector<double>& grid,
     total += 0.5 * h * (density[i] + density[i + 1]);
   }
   return total;
+}
+
+// Heat kernel G*(t, dbeta) = exp(-dbeta^2/(2t)) / sqrt(2 pi t)
+inline double Gstar(double t, double delta) {
+  if (t <= FPM_EPSILON) return 0.0;
+  const double denom = std::sqrt(2.0 * M_PI * t);
+  return safe_exp(-(delta * delta) / (2.0 * t)) / denom;
+}
+
+// Computes the uniform-avergage image weight for the BM case
+inline double averaged_image_term(double t, double beta_t, const RD_Params& pars) {
+    if (t <= FPM_EPSILON) return 0.0;
+
+    // Handle the point-start case (no averaging needed)
+    if (!pars.sp_var) {
+        const double num = pars.zU_scaled - beta_t; // (z - b) in scaled units
+        return (num / t) * Gstar(t, num);
+    }
+
+    double z_lo = pars.zL_scaled;
+    double z_hi = pars.zU_scaled;
+    if (z_hi < z_lo) std::swap(z_lo, z_hi);
+    const double span = z_hi - z_lo;
+    if (span <= FPM_EPSILON) {
+        return 0.0;
+    }
+
+    // Elegant formulation using the heat kernel (Gstar)
+    const double G_at_lower_bound = Gstar(t, z_lo - beta_t);
+    const double G_at_upper_bound = Gstar(t, z_hi - beta_t);
+
+    return (1.0 / span) * (G_at_lower_bound - G_at_upper_bound);
 }
 
 #endif // utils_reducible_diffusion_h

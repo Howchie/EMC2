@@ -29,6 +29,10 @@ bm_fht_cdf_vec <- function(t, mu, sigma, z0, b0, binf, tau, pow, num_steps = 200
     .Call(`_EMC2_bm_fht_cdf_vec`, t, mu, sigma, z0, b0, binf, tau, pow, num_steps)
 }
 
+simulate_bm_hit_times <- function(n, mu, sigma, z0, b0, binf, tau = 1.0, pow = 1.0, dt = 1e-3, t_max = 10.0) {
+    .Call(`_EMC2_simulate_bm_hit_times`, n, mu, sigma, z0, b0, binf, tau, pow, dt, t_max)
+}
+
 plba_norm <- function(t, A, b, v, sv, posdrift = TRUE, log_out = FALSE) {
     .Call(`_EMC2_plba_norm`, t, A, b, v, sv, posdrift, log_out)
 }
@@ -65,12 +69,8 @@ ou_fht_cdf <- function(t, lambda, theta, sigma, z0, b0, binf, tau, p, num_steps)
     .Call(`_EMC2_ou_fht_cdf`, t, lambda, theta, sigma, z0, b0, binf, tau, p, num_steps)
 }
 
-ou_fht_pdf_forward <- function(t, lambda, theta, sigma, z0, b0, binf, tau, p, num_steps) {
-    .Call(`_EMC2_ou_fht_pdf_forward`, t, lambda, theta, sigma, z0, b0, binf, tau, p, num_steps)
-}
-
-ou_fht_pdf_forward_vec <- function(t, lambda, theta, sigma, z0, b0, binf, tau, pow, num_steps = 200L) {
-    .Call(`_EMC2_ou_fht_pdf_forward_vec`, t, lambda, theta, sigma, z0, b0, binf, tau, pow, num_steps)
+ou_fht_pdf_vec <- function(t, lambda, theta, sigma, z0, b0, binf, tau, pow, num_steps = 200L) {
+    .Call(`_EMC2_ou_fht_pdf_vec`, t, lambda, theta, sigma, z0, b0, binf, tau, pow, num_steps)
 }
 
 ou_fht_cdf_vec <- function(t, lambda, theta, sigma, z0, b0, binf, tau, pow, num_steps = 200L) {
@@ -79,6 +79,10 @@ ou_fht_cdf_vec <- function(t, lambda, theta, sigma, z0, b0, binf, tau, pow, num_
 
 simulate_ou_hit_times_std <- function(n, lambda, theta, sigma, z0, b0, binf, tau = 1.0, p = 1.0, dt = 1e-3, t_max = 10.0) {
     .Call(`_EMC2_simulate_ou_hit_times_std`, n, lambda, theta, sigma, z0, b0, binf, tau, p, dt, t_max)
+}
+
+simulate_ou_hit_times <- function(n, lambda, theta, sigma, z0, b0, binf, tau = 1.0, p = 1.0, dt = 1e-3, t_max = 10.0) {
+    .Call(`_EMC2_simulate_ou_hit_times`, n, lambda, theta, sigma, z0, b0, binf, tau, p, dt, t_max)
 }
 
 pigt0 <- function(t, k = 1.0, l = 1.0, log_out = FALSE) {

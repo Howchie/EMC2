@@ -12,72 +12,40 @@
 #include <functional>
 #include <limits>
 #include <cstddef>
-#include <utility>
 #include <Rcpp.h>
 #include <quadmath.h>
 using namespace Rcpp;
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 // Section 1: Core Constants and Helper Functions
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-inline double averaged_shifted_gaussian(double beta, double variance, double z_lo, double z_hi) {
-  if (variance <= FPM_EPSILON) {
-    return 0.0;
-  }
-  if (z_hi < z_lo) {
-    std::swap(z_lo, z_hi);
-  }
-  const double span = z_hi - z_lo;
-  if (span <= FPM_EPSILON) {
-    const double delta = z_lo - beta;
-    return delta * safe_exp(-(delta * delta) / variance);
-  }
-  const double half_var = 0.5 * variance;
-  const double scale = std::sqrt(2.0 * M_PI * half_var);
-  const double exp_hi = Gstar(half_var, z_hi - beta) * scale;
-  const double exp_lo = Gstar(half_var, z_lo - beta) * scale;
-  return (variance / (2.0 * span)) * (exp_hi - exp_lo);
-}
 
-inline RD_Params prepare_ou_params(double t, double lambda, double theta, double sigma, double z0, double b0, double binf, double tau, double pow,
-                                 BoundaryDecayFn boundary_fn = BoundaryDecayFn(),
-                                 std::vector<double> boundary_params = {}) {
-  RD_Params p{};
-    p.sp_var = false;
+// Centralized function for parameter validation, scaling, and handling edge cases.
+inline RD_Params prepare_ou_params(double t, double lambda, double theta, double sigma, double z0, double b0, double binf, double tau, double pow) {
+  RD_Params p;
+    p.omega = 1.0; // default: hitting from above
     p.b0 = b0;
     p.c = std::sqrt(lambda) / sigma;
     p.t_scaled = lambda * t;
-
-    const double z_scaled_raw = p.c * (z0 - theta);
-    const double b_scaled_raw = p.c * (b0 - theta);
-    const double lower_scaled_raw = p.c * (0.0 - theta);
-
-    p.omega = (z_scaled_raw >= b_scaled_raw) ? 1.0 : -1.0;
-
-    p.zU_scaled = z_scaled_raw; // these will both be zero for point start
-    p.zL_scaled = p.zU_scaled;
-    if (p.sp_var) {
-        const double lo = std::min(lower_scaled_raw, z_scaled_raw);
-        const double hi = std::max(lower_scaled_raw, z_scaled_raw);
-        p.zL_scaled = lo;
-        p.zU_scaled = hi;
-    }
-    p.b_scaled = b_scaled_raw;
+    p.z_scaled = p.c * (z0 - theta);
+    p.b_scaled = p.c * (b0 - theta);
     p.binf = binf;
     p.fixed_b = true;
+    p.mu = 0.0;
     p.sigma = sigma;
     p.z0 = z0;
-    if (std::abs(p.binf - p.b0) > FPM_EPSILON) {
+    if (std::abs(p.binf-p.b0) > FPM_EPSILON) {
         p.fixed_b = false;
     }
     p.lambda = lambda;
-    p.theta = theta;
+    p.theta=theta;
     p.tau = tau;
     p.pow = pow;
-    p.boundary_params = std::move(boundary_params);
-    if (!boundary_fn) {
-        boundary_fn = p.fixed_b ? BoundaryDecayFn(fixed_boundary_decay) : BoundaryDecayFn(default_boundary_decay);
+    if (p.z_scaled < p.b_scaled) { // Hitting from below -> flip problem
+        p.omega = -1.0;
+        p.z_scaled = -p.z_scaled;
+        p.b_scaled = -p.b_scaled;
+        p.z0 = -p.z0;
     }
-    p.boundary_fn = std::move(boundary_fn);
     return p;
 }
 
@@ -101,8 +69,8 @@ inline double beta_from_v_raw(double v, const RD_Params& pars) {
     }
     const double t = v_to_t(v) / pars.lambda;
     const double t_max = pars.t_scaled / pars.lambda;
-    const double bt = -pars.omega*evaluate_boundary_decay(t_max - t, pars);
-    const double bt_scaled =  (pars.c * (bt - pars.theta));
+    const double bt = exp_decay_scalar(t_max - t, pars.b0, pars.binf, pars.tau, pars.pow);
+    const double bt_scaled = pars.omega * (pars.c * (bt - pars.theta));
     return scale * bt_scaled;
 }
 
@@ -115,10 +83,12 @@ inline double beta_from_theta_raw(double theta, const RD_Params& pars) {
         return scale * pars.b_scaled;
     }
     const double t = theta_to_t(theta) / pars.lambda;
-    const double bt = -pars.omega * evaluate_boundary_decay(t, pars);
-    const double bt_scaled = pars.c * (bt - pars.theta);
+    const double bt = exp_decay_scalar(t, pars.b0, pars.binf, pars.tau, pars.pow);
+    const double bt_scaled = pars.omega * (pars.c * (bt - pars.theta));
     return scale * bt_scaled;
 }
+
+
 
 inline double beta_from_v(double v, const RD_Params& pars, const BoundaryDecayCache* cache = nullptr) {
     if (pars.fixed_b) {
@@ -148,29 +118,17 @@ inline double beta_from_theta(double theta, const RD_Params& pars, const Boundar
     return beta_from_theta_raw(theta, pars);
 }
 
-inline void effective_positions_tv(double v, double vp, double variance, const RD_Params& pars,
+inline void effective_positions_tv(double v, double vp, const RD_Params& pars,
                                 double& Delta, double& one_minus_vp,
                                 const BoundaryDecayCache* cache = nullptr) {
-  const double alpha = std::max(0.0, 1.0 - v);
-  const double omega = pars.omega;
+  const double z_eff = pars.z_scaled * std::max(0.0, 1.0 - v);
   double beta_vp;
   if (pars.fixed_b) {
-        beta_vp = pars.b_scaled * std::max(0.0, 1.0 - vp);
+        beta_vp = pars.b_scaled * (1.0 - vp);
   } else {
         beta_vp = beta_from_v(vp, pars, cache);
   }
-  const double z_start = pars.zU_scaled;
-  Delta = alpha * z_start - beta_vp;
-  Rcout<<"beta_vp: "<<beta_vp<<", b_scaled: "<<pars.b_scaled<<", 1mv: "<<1.0 - vp<<", Delta: "<<Delta<<std::endl;
-  if (pars.sp_var) {
-      double z_lo = pars.zU_scaled, z_hi = pars.zU_scaled;
-      if ((pars.zU_scaled - pars.zL_scaled > FPM_EPSILON) && variance > FPM_EPSILON) {
-          const double y_lo = alpha * z_lo;
-          const double y_hi = alpha * z_hi;
-          const double avg = averaged_shifted_gaussian(beta_vp, variance, y_lo, y_hi);
-          Delta = -avg;
-      }
-  }
+  Delta = z_eff - beta_vp;
   one_minus_vp = std::max(0.0, 1.0 - vp);
 }
 
@@ -181,91 +139,96 @@ double kernel_backward(double v, double vp, const RD_Params& pars) {
     if (std::abs(b) < FPM_EPSILON) {
         return 0.0;
     }
-    const double omega = pars.omega;
-    const double beta_v = beta_from_v(v, pars);
-    const double beta_vp = beta_from_v(vp, pars);
-	const double dv = v - vp;
-    const double s = 2.0 - v - vp;
+	double dv = v - vp;
+    double s = 2.0 - v - vp;
 	if (dv < 0.0 || s <= FPM_EPSILON) return 0.0;
-    const double expo = safe_exp(-b*b*dv/s); // clamp extreme values
-    const double term1 = (-2.0 * b / std::sqrt(M_PI)); // minus sign because b here is implicilty negative. In fixed b case, beta_v<beta_vp, and (beta_v - beta_vp)/dv = -b. In Lipton & Kaushansky (2020) they removed omega and assumed a hitting from above problem which canceled some signs, this is the more general form
-    const double term2 = (((1.0 - vp) * expo) / (s * std::sqrt(s)));
-    const double kernel = omega * (term1 * term2);
-    return -kernel; // - because we move the kernel term across to the right hand side when solving (Eq 13 Lipton & Kaushansky 2020)
+    double expo = safe_exp(-b*b*dv/s); // clamp extreme values
+    double term1 = (2.0 * b / std::sqrt(M_PI));
+    return term1 * (((1.0 - vp) * expo) / (s * std::sqrt(s)));
 }
 
 // Time-varying extension of above. replace b with (beta(v) - beta(v'))/dv
-inline double kernel_backward_tv_core(double v, double vp, const RD_Params& pars, const BoundaryDecayCache& cache) {
+inline double kernel_backward_tv_core(double v, double vp, double beta_v, double beta_vp) {
     const double dv = v - vp;
-    if (dv <= FPM_EPSILON)
-      return 0.0;
-    const double beta_v = beta_from_v(v, pars, &cache);
-    const double beta_vp = beta_from_v(vp, pars, &cache);
+    if (dv <= FPM_EPSILON) return 0.0;
     const double psi = beta_v - beta_vp;
     if (std::abs(psi) < 1e-15) return 0.0;
     const double s = 2.0 - v - vp;
     if (s <= FPM_EPSILON) return 0.0;
-    const double omega = pars.omega;
-    const double b_eff = psi / dv;
+
+    const double m_eff = -psi / dv;
     const double xi = safe_exp(-(psi * psi) / (dv * s));
 
-    const double term1 = (-2.0 * b_eff / std::sqrt(M_PI));
+    const double term1 = (2.0 * m_eff / std::sqrt(M_PI));
     const double term2 = ((1.0 - vp) * xi) / (s * std::sqrt(s));
-    const double kernel = omega * (term1 * term2);
-    return -kernel;
+    return term1 * term2;
+}
+
+inline double kernel_backward_tv_cached(double v, double vp, const RD_Params& pars,
+                                        const BoundaryDecayCache& cache) {
+    if (pars.fixed_b) {
+        return kernel_backward(v, vp, pars);
+    }
+    const double beta_v = beta_from_v(v, pars, &cache);
+    const double beta_vp = beta_from_v(vp, pars, &cache);
+    return kernel_backward_tv_core(v, vp, beta_v, beta_vp);
 }
 
 // The non-singular part of the backwards Volterra kernel in theta from page 11 Lipton & Kaushansky(2018)
 double kernel_forward(double theta, double theta_p, const RD_Params& pars) {
     const double b = pars.b_scaled;
     if (std::abs(b) < FPM_EPSILON) return 0.0;
-    const double omega = pars.omega;
-    const double dv = theta - theta_p;
-    const double s = 2.0 + theta + theta_p;
+
+    const double s  = 1.0 + theta;
+    const double sp = 1.0 + theta_p;
+    const double sum = 2.0 + theta + theta_p;
 	// Handle diagonal explicitly
-    if (std::abs(dv) < 1e-15) {
+    if (std::abs(s - sp) < 1e-15) {
         // K(tau,tau) = - b / (sqrt (2pi) sqrt s)
-        if (s < FPM_EPSILON)
-          return 0.0;
-        const double kernel_limit = -omega*(pars.beta_prime / std::sqrt(2.0 * M_PI) / sqrt_pos((1+theta)));
-        return kernel_limit;// in fixed case, beta' = -b_scaled
+		if (s < FPM_EPSILON) return 0.0;
+        return -(pars.beta_prime / std::sqrt(2.0 * M_PI)) / sqrt_pos(s); // in fixed case, beta' = b_scaled
     }
     if (theta <= theta_p + FPM_EPSILON) return 0.0;
 
-    const double ratio = dv / s;
-    const double xi  = safe_exp(-b*b*ratio);
-    const double term1 = 2.0*b*xi  / std::sqrt(M_PI);
-    const double term2 = (1.0 + theta_p)/ (s * std::sqrt(s)); // change of variables transform and jacobian
+    const double ratio = (theta - theta_p) / sum;
+    const double expo  = safe_exp(-b*b*ratio);
+
     // Eq. 10 Lipton et al (2018), -sign when moving to RHS of equation
-    const double kernel = omega * (term1 * term2);
-    return -kernel; // -omega because we move the kernel term across to the right hand side when solving (Eq 13 Lipton & Kaushansky 2020)
+    return -(2.0*b/std::sqrt(M_PI)) * (expo * sp) / (sum * std::sqrt(sum));
 }
 
 // Time-varying extension of above. replace b with (beta(theta)-beta(theta_p))/dtheta
 // Diagonal term uses the derivative of beta at theta. In the fixed case that term reduces to b_scaled, hence the change from above
-double kernel_forward_tv_core(double theta, double theta_p, const RD_Params& pars, const BoundaryDecayCache& cache) {
-    const double dv = theta - theta_p;
-    const double scale = 1.0 + theta;
-    const double omega = pars.omega;
-    const double beta_theta = beta_from_theta(theta, pars, &cache);
-    const double beta_theta_p = beta_from_theta(theta_p, pars, &cache);
+double kernel_forward_tv_core(double theta, double theta_p, double beta_theta, double beta_theta_p,const RD_Params& pars) {
+  const double dv = theta - theta_p;
+  const double scale = 1.0 + theta;
     // Handle diagonal explicitly
     if (std::abs(dv) < 1e-15) {
         const double beta_prime = pars.beta_prime;
         if (scale < FPM_EPSILON) return 0.0;
-        return -omega*(beta_prime / std::sqrt(2.0 * M_PI)) / sqrt_pos(scale);
+        return -(beta_prime / std::sqrt(2.0 * M_PI)) / sqrt_pos(scale);
     }
-    const double psi = beta_theta - beta_theta_p; // this is equivalent to b*dv in the fixed case
+    const double psi = beta_theta - beta_theta_p;
     const double s = 2.0 + theta + theta_p;
     if (s <= 1e-15) return 0.0;
 
-    const double b_eff = psi / dv;
-    const double xi = safe_exp(-(psi * psi) / (dv * s)); 
+    const double m_eff = psi / dv;
+    const double xi = safe_exp(-(psi * psi) / (dv * s));
 
-    const double term1 = (2.0 * b_eff  * xi/ std::sqrt(M_PI));
-    const double term2 = ((1.0 + theta_p)) / (s * std::sqrt(s)); // change of variables transform and jacobian
-    const double kernel = omega * (term1 * term2);
-    return -kernel; // -omega because we move the kernel term across to the right hand side when solving (Eq 13 Lipton & Kaushansky 2020)
+    const double term1 = (2.0 * m_eff / std::sqrt(M_PI));
+    const double term2 = ((1.0 + theta_p) * xi) / (s * std::sqrt(s));
+
+    return -term1 * term2;
+}
+
+inline double kernel_forward_tv_cached(double theta, double theta_p, const RD_Params& pars,
+                                        const BoundaryDecayCache& cache) {
+    if (pars.fixed_b) {
+        return kernel_forward(theta, theta_p, pars);
+    }
+    const double beta_v = beta_from_theta(theta, pars, &cache);
+    const double beta_vp = beta_from_theta(theta_p, pars, &cache);
+    return kernel_forward_tv_core(theta, theta_p, beta_v, beta_vp, pars);
 }
 
 // Dummy function for backward kernel
@@ -275,73 +238,33 @@ double g_term_backward(double v, const RD_Params& pars) {
 
 // Forward kernel g term from page 11 Lipton & Kaushansky(2018)
 double g_term_forward(double theta, const RD_Params& pars) {
-    const double z = pars.zU_scaled;
-    const double b = pars.b_scaled;
-    const double scale = 1.0 + theta;
-	const double tau_2 = scale*scale-1.0; // this is 2*tau, which is the solver units
+    const double z = pars.z_scaled, b = pars.b_scaled;
+    const double s = 1.0 + theta;
+	const double term1 = s*s-1.0;
     if (theta <= FPM_EPSILON) return 0.0;
-    const double num = z - scale*b;
-	const double expo = safe_exp(-(num*num)/tau_2);
-	const double denom = sqrt_pos(M_PI * tau_2);
+    const double num = s*b - z;
+	const double expo = safe_exp(-(num*num)/term1);
+	const double denom = sqrt_pos(M_PI * term1);
 	if (denom <= FPM_EPSILON) return 0.0;
     return -expo / denom;
-}
-
-double g_term_forward_uniform(double theta, const RD_Params& pars) {
-    const double scale = 1.0 + theta;
-    const double tau_2 = scale*scale-1.0; // this is 2*tau, which is the solver units
-    if (theta <= FPM_EPSILON || tau_2 <= FPM_EPSILON) return 0.0;
-    double z_lo = pars.zU_scaled, z_hi = pars.zU_scaled;
-    if (!(pars.zU_scaled - pars.zL_scaled > FPM_EPSILON)) {
-        return g_term_forward(theta, pars);
-    }
-    const double span = z_hi - z_lo;
-    if (span <= FPM_EPSILON) {
-        return g_term_forward(theta, pars);
-    }
-    const double a = scale * pars.b_scaled;
-    const double root = std::sqrt(tau_2);
-    const double erf_hi = std::erf((z_hi - a) / root);
-    const double erf_lo = std::erf((z_lo - a) / root);
-    return -(erf_hi - erf_lo) / (2.0 * span);
 }
 
 // Time-varying version of the above, replace b with beta at theta (beta includes the (1+theta) factor already)
 double g_term_forward_tv(double theta, const RD_Params& pars,
                                         const BoundaryDecayCache& cache) {
-    //if (pars.fixed_b) {
-    //    return g_term_forward(theta, pars);
-    //}
-    //TODO implement the averaging across 0-z0 for sp_var case
-    const double z = pars.zU_scaled;
-    const double scale = 1.0 + theta;
-	const double tau_2 = scale*scale-1.0; // this is 2*tau, which is the solver units
+    if (pars.fixed_b) {
+        return g_term_forward(theta, pars);
+    }
+    const double z = pars.z_scaled;
+    const double s = 1.0 + theta;
+	const double term1 = s*s-1.0;
     if (theta <= FPM_EPSILON) return 0.0;
-    const double beta = beta_from_theta(theta, pars, &cache); // beta already has "scale" factored in
+    const double beta = beta_from_theta(theta, pars, &cache); 
     const double num = beta - z;
-	const double expo = safe_exp(-(num*num)/tau_2);
-	const double denom = sqrt_pos(M_PI * tau_2);
+	const double expo = safe_exp(-(num*num)/term1);
+	const double denom = sqrt_pos(M_PI * term1);
 	if (denom <= FPM_EPSILON) return 0.0;
     return -expo / denom;
-}
-
-inline double g_term_forward_tv_uniform(double theta, const RD_Params& pars, const BoundaryDecayCache& cache) {
-    const double scale = 1.0 + theta;
-    const double tau_2 = scale*scale-1.0; // this is 2*tau, which is the solver units
-    if (theta <= FPM_EPSILON || tau_2 <= FPM_EPSILON) return 0.0;
-    double z_lo = pars.zL_scaled, z_hi = pars.zU_scaled;
-    if (!(pars.zU_scaled - pars.zL_scaled > FPM_EPSILON)) {
-        return g_term_forward_tv(theta, pars, cache);
-    }
-    const double span = z_hi - z_lo;
-    if (span <= FPM_EPSILON) {
-        return g_term_forward_tv(theta, pars, cache);
-    }
-    const double beta = beta_from_theta(theta, pars, &cache); // beta already has "scale" factored in
-    const double root = std::sqrt(tau_2);
-    const double erf_hi = std::erf((z_hi - beta) / root);
-    const double erf_lo = std::erf((z_lo - beta) / root);
-    return -(erf_hi - erf_lo) / (2.0 * span);
 }
 
 // Abel Approximations
@@ -349,29 +272,20 @@ inline double g_term_forward_tv_uniform(double theta, const RD_Params& pars, con
 // When b is not fixed, we use the scaled b value at time t (shouldn't make a huge difference for small t but it's more mathematically correct)
 double abel_approx_nu_b(double v, const RD_Params& pars, const BoundaryDecayCache* cache = nullptr) {
     double b_eff = pars.b_scaled;
-    const double omega = pars.omega;
-    const double b_signed = omega * b_eff;
-    const double z_signed = omega * pars.zU_scaled;
     if (!pars.fixed_b) {
-        const double beta_v = omega*beta_from_v(v, pars, cache);
+        const double beta_v = beta_from_v(v, pars, cache);
         const double scale = std::max(FPM_EPSILON, 1.0 - v);
         b_eff = beta_v / scale;
     }
     if (std::abs(b_eff) < FPM_EPSILON) {
         return 1.0;
     }
-    return 2.0 * std::exp((b_signed * b_signed * v) / 2.0) * normal_cdf(b_signed * std::sqrt(v));
+    return 2.0 * std::exp((b_eff * b_eff * v) / 2.0) * normal_cdf(b_eff * std::sqrt(v));
 }
 
 double abel_approx_nu_f(double theta, const RD_Params& pars, const BoundaryDecayCache* cache = nullptr) {
     if (theta < FPM_EPSILON) {
         return 0.0; // nu_f(0) = g(0) = 0
-    }
-    if (pars.sp_var) {
-        if (cache) {
-            return g_term_forward_tv_uniform(theta, pars, *cache);
-        }
-        return g_term_forward_uniform(theta, pars);
     }
     double b_eff = pars.b_scaled;
     if (!pars.fixed_b) {
@@ -379,18 +293,16 @@ double abel_approx_nu_f(double theta, const RD_Params& pars, const BoundaryDecay
         const double scale = std::max(FPM_EPSILON, 1.0 + theta);
         b_eff = beta_theta / scale;
     }
-    const double omega = pars.omega;
-    const double b_signed = omega * b_eff;
-    const double z_signed = omega * pars.zU_scaled;
-    // TODO: implement the uniform start point case here
-    const double num = b_signed * theta + z_signed - b_signed;
+    const double z = pars.z_scaled;
+    const double num = b_eff * theta + z - b_eff;
 
-    const double exp_arg1 = 0.5 * b_signed * b_signed * theta + b_signed * (z_signed - b_signed);
+    const double exp_arg1 = 0.5 * b_eff * b_eff * theta + b_eff * (z - b_eff);
     const double cdf_arg = -num / std::sqrt(theta);
-    const double term1 = b_signed * safe_exp(exp_arg1) * normal_cdf(cdf_arg);
+    const double term1 = b_eff * safe_exp(exp_arg1) * normal_cdf(cdf_arg);
 
-    const double exp_arg2 = -((b_signed - z_signed) * (b_signed - z_signed)) / (2 * theta);
+    const double exp_arg2 = -((b_eff - z) * (b_eff - z)) / (2 * theta);
     const double term2 = -safe_exp(exp_arg2) / std::sqrt(2.0 * M_PI * theta);
+
     return term1 + term2;
 }
 
@@ -405,14 +317,12 @@ inline double G_integrand_smooth(double v, double vp, const RD_Params& pars, dou
     double Delta, one_minus_vp;
     const double s_eff = (s > 1e-14) ? s : 1e-14;
     const double dv_eff = (dv > 1e-14) ? dv : 1e-14;
-    effective_positions_tv(v, vp, dv_eff * s_eff, pars, Delta, one_minus_vp,
-                           cache);
+    effective_positions_tv(v, vp, pars, Delta, one_minus_vp, cache);
     const double expo = safe_exp(-Delta * Delta / (dv_eff * s_eff));
 
     const double denom = std::sqrt(M_PI) * (s_eff * std::sqrt(s_eff)); 
     const double num = Delta * expo * one_minus_vp * nu;
-    if (denom < FPM_EPSILON)
-      return 0.0;
+    if (denom < FPM_EPSILON) return 0.0;
     return num / denom;
 }
 
@@ -426,29 +336,21 @@ inline double regularized_pdf_integrand_theta(
     const BoundaryDecayCache* cache = nullptr)
 {
     const double dv = theta - theta_p;
-    const double scale = 1.0 + theta;
-    const double beta_theta = beta_from_theta(theta, pars, cache);
-    const double beta_theta_p = beta_from_theta(theta_p, pars, cache);
-
-    const double psi = beta_theta - beta_theta_p; // this is equivalent to b*dv in the fixed case
-    const double psi_sq = psi * psi;
-    const double s = 2.0 + theta + theta_p;
-    if (s <= 1e-15) return 0.0;
-
-    const double b_eff = psi / dv;
-    const double ratio = (psi * psi) / (dv * s);
-    const double xi = safe_exp(-ratio);
-
-    const double term1 = (2.0 * b_eff * xi / std::sqrt(M_PI));
-
     if (dv <= 0) return 0.0;
 
+    const double beta_theta = beta_from_theta(theta, pars, cache);
+    const double beta_theta_p = beta_from_theta(theta_p, pars, cache);
+    const double psi = beta_theta - beta_theta_p;
+
     // Kernel's smooth part, H_smooth(theta, theta_p)
-    //const double ratio = dv / s;
-    const double H_smooth = (1.0 - 2.0 * ratio) * xi;
+    const double s = 2.0 + theta + theta_p;
+    const double ratio = dv / s;
+    const double psi_sq_over_dv = safe_div(psi * psi, dv * dv);
+    const double H_smooth = (1.0 - 2.0 * psi_sq_over_dv * ratio) * safe_exp(-psi_sq_over_dv * ratio);
+
     const double jacobian_part = 1.0 + theta_p;
 
-    const double denom = dv * s * sqrt_pos(s); // dv here = u^2
+    const double denom = dv * s * sqrt_pos(s);
     if (denom < FPM_EPSILON) return 0.0;
     // NB 2* is from the jacobian of the u-transform
     return 2.0 * (H_smooth * nu_f_p - nu_f_theta) * jacobian_part / denom;
@@ -471,6 +373,7 @@ inline double integrate_cdf_backward_trapezoid(
 
         const double H_a = G_integrand_smooth(v, a, pars, nu_vals[i], cache);
 		double H_b = 0.0; 
+        const double sqrt_v_minus_a = std::sqrt(std::max(0.0, v - a));
  
         // Final interval b==v and Hb=0
         double W_a, W_b;
@@ -512,12 +415,22 @@ double integrate_pdf_forward_theta_u(
         u_grid[i] = sqrt_pos(theta_max - theta_grid[i]);
     }
 
+    // Evaluate f(u_i) for i = 0 to N-1
+    for (int i = 0; i < N; ++i) {
+        f_vals[i] = regularized_pdf_integrand_theta(
+            theta_max, theta_grid[i],
+            nu_f_at_max, nu_f_vals[i],
+            pars, cache
+        );
+    }
+
     // Evaluate f(u_N) = f(0) using the derivative limit
     const double mid = 0.5 * (theta_grid[N-1] + theta_max);
 	const RightQuad rq = right_end_quadratic(theta_grid, nu_f_vals, mid);
     const double nu_prime_theta = rq.nu_prime;
     const double s = 1.0 + theta_max;
     const double f_right_limit = -nu_prime_theta / std::sqrt(2.0 * s);
+
     double integral_sum = 0.0;
     // Panel-wise Simpson with quadratic ν(θ′) at θ_mid
     // Panels are [i, i+1] in θ (equivalently [u_{i+1}, u_i] in u)
@@ -535,7 +448,7 @@ double integrate_pdf_forward_theta_u(
         const double nuL = nu_f_vals[i];
         const double nuR = nu_f_vals[i+1];
         const double nuU = quad_interp(theta_grid, nu_f_vals, i, thetaU);
-        double u2 = (u_grid[i] * u_grid[i]);
+
         // f at left endpoint
         const double fL = regularized_pdf_integrand_theta(theta_max, thetaL,
                                                       nu_f_at_max, nuL, pars, cache);
@@ -565,28 +478,24 @@ double ou_fht_cdf(double t, double lambda, double theta, double sigma, double z0
         return 0.0;
     }
     RD_Params pars = prepare_ou_params(t, lambda, theta, sigma, z0, b0, binf, tau, p);
-    const double v_max = 1.0 - std::exp(-pars.t_scaled);
-    pars.v_max = v_max;
-    const double omega = pars.omega;
-    const double b_at_t = (beta_from_v(v_max, pars) / (1 - v_max)) / pars.c + theta; // unscaled b at time t
-    if (std::abs(b_at_t) < FPM_EPSILON) { // Already hit
+    if (pars.z_scaled <= pars.b_scaled + FPM_EPSILON) { // Already hit
          return 1.0;
-    } 
+    }
 
-    // TODO implement the sp_var case here
     if (std::abs(pars.b_scaled) < FPM_EPSILON) { // Analytical case for b_scaled = 0
         double sinh_t = std::sinh(pars.t_scaled);
         if (sinh_t < FPM_EPSILON) {
             return 0.0;
         } else {
-            double common_arg = -pars.zU_scaled * std::exp(-0.5 * pars.t_scaled) / std::sqrt(sinh_t);
+            double common_arg = -pars.z_scaled * std::exp(-0.5 * pars.t_scaled) / std::sqrt(sinh_t);
             return 2.0 * normal_cdf(common_arg);
         }
     }
-  
+
+    const double v = 1.0 - std::exp(-pars.t_scaled);
     const int N = (num_steps < 2) ? 2 : (num_steps % 2 ? num_steps + 1 : num_steps);
 
-    const double h_v = v_max / N;
+    const double h_v = v / N;
     std::vector<double> v_grid(N + 1);
     for (int j = 0; j <= N; ++j) v_grid[j] = j * h_v;
 
@@ -597,9 +506,9 @@ double ou_fht_cdf(double t, double lambda, double theta, double sigma, double z0
     if (pars.fixed_b) {
         kernel_fn = KernelFn(kernel_backward);
     } else {
-        beta_cache = make_boundary_decay_cache(v_max, N, pars, beta_from_v_raw);
+        beta_cache = make_boundary_decay_cache(v, N, pars, beta_from_v_raw);
         kernel_fn = KernelFn([&beta_cache](double vv, double vvp, const RD_Params& p) {
-            return kernel_backward_tv_core(vv, vvp, p, beta_cache);
+            return kernel_backward_tv_cached(vv, vvp, p, beta_cache);
         });
         cache_ptr = &beta_cache;
     }
@@ -609,16 +518,21 @@ double ou_fht_cdf(double t, double lambda, double theta, double sigma, double z0
         return abel_approx_nu_b(vv, p, abel_cache);
     });
 
-    auto nu_vals = solve_nu_block_with_abel(v_max, pars, N, v_grid, kernel_fn, g_term_backward, abel_fn);
-
-    const double integral_sum = integrate_cdf_backward_trapezoid(v_max, v_grid, nu_vals, pars, cache_ptr);
-    const double cdf = omega * 2.0 * integral_sum;
-    return cdf;
+    auto nu_vals = solve_nu_block_with_abel(v, pars, N, v_grid, kernel_fn, g_term_backward, abel_fn);
+    
+    const double integral_sum = integrate_cdf_backward_trapezoid(v, v_grid, nu_vals, pars, cache_ptr);
+    
+    // Formula for G(t,z) has a coefficient of 2
+    return std::max(0.0, std::min(1.0, 2*integral_sum));
 }
 
+// [[Rcpp::export]]
 double ou_fht_pdf_forward(double t, double lambda, double theta, double sigma, double z0, double b0, double binf, double tau, double p, int num_steps) {
     RD_Params pars = prepare_ou_params(t, lambda, theta, sigma, z0, b0, binf, tau, p);
-    const double omega = pars.omega;
+    if (pars.z_scaled <= pars.b_scaled + FPM_EPSILON) { // Already hit
+         return 1.0;
+    }
+
     if (t < FPM_EPSILON || lambda <= 0.0 || sigma <= 0.0) {
         return 0.0;
     }
@@ -628,26 +542,19 @@ double ou_fht_pdf_forward(double t, double lambda, double theta, double sigma, d
         if (sinh_t < FPM_EPSILON) {
             return 0.0;
         } else {
-            // TOD0: implement the sp_var case here
-            double common_arg = -pars.zU_scaled * std::exp(-0.5 * pars.t_scaled) / std::sqrt(sinh_t);
+            double common_arg = -pars.z_scaled * std::exp(-0.5 * pars.t_scaled) / std::sqrt(sinh_t);
             const double exp_term = std::exp(-0.5 * common_arg * common_arg + 0.5 * pars.t_scaled);
-            const double g_scaled = (pars.zU_scaled * exp_term) / (std::sqrt(2.0 * M_PI) * std::pow(sinh_t, 1.5));
+            const double g_scaled = (pars.z_scaled * exp_term) / (std::sqrt(2.0 * M_PI) * std::pow(sinh_t, 1.5));
             return lambda * g_scaled;
         }
     }
 	const double et  = std::exp(pars.t_scaled);
 	const double e2t = std::exp(2.0 * pars.t_scaled);
-    const double e2tm1 = e2t - 1.0;
-    const double theta_max = et - 1.0;
-    const double tau_max = 0.5 * (e2tm1);
+	const double e2tm1 = e2t - 1.0;
     const int N = (num_steps < 2) ? 2 : num_steps;
     std::vector<double> theta_grid_block;
-	
-    pars.theta_max = theta_max;
-
-    if (omega*(pars.zU_scaled - pars.b_scaled) < FPM_EPSILON) { 
-         return 0.0;
-    }
+	double theta_max = std::exp(pars.t_scaled) - 1.0;
+    
     const double h_t = theta_max / N;
     std::vector<double> t_grid(N + 1);
     for (int j = 0; j <= N; ++j) t_grid[j] = j * h_t;
@@ -661,22 +568,17 @@ double ou_fht_pdf_forward(double t, double lambda, double theta, double sigma, d
     } else {
         beta_cache = make_boundary_decay_cache(theta_max, N, pars, beta_from_theta_raw);
         kernel_fn = KernelFn([&beta_cache](double tt, double ttp, const RD_Params& p) {
-            return kernel_forward_tv_core(tt, ttp, p, beta_cache);
+            return kernel_forward_tv_cached(tt, ttp, p, beta_cache);
         });
         cache_ptr = &beta_cache;
     }
 
     ForcingFn g_fn;
-    if (pars.fixed_b) {
-        g_fn = pars.sp_var ? ForcingFn(g_term_forward_uniform)
-                           : ForcingFn(g_term_forward);
+    if(pars.fixed_b) {
+        g_fn = ForcingFn(g_term_forward);
     } else {
-        g_fn = ForcingFn([cache_ptr](double theta_val, const RD_Params &p) {
-                if (cache_ptr) {
-                    return p.sp_var ? g_term_forward_tv_uniform(theta_val, p, *cache_ptr)
-                                     : g_term_forward_tv(theta_val, p, *cache_ptr);
-                }
-                return p.sp_var ? g_term_forward_uniform(theta_val, p)
+        g_fn =  ForcingFn([cache_ptr](double theta_val, const RD_Params &p) {
+                return cache_ptr ? g_term_forward_tv(theta_val, p, *cache_ptr)
                                  : g_term_forward(theta_val, p);
                 });
     }
@@ -688,34 +590,34 @@ double ou_fht_pdf_forward(double t, double lambda, double theta, double sigma, d
     const double scale = 1+theta_max;
     std::vector<double> beta_grid(N + 1);
     for (int j = 0; j <= N; ++j) beta_grid[j] = beta_from_theta(t_grid[j], pars, cache_ptr);
-    const double beta_t = beta_grid.back();
-    pars.beta_prime = beta_t; // constant-barrier default
-    //if (!pars.fixed_b) {
+    const double beta = beta_grid.back();
+    pars.beta_prime = beta; // constant-barrier default
+    if (!pars.fixed_b) {
       const double mid = 0.5 * (t_grid[N] + t_grid.back()); // theta_grid is N+1 in size 
       const RightQuad rq = right_end_quadratic(t_grid, beta_grid,mid); 
       pars.beta_prime = rq.nu_prime;
-    //}
-    const double b_prime_t = pars.beta_prime * scale;
+    }
     auto nu_f_vals = solve_nu_block_with_abel(theta_max, pars, N, theta_grid_block, kernel_fn, g_fn, abel_fn_theta);
-    const double nu_t = nu_f_vals.back();
-    // Equations here are re-arranged to match general form in Lipton & Kaushansky (2020) Equation 10
-    // They are mathematically equivalent to the original form in section 4.4, but easier to relate to the general case
-    // Term 1: The integral from Eq. (10)
-    
-    const double integal_sum = integrate_pdf_forward_theta_u(theta_max, theta_grid_block, nu_f_vals, pars, cache_ptr);
-    const double termA = (1/std::sqrt(M_PI))*integal_sum;
-    // Term 2: -ν(t) / sqrt(2πt)
-    const double termB = -nu_t / std::sqrt(2.0 * M_PI * tau_max);
 
-    // The b'(t)ν(t) part
-    const double beta_prime_term = omega*(-(pars.beta_prime/scale) * nu_t);
-    const double image_term = omega* (0.5* averaged_image_term(tau_max, beta_t, pars));
-    const double g_scaled = termA + termB + beta_prime_term + image_term;
-    return lambda * g_scaled * e2t;
+	const double numA  = beta - pars.z_scaled;
+    const double termA = - (numA * safe_exp(-((numA*numA)/e2tm1) + 2.0*pars.t_scaled)
+                     / std::sqrt(M_PI * e2tm1*e2tm1*e2tm1));
+
+	const double termB = ( pars.beta_prime*scale + e2t/(std::sqrt(M_PI*e2tm1)) ) * nu_f_vals.back();
+
+	const double prefactor = (e2t / std::sqrt(M_PI));
+    
+    const double integral_sum =  integrate_pdf_forward_theta_u(theta_max, theta_grid_block, nu_f_vals, pars, cache_ptr);
+    
+    const double termC = prefactor * integral_sum;
+    
+    const double g_scaled = termA - termB + termC;
+			
+    return lambda * g_scaled;
 }
 
 // [[Rcpp::export]]
-NumericVector ou_fht_pdf_vec(NumericVector t,
+NumericVector ou_fht_pdf_forward_vec(NumericVector t,
                              double lambda, double theta, double sigma,
                              double z0, double b0, double binf, double tau, double pow, int num_steps = 200) {
   const int n = t.size();
@@ -751,10 +653,10 @@ if (lambda <= 0.0 || sigma <= 0.0 || dt <= 0.0 || t_max <= 0.0) {
     stop("simulate_ou_hit_times_std: invalid parameters.");
 }
 // Determine if we use fixed boundary or time-varying boundary
-RD_Params pars = prepare_ou_params(t_max, lambda, theta, sigma, z0, b0, binf, tau, p);
-const bool use_fixed = pars.fixed_b;
-const double c = pars.c;
-double z0_scaled = pars.zU_scaled;
+const bool use_fixed = (tau <= 0.0) || (p <= 0.0) || (std::abs(binf - b0) <= 0.0);
+// Scaling constants
+const double c = std::sqrt(lambda) / sigma;
+double z0_scaled = c * (z0 - theta);
 
 // Time grid (original time for boundary eval); step count
 const int steps = std::max(1, (int)std::ceil(t_max / dt));
@@ -763,13 +665,14 @@ const double s_max = lambda * t_max;    // scaled max time
 // Precompute standardized boundary trajectory B_k (k=0..steps)
 std::vector<double> B_scaled(steps + 1);
 if (use_fixed) {
-    std::fill(B_scaled.begin(), B_scaled.end(), pars.b_scaled);
+    const double B0 = c * (b0 - theta);
+    std::fill(B_scaled.begin(), B_scaled.end(), B0);
 } else {
-    for (int k = 0; k <= steps; ++k) {
-        const double t_k = k * dt;
-        const double b_t = evaluate_boundary_decay(t_k, pars);
-        B_scaled[k] = pars.omega * (c * (b_t - pars.theta));
-    }
+    // Build t-grid and decay, then scale
+    NumericVector t_grid(steps + 1);
+    for (int k = 0; k <= steps; ++k) t_grid[k] = k * dt;
+    NumericVector b_t = exp_decay(t_grid, std::abs(b0), std::abs(binf), tau, p);
+    for (int k = 0; k <= steps; ++k) B_scaled[k] = c * (b_t[k] - theta);
 }
 if (z0_scaled < B_scaled[0]) {
     z0_scaled = -z0_scaled;
@@ -779,15 +682,14 @@ if (z0_scaled < B_scaled[0]) {
   const double lambda_scaled = 1, theta_scaled=0, sigma_scaled=1;
 
 
-  const double e = std::exp(-ds);
-  const double var_step = 0.5 * (1.0 - std::exp(-2.0 * ds));
+  const double e = std::exp(-lambda_scaled * ds); // e = exp(-1.0 * lambda * dt)
+  const double var_step = (1.0 - e * e) / (2.0 * lambda_scaled);
   const double sd_step = std::sqrt(var_step);
 
   NumericVector X(n);
 
   for (int j = 0; j < n; ++j) {
-    // Sample start point: X0 ~ Uniform(0, z0); point start at 0 if z0 == 0
-    double Z = (z0 > 0.0) ? R::runif(0.0, z0) : 0.0;
+    double Z = z0_scaled; // Start with the scaled initial value
     double s = 0.0;      // Time variable is now the scaled time 's'
     bool hit = false;
 
@@ -830,99 +732,6 @@ if (z0_scaled < B_scaled[0]) {
   }
 
   return X;
-}
-
-// [[Rcpp::export]]
-NumericVector simulate_ou_hit_times(int n,
-                                    double lambda, double theta, double sigma,
-                                    double z0, double b0, double binf,
-                                    double tau = 1.0, double p = 1.0,
-                                    double dt = 1e-3, double t_max = 10.0) {
-  if (n <= 0) {
-    stop("simulate_ou_hit_times: n must be positive.");
-  }
-  if (!R_finite(lambda) || !R_finite(theta) || !R_finite(sigma) ||
-      !R_finite(z0) || !R_finite(b0) || !R_finite(binf) ||
-      !R_finite(tau) || !R_finite(p)) {
-    stop("simulate_ou_hit_times: parameters must be finite.");
-  }
-  if (lambda <= 0.0 || sigma <= 0.0 || dt <= 0.0 || t_max <= 0.0) {
-    stop("simulate_ou_hit_times: invalid parameters.");
-  }
-  if (z0 < 0.0) {
-    stop("simulate_ou_hit_times: z0 must be >= 0 to define Uniform(0, z0) start.");
-  }
-
-  RD_Params pars = prepare_ou_params(t_max, lambda, theta, sigma, z0, b0, binf, tau, p);
-  const bool use_fixed = pars.fixed_b;
-
-  const int steps = std::max(1, static_cast<int>(std::ceil(t_max / dt)));
-  std::vector<double> B(steps + 1);
-  if (use_fixed) {
-    std::fill(B.begin(), B.end(), b0);
-  } else {
-    for (int k = 0; k <= steps; ++k) {
-      const double t_k = k * dt;
-      B[k] = evaluate_boundary_decay(t_k, pars);
-    }
-  }
-
-  const double lambda_dt = lambda * dt;
-  const double exp_neg = std::exp(-lambda_dt);
-  const double var_factor = (sigma * sigma) * (-std::expm1(-2.0 * lambda_dt)) / (2.0 * lambda);
-  const double sd_step = std::sqrt(std::max(var_factor, 0.0));
-
-  NumericVector T(n, NA_REAL);
-  for (int j = 0; j < n; ++j) {
-    const double X0 = (z0 > 0.0) ? R::runif(0.0, z0) : 0.0;
-    const double B0 = B[0];
-
-    if (std::abs(X0 - B0) <= FPM_EPSILON) {
-      T[j] = 0.0;
-      continue;
-    }
-
-    const double dir = (X0 < B0) ? 1.0 : -1.0; // 1 => approach from below, -1 => from above
-
-    double X = X0;
-    double t = 0.0;
-    bool hit = false;
-
-    for (int k = 0; k < steps; ++k) {
-      const double X_prev = X;
-      const double B_prev = B[k];
-
-      X = theta + (X_prev - theta) * exp_neg + sd_step * R::rnorm(0.0, 1.0);
-      const double B_next = B[k + 1];
-
-      const double D_prev = X_prev - B_prev;
-      const double D_next = X - B_next;
-
-      if ((dir > 0.0 && D_prev < 0.0 && D_next >= 0.0) ||
-          (dir < 0.0 && D_prev > 0.0 && D_next <= 0.0)) {
-        const double num = B_prev - X_prev;
-        const double den = (X - X_prev) - (B_next - B_prev);
-        double alpha = 0.5;
-        if (std::abs(den) > FPM_EPSILON) {
-          alpha = num / den;
-        }
-        if (alpha < 0.0) alpha = 0.0;
-        if (alpha > 1.0) alpha = 1.0;
-
-        T[j] = t + alpha * dt;
-        hit = true;
-        break;
-      }
-
-      t += dt;
-    }
-
-    if (!hit) {
-      T[j] = NA_REAL;
-    }
-  }
-
-  return T;
 }
 
 #endif // OU_HITTING_TIME_H

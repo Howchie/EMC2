@@ -18,14 +18,12 @@ z_scaled = c * (z0 - theta)
 b_scaled = c * (b - theta)
 
 tt = seq(0.01,10,length.out=1000)
-sim_dat <- simulate_ou_hit_times_std(5e4, lambda, theta, sigma, z0, b, z0, tau_exp,pow, dt = 1e-3, t_max = 10)
+sim_dat <- simulate_ou_hit_times_std(5e4, lambda, theta, sigma, z0, b, b, tau_exp,pow, dt = 1e-3, t_max = 10)
 misses = mean(is.na(sim_dat))
 tmp=density(sim_dat[!is.na(sim_dat)]); f=approxfun(tmp)
 
-pdf <- ou_fht_pdf_forward_vec(tt, lambda, theta, sigma, z0, b, z0, tau_exp, pow, num_steps = 300)
-tictoc::tic()
-cdf <- ou_fht_cdf_vec(tt, lambda, theta, sigma, z0, b, z0, tau_exp, pow, num_steps = 300)
-tictoc::toc()
+pdf <- ou_fht_pdf_vec(tt, lambda, theta, sigma, z0, b, b-.1, tau_exp, pow, num_steps = 300)
+cdf <- ou_fht_cdf_vec(tt, lambda, theta, sigma, z0, b, b, tau_exp, pow, num_steps = 300)
 # Sanity checks
 plot(tt, pdf, type="l", main="OU FHT PDF")
 lines(tt, f(tt) * (1 - misses), col = "purple", lwd = 2)
@@ -35,8 +33,8 @@ trap <- sum(0.5*(head(pdf1,-1)+tail(pdf1,-1))*diff(tt))
 trap                 # ~ probability of ever hitting by max(tt)
 
 # Simulate hitting times
-hist(sim_dat, breaks=100, freq=FALSE, main="TV b")
-lines(tt, pdf/(1-misses), lwd=2, col='red')
+hist(sim_dat, breaks=100, freq=FALSE, main="Fixed-b, no start point variability")
+lines(tt, pdf/(1-misses), lwd=2, col='blue')
 # Empirical CDF vs. model CDF
 ec <- ecdf(sim_dat)
 plot(tt, cdf/(1-misses), type="l", lwd=2, ylim=c(0,1), main="Our version")

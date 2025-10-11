@@ -123,6 +123,26 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// simulate_bm_hit_times
+Rcpp::NumericVector simulate_bm_hit_times(int n, double mu, double sigma, double z0, double b0, double binf, double tau, double pow, double dt, double t_max);
+RcppExport SEXP _EMC2_simulate_bm_hit_times(SEXP nSEXP, SEXP muSEXP, SEXP sigmaSEXP, SEXP z0SEXP, SEXP b0SEXP, SEXP binfSEXP, SEXP tauSEXP, SEXP powSEXP, SEXP dtSEXP, SEXP t_maxSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< int >::type n(nSEXP);
+    Rcpp::traits::input_parameter< double >::type mu(muSEXP);
+    Rcpp::traits::input_parameter< double >::type sigma(sigmaSEXP);
+    Rcpp::traits::input_parameter< double >::type z0(z0SEXP);
+    Rcpp::traits::input_parameter< double >::type b0(b0SEXP);
+    Rcpp::traits::input_parameter< double >::type binf(binfSEXP);
+    Rcpp::traits::input_parameter< double >::type tau(tauSEXP);
+    Rcpp::traits::input_parameter< double >::type pow(powSEXP);
+    Rcpp::traits::input_parameter< double >::type dt(dtSEXP);
+    Rcpp::traits::input_parameter< double >::type t_max(t_maxSEXP);
+    rcpp_result_gen = Rcpp::wrap(simulate_bm_hit_times(n, mu, sigma, z0, b0, binf, tau, pow, dt, t_max));
+    return rcpp_result_gen;
+END_RCPP
+}
 // plba_norm
 double plba_norm(double t, double A, double b, double v, double sv, bool posdrift, bool log_out);
 RcppExport SEXP _EMC2_plba_norm(SEXP tSEXP, SEXP ASEXP, SEXP bSEXP, SEXP vSEXP, SEXP svSEXP, SEXP posdriftSEXP, SEXP log_outSEXP) {
@@ -277,29 +297,9 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
-// ou_fht_pdf_forward
-double ou_fht_pdf_forward(double t, double lambda, double theta, double sigma, double z0, double b0, double binf, double tau, double p, int num_steps);
-RcppExport SEXP _EMC2_ou_fht_pdf_forward(SEXP tSEXP, SEXP lambdaSEXP, SEXP thetaSEXP, SEXP sigmaSEXP, SEXP z0SEXP, SEXP b0SEXP, SEXP binfSEXP, SEXP tauSEXP, SEXP pSEXP, SEXP num_stepsSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< double >::type t(tSEXP);
-    Rcpp::traits::input_parameter< double >::type lambda(lambdaSEXP);
-    Rcpp::traits::input_parameter< double >::type theta(thetaSEXP);
-    Rcpp::traits::input_parameter< double >::type sigma(sigmaSEXP);
-    Rcpp::traits::input_parameter< double >::type z0(z0SEXP);
-    Rcpp::traits::input_parameter< double >::type b0(b0SEXP);
-    Rcpp::traits::input_parameter< double >::type binf(binfSEXP);
-    Rcpp::traits::input_parameter< double >::type tau(tauSEXP);
-    Rcpp::traits::input_parameter< double >::type p(pSEXP);
-    Rcpp::traits::input_parameter< int >::type num_steps(num_stepsSEXP);
-    rcpp_result_gen = Rcpp::wrap(ou_fht_pdf_forward(t, lambda, theta, sigma, z0, b0, binf, tau, p, num_steps));
-    return rcpp_result_gen;
-END_RCPP
-}
-// ou_fht_pdf_forward_vec
-NumericVector ou_fht_pdf_forward_vec(NumericVector t, double lambda, double theta, double sigma, double z0, double b0, double binf, double tau, double pow, int num_steps);
-RcppExport SEXP _EMC2_ou_fht_pdf_forward_vec(SEXP tSEXP, SEXP lambdaSEXP, SEXP thetaSEXP, SEXP sigmaSEXP, SEXP z0SEXP, SEXP b0SEXP, SEXP binfSEXP, SEXP tauSEXP, SEXP powSEXP, SEXP num_stepsSEXP) {
+// ou_fht_pdf_vec
+NumericVector ou_fht_pdf_vec(NumericVector t, double lambda, double theta, double sigma, double z0, double b0, double binf, double tau, double pow, int num_steps);
+RcppExport SEXP _EMC2_ou_fht_pdf_vec(SEXP tSEXP, SEXP lambdaSEXP, SEXP thetaSEXP, SEXP sigmaSEXP, SEXP z0SEXP, SEXP b0SEXP, SEXP binfSEXP, SEXP tauSEXP, SEXP powSEXP, SEXP num_stepsSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -313,7 +313,7 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< double >::type tau(tauSEXP);
     Rcpp::traits::input_parameter< double >::type pow(powSEXP);
     Rcpp::traits::input_parameter< int >::type num_steps(num_stepsSEXP);
-    rcpp_result_gen = Rcpp::wrap(ou_fht_pdf_forward_vec(t, lambda, theta, sigma, z0, b0, binf, tau, pow, num_steps));
+    rcpp_result_gen = Rcpp::wrap(ou_fht_pdf_vec(t, lambda, theta, sigma, z0, b0, binf, tau, pow, num_steps));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -355,6 +355,27 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< double >::type dt(dtSEXP);
     Rcpp::traits::input_parameter< double >::type t_max(t_maxSEXP);
     rcpp_result_gen = Rcpp::wrap(simulate_ou_hit_times_std(n, lambda, theta, sigma, z0, b0, binf, tau, p, dt, t_max));
+    return rcpp_result_gen;
+END_RCPP
+}
+// simulate_ou_hit_times
+NumericVector simulate_ou_hit_times(int n, double lambda, double theta, double sigma, double z0, double b0, double binf, double tau, double p, double dt, double t_max);
+RcppExport SEXP _EMC2_simulate_ou_hit_times(SEXP nSEXP, SEXP lambdaSEXP, SEXP thetaSEXP, SEXP sigmaSEXP, SEXP z0SEXP, SEXP b0SEXP, SEXP binfSEXP, SEXP tauSEXP, SEXP pSEXP, SEXP dtSEXP, SEXP t_maxSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< int >::type n(nSEXP);
+    Rcpp::traits::input_parameter< double >::type lambda(lambdaSEXP);
+    Rcpp::traits::input_parameter< double >::type theta(thetaSEXP);
+    Rcpp::traits::input_parameter< double >::type sigma(sigmaSEXP);
+    Rcpp::traits::input_parameter< double >::type z0(z0SEXP);
+    Rcpp::traits::input_parameter< double >::type b0(b0SEXP);
+    Rcpp::traits::input_parameter< double >::type binf(binfSEXP);
+    Rcpp::traits::input_parameter< double >::type tau(tauSEXP);
+    Rcpp::traits::input_parameter< double >::type p(pSEXP);
+    Rcpp::traits::input_parameter< double >::type dt(dtSEXP);
+    Rcpp::traits::input_parameter< double >::type t_max(t_maxSEXP);
+    rcpp_result_gen = Rcpp::wrap(simulate_ou_hit_times(n, lambda, theta, sigma, z0, b0, binf, tau, p, dt, t_max));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -1139,6 +1160,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_calculate_subject_means", (DL_FUNC) &_EMC2_calculate_subject_means, 4},
     {"_EMC2_bm_fht_pdf_vec", (DL_FUNC) &_EMC2_bm_fht_pdf_vec, 9},
     {"_EMC2_bm_fht_cdf_vec", (DL_FUNC) &_EMC2_bm_fht_cdf_vec, 9},
+    {"_EMC2_simulate_bm_hit_times", (DL_FUNC) &_EMC2_simulate_bm_hit_times, 10},
     {"_EMC2_plba_norm", (DL_FUNC) &_EMC2_plba_norm, 7},
     {"_EMC2_dlba_norm", (DL_FUNC) &_EMC2_dlba_norm, 7},
     {"_EMC2_dlba_c", (DL_FUNC) &_EMC2_dlba_c, 7},
@@ -1148,10 +1170,10 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_dlba", (DL_FUNC) &_EMC2_dlba, 6},
     {"_EMC2_plba", (DL_FUNC) &_EMC2_plba, 6},
     {"_EMC2_ou_fht_cdf", (DL_FUNC) &_EMC2_ou_fht_cdf, 10},
-    {"_EMC2_ou_fht_pdf_forward", (DL_FUNC) &_EMC2_ou_fht_pdf_forward, 10},
-    {"_EMC2_ou_fht_pdf_forward_vec", (DL_FUNC) &_EMC2_ou_fht_pdf_forward_vec, 10},
+    {"_EMC2_ou_fht_pdf_vec", (DL_FUNC) &_EMC2_ou_fht_pdf_vec, 10},
     {"_EMC2_ou_fht_cdf_vec", (DL_FUNC) &_EMC2_ou_fht_cdf_vec, 10},
     {"_EMC2_simulate_ou_hit_times_std", (DL_FUNC) &_EMC2_simulate_ou_hit_times_std, 11},
+    {"_EMC2_simulate_ou_hit_times", (DL_FUNC) &_EMC2_simulate_ou_hit_times, 11},
     {"_EMC2_pigt0", (DL_FUNC) &_EMC2_pigt0, 4},
     {"_EMC2_digt0", (DL_FUNC) &_EMC2_digt0, 4},
     {"_EMC2_dwald_classic", (DL_FUNC) &_EMC2_dwald_classic, 4},
