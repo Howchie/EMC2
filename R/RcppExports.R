@@ -73,8 +73,16 @@ ou_fht_pdf_vec <- function(t, lambda, theta, sigma, z0, b0, binf, tau, pow, num_
     .Call(`_EMC2_ou_fht_pdf_vec`, t, lambda, theta, sigma, z0, b0, binf, tau, pow, num_steps)
 }
 
+ou_fht_pdf_vec_spline <- function(t, lambda, theta, sigma, z0, b0, binf, tau, pow, num_steps = 200L) {
+    .Call(`_EMC2_ou_fht_pdf_vec_spline`, t, lambda, theta, sigma, z0, b0, binf, tau, pow, num_steps)
+}
+
 ou_fht_cdf_vec <- function(t, lambda, theta, sigma, z0, b0, binf, tau, pow, num_steps = 200L) {
     .Call(`_EMC2_ou_fht_cdf_vec`, t, lambda, theta, sigma, z0, b0, binf, tau, pow, num_steps)
+}
+
+ou_fht_pdf_vec_grid <- function(t, lambda, theta, sigma, z0, b0, binf, tau, pow) {
+    .Call(`_EMC2_ou_fht_pdf_vec_grid`, t, lambda, theta, sigma, z0, b0, binf, tau, pow)
 }
 
 simulate_ou_hit_times_std <- function(n, lambda, theta, sigma, z0, b0, binf, tau = 1.0, p = 1.0, dt = 1e-3, t_max = 10.0) {

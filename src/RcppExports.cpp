@@ -317,6 +317,26 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// ou_fht_pdf_vec_spline
+NumericVector ou_fht_pdf_vec_spline(NumericVector t, double lambda, double theta, double sigma, double z0, double b0, double binf, double tau, double pow, int num_steps);
+RcppExport SEXP _EMC2_ou_fht_pdf_vec_spline(SEXP tSEXP, SEXP lambdaSEXP, SEXP thetaSEXP, SEXP sigmaSEXP, SEXP z0SEXP, SEXP b0SEXP, SEXP binfSEXP, SEXP tauSEXP, SEXP powSEXP, SEXP num_stepsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type t(tSEXP);
+    Rcpp::traits::input_parameter< double >::type lambda(lambdaSEXP);
+    Rcpp::traits::input_parameter< double >::type theta(thetaSEXP);
+    Rcpp::traits::input_parameter< double >::type sigma(sigmaSEXP);
+    Rcpp::traits::input_parameter< double >::type z0(z0SEXP);
+    Rcpp::traits::input_parameter< double >::type b0(b0SEXP);
+    Rcpp::traits::input_parameter< double >::type binf(binfSEXP);
+    Rcpp::traits::input_parameter< double >::type tau(tauSEXP);
+    Rcpp::traits::input_parameter< double >::type pow(powSEXP);
+    Rcpp::traits::input_parameter< int >::type num_steps(num_stepsSEXP);
+    rcpp_result_gen = Rcpp::wrap(ou_fht_pdf_vec_spline(t, lambda, theta, sigma, z0, b0, binf, tau, pow, num_steps));
+    return rcpp_result_gen;
+END_RCPP
+}
 // ou_fht_cdf_vec
 NumericVector ou_fht_cdf_vec(NumericVector t, double lambda, double theta, double sigma, double z0, double b0, double binf, double tau, double pow, int num_steps);
 RcppExport SEXP _EMC2_ou_fht_cdf_vec(SEXP tSEXP, SEXP lambdaSEXP, SEXP thetaSEXP, SEXP sigmaSEXP, SEXP z0SEXP, SEXP b0SEXP, SEXP binfSEXP, SEXP tauSEXP, SEXP powSEXP, SEXP num_stepsSEXP) {
@@ -334,6 +354,25 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< double >::type pow(powSEXP);
     Rcpp::traits::input_parameter< int >::type num_steps(num_stepsSEXP);
     rcpp_result_gen = Rcpp::wrap(ou_fht_cdf_vec(t, lambda, theta, sigma, z0, b0, binf, tau, pow, num_steps));
+    return rcpp_result_gen;
+END_RCPP
+}
+// ou_fht_pdf_vec_grid
+NumericVector ou_fht_pdf_vec_grid(NumericVector t, double lambda, double theta, double sigma, double z0, double b0, double binf, double tau, double pow);
+RcppExport SEXP _EMC2_ou_fht_pdf_vec_grid(SEXP tSEXP, SEXP lambdaSEXP, SEXP thetaSEXP, SEXP sigmaSEXP, SEXP z0SEXP, SEXP b0SEXP, SEXP binfSEXP, SEXP tauSEXP, SEXP powSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type t(tSEXP);
+    Rcpp::traits::input_parameter< double >::type lambda(lambdaSEXP);
+    Rcpp::traits::input_parameter< double >::type theta(thetaSEXP);
+    Rcpp::traits::input_parameter< double >::type sigma(sigmaSEXP);
+    Rcpp::traits::input_parameter< double >::type z0(z0SEXP);
+    Rcpp::traits::input_parameter< double >::type b0(b0SEXP);
+    Rcpp::traits::input_parameter< double >::type binf(binfSEXP);
+    Rcpp::traits::input_parameter< double >::type tau(tauSEXP);
+    Rcpp::traits::input_parameter< double >::type pow(powSEXP);
+    rcpp_result_gen = Rcpp::wrap(ou_fht_pdf_vec_grid(t, lambda, theta, sigma, z0, b0, binf, tau, pow));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -1171,7 +1210,9 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_plba", (DL_FUNC) &_EMC2_plba, 6},
     {"_EMC2_ou_fht_cdf", (DL_FUNC) &_EMC2_ou_fht_cdf, 10},
     {"_EMC2_ou_fht_pdf_vec", (DL_FUNC) &_EMC2_ou_fht_pdf_vec, 10},
+    {"_EMC2_ou_fht_pdf_vec_spline", (DL_FUNC) &_EMC2_ou_fht_pdf_vec_spline, 10},
     {"_EMC2_ou_fht_cdf_vec", (DL_FUNC) &_EMC2_ou_fht_cdf_vec, 10},
+    {"_EMC2_ou_fht_pdf_vec_grid", (DL_FUNC) &_EMC2_ou_fht_pdf_vec_grid, 9},
     {"_EMC2_simulate_ou_hit_times_std", (DL_FUNC) &_EMC2_simulate_ou_hit_times_std, 11},
     {"_EMC2_simulate_ou_hit_times", (DL_FUNC) &_EMC2_simulate_ou_hit_times, 11},
     {"_EMC2_pigt0", (DL_FUNC) &_EMC2_pigt0, 4},
