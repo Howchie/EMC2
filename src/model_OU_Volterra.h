@@ -438,7 +438,7 @@ inline double G_integrand_smooth(double v, double vp, const RD_Params& pars, dou
 }
 
 // The smooth integrand of the final PDF integral after a u-transform.
-// f(u) = 2 * H_smooth(θ, θ-u²) * (v(θ-u²) - v(θ)) * (1+θ-u²) / u²
+// f(u) = 2 * H_smooth(ÃƒÅ½Ã‚Â¸, ÃƒÅ½Ã‚Â¸-uÃƒâ€šÃ‚Â²) * (v(ÃƒÅ½Ã‚Â¸-uÃƒâ€šÃ‚Â²) - v(ÃƒÅ½Ã‚Â¸)) * (1+ÃƒÅ½Ã‚Â¸-uÃƒâ€šÃ‚Â²) / uÃƒâ€šÃ‚Â²
 // This function computes the value of f(u) given theta and theta'.
 inline double regularized_pdf_integrand_theta(
     double theta, double theta_p,
@@ -539,10 +539,10 @@ double integrate_pdf_forward_theta_u(
     const double nu_prime_theta = rq.nu_prime;
     const double s = 1.0 + theta_max;
     const double f_right_limit = -nu_prime_theta / std::sqrt(2.0 * s);
-    Rcout << "f_right_limit: " << f_right_limit << std::endl;
+    //Rcout << "f_right_limit: " << f_right_limit << std::endl;
     double integral_sum = 0.0;
-    // Panel-wise Simpson with quadratic ν(θ′) at θ_mid
-    // Panels are [i, i+1] in θ (equivalently [u_{i+1}, u_i] in u)
+    // Panel-wise Simpson with quadratic ÃƒÅ½Ã‚Â½(ÃƒÅ½Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â²) at ÃƒÅ½Ã‚Â¸_mid
+    // Panels are [i, i+1] in ÃƒÅ½Ã‚Â¸ (equivalently [u_{i+1}, u_i] in u)
     for (int i = N - 1; i >= 0; --i) {
         const double uL = u_grid[i];
         const double uR = u_grid[i+1];
@@ -553,7 +553,6 @@ double integrate_pdf_forward_theta_u(
         const double uM     = 0.5 * (uL + uR);
         const double thetaU = theta_max - uM * uM;
 
-        // ν values
         const double nuL = nu_f_vals[i];
         const double nuR = nu_f_vals[i+1];
         const double nuU = quad_interp(theta_grid, nu_f_vals, i, thetaU);
@@ -566,7 +565,7 @@ double integrate_pdf_forward_theta_u(
         const double fR = (i == N - 1) ? f_right_limit :  regularized_pdf_integrand_theta(theta_max, thetaR,
                                           nu_f_at_max, nuR, pars, cache);
 
-        // f at midpoint with quadratic ν and midpoint θ′ in the smooth factors
+        // f at midpoint with quadratic ÃƒÅ½Ã‚Â½ and midpoint ÃƒÅ½Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â² in the smooth factors
         const double fM = regularized_pdf_integrand_theta(theta_max, thetaU,
                                                       nu_f_at_max, nuU, pars, cache);
 
@@ -592,7 +591,8 @@ double integrate_pdf_forward_spline(
     const util::AkimaSpline& nu_spline,
     const RD_Params& pars,
     const BoundaryDecayCache* cache = nullptr,
-    int M = 100) // 100 panels is probably overkill, but FAST.
+    int M = 100,                 // 100 panels is probably overkill, but FAST.
+    double nu_prime_at_k_override = std::numeric_limits<double>::quiet_NaN())
 {
     if (theta_k <= 0.0) return 0.0;
 
@@ -609,10 +609,13 @@ double integrate_pdf_forward_spline(
 
     // Get the ANALYTIC ENDPOINT at theta_k using the spline
     const double nu_at_k = nu_spline.interpolate(theta_k);
-    const double nu_prime_at_k = nu_spline.derivative(theta_k);
+    // Allow an optional, numerically robust override for the endpoint derivative.
+    const double nu_prime_at_k = std::isfinite(nu_prime_at_k_override)
+                                   ? nu_prime_at_k_override
+                                   : nu_spline.derivative(theta_k);
     const double s = 1.0 + theta_k;
     const double f_right_limit = -nu_prime_at_k / std::sqrt(2.0 * s);
-    Rcout << "f_right_limit: " << f_right_limit << std::endl;
+    //Rcout << "f_right_limit: " << f_right_limit << std::endl;
     // Run Simpson's loop
     double integral_sum = 0.0;
     
@@ -718,7 +721,7 @@ double ou_fht_cdf(double t, double lambda, double theta, double sigma, double z0
     return std::max(0.0, std::min(cdf,1.0));
 }
 
-double ou_fht_pdf_forward(double t, double lambda, double theta, double sigma, double z0, double b0, double binf, double tau, double p, int num_steps) {
+double ou_fht_pdf_forward(double t, double lambda, double theta, double sigma, double z0, double b0, double binf, double tau, double p) {
     RD_Params pars = prepare_ou_params(t, lambda, theta, sigma, z0, b0, binf, tau, p);
     const double omega = pars.omega;
     if (t < FPM_EPSILON || lambda <= 0.0 || sigma <= 0.0) {
@@ -742,7 +745,7 @@ double ou_fht_pdf_forward(double t, double lambda, double theta, double sigma, d
     const double e2tm1 = e2t - 1.0;
     const double theta_max = et - 1.0;
     const double tau_max = 0.5 * (e2tm1);
-    const int N = (num_steps < 2) ? 2 : num_steps;
+    const int N = calculate_num_steps(t, 0.005, 300);
     std::vector<double> theta_grid_block;
 	
     pars.theta_max = theta_max;
@@ -811,20 +814,17 @@ double ou_fht_pdf_forward(double t, double lambda, double theta, double sigma, d
     // Term 1: The integral from Eq. (10)
     const double integal_sum = integrate_pdf_forward_theta_u(theta_max, theta_grid_block, nu_f_vals, pars, cache_ptr);
     const double termA = (1/std::sqrt(M_PI))*integal_sum;
-    // Term 2: -ν(t) / sqrt(2πt)
     const double termB = -nu_t / std::sqrt(2.0 * M_PI * tau_max);
-
-    // The b'(t)ν(t) part
     const double beta_prime_term = omega*(-(pars.beta_prime/scale) * nu_t);
     const double image_term = omega* (0.5* averaged_image_term(tau_max, beta_t, pars));
     const double g_scaled = termA + termB + beta_prime_term + image_term;
     const double pdf = lambda * g_scaled * e2t;
-    Rcout<<"nu_prime=" << nu_prime_at_max << std::endl;
-    Rcout<<"PDF components: Integral=" << termA <<", TermB=" << termB <<", Nu=" << nu_t << ", Beta_prime_term=" << beta_prime_term << ", Image_term=" << image_term << ", PDF=" << pdf << std::endl;
+    //Rcout<<"nu_prime=" << nu_prime_at_max << std::endl;
+    //Rcout<<"PDF components: Integral=" << termA <<", TermB=" << termB <<", Nu=" << nu_t << ", Beta_prime_term=" << beta_prime_term << ", Image_term=" << image_term << ", PDF=" << pdf << std::endl;
     return std::max(0.0, pdf);
 }
 
-double ou_fht_pdf_spline(double t, double lambda, double theta, double sigma, double z0, double b0, double binf, double tau, double p, int num_steps) {
+double ou_fht_pdf_spline(double t, double lambda, double theta, double sigma, double z0, double b0, double binf, double tau, double p) {
     RD_Params pars = prepare_ou_params(t, lambda, theta, sigma, z0, b0, binf, tau, p);
     const double omega = pars.omega;
     if (t < FPM_EPSILON || lambda <= 0.0 || sigma <= 0.0) {
@@ -848,7 +848,7 @@ double ou_fht_pdf_spline(double t, double lambda, double theta, double sigma, do
     const double e2tm1 = e2t - 1.0;
     const double theta_max = et - 1.0;
     const double tau_max = 0.5 * (e2tm1);
-    const int N = (num_steps < 2) ? 2 : num_steps;
+    const int N = calculate_num_steps(t, 0.005, 300);
     std::vector<double> theta_grid_block;
 	
     pars.theta_max = theta_max;
@@ -910,12 +910,12 @@ double ou_fht_pdf_spline(double t, double lambda, double theta, double sigma, do
     // Kaushansky (2020) Equation 10 They are mathematically equivalent to the
     // original form in section 4.4, but easier to relate to the general case
     // Term 1: The integral from Eq. (10)
-    const double integral_sum = integrate_pdf_forward_spline(theta_max, nu_spline, pars, cache_ptr, num_steps);
+    const double integral_sum = integrate_pdf_forward_spline(theta_max, nu_spline, pars, cache_ptr, N);
     const double termA = (1/std::sqrt(M_PI))*integral_sum;
-    // Term 2: -ν(t) / sqrt(2πt)
+    // Term 2: -ÃƒÅ½Ã‚Â½(t) / sqrt(2ÃƒÂÃ¢â€šÂ¬t)
     const double termB = -nu_t / std::sqrt(2.0 * M_PI * tau_max);
 
-    // The b'(t)ν(t) part
+    // The b'(t)ÃƒÅ½Ã‚Â½(t) part
     const double beta_prime_term = omega*(-(pars.beta_prime/scale) * nu_t);
     const double image_term = omega* (0.5* averaged_image_term(tau_max, beta_t, pars));
     const double g_scaled = termA + termB + beta_prime_term + image_term;
@@ -928,12 +928,12 @@ double ou_fht_pdf_spline(double t, double lambda, double theta, double sigma, do
 // [[Rcpp::export]]
 NumericVector ou_fht_pdf_vec(NumericVector t,
                              double lambda, double theta, double sigma,
-                             double z0, double b0, double binf, double tau, double pow, int num_steps = 200) {
+                             double z0, double b0, double binf, double tau, double pow) {
   const int n = t.size();
   NumericVector out(n);
   for (int i = 0; i < n; ++i) {
     const double ti = t[i];
-    out[i] = R_finite(ti) ? ou_fht_pdf_forward(ti, lambda, theta, sigma, z0, b0, binf, tau, pow, num_steps) : NA_REAL;
+    out[i] = R_finite(ti) ? ou_fht_pdf_forward(ti, lambda, theta, sigma, z0, b0, binf, tau, pow) : NA_REAL;
   }
   return out;
 }
@@ -941,12 +941,12 @@ NumericVector ou_fht_pdf_vec(NumericVector t,
 // [[Rcpp::export]]
 NumericVector ou_fht_pdf_vec_spline(NumericVector t,
                              double lambda, double theta, double sigma,
-                             double z0, double b0, double binf, double tau, double pow, int num_steps = 200) {
+                             double z0, double b0, double binf, double tau, double pow) {
   const int n = t.size();
   NumericVector out(n);
   for (int i = 0; i < n; ++i) {
     const double ti = t[i];
-    out[i] = R_finite(ti) ? ou_fht_pdf_spline(ti, lambda, theta, sigma, z0, b0, binf, tau, pow, num_steps) : NA_REAL;
+    out[i] = R_finite(ti) ? ou_fht_pdf_spline(ti, lambda, theta, sigma, z0, b0, binf, tau, pow) : NA_REAL;
   }
   return out;
 }
@@ -1049,7 +1049,7 @@ NumericVector ou_fht_pdf_vec_grid(NumericVector t,
   // Choose solver steps in the native theta variable (the block solver is uniform in theta)
   const double et_max  = std::exp(pars.t_scaled);
   const double theta_max = et_max - 1.0;
-  int N = calculate_num_steps(t_max, 0.005, 200);
+  int N = calculate_num_steps(t_max, 0.005, 300);
   Rcout << "num_steps: " << N << std::endl;
 
   // Special analytical case for b_scaled ~ 0 (fixed barrier at zero in scaled space)
@@ -1150,25 +1150,238 @@ NumericVector ou_fht_pdf_vec_grid(NumericVector t,
     int M_int = static_cast<int>(theta_eval / h);
     if (M_int < 200) M_int = 200;
     if (M_int > N)   M_int = N;
-    const double integral_sum = integrate_pdf_forward_spline(theta_eval, nu_spline, pars_i, cache_ptr, M_int);
-    const double termA = (1/std::sqrt(M_PI))*integral_sum;
-    // Term 2: -ν(t) / sqrt(2πt)
-    const double termB = -nu_t / std::sqrt(2.0 * M_PI * tau_eval);
+    // If evaluating exactly at the last grid node, prefer the raw-grid
+    // local quadratic derivative to stabilize the endpoint limit.
+    double deriv_override = std::numeric_limits<double>::quiet_NaN();
+    const double last_theta = theta_grid_block.back();
+    if (std::abs(theta_eval - last_theta) <= std::max(1e-12, 1e-12 * std::abs(last_theta))) {
+      deriv_override = nu_prime_local;
+    }
 
-    // The b'(t)ν(t) part
+    const double integral_sum = integrate_pdf_forward_spline(
+      theta_eval, nu_spline, pars_i, cache_ptr, M_int, deriv_override);
+    const double termA = (1/std::sqrt(M_PI))*integral_sum;
+    const double termB = -nu_t / std::sqrt(2.0 * M_PI * tau_eval);
     const double omega_i = pars_i.omega;
     const double beta_prime_term = omega_i*(-(pars_i.beta_prime/scale) * nu_t);
     const double image_term = omega_i* (0.5* averaged_image_term(tau_eval, beta_t, pars_i));
     const double g_scaled = termA + termB + beta_prime_term + image_term;
     const double pdf = lambda * g_scaled * e2t;
-    Rcout<<"nu_prime_spline="<< nu_prime_spline << ", nu_prime_local=" << nu_prime_local << std::endl;
-    Rcout<<"PDF components: Integral=" << termA <<", TermB=" << termB <<", Nu=" << nu_t << ", Beta_prime_term=" << beta_prime_term << ", Image_term=" << image_term << ", PDF=" << pdf <<", Theta= "<<theta_eval<<", beta= "<<beta_t<<", beta_p= "<<pars_i.beta_prime << std::endl;
+    //Rcout<<"nu_prime_spline="<< nu_prime_spline << ", nu_prime_local=" << nu_prime_local << std::endl;
+    //Rcout<<"PDF components: Integral=" << termA <<", TermB=" << termB <<", Nu=" << nu_t << ", Beta_prime_term=" << beta_prime_term << ", Image_term=" << image_term << ", PDF=" << pdf <<", Theta= "<<theta_eval<<", beta= "<<beta_t<<", beta_p= "<<pars_i.beta_prime << std::endl;
     out[i] = pdf;
   }
 
   return out;
 }
 
+
+// Variant of the grid-based solver using the chunked Volterra kernel
+// acceleration. Keeps the legacy function untouched for comparative testing.
+// [[Rcpp::export]]
+NumericVector ou_fht_pdf_vec_grid_chunked(NumericVector t,
+                                          double lambda, double theta, double sigma,
+                                          double z0, double b0, double binf,
+                                          double tau, double pow, double chunk_ratio, double chunk_base_panels,
+                                          double chunk_max, double chunk_history_recent, double chunk_refine_ratio,
+                                          double chunk_refine_width = 1.01, double chunk_keep_last_chunks=2,
+                                          bool chunk_disable_compression = false)
+{
+  const int n = t.size();
+  NumericVector out(n, NA_REAL);
+
+  double t_max = 0.0;
+  bool has_finite = false;
+  for (int i = 0; i < n; ++i) {
+    if (R_finite(t[i]) && t[i] > t_max) {
+      t_max = t[i];
+      has_finite = true;
+    }
+  }
+  if (!has_finite || t_max <= 0.0 || lambda <= 0.0 || sigma <= 0.0) {
+    for (int i = 0; i < n; ++i) {
+      if (R_finite(t[i]) && t[i] >= 0.0) {
+        out[i] = 0.0;
+      } else {
+        out[i] = NA_REAL;
+      }
+    }
+    return out;
+  }
+
+  RD_Params pars = prepare_ou_params(t_max, lambda, theta, sigma, z0, b0, binf, tau, pow);
+  const double omega = pars.omega;
+
+  if (std::abs(pars.b_scaled) < FPM_EPSILON && pars.fixed_b) {
+    NumericVector analytical = ou_fht_pdf_vec_fixed_zero_branch(t, pars);
+    for (int i = 0; i < n; ++i) {
+      out[i] = analytical[i];
+    }
+    return out;
+  }
+
+  const double theta_max = std::exp(pars.t_scaled) - 1.0;
+  int N = calculate_num_steps(t_max, 0.005, 300);
+  Rcout << "num_steps: " << N << std::endl;
+  BoundaryDecayCache cache;
+  BoundaryDecayCache* cache_ptr = nullptr;
+  if (!pars.fixed_b) {
+    const int cache_panels = N; cache = make_boundary_decay_cache(theta_max, cache_panels, pars, beta_from_theta_raw);
+    cache_ptr = &cache;
+  }
+
+  KernelFn kernel_fn;
+  if (pars.fixed_b) {
+    kernel_fn = KernelFn(kernel_forward);
+  } else {
+    kernel_fn = KernelFn([cache_ptr](double theta_val, double theta_prime, const RD_Params& p) {
+      if (cache_ptr) {
+        return kernel_forward_tv_core(theta_val, theta_prime, p, *cache_ptr);
+      }
+      return kernel_forward(theta_val, theta_prime, p);
+    });
+  }
+
+  ForcingFn g_fn;
+  if (pars.fixed_b) {
+    g_fn = pars.sp_var ? ForcingFn(g_term_forward_uniform)
+                       : ForcingFn(g_term_forward);
+  } else {
+    g_fn = ForcingFn([cache_ptr](double theta_val, const RD_Params &p) {
+      if (cache_ptr) {
+        return p.sp_var ? g_term_forward_tv_uniform(theta_val, p, *cache_ptr)
+                        : g_term_forward_tv(theta_val, p, *cache_ptr);
+      }
+      return p.sp_var ? g_term_forward_uniform(theta_val, p)
+                      : g_term_forward(theta_val, p);
+    });
+  }
+
+  const BoundaryDecayCache* abel_cache_theta = cache_ptr;
+  AbelFn abel_fn_theta = AbelFn([abel_cache_theta](double theta_val, const RD_Params& p) {
+    return abel_approx_nu_f(theta_val, p, abel_cache_theta);
+  });
+
+  ChunkingOptions chunk_opts;
+  // ratio: larger => coarser later chunks; smaller (>=1.5) => finer overall.
+  chunk_opts.ratio = chunk_ratio;
+  // base_panels: panels in the first chunk (near zero). Larger => finer near zero.
+  chunk_opts.base_panels = chunk_base_panels;
+  //std::min(300, N / 2);
+  // max_chunks: upper bound on number of chunks.
+  chunk_opts.max_chunks = chunk_max;
+  // history_recent: number of recent panels kept exact. Larger => more exact history near tn.
+  chunk_opts.history_recent = chunk_history_recent; // std::min(300, N / 4);
+  // Refinement knobs near tn in the compressed tiers:
+  // refine_ratio: larger => less refinement; smaller => more splitting near tn.
+  chunk_opts.refine_ratio = chunk_refine_ratio;
+  // refine_min_width_factor: larger => stop refining earlier (coarser); smaller (>=1.0) => finer.
+  chunk_opts.refine_min_width_factor = chunk_refine_width;
+  // disable_compression: true => keep entire history exact (slower, most accurate)
+  chunk_opts.disable_compression = chunk_disable_compression;
+  // how many chunks should use exact history rather than compressed
+  chunk_opts.keep_last_chunks = chunk_keep_last_chunks;
+  // Print per-chunk history diagnostics
+  chunk_opts.print_history_stats = true;
+  // Debug: number of chunks and per-chunk panel counts
+  {
+    auto __chunks_dbg = build_chunked_theta_layout(theta_max, N, chunk_opts);
+    Rcout << "chunks: " << __chunks_dbg.size();
+    if (!__chunks_dbg.empty()) {
+      Rcout << " [";
+      for (size_t ci = 0; ci < __chunks_dbg.size(); ++ci) {
+        if (ci) Rcout << ", ";
+        Rcout << __chunks_dbg[ci].num_steps;
+      }
+      Rcout << "]";
+    }
+    Rcout << std::endl;
+  }
+
+  std::vector<double> theta_grid_block;
+  // Precompute beta-grid across the mesh for later local derivatives
+  auto theta_grid_block_upfront = build_chunked_theta_grid(theta_max, N, chunk_opts);
+  Rcout << "total grid points: " << theta_grid_block_upfront.size() << std::endl;
+  std::vector<double> beta_grid(theta_grid_block_upfront.size());
+  for (size_t j=0;j<beta_grid.size();++j) {
+    beta_grid[j]  = beta_from_theta(theta_grid_block_upfront[j], pars, cache_ptr);
+  }
+  util::AkimaSpline beta_spline(theta_grid_block_upfront, beta_grid);
+  pars.beta_prime = beta_spline.derivative(theta_max);
+  auto nu_f_vals = solve_nu_block_with_abel_chunked(theta_max, pars, N, theta_grid_block,
+                                                    kernel_fn, g_fn, abel_fn_theta,
+                                                    chunk_opts);
+  util::AkimaSpline nu_spline(theta_grid_block, nu_f_vals);
+
+  const int total_nodes = static_cast<int>(theta_grid_block.size());
+  const int total_panels = std::max(0, total_nodes - 1);
+
+  for (int i = 0; i < n; ++i) {
+    const double ti = t[i];
+    if (!R_finite(ti) || ti <= 0.0) {
+      out[i] = R_finite(ti) ? 0.0 : NA_REAL;
+      continue;
+    }
+
+    RD_Params pars_i = prepare_ou_params(ti, lambda, theta, sigma, z0, b0, binf, tau, pow);
+    const double et  = std::exp(pars_i.t_scaled);
+    const double e2t = et * et;
+    const double theta_eval = et - 1.0;
+    const double tau_eval   = 0.5 * (e2t - 1.0);
+
+    const double nu_t = nu_spline.interpolate(theta_eval);
+    const double scale = 1.0 + theta_eval;
+
+    pars_i.beta_prime = beta_spline.derivative(theta_eval);
+    const double beta_t = beta_spline.interpolate(theta_eval);
+
+    const double nu_prime_spline = nu_spline.derivative(theta_eval);
+    double nu_prime_local = 0.0;
+    if (total_nodes >= 3) {
+      auto upper_idx = std::upper_bound(theta_grid_block.begin(), theta_grid_block.end(), theta_eval);
+      int jpanel = static_cast<int>(upper_idx - theta_grid_block.begin()) - 1;
+      if (jpanel < 1) jpanel = 1;
+      if (jpanel > total_nodes - 2) jpanel = total_nodes - 2;
+      const int c_index = jpanel + 1;
+      nu_prime_local = local_quad_derivative(theta_grid_block, nu_f_vals, c_index);
+    }
+
+    auto integration_it = std::upper_bound(theta_grid_block.begin(), theta_grid_block.end(), theta_eval);
+    int idx = static_cast<int>(integration_it - theta_grid_block.begin());
+    if (idx < 1) idx = 1;
+    int integration_floor = std::min(200, total_panels);
+    int M_int = total_panels > 0 ? std::max(idx, integration_floor) : 0;
+    if (total_panels > 0 && M_int > total_panels) {
+      M_int = total_panels;
+    }
+
+    // Prefer a raw-grid local quadratic derivative for the endpoint case
+    // to stabilize the right-limit used in the last u-panel.
+    double deriv_override = std::numeric_limits<double>::quiet_NaN();
+    const double last_theta = theta_grid_block.back();
+    if (std::abs(theta_eval - last_theta) <= std::max(1e-12, 1e-12 * std::abs(last_theta))) {
+      deriv_override = nu_prime_local;
+    }
+
+    const double integral_sum = integrate_pdf_forward_spline(
+      theta_eval, nu_spline, pars_i, cache_ptr, M_int, deriv_override);
+    const double termA = (1.0 / std::sqrt(M_PI)) * integral_sum;
+    const double termB = -nu_t / std::sqrt(2.0 * M_PI * tau_eval);
+
+    const double omega_i = pars_i.omega;
+    const double beta_prime_term = omega_i * (-(pars_i.beta_prime / scale) * nu_t);
+
+    const double image_term = omega_i* (0.5* averaged_image_term(tau_eval, beta_t, pars_i));
+    const double g_scaled = termA + termB + beta_prime_term + image_term;
+    const double pdf = lambda * g_scaled * e2t;
+
+    //Rcout<<"nu_prime_spline="<< nu_prime_spline << ", nu_prime_local=" << nu_prime_local << std::endl;
+    //Rcout<<"PDF components: Integral=" << termA <<", TermB=" << termB <<", Nu=" << nu_t << ", Beta_prime_term=" << beta_prime_term << ", Image_term=" << image_term << ", PDF=" << pdf <<", Theta= "<<theta_eval<<", beta= "<<beta_t<<", beta_p= "<<pars_i.beta_prime << std::endl;
+    out[i] = std::max(0.0, pdf);
+  }
+
+  return out;
+}
 
 // [[Rcpp::export]]
 NumericVector simulate_ou_hit_times_std(int n,

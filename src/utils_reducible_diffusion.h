@@ -1,4 +1,4 @@
-#ifndef utils_reducible_diffusion_h
+﻿#ifndef utils_reducible_diffusion_h
 #define utils_reducible_diffusion_h
 
 #define _USE_MATH_DEFINES
@@ -12,6 +12,7 @@
 #include <limits>
 #include <cstddef>
 #include <utility>
+#include <deque>
 #include <Rcpp.h>
 #include <quadmath.h>
 #include <stdexcept>
@@ -117,11 +118,11 @@ struct BoundaryDecayCache {
     }
 };
 
-// Right-end quadratic fit (last 3 points) => ν′(τ), ν″(τ), and ν(mid) via Newton form
+// Right-end quadratic fit (last 3 points) => nu'(tau), nu''(tau), and nu(mid) via Newton form
 struct RightQuad {
-    double nu_prime;   // ν′(τ)
-    double nu_second;  // ν″(τ)
-    double nu_at_mid;  // quadratic ν at midpoint of last panel
+    double nu_prime;   // nu'(tau)
+    double nu_second;  // nu''(tau)
+    double nu_at_mid;  // quadratic nu at midpoint of last panel
 };
 RightQuad right_end_quadratic(const std::vector<double>& x,
                                      const std::vector<double>& y,
@@ -137,11 +138,11 @@ RightQuad right_end_quadratic(const std::vector<double>& x,
     const double f12  = (y2 - y1) / (x2 - x1);
     const double f012 = (f12 - f01) / (x2 - x0);
 
-    // ν′(x2) and ν″(x2) for the quadratic that interpolates the last 3 points
+    // nu'(x2) and nu''(x2) for the quadratic that interpolates the last 3 points
     out.nu_second = 2.0 * f012;
     out.nu_prime  = f01 + f012 * ((x2 - x0) + (x2 - x1));  // p'(x2) = f[x0,x1] + f[x0,x1,x2]((x2-x0)+(x2-x1))
 
-    // ν(mid) from the same quadratic
+    // nu(mid) from the same quadratic
     const double mid_m_x0 = mid - x0;
     const double mid_m_x1 = mid - x1;
     out.nu_at_mid = y0 + f01 * (mid_m_x0) + f012 * (mid_m_x0) * (mid_m_x1);
@@ -182,7 +183,7 @@ double quad_interp(
     const double xa = grid[a], xb = grid[b], xc = grid[c];
     const double ya = nu[a],    yb = nu[b],    yc = nu[c];
 
-    // Lagrange basis at θq
+    // Lagrange basis at theta_q
     const double Lab = (t_q - xb) / (xa - xb);
     const double Lac = (t_q - xc) / (xa - xc);
     const double Lba = (t_q - xa) / (xb - xa);
@@ -361,8 +362,184 @@ double stieltjes_trap_history(
     return S;
 }
 
-// Seed first nodes of ν^f on a θ-grid using the Abel approximation.
-// Returns the number of nodes filled (≥1).
+// Seed first nodes of nu^f on a theta-grid using the Abel approximation.
+// Returns the number of nodes filled (>=1).
+struct QuadraticPanel {
+    double a{0.0};
+    double mid{0.0};
+    double b{0.0};
+    double Fa{0.0};
+    double Fm{0.0};
+    double Fb{0.0};
+    // Metadata for controlled coarsening
+    int chunk_id{-1};
+    double base_w{0.0};
+
+    double width() const { return b - a; }
+};
+
+inline double lagrange_quadratic_value(double x,
+                                       double x0, double y0,
+                                       double x1, double y1,
+                                       double x2, double y2) {
+    const double denom0 = (x0 - x1) * (x0 - x2);
+    const double denom1 = (x1 - x0) * (x1 - x2);
+    const double denom2 = (x2 - x0) * (x2 - x1);
+
+    if (std::abs(denom0) < FPM_EPSILON ||
+        std::abs(denom1) < FPM_EPSILON ||
+        std::abs(denom2) < FPM_EPSILON) {
+        return 0.5 * (y0 + y2);
+    }
+
+    const double l0 = ((x - x1) * (x - x2)) / denom0;
+    const double l1 = ((x - x0) * (x - x2)) / denom1;
+    const double l2 = ((x - x0) * (x - x1)) / denom2;
+    return l0 * y0 + l1 * y1 + l2 * y2;
+}
+
+inline QuadraticPanel merge_quadratic_panels(const QuadraticPanel& left,
+                                             const QuadraticPanel& right) {
+    QuadraticPanel merged;
+    merged.a = left.a;
+    merged.b = right.b;
+    merged.mid = 0.5 * (merged.a + merged.b);
+    merged.Fa = left.Fa;
+    merged.Fb = right.Fb;
+    merged.chunk_id = left.chunk_id;
+    merged.base_w = (left.base_w > 0.0 ? left.base_w : right.base_w);
+
+    const double shared_node = left.b; // equals right.a
+    const double shared_value = 0.5 * (left.Fb + right.Fa);
+    merged.Fm = lagrange_quadratic_value(
+        merged.mid,
+        left.a, left.Fa,
+        shared_node, shared_value,
+        right.b, right.Fb);
+    return merged;
+}
+
+inline double compute_midpoint_value(int left_idx,
+                                     int right_idx,
+                                     const std::vector<double>& grid,
+                                     const std::vector<double>& F) {
+    const int N = static_cast<int>(grid.size());
+    if (left_idx < 0 || right_idx >= N || left_idx >= right_idx) {
+        return 0.0;
+    }
+
+    const double mid = 0.5 * (grid[left_idx] + grid[right_idx]);
+
+    int aux = (left_idx > 0)
+                  ? (left_idx - 1)
+                  : ((right_idx + 1 < N) ? (right_idx + 1) : left_idx);
+    if (aux == left_idx || aux == right_idx) {
+        if (right_idx + 1 < N) {
+            aux = right_idx + 1;
+        } else if (left_idx > 0) {
+            aux = left_idx - 1;
+        }
+    }
+
+    if (aux == left_idx || aux == right_idx) {
+        return 0.5 * (F[left_idx] + F[right_idx]);
+    }
+
+    return lagrange_quadratic_value(
+        mid,
+        grid[aux], F[aux],
+        grid[left_idx], F[left_idx],
+        grid[right_idx], F[right_idx]);
+}
+
+inline QuadraticPanel panel_from_indices(int left_idx,
+                                         int right_idx,
+                                         const std::vector<double>& grid,
+                                         const std::vector<double>& F) {
+    QuadraticPanel panel;
+    if (left_idx < 0 || right_idx >= static_cast<int>(grid.size()) || left_idx >= right_idx) {
+        return panel;
+    }
+
+    panel.a = grid[left_idx];
+    panel.b = grid[right_idx];
+    panel.mid = 0.5 * (panel.a + panel.b);
+    panel.Fa = F[left_idx];
+    panel.Fb = F[right_idx];
+    panel.Fm = compute_midpoint_value(left_idx, right_idx, grid, F);
+    panel.base_w = panel.b - panel.a;
+    return panel;
+}
+
+inline QuadraticPanel panel_from_indices_chunk(int left_idx,
+                                               int right_idx,
+                                               const std::vector<double>& grid,
+                                               const std::vector<double>& F,
+                                               int chunk_id,
+                                               double chunk_h_hint = 0.0) {
+    QuadraticPanel p = panel_from_indices(left_idx, right_idx, grid, F);
+    p.chunk_id = chunk_id;
+    if (chunk_h_hint > 0.0) p.base_w = chunk_h_hint;
+    return p;
+}
+
+inline double stieltjes_panel_quadratic(const QuadraticPanel& panel,
+                                        double tn,
+                                        const RD_Params& pars,
+                                        const KernelFn& K) {
+    if (!(panel.b > panel.a) || tn <= panel.a + FPM_EPSILON) {
+        return 0.0;
+    }
+    const Panel p{panel.a, panel.mid, panel.b, panel.b - panel.a};
+    const StieltjesMoments M = stieltjes_moments(tn, p.a, p.b);
+    const LagrangeWeights W = stieltjes_lagrange_weights(p, M);
+
+    const double Qa = K(tn, panel.a, pars) * panel.Fa;
+    const double Qm = K(tn, panel.mid, pars) * panel.Fm;
+    const double Qb = K(tn, panel.b, pars) * panel.Fb;
+
+    return W.w0 * Qa + W.w1 * Qm + W.w2 * Qb;
+}
+
+// Near the evaluation point tn, large coarsened panels can introduce a small bias
+// in the history sum. To stabilize the endpoint (e.g., at t_max), refine any
+// panel whose right edge is too close to tn by splitting it once into two
+// equal subpanels and applying the same quadratic product-integration on each.
+inline double stieltjes_panel_quadratic_refined(const QuadraticPanel& panel,
+                                                double tn,
+                                                const RD_Params& pars,
+                                                const KernelFn& K,
+                                                double refine_factor = 2.0) {
+    if (!(panel.b > panel.a)) return 0.0;
+    const double w = panel.width();
+    if (tn <= panel.a + FPM_EPSILON) return 0.0;
+
+    // If far from tn relative to panel width, the single-panel evaluation is fine.
+    if ((tn - panel.b) >= refine_factor * w) {
+        return stieltjes_panel_quadratic(panel, tn, pars, K);
+    }
+
+    // Split [a,b] into [a,mid] and [mid,b], reconstruct midpoints by the
+    // quadratic defined by (a,Fa), (mid,Fm), (b,Fb).
+    QuadraticPanel left, right;
+    left.a = panel.a; left.b = panel.mid; left.mid = 0.5 * (left.a + left.b);
+    right.a = panel.mid; right.b = panel.b; right.mid = 0.5 * (right.a + right.b);
+
+    left.Fa = panel.Fa; left.Fb = panel.Fm;
+    right.Fa = panel.Fm; right.Fb = panel.Fb;
+
+    auto qval = [&](double x){
+        return lagrange_quadratic_value(x,
+                                        panel.a,  panel.Fa,
+                                        panel.mid, panel.Fm,
+                                        panel.b,  panel.Fb);
+    };
+    left.Fm = qval(left.mid);
+    right.Fm = qval(right.mid);
+
+    return stieltjes_panel_quadratic(left, tn, pars, K)
+         + stieltjes_panel_quadratic(right, tn, pars, K);
+}
 int seed_nu_on_grid(
     const std::vector<double>& grid,
     const RD_Params& pars,
@@ -388,6 +565,59 @@ int seed_nu_on_grid(
     return J;
 }
 
+struct SeedInfo {
+    int first_unseeded = 0;
+    int last_seeded = -1;
+};
+
+inline SeedInfo seed_nu_on_nonuniform_grid(const std::vector<double>& grid,
+                                           const RD_Params& pars,
+                                           std::vector<double>& F,
+                                           const AbelFn& abel,
+                                           double t_cut = SMALL_T_SCALED_THRESHOLD) {
+    SeedInfo info{};
+    const int N = static_cast<int>(grid.size());
+    if (N == 0) {
+        info.first_unseeded = 0;
+        info.last_seeded = -1;
+        return info;
+    }
+
+    int last = -1;
+    for (int j = 0; j < N; ++j) {
+        const double t = grid[j];
+        if (t > t_cut) break;
+        F[j] = abel(t, pars);
+        last = j;
+    }
+
+    if (last < 0) {
+        F[0] = abel(grid[0], pars);
+        last = 0;
+    }
+    if (last < 1 && N >= 2) {
+        F[1] = abel(grid[1], pars);
+        last = std::max(last, 1);
+    }
+
+    info.last_seeded = std::min(N - 1, std::max(0, last));
+
+    int first_unseeded = info.last_seeded + 1;
+    if (first_unseeded < 1) {
+        first_unseeded = std::min(1, N - 1);
+    }
+    if (first_unseeded % 2 != 0) {
+        ++first_unseeded;
+    }
+    if (first_unseeded >= N) {
+        first_unseeded = N - 1;
+        if (first_unseeded % 2 != 0 && first_unseeded > 0) {
+            --first_unseeded;
+        }
+    }
+    info.first_unseeded = std::max(0, first_unseeded);
+    return info;
+}
 // Quadratic block step on a uniform grid t_j = j*h, j = 0..N, N even
 std::vector<double> solve_nu_block_by_block_impl(
     double t_max,
@@ -484,8 +714,34 @@ std::vector<double> solve_nu_block_by_block_impl(
         F[j1] = blend * F1_corr + (1.0 - blend) * F1_pred;
         F[j2] = blend * F2_corr + (1.0 - blend) * F2_pred;
     }
-
     return F;
+}
+
+// Dense non-uniform history sum: sum quadratic product-integration over all
+// native panels strictly before tn, up to (but excluding) panel index cut_index.
+// This restores the exact O(N^2) history on a non-uniform grid.
+inline double stieltjes_history_dense_nonuniform(
+    int cut_index_exclusive,
+    double tn,
+    const std::vector<double>& grid,
+    const std::vector<double>& F,
+    const RD_Params& pars,
+    const KernelFn& K)
+{
+    const int total_nodes = static_cast<int>(grid.size());
+    if (total_nodes < 2) return 0.0;
+    int last_panel = std::min(std::max(cut_index_exclusive - 1, 0), total_nodes - 2);
+    if (last_panel < 0) return 0.0;
+
+    double S = 0.0;
+    for (int i = 0; i <= last_panel; ++i) {
+        // Panels are strictly before tn
+        if (grid[i + 1] >= tn - FPM_EPSILON) break;
+        QuadraticPanel p = panel_from_indices(i, i + 1, grid, F);
+        if (p.b <= p.a) continue;
+        S += stieltjes_panel_quadratic(p, tn, pars, K);
+    }
+    return S;
 }
 
 std::vector<double> solve_nu_block_with_abel(
@@ -508,6 +764,640 @@ std::vector<double> solve_nu_block_with_abel(
     return solve_nu_block_by_block_impl(t_max, pars, num_steps, grid, F, k0, K, G);
 }
 
+struct ChunkSpec {
+    double start = 0.0;
+    double end = 0.0;
+    double h = 0.0;
+    int num_steps = 0;
+    int start_index = 0;
+
+    int end_index() const { return start_index + num_steps; }
+    double span() const { return end - start; }
+};
+
+struct ChunkingOptions {
+    // Geometric growth ratio of step size: h_{m+1} = ratio * h_m.
+    // Larger => coarser later chunks (fewer total panels). Smaller (>=1.5) => finer.
+    double ratio = 2.0;
+    // Target number of panels in the first chunk near zero (even is enforced).
+    // Larger => finer resolution near zero.
+    int base_panels = 128;
+    // Maximum number of chunks to create. Larger => more chunk transitions and
+    // potentially more total panels (if remaining span forces extra chunks).
+    int max_chunks = 12;
+    // Number of most-recent panels kept at native resolution in history.
+    // Larger => more exact history near tn (slower, more memory), smaller => faster.
+    int history_recent = 64;
+    // Tolerance for treating adjacent panels as contiguous when merging tiers.
+    // Larger => more aggressive merging.
+    double width_tolerance = 1e-8;
+    // Near-tn refinement threshold used during history evaluation:
+    // refine if (tn - panel.b) < refine_ratio * panel.width(). Larger => less refinement.
+    double refine_ratio = 8.0;
+    // Minimum width factor to stop recursive splitting by width.
+    // We stop splitting when panel.width() <= refine_min_width_factor * base_width.
+    // Larger => less splitting (coarser); smaller (>=1.0) => more splitting (finer).
+    double refine_min_width_factor = 1.01;
+    // Disable history compression entirely. When true, keep all panels exact in
+    // the recent window. Increases cost toward O(N^2) but maximizes accuracy.
+    bool disable_compression = false;
+    // Keep the last K chunks exact in the history (i.e., do not compress any
+    // panels that belong to these last chunks). This links the history dropoff
+    // to chunk boundaries instead of a raw panel count and typically improves
+    // stability near tn. Larger K => more exact history, slower.
+    int keep_last_chunks = 2;
+    // Additional accuracy guards for compressed history evaluation:
+    // If the kernel varies too much across a coarsened panel at evaluation t,
+    // force a split regardless of distance. Relative curvature tolerance using
+    // three-point second-difference of K(t, s) across [a, mid, b]. Smaller =>
+    // more splitting (more accurate, slower).
+    double kernel_curvature_tol = 0.02;
+    // Also consider first-difference (relative) variation of K across a panel.
+    // If max(|K(a)-K(mid)|, |K(b)-K(mid)|)/|K(mid)| exceeds this tol, split.
+    double kernel_variation_tol = 0.05;
+    // Hard cap on how wide a coarsened panel may be, as a multiple of the
+    // base (uniform) width. Panels wider than max_coarsen_factor * base_width
+    // are recursively split until under the cap, even if far from t.
+    double max_coarsen_factor = 16.0;
+    // Print per-chunk/tier history statistics for diagnostics
+    bool print_history_stats = true;
+};
+
+inline std::vector<ChunkSpec> build_chunked_theta_layout(
+    double theta_max,
+    int uniform_num_steps,
+    const ChunkingOptions& opts)
+{
+    std::vector<ChunkSpec> chunks;
+    if (!(theta_max > 0.0) || uniform_num_steps <= 0) {
+        return chunks;
+    }
+
+    if (uniform_num_steps % 2 != 0) {
+        ++uniform_num_steps;
+    }
+
+    // Allow near-uniform chunking by permitting ratio >= 1.0. Values close to 1.0
+    // mean little to no coarsening across chunks.
+    const double ratio = std::max(1.0, opts.ratio);
+    int panels_per_chunk = std::max(4, opts.base_panels);
+    if (panels_per_chunk % 2 != 0) {
+        ++panels_per_chunk;
+    }
+    const int max_chunks = std::max(1, opts.max_chunks);
+    const double base_h = theta_max / uniform_num_steps;
+
+    double start = 0.0;
+    int start_index = 0;
+    double current_h = base_h;
+
+    for (int chunk_id = 0; chunk_id < max_chunks && start < theta_max - 1e-12; ++chunk_id) {
+        int panels = panels_per_chunk;
+        const double span = panels * current_h;
+        double end = start + span;
+
+        const bool is_last = (chunk_id == max_chunks - 1) || (end >= theta_max - 1e-12);
+        if (is_last) {
+            const double remaining = theta_max - start;
+            if (remaining <= 0.0) {
+                break;
+            }
+            panels = std::max(2, static_cast<int>(std::ceil(remaining / current_h)));
+            if (panels % 2 != 0) {
+                ++panels;
+            }
+            const double adjusted_h = remaining / panels;
+
+            ChunkSpec chunk;
+            chunk.start = start;
+            chunk.end = theta_max;
+            chunk.h = adjusted_h;
+            chunk.num_steps = panels;
+            chunk.start_index = start_index;
+            chunks.push_back(chunk);
+            start_index += panels;
+            start = theta_max;
+            break;
+        }
+
+        ChunkSpec chunk;
+        chunk.start = start;
+        chunk.end = end;
+        chunk.h = current_h;
+        chunk.num_steps = panels;
+        chunk.start_index = start_index;
+        chunks.push_back(chunk);
+
+        start = end;
+        start_index += panels;
+        current_h *= ratio;
+    }
+
+    if (start < theta_max - 1e-12) {
+        const double remaining = theta_max - start;
+        double h_guess = chunks.empty() ? base_h : chunks.back().h * opts.ratio;
+        if (!(h_guess > 0.0)) {
+            h_guess = base_h;
+        }
+        int panels = std::max(2, static_cast<int>(std::ceil(remaining / h_guess)));
+        if (panels % 2 != 0) {
+            ++panels;
+        }
+        const double adjusted_h = remaining / panels;
+
+        ChunkSpec chunk;
+        chunk.start = start;
+        chunk.end = theta_max;
+        chunk.h = adjusted_h;
+        chunk.num_steps = panels;
+        chunk.start_index = start_index;
+        chunks.push_back(chunk);
+    }
+
+    return chunks;
+}
+
+// Builds the full theta grid that the chunked solver will use, without running the solver.
+// Useful for preparing boundary/spline data (e.g., beta and beta') that must be known
+// before calling the kernel solve.
+inline std::vector<double> build_chunked_theta_grid(
+    double theta_max,
+    int uniform_num_steps,
+    const ChunkingOptions& opts)
+{
+    std::vector<double> grid;
+    if (!(theta_max > 0.0) || uniform_num_steps <= 0) {
+        grid.assign(1, 0.0);
+        return grid;
+    }
+
+    if (uniform_num_steps % 2 != 0) {
+        ++uniform_num_steps;
+    }
+
+    const auto chunks = build_chunked_theta_layout(theta_max, uniform_num_steps, opts);
+    const int total_panels = std::accumulate(chunks.begin(), chunks.end(), 0,
+        [](int acc, const ChunkSpec& c){ return acc + std::max(0, c.num_steps); });
+
+    grid.reserve(std::max(1, total_panels + 1));
+    grid.clear();
+    double current = 0.0;
+    grid.push_back(current);
+    for (const auto& chunk : chunks) {
+        current = grid.back();
+        for (int j = 0; j < chunk.num_steps; ++j) {
+            current += chunk.h;
+            if (j == chunk.num_steps - 1) {
+                current = chunk.end;
+            }
+            grid.push_back(current);
+        }
+    }
+    if (!grid.empty()) {
+        grid.back() = theta_max;
+    }
+    return grid;
+}
+
+class TieredQuadraticHistory {
+public:
+    explicit TieredQuadraticHistory(double base_width,
+                                    int recent_capacity,
+                                    int max_tiers,
+                                    double width_tol,
+                                    double refine_ratio = 8.0,
+                                    double refine_min_width_factor = 1.01,
+                                    double kernel_curvature_tol = 0.02,
+                                    double kernel_variation_tol = 0.05,
+                                    double max_coarsen_factor = 16.0)
+        : base_width_(std::max(base_width, FPM_EPSILON)),
+          recent_capacity_(std::max(1, recent_capacity)),
+          max_tiers_(std::max(1, max_tiers)),
+          width_tol_(std::max(width_tol, 1e-12)),
+          refine_ratio_(std::max(1.0, refine_ratio)),
+          refine_min_width_factor_(std::max(1.0, refine_min_width_factor)),
+          kernel_curvature_tol_(std::max(0.0, kernel_curvature_tol)),
+          kernel_variation_tol_(std::max(0.0, kernel_variation_tol)),
+          max_coarsen_factor_(std::max(2.0, max_coarsen_factor)),
+          recent_(),
+          tiers_(std::max(1, max_tiers)) {}
+
+    void clear(double base_width) {
+        base_width_ = std::max(base_width, FPM_EPSILON);
+        recent_.clear();
+        for (auto& v : tiers_) v.clear();
+    }
+
+    void push_panel(const QuadraticPanel& panel) {
+        if (!(panel.b > panel.a)) return;
+        // Keep the most recent L panels at native resolution
+        recent_.push_back(panel);
+        while (static_cast<int>(recent_.size()) > recent_capacity_) {
+            QuadraticPanel p_old = recent_.front();
+            recent_.pop_front();
+            add_to_tier(0, p_old);
+        }
+    }
+
+    double evaluate(double t, const RD_Params& pars, const KernelFn& K) const {
+        double total = 0.0;
+        auto accumulate_panel = [&](const QuadraticPanel& p) {
+            if (p.b >= t - FPM_EPSILON) return;
+            total += eval_panel_adaptive(p, t, pars, K);
+        };
+        for (const auto& p : recent_) accumulate_panel(p);
+        for (int lvl = 0; lvl < max_tiers_; ++lvl) {
+            const auto& v = tiers_[lvl];
+            for (const auto& p : v) accumulate_panel(p);
+        }
+        return total;
+    }
+
+    // Evaluate history contributions at evaluation time t, but only from panels
+    // whose right edge is strictly less than cut_b. This mirrors the legacy
+    // uniform-grid logic where, for the second node in a block, the last two
+    // panels are excluded from the history and handled analytically by the
+    // block update. If a compressed panel straddles cut_b, we clip it to
+    // [a, cut_b] by reconstructing values from the panel's quadratic and then
+    // evaluate adaptively on the clipped sub-panel.
+    double evaluate_with_cut(double t, double cut_b,
+                             const RD_Params& pars, const KernelFn& K) const {
+        double total = 0.0;
+
+        auto qval_from_panel = [](const QuadraticPanel& panel, double x) {
+            return lagrange_quadratic_value(x,
+                                            panel.a,  panel.Fa,
+                                            panel.mid, panel.Fm,
+                                            panel.b,  panel.Fb);
+        };
+
+        auto accumulate_with_cut = [&](const QuadraticPanel& p) {
+            // Nothing to add if panel starts at/after cut or panel ends at/after t
+            if (p.a >= cut_b - FPM_EPSILON) return;
+            if (p.b >= t - FPM_EPSILON) return; // exclude the last panel by t
+
+            if (p.b <= cut_b - FPM_EPSILON) {
+                // Entire panel is strictly before cut_b: take full contribution
+                total += eval_panel_adaptive(p, t, pars, K);
+                return;
+            }
+
+            // Panel crosses the cut: clip to [a, cut_b]
+            QuadraticPanel clipped;
+            clipped.a = p.a;
+            clipped.b = cut_b;
+            clipped.mid = 0.5 * (clipped.a + clipped.b);
+            clipped.Fa = p.Fa;
+            clipped.Fb = qval_from_panel(p, clipped.b);
+            clipped.Fm = qval_from_panel(p, clipped.mid);
+            clipped.chunk_id = p.chunk_id;
+            clipped.base_w = (p.base_w > 0.0) ? p.base_w : base_width_;
+            if (clipped.b > clipped.a + FPM_EPSILON) {
+                total += eval_panel_adaptive(clipped, t, pars, K);
+            }
+        };
+
+        for (const auto& p : recent_) accumulate_with_cut(p);
+        for (int lvl = 0; lvl < max_tiers_; ++lvl) {
+            const auto& v = tiers_[lvl];
+            for (const auto& p : v) accumulate_with_cut(p);
+        }
+        return total;
+    }
+
+    void dump_diagnostics_per_chunk(const std::vector<ChunkSpec>& chunks) const {
+        const int C = static_cast<int>(chunks.size());
+        std::vector<int> recent_counts(C, 0);
+        int recent_unknown = 0;
+        for (const auto& p : recent_) {
+            if (p.chunk_id >= 0 && p.chunk_id < C) recent_counts[p.chunk_id]++;
+            else recent_unknown++;
+        }
+        auto print_counts = [&](const char* label, const std::vector<int>& cnt, int unknown, int total){
+            Rcout << label << ": total=" << total << ", per-chunk=[";
+            for (int i = 0; i < C; ++i) {
+                if (i) Rcout << ", ";
+                Rcout << cnt[i];
+            }
+            Rcout << "]";
+            if (unknown) Rcout << ", unknown=" << unknown;
+            Rcout << std::endl;
+        };
+        int recent_total = static_cast<int>(recent_.size());
+        Rcout << "history stats:" << std::endl;
+        print_counts("  recent", recent_counts, recent_unknown, recent_total);
+
+        // Tiers
+        for (int lvl = 0; lvl < max_tiers_; ++lvl) {
+            const auto& v = tiers_[lvl];
+            std::vector<int> counts(C, 0);
+            int unknown = 0;
+            double sum_ratio = 0.0;
+            int ratio_n = 0;
+            for (const auto& p : v) {
+                if (p.chunk_id >= 0 && p.chunk_id < C) counts[p.chunk_id]++;
+                else unknown++;
+                const double bw = (p.base_w > 0.0) ? p.base_w : base_width_;
+                if (bw > 0.0) { sum_ratio += (p.width() / bw); ratio_n++; }
+            }
+            const int total = static_cast<int>(v.size());
+            Rcout << "  tier " << lvl << ": total=" << total
+                  << ", mean_width_factor=" << (ratio_n ? (sum_ratio / ratio_n) : 0.0)
+                  << ", per-chunk=[";
+            for (int i = 0; i < C; ++i) {
+                if (i) Rcout << ", ";
+                Rcout << counts[i];
+            }
+            Rcout << "]";
+            if (unknown) Rcout << ", unknown=" << unknown;
+            Rcout << std::endl;
+        }
+    }
+
+private:
+    static inline double max3(double a, double b, double c) {
+        return std::max(a, std::max(b, c));
+    }
+
+    bool are_contiguous(const QuadraticPanel& left, const QuadraticPanel& right) const {
+        // Accept exact continuity or small numerical gaps/overlaps
+        if (left.chunk_id != right.chunk_id) return false;
+        const double scale = max3(1.0, left.width(), right.width());
+        return std::abs(left.b - right.a) <= width_tol_ * scale;
+    }
+
+    // Recursively refine panels that are too close to t relative to their
+    // width, to control the error from coarsened tiers near the endpoint.
+    double eval_panel_adaptive(const QuadraticPanel& panel,
+                               double t,
+                               const RD_Params& pars,
+                               const KernelFn& K) const {
+        if (!(panel.b > panel.a) || t <= panel.a + FPM_EPSILON) return 0.0;
+
+        const double w = panel.width();
+        const double dist = t - panel.b; // distance from panel's right edge to t
+
+        // Heuristic: decide if we can safely evaluate without further splits.
+        // 1) never allow panels wider than a hard multiple of the base width
+        // 2) if the kernel varies too much across [a,mid,b] at time t, split
+        // 3) otherwise, if sufficiently far (dist >= R*w) or already fine by width,
+        //    accept a single evaluation.
+        const double R = refine_ratio_;
+
+        // Hard width cap check (per-panel base width if available)
+        const double local_base = (panel.base_w > 0.0) ? panel.base_w : base_width_;
+        const bool too_wide = (w > max_coarsen_factor_ * local_base);
+
+        // Kernel curvature (relative) across panel
+        double Ka = 0.0, Km = 0.0, Kb = 0.0;
+        Ka = K(t, panel.a, pars);
+        Km = K(t, panel.mid, pars);
+        Kb = K(t, panel.b, pars);
+        const double denom = std::abs(Km) + 1e-14;
+        const double k_curv = std::abs(Ka - 2.0 * Km + Kb) / denom;
+        const double k_var = std::max(std::abs(Ka - Km), std::abs(Kb - Km)) / denom;
+
+        const bool wide_ok = !too_wide;
+        const bool kernel_ok = (k_curv <= kernel_curvature_tol_) && (k_var <= kernel_variation_tol_);
+        const bool far_enough = (dist >= R * w);
+        const bool fine_enough = (w <= refine_min_width_factor_ * local_base);
+
+        if (wide_ok && kernel_ok && (far_enough || fine_enough)) {
+            return stieltjes_panel_quadratic(panel, t, pars, K);
+        }
+
+        // Split panel into two halves using the quadratic defined by
+        // (a,Fa), (mid,Fm), (b,Fb) to reconstruct child midpoints.
+        QuadraticPanel left, right;
+        left.a = panel.a; left.b = panel.mid; left.mid = 0.5 * (left.a + left.b);
+        right.a = panel.mid; right.b = panel.b; right.mid = 0.5 * (right.a + right.b);
+
+        left.Fa = panel.Fa; left.Fb = panel.Fm;
+        right.Fa = panel.Fm; right.Fb = panel.Fb;
+        left.chunk_id = panel.chunk_id; right.chunk_id = panel.chunk_id;
+        left.base_w = local_base; right.base_w = local_base;
+
+        auto qval = [&](double x){
+            return lagrange_quadratic_value(x,
+                                            panel.a,  panel.Fa,
+                                            panel.mid, panel.Fm,
+                                            panel.b,  panel.Fb);
+        };
+        left.Fm = qval(left.mid);
+        right.Fm = qval(right.mid);
+
+        return eval_panel_adaptive(left,  t, pars, K)
+             + eval_panel_adaptive(right, t, pars, K);
+    }
+
+    void add_to_tier(int level, const QuadraticPanel& panel) {
+        if (level >= max_tiers_) {
+            // Append to last tier without merging if we ran out of tiers
+            tiers_[max_tiers_ - 1].push_back(panel);
+            return;
+        }
+
+        auto& v = tiers_[level];
+        if (!v.empty() && are_contiguous(v.back(), panel)) {
+            QuadraticPanel merged = merge_quadratic_panels(v.back(), panel);
+            v.pop_back();
+            add_to_tier(level + 1, merged);
+        } else {
+            v.push_back(panel);
+        }
+    }
+
+    double base_width_;
+    int recent_capacity_;
+    int max_tiers_;
+    double width_tol_;
+    double refine_ratio_;
+    double refine_min_width_factor_;
+    double kernel_curvature_tol_;
+    double kernel_variation_tol_;
+    double max_coarsen_factor_;
+    std::deque<QuadraticPanel> recent_;
+    std::vector<std::vector<QuadraticPanel>> tiers_;
+};
+
+// Chunked theta-grid Volterra solver with tiered history compression.
+// Retains the quadratic integration accuracy while reducing asymptotic cost.
+std::vector<double> solve_nu_chunked_with_abel(
+    double t_max,
+    const RD_Params& pars,
+    int uniform_num_steps,
+    std::vector<double>& grid,
+    const KernelFn& K,
+    const ForcingFn& G,
+    const AbelFn& abel,
+    const ChunkingOptions& opts,
+    double t_cut = SMALL_T_SCALED_THRESHOLD)
+{    // Single-chunk fallback: use legacy uniform-grid solver to guarantee
+    // numerical identity with the baseline when no chunking is present.
+    // This avoids any differences from the generalized history path.
+    {
+        auto __chunks_probe = build_chunked_theta_layout(t_max, uniform_num_steps, opts);
+        if (__chunks_probe.size() == 1) {
+            // Delegate entirely to the legacy implementation
+            return solve_nu_block_with_abel(t_max, pars, uniform_num_steps, grid, K, G, abel, t_cut);
+        }
+    }
+    if (t_max <= 0.0) {
+        grid.assign(1, 0.0);
+        return std::vector<double>{G(0.0, pars)};
+    }
+
+    if (uniform_num_steps < 2) {
+        uniform_num_steps = 2;
+    }
+    if (uniform_num_steps % 2 != 0) {
+        ++uniform_num_steps;
+    }
+
+    auto chunks = build_chunked_theta_layout(t_max, uniform_num_steps, opts);
+    if (chunks.empty()) {
+        ChunkSpec chunk;
+        chunk.start = 0.0;
+        chunk.end = t_max;
+        chunk.h = t_max / uniform_num_steps;
+        chunk.num_steps = uniform_num_steps;
+        chunk.start_index = 0;
+        chunks.push_back(chunk);
+    }
+
+    // Build the theta grid using the same layout logic as all other components.
+    // This single-sources the grid construction and avoids drift.
+    grid = build_chunked_theta_grid(t_max, uniform_num_steps, opts);
+
+    const int total_nodes = static_cast<int>(grid.size());
+
+    std::vector<double> F(total_nodes, 0.0);
+    F[0] = G(grid[0], pars);
+
+    SeedInfo seed = seed_nu_on_nonuniform_grid(grid, pars, F, abel, t_cut);
+    int first_unseeded = std::min(seed.first_unseeded, total_nodes - 1);
+    int last_seeded = std::min(std::max(seed.last_seeded, 0), total_nodes - 1);
+
+    if (first_unseeded >= total_nodes - 1) {
+        return F;
+    }
+
+    const double base_h = t_max / static_cast<double>(uniform_num_steps);
+
+    for (size_t ci = 0; ci < chunks.size(); ++ci) {
+        const auto& chunk = chunks[ci];
+        const int chunk_start = chunk.start_index;
+        const int chunk_end = chunk.end_index();
+        if (chunk.num_steps < 2) {
+            continue;
+        }
+
+        int first_block = std::max(chunk_start / 2, first_unseeded / 2);
+        const int block_end = chunk_end / 2;
+
+        // Coefficients for the quadratic product integration depend only on h within a chunk.
+        const double h = chunk.h;
+        double a1, b1, g1, a2, b2, g2;
+        block_coeffs(h, 0.5 * h, a1, b1, g1);
+        block_coeffs(2.0 * h, h, a2, b2, g2);
+
+        for (int m = first_block; m < block_end; ++m) {
+            const int j0 = 2 * m;
+            const int j1 = j0 + 1;
+            const int j2 = j0 + 2;
+
+            if (j2 >= total_nodes) {
+                break;
+            }
+            if (j0 < chunk_start || j2 > chunk_end) {
+                continue;
+            }
+            if (j1 <= last_seeded && j2 <= last_seeded) {
+                continue;
+            }
+
+            const double t0 = grid[j0];
+            const double t1 = grid[j1];
+            const double t2 = grid[j2];
+            const double tmid = t0 + 0.5 * h;
+
+            // Dense non-uniform history (no compression):
+            // Cut at t0 => exclude [j0,j1] and [j1,j2] from S2, and [j0,j1] from S1
+            const double S1 = stieltjes_history_dense_nonuniform(j0, t1, grid, F, pars, K);
+            const double S2 = stieltjes_history_dense_nonuniform(j0, t2, grid, F, pars, K);
+
+            const double K1_0 = K(t1, t0, pars);
+            const double K1_mid = K(t1, tmid, pars);
+            const double K1_1 = K(t1, t1, pars);
+
+            const double K2_0 = K(t2, t0, pars);
+            const double K2_1 = K(t2, t1, pars);
+            const double K2_2 = K(t2, t2, pars);
+
+            const double G1 = G(t1, pars);
+            const double G2 = G(t2, pars);
+
+            double F1_pred = 0.0;
+            const int local_j0 = j0 - chunk_start;
+            if (local_j0 >= 1) {
+                const double Fmid = (-0.125) * F[j0 - 1] + 0.75 * F[j0] + 0.375 * F[j0 + 1];
+                const double den1_pred = 1.0 - g1 * K1_1 - (3.0 / 8.0) * b1 * K1_mid;
+                const double rhs1_pred = G1 + S1
+                    + a1 * K1_0 * F[j0]
+                    + b1 * K1_mid * Fmid;
+                F1_pred = rhs1_pred / ((std::abs(den1_pred) < FPM_EPSILON) ? FPM_EPSILON : den1_pred);
+            } else {
+                const double den1_pred = 1.0 - g1 * K1_1 - 0.5 * b1 * K1_mid;
+                const double rhs1_pred = G1 + S1 + a1 * K1_0 * F[j0] + 0.5 * b1 * K1_mid * F[j0];
+                F1_pred = rhs1_pred / ((std::abs(den1_pred) < FPM_EPSILON) ? FPM_EPSILON : den1_pred);
+            }
+
+            const double den2_pred = 1.0 - g2 * K2_2;
+            const double rhs2_pred = G2 + S2 + a2 * K2_0 * F[j0] + b2 * K2_1 * F1_pred;
+            const double F2_pred = rhs2_pred / ((std::abs(den2_pred) < FPM_EPSILON) ? FPM_EPSILON : den2_pred);
+
+            const double A = 1.0 - (3.0 / 4.0) * b1 * K1_mid - g1 * K1_1;
+            const double B = (1.0 / 8.0) * b1 * K1_mid;
+            const double C = G1 + S1 + a1 * K1_0 * F[j0]
+                + (3.0 / 8.0) * b1 * K1_mid * F[j0];
+
+            const double D = -b2 * K2_1;
+            const double E = 1.0 - g2 * K2_2;
+            const double R = G2 + S2 + a2 * K2_0 * F[j0];
+
+            const double det = A * E - B * D;
+            const double inv_det = (std::abs(det) < FPM_EPSILON) ? (1.0 / FPM_EPSILON) : (1.0 / det);
+
+            const double F1_corr = (E * C - B * R) * inv_det;
+            const double F2_corr = (-D * C + A * R) * inv_det;
+
+            const double blend = 1.0;
+            F[j1] = blend * F1_corr + (1.0 - blend) * F1_pred;
+            F[j2] = blend * F2_corr + (1.0 - blend) * F2_pred;
+
+            // No history compression: dense history recomputed each step
+
+            last_seeded = std::max(last_seeded, j2);
+        }
+    }
+
+    return F;
+}
+
+inline std::vector<double> solve_nu_block_with_abel_chunked(
+    double t_max,
+    const RD_Params& pars,
+    int num_steps,
+    std::vector<double>& grid,
+    const KernelFn& K,
+    const ForcingFn& G,
+    const AbelFn& abel,
+    const ChunkingOptions& opts = ChunkingOptions(),
+    double t_cut = SMALL_T_SCALED_THRESHOLD)
+{
+    return solve_nu_chunked_with_abel(t_max, pars, num_steps, grid, K, G, abel, opts, t_cut);
+}
+
 // Linear-product weights for the integral of (Linear(H) / (x-s)^{3/2}) ds on [a,b]
 void weights_panel_32(double x, double a, double b, double& Wa, double& Wb) {
     const double ra = std::sqrt(std::max(0.0, x - a));
@@ -526,7 +1416,7 @@ void weights_panel_12(double x, double a, double b, double& Wa, double& Wb) {
 
     if (h <= 0.0) { Wa = Wb = 0.0; return; }
 
-    // Last panel (or numerically rb≈0): exact limit
+    // Last panel (or numerically rb ~ 0): exact limit
     if (rb <= FPM_EPSILON) {Wa = (ra > 0.0) ? (2.0 / ra) : 0.0; Wb = 0.0; return; }
     const double Wb_term = (2.0 * (x - a) / rb) + (2.0 * rb) - (4.0 * ra);
     Wb = Wb_term / h;
