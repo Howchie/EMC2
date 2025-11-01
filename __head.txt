@@ -1,0 +1,250 @@
+#ifndef utils_reducible_diffusion_h
+#define utils_reducible_diffusion_h
+
+#define _USE_MATH_DEFINES
+#include "utility_functions.h"
+#include <cmath>
+#include <vector>
+#include <stdexcept>
+#include <numeric>
+#include <algorithm>
+#include <functional>
+#include <limits>
+#include <cstddef>
+#include <utility>
+#include <deque>
+#include <Rcpp.h>
+#include <quadmath.h>
+#include <stdexcept>
+#include <iostream> // For error messages
+using namespace Rcpp;
+
+struct RD_Params;
+
+using KernelFn = std::function<double(double,double,const RD_Params&)>;
+using ForcingFn = std::function<double(double,const RD_Params&)>;
+using AbelFn = std::function<double(double,const RD_Params&)>;
+using BoundaryDecayFn = std::function<double(double, const RD_Params &)>;
+
+// Prepare and scale parameters for the OU hitting time problem.
+struct RD_Params {
+  double b0, t_scaled, zL_scaled, zU_scaled, b_scaled, binf, c, lambda, theta, tau, pow, omega, beta_prime;
+  double mu, sigma, z0, v_max, theta_max;
+  bool fixed_b, sp_var;
+  BoundaryDecayFn boundary_fn;
+  std::vector<double> boundary_params;
+};
+
+inline double default_boundary_decay(double t, const RD_Params& pars) {
+  return exp_decay_scalar(t, pars.b0, pars.binf, pars.tau, pars.pow);
+}
+
+inline double fixed_boundary_decay(double, const RD_Params& pars) {
+  return pars.b0;
+}
+
+inline double evaluate_boundary_decay(double t, const RD_Params& pars) {
+  if (pars.boundary_fn) {
+    return pars.boundary_fn(t, pars);
+  }
+  if (pars.fixed_b) {
+    return pars.b0;
+  }
+  return default_boundary_decay(t, pars);
+}
+
+// Threshold for switching to Abel approximation, based on the scaled time.
+// The paper notes solutions are "visually indistinguishable" up to t=0.02.
+const double SMALL_T_SCALED_THRESHOLD = 0.02;
+const double FPM_EPSILON = 1e-12;
+
+struct BoundaryDecayCache {
+    double h = 0.0;
+    double inv_h = 0.0;
+    double tol = 0.0;
+    std::vector<double> beta_nodes;
+    std::vector<double> beta_midpoints;
+    std::vector<double> beta_prime_nodes;
+    std::vector<double> beta_prime_midpoints;
+
+    bool empty() const {
+        return beta_nodes.empty() && beta_midpoints.empty();
+    }
+
+    bool has_derivatives() const {
+        return !beta_prime_nodes.empty() || !beta_prime_midpoints.empty();
+    }
+
+    double lookup(double v) const {
+        if (inv_h <= 0.0) {
+            return std::numeric_limits<double>::quiet_NaN();
+        }
+        const double scaled = v * inv_h;
+        const double idx = std::round(scaled);
+        if (!beta_nodes.empty() && std::abs(scaled - idx) <= tol) {
+            const double idx_clamped = std::clamp(idx, 0.0, static_cast<double>(beta_nodes.size() - 1));
+            return beta_nodes[static_cast<std::size_t>(idx_clamped)];
+        }
+        if (!beta_midpoints.empty()) {
+            const double base = std::floor(scaled);
+            const double mid_center = base + 0.5;
+            if (std::abs(scaled - mid_center) <= tol) {
+                const double mid_idx = std::clamp(base, 0.0, static_cast<double>(beta_midpoints.size() - 1));
+                return beta_midpoints[static_cast<std::size_t>(mid_idx)];
+            }
+        }
+        return std::numeric_limits<double>::quiet_NaN();
+    }
+
+    double lookup_prime(double v) const {
+        if (!has_derivatives() || inv_h <= 0.0) {
+            return std::numeric_limits<double>::quiet_NaN();
+        }
+        const double scaled = v * inv_h;
+        const double idx = std::round(scaled);
+        if (!beta_prime_nodes.empty() && std::abs(scaled - idx) <= tol) {
+            const double idx_clamped = std::clamp(idx, 0.0, static_cast<double>(beta_prime_nodes.size() - 1));
+            return beta_prime_nodes[static_cast<std::size_t>(idx_clamped)];
+        }
+        if (!beta_prime_midpoints.empty()) {
+            const double base = std::floor(scaled);
+            const double mid_center = base + 0.5;
+            if (std::abs(scaled - mid_center) <= tol) {
+                const double mid_idx = std::clamp(base, 0.0, static_cast<double>(beta_prime_midpoints.size() - 1));
+                return beta_prime_midpoints[static_cast<std::size_t>(mid_idx)];
+            }
+        }
+        return std::numeric_limits<double>::quiet_NaN();
+    }
+};
+
+// Right-end quadratic fit (last 3 points) => nu'(tau), nu''(tau), and nu(mid) via Newton form
+struct RightQuad {
+    double nu_prime;   // nu'(tau)
+    double nu_second;  // nu''(tau)
+    double nu_at_mid;  // quadratic nu at midpoint of last panel
+};
+RightQuad right_end_quadratic(const std::vector<double>& x,
+                                     const std::vector<double>& y,
+                                     double mid) {
+    const int n = (int)x.size();
+    RightQuad out{0.0, 0.0, y.back()};
+    if (n < 3) return out;
+    const double x0 = x[n-3], x1 = x[n-2], x2 = x[n-1];
+    const double y0 = y[n-3], y1 = y[n-2], y2 = y[n-1];
+
+    // Divided differences (Newton) on uneven grid
+    const double f01  = (y1 - y0) / (x1 - x0);
+    const double f12  = (y2 - y1) / (x2 - x1);
+    const double f012 = (f12 - f01) / (x2 - x0);
+
+    // nu'(x2) and nu''(x2) for the quadratic that interpolates the last 3 points
+    out.nu_second = 2.0 * f012;
+    out.nu_prime  = f01 + f012 * ((x2 - x0) + (x2 - x1));  // p'(x2) = f[x0,x1] + f[x0,x1,x2]((x2-x0)+(x2-x1))
+
+    // nu(mid) from the same quadratic
+    const double mid_m_x0 = mid - x0;
+    const double mid_m_x1 = mid - x1;
+    out.nu_at_mid = y0 + f01 * (mid_m_x0) + f012 * (mid_m_x0) * (mid_m_x1);
+
+    return out;
+}
+
+double local_quad_derivative(const std::vector<double>& x,
+                                  const std::vector<double>& y,
+                                  int j) {
+    const int n = static_cast<int>(x.size());
+    if (n < 3) return 0.0;
+    int c = std::max(2, std::min(j, n - 1)); // ensure we can pick (a,b,c)
+    int b = c - 1;
+    int a = c - 2;
+    const double x0 = x[a], x1 = x[b], x2 = x[c];
+    const double y0 = y[a], y1 = y[b], y2 = y[c];
+    const double f01  = (y1 - y0) / (x1 - x0);
+    const double f12  = (y2 - y1) / (x2 - x1);
+    const double f012 = (f12 - f01) / (x2 - x0);
+    return f01 + f012 * ((x2 - x0) + (x2 - x1));
+  };
+
+double quad_interp(
+    const std::vector<double>& grid,
+    const std::vector<double>& nu,
+    int i,            // panel index for [i, i+1]
+    double t_q    // query inside [theta[i], theta[i+1]]
+) {
+    const int N = static_cast<int>(grid.size()) - 1;
+    // Choose a local triple around the panel:
+    // interior panels: (i-1,i,i+1); near left: (0,1,2); near right: (N-2,N-1,N)
+    int a, b, c;
+    if (i == 0) { a = 0; b = 1; c = 2; }
+    else if (i == N-1) { a = N-2; b = N-1; c = N; }
+    else { a = i-1; b = i; c = i+1; }
+
+    const double xa = grid[a], xb = grid[b], xc = grid[c];
+    const double ya = nu[a],    yb = nu[b],    yc = nu[c];
+
+    // Lagrange basis at theta_q
+    const double Lab = (t_q - xb) / (xa - xb);
+    const double Lac = (t_q - xc) / (xa - xc);
+    const double Lba = (t_q - xa) / (xb - xa);
+    const double Lbc = (t_q - xc) / (xb - xc);
+    const double Lca = (t_q - xa) / (xc - xa);
+    const double Lcb = (t_q - xb) / (xc - xb);
+
+    return ya * Lab * Lac + yb * Lba * Lbc + yc * Lca * Lcb;
+}
+
+inline BoundaryDecayCache make_boundary_decay_cache(double t_max, int num_steps, const RD_Params& pars,
+                                                    const BoundaryDecayFn& transform) {
+    BoundaryDecayCache cache;
+    if (pars.fixed_b || num_steps <= 0 || t_max <= 0.0 || !transform) {
+        return cache;
+    }
+    const double h = t_max / num_steps;
+    if (h <= 0.0) {
+        return cache;
+    }
+    cache.h = h;
+    cache.inv_h = 1.0 / h;
+    cache.tol = std::max(1e-10, 32.0 * std::numeric_limits<double>::epsilon() *
+                                     std::max(1.0, static_cast<double>(num_steps)));
+    cache.beta_nodes.resize(num_steps + 1);
+    for (int k = 0; k <= num_steps; ++k) {
+        const double t_k = h * k;
+        cache.beta_nodes[k] = transform(t_k, pars);
+    }
+    cache.beta_midpoints.resize(num_steps);
+    for (int k = 0; k < num_steps; ++k) {
+        const double t_mid = h * (k + 0.5);
+        cache.beta_midpoints[k] = transform(t_mid, pars);
+    }
+
+    cache.beta_prime_nodes.assign(num_steps + 1, 0.0);
+    if (num_steps == 1) {
+        const double slope = (cache.beta_nodes[1] - cache.beta_nodes[0]) / h;
+        cache.beta_prime_nodes[0] = slope;
+        cache.beta_prime_nodes[1] = slope;
+    } else if (num_steps >= 2) {
+        const double inv_two_h = 1.0 / (2.0 * h);
+        cache.beta_prime_nodes[0] = (-3.0 * cache.beta_nodes[0] + 4.0 * cache.beta_nodes[1] - cache.beta_nodes[2]) * inv_two_h;
+        for (int k = 1; k < num_steps; ++k) {
+            cache.beta_prime_nodes[k] = (cache.beta_nodes[k + 1] - cache.beta_nodes[k - 1]) * inv_two_h;
+        }
+        cache.beta_prime_nodes[num_steps] = (3.0 * cache.beta_nodes[num_steps] - 4.0 * cache.beta_nodes[num_steps - 1] + cache.beta_nodes[num_steps - 2]) * inv_two_h;
+    }
+
+    cache.beta_prime_midpoints.resize(num_steps);
+    for (int k = 0; k < num_steps; ++k) {
+        cache.beta_prime_midpoints[k] = (cache.beta_nodes[k + 1] - cache.beta_nodes[k]) / h;
+    }
+
+    return cache;
+}
+
+// Indefinite integral of P(s)/sqrt(A-s) ds, where P(s) is a quadratic.
+// P(s) = c2*s^2 + c1*s + c0
+// Returns the evaluated definite integral from s=0 to s=2.
+double eval_quad_sqrt_integral(double A, double c2, double c1, double c0) {
+    auto term_at = [A](double s, double c2, double c1, double c0) {
+        if (A <= s) return 0.0;
+        double sqrt_A_minus_s = std::sqrt(A - s);

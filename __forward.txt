@@ -1,0 +1,99 @@
+double ou_fht_pdf_forward(double t, double lambda, double theta, double sigma, double z0, double b0, double binf, double tau, double p, int num_steps) {
+    RD_Params pars = prepare_ou_params(t, lambda, theta, sigma, z0, b0, binf, tau, p);
+    const double omega = pars.omega;
+    if (t < FPM_EPSILON || lambda <= 0.0 || sigma <= 0.0) {
+        return 0.0;
+    }
+
+    if (std::abs(pars.b_scaled) < FPM_EPSILON) { // Analytical case for b_scaled = 0
+        double sinh_t = std::sinh(pars.t_scaled);
+        if (sinh_t < FPM_EPSILON) {
+            return 0.0;
+        } else {
+            // TOD0: implement the sp_var case here
+            double common_arg = -pars.zU_scaled * std::exp(-0.5 * pars.t_scaled) / std::sqrt(sinh_t);
+            const double exp_term = std::exp(-0.5 * common_arg * common_arg + 0.5 * pars.t_scaled);
+            const double g_scaled = (pars.zU_scaled * exp_term) / (std::sqrt(2.0 * M_PI) * std::pow(sinh_t, 1.5));
+            return lambda * g_scaled;
+        }
+    }
+	  const double et  = std::exp(pars.t_scaled);
+	  const double e2t = std::exp(2.0 * pars.t_scaled);
+    const double e2tm1 = e2t - 1.0;
+    const double theta_max = et - 1.0;
+    const double tau_max = 0.5 * (e2tm1);
+    const int N = (num_steps < 2) ? 2 : num_steps;
+    std::vector<double> theta_grid_block;
+	
+    pars.theta_max = theta_max;
+
+    if (omega*(pars.zU_scaled - pars.b_scaled) < FPM_EPSILON) { 
+         return 0.0;
+    }
+    const double h_t = theta_max / N;
+    std::vector<double> t_grid(N + 1);
+    for (int j = 0; j <= N; ++j) t_grid[j] = j * h_t;
+
+    BoundaryDecayCache beta_cache;
+    const BoundaryDecayCache* cache_ptr = nullptr;
+    KernelFn kernel_fn;
+
+    if (pars.fixed_b) {
+        kernel_fn = KernelFn(kernel_forward);
+    } else {
+        beta_cache = make_boundary_decay_cache(theta_max, N, pars, beta_from_theta_raw);
+        kernel_fn = KernelFn([&beta_cache](double tt, double ttp, const RD_Params& p) {
+            return kernel_forward_tv_core(tt, ttp, p, beta_cache);
+        });
+        cache_ptr = &beta_cache;
+    }
+
+    ForcingFn g_fn;
+    if (pars.fixed_b) {
+        g_fn = pars.sp_var ? ForcingFn(g_term_forward_uniform)
+                           : ForcingFn(g_term_forward);
+    } else {
+        g_fn = ForcingFn([cache_ptr](double theta_val, const RD_Params &p) {
+                if (cache_ptr) {
+                    return p.sp_var ? g_term_forward_tv_uniform(theta_val, p, *cache_ptr)
+                                     : g_term_forward_tv(theta_val, p, *cache_ptr);
+                }
+                return p.sp_var ? g_term_forward_uniform(theta_val, p)
+                                 : g_term_forward(theta_val, p);
+                });
+    }
+
+	const BoundaryDecayCache* abel_cache_theta = cache_ptr;
+	AbelFn abel_fn_theta = AbelFn([abel_cache_theta](double theta_val, const RD_Params& p) {
+	    return abel_approx_nu_f(theta_val, p, abel_cache_theta);
+	});
+    const double scale = 1+theta_max;
+    std::vector<double> beta_grid(N + 1);
+    for (int j = 0; j <= N; ++j) beta_grid[j] = beta_from_theta(t_grid[j], pars, cache_ptr);
+    const double beta_t = beta_grid.back();
+    pars.beta_prime = beta_t; // constant-barrier default
+    double mid = 0.5 * (t_grid[N] + t_grid.back()); // theta_grid is N+1 in size 
+    RightQuad rq = right_end_quadratic(t_grid, beta_grid,mid); 
+    pars.beta_prime = rq.nu_prime;
+
+    const double b_prime_t = pars.beta_prime * scale;
+    auto nu_f_vals = solve_nu_block_with_abel(theta_max, pars, N, theta_grid_block, kernel_fn, g_fn, abel_fn_theta);
+    const double nu_t = nu_f_vals.back();
+    // Equations here are re-arranged to match general form in Lipton &
+    // Kaushansky (2020) Equation 10 They are mathematically equivalent to the
+    // original form in section 4.4, but easier to relate to the general case
+    // Term 1: The integral from Eq. (10)
+    const double integal_sum = integrate_pdf_forward_theta_u(theta_max, theta_grid_block, nu_f_vals, pars, cache_ptr);
+    const double termA = (1/std::sqrt(M_PI))*integal_sum;
+    // Term 2: -ν(t) / sqrt(2πt)
+    const double termB = -nu_t / std::sqrt(2.0 * M_PI * tau_max);
+
+    // The b'(t)ν(t) part
+    const double beta_prime_term = omega*(-(pars.beta_prime/scale) * nu_t);
+    const double image_term = omega* (0.5* averaged_image_term(tau_max, beta_t, pars));
+    const double g_scaled = termA + termB + beta_prime_term + image_term;
+    const double pdf = lambda * g_scaled * e2t;
+    Rcout<<"PDF components: Integral=" << termA << ", Nu=" << nu_t << ", Beta_prime_term=" << beta_prime_term << ", Image_term=" << image_term << ", PDF=" << pdf << std::endl;
+    return std::max(0.0, pdf);
+}
+

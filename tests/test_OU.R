@@ -4,43 +4,115 @@
 # devtools::build()
 # devtools::load_all(reset=TRUE)
 devtools::load_all()
+
+# Helper: windowed PDF estimator with error bars
+mc_pdf_window <- function(sim, t0, h) {
+  sim <- sim[is.finite(sim)]
+  N <- length(sim)
+  if (N == 0) return(list(f=NA_real_, se=NA_real_, k=0L, N=0L))
+  k <- sum(abs(sim - t0) <= h)
+  fhat <- k / (N * 2*h)
+  p <- max(k / N, .Machine$double.eps)
+  se <- sqrt(p*(1-p)/N) / (2*h)
+  list(f=fhat, se=se, k=k, N=N)
+}
+
+# Helper: KS distance between empirical CDF and model CDF evaluated on grid
+ks_against_model <- function(sim, tgrid, F_model) {
+  sim <- sim[is.finite(sim)]
+  if (!length(sim)) return(NA_real_)
+  ec <- ecdf(sim)
+  max(abs(ec(tgrid) - F_model))
+}
+
 # Parameters
-lambda <- 0.5
-theta  <- 2.5
-sigma  <- 1
-z0 <- 0
-b=2
-pow=3
-tau_exp=4
+tt = seq(0.1,10,b=.01)
+par(mfrow=c(2,2))
+for (i in 1:4) {
+    lambda <- runif(1,0.1,1.5)
+    theta  <- runif(1,0.5,3)
+    sigma  <- runif(1,0.1,1)
+    z0 <- 0 # no start point variability
+    b = theta #runif(1, 1, 3)
+    b_inf = b # no decay (fixed_b)
+    pow=3
+    tau_exp=4
 
-c = sqrt(lambda) / sigma
-z_scaled = c * (z0 - theta)
-b_scaled = c * (b - theta)
+    c = sqrt(lambda) / sigma
+    z_scaled = c * (z0 - theta)
+    b_scaled = c * (b - theta)
 
-tt = seq(0.01,10,length.out=1000)
-sim_dat <- simulate_ou_hit_times_std(5e4, lambda, theta, sigma, z0, b, b, tau_exp,pow, dt = 1e-3, t_max = 10)
-misses = mean(is.na(sim_dat))
-tmp=density(sim_dat[!is.na(sim_dat)]); f=approxfun(tmp)
+    print(paste0("z_scaled = ", round(z_scaled,3), "; b_scaled = ", round(b_scaled,3), "; theta = ", round(theta,3)))
+    
+    library(microbenchmark)
+    bench = microbenchmark(
+        grid = ou_fht_pdf_vec_grid(tt, lambda, theta, sigma, z0, b, b_inf, tau_exp, pow, 0.001, 300),
+        chunked = ou_fht_pdf_vec_grid_chunked(
+            tt, lambda, theta, sigma, z0, b, b_inf, tau_exp, pow,
+            0.001, 300, 1.5, 500, 12
+        ),
+        times = 5
+    )
 
-pdf <- ou_fht_pdf_vec(tt, lambda, theta, sigma, z0, b, b-.1, tau_exp, pow, num_steps = 300)
-cdf <- ou_fht_cdf_vec(tt, lambda, theta, sigma, z0, b, b, tau_exp, pow, num_steps = 300)
-# Sanity checks
-plot(tt, pdf, type="l", main="OU FHT PDF")
-lines(tt, f(tt) * (1 - misses), col = "purple", lwd = 2)
-plot(tt, cdf, type="l", main="OU FHT CDF")
-max(cdf)           # <= 1
-trap <- sum(0.5*(head(pdf1,-1)+tail(pdf1,-1))*diff(tt))
-trap                 # ~ probability of ever hitting by max(tt)
+    sim_dat <- simulate_ou_hit_times_bb(5e6, lambda, theta, sigma, z0, b, b_inf, tau_exp, pow,
+                                        dt = 1e-2, t_max = 100, adapt_factor = 1e6)
+    misses = mean(is.na(sim_dat))
+    # check at t=5 seconds via windowed estimator
+    t = round(runif(1, 1, length(tt) - 1))
+    t0 <- tt[t]
+    h <- 0.1
+    w <- mc_pdf_window(sim_dat, t0, h)
+    fhat <- w$f; se <- w$se
+    if (b==theta) {
+        pdf_analytic = ou_fht_pdf_vec_closed_form(tt[t], lambda, theta, sigma, z0, b, b_inf)
+    }
+    # analytic, on-grid pdf (no chunking or splines)
+    pdf_on_grid = ou_fht_pdf_vec(tt[t], lambda, theta, sigma, z0, b, z0, tau_exp, pow, 0.001, 0)
+    # on_grid with spline, should be identical except for interpolation error in the derivative of nu
+    pdf_spline = ou_fht_pdf_vec_spline(tt[t], lambda, theta, sigma, z0, b, z0, tau_exp, pow, 0.001,0)
+    # Solve kernel once at max_t and use the same kernel for all t
+    pdf_grid = ou_fht_pdf_vec_grid(tt, lambda, theta, sigma, z0, b, z0, tau_exp, pow, 0.0001,0, 0.001)[t]
+    # as above but also smartly chunk the time grid used for kernel estimation using a minimum level for t_min, then gemoetrically widening the grid width across chunks
+    pdf_chunked = ou_fht_pdf_vec_grid_chunked(tt, lambda, theta, sigma, z0, b, z0, tau_exp, pow,
+        0.0001,0,.001, 2,200,12)[t]
+    if (b==theta) {
+        print(paste0("Closed-form PDF at t=", round(t0, 2), "s: ", round(pdf_analytic,6)))
+    }
+    print(paste0(
+        "PDF at t=", round(t0, 2), "s: volterra=", round(pdf_on_grid, 6),
+        "; spline=", round(pdf_spline, 6),
+        "; grid=", round(pdf_grid, 6),
+        "; chunked=", round(pdf_chunked, 6),
+        "; mc_window=", round(fhat, 6),
+        " (±", round(3*se,6), ")"
+    ))
 
-# Simulate hitting times
-hist(sim_dat, breaks=100, freq=FALSE, main="Fixed-b, no start point variability")
-lines(tt, pdf/(1-misses), lwd=2, col='blue')
-# Empirical CDF vs. model CDF
-ec <- ecdf(sim_dat)
-plot(tt, cdf/(1-misses), type="l", lwd=2, ylim=c(0,1), main="Our version")
-lines(tt, ec(tt), col=2)
+    cdf_chunked = ou_fht_cdf_vec_grid_chunked(tt, lambda, theta, sigma, z0, b, b_inf, tau_exp, pow, 0.001, 300, 2, 300, 12)[tt[t]]
+    cdf_backwards = ou_fht_cdf_vec(tt[t], lambda, theta, sigma, z0, b, b_inf, tau_exp, pow, 0.001, 300)
+    ec <- ecdf(sim_dat)
+    print(paste0(
+        "CDF at t=", round(t0, 2), "s: volterra=", round(cdf_backwards, 6),
+        "; chunked=", round(cdf_chunked, 6),
+        "; ecdf=", round(ec(t0), 6)
+    ))
+}
 
 
+
+    # Plot pdf against data
+    hist(sim_dat, breaks=1000, freq=FALSE, main="Fixed-b, no start point variability")
+    lines(tt, pdf_on_grid/(1-misses), lwd=2, col='red')
+    lines(tt, pdf_chunked / (1 - misses), lwd = 2, col = "green", lty="dashed")
+    abline(v=t0, col="gray70", lty=3)
+    segments(x0=t0-h, y0=fhat, x1=t0+h, y1=fhat, col="black", lwd=2)
+    segments(x0=t0, y0=fhat-3*se, x1=t0, y1=fhat+3*se, col="black", lwd=2)
+    # Empirical CDF vs. model CDF
+    ec <- ecdf(sim_dat)
+    plot(tt, ec(tt), type="l", lwd=2, ylim=c(0,1), main="CDF")
+    lines(tt, cdf/(1-misses), col="red")
+    lines(tt, cdf_chunked/(1-misses), col="blue", lty="dashed")
+    ks <- ks_against_model(sim_dat, tt, cdf)
+    cat("KS distance:", ks, "\n")
 lambda <- 1.2; theta <- 0; sigma <- 0.8; z0 <- -0.5; b <- 0.5
 tt  <- seq(0.01, 5, length.out = 400)
 

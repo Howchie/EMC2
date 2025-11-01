@@ -1,0 +1,250 @@
+    const double omega = pars.omega;
+    const double beta_theta = beta_from_theta(theta, pars, &cache);
+    const double beta_theta_p = beta_from_theta(theta_p, pars, &cache);
+    // Handle diagonal explicitly
+    if (std::abs(dv) < 1e-15) {
+        // Use the local derivative beta'(theta) for the diagonal limit.
+        // For fixed barriers beta'(theta) = b_scaled (constant); for
+        // time-varying barriers prefer a robust local finite-difference
+        // that does not depend on the cache spacing when the cache is too coarse.
+        double beta_prime_local = pars.b_scaled; // fixed-barrier fallback
+        if (!pars.fixed_b) {
+            // Heuristic: if the cache resolution is reasonably fine near theta,
+            // use the cached derivative; otherwise fall back to a small-step
+            // central difference that is independent of theta_max.
+            bool used_cached = false;
+            if (cache.has_derivatives() && cache.h > 0.0) {
+                // Consider the cache fine if its spacing is small relative to (1+theta).
+                const double rel_scale = 1.0 + std::abs(theta);
+                if (cache.h <= 0.02 * rel_scale) {
+                    const double bp_cached = cache.lookup_prime(theta);
+                    if (std::isfinite(bp_cached)) {
+                        beta_prime_local = bp_cached;
+                        used_cached = true;
+                    }
+                }
+            }
+            if (!used_cached) {
+                // Robust central difference with a local step that scales with (1+theta),
+                // but is bounded to avoid under/overflow. Evaluate via the raw routine
+                // to avoid quantization from the cache lookup.
+                const double rel_scale = 1.0 + std::abs(theta);
+                double d = 1e-3 * rel_scale;
+                // Keep the step within a sensible absolute bound
+                if (d > 1e-2) d = 1e-2;
+                if (d < 1e-6) d = 1e-6;
+                double tL = theta - d;
+                double tR = theta + d;
+                if (tL < 0.0) { tL = 0.0; tR = tL + 2.0 * d; }
+                // Use raw evaluator to avoid dependence on cache discretization
+                const double bL = beta_from_theta_raw(tL, pars);
+                const double bR = beta_from_theta_raw(tR, pars);
+                const double denom = (tR - tL);
+                beta_prime_local = (denom > FPM_EPSILON) ? ((bR - bL) / denom) : 0.0;
+            }
+        }
+        if (scale < FPM_EPSILON) return 0.0;
+        return -omega*(beta_prime_local / std::sqrt(2.0 * M_PI)) / sqrt_pos(scale);
+    }
+    const double psi = beta_theta - beta_theta_p; // this is equivalent to b*dv in the fixed case
+    const double s = 2.0 + theta + theta_p;
+    if (s <= 1e-15) return 0.0;
+
+    const double b_eff = psi / dv;
+    const double xi = safe_exp(-(psi * psi) / (dv * s)); 
+
+    const double term1 = (2.0 * b_eff  * xi/ std::sqrt(M_PI));
+    const double term2 = ((1.0 + theta_p)) / (s * std::sqrt(s)); // change of variables transform and jacobian
+    const double kernel = omega * (term1 * term2);
+    return -kernel; // -omega because we move the kernel term across to the right hand side when solving (Eq 13 Lipton & Kaushansky 2020)
+}
+
+// Dummy function for backward kernel
+double g_term_backward(double v, const RD_Params& pars) {
+    return 1.0;
+}
+
+// Forward kernel g term from page 11 Lipton & Kaushansky(2018)
+double g_term_forward(double theta, const RD_Params& pars) {
+    const double z = pars.zU_scaled;
+    const double b = pars.b_scaled;
+    const double scale = 1.0 + theta;
+	const double tau_2 = scale*scale-1.0; // this is 2*tau, which is the solver units
+    if (theta <= FPM_EPSILON) return 0.0;
+    const double num = z - scale*b;
+	const double expo = safe_exp(-(num*num)/tau_2);
+	const double denom = sqrt_pos(M_PI * tau_2);
+	if (denom <= FPM_EPSILON) return 0.0;
+    return -expo / denom;
+}
+
+double g_term_forward_uniform(double theta, const RD_Params& pars) {
+    const double scale = 1.0 + theta;
+    const double tau_2 = scale*scale-1.0; // this is 2*tau, which is the solver units
+    if (theta <= FPM_EPSILON || tau_2 <= FPM_EPSILON) return 0.0;
+    double z_lo = pars.zU_scaled, z_hi = pars.zU_scaled;
+    if (!(pars.zU_scaled - pars.zL_scaled > FPM_EPSILON)) {
+        return g_term_forward(theta, pars);
+    }
+    const double span = z_hi - z_lo;
+    if (span <= FPM_EPSILON) {
+        return g_term_forward(theta, pars);
+    }
+    const double a = scale * pars.b_scaled;
+    const double root = std::sqrt(tau_2);
+    const double erf_hi = std::erf((z_hi - a) / root);
+    const double erf_lo = std::erf((z_lo - a) / root);
+    return -(erf_hi - erf_lo) / (2.0 * span);
+}
+
+// Time-varying version of the above, replace b with beta at theta (beta includes the (1+theta) factor already)
+double g_term_forward_tv(double theta, const RD_Params& pars,
+                                         const BoundaryDecayCache& cache) {
+    //if (pars.fixed_b) {
+    //    return g_term_forward(theta, pars);
+    //}
+    //TODO implement the averaging across 0-z0 for sp_var case
+    const double z = pars.zU_scaled;
+    const double scale = 1.0 + theta;
+	const double tau_2 = scale*scale-1.0; // this is 2*tau, which is the solver units
+    if (theta <= FPM_EPSILON) return 0.0;
+    const double beta = beta_from_theta(theta, pars, &cache); // beta already has "scale" factored in
+    const double num = beta - z;
+	const double expo = safe_exp(-(num*num)/tau_2);
+	const double denom = sqrt_pos(M_PI * tau_2);
+	if (denom <= FPM_EPSILON) return 0.0;
+    return -expo / denom;
+}
+
+inline double g_term_forward_tv_uniform(double theta, const RD_Params& pars, const BoundaryDecayCache& cache) {
+    const double scale = 1.0 + theta;
+    const double tau_2 = scale*scale-1.0; // this is 2*tau, which is the solver units
+    if (theta <= FPM_EPSILON || tau_2 <= FPM_EPSILON) return 0.0;
+    double z_lo = pars.zL_scaled, z_hi = pars.zU_scaled;
+    if (!(pars.zU_scaled - pars.zL_scaled > FPM_EPSILON)) {
+        return g_term_forward_tv(theta, pars, cache);
+    }
+    const double span = z_hi - z_lo;
+    if (span <= FPM_EPSILON) {
+        return g_term_forward_tv(theta, pars, cache);
+    }
+    const double beta = beta_from_theta(theta, pars, &cache); // beta already has "scale" factored in
+    const double root = std::sqrt(tau_2);
+    const double erf_hi = std::erf((z_hi - beta) / root);
+    const double erf_lo = std::erf((z_lo - beta) / root);
+    return -(erf_hi - erf_lo) / (2.0 * span);
+}
+
+// Spline-based time-varying forward g-term (beta from spline)
+inline double g_term_forward_tv_spline(double theta, const RD_Params& pars,
+                                       const util::AkimaSpline& beta_spline) {
+    const double z = pars.zU_scaled;
+    const double scale = 1.0 + theta;
+    const double tau_2 = scale * scale - 1.0; // 2*tau in solver units
+    if (theta <= FPM_EPSILON) return 0.0;
+    const double beta = beta_spline.interpolate(theta); // already includes scale
+    const double num = beta - z;
+    const double expo = safe_exp(-(num * num) / tau_2);
+    const double denom = sqrt_pos(M_PI * tau_2);
+    if (denom <= FPM_EPSILON) return 0.0;
+    return -expo / denom;
+}
+
+inline double g_term_forward_tv_uniform_spline(double theta, const RD_Params& pars,
+                                               const util::AkimaSpline& beta_spline) {
+    const double scale = 1.0 + theta;
+    const double tau_2 = scale * scale - 1.0;
+    if (theta <= FPM_EPSILON || tau_2 <= FPM_EPSILON) return 0.0;
+    double z_lo = pars.zL_scaled, z_hi = pars.zU_scaled;
+    if (!(pars.zU_scaled - pars.zL_scaled > FPM_EPSILON)) {
+        return g_term_forward_tv_spline(theta, pars, beta_spline);
+    }
+    const double span = z_hi - z_lo;
+    if (span <= FPM_EPSILON) {
+        return g_term_forward_tv_spline(theta, pars, beta_spline);
+    }
+    const double beta = beta_spline.interpolate(theta);
+    const double root = std::sqrt(tau_2);
+    const double erf_hi = std::erf((z_hi - beta) / root);
+    const double erf_lo = std::erf((z_lo - beta) / root);
+    return -(erf_hi - erf_lo) / (2.0 * span);
+}
+
+// Spline-based time-varying forward kernel (beta and beta' from spline)
+inline double kernel_forward_tv_spline_core(double theta, double theta_p,
+                                            const RD_Params& pars,
+                                            const util::AkimaSpline& beta_spline) {
+    const double dv = theta - theta_p;
+    const double scale = 1.0 + theta;
+    const double omega = pars.omega;
+
+    // Diagonal limit uses beta'(theta)
+    if (std::abs(dv) < 1e-15) {
+        if (scale < FPM_EPSILON) return 0.0;
+        const double beta_prime_local = beta_spline.derivative(theta);
+        return -omega * (beta_prime_local / std::sqrt(2.0 * M_PI)) / sqrt_pos(scale);
+    }
+
+    const double beta_theta   = beta_spline.interpolate(theta);
+    const double beta_theta_p = beta_spline.interpolate(theta_p);
+    const double psi = beta_theta - beta_theta_p;
+    const double s = 2.0 + theta + theta_p;
+    if (s <= 1e-15) return 0.0;
+
+    const double b_eff = psi / dv;
+    const double xi = safe_exp(-(psi * psi) / (dv * s));
+    const double term1 = (2.0 * b_eff * xi / std::sqrt(M_PI));
+    const double term2 = ((1.0 + theta_p)) / (s * std::sqrt(s));
+    const double kernel = omega * (term1 * term2);
+    return -kernel;
+}
+
+// Abel Approximations
+// Analytical solution for nu_b and nu_f for small t (Abel approximation from Eq. 24 and 26) Lipton & Kaushansky(2018)
+// When b is not fixed, we use the scaled b value at time t (shouldn't make a huge difference for small t but it's more mathematically correct)
+double abel_approx_nu_b(double v, const RD_Params& pars, const BoundaryDecayCache* cache = nullptr) {
+    double b_eff = pars.b_scaled;
+    const double omega = pars.omega;
+    const double b_signed = omega * b_eff;
+    const double z_signed = omega * pars.zU_scaled;
+    if (!pars.fixed_b) {
+        const double beta_v = omega*beta_from_v(v, pars, cache);
+        const double scale = std::max(FPM_EPSILON, 1.0 - v);
+        b_eff = beta_v / scale;
+    }
+    if (std::abs(b_eff) < FPM_EPSILON) {
+        return 1.0;
+    }
+    return 2.0 * std::exp((b_signed * b_signed * v) / 2.0) * normal_cdf(b_signed * std::sqrt(v));
+}
+
+double abel_approx_nu_f(double theta, const RD_Params& pars, const BoundaryDecayCache* cache = nullptr) {
+    if (theta < FPM_EPSILON) {
+        return 0.0; // nu_f(0) = g(0) = 0
+    }
+    if (pars.sp_var) {
+        if (cache) {
+            return g_term_forward_tv_uniform(theta, pars, *cache);
+        }
+        return g_term_forward_uniform(theta, pars);
+    }
+    double b_eff = pars.b_scaled;
+    if (!pars.fixed_b) {
+        const double beta_theta = beta_from_theta(theta, pars, cache);
+        const double scale = std::max(FPM_EPSILON, 1.0 + theta);
+        b_eff = beta_theta / scale;
+    }
+    const double omega = pars.omega;
+    const double b_signed = omega * b_eff;
+    const double z_signed = omega * pars.zU_scaled;
+    // TODO: implement the uniform start point case here
+    const double num = b_signed * theta + z_signed - b_signed;
+
+    const double exp_arg1 = 0.5 * b_signed * b_signed * theta + b_signed * (z_signed - b_signed);
+    const double cdf_arg = -num / std::sqrt(theta);
+    const double term1 = b_signed * safe_exp(exp_arg1) * normal_cdf(cdf_arg);
+
+    const double exp_arg2 = -((b_signed - z_signed) * (b_signed - z_signed)) / (2 * theta);
+    const double term2 = -safe_exp(exp_arg2) / std::sqrt(2.0 * M_PI * theta);
+    return term1 + term2;
+}

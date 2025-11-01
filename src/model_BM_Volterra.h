@@ -370,6 +370,71 @@ double integrate_pdf_forward_bm_u(
     return integral_sum;
 }
 
+// 2b. Spline-based variant: identical numerics on-grid, but integrates using Akima spline
+//     and the same regularized integrand as integrate_pdf_forward_bm_u. This mirrors
+//     OU's integrate_pdf_forward_spline and allows per-time adaptive integration.
+inline double integrate_pdf_forward_bm_spline(
+    double t_k,
+    const util::AkimaSpline& nu_spline,
+    const RD_Params& pars,
+    const BoundaryDecayCache* cache = nullptr,
+    int M = 100,
+    double nu_prime_at_k_override = std::numeric_limits<double>::quiet_NaN())
+{
+    if (t_k <= FPM_EPSILON) return 0.0;
+
+    // Build a temporary uniform partition in t' and corresponding u-grid
+    std::vector<double> t_grid(M + 1);
+    std::vector<double> u_grid(M + 1);
+    const double h_t = t_k / M;
+    for (int i = 0; i <= M; ++i) {
+        const double tp = i * h_t;
+        t_grid[i] = tp;
+        u_grid[i] = sqrt_pos(t_k - tp);
+    }
+
+    // Endpoint values via spline
+    const double nu_at_k = nu_spline.interpolate(t_k);
+    const double nu_prime_at_k = std::isfinite(nu_prime_at_k_override)
+                                     ? nu_prime_at_k_override
+                                     : nu_spline.derivative(t_k);
+
+    // Right-end limit of the integrand in u-space for BM (matches integrate_pdf_forward_bm_u)
+    const double beta_prime_t = pars.beta_prime;
+    const double beta_prime_sq = beta_prime_t * beta_prime_t;
+    const double f_right_limit = -2.0 * (nu_prime_at_k + 1.5 * beta_prime_sq * nu_at_k) / std::sqrt(2.0 * M_PI);
+
+    double integral_sum = 0.0;
+    for (int i = M - 1; i >= 0; --i) {
+        const double tL = t_grid[i];
+        const double tR = t_grid[i + 1];
+        const double uL = u_grid[i];
+        const double uR = u_grid[i + 1];
+        const double h_u = uL - uR; // panel size in u
+        if (h_u == 0.0) continue;
+
+        const double uM = 0.5 * (uL + uR);
+        const double tM = t_k - uM * uM;
+
+        // nu values from spline
+        const double nuL = nu_spline.interpolate(tL);
+        const double nuR = nu_spline.interpolate(tR);
+        const double nuM = nu_spline.interpolate(tM);
+
+        // Regularized integrand at the three points
+        const double fL = regularized_pdf_integrand_bm(t_k, tL, nu_at_k, nuL, pars, cache);
+        const double fR = (i == M - 1)
+                            ? f_right_limit
+                            : regularized_pdf_integrand_bm(t_k, tR, nu_at_k, nuR, pars, cache);
+        const double fM = regularized_pdf_integrand_bm(t_k, tM, nu_at_k, nuM, pars, cache);
+
+        // Simpson on this u-panel
+        integral_sum += (h_u / 6.0) * (fL + 4.0 * fM + fR);
+    }
+
+    return integral_sum;
+}
+
 double calculate_cdf_from_nu_backward(const std::vector<double>& t_grid,
                                       const std::vector<double>& nu_vec,
                                       const RD_Params& pars) {
@@ -470,13 +535,15 @@ double bm_fht_pdf(double t,
   //}
   auto nu_vec = solve_nu_block_with_abel(t, pars, N, t_grid, kernel_fn,
                                           forcing_fn, abel_fn);
-									  
-	  const double nu_t = nu_vec.back();
-    const double omega = pars.omega;
-    const RightQuad rq_nu = right_end_quadratic(t_grid, nu_vec,mid);
 
-    // Term 1: The integral from Eq. (10)
-    const double termA = 0.5*integrate_pdf_forward_bm_u(t, t_grid, nu_vec, pars, cache_ptr);
+  // Spline for nu for exact on-grid evaluation and stable derivatives
+  util::AkimaSpline nu_spline(t_grid, nu_vec);
+
+	  const double nu_t = nu_spline.interpolate(t);
+    const double omega = pars.omega;
+
+    // Term 1: The integral from Eq. (10) using spline-based integrator
+    const double termA = 0.5 * integrate_pdf_forward_bm_spline(t, nu_spline, pars, cache_ptr, N);
     
     // Term 2: -ν(t) / sqrt(2πt)
     const double termB = -nu_t / std::sqrt(2.0 * M_PI * t);
@@ -493,6 +560,168 @@ double bm_fht_pdf(double t,
     const double density = termA + termB + termC;
 
   return density;
+}
+
+// Forward declarations for chunked BM grid solver
+NumericVector bm_fht_pdf_vec_grid_chunked(NumericVector t,
+                                          double mu, double sigma, double z0,
+                                          double b0, double binf, double tau, double pow,
+                                          double steps_fineness, double min_steps,
+                                          double chunk_ratio, double chunk_base_panels,
+                                          double chunk_max);
+
+// [[Rcpp::export]]
+NumericVector bm_fht_pdf_vec_grid(NumericVector t,
+                                  double mu, double sigma, double z0,
+                                  double b0, double binf, double tau, double pow,
+                                  double steps_fineness, double min_steps)
+{
+  const int n = t.size();
+  // Determine horizon and earliest positive time
+  double t_max = 0.0;
+  double t_min_pos = std::numeric_limits<double>::infinity();
+  bool has_finite = false;
+  for (int i = 0; i < n; ++i) {
+    if (R_finite(t[i])) {
+      if (t[i] > t_max) { t_max = t[i]; has_finite = true; }
+      if (t[i] > 0.0 && t[i] < t_min_pos) t_min_pos = t[i];
+    }
+  }
+  if (!has_finite || t_max <= 0.0 || sigma <= 0.0) {
+    NumericVector out(n, NA_REAL);
+    for (int i = 0; i < n; ++i) out[i] = (R_finite(t[i]) && t[i] >= 0.0) ? 0.0 : NA_REAL;
+    return out;
+  }
+
+  int N = calculate_num_steps(t_max, steps_fineness, (int)min_steps);
+  int P = 0;
+  if (R_finite(t_min_pos) && t_min_pos > 0.0) {
+    P = calculate_num_steps(t_min_pos, steps_fineness, (int)min_steps);
+    if (P % 2 != 0) ++P;
+    if (P > N - 2) P = std::max(2, N - 2);
+    if ((N - P) % 2 != 0) { if (P > 2) --P; else ++N; }
+  }
+  const double ratio = 1.0; // zero compression path
+  const double base_panels = static_cast<double>(std::max(2, N - P));
+  const double max_chunks = 2.0;
+  return bm_fht_pdf_vec_grid_chunked(t, mu, sigma, z0, b0, binf, tau, pow,
+                                     steps_fineness, min_steps,
+                                     ratio, base_panels, max_chunks);
+}
+
+// Variant of the grid-based solver using the chunked Volterra kernel
+// acceleration, mirroring OU. Keeps legacy functions available.
+// [[Rcpp::export]]
+NumericVector bm_fht_pdf_vec_grid_chunked(NumericVector t,
+                                          double mu, double sigma, double z0,
+                                          double b0, double binf, double tau, double pow,
+                                          double steps_fineness, double min_steps,
+                                          double chunk_ratio, double chunk_base_panels,
+                                          double chunk_max)
+{
+  const int n = t.size();
+  NumericVector out(n, NA_REAL);
+
+  double t_max = 0.0;
+  bool has_finite = false;
+  for (int i = 0; i < n; ++i) {
+    if (R_finite(t[i]) && t[i] > t_max) { t_max = t[i]; has_finite = true; }
+  }
+  if (!has_finite || t_max <= 0.0 || sigma <= 0.0) {
+    for (int i = 0; i < n; ++i) {
+      if (R_finite(t[i]) && t[i] >= 0.0) out[i] = 0.0; else out[i] = NA_REAL;
+    }
+    return out;
+  }
+
+  // Earliest positive time for prelude panels
+  double t_min_pos = std::numeric_limits<double>::infinity();
+  for (int i = 0; i < n; ++i) {
+    const double ti = t[i];
+    if (R_finite(ti) && ti > 0.0 && ti < t_min_pos) t_min_pos = ti;
+  }
+
+  RD_Params pars = prepare_bm_params(t_max, mu, sigma, z0, b0, binf, tau, pow);
+  const bool use_cache = !pars.fixed_b || std::abs(mu) > FPM_EPSILON;
+  BoundaryDecayCache beta_cache;
+  BoundaryDecayCache* cache_ptr = nullptr;
+  int N = calculate_num_steps(t_max, steps_fineness, (int)min_steps);
+  if (use_cache) {
+    beta_cache = make_boundary_decay_cache(t_max, N, pars, beta_from_time_raw);
+    cache_ptr = &beta_cache;
+  }
+
+  KernelFn kernel_fn = KernelFn([cache_ptr](double tt, double ss, const RD_Params& p) {
+    return kernel_bm(tt, ss, p, cache_ptr);
+  });
+
+  ForcingFn forcing_fn = ForcingFn([cache_ptr](double tt, const RD_Params& p) {
+    return forcing_bm(tt, p, cache_ptr);
+  });
+
+  AbelFn abel_fn = AbelFn([cache_ptr](double tt, const RD_Params &p) {
+    return abel_approx_bm(tt, p, cache_ptr);
+  });
+
+  // Chunking configuration (reuse theta helpers for generic t-grid)
+  ChunkingOptions chunk_opts;
+  chunk_opts.ratio = chunk_ratio;
+  chunk_opts.base_panels = static_cast<int>(std::round(chunk_base_panels));
+  chunk_opts.max_chunks = chunk_max;
+  if (R_finite(t_min_pos) && t_min_pos > 0.0) {
+    chunk_opts.theta_min = t_min_pos; // same semantics: position in the domain
+    int P = calculate_num_steps(t_min_pos, steps_fineness, (int)min_steps);
+    if (P % 2 != 0) ++P;
+    chunk_opts.pre_min_panels = std::max(2, P);
+  }
+
+  std::vector<double> t_grid_block;
+  auto t_grid_block_upfront = build_chunked_theta_grid(t_max, N, chunk_opts);
+  std::vector<double> beta_grid(t_grid_block_upfront.size());
+  for (size_t j = 0; j < beta_grid.size(); ++j) {
+    beta_grid[j] = beta_from_time(t_grid_block_upfront[j], pars, cache_ptr);
+  }
+  util::AkimaSpline beta_spline(t_grid_block_upfront, beta_grid);
+  pars.beta_prime = beta_spline.derivative(t_max);
+
+  auto nu_vals = solve_nu_block_with_abel_chunked(t_max, pars, N, t_grid_block,
+                                                  kernel_fn, forcing_fn, abel_fn,
+                                                  chunk_opts);
+  util::AkimaSpline nu_spline(t_grid_block, nu_vals);
+
+  const int total_nodes = static_cast<int>(t_grid_block.size());
+
+  for (int i = 0; i < n; ++i) {
+    const double ti = t[i];
+    if (!R_finite(ti)) { out[i] = NA_REAL; continue; }
+    if (ti <= 0.0) { out[i] = 0.0; continue; }
+
+    RD_Params pars_i = prepare_bm_params(ti, mu, sigma, z0, b0, binf, tau, pow);
+    const double nu_ti = nu_spline.interpolate(ti);
+    pars_i.beta_prime = beta_spline.derivative(ti);
+    const double beta_ti = beta_spline.interpolate(ti);
+
+    // For derivative override near the endpoint; compute a local quadratic derivative
+    double deriv_override = std::numeric_limits<double>::quiet_NaN();
+    if (total_nodes >= 3) {
+      const double last_t = t_grid_block.back();
+      if (std::abs(ti - last_t) <= std::max(1e-12, 1e-12 * std::abs(last_t))) {
+        // Use right-end quadratic on the solved grid for stability
+        const RightQuad rq = right_end_quadratic(t_grid_block, nu_vals, 0.5 * (t_grid_block[total_nodes-2] + last_t));
+        deriv_override = rq.nu_prime;
+      }
+    }
+
+    const double integral_sum = integrate_pdf_forward_bm_spline(ti, nu_spline, pars_i, cache_ptr, N, deriv_override);
+    const double termA = 0.5 * integral_sum;
+    const double termB = -nu_ti / std::sqrt(2.0 * M_PI * ti);
+    const double omega_i = pars_i.omega;
+    const double termC = omega_i * (-pars_i.beta_prime * nu_ti + 0.5 * averaged_image_term(ti, beta_ti, pars_i));
+    const double density = termA + termB + termC;
+    out[i] = std::max(0.0, density);
+  }
+
+  return out;
 }
 
 inline double bm_fht_cdf(double t,
@@ -541,6 +770,139 @@ inline double bm_fht_cdf(double t,
                                           forcing_fn, abel_fn);
   const double cdf_val = calculate_cdf_from_nu_backward(t_grid, nu_vals, pars);
   return std::max(0.0, std::min(1.0, cdf_val));
+}
+
+// [[Rcpp::export]]
+NumericVector bm_fht_cdf_vec_grid_chunked(NumericVector t,
+                                          double mu, double sigma, double z0,
+                                          double b0, double binf, double tau, double pow,
+                                          double steps_fineness = 0.005,
+                                          double min_steps = 300,
+                                          double chunk_ratio = 1.5,
+                                          double chunk_base_panels = 500,
+                                          double chunk_max = 12,
+                                          double rt_resolution = NA_REAL)
+{
+  const int n = t.size();
+  NumericVector out(n, NA_REAL);
+
+  // Determine horizon for building a uniform grid for trapezoidal accumulation
+  double t_max = 0.0;
+  for (int i = 0; i < n; ++i) if (R_finite(t[i]) && t[i] > t_max) t_max = t[i];
+  if (!(sigma > 0.0) || t_max <= 0.0) {
+    for (int i = 0; i < n; ++i) {
+      if (R_finite(t[i]) && t[i] >= 0.0) out[i] = 0.0; else out[i] = NA_REAL;
+    }
+    return out;
+  }
+
+  // Uniform evaluation grid in t for CDF integration
+  int N = calculate_num_steps(t_max, steps_fineness, (int)min_steps);
+  std::vector<double> t_grid(N + 1);
+  const double h = t_max / N;
+  for (int j = 0; j <= N; ++j) t_grid[j] = j * h;
+
+  // Evaluate PDF on this grid using the chunked forward solver (amortizes kernel solve)
+  NumericVector t_grid_nv(t_grid.begin(), t_grid.end());
+  NumericVector pdf_on_grid = bm_fht_pdf_vec_grid_chunked(t_grid_nv, mu, sigma, z0, b0, binf, tau, pow,
+                                                          steps_fineness, min_steps,
+                                                          chunk_ratio, chunk_base_panels, chunk_max);
+  const size_t m = static_cast<size_t>(pdf_on_grid.size());
+  std::vector<double> pdf_grid(m, 0.0);
+  for (size_t i = 0; i < m; ++i) {
+    const double val = pdf_on_grid[static_cast<R_xlen_t>(i)];
+    pdf_grid[i] = (R_finite(val) && val > 0.0) ? val : 0.0;
+  }
+
+  // Trapezoidal accumulation to get CDF on the grid
+  std::vector<double> cdf_grid(m, 0.0);
+  for (size_t i = 1; i < m; ++i) {
+    const double dt_ = t_grid[i] - t_grid[i - 1];
+    if (dt_ > 0.0) {
+      const double avg = 0.5 * (pdf_grid[i] + pdf_grid[i - 1]);
+      cdf_grid[i] = cdf_grid[i - 1] + dt_ * avg;
+    } else {
+      cdf_grid[i] = cdf_grid[i - 1];
+    }
+    if (cdf_grid[i] < cdf_grid[i - 1]) cdf_grid[i] = cdf_grid[i - 1];
+    if (cdf_grid[i] > 1.0) cdf_grid[i] = 1.0;
+  }
+
+  // Build Akima spline on either uniform grid or requested times
+  std::vector<double> spline_x;
+  std::vector<double> spline_y;
+  if (R_finite(rt_resolution) && rt_resolution > 0.0) {
+    spline_x = t_grid;
+    spline_y = cdf_grid;
+  } else {
+    spline_x.reserve(static_cast<size_t>(n) + 1);
+    for (int i = 0; i < n; ++i) {
+      const double ti = t[i];
+      if (R_finite(ti) && ti >= 0.0) spline_x.push_back(ti);
+    }
+    std::sort(spline_x.begin(), spline_x.end());
+    spline_x.erase(std::unique(spline_x.begin(), spline_x.end(), [](double a, double b){ return std::abs(a-b) <= 1e-15; }), spline_x.end());
+    spline_y.resize(spline_x.size());
+    for (size_t i = 0; i < spline_x.size(); ++i) {
+      spline_y[i] = linear_interp(t_grid, cdf_grid, spline_x[i]);
+    }
+  }
+
+  bool use_akima = (spline_x.size() >= 5);
+  std::unique_ptr<util::AkimaSpline> cdf_spline;
+  if (use_akima) {
+    try { cdf_spline = std::unique_ptr<util::AkimaSpline>(new util::AkimaSpline(spline_x, spline_y)); }
+    catch (...) { use_akima = false; }
+  }
+  for (int i = 0; i < n; ++i) {
+    const double ti = t[i];
+    if (!R_finite(ti)) { out[i] = NA_REAL; continue; }
+    if (ti <= 0.0) { out[i] = 0.0; continue; }
+    out[i] = use_akima ? cdf_spline->interpolate(ti) : linear_interp(t_grid, cdf_grid, ti);
+  }
+  return out;
+}
+
+// [[Rcpp::export]]
+NumericVector bm_fht_cdf_vec_grid(NumericVector t,
+                                  double mu, double sigma, double z0,
+                                  double b0, double binf, double tau, double pow,
+                                  double steps_fineness, double min_steps,
+                                  double rt_resolution = NA_REAL)
+{
+  const int n = t.size();
+  // Determine horizon and earliest positive request time
+  double t_max = 0.0;
+  double t_min_pos = std::numeric_limits<double>::infinity();
+  bool has_finite = false;
+  for (int i = 0; i < n; ++i) {
+    if (R_finite(t[i])) {
+      if (t[i] > t_max) { t_max = t[i]; has_finite = true; }
+      if (t[i] > 0.0 && t[i] < t_min_pos) t_min_pos = t[i];
+    }
+  }
+  if (!has_finite || t_max <= 0.0 || !(sigma > 0.0)) {
+    NumericVector out(n, NA_REAL);
+    for (int i = 0; i < n; ++i) out[i] = (R_finite(t[i]) && t[i] >= 0.0) ? 0.0 : NA_REAL;
+    return out;
+  }
+
+  int N = calculate_num_steps(t_max, steps_fineness, (int)min_steps);
+  int P = 0;
+  if (R_finite(t_min_pos) && t_min_pos > 0.0) {
+    P = calculate_num_steps(t_min_pos, steps_fineness, (int)min_steps);
+    if (P % 2 != 0) ++P;
+    if (P > N - 2) P = std::max(2, N - 2);
+    if ((N - P) % 2 != 0) { if (P > 2) --P; else ++N; }
+  }
+  const double ratio = 1.0;
+  const double base_panels = static_cast<double>(std::max(2, N - P));
+  const double max_chunks = 2.0;
+
+  return bm_fht_cdf_vec_grid_chunked(t, mu, sigma, z0, b0, binf, tau, pow,
+                                     steps_fineness, min_steps,
+                                     ratio, base_panels, max_chunks,
+                                     rt_resolution);
 }
 
 // [[Rcpp::export]]
@@ -674,6 +1036,101 @@ Rcpp::NumericVector simulate_bm_hit_times(
     if (!hit) {
       T[j] = NA_REAL; // no hit by t_max
     }
+  }
+
+  return T;
+}
+
+// [[Rcpp::export]]
+Rcpp::NumericVector simulate_bm_hit_times_bb(
+    int n,
+    double mu,
+    double sigma,
+    double z0,
+    double b0,
+    double binf,
+    double tau = 1.0,
+    double pow = 1.0,
+    double dt = 1e-3,
+    double t_max = 10.0)
+{
+  if (n <= 0) stop("simulate_bm_hit_times_bb: n must be positive.");
+  if (!R_finite(mu) || !R_finite(sigma) || !R_finite(z0) || !R_finite(b0) || !R_finite(binf) ||
+      !R_finite(tau) || !R_finite(pow) || !R_finite(dt) || !R_finite(t_max)) {
+    stop("simulate_bm_hit_times_bb: parameters must be finite.");
+  }
+  if (sigma <= 0.0 || dt <= 0.0 || t_max <= 0.0) {
+    stop("simulate_bm_hit_times_bb: invalid parameters.");
+  }
+  if (z0 < 0.0) stop("simulate_bm_hit_times_bb: z0 must be >= 0.");
+
+  RD_Params pars = prepare_bm_params(t_max, mu, sigma, z0, b0, binf, tau, pow);
+  const bool use_fixed = pars.fixed_b;
+
+  const int steps = std::max(1, static_cast<int>(std::ceil(t_max / dt)));
+  std::vector<double> B(steps + 1);
+  if (use_fixed) {
+    std::fill(B.begin(), B.end(), b0);
+  } else {
+    for (int k = 0; k <= steps; ++k) {
+      const double t_k = k * dt;
+      B[k] = evaluate_boundary_decay(t_k, pars);
+    }
+  }
+
+  const double sdt = std::sqrt(dt);
+  const double var_step = (sigma * sigma) * dt;
+
+  NumericVector T(n, NA_REAL);
+  for (int j = 0; j < n; ++j) {
+    const double X0 = (z0 > 0.0) ? R::runif(0.0, z0) : 0.0;
+    double X = X0;
+    double t = 0.0;
+    bool hit = false;
+
+    if (std::abs(X - B[0]) <= FPM_EPSILON) { T[j] = 0.0; continue; }
+
+    for (int k = 0; k < steps; ++k) {
+      const double X_prev = X;
+      const double B_prev = B[k];
+      X = X_prev + mu * dt + sigma * sdt * R::rnorm(0.0, 1.0);
+      const double B_next = B[k + 1];
+
+      const double D_prev = X_prev - B_prev;
+      const double D_next = X - B_next;
+
+      // Straddle detection: linear interpolation
+      if ((D_prev <= 0.0 && D_next >= 0.0) || (D_prev >= 0.0 && D_next <= 0.0)) {
+        const double denom = (D_prev - D_next);
+        double alpha = (std::abs(denom) > FPM_EPSILON) ? (D_prev / denom) : 0.5;
+        if (alpha < 0.0) alpha = 0.0;
+        if (alpha > 1.0) alpha = 1.0;
+        T[j] = t + alpha * dt;
+        hit = true;
+        break;
+      }
+
+      // Brownian bridge correction when both endpoints on same side
+      if (D_prev * D_next > 0.0) {
+        const double a = std::abs(D_prev);
+        const double b = std::abs(D_next);
+        const double s2 = std::max(var_step, FPM_EPSILON);
+        const double p_cross = std::exp(-2.0 * (a * b) / s2);
+        if (R::runif(0.0, 1.0) < p_cross) {
+          double alpha = R::rbeta(0.5, 0.5);
+          if (!R_finite(alpha)) alpha = 0.5;
+          if (alpha < 0.0) alpha = 0.0;
+          if (alpha > 1.0) alpha = 1.0;
+          T[j] = t + alpha * dt;
+          hit = true;
+          break;
+        }
+      }
+
+      t += dt;
+    }
+
+    if (!hit) T[j] = NA_REAL;
   }
 
   return T;
