@@ -541,7 +541,11 @@ inline SeedInfo seed_nu_on_nonuniform_grid(const std::vector<double>& grid,
         first_unseeded = std::min(1, N - 1);
     }
     if (first_unseeded % 2 != 0) {
-        ++first_unseeded;
+        if (first_unseeded > 0) {
+            --first_unseeded;
+        } else {
+            first_unseeded = 0;
+        }
     }
     if (first_unseeded >= N) {
         first_unseeded = N - 1;
@@ -549,7 +553,7 @@ inline SeedInfo seed_nu_on_nonuniform_grid(const std::vector<double>& grid,
             --first_unseeded;
         }
     }
-    info.first_unseeded = std::max(0, first_unseeded);
+    info.first_unseeded = std::clamp(first_unseeded, 0, N - 1);
     return info;
 }
 // Quadratic block step on a uniform grid t_j = j*h, j = 0..N, N even
@@ -664,8 +668,13 @@ inline double stieltjes_history_dense_nonuniform(
 {
     const int total_nodes = static_cast<int>(grid.size());
     if (total_nodes < 2) return 0.0;
-    int last_panel = std::min(std::max(cut_index_exclusive - 1, 0), total_nodes - 2);
-    if (last_panel < 0) return 0.0;
+    int last_panel = cut_index_exclusive - 1;
+    if (last_panel > total_nodes - 2) {
+        last_panel = total_nodes - 2;
+    }
+    if (last_panel < 0) {
+        return 0.0;
+    }
 
     double S = 0.0;
     for (int i = 0; i <= last_panel; ++i) {
@@ -854,12 +863,34 @@ inline std::vector<ChunkSpec> build_chunked_theta_layout_with_prelude(
     const double ratio = std::max(1.0, opts.ratio);
     int panels_per_chunk = std::max(4, opts.base_panels);
     if (panels_per_chunk % 2 != 0) ++panels_per_chunk;
-    const int max_chunks = std::max(1, opts.max_chunks);
     const double base_h = (theta_max - theta_min) / static_cast<double>(N_tail);
+
+    int max_chunks = std::max(1, opts.max_chunks);
+    if (ratio > 1.0 && theta_min > 0.0) {
+        const double pre_h = theta_min / static_cast<double>(P);
+        if (pre_h > 0.0 && base_h > pre_h * (1.0 + 1e-12)) {
+            const double growth_needed = base_h / pre_h;
+            const double required = std::log(growth_needed) / std::log(ratio);
+            if (std::isfinite(required)) {
+                const int needed_chunks = static_cast<int>(std::ceil(required)) + 1;
+                max_chunks = std::max(max_chunks, std::min(needed_chunks, 64));
+            }
+        }
+    }
 
     double start = theta_min;
     int start_index = P;
     double current_h = base_h;
+    const double pre_h = (theta_min > 0.0 && P > 0) ? theta_min / static_cast<double>(P) : base_h;
+    if (ratio > 1.0 && max_chunks > 1) {
+        const double scale = std::pow(ratio, max_chunks - 1);
+        if (std::isfinite(scale) && scale > 0.0) {
+            const double candidate_h = base_h / scale;
+            if (candidate_h > 0.0) {
+                current_h = std::max(candidate_h, pre_h);
+            }
+        }
+    }
 
     for (int chunk_id = 0; chunk_id < max_chunks && start < theta_max - 1e-12; ++chunk_id) {
         int panels = panels_per_chunk;
@@ -896,7 +927,7 @@ inline std::vector<ChunkSpec> build_chunked_theta_layout_with_prelude(
 
         start = end;
         start_index += panels;
-        current_h *= ratio;
+        current_h = std::min(current_h * ratio, base_h);
     }
 
     return chunks;
@@ -1022,9 +1053,11 @@ std::vector<double> solve_nu_chunked_with_abel(
             const double G2 = G(t2, pars);
 
             double F1_pred = 0.0;
-            const int local_j0 = j0 - chunk_start;
-            if (local_j0 >= 1) {
-                const double Fmid = (-0.125) * F[j0 - 1] + 0.75 * F[j0] + 0.375 * F[j0 + 1];
+            if (j0 >= 1) {
+                double Fmid = (-0.125) * F[j0 - 1] + 0.75 * F[j0];
+                if (j1 <= last_seeded) {
+                    Fmid += 0.375 * F[j1];
+                }
                 const double den1_pred = 1.0 - g1 * K1_1 - (3.0 / 8.0) * b1 * K1_mid;
                 const double rhs1_pred = G1 + S1 + a1 * K1_0 * F[j0] + b1 * K1_mid * Fmid;
                 F1_pred = rhs1_pred / ((std::abs(den1_pred) < FPM_EPSILON) ? FPM_EPSILON : den1_pred);
