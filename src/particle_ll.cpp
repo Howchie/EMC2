@@ -15,7 +15,6 @@
 #include <unordered_map>
 #include <sstream>
 #include <iomanip>
-#include "bivnorm.h"
 
 
 using namespace Rcpp;

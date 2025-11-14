@@ -18,6 +18,7 @@
 
 using namespace Rcpp;
 
+// TODO merge the pars objects from BM and OU to simplify code
 inline RD_Params prepare_bm_params(double t,
                                    double mu,
                                    double sigma,
@@ -27,21 +28,38 @@ inline RD_Params prepare_bm_params(double t,
                                    double tau,
                                    double pow,
                                    BoundaryDecayFn boundary_fn = BoundaryDecayFn(),
-                                   std::vector<double> boundary_params = {}) {
+                                   std::vector<double> boundary_params = {},
+								   std::string model="BM") {
   if (sigma <= 0.0) {
     stop("prepare_bm_params: sigma must be positive.");
   }
   RD_Params pars{};
+ 
+  pars.model=model;
   pars.b0 = b0;
   pars.binf = binf;
   pars.mu = mu;
   pars.sigma = sigma;
-  pars.z0 = z0;
   pars.tau = tau;
   pars.pow = pow;
-  pars.t_scaled = t;
-  pars.zL_scaled = 0.0/sigma;
-  pars.zU_scaled = z0/sigma;
+  double z_scaled_raw = z0/sigma;
+  double lower_scaled_raw = 0;
+  if (model == "BM") {
+    pars.time_scale = 1;
+    pars.t_scaled = t*pars.time_scale; // redundant but clearer link to GBM
+
+  } else if (model == "GBM") {
+    pars.time_scale = sigma*sigma;
+    pars.t_scaled = t*pars.time_scale;
+    z_scaled_raw = z0/sigma;
+    lower_scaled_raw = 0;
+    pars.zL_scaled = std::log(1e-8);
+    // TODO -- check math, is this the correct transform? I think so...
+    // TODO -- we're gonna start it at z0=1
+    pars.zU_scaled = std::log(std::max(1e-8,z0)); // cannot have an exact zero startpoint in log space
+    
+  }
+
   pars.omega = 1.0;
   if (b0>=FPM_EPSILON) { // Hitting from above
     pars.omega = -1.0;
@@ -52,6 +70,12 @@ inline RD_Params prepare_bm_params(double t,
     pars.pow = 0.0;
   }
   pars.sp_var = (z0 > 0);
+  if (pars.sp_var) {
+        const double lo = std::min(lower_scaled_raw, z_scaled_raw);
+        const double hi = std::max(lower_scaled_raw, z_scaled_raw);
+        pars.zL_scaled = lo;
+        pars.zU_scaled = hi;
+  }
   pars.boundary_params = std::move(boundary_params);
   if (!boundary_fn) {
     boundary_fn = pars.fixed_b ? BoundaryDecayFn(fixed_boundary_decay) : BoundaryDecayFn(default_boundary_decay);
@@ -61,80 +85,125 @@ inline RD_Params prepare_bm_params(double t,
   return pars;
 }
 
-inline double physical_boundary(double t, const RD_Params& pars) {
-  return evaluate_boundary_decay(t, pars);
-}
 
-inline double beta_from_time_raw(double t, const RD_Params& pars) {
-  const double b_t = -pars.omega*physical_boundary(t, pars);
-  const double shifted = b_t - pars.mu * t;
-  return shifted/pars.sigma;
-}
-
-inline double beta_from_time(double t,
-                             const RD_Params& pars,
-                             const BoundaryDecayCache* cache = nullptr) {
-  if (cache && !cache->empty()) {
-    const double cached = cache->lookup(t);
-    if (std::isfinite(cached)) {
-      return cached;
+inline double physical_time_from_scaled(double t_scaled, const RD_Params& pars) {
+    if (pars.model == "BM") {
+        // For BM there is no re-scale
+        return t_scaled;
+    } else if (pars.model=="GBM") {
+        // For GBM: \tilde t = sigma^2 * t_phys  =>  t_phys = \tilde t / sigma^2
+        return t_scaled / (pars.sigma * pars.sigma);
     }
-  }
-  return beta_from_time_raw(t, pars);
+    // TODO might as well add the OU here and re-use this function, can just use theta as we no longer use the backward form (so don't need v)
+    // Default fallback: assume parameters are already in scaled time.
+    return t_scaled;
 }
 
+
+// Evaluate physical boundary b(t_phys) in *physical* time
+inline double physical_boundary(double t_scaled, const RD_Params& pars) {
+    const double t_phys = physical_time_from_scaled(t_scaled, pars);
+    // IMPORTANT: use physical time inside boundary function (we already do this)
+    return evaluate_boundary_decay(t_phys, pars);  // not t_scaled
+}
+
+
+// Return β(t̃): the boundary in Wiener-space in *scaled* time coordinates
+// shifts (to remove drift) and scales to unit drift
+// TODO add spline
+inline double beta_from_time(double t_scaled, const RD_Params &pars,
+                             const BoundaryDecayCache *cache = nullptr,
+                             const util::AkimaSpline* spline = nullptr) {
+  const double t_phys = physical_time_from_scaled(t_scaled, pars);
+
+  if (t_phys <= 0.0) {
+        return 0.0;
+  }
+	if (pars.fixed_b) {
+        return pars.b0;
+    }
+  if (cache) {
+        const double cached = cache->lookup(t_scaled);
+        if (std::isfinite(cached)) {
+            return cached;
+        }
+  }
+	
+	// Try spline if provided
+    if (spline) {
+        const double interp = spline->interpolate(t_scaled);
+        if (std::isfinite(interp)) {
+            return interp;
+        }
+    }
+
+    // Physical boundary value b(t_phys), must be > 0 for GBM branch (log)
+    const double b_phys = physical_boundary(t_scaled, pars);
+    double beta_t;
+    if (pars.model == "BM") {
+        // BM: X_t = μ t + σ W_t  =>  β(t) = (b(t) - μ t) / σ
+        const double shifted = b_phys - pars.mu * t_phys;  // t_phys == t_scaled for BM
+        beta_t = shifted / pars.sigma; // scale back to unit diffusion
+        if (cache) cache->put_beta(t_scaled, beta_t);
+    } else { // "GBM"
+        // GBM: β( t̃ ) = ln b(t_phys) - ( μ - 0.5 σ^2 ) t_phys
+        // NO division by σ here (already unit diffusion after log+shift).
+        // Ensure positivity for log:
+        constexpr double eps = 1e-8;
+        const double b_pos = std::max(b_phys, eps);
+        beta_t =  std::log(b_pos) - pars.mu*t_phys - 0.5 * t_scaled; // already in unit diffusion
+        if (cache) cache->put_beta(t_scaled, beta_t);
+    }
+    
+    return beta_t;
+}
+
+// TODO add spline
 inline double boundary_from_time(double t,
                                  const RD_Params& pars,
                                  const BoundaryDecayCache* cache = nullptr) {
   if (pars.fixed_b) {
     return physical_boundary(t, pars);
   }
-  if (cache && !cache->empty()) {
-    const double beta_t = cache->lookup(t);
-    if (std::isfinite(beta_t)) {
-      return (beta_t * pars.sigma) + pars.mu * t;
-    }
+  if (pars.fixed_b) {
+        return pars.b0;
+  }
+  if (cache) {
+    const double cached = cache->lookup(t);
+    double shifted;
+        if (std::isfinite(cached)) {
+          const double beta = cached;
+            if (pars.model=="BM") {
+              shifted = (beta * pars.sigma) + pars.mu * t;
+            } else if (pars.model=="GBM") {
+              shifted = std::exp(beta + pars.mu*t + 0.5*pars.sigma*pars.sigma);
+            }
+          return shifted;
+      }
   }
   return physical_boundary(t, pars);
 }
 
-inline double beta_prime_from_time(double t,
-                                       const RD_Params& pars,
-                                       const BoundaryDecayCache* cache = nullptr) {
-  if (cache && cache->has_derivatives()) {
-    const double beta_prime = cache->lookup_prime(t);
-    if (std::isfinite(beta_prime)) {
-      return beta_prime;
-    }
-  }
-  const double step = (cache && cache->h > 0.0) ? cache->h : std::max(1e-6, 0.5 * std::max(1e-6, std::abs(t)));
-  const double forward = t + step;
-  const double backward = (t > step) ? (t - step) : 0.0;
-  double beta_prime = std::numeric_limits<double>::quiet_NaN();
-  if (backward <= FPM_EPSILON) {
-    const double beta_t = beta_from_time_raw(t, pars);
-    const double beta_forward = beta_from_time_raw(forward, pars);
-    const double dt = forward - t;
-    beta_prime = (dt > 0.0) ? (beta_forward - beta_t) / dt : 0.0;
-  } else {
-    const double beta_forward = beta_from_time_raw(forward, pars);
-    const double beta_backward = beta_from_time_raw(backward, pars);
-    const double dt = forward - backward;
-    beta_prime = (dt > 0.0) ? (beta_forward - beta_backward) / dt : 0.0;
-  }
-  if (!std::isfinite(beta_prime)) {
-    beta_prime = beta_prime_from_time(std::max(t, 1e-6), pars);
-  }
-  return beta_prime;
-}
 
-inline double boundary_prime_from_time(double t, const RD_Params& pars,
+inline double beta_prime_from_time(double t, const RD_Params &pars,
+                                   const double t_max,
                                        const BoundaryDecayCache* cache = nullptr) {
   if (pars.fixed_b) {
-	return 0.0;
-  }
-  const double beta_prime = beta_prime_from_time(t,pars,cache);
-  return (beta_prime * pars.sigma) + pars.mu;
+        return pars.b_scaled;
+    }
+	
+	// Compute derivative via finite difference
+  double tL = 0.0;
+  double tR = 0.0;
+  if (!make_central_difference_times(t, 0.0, t_max, tL, tR)) {
+        return 0.0;
+    }
+  const double bL = beta_from_time(tL, pars, cache);
+  const double bR = beta_from_time(tR, pars, cache);
+  const double denom = tR - tL;
+	const double beta_prime = (std::abs(denom) > FPM_EPSILON) ? ((bR - bL) / denom) : 0.0;
+  if (cache) cache->put_beta_prime(t, beta_prime);
+  return beta_prime;
 }
 
 
@@ -146,7 +215,7 @@ inline double kernel_bm(double t,
   // omega = sgn(z - b(0)) -> sgn(0 - beta(0))
   const double omega = pars.omega;
     if (dt <= FPM_EPSILON) {
-        const double beta_prime_t = beta_prime_from_time(t, pars);
+        const double beta_prime_t = beta_prime_from_time(t, pars, t);
         return -omega * (beta_prime_t / std::sqrt(2.0 * M_PI));
     }
 
@@ -180,8 +249,8 @@ inline double kernel_bm_backward(double t,      // Current time in the solver gr
         return 0.0;
     }
     
-    const double beta_T_minus_t = beta_from_time_raw(time_T_minus_t, pars);
-    const double beta_T_minus_s = beta_from_time_raw(time_T_minus_s, pars);
+    const double beta_T_minus_t = beta_from_time(time_T_minus_t, pars);
+    const double beta_T_minus_s = beta_from_time(time_T_minus_s, pars);
 
     // Psi(T-t, T-s) = b(T-t) - b(T-s) in the paper's notation
     const double psi = beta_T_minus_t - beta_T_minus_s;
@@ -214,7 +283,7 @@ inline double forcing_bm_uniform(double t,
   if (t <= FPM_EPSILON) {
     return 0.0;                       // limit is zero as t→0
   }
-  const double z_hi = std::max(pars.z0, 0.0);   // assumed uniform on [0, z0]
+  const double z_hi = std::max(pars.zU_scaled, 0.0);   // assumed uniform on [0, z0]
   if (z_hi <= FPM_EPSILON) {
     return forcing_bm_point(t, pars, cache);    // degenerates to point start
   }
@@ -226,8 +295,8 @@ inline double forcing_bm_uniform(double t,
   const double scale = std::sqrt(t);
 
   // G* averaged over z ∈ [0, z0] → σ/z0 × [Φ(upper/√t) − Φ(lower/√t)]
-  const double cdf_upper = normal_cdf(upper / scale);
-  const double cdf_lower = normal_cdf(lower / scale);
+  const double cdf_upper = gaussian_cdf(upper / scale);
+  const double cdf_lower = gaussian_cdf(lower / scale);
   const double averaged = (pars.sigma / z_hi) * (cdf_upper - cdf_lower);
 
   return -averaged;
@@ -238,7 +307,6 @@ inline double forcing_bm(double t,
                                const RD_Params& pars,
                                const BoundaryDecayCache* cache = nullptr) {
   if (!pars.sp_var) {
-    // Point start at z0 = S.zL (optionally: assert S.zL ≈ pars.z0)
     return forcing_bm_point(t, pars, cache);
   } else {
     return forcing_bm_uniform(t, pars, cache);
@@ -263,7 +331,7 @@ inline double abel_approx_bm_backward(double t,
   const double sqrt_t = std::sqrt(std::max(t, 0.0));
   const double arg = drift * sqrt_t;
   const double prefactor = safe_exp(0.5 * drift * drift * t);
-  const double value = 2.0 * prefactor * normal_cdf(arg);
+  const double value = 2.0 * prefactor * gaussian_cdf(arg);
   return std::max(0.0, value);
 }
 
@@ -453,7 +521,7 @@ double calculate_cdf_from_nu_backward(const std::vector<double>& t_grid,
             const double T_minus_s = t - s;
             if (T_minus_s <= FPM_EPSILON) return 0.0;
 
-            const double beta_T_minus_s = beta_from_time_raw(T_minus_s, pars);
+            const double beta_T_minus_s = beta_from_time(T_minus_s, pars);
 
             // The backward CDF integrand (Eq. 12) is exactly twice the forward
             // PDF's image term (Eq. 10). We can reuse the same function.
@@ -508,7 +576,7 @@ double bm_fht_pdf(double t,
   const bool use_cache = !pars.fixed_b || std::abs(pars.mu) > FPM_EPSILON;
   const BoundaryDecayCache* cache_ptr = nullptr;
   if (use_cache) {
-    beta_cache = make_boundary_decay_cache(t, N, pars, beta_from_time_raw);
+    beta_cache = make_boundary_decay_cache(t_grid,pars);
     cache_ptr = &beta_cache;
   }
 
@@ -646,22 +714,6 @@ NumericVector bm_fht_pdf_vec_grid_chunked(NumericVector t,
   BoundaryDecayCache beta_cache;
   BoundaryDecayCache* cache_ptr = nullptr;
   int N = calculate_num_steps(t_max, steps_fineness, (int)min_steps);
-  if (use_cache) {
-    beta_cache = make_boundary_decay_cache(t_max, N, pars, beta_from_time_raw);
-    cache_ptr = &beta_cache;
-  }
-
-  KernelFn kernel_fn = KernelFn([cache_ptr](double tt, double ss, const RD_Params& p) {
-    return kernel_bm(tt, ss, p, cache_ptr);
-  });
-
-  ForcingFn forcing_fn = ForcingFn([cache_ptr](double tt, const RD_Params& p) {
-    return forcing_bm(tt, p, cache_ptr);
-  });
-
-  AbelFn abel_fn = AbelFn([cache_ptr](double tt, const RD_Params &p) {
-    return abel_approx_bm(tt, p, cache_ptr);
-  });
 
   // Chunking configuration (reuse theta helpers for generic t-grid)
   ChunkingOptions chunk_opts;
@@ -677,12 +729,28 @@ NumericVector bm_fht_pdf_vec_grid_chunked(NumericVector t,
 
   std::vector<double> t_grid_block;
   auto t_grid_block_upfront = build_chunked_theta_grid(t_max, N, chunk_opts);
+  beta_cache = make_boundary_decay_cache(t_grid_block_upfront, pars);
+  cache_ptr = &beta_cache;
+
   std::vector<double> beta_grid(t_grid_block_upfront.size());
   for (size_t j = 0; j < beta_grid.size(); ++j) {
     beta_grid[j] = beta_from_time(t_grid_block_upfront[j], pars, cache_ptr);
   }
   util::AkimaSpline beta_spline(t_grid_block_upfront, beta_grid);
-  pars.beta_prime = beta_spline.derivative(t_max);
+
+  KernelFn kernel_fn = KernelFn([cache_ptr](double tt, double ss, const RD_Params& p) {
+    return kernel_bm(tt, ss, p, cache_ptr);
+  });
+
+  ForcingFn forcing_fn = ForcingFn([cache_ptr](double tt, const RD_Params& p) {
+    return forcing_bm(tt, p, cache_ptr);
+  });
+
+  AbelFn abel_fn = AbelFn([cache_ptr](double tt, const RD_Params &p) {
+    return abel_approx_bm(tt, p, cache_ptr);
+  });
+
+  const double beta_prime = beta_spline.derivative(t_max);
 
   auto nu_vals = solve_nu_block_with_abel_chunked(t_max, pars, N, t_grid_block,
                                                   kernel_fn, forcing_fn, abel_fn,
@@ -750,7 +818,7 @@ inline double bm_fht_cdf(double t,
   const bool use_cache = !pars.fixed_b || std::abs(pars.mu) > FPM_EPSILON;
   const BoundaryDecayCache* cache_ptr = nullptr;
   if (use_cache) {
-    beta_cache = make_boundary_decay_cache(t, N, pars, beta_from_time_raw);
+    beta_cache = make_boundary_decay_cache(t_grid, pars);
     cache_ptr = &beta_cache;
   }
 
@@ -1052,7 +1120,11 @@ Rcpp::NumericVector simulate_bm_hit_times_bb(
     double tau = 1.0,
     double pow = 1.0,
     double dt = 1e-3,
-    double t_max = 10.0)
+    double t_max = 10.0,
+    double p_tol = 1e-9,
+    double eps_curv = 0.1,
+    double adapt_factor = 32.0,
+    bool adaptive = true)
 {
   if (n <= 0) stop("simulate_bm_hit_times_bb: n must be positive.");
   if (!R_finite(mu) || !R_finite(sigma) || !R_finite(z0) || !R_finite(b0) || !R_finite(binf) ||
@@ -1066,6 +1138,14 @@ Rcpp::NumericVector simulate_bm_hit_times_bb(
 
   RD_Params pars = prepare_bm_params(t_max, mu, sigma, z0, b0, binf, tau, pow);
   const bool use_fixed = pars.fixed_b;
+
+  if (!(p_tol > 0.0 && p_tol < 1.0) || !R_finite(p_tol)) p_tol = 1e-8;
+  if (!(eps_curv >= 0.0) || !R_finite(eps_curv)) eps_curv = 0.1;
+  if (!(adapt_factor >= 1.0) || !R_finite(adapt_factor)) adapt_factor = 64.0;
+  if (!use_fixed) eps_curv *= 0.5;
+  const double dt_min_floor = 1e-8;
+  const double sigma2 = sigma * sigma;
+  const double log_tol = std::max(std::log(1.0 / p_tol), 1e-12);
 
   const int steps = std::max(1, static_cast<int>(std::ceil(t_max / dt)));
   std::vector<double> B(steps + 1);
@@ -1090,44 +1170,347 @@ Rcpp::NumericVector simulate_bm_hit_times_bb(
 
     if (std::abs(X - B[0]) <= FPM_EPSILON) { T[j] = 0.0; continue; }
 
-    for (int k = 0; k < steps; ++k) {
-      const double X_prev = X;
-      const double B_prev = B[k];
-      X = X_prev + mu * dt + sigma * sdt * R::rnorm(0.0, 1.0);
-      const double B_next = B[k + 1];
+    if (adaptive) {
+      while (t < t_max) {
+        const double Bt = use_fixed ? b0 : evaluate_boundary_decay(t, pars);
+        const double d = std::abs(Bt - X);
+        double dt_max_coarse = std::min(t_max - t, adapt_factor * dt);
+        if (dt_max_coarse <= dt_min_floor) { t = t_max; break; }
 
-      const double D_prev = X_prev - B_prev;
-      const double D_next = X - B_next;
+        const double dt_min_adapt = std::max(dt_min_floor, dt / 32.0);
+        double dt_target = dt_max_coarse;
+        if (d > 0.0) {
+          double dt_prob = (2.0 * d * d) / std::max(sigma2 * log_tol, 1e-12);
+          if (!R_finite(dt_prob) || dt_prob <= 0.0) dt_prob = dt_min_adapt;
+          dt_target = std::min(dt_target, dt_prob);
+        }
+        double dt_step = std::min(std::max(dt_target, dt_min_adapt), dt_max_coarse);
+        double t_next = t + dt_step;
+        double B_next = use_fixed ? b0 : evaluate_boundary_decay(t_next, pars);
 
-      // Straddle detection: linear interpolation
-      if ((D_prev <= 0.0 && D_next >= 0.0) || (D_prev >= 0.0 && D_next <= 0.0)) {
-        const double denom = (D_prev - D_next);
-        double alpha = (std::abs(denom) > FPM_EPSILON) ? (D_prev / denom) : 0.5;
-        if (alpha < 0.0) alpha = 0.0;
-        if (alpha > 1.0) alpha = 1.0;
-        T[j] = t + alpha * dt;
-        hit = true;
-        break;
+        for (int shrink = 0; shrink < 10; ++shrink) {
+          const double tm = 0.5 * (t + t_next);
+          const double Bm = use_fixed ? b0 : evaluate_boundary_decay(tm, pars);
+          const double Llin = 0.5 * (Bt + B_next);
+          const double curv = std::abs(Bm - Llin);
+          const double var_step_adapt = sigma2 * dt_step;
+          const double scale = std::max(d, std::sqrt(std::max(var_step_adapt, 0.0)));
+          if (curv <= eps_curv * scale) break;
+
+          dt_step *= 0.5;
+          if (dt_step <= dt_min_adapt) {
+            dt_step = dt_min_adapt;
+            t_next = t + dt_step;
+            B_next = use_fixed ? b0 : evaluate_boundary_decay(t_next, pars);
+            break;
+          }
+          t_next = t + dt_step;
+          B_next = use_fixed ? b0 : evaluate_boundary_decay(t_next, pars);
+        }
+
+        const double sqrt_dt = std::sqrt(dt_step);
+        const double X_prev = X;
+        X = X_prev + mu * dt_step + sigma * sqrt_dt * R::rnorm(0.0, 1.0);
+
+        const double D_prev = X_prev - Bt;
+        const double D_next = X - B_next;
+
+        if ((D_prev <= 0.0 && D_next >= 0.0) || (D_prev >= 0.0 && D_next <= 0.0)) {
+          const double denom = (D_prev - D_next);
+          double alpha = (std::abs(denom) > FPM_EPSILON) ? (D_prev / denom) : 0.5;
+          if (alpha < 0.0) alpha = 0.0;
+          if (alpha > 1.0) alpha = 1.0;
+          T[j] = t + alpha * dt_step;
+          hit = true;
+          break;
+        }
+
+        if (D_prev * D_next > 0.0) {
+          const double a = std::abs(D_prev);
+          const double b = std::abs(D_next);
+          const double s2 = std::max(sigma2 * dt_step, FPM_EPSILON);
+          const double p_cross = std::exp(-2.0 * (a * b) / s2);
+          if (R::runif(0.0, 1.0) < p_cross) {
+            double alpha = R::rbeta(0.5, 0.5);
+            if (!R_finite(alpha)) alpha = 0.5;
+            if (alpha < 0.0) alpha = 0.0;
+            if (alpha > 1.0) alpha = 1.0;
+            T[j] = t + alpha * dt_step;
+            hit = true;
+            break;
+          }
+        }
+
+        t = t_next;
       }
+    } else {
+      for (int k = 0; k < steps; ++k) {
+        const double X_prev = X;
+        const double B_prev = B[k];
+        X = X_prev + mu * dt + sigma * sdt * R::rnorm(0.0, 1.0);
+        const double B_next = B[k + 1];
 
-      // Brownian bridge correction when both endpoints on same side
-      if (D_prev * D_next > 0.0) {
-        const double a = std::abs(D_prev);
-        const double b = std::abs(D_next);
-        const double s2 = std::max(var_step, FPM_EPSILON);
-        const double p_cross = std::exp(-2.0 * (a * b) / s2);
-        if (R::runif(0.0, 1.0) < p_cross) {
-          double alpha = R::rbeta(0.5, 0.5);
-          if (!R_finite(alpha)) alpha = 0.5;
+        const double D_prev = X_prev - B_prev;
+        const double D_next = X - B_next;
+
+        // Straddle detection: linear interpolation
+        if ((D_prev <= 0.0 && D_next >= 0.0) || (D_prev >= 0.0 && D_next <= 0.0)) {
+          const double denom = (D_prev - D_next);
+          double alpha = (std::abs(denom) > FPM_EPSILON) ? (D_prev / denom) : 0.5;
           if (alpha < 0.0) alpha = 0.0;
           if (alpha > 1.0) alpha = 1.0;
           T[j] = t + alpha * dt;
           hit = true;
           break;
         }
-      }
 
-      t += dt;
+        // Brownian bridge correction when both endpoints on same side
+        if (D_prev * D_next > 0.0) {
+          const double a = std::abs(D_prev);
+          const double b = std::abs(D_next);
+          const double s2 = std::max(var_step, FPM_EPSILON);
+          const double p_cross = std::exp(-2.0 * (a * b) / s2);
+          if (R::runif(0.0, 1.0) < p_cross) {
+            double alpha = R::rbeta(0.5, 0.5);
+            if (!R_finite(alpha)) alpha = 0.5;
+            if (alpha < 0.0) alpha = 0.0;
+            if (alpha > 1.0) alpha = 1.0;
+            T[j] = t + alpha * dt;
+            hit = true;
+            break;
+          }
+        }
+
+        t += dt;
+      }
+    }
+
+    if (!hit) T[j] = NA_REAL;
+  }
+
+  return T;
+}
+
+// [[Rcpp::export]]
+Rcpp::NumericVector simulate_gbm_hit_times_bb(
+    int n,
+    double mu,
+    double sigma,
+    double z0,
+    double b0,
+    double binf,
+    double tau = 1.0,
+    double pow = 1.0,
+    double dt = 1e-3,
+    double t_max = 10.0,
+    double start_floor = 1,
+    double p_tol = 1e-9,
+    double eps_curv = 0.1,
+    double adapt_factor = 32.0,
+    bool adaptive = true)
+{
+  if (n <= 0) stop("simulate_gbm_hit_times_bb: n must be positive.");
+  if (!R_finite(mu) || !R_finite(sigma) || !R_finite(z0) || !R_finite(b0) || !R_finite(binf) ||
+      !R_finite(tau) || !R_finite(pow) || !R_finite(dt) || !R_finite(t_max)) {
+    stop("simulate_gbm_hit_times_bb: parameters must be finite.");
+  }
+  z0 = z0 += start_floor; // ensure positivity
+  if (sigma <= 0.0 || dt <= 0.0 || t_max <= 0.0) {
+    stop("simulate_gbm_hit_times_bb: invalid parameters.");
+  }
+  if (z0 <= 0.0) {
+    stop("simulate_gbm_hit_times_bb: z0 must be > 0 to define the positive initial state.");
+  }
+  if (b0 <= 0.0 || binf <= 0.0) {
+    stop("simulate_gbm_hit_times_bb: boundaries must remain positive for geometric Brownian motion.");
+  }
+  if (!R_finite(start_floor) || start_floor < 0.0) {
+    stop("simulate_gbm_hit_times_bb: start_floor must be non-negative and finite.");
+  }
+  if (start_floor > z0) {
+    stop("simulate_gbm_hit_times_bb: start_floor must be strictly less than z0.");
+  }
+
+  RD_Params pars = prepare_bm_params(t_max, mu, sigma, z0, b0, binf, tau, pow);
+  const bool use_fixed = pars.fixed_b;
+
+  if (!(p_tol > 0.0 && p_tol < 1.0) || !R_finite(p_tol)) p_tol = 1e-8;
+  if (!(eps_curv >= 0.0) || !R_finite(eps_curv)) eps_curv = 0.1;
+  if (!(adapt_factor >= 1.0) || !R_finite(adapt_factor)) adapt_factor = 64.0;
+  if (!use_fixed) eps_curv *= 0.5;
+  const double dt_min_floor = 1e-8;
+
+  const int steps = std::max(1, static_cast<int>(std::ceil(t_max / dt)));
+  std::vector<double> B(steps + 1);
+  if (use_fixed) {
+    std::fill(B.begin(), B.end(), b0);
+  } else {
+    for (int k = 0; k <= steps; ++k) {
+      const double t_k = k * dt;
+      B[k] = evaluate_boundary_decay(t_k, pars);
+    }
+  }
+
+  std::vector<double> logB(steps + 1);
+  for (int k = 0; k <= steps; ++k) {
+    if (!(B[k] > 0.0)) {
+      stop("simulate_gbm_hit_times_bb: boundary trajectory must stay positive.");
+    }
+    logB[k] = std::log(B[k]);
+  }
+
+  const double sdt = std::sqrt(dt);
+  const double sigma2 = sigma * sigma;
+  const double drift_y = mu - 0.5 * sigma2;
+  const double var_step = sigma2 * dt;
+  const double log_tol = std::max(std::log(1.0 / p_tol), 1e-12);
+
+  NumericVector T(n, NA_REAL);
+  for (int j = 0; j < n; ++j) {
+    double X0 = (z0 > start_floor) ? R::runif(start_floor, z0) : start_floor;
+    if (!R_finite(X0) || X0 <= 0.0) {
+      X0 = start_floor;
+    }
+    double Y = std::log(X0);
+    double t = 0.0;
+    bool hit = false;
+
+    if (std::abs(Y - logB[0]) <= FPM_EPSILON) {
+      T[j] = 0.0;
+      continue;
+    }
+
+    if (adaptive) {
+      while (t < t_max) {
+        const double Bt = use_fixed ? b0 : evaluate_boundary_decay(t, pars);
+        if (!(Bt > 0.0)) {
+          stop("simulate_gbm_hit_times_bb: boundary trajectory must stay positive.");
+        }
+        const double logBt = std::log(Bt);
+        const double d = std::abs(logBt - Y);
+        double dt_max_coarse = std::min(t_max - t, adapt_factor * dt);
+        if (dt_max_coarse <= dt_min_floor) { t = t_max; break; }
+
+        const double dt_min_adapt = std::max(dt_min_floor, dt / 32.0);
+        double dt_target = dt_max_coarse;
+        if (d > 0.0) {
+          double dt_prob = (2.0 * d * d) / std::max(sigma2 * log_tol, 1e-12);
+          if (!R_finite(dt_prob) || dt_prob <= 0.0) dt_prob = dt_min_adapt;
+          dt_target = std::min(dt_target, dt_prob);
+        }
+        double dt_step = std::min(std::max(dt_target, dt_min_adapt), dt_max_coarse);
+        double t_next = t + dt_step;
+        double B_next = use_fixed ? b0 : evaluate_boundary_decay(t_next, pars);
+        if (!(B_next > 0.0)) {
+          stop("simulate_gbm_hit_times_bb: boundary trajectory must stay positive.");
+        }
+
+        for (int shrink = 0; shrink < 10; ++shrink) {
+          const double tm = 0.5 * (t + t_next);
+          const double Bm = use_fixed ? b0 : evaluate_boundary_decay(tm, pars);
+          if (!(Bm > 0.0)) {
+            stop("simulate_gbm_hit_times_bb: boundary trajectory must stay positive.");
+          }
+          const double logB_next = std::log(B_next);
+          const double logBm = std::log(Bm);
+          const double Llin = 0.5 * (logBt + logB_next);
+          const double curv = std::abs(logBm - Llin);
+          const double var_step_adapt = sigma2 * dt_step;
+          const double scale = std::max(d, std::sqrt(std::max(var_step_adapt, 0.0)));
+          if (curv <= eps_curv * scale) break;
+
+          dt_step *= 0.5;
+          if (dt_step <= dt_min_adapt) {
+            dt_step = dt_min_adapt;
+            t_next = t + dt_step;
+            B_next = use_fixed ? b0 : evaluate_boundary_decay(t_next, pars);
+            if (!(B_next > 0.0)) {
+              stop("simulate_gbm_hit_times_bb: boundary trajectory must stay positive.");
+            }
+            break;
+          }
+          t_next = t + dt_step;
+          B_next = use_fixed ? b0 : evaluate_boundary_decay(t_next, pars);
+          if (!(B_next > 0.0)) {
+            stop("simulate_gbm_hit_times_bb: boundary trajectory must stay positive.");
+          }
+        }
+
+        const double sqrt_dt = std::sqrt(dt_step);
+        const double Y_prev = Y;
+        Y = Y_prev + drift_y * dt_step + sigma * sqrt_dt * R::rnorm(0.0, 1.0);
+
+        const double logB_next = std::log(B_next);
+        const double D_prev = Y_prev - logBt;
+        const double D_next = Y - logB_next;
+
+        if ((D_prev <= 0.0 && D_next >= 0.0) || (D_prev >= 0.0 && D_next <= 0.0)) {
+          const double denom = (D_prev - D_next);
+          double alpha = (std::abs(denom) > FPM_EPSILON) ? (D_prev / denom) : 0.5;
+          if (alpha < 0.0) alpha = 0.0;
+          if (alpha > 1.0) alpha = 1.0;
+          T[j] = t + alpha * dt_step;
+          hit = true;
+          break;
+        }
+
+        if (D_prev * D_next > 0.0) {
+          const double a = std::abs(D_prev);
+          const double b = std::abs(D_next);
+          const double s2 = std::max(sigma2 * dt_step, FPM_EPSILON);
+          const double p_cross = std::exp(-2.0 * (a * b) / s2);
+          if (R::runif(0.0, 1.0) < p_cross) {
+            double alpha = R::rbeta(0.5, 0.5);
+            if (!R_finite(alpha)) alpha = 0.5;
+            if (alpha < 0.0) alpha = 0.0;
+            if (alpha > 1.0) alpha = 1.0;
+            T[j] = t + alpha * dt_step;
+            hit = true;
+            break;
+          }
+        }
+
+        t = t_next;
+      }
+    } else {
+      for (int k = 0; k < steps; ++k) {
+        const double Y_prev = Y;
+        const double logB_prev = logB[k];
+        const double logB_next = logB[k + 1];
+
+        Y = Y_prev + drift_y * dt + sigma * sdt * R::rnorm(0.0, 1.0);
+
+        const double D_prev = Y_prev - logB_prev;
+        const double D_next = Y - logB_next;
+
+        if ((D_prev <= 0.0 && D_next >= 0.0) || (D_prev >= 0.0 && D_next <= 0.0)) {
+          const double denom = (D_prev - D_next);
+          double alpha = (std::abs(denom) > FPM_EPSILON) ? (D_prev / denom) : 0.5;
+          if (alpha < 0.0) alpha = 0.0;
+          if (alpha > 1.0) alpha = 1.0;
+          T[j] = t + alpha * dt;
+          hit = true;
+          break;
+        }
+
+        if (D_prev * D_next > 0.0) {
+          const double a = std::abs(D_prev);
+          const double b = std::abs(D_next);
+          const double s2 = std::max(var_step, FPM_EPSILON);
+          const double p_cross = std::exp(-2.0 * (a * b) / s2);
+          if (R::runif(0.0, 1.0) < p_cross) {
+            double alpha = R::rbeta(0.5, 0.5);
+            if (!R_finite(alpha)) alpha = 0.5;
+            if (alpha < 0.0) alpha = 0.0;
+            if (alpha > 1.0) alpha = 1.0;
+            T[j] = t + alpha * dt;
+            hit = true;
+            break;
+          }
+        }
+
+        t += dt;
+      }
     }
 
     if (!hit) T[j] = NA_REAL;

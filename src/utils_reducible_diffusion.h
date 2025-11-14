@@ -5,6 +5,7 @@
 #include "utility_functions.h"
 #include <cmath>
 #include <vector>
+#include <map>
 #include <stdexcept>
 #include <numeric>
 #include <algorithm>
@@ -12,6 +13,7 @@
 #include <limits>
 #include <cstddef>
 #include <utility>
+#include <iomanip>
 #include <deque>
 #include <Rcpp.h>
 #include <quadmath.h>
@@ -25,14 +27,324 @@ using KernelFn = std::function<double(double,double,const RD_Params&)>;
 using ForcingFn = std::function<double(double,const RD_Params&)>;
 using AbelFn = std::function<double(double,const RD_Params&)>;
 using BoundaryDecayFn = std::function<double(double, const RD_Params &)>;
+// Threshold for switching to Abel approximation, based on the scaled time.
+// The paper notes solutions are "visually indistinguishable" up to t=0.02.
+const double SMALL_T_SCALED_THRESHOLD = 0.02;
 
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+// Lightweight debug utilities (toggle from R via ou_debug_set)
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+inline bool OU_DEBUG_ENABLED = false;   // header inline => one definition across TU
+inline int  OU_DEBUG_LEVEL   = 1;
+
+// Guarded logging macro
+#define OU_DEBUG_LOG(level, expr) \
+  do { \
+    if (OU_DEBUG_ENABLED && OU_DEBUG_LEVEL >= (level)) { \
+      Rcpp::Rcout << std::setprecision(12) << expr << std::endl; \
+    } \
+  } while(0)
+
+// [[Rcpp::export]]
+void ou_debug_set(bool enabled = true, int level = 1) {
+  OU_DEBUG_ENABLED = enabled;
+  OU_DEBUG_LEVEL   = level;
+  Rcpp::Rcout << "[OU DEBUG] enabled=" << (OU_DEBUG_ENABLED?"true":"false")
+              << ", level=" << OU_DEBUG_LEVEL << std::endl;
+}
 // Prepare and scale parameters for the OU hitting time problem.
 struct RD_Params {
   double b0, t_scaled, zL_scaled, zU_scaled, b_scaled, binf, c, lambda, theta, tau, pow, omega, beta_prime;
-  double mu, sigma, z0, v_max, theta_max;
+  double mu, sigma, v_max, theta_max, time_scale, z0;
   bool fixed_b, sp_var;
+  std::string model;
   BoundaryDecayFn boundary_fn;
   std::vector<double> boundary_params;
+};
+
+struct GompertzParams {
+    double alpha;    // Rate of reversion (like lambda in OU)
+    double beta;     // Volatility term (like sigma in OU)
+    double K;        // Carrying capacity / reversion point
+    double x0;       // Starting point of the process
+    double b_gomp;   // Boundary for the Gompertz process
+};
+
+RD_Params transform_gompertz_to_ou(const GompertzParams& g_params, double t) {
+    RD_Params ou_params{};
+
+    // 1. Time is unchanged by this transformation.
+
+    // 2. Mean-reversion strength (lambda) is directly equivalent to alpha.
+    // The drift term -alpha*Y in the transformed SDE matches -lambda*Y.
+    ou_params.lambda = g_params.alpha;
+
+    // 3. Volatility (sigma) is directly equivalent to beta.
+    // The noise term beta*dW in the transformed SDE matches sigma*dW.
+    ou_params.sigma = g_params.beta;
+
+    // 4. The reversion point (theta) is the most complex. It absorbs
+    // the constant drift terms from Ito's lemma and the original SDE.
+    // The constant drift is: alpha*ln(K) - beta^2/2, which must equal lambda*theta.
+    // theta = (alpha*ln(K) - beta^2/2) / lambda
+    // Since lambda = alpha, this simplifies.
+    ou_params.theta = std::log(g_params.K) - (g_params.beta * g_params.beta) / (2.0 * g_params.alpha);
+
+    // 5. The starting point (z0) and boundary (b0) are log-transformed.
+    ou_params.z0 = std::log(g_params.x0);
+    ou_params.b0 = std::log(g_params.b_gomp);
+
+    return ou_params;
+}
+
+namespace util {
+/**
+ * @class AkimaSpline
+ * @brief Implements the Akima (or "Akima C1") piecewise cubic Hermite interpolator.
+ *
+ * This interpolator is C1 continuous (it has a continuous first derivative).
+ * Its main advantage over a standard cubic spline is that it's "local,"
+ * meaning the polynomial for a given interval is determined only by nearby points,
+ * which prevents the wild oscillations (Runge's phenomenon) that can
+ * plague global interpolators.
+ *
+ * It's particularly good for non-monotonic data or data with
+ * abrupt changes in slope, as it tends to produce a more "natural"
+ * and less "wiggly" fit.
+ */
+class AkimaSpline {
+public:
+    /**
+     * @brief Constructs the Akima spline interpolator.
+     *
+     * The interpolator is built and coefficients are pre-calculated
+     * immediately upon construction.
+     *
+     * @param t The vector of independent variable values (e.g., time).
+     * Must be sorted in ascending order.
+     * @param nu The vector of dependent variable values.
+     * @throws std::runtime_error if t and nu sizes don't match,
+     * if t is not sorted, or if there are fewer than 5 points
+     * (Akima needs at least 5 points to compute its tangents correctly).
+     */
+    AkimaSpline(const std::vector<double>& t, const std::vector<double>& nu) {
+        if (t.size() != nu.size()) {
+            throw std::runtime_error("AkimaSpline: t and nu vectors must have the same size.");
+        }
+        // TODO implement safe fallbacks for <5 points instead of throwing error
+        if (t.size() < 5) {
+            throw std::runtime_error("AkimaSpline: requires at least 5 data points for full algorithm.");
+            // Note: Could implement fallbacks (linear, quadratic) for < 5 points,
+            // but for this solver, it's better to enforce a minimum grid.
+        }
+
+        n_ = t.size();
+        t_ = t;
+        nu_ = nu;
+
+        // Verify that t is sorted
+        for (size_t i = 0; i < n_ - 1; ++i) {
+            if (t_[i] >= t_[i + 1]) {
+                throw std::runtime_error("AkimaSpline: t vector must be strictly increasing.");
+            }
+        }
+
+        // Pre-calculate the derivatives (tangents) at each point `t_i`
+        // This is the core of the Akima algorithm.
+        calculate_tangents();
+    }
+
+    /**
+     * @brief Interpolates the value at a new point t_val.
+     * @param t_val The point at which to interpolate.
+     * @return The interpolated value nu(t_val).
+     */
+    double interpolate(double t_val) const {
+        // Find the correct interval [t_i, t_{i+1}] for t_val
+        // std::upper_bound finds the first element > t_val.
+        // So, `it` points to t_{i+1}, and `i` will be its index.
+        auto it = std::upper_bound(t_.begin(), t_.end(), t_val);
+
+        // Handle edge cases (extrapolation)
+        if (it == t_.begin()) {
+            // t_val is before the first point
+            return nu_.front(); // Clamping
+            // Or could do linear extrapolation:
+            // return nu_[0] + (t_val - t_[0]) * d_[0];
+        }
+        if (it == t_.end()) {
+            // t_val is after the last point
+            return nu_.back(); // Clamping
+            // Or could do linear extrapolation:
+            // return nu_[n_-1] + (t_val - t_[n_-1]) * d_[n_-1];
+        }
+
+        // `it` points to t_[i], so we want the interval [i-1, i]
+        size_t i = std::distance(t_.begin(), it) - 1;
+
+        double h = t_[i + 1] - t_[i];
+        if (h == 0.0) {
+            // Should be caught by the sorted check, but good to have
+            return nu_[i];
+        }
+
+        // Normalize t_val to s in [0, 1]
+        double s = (t_val - t_[i]) / h;
+
+        // Apply the standard C1 Hermite cubic polynomial
+        double s2 = s * s;
+        double s3 = s * s2;
+
+        double h00 = 2 * s3 - 3 * s2 + 1;
+        double h10 = s3 - 2 * s2 + s;
+        double h01 = -2 * s3 + 3 * s2;
+        double h11 = s3 - s2;
+
+        return h00 * nu_[i] + h10 * h * d_[i] + h01 * nu_[i + 1] + h11 * h * d_[i + 1];
+    }
+
+    /**
+     * @brief Computes the first derivative at a new point t_val.
+     * @param t_val The point at which to compute the derivative.
+     * @return The derivative d(nu)/d(t) at t_val.
+     */
+    double derivative(double t_val) const {
+        // Find the correct interval [t_i, t_{i+1}]
+        auto it = std::upper_bound(t_.begin(), t_.end(), t_val);
+
+        // Handle edge cases
+        if (it == t_.begin()) {
+            return d_.front(); // Constant derivative extrapolation
+        }
+        if (it == t_.end()) {
+            return d_.back(); // Constant derivative extrapolation
+        }
+
+        size_t i = std::distance(t_.begin(), it) - 1;
+
+        double h = t_[i + 1] - t_[i];
+        if (h == 0.0) {
+            // This case is tricky. The derivative is technically infinite
+            // or undefined. We can return the average of the tangents
+            // or just the left tangent.
+            return d_[i];
+        }
+
+        // Normalize t_val to s in [0, 1]
+        double s = (t_val - t_[i]) / h;
+
+        // We need the derivative of the Hermite polynomial *with respect to t_val*.
+        double s2 = s * s;
+
+        double dh00_ds = 6 * s2 - 6 * s;
+        double dh10_ds = 3 * s2 - 4 * s + 1;
+        double dh01_ds = -6 * s2 + 6 * s;
+        double dh11_ds = 3 * s2 - 2 * s;
+
+        double dp_ds = dh00_ds * nu_[i] + dh10_ds * h * d_[i] +
+                       dh01_ds * nu_[i + 1] + dh11_ds * h * d_[i + 1];
+
+        return dp_ds / h;
+    }
+
+
+private:
+    size_t n_;
+    std::vector<double> t_;   // x-values
+    std::vector<double> nu_;  // y-values
+    std::vector<double> d_;   // derivatives (tangents) at each point
+
+    /**
+     * @brief Pre-calculates the tangents (derivatives) at each data point.
+     *
+     * This is the core logic of the Akima spline. It uses a weighted
+     * average of slopes from adjacent intervals to find a "natural"
+     * looking tangent, avoiding the oscillations of standard splines.
+     */
+    void calculate_tangents() {
+        d_.resize(n_);
+        std::vector<double> m(n_ - 1); // Slopes of intervals [t_i, t_{i+1}]
+
+        // 1. Calculate the slopes of the n-1 intervals
+        for (size_t i = 0; i < n_ - 1; ++i) {
+            m[i] = (nu_[i + 1] - nu_[i]) / (t_[i + 1] - t_[i]);
+        }
+
+        // 2. We need "ghost" slopes at the ends to handle boundaries.
+        // We add two on each side: m[-2], m[-1], m[0], ..., m[n-2], m[n-1], m[n]
+        // (total n+3 slopes for n points)
+        // m[-1] = 2*m[0] - m[1]
+        // m[-2] = 2*m[-1] - m[0] = 3*m[0] - 2*m[1]
+        // m[n-1] = 2*m[n-2] - m[n-3]
+        // m[n] = 2*m[n-1] - m[n-2] = 3*m[n-2] - 2*m[n-3]
+        
+        std::vector<double> m_ext(n_ + 3);
+        for (size_t i = 0; i < n_ - 1; ++i) {
+            m_ext[i + 2] = m[i];
+        }
+
+        m_ext[1] = 2.0 * m_ext[2] - m_ext[3];
+        m_ext[0] = 2.0 * m_ext[1] - m_ext[2];
+        m_ext[n_ + 1] = 2.0 * m_ext[n_] - m_ext[n_ - 1];
+        m_ext[n_ + 2] = 2.0 * m_ext[n_ + 1] - m_ext[n_];
+
+
+        // 3. Calculate the weighted average for the tangents
+        for (size_t i = 0; i < n_; ++i) {
+            // We need slopes from m_ext[i], m_ext[i+1], m_ext[i+2], m_ext[i+3]
+            // which correspond to original slopes m[i-2], m[i-1], m[i], m[i+1]
+            
+            // Get weights w1 = |m_{i+1} - m_i| and w2 = |m_{i-1} - m_{i-2}|
+            // (using the extended m_ext indices)
+            double w1 = std::abs(m_ext[i + 3] - m_ext[i + 2]);
+            double w2 = std::abs(m_ext[i + 1] - m_ext[i]);
+
+            if (w1 + w2 == 0.0) {
+                // Special case: all four slopes are equal (linear segment)
+                // or w1=0 and w2=0 (e.g. at a local extremum)
+                // Use the average of the two middle slopes.
+                d_[i] = (m_ext[i + 1] + m_ext[i + 2]) / 2.0;
+            } else {
+                // Standard weighted average
+                // d_i = (w1 * m_{i-1} + w2 * m_i) / (w1 + w2)
+                d_[i] = (w1 * m_ext[i + 1] + w2 * m_ext[i + 2]) / (w1 + w2);
+            }
+        }
+    }
+};
+} // namespace util
+
+
+// Re-worked to use maps to allow arbitrary additions to the cache
+struct BoundaryDecayCache {
+    mutable std::map<double, double> beta_map;
+    mutable std::map<double, double> beta_prime_map;
+
+    bool empty() const {
+        return beta_map.empty();
+    }
+
+    bool has_derivatives() const {
+        return !beta_prime_map.empty();
+    }
+
+	double lookup(double theta) const {
+        auto it = beta_map.find(theta);
+        return (it != beta_map.end()) ? it->second : std::numeric_limits<double>::quiet_NaN();
+    }
+ 
+	double lookup_prime(double theta) const {
+        auto it = beta_prime_map.find(theta);
+        return (it != beta_prime_map.end()) ? it->second : std::numeric_limits<double>::quiet_NaN();
+    }
+	
+	void put_beta(double theta, double value) const {
+        beta_map.emplace(theta, value);
+    }
+
+    void put_beta_prime(double theta, double value) const {
+        beta_prime_map.emplace(theta, value);
+    }
 };
 
 inline double default_boundary_decay(double t, const RD_Params& pars) {
@@ -53,70 +365,261 @@ inline double evaluate_boundary_decay(double t, const RD_Params& pars) {
   return default_boundary_decay(t, pars);
 }
 
-// Threshold for switching to Abel approximation, based on the scaled time.
-// The paper notes solutions are "visually indistinguishable" up to t=0.02.
-const double SMALL_T_SCALED_THRESHOLD = 0.02;
-const double FPM_EPSILON = 1e-12;
+double theta_to_t(double theta) {
+    if (theta <= -1.0) return std::numeric_limits<double>::infinity();
+    return std::log1p(theta);
+}
 
-struct BoundaryDecayCache {
-    double h = 0.0;
-    double inv_h = 0.0;
-    double tol = 0.0;
-    std::vector<double> beta_nodes;
-    std::vector<double> beta_midpoints;
-    std::vector<double> beta_prime_nodes;
-    std::vector<double> beta_prime_midpoints;
+double v_to_t(double v) {
+    if (v >= 1.0) return std::numeric_limits<double>::infinity();
+    return -std::log(1.0 - v);
+}
 
-    bool empty() const {
-        return beta_nodes.empty() && beta_midpoints.empty();
+inline double beta_from_v(double v, const RD_Params& pars, const BoundaryDecayCache* cache = nullptr) {
+    const double scale = std::max(0.0, 1.0 - v);
+    if (scale <= 0.0) {
+        return 0.0;
     }
-
-    bool has_derivatives() const {
-        return !beta_prime_nodes.empty() || !beta_prime_midpoints.empty();
+    if (pars.fixed_b) {
+        return scale * pars.b_scaled;
     }
+    if (cache && !cache->empty()) {
+        const double cached = cache->lookup(v);
+        if (std::isfinite(cached)) {
+            return cached;
+        }
+    }
+    const double t = v_to_t(v) / pars.lambda;
+    const double t_max = pars.t_scaled / pars.lambda;
+    const double bt = -pars.omega*evaluate_boundary_decay(t_max - t, pars);
+    const double bt_scaled =  (pars.c * (bt - pars.theta));
+    const double beta = scale * bt_scaled;
+	if (cache) cache->put_beta(v, beta);
+    return beta;
+}
 
-    double lookup(double v) const {
-        if (inv_h <= 0.0) {
-            return std::numeric_limits<double>::quiet_NaN();
+inline double beta_from_theta(double theta, const RD_Params& pars, const BoundaryDecayCache* cache = nullptr,const util::AkimaSpline* spline = nullptr) {
+    const double scale = std::max(0.0, 1.0 + theta);
+    if (theta <= 0.0) {
+        return 0.0;
+    }
+	if (pars.fixed_b) {
+        return scale * pars.b_scaled;
+    }
+    if (cache) {
+        const double cached = cache->lookup(theta);
+        if (std::isfinite(cached)) {
+            return cached;
         }
-        const double scaled = v * inv_h;
-        const double idx = std::round(scaled);
-        if (!beta_nodes.empty() && std::abs(scaled - idx) <= tol) {
-            const double idx_clamped = std::clamp(idx, 0.0, static_cast<double>(beta_nodes.size() - 1));
-            return beta_nodes[static_cast<std::size_t>(idx_clamped)];
+    }
+	
+	// Try spline if provided
+    if (spline) {
+        const double interp = spline->interpolate(theta);
+        if (std::isfinite(interp)) {
+            return interp;
         }
-        if (!beta_midpoints.empty()) {
-            const double base = std::floor(scaled);
-            const double mid_center = base + 0.5;
-            if (std::abs(scaled - mid_center) <= tol) {
-                const double mid_idx = std::clamp(base, 0.0, static_cast<double>(beta_midpoints.size() - 1));
-                return beta_midpoints[static_cast<std::size_t>(mid_idx)];
-            }
+	}
+
+	// If not cached and no spline is built, compute the value
+    const double t = theta_to_t(theta) / pars.lambda;
+    const double bt = -pars.omega * evaluate_boundary_decay(t, pars); // always use a positive boundary to compute decay for convenience. Omega is negative when hitting from above, and we always initialise at z=0 therefore we can be confident in the sign of the raw boundary aligning here
+    const double bt_scaled = pars.c * (bt - pars.theta);
+	const double beta = scale * bt_scaled;
+	if (cache) cache->put_beta(theta, beta);
+    return beta;
+}
+
+// Utility: build a central-difference stencil around theta while respecting bounds.
+inline bool make_central_difference_times(double theta,
+                                          double lower_bound,
+                                          double upper_bound,
+                                          double& tL,
+                                          double& tR) {
+    const double rel_scale = 1.0 + std::abs(theta);
+    double step = 1e-4 * rel_scale;
+    if (step > 1e-3) step = 1e-3;
+    if (step < 1e-7) step = 1e-7;
+
+    tL = theta - step;
+    tR = theta + step;
+    if (tL < lower_bound) {
+        tL = lower_bound;
+        tR = std::min(upper_bound, tL + 2.0 * step);
+    }
+    if (tR > upper_bound) {
+        tR = upper_bound;
+        tL = std::max(lower_bound, tR - 2.0 * step);
+    }
+    return tR > tL;
+}
+
+// Utility: compute beta'(theta) at a single point using a robust central difference.
+inline double beta_prime_at_theta(double theta, const RD_Params& pars, double theta_max, const BoundaryDecayCache* cache = nullptr) {
+    if (pars.fixed_b) {
+        return pars.b_scaled;
+    }
+	if (cache) {
+        const double cached = cache->lookup_prime(theta);
+        if (std::isfinite(cached)) {
+            return cached;
         }
+    }
+	// Compute derivative via finite difference
+    double tL = 0.0;
+    double tR = 0.0;
+    if (!make_central_difference_times(theta, 0.0, theta_max, tL, tR)) {
+        return 0.0;
+    }
+    const double bL = beta_from_theta(tL, pars, cache);
+    const double bR = beta_from_theta(tR, pars, cache);
+    const double denom = tR - tL;
+	const double beta_prime = (std::abs(denom) > FPM_EPSILON) ? ((bR - bL) / denom) : 0.0;
+    if (cache) cache->put_beta_prime(theta, beta_prime);
+    return beta_prime;
+}
+
+inline BoundaryDecayCache make_boundary_decay_cache(const std::vector<double>& theta_vals,
+                                                    const RD_Params& pars) {
+    BoundaryDecayCache cache;
+    if (pars.fixed_b || theta_vals.empty()) {
+        return cache;
+    }
+    const double theta_max = *std::max_element(theta_vals.begin(), theta_vals.end());
+    for (double theta : theta_vals) {
+        (void)beta_from_theta(theta, pars, &cache);
+        (void)beta_prime_at_theta(theta, pars, theta_max, &cache);
+    }
+    return cache;
+}
+
+double local_quad_derivative(const std::vector<double>& x,
+                                  const std::vector<double>& y,
+                                  int j,
+                                  double eval_point) {
+    const int n = static_cast<int>(x.size());
+    if (n < 3) return 0.0;
+    int c = std::max(2, std::min(j, n - 1)); // ensure we can pick (a,b,c)
+    int b = c - 1;
+    int a = c - 2;
+    const double x0 = x[a], x1 = x[b], x2 = x[c];
+    const double y0 = y[a], y1 = y[b], y2 = y[c];
+    const double f01  = (y1 - y0) / (x1 - x0);
+    const double f12  = (y2 - y1) / (x2 - x1);
+    const double f012 = (f12 - f01) / (x2 - x0);
+    return f01 + f012 * ((eval_point - x1) + (eval_point - x0));
+}
+
+namespace util {
+
+/**
+ * @brief Computes the derivative at a point using a Savitzky-Golay filter.
+ *
+ * This method fits a polynomial of a given order to a window of data points
+ * surrounding the target point using least-squares. The derivative of that
+ * fitted polynomial at the target point is returned. This is robust to noise.
+ * This implementation is for non-uniformly spaced data.
+ *
+ * @param x The vector of independent variable values (must be sorted).
+ * @param y The vector of dependent variable values.
+ * @param index The index of the point at which to compute the derivative.
+ * @param window_size The number of points in the fitting window (must be odd, e.g., 5, 7).
+ * @param poly_order The order of the polynomial to fit (e.g., 2 for quadratic).
+ * @return The estimated derivative at x[index].
+ */
+double savitzky_golay_derivative(const std::vector<double>& x,
+                                 const std::vector<double>& y,
+                                 int index,
+                                 double eval_point,
+                                 int window_size,
+                                 int poly_order)
+{
+    // Validation and basic setup
+    const int n = static_cast<int>(x.size());
+    if (n == 0 || y.size() != x.size()) return std::numeric_limits<double>::quiet_NaN();
+
+    // Require odd window; clamp to available data if needed
+    if (window_size < 3) window_size = 3;
+    if ((window_size & 1) == 0) ++window_size; // make odd
+    if (window_size > n) window_size = (n % 2 == 0 ? n - 1 : n);
+
+    if (poly_order != 2 || poly_order >= window_size) {
+        // Only quadratic supported for now
         return std::numeric_limits<double>::quiet_NaN();
     }
 
-    double lookup_prime(double v) const {
-        if (!has_derivatives() || inv_h <= 0.0) {
-            return std::numeric_limits<double>::quiet_NaN();
-        }
-        const double scaled = v * inv_h;
-        const double idx = std::round(scaled);
-        if (!beta_prime_nodes.empty() && std::abs(scaled - idx) <= tol) {
-            const double idx_clamped = std::clamp(idx, 0.0, static_cast<double>(beta_prime_nodes.size() - 1));
-            return beta_prime_nodes[static_cast<std::size_t>(idx_clamped)];
-        }
-        if (!beta_prime_midpoints.empty()) {
-            const double base = std::floor(scaled);
-            const double mid_center = base + 0.5;
-            if (std::abs(scaled - mid_center) <= tol) {
-                const double mid_idx = std::clamp(base, 0.0, static_cast<double>(beta_prime_midpoints.size() - 1));
-                return beta_prime_midpoints[static_cast<std::size_t>(mid_idx)];
-            }
-        }
-        return std::numeric_limits<double>::quiet_NaN();
+    const int half_window = window_size / 2;
+    // Prefer the window centered around the actual evaluation location.
+    int k = 0;
+    {
+        // k = index of the last x <= eval_point (clamped)
+        auto it = std::upper_bound(x.begin(), x.end(), eval_point);
+        k = static_cast<int>(std::distance(x.begin(), (it == x.begin() ? it : std::prev(it))));
+        if (k < 0) k = 0;
+        if (k > n - 1) k = n - 1;
     }
-};
+
+    // Near-boundary: fall back to a local 3-point derivative centered near eval_point.
+    if (k < half_window || k > n - 1 - half_window) {
+        if (n >= 3) {
+            return local_quad_derivative(x, y, k, eval_point);
+        }
+        if (n > 1) {
+            // fall back to one-sided difference around the nearest available segment
+            if (k == 0) return (y[1] - y[0]) / (x[1] - x[0]);
+            return (y[n - 1] - y[n - 2]) / (x[n - 1] - x[n - 2]);
+        }
+        return 0.0;
+    }
+
+    // Choose a contiguous window that slides to the boundary when needed.
+    // This ensures a proper right/left-sided fit near the ends.
+    int start = k - half_window;
+    int end = k + half_window;
+    if (start < 0) { end -= start; start = 0; }
+    if (end > n - 1) { start -= (end - (n - 1)); end = n - 1; }
+    if (start < 0) start = 0; // final clamp
+
+    // Center the polynomial at the actual evaluation point to avoid bias
+    const double x_center = eval_point;
+
+    // Build normal equations for quadratic LS fit: y ~= c0 + c1*(x-xc) + c2*(x-xc)^2
+    double S0=0.0, S1=0.0, S2=0.0, S3=0.0, S4=0.0;
+    double T0=0.0, T1=0.0, T2=0.0;
+    for (int i = start; i <= end; ++i) {
+        const double dx = x[i] - x_center;
+        const double yi = y[i];
+        const double dx2 = dx * dx;
+        const double dx3 = dx2 * dx;
+        const double dx4 = dx2 * dx2;
+
+        S0 += 1.0;
+        S1 += dx;
+        S2 += dx2;
+        S3 += dx3;
+        S4 += dx4;
+
+        T0 += yi;
+        T1 += yi * dx;
+        T2 += yi * dx2;
+    }
+
+    // Solve 3x3 via Cramer's rule. If ill-conditioned, fall back to local quadratic.
+    const double det = S0*(S2*S4 - S3*S3) - S1*(S1*S4 - S2*S3) + S2*(S1*S3 - S2*S2);
+    if (!std::isfinite(det) || std::abs(det) < 1e-15) {
+        // Use a simple 3-point quadratic derivative around the nearest triple
+        return local_quad_derivative(x, y, k, eval_point);
+    }
+    const double inv_det = 1.0 / det;
+
+    // derivative at eval_point is c1 when centered at x_center = eval_point
+    const double det1 = S0*(T1*S4 - S3*T2) - T0*(S1*S4 - S2*S3) + S2*(S1*T2 - S2*T1);
+    const double c1 = det1 * inv_det;
+
+    return c1;
+}
+
+}; // namespace util
 
 // Right-end quadratic fit (last 3 points) => nu'(tau), nu''(tau), and nu(mid) via Newton form
 struct RightQuad {
@@ -150,23 +653,6 @@ RightQuad right_end_quadratic(const std::vector<double>& x,
     return out;
 }
 
-double local_quad_derivative(const std::vector<double>& x,
-                                  const std::vector<double>& y,
-                                  int j,
-                                  double eval_point) {
-    const int n = static_cast<int>(x.size());
-    if (n < 3) return 0.0;
-    int c = std::max(2, std::min(j, n - 1)); // ensure we can pick (a,b,c)
-    int b = c - 1;
-    int a = c - 2;
-    const double x0 = x[a], x1 = x[b], x2 = x[c];
-    const double y0 = y[a], y1 = y[b], y2 = y[c];
-    const double f01  = (y1 - y0) / (x1 - x0);
-    const double f12  = (y2 - y1) / (x2 - x1);
-    const double f012 = (f12 - f01) / (x2 - x0);
-    return f01 + f012 * ((eval_point - x1) + (eval_point - x0));
-}
-
 double quad_interp(
     const std::vector<double>& grid,
     const std::vector<double>& nu,
@@ -195,52 +681,7 @@ double quad_interp(
     return ya * Lab * Lac + yb * Lba * Lbc + yc * Lca * Lcb;
 }
 
-inline BoundaryDecayCache make_boundary_decay_cache(double t_max, int num_steps, const RD_Params& pars,
-                                                    const BoundaryDecayFn& transform) {
-    BoundaryDecayCache cache;
-    if (pars.fixed_b || num_steps <= 0 || t_max <= 0.0 || !transform) {
-        return cache;
-    }
-    const double h = t_max / num_steps;
-    if (h <= 0.0) {
-        return cache;
-    }
-    cache.h = h;
-    cache.inv_h = 1.0 / h;
-    cache.tol = std::max(1e-10, 32.0 * std::numeric_limits<double>::epsilon() *
-                                     std::max(1.0, static_cast<double>(num_steps)));
-    cache.beta_nodes.resize(num_steps + 1);
-    for (int k = 0; k <= num_steps; ++k) {
-        const double t_k = h * k;
-        cache.beta_nodes[k] = transform(t_k, pars);
-    }
-    cache.beta_midpoints.resize(num_steps);
-    for (int k = 0; k < num_steps; ++k) {
-        const double t_mid = h * (k + 0.5);
-        cache.beta_midpoints[k] = transform(t_mid, pars);
-    }
 
-    cache.beta_prime_nodes.assign(num_steps + 1, 0.0);
-    if (num_steps == 1) {
-        const double slope = (cache.beta_nodes[1] - cache.beta_nodes[0]) / h;
-        cache.beta_prime_nodes[0] = slope;
-        cache.beta_prime_nodes[1] = slope;
-    } else if (num_steps >= 2) {
-        const double inv_two_h = 1.0 / (2.0 * h);
-        cache.beta_prime_nodes[0] = (-3.0 * cache.beta_nodes[0] + 4.0 * cache.beta_nodes[1] - cache.beta_nodes[2]) * inv_two_h;
-        for (int k = 1; k < num_steps; ++k) {
-            cache.beta_prime_nodes[k] = (cache.beta_nodes[k + 1] - cache.beta_nodes[k - 1]) * inv_two_h;
-        }
-        cache.beta_prime_nodes[num_steps] = (3.0 * cache.beta_nodes[num_steps] - 4.0 * cache.beta_nodes[num_steps - 1] + cache.beta_nodes[num_steps - 2]) * inv_two_h;
-    }
-
-    cache.beta_prime_midpoints.resize(num_steps);
-    for (int k = 0; k < num_steps; ++k) {
-        cache.beta_prime_midpoints[k] = (cache.beta_nodes[k + 1] - cache.beta_nodes[k]) / h;
-    }
-
-    return cache;
-}
 
 // Indefinite integral of P(s)/sqrt(A-s) ds, where P(s) is a quadratic.
 // P(s) = c2*s^2 + c1*s + c0
@@ -483,6 +924,7 @@ int seed_nu_on_grid(
 {
     const int N = static_cast<int>(grid.size());
     int J = 0;
+    OU_DEBUG_LOG(2, "seed_nu_on_grid: N=" << N << ", t_cut=" << t_cut);
     for (; J < N; ++J) {
         const double v = grid[J];
         if (v > t_cut) break;
@@ -496,6 +938,9 @@ int seed_nu_on_grid(
 
     if (J < 1) J = 1;
     if (J & 1) --J;
+    OU_DEBUG_LOG(2, "seed_nu_on_grid: seeded up to index=" << (J-1)
+                    << ", first_unseeded_index=" << J
+                    << ", last_seed_val_at=" << (J>0? grid[J-1] : grid[0]));
     return J;
 }
 
@@ -518,6 +963,7 @@ inline SeedInfo seed_nu_on_nonuniform_grid(const std::vector<double>& grid,
     }
 
     int last = -1;
+    OU_DEBUG_LOG(2, "seed_nu_on_nonuniform_grid: N=" << N << ", t_cut=" << t_cut);
     for (int j = 0; j < N; ++j) {
         const double t = grid[j];
         if (t > t_cut) break;
@@ -541,7 +987,11 @@ inline SeedInfo seed_nu_on_nonuniform_grid(const std::vector<double>& grid,
         first_unseeded = std::min(1, N - 1);
     }
     if (first_unseeded % 2 != 0) {
-        ++first_unseeded;
+        if (first_unseeded > 0) {
+            --first_unseeded;
+        } else {
+            first_unseeded = 0;
+        }
     }
     if (first_unseeded >= N) {
         first_unseeded = N - 1;
@@ -549,7 +999,10 @@ inline SeedInfo seed_nu_on_nonuniform_grid(const std::vector<double>& grid,
             --first_unseeded;
         }
     }
-    info.first_unseeded = std::max(0, first_unseeded);
+    info.first_unseeded = std::clamp(first_unseeded, 0, N - 1);
+    OU_DEBUG_LOG(2, "seed_nu_on_nonuniform_grid: last_seeded_index=" << info.last_seeded
+                    << ", first_unseeded_index=" << info.first_unseeded
+                    << ", last_seed_val_at=" << (info.last_seeded>=0? grid[info.last_seeded] : 0.0));
     return info;
 }
 // Quadratic block step on a uniform grid t_j = j*h, j = 0..N, N even
@@ -567,6 +1020,9 @@ std::vector<double> solve_nu_block_by_block_impl(
     if (num_steps % 2) ++num_steps;
     const int N = num_steps;
     const double h = t_max / N;
+    OU_DEBUG_LOG(1, "solve_nu_block_by_block_impl: t_max=" << t_max
+                    << ", N=" << N << ", h=" << h
+                    << ", k0_seeded=" << k0_seeded);
 
     grid.resize(N + 1);
     for (int i = 0; i <= N; ++i) {
@@ -647,6 +1103,11 @@ std::vector<double> solve_nu_block_by_block_impl(
         const double blend = 1.0;
         F[j1] = blend * F1_corr + (1.0 - blend) * F1_pred;
         F[j2] = blend * F2_corr + (1.0 - blend) * F2_pred;
+        OU_DEBUG_LOG(5, "block m=" << m
+                        << ", t0=" << t0 << ", t1=" << t1 << ", t2=" << t2
+                        << ", S1=" << S1 << ", S2=" << S2
+                        << ", F1_pred=" << F1_pred << ", F2_pred=" << F2_pred
+                        << ", F1_corr=" << F[j1] << ", F2_corr=" << F[j2]);
     }
     return F;
 }
@@ -655,7 +1116,8 @@ std::vector<double> solve_nu_block_by_block_impl(
 // native panels strictly before tn, up to (but excluding) panel index cut_index.
 // This restores the exact O(N^2) history on a non-uniform grid.
 inline double stieltjes_history_dense_nonuniform(
-    int cut_index_exclusive,
+    int cut_index_exclusive,      // panels strictly before this node
+    int max_known_index,          // last index i such that F[i] is known
     double tn,
     const std::vector<double>& grid,
     const std::vector<double>& F,
@@ -664,17 +1126,56 @@ inline double stieltjes_history_dense_nonuniform(
 {
     const int total_nodes = static_cast<int>(grid.size());
     if (total_nodes < 2) return 0.0;
-    int last_panel = std::min(std::max(cut_index_exclusive - 1, 0), total_nodes - 2);
-    if (last_panel < 0) return 0.0;
+
+    int last_panel = cut_index_exclusive - 1;
+    if (last_panel > total_nodes - 2) {
+        last_panel = total_nodes - 2;
+    }
+    if (last_panel < 0) {
+        return 0.0;
+    }
 
     double S = 0.0;
     for (int i = 0; i <= last_panel; ++i) {
-        // Panels are strictly before tn
-        if (grid[i + 1] >= tn - FPM_EPSILON) break;
-        QuadraticPanel p = panel_from_indices(i, i + 1, grid, F);
-        if (p.b <= p.a) continue;
-        S += stieltjes_panel_quadratic(p, tn, pars, K);
+        const double a = grid[i];
+        const double b = grid[i + 1];
+        if (b >= tn - FPM_EPSILON) break;
+
+        const double Fa = F[i];
+        const double Fb = F[i + 1];
+
+        bool have_mid = false;
+        double Fm = 0.5 * (Fa + Fb);
+
+        // Interior panel midpoint uses (i-1, i, i+1) if all known
+        if (i > 0 && (i + 1) <= max_known_index) {
+            Fm = (-0.125) * F[i - 1] + 0.75 * F[i] + 0.375 * F[i + 1];
+            have_mid = true;
+        }
+        // First panel midpoint uses (0,1,2) if all known
+        else if (i == 0 && (i + 2) <= max_known_index) {
+            Fm = 0.375 * F[i] + 0.75 * F[i + 1] - 0.125 * F[i + 2];
+            have_mid = true;
+        }
+
+        const Panel P{a, 0.5 * (a + b), b, b - a};
+        const StieltjesMoments M = stieltjes_moments(tn, P.a, P.b);
+
+        if (have_mid) {
+            const LagrangeWeights W = stieltjes_lagrange_weights(P, M);
+            const double Qa = K(tn, a, pars) * Fa;
+            const double Qm = K(tn, P.mid, pars) * Fm;
+            const double Qb = K(tn, b, pars) * Fb;
+            S += W.w0 * Qa + W.w1 * Qm + W.w2 * Qb;
+        } else {
+            // Fallback to endpoint-only rule if midpoint would peek forward
+            const double Wa = (P.b * M.J0 - M.J1) / P.d;
+            const double Wb = (M.J1 - P.a * M.J0) / P.d;
+            S += Wa * (K(tn, a, pars) * Fa) + Wb * (K(tn, b, pars) * Fb);
+        }
     }
+    OU_DEBUG_LOG(6, "stieltjes_history_dense_nonuniform: tn=" << tn
+                    << ", last_panel=" << last_panel << ", S=" << S);
     return S;
 }
 
@@ -695,6 +1196,9 @@ std::vector<double> solve_nu_block_with_abel(
     }
 
     const int k0 = seed_nu_on_grid(grid, pars, F, abel, t_cut);
+    OU_DEBUG_LOG(1, "solve_nu_block_with_abel: t_max=" << t_max
+                    << ", num_steps=" << num_steps
+                    << ", seeded_up_to_index=" << k0);
     return solve_nu_block_by_block_impl(t_max, pars, num_steps, grid, F, k0, K, G);
 }
 
@@ -854,13 +1358,34 @@ inline std::vector<ChunkSpec> build_chunked_theta_layout_with_prelude(
     const double ratio = std::max(1.0, opts.ratio);
     int panels_per_chunk = std::max(4, opts.base_panels);
     if (panels_per_chunk % 2 != 0) ++panels_per_chunk;
-    const int max_chunks = std::max(1, opts.max_chunks);
+    int max_chunks = std::max(1, opts.max_chunks);
     const double base_h = (theta_max - theta_min) / static_cast<double>(N_tail);
-
+    if (ratio > 1.0 && theta_min > 0.0) {
+    const double pre_h = theta_min / static_cast<double>(P);
+        if (pre_h > 0.0 && base_h > pre_h * (1.0 + 1e-12)) {
+            const double growth_needed = base_h / pre_h;
+            const double required = std::log(growth_needed) / std::log(ratio);
+            if (std::isfinite(required)) {
+                const int needed_chunks = static_cast<int>(std::ceil(required)) + 1;
+                max_chunks = std::max(max_chunks, std::min(needed_chunks, 64));
+                OU_DEBUG_LOG(1, "needed_chunks=" << needed_chunks
+                                << ", max_chunks=" << max_chunks << std::endl);
+            }
+        }
+    }
+    const double pre_h = (theta_min > 0.0 && P > 0) ? theta_min / static_cast<double>(P) : base_h;
     double start = theta_min;
     int start_index = P;
     double current_h = base_h;
-
+    if (ratio > 1.0 && max_chunks > 1) {
+        const double scale = std::pow(ratio, max_chunks - 1);
+        if (std::isfinite(scale) && scale > 0.0) {
+            const double candidate_h = base_h / scale;
+            if (candidate_h > 0.0) {
+                current_h = std::max(candidate_h, pre_h);
+            }
+        }
+    }
     for (int chunk_id = 0; chunk_id < max_chunks && start < theta_max - 1e-12; ++chunk_id) {
         int panels = panels_per_chunk;
         const double span = panels * current_h;
@@ -896,7 +1421,7 @@ inline std::vector<ChunkSpec> build_chunked_theta_layout_with_prelude(
 
         start = end;
         start_index += panels;
-        current_h *= ratio;
+        current_h = std::min(current_h * ratio, base_h);
     }
 
     return chunks;
@@ -974,6 +1499,20 @@ std::vector<double> solve_nu_chunked_with_abel(
 
     grid = build_chunked_theta_grid(t_max, uniform_num_steps, opts);
     const int total_nodes = static_cast<int>(grid.size());
+    OU_DEBUG_LOG(1, "solve_nu_chunked_with_abel: t_max=" << t_max
+                    << ", uniform_num_steps=" << uniform_num_steps
+                    << ", total_nodes=" << total_nodes
+                    << ", opts(ratio=" << opts.ratio
+                    << ", base_panels=" << opts.base_panels
+                    << ", max_chunks=" << opts.max_chunks
+                    << ", theta_min=" << opts.theta_min
+                    << ", pre_min_panels=" << opts.pre_min_panels << ")");
+    for (size_t ci=0; ci<chunks.size(); ++ci) {
+      const auto& c = chunks[ci];
+      OU_DEBUG_LOG(3, "  chunk[" << ci << "]: start=" << c.start << ", end=" << c.end
+                      << ", h=" << c.h << ", panels=" << c.num_steps
+                      << ", start_index=" << c.start_index);
+    }
 
     std::vector<double> F(total_nodes, 0.0);
     F[0] = G(grid[0], pars);
@@ -1009,8 +1548,8 @@ std::vector<double> solve_nu_chunked_with_abel(
             const double t2 = grid[j2];
             const double tmid = t0 + 0.5 * h;
 
-            const double S1 = stieltjes_history_dense_nonuniform(j0, t1, grid, F, pars, K);
-            const double S2 = stieltjes_history_dense_nonuniform(j0, t2, grid, F, pars, K);
+            const double S1 = stieltjes_history_dense_nonuniform(j0, j0, t1, grid, F, pars, K);
+            const double S2 = stieltjes_history_dense_nonuniform(j0, j0, t2, grid, F, pars, K);
 
             const double K1_0 = K(t1, t0, pars);
             const double K1_mid = K(t1, tmid, pars);
@@ -1022,11 +1561,13 @@ std::vector<double> solve_nu_chunked_with_abel(
             const double G2 = G(t2, pars);
 
             double F1_pred = 0.0;
-            const int local_j0 = j0 - chunk_start;
-            if (local_j0 >= 1) {
-                const double Fmid = (-0.125) * F[j0 - 1] + 0.75 * F[j0] + 0.375 * F[j0 + 1];
+            if (j0 >= 1) {
+                double Fmid_pred = (-0.125) * F[j0 - 1] + 0.75 * F[j0];
+                if (j1 <= last_seeded) {
+                    Fmid_pred += 0.375 * F[j1];
+                }
                 const double den1_pred = 1.0 - g1 * K1_1 - (3.0 / 8.0) * b1 * K1_mid;
-                const double rhs1_pred = G1 + S1 + a1 * K1_0 * F[j0] + b1 * K1_mid * Fmid;
+                const double rhs1_pred = G1 + S1 + a1 * K1_0 * F[j0] + b1 * K1_mid * Fmid_pred;
                 F1_pred = rhs1_pred / ((std::abs(den1_pred) < FPM_EPSILON) ? FPM_EPSILON : den1_pred);
             } else {
                 const double den1_pred = 1.0 - g1 * K1_1 - 0.5 * b1 * K1_mid;
@@ -1054,6 +1595,10 @@ std::vector<double> solve_nu_chunked_with_abel(
             F[j2] = F2_corr;
 
             last_seeded = std::max(last_seeded, j2);
+            OU_DEBUG_LOG(5, "chunk step: j0=" << j0 << ", j1=" << j1 << ", j2=" << j2
+                            << ", t0=" << t0 << ", t1=" << t1 << ", t2=" << t2
+                            << ", S1=" << S1 << ", S2=" << S2
+                            << ", F1=" << F[j1] << ", F2=" << F[j2]);
         }
     }
 
@@ -1114,13 +1659,6 @@ double integrate_density(const std::vector<double>& grid,
   return total;
 }
 
-// Heat kernel G*(t, dbeta) = exp(-dbeta^2/(2t)) / sqrt(2 pi t)
-inline double Gstar(double t, double delta) {
-  if (t <= FPM_EPSILON) return 0.0;
-  const double denom = std::sqrt(2.0 * M_PI * t);
-  return safe_exp(-(delta * delta) / (2.0 * t)) / denom;
-}
-
 // Computes the uniform-avergage image weight for the BM case
 inline double averaged_image_term(double t, double beta_t, const RD_Params& pars) {
     if (t <= FPM_EPSILON) return 0.0;
@@ -1145,6 +1683,93 @@ inline double averaged_image_term(double t, double beta_t, const RD_Params& pars
 
     return (1.0 / span) * (G_at_lower_bound - G_at_upper_bound);
 }
+
+// Computes the uniform-in-X-space averaged image weight for the Gompertz case,
+// which is equivalent to an exp(y)-weighted average in Y-space (OU/Wiener space).
+// This is the direct replacement for your 'averaged_image_term' function.
+inline double averaged_image_term_exp(double t, double beta_t, const RD_Params& pars) {
+    if (t <= FPM_EPSILON) return 0.0;
+
+    // Point-start case is identical to the original function
+    if (!pars.sp_var) {
+        const double num = pars.zU_scaled - beta_t; // zU_scaled is log(x0)
+        return (num / t) * Gstar(t, num);
+    }
+
+    double y_lo = pars.zL_scaled;
+    double y_hi = pars.zU_scaled;
+    if (y_hi < y_lo) std::swap(y_lo, y_hi);
+    
+    // Normalization constant for the p(y) = e^y PDF
+    const double norm_const = std::exp(y_hi) - std::exp(y_lo);
+    if (norm_const <= FPM_EPSILON) {
+        return 0.0;
+    }
+
+    // This term comes from completing the square in the exponent
+    const double exp_factor = std::exp(beta_t + t / 2.0);
+
+    // The new mean of the Gaussian after completing the square
+    const double new_mean = beta_t + t;
+
+    // We evaluate the Gaussian PDF and CDF with this new mean
+    const double G_hi = Gstar(t, y_hi - new_mean);
+    const double G_lo = Gstar(t, y_lo - new_mean);
+
+    const double I_hi = Gstar_Integral(t, new_mean, -std::numeric_limits<double>::infinity(), y_hi);
+    const double I_lo = Gstar_Integral(t, new_mean, -std::numeric_limits<double>::infinity(), y_lo);
+
+    // The integral of (y - b) * exp(...) splits into two parts:
+    // (new_mean - b) * integral[G*] - t * [G]_lo^hi
+    const double term1 = (new_mean - beta_t) * (I_hi - I_lo);
+    const double term2 = -t * (G_hi - G_lo);
+
+    return (1.0 / norm_const) * exp_factor * (term1 + term2);
+}
+
+// Computes the average of f(y) = (y - beta) * exp(-(y - beta)^2 / v)
+// over the interval [y_lo, y_hi]
+inline double average_of_exp_deriv(double beta, double variance, double y_lo, double y_hi) {
+    // This check handles all divide-by-zero or bad exp() calls
+    if (variance <= FPM_EPSILON) {
+        return 0.0;
+    }
+
+    // The core exponential term: exp(-(y - beta)^2 / v)
+    auto exp_term = [beta, variance](double y) {
+        const double delta = y - beta;
+        return std::exp(-(delta * delta) / variance);
+    };
+
+    // The point-start function: f(y) = (y - beta) * exp_term(...)
+    auto point_start_f = [beta, &exp_term](double y) {
+        return (y - beta) * exp_term(y);
+    };
+
+    // The antiderivative: F(y) = -0.5 * v * exp_term(...)
+    auto antideriv_F = [variance, &exp_term](double y) {
+        return -0.5 * variance * exp_term(y);
+    };
+
+
+    // --- Main logic ---
+    if (y_hi < y_lo) {
+        std::swap(y_lo, y_hi);
+    }
+    const double span = y_hi - y_lo;
+
+    // Point-start case: return f(y_lo)
+    if (span <= FPM_EPSILON) {
+        return point_start_f(y_lo);
+    }
+
+    // Averaged case: return (F(y_hi) - F(y_lo)) / span
+    const double F_hi = antideriv_F(y_hi);
+    const double F_lo = antideriv_F(y_lo);
+    
+    return (F_hi - F_lo) / span;
+}
+
 
 /**
  * @brief Determines the number of integration steps for a given t_max.
@@ -1194,329 +1819,8 @@ int calculate_num_steps(double t_max, double fineness = 0.01, int min_steps = 10
     return num_steps;
 }
 
-namespace util {
-/**
- * @class AkimaSpline
- * @brief Implements the Akima (or "Akima C1") piecewise cubic Hermite interpolator.
- *
- * This interpolator is C1 continuous (it has a continuous first derivative).
- * Its main advantage over a standard cubic spline is that it's "local,"
- * meaning the polynomial for a given interval is determined only by nearby points,
- * which prevents the wild oscillations (Runge's phenomenon) that can
- * plague global interpolators.
- *
- * It's particularly good for non-monotonic data or data with
- * abrupt changes in slope, as it tends to produce a more "natural"
- * and less "wiggly" fit.
- */
-class AkimaSpline {
-public:
-    /**
-     * @brief Constructs the Akima spline interpolator.
-     *
-     * The interpolator is built and coefficients are pre-calculated
-     * immediately upon construction.
-     *
-     * @param t The vector of independent variable values (e.g., time).
-     * Must be sorted in ascending order.
-     * @param nu The vector of dependent variable values.
-     * @throws std::runtime_error if t and nu sizes don't match,
-     * if t is not sorted, or if there are fewer than 5 points
-     * (Akima needs at least 5 points to compute its tangents correctly).
-     */
-    AkimaSpline(const std::vector<double>& t, const std::vector<double>& nu) {
-        if (t.size() != nu.size()) {
-            throw std::runtime_error("AkimaSpline: t and nu vectors must have the same size.");
-        }
-        if (t.size() < 5) {
-            throw std::runtime_error("AkimaSpline: requires at least 5 data points for full algorithm.");
-            // Note: Could implement fallbacks (linear, quadratic) for < 5 points,
-            // but for this solver, it's better to enforce a minimum grid.
-        }
-
-        n_ = t.size();
-        t_ = t;
-        nu_ = nu;
-
-        // Verify that t is sorted
-        for (size_t i = 0; i < n_ - 1; ++i) {
-            if (t_[i] >= t_[i + 1]) {
-                throw std::runtime_error("AkimaSpline: t vector must be strictly increasing.");
-            }
-        }
-
-        // Pre-calculate the derivatives (tangents) at each point `t_i`
-        // This is the core of the Akima algorithm.
-        calculate_tangents();
-    }
-
-    /**
-     * @brief Interpolates the value at a new point t_val.
-     * @param t_val The point at which to interpolate.
-     * @return The interpolated value nu(t_val).
-     */
-    double interpolate(double t_val) const {
-        // Find the correct interval [t_i, t_{i+1}] for t_val
-        // std::upper_bound finds the first element > t_val.
-        // So, `it` points to t_{i+1}, and `i` will be its index.
-        auto it = std::upper_bound(t_.begin(), t_.end(), t_val);
-
-        // Handle edge cases (extrapolation)
-        if (it == t_.begin()) {
-            // t_val is before the first point
-            return nu_.front(); // Clamping
-            // Or could do linear extrapolation:
-            // return nu_[0] + (t_val - t_[0]) * d_[0];
-        }
-        if (it == t_.end()) {
-            // t_val is after the last point
-            return nu_.back(); // Clamping
-            // Or could do linear extrapolation:
-            // return nu_[n_-1] + (t_val - t_[n_-1]) * d_[n_-1];
-        }
-
-        // `it` points to t_[i], so we want the interval [i-1, i]
-        size_t i = std::distance(t_.begin(), it) - 1;
-
-        double h = t_[i + 1] - t_[i];
-        if (h == 0.0) {
-            // Should be caught by the sorted check, but good to have
-            return nu_[i];
-        }
-
-        // Normalize t_val to s in [0, 1]
-        double s = (t_val - t_[i]) / h;
-
-        // Apply the standard C1 Hermite cubic polynomial
-        double s2 = s * s;
-        double s3 = s * s2;
-
-        double h00 = 2 * s3 - 3 * s2 + 1;
-        double h10 = s3 - 2 * s2 + s;
-        double h01 = -2 * s3 + 3 * s2;
-        double h11 = s3 - s2;
-
-        return h00 * nu_[i] + h10 * h * d_[i] + h01 * nu_[i + 1] + h11 * h * d_[i + 1];
-    }
-
-    /**
-     * @brief Computes the first derivative at a new point t_val.
-     * @param t_val The point at which to compute the derivative.
-     * @return The derivative d(nu)/d(t) at t_val.
-     */
-    double derivative(double t_val) const {
-        // Find the correct interval [t_i, t_{i+1}]
-        auto it = std::upper_bound(t_.begin(), t_.end(), t_val);
-
-        // Handle edge cases
-        if (it == t_.begin()) {
-            return d_.front(); // Constant derivative extrapolation
-        }
-        if (it == t_.end()) {
-            return d_.back(); // Constant derivative extrapolation
-        }
-
-        size_t i = std::distance(t_.begin(), it) - 1;
-
-        double h = t_[i + 1] - t_[i];
-        if (h == 0.0) {
-            // This case is tricky. The derivative is technically infinite
-            // or undefined. We can return the average of the tangents
-            // or just the left tangent.
-            return d_[i];
-        }
-
-        // Normalize t_val to s in [0, 1]
-        double s = (t_val - t_[i]) / h;
-
-        // We need the derivative of the Hermite polynomial *with respect to t_val*.
-        double s2 = s * s;
-
-        double dh00_ds = 6 * s2 - 6 * s;
-        double dh10_ds = 3 * s2 - 4 * s + 1;
-        double dh01_ds = -6 * s2 + 6 * s;
-        double dh11_ds = 3 * s2 - 2 * s;
-
-        double dp_ds = dh00_ds * nu_[i] + dh10_ds * h * d_[i] +
-                       dh01_ds * nu_[i + 1] + dh11_ds * h * d_[i + 1];
-
-        return dp_ds / h;
-    }
 
 
-private:
-    size_t n_;
-    std::vector<double> t_;   // x-values
-    std::vector<double> nu_;  // y-values
-    std::vector<double> d_;   // derivatives (tangents) at each point
-
-    /**
-     * @brief Pre-calculates the tangents (derivatives) at each data point.
-     *
-     * This is the core logic of the Akima spline. It uses a weighted
-     * average of slopes from adjacent intervals to find a "natural"
-     * looking tangent, avoiding the oscillations of standard splines.
-     */
-    void calculate_tangents() {
-        d_.resize(n_);
-        std::vector<double> m(n_ - 1); // Slopes of intervals [t_i, t_{i+1}]
-
-        // 1. Calculate the slopes of the n-1 intervals
-        for (size_t i = 0; i < n_ - 1; ++i) {
-            m[i] = (nu_[i + 1] - nu_[i]) / (t_[i + 1] - t_[i]);
-        }
-
-        // 2. We need "ghost" slopes at the ends to handle boundaries.
-        // We add two on each side: m[-2], m[-1], m[0], ..., m[n-2], m[n-1], m[n]
-        // (total n+3 slopes for n points)
-        // m[-1] = 2*m[0] - m[1]
-        // m[-2] = 2*m[-1] - m[0] = 3*m[0] - 2*m[1]
-        // m[n-1] = 2*m[n-2] - m[n-3]
-        // m[n] = 2*m[n-1] - m[n-2] = 3*m[n-2] - 2*m[n-3]
-        
-        std::vector<double> m_ext(n_ + 3);
-        for (size_t i = 0; i < n_ - 1; ++i) {
-            m_ext[i + 2] = m[i];
-        }
-
-        m_ext[1] = 2.0 * m_ext[2] - m_ext[3];
-        m_ext[0] = 2.0 * m_ext[1] - m_ext[2];
-        m_ext[n_ + 1] = 2.0 * m_ext[n_] - m_ext[n_ - 1];
-        m_ext[n_ + 2] = 2.0 * m_ext[n_ + 1] - m_ext[n_];
-
-
-        // 3. Calculate the weighted average for the tangents
-        for (size_t i = 0; i < n_; ++i) {
-            // We need slopes from m_ext[i], m_ext[i+1], m_ext[i+2], m_ext[i+3]
-            // which correspond to original slopes m[i-2], m[i-1], m[i], m[i+1]
-            
-            // Get weights w1 = |m_{i+1} - m_i| and w2 = |m_{i-1} - m_{i-2}|
-            // (using the extended m_ext indices)
-            double w1 = std::abs(m_ext[i + 3] - m_ext[i + 2]);
-            double w2 = std::abs(m_ext[i + 1] - m_ext[i]);
-
-            if (w1 + w2 == 0.0) {
-                // Special case: all four slopes are equal (linear segment)
-                // or w1=0 and w2=0 (e.g. at a local extremum)
-                // Use the average of the two middle slopes.
-                d_[i] = (m_ext[i + 1] + m_ext[i + 2]) / 2.0;
-            } else {
-                // Standard weighted average
-                // d_i = (w1 * m_{i-1} + w2 * m_i) / (w1 + w2)
-                d_[i] = (w1 * m_ext[i + 1] + w2 * m_ext[i + 2]) / (w1 + w2);
-            }
-        }
-    }
-};
-
-/**
- * @brief Computes the derivative at a point using a Savitzky-Golay filter.
- *
- * This method fits a polynomial of a given order to a window of data points
- * surrounding the target point using least-squares. The derivative of that
- * fitted polynomial at the target point is returned. This is robust to noise.
- * This implementation is for non-uniformly spaced data.
- *
- * @param x The vector of independent variable values (must be sorted).
- * @param y The vector of dependent variable values.
- * @param index The index of the point at which to compute the derivative.
- * @param window_size The number of points in the fitting window (must be odd, e.g., 5, 7).
- * @param poly_order The order of the polynomial to fit (e.g., 2 for quadratic).
- * @return The estimated derivative at x[index].
- */
-double savitzky_golay_derivative(const std::vector<double>& x,
-                                 const std::vector<double>& y,
-                                 int index,
-                                 double eval_point,
-                                 int window_size,
-                                 int poly_order)
-{
-    // Validation and basic setup
-    const int n = static_cast<int>(x.size());
-    if (n == 0 || y.size() != x.size()) return std::numeric_limits<double>::quiet_NaN();
-
-    // Require odd window; clamp to available data if needed
-    if (window_size < 3) window_size = 3;
-    if ((window_size & 1) == 0) ++window_size; // make odd
-    if (window_size > n) window_size = (n % 2 == 0 ? n - 1 : n);
-
-    if (poly_order != 2 || poly_order >= window_size) {
-        // Only quadratic supported for now
-        return std::numeric_limits<double>::quiet_NaN();
-    }
-
-    const int half_window = window_size / 2;
-    // Prefer the window centered around the actual evaluation location.
-    int k = 0;
-    {
-        // k = index of the last x <= eval_point (clamped)
-        auto it = std::upper_bound(x.begin(), x.end(), eval_point);
-        k = static_cast<int>(std::distance(x.begin(), (it == x.begin() ? it : std::prev(it))));
-        if (k < 0) k = 0;
-        if (k > n - 1) k = n - 1;
-    }
-
-    // Near-boundary: fall back to a local 3-point derivative centered near eval_point.
-    if (k < half_window || k > n - 1 - half_window) {
-        if (n >= 3) {
-            return local_quad_derivative(x, y, k, eval_point);
-        }
-        if (n > 1) {
-            // fall back to one-sided difference around the nearest available segment
-            if (k == 0) return (y[1] - y[0]) / (x[1] - x[0]);
-            return (y[n - 1] - y[n - 2]) / (x[n - 1] - x[n - 2]);
-        }
-        return 0.0;
-    }
-
-    // Choose a contiguous window that slides to the boundary when needed.
-    // This ensures a proper right/left-sided fit near the ends.
-    int start = k - half_window;
-    int end = k + half_window;
-    if (start < 0) { end -= start; start = 0; }
-    if (end > n - 1) { start -= (end - (n - 1)); end = n - 1; }
-    if (start < 0) start = 0; // final clamp
-
-    // Center the polynomial at the actual evaluation point to avoid bias
-    const double x_center = eval_point;
-
-    // Build normal equations for quadratic LS fit: y ~= c0 + c1*(x-xc) + c2*(x-xc)^2
-    double S0=0.0, S1=0.0, S2=0.0, S3=0.0, S4=0.0;
-    double T0=0.0, T1=0.0, T2=0.0;
-    for (int i = start; i <= end; ++i) {
-        const double dx = x[i] - x_center;
-        const double yi = y[i];
-        const double dx2 = dx * dx;
-        const double dx3 = dx2 * dx;
-        const double dx4 = dx2 * dx2;
-
-        S0 += 1.0;
-        S1 += dx;
-        S2 += dx2;
-        S3 += dx3;
-        S4 += dx4;
-
-        T0 += yi;
-        T1 += yi * dx;
-        T2 += yi * dx2;
-    }
-
-    // Solve 3x3 via Cramer's rule. If ill-conditioned, fall back to local quadratic.
-    const double det = S0*(S2*S4 - S3*S3) - S1*(S1*S4 - S2*S3) + S2*(S1*S3 - S2*S2);
-    if (!std::isfinite(det) || std::abs(det) < 1e-15) {
-        // Use a simple 3-point quadratic derivative around the nearest triple
-        return local_quad_derivative(x, y, k, eval_point);
-    }
-    const double inv_det = 1.0 / det;
-
-    // derivative at eval_point is c1 when centered at x_center = eval_point
-    const double det1 = S0*(T1*S4 - S3*T2) - T0*(S1*S4 - S2*S3) + S2*(S1*T2 - S2*T1);
-    const double c1 = det1 * inv_det;
-
-    return c1;
-}
-
-}; // namespace util
 
 #endif // utils_reducible_diffusion_h
 

@@ -377,7 +377,7 @@ rRDMSWTN <- function(lR,pars,p_types=c("v","b","A","t0","sv"),ok=rep(TRUE,dim(pa
   out
 }
 
-rSWTN <- function(n,b,v,A,sv)
+rSWTN <- function(n,b,v,A,sv,s=1)
   # random function for single accumulator
 {
   
@@ -393,7 +393,7 @@ rSWTN <- function(n,b,v,A,sv)
   
   ok <- !l<0
   nok <- sum(ok)
-  out[ok] <- statmod::rinvgauss(nok,mean=b/l,shape=b^2)
+  out[ok] <- statmod::rinvgauss(nok, mean = (b / s) / (l / s), shape = (b / s)^2)
   out[!ok] <- Inf
   out  
   
