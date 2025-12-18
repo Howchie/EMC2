@@ -57,7 +57,7 @@ Rlevels <- if (include_stop_triggered) c("left", "right", "st") else c("left", "
 matchfun <- function(d) as.character(d$S) == as.character(d$lR)
 
 designSS <- design(
-  model = SSexG,#function() SSexG_cens(normalise_trunc = normalise_trunc),
+  model = function() SSexG_cens(normalise_trunc = normalise_trunc),
   factors = list(subjects = 1, S = c("left", "right")),
   Rlevels = Rlevels,
   matchfun = matchfun,
@@ -83,9 +83,9 @@ if ("gf" %in% names(p_vector)) p_vector[["gf"]] <- qnorm(.10)
 if ("tf" %in% names(p_vector)) p_vector[["tf"]] <- qnorm(.10)
 
 # Deadline (UC) + optional truncation bounds (LT/UT)
-UC <- Inf
+UC <- 1.5
 LT <- if (normalise_trunc) 0.15 else 0
-UT <- if (normalise_trunc) 1.5 else Inf
+UT <- if (normalise_trunc) 2 else Inf
 
 dat <- make_data(
   p_vector, designSS, n_trials = 500,
