@@ -594,9 +594,13 @@ design_model <- function(data,design,model=NULL,
   order_idx <- order(da$subjects)
   da <- da[order_idx,] # fixes different sort in add_accumulators depending on subject type
 
+  # Only create Ffunction columns when missing.
+  # Many designs use stochastic Ffunctions (e.g., SSD assignment), so overwriting an existing
+  # column would silently change the design encoded in the data and break likelihood checks.
   if (!is.null(design$Ffunctions)) for (i in names(design$Ffunctions)) {
-    newF <- stats::setNames(data.frame(design$Ffunctions[[i]](da)),i)
-    da[,i] <- newF
+    if (i %in% names(da)) next
+    newF <- stats::setNames(data.frame(design$Ffunctions[[i]](da)), i)
+    da[, i] <- newF
   }
 
   if (is.null(model()$p_types) | is.null(model()$Ttransform))
