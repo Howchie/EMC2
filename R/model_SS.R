@@ -16,16 +16,25 @@ SSD_function <- function(d,SSD=NA,pSSD=.25) {
   if (length(pSSD)==length(SSD)-1) pSSD <- c(pSSD,1-sum(pSSD))
   if (length(pSSD)!=length(SSD))
     stop("pSSD must be the same length or 1 less than the length of SSD")
+  # NOTE: `design_model()` applies Ffunctions *after* `add_accumulators()`, so `d`
+  # is typically already expanded to one row per accumulator per trial.
+  # SSDs must therefore be assigned per *trial* and then replicated across rows.
   n_acc <- length(levels(d$lR))
-  n_trial <- nrow(d)
-  out <- rep(Inf,n_trial)
-  trials <- c(1:n_trial)
-  for (i in 1:length(pSSD)) {
-    pick <- sample(trials,floor(pSSD[i]*n_trial))
-    out[pick] <- SSD[i]
-    trials <- trials[!(trials %in% pick)]
+  if (n_acc <= 0) stop("d$lR must be a factor with >= 1 levels.")
+  if (nrow(d) %% n_acc != 0) stop("nrow(d) must be a multiple of the number of accumulators (levels(d$lR)).")
+  n_trial <- nrow(d) / n_acc
+
+  out_trial <- rep(Inf, n_trial)
+  remaining <- seq_len(n_trial)
+  for (i in seq_along(pSSD)) {
+    n_pick <- floor(pSSD[i] * n_trial)
+    if (n_pick <= 0 || length(remaining) == 0) next
+    pick <- sample(remaining, n_pick)
+    out_trial[pick] <- SSD[i]
+    remaining <- remaining[!(remaining %in% pick)]
   }
-  return(out)
+  # Replicate in the same block-order used by `add_accumulators()` (n_acc rows per trial).
+  rep(out_trial, each = n_acc)
 }
 
 staircase_function <- function(dts,staircase) {
