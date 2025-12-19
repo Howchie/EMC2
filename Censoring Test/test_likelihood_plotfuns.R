@@ -47,11 +47,15 @@ profile_plot_test <- function (data, design, p_vector, range = 0.5, layout = NA,
   if (is.null(use_par))
     use_par <- names(p_vector)
   if (any(is.na(layout))) {
-    par(mfrow = coda_setmfrow(Nchains = 1, Nparms = length(use_par),
-                              nplots = 1))
+    par(mfrow = coda_setmfrow(
+      Nchains = 1, Nparms = length(use_par),
+      nplots = 1
+    ))
+    par(oma=c(0,0,3,0))
   }
   else {
     par(mfrow = layout)
+    par(oma=c(0,0,3,0))
   }
   if (!is.null(figure_title_settings)) {
     requested_top <- figure_title_settings$line + 1

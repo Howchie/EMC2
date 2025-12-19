@@ -48,6 +48,39 @@ log_likelihood_race <- function(pars,dadm,model,min_ll=log(1e-10))
           collapse = "_")
   )
 
+.log_diff_exp <- function(a, b) {
+  if (!is.finite(a)) return(-Inf)
+  if (!is.finite(b)) {
+    if (is.infinite(b) && b < 0) return(a)
+    return(-Inf)
+  }
+  if (a <= b) return(-Inf)
+  m <- max(a, b)
+  m + log(exp(a - m) - exp(b - m))
+}
+
+.log_survivor_prod <- function(t, pars_mat, model) {
+  if (nrow(pars_mat) == 0) return(0)
+  cdf <- model$pfun(rt = t, pars = pars_mat)
+  if (any(!is.finite(cdf))) return(-Inf)
+  cdf[cdf <= 0] <- 0
+  if (any(cdf >= 1, na.rm = TRUE)) return(-Inf)
+  cdf <- pmin(cdf, 1 - 1e-15)
+  sum(log1p(-cdf))
+}
+
+.prob_min_in_interval <- function(lower, upper, pars_mat, model) {
+  logS_lower <- .log_survivor_prod(lower, pars_mat, model)
+  if (!is.finite(logS_lower)) return(.Machine$double.eps)
+  if (is.infinite(upper)) {
+    return(max(exp(logS_lower), .Machine$double.eps))
+  }
+  logS_upper <- .log_survivor_prod(upper, pars_mat, model)
+  log_prob <- .log_diff_exp(logS_lower, logS_upper)
+  if (!is.finite(log_prob)) return(.Machine$double.eps)
+  max(exp(log_prob), .Machine$double.eps)
+}
+
 ## integrate the joint density for the *k-th winner* on (lower, upper)
 .integrate_kth_winner <- function(k, pars_mat, lower, upper, model,
                                   rel.tol = 1e-7, ...) {
@@ -68,16 +101,21 @@ log_likelihood_race <- function(pars,dadm,model,min_ll=log(1e-10))
 
 ## probability of *any* observable response in (lower, upper)
 .truncation_normaliser <- function(pars_mat, lower, upper, model, rel.tol = 1e-5, ...) {
-  
+  # Prefer analytic survivor-product wherever possible (matches particle_ll.cpp)
+  p_tot <- .prob_min_in_interval(lower, upper, pars_mat, model)
+  if (is.finite(p_tot) && p_tot > .Machine$double.eps) {
+    return(p_tot)
+  }
+
+  # Fallback to numerical integration if survivor path failed
   n_acc <- nrow(pars_mat)
-  p_tot <- 0
+  p_tot_int <- 0
   for (k in 1:n_acc) {
-    p_tot <- p_tot +
+    p_tot_int <- p_tot_int +
       .integrate_kth_winner(k, pars_mat, lower, upper, model,
                             rel.tol = rel.tol)
   }
-  
-  max(p_tot, .Machine$double.eps)             # guard against 0
+  max(p_tot_int, .Machine$double.eps)
 }
 
 # Main likelihood function -----------------------------------------------------
@@ -189,11 +227,14 @@ gng = any(grepl("GNG", model$c_name))
         if (lo==Inf) {stop("UC must be finite if rt==Inf")}
         if (length(idx_j)==1) {
           pval = 1 - (model$pfun(lo,pars[idx, , drop = FALSE])) # if a single acccumulator, design omissions are just 1-F(t)
-        } else if (is.na(Rj) && is.infinite(hi)) {
-          # With unknown winner and no upper truncation, the slow-censor event is simply
-          # {min(T_k) > UC} which can be computed exactly as a product of survivors.
-          # This also automatically includes intrinsic omissions for LBAIO.
-          pval <- prod(1 - model$pfun(rt = lo, pars = pars[idx_j, , drop = FALSE]))
+        } else if (is.na(Rj)) {
+          # Unknown winner: use analytic survivor product wherever possible
+          prob_from_surv <- .prob_min_in_interval(lo, hi, pars[idx_j, , drop = FALSE], model)
+          if (is.finite(prob_from_surv) && prob_from_surv > .Machine$double.eps) {
+            pval <- prob_from_surv
+          } else {
+            pval <- sum(vapply(ks, prob_win, numeric(1), lo, hi))
+          }
         } else {
           pval <- sum(vapply(ks, prob_win, numeric(1), lo, hi))
         }
@@ -203,8 +244,19 @@ gng = any(grepl("GNG", model$c_name))
       lo1 <- LT[idx_j[1]]; hi1 <- LC[idx_j[1]]
       lo2 <- UC[idx_j[1]]; hi2 <- UT[idx_j[1]]
       if (lo2==Inf) {stop("UC must be finite if rt==NA")}
-      pval <- sum(vapply(ks, function(k)
-        prob_win(k, lo1, hi1) + prob_win(k, lo2, hi2), numeric(1)))
+      if (is.na(Rj)) {
+        # Unknown winner: compute via survivor products, fall back to integrals if needed
+        pval_lower <- .prob_min_in_interval(lo1, hi1, pars[idx_j, , drop = FALSE], model)
+        pval_upper <- .prob_min_in_interval(lo2, hi2, pars[idx_j, , drop = FALSE], model)
+        pval <- pval_lower + pval_upper
+        if (!is.finite(pval) || pval <= .Machine$double.eps) {
+          pval <- sum(vapply(ks, function(k)
+            prob_win(k, lo1, hi1) + prob_win(k, lo2, hi2), numeric(1)))
+        }
+      } else {
+        pval <- sum(vapply(ks, function(k)
+          prob_win(k, lo1, hi1) + prob_win(k, lo2, hi2), numeric(1)))
+      }
     }                                               # 0 or negative RT prob 0
     
     ## truncation correction (if RT unobserved)

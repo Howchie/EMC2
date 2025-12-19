@@ -1,8 +1,10 @@
-## LBAIO likelihood + recovery demo for EMC2
-# - Simulates 2-choice LBAIO data with a response deadline (UC) so omissions are encoded as rt=Inf
-# - Runs profile plots (R + C likelihood) and a simple parameter-recovery fit
+## LBA likelihood + recovery demo for EMC2 to illustrate handling of censored and truncated RTs and optional contaminant omissions
+# - Simulates 2-choice LBA data with a response deadline (UC) and optional truncation (LT,UT) with censored RTs and omissions coded as rt=Inf and R=NA
+# - Runs a simulation with truncated RTs, generating profile plots (R+C likelihood) and a simple parameter-recovery fit, demonstrating the failure of the older likelihood with no censoring/truncation handling
+# - Repeats the demo with censoring handling for comparison
+# - Runs a simulation with censoring and truncated RTs, generating profile plots (R + C likelihood) and a simple parameter-recovery fit
 # - Repeats the demo with contaminant omissions (e.g., 15%)
-# NB - I couldn't think through a logical situation where truncation could sit with intirnsic omissions logically, so it doesn't support UT<Inf
+
 library(EMC2)
 source("Censoring Test/test_likelihood_plotfuns.R")
 
@@ -12,16 +14,25 @@ set.seed(123)
 # Whether to run the (slow) MCMC recovery fits
 RUN_FITS <- FALSE
 
-# Helper
+# Helper functions
 Rtfun <- function(d) {
   out <- d$rt
   out[is.infinite(out)] <- NA
   out
 }
-
-
+Cfun <- function(d) as.numeric(d$S)==as.numeric(d$R)
+lba_no_cens <- function() {
+  m <- LBA()
+  m$log_likelihood <- function(pars, dadm, model, min_ll = log(1e-10)) {
+    log_likelihood_race(
+      pars, dadm, model, min_ll = min_ll
+    )
+  }
+  m
+}
+  
 lba_cens <- function() {
-  m <- LBAIO()
+  m <- LBA()
   m$log_likelihood <- function(pars, dadm, model, min_ll = log(1e-10)) {
     log_likelihood_race_cens_trunc(
       pars, dadm, model, min_ll = min_ll
@@ -30,28 +41,29 @@ lba_cens <- function() {
   m
 }
 
-run_lbaio_demo <- function(p_contaminant = 0, estimate_contaminant = FALSE,
-                           n_trials = 500, UC = 2.0, UT=Inf, LC=0, LT=0,
-                           cores_for_chains = 3,
-                           sample_file = "samples_lbaio.RData") {
-  if (UC == Inf) stop("LBAIO demos require a finite UC (deadline) when omissions are present.")
+run_lba_demo <- function(p_contaminant = 0, cens = TRUE, estimate_contaminant = FALSE,
+                         n_trials = 500, UC = 2.0, UT=Inf, LC=0, LT=0,
+                         cores_for_chains = 3,
+                         sample_file = "samples_LBA.RData") {
+  if (UC == Inf & p_contaminant>0) stop("Require a finite UC (deadline) when omissions are present.")
 
   matchfun <- function(d) as.numeric(d$S) == as.numeric(d$lR)
+
   # Base 2-choice design; lM is automatically constructed from matchfun.
-  designLBAIO <- design(
+  designLBA <- design(
     factors = list(subjects = 1, S = c("left", "right")),
     Rlevels = c("left", "right"),
     matchfun = matchfun,
-    model = LBAIO,
+    model = ifelse(cens, lba_cens, lba_no_cens), # NB this is just for demonstration; normally use LBA with built-in censoring/truncation handling
     formula = c(
       list(B ~ 1, v ~ 0 + lM, A ~ 1, t0 ~ 1, sv ~ 0 + lM),
       if (estimate_contaminant) list(pContaminant ~ 1) else list()
     ),
     constants = c(sv_lMFALSE = log(1))
   )
-  
+
   # Set simulation parameters (on the transformed scale expected by p_types)
-  p_vector <- sampled_pars(designLBAIO, doMap = FALSE)
+  p_vector <- sampled_pars(designLBA, doMap = FALSE)
 
   # Threshold / start-point / non-decision time
   if ("B" %in% names(p_vector)) p_vector[["B"]] <- log(1.0)
@@ -65,7 +77,7 @@ run_lbaio_demo <- function(p_contaminant = 0, estimate_contaminant = FALSE,
   # Sv for match accumulator
   if ("sv_lMFALSE" %in% names(p_vector)) p_vector[["sv_lMFALSE"]] <- log(1)
   if ("sv_lMTRUE" %in% names(p_vector)) p_vector[["sv_lMTRUE"]] <- log(1)
-  
+
   # Contaminant omissions: pContaminant is on probit scale (transformed via pnorm)
   if (estimate_contaminant) {
     if (!("pContaminant" %in% names(p_vector))) {
@@ -79,15 +91,17 @@ run_lbaio_demo <- function(p_contaminant = 0, estimate_contaminant = FALSE,
   }
 
   dat <- make_data(
-    p_vector, designLBAIO, n_trials = n_trials,
+    p_vector, designLBA,
+    n_trials = n_trials,
     UC = UC,
     UT = UT,
     LC = LC,
     LT = LT,
-    rtContaminantNA = FALSE   # contaminant omissions coded same as censored
+    LCdirection = FALSE, # deadline-only censoring -> rt=Inf (not -Inf)
+    rtContaminantNA = FALSE # contaminant omissions coded same as censored with Inf
   )
 
-  cat("\n--- LBAIO demo ---\n")
+  cat("\n--- LBA demo ---\n")
   cat("estimate_contaminant =", estimate_contaminant, "\n")
   cat("p_contaminant (true) =", p_contaminant, "\n")
   cat("UC =", UC, " n_trials per cell =", n_trials, "\n\n")
@@ -106,44 +120,54 @@ run_lbaio_demo <- function(p_contaminant = 0, estimate_contaminant = FALSE,
 
   # Profile plots. Use n_cores=1 on Windows.
   library(parallel)
-  profile_plot_test(dat, designLBAIO, p_vector, n_cores = 1, range = 1, layout = NA, figure_title="R Likelihood") # R likelihood
-  profile_plot_test(dat, designLBAIO, p_vector, n_cores = 1, range = 1, layout = NA, use_c = TRUE, figure_title="C Likelihood") # C likelihood
+  profile_plot_test(dat, designLBA, p_vector, n_cores = 1, range=1,layout = NA, figure_title = "R Likelihood") # R likelihood
+  profile_plot_test(dat, designLBA, p_vector, n_cores = 1, range=1,layout = NA, use_c = TRUE, figure_title = "C Likelihood") # C likelihood
 
   if (isTRUE(RUN_FITS)) {
-    emc <- make_emc(dat, designLBAIO, type = "single")
+    emc <- make_emc(dat, designLBA, type = "single")
     emc <- fit(emc, cores_for_chains = cores_for_chains, fileName = sample_file)
     post_predict <- predict(emc, n_post = 50)
-    plot_pars(emc, post_predict = post_predict, n_post = 20, true_pars = p_vector)
+    plot_pars(emc, post_predict = post_predict, true_pars = p_vector)
   }
 
-  invisible(list(data = dat, design = designLBAIO, true_pars = p_vector))
+  invisible(list(data = dat, design = designLBA, true_pars = p_vector))
 }
 
-# --- Test 1: LBAIO recovery without contaminants (pContaminant fixed at 0) ----
-res_clean <- run_lbaio_demo(
+# --- Test 1a: Demonstrate equivalence of new C++ function when no censoring present (compares against old R likelihood)
+res_old <- run_lba_demo(
+  p_contaminant = 0,
+  cens=FALSE,
+  estimate_contaminant = FALSE,
+  n_trials = 500,
+  UC = Inf,
+  sample_file = "samples_lba_old.RData"
+)
+# --- Test 1b: Repeat above with both new R and C likelihoods using censoring handling to demonstrate equivalence
+res_cens <- run_lba_demo(
   p_contaminant = 0,
   estimate_contaminant = FALSE,
-  n_trials = 2000,
+  n_trials = 500,
   UC = 2.0,
-  sample_file = "samples_lbaio_uc.RData"
+  sample_file = "samples_lba_cens.RData"
 )
 
-# --- Test 2: LBAIO recovery with contaminant omissions (e.g., 15%) ------------
-res_contam <- run_lbaio_demo(
-  p_contaminant = 0.15,
-  estimate_contaminant = TRUE,
-  n_trials = 2000,
+# --- Test 2: LBA recovery with truncated RTs and censoring ------------
+res_contam <- run_lba_demo(
+  p_contaminant = 0,
+  estimate_contaminant = FALSE,
+  n_trials = 500,
   UC = 2.0,
-  sample_file = "samples_lbaio_contam.RData"
+  UT = 3.0,
+  LT = 0.2,
+  LC = 0.2,
+  sample_file = "samples_lba_cens_trunc.RData"
 )
 
-# --- Test 3: LBAIO recovery with truncation ------------
-res_contam <- run_lbaio_demo(
+# --- Test 3: LBA recovery with contaminant omissions (e.g., 15%) ------------
+res_contam <- run_lba_demo(
   p_contaminant = 0.15,
   estimate_contaminant = TRUE,
-  n_trials = 2000,
+  n_trials = 500,
   UC = 2.0,
-  UT = 3,
-  LT = .15,
-  sample_file = "samples_lbaio_trunc.RData"
+  sample_file = "samples_lba_contam.RData"
 )

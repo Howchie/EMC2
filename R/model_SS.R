@@ -11,31 +11,58 @@
 #'
 #' @return A vector of SSDs with the same length as the number of rows in 'd'.
 #'         Trials without a stop signal are assigned Inf.
-SSD_function <- function(d,SSD=NA,pSSD=.25) {
-  if (sum(pSSD)>1) stop("pSSD sum cannot exceed 1.")
-  if (length(pSSD)==length(SSD)-1) pSSD <- c(pSSD,1-sum(pSSD))
-  if (length(pSSD)!=length(SSD))
-    stop("pSSD must be the same length or 1 less than the length of SSD")
-  # NOTE: `design_model()` applies Ffunctions *after* `add_accumulators()`, so `d`
-  # is typically already expanded to one row per accumulator per trial.
-  # SSDs must therefore be assigned per *trial* and then replicated across rows.
-  n_acc <- length(levels(d$lR))
-  if (n_acc <= 0) stop("d$lR must be a factor with >= 1 levels.")
-  if (nrow(d) %% n_acc != 0) stop("nrow(d) must be a multiple of the number of accumulators (levels(d$lR)).")
-  n_trial <- nrow(d) / n_acc
-
-  out_trial <- rep(Inf, n_trial)
-  remaining <- seq_len(n_trial)
-  for (i in seq_along(pSSD)) {
-    n_pick <- floor(pSSD[i] * n_trial)
-    if (n_pick <= 0 || length(remaining) == 0) next
-    pick <- sample(remaining, n_pick)
-    out_trial[pick] <- SSD[i]
-    remaining <- remaining[!(remaining %in% pick)]
-  }
-  # Replicate in the same block-order used by `add_accumulators()` (n_acc rows per trial).
-  rep(out_trial, each = n_acc)
-}
+#' @export
+SSD_function <- function(d,SSD=NA,pSSD=.25) { 
+  if (any(!is.finite(pSSD)) || any(pSSD < 0)) stop("pSSD must be finite and non-negative.") 
+  if (sum(pSSD) > 1) stop("pSSD sum cannot exceed 1.") 
+  if (length(pSSD) == length(SSD) - 1) pSSD <- c(pSSD, 1 - sum(pSSD)) 
+  if (length(pSSD) != length(SSD)) 
+    stop("pSSD must be the same length or 1 less than the length of SSD") 
+ 
+  # NOTE: `design_model()` applies Ffunctions *after* `add_accumulators()`, so `d` is
+  # typically expanded to one row per accumulator per trial. SSDs must be assigned per
+  # trial and then repeated across accumulator rows. Do not assume any particular row order:
+  # use `trials` (and `subjects` when present) to identify trials.
+  has_lR <- ("lR" %in% names(d)) && is.factor(d$lR) 
+  n_acc <- if (has_lR) length(levels(d$lR)) else 1 
+  if (n_acc <= 0) stop("d$lR must be a factor with >= 1 levels.") 
+ 
+  if ("trials" %in% names(d)) { 
+    trial_key <- d$trials 
+    if ("subjects" %in% names(d)) trial_key <- interaction(d$subjects, trial_key, drop = TRUE) 
+    trial_key <- factor(trial_key, levels = unique(trial_key)) 
+  } else { 
+    trial_key <- NULL 
+  } 
+ 
+  if (has_lR) { 
+    if (!is.null(trial_key)) { 
+      counts <- tabulate(as.integer(trial_key)) 
+      # Some internal calls build expanded `d` without a trial-level `trials` identifier.
+      # In that case, fall back to the conventional block structure (n_acc rows per trial).
+      if (any(counts != n_acc)) trial_key <- NULL 
+    } 
+    if (is.null(trial_key)) { 
+      if (nrow(d) %% n_acc != 0) { 
+        stop("When d includes lR, nrow(d) must be a multiple of levels(d$lR).") 
+      } 
+      trial_key <- factor(rep(seq_len(nrow(d) / n_acc), each = n_acc)) 
+    } 
+  } else if (is.null(trial_key)) { 
+    trial_key <- factor(seq_len(nrow(d))) 
+  } 
+ 
+  n_trial <- nlevels(trial_key) 
+  prob_go <- 1 - sum(pSSD) 
+  values <- SSD 
+  probs <- pSSD 
+  if (prob_go > 0) { 
+    values <- c(values, Inf) 
+    probs <- c(probs, prob_go) 
+  } 
+  out_trial <- sample(values, size = n_trial, replace = TRUE, prob = probs) 
+  out_trial[as.integer(trial_key)] 
+} 
 
 staircase_function <- function(dts,staircase) {
   ns <- ncol(dts)
@@ -380,9 +407,9 @@ rSSexGaussian <- function(data,pars,ok=rep(TRUE,dim(pars)[1]))
   pstair <- is.na(pars[,"SSD"])
   stair <- pstair[is1]
   if (any(stair)) {
-    if (is.null(attr(data,"staircase")))
+    if (is.null(attr(pars,"staircase")))
       stop("When SSD has NAs a staircase list must be supplied!")
-    staircase <- attr(data,"staircase")
+    staircase <- attr(pars,"staircase")
     if (length(accST)>0)
       staircase$accST <- 1+accST
     if (is.null(attr(staircase,"staircase_function"))) {
@@ -772,7 +799,7 @@ rSShybrid <- function(data,pars,ok=rep(TRUE,dim(pars)[1]))
 
 
 pstopHybrid <- function(parstop,n_acc,upper=Inf,
-  gpars=c("v","B","t0","A"),spars=c("muS","sigmaS","tauS"))
+  gpars=c("v","B","t0","A","s"),spars=c("muS","sigmaS","tauS"))
 {
   sindex <- seq(1,nrow(parstop),by=n_acc)  # Stop accumulator index
   ps <- parstop[sindex,spars,drop=FALSE]   # Stop accumulator parameters
@@ -786,9 +813,14 @@ pstopHybrid <- function(parstop,n_acc,upper=Inf,
   ,1,paste,collapse="")
   uniq <- !duplicated(cells)
   ups <- sapply(1:sum(uniq),function(i){
+    s_scale <- pgo[,i,"s"]
+    s_scale[!is.finite(s_scale) | s_scale <= 0] <- 1
+    v_sc <- pgo[,i,"v"]/s_scale
+    B_sc <- pgo[,i,"B"]/s_scale
+    A_sc <- pgo[,i,"A"]/s_scale
     my.integrate(f=stopfn_rdex,lower=0,upper=upper[i],
       mu=ps[i,"muS"],sigma=ps[i,"sigmaS"],tau=ps[i,"tauS"],
-      v=pgo[,i,"v"],B=pgo[,i,"B"],A=pgo[,i,"A"],t0=pgo[,i,"t0"],
+      v=v_sc,B=B_sc,A=A_sc,t0=pgo[,i,"t0"],
       SSD=SSDs[i],n_acc=n_acc)
   })
   ups[as.numeric(factor(cells,levels=cells[uniq]))]
@@ -1089,6 +1121,7 @@ log_likelihood_race_ss_cens_trunc <- function(pars, dadm, model, min_ll = log(1e
   n_trials_all <- nrow(dadm) / n_acc
   n_accG <- sum(as.numeric(dadm[1:n_acc, "lI"]) == 2)
   n_accST <- sum(as.numeric(dadm[1:n_acc, "lI"]) == 1)
+  tiny <- .Machine$double.xmin
 
   if (!("UC" %in% names(dadm)) && any(is.infinite(dadm$rt))) {
     stop("Censored SS likelihood requires dadm to have UC when rt contains Inf.")
@@ -1096,11 +1129,7 @@ log_likelihood_race_ss_cens_trunc <- function(pars, dadm, model, min_ll = log(1e
   if (normalise_trunc && !all(c("LT", "UT") %in% names(dadm))) {
     stop("normalise_trunc=TRUE requires dadm to include LT and UT columns.")
   }
-  if ((normalise_trunc || any(is.infinite(dadm$rt))) && n_accST > 0) {
-    if (normalise_trunc) {
-      stop("normalise_trunc=TRUE not yet supported when stop-triggered accumulators are present (n_accST > 0).")
-    }
-  }
+  # normalise_trunc is supported with stop-triggered accumulators (n_accST > 0).
 
   allLL <- rep(min_ll, n_trials_all)
   allok_trial <- ok[dadm$lR == levels(dadm$lR)[1]]
@@ -1120,72 +1149,96 @@ log_likelihood_race_ss_cens_trunc <- function(pars, dadm, model, min_ll = log(1e
 
   GoR <- as.character(dadm[1:n_acc, "lR"][dadm[1:n_acc, "lI"] == 2])
 
-  .prod_surv_go_min <- function(rt_upper, idx_go_rows) {
-    if (length(rt_upper) == 0) return(numeric(0))
-    rt_rep <- rep(rt_upper, each = n_accG)
-    cdf <- model$pfunG(rt = rt_rep, pars = pars[idx_go_rows, , drop = FALSE])
-    cdf[is.na(cdf)] <- 1
-    cdf <- pmin(1, pmax(0, cdf))
-    surv <- 1 - cdf
-    surv_mat <- matrix(surv, nrow = n_accG)
-    as.numeric(apply(surv_mat, 2, prod))
-  }
+  .prod_surv_go_min <- function(rt_upper, idx_go_rows, pars_mat = pars) { 
+    if (length(rt_upper) == 0) return(numeric(0)) 
+    rt_rep <- rep(rt_upper, each = n_accG) 
+    cdf <- model$pfunG(rt = rt_rep, pars = pars_mat[idx_go_rows, , drop = FALSE]) 
+    cdf[is.na(cdf)] <- 1 
+    cdf <- pmin(1, pmax(0, cdf)) 
+    surv <- 1 - cdf 
+    surv_mat <- matrix(surv, nrow = n_accG) 
+    as.numeric(apply(surv_mat, 2, prod)) 
+  } 
 
-  .prod_surv_ST_min <- function(rt_upper, idx_st_rows, ssd_upper) {
-    if (length(rt_upper) == 0) return(numeric(0))
-    if (n_accST == 0) return(rep(1, length(rt_upper)))
-    # ST racers are shifted by SSD; evaluate their survivor at (rt_upper - ssd_upper)
-    t_eff <- rt_upper - ssd_upper
-    # If deadline precedes trigger, ST cannot respond yet
-    t_eff[!is.finite(t_eff) | t_eff <= 0] <- 0
-    t_rep <- rep(t_eff, each = n_accST)
-    cdf <- model$pfunG(rt = t_rep, pars = pars[idx_st_rows, , drop = FALSE])
-    cdf[is.na(cdf)] <- 1
-    cdf <- pmin(1, pmax(0, cdf))
-    surv <- 1 - cdf
-    surv_mat <- matrix(surv, nrow = n_accST)
-    as.numeric(apply(surv_mat, 2, prod))
-  }
+  .prod_surv_ST_min <- function(rt_upper, idx_st_rows, ssd_upper, pars_mat = pars) { 
+    if (length(rt_upper) == 0) return(numeric(0)) 
+    if (n_accST == 0) return(rep(1, length(rt_upper))) 
+    # ST racers are shifted by SSD; evaluate their survivor at (rt_upper - ssd_upper) 
+    t_eff <- rt_upper - ssd_upper 
+    # If deadline precedes trigger, ST cannot respond yet 
+    t_eff[!is.finite(t_eff) | t_eff <= 0] <- 0 
+    t_rep <- rep(t_eff, each = n_accST) 
+    cdf <- model$pfunG(rt = t_rep, pars = pars_mat[idx_st_rows, , drop = FALSE]) 
+    cdf[is.na(cdf)] <- 1 
+    cdf <- pmin(1, pmax(0, cdf)) 
+    surv <- 1 - cdf 
+    surv_mat <- matrix(surv, nrow = n_accST) 
+    as.numeric(apply(surv_mat, 2, prod)) 
+  } 
 
   .trunc_Z_stoptrial <- local({
     cache_env <- new.env(parent = emptyenv())
-    function(trial_idx, lt, ut, idx_go_rows, idx_trial_rows) {
+    function(lt, ut, idx_go_rows, idx_st_rows, idx_trial_rows, pars_mat = pars) {
       if (lt == 0 && is.infinite(ut)) return(1)
       key <- paste0(
         formatC(lt, digits = 12, width = 0, format = "fg"), "_",
         formatC(ut, digits = 12, width = 0, format = "fg"), "_",
-        paste(formatC(as.numeric(pars[idx_trial_rows, , drop = FALSE]), digits = 12, width = 0, format = "fg"),
+        paste(formatC(as.numeric(pars_mat[idx_trial_rows, , drop = FALSE]), digits = 12, width = 0, format = "fg"),
               collapse = "_")
       )
       hit <- cache_env[[key]]
       if (!is.null(hit)) return(hit)
 
-      go_pars_mat <- pars[idx_go_rows, , drop = FALSE]
-      stop_pars <- pars[idx_trial_rows[1], , drop = FALSE]
+      stop_pars <- pars_mat[idx_trial_rows[1], , drop = FALSE]
       gf_j <- stop_pars[1, "gf"]
       tf_j <- stop_pars[1, "tf"]
+      SSD_j <- stop_pars[1, "SSD"]
 
-      integrand <- function(t) {
-        vapply(t, function(tt) {
-          t_rep <- rep(tt, n_accG)
-          pdfs <- model$dfunG(rt = t_rep, pars = go_pars_mat)
-          cdfs <- model$pfunG(rt = t_rep, pars = go_pars_mat)
-          pdfs[is.na(pdfs)] <- 0
-          cdfs[is.na(cdfs)] <- 1
-          cdfs <- pmin(1, pmax(0, cdfs))
-          survs <- 1 - cdfs
-          f_min <- 0
-          for (k in seq_len(n_accG)) {
-            f_min <- f_min + pdfs[k] * prod(survs[-k])
-          }
-          S_stop <- 1 - model$pfunS(rt = tt, pars = stop_pars)
-          f_min * (tf_j + (1 - tf_j) * S_stop)
-        }, numeric(1))
+      if (length(idx_st_rows) == 0) {
+        # No stop-triggered accumulators: integrate GO-response density directly (faster / legacy path).
+        go_pars_mat <- pars_mat[idx_go_rows, , drop = FALSE]
+        integrand <- function(t) {
+          vapply(t, function(tt) {
+            t_rep <- rep(tt, n_accG)
+            pdfs <- model$dfunG(rt = t_rep, pars = go_pars_mat)
+            cdfs <- model$pfunG(rt = t_rep, pars = go_pars_mat)
+            pdfs[is.na(pdfs)] <- 0
+            cdfs[is.na(cdfs)] <- 1
+            cdfs <- pmin(1, pmax(0, cdfs))
+            survs <- 1 - cdfs
+            f_min <- 0
+            for (k in seq_len(n_accG)) {
+              f_min <- f_min + pdfs[k] * prod(survs[-k])
+            }
+            S_stop <- 1 - model$pfunS(rt = tt, pars = stop_pars)
+            f_min * (tf_j + (1 - tf_j) * S_stop)
+          }, numeric(1))
+        }
+        out <- try(integrate(integrand, lower = lt, upper = ut), silent = TRUE)
+        Z <- if (inherits(out, "try-error")) 0 else out$value
+        Z <- (1 - gf_j) * max(Z, tiny)
+      } else {
+        # With stop-triggered accumulators: use Z = P(no response by LT) - P(no response by UT).
+        p_noby_t <- function(t_abs) {
+          S_go <- .prod_surv_go_min(t_abs, idx_go_rows, pars_mat = pars_mat)
+          p_tf <- gf_j + (1 - gf_j) * S_go
+
+          S_stop <- 1 - model$pfunS(rt = t_abs, pars = stop_pars)
+          S_stop[is.na(S_stop)] <- 0
+          S_stop <- pmin(1, pmax(0, S_stop))
+
+          upper_stop <- t_abs - SSD_j
+          pStop <- pmin(1, pmax(0, model$sfun(pars_mat[idx_go_rows, , drop = FALSE], n_acc = n_accG, upper = upper_stop)))
+
+          S_st <- .prod_surv_ST_min(t_abs, idx_st_rows, SSD_j, pars_mat = pars_mat)
+          p_trig <- S_st * (gf_j + (1 - gf_j) * (pStop + S_go * S_stop))
+
+          p <- tf_j * p_tf + (1 - tf_j) * p_trig
+          pmin(1, pmax(0, p))
+        }
+        Z <- max(p_noby_t(lt) - p_noby_t(ut), tiny)
       }
 
-      out <- try(integrate(integrand, lower = lt, upper = ut), silent = TRUE)
-      Z <- if (inherits(out, "try-error")) 0 else out$value
-      Z <- (1 - gf_j) * max(Z, .Machine$double.eps)
       cache_env[[key]] <- Z
       Z
     }
@@ -1209,11 +1262,16 @@ log_likelihood_race_ss_cens_trunc <- function(pars, dadm, model, min_ll = log(1e
 
       if (any(is_stop_intr)) {
         t_stop_intr <- t_intr[is_stop_intr]
-        mask_trials <- rep(FALSE, n_trials)
-        mask_trials[t_stop_intr] <- TRUE
-        idx_go <- which(rep(mask_trials, each = n_acc) & ispGOacc)
-        pStop <- pmin(1, pmax(0, model$sfun(pars[idx_go, , drop = FALSE], n_acc = n_accG)))
-        allLL[allok_trial][t_stop_intr] <- log(gf[t_stop_intr] + (1 - gf[t_stop_intr]) * (1 - tf[t_stop_intr]) * pStop)
+        if (n_accST > 0) {
+          # With stop-triggered accumulators, a true intrinsic non-response requires both go failure and trigger failure.
+          allLL[allok_trial][t_stop_intr] <- log(gf[t_stop_intr] * tf[t_stop_intr])
+        } else {
+          mask_trials <- rep(FALSE, n_trials)
+          mask_trials[t_stop_intr] <- TRUE
+          idx_go <- which(rep(mask_trials, each = n_acc) & ispGOacc)
+          pStop <- pmin(1, pmax(0, model$sfun(pars[idx_go, , drop = FALSE], n_acc = n_accG)))
+          allLL[allok_trial][t_stop_intr] <- log(gf[t_stop_intr] + (1 - gf[t_stop_intr]) * (1 - tf[t_stop_intr]) * pStop)
+        }
       }
     }
 
@@ -1287,41 +1345,48 @@ log_likelihood_race_ss_cens_trunc <- function(pars, dadm, model, min_ll = log(1e
     gf_r <- pars_r[isp1_r, "gf"]
     tf_r <- pars_r[isp1_r, "tf"]
 
-    like <- numeric(n_trials_r)
-
-    # Go trials with response
-    if (any(!ispStop_r)) {
-      ispGOwin <- !ispStop_r & dadm_r$winner
-      tGO <- ptrials[ispGOwin]
-      like[tGO] <- log(model$dfunG(rt = dadm_r$rt[ispGOwin], pars = pars_r[ispGOwin, , drop = FALSE]))
-      if (n_accG > 1) {
-        ispGOloss <- !ispStop_r & !dadm_r$winner & ispGOacc_r
-        n_expected <- (n_accG - 1) * length(tGO)
-        if (sum(ispGOloss) != n_expected) {
-          cdf_loss <- model$pfunG(rt = dadm_r$rt[ispGOloss], pars = pars_r[ispGOloss, , drop = FALSE])
-          cdf_loss[is.na(cdf_loss)] <- 1
-          cdf_loss <- pmin(1, pmax(0, cdf_loss))
-          ll_loss <- log(pmax(1 - cdf_loss, 0))
-          loss_sum <- rowsum(ll_loss, group = ptrials[ispGOloss], reorder = FALSE)
-          like[as.integer(rownames(loss_sum))] <- like[as.integer(rownames(loss_sum))] + loss_sum[, 1]
-        } else {
-        like[tGO] <- like[tGO] + apply(
-          matrix(log(1 - model$pfunG(rt = dadm_r$rt[ispGOloss], pars = pars_r[ispGOloss, , drop = FALSE])),
-                 nrow = n_accG - 1),
-          2, sum
-        )
-        }
-      }
-      like[tGO] <- (1 - gf_r[tGO]) * exp(like[tGO])
-    }
+    like <- numeric(n_trials_r) 
+ 
+    # Go trials with response 
+    if (any(!ispStop_r)) { 
+      # GO trials cannot be "won" by stop-triggered accumulators: restrict to GO responses.
+      ispGOtrial <- !ispStop_r & (dadm_r$R %in% GoR) 
+      ispGOwin <- ispGOtrial & dadm_r$winner & ispGOacc_r 
+      tGO <- ptrials[ispGOwin] 
+      like[tGO] <- log(model$dfunG(rt = dadm_r$rt[ispGOwin], pars = pars_r[ispGOwin, , drop = FALSE])) 
+      if (n_accG > 1) { 
+        ispGOloss <- ispGOtrial & !dadm_r$winner & ispGOacc_r 
+        n_expected <- (n_accG - 1) * length(tGO) 
+        if (sum(ispGOloss) != n_expected) { 
+          cdf_loss <- model$pfunG(rt = dadm_r$rt[ispGOloss], pars = pars_r[ispGOloss, , drop = FALSE]) 
+          cdf_loss[is.na(cdf_loss)] <- 1 
+          cdf_loss <- pmin(1, pmax(0, cdf_loss)) 
+          ll_loss <- log(pmax(1 - cdf_loss, 0)) 
+          loss_sum <- rowsum(ll_loss, group = ptrials[ispGOloss], reorder = FALSE) 
+          like[as.integer(rownames(loss_sum))] <- like[as.integer(rownames(loss_sum))] + loss_sum[, 1] 
+        } else { 
+        like[tGO] <- like[tGO] + apply( 
+          matrix(log(1 - model$pfunG(rt = dadm_r$rt[ispGOloss], pars = pars_r[ispGOloss, , drop = FALSE])), 
+                 nrow = n_accG - 1), 
+          2, sum 
+        ) 
+        } 
+      } 
+      like[tGO] <- (1 - gf_r[tGO]) * exp(like[tGO]) 
+    } 
 
     # Stop trials with a response (n_accST==0 only)
     if (any(ispStop_r)) {
-      ispSGO <- ispStop_r & (dadm_r$R %in% GoR)
+      ispSGO <- ispStop_r & (dadm_r$R %in% GoR)   # GO responses
+      ispSST <- ispStop_r & !(dadm_r$R %in% GoR)  # ST responses
+
+      # GO responses on stop trials: mixture over trigger failure vs triggered (requires stop + ST survive).
       if (any(ispSGO)) {
         ispGOwin <- ispSGO & dadm_r$winner
         tGO <- ptrials[ispGOwin]
         like[tGO] <- log(model$dfunG(rt = dadm_r$rt[ispGOwin], pars = pars_r[ispGOwin, , drop = FALSE]))
+
+        # GO loser survivor(s)
         if (n_accG > 1) {
           ispGOloss <- ispSGO & !dadm_r$winner & ispGOacc_r
           n_expected <- (n_accG - 1) * length(tGO)
@@ -1335,14 +1400,68 @@ log_likelihood_race_ss_cens_trunc <- function(pars, dadm, model, min_ll = log(1e
           } else {
             like[tGO] <- like[tGO] + apply(
               matrix(log(1 - model$pfunG(rt = dadm_r$rt[ispGOloss], pars = pars_r[ispGOloss, , drop = FALSE])),
-                nrow = n_accG - 1
-              ),
+                     nrow = n_accG - 1),
               2, sum
             )
           }
-          ts <- like[tGO] + log(1 - model$pfunS(rt = dadm_r$rt[ispGOwin], pars = pars_r[ispGOwin, , drop = FALSE]))
-          like[tGO] <- (1 - gf_r[tGO]) * (tf_r[tGO] * exp(like[tGO]) + (1 - tf_r[tGO]) * exp(ts))
         }
+
+        # Triggered branch: stop survivor and ST survivor(s) by rt.
+        ts <- like[tGO] + log(1 - model$pfunS(rt = dadm_r$rt[ispGOwin], pars = pars_r[ispGOwin, , drop = FALSE]))
+        if (n_accST == 0) {
+          stl <- 0
+        } else {
+          ispSTloss <- ispSGO & !ispGOacc_r
+          stl <- apply(matrix(log(1 - model$pfunG(
+            rt = dadm_r$rt[ispSTloss] - pars_r[ispSTloss, "SSD"],
+            pars = pars_r[ispSTloss, , drop = FALSE]
+          )), nrow = n_accST), 2, sum)
+        }
+
+        like[tGO] <- (1 - gf_r[tGO]) * (tf_r[tGO] * exp(like[tGO]) + (1 - tf_r[tGO]) * exp(ts + stl))
+      }
+
+      # ST responses on stop trials: require triggering; mixture over go failure and stop-win vs go-survival.
+      if (any(ispSST)) {
+        ispSSTwin <- dadm_r$winner & ispSST
+        tST <- ptrials[ispSSTwin]
+
+        # Stop-win probability up to the observed RT (convert absolute RT to stop duration RT-SSD).
+        pStop <- pmin(1, pmax(0, model$sfun(
+          pars_r[ispSST & ispGOacc_r, , drop = FALSE], n_acc = n_accG,
+          upper = dadm_r$rt[ispSSTwin] - dadm_r$SSD[ispSSTwin]
+        )))
+
+        like[tST] <- log(model$dfunG(
+          rt = dadm_r$rt[ispSSTwin] - dadm_r$SSD[ispSSTwin],
+          pars = pars_r[ispSSTwin, , drop = FALSE]
+        ))
+
+        # ST loser survivor(s)
+        if (n_accST > 1) {
+          ispSSTloss <- !dadm_r$winner & ispSST & !ispGOacc_r
+          llST <- log(1 - model$pfunG(
+            rt = dadm_r$rt[ispSSTloss] - dadm_r$SSD[ispSSTloss],
+            pars = pars_r[ispSSTloss, , drop = FALSE]
+          ))
+          if (n_accST == 2) {
+            like[tST] <- like[tST] + llST
+          } else {
+            like[tST] <- like[tST] + apply(matrix(llST, nrow = n_accST - 1), 2, sum)
+          }
+        }
+
+        # GO loser survivor(s)
+        ispSGloss <- ispSST & ispGOacc_r
+        llG <- apply(matrix(log(1 - model$pfunG(
+          rt = dadm_r$rt[ispSGloss],
+          pars = pars_r[ispSGloss, , drop = FALSE]
+        )), nrow = n_accG), 2, sum)
+
+        like[tST] <- (1 - tf_r[tST]) * (
+          gf_r[tST] * exp(like[tST]) +
+            (1 - gf_r[tST]) * (pStop * exp(like[tST]) + (1 - pStop) * exp(like[tST] + llG))
+        )
       }
     }
 
@@ -1355,12 +1474,13 @@ log_likelihood_race_ss_cens_trunc <- function(pars, dadm, model, min_ll = log(1e
         start_row <- (j - 1) * n_acc + 1
         idx_trial_rows <- start_row:(start_row + n_acc - 1)
         idx_go_rows <- idx_trial_rows[ispGOacc_r[idx_trial_rows]]
+        idx_st_rows <- idx_trial_rows[!ispGOacc_r[idx_trial_rows]]
         if (!is_stop_j) {
-          S_lt <- .prod_surv_go_min(LT1[j], idx_go_rows)
-          S_ut <- .prod_surv_go_min(UT1[j], idx_go_rows)
-          Z <- (1 - gf_r[j]) * max(S_lt - S_ut, .Machine$double.eps)
+          S_lt <- .prod_surv_go_min(LT1[j], idx_go_rows, pars_mat = pars_r)
+          S_ut <- .prod_surv_go_min(UT1[j], idx_go_rows, pars_mat = pars_r)
+          Z <- (1 - gf_r[j]) * max(S_lt - S_ut, tiny)
         } else {
-          Z <- .trunc_Z_stoptrial(j, LT1[j], UT1[j], idx_go_rows, idx_trial_rows)
+          Z <- .trunc_Z_stoptrial(LT1[j], UT1[j], idx_go_rows, idx_st_rows, idx_trial_rows, pars_mat = pars_r)
         }
         like[j] <- like[j] / Z
       }

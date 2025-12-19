@@ -20,6 +20,13 @@
 #include <limits>
 using namespace Rcpp;
 
+// Numerically stable log(exp(a) - exp(b)) for a > b
+inline double log_diff_exp(double a, double b) {
+  if (a <= b) return R_NegInf; // Probability <= 0 or logic error
+  if (b == R_NegInf) return a;
+    return a + std::log1p(-std::exp(b - a));
+}
+
 // Forward declaration: stop-signal likelihood with deadline censoring (rt==Inf uses UC).
 double c_log_likelihood_ss_cens_trunc(
     const Rcpp::NumericMatrix& pars,
@@ -498,25 +505,52 @@ double get_trunc_normaliser_cpp(
     double epsilon,
     void* model_specific_context,
     gsl_integration_workspace* w){
-    double total_log_mass = R_NegInf; 
-    for(int k=1;k<=n_lR;++k) {
-        double log_mass_k  = integrate_for_kth_winner_cpp(k,
-                                                          p_all_acc,
-                                                          isok_trial,
-                                                          LT,
-                                                          UT,
-                                                          pdf1,
-                                                          cdf1,
-                                                          n_lR,
-                                                          n_par,
-                                                          epsilon,
-                                                          model_specific_context,
-                                                          w);
-		    // Accumulate the log masses using the log-sum-exp trick
-        total_log_mass = log_sum_exp(total_log_mass, log_mass_k);
-	}
-    return total_log_mass;
-}
+    // Calculate sum of log(1-F(LT)) and sum of log(1-F(UT))
+    // S(t) = product(1 - F_i(t))
+    // P(LT < T < UT) = S(LT) - S(UT)
+    // log P = log_diff_exp(log S(LT), log S(UT))
+
+    double logS_LT = 0.0;
+    std::vector<double> par_row(static_cast<size_t>(n_par));
+
+    // Calculate S(LT)
+    for(int k=0; k < n_lR; ++k) {
+      if (!isok_trial[k]) return R_NegInf; 
+      for(int c=0; c<n_par; ++c) par_row[static_cast<size_t>(c)] = p_all_acc(k, c);
+      double cdf = cdf1(LT, par_row.data(), model_specific_context);
+      if (!std::isfinite(cdf)) return R_NegInf;
+      if (cdf >= 1.0) { logS_LT = R_NegInf; break; }
+      if (cdf > 0.0) {
+        if (cdf > 1.0 - 1e-15) cdf = 1.0 - 1e-15;
+        logS_LT += std::log1p(-cdf);
+      }
+    }
+
+    if (logS_LT == R_NegInf) return R_NegInf; // Probability mass already 0 at start
+
+    if (UT == R_PosInf) {
+       // S(inf) = 0, so logS_UT = -inf
+       // log(S(LT) - 0) = logS(LT)
+       return logS_LT;
+    }
+
+    double logS_UT = 0.0;
+    // Calculate S(UT)
+    for(int k=0; k < n_lR; ++k) {
+       // No need to check isok again
+       for(int c=0; c<n_par; ++c) par_row[static_cast<size_t>(c)] = p_all_acc(k, c);
+       double cdf = cdf1(UT, par_row.data(), model_specific_context);
+       if (!std::isfinite(cdf)) return R_NegInf; 
+       if (cdf >= 1.0) { logS_UT = R_NegInf; break; }
+       if (cdf > 0.0) {
+          if (cdf > 1.0 - 1e-15) cdf = 1.0 - 1e-15;
+          logS_UT += std::log1p(-cdf);
+       }
+    }
+
+    return log_diff_exp(logS_LT, logS_UT);
+    }
+
 
 inline void append_par_block(std::ostringstream& oss,
                             int start_row,
@@ -859,6 +893,23 @@ double c_log_likelihood_race_cens_trunc(
 		  log_integral_cache.emplace(std::move(key), log_val);
 		  return log_val;
 		};
+    // Helper for calculating log survivor S(t) = sum(log(1-F_i(t)))
+    auto calc_log_survivor = [&](double t) -> double {
+       if (t == R_PosInf) return R_NegInf;
+       double logS = 0.0;
+       std::vector<double> par_row(static_cast<size_t>(pars.ncol()));
+       for (int k = 0; k < n_lR_j; ++k) {
+         if (!isok_for_trial[k]) return R_NegInf;
+         for (int c = 0; c < pars.ncol(); ++c) par_row[static_cast<size_t>(c)] = p_all_acc_for_trial(k, c);
+         double cdf = cdf1(t, par_row.data(), model_context_for_funcs);
+         if (!std::isfinite(cdf)) return R_NegInf;
+         if (cdf >= 1.0) return R_NegInf;
+         if (cdf <= 0.0) continue;
+         if (cdf > 1.0 - 1e-15) cdf = 1.0 - 1e-15;
+         logS += std::log1p(-cdf);
+       }
+       return logS;
+    };
         // Case 2: Fast censoring (RT=-Inf). Probability is integral from LT to LC.
         if (rt_j == R_NegInf) {
 			lower_for_trial = LT[start_row_idx];
@@ -908,55 +959,20 @@ double c_log_likelihood_race_cens_trunc(
 					lower_for_trial = UC[start_row_idx];
 					upper_for_trial = UT[start_row_idx];
 
-					// Fast path: when the winner is unknown and there is no upper truncation (UT = +Inf),
-					// the observation {rt == Inf} corresponds to the event {T_min > UC}. This can be
-					// computed exactly as a product of survivor functions, avoiding numerical integration.
-					// For LBAIO (posdrift=false) this already includes intrinsic-omission mass.
-					if (R_j_idx == NA_INTEGER && upper_for_trial == R_PosInf) {
-						double logS = 0.0;
-						std::vector<double> par_row(static_cast<size_t>(pars.ncol()));
-						for (int k = 0; k < n_lR_j; ++k) {
-							if (!isok_for_trial[k]) { logS = R_NegInf; break; }
-							for (int c = 0; c < pars.ncol(); ++c) par_row[static_cast<size_t>(c)] = p_all_acc_for_trial(k, c);
-							double cdf = cdf1(lower_for_trial, par_row.data(), model_context_for_funcs);
-							if (!std::isfinite(cdf)) { logS = R_NegInf; break; }
-							if (cdf <= 0.0) continue;                   // log(1)
-							if (cdf >= 1.0) { logS = R_NegInf; break; } // log(0)
-							if (cdf > 1.0 - 1e-15) cdf = 1.0 - 1e-15;
-							logS += std::log1p(-cdf);
-						}
-						current_ll_val = logS;
+					if (R_j_idx == NA_INTEGER) {
+            // Winner is unknown: P(UC < min(T) < UT) = S(UC) - S(UT)
+            // This is an analytic solution for the probability that no accumulator finishes before UC
+            // but one finishes before UT.
+            double logS_lower = calc_log_survivor(lower_for_trial);
+            double logS_upper = calc_log_survivor(upper_for_trial);
+            current_ll_val = log_diff_exp(logS_lower, logS_upper);
 						slow_censor_closed_form = true;
-					} else if (n_lR_j == 1) {
-						// Simplified case for single accumulator
-						if (!isok_for_trial[0]) {
-							current_ll_val = R_NegInf;
-						} else {
-							std::vector<double> par_row(static_cast<size_t>(pars.ncol()));
-							for (int c = 0; c < pars.ncol(); ++c) par_row[static_cast<size_t>(c)] = p_all_acc_for_trial(0, c);
-							double cdf = cdf1(lower_for_trial, par_row.data(), model_context_for_funcs);
-							if (!std::isfinite(cdf) || cdf >= 1.0) {
-								current_ll_val = R_NegInf;
-							} else if (cdf <= 0.0) {
-								current_ll_val = 0.0; // log(1)
-							} else {
-								if (cdf > 1.0 - 1e-15) cdf = 1.0 - 1e-15;
-								current_ll_val = std::log1p(-cdf);
-							}
-						}
-						if (R_j_idx == NA_INTEGER && upper_for_trial == R_PosInf) {
-							slow_censor_closed_form = true;
-						}
 					} else {
-						if (R_j_idx != NA_INTEGER) { // Response (winner) is known
+            // Response (winner) is known: We need the probability that *specific* accumulator k won
+            // in the interval (UC, UT). This generally requires integration.
+						// Simplified case for single accumulator
 							current_ll_val = integrate_cached(R_j_idx, lower_for_trial, upper_for_trial);
-						} else { // Response (winner) is unknown; sum probabilities over all possible winners
-                for (int k_win = 1; k_win <= n_lR_j; ++k_win) {
-                  double log_l_k = integrate_cached(k_win, lower_for_trial, upper_for_trial);
-                  current_ll_val =  log_sum_exp(current_ll_val, log_l_k);
-                }
-              }
-				    }
+						} 
 			  }
         // Case 4: Missing RT (NA). Probability is sum of integral from LT to LC and UC to UT (i.e., outside the observation window but within truncation).
       } else if (NumericVector::is_na(rt_j)) {
@@ -1397,36 +1413,48 @@ double c_log_likelihood_ss_cens_trunc(
     }
   };
 
-  auto surv_prod = [&](double t, const std::vector<double>& pars_pack, int n_acc) -> double {
+  auto log_surv_prod = [&](double t, const std::vector<double>& pars_pack, int n_acc) -> double {
     double logS = 0.0;
     for (int k = 0; k < n_acc; ++k) {
       const double* par_k = pars_pack.data() + static_cast<size_t>(k) * n_go_par;
       double cdf = go_cdf1(t, par_k, go_ctx);
       cdf = clamp_cdf01(cdf);
       const double ll = safe_log1m(cdf);
-      if (!std::isfinite(ll)) return 0.0;
+      if (!std::isfinite(ll)) return R_NegInf;
       logS += ll;
     }
-    const double out = std::exp(logS);
-    if (!std::isfinite(out)) return 0.0;
-    return out;
+    return logS;
   };
 
-  auto surv_prod_subset = [&](double t,
-                             const std::vector<double>& resp_pars,
-                             const std::vector<int>& offsets) -> double {
+  auto log_surv_prod_subset = [&](double t,
+                                 const std::vector<double>& resp_pars,
+                                 const std::vector<int>& offsets) -> double {
     double logS = 0.0;
     for (int off : offsets) {
       const double* par_k = resp_pars.data() + static_cast<size_t>(off) * n_go_par;
       double cdf = go_cdf1(t, par_k, go_ctx);
       cdf = clamp_cdf01(cdf);
       const double ll = safe_log1m(cdf);
-      if (!std::isfinite(ll)) return 0.0;
+      if (!std::isfinite(ll)) return R_NegInf;
       logS += ll;
     }
+    return logS;
+  };
+
+  auto surv_prod = [&](double t, const std::vector<double>& pars_pack, int n_acc) -> double {
+    const double logS = log_surv_prod(t, pars_pack, n_acc);
+    if (!std::isfinite(logS)) return 0.0;
     const double out = std::exp(logS);
-    if (!std::isfinite(out)) return 0.0;
-    return out;
+    return (std::isfinite(out) ? out : 0.0);
+  };
+
+  auto surv_prod_subset = [&](double t,
+                             const std::vector<double>& resp_pars,
+                             const std::vector<int>& offsets) -> double {
+    const double logS = log_surv_prod_subset(t, resp_pars, offsets);
+    if (!std::isfinite(logS)) return 0.0;
+    const double out = std::exp(logS);
+    return (std::isfinite(out) ? out : 0.0);
   };
 
   auto log_joint_for_winner_subset = [&](double t,
@@ -1501,6 +1529,27 @@ double c_log_likelihood_ss_cens_trunc(
     oss << std::setprecision(17);
     oss << "SSZ|" << LTj << '|' << UTj << '|' << tf << '|' << SSD << '|' << muS << '|' << sigmaS << '|' << tauS << '|';
     for (double v : goonly_pars) {
+      if (Rcpp::NumericVector::is_na(v)) oss << "NA";
+      else oss << v;
+      oss << ',';
+    }
+    return oss.str();
+  };
+
+  auto make_stoptrunc_key_st = [&](double LTj,
+                                  double UTj,
+                                  double gf,
+                                  double tf,
+                                  double SSD,
+                                  double muS,
+                                  double sigmaS,
+                                  double tauS,
+                                  const std::vector<double>& resp_pars) -> std::string {
+    std::ostringstream oss;
+    oss.setf(std::ios::scientific);
+    oss << std::setprecision(17);
+    oss << "SSZST|" << LTj << '|' << UTj << '|' << gf << '|' << tf << '|' << SSD << '|' << muS << '|' << sigmaS << '|' << tauS << '|';
+    for (double v : resp_pars) {
       if (Rcpp::NumericVector::is_na(v)) oss << "NA";
       else oss << v;
       oss << ',';
@@ -1662,9 +1711,9 @@ double c_log_likelihood_ss_cens_trunc(
             double logS_stop = (S_stop_rt > 0.0) ? std::log(S_stop_rt) : R_NegInf;
             double logS_st = 0.0;
             if (n_st > 0) {
-              const double t_eff = rt_j - SSD;
-              const double S_st = surv_prod_subset(t_eff, resp_pars, st_offsets);
-              logS_st = (S_st > 0.0) ? std::log(S_st) : R_NegInf;
+              double t_eff = rt_j - SSD;
+              if (!R_finite(t_eff) || t_eff <= 0.0) t_eff = 0.0;
+              logS_st = log_surv_prod_subset(t_eff, resp_pars, st_offsets);
             }
             if (std::isfinite(logS_stop) && std::isfinite(logS_st)) {
               log_go_mass = log_sum_exp(log_go_mass, std::log1p(-tf) + log_base + logS_stop + logS_st);
@@ -1703,11 +1752,7 @@ double c_log_likelihood_ss_cens_trunc(
           const double log1m_pStop = safe_log1m(pStop_rt);
 
           // GO survivor by rt (only matters when stop doesn't beat go).
-          double logS_go_rt = 0.0;
-          if (n_go > 0) {
-            const double S_go_rt = surv_prod(rt_j, goonly_pars, n_go);
-            logS_go_rt = (S_go_rt > 0.0) ? std::log(S_go_rt) : R_NegInf;
-          }
+          const double logS_go_rt = (n_go > 0) ? log_surv_prod(rt_j, goonly_pars, n_go) : 0.0;
 
           // gf branch: only ST races
           if (gf > 0.0) {
@@ -1735,28 +1780,94 @@ double c_log_likelihood_ss_cens_trunc(
     if (LTj != 0.0 || UTj != R_PosInf) {
       double logZ = R_NegInf;
       if (!is_stop) {
-        const double S_lt = (n_go > 0) ? surv_prod(LTj, goonly_pars, n_go) : 1.0;
-        const double S_ut = (UTj == R_PosInf) ? 0.0 : ((n_go > 0) ? surv_prod(UTj, goonly_pars, n_go) : 0.0);
-        const double diff = std::max(S_lt - S_ut, std::numeric_limits<double>::min());
-        const double Z = (1.0 - gf) * diff;
-        logZ = (Z > 0.0) ? std::log(Z) : R_NegInf;
+        const double logS_lt = (n_go > 0) ? log_surv_prod(LTj, goonly_pars, n_go) : 0.0;
+        const double logS_ut = (n_go > 0)
+          ? ((UTj == R_PosInf) ? R_NegInf : log_surv_prod(UTj, goonly_pars, n_go))
+          : 0.0;
+        double log_diff = log_diff_exp(logS_lt, logS_ut);
+        if (!std::isfinite(log_diff)) log_diff = std::log(std::numeric_limits<double>::min());
+        logZ = ((1.0 - gf) > 0.0) ? (std::log1p(-gf) + log_diff) : R_NegInf;
       } else {
         if (n_st > 0) {
-          Rcpp::stop("c_log_likelihood_ss_cens_trunc: truncation normalisation is not yet supported when stop-triggered accumulators are present.");
-        }
-        const std::string key = make_stoptrunc_key(LTj, UTj, tf, SSD, muS, sigmaS, tauS, goonly_pars);
-        auto hit = cache_logZ.find(key);
-        if (hit != cache_logZ.end()) {
-          logZ = hit->second;
+          // Z = P(response in (LT, UT)) = P(no response by LT) - P(no response by UT).
+          // Requires pStop(t) evaluation (stop-win CDF) at LT and UT; cached via make_stopwin_key.
+          const std::string key = make_stoptrunc_key_st(LTj, UTj, gf, tf, SSD, muS, sigmaS, tauS, resp_pars);
+          auto hit = cache_logZ.find(key);
+          if (hit != cache_logZ.end()) {
+            logZ = hit->second;
+          } else {
+            auto p_no_by_t = [&](double t_abs) -> double {
+              // GO survivor by absolute time.
+              const double S_go = (n_go > 0) ? surv_prod(t_abs, goonly_pars, n_go) : 1.0;
+              const double p_tf = gf + (1.0 - gf) * S_go;
+
+              // Stop survivor by absolute time.
+              double S_stop = ss_stop_surv_abs(t_abs, SSD, muS, sigmaS, tauS);
+              if (!std::isfinite(S_stop)) S_stop = 0.0;
+              S_stop = ss_clamp_prob01(S_stop);
+
+              // pStop(t): P(stop finishes before GO by t).
+              double pStop = 0.0;
+              if (n_go == 0) {
+                pStop = 1.0;
+              } else if ((1.0 - gf) > 0.0) {
+                const double upper_dur = t_abs - SSD;
+                const std::string keyP = make_stopwin_key(upper_dur, SSD, muS, sigmaS, tauS, goonly_pars);
+                auto hitP = cache_prob.find(keyP);
+                if (hitP != cache_prob.end()) {
+                  pStop = hitP->second;
+                } else {
+                  pStop = integrate_ss_stopwin_prob(upper_dur,
+                                                    goonly_pars.data(), n_go, n_go_par,
+                                                    go_cdf1, go_ctx,
+                                                    SSD, muS, sigmaS, tauS,
+                                                    epsilon, workspace.get());
+                  cache_prob.emplace(keyP, pStop);
+                }
+              }
+              pStop = ss_clamp_prob01(pStop);
+
+              // ST survivor by absolute time (shifted by SSD; deadline before trigger => ST cannot respond yet).
+              double S_st = 1.0;
+              if (n_st > 0) {
+                double t_eff = t_abs - SSD;
+                if (!R_finite(t_eff) || t_eff <= 0.0) t_eff = 0.0;
+                S_st = surv_prod_subset(t_eff, resp_pars, st_offsets);
+              }
+
+              const double p_trig_core = gf + (1.0 - gf) * (pStop + S_go * S_stop);
+              const double p_trig = S_st * p_trig_core;
+
+              const double p = tf * p_tf + (1.0 - tf) * p_trig;
+              return ss_clamp_prob01(p);
+            };
+
+            const double p_lt = p_no_by_t(LTj);
+            const double p_ut = p_no_by_t(UTj);
+            if (!(p_lt > p_ut) || !std::isfinite(p_lt) || !std::isfinite(p_ut)) {
+              logZ = std::log(std::numeric_limits<double>::min());
+            } else {
+              double logZtmp = log_diff_exp(std::log(p_lt), std::log(p_ut));
+              if (!std::isfinite(logZtmp)) logZtmp = std::log(std::numeric_limits<double>::min());
+              logZ = logZtmp;
+            }
+            cache_logZ.emplace(key, logZ);
+          }
         } else {
-          const double Zcore = integrate_ss_stoptrunc_Z(LTj, UTj,
-                                                       goonly_pars.data(), n_go, n_go_par,
-                                                       go_pdf1, go_cdf1, go_ctx,
-                                                       tf, SSD, muS, sigmaS, tauS,
-                                                       epsilon, workspace.get());
-          const double Z = (1.0 - gf) * std::max(Zcore, std::numeric_limits<double>::min());
-          logZ = (Z > 0.0) ? std::log(Z) : R_NegInf;
-          cache_logZ.emplace(key, logZ);
+          const std::string key = make_stoptrunc_key(LTj, UTj, tf, SSD, muS, sigmaS, tauS, goonly_pars);
+          auto hit = cache_logZ.find(key);
+          if (hit != cache_logZ.end()) {
+            logZ = hit->second;
+          } else {
+            const double Zcore = integrate_ss_stoptrunc_Z(LTj, UTj,
+                                                         goonly_pars.data(), n_go, n_go_par,
+                                                         go_pdf1, go_cdf1, go_ctx,
+                                                         tf, SSD, muS, sigmaS, tauS,
+                                                         epsilon, workspace.get());
+            const double Z = (1.0 - gf) * std::max(Zcore, std::numeric_limits<double>::min());
+            logZ = (Z > 0.0) ? std::log(Z) : R_NegInf;
+            cache_logZ.emplace(key, logZ);
+          }
         }
       }
 

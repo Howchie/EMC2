@@ -149,6 +149,8 @@ predict.emc <- function(object,hyper=FALSE,n_post=50,n_cores=1,
   dots <- list(...)
   data <- get_data(emc)
   design <- get_design(emc)
+  if (is.null(dots$force_direction)) dots$force_direction <- FALSE
+  if (is.null(dots$force_response)) dots$force_response <- FALSE
   return_trialwise_parameters <- isTRUE(dots$return_trialwise_parameters)
 #   if (is.null(dots$conditional_on_data) && has_conditional_covariates(design[[1]])) {
 #     dots$conditional_on_data <- FALSE
@@ -1177,4 +1179,3 @@ auto_thin.emc <- function(emc, stage = "sample", selection = c("alpha", "mu"), .
 auto_thin <- function(emc, stage = "sample", selection = c("alpha", "mu"), ...){
   UseMethod("auto_thin")
 }
-

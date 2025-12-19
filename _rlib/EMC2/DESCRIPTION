@@ -32,44 +32,38 @@ Description: Fit Bayesian (hierarchical) cognitive models
     such as information criteria or Bayes factors.
     References: Stevenson et al. (2024) <doi:10.31234/osf.io/2e4dq>.
 License: GPL (>= 3)
-URL: https://ampl-psych.github.io/EMC2/, https://github.com/ampl-psych/EMC2
-BugReports: https://github.com/ampl-psych/EMC2/issues 
+URL: https://ampl-psych.github.io/EMC2/,
+        https://github.com/ampl-psych/EMC2
+BugReports: https://github.com/ampl-psych/EMC2/issues
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
 RoxygenNote: 7.3.3
 VignetteBuilder: knitr
-Suggests: 
-    testthat (>= 3.0.0),
-    vdiffr,
-    knitr,
-    rmarkdown,
-    DiagrammeR
+Suggests: testthat (>= 3.0.0), vdiffr, knitr, rmarkdown, DiagrammeR
 Config/testthat/edition: 3
-Imports: 
-    abind,
-    coda,
-    graphics,
-    grDevices,
-    magic,
-    MASS,
-    matrixcalc,
-    methods,
-    msm,
-    mvtnorm,
-    parallel,
-    stats,
-    Matrix,
-    Rcpp,
-    Brobdingnag,
-    corrplot,
-    colorspace,
-    psych,
-    utils,
-    lpSolve,
-    WienR,
-LinkingTo: 
-    Rcpp, RcppArmadillo
-Depends: 
-    R (>= 3.5.0)
+Imports: abind, coda, graphics, grDevices, magic, MASS, matrixcalc,
+        methods, msm, mvtnorm, parallel, stats, Matrix, Rcpp,
+        Brobdingnag, corrplot, colorspace, psych, utils, lpSolve,
+        WienR,
+LinkingTo: Rcpp, RcppArmadillo
+Depends: R (>= 3.5.0)
 LazyData: true
 Config/testthat/parallel: true
+Author: Niek Stevenson [aut, cre] (ORCID:
+    <https://orcid.org/0000-0003-3206-7544>),
+  Michelle Donzallaz [aut],
+  Andrew Heathcote [aut],
+  Steven Miletić [ctb],
+  Raphael Hartmann [ctb],
+  Karl C. Klauer [ctb],
+  Steven G. Johnson [ctb],
+  Jean M. Linhart [ctb],
+  Brian Gough [ctb],
+  Gerard Jungman [ctb],
+  Rudolf Schuerer [ctb],
+  Przemyslaw Sliwa [ctb],
+  Jason H. Stover [ctb],
+  Zachary L. Howard [ctb]
+Maintainer: Niek Stevenson <niek.stevenson@gmail.com>
+Built: R 4.5.1; x86_64-w64-mingw32; 2025-12-19 03:41:12 UTC; windows
+Archs: x64

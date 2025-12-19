@@ -33,7 +33,7 @@ expand_bound_rowwise <- function(b, data, bound_name = "bound") {
 }
 
 make_missing <- function(data, LT = 0, UT = Inf, LC = 0, UC = Inf,
-                         LCresponse = TRUE, UCresponse = TRUE,
+                         LCresponse = FALSE, UCresponse = FALSE,
                          LCdirection = TRUE, UCdirection = TRUE) {
 
   LTr <- expand_bound_rowwise(LT, data, "LT")
@@ -101,6 +101,17 @@ make_missing <- function(data, LT = 0, UT = Inf, LC = 0, UC = Inf,
 #' algorithm. If non-null and a list then passed through as is, if not it is assigned the
 #' default list structure: list(p=.25,SSD0=.25,stairstep=.05,stairmin=0,stairmax=Inf)
 #' @param functions List of functions you want to apply to the data generation.
+#' @param LT Lower truncation bound below which data are removed (scalar, subject-wise vector, or trial-wise vector).
+#' @param UT Upper truncation bound above which data are removed (scalar, subject-wise vector, or trial-wise vector).
+#' @param LC Lower censoring bound (scalar, subject-wise vector, or trial-wise vector).
+#' @param UC Upper censoring bound (scalar, subject-wise vector, or trial-wise vector).
+#' @param LCresponse Logical. If FALSE, set responses to NA on lower-censored trials.
+#' @param UCresponse Logical. If FALSE, set responses to NA on upper-censored trials.
+#' @param LCdirection Logical. If TRUE, lower-censored RTs are coded as -Inf; if FALSE, as NA.
+#' @param UCdirection Logical. If TRUE, upper-censored RTs are coded as Inf; if FALSE, as NA.
+#' @param force_direction Logical. If TRUE (default), do not infer censor direction from `data$rt`.
+#' @param force_response Logical. If TRUE (default), do not infer whether censored trials keep responses from `data$R`.
+#' @param rtContaminantNA Logical. If TRUE, contaminant trials have `rt=NA`; otherwise they are coded using the censor direction(s).
 #' @param ... Additional optional arguments
 #' @return A data frame with simulated data
 #' @examples
@@ -129,29 +140,15 @@ make_missing <- function(data, LT = 0, UT = Inf, LC = 0, UC = Inf,
 #' @export
 
 make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1, staircase = NULL,
-                      functions = NULL, LT=NULL,LC=NULL,UC=NULL,UT=NULL,...)
+                      functions = NULL, LT=NULL,LC=NULL,UC=NULL,UT=NULL,...,
+                      LCresponse = FALSE, UCresponse = FALSE,
+                      LCdirection = TRUE, UCdirection = TRUE,
+                      force_direction = TRUE, force_response = TRUE,
+                      rtContaminantNA = FALSE)
 {
-  # #' @param LT lower truncation bound below which data are removed (scalar or subject named vector)
-  # #' @param UT upper truncation bound above which data are removed (scalar or subject named vector)
-  # #' @param LC lower censoring bound (scalar or subject named vector)
-  # #' @param UC upper censoring bound (scalar or subject named vector)
-  # #' @param LCresponse Boolean, default TRUE, if false set LC response to NA
-  # #' @param UCresponse Boolean, default TRUE, if false set UC response to NA
-  # #' @param LCdirection Boolean, default TRUE, set LC rt to 0, else to NA
-  # #' @param UCdirection Boolean, default TRUE, set LC rt to Inf, else to NA
-  # #' @param force_direction Boolean, take direction from argument not data (default FALSE)
-  # #' @param force_response Boolean, take response from argument not data (default FALSE)
-  # #' @param rtContaminantNA Boolean, TRUE sets contaminant trial rt to NA, if FALSE
-  # #' (the default) direction is taken from data or LCdirection or UCdirection (NB
-  # #' if both of these are false an error occurs as then contamination is not identifiable).
-  # #' @param return_Ffunctions if false covariates are not returned
-
   if (!is.null(staircase)){
     staircase <- check_staircase(staircase)
   }
-  # #' @param Fcovariates either a data frame of covariate values with the same
-  # #' number of rows as the data or a list of functions specifying covariates for
-  # #' each trial. Must have names specified in the design Fcovariates argument.
   check_bounds <- FALSE
 
   resolve_bound <- function(bound_name, supplied, default) {
@@ -164,15 +161,8 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
 
   LT <- resolve_bound("LT", LT, 0)
   UT <- resolve_bound("UT", UT, Inf)
-  LC <- resolve_bound("LC", LC, 0)
+  LC <- resolve_bound("LC", LC, LT)
   UC <- resolve_bound("UC", UC, Inf)
-  LCresponse<-TRUE
-  UCresponse<-TRUE
-  LCdirection<-TRUE
-  UCdirection<-TRUE
-  force_direction<-FALSE
-  force_response<-FALSE
-  rtContaminantNA<-FALSE
   return_Ffunctions <- FALSE
   post_functions <- NULL
   optionals <- list(...)
@@ -234,20 +224,25 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
     # bounds handled below after add_trials ordering
 		if (!force_direction) {
 		  ok <- data$rt==-Inf; ok[is.na(ok)] <- FALSE
-		  LCdirection <- any(ok)
+		  if (missing(LCdirection)) LCdirection <- any(ok)
 		  ok <- data$rt==Inf; ok[is.na(ok)] <- FALSE
-		  UCdirection=any(ok)
+		  if (missing(UCdirection)) UCdirection <- any(ok)
 		}
 		if (!force_response) {
 		  if (!any(is.infinite(data$rt)) & any(is.na(data$R))) {
-			LCresponse <- UCresponse <- FALSE
+			if (missing(LCresponse)) LCresponse <- FALSE
+			if (missing(UCresponse)) UCresponse <- FALSE
 		  } else {
-			ok <- data$rt==-Inf
-			bad <- is.na(ok)
-			LCresponse <- !any(ok[!bad] & is.na(data$R[!bad]))
-			ok <- data$rt==Inf
-			bad <- is.na(ok)
-			UCresponse <- !any(ok[!bad] & is.na(data$R[!bad]))
+			if (missing(LCresponse)) {
+			  ok <- data$rt == -Inf
+			  bad <- is.na(ok)
+			  LCresponse <- !any(ok[!bad] & is.na(data$R[!bad]))
+			}
+			if (missing(UCresponse)) {
+			  ok <- data$rt == Inf
+			  bad <- is.na(ok)
+			  UCresponse <- !any(ok[!bad] & is.na(data$R[!bad]))
+			}
 		  }
 		}
 		data <- add_trials(data[order(data$subjects),])
@@ -353,15 +348,33 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
         stop("Cannot have contamination and censoring with no direction and response")
       contam <- rbinom(nrow(data), 1, pc2) == 1
       data[contam,"R"] <- NA
-      if (any(LC != 0) | any(is.finite(UC))) { # censoring
-        if ((LCdirection & UCdirection) & !rtContaminantNA)
+
+      has_LC <- any(is.finite(data$LC) & data$LC != 0, na.rm = TRUE)
+      has_UC <- any(is.finite(data$UC), na.rm = TRUE)
+      if (has_LC | has_UC) { # censoring
+        if (has_LC & has_UC & (LCdirection & UCdirection) & !rtContaminantNA) {
           stop("Cannot have contamination with a mixture of censor directions")
-        if (rtContaminantNA & ((any(is.finite(LC)) & !LCresponse & !LCdirection) |
-                               (any(is.finite(UC)) & !UCresponse & !UCdirection)))
+        }
+        if (
+          rtContaminantNA &&
+          ((has_LC && !LCresponse && !LCdirection) || (has_UC && !UCresponse && !UCdirection))
+        ) {
           stop("Cannot have contamination and censoring with no direction and response")
-        if (rtContaminantNA | (!LCdirection & !UCdirection)) data[contam,"rt"] <- NA else
-          if (LCdirection) data[contam,"rt"] <- -Inf  else data[contam,"rt"] <- Inf
-      } else data[contam,"rt"] <- NA
+        }
+
+        if (rtContaminantNA || (!LCdirection && !UCdirection)) {
+          data[contam, "rt"] <- NA
+        } else if (has_LC && !has_UC) {
+          data[contam, "rt"] <- if (LCdirection) -Inf else NA
+        } else if (has_UC && !has_LC) {
+          data[contam, "rt"] <- if (UCdirection) Inf else NA
+        } else {
+          if (LCdirection) data[contam, "rt"] <- -Inf else
+            if (UCdirection) data[contam, "rt"] <- Inf else data[contam, "rt"] <- NA
+        }
+      } else {
+        data[contam, "rt"] <- NA
+      }
     }
     attr(data, "p_vector") <- parameters
     if (return_trialwise_parameters) attr(data, "trialwise_parameters") <- trialwise_parameters
@@ -455,15 +468,33 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
       stop("Cannot have contamination and censoring with no direction and response")
     contam <- rbinom(nrow(data), 1, pc2) == 1
     data[contam,"R"] <- NA
-    if ( any(LC!=0) | any(is.finite(UC)) ) { # censoring
-      if ( (LCdirection & UCdirection) &  !rtContaminantNA)
+
+    has_LC <- any(is.finite(data$LC) & data$LC != 0, na.rm = TRUE)
+    has_UC <- any(is.finite(data$UC), na.rm = TRUE)
+    if (has_LC | has_UC) { # censoring
+      if (has_LC & has_UC & (LCdirection & UCdirection) & !rtContaminantNA) {
         stop("Cannot have contamination with a mixture of censor directions")
-      if (rtContaminantNA & ((any(is.finite(LC)) & !LCresponse & !LCdirection) |
-                              (any(is.finite(UC)) & !UCresponse & !UCdirection)))
+      }
+      if (
+        rtContaminantNA &&
+        ((has_LC && !LCresponse && !LCdirection) || (has_UC && !UCresponse && !UCdirection))
+      ) {
         stop("Cannot have contamination and censoring with no direction and response")
-      if (rtContaminantNA | (!LCdirection & !UCdirection)) data[contam,"rt"] <- NA else
-        if (LCdirection) data[contam,"rt"] <- -Inf  else data[contam,"rt"] <- Inf
-    } else data[contam,"rt"] <- NA
+      }
+
+      if (rtContaminantNA || (!LCdirection && !UCdirection)) {
+        data[contam, "rt"] <- NA
+      } else if (has_LC && !has_UC) {
+        data[contam, "rt"] <- if (LCdirection) -Inf else NA
+      } else if (has_UC && !has_LC) {
+        data[contam, "rt"] <- if (UCdirection) Inf else NA
+      } else {
+        if (LCdirection) data[contam, "rt"] <- -Inf else
+          if (UCdirection) data[contam, "rt"] <- Inf else data[contam, "rt"] <- NA
+      }
+    } else {
+      data[contam, "rt"] <- NA
+    }
   }
   
   attr(data,"p_vector") <- parameters;

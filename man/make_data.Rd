@@ -16,7 +16,14 @@ make_data(
   LC = NULL,
   UC = NULL,
   UT = NULL,
-  ...
+  ...,
+  LCresponse = FALSE,
+  UCresponse = FALSE,
+  LCdirection = TRUE,
+  UCdirection = TRUE,
+  force_direction = TRUE,
+  force_response = TRUE,
+  rtContaminantNA = FALSE
 )
 }
 \arguments{
@@ -39,7 +46,29 @@ default list structure: list(p=.25,SSD0=.25,stairstep=.05,stairmin=0,stairmax=In
 
 \item{functions}{List of functions you want to apply to the data generation.}
 
+\item{LT}{Lower truncation bound below which data are removed (scalar, subject-wise vector, or trial-wise vector).}
+
+\item{LC}{Lower censoring bound (scalar, subject-wise vector, or trial-wise vector).}
+
+\item{UC}{Upper censoring bound (scalar, subject-wise vector, or trial-wise vector).}
+
+\item{UT}{Upper truncation bound above which data are removed (scalar, subject-wise vector, or trial-wise vector).}
+
 \item{...}{Additional optional arguments}
+
+\item{LCresponse}{Logical. If FALSE, set responses to NA on lower-censored trials.}
+
+\item{UCresponse}{Logical. If FALSE, set responses to NA on upper-censored trials.}
+
+\item{LCdirection}{Logical. If TRUE, lower-censored RTs are coded as -Inf; if FALSE, as NA.}
+
+\item{UCdirection}{Logical. If TRUE, upper-censored RTs are coded as Inf; if FALSE, as NA.}
+
+\item{force_direction}{Logical. If TRUE (default), do not infer censor direction from \code{data$rt}.}
+
+\item{force_response}{Logical. If TRUE (default), do not infer whether censored trials keep responses from \code{data$R}.}
+
+\item{rtContaminantNA}{Logical. If TRUE, contaminant trials have \code{rt=NA}; otherwise they are coded using the censor direction(s).}
 }
 \value{
 A data frame with simulated data
