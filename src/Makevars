@@ -1,3 +1,4 @@
 PKG_CPPFLAGS = $(RCPP_ARMA_CXXFLAGS) -I../inst/include
-PKG_LIBS     = $(RCPP_ARMA_LIBS)
+# Link against GSL for integration routines
+PKG_LIBS     = $(RCPP_ARMA_LIBS) -lgsl -lgslcblas
 CXX_STD      = C++11      # uncomment only if you need to force C++11
