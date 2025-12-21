@@ -1,4 +1,10 @@
-PKG_CPPFLAGS = $(RCPP_ARMA_CXXFLAGS) -I../inst/include
-# Link against GSL for integration routines
-PKG_LIBS     = $(RCPP_ARMA_LIBS) -lgsl -lgslcblas
-CXX_STD      = C++11      # uncomment only if you need to force C++11
+## ---- src/Makevars ----
+# Force modern C++ on the compile line
+PKG_CXXFLAGS += -std=gnu++17     # (or: CXX_STD = CXX17)
+
+# Add the package headers path and RcppArmadillo flags
+PKG_CPPFLAGS += -I../inst/include $(RCPP_ARMA_CXXFLAGS)
+
+# Link libs
+PKG_LIBS     += $(RCPP_ARMA_LIBS) -lgsl -lgslcblas
+
