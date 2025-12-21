@@ -143,11 +143,11 @@ gng = any(grepl("GNG", model$c_name))
   if (is.null(attr(pars,"ok"))){
     ok <- !logical(dim(pars)[1])
   } else ok <- attr(pars,"ok")
-  
+
   ## convenience column refs
   RT <- dadm$rt;  LT <- dadm$LT;  UT <- dadm$UT
   LC <- dadm$LC;  UC <- dadm$UC;  R_idx <- dadm$R
-  
+
   ## initialise per-row log densities
   lds <- rep(NA, n_trials)
   ll_unique <- rep(NA,n_unique)
@@ -156,18 +156,18 @@ gng = any(grepl("GNG", model$c_name))
     RT >= LT & RT <= UT & !is.na(R_idx) & (as.numeric(dadm$lR) <= dadm$RACE_num)
   trunc_cens_mask = !(is.finite(RT)) & (as.numeric(dadm$lR) <= dadm$RACE_num)
   if (any(finite_mask)) {
-    
+
     # pdf for winners
     lds[dadm$winner & finite_mask] <-
       log(model$dfun(rt   = RT[dadm$winner & finite_mask],
                      pars = pars[dadm$winner & finite_mask, , drop = FALSE]))
-    
+
     # survivor for losers
     if (n_acc > 1L) {
       lds[!dadm$winner & finite_mask] <- log(1 - model$pfun(rt   = RT[!dadm$winner & finite_mask],
                                                             pars = pars[!dadm$winner & finite_mask, , drop = FALSE]))
     }
-    
+
     # truncate-window correction, cached by unique trial
     for (j in seq_len(n_unique)) {
       idx  <- ((j - 1L) * n_acc + 1L):(j * n_acc)
@@ -190,13 +190,13 @@ gng = any(grepl("GNG", model$c_name))
       }
     }
   }
-  
+
   ## process other trials one-by-one (-Inf, +Inf, NA)
   prob_win <- function(k, lo, hi) {
     .integrate_kth_winner(k, pars[idx, , drop = FALSE],
                           lo, hi, model, rel.tol = 1e-7)
   }
-  
+
   for (j in seq_len(n_unique)) {
     idx  <- ((j - 1L) * n_acc + 1L):(j * n_acc)
     winner = dadm$winner[idx]
@@ -204,7 +204,7 @@ gng = any(grepl("GNG", model$c_name))
     rt   <- RT[idx[1]]          # all rows of a trial share RT
     Rj   <- as.numeric(R_idx[idx[1]])
     pval <- 0
-    
+
     n_acc_j = dadm$RACE_num[idx[1]]
     idx_j=idx[1:n_acc_j]
     if(is.na(Rj)){ks = 1:n_acc_j}else{ks = Rj}
@@ -224,7 +224,7 @@ gng = any(grepl("GNG", model$c_name))
         pval = termA+termB
       } else {
         lo <- UC[idx_j[1]]; hi <- UT[idx_j[1]]
-        if (lo==Inf) {stop("UC must be finite if rt==Inf")}
+        # if (lo==Inf) {stop("UC must be finite if rt==Inf")}
         if (length(idx_j)==1) {
           pval = 1 - (model$pfun(lo,pars[idx, , drop = FALSE])) # if a single acccumulator, design omissions are just 1-F(t)
         } else if (is.na(Rj)) {
@@ -243,7 +243,7 @@ gng = any(grepl("GNG", model$c_name))
       # missing RT
       lo1 <- LT[idx_j[1]]; hi1 <- LC[idx_j[1]]
       lo2 <- UC[idx_j[1]]; hi2 <- UT[idx_j[1]]
-      if (lo2==Inf) {stop("UC must be finite if rt==NA")}
+      # if (lo2==Inf) {stop("UC must be finite if rt==NA")}
       if (is.na(Rj)) {
         # Unknown winner: compute via survivor products, fall back to integrals if needed
         pval_lower <- .prob_min_in_interval(lo1, hi1, pars[idx_j, , drop = FALSE], model)
@@ -258,7 +258,7 @@ gng = any(grepl("GNG", model$c_name))
           prob_win(k, lo1, hi1) + prob_win(k, lo2, hi2), numeric(1)))
       }
     }                                               # 0 or negative RT prob 0
-    
+
     ## truncation correction (if RT unobserved)
     if (!(LT[idx_j[1]] == 0 && UT[idx_j[1]] == Inf) && pval > 0) {
       key  <- .make_key(LT[idx_j[1]], UT[idx_j[1]], pars[idx, , drop = FALSE])
@@ -271,8 +271,8 @@ gng = any(grepl("GNG", model$c_name))
       }
       pval <- pval * invZ
     }
-  
-    
+
+
     ll_unique[j] <- if (pval > .Machine$double.eps) log(pval) else min_ll
   }
 
@@ -350,7 +350,7 @@ log_likelihood_ddmgng <- function(pars,dadm,model,min_ll=log(1e-10))
     ok <- attr(pars,"ok") & isna
     like[ok] <- # dont terminate on go boundary before timeout
       pmax(0,pmin(1,(1-model$pfun(dadm$TIMEOUT[ok],dadm$Rgo[ok],pars[ok,,drop=FALSE]))))
-    
+
   }
   like[attr(pars,"ok")][is.na(like[attr(pars,"ok")])] <- 0
   sum(pmax(min_ll,log(like[attr(dadm,"expand")])))
