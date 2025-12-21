@@ -28,7 +28,7 @@ Authors:
 
 Other contributors:
 \itemize{
-  \item Steven Miletic [contributor]
+  \item Steven Miletić [contributor]
   \item Raphael Hartmann [contributor]
   \item Karl C. Klauer [contributor]
   \item Steven G. Johnson [contributor]
