@@ -70,6 +70,7 @@ log_likelihood_race <- function(pars,dadm,model,min_ll=log(1e-10))
 }
 
 .prob_min_in_interval <- function(lower, upper, pars_mat, model) {
+  if (lower==upper) return(0)
   logS_lower <- .log_survivor_prod(lower, pars_mat, model)
   if (!is.finite(logS_lower)) return(.Machine$double.eps)
   if (is.infinite(upper)) {
@@ -102,10 +103,10 @@ log_likelihood_race <- function(pars,dadm,model,min_ll=log(1e-10))
 ## probability of *any* observable response in (lower, upper)
 .truncation_normaliser <- function(pars_mat, lower, upper, model, rel.tol = 1e-5, ...) {
   # Prefer analytic survivor-product wherever possible (matches particle_ll.cpp)
-  p_tot <- .prob_min_in_interval(lower, upper, pars_mat, model)
-  if (is.finite(p_tot) && p_tot > .Machine$double.eps) {
-    return(p_tot)
-  }
+  # p_tot <- .prob_min_in_interval(lower, upper, pars_mat, model)
+  # if (is.finite(p_tot) && p_tot > .Machine$double.eps) {
+  #   return(p_tot)
+  # }
 
   # Fallback to numerical integration if survivor path failed
   n_acc <- nrow(pars_mat)
@@ -121,9 +122,9 @@ log_likelihood_race <- function(pars,dadm,model,min_ll=log(1e-10))
 # Main likelihood function -----------------------------------------------------
 log_likelihood_race_cens_trunc <- function(pars,dadm,model,min_ll=log(1e-10)) {
   cache_env <- new.env(parent = emptyenv())
-posdrift = ifelse(model$c_name=="LBAIO",FALSE,TRUE)
-gng = any(grepl("GNG", model$c_name))
-  has_pC <- !is.null(colnames(pars)) && ("pContaminant" %in% colnames(pars))
+  posdrift = ifelse(model$c_name=="LBAIO",FALSE,TRUE)
+  gng = any(grepl("GNG", model$c_name))
+  has_pC <- !is.null(colnames(pars)) && ("pContaminant" %in% colnames(pars) && !(all(pars[,"pContaminant"]==0)))
   log_sum_exp2 <- function(a, b) {
     if (is.infinite(a) && a < 0) return(b)
     if (is.infinite(b) && b < 0) return(a)
@@ -135,7 +136,9 @@ gng = any(grepl("GNG", model$c_name))
   n_acc    <- length(levels(dadm$R))
   stopifnot(n_trials %% n_acc == 0L)          # one row per acc. per trial
   n_unique <- n_trials / n_acc
-  dadm$RACE_num <- if("RACE" %in% names(dadm)) as.numeric(as.character(dadm$RACE)) else rep(n_acc, n_trials)
+  dadm$RACE_num <- if("RACE" %in% names(dadm))
+    as.numeric(as.character(dadm$RACE)) else
+    rep(n_acc, n_trials)
   if (any(names(dadm)=="RACE")){# Some accumulators not present
     pars[as.numeric(dadm$lR)>as.numeric(as.character(dadm$RACE)),] <- NA
   }
@@ -154,7 +157,7 @@ gng = any(grepl("GNG", model$c_name))
   ## batch: finite RT, in-bounds, known winner
   finite_mask <- is.finite(RT) & RT > 0 &
     RT >= LT & RT <= UT & !is.na(R_idx) & (as.numeric(dadm$lR) <= dadm$RACE_num)
-  trunc_cens_mask = !(is.finite(RT)) & (as.numeric(dadm$lR) <= dadm$RACE_num)
+  trunc_cens_mask = ( (!is.finite(RT))) & (as.numeric(dadm$lR) <= dadm$RACE_num)
   if (any(finite_mask)) {
 
     # pdf for winners
@@ -165,7 +168,7 @@ gng = any(grepl("GNG", model$c_name))
     # survivor for losers
     if (n_acc > 1L) {
       lds[!dadm$winner & finite_mask] <- log(1 - model$pfun(rt   = RT[!dadm$winner & finite_mask],
-                                                            pars = pars[!dadm$winner & finite_mask, , drop = FALSE]))
+                                             pars = pars[!dadm$winner & finite_mask, , drop = FALSE]))
     }
 
     # truncate-window correction, cached by unique trial
@@ -175,12 +178,12 @@ gng = any(grepl("GNG", model$c_name))
         n_acc_j = dadm$RACE_num[idx[1]]
         idx=idx[1:n_acc_j]
         ll_j <- sum(lds[idx])
-        ll_unique[j] <- max(min_ll, ll_j)
+        ll_unique[j] <- ll_j # max(min_ll, ll_j)
         if (!(LT[idx[1]] == 0 && UT[idx[1]] == Inf)){
           key <- .make_key(LT[idx[1]], UT[idx[1]], pars[idx, , drop = FALSE])
           invZ <- cache_env[[key]]
           if (is.null(invZ)) {
-            invZ <- 1 / .truncation_normaliser(pars[idx, , drop = FALSE],
+            invZ <- 1/.truncation_normaliser(pars[idx, , drop = FALSE],
                                                LT[idx[1]], UT[idx[1]], model,
                                                rel.tol = 1e-7)
             cache_env[[key]] <- invZ
@@ -224,20 +227,20 @@ gng = any(grepl("GNG", model$c_name))
         pval = termA+termB
       } else {
         lo <- UC[idx_j[1]]; hi <- UT[idx_j[1]]
-        # if (lo==Inf) {stop("UC must be finite if rt==Inf")}
-        if (length(idx_j)==1) {
-          pval = 1 - (model$pfun(lo,pars[idx, , drop = FALSE])) # if a single acccumulator, design omissions are just 1-F(t)
-        } else if (is.na(Rj)) {
-          # Unknown winner: use analytic survivor product wherever possible
-          prob_from_surv <- .prob_min_in_interval(lo, hi, pars[idx_j, , drop = FALSE], model)
-          if (is.finite(prob_from_surv) && prob_from_surv > .Machine$double.eps) {
-            pval <- prob_from_surv
-          } else {
-            pval <- sum(vapply(ks, prob_win, numeric(1), lo, hi))
-          }
-        } else {
+        if (lo==Inf) {stop("UC must be finite if rt==Inf")}
+        # if (length(idx_j)==1) {
+        #   pval = 1 - (model$pfun(lo,pars[idx, , drop = FALSE])) # if a single acccumulator, design omissions are just 1-F(t)
+        # } else if (is.na(Rj)) {
+        #   # Unknown winner: use analytic survivor product wherever possible
+        #   prob_from_surv <- .prob_min_in_interval(lo, hi, pars[idx_j, , drop = FALSE], model)
+        #   if (is.finite(prob_from_surv) && prob_from_surv > .Machine$double.eps) {
+        #     pval <- prob_from_surv
+        #   } else {
+        #     pval <- sum(vapply(ks, prob_win, numeric(1), lo, hi))
+        #   }
+        # } else {
           pval <- sum(vapply(ks, prob_win, numeric(1), lo, hi))
-        }
+        # }
       }
     } else if (is.na(rt)) {
       # missing RT
@@ -273,7 +276,7 @@ gng = any(grepl("GNG", model$c_name))
     }
 
 
-    ll_unique[j] <- if (pval > .Machine$double.eps) log(pval) else min_ll
+    ll_unique[j] <- log(pval) # if (pval > .Machine$double.eps) log(pval) else min_ll
   }
 
   ## Mixture for contaminant omissions (pContaminant): with prob pC the trial is a contaminant omission,
