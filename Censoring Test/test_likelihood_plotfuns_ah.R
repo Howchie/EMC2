@@ -126,8 +126,9 @@ profile_plot_test <- function (data, design, p_vector, range = 1, layout = NA, p
         x <- transform_to_natural(x, cur_name)
         cur_par <- transform_to_natural(cur_par, cur_name)
       }
+      if (natural) xlab <- paste0(cur_name, " (natural)") else xlab <- cur_name
       do.call(plot, c(list(x, ll), EMC2:::fix_dots_plot(EMC2:::add_defaults(dots,
-        type = "l", xlab = paste0(cur_name, " (natural)"), ylab = "LL"))))
+        type = "l", xlab = xlab, ylab = "LL"))))
       do.call(abline, c(list(v = cur_par), EMC2:::fix_dots_plot(EMC2:::add_defaults(true_args,lty = 2))))
       # out[cur_name, ] <- c(p_vector[cur_name], x[which.max(ll)],
       #                      p_vector[cur_name] - x[which.max(ll)])
