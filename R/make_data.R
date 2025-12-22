@@ -10,7 +10,7 @@ bound_to_numeric <- function(x, bound_name = "bound") {
 }
 
 expand_bound_rowwise <- function(b, data, bound_name = "bound") {
-  if (is.null(b)) stop(paste0(bound_name, " cannot be NULL."))
+  # if (is.null(b)) stop(paste0(bound_name, " cannot be NULL."))
   b <- bound_to_numeric(b, bound_name)
   n <- nrow(data)
 
@@ -140,11 +140,12 @@ make_missing <- function(data, LT = 0, UT = Inf, LC = 0, UC = Inf,
 #' @export
 
 make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1, staircase = NULL,
-                      functions = NULL, LT=NULL,LC=NULL,UC=NULL,UT=NULL,...,
+                      functions = NULL,
+                      LT=NULL,LC=NULL,UC=NULL,UT=NULL,
                       LCresponse = FALSE, UCresponse = FALSE,
                       LCdirection = TRUE, UCdirection = TRUE,
                       force_direction = TRUE, force_response = TRUE,
-                      rtContaminantNA = FALSE)
+                      rtContaminantNA = FALSE,...)
 {
   if (!is.null(staircase)){
     staircase <- check_staircase(staircase)
@@ -441,7 +442,7 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
       if (any(names(data)=="RACE")) {
         Rrt <- GNG_rfun(data, pars, model)
       } else Rrt <- model()$rfun(data,pars)
-    }   
+    }
     else if (any(names(data)=="RACE")) {
       Rrt <- RACE_rfun(data, pars, model)
     } else Rrt <- model()$rfun(data,pars)
@@ -472,15 +473,15 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
     has_LC <- any(is.finite(data$LC) & data$LC != 0, na.rm = TRUE)
     has_UC <- any(is.finite(data$UC), na.rm = TRUE)
     if (has_LC | has_UC) { # censoring
-      if (has_LC & has_UC & (LCdirection & UCdirection) & !rtContaminantNA) {
-        stop("Cannot have contamination with a mixture of censor directions")
-      }
-      if (
-        rtContaminantNA &&
-        ((has_LC && !LCresponse && !LCdirection) || (has_UC && !UCresponse && !UCdirection))
-      ) {
-        stop("Cannot have contamination and censoring with no direction and response")
-      }
+      # if (has_LC & has_UC & (LCdirection & UCdirection) & !rtContaminantNA) {
+      #   stop("Cannot have contamination with a mixture of censor directions")
+      # }
+      # if (
+      #   rtContaminantNA &&
+      #   ((has_LC && !LCresponse && !LCdirection) || (has_UC && !UCresponse && !UCdirection))
+      # ) {
+      #   stop("Cannot have contamination and censoring with no direction and response")
+      # }
 
       if (rtContaminantNA || (!LCdirection && !UCdirection)) {
         data[contam, "rt"] <- NA
@@ -496,7 +497,7 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
       data[contam, "rt"] <- NA
     }
   }
-  
+
   attr(data,"p_vector") <- parameters;
   if(!is.null(post_functions)){
     for(i in 1:length(post_functions)){
