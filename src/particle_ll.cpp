@@ -303,9 +303,9 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
         lls[i] = c_log_likelihood_MRI_white(pars, y, is_ok, n_trials, n_pars, min_ll);
       }
     }
-  } else{
+  } else {
     // ZH I have adjusted a lot here. I made new race model pointers that help branch things like intrinsic omissions LBA, and the new GNG models
-    // The "1" versions handle scalar likelihoods that do not call Rcpp functions,which speeds up the GSL integrations used in censoring, truncation, and GNG 
+    // The "1" versions handle scalar likelihoods that do not call Rcpp functions,which speeds up the GSL integrations used in censoring, truncation, and GNG
     IntegerVector expand = data.attr("expand");
     LogicalVector winner = data["winner"];
     // Standardize incoming model type string from R
@@ -314,14 +314,14 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
     std::string type_std = Rcpp::as<std::string>(Rcpp::wrap(type));
     const bool is_ss = (type_std.find("SS") != std::string::npos);
 
- 	RacePdfFun model_dfun_ptr = nullptr;
- 	RaceCdfFun model_pfun_ptr = nullptr;
- 	RacePdf1Fun pdf1_ptr = nullptr;
- 	RaceCdf1Fun cdf1_ptr = nullptr;
- 	ContextForRaceModels current_model_ctx;
- 	current_model_ctx.min_lik_for_pdf = std::exp(min_ll);
- 	current_model_ctx.use_posdrift = true; // Default: LBA uses posdrift, RDM/LNR ignore this context field.
- 	current_model_ctx.gng = false; // Default: Do not use go/no-go likelihoods by default
+   	RacePdfFun model_dfun_ptr = nullptr;
+   	RaceCdfFun model_pfun_ptr = nullptr;
+ 	  RacePdf1Fun pdf1_ptr = nullptr;
+   	RaceCdf1Fun cdf1_ptr = nullptr;
+ 	  ContextForRaceModels current_model_ctx;
+   	current_model_ctx.min_lik_for_pdf = std::exp(min_ll);
+ 	  current_model_ctx.use_posdrift = true; // Default: LBA uses posdrift, RDM/LNR ignore this context field.
+   	current_model_ctx.gng = false; // Default: Do not use go/no-go likelihoods by default
     if (!is_ss) {
       // Determine adapter functions and specific LBA posdrift setting based on type_std
       if (type_std.find("LBA") != std::string::npos) {
@@ -437,7 +437,7 @@ double integrate_for_kth_winner_cpp(
       Rcpp::Rcerr << "Warning: Invalid k_winner_idx in integrate_for_kth_winner_cpp: " << k_winner_idx << std::endl;
       return R_NegInf;
     }
-	
+
     if (w == nullptr) {
       Rcpp::stop("integrate_for_kth_winner_cpp: GSL workspace is null.");
     }
@@ -498,7 +498,7 @@ double get_trunc_normaliser_cpp(
     const Rcpp::NumericMatrix& p_all_acc,
     RacePdf1Fun pdf1,
     RaceCdf1Fun cdf1,
-	  LogicalVector isok_trial, 
+	  LogicalVector isok_trial,
     double LT, double UT,
     int n_lR,
     int n_par,
@@ -515,7 +515,7 @@ double get_trunc_normaliser_cpp(
 
     // Calculate S(LT)
     for(int k=0; k < n_lR; ++k) {
-      if (!isok_trial[k]) return R_NegInf; 
+      if (!isok_trial[k]) return R_NegInf;
       for(int c=0; c<n_par; ++c) par_row[static_cast<size_t>(c)] = p_all_acc(k, c);
       double cdf = cdf1(LT, par_row.data(), model_specific_context);
       if (!std::isfinite(cdf)) return R_NegInf;
@@ -540,7 +540,7 @@ double get_trunc_normaliser_cpp(
        // No need to check isok again
        for(int c=0; c<n_par; ++c) par_row[static_cast<size_t>(c)] = p_all_acc(k, c);
        double cdf = cdf1(UT, par_row.data(), model_specific_context);
-       if (!std::isfinite(cdf)) return R_NegInf; 
+       if (!std::isfinite(cdf)) return R_NegInf;
        if (cdf >= 1.0) { logS_UT = R_NegInf; break; }
        if (cdf > 0.0) {
           if (cdf > 1.0 - 1e-15) cdf = 1.0 - 1e-15;
@@ -622,8 +622,8 @@ double c_log_likelihood_race_cens_trunc(
 	    &gsl_integration_workspace_free);
 	if (!workspace) Rcpp::stop("Failed to allocate GSL integration workspace.");
 	Rcpp::NumericVector LT = dadm["LT"];
-	Rcpp::NumericVector UT = dadm["UT"]; 
-	Rcpp::NumericVector LC = dadm["LC"];    
+	Rcpp::NumericVector UT = dadm["UT"];
+	Rcpp::NumericVector LC = dadm["LC"];
 	Rcpp::NumericVector UC = dadm["UC"];
 	std::unordered_map<std::string,double> log_integral_cache; // truncation + go/no-go caching
 	double integration_epsilon = 1e-7; // Tolerance for GSL integration
@@ -717,7 +717,7 @@ double c_log_likelihood_race_cens_trunc(
 	std::vector<int> finite_dadm_rows_indices; // Stores actual dadm/pars row indices for finite RTs
 	finite_dadm_rows_indices.reserve(n_trials); // Reserve space
 	double log_Z_this = 0;  // Default inv_Z if no truncation. Should never be used but here as a precaution.
-	double lower_for_trial = 0; 
+	double lower_for_trial = 0;
 	double upper_for_trial = R_PosInf;
 	ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(model_context_for_funcs);
 	// If posdrift=true we'll add the probability of an intrinsic omission in relevant sections
@@ -747,7 +747,7 @@ double c_log_likelihood_race_cens_trunc(
             other_unique_trial_indices.push_back(j); // All other cases (NA, Inf, -Inf, outside bounds, or unknown winner with finite RT)
         }
     }
-	
+
 	  Rcpp::NumericMatrix finite_rt_pars;
     if (!finite_dadm_rows_indices.empty()) {
         finite_rt_pars = Rcpp::NumericMatrix(finite_dadm_rows_indices.size(), pars.ncol());
@@ -794,7 +794,7 @@ double c_log_likelihood_race_cens_trunc(
               if (cdf > 1.0 - 1e-15) cdf = 1.0 - 1e-15;
               loss[j] = std::log1p(-cdf);
             }
-            
+
             current_lds_idx = 0; // Reset for iterating through loss_contributions
             for(int i = 0; i < n_trials; ++i) {
               if(finite_rt_mask[i] && !winner[i]) {
@@ -842,11 +842,11 @@ double c_log_likelihood_race_cens_trunc(
                 if ((LT[start_row_idx] != 0 || UT[start_row_idx] != R_PosInf) && (NumericVector::is_na(log_Z_this) || !R_FINITE(log_Z_this))) {
                               // If truncation active but inv_Z is bad, probability is effectively zero. Could mean the probability of observing an untruncated RT is zero, which would be bad.
                               ll_unique[unique_trial_idx] = min_ll;
-                } 
+                }
                 else if (LT[start_row_idx] != 0 || UT[start_row_idx] != R_PosInf) { // Truncation active and inv_Z is good
                   current_trial_ll_sum -=  log_Z_this;
                 }
-                
+
                 ll_unique[unique_trial_idx] = current_trial_ll_sum;
                 ll_unique[unique_trial_idx] = std::max(min_ll, ll_unique[unique_trial_idx]);
         }
@@ -937,11 +937,11 @@ double c_log_likelihood_race_cens_trunc(
 				}
 				if (n_true != 1) {
 				  Rcpp::stop("No winner identified in go/no-go withheld response");
-				} 
+				}
 				// Term A: No-Go accumulator wins before the deadline D and before the Go accumulator
 				const double logA = integrate_cached(k_nogo, lower_for_trial, D);
-				
-				// Term B: Neither accumulator finishes before the deadline = product of survivors			
+
+				// Term B: Neither accumulator finishes before the deadline = product of survivors
 				double logB = 0.0;
 				std::vector<double> par_row(static_cast<size_t>(pars.ncol()));
 				for (int k = 0; k < n_lR_j; ++k) {
@@ -954,7 +954,7 @@ double c_log_likelihood_race_cens_trunc(
 					logB += std::log1p(-cdf);
 				}
 				current_ll_val = log_sum_exp(logA, logB);
-			
+
 				} else {
 					lower_for_trial = UC[start_row_idx];
 					upper_for_trial = UT[start_row_idx];
@@ -972,12 +972,12 @@ double c_log_likelihood_race_cens_trunc(
             // in the interval (UC, UT). This generally requires integration.
 						// Simplified case for single accumulator
 							current_ll_val = integrate_cached(R_j_idx, lower_for_trial, upper_for_trial);
-						} 
+						}
 			  }
         // Case 4: Missing RT (NA). Probability is sum of integral from LT to LC and UC to UT (i.e., outside the observation window but within truncation).
       } else if (NumericVector::is_na(rt_j)) {
         double lower_for_trial1 = LT[start_row_idx];
-        double upper_for_trial1 = LC[start_row_idx];			
+        double upper_for_trial1 = LC[start_row_idx];
         double lower_for_trial2 = UC[start_row_idx];
         double upper_for_trial2 = UT[start_row_idx];
         if (R_j_idx != NA_INTEGER) { // Response (winner) is known
@@ -989,7 +989,7 @@ double c_log_likelihood_race_cens_trunc(
                 double ll_L_k = integrate_cached(k_win, lower_for_trial1, upper_for_trial1);
                 double ll_U_k = integrate_cached(k_win, lower_for_trial2, upper_for_trial2);
                 double ll_k_sum = log_sum_exp(ll_L_k, ll_U_k);
-                current_ll_val = log_sum_exp(current_ll_val,ll_k_sum); 
+                current_ll_val = log_sum_exp(current_ll_val,ll_k_sum);
             }
         }
       }
@@ -1016,10 +1016,10 @@ double c_log_likelihood_race_cens_trunc(
 				                                       workspace.get());
 				log_integral_cache.emplace(std::move(key), log_Z_this);
 			}
-			
+
 			if (!NumericVector::is_na(log_Z_this) && R_FINITE(log_Z_this)){current_ll_val -= log_Z_this;}
 		}
-		
+
 		current_ll_val = std::max(min_ll, current_ll_val); // Ensure probability is not negative
         ll_unique[unique_trial_idx] = current_ll_val;
         ll_unique[unique_trial_idx] = std::max(min_ll, ll_unique[unique_trial_idx]); // Ensure not less than min_ll
