@@ -162,7 +162,7 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
 
   LT <- resolve_bound("LT", LT, 0)
   UT <- resolve_bound("UT", UT, Inf)
-  LC <- resolve_bound("LC", LC, LT)
+  LC <- resolve_bound("LC", LC, 0)
   UC <- resolve_bound("UC", UC, Inf)
   return_Ffunctions <- FALSE
   post_functions <- NULL
@@ -180,7 +180,7 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
   sampled_p_names <- names(sampled_pars(design))
   if(is.null(dim(parameters))){
     if(is.null(names(parameters))) names(parameters) <- sampled_p_names
-  } else{
+  } else {
     if(!is.null(data)){
       if(nrow(parameters) == length(unique(data$subjects))){
         design$Ffactors$subjects <- unique(data$subjects)
@@ -307,39 +307,39 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
       trialwise_parameters <- res$trialwise_parameters
     }
 
-    # Add trial-level pContaminant if present so it stays aligned through truncation
-    if (!is.null(colnames(pars)) && "pContaminant" %in% colnames(pars)) {
-      dm_pc <- design_model(
-        add_accumulators(data, design$matchfun, simulate = TRUE, type = model()$type, Fcovariates = design$Fcovariates),
-        design, model,
-        add_acc = FALSE, compress = FALSE, verbose = FALSE,
-        rt_check = FALSE
-      )
-      pm_pc <- map_p(pars, dm_pc, model(), FALSE)
-      if (!is.null(model()$trend)) {
-        phases <- vapply(model()$trend, function(x) x$phase, character(1))
-        if (any(phases == "pretransform")) {
-          pm_pc <- prep_trend_phase(dm_pc, model()$trend, pm_pc, "pretransform", FALSE)
-        }
-      }
-      pm_pc <- do_transform(pm_pc, model()$transform)
-      if (!is.null(model()$trend)) {
-        phases <- vapply(model()$trend, function(x) x$phase, character(1))
-        if (any(phases == "posttransform")) {
-          pm_pc <- prep_trend_phase(dm_pc, model()$trend, pm_pc, "posttransform", FALSE)
-        }
-      }
-      pm_pc <- model()$Ttransform(pm_pc, dm_pc)
-      if (is.null(optionals$nobound)) pm_pc <- add_bound(pm_pc, model()$bound, dm_pc$lR)
-      if (any(dimnames(pm_pc)[[2]] == "pContaminant") && any(pm_pc[, "pContaminant"] > 0)) {
-        pc <- pm_pc[dm_pc$lR == levels(dm_pc$lR)[1], "pContaminant"]
-        data$.pContaminant <- pc
-      }
-    }
-
-    # Apply truncation/censoring to unconditional simulation output
-    data <- make_missing(data, data$LT, data$UT, data$LC, data$UC,
-                         LCresponse, UCresponse, LCdirection, UCdirection)
+    # # Add trial-level pContaminant if present so it stays aligned through truncation
+    # if (!is.null(colnames(pars)) && "pContaminant" %in% colnames(pars)) {
+    #   dm_pc <- design_model(
+    #     add_accumulators(data, design$matchfun, simulate = TRUE, type = model()$type, Fcovariates = design$Fcovariates),
+    #     design, model,
+    #     add_acc = FALSE, compress = FALSE, verbose = FALSE,
+    #     rt_check = FALSE
+    #   )
+    #   pm_pc <- map_p(pars, dm_pc, model(), FALSE)
+    #   if (!is.null(model()$trend)) {
+    #     phases <- vapply(model()$trend, function(x) x$phase, character(1))
+    #     if (any(phases == "pretransform")) {
+    #       pm_pc <- prep_trend_phase(dm_pc, model()$trend, pm_pc, "pretransform", FALSE)
+    #     }
+    #   }
+    #   pm_pc <- do_transform(pm_pc, model()$transform)
+    #   if (!is.null(model()$trend)) {
+    #     phases <- vapply(model()$trend, function(x) x$phase, character(1))
+    #     if (any(phases == "posttransform")) {
+    #       pm_pc <- prep_trend_phase(dm_pc, model()$trend, pm_pc, "posttransform", FALSE)
+    #     }
+    #   }
+    #   pm_pc <- model()$Ttransform(pm_pc, dm_pc)
+    #   if (is.null(optionals$nobound)) pm_pc <- add_bound(pm_pc, model()$bound, dm_pc$lR)
+    #   if (any(dimnames(pm_pc)[[2]] == "pContaminant") && any(pm_pc[, "pContaminant"] > 0)) {
+    #     pc <- pm_pc[dm_pc$lR == levels(dm_pc$lR)[1], "pContaminant"]
+    #     data$.pContaminant <- pc
+    #   }
+    # }
+    #
+    # # Apply truncation/censoring to unconditional simulation output
+    # data <- make_missing(data, data$LT, data$UT, data$LC, data$UC,
+    #                      LCresponse, UCresponse, LCdirection, UCdirection)
 
     # Apply contamination after truncation so indices stay aligned
     if (!is.null(data$.pContaminant)) {
@@ -425,46 +425,45 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
       return(FALSE)
     }
   }
-    if (expand>1) {
+  if (expand>1) {
       data <- cbind(rep=rep(1:expand,each=dim(data)[1]),
                     data.frame(lapply(data,rep,times=expand)))
       pars <- apply(pars,2,rep,times=expand)
-    }
-    if (!is.null(staircase)) {
+  }
+  if (!is.null(staircase)) {
       attr(pars, "staircase") <- staircase
-    }
-    # ZH added for contaminant miss handling (compute after `expand` so it stays aligned)
-    pc <- NULL
-    if (any(dimnames(pars)[[2]] == "pContaminant") && any(pars[, "pContaminant"] > 0)) {
-      pc <- pars[data$lR == levels(data$lR)[1], "pContaminant"]
-    }
-    if (model()$type=="GNG") {
-      if (any(names(data)=="RACE")) {
-        Rrt <- GNG_rfun(data, pars, model)
-      } else Rrt <- model()$rfun(data,pars)
-    }
-    else if (any(names(data)=="RACE")) {
-      Rrt <- RACE_rfun(data, pars, model)
+  }
+  # ZH added for contaminant miss handling (compute after `expand` so it stays aligned)
+  pc <- NULL
+  if (any(dimnames(pars)[[2]] == "pContaminant") && any(pars[, "pContaminant"] > 0)) {
+    pc <- pars[data$lR == levels(data$lR)[1], "pContaminant"]
+  }
+  if (model()$type=="GNG") {
+    if (any(names(data)=="RACE")) {
+      Rrt <- GNG_rfun(data, pars, model)
     } else Rrt <- model()$rfun(data,pars)
-    dropNames <- c("lR","lM")
-    if (!return_Ffunctions && !is.null(design$Ffunctions))
-      dropNames <- c(dropNames,names(design$Ffunctions))
-    if(!is.null(data$lR)) data <- data[data$lR == levels(data$lR)[1],]
-    data <- data[,!(names(data) %in% dropNames)]
-    for (i in dimnames(Rrt)[[2]]) data[[i]] <- Rrt[, i]
-    if (!is.null(pc)) data$.pContaminant <- pc
-    # ZH Added for censoring/truncation
-    # For censoring/truncation we want row-wise bounds: use the
-    # current LT/UT/LC/UC columns, which have already been set up.
-    data <- make_missing(
-      data[, names(data) != "winner"],
-      data$LT, data$UT, data$LC, data$UC,
-      LCresponse, UCresponse, LCdirection, UCdirection
-    )
-    # ZH added for contaminant miss handling
-    if ( !is.null(pc) ) {
-      pc2 <- data$.pContaminant
-      data$.pContaminant <- NULL
+  } else if (any(names(data)=="RACE")) {
+      Rrt <- RACE_rfun(data, pars, model)
+  } else Rrt <- model()$rfun(data,pars)
+  dropNames <- c("lR","lM")
+  if (!return_Ffunctions && !is.null(design$Ffunctions))
+    dropNames <- c(dropNames,names(design$Ffunctions))
+  if(!is.null(data$lR)) data <- data[data$lR == levels(data$lR)[1],]
+  data <- data[,!(names(data) %in% dropNames)]
+  for (i in dimnames(Rrt)[[2]]) data[[i]] <- Rrt[, i]
+  if (!is.null(pc)) data$.pContaminant <- pc
+  # ZH Added for censoring/truncation
+  # For censoring/truncation we want row-wise bounds: use the
+  # current LT/UT/LC/UC columns, which have already been set up.
+  data <- make_missing(
+    data[, names(data) != "winner"],
+    data$LT, data$UT, data$LC, data$UC,
+    LCresponse, UCresponse, LCdirection, UCdirection
+  )
+  # ZH added for contaminant miss handling
+  if ( !is.null(pc) ) {
+    pc2 <- data$.pContaminant
+    data$.pContaminant <- NULL
     if (!any(is.infinite(data$rt)) & any(is.na(data$R)))
       stop("Cannot have contamination and censoring with no direction and response")
     contam <- rbinom(nrow(data), 1, pc2) == 1
@@ -482,7 +481,6 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
       # ) {
       #   stop("Cannot have contamination and censoring with no direction and response")
       # }
-
       if (rtContaminantNA || (!LCdirection && !UCdirection)) {
         data[contam, "rt"] <- NA
       } else if (has_LC && !has_UC) {
