@@ -70,7 +70,7 @@ log_likelihood_race <- function(pars,dadm,model,min_ll=log(1e-10))
 }
 
 .prob_min_in_interval <- function(lower, upper, pars_mat, model) {
-  if (lower==upper) return(0)
+  if (lower<=upper) return(0)
   logS_lower <- .log_survivor_prod(lower, pars_mat, model)
   if (!is.finite(logS_lower)) return(.Machine$double.eps)
   if (is.infinite(upper)) {
@@ -102,11 +102,12 @@ log_likelihood_race <- function(pars,dadm,model,min_ll=log(1e-10))
 
 ## probability of *any* observable response in (lower, upper)
 .truncation_normaliser <- function(pars_mat, lower, upper, model, rel.tol = 1e-5, ...) {
+  if (lower >= upper) return(.Machine$double.eps)
   # Prefer analytic survivor-product wherever possible (matches particle_ll.cpp)
-  # p_tot <- .prob_min_in_interval(lower, upper, pars_mat, model)
-  # if (is.finite(p_tot) && p_tot > .Machine$double.eps) {
-  #   return(p_tot)
-  # }
+  p_tot <- .prob_min_in_interval(lower, upper, pars_mat, model)
+  if (is.finite(p_tot) && p_tot > .Machine$double.eps) {
+    return(p_tot)
+  }
 
   # Fallback to numerical integration if survivor path failed
   n_acc <- nrow(pars_mat)
@@ -118,6 +119,7 @@ log_likelihood_race <- function(pars,dadm,model,min_ll=log(1e-10))
   }
   max(p_tot_int, .Machine$double.eps)
 }
+
 
 # Main likelihood function -----------------------------------------------------
 log_likelihood_race_cens_trunc <- function(pars,dadm,model,min_ll=log(1e-10)) {
