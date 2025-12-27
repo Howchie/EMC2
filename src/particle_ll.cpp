@@ -8,6 +8,7 @@
 #include "model_SS.h"
 #include "trend.h"
 #include "utils.h"
+#include "numerical_integration.h"
 #include <gsl/gsl_integration.h>
 #include <gsl/gsl_errno.h> // For GSL error handling
 #include <cmath>
@@ -204,6 +205,9 @@ double c_log_likelihood_race(NumericMatrix pars, DataFrame data,
       }
     }
   }
+
+//    Rcpp::Rcout << "oldC" << std::endl;
+
   NumericVector win = log(dfun(rts, pars, winner, exp(min_ll), is_ok)); //first for compressed
   lds[winner] = win;
   if(n_lR > 1){
@@ -215,7 +219,6 @@ double c_log_likelihood_race(NumericMatrix pars, DataFrame data,
   lds[is_na(lds)] = min_ll;
 
   if(n_lR > 1){
-    // LogicalVector winner_exp = c_bool_expand(winner, expand);
     NumericVector ll_out = lds[winner];
     NumericVector lds_los = lds[!winner];
     if(n_lR == 2){
@@ -225,7 +228,6 @@ double c_log_likelihood_race(NumericMatrix pars, DataFrame data,
         ll_out[z] = ll_out[z] + sum(lds_los[seq( z * (n_lR -1), (z+1) * (n_lR -1) -1)]);
       }
     }
-
     ll_out[is_na(ll_out)] = min_ll;
     ll_out[is_infinite(ll_out)] = min_ll;
     ll_out[ll_out < min_ll] = min_ll;
@@ -238,6 +240,529 @@ double c_log_likelihood_race(NumericMatrix pars, DataFrame data,
     lds_exp = c_expand(lds, expand); // decompress
     return(sum(lds_exp));
   }
+}
+
+double first_value_or_default_df(DataFrame df, std::string col, double fallback) {
+  if (!df.containsElementNamed(col.c_str())) return fallback;
+  NumericVector v = df[col];
+  if (v.size() == 0) return fallback;
+  return v[0];
+}
+
+double c_log_likelihood_race_missing(NumericMatrix pars, DataFrame data,
+                                     NumericVector (*dfun)(NumericVector, NumericMatrix, LogicalVector, double, LogicalVector),
+                                     NumericVector (*pfun)(NumericVector, NumericMatrix, LogicalVector, double, LogicalVector),
+                                     const int n_trials, LogicalVector winner, IntegerVector expand,
+                                     double min_ll, LogicalVector is_ok){
+  const int n_out = expand.length();
+  NumericVector lds(n_trials);
+  NumericVector rts = data["rt"];
+  CharacterVector R = data["R"];
+  NumericVector pCont = pars(_ , pars.ncol() - 1);
+  NumericVector lds_exp(n_out);
+  int n_acc = unique(R).length();
+  if (any(is_na(R))) {
+    n_acc -= 1;
+  }
+  if(sum(contains(data.names(), "NACC")) == 1){
+    NumericVector lR = data["lR"];
+    NumericVector NACC = data["NACC"];
+    for(int x = 0; x < pars.nrow(); x++){
+      if(lR[x] > NACC[x]){
+        pars(x,0) = NA_REAL;
+      }
+    }
+  }
+  NumericVector win = log(dfun(rts, pars, winner, exp(min_ll), is_ok)); //first for compressed
+  lds[winner] = win;
+  if(n_acc > 1){
+    NumericVector loss = log(1- pfun(rts, pars, !winner, exp(min_ll), is_ok)); //cdfs
+    loss[is_na(loss)] = min_ll;
+    loss[loss == log(1 - exp(min_ll))] = min_ll;
+    lds[!winner] = loss;
+  }
+  lds[is_na(lds) | (winner & is_infinite(rts))] = min_ll;
+  lds[(!winner) & (is_infinite(rts) | is_na(rts))] = 0;
+
+  double LT = first_value_or_default_df(data,"LT",0);
+  double UT = first_value_or_default_df(data,"UT",R_PosInf);
+  bool dotrunc = !(LT==0 & UT==R_PosInf);
+  double LC = first_value_or_default_df(data,"LC",0);
+  double UC = first_value_or_default_df(data,"UC",R_PosInf);
+
+  if (!(LT==0 & LC==0 & !R_finite(UT) & !R_finite(UC))) {
+
+//  Environment global = Environment::global_env();
+//  global["LC"]  = LC;
+//  global["UC"]  = UC;
+//  global["LT"]  = LT;
+//  global["UT"]  = UT;
+
+  //For single trial integration
+  LogicalVector ok1(n_acc,1);
+
+  // Response known
+  // Fast
+  LogicalVector neginf = rts == R_NegInf; // also sets NA to FALSE
+  LogicalVector nortfast = neginf & !is_na(R) & is_ok;
+
+  if (is_true(any(nortfast))) {
+
+//    Rcpp::Rcout << "nortfast" << std::endl;
+
+    NumericMatrix mparsfast(sum(nortfast),pars.ncol());
+    for (int i = 0, j = 0; i < nortfast.length(); i++) {
+      if (nortfast[i]) {
+        mparsfast(j,_) = pars(i,_);
+        j++;
+      }
+    }
+
+    LogicalVector winnerfastvec = winner[nortfast];
+    LogicalMatrix winnerfast(n_acc, winnerfastvec.length() / n_acc, winnerfastvec.begin());
+
+    LogicalVector tofixfast = (winner & nortfast);
+    NumericVector ldstofixfast(sum(tofixfast));
+
+    for (int i = 0; i < sum(tofixfast); i++) {
+      NumericMatrix pifast(n_acc, mparsfast.ncol());
+      if (n_acc == 1) {
+        pifast(0,_) = mparsfast(i,_);
+      } else {
+        for (int j = 0; j < n_acc; j++) {
+          pifast(j,_) = mparsfast(i * n_acc + j,_);
+        }
+      }
+      NumericVector tmp = f_integrate(pifast, winnerfast(_,i), dfun, pfun, exp(min_ll), ok1, LT, LC);
+      ldstofixfast[i] = std::log(std::max(0.0, std::min(tmp[0], 1.0)));
+    }
+    lds[tofixfast] = ldstofixfast;
+  }
+
+  // Slow
+  LogicalVector posinf = rts == R_PosInf; // also sets NA to FALSE
+  LogicalVector nortslow = posinf & !is_na(R) & is_ok;
+
+  if (is_true(any(nortslow))) {
+
+//    Rcpp::Rcout << "nortslow" << std::endl;
+
+
+    NumericMatrix mparsslow(sum(nortslow),pars.ncol());
+    for (int i = 0, j = 0; i < nortslow.length(); i++) {
+      if (nortslow[i]) {
+        mparsslow(j,_) = pars(i,_);
+        j++;
+      }
+    }
+
+    LogicalVector winnerslowvec = winner[nortslow];
+    LogicalMatrix winnerslow(n_acc, winnerslowvec.length() / n_acc, winnerslowvec.begin());
+
+    LogicalVector tofixslow = (winner & nortslow);
+    NumericVector ldstofixslow(sum(tofixslow));
+
+    for (int i = 0; i < sum(tofixslow); i++) {
+      NumericMatrix pislow(n_acc, mparsslow.ncol());
+      if (n_acc == 1) {
+        pislow(0,_) = mparsslow(i,_);
+      } else {
+        for (int j = 0; j < n_acc; j++) {
+          pislow(j,_) = mparsslow(i * n_acc + j,_);
+        }
+      }
+      NumericVector tmp = f_integrate_slow(pislow, winnerslow(_,i), dfun, pfun, exp(min_ll), ok1, UC, UT);
+      ldstofixslow[i] = std::log(std::max(0.0, std::min(tmp[0], 1.0)));
+    }
+    lds[tofixslow] = ldstofixslow;
+  }
+
+  // No direction
+  LogicalVector nortno = is_na(rts) & !is_na(R) & is_ok;
+
+  if (is_true(any(nortno))) {
+
+//    Rcpp::Rcout << "nortno" << std::endl;
+
+    NumericMatrix mparsno(sum(nortno), pars.ncol());
+
+    for (int i = 0, j = 0; i < nortno.length(); i++) {
+      if (nortno[i]) {
+        mparsno(j,_) = pars(i,_);
+        j++;
+      }
+    }
+
+    LogicalVector winnernovec = winner[nortno];
+    LogicalMatrix winnerno(n_acc, winnernovec.length() / n_acc, winnernovec.begin());
+
+    LogicalVector tofixno = (winner & nortno);
+    NumericVector ldstofixno(sum(tofixno));
+
+    for (int i = 0; i < sum(tofixno); i++) {
+      NumericMatrix pino(n_acc, mparsno.ncol());
+      if (n_acc  == 1) {
+        pino(0,_) = mparsno(i,_);
+      } else {
+        for (int j = 0; j < n_acc; j++) {
+          pino(j,_) = mparsno(i * n_acc + j,_);
+        }
+      }
+      NumericVector tmpslow = f_integrate_slow(pino, winnerno(_,i), dfun, pfun, exp(min_ll), ok1, UC, UT);
+      NumericVector tmpfast = f_integrate(pino, winnerno(_,i), dfun, pfun, exp(min_ll), ok1, LT, LC);
+      double tmp = tmpslow[0] + tmpfast[0];
+
+      ldstofixno[i] = std::log(std::max(0.0, std::min(tmp, 1.0)));
+    }
+    lds[tofixno] = ldstofixno;
+  }
+
+  // Response unknown
+  // Fast
+  LogicalVector nortfastu = (rts == R_NegInf) & is_na(R)  & is_ok;
+  LogicalVector tofixfast(winner.length());
+
+  if (is_true(any(nortfastu))) {
+
+//    Rcpp::Rcout << "nortfastu" << std::endl;
+
+
+    NumericMatrix mpars(sum(nortfastu), pars.ncol());
+
+    for (int i = 0, j = 0; i < nortfastu.length(); i++) {
+      if (nortfastu[i]) {
+        mpars(j,_) = pars(i,_);
+        j++;
+      }
+    }
+
+    LogicalVector winnerfastuvec = winner[nortfastu];
+    LogicalMatrix winnerfastu(n_acc, winnerfastuvec.length() / n_acc, winnerfastuvec.begin());
+
+    tofixfast = (winner & nortfastu);
+    NumericVector ldstofixfast(sum(tofixfast));
+
+    for (int i = 0; i < sum(tofixfast); i++) {
+      NumericMatrix pi(n_acc, mpars.ncol());
+
+      for (int j = 0; j < n_acc; j++) {
+        pi(j,_) = mpars(i * n_acc + j,_);
+      }
+
+      LogicalVector idx(n_acc, 0);
+      idx[0] = 1;
+
+      NumericVector pc = f_integrate(pi, idx, dfun, pfun, exp(min_ll), ok1, LT, LC);
+      double p;
+      if (pc[2] != 0 || traits::is_nan<REALSXP>(pc[0])) {
+        p = NA_REAL;
+      } else{
+        p = std::max(0.0 ,std::min(pc[0],1.0));
+      }
+
+      double cf;
+      if (p != 0 && !(LT==0 && UT==R_PosInf)) {
+        cf = pr_pt(pi, pfun, LT, UT);
+      } else {
+        cf = 1;
+      }
+
+      if (!traits::is_na<REALSXP>(cf)) {
+        p *= cf;
+      }
+
+      if (!traits::is_na<REALSXP>(p) && n_acc > 1) {
+        for (int j = 1; j < n_acc; j++) {
+          idx.fill(0);
+          idx[j] = 1;
+          pc = f_integrate(pi, idx, dfun, pfun, exp(min_ll), ok1, LT, LC);
+          if (pc[2] != 0 || traits::is_nan<REALSXP>(pc[0])) {
+            p = NA_REAL;
+            break;
+          }
+          if (pc[0] != 0.0 && !(LT == 0 && UT == R_PosInf)) {
+            cf = pr_pt(pi, pfun, LT, UT);
+          } else{
+            cf = 1;
+          }
+          if (!traits::is_na<REALSXP>(cf)) {
+            p += pc[0] * cf;
+          }
+        }
+      }
+      double lp = std::log(p);
+      if (!traits::is_na<REALSXP>(lp)) {
+        ldstofixfast[i] = lp;
+      } else{
+        ldstofixfast[i] = R_NegInf;
+      }
+    }
+    lds[tofixfast] = ldstofixfast;
+  }
+
+  // Slow
+  LogicalVector nortslowu = (rts == R_PosInf) & is_na(R) & is_ok;
+  LogicalVector tofixslow(winner.length());
+  if (is_true(any(nortslowu))) {
+
+//    Rcpp::Rcout << "nortslowu" << std::endl;
+
+    NumericMatrix mpars(sum(nortslowu), pars.ncol());
+    for (int i = 0, j = 0; i < nortslowu.length(); i++) {
+      if (nortslowu[i]) {
+        mpars(j,_) = pars(i,_);
+        j++;
+      }
+    }
+
+    LogicalVector winnerslowuvec = winner[nortslowu];
+    LogicalMatrix winnerslowu(n_acc, winnerslowuvec.length() / n_acc, winnerslowuvec.begin());
+    tofixslow = (winner & nortslowu);
+    NumericVector ldstofixslow(sum(tofixslow));
+    for (int i = 0; i < sum(tofixslow); i++) {
+      NumericMatrix pi(n_acc, mpars.ncol());
+      for (int j = 0; j < n_acc; j++) {
+        pi(j,_) = mpars(i * n_acc + j,_);
+      }
+
+      LogicalVector idx(n_acc);
+      idx[0] = 1;
+      NumericVector pc = f_integrate(pi, idx, dfun, pfun, exp(min_ll), ok1, UC, UT);
+      double p;
+      if (pc[2] != 0 || traits::is_nan<REALSXP>(pc[0])) {
+        p = NA_REAL;
+      } else{
+        p = std::max(0.0,std::min(pc[0],1.0));
+      }
+
+      double cf;
+      if (p != 0 && !(LT==0 && UT==R_PosInf)) {
+        cf = pr_pt(pi, pfun, LT, UT);
+      } else {
+        cf = 1;
+      }
+
+      if (!traits::is_na<REALSXP>(cf)) {
+        p *= cf;
+      }
+
+      if (!traits::is_na<REALSXP>(p) && n_acc > 1) {
+        for (int j = 1; j < n_acc; j++) {
+          idx.fill(0);
+          idx[j] = 1;
+          pc = f_integrate(pi, idx, dfun, pfun, exp(min_ll), ok1, UC, UT);
+          if (pc[2] != 0 || traits::is_nan<REALSXP>(pc[0])) {
+            p = NA_REAL;
+            break;
+          }
+          if (pc[0] != 0.0 && !(LT == 0 && UT == R_PosInf)) {
+            cf = pr_pt(pi, pfun, LT, UT);
+          } else{
+            cf = 1;
+          }
+          if (!traits::is_na<REALSXP>(cf)) {
+            p += pc[0] * cf;
+          }
+        }
+      }
+      double lp = std::log(p);
+      if (!traits::is_na<REALSXP>(lp)) {
+        ldstofixslow[i] = lp;
+      } else{
+        ldstofixslow[i] = R_NegInf;
+      }
+    }
+    lds[tofixslow] = ldstofixslow;
+  }
+
+  // No direction
+  LogicalVector nortnou = is_na(rts) & is_na(R) & is_ok;
+
+  if (is_true(any(nortnou))) {
+
+//    Rcpp::Rcout << "nortnou" << std::endl;
+
+    NumericMatrix mpars(sum(nortnou), pars.ncol());
+
+    for (int i = 0, j = 0; i < nortnou.length(); i++) {
+      if (nortnou[i]) {
+        mpars(j,_) = pars(i,_);
+        j++;
+      }
+    }
+
+    LogicalVector winnernouvec = winner[nortnou];
+    LogicalMatrix winnernou(n_acc, winnernouvec.length() / n_acc, winnernouvec.begin());
+
+    LogicalVector tofix = (winner & nortnou);
+    NumericVector ldstofix(sum(tofix));
+
+    for (int i = 0; i < sum(tofix); i++) {
+      NumericMatrix pi(n_acc, mpars.ncol());
+
+      for (int j = 0; j < n_acc; j++) {
+        pi(j,_) = mpars(i * n_acc + j,_);
+      }
+
+      LogicalVector idx(n_acc);
+      idx[0] = 1;
+
+      double pc = pLU(pi, idx, dfun, pfun, exp(min_ll), ok1, LT, LC, UC, UT);
+      double p;
+      double cf;
+      if (traits::is_na<REALSXP>(pc)) {
+        p = NA_REAL;
+      } else{
+        if (pc != 0.0 && !(LT == 0 && UT == R_PosInf)) {
+          cf = pr_pt(pi, pfun, LT, UT);
+        } else{
+          cf = 1;
+        }
+
+        if (!traits::is_na<REALSXP>(cf)) {
+          p = pc*cf;
+        } else {
+          p = NA_REAL;
+        }
+
+        if (!traits::is_na<REALSXP>(p) && n_acc > 1) {
+          for (int j = 1; j < n_acc; j++) {
+            idx.fill(0);
+            idx[j] = 1;
+
+            pc = pLU(pi, idx, dfun, pfun, exp(min_ll), ok1, LT, LC, UC, UT);
+            if (traits::is_na<REALSXP>(pc)) {
+              p = NA_REAL;
+              break;
+            }
+            if (pc != 0 && !(LT == 0 && UT == R_PosInf)) {
+              cf = pr_pt(pi, pfun, LT, UT);
+            } else {
+              cf = 1;
+            }
+
+            if (traits::is_na<REALSXP>(cf)) {
+              p = NA_REAL;
+              break;
+            } else{
+              p += pc * cf;
+            }
+          }
+        }
+      }
+      double lp = std::log(p);
+      if (!traits::is_na<REALSXP>(lp)) {
+        ldstofix[i] = lp;
+      } else{
+        ldstofix[i] = R_NegInf;
+      }
+    }
+    lds[tofix] = ldstofix;
+  }
+
+  // Truncation where not censored or censored and response known
+  LogicalVector unique_nort = data.attr("unique_nort");
+  NumericVector uniquewinlike = lds[unique_nort & winner];
+  LogicalVector ok = is_finite(uniquewinlike);
+  CharacterVector uniquewinresp = R[unique_nort & winner];
+  LogicalVector alreadyfixed = is_na(uniquewinresp);
+  ok = ok & !alreadyfixed & is_ok;
+
+  if (dotrunc & is_true(any(ok))) {
+
+//    Rcpp::Rcout << "dotrunc" << std::endl;
+
+    IntegerVector expand_nort = data.attr("expand_nort");
+    NumericMatrix tpars(sum(unique_nort),pars.ncol());
+    for (int i=0, j=0; i < unique_nort.length(); i++) {
+      if (unique_nort[i]) {
+        tpars(j,_) = pars(i,_);
+        j++;
+      }
+    }
+    LogicalVector winnertruncvec = winner[unique_nort];
+    LogicalMatrix winnertrunc(n_acc, winnertruncvec.length() / n_acc, winnertruncvec.begin());
+    NumericVector cf = rep(NA_REAL, ok.length());
+
+    for (int i = 0; i < ok.length(); i++) {
+      if (ok[i]) {
+        NumericMatrix pi(n_acc, tpars.ncol());
+
+        for (int j = 0; j < n_acc; j++) {
+          pi(j,_) = tpars(i * n_acc + j , _ );
+        }
+
+        cf[i] = pr_pt(pi, pfun, LT, UT);
+      }
+    }
+    NumericVector cf_log = rep_each(log(cf), n_acc);
+    NumericVector cf_exp = c_expand(cf_log, expand_nort);
+    LogicalVector fix = winner & !is_na(cf_exp) & is_finite(cf_exp);
+    if (is_true(any(fix))) {
+      lds[fix] = lds[fix] + cf_exp[fix];
+    }
+    LogicalVector badfix = winner & (is_na(cf_exp) | is_infinite(cf_exp));
+    if (all(!is_na(tofixfast))) {
+      badfix = badfix & !tofixfast;
+    }
+    if (all(!is_na(tofixslow))) {
+      badfix = badfix & !tofixslow;
+    }
+    if (is_true(any(badfix))) {
+      lds[badfix] = R_NegInf;
+    }
+  }
+
+  }
+
+  // Non-process (contaminant) miss.
+  LogicalVector isPCont = (pCont > 0);
+  LogicalVector okwin = winner & is_ok;
+  if (is_true(any(isPCont & okwin))) {
+
+//    Rcpp::Rcout << "isPCont" << std::endl;
+
+    NumericVector p = lds[okwin];
+    p = exp(p);
+    NumericVector pc = pCont[okwin];
+    CharacterVector Rwin = R[okwin];
+    LogicalVector isMiss = is_na(Rwin);
+    for (int i = 0; i < p.length(); i++) {
+      if (isMiss[i]) {
+        p[i] = pc[i] + (1  - pc[i]) * p[i];
+      } else {
+        p[i] = (1 - pc[i]) * p[i];
+      }
+    }
+    NumericVector ldswinner = log(p);
+    lds[okwin] = ldswinner;
+  }
+
+
+
+  if(n_acc > 1){
+    NumericVector ll_out = lds[winner];
+    NumericVector lds_los = lds[!winner];
+    if(n_acc == 2){
+      ll_out = ll_out + lds_los;
+    } else{
+      for(int z = 0; z < ll_out.length(); z++){
+        ll_out[z] = ll_out[z] + sum(lds_los[seq( z * (n_acc -1), (z+1) * (n_acc -1) -1)]);
+      }
+    }
+    ll_out[is_na(ll_out)] = min_ll;
+    ll_out[is_infinite(ll_out)] = min_ll;
+    ll_out[ll_out < min_ll] = min_ll;
+    ll_out = c_expand(ll_out, expand); // decompress
+    return(sum(ll_out));
+  } else{
+    lds_exp[is_na(lds_exp)] = min_ll;
+    lds_exp[is_infinite(lds_exp)] = min_ll;
+    lds_exp[lds_exp < min_ll] = min_ll;
+    lds_exp = c_expand(lds, expand); // decompress
+    return(sum(lds_exp));
+  }
+
 }
 
 // [[Rcpp::export]]
@@ -301,6 +826,45 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
         lls[i] = c_log_likelihood_MRI(pars, y, is_ok, n_trials, n_pars, min_ll);
       } else{
         lls[i] = c_log_likelihood_MRI_white(pars, y, is_ok, n_trials, n_pars, min_ll);
+      }
+    }
+  } else if(type == "MLBA" || type == "MRDM" || type == "MLNR" || type == "OLBA" || type == "ORDM" || type == "OLNR") {
+    IntegerVector expand = data.attr("expand");
+    LogicalVector winner = data["winner"];
+    // Love me some good old ugly but fast c++ pointers
+    NumericVector (*dfun)(NumericVector, NumericMatrix, LogicalVector, double, LogicalVector);
+    NumericVector (*pfun)(NumericVector, NumericMatrix, LogicalVector, double, LogicalVector);
+    if(type == "MLBA" || type == "OLBA"){
+      dfun = dlba_c1;
+      pfun = plba_c1;
+    } else if(type == "MRDM"|| type == "ORDM"){
+      dfun = drdm_c;
+      pfun = prdm_c;
+    } else {
+      dfun = dlnr_c;
+      pfun = plnr_c;
+    }
+    NumericVector lR = data["lR"];
+    int n_lR = unique(lR).length();
+    for (int i = 0; i < n_particles; ++i) {
+      p_vector = p_matrix(i, _);
+      if(i == 0){
+        p_specs = make_pretransform_specs(p_vector, pretransforms);
+        // Precompute transform specs for all p_types using a one-time dummy
+        NumericMatrix dummy(1, p_types.size());
+        colnames(dummy) = p_types;
+        full_t_specs = make_transform_specs(dummy, transforms);
+      }
+      pars = get_pars_matrix(p_vector, constants, p_specs, p_types, designs, n_trials, data, trend, full_t_specs);
+      if (i == 0) {                            // first particle only, just to get colnames
+        bound_specs = make_bound_specs(minmax,mm_names,pars,bounds);
+      }
+      is_ok = c_do_bound(pars, bound_specs);
+      is_ok = lr_all(is_ok, n_lR);
+      if(type == "MLBA" || type == "MRDM" || type == "MLNR") {
+        lls[i] = c_log_likelihood_race_missing(pars, data, dfun, pfun, n_trials, winner, expand, min_ll, is_ok);
+      } else {
+        lls[i] = c_log_likelihood_race(pars, data, dfun, pfun, n_trials, winner, expand, min_ll, is_ok);
       }
     }
   } else {
@@ -596,6 +1160,7 @@ inline std::string make_winner_integral_key(int start_row,
   append_par_block(oss, start_row, pars, n_lR, n_par);
   return oss.str();
 }
+
 
 // Main C++ function for censored/truncated race likelihood calculation
 // This function is now the unified entry point for all race models (LBA, RDM, LNR),
@@ -1024,6 +1589,7 @@ double c_log_likelihood_race_cens_trunc(
         ll_unique[unique_trial_idx] = current_ll_val;
         ll_unique[unique_trial_idx] = std::max(min_ll, ll_unique[unique_trial_idx]); // Ensure not less than min_ll
     }
+
     // --- Summation of log-likelihoods for all unique trials ---
     double total_ll = 0;
     if (expand.length() > 0) { // If an expansion vector is provided (e.g. from non-compressed dadm)
