@@ -262,7 +262,7 @@ LBA <- function(){
 LBAIO <- function(){
   list(
     type="RACE",
-    c_name = "LBAIO", 
+    c_name = "LBAIO",
     # p_vector transform, sets sv as a scaling parameter
     p_types=c("v" = 1,"sv" = log(1),"B" = log(1),"A" = log(0),"t0" = log(0), "pContaminant"=qnorm(0)),
     transform=list(func=c(v = "identity",sv = "exp", B = "exp", A = "exp",t0 = "exp",pContaminant="pnorm")),
@@ -294,7 +294,7 @@ LBAIO <- function(){
 LBAGNG <- function(){
   list(
     type="GNG",
-    c_name = "LBAGNG", 
+    c_name = "LBAGNG",
     # p_vector transform, sets sv as a scaling parameter
     p_types=c("v" = 1,"sv" = log(1),"B" = log(1),"A" = log(0),"t0" = log(0), "pContaminant"=qnorm(0)),
     transform=list(func=c(v = "identity",sv = "exp", B = "exp", A = "exp",t0 = "exp",pContaminant="pnorm")),
@@ -360,5 +360,66 @@ rLBAGNG <- function(data,pars,p_types=c("v","sv","b","A","t0"),posdrift = TRUE,
   out$R[out$rt>D]="nogo"
   out$rt[out$R=="nogo"]=Inf
   out
+}
+
+#' MLBA
+#' @export
+
+MLBA <- function(){
+  list(
+    type="RACE",
+    c_name = "MLBA",
+    # p_vector transform, sets sv as a scaling parameter
+    p_types=c("v" = 1,"sv" = log(1),"B" = log(1),"A" = log(0),"t0" = log(0), "pContaminant"=qnorm(0)),
+    transform=list(func=c(v = "identity",sv = "exp", B = "exp", A = "exp",t0 = "exp",pContaminant="pnorm")),
+    bound=list(minmax=cbind(v=c(-Inf,Inf),sv = c(0, Inf), A=c(1e-4,Inf),B=c(1e-4,Inf),t0=c(0.05,Inf),pContaminant=c(0.001,0.999)),
+               exception=c(A=0,pContaminant=0)),
+    # Transform to natural scale
+    # Trial dependent parameter transform
+    Ttransform = function(pars,dadm) {
+      pars <- cbind(pars,b=pars[,"B"] + pars[,"A"])
+      pars
+    },
+    # Random function for racing accumulator
+    rfun=function(data,pars) rLBA(data$lR,pars,posdrift=TRUE,ok = attr(pars, "ok")),
+    # Density function (PDF) for single accumulator
+    dfun=function(rt,pars) dLBA(rt,pars,posdrift = TRUE),
+    # Probability function (CDF) for single accumulator
+    pfun=function(rt,pars) pLBA(rt,pars,posdrift = TRUE),
+    # Race likelihood combining pfun and dfun
+    log_likelihood=function(pars,dadm,model,min_ll=log(1e-10)){
+      log_likelihood_race_missing(pars=pars, dadm = dadm, model = model, min_ll = min_ll)
+    }
+  )
+}
+
+#' OLBA
+#' @export
+OLBA <- function(){
+  list(
+    type="RACE",
+    c_name = "OLBA",
+    # p_vector transform, sets sv as a scaling parameter
+    p_types=c("v" = 1,"sv" = log(1),"B" = log(1),"A" = log(0),"t0" = log(0), "pContaminant"=qnorm(0)),
+    transform=list(func=c(v = "identity",sv = "exp", B = "exp", A = "exp",t0 = "exp",pContaminant="pnorm")),
+    bound=list(minmax=cbind(v=c(-Inf,Inf),sv = c(0, Inf), A=c(1e-4,Inf),B=c(1e-4,Inf),t0=c(0.05,Inf),pContaminant=c(0.001,0.999)),
+               exception=c(A=0,pContaminant=0)),
+    # Transform to natural scale
+    # Trial dependent parameter transform
+    Ttransform = function(pars,dadm) {
+      pars <- cbind(pars,b=pars[,"B"] + pars[,"A"])
+      pars
+    },
+    # Random function for racing accumulator
+    rfun=function(data,pars) rLBA(data$lR,pars,posdrift=TRUE,ok = attr(pars, "ok")),
+    # Density function (PDF) for single accumulator
+    dfun=function(rt,pars) dLBA(rt,pars,posdrift = TRUE),
+    # Probability function (CDF) for single accumulator
+    pfun=function(rt,pars) pLBA(rt,pars,posdrift = TRUE),
+    # Race likelihood combining pfun and dfun
+    log_likelihood=function(pars,dadm,model,min_ll=log(1e-10)){
+      log_likelihood_race(pars=pars, dadm = dadm, model = model, min_ll = min_ll)
+    }
+  )
 }
 
