@@ -45,7 +45,7 @@ Imports: abind, coda, graphics, grDevices, magic, MASS, matrixcalc,
         methods, msm, mvtnorm, parallel, stats, Matrix, Rcpp,
         Brobdingnag, corrplot, colorspace, psych, utils, lpSolve,
         WienR,
-LinkingTo: Rcpp, RcppArmadillo
+LinkingTo: Rcpp, RcppArmadillo, RcppEigen, RcppNumerical
 Depends: R (>= 3.5.0)
 LazyData: true
 Config/testthat/parallel: true
