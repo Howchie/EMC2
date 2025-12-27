@@ -328,7 +328,7 @@ add_accumulators <- function(data,matchfun=NULL,simulate=FALSE, type = "RACE", F
       }
       factors <- factors[!(factors %in% dimnames(datar)[[2]][islS])]
       # datar <- datar[,!islS]
-      datar$lSmagnitude <- as.numeric(lSmagnitude)  
+      datar$lSmagnitude <- as.numeric(lSmagnitude)
     }
 	if (type=="GNG" & !("nogo"%in%levels(datar$lR))) {
 		stop("GNG model must have nogo level in R")
@@ -499,14 +499,14 @@ rt_check_function <- function(data){
   # Censoring
   if ("UC"%in%colnames(data)) {
     check_rt(data$UC,data$rt)
-    if ("UT"%in%colnames(data) && any( is.finite(data$UC) & (data$UC > data$UT)) )
-      stop("Upper censor must be less than upper truncation")
+    if ("UT"%in%colnames(data) && any(is.finite(data$UC) & (data$UT < data$UC)) )
+      stop("Upper truncation must not be less than upper censor")
   }
   if ("LC"%in%colnames(data)) {
     if (any(data$LC<0)) stop("Lower censor cannot be negative")
     check_rt(data$LC,data$rt,upper=FALSE)
-    if ("LT"%in%colnames(data) && any(data$LT>data$LC))
-      stop("Lower censor must be greater than lower truncation")
+    if ("LT"%in%colnames(data) && any(data$LC!=0 & (data$LT>data$LC)))
+      stop("Lower censor must not be less than lower truncation")
   }
   if (any(data$rt[!is.na(data$rt)]==-Inf) & !("LC"%in%colnames(data)))
     stop("Data must have an LC attribute if any rt = -Inf")
@@ -628,7 +628,13 @@ design_model <- function(data,design,model=NULL,
   for (i in pnames) attr(design$Flist[[i]],"Clist") <- design$Clist[[i]]
 
   out <- lapply(design$Flist,make_dm,da=da,Fcovariates=design$Fcovariates, add_da = add_da, all_cells_dm = all_cells_dm)
-  if (!is.null(rt_resolution) & !is.null(da$rt)) da$rt <- floor(da$rt/rt_resolution)*rt_resolution
+  if (!is.null(rt_resolution) & !is.null(da$rt)) {
+    da$rt <- floor(da$rt/rt_resolution)*rt_resolution
+    da$LC <- floor(da$LC/rt_resolution)*rt_resolution
+    da$UC <- floor(da$UC/rt_resolution)*rt_resolution
+    da$LT <- floor(da$LT/rt_resolution)*rt_resolution
+    da$UT <- floor(da$UT/rt_resolution)*rt_resolution
+  }
   if (compress){
     dadm <- compress_dadm(da,designs=out, Fcov=design$Fcovariates,Ffun=names(design$Ffunctions))
     # Change expansion names
