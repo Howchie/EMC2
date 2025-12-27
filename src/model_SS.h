@@ -1,7 +1,7 @@
 #ifndef MODEL_SS_H
 #define MODEL_SS_H
 
-#include <Rcpp.h>
+#include <RcppArmadillo.h>
 #include <cmath>
 
 inline double ss_clamp_prob01(double p) {
