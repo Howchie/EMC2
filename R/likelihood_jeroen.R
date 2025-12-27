@@ -150,20 +150,42 @@ f <- function(t,p,dfun,pfun) {
     out
 }
 
+# pr_pt <- function(LT,UT,ps,dadm,model)
+#     # log(p(untruncated response)/p(truncated response)), >= log(1), multiplicative truncation correction
+#   {
+#     pr <- my_integrate(f,lower=0,upper=Inf,p=ps,
+#                        dfun=model$dfun,pfun=model$pfun)
+#     if (inherits(pr, "try-error") || suppressWarnings(is.nan(pr$value))) return(NA)
+#     if (pr$value==0) return(0)
+#     pt <- my_integrate(f,lower=LT,upper=UT,p=ps,
+#                        dfun=model$dfun,pfun=model$pfun)
+#     if (inherits(pt, "try-error") || suppressWarnings(is.nan(pt$value)) || pt$value==0) return(NA)
+#     # 1/pmax(0,pmin(pt$value,1))
+#     out <- pmax(0,pmin(pr$value,1))/pmax(0,pmin(pt$value,1))
+#     if (is.infinite(out)) return(NA)
+#     out
+# }
+
 pr_pt <- function(LT,UT,ps,dadm,model)
-    # log(p(untruncated response)/p(truncated response)), >= log(1), multiplicative truncation correction
-  {
-    pr <- my_integrate(f,lower=0,upper=Inf,p=ps,
-                       dfun=model$dfun,pfun=model$pfun)
-    if (inherits(pr, "try-error") || suppressWarnings(is.nan(pr$value))) return(NA)
-    if (pr$value==0) return(0)
-    pt <- my_integrate(f,lower=LT,upper=UT,p=ps,
-                       dfun=model$dfun,pfun=model$pfun)
-    if (inherits(pt, "try-error") || suppressWarnings(is.nan(pt$value)) || pt$value==0) return(NA)
-    out <- pmax(0,pmin(pr$value,1))/pmax(0,pmin(pt$value,1))
-    if (is.infinite(out)) return(NA)
-    out
+  # Probability of a response between LT and UT
+{
+  out <- abs(prod(1-model$pfun(LT,ps))-prod(1-model$pfun(UT,ps)))
+  if (is.nan(out) | is.na(out) | out==0) return(NA) else return(1/out)
+  # pr <- my_integrate(f,lower=LT,upper=UT,p=ps,dfun=model$dfun,pfun=model$pfun)
+  # if (inherits(pr, "try-error") || suppressWarnings(is.nan(pr$value)))
+  #   return(NA) else pr <- pr$value
+  # if (nrow(ps)>1) {
+  #   idx <- 1:nrow(ps)
+  #   for (i in 2:nrow(ps)) {
+  #     pri <- my_integrate(f,lower=LT,upper=UT,p=ps[c(i,idx[-i]),],dfun=model$dfun,pfun=model$pfun)
+  #     if (inherits(pri, "try-error") || suppressWarnings(is.nan(pri$value))) return(NA)
+  #     pr <- pr + pri$value
+  #   }
+  # }
+  # pr <- 1/pmax(0,pmin(pr,1))
+  # if (is.finite(pr)) return(pr) else return(NA)
 }
+
 
 pLU <- function(LT,LC,UC,UT,ps,dadm,model)
     # Probability from LT-LC + UC-UT
@@ -362,27 +384,31 @@ log_likelihood_race_missing <- function(pars,dadm,model,min_ll=log(1e-10))
 
 
   # Truncation where not censored or censored and response known
-  ok <- is.finite(lds[attr(dadm,"unique_nort") & dadm$winner])
-  alreadyfixed <- is.na(dadm$R[attr(dadm,"unique_nort") & dadm$winner])
+  ok <- is.finite(lds[attr(dadm,"unique_nortR") & dadm$winner])
+  alreadyfixed <- is.na(dadm$R[attr(dadm,"unique_nortR") & dadm$winner])
   ok <- ok & !alreadyfixed
   if ( dotrunc & any(ok) ) {
-    tpars <- pars[attr(dadm,"unique_nort"),,drop=FALSE]
+    tpars <- pars[attr(dadm,"unique_nortR"),,drop=FALSE]
     tpars <- array(tpars[,,drop=FALSE],dim=c(n_acc,nrow(tpars)/n_acc,ncol(tpars)),
                    dimnames = list(NULL,NULL,colnames(tpars)))[,,,drop=FALSE]
-    winner <- matrix(dadm$winner[attr(dadm,"unique_nort")],nrow=n_acc)[,,drop=FALSE]
+    winner <- matrix(dadm$winner[attr(dadm,"unique_nortR")],nrow=n_acc)[,,drop=FALSE]
     cf <- rep(NA,length(ok))
     for (i in 1:length(ok)) if (ok[i]) {
       if (dim(tpars)[[1]]==1) pi <- t(as.matrix(tpars[,i,])) else
         pi <- tpars[,i,][order(!winner[,i]),]
       cf[i] <- pr_pt(LT,UT,pi,dadm,model)
     }
-    cf <- rep(log(cf),each=n_acc)[attr(dadm,"expand_nort")]
+    cf <- rep(log(cf),each=n_acc)[attr(dadm,"expand_nortR")]
     fix <- dadm$winner & !is.na(cf) & !is.nan(cf) & is.finite(cf)
-    if (any(fix)) lds[fix] <- lds[fix] + cf[fix]
+    if (any(fix)) {
+      lds[fix] <- lds[fix] + cf[fix]
+    }
     badfix <- dadm$winner & (is.na(cf) | is.nan(cf) | is.infinite(cf))
     if (!all(is.na(tofixfast))) badfix <- badfix & !tofixfast
     if (!all(is.na(tofixslow))) badfix <- badfix & !tofixslow
-    if (any(badfix)) lds[badfix] <- -Inf
+    if (any(badfix)) {
+      lds[badfix] <- -Inf
+    }
   }
 
   # Non-process (contaminant) miss.
@@ -441,6 +467,23 @@ log_likelihood_race_missing_LBAU <- function(p_vector,dadm,min_ll=log(1e-10))
     if (is.infinite(out)) return(NA)
     out
   }
+
+  # pr_pt <- function(LT,UT,ps,dadm,model)
+  #   # Sum over responses of the probability of a response with rt between LT and UT
+  # {
+  #   for ()
+  #   pr <- my_integrate(f,lower=0,upper=Inf,p=ps,
+  #                      dfun=model$dfun,pfun=model$pfun)
+  #   if (inherits(pr, "try-error") || suppressWarnings(is.nan(pr$value))) return(NA)
+  #   if (pr$value==0) return(0)
+  #   pt <- my_integrate(f,lower=LT,upper=UT,p=ps,
+  #                      dfun=model$dfun,pfun=model$pfun)
+  #   if (inherits(pt, "try-error") || suppressWarnings(is.nan(pt$value)) || pt$value==0) return(NA)
+  #   out <- pmax(0,pmin(pr$value,1))/pmax(0,pmin(pt$value,1))
+  #   if (is.infinite(out)) return(NA)
+  #   out
+  # }
+
 
   pLU <- function(LT,LC,UC,UT,ps,dadm,model)
     # Probability from LT-LC + UC-UT
