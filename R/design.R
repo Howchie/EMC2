@@ -90,8 +90,8 @@ design <- function(formula = NULL,factors = NULL,Rlevels = NULL,model,data=NULL,
     pre_transform <- NULL
   }
 
-  if(any(names(factors) %in% c("trial", "R", "rt", "lR", "lM"))){
-    stop("Please do not use any of the following names within factors argument: trial, R, rt, lR, lM")
+  if(any(names(factors) %in% c("trial", "R", "rt", "lR", "lM","UC","LC","UT","LT","winner"))){
+    stop("Please do not use any of these factor names: winner, trial, R, rt, lR, lM, UC, LC, UT, LT")
   }
   if (!"subjects" %in% names(factors)) factors$subjects <- 1 # ZH: ensure subjects is added to factors when there's no data, for make_data to work properly
   factors <- setNames(
@@ -414,53 +414,17 @@ compress_dadm <- function(da,designs,Fcov,Ffun)
     cells_nort <- paste(
       apply(do.call(cbind,lapply(designs,function(x){
         apply(x[attr(x,"expand"),,drop=FALSE],1,paste,collapse="_")})
-      ),1,paste,collapse="+"),da$subjects,da$R,da$lR,sep="+")[contract]
+      ),1,paste,collapse="+"),da$subjects,da$R,da$lR,LT, UT, LC, UC,sep="+")[contract]
     attr(out,"unique_nort") <- !duplicated(cells_nort)
     attr(out,"expand_nort") <- as.numeric(factor(cells_nort,levels=unique(cells_nort)))
-
-    # cells_nort <- paste(
-    #   apply(do.call(cbind,lapply(designs,function(x){
-    #     apply(x[attr(x,"expand"),,drop=FALSE],1,paste,collapse="_")})
-    #   ),1,paste,collapse="+"),da$subjects,da$R,da$lR,sep="+")[contract]
-    # attr(out,"unique_nort") <- !duplicated(cells_nort)
-    # # Only first level WHY????
-    # cells <- cells[da$lR==levels(da$lR)[1]]
-    # cells_nort <- cells_nort[out$lR==levels(out$lR)[1]]
-    # attr(out,"expand_nort") <- as.numeric(factor(cells_nort,
-    #    levels=unique(cells_nort)))[as.numeric(factor(cells,levels=unique(cells)))]
 
     # indices to use to contract ignoring rt and response (R), then expand back
     cells_nortR <- paste(apply(do.call(cbind,lapply(designs,function(x){
       apply(x[attr(x,"expand"),,drop=FALSE],1,paste,collapse="_")})),1,paste,collapse="+"),
-      da$subjects,da$lR,sep="+")[contract]
+      da$subjects,da$lR,LT, UT, LC, UC,sep="+")[contract]
     attr(out,"unique_nortR") <- !duplicated(cells_nortR)
     attr(out,"expand_nortR") <- as.numeric(factor(cells_nortR,levels=unique(cells_nortR)))
 
-    # # indices to use to contract ignoring rt and response (R), then expand back
-    # cells_nortR <- paste(apply(do.call(cbind,lapply(designs,function(x){
-    #   apply(x[attr(x,"expand"),,drop=FALSE],1,paste,collapse="_")})),1,paste,collapse="+"),
-    #   da$subjects,da$lR,sep="+")[contract]
-    # attr(out,"unique_nortR") <- !duplicated(cells_nortR)
-    # # Only first level WHY????
-    # cells_nortR <- cells_nortR[out$lR==levels(out$lR)[1]]
-    # attr(out,"expand_nortR") <- as.numeric(factor(cells_nortR,
-    #    levels=unique(cells_nortR)))[as.numeric(factor(cells,levels=unique(cells)))]
-
-    # Lower censor
-    if (!any(is.na(out$rt))) { # Not a choice only model
-      winner <- out$lR==levels(out$lR)[[1]]
-      ok <- out$rt[winner]==-Inf
-      if (any(ok)) {
-        ok[ok] <- 1:sum(ok)
-        attr(out,"expand_lc") <- ok[attr(out,"expand_winner")] + 1
-      }
-      # Upper censor
-      ok <- out$rt[winner]==Inf
-      if (any(ok)) {
-        ok[ok] <- 1:sum(ok)
-        attr(out,"expand_uc") <- ok[attr(out,"expand_winner")] + 1
-      }
-    }
     out
 }
 
@@ -546,47 +510,6 @@ design_model <- function(data,design,model=NULL,
     warning("subjects column was converted to a factor")
   }
 
-  resolve_bound <- function(bound_name, default) {
-    if (bound_name %in% colnames(data)) return(data[[bound_name]])
-    a <- attr(data, bound_name)
-    if (!is.null(a)) return(a)
-    if (!is.null(design[[bound_name]])) return(design[[bound_name]])
-    default
-  }
-  bound_to_numeric <- function(x, bound_name) {
-    if (is.numeric(x)) return(x)
-    out <- suppressWarnings(as.numeric(as.character(x)))
-    if (all(is.na(out)) && any(!is.na(x))) {
-      stop(paste0(bound_name, " must be numeric (or coercible to numeric)."))
-    }
-    names(out) <- names(x)
-    out
-  }
-  expand_bound_trialwise <- function(b, bound_name) {
-    b <- bound_to_numeric(b, bound_name)
-    n <- nrow(data)
-    if (length(b) == 1) return(rep(b, n))
-    if (length(b) == n) return(b)
-    if (!is.null(names(b))) {
-      present <- unique(as.character(data$subjects))
-      if (!all(present %in% names(b))) {
-        stop(paste0("Subject-wise ", bound_name, " must be named for all subjects present in data$subjects."))
-      }
-      return(unname(b[as.character(data$subjects)]))
-    }
-    stop(paste0(bound_name, " must be scalar, length nrow(data), or a subject-named vector."))
-  }
-
-  # Race censor/trunc likelihood expects these columns to exist
-  LT <- resolve_bound("LT", 0)
-  UT <- resolve_bound("UT", Inf)
-  LC <- resolve_bound("LC", 0)
-  UC <- resolve_bound("UC", Inf)
-  data$LT <- expand_bound_trialwise(LT, "LT")
-  data$UT <- expand_bound_trialwise(UT, "UT")
-  data$LC <- expand_bound_trialwise(LC, "LC")
-  data$UC <- expand_bound_trialwise(UC, "UC")
-
   if (!any(names(data)=="trials")) data$trials <- 1:dim(data)[1]
   if(rt_check){rt_check_function(data)}
   if (!add_acc) da <- data else
@@ -627,13 +550,14 @@ design_model <- function(data,design,model=NULL,
   }
   for (i in pnames) attr(design$Flist[[i]],"Clist") <- design$Clist[[i]]
 
-  out <- lapply(design$Flist,make_dm,da=da,Fcovariates=design$Fcovariates, add_da = add_da, all_cells_dm = all_cells_dm)
-  if (!is.null(rt_resolution) & !is.null(da$rt)) {
-    da$rt <- floor(da$rt/rt_resolution)*rt_resolution
-    da$LC <- floor(da$LC/rt_resolution)*rt_resolution
-    da$UC <- floor(da$UC/rt_resolution)*rt_resolution
-    da$LT <- floor(da$LT/rt_resolution)*rt_resolution
-    da$UT <- floor(da$UT/rt_resolution)*rt_resolution
+  out <- lapply(design$Flist,make_dm,da=da,Fcovariates=design$Fcovariates,
+                add_da = add_da, all_cells_dm = all_cells_dm)
+  if (!is.null(rt_resolution)) {
+    if (!is.null(da$rt)) da$rt <- floor(da$rt/rt_resolution)*rt_resolution
+    if (!is.null(da$LC)) da$LC <- floor(da$LC/rt_resolution)*rt_resolution
+    if (!is.null(da$UC)) da$UC <- floor(da$UC/rt_resolution)*rt_resolution
+    if (!is.null(da$LT)) da$LT <- floor(da$LT/rt_resolution)*rt_resolution
+    if (!is.null(da$UT)) da$UT <- floor(da$UT/rt_resolution)*rt_resolution
   }
   if (compress){
     dadm <- compress_dadm(da,designs=out, Fcov=design$Fcovariates,Ffun=names(design$Ffunctions))
