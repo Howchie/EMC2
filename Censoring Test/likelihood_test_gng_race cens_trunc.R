@@ -19,12 +19,11 @@ Rtfun <- function(d){ d$rt[d$rt==Inf]=NA; d$rt}
 Cfun <- function(d) as.numeric(d$S)==as.numeric(d$R)
 
 run_gng_demo <- function(p_contaminant = 0, cens = TRUE, estimate_contaminant = FALSE,
-                         n_trials = 500, UC = 2.0, UT=Inf, LC=0, LT=0,
+                         n_trials = 500, UC = Inf, UT=Inf, LC=0, LT=0,
                          cores_for_chains = 3,
                          sample_file = "samples_GNG.RData") {
   matchfun <- function(d) as.numeric(d$S) == as.numeric(d$lR)
-  if (UC == Inf) stop("Require a finite UC (deadline) for GNG.")
-  # Base 2-choice design; lM is automatically constructed from matchfun.
+
   designLBA <- design(
     factors=list(subjects=1,S=c("go","go","go","nogo")),
     Rlevels=c("go","nogo"),

@@ -1,9 +1,4 @@
-## LBA likelihood + recovery demo for EMC2 to illustrate handling of censored and truncated RTs and optional contaminant omissions
-# - Simulates 2-choice LBA data with a response deadline (UC) and optional truncation (LT,UT) with censored RTs and omissions coded as rt=Inf and R=NA
-# - Runs a simulation with truncated RTs, generating profile plots (R+C likelihood) and a simple parameter-recovery fit, demonstrating the failure of the older likelihood with no censoring/truncation handling
-# - Repeats the demo with censoring handling for comparison
-# - Runs a simulation with censoring and truncated RTs, generating profile plots (R + C likelihood) and a simple parameter-recovery fit
-# - Repeats the demo with contaminant omissions (e.g., 15%)
+# Censoring and truncation tests of Zachs R and C, my R, Jeroen's C
 rm(list=ls())
 library(EMC2)
 source("Censoring Test/test_likelihood_plotfuns_ah.R")
@@ -61,7 +56,7 @@ run_lba_demo <- function(p_contaminant = 0, cens = TRUE, estimate_contaminant = 
                          LCresponse = FALSE, UCresponse = FALSE,oldC=FALSE,
                          LCdirection = TRUE, UCdirection = TRUE,
                          force_direction = TRUE, force_response = TRUE,
-                         rtContaminantNA = FALSE,print_stats=FALSE,
+                         print_stats=FALSE,
                          sample_file = "samples_LBA.RData") {
   # if (UC == Inf & p_contaminant>0)
   #   stop("Require a finite UC (deadline) when omissions are present.")
@@ -153,9 +148,7 @@ run_lba_demo <- function(p_contaminant = 0, cens = TRUE, estimate_contaminant = 
     LC = LC,
     LT = LT,
     LCresponse = LCresponse, UCresponse = UCresponse,
-    LCdirection = LCdirection, UCdirection = UCdirection,
-    force_direction = force_direction, force_response = force_response,
-    rtContaminantNA = rtContaminantNA
+    LCdirection = LCdirection, UCdirection = UCdirection
   )
 
   if (print_stats) {
@@ -243,7 +236,7 @@ res_old <- run_lba_demo(
   sample_file = "samples_lba_old.RData"
 )
 
-# C1 is now the old C version
+# C1 is now the old C version, slightly faster
 res_old <- run_lba_demo(
   p_contaminant = 0,
   cens=FALSE,
@@ -309,6 +302,8 @@ res_cens <- run_lba_demo(
 
 # Test 3: Truncated RTs ------------
 
+# TRUNCATION BUG IN MY C, FIXED IN MY R
+
 res_contam <- run_lba_demo(
   p_contaminant = 0,
   estimate_contaminant = FALSE,
@@ -339,7 +334,6 @@ res_contam <- run_lba_demo(
 
 # Test 4: Truncation and censoring ------------
 
-# MY R BAD!
 res_contam <- run_lba_demo(
   p_contaminant = 0,
   estimate_contaminant = FALSE,
@@ -352,18 +346,18 @@ res_contam <- run_lba_demo(
   sample_file = "samples_lba_cens_trunc.RData"
 )
 
-# Test 5: Contaminant omissions  ------------
 
+# Test 5: Contaminant omissions  ------------
 
 res_contam <- run_lba_demo(
   p_contaminant = 0.15,
   estimate_contaminant = TRUE,
   n_trials = 10000,
-  layout=c(2,4),
+  layout=c(2,4),n_cores=9,
   sample_file = "samples_lba_contam.RData"
 )
 
-# My R better
+
 res_contam <- run_lba_demo(
   p_contaminant = .05,
   estimate_contaminant = TRUE,
@@ -376,9 +370,9 @@ res_contam <- run_lba_demo(
   sample_file = "samples_lba_cens_trunc.RData"
 )
 
-# My R worse
+
 res_contam <- run_lba_demo(
-  p_contaminant = .05,
+  p_contaminant = .15,
   estimate_contaminant = TRUE,
   n_trials = 10000,
   LC = .915,
@@ -390,9 +384,8 @@ res_contam <- run_lba_demo(
 )
 
 # This case no longer barred by a check, as expected recovery not great but not super terrible
-# My R worsete a lot., occasionaly qui
 res_contam <- run_lba_demo(
-  p_contaminant = .05,
+  p_contaminant = .15,
   estimate_contaminant = TRUE,
   n_trials = 10000,
   LC = .915,
@@ -403,6 +396,7 @@ res_contam <- run_lba_demo(
   layout=c(2,4),
   sample_file = "samples_lba_cens_trunc.RData"
 )
+
 
 #### RDM ----
 
@@ -441,8 +435,7 @@ run_RDM_demo <- function(p_contaminant = 0, cens = TRUE, estimate_contaminant = 
                          cores_for_chains = 3,layout=c(2,3),natural=TRUE,n_cores=1,
                          LCresponse = FALSE, UCresponse = FALSE,
                          LCdirection = TRUE, UCdirection = TRUE,oldC=FALSE,
-                         force_direction = TRUE, force_response = TRUE,
-                         rtContaminantNA = FALSE,print_stats=FALSE,
+                         print_stats=FALSE,
                          sample_file = "samples_RDM.RData") {
   # if (UC == Inf & p_contaminant>0)
   #   stop("Require a finite UC (deadline) when omissions are present.")
@@ -534,9 +527,7 @@ run_RDM_demo <- function(p_contaminant = 0, cens = TRUE, estimate_contaminant = 
     LC = LC,
     LT = LT,
     LCresponse = LCresponse, UCresponse = UCresponse,
-    LCdirection = LCdirection, UCdirection = UCdirection,
-    force_direction = force_direction, force_response = force_response,
-    rtContaminantNA = rtContaminantNA
+    LCdirection = LCdirection, UCdirection = UCdirection
   )
 
   if (print_stats) {
@@ -626,19 +617,22 @@ res_old <- run_RDM_demo(
 
 
 # Test 2: Censored RTs ----
-res_cens <- run_RDM_demo(
-  p_contaminant = 0,
-  estimate_contaminant = FALSE,
-  n_trials = 10000,
-  UC = 1.6,
-  sample_file = "samples_RDM_cens.RData"
-)
 
 res_cens <- run_RDM_demo(
   p_contaminant = 0,
   estimate_contaminant = FALSE,
   n_trials = 10000,
-  LC = .85,
+  UC = 1.6,n_cores=1,
+  sample_file = "samples_RDM_cens.RData"
+)
+
+# Zach's R wrong if LC defined
+
+res_cens <- run_RDM_demo(
+  p_contaminant = 0,
+  estimate_contaminant = FALSE,
+  n_trials = 10000,
+  LC = .85,n_cores=9,
   sample_file = "samples_RDM_cens.RData"
 )
 
@@ -647,12 +641,13 @@ res_cens <- run_RDM_demo(
   estimate_contaminant = FALSE,
   n_trials = 10000,
   UC = 1.8,
-  LC = .8,
+  LC = .8,n_cores=9,
   sample_file = "samples_RDM_cens.RData"
 )
 
 
 # Test 3: Truncated RTs ------------
+
 res_contam <- run_RDM_demo(
   p_contaminant = 0,
   estimate_contaminant = FALSE,
@@ -661,7 +656,7 @@ res_contam <- run_RDM_demo(
   sample_file = "samples_RDM_cens_trunc.RData"
 )
 
-# My R better
+# Z's R bad, ? likley problem with handling 0 in pRDM
 res_contam <- run_RDM_demo(
   p_contaminant = 0,
   estimate_contaminant = FALSE,
@@ -670,7 +665,8 @@ res_contam <- run_RDM_demo(
   sample_file = "samples_RDM_cens_trunc.RData"
 )
 
-# My R better
+
+# Z's R bad
 res_contam <- run_RDM_demo(
   p_contaminant = 0,
   estimate_contaminant = FALSE,
@@ -683,7 +679,7 @@ res_contam <- run_RDM_demo(
 
 # Test 4: Truncation and censoring ------------
 
-# My R better
+# Z's R bad
 res_contam <- run_RDM_demo(
   p_contaminant = 0,
   estimate_contaminant = FALSE,
@@ -702,11 +698,11 @@ res_contam <- run_RDM_demo(
   p_contaminant = 0.15,
   estimate_contaminant = TRUE,
   n_trials = 10000,
-  layout=c(2,4),
+  layout=c(2,4),n_cores=9,
   sample_file = "samples_RDM_contam.RData"
 )
 
-# My R mostly better
+# Z's R bad
 res_contam <- run_RDM_demo(
   p_contaminant = .05,
   estimate_contaminant = TRUE,
@@ -719,7 +715,7 @@ res_contam <- run_RDM_demo(
   sample_file = "samples_rdm_cens_trunc.RData"
 )
 
-# My R mostly better
+# Z's R bad, my R and Z's C differ a bit with similar quality
 res_contam <- run_RDM_demo(
   p_contaminant = .05,
   estimate_contaminant = TRUE,
@@ -732,7 +728,116 @@ res_contam <- run_RDM_demo(
   sample_file = "samples_rdm_cens_trunc.RData"
 )
 
-# My R mostly better
+# devtools::load_all()
+#
+# # estimate_contaminant=TRUE; p_contaminant = .15
+# estimate_contaminant=FALSE
+#
+# cens=TRUE
+#
+#   matchfun <- function(d) as.numeric(d$S) == as.numeric(d$lR)
+#
+#   designRDM <- design(
+#     factors = list(subjects = 1, S = c("left", "right")),
+#     Rlevels = c("left", "right"),
+#     matchfun = matchfun,
+#     model = ifelse(cens, RDM_cens, RDM_no_cens), # NB this is just for demonstration; normally use RDM with built-in censoring/truncation handling
+#     formula = c(
+#       list(B ~ 1, v ~ lM, A ~ 1, t0 ~ 1, s ~ lM),
+#       if (estimate_contaminant) list(pContaminant ~ 1) else list()
+#     ),
+#     constants = c(s = log(1))
+#   )
+#
+#   designRDM1 <- design(
+#     factors = list(subjects = 1, S = c("left", "right")),
+#     Rlevels = c("left", "right"),
+#     matchfun = matchfun,
+#     model = ifelse(cens, RDM_cens1, RDM_no_cens), # NB this is just for demonstration; normally use RDM with built-in censoring/truncation handling
+#     formula = c(
+#       list(B ~ 1, v ~ lM, A ~ 1, t0 ~ 1, s ~ lM),
+#       if (estimate_contaminant) list(pContaminant ~ 1) else list()
+#     ),
+#     constants = c(s = log(1))
+#   )
+#
+#
+#   # Set simulation parameters (on the transformed scale expected by p_types)
+#   p_vector <- sampled_pars(designRDM, doMap = FALSE)
+#
+#   # Threshold / start-point / non-decision time
+#   if ("B" %in% names(p_vector)) p_vector[["B"]] <- log(2)
+#   if ("A" %in% names(p_vector)) p_vector[["A"]] <- log(.5)
+#   if ("t0" %in% names(p_vector)) p_vector[["t0"]] <- log(0.2)
+#
+#   # Drift means for mismatch vs match accumulators
+#   if ("v" %in% names(p_vector)) p_vector[["v"]] <- log(1)
+#   if ("v_lMTRUE" %in% names(p_vector)) p_vector[["v_lMTRUE"]] <- log(2)
+#
+#   # s for match accumulator
+#   if ("s" %in% names(p_vector)) p_vector[["s"]] <- log(1)
+#   if ("s_lMTRUE" %in% names(p_vector)) p_vector[["s_lMTRUE"]] <- log(.8)
+#
+#   # Contaminant omissions: pContaminant is on probit scale (transformed via pnorm)
+#   if (estimate_contaminant) {
+#     if (!("pContaminant" %in% names(p_vector))) {
+#       stop("estimate_contaminant=TRUE but pContaminant not found in sampled parameters.")
+#     }
+#     if (p_contaminant <= 0 || p_contaminant >= 1) stop("p_contaminant must be in (0,1) when estimated.")
+#     p_vector[["pContaminant"]] <- qnorm(p_contaminant)
+#   } else {
+#     # Fixed to 0 contaminant probability (i.e., pnorm(-Inf) = 0)
+#     if ("pContaminant" %in% names(p_vector)) p_vector[["pContaminant"]] <- qnorm(0)
+#   }
+#
+#
+#   LCresponse = FALSE; UCresponse = FALSE
+#   LCdirection = TRUE; UCdirection = TRUE
+#
+#   UC = NULL; UT=NULL; LC=NULL; LT=NULL
+#   UC = 1.775
+#   LC = .825
+#   UT = 2.2
+#   LT = .775
+#
+#   n_trials=10;
+#
+#   # debug(make_data)
+#   # debug(make_missing)
+#
+#   dat <- make_data(
+#     p_vector, designRDM,
+#     n_trials = n_trials,
+#     UC = UC,
+#     UT = UT,
+#     LC = LC,
+#     LT = LT,
+#     LCresponse = LCresponse, UCresponse = UCresponse,
+#     LCdirection = LCdirection, UCdirection = UCdirection
+#   )
+#
+#   # mean(is.infinite(dat$rt))
+#   # mean(is.na(dat$rt))
+#
+#   dadm <- design_model(dat,designRDM)
+#   undebug(EMC2:::log_likelihood_race_cens_trunc)
+#   EMC2:::calc_ll_R(p_vector, attr(dadm, "model")(), dadm)
+# #
+# # llZ
+# # llZ1
+#
+# # undebug(EMC2:::compress_dadm)
+#   dadm <- design_model(dat,designRDM1)
+#   undebug(EMC2:::log_likelihood_race_missing)
+#   # undebug(EMC2:::pr_pt)
+#   EMC2:::calc_ll_R(p_vector, attr(dadm, "model")(), dadm)
+#
+#
+# undebug(EMC2:::log_likelihood_race_cens_trunc)
+# undebug(run_lba_demo)
+# undebug(profile_plot_test)
+
+# Z's R bad, my R and Z's C differ, my R often better
 res_contam <- run_RDM_demo(
   p_contaminant = .05,
   estimate_contaminant = TRUE,
@@ -784,8 +889,7 @@ run_LNR_demo <- function(p_contaminant = 0, cens = TRUE, estimate_contaminant = 
                          cores_for_chains = 3,layout=c(2,3),natural=TRUE,n_cores=1,
                          LCresponse = FALSE, UCresponse = FALSE,
                          LCdirection = TRUE, UCdirection = TRUE,oldC=FALSE,
-                         force_direction = TRUE, force_response = TRUE,
-                         rtContaminantNA = FALSE,print_stats=FALSE,
+                         print_stats=FALSE,
                          sample_file = "samples_LNR.RData") {
   # if (UC == Inf & p_contaminant>0)
   #   stop("Require a finite UC (deadline) when omissions are present.")
@@ -870,9 +974,7 @@ run_LNR_demo <- function(p_contaminant = 0, cens = TRUE, estimate_contaminant = 
     LC = LC,
     LT = LT,
     LCresponse = LCresponse, UCresponse = UCresponse,
-    LCdirection = LCdirection, UCdirection = UCdirection,
-    force_direction = force_direction, force_response = force_response,
-    rtContaminantNA = rtContaminantNA
+    LCdirection = LCdirection, UCdirection = UCdirection
   )
 
   if (print_stats) {
@@ -989,6 +1091,9 @@ res_cens <- run_LNR_demo(
 
 
 # Test 3: Truncated RTs ------------
+
+# My C bad as expected
+
 res_contam <- run_LNR_demo(
   p_contaminant = 0,
   estimate_contaminant = FALSE,
@@ -1021,7 +1126,6 @@ res_contam <- run_LNR_demo(
 
 # Test 4: Truncation and censoring ------------
 
-# Uneven but my R a bit worse
 res_contam <- run_LNR_demo(
   p_contaminant = 0,
   estimate_contaminant = FALSE,
@@ -1043,7 +1147,7 @@ res_contam <- run_LNR_demo(
   sample_file = "samples_LNR_contam.RData"
 )
 
-# My R worse
+# My C bad as expected, but also Z's C
 res_contam <- run_LNR_demo(
   p_contaminant = .05,
   estimate_contaminant = TRUE,
@@ -1055,7 +1159,7 @@ res_contam <- run_LNR_demo(
   sample_file = "samples_rdm_cens_trunc.RData"
 )
 
-# My R worse
+# My C bad as expected, but also Z's C
 res_contam <- run_LNR_demo(
   p_contaminant = .05,
   estimate_contaminant = TRUE,
@@ -1067,7 +1171,7 @@ res_contam <- run_LNR_demo(
   sample_file = "samples_rdm_cens_trunc.RData"
 )
 
-# My R worse
+# My C bad as expected, but also Z's C
 res_contam <- run_LNR_demo(
   p_contaminant = .05,
   estimate_contaminant = TRUE,
