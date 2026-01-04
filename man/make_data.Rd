@@ -20,9 +20,6 @@ make_data(
   UCresponse = FALSE,
   LCdirection = TRUE,
   UCdirection = TRUE,
-  force_direction = TRUE,
-  force_response = TRUE,
-  rtContaminantNA = FALSE,
   ...
 )
 }
@@ -62,13 +59,11 @@ default list structure: list(p=.25,SSD0=.25,stairstep=.05,stairmin=0,stairmax=In
 
 \item{UCdirection}{Logical. If TRUE, upper-censored RTs are coded as Inf; if FALSE, as NA.}
 
+\item{...}{Additional optional arguments}
+
 \item{force_direction}{Logical. If TRUE (default), do not infer censor direction from \code{data$rt}.}
 
 \item{force_response}{Logical. If TRUE (default), do not infer whether censored trials keep responses from \code{data$R}.}
-
-\item{rtContaminantNA}{Logical. If TRUE, contaminant trials have \code{rt=NA}; otherwise they are coded using the censor direction(s).}
-
-\item{...}{Additional optional arguments}
 }
 \value{
 A data frame with simulated data
