@@ -70,7 +70,7 @@ log_likelihood_race <- function(pars,dadm,model,min_ll=log(1e-10))
 }
 
 .prob_min_in_interval <- function(lower, upper, pars_mat, model) {
-  if (lower<=upper) return(0)
+  if (lower>=upper) return(0)
   logS_lower <- .log_survivor_prod(lower, pars_mat, model)
   if (!is.finite(logS_lower)) return(.Machine$double.eps)
   if (is.infinite(upper)) {
@@ -85,6 +85,7 @@ log_likelihood_race <- function(pars,dadm,model,min_ll=log(1e-10))
 ## integrate the joint density for the *k-th winner* on (lower, upper)
 .integrate_kth_winner <- function(k, pars_mat, lower, upper, model,
                                   rel.tol = 1e-7, ...) {
+  if (lower>=upper) return(0)
   n_acc <- nrow(pars_mat)
   if (any(is.na(pars_mat[k,]))) return(0)
   idx_los <- setdiff(seq_len(n_acc), k)
@@ -229,26 +230,27 @@ log_likelihood_race_cens_trunc <- function(pars,dadm,model,min_ll=log(1e-10)) {
         pval = termA+termB
       } else {
         lo <- UC[idx_j[1]]; hi <- UT[idx_j[1]]
-        if (lo==Inf) {stop("UC must be finite if rt==Inf")}
-        # if (length(idx_j)==1) {
-        #   pval = 1 - (model$pfun(lo,pars[idx, , drop = FALSE])) # if a single acccumulator, design omissions are just 1-F(t)
-        # } else if (is.na(Rj)) {
-        #   # Unknown winner: use analytic survivor product wherever possible
-        #   prob_from_surv <- .prob_min_in_interval(lo, hi, pars[idx_j, , drop = FALSE], model)
-        #   if (is.finite(prob_from_surv) && prob_from_surv > .Machine$double.eps) {
-        #     pval <- prob_from_surv
-        #   } else {
-        #     pval <- sum(vapply(ks, prob_win, numeric(1), lo, hi))
-        #   }
-        # } else {
-          pval <- sum(vapply(ks, prob_win, numeric(1), lo, hi))
-        # }
+        if (lo>=hi) pval <- 0 else {
+          if (length(idx_j)==1) {
+            pval = 1 - (model$pfun(lo,pars[idx, , drop = FALSE])) # if a single acccumulator, design omissions are just 1-F(t)
+          } else if (is.na(Rj)) {
+            # Unknown winner: use analytic survivor product wherever possible
+            prob_from_surv <- .prob_min_in_interval(lo, hi, pars[idx_j, , drop = FALSE], model)
+            if (is.finite(prob_from_surv) && prob_from_surv > .Machine$double.eps) {
+              pval <- prob_from_surv
+            } else {
+              pval <- sum(vapply(ks, prob_win, numeric(1), lo, hi))
+            }
+          } else {
+            pval <- sum(vapply(ks, prob_win, numeric(1), lo, hi))
+          }
+        }
       }
     } else if (is.na(rt)) {
       # missing RT
       lo1 <- LT[idx_j[1]]; hi1 <- LC[idx_j[1]]
       lo2 <- UC[idx_j[1]]; hi2 <- UT[idx_j[1]]
-      # if (lo2==Inf) {stop("UC must be finite if rt==NA")}
+      if (lo2==Inf) {stop("UC must be finite if rt==NA")}
       if (is.na(Rj)) {
         # Unknown winner: compute via survivor products, fall back to integrals if needed
         pval_lower <- .prob_min_in_interval(lo1, hi1, pars[idx_j, , drop = FALSE], model)
@@ -293,7 +295,7 @@ log_likelihood_race_cens_trunc <- function(pars,dadm,model,min_ll=log(1e-10)) {
       pC <- max(0, min(1, pC))
       log1m_pC <- if (pC < 1) log1p(-pC) else -Inf
       rt <- RT[(j - 1L) * n_acc + 1L]
-      if (is.finite(rt)) {
+      if (rt!=Inf) {
         ll_unique[j] <- ll_unique[j] + log1m_pC
       } else {
         ll_unique[j] <- log_sum_exp2(log(pC), log1m_pC + ll_unique[j])
