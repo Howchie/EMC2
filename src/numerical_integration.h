@@ -159,9 +159,12 @@ double pr_pt(NumericMatrix pars,
   const double min_lik = 0.0;     // not used here; pass 0
 
   NumericVector cLT = pfun(NumericVector::create(LT), pars, idx, min_lik, is_ok);
-  NumericVector cUT = pfun(NumericVector::create(UT), pars, idx, min_lik, is_ok);
 
   const double Slt = surv_prod(cLT);
+  if (NumericVector::is_na(Slt) ) return NA_REAL;
+  if (!R_finite(UT)) return 1/Slt;
+
+  NumericVector cUT = pfun(NumericVector::create(UT), pars, idx, min_lik, is_ok);
   const double Sut = surv_prod(cUT);
   if (NumericVector::is_na(Slt) || NumericVector::is_na(Sut)) return NA_REAL;
 
