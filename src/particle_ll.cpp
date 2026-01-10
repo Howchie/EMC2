@@ -1181,6 +1181,10 @@ double c_log_likelihood_race_cens_trunc(
     int n_lR,                              // Number of accumulators in the race (must be > 0 if data exists)
     void* model_context_for_funcs           // Context for model_dfun/model_pfun (e.g., contains posdrift for LBA)
 ) {
+
+// AH  write results to global environment
+// Environment global = Environment::global_env();
+
   // Fetch censoring and truncation values from dadm columns. These are passed across all rows for ease of access, but should be identical at least at the subject level as they don't correspond to a data entry. Attributes probably a better fit here but clunky.
 	auto workspace = std::unique_ptr<gsl_integration_workspace, decltype(&gsl_integration_workspace_free)>(
 	    gsl_integration_workspace_alloc(1000),
@@ -1369,6 +1373,10 @@ double c_log_likelihood_race_cens_trunc(
               }
             }
           }
+
+//    global["ldsC"]  = lds;
+
+
         // Apply truncation correction and calculate log-likelihood for each trial in the batch
           for (size_t i = 0; i < finite_rt_unique_trial_indices.size(); ++i) {
               int unique_trial_idx = finite_rt_unique_trial_indices[i];
@@ -1415,6 +1423,9 @@ double c_log_likelihood_race_cens_trunc(
                 ll_unique[unique_trial_idx] = current_trial_ll_sum;
                 ll_unique[unique_trial_idx] = std::max(min_ll, ll_unique[unique_trial_idx]);
         }
+
+//        global["llC"]  = ll_unique;
+
       }
   // --- Process other trials (Infinite RTs, NA RTs, or finite RTs outside truncation) ---
     // These trials require individual processing, often involving numerical integration for censored intervals.
@@ -1590,6 +1601,8 @@ double c_log_likelihood_race_cens_trunc(
         ll_unique[unique_trial_idx] = std::max(min_ll, ll_unique[unique_trial_idx]); // Ensure not less than min_ll
     }
 
+//    global["llC1"]  = ll_unique;
+
     // --- Summation of log-likelihoods for all unique trials ---
     double total_ll = 0;
     if (expand.length() > 0) { // If an expansion vector is provided (e.g. from non-compressed dadm)
@@ -1600,13 +1613,16 @@ double c_log_likelihood_race_cens_trunc(
                 int start_row_idx = j * n_lR;
                 double rt_j = rts_dadm[start_row_idx];
 
-                if (R_FINITE(rt_j)) {
-                    ll_unique[j] = log1m_pC + ll_unique[j]; // pRT * 1-pC
+                // AH changed to match contamination signaled by +Inf
+                if (rt_j == R_PosInf) {
+                  double term1 = std::log(pC);
+                  double term2 = log1m_pC + ll_unique[j];
+                  ll_unique[j] = log_sum_exp(term1, term2); // pC * pIO * pCens
                 } else {
-                    double term1 = std::log(pC);
-                    double term2 = log1m_pC + ll_unique[j];
-                    ll_unique[j] = log_sum_exp(term1, term2); // pC * pIO * pCens
+                  ll_unique[j] = log1m_pC + ll_unique[j];    // pRT * 1-pC
                 }
+
+
             }
         }
         total_ll = sum(c_expand(ll_unique,expand));
@@ -1629,6 +1645,9 @@ double c_log_likelihood_race_cens_trunc(
             total_ll += ll_unique[j];
         }
     }
+
+//    global["llC1C"]  = ll_unique;
+
     return total_ll;
 }
 
