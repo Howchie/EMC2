@@ -1,3 +1,5 @@
+remotes::install_github("https://github.com/Howchie/EMC2/",ref="censoring_truncation_ah")
+
 rm(list=ls())
 library(EMC2)
 

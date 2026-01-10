@@ -1,3 +1,5 @@
+remotes::install_github("https://github.com/Howchie/EMC2/",ref="censoring_truncation_ah")
+
 # Censoring and truncation tests of Zachs R and C, my R for GNG
 # (not Jeroen's C as not fixed to handle LC/UC/LT/UT that are not all the same
 rm(list=ls())

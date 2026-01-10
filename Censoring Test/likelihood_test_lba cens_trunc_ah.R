@@ -1,3 +1,5 @@
+remotes::install_github("https://github.com/Howchie/EMC2/",ref="censoring_truncation_ah")
+
 # Censoring and truncation tests of Zachs R and C, my R, Jeroen's C
 #
 # force_direction, force_response, and rtContaminantNA are all removed.
