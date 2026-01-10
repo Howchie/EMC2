@@ -13,7 +13,7 @@ designRDM <- design(model = RDM,
   constants = c(s = log(1)))
 
 # First address a case with no contamination.
-p_vector <-log(c(B=2,A=.5,t0=0.2,v=1,v_lMTRUE=2,s_lMTRUE=.8,pContaminant=0))
+p_vector <-c(log(c(B=2,A=.5,t0=0.2,v=1,v_lMTRUE=2,s_lMTRUE=.8)),pContaminant=qnorm(0))
 
 # Default data generation, LT/UT/LC/UC columns at default values
 dat <- make_data(p_vector, designRDM,n_trials = 50)
@@ -29,7 +29,7 @@ LT = .7
 UT = c('1'=1.8,'2'=1.85)
 # Lower truncation equal to the number of data rows
 LC = rep(.75,nrow(data))
-# Functional subject-specific upper truancation at 90th percentile
+# Functional subject-specific upper truncation at 90th percentile
 UC = \(d) {
   ok <- is.finite(d$rt)
   tapply(d$rt[ok],d$subjects[ok],quantile,probs=.9)
@@ -43,7 +43,7 @@ dat2 <- make_missing(dat1)
 all(c(dat1$LC==dat2$LC,dat1$UC==dat2$UC,dat1$LC==dat2$LC,dat1$UC==dat2$UC))
 
 # Now make a data file with a 3 second response window, so trials with model
-# generated rt>1.5 are given rt = Inf and R = NA. This can be achieved in make_data
+# generated rt>3 are given rt = Inf and R = NA. This can be achieved in make_data
 # by passing a list named TC with the arguments required my make_missing.
 # We use a large number of trials so that there are reliably a few rts outside the
 # window, and we up the default digits to get a precise report.
@@ -167,7 +167,7 @@ system.time({
 
 #### RDM Parameter recovery ----
 
-# Start with no contamination, truncation or censoring as a baseline comparision
+# Start with no contamination, truncation or censoring as a baseline comparison
 
 # Here is a simple 4 parameter RDM model that uses Zach's C
 designRDM <- design(
@@ -505,6 +505,8 @@ print(recovery(emcrCT,p_vector,selection="alpha"))
 
 
 ### GNG LBA ----
+
+load("Censoring TEST/GNG.RData")
 
 # Go/NoGo designs are detected via the use of a "nogo" level in the response.
 designLBA <- design(
