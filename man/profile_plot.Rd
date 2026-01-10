@@ -15,7 +15,8 @@ profile_plot(
   use_par = NULL,
   n_point = 100,
   n_cores = 1,
-  round = 3,
+  use_c = TRUE,
+  digits = 3,
   true_args = list(),
   ...
 )
@@ -41,7 +42,9 @@ profile_plot(
 
 \item{n_cores}{Number of likelihood points evenly spaced between the minimum and maximum likelihood range.}
 
-\item{round}{Integer. To how many digits will the output be rounded.}
+\item{use_c}{Logical, default TRUE uses C version of likelihood, else R version}
+
+\item{digits}{Integer. To how many digits will the output be rounded.}
 
 \item{true_args}{A list. Optional additional arguments that can be passed to plot.default for the plotting of the true vertical line.}
 
