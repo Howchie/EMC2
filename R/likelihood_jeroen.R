@@ -195,11 +195,13 @@ log_likelihood_race_missing <- function(pars,dadm,model,min_ll=log(1e-10))
     ok <- !logical(dim(pars)[1]) else ok <- attr(pars,"ok")
 
   lds <- numeric(dim(dadm)[1]) # log pdf (winner) or survivor (losers)
-  lds[dadm$winner] <- log(model$dfun(rt=dadm$rt[dadm$winner],
-                                                    pars=pars[dadm$winner,]))
+  lds[dadm$winner] <- -Inf # Cases where winner is due only to contamination
+  fix <- dadm$winner & is.finite(dadm$rt) & ok
+  lds[fix] <- log(model$dfun(rt=dadm$rt[fix],pars=pars[fix,,drop=FALSE]))
   n_acc <- length(levels(dadm$R))
-  if (n_acc>1) lds[!dadm$winner] <-
-    log(1-model$pfun(rt=dadm$rt[!dadm$winner],pars=pars[!dadm$winner,]))
+  fix <- !dadm$winner & is.finite(dadm$rt) & ok
+  if (n_acc>1) lds[fix] <-
+    log(1-model$pfun(rt=dadm$rt[fix],pars=pars[fix,,drop=FALSE]))
   lds[is.na(lds) | !ok] <- -Inf
 
   # Calculate truncation?
@@ -213,7 +215,7 @@ log_likelihood_race_missing <- function(pars,dadm,model,min_ll=log(1e-10))
 
   # Response known
   # Fast
-  nort <- dadm$rt==-Inf; nort[is.na(nort)] <- FALSE; nort <- nort & !is.na(dadm$R)
+  nort <- dadm$rt==-Inf; nort[is.na(nort)] <- FALSE; nort <- nort & !is.na(dadm$R) & ok
   if ( any(nort) ) {
     LCs <- LC[nort & dadm$lR==levels(dadm$lR)[1]]; LTs <- LT[nort & dadm$lR==levels(dadm$lR)[1]]
     mpars <- array(pars[nort,,drop=FALSE],dim=c(n_acc,sum(nort)/n_acc,ncol(pars)),
@@ -230,7 +232,7 @@ log_likelihood_race_missing <- function(pars,dadm,model,min_ll=log(1e-10))
     }
   }
   # Slow
-  nort <- dadm$rt==Inf; nort[is.na(nort)] <- FALSE; nort <- nort & !is.na(dadm$R)
+  nort <- dadm$rt==Inf; nort[is.na(nort)] <- FALSE; nort <- nort & !is.na(dadm$R) & ok
   if ( any(nort) ) {
     UCs <- UC[nort & dadm$lR==levels(dadm$lR)[1]]; UTs <- UT[nort & dadm$lR==levels(dadm$lR)[1]]
     mpars <- array(pars[nort,,drop=FALSE],dim=c(n_acc,sum(nort)/n_acc,ncol(pars)),
@@ -247,7 +249,7 @@ log_likelihood_race_missing <- function(pars,dadm,model,min_ll=log(1e-10))
     }
   }
   # No direction
-  nort <- is.na(dadm$rt) & !is.na(dadm$R)
+  nort <- is.na(dadm$rt) & !is.na(dadm$R) & ok
   if ( any(nort) ) {
     LCs <- LC[nort & dadm$lR==levels(dadm$lR)[1]]; LTs <- LT[nort & dadm$lR==levels(dadm$lR)[1]]
     UCs <- UC[nort & dadm$lR==levels(dadm$lR)[1]]; UTs <- UT[nort & dadm$lR==levels(dadm$lR)[1]]
@@ -275,7 +277,7 @@ log_likelihood_race_missing <- function(pars,dadm,model,min_ll=log(1e-10))
 
   # Response unknown.
   # Fast
-  nort <- dadm$rt==-Inf; nort[is.na(nort)] <- FALSE; nort <- nort & is.na(dadm$R)
+  nort <- dadm$rt==-Inf; nort[is.na(nort)] <- FALSE; nort <- nort & is.na(dadm$R) & ok
   if ( any(nort) ) {
     LCs <- LC[nort & dadm$lR==levels(dadm$lR)[1]]; LTs <- LT[nort & dadm$lR==levels(dadm$lR)[1]]
     UCs <- UC[nort & dadm$lR==levels(dadm$lR)[1]]; UTs <- UT[nort & dadm$lR==levels(dadm$lR)[1]]
@@ -310,7 +312,7 @@ log_likelihood_race_missing <- function(pars,dadm,model,min_ll=log(1e-10))
     }
   } else tofixfast <- NA
   # Slow
-  nort <- dadm$rt==Inf; nort[is.na(nort)] <- FALSE; nort <- nort & is.na(dadm$R)
+  nort <- dadm$rt==Inf; nort[is.na(nort)] <- FALSE; nort <- nort & is.na(dadm$R) & ok
   if ( any(nort) ) {
     LCs <- LC[nort & dadm$lR==levels(dadm$lR)[1]]; LTs <- LT[nort & dadm$lR==levels(dadm$lR)[1]]
     UCs <- UC[nort & dadm$lR==levels(dadm$lR)[1]]; UTs <- UT[nort & dadm$lR==levels(dadm$lR)[1]]
@@ -345,7 +347,7 @@ log_likelihood_race_missing <- function(pars,dadm,model,min_ll=log(1e-10))
     }
   } else tofixslow <- NA
   # no direction
-  nort <- is.na(dadm$rt) & is.na(dadm$R)
+  nort <- is.na(dadm$rt) & is.na(dadm$R) & ok
   # nort <- nort & (pars[,"pContaminant"] == 0) # Otherwise not identifiable
   if ( any(nort) ) {
     LCs <- LC[nort & dadm$lR==levels(dadm$lR)[1]]; LTs <- LT[nort & dadm$lR==levels(dadm$lR)[1]]
@@ -382,22 +384,24 @@ log_likelihood_race_missing <- function(pars,dadm,model,min_ll=log(1e-10))
 
   # Truncation
   if ( dotrunc ) {
-    okT <- attr(dadm,"unique_nortR") & dadm$winner
-    LTs <- LT[okT]; UTs <- UT[okT]
-    tpars <- pars[attr(dadm,"unique_nortR"),,drop=FALSE]
-    tpars <- array(tpars[,,drop=FALSE],dim=c(n_acc,nrow(tpars)/n_acc,ncol(tpars)),
-                   dimnames = list(NULL,NULL,colnames(tpars)))[,,,drop=FALSE]
-    winner <- matrix(dadm$winner[attr(dadm,"unique_nortR")],nrow=n_acc)[,,drop=FALSE]
-    cf <- rep(NA,length(LTs))
-    for (i in 1:length(LTs)) {
-      if (dim(tpars)[[1]]==1) pi <- t(as.matrix(tpars[,i,])) else
-        pi <- tpars[,i,][order(!winner[,i]),]
-      cf[i] <- pr_pt(LTs[i],UTs[i],pi,dadm,model)
-    }
-    cf <- rep(log(cf),each=n_acc)[attr(dadm,"expand_nortR")]
-    fix <- dadm$winner & !is.na(cf) & !is.nan(cf) & is.finite(cf) & !is.na(dadm$R)
-    if (any(fix)) {
-      lds[fix] <- lds[fix] + cf[fix]
+    okT <- attr(dadm,"unique_nortR") & dadm$winner & ok
+    if (any(okT)) {
+      LTs <- LT[okT]; UTs <- UT[okT]
+      tpars <- pars[attr(dadm,"unique_nortR") & ok,,drop=FALSE]
+      tpars <- array(tpars[,,drop=FALSE],dim=c(n_acc,nrow(tpars)/n_acc,ncol(tpars)),
+                     dimnames = list(NULL,NULL,colnames(tpars)))[,,,drop=FALSE]
+      winner <- matrix(dadm$winner[attr(dadm,"unique_nortR") & ok],nrow=n_acc)[,,drop=FALSE]
+      cf <- rep(NA,length(LTs))
+      for (i in 1:length(LTs)) {
+        if (dim(tpars)[[1]]==1) pi <- t(as.matrix(tpars[,i,])) else
+          pi <- tpars[,i,][order(!winner[,i]),]
+        cf[i] <- pr_pt(LTs[i],UTs[i],pi,dadm,model)
+      }
+      cf <- rep(log(cf),each=n_acc)[attr(dadm,"expand_nortR")]
+      fix <- dadm$winner & !is.na(cf) & !is.nan(cf) & is.finite(cf) & !is.na(dadm$R) & ok
+      if (any(fix)) {
+        lds[fix] <- lds[fix] + cf[fix]
+      }
     }
   }
 
@@ -412,19 +416,24 @@ log_likelihood_race_missing <- function(pars,dadm,model,min_ll=log(1e-10))
   } else ll <- lds
   ll[is.na(ll) | is.nan(ll)] <- -Inf
 
+#  llR <<- ll
+
   # Non-process (contaminant) miss.
-  ispContaminant <- pars[,"pContaminant"]>0
+  ispContaminant <- pars[dadm$winner & ok,"pContaminant"]>0
   if ( any(ispContaminant) ) {
-    p <- exp(ll)
-    pc <- pars[dadm$winner,"pContaminant"]
-    isMiss <- dadm$rt[dadm$winner]==Inf
+    use <- dadm$winner & ok
+    p <- exp(ll[ispContaminant])
+    pc <- pars[use,"pContaminant"]
+    isMiss <- c(dadm$rt==Inf)[use]
     p[isMiss] <- pc[isMiss] + (1-pc[isMiss])*p[isMiss]
     p[!isMiss] <- (1-pc[!isMiss])*p[!isMiss]
-    ll <- log(p)
+    ll[ispContaminant] <- log(p)
   }
 
+#  llRC <<- ll
 
-  return(sum(pmax(min_ll,ll[attr(dadm,"expand")])))
+  ll <- pmax(min_ll,ll)
+  return(sum(ll[attr(dadm,"expand")]))
 }
 
 
