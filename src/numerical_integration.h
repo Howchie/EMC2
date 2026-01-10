@@ -104,27 +104,6 @@ Rcpp::NumericVector f_integrate_slow(Rcpp::NumericMatrix pars,
 }
 
 
-// double pr_pt(Rcpp::NumericMatrix pars,
-//              Rcpp::LogicalVector winner,
-//              Rcpp::NumericVector (*dfun)(Rcpp::NumericVector, Rcpp::NumericMatrix, Rcpp::LogicalVector, double, Rcpp::LogicalVector),
-//              Rcpp::NumericVector (*pfun)(Rcpp::NumericVector, Rcpp::NumericMatrix, Rcpp::LogicalVector, double, Rcpp::LogicalVector),
-//              double min_ll,
-//              Rcpp::LogicalVector is_ok,
-//              double LT,
-//              double UT) {
-//  Rcpp:: NumericVector pr = f_integrate(pars, winner, dfun, pfun, min_ll, is_ok, 0, R_PosInf);
-//   if ((pr[2] != 0) || Rcpp::traits::is_nan<REALSXP>(pr[0])) return NA_REAL;
-//   if (pr[0] == 0.0) return 0.0;
-//
-//   Rcpp::NumericVector pt = f_integrate(pars, winner, dfun, pfun, min_ll, is_ok, LT, UT);
-//   if ((pt[2] != 0) || Rcpp::traits::is_nan<REALSXP>(pt[0])) return NA_REAL;
-//
-//   double out = std::max(0.0, std::min(pr[0], 1.0)) / std::max(0.0, std::min(pt[0], 1.0));
-//   if (Rcpp::traits::is_infinite<REALSXP>(out)) return NA_REAL;
-//
-//   return out;
-// }
-
 #include <Rcpp.h>
 using namespace Rcpp;
 
