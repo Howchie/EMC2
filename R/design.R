@@ -421,7 +421,7 @@ compress_dadm <- function(da,designs,Fcov,Ffun)
     # indices to use to contract ignoring rt and response (R), then expand back
     cells_nortR <- paste(apply(do.call(cbind,lapply(designs,function(x){
       apply(x[attr(x,"expand"),,drop=FALSE],1,paste,collapse="_")})),1,paste,collapse="+"),
-      da$subjects,da$lR,LT, UT, LC, UC,sep="+")[contract]
+      da$subjects,LT, UT, LC, UC,sep="+")[contract] #  ,da$lR
     attr(out,"unique_nortR") <- !duplicated(cells_nortR)
     attr(out,"expand_nortR") <- as.numeric(factor(cells_nortR,levels=unique(cells_nortR)))
 
@@ -552,13 +552,8 @@ design_model <- function(data,design,model=NULL,
 
   out <- lapply(design$Flist,make_dm,da=da,Fcovariates=design$Fcovariates,
                 add_da = add_da, all_cells_dm = all_cells_dm)
-  if (!is.null(rt_resolution)) {
-    if (!is.null(da$rt)) da$rt <- floor(da$rt/rt_resolution)*rt_resolution
-    if (!is.null(da$LC)) da$LC <- floor(da$LC/rt_resolution)*rt_resolution
-    if (!is.null(da$UC)) da$UC <- floor(da$UC/rt_resolution)*rt_resolution
-    if (!is.null(da$LT)) da$LT <- floor(da$LT/rt_resolution)*rt_resolution
-    if (!is.null(da$UT)) da$UT <- floor(da$UT/rt_resolution)*rt_resolution
-  }
+  if (!is.null(rt_resolution) & !is.null(da$rt))
+    da$rt <- floor(da$rt/rt_resolution)*rt_resolution
   if (compress){
     dadm <- compress_dadm(da,designs=out, Fcov=design$Fcovariates,Ffun=names(design$Ffunctions))
     # Change expansion names
@@ -589,9 +584,16 @@ design_model <- function(data,design,model=NULL,
   attr(dadm,"sampled_p_names") <- sampled_p_names
   if (model()$type=="DDM") nunique <- dim(dadm)[1] else
     nunique <- dim(dadm)[1]/length(levels(dadm$lR))
-  if (verbose & compress) message("Likelihood speedup factor: ",
-  round(dim(da)[1]/dim(dadm)[1],1)," (",nunique," unique trials)")
-
+  if (verbose & compress) {
+    if (all(c(dadm$LC,dadm$LT)==0) & all(is.infinite(c(dadm$UC,dadm$UT))))
+      mismes <- NULL else {
+        okDADM <- !is.na(dadm$R) | !is.infinite(dadm$rt)
+        okDA <- !is.na(da$R) | !is.infinite(da$rt)
+        mismes <- paste0(" (with no missing ",round(sum(okDA)/sum(okDADM),1),"x)")
+      }
+    message("Likelihood speedup factor: ",
+    round(dim(da)[1]/dim(dadm)[1],1),mismes,", ",nunique," unique trials")
+  }
   attr(dadm,"model") <- model
   attr(dadm,"constants") <- design$constants
   attr(dadm,"ok_trials") <- is.finite(data$rt)
@@ -775,9 +777,9 @@ dm_list <- function(dadm)
       }
 
       attr(dl[[i]], "unique_nort") <- NULL
-      attr(dl[[i]], "unique_nortR") <- NULL
+      # attr(dl[[i]], "unique_nortR") <- NULL
       attr(dl[[i]], "expand_nort") <- NULL
-      attr(dl[[i]], "expand_nortR") <- NULL
+      # attr(dl[[i]], "expand_nortR") <- NULL
     }
   }
 
