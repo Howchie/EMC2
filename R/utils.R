@@ -37,6 +37,96 @@ na_locf <- function(x, na.rm = FALSE) {
   return(result)
 }
 
+.emc2_ll_cache_version <- 1L
+
+.cache_ll_data_attrs <- function(dadm) {
+  if (!is.data.frame(dadm)) return(dadm)
+  if (identical(attr(dadm, "emc2_ll_cache_version"), .emc2_ll_cache_version)) return(dadm)
+
+  cols <- names(dadm)
+  if (!all(c("lR", "rt", "R") %in% cols)) {
+    attr(dadm, "emc2_ll_cache_version") <- .emc2_ll_cache_version
+    return(dadm)
+  }
+
+  n_trials <- nrow(dadm)
+  lR <- dadm[["lR"]]
+  lR_codes <- as.integer(lR)
+  n_lR <- length(unique(lR_codes))
+
+  has_RACE_col <- "RACE" %in% cols && is.factor(dadm[["RACE"]])
+  if (has_RACE_col) {
+    race_idx <- dadm[["RACE"]]
+    race_levels <- levels(race_idx)
+    nacc_by_level <- suppressWarnings(as.integer(race_levels))
+    if (anyNA(nacc_by_level)) stop("RACE column levels must be integer-valued (e.g., '2', '3').")
+
+    race_nacc_by_row <- rep.int(as.integer(n_lR), n_trials)
+    race_mask <- rep.int(TRUE, n_trials)
+    race_codes <- as.integer(race_idx)
+    for (i in seq_len(n_trials)) {
+      code <- race_codes[i]
+      if (is.na(code)) next
+      nacc <- nacc_by_level[code]
+      race_nacc_by_row[i] <- nacc
+      lR_i <- lR_codes[i]
+      if (!is.na(lR_i) && lR_i > nacc) race_mask[i] <- FALSE
+    }
+    attr(dadm, "RACE_nacc_by_row") <- race_nacc_by_row
+    attr(dadm, "RACE_mask") <- race_mask
+  }
+
+  all_finite_trials <- TRUE
+  if (n_trials > 0L) {
+    if (n_lR <= 0L || (n_trials %% n_lR) != 0L) {
+      all_finite_trials <- FALSE
+    } else {
+      start_idx <- seq.int(1L, n_trials, by = n_lR)
+      rts <- dadm[["rt"]][start_idx]
+      R_idx <- dadm[["R"]][start_idx]
+      ok <- is.finite(rts) & rts > 0 & !is.na(R_idx)
+      if (!all(ok)) all_finite_trials <- FALSE
+    }
+  }
+  attr(dadm, "emc2_all_finite_trials") <- all_finite_trials
+
+  if (!all_finite_trials && n_trials > 0L && n_lR > 0L && (n_trials %% n_lR) == 0L) {
+    n_unique_trials <- n_trials %/% n_lR
+    finite_rt_mask <- rep.int(FALSE, n_trials)
+    finite_rt_unique_trial_indices <- integer(0)
+    other_unique_trial_indices <- integer(0)
+
+    start_idx <- seq.int(1L, n_trials, by = n_lR)
+    rts_dadm <- dadm[["rt"]]
+    R_idxs_dadm <- dadm[["R"]]
+    race_nacc_by_row <- if (has_RACE_col) attr(dadm, "RACE_nacc_by_row") else NULL
+
+    for (j0 in 0:(n_unique_trials - 1L)) {
+      start_row_idx <- start_idx[j0 + 1L]
+      rt_j <- rts_dadm[start_row_idx]
+      R_j <- R_idxs_dadm[start_row_idx]
+      n_lR_j <- if (has_RACE_col && length(race_nacc_by_row) == n_trials) {
+        race_nacc_by_row[start_row_idx]
+      } else {
+        n_lR
+      }
+      if (is.finite(rt_j) && rt_j > 0 && !is.na(R_j)) {
+        finite_rt_unique_trial_indices <- c(finite_rt_unique_trial_indices, j0)
+        finite_rt_mask[start_row_idx + 0:(n_lR_j - 1L)] <- TRUE
+      } else {
+        other_unique_trial_indices <- c(other_unique_trial_indices, j0)
+      }
+    }
+
+    attr(dadm, "finite_rt_mask") <- finite_rt_mask
+    attr(dadm, "finite_rt_unique_trial_indices") <- finite_rt_unique_trial_indices
+    attr(dadm, "other_unique_trial_indices") <- other_unique_trial_indices
+  }
+
+  attr(dadm, "emc2_ll_cache_version") <- .emc2_ll_cache_version
+  dadm
+}
+
 #
 # augment <- function(s,da,design)
 #   # Adds attributes to augmented data

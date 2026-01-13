@@ -1,7 +1,28 @@
-remotes::install_github("https://github.com/Howchie/EMC2/",ref="censoring_truncation_ah")
-
+#remotes::install_github("https://github.com/Howchie/EMC2/",ref="censoring_truncation_ah")
+unloadNamespace("EMC2")
+devtools::install_local(force=TRUE)
 rm(list=ls())
 library(EMC2)
+## This is a helper function to directly check likelihoods
+lfun <- function(p_vector, dadm, use_c=T) {
+  if (use_c) {
+    p_matrix <- matrix(p_vector,nrow=1)
+    colnames(p_matrix) <- names(p_vector)
+    model <- attr(dadm, "model")()
+    p_types=names(model$p_types)
+    designs <- list()
+    for (p in p_types) {
+      designs[[p]] <- attr(dadm,"designs")[[p]][attr(attr(dadm,"designs")[[p]],"expand"),,drop=FALSE]
+    }
+    constants <- attr(dadm,"constants")
+    if (is.null(constants)) constants <- NA
+    EMC2:::calc_ll(p_matrix, dadm, constants,designs,model$c_name,
+                   model$bound,model$transform,model$pre_transform,p_types,log(1e-10),model$trend)
+  } else {
+    EMC2:::calc_ll_R(p_vector, attr(dadm, "model")(), dadm)
+  }
+}
+pdf("Censoring Test/Test_Plots.pdf")
 
 #### Using make_missing to censor and truncate data ----
 
@@ -182,7 +203,6 @@ designRDM <- design(
 p_vector <- sampled_pars(designRDM,doMap = FALSE)
 p_vector[] <- c(log(2), log(1.5), log(2), log(0.2))
 
-
 ## This is a hack to get access to my R
 RDMR <- function() {
   m <- RDM()
@@ -225,29 +245,7 @@ print(recovery(emcr,p_vector,selection="alpha"))
 ### CONTAMINATION only ----
 
 # I saved off generated data and fits
-load("Censoring TEST/RDM.RData")
-
-## This is a helper function to directly check likelihoods
-lfun <- function(p_vector, dadm, use_c=T) {
-  if (use_c) {
-    p_matrix <- matrix(p_vector,nrow=1)
-    colnames(p_matrix) <- names(p_vector)
-    model <- attr(dadm, "model")()
-    p_types=names(model$p_types)
-    designs <- list()
-    for (p in p_types) {
-      designs[[p]] <- attr(dadm,"designs")[[p]][attr(attr(dadm,"designs")[[p]],"expand"),,drop=FALSE]
-    }
-    constants <- attr(dadm,"constants")
-    if (is.null(constants)) constants <- NA
-    EMC2:::calc_ll(p_matrix, dadm, constants,designs,model$c_name,
-                   model$bound,model$transform,model$pre_transform,p_types,log(1e-10),model$trend)
-  } else {
-    EMC2:::calc_ll_R(p_vector, attr(dadm, "model")(), dadm)
-  }
-}
-
-
+load("Censoring Test/RDM.RData")
 
 # Here is a simple 5 parameter RDM model with contamination that uses Zach's C
 designRDM <- design(
@@ -355,13 +353,11 @@ print(recovery(emcrT,p_vector,selection="alpha"))
 
 TC=list(LT=.5,UT=1.3,LC=.55,UC=1.2,verbose=TRUE)
 datCT <- make_data(p_vector,designRDM,n_trials=10000,TC=TC)
-
 # Compare likelihoods
 dadmC <- EMC2:::design_model(datCT,designRDM)
 dadmR <- EMC2:::design_model(datCT,designRDM1)
 lfun(p_vector,dadmC)
 lfun(p_vector,dadmR,use_c = F)
-
 
 # Fitting
 emc <- make_emc(datCT,designRDM,type="single")
@@ -383,15 +379,23 @@ print(recovery(emcrCT,p_vector,selection="alpha"))
 # save(dat,emcc,emcr,datC,emccC,emcrC,datT,emccT,emcrT,datCT,emccCT,emcrCT,
 #      file="Censoring TEST/RDM.RData")
 
-#### LBA, Parameter recovery, all three only ----
+#### LBA, Parameter recovery, test memory consumption of old vs new C ----
 
-load("Censoring TEST/LBA.RData")
+load("Censoring Test/LBA.RData")
 
 # Here is a simple 5 parameter RDM model with contamination that uses Zach's C
 designLBA <- design(
   factors=list(subjects=1,S=c("left","right")),Rlevels=c("left","right"),
   matchfun=function(d) as.numeric(d$S)==as.numeric(d$lR),
   model=LBA,
+  formula=list(v~lM,B~1,t0~1,pContaminant~1)
+)
+
+# Old C likelihood implementation (for memory/speed comparisons)
+designOLBA <- design(
+  factors=list(subjects=1,S=c("left","right")),Rlevels=c("left","right"),
+  matchfun=function(d) as.numeric(d$S)==as.numeric(d$lR),
+  model=OLBA,
   formula=list(v~lM,B~1,t0~1,pContaminant~1)
 )
 
@@ -418,23 +422,30 @@ designLBA1 <- design(
   formula=list(v~lM,B~1,t0~1,pContaminant~1)
 )
 
-TC=list(LT=.7,UT=2.1,LC=.75,UC=1.7,verbose=TRUE)
+TC=list(LT=0,UT=Inf,LC=0,UC=Inf,verbose=TRUE)
 datCT <- make_data(p_vector,designLBA,n_trials=10000,TC=TC)
 
 # Compare likelihoods
 dadmC <- EMC2:::design_model(datCT,designLBA)
-dadmR <- EMC2:::design_model(datCT,designLBA1)
+dadmO <- EMC2:::design_model(datCT,designOLBA)
 lfun(p_vector,dadmC)
-lfun(p_vector,dadmR,use_c = F)
+lfun(p_vector,dadmO)
 
 
 # Fitting
 emc <- make_emc(datCT,designLBA,type="single")
-system.time({emccCT <- fit(emc)})
+emccCT <- profile_fit_rss_live(fit(emc), label = "fit: LBA (C)")
 # Time difference of 8.741704 mins
 emc <- make_emc(datCT,designLBA1,type="single")
-system.time({emcrCT <- fit(emc)})
+emcrCT <- profile_fit_rss_live(fit(emc), label = "fit: LBA (R)")
 # Time difference of 2.771561 mins
+
+# Optional: fit old C (OLBA) with the same data, to compare memory behaviour.
+RUN_OLD_C_FIT <- FALSE
+if (isTRUE(RUN_OLD_C_FIT)) {
+  emc <- make_emc(datCT,designOLBA,type="single")
+  emcoCT <- profile_fit_rss_live(fit(emc), label = "fit: OLBA (Old_C)")
+}
 
 
 # C fails, R fine
@@ -445,7 +456,7 @@ print(recovery(emcrCT,p_vector,selection="alpha"))
 
 #### LNR, Parameter recovery, all three only ----
 
-load("Censoring TEST/LNR.RData")
+load("Censoring Test/LNR.RData")
 
 # Here is a simple 5 parameter RDM model with contamination that uses Zach's C
 designLNR <- design(
@@ -503,10 +514,10 @@ print(recovery(emcrCT,p_vector,selection="alpha"))
 
 # save(datCT,emccCT,emcrCT,file="Censoring TEST/LNR.RData")
 
-
+dev.off()
 ### GNG LBA ----
 
-load("Censoring TEST/GNG.RData")
+load("Censoring Test/GNG.RData")
 
 # Go/NoGo designs are detected via the use of a "nogo" level in the response.
 designLBA <- design(
@@ -665,7 +676,6 @@ lfun(p_vector,dadm,use_c = F)
 # Profiles
 print(profile_plot(datD,designDDM,p_vector,n_cores=1,layout=c(2,3),use_c=FALSE))
 
-
 # Fitting
 emc <- make_emc(datD,designDDM,type="single")
 system.time({emcrD <- fit(emc)})
@@ -674,5 +684,3 @@ system.time({emcrD <- fit(emc)})
 print(recovery(emcrD,p_vector,selection="alpha"))
 
 # save(dat,emcc,emcr,dat3,emcc3,emcr3,datD,emcrD,file="Censoring TEST/GNG.RData")
-
-

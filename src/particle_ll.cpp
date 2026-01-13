@@ -916,6 +916,123 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
     }
     NumericVector lR = data["lR"];
     int n_lR = unique(lR).length();
+    
+    constexpr int kLlCacheVersion = 1;
+    bool cache_ok = false;
+    if (data.hasAttribute("emc2_ll_cache_version")) {
+      int ver = Rcpp::as<int>(data.attr("emc2_ll_cache_version"));
+      cache_ok = (ver == kLlCacheVersion);
+    }
+
+    const bool has_RACE_col = data.containsElementNamed("RACE");
+
+    bool all_finite_trials = true;
+    bool have_all_finite_attr = false;
+    if (cache_ok && data.hasAttribute("emc2_all_finite_trials")) {
+      Rcpp::LogicalVector v = data.attr("emc2_all_finite_trials");
+      if (v.size() == 1 && v[0] != NA_LOGICAL) {
+        all_finite_trials = v[0];
+        have_all_finite_attr = true;
+      }
+    }
+
+    const bool have_race_attrs = (!has_RACE_col) ||
+      (data.hasAttribute("RACE_nacc_by_row") && data.hasAttribute("RACE_mask"));
+    const bool have_finite_attrs = data.hasAttribute("finite_rt_mask") &&
+      data.hasAttribute("finite_rt_unique_trial_indices") &&
+      data.hasAttribute("other_unique_trial_indices");
+
+    const bool need_prepare =
+      !(cache_ok && have_all_finite_attr && have_race_attrs && (all_finite_trials || have_finite_attrs));
+
+    if (need_prepare) {
+      if (has_RACE_col && !have_race_attrs) {
+        const Rcpp::IntegerVector lR_dadm = data["lR"];
+        const Rcpp::IntegerVector race_idx = data["RACE"];
+        const Rcpp::CharacterVector race_levels = race_idx.attr("levels");
+        std::vector<int> nacc_by_level;
+        nacc_by_level.reserve(static_cast<size_t>(race_levels.size()));
+        for (int i = 0; i < race_levels.size(); ++i) {
+          nacc_by_level.push_back(std::stoi(Rcpp::as<std::string>(race_levels[i])));
+        }
+        Rcpp::IntegerVector race_nacc_by_row(n_trials, n_lR);
+        Rcpp::LogicalVector race_mask(n_trials, true);
+        for (int row = 0; row < n_trials; ++row) {
+          if (race_idx[row] == NA_INTEGER) continue;
+          const int n_lR_this_trial = nacc_by_level[static_cast<size_t>(race_idx[row] - 1)];
+          race_nacc_by_row[row] = n_lR_this_trial;
+          if (lR_dadm[row] > n_lR_this_trial) race_mask[row] = false;
+        }
+        data.attr("RACE_nacc_by_row") = race_nacc_by_row;
+        data.attr("RACE_mask") = race_mask;
+      }
+
+      if (!have_all_finite_attr) {
+        // Data-only: determine whether every unique trial has a finite RT, known response, and is within [LT, UT].
+        // Computing this once here avoids repeating an O(n_unique_trials) scan per particle.
+        all_finite_trials = true;
+        if (n_trials > 0) {
+          if (n_lR <= 0 || (n_trials % n_lR) != 0) {
+            all_finite_trials = false;
+          } else {
+            const int n_unique_trials = n_trials / n_lR;
+            const Rcpp::NumericVector rts_dadm = data["rt"];
+            const Rcpp::IntegerVector R_idxs_dadm = data["R"];
+            for (int j = 0; j < n_unique_trials; ++j) {
+              const int start_row_idx = j * n_lR;
+              const double rt_j = rts_dadm[start_row_idx];
+              const int R_j_idx = R_idxs_dadm[start_row_idx];
+              if (!(R_FINITE(rt_j) && rt_j > 0.0 && R_j_idx != NA_INTEGER)) {
+                all_finite_trials = false;
+                break;
+              }
+            }
+          }
+        }
+        data.attr("emc2_all_finite_trials") = all_finite_trials;
+      }
+
+      if (!all_finite_trials && n_trials > 0 && n_lR > 0 && (n_trials % n_lR) == 0) {
+        if (!have_finite_attrs) {
+          const int n_unique_trials = n_trials / n_lR;
+          Rcpp::LogicalVector finite_rt_mask(n_trials, false);
+          std::vector<int> finite_rt_unique_trial_indices;
+          std::vector<int> other_unique_trial_indices;
+          finite_rt_unique_trial_indices.reserve(n_unique_trials);
+          other_unique_trial_indices.reserve(n_unique_trials);
+          const Rcpp::NumericVector rts_dadm = data["rt"];
+          const Rcpp::IntegerVector R_idxs_dadm = data["R"];
+          Rcpp::IntegerVector race_nacc_by_row;
+          if (has_RACE_col && data.hasAttribute("RACE_nacc_by_row")) {
+            race_nacc_by_row = data.attr("RACE_nacc_by_row");
+          }
+          for (int j = 0; j < n_unique_trials; ++j) {
+            const int start_row_idx = j * n_lR;
+            const double rt_j = rts_dadm[start_row_idx];
+            const int R_j_idx = R_idxs_dadm[start_row_idx];
+            const int n_lR_j = (has_RACE_col && race_nacc_by_row.size() == n_trials)
+              ? race_nacc_by_row[start_row_idx]
+              : n_lR;
+            if (R_FINITE(rt_j) && rt_j > 0.0 && R_j_idx != NA_INTEGER) {
+              finite_rt_unique_trial_indices.push_back(j);
+              for (int k_acc = 0; k_acc < n_lR_j; ++k_acc) {
+                finite_rt_mask[start_row_idx + k_acc] = true;
+              }
+            } else {
+              other_unique_trial_indices.push_back(j);
+            }
+          }
+          data.attr("finite_rt_mask") = finite_rt_mask;
+          data.attr("finite_rt_unique_trial_indices") = Rcpp::IntegerVector(finite_rt_unique_trial_indices.begin(),
+                                                                            finite_rt_unique_trial_indices.end());
+          data.attr("other_unique_trial_indices") = Rcpp::IntegerVector(other_unique_trial_indices.begin(),
+                                                                        other_unique_trial_indices.end());
+        }
+      }
+
+      data.attr("emc2_ll_cache_version") = kLlCacheVersion;
+    }
+    
     for (int i = 0; i < n_particles; ++i) {
       p_vector = p_matrix(i, Rcpp::_);
       if (i == 0) {
@@ -941,7 +1058,8 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
                                                   pdf1_ptr, cdf1_ptr,
                                                   n_trials,
                                                   winner, expand, min_ll, is_ok, n_lR,
-                                                  &current_model_ctx);
+                                                  &current_model_ctx,
+                                                  all_finite_trials);
       }
     }
   }
@@ -975,11 +1093,137 @@ double gsl_f_race_scalar(double t, void* p) {
 
 
 bool row_is_finite(const Rcpp::NumericMatrix& mat, int row) {
+  // Convenience helper for sanity checks on parameter rows.
   for (int j = 0; j < mat.ncol(); ++j) {
     if (!R_finite(mat(row, j))) return false;
   }
   return true;
 }
+
+inline double clamp_cdf01_race(double cdf) {
+  // Keep CDF values in a stable range for downstream log/1-CDF operations.
+  // Centralizing this avoids repeating the same "near 0/near 1/NaN/Inf" guards
+  // throughout the hot loops.
+  if (!std::isfinite(cdf)) return NA_REAL;
+  if (cdf <= 0.0) return 0.0;
+  if (cdf >= 1.0) return 1.0;
+  if (cdf > 1.0 - 1e-15) return 1.0 - 1e-15;
+  return cdf;
+}
+
+inline double safe_log1m_race(double p) {
+  // Stable log(1 - p) with the same edge-case policy everywhere:
+  // - p <= 0 => log(1) = 0
+  // - p >= 1 => log(0) = -Inf
+  // - p ~ 1  => clamp away from 1 to avoid hitting log(0) in finite arithmetic
+  if (!std::isfinite(p)) return R_NegInf;
+  if (p <= 0.0) return 0.0;
+  if (p >= 1.0) return R_NegInf;
+  if (p > 1.0 - 1e-15) p = 1.0 - 1e-15;
+  return std::log1p(-p);
+}
+
+inline double log_survivor_rowmajor(double t,
+                                    const double* pars_rowmajor,
+                                    const int* isok_int,
+                                    int n_lR,
+                                    int n_par,
+                                    RaceCdf1Fun cdf1,
+                                    void* ctx) {
+  // Log survivor of the race at time t:
+  //   log S(t) = sum_k log(1 - F_k(t))
+  //
+  // "rowmajor" here means per-trial parameters for the n_lR accumulators are
+  // packed as a contiguous buffer:
+  //   pars_rowmajor[k * n_par + c]
+  //
+  // This avoids repeatedly indexing into an Rcpp::NumericMatrix inside tight
+  // loops and matches the representation needed for the scalar/GSL integrands.
+  if (t == R_PosInf) return R_NegInf;
+  double logS = 0.0;
+  for (int k = 0; k < n_lR; ++k) {
+    if (!isok_int[k]) return R_NegInf;
+    const double* par_k = pars_rowmajor + static_cast<size_t>(k) * n_par;
+    double cdf = cdf1(t, par_k, ctx);
+    cdf = clamp_cdf01_race(cdf);
+    const double ll = safe_log1m_race(cdf);
+    if (!std::isfinite(ll)) return R_NegInf;
+    logS += ll;
+  }
+  return logS;
+}
+
+inline double log_min_density_rowmajor(double t,
+                                       const double* pars_rowmajor,
+                                       const int* isok_int,
+                                       int n_lR,
+                                       int n_par,
+                                       RacePdf1Fun pdf1,
+                                       RaceCdf1Fun cdf1,
+                                       void* ctx,
+                                       std::vector<double>& logS_k) {
+  // Log density of the minimum (no known winner) at time t:
+  //   f_min(t) = sum_k f_k(t) * prod_{j != k} (1 - F_j(t))
+  //
+  // Work in log space:
+  //   log f_min(t) = logsumexp_k [ log f_k(t) + sum_{j != k} log(1 - F_j(t)) ].
+  //
+  // logS_k is a per-accumulator scratch buffer (reused across calls) holding
+  // log(1 - F_k(t)) for the current t, to avoid reallocations in the "other
+  // trial" loop.
+  if (!(t > 0.0) || !std::isfinite(t)) return R_NegInf;
+  double logS_all = 0.0;
+  if (logS_k.size() < static_cast<size_t>(n_lR)) {
+    logS_k.assign(static_cast<size_t>(n_lR), R_NegInf);
+  } else {
+    std::fill(logS_k.begin(), logS_k.begin() + n_lR, R_NegInf);
+  }
+  for (int k = 0; k < n_lR; ++k) {
+    if (!isok_int[k]) return R_NegInf;
+    const double* par_k = pars_rowmajor + static_cast<size_t>(k) * n_par;
+    double cdf = cdf1(t, par_k, ctx);
+    cdf = clamp_cdf01_race(cdf);
+    const double ll = safe_log1m_race(cdf);
+    if (!std::isfinite(ll)) return R_NegInf;
+    logS_k[static_cast<size_t>(k)] = ll;
+    logS_all += ll;
+  }
+  double out = R_NegInf;
+  for (int k = 0; k < n_lR; ++k) {
+    const double* par_k = pars_rowmajor + static_cast<size_t>(k) * n_par;
+    const double pdf = pdf1(t, par_k, ctx);
+    if (!(pdf > 0.0) || !std::isfinite(pdf)) continue;
+    const double term = std::log(pdf) + (logS_all - logS_k[static_cast<size_t>(k)]);
+    out = log_sum_exp(out, term);
+  }
+  return out;
+}
+
+using GslWorkspacePtr = std::unique_ptr<gsl_integration_workspace, decltype(&gsl_integration_workspace_free)>;
+
+inline gsl_integration_workspace* ensure_gsl_workspace(GslWorkspacePtr& ws, size_t n = 1000) {
+  // Lazily allocate the GSL workspace: most trials never need numerical
+  // integration (finite RT + no truncation/censoring), so avoid paying for it.
+  if (!ws) {
+    ws.reset(gsl_integration_workspace_alloc(n));
+    if (!ws) Rcpp::stop("Failed to allocate GSL integration workspace.");
+  }
+  return ws.get();
+}
+
+double integrate_for_kth_winner_rowmajor_cpp(
+    int k_winner_idx, // 1-based
+    const double* pars_rowmajor,
+    const int* isok_int,
+    double low,
+    double upp,
+    RacePdf1Fun pdf1,
+    RaceCdf1Fun cdf1,
+    int n_lR_j,
+    int n_par,
+    double epsilon,
+    void* model_specific_context,
+    gsl_integration_workspace* w);
 
 // Numerical integration helper using GSL
 double integrate_for_kth_winner_cpp(
@@ -1016,13 +1260,49 @@ double integrate_for_kth_winner_cpp(
   std::vector<int> isok_int(n_lR_j, 0);
   for (int r = 0; r < n_lR_j; ++r) isok_int[r] = isok[r] ? 1 : 0;
   
+  return integrate_for_kth_winner_rowmajor_cpp(k_winner_idx,
+                                               pars_rowmajor.data(),
+                                               isok_int.data(),
+                                               low,
+                                               upp,
+                                               pdf1,
+                                               cdf1,
+                                               n_lR_j,
+                                               n_par,
+                                               epsilon,
+                                               model_specific_context,
+                                               w);
+}
+
+double integrate_for_kth_winner_rowmajor_cpp(
+    int k_winner_idx, // 1-based
+    const double* pars_rowmajor,
+    const int* isok_int,
+    double low,
+    double upp,
+    RacePdf1Fun pdf1,
+    RaceCdf1Fun cdf1,
+    int n_lR_j,
+    int n_par,
+    double epsilon,
+    void* model_specific_context,
+    gsl_integration_workspace* w) {
+  
+  // Integrate the k-th winner density over an interval [low, upp] for a single
+  // unique trial, using rowmajor buffers (raw pointers). This is the fast path
+  // used by truncation/censoring normalisers and by go/no-go branches; it avoids
+  // Rcpp object traffic inside the GSL callback.
+  if (low >= upp && !(low == 0 && upp == R_PosInf)) return R_NegInf;
+  if (k_winner_idx < 1 || k_winner_idx > n_lR_j) return R_NegInf;
+  if (w == nullptr) Rcpp::stop("integrate_for_kth_winner_rowmajor_cpp: GSL workspace is null.");
+  
   gsl_function F;
   gsl_race_params_scalar params_struct;
-  params_struct.pars = pars_rowmajor.data();
+  params_struct.pars = pars_rowmajor;
   params_struct.n_lR = n_lR_j;
   params_struct.n_par = n_par;
   params_struct.winner_idx0 = k_winner_idx - 1;
-  params_struct.isok = isok_int.data();
+  params_struct.isok = isok_int;
   params_struct.pdf1 = pdf1;
   params_struct.cdf1 = cdf1;
   params_struct.ctx = model_specific_context;
@@ -1032,11 +1312,13 @@ double integrate_for_kth_winner_cpp(
   
   gsl_error_handler_t* old_handler = gsl_set_error_handler_off();
   int status;
-  double result, error;
+  double result = 0.0;
+  double error = 0.0;
   if (upp == R_PosInf) {
     if (low < 0) low = 0; // QAGIU requires a >= 0
     if (low >= R_PosInf) {
-      result = 0; status = GSL_SUCCESS;
+      result = 0.0;
+      status = GSL_SUCCESS;
     } else {
       status = gsl_integration_qagiu(&F, low, 0, epsilon, 1000, w, &result, &error);
     }
@@ -1045,16 +1327,50 @@ double integrate_for_kth_winner_cpp(
   }
   
   gsl_set_error_handler(old_handler);
-  
-  if (status != GSL_SUCCESS) {
-    // On integration failure, treat as zero probability on this interval
-    return R_NegInf;
-  }
-  
-  if (!(result > 0) || !R_finite(result)) {
-    return R_NegInf;
-  }
+  if (status != GSL_SUCCESS) return R_NegInf;
+  if (!(result > 0.0) || !R_finite(result)) return R_NegInf;
   return std::log(result);
+}
+
+double get_trunc_normaliser_rowmajor_cpp(const double* pars_rowmajor,
+                                         const int* isok_int,
+                                         RacePdf1Fun pdf1,
+                                         RaceCdf1Fun cdf1,
+                                         double LT,
+                                         double UT,
+                                         int n_lR,
+                                         int n_par,
+                                         double epsilon,
+                                         void* model_specific_context,
+                                         GslWorkspacePtr& workspace) {
+  const double log_prob_eps = std::log(std::numeric_limits<double>::epsilon());
+  const double logS_LT = log_survivor_rowmajor(LT, pars_rowmajor, isok_int, n_lR, n_par, cdf1, model_specific_context);
+  if (!R_FINITE(logS_LT)) return R_NegInf;
+  if (UT == R_PosInf) return logS_LT;
+  
+  const double logS_UT = log_survivor_rowmajor(UT, pars_rowmajor, isok_int, n_lR, n_par, cdf1, model_specific_context);
+  double logP = log_diff_exp(logS_LT, logS_UT);
+  if (R_FINITE(logP) && logP > log_prob_eps) return logP;
+  
+  gsl_integration_workspace* w = ensure_gsl_workspace(workspace);
+  double log_total = R_NegInf;
+  for (int k_win = 1; k_win <= n_lR; ++k_win) {
+    const double log_k = integrate_for_kth_winner_rowmajor_cpp(k_win,
+                                                               pars_rowmajor,
+                                                               isok_int,
+                                                               LT,
+                                                               UT,
+                                                               pdf1,
+                                                               cdf1,
+                                                               n_lR,
+                                                               n_par,
+                                                               epsilon,
+                                                               model_specific_context,
+                                                               w);
+    log_total = log_sum_exp(log_total, log_k);
+  }
+  if (R_FINITE(log_total) && log_total > log_prob_eps) return log_total;
+  return R_NegInf;
 }
 
 // New common normaliser
@@ -1075,43 +1391,35 @@ double get_trunc_normaliser_cpp(
   // log P = log_diff_exp(log S(LT), log S(UT))
   
   double logS_LT = 0.0;
+  double logS_UT = 0.0;
   const double log_prob_eps = std::log(std::numeric_limits<double>::epsilon());
   std::vector<double> par_row(static_cast<size_t>(n_par));
   
-  // Calculate S(LT)
-  for(int k=0; k < n_lR; ++k) {
+  const bool ut_finite = (UT != R_PosInf);
+  for (int k = 0; k < n_lR; ++k) {
     if (!isok_trial[k]) return R_NegInf;
-    for(int c=0; c<n_par; ++c) par_row[static_cast<size_t>(c)] = p_all_acc(k, c);
-    double cdf = cdf1(LT, par_row.data(), model_specific_context);
-    if (!std::isfinite(cdf)) return R_NegInf;
-    if (cdf >= 1.0) { logS_LT = R_NegInf; break; }
-    if (cdf > 0.0) {
-      if (cdf > 1.0 - 1e-15) cdf = 1.0 - 1e-15;
-      logS_LT += std::log1p(-cdf);
+    for (int c = 0; c < n_par; ++c) par_row[static_cast<size_t>(c)] = p_all_acc(k, c);
+    
+    double cdf_lt = cdf1(LT, par_row.data(), model_specific_context);
+    if (!std::isfinite(cdf_lt)) return R_NegInf;
+    if (cdf_lt >= 1.0) { logS_LT = R_NegInf; break; }
+    if (cdf_lt > 0.0) {
+      if (cdf_lt > 1.0 - 1e-15) cdf_lt = 1.0 - 1e-15;
+      logS_LT += std::log1p(-cdf_lt);
+    }
+    
+    if (!ut_finite) continue;
+    double cdf_ut = cdf1(UT, par_row.data(), model_specific_context);
+    if (!std::isfinite(cdf_ut)) return R_NegInf;
+    if (cdf_ut >= 1.0) { logS_UT = R_NegInf; }
+    else if (cdf_ut > 0.0) {
+      if (cdf_ut > 1.0 - 1e-15) cdf_ut = 1.0 - 1e-15;
+      logS_UT += std::log1p(-cdf_ut);
     }
   }
   
-  if (logS_LT == R_NegInf) return R_NegInf; // Probability mass already 0 at start
-  
-  if (UT == R_PosInf) {
-    // S(inf) = 0, so logS_UT = -inf
-    // log(S(LT) - 0) = logS(LT)
-    return logS_LT;
-  }
-  
-  double logS_UT = 0.0;
-  // Calculate S(UT)
-  for(int k=0; k < n_lR; ++k) {
-    // No need to check isok again
-    for(int c=0; c<n_par; ++c) par_row[static_cast<size_t>(c)] = p_all_acc(k, c);
-    double cdf = cdf1(UT, par_row.data(), model_specific_context);
-    if (!std::isfinite(cdf)) return R_NegInf;
-    if (cdf >= 1.0) { logS_UT = R_NegInf; break; }
-    if (cdf > 0.0) {
-      if (cdf > 1.0 - 1e-15) cdf = 1.0 - 1e-15;
-      logS_UT += std::log1p(-cdf);
-    }
-  }
+  if (logS_LT == R_NegInf) return R_NegInf;
+  if (!ut_finite) return logS_LT;
   
   double logP = log_diff_exp(logS_LT, logS_UT);
   if (R_FINITE(logP) && logP > log_prob_eps) return logP;
@@ -1138,53 +1446,6 @@ double get_trunc_normaliser_cpp(
   return R_NegInf;
 }
 
-
-inline void append_par_block(std::ostringstream& oss,
-                             int start_row,
-                             const Rcpp::NumericMatrix& pars,
-                             int n_lR,
-                             int n_par) {
-  for (int r = 0; r < n_lR; ++r) {
-    for (int c = 0; c < n_par; ++c) {
-      const double v = pars(start_row + r, c);
-      if (Rcpp::NumericVector::is_na(v)) oss << "NA";
-      else oss << v;
-      oss << ',';
-    }
-    oss << '|';
-  }
-}
-
-inline std::string make_logZ_key(int start_row,
-                                 double low,
-                                 double upp,
-                                 const Rcpp::NumericMatrix& pars,
-                                 int n_lR,
-                                 int n_par) {
-  std::ostringstream oss;
-  oss.setf(std::ios::scientific);
-  oss << std::setprecision(17);
-  oss << "Z|" << low << '|' << upp << '|';
-  append_par_block(oss, start_row, pars, n_lR, n_par);
-  return oss.str();
-}
-
-inline std::string make_winner_integral_key(int start_row,
-                                            double low,
-                                            double upp,
-                                            int k_winner_idx,
-                                            const Rcpp::NumericMatrix& pars,
-                                            int n_lR,
-                                            int n_par) {
-  std::ostringstream oss;
-  oss.setf(std::ios::scientific);
-  oss << std::setprecision(17);
-  oss << "I|" << k_winner_idx << '|' << low << '|' << upp << '|';
-  append_par_block(oss, start_row, pars, n_lR, n_par);
-  return oss.str();
-}
-
-
 // Main C++ function for censored/truncated race likelihood calculation
 // This function is now the unified entry point for all race models (LBA, RDM, LNR),
 // whether they are standard or explicitly handling censoring/truncation.
@@ -1202,52 +1463,67 @@ double c_log_likelihood_race_cens_trunc(
     double min_ll,                          // Minimum log-likelihood value
     const Rcpp::LogicalVector isok,   // Parameter validity for each row in 'pars' matrix
     int n_lR,                              // Number of accumulators in the race (must be > 0 if data exists)
-    void* model_context_for_funcs           // Context for model_dfun/model_pfun (e.g., contains posdrift for LBA)
+    void* model_context_for_funcs,          // Context for model_dfun/model_pfun (e.g., contains posdrift for LBA)
+    bool all_finite_trials             // Data-only hint: all trials finite/in-bounds/known response
 ) {
   
   // AH  write results to global environment
   // Environment global = Environment::global_env();
   
+  // Only allocate a GSL workspace if/when numerical integration is needed.
+  GslWorkspacePtr workspace(nullptr, &gsl_integration_workspace_free);
+  
   // Fetch censoring and truncation values from dadm columns. These are passed across all rows for ease of access, but should be identical at least at the subject level as they don't correspond to a data entry. Attributes probably a better fit here but clunky.
-  auto workspace = std::unique_ptr<gsl_integration_workspace, decltype(&gsl_integration_workspace_free)>(
-    gsl_integration_workspace_alloc(1000),
-    &gsl_integration_workspace_free);
-  if (!workspace) Rcpp::stop("Failed to allocate GSL integration workspace.");
   Rcpp::NumericVector LT = dadm["LT"];
   Rcpp::NumericVector UT = dadm["UT"];
   Rcpp::NumericVector LC = dadm["LC"];
   Rcpp::NumericVector UC = dadm["UC"];
-  std::unordered_map<std::string,double> log_integral_cache; // truncation + go/no-go caching
   double integration_epsilon = 1e-7; // Tolerance for GSL integration
   int n_lR_j = n_lR;
-  const int n_out = expand.length();
   Rcpp::NumericVector rts_dadm = dadm["rt"];
   Rcpp::IntegerVector R_idxs_dadm = dadm["R"];
-  Rcpp::IntegerVector lR_dadm = dadm["lR"];
-  NumericVector lds(n_trials,min_ll); // initialise at min_ll
-  NumericVector lds_exp(n_out);
+  NumericVector lds(n_trials, min_ll); // initialise at min_ll
   // If a RACE column exists, set parameters of accumulators not present on a
   // given trial to NA so the density functions return zero for them. This
   // mirrors logic from the old c_log_likelihood_race implementation.
-  IntegerVector RACE(n_trials, n_lR);
-  Rcpp::LogicalVector RACE_mask(n_trials, true); // Mask for all dadm rows
-  if (dadm.containsElementNamed("RACE")) {
-    // factor codes (1-based) for each row
-    Rcpp::IntegerVector race_idx = dadm["RACE"];
-    // character levels ("2", "3", ...)
-    Rcpp::CharacterVector race_levels = race_idx.attr("levels");
-    for (int row = 0; row < pars.nrow(); ++row) {
-      // how many accumulators for this trial
-      int n_lR_this_trial = std::stoi(
-        Rcpp::as<std::string>(race_levels[ race_idx[row] - 1 ])
-      );
-      RACE[row]=n_lR_this_trial;
-      // lR_dadm is the (1-based) index of *this* accumulator on the trial
-      if (lR_dadm[row] > n_lR_this_trial) {
-        // accumulator not present - blank its parameter row
-        std::fill(pars.row(row).begin(), pars.row(row).end(), NA_REAL);
-        RACE_mask[row]=false;
+  const bool has_RACE_col = dadm.containsElementNamed("RACE");
+  Rcpp::IntegerVector RACE;
+  Rcpp::LogicalVector RACE_mask;
+  if (has_RACE_col) {
+    bool has_precomputed_race = false;
+    if (dadm.hasAttribute("RACE_nacc_by_row") && dadm.hasAttribute("RACE_mask")) {
+      RACE = dadm.attr("RACE_nacc_by_row");
+      RACE_mask = dadm.attr("RACE_mask");
+      has_precomputed_race = (RACE.size() == n_trials && RACE_mask.size() == n_trials);
+    }
+    if (!has_precomputed_race) {
+      Rcpp::IntegerVector lR_dadm = dadm["lR"];
+      RACE = Rcpp::IntegerVector(n_trials, n_lR);
+      RACE_mask = Rcpp::LogicalVector(n_trials, true); // Mask for all dadm rows
+      // factor codes (1-based) for each row
+      Rcpp::IntegerVector race_idx = dadm["RACE"];
+      // character levels ("2", "3", ...)
+      Rcpp::CharacterVector race_levels = race_idx.attr("levels");
+      std::vector<int> nacc_by_level;
+      nacc_by_level.reserve(static_cast<size_t>(race_levels.size()));
+      for (int i = 0; i < race_levels.size(); ++i) {
+        nacc_by_level.push_back(std::stoi(Rcpp::as<std::string>(race_levels[i])));
       }
+      for (int row = 0; row < pars.nrow(); ++row) {
+        // how many accumulators for this trial
+        if (race_idx[row] == NA_INTEGER) continue;
+        int n_lR_this_trial = nacc_by_level[static_cast<size_t>(race_idx[row] - 1)];
+        RACE[row] = n_lR_this_trial;
+        // lR_dadm is the (1-based) index of *this* accumulator on the trial
+        if (lR_dadm[row] > n_lR_this_trial) {
+          // accumulator not present - blank its parameter row
+          std::fill(pars.row(row).begin(), pars.row(row).end(), NA_REAL);
+          RACE_mask[row] = false;
+        }
+      }
+    }
+    for (int row = 0; row < pars.nrow(); ++row) {
+      if (!RACE_mask[row]) std::fill(pars.row(row).begin(), pars.row(row).end(), NA_REAL);
     }
   }
   if (n_trials == 0) return 0.0; // No data, no likelihood
@@ -1283,8 +1559,7 @@ double c_log_likelihood_race_cens_trunc(
   }
   
   int n_unique_trials = n_trials / n_lR;
-  Rcpp::NumericVector ll_unique(n_unique_trials);
-  //ll_unique.fill(min_ll); // Initialize all to min_ll
+  Rcpp::NumericVector ll_unique(n_unique_trials, min_ll);
   Rcpp::NumericVector pC_values(n_unique_trials);
   if (use_pC) {
     for (int j = 0; j < n_unique_trials; ++j) {
@@ -1304,40 +1579,56 @@ double c_log_likelihood_race_cens_trunc(
   if (winner.size() != pars.nrow()) {
     Rcpp::stop("c_log_likelihood_race_cens_trunc: isok size does not match pars matrix rows.");
   }
-  
-  // Fast path check: if every unique trial is finite/valid, skip subsetting and per-trial categorization.
-  bool all_finite_trials = true;
-  for (int j = 0; j < n_unique_trials; ++j) {
-    int start_row_idx = j * n_lR;
-    double rt_j = rts_dadm[start_row_idx];
-    int R_j_idx = R_idxs_dadm[start_row_idx];
-    if (!(R_FINITE(rt_j) && rt_j > 0 && rt_j >= LT[start_row_idx] && rt_j <= UT[start_row_idx] && R_j_idx != NA_INTEGER)) {
-      all_finite_trials = false;
-      break;
+  const int n_par = pars.ncol();
+  std::vector<double> pars_rowmajor_buffer(static_cast<size_t>(n_lR) * n_par);
+  std::vector<int> isok_int_buffer(static_cast<size_t>(n_lR), 0);
+  std::vector<double> logS_k_buffer(static_cast<size_t>(n_lR), R_NegInf);
+  auto fill_trial_buffers = [&](int start_row_idx, int n_lR_j) {
+    for (int k = 0; k < n_lR_j; ++k) {
+      isok_int_buffer[k] = isok[start_row_idx + k] ? 1 : 0;
+      for (int c = 0; c < n_par; ++c) {
+        pars_rowmajor_buffer[static_cast<size_t>(k) * n_par + c] = pars(start_row_idx + k, c);
+      }
     }
-  }
-
+  };
+  
+  // Fast path hint: computed once per calc_ll call (data-only), to avoid re-scanning per particle.
   const bool use_full_finite_batch = all_finite_trials;
   Rcpp::LogicalVector finite_rt_mask;
-  std::vector<int> finite_dadm_rows_indices; // Stores actual dadm/pars row indices for finite RTs
+  std::vector<int> finite_rt_unique_trial_indices;
+  std::vector<int> other_unique_trial_indices;
+  bool has_precomputed_finite = false;
   if (!use_full_finite_batch) {
-    finite_rt_mask = Rcpp::LogicalVector(n_trials, false); // Mask for all dadm rows
-    finite_dadm_rows_indices.reserve(n_trials); // Reserve space
+    if (dadm.hasAttribute("finite_rt_mask") &&
+        dadm.hasAttribute("finite_rt_unique_trial_indices") &&
+        dadm.hasAttribute("other_unique_trial_indices")) {
+      finite_rt_mask = dadm.attr("finite_rt_mask");
+      Rcpp::IntegerVector finite_attr = dadm.attr("finite_rt_unique_trial_indices");
+      Rcpp::IntegerVector other_attr = dadm.attr("other_unique_trial_indices");
+      if (finite_rt_mask.size() == n_trials) {
+        finite_rt_unique_trial_indices.assign(finite_attr.begin(), finite_attr.end());
+        other_unique_trial_indices.assign(other_attr.begin(), other_attr.end());
+        has_precomputed_finite = true;
+      }
+    }
+    if (!has_precomputed_finite) {
+      finite_rt_mask = Rcpp::LogicalVector(n_trials, false); // Mask for all dadm rows
+    }
   }
   double log_Z_this = 0;  // Default inv_Z if no truncation. Should never be used but here as a precaution.
+  // Scratch interval bounds for per-trial branches below. Keeping these as
+  // mutable locals makes the censoring/truncation logic read like "set bounds,
+  // then integrate / take survivor", rather than threading LTj/UTj/LCj/UCj
+  // through every helper call.
   double lower_for_trial = 0;
   double upper_for_trial = R_PosInf;
   ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(model_context_for_funcs);
   ContextForRaceModels dense_ctx = *ctx;
   dense_ctx.min_lik_for_pdf = 0.0;
   void* dense_ctx_ptr = static_cast<void*>(&dense_ctx);
-  // If posdrift=true we'll add the probability of an intrinsic omission in relevant sections
-  bool posdrift=ctx->use_posdrift;
   bool gng=ctx->gng;
   // Batch process finite rt trials
-  std::vector<int> finite_rt_unique_trial_indices; // Stores *unique trial* indices for finite RTs
-  std::vector<int> other_unique_trial_indices;   // Stores *unique trial* indices for other cases
-  if (!use_full_finite_batch) {
+  if (!use_full_finite_batch && !has_precomputed_finite) {
     finite_rt_unique_trial_indices.reserve(n_unique_trials);
     other_unique_trial_indices.reserve(n_unique_trials);
     // Categorize unique trials based on RT properties and parameter validity
@@ -1345,14 +1636,13 @@ double c_log_likelihood_race_cens_trunc(
       int start_row_idx = j * n_lR; // Starting row in dadm/pars for this unique trial
       double rt_j = rts_dadm[start_row_idx]; // RT for this unique trial
       int R_j_idx = R_idxs_dadm[start_row_idx]; // Winner index (1-based from R factor)
-      int n_lR_j = RACE[start_row_idx];
-      // Criteria for batch processing: finite, positive RT, within truncation bounds [LT, UT], and known winner
-      if (R_FINITE(rt_j) && rt_j > 0 && rt_j >= LT[start_row_idx] && rt_j <= UT[start_row_idx] && R_j_idx != NA_INTEGER) {
+      int n_lR_j = has_RACE_col ? RACE[start_row_idx] : n_lR;
+      // Criteria for batch processing: finite, positive RT, and known winner
+      if (R_FINITE(rt_j) && rt_j > 0 && R_j_idx != NA_INTEGER) {
         finite_rt_unique_trial_indices.push_back(j); // Store unique trial index
         for(int k_acc = 0; k_acc < n_lR_j; ++k_acc) {
           int dadm_row_idx = start_row_idx + k_acc;
           finite_rt_mask[dadm_row_idx] = true;
-          finite_dadm_rows_indices.push_back(dadm_row_idx);
         }
       }  else {
         other_unique_trial_indices.push_back(j); // All other cases (NA, Inf, -Inf, outside bounds, or unknown winner with finite RT)
@@ -1360,113 +1650,79 @@ double c_log_likelihood_race_cens_trunc(
     }
   }
   
-  const Rcpp::NumericMatrix* finite_rt_pars_ptr = &pars;
-  Rcpp::NumericMatrix finite_rt_pars;
-  if (!use_full_finite_batch && !finite_dadm_rows_indices.empty()) {
-    finite_rt_pars = Rcpp::NumericMatrix(finite_dadm_rows_indices.size(), pars.ncol());
-    Rcpp::CharacterVector par_colnames = Rcpp::colnames(pars);
-    Rcpp::colnames(finite_rt_pars) = par_colnames;
-    for(size_t i = 0; i < finite_dadm_rows_indices.size(); ++i) {
-      finite_rt_pars.row(i) = pars.row(finite_dadm_rows_indices[i]);
-    }
-    finite_rt_pars_ptr = &finite_rt_pars;
-  }
-  // Important: rts_dadm, isok, winner used for indexing lds calculation
-  // should be sliced by finite_rt_mask, NOT finite_dadm_rows_indices directly
-  // if the model functions expect a dense rt vector and pars matrix.
-  // The current model functions (e.g. dlba_c) take full rts/pars and an 'idx' mask.
-  // So, we pass the full rts_dadm, full pars, and finite_rt_mask as 'idx'.
-  // However, the 'pars' argument to model_dfun/pfun should be the one corresponding to the RTs selected by finite_rt_mask.
-  // This means finite_rt_pars is the correct parameter matrix to pass if the RTs are rts_dadm[finite_rt_mask].
-  const Rcpp::NumericVector* rts_for_finite_batch_ptr = nullptr;
-  const Rcpp::LogicalVector* winner_for_finite_batch_ptr = nullptr;
-  const Rcpp::LogicalVector* isok_for_finite_batch_ptr = nullptr;
-  Rcpp::NumericVector rts_for_finite_batch;
-  Rcpp::LogicalVector winner_for_finite_batch;
-  Rcpp::LogicalVector isok_for_finite_batch;
-  if (use_full_finite_batch) {
-    rts_for_finite_batch_ptr = &rts_dadm;
-    winner_for_finite_batch_ptr = &winner;
-    isok_for_finite_batch_ptr = &isok;
-  } else {
-    rts_for_finite_batch = rts_dadm[finite_rt_mask];
-    winner_for_finite_batch = winner[finite_rt_mask];
-    isok_for_finite_batch = isok[finite_rt_mask];
-    rts_for_finite_batch_ptr = &rts_for_finite_batch;
-    winner_for_finite_batch_ptr = &winner_for_finite_batch;
-    isok_for_finite_batch_ptr = &isok_for_finite_batch;
-  }
-  if (rts_for_finite_batch_ptr->size() > 0) { // Only calculate if there are any finite RTs
-    Rcpp::NumericVector win = log(model_dfun(*rts_for_finite_batch_ptr, *finite_rt_pars_ptr, *winner_for_finite_batch_ptr, *isok_for_finite_batch_ptr, dense_ctx_ptr));
-    // Place results into the correct positions in 'lds'
-    int current_lds_idx = 0;
-    for(int i = 0; i < n_trials; ++i) {
-      if((use_full_finite_batch || finite_rt_mask[i]) && winner[i]) {
-        lds[i] =win[current_lds_idx++];
+  const bool has_finite_batch = use_full_finite_batch || (finite_rt_unique_trial_indices.size() > 0);
+  if (has_finite_batch) {
+    Rcpp::LogicalVector idx_win;
+    Rcpp::LogicalVector idx_loss;
+    bool any_win = false;
+    bool any_loss = false;
+    if (use_full_finite_batch && !has_RACE_col) {
+      idx_win = winner;
+      any_win = true;
+      if (n_lR > 1) {
+        idx_loss = !winner;
+        any_loss = true;
       }
-    }
-    // Prepare survivor functions for losers, one matrix per accumulator
-    if (n_lR > 1) {
-      Rcpp::NumericVector loss_cdf = model_pfun(*rts_for_finite_batch_ptr,
-                                                *finite_rt_pars_ptr,
-                                                !(*winner_for_finite_batch_ptr),
-                                                *isok_for_finite_batch_ptr,
-                                                dense_ctx_ptr);
-      
-      // Compute log(1 - CDF) directly to avoid log/exp round-trips.
-      Rcpp::NumericVector loss(loss_cdf.size());
-      for (int j = 0; j < loss_cdf.size(); ++j) {
-        double cdf = loss_cdf[j];
-        if (!R_finite(cdf)) { loss[j] = R_NegInf; continue; }
-        if (cdf <= 0.0) { loss[j] = 0.0; continue; }           // log(1)
-        if (cdf >= 1.0) { loss[j] = R_NegInf; continue; }       // log(0)
-        if (cdf > 1.0 - 1e-15) cdf = 1.0 - 1e-15;
-        loss[j] = std::log1p(-cdf);
-      }
-      
-      current_lds_idx = 0; // Reset for iterating through loss_contributions
-      for(int i = 0; i < n_trials; ++i) {
-        if((use_full_finite_batch || finite_rt_mask[i]) && !winner[i]) {
-          double tmp_ll = loss[current_lds_idx++];
-          lds[i] = tmp_ll;
-        }
+    } else {
+      idx_win = Rcpp::LogicalVector(n_trials, false);
+      idx_loss = Rcpp::LogicalVector(n_trials, false);
+      for (int i = 0; i < n_trials; ++i) {
+        if (has_RACE_col && !RACE_mask[i]) continue;
+        if (!use_full_finite_batch && !finite_rt_mask[i]) continue;
+        if (winner[i]) { idx_win[i] = true; any_win = true; }
+        else { idx_loss[i] = true; any_loss = true; }
       }
     }
     
-    //    global["ldsC"]  = lds;
+    if (any_win) {
+      Rcpp::NumericVector win_pdf = model_dfun(rts_dadm, pars, idx_win, isok, dense_ctx_ptr);
+      int out_i = 0;
+      for (int i = 0; i < n_trials; ++i) {
+        if (!idx_win[i]) continue;
+        const double pdf = win_pdf[out_i++];
+        lds[i] = (pdf > 0.0 && std::isfinite(pdf)) ? std::log(pdf) : R_NegInf;
+      }
+    }
     
+  if (n_lR > 1 && any_loss) {
+      Rcpp::NumericVector loss_cdf = model_pfun(rts_dadm, pars, idx_loss, isok, dense_ctx_ptr);
+      int out_i = 0;
+      for (int i = 0; i < n_trials; ++i) {
+        if (!idx_loss[i]) continue;
+        double cdf = loss_cdf[out_i++];
+        cdf = clamp_cdf01_race(cdf);
+        lds[i] = safe_log1m_race(cdf);
+      }
+    }
     
     // Apply truncation correction and calculate log-likelihood for each trial in the batch
     const int n_finite_unique = use_full_finite_batch
-      ? n_unique_trials
-      : static_cast<int>(finite_rt_unique_trial_indices.size());
+    ? n_unique_trials
+    : static_cast<int>(finite_rt_unique_trial_indices.size());
     for (int i = 0; i < n_finite_unique; ++i) {
-      int unique_trial_idx = use_full_finite_batch ? i : finite_rt_unique_trial_indices[static_cast<size_t>(i)];
-      int start_row_idx = unique_trial_idx*(n_lR);
-      n_lR_j = RACE[start_row_idx];
-      Rcpp::NumericMatrix p_all_acc_for_trial = pars(Rcpp::Range(start_row_idx, start_row_idx + n_lR_j - 1), Rcpp::_);
-      Rcpp::LogicalVector isok_for_trial = isok[Rcpp::Range(start_row_idx, start_row_idx + n_lR_j - 1)];
-      lower_for_trial = LT[start_row_idx];
-      upper_for_trial = UT[start_row_idx];
-      if (LT[start_row_idx]!=0 || UT[start_row_idx] != R_PosInf) { // if truncation
-        std::string key = make_logZ_key(start_row_idx, lower_for_trial, upper_for_trial, pars, n_lR_j, pars.ncol());
-        auto hit = log_integral_cache.find(key);
-        if (hit != log_integral_cache.end()) { // check if we've integrated this exact parameter set already and re-use result if we have
-          log_Z_this = hit->second;
-        } else { // otherwise compute the integral and cache it
-          log_Z_this  = get_trunc_normaliser_cpp(p_all_acc_for_trial,
-                                                 pdf1,
-                                                 cdf1,
-                                                 isok_for_trial,
-                                                 lower_for_trial,
-                                                 upper_for_trial,
-                                                 n_lR_j,
-                                                 pars.ncol(),
-                                                 integration_epsilon,
-                                                 model_context_for_funcs,
-                                                 workspace.get());
-          log_integral_cache.emplace(std::move(key), log_Z_this);
-        }
+      // When all unique trials are finite, iterate in order 0..n_unique_trials-1.
+      // Otherwise, iterate over the precomputed subset of finite-RT unique trials.
+      int unique_trial_idx = use_full_finite_batch
+        ? i
+        : finite_rt_unique_trial_indices[static_cast<size_t>(i)];
+      int start_row_idx = unique_trial_idx * n_lR;
+      n_lR_j = has_RACE_col ? RACE[start_row_idx] : n_lR;
+      log_Z_this = 0.0;
+      const double LTj = LT[start_row_idx];
+      const double UTj = UT[start_row_idx];
+      if (LTj != 0.0 || UTj != R_PosInf) { // truncation active
+        fill_trial_buffers(start_row_idx, n_lR_j);
+        log_Z_this = get_trunc_normaliser_rowmajor_cpp(pars_rowmajor_buffer.data(),
+                                                       isok_int_buffer.data(),
+                                                       pdf1,
+                                                       cdf1,
+                                                       LTj,
+                                                       UTj,
+                                                       n_lR_j,
+                                                       n_par,
+                                                       integration_epsilon,
+                                                       model_context_for_funcs,
+                                                       workspace);
       }
       double current_trial_ll_sum = 0.0;
       for(int k=0; k < n_lR_j; ++k) {
@@ -1499,211 +1755,150 @@ double c_log_likelihood_race_cens_trunc(
     int unique_trial_idx = other_unique_trial_indices[i];
     int start_row_idx = unique_trial_idx*n_lR;
     log_Z_this = 0.0;
-    n_lR_j = RACE[start_row_idx];
-    Rcpp::NumericMatrix p_all_acc_for_trial = pars(Rcpp::Range(start_row_idx, start_row_idx + n_lR_j - 1), Rcpp::_);
-    Rcpp::LogicalVector isok_for_trial = isok[Rcpp::Range(start_row_idx, start_row_idx + n_lR_j - 1)];
-    Rcpp::LogicalVector winner_for_trial = winner[Rcpp::Range(start_row_idx, start_row_idx + n_lR_j - 1)];
-    double rt_j = rts_dadm[start_row_idx];
-    int R_j_idx = R_idxs_dadm[start_row_idx];
-    current_ll_val = R_NegInf;
+    n_lR_j = has_RACE_col ? RACE[start_row_idx] : n_lR;
+    const double rt_j = rts_dadm[start_row_idx];
+    const int R_j_idx = R_idxs_dadm[start_row_idx];
+    const double LTj = LT[start_row_idx];
+    const double UTj = UT[start_row_idx];
+    const double LCj = LC[start_row_idx];
+    const double UCj = UC[start_row_idx];
+    const bool has_trunc = (LTj != 0.0 || UTj != R_PosInf);
     
-    auto integrate_cached = [&](int k_winner_1based, double low, double upp) -> double {
-      std::string key = make_winner_integral_key(start_row_idx,
-                                                 low,
-                                                 upp,
-                                                 k_winner_1based,
-                                                 pars,
-                                                 n_lR_j,
-                                                 pars.ncol());
-      auto hit = log_integral_cache.find(key);
-      if (hit != log_integral_cache.end()) return hit->second;
-      
-      double log_val = integrate_for_kth_winner_cpp(k_winner_1based,
-                                                    p_all_acc_for_trial,
-                                                    isok_for_trial,
-                                                    low,
-                                                    upp,
-                                                    pdf1,
-                                                    cdf1,
-                                                    n_lR_j,
-                                                    pars.ncol(),
-                                                    integration_epsilon,
-                                                    model_context_for_funcs,
-                                                    workspace.get());
-      log_integral_cache.emplace(std::move(key), log_val);
-      return log_val;
+    const bool needs_model = (rt_j == R_NegInf) || (rt_j == R_PosInf) || Rcpp::NumericVector::is_na(rt_j) ||
+      (R_FINITE(rt_j) && rt_j > 0.0 && R_j_idx == NA_INTEGER);
+    if (!needs_model) {
+      ll_unique[unique_trial_idx] = min_ll;
+      continue;
+    }
+    
+    fill_trial_buffers(start_row_idx, n_lR_j);
+    
+    auto integrate_interval = [&](int k_winner_1based, double low, double upp) -> double {
+      gsl_integration_workspace* w = ensure_gsl_workspace(workspace);
+      return integrate_for_kth_winner_rowmajor_cpp(k_winner_1based,
+                                                   pars_rowmajor_buffer.data(),
+                                                   isok_int_buffer.data(),
+                                                   low,
+                                                   upp,
+                                                   pdf1,
+                                                   cdf1,
+                                                   n_lR_j,
+                                                   n_par,
+                                                   integration_epsilon,
+                                                   model_context_for_funcs,
+                                                   w);
     };
-    // Helper for calculating log survivor S(t) = sum(log(1-F_i(t)))
-    auto calc_log_survivor = [&](double t) -> double {
-      if (t == R_PosInf) return R_NegInf;
-      double logS = 0.0;
-      std::vector<double> par_row(static_cast<size_t>(pars.ncol()));
-      for (int k = 0; k < n_lR_j; ++k) {
-        if (!isok_for_trial[k]) return R_NegInf;
-        for (int c = 0; c < pars.ncol(); ++c) par_row[static_cast<size_t>(c)] = p_all_acc_for_trial(k, c);
-        double cdf = cdf1(t, par_row.data(), model_context_for_funcs);
-        if (!std::isfinite(cdf)) return R_NegInf;
-        if (cdf >= 1.0) return R_NegInf;
-        if (cdf <= 0.0) continue;
-        if (cdf > 1.0 - 1e-15) cdf = 1.0 - 1e-15;
-        logS += std::log1p(-cdf);
-      }
-      return logS;
+    
+    auto log_survivor = [&](double t) -> double {
+      return log_survivor_rowmajor(t,
+                                   pars_rowmajor_buffer.data(),
+                                   isok_int_buffer.data(),
+                                   n_lR_j,
+                                   n_par,
+                                   cdf1,
+                                   model_context_for_funcs);
     };
-    // Case 2: Fast censoring (RT=-Inf). Probability is integral from LT to LC.
-    if (R_j_idx == NA_INTEGER) {
-      // Winner is unknown: P(LT < min(T) < LC) = S(LT) - S(LC)
-      // This is an analytic solution for the probability that no accumulator finishes before UC
-      // but one finishes before UT.
-      double logS_lower = calc_log_survivor(lower_for_trial);
-      double logS_upper = calc_log_survivor(upper_for_trial);
-      double logP = log_diff_exp(logS_lower, logS_upper);
-      if (R_FINITE(logP) && logP > log_prob_eps) {
-        current_ll_val = logP;
-      } else {
-        for (int k_win = 1; k_win <= n_lR_j; ++k_win) {
-          double log_l_k = integrate_cached(k_win, lower_for_trial, upper_for_trial);
-          current_ll_val = log_sum_exp(current_ll_val, log_l_k);
+    
+    current_ll_val = R_NegInf;
+    if (rt_j == R_NegInf) {
+      lower_for_trial = LTj;
+      upper_for_trial = LCj;
+      if (R_j_idx == NA_INTEGER) {
+        const double logP = log_diff_exp(log_survivor(lower_for_trial), log_survivor(upper_for_trial));
+        if (R_FINITE(logP) && logP > log_prob_eps) {
+          current_ll_val = logP;
+        } else {
+          for (int k_win = 1; k_win <= n_lR_j; ++k_win) {
+            current_ll_val = log_sum_exp(current_ll_val, integrate_interval(k_win, lower_for_trial, upper_for_trial));
+          }
         }
+      } else {
+        current_ll_val = integrate_interval(R_j_idx, lower_for_trial, upper_for_trial);
       }
-    } else {
-      // Response (winner) is known: We need the probability that *specific* accumulator k won
-      // in the interval (UC, UT). This generally requires integration.
-      current_ll_val = integrate_cached(R_j_idx, lower_for_trial, upper_for_trial);
-      
-      // Case 3: Slow censoring (RT = Inf). Probability is integral from UC to UT.
-      // ZH added Go/No-Go Race logic here.
-    } if (rt_j == R_PosInf) {
+    } else if (rt_j == R_PosInf) {
       if (gng) {
-        const double D = UC[start_row_idx];
-        lower_for_trial = LT[start_row_idx]; // maybe needs to be 0?
-        upper_for_trial = D; // the censor value is the upper limit of a winning no-go, or the lower limit of a losing go/no-go
-        // Identify which accumulator is the NOGO channel from winner_for_trial tag
-        int k_nogo = -1; // 1-based index for integrate_for_kth_winner_cpp
+        const double D = UCj;
+        lower_for_trial = LTj;
+        upper_for_trial = D;
+        int k_nogo = -1; // 1-based
         int n_true = 0;
         for (int k = 0; k < n_lR_j; ++k) {
-          if (winner_for_trial[k]) { n_true++; k_nogo = k + 1; }
+          if (winner[start_row_idx + k]) { n_true++; k_nogo = k + 1; }
         }
-        if (n_true != 1) {
-          Rcpp::stop("No winner identified in go/no-go withheld response");
-        }
-        // Term A: No-Go accumulator wins before the deadline D and before the Go accumulator
-        const double logA = integrate_cached(k_nogo, lower_for_trial, D);
-        
-        // Term B: Neither accumulator finishes before the deadline = product of survivors
-        double logB = 0.0;
-        std::vector<double> par_row(static_cast<size_t>(pars.ncol()));
-        for (int k = 0; k < n_lR_j; ++k) {
-          if (!isok_for_trial[k]) { logB = R_NegInf; break; }
-          for (int c = 0; c < pars.ncol(); ++c) par_row[static_cast<size_t>(c)] = p_all_acc_for_trial(k, c);
-          double cdf = cdf1(D, par_row.data(), model_context_for_funcs);
-          if (!std::isfinite(cdf) || cdf >= 1.0) { logB = R_NegInf; break; }
-          if (cdf <= 0.0) continue;
-          if (cdf > 1.0 - 1e-15) cdf = 1.0 - 1e-15;
-          logB += std::log1p(-cdf);
-        }
+        if (n_true != 1) Rcpp::stop("No winner identified in go/no-go withheld response");
+        const double logA = integrate_interval(k_nogo, lower_for_trial, upper_for_trial);
+        const double logB = log_survivor(D);
         current_ll_val = log_sum_exp(logA, logB);
-        
       } else {
-        lower_for_trial = UC[start_row_idx];
-        upper_for_trial = UT[start_row_idx];
+        lower_for_trial = UCj;
+        upper_for_trial = UTj;
         if (n_lR_j == 1) {
-          // Simplified case for single accumulator
-          Rcpp::NumericVector t_vec = Rcpp::NumericVector::create(lower_for_trial);
-          Rcpp::NumericVector l_vec = model_pfun(t_vec, p_all_acc_for_trial, isok_for_trial, winner_for_trial, model_context_for_funcs);
-          double cdf = l_vec[0];
-          if (!R_finite(cdf)) { current_ll_val = R_NegInf; continue; }
-          if (cdf <= 0.0) { current_ll_val = 0.0; continue; }           // log(1)
-          if (cdf >= 1.0) { current_ll_val = R_NegInf; continue; }       // log(0)
-          if (cdf > 1.0 - 1e-15) cdf = 1.0 - 1e-15;
-          current_ll_val = std::log1p(-cdf);
+          const double cdf = cdf1(lower_for_trial, pars_rowmajor_buffer.data(), model_context_for_funcs);
+          current_ll_val = safe_log1m_race(clamp_cdf01_race(cdf));
         } else if (R_j_idx == NA_INTEGER) {
-          // Winner is unknown: P(UC < min(T) < UT) = S(UC) - S(UT)
-          // This is an analytic solution for the probability that no accumulator finishes before UC
-          // but one finishes before UT.
-          double logS_lower = calc_log_survivor(lower_for_trial);
-          double logS_upper = calc_log_survivor(upper_for_trial);
-          double logP = log_diff_exp(logS_lower, logS_upper);
+          const double logP = log_diff_exp(log_survivor(lower_for_trial), log_survivor(upper_for_trial));
           if (R_FINITE(logP) && logP > log_prob_eps) {
             current_ll_val = logP;
           } else {
             for (int k_win = 1; k_win <= n_lR_j; ++k_win) {
-              double log_l_k = integrate_cached(k_win, lower_for_trial, upper_for_trial);
-              current_ll_val = log_sum_exp(current_ll_val, log_l_k);
+              current_ll_val = log_sum_exp(current_ll_val, integrate_interval(k_win, lower_for_trial, upper_for_trial));
             }
           }
-          
         } else {
-          // Response (winner) is known: We need the probability that *specific* accumulator k won
-          // in the interval (UC, UT). This generally requires integration.
-          // Simplified case for single accumulator
-          current_ll_val = integrate_cached(R_j_idx, lower_for_trial, upper_for_trial);
+          current_ll_val = integrate_interval(R_j_idx, lower_for_trial, upper_for_trial);
         }
       }
-      // Case 4: Missing RT (NA). Probability is sum of integral from LT to LC and UC to UT (i.e., outside the observation window but within truncation).
-    } else if (NumericVector::is_na(rt_j)) {
-      double lower_for_trial1 = LT[start_row_idx];
-      double upper_for_trial1 = LC[start_row_idx];
-      double lower_for_trial2 = UC[start_row_idx];
-      double upper_for_trial2 = UT[start_row_idx];
-      if (R_j_idx != NA_INTEGER) { // Response (winner) is known
-        double ll_L = integrate_cached(R_j_idx, lower_for_trial1, upper_for_trial1);
-        double ll_U = integrate_cached(R_j_idx, lower_for_trial2, upper_for_trial2);
-        current_ll_val = log_sum_exp(ll_L, ll_U);
-      } else { // Response (winner) is unknown; sum probabilities over all possible winners
-        double logS_lower1 = calc_log_survivor(lower_for_trial1);
-        double logS_upper1 = calc_log_survivor(upper_for_trial1);
-        double logS_lower2 = calc_log_survivor(lower_for_trial2);
-        double logS_upper2 = calc_log_survivor(upper_for_trial2);
-        double logP1 = log_diff_exp(logS_lower1, logS_upper1);
-        double logP2 = log_diff_exp(logS_lower2, logS_upper2);
-        double logPsum = log_sum_exp(logP1, logP2);
+    } else if (Rcpp::NumericVector::is_na(rt_j)) {
+      const double lower1 = LTj;
+      const double upper1 = LCj;
+      const double lower2 = UCj;
+      const double upper2 = UTj;
+      if (R_j_idx != NA_INTEGER) {
+        current_ll_val = log_sum_exp(integrate_interval(R_j_idx, lower1, upper1),
+                                     integrate_interval(R_j_idx, lower2, upper2));
+      } else {
+        const double logP1 = log_diff_exp(log_survivor(lower1), log_survivor(upper1));
+        const double logP2 = log_diff_exp(log_survivor(lower2), log_survivor(upper2));
+        const double logPsum = log_sum_exp(logP1, logP2);
         if (R_FINITE(logPsum) && logPsum > log_prob_eps) {
           current_ll_val = logPsum;
         } else {
           for (int k_win = 1; k_win <= n_lR_j; ++k_win) {
-            double ll_L_k = integrate_cached(k_win, lower_for_trial1, upper_for_trial1);
-            double ll_U_k = integrate_cached(k_win, lower_for_trial2, upper_for_trial2);
-            double ll_k_sum = log_sum_exp(ll_L_k, ll_U_k);
-            current_ll_val = log_sum_exp(current_ll_val,ll_k_sum);
+            const double ll_L_k = integrate_interval(k_win, lower1, upper1);
+            const double ll_U_k = integrate_interval(k_win, lower2, upper2);
+            current_ll_val = log_sum_exp(current_ll_val, log_sum_exp(ll_L_k, ll_U_k));
           }
         }
       }
-    }
-    lower_for_trial = LT[start_row_idx];
-    upper_for_trial = UT[start_row_idx];
-    // Else: rt_j is 0 or negative finite (but not -Inf), current_prob_val remains 0.
-    // Apply trial-level truncation-correction i.e. probability of observing ANY trial in the truncation window
-    if (current_ll_val > min_ll && (LT[start_row_idx]!=0 || UT[start_row_idx] != R_PosInf) ) {
-      std::string key = make_logZ_key(start_row_idx, lower_for_trial, upper_for_trial, pars, n_lR_j, pars.ncol());
-      auto hit = log_integral_cache.find(key);
-      if (hit != log_integral_cache.end()) { // fast path check if we've integrated this exact parameter set already and re-use result if we have
-        log_Z_this = hit->second;
-      } else { // otherwise compute the integral and cache it
-        log_Z_this  = get_trunc_normaliser_cpp(p_all_acc_for_trial,
-                                               pdf1,
-                                               cdf1,
-                                               isok_for_trial,
-                                               lower_for_trial,
-                                               upper_for_trial,
-                                               n_lR_j,
-                                               pars.ncol(),
-                                               integration_epsilon,
-                                               model_context_for_funcs,
-                                               workspace.get());
-        log_integral_cache.emplace(std::move(key), log_Z_this);
-      }
-      
-      if (NumericVector::is_na(log_Z_this) || !R_FINITE(log_Z_this)) {
-        current_ll_val = min_ll;
-      } else {
-        current_ll_val -= log_Z_this;
-      }
+    } else if (R_FINITE(rt_j) && rt_j > 0.0 && R_j_idx == NA_INTEGER) {
+      current_ll_val = log_min_density_rowmajor(rt_j,
+                                                pars_rowmajor_buffer.data(),
+                                                isok_int_buffer.data(),
+                                                n_lR_j,
+                                                n_par,
+                                                pdf1,
+                                                cdf1,
+                                                model_context_for_funcs,
+                                                logS_k_buffer);
     }
     
-    current_ll_val = std::max(min_ll, current_ll_val); // Ensure probability is not negative
-    ll_unique[unique_trial_idx] = current_ll_val;
-    ll_unique[unique_trial_idx] = std::max(min_ll, ll_unique[unique_trial_idx]); // Ensure not less than min_ll
+    if (current_ll_val > min_ll && has_trunc) {
+      log_Z_this = get_trunc_normaliser_rowmajor_cpp(pars_rowmajor_buffer.data(),
+                                                     isok_int_buffer.data(),
+                                                     pdf1,
+                                                     cdf1,
+                                                     LTj,
+                                                     UTj,
+                                                     n_lR_j,
+                                                     n_par,
+                                                     integration_epsilon,
+                                                     model_context_for_funcs,
+                                                     workspace);
+      if (!R_FINITE(log_Z_this)) current_ll_val = min_ll;
+      else current_ll_val -= log_Z_this;
+    }
+    
+    ll_unique[unique_trial_idx] = std::max(min_ll, current_ll_val);
   }
   
   //    global["llC1"]  = ll_unique;
@@ -1730,7 +1925,9 @@ double c_log_likelihood_race_cens_trunc(
         
       }
     }
-    total_ll = sum(c_expand(ll_unique,expand));
+    for (int i = 0; i < expand.length(); ++i) {
+      total_ll += ll_unique[expand[i] - 1];
+    }
   } else { // Default: sum ll_unique directly (each unique trial counted once)
     for (int j = 0; j < n_unique_trials; ++j) {
       if (use_pC) {

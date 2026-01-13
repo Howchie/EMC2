@@ -674,6 +674,7 @@ calc_ll_manager <- function(proposals, dadm, model, component = NULL, r_cores = 
     lls <- log_likelihood_joint(proposals, dadm, model, component)
   } else{
     model <- model()
+    dadm <- .cache_ll_data_attrs(dadm)
     if(is.null(model$c_name)){ # use the R implementation
       lls <- unlist(
         auto_mclapply(1:nrow(proposals),
@@ -806,4 +807,3 @@ check_CR <- function(emc, p_vector, range = .2, N = 500){
   }
   return(list(C = C, R = R))
 }
-

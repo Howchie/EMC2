@@ -629,6 +629,11 @@ loadRData <- function(fileName){
 #' of the first three and of the last two parameters are estimated as two separate blocks.
 #' @param prior_list A named list containing the prior. Default prior created if `NULL`. For the default priors, see `?get_prior_{type}`.
 #' @param ... Additional, optional arguments.
+#' @details
+#' Some likelihood backends attach internal, versioned cache attributes to the
+#' processed per-subject data (dadm) to avoid repeating data-only scans during
+#' sampling. These attributes are recomputed when missing or outdated and are not
+#' part of the user-facing API.
 #' @return An uninitialized emc object
 #' @examples dat <- forstmann
 #'
@@ -748,6 +753,7 @@ make_emc <- function(data,design,model=NULL,
                                                design = design[[i]],model=model[[i]])
       sampled_p_names <- attr(design[[i]],"sampled_p_names")
     }
+    dadm_list[[i]] <- .cache_ll_data_attrs(dadm_list[[i]])
     if(length(prior_list) == length(data)){
       if(!is.null(prior_list[[i]])){
         prior_list[[i]] <- check_prior(prior_list[[i]], sampled_p_names, group_design)
