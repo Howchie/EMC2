@@ -23,6 +23,7 @@ design(
   LC = NULL,
   UC = NULL,
   UT = NULL,
+  fixed_accumulator_roles = NULL,
   ...
 )
 }

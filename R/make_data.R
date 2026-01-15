@@ -529,7 +529,11 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
   }
   if (any(names(data)=="RACE")) {
       Rrt <- RACE_rfun(data, pars, model)
-  } else Rrt <- model()$rfun(data,pars)
+  } else if (any(names(data)=="LogicalRule")) {
+    if (grepl("substitution",model()$c_name)){
+      Rrt <- LogicalRules_substitution_rfun(data, pars, model)
+    } else {Rrt <- LogicalRules_rfun(data, pars, model)}
+  } else {Rrt <- model()$rfun(data,pars)}
 
   if (is.null(TC$pContaminant) & any(dimnames(pars)[[2]]=="pContaminant"))
     TC$pContaminant <- pars[,"pContaminant"][data$lR==levels(data$lR)[1]]
@@ -559,25 +563,142 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
 }
 
 
-RACE_rfun <- function(data, pars, model){
-  Rrt <- matrix(ncol=2,nrow=dim(data)[1]/length(levels(data$lR)),
-         dimnames=list(NULL,c("R","rt")))
-  RACE <- data[data$lR==levels(data$lR)[1],"RACE"]
+RACE_rfun <- function(data, pars, model) {
+  Rrt <- matrix(
+    ncol = 2, nrow = dim(data)[1] / length(levels(data$lR)),
+    dimnames = list(NULL, c("R", "rt"))
+  )
+  RACE <- data[data$lR == levels(data$lR)[1], "RACE"]
   ok <- as.numeric(data$lR) <= as.numeric(as.character(data$RACE))
   for (i in levels(RACE)) {
-    pick <- data$RACE==i
-    data_in <- data[pick & ok,]
+    pick <- data$RACE == i
+    data_in <- data[pick & ok, ]
     data_in$lR <- factor(data$lR[pick & ok])
-    tmp <- pars[pick & ok,]
+    tmp <- pars[pick & ok, ]
     attr(tmp, "ok") <- rep(T, nrow(tmp))
     if (!is.null(attr(pars, "staircase"))) attr(tmp, "staircase") <- attr(pars, "staircase")
-    Rrti <- model()$rfun(data_in,tmp)
+    Rrti <- model()$rfun(data_in, tmp)
     Rrti$R <- as.numeric(Rrti$R)
-    Rrt[RACE==i,] <- as.matrix(Rrti)
+    Rrt[RACE == i, ] <- as.matrix(Rrti)
   }
   Rrt <- data.frame(Rrt)
   Rrt$R <- factor(Rrt$R, labels = levels(data$lR), levels = 1:length(levels(data$lR)))
   return(Rrt)
+}
+
+LogicalRules_rfun <- function(data, pars, model) {
+  # Simulates a two-channel architecture with local sub-races:
+  # Channel A: A vs n_A
+  # Channel B: B vs n_B
+  #
+  # LogicalRule:
+  #   "OR"  : YES if either channel's target wins its local race; NO if both lose
+  #   "AND" : YES only if both targets win; NO as soon as any target loses
+  #   "ID"  : Identify stimulus class: NT, A, B, DT (exhaustive over channels)
+  #
+
+  posdrift <- model()$posdrift
+  n_trials <- dim(data)[1] / length(levels(data$lR)) # number of unique trials
+  Rrti <- matrix(ncol = length(levels(data$lR)), nrow = n_trials,
+                 dimnames = list(NULL, levels(data$lR)))
+  RACE <- levels(data$lR) # should be 4 unless using a non-standard implementation
+  df <- data.frame(
+    LogicalRule = data$LogicalRule[data$lR == levels(data$lR)[1]],
+    RuleFollow = rbinom(n_trials, 1, pars[data$lR == levels(data$lR)[1], "p"]) == 1,
+    ChannelA = rbinom(n_trials, 1, 1 - pars[data$lR == levels(data$lR)[1], "q"]) == 1
+  )
+  racers <- c("A", "n_A", "B", "n_B")
+  if (!all(df$LogicalRule %in% c("OR", "AND", "ID"))) {
+    stop("LogicalRule must be one of: OR, AND, ID")
+  }
+  if (!all(racers %in% RACE)) stop("RACE must have: A, n_A, B, n_B")
+  # --- Simulate finishing times for each accumulator ---
+  Rrti <- matrix(NA_real_, nrow = n_trials, ncol = length(RACE),
+                 dimnames = list(NULL, RACE))
+  
+  for (i in RACE) {
+    pick <- data$lR==i
+    data_in <- data[pick, ]
+    data_in$lR <- factor(data$lR[pick])
+    p <- pars[pick, , drop = FALSE]
+    attr(p, "ok") <- rep(TRUE, ifelse(is.null(dim(p)), 1, nrow(p)))
+    Rrti[, i] <- model()$rfun(data_in, p, posdrift = posdrift)$rt
+  }
+  
+  A_t   <- Rrti[, "A"]
+  nA_t  <- Rrti[, "n_A"]
+  B_t   <- Rrti[, "B"]
+  nB_t  <- Rrti[, "n_B"]
+  browser()
+  # --- Local channel outcomes (sub-races) ---
+  # A_yes: channel A says "target present" if A beats n_A
+  # B_yes: channel B says "target present" if B beats n_B
+  A_yes <- A_t < nA_t
+  B_yes <- B_t < nB_t
+  
+  # Tie handling (rare): break ties randomly so decisions remain well-defined.
+  tieA <- A_t == nA_t
+  tieB <- B_t == nB_t
+  if (any(tieA)) A_yes[tieA] <- runif(sum(tieA)) < 0.5
+  if (any(tieB)) B_yes[tieB] <- runif(sum(tieB)) < 0.5
+  
+  # Local decision times (whoever wins the channel race)
+  tA <- pmin(A_t, nA_t)
+  tB <- pmin(B_t, nB_t)
+  
+  is_or <- df$LogicalRule == "OR"
+  is_and <- df$LogicalRule == "AND"
+  is_id <- df$LogicalRule == "ID"
+
+  R <- rep(NA_character_, n_trials)
+  rt <- rep(NA_real_, n_trials)
+
+  # Followed-rule logic (skip rule-break trials).
+  follow_or <- df$RuleFollow & is_or
+  follow_and <- df$RuleFollow & is_and
+  if (any(follow_or)) {
+    R_or <- ifelse(A_yes | B_yes, "yes", "no")
+    RT_yes <- pmin(ifelse(A_yes, A_t, Inf), ifelse(B_yes, B_t, Inf))
+    RT_no <- pmax(nA_t, nB_t)
+    rt_or <- ifelse(A_yes | B_yes, RT_yes, RT_no)
+    R[follow_or] <- R_or[follow_or]
+    rt[follow_or] <- rt_or[follow_or]
+  }
+  if (any(follow_and)) {
+    R_and <- ifelse(A_yes & B_yes, "yes", "no")
+    RT_yes <- pmax(A_t, B_t)
+    RT_no <- pmin(ifelse(!A_yes, nA_t, Inf), ifelse(!B_yes, nB_t, Inf))
+    rt_and <- ifelse(A_yes & B_yes, RT_yes, RT_no)
+    R[follow_and] <- R_and[follow_and]
+    rt[follow_and] <- rt_and[follow_and]
+  }
+  if (any(is_id)) {
+    R_id <- ifelse(!A_yes & !B_yes, "NT",
+      ifelse(A_yes & !B_yes, "A",
+        ifelse(!A_yes & B_yes, "B", "DT")
+      )
+    )
+    R[is_id] <- R_id
+    rt[is_id] <- pmax(tA, tB)
+  }
+
+  # Rule-breaking: for OR/AND only, choose a single channel to decide.
+  break_trials <- !df$RuleFollow & (is_or | is_and)
+  if (any(break_trials)) {
+    use_A <- break_trials & df$ChannelA
+    use_B <- break_trials & !df$ChannelA
+    R[use_A] <- ifelse(A_yes[use_A], "yes", "no")
+    rt[use_A] <- tA[use_A]
+    R[use_B] <- ifelse(B_yes[use_B], "yes", "no")
+    rt[use_B] <- tB[use_B]
+  }
+
+  if (any(is_id)) {
+    R <- factor(R, levels = c("NT", "A", "B", "DT"))
+  } else {
+    R <- factor(R, levels = c("no", "yes"))
+  }
+  data.frame(R = R, rt = rt)
 }
 
 # GNG_rfun <- function(data, pars, model){

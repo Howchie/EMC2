@@ -67,7 +67,7 @@ minimal_design <- function(design, covariates = NULL, drop_subjects = TRUE,
 
     ## 3. Add accumulators
     if(add_acc){
-      fac_df <- add_accumulators(fac_df, matchfun = cur_des$matchfun, type = cur_des$model()$type)
+      fac_df <- add_accumulators(fac_df, matchfun = cur_des$matchfun, type = cur_des$model()$type, fixed_accumulator_roles=design[[1]]$fixed_accumulator_roles)
     }
     if(!is.null(fac_df$R) & drop_R_levels){
       fac_df <- fac_df[fac_df$R == unique(fac_df$R)[1],]

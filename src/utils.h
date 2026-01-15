@@ -101,6 +101,10 @@ struct ContextForRaceModels {
 	bool log_out=false;
 	bool gng=false;
 	std::string LogicalRule;
+  // Optional scalar PDF/CDF for numerical integration in composite models.
+  RacePdf1Fun pdf1 = nullptr;
+  RaceCdf1Fun cdf1 = nullptr;
+  int n_par = 0;
 };
 
 // Scalar adapters (single-RT, single-parameter-row) used by GSL integration.

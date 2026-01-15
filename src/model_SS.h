@@ -3,12 +3,10 @@
 
 #include <RcppArmadillo.h>
 #include <cmath>
+#include "prob_utils.h"
 
 inline double ss_clamp_prob01(double p) {
-  if (!std::isfinite(p)) return p;
-  if (p < 0.0) return 0.0;
-  if (p > 1.0) return 1.0;
-  return p;
+  return clamp_prob01(p);
 }
 
 inline double ss_exgauss_cdf(double x, double mu, double sigma, double tau) {
@@ -39,7 +37,7 @@ inline double ss_exgauss_cdf(double x, double mu, double sigma, double tau) {
   const double expo = (a * a - mu * mu - 2.0 * x * (s2 / tau)) / (2.0 * s2);
   const double term2 = std::exp(logPhi + expo);
 
-  return ss_clamp_prob01(term1 - term2);
+  return clamp_prob01(term1 - term2);
 }
 
 inline double ss_exgauss_pdf(double x, double mu, double sigma, double tau) {
@@ -70,7 +68,7 @@ inline double ss_exgauss_pdf(double x, double mu, double sigma, double tau) {
 inline double ss_exgauss_surv(double x, double mu, double sigma, double tau) {
   const double cdf = ss_exgauss_cdf(x, mu, sigma, tau);
   if (!std::isfinite(cdf)) return NA_REAL;
-  return ss_clamp_prob01(1.0 - cdf);
+  return clamp_prob01(1.0 - cdf);
 }
 
 inline double ss_stop_cdf_abs(double t_abs, double SSD, double muS, double sigmaS, double tauS) {
