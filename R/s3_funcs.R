@@ -1008,11 +1008,14 @@ get_data.emc <- function(emc) {
   } else{
     design <- get_design(emc)[[1]]
     dat <- do.call(rbind,lapply(emc[[1]]$data,function(x){
-      if(!is.null(x$winner) && (length(unique(x$lR)) > 1)){
+      if(!is.null(x$winner) && (length(unique(x$lR)) > 1) && !"LogicalRule"%in%names(x)){
         # Only expand winner for race models
         x <- x[x$winner,]
       }
-
+      if("LogicalRule"%in%names(x)){
+        # Only expand winner for race models
+        x <- x[x$lR==levels(x$lR)[1],]
+      }
       expand <- attr(x,"expand")
       if(is.null(expand)) expand <- 1:nrow(x)
       return(x[expand,])
