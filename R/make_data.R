@@ -630,7 +630,7 @@ LogicalRules_rfun <- function(data, pars, model) {
   nA_t  <- Rrti[, "n_A"]
   B_t   <- Rrti[, "B"]
   nB_t  <- Rrti[, "n_B"]
-  browser()
+
   # --- Local channel outcomes (sub-races) ---
   # A_yes: channel A says "target present" if A beats n_A
   # B_yes: channel B says "target present" if B beats n_B
