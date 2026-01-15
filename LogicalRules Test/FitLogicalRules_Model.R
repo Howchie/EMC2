@@ -4,7 +4,9 @@ Packages <- c("EMC2","dplyr","sft")
 lapply(Packages, library, character.only = TRUE) # to install change 'library' to 'install.packages'
 
 ## Read in Eidels 2015 data
-load("LogicalRules Test/Eidels2015.RData"); data=all_data_acc
+load("LogicalRules Test/Eidels2015.RData")
+data = all_data_acc
+data = all_data_acc[all_data_acc$subject=="AW", ]
 
 source("LogicalRules Test/Functions.R")
 source("LogicalRules Test/Contrasts.R")
@@ -18,7 +20,7 @@ designBushmakin <- design(
   Rlevels=c("yes","no")
 )
 
-BushmakinModel = make_emc(data,designBushmakin,type="standard",fileName = 'samples.RData')
+BushmakinModel = make_emc(data,designBushmakin,type="single",fileName = 'samples.RData')
 BushmakinModel=fit(BushmakinModel,max_tries = 50, cores_per_chain=1, cores_for_chains=3, 
     stop_criteria = list(
     preburn = list(iter = 10), burn = list(mean_gd = 2.5), adapt = list(min_unique = 20),

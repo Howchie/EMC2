@@ -475,7 +475,8 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
     return(data)
   } else {
     data <- design_model(
-      add_accumulators(data, design$matchfun, simulate = TRUE, type = model()$type, Fcovariates = design$Fcovariates),
+      add_accumulators(data, design$matchfun, simulate = TRUE, type = model()$type, Fcovariates = design$Fcovariates,
+                       fixed_accumulator_roles = design$fixed_accumulator_roles),
       design, model,
       add_acc = FALSE, compress = FALSE, verbose = FALSE,
       rt_check = FALSE
