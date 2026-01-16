@@ -939,9 +939,9 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
       int ver = Rcpp::as<int>(data.attr("emc2_ll_cache_version"));
       cache_ok = (ver == kLlCacheVersion);
     }
-
+    
     const bool has_RACE_col = data.containsElementNamed("RACE");
-
+    
     bool all_finite_trials = true;
     bool have_all_finite_attr = false;
     if (cache_ok && data.hasAttribute("emc2_all_finite_trials")) {
@@ -951,149 +951,149 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
         have_all_finite_attr = true;
       }
     }
-
+    
     const bool have_race_attrs = (!has_RACE_col) ||
       (data.hasAttribute("RACE_nacc_by_row") && data.hasAttribute("RACE_mask"));
     const bool have_finite_attrs = data.hasAttribute("finite_rt_mask") &&
       data.hasAttribute("finite_rt_unique_trial_indices") &&
       data.hasAttribute("other_unique_trial_indices");
-
+    
     const bool need_prepare =
       !(cache_ok && have_all_finite_attr && have_race_attrs && (all_finite_trials || have_finite_attrs));
-
-    if (need_prepare) {
-      if (has_RACE_col && !have_race_attrs) {
-        const Rcpp::IntegerVector lR_dadm = data["lR"];
-        const Rcpp::IntegerVector race_idx = data["RACE"];
-        const Rcpp::CharacterVector race_levels = race_idx.attr("levels");
-        std::vector<int> nacc_by_level;
-        nacc_by_level.reserve(static_cast<size_t>(race_levels.size()));
-        for (int i = 0; i < race_levels.size(); ++i) {
-          nacc_by_level.push_back(std::stoi(Rcpp::as<std::string>(race_levels[i])));
+      
+      if (need_prepare) {
+        if (has_RACE_col && !have_race_attrs) {
+          const Rcpp::IntegerVector lR_dadm = data["lR"];
+          const Rcpp::IntegerVector race_idx = data["RACE"];
+          const Rcpp::CharacterVector race_levels = race_idx.attr("levels");
+          std::vector<int> nacc_by_level;
+          nacc_by_level.reserve(static_cast<size_t>(race_levels.size()));
+          for (int i = 0; i < race_levels.size(); ++i) {
+            nacc_by_level.push_back(std::stoi(Rcpp::as<std::string>(race_levels[i])));
+          }
+          Rcpp::IntegerVector race_nacc_by_row(n_trials, n_lR);
+          Rcpp::LogicalVector race_mask(n_trials, true);
+          for (int row = 0; row < n_trials; ++row) {
+            if (race_idx[row] == NA_INTEGER) continue;
+            const int n_lR_this_trial = nacc_by_level[static_cast<size_t>(race_idx[row] - 1)];
+            race_nacc_by_row[row] = n_lR_this_trial;
+            if (lR_dadm[row] > n_lR_this_trial) race_mask[row] = false;
+          }
+          data.attr("RACE_nacc_by_row") = race_nacc_by_row;
+          data.attr("RACE_mask") = race_mask;
         }
-        Rcpp::IntegerVector race_nacc_by_row(n_trials, n_lR);
-        Rcpp::LogicalVector race_mask(n_trials, true);
-        for (int row = 0; row < n_trials; ++row) {
-          if (race_idx[row] == NA_INTEGER) continue;
-          const int n_lR_this_trial = nacc_by_level[static_cast<size_t>(race_idx[row] - 1)];
-          race_nacc_by_row[row] = n_lR_this_trial;
-          if (lR_dadm[row] > n_lR_this_trial) race_mask[row] = false;
+        
+        if (!have_all_finite_attr) {
+          // Data-only: determine whether every unique trial has a finite RT, known response, and is within [LT, UT].
+          // Computing this once here avoids repeating an O(n_unique_trials) scan per particle.
+          all_finite_trials = true;
+          if (n_trials > 0) {
+            if (n_lR <= 0 || (n_trials % n_lR) != 0) {
+              all_finite_trials = false;
+            } else {
+              const int n_unique_trials = n_trials / n_lR;
+              const Rcpp::NumericVector rts_dadm = data["rt"];
+              const Rcpp::IntegerVector R_idxs_dadm = data["R"];
+              for (int j = 0; j < n_unique_trials; ++j) {
+                const int start_row_idx = j * n_lR;
+                const double rt_j = rts_dadm[start_row_idx];
+                const int R_j_idx = R_idxs_dadm[start_row_idx];
+                if (!(R_FINITE(rt_j) && rt_j > 0.0 && R_j_idx != NA_INTEGER)) {
+                  all_finite_trials = false;
+                  break;
+                }
+              }
+            }
+          }
+          data.attr("emc2_all_finite_trials") = all_finite_trials;
         }
-        data.attr("RACE_nacc_by_row") = race_nacc_by_row;
-        data.attr("RACE_mask") = race_mask;
-      }
-
-      if (!have_all_finite_attr) {
-        // Data-only: determine whether every unique trial has a finite RT, known response, and is within [LT, UT].
-        // Computing this once here avoids repeating an O(n_unique_trials) scan per particle.
-        all_finite_trials = true;
-        if (n_trials > 0) {
-          if (n_lR <= 0 || (n_trials % n_lR) != 0) {
-            all_finite_trials = false;
-          } else {
+        
+        if (!all_finite_trials && n_trials > 0 && n_lR > 0 && (n_trials % n_lR) == 0) {
+          if (!have_finite_attrs) {
             const int n_unique_trials = n_trials / n_lR;
+            Rcpp::LogicalVector finite_rt_mask(n_trials, false);
+            std::vector<int> finite_rt_unique_trial_indices;
+            std::vector<int> other_unique_trial_indices;
+            finite_rt_unique_trial_indices.reserve(n_unique_trials);
+            other_unique_trial_indices.reserve(n_unique_trials);
             const Rcpp::NumericVector rts_dadm = data["rt"];
             const Rcpp::IntegerVector R_idxs_dadm = data["R"];
+            Rcpp::IntegerVector race_nacc_by_row;
+            if (has_RACE_col && data.hasAttribute("RACE_nacc_by_row")) {
+              race_nacc_by_row = data.attr("RACE_nacc_by_row");
+            }
             for (int j = 0; j < n_unique_trials; ++j) {
               const int start_row_idx = j * n_lR;
               const double rt_j = rts_dadm[start_row_idx];
               const int R_j_idx = R_idxs_dadm[start_row_idx];
-              if (!(R_FINITE(rt_j) && rt_j > 0.0 && R_j_idx != NA_INTEGER)) {
-                all_finite_trials = false;
-                break;
-              }
-            }
-          }
-        }
-        data.attr("emc2_all_finite_trials") = all_finite_trials;
-      }
-
-      if (!all_finite_trials && n_trials > 0 && n_lR > 0 && (n_trials % n_lR) == 0) {
-        if (!have_finite_attrs) {
-          const int n_unique_trials = n_trials / n_lR;
-          Rcpp::LogicalVector finite_rt_mask(n_trials, false);
-          std::vector<int> finite_rt_unique_trial_indices;
-          std::vector<int> other_unique_trial_indices;
-          finite_rt_unique_trial_indices.reserve(n_unique_trials);
-          other_unique_trial_indices.reserve(n_unique_trials);
-          const Rcpp::NumericVector rts_dadm = data["rt"];
-          const Rcpp::IntegerVector R_idxs_dadm = data["R"];
-          Rcpp::IntegerVector race_nacc_by_row;
-          if (has_RACE_col && data.hasAttribute("RACE_nacc_by_row")) {
-            race_nacc_by_row = data.attr("RACE_nacc_by_row");
-          }
-          for (int j = 0; j < n_unique_trials; ++j) {
-            const int start_row_idx = j * n_lR;
-            const double rt_j = rts_dadm[start_row_idx];
-            const int R_j_idx = R_idxs_dadm[start_row_idx];
-            const int n_lR_j = (has_RACE_col && race_nacc_by_row.size() == n_trials)
-              ? race_nacc_by_row[start_row_idx]
+              const int n_lR_j = (has_RACE_col && race_nacc_by_row.size() == n_trials)
+                ? race_nacc_by_row[start_row_idx]
               : n_lR;
-            if (R_FINITE(rt_j) && rt_j > 0.0 && R_j_idx != NA_INTEGER) {
-              finite_rt_unique_trial_indices.push_back(j);
-              for (int k_acc = 0; k_acc < n_lR_j; ++k_acc) {
-                finite_rt_mask[start_row_idx + k_acc] = true;
+              if (R_FINITE(rt_j) && rt_j > 0.0 && R_j_idx != NA_INTEGER) {
+                finite_rt_unique_trial_indices.push_back(j);
+                for (int k_acc = 0; k_acc < n_lR_j; ++k_acc) {
+                  finite_rt_mask[start_row_idx + k_acc] = true;
+                }
+              } else {
+                other_unique_trial_indices.push_back(j);
               }
-            } else {
-              other_unique_trial_indices.push_back(j);
             }
+            data.attr("finite_rt_mask") = finite_rt_mask;
+            data.attr("finite_rt_unique_trial_indices") = Rcpp::IntegerVector(finite_rt_unique_trial_indices.begin(),
+                      finite_rt_unique_trial_indices.end());
+            data.attr("other_unique_trial_indices") = Rcpp::IntegerVector(other_unique_trial_indices.begin(),
+                      other_unique_trial_indices.end());
           }
-          data.attr("finite_rt_mask") = finite_rt_mask;
-          data.attr("finite_rt_unique_trial_indices") = Rcpp::IntegerVector(finite_rt_unique_trial_indices.begin(),
-                                                                            finite_rt_unique_trial_indices.end());
-          data.attr("other_unique_trial_indices") = Rcpp::IntegerVector(other_unique_trial_indices.begin(),
-                                                                        other_unique_trial_indices.end());
+        }
+        
+        data.attr("emc2_ll_cache_version") = kLlCacheVersion;
+      }
+      
+      for (int i = 0; i < n_particles; ++i) {
+        p_vector = p_matrix(i, Rcpp::_);
+        if (i == 0) {
+          p_specs = make_pretransform_specs(p_vector, pretransforms);
+          // Precompute transform specs for all p_types using a one-time dummy
+          NumericMatrix dummy(1, p_types.size());
+          colnames(dummy) = p_types;
+          full_t_specs = make_transform_specs(dummy, transforms);
+        }
+        pars = get_pars_matrix(p_vector, constants, p_specs, p_types, designs, n_trials, data, trend, full_t_specs);
+        if (i == 0) {                            // first particle only, just to get colnames
+          bound_specs = make_bound_specs(minmax,mm_names,pars,bounds);
+        }
+        is_ok = c_do_bound(pars, bound_specs);
+        is_ok = lr_all(is_ok, n_lR);
+        
+        // Optional debugging: print which integrator path is being used (qng vs qag fallback)
+        // for LogicalRules likelihood. To enable:
+        //   Sys.setenv(EMC2_LOGICALRULES_LOG_INTEGRATION="1")
+        // This prints only for the first particle to avoid flooding output.
+        bool log_integrator = false;
+        if (const char* v = std::getenv("EMC2_LOGICALRULES_LOG_INTEGRATION")) {
+          log_integrator = (v[0] != '\0' && v[0] != '0');
+        }
+        current_model_ctx.log_out = (log_integrator && (i == 0));
+        if (is_ss) {
+          lls[i] = c_log_likelihood_ss_cens_trunc(pars, data,
+                                                  n_trials, winner, expand,
+                                                  min_ll, is_ok, n_lR, type_std);
+        } else if (is_logicalrules){
+          lls[i] = c_log_likelihood_logicalrules(pars, data,
+                                                 model_dfun_ptr, model_pfun_ptr,
+                                                 n_trials, expand, min_ll, is_ok,
+                                                 n_lR, &current_model_ctx);
+        }
+        else {
+          lls[i] = c_log_likelihood_race_cens_trunc(pars, data,
+                                                    model_dfun_ptr, model_pfun_ptr,
+                                                    pdf1_ptr, cdf1_ptr,
+                                                    n_trials,
+                                                    winner, expand, min_ll, is_ok, n_lR,
+                                                    &current_model_ctx,
+                                                    all_finite_trials);
         }
       }
-
-      data.attr("emc2_ll_cache_version") = kLlCacheVersion;
-    }
-    
-    for (int i = 0; i < n_particles; ++i) {
-      p_vector = p_matrix(i, Rcpp::_);
-      if (i == 0) {
-        p_specs = make_pretransform_specs(p_vector, pretransforms);
-        // Precompute transform specs for all p_types using a one-time dummy
-        NumericMatrix dummy(1, p_types.size());
-        colnames(dummy) = p_types;
-        full_t_specs = make_transform_specs(dummy, transforms);
-      }
-      pars = get_pars_matrix(p_vector, constants, p_specs, p_types, designs, n_trials, data, trend, full_t_specs);
-      if (i == 0) {                            // first particle only, just to get colnames
-        bound_specs = make_bound_specs(minmax,mm_names,pars,bounds);
-      }
-      is_ok = c_do_bound(pars, bound_specs);
-      is_ok = lr_all(is_ok, n_lR);
-
-      // Optional debugging: print which integrator path is being used (qng vs qag fallback)
-      // for LogicalRules likelihood. To enable:
-      //   Sys.setenv(EMC2_LOGICALRULES_LOG_INTEGRATION="1")
-      // This prints only for the first particle to avoid flooding output.
-      bool log_integrator = false;
-      if (const char* v = std::getenv("EMC2_LOGICALRULES_LOG_INTEGRATION")) {
-        log_integrator = (v[0] != '\0' && v[0] != '0');
-      }
-      current_model_ctx.log_out = (log_integrator && (i == 0));
-      if (is_ss) {
-        lls[i] = c_log_likelihood_ss_cens_trunc(pars, data,
-                                                n_trials, winner, expand,
-                                                min_ll, is_ok, n_lR, type_std);
-      } else if (is_logicalrules){
-        lls[i] = c_log_likelihood_logicalrules(pars, data,
-                                              model_dfun_ptr, model_pfun_ptr,
-                                              n_trials, expand, min_ll, is_ok,
-                                              n_lR, &current_model_ctx);
-      }
-      else {
-        lls[i] = c_log_likelihood_race_cens_trunc(pars, data,
-                                                  model_dfun_ptr, model_pfun_ptr,
-                                                  pdf1_ptr, cdf1_ptr,
-                                                  n_trials,
-                                                  winner, expand, min_ll, is_ok, n_lR,
-                                                  &current_model_ctx,
-                                                  all_finite_trials);
-      }
-    }
   }
   return(lls);
 }
@@ -1693,7 +1693,7 @@ double c_log_likelihood_race_cens_trunc(
       }
     }
     
-  if (n_lR > 1 && any_loss) {
+    if (n_lR > 1 && any_loss) {
       Rcpp::NumericVector loss_cdf = model_pfun(rts_dadm, pars, idx_loss, isok, dense_ctx_ptr);
       int out_i = 0;
       for (int i = 0; i < n_trials; ++i) {
@@ -1712,8 +1712,8 @@ double c_log_likelihood_race_cens_trunc(
       // When all unique trials are finite, iterate in order 0..n_unique_trials-1.
       // Otherwise, iterate over the precomputed subset of finite-RT unique trials.
       int unique_trial_idx = use_full_finite_batch
-        ? i
-        : finite_rt_unique_trial_indices[static_cast<size_t>(i)];
+      ? i
+      : finite_rt_unique_trial_indices[static_cast<size_t>(i)];
       int start_row_idx = unique_trial_idx * n_lR;
       n_lR_j = has_RACE_col ? RACE[start_row_idx] : n_lR;
       log_Z_this = 0.0;
@@ -1969,138 +1969,138 @@ struct LogicalRulesYesCdfParams {
   const double* par_nontarget;   // length n_par
   ContextForRaceModels* ctx;     // provides pdf1/cdf1 + any model options (e.g., posdrift)
 };
-
-struct LogicalRulesIntegrationStats {
-  int64_t qng_ok = 0;
-  int64_t qng_fail = 0;
-  int64_t qag_ok = 0;
-  int64_t qag_fail = 0;
-  int64_t qng_neval = 0;
-};
-
-inline double clamp01(double x) {
-  if (!R_FINITE(x)) return NA_REAL;
-  if (x <= 0.0) return 0.0;
-  if (x >= 1.0) return 1.0;
-  return x;
-}
-
-double logicalrules_yes_cdf_integrand(double u, void* vp) {
-  auto* p = static_cast<LogicalRulesYesCdfParams*>(vp);
-  if (!p || !p->ctx || !p->ctx->pdf1 || !p->ctx->cdf1) return 0.0;
-  if (!R_FINITE(u) || u <= 0.0) return 0.0;
-
-  const double f = p->ctx->pdf1(u, p->par_target, p->ctx);
-  if (!R_FINITE(f) || f <= 0.0) return 0.0;
-
-  const double Fn = clamp01(p->ctx->cdf1(u, p->par_nontarget, p->ctx));
-  if (!R_FINITE(Fn)) return 0.0;
-  const double sn = 1.0 - Fn;
-  return f * ((sn >= 0.0) ? sn : 0.0);
-}
-
-double integrate_logicalrules_yes_cdf(double t,
-                                     const double* par_target,
-                                     const double* par_nontarget,
-                                     ContextForRaceModels* ctx,
-                                     gsl_integration_workspace* w,
-                                     double epsrel,
-                                     LogicalRulesIntegrationStats* stats,
-                                     bool try_qng) {
-  if (!R_FINITE(t) || t <= 0.0) return 0.0;
-  if (!ctx || !ctx->pdf1 || !ctx->cdf1) return NA_REAL;
-  if (!w) return NA_REAL;
-
-  // IMPORTANT: GSL's default error handler aborts the process on non-success
-  // statuses (including qng "failed to reach tolerance"). We want to detect
-  // failure and fall back to an adaptive integrator instead.
-  gsl_error_handler_t* old_handler = gsl_set_error_handler_off();
-  struct HandlerRestore {
-    gsl_error_handler_t* h;
-    ~HandlerRestore() { gsl_set_error_handler(h); }
-  } restore{old_handler};
-
-  LogicalRulesYesCdfParams p{par_target, par_nontarget, ctx};
-  gsl_function F;
-  F.function = &logicalrules_yes_cdf_integrand;
-  F.params = &p;
-
-  // Fast path: non-adaptive Gauss-Kronrod (usually much faster than qag).
-  // Falls back to adaptive integration if qng fails.
-  if (try_qng) {
+  
+  struct LogicalRulesIntegrationStats {
+    int64_t qng_ok = 0;
+    int64_t qng_fail = 0;
+    int64_t qag_ok = 0;
+    int64_t qag_fail = 0;
+    int64_t qng_neval = 0;
+  };
+  
+  inline double clamp01(double x) {
+    if (!R_FINITE(x)) return NA_REAL;
+    if (x <= 0.0) return 0.0;
+    if (x >= 1.0) return 1.0;
+    return x;
+  }
+  
+  double logicalrules_yes_cdf_integrand(double u, void* vp) {
+    auto* p = static_cast<LogicalRulesYesCdfParams*>(vp);
+    if (!p || !p->ctx || !p->ctx->pdf1 || !p->ctx->cdf1) return 0.0;
+    if (!R_FINITE(u) || u <= 0.0) return 0.0;
+    
+    const double f = p->ctx->pdf1(u, p->par_target, p->ctx);
+    if (!R_FINITE(f) || f <= 0.0) return 0.0;
+    
+    const double Fn = clamp01(p->ctx->cdf1(u, p->par_nontarget, p->ctx));
+    if (!R_FINITE(Fn)) return 0.0;
+    const double sn = 1.0 - Fn;
+    return f * ((sn >= 0.0) ? sn : 0.0);
+  }
+  
+  double integrate_logicalrules_yes_cdf(double t,
+                                        const double* par_target,
+                                        const double* par_nontarget,
+                                        ContextForRaceModels* ctx,
+                                        gsl_integration_workspace* w,
+                                        double epsrel,
+                                        LogicalRulesIntegrationStats* stats,
+                                        bool try_qng) {
+    if (!R_FINITE(t) || t <= 0.0) return 0.0;
+    if (!ctx || !ctx->pdf1 || !ctx->cdf1) return NA_REAL;
+    if (!w) return NA_REAL;
+    
+    // IMPORTANT: GSL's default error handler aborts the process on non-success
+    // statuses (including qng "failed to reach tolerance"). We want to detect
+    // failure and fall back to an adaptive integrator instead.
+    gsl_error_handler_t* old_handler = gsl_set_error_handler_off();
+    struct HandlerRestore {
+      gsl_error_handler_t* h;
+      ~HandlerRestore() { gsl_set_error_handler(h); }
+    } restore{old_handler};
+    
+    LogicalRulesYesCdfParams p{par_target, par_nontarget, ctx};
+    gsl_function F;
+    F.function = &logicalrules_yes_cdf_integrand;
+    F.params = &p;
+    const double epsabs = 1e-10;
+    // Fast path: non-adaptive Gauss-Kronrod (usually much faster than qag).
+    // Falls back to adaptive integration if qng fails.
+    if (try_qng) {
+      double result = NA_REAL;
+      double abserr = NA_REAL;
+      size_t neval = 0;
+      const int status = gsl_integration_qng(&F,
+                                             0.0,
+                                             t,
+                                             epsabs,    // epsabs
+                                             epsrel, // epsrel
+                                             &result,
+                                             &abserr,
+                                             &neval);
+                                             if (stats) stats->qng_neval += static_cast<int64_t>(neval);
+                                             if (status == GSL_SUCCESS && R_FINITE(result)) {
+                                               if (stats) stats->qng_ok += 1;
+                                               if (result < 0.0) result = 0.0;
+                                               return result;
+                                             }
+                                             if (stats) stats->qng_fail += 1;
+                                             
+                                             if (ctx && ctx->log_out) {
+                                               static int printed = 0;
+                                               int max_print = 5;
+                                               if (const char* v = std::getenv("EMC2_LOGICALRULES_LOG_INTEGRATION_FAILS")) {
+                                                 char* endp = nullptr;
+                                                 const long vv = std::strtol(v, &endp, 10);
+                                                 if (endp != v && vv >= 0) max_print = static_cast<int>(vv);
+                                               }
+                                               if (printed < max_print) {
+                                                 ++printed;
+                                                 Rprintf("LogicalRules qng fail (status=%d: %s): t=%.6g epsrel=%.2g abserr=%.2g neval=%llu\n",
+                                                         status, gsl_strerror(status), t, epsrel, abserr,
+                                                         static_cast<unsigned long long>(neval));
+                                               }
+                                             }
+    }
+    
     double result = NA_REAL;
     double abserr = NA_REAL;
-    size_t neval = 0;
-    const int status = gsl_integration_qng(&F,
-                                          0.0,
-                                          t,
-                                          0.0,    // epsabs
-                                          epsrel, // epsrel
-                                          &result,
-                                          &abserr,
-                                          &neval);
-    if (stats) stats->qng_neval += static_cast<int64_t>(neval);
-    if (status == GSL_SUCCESS && R_FINITE(result)) {
-      if (stats) stats->qng_ok += 1;
-      if (result < 0.0) result = 0.0;
-      return result;
-    }
-    if (stats) stats->qng_fail += 1;
-
-    if (ctx && ctx->log_out) {
-      static int printed = 0;
-      int max_print = 5;
-      if (const char* v = std::getenv("EMC2_LOGICALRULES_LOG_INTEGRATION_FAILS")) {
-        char* endp = nullptr;
-        const long vv = std::strtol(v, &endp, 10);
-        if (endp != v && vv >= 0) max_print = static_cast<int>(vv);
-      }
-      if (printed < max_print) {
-        ++printed;
-        Rprintf("LogicalRules qng fail (status=%d: %s): t=%.6g epsrel=%.2g abserr=%.2g neval=%llu\n",
-                status, gsl_strerror(status), t, epsrel, abserr,
-                static_cast<unsigned long long>(neval));
-      }
-    }
+    const int status = gsl_integration_qag(&F,
+                                           0.0,
+                                           t,
+                                           epsabs,    // epsabs
+                                           epsrel, // epsrel
+                                           w->limit,
+                                           GSL_INTEG_GAUSS21, // cheaper than 61-point; adaptive handles hard cases
+                                           w,
+                                           &result,
+                                           &abserr);
+                                           if (status == GSL_SUCCESS && R_FINITE(result)) {
+                                             if (stats) stats->qag_ok += 1;
+                                           } else {
+                                             if (stats) stats->qag_fail += 1;
+                                           }
+                                           if (status != GSL_SUCCESS || !R_FINITE(result)) return NA_REAL;
+                                           if (result < 0.0) result = 0.0;
+                                           return result;
   }
-
-  double result = NA_REAL;
-  double abserr = NA_REAL;
-  const int status = gsl_integration_qag(&F,
-                                        0.0,
-                                        t,
-                                        0.0,    // epsabs
-                                        epsrel, // epsrel
-                                        w->limit,
-                                        GSL_INTEG_GAUSS21, // cheaper than 61-point; adaptive handles hard cases
-                                        w,
-                                        &result,
-                                        &abserr);
-  if (status == GSL_SUCCESS && R_FINITE(result)) {
-    if (stats) stats->qag_ok += 1;
-  } else {
-    if (stats) stats->qag_fail += 1;
-  }
-  if (status != GSL_SUCCESS || !R_FINITE(result)) return NA_REAL;
-  if (result < 0.0) result = 0.0;
-  return result;
-}
-
+  
 } // namespace
 
 // This is the Bushmakin et al (2017) model
 double c_log_likelihood_logicalrules(
-  Rcpp::NumericMatrix pars,
-  Rcpp::DataFrame dadm,
-  RacePdfFun model_dfun,
-  RaceCdfFun model_pfun,
-  const int n_trials,
-  const Rcpp::IntegerVector expand,
-  double min_ll,
-  const Rcpp::LogicalVector ok_params,
-	int n_acc,
-  void* model_specific_context) {
-
+    Rcpp::NumericMatrix pars,
+    Rcpp::DataFrame dadm,
+    RacePdfFun model_dfun,
+    RaceCdfFun model_pfun,
+    const int n_trials,
+    const Rcpp::IntegerVector expand,
+    double min_ll,
+    const Rcpp::LogicalVector ok_params,
+    int n_acc,
+    void* model_specific_context) {
+  
   if (n_trials == 0) return 0.0;
   if (n_acc <= 0) Rcpp::stop("c_log_likelihood_redundant_target_race: n_acc must be positive");
   if (n_trials % n_acc != 0) Rcpp::stop("c_log_likelihood_redundant_target_race: dadm rows must be multiple of n_acc");
@@ -2110,9 +2110,9 @@ double c_log_likelihood_logicalrules(
       !dadm.containsElementNamed("lR") ||
       !dadm.containsElementNamed("R") ||
       !dadm.containsElementNamed("LogicalRule")) {
-    Rcpp::stop("c_log_likelihood_redundant_target_race: dadm must contain columns rt, lR, R, LogicalRule");
+      Rcpp::stop("c_log_likelihood_redundant_target_race: dadm must contain columns rt, lR, R, LogicalRule");
   }
-
+  
   Rcpp::NumericVector rts = dadm["rt"];
   SEXP role_sexp = dadm["lR"];
   SEXP resp_sexp = dadm["R"];
@@ -2123,30 +2123,30 @@ double c_log_likelihood_logicalrules(
       Rf_length(rule_sexp) != n_trials) {
     Rcpp::stop("c_log_likelihood_redundant_target_race: dadm column lengths must match n_trials");
   }
-
+  
   // Avoid repeated factor -> character coercion (very costly inside PMwG likelihood loops).
   const bool role_is_factor = Rf_inherits(role_sexp, "factor");
   const bool resp_is_factor = Rf_inherits(resp_sexp, "factor");
   const bool rule_is_factor = Rf_inherits(rule_sexp, "factor");
-
+  
   Rcpp::IntegerVector role_code;
   Rcpp::IntegerVector resp_code;
   Rcpp::IntegerVector rule_code;
   Rcpp::CharacterVector role_chr;
   Rcpp::CharacterVector resp_chr;
   Rcpp::CharacterVector rule_chr;
-
+  
   auto level_code = [](const Rcpp::CharacterVector& levels, const std::string& target) -> int {
     for (int i = 0; i < levels.size(); ++i) {
       if (Rcpp::as<std::string>(levels[i]) == target) return i + 1; // factor codes are 1-based
     }
     return -1;
   };
-
+  
   int codeA = -1, codeB = -1, codenA = -1, codenB = -1;
   int codeYes = -1, codeNo = -1;
   int codeAND = -1, codeOR = -1;
-
+  
   if (role_is_factor) {
     role_code = Rcpp::IntegerVector(role_sexp);
     const Rcpp::CharacterVector lev = role_code.attr("levels");
@@ -2157,7 +2157,7 @@ double c_log_likelihood_logicalrules(
   } else {
     role_chr = Rcpp::CharacterVector(role_sexp);
   }
-
+  
   if (resp_is_factor) {
     resp_code = Rcpp::IntegerVector(resp_sexp);
     const Rcpp::CharacterVector lev = resp_code.attr("levels");
@@ -2166,7 +2166,7 @@ double c_log_likelihood_logicalrules(
   } else {
     resp_chr = Rcpp::CharacterVector(resp_sexp);
   }
-
+  
   if (rule_is_factor) {
     rule_code = Rcpp::IntegerVector(rule_sexp);
     const Rcpp::CharacterVector lev = rule_code.attr("levels");
@@ -2175,22 +2175,22 @@ double c_log_likelihood_logicalrules(
   } else {
     rule_chr = Rcpp::CharacterVector(rule_sexp);
   }
-
+  
   // No concept of "winner" here: request PDF/CDF for all accumulators, respecting ok_params bounds.
   Rcpp::LogicalVector winner_all(n_trials, true);
   Rcpp::NumericVector f_all = model_dfun(rts, pars, winner_all, ok_params, model_specific_context);
   Rcpp::NumericVector F_all = model_pfun(rts, pars, winner_all, ok_params, model_specific_context);
   const double* f_ptr = f_all.begin();
   const double* F_ptr = F_all.begin();
-
+  
   const int n_unique_trials = n_trials / n_acc;
   Rcpp::NumericVector ll_unique(n_unique_trials, min_ll);
- 	
-	// Here we check for a rule-following parameter (p) corresponding to probability of processing only a single channel with probability q.
-	// Index the column (if it exists)
-	bool use_rulebreak = false;
+  
+  // Here we check for a rule-following parameter (p) corresponding to probability of processing only a single channel with probability q.
+  // Index the column (if it exists)
+  bool use_rulebreak = false;
   int rulebreak_col = -1;
-	int q_col = -1;
+  int q_col = -1;
   Rcpp::CharacterVector colnames;
   if (pars.hasAttribute("dimnames")) {
     Rcpp::List dimnames = pars.attr("dimnames");
@@ -2218,8 +2218,8 @@ double c_log_likelihood_logicalrules(
     }
     use_rulebreak = !all_one;
   }
-
-	// If we're rulebreaking, find the index of column q, then also check that the rulebreak probability isn't hardcoded to zero
+  
+  // If we're rulebreaking, find the index of column q, then also check that the rulebreak probability isn't hardcoded to zero
   if (use_rulebreak) {
     for (int j = 0; j < colnames.size(); ++j) {
       if (as<std::string>(colnames[j]) == "q") {
@@ -2230,10 +2230,10 @@ double c_log_likelihood_logicalrules(
     // Require both p and q columns for rule-breaking mixture.
     if (q_col < 0) use_rulebreak = false;
   }
-
-	
-	// set up parameters
-	double p_j = 0.0;
+  
+  
+  // set up parameters
+  double p_j = 0.0;
   constexpr double kMinSurv = 1e-12;
   auto clamp01_finite = [](double x) -> double {
     if (!R_FINITE(x)) return NA_REAL;
@@ -2254,228 +2254,244 @@ double c_log_likelihood_logicalrules(
     const double s = std::fma(-F1, F2, 1.0); // 1 - F1*F2 (single-rounding)
     return (s >= kMinSurv) ? s : kMinSurv;
   };
-	
+  
   // Workspace for numerical integration (local-race CDF terms).
   GslWorkspacePtr workspace(nullptr, &gsl_integration_workspace_free);
   auto ensure_workspace = [&]() {
     if (!workspace) workspace.reset(gsl_integration_workspace_alloc(1000));
   };
-
+  
   auto* ctx = static_cast<ContextForRaceModels*>(model_specific_context);
-  const double epsrel = 1e-7;
+  const double epsrel = 1e-4;
   const int n_par = pars.ncol();
   LogicalRulesIntegrationStats stats;
   bool try_qng = true;
-
+  
   // Reuse buffers to avoid per-trial allocations.
   std::vector<double> parA(static_cast<size_t>(n_par));
   std::vector<double> parB(static_cast<size_t>(n_par));
   std::vector<double> parnA(static_cast<size_t>(n_par));
   std::vector<double> parnB(static_cast<size_t>(n_par));
-
+  
   for(int j=0; j<n_unique_trials; ++j){
-        int start = j*n_acc;
-		    p_j = 0.0;
-        double fA = NA_REAL, fB = NA_REAL, fnA = NA_REAL, fnB = NA_REAL;
-        double FA = NA_REAL, FB = NA_REAL, FnA = NA_REAL, FnB = NA_REAL;
-        int idxA = -1, idxB = -1, idxnA = -1, idxnB = -1;
-        for(int k=0;k<n_acc;++k){
-            int idx = start+k;
-            if (role_is_factor) {
-              const int rc = role_code[idx];
-              if (rc == codeA) { fA = f_ptr[idx]; FA = F_ptr[idx]; idxA = idx; }
-              else if (rc == codeB) { fB = f_ptr[idx]; FB = F_ptr[idx]; idxB = idx; }
-              else if (rc == codenA) { fnA = f_ptr[idx]; FnA = F_ptr[idx]; idxnA = idx; }
-              else if (rc == codenB) { fnB = f_ptr[idx]; FnB = F_ptr[idx]; idxnB = idx; }
-            } else {
-              const Rcpp::String r = role_chr[idx];
-              if (r == "A") { fA = f_ptr[idx]; FA = F_ptr[idx]; idxA = idx; }
-              else if (r == "B") { fB = f_ptr[idx]; FB = F_ptr[idx]; idxB = idx; }
-              else if (r == "n_A") { fnA = f_ptr[idx]; FnA = F_ptr[idx]; idxnA = idx; }
-              else if (r == "n_B") { fnB = f_ptr[idx]; FnB = F_ptr[idx]; idxnB = idx; }
-            }
-        }
-
-        // Guard: if any required pieces are missing/non-finite, return min_ll for this unique trial.
-        if (!R_FINITE(fA) || !R_FINITE(fB) || !R_FINITE(fnA) || !R_FINITE(fnB) ||
-            !R_FINITE(FA) || !R_FINITE(FB) || !R_FINITE(FnA) || !R_FINITE(FnB)) {
-          ll_unique[j] = min_ll;
-          continue;
-        }
-        if (idxA < 0 || idxB < 0 || idxnA < 0 || idxnB < 0) {
-          ll_unique[j] = min_ll;
-          continue;
-        }
-        if (fA < 0.0) fA = 0.0;
-        if (fB < 0.0) fB = 0.0;
-        if (fnA < 0.0) fnA = 0.0;
-        if (fnB < 0.0) fnB = 0.0;
-        FA = clamp_cdf01(FA);
-        FB = clamp_cdf01(FB);
-        FnA = clamp_cdf01(FnA);
-        FnB = clamp_cdf01(FnB);
-        if (!R_FINITE(FA) || !R_FINITE(FB) || !R_FINITE(FnA) || !R_FINITE(FnB)) {
-          ll_unique[j] = min_ll;
-          continue;
-        }
-
-        const double one_m_FB = safe_surv_from_cdf(FB);
-        const double one_m_FA = safe_surv_from_cdf(FA);
-        const double one_m_FnB = safe_surv_from_cdf(FnB);
-        const double one_m_FnA = safe_surv_from_cdf(FnA);
-        if (!R_FINITE(one_m_FB) || !R_FINITE(one_m_FA) || !R_FINITE(one_m_FnB) ||
-            !R_FINITE(one_m_FnA)) {
-          ll_unique[j] = min_ll;
-          continue;
-        }
-
-        const bool rule_is_or = rule_is_factor ? (rule_code[start] == codeOR) : (Rcpp::String(rule_chr[start]) == "OR");
-        const bool rule_is_and = rule_is_factor ? (rule_code[start] == codeAND) : (Rcpp::String(rule_chr[start]) == "AND");
-        if (!(rule_is_or || rule_is_and)) {
-          ll_unique[j] = min_ll;
-          continue;
-        }
-        const bool resp_is_yes = resp_is_factor ? (resp_code[start] == codeYes) : (Rcpp::String(resp_chr[start]) == "yes");
-        const bool resp_is_no = resp_is_factor ? (resp_code[start] == codeNo) : (Rcpp::String(resp_chr[start]) == "no");
-        if (!(resp_is_yes || resp_is_no)) {
-          ll_unique[j] = min_ll;
-          continue;
-        }
-
-        // Parameters for local (two-accumulator) races, copied into contiguous row-major buffers.
-        for (int c = 0; c < n_par; ++c) {
-          parA[static_cast<size_t>(c)] = pars(idxA, c);
-          parB[static_cast<size_t>(c)] = pars(idxB, c);
-          parnA[static_cast<size_t>(c)] = pars(idxnA, c);
-          parnB[static_cast<size_t>(c)] = pars(idxnB, c);
-        }
-
-        // Subdistribution CDFs and densities for local races.
-        // We compute specific integrals based on the logical rule to avoid numerical subtraction issues.
-        // For OR rules, we need GA_no and GB_no (prob of "No" winning in channel).
-        // For AND rules, we need GA_yes and GB_yes (prob of "Yes" winning in channel).
-        // The other quantities are derived additively: S(G_yes) = G_no + (1-G_dec).
-        ensure_workspace();
-        if (!workspace || !ctx || !ctx->pdf1 || !ctx->cdf1) {
-          ll_unique[j] = min_ll;
-          continue;
-        }
-        const double t = rts[start];
-
-        // Heuristic: if qng is repeatedly failing, stop trying it to avoid the "double cost"
-        // (failed qng + then qag) on every subsequent integral within this likelihood eval.
-        if (stats.qng_fail >= 50 && stats.qng_ok <= 1) {
-          try_qng = false;
-        }
-
-        // Local winner densities at time t (analytic).
-        const double gA_yes = fA * one_m_FnA;
-        const double gB_yes = fB * one_m_FnB;
-        const double gA_no = fnA * one_m_FA;
-        const double gB_no = fnB * one_m_FB;
-
-        // "Survival of decision": probability that neither accumulator in the channel has finished by t.
-        // S_dec = (1 - FA) * (1 - FnA)
-        const double S_dec_A = one_m_FA * one_m_FnA;
-        const double S_dec_B = one_m_FB * one_m_FnB;
-
-        double GA_yes = NA_REAL, GB_yes = NA_REAL;
-        double GA_no = NA_REAL, GB_no = NA_REAL;
-        double S_GA_yes = NA_REAL, S_GB_yes = NA_REAL; // S(G_yes) = 1 - G_yes
-        double S_GA_no = NA_REAL, S_GB_no = NA_REAL;   // S(G_no) = 1 - G_no
-
-        // Rule-breaking mixture (single-channel processing) components, if enabled.
-        bool apply_mix = false;
-        double p_follow = NA_REAL;
-        double q_chooseB = NA_REAL;
-        if (use_rulebreak) {
-          p_follow = clamp01_finite(pars(start, rulebreak_col));
-          q_chooseB = clamp01_finite(pars(start, q_col));
-          apply_mix = R_FINITE(p_follow) && R_FINITE(q_chooseB) && (p_follow < 1.0);
-        }
-        // These are needed only if apply_mix is true, but calculating them is cheap (just densities)
-        const double p_rulebreak_yes = (apply_mix) ? (q_chooseB * gB_yes + (1.0 - q_chooseB) * gA_yes) : NA_REAL;
-        const double p_rulebreak_no  = (apply_mix) ? (q_chooseB * gB_no  + (1.0 - q_chooseB) * gA_no)  : NA_REAL;
-
-        if (rule_is_or) {
-          // OR rule requires robust GA_no, GB_no.
-          // integrate(nA, A) gives P(nA wins), i.e., G_no.
-          GA_no = integrate_logicalrules_yes_cdf(t, parnA.data(), parA.data(), ctx, workspace.get(), epsrel, &stats, try_qng);
-          GB_no = integrate_logicalrules_yes_cdf(t, parnB.data(), parB.data(), ctx, workspace.get(), epsrel, &stats, try_qng);
-          
-          if (!R_FINITE(GA_no) || !R_FINITE(GB_no)) {
-            ll_unique[j] = min_ll;
-            continue;
-          }
-          // Clamp
-          if (GA_no < 0.0) GA_no = 0.0; if (GA_no > 1.0) GA_no = 1.0;
-          if (GB_no < 0.0) GB_no = 0.0; if (GB_no > 1.0) GB_no = 1.0;
-
-          // For OR-Yes (Min-Yes), we need S(G_yes) = P(Yes hasn't happened) = P(No happened) + P(Neither).
-          // S(G_yes) = G_no + S_dec.
-          S_GA_yes = GA_no + S_dec_A;
-          S_GB_yes = GB_no + S_dec_B;
-          // Clamp survivors
-          if (S_GA_yes > 1.0) S_GA_yes = 1.0; if (S_GA_yes < kMinSurv) S_GA_yes = kMinSurv;
-          if (S_GB_yes > 1.0) S_GB_yes = 1.0; if (S_GB_yes < kMinSurv) S_GB_yes = kMinSurv;
-          if (resp_is_yes) {
-            // Min(A_yes, B_yes)
-            p_j = gA_yes * S_GB_yes + gB_yes * S_GA_yes;
-            if (apply_mix) {
-              p_j = p_follow * p_j + (1.0 - p_follow) * p_rulebreak_yes;
-            }
-          } else if (resp_is_no) {
-            // Max(A_no, B_no)
-            p_j = gA_no * GB_no + gB_no * GA_no;
-            if (apply_mix) {
-              p_j = p_follow * p_j + (1.0 - p_follow) * p_rulebreak_no;
-            }
-          }
-
-        } else if (rule_is_and) {
-          // AND rule requires robust GA_yes, GB_yes.
-          // integrate(A, nA) gives P(A wins), i.e., G_yes.
-          GA_yes = integrate_logicalrules_yes_cdf(t, parA.data(), parnA.data(), ctx, workspace.get(), epsrel, &stats, try_qng);
-          GB_yes = integrate_logicalrules_yes_cdf(t, parB.data(), parnB.data(), ctx, workspace.get(), epsrel, &stats, try_qng);
-
-          if (!R_FINITE(GA_yes) || !R_FINITE(GB_yes)) {
-            ll_unique[j] = min_ll;
-            continue;
-          }
-          // Clamp
-          if (GA_yes < 0.0) GA_yes = 0.0; if (GA_yes > 1.0) GA_yes = 1.0;
-          if (GB_yes < 0.0) GB_yes = 0.0; if (GB_yes > 1.0) GB_yes = 1.0;
-
-          // For AND-No (Min-No), we need S(G_no) = P(No hasn't happened) = P(Yes happened) + P(Neither).
-          // S(G_no) = G_yes + S_dec.
-          S_GA_no = GA_yes + S_dec_A;
-          S_GB_no = GB_yes + S_dec_B;
-          // Clamp survivors
-          if (S_GA_no > 1.0) S_GA_no = 1.0; if (S_GA_no < kMinSurv) S_GA_no = kMinSurv;
-          if (S_GB_no > 1.0) S_GB_no = 1.0; if (S_GB_no < kMinSurv) S_GB_no = kMinSurv;
-
-          if (resp_is_no) {
-             // Min(A_no, B_no)
-            p_j = gA_no * S_GB_no + gB_no * S_GA_no;
-            if (apply_mix) {
-              p_j = p_follow * p_j + (1.0 - p_follow) * p_rulebreak_no;
-            }
-          } else if (resp_is_yes) {
-            // Max(A_yes, B_yes)
-            p_j = gA_yes * GB_yes + gB_yes * GA_yes;
-            if (apply_mix) {
-              p_j = p_follow * p_j + (1.0 - p_follow) * p_rulebreak_yes;
-            }
-          }
-        }
-
-        if (p_j <= 0.0 || !R_FINITE(p_j)) {
-          ll_unique[j] = min_ll;
-        } else {
-          ll_unique[j] = std::log(p_j);
-        }
+    int start = j*n_acc;
+    p_j = 0.0;
+    double fA = NA_REAL, fB = NA_REAL, fnA = NA_REAL, fnB = NA_REAL;
+    double FA = NA_REAL, FB = NA_REAL, FnA = NA_REAL, FnB = NA_REAL;
+    int idxA = -1, idxB = -1, idxnA = -1, idxnB = -1;
+    for(int k=0;k<n_acc;++k){
+      int idx = start+k;
+      if (role_is_factor) {
+        const int rc = role_code[idx];
+        if (rc == codeA) { fA = f_ptr[idx]; FA = F_ptr[idx]; idxA = idx; }
+        else if (rc == codeB) { fB = f_ptr[idx]; FB = F_ptr[idx]; idxB = idx; }
+        else if (rc == codenA) { fnA = f_ptr[idx]; FnA = F_ptr[idx]; idxnA = idx; }
+        else if (rc == codenB) { fnB = f_ptr[idx]; FnB = F_ptr[idx]; idxnB = idx; }
+      } else {
+        const Rcpp::String r = role_chr[idx];
+        if (r == "A") { fA = f_ptr[idx]; FA = F_ptr[idx]; idxA = idx; }
+        else if (r == "B") { fB = f_ptr[idx]; FB = F_ptr[idx]; idxB = idx; }
+        else if (r == "n_A") { fnA = f_ptr[idx]; FnA = F_ptr[idx]; idxnA = idx; }
+        else if (r == "n_B") { fnB = f_ptr[idx]; FnB = F_ptr[idx]; idxnB = idx; }
+      }
+    }
+    
+    // Guard: if any required pieces are missing/non-finite, return min_ll for this unique trial.
+    if (!R_FINITE(fA) || !R_FINITE(fB) || !R_FINITE(fnA) || !R_FINITE(fnB) ||
+        !R_FINITE(FA) || !R_FINITE(FB) || !R_FINITE(FnA) || !R_FINITE(FnB)) {
+        ll_unique[j] = min_ll;
+      continue;
+    }
+    if (idxA < 0 || idxB < 0 || idxnA < 0 || idxnB < 0) {
+      ll_unique[j] = min_ll;
+      continue;
     }
 
+    if (!ok_params[idxA] || !ok_params[idxB] || !ok_params[idxnA] || !ok_params[idxnB]) {
+      ll_unique[j] = min_ll;
+      continue;
+    }
+
+    if (fA < 0.0) fA = 0.0;
+    if (fB < 0.0) fB = 0.0;
+    if (fnA < 0.0) fnA = 0.0;
+    if (fnB < 0.0) fnB = 0.0;
+    FA = clamp_cdf01(FA);
+    FB = clamp_cdf01(FB);
+    FnA = clamp_cdf01(FnA);
+    FnB = clamp_cdf01(FnB);
+    if (!R_FINITE(FA) || !R_FINITE(FB) || !R_FINITE(FnA) || !R_FINITE(FnB)) {
+      ll_unique[j] = min_ll;
+      continue;
+    }
+    
+    const double one_m_FB = safe_surv_from_cdf(FB);
+    const double one_m_FA = safe_surv_from_cdf(FA);
+    const double one_m_FnB = safe_surv_from_cdf(FnB);
+    const double one_m_FnA = safe_surv_from_cdf(FnA);
+    if (!R_FINITE(one_m_FB) || !R_FINITE(one_m_FA) || !R_FINITE(one_m_FnB) ||
+        !R_FINITE(one_m_FnA)) {
+        ll_unique[j] = min_ll;
+      continue;
+    }
+    
+    const bool rule_is_or = rule_is_factor ? (rule_code[start] == codeOR) : (Rcpp::String(rule_chr[start]) == "OR");
+    const bool rule_is_and = rule_is_factor ? (rule_code[start] == codeAND) : (Rcpp::String(rule_chr[start]) == "AND");
+    if (!(rule_is_or || rule_is_and)) {
+      ll_unique[j] = min_ll;
+      continue;
+    }
+    const bool resp_is_yes = resp_is_factor ? (resp_code[start] == codeYes) : (Rcpp::String(resp_chr[start]) == "yes");
+    const bool resp_is_no = resp_is_factor ? (resp_code[start] == codeNo) : (Rcpp::String(resp_chr[start]) == "no");
+    if (!(resp_is_yes || resp_is_no)) {
+      ll_unique[j] = min_ll;
+      continue;
+    }
+    
+    // Parameters for local (two-accumulator) races, copied into contiguous row-major buffers.
+    for (int c = 0; c < n_par; ++c) {
+      parA[static_cast<size_t>(c)] = pars(idxA, c);
+      parB[static_cast<size_t>(c)] = pars(idxB, c);
+      parnA[static_cast<size_t>(c)] = pars(idxnA, c);
+      parnB[static_cast<size_t>(c)] = pars(idxnB, c);
+    }
+    
+    // Subdistribution CDFs and densities for local races.
+    // We compute specific integrals based on the logical rule to avoid numerical subtraction issues.
+    // For OR rules, we need GA_no and GB_no (prob of "No" winning in channel).
+    // For AND rules, we need GA_yes and GB_yes (prob of "Yes" winning in channel).
+    // The other quantities are derived additively: S(G_yes) = G_no + (1-G_dec).
+    ensure_workspace();
+    if (!workspace || !ctx || !ctx->pdf1 || !ctx->cdf1) {
+      ll_unique[j] = min_ll;
+      continue;
+    }
+    const double t = rts[start];
+    
+    // Heuristic: if qng is repeatedly failing, stop trying it to avoid the "double cost"
+    // (failed qng + then qag) on every subsequent integral within this likelihood eval.
+    if (stats.qng_fail >= 50 && stats.qng_ok <= 1) {
+      try_qng = false;
+    }
+    
+    // Local winner densities at time t (analytic).
+    const double gA_yes = fA * one_m_FnA;
+    const double gB_yes = fB * one_m_FnB;
+    const double gA_no = fnA * one_m_FA;
+    const double gB_no = fnB * one_m_FB;
+    
+    // "Survival of decision": probability that neither accumulator in the channel has finished by t.
+    // S_dec = (1 - FA) * (1 - FnA)
+    const double S_dec_A = one_m_FA * one_m_FnA;
+    const double S_dec_B = one_m_FB * one_m_FnB;
+    
+    double GA_yes = NA_REAL, GB_yes = NA_REAL;
+    double GA_no = NA_REAL, GB_no = NA_REAL;
+    double S_GA_yes = NA_REAL, S_GB_yes = NA_REAL; // S(G_yes) = 1 - G_yes
+    double S_GA_no = NA_REAL, S_GB_no = NA_REAL;   // S(G_no) = 1 - G_no
+    
+    // Rule-breaking mixture (single-channel processing) components, if enabled.
+    bool apply_mix = false;
+    double p_follow = NA_REAL;
+    double q_chooseB = NA_REAL;
+    if (use_rulebreak) {
+      p_follow = clamp01_finite(pars(start, rulebreak_col));
+      q_chooseB = clamp01_finite(pars(start, q_col));
+      apply_mix = R_FINITE(p_follow) && R_FINITE(q_chooseB) && (p_follow < 1.0);
+    }
+    // These are needed only if apply_mix is true, but calculating them is cheap (just densities)
+    const double p_rulebreak_yes = (apply_mix) ? (q_chooseB * gB_yes + (1.0 - q_chooseB) * gA_yes) : NA_REAL;
+    const double p_rulebreak_no  = (apply_mix) ? (q_chooseB * gB_no  + (1.0 - q_chooseB) * gA_no)  : NA_REAL;
+    
+    if (rule_is_or) {
+      // OR rule requires robust GA_no, GB_no.
+      // integrate(nA, A) gives P(nA wins), i.e., G_no.
+      GA_no = integrate_logicalrules_yes_cdf(t, parnA.data(), parA.data(), ctx, workspace.get(), epsrel, &stats, try_qng);
+      
+      if (parnA == parnB && parA == parB) {
+        GB_no = GA_no;
+      } else {
+        GB_no = integrate_logicalrules_yes_cdf(t, parnB.data(), parB.data(), ctx, workspace.get(), epsrel, &stats, try_qng);
+      }
+      
+      if (!R_FINITE(GA_no) || !R_FINITE(GB_no)) {
+        ll_unique[j] = min_ll;
+        continue;
+      }
+      // Clamp
+      if (GA_no < 0.0) GA_no = 0.0; if (GA_no > 1.0) GA_no = 1.0;
+      if (GB_no < 0.0) GB_no = 0.0; if (GB_no > 1.0) GB_no = 1.0;
+      
+      // For OR-Yes (Min-Yes), we need S(G_yes) = P(Yes hasn't happened) = P(No happened) + P(Neither).
+      // S(G_yes) = G_no + S_dec.
+      S_GA_yes = GA_no + S_dec_A;
+      S_GB_yes = GB_no + S_dec_B;
+      // Clamp survivors
+      if (S_GA_yes > 1.0) S_GA_yes = 1.0; if (S_GA_yes < kMinSurv) S_GA_yes = kMinSurv;
+      if (S_GB_yes > 1.0) S_GB_yes = 1.0; if (S_GB_yes < kMinSurv) S_GB_yes = kMinSurv;
+      if (resp_is_yes) {
+        // Min(A_yes, B_yes)
+        p_j = gA_yes * S_GB_yes + gB_yes * S_GA_yes;
+        if (apply_mix) {
+          p_j = p_follow * p_j + (1.0 - p_follow) * p_rulebreak_yes;
+        }
+      } else if (resp_is_no) {
+        // Max(A_no, B_no)
+        p_j = gA_no * GB_no + gB_no * GA_no;
+        if (apply_mix) {
+          p_j = p_follow * p_j + (1.0 - p_follow) * p_rulebreak_no;
+        }
+      }
+      
+    } else if (rule_is_and) {
+      // AND rule requires robust GA_yes, GB_yes.
+      // integrate(A, nA) gives P(A wins), i.e., G_yes.
+      GA_yes = integrate_logicalrules_yes_cdf(t, parA.data(), parnA.data(), ctx, workspace.get(), epsrel, &stats, try_qng);
+      
+      if (parA == parB && parnA == parnB) {
+        GB_yes = GA_yes;
+      } else {
+        GB_yes = integrate_logicalrules_yes_cdf(t, parB.data(), parnB.data(), ctx, workspace.get(), epsrel, &stats, try_qng);
+      }
+      
+      if (!R_FINITE(GA_yes) || !R_FINITE(GB_yes)) {
+        ll_unique[j] = min_ll;
+        continue;
+      }
+      // Clamp
+      if (GA_yes < 0.0) GA_yes = 0.0; if (GA_yes > 1.0) GA_yes = 1.0;
+      if (GB_yes < 0.0) GB_yes = 0.0; if (GB_yes > 1.0) GB_yes = 1.0;
+      
+      // For AND-No (Min-No), we need S(G_no) = P(No hasn't happened) = P(Yes happened) + P(Neither).
+      // S(G_no) = G_yes + S_dec.
+      S_GA_no = GA_yes + S_dec_A;
+      S_GB_no = GB_yes + S_dec_B;
+      // Clamp survivors
+      if (S_GA_no > 1.0) S_GA_no = 1.0; if (S_GA_no < kMinSurv) S_GA_no = kMinSurv;
+      if (S_GB_no > 1.0) S_GB_no = 1.0; if (S_GB_no < kMinSurv) S_GB_no = kMinSurv;
+      
+      if (resp_is_no) {
+        // Min(A_no, B_no)
+        p_j = gA_no * S_GB_no + gB_no * S_GA_no;
+        if (apply_mix) {
+          p_j = p_follow * p_j + (1.0 - p_follow) * p_rulebreak_no;
+        }
+      } else if (resp_is_yes) {
+        // Max(A_yes, B_yes)
+        p_j = gA_yes * GB_yes + gB_yes * GA_yes;
+        if (apply_mix) {
+          p_j = p_follow * p_j + (1.0 - p_follow) * p_rulebreak_yes;
+        }
+      }
+    }
+    
+    if (p_j <= 0.0 || !R_FINITE(p_j)) {
+      ll_unique[j] = min_ll;
+    } else {
+      ll_unique[j] = std::log(p_j);
+    }
+  }
+  
   double sum_ll = 0.0;
   if (expand.length() > 0) {
     Rcpp::NumericVector ll_exp = c_expand(ll_unique, expand);
@@ -2491,7 +2507,7 @@ double c_log_likelihood_logicalrules(
       sum_ll += val;
     }
   }
-
+  
   if (ctx && ctx->log_out) {
     Rprintf("LogicalRules integration summary: qng ok=%lld fail=%lld; qag ok=%lld fail=%lld; qng neval=%lld\n",
             static_cast<long long>(stats.qng_ok),
