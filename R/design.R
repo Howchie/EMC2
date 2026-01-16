@@ -573,6 +573,10 @@ design_model <- function(data,design,model=NULL,
   }
   fixed_accumulator_roles <- design$fixed_accumulator_roles # Defaults to NULL if not present
   if (!any(names(data)=="trials")) data$trials <- 1:dim(data)[1]
+  if(is.null(data$LT) && !is.null(design$LT)) data$LT <- design$LT
+  if(is.null(data$UT) && !is.null(design$UT)) data$UT <- design$UT
+  if(is.null(data$LC) && !is.null(design$LC)) data$LC <- design$LC
+  if(is.null(data$UC) && !is.null(design$UC)) data$UC <- design$UC
   if(rt_check){rt_check_function(data)}
   if (!add_acc) da <- data else
     da <- add_accumulators(data,design$matchfun,type=model()$type,Fcovariates=design$Fcovariates,fixed_accumulator_roles = fixed_accumulator_roles)

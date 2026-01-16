@@ -20,6 +20,7 @@
 #include <iomanip>
 #include <array>
 #include <limits>
+#include <cstdlib>
 using namespace Rcpp;
 
 // Numerically stable log(exp(a) - exp(b)) for a > b
@@ -205,7 +206,6 @@ double c_log_likelihood_race(NumericMatrix pars, DataFrame data,
   const int n_out = expand.length();
   NumericVector lds(n_trials);
   NumericVector rts = data["rt"];
-  CharacterVector R = data["R"];
   NumericVector lR = data["lR"];
   NumericVector lds_exp(n_out);
   const int n_lR = unique(lR).length();
@@ -271,15 +271,13 @@ double c_log_likelihood_race_missing(NumericMatrix pars, DataFrame data,
   const int n_out = expand.length();
   NumericVector lds(n_trials);
   NumericVector rts = data["rt"];
-  CharacterVector R = data["R"];
+  // Keep as integer codes (avoids factor -> character coercion).
+  IntegerVector R = data["R"];
+  NumericVector lR = data["lR"];
   NumericVector pCont = pars(_ , pars.ncol() - 1);
   NumericVector lds_exp(n_out);
-  int n_acc = unique(R).length();
-  if (any(is_na(R))) {
-    n_acc -= 1;
-  }
+  int n_acc = unique(lR).length();
   if(sum(contains(data.names(), "NACC")) == 1){
-    NumericVector lR = data["lR"];
     NumericVector NACC = data["NACC"];
     for(int x = 0; x < pars.nrow(); x++){
       if(lR[x] > NACC[x]){
@@ -300,11 +298,11 @@ double c_log_likelihood_race_missing(NumericMatrix pars, DataFrame data,
   
   double LT = first_value_or_default_df(data,"LT",0);
   double UT = first_value_or_default_df(data,"UT",R_PosInf);
-  bool dotrunc = !(LT==0 & UT==R_PosInf);
+  bool dotrunc = !(LT == 0 && UT == R_PosInf);
   double LC = first_value_or_default_df(data,"LC",0);
   double UC = first_value_or_default_df(data,"UC",R_PosInf);
   
-  if (!(LT==0 & LC==0 & !R_finite(UT) & !R_finite(UC))) {
+  if (!(LT == 0 && LC == 0 && !R_finite(UT) && !R_finite(UC))) {
     
     //  Environment global = Environment::global_env();
     //  global["LC"]  = LC;
@@ -678,7 +676,7 @@ double c_log_likelihood_race_missing(NumericMatrix pars, DataFrame data,
     LogicalVector unique_nort = data.attr("unique_nort");
     NumericVector uniquewinlike = lds[unique_nort & winner];
     LogicalVector ok = is_finite(uniquewinlike);
-    CharacterVector uniquewinresp = R[unique_nort & winner];
+    IntegerVector uniquewinresp = R[unique_nort & winner];
     LogicalVector alreadyfixed = is_na(uniquewinresp);
     ok = ok & !alreadyfixed & is_ok;
     
@@ -739,7 +737,7 @@ double c_log_likelihood_race_missing(NumericMatrix pars, DataFrame data,
     NumericVector p = lds[okwin];
     p = exp(p);
     NumericVector pc = pCont[okwin];
-    CharacterVector Rwin = R[okwin];
+    IntegerVector Rwin = R[okwin];
     LogicalVector isMiss = is_na(Rwin);
     for (int i = 0; i < p.length(); i++) {
       if (isMiss[i]) {
@@ -1066,6 +1064,16 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
       }
       is_ok = c_do_bound(pars, bound_specs);
       is_ok = lr_all(is_ok, n_lR);
+
+      // Optional debugging: print which integrator path is being used (qng vs qag fallback)
+      // for LogicalRules likelihood. To enable:
+      //   Sys.setenv(EMC2_LOGICALRULES_LOG_INTEGRATION="1")
+      // This prints only for the first particle to avoid flooding output.
+      bool log_integrator = false;
+      if (const char* v = std::getenv("EMC2_LOGICALRULES_LOG_INTEGRATION")) {
+        log_integrator = (v[0] != '\0' && v[0] != '0');
+      }
+      current_model_ctx.log_out = (log_integrator && (i == 0));
       if (is_ss) {
         lls[i] = c_log_likelihood_ss_cens_trunc(pars, data,
                                                 n_trials, winner, expand,
@@ -1962,6 +1970,14 @@ struct LogicalRulesYesCdfParams {
   ContextForRaceModels* ctx;     // provides pdf1/cdf1 + any model options (e.g., posdrift)
 };
 
+struct LogicalRulesIntegrationStats {
+  int64_t qng_ok = 0;
+  int64_t qng_fail = 0;
+  int64_t qag_ok = 0;
+  int64_t qag_fail = 0;
+  int64_t qng_neval = 0;
+};
+
 inline double clamp01(double x) {
   if (!R_FINITE(x)) return NA_REAL;
   if (x <= 0.0) return 0.0;
@@ -1988,7 +2004,9 @@ double integrate_logicalrules_yes_cdf(double t,
                                      const double* par_nontarget,
                                      ContextForRaceModels* ctx,
                                      gsl_integration_workspace* w,
-                                     double epsrel) {
+                                     double epsrel,
+                                     LogicalRulesIntegrationStats* stats,
+                                     bool try_qng) {
   if (!R_FINITE(t) || t <= 0.0) return 0.0;
   if (!ctx || !ctx->pdf1 || !ctx->cdf1) return NA_REAL;
   if (!w) return NA_REAL;
@@ -2009,7 +2027,7 @@ double integrate_logicalrules_yes_cdf(double t,
 
   // Fast path: non-adaptive Gauss-Kronrod (usually much faster than qag).
   // Falls back to adaptive integration if qng fails.
-  {
+  if (try_qng) {
     double result = NA_REAL;
     double abserr = NA_REAL;
     size_t neval = 0;
@@ -2021,9 +2039,28 @@ double integrate_logicalrules_yes_cdf(double t,
                                           &result,
                                           &abserr,
                                           &neval);
+    if (stats) stats->qng_neval += static_cast<int64_t>(neval);
     if (status == GSL_SUCCESS && R_FINITE(result)) {
+      if (stats) stats->qng_ok += 1;
       if (result < 0.0) result = 0.0;
       return result;
+    }
+    if (stats) stats->qng_fail += 1;
+
+    if (ctx && ctx->log_out) {
+      static int printed = 0;
+      int max_print = 5;
+      if (const char* v = std::getenv("EMC2_LOGICALRULES_LOG_INTEGRATION_FAILS")) {
+        char* endp = nullptr;
+        const long vv = std::strtol(v, &endp, 10);
+        if (endp != v && vv >= 0) max_print = static_cast<int>(vv);
+      }
+      if (printed < max_print) {
+        ++printed;
+        Rprintf("LogicalRules qng fail (status=%d: %s): t=%.6g epsrel=%.2g abserr=%.2g neval=%llu\n",
+                status, gsl_strerror(status), t, epsrel, abserr,
+                static_cast<unsigned long long>(neval));
+      }
     }
   }
 
@@ -2039,6 +2076,11 @@ double integrate_logicalrules_yes_cdf(double t,
                                         w,
                                         &result,
                                         &abserr);
+  if (status == GSL_SUCCESS && R_FINITE(result)) {
+    if (stats) stats->qag_ok += 1;
+  } else {
+    if (stats) stats->qag_fail += 1;
+  }
   if (status != GSL_SUCCESS || !R_FINITE(result)) return NA_REAL;
   if (result < 0.0) result = 0.0;
   return result;
@@ -2072,11 +2114,66 @@ double c_log_likelihood_logicalrules(
   }
 
   Rcpp::NumericVector rts = dadm["rt"];
-  Rcpp::CharacterVector role = dadm["lR"];
-  Rcpp::CharacterVector resp = dadm["R"];
-	Rcpp::CharacterVector LogicalRule = dadm["LogicalRule"];
-  if (rts.size() != n_trials || role.size() != n_trials || resp.size() != n_trials || LogicalRule.size() != n_trials) {
+  SEXP role_sexp = dadm["lR"];
+  SEXP resp_sexp = dadm["R"];
+  SEXP rule_sexp = dadm["LogicalRule"];
+  if (rts.size() != n_trials ||
+      Rf_length(role_sexp) != n_trials ||
+      Rf_length(resp_sexp) != n_trials ||
+      Rf_length(rule_sexp) != n_trials) {
     Rcpp::stop("c_log_likelihood_redundant_target_race: dadm column lengths must match n_trials");
+  }
+
+  // Avoid repeated factor -> character coercion (very costly inside PMwG likelihood loops).
+  const bool role_is_factor = Rf_inherits(role_sexp, "factor");
+  const bool resp_is_factor = Rf_inherits(resp_sexp, "factor");
+  const bool rule_is_factor = Rf_inherits(rule_sexp, "factor");
+
+  Rcpp::IntegerVector role_code;
+  Rcpp::IntegerVector resp_code;
+  Rcpp::IntegerVector rule_code;
+  Rcpp::CharacterVector role_chr;
+  Rcpp::CharacterVector resp_chr;
+  Rcpp::CharacterVector rule_chr;
+
+  auto level_code = [](const Rcpp::CharacterVector& levels, const std::string& target) -> int {
+    for (int i = 0; i < levels.size(); ++i) {
+      if (Rcpp::as<std::string>(levels[i]) == target) return i + 1; // factor codes are 1-based
+    }
+    return -1;
+  };
+
+  int codeA = -1, codeB = -1, codenA = -1, codenB = -1;
+  int codeYes = -1, codeNo = -1;
+  int codeAND = -1, codeOR = -1;
+
+  if (role_is_factor) {
+    role_code = Rcpp::IntegerVector(role_sexp);
+    const Rcpp::CharacterVector lev = role_code.attr("levels");
+    codeA = level_code(lev, "A");
+    codeB = level_code(lev, "B");
+    codenA = level_code(lev, "n_A");
+    codenB = level_code(lev, "n_B");
+  } else {
+    role_chr = Rcpp::CharacterVector(role_sexp);
+  }
+
+  if (resp_is_factor) {
+    resp_code = Rcpp::IntegerVector(resp_sexp);
+    const Rcpp::CharacterVector lev = resp_code.attr("levels");
+    codeYes = level_code(lev, "yes");
+    codeNo = level_code(lev, "no");
+  } else {
+    resp_chr = Rcpp::CharacterVector(resp_sexp);
+  }
+
+  if (rule_is_factor) {
+    rule_code = Rcpp::IntegerVector(rule_sexp);
+    const Rcpp::CharacterVector lev = rule_code.attr("levels");
+    codeAND = level_code(lev, "AND");
+    codeOR = level_code(lev, "OR");
+  } else {
+    rule_chr = Rcpp::CharacterVector(rule_sexp);
   }
 
   // No concept of "winner" here: request PDF/CDF for all accumulators, respecting ok_params bounds.
@@ -2165,8 +2262,10 @@ double c_log_likelihood_logicalrules(
   };
 
   auto* ctx = static_cast<ContextForRaceModels*>(model_specific_context);
-  const double epsrel = 1e-8;
+  const double epsrel = 1e-7;
   const int n_par = pars.ncol();
+  LogicalRulesIntegrationStats stats;
+  bool try_qng = true;
 
   // Reuse buffers to avoid per-trial allocations.
   std::vector<double> parA(static_cast<size_t>(n_par));
@@ -2182,11 +2281,19 @@ double c_log_likelihood_logicalrules(
         int idxA = -1, idxB = -1, idxnA = -1, idxnB = -1;
         for(int k=0;k<n_acc;++k){
             int idx = start+k;
-            const Rcpp::String r = role[idx];
-            if (r == "A") { fA = f_ptr[idx]; FA = F_ptr[idx]; idxA = idx; }
-            else if (r == "B") { fB = f_ptr[idx]; FB = F_ptr[idx]; idxB = idx; }
-            else if (r == "n_A") { fnA = f_ptr[idx]; FnA = F_ptr[idx]; idxnA = idx; }
-            else if (r == "n_B") { fnB = f_ptr[idx]; FnB = F_ptr[idx]; idxnB = idx; }
+            if (role_is_factor) {
+              const int rc = role_code[idx];
+              if (rc == codeA) { fA = f_ptr[idx]; FA = F_ptr[idx]; idxA = idx; }
+              else if (rc == codeB) { fB = f_ptr[idx]; FB = F_ptr[idx]; idxB = idx; }
+              else if (rc == codenA) { fnA = f_ptr[idx]; FnA = F_ptr[idx]; idxnA = idx; }
+              else if (rc == codenB) { fnB = f_ptr[idx]; FnB = F_ptr[idx]; idxnB = idx; }
+            } else {
+              const Rcpp::String r = role_chr[idx];
+              if (r == "A") { fA = f_ptr[idx]; FA = F_ptr[idx]; idxA = idx; }
+              else if (r == "B") { fB = f_ptr[idx]; FB = F_ptr[idx]; idxB = idx; }
+              else if (r == "n_A") { fnA = f_ptr[idx]; FnA = F_ptr[idx]; idxnA = idx; }
+              else if (r == "n_B") { fnB = f_ptr[idx]; FnB = F_ptr[idx]; idxnB = idx; }
+            }
         }
 
         // Guard: if any required pieces are missing/non-finite, return min_ll for this unique trial.
@@ -2222,9 +2329,15 @@ double c_log_likelihood_logicalrules(
           continue;
         }
 
-        const Rcpp::String r_obs = resp[start];
-        const Rcpp::String rule = LogicalRule[start];
-        if (!(rule == "OR" || rule == "AND")) {
+        const bool rule_is_or = rule_is_factor ? (rule_code[start] == codeOR) : (Rcpp::String(rule_chr[start]) == "OR");
+        const bool rule_is_and = rule_is_factor ? (rule_code[start] == codeAND) : (Rcpp::String(rule_chr[start]) == "AND");
+        if (!(rule_is_or || rule_is_and)) {
+          ll_unique[j] = min_ll;
+          continue;
+        }
+        const bool resp_is_yes = resp_is_factor ? (resp_code[start] == codeYes) : (Rcpp::String(resp_chr[start]) == "yes");
+        const bool resp_is_no = resp_is_factor ? (resp_code[start] == codeNo) : (Rcpp::String(resp_chr[start]) == "no");
+        if (!(resp_is_yes || resp_is_no)) {
           ll_unique[j] = min_ll;
           continue;
         }
@@ -2245,8 +2358,15 @@ double c_log_likelihood_logicalrules(
           continue;
         }
         const double t = rts[start];
-        double GA_yes = integrate_logicalrules_yes_cdf(t, parA.data(), parnA.data(), ctx, workspace.get(), epsrel);
-        double GB_yes = integrate_logicalrules_yes_cdf(t, parB.data(), parnB.data(), ctx, workspace.get(), epsrel);
+
+        // Heuristic: if qng is repeatedly failing, stop trying it to avoid the "double cost"
+        // (failed qng + then qag) on every subsequent integral within this likelihood eval.
+        if (stats.qng_fail >= 50 && stats.qng_ok <= 1) {
+          try_qng = false;
+        }
+
+        double GA_yes = integrate_logicalrules_yes_cdf(t, parA.data(), parnA.data(), ctx, workspace.get(), epsrel, &stats, try_qng);
+        double GB_yes = integrate_logicalrules_yes_cdf(t, parB.data(), parnB.data(), ctx, workspace.get(), epsrel, &stats, try_qng);
         if (!R_FINITE(GA_yes) || !R_FINITE(GB_yes)) {
           ll_unique[j] = min_ll;
           continue;
@@ -2289,25 +2409,25 @@ double c_log_likelihood_logicalrules(
           ? (q_chooseB * gB_no + (1.0 - q_chooseB) * gA_no)
           : NA_REAL;
 
-        if (rule == "OR") {
-          if (r_obs == "yes") {
+        if (rule_is_or) {
+          if (resp_is_yes) {
             p_j = gA_yes * safe_surv_from_cdf(GB_yes) + gB_yes * safe_surv_from_cdf(GA_yes);
             if (apply_mix && R_FINITE(p_rulebreak_yes)) {
               p_j = p_follow * p_j + (1.0 - p_follow) * p_rulebreak_yes;
             }
-          } else if (r_obs == "no") {
+          } else if (resp_is_no) {
             p_j = gA_no * GB_no + gB_no * GA_no;
             if (apply_mix && R_FINITE(p_rulebreak_no)) {
               p_j = p_follow * p_j + (1.0 - p_follow) * p_rulebreak_no;
             }
           }
-        } else if (rule == "AND") {
-          if (r_obs == "no") {
+        } else if (rule_is_and) {
+          if (resp_is_no) {
             p_j = gA_no * safe_surv_from_cdf(GB_no) + gB_no * safe_surv_from_cdf(GA_no);
             if (apply_mix && R_FINITE(p_rulebreak_no)) {
               p_j = p_follow * p_j + (1.0 - p_follow) * p_rulebreak_no;
             }
-          } else if (r_obs == "yes") {
+          } else if (resp_is_yes) {
             p_j = gA_yes * GB_yes + gB_yes * GA_yes;
             if (apply_mix && R_FINITE(p_rulebreak_yes)) {
               p_j = p_follow * p_j + (1.0 - p_follow) * p_rulebreak_yes;
@@ -2336,6 +2456,15 @@ double c_log_likelihood_logicalrules(
       if (!R_FINITE(val) || Rcpp::NumericVector::is_na(val) || val < min_ll) val = min_ll;
       sum_ll += val;
     }
+  }
+
+  if (ctx && ctx->log_out) {
+    Rprintf("LogicalRules integration summary: qng ok=%lld fail=%lld; qag ok=%lld fail=%lld; qng neval=%lld\n",
+            static_cast<long long>(stats.qng_ok),
+            static_cast<long long>(stats.qng_fail),
+            static_cast<long long>(stats.qag_ok),
+            static_cast<long long>(stats.qag_fail),
+            static_cast<long long>(stats.qng_neval));
   }
   return sum_ll;
 }

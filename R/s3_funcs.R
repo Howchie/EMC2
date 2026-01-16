@@ -993,6 +993,12 @@ get_data.emc <- function(emc) {
       design <- get_design(emc)[[i]]
       tmp <- do.call(rbind,lapply(emc[[1]]$data,function(x){
         cur <- x[[i]]
+        if("LogicalRule"%in%names(cur)){
+          # Logical rules can duplicate trial rows across lR. Keep the first level
+          # to recover the original trial-level data and do not use `expand`.
+          cur <- cur[cur$lR==levels(cur$lR)[1],]
+          return(cur)
+        }
         if(!is.null(cur$winner) && (length(unique(cur$lR)) > 1)){
           cur <- cur[cur$winner,]
         }
@@ -1013,8 +1019,10 @@ get_data.emc <- function(emc) {
         x <- x[x$winner,]
       }
       if("LogicalRule"%in%names(x)){
-        # Only expand winner for race models
+        # Logical rules can duplicate trial rows across lR. Keep the first level
+        # to recover the original trial-level data and do not use `expand`.
         x <- x[x$lR==levels(x$lR)[1],]
+        #return(x)
       }
       expand <- attr(x,"expand")
       if(is.null(expand)) expand <- 1:nrow(x)

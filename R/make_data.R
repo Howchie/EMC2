@@ -358,6 +358,13 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
 
   TC <- add_defaults(TC,no_truncate=FALSE,no_censor=FALSE,verbose=FALSE,digits=2)
 
+  if(!is.null(design)){
+    if(is.null(TC$LT) && is.null(data$LT)) TC$LT <- design$LT
+    if(is.null(TC$UT) && is.null(data$UT)) TC$UT <- design$UT
+    if(is.null(TC$LC) && is.null(data$LC)) TC$LC <- design$LC
+    if(is.null(TC$UC) && is.null(data$UC)) TC$UC <- design$UC
+  }
+
   # check_bounds <- FALSE
 
   post_functions <- NULL
