@@ -2350,8 +2350,11 @@ double c_log_likelihood_logicalrules(
           parnB[static_cast<size_t>(c)] = pars(idxnB, c);
         }
 
-        // Subdistribution CDFs for "target wins local race by time t" in each channel.
-        // G_yes(t) = ∫_0^t f_target(u) * (1 - F_nontarget(u)) du
+        // Subdistribution CDFs and densities for local races.
+        // We compute specific integrals based on the logical rule to avoid numerical subtraction issues.
+        // For OR rules, we need GA_no and GB_no (prob of "No" winning in channel).
+        // For AND rules, we need GA_yes and GB_yes (prob of "Yes" winning in channel).
+        // The other quantities are derived additively: S(G_yes) = G_no + (1-G_dec).
         ensure_workspace();
         if (!workspace || !ctx || !ctx->pdf1 || !ctx->cdf1) {
           ll_unique[j] = min_ll;
@@ -2365,33 +2368,21 @@ double c_log_likelihood_logicalrules(
           try_qng = false;
         }
 
-        double GA_yes = integrate_logicalrules_yes_cdf(t, parA.data(), parnA.data(), ctx, workspace.get(), epsrel, &stats, try_qng);
-        double GB_yes = integrate_logicalrules_yes_cdf(t, parB.data(), parnB.data(), ctx, workspace.get(), epsrel, &stats, try_qng);
-        if (!R_FINITE(GA_yes) || !R_FINITE(GB_yes)) {
-          ll_unique[j] = min_ll;
-          continue;
-        }
-
-        // Channel decision-time CDF: min(target, nontarget) <= t
-        const double GA_dec = clamp01_finite(1.0 - (one_m_FA * one_m_FnA));
-        const double GB_dec = clamp01_finite(1.0 - (one_m_FB * one_m_FnB));
-        if (!R_FINITE(GA_dec) || !R_FINITE(GB_dec)) {
-          ll_unique[j] = min_ll;
-          continue;
-        }
-        // Numerical guard: enforce 0 <= G_yes <= G_dec, then derive G_no = G_dec - G_yes.
-        if (GA_yes < 0.0) GA_yes = 0.0;
-        if (GB_yes < 0.0) GB_yes = 0.0;
-        if (GA_yes > GA_dec) GA_yes = GA_dec;
-        if (GB_yes > GB_dec) GB_yes = GB_dec;
-        const double GA_no = GA_dec - GA_yes;
-        const double GB_no = GB_dec - GB_yes;
-
-        // Local winner densities at time t.
+        // Local winner densities at time t (analytic).
         const double gA_yes = fA * one_m_FnA;
         const double gB_yes = fB * one_m_FnB;
         const double gA_no = fnA * one_m_FA;
         const double gB_no = fnB * one_m_FB;
+
+        // "Survival of decision": probability that neither accumulator in the channel has finished by t.
+        // S_dec = (1 - FA) * (1 - FnA)
+        const double S_dec_A = one_m_FA * one_m_FnA;
+        const double S_dec_B = one_m_FB * one_m_FnB;
+
+        double GA_yes = NA_REAL, GB_yes = NA_REAL;
+        double GA_no = NA_REAL, GB_no = NA_REAL;
+        double S_GA_yes = NA_REAL, S_GB_yes = NA_REAL; // S(G_yes) = 1 - G_yes
+        double S_GA_no = NA_REAL, S_GB_no = NA_REAL;   // S(G_no) = 1 - G_no
 
         // Rule-breaking mixture (single-channel processing) components, if enabled.
         bool apply_mix = false;
@@ -2402,34 +2393,77 @@ double c_log_likelihood_logicalrules(
           q_chooseB = clamp01_finite(pars(start, q_col));
           apply_mix = R_FINITE(p_follow) && R_FINITE(q_chooseB) && (p_follow < 1.0);
         }
-        const double p_rulebreak_yes = (R_FINITE(q_chooseB))
-          ? (q_chooseB * gB_yes + (1.0 - q_chooseB) * gA_yes)
-          : NA_REAL;
-        const double p_rulebreak_no = (R_FINITE(q_chooseB))
-          ? (q_chooseB * gB_no + (1.0 - q_chooseB) * gA_no)
-          : NA_REAL;
+        // These are needed only if apply_mix is true, but calculating them is cheap (just densities)
+        const double p_rulebreak_yes = (apply_mix) ? (q_chooseB * gB_yes + (1.0 - q_chooseB) * gA_yes) : NA_REAL;
+        const double p_rulebreak_no  = (apply_mix) ? (q_chooseB * gB_no  + (1.0 - q_chooseB) * gA_no)  : NA_REAL;
 
         if (rule_is_or) {
+          // OR rule requires robust GA_no, GB_no.
+          // integrate(nA, A) gives P(nA wins), i.e., G_no.
+          GA_no = integrate_logicalrules_yes_cdf(t, parnA.data(), parA.data(), ctx, workspace.get(), epsrel, &stats, try_qng);
+          GB_no = integrate_logicalrules_yes_cdf(t, parnB.data(), parB.data(), ctx, workspace.get(), epsrel, &stats, try_qng);
+          
+          if (!R_FINITE(GA_no) || !R_FINITE(GB_no)) {
+            ll_unique[j] = min_ll;
+            continue;
+          }
+          // Clamp
+          if (GA_no < 0.0) GA_no = 0.0; if (GA_no > 1.0) GA_no = 1.0;
+          if (GB_no < 0.0) GB_no = 0.0; if (GB_no > 1.0) GB_no = 1.0;
+
+          // For OR-Yes (Min-Yes), we need S(G_yes) = P(Yes hasn't happened) = P(No happened) + P(Neither).
+          // S(G_yes) = G_no + S_dec.
+          S_GA_yes = GA_no + S_dec_A;
+          S_GB_yes = GB_no + S_dec_B;
+          // Clamp survivors
+          if (S_GA_yes > 1.0) S_GA_yes = 1.0; if (S_GA_yes < kMinSurv) S_GA_yes = kMinSurv;
+          if (S_GB_yes > 1.0) S_GB_yes = 1.0; if (S_GB_yes < kMinSurv) S_GB_yes = kMinSurv;
           if (resp_is_yes) {
-            p_j = gA_yes * safe_surv_from_cdf(GB_yes) + gB_yes * safe_surv_from_cdf(GA_yes);
-            if (apply_mix && R_FINITE(p_rulebreak_yes)) {
+            // Min(A_yes, B_yes)
+            p_j = gA_yes * S_GB_yes + gB_yes * S_GA_yes;
+            if (apply_mix) {
               p_j = p_follow * p_j + (1.0 - p_follow) * p_rulebreak_yes;
             }
           } else if (resp_is_no) {
+            // Max(A_no, B_no)
             p_j = gA_no * GB_no + gB_no * GA_no;
-            if (apply_mix && R_FINITE(p_rulebreak_no)) {
+            if (apply_mix) {
               p_j = p_follow * p_j + (1.0 - p_follow) * p_rulebreak_no;
             }
           }
+
         } else if (rule_is_and) {
+          // AND rule requires robust GA_yes, GB_yes.
+          // integrate(A, nA) gives P(A wins), i.e., G_yes.
+          GA_yes = integrate_logicalrules_yes_cdf(t, parA.data(), parnA.data(), ctx, workspace.get(), epsrel, &stats, try_qng);
+          GB_yes = integrate_logicalrules_yes_cdf(t, parB.data(), parnB.data(), ctx, workspace.get(), epsrel, &stats, try_qng);
+
+          if (!R_FINITE(GA_yes) || !R_FINITE(GB_yes)) {
+            ll_unique[j] = min_ll;
+            continue;
+          }
+          // Clamp
+          if (GA_yes < 0.0) GA_yes = 0.0; if (GA_yes > 1.0) GA_yes = 1.0;
+          if (GB_yes < 0.0) GB_yes = 0.0; if (GB_yes > 1.0) GB_yes = 1.0;
+
+          // For AND-No (Min-No), we need S(G_no) = P(No hasn't happened) = P(Yes happened) + P(Neither).
+          // S(G_no) = G_yes + S_dec.
+          S_GA_no = GA_yes + S_dec_A;
+          S_GB_no = GB_yes + S_dec_B;
+          // Clamp survivors
+          if (S_GA_no > 1.0) S_GA_no = 1.0; if (S_GA_no < kMinSurv) S_GA_no = kMinSurv;
+          if (S_GB_no > 1.0) S_GB_no = 1.0; if (S_GB_no < kMinSurv) S_GB_no = kMinSurv;
+
           if (resp_is_no) {
-            p_j = gA_no * safe_surv_from_cdf(GB_no) + gB_no * safe_surv_from_cdf(GA_no);
-            if (apply_mix && R_FINITE(p_rulebreak_no)) {
+             // Min(A_no, B_no)
+            p_j = gA_no * S_GB_no + gB_no * S_GA_no;
+            if (apply_mix) {
               p_j = p_follow * p_j + (1.0 - p_follow) * p_rulebreak_no;
             }
           } else if (resp_is_yes) {
+            // Max(A_yes, B_yes)
             p_j = gA_yes * GB_yes + gB_yes * GA_yes;
-            if (apply_mix && R_FINITE(p_rulebreak_yes)) {
+            if (apply_mix) {
               p_j = p_follow * p_j + (1.0 - p_follow) * p_rulebreak_yes;
             }
           }

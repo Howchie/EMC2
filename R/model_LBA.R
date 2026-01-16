@@ -272,7 +272,9 @@ rLBAGNG <- function(data,pars,p_types=c("v","sv","b","A","t0"),posdrift = TRUE,
 LogicalRulesLBA <- function(posdrift = TRUE){
   list(
     type="RACE",
-    c_name = "LBA_LogicalRules",
+    # Note: `calc_ll()` infers LBA `posdrift` from whether `c_name` contains "IO".
+    # Keep this in sync so likelihood and simulation use the same setting.
+    c_name = if (isTRUE(posdrift)) "LBA_LogicalRules" else "LBA_LogicalRulesIO",
     posdrift=posdrift,
     # p_vector transform, sets sv as a scaling parameter
     p_types=c("v" = 1,"sv" = log(1),"B" = log(1),"A" = log(0),"t0" = log(0), "p"=qnorm(1),"q"=qnorm(0.5)),
@@ -297,4 +299,3 @@ LogicalRulesLBA <- function(posdrift = TRUE){
     }	
   )
 }
-

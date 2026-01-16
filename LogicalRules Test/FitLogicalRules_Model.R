@@ -12,11 +12,11 @@ source("LogicalRules Test/Functions.R")
 source("LogicalRules Test/Contrasts.R")
 designBushmakin <- design(data=data,
   fixed_accumulator_roles = factor(c("A","n_A","B","n_B"),levels=c("A","n_A","B","n_B")),
-  matchfun=correctfun,
+  matchfun=matchfun,
   model=function(){LogicalRulesLBA(posdrift=TRUE)},constants=c('sv_lMFALSE:LogicalRuleAND'=log(1),'sv_lMFALSE:LogicalRuleOR'=log(1),p_LogicalRuleAND=qnorm(1),q_LogicalRuleAND=qnorm(0.5)),
   formula=list(v~0+Stim,B~(0+Resp:LogicalRule),t0~0+LogicalRule,A~0+LogicalRule,sv~0+lM:LogicalRule,p~0+LogicalRule,q~0+LogicalRule),
   functions=list(Stim=RateYNMatchMismatch_Contrast,Resp=YN_Contrast,nDots=nTargets_Contrast),
-  Rlevels=c("yes","no")
+  Rlevels=factor(c("yes","no"),levels=c("yes","no")),UC=4.01
 )
 
 BushmakinModel = make_emc(data,designBushmakin,type="single",fileName = 'samples.RData')
