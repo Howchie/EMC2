@@ -126,8 +126,8 @@ pLBA <- function (rt, pars, posdrift = TRUE)
 }
 
 
-rLBA <- function(lR,pars,p_types=c("v","sv","b","A","t0"),posdrift = TRUE,
-                 ok=rep(TRUE,length(lR)))
+rLBA <- function(lR,pars,p_types=c("v","sv","b","A","t0"),
+                 ok=rep(TRUE,length(lR)),posdrift = TRUE)
   # lR is an empty latent response factor lR with one level for each accumulator.
   # pars is a matrix of corresponding parameter values named as in p_types
   # pars must be sorted so accumulators and parameter for each trial are in
@@ -226,10 +226,10 @@ rLBA <- function(lR,pars,p_types=c("v","sv","b","A","t0"),posdrift = TRUE,
 #' @export
 #'
 
-LBA <- function(){
+LBA <- function(posdrift=TRUE){
   list(
     type="RACE",
-    c_name = "LBA",
+    c_name = ifelse(posdrift,"LBA","LBAIO"),
     # p_vector transform, sets sv as a scaling parameter
     p_types=c("v" = 1,"sv" = log(1),"B" = log(1),"A" = log(0),"t0" = log(0), "pContaminant"=qnorm(0)),
     transform=list(func=c(v = "identity",sv = "exp", B = "exp", A = "exp",t0 = "exp",pContaminant="pnorm")),
@@ -242,47 +242,14 @@ LBA <- function(){
       pars
     },
     # Random function for racing accumulator
-    rfun=function(data,pars) rLBA(data$lR,pars,posdrift=TRUE,ok = attr(pars, "ok")),
+    rfun=function(data,pars) rLBA(data$lR,pars,ok = attr(pars, "ok"),posdrift=ifelse(posdrift,TRUE,FALSE)),
     # Density function (PDF) for single accumulator
-    dfun=function(rt,pars) dLBA(rt,pars,posdrift = TRUE),
+    dfun=function(rt,pars) dLBA(rt,pars,ifelse(posdrift,TRUE,FALSE)),
     # Probability function (CDF) for single accumulator
-    pfun=function(rt,pars) pLBA(rt,pars,posdrift = TRUE),
+    pfun=function(rt,pars) pLBA(rt,pars,ifelse(posdrift,TRUE,FALSE)),
     # Race likelihood combining pfun and dfun
     log_likelihood=function(pars,dadm,model,min_ll=log(1e-10)){
       log_likelihood_race_cens_trunc(pars=pars, dadm = dadm, model = model, min_ll = min_ll)
-    }
-  )
-}
-
-#' LBAIO
-#' LBA model accommodating missing values (truncation and censoring) and
-#' assuming unbounded rates (i.e., allows intrinsic omissions)
-#' @export
-
-LBAIO <- function(){
-  list(
-    type="RACE",
-    c_name = "LBAIO",
-    # p_vector transform, sets sv as a scaling parameter
-    p_types=c("v" = 1,"sv" = log(1),"B" = log(1),"A" = log(0),"t0" = log(0), "pContaminant"=qnorm(0)),
-    transform=list(func=c(v = "identity",sv = "exp", B = "exp", A = "exp",t0 = "exp",pContaminant="pnorm")),
-    bound=list(minmax=cbind(v=c(-Inf,Inf),sv = c(0, Inf), A=c(1e-4,Inf),B=c(1e-4,Inf),t0=c(0.05,Inf),pContaminant=c(0.001,0.999)),
-               exception=c(A=0,pContaminant=0)),
-    # Transform to natural scale
-    # Trial dependent parameter transform
-    Ttransform = function(pars,dadm) {
-      pars <- cbind(pars,b=pars[,"B"] + pars[,"A"])
-      pars
-    },
-    # Random function for racing accumulator
-    rfun=function(data,pars) rLBA(data$lR,pars,posdrift=FALSE,ok = attr(pars, "ok")),
-    # Density function (PDF) for single accumulator
-    dfun=function(rt,pars) dLBA(rt,pars,posdrift = FALSE),
-    # Probability function (CDF) for single accumulator
-    pfun=function(rt,pars) pLBA(rt,pars,posdrift = FALSE),
-    # Race likelihood combining pfun and dfun
-    log_likelihood=function(pars,dadm,model){
-      log_likelihood_race_cens_trunc(pars=pars, dadm=dadm, model=model, min_ll=log(1e-10))
     }
   )
 }

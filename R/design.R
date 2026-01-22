@@ -79,6 +79,13 @@ design <- function(formula = NULL,factors = NULL,Rlevels = NULL,model,data=NULL,
                    transform = NULL, bound = NULL, LT=NULL,LC=NULL,UC=NULL,UT=NULL,...){
 
   optionals <- list(...)
+  if (is.list(model) && !is.function(model)) {
+    model_list <- model
+    model <- function(){return(model_list)}
+  }
+  if (!is.function(model)) {
+    stop("model must be a function or a model list (e.g., LBA())")
+  }
   if(!is.null(optionals$trend)){
     trend <- optionals$trend
   } else {

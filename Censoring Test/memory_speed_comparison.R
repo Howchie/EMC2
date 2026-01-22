@@ -1,6 +1,5 @@
 #remotes::install_github("https://github.com/Howchie/EMC2/",ref="censoring_truncation_ah")
-unloadNamespace("EMC2")
-devtools::install_local(force=TRUE)
+
 rm(list=ls())
 library(EMC2)
 library(microbenchmark)
