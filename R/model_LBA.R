@@ -219,11 +219,11 @@ LBA <- function(posdrift=TRUE){
       pars
     },
     # Random function for racing accumulator
-    rfun=function(data,pars) rLBA(data$lR,pars,ok = attr(pars, "ok"),ifelse(posdrift,TRUE,FALSE)),
+    rfun=function(data,pars) rLBA(data$lR,pars,ok = attr(pars, "ok"),posdrift=ifelse(posdrift,TRUE,FALSE)),
     # Density function (PDF) for single accumulator
-    dfun=function(rt,pars) dLBA(rt,pars,ifelse(posdrift,TRUE,FALSE)),
+    dfun=function(rt,pars) dLBA(rt,pars,posdrift=ifelse(posdrift,TRUE,FALSE)),
     # Probability function (CDF) for single accumulator
-    pfun=function(rt,pars) pLBA(rt,pars,ifelse(posdrift,TRUE,FALSE)),
+    pfun=function(rt,pars) pLBA(rt,pars,posdrift=ifelse(posdrift,TRUE,FALSE)),
     # Race likelihood combining pfun and dfun
     log_likelihood=function(pars,dadm,model,min_ll=log(1e-10)){
       log_likelihood_race_cens_trunc(pars=pars, dadm = dadm, model = model, min_ll = min_ll)
@@ -250,7 +250,7 @@ BAwL <- function(posdrift=TRUE){
       pars
     },
     # Random function for racing accumulator
-    rfun=function(data,pars) rBAwL(data$lR,pars,ok = attr(pars, "ok"),posdrift=posdrift,),
+    rfun=function(data,pars) rBAwL(data$lR,pars,ok = attr(pars, "ok"),posdrift=ifelse(posdrift,TRUE,FALSE)),
     # Density function (PDF) for single accumulator
     dfun=function(rt,pars) dLBA(rt,pars,ifelse(posdrift,TRUE,FALSE)),
     # Probability function (CDF) for single accumulator
@@ -359,7 +359,7 @@ LogicalRulesLBA <- function(posdrift = TRUE, fast_path=TRUE, spline=FALSE){
       pars
     },
     # Random function for racing accumulator
-    rfun=function(data,pars) rLBA(data$lR,pars,ok = attr(pars, "ok"),posdrift=ifelse(posdrift,TRUE,FALSE),),
+    rfun=function(data,pars) rLBA(data$lR,pars,ok = attr(pars, "ok"),posdrift=ifelse(posdrift,TRUE,FALSE)),
     # Density function (PDF) for single accumulator
     dfun=function(rt,pars) dLBA(rt,pars,posdrift=ifelse(posdrift,TRUE,FALSE)),
     # Probability function (CDF) for single accumulator
