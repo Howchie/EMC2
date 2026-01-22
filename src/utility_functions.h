@@ -6,6 +6,10 @@
 #include <unordered_map>
 #include <vector>
 #include <functional>
+#include <algorithm>
+#include <cmath>
+#include <stdexcept>
+#include <memory>
 using namespace Rcpp;
 
 LogicalVector contains(CharacterVector sv, std::string txt) {
@@ -681,6 +685,234 @@ double log_sum_exp(double a, double b) {
         return b + std::log1p(std::exp(a - b));
     }
 }
+
+// clamp small positive
+double clamp_pos(double x, double floor_val) {
+  return (x < floor_val) ? floor_val : x;
+}
+
+// return log(val) with -Inf for nonpositive
+double safe_log(double x) {
+  return (x > 0.0) ? std::log(x) : R_NegInf;
+}
+
+namespace util {
+/**
+ * @class AkimaSpline
+ * @brief Implements the Akima (or "Akima C1") piecewise cubic Hermite interpolator.
+ *
+ * This interpolator is C1 continuous (it has a continuous first derivative).
+ * Its main advantage over a standard cubic spline is that it's "local,"
+ * meaning the polynomial for a given interval is determined only by nearby points,
+ * which prevents the wild oscillations (Runge's phenomenon) that can
+ * plague global interpolators.
+ *
+ * It's particularly good for non-monotonic data or data with
+ * abrupt changes in slope, as it tends to produce a more "natural"
+ * and less "wiggly" fit.
+ */
+class AkimaSpline {
+public:
+    /**
+     * @brief Constructs the Akima spline interpolator.
+     *
+     * The interpolator is built and coefficients are pre-calculated
+     * immediately upon construction.
+     *
+     * @param t The vector of independent variable values (e.g., time).
+     * Must be sorted in ascending order.
+     * @param nu The vector of dependent variable values.
+     * @throws std::runtime_error if t and nu sizes don't match,
+     * if t is not sorted, or if there are fewer than 5 points
+     * (Akima needs at least 5 points to compute its tangents correctly).
+     */
+    AkimaSpline(const std::vector<double>& t, const std::vector<double>& nu) {
+        if (t.size() != nu.size()) {
+            throw std::runtime_error("AkimaSpline: t and nu vectors must have the same size.");
+        }
+        // TODO implement safe fallbacks for <5 points instead of throwing error
+        if (t.size() < 5) {
+            throw std::runtime_error("AkimaSpline: requires at least 5 data points for full algorithm.");
+            // Note: Could implement fallbacks (linear, quadratic) for < 5 points,
+            // but for this solver, it's better to enforce a minimum grid.
+        }
+
+        n_ = t.size();
+        t_ = t;
+        nu_ = nu;
+
+        // Verify that t is sorted
+        for (size_t i = 0; i < n_ - 1; ++i) {
+            if (t_[i] >= t_[i + 1]) {
+                throw std::runtime_error("AkimaSpline: t vector must be strictly increasing.");
+            }
+        }
+
+        // Pre-calculate the derivatives (tangents) at each point `t_i`
+        // This is the core of the Akima algorithm.
+        calculate_tangents();
+    }
+
+    /**
+     * @brief Interpolates the value at a new point t_val.
+     * @param t_val The point at which to interpolate.
+     * @return The interpolated value nu(t_val).
+     */
+    double interpolate(double t_val) const {
+        // Find the correct interval [t_i, t_{i+1}] for t_val
+        // std::upper_bound finds the first element > t_val.
+        // So, `it` points to t_{i+1}, and `i` will be its index.
+        auto it = std::upper_bound(t_.begin(), t_.end(), t_val);
+
+        // Handle edge cases (extrapolation)
+        if (it == t_.begin()) {
+            // t_val is before the first point
+            return nu_.front(); // Clamping
+            // Or could do linear extrapolation:
+            // return nu_[0] + (t_val - t_[0]) * d_[0];
+        }
+        if (it == t_.end()) {
+            // t_val is after the last point
+            return nu_.back(); // Clamping
+            // Or could do linear extrapolation:
+            // return nu_[n_-1] + (t_val - t_[n_-1]) * d_[n_-1];
+        }
+
+        // `it` points to t_[i], so we want the interval [i-1, i]
+        size_t i = std::distance(t_.begin(), it) - 1;
+
+        double h = t_[i + 1] - t_[i];
+        if (h == 0.0) {
+            // Should be caught by the sorted check, but good to have
+            return nu_[i];
+        }
+
+        // Normalize t_val to s in [0, 1]
+        double s = (t_val - t_[i]) / h;
+
+        // Apply the standard C1 Hermite cubic polynomial
+        double s2 = s * s;
+        double s3 = s * s2;
+
+        double h00 = 2 * s3 - 3 * s2 + 1;
+        double h10 = s3 - 2 * s2 + s;
+        double h01 = -2 * s3 + 3 * s2;
+        double h11 = s3 - s2;
+
+        return h00 * nu_[i] + h10 * h * d_[i] + h01 * nu_[i + 1] + h11 * h * d_[i + 1];
+    }
+
+    /**
+     * @brief Computes the first derivative at a new point t_val.
+     * @param t_val The point at which to compute the derivative.
+     * @return The derivative d(nu)/d(t) at t_val.
+     */
+    double derivative(double t_val) const {
+        // Find the correct interval [t_i, t_{i+1}]
+        auto it = std::upper_bound(t_.begin(), t_.end(), t_val);
+
+        // Handle edge cases
+        if (it == t_.begin()) {
+            return d_.front(); // Constant derivative extrapolation
+        }
+        if (it == t_.end()) {
+            return d_.back(); // Constant derivative extrapolation
+        }
+
+        size_t i = std::distance(t_.begin(), it) - 1;
+
+        double h = t_[i + 1] - t_[i];
+        if (h == 0.0) {
+            // This case is tricky. The derivative is technically infinite
+            // or undefined. We can return the average of the tangents
+            // or just the left tangent.
+            return d_[i];
+        }
+
+        // Normalize t_val to s in [0, 1]
+        double s = (t_val - t_[i]) / h;
+
+        // We need the derivative of the Hermite polynomial *with respect to t_val*.
+        double s2 = s * s;
+
+        double dh00_ds = 6 * s2 - 6 * s;
+        double dh10_ds = 3 * s2 - 4 * s + 1;
+        double dh01_ds = -6 * s2 + 6 * s;
+        double dh11_ds = 3 * s2 - 2 * s;
+
+        double dp_ds = dh00_ds * nu_[i] + dh10_ds * h * d_[i] +
+                       dh01_ds * nu_[i + 1] + dh11_ds * h * d_[i + 1];
+
+        return dp_ds / h;
+    }
+
+
+private:
+    size_t n_;
+    std::vector<double> t_;   // x-values
+    std::vector<double> nu_;  // y-values
+    std::vector<double> d_;   // derivatives (tangents) at each point
+
+    /**
+     * @brief Pre-calculates the tangents (derivatives) at each data point.
+     *
+     * This is the core logic of the Akima spline. It uses a weighted
+     * average of slopes from adjacent intervals to find a "natural"
+     * looking tangent, avoiding the oscillations of standard splines.
+     */
+    void calculate_tangents() {
+        d_.resize(n_);
+        std::vector<double> m(n_ - 1); // Slopes of intervals [t_i, t_{i+1}]
+
+        // 1. Calculate the slopes of the n-1 intervals
+        for (size_t i = 0; i < n_ - 1; ++i) {
+            m[i] = (nu_[i + 1] - nu_[i]) / (t_[i + 1] - t_[i]);
+        }
+
+        // 2. We need "ghost" slopes at the ends to handle boundaries.
+        // We add two on each side: m[-2], m[-1], m[0], ..., m[n-2], m[n-1], m[n]
+        // (total n+3 slopes for n points)
+        // m[-1] = 2*m[0] - m[1]
+        // m[-2] = 2*m[-1] - m[0] = 3*m[0] - 2*m[1]
+        // m[n-1] = 2*m[n-2] - m[n-3]
+        // m[n] = 2*m[n-1] - m[n-2] = 3*m[n-2] - 2*m[n-3]
+        
+        std::vector<double> m_ext(n_ + 3);
+        for (size_t i = 0; i < n_ - 1; ++i) {
+            m_ext[i + 2] = m[i];
+        }
+
+        m_ext[1] = 2.0 * m_ext[2] - m_ext[3];
+        m_ext[0] = 2.0 * m_ext[1] - m_ext[2];
+        m_ext[n_ + 1] = 2.0 * m_ext[n_] - m_ext[n_ - 1];
+        m_ext[n_ + 2] = 2.0 * m_ext[n_ + 1] - m_ext[n_];
+
+
+        // 3. Calculate the weighted average for the tangents
+        for (size_t i = 0; i < n_; ++i) {
+            // We need slopes from m_ext[i], m_ext[i+1], m_ext[i+2], m_ext[i+3]
+            // which correspond to original slopes m[i-2], m[i-1], m[i], m[i+1]
+            
+            // Get weights w1 = |m_{i+1} - m_i| and w2 = |m_{i-1} - m_{i-2}|
+            // (using the extended m_ext indices)
+            double w1 = std::abs(m_ext[i + 3] - m_ext[i + 2]);
+            double w2 = std::abs(m_ext[i + 1] - m_ext[i]);
+
+            if (w1 + w2 == 0.0) {
+                // Special case: all four slopes are equal (linear segment)
+                // or w1=0 and w2=0 (e.g. at a local extremum)
+                // Use the average of the two middle slopes.
+                d_[i] = (m_ext[i + 1] + m_ext[i + 2]) / 2.0;
+            } else {
+                // Standard weighted average
+                // d_i = (w1 * m_{i-1} + w2 * m_i) / (w1 + w2)
+                d_[i] = (w1 * m_ext[i + 1] + w2 * m_ext[i + 2]) / (w1 + w2);
+            }
+        }
+    }
+};
+} // namespace util
+
 
 #endif
 

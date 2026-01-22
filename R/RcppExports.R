@@ -21,6 +21,22 @@ plba <- function(t, A, b, v, sv, posdrift = TRUE) {
     .Call(`_EMC2_plba`, t, A, b, v, sv, posdrift)
 }
 
+pleakyba_norm <- function(t, A, b, v, sv, k, posdrift = TRUE, log_out = FALSE) {
+    .Call(`_EMC2_pleakyba_norm`, t, A, b, v, sv, k, posdrift, log_out)
+}
+
+dleakyba_norm <- function(t, A, b, v, sv, k, posdrift = TRUE, log_out = FALSE) {
+    .Call(`_EMC2_dleakyba_norm`, t, A, b, v, sv, k, posdrift, log_out)
+}
+
+dleakyba <- function(t, A, b, v, sv, k, posdrift = TRUE) {
+    .Call(`_EMC2_dleakyba`, t, A, b, v, sv, k, posdrift)
+}
+
+pleakyba <- function(t, A, b, v, sv, k, posdrift = TRUE) {
+    .Call(`_EMC2_pleakyba`, t, A, b, v, sv, k, posdrift)
+}
+
 dWald <- function(t, v, B, A, t0) {
     .Call(`_EMC2_dWald`, t, v, B, A, t0)
 }

@@ -104,6 +104,7 @@ struct ContextForRaceModels {
   // Optional scalar PDF/CDF for numerical integration in composite models.
   RacePdf1Fun pdf1 = nullptr;
   RaceCdf1Fun cdf1 = nullptr;
+  bool fast_path = true;
   int n_par = 0;
 };
 
@@ -134,6 +135,37 @@ inline double plba_scalar(double t, const double* par, void* ctx_) {
   const double tt = t - t0;
   if (tt <= 0.0) return 0.0;
   return plba_norm(tt, A, b, v, sv, ctx->use_posdrift);
+}
+
+// Scalar adapters (single-RT, single-parameter-row) used by GSL integration.
+inline double dleakyba_scalar(double t, const double* par, void* ctx_) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  const double v  = par[0];
+  const double sv = par[1];
+  const double b  = par[2] + par[3];
+  const double A  = par[3];
+  const double t0 = par[4];
+  const double k  = par[5];
+
+  if (R_IsNA(v)) return 0.0;
+  const double tt = t - t0;
+  if (tt <= 0.0) return 0.0;
+  return dleakyba_norm(tt, A, b, v, sv, k, ctx->use_posdrift);
+}
+
+inline double pleakyba_scalar(double t, const double* par, void* ctx_) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  const double v  = par[0];
+  const double sv = par[1];
+  const double b  = par[2] + par[3];
+  const double A  = par[3];
+  const double t0 = par[4];
+  const double k  = par[5];
+
+  if (R_IsNA(v)) return 0.0;
+  const double tt = t - t0;
+  if (tt <= 0.0) return 0.0;
+  return pleakyba_norm(tt, A, b, v, sv, k, ctx->use_posdrift);
 }
 
 inline double drdm_scalar(double t, const double* par, void* /*ctx_*/) {
@@ -199,6 +231,26 @@ Rcpp::NumericVector lba_pfun_adapter(Rcpp::NumericVector rt,
     ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context);
     // Pass use_posdrift from context to plba_c
     return plba_c(rt, pars, winner, ctx->min_lik_for_pdf, is_ok, ctx->use_posdrift);
+}
+
+Rcpp::NumericVector leakyba_dfun_adapter(Rcpp::NumericVector rt,
+                                            Rcpp::NumericMatrix pars,
+                                            Rcpp::LogicalVector winner,
+                                            Rcpp::LogicalVector is_ok,
+                                            void* context) {
+    ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context);
+    // Pass use_posdrift from context to dlba_c
+    return dleakyba_c(rt, pars, winner, ctx->min_lik_for_pdf, is_ok, ctx->use_posdrift);
+}
+
+Rcpp::NumericVector leakyba_pfun_adapter(Rcpp::NumericVector rt,
+                                            Rcpp::NumericMatrix pars,
+                                            Rcpp::LogicalVector winner,
+                                            Rcpp::LogicalVector is_ok,
+                                            void* context) {
+    ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context);
+    // Pass use_posdrift from context to plba_c
+    return pleakyba_c(rt, pars, winner, ctx->min_lik_for_pdf, is_ok, ctx->use_posdrift);
 }
 
 // Static adapter for RDM dfun

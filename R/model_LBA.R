@@ -29,6 +29,34 @@ pLBA <- function (rt, pars, posdrift = TRUE)
   out
 }
 
+dBAwL <- function (rt, pars, posdrift = TRUE)
+  # posdrift = truncated positive normal rates
+  # robust slower, deals with extreme rate values
+{
+  dt <- rt - pars[,"t0"]
+  ok <- (dt>0) & (pars[,"b"] >= pars[,"A"])
+  ok[is.na(ok) | !is.finite(dt)] <- FALSE
+  out <- numeric(length(dt))
+  out[ok] <- dleakyba(t = dt[ok], A = pars[ok,"A"], b = pars[ok,"b"],
+                         v = pars[ok,"v"], sv = pars[ok,"sv"], k = pars[ok, "k"],
+                         posdrift = posdrift)
+  out
+}
+
+pBAwL <- function (rt, pars, posdrift = TRUE)
+  # posdrift = truncated positive normal rates
+  # robust slower, deals with extreme rate values
+{
+  dt <- rt - pars[,"t0"]
+  ok <- (dt>0) & (pars[,"b"] >= pars[,"A"])
+  ok[is.na(ok) | !is.finite(dt)] <- FALSE
+  out <- numeric(length(dt))
+  out[ok] <- pleakyba(t = dt[ok], A = pars[ok,"A"], b = pars[ok,"b"],
+                         v = pars[ok,"v"], sv = pars[ok,"sv"], k = pars[ok, "k"],
+                         posdrift = posdrift)
+  out
+}
+
 
 rLBA <- function(lR,pars,posdrift = TRUE,p_types=c("v","sv","b","A","t0"),
                  ok=rep(TRUE,length(lR)))
@@ -62,6 +90,51 @@ rLBA <- function(lR,pars,posdrift = TRUE,p_types=c("v","sv","b","A","t0"),
   out$rt[ok] <- rt[ok]
   out
 }
+
+rBAwL <- function(lR,pars,ok=rep(TRUE,length(lR)),p_types=c("v","sv","b","A","t0","k"), posdrift = TRUE, eps = 1e-10) {
+  bad <- rep(NA, length(lR)/length(levels(lR)))
+  out <- data.frame(R = bad, rt = bad)
+  nr <- length(levels(lR))
+  dt <- matrix(Inf,nrow=nr,ncol=nrow(pars)/nr)
+  t0 <- pars[,"t0"]
+  pars <- pars[ok,]
+  if (!all(p_types %in% dimnames(pars)[[2]]))
+    stop("pars must have columns ",paste(p_types,collapse = " "))
+  lower <- if (posdrift) 0 else -Inf
+  drifts <- msm::rtnorm(nrow(pars), mean = pars[,"v"], sd = pars[,"sv"], lower = lower)
+  
+  # For k<eps it's the LBA
+  small_k = pars[,"k"]<eps
+  if (any(small_k)) {
+    dt[small_k] <- (pars[small_k,"b"]-pars[small_k,"A"]*runif(sum(small_k)))/
+      drifts[small_k]
+  }
+  # leaky: ever-cross iff v > k*b
+  big_k = pars[,"k"]>=eps & drifts > pars[,"k"] * pars[,"b"]
+ 
+  if (any(big_k)) {
+    num <- drifts[big_k] - pars[big_k,"k"] * pars[big_k,"b"]
+    den <- drifts[big_k] - pars[big_k,"k"] * pars[big_k,"A"]*runif(sum(big_k))
+    ratio <- num / den  # in (0,1)
+    ratio <- pmin(pmax(ratio, .Machine$double.xmin), 1 - 1e-15)
+    dt[big_k] <- (-1 / pars[big_k,"k"]) * log(ratio)
+  }
+  dt[dt<0] <- Inf
+  bad <- apply(dt,2,function(x){all(is.infinite(x))})
+  R <- apply(dt,2,which.min)
+  pick <- cbind(R,1:dim(dt)[2]) # Matrix to pick winner
+  # Any t0 difference with lR due to response production time (no effect on race)
+  rt <- matrix(t0,nrow=nr)[pick] + dt[pick]
+  R <- factor(levels(lR)[R],levels=levels(lR))
+  R[bad] <- NA
+  rt[bad] <- Inf
+  ok <- matrix(ok,nrow=length(levels(lR)))[1,]
+  out$R[ok] <- levels(lR)[R][ok]
+  out$R <- factor(out$R,levels=levels(lR))
+  out$rt[ok] <- rt[ok]
+  out
+}
+
 #### Model functions ----
 
 #' The Linear Ballistic Accumulator model
@@ -130,10 +203,10 @@ rLBA <- function(lR,pars,posdrift = TRUE,p_types=c("v","sv","b","A","t0"),
 #' @export
 #'
 
-LBA <- function(){
+LBA <- function(posdrift=TRUE){
   list(
     type="RACE",
-    c_name = "LBA",
+    c_name = ifelse(posdrift,"LBA","LBAIO"),
     # p_vector transform, sets sv as a scaling parameter
     p_types=c("v" = 1,"sv" = log(1),"B" = log(1),"A" = log(0),"t0" = log(0), "pContaminant"=qnorm(0)),
     transform=list(func=c(v = "identity",sv = "exp", B = "exp", A = "exp",t0 = "exp",pContaminant="pnorm")),
@@ -146,11 +219,11 @@ LBA <- function(){
       pars
     },
     # Random function for racing accumulator
-    rfun=function(data,pars) rLBA(data$lR,pars,posdrift=TRUE,ok = attr(pars, "ok")),
+    rfun=function(data,pars) rLBA(data$lR,pars,ok = attr(pars, "ok"),ifelse(posdrift,TRUE,FALSE)),
     # Density function (PDF) for single accumulator
-    dfun=function(rt,pars) dLBA(rt,pars,posdrift = TRUE),
+    dfun=function(rt,pars) dLBA(rt,pars,ifelse(posdrift,TRUE,FALSE)),
     # Probability function (CDF) for single accumulator
-    pfun=function(rt,pars) pLBA(rt,pars,posdrift = TRUE),
+    pfun=function(rt,pars) pLBA(rt,pars,ifelse(posdrift,TRUE,FALSE)),
     # Race likelihood combining pfun and dfun
     log_likelihood=function(pars,dadm,model,min_ll=log(1e-10)){
       log_likelihood_race_cens_trunc(pars=pars, dadm = dadm, model = model, min_ll = min_ll)
@@ -158,20 +231,18 @@ LBA <- function(){
   )
 }
 
-#' LBAIO
-#' LBA model accommodating missing values (truncation and censoring) and
-#' assuming unbounded rates (i.e., allows intrinsic omissions)
+#' The Ballistic Accumulator Model with Leakage (modified race-variant of Brown & Heathcote, 2005)
 #' @export
-
-LBAIO <- function(){
+#'
+BAwL <- function(posdrift=TRUE){
   list(
     type="RACE",
-    c_name = "LBAIO",
+    c_name = ifelse(posdrift,"BAwL","BAwLIO"),
     # p_vector transform, sets sv as a scaling parameter
-    p_types=c("v" = 1,"sv" = log(1),"B" = log(1),"A" = log(0),"t0" = log(0), "pContaminant"=qnorm(0)),
-    transform=list(func=c(v = "identity",sv = "exp", B = "exp", A = "exp",t0 = "exp",pContaminant="pnorm")),
-    bound=list(minmax=cbind(v=c(-Inf,Inf),sv = c(0, Inf), A=c(1e-4,Inf),B=c(1e-4,Inf),t0=c(0.05,Inf),pContaminant=c(0.001,0.999)),
-               exception=c(A=0,pContaminant=0)),
+    p_types=c("v" = 1,"sv" = log(1),"B" = log(1),"A" = log(0),"t0" = log(0), "k" = log(0),"pContaminant"=qnorm(0)),
+    transform=list(func=c(v = "identity",sv = "exp", B = "exp", A = "exp",t0 = "exp",k = "exp",pContaminant="pnorm")),
+    bound=list(minmax=cbind(v=c(-Inf,Inf),sv = c(0, Inf), A=c(1e-4,Inf),B=c(1e-4,Inf),t0=c(0.05,Inf),k=c(1e-4,Inf),pContaminant=c(0.001,0.999)),
+               exception=c(A=0,pContaminant=0,k=0)),
     # Transform to natural scale
     # Trial dependent parameter transform
     Ttransform = function(pars,dadm) {
@@ -179,17 +250,18 @@ LBAIO <- function(){
       pars
     },
     # Random function for racing accumulator
-    rfun=function(data,pars) rLBA(data$lR,pars,posdrift=FALSE,ok = attr(pars, "ok")),
+    rfun=function(data,pars) rBAwL(data$lR,pars,ok = attr(pars, "ok"),posdrift=posdrift,),
     # Density function (PDF) for single accumulator
-    dfun=function(rt,pars) dLBA(rt,pars,posdrift = FALSE),
+    dfun=function(rt,pars) dLBA(rt,pars,ifelse(posdrift,TRUE,FALSE)),
     # Probability function (CDF) for single accumulator
-    pfun=function(rt,pars) pLBA(rt,pars,posdrift = FALSE),
+    pfun=function(rt,pars) pLBA(rt,pars,ifelse(posdrift,TRUE,FALSE)),
     # Race likelihood combining pfun and dfun
-    log_likelihood=function(pars,dadm,model){
-      log_likelihood_race_cens_trunc(pars=pars, dadm=dadm, model=model, min_ll=log(1e-10))
+    log_likelihood=function(pars,dadm,model,min_ll=log(1e-10)){
+      log_likelihood_race_cens_trunc(pars=pars, dadm = dadm, model = model, min_ll = min_ll)
     }
   )
 }
+
 
 #' LBAGNG
 #' LBA model with Go/No-Go racers
@@ -269,13 +341,12 @@ rLBAGNG <- function(data,pars,p_types=c("v","sv","b","A","t0"),posdrift = TRUE,
 #' @export
 #'
 
-LogicalRulesLBA <- function(posdrift = TRUE){
+LogicalRulesLBA <- function(posdrift = TRUE, fast_path=TRUE, spline=FALSE){
   list(
     type="RACE",
     # Note: `calc_ll()` infers LBA `posdrift` from whether `c_name` contains "IO".
     # Keep this in sync so likelihood and simulation use the same setting.
-    c_name = if (isTRUE(posdrift)) "LBA_LogicalRules" else "LBA_LogicalRulesIO",
-    posdrift=posdrift,
+    c_name = paste0("LBA_LogicalRules",ifelse(posdrift,"","IO"),ifelse(spline,"_spline",ifelse(fast_path,"_quad","_adapt"))),
     # p_vector transform, sets sv as a scaling parameter
     p_types=c("v" = 1,"sv" = log(1),"B" = log(1),"A" = log(0),"t0" = log(0), "p"=qnorm(1),"q"=qnorm(0.5)),
     transform=list(func=c(v = "identity",sv = "exp", B = "exp", A = "exp",t0 = "exp",p="pnorm",q="pnorm")),
@@ -288,11 +359,11 @@ LogicalRulesLBA <- function(posdrift = TRUE){
       pars
     },
     # Random function for racing accumulator
-    rfun=function(data,pars,posdrift=posdrift) rLBA(data$lR,pars,posdrift,ok = attr(pars, "ok")),
+    rfun=function(data,pars) rLBA(data$lR,pars,ok = attr(pars, "ok"),posdrift=ifelse(posdrift,TRUE,FALSE),),
     # Density function (PDF) for single accumulator
-    dfun=function(rt,pars,posdrift = posdrift) dLBA(rt,pars,posdrift),
+    dfun=function(rt,pars) dLBA(rt,pars,posdrift=ifelse(posdrift,TRUE,FALSE)),
     # Probability function (CDF) for single accumulator
-    pfun=function(rt,pars,posdrift = posdrift) pLBA(rt,pars,posdrift),
+    pfun=function(rt,pars) pLBA(rt,pars,posdrift=ifelse(posdrift,TRUE,FALSE)),
     # Race likelihood combining pfun and dfun
     log_likelihood=function(pars,dadm,model,min_ll=log(1e-10)){
       log_likelihood_redundant_target_race(pars=pars, dadm = dadm, model = model, min_ll = min_ll)
