@@ -58,8 +58,8 @@ pBAwL <- function (rt, pars, posdrift = TRUE)
 }
 
 
-rLBA <- function(lR,pars,posdrift = TRUE,p_types=c("v","sv","b","A","t0"),
-                 ok=rep(TRUE,length(lR)))
+rLBA <- function(lR,pars,p_types=c("v","sv","b","A","t0"),
+                 ok=rep(TRUE,length(lR)),posdrift = TRUE)
   # lR is an empty latent response factor lR with one level for each accumulator.
   # pars is a matrix of corresponding parameter values named as in p_types
   # pars must be sorted so accumulators and parameter for each trial are in
