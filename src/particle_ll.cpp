@@ -1174,6 +1174,24 @@ inline double log_cdf_rowmajor(double t,
   return logC;
 }
 
+inline double log_p_all_negative_drifts_rowmajor(const double* pars_rowmajor,
+                                                 const int* isok_int,
+                                                 int n_lR,
+                                                 int n_par) {
+  double log_p = 0.0;
+  for (int k = 0; k < n_lR; ++k) {
+    if (!isok_int[k]) return R_NegInf;
+    const double* par_k = pars_rowmajor + static_cast<size_t>(k) * n_par;
+    const double v = par_k[0];
+    const double sv = par_k[1];
+    if (!std::isfinite(v) || !std::isfinite(sv) || sv <= 0.0) return R_NegInf;
+    const double ll = R::pnorm(0.0, v, sv, 1, 1);
+    if (!std::isfinite(ll)) return R_NegInf;
+    log_p += ll;
+  }
+  return log_p;
+}
+
 inline double log_min_density_rowmajor(double t,
                                        const double* pars_rowmajor,
                                        const int* isok_int,
@@ -1874,9 +1892,17 @@ double c_log_likelihood_race_cens_trunc(
           : log_survivor(lower_for_trial); // For LBAIO this includes "all accumulators never finished" 
           if (R_FINITE(logP) && logP > log_prob_eps) {
             current_ll_val = logP;
-          } else { // numerical integration fallback
+          } else { // numerical integration fallback integrates across each winner case
             for (int k_win = 1; k_win <= n_lR_j; ++k_win) {
               current_ll_val = log_sum_exp(current_ll_val, integrate_interval(k_win, lower_for_trial, upper_for_trial));
+            }
+            // For the fallback we need to add in pIO
+            if (!posdrift) { // should only ever be false for models with intrinsic omissions
+              const double log_p_I = log_p_all_negative_drifts_rowmajor(pars_rowmajor_buffer.data(),
+                                                                        isok_int_buffer.data(),
+                                                                        n_lR_j,
+                                                                        n_par);
+              current_ll_val = log_sum_exp(current_ll_val, log_p_I);
             }
           }
         } else {

@@ -260,7 +260,7 @@ res_contam <- run_lba_demo(
 designLBA <- design(
   factors=list(subjects=1,S=c("left","right")),Rlevels=c("left","right"),
   matchfun=function(d) as.numeric(d$S)==as.numeric(d$lR),
-  model=LBA(posdrift=FALSE), # ZH: We need to find a way for the design to allow function arguments, it breaks with a Error in model() : could not find function "model" error when there's any arguments passed
+  model=LBA(posdrift=FALSE),
   formula=list(v~0+lM,B~1,t0~1,sv~0+lM,pContaminant~1),
   constants=c(A=log(.5)) #
 )
@@ -292,13 +292,15 @@ print(recovery(emccCT,p_vector,selection="alpha"))
 designLBA <- design(
   factors=list(subjects=1,S=c("yes"),Load=c("Low","High")),Rlevels=c("yes"),
   matchfun=function(d) as.numeric(d$S)==as.numeric(d$lR),
-  model=LBA(posdrift=FALSE), # ZH: We need to find a way for the design to allow function arguments, it breaks with a Error in model() : could not find function "model" error when there's any arguments passed
+  model=LBA(posdrift=FALSE),
   formula=list(v~0+Load,B~1,t0~1,sv~1,pContaminant~1),
   constants=c(A=log(.5)) #
 )
 # This parameter vector produces reasonable RTs, lowish accuracy and a non-zero percent of intrinsic omissions.
 p_vector <- sampled_pars(designLBA,doMap = FALSE)
 p_vector[] <- c(1.2, .825, log(1.6), log(0.15),log(1), qnorm(.05))
+
+cat("Expected Intrinsic Omissions:\nLow: ", pnorm(0,1.2,1),"\nHigh: ", pnorm(0,.825,1))
 
 TC=list(LT=0,UT=Inf,LC=0,UC=3,verbose=TRUE)
 datCT <- make_data(p_vector,designLBA,n_trials=10000,TC=TC)
