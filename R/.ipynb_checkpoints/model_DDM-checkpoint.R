@@ -236,6 +236,7 @@ DDMGNG <- function(){
       out <- rDDM(data$R,pars, attr(pars, "ok"))
       out$rt[out$rt>pars[,"TIMEOUT"]] <- Inf
       out$rt[as.numeric(out$R)==pars[,"Rnogo"]] <- Inf
+      out$R[is.infinite(out$rt)] <- NA
       out
     },
     # Density function (PDF)
