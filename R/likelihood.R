@@ -304,9 +304,7 @@ log_likelihood_race_cens_trunc <- function(pars,dadm,model,min_ll=log(1e-10)) {
   }
   ## aggregate over copies (expand) or N column
   return(sum(pmax(min_ll,ll_unique[attr(dadm,"expand")]),na.rm = TRUE))
-}
-
-
+} 
 
 log_likelihood_ddm <- function(pars,dadm,model,min_ll=log(1e-10))
   # DDM summed log likelihood, with protection against numerical issues
@@ -317,41 +315,14 @@ log_likelihood_ddm <- function(pars,dadm,model,min_ll=log(1e-10))
                                         pars[attr(pars,"ok"),,drop=FALSE])
   like[attr(pars,"ok")][is.na(like[attr(pars,"ok")])] <- 0
   sum(pmax(min_ll,log(like[attr(dadm,"expand")])))
-}
-
-
-
-log_likelihood_ddm <- function(pars,dadm,model,min_ll=log(1e-10))
-  # DDM summed log likelihood, with protection against numerical issues
-{
-  like <- numeric(dim(dadm)[1])
-  if (any(attr(pars,"ok")))
-    like[attr(pars,"ok")] <- model$dfun(dadm$rt[attr(pars,"ok")],dadm$R[attr(pars,"ok")],
-                                        pars[attr(pars,"ok"),,drop=FALSE])
-  like[attr(pars,"ok")][is.na(like[attr(pars,"ok")])] <- 0
-  sum(pmax(min_ll,log(like[attr(dadm,"expand")])))
-}
-
-
-
-log_likelihood_ddm <- function(pars,dadm,model,min_ll=log(1e-10))
-  # DDM summed log likelihood, with protection against numerical issues
-{
-  like <- numeric(dim(dadm)[1])
-  if (any(attr(pars,"ok")))
-    like[attr(pars,"ok")] <- model$dfun(dadm$rt[attr(pars,"ok")],dadm$R[attr(pars,"ok")],
-                                        pars[attr(pars,"ok"),,drop=FALSE])
-  like[attr(pars,"ok")][is.na(like[attr(pars,"ok")])] <- 0
-  sum(pmax(min_ll,log(like[attr(dadm,"expand")])))
-}
-
+} 
 
 log_likelihood_ddmgng <- function(pars,dadm,model,min_ll=log(1e-10))
   # DDM summed log likelihood for go/nogo model
 {
   like <- numeric(dim(dadm)[1])
   if (any(attr(pars,"ok"))) {
-    isna <- is.na(dadm$rt)
+    isna <- is.na(dadm$rt)|is.infinite(dadm$rt) # allow Inf like other censored models
     ok <- attr(pars,"ok") & !isna
     like[ok] <- model$dfun(dadm$rt[ok],dadm$R[ok],pars[ok,,drop=FALSE])
     ok <- attr(pars,"ok") & isna
