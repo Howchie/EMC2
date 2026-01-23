@@ -234,8 +234,8 @@ DDMGNG <- function(){
     # Random function
     rfun=function(data,pars) {
       out <- rDDM(data$R,pars, attr(pars, "ok"))
-      out$rt[out$rt>pars[,"TIMEOUT"]] <- NA
-      out$rt[as.numeric(out$R)==pars[,"Rnogo"]] <- NA
+      out$rt[out$rt>pars[,"TIMEOUT"]] <- Inf
+      out$rt[as.numeric(out$R)==pars[,"Rnogo"]] <- Inf
       out
     },
     # Density function (PDF)
