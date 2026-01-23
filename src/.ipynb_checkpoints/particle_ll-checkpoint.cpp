@@ -923,9 +923,9 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
       int ver = Rcpp::as<int>(data.attr("emc2_ll_cache_version"));
       cache_ok = (ver == kLlCacheVersion);
     }
-
+    
     const bool has_RACE_col = data.containsElementNamed("RACE");
-
+    
     bool all_finite_trials = true;
     bool have_all_finite_attr = false;
     if (cache_ok && data.hasAttribute("emc2_all_finite_trials")) {
@@ -935,133 +935,133 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
         have_all_finite_attr = true;
       }
     }
-
+    
     const bool have_race_attrs = (!has_RACE_col) ||
       (data.hasAttribute("RACE_nacc_by_row") && data.hasAttribute("RACE_mask"));
     const bool have_finite_attrs = data.hasAttribute("finite_rt_mask") &&
       data.hasAttribute("finite_rt_unique_trial_indices") &&
       data.hasAttribute("other_unique_trial_indices");
-
+    
     const bool need_prepare =
       !(cache_ok && have_all_finite_attr && have_race_attrs && (all_finite_trials || have_finite_attrs));
-
-    if (need_prepare) {
-      if (has_RACE_col && !have_race_attrs) {
-        const Rcpp::IntegerVector lR_dadm = data["lR"];
-        const Rcpp::IntegerVector race_idx = data["RACE"];
-        const Rcpp::CharacterVector race_levels = race_idx.attr("levels");
-        std::vector<int> nacc_by_level;
-        nacc_by_level.reserve(static_cast<size_t>(race_levels.size()));
-        for (int i = 0; i < race_levels.size(); ++i) {
-          nacc_by_level.push_back(std::stoi(Rcpp::as<std::string>(race_levels[i])));
+      
+      if (need_prepare) {
+        if (has_RACE_col && !have_race_attrs) {
+          const Rcpp::IntegerVector lR_dadm = data["lR"];
+          const Rcpp::IntegerVector race_idx = data["RACE"];
+          const Rcpp::CharacterVector race_levels = race_idx.attr("levels");
+          std::vector<int> nacc_by_level;
+          nacc_by_level.reserve(static_cast<size_t>(race_levels.size()));
+          for (int i = 0; i < race_levels.size(); ++i) {
+            nacc_by_level.push_back(std::stoi(Rcpp::as<std::string>(race_levels[i])));
+          }
+          Rcpp::IntegerVector race_nacc_by_row(n_trials, n_lR);
+          Rcpp::LogicalVector race_mask(n_trials, true);
+          for (int row = 0; row < n_trials; ++row) {
+            if (race_idx[row] == NA_INTEGER) continue;
+            const int n_lR_this_trial = nacc_by_level[static_cast<size_t>(race_idx[row] - 1)];
+            race_nacc_by_row[row] = n_lR_this_trial;
+            if (lR_dadm[row] > n_lR_this_trial) race_mask[row] = false;
+          }
+          data.attr("RACE_nacc_by_row") = race_nacc_by_row;
+          data.attr("RACE_mask") = race_mask;
         }
-        Rcpp::IntegerVector race_nacc_by_row(n_trials, n_lR);
-        Rcpp::LogicalVector race_mask(n_trials, true);
-        for (int row = 0; row < n_trials; ++row) {
-          if (race_idx[row] == NA_INTEGER) continue;
-          const int n_lR_this_trial = nacc_by_level[static_cast<size_t>(race_idx[row] - 1)];
-          race_nacc_by_row[row] = n_lR_this_trial;
-          if (lR_dadm[row] > n_lR_this_trial) race_mask[row] = false;
+        
+        if (!have_all_finite_attr) {
+          // Data-only: determine whether every unique trial has a finite RT, known response, and is within [LT, UT].
+          // Computing this once here avoids repeating an O(n_unique_trials) scan per particle.
+          all_finite_trials = true;
+          if (n_trials > 0) {
+            if (n_lR <= 0 || (n_trials % n_lR) != 0) {
+              all_finite_trials = false;
+            } else {
+              const int n_unique_trials = n_trials / n_lR;
+              const Rcpp::NumericVector rts_dadm = data["rt"];
+              const Rcpp::IntegerVector R_idxs_dadm = data["R"];
+              for (int j = 0; j < n_unique_trials; ++j) {
+                const int start_row_idx = j * n_lR;
+                const double rt_j = rts_dadm[start_row_idx];
+                const int R_j_idx = R_idxs_dadm[start_row_idx];
+                if (!(R_FINITE(rt_j) && rt_j > 0.0 && R_j_idx != NA_INTEGER)) {
+                  all_finite_trials = false;
+                  break;
+                }
+              }
+            }
+          }
+          data.attr("emc2_all_finite_trials") = all_finite_trials;
         }
-        data.attr("RACE_nacc_by_row") = race_nacc_by_row;
-        data.attr("RACE_mask") = race_mask;
-      }
-
-      if (!have_all_finite_attr) {
-        // Data-only: determine whether every unique trial has a finite RT, known response, and is within [LT, UT].
-        // Computing this once here avoids repeating an O(n_unique_trials) scan per particle.
-        all_finite_trials = true;
-        if (n_trials > 0) {
-          if (n_lR <= 0 || (n_trials % n_lR) != 0) {
-            all_finite_trials = false;
-          } else {
+        
+        if (!all_finite_trials && n_trials > 0 && n_lR > 0 && (n_trials % n_lR) == 0) {
+          if (!have_finite_attrs) {
             const int n_unique_trials = n_trials / n_lR;
+            Rcpp::LogicalVector finite_rt_mask(n_trials, false);
+            std::vector<int> finite_rt_unique_trial_indices;
+            std::vector<int> other_unique_trial_indices;
+            finite_rt_unique_trial_indices.reserve(n_unique_trials);
+            other_unique_trial_indices.reserve(n_unique_trials);
             const Rcpp::NumericVector rts_dadm = data["rt"];
             const Rcpp::IntegerVector R_idxs_dadm = data["R"];
+            Rcpp::IntegerVector race_nacc_by_row;
+            if (has_RACE_col && data.hasAttribute("RACE_nacc_by_row")) {
+              race_nacc_by_row = data.attr("RACE_nacc_by_row");
+            }
             for (int j = 0; j < n_unique_trials; ++j) {
               const int start_row_idx = j * n_lR;
               const double rt_j = rts_dadm[start_row_idx];
               const int R_j_idx = R_idxs_dadm[start_row_idx];
-              if (!(R_FINITE(rt_j) && rt_j > 0.0 && R_j_idx != NA_INTEGER)) {
-                all_finite_trials = false;
-                break;
-              }
-            }
-          }
-        }
-        data.attr("emc2_all_finite_trials") = all_finite_trials;
-      }
-
-      if (!all_finite_trials && n_trials > 0 && n_lR > 0 && (n_trials % n_lR) == 0) {
-        if (!have_finite_attrs) {
-          const int n_unique_trials = n_trials / n_lR;
-          Rcpp::LogicalVector finite_rt_mask(n_trials, false);
-          std::vector<int> finite_rt_unique_trial_indices;
-          std::vector<int> other_unique_trial_indices;
-          finite_rt_unique_trial_indices.reserve(n_unique_trials);
-          other_unique_trial_indices.reserve(n_unique_trials);
-          const Rcpp::NumericVector rts_dadm = data["rt"];
-          const Rcpp::IntegerVector R_idxs_dadm = data["R"];
-          Rcpp::IntegerVector race_nacc_by_row;
-          if (has_RACE_col && data.hasAttribute("RACE_nacc_by_row")) {
-            race_nacc_by_row = data.attr("RACE_nacc_by_row");
-          }
-          for (int j = 0; j < n_unique_trials; ++j) {
-            const int start_row_idx = j * n_lR;
-            const double rt_j = rts_dadm[start_row_idx];
-            const int R_j_idx = R_idxs_dadm[start_row_idx];
-            const int n_lR_j = (has_RACE_col && race_nacc_by_row.size() == n_trials)
-              ? race_nacc_by_row[start_row_idx]
+              const int n_lR_j = (has_RACE_col && race_nacc_by_row.size() == n_trials)
+                ? race_nacc_by_row[start_row_idx]
               : n_lR;
-            if (R_FINITE(rt_j) && rt_j > 0.0 && R_j_idx != NA_INTEGER) {
-              finite_rt_unique_trial_indices.push_back(j);
-              for (int k_acc = 0; k_acc < n_lR_j; ++k_acc) {
-                finite_rt_mask[start_row_idx + k_acc] = true;
+              if (R_FINITE(rt_j) && rt_j > 0.0 && R_j_idx != NA_INTEGER) {
+                finite_rt_unique_trial_indices.push_back(j);
+                for (int k_acc = 0; k_acc < n_lR_j; ++k_acc) {
+                  finite_rt_mask[start_row_idx + k_acc] = true;
+                }
+              } else {
+                other_unique_trial_indices.push_back(j);
               }
-            } else {
-              other_unique_trial_indices.push_back(j);
             }
+            data.attr("finite_rt_mask") = finite_rt_mask;
+            data.attr("finite_rt_unique_trial_indices") = Rcpp::IntegerVector(finite_rt_unique_trial_indices.begin(),
+                      finite_rt_unique_trial_indices.end());
+            data.attr("other_unique_trial_indices") = Rcpp::IntegerVector(other_unique_trial_indices.begin(),
+                      other_unique_trial_indices.end());
           }
-          data.attr("finite_rt_mask") = finite_rt_mask;
-          data.attr("finite_rt_unique_trial_indices") = Rcpp::IntegerVector(finite_rt_unique_trial_indices.begin(),
-                                                                            finite_rt_unique_trial_indices.end());
-          data.attr("other_unique_trial_indices") = Rcpp::IntegerVector(other_unique_trial_indices.begin(),
-                                                                        other_unique_trial_indices.end());
+        }
+        
+        data.attr("emc2_ll_cache_version") = kLlCacheVersion;
+      }
+      
+      for (int i = 0; i < n_particles; ++i) {
+        p_vector = p_matrix(i, Rcpp::_);
+        if (i == 0) {
+          p_specs = make_pretransform_specs(p_vector, pretransforms);
+          // Precompute transform specs for all p_types using a one-time dummy
+          NumericMatrix dummy(1, p_types.size());
+          colnames(dummy) = p_types;
+          full_t_specs = make_transform_specs(dummy, transforms);
+        }
+        pars = get_pars_matrix(p_vector, constants, p_specs, p_types, designs, n_trials, data, trend, full_t_specs);
+        if (i == 0) {                            // first particle only, just to get colnames
+          bound_specs = make_bound_specs(minmax,mm_names,pars,bounds);
+        }
+        is_ok = c_do_bound(pars, bound_specs);
+        is_ok = lr_all(is_ok, n_lR);
+        if (is_ss) {
+          lls[i] = c_log_likelihood_ss_cens_trunc(pars, data,
+                                                  n_trials, winner, expand,
+                                                  min_ll, is_ok, n_lR, type_std);
+        } else {
+          lls[i] = c_log_likelihood_race_cens_trunc(pars, data,
+                                                    model_dfun_ptr, model_pfun_ptr,
+                                                    pdf1_ptr, cdf1_ptr,
+                                                    n_trials,
+                                                    winner, expand, min_ll, is_ok, n_lR,
+                                                    &current_model_ctx,
+                                                    all_finite_trials);
         }
       }
-
-      data.attr("emc2_ll_cache_version") = kLlCacheVersion;
-    }
-    
-    for (int i = 0; i < n_particles; ++i) {
-      p_vector = p_matrix(i, Rcpp::_);
-      if (i == 0) {
-        p_specs = make_pretransform_specs(p_vector, pretransforms);
-        // Precompute transform specs for all p_types using a one-time dummy
-        NumericMatrix dummy(1, p_types.size());
-        colnames(dummy) = p_types;
-        full_t_specs = make_transform_specs(dummy, transforms);
-      }
-      pars = get_pars_matrix(p_vector, constants, p_specs, p_types, designs, n_trials, data, trend, full_t_specs);
-      if (i == 0) {                            // first particle only, just to get colnames
-        bound_specs = make_bound_specs(minmax,mm_names,pars,bounds);
-      }
-      is_ok = c_do_bound(pars, bound_specs);
-      is_ok = lr_all(is_ok, n_lR);
-      if (is_ss) {
-        lls[i] = c_log_likelihood_ss_cens_trunc(pars, data,
-                                                n_trials, winner, expand,
-                                                min_ll, is_ok, n_lR, type_std);
-      } else {
-        lls[i] = c_log_likelihood_race_cens_trunc(pars, data,
-                                                  model_dfun_ptr, model_pfun_ptr,
-                                                  pdf1_ptr, cdf1_ptr,
-                                                  n_trials,
-                                                  winner, expand, min_ll, is_ok, n_lR,
-                                                  &current_model_ctx,
-                                                  all_finite_trials);
-      }
-    }
   }
   return(lls);
 }
@@ -1100,28 +1100,34 @@ bool row_is_finite(const Rcpp::NumericMatrix& mat, int row) {
   return true;
 }
 
-inline double clamp_cdf01_race(double cdf) {
-  // Keep CDF values in a stable range for downstream log/1-CDF operations.
-  // Centralizing this avoids repeating the same "near 0/near 1/NaN/Inf" guards
-  // throughout the hot loops.
-  if (!std::isfinite(cdf)) return NA_REAL;
-  if (cdf <= 0.0) return 0.0;
-  if (cdf >= 1.0) return 1.0;
-  if (cdf > 1.0 - 1e-15) return 1.0 - 1e-15;
-  return cdf;
+// Log probability of intrinsic omission
+inline double log_p_all_negative_drifts_rowmajor(const double* pars_rowmajor,
+                                                 const int* isok_int,
+                                                 int n_lR,
+                                                 int n_par) {
+  double log_p = 0.0;
+  for (int k = 0; k < n_lR; ++k) {
+    if (!isok_int[k]) return R_NegInf;
+    const double* par_k = pars_rowmajor + static_cast<size_t>(k) * n_par;
+    const double v = par_k[0];
+    const double sv = par_k[1];
+    if (!std::isfinite(v) || !std::isfinite(sv) || sv <= 0.0) return R_NegInf;
+    const double ll = R::pnorm(0.0, v, sv, 1, 1);
+    if (!std::isfinite(ll)) return R_NegInf;
+    log_p += ll;
+  }
+  return log_p;
 }
 
-inline double safe_log1m_race(double p) {
-  // Stable log(1 - p) with the same edge-case policy everywhere:
-  // - p <= 0 => log(1) = 0
-  // - p >= 1 => log(0) = -Inf
-  // - p ~ 1  => clamp away from 1 to avoid hitting log(0) in finite arithmetic
-  if (!std::isfinite(p)) return R_NegInf;
-  if (p <= 0.0) return 0.0;
-  if (p >= 1.0) return R_NegInf;
-  if (p > 1.0 - 1e-15) p = 1.0 - 1e-15;
-  return std::log1p(-p);
-}
+// Log survivor and cdf of the race at time t:
+//   log S(t) = sum_k log(1 - F_k(t))
+//
+// "rowmajor" here means per-trial parameters for the n_lR accumulators are
+// packed as a contiguous buffer:
+//   pars_rowmajor[k * n_par + c]
+//
+// This avoids repeatedly indexing into an Rcpp::NumericMatrix inside tight
+// loops and matches the representation needed for the scalar/GSL integrands.
 
 inline double log_survivor_rowmajor(double t,
                                     const double* pars_rowmajor,
@@ -1130,16 +1136,13 @@ inline double log_survivor_rowmajor(double t,
                                     int n_par,
                                     RaceCdf1Fun cdf1,
                                     void* ctx) {
-  // Log survivor of the race at time t:
-  //   log S(t) = sum_k log(1 - F_k(t))
-  //
-  // "rowmajor" here means per-trial parameters for the n_lR accumulators are
-  // packed as a contiguous buffer:
-  //   pars_rowmajor[k * n_par + c]
-  //
-  // This avoids repeatedly indexing into an Rcpp::NumericMatrix inside tight
-  // loops and matches the representation needed for the scalar/GSL integrands.
-  if (t == R_PosInf) return R_NegInf;
+  if (t == R_PosInf) {
+    auto* race_ctx = static_cast<ContextForRaceModels*>(ctx);
+    if (race_ctx && !race_ctx->use_posdrift) {
+      return log_p_all_negative_drifts_rowmajor(pars_rowmajor, isok_int, n_lR, n_par);
+    }
+    return R_NegInf;
+  }
   double logS = 0.0;
   for (int k = 0; k < n_lR; ++k) {
     if (!isok_int[k]) return R_NegInf;
@@ -1151,6 +1154,45 @@ inline double log_survivor_rowmajor(double t,
     logS += ll;
   }
   return logS;
+}
+
+inline double log_cdf_rowmajor(double t,
+                               const double* pars_rowmajor,
+                               const int* isok_int,
+                               int n_lR,
+                               int n_par,
+                               RaceCdf1Fun cdf1,
+                               void* ctx) {
+  if (t == R_PosInf) {
+      auto* race_ctx = static_cast<ContextForRaceModels*>(ctx);
+      if (race_ctx && !race_ctx->use_posdrift) {
+          double logC = 0.0;
+          for (int k = 0; k < n_lR; ++k) {
+            if (!isok_int[k]) return R_NegInf;
+            const double* par_k = pars_rowmajor + static_cast<size_t>(k) * n_par;
+            const double v = par_k[0];
+            const double sv = par_k[1];
+            if (!std::isfinite(v) || !std::isfinite(sv) || sv <= 0.0) return R_NegInf;
+            const double lp_neg = R::pnorm(0.0, v, sv, 1, 1);
+            const double ll = log1mexp(lp_neg);
+            if (!std::isfinite(ll)) return R_NegInf;
+            logC += ll;
+          }
+          return logC;
+     }
+    return 0.0;
+  }
+  double logC = 0.0;
+  for (int k = 0; k < n_lR; ++k) {
+    if (!isok_int[k]) return R_NegInf;
+    const double* par_k = pars_rowmajor + static_cast<size_t>(k) * n_par;
+    double cdf = cdf1(t, par_k, ctx);
+    cdf = clamp_cdf01_race(cdf);
+    const double ll = std::log(cdf);
+    if (!std::isfinite(ll)) return R_NegInf;
+    logC += ll;
+  }
+  return logC;
 }
 
 inline double log_min_density_rowmajor(double t,
@@ -1627,6 +1669,7 @@ double c_log_likelihood_race_cens_trunc(
   dense_ctx.min_lik_for_pdf = 0.0;
   void* dense_ctx_ptr = static_cast<void*>(&dense_ctx);
   bool gng=ctx->gng;
+  bool posdrift=ctx->use_posdrift;
   // Batch process finite rt trials
   if (!use_full_finite_batch && !has_precomputed_finite) {
     finite_rt_unique_trial_indices.reserve(n_unique_trials);
@@ -1684,7 +1727,7 @@ double c_log_likelihood_race_cens_trunc(
       }
     }
     
-  if (n_lR > 1 && any_loss) {
+    if (n_lR > 1 && any_loss) {
       Rcpp::NumericVector loss_cdf = model_pfun(rts_dadm, pars, idx_loss, isok, dense_ctx_ptr);
       int out_i = 0;
       for (int i = 0; i < n_trials; ++i) {
@@ -1703,8 +1746,8 @@ double c_log_likelihood_race_cens_trunc(
       // When all unique trials are finite, iterate in order 0..n_unique_trials-1.
       // Otherwise, iterate over the precomputed subset of finite-RT unique trials.
       int unique_trial_idx = use_full_finite_batch
-        ? i
-        : finite_rt_unique_trial_indices[static_cast<size_t>(i)];
+      ? i
+      : finite_rt_unique_trial_indices[static_cast<size_t>(i)];
       int start_row_idx = unique_trial_idx * n_lR;
       n_lR_j = has_RACE_col ? RACE[start_row_idx] : n_lR;
       log_Z_this = 0.0;
@@ -1748,7 +1791,6 @@ double c_log_likelihood_race_cens_trunc(
   }
   // --- Process other trials (Infinite RTs, NA RTs, or finite RTs outside truncation) ---
   // These trials require individual processing, often involving numerical integration for censored intervals.
-  // TODO update Case 3 to handle go/no-go withheld response
   double current_ll_val;
   const double log_prob_eps = std::log(std::numeric_limits<double>::epsilon());
   for (size_t i = 0; i < other_unique_trial_indices.size(); ++i) {
@@ -1799,12 +1841,24 @@ double c_log_likelihood_race_cens_trunc(
                                    model_context_for_funcs);
     };
     
+    auto log_cdf = [&](double t) -> double {
+      return log_cdf_rowmajor(t,
+                              pars_rowmajor_buffer.data(),
+                              isok_int_buffer.data(),
+                              n_lR_j,
+                              n_par,
+                              cdf1,
+                              model_context_for_funcs);
+    };
+    
     current_ll_val = R_NegInf;
-    if (rt_j == R_NegInf) {
+    if (rt_j == R_NegInf) { // NB no posdrift handling here yet, need to think it through
       lower_for_trial = LTj;
       upper_for_trial = LCj;
       if (R_j_idx == NA_INTEGER) {
-        const double logP = log_diff_exp(log_survivor(lower_for_trial), log_survivor(upper_for_trial));
+        const double logP = posdrift
+          ? log_diff_exp(log_survivor(lower_for_trial), log_survivor(upper_for_trial))
+          : log_cdf(upper_for_trial); // For LBAIO this EXCLUDES all accumulators never finished, because we assume a fast but finite finish here
         if (R_FINITE(logP) && logP > log_prob_eps) {
           current_ll_val = logP;
         } else {
@@ -1826,8 +1880,8 @@ double c_log_likelihood_race_cens_trunc(
           if (winner[start_row_idx + k]) { n_true++; k_nogo = k + 1; }
         }
         if (n_true != 1) Rcpp::stop("No winner identified in go/no-go withheld response");
-        const double logA = integrate_interval(k_nogo, lower_for_trial, upper_for_trial);
-        const double logB = log_survivor(D);
+        const double logA = integrate_interval(k_nogo, lower_for_trial, upper_for_trial); // probability of no-go winning
+        const double logB = log_survivor(D); // probability of no accumulator terminating
         current_ll_val = log_sum_exp(logA, logB);
       } else {
         lower_for_trial = UCj;
@@ -1836,12 +1890,22 @@ double c_log_likelihood_race_cens_trunc(
           const double cdf = cdf1(lower_for_trial, pars_rowmajor_buffer.data(), model_context_for_funcs);
           current_ll_val = safe_log1m_race(clamp_cdf01_race(cdf));
         } else if (R_j_idx == NA_INTEGER) {
-          const double logP = log_diff_exp(log_survivor(lower_for_trial), log_survivor(upper_for_trial));
+          const double logP = posdrift
+          ? log_diff_exp(log_survivor(lower_for_trial), log_survivor(upper_for_trial))
+          : log_survivor(lower_for_trial); // For LBAIO this includes "all accumulators never finished" 
           if (R_FINITE(logP) && logP > log_prob_eps) {
             current_ll_val = logP;
-          } else {
+          } else { // numerical integration fallback integrates across each winner case
             for (int k_win = 1; k_win <= n_lR_j; ++k_win) {
               current_ll_val = log_sum_exp(current_ll_val, integrate_interval(k_win, lower_for_trial, upper_for_trial));
+            }
+            // For the fallback we need to add in pIO
+            if (!posdrift) { // should only ever be false for models with intrinsic omissions
+              const double log_p_I = log_p_all_negative_drifts_rowmajor(pars_rowmajor_buffer.data(),
+                                                                        isok_int_buffer.data(),
+                                                                        n_lR_j,
+                                                                        n_par);
+              current_ll_val = log_sum_exp(current_ll_val, log_p_I);
             }
           }
         } else {
@@ -1916,12 +1980,11 @@ double c_log_likelihood_race_cens_trunc(
         // AH changed to match contamination signaled by +Inf
         if (rt_j == R_PosInf) {
           double term1 = std::log(pC);
-          double term2 = log1m_pC + ll_unique[j];
-          ll_unique[j] = log_sum_exp(term1, term2); // pC * pIO * pCens
+          double term2 = log1m_pC + ll_unique[j]; //pIO + pD
+          ll_unique[j] = log_sum_exp(term1, term2); // pC * pIO * pD
         } else {
           ll_unique[j] = log1m_pC + ll_unique[j];    // pRT * 1-pC
         }
-        
         
       }
     }

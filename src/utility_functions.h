@@ -682,5 +682,40 @@ double log_sum_exp(double a, double b) {
     }
 }
 
+double log1mexp(double logx) {
+  // log(1 - exp(logx)), with logx <= 0
+  if (logx >= 0.0) return R_NegInf;
+  // switch point at log(0.5) for stability
+  if (logx < -0.6931471805599453) {          // log(0.5)
+    return std::log1p(-std::exp(logx));
+  } else {
+    return std::log(-std::expm1(logx));      // expm1(logx) = exp(logx)-1
+  }
+}
+
+double clamp_cdf01_race(double cdf) {
+  // Keep CDF values in a stable range for downstream log/1-CDF operations.
+  // Centralizing this avoids repeating the same "near 0/near 1/NaN/Inf" guards
+  // throughout the hot loops.
+  if (!std::isfinite(cdf)) return NA_REAL;
+  if (cdf <= 0.0) return 0.0;
+  if (cdf >= 1.0) return 1.0;
+  if (cdf > 1.0 - 1e-15) return 1.0 - 1e-15;
+  return cdf;
+}
+
+double safe_log1m_race(double p) {
+  // Stable log(1 - p) with the same edge-case policy everywhere:
+  // - p <= 0 => log(1) = 0
+  // - p >= 1 => log(0) = -Inf
+  // - p ~ 1  => clamp away from 1 to avoid hitting log(0) in finite arithmetic
+  if (!std::isfinite(p)) return R_NegInf; //
+  if (p <= 0.0) return 0.0;
+  if (p >= 1.0) return R_NegInf;
+  if (p > 1.0 - 1e-15) p = 1.0 - 1e-15;
+  return std::log1p(-p);
+}
+
+
 #endif
 

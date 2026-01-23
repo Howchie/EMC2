@@ -1100,28 +1100,34 @@ bool row_is_finite(const Rcpp::NumericMatrix& mat, int row) {
   return true;
 }
 
-inline double clamp_cdf01_race(double cdf) {
-  // Keep CDF values in a stable range for downstream log/1-CDF operations.
-  // Centralizing this avoids repeating the same "near 0/near 1/NaN/Inf" guards
-  // throughout the hot loops.
-  if (!std::isfinite(cdf)) return NA_REAL;
-  if (cdf <= 0.0) return 0.0;
-  if (cdf >= 1.0) return 1.0;
-  if (cdf > 1.0 - 1e-15) return 1.0 - 1e-15;
-  return cdf;
+// Log probability of intrinsic omission
+inline double log_p_all_negative_drifts_rowmajor(const double* pars_rowmajor,
+                                                 const int* isok_int,
+                                                 int n_lR,
+                                                 int n_par) {
+  double log_p = 0.0;
+  for (int k = 0; k < n_lR; ++k) {
+    if (!isok_int[k]) return R_NegInf;
+    const double* par_k = pars_rowmajor + static_cast<size_t>(k) * n_par;
+    const double v = par_k[0];
+    const double sv = par_k[1];
+    if (!std::isfinite(v) || !std::isfinite(sv) || sv <= 0.0) return R_NegInf;
+    const double ll = R::pnorm(0.0, v, sv, 1, 1);
+    if (!std::isfinite(ll)) return R_NegInf;
+    log_p += ll;
+  }
+  return log_p;
 }
 
-inline double safe_log1m_race(double p) {
-  // Stable log(1 - p) with the same edge-case policy everywhere:
-  // - p <= 0 => log(1) = 0
-  // - p >= 1 => log(0) = -Inf
-  // - p ~ 1  => clamp away from 1 to avoid hitting log(0) in finite arithmetic
-  if (!std::isfinite(p)) return R_NegInf;
-  if (p <= 0.0) return 0.0;
-  if (p >= 1.0) return R_NegInf;
-  if (p > 1.0 - 1e-15) p = 1.0 - 1e-15;
-  return std::log1p(-p);
-}
+// Log survivor and cdf of the race at time t:
+//   log S(t) = sum_k log(1 - F_k(t))
+//
+// "rowmajor" here means per-trial parameters for the n_lR accumulators are
+// packed as a contiguous buffer:
+//   pars_rowmajor[k * n_par + c]
+//
+// This avoids repeatedly indexing into an Rcpp::NumericMatrix inside tight
+// loops and matches the representation needed for the scalar/GSL integrands.
 
 inline double log_survivor_rowmajor(double t,
                                     const double* pars_rowmajor,
@@ -1130,16 +1136,13 @@ inline double log_survivor_rowmajor(double t,
                                     int n_par,
                                     RaceCdf1Fun cdf1,
                                     void* ctx) {
-  // Log survivor of the race at time t:
-  //   log S(t) = sum_k log(1 - F_k(t))
-  //
-  // "rowmajor" here means per-trial parameters for the n_lR accumulators are
-  // packed as a contiguous buffer:
-  //   pars_rowmajor[k * n_par + c]
-  //
-  // This avoids repeatedly indexing into an Rcpp::NumericMatrix inside tight
-  // loops and matches the representation needed for the scalar/GSL integrands.
-  if (t == R_PosInf) return R_NegInf;
+  if (t == R_PosInf) {
+    auto* race_ctx = static_cast<ContextForRaceModels*>(ctx);
+    if (race_ctx && !race_ctx->use_posdrift) {
+      return log_p_all_negative_drifts_rowmajor(pars_rowmajor, isok_int, n_lR, n_par);
+    }
+    return R_NegInf;
+  }
   double logS = 0.0;
   for (int k = 0; k < n_lR; ++k) {
     if (!isok_int[k]) return R_NegInf;
@@ -1160,7 +1163,25 @@ inline double log_cdf_rowmajor(double t,
                                int n_par,
                                RaceCdf1Fun cdf1,
                                void* ctx) {
-  if (t == R_PosInf) return R_NegInf;
+  if (t == R_PosInf) {
+      auto* race_ctx = static_cast<ContextForRaceModels*>(ctx);
+      if (race_ctx && !race_ctx->use_posdrift) {
+          double logC = 0.0;
+          for (int k = 0; k < n_lR; ++k) {
+            if (!isok_int[k]) return R_NegInf;
+            const double* par_k = pars_rowmajor + static_cast<size_t>(k) * n_par;
+            const double v = par_k[0];
+            const double sv = par_k[1];
+            if (!std::isfinite(v) || !std::isfinite(sv) || sv <= 0.0) return R_NegInf;
+            const double lp_neg = R::pnorm(0.0, v, sv, 1, 1);
+            const double ll = log1mexp(lp_neg);
+            if (!std::isfinite(ll)) return R_NegInf;
+            logC += ll;
+          }
+          return logC;
+     }
+    return 0.0;
+  }
   double logC = 0.0;
   for (int k = 0; k < n_lR; ++k) {
     if (!isok_int[k]) return R_NegInf;
@@ -1172,24 +1193,6 @@ inline double log_cdf_rowmajor(double t,
     logC += ll;
   }
   return logC;
-}
-
-inline double log_p_all_negative_drifts_rowmajor(const double* pars_rowmajor,
-                                                 const int* isok_int,
-                                                 int n_lR,
-                                                 int n_par) {
-  double log_p = 0.0;
-  for (int k = 0; k < n_lR; ++k) {
-    if (!isok_int[k]) return R_NegInf;
-    const double* par_k = pars_rowmajor + static_cast<size_t>(k) * n_par;
-    const double v = par_k[0];
-    const double sv = par_k[1];
-    if (!std::isfinite(v) || !std::isfinite(sv) || sv <= 0.0) return R_NegInf;
-    const double ll = R::pnorm(0.0, v, sv, 1, 1);
-    if (!std::isfinite(ll)) return R_NegInf;
-    log_p += ll;
-  }
-  return log_p;
 }
 
 inline double log_min_density_rowmajor(double t,
