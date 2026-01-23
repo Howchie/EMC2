@@ -237,6 +237,7 @@ DDMGNG <- function(){
       out$rt[out$rt>pars[,"TIMEOUT"]] <- Inf
       out$rt[as.numeric(out$R)==pars[,"Rnogo"]] <- Inf
       out$R[is.infinite(out$rt)] <- NA
+      out$R = factor(out$R) # remove unused factor or race models get extra accumulator
       out
     },
     # Density function (PDF)
