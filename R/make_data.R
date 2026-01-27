@@ -219,33 +219,38 @@ make_missing <- function(data, LT = NULL, UT = NULL, LC = NULL, UC = NULL,
   LCdirection <- get_missing(LCdirection, data, "LCdirection",TRUE,"logical")
   UCdirection <- get_missing(UCdirection, data, "UCdirection",TRUE,"logical")
 
+  LT_eff <- data$LT
+  LC_eff <- data$LC
+  UT_eff <- data$UT
+  UC_eff <- data$UC
+
   isgng <- data$R == "nogo"
   isgng[is.na(isgng)] <- FALSE
   if (any(isgng)) {
-    data[isgng,"UC"] <- 0
-    data[isgng,"LC"] <- 0
-    data[isgng,"UT"] <- Inf
-    data[isgng,"LT"] <- 0
+    UC_eff[isgng] <- 0
+    LC_eff[isgng] <- 0
+    UT_eff[isgng] <- Inf
+    LT_eff[isgng] <- 0
     UCdirection[isgng] <- TRUE
     UCresponse[isgng] <- TRUE
   }
 
-  if (any(data$LT>data$LC & data$LC!=0)) stop("LT > LC not allowed")
-  if (any(data$UC>data$UT & data$UC!=Inf)) stop("UC > UT not allowed")
+  if (any(LT_eff>LC_eff & LC_eff!=0)) stop("LT > LC not allowed")
+  if (any(UC_eff>UT_eff & UC_eff!=Inf)) stop("UC > UT not allowed")
 
   # Only keep trials in LT-UT (inclusive) or infinite or NA
-  cutL <- is.finite(data$rt) & (data$rt < data$LT)
+  cutL <- is.finite(data$rt) & (data$rt < LT_eff)
   cutL[is.na(cutL)] <- FALSE; cutL[no_truncate] <- FALSE
-  cutU <- is.finite(data$rt) & (data$rt > data$UT)
+  cutU <- is.finite(data$rt) & (data$rt > UT_eff)
   cutU[is.na(cutU)] <- FALSE; cutU[no_truncate] <- FALSE
   if (verbose) {
-    if (!all(data$LT==0)) {
+    if (!all(LT_eff==0)) {
       if (!attr(LT,"subjectwise")) stat <- mean(cutL) else
         stat <- tapply(cutL,data$subjects,mean)
       message("% lower truncation")
       print(round(100*stat,digits))
     }
-    if (!all(data$UT==Inf)) {
+    if (!all(UT_eff==Inf)) {
       if (!attr(UT,"subjectwise")) stat <- mean(cutU) else
         stat <- tapply(cutU,data$subjects,mean)
       message("% upper truncation")
@@ -255,6 +260,10 @@ make_missing <- function(data, LT = NULL, UT = NULL, LC = NULL, UC = NULL,
 
   # Truncate
   data <- data[!cutL & !cutU, ]
+  LT_eff <- LT_eff[!cutL & !cutU]
+  LC_eff <- LC_eff[!cutL & !cutU]
+  UT_eff <- UT_eff[!cutL & !cutU]
+  UC_eff <- UC_eff[!cutL & !cutU]
   LCresponse <- LCresponse[!cutL & !cutU]
   UCresponse <- UCresponse[!cutL & !cutU]
   LCdirection <- LCdirection[!cutL & !cutU]
@@ -262,18 +271,18 @@ make_missing <- function(data, LT = NULL, UT = NULL, LC = NULL, UC = NULL,
   no_censor <- no_censor[!cutL & !cutU]
 
   # Censoring proportions (like truncation dont censor if equal to LC or UC)
-  cutL <- is.finite(data$rt) & (data$rt < data$LC)
+  cutL <- is.finite(data$rt) & (data$rt < LC_eff)
   cutL[is.na(cutL)] <- TRUE; cutL[no_censor] <- FALSE
-  cutU <- is.finite(data$rt) & (data$rt > data$UC)
+  cutU <- is.finite(data$rt) & (data$rt > UC_eff)
   cutU[is.na(cutU)] <- TRUE; cutU[no_censor] <- FALSE
   if (verbose) {
-    if (!all(data$LC==0)) {
+    if (!all(LC_eff==0)) {
       if (!attr(LT,"subjectwise")) stat <- mean(cutL) else
         stat <- tapply(cutL,data$subjects,mean)
       message("% lower censoring (after truncation)")
       print(round(100*stat,digits))
     }
-    if (!all(data$UC==Inf)) {
+    if (!all(UC_eff==Inf)) {
       if (!attr(UT,"subjectwise")) stat <- mean(cutU) else
         stat <- tapply(cutU,data$subjects,mean)
       message("% upper censoring (after truncation)")
@@ -352,10 +361,12 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
                       TC = NULL,...)
 
 {
+
   if (!is.null(staircase)){
     staircase <- check_staircase(staircase)
   }
 
+  if (is.null(TC)) TC <- list()
   TC <- add_defaults(TC,no_truncate=FALSE,no_censor=FALSE,verbose=FALSE,digits=2)
 
   # check_bounds <- FALSE
@@ -540,6 +551,20 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
   if(!is.null(data$lR)) data <- data[data$lR == levels(data$lR)[1],]
   data <- data[,!(names(data) %in% dropNames)]
   for (i in dimnames(Rrt)[[2]]) data[[i]] <- Rrt[, i]
+  
+  # This handles censoring and truncation where TC is not specified -- first check data, then design as a fallback (need to agree on the accepted order)
+  if (is.null(TC)) {
+    if (is.null(data)) {
+      missing_cols <- c("LT","LC","UC","UT")
+    } else {
+      missing_cols <- c("LT","LC","UC","UT")[!(c("LT","LC","UC","UT") %in% names(data))]
+    }
+    if (length(missing_cols) > 0) {
+      for (nm in missing_cols) {
+        if (!is.null(design[[nm]])) TC[[nm]] <- design[[nm]]
+      }
+    }
+  }
 
   data <- make_missing(data,LT=TC$LT,LC=TC$LC,UC=TC$UC,UT=TC$UT,
     LCresponse = TC$LCresponse, UCresponse = TC$UCresponse,

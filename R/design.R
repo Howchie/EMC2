@@ -86,6 +86,7 @@ design <- function(formula = NULL,factors = NULL,Rlevels = NULL,model,data=NULL,
   if (!is.function(model)) {
     stop("model must be a function or a model list (e.g., LBA())")
   }
+  # Matches Andrew's make_data handling for model fitting
   if(!is.null(optionals$trend)){
     trend <- optionals$trend
   } else {
@@ -148,7 +149,16 @@ design <- function(formula = NULL,factors = NULL,Rlevels = NULL,model,data=NULL,
   if (!is.null(trend)) {
     formula <- check_trend(trend,c(names(functions), covariates), model, formula)
   }
-
+  
+  ## Handle GNG models silently
+  if ("nogo" %in% Rlevels) {
+    m_list <- model()
+    if(m_list$type != "GNG"){
+      m_list$type <- "GNG"
+      if(!grepl("GNG", m_list$c_name)) m_list$c_name <- paste0(m_list$c_name, "GNG")
+      model <- function() m_list
+    }
+  }
   # Check if all parameters in the model are specified in the formula
   nams <- unlist(lapply(formula,function(x) as.character(stats::terms(x)[[2]])))
   if (!all(sort(names(model()$p_types)) %in% sort(nams)) & is.null(custom_p_vector)){
@@ -358,6 +368,12 @@ add_accumulators <- function(data,matchfun=NULL,simulate=FALSE, type = "RACE", F
 
     if (type %in% c("MT","TC")) datar$winner <- NA else
       datar$winner <- datar$lR==R
+    if (type == "GNG") {
+      is_inf <- is.infinite(datar$rt)
+      if (any(is_inf)) {
+        datar$winner[is_inf] <- datar$lR[is_inf] == "nogo" # here we code all missing responses as "nogo" winner
+      }
+    }
   }
   datar
 }

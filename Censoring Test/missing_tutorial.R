@@ -515,20 +515,20 @@ print(recovery(emcrCT,p_vector,selection="alpha"))
 # save(datCT,emccCT,emcrCT,file="Censoring TEST/LNR.RData")
 
 dev.off()
-### GNG LBA ----
+### GNG LBA ---- CHECK HERE
 
 load("Censoring Test/GNG.RData")
 
 # Go/NoGo designs are detected via the use of a "nogo" level in the response.
 designLBA <- design(
-  factors=list(subjects=1,S=c("left","right")),Rlevels=c("go","nogo"),
+  factors=list(subjects=1,S=c("go","nogo")),Rlevels=c("go","nogo"),
   matchfun=function(d) as.numeric(d$S)==as.numeric(d$lR),
-  model=LBA,
+  model=LBA,UC=3,
   formula=list(v~lM,B~1,t0~1)
 )
 
 p_vector <- sampled_pars(designLBA,doMap = FALSE)
-p_vector[] <- c(1, 1.25, log(2), log(0.2))
+p_vector[] <- c(1, 2, log(1), log(0.2))
 dat <- make_data(p_vector,designLBA,n_trials=10000)
 
 # All responses that would have been nogo are coded as NA with rt=Inf
@@ -538,24 +538,8 @@ unique(dat$R)
 # Response probabilities as expected
 tapply(is.na(dat$R),dat$S,mean)
 
-LBAR <- function() {
-  m <- LBA()
-  m$log_likelihood <- function(pars, dadm, model, min_ll = log(1e-10)) {
-    EMC2:::log_likelihood_race_missing(pars, dadm, model, min_ll = min_ll)}
-  m$c_name=NULL
-  m
-}
-designLBA1 <- design(
-  factors=list(subjects=1,S=c("left","right")),Rlevels=c("go","nogo"),
-  matchfun=function(d) as.numeric(d$S)==as.numeric(d$lR),
-  model=LBAR,
-  formula=list(v~lM,B~1,t0~1)
-)
-
-
 # Compare likelihoods
 dadmC <- EMC2:::design_model(dat,designLBA)
-dadmR <- EMC2:::design_model(dat,designLBA1)
 lfun(p_vector,dadmC)
 lfun(p_vector,dadmR,use_c = F)
 
@@ -574,9 +558,10 @@ system.time({emcr <- fit(emc)})
 
 # Both good
 print(recovery(emcc,p_vector,selection="alpha"))
-print(recovery(emcr,p_vector,selection="alpha"))
 
-
+pred=predict(emcc)
+tapply(is.na(dat$R),dat$S,mean)
+tapply(is.na(pred$R),pred$S,mean)
 ### GNG LNR 3 Choice ----
 
 # Race models allow go/nogo with more than two choices, here with an LNR

@@ -897,7 +897,7 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
         if (type_std.find("IO") != std::string::npos) {
           current_model_ctx.use_posdrift = false;
         }
-      } else if (type_std == "RDM") {
+      } else if (type_std.find("RDM") != std::string::npos) {
         model_dfun_ptr = &rdm_dfun_adapter;
         model_pfun_ptr = &rdm_pfun_adapter;
         pdf1_ptr = &drdm_scalar;
