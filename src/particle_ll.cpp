@@ -462,12 +462,34 @@ double c_log_likelihood_DDM(NumericMatrix pars, DataFrame data,
   // NB: Currently it is possible that the regular DDM could have censoring/truncation applied and will branch here but be incorrectly handled
   if (is_true(any(ok_nonfinite))) {
     if (gng) {
-      // Infer the "go" boundary index from the first finite-rt trial with a known response.
-      int go_idx = 1;
-      for (int i = 0; i < n_trials; ++i) {
-        if (finite[i] && R[i] != NA_INTEGER) {
-          go_idx = R[i];
-          break;
+      // Infer the "go" boundary index.
+      //
+      // Prefer using the factor levels: we treat the non-"nogo" level as the go boundary.
+      // This is robust even when a dataset (or a compressed design row) contains only
+      // non-responses (rt = Inf / NA) and therefore has no finite-rt trials to infer from.
+      int go_idx = -1; // 1-based index into the R factor levels
+      SEXP lev_sexp = R.attr("levels");
+      if (lev_sexp != R_NilValue) {
+        CharacterVector levs(lev_sexp);
+        int nogo_idx = -1;
+        for (int j = 0; j < levs.size(); ++j) {
+          if (Rcpp::as<std::string>(levs[j]) == "nogo") { nogo_idx = j + 1; break; }
+        }
+        if (nogo_idx != -1) {
+          for (int j = 0; j < levs.size(); ++j) {
+            const int idx = j + 1;
+            if (idx != nogo_idx) { go_idx = idx; break; }
+          }
+        }
+      }
+      // Fallback: infer from the first finite-rt trial with a known response.
+      if (go_idx == -1) {
+        go_idx = 1;
+        for (int i = 0; i < n_trials; ++i) {
+          if (finite[i] && R[i] != NA_INTEGER) {
+            go_idx = R[i];
+            break;
+          }
         }
       }
       // Non-finite RTs are treated as right-censoring at UC:
@@ -486,7 +508,9 @@ double c_log_likelihood_DDM(NumericMatrix pars, DataFrame data,
       NumericVector logcdf = p_DDM_Wien(UC, R_for_cdf, pars, ok_nonfinite);
       for (int i = 0; i < n_trials; ++i) {
         if (ok_nonfinite[i]) {
-          lls[i] = log1mexp(logcdf[i]);
+          // log(1 - CDF). NOTE: `log1mexp()` in Rmath computes log(1 - exp(-x)),
+          // which is not what we need here (we have logcdf <= 0).
+          lls[i] = log1m_exp(logcdf[i]);
         }
       }
     } else {
@@ -510,7 +534,8 @@ double c_log_likelihood_DDM(NumericMatrix pars, DataFrame data,
       for (int i = 0; i < n_trials; ++i) {
         if (ok_nonfinite[i]) {
           const double logcdf_sum = log_sum_exp(logcdf1[i], logcdf2[i]); // log(F1 + F2)
-          lls[i] = log1mexp(logcdf_sum); // log(1 - (F1 + F2)) because DDM boundaries are not independent racers
+          // log(1 - (F1 + F2)) because DDM boundaries are not independent racers.
+          lls[i] = log1m_exp(logcdf_sum);
         }
       }
       
@@ -909,7 +934,7 @@ inline double log_cdf_rowmajor(double t,
             const double sv = par_k[1];
             if (!std::isfinite(v) || !std::isfinite(sv) || sv <= 0.0) return R_NegInf;
             const double lp_neg = R::pnorm(0.0, v, sv, 1, 1);
-            const double ll = log1mexp(lp_neg);
+            const double ll = log1m_exp(lp_neg);
             if (!std::isfinite(ll)) return R_NegInf;
             logC += ll;
           }
