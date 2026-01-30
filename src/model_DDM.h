@@ -5,8 +5,10 @@
 using namespace Rcpp;
 #include "utility_functions.h"
 #include "pdf_fncs.h"
+#include "cdf_fncs.h"
 #include "fncs_seven.h"
 #include "tools.h"
+#include <cstdlib> // getenv
 
 NumericVector d_DDM_Wien(NumericVector rts, IntegerVector Rs, NumericMatrix pars, LogicalVector is_ok){
   int Epsflag = 1;
@@ -36,6 +38,60 @@ NumericVector d_DDM_Wien(NumericVector rts, IntegerVector Rs, NumericMatrix pars
         double Rerr;
         double sz = (pars(i,6) < (1 - pars(i,6))) ? 2*pars(i,7)*pars(i,6) : 2*pars(i,7)*(1-pars(i,6));
         ddiff(choice, rts[i], pm, pars(i, 1)/pars(i,5), pars(i, 0)/pars(i,5), pars(i, 3), pars(i, 6), sz, pars(i, 2)/pars(i,5), pars(i,4), eps, K, Epsflag, Neval, &Rval, &Rerr);
+        out[i] = log(Rval);
+      }
+    }
+  }
+  return(out);
+}
+
+NumericVector p_DDM_Wien(NumericVector rts, IntegerVector Rs, NumericMatrix pars, LogicalVector is_ok){
+  static int ddm_debug_prints_left = 20; // shared across calls; keep noise bounded
+  const bool ddm_debug = (std::getenv("EMC2_DEBUG_DDM") != nullptr);
+  int Epsflag = 1;
+  double eps = 5e-3;
+  int K = 0;
+  int Neval = 6000;
+  int choice = 0; //the type of integration method to choose.
+  //0 = "v", 1 = "a", 2= "sv", 3 = "t0", 4 = "st0", 5 = "s", 6 = "Z", 7 = "SZ",
+  int N = rts.length();
+  NumericVector out(N);
+  for(int i = 0; i < N; i++){
+    if(is_ok[i] == FALSE){
+      out[i] = R_NegInf;
+    } else{
+      // we divide v, a and sv by s to introduce the scaling parameter s
+      double new_rt = rts[i] - pars(i,3);
+      if(new_rt <= 0){
+        out[i] = R_NegInf;
+      } else if(pars(i,2) == 0 && pars(i,7) == 0 && pars(i, 4) == 0){
+        // if sv, sz and st0 are zero we can use simple and fast pwiener function
+        // NOTE: Unlike dwiener(), pwiener() does not accept a signed time argument
+        // to indicate the boundary. To get the upper-bound CDF, we reflect the
+        // diffusion (v -> -v, w -> 1-w) and evaluate the lower-bound CDF.
+        double v = pars(i, 0)/pars(i,5);
+        double w = pars(i, 6);
+        if (Rs[i] != 1) { // upper boundary
+          v = -v;
+          w = 1.0 - w;
+        }
+        out[i] = pwiener(new_rt, pars(i, 1)/pars(i,5), v, w, eps, K, Epsflag);
+        if (ddm_debug && ddm_debug_prints_left-- > 0 && !R_FINITE(out[i])) {
+          Rcpp::Rcout << "[EMC2_DEBUG_DDM] pwiener returned non-finite logcdf: "
+                      << out[i]
+                      << " new_rt=" << new_rt
+                      << " a=" << (pars(i, 1)/pars(i,5))
+                      << " v=" << v
+                      << " w=" << w
+                      << " Rs=" << Rs[i]
+                      << "\n";
+        }
+      } else{ // otherwise use pdiff function with integration
+        double Rval;
+        double Rerr;
+        double pm = (Rs[i]==1) ? -1 : 1;
+        double sz = (pars(i,6) < (1 - pars(i,6))) ? 2*pars(i,7)*pars(i,6) : 2*pars(i,7)*(1-pars(i,6));
+        pdiff(choice, rts[i], pm, pars(i, 1)/pars(i,5), pars(i, 0)/pars(i,5), pars(i, 3), pars(i, 6), sz, pars(i, 2)/pars(i,5), pars(i,4), eps, K, Epsflag, Neval, &Rval, &Rerr);
         out[i] = log(Rval);
       }
     }

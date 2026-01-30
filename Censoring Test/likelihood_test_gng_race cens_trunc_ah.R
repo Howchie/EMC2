@@ -1,7 +1,6 @@
 remotes::install_github("https://github.com/Howchie/EMC2/",ref="censoring_truncation_ah")
 
-# Censoring and truncation tests of Zachs R and C, my R for GNG
-# (not Jeroen's C as not fixed to handle LC/UC/LT/UT that are not all the same
+# Censoring and truncation tests
 rm(list=ls())
 library(EMC2)
 source("Censoring Test/test_likelihood_plotfuns_ah.R")
@@ -21,33 +20,10 @@ Cfun <- function(d) as.numeric(d$S)==as.numeric(d$R)
 
 #### LBA ----
 
-LBA_cens <- function() {
-  m <- LBA()
-  m$log_likelihood <- function(pars, dadm, model, min_ll = log(1e-10)) {
-    EMC2:::log_likelihood_race_cens_trunc(
-      pars, dadm, model, min_ll = min_ll
-    )
-  }
-  m
-}
-
-# Andrew's R function, C versions require a different model MLBA/MRDM/MLNR
-# e.g,. designLBA2 in demo
-LBA_cens1 <- function() {
-  m <- LBA()
-  m$log_likelihood <- function(pars, dadm, model, min_ll = log(1e-10)) {
-    EMC2:::log_likelihood_race_missing(
-      pars, dadm, model, min_ll = min_ll
-    )
-  }
-  m
-}
-
 run_lba_demo <- function(p_contaminant = 0, estimate_contaminant = FALSE,
                          n_trials = 500, UC = NULL, UT=NULL, LC=NULL, LT=NULL,range=1,
                          cores_for_chains = 3,layout=c(2,3),natural=TRUE,n_cores=1,
-                         LCresponse = FALSE, UCresponse = FALSE,
-                         LCdirection = TRUE, UCdirection = TRUE, print_stats=FALSE,
+                         print_stats=FALSE,
                          sample_file = "samples_LBA.RData") {
 
   matchfun <- function(d) as.numeric(d$S) == as.numeric(d$lR)
@@ -55,9 +31,9 @@ run_lba_demo <- function(p_contaminant = 0, estimate_contaminant = FALSE,
   # Base 2-choice design; lM is automatically constructed from matchfun.
   capture.output(suppressMessages(designLBA <- design(
     factors = list(subjects = 1, S = c("left", "right")),
-    Rlevels = c("go", "nogo"),
+    Rlevels = c("left", "right"),
     matchfun = matchfun,
-    model = LBA_cens,
+    model = LBA,
     # covariates = c("LT","UT","LC","UC"),
     formula = c(
       list(B ~ 1, v ~ lM, A ~ 1, t0 ~ 1, sv ~ lM),
@@ -65,20 +41,6 @@ run_lba_demo <- function(p_contaminant = 0, estimate_contaminant = FALSE,
     ),
     constants = c(sv = log(1))
   )),file=NULL)
-
-  capture.output(suppressMessages(designLBA1 <- design(
-    factors = list(subjects = 1, S = c("left", "right")),
-    Rlevels = c("go", "nogo"),
-    matchfun = matchfun,
-    model = LBA_cens1,
-    # covariates = c("LT","UT","LC","UC"),
-    formula = c(
-      list(B ~ 1, v ~ lM, A ~ 1, t0 ~ 1, sv ~ lM),
-      if (estimate_contaminant) list(pContaminant ~ 1) else list()
-    ),
-    constants = c(sv = log(1))
-  )),file=NULL)
-
 
   # Set simulation parameters (on the transformed scale expected by p_types)
   p_vector <- sampled_pars(designLBA, doMap = FALSE)
@@ -111,8 +73,7 @@ run_lba_demo <- function(p_contaminant = 0, estimate_contaminant = FALSE,
   dat <- make_data(
     p_vector, designLBA,
     n_trials = n_trials,
-    TC=list(UC = UC,UT = UT,LC = LC,LT = LT,LCresponse = LCresponse,
-      UCresponse = UCresponse,LCdirection = LCdirection, UCdirection = UCdirection)
+    TC=list(UC = UC,UT = UT,LC = LC,LT = LT)
   )
 
   if (print_stats) {
@@ -141,29 +102,12 @@ run_lba_demo <- function(p_contaminant = 0, estimate_contaminant = FALSE,
   library(parallel)
   par(mfrow=layout)
 
-  # R _race_cens_trunc (Zachs)
-  rtrt <- system.time({rtr <- profile_plot_test(dat, designLBA, p_vector, n_cores = n_cores, range=range,
-    layout = NULL, figure_title = "R Likelihood",natural=natural)})
-
-  # R _race_missing (mine)
-  rtrt1 <- system.time({rtr1 <- profile_plot_test(dat, designLBA1, p_vector, n_cores = n_cores, range=range,
-    layout = NULL, figure_title = "R1 Likelihood",natural=natural)})
-
   #  C _race_cens_trunc
   rtct <- system.time({rtc <- profile_plot_test(dat, designLBA, p_vector, n_cores = n_cores, range=range,
   layout = NULL, use_c = TRUE, figure_title = "C Likelihood",natural=natural)})
 
-
-  print(cbind(rtr,max1=rtr1$max,miss1=rtr1$miss,eq=abs(rtr1$miss)-abs(rtr$miss)))
-  cat(paste0("R likelihood: ",round(rtrt[3],2),"\n"))
-  cat(paste0("R1 likelihood: ",round(rtrt1[3],2),"\n"))
-  cat(paste0("Speedup R/R1: ",round(rtrt[3]/rtrt1[3],2),"\n\n"))
-
   print(rtc)
   cat(paste0("C likelihood: ",round(rtct[3],2),"\n"))
-
-  cat(paste0("\nSpeedup R/C: ",round(rtrt[3]/rtct[3],2),"\n"))
-  cat(paste0("Speedup R1/C: ",round(rtrt1[3]/rtct[3],2),"\n"))
 
   if (isTRUE(RUN_FITS)) {
     emc <- make_emc(dat, designLBA, type = "single")
@@ -181,54 +125,27 @@ set.seed(123)
 
 # Test 1: no cens or trunc ----
 
-# max/miss is Zachs, max1/miss1 is mine
-res_old <- run_lba_demo(
+res <- run_lba_demo(
   n_trials = 10000, n_cores=9
 )
 
-
 # Test 2: Censored RTs ----
-
-# Defaults
-resp <- FALSE
-dirn <- TRUE
-
-# # Opp resp default stop called for go/nogo models
-# resp <- T
-# dirn <- F
-#
-# # Opp res
-# resp <- T
-# dirn <- TRUE
-#
-# # Opp dirn
-# resp <- FALSE
-# dirn <- T
-
-
 res_cens <- run_lba_demo(
   n_trials = 10000,
   UC = 1.5,
-  UCresponse=resp,
-  UCdirection=dirn,n_cores=9,
+  n_cores=9,
   sample_file = "samples_lba_cens.RData"
 )
 
 res_cens <- run_lba_demo(
   n_trials = 10000,
   LC = .9,
-  LCresponse=resp,
-  LCdirection=dirn,n_cores=9,
+  n_cores=9,
   sample_file = "samples_lba_cens.RData"
 )
 
-
 res_cens <- run_lba_demo(
   n_trials = 10000,
-  LCresponse=resp,
-  UCresponse=resp,
-  LCdirection=dirn,
-  UCdirection=dirn,
   UC = 1.8,
   LC = .85,n_cores=9,
   sample_file = "samples_lba_cens.RData"
@@ -243,7 +160,6 @@ res_contam <- run_lba_demo(
   n_cores=9,
   sample_file = "samples_lba_cens_trunc.RData"
 )
-
 
 res_contam <- run_lba_demo(
   n_trials = 10000,
@@ -326,63 +242,26 @@ res_contam <- run_lba_demo(
 
 #### RDM ----
 
-RDM_cens <- function() {
-  m <- RDM()
-  m$log_likelihood <- function(pars, dadm, model, min_ll = log(1e-10)) {
-    EMC2:::log_likelihood_race_cens_trunc(
-      pars, dadm, model, min_ll = min_ll
-    )
-  }
-  m
-}
-
-RDM_cens1 <- function() {
-  m <- RDM()
-  m$log_likelihood <- function(pars, dadm, model, min_ll = log(1e-10)) {
-    EMC2:::log_likelihood_race_missing(
-      pars, dadm, model, min_ll = min_ll
-    )
-  }
-  m
-}
-
-run_RDM_demo <- function(p_contaminant = 0, cens = TRUE, estimate_contaminant = FALSE,
+run_RDM_demo <- function(p_contaminant = 0,estimate_contaminant = FALSE,
                          n_trials = 500, UC = NULL, UT=NULL, LC=NULL, LT=NULL,range=1,
                          cores_for_chains = 3,layout=c(2,3),natural=TRUE,n_cores=1,
-                         LCresponse = FALSE, UCresponse = FALSE,
-                         LCdirection = TRUE, UCdirection = TRUE,
                          print_stats=FALSE,
                          sample_file = "samples_RDM.RData") {
-  # if (UC == Inf & p_contaminant>0)
-  #   stop("Require a finite UC (deadline) when omissions are present.")
 
   matchfun <- function(d) as.numeric(d$S) == as.numeric(d$lR)
 
   # Base 2-choice design; lM is automatically constructed from matchfun.
   capture.output(suppressMessages(designRDM <- design(
     factors = list(subjects = 1, S = c("left", "right")),
-    Rlevels = c("go", "nogo"),
+    Rlevels = c("left", "right"),
     matchfun = matchfun,
-    model = RDM_cens,
+    model = RDM,
     formula = c(
       list(B ~ 1, v ~ lM, A ~ 1, t0 ~ 1, s ~ lM),
       if (estimate_contaminant) list(pContaminant ~ 1) else list()
     ),
     constants = c(s = log(1))
   )),file=NULL)
-
-  capture.output(suppressMessages(designRDM1 <- design(
-    factors = list(subjects = 1, S = c("left", "right")),
-    Rlevels = c("go", "nogo"),
-    matchfun = matchfun,
-    model = RDM_cens1,
-    formula = c(
-      list(B ~ 1, v ~ lM, A ~ 1, t0 ~ 1, s ~ lM),
-      if (estimate_contaminant) list(pContaminant ~ 1) else list()
-    ),
-    constants = c(s = log(1))
-  )),file=NULL)
-
 
   # Set simulation parameters (on the transformed scale expected by p_types)
   p_vector <- sampled_pars(designRDM, doMap = FALSE)
@@ -415,8 +294,7 @@ run_RDM_demo <- function(p_contaminant = 0, cens = TRUE, estimate_contaminant = 
   dat <- make_data(
     p_vector, designRDM,
     n_trials = n_trials,
-    TC=list(UC = UC,UT = UT,LC = LC,LT = LT,LCresponse = LCresponse,
-      UCresponse = UCresponse,LCdirection = LCdirection, UCdirection = UCdirection)
+    TC=list(UC = UC,UT = UT,LC = LC,LT = LT)
   )
 
   if (print_stats) {
@@ -445,29 +323,14 @@ run_RDM_demo <- function(p_contaminant = 0, cens = TRUE, estimate_contaminant = 
   library(parallel)
   par(mfrow=layout)
 
-  # R _race_cens_trunc (Zachs)
-  rtrt <- system.time({rtr <- profile_plot_test(dat, designRDM, p_vector, n_cores = n_cores, range=range,
-    layout = NULL, figure_title = "R Likelihood",natural=natural)})
-
-  # R _race_missing (mine)
-  rtrt1 <- system.time({rtr1 <- profile_plot_test(dat, designRDM1, p_vector, n_cores = n_cores, range=range,
-    layout = NULL, figure_title = "R1 Likelihood",natural=natural)})
-
+  
   #  C _race_cens_trunc
   rtct <- system.time({rtc <- profile_plot_test(dat, designRDM, p_vector, n_cores = n_cores, range=range,
   layout = NULL, use_c = TRUE, figure_title = "C Likelihood",natural=natural)})
 
-
-  print(cbind(rtr,max1=rtr1$max,miss1=rtr1$miss,eq=abs(rtr1$miss)-abs(rtr$miss)))
-  cat(paste0("R likelihood: ",round(rtrt[3],2),"\n"))
-  cat(paste0("R1 likelihood: ",round(rtrt1[3],2),"\n"))
-  cat(paste0("Speedup R/R1: ",round(rtrt[3]/rtrt1[3],2),"\n\n"))
-
   print(rtc)
   cat(paste0("C likelihood: ",round(rtct[3],2),"\n"))
 
-  cat(paste0("\nSpeedup R/C: ",round(rtrt[3]/rtct[3],2),"\n"))
-  cat(paste0("Speedup R1/C: ",round(rtrt1[3]/rtct[3],2),"\n"))
 
   if (isTRUE(RUN_FITS)) {
     emc <- make_emc(dat, designRDM, type = "single")
@@ -487,7 +350,6 @@ set.seed(123)
 
 res_old <- run_RDM_demo(
   p_contaminant = 0,
-  cens=FALSE,
   estimate_contaminant = FALSE,
   n_trials = 10000,
   sample_file = "samples_RDM_old.RData"
@@ -530,7 +392,6 @@ res_contam <- run_RDM_demo(
   sample_file = "samples_RDM_cens_trunc.RData"
 )
 
-# Z's R bad with LT here and next
 res_contam <- run_RDM_demo(
   p_contaminant = 0,
   estimate_contaminant = FALSE,
@@ -539,7 +400,6 @@ res_contam <- run_RDM_demo(
   sample_file = "samples_RDM_cens_trunc.RData"
 )
 
-# Z's R bad
 res_contam <- run_RDM_demo(
   p_contaminant = 0,
   estimate_contaminant = FALSE,
@@ -551,8 +411,6 @@ res_contam <- run_RDM_demo(
 )
 
 # Test 4: Truncation and censoring ------------
-
-# Z's R bad
 res_contam <- run_RDM_demo(
   p_contaminant = 0,
   estimate_contaminant = FALSE,
@@ -567,7 +425,6 @@ res_contam <- run_RDM_demo(
 
 # Test 5: Contaminant omissions  ------------
 
-# Not very good pContam estimtes but all the same
 res_contam <- run_RDM_demo(
   p_contaminant = 0.15,
   estimate_contaminant = TRUE,
@@ -576,7 +433,15 @@ res_contam <- run_RDM_demo(
   sample_file = "samples_RDM_contam.RData"
 )
 
-# Z's R bad
+res_contam <- run_RDM_demo(
+  p_contaminant = 0.15,
+  estimate_contaminant = TRUE,
+  n_trials = 10000,
+  UC=1.5,
+  layout=c(2,4),
+  sample_file = "samples_RDM_contam.RData"
+)
+
 res_contam <- run_RDM_demo(
   p_contaminant = .05,
   estimate_contaminant = TRUE,
@@ -589,7 +454,6 @@ res_contam <- run_RDM_demo(
   sample_file = "samples_rdm_cens_trunc.RData"
 )
 
-# Z's R bad
 res_contam <- run_RDM_demo(
   p_contaminant = .05,
   estimate_contaminant = TRUE,
@@ -602,7 +466,6 @@ res_contam <- run_RDM_demo(
   sample_file = "samples_rdm_cens_trunc.RData"
 )
 
-# Z's R bad
 res_contam <- run_RDM_demo(
   p_contaminant = .05,
   estimate_contaminant = TRUE,
@@ -618,56 +481,20 @@ res_contam <- run_RDM_demo(
 
 
 #### LNR ----
-
-LNR_cens <- function() {
-  m <- LNR()
-  m$log_likelihood <- function(pars, dadm, model, min_ll = log(1e-10)) {
-    EMC2:::log_likelihood_race_cens_trunc(
-      pars, dadm, model, min_ll = min_ll
-    )
-  }
-  m
-}
-
-LNR_cens1 <- function() {
-  m <- LNR()
-  m$log_likelihood <- function(pars, dadm, model, min_ll = log(1e-10)) {
-    EMC2:::log_likelihood_race_missing(
-      pars, dadm, model, min_ll = min_ll
-    )
-  }
-  m
-}
-
-run_LNR_demo <- function(p_contaminant = 0, cens = TRUE, estimate_contaminant = FALSE,
+run_LNR_demo <- function(p_contaminant = 0, estimate_contaminant = FALSE,
                          n_trials = 500, UC = NULL, UT=NULL, LC=NULL, LT=NULL,range=1,
                          cores_for_chains = 3,layout=c(2,3),natural=TRUE,n_cores=1,
-                         LCresponse = FALSE, UCresponse = FALSE,
-                         LCdirection = TRUE, UCdirection = TRUE,
                          print_stats=FALSE,
                          sample_file = "samples_LNR.RData") {
-  # if (UC == Inf & p_contaminant>0)
-  #   stop("Require a finite UC (deadline) when omissions are present.")
 
   matchfun <- function(d) as.numeric(d$S) == as.numeric(d$lR)
 
   # Base 2-choice design; lM is automatically constructed from matchfun.
   capture.output(suppressMessages(designLNR <- design(
     factors = list(subjects = 1, S = c("left", "right")),
-    Rlevels = c("go", "nogo"),
+    Rlevels = c("left", "right"),
     matchfun = matchfun,
-    model = LNR_cens,
-    formula = c(
-      list(m~lM,s~lM,t0~1),
-      if (estimate_contaminant) list(pContaminant ~ 1) else list()
-    ),
-  )),file=NULL)
-
-  capture.output(suppressMessages(designLNR1 <- design(
-    factors = list(subjects = 1, S = c("left", "right")),
-    Rlevels = c("go", "nogo"),
-    matchfun = matchfun,
-    model = LNR_cens1,
+    model = LNR,
     formula = c(
       list(m~lM,s~lM,t0~1),
       if (estimate_contaminant) list(pContaminant ~ 1) else list()
@@ -703,8 +530,7 @@ run_LNR_demo <- function(p_contaminant = 0, cens = TRUE, estimate_contaminant = 
   dat <- make_data(
     p_vector, designLNR,
     n_trials = n_trials,
-    TC=list(UC = UC,UT = UT,LC = LC,LT = LT,LCresponse = LCresponse,
-      UCresponse = UCresponse,LCdirection = LCdirection, UCdirection = UCdirection)
+    TC=list(UC = UC,UT = UT,LC = LC,LT = LT)
   )
 
   if (print_stats) {
@@ -733,29 +559,12 @@ run_LNR_demo <- function(p_contaminant = 0, cens = TRUE, estimate_contaminant = 
   library(parallel)
   par(mfrow=layout)
 
-  # R _race_cens_trunc (Zachs)
-  rtrt <- system.time({rtr <- profile_plot_test(dat, designLNR, p_vector, n_cores = n_cores, range=range,
-    layout = NULL, figure_title = "R Likelihood",natural=natural)})
-
-  # R _race_missing (mine)
-  rtrt1 <- system.time({rtr1 <- profile_plot_test(dat, designLNR1, p_vector, n_cores = n_cores, range=range,
-    layout = NULL, figure_title = "R1 Likelihood",natural=natural)})
-
   #  C _race_cens_trunc
   rtct <- system.time({rtc <- profile_plot_test(dat, designLNR, p_vector, n_cores = n_cores, range=range,
   layout = NULL, use_c = TRUE, figure_title = "C Likelihood",natural=natural)})
 
-
-  print(cbind(rtr,max1=rtr1$max,miss1=rtr1$miss,eq=abs(rtr1$miss)-abs(rtr$miss)))
-  cat(paste0("R likelihood: ",round(rtrt[3],2),"\n"))
-  cat(paste0("R1 likelihood: ",round(rtrt1[3],2),"\n"))
-  cat(paste0("Speedup R/R1: ",round(rtrt[3]/rtrt1[3],2),"\n\n"))
-
   print(rtc)
   cat(paste0("C likelihood: ",round(rtct[3],2),"\n"))
-
-  cat(paste0("\nSpeedup R/C: ",round(rtrt[3]/rtct[3],2),"\n"))
-  cat(paste0("Speedup R1/C: ",round(rtrt1[3]/rtct[3],2),"\n"))
 
   if (isTRUE(RUN_FITS)) {
     emc <- make_emc(dat, designLNR, type = "single")
@@ -772,9 +581,8 @@ set.seed(123)
 
 # Test 1: Equivalence of R and C++ function no censor/trunc/contam ----
 
-res_old <- run_LNR_demo(
+res <- run_LNR_demo(
   p_contaminant = 0,
-  cens=FALSE,
   estimate_contaminant = FALSE,
   n_trials = 10000,
   sample_file = "samples_LNR_old.RData"
@@ -858,8 +666,6 @@ res_contam <- run_LNR_demo(
 
 # Test 5: Contaminant omissions  ------------
 
-# Poor contaminant estimates
-
 res_contam <- run_LNR_demo(
   p_contaminant = 0.15,
   estimate_contaminant = TRUE,
@@ -879,7 +685,6 @@ res_contam <- run_LNR_demo(
   sample_file = "samples_rdm_cens_trunc.RData"
 )
 
-
 res_contam <- run_LNR_demo(
   p_contaminant = .05,
   estimate_contaminant = TRUE,
@@ -890,7 +695,6 @@ res_contam <- run_LNR_demo(
   n_cores=9,
   sample_file = "samples_rdm_cens_trunc.RData"
 )
-
 
 res_contam <- run_LNR_demo(
   p_contaminant = .05,

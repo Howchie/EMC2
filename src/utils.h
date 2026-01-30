@@ -44,20 +44,7 @@ struct gsl_race_params_scalar {
 
 double gsl_f_race_scalar(double t, void* p);
 
-double integrate_for_kth_winner_cpp(int k_winner_idx,
-                                    const Rcpp::NumericMatrix& p_all_acc,
-                                    Rcpp::LogicalVector isok,
-                                    double low,
-                                    double upp,
-                                    RacePdf1Fun pdf1,
-                                    RaceCdf1Fun cdf1,
-                                    int n_lR,
-                                    int n_par,
-                                    double epsilon,
-                                    void* model_specific_context,
-                                    gsl_integration_workspace* w);
-
-double c_log_likelihood_race_cens_trunc(Rcpp::NumericMatrix pars, Rcpp::DataFrame dadm,
+double c_log_likelihood_race(Rcpp::NumericMatrix pars, Rcpp::DataFrame dadm,
                                         RacePdfFun model_dfun, // Pointer to the model's PDF adapter function
                                         RaceCdfFun model_pfun, // Pointer to the model's CDF adapter function
                                         RacePdf1Fun pdf1,      // Scalar PDF for integration
@@ -82,18 +69,6 @@ Rcpp::NumericVector calc_ll(Rcpp::NumericMatrix p_matrix, Rcpp::DataFrame data,
                             Rcpp::CharacterVector p_types, double min_ll,
                             Rcpp::List trend);
 							
-double get_trunc_normaliser_cpp(
-    const Rcpp::NumericMatrix& p_all_acc,
-    RacePdf1Fun pdf1,
-    RaceCdf1Fun cdf1,
-	Rcpp::LogicalVector isok_trial, 
-    double LT, double UT,
-    int n_lR,
-    int n_par,
-    double epsilon = 1e-8,
-    void* model_specific_context = nullptr,
-    gsl_integration_workspace* w = nullptr);
-
 // Structures
 struct ContextForRaceModels {
     double min_lik_for_pdf;

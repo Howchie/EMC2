@@ -11,7 +11,6 @@ rm(list=ls())
 library(EMC2)
 source("Censoring Test/test_likelihood_plotfuns_ah.R")
 
-
 # Whether to run the (slow) MCMC recovery fits
 RUN_FITS <- FALSE
 
@@ -26,33 +25,10 @@ Cfun <- function(d) as.numeric(d$S)==as.numeric(d$R)
 
 #### LBAIO ----
 
-LBA_cens <- function() {
-  m <- LBA(posdrift=FALSE) # ZH: I simplified the code by just adding it as an argument here and updating model_LBA.R
-  m$log_likelihood <- function(pars, dadm, model, min_ll = log(1e-10)) {
-    EMC2:::log_likelihood_race_cens_trunc(
-      pars, dadm, model, min_ll = min_ll
-    )
-  }
-  m
-}
 
-# Andrew's R function, C versions require a different model MLBA/MRDM/MLNR
-# e.g,. designLBA2 in demo
-LBA_cens1 <- function() {
-  m <- LBA(posdrift=FALSE)
-  m$log_likelihood <- function(pars, dadm, model, min_ll = log(1e-10)) {
-    EMC2:::log_likelihood_race_missing(
-      pars, dadm, model, min_ll = min_ll
-    )
-  }
-  m
-}
-
-run_lba_demo <- function(p_contaminant = 0, cens = TRUE, estimate_contaminant = FALSE,
+run_lba_demo <- function(p_contaminant = 0, estimate_contaminant = FALSE,
                          n_trials = 500, UC = NULL, UT=NULL, LC=NULL, LT=NULL,range=1,
                          cores_for_chains = 3,layout=c(2,3),natural=TRUE,n_cores=1,
-                         LCresponse = FALSE, UCresponse = FALSE,oldC=FALSE,
-                         LCdirection = TRUE, UCdirection = TRUE,
                          force_direction = TRUE, force_response = TRUE,
                          print_stats=FALSE,
                          sample_file = "samples_LBA.RData") {
@@ -66,7 +42,7 @@ run_lba_demo <- function(p_contaminant = 0, cens = TRUE, estimate_contaminant = 
     factors = list(subjects = 1, S = c("left", "right")),
     Rlevels = c("left", "right"),
     matchfun = matchfun,
-    model = ifelse(cens, LBA_cens, LBA_no_cens), # NB this is just for demonstration; normally use LBA with built-in censoring/truncation handling
+    model = LBA(posdrift=FALSE), 
     formula = c(
       list(B ~ 1, v ~ 0+lM, A ~ 1, t0 ~ 1, sv ~ 0+lM),
       if (estimate_contaminant) list(pContaminant ~ 1) else list()
@@ -74,19 +50,7 @@ run_lba_demo <- function(p_contaminant = 0, cens = TRUE, estimate_contaminant = 
     constants = c(A = log(0.4))
   )),file=NULL)
 
-  capture.output(suppressMessages(designLBA1 <- design(
-    factors = list(subjects = 1, S = c("left", "right")),
-    Rlevels = c("left", "right"),
-    matchfun = matchfun,
-    model = ifelse(cens, LBA_cens1, LBA_no_cens), # NB this is just for demonstration; normally use LBA with built-in censoring/truncation handling
-    formula = c(
-      list(B ~ 1, v ~ 0+lM, A ~ 1, t0 ~ 1, sv ~ 0+lM),
-      if (estimate_contaminant) list(pContaminant ~ 1) else list()
-    ),
-    constants = c(A = log(0.4))
-  )),file=NULL)
-
-
+  
   # Set simulation parameters (on the transformed scale expected by p_types)
   p_vector <- sampled_pars(designLBA, doMap = FALSE)
 
@@ -118,9 +82,10 @@ run_lba_demo <- function(p_contaminant = 0, cens = TRUE, estimate_contaminant = 
   dat <- make_data(
     p_vector, designLBA,
     n_trials = n_trials,
-    TC=list(UC = UC,UT = UT,LC = LC,LT = LT,LCresponse = LCresponse,
-      UCresponse = UCresponse,LCdirection = LCdirection, UCdirection = UCdirection, verbose = TRUE)
+    TC=list(UC = UC,UT = UT,LC = LC, LT = LT, verbose = TRUE)
   )
+  dat$R[is.infinite(dat$rt)]=NA
+  
 
   if (print_stats) {
 
@@ -152,22 +117,11 @@ run_lba_demo <- function(p_contaminant = 0, cens = TRUE, estimate_contaminant = 
   library(parallel)
   par(mfrow=layout)
 
-
-  # R _race_missing (mine)
-  rtrt1 <- system.time({rtr1 <- profile_plot_test(dat, designLBA1, p_vector, n_cores = n_cores, range=range,
-    layout = NULL, figure_title = "R Likelihood",natural=natural)})
-
   #  C _race_cens_trunc
   rtct <- system.time({rtc <- profile_plot_test(dat, designLBA, p_vector, n_cores = n_cores, range=range,
   layout = NULL, use_c = TRUE, figure_title = "C Likelihood",natural=natural)})
-
-  print(cbind(rtr1,max_C=rtc$max,miss_C=rtc$miss,eq=abs(rtr1$max-rtc$max)))
-  
-  cat(paste0("R  likelihood: ",round(rtrt1[3],2),"\n"))
   
   cat(paste0("C likelihood: ",round(rtct[3],2),"\n"))
-
-  cat(paste0("Speedup R1/C: ",round(rtrt1[3]/rtct[3],2),"\n"))
 
   if (isTRUE(RUN_FITS)) {
     emc <- make_emc(dat, designLBA, type = "single")
@@ -184,18 +138,12 @@ set.seed(123)
 
 # Test 1: Censored RTs ----
 
-# Defaults
-resp <- FALSE
-dirn <- TRUE
-
 # Gentle Censor at 3s (e.g. exp timeout)
 res_cens <- run_lba_demo(
   p_contaminant = 0,
   estimate_contaminant = FALSE,
   n_trials = 10000,
   UC = 3,
-  UCresponse=resp,
-  UCdirection=dirn,
   sample_file = "samples_lba_cens.RData",
   print_stats=TRUE
 )
@@ -206,9 +154,7 @@ res_cens <- run_lba_demo(
   estimate_contaminant = FALSE,
   n_trials = 10000,
   LC = .9,
-  UC = 100, # must be a UC otherwise Intrinsic Omissions aren't handled properly
-  LCresponse=resp,
-  LCdirection=dirn,
+  UC = 3,
   sample_file = "samples_lba_cens.RData",
   print_stats=TRUE
 )
@@ -218,12 +164,8 @@ res_cens <- run_lba_demo(
   p_contaminant = 0,
   estimate_contaminant = FALSE,
   n_trials = 10000,
-  LCresponse=resp,
-  UCresponse=resp,
-  LCdirection=dirn,
-  UCdirection=dirn,
   UC = 1.8,
-  LC = .85,n_cores=9,
+  LC = 0.5,n_cores=9,
   sample_file = "samples_lba_cens.RData",
   print_stats=TRUE
 )
@@ -235,7 +177,7 @@ res_contam <- run_lba_demo(
   p_contaminant = 0.15,
   estimate_contaminant = TRUE,
   n_trials = 10000,
-  UC=100,
+  UC=100, # requires something to correctly censor the data with never-finished accumulators
   layout=c(2,4),n_cores=9,
   sample_file = "samples_lba_contam.RData",
   print_stats=TRUE

@@ -1,3 +1,4 @@
+library(parallel)
 lfun <- function(i, x, p_vector, pname, dadm, use_c) {
   p_vector[pname] <- x[i]
   if (use_c) {

@@ -1,106 +1,3 @@
-# resolve_bound <- function(data, bound_name, supplied, default) {
-#     if (!is.null(supplied)) return(supplied)
-#     if (!is.null(data) && bound_name %in% colnames(data)) return(data[[bound_name]])
-#     if (!is.null(data) && !is.null(attr(data, bound_name))) return(attr(data, bound_name))
-#     default
-# }
-#
-#
-# bound_to_numeric <- function(x, bound_name = "bound") {
-#   if (is.null(x)) return(NULL)
-#   if (is.numeric(x)) return(x)
-#   out <- suppressWarnings(as.numeric(as.character(x)))
-#   if (all(is.na(out)) && any(!is.na(x))) {
-#     stop(paste0(bound_name, " must be numeric (or coercible to numeric)."))
-#   }
-#   names(out) <- names(x)
-#   out
-# }
-#
-# expand_bound_rowwise <- function(b, data, bound_name = "bound") {
-#   if (any(names(data)==bound_name)) data$bound_name
-#   b <- bound_to_numeric(b, bound_name)
-#   n <- nrow(data)
-#
-#   if (length(b) == 1) {
-#     return(rep(b, n))
-#   }
-#   if (length(b) == n) {
-#     return(b)
-#   }
-#
-#   if (!is.null(names(b)) && "subjects" %in% names(data)) {
-#     present <- unique(as.character(data$subjects))
-#     if (!all(present %in% names(b))) {
-#       stop(paste0("Subject-wise ", bound_name, " must be named for all subjects present in data$subjects."))
-#     }
-#     return(unname(b[as.character(data$subjects)]))
-#   }
-#
-#   stop(paste0(bound_name, " must be scalar, length nrow(data), or a subject-named vector."))
-# }
-#
-#
-# make_missing <- function(data, LT = 0, UT = Inf, LC = 0, UC = Inf,
-#                          LCresponse = FALSE, UCresponse = FALSE,
-#                          LCdirection = TRUE, UCdirection = TRUE,
-#                          pContaminant=NULL) {
-#
-# #force_direction=FALSE,force_response=FALSE
-#
-#   LT <- resolve_bound("LT", LT, 0)
-#   UT <- resolve_bound("UT", UT, Inf)
-#   LC <- resolve_bound("LC", LC, 0)
-#   UC <- resolve_bound("UC", UC, Inf)
-#
-#   # Ensure truncation/censoring bounds are row-wise numeric columns (scalar,
-#   # subject-wise, or trial-wise)
-#   data$LT <- expand_bound_rowwise(LT, data, "LT")
-#   data$UT <- expand_bound_rowwise(UT, data, "UT")
-#   data$LC <- expand_bound_rowwise(LC, data, "LC")
-#   data$UC <- expand_bound_rowwise(UC, data, "UC")
-#
-#   isgng <- data$R == "nogo"
-#   if (any(isgng)) {
-#     if (!UCdirection) {
-#       stop("UCdirction cannot be FALSE for a go/nogo model")
-#     }
-#     data[isgng,"UC"] <- 0
-#     data[isgng,"LC"] <- 0
-#     data[isgng,"UT"] <- Inf
-#     data[isgng,"LT"] <- 0
-#     # Wont work if go trials don't correspond
-#     UCdirection <- TRUE
-#     UCresponse <- TRUE
-#   }
-#
-#   # Only keep trials in (LT, UT) or infinite
-#   pick <- is.infinite(data$rt) | (data$rt > data$LT & data$rt < data$UT)
-#   pick[is.na(pick)] <- TRUE
-#   data <- data[pick, ]
-#
-#   # Lower censoring
-#   pickL <- data$rt < data$LC
-#   pickL[is.na(pickL)] <- FALSE
-#   if (LCdirection) data$rt[pickL] <- -Inf else data$rt[pickL] <- NA
-#   if (!LCresponse) data$R[pickL] <- NA
-#
-#   # Upper censoring
-#   pickU <- data$rt > data$UC
-#   pickU[is.na(pickU)] <- FALSE
-#   if (UCdirection) data$rt[pickU] <- Inf else data$rt[pickU] <- NA
-#   if (!UCresponse) data$R[pickU] <- NA
-#
-#   if (!is.null(pContaminant)) {
-#     contam <- rbinom(nrow(data), 1, pContaminant) == 1
-#     data[contam, "rt"] <- Inf
-#     data[contam, "R"] <- NA
-#   }
-#
-#   data
-# }
-
-
 
 get_missing <- function(supplied, data, bound_name, default,type) {
 
@@ -232,7 +129,7 @@ make_missing <- function(data, LT = NULL, UT = NULL, LC = NULL, UC = NULL,
     UT_eff[isgng] <- Inf
     LT_eff[isgng] <- 0
     UCdirection[isgng] <- TRUE
-    UCresponse[isgng] <- TRUE
+    UCresponse[isgng] <- FALSE
   }
 
   if (any(LT_eff>LC_eff & LC_eff!=0)) stop("LT > LC not allowed")
@@ -241,7 +138,7 @@ make_missing <- function(data, LT = NULL, UT = NULL, LC = NULL, UC = NULL,
   # Only keep trials in LT-UT (inclusive) or infinite or NA
   cutL <- is.finite(data$rt) & (data$rt < LT_eff)
   cutL[is.na(cutL)] <- FALSE; cutL[no_truncate] <- FALSE
-  cutU <- is.finite(data$rt) & (data$rt > UT_eff)
+  cutU <- (data$rt > UT_eff)
   cutU[is.na(cutU)] <- FALSE; cutU[no_truncate] <- FALSE
   if (verbose) {
     if (!all(LT_eff==0)) {
@@ -257,7 +154,7 @@ make_missing <- function(data, LT = NULL, UT = NULL, LC = NULL, UC = NULL,
       print(round(100*stat,digits))
     }
   }
-
+  
   # Truncate
   data <- data[!cutL & !cutU, ]
   LT_eff <- LT_eff[!cutL & !cutU]
@@ -273,7 +170,7 @@ make_missing <- function(data, LT = NULL, UT = NULL, LC = NULL, UC = NULL,
   # Censoring proportions (like truncation dont censor if equal to LC or UC)
   cutL <- is.finite(data$rt) & (data$rt < LC_eff)
   cutL[is.na(cutL)] <- TRUE; cutL[no_censor] <- FALSE
-  cutU <- is.finite(data$rt) & (data$rt > UC_eff)
+  cutU <- (data$rt > UC_eff)
   cutU[is.na(cutU)] <- TRUE; cutU[no_censor] <- FALSE
   if (verbose) {
     if (!all(LC_eff==0)) {
@@ -296,9 +193,9 @@ make_missing <- function(data, LT = NULL, UT = NULL, LC = NULL, UC = NULL,
   data$R[cutL & !LCresponse] <- NA
 
   # Upper censoring
-  data$rt[cutU &  LCdirection] <- Inf
-  data$rt[cutU & !LCdirection] <- NA
-  data$R[cutU & !LCresponse] <- NA
+  data$rt[cutU &  UCdirection] <- Inf
+  data$rt[cutU & !UCdirection] <- NA
+  data$R[cutU & !UCresponse] <- NA
 
   data
 }
@@ -365,9 +262,32 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
   if (!is.null(staircase)){
     staircase <- check_staircase(staircase)
   }
-
-  if (is.null(TC)) TC <- list()
-  TC <- add_defaults(TC,no_truncate=FALSE,no_censor=FALSE,verbose=FALSE,digits=2)
+  # This handles censoring and truncation where TC is not specified -- first check data, then design as a fallback (need to agree on the accepted order)
+  if (is.null(TC)) {
+    TC <- list()
+    TC <- add_defaults(TC,
+      no_truncate=FALSE,no_censor=FALSE,verbose=FALSE,digits=2,
+      LCresponse=FALSE,UCresponse=FALSE,LCdirection=TRUE,UCdirection=TRUE,
+      pContaminant=NULL,rt_resolution=NULL
+    )
+    if (is.null(data)) {
+      missing_cols <- c("LT","LC","UC","UT")
+    } else {
+      missing_cols <- c("LT","LC","UC","UT")[!(c("LT","LC","UC","UT") %in% names(data))]
+    }
+    if (length(missing_cols) > 0) {
+      for (nm in missing_cols) {
+        if (!is.null(design[[nm]])) TC[[nm]] <- design[[nm]]
+      }
+    }
+  } else {
+    if (!is.list(TC)) stop("TC must be a list")
+    TC <- add_defaults(TC,
+      no_truncate=FALSE,no_censor=FALSE,verbose=FALSE,digits=2,
+      LCresponse=FALSE,UCresponse=FALSE,LCdirection=TRUE,UCdirection=TRUE,
+      pContaminant=NULL,rt_resolution=NULL
+    )
+  }
 
   # check_bounds <- FALSE
 
@@ -541,30 +461,20 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
   if (any(names(data)=="RACE")) {
       Rrt <- RACE_rfun(data, pars, model)
   } else Rrt <- model()$rfun(data,pars)
-
+  
   if (is.null(TC$pContaminant) & any(dimnames(pars)[[2]]=="pContaminant"))
     TC$pContaminant <- pars[,"pContaminant"][data$lR==levels(data$lR)[1]]
 
   dropNames <- c("lR","lM")
   if (!return_functions && !is.null(design$Ffunctions))
     dropNames <- c(dropNames,names(design$Ffunctions))
+  # ZH added to protect SSD simulation
+  if ("SSD"%in%dropNames) {dropNames=dropNames[!grepl("SSD",dropNames)]}
   if(!is.null(data$lR)) data <- data[data$lR == levels(data$lR)[1],]
   data <- data[,!(names(data) %in% dropNames)]
   for (i in dimnames(Rrt)[[2]]) data[[i]] <- Rrt[, i]
   
-  # This handles censoring and truncation where TC is not specified -- first check data, then design as a fallback (need to agree on the accepted order)
-  if (is.null(TC)) {
-    if (is.null(data)) {
-      missing_cols <- c("LT","LC","UC","UT")
-    } else {
-      missing_cols <- c("LT","LC","UC","UT")[!(c("LT","LC","UC","UT") %in% names(data))]
-    }
-    if (length(missing_cols) > 0) {
-      for (nm in missing_cols) {
-        if (!is.null(design[[nm]])) TC[[nm]] <- design[[nm]]
-      }
-    }
-  }
+  
 
   data <- make_missing(data,LT=TC$LT,LC=TC$LC,UC=TC$UC,UT=TC$UT,
     LCresponse = TC$LCresponse, UCresponse = TC$UCresponse,
@@ -604,36 +514,6 @@ RACE_rfun <- function(data, pars, model){
   Rrt$R <- factor(Rrt$R, labels = levels(data$lR), levels = 1:length(levels(data$lR)))
   return(Rrt)
 }
-
-# GNG_rfun <- function(data, pars, model){
-# 	if (!"nogo"%in%levels(data$lR)) {
-# 		stop("Go/No-Go models must have a nogo level for Response")
-# 	}
-# 	if (any(is.infinite(data$UC))) {
-# 		stop("UC must be finite for Go/No-Go Models")
-# 	}
-#   Rrt <- matrix(ncol=2,nrow=dim(data)[1]/length(levels(data$lR)),
-#          dimnames=list(NULL,c("R","rt")))
-#   RACE <- data[data$lR==levels(data$lR)[1],"RACE"]
-#   D = data[data$lR==levels(data$lR)[1],"UC"]
-#   ok <- as.numeric(data$lR) <= as.numeric(as.character(data$RACE))
-#   for (i in levels(RACE)) {
-#     pick <- data$RACE==i
-#     data_in <- data[pick & ok,]
-#     data_in$lR <- factor(data$lR[pick & ok])
-#     tmp <- pars[pick & ok,]
-#     attr(tmp, "ok") <- rep(T, nrow(tmp))
-#     if (!is.null(attr(pars, "staircase"))) attr(tmp, "staircase") <- attr(pars, "staircase")
-#     Rrti <- model()$rfun(data_in,tmp)
-#     Rrti$R <- as.numeric(Rrti$R)
-#     Rrt[RACE==i,] <- as.matrix(Rrti)
-#   }
-#   Rrt <- data.frame(Rrt)
-#   Rrt$R <- factor(Rrt$R, labels = levels(data$lR), levels = 1:length(levels(data$lR)))
-#   Rrt$R[Rrt$rt>D]="nogo"
-#   Rrt$rt[Rrt$R=="nogo"]=Inf
-#   return(Rrt)
-# }
 
 add_Ffunctions <- function(data,design)
   # Adds columns created by Ffunctions (if not already there)

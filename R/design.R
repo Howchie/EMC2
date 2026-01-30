@@ -151,11 +151,12 @@ design <- function(formula = NULL,factors = NULL,Rlevels = NULL,model,data=NULL,
   }
   
   ## Handle GNG models silently
+  # ZH This matches Andrew's code in make_data by branching the model likelihood soley based on the presence of "nogo" in Rlevels
   if ("nogo" %in% Rlevels) {
     m_list <- model()
-    if(m_list$type != "GNG"){
-      m_list$type <- "GNG"
-      if(!grepl("GNG", m_list$c_name)) m_list$c_name <- paste0(m_list$c_name, "GNG")
+    if(!("GNG"%in%m_list$type)){
+      if(!grepl("GNG", m_list$type)) m_list$type <- paste0(m_list$type, "GNG")
+      if (!is.null(m_list$c_name)) {if(!grepl("GNG", m_list$c_name)) m_list$c_name <- paste0(m_list$c_name, "GNG")}
       model <- function() m_list
     }
   }
@@ -309,11 +310,10 @@ contr.anova <- function(n) {
 }
 
 add_accumulators <- function(data,matchfun=NULL,simulate=FALSE, type = "RACE", Fcovariates=NULL) {
-  if(is.null(type) || !type %in% c("RACE", "GNG", "SDT", "MT", "TC")) return(data)
+  if(is.null(type) || !type %in% c("RACE", "RACEGNG", "SDT", "MT", "TC")) return(data)
   if (!is.factor(data$R)) stop("data must have a factor R")
   factors <- names(data)[!names(data) %in% c("R","rt","trials",Fcovariates)]
-  # ZH -- Go/No-Go Race should work as-is as long as data are coded with R="go" or "no-go" or similar, with Inf rt for no-go.
-  if (type %in% c("RACE","SDT", "GNG")) {
+  if (type %in% c("RACE","SDT", "RACEGNG")) {
     nacc <- length(levels(data$R))
     datar <- cbind(do.call(rbind,lapply(1:nacc,function(x){data})),
                    lR=factor(rep(levels(data$R),each=dim(data)[1]),levels=levels(data$R)))
@@ -347,9 +347,6 @@ add_accumulators <- function(data,matchfun=NULL,simulate=FALSE, type = "RACE", F
       # datar <- datar[,!islS]
       datar$lSmagnitude <- as.numeric(lSmagnitude)
     }
-	if (type=="GNG" & !("nogo"%in%levels(datar$lR))) {
-		stop("GNG model must have nogo level in R")
-	}
   }
   if (type %in% c("MT","TC")) {
     datar <- cbind(do.call(rbind,lapply(1:2,function(x){data})),
@@ -368,10 +365,10 @@ add_accumulators <- function(data,matchfun=NULL,simulate=FALSE, type = "RACE", F
 
     if (type %in% c("MT","TC")) datar$winner <- NA else
       datar$winner <- datar$lR==R
-    if (type == "GNG") {
+    if ("RACEGNG"%in%type) {
       is_inf <- is.infinite(datar$rt)
       if (any(is_inf)) {
-        datar$winner[is_inf] <- datar$lR[is_inf] == "nogo" # here we code all missing responses as "nogo" winner
+        datar$winner[is_inf] <- datar$lR[is_inf] == "nogo" # here we code all missing responses as "nogo" winner because the make_missing trick doesn't handle that
       }
     }
   }
@@ -472,11 +469,15 @@ rt_check_function <- function(data){
   # Truncation
   if ("UT"%in%colnames(data)) {
     # Use upper truncation bound, not censoring bound
-    check_rt(data$UT, data$rt)
+    if (any(is.finite(data$UT))) {
+      check_rt(data$UT, data$rt)
+    }
   }
   if ("LT"%in%colnames(data)) {
     if (any(data$LT<0)) stop("Lower truncation cannot be negative")
-    check_rt(data$LT,data$rt,upper=FALSE)
+    if (any(data$LT>0)) {
+      check_rt(data$LT,data$rt,upper=FALSE)
+    }
   }
   if ("UT"%in%colnames(data) & "LT"%in%colnames(data)) {
     DT <- data$UT - data$LT
@@ -485,13 +486,17 @@ rt_check_function <- function(data){
 
   # Censoring
   if ("UC"%in%colnames(data)) {
-    check_rt(data$UC,data$rt)
+    if (any(is.finite(data$UC))) {
+      check_rt(data$UC,data$rt)
+    }
     if ("UT"%in%colnames(data) && any(is.finite(data$UC) & (data$UT < data$UC)) )
       stop("Upper truncation must not be less than upper censor")
   }
   if ("LC"%in%colnames(data)) {
     if (any(data$LC<0)) stop("Lower censor cannot be negative")
-    check_rt(data$LC,data$rt,upper=FALSE)
+    if (any(data$LC>0)) { 
+      check_rt(data$LC,data$rt,upper=FALSE)
+    }
     if ("LT"%in%colnames(data) && any(data$LC!=0 & (data$LT>data$LC)))
       stop("Lower censor must not be less than lower truncation")
   }
@@ -605,7 +610,9 @@ design_model <- function(data,design,model=NULL,
   sampled_p_names <- p_names[!(p_names %in% names(design$constants))]
   attr(dadm,"p_names") <- p_names
   attr(dadm,"sampled_p_names") <- sampled_p_names
-  if (model()$type=="DDM") nunique <- dim(dadm)[1] else
+ 
+  # `type` is a length-1 string (e.g. "DDM", "DDMGNG"); `%in%` would fail for "DDMGNG".
+  if (grepl("DDM", model()$type)) nunique <- dim(dadm)[1] else
     nunique <- dim(dadm)[1]/length(levels(dadm$lR))
   if (verbose & compress) {
     if (all(c(dadm$LC,dadm$LT)==0) & all(is.infinite(c(dadm$UC,dadm$UT))))

@@ -1,6 +1,4 @@
 remotes::install_github("https://github.com/Howchie/EMC2/",ref="censoring_truncation_ah")
-unloadNamespace("EMC2")
-devtools::install_local(force=TRUE)
 rm(list=ls())
 library(EMC2)
 ## This is a helper function to directly check likelihoods
@@ -203,11 +201,9 @@ designRDM <- design(
 p_vector <- sampled_pars(designRDM,doMap = FALSE)
 p_vector[] <- c(log(2), log(1.5), log(2), log(0.2))
 
-## This is a hack to get access to my R
+## This is a hack to remove the c_name
 RDMR <- function() {
   m <- RDM()
-  m$log_likelihood <- function(pars, dadm, model, min_ll = log(1e-10)) {
-    EMC2:::log_likelihood_race_missing(pars, dadm, model, min_ll = min_ll)}
   m$c_name=NULL
   m
 }
@@ -245,7 +241,7 @@ print(recovery(emcr,p_vector,selection="alpha"))
 ### CONTAMINATION only ----
 
 # I saved off generated data and fits
-load("Censoring Test/RDM.RData")
+# load("Censoring Test/RDM.RData")
 
 # Here is a simple 5 parameter RDM model with contamination that uses Zach's C
 designRDM <- design(
@@ -368,20 +364,15 @@ system.time({emcrCT <- fit(emc)})
 # Time difference of 3.282171 mins
 
 
-# C fails, R fine (same pattern with no contamination)
 print(recovery(emccCT,p_vector,selection="alpha"))
 print(recovery(emcrCT,p_vector,selection="alpha"))
-
-# As likelihoods match at the generating value it seems likely
-# that there is a failure in the measures taken to make the likelihood
-# robust in the C ... will have to leave that to you Zach, sorry.
 
 # save(dat,emcc,emcr,datC,emccC,emcrC,datT,emccT,emcrT,datCT,emccCT,emcrCT,
 #      file="Censoring TEST/RDM.RData")
 
 #### LBA, Parameter recovery, test memory consumption of old vs new C ----
 
-load("Censoring Test/LBA.RData")
+# load("Censoring Test/LBA.RData")
 
 # Here is a simple 5 parameter RDM model with contamination that uses Zach's C
 designLBA <- design(
@@ -391,25 +382,15 @@ designLBA <- design(
   formula=list(v~lM,B~1,t0~1,pContaminant~1)
 )
 
-# Old C likelihood implementation (for memory/speed comparisons)
-designOLBA <- design(
-  factors=list(subjects=1,S=c("left","right")),Rlevels=c("left","right"),
-  matchfun=function(d) as.numeric(d$S)==as.numeric(d$lR),
-  model=OLBA,
-  formula=list(v~lM,B~1,t0~1,pContaminant~1)
-)
-
 # This parameter vector produces reasonable RTs and accuracies with a small
 # level of contamination.
 p_vector <- sampled_pars(designLBA,doMap = FALSE)
 p_vector[] <- c(1, 1.25, log(2), log(0.2),qnorm(.05))
 
 
-## This is a hack to get access to my R
+## This is a hack to remove c_name
 LBAR <- function() {
   m <- LBA()
-  m$log_likelihood <- function(pars, dadm, model, min_ll = log(1e-10)) {
-    EMC2:::log_likelihood_race_missing(pars, dadm, model, min_ll = min_ll)}
   m$c_name=NULL
   m
 }
@@ -427,9 +408,7 @@ datCT <- make_data(p_vector,designLBA,n_trials=10000,TC=TC)
 
 # Compare likelihoods
 dadmC <- EMC2:::design_model(datCT,designLBA)
-dadmO <- EMC2:::design_model(datCT,designOLBA)
 lfun(p_vector,dadmC)
-lfun(p_vector,dadmO)
 
 
 # Fitting
@@ -440,15 +419,6 @@ emc <- make_emc(datCT,designLBA1,type="single")
 emcrCT <- profile_fit_rss_live(fit(emc), label = "fit: LBA (R)")
 # Time difference of 2.771561 mins
 
-# Optional: fit old C (OLBA) with the same data, to compare memory behaviour.
-RUN_OLD_C_FIT <- FALSE
-if (isTRUE(RUN_OLD_C_FIT)) {
-  emc <- make_emc(datCT,designOLBA,type="single")
-  emcoCT <- profile_fit_rss_live(fit(emc), label = "fit: OLBA (Old_C)")
-}
-
-
-# C fails, R fine
 print(recovery(emccCT,p_vector,selection="alpha"))
 print(recovery(emcrCT,p_vector,selection="alpha"))
 
@@ -456,7 +426,7 @@ print(recovery(emcrCT,p_vector,selection="alpha"))
 
 #### LNR, Parameter recovery, all three only ----
 
-load("Censoring Test/LNR.RData")
+#load("Censoring Test/LNR.RData")
 
 # Here is a simple 5 parameter RDM model with contamination that uses Zach's C
 designLNR <- design(
@@ -472,11 +442,9 @@ p_vector <- sampled_pars(designLNR,doMap = FALSE)
 p_vector[] <- c(log(1.5),log(.4), log(1), log(0.3),qnorm(.05))
 
 
-## This is a hack to get access to my R
+## This is a hack to remove c_name
 LNRR <- function() {
   m <- LNR()
-  m$log_likelihood <- function(pars, dadm, model, min_ll = log(1e-10)) {
-    EMC2:::log_likelihood_race_missing(pars, dadm, model, min_ll = min_ll)}
   m$c_name=NULL
   m
 }
@@ -507,23 +475,32 @@ emc <- make_emc(datCT,designLNR1,type="single")
 system.time({emcrCT <- fit(emc)})
 # Time difference of 2.199915 mins
 
-
-# C fails, R fine
 print(recovery(emccCT,p_vector,selection="alpha"))
 print(recovery(emcrCT,p_vector,selection="alpha"))
 
 # save(datCT,emccCT,emcrCT,file="Censoring TEST/LNR.RData")
 
 dev.off()
-### GNG LBA ---- CHECK HERE
+### GNG LBA
 
-load("Censoring Test/GNG.RData")
-
+#load("Censoring Test/GNG.RData")
+LBAR <- function() {
+  m <- LBA()
+  m$c_name=NULL
+  m
+}
 # Go/NoGo designs are detected via the use of a "nogo" level in the response.
 designLBA <- design(
   factors=list(subjects=1,S=c("go","nogo")),Rlevels=c("go","nogo"),
   matchfun=function(d) as.numeric(d$S)==as.numeric(d$lR),
   model=LBA,UC=3,
+  formula=list(v~lM,B~1,t0~1)
+)
+
+designLBA1 <- design(
+  factors=list(subjects=1,S=c("go","nogo")),Rlevels=c("go","nogo"),
+  matchfun=function(d) as.numeric(d$S)==as.numeric(d$lR),
+  model=LBAR,UC=3,
   formula=list(v~lM,B~1,t0~1)
 )
 
@@ -540,13 +517,13 @@ tapply(is.na(dat$R),dat$S,mean)
 
 # Compare likelihoods
 dadmC <- EMC2:::design_model(dat,designLBA)
+dadmR <- EMC2:::design_model(dat,designLBA1)
 lfun(p_vector,dadmC)
 lfun(p_vector,dadmR,use_c = F)
 
 # Profiles
 print(profile_plot(dat,designLBA,p_vector,n_cores=1,layout=c(2,2)))
-print(profile_plot(dat,designLBA1,p_vector,n_cores=1,layout=c(2,2),use_c=FALSE))
-
+print(profile_plot(dat,designLBA1,p_vector,n_cores=1,layout=c(2,2),use_c=FALSE)) # NB R code seems to have a weird bump might be integration noise
 
 # Fitting
 emc <- make_emc(dat,designLBA,type="single")
@@ -558,10 +535,14 @@ system.time({emcr <- fit(emc)})
 
 # Both good
 print(recovery(emcc,p_vector,selection="alpha"))
+print(recovery(emcr,p_vector,selection="alpha"))
 
+# Recovers data trends
 pred=predict(emcc)
 tapply(is.na(dat$R),dat$S,mean)
 tapply(is.na(pred$R),pred$S,mean)
+tapply(dat$rt,dat$S,function(x) {mean(x[is.finite(x)])})
+tapply(pred$rt,pred$S,function(x) {mean(x[is.finite(x)])})
 ### GNG LNR 3 Choice ----
 
 # Race models allow go/nogo with more than two choices, here with an LNR
@@ -625,47 +606,69 @@ print(recovery(emcr3,p_vector,selection="alpha"))
 
 ### DDM GNG ----
 
-# GNG has been implemented for the DDM in a clumsy fashion and only in R.
-# Here is the current implementation which needs to be put into the new GNG
-# structure and ported to C.
+# GNG has been implemented for the DDM.
+# The new C++ code follows the structure of the race models:
+# If either Rlevel is exactly "nogo" the likelihood function will divert non-finite RTs to the GNG-style 1-pfun(UC,go) calculation
+# As a fallback, if there are non-finite RTs specified in the DDM and no "nogo" response, it will currently treat them as unfinished
+# and compute 1 - (FA + FB) -- no truncation or lower censor implemented
 
-# For speed do a WDM example. We must specify an upper limit of the response window
+# NB the example against the old R code uses different random data due to the different inputs and rfun styles, but the parameters etc are identical
+# Also NB the DDMGNG() model can have "nogo" as a factor as it will (a) pre-filter the data in rfun, and (b) has no c_name so the new design paths don't change it
 TIMEOUT <- 2.5
-designDDM <- design(Rlevels = c("left","right"),
-              factors=list(subjects=1,S=c("left","right")),
-              functions=list(
-                # This is the same as UC = 2.5
-                TIMEOUT=function(d)rep(TIMEOUT,nrow(d)),
-                # specify nogo response level
-                Rnogo=function(d)factor(rep("left",nrow(d)),levels=c("left","right")),
-                # specify go response level
-                Rgo=function(d)factor(rep("right",nrow(d)),levels=c("left","right"))),
+designDDM <- design(Rlevels = c("nogo","go"),
+              factors=list(subjects=1,S=c("nogo","go")),
                 formula=list(v~S,a~1, Z~1, t0~1),
-                model=DDMGNG)
+                model=DDM, UC=2.5)
+designDDMGNG <- design(Rlevels = c("nogo","go"),
+                       factors=list(subjects=1,S=c("nogo","go")),
+                       functions=list(
+                         # This is the same as UC = 2.5
+                         TIMEOUT=function(d)rep(TIMEOUT,nrow(d)),
+                         # specify nogo response level
+                         Rnogo=function(d)factor(rep("nogo",nrow(d)),levels=c("nogo","go")),
+                         # specify go response level
+                         Rgo=function(d)factor(rep("go",nrow(d)),levels=c("nogo","go"))),
+                       formula=list(v~S,a~1, Z~1, t0~1),
+                       model=DDMGNG)
 
 
 p_vector <- sampled_pars(designDDM,doMap = FALSE)
 p_vector[] <- c(-.5, 1, log(2), qnorm(.5),log(.3))
-
 # Nogo responses are indicated by rt=NA, the R column is ignored for these trials
-datD <- make_data(p_vector,designDDM,n_trials=10000)
-
+datC <- make_data(p_vector,designDDM,n_trials=10000)
+datR <- make_data(p_vector,designDDMGNG,n_trials=10000)
 # Response probabilities are as expected and there is clear truncation
-tapply(is.na(datD$rt),datD$S,mean)
-hist(datD$rt,breaks=seq(0,TIMEOUT,.1))
+tapply(is.infinite(datC$rt),datC$S,mean)
+tapply(is.infinite(datR$rt),datR$S,mean)
+plot(density(datC$rt), type='l', col='blue')
+lines(density(datR$rt), col='red')
+dadmC <- EMC2:::design_model(datC, designDDM)
+dadmR <- EMC2:::design_model(datR, designDDMGNG)
 
-# Compare likelihoods
-dadm <- EMC2:::design_model(datD,designDDM)
-lfun(p_vector,dadm,use_c = F)
-
-# Profiles
-print(profile_plot(datD,designDDM,p_vector,n_cores=1,layout=c(2,3),use_c=FALSE))
+c_ll <- lfun(p_vector, dadmC, use_c = TRUE)
+r_ll <- lfun(p_vector, dadmR, use_c = FALSE)
 
 # Fitting
-emc <- make_emc(datD,designDDM,type="single")
-system.time({emcrD <- fit(emc)})
-#Time difference of 1.158099 mins
+emc <- make_emc(datC,designDDM,type="single")
+system.time({emcC <- fit(emc)})
 
-print(recovery(emcrD,p_vector,selection="alpha"))
+emc <- make_emc(datR,designDDMGNG,type="single")
+system.time({emcR <- fit(emc)})
 
-# save(dat,emcc,emcr,dat3,emcc3,emcr3,datD,emcrD,file="Censoring TEST/GNG.RData")
+print(recovery(emcC,p_vector,selection="alpha"))
+print(recovery(emcR,p_vector,selection="alpha"))
+# save(dat,emcc,emcr,dat3,emcc3,emcr3,datR,emcrD,file="Censoring TEST/GNG.RData")
+
+## Quick test of the DDM UC path. It seems a lot worse than race models.
+designDDM <- design(Rlevels = c("left","right"),
+                    factors=list(subjects=1,S=c("left","right")),
+                    formula=list(v~S,a~1, Z~1, t0~1),
+                    model=DDM, UC=2.5)
+p_vector <- sampled_pars(designDDM,doMap = FALSE)
+p_vector[] <- c(-.5, 1, log(2), qnorm(.5),log(.3))
+datC <- make_data(p_vector,designDDM,n_trials=10000)
+tapply(is.infinite(datC$rt),datC$S,mean)
+plot(density(datC$rt), type='l', col='blue')
+emc <- make_emc(datC,designDDM,type="single")
+system.time({emcC <- fit(emc)})
+print(recovery(emcC,p_vector,selection="alpha"))
