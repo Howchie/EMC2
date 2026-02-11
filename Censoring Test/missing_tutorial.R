@@ -481,7 +481,7 @@ print(recovery(emcrCT,p_vector,selection="alpha"))
 # save(datCT,emccCT,emcrCT,file="Censoring TEST/LNR.RData")
 
 dev.off()
-### GNG LBA
+### GNG LBA ----
 
 #load("Censoring Test/GNG.RData")
 LBAR <- function() {
