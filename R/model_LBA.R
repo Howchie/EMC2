@@ -240,11 +240,14 @@ LBA <- function(posdrift=TRUE){
       pars
     },
     # Random function for racing accumulator
-    rfun=function(data,pars) rLBA(data$lR,pars,ok = attr(pars, "ok"),posdrift=ifelse(posdrift,TRUE,FALSE)),
+    rfun=ifelse(posdrift,function(data,pars) rLBA(data$lR,pars,ok = attr(pars, "ok"),posdrift=TRUE),
+                function(data,pars) rLBA(data$lR,pars,ok = attr(pars, "ok"),posdrift=FALSE)),
     # Density function (PDF) for single accumulator
-    dfun=function(rt,pars) dLBA(rt,pars,ifelse(posdrift,TRUE,FALSE)),
+    dfun=ifelse(posdrift,function(rt,pars) dLBA(rt,pars,posdrift=TRUE),
+                function(rt,pars) dLBA(rt,pars,posdrift=FALSE)),
     # Probability function (CDF) for single accumulator
-    pfun=function(rt,pars) pLBA(rt,pars,ifelse(posdrift,TRUE,FALSE)),
+    pfun=ifelse(posdrift,function(rt,pars) pLBA(rt,pars,posdrift=TRUE),
+                function(rt,pars) pLBA(rt,pars,posdrift=FALSE)),
     # Race likelihood combining pfun and dfun
     log_likelihood=function(pars,dadm,model,min_ll=log(1e-10)){
       log_likelihood_race_missing(pars=pars, dadm = dadm, model = model, min_ll = min_ll)

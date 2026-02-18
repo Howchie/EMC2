@@ -349,10 +349,17 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
   } else {
 		data <- add_trials(data[order(data$subjects),])
   }
-
+  ssd_meta <- NULL
   if(!is.null(functions)){
     for(i in 1:length(functions)){
-      data[[names(functions)[i]]] <- functions[[i]](data)
+      fun <- functions[[i]]
+      value <- fun(data)
+      meta <- attr(value, "emc_ssd")
+      if (!is.null(meta)) {
+        attr(value, "emc_ssd") <- NULL
+        ssd_meta <- meta$staircase
+      }
+      data[[names(functions)[i]]] <- value
     }
   }
   if (!is.factor(data$subjects)) data$subjects <- factor(data$subjects)
@@ -455,8 +462,17 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
                     data.frame(lapply(data,rep,times=expand)))
       pars <- apply(pars,2,rep,times=expand)
   }
-  if (!is.null(staircase)) {
-      attr(pars, "staircase") <- staircase
+  if (!is.null(ssd_meta)) {
+    ssd_meta$labels <- lR_levels
+    if (!is.null(ssd_meta$specs)) {
+      for (nm in names(ssd_meta$specs)) {
+        if (is.list(ssd_meta$specs[[nm]])) {
+          ssd_meta$specs[[nm]]$labels <- lR_levels
+        }
+      }
+    }
+    attr(data, "staircase") <- ssd_meta
+    attr(pars, "staircase") <- ssd_meta
   }
   if (any(names(data)=="RACE")) {
       Rrt <- RACE_rfun(data, pars, model)
@@ -472,6 +488,10 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
   if ("SSD"%in%dropNames) {dropNames=dropNames[!grepl("SSD",dropNames)]}
   if(!is.null(data$lR)) data <- data[data$lR == levels(data$lR)[1],]
   data <- data[,!(names(data) %in% dropNames)]
+  if (!is.null(ssd_meta)) {
+    attr(data, "staircase") <- ssd_meta
+    attr(pars, "staircase") <- ssd_meta
+  }
   for (i in dimnames(Rrt)[[2]]) data[[i]] <- Rrt[, i]
   
   

@@ -810,6 +810,15 @@ dm_list <- function(dadm)
       # attr(dl[[i]], "unique_nortR") <- NULL
       attr(dl[[i]], "expand_nort") <- NULL
       # attr(dl[[i]], "expand_nortR") <- NULL
+      # LL cache attrs are data-shape specific; drop any inherited cache from the
+      # full dadm so per-subject caching is always rebuilt safely.
+      attr(dl[[i]], "emc2_ll_cache_version") <- NULL
+      attr(dl[[i]], "emc2_all_finite_trials") <- NULL
+      attr(dl[[i]], "finite_rt_mask") <- NULL
+      attr(dl[[i]], "finite_rt_unique_trial_indices") <- NULL
+      attr(dl[[i]], "other_unique_trial_indices") <- NULL
+      attr(dl[[i]], "RACE_nacc_by_row") <- NULL
+      attr(dl[[i]], "RACE_mask") <- NULL
     }
   }
 

@@ -692,7 +692,7 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
     int n_lR = unique(lR).length();
     
     // Todo check whether these fallbacks are needed or if make_emc forces them. If so, simplify fallback to just assume no censoring/truncation for backwards compatability
-    constexpr int kLlCacheVersion = 1;
+    constexpr int kLlCacheVersion = 2;
     bool cache_ok = false;
     if (data.hasAttribute("emc2_ll_cache_version")) {
       int ver = Rcpp::as<int>(data.attr("emc2_ll_cache_version"));
@@ -711,11 +711,36 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
       }
     }
     
-    const bool have_race_attrs = (!has_RACE_col) ||
-      (data.hasAttribute("RACE_nacc_by_row") && data.hasAttribute("RACE_mask"));
-    const bool have_finite_attrs = data.hasAttribute("finite_rt_mask") &&
-      data.hasAttribute("finite_rt_unique_trial_indices") &&
-      data.hasAttribute("other_unique_trial_indices");
+    bool have_race_attrs = !has_RACE_col;
+    if (has_RACE_col && data.hasAttribute("RACE_nacc_by_row") && data.hasAttribute("RACE_mask")) {
+      Rcpp::IntegerVector race_nacc_by_row = data.attr("RACE_nacc_by_row");
+      Rcpp::LogicalVector race_mask = data.attr("RACE_mask");
+      have_race_attrs = (race_nacc_by_row.size() == n_trials && race_mask.size() == n_trials);
+    }
+    bool have_finite_attrs = false;
+    if (data.hasAttribute("finite_rt_mask") &&
+        data.hasAttribute("finite_rt_unique_trial_indices") &&
+        data.hasAttribute("other_unique_trial_indices") &&
+        n_lR > 0 && (n_trials % n_lR) == 0) {
+      const int n_unique_trials = n_trials / n_lR;
+      Rcpp::LogicalVector finite_rt_mask_attr = data.attr("finite_rt_mask");
+      Rcpp::IntegerVector finite_idx_attr = data.attr("finite_rt_unique_trial_indices");
+      Rcpp::IntegerVector other_idx_attr = data.attr("other_unique_trial_indices");
+      bool idx_ok = ((finite_idx_attr.size() + other_idx_attr.size()) == n_unique_trials);
+      if (idx_ok) {
+        for (int ii = 0; ii < finite_idx_attr.size(); ++ii) {
+          const int v = finite_idx_attr[ii];
+          if (v < 0 || v >= n_unique_trials) { idx_ok = false; break; }
+        }
+      }
+      if (idx_ok) {
+        for (int ii = 0; ii < other_idx_attr.size(); ++ii) {
+          const int v = other_idx_attr[ii];
+          if (v < 0 || v >= n_unique_trials) { idx_ok = false; break; }
+        }
+      }
+      have_finite_attrs = (finite_rt_mask_attr.size() == n_trials) && idx_ok;
+    }
     
     const bool need_prepare =
       !(cache_ok && have_all_finite_attr && have_race_attrs && (all_finite_trials || have_finite_attrs));
@@ -1484,17 +1509,25 @@ double c_log_likelihood_race(
       }
     } else if (rt_j == R_PosInf) {
       if (gng) {
-        const double D = UCj;
         lower_for_trial = LTj;
-        upper_for_trial = D;
+        upper_for_trial = UCj;
         int k_nogo = -1; // 1-based
         int n_true = 0;
         for (int k = 0; k < n_lR_j; ++k) {
           if (winner[start_row_idx + k]) { n_true++; k_nogo = k + 1; }
         }
+        // Robust fallback: for a single-accumulator go/no-go trial with no
+        // observed response, winner may be all FALSE in dadm. In that case the
+        // only valid no-go accumulator is index 1.
+        if (n_true == 0 && n_lR_j == 1 && R_j_idx == NA_INTEGER) {
+          k_nogo = 1;
+          n_true = 1;
+        }
         if (n_true != 1) Rcpp::stop("No winner identified in go/no-go withheld response");
         const double logA = integrate_interval(k_nogo, lower_for_trial, upper_for_trial); // probability of no-go winning
-        const double logB = log_survivor(D); // probability of no accumulator terminating
+        const double logB = posdrift
+        ? log_diff_exp(log_survivor(lower_for_trial), log_survivor(upper_for_trial))
+          : log_survivor(lower_for_trial); // For LBAIO this includes "all accumulators never finished" 
         current_ll_val = log_sum_exp(logA, logB);
       } else {
         lower_for_trial = UCj;

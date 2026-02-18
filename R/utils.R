@@ -37,11 +37,44 @@ na_locf <- function(x, na.rm = FALSE) {
   return(result)
 }
 
-.emc2_ll_cache_version <- 1L
+.emc2_ll_cache_version <- 2L
+
+.is_valid_ll_cache <- function(dadm, n_trials, n_lR, has_RACE_col) {
+  if (!is.data.frame(dadm)) return(FALSE)
+  if (!identical(attr(dadm, "emc2_ll_cache_version"), .emc2_ll_cache_version)) return(FALSE)
+  if (is.null(attr(dadm, "emc2_all_finite_trials"))) return(FALSE)
+  all_finite <- attr(dadm, "emc2_all_finite_trials")
+  if (!is.logical(all_finite) || length(all_finite) != 1L || is.na(all_finite)) return(FALSE)
+
+  if (has_RACE_col) {
+    race_nacc <- attr(dadm, "RACE_nacc_by_row")
+    race_mask <- attr(dadm, "RACE_mask")
+    if (is.null(race_nacc) || is.null(race_mask)) return(FALSE)
+    if (length(race_nacc) != n_trials || length(race_mask) != n_trials) return(FALSE)
+  }
+
+  if (isTRUE(all_finite)) return(TRUE)
+  if (n_lR <= 0L || (n_trials %% n_lR) != 0L) return(FALSE)
+  n_unique_trials <- n_trials %/% n_lR
+
+  finite_rt_mask <- attr(dadm, "finite_rt_mask")
+  finite_rt_unique <- attr(dadm, "finite_rt_unique_trial_indices")
+  other_unique <- attr(dadm, "other_unique_trial_indices")
+  if (is.null(finite_rt_mask) || is.null(finite_rt_unique) || is.null(other_unique)) return(FALSE)
+  if (length(finite_rt_mask) != n_trials) return(FALSE)
+  if ((length(finite_rt_unique) + length(other_unique)) != n_unique_trials) return(FALSE)
+
+  valid_idx <- function(x) {
+    if (!is.numeric(x)) return(FALSE)
+    if (length(x) == 0L) return(TRUE)
+    all(is.finite(x)) && all(x >= 0) && all(x <= (n_unique_trials - 1L))
+  }
+  if (!valid_idx(finite_rt_unique) || !valid_idx(other_unique)) return(FALSE)
+  TRUE
+}
 
 .cache_ll_data_attrs <- function(dadm) {
   if (!is.data.frame(dadm)) return(dadm)
-  if (identical(attr(dadm, "emc2_ll_cache_version"), .emc2_ll_cache_version)) return(dadm)
 
   cols <- names(dadm)
   if (!all(c("lR", "rt", "R") %in% cols)) {
@@ -55,6 +88,7 @@ na_locf <- function(x, na.rm = FALSE) {
   n_lR <- length(unique(lR_codes))
 
   has_RACE_col <- "RACE" %in% cols && is.factor(dadm[["RACE"]])
+  if (.is_valid_ll_cache(dadm, n_trials = n_trials, n_lR = n_lR, has_RACE_col = has_RACE_col)) return(dadm)
   if (has_RACE_col) {
     race_idx <- dadm[["RACE"]]
     race_levels <- levels(race_idx)
