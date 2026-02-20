@@ -1525,9 +1525,7 @@ double c_log_likelihood_race(
         }
         if (n_true != 1) Rcpp::stop("No winner identified in go/no-go withheld response");
         const double logA = integrate_interval(k_nogo, lower_for_trial, upper_for_trial); // probability of no-go winning
-        const double logB = posdrift
-        ? log_diff_exp(log_survivor(lower_for_trial), log_survivor(upper_for_trial))
-          : log_survivor(lower_for_trial); // For LBAIO this includes "all accumulators never finished" 
+        const double logB = log_survivor(lower_for_trial); // For LBAIO this includes "all accumulators never finished" 
         current_ll_val = log_sum_exp(logA, logB);
       } else {
         lower_for_trial = UCj;
