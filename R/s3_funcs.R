@@ -458,6 +458,18 @@ fit.emc <- function(emc, stage = NULL, iter = 1000, stop_criteria = NULL,
 #'
 #' ``iter`` (integer): The number of MCMC samples to collect.
 #'
+#' ``max_flat_loc`` (numeric): Optional sample-stage stationarity threshold based on
+#' interleaved chain drift (difference in early vs late medians, scaled by IQR).
+#'
+#' ``flat_selection`` (character vector): Optional set of sample objects to include
+#' in the flatness check. Supported values: ``alpha``, ``subj_ll``, ``theta_mu``, ``theta_var``.
+#'
+#' ``flat_p1`` / ``flat_p2`` (numeric in (0,1]): Optional proportions defining early
+#' and late windows for the flatness statistic.
+#'
+#' ``max_sample_iter`` (integer): Optional hard cap for sample-stage iterations. If exceeded,
+#' earliest sample-stage draws are removed.
+#'
 #' The estimation is performed using particle-metropolis within-Gibbs sampling.
 #' For sampling details see:
 #'

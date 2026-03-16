@@ -2,3 +2,6 @@
 .gemini
 .Rproj.user
 .ipynb_checkpoints
+/.Rtmp/
+*.RData
+*.RData

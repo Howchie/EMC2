@@ -1038,6 +1038,15 @@ inline gsl_integration_workspace* ensure_gsl_workspace(GslWorkspacePtr& ws, size
   return ws.get();
 }
 
+struct GslIntegrationControls {
+  double abs_tol;
+  double rel_tol;
+  size_t limit;
+  double retry_abs_tol;
+  double retry_rel_tol;
+  size_t retry_limit;
+};
+
 double integrate_for_kth_winner_rowmajor_cpp(
     int k_winner_idx, // 1-based
     const double* pars_rowmajor,
@@ -1048,7 +1057,7 @@ double integrate_for_kth_winner_rowmajor_cpp(
     RaceCdf1Fun cdf1,
     int n_lR_j,
     int n_par,
-    double epsilon,
+    const GslIntegrationControls& gsl_ctl,
     void* model_specific_context,
     gsl_integration_workspace* w) {
   
@@ -1078,16 +1087,22 @@ double integrate_for_kth_winner_rowmajor_cpp(
   int status;
   double result = 0.0;
   double error = 0.0;
-  if (upp == R_PosInf) {
-    if (low < 0) low = 0; // QAGIU requires a >= 0
-    if (low >= R_PosInf) {
-      result = 0.0;
-      status = GSL_SUCCESS;
-    } else {
-      status = gsl_integration_qagiu(&F, low, 0, epsilon, 1000, w, &result, &error);
+  auto run_integral = [&](double abs_tol, double rel_tol, size_t limit) -> int {
+    if (upp == R_PosInf) {
+      if (low < 0) low = 0; // QAGIU requires a >= 0
+      if (low >= R_PosInf) {
+        result = 0.0;
+        error = 0.0;
+        return GSL_SUCCESS;
+      }
+      return gsl_integration_qagiu(&F, low, abs_tol, rel_tol, limit, w, &result, &error);
     }
-  } else {
-    status = gsl_integration_qags(&F, low, upp, 0, epsilon, 1000, w, &result, &error);
+    return gsl_integration_qags(&F, low, upp, abs_tol, rel_tol, limit, w, &result, &error);
+  };
+  status = run_integral(gsl_ctl.abs_tol, gsl_ctl.rel_tol, gsl_ctl.limit);
+  // Retry once with tighter controls if the fast pass fails.
+  if (status != GSL_SUCCESS) {
+    status = run_integral(gsl_ctl.retry_abs_tol, gsl_ctl.retry_rel_tol, gsl_ctl.retry_limit);
   }
   
   gsl_set_error_handler(old_handler);
@@ -1104,7 +1119,7 @@ double get_trunc_normaliser_rowmajor_cpp(const double* pars_rowmajor,
                                          double UT,
                                          int n_lR,
                                          int n_par,
-                                         double epsilon,
+                                         const GslIntegrationControls& gsl_ctl,
                                          void* model_specific_context,
                                          GslWorkspacePtr& workspace) {
   const double log_prob_eps = std::log(std::numeric_limits<double>::epsilon());
@@ -1129,7 +1144,7 @@ double get_trunc_normaliser_rowmajor_cpp(const double* pars_rowmajor,
                                                                cdf1,
                                                                n_lR,
                                                                n_par,
-                                                               epsilon,
+                                                               gsl_ctl,
                                                                model_specific_context,
                                                                w);
     log_total = log_sum_exp(log_total, log_k);
@@ -1168,7 +1183,16 @@ double c_log_likelihood_race(
   Rcpp::NumericVector UT = dadm["UT"];
   Rcpp::NumericVector LC = dadm["LC"];
   Rcpp::NumericVector UC = dadm["UC"];
-  double integration_epsilon = 1e-7; // Tolerance for GSL integration
+  // Fast default controls for MCMC throughput, with an automatic stricter retry.
+  // Retry settings match the old behaviour (rel_tol=1e-7, limit=1000).
+  const GslIntegrationControls gsl_ctl{
+    1e-10, // abs_tol
+    1e-5,  // rel_tol
+    200,   // max subintervals
+    0.0,   // retry_abs_tol
+    1e-7,  // retry_rel_tol
+    1000   // retry max subintervals
+  };
   int n_lR_j = n_lR;
   Rcpp::NumericVector rts_dadm = dadm["rt"];
   Rcpp::IntegerVector R_idxs_dadm = dadm["R"];
@@ -1411,7 +1435,7 @@ double c_log_likelihood_race(
                                                        UTj,
                                                        n_lR_j,
                                                        n_par,
-                                                       integration_epsilon,
+                                                       gsl_ctl,
                                                        model_context_for_funcs,
                                                        workspace);
       }
@@ -1472,7 +1496,7 @@ double c_log_likelihood_race(
                                                    cdf1,
                                                    n_lR_j,
                                                    n_par,
-                                                   integration_epsilon,
+                                                   gsl_ctl,
                                                    model_context_for_funcs,
                                                    w);
     };
@@ -1599,7 +1623,7 @@ double c_log_likelihood_race(
                                                      UTj,
                                                      n_lR_j,
                                                      n_par,
-                                                     integration_epsilon,
+                                                     gsl_ctl,
                                                      model_context_for_funcs,
                                                      workspace);
       if (!R_FINITE(log_Z_this)) current_ll_val = min_ll;
