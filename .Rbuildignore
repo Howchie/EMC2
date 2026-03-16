@@ -1,14 +1,2 @@
-^EMC2\.Rproj$
+^.*\.Rproj$
 ^\.Rproj\.user$
-^test_files$
-^LICENSE\.md$
-^\.github$
-^_pkgdown\.yml$
-^docs$
-^pkgdown$
-^\.RData$
-^\.json$
-^\.vscode$
-^paper$
-^\.settings\.json$
-

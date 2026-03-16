@@ -1,0 +1,609 @@
+nohup: ignoring input
+Parameter(s) exgS_lb, s not specified in formula and assumed constant.
+
+ Sampled Parameters: 
+ [1] "v_lMFALSE" "v_lMTRUE"  "B"         "A"         "t0"        "muS"      
+ [7] "sigmaS"    "tauS"      "gf"        "tf"       
+
+ Design Matrices: 
+$v
+    lM v_lMFALSE v_lMTRUE
+  TRUE         0        1
+ FALSE         1        0
+
+$B
+ B
+ 1
+
+$A
+ A
+ 1
+
+$t0
+ t0
+  1
+
+$muS
+ muS
+   1
+
+$sigmaS
+ sigmaS
+      1
+
+$tauS
+ tauS
+    1
+
+$gf
+ gf
+  1
+
+$tf
+ tf
+  1
+
+$exgS_lb
+ exgS_lb
+       1
+
+$s
+ s
+ 1
+
+
+─── SSrdex no-ST UC=Inf ───
+Trial type counts:
+trial_type
+  go stop 
+ 981 1019 
+Response counts:
+response
+ left    NR right 
+  631   703   666 
+Response × trial type:
+          response
+trial_type left  NR right
+      go    440  77   464
+      stop  191 626   202
+NR rate by trial type:
+        go       stop 
+0.07849134 0.61432777 
+Mean RT (finite only):
+     left     right 
+0.7558354 0.7399846 
+Processing data set 1
+Likelihood speedup factor: 4, 501 unique trials
+Running preburn stage
+1: Iterations preburn = 50
+Running burn stage
+1: Iterations burn = 100
+Mean Rhat = 3.023
+2: Iterations burn = 200
+Mean Rhat = 1.346
+3: Iterations burn = 233
+Mean Rhat = 1.113
+4: Iterations burn = 255
+Mean Rhat = 1.04
+Running adapt stage
+1: Iterations adapt = 100
+Enough unique values detected: 150
+Testing proposal distribution creation
+Successfully adapted - stopping adaptation
+Running sample stage
+Max flat drift = Inf
+1: Iterations sample = 100
+Max Rhat = 1.113
+Max flat drift = 0.431
+2: Iterations sample = 200
+Max Rhat = 1.063
+Max flat drift = 0.185
+3: Iterations sample = 300
+Max Rhat = 1.041
+Max flat drift = 0.152
+4: Iterations sample = 400
+Max Rhat = 1.039
+Max flat drift = 0.652
+5: Iterations sample = 500
+Max Rhat = 1.039
+Max flat drift = 0.622
+6: Iterations sample = 600
+Max Rhat = 1.034
+Max flat drift = 0.594
+7: Iterations sample = 700
+Max Rhat = 1.027
+Max flat drift = 0.604
+8: Iterations sample = 800
+Max Rhat = 1.024
+Max flat drift = 0.663
+9: Iterations sample = 900
+Max Rhat = 1.023
+Max flat drift = 0.655
+10: Iterations sample = 1000
+Max Rhat = 1.024
+Max flat drift = 0.659
+11: Iterations sample = 1100
+Max Rhat = 1.026
+Max flat drift = 0.657
+12: Iterations sample = 1200
+Max Rhat = 1.025
+Max flat drift = 0.71
+13: Iterations sample = 1300
+Max Rhat = 1.026
+Max flat drift = 0.715
+14: Iterations sample = 1400
+Max Rhat = 1.026
+Max flat drift = 0.712
+15: Iterations sample = 1500
+Max Rhat = 1.023
+Max flat drift = 0.661
+16: Iterations sample = 1600
+Max Rhat = 1.024
+Max flat drift = 0.623
+17: Iterations sample = 1700
+Max Rhat = 1.022
+Max flat drift = 0.591
+18: Iterations sample = 1800
+Max Rhat = 1.022
+Max flat drift = 0.582
+19: Iterations sample = 1900
+Max Rhat = 1.02
+Max flat drift = 0.517
+20: Iterations sample = 2000
+Max Rhat = 1.016
+Max flat drift = 0.484
+Time difference of 14.22882 mins
+$`1`
+$`1`$quantiles
+                2.5%         50%      97.5%       true         miss
+v_lMFALSE -2.3967852 -1.49420845 -0.9598282 -1.6094379  0.115229463
+v_lMTRUE   0.3093772  0.40418309  0.4957833  0.4054651 -0.001282022
+B         -0.1906042  0.01612696  0.1662520  0.0000000  0.016126956
+A         -2.3475632 -1.10670331 -0.3583884 -0.9162907 -0.190412578
+t0        -2.1481395 -1.94564608 -1.7772434 -1.8971200 -0.048526090
+muS       -3.4042316 -2.21758885 -1.5508504 -1.6094379 -0.608150936
+sigmaS    -2.9498858 -1.76074730 -1.2266540 -2.5257286  0.764981349
+tauS      -4.1076716 -2.50196143 -1.5384657 -2.3025851 -0.199376332
+gf        -1.5592157 -1.42641799 -1.2947587 -1.4050716 -0.021346431
+tf        -1.7240634 -1.37122870 -1.0954053 -1.4050716  0.033842858
+
+$`1`$stats
+    pearson    spearman        rmse    coverage 
+  0.9323180   0.8963581   0.3238128 100.0000000 
+
+
+Parameter(s) exgS_lb, s not specified in formula and assumed constant.
+
+ Sampled Parameters: 
+ [1] "v_lMFALSE" "v_lMTRUE"  "B"         "A"         "t0"        "muS"      
+ [7] "sigmaS"    "tauS"      "gf"        "tf"       
+
+ Design Matrices: 
+$v
+    lM v_lMFALSE v_lMTRUE
+  TRUE         0        1
+ FALSE         1        0
+
+$B
+ B
+ 1
+
+$A
+ A
+ 1
+
+$t0
+ t0
+  1
+
+$muS
+ muS
+   1
+
+$sigmaS
+ sigmaS
+      1
+
+$tauS
+ tauS
+    1
+
+$gf
+ gf
+  1
+
+$tf
+ tf
+  1
+
+$exgS_lb
+ exgS_lb
+       1
+
+$s
+ s
+ 1
+
+
+─── SSrdex no-ST UC=1.2 ───
+Trial type counts:
+trial_type
+  go stop 
+1009  991 
+Response counts:
+response
+ left    NR right 
+  609   848   543 
+Response × trial type:
+          response
+trial_type left  NR right
+      go    421 212   376
+      stop  188 636   167
+NR rate by trial type:
+      go     stop 
+0.210109 0.641776 
+Mean RT (finite only):
+     left     right 
+0.6306798 0.6053698 
+Processing data set 1
+Likelihood speedup factor: 5.4 (with no missing 3.2x), 367 unique trials
+Running preburn stage
+1: Iterations preburn = 50
+Running burn stage
+1: Iterations burn = 100
+Mean Rhat = 1.498
+2: Iterations burn = 200
+Mean Rhat = 1.238
+3: Iterations burn = 300
+Mean Rhat = 1.095
+Running adapt stage
+1: Iterations adapt = 100
+Enough unique values detected: 150
+Testing proposal distribution creation
+Successfully adapted - stopping adaptation
+Running sample stage
+Max flat drift = Inf
+1: Iterations sample = 100
+Max Rhat = 1.024
+Max flat drift = 0.469
+2: Iterations sample = 200
+Max Rhat = 1.011
+Max flat drift = 0.241
+3: Iterations sample = 300
+Max Rhat = 1.008
+Max flat drift = 0.233
+4: Iterations sample = 400
+Max Rhat = 1.005
+Max flat drift = 0.208
+5: Iterations sample = 500
+Max Rhat = 1.005
+Max flat drift = 0.177
+6: Iterations sample = 600
+Max Rhat = 1.005
+Max flat drift = 0.093
+7: Iterations sample = 700
+Max Rhat = 1.004
+Max flat drift = 0.113
+8: Iterations sample = 800
+Max Rhat = 1.002
+Max flat drift = 0.074
+9: Iterations sample = 900
+Max Rhat = 1.003
+Max flat drift = 0.108
+10: Iterations sample = 1000
+Max Rhat = 1.002
+Max flat drift = 0.199
+Time difference of 5.993576 mins
+$`1`
+$`1`$quantiles
+                2.5%          50%      97.5%       true         miss
+v_lMFALSE -1.9259957 -0.901441429 -0.2263458 -1.6094379  0.707996483
+v_lMTRUE   0.3394888  0.543540300  0.7772357  0.4054651  0.138075192
+B         -0.2027816 -0.004771029  0.1997114  0.0000000 -0.004771029
+A         -1.5964521 -0.548135344  0.1117793 -0.9162907  0.368155388
+t0        -2.2602066 -1.979024966 -1.7985742 -1.8971200 -0.081904982
+muS       -2.3869040 -1.652115765 -1.3113306 -1.6094379 -0.042677852
+sigmaS    -2.6923323 -2.000474844 -1.4695237 -2.5257286  0.525253800
+tauS      -4.4330184 -3.046191584 -1.9777893 -2.3025851 -0.743606491
+gf        -1.8828316 -1.319827108 -1.0257255 -1.4050716  0.085244453
+tf        -1.7394489 -1.402141990 -1.1327835 -1.4050716  0.002929571
+
+$`1`$stats
+    pearson    spearman        rmse    coverage 
+  0.9267654   0.9329442   0.3873670 100.0000000 
+
+
+Parameter(s) exgS_lb, s not specified in formula and assumed constant.
+
+ Sampled Parameters: 
+ [1] "v_AccTypemismatch" "v_AccTypematch"    "v_AccTypest"      
+ [4] "B"                 "A"                 "t0"               
+ [7] "muS"               "sigmaS"            "tauS"             
+[10] "gf"                "tf"               
+
+ Design Matrices: 
+$v
+  AccType v_AccTypemismatch v_AccTypematch v_AccTypest
+    match                 0              1           0
+ mismatch                 1              0           0
+       st                 0              0           1
+
+$B
+ B
+ 1
+
+$A
+ A
+ 1
+
+$t0
+ t0
+  1
+
+$muS
+ muS
+   1
+
+$sigmaS
+ sigmaS
+      1
+
+$tauS
+ tauS
+    1
+
+$gf
+ gf
+  1
+
+$tf
+ tf
+  1
+
+$exgS_lb
+ exgS_lb
+       1
+
+$s
+ s
+ 1
+
+
+─── SSrdex ST UC=Inf ───
+Trial type counts:
+trial_type
+  go stop 
+ 987 1013 
+Response counts:
+response
+ left    NR right    st 
+  641    64   666   629 
+Response × trial type:
+          response
+trial_type left  NR right  st
+      go    454  62   471   0
+      stop  187   2   195 629
+NR rate by trial type:
+         go        stop 
+0.062816616 0.001974334 
+Mean RT (finite only):
+     left     right 
+0.8359459 0.8314371 
+Processing data set 1
+Likelihood speedup factor: 2.7, 738 unique trials
+Running preburn stage
+1: Iterations preburn = 50
+Running burn stage
+1: Iterations burn = 100
+Mean Rhat = 2.964
+2: Iterations burn = 200
+Mean Rhat = 1.541
+3: Iterations burn = 233
+Mean Rhat = 1.199
+4: Iterations burn = 333
+Mean Rhat = 1.064
+Running adapt stage
+1: Iterations adapt = 100
+Enough unique values detected: 150
+Testing proposal distribution creation
+Successfully adapted - stopping adaptation
+Running sample stage
+Max flat drift = Inf
+1: Iterations sample = 100
+Max Rhat = 1.017
+Max flat drift = 0.401
+2: Iterations sample = 200
+Max Rhat = 1.007
+Max flat drift = 0.172
+3: Iterations sample = 300
+Max Rhat = 1.008
+Max flat drift = 0.225
+4: Iterations sample = 400
+Max Rhat = 1.007
+Max flat drift = 0.17
+5: Iterations sample = 500
+Max Rhat = 1.005
+Max flat drift = 0.149
+6: Iterations sample = 600
+Max Rhat = 1.003
+Max flat drift = 0.176
+7: Iterations sample = 700
+Max Rhat = 1.005
+Max flat drift = 0.191
+8: Iterations sample = 800
+Max Rhat = 1.007
+Max flat drift = 0.183
+9: Iterations sample = 900
+Max Rhat = 1.006
+Max flat drift = 0.169
+10: Iterations sample = 1000
+Max Rhat = 1.004
+Max flat drift = 0.133
+Time difference of 1.467507 hours
+$`1`
+$`1`$quantiles
+                        2.5%         50%      97.5%       true        miss
+v_AccTypemismatch -2.5968473 -1.75325759 -1.1672761 -1.6094379 -0.14381968
+v_AccTypematch     0.2799922  0.36026406  0.4431235  0.4054651 -0.04520105
+v_AccTypest        0.6432970  0.71472813  0.7925708  0.6931472  0.02158095
+B                 -0.2937380 -0.08035596  0.1234279  0.0000000 -0.08035596
+A                 -1.7238974 -0.63518183 -0.1029930 -0.9162907  0.28110891
+t0                -2.1408461 -1.93786447 -1.7779659 -1.8971200 -0.04074448
+muS               -1.5235431 -1.35173913 -1.2201654 -1.6094379  0.25769878
+sigmaS            -4.1154598 -3.22181637 -2.5638296 -2.5257286 -0.69608772
+tauS              -3.5664039 -2.71224780 -2.1836608 -2.3025851 -0.40966271
+gf                -1.6952876 -1.57860540 -1.4596954 -1.6448536  0.06624822
+tf                -1.7744717 -1.54969063 -1.3566740 -1.6448536  0.09516300
+
+$`1`$stats
+   pearson   spearman       rmse   coverage 
+ 0.9777175  0.9589141  0.2767584 81.8181818 
+
+
+Parameter(s) exgS_lb, s not specified in formula and assumed constant.
+
+ Sampled Parameters: 
+ [1] "v_AccTypemismatch" "v_AccTypematch"    "v_AccTypest"      
+ [4] "B"                 "A"                 "t0"               
+ [7] "muS"               "sigmaS"            "tauS"             
+[10] "gf"                "tf"               
+
+ Design Matrices: 
+$v
+  AccType v_AccTypemismatch v_AccTypematch v_AccTypest
+    match                 0              1           0
+ mismatch                 1              0           0
+       st                 0              0           1
+
+$B
+ B
+ 1
+
+$A
+ A
+ 1
+
+$t0
+ t0
+  1
+
+$muS
+ muS
+   1
+
+$sigmaS
+ sigmaS
+      1
+
+$tauS
+ tauS
+    1
+
+$gf
+ gf
+  1
+
+$tf
+ tf
+  1
+
+$exgS_lb
+ exgS_lb
+       1
+
+$s
+ s
+ 1
+
+
+─── SSrdex ST UC=1.2 ───
+Trial type counts:
+trial_type
+  go stop 
+ 976 1024 
+Response counts:
+response
+ left    NR right    st 
+  584   372   568   476 
+Response × trial type:
+          response
+trial_type left  NR right  st
+      go    388 203   385   0
+      stop  196 169   183 476
+NR rate by trial type:
+       go      stop 
+0.2079918 0.1650391 
+Mean RT (finite only):
+     left     right 
+0.6714252 0.6896727 
+Processing data set 1
+Likelihood speedup factor: 3.8 (with no missing 3.1x), 531 unique trials
+Running preburn stage
+1: Iterations preburn = 50
+Running burn stage
+1: Iterations burn = 100
+Mean Rhat = 3.934
+2: Iterations burn = 200
+Mean Rhat = 1.492
+3: Iterations burn = 233
+Mean Rhat = 1.149
+4: Iterations burn = 255
+Mean Rhat = 1.077
+Running adapt stage
+1: Iterations adapt = 100
+Enough unique values detected: 150
+Testing proposal distribution creation
+Successfully adapted - stopping adaptation
+Running sample stage
+Max flat drift = Inf
+1: Iterations sample = 100
+Max Rhat = 1.03
+Max flat drift = 0.259
+2: Iterations sample = 200
+Max Rhat = 1.012
+Max flat drift = 0.168
+3: Iterations sample = 300
+Max Rhat = 1.017
+Max flat drift = 0.233
+4: Iterations sample = 400
+Max Rhat = 1.01
+Max flat drift = 0.479
+5: Iterations sample = 500
+Max Rhat = 1.018
+Max flat drift = 0.516
+6: Iterations sample = 600
+Max Rhat = 1.011
+Max flat drift = 0.554
+7: Iterations sample = 700
+Max Rhat = 1.008
+Max flat drift = 0.566
+8: Iterations sample = 800
+Max Rhat = 1.011
+Max flat drift = 0.53
+9: Iterations sample = 900
+Max Rhat = 1.011
+Max flat drift = 0.467
+10: Iterations sample = 1000
+Max Rhat = 1.008
+Max flat drift = 0.364
+Time difference of 41.15439 mins
+$`1`
+$`1`$quantiles
+                        2.5%         50%      97.5%       true        miss
+v_AccTypemismatch -3.2535594 -2.01361074 -1.2018059 -1.6094379 -0.40417283
+v_AccTypematch     0.1236461  0.24577644  0.3787270  0.4054651 -0.15968867
+v_AccTypest        0.5804349  0.67768967  0.7810990  0.6931472 -0.01545751
+B                 -0.2650993 -0.03199651  0.1260118  0.0000000 -0.03199651
+A                 -2.0482523 -0.94920301 -0.2204780 -0.9162907 -0.03291228
+t0                -2.1300610 -1.95037193 -1.7836004 -1.8971200 -0.05325195
+muS               -1.6310442 -1.39552536 -1.1979457 -1.6094379  0.21391255
+sigmaS            -3.9944643 -2.94516788 -2.2910570 -2.5257286 -0.41943924
+tauS              -3.7036656 -2.64974960 -2.0763871 -2.3025851 -0.34716450
+gf                -3.0184421 -2.36697497 -1.7302065 -1.6448536 -0.72212134
+tf                -1.8379414 -1.50046046 -1.2234293 -1.6448536  0.14439316
+
+$`1`$stats
+   pearson   spearman       rmse   coverage 
+ 0.9761583  0.9315166  0.3131305 81.8181818 
+
+

@@ -22,7 +22,7 @@ double ks(double t, double w, double eps) {
 double kl(double q, double v, double w, double err) {
 	double K1 = 1.0 / (M_PI * sqrt(q)), K2=0.0;
 	double temp = -2.0 * (std::log(M_PI * q) + err);
-	if (temp>=0) K2 = sqrt(temp/(pow(M_PI, 2) * q));
+	if (temp>=0) K2 = sqrt(temp/(M_PI * M_PI * q));
 	return ceil(fmax(K1,K2));
 }
 
@@ -34,10 +34,10 @@ double logfs(double t, double w, int K) {
 		for (int k = K; k >= 1; k--) {
 			double temp1 = w + 2.0 * k, temp2 = w - 2.0 * k;
 
-			fplus = logsum(std::log(temp1) - pow(temp1, 2) / twot, fplus);
-			fminus = logsum(std::log(-temp2) - pow(temp2, 2) / twot, fminus);
+			fplus = logsum(std::log(temp1) - temp1 * temp1 / twot, fplus);
+			fminus = logsum(std::log(-temp2) - temp2 * temp2 / twot, fminus);
 		}
-	fplus = logsum(std::log(w) - pow(w, 2) / twot, fplus);
+	fplus = logsum(std::log(w) - w * w / twot, fplus);
 	return  -0.5 * M_LN2 - M_LN_SQRT_PI - 1.5 * std::log(t) + logdiff(fplus, fminus);
 }
 
@@ -49,8 +49,8 @@ double logfl(double q, double v, double w, int K) {
 	for (int k = K; k >= 1; k--) {
 		double temp = k * M_PI;
 		double check = sin(temp * w);
-		if (check > 0) fplus = logsum(std::log(static_cast<double>(k)) - pow(temp, 2) * halfq + std::log(check), fplus);
-		else fminus = logsum(std::log(static_cast<double>(k)) - pow(temp, 2) * halfq + std::log(-check), fminus);
+		if (check > 0) fplus = logsum(std::log(static_cast<double>(k)) - temp * temp * halfq + std::log(check), fplus);
+		else fminus = logsum(std::log(static_cast<double>(k)) - temp * temp * halfq + std::log(-check), fminus);
 	}
 	return	logdiff(fplus, fminus) + M_LNPI;
 }
@@ -78,14 +78,14 @@ double dwiener(double q, double a, double vn, double wn, double sv, double err, 
 		v = vn;
 	}
 
-	double q_asq = q / pow(a, 2);
+	double q_asq = q / (a * a);
 	ans = 0.0;
 
 	/* calculate the number of terms needed for short t*/
-	double eta_sqr = pow(sv, 2);
+	double eta_sqr = sv * sv;
 	double temp = 1 + eta_sqr * q;
-	double lg1 = (eta_sqr * pow(a * w, 2) - 2 * a * v * w - pow(v, 2) * q) / 2.0 / temp - 2 *std::log(a) - 0.5 *std::log(temp);
-	//double lg1 = (-v * a * w - (pow(v, 2)) * q / 2.0) - 2.0*std::log(a);
+	double lg1 = (eta_sqr * (a * w) * (a * w) - 2 * a * v * w - v * v * q) / 2.0 / temp - 2 *std::log(a) - 0.5 *std::log(temp);
+	//double lg1 = (-v * a * w - (v * v) * q / 2.0) - 2.0*std::log(a);
 	double es = (err - lg1);
 	kss = ks(q_asq, w, es);
 	/* calculate the number of terms needed for large t*/

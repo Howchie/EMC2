@@ -1,7 +1,7 @@
 #ifndef lba_h
 #define lba_h
 
-#include <Rcpp.h>
+#include <RcppArmadillo.h>
 #include "utility_functions.h"
 
 using namespace Rcpp;
@@ -75,7 +75,7 @@ double dlba_norm(double t, double A,double b, double v, double sv,
   return pdf;
 }
 
-NumericVector dlba_c(NumericVector rts, NumericMatrix pars, LogicalVector idx, double min_ll, LogicalVector is_ok){
+NumericVector dlba_c1(NumericVector rts, NumericMatrix pars, LogicalVector idx, double min_ll, LogicalVector is_ok){
   //v = 0, sv = 1, B = 2, A = 3, t0 = 4
   int n = sum(idx);
   NumericVector out(n);
@@ -92,10 +92,11 @@ NumericVector dlba_c(NumericVector rts, NumericMatrix pars, LogicalVector idx, d
       k++;
     }
   }
+
   return(out);
 }
 
-NumericVector plba_c(NumericVector rts, NumericMatrix pars, LogicalVector idx, double min_ll, LogicalVector is_ok){
+NumericVector plba_c1(NumericVector rts, NumericMatrix pars, LogicalVector idx, double min_ll, LogicalVector is_ok){
   //v = 0, sv = 1, B = 2, A = 3, t0 = 4
   int n = sum(idx);
   NumericVector out(n);
@@ -106,6 +107,46 @@ NumericVector plba_c(NumericVector rts, NumericMatrix pars, LogicalVector idx, d
         out[k] = 0;
       } else if((rts[i] - pars(i,4) > 0) && (is_ok[i] == TRUE)){
         out[k] = plba_norm(rts[i] - pars(i,4), pars(i,3), pars(i,2) + pars(i,3), pars(i,0), pars(i,1), true);
+      } else{
+        out[k] = min_ll;
+      }
+      k++;
+    }
+  }
+  return(out);
+}
+
+NumericVector dlba_c(NumericVector rts, NumericMatrix pars, LogicalVector idx, double min_ll, LogicalVector is_ok, bool posdrift = true){
+  //v = 0, sv = 1, B = 2, A = 3, t0 = 4
+  int n = sum(idx);
+  NumericVector out(n);
+  int k = 0;
+  for(int i = 0; i < rts.length(); i++){
+    if(idx[i] == TRUE){
+      if(NumericVector::is_na(pars(i,0))){
+        out[k] = 0;
+      } else if((rts[i] - pars(i,4) > 0) && (is_ok[i] == TRUE)){
+        out[k] = dlba_norm(rts[i] - pars(i,4), pars(i,3), pars(i,2) + pars(i,3), pars(i,0), pars(i,1), posdrift);
+      } else{
+        out[k] = min_ll;
+      }
+      k++;
+    }
+  }
+  return(out);
+}
+
+NumericVector plba_c(NumericVector rts, NumericMatrix pars, LogicalVector idx, double min_ll, LogicalVector is_ok, bool posdrift = true){
+  //v = 0, sv = 1, B = 2, A = 3, t0 = 4
+  int n = sum(idx);
+  NumericVector out(n);
+  int k = 0;
+  for(int i = 0; i < rts.length(); i++){
+    if(idx[i] == TRUE){
+      if(NumericVector::is_na(pars(i,0))){
+        out[k] = 0;
+      } else if((rts[i] - pars(i,4) > 0) && (is_ok[i] == TRUE)){
+        out[k] = plba_norm(rts[i] - pars(i,4), pars(i,3), pars(i,2) + pars(i,3), pars(i,0), pars(i,1), posdrift);
       } else{
         out[k] = min_ll;
       }

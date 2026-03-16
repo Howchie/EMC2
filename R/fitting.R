@@ -30,6 +30,21 @@ get_stop_criteria <- function(stage, stop_criteria, type){
     if(is.null(stop_criteria$selection)) stop_criteria$selection <- c('alpha', 'mu')
     if(is.null(stop_criteria$omit_mpsrf)) stop_criteria$omit_mpsrf <- TRUE
   }
+  if(stage == "sample"){
+    if(!is.null(stop_criteria$max_flat_loc)){
+      if(is.null(stop_criteria$flat_selection)) stop_criteria$flat_selection <- c("alpha", "subj_ll", "theta_mu")
+      if(is.null(stop_criteria$flat_p1)) stop_criteria$flat_p1 <- 1/3
+      if(is.null(stop_criteria$flat_p2)) stop_criteria$flat_p2 <- 1/3
+      if(stop_criteria$flat_p1 <= 0 || stop_criteria$flat_p1 > 1) stop("flat_p1 must be in (0, 1].")
+      if(stop_criteria$flat_p2 <= 0 || stop_criteria$flat_p2 > 1) stop("flat_p2 must be in (0, 1].")
+      if(!all(stop_criteria$flat_selection %in% c("alpha", "subj_ll", "theta_mu", "theta_var"))){
+        stop("flat_selection must be one or more of: alpha, subj_ll, theta_mu, theta_var")
+      }
+    }
+    if(!is.null(stop_criteria$max_sample_iter) && stop_criteria$max_sample_iter < 10){
+      stop("max_sample_iter should be >= 10.")
+    }
+  }
   if(stage == "adapt" & is.null(stop_criteria$min_unique)) stop_criteria$min_unique <- 600
   if(stage != "adapt" & !is.null(stop_criteria$min_unique)) stop("min_unique only applicable for adapt stage, try min_es instead.")
   return(stop_criteria)
@@ -136,6 +151,9 @@ run_emc <- function(emc, stage, stop_criteria,
       emc <- concat_emc(emc, sub_emc, progress$step_size, stage)
     } else{
       emc <- sub_emc
+    }
+    if(stage == "sample" && !is.null(stop_criteria$max_sample_iter)){
+      emc <- .trim_sample_stage(emc, stop_criteria$max_sample_iter)
     }
     progress <- check_progress(emc, stage, iter, stop_criteria, max_tries, step_size, cores_per_chain*cores_for_chains,
                                verbose, progress,n_blocks)
@@ -248,12 +266,26 @@ check_progress <- function (emc, stage, iter, stop_criteria,
   else {
     adapted <- TRUE
   }
-  done <- (es_done & iter_done & gd$gd_done & adapted) | (trys_done & iter_done)
-  if(es_done & gd$gd_done & adapted & !iter_done){
+  flat_done <- TRUE
+  if(stage == "sample" && !is.null(stop_criteria$max_flat_loc)){
+    flat_out <- .check_flatness_stop(
+      emc = emc,
+      max_flat_loc = stop_criteria$max_flat_loc,
+      flat_selection = stop_criteria$flat_selection,
+      flat_p1 = stop_criteria$flat_p1,
+      flat_p2 = stop_criteria$flat_p2,
+      stage = "sample"
+    )
+    flat_done <- flat_out$flat_done
+    if (verbose) message("Max flat drift = ", round(flat_out$max_flat, 3))
+  }
+
+  done <- (es_done & iter_done & gd$gd_done & adapted & flat_done) | (trys_done & iter_done)
+  if(es_done & gd$gd_done & adapted & flat_done & !iter_done){
     step_size <- min(step_size, abs(iter - total_iters_stage))[1]
   }
   if (trys_done & iter_done) {
-    if(!(es_done & gd$gd_done & adapted)){
+    if(!(es_done & gd$gd_done & adapted & flat_done)){
       warning("Max tries reached. If this happens in burn-in while trying to get
             gelman diagnostics small enough, you might have a particularly hard model.
             Make sure your model is well specified. If so, you can run adapt and
@@ -630,6 +662,11 @@ loadRData <- function(fileName){
 #' of the first three and of the last two parameters are estimated as two separate blocks.
 #' @param prior_list A named list containing the prior. Default prior created if `NULL`. For the default priors, see `?get_prior_{type}`.
 #' @param ... Additional, optional arguments.
+#' @details
+#' Some likelihood backends attach internal, versioned cache attributes to the
+#' processed per-subject data (dadm) to avoid repeating data-only scans during
+#' sampling. These attributes are recomputed when missing or outdated and are not
+#' part of the user-facing API.
 #' @return An uninitialized emc object
 #' @examples dat <- forstmann
 #'
@@ -749,6 +786,7 @@ make_emc <- function(data,design,model=NULL,
                                                design = design[[i]],model=model[[i]])
       sampled_p_names <- attr(design[[i]],"sampled_p_names")
     }
+    dadm_list[[i]] <- .cache_ll_data_attrs(dadm_list[[i]])
     if(length(prior_list) == length(data)){
       if(!is.null(prior_list[[i]])){
         prior_list[[i]] <- check_prior(prior_list[[i]], sampled_p_names, group_design)

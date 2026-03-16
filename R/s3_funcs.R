@@ -149,6 +149,8 @@ predict.emc <- function(object,hyper=FALSE,n_post=50,n_cores=1,
   dots <- list(...)
   data <- get_data(emc)
   design <- get_design(emc)
+  if (is.null(dots$force_direction)) dots$force_direction <- FALSE
+  if (is.null(dots$force_response)) dots$force_response <- FALSE
   return_trialwise_parameters <- isTRUE(dots$return_trialwise_parameters)
   if (is.null(dots$conditional_on_data) && has_conditional_covariates(design[[1]])) {
     dots$conditional_on_data <- FALSE
@@ -455,6 +457,18 @@ fit.emc <- function(emc, stage = NULL, iter = 1000, stop_criteria = NULL,
 #' ``omit_mpsrf`` (Boolean): Whether to include the multivariate point-scale reduction factor in the Gelman-Rubin diagnostic. Default is ``FALSE``.
 #'
 #' ``iter`` (integer): The number of MCMC samples to collect.
+#'
+#' ``max_flat_loc`` (numeric): Optional sample-stage stationarity threshold based on
+#' interleaved chain drift (difference in early vs late medians, scaled by IQR).
+#'
+#' ``flat_selection`` (character vector): Optional set of sample objects to include
+#' in the flatness check. Supported values: ``alpha``, ``subj_ll``, ``theta_mu``, ``theta_var``.
+#'
+#' ``flat_p1`` / ``flat_p2`` (numeric in (0,1]): Optional proportions defining early
+#' and late windows for the flatness statistic.
+#'
+#' ``max_sample_iter`` (integer): Optional hard cap for sample-stage iterations. If exceeded,
+#' earliest sample-stage draws are removed.
 #'
 #' The estimation is performed using particle-metropolis within-Gibbs sampling.
 #' For sampling details see:
@@ -1177,4 +1191,3 @@ auto_thin.emc <- function(emc, stage = "sample", selection = c("alpha", "mu"), .
 auto_thin <- function(emc, stage = "sample", selection = c("alpha", "mu"), ...){
   UseMethod("auto_thin")
 }
-
