@@ -17,6 +17,7 @@
 #include <iomanip>
 
 
+
 using namespace Rcpp;
 
 LogicalVector c_do_bound(NumericMatrix pars,
@@ -454,29 +455,6 @@ double gsl_f_race_adapter(double t, void *p) {
     return std::exp(ll_out);   
 }
 
-
-// Helper to order parameters (winner first)
-/*
-Rcpp::NumericMatrix order_pars_for_winner_cpp(
-    const Rcpp::NumericMatrix& p_all_acc,
-    int k_idx, // 1-based index
-    int n_acc) {
-    if (k_idx < 1 || k_idx > n_acc) {
-        Rcpp::stop("order_pars_for_winner_cpp: k_idx out of bounds.");
-    }
-
-    Rcpp::NumericMatrix ordered_pars(n_acc, p_all_acc.ncol());
-	std::fill(ordered_pars.begin(), ordered_pars.end(), NA_REAL);
-    ordered_pars.row(0) = p_all_acc.row(k_idx - 1);
-
-    int current_row = 1;
-    for (int i = 0; i < n_acc; ++i) {
-        if (i == (k_idx - 1)) continue;
-        ordered_pars.row(current_row++) = p_all_acc.row(i);
-    }
-    return ordered_pars;
-} */
-
 bool row_is_finite(const Rcpp::NumericMatrix& mat, int row) {
     for (int j = 0; j < mat.ncol(); ++j) {
         if (!R_finite(mat(row, j))) return false;
@@ -485,7 +463,6 @@ bool row_is_finite(const Rcpp::NumericMatrix& mat, int row) {
 }
 
 // Numerical integration helper using GSL
-// TODO - reinstate ordering - this one shouldn't use the winner vec
 double integrate_for_kth_winner_cpp(
     int k_winner_idx, // 1-based
     const Rcpp::NumericMatrix& p_all_acc,
@@ -544,7 +521,7 @@ double integrate_for_kth_winner_cpp(
             return 0.0; // 0? Or NaN to indicate error
         return 0.0;
     }
-    return (result > 0 && R_finite(result)) ? result : 0.0;
+    return (result > 0 && R_finite(result)) ? std::log(result) : R_NegInf;
 }
 
 // New common normaliser (ZH: I think the normalise by kth-winner is wrong?)
@@ -567,7 +544,7 @@ double get_trunc_normaliser_cpp(
 }
 
 // Helper function to cache unique parameter combinations
-static inline std::string make_key(int start_row,
+inline std::string make_key(int start_row,
                                    const Rcpp::NumericVector &LT,
                                    const Rcpp::NumericVector &UT,
                                    const Rcpp::NumericMatrix &pars,
@@ -608,12 +585,12 @@ double c_log_likelihood_race_cens_trunc(
     int n_acc,                              // Number of accumulators in the race (must be > 0 if data exists)
     void* model_context_for_funcs           // Context for model_dfun/model_pfun (e.g., contains posdrift for LBA)
 ) {
-    // Fetch censoring and truncation values from dadm columns. These are passed across all rows for ease of access, but should be identical at least at the subject level as they don't correspond to a data entry. Attributes probably a better fit here but clunky.
+    // Fetch censoring and truncation values from dadm columns. These are passed across all rows for ease of access and to allow trial-varying UC.
     Rcpp::NumericVector LT = dadm["LT"];
 	Rcpp::NumericVector UT = dadm["UT"]; 
 	Rcpp::NumericVector LC = dadm["LC"];    
 	Rcpp::NumericVector UC = dadm["UC"];
-    static std::unordered_map<std::string,double> inv_Z_cache; // for truncation caching
+    std::unordered_map<std::string,double> inv_Z_cache; // for truncation caching
     double integration_epsilon = 1e-7; // Tolerance for GSL integration
 	int n_acc_j = n_acc;
 	const int n_out = expand.length();

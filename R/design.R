@@ -311,17 +311,14 @@ add_accumulators <- function(data,matchfun=NULL,simulate=FALSE, type = "RACE", F
     # It's good practice to ensure data$R is a factor if it's not already for consistency,
     # though the likelihood will check its values.
     
-    nacc <- length(fixed_accumulator_roles)
-    datar <- do.call(rbind, lapply(1:nacc, function(x) data))
-    datar <- cbind(do.call(rbind,lapply(1:nacc,function(x){data})),
-                   lR=factor(rep(levels(fixed_accumulator_roles),each=dim(data)[1]),levels=levels(fixed_accumulator_roles)))
-    datar <- datar[order(rep(1:dim(data)[1],nacc),datar$lR),]
+    role_levels <- levels(fixed_accumulator_roles)
+    nacc <- length(role_levels)
+    datar <- data[rep(seq_len(nrow(data)), times = nacc), , drop = FALSE]
+    datar$lR <- factor(rep(role_levels, each = nrow(data)), levels = role_levels)
+    datar <- datar[order(rep(seq_len(nrow(data)), nacc), datar$lR), , drop = FALSE]
     # datar$R already contains the replicated observed "yes"/"no" responses from the original data$R.
     # Create datar$lR as the accumulator role factor
-    datar$lR <- factor(
-      rep(fixed_accumulator_roles, length.out = nrow(datar)),
-      levels = fixed_accumulator_roles
-    )
+    datar$lR <- factor(rep(role_levels, length.out = nrow(datar)), levels = role_levels)
   
     if (!is.null(matchfun)) {
       lM_values <- matchfun(datar) # matchfun sees d$R as "yes/no", d$lR as role
@@ -345,12 +342,13 @@ add_accumulators <- function(data,matchfun=NULL,simulate=FALSE, type = "RACE", F
     if(is.null(type) || !type %in% c("RACE", "SDT", "MT", "TC")) return(data)
     if (!is.factor(data$R)) stop("data must have a factor R (for traditional accumulator setup).")
     factors <- names(data)[!names(data) %in% c("R","rt","trials","fixed_accumulator_roles",Fcovariates)] # This might need adjustment if fixed_accumulator_roles changes things.
-                                                                            
+                                                                             
     if (type %in% c("RACE","SDT")) {
-    nacc <- length(levels(data$R))
-    datar <- cbind(do.call(rbind,lapply(1:nacc,function(x){data})),
-                   lR=factor(rep(levels(data$R),each=dim(data)[1]),levels=levels(data$R)))
-    datar <- datar[order(rep(1:dim(data)[1],nacc),datar$lR),]
+    resp_levels <- levels(data$R)
+    nacc <- length(resp_levels)
+    datar <- data[rep(seq_len(nrow(data)), times = nacc), , drop = FALSE]
+    datar$lR <- factor(rep(resp_levels, each = nrow(data)), levels = resp_levels)
+    datar <- datar[order(rep(seq_len(nrow(data)), nacc), datar$lR), , drop = FALSE]
     if (!is.null(matchfun)) {
       lM <- matchfun(datar)
       if (!is.factor(lM)){
@@ -425,16 +423,19 @@ compress_dadm <- function(da,designs,Fcov,Ffun)
     # out keeps only unique rows in terms of all parameters design matrices
     # R, lR and rt (at given resolution) from full data set
   {
-  if("LT"%in%colnames(da)) LT=da$LT else{LT <- attr(da,"LT")}; if (is.null(LT)) LT <- 0
-  if("UT"%in%colnames(da)) UT=da$UT else{UT <- attr(da,"UT")}; if (is.null(UT)) UT <- Inf
-  if("LC"%in%colnames(da)) LC=da$LC else{LC <- attr(da,"LC")}; if (is.null(LC)) LC <- 0
-  if("UC"%in%colnames(da)) UC=da$UC else{UC <- attr(da,"UC")}; if (is.null(UC)) UC <- Inf
+    if("LT"%in%colnames(da)) LT=da$LT else{LT <- attr(da,"LT")}; if (is.null(LT)) LT <- 0
+    if("UT"%in%colnames(da)) UT=da$UT else{UT <- attr(da,"UT")}; if (is.null(UT)) UT <- Inf
+    if("LC"%in%colnames(da)) LC=da$LC else{LC <- attr(da,"LC")}; if (is.null(LC)) LC <- 0
+    if("UC"%in%colnames(da)) UC=da$UC else{UC <- attr(da,"UC")}; if (is.null(UC)) UC <- Inf
     nacc <- length(unique(da$lR))
     # contract output
-    cells <- paste(
-      apply(do.call(cbind,lapply(designs,function(x){
-        apply(x[attr(x,"expand"),,drop=FALSE],1,paste,collapse="_")})
-      ),1,paste,collapse="+"),da$subjects,da$R,da$lR,da$rt,sep="+")
+    cells <- paste(apply(do.call(cbind,lapply(designs,function(x){
+                apply(x[attr(x,"expand"),,drop=FALSE],1,paste,collapse="_")})
+                ),1,paste,collapse="+"),
+                da$subjects, da$R, da$lR, da$rt,
+                LT, UT, LC, UC,  # <--- ZH Added these columns
+                sep="+"
+              )
     # Make sure that if row is included for a trial so are other rows
     if (!is.null(Fcov)) {
       if (is.null(names(Fcov))) nFcov <- Fcov else nFcov <- names(Fcov)

@@ -866,4 +866,53 @@ NumericVector dGBMspv(NumericVector t, NumericVector b, NumericVector v, Numeric
     return pdf;
 }
 
+// [[Rcpp::export]]
+NumericVector pWALDspv(NumericVector t, NumericVector b, NumericVector v, NumericVector sigma, NumericVector A, NumericVector t0, bool log_out=false) { 
+    int n = t.size();
+    NumericVector cdf(n);
+
+    auto pick = [](const NumericVector &vec, int i) -> double {
+      return vec.size() == 1 ? vec[0] : vec[i];
+    };
+    for (int i = 0; i < n; ++i) {
+        const double shifted_t = t[i] - pick(t0, i);
+        if (shifted_t <= 0.0) {
+            cdf[i] = log_out ? R_NegInf : 0.0;
+            continue;
+        }
+        cdf[i] = pwald(shifted_t,
+                       pick(b, i),
+                       pick(v, i),
+                       pick(sigma, i),
+                       pick(A, i),
+                       log_out);
+    }
+    return cdf;
+}
+
+// [[Rcpp::export]]
+NumericVector pGBMspv(NumericVector t, NumericVector b, NumericVector v, NumericVector sigma, NumericVector A, NumericVector t0, bool log_out=false) { 
+    const int n = t.size();
+    NumericVector cdf(n);
+
+    auto pick = [](const NumericVector &vec, int i) -> double {
+      return vec.size() == 1 ? vec[0] : vec[i];
+    };
+
+    for (int i = 0; i < n; ++i) {
+        const double shifted_t = t[i] - pick(t0, i);
+        if (shifted_t <= 0.0) {
+            cdf[i] = log_out ? R_NegInf : 0.0;
+            continue;
+        }
+        cdf[i] = pgbm(shifted_t,
+                      pick(b, i),
+                      pick(v, i),
+                      pick(sigma, i),
+                      pick(A, i),
+                      log_out);
+	}
+    return cdf;
+}
+
 #endif

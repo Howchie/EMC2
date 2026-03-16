@@ -62,7 +62,6 @@ init <- function(pmwgs, start_mu = NULL, start_var = NULL,
   startpoints <-startpoints_comb <- get_startpoints(pmwgs, start_mu, start_var, type)
   if(any(pmwgs$nuisance)){
     type_nuis <- pmwgs$sampler_nuis$type
-    browser()
     startpoints_nuis <- get_startpoints(pmwgs$sampler_nuis, start_mu = NULL, start_var = NULL, type = type_nuis)
     startpoints_comb <- merge_group_level(startpoints$tmu, startpoints_nuis$tmu,
                                           startpoints$tvar, startpoints_nuis$tvar,

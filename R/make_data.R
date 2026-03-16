@@ -262,8 +262,17 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
   std <- c("names", "row.names", "class", "dim")
   data <- data[, !(names(data) %in% dropNames)]
   for (i in dimnames(Rrt)[[2]]) data[[i]] <- Rrt[,i]
-  data <- make_missing(data[,names(data)!="winner"],LT,UT,LC,UC,
-    LCresponse,UCresponse,LCdirection,UCdirection)
+  data <- make_missing(
+    data[, names(data) != "winner"],
+    LT = data$LT,
+    UT = data$UT,
+    LC = data$LC,
+    UC = data$UC,
+    LCresponse = LCresponse,
+    UCresponse = UCresponse,
+    LCdirection = LCdirection,
+    UCdirection = UCdirection
+  )
   if ( !is.null(pc) ) {
     if (!any(is.infinite(data$rt)) & any(is.na(data$R)))
       stop("Cannot have contamination and censoring with no direction and response")
@@ -290,9 +299,10 @@ RACE_rfun <- function(data, pars, model){
   ok <- as.numeric(data$lR) <= as.numeric(as.character(data$RACE))
   for (i in levels(RACE)) {
     pick <- data$RACE==i
-    data_in <- data[pick,]
-    data_in$lR <- factor(data$lR[pick & ok])
-    tmp <- pars[pick,, drop=FALSE]
+    pick_ok <- pick & ok
+    data_in <- data[pick_ok, , drop=FALSE]
+    data_in$lR <- droplevels(data_in$lR)
+    tmp <- pars[pick_ok, , drop=FALSE]
     attr(tmp, "ok") <- rep(T, ifelse(is.null(dim(tmp)),1,nrow(tmp)))
     Rrti <- model()$rfun(data_in,tmp)
     Rrti$R <- as.numeric(Rrti$R)
@@ -303,7 +313,122 @@ RACE_rfun <- function(data, pars, model){
   return(Rrt)
 }
 
-LogicalRules_rfun <- function(data, pars, model){
+LogicalRules_rfun <- function(data, pars, model) {
+  # Simulates a two-channel architecture with local sub-races:
+  # Channel A: A vs n_A
+  # Channel B: B vs n_B
+  #
+  # LogicalRule:
+  #   "OR"  : YES if either channel's target wins its local race; NO if both lose
+  #   "AND" : YES only if both targets win; NO as soon as any target loses
+  #   "ID"  : Identify stimulus class: NT, A, B, DT (exhaustive over channels)
+  #
+
+  posdrift <- model()$posdrift
+  n_trials <- dim(data)[1] / length(levels(data$lR)) # number of unique trials
+  Rrti <- matrix(ncol = length(levels(data$lR)), nrow = n_trials,
+                 dimnames = list(NULL, levels(data$lR)))
+  RACE <- levels(data$lR) # should be 4 unless using a non-standard implementation
+  df <- data.frame(
+    LogicalRule = data$LogicalRule[data$lR == levels(data$lR)[1]],
+    RuleFollow = rbinom(n_trials, 1, pars[data$lR == levels(data$lR)[1], "p"]) == 1,
+    ChannelA = rbinom(n_trials, 1, 1 - pars[data$lR == levels(data$lR)[1], "q"]) == 1
+  )
+  racers <- c("A", "n_A", "B", "n_B")
+  if (!all(df$LogicalRule %in% c("OR", "AND", "ID"))) {
+    stop("LogicalRule must be one of: OR, AND, ID")
+  }
+  if (!all(racers %in% RACE)) stop("RACE must have: A, n_A, B, n_B")
+  # --- Simulate finishing times for each accumulator ---
+  Rrti <- matrix(NA_real_, nrow = n_trials, ncol = length(RACE),
+                 dimnames = list(NULL, RACE))
+  
+  for (i in RACE) {
+    pick <- data$lR==i
+    data_in <- data[pick, ]
+    data_in$lR <- factor(data$lR[pick])
+    p <- pars[pick, , drop = FALSE]
+    attr(p, "ok") <- rep(TRUE, ifelse(is.null(dim(p)), 1, nrow(p)))
+    Rrti[, i] <- model()$rfun(data_in, p, posdrift = posdrift)$rt
+  }
+  
+  A_t   <- Rrti[, "A"]
+  nA_t  <- Rrti[, "n_A"]
+  B_t   <- Rrti[, "B"]
+  nB_t  <- Rrti[, "n_B"]
+  # --- Local channel outcomes (sub-races) ---
+  # A_yes: channel A says "target present" if A beats n_A
+  # B_yes: channel B says "target present" if B beats n_B
+  A_yes <- A_t < nA_t
+  B_yes <- B_t < nB_t
+  
+  # Tie handling (rare): break ties randomly so decisions remain well-defined.
+  tieA <- A_t == nA_t
+  tieB <- B_t == nB_t
+  if (any(tieA)) A_yes[tieA] <- runif(sum(tieA)) < 0.5
+  if (any(tieB)) B_yes[tieB] <- runif(sum(tieB)) < 0.5
+  
+  # Local decision times (whoever wins the channel race)
+  tA <- pmin(A_t, nA_t)
+  tB <- pmin(B_t, nB_t)
+  
+  is_or <- df$LogicalRule == "OR"
+  is_and <- df$LogicalRule == "AND"
+  is_id <- df$LogicalRule == "ID"
+
+  R <- rep(NA_character_, n_trials)
+  rt <- rep(NA_real_, n_trials)
+
+  # Followed-rule logic (skip rule-break trials).
+  follow_or <- df$RuleFollow & is_or
+  follow_and <- df$RuleFollow & is_and
+  if (any(follow_or)) {
+    R_or <- ifelse(A_yes | B_yes, "yes", "no")
+    RT_yes <- pmin(ifelse(A_yes, A_t, Inf), ifelse(B_yes, B_t, Inf))
+    RT_no <- pmax(nA_t, nB_t)
+    rt_or <- ifelse(A_yes | B_yes, RT_yes, RT_no)
+    R[follow_or] <- R_or[follow_or]
+    rt[follow_or] <- rt_or[follow_or]
+  }
+  if (any(follow_and)) {
+    R_and <- ifelse(A_yes & B_yes, "yes", "no")
+    RT_yes <- pmax(A_t, B_t)
+    RT_no <- pmin(ifelse(!A_yes, nA_t, Inf), ifelse(!B_yes, nB_t, Inf))
+    rt_and <- ifelse(A_yes & B_yes, RT_yes, RT_no)
+    R[follow_and] <- R_and[follow_and]
+    rt[follow_and] <- rt_and[follow_and]
+  }
+  if (any(is_id)) {
+    R_id <- ifelse(!A_yes & !B_yes, "NT",
+      ifelse(A_yes & !B_yes, "A",
+        ifelse(!A_yes & B_yes, "B", "DT")
+      )
+    )
+    R[is_id] <- R_id
+    rt[is_id] <- pmax(tA, tB)
+  }
+
+  # Rule-breaking: for OR/AND only, choose a single channel to decide.
+  break_trials <- !df$RuleFollow & (is_or | is_and)
+  if (any(break_trials)) {
+    use_A <- break_trials & df$ChannelA
+    use_B <- break_trials & !df$ChannelA
+    R[use_A] <- ifelse(A_yes[use_A], "yes", "no")
+    rt[use_A] <- tA[use_A]
+    R[use_B] <- ifelse(B_yes[use_B], "yes", "no")
+    rt[use_B] <- tB[use_B]
+  }
+
+  if (any(is_id)) {
+    R <- factor(R, levels = c("NT", "A", "B", "DT"))
+  } else {
+    R <- factor(R, levels = c("no", "yes"))
+  }
+  data.frame(R = R, rt = rt)
+}
+
+LogicalRules_rfun_old <- function(data, pars, model){
+  posdrift = model()$posdrift
   Rrti <- matrix(ncol=length(levels(data$lR)),nrow=dim(data)[1]/length(levels(data$lR)),
                  dimnames=list(NULL,levels(data$lR)))
   RACE <- levels(data$lR) # should be 4 unless using a non-standard implementation
@@ -316,7 +441,7 @@ LogicalRules_rfun <- function(data, pars, model){
     data_in$lR <- factor(data$lR[pick])
     tmp <- pars[pick,, drop=FALSE]
     attr(tmp, "ok") <- rep(T, ifelse(is.null(dim(tmp)),1,nrow(tmp)))
-    Rrti[,i] <- model()$rfun(data_in,tmp)$rt
+    Rrti[,i] <- model()$rfun(data_in,tmp,posdrift=posdrift)$rt
   }
   Rrt = Rrti %>%
     as.data.frame() %>%
@@ -421,20 +546,44 @@ LogicalRules_substitution_rfun <- function(data, pars, model){
   accs = levels(data$lR); 
   
   # 
-  lower=numeric(length=length(accs));names(lower)=accs
-  if(grepl("negdrift",model()$c_name)){
-    lower["A"]=-Inf;lower["B"]=-Inf
-  }
-  sampled_v=numeric(length(pars))
+    lower <- setNames(rep(0, length(accs)), accs)
+  if (grepl("negdrift|IO", model()$c_name)) lower[] <- -Inf
+
+  sampled_v <- numeric(nrow(pars))
+
   for (i in unique(data$trials)) {
-    adj_vars = pars[data$trials==i,"adj_sv"]^2; adj_vs=pars[data$trials==i,"adj_v"]
-    covariances=matrix(0,nrow=length(accs),ncol=length(accs),dimnames=list(accs,accs))
-    diag(covariances)=adj_vars
-    tauA=pars[data$trials==i&data$lR=="A","tau"];tauB=pars[data$trials==i&data$lR=="B","tau"]
-    muvA=pars[data$trials==i&data$lR=="A","v"];muvB=pars[data$trials==i&data$lR=="B","v"]
-    if(tauA==tauB){tau2=tauA^2}else{stop("tau parameter mismatch")}
-    covariances["A","B"] = (tau2)*muvA*muvB;covariances["B","A"] = (tau2)*muvA*muvB
-    sampled_v[data$trials==i]=tmvtnorm::rtmvnorm(1,mean=adj_vs,sigma=covariances,lower=lower)
+    idx <- data$trials == i
+    lri <- as.character(data$lR[idx])
+
+    # enforce accumulator order
+    ord <- match(accs, lri)
+    if (anyNA(ord)) stop("Missing accumulator(s) in trial ", i)
+
+    pv  <- pars[idx, "v"][ord]
+    psv <- pars[idx, "sv"][ord]
+    pk  <- pars[idx, "kappa"][ord]
+    pt  <- pars[idx, "tau"][ord]
+
+    tau2 <- unique(pt[lri[ord] %in% c("A","B")])^2
+    if (length(unique(pt[lri[ord] %in% c("A","B")])) != 1) stop("tau mismatch in trial ", i)
+
+    mu <- pv
+    ia  <- which(accs == "A");  ib  <- which(accs == "B")
+    ina <- which(accs == "n_A"); inb <- which(accs == "n_B")
+
+    mu[ia]  <- pv[ia]  + pk[ia]  * pv[ib]
+    mu[ib]  <- pv[ib]  + pk[ib]  * pv[ia]
+    mu[ina] <- pv[ina] + pk[ina] * pv[inb]
+    mu[inb] <- pv[inb] + pk[inb] * pv[ina]
+
+    Sigma <- diag(psv^2, length(accs))
+    Sigma[ia, ia] <- Sigma[ia, ia] + tau2
+    Sigma[ib, ib] <- Sigma[ib, ib] + tau2
+    Sigma[ia, ib] <- tau2
+    Sigma[ib, ia] <- tau2
+
+    draw <- tmvtnorm::rtmvnorm(1, mean = mu, sigma = Sigma, lower = lower[accs])
+    sampled_v[idx][ord] <- as.numeric(draw)
   }
   pars=cbind(pars,"sampled_v"=sampled_v)
   for (i in RACE) {
@@ -589,5 +738,3 @@ make_random_effects <- function(design, group_means, n_subj = NULL, variance_pro
   random_effects <- do_reverse_transform(random_effects,model)
   return(random_effects)
 }
-
-

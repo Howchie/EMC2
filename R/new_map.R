@@ -74,10 +74,22 @@ minimal_design <- function(design, covariates = NULL, drop_subjects = TRUE,
         fac_df[[nm]] <- res
       }
     }
-  if("LT"%in%colnames(fac_df))LT=fac_df$LT else{LT <- attr(fac_df,"LT")}; if (is.null(LT)) LT <- 0
-  if("UT"%in%colnames(fac_df))UT=fac_df$UT else{UT <- attr(fac_df,"UT")}; if (is.null(UT)) UT <- Inf
-  if("LC"%in%colnames(fac_df))LC=fac_df$LC else{LC <- attr(fac_df,"LC")}; if (is.null(LC)) LC <- 0
-  if("UC"%in%colnames(fac_df))UC=fac_df$UC else{UC <- attr(fac_df,"UC")}; if (is.null(UC)) UC <- Inf
+  if (is.null(LT)) {
+    LT <- if ("LT" %in% colnames(fac_df)) fac_df$LT else attr(fac_df, "LT")
+  }
+  if (is.null(UT)) {
+    UT <- if ("UT" %in% colnames(fac_df)) fac_df$UT else attr(fac_df, "UT")
+  }
+  if (is.null(LC)) {
+    LC <- if ("LC" %in% colnames(fac_df)) fac_df$LC else attr(fac_df, "LC")
+  }
+  if (is.null(UC)) {
+    UC <- if ("UC" %in% colnames(fac_df)) fac_df$UC else attr(fac_df, "UC")
+  }
+  if (is.null(LT)) LT <- 0
+  if (is.null(UT)) UT <- Inf
+  if (is.null(LC)) LC <- 0
+  if (is.null(UC)) UC <- Inf
   if(length(LT)==1) {fac_df$LT = rep(LT,nrow(fac_df))}
   else{fac_df$LT=LT}
   if(length(UT)==1) {fac_df$UT = rep(UT,nrow(fac_df))}

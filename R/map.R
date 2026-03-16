@@ -194,8 +194,9 @@ out = data.frame(pars=par_tr[1,],var=diag(var_tr),row.names = colnames(mu_nat))
 
 do_pre_transform <- function(p_vector, model)
 {
-  transform=model$pre_transform
-  ptypes <- names(p_vector)
+  pars=to_matrix(p_vector)
+  transform=model$transform
+  ptypes <- get_p_types(colnames(pars))
   isexp    <- transform$func[ptypes] == "exp"
   isprobit <- transform$func[ptypes] == "pnorm"
   

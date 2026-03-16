@@ -40,7 +40,7 @@ pLBA <- function (rt, pars, posdrift = TRUE)
 }
 
 
-rLBA <- function(lR,pars,p_types=c("v","sv","b","A","t0"),posdrift = TRUE,
+rLBA <- function(lR,pars,posdrift = TRUE,p_types=c("v","sv","b","A","t0"),
                  ok=rep(TRUE,length(lR)))
   # lR is an empty latent response factor lR with one level for each accumulator.
   # pars is a matrix of corresponding parameter values named as in p_types
@@ -204,7 +204,7 @@ LBA <- function(){
     pfun=function(rt,pars) pLBA(rt,pars,posdrift = TRUE),
     # Race likelihood combining pfun and dfun
     log_likelihood=function(pars,dadm,model,min_ll=log(1e-10)){
-      log_likelihood_race(pars=pars, dadm = dadm, model = model, min_ll = min_ll)
+      log_likelihood_race_cens_trunc(pars=pars, dadm = dadm, model = model, min_ll = min_ll)
     }
   )
 }
@@ -245,15 +245,16 @@ LBAIO <- function(){
 #' @export
 #'
 
-LogicalRulesLBA <- function(){
+LogicalRulesLBA <- function(posdrift = TRUE){
   list(
     type="RACE",
     c_name = "LBA_LogicalRules",
+    posdrift=posdrift,
     # p_vector transform, sets sv as a scaling parameter
-    p_types=c("v" = 1,"sv" = log(1),"B" = log(1),"A" = log(0),"t0" = log(0), "p"=qnorm(1),"q"=qnorm(0.5), "r"=qnorm(1)),
-    transform=list(func=c(v = "identity",sv = "exp", B = "exp", A = "exp",t0 = "exp",p="pnorm",q="pnorm", r="pnorm")),
-    bound=list(minmax=cbind(v=c(-Inf,Inf),sv = c(0, Inf), A=c(1e-4,Inf),B=c(0,Inf),t0=c(0.05,Inf),p=c(0.01,0.99),q=c(0.01,0.99),r=c(0.0,0.99)),
-               exception=c(A=0,p=1,r=0)),
+    p_types=c("v" = 1,"sv" = log(1),"B" = log(1),"A" = log(0),"t0" = log(0), "p"=qnorm(1),"q"=qnorm(0.5)),
+    transform=list(func=c(v = "identity",sv = "exp", B = "exp", A = "exp",t0 = "exp",p="pnorm",q="pnorm")),
+    bound=list(minmax=cbind(v=c(-Inf,Inf),sv = c(0, Inf), A=c(1e-4,Inf),B=c(0,Inf),t0=c(0.05,Inf),p=c(0.01,0.99),q=c(0.01,0.99)),
+               exception=c(A=0,p=1,q=1)),
     # Transform to natural scale
     # Trial dependent parameter transform
     Ttransform = function(pars,dadm) {
@@ -261,15 +262,15 @@ LogicalRulesLBA <- function(){
       pars
     },
     # Random function for racing accumulator
-    rfun=function(data,pars) rLBA(data$lR,pars,posdrift=TRUE,ok = attr(pars, "ok")),
+    rfun=function(data,pars,posdrift=posdrift) rLBA(data$lR,pars,posdrift,ok = attr(pars, "ok")),
     # Density function (PDF) for single accumulator
-    dfun=function(rt,pars) dLBA(rt,pars,posdrift = TRUE),
+    dfun=function(rt,pars,posdrift = posdrift) dLBA(rt,pars,posdrift),
     # Probability function (CDF) for single accumulator
-    pfun=function(rt,pars) pLBA(rt,pars,posdrift = TRUE),
+    pfun=function(rt,pars,posdrift = posdrift) pLBA(rt,pars,posdrift),
     # Race likelihood combining pfun and dfun
     log_likelihood=function(pars,dadm,model,min_ll=log(1e-10)){
       log_likelihood_redundant_target_race(pars=pars, dadm = dadm, model = model, min_ll = min_ll)
-    }
+    }	
   )
 }
 
