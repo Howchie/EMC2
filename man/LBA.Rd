@@ -4,7 +4,7 @@
 \alias{LBA}
 \title{The Linear Ballistic Accumulator model}
 \usage{
-LBA()
+LBA(posdrift = TRUE)
 }
 \value{
 A model list with all the necessary functions for EMC2 to sample

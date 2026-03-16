@@ -40,6 +40,7 @@ Other contributors:
   \item Rudolf Schuerer [contributor]
   \item Przemyslaw Sliwa [contributor]
   \item Jason H. Stover [contributor]
+  \item Zachary L. Howard [contributor]
 }
 
 }

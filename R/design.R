@@ -78,24 +78,32 @@ design <- function(formula = NULL,factors = NULL,Rlevels = NULL,model,data=NULL,
                    contrasts=NULL,matchfun=NULL,constants=NULL,covariates=NULL,
                    functions=NULL,report_p_vector=TRUE, custom_p_vector = NULL,
                    trend=NULL,
-                   transform = NULL, bound = NULL, ...){
+                   transform = NULL, bound = NULL, LT=NULL,LC=NULL,UC=NULL,UT=NULL,...){
 
   optionals <- list(...)
-  # if(!is.null(optionals$trend)){
-  #   trend <- optionals$trend
-  # } else {
-  #   trend <- NULL
-  # }
+  if (is.list(model) && !is.function(model)) {
+    model_list <- model
+    model <- function(){return(model_list)}
+  }
+  if (!is.function(model)) {
+    stop("model must be a function or a model list (e.g., LBA())")
+  }
   if(!is.null(optionals$pre_transform)){
     pre_transform <- optionals$pre_transform
   } else {
     pre_transform <- NULL
   }
 
-  if(any(names(factors) %in% c("trial", "R", "rt", "lR", "lM"))){
-    stop("Please do not use any of the following names within factors argument: trial, R, rt, lR, lM")
+  if(any(names(factors) %in% c("trial", "R", "rt", "lR", "lM","UC","LC","UT","LT","winner"))){
+    stop("Please do not use any of these factor names: winner, trial, R, rt, lR, lM, UC, LC, UT, LT")
   }
-
+  if (!"subjects" %in% names(factors)) factors$subjects <- 1 # ZH: ensure subjects is added to factors when there's no data, for make_data to work properly
+  factors <- setNames(
+    lapply(factors, function(x)
+      if (!is.factor(x)) factor(x, levels = unique(x)) else x
+    ),
+    names(factors)
+  ) # factors were being passed even if not factor types, which is inconsistent with the case where data is passed
   if(any(grepl("_", names(factors)))){
     stop("_ in variable names detected. Please refrain from using any underscores.")
   }
@@ -114,6 +122,7 @@ design <- function(formula = NULL,factors = NULL,Rlevels = NULL,model,data=NULL,
     return(design)
   }
   if (!is.null(data)) {
+    if(!"R" %in% colnames(data)) stop("make sure R is specified in data")
     if(!"subjects" %in% colnames(data)) stop("make sure subjects identifier is present in data")
     data$subjects <- factor(data$subjects)
     facs <- lapply(data,levels)
@@ -128,12 +137,25 @@ design <- function(formula = NULL,factors = NULL,Rlevels = NULL,model,data=NULL,
       # covariates <- covariates[covariates %in% all_preds]
       if(length(covariates) == 0) covariates <- NULL
     }
-    # factors <- factors[names(factors) %in% c(all_preds, "subjects")]
-  }
+    if(is.null(LT)){if("LT"%in%colnames(data)) LT=data$LT else{LT <- attr(data,"LT")}}; if (is.null(LT)) LT <- 0
+    if(is.null(UT)){if("UT"%in%colnames(data)) UT=data$UT else{UT <- attr(data,"UT")}}; if (is.null(UT)) UT <- Inf
+    if(is.null(LC)){if("LC"%in%colnames(data)) LC=data$LC else{LC <- attr(data,"LC")}}; if (is.null(LC)) LC <- 0
+    if(is.null(UC)){if("UC"%in%colnames(data)) UC=data$UC else{UC <- attr(data,"UC")}}; if (is.null(UC)) UC <- Inf
+  } else {if(is.null(Rlevels)) stop("make sure Rlevels is specified")} # this check wasn't present - would break accumulator logic
   if (!is.null(trend)) {
     formula <- check_trend(trend,c(names(functions), covariates), model, formula)
   }
-
+  
+  ## Handle GNG models silently
+  # ZH This matches Andrew's code in make_data by branching the model likelihood soley based on the presence of "nogo" in Rlevels
+  if ("nogo" %in% Rlevels) {
+    m_list <- model()
+    if(!("GNG"%in%m_list$type)){
+      if(!grepl("GNG", m_list$type)) m_list$type <- paste0(m_list$type, "GNG")
+      if (!is.null(m_list$c_name)) {if(!grepl("GNG", m_list$c_name)) m_list$c_name <- paste0(m_list$c_name, "GNG")}
+      model <- function() m_list
+    }
+  }
   # Check if all parameters in the model are specified in the formula
   nams <- unlist(lapply(formula,function(x) as.character(stats::terms(x)[[2]])))
   if (!all(sort(names(model()$p_types)) %in% sort(nams)) & is.null(custom_p_vector)){
@@ -149,7 +171,7 @@ design <- function(formula = NULL,factors = NULL,Rlevels = NULL,model,data=NULL,
 
   design <- list(Flist=formula,Ffactors=factors,Rlevels=Rlevels,
                  Clist=contrasts,matchfun=matchfun,constants=constants,
-                 Fcovariates=covariates,Ffunctions=functions,model=model)
+                 Fcovariates=covariates,Ffunctions=functions,model=model,LT=LT,LC=LC,UC=UC,UT=UT)
   class(design) <- "emc.design"
   if (!is.null(trend)) {
     # check for at = 'lR'
@@ -289,10 +311,10 @@ contr.anova <- function(n) {
 }
 
 add_accumulators <- function(data,matchfun=NULL,simulate=FALSE, type = "RACE", Fcovariates=NULL) {
-  if(is.null(type) || !type %in% c("RACE", "SDT", "MT", "TC")) return(data)
+  if(is.null(type) || !type %in% c("RACE", "RACEGNG", "SDT", "MT", "TC")) return(data)
   if (!is.factor(data$R)) stop("data must have a factor R")
   factors <- names(data)[!names(data) %in% c("R","rt","trials",Fcovariates)]
-  if (type %in% c("RACE","SDT")) {
+  if (type %in% c("RACE","SDT", "RACEGNG")) {
     nacc <- length(levels(data$R))
     datar <- cbind(do.call(rbind,lapply(1:nacc,function(x){data})),
                    lR=factor(rep(levels(data$R),each=dim(data)[1]),levels=levels(data$R)))
@@ -348,6 +370,12 @@ add_accumulators <- function(data,matchfun=NULL,simulate=FALSE, type = "RACE", F
 
     if (type %in% c("MT","TC")) datar$winner <- NA else
       datar$winner <- datar$lR==R
+    if ("RACEGNG"%in%type) {
+      is_inf <- is.infinite(datar$rt)
+      if (any(is_inf)) {
+        datar$winner[is_inf] <- datar$lR[is_inf] == "nogo" # here we code all missing responses as "nogo" winner because the make_missing trick doesn't handle that
+      }
+    }
   }
   datar
 }
@@ -373,12 +401,19 @@ compress_dadm <- function(da,designs,Fcov,Ffun)
     # out keeps only unique rows in terms of all parameters design matrices
     # R, lR and rt (at given resolution) from full data set
   {
+  if("LT"%in%colnames(da)) LT=da$LT else{LT <- attr(da,"LT")}; if (is.null(LT)) LT <- 0
+  if("UT"%in%colnames(da)) UT=da$UT else{UT <- attr(da,"UT")}; if (is.null(UT)) UT <- Inf
+  if("LC"%in%colnames(da)) LC=da$LC else{LC <- attr(da,"LC")}; if (is.null(LC)) LC <- 0
+  if("UC"%in%colnames(da)) UC=da$UC else{UC <- attr(da,"UC")}; if (is.null(UC)) UC <- Inf
     nacc <- length(unique(da$lR))
     # contract output
-    cells <- paste(
-      apply(do.call(cbind,lapply(designs,function(x){
-        apply(x[attr(x,"expand"),,drop=FALSE],1,paste,collapse="_")})
-      ),1,paste,collapse="+"),da$subjects,da$R,da$lR,da$rt,sep="+")
+    cells <- paste(apply(do.call(cbind,lapply(designs,function(x){
+                apply(x[attr(x,"expand"),,drop=FALSE],1,paste,collapse="_")})
+                ),1,paste,collapse="+"),
+                da$subjects, da$R, da$lR, da$rt,
+                LT, UT, LC, UC,  # <--- ZH Added these columns
+                sep="+"
+              )
     # Make sure that if row is included for a trial so are other rows
     if (!is.null(Fcov)) {
       if (is.null(names(Fcov))) nFcov <- Fcov else nFcov <- names(Fcov)
@@ -404,117 +439,78 @@ compress_dadm <- function(da,designs,Fcov,Ffun)
     cells_nort <- paste(
       apply(do.call(cbind,lapply(designs,function(x){
         apply(x[attr(x,"expand"),,drop=FALSE],1,paste,collapse="_")})
-      ),1,paste,collapse="+"),da$subjects,da$R,da$lR,sep="+")[contract]
+      ),1,paste,collapse="+"),da$subjects,da$R,da$lR,LT, UT, LC, UC,sep="+")[contract]
     attr(out,"unique_nort") <- !duplicated(cells_nort)
     attr(out,"expand_nort") <- as.numeric(factor(cells_nort,levels=unique(cells_nort)))
-
-    # cells_nort <- paste(
-    #   apply(do.call(cbind,lapply(designs,function(x){
-    #     apply(x[attr(x,"expand"),,drop=FALSE],1,paste,collapse="_")})
-    #   ),1,paste,collapse="+"),da$subjects,da$R,da$lR,sep="+")[contract]
-    # attr(out,"unique_nort") <- !duplicated(cells_nort)
-    # # Only first level WHY????
-    # cells <- cells[da$lR==levels(da$lR)[1]]
-    # cells_nort <- cells_nort[out$lR==levels(out$lR)[1]]
-    # attr(out,"expand_nort") <- as.numeric(factor(cells_nort,
-    #    levels=unique(cells_nort)))[as.numeric(factor(cells,levels=unique(cells)))]
 
     # indices to use to contract ignoring rt and response (R), then expand back
     cells_nortR <- paste(apply(do.call(cbind,lapply(designs,function(x){
       apply(x[attr(x,"expand"),,drop=FALSE],1,paste,collapse="_")})),1,paste,collapse="+"),
-      da$subjects,da$lR,sep="+")[contract]
+      da$subjects,LT, UT, LC, UC,sep="+")[contract] #  ,da$lR
     attr(out,"unique_nortR") <- !duplicated(cells_nortR)
     attr(out,"expand_nortR") <- as.numeric(factor(cells_nortR,levels=unique(cells_nortR)))
 
-    # # indices to use to contract ignoring rt and response (R), then expand back
-    # cells_nortR <- paste(apply(do.call(cbind,lapply(designs,function(x){
-    #   apply(x[attr(x,"expand"),,drop=FALSE],1,paste,collapse="_")})),1,paste,collapse="+"),
-    #   da$subjects,da$lR,sep="+")[contract]
-    # attr(out,"unique_nortR") <- !duplicated(cells_nortR)
-    # # Only first level WHY????
-    # cells_nortR <- cells_nortR[out$lR==levels(out$lR)[1]]
-    # attr(out,"expand_nortR") <- as.numeric(factor(cells_nortR,
-    #    levels=unique(cells_nortR)))[as.numeric(factor(cells,levels=unique(cells)))]
-
-    # Lower censor
-    # if (!any(is.na(out$rt))) { # Not a choice only model
-    #   winner <- out$lR==levels(out$lR)[[1]]
-    #   ok <- out$rt[winner]==-Inf
-    #   if (any(ok)) {
-    #     ok[ok] <- 1:sum(ok)
-    #     attr(out,"expand_lc") <- ok[attr(out,"expand_winner")] + 1
-    #   }
-    #   # Upper censor
-    #   ok <- out$rt[winner]==Inf
-    #   if (any(ok)) {
-    #     ok[ok] <- 1:sum(ok)
-    #     attr(out,"expand_uc") <- ok[attr(out,"expand_winner")] + 1
-    #   }
-    # }
     out
 }
 
-check_rt <- function(b,d,upper=TRUE)
-  # Check bounds respected if present
+check_rt <- function(b, d, upper = TRUE)
+  # Check bounds respected if present; b and d are numeric vectors
 {
-  if (!all(sort(levels(d$subjects))==sort(names(b))))
-    stop("Bound vector must have same names as subjects")
-  d <- d[!is.na(d$rt),]
-  d <- d[is.finite(d$rt),]
-  bound <- d$subjects
-  levels(bound) <- unlist(b)[levels(bound)]
-  if (upper)
-    ok <- all(d$rt < as.numeric(as.character(bound))) else
-      ok <- all(d$rt > as.numeric(as.character(bound)))
+  idx <- !is.na(d) & is.finite(d)
+  d <- d[idx]
+  b <- b[idx]
+  if (!length(d)) return(invisible(TRUE))
+  b_num <- as.numeric(as.character(b))
+  if (upper) {
+    ok <- d <= b_num
+  } else {
+    ok <- d >= b_num
+  }
   if (!all(ok)) stop("Bound not respected in data")
+  invisible(TRUE)
 }
 
 rt_check_function <- function(data){
   # Truncation
-  if (!is.null(attr(data,"UT"))) {
-    if (length(attr(data,"UT"))==1 && is.null(names(attr(data,"UT"))))
-      attr(data,"UT") <- stats::setNames(rep(attr(data,"UT"),length(levels(data$subjects))),
-                                         levels(data$subjects))
-    check_rt(attr(data,"UT"),data)
+  if ("UT"%in%colnames(data)) {
+    # Use upper truncation bound, not censoring bound
+    if (any(is.finite(data$UT))) {
+      check_rt(data$UT, data$rt)
+    }
   }
-  if (!is.null(attr(data,"LT"))) {
-    if (length(attr(data,"LT"))==1 && is.null(names(attr(data,"LT"))))
-      attr(data,"LT") <- stats::setNames(rep(attr(data,"LT"),length(levels(data$subjects))),
-                                         levels(data$subjects))
-    if (any(attr(data,"LT")<0)) stop("Lower truncation cannot be negative")
-    check_rt(attr(data,"LT"),data,upper=FALSE)
+  if ("LT"%in%colnames(data)) {
+    if (any(data$LT<0)) stop("Lower truncation cannot be negative")
+    if (any(data$LT>0)) {
+      check_rt(data$LT,data$rt,upper=FALSE)
+    }
   }
-  if (!is.null(attr(data,"UT")) & !is.null(attr(data,"LT"))) {
-    DT <- attr(data,"UT") - attr(data,"LT")
+  if ("UT"%in%colnames(data) & "LT"%in%colnames(data)) {
+    DT <- data$UT - data$LT
     if (!is.null(DT) && any(DT<0)) stop("UT must be greater than LT")
   }
 
   # Censoring
-  if (!is.null(attr(data,"UC"))) {
-    if (length(attr(data,"UC"))==1 && is.null(names(attr(data,"UC"))))
-      attr(data,"UC") <- stats::setNames(rep(attr(data,"UC"),length(levels(data$subjects))),
-                                         levels(data$subjects))
-    check_rt(attr(data,"UC"),data)
-    if (!is.null(attr(data,"UT")) && attr(data,"UT") < attr(data,"UC"))
-      stop("Upper censor must be less than upper truncation")
+  if ("UC"%in%colnames(data)) {
+    if (any(is.finite(data$UC))) {
+      check_rt(data$UC,data$rt)
+    }
+    if ("UT"%in%colnames(data) && any(is.finite(data$UC) & (data$UT < data$UC)) )
+      stop("Upper truncation must not be less than upper censor")
   }
-  if (!is.null(attr(data,"LC"))) {
-    if (length(attr(data,"LC"))==1 && is.null(names(attr(data,"LC"))))
-      attr(data,"LC") <- stats::setNames(rep(attr(data,"LC"),length(levels(data$subjects))),
-                                         levels(data$subjects))
-    if (any(attr(data,"LC")<0)) stop("Lower censor cannot be negative")
-    check_rt(attr(data,"LC"),data,upper=FALSE)
-    if (!is.null(attr(data,"LT")) && attr(data,"LT") > attr(data,"LC"))
-      stop("Lower censor must be greater than lower truncation")
+  if ("LC"%in%colnames(data)) {
+    if (any(data$LC<0)) stop("Lower censor cannot be negative")
+    if (any(data$LC>0)) { 
+      check_rt(data$LC,data$rt,upper=FALSE)
+    }
+    if ("LT"%in%colnames(data) && any(data$LC!=0 & (data$LT>data$LC)))
+      stop("Lower censor must not be less than lower truncation")
   }
-  if (any(data$rt[!is.na(data$rt)]==-Inf) & is.null(attr(data,"LC")))
+  if (any(data$rt[!is.na(data$rt)]==-Inf) & !("LC"%in%colnames(data)))
     stop("Data must have an LC attribute if any rt = -Inf")
-  if (any(data$rt[!is.na(data$rt)]==Inf) & is.null(attr(data,"UC")))
+  if (any(data$rt[!is.na(data$rt)]==Inf) & !("UC"%in%colnames(data)))
     stop("Data must have an UC attribute if any rt = Inf")
-  if (!is.null(attr(data,"UC"))) check_rt(attr(data,"UC"),data)
-  if (!is.null(attr(data,"LC"))) check_rt(attr(data,"LC"),data,upper=FALSE)
-  if (!is.null(attr(data,"UC")) & !is.null(attr(data,"LC"))) {
-    DC <- attr(data,"UC") - attr(data,"LC")
+  if ("UC"%in%colnames(data) & "LC"%in%colnames(data)) {
+    DC <- data$UC - data$LC
     if (!is.null(DC) && any(DC<0)) stop("UC must be greater than LC")
   }
 }
@@ -554,9 +550,13 @@ design_model <- function(data,design,model=NULL,
   order_idx <- order(da$subjects)
   da <- da[order_idx,] # fixes different sort in add_accumulators depending on subject type
 
+  # Only create Ffunction columns when missing.
+  # Many designs use stochastic Ffunctions (e.g., SSD assignment), so overwriting an existing
+  # column would silently change the design encoded in the data and break likelihood checks.
   if (!is.null(design$Ffunctions)) for (i in names(design$Ffunctions)) {
-    newF <- stats::setNames(data.frame(design$Ffunctions[[i]](da)),i)
-    da[,i] <- newF
+    if (i %in% names(da)) next
+    newF <- stats::setNames(data.frame(design$Ffunctions[[i]](da)), i)
+    da[, i] <- newF
   }
 
   # Add covariate_map as attribute to da
@@ -599,8 +599,10 @@ design_model <- function(data,design,model=NULL,
   }
   for (i in pnames) attr(design$Flist[[i]],"Clist") <- design$Clist[[i]]
 
-  out <- lapply(design$Flist,make_dm,da=da,Fcovariates=design$Fcovariates, add_da = add_da, all_cells_dm = all_cells_dm)
-  if (!is.null(rt_resolution) & !is.null(da$rt)) da$rt <- floor(da$rt/rt_resolution)*rt_resolution
+  out <- lapply(design$Flist,make_dm,da=da,Fcovariates=design$Fcovariates,
+                add_da = add_da, all_cells_dm = all_cells_dm)
+  if (!is.null(rt_resolution) & !is.null(da$rt))
+    da$rt <- floor(da$rt/rt_resolution)*rt_resolution
   if (compress){
     dadm <- compress_dadm(da,designs=out, Fcov=design$Fcovariates,Ffun=names(design$Ffunctions))
     # Change expansion names
@@ -629,11 +631,20 @@ design_model <- function(data,design,model=NULL,
   sampled_p_names <- p_names[!(p_names %in% names(design$constants))]
   attr(dadm,"p_names") <- p_names
   attr(dadm,"sampled_p_names") <- sampled_p_names
-  if (model()$type=="DDM") nunique <- dim(dadm)[1] else
+ 
+  # `type` is a length-1 string (e.g. "DDM", "DDMGNG"); `%in%` would fail for "DDMGNG".
+  if (grepl("DDM", model()$type)) nunique <- dim(dadm)[1] else
     nunique <- dim(dadm)[1]/length(levels(dadm$lR))
-  if (verbose & compress) message("Likelihood speedup factor: ",
-  round(dim(da)[1]/dim(dadm)[1],1)," (",nunique," unique trials)")
-
+  if (verbose & compress) {
+    if (all(c(dadm$LC,dadm$LT)==0) & all(is.infinite(c(dadm$UC,dadm$UT))))
+      mismes <- NULL else {
+        okDADM <- !is.na(dadm$R) | !is.infinite(dadm$rt)
+        okDA <- !is.na(da$R) | !is.infinite(da$rt)
+        mismes <- paste0(" (with no missing ",round(sum(okDA)/sum(okDADM),1),"x)")
+      }
+    message("Likelihood speedup factor: ",
+    round(dim(da)[1]/dim(dadm)[1],1),mismes,", ",nunique," unique trials")
+  }
   attr(dadm,"model") <- model
   attr(dadm,"constants") <- design$constants
   attr(dadm,"ok_trials") <- is.finite(data$rt)
@@ -756,7 +767,18 @@ dm_list <- function(dadm)
       x
     })
 
-
+  if("LT"%in%colnames(dadm))LT=dadm$LT else{LT <- attr(dadm,"LT")}; if (is.null(LT)) LT <- 0
+  if("UT"%in%colnames(dadm))UT=dadm$UT else{UT <- attr(dadm,"UT")}; if (is.null(UT)) UT <- Inf
+  if("LC"%in%colnames(dadm))LC=dadm$LC else{LC <- attr(dadm,"LC")}; if (is.null(LC)) LC <- 0
+  if("UC"%in%colnames(dadm))UC=dadm$UC else{UC <- attr(dadm,"UC")}; if (is.null(UC)) UC <- Inf
+  if(length(LT)==1) {dadm$LT = rep(LT,nrow(dadm))}
+  else{dadm$LT=LT}
+  if(length(UT)==1) {dadm$UT = rep(UT,nrow(dadm))}
+  else{dadm$UT=UT}
+  if(length(LC)==1) {dadm$LC = rep(LC,nrow(dadm))}
+  else{dadm$LC=LC}
+  if(length(UC)==1) {dadm$UC = rep(UC,nrow(dadm))}
+  else{dadm$UC=UC}
   model <- attr(dadm,"model")
   p_names <- attr(dadm,"p_names")
   sampled_p_names <- attr(dadm,"sampled_p_names")
@@ -780,8 +802,8 @@ dm_list <- function(dadm)
   dl <- stats::setNames(vector(mode="list",length=length(levels(dadm$subjects))),
                         levels(dadm$subjects))
   for (i in levels(dadm$subjects)) {
-    isin <- dadm$subjects==i         # dadm
-    dl[[i]] <- dadm[isin,]
+    isin <- dadm$subjects == i # dadm
+    dl[[i]] <- dadm[isin, ]
     dl[[i]]$subjects <- factor(as.character(dl[[i]]$subjects))
 
     if(!is.null(attr(dadm, 'covariate_maps'))) {
@@ -797,39 +819,35 @@ dm_list <- function(dadm)
       if(length(isin2) > 0){
         attr(dl[[i]],"expand") <- expand_winner[isin2]-min(expand_winner[isin2]) + 1
       }
-      attr(dl[[i]],"model") <- NULL
-      attr(dl[[i]],"p_names") <- p_names
-      attr(dl[[i]],"sampled_p_names") <- sampled_p_names
-      attr(dl[[i]],"designs") <- sub_design(designs,isin)
+      attr(dl[[i]], "model") <- NULL
+      attr(dl[[i]], "p_names") <- p_names
+      attr(dl[[i]], "sampled_p_names") <- sampled_p_names
+      attr(dl[[i]], "designs") <- sub_design(designs, isin)
       # if(!is.null(expand)) attr(dl[[i]],"expand_all") <- expand[isin1]-min(expand[isin1]) + 1
-      attr(dl[[i]],"contract") <- NULL
-      attr(dl[[i]],"expand_winner") <- NULL
-      attr(dl[[i]],"ok_trials") <- NULL
-      attr(dl[[i]],"s_data") <- NULL
-      attr(dl[[i]],"s_expand") <- NULL
-      attr(dl[[i]],"prior") <- NULL
-      if(!is.null(dms_mri)){
+      attr(dl[[i]], "contract") <- NULL
+      attr(dl[[i]], "expand_winner") <- NULL
+      attr(dl[[i]], "ok_trials") <- NULL
+      attr(dl[[i]], "s_data") <- NULL
+      attr(dl[[i]], "s_expand") <- NULL
+      attr(dl[[i]], "prior") <- NULL
+      if (!is.null(dms_mri)) {
         attr(dl[[i]], "designs") <- make_mri_sampling_design(dms_mri[[i]], sampled_p_names)
         attr(dl[[i]], "design_matrix") <- NULL
       }
 
       attr(dl[[i]], "unique_nort") <- NULL
-      attr(dl[[i]], "unique_nortR") <- NULL
+      # attr(dl[[i]], "unique_nortR") <- NULL
       attr(dl[[i]], "expand_nort") <- NULL
-      attr(dl[[i]], "expand_nortR") <- NULL
-
-      if (!is.null(attr(dadm,"LT"))){
-        attr(dl[[i]],"LT") <- attr(dadm,"LT")[names(attr(dadm,"LT"))==i]
-      }
-      if (!is.null(attr(dadm,"UT"))){
-        attr(dl[[i]],"UT") <- attr(dadm,"UT")[names(attr(dadm,"UT"))==i]
-      }
-      if (!is.null(attr(dadm,"LC"))){
-        attr(dl[[i]],"LC") <- attr(dadm,"LC")[names(attr(dadm,"LC"))==i]
-      }
-      if (!is.null(attr(dadm,"UC"))){
-        attr(dl[[i]],"UC") <- attr(dadm,"UC")[names(attr(dadm,"UC"))==i]
-      }
+      # attr(dl[[i]], "expand_nortR") <- NULL
+      # LL cache attrs are data-shape specific; drop any inherited cache from the
+      # full dadm so per-subject caching is always rebuilt safely.
+      attr(dl[[i]], "emc2_ll_cache_version") <- NULL
+      attr(dl[[i]], "emc2_all_finite_trials") <- NULL
+      attr(dl[[i]], "finite_rt_mask") <- NULL
+      attr(dl[[i]], "finite_rt_unique_trial_indices") <- NULL
+      attr(dl[[i]], "other_unique_trial_indices") <- NULL
+      attr(dl[[i]], "RACE_nacc_by_row") <- NULL
+      attr(dl[[i]], "RACE_mask") <- NULL
     }
   }
 
@@ -881,7 +899,7 @@ update2version <- function(emc){
 
         reduced <- unique(new_x)       # keeps the first appearance of every row
 
-        ## ——— 2. create the “expand” index ———
+        ## ——— 2. create the "expand" index ———
         key_full    <- do.call(paste, c(new_x,      sep = "\r"))   # one string per row
         key_reduced <- do.call(paste, c(reduced, sep = "\r"))   # the same for reduced
         attr(x, "expand") <- match(key_full, key_reduced)

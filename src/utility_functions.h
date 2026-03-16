@@ -1,7 +1,7 @@
 #ifndef utility_h
 #define utility_h
 
-#include <Rcpp.h>
+#include <RcppArmadillo.h>
 #include <unordered_set>
 #include <unordered_map>
 #include <vector>
@@ -316,7 +316,7 @@ LogicalVector lr_all(LogicalVector ok, int n_side)
 
     int state = TRUE;                 // optimistic
 
-    // inspect one “column”
+    // inspect one "column"
     for (int j = 0; j < n_side; ++j) {
       const int v = x[i + j];
       if (v == FALSE) {             // any FALSE trumps everything
@@ -671,6 +671,13 @@ NumericMatrix c_do_transform(NumericMatrix pars,
   return pars;
 }
 
+bool row_is_finite(const Rcpp::NumericMatrix& mat, int row) {
+  // Convenience helper for sanity checks on parameter rows.
+  for (int j = 0; j < mat.ncol(); ++j) {
+    if (!R_finite(mat(row, j))) return false;
+  }
+  return true;
+}
 
 
 #endif

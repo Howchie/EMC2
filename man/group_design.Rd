@@ -35,7 +35,7 @@ it is important to ensure that the design matrix has a mean of zero. If not, thi
 warning. For some unbalanced designs, this is unavoidable and the warning can be ignored.
 }
 \examples{
-# Create subject-level design 
+# Create subject-level design
 subj_design <- design(data = forstmann, model = DDM,
                       formula = list(v ~ S, a ~ E, t0 ~ 1),
                       contrasts = list(S = contr.helmert))

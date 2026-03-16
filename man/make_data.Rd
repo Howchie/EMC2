@@ -12,6 +12,8 @@ make_data(
   expand = 1,
   staircase = NULL,
   functions = NULL,
+  return_functions = FALSE,
+  TC = NULL,
   ...
 )
 }
@@ -33,9 +35,13 @@ or an emc object with sampled parameters
 algorithm. If non-null and a list then passed through as is, if not it is assigned the
 default list structure: list(p=.25,SSD0=.25,stairstep=.05,stairmin=0,stairmax=Inf)}
 
-\item{functions}{List of functions you want to apply to the data generation.}
+\item{functions}{List of functions to create factors used in data generation.}
+
+\item{return_functions}{Logical, should factors created by functions be returned, default FALSE.}
 
 \item{...}{Additional optional arguments}
+
+\item{missing}{List named with the arguments of the make_missing function (except data).}
 }
 \value{
 A data frame with simulated data

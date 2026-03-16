@@ -1,7 +1,7 @@
 #ifndef mri_H
 #define mri_H
 
-#include <Rcpp.h>
+#include <RcppArmadillo.h>
 using namespace Rcpp;
 //
 // #include "mri.h"

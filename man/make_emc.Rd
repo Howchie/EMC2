@@ -50,6 +50,12 @@ An uninitialized emc object
 Creates an emc object by combining the data, prior,
 and model specification into a \code{emc} object that is needed in \code{fit()}.
 }
+\details{
+Some likelihood backends attach internal, versioned cache attributes to the
+processed per-subject data (dadm) to avoid repeating data-only scans during
+sampling. These attributes are recomputed when missing or outdated and are not
+part of the user-facing API.
+}
 \examples{
 dat <- forstmann
 

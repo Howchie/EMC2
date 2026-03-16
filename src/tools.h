@@ -9,6 +9,7 @@
 #include <vector>
 // #include <mutex>
 #include <R.h>
+#include <gsl/gsl_errno.h>
 
 //
 // extern std::mutex mtx_R_CUI; // mutex for R_CheckUserInterrupt
@@ -18,20 +19,20 @@
 
 /* gsl_sf_result_struct and cheb_series_struct
   are copied from the GNU scientific library version 2.6 */
-struct gsl_sf_result_struct {
+struct emc2_gsl_sf_result_struct {
   double val;
   double err;
 };
-typedef struct gsl_sf_result_struct gsl_sf_result;
+typedef struct emc2_gsl_sf_result_struct emc2_gsl_sf_result;
 
-struct cheb_series_struct {
+struct emc2_cheb_series_struct {
   double * c;   /* coefficients                */
   int order;    /* order of expansion          */
   double a;     /* lower interval point        */
   double b;     /* upper interval point        */
   int order_sp; /* effective single precision order */
 };
-typedef struct cheb_series_struct cheb_series;
+typedef struct emc2_cheb_series_struct emc2_cheb_series;
 
 
 /*------------------------------------------------*/
@@ -150,12 +151,20 @@ double rat_eval(const double, const size_t, const double, const size_t, const do
 double small(double);
 double intermediate(double);
 double tail(double);
-double gsl_cdf_ugaussian_Pinv(const double);
+double emc2_gsl_cdf_ugaussian_Pinv(const double);
 
-/* GSL_ERROR_VAL: call the error handler, and return the given value */
-#define GSL_ERROR_VAL(reason, gsl_errno, value) \
+/* Forward declaration of our custom error reporter (avoids duplicate symbol with libgsl) */
+void emc2_gsl_error(const char * reason, const char * file,
+                    int line, int gsl_errno);
+
+// Helpers to control libgsl error handling (print via Rprintf, no abort).
+gsl_error_handler_t* emc2_gsl_set_error_handler_rprintf();
+gsl_error_handler_t* emc2_gsl_set_error_handler_off();
+
+/* EMC2_GSL_ERROR_VAL: call our error reporter, and return the given value */
+#define EMC2_GSL_ERROR_VAL(reason, gsl_errno, value) \
        do { \
-       gsl_error (reason, __FILE__, __LINE__, gsl_errno) ; \
+       emc2_gsl_error (reason, __FILE__, __LINE__, gsl_errno) ; \
        return value ; \
        } while (0)
 
@@ -163,67 +172,28 @@ double gsl_cdf_ugaussian_Pinv(const double);
 /* modified gsl_ran_gaussian */
 double onenorm();
 /* modified gsl_ran_gaussian_tail */
-double gsl_ran_gaussian_tail(const double, const double);
+double emc2_gsl_ran_gaussian_tail(const double, const double);
 /* modified gsl_ran_ugaussian_tail */
-double gsl_ran_ugaussian_tail(const double a);
-int gsl_sf_erfc_e(double, gsl_sf_result *);
-double gsl_sf_erfc(double);
+double emc2_gsl_ran_ugaussian_tail(const double a);
+int emc2_gsl_sf_erfc_e(double, emc2_gsl_sf_result *);
+double emc2_gsl_sf_erfc(double);
 
-typedef void gsl_error_handler_t (const char * reason, const char * file,
-                                  int line, int gsl_errno);
+/* gsl_error_handler_t comes from <gsl/gsl_errno.h> */
 
 #define EVAL_RESULT(fn) \
-   gsl_sf_result result; \
+   emc2_gsl_sf_result result; \
    int status = fn; \
    if (status != GSL_SUCCESS) { \
-     GSL_ERROR_VAL(#fn, status, result.val); \
+     EMC2_GSL_ERROR_VAL(#fn, status, result.val); \
    } ; \
    return result.val;
 
 #define EVAL_DOUBLE(fn) \
    int status = fn; \
    if (status != GSL_SUCCESS) { \
-     GSL_ERROR_VAL(#fn, status, result); \
+     EMC2_GSL_ERROR_VAL(#fn, status, result); \
    } ; \
    return result;
-
-enum {
- GSL_SUCCESS  = 0,
- GSL_FAILURE  = -1,
- GSL_CONTINUE = -2,  /* iteration has not converged */
- GSL_EDOM     = 1,   /* input domain error, e.g sqrt(-1) */
- GSL_ERANGE   = 2,   /* output range error, e.g. exp(1e100) */
- GSL_EFAULT   = 3,   /* invalid pointer */
- GSL_EINVAL   = 4,   /* invalid argument supplied by user */
- GSL_EFAILED  = 5,   /* generic failure */
- GSL_EFACTOR  = 6,   /* factorization failed */
- GSL_ESANITY  = 7,   /* sanity check failed - shouldn't happen */
- GSL_ENOMEM   = 8,   /* malloc failed */
- GSL_EBADFUNC = 9,   /* problem with user-supplied function */
- GSL_ERUNAWAY = 10,  /* iterative process is out of control */
- GSL_EMAXITER = 11,  /* exceeded max number of iterations */
- GSL_EZERODIV = 12,  /* tried to divide by zero */
- GSL_EBADTOL  = 13,  /* user specified an invalid tolerance */
- GSL_ETOL     = 14,  /* failed to reach the specified tolerance */
- GSL_EUNDRFLW = 15,  /* underflow */
- GSL_EOVRFLW  = 16,  /* overflow  */
- GSL_ELOSS    = 17,  /* loss of accuracy */
- GSL_EROUND   = 18,  /* failed because of roundoff error */
- GSL_EBADLEN  = 19,  /* matrix, vector lengths are not conformant */
- GSL_ENOTSQR  = 20,  /* matrix not square */
- GSL_ESING    = 21,  /* apparent singularity detected */
- GSL_EDIVERGE = 22,  /* integral or series is divergent */
- GSL_EUNSUP   = 23,  /* requested feature is not supported by the hardware */
- GSL_EUNIMPL  = 24,  /* requested feature not (yet) implemented */
- GSL_ECACHE   = 25,  /* cache limit exceeded */
- GSL_ETABLE   = 26,  /* table limit exceeded */
- GSL_ENOPROG  = 27,  /* iteration is not making progress towards solution */
- GSL_ENOPROGJ = 28,  /* jacobian evaluations are not improving the solution */
- GSL_ETOLF    = 29,  /* cannot reach the specified tolerance in F */
- GSL_ETOLX    = 30,  /* cannot reach the specified tolerance in X */
- GSL_ETOLG    = 31,  /* cannot reach the specified tolerance in gradient */
- GSL_EOF      = 32   /* end of file */
-} ;
 
 
 /* -------------------------------------------------------- */
