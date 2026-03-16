@@ -1,7 +1,8 @@
-/Papers
 .gemini
-.Rproj.user
+*.ipynb
+**/.ipynb_checkpoints/
 .ipynb_checkpoints
+/Papers
+*.RData
+.Rproj.user
 /.Rtmp/
-*.RData
-*.RData
