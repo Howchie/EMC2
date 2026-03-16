@@ -20,6 +20,10 @@ design(
   trend = NULL,
   transform = NULL,
   bound = NULL,
+  LT = NULL,
+  LC = NULL,
+  UC = NULL,
+  UT = NULL,
   ...
 )
 }

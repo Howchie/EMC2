@@ -8,7 +8,7 @@
 #     exp(pars[, isexp, drop = FALSE]), 2,
 #     transform$lower[colnames(pars)[isexp]], "+")
 #
-#   ## probit link: lower + (upper‑lower) * pnorm(real)
+#   ## probit link: lower + (upper+lower) * pnorm(real)
 #   pars[, isprobit] <- sweep(
 #     sweep(pnorm(pars[, isprobit, drop = FALSE]), 2,
 #           transform$upper[colnames(pars)[isprobit]] -

@@ -3,7 +3,7 @@
 
 #include "utility_functions.h"
 #include "EMC2/userfun.hpp"
-#include <Rcpp.h>
+#include <RcppArmadillo.h>
 #include <unordered_map>
 using namespace Rcpp;
 
@@ -271,17 +271,20 @@ NumericMatrix run_kernel_rcpp(NumericMatrix kernel_pars,
         } else if (kernel == "poly2") {
           for (int i = 0; i < n_comp; ++i) if (good[i]) {
             int r = good_pos[i];
-            comp_out[i] = kp_good(r, 0) * cov_comp[i] + kp_good(r, 1) * std::pow(cov_comp[i], 2);
+            double x = cov_comp[i];
+            comp_out[i] = x * (kp_good(r, 0) + x * kp_good(r, 1));
           }
         } else if (kernel == "poly3") {
           for (int i = 0; i < n_comp; ++i) if (good[i]) {
             int r = good_pos[i];
-            comp_out[i] = kp_good(r, 0) * cov_comp[i] + kp_good(r, 1) * std::pow(cov_comp[i], 2) + kp_good(r, 2) * std::pow(cov_comp[i], 3);
+            double x = cov_comp[i];
+            comp_out[i] = x * (kp_good(r, 0) + x * (kp_good(r, 1) + x * kp_good(r, 2)));
           }
         } else if (kernel == "poly4") {
           for (int i = 0; i < n_comp; ++i) if (good[i]) {
             int r = good_pos[i];
-            comp_out[i] = kp_good(r, 0) * cov_comp[i] + kp_good(r, 1) * std::pow(cov_comp[i], 2) + kp_good(r, 2) * std::pow(cov_comp[i], 3) + kp_good(r, 3) * std::pow(cov_comp[i], 4);
+            double x = cov_comp[i];
+            comp_out[i] = x * (kp_good(r, 0) + x * (kp_good(r, 1) + x * (kp_good(r, 2) + x * kp_good(r, 3))));
           }
         } else {
           stop("Unknown kernel type");

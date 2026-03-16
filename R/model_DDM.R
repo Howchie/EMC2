@@ -181,7 +181,7 @@ DDM <- function(){
 #' modeling the TIMEOUT (which is considered but not used in this paper).
 #'
 #' Gomez, P., Ratcliff, R., & Perea, M. (2007). A Model of the Go/No-Go Task.
-#' Journal of Experimental Psychology: General, 136(3), 389–413.
+#' Journal of Experimental Psychology: General, 136(3), 389-413.
 #' https://doi.org/10.1037/0096-3445.136.3.389
 #'
 #' The likelihood of non-responses requires and evaluation of the DDM cdf,
@@ -234,8 +234,9 @@ DDMGNG <- function(){
     # Random function
     rfun=function(data,pars) {
       out <- rDDM(data$R,pars, attr(pars, "ok"))
-      out$rt[out$rt>pars[,"TIMEOUT"]] <- NA
-      out$rt[as.numeric(out$R)==pars[,"Rnogo"]] <- NA
+      out$rt[out$rt>pars[,"TIMEOUT"]] <- Inf
+      out$rt[as.numeric(out$R)==pars[,"Rnogo"]] <- Inf
+      out$R[is.infinite(out$rt)] <- NA
       out
     },
     # Density function (PDF)
@@ -247,4 +248,3 @@ DDMGNG <- function(){
     }
   )
 }
-

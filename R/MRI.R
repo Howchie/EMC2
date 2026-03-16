@@ -893,7 +893,7 @@ prepare_event_groups <- function(events, event_type, n_bins = 4) {
 #   K = floor((pre+post)/dt)+1  (dt = median diff(frame_times))
 # Column k corresponds to lag t = -pre + (k-1)*dt.
 # ---------------------------------------------------------------------------
-# Build an FIR design with an optional externally‑specified TR  --------------
+# Build an FIR design with an optional externally-specified TR  --------------
 # ---------------------------------------------------------------------------
 ###############################################################################
 ## Fast FIR utilities + plot_fmri (robust version, 3 May 2025)               ##
@@ -919,7 +919,7 @@ build_fir_design <- function(frame_times, onsets, durations,
   X <- matrix(0, nrow = nTR, ncol = K,
               dimnames = list(NULL, sprintf("lag_%0.3f", lags)))
 
-  ## pre‑compute frame centres for fast look‑up
+  ## pre-compute frame centres for fast look-up
   fc <- frame_times
 
   for (j in seq_along(onsets)) {
@@ -929,7 +929,7 @@ build_fir_design <- function(frame_times, onsets, durations,
 
     ## frames whose centre is within the event window
     in_evt <- which(fc >= onset & fc < onset + dur)
-    if (!length(in_evt)) {              # shorter than first half‑TR → impulse
+    if (!length(in_evt)) {              # shorter than first half-TR  impulse
       in_evt <- which.min(abs(fc - onset))
     }
 
@@ -952,7 +952,7 @@ build_fir_design <- function(frame_times, onsets, durations,
 estimate_rho <- function(y, clip = TRUE) {
   if (length(y) < 2L) return(0)
 
-  y <- y - mean(y, na.rm = TRUE)        # 1 de‑mean
+  y <- y - mean(y, na.rm = TRUE)        # 1 de-mean
   rho <- sum(y[-1] * y[-length(y)]) /
     (sum(y[-length(y)]^2) + 1e-12)
 
@@ -983,7 +983,7 @@ fit_fir_glm <- function(y, X, lags_sec, target) {
 
   beta <- as.vector(solve(crossprod(Xw), crossprod(Xw, yw)))
   beta <- beta[target]
-  ## Baseline correction (pre‑stimulus lags)
+  ## Baseline correction (pre-stimulus lags)
   idx_pre <- lags_sec < 0
   if(any(idx_pre, na.rm = TRUE))
     beta <- beta - mean(beta[idx_pre], na.rm = TRUE)
@@ -994,7 +994,7 @@ fit_fir_glm <- function(y, X, lags_sec, target) {
 # 5)  Main extractor – returns long data.frame for plotting
 # ─────────────────────────────────────────────────────────────────────────────
 # ─────────────────────────────────────────────────────────────────────────────
-# 5)  Main extractor – FIR for *all* events, returns long data‑frame
+# 5)  Main extractor – FIR for *all* events, returns long data-frame
 # ─────────────────────────────────────────────────────────────────────────────
 get_fir_lines <- function(timeseries, events, event_type,
                           pre = 2, post = 18, n_bins = 4,
@@ -1068,7 +1068,7 @@ get_fir_lines <- function(timeseries, events, event_type,
                        ev_sub$run       == rid, ]
       if(!nrow(ev_g)) next
 
-      ## NOTE: weights = NULL → un‑scaled FIR for the curve we plot
+      ## NOTE: weights = NULL  un-scaled FIR for the curve we plot
       X_tar <- build_fir_design(ft,
                                 ev_g$onset,
                                 ev_g$duration,       # durations for the target
@@ -1089,7 +1089,7 @@ get_fir_lines <- function(timeseries, events, event_type,
     }
   }
 
-  ## 3) weight‑averaged β → long data.frame
+  ## 3) weight-averaged β  long data.frame
   out <- lapply(names(betas), function(g) {
     mat <- betas[[g]]; if(is.null(mat)) return(NULL)
     B <- mat[, 1:K, drop = FALSE]; w <- mat[, K+1L]

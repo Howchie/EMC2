@@ -29,38 +29,38 @@
     Code
       mapped_pars(des, p_vector = rnorm(length(sampled_pars(des))))
     Output
-                E     S   covariate    lR      v sv     B A    t0     b
-      1     speed  left -0.29797771  left  1.637  1 3.048 0 0.292 3.048
-      2     speed  left -0.29797771 right  1.637  1 3.048 0 0.292 3.048
-      3   neutral  left  0.34063680  left  0.805  1 1.793 0 0.292 1.793
-      4   neutral  left  0.34063680 right  0.805  1 1.793 0 0.292 1.793
-      5  accuracy  left  0.13373072  left -0.213  1 3.051 0 0.292 3.051
-      6  accuracy  left  0.13373072 right -0.213  1 3.051 0 0.292 3.051
-      7     speed right  0.86266186  left  0.057  1 3.048 0 0.189 3.048
-      8     speed right  0.86266186 right  0.057  1 3.048 0 0.189 3.048
-      9   neutral right  0.05063779  left  0.895  1 1.793 0 0.189 1.793
-      10  neutral right  0.05063779 right  0.895  1 1.793 0 0.189 1.793
-      11 accuracy right  1.22458533  left -2.828  1 3.051 0 0.189 3.051
-      12 accuracy right  1.22458533 right -2.828  1 3.051 0 0.189 3.051
+                E     S   covariate    lR      v sv     B A    t0 pContaminant     b
+      1     speed  left -0.29797771  left  1.637  1 3.048 0 0.292            0 3.048
+      2     speed  left -0.29797771 right  1.637  1 3.048 0 0.292            0 3.048
+      3   neutral  left  0.34063680  left  0.805  1 1.793 0 0.292            0 1.793
+      4   neutral  left  0.34063680 right  0.805  1 1.793 0 0.292            0 1.793
+      5  accuracy  left  0.13373072  left -0.213  1 3.051 0 0.292            0 3.051
+      6  accuracy  left  0.13373072 right -0.213  1 3.051 0 0.292            0 3.051
+      7     speed right  0.86266186  left  0.057  1 3.048 0 0.189            0 3.048
+      8     speed right  0.86266186 right  0.057  1 3.048 0 0.189            0 3.048
+      9   neutral right  0.05063779  left  0.895  1 1.793 0 0.189            0 1.793
+      10  neutral right  0.05063779 right  0.895  1 1.793 0 0.189            0 1.793
+      11 accuracy right  1.22458533  left -2.828  1 3.051 0 0.189            0 3.051
+      12 accuracy right  1.22458533 right -2.828  1 3.051 0 0.189            0 3.051
 
 ---
 
     Code
       mapped_pars(prior(des, mu_mean = c(v_covariate = 1)))
     Output
-                E     S   covariate    lR      v sv B A t0 b
-      1     speed  left -0.09534976  left -0.095  1 1 0  1 1
-      2     speed  left -0.09534976 right -0.095  1 1 0  1 1
-      3   neutral  left -0.54328498  left -0.543  1 1 0  1 1
-      4   neutral  left -0.54328498 right -0.543  1 1 0  1 1
-      5  accuracy  left -2.15286166  left -2.153  1 1 0  1 1
-      6  accuracy  left -2.15286166 right -2.153  1 1 0  1 1
-      7     speed right -1.12658056  left -1.127  1 1 0  1 1
-      8     speed right -1.12658056 right -1.127  1 1 0  1 1
-      9   neutral right  0.67546458  left  0.675  1 1 0  1 1
-      10  neutral right  0.67546458 right  0.675  1 1 0  1 1
-      11 accuracy right -0.08025789  left -0.080  1 1 0  1 1
-      12 accuracy right -0.08025789 right -0.080  1 1 0  1 1
+                E     S   covariate    lR      v sv B A t0 pContaminant b
+      1     speed  left -0.09534976  left -0.095  1 1 0  1            0 1
+      2     speed  left -0.09534976 right -0.095  1 1 0  1            0 1
+      3   neutral  left -0.54328498  left -0.543  1 1 0  1            0 1
+      4   neutral  left -0.54328498 right -0.543  1 1 0  1            0 1
+      5  accuracy  left -2.15286166  left -2.153  1 1 0  1            0 1
+      6  accuracy  left -2.15286166 right -2.153  1 1 0  1            0 1
+      7     speed right -1.12658056  left -1.127  1 1 0  1            0 1
+      8     speed right -1.12658056 right -1.127  1 1 0  1            0 1
+      9   neutral right  0.67546458  left  0.675  1 1 0  1            0 1
+      10  neutral right  0.67546458 right  0.675  1 1 0  1            0 1
+      11 accuracy right -0.08025789  left -0.080  1 1 0  1            0 1
+      12 accuracy right -0.08025789 right -0.080  1 1 0  1            0 1
 
 ---
 

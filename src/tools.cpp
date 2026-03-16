@@ -9,6 +9,21 @@
 
 std::mutex mtx_samp, mtx_RCUI;
 
+static void emc2_gsl_error_handler_rprintf(const char* reason,
+                                          const char* file,
+                                          int line,
+                                          int gsl_errno) {
+  Rprintf("GSL error (%d) at %s:%d: %s\n", gsl_errno, file, line, reason);
+}
+
+gsl_error_handler_t* emc2_gsl_set_error_handler_rprintf() {
+  return gsl_set_error_handler(&emc2_gsl_error_handler_rprintf);
+}
+
+gsl_error_handler_t* emc2_gsl_set_error_handler_off() {
+  return gsl_set_error_handler_off();
+}
+
 
 double logsum(double xa, double xb) {
 	double temp;
@@ -306,7 +321,7 @@ double tail(double r) {
   return x;
 }
 
-double gsl_cdf_ugaussian_Pinv(const double P) {
+double emc2_gsl_cdf_ugaussian_Pinv(const double P) {
   double r, x, pp;
   double dP = P - 0.5;
   if (P == 1.0)
@@ -346,11 +361,11 @@ double gsl_cdf_ugaussian_Pinv(const double P) {
     }
 }
 
-static inline int cheb_eval_e(const cheb_series * cs, const double x, gsl_sf_result * result);
+static inline int cheb_eval_e(const emc2_cheb_series * cs, const double x, emc2_gsl_sf_result * result);
 
-static inline int cheb_eval_e(const cheb_series * cs,
+static inline int cheb_eval_e(const emc2_cheb_series * cs,
             const double x,
-            gsl_sf_result * result)
+            emc2_gsl_sf_result * result)
 {
   int j;
   double d  = 0.0;
@@ -404,7 +419,7 @@ double onenorm() {
 
 
 /* modified gsl_ran_gaussian_tail */
-double gsl_ran_gaussian_tail(const double a, const double sigma) {
+double emc2_gsl_ran_gaussian_tail(const double a, const double sigma) {
   /* Returns a gaussian random variable larger than a
    * This implementation does one-sided upper-tailed deviates.
    */
@@ -452,8 +467,8 @@ double gsl_ran_gaussian_tail(const double a, const double sigma) {
 }
 
 /* modified gsl_ran_ugaussian_tail */
-double gsl_ran_ugaussian_tail(const double a) {
-  return gsl_ran_gaussian_tail (a, 1.0) ;
+double emc2_gsl_ran_ugaussian_tail(const double a) {
+  return emc2_gsl_ran_gaussian_tail (a, 1.0) ;
 }
 
 static double erfc_xlt1_data[20] = {
@@ -478,7 +493,7 @@ static double erfc_xlt1_data[20] = {
   2.45935306460536488037576200030e-18,
  -9.29599561220523396007359328540e-19
 };
-static cheb_series erfc_xlt1_cs = {
+static emc2_cheb_series erfc_xlt1_cs = {
   erfc_xlt1_data,
   19,
   -1, 1,
@@ -512,7 +527,7 @@ static double erfc_x15_data[25] = {
  -1.90685978789192181051961024995e-15,
   3.50826648032737849245113757340e-16
 };
-static cheb_series erfc_x15_cs = {
+static emc2_cheb_series erfc_x15_cs = {
   erfc_x15_data,
   24,
   -1, 1,
@@ -541,24 +556,16 @@ static double erfc_x510_data[20] = {
  -6.07970619384160374392535453420e-16,
   9.12600607264794717315507477670e-17
 };
-static cheb_series erfc_x510_cs = {
+static emc2_cheb_series erfc_x510_cs = {
   erfc_x510_data,
   19,
   -1, 1,
   12
 };
 
-gsl_error_handler_t * gsl_error_handler = NULL;
-
-/* modified gsl_error */
-void gsl_error (const char * reason, const char * file, int line, int gsl_errno)
+/* modified error reporter to avoid clashing with libgsl symbol */
+void emc2_gsl_error (const char * reason, const char * file, int line, int gsl_errno)
 {
-  if (gsl_error_handler)
-    {
-      (*gsl_error_handler) (reason, file, line, gsl_errno);
-      return ;
-    }
-
   Rprintf ("ERROR");
 
   //fflush (stdout);
@@ -613,7 +620,7 @@ inline static double erfc8(double x)
   return e;
 }
 
-int gsl_sf_erfc_e(double x, gsl_sf_result * result) {
+int emc2_gsl_sf_erfc_e(double x, emc2_gsl_sf_result * result) {
   const double ax = fabs(x);
   double e_val, e_err;
 
@@ -621,7 +628,7 @@ int gsl_sf_erfc_e(double x, gsl_sf_result * result) {
 
   if(ax <= 1.0) {
     double t = 2.0*ax - 1.0;
-    gsl_sf_result c;
+    emc2_gsl_sf_result c;
     cheb_eval_e(&erfc_xlt1_cs, t, &c);
     e_val = c.val;
     e_err = c.err;
@@ -629,7 +636,7 @@ int gsl_sf_erfc_e(double x, gsl_sf_result * result) {
   else if(ax <= 5.0) {
     double ex2 = exp(-x*x);
     double t = 0.5*(ax-3.0);
-    gsl_sf_result c;
+    emc2_gsl_sf_result c;
     cheb_eval_e(&erfc_x15_cs, t, &c);
     e_val = ex2 * c.val;
     e_err = ex2 * (c.err + 2.0*fabs(x)*GSL_DBL_EPSILON);
@@ -637,7 +644,7 @@ int gsl_sf_erfc_e(double x, gsl_sf_result * result) {
   else if(ax < 10.0) {
     double exterm = exp(-x*x) / ax;
     double t = (2.0*ax - 15.0)/5.0;
-    gsl_sf_result c;
+    emc2_gsl_sf_result c;
     cheb_eval_e(&erfc_x510_cs, t, &c);
     e_val = exterm * c.val;
     e_err = exterm * (c.err + 2.0*fabs(x)*GSL_DBL_EPSILON + GSL_DBL_EPSILON);
@@ -661,9 +668,9 @@ int gsl_sf_erfc_e(double x, gsl_sf_result * result) {
   return GSL_SUCCESS;
 }
 
-double gsl_sf_erfc(double x)
+double emc2_gsl_sf_erfc(double x)
 {
-  EVAL_RESULT(gsl_sf_erfc_e(x, &result));
+  EVAL_RESULT(emc2_gsl_sf_erfc_e(x, &result));
 }
 
 

@@ -17,7 +17,8 @@ Authors@R:
       person("Gerard", "Jungman", role=c("ctb")),
       person("Rudolf", "Schuerer", role=c("ctb")),
       person("Przemyslaw", "Sliwa", role=c("ctb")),
-      person("Jason H.", "Stover", role=c("ctb")))
+      person("Jason H.", "Stover", role=c("ctb")),
+	    person("Zachary L.", "Howard", role=c("ctb")))
 Description: Fit Bayesian (hierarchical) cognitive models
     using a linear modeling language interface using particle Metropolis Markov
     chain Monte Carlo sampling with Gibbs steps. The diffusion decision model (DDM), 
@@ -68,8 +69,11 @@ Imports:
     utils,
     lpSolve,
     WienR,
+    RcppArmadillo
+SystemRequirements: GSL (>= 1.15)
 LinkingTo: 
-    Rcpp, RcppArmadillo
+    Rcpp,
+    RcppArmadillo
 Depends: 
     R (>= 3.5.0)
 LazyData: true
