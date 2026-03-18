@@ -58,8 +58,8 @@ double pigt(double t, double k = 1, double l = 1, double a = .1, double threshol
 
     cdf = 1. + std::exp(t6a) - std::exp(t6b) + ((- k + a) * t5a - (k - a) * t5b) / (2. * a);
   } else {
-    double t1a = std::exp(- .5 * std::pow(k - a - t * l, 2) / t);
-    double t1b = std::exp(- .5 * std::pow(a + k - t * l, 2) / t);
+    double t1a = std::exp(- .5 * (k - a - t * l) * (k - a - t * l) / t);
+    double t1b = std::exp(- .5 * (a + k - t * l) * (a + k - t * l) / t);
     double t1 = std::exp(.5* (lgt - M_LN2 - L_PI)) * (t1a - t1b);
 
     double t2a = std::exp(2. * l * (k - a) + R::pnorm(- (k - a + t * l) / sqt, 0., 1., true, true));
@@ -92,8 +92,8 @@ double digt(double t, double k = 1., double l = 1., double a = .1, double thresh
   } else {
     double sqt = std::sqrt(t);
 
-    double t1a = - std::pow(a - k + t * l, 2) / (2. * t);
-    double t1b = - std::pow(a + k - t * l, 2) / (2. * t);
+    double t1a = - (a - k + t * l) * (a - k + t * l) / (2. * t);
+    double t1b = - (a + k - t * l) * (a + k - t * l) / (2. * t);
     double t1 = M_SQRT1_2 * (std::exp(t1a) - std::exp(t1b)) / (std::sqrt(M_PI) * sqt);
 
     double t2a = 2. * R::pnorm((- k + a) / sqt + sqt * l, 0., 1., true, false) - 1.;

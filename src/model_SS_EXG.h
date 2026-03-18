@@ -528,7 +528,8 @@ NumericVector pEXG_old(NumericVector q,
     if (!traits::is_infinite<REALSXP>(q[i])){
       //      if (tau > .05 * sigma){
       double z_i = q[i] - mu - (sigma * sigma) / tau;
-      cdf[i] = R::pnorm((q[i] - mu) / sigma, 0., 1., true, false) - std::exp(std::log(R::pnorm(z_i / sigma, 0., 1., true, false)) + (std::pow((mu + (sigma * sigma / tau)), 2) - mu * mu - 2. * q[i] * (sigma * sigma / tau)) / (2. * sigma * sigma));
+      double mu_term = mu + (sigma * sigma / tau);
+      cdf[i] = R::pnorm((q[i] - mu) / sigma, 0., 1., true, false) - std::exp(std::log(R::pnorm(z_i / sigma, 0., 1., true, false)) + (mu_term * mu_term - mu * mu - 2. * q[i] * (sigma * sigma / tau)) / (2. * sigma * sigma));
       //      } else {
       //        cdf[i] = R::pnorm(q[i], mu, sigma, true, false);
       //      }
