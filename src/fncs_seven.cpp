@@ -32,7 +32,7 @@ int int_ddiff(unsigned dim, const double *x, void *p, unsigned fdim, double *ret
   // double *val_ptr = (params->val_ptr);
 
   // usually: 0  = s (v); 1 = u (w), 2 = v (t), depending on whether sv, sw, or st = 0
-  //double temp = sv ? pow(x[0], 2) : 0;
+  //double temp = sv ? x[0] * x[0] : 0;
   //double y = sv ? x[0] / (1 - temp) : 0;
   //double nu = sv ? v + sv * y : v;
   //double omega = sv ? (sw ? w + sw * (x[1] - 0.5) : w) : (sw ? w + sw * (x[0] - 0.5) : w);
@@ -45,7 +45,7 @@ int int_ddiff(unsigned dim, const double *x, void *p, unsigned fdim, double *ret
   else {
     double ldW = dwiener(low_or_up * (t - tau), a, v, omega, sv, errorW, K, epsFLAG);
     double temp2 = 0;
-    //if (sv) temp2 = -0.5 * pow(y, 2) - M_LN_SQRT_PI - 0.5 * M_LN2 + log1p(temp) - 2 * log1p(-temp);
+    //if (sv) temp2 = -0.5 * y * y - M_LN_SQRT_PI - 0.5 * M_LN2 + log1p(temp) - 2 * log1p(-temp);
     double integrand = exp(ldW + temp2);
     retval[0] = integrand;
   }
@@ -123,7 +123,7 @@ int int_pdiff(unsigned dim, const double *x, void *p, unsigned fdim, double *ret
   // double *val_ptr = (params->val_ptr);
   
   // usually: 0  = s (v); 1 = u (w), 2 = v (t), depending on whether sv, sw, or st = 0
-  double temp = sv ? pow(x[0], 2) : 0;
+  double temp = sv ? x[0] * x[0] : 0;
   double y = sv ? x[0] / (1 - temp) : 0;
   double nu = sv ? v + sv * y : v;
   double omega = sv ? (sw ? w + sw * (x[1] - 0.5) : w) : (sw ? w + sw * (x[0] - 0.5) : w);
@@ -137,7 +137,7 @@ int int_pdiff(unsigned dim, const double *x, void *p, unsigned fdim, double *ret
     double lpW = pwiener((t-tau), a, -low_or_up*nu, wn, errorW, K, epsFLAG);
     
     double temp2 = 0;
-    if (sv) temp2 = - 0.5*pow(y, 2) - M_LN_SQRT_PI - 0.5*M_LN2 + log1p(temp) - 2*log1p(-temp);
+    if (sv) temp2 = - 0.5*y * y - M_LN_SQRT_PI - 0.5*M_LN2 + log1p(temp) - 2*log1p(-temp);
     
     double integrand = exp(lpW + temp2);
     

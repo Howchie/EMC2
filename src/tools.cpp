@@ -151,8 +151,8 @@ double phi1(double x, double y, double v) {
 
 double lower_bound_var(double a, double vn, double wn) {
 	double z = a * wn, phiza = phi1(z, a, vn);
-	double temp = (-2 * a * phi1(0, z, vn) * (2 * vn * a * phi1(z, 2 * a, vn) + phi1(0, a, vn) * phiza)) * exp(2 * vn * a) / (pow(vn, 3) * pow(phi1(0, a, vn) * phiza, 2));
-	temp += (4 * vn * z * (2 * a - z) * exp(2 * vn * (z + a)) + z * phi1(2 * z, 2 * a, vn)) / pow(vn, 3) / pow(phiza, 2);
+	double temp = (-2 * a * phi1(0, z, vn) * (2 * vn * a * phi1(z, 2 * a, vn) + phi1(0, a, vn) * phiza)) * exp(2 * vn * a) / ((vn * vn * vn) * ((phi1(0, a, vn) * phiza) * (phi1(0, a, vn) * phiza)));
+	temp += (4 * vn * z * (2 * a - z) * exp(2 * vn * (z + a)) + z * phi1(2 * z, 2 * a, vn)) / (vn * vn * vn) / (phiza * phiza);
 	if (temp < 0) {
 		Rprintf("! %20g%20g%20g%20g\n", a, vn, wn, temp);
 		temp = 0.1;
@@ -168,7 +168,7 @@ double coth(double x) {
 double lower_bound_time(double a, double vn, double wn) {
 	double temp, amw = a * (1 - wn);
 	if (fabs(vn) < 1e-5) {
-		temp = (pow(a, 2) - pow(amw, 2)) / 3.0;
+		temp = ((a * a) - (amw * amw)) / 3.0;
 
 	}
 	else {

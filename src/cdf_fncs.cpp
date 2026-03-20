@@ -40,16 +40,16 @@ double logP(int pm, double a, double v, double w) {
 double Ks(double t, double v, double a, double w, double eps)
 {
 	double K1 = 0.5 * (fabs(v) / a * t - w);
-	double arg = fmax(0, fmin(1, exp(v*a*w + pow(v, 2)*t / 2 + (eps)) / 2));
+	double arg = fmax(0, fmin(1, exp(v*a*w + v * v*t / 2 + (eps)) / 2));
 	double K2 = (arg==0) ? INFINITY : (arg==1) ? -INFINITY : -sqrt(t) / 2 / a * emc2_gsl_cdf_ugaussian_Pinv(arg);
 	return ceil(fmax(K1, K1 + K2));
 }
 
 /* calculate number of terms needed for large t */
 double Kl(double t, double v, double a, double w, double err) {
-	double api = a / M_PI, vsq = pow(v, 2);
+	double api = a / M_PI, vsq = v * v;
 	double sqrtL1 = sqrt(1 / t) * api;
-	double sqrtL2 = sqrt(fmax(1.0, -2 / t * pow(api, 2) * (err+std::log(M_PI*t / 2 * (vsq + pow((M_PI / a), 2))) + v * a * w + vsq * t / 2)));
+	double sqrtL2 = sqrt(fmax(1.0, -2 / t * api * api * (err+std::log(M_PI*t / 2 * (vsq + (M_PI / a) * (M_PI / a))) + v * a * w + vsq * t / 2)));
 	return ceil(fmax(sqrtL1, sqrtL2));
 }
 
@@ -57,7 +57,7 @@ double Kl(double t, double v, double a, double w, double err) {
 double logFs(double t, double v, double a, double w, int K)
 {
 	double fplus = -INFINITY, fminus = -INFINITY;
-	double sqt = sqrt(t), temp = -v * a*w - pow(v, 2)*t / 2;
+	double sqt = sqrt(t), temp = -v * a*w - v * v*t / 2;
 	double vt = v * t;
 
 	for (int k = K; k >= 0; k--)
@@ -87,17 +87,17 @@ double logFl(double q, double v, double a, double w, int K)
 		double temp0 = std::log(k * 1.0), temp1 = k * M_PI, temp2 = temp1 * w;
 		double check = sin(temp2);
 		if (check > 0) {
-			double temp = temp0 - logsum(2 * lv, 2 * (temp0 + M_LNPI - la)) - 0.5 * pow((temp1 / a), 2) * q + std::log(check);
+			double temp = temp0 - logsum(2 * lv, 2 * (temp0 + M_LNPI - la)) - 0.5 * (temp1 / a) * (temp1 / a) * q + std::log(check);
 			fplus = logsum(temp, fplus);
 		}
 		else if (check < 0)
 		{
-			double temp = temp0 - logsum(2 * lv, 2 * (temp0 + M_LNPI - la)) - 0.5 * pow((temp1 / a), 2) * q + std::log(-check);
+			double temp = temp0 - logsum(2 * lv, 2 * (temp0 + M_LNPI - la)) - 0.5 * (temp1 / a) * (temp1 / a) * q + std::log(-check);
 			fminus = logsum(temp, fminus);
 		}
 	}
 	F = logdiff(fplus, fminus);
-	return (F - v * a * w - 0.5 * pow(v, 2) * q);
+	return (F - v * a * w - 0.5 * v * v * q);
 }
 
 /* calculate distribution */

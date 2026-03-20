@@ -104,7 +104,7 @@
 //     for (int x = 0; x != n; x++) temp.push_back(0.0);
 //     combination(c, n, k, i);
 //     vector<bool> index; index.clear();
-//     for (int j = 0; j != pow(2, k); j++) {
+//     for (int j = 0; j != (1 << k); j++) {
 //       increment(index, k, lambda, n, c, temp);
 //       p.push_back(temp);
 //     }
@@ -142,7 +142,7 @@
 //   double l3 = l4;
 //   double l5 = sqrt(9 * 1.0 / 19);
 //
-//   int twopn = pow(2, n);
+//   int twopn = (1 << n);
 //
 //   g.w[0] = twopn * ((12824 - 9120 * n + 400 * n * n) * 1.0 / 19683);
 //   g.w[1] = twopn * (980.0 / 6561);
@@ -246,7 +246,7 @@
 //   double E = fabs(I - Idash);
 // #
 //   int kdivide = 0;
-//   double deltaf = E / (pow(10, n) * v);
+//   double deltaf = E / (std::pow(10, n) * v);
 //   for (int i = 0; i != n; i++) {
 //     double delta = divdiff[i] - maxdivdiff;
 //     if (delta > deltaf) {
@@ -297,7 +297,7 @@
 //     make_GenzMalik(n, g);
 //     integrate_GenzMalik(g, n, a, b, out, pars, integrand);
 //   }
-//   int numevals = (n == 1) ? 15 : 1 + 4 * n + 2 * n * (n - 1) + pow(2, n);
+//   int numevals = (n == 1) ? 15 : 1 + 4 * n + 2 * n * (n - 1) + (1 << n);
 //   int evals_per_box = numevals;
 //   int kdiv = out.kdivide;
 //   err[0] = out.err;
@@ -448,7 +448,7 @@ void signcombos(int k, double lambda, int n, vector<vector<double>>& p) {
     vector<double> temp(n, 0.0);
     combination(c, n, k, i);
     vector<bool> index; index.clear();
-    int p2k = pow(2, k);
+    int p2k = (1 << k);
     for (int j = 0; j != p2k; j++) {
       increment(index, k, lambda, n, c, temp);
       p.push_back(temp);
@@ -487,7 +487,7 @@ void make_GenzMalik(int n, GenzMalik& g) {
   double l3 = l4;
   double l5 = sqrt(9 * 1.0 / 19);
 
-  int twopn = pow(2, n);
+  int twopn = (1 << n);
 
   g.w[0] = twopn * ((12824 - 9120 * n + 400 * n * n) * 1.0 / 19683);
   g.w[1] = twopn * (980.0 / 6561);
@@ -594,7 +594,7 @@ void integrate_GenzMalik(GenzMalik g, int n, const double* a, const double* b, o
   double E = fabs(I - Idash);
 #
   int kdivide = 0;
-  double deltaf = E / (pow(10, n) * v);
+  double deltaf = E / (std::pow(10, n) * v);
   for (int i = 0; i != n; i++) {
     double delta = divdiff[i] - maxdivdiff;
     if (delta > deltaf) {
@@ -645,7 +645,7 @@ int hcubature(int integrand(unsigned dim, const double* x, void* p, unsigned fdi
     make_GenzMalik(n, g);
     integrate_GenzMalik(g, n, a, b, out, pars, integrand);
   }
-  int numevals = (n == 1) ? 15 : 1 + 4 * n + 2 * n * (n - 1) + pow(2, n);
+  int numevals = (n == 1) ? 15 : 1 + 4 * n + 2 * n * (n - 1) + (1 << n);
   int evals_per_box = numevals;
   err[0] = out.err;
   val[0] = out.result;
