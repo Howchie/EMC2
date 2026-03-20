@@ -699,149 +699,15 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
     NumericVector lR = data["lR"];
     int n_lR = unique(lR).length();
     
-    // Todo check whether these fallbacks are needed or if make_emc forces them. If so, simplify fallback to just assume no censoring/truncation for backwards compatability
-    constexpr int kLlCacheVersion = 2;
-    bool cache_ok = false;
-    if (data.hasAttribute("emc2_ll_cache_version")) {
-      int ver = Rcpp::as<int>(data.attr("emc2_ll_cache_version"));
-      cache_ok = (ver == kLlCacheVersion);
-    }
-    
-    const bool has_RACE_col = data.containsElementNamed("RACE");
-    
     bool all_finite_trials = true;
-    bool have_all_finite_attr = false;
-    if (cache_ok && data.hasAttribute("emc2_all_finite_trials")) {
+    if (data.hasAttribute("emc2_all_finite_trials")) {
       Rcpp::LogicalVector v = data.attr("emc2_all_finite_trials");
       if (v.size() == 1 && v[0] != NA_LOGICAL) {
         all_finite_trials = v[0];
-        have_all_finite_attr = true;
       }
     }
-    
-    bool have_race_attrs = !has_RACE_col;
-    if (has_RACE_col && data.hasAttribute("RACE_nacc_by_row") && data.hasAttribute("RACE_mask")) {
-      Rcpp::IntegerVector race_nacc_by_row = data.attr("RACE_nacc_by_row");
-      Rcpp::LogicalVector race_mask = data.attr("RACE_mask");
-      have_race_attrs = (race_nacc_by_row.size() == n_trials && race_mask.size() == n_trials);
-    }
-    bool have_finite_attrs = false;
-    if (data.hasAttribute("finite_rt_mask") &&
-        data.hasAttribute("finite_rt_unique_trial_indices") &&
-        data.hasAttribute("other_unique_trial_indices") &&
-        n_lR > 0 && (n_trials % n_lR) == 0) {
-      const int n_unique_trials = n_trials / n_lR;
-      Rcpp::LogicalVector finite_rt_mask_attr = data.attr("finite_rt_mask");
-      Rcpp::IntegerVector finite_idx_attr = data.attr("finite_rt_unique_trial_indices");
-      Rcpp::IntegerVector other_idx_attr = data.attr("other_unique_trial_indices");
-      bool idx_ok = ((finite_idx_attr.size() + other_idx_attr.size()) == n_unique_trials);
-      if (idx_ok) {
-        for (int ii = 0; ii < finite_idx_attr.size(); ++ii) {
-          const int v = finite_idx_attr[ii];
-          if (v < 0 || v >= n_unique_trials) { idx_ok = false; break; }
-        }
-      }
-      if (idx_ok) {
-        for (int ii = 0; ii < other_idx_attr.size(); ++ii) {
-          const int v = other_idx_attr[ii];
-          if (v < 0 || v >= n_unique_trials) { idx_ok = false; break; }
-        }
-      }
-      have_finite_attrs = (finite_rt_mask_attr.size() == n_trials) && idx_ok;
-    }
-    
-    const bool need_prepare =
-      !(cache_ok && have_all_finite_attr && have_race_attrs && (all_finite_trials || have_finite_attrs));
       
-      if (need_prepare) {
-        if (has_RACE_col && !have_race_attrs) {
-          const Rcpp::IntegerVector lR_dadm = data["lR"];
-          const Rcpp::IntegerVector race_idx = data["RACE"];
-          const Rcpp::CharacterVector race_levels = race_idx.attr("levels");
-          std::vector<int> nacc_by_level;
-          nacc_by_level.reserve(static_cast<size_t>(race_levels.size()));
-          for (int i = 0; i < race_levels.size(); ++i) {
-            nacc_by_level.push_back(std::stoi(Rcpp::as<std::string>(race_levels[i])));
-          }
-          Rcpp::IntegerVector race_nacc_by_row(n_trials, n_lR);
-          Rcpp::LogicalVector race_mask(n_trials, true);
-          for (int row = 0; row < n_trials; ++row) {
-            if (race_idx[row] == NA_INTEGER) continue;
-            const int n_lR_this_trial = nacc_by_level[static_cast<size_t>(race_idx[row] - 1)];
-            race_nacc_by_row[row] = n_lR_this_trial;
-            if (lR_dadm[row] > n_lR_this_trial) race_mask[row] = false;
-          }
-          data.attr("RACE_nacc_by_row") = race_nacc_by_row;
-          data.attr("RACE_mask") = race_mask;
-        }
-        
-        if (!have_all_finite_attr) {
-          // Data-only: determine whether every unique trial has a finite RT, known response, and is within [LT, UT].
-          // Computing this once here avoids repeating an O(n_unique_trials) scan per particle.
-          all_finite_trials = true;
-          if (n_trials > 0) {
-            if (n_lR <= 0 || (n_trials % n_lR) != 0) {
-              all_finite_trials = false;
-            } else {
-              const int n_unique_trials = n_trials / n_lR;
-              const Rcpp::NumericVector rts_dadm = data["rt"];
-              const Rcpp::IntegerVector R_idxs_dadm = data["R"];
-              for (int j = 0; j < n_unique_trials; ++j) {
-                const int start_row_idx = j * n_lR;
-                const double rt_j = rts_dadm[start_row_idx];
-                const int R_j_idx = R_idxs_dadm[start_row_idx];
-                if (!(R_FINITE(rt_j) && rt_j > 0.0 && R_j_idx != NA_INTEGER)) {
-                  all_finite_trials = false;
-                  break;
-                }
-              }
-            }
-          }
-          data.attr("emc2_all_finite_trials") = all_finite_trials;
-        }
-        
-        if (!all_finite_trials && n_trials > 0 && n_lR > 0 && (n_trials % n_lR) == 0) {
-          if (!have_finite_attrs) {
-            const int n_unique_trials = n_trials / n_lR;
-            Rcpp::LogicalVector finite_rt_mask(n_trials, false);
-            std::vector<int> finite_rt_unique_trial_indices;
-            std::vector<int> other_unique_trial_indices;
-            finite_rt_unique_trial_indices.reserve(n_unique_trials);
-            other_unique_trial_indices.reserve(n_unique_trials);
-            const Rcpp::NumericVector rts_dadm = data["rt"];
-            const Rcpp::IntegerVector R_idxs_dadm = data["R"];
-            Rcpp::IntegerVector race_nacc_by_row;
-            if (has_RACE_col && data.hasAttribute("RACE_nacc_by_row")) {
-              race_nacc_by_row = data.attr("RACE_nacc_by_row");
-            }
-            for (int j = 0; j < n_unique_trials; ++j) {
-              const int start_row_idx = j * n_lR;
-              const double rt_j = rts_dadm[start_row_idx];
-              const int R_j_idx = R_idxs_dadm[start_row_idx];
-              const int n_lR_j = (has_RACE_col && race_nacc_by_row.size() == n_trials)
-                ? race_nacc_by_row[start_row_idx]
-              : n_lR;
-              if (R_FINITE(rt_j) && rt_j > 0.0 && R_j_idx != NA_INTEGER) {
-                finite_rt_unique_trial_indices.push_back(j);
-                for (int k_acc = 0; k_acc < n_lR_j; ++k_acc) {
-                  finite_rt_mask[start_row_idx + k_acc] = true;
-                }
-              } else {
-                other_unique_trial_indices.push_back(j);
-              }
-            }
-            data.attr("finite_rt_mask") = finite_rt_mask;
-            data.attr("finite_rt_unique_trial_indices") = Rcpp::IntegerVector(finite_rt_unique_trial_indices.begin(),
-                      finite_rt_unique_trial_indices.end());
-            data.attr("other_unique_trial_indices") = Rcpp::IntegerVector(other_unique_trial_indices.begin(),
-                      other_unique_trial_indices.end());
-          }
-        }
-        
-        data.attr("emc2_ll_cache_version") = kLlCacheVersion;
-      }
-      
-      for (int i = 0; i < n_particles; ++i) {
+    for (int i = 0; i < n_particles; ++i) {
         p_vector = p_matrix(i, Rcpp::_);
         if (i == 0) {
           p_specs = make_pretransform_specs(p_vector, pretransforms);
@@ -1242,44 +1108,18 @@ double c_log_likelihood_race(
   // If a RACE column exists, set parameters of accumulators not present on a
   // given trial to NA so the density functions return zero for them. This
   // mirrors logic from the old c_log_likelihood_race implementation.
-  const bool has_RACE_col = dadm.containsElementNamed("RACE");
+  bool has_RACE_col = dadm.containsElementNamed("RACE");
   Rcpp::IntegerVector RACE;
   Rcpp::LogicalVector RACE_mask;
   if (has_RACE_col) {
-    bool has_precomputed_race = false;
     if (dadm.hasAttribute("RACE_nacc_by_row") && dadm.hasAttribute("RACE_mask")) {
       RACE = dadm.attr("RACE_nacc_by_row");
       RACE_mask = dadm.attr("RACE_mask");
-      has_precomputed_race = (RACE.size() == n_trials && RACE_mask.size() == n_trials);
-    }
-    if (!has_precomputed_race) {
-      Rcpp::IntegerVector lR_dadm = dadm["lR"];
-      RACE = Rcpp::IntegerVector(n_trials, n_lR);
-      RACE_mask = Rcpp::LogicalVector(n_trials, true); // Mask for all dadm rows
-      // factor codes (1-based) for each row
-      Rcpp::IntegerVector race_idx = dadm["RACE"];
-      // character levels ("2", "3", ...)
-      Rcpp::CharacterVector race_levels = race_idx.attr("levels");
-      std::vector<int> nacc_by_level;
-      nacc_by_level.reserve(static_cast<size_t>(race_levels.size()));
-      for (int i = 0; i < race_levels.size(); ++i) {
-        nacc_by_level.push_back(std::stoi(Rcpp::as<std::string>(race_levels[i])));
-      }
       for (int row = 0; row < pars.nrow(); ++row) {
-        // how many accumulators for this trial
-        if (race_idx[row] == NA_INTEGER) continue;
-        int n_lR_this_trial = nacc_by_level[static_cast<size_t>(race_idx[row] - 1)];
-        RACE[row] = n_lR_this_trial;
-        // lR_dadm is the (1-based) index of *this* accumulator on the trial
-        if (lR_dadm[row] > n_lR_this_trial) {
-          // accumulator not present - blank its parameter row
-          std::fill(pars.row(row).begin(), pars.row(row).end(), NA_REAL);
-          RACE_mask[row] = false;
-        }
+        if (!RACE_mask[row]) std::fill(pars.row(row).begin(), pars.row(row).end(), NA_REAL);
       }
-    }
-    for (int row = 0; row < pars.nrow(); ++row) {
-      if (!RACE_mask[row]) std::fill(pars.row(row).begin(), pars.row(row).end(), NA_REAL);
+    } else {
+      has_RACE_col = false;
     }
   }
   if (n_trials == 0) return 0.0; // No data, no likelihood
@@ -1353,7 +1193,6 @@ double c_log_likelihood_race(
   Rcpp::LogicalVector finite_rt_mask;
   std::vector<int> finite_rt_unique_trial_indices;
   std::vector<int> other_unique_trial_indices;
-  bool has_precomputed_finite = false;
   if (!use_full_finite_batch) {
     if (dadm.hasAttribute("finite_rt_mask") &&
         dadm.hasAttribute("finite_rt_unique_trial_indices") &&
@@ -1361,14 +1200,8 @@ double c_log_likelihood_race(
       finite_rt_mask = dadm.attr("finite_rt_mask");
       Rcpp::IntegerVector finite_attr = dadm.attr("finite_rt_unique_trial_indices");
       Rcpp::IntegerVector other_attr = dadm.attr("other_unique_trial_indices");
-      if (finite_rt_mask.size() == n_trials) {
-        finite_rt_unique_trial_indices.assign(finite_attr.begin(), finite_attr.end());
-        other_unique_trial_indices.assign(other_attr.begin(), other_attr.end());
-        has_precomputed_finite = true;
-      }
-    }
-    if (!has_precomputed_finite) {
-      finite_rt_mask = Rcpp::LogicalVector(n_trials, false); // Mask for all dadm rows
+      finite_rt_unique_trial_indices.assign(finite_attr.begin(), finite_attr.end());
+      other_unique_trial_indices.assign(other_attr.begin(), other_attr.end());
     }
   }
   double log_Z_this = 0;  // Default inv_Z if no truncation. Should never be used but here as a precaution.
@@ -1384,28 +1217,6 @@ double c_log_likelihood_race(
   void* dense_ctx_ptr = static_cast<void*>(&dense_ctx);
   bool gng=ctx->gng;
   bool posdrift=ctx->use_posdrift;
-  // Batch process finite rt trials
-  if (!use_full_finite_batch && !has_precomputed_finite) {
-    finite_rt_unique_trial_indices.reserve(n_unique_trials);
-    other_unique_trial_indices.reserve(n_unique_trials);
-    // Categorize unique trials based on RT properties and parameter validity
-    for (int j = 0; j < n_unique_trials; ++j) {
-      int start_row_idx = j * n_lR; // Starting row in dadm/pars for this unique trial
-      double rt_j = rts_dadm[start_row_idx]; // RT for this unique trial
-      int R_j_idx = R_idxs_dadm[start_row_idx]; // Winner index (1-based from R factor)
-      int n_lR_j = has_RACE_col ? RACE[start_row_idx] : n_lR;
-      // Criteria for batch processing: finite, positive RT, and known winner
-      if (R_FINITE(rt_j) && rt_j > 0 && R_j_idx != NA_INTEGER) {
-        finite_rt_unique_trial_indices.push_back(j); // Store unique trial index
-        for(int k_acc = 0; k_acc < n_lR_j; ++k_acc) {
-          int dadm_row_idx = start_row_idx + k_acc;
-          finite_rt_mask[dadm_row_idx] = true;
-        }
-      }  else {
-        other_unique_trial_indices.push_back(j); // All other cases (NA, Inf, -Inf, outside bounds, or unknown winner with finite RT)
-      }
-    }
-  }
   
   const bool has_finite_batch = use_full_finite_batch || (finite_rt_unique_trial_indices.size() > 0);
   if (has_finite_batch) {
