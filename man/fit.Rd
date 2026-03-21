@@ -91,6 +91,18 @@ The potential stop criteria to be set are:
 
 \code{iter} (integer): The number of MCMC samples to collect.
 
+\code{max_flat_loc} (numeric): Optional sample-stage stationarity threshold based on
+interleaved chain drift (difference in early vs late medians, scaled by IQR).
+
+\code{flat_selection} (character vector): Optional set of sample objects to include
+in the flatness check. Supported values: \code{alpha}, \code{subj_ll}, \code{theta_mu}, \code{theta_var}.
+
+\code{flat_p1} / \code{flat_p2} (numeric in (0,1]): Optional proportions defining early
+and late windows for the flatness statistic.
+
+\code{max_sample_iter} (integer): Optional hard cap for sample-stage iterations. If exceeded,
+earliest sample-stage draws are removed.
+
 The estimation is performed using particle-metropolis within-Gibbs sampling.
 For sampling details see:
 
