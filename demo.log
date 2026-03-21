@@ -1,0 +1,64 @@
+nohup: ignoring input
+Parameter(s) pContaminant not specified in formula and assumed constant.
+
+ Sampled Parameters: 
+[1] "B"          "v_lMFALSE"  "v_lMTRUE"   "t0"         "sv_lMFALSE"
+[6] "sv_lMTRUE" 
+
+ Design Matrices: 
+$B
+ B
+ 1
+
+$v
+    lM v_lMFALSE v_lMTRUE
+  TRUE         0        1
+ FALSE         1        0
+
+$A
+ A
+ 1
+
+$t0
+ t0
+  1
+
+$sv
+    lM sv_lMFALSE sv_lMTRUE
+  TRUE          0         1
+ FALSE          1         0
+
+$pContaminant
+ pContaminant
+            1
+
+
+--- LBA demo ---
+Counts by response (NA = omission):
+
+ left right 
+10029  9971 
+
+Mean RT by stimulus (finite RTs only):
+    left    right 
+1.298510 1.270052 
+
+Mean Acc by stimulus (defined responses only):
+  left  right 
+0.6107 0.6078 
+
+Omission rate by stimulus:
+ left right 
+    0     0 
+
+Truncation rate by stimulus:
+ left right 
+    0     0 
+
+Processing data set 1
+Likelihood speedup factor: 17.9, 1119 unique trials
+Running preburn stage
+1: Iterations preburn = 50
+Running burn stage
+1: Iterations burn = 100
+Mean Rhat = 3.913

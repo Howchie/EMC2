@@ -18,7 +18,7 @@ Cfun <- function(d) as.numeric(d$S)==as.numeric(d$R)
 #### LBA ----
 run_lba_demo <- function(p_contaminant = 0, estimate_contaminant = FALSE,
                          n_trials = 500, UC = NULL, UT=NULL, LC=NULL, LT=NULL,range=1,
-                         cores_for_chains = cores_for_chains,layout=c(2,3),natural=TRUE,cores_per_chain = 3,
+                         cores_for_chains = 3,layout=c(2,3),natural=TRUE,cores_per_chain = 3,
                          LCresponse = FALSE, UCresponse = FALSE,
                          LCdirection = TRUE, UCdirection = TRUE,
                          force_direction = TRUE, force_response = TRUE,
@@ -279,7 +279,7 @@ if (RUN_FITS) print(recovery(res_cens_contam_lbaio$emc, true_pars = res_cens_con
 
 run_RDM_demo <- function(p_contaminant = 0, estimate_contaminant = FALSE,
                          n_trials = 500, UC = NULL, UT=NULL, LC=NULL, LT=NULL,range=1,
-                         cores_for_chains = cores_for_chains,layout=c(2,3),natural=TRUE,cores_per_chain = 3,
+                         cores_for_chains = 3,layout=c(2,3),natural=TRUE,cores_per_chain = 3,
                          LCresponse = FALSE, UCresponse = FALSE,
                          LCdirection = TRUE, UCdirection = TRUE,
                          print_stats=TRUE,
@@ -456,7 +456,7 @@ if (RUN_FITS) print(recovery(res_rdm_cens_trunc_contam$emc, true_pars = res_rdm_
 
 run_LNR_demo <- function(p_contaminant = 0, estimate_contaminant = FALSE,
                          n_trials = 500, UC = NULL, UT=NULL, LC=NULL, LT=NULL,range=1,
-                         cores_for_chains = cores_for_chains,layout=c(2,3),natural=TRUE,cores_per_chain = 3,
+                         cores_for_chains = 3,layout=c(2,3),natural=TRUE,cores_per_chain = 3,
                          LCresponse = FALSE, UCresponse = FALSE,
                          LCdirection = TRUE, UCdirection = TRUE,
                          print_stats=TRUE,

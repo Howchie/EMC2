@@ -130,7 +130,7 @@ run_ss_demo <- function(
         flat_p1 = 1/3,
         flat_p2 = 1/3,
         max_sample_iter = 5000
-      ),cores_per_chain=cores_per_chain, cores_for_chains = cores_for_chains = cores_for_chains), max_tries=30)
+      ),cores_per_chain=cores_per_chain, cores_for_chains = cores_for_chains), max_tries=30)
     pp  <- predict(emc, n_post = 50)
     plot_pars(emc, post_predict = pp, n_post = 20, true_pars = p_vector)
     return(invisible(list(data = dat, design = designSS, true_pars = p_vector, emc=emc, pp=pp)))

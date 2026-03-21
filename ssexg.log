@@ -1,0 +1,73 @@
+nohup: ignoring input
+Parameter(s) exg_lb, exgS_lb not specified in formula and assumed constant.
+
+ Sampled Parameters: 
+[1] "mu_lMFALSE" "mu_lMTRUE"  "sigma"      "tau"        "muS"       
+[6] "sigmaS"     "tauS"       "gf"         "tf"        
+
+ Design Matrices: 
+$mu
+    lM mu_lMFALSE mu_lMTRUE
+  TRUE          0         1
+ FALSE          1         0
+
+$sigma
+ sigma
+     1
+
+$tau
+ tau
+   1
+
+$muS
+ muS
+   1
+
+$sigmaS
+ sigmaS
+      1
+
+$tauS
+ tauS
+    1
+
+$gf
+ gf
+  1
+
+$tf
+ tf
+  1
+
+$exg_lb
+ exg_lb
+      1
+
+$exgS_lb
+ exgS_lb
+       1
+
+
+─── SSexG no-ST UC=Inf ───
+Trial type counts:
+trial_type
+  go stop 
+ 981 1019 
+Response counts:
+response
+ left    NR right 
+  631   794   575 
+Response × trial type:
+          response
+trial_type left  NR right
+      go    482  77   422
+      stop  149 717   153
+NR rate by trial type:
+        go       stop 
+0.07849134 0.70363101 
+Mean RT (finite only):
+     left     right 
+0.7343197 0.7444009 
+Processing data set 1
+Likelihood speedup factor: 4.5, 444 unique trials
+Running preburn stage
