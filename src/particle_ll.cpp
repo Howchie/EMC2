@@ -1369,16 +1369,32 @@ double c_log_likelihood_race(
       lower_for_trial = LTj;
       upper_for_trial = LCj;
       if (R_j_idx == NA_INTEGER) {
-        // Left-censoring with unknown winner: probability the *minimum* finishes in (LT, LC].
-        // This is S(LT) - S(LC), where S(t)=P(min > t)=prod_k (1 - F_k(t)).
-        // Note: this works for both posdrift and intrinsic-omission (posdrift=FALSE) cases;
-        // any mass at +Inf cancels in the survivor difference.
-        const double logP = log_diff_exp(log_survivor(lower_for_trial), log_survivor(upper_for_trial));
-        if (R_FINITE(logP) && logP > log_prob_eps) {
-          current_ll_val = logP;
-        } else {
+        if (gng) {
+          // For go/no-go, rt == -Inf means an observed response below LC.
+          // The no-go accumulator cannot be the winner for this event, so we
+          // skip that winner index when summing winner-specific densities.
+          int k_nogo = -1; // 1-based
+          int n_true = 0;
+          for (int k = 0; k < n_lR_j; ++k) {
+            if (winner[start_row_idx + k]) { n_true++; k_nogo = k + 1; }
+          }
+          if (n_true != 1) k_nogo = -1; // fallback: keep normal behavior
           for (int k_win = 1; k_win <= n_lR_j; ++k_win) {
+            if (k_win == k_nogo) continue;
             current_ll_val = log_sum_exp(current_ll_val, integrate_interval(k_win, lower_for_trial, upper_for_trial));
+          }
+        } else {
+          // Left-censoring with unknown winner: probability the *minimum* finishes in (LT, LC].
+          // This is S(LT) - S(LC), where S(t)=P(min > t)=prod_k (1 - F_k(t)).
+          // Note: this works for both posdrift and intrinsic-omission (posdrift=FALSE) cases;
+          // any mass at +Inf cancels in the survivor difference.
+          const double logP = log_diff_exp(log_survivor(lower_for_trial), log_survivor(upper_for_trial));
+          if (R_FINITE(logP) && logP > log_prob_eps) {
+            current_ll_val = logP;
+          } else {
+            for (int k_win = 1; k_win <= n_lR_j; ++k_win) {
+              current_ll_val = log_sum_exp(current_ll_val, integrate_interval(k_win, lower_for_trial, upper_for_trial));
+            }
           }
         }
       } else {

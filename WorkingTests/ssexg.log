@@ -127,7 +127,7 @@ Max flat drift = 0.535
 13: Iterations sample = 1300
 Max Rhat = 1.013
 Max flat drift = 0.484
-Time difference of 9.665705 mins
+Time difference of 9.535165 mins
 $`1`
 $`1`$quantiles
                  2.5%        50%      97.5%       true         miss
@@ -265,7 +265,7 @@ Max flat drift = 0.523
 10: Iterations sample = 1000
 Max Rhat = 1.015
 Max flat drift = 0.488
-Time difference of 6.242009 mins
+Time difference of 6.226542 mins
 $`1`
 $`1`$quantiles
                  2.5%        50%      97.5%       true          miss
@@ -404,7 +404,7 @@ Max flat drift = 0.047
 10: Iterations sample = 1000
 Max Rhat = 1.006
 Max flat drift = 0.083
-Time difference of 2.336084 hours
+Time difference of 2.336661 hours
 $`1`
 $`1`$quantiles
                          2.5%        50%      97.5%       true         miss
@@ -544,7 +544,7 @@ Max flat drift = 0.306
 10: Iterations sample = 1000
 Max Rhat = 1.009
 Max flat drift = 0.296
-Time difference of 43.28828 mins
+Time difference of 43.14149 mins
 $`1`
 $`1`$quantiles
                          2.5%        50%      97.5%       true        miss

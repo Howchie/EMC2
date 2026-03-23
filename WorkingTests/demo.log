@@ -1,8 +1,2994 @@
 nohup: ignoring input
-Error in file(filename, "r", encoding = encoding) : 
-  cannot open the connection
-Calls: source -> file
-In addition: Warning message:
-In file(filename, "r", encoding = encoding) :
-  cannot open file 'WorkingTests/test_likelihood_plotfuns_ah.R': No such file or directory
-Execution halted
+Parameter(s) pContaminant not specified in formula and assumed constant.
+
+ Sampled Parameters: 
+[1] "B"          "v_lMFALSE"  "v_lMTRUE"   "t0"         "sv_lMFALSE"
+[6] "sv_lMTRUE" 
+
+ Design Matrices: 
+$B
+ B
+ 1
+
+$v
+    lM v_lMFALSE v_lMTRUE
+  TRUE         0        1
+ FALSE         1        0
+
+$A
+ A
+ 1
+
+$t0
+ t0
+  1
+
+$sv
+    lM sv_lMFALSE sv_lMTRUE
+  TRUE          0         1
+ FALSE          1         0
+
+$pContaminant
+ pContaminant
+            1
+
+
+--- LBA demo ---
+Counts by response (NA = omission):
+
+ left right 
+10029  9971 
+
+Mean RT by stimulus (finite RTs only):
+    left    right 
+1.298510 1.270052 
+
+Mean Acc by stimulus (defined responses only):
+  left  right 
+0.6107 0.6078 
+
+Omission rate by stimulus:
+ left right 
+    0     0 
+
+Truncation rate by stimulus:
+ left right 
+    0     0 
+
+Processing data set 1
+Likelihood speedup factor: 17.9, 1119 unique trials
+Running preburn stage
+1: Iterations preburn = 50
+Running burn stage
+1: Iterations burn = 100
+Mean Rhat = 3.913
+2: Iterations burn = 200
+Mean Rhat = 1.703
+3: Iterations burn = 233
+Mean Rhat = 1.249
+4: Iterations burn = 333
+Mean Rhat = 1.029
+Running adapt stage
+1: Iterations adapt = 100
+Enough unique values detected: 150
+Testing proposal distribution creation
+Successfully adapted - stopping adaptation
+Running sample stage
+Max flat drift = Inf
+1: Iterations sample = 100
+Max Rhat = 1.013
+Max flat drift = 0.303
+2: Iterations sample = 200
+Max Rhat = 1.02
+Max flat drift = 0.063
+3: Iterations sample = 300
+Max Rhat = 1.007
+Max flat drift = 0.151
+4: Iterations sample = 400
+Max Rhat = 1.007
+Max flat drift = 0.104
+5: Iterations sample = 500
+Max Rhat = 1.005
+Max flat drift = 0.124
+6: Iterations sample = 600
+Max Rhat = 1.011
+Max flat drift = 0.271
+7: Iterations sample = 700
+Max Rhat = 1.013
+Max flat drift = 0.285
+8: Iterations sample = 800
+Max Rhat = 1.01
+Max flat drift = 0.23
+9: Iterations sample = 900
+Max Rhat = 1.009
+Max flat drift = 0.26
+10: Iterations sample = 1000
+Max Rhat = 1.01
+Max flat drift = 0.225
+Time difference of 2.39909 mins
+$`1`
+$`1`$quantiles
+                  2.5%        50%      97.5%       true       miss
+B          -1.13966026 -0.8263534 -0.4258524  0.1823216 -1.0086750
+v_lMFALSE   0.03057645  0.1269658  0.2363367  0.4000000 -0.2730342
+v_lMTRUE    0.45725513  0.5569561  0.7300502  1.2000000 -0.6430439
+t0         -1.75438937 -1.5713901 -1.4239369 -1.8971200  0.3257299
+sv_lMFALSE -0.66241476 -0.4913787 -0.2547301  0.1823216 -0.6737003
+sv_lMTRUE  -0.83195424 -0.6637929 -0.4213789  0.0000000 -0.6637929
+
+$`1`$stats
+  pearson  spearman      rmse  coverage 
+0.9114251 0.8986451 0.6462805 0.0000000 
+
+
+Parameter(s) pContaminant not specified in formula and assumed constant.
+
+ Sampled Parameters: 
+[1] "B"          "v_lMFALSE"  "v_lMTRUE"   "t0"         "sv_lMFALSE"
+[6] "sv_lMTRUE" 
+
+ Design Matrices: 
+$B
+ B
+ 1
+
+$v
+    lM v_lMFALSE v_lMTRUE
+  TRUE         0        1
+ FALSE         1        0
+
+$A
+ A
+ 1
+
+$t0
+ t0
+  1
+
+$sv
+    lM sv_lMFALSE sv_lMTRUE
+  TRUE          0         1
+ FALSE          1         0
+
+$pContaminant
+ pContaminant
+            1
+
+
+--- LBA demo ---
+Counts by response (NA = omission):
+
+ left right  <NA> 
+ 8095  8079  3826 
+
+Mean RT by stimulus (finite RTs only):
+     left     right 
+0.9233359 0.9241109 
+
+Mean Acc by stimulus (defined responses only):
+     left     right 
+0.6210097 0.6198715 
+
+Omission rate by stimulus:
+  left  right 
+0.1918 0.1908 
+
+Truncation rate by stimulus:
+ left right 
+    0     0 
+
+Processing data set 1
+Likelihood speedup factor: 76 (with no missing 62x), 263 unique trials
+Running preburn stage
+1: Iterations preburn = 50
+Running burn stage
+1: Iterations burn = 100
+Mean Rhat = 9.086
+2: Iterations burn = 200
+Mean Rhat = 3.136
+3: Iterations burn = 233
+Mean Rhat = 1.66
+4: Iterations burn = 333
+Mean Rhat = 1.244
+5: Iterations burn = 322
+Mean Rhat = 1.144
+6: Iterations burn = 422
+Mean Rhat = 1.269
+7: Iterations burn = 522
+Mean Rhat = 1.198
+8: Iterations burn = 448
+Mean Rhat = 1.225
+9: Iterations burn = 548
+Mean Rhat = 1.082
+Running adapt stage
+1: Iterations adapt = 100
+Enough unique values detected: 150
+Testing proposal distribution creation
+Successfully adapted - stopping adaptation
+Running sample stage
+Max flat drift = Inf
+1: Iterations sample = 100
+Max Rhat = 1.017
+Max flat drift = 0.117
+2: Iterations sample = 200
+Max Rhat = 1.011
+Max flat drift = 0.098
+3: Iterations sample = 300
+Max Rhat = 1.016
+Max flat drift = 0.058
+4: Iterations sample = 400
+Max Rhat = 1.01
+Max flat drift = 0.128
+5: Iterations sample = 500
+Max Rhat = 1.008
+Max flat drift = 0.068
+6: Iterations sample = 600
+Max Rhat = 1.008
+Max flat drift = 0.156
+7: Iterations sample = 700
+Max Rhat = 1.006
+Max flat drift = 0.167
+8: Iterations sample = 800
+Max Rhat = 1.005
+Max flat drift = 0.217
+9: Iterations sample = 900
+Max Rhat = 1.004
+Max flat drift = 0.267
+10: Iterations sample = 1000
+Max Rhat = 1.005
+Max flat drift = 0.271
+Time difference of 1.37396 mins
+$`1`
+$`1`$quantiles
+                 2.5%         50%      97.5%       true        miss
+B          -0.2927021  0.08055967  0.4394334  0.1823216 -0.10176189
+v_lMFALSE   0.1326182  0.31561380  0.5429769  0.4000000 -0.08438620
+v_lMTRUE    0.8043206  1.08740740  1.4749883  1.2000000 -0.11259260
+t0         -1.9968463 -1.84470190 -1.6950714 -1.8971200  0.05241808
+sv_lMFALSE -0.1373605  0.13272518  0.4286562  0.1823216 -0.04959637
+sv_lMTRUE  -0.3000838 -0.02688999  0.2733260  0.0000000 -0.02688999
+
+$`1`$stats
+     pearson     spearman         rmse     coverage 
+  0.99973489   0.98561076   0.07755013 100.00000000 
+
+
+Parameter(s) pContaminant not specified in formula and assumed constant.
+
+ Sampled Parameters: 
+[1] "B"          "v_lMFALSE"  "v_lMTRUE"   "t0"         "sv_lMFALSE"
+[6] "sv_lMTRUE" 
+
+ Design Matrices: 
+$B
+ B
+ 1
+
+$v
+    lM v_lMFALSE v_lMTRUE
+  TRUE         0        1
+ FALSE         1        0
+
+$A
+ A
+ 1
+
+$t0
+ t0
+  1
+
+$sv
+    lM sv_lMFALSE sv_lMTRUE
+  TRUE          0         1
+ FALSE          1         0
+
+$pContaminant
+ pContaminant
+            1
+
+
+--- LBA demo ---
+Counts by response (NA = omission):
+
+ left right  <NA> 
+ 5743  5785  8472 
+
+Mean RT by stimulus (finite RTs only):
+    left    right 
+1.634062 1.561269 
+
+Mean Acc by stimulus (defined responses only):
+     left     right 
+0.5881226 0.5910819 
+
+Omission rate by stimulus:
+  left  right 
+0.4258 0.4214 
+
+Truncation rate by stimulus:
+ left right 
+    0     0 
+
+Processing data set 1
+Likelihood speedup factor: 20.6 (with no missing 11.9x), 971 unique trials
+Running preburn stage
+1: Iterations preburn = 50
+Running burn stage
+1: Iterations burn = 100
+Mean Rhat = 2.065
+2: Iterations burn = 200
+Mean Rhat = 1.195
+3: Iterations burn = 233
+Mean Rhat = 1.064
+Running adapt stage
+1: Iterations adapt = 100
+Enough unique values detected: 150
+Testing proposal distribution creation
+Successfully adapted - stopping adaptation
+Running sample stage
+Max flat drift = Inf
+1: Iterations sample = 100
+Max Rhat = 1.006
+Max flat drift = 0.23
+2: Iterations sample = 200
+Max Rhat = 1.01
+Max flat drift = 0.123
+3: Iterations sample = 300
+Max Rhat = 1
+Max flat drift = 0.163
+4: Iterations sample = 400
+Max Rhat = 1.005
+Max flat drift = 0.166
+5: Iterations sample = 500
+Max Rhat = 1.003
+Max flat drift = 0.113
+6: Iterations sample = 600
+Max Rhat = 1.003
+Max flat drift = 0.111
+7: Iterations sample = 700
+Max Rhat = 1.002
+Max flat drift = 0.14
+8: Iterations sample = 800
+Max Rhat = 1.001
+Max flat drift = 0.125
+9: Iterations sample = 900
+Max Rhat = 1.001
+Max flat drift = 0.094
+10: Iterations sample = 1000
+Max Rhat = 1.001
+Max flat drift = 0.105
+Time difference of 2.373876 mins
+$`1`
+$`1`$quantiles
+                  2.5%        50%      97.5%       true        miss
+B          -0.22823322  0.1946208  0.6290666  0.1823216  0.01229924
+v_lMFALSE  -0.44652964  0.1321587  0.5575739  0.4000000 -0.26784125
+v_lMTRUE    0.85561481  1.2111872  1.7721605  1.2000000  0.01118716
+t0         -1.94329363 -1.6132754 -1.3687541 -1.8971200  0.28384456
+sv_lMFALSE -0.01842725  0.4124191  0.8256054  0.1823216  0.23009751
+sv_lMTRUE  -0.24852013  0.1447812  0.5469126  0.0000000  0.14478118
+
+$`1`$stats
+    pearson    spearman        rmse    coverage 
+  0.9845492   0.6377481   0.1942891 100.0000000 
+
+
+Parameter(s) pContaminant not specified in formula and assumed constant.
+
+ Sampled Parameters: 
+[1] "B"          "v_lMFALSE"  "v_lMTRUE"   "t0"         "sv_lMFALSE"
+[6] "sv_lMTRUE" 
+
+ Design Matrices: 
+$B
+ B
+ 1
+
+$v
+    lM v_lMFALSE v_lMTRUE
+  TRUE         0        1
+ FALSE         1        0
+
+$A
+ A
+ 1
+
+$t0
+ t0
+  1
+
+$sv
+    lM sv_lMFALSE sv_lMTRUE
+  TRUE          0         1
+ FALSE          1         0
+
+$pContaminant
+ pContaminant
+            1
+
+
+--- LBA demo ---
+Counts by response (NA = omission):
+
+ left right  <NA> 
+ 5320  5193  9487 
+
+Mean RT by stimulus (finite RTs only):
+    left    right 
+1.167456 1.169805 
+
+Mean Acc by stimulus (defined responses only):
+     left     right 
+0.6087450 0.5977055 
+
+Omission rate by stimulus:
+  left  right 
+0.4717 0.4770 
+
+Truncation rate by stimulus:
+ left right 
+    0     0 
+
+Processing data set 1
+Likelihood speedup factor: 86.2 (with no missing 46.1x), 232 unique trials
+Running preburn stage
+1: Iterations preburn = 50
+Running burn stage
+1: Iterations burn = 100
+Mean Rhat = 7.958
+2: Iterations burn = 200
+Mean Rhat = 2.386
+3: Iterations burn = 233
+Mean Rhat = 1.808
+4: Iterations burn = 333
+Mean Rhat = 1.405
+5: Iterations burn = 433
+Mean Rhat = 1.185
+6: Iterations burn = 389
+Mean Rhat = 1.075
+Running adapt stage
+1: Iterations adapt = 100
+Enough unique values detected: 150
+Testing proposal distribution creation
+Successfully adapted - stopping adaptation
+Running sample stage
+Max flat drift = Inf
+1: Iterations sample = 100
+Max Rhat = 1.022
+Max flat drift = 0.263
+2: Iterations sample = 200
+Max Rhat = 1.009
+Max flat drift = 0.169
+3: Iterations sample = 300
+Max Rhat = 1.007
+Max flat drift = 0.123
+4: Iterations sample = 400
+Max Rhat = 1.006
+Max flat drift = 0.114
+5: Iterations sample = 500
+Max Rhat = 1.005
+Max flat drift = 0.156
+6: Iterations sample = 600
+Max Rhat = 1.005
+Max flat drift = 0.269
+7: Iterations sample = 700
+Max Rhat = 1.01
+Max flat drift = 0.312
+8: Iterations sample = 800
+Max Rhat = 1.009
+Max flat drift = 0.33
+9: Iterations sample = 900
+Max Rhat = 1.008
+Max flat drift = 0.372
+10: Iterations sample = 1000
+Max Rhat = 1.011
+Max flat drift = 0.371
+Time difference of 1.169111 mins
+$`1`
+$`1`$quantiles
+                 2.5%         50%      97.5%       true       miss
+B          -0.5608198 -0.05483506  0.4267046  0.1823216 -0.2371566
+v_lMFALSE  -2.1272282 -0.98201545 -0.2304729  0.4000000 -1.3820154
+v_lMTRUE    0.6102405  0.94281612  1.4248195  1.2000000 -0.2571839
+t0         -1.4165589 -1.23690639 -1.0928079 -1.8971200  0.6602136
+sv_lMFALSE  0.2078616  0.59714416  0.9773325  0.1823216  0.4148226
+sv_lMTRUE  -0.2490640  0.15819487  0.5575597  0.0000000  0.1581949
+
+$`1`$stats
+   pearson   spearman       rmse   coverage 
+ 0.7216523  0.5507825  0.6665007 50.0000000 
+
+
+Parameter(s) pContaminant not specified in formula and assumed constant.
+
+ Sampled Parameters: 
+[1] "B"          "v_lMFALSE"  "v_lMTRUE"   "t0"         "sv_lMFALSE"
+[6] "sv_lMTRUE" 
+
+ Design Matrices: 
+$B
+ B
+ 1
+
+$v
+    lM v_lMFALSE v_lMTRUE
+  TRUE         0        1
+ FALSE         1        0
+
+$A
+ A
+ 1
+
+$t0
+ t0
+  1
+
+$sv
+    lM sv_lMFALSE sv_lMTRUE
+  TRUE          0         1
+ FALSE          1         0
+
+$pContaminant
+ pContaminant
+            1
+
+
+--- LBA demo ---
+Counts by response (NA = omission):
+
+ left right  <NA> 
+ 8726  8805  2469 
+
+Mean RT by stimulus (finite RTs only):
+    left    right 
+1.145775 1.153801 
+
+Mean Acc by stimulus (defined responses only):
+     left     right 
+0.6993127 0.7021929 
+
+Omission rate by stimulus:
+  left  right 
+0.1270 0.1199 
+
+Truncation rate by stimulus:
+ left right 
+    0     0 
+
+Expected Intrinsic Omissions:
+[1] 0.04251149
+
+Processing data set 1
+Likelihood speedup factor: 32.6 (with no missing 28.7x), 613 unique trials
+Running preburn stage
+1: Iterations preburn = 50
+Running burn stage
+1: Iterations burn = 100
+Mean Rhat = 7.235
+2: Iterations burn = 200
+Mean Rhat = 2.153
+3: Iterations burn = 233
+Mean Rhat = 1.412
+4: Iterations burn = 333
+Mean Rhat = 1.16
+5: Iterations burn = 322
+Mean Rhat = 1.066
+Running adapt stage
+1: Iterations adapt = 100
+Enough unique values detected: 150
+Testing proposal distribution creation
+Successfully adapted - stopping adaptation
+Running sample stage
+Max flat drift = Inf
+1: Iterations sample = 100
+Max Rhat = 1
+Max flat drift = 0.269
+2: Iterations sample = 200
+Max Rhat = 1.01
+Max flat drift = 0.397
+3: Iterations sample = 300
+Max Rhat = 1.003
+Max flat drift = 0.199
+4: Iterations sample = 400
+Max Rhat = 1.004
+Max flat drift = 0.096
+5: Iterations sample = 500
+Max Rhat = 1.002
+Max flat drift = 0.23
+6: Iterations sample = 600
+Max Rhat = 1.001
+Max flat drift = 0.322
+7: Iterations sample = 700
+Max Rhat = 1.002
+Max flat drift = 0.471
+8: Iterations sample = 800
+Max Rhat = 1.002
+Max flat drift = 0.487
+9: Iterations sample = 900
+Max Rhat = 1.002
+Max flat drift = 0.488
+10: Iterations sample = 1000
+Max Rhat = 1.003
+Max flat drift = 0.442
+Time difference of 1.539972 mins
+$`1`
+$`1`$quantiles
+                 2.5%         50%      97.5%       true        miss
+B          -0.4084984 -0.05281470  0.2991352  0.1823216 -0.23513625
+v_lMFALSE   0.2477067  0.33441033  0.4558865  0.4000000 -0.06558967
+v_lMTRUE    0.7741698  1.01590263  1.3559033  1.2000000 -0.18409737
+t0         -1.9478176 -1.83699625 -1.7148655 -1.8971200  0.06012374
+sv_lMFALSE -0.2464660  0.01370141  0.3039758  0.1823216 -0.16862014
+sv_lMTRUE  -0.4395604 -0.17707007  0.1155962  0.0000000 -0.17707007
+
+$`1`$stats
+    pearson    spearman        rmse    coverage 
+  0.9973713   0.9856108   0.1617015 100.0000000 
+
+
+Parameter(s) pContaminant not specified in formula and assumed constant.
+
+ Sampled Parameters: 
+[1] "B"          "v_lMFALSE"  "v_lMTRUE"   "t0"         "sv_lMFALSE"
+[6] "sv_lMTRUE" 
+
+ Design Matrices: 
+$B
+ B
+ 1
+
+$v
+    lM v_lMFALSE v_lMTRUE
+  TRUE         0        1
+ FALSE         1        0
+
+$A
+ A
+ 1
+
+$t0
+ t0
+  1
+
+$sv
+    lM sv_lMFALSE sv_lMTRUE
+  TRUE          0         1
+ FALSE          1         0
+
+$pContaminant
+ pContaminant
+            1
+
+
+--- LBA demo ---
+Counts by response (NA = omission):
+
+ left right 
+ 8131  8138 
+
+Mean RT by stimulus (finite RTs only):
+     left     right 
+0.9206236 0.9230833 
+
+Mean Acc by stimulus (defined responses only):
+     left     right 
+0.6229630 0.6223528 
+
+Omission rate by stimulus:
+ left right 
+    0     0 
+
+Truncation rate by stimulus:
+  left  right 
+0.1900 0.1831 
+
+Processing data set 1
+Likelihood speedup factor: 62.3 (with no missing 62.3x), 261 unique trials
+Running preburn stage
+1: Iterations preburn = 50
+Running burn stage
+1: Iterations burn = 100
+Mean Rhat = 3.808
+2: Iterations burn = 200
+Mean Rhat = 1.561
+3: Iterations burn = 233
+Mean Rhat = 1.179
+4: Iterations burn = 255
+Mean Rhat = 1.399
+5: Iterations burn = 355
+Mean Rhat = 1.202
+6: Iterations burn = 337
+Mean Rhat = 1.035
+Running adapt stage
+1: Iterations adapt = 100
+Enough unique values detected: 150
+Testing proposal distribution creation
+Successfully adapted - stopping adaptation
+Running sample stage
+Max flat drift = Inf
+1: Iterations sample = 100
+Max Rhat = 1.016
+Max flat drift = 0.094
+2: Iterations sample = 200
+Max Rhat = 1.007
+Max flat drift = 0.174
+3: Iterations sample = 300
+Max Rhat = 1.004
+Max flat drift = 0.119
+4: Iterations sample = 400
+Max Rhat = 1.003
+Max flat drift = 0.165
+5: Iterations sample = 500
+Max Rhat = 1.004
+Max flat drift = 0.212
+6: Iterations sample = 600
+Max Rhat = 1.004
+Max flat drift = 0.21
+7: Iterations sample = 700
+Max Rhat = 1.007
+Max flat drift = 0.261
+8: Iterations sample = 800
+Max Rhat = 1.006
+Max flat drift = 0.278
+9: Iterations sample = 900
+Max Rhat = 1.008
+Max flat drift = 0.318
+10: Iterations sample = 1000
+Max Rhat = 1.007
+Max flat drift = 0.3
+Time difference of 1.405536 mins
+$`1`
+$`1`$quantiles
+                  2.5%         50%      97.5%       true        miss
+B          -0.56737684 -0.06937279  0.3992081  0.1823216 -0.25169435
+v_lMFALSE   0.01004796  0.28113691  0.5905681  0.4000000 -0.11886309
+v_lMTRUE    0.69621501  0.99846803  1.4704548  1.2000000 -0.20153197
+t0         -2.01654214 -1.80349623 -1.6050537 -1.8971200  0.09362376
+sv_lMFALSE -0.32730939  0.03011865  0.4017412  0.1823216 -0.15220291
+sv_lMTRUE  -0.52372535 -0.16281205  0.2164226  0.0000000 -0.16281205
+
+$`1`$stats
+    pearson    spearman        rmse    coverage 
+  0.9979034   0.9856108   0.1715287 100.0000000 
+
+
+Parameter(s) pContaminant not specified in formula and assumed constant.
+
+ Sampled Parameters: 
+[1] "B"          "v_lMFALSE"  "v_lMTRUE"   "t0"         "sv_lMFALSE"
+[6] "sv_lMTRUE" 
+
+ Design Matrices: 
+$B
+ B
+ 1
+
+$v
+    lM v_lMFALSE v_lMTRUE
+  TRUE         0        1
+ FALSE         1        0
+
+$A
+ A
+ 1
+
+$t0
+ t0
+  1
+
+$sv
+    lM sv_lMFALSE sv_lMTRUE
+  TRUE          0         1
+ FALSE          1         0
+
+$pContaminant
+ pContaminant
+            1
+
+
+--- LBA demo ---
+Counts by response (NA = omission):
+
+ left right 
+ 5859  5711 
+
+Mean RT by stimulus (finite RTs only):
+    left    right 
+1.635872 1.617855 
+
+Mean Acc by stimulus (defined responses only):
+     left     right 
+0.6056485 0.5911896 
+
+Omission rate by stimulus:
+ left right 
+    0     0 
+
+Truncation rate by stimulus:
+  left  right 
+0.4264 0.4166 
+
+Processing data set 1
+Likelihood speedup factor: 11.8 (with no missing 11.8x), 980 unique trials
+Running preburn stage
+1: Iterations preburn = 50
+Running burn stage
+1: Iterations burn = 100
+Mean Rhat = 1.29
+2: Iterations burn = 200
+Mean Rhat = 1.141
+3: Iterations burn = 233
+Mean Rhat = 1.085
+Running adapt stage
+1: Iterations adapt = 100
+Enough unique values detected: 150
+Testing proposal distribution creation
+Successfully adapted - stopping adaptation
+Running sample stage
+Max flat drift = Inf
+1: Iterations sample = 100
+Max Rhat = 1.016
+Max flat drift = 0.273
+2: Iterations sample = 200
+Max Rhat = 1.005
+Max flat drift = 0.133
+3: Iterations sample = 300
+Max Rhat = 1.003
+Max flat drift = 0.117
+4: Iterations sample = 400
+Max Rhat = 1.002
+Max flat drift = 0.226
+5: Iterations sample = 500
+Max Rhat = 1.003
+Max flat drift = 0.149
+6: Iterations sample = 600
+Max Rhat = 1.002
+Max flat drift = 0.144
+7: Iterations sample = 700
+Max Rhat = 1.002
+Max flat drift = 0.058
+8: Iterations sample = 800
+Max Rhat = 1.002
+Max flat drift = 0.047
+9: Iterations sample = 900
+Max Rhat = 1.001
+Max flat drift = 0.051
+10: Iterations sample = 1000
+Max Rhat = 1.001
+Max flat drift = 0.034
+Time difference of 3.099328 mins
+$`1`
+$`1`$quantiles
+                 2.5%        50%      97.5%       true       miss
+B          -0.9050521 -0.1135080  0.5603337  0.1823216 -0.2958295
+v_lMFALSE  -1.2856453 -0.2946098  0.3253898  0.4000000 -0.6946098
+v_lMTRUE    0.5792322  1.0174675  1.7912169  1.2000000 -0.1825325
+t0         -2.8412085 -2.0540518 -1.4137754 -1.8971200 -0.1569318
+sv_lMFALSE -0.1558401  0.4066440  0.9367275  0.1823216  0.2243224
+sv_lMTRUE  -0.7021768 -0.1407344  0.4095341  0.0000000 -0.1407344
+
+$`1`$stats
+   pearson   spearman       rmse   coverage 
+ 0.9584670  0.6377481  0.3410939 83.3333333 
+
+
+Parameter(s) pContaminant not specified in formula and assumed constant.
+
+ Sampled Parameters: 
+[1] "B"          "v_lMFALSE"  "v_lMTRUE"   "t0"         "sv_lMFALSE"
+[6] "sv_lMTRUE" 
+
+ Design Matrices: 
+$B
+ B
+ 1
+
+$v
+    lM v_lMFALSE v_lMTRUE
+  TRUE         0        1
+ FALSE         1        0
+
+$A
+ A
+ 1
+
+$t0
+ t0
+  1
+
+$sv
+    lM sv_lMFALSE sv_lMTRUE
+  TRUE          0         1
+ FALSE          1         0
+
+$pContaminant
+ pContaminant
+            1
+
+
+--- LBA demo ---
+Counts by response (NA = omission):
+
+ left right 
+ 4010  3880 
+
+Mean RT by stimulus (finite RTs only):
+    left    right 
+1.135196 1.130248 
+
+Mean Acc by stimulus (defined responses only):
+     left     right 
+0.6200101 0.6042726 
+
+Omission rate by stimulus:
+ left right 
+    0     0 
+
+Truncation rate by stimulus:
+  left  right 
+0.6042 0.6068 
+
+Processing data set 1
+Likelihood speedup factor: 54.8 (with no missing 54.8x), 144 unique trials
+Running preburn stage
+1: Iterations preburn = 50
+Running burn stage
+1: Iterations burn = 100
+Mean Rhat = 1.19
+2: Iterations burn = 200
+Mean Rhat = 1.089
+Running adapt stage
+1: Iterations adapt = 100
+Enough unique values detected: 150
+Testing proposal distribution creation
+Successfully adapted - stopping adaptation
+Running sample stage
+Max flat drift = Inf
+1: Iterations sample = 100
+Max Rhat = 1.077
+Max flat drift = 0.272
+2: Iterations sample = 200
+Max Rhat = 1.027
+Max flat drift = 0.192
+3: Iterations sample = 300
+Max Rhat = 1.015
+Max flat drift = 0.131
+4: Iterations sample = 400
+Max Rhat = 1.008
+Max flat drift = 0.132
+5: Iterations sample = 500
+Max Rhat = 1.005
+Max flat drift = 0.132
+6: Iterations sample = 600
+Max Rhat = 1.007
+Max flat drift = 0.116
+7: Iterations sample = 700
+Max Rhat = 1.009
+Max flat drift = 0.12
+8: Iterations sample = 800
+Max Rhat = 1.009
+Max flat drift = 0.103
+9: Iterations sample = 900
+Max Rhat = 1.011
+Max flat drift = 0.102
+10: Iterations sample = 1000
+Max Rhat = 1.014
+Max flat drift = 0.157
+Time difference of 42.88935 secs
+$`1`
+$`1`$quantiles
+                 2.5%         50%        97.5%       true        miss
+B          -1.7291237 -0.60104416  0.251760274  0.1823216 -0.78336572
+v_lMFALSE  -2.0838290 -0.95143788  0.009422322  0.4000000 -1.35143788
+v_lMTRUE    0.3680794  0.82693265  1.544416542  1.2000000 -0.37306735
+t0         -2.6504853 -1.83841527 -1.203422850 -1.8971200  0.05870471
+sv_lMFALSE -0.2251598  0.31305838  0.871491107  0.1823216  0.13073682
+sv_lMTRUE  -0.7626834 -0.08432276  0.671653767  0.0000000 -0.08432276
+
+$`1`$stats
+   pearson   spearman       rmse   coverage 
+ 0.8344005  0.5507825  0.6591502 83.3333333 
+
+
+Parameter(s) pContaminant not specified in formula and assumed constant.
+
+ Sampled Parameters: 
+[1] "B"          "v_lMFALSE"  "v_lMTRUE"   "t0"         "sv_lMFALSE"
+[6] "sv_lMTRUE" 
+
+ Design Matrices: 
+$B
+ B
+ 1
+
+$v
+    lM v_lMFALSE v_lMTRUE
+  TRUE         0        1
+ FALSE         1        0
+
+$A
+ A
+ 1
+
+$t0
+ t0
+  1
+
+$sv
+    lM sv_lMFALSE sv_lMTRUE
+  TRUE          0         1
+ FALSE          1         0
+
+$pContaminant
+ pContaminant
+            1
+
+
+--- LBA demo ---
+Counts by response (NA = omission):
+
+ left right  <NA> 
+ 4281  4234  2194 
+
+Mean RT by stimulus (finite RTs only):
+    left    right 
+1.222185 1.225973 
+
+Mean Acc by stimulus (defined responses only):
+     left     right 
+0.6118203 0.6049008 
+
+Omission rate by stimulus:
+     left     right 
+0.2115564 0.1981662 
+
+Truncation rate by stimulus:
+  left  right 
+0.4635 0.4656 
+
+Processing data set 1
+Likelihood speedup factor: 49.6 (with no missing 40.2x), 216 unique trials
+Running preburn stage
+1: Iterations preburn = 50
+Running burn stage
+1: Iterations burn = 100
+Mean Rhat = 1.463
+2: Iterations burn = 200
+Mean Rhat = 1.168
+3: Iterations burn = 233
+Mean Rhat = 1.097
+Running adapt stage
+1: Iterations adapt = 100
+Enough unique values detected: 150
+Testing proposal distribution creation
+Successfully adapted - stopping adaptation
+Running sample stage
+Max flat drift = Inf
+1: Iterations sample = 100
+Max Rhat = 1.029
+Max flat drift = 0.232
+2: Iterations sample = 200
+Max Rhat = 1.009
+Max flat drift = 0.196
+3: Iterations sample = 300
+Max Rhat = 1.009
+Max flat drift = 0.161
+4: Iterations sample = 400
+Max Rhat = 1.009
+Max flat drift = 0.103
+5: Iterations sample = 500
+Max Rhat = 1.007
+Max flat drift = 0.087
+6: Iterations sample = 600
+Max Rhat = 1.004
+Max flat drift = 0.092
+7: Iterations sample = 700
+Max Rhat = 1.012
+Max flat drift = 0.146
+8: Iterations sample = 800
+Max Rhat = 1.017
+Max flat drift = 0.142
+9: Iterations sample = 900
+Max Rhat = 1.022
+Max flat drift = 0.149
+10: Iterations sample = 1000
+Max Rhat = 1.02
+Max flat drift = 0.219
+Time difference of 57.45622 secs
+$`1`
+$`1`$quantiles
+                 2.5%         50%       97.5%       true        miss
+B          -0.8260392 -0.18065450  0.40526697  0.1823216 -0.36297606
+v_lMFALSE  -1.7105202 -0.68093749  0.09143787  0.4000000 -1.08093749
+v_lMTRUE    0.4920759  0.93229538  1.54075729  1.2000000 -0.26770462
+t0         -2.2606112 -1.54977110 -1.09194508 -1.8971200  0.34734888
+sv_lMFALSE -0.0135627  0.40246384  0.84741972  0.1823216  0.22014228
+sv_lMTRUE  -0.3940023  0.09942164  0.62009741  0.0000000  0.09942164
+
+$`1`$stats
+   pearson   spearman       rmse   coverage 
+ 0.8603200  0.5507825  0.5084030 83.3333333 
+
+
+
+ Sampled Parameters: 
+[1] "B"            "v_lMFALSE"    "v_lMTRUE"     "t0"           "sv_lMFALSE"  
+[6] "sv_lMTRUE"    "pContaminant"
+
+ Design Matrices: 
+$B
+ B
+ 1
+
+$v
+    lM v_lMFALSE v_lMTRUE
+  TRUE         0        1
+ FALSE         1        0
+
+$A
+ A
+ 1
+
+$t0
+ t0
+  1
+
+$sv
+    lM sv_lMFALSE sv_lMTRUE
+  TRUE          0         1
+ FALSE          1         0
+
+$pContaminant
+ pContaminant
+            1
+
+
+--- LBA demo ---
+Counts by response (NA = omission):
+
+ left right  <NA> 
+ 8500  8469  3031 
+
+Mean RT by stimulus (finite RTs only):
+    left    right 
+1.232482 1.243841 
+
+Mean Acc by stimulus (defined responses only):
+     left     right 
+0.6138859 0.6116471 
+
+Omission rate by stimulus:
+  left  right 
+0.1531 0.1500 
+
+Truncation rate by stimulus:
+ left right 
+    0     0 
+
+Processing data set 1
+Likelihood speedup factor: 19.1, 1046 unique trials
+Running preburn stage
+1: Iterations preburn = 50
+Running burn stage
+1: Iterations burn = 100
+Mean Rhat = 4.621
+2: Iterations burn = 200
+Mean Rhat = 3.64
+3: Iterations burn = 300
+Mean Rhat = 1.86
+4: Iterations burn = 400
+Mean Rhat = 1.297
+5: Iterations burn = 367
+Mean Rhat = 1.059
+Running adapt stage
+1: Iterations adapt = 100
+Enough unique values detected: 150
+Testing proposal distribution creation
+Successfully adapted - stopping adaptation
+Running sample stage
+Max flat drift = Inf
+1: Iterations sample = 100
+Max Rhat = 1.004
+Max flat drift = 0.219
+2: Iterations sample = 200
+Max Rhat = 1.003
+Max flat drift = 0.142
+3: Iterations sample = 300
+Max Rhat = 1.005
+Max flat drift = 0.229
+4: Iterations sample = 400
+Max Rhat = 1.005
+Max flat drift = 0.292
+5: Iterations sample = 500
+Max Rhat = 1.005
+Max flat drift = 0.338
+6: Iterations sample = 600
+Max Rhat = 1.004
+Max flat drift = 0.374
+7: Iterations sample = 700
+Max Rhat = 1.006
+Max flat drift = 0.446
+8: Iterations sample = 800
+Max Rhat = 1.009
+Max flat drift = 0.454
+9: Iterations sample = 900
+Max Rhat = 1.01
+Max flat drift = 0.429
+10: Iterations sample = 1000
+Max Rhat = 1.012
+Max flat drift = 0.401
+Time difference of 3.602783 mins
+$`1`
+$`1`$quantiles
+                   2.5%         50%      97.5%       true         miss
+B            -0.3114582  0.15690211  0.5956619  0.1823216 -0.025419445
+v_lMFALSE     0.2130569  0.40827549  0.6915472  0.4000000  0.008275494
+v_lMTRUE      0.8070747  1.17332792  1.7156031  1.2000000 -0.026672080
+t0           -2.1705769 -1.97597131 -1.7893757 -1.8971200 -0.078851328
+sv_lMFALSE   -0.2132658  0.14092067  0.5064373  0.1823216 -0.041400888
+sv_lMTRUE    -0.3905260 -0.03631741  0.3313406  0.0000000 -0.036317411
+pContaminant -1.0508888 -1.02930859 -1.0081515 -1.0364334  0.007124799
+
+$`1`$stats
+     pearson     spearman         rmse     coverage 
+  0.99964653   0.99103121   0.03914682 100.00000000 
+
+
+
+ Sampled Parameters: 
+[1] "B"            "v_lMFALSE"    "v_lMTRUE"     "t0"           "sv_lMFALSE"  
+[6] "sv_lMTRUE"    "pContaminant"
+
+ Design Matrices: 
+$B
+ B
+ 1
+
+$v
+    lM v_lMFALSE v_lMTRUE
+  TRUE         0        1
+ FALSE         1        0
+
+$A
+ A
+ 1
+
+$t0
+ t0
+  1
+
+$sv
+    lM sv_lMFALSE sv_lMTRUE
+  TRUE          0         1
+ FALSE          1         0
+
+$pContaminant
+ pContaminant
+            1
+
+
+--- LBA demo ---
+Counts by response (NA = omission):
+
+ left right  <NA> 
+ 6777  6772  6451 
+
+Mean RT by stimulus (finite RTs only):
+    left    right 
+1.038068 1.042450 
+
+Mean Acc by stimulus (defined responses only):
+     left     right 
+0.7053440 0.7049446 
+
+Omission rate by stimulus:
+  left  right 
+0.3226 0.3225 
+
+Truncation rate by stimulus:
+ left right 
+    0     0 
+
+Expected Intrinsic Omissions:
+[1] 0.04251149
+
+Processing data set 1
+Likelihood speedup factor: 52.2 (with no missing 35.6x), 383 unique trials
+Running preburn stage
+1: Iterations preburn = 50
+Running burn stage
+1: Iterations burn = 100
+Mean Rhat = 4.315
+2: Iterations burn = 200
+Mean Rhat = 2.711
+3: Iterations burn = 233
+Mean Rhat = 1.454
+4: Iterations burn = 255
+Mean Rhat = 1.155
+5: Iterations burn = 270
+Mean Rhat = 1.065
+Running adapt stage
+1: Iterations adapt = 100
+Enough unique values detected: 150
+Testing proposal distribution creation
+Successfully adapted - stopping adaptation
+Running sample stage
+Max flat drift = Inf
+1: Iterations sample = 100
+Max Rhat = 1.017
+Max flat drift = 0.519
+2: Iterations sample = 200
+Max Rhat = 1.008
+Max flat drift = 0.202
+3: Iterations sample = 300
+Max Rhat = 1.008
+Max flat drift = 0.106
+4: Iterations sample = 400
+Max Rhat = 1.006
+Max flat drift = 0.097
+5: Iterations sample = 500
+Max Rhat = 1.003
+Max flat drift = 0.078
+6: Iterations sample = 600
+Max Rhat = 1.001
+Max flat drift = 0.044
+7: Iterations sample = 700
+Max Rhat = 1.001
+Max flat drift = 0.062
+8: Iterations sample = 800
+Max Rhat = 1.001
+Max flat drift = 0.08
+9: Iterations sample = 900
+Max Rhat = 1.001
+Max flat drift = 0.056
+10: Iterations sample = 1000
+Max Rhat = 1.002
+Max flat drift = 0.055
+Time difference of 1.448787 mins
+$`1`
+$`1`$quantiles
+                   2.5%          50%      97.5%       true         miss
+B            -0.2323978  0.168733413  0.5647665  0.1823216 -0.013588144
+v_lMFALSE     0.2069690  0.361340506  0.5705020  0.4000000 -0.038659494
+v_lMTRUE      0.8607716  1.180790012  1.6619962  1.2000000 -0.019209988
+t0           -2.1738811 -1.945766470 -1.7631553 -1.8971200 -0.048646485
+sv_lMFALSE   -0.1434289  0.192355408  0.5353947  0.1823216  0.010033851
+sv_lMTRUE    -0.3351348 -0.003678412  0.3373440  0.0000000 -0.003678412
+pContaminant -1.2163854 -1.047714720 -0.9287696 -1.0364334 -0.011281331
+
+$`1`$stats
+     pearson     spearman         rmse     coverage 
+  0.99983664   0.99103121   0.02579085 100.00000000 
+
+
+
+ Sampled Parameters: 
+[1] "B"            "v_lMFALSE"    "v_lMTRUE"     "t0"           "sv_lMFALSE"  
+[6] "sv_lMTRUE"    "pContaminant"
+
+ Design Matrices: 
+$B
+ B
+ 1
+
+$v
+    lM v_lMFALSE v_lMTRUE
+  TRUE         0        1
+ FALSE         1        0
+
+$A
+ A
+ 1
+
+$t0
+ t0
+  1
+
+$sv
+    lM sv_lMFALSE sv_lMTRUE
+  TRUE          0         1
+ FALSE          1         0
+
+$pContaminant
+ pContaminant
+            1
+
+
+--- LBA demo ---
+Counts by response (NA = omission):
+
+ left right  <NA> 
+ 3866  3858  1741 
+
+Mean RT by stimulus (finite RTs only):
+    left    right 
+1.232459 1.227380 
+
+Mean Acc by stimulus (defined responses only):
+     left     right 
+0.6066632 0.6061786 
+
+Omission rate by stimulus:
+     left     right 
+0.1829500 0.1849344 
+
+Truncation rate by stimulus:
+  left  right 
+0.5261 0.5274 
+
+Processing data set 1
+Likelihood speedup factor: 40.8 (with no missing 33.9x), 232 unique trials
+Running preburn stage
+1: Iterations preburn = 50
+Running burn stage
+1: Iterations burn = 100
+Mean Rhat = 1.429
+2: Iterations burn = 200
+Mean Rhat = 1.168
+3: Iterations burn = 300
+Mean Rhat = 1.086
+Running adapt stage
+1: Iterations adapt = 100
+Enough unique values detected: 150
+Testing proposal distribution creation
+Successfully adapted - stopping adaptation
+Running sample stage
+Max flat drift = Inf
+1: Iterations sample = 100
+Max Rhat = 1.006
+Max flat drift = 0.288
+2: Iterations sample = 200
+Max Rhat = 1.013
+Max flat drift = 0.1
+3: Iterations sample = 300
+Max Rhat = 1.003
+Max flat drift = 0.139
+4: Iterations sample = 400
+Max Rhat = 1.008
+Max flat drift = 0.238
+5: Iterations sample = 500
+Max Rhat = 1.018
+Max flat drift = 0.298
+6: Iterations sample = 600
+Max Rhat = 1.022
+Max flat drift = 0.314
+7: Iterations sample = 700
+Max Rhat = 1.022
+Max flat drift = 0.32
+8: Iterations sample = 800
+Max Rhat = 1.026
+Max flat drift = 0.315
+9: Iterations sample = 900
+Max Rhat = 1.023
+Max flat drift = 0.341
+10: Iterations sample = 1000
+Max Rhat = 1.025
+Max flat drift = 0.361
+Time difference of 1.469204 mins
+$`1`
+$`1`$quantiles
+                   2.5%         50%      97.5%       true        miss
+B            -0.9796412 -0.12422697  0.5853709  0.1823216 -0.30654852
+v_lMFALSE    -1.4252675 -0.24549711  0.6120090  0.4000000 -0.64549711
+v_lMTRUE      0.3258671  0.89387818  1.7266331  1.2000000 -0.30612182
+t0           -2.0195747 -1.25307429 -0.8807704 -1.8971200  0.64404569
+sv_lMFALSE   -0.3191470  0.26713642  0.8395450  0.1823216  0.08481487
+sv_lMTRUE    -0.5154178  0.08377758  0.7012158  0.0000000  0.08377758
+pContaminant -3.0486579 -2.74117378 -2.4669263 -1.0364334 -1.70474039
+
+$`1`$stats
+   pearson   spearman       rmse   coverage 
+ 0.7899876  0.6847125  0.7501901 85.7142857 
+
+
+
+ Sampled Parameters: 
+[1] "B"            "v_lMFALSE"    "v_lMTRUE"     "t0"           "sv_lMFALSE"  
+[6] "sv_lMTRUE"    "pContaminant"
+
+ Design Matrices: 
+$B
+ B
+ 1
+
+$v
+    lM v_lMFALSE v_lMTRUE
+  TRUE         0        1
+ FALSE         1        0
+
+$A
+ A
+ 1
+
+$t0
+ t0
+  1
+
+$sv
+    lM sv_lMFALSE sv_lMTRUE
+  TRUE          0         1
+ FALSE          1         0
+
+$pContaminant
+ pContaminant
+            1
+
+
+--- LBA demo ---
+Counts by response (NA = omission):
+
+ left right  <NA> 
+ 3625  3762 12613 
+
+Mean RT by stimulus (finite RTs only):
+    left    right 
+1.249993 1.245474 
+
+Mean Acc by stimulus (defined responses only):
+     left     right 
+0.6840391 0.7015933 
+
+Omission rate by stimulus:
+  left  right 
+0.6316 0.6297 
+
+Truncation rate by stimulus:
+ left right 
+    0     0 
+
+Expected Intrinsic Omissions:
+[1] 0.04251149
+
+Processing data set 1
+Likelihood speedup factor: 86.2 (with no missing 32.4x), 232 unique trials
+Running preburn stage
+1: Iterations preburn = 50
+Running burn stage
+1: Iterations burn = 100
+Mean Rhat = 2.954
+2: Iterations burn = 200
+Mean Rhat = 1.327
+3: Iterations burn = 233
+Mean Rhat = 1.098
+Running adapt stage
+1: Iterations adapt = 100
+Enough unique values detected: 150
+Testing proposal distribution creation
+Successfully adapted - stopping adaptation
+Running sample stage
+Max flat drift = Inf
+1: Iterations sample = 100
+Max Rhat = 1.03
+Max flat drift = 0.236
+2: Iterations sample = 200
+Max Rhat = 1.012
+Max flat drift = 0.272
+3: Iterations sample = 300
+Max Rhat = 1.012
+Max flat drift = 0.311
+4: Iterations sample = 400
+Max Rhat = 1.029
+Max flat drift = 0.396
+5: Iterations sample = 500
+Max Rhat = 1.056
+Max flat drift = 0.343
+6: Iterations sample = 600
+Max Rhat = 1.039
+Max flat drift = 0.351
+7: Iterations sample = 700
+Max Rhat = 1.027
+Max flat drift = 0.336
+8: Iterations sample = 800
+Max Rhat = 1.017
+Max flat drift = 0.264
+9: Iterations sample = 900
+Max Rhat = 1.008
+Max flat drift = 0.257
+10: Iterations sample = 1000
+Max Rhat = 1.008
+Max flat drift = 0.256
+Time difference of 1.173319 mins
+$`1`
+$`1`$quantiles
+                   2.5%        50%      97.5%       true        miss
+B            -0.2565552  0.2520645  0.7918265  0.1823216  0.06974298
+v_lMFALSE    -0.4686965 -0.1781650  0.1218884  0.4000000 -0.57816503
+v_lMTRUE      0.8027008  1.2457633  1.9888549  1.2000000  0.04576335
+t0           -1.2375286 -1.0677255 -0.9520303 -1.8971200  0.82939451
+sv_lMFALSE    0.2875636  0.7614272  1.2811976  0.1823216  0.57910565
+sv_lMTRUE     0.1474524  0.6043315  1.1184583  0.0000000  0.60433150
+pContaminant -2.8592419 -1.9637731 -1.3781973 -1.0364334 -0.92733975
+
+$`1`$stats
+   pearson   spearman       rmse   coverage 
+ 0.8200946  0.6847125  0.6082372 28.5714286 
+
+
+Parameter(s) pContaminant not specified in formula and assumed constant.
+
+ Sampled Parameters: 
+[1] "B"        "v"        "v_lMTRUE" "A"        "t0"       "s_lMTRUE"
+
+ Design Matrices: 
+$B
+ B
+ 1
+
+$v
+    lM v v_lMTRUE
+  TRUE 1        1
+ FALSE 1        0
+
+$A
+ A
+ 1
+
+$t0
+ t0
+  1
+
+$s
+    lM s s_lMTRUE
+  TRUE 1        1
+ FALSE 1        0
+
+$pContaminant
+ pContaminant
+            1
+
+
+--- RDM demo ---
+Counts by response (NA = omission):
+
+ left right 
+10012  9988 
+
+Mean RT by stimulus (finite RTs only):
+    left    right 
+1.228774 1.227647 
+
+Mean Acc by stimulus (defined responses only):
+  left  right 
+0.7878 0.7866 
+
+Omission rate by stimulus:
+ left right 
+    0     0 
+
+Truncation rate by stimulus:
+ left right 
+    0     0 
+
+Processing data set 1
+Likelihood speedup factor: 36.2, 552 unique trials
+Running preburn stage
+1: Iterations preburn = 50
+Running burn stage
+1: Iterations burn = 100
+Mean Rhat = 1.122
+2: Iterations burn = 200
+Mean Rhat = 1.066
+Running adapt stage
+1: Iterations adapt = 100
+Enough unique values detected: 150
+Testing proposal distribution creation
+Successfully adapted - stopping adaptation
+Running sample stage
+Max flat drift = Inf
+1: Iterations sample = 100
+Max Rhat = 1.01
+Max flat drift = 0.127
+2: Iterations sample = 200
+Max Rhat = 1.007
+Max flat drift = 0.127
+3: Iterations sample = 300
+Max Rhat = 1.005
+Max flat drift = 0.112
+4: Iterations sample = 400
+Max Rhat = 1.003
+Max flat drift = 0.148
+5: Iterations sample = 500
+Max Rhat = 1.003
+Max flat drift = 0.06
+6: Iterations sample = 600
+Max Rhat = 1.006
+Max flat drift = 0.112
+7: Iterations sample = 700
+Max Rhat = 1.004
+Max flat drift = 0.071
+8: Iterations sample = 800
+Max Rhat = 1.004
+Max flat drift = 0.084
+9: Iterations sample = 900
+Max Rhat = 1.003
+Max flat drift = 0.115
+10: Iterations sample = 1000
+Max Rhat = 1.006
+Max flat drift = 0.115
+Time difference of 1.402791 mins
+$`1`
+$`1`$quantiles
+                2.5%         50%       97.5%       true         miss
+B         0.52476075  0.64416450  0.74281842  0.6931472 -0.048982685
+v        -0.09643572 -0.03467939  0.02604738  0.0000000 -0.034679394
+v_lMTRUE  0.68244457  0.72591883  0.77317182  0.6931472  0.032771647
+A        -1.13382413 -0.51184426 -0.08170933 -0.6931472  0.181302916
+t0       -1.74899784 -1.55151320 -1.35960463 -1.6094379  0.057924713
+s_lMTRUE -0.24934580 -0.22692999 -0.20435926 -0.2231436 -0.003786444
+
+$`1`$stats
+     pearson     spearman         rmse     coverage 
+  0.99636591   0.98561076   0.08257956 100.00000000 
+
+
+Parameter(s) pContaminant not specified in formula and assumed constant.
+
+ Sampled Parameters: 
+[1] "B"        "v"        "v_lMTRUE" "A"        "t0"       "s_lMTRUE"
+
+ Design Matrices: 
+$B
+ B
+ 1
+
+$v
+    lM v v_lMTRUE
+  TRUE 1        1
+ FALSE 1        0
+
+$A
+ A
+ 1
+
+$t0
+ t0
+  1
+
+$s
+    lM s s_lMTRUE
+  TRUE 1        1
+ FALSE 1        0
+
+$pContaminant
+ pContaminant
+            1
+
+
+--- RDM demo ---
+Counts by response (NA = omission):
+
+ left right  <NA> 
+ 7185  7095  5720 
+
+Mean RT by stimulus (finite RTs only):
+    left    right 
+1.180276 1.176476 
+
+Mean Acc by stimulus (defined responses only):
+     left     right 
+0.7891642 0.7831021 
+
+Omission rate by stimulus:
+  left  right 
+0.2857 0.2863 
+
+Truncation rate by stimulus:
+ left right 
+    0     0 
+
+Processing data set 1
+Likelihood speedup factor: 108.7 (with no missing 79.3x), 184 unique trials
+Running preburn stage
+1: Iterations preburn = 50
+Running burn stage
+1: Iterations burn = 100
+Mean Rhat = 8.332
+2: Iterations burn = 200
+Mean Rhat = 5.415
+3: Iterations burn = 300
+Mean Rhat = 4.298
+4: Iterations burn = 400
+Mean Rhat = 3.702
+5: Iterations burn = 500
+Mean Rhat = 1.978
+6: Iterations burn = 433
+Mean Rhat = 1.82
+7: Iterations burn = 389
+Mean Rhat = 1.114
+8: Iterations burn = 359
+Mean Rhat = 1.076
+Running adapt stage
+1: Iterations adapt = 100
+Enough unique values detected: 150
+Testing proposal distribution creation
+Successfully adapted - stopping adaptation
+Running sample stage
+Max flat drift = Inf
+1: Iterations sample = 100
+Max Rhat = 1.01
+Max flat drift = 0.247
+2: Iterations sample = 200
+Max Rhat = 1.015
+Max flat drift = 0.191
+3: Iterations sample = 300
+Max Rhat = 1.004
+Max flat drift = 0.063
+4: Iterations sample = 400
+Max Rhat = 1.006
+Max flat drift = 0.16
+5: Iterations sample = 500
+Max Rhat = 1.003
+Max flat drift = 0.077
+6: Iterations sample = 600
+Max Rhat = 1.003
+Max flat drift = 0.108
+7: Iterations sample = 700
+Max Rhat = 1.004
+Max flat drift = 0.077
+8: Iterations sample = 800
+Max Rhat = 1.004
+Max flat drift = 0.113
+9: Iterations sample = 900
+Max Rhat = 1.003
+Max flat drift = 0.085
+10: Iterations sample = 1000
+Max Rhat = 1.002
+Max flat drift = 0.092
+Time difference of 1.321067 mins
+$`1`
+$`1`$quantiles
+                2.5%        50%       97.5%       true       miss
+B        -0.38919662 -0.2217025 -0.05124069  0.6931472 -0.9148496
+v        -0.08246393  0.1584388  0.44576562  0.0000000  0.1584388
+v_lMTRUE  0.80311576  0.8759311  0.96326425  0.6931472  0.1827839
+A         0.62377622  0.9003030  1.21112401 -0.6931472  1.5934502
+t0       -0.61729711 -0.5165227 -0.43743645 -1.6094379  1.0929153
+s_lMTRUE  0.02112527  0.1802800  0.40210174 -0.2231436  0.4034235
+
+$`1`$stats
+   pearson   spearman       rmse   coverage 
+ 0.3507957  0.1159542  0.8936592 16.6666667 
+
+
+Parameter(s) pContaminant not specified in formula and assumed constant.
+
+ Sampled Parameters: 
+[1] "B"        "v"        "v_lMTRUE" "A"        "t0"       "s_lMTRUE"
+
+ Design Matrices: 
+$B
+ B
+ 1
+
+$v
+    lM v v_lMTRUE
+  TRUE 1        1
+ FALSE 1        0
+
+$A
+ A
+ 1
+
+$t0
+ t0
+  1
+
+$s
+    lM s s_lMTRUE
+  TRUE 1        1
+ FALSE 1        0
+
+$pContaminant
+ pContaminant
+            1
+
+
+--- RDM demo ---
+Counts by response (NA = omission):
+
+ left right 
+ 8859  8895 
+
+Mean RT by stimulus (finite RTs only):
+    left    right 
+1.143132 1.140162 
+
+Mean Acc by stimulus (defined responses only):
+     left     right 
+0.7768409 0.7799977 
+
+Omission rate by stimulus:
+ left right 
+    0     0 
+
+Truncation rate by stimulus:
+  left  right 
+0.1105 0.1141 
+
+Processing data set 1
+Likelihood speedup factor: 67.2 (with no missing 67.2x), 264 unique trials
+Running preburn stage
+1: Iterations preburn = 50
+Running burn stage
+1: Iterations burn = 100
+Mean Rhat = 1.529
+2: Iterations burn = 200
+Mean Rhat = 1.706
+3: Iterations burn = 300
+Mean Rhat = 1.22
+4: Iterations burn = 400
+Mean Rhat = 1.191
+5: Iterations burn = 500
+Mean Rhat = 1.068
+Running adapt stage
+1: Iterations adapt = 100
+Enough unique values detected: 150
+Testing proposal distribution creation
+Successfully adapted - stopping adaptation
+Running sample stage
+Max flat drift = Inf
+1: Iterations sample = 100
+Max Rhat = 1.009
+Max flat drift = 0.147
+2: Iterations sample = 200
+Max Rhat = 1.009
+Max flat drift = 0.092
+3: Iterations sample = 300
+Max Rhat = 1.007
+Max flat drift = 0.157
+4: Iterations sample = 400
+Max Rhat = 1.008
+Max flat drift = 0.13
+5: Iterations sample = 500
+Max Rhat = 1.006
+Max flat drift = 0.138
+6: Iterations sample = 600
+Max Rhat = 1.004
+Max flat drift = 0.186
+7: Iterations sample = 700
+Max Rhat = 1.005
+Max flat drift = 0.26
+8: Iterations sample = 800
+Max Rhat = 1.008
+Max flat drift = 0.336
+9: Iterations sample = 900
+Max Rhat = 1.01
+Max flat drift = 0.345
+10: Iterations sample = 1000
+Max Rhat = 1.009
+Max flat drift = 0.335
+Time difference of 1.9301 mins
+$`1`
+$`1`$quantiles
+                  2.5%         50%      97.5%       true        miss
+B         0.5230837556  0.65654427  0.7806628  0.6931472 -0.03660291
+v        -0.0002504052  0.13242489  0.2737513  0.0000000  0.13242489
+v_lMTRUE  0.5645422013  0.62938682  0.7032773  0.6931472 -0.06376036
+A        -0.6242324974 -0.05018859  0.3515363 -0.6931472  0.64295859
+t0       -2.2248626403 -1.77183409 -1.4240721 -1.6094379 -0.16239618
+s_lMTRUE -0.3167473776 -0.27367243 -0.2363185 -0.2231436 -0.05052888
+
+$`1`$stats
+   pearson   spearman       rmse   coverage 
+ 0.9453757  0.9276337  0.2784669 66.6666667 
+
+
+Parameter(s) pContaminant not specified in formula and assumed constant.
+
+ Sampled Parameters: 
+[1] "B"        "v"        "v_lMTRUE" "A"        "t0"       "s_lMTRUE"
+
+ Design Matrices: 
+$B
+ B
+ 1
+
+$v
+    lM v v_lMTRUE
+  TRUE 1        1
+ FALSE 1        0
+
+$A
+ A
+ 1
+
+$t0
+ t0
+  1
+
+$s
+    lM s s_lMTRUE
+  TRUE 1        1
+ FALSE 1        0
+
+$pContaminant
+ pContaminant
+            1
+
+
+--- RDM demo ---
+Counts by response (NA = omission):
+
+ left right  <NA> 
+ 8082  7987  2032 
+
+Mean RT by stimulus (finite RTs only):
+    left    right 
+1.209931 1.205582 
+
+Mean Acc by stimulus (defined responses only):
+     left     right 
+0.7892315 0.7838545 
+
+Omission rate by stimulus:
+     left     right 
+0.1119700 0.1125484 
+
+Truncation rate by stimulus:
+  left  right 
+0.0944 0.0955 
+
+Processing data set 1
+Likelihood speedup factor: 76.7 (with no missing 69.3x), 236 unique trials
+Running preburn stage
+1: Iterations preburn = 50
+Running burn stage
+1: Iterations burn = 100
+Mean Rhat = 1.512
+2: Iterations burn = 167
+Mean Rhat = 1.361
+3: Iterations burn = 211
+Mean Rhat = 1.11
+4: Iterations burn = 311
+Mean Rhat = 1.124
+5: Iterations burn = 411
+Mean Rhat = 1.076
+Running adapt stage
+1: Iterations adapt = 100
+Enough unique values detected: 150
+Testing proposal distribution creation
+Successfully adapted - stopping adaptation
+Running sample stage
+Max flat drift = Inf
+1: Iterations sample = 100
+Max Rhat = 1.019
+Max flat drift = 0.158
+2: Iterations sample = 200
+Max Rhat = 1.009
+Max flat drift = 0.134
+3: Iterations sample = 300
+Max Rhat = 1.007
+Max flat drift = 0.133
+4: Iterations sample = 400
+Max Rhat = 1.011
+Max flat drift = 0.095
+5: Iterations sample = 500
+Max Rhat = 1.008
+Max flat drift = 0.081
+6: Iterations sample = 600
+Max Rhat = 1.006
+Max flat drift = 0.178
+7: Iterations sample = 700
+Max Rhat = 1.007
+Max flat drift = 0.218
+8: Iterations sample = 800
+Max Rhat = 1.005
+Max flat drift = 0.211
+9: Iterations sample = 900
+Max Rhat = 1.006
+Max flat drift = 0.261
+10: Iterations sample = 1000
+Max Rhat = 1.007
+Max flat drift = 0.254
+Time difference of 1.608235 mins
+$`1`
+$`1`$quantiles
+               2.5%         50%       97.5%       true        miss
+B         0.4589648  0.60309566  0.72791877  0.6931472 -0.09005152
+v        -0.1482726 -0.01567613  0.10280200  0.0000000 -0.01567613
+v_lMTRUE  0.6353904  0.70617916  0.79337972  0.6931472  0.01303198
+A        -1.0513038 -0.40490892  0.04792885 -0.6931472  0.28823826
+t0       -1.9395547 -1.50145371 -1.16899410 -1.6094379  0.10798421
+s_lMTRUE -0.2624450 -0.20697094 -0.15457842 -0.2231436  0.01617261
+
+$`1`$stats
+    pearson    spearman        rmse    coverage 
+  0.9920132   0.9856108   0.1313572 100.0000000 
+
+
+
+ Sampled Parameters: 
+[1] "B"            "v"            "v_lMTRUE"     "A"            "t0"          
+[6] "s_lMTRUE"     "pContaminant"
+
+ Design Matrices: 
+$B
+ B
+ 1
+
+$v
+    lM v v_lMTRUE
+  TRUE 1        1
+ FALSE 1        0
+
+$A
+ A
+ 1
+
+$t0
+ t0
+  1
+
+$s
+    lM s s_lMTRUE
+  TRUE 1        1
+ FALSE 1        0
+
+$pContaminant
+ pContaminant
+            1
+
+
+--- RDM demo ---
+Counts by response (NA = omission):
+
+ left right  <NA> 
+ 8405  8631  2964 
+
+Mean RT by stimulus (finite RTs only):
+    left    right 
+1.224892 1.232342 
+
+Mean Acc by stimulus (defined responses only):
+     left     right 
+0.7810477 0.7927643 
+
+Omission rate by stimulus:
+  left  right 
+0.1505 0.1459 
+
+Truncation rate by stimulus:
+ left right 
+    0     0 
+
+Processing data set 1
+Likelihood speedup factor: 36.8, 544 unique trials
+Running preburn stage
+1: Iterations preburn = 50
+Running burn stage
+1: Iterations burn = 100
+Mean Rhat = 1.898
+2: Iterations burn = 200
+Mean Rhat = 1.21
+3: Iterations burn = 233
+Mean Rhat = 1.053
+Running adapt stage
+1: Iterations adapt = 100
+Enough unique values detected: 150
+Testing proposal distribution creation
+Successfully adapted - stopping adaptation
+Running sample stage
+Max flat drift = Inf
+1: Iterations sample = 100
+Max Rhat = 1.008
+Max flat drift = 0.22
+2: Iterations sample = 200
+Max Rhat = 1.007
+Max flat drift = 0.186
+3: Iterations sample = 300
+Max Rhat = 1.01
+Max flat drift = 0.22
+4: Iterations sample = 400
+Max Rhat = 1.008
+Max flat drift = 0.244
+5: Iterations sample = 500
+Max Rhat = 1.009
+Max flat drift = 0.313
+6: Iterations sample = 600
+Max Rhat = 1.008
+Max flat drift = 0.361
+7: Iterations sample = 700
+Max Rhat = 1.006
+Max flat drift = 0.394
+8: Iterations sample = 800
+Max Rhat = 1.005
+Max flat drift = 0.445
+9: Iterations sample = 900
+Max Rhat = 1.007
+Max flat drift = 0.371
+10: Iterations sample = 1000
+Max Rhat = 1.008
+Max flat drift = 0.346
+Time difference of 2.185219 mins
+$`1`
+$`1`$quantiles
+                    2.5%        50%       97.5%       true         miss
+B             0.51736355  0.6418446  0.75050472  0.6931472 -0.051302624
+v            -0.09515129 -0.0282262  0.03358265  0.0000000 -0.028226198
+v_lMTRUE      0.67702257  0.7222351  0.77294505  0.6931472  0.029087922
+A            -1.21982669 -0.4955039 -0.05717589 -0.6931472  0.197643277
+t0           -1.75165738 -1.5432195 -1.34787115 -1.6094379  0.066218405
+s_lMTRUE     -0.24868589 -0.2250593 -0.19994035 -0.2231436 -0.001915742
+pContaminant -1.06634671 -1.0437213 -1.02171532 -1.0364334 -0.007287913
+
+$`1`$stats
+     pearson     spearman         rmse     coverage 
+  0.99589469   0.99103121   0.08261728 100.00000000 
+
+
+Parameter(s) pContaminant not specified in formula and assumed constant.
+
+ Sampled Parameters: 
+[1] "B"        "v"        "v_lMTRUE" "A"        "t0"       "s_lMTRUE"
+
+ Design Matrices: 
+$B
+ B
+ 1
+
+$v
+    lM v v_lMTRUE
+  TRUE 1        1
+ FALSE 1        0
+
+$A
+ A
+ 1
+
+$t0
+ t0
+  1
+
+$s
+    lM s s_lMTRUE
+  TRUE 1        1
+ FALSE 1        0
+
+$pContaminant
+ pContaminant
+            1
+
+
+--- RDM demo ---
+Counts by response (NA = omission):
+
+ left right  <NA> 
+ 8003  8092  2031 
+
+Mean RT by stimulus (finite RTs only):
+    left    right 
+1.211257 1.206037 
+
+Mean Acc by stimulus (defined responses only):
+     left     right 
+0.7934850 0.7986836 
+
+Omission rate by stimulus:
+     left     right 
+0.1139143 0.1101779 
+
+Truncation rate by stimulus:
+  left  right 
+0.0923 0.0951 
+
+Processing data set 1
+Likelihood speedup factor: 76.8 (with no missing 69.4x), 236 unique trials
+Running preburn stage
+1: Iterations preburn = 50
+Running burn stage
+1: Iterations burn = 100
+Mean Rhat = 3.899
+2: Iterations burn = 200
+Mean Rhat = 1.915
+3: Iterations burn = 233
+Mean Rhat = 1.169
+4: Iterations burn = 255
+Mean Rhat = 1.031
+Running adapt stage
+1: Iterations adapt = 100
+Enough unique values detected: 150
+Testing proposal distribution creation
+Successfully adapted - stopping adaptation
+Running sample stage
+Max flat drift = Inf
+1: Iterations sample = 100
+Max Rhat = 1.088
+Max flat drift = 0.286
+2: Iterations sample = 200
+Max Rhat = 1.009
+Max flat drift = 0.232
+3: Iterations sample = 300
+Max Rhat = 1.013
+Max flat drift = 0.178
+4: Iterations sample = 400
+Max Rhat = 1.01
+Max flat drift = 0.132
+5: Iterations sample = 500
+Max Rhat = 1.005
+Max flat drift = 0.158
+6: Iterations sample = 600
+Max Rhat = 1.004
+Max flat drift = 0.293
+7: Iterations sample = 700
+Max Rhat = 1.005
+Max flat drift = 0.407
+8: Iterations sample = 800
+Max Rhat = 1.006
+Max flat drift = 0.479
+9: Iterations sample = 900
+Max Rhat = 1.006
+Max flat drift = 0.476
+10: Iterations sample = 1000
+Max Rhat = 1.006
+Max flat drift = 0.49
+Time difference of 1.536104 mins
+$`1`
+$`1`$quantiles
+                2.5%         50%       97.5%       true        miss
+B         0.11755634  0.31952684  0.48211597  0.6931472 -0.37362034
+v        -0.20531303 -0.07358536  0.05776086  0.0000000 -0.07358536
+v_lMTRUE  0.73973370  0.83108985  0.92958818  0.6931472  0.13794267
+A        -0.09105079  0.23479861  0.49057067 -0.6931472  0.92794579
+t0       -1.29127389 -1.00464177 -0.75479334 -1.6094379  0.60479614
+s_lMTRUE -0.21102805 -0.13943363 -0.05833110 -0.2231436  0.08370992
+
+$`1`$stats
+   pearson   spearman       rmse   coverage 
+ 0.8592763  0.8116794  0.4826842 16.6666667 
+
+
+Parameter(s) pContaminant not specified in formula and assumed constant.
+
+ Sampled Parameters: 
+[1] "m"        "m_lMTRUE" "s"        "s_lMTRUE" "t0"      
+
+ Design Matrices: 
+$m
+    lM m m_lMTRUE
+  TRUE 1        1
+ FALSE 1        0
+
+$s
+    lM s s_lMTRUE
+  TRUE 1        1
+ FALSE 1        0
+
+$t0
+ t0
+  1
+
+$pContaminant
+ pContaminant
+            1
+
+
+--- LNR demo ---
+Counts by response (NA = omission):
+
+ left right 
+10059  9941 
+
+Mean RT by stimulus (finite RTs only):
+     left     right 
+0.9091158 0.9090077 
+
+Mean Acc by stimulus (defined responses only):
+  left  right 
+0.7357 0.7298 
+
+Omission rate by stimulus:
+ left right 
+    0     0 
+
+Truncation rate by stimulus:
+ left right 
+    0     0 
+
+Processing data set 1
+Likelihood speedup factor: 25.3, 791 unique trials
+Running preburn stage
+1: Iterations preburn = 50
+Running burn stage
+1: Iterations burn = 100
+Mean Rhat = 1.148
+2: Iterations burn = 200
+Mean Rhat = 1.046
+Running adapt stage
+1: Iterations adapt = 100
+Enough unique values detected: 150
+Testing proposal distribution creation
+Successfully adapted - stopping adaptation
+Running sample stage
+Max flat drift = Inf
+1: Iterations sample = 100
+Max Rhat = 1.006
+Max flat drift = 0.214
+2: Iterations sample = 200
+Max Rhat = 1.005
+Max flat drift = 0.205
+3: Iterations sample = 300
+Max Rhat = 1.007
+Max flat drift = 0.207
+4: Iterations sample = 400
+Max Rhat = 1.003
+Max flat drift = 0.194
+5: Iterations sample = 500
+Max Rhat = 1
+Max flat drift = 0.148
+6: Iterations sample = 600
+Max Rhat = 1.001
+Max flat drift = 0.118
+7: Iterations sample = 700
+Max Rhat = 1.001
+Max flat drift = 0.171
+8: Iterations sample = 800
+Max Rhat = 1.002
+Max flat drift = 0.123
+9: Iterations sample = 900
+Max Rhat = 1.001
+Max flat drift = 0.116
+10: Iterations sample = 1000
+Max Rhat = 1.002
+Max flat drift = 0.062
+Time difference of 56.9819 secs
+$`1`
+$`1`$quantiles
+                2.5%          50%       97.5%       true          miss
+m         0.37725586  0.402391999  0.42781345  0.4054651 -0.0030731086
+m_lMTRUE -0.82069006 -0.789581672 -0.75891221 -0.7985077  0.0089260241
+s        -0.03118393 -0.007113206  0.01637209  0.0000000 -0.0071132065
+s_lMTRUE -0.24598774 -0.222942737 -0.19976970 -0.2231436  0.0002008145
+t0       -1.69015924 -1.657494777 -1.62681195 -1.6094379 -0.0480568648
+
+$`1`$stats
+    pearson    spearman        rmse    coverage 
+ 0.99979130  1.00000000  0.02213241 80.00000000 
+
+
+Parameter(s) pContaminant not specified in formula and assumed constant.
+
+ Sampled Parameters: 
+[1] "m"        "m_lMTRUE" "s"        "s_lMTRUE" "t0"      
+
+ Design Matrices: 
+$m
+    lM m m_lMTRUE
+  TRUE 1        1
+ FALSE 1        0
+
+$s
+    lM s s_lMTRUE
+  TRUE 1        1
+ FALSE 1        0
+
+$t0
+ t0
+  1
+
+$pContaminant
+ pContaminant
+            1
+
+
+--- LNR demo ---
+Counts by response (NA = omission):
+
+ left right  <NA> 
+ 3219  3127 13654 
+
+Mean RT by stimulus (finite RTs only):
+    left    right 
+1.134193 1.127725 
+
+Mean Acc by stimulus (defined responses only):
+     left     right 
+0.7227785 0.7114286 
+
+Omission rate by stimulus:
+  left  right 
+0.6804 0.6850 
+
+Truncation rate by stimulus:
+ left right 
+    0     0 
+
+Processing data set 1
+Likelihood speedup factor: 108.7 (with no missing 35.3x), 184 unique trials
+Running preburn stage
+1: Iterations preburn = 50
+Running burn stage
+1: Iterations burn = 100
+Mean Rhat = 1.964
+2: Iterations burn = 200
+Mean Rhat = 1.181
+3: Iterations burn = 233
+Mean Rhat = 1.078
+Running adapt stage
+1: Iterations adapt = 100
+Enough unique values detected: 150
+Testing proposal distribution creation
+Successfully adapted - stopping adaptation
+Running sample stage
+Max flat drift = Inf
+1: Iterations sample = 100
+Max Rhat = 1.01
+Max flat drift = 0.131
+2: Iterations sample = 200
+Max Rhat = 1.006
+Max flat drift = 0.19
+3: Iterations sample = 300
+Max Rhat = 1.005
+Max flat drift = 0.126
+4: Iterations sample = 400
+Max Rhat = 1.003
+Max flat drift = 0.152
+5: Iterations sample = 500
+Max Rhat = 1.003
+Max flat drift = 0.097
+6: Iterations sample = 600
+Max Rhat = 1.002
+Max flat drift = 0.06
+7: Iterations sample = 700
+Max Rhat = 1.002
+Max flat drift = 0.111
+8: Iterations sample = 800
+Max Rhat = 1.001
+Max flat drift = 0.146
+9: Iterations sample = 900
+Max Rhat = 1.001
+Max flat drift = 0.099
+10: Iterations sample = 1000
+Max Rhat = 1.001
+Max flat drift = 0.097
+Time difference of 34.26003 secs
+$`1`
+$`1`$quantiles
+                 2.5%        50%       97.5%       true        miss
+m         0.210144961  0.3128840  0.38920651  0.4054651 -0.09258111
+m_lMTRUE -1.147386219 -0.9694509 -0.76987545 -0.7985077 -0.17094325
+s        -0.002063709  0.1508504  0.30734590  0.0000000  0.15085041
+s_lMTRUE -0.361973433 -0.1809500 -0.01805785 -0.2231436  0.04219359
+t0       -1.282549715 -1.0566132 -0.88709043 -1.6094379  0.55282470
+
+$`1`$stats
+   pearson   spearman       rmse   coverage 
+ 0.9416187  1.0000000  0.2712726 60.0000000 
+
+
+Parameter(s) pContaminant not specified in formula and assumed constant.
+
+ Sampled Parameters: 
+[1] "m"        "m_lMTRUE" "s"        "s_lMTRUE" "t0"      
+
+ Design Matrices: 
+$m
+    lM m m_lMTRUE
+  TRUE 1        1
+ FALSE 1        0
+
+$s
+    lM s s_lMTRUE
+  TRUE 1        1
+ FALSE 1        0
+
+$t0
+ t0
+  1
+
+$pContaminant
+ pContaminant
+            1
+
+
+--- LNR demo ---
+Counts by response (NA = omission):
+
+ left right 
+ 5871  5985 
+
+Mean RT by stimulus (finite RTs only):
+     left     right 
+0.9658914 0.9632537 
+
+Mean Acc by stimulus (defined responses only):
+     left     right 
+0.7187553 0.7272421 
+
+Omission rate by stimulus:
+ left right 
+    0     0 
+
+Truncation rate by stimulus:
+  left  right 
+0.4087 0.4057 
+
+Processing data set 1
+Likelihood speedup factor: 44.9 (with no missing 44.9x), 264 unique trials
+Running preburn stage
+1: Iterations preburn = 50
+Running burn stage
+1: Iterations burn = 100
+Mean Rhat = 1.14
+2: Iterations burn = 200
+Mean Rhat = 1.064
+Running adapt stage
+1: Iterations adapt = 100
+Enough unique values detected: 150
+Testing proposal distribution creation
+Successfully adapted - stopping adaptation
+Running sample stage
+Max flat drift = Inf
+1: Iterations sample = 100
+Max Rhat = 1.019
+Max flat drift = 0.252
+2: Iterations sample = 200
+Max Rhat = 1.017
+Max flat drift = 0.191
+3: Iterations sample = 300
+Max Rhat = 1.006
+Max flat drift = 0.08
+4: Iterations sample = 400
+Max Rhat = 1.003
+Max flat drift = 0.108
+5: Iterations sample = 500
+Max Rhat = 1.007
+Max flat drift = 0.09
+6: Iterations sample = 600
+Max Rhat = 1.002
+Max flat drift = 0.091
+7: Iterations sample = 700
+Max Rhat = 1.003
+Max flat drift = 0.142
+8: Iterations sample = 800
+Max Rhat = 1.002
+Max flat drift = 0.136
+9: Iterations sample = 900
+Max Rhat = 1.003
+Max flat drift = 0.149
+10: Iterations sample = 1000
+Max Rhat = 1.004
+Max flat drift = 0.163
+Time difference of 36.1761 secs
+$`1`
+$`1`$quantiles
+                2.5%        50%       97.5%       true        miss
+m         0.34980446  0.4368302  0.53075609  0.4054651  0.03136513
+m_lMTRUE -1.49104574 -1.1533642 -0.94252661 -0.7985077 -0.35485649
+s         0.09748137  0.2676404  0.45346989  0.0000000  0.26764044
+s_lMTRUE -0.28721983 -0.1694159 -0.05085796 -0.2231436  0.05372767
+t0       -2.87063126 -2.0093169 -1.24999331 -1.6094379 -0.39987895
+
+$`1`$stats
+   pearson   spearman       rmse   coverage 
+ 0.9882040  1.0000000  0.2688227 60.0000000 
+
+
+Parameter(s) pContaminant not specified in formula and assumed constant.
+
+ Sampled Parameters: 
+[1] "m"        "m_lMTRUE" "s"        "s_lMTRUE" "t0"      
+
+ Design Matrices: 
+$m
+    lM m m_lMTRUE
+  TRUE 1        1
+ FALSE 1        0
+
+$s
+    lM s s_lMTRUE
+  TRUE 1        1
+ FALSE 1        0
+
+$t0
+ t0
+  1
+
+$pContaminant
+ pContaminant
+            1
+
+
+--- LNR demo ---
+Counts by response (NA = omission):
+
+ left right  <NA> 
+ 3556  3720  1722 
+
+Mean RT by stimulus (finite RTs only):
+    left    right 
+1.146588 1.149571 
+
+Mean Acc by stimulus (defined responses only):
+     left     right 
+0.7158516 0.7286175 
+
+Omission rate by stimulus:
+     left     right 
+0.1920981 0.1906835 
+
+Truncation rate by stimulus:
+  left  right 
+0.5596 0.5406 
+
+Processing data set 1
+Likelihood speedup factor: 38.1 (with no missing 31.4x), 236 unique trials
+Running preburn stage
+1: Iterations preburn = 50
+Running burn stage
+1: Iterations burn = 100
+Mean Rhat = 1.097
+Running adapt stage
+1: Iterations adapt = 100
+Enough unique values detected: 150
+Testing proposal distribution creation
+Successfully adapted - stopping adaptation
+Running sample stage
+Max flat drift = Inf
+1: Iterations sample = 100
+Max Rhat = 1.008
+Max flat drift = 0.098
+2: Iterations sample = 200
+Max Rhat = 1.006
+Max flat drift = 0.17
+3: Iterations sample = 300
+Max Rhat = 1.004
+Max flat drift = 0.156
+4: Iterations sample = 400
+Max Rhat = 1.001
+Max flat drift = 0.095
+5: Iterations sample = 500
+Max Rhat = 1.001
+Max flat drift = 0.055
+6: Iterations sample = 600
+Max Rhat = 1
+Max flat drift = 0.091
+7: Iterations sample = 700
+Max Rhat = 1.001
+Max flat drift = 0.051
+8: Iterations sample = 800
+Max Rhat = 1
+Max flat drift = 0.059
+9: Iterations sample = 900
+Max Rhat = 1.002
+Max flat drift = 0.048
+10: Iterations sample = 1000
+Max Rhat = 1.003
+Max flat drift = 0.085
+Time difference of 32.55494 secs
+$`1`
+$`1`$quantiles
+               2.5%         50%      97.5%       true        miss
+m        -0.6301255  0.06164534  0.3429421  0.4054651 -0.34381977
+m_lMTRUE -1.5284461 -0.96045654 -0.3978442 -0.7985077 -0.16194884
+s         0.2395952  0.46147687  0.7292923  0.0000000  0.46147687
+s_lMTRUE -0.6060092 -0.36948375 -0.1475473 -0.2231436 -0.14634020
+t0       -2.7322002 -1.66961048 -0.8615985 -1.6094379 -0.06017256
+
+$`1`$stats
+   pearson   spearman       rmse   coverage 
+ 0.9325404  0.9000000  0.2765634 60.0000000 
+
+
+
+ Sampled Parameters: 
+[1] "m"            "m_lMTRUE"     "s"            "s_lMTRUE"     "t0"          
+[6] "pContaminant"
+
+ Design Matrices: 
+$m
+    lM m m_lMTRUE
+  TRUE 1        1
+ FALSE 1        0
+
+$s
+    lM s s_lMTRUE
+  TRUE 1        1
+ FALSE 1        0
+
+$t0
+ t0
+  1
+
+$pContaminant
+ pContaminant
+            1
+
+
+--- LNR demo ---
+Counts by response (NA = omission):
+
+ left right  <NA> 
+ 8525  8414  3061 
+
+Mean RT by stimulus (finite RTs only):
+     left     right 
+0.9115408 0.9012715 
+
+Mean Acc by stimulus (defined responses only):
+     left     right 
+0.7370466 0.7317391 
+
+Omission rate by stimulus:
+  left  right 
+0.1508 0.1553 
+
+Truncation rate by stimulus:
+ left right 
+    0     0 
+
+Processing data set 1
+Likelihood speedup factor: 25.7, 778 unique trials
+Running preburn stage
+1: Iterations preburn = 50
+Running burn stage
+1: Iterations burn = 100
+Mean Rhat = 1.646
+2: Iterations burn = 200
+Mean Rhat = 1.46
+3: Iterations burn = 300
+Mean Rhat = 1.131
+4: Iterations burn = 300
+Mean Rhat = 1.009
+Running adapt stage
+1: Iterations adapt = 100
+Enough unique values detected: 150
+Testing proposal distribution creation
+Successfully adapted - stopping adaptation
+Running sample stage
+Max flat drift = Inf
+1: Iterations sample = 100
+Max Rhat = 1.005
+Max flat drift = 0.329
+2: Iterations sample = 200
+Max Rhat = 1.002
+Max flat drift = 0.17
+3: Iterations sample = 300
+Max Rhat = 1.002
+Max flat drift = 0.096
+4: Iterations sample = 400
+Max Rhat = 1.001
+Max flat drift = 0.121
+5: Iterations sample = 500
+Max Rhat = 1.003
+Max flat drift = 0.091
+6: Iterations sample = 600
+Max Rhat = 1.003
+Max flat drift = 0.101
+7: Iterations sample = 700
+Max Rhat = 1.001
+Max flat drift = 0.14
+8: Iterations sample = 800
+Max Rhat = 1.001
+Max flat drift = 0.135
+9: Iterations sample = 900
+Max Rhat = 1
+Max flat drift = 0.126
+10: Iterations sample = 1000
+Max Rhat = 1.001
+Max flat drift = 0.093
+Time difference of 1.698785 mins
+$`1`
+$`1`$quantiles
+                     2.5%         50%       97.5%       true         miss
+m             0.383246264  0.41075008  0.43861562  0.4054651  0.005284973
+m_lMTRUE     -0.845386842 -0.81186233 -0.77981041 -0.7985077 -0.013354637
+s            -0.009327451  0.01589586  0.04038124  0.0000000  0.015895864
+s_lMTRUE     -0.257464492 -0.23134305 -0.20668739 -0.2231436 -0.008199496
+t0           -1.680245654 -1.64720033 -1.61700062 -1.6094379 -0.037762414
+pContaminant -1.045229838 -1.02325791 -1.00121439 -1.0364334  0.013175475
+
+$`1`$stats
+    pearson    spearman        rmse    coverage 
+ 0.99979313  1.00000000  0.01882277 83.33333333 
+
+
+Parameter(s) pContaminant not specified in formula and assumed constant.
+
+ Sampled Parameters: 
+[1] "m"        "m_lMTRUE" "s"        "s_lMTRUE" "t0"      
+
+ Design Matrices: 
+$m
+    lM m m_lMTRUE
+  TRUE 1        1
+ FALSE 1        0
+
+$s
+    lM s s_lMTRUE
+  TRUE 1        1
+ FALSE 1        0
+
+$t0
+ t0
+  1
+
+$pContaminant
+ pContaminant
+            1
+
+
+--- LNR demo ---
+Counts by response (NA = omission):
+
+ left right  <NA> 
+ 3621  3722  1615 
+
+Mean RT by stimulus (finite RTs only):
+    left    right 
+1.145313 1.149789 
+
+Mean Acc by stimulus (defined responses only):
+     left     right 
+0.7124829 0.7230936 
+
+Omission rate by stimulus:
+     left     right 
+0.1807148 0.1798625 
+
+Truncation rate by stimulus:
+  left  right 
+0.5551 0.5491 
+
+Processing data set 1
+Likelihood speedup factor: 38 (with no missing 31.7x), 236 unique trials
+Running preburn stage
+1: Iterations preburn = 50
+Running burn stage
+1: Iterations burn = 100
+Mean Rhat = 1.416
+2: Iterations burn = 200
+Mean Rhat = 1.188
+3: Iterations burn = 300
+Mean Rhat = 1.014
+Running adapt stage
+1: Iterations adapt = 100
+Enough unique values detected: 150
+Testing proposal distribution creation
+Successfully adapted - stopping adaptation
+Running sample stage
+Max flat drift = Inf
+1: Iterations sample = 100
+Max Rhat = 1.02
+Max flat drift = 0.24
+2: Iterations sample = 200
+Max Rhat = 1.011
+Max flat drift = 0.114
+3: Iterations sample = 300
+Max Rhat = 1.004
+Max flat drift = 0.139
+4: Iterations sample = 400
+Max Rhat = 1.007
+Max flat drift = 0.145
+5: Iterations sample = 500
+Max Rhat = 1.005
+Max flat drift = 0.108
+6: Iterations sample = 600
+Max Rhat = 1.002
+Max flat drift = 0.116
+7: Iterations sample = 700
+Max Rhat = 1.003
+Max flat drift = 0.126
+8: Iterations sample = 800
+Max Rhat = 1.005
+Max flat drift = 0.098
+9: Iterations sample = 900
+Max Rhat = 1.002
+Max flat drift = 0.064
+10: Iterations sample = 1000
+Max Rhat = 1.001
+Max flat drift = 0.062
+Time difference of 39.10487 secs
+$`1`
+$`1`$quantiles
+                2.5%        50%      97.5%       true        miss
+m         0.17946881  0.3255357  0.4113337  0.4054651 -0.07992941
+m_lMTRUE -1.09291770 -0.9023125 -0.6859666 -0.7985077 -0.10380482
+s         0.01914727  0.2153498  0.3876686  0.0000000  0.21534984
+s_lMTRUE -0.42386548 -0.2660781 -0.1148646 -0.2231436 -0.04293459
+t0       -2.40970675 -1.1292012 -0.4952920 -1.6094379  0.48023674
+
+$`1`$stats
+   pearson   spearman       rmse   coverage 
+ 0.9552387  1.0000000  0.2433148 80.0000000 
+
+
