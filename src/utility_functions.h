@@ -679,6 +679,14 @@ bool row_is_finite(const Rcpp::NumericMatrix& mat, int row) {
   return true;
 }
 
+// 1-liner that loads the namespace if necessary and returns it
+static const Rcpp::Environment statmodNS = Rcpp::Environment::namespace_env("statmod");
+
+// Function object lives for the life-time of the DLL
+static const Rcpp::Function gauss_quad = statmodNS["gauss.quad"];
+
+static Rcpp::List gl20 = gauss_quad(20, "legendre");
+static Rcpp::List gh5 = gauss_quad(5, "hermite");
 
 #endif
 

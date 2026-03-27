@@ -107,26 +107,61 @@ inline double plba_scalar(double t, const double* par, void* ctx_) {
   return plba_norm(tt, A, b, v, sv, ctx->use_posdrift);
 }
 
+// Scalar adapters (single-RT, single-parameter-row) used by GSL integration.
+inline double dleakyba_scalar(double t, const double* par, void* ctx_) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  const double v  = par[0];
+  const double sv = par[1];
+  const double b  = par[2] + par[3];
+  const double A  = par[3];
+  const double t0 = par[4];
+  const double k  = par[5];
+  
+  if (R_IsNA(v)) return 0.0;
+  const double tt = t - t0;
+  if (tt <= 0.0) return 0.0;
+  return dleakyba_norm(tt, A, b, v, sv, k, ctx->use_posdrift);
+}
+
+inline double pleakyba_scalar(double t, const double* par, void* ctx_) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  const double v  = par[0];
+  const double sv = par[1];
+  const double b  = par[2] + par[3];
+  const double A  = par[3];
+  const double t0 = par[4];
+  const double k  = par[5];
+  
+  if (R_IsNA(v)) return 0.0;
+  const double tt = t - t0;
+  if (tt <= 0.0) return 0.0;
+  return pleakyba_norm(tt, A, b, v, sv, k, ctx->use_posdrift);
+}
+
 inline double drdm_scalar(double t, const double* par, void* /*ctx_*/) {
   if (R_IsNA(par[0])) return 0.0;
   const double tt = t - par[3];
   if (tt <= 0.0) return 0.0;
-  const double v = par[0];
-  const double B = par[1];
-  const double A = par[2];
-  const double s = par[4];
-  return digt(tt, B / s + 0.5 * A / s, v / s, 0.5 * A / s);
+  const double v  = par[0];
+  const double B  = par[1];
+  const double A  = par[2];
+  const double s  = par[4];
+  const double sv = par[5];
+  const double b  = (B + A) / s;
+  return drdmswtn(tt, b, v / s, A / s, sv / s, 1.0, 0.0, 20, false);
 }
 
 inline double prdm_scalar(double t, const double* par, void* /*ctx_*/) {
   if (R_IsNA(par[0])) return 0.0;
   const double tt = t - par[3];
   if (tt <= 0.0) return 0.0;
-  const double v = par[0];
-  const double B = par[1];
-  const double A = par[2];
-  const double s = par[4];
-  return pigt(tt, B / s + 0.5 * A / s, v / s, 0.5 * A / s);
+  const double v  = par[0];
+  const double B  = par[1];
+  const double A  = par[2];
+  const double s  = par[4];
+  const double sv = par[5];
+  const double b  = (B + A) / s;
+  return prdmswtn(tt, b, v / s, A / s, sv / s, 1.0, 0.0, 20, false);
 }
 
 inline double dlnr_scalar(double t, const double* par, void* /*ctx_*/) {
@@ -172,6 +207,26 @@ Rcpp::NumericVector lba_pfun_adapter(Rcpp::NumericVector rt,
     return plba_c(rt, pars, winner, ctx->min_lik_for_pdf, is_ok, ctx->use_posdrift);
 }
 
+Rcpp::NumericVector leakyba_dfun_adapter(Rcpp::NumericVector rt,
+                                         Rcpp::NumericMatrix pars,
+                                         Rcpp::LogicalVector winner,
+                                         Rcpp::LogicalVector is_ok,
+                                         void* context) {
+  ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context);
+  // Pass use_posdrift from context to dlba_c
+  return dleakyba_c(rt, pars, winner, ctx->min_lik_for_pdf, is_ok, ctx->use_posdrift);
+}
+
+Rcpp::NumericVector leakyba_pfun_adapter(Rcpp::NumericVector rt,
+                                         Rcpp::NumericMatrix pars,
+                                         Rcpp::LogicalVector winner,
+                                         Rcpp::LogicalVector is_ok,
+                                         void* context) {
+  ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context);
+  // Pass use_posdrift from context to plba_c
+  return pleakyba_c(rt, pars, winner, ctx->min_lik_for_pdf, is_ok, ctx->use_posdrift);
+}
+
 // Static adapter for RDM dfun
 Rcpp::NumericVector rdm_dfun_adapter(Rcpp::NumericVector rt,
                                             Rcpp::NumericMatrix pars,
@@ -179,7 +234,7 @@ Rcpp::NumericVector rdm_dfun_adapter(Rcpp::NumericVector rt,
                                             Rcpp::LogicalVector is_ok,
                                             void* context) {
     ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context);
-    return drdm_c(rt, pars, winner, ctx->min_lik_for_pdf, is_ok);
+    return drdmswtn_c(rt, pars, winner, ctx->min_lik_for_pdf, is_ok, ctx->log_out);
 }
 
 // Static adapter for RDM pfun
@@ -189,7 +244,7 @@ Rcpp::NumericVector rdm_pfun_adapter(Rcpp::NumericVector rt,
                                             Rcpp::LogicalVector is_ok,
                                             void* context) {
     ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context);
-    return prdm_c(rt, pars, winner, ctx->min_lik_for_pdf, is_ok);
+    return prdmswtn_c(rt, pars, winner, ctx->min_lik_for_pdf, is_ok, ctx->log_out);
 }
 
 // Static adapter for LNR dfun

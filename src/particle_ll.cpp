@@ -679,6 +679,15 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
         if (type_std.find("IO") != std::string::npos) {
           current_model_ctx.use_posdrift = false;
         }
+    } else if (type_std.find("BAwL") != std::string::npos) {
+      model_dfun_ptr = &leakyba_dfun_adapter;
+      model_pfun_ptr = &leakyba_pfun_adapter;
+      pdf1_ptr = &dleakyba_scalar;
+      cdf1_ptr = &pleakyba_scalar;
+      // Check for the 'IO' (Implicit Omissions / no posdrift) flag in the original type_std
+      if (type_std.find("IO") != std::string::npos) {
+        current_model_ctx.use_posdrift = false;
+      }
     } else if (type_std.find("RDM") != std::string::npos) {
         model_dfun_ptr = &rdm_dfun_adapter;
         model_pfun_ptr = &rdm_pfun_adapter;

@@ -240,6 +240,14 @@ inline double log_diff_exp(double a, double b) {
   }
 }
 
+inline double clamp_pos(double x, double floor_val = 1e-300) {
+  return (std::isfinite(x) && x > floor_val) ? x : floor_val;
+}
+
+inline double safe_log(double x, double floor_val = 1e-300) {
+  return std::log(clamp_pos(x, floor_val));
+}
+
 /**
  * @brief Compute log(exp(a) - exp(b)) for vectors in a numerically stable way
  *

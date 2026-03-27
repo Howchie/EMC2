@@ -2,72 +2,44 @@
 % Please edit documentation in R/model_RDM.R
 \name{RDM}
 \alias{RDM}
-\title{The Racing Diffusion Model}
+\title{The Racing Diffusion Model with Trial-Varying Drift (DSWTN)}
 \usage{
 RDM()
 }
-\value{
-A list defining the cognitive model
-}
 \description{
-Model file to estimate the Racing Diffusion Model (RDM), also known as the Racing Wald Model.
+Model file to estimate a Racing Diffusion Model where each accumulator
+follows a Wald distribution with trial-varying drift rates, modeled
+by the DSWTN (Distribution Scalar Wald Truncated Normal) distribution.
 }
 \details{
-Model files are almost exclusively used in \code{design()}.
+This model replaces the standard RDM's single drift rate \code{v} and start-point
+variability \code{A} with parameters for a distribution of drift rates:
+\code{mu_drift} (mean of the drift distribution) and \code{sigma_drift_sq} (variance
+of the drift distribution).
 
 Default values are used for all parameters that are not explicitly listed in the \code{formula}
-argument of \code{design()}.They can also be accessed with \code{RDM()$p_types}.\tabular{llllll}{
-   \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Mapping} \tab \strong{Interpretation} \cr
-   \emph{v} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Evidence-accumulation rate (drift rate) \cr
-   \emph{A} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Between-trial variation (range) in start point \cr
-   \emph{B} \tab log \tab [0, Inf] \tab log(1) \tab \emph{b} = \emph{B} + \emph{A} \tab Distance from \emph{A} to \emph{b} (response threshold) \cr
-   \emph{t0} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Non-decision time \cr
-   \emph{s} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Within-trial standard deviation of drift rate \cr
+argument of \code{design()}.
+
+#' Default values are used for all parameters that are not explicitly listed in the \code{formula}
+argument of \code{design()}.They can also be accessed with \code{RDM()$p_types}.
+
+| \strong{Parameter} | \strong{Transform} | \strong{Natural scale} | \strong{Default}   | \strong{Mapping}          | \strong{Interpretation}                                                |
+|-----------|-----------|--------------  -|-----------|------------------|---------------------------------------------------------------|
+| \emph{v}       | log       | [0, Inf]      | log(1)    |                  | Evidence-accumulation rate (drift rate)                        |
+| \emph{zA}       | qnorm     | [0, 1]        | log(0)    |                  | Between-trial variation (range) in start point as a proportion of b (threshold)                 |
+| \emph{b}       | log       | [0, Inf]      | log(1)    |                  | Response threshold                  |
+| \emph{t0}      | log       | [0, Inf]      | log(0)    |                  | Non-decision time                                             |
+| \emph{s}       | log       | [0, Inf]      | log(1)    |                  | Within-trial standard deviation of drift rate                 |
+| \emph{cv}      | log       | [0, Inf]      | log(0.1)  |                  | Standard deviation of the trial-by-trial drift rate distribution, expressed as a coefficient of variation in terms of the corresponding drift rate   |
+
+All parameters are typically estimated on the log scale. \code{A} (start-point variability range)
+and \code{sv} (drift rate between trial variance) can be zero.
+\itemize{
+\item If \code{zA=0} and \code{cv=0}, the model reduces to a simple Wald distribution with threshold \code{B} and drift \code{v}.
+\item If \code{cv=0} (and \code{zA > 0}), the model reduces to the standard RDM (with start-point variability \code{A} and fixed drift \code{v}).
+\item If \code{zA=0} (and \code{cv > 0}), the model reduces to a SWTN with a fixed threshold \code{B}.
+\code{b} should generally be positive, especially if \code{zA=0}.
 }
 
-
-All parameters are estimated on the log scale.
-
-The parameterization \emph{b} = \emph{B} + \emph{A} ensures that the response threshold is
-always higher than the between trial variation in start point.
-
-Conventionally, \code{s} is fixed to 1 to satisfy scaling constraints.
-
-Because the RDM is a race model, it has one accumulator per response option.
-EMC2 automatically constructs a factor representing the accumulators \code{lR} (i.e., the
-latent response) with level names taken from the \code{R} column in the data.
-
-The \code{lR} factor is mainly used to allow for response bias, analogous to \emph{Z} in the
-DDM. For example, in the RDM, response thresholds are determined by the \emph{B}
-parameters, so \code{B~lR} allows for different thresholds for the accumulator
-corresponding to "left" and "right" stimuli, for example, (e.g., a bias to respond left occurs
-if the left threshold is less than the right threshold).
-
-For race models in general, the argument \code{matchfun} can be provided in \code{design()}.
-One needs to supply a function that takes the \code{lR} factor (defined in the augmented data (d)
-in the following function) and returns a logical defining the correct
-response. In the example below, this is simply whether the \code{S} factor equals the
-latent response factor: \code{matchfun=function(d)d$S==d$lR}. Using \code{matchfun} a latent match factor (\code{lM}) with
-levels \code{FALSE} (i.e., the stimulus does not match the accumulator) and \code{TRUE}
-(i.e., the stimulus does match the accumulator). This is added internally
-and can also be used in model formula, typically for parameters related to
-the rate of accumulation.
-
-Tillman, G., Van Zandt, T., & Logan, G. D. (2020). Sequential sampling models
-without random between-trial variability: The racing diffusion model of speeded
-decision making. \emph{Psychonomic Bulletin & Review, 27}(5), 911-936.
-https://doi.org/10.3758/s13423-020-01719-6
-}
-\examples{
-# When working with lM it is useful to design  an "average and difference"
-# contrast matrix, which for binary responses has a simple canonical from:
-ADmat <- matrix(c(-1/2,1/2),ncol=1,dimnames=list(NULL,"d"))
-# We also define a match function for lM
-matchfun=function(d)d$S==d$lR
-# We now construct our design, with v ~ lM and the contrast for lM the ADmat.
-design_RDMBE <- design(data = forstmann,model=RDM,matchfun=matchfun,
-                       formula=list(v~lM,s~lM,B~E+lR,A~1,t0~1),
-                       contrasts=list(v=list(lM=ADmat)),constants=c(s=log(1)))
-# For all parameters that are not defined in the formula, default values are assumed
-# (see Table above).
+Like the standard RDM, this is a race model with one SWTN-spv accumulator per response option.
 }
