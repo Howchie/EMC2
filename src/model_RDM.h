@@ -10,14 +10,24 @@ using namespace Rcpp;
 
 NumericVector drdm_c(NumericVector rts, NumericMatrix pars, LogicalVector idx, double min_ll, LogicalVector is_ok){
   //v = 0, B = 1, A = 2, t0 = 3, s = 4
+  const int n_rows = rts.size();
   NumericVector out(sum(idx));
+  const double* rt = rts.begin();
+  const double* v  = &pars(0, 0);
+  const double* B  = &pars(0, 1);
+  const double* A  = &pars(0, 2);
+  const double* t0 = &pars(0, 3);
+  const double* s  = &pars(0, 4);
+  int* idx_ptr = LOGICAL(idx);
+  int* ok_ptr = LOGICAL(is_ok);
   int k = 0;
-  for(int i = 0; i < rts.length(); i++){
-    if(idx[i] == TRUE){
-      if(NumericVector::is_na(pars(i,0))){
-        out[k] = 0;
-      } else if((rts[i] - pars(i,3) > 0) && (is_ok[i] == TRUE)){
-        out[k] = digt(rts[i] - pars(i,3), pars(i,1)/pars(i,4) + .5 * pars(i,2)/pars(i,4), pars(i,0)/pars(i,4), .5*pars(i,2)/pars(i,4));
+  for(int i = 0; i < n_rows; i++){
+    if(idx_ptr[i]){
+      if(R_IsNA(v[i])){
+        out[k] = 0.0;
+      } else if((rt[i] - t0[i] > 0.0) && ok_ptr[i]){
+        const double inv_s = 1.0 / s[i];
+        out[k] = digt(rt[i] - t0[i], B[i] * inv_s + 0.5 * A[i] * inv_s, v[i] * inv_s, 0.5 * A[i] * inv_s);
       } else{
         out[k] = min_ll;
       }
@@ -30,14 +40,24 @@ NumericVector drdm_c(NumericVector rts, NumericMatrix pars, LogicalVector idx, d
 
 NumericVector prdm_c(NumericVector rts, NumericMatrix pars, LogicalVector idx, double min_ll, LogicalVector is_ok){
   //v = 0, B = 1, A = 2, t0 = 3, s = 4
+  const int n_rows = rts.size();
   NumericVector out(sum(idx));
+  const double* rt = rts.begin();
+  const double* v  = &pars(0, 0);
+  const double* B  = &pars(0, 1);
+  const double* A  = &pars(0, 2);
+  const double* t0 = &pars(0, 3);
+  const double* s  = &pars(0, 4);
+  int* idx_ptr = LOGICAL(idx);
+  int* ok_ptr = LOGICAL(is_ok);
   int k = 0;
-  for(int i = 0; i < rts.length(); i++){
-    if(idx[i] == TRUE){
-      if(NumericVector::is_na(pars(i,0))){
-        out[k] = 0;
-      } else if((rts[i] - pars(i,3) > 0) && (is_ok[i] == TRUE)){
-        out[k] = pigt(rts[i] - pars(i,3), pars(i,1)/pars(i,4) + .5 * pars(i,2)/pars(i,4), pars(i,0)/pars(i,4), .5*pars(i,2)/pars(i,4));
+  for(int i = 0; i < n_rows; i++){
+    if(idx_ptr[i]){
+      if(R_IsNA(v[i])){
+        out[k] = 0.0;
+      } else if((rt[i] - t0[i] > 0.0) && ok_ptr[i]){
+        const double inv_s = 1.0 / s[i];
+        out[k] = pigt(rt[i] - t0[i], B[i] * inv_s + 0.5 * A[i] * inv_s, v[i] * inv_s, 0.5 * A[i] * inv_s);
       } else{
         out[k] = min_ll;
       }
@@ -83,4 +103,3 @@ NumericVector pWald(NumericVector t, NumericVector v,
 }
 
 #endif
-

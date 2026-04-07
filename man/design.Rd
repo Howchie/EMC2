@@ -86,6 +86,14 @@ if the conventional bound aren't desired.
 see \code{DDM()} for an example of such bounds. Bounds are used to set limits to
 the likelihood landscape that cannot reasonable be achieved with \code{transform}}
 
+\item{LT}{Optional. Lower truncation bound for the response time distribution.}
+
+\item{LC}{Optional. Lower censoring bound for the response time distribution.}
+
+\item{UC}{Optional. Upper censoring bound for the response time distribution.}
+
+\item{UT}{Optional. Upper truncation bound for the response time distribution.}
+
 \item{...}{Additional, optional arguments}
 }
 \value{

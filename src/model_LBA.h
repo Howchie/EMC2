@@ -117,43 +117,67 @@ NumericVector plba_c1(NumericVector rts, NumericMatrix pars, LogicalVector idx, 
 }
 
 NumericVector dlba_c(NumericVector rts, NumericMatrix pars, LogicalVector idx, double min_ll, LogicalVector is_ok, bool posdrift = true){
-  //v = 0, sv = 1, B = 2, A = 3, t0 = 4
-  int n = sum(idx);
-  NumericVector out(n);
+  // v = 0, sv = 1, B = 2, A = 3, t0 = 4
+  const int n_rows = rts.size();
+  const int n_out = sum(idx);
+  NumericVector out(n_out);
+
+  const double* rt = rts.begin();
+  const double* v  = &pars(0, 0);
+  const double* sv = &pars(0, 1);
+  const double* B  = &pars(0, 2);
+  const double* A  = &pars(0, 3);
+  const double* t0 = &pars(0, 4);
+  int* idx_ptr = LOGICAL(idx);
+  int* ok_ptr = LOGICAL(is_ok);
+
   int k = 0;
-  for(int i = 0; i < rts.length(); i++){
-    if(idx[i] == TRUE){
-      if(NumericVector::is_na(pars(i,0))){
-        out[k] = 0;
-      } else if((rts[i] - pars(i,4) > 0) && (is_ok[i] == TRUE)){
-        out[k] = dlba_norm(rts[i] - pars(i,4), pars(i,3), pars(i,2) + pars(i,3), pars(i,0), pars(i,1), posdrift);
-      } else{
-        out[k] = min_ll;
-      }
-      k++;
+  for (int i = 0; i < n_rows; ++i) {
+    if (!idx_ptr[i]) continue;
+    if (R_IsNA(v[i])) {
+      out[k++] = 0.0;
+      continue;
+    }
+    const double t_eff = rt[i] - t0[i];
+    if (t_eff > 0.0 && ok_ptr[i]) {
+      out[k++] = dlba_norm(t_eff, A[i], B[i] + A[i], v[i], sv[i], posdrift);
+    } else {
+      out[k++] = min_ll;
     }
   }
-  return(out);
+  return out;
 }
 
 NumericVector plba_c(NumericVector rts, NumericMatrix pars, LogicalVector idx, double min_ll, LogicalVector is_ok, bool posdrift = true){
-  //v = 0, sv = 1, B = 2, A = 3, t0 = 4
-  int n = sum(idx);
-  NumericVector out(n);
+  // v = 0, sv = 1, B = 2, A = 3, t0 = 4
+  const int n_rows = rts.size();
+  const int n_out = sum(idx);
+  NumericVector out(n_out);
+
+  const double* rt = rts.begin();
+  const double* v  = &pars(0, 0);
+  const double* sv = &pars(0, 1);
+  const double* B  = &pars(0, 2);
+  const double* A  = &pars(0, 3);
+  const double* t0 = &pars(0, 4);
+  int* idx_ptr = LOGICAL(idx);
+  int* ok_ptr = LOGICAL(is_ok);
+
   int k = 0;
-  for(int i = 0; i < rts.length(); i++){
-    if(idx[i] == TRUE){
-      if(NumericVector::is_na(pars(i,0))){
-        out[k] = 0;
-      } else if((rts[i] - pars(i,4) > 0) && (is_ok[i] == TRUE)){
-        out[k] = plba_norm(rts[i] - pars(i,4), pars(i,3), pars(i,2) + pars(i,3), pars(i,0), pars(i,1), posdrift);
-      } else{
-        out[k] = min_ll;
-      }
-      k++;
+  for (int i = 0; i < n_rows; ++i) {
+    if (!idx_ptr[i]) continue;
+    if (R_IsNA(v[i])) {
+      out[k++] = 0.0;
+      continue;
+    }
+    const double t_eff = rt[i] - t0[i];
+    if (t_eff > 0.0 && ok_ptr[i]) {
+      out[k++] = plba_norm(t_eff, A[i], B[i] + A[i], v[i], sv[i], posdrift);
+    } else {
+      out[k++] = min_ll;
     }
   }
-  return(out);
+  return out;
 }
 
 // [[Rcpp::export]]
@@ -187,5 +211,4 @@ NumericVector plba(NumericVector t,
 }
 
 #endif
-
 

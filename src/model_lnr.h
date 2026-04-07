@@ -8,16 +8,22 @@ using namespace Rcpp;
 
 NumericVector plnr_c(NumericVector rts, NumericMatrix pars, LogicalVector idx, double min_ll, LogicalVector is_ok){
   // 0 = m, 1 = s, 2 = t0
-  int n = sum(idx);
-  NumericVector out(n);
+  const int n_rows = rts.size();
+  NumericVector out(sum(idx));
+  const double* rt = rts.begin();
+  const double* m  = &pars(0, 0);
+  const double* s  = &pars(0, 1);
+  const double* t0 = &pars(0, 2);
+  int* idx_ptr = LOGICAL(idx);
+  int* ok_ptr = LOGICAL(is_ok);
   int k = 0;
-  for(int i = 0; i < rts.length(); i++){
-    if(idx[i] == TRUE){
-      if(NumericVector::is_na(pars(i,0))){
+  for(int i = 0; i < n_rows; i++){
+    if(idx_ptr[i]){
+      if(R_IsNA(m[i])){
         out[k] = 0; // This is a bit tricky, but helps with assigning missing values a zero (instead of min_ll value)
         // which is important for RACE
-      } else if((rts[i] - pars(i,2) > 0) && (is_ok[i] == TRUE)){
-        out[k] = R::plnorm(rts[i] - pars(i,2), pars(i, 0), pars(i, 1), TRUE, FALSE);
+      } else if((rt[i] - t0[i] > 0.0) && ok_ptr[i]){
+        out[k] = R::plnorm(rt[i] - t0[i], m[i], s[i], TRUE, FALSE);
       } else{
         out[k] = min_ll;
       }
@@ -29,16 +35,22 @@ NumericVector plnr_c(NumericVector rts, NumericMatrix pars, LogicalVector idx, d
 }
 
 NumericVector dlnr_c(NumericVector rts, NumericMatrix pars, LogicalVector idx, double min_ll, LogicalVector is_ok){
-  int n = sum(idx);
-  NumericVector out(n);
+  const int n_rows = rts.size();
+  NumericVector out(sum(idx));
+  const double* rt = rts.begin();
+  const double* m  = &pars(0, 0);
+  const double* s  = &pars(0, 1);
+  const double* t0 = &pars(0, 2);
+  int* idx_ptr = LOGICAL(idx);
+  int* ok_ptr = LOGICAL(is_ok);
   int k = 0;
-  for(int i = 0; i < rts.length(); i++){
-    if(idx[i] == TRUE){
-      if(NumericVector::is_na(pars(i,0))){
+  for(int i = 0; i < n_rows; i++){
+    if(idx_ptr[i]){
+      if(R_IsNA(m[i])){
         out[k] = 0; // This is a bit tricky, but helps with assigning missing values a zero (instead of min_ll value)
         // which is important for RACE
-      } else if((rts[i] - pars(i,2) > 0) && (is_ok[i] == TRUE)){
-        out[k] = R::dlnorm(rts[i] - pars(i,2), pars(i, 0), pars(i, 1), FALSE);
+      } else if((rt[i] - t0[i] > 0.0) && ok_ptr[i]){
+        out[k] = R::dlnorm(rt[i] - t0[i], m[i], s[i], FALSE);
       } else{
         out[k] = min_ll;
       }

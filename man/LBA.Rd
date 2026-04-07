@@ -6,6 +6,10 @@
 \usage{
 LBA(posdrift = TRUE)
 }
+\arguments{
+\item{posdrift}{Logical. If TRUE (default), enforces positive drift rates by conditioning
+on the drift rate being positive. Set to FALSE to allow negative drift rates (implicit omissions).}
+}
 \value{
 A model list with all the necessary functions for EMC2 to sample
 }

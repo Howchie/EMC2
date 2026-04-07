@@ -21,6 +21,18 @@
 using namespace Rcpp;
 //todo check whether all the includes are still required
 
+NumericMatrix get_pars_c_wrapper_oo_core(NumericMatrix particle_matrix,
+                                         DataFrame data,
+                                         NumericVector constants,
+                                         List designs,
+                                         List bounds,
+                                         List transforms,
+                                         List pretransforms,
+                                         Rcpp::Nullable<Rcpp::List> trend,
+                                         bool return_kernel_matrix,
+                                         bool return_all_pars,
+                                         IntegerVector kernel_output_codes);
+
 // [[Rcpp::export]]
 Rcpp::NumericMatrix do_transform(Rcpp::NumericMatrix pars, Rcpp::List transform) {
   // Build the specs for these parameters
@@ -36,7 +48,8 @@ NumericMatrix c_map_p(NumericVector p_vector,
                       int n_trials,
                       DataFrame data,
                       List trend,
-                      const std::vector<TransformSpec>& full_specs) {
+                      const std::vector<TransformSpec>& full_specs,
+                      bool drop_trend_pars=true) {
   
   // Extract information about trends
   const bool has_trend = (trend.length() > 0);
@@ -56,6 +69,18 @@ NumericMatrix c_map_p(NumericVector p_vector,
   const int n_params = p_types.size();
   NumericMatrix pars(n_trials, n_params);
   colnames(pars) = p_types;
+
+  // Build a fast lookup for available particle coefficients.
+  // Some design columns (e.g., contrast coefficients like v_lMd) may be
+  // absent from p_vector in certain call paths and should contribute zero.
+  std::unordered_map<std::string, double> p_lookup;
+  CharacterVector pv_names = p_vector.names();
+  if (pv_names.size() > 0) {
+    p_lookup.reserve(pv_names.size());
+    for (int i = 0; i < pv_names.size(); ++i) {
+      p_lookup[Rcpp::as<std::string>(pv_names[i])] = p_vector[i];
+    }
+  }
   
   // Prepare trend parameter columns when needed
   NumericMatrix trend_pars;
@@ -79,8 +104,10 @@ NumericMatrix c_map_p(NumericVector p_vector,
     NumericMatrix cur_design = designs[i];
     CharacterVector cur_names = colnames(cur_design);
     for (int j = 0; j < cur_design.ncol(); j++) {
-      String cur_name(cur_names[j]);
-      NumericVector p_mult_design(n_trials, p_vector[cur_name]);
+      std::string cur_name = Rcpp::as<std::string>(cur_names[j]);
+      auto it_coef = p_lookup.find(cur_name);
+      if (it_coef == p_lookup.end()) continue;
+      NumericVector p_mult_design(n_trials, it_coef->second);
       if (has_trend && premap) {
         p_mult_design = apply_premap_trends(data, trend, trend_names, cur_name, p_mult_design, trend_pars, p_vector);
       }
@@ -100,7 +127,7 @@ NumericMatrix c_map_p(NumericVector p_vector,
   }
   
   // If premap, trend parameter columns are not part of the final matrix
-  if (has_trend && premap) {
+  if (has_trend && premap && drop_trend_pars) {
     CharacterVector names_premap = collect_trend_param_names_phase(trend, "premap");
     if (names_premap.size() > 0) {
       pars = submat_rcpp_col(pars, !contains_multiple(p_types, names_premap));
@@ -111,7 +138,8 @@ NumericMatrix c_map_p(NumericVector p_vector,
 
 NumericMatrix get_pars_matrix(NumericVector p_vector, NumericVector constants, const std::vector<PreTransformSpec>& p_specs,
                               CharacterVector p_types, List designs, int n_trials, DataFrame data, List trend,
-                              const std::vector<TransformSpec>& full_specs){
+                              const std::vector<TransformSpec>& full_specs,
+                              bool drop_trend_pars=true){
   const bool has_trend = (trend.length() > 0);
   bool pretransform = false;
   bool posttransform = false;
@@ -126,7 +154,7 @@ NumericMatrix get_pars_matrix(NumericVector p_vector, NumericVector constants, c
   NumericVector p_vector_updtd(clone(p_vector));
   p_vector_updtd = c_do_pre_transform(p_vector_updtd, p_specs);
   p_vector_updtd = c_add_vectors(p_vector_updtd, constants);
-  NumericMatrix pars = c_map_p(p_vector_updtd, p_types, designs, n_trials, data, trend, full_specs);
+  NumericMatrix pars = c_map_p(p_vector_updtd, p_types, designs, n_trials, data, trend, full_specs, drop_trend_pars);
   // // Check if pretransform trend applies
   if(pretransform){
     pars = prep_trend_phase(data, trend, pars, "pretransform");
@@ -144,6 +172,7 @@ NumericMatrix get_pars_matrix(NumericVector p_vector, NumericVector constants, c
   // ok is calculated afterwards and Ttransform applied in the function
   return(pars);
 }
+
 
 // SS helper pointer types
 using ss_go_pdf_fn = NumericVector (*)(NumericVector, NumericMatrix, LogicalVector, double);
@@ -559,7 +588,7 @@ double c_log_likelihood_DDM(NumericMatrix pars, DataFrame data,
 // [[Rcpp::export]]
 NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector constants,
                       List designs, String type, List bounds, List transforms, List pretransforms,
-                      CharacterVector p_types, double min_ll, List trend){
+                      CharacterVector p_types, double min_ll, Rcpp::Nullable<Rcpp::List> trend = R_NilValue){
   const int n_particles = p_matrix.nrow();
   const int n_trials = data.nrow();
   NumericVector lls(n_particles);
@@ -575,12 +604,19 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
   std::vector<PreTransformSpec> p_specs;
   std::vector<BoundSpec> bound_specs;
   std::vector<TransformSpec> full_t_specs; // precomputed transform specs for p_types
+  Rcpp::List trend_list;
+  if (!trend.isNull()) {
+    trend_list = Rcpp::List(trend);
+  } else {
+    trend_list = Rcpp::List::create();
+  }
   std::string type_std = Rcpp::as<std::string>(Rcpp::wrap(type));
   if(type_std.find("DDM") != std::string::npos){
     bool gng = (type_std.find("GNG") != std::string::npos);
     IntegerVector expand = data.attr("expand");
     for(int i = 0; i < n_particles; i++){
       p_vector = p_matrix(i, _);
+      p_vector.names() = p_names;
       if(i == 0){
         p_specs = make_pretransform_specs(p_vector, pretransforms);
         // Precompute transform specs for all p_types using a one-time dummy
@@ -588,7 +624,7 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
         colnames(dummy) = p_types;
         full_t_specs = make_transform_specs(dummy, transforms);
       }
-      pars = get_pars_matrix(p_vector, constants, p_specs, p_types, designs, n_trials, data, trend, full_t_specs);
+      pars = get_pars_matrix(p_vector, constants, p_specs, p_types, designs, n_trials, data, trend_list, full_t_specs);
       // Precompute specs
       if (i == 0) {                            // first particle only, just to get colnames
         bound_specs = make_bound_specs(minmax,mm_names,pars,bounds);
@@ -601,6 +637,7 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
     NumericVector y = extract_y(data);
     for(int i = 0; i < n_particles; i++){
       p_vector = p_matrix(i, _);
+      p_vector.names() = p_names;
       if(i == 0){
         p_specs = make_pretransform_specs(p_vector, pretransforms);
         // Precompute transform specs for all p_types using a one-time dummy
@@ -608,7 +645,7 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
         colnames(dummy) = p_types;
         full_t_specs = make_transform_specs(dummy, transforms);
       }
-      pars = get_pars_matrix(p_vector, constants, p_specs, p_types, designs, n_trials, data, trend, full_t_specs);
+      pars = get_pars_matrix(p_vector, constants, p_specs, p_types, designs, n_trials, data, trend_list, full_t_specs);
       // Precompute specs
       if (i == 0) {                            // first particle only, just to get colnames
         bound_specs = make_bound_specs(minmax,mm_names,pars,bounds);
@@ -635,6 +672,7 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
       int idx_gf = is_exg ? 7 : 9;
       for (int i = 0; i < n_particles; ++i) {
         p_vector = p_matrix(i, _);
+        p_vector.names() = p_names;
         if(i == 0){
           p_specs = make_pretransform_specs(p_vector, pretransforms);
           // Precompute transform specs for all p_types using a one-time dummy
@@ -642,7 +680,7 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
           colnames(dummy) = p_types;
           full_t_specs = make_transform_specs(dummy, transforms);
         }
-        pars = get_pars_matrix(p_vector, constants, p_specs, p_types, designs, n_trials, data, trend, full_t_specs);
+        pars = get_pars_matrix(p_vector, constants, p_specs, p_types, designs, n_trials, data, trend_list, full_t_specs);
         if (i == 0) {                            // first particle only, just to get colnames
           bound_specs = make_bound_specs(minmax,mm_names,pars,bounds);
         }
@@ -709,6 +747,7 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
       
     for (int i = 0; i < n_particles; ++i) {
         p_vector = p_matrix(i, Rcpp::_);
+        p_vector.names() = p_names;
         if (i == 0) {
           p_specs = make_pretransform_specs(p_vector, pretransforms);
           // Precompute transform specs for all p_types using a one-time dummy
@@ -716,7 +755,7 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
           colnames(dummy) = p_types;
           full_t_specs = make_transform_specs(dummy, transforms);
         }
-        pars = get_pars_matrix(p_vector, constants, p_specs, p_types, designs, n_trials, data, trend, full_t_specs);
+        pars = get_pars_matrix(p_vector, constants, p_specs, p_types, designs, n_trials, data, trend_list, full_t_specs);
         if (i == 0) {                            // first particle only, just to get colnames
           bound_specs = make_bound_specs(minmax,mm_names,pars,bounds);
         }
@@ -734,58 +773,208 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
   return(lls);
 }
 
+// [[Rcpp::export]]
+NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericVector constants,
+                         List designs, String type, List bounds, List transforms, List pretransforms,
+                         CharacterVector p_types, double min_ll, Rcpp::Nullable<Rcpp::List> trend = R_NilValue) {
+  const int n_particles = particle_matrix.nrow();
+  const int n_trials = data.nrow();
+  NumericVector lls(n_particles);
+  LogicalVector is_ok(n_trials);
+  NumericMatrix pars;
+
+  NumericMatrix minmax = bounds["minmax"];
+  CharacterVector mm_names = colnames(minmax);
+  std::vector<BoundSpec> bound_specs;
+  CharacterVector p_names = colnames(particle_matrix);
+  std::string type_std = Rcpp::as<std::string>(Rcpp::wrap(type));
+
+  NumericMatrix one_particle(1, particle_matrix.ncol());
+  colnames(one_particle) = p_names;
+  IntegerVector kernel_output_codes = IntegerVector::create(1);
+  auto pars_for_particle = [&](int i) -> NumericMatrix {
+    for (int j = 0; j < particle_matrix.ncol(); ++j) {
+      one_particle(0, j) = particle_matrix(i, j);
+    }
+    return get_pars_c_wrapper_oo_core(one_particle, data, constants, designs, bounds, transforms,
+                                      pretransforms, trend, false, false, kernel_output_codes);
+  };
+
+  if (type_std.find("DDM") != std::string::npos) {
+    bool gng = (type_std.find("GNG") != std::string::npos);
+    IntegerVector expand = data.attr("expand");
+    for (int i = 0; i < n_particles; ++i) {
+      pars = pars_for_particle(i);
+      if (i == 0) {
+        bound_specs = make_bound_specs(minmax, mm_names, pars, bounds);
+      }
+      is_ok = c_do_bound(pars, bound_specs);
+      lls[i] = c_log_likelihood_DDM(pars, data, n_trials, expand, min_ll, is_ok, gng);
+    }
+  } else if (type == "MRI" || type == "MRI_AR1") {
+    int n_pars = p_types.length();
+    NumericVector y = extract_y(data);
+    for (int i = 0; i < n_particles; ++i) {
+      pars = pars_for_particle(i);
+      if (i == 0) {
+        bound_specs = make_bound_specs(minmax, mm_names, pars, bounds);
+      }
+      is_ok = c_do_bound(pars, bound_specs);
+      if (type == "MRI") {
+        lls[i] = c_log_likelihood_MRI(pars, y, is_ok, n_trials, n_pars, min_ll);
+      } else {
+        lls[i] = c_log_likelihood_MRI_white(pars, y, is_ok, n_trials, n_pars, min_ll);
+      }
+    }
+  } else if (type_std.find("SS") != std::string::npos) {
+    IntegerVector expand = data.attr("expand");
+    NumericVector lR = data["lR"];
+    int n_lR = unique(lR).length();
+    int n_trials_ss = (n_lR > 0) ? (n_trials / n_lR) : n_trials;
+    bool is_exg = type_std.find("EXG") != std::string::npos;
+    ss_go_pdf_fn go_lpdf_ptr = is_exg ? texg_go_lpdf : rdex_go_lpdf;
+    ss_go_pdf_fn go_lccdf_ptr = is_exg ? texg_go_lccdf : rdex_go_lccdf;
+    ss_stop_surv_fn stop_logsurv_ptr = is_exg ? stop_logsurv_texg_fn : stop_logsurv_rdex_fn;
+    ss_stop_success_fn stop_success_ptr = is_exg ? ss_texg_stop_success_lpdf : ss_rdex_stop_success_lpdf;
+    int idx_tf = is_exg ? 6 : 8;
+    int idx_gf = is_exg ? 7 : 9;
+
+    for (int i = 0; i < n_particles; ++i) {
+      pars = pars_for_particle(i);
+      if (i == 0) {
+        bound_specs = make_bound_specs(minmax, mm_names, pars, bounds);
+      }
+      is_ok = c_do_bound(pars, bound_specs);
+      is_ok = lr_all(is_ok, n_lR);
+      lls[i] = c_log_likelihood_ss(pars, data, n_trials_ss, expand, min_ll, is_ok,
+                                   go_lpdf_ptr, go_lccdf_ptr,
+                                   stop_logsurv_ptr, stop_success_ptr,
+                                   idx_tf, idx_gf);
+    }
+  } else {
+    IntegerVector expand = data.attr("expand");
+    LogicalVector winner = data["winner"];
+
+    RacePdfFun model_dfun_ptr = nullptr;
+    RaceCdfFun model_pfun_ptr = nullptr;
+    RacePdf1Fun pdf1_ptr = nullptr;
+    RaceCdf1Fun cdf1_ptr = nullptr;
+    ContextForRaceModels current_model_ctx;
+    current_model_ctx.min_lik_for_pdf = std::exp(min_ll);
+    current_model_ctx.use_posdrift = true;
+    current_model_ctx.gng = false;
+
+    if (type_std.find("LBA") != std::string::npos) {
+      model_dfun_ptr = &lba_dfun_adapter;
+      model_pfun_ptr = &lba_pfun_adapter;
+      pdf1_ptr = &dlba_scalar;
+      cdf1_ptr = &plba_scalar;
+      if (type_std.find("IO") != std::string::npos) {
+        current_model_ctx.use_posdrift = false;
+      }
+    } else if (type_std.find("RDM") != std::string::npos) {
+      model_dfun_ptr = &rdm_dfun_adapter;
+      model_pfun_ptr = &rdm_pfun_adapter;
+      pdf1_ptr = &drdm_scalar;
+      cdf1_ptr = &prdm_scalar;
+    } else if (type_std.find("LNR") != std::string::npos) {
+      model_dfun_ptr = &lnr_dfun_adapter;
+      model_pfun_ptr = &lnr_pfun_adapter;
+      pdf1_ptr = &dlnr_scalar;
+      cdf1_ptr = &plnr_scalar;
+    } else {
+      Rcpp::stop("Unsupported race model type string in calc_ll_oo: " + type_std);
+    }
+    if (type_std.find("GNG") != std::string::npos) {
+      current_model_ctx.gng = true;
+    }
+
+    NumericVector lR = data["lR"];
+    int n_lR = unique(lR).length();
+    bool all_finite_trials = true;
+    if (data.hasAttribute("emc2_all_finite_trials")) {
+      Rcpp::LogicalVector v = data.attr("emc2_all_finite_trials");
+      if (v.size() == 1 && v[0] != NA_LOGICAL) {
+        all_finite_trials = v[0];
+      }
+    }
+
+    for (int i = 0; i < n_particles; ++i) {
+      pars = pars_for_particle(i);
+      if (i == 0) {
+        bound_specs = make_bound_specs(minmax, mm_names, pars, bounds);
+      }
+      is_ok = c_do_bound(pars, bound_specs);
+      is_ok = lr_all(is_ok, n_lR);
+      lls[i] = c_log_likelihood_race(pars, data,
+                                     model_dfun_ptr, model_pfun_ptr,
+                                     pdf1_ptr, cdf1_ptr,
+                                     n_trials,
+                                     winner, expand, min_ll, is_ok, n_lR,
+                                     &current_model_ctx,
+                                     all_finite_trials);
+    }
+  }
+  return lls;
+}
+
 
 
 // [[Rcpp::export]]
 NumericMatrix get_pars_c_wrapper(NumericMatrix p_matrix, DataFrame data, NumericVector constants,
                                  List designs, List bounds, List transforms, List pretransforms,
-                                 CharacterVector p_types, List trend){
-  // const int n_particles = p_matrix.nrow();
+                                 CharacterVector p_types,
+                                 Rcpp::Nullable<Rcpp::List> trend = R_NilValue,
+                                 bool return_kernel_matrix = false,
+                                 bool drop_trend_pars = true){
+  if (return_kernel_matrix && trend.isNull()) {
+    stop("return_kernel_matrix=TRUE requires a non-NULL 'trend' specification");
+  }
+
   const int n_trials = data.nrow();
-  // NumericVector lls(n_particles);
   NumericVector p_vector(p_matrix.ncol());
   CharacterVector p_names = colnames(p_matrix);
   p_vector.names() = p_names;
   NumericMatrix pars;
 
-  // Once (outside the main loop over particles):
-  // NumericMatrix minmax = bounds["minmax"];
-  // CharacterVector mm_names = colnames(minmax);
   std::vector<PreTransformSpec> p_specs;
-  std::vector<TransformSpec> full_t_specs; // precomputed transform specs for p_types
+  std::vector<TransformSpec> full_t_specs;
 
-  // Extract
   p_vector = p_matrix(0, _);
   p_specs = make_pretransform_specs(p_vector, pretransforms);
   NumericMatrix dummy(1, p_types.size());
   colnames(dummy) = p_types;
   full_t_specs = make_transform_specs(dummy, transforms);
-  pars = get_pars_matrix(p_vector, constants, p_specs, p_types, designs, n_trials, data, trend, full_t_specs);
 
-  // if(type == "DDM"){
-  //   p_vector = p_matrix(0, _);
-  //   p_specs = make_pretransform_specs(p_vector, pretransforms);
-  //   NumericMatrix dummy(1, p_types.size());
-  //   colnames(dummy) = p_types;
-  //   full_t_specs = make_transform_specs(dummy, transforms);
-  //   pars = get_pars_matrix(p_vector, constants, p_specs, p_types, designs, n_trials, data, trend, full_t_specs);
-  // } else if(type == "MRI" || type == "MRI_AR1"){
-  //   p_vector = p_matrix(0, _);
-  //   p_specs = make_pretransform_specs(p_vector, pretransforms);
-  //   // Precompute transform specs for all p_types using a one-time dummy
-  //   NumericMatrix dummy(1, p_types.size());
-  //   colnames(dummy) = p_types;
-  //   full_t_specs = make_transform_specs(dummy, transforms);
-  //   pars = get_pars_matrix(p_vector, constants, p_specs, p_types, designs, n_trials, data, trend, full_t_specs);
-  // } else {
-  //   p_vector = p_matrix(0, _);
-  //   p_specs = make_pretransform_specs(p_vector, pretransforms);
-  //   NumericMatrix dummy(1, p_types.size());
-  //   colnames(dummy) = p_types;
-  //   full_t_specs = make_transform_specs(dummy, transforms);
-  //   pars = get_pars_matrix(p_vector, constants, p_specs, p_types, designs, n_trials, data, trend, full_t_specs);
-  // }
-  return(pars);
+  Rcpp::List trend_list;
+  if (!trend.isNull()) {
+    trend_list = Rcpp::List(trend);
+  } else {
+    trend_list = Rcpp::List::create();
+  }
+
+  pars = get_pars_matrix(p_vector, constants,
+                         p_specs, p_types,
+                         designs, n_trials, data,
+                         trend_list, full_t_specs, drop_trend_pars);
+  return pars;
+}
+
+// [[Rcpp::export]]
+NumericMatrix get_pars_c_wrapper_oo(NumericMatrix particle_matrix,
+                                    DataFrame data,
+                                    NumericVector constants,
+                                    List designs,
+                                    List bounds,
+                                    List transforms,
+                                    List pretransforms,
+                                    Rcpp::Nullable<Rcpp::List> trend = R_NilValue,
+                                    bool return_kernel_matrix = false,
+                                    bool return_all_pars = false,
+                                    IntegerVector kernel_output_codes = 1) {
+  return get_pars_c_wrapper_oo_core(particle_matrix, data, constants, designs, bounds, transforms,
+                                    pretransforms, trend, return_kernel_matrix,
+                                    return_all_pars, kernel_output_codes);
 }
 
 // gsl adapter for integrals - uses scalar, Rcpp-independent functions for speed
@@ -1262,7 +1451,7 @@ double c_log_likelihood_race(
         lds[i] = safe_log1m_race(cdf);
       }
     }
-    
+
     // Apply truncation correction and calculate log-likelihood for each trial in the batch
     const int n_finite_unique = use_full_finite_batch
     ? n_unique_trials

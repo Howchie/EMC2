@@ -39,9 +39,11 @@ default list structure: list(p=.25,SSD0=.25,stairstep=.05,stairmin=0,stairmax=In
 
 \item{return_functions}{Logical, should factors created by functions be returned, default FALSE.}
 
-\item{...}{Additional optional arguments}
+\item{TC}{Optional. Truncation/censoring specification list for the response time distribution.}
 
-\item{missing}{List named with the arguments of the make_missing function (except data).}
+\item{...}{Additional optional arguments. Includes \code{missing} (a list named with arguments
+of \code{make_missing} except \code{data}), \code{return_trialwise_parameters} (logical),
+and \code{conditional_on_data} (logical).}
 }
 \value{
 A data frame with simulated data

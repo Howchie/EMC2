@@ -371,6 +371,12 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
 
   simulate_unconditional_on_data <- return_trialwise_parameters <- FALSE
   dots_local <- list(...)
+  use_vectorised <- isTRUE(dots_local$use_vectorised)
+  if ("kernel_output_codes" %in% names(dots_local)) {
+    kernel_output_codes <- dots_local$kernel_output_codes
+  } else {
+    kernel_output_codes <- c(1L)
+  }
   if (isFALSE(dots_local$conditional_on_data)) {
     simulate_unconditional_on_data <- TRUE
   } else if (!is.null(dots_local$conditional_on_data)) {
@@ -390,10 +396,19 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
       data_list <- vector("list", expand)
       twp_last <- NULL
       for (rep_i in seq_len(expand)) {
-        res_i <- make_data_unconditional(
-          data = data, pars = pars, design = design, model = model,
-          return_trialwise_parameters = (rep_i == expand && return_trialwise_parameters)
-        )
+        if (use_vectorised) {
+          res_i <- make_data_unconditional_vectorised(
+            data = data, pars = pars, design = design, model = model,
+            return_trialwise_parameters = (rep_i == expand && return_trialwise_parameters),
+            kernel_output_codes = kernel_output_codes
+          )
+        } else {
+          res_i <- make_data_unconditional(
+            data = data, pars = pars, design = design, model = model,
+            return_trialwise_parameters = (rep_i == expand && return_trialwise_parameters),
+            kernel_output_codes = kernel_output_codes
+          )
+        }
         data_list[[rep_i]] <- cbind(rep = rep_i, res_i$data)
         if (rep_i == expand) twp_last <- res_i$trialwise_parameters
       }
@@ -401,10 +416,19 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
       rownames(data) <- NULL
       trialwise_parameters <- twp_last
     } else {
-      res <- make_data_unconditional(
-        data = data, pars = pars, design = design, model = model,
-        return_trialwise_parameters = return_trialwise_parameters
-      )
+      if (use_vectorised) {
+        res <- make_data_unconditional_vectorised(
+          data = data, pars = pars, design = design, model = model,
+          return_trialwise_parameters = return_trialwise_parameters,
+          kernel_output_codes = kernel_output_codes
+        )
+      } else {
+        res <- make_data_unconditional(
+          data = data, pars = pars, design = design, model = model,
+          return_trialwise_parameters = return_trialwise_parameters,
+          kernel_output_codes = kernel_output_codes
+        )
+      }
       data <- res$data
       trialwise_parameters <- res$trialwise_parameters
     }
