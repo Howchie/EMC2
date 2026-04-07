@@ -6,6 +6,7 @@
 #include <unordered_map>
 #include <vector>
 #include <functional>
+#include "utility_types.h"
 using namespace Rcpp;
 
 LogicalVector contains(CharacterVector sv, std::string txt) {
@@ -333,16 +334,6 @@ LogicalVector lr_all(LogicalVector ok, int n_side)
   return out;
 }
 
-// For do_bounds
-struct BoundSpec {
-  int col_idx;         // which column in 'pars'
-  double min_val;
-  double max_val;
-  bool has_exception;
-  double exception_val;
-};
-
-
 std::vector<BoundSpec> make_bound_specs(NumericMatrix minmax,
                                         CharacterVector minmax_colnames,
                                         NumericMatrix pars,
@@ -390,20 +381,6 @@ std::vector<BoundSpec> make_bound_specs(NumericMatrix minmax,
   }
   return specs;
 }
-
-// For transforms
-enum TransformCode {
-  IDENTITY = 0,
-  EXP      = 1,
-  PNORM    = 2
-};
-
-struct TransformSpec {
-  int col_idx;        // which column in 'pars'
-  TransformCode code; // e.g. EXP, PNORM, ...
-  double lower;
-  double upper;
-};
 
 std::vector<TransformSpec> make_transform_specs(NumericMatrix pars, List transform)
 {
@@ -504,18 +481,6 @@ inline std::vector<TransformSpec> make_transform_specs_from_full(
   return specs;
 }
 
-
-// For pretransform
-enum PreTFCode { PTF_EXP = 1, PTF_PNORM = 2, PTF_NONE = 0 };
-
-struct PreTransformSpec {
-  int index;       // index in p_vector
-  PreTFCode code;
-  double lower;
-  double upper;
-  // Possibly store the original name if needed
-};
-
 std::vector<PreTransformSpec> make_pretransform_specs(NumericVector p_vector, List transform)
 {
   // e.g. transform["func"], transform["lower"], transform["upper"]
@@ -572,6 +537,7 @@ std::vector<PreTransformSpec> make_pretransform_specs(NumericVector p_vector, Li
   }
   return specs;
 }
+
 LogicalVector c_do_bound(NumericMatrix pars,
                          const std::vector<BoundSpec>& specs)
 {

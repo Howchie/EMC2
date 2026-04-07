@@ -4,19 +4,9 @@
 #include <RcppArmadillo.h>
 #include <unordered_set>
 #include "ParamTable.h"
+#include "utility_types.h"
 
-enum TransformCode {
-  IDENTITY = 0,
-  EXP      = 1,
-  PNORM    = 2
-};
-
-struct TransformSpec {
-  int col_idx;
-  TransformCode code;
-  double lower;
-  double upper;
-};
+// TransformCode, TransformSpec, PreTransformSpec, BoundSpec are defined in utility_types.h
 
 std::vector<TransformSpec>
 make_transform_specs_for_paramtable(const ParamTable& pt,

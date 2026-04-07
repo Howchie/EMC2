@@ -6,3 +6,8 @@
 *.RData
 .Rproj.user
 /.Rtmp/
+EMC2.Rcheck/
+EMC2_*.tar.gz
+tests/testthat/_problems/
+src/*.o
+src/*.so
