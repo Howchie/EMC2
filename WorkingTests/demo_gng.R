@@ -149,6 +149,7 @@ set.seed(123)
 # Test 1: Mild upper Censor (GNG must have a finite UC)
 # With current design +  parameters burn is a struggle and sampling takes a while
 # I think sv:lM, v_match:S, B_lR it's hard to identify, but does converge. Parameters aren't "right" but the posterior predicted data is.
+# See gng_unidentifiabilities.R for more thorough tests
 res_lba_gng <- run_lba_demo(
   n_trials = 10000,
   UC = 3,
@@ -178,7 +179,7 @@ res_lba_gng_hierarchical <- run_lba_demo(
 
 #### DDM ----
 
-run_ddmgng_demo <- function(
+run_ddmgng_R_demo <- function(
     n_trials = 500, UC = 3, LC = NULL, range = 1,
     cores_for_chains = 3, layout = c(2, 3), natural = TRUE, cores_per_chain = 3,
     print_stats = TRUE, label = NULL
@@ -186,22 +187,22 @@ run_ddmgng_demo <- function(
   timeout_val <- if (is.finite(UC)) UC else 3
 
   designDDM <- design(
-    factors = list(subjects = 1, S = c("go", "nogo")),
-    Rlevels = c("go", "nogo"),
+    factors = list(subjects = 1, S = c("go", "no")),
+    Rlevels = c("go", "no"),
     model = DDMGNG,
     functions = list(
       TIMEOUT = function(d) rep(timeout_val, nrow(d)),
-      Rnogo = function(d) factor(rep("nogo", nrow(d)), levels = c("go", "nogo")),
-      Rgo = function(d) factor(rep("go", nrow(d)), levels = c("go", "nogo"))
+      Rnogo = function(d) factor(rep("no", nrow(d)), levels = c("go", "no")),
+      Rgo = function(d) factor(rep("go", nrow(d)), levels = c("go", "no"))
     ),
     formula = list(v ~ 0 + S, a ~ 1, t0 ~ 1, Z ~ 1),
     constants = c(s = log(1), sv = log(0), SZ = qnorm(0), st0 = log(0))
   )
 
   p_vector <- sampled_pars(designDDM, doMap = FALSE)
-  if ("v_Sgo" %in% names(p_vector)) p_vector[["v_Sgo"]] <- 2.0
-  if ("v_Snogo" %in% names(p_vector)) p_vector[["v_Snogo"]] <- -2.0
-  if ("a" %in% names(p_vector)) p_vector[["a"]] <- log(1.2)
+  if ("v_Sgo" %in% names(p_vector)) p_vector[["v_Sgo"]] <- -1.5
+  if ("v_Sno" %in% names(p_vector)) p_vector[["v_Sno"]] <- 1.5
+  if ("a" %in% names(p_vector)) p_vector[["a"]] <- log(2)
   if ("t0" %in% names(p_vector)) p_vector[["t0"]] <- log(0.2)
   if ("Z" %in% names(p_vector)) p_vector[["Z"]] <- qnorm(0.5)
 
@@ -210,7 +211,7 @@ run_ddmgng_demo <- function(
     n_trials = n_trials,
     TC = list(UC = UC, LC = LC)
   )
-
+  
   if (print_stats) {
     cat("\n--- DDM GNG demo ---\n")
     cat("Counts by response (NA = omission):\n")
@@ -228,7 +229,7 @@ run_ddmgng_demo <- function(
     rtc <- profile_plot_test(
       dat, designDDM, p_vector,
       n_cores = cores_for_chains, range = range,
-      layout = NULL, use_c = TRUE,
+      layout = NULL, use_c = FALSE,
       figure_title = paste("C++:", label), natural = natural
     )
   })
@@ -242,7 +243,7 @@ run_ddmgng_demo <- function(
           iter = 1000,
           max_gd = 1.10,
           max_flat_loc = 0.5,
-          flat_selection = c("alpha", "subj_ll", "theta_mu"),
+          flat_selection = c("alpha", "subj_ll"),
           flat_p1 = 1/3,
           flat_p2 = 1/3,
           max_sample_iter = 5000
@@ -260,26 +261,18 @@ run_ddmgng_demo <- function(
   invisible(list(data = dat, design = designDDM, true_pars = p_vector))
 }
 
-res_ddm_gng <- run_ddmgng_demo(
+res_ddm_gng_R <- run_ddmgng_R_demo(
   n_trials = 10000,
-  UC = 3,
-  label = "GNG-DDM UC=3"
+  UC = 2,
+  label = "GNG-DDM UC=2"
 )
-if (RUN_FITS) print(recovery(res_ddm_gng$emc, true_pars = res_ddm_gng$true_pars))
-if (RUN_FITS) plot_cdf(res_ddm_gng$data, post_predict = res_ddm_gng$pp, functions = list(Correct = Cfun), defective_factor = "Correct", factors = "S")
-if (RUN_FITS) plot_stat(res_ddm_gng$data, post_predict = res_ddm_gng$pp, factors = "S", stat_name = "MeanCorrect",
+if (RUN_FITS) print(recovery(res_ddm_gng_R$emc, true_pars = res_ddm_gng_R$true_pars))
+if (RUN_FITS) plot_cdf(res_ddm_gng_R$data, post_predict = res_ddm_gng_R$pp, functions = list(Correct = Cfun), defective_factor = "Correct", factors = "S")
+if (RUN_FITS) plot_stat(res_ddm_gng_R$data, post_predict = res_ddm_gng_R$pp, factors = "S", stat_name = "MeanCorrect",
                         stat_fun = function(d) mean(d$Correct, na.rm = TRUE), functions = list(Correct = Cfun))
 
-res_ddm_gng_lc <- run_ddmgng_demo(
-  n_trials = 10000,
-  UC = 3,
-  LC = 0.3,
-  label = "GNG-DDM UC=3, LC=.3"
-)
-if (RUN_FITS) print(recovery(res_ddm_gng_lc$emc, true_pars = res_ddm_gng_lc$true_pars))
-
-# Canonical C++ GNG path: use DDM() with any Rlevel == "nogo"
-run_ddm_canonical_demo <- function(
+# C++ GNG path: use DDM() with any Rlevel == "nogo"
+run_ddmgng_C_demo <- function(
     n_trials = 500, UC = 3, LC = NULL, range = 1,
     cores_for_chains = 3, layout = c(2, 3), natural = TRUE, cores_per_chain = 3,
     print_stats = TRUE, label = NULL
@@ -293,9 +286,9 @@ run_ddm_canonical_demo <- function(
   )
 
   p_vector <- sampled_pars(designDDM, doMap = FALSE)
-  if ("v_Sgo" %in% names(p_vector)) p_vector[["v_Sgo"]] <- 2.0
-  if ("v_Snogo" %in% names(p_vector)) p_vector[["v_Snogo"]] <- -2.0
-  if ("a" %in% names(p_vector)) p_vector[["a"]] <- log(1.2)
+  if ("v_Sgo" %in% names(p_vector)) p_vector[["v_Sgo"]] <- -1.5
+  if ("v_Snogo" %in% names(p_vector)) p_vector[["v_Snogo"]] <- 1.5
+  if ("a" %in% names(p_vector)) p_vector[["a"]] <- log(2)
   if ("t0" %in% names(p_vector)) p_vector[["t0"]] <- log(0.2)
   if ("Z" %in% names(p_vector)) p_vector[["Z"]] <- qnorm(0.5)
 
@@ -336,7 +329,7 @@ run_ddm_canonical_demo <- function(
           iter = 1000,
           max_gd = 1.10,
           max_flat_loc = 0.5,
-          flat_selection = c("alpha", "subj_ll", "theta_mu"),
+          flat_selection = c("alpha", "subj_ll"),
           flat_p1 = 1/3,
           flat_p2 = 1/3,
           max_sample_iter = 5000
@@ -354,18 +347,21 @@ run_ddm_canonical_demo <- function(
   invisible(list(data = dat, design = designDDM, true_pars = p_vector))
 }
 
-res_ddm_canonical <- run_ddm_canonical_demo(
+res_ddmgng_c <- run_ddmgng_C_demo(
   n_trials = 10000,
-  UC = 3,
-  label = "GNG-DDM(canonical) UC=3"
+  UC = 2,
+  label = "GNG-DDM (C++) UC=2"
 )
-if (RUN_FITS) print(recovery(res_ddm_canonical$emc, true_pars = res_ddm_canonical$true_pars))
+if (RUN_FITS) print(recovery(res_ddmgng_c$emc, true_pars = res_ddmgng_c$true_pars))
+if (RUN_FITS) plot_cdf(res_ddmgng_c$data, post_predict = res_ddmgng_c$pp, functions = list(Correct = Cfun), defective_factor = "Correct", factors = "S")
+if (RUN_FITS) plot_stat(res_ddmgng_c$data, post_predict = res_ddmgng_c$pp, factors = "S", stat_name = "MeanCorrect",
+                        stat_fun = function(d) mean(d$Correct, na.rm = TRUE), functions = list(Correct = Cfun))
 
-res_ddm_canonical_lc <- run_ddm_canonical_demo(
+res_ddmgng_c_lc <- run_ddmgng_C_demo(
   n_trials = 10000,
-  UC = 3,
+  UC = 2,
   LC = 0.3,
-  label = "GNG-DDM(canonical) UC=3, LC=.3"
+  label = "GNG-DDM (C++) UC=2, LC=.3"
 )
 if (RUN_FITS) print(recovery(res_ddm_canonical_lc$emc, true_pars = res_ddm_canonical_lc$true_pars))
 

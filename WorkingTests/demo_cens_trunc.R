@@ -1,3 +1,6 @@
+## This script demonstrates censoring and/or truncation handling for all race models (LBA,RDM,LNR) and the DDM (all in C++)
+# Also evidences defective cdf/density/stat calls work ok for data that includes omissions
+
 rm(list=ls())
 library(EMC2)
 source("WorkingTests/test_likelihood_plotfuns_ah.R")
@@ -176,6 +179,7 @@ res_cens <- run_lba_demo(
 ## Same plot-code can be used anywhere
 if (RUN_FITS) print(recovery(res_cens$emc, true_pars = res_cens$true_pars))
 if (RUN_FITS) plot_cdf(res_cens$data, post_predict = res_cens$pp, functions = list(Correct = Cfun), defective_factor = "Correct", factors = "S")
+if (RUN_FITS) plot_density(res_cens$data, post_predict = res_cens$pp, functions = list(Correct = Cfun), defective_factor = "Correct", factors = "S")
 if (RUN_FITS) plot_stat(res_cens$data, post_predict = res_cens$pp, factors = "S", stat_name = "MeanCorrect_Finite",
                         stat_fun = function(d) mean(d$Correct,na.rm=TRUE), functions = list(Correct = Cfun))
 if (RUN_FITS) plot_stat(res_cens$data, post_predict = res_cens$pp, factors = "S", stat_name = "MeanOmissions",
@@ -406,8 +410,8 @@ if (RUN_FITS) print(recovery(res_ddm_lc$emc, true_pars = res_ddm_lc$true_pars))
 # 4. both censor bounds
 res_ddm_both <- run_DDM_demo(
   n_trials = 10000,
-  LC = 0.5,
-  UC = 1.6,
+  LC = 0.55,
+  UC = 1.3,
   label = "ddm_both"
 )
 if (RUN_FITS) print(recovery(res_ddm_both$emc, true_pars = res_ddm_both$true_pars))
@@ -432,8 +436,8 @@ if (RUN_FITS) print(recovery(res_ddm_lt$emc, true_pars = res_ddm_lt$true_pars))
 res_ddm_all <- run_DDM_demo(
   n_trials = 10000,
   LT = 0.30,
-  LC = 0.35,
-  UC = 1.6,
+  LC = 0.55,
+  UC = 1.35,
   UT = 1.8,
   label = "ddm_all"
 )

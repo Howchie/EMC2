@@ -651,11 +651,9 @@ double c_log_likelihood_DDM(NumericMatrix pars, DataFrame data,
           if (!r_known) {
             lls[i] = log_interval_mass(logF_UC_all, logF_UT_all);
           } else if (r_idx == 1) {
-            const double logF_UT = R_FINITE(UT[i]) ? logF_UT_1[i] : 0.0;
-            lls[i] = log_interval_mass(logF_UC_1[i], logF_UT);
+            lls[i] = log_interval_mass(logF_UC_1[i], logF_UT_1[i]);
           } else {
-            const double logF_UT = R_FINITE(UT[i]) ? logF_UT_2[i] : 0.0;
-            lls[i] = log_interval_mass(logF_UC_2[i], logF_UT);
+            lls[i] = log_interval_mass(logF_UC_2[i], logF_UT_2[i]);
           }
         } else {
           // rt == NA: union of left and right censored intervals
@@ -664,14 +662,12 @@ double c_log_likelihood_DDM(NumericMatrix pars, DataFrame data,
             const double ll_right = log_interval_mass(logF_UC_all, logF_UT_all);
             lls[i] = log_sum_exp(ll_left, ll_right);
           } else if (r_idx == 1) {
-            const double logF_UT = R_FINITE(UT[i]) ? logF_UT_1[i] : 0.0;
             const double ll_left = log_interval_mass(logF_LT_1[i], logF_LC_1[i]);
-            const double ll_right = log_interval_mass(logF_UC_1[i], logF_UT);
+            const double ll_right = log_interval_mass(logF_UC_1[i], logF_UT_1[i]);
             lls[i] = log_sum_exp(ll_left, ll_right);
           } else {
-            const double logF_UT = R_FINITE(UT[i]) ? logF_UT_2[i] : 0.0;
             const double ll_left = log_interval_mass(logF_LT_2[i], logF_LC_2[i]);
-            const double ll_right = log_interval_mass(logF_UC_2[i], logF_UT);
+            const double ll_right = log_interval_mass(logF_UC_2[i], logF_UT_2[i]);
             lls[i] = log_sum_exp(ll_left, ll_right);
           }
         }
