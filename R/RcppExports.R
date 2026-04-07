@@ -237,10 +237,6 @@ get_pars_c_wrapper_oo <- function(particle_matrix, data, constants, designs, bou
     .Call(`_EMC2_get_pars_c_wrapper_oo`, particle_matrix, data, constants, designs, bounds, transforms, pretransforms, trend, return_kernel_matrix, return_all_pars, kernel_output_codes)
 }
 
-EMC2_call_custom_trend <- function(trend_pars, input, funptrSEXP) {
-    .Call(`_EMC2_EMC2_call_custom_trend`, trend_pars, input, funptrSEXP)
-}
-
 run_trend_rcpp <- function(data, trend, param, trend_pars, pars_full, return_kernel = FALSE) {
     .Call(`_EMC2_run_trend_rcpp`, data, trend, param, trend_pars, pars_full, return_kernel)
 }

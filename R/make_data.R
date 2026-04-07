@@ -96,6 +96,23 @@ make_missing <- function(data, LT = NULL, UT = NULL, LC = NULL, UC = NULL,
   UT <- get_missing(UT, data, "UT",Inf,"numeric")
   data$UT[!no_truncate] <- as.numeric(UT[!no_truncate])
 
+  # Go/no-go data are defined by explicit non-responses. Truncation is not a
+  # coherent missing-data mechanism in this setting, so disable LT/UT globally.
+  is_gng_data <- FALSE
+  if ("R" %in% names(data)) {
+    if (is.factor(data$R)) is_gng_data <- "nogo" %in% levels(data$R)
+    if (!is_gng_data) is_gng_data <- any(data$R == "nogo", na.rm = TRUE)
+  }
+  if (is_gng_data) {
+    requested_trunc <- any(((data$LT != 0) | is.finite(data$UT)) & !no_truncate, na.rm = TRUE)
+    if (requested_trunc) {
+      warning("Ignoring LT/UT truncation for go/no-go data (R includes 'nogo').")
+    }
+    no_truncate[] <- TRUE
+    data$LT[] <- 0
+    data$UT[] <- Inf
+  }
+
 
   no_censor <- get_missing(no_censor, data, "no_censor",FALSE,"logical")
   LC <- get_missing(LC, data, "LC",0,"numeric")

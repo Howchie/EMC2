@@ -11,3 +11,4 @@ EMC2_*.tar.gz
 tests/testthat/_problems/
 src/*.o
 src/*.so
+/DDM_Censoring
