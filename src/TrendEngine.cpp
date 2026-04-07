@@ -296,6 +296,9 @@ TrendPlan::TrendPlan(Rcpp::Nullable<Rcpp::List> trend_,
     TrendPhase phase = parse_phase(Rcpp::as<std::string>(tr_i["phase"]));
     std::string kernel_name = Rcpp::as<std::string>(tr_i["kernel"]);
     std::string base_name   = Rcpp::as<std::string>(tr_i["base"]);
+    bool ffill_na = tr_i.containsElementNamed("ffill_na") &&
+      !Rf_isNull(tr_i["ffill_na"]) &&
+      Rcpp::as<bool>(tr_i["ffill_na"]);
 
     // Build one TrendOpSpec for this entry. The TrendOpSpec contains one base and a group of kernels
     TrendOpSpec op;
@@ -340,6 +343,7 @@ TrendPlan::TrendPlan(Rcpp::Nullable<Rcpp::List> trend_,
       KernelSlotSpec slot;
       slot.kernel      = kernel_name;
       slot.kernel_type = ktype;
+      slot.ffill_na    = ffill_na;
       slot.input_kind  = InputKind::Combined;
 
       // custom_ptr is stored as an attribute on the trend spec entry
@@ -378,6 +382,7 @@ TrendPlan::TrendPlan(Rcpp::Nullable<Rcpp::List> trend_,
               KernelSlotSpec slot;
               slot.kernel      = kernel_name;
               slot.kernel_type = ktype;
+              slot.ffill_na    = ffill_na;
               slot.input_kind  = InputKind::Covariate;
 
               // spec copy with *single* covariate name
@@ -419,6 +424,7 @@ TrendPlan::TrendPlan(Rcpp::Nullable<Rcpp::List> trend_,
             KernelSlotSpec slot;
             slot.kernel        = kernel_name;
             slot.kernel_type   = ktype;
+            slot.ffill_na      = ffill_na;
             slot.input_kind    = InputKind::ParInput;
             slot.par_input_name = par_nm;
             slot.kernel_input  = NumericMatrix(data_.nrow(), 1); // initialize empty matrix
@@ -655,6 +661,18 @@ void TrendRuntime::run_kernels_for_op(TrendOpRuntime& op,
     k_rt.kernel_ptr->reset();
     k_rt.kernel_ptr->run(kp_view, input, spec.comp_index);
 
+    bool needs_output_ffill =
+      kspec.ffill_na &&
+      input.ncol() == 1 &&
+      kspec.kernel_type != KernelType::SimpleDelta &&
+      kspec.kernel_type != KernelType::Delta2Kernel &&
+      kspec.kernel_type != KernelType::Delta2LR &&
+      kspec.kernel_type != KernelType::Custom;
+
+    if (needs_output_ffill) {
+      k_rt.kernel_ptr->forward_fill_missing_outputs(input, spec.comp_index);
+    }
+
     if (spec.has_at) {
       // record and expand
       k_rt.kernel_ptr->set_expand_idx(spec.expand_idx);
@@ -774,15 +792,18 @@ void TrendRuntime::apply_base_for_op(TrendOpRuntime& op,
       contrib = tmp;
     }
 
-    // Base term from target value
-    double base_term;
-    if (base == "exp_lin" || base == "lin_exp") {
-      base_term = std::exp(p);
+    if (base == "identity") {
+      target_col[r] = contrib;
     } else {
-      base_term = p;
-    }
+      double base_term;
+      if (base == "exp_lin" || base == "lin_exp") {
+        base_term = std::exp(p);
+      } else {
+        base_term = p;
+      }
 
-    target_col[r] = base_term + contrib;
+      target_col[r] = base_term + contrib;
+    }
   }
 }
 

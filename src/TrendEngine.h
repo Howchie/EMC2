@@ -21,6 +21,7 @@ enum class InputKind { None, Covariate, ParInput, MultiCovariate, MultiParInput,
 struct KernelSlotSpec {
   std::string kernel;
   KernelType kernel_type;
+  bool ffill_na = false;
 
   InputKind input_kind = InputKind::None;
 

@@ -95,6 +95,30 @@ public:
   const std::vector<int>& expand_idx() const { return expand_idx_; }
   bool has_expand_idx() const { return has_expand_idx_; }
 
+  void forward_fill_missing_outputs(const Rcpp::NumericMatrix& input,
+                                    const std::vector<int>& comp_idx) {
+    if (input.ncol() < 1) return;
+    if ((int)out_.size() != (int)comp_idx.size()) {
+      Rcpp::stop("BaseKernel::forward_fill_missing_outputs: output length mismatch");
+    }
+
+    for (int j = 0; j < (int)comp_idx.size(); ++j) {
+      int r = comp_idx[j];
+      if (ISNAN(input(r, 0))) {
+        out_[j] = NA_REAL;
+      }
+    }
+
+    double last = NA_REAL;
+    for (int j = 0; j < (int)out_.size(); ++j) {
+      if (ISNAN(out_[j])) {
+        out_[j] = last;
+      } else {
+        last = out_[j];
+      }
+    }
+  }
+
   // Expand compressed out_ (length n_comp) into full length using expand_idx
   void do_expand(const std::vector<int>& expand_idx) {
     const int n_full = static_cast<int>(expand_idx.size());
@@ -870,5 +894,4 @@ KernelType to_kernel_type(const Rcpp::String& k);
 
 std::unique_ptr<BaseKernel> make_kernel(KernelType kt,
                                         SEXP custom_fun = R_NilValue);
-
 

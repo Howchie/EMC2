@@ -31,6 +31,13 @@ make_transform_specs_for_paramtable_from_full(
 void c_do_transform_pt(ParamTable& pt,
                        const std::vector<TransformSpec>& specs);
 
+Rcpp::LogicalVector c_do_bound_pt(const ParamTable& pt, const std::vector<BoundSpec>& specs);
+
+std::vector<BoundSpec> make_bound_specs_pt(Rcpp::NumericMatrix minmax,
+                                           Rcpp::CharacterVector minmax_colnames,
+                                           const ParamTable& pt,
+                                           Rcpp::List bound);
+
 std::vector<TransformSpec> filter_specs_by_param_set(
   const ParamTable& pt,
   const std::vector<TransformSpec>& full_specs,

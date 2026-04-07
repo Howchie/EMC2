@@ -82,6 +82,40 @@ make_transform_specs_for_paramtable_from_full(
   return out;
 }
 
+Rcpp::LogicalVector c_do_bound_pt(const ParamTable& pt,
+                                  const std::vector<BoundSpec>& specs)
+{
+  using Rcpp::LogicalVector;
+  using Rcpp::NumericMatrix;
+
+  const NumericMatrix& base = pt.base;
+  const int nrows = base.nrow();
+
+  LogicalVector result(nrows, true);
+
+  for (std::size_t j = 0; j < specs.size(); ++j) {
+    const BoundSpec& bs = specs[j];
+    const int col_idx   = bs.col_idx;
+    const double min_v  = bs.min_val;
+    const double max_v  = bs.max_val;
+    const bool has_exc  = bs.has_exception;
+    const double exc_val= bs.exception_val;
+
+    for (int i = 0; i < nrows; ++i) {
+      const double val = base(i, col_idx);
+      bool ok = (val > min_v && val < max_v);
+      if (!ok && has_exc) {
+        ok = (val == exc_val);
+      }
+      if (result[i] && !ok) {
+        result[i] = false;
+      }
+    }
+  }
+
+  return result;
+}
+
 void c_do_transform_pt(ParamTable& pt,
                        const std::vector<TransformSpec>& specs)
 {
@@ -145,4 +179,51 @@ std::vector<TransformSpec> complement_specs_for_premap(
     if (premap_set.find(nm) == premap_set.end()) out.push_back(sp);
   }
   return out;
+}
+
+// Same logic as make_bound_specs but indexed into ParamTable base columns
+std::vector<BoundSpec> make_bound_specs_pt(Rcpp::NumericMatrix minmax,
+                                           Rcpp::CharacterVector minmax_colnames,
+                                           const ParamTable& pt,
+                                           Rcpp::List bound)
+{
+  using namespace Rcpp;
+  using std::string;
+
+  bool has_exception =
+    bound.containsElementNamed("exception") &&
+    !Rf_isNull(bound["exception"]);
+
+  std::unordered_map<string, double> exceptionMap;
+  if (has_exception) {
+    NumericVector except_vec = bound["exception"];
+    CharacterVector except_names = except_vec.names();
+    for (int i = 0; i < except_vec.size(); ++i) {
+      exceptionMap[ as<string>(except_names[i]) ] = except_vec[i];
+    }
+  }
+
+  const int ncols = minmax_colnames.size();
+  std::vector<BoundSpec> specs(ncols);
+
+  for (int j = 0; j < ncols; ++j) {
+    string var_name = as<string>(minmax_colnames[j]);
+    int base_idx = pt.base_index_for(var_name);
+
+    BoundSpec s;
+    s.col_idx = base_idx;
+    s.min_val = minmax(0, j);
+    s.max_val = minmax(1, j);
+
+    auto it = exceptionMap.find(var_name);
+    if (it != exceptionMap.end()) {
+      s.has_exception = true;
+      s.exception_val = it->second;
+    } else {
+      s.has_exception = false;
+      s.exception_val = NA_REAL;
+    }
+    specs[j] = s;
+  }
+  return specs;
 }
