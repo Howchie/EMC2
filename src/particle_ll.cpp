@@ -748,11 +748,24 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
     NumericVector lR = data["lR"];
     int n_lR = unique(lR).length();
     
-    bool all_finite_trials = true;
+    bool all_finite_trials = false;
     if (data.hasAttribute("emc2_all_finite_trials")) {
       Rcpp::LogicalVector v = data.attr("emc2_all_finite_trials");
       if (v.size() == 1 && v[0] != NA_LOGICAL) {
         all_finite_trials = v[0];
+      }
+    } else if (n_trials > 0 && n_lR > 0 && (n_trials % n_lR) == 0) {
+      // Fallback for direct calc_ll callers that bypass R-side cache setup.
+      all_finite_trials = true;
+      NumericVector rts = data["rt"];
+      IntegerVector R_idx = data["R"];
+      for (int start_row_idx = 0; start_row_idx < n_trials; start_row_idx += n_lR) {
+        const double rt_j = rts[start_row_idx];
+        const int R_j_idx = R_idx[start_row_idx];
+        if (!(R_FINITE(rt_j) && rt_j > 0.0 && R_j_idx != NA_INTEGER)) {
+          all_finite_trials = false;
+          break;
+        }
       }
     }
       
@@ -871,11 +884,24 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
 
     NumericVector lR = data["lR"];
     int n_lR = unique(lR).length();
-    bool all_finite_trials = true;
+    bool all_finite_trials = false;
     if (data.hasAttribute("emc2_all_finite_trials")) {
       Rcpp::LogicalVector v = data.attr("emc2_all_finite_trials");
       if (v.size() == 1 && v[0] != NA_LOGICAL) {
         all_finite_trials = v[0];
+      }
+    } else if (n_trials > 0 && n_lR > 0 && (n_trials % n_lR) == 0) {
+      // Fallback for direct calc_ll_oo callers that bypass R-side cache setup.
+      all_finite_trials = true;
+      NumericVector rts = data["rt"];
+      IntegerVector R_idx = data["R"];
+      for (int start_row_idx = 0; start_row_idx < n_trials; start_row_idx += n_lR) {
+        const double rt_j = rts[start_row_idx];
+        const int R_j_idx = R_idx[start_row_idx];
+        if (!(R_FINITE(rt_j) && rt_j > 0.0 && R_j_idx != NA_INTEGER)) {
+          all_finite_trials = false;
+          break;
+        }
       }
     }
 
@@ -1367,14 +1393,33 @@ double c_log_likelihood_race(
   std::vector<int> finite_rt_unique_trial_indices;
   std::vector<int> other_unique_trial_indices;
   if (!use_full_finite_batch) {
-    if (dadm.hasAttribute("finite_rt_mask") &&
-        dadm.hasAttribute("finite_rt_unique_trial_indices") &&
-        dadm.hasAttribute("other_unique_trial_indices")) {
+    const bool has_partition_attrs =
+      dadm.hasAttribute("finite_rt_mask") &&
+      dadm.hasAttribute("finite_rt_unique_trial_indices") &&
+      dadm.hasAttribute("other_unique_trial_indices");
+
+    if (has_partition_attrs) {
       finite_rt_mask = dadm.attr("finite_rt_mask");
       Rcpp::IntegerVector finite_attr = dadm.attr("finite_rt_unique_trial_indices");
       Rcpp::IntegerVector other_attr = dadm.attr("other_unique_trial_indices");
       finite_rt_unique_trial_indices.assign(finite_attr.begin(), finite_attr.end());
       other_unique_trial_indices.assign(other_attr.begin(), other_attr.end());
+    } else {
+      // Fallback path for direct calc_ll/calc_ll_oo callers that bypass
+      // .cache_ll_data_attrs(): derive finite/other unique-trial partitions.
+      finite_rt_mask = Rcpp::LogicalVector(n_trials, false);
+      for (int unique_trial_idx = 0; unique_trial_idx < n_unique_trials; ++unique_trial_idx) {
+        const int start_row_idx = unique_trial_idx * n_lR;
+        const int n_lR_j = has_RACE_col ? RACE[start_row_idx] : n_lR;
+        const double rt_j = rts_dadm[start_row_idx];
+        const int R_j_idx = R_idxs_dadm[start_row_idx];
+        if (R_FINITE(rt_j) && rt_j > 0.0 && R_j_idx != NA_INTEGER) {
+          finite_rt_unique_trial_indices.push_back(unique_trial_idx);
+          for (int k = 0; k < n_lR_j; ++k) finite_rt_mask[start_row_idx + k] = true;
+        } else {
+          other_unique_trial_indices.push_back(unique_trial_idx);
+        }
+      }
     }
   }
   double log_Z_this = 0;  // Default inv_Z if no truncation. Should never be used but here as a precaution.
