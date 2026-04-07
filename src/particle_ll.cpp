@@ -189,6 +189,49 @@ static inline double stop_logsurv_rdex_fn(double q, NumericMatrix P) {
   return ptexg(q, P(0, 5), P(0, 6), P(0, 7), P(0, 10), R_PosInf, false, true);
 }
 
+struct RaceModelAdapter {
+  RacePdfFun model_dfun_ptr = nullptr;
+  RaceCdfFun model_pfun_ptr = nullptr;
+  RacePdf1Fun pdf1_ptr = nullptr;
+  RaceCdf1Fun cdf1_ptr = nullptr;
+  ContextForRaceModels ctx;
+};
+
+static inline RaceModelAdapter resolve_race_model_adapter(const std::string& type_std,
+                                                          const std::string& caller) {
+  RaceModelAdapter out;
+  out.ctx.min_lik_for_pdf = std::exp(std::log(1e-10));
+  out.ctx.use_posdrift = true;
+  out.ctx.gng = false;
+
+  if (type_std.find("LBA") != std::string::npos) {
+    out.model_dfun_ptr = &lba_dfun_adapter;
+    out.model_pfun_ptr = &lba_pfun_adapter;
+    out.pdf1_ptr = &dlba_scalar;
+    out.cdf1_ptr = &plba_scalar;
+    if (type_std.find("IO") != std::string::npos) {
+      out.ctx.use_posdrift = false;
+    }
+  } else if (type_std.find("RDM") != std::string::npos) {
+    out.model_dfun_ptr = &rdm_dfun_adapter;
+    out.model_pfun_ptr = &rdm_pfun_adapter;
+    out.pdf1_ptr = &drdm_scalar;
+    out.cdf1_ptr = &prdm_scalar;
+  } else if (type_std.find("LNR") != std::string::npos) {
+    out.model_dfun_ptr = &lnr_dfun_adapter;
+    out.model_pfun_ptr = &lnr_pfun_adapter;
+    out.pdf1_ptr = &dlnr_scalar;
+    out.cdf1_ptr = &plnr_scalar;
+  } else {
+    Rcpp::stop("Unsupported race model type string in %s: %s", caller.c_str(), type_std.c_str());
+  }
+
+  if (type_std.find("GNG") != std::string::npos) {
+    out.ctx.gng = true;
+  }
+  return out;
+}
+
 double c_log_likelihood_ss(
     NumericMatrix pars,
     DataFrame data,
@@ -699,40 +742,8 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
     // Standardize incoming model type string from R
     // For race models: e.g. "LBA", "LBAIO", "LBAGNG", "RDM", "RDMGNG", "LNR", "LNRGNG"
 
-    RacePdfFun model_dfun_ptr = nullptr;
-    RaceCdfFun model_pfun_ptr = nullptr;
-    RacePdf1Fun pdf1_ptr = nullptr;
-    RaceCdf1Fun cdf1_ptr = nullptr;
-    ContextForRaceModels current_model_ctx;
-    current_model_ctx.min_lik_for_pdf = std::exp(min_ll);
-    current_model_ctx.use_posdrift = true; // Default: LBA uses posdrift, RDM/LNR ignore this context field.
-    current_model_ctx.gng = false; // Default: Do not use go/no-go likelihoods by default
-    // Determine adapter functions and specific LBA posdrift setting based on type_std
-    if (type_std.find("LBA") != std::string::npos) {
-        model_dfun_ptr = &lba_dfun_adapter;
-        model_pfun_ptr = &lba_pfun_adapter;
-        pdf1_ptr = &dlba_scalar;
-        cdf1_ptr = &plba_scalar;
-        // Check for the 'IO' (Implicit Omissions / no posdrift) flag in the original type_std
-        if (type_std.find("IO") != std::string::npos) {
-          current_model_ctx.use_posdrift = false;
-        }
-    } else if (type_std.find("RDM") != std::string::npos) {
-        model_dfun_ptr = &rdm_dfun_adapter;
-        model_pfun_ptr = &rdm_pfun_adapter;
-        pdf1_ptr = &drdm_scalar;
-        cdf1_ptr = &prdm_scalar;
-    } else if (type_std.find("LNR") != std::string::npos) {
-        model_dfun_ptr = &lnr_dfun_adapter;
-        model_pfun_ptr = &lnr_pfun_adapter;
-        pdf1_ptr = &dlnr_scalar;
-        cdf1_ptr = &plnr_scalar;
-    } else {
-        Rcpp::stop("Unsupported race model type string in calc_ll: " + type_std);
-    }
-    if (type_std.find("GNG") != std::string::npos) {
-        current_model_ctx.gng = true;
-    }
+    RaceModelAdapter adapter = resolve_race_model_adapter(type_std, "calc_ll");
+    adapter.ctx.min_lik_for_pdf = std::exp(min_ll);
     
     NumericVector lR = data["lR"];
     int n_lR = unique(lR).length();
@@ -762,12 +773,12 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
         is_ok = c_do_bound(pars, bound_specs);
         is_ok = lr_all(is_ok, n_lR);
         lls[i] = c_log_likelihood_race(pars, data,
-                                                    model_dfun_ptr, model_pfun_ptr,
-                                                    pdf1_ptr, cdf1_ptr,
-                                                    n_trials,
-                                                    winner, expand, min_ll, is_ok, n_lR,
-                                                    &current_model_ctx,
-                                                    all_finite_trials);
+                                       adapter.model_dfun_ptr, adapter.model_pfun_ptr,
+                                       adapter.pdf1_ptr, adapter.cdf1_ptr,
+                                       n_trials,
+                                       winner, expand, min_ll, is_ok, n_lR,
+                                       &adapter.ctx,
+                                       all_finite_trials);
       }
   }
   return(lls);
@@ -855,39 +866,8 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
     IntegerVector expand = data.attr("expand");
     LogicalVector winner = data["winner"];
 
-    RacePdfFun model_dfun_ptr = nullptr;
-    RaceCdfFun model_pfun_ptr = nullptr;
-    RacePdf1Fun pdf1_ptr = nullptr;
-    RaceCdf1Fun cdf1_ptr = nullptr;
-    ContextForRaceModels current_model_ctx;
-    current_model_ctx.min_lik_for_pdf = std::exp(min_ll);
-    current_model_ctx.use_posdrift = true;
-    current_model_ctx.gng = false;
-
-    if (type_std.find("LBA") != std::string::npos) {
-      model_dfun_ptr = &lba_dfun_adapter;
-      model_pfun_ptr = &lba_pfun_adapter;
-      pdf1_ptr = &dlba_scalar;
-      cdf1_ptr = &plba_scalar;
-      if (type_std.find("IO") != std::string::npos) {
-        current_model_ctx.use_posdrift = false;
-      }
-    } else if (type_std.find("RDM") != std::string::npos) {
-      model_dfun_ptr = &rdm_dfun_adapter;
-      model_pfun_ptr = &rdm_pfun_adapter;
-      pdf1_ptr = &drdm_scalar;
-      cdf1_ptr = &prdm_scalar;
-    } else if (type_std.find("LNR") != std::string::npos) {
-      model_dfun_ptr = &lnr_dfun_adapter;
-      model_pfun_ptr = &lnr_pfun_adapter;
-      pdf1_ptr = &dlnr_scalar;
-      cdf1_ptr = &plnr_scalar;
-    } else {
-      Rcpp::stop("Unsupported race model type string in calc_ll_oo: " + type_std);
-    }
-    if (type_std.find("GNG") != std::string::npos) {
-      current_model_ctx.gng = true;
-    }
+    RaceModelAdapter adapter = resolve_race_model_adapter(type_std, "calc_ll_oo");
+    adapter.ctx.min_lik_for_pdf = std::exp(min_ll);
 
     NumericVector lR = data["lR"];
     int n_lR = unique(lR).length();
@@ -907,11 +887,11 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
       is_ok = c_do_bound(pars, bound_specs);
       is_ok = lr_all(is_ok, n_lR);
       lls[i] = c_log_likelihood_race(pars, data,
-                                     model_dfun_ptr, model_pfun_ptr,
-                                     pdf1_ptr, cdf1_ptr,
+                                     adapter.model_dfun_ptr, adapter.model_pfun_ptr,
+                                     adapter.pdf1_ptr, adapter.cdf1_ptr,
                                      n_trials,
                                      winner, expand, min_ll, is_ok, n_lR,
-                                     &current_model_ctx,
+                                     &adapter.ctx,
                                      all_finite_trials);
     }
   }
@@ -929,6 +909,10 @@ NumericMatrix get_pars_c_wrapper(NumericMatrix p_matrix, DataFrame data, Numeric
                                  bool drop_trend_pars = true){
   if (return_kernel_matrix && trend.isNull()) {
     stop("return_kernel_matrix=TRUE requires a non-NULL 'trend' specification");
+  }
+  if (return_kernel_matrix) {
+    return get_pars_c_wrapper_oo_core(p_matrix, data, constants, designs, bounds, transforms,
+                                      pretransforms, trend, true, false, IntegerVector::create(1));
   }
 
   const int n_trials = data.nrow();
