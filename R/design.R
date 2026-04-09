@@ -407,9 +407,12 @@ compress_dadm <- function(da,designs,Fcov,Ffun)
   if("UC"%in%colnames(da)) UC=da$UC else{UC <- attr(da,"UC")}; if (is.null(UC)) UC <- Inf
     nacc <- length(unique(da$lR))
     # contract output
-    cells <- paste(apply(do.call(cbind,lapply(designs,function(x){
-                apply(x[attr(x,"expand"),,drop=FALSE],1,paste,collapse="_")})
-                ),1,paste,collapse="+"),
+    design_cells_list <- lapply(designs, function(x) {
+      do.call(paste, c(unname(as.data.frame(x[attr(x, "expand"), , drop = FALSE])), sep = "_"))
+    })
+    design_cells <- do.call(paste, c(design_cells_list, sep = "+"))
+
+    cells <- paste(design_cells,
                 da$subjects, da$R, da$lR, da$rt,
                 LT, UT, LC, UC,  # <--- ZH Added these columns
                 sep="+"
@@ -417,13 +420,16 @@ compress_dadm <- function(da,designs,Fcov,Ffun)
     # Make sure that if row is included for a trial so are other rows
     if (!is.null(Fcov)) {
       if (is.null(names(Fcov))) nFcov <- Fcov else nFcov <- names(Fcov)
-      cells <- paste(cells,apply(da[,nFcov,drop=FALSE],1,paste,collapse="+"),sep="+")
+      cells <- paste(cells, do.call(paste, c(unname(as.data.frame(da[, nFcov, drop = FALSE])), sep = "+")), sep = "+")
     }
     if (!is.null(Ffun))
-      cells <- paste(cells,apply(da[,Ffun,drop=FALSE],1,paste,collapse="+"),sep="+")
+      cells <- paste(cells, do.call(paste, c(unname(as.data.frame(da[, Ffun, drop = FALSE])), sep = "+")), sep = "+")
 
-    if (nacc>1) cells <- paste0(rep(apply(matrix(cells,nrow=nacc),2,paste0,collapse="_"),
-                                    each=nacc),rep(1:nacc,times=length(cells)/nacc),sep="_")
+    if (nacc>1) {
+      cells_mat <- matrix(cells, nrow = nacc)
+      base_cells <- do.call(paste, c(unname(as.data.frame(t(cells_mat))), sep = "_"))
+      cells <- paste0(rep(base_cells, each = nacc), "_", rep(1:nacc, times = length(base_cells)))
+    }
 
     contract <- !duplicated(cells)
     out <- da[contract,,drop=FALSE]
@@ -437,16 +443,15 @@ compress_dadm <- function(da,designs,Fcov,Ffun)
 
     # indices to use to contract further ignoring rt then expand back
     cells_nort <- paste(
-      apply(do.call(cbind,lapply(designs,function(x){
-        apply(x[attr(x,"expand"),,drop=FALSE],1,paste,collapse="_")})
-      ),1,paste,collapse="+"),da$subjects,da$R,da$lR,LT, UT, LC, UC,sep="+")[contract]
+      design_cells, da$subjects, da$R, da$lR, LT, UT, LC, UC, sep = "+"
+    )[contract]
     attr(out,"unique_nort") <- !duplicated(cells_nort)
     attr(out,"expand_nort") <- as.numeric(factor(cells_nort,levels=unique(cells_nort)))
 
     # indices to use to contract ignoring rt and response (R), then expand back
-    cells_nortR <- paste(apply(do.call(cbind,lapply(designs,function(x){
-      apply(x[attr(x,"expand"),,drop=FALSE],1,paste,collapse="_")})),1,paste,collapse="+"),
-      da$subjects,LT, UT, LC, UC,sep="+")[contract] #  ,da$lR
+    cells_nortR <- paste(
+      design_cells, da$subjects, LT, UT, LC, UC, sep = "+"
+    )[contract] #  ,da$lR
     attr(out,"unique_nortR") <- !duplicated(cells_nortR)
     attr(out,"expand_nortR") <- as.numeric(factor(cells_nortR,levels=unique(cells_nortR)))
 
@@ -714,11 +719,12 @@ make_dm <- function(form,da,Clist=NULL,Fcovariates=NULL, add_da = FALSE, all_cel
   compress_dm <- function(dm, da = NULL, all_cells_dm = FALSE)
     # out keeps only unique rows, out[attr(out,"expand"),] gets back original.
   {
-    cells <- apply(dm,1,paste,collapse="_")
+    cells <- do.call(paste, c(unname(as.data.frame(dm)), sep = "_"))
     ass <- attr(dm,"assign")
     contr <- attr(dm,"contrasts")
     if(!is.null(da)){
-      dups <- duplicated(paste0(cells, apply(da, 1, paste0, collapse = "_")))
+      da_cells <- do.call(paste, c(unname(as.data.frame(da)), sep = "_"))
+      dups <- duplicated(paste0(cells, da_cells))
     } else{
       dups <- duplicated(cells)
     }

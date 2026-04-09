@@ -399,7 +399,7 @@ rexGaussian <- function(lR,pars,p_types=c("mu","sigma","tau"),
     stop("pars must have columns ",paste(p_types,collapse = " "))
   dt <- matrix(rexG(dim(pars)[1],pars[,"mu"],pars[,"sigma"],pars[,"tau"]),
                nrow=length(levels(lR)))
-  R <- apply(dt,2,which.min)
+  R <- max.col(-t(dt), ties.method='first')
   pick <- cbind(R,1:dim(dt)[2]) # Matrix to pick winner
   rt <- dt[pick]
   R <- factor(levels(lR)[R],levels=levels(lR))
@@ -543,10 +543,10 @@ rSSexGaussian <- function(data,pars,ok=rep(TRUE,dim(pars)[1]))
   R <- rt <- rep(NA,ntrials)
   
   # All accumulators Inf (usually when both gf and tf)
-  allinf <- apply(dt,2,function(x)all(is.infinite(x)))
+  allinf <- colSums(is.infinite(dt)) == nrow(dt)
   
   # get winner of stop and go where there is a race
-  r <- c(0, acc)[apply(dt[,!allinf,drop=FALSE],2,which.min)]
+  r <- c(0, acc)[max.col(-t(dt[,!allinf,drop=FALSE]), ties.method='first')]
   
   # stop wins
   stopwins <- r==0
@@ -565,7 +565,7 @@ rSSexGaussian <- function(data,pars,ok=rep(TRUE,dim(pars)[1]))
     # stop triggered accumulators that are racing
     rst <- dt[-1,!allinf,drop=FALSE][accST,stopwins,drop=FALSE]
     # stop-triggered winners
-    rtw <- apply(rst,2,which.min)
+    rtw <- max.col(-t(rst), ties.method='first')
     # index for stop-triggered
     R[!allinf][stopwins] <- accST[rtw]
     pick <- cbind(rtw,1:ncol(rst))
@@ -917,10 +917,10 @@ rSShybrid <- function(data,pars,ok=rep(TRUE,dim(pars)[1]))
   R <- rt <- rep(NA,ntrials)
   
   # All accumulators Inf (usually when both gf and tf)
-  allinf <- apply(dt,2,function(x)all(is.infinite(x)))
+  allinf <- colSums(is.infinite(dt)) == nrow(dt)
   
   # get winner of stop and go where there is a race
-  r <- c(0, acc)[apply(dt[,!allinf,drop=FALSE],2,which.min)]
+  r <- c(0, acc)[max.col(-t(dt[,!allinf,drop=FALSE]), ties.method='first')]
   
   # stop wins
   stopwins <- r==0
@@ -939,7 +939,7 @@ rSShybrid <- function(data,pars,ok=rep(TRUE,dim(pars)[1]))
     # stop triggered accumulators that are racing
     rst <- dt[-1,!allinf,drop=FALSE][accST,stopwins,drop=FALSE]
     # stop-triggered winners
-    rtw <- apply(rst,2,which.min)
+    rtw <- max.col(-t(rst), ties.method='first')
     # index for stop-triggered
     R[!allinf][stopwins] <- accST[rtw]
     pick <- cbind(rtw,1:ncol(rst))

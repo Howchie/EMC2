@@ -7,8 +7,6 @@ combine_factors <- function(df, factor_names, new_col_name) {
     df[[new_col_name]] <- "global"
     return(df)
   }
-  # Optimization: Use vectorized do.call(paste, ...) instead of slow row-wise apply(..., 1, paste)
-  # Performance impact: Often >5x speedup for large dataframes
   df[[new_col_name]] <- do.call(paste, c(unname(as.data.frame(df[, factor_names, drop=FALSE])), sep=":"))
   return(df)
 }
@@ -89,8 +87,6 @@ get_defect_scalars <- function(
   if (length(plot_cols_union) == 0) {
     cells <- rep("global", nrow(data))
   } else {
-    # Optimization: Use vectorized do.call(paste, ...) instead of slow row-wise apply(..., 1, paste)
-    # Performance impact: Often >5x speedup for large dataframes
     cells <- do.call(paste, c(unname(as.data.frame(data[, plot_cols_union, drop=FALSE])), sep=" "))
   }
   unique_cells <- unique(cells)
@@ -255,8 +251,6 @@ single_DDM_plot <- function(
     if (length(cols_in_data)==0) {
       row_cells <- rep("global", nrow(dat))
     } else {
-      # Optimization: Use vectorized do.call(paste, ...) instead of slow row-wise apply(..., 1, paste)
-      # Performance impact: Often >5x speedup for large dataframes
       row_cells <- do.call(paste, c(unname(as.data.frame(dat[, cols_in_data, drop=FALSE])), sep=" "))
     }
     unique_cells <- unique(row_cells)
@@ -546,8 +540,6 @@ single_race_plot <- function(
   if(length(cols_in_data)==0) {
     row_cells <- rep("global",nrow(data_sub))
   } else {
-    # Optimization: Use vectorized do.call(paste, ...) instead of slow row-wise apply(..., 1, paste)
-    # Performance impact: Often >5x speedup for large dataframes
     row_cells <- do.call(paste, c(unname(as.data.frame(data_sub[, cols_in_data, drop=FALSE])), sep=" "))
   }
   unique_cells <- unique(row_cells)
@@ -819,8 +811,6 @@ single_LNR_plot <- function(
   if (length(cols_in_data) == 0) {
     row_cells <- rep("global", nrow(data_sub))
   } else {
-    # Optimization: Use vectorized do.call(paste, ...) instead of slow row-wise apply(..., 1, paste)
-    # Performance impact: Often >5x speedup for large dataframes
     row_cells <- do.call(paste, c(unname(as.data.frame(data_sub[, cols_in_data, drop=FALSE])), sep=" "))
   }
   unique_cells <- unique(row_cells)
