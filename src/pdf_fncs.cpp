@@ -28,8 +28,8 @@ double kl(double q, double v, double w, double err) {
 
 /* calculate terms of the sum for short t */
 double logfs(double t, double w, int K) {
-	if (w == 0) return -INFINITY;
-	double	fplus = -INFINITY, fminus = -INFINITY, twot = 2.0 * t;
+	if (w == 0) return R_NegInf;
+	double	fplus = R_NegInf, fminus = R_NegInf, twot = 2.0 * t;
 	if (K > 0)
 		for (int k = K; k >= 1; k--) {
 			double temp1 = w + 2.0 * k, temp2 = w - 2.0 * k;
@@ -43,8 +43,8 @@ double logfs(double t, double w, int K) {
 
 /* calculate terms of the sum for large t */
 double logfl(double q, double v, double w, int K) {
-	if (w == 0) return -INFINITY;
-	double fplus = -INFINITY, fminus = -INFINITY;
+	if (w == 0) return R_NegInf;
+	double fplus = R_NegInf, fminus = R_NegInf;
 	double halfq = q / 2.0;
 	for (int k = K; k >= 1; k--) {
 		double temp = k * M_PI;
@@ -58,7 +58,7 @@ double logfl(double q, double v, double w, int K) {
 /* calculate density */
 double dwiener(double q, double a, double vn, double wn, double sv, double err, int K, int epsFLAG) {
 	if (q == 0.0) {
-		return -INFINITY;
+		return R_NegInf;
 	}
 	double kll, kss, ans, v, w;
 	if(!epsFLAG && K==0) {

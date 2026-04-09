@@ -96,6 +96,23 @@ make_missing <- function(data, LT = NULL, UT = NULL, LC = NULL, UC = NULL,
   UT <- get_missing(UT, data, "UT",Inf,"numeric")
   data$UT[!no_truncate] <- as.numeric(UT[!no_truncate])
 
+  # Go/no-go data are defined by explicit non-responses. Truncation is not a
+  # coherent missing-data mechanism in this setting, so disable LT/UT globally.
+  is_gng_data <- FALSE
+  if ("R" %in% names(data)) {
+    if (is.factor(data$R)) is_gng_data <- "nogo" %in% levels(data$R)
+    if (!is_gng_data) is_gng_data <- any(data$R == "nogo", na.rm = TRUE)
+  }
+  if (is_gng_data) {
+    requested_trunc <- any(((data$LT != 0) | is.finite(data$UT)) & !no_truncate, na.rm = TRUE)
+    if (requested_trunc) {
+      warning("Ignoring LT/UT truncation for go/no-go data (R includes 'nogo').")
+    }
+    no_truncate[] <- TRUE
+    data$LT[] <- 0
+    data$UT[] <- Inf
+  }
+
 
   no_censor <- get_missing(no_censor, data, "no_censor",FALSE,"logical")
   LC <- get_missing(LC, data, "LC",0,"numeric")
@@ -371,6 +388,12 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
 
   simulate_unconditional_on_data <- return_trialwise_parameters <- FALSE
   dots_local <- list(...)
+  use_vectorised <- isTRUE(dots_local$use_vectorised)
+  if ("kernel_output_codes" %in% names(dots_local)) {
+    kernel_output_codes <- dots_local$kernel_output_codes
+  } else {
+    kernel_output_codes <- c(1L)
+  }
   if (isFALSE(dots_local$conditional_on_data)) {
     simulate_unconditional_on_data <- TRUE
   } else if (!is.null(dots_local$conditional_on_data)) {
@@ -390,10 +413,19 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
       data_list <- vector("list", expand)
       twp_last <- NULL
       for (rep_i in seq_len(expand)) {
-        res_i <- make_data_unconditional(
-          data = data, pars = pars, design = design, model = model,
-          return_trialwise_parameters = (rep_i == expand && return_trialwise_parameters)
-        )
+        if (use_vectorised) {
+          res_i <- make_data_unconditional_vectorised(
+            data = data, pars = pars, design = design, model = model,
+            return_trialwise_parameters = (rep_i == expand && return_trialwise_parameters),
+            kernel_output_codes = kernel_output_codes
+          )
+        } else {
+          res_i <- make_data_unconditional(
+            data = data, pars = pars, design = design, model = model,
+            return_trialwise_parameters = (rep_i == expand && return_trialwise_parameters),
+            kernel_output_codes = kernel_output_codes
+          )
+        }
         data_list[[rep_i]] <- cbind(rep = rep_i, res_i$data)
         if (rep_i == expand) twp_last <- res_i$trialwise_parameters
       }
@@ -401,10 +433,19 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
       rownames(data) <- NULL
       trialwise_parameters <- twp_last
     } else {
-      res <- make_data_unconditional(
-        data = data, pars = pars, design = design, model = model,
-        return_trialwise_parameters = return_trialwise_parameters
-      )
+      if (use_vectorised) {
+        res <- make_data_unconditional_vectorised(
+          data = data, pars = pars, design = design, model = model,
+          return_trialwise_parameters = return_trialwise_parameters,
+          kernel_output_codes = kernel_output_codes
+        )
+      } else {
+        res <- make_data_unconditional(
+          data = data, pars = pars, design = design, model = model,
+          return_trialwise_parameters = return_trialwise_parameters,
+          kernel_output_codes = kernel_output_codes
+        )
+      }
       data <- res$data
       trialwise_parameters <- res$trialwise_parameters
     }
@@ -418,31 +459,9 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
       add_acc = FALSE, compress = FALSE, verbose = FALSE,
       rt_check = FALSE
     )
-    pars <- map_p(pars, data, model(), return_trialwise_parameters)
-
-    if (!is.null(model()$trend)) {
-      phases <- vapply(model()$trend, function(x) x$phase, character(1))
-      if (any(phases == "pretransform")) {
-        # apply only pretransform trends and remove their trend parameters
-        pars <- prep_trend_phase(
-          data, model()$trend, pars, "pretransform",
-          return_trialwise_parameters
-        )
-      }
-    }
-    pars <- do_transform(pars, model()$transform)
-    if (!is.null(model()$trend)) {
-      phases <- vapply(model()$trend, function(x) x$phase, character(1))
-      if (any(phases == "posttransform")) {
-        # apply only posttransform trends and remove their trend parameters
-        pars <- prep_trend_phase(
-          data, model()$trend, pars, "posttransform",
-          return_trialwise_parameters
-        )
-      }
-    }
+    pars <- get_pars_oo(parameters, data, model())
     if (return_trialwise_parameters)
-      trialwise_parameters <- cbind(pars, attr(pars, "trialwise_parameters"))
+      trialwise_parameters <- pars
 
     pars <- model()$Ttransform(pars, data)
     if (!is.null(optionals$nobound)) attr(pars,"ok") <- rep(TRUE,nrow(pars)) else

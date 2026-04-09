@@ -149,6 +149,7 @@ set.seed(123)
 # Test 1: Mild upper Censor (GNG must have a finite UC)
 # With current design +  parameters burn is a struggle and sampling takes a while
 # I think sv:lM, v_match:S, B_lR it's hard to identify, but does converge. Parameters aren't "right" but the posterior predicted data is.
+# See gng_unidentifiabilities.R for more thorough tests
 res_lba_gng <- run_lba_demo(
   n_trials = 10000,
   UC = 3,
@@ -160,7 +161,7 @@ res_lba_gng <- run_lba_demo(
 if (RUN_FITS) print(recovery(res_lba_gng$emc, true_pars = res_lba_gng$true_pars))
 if (RUN_FITS) plot_cdf(res_lba_gng$dat, post_predict=res_lba_gng$pp, functions=list(Correct=Cfun), defective_factor = "Correct", factors="S")
 if (RUN_FITS) plot_stat(res_lba_gng$dat, post_predict=res_lba_gng$pp, factors="S", stat_name = "MeanCorrect",
-                        stat_fun = function(d){mean(d$Correct)}, functions=list(Correct=Cfun))
+                        stat_fun = function(d){mean(d$Correct, na.rm = TRUE)}, functions=list(Correct=Cfun))
 res_lba_gng_lc <- run_lba_demo(
   n_trials = 10000,
   UC = 1.8,
@@ -175,6 +176,194 @@ res_lba_gng_hierarchical <- run_lba_demo(
   Load = c("L","M","H"),
   label = "GNG-LBA Hierarchical + Load UC=3"
 )
+
+#### DDM ----
+
+run_ddmgng_R_demo <- function(
+    n_trials = 500, UC = 3, LC = NULL, range = 1,
+    cores_for_chains = 3, layout = c(2, 3), natural = TRUE, cores_per_chain = 3,
+    print_stats = TRUE, label = NULL
+) {
+  timeout_val <- if (is.finite(UC)) UC else 3
+
+  designDDM <- design(
+    factors = list(subjects = 1, S = c("go", "no")),
+    Rlevels = c("go", "no"),
+    model = DDMGNG,
+    functions = list(
+      TIMEOUT = function(d) rep(timeout_val, nrow(d)),
+      Rnogo = function(d) factor(rep("no", nrow(d)), levels = c("go", "no")),
+      Rgo = function(d) factor(rep("go", nrow(d)), levels = c("go", "no"))
+    ),
+    formula = list(v ~ 0 + S, a ~ 1, t0 ~ 1, Z ~ 1),
+    constants = c(s = log(1), sv = log(0), SZ = qnorm(0), st0 = log(0))
+  )
+
+  p_vector <- sampled_pars(designDDM, doMap = FALSE)
+  if ("v_Sgo" %in% names(p_vector)) p_vector[["v_Sgo"]] <- -1.5
+  if ("v_Sno" %in% names(p_vector)) p_vector[["v_Sno"]] <- 1.5
+  if ("a" %in% names(p_vector)) p_vector[["a"]] <- log(2)
+  if ("t0" %in% names(p_vector)) p_vector[["t0"]] <- log(0.2)
+  if ("Z" %in% names(p_vector)) p_vector[["Z"]] <- qnorm(0.5)
+
+  dat <- make_data(
+    p_vector, designDDM,
+    n_trials = n_trials,
+    TC = list(UC = UC, LC = LC)
+  )
+  
+  if (print_stats) {
+    cat("\n--- DDM GNG demo ---\n")
+    cat("Counts by response (NA = omission):\n")
+    print(table(dat$R, useNA = "ifany"))
+    cat("\nMean RT by stimulus (finite RTs only):\n")
+    print(tapply(Rtfun(dat), dat$S, function(x) mean(x, na.rm = TRUE)))
+    cat("\nOmission rate by stimulus:\n")
+    print(tapply(is.na(dat$R), dat$S, mean))
+    cat("\n")
+  }
+
+  library(parallel)
+  par(mfrow = layout)
+  rtct <- system.time({
+    rtc <- profile_plot_test(
+      dat, designDDM, p_vector,
+      n_cores = cores_for_chains, range = range,
+      layout = NULL, use_c = FALSE,
+      figure_title = paste("C++:", label), natural = natural
+    )
+  })
+
+  if (isTRUE(RUN_FITS)) {
+    emc <- make_emc(dat, designDDM, type = "single")
+    emc <- fit(
+      emc,
+      stop_criteria = list(
+        sample = list(
+          iter = 1000,
+          max_gd = 1.10,
+          max_flat_loc = 0.5,
+          flat_selection = c("alpha", "subj_ll"),
+          flat_p1 = 1/3,
+          flat_p2 = 1/3,
+          max_sample_iter = 5000
+        ),
+        cores_per_chain = cores_per_chain,
+        cores_for_chains = cores_for_chains
+      ),
+      max_tries = 30
+    )
+    post_predict <- predict(emc, n_post = 50)
+    plot_pars(emc, post_predict = post_predict, true_pars = p_vector)
+    return(invisible(list(data = dat, design = designDDM, true_pars = p_vector, emc = emc, pp = post_predict)))
+  }
+
+  invisible(list(data = dat, design = designDDM, true_pars = p_vector))
+}
+
+res_ddm_gng_R <- run_ddmgng_R_demo(
+  n_trials = 10000,
+  UC = 2,
+  label = "GNG-DDM UC=2"
+)
+if (RUN_FITS) print(recovery(res_ddm_gng_R$emc, true_pars = res_ddm_gng_R$true_pars))
+if (RUN_FITS) plot_cdf(res_ddm_gng_R$data, post_predict = res_ddm_gng_R$pp, functions = list(Correct = Cfun), defective_factor = "Correct", factors = "S")
+if (RUN_FITS) plot_stat(res_ddm_gng_R$data, post_predict = res_ddm_gng_R$pp, factors = "S", stat_name = "MeanCorrect",
+                        stat_fun = function(d) mean(d$Correct, na.rm = TRUE), functions = list(Correct = Cfun))
+
+# C++ GNG path: use DDM() with any Rlevel == "nogo"
+run_ddmgng_C_demo <- function(
+    n_trials = 500, UC = 3, LC = NULL, range = 1,
+    cores_for_chains = 3, layout = c(2, 3), natural = TRUE, cores_per_chain = 3,
+    print_stats = TRUE, label = NULL
+) {
+  designDDM <- design(
+    factors = list(subjects = 1, S = c("go", "nogo")),
+    Rlevels = c("go", "nogo"),
+    model = DDM,
+    formula = list(v ~ 0 + S, a ~ 1, t0 ~ 1, Z ~ 1),
+    constants = c(s = log(1), sv = log(0), SZ = qnorm(0), st0 = log(0))
+  )
+
+  p_vector <- sampled_pars(designDDM, doMap = FALSE)
+  if ("v_Sgo" %in% names(p_vector)) p_vector[["v_Sgo"]] <- -1.5
+  if ("v_Snogo" %in% names(p_vector)) p_vector[["v_Snogo"]] <- 1.5
+  if ("a" %in% names(p_vector)) p_vector[["a"]] <- log(2)
+  if ("t0" %in% names(p_vector)) p_vector[["t0"]] <- log(0.2)
+  if ("Z" %in% names(p_vector)) p_vector[["Z"]] <- qnorm(0.5)
+
+  dat <- make_data(
+    p_vector, designDDM,
+    n_trials = n_trials,
+    TC = list(UC = UC, LC = LC)
+  )
+
+  if (print_stats) {
+    cat("\n--- DDM canonical GNG demo ---\n")
+    cat("Counts by response (NA = omission):\n")
+    print(table(dat$R, useNA = "ifany"))
+    cat("\nMean RT by stimulus (finite RTs only):\n")
+    print(tapply(Rtfun(dat), dat$S, function(x) mean(x, na.rm = TRUE)))
+    cat("\nOmission rate by stimulus:\n")
+    print(tapply(is.na(dat$R), dat$S, mean))
+    cat("\n")
+  }
+
+  library(parallel)
+  par(mfrow = layout)
+  rtct <- system.time({
+    rtc <- profile_plot_test(
+      dat, designDDM, p_vector,
+      n_cores = cores_for_chains, range = range,
+      layout = NULL, use_c = TRUE,
+      figure_title = paste("C++:", label), natural = natural
+    )
+  })
+
+  if (isTRUE(RUN_FITS)) {
+    emc <- make_emc(dat, designDDM, type = "single")
+    emc <- fit(
+      emc,
+      stop_criteria = list(
+        sample = list(
+          iter = 1000,
+          max_gd = 1.10,
+          max_flat_loc = 0.5,
+          flat_selection = c("alpha", "subj_ll"),
+          flat_p1 = 1/3,
+          flat_p2 = 1/3,
+          max_sample_iter = 5000
+        ),
+        cores_per_chain = cores_per_chain,
+        cores_for_chains = cores_for_chains
+      ),
+      max_tries = 30
+    )
+    post_predict <- predict(emc, n_post = 50)
+    plot_pars(emc, post_predict = post_predict, true_pars = p_vector)
+    return(invisible(list(data = dat, design = designDDM, true_pars = p_vector, emc = emc, pp = post_predict)))
+  }
+
+  invisible(list(data = dat, design = designDDM, true_pars = p_vector))
+}
+
+res_ddmgng_c <- run_ddmgng_C_demo(
+  n_trials = 10000,
+  UC = 2,
+  label = "GNG-DDM (C++) UC=2"
+)
+if (RUN_FITS) print(recovery(res_ddmgng_c$emc, true_pars = res_ddmgng_c$true_pars))
+if (RUN_FITS) plot_cdf(res_ddmgng_c$data, post_predict = res_ddmgng_c$pp, functions = list(Correct = Cfun), defective_factor = "Correct", factors = "S")
+if (RUN_FITS) plot_stat(res_ddmgng_c$data, post_predict = res_ddmgng_c$pp, factors = "S", stat_name = "MeanCorrect",
+                        stat_fun = function(d) mean(d$Correct, na.rm = TRUE), functions = list(Correct = Cfun))
+
+res_ddmgng_c_lc <- run_ddmgng_C_demo(
+  n_trials = 10000,
+  UC = 2,
+  LC = 0.3,
+  label = "GNG-DDM (C++) UC=2, LC=.3"
+)
+if (RUN_FITS) print(recovery(res_ddm_canonical_lc$emc, true_pars = res_ddm_canonical_lc$true_pars))
 
 #### RDM ----
 
@@ -301,7 +490,7 @@ res_rdm_gng <- run_rdm_demo(
 if (RUN_FITS) print(recovery(res_rdm_gng$emc, true_pars = res_rdm_gng$true_pars))
 if (RUN_FITS) plot_cdf(res_rdm_gng$dat, post_predict=res_rdm_gng$pp, functions=list(Correct=Cfun), defective_factor = "Correct", factors="S")
 if (RUN_FITS) plot_stat(res_rdm_gng$dat, post_predict=res_rdm_gng$pp, factors="S", stat_name = "MeanCorrect",
-                        stat_fun = function(d){mean(d$Correct)}, functions=list(Correct=Cfun))
+                        stat_fun = function(d){mean(d$Correct, na.rm = TRUE)}, functions=list(Correct=Cfun))
 
 ## Heavy censoring seems to make v_match:Snogo unidentifiable because there's no RT shape to distinguish it.
 # LC makes gng even slower because there's numerical integration required
@@ -315,7 +504,7 @@ res_rdm_gng_lc <- run_rdm_demo(
 if (RUN_FITS) print(recovery(res_rdm_gng_lc$emc, true_pars = res_rdm_gng_lc$true_pars))
 if (RUN_FITS) plot_cdf(res_rdm_gng_lc$dat, post_predict=res_rdm_gng_lc$pp, functions=list(Correct=Cfun), defective_factor = "Correct", factors="S")
 if (RUN_FITS) plot_stat(res_rdm_gng_lc$dat, post_predict=res_rdm_gng_lc$pp, factors="S", stat_name = "MeanCorrect",
-                        stat_fun = function(d){mean(d$Correct)}, functions=list(Correct=Cfun))
+                        stat_fun = function(d){mean(d$Correct, na.rm = TRUE)}, functions=list(Correct=Cfun))
 
 res_rdm_gng_hierarchical <- run_rdm_demo(
   n_trials = 200,
@@ -552,4 +741,3 @@ res_contam <- run_LNR_demo(
   n_cores=9,
   sample_file = "samples_rdm_cens_trunc.RData"
 )
-

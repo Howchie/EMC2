@@ -523,7 +523,8 @@ rt_check_function <- function(data){
 
 design_model <- function(data,design,model=NULL,
                          add_acc=TRUE,rt_resolution=1/60,verbose=TRUE,
-                         compress=TRUE,rt_check=TRUE, add_da = FALSE, all_cells_dm = FALSE)
+                         compress=TRUE,rt_check=TRUE, add_da = FALSE, all_cells_dm = FALSE,
+                         compress_dms = TRUE)
 {
   if (is.null(model)) {
     if (is.null(design$model))
@@ -602,10 +603,10 @@ design_model <- function(data,design,model=NULL,
       }
     }
   }
-  for (i in pnames) attr(design$Flist[[i]],"Clist") <- design$Clist[[i]]
+  for (i in pnames) if (!is.null(design$Flist[[i]])) attr(design$Flist[[i]],"Clist") <- design$Clist[[i]]
 
-  out <- lapply(design$Flist,make_dm,da=da,Fcovariates=design$Fcovariates,
-                add_da = add_da, all_cells_dm = all_cells_dm)
+  out <- lapply(design$Flist, make_dm, da = da, Fcovariates = design$Fcovariates,
+                add_da = add_da, all_cells_dm = all_cells_dm, compress_dms = compress_dms)
   if (!is.null(rt_resolution) & !is.null(da$rt))
     da$rt <- floor(da$rt/rt_resolution)*rt_resolution
   if (compress){
@@ -712,7 +713,8 @@ make_full_dm <- function(form, Clist, da) {
   return(out)
 }
 
-make_dm <- function(form,da,Clist=NULL,Fcovariates=NULL, add_da = FALSE, all_cells_dm = FALSE)
+make_dm <- function(form,da,Clist=NULL,Fcovariates=NULL, add_da = FALSE, all_cells_dm = FALSE,
+                    compress_dms = TRUE)
   # Makes a design matrix based on formula form from augmented data frame da
 {
 
@@ -740,6 +742,10 @@ make_dm <- function(form,da,Clist=NULL,Fcovariates=NULL, add_da = FALSE, all_cel
     out
   }
   out <- make_full_dm(form, Clist, da)
+
+  if (!compress_dms) {
+    return(out)
+  }
 
   if(add_da){
     da <- da[,all.vars(form)[-1], drop = F]
@@ -1062,7 +1068,7 @@ mapped_pars.emc.design <- function(x, p_vector = NULL, model=NULL,
                                       do_functions = F),
                        design,model,rt_check=FALSE,compress=FALSE, verbose = FALSE)
   ok <- !(names(dadm) %in% c("subjects","trials","R","rt","winner"))
-  out <- cbind(dadm[,ok, drop = F],round(get_pars_matrix(p_vector,dadm, design$model()),digits))
+  out <- cbind(dadm[,ok, drop = F],round(get_pars_matrix_oo(p_vector,dadm, design$model()),digits))
   if (model()$type=="SDT")  out <- out[dadm$lR!=levels(dadm$lR)[length(levels(dadm$lR))],]
   if (model()$type=="DDM")  out <- out[,!(names(out) %in% c("lR","lM"))]
   if (any(names(out)=="RACE") && remove_RACE)

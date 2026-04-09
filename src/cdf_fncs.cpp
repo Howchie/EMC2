@@ -56,7 +56,7 @@ double Kl(double t, double v, double a, double w, double err) {
 /* calculate terms of the sum for short t */
 double logFs(double t, double v, double a, double w, int K)
 {
-	double fplus = -INFINITY, fminus = -INFINITY;
+	double fplus = R_NegInf, fminus = R_NegInf;
 	double sqt = sqrt(t), temp = -v * a*w - v * v*t / 2;
 	double vt = v * t;
 
@@ -80,7 +80,7 @@ double logFs(double t, double v, double a, double w, int K)
 /* calculate terms of the sum for large t */
 double logFl(double q, double v, double a, double w, int K)
 {
-	double fplus = -INFINITY, fminus = -INFINITY;
+	double fplus = R_NegInf, fminus = R_NegInf;
 	double la = std::log(a), lv = std::log(fabs(v));
 	double F = -INFINITY;
 	for (int k = K; k >= 1; k--) {

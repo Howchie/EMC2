@@ -7,24 +7,13 @@
 #include <unordered_map>
 using namespace Rcpp;
 
-// Call a user-supplied custom trend kernel
-// [[Rcpp::export]]
+// Forward declaration — canonical definition and Rcpp export is in custom_trend_interface.cpp
 NumericVector EMC2_call_custom_trend(NumericMatrix trend_pars,
                                      NumericMatrix input,
-                                     SEXP funptrSEXP) {
-  XPtr<userfun_t> funptr(funptrSEXP);
-  if (funptr.get() == nullptr) stop("Null function pointer.");
-  userfun_t f = *funptr;
-  if (!f) stop("Invalid function pointer.");
-  NumericVector res = f(trend_pars, input);
-  if (res.size() != input.nrow()) {
-    stop("Custom trend function must return a vector of length nrow(input).");
-  }
-  return res;
-}
+                                     SEXP funptrSEXP);
 
 
-NumericVector run_delta_rcpp(NumericVector q0, NumericVector alpha, NumericVector covariate) {
+inline NumericVector run_delta_rcpp(NumericVector q0, NumericVector alpha, NumericVector covariate) {
   int n = covariate.length();
   NumericVector q(n);
   NumericVector pe(n);
@@ -42,7 +31,7 @@ NumericVector run_delta_rcpp(NumericVector q0, NumericVector alpha, NumericVecto
   return q;
 }
 
-NumericVector run_delta2kernel_rcpp(NumericVector q0, NumericVector alphaFast,
+inline NumericVector run_delta2kernel_rcpp(NumericVector q0, NumericVector alphaFast,
                                     NumericVector propSlow, NumericVector dSwitch,
                                     NumericVector covariate) {
   int n = covariate.length();
@@ -78,7 +67,7 @@ NumericVector run_delta2kernel_rcpp(NumericVector q0, NumericVector alphaFast,
   return q;
 }
 
-NumericVector run_delta2lr_rcpp(NumericVector q0, NumericVector alphaPos,
+inline NumericVector run_delta2lr_rcpp(NumericVector q0, NumericVector alphaPos,
                                 NumericVector alphaNeg,
                                 NumericVector covariate) {
   int n = covariate.length();
@@ -116,7 +105,7 @@ inline IntegerVector build_expand_idx_rcpp(const LogicalVector& first_level) {
 }
 
 
-NumericMatrix run_kernel_rcpp(NumericMatrix kernel_pars,
+inline NumericMatrix run_kernel_rcpp(NumericMatrix kernel_pars,
                               String kernel,
                               NumericMatrix input,
                               SEXP funptrSEXP = R_NilValue,
@@ -313,7 +302,7 @@ NumericMatrix run_kernel_rcpp(NumericMatrix kernel_pars,
 // Now accepts the full parameter matrix `pars_full` so we can use par_input columns as inputs too.
 // Passes all inputs (covariates + par_input) to kernel in one call; kernel sums across columns.
 // [[Rcpp::export]]
-NumericVector run_trend_rcpp(DataFrame data, List trend, NumericVector param, NumericMatrix trend_pars, NumericMatrix pars_full,
+inline NumericVector run_trend_rcpp(DataFrame data, List trend, NumericVector param, NumericMatrix trend_pars, NumericMatrix pars_full,
                              bool return_kernel = false) {
   String kernel = as<String>(trend["kernel"]);
   String base = as<String>(trend["base"]);

@@ -1,3 +1,6 @@
+## This script demonstrates censoring and/or truncation handling for all race models (LBA,RDM,LNR) and the DDM (all in C++)
+# Also evidences defective cdf/density/stat calls work ok for data that includes omissions
+
 rm(list=ls())
 library(EMC2)
 source("WorkingTests/test_likelihood_plotfuns_ah.R")
@@ -138,6 +141,7 @@ res_no_cens_trunc <- run_lba_demo(
   n_trials = 10000,
   label = "no_cens_trunc"
 )
+
 if (RUN_FITS) print(recovery(res_no_cens_trunc$emc, true_pars = res_no_cens_trunc$true_pars))
 
 # Test 2: Censored RTs ----
@@ -171,8 +175,15 @@ res_cens <- run_lba_demo(
   LC = .85,
   label = "cens"
 )
-if (RUN_FITS) print(recovery(res_cens$emc, true_pars = res_cens$true_pars))
 
+## Same plot-code can be used anywhere
+if (RUN_FITS) print(recovery(res_cens$emc, true_pars = res_cens$true_pars))
+if (RUN_FITS) plot_cdf(res_cens$data, post_predict = res_cens$pp, functions = list(Correct = Cfun), defective_factor = "Correct", factors = "S")
+if (RUN_FITS) plot_density(res_cens$data, post_predict = res_cens$pp, functions = list(Correct = Cfun), defective_factor = "Correct", factors = "S")
+if (RUN_FITS) plot_stat(res_cens$data, post_predict = res_cens$pp, factors = "S", stat_name = "MeanCorrect_Finite",
+                        stat_fun = function(d) mean(d$Correct,na.rm=TRUE), functions = list(Correct = Cfun))
+if (RUN_FITS) plot_stat(res_cens$data, post_predict = res_cens$pp, factors = "S", stat_name = "MeanOmissions",
+                        stat_fun = function(d) mean(is.na(d$R)), functions = list(Correct = Cfun))
 ## LBAIO test with UC
 res_lbaio <- run_lba_demo(
   p_contaminant = 0,
@@ -249,7 +260,6 @@ res_contam_lbaio <- run_lba_demo(
 )
 if (RUN_FITS) print(recovery(res_contam_lbaio$emc, true_pars = res_contam_lbaio$true_pars))
 
-# This case no longer barred by a check, as expected recovery not great but not super terrible
 res_cens_trunc_contam <- run_lba_demo(
   p_contaminant = .15,
   estimate_contaminant = TRUE,
@@ -273,6 +283,165 @@ res_cens_contam_lbaio <- run_lba_demo(
   label = "cens_contam_lbaio"
 )
 if (RUN_FITS) print(recovery(res_cens_contam_lbaio$emc, true_pars = res_cens_contam_lbaio$true_pars))
+
+
+#### DDM using Henrich & Klauer (2026) ----
+
+run_DDM_demo <- function(
+    n_trials = 500, UC = NULL, UT = NULL, LC = NULL, LT = NULL, range = 1,
+    cores_for_chains = 3, layout = c(2, 3), natural = TRUE, cores_per_chain = 3,
+    LCresponse = FALSE, UCresponse = FALSE,
+    LCdirection = TRUE, UCdirection = TRUE,
+    print_stats = TRUE,
+    label = NULL
+) {
+
+  designDDM <- design(
+    factors = list(subjects = 1, S = c("left", "right")),
+    Rlevels = c("left", "right"),
+    model = DDM,
+    formula = list(v ~ 0 + S, a ~ 1, t0 ~ 1, Z ~ 1),
+    constants = c(s = log(1), sv = log(0), SZ = qnorm(0), st0 = log(0))
+  )
+
+  p_vector <- sampled_pars(designDDM, doMap = FALSE)
+  if ("v_Sleft" %in% names(p_vector)) p_vector[["v_Sleft"]] <- -1.2
+  if ("v_Sright" %in% names(p_vector)) p_vector[["v_Sright"]] <- 1.2
+  if ("a" %in% names(p_vector)) p_vector[["a"]] <- log(2)
+  if ("t0" %in% names(p_vector)) p_vector[["t0"]] <- log(0.2)
+  if ("Z" %in% names(p_vector)) p_vector[["Z"]] <- qnorm(0.6)
+
+  dat <- make_data(
+    p_vector, designDDM,
+    n_trials = n_trials,
+    TC = list(
+      UC = UC, UT = UT, LC = LC, LT = LT,
+      LCresponse = LCresponse, UCresponse = UCresponse,
+      LCdirection = LCdirection, UCdirection = UCdirection
+    )
+  )
+
+  if (print_stats) {
+    cat("\n--- DDM demo ---\n")
+    cat("Counts by response (NA = omission):\n")
+    print(table(dat$R, useNA = "ifany"))
+    cat("\nMean RT by stimulus (finite RTs only):\n")
+    print(tapply(Rtfun(dat), dat$S, function(x) mean(x, na.rm = TRUE)))
+    cat("\nMean Acc by stimulus (defined responses only):\n")
+    print(tapply(Cfun(dat), dat$S, function(x) mean(x, na.rm = TRUE)))
+    cat("\nOmission rate by stimulus:\n")
+    print(tapply(is.na(dat$R), dat$S, mean))
+    cat("\nTruncation rate by stimulus:\n")
+    print(1 - (tapply(dat$R, dat$S, length) / n_trials))
+    cat("\n")
+  }
+
+  library(parallel)
+  par(mfrow = layout)
+  rtct <- system.time({
+    rtc <- profile_plot_test(
+      dat, designDDM, p_vector,
+      n_cores = cores_for_chains, range = range,
+      layout = NULL, use_c = TRUE,
+      figure_title = paste("C++:", label), natural = natural
+    )
+  })
+
+  if (isTRUE(RUN_FITS)) {
+    emc <- make_emc(dat, designDDM, type = "single")
+    emc <- fit(
+      emc,
+      fileName = paste0("samples_ss_", gsub("[^a-z0-9]", "_", tolower(label)), ".RData"),
+      stop_criteria = list(
+        sample = list(
+          iter = 1000,
+          max_gd = 1.10,
+          max_flat_loc = 0.5,
+          flat_selection = c("alpha", "subj_ll"),
+          flat_p1 = 1/3,
+          flat_p2 = 1/3,
+          max_sample_iter = 5000
+        ),
+        cores_per_chain = cores_per_chain,
+        cores_for_chains = cores_for_chains
+      ),
+      max_tries = 30
+    )
+    post_predict <- predict(emc, n_post = 50)
+    plot_pars(emc, post_predict = post_predict, true_pars = p_vector)
+    return(invisible(list(data = dat, design = designDDM, true_pars = p_vector, emc = emc, pp = post_predict)))
+  }
+
+  invisible(list(data = dat, design = designDDM, true_pars = p_vector))
+}
+
+RNGkind("L'Ecuyer-CMRG")
+set.seed(123)
+
+# 1. uncensored/truncated
+res_ddm_uncensored <- run_DDM_demo(
+  n_trials = 10000,
+  label = "ddm_uncensored"
+)
+if (RUN_FITS) print(recovery(res_ddm_uncensored$emc, true_pars = res_ddm_uncensored$true_pars))
+
+# 2. upper censor only
+res_ddm_uc <- run_DDM_demo(
+  n_trials = 10000,
+  UC = 1.5,
+  label = "ddm_uc"
+)
+
+## Same plot-code can be used anywhere
+if (RUN_FITS) print(recovery(res_ddm_uc$emc, true_pars = res_ddm_uc$true_pars))
+if (RUN_FITS) plot_cdf(res_ddm_uc$data, post_predict = res_ddm_uc$pp, functions = list(Correct = Cfun), defective_factor = "Correct", factors = "S")
+if (RUN_FITS) plot_stat(res_ddm_uc$data, post_predict = res_ddm_uc$pp, factors = "S", stat_name = "MeanCorrect_Finite",
+                        stat_fun = function(d) mean(d$Correct,na.rm=TRUE), functions = list(Correct = Cfun))
+if (RUN_FITS) plot_stat(res_ddm_uc$data, post_predict = res_ddm_uc$pp, factors = "S", stat_name = "MeanOmissions",
+                        stat_fun = function(d) mean(is.na(d$R)), functions = list(Correct = Cfun))
+# 3. lower censor only
+res_ddm_lc <- run_DDM_demo(
+  n_trials = 10000,
+  LC = 0.5,
+  label = "ddm_lc"
+)
+if (RUN_FITS) print(recovery(res_ddm_lc$emc, true_pars = res_ddm_lc$true_pars))
+
+# 4. both censor bounds
+res_ddm_both <- run_DDM_demo(
+  n_trials = 10000,
+  LC = 0.55,
+  UC = 1.3,
+  label = "ddm_both"
+)
+if (RUN_FITS) print(recovery(res_ddm_both$emc, true_pars = res_ddm_both$true_pars))
+
+# 5. upper trunc only
+res_ddm_ut <- run_DDM_demo(
+  n_trials = 10000,
+  UT = 1.5,
+  label = "ddm_ut"
+)
+if (RUN_FITS) print(recovery(res_ddm_ut$emc, true_pars = res_ddm_ut$true_pars))
+
+# 6. lower trunc only
+res_ddm_lt <- run_DDM_demo(
+  n_trials = 10000,
+  LT = 0.35,
+  label = "ddm_lt"
+)
+if (RUN_FITS) print(recovery(res_ddm_lt$emc, true_pars = res_ddm_lt$true_pars))
+
+# 7. all: trunc + censor
+res_ddm_all <- run_DDM_demo(
+  n_trials = 10000,
+  LT = 0.30,
+  LC = 0.55,
+  UC = 1.35,
+  UT = 1.8,
+  label = "ddm_all"
+)
+if (RUN_FITS) print(recovery(res_ddm_all$emc, true_pars = res_ddm_all$true_pars))
 
 
 #### RDM ----
