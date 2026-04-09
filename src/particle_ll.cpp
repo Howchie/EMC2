@@ -1339,7 +1339,6 @@ double c_log_likelihood_race(
   GslWorkspacePtr workspace(nullptr, &gsl_integration_workspace_free);
   
   // Fetch censoring and truncation values from dadm columns. These are passed across all rows for ease of access, but should be identical at least at the subject level as they don't correspond to a data entry. Attributes probably a better fit here but clunky.
-  // todo fill with defaults if missing for backwards compatability (LC/LT=0, UC/UT=R_PosInf)
   Rcpp::NumericVector LT = get_col_with_default(dadm, "LT", 0.0);
   Rcpp::NumericVector UT = get_col_with_default(dadm, "UT", R_PosInf);
   Rcpp::NumericVector LC = get_col_with_default(dadm, "LC", 0.0);

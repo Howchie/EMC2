@@ -213,9 +213,28 @@ Rcpp::NumericVector lnr_pfun_adapter(Rcpp::NumericVector rt,
 }
 
 // Helper to safely get a column from a DataFrame with a default value if missing
+// Also fills NA values with the default for backward compatibility.
 inline Rcpp::NumericVector get_col_with_default(const Rcpp::DataFrame& df, const std::string& name, double default_val) {
   if (df.containsElementNamed(name.c_str())) {
-    return df[name];
+    Rcpp::NumericVector col = df[name];
+    // Check for NAs and replace if necessary
+    bool has_na = false;
+    for (int i = 0; i < col.size(); ++i) {
+      if (Rcpp::NumericVector::is_na(col[i])) {
+        has_na = true;
+        break;
+      }
+    }
+    if (has_na) {
+      Rcpp::NumericVector res = Rcpp::clone(col);
+      for (int i = 0; i < res.size(); ++i) {
+        if (Rcpp::NumericVector::is_na(res[i])) {
+          res[i] = default_val;
+        }
+      }
+      return res;
+    }
+    return col;
   }
   return Rcpp::NumericVector(df.nrow(), default_val);
 }
