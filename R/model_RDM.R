@@ -94,7 +94,7 @@ rRDM <- function(lR,pars,p_types=c("v","B","A","t0"),ok=rep(TRUE,dim(pars)[1]))
   t0 <- pars[,"t0"]
   pars <- pars[ok,]
   dt[ok] <- rWald(sum(ok),B=pars[,"B"],v=pars[,"v"],A=pars[,"A"])
-  R <- apply(dt,2,which.min)
+  R <- max.col(-t(dt), ties.method='first')
   pick <- cbind(R,1:dim(dt)[2]) # Matrix to pick winner
   # Any t0 difference with lR due to response production time (no effect on race)
   rt <- matrix(t0,nrow=nr)[pick] + dt[pick]
