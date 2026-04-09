@@ -106,7 +106,7 @@ gibbs_step_diag_gamma <- function(sampler, alpha){
   alpha <- as.matrix(alpha)
   #Mu
   var_mu = 1.0 / (sampler$n_subjects * last$tvinv + diag(prior$theta_mu_invar))
-  mean_mu = var_mu * ((apply(alpha, 1, sum) * last$tvinv + prior$theta_mu_mean * diag(prior$theta_mu_invar)))
+  mean_mu = var_mu * ((rowSums(alpha) * last$tvinv + prior$theta_mu_mean * diag(prior$theta_mu_invar)))
   tmu <- rnorm(n_pars, mean_mu, sd = sqrt(var_mu))
   names(tmu) <- sampler$par_names[!sampler$nuisance]
 
