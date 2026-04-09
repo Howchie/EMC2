@@ -208,9 +208,9 @@ calc_sbc_stats <- function(stats){
   out_names <- names(stats[[1]])
   for(i in 1:length(stats[[1]])){
     out[[out_names[i]]] <- list(
-      coverage = apply(stats$coverage[[i]], 2, mean),
+      coverage = colMeans(stats$coverage[[i]]),
       # precision = apply(stats$med[[i]], 2, sd),
-      bias = apply(stats$bias[[i]], 2, mean)
+      bias = colMeans(stats$bias[[i]])
     )
   }
   return(out)

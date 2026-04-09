@@ -1,7 +1,7 @@
 create_group_key <- function(df, factors) {
   if (length(factors) == 0) return(rep("All Data", nrow(df)))
-  key <- apply(df[, factors, drop = FALSE], 1, function(x)
-    paste(paste(factors, x, sep = "="), collapse = " "))
+  formatted_cols <- lapply(factors, function(f) paste(f, df[[f]], sep = "="))
+  key <- do.call(paste, c(formatted_cols, sep = " "))
   levs <- lapply(df[,factors],levels)
   for (i in 1:length(factors)) levs[[i]] <- paste(factors[i],levs[[i]],sep="=")
   lev <- levs[[1]]
