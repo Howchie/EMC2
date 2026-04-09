@@ -558,9 +558,9 @@ group__IC_SEM <- function(emc, stage="sample",filter=NULL, ...){
                        return_mcmc = FALSE, merge_chains = TRUE)
   theta_var <- get_pars(emc, selection = "Sigma", stage = stage, filter = filter,
                         return_mcmc = FALSE, merge_chains = TRUE, remove_constants = F)
-  mean_alpha <- rowMeans(alpha, dims = 2)
+  mean_alpha <- apply(alpha, 1:2, mean)
   mean_mu <- rowMeans(theta_mu)
-  mean_var <- rowMeans(theta_var, dims = 2)
+  mean_var <- apply(theta_var, 1:2, mean)
 
   N <- ncol(theta_mu)
   lls <- numeric(N)

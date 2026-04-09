@@ -648,9 +648,9 @@ group__IC_standard <- function(emc, stage="sample", filter=NULL) {
   N <- dim(alpha)[3]           # number of samples
 
   # 2) Averages
-  mean_alpha <- rowMeans(alpha, dims = 2)
+  mean_alpha <- apply(alpha, c(1,2), mean)
   mean_mu <- rowMeans(theta_mu)
-  mean_var <- rowMeans(theta_var, dims = 2)
+  mean_var <- apply(theta_var, c(1,2), mean)
 
   if(is.null(emc[[1]]$group_designs)){
     lls <- numeric(N)
