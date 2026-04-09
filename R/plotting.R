@@ -38,7 +38,7 @@ plot_roc <- function(data,signalFactor="S",zROC=FALSE,qfun=NULL,main="",lim=NULL
 
 {
   tab <- table(data$R,data[[signalFactor]])
-  ctab <- 1-apply(t(tab)/apply(tab,2,sum),1,cumsum)[-dim(tab)[1],] # p(Signal)
+  ctab <- 1-apply(t(tab)/colSums(tab),1,cumsum)[-dim(tab)[1],] # p(Signal)
   if (!zROC) {
     if (!is.null(lim)) {xlim <- lim; ylim <- lim} else
     {xlim <- c(0,1); ylim <- c(0,1)}
@@ -220,7 +220,7 @@ plot_fit_choice <- function(data,pp,subject=NULL,factors=NULL,functions=NULL,
       }
       dpts <- plot_roc(dati,zROC=zROC,qfun=qfun,lim=lim,main=paste(main,i),signalFactor=signalFactor)
       tab <- table(ppi$postn,ppi$R,ppi[[signalFactor]])
-      ctab <- apply(tab,1,function(x){list(1-apply(t(x)/apply(x,2,sum),1,cumsum)[-dim(x)[1],])})
+      ctab <- apply(tab,1,function(x){list(1-apply(t(x)/colSums(x),1,cumsum)[-dim(x)[1],])})
       if (!zROC) lapply(ctab,function(x){
         points(x[[1]][,1],x[[1]][,2],col="grey",pch=16,cex=rocfit_cex)
       }) else ctab <- lapply(ctab,function(x){
@@ -876,9 +876,9 @@ plot_trend <- function(input_data, emc, par_name, subject=1,
     }
   }
   if(!is.list(input_data)) {
-    updated <- get_pars_matrix_oo(p_vector=input_data,
-                                  dadm=dadm,
-                                  model=emc[[1]]$model())
+    updated <- get_pars_matrix(p_vector=input_data,
+                               dadm=dadm,
+                               model=emc[[1]]$model())
     trend <- updated[row_filter, par_name]
     credible_interval <- NULL
     ylim <- range(trend)
@@ -1214,4 +1214,5 @@ plot_spectrum <- function(dat, pp = NULL,
 
   invisible(result)
 }
+
 
