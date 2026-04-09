@@ -144,8 +144,8 @@ rLBA <- function(lR,pars,p_types=c("v","sv","b","A","t0"),
   dt[ok] <- (pars[,"b"]-pars[,"A"]*runif(dim(pars)[1]))/
     msm::rtnorm(dim(pars)[1],pars[,"v"],pars[,"sv"],ifelse(posdrift,0,-Inf))
   dt[dt<0] <- Inf
-  bad <- apply(dt,2,function(x){all(is.infinite(x))})
-  R <- apply(dt,2,which.min)
+  bad <- colSums(is.infinite(dt)) == nrow(dt)
+  R <- max.col(-t(dt), ties.method='first')
   pick <- cbind(R,1:dim(dt)[2]) # Matrix to pick winner
   # Any t0 difference with lR due to response production time (no effect on race)
   rt <- matrix(t0,nrow=nr)[pick] + dt[pick]
