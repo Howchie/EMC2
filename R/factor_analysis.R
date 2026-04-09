@@ -93,7 +93,7 @@ align_loadings <- function (emc = NULL, lambda = NULL, n_cores = 1, verbose = TR
   if(is.null(lambda)){
     lambda <- get_pars(emc, selection = "loadings", merge_chains = TRUE, return_mcmc = FALSE)
   }
-  energy <- apply(lambda^2, 2, mean)          # length q
+  energy <- colMeans(lambda^2)          # length q
   lambda <- lambda[,energy / max(energy) > 0.0075,, drop = F]
   q <- ncol(lambda)
   p <- nrow(lambda)
@@ -125,7 +125,7 @@ align_loadings <- function (emc = NULL, lambda = NULL, n_cores = 1, verbose = TR
     }
   }
   all_c[l + 1, ] <- rep(-1, q)
-  lambda_hat <- apply(lambda_varimax, 1:2, mean)
+  lambda_hat <- rowMeans(lambda_varimax, dims = 2)
   lambda_hat_zero <- lambda_hat
   st <- 1:q
   dim_all_c <- 2^q
@@ -209,7 +209,7 @@ rearrange_loadings <- function(lambda, metric = c("ssq", "absmean"))
   metric <- match.arg(metric)
   # ----- collapse MCMC draws to a single p x q summary -----------------
   if (length(dim(lambda)) == 3L) {
-    lambda_hat <- apply(lambda, 1:2, mean)           # p x q
+    lambda_hat <- rowMeans(lambda, dims = 2)           # p x q
   } else {
     lambda_hat <- lambda
     lambda      <- array(lambda, dim = c(dim(lambda), 1L))  # unify shape
@@ -342,7 +342,7 @@ plot_relations <- function(emc = NULL, stage = "sample",  plot_cred = FALSE,
       values <- values[use_par,,, drop = F]
     }
   }
-  means <- apply(values, 1:2, mean)
+  means <- rowMeans(values, dims = 2)
 
 
 
@@ -441,7 +441,7 @@ factor_diagram <- function(emc = NULL, stage = "sample",
   } else{
     loadings <- get_pars(emc, selection = "loadings", return_mcmc = F, merge_chains = TRUE)
   }
-  means <- apply(loadings, 1:2, mean)
+  means <- rowMeans(loadings, dims = 2)
   if(only_cred){
     cred <- aperm(apply(loadings, 1:2, quantile, probs = c(0.025, 0.975)))
     is_cred <- unique(c(which(t(cred[,,1] > 0)), which(t(cred[,,2] < 0))))
@@ -635,7 +635,7 @@ rotater <- function(L_array, rot_fun, sign_convention = TRUE) {
   p <- dim(L_array)[1]; m <- dim(L_array)[2]; iters <- dim(L_array)[3]
 
   # Posterior mean loadings
-  Abar <- apply(L_array, c(1, 2), mean)
+  Abar <- rowMeans(L_array, dims = 2)
 
   # Fit rotation once on the center matrix
   fit <- rot_fun(Abar)
