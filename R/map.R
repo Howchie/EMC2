@@ -283,52 +283,58 @@ generate_design_equations <- function(design_matrix,
   }
 
   # 2. Build the "equation" strings from numeric cols
-  make_equation_string <- function(row_i) {
-    eq_terms <- c()
-    trend_terms <- c()
-    for (colname in numeric_cols) {
-      new_name <- colname
-      if(colname %in% names(pre_transform)){
-        cur_trans <- pre_transform[colname]
-        if(cur_trans != "identity"){
-          new_name <- paste0(cur_trans, "(", colname, ")")
+  if (length(numeric_cols) == 0) {
+    eq_strings <- rep("0", nrow(design_matrix))
+  } else {
+    # Pre-calculate transformed names
+    new_names <- setNames(numeric_cols, numeric_cols)
+    if (!is.null(pre_transform)) {
+      idx <- numeric_cols %in% names(pre_transform)
+      if (any(idx)) {
+        cur_trans <- pre_transform[numeric_cols[idx]]
+        trans_idx <- cur_trans != "identity"
+        if (any(trans_idx)) {
+          new_names[numeric_cols[idx][trans_idx]] <- paste0(
+            cur_trans[trans_idx], "(", numeric_cols[idx][trans_idx], ")"
+          )
         }
       }
-      val <- as.numeric(row_i[[colname]])
-      # Skip zeros
-      if (abs(val) < 1e-15) next
+    }
 
-      # If val is exactly +1 or -1, skip numeric part:
-      if (abs(val - 1) < 1e-15) {
-        # val == +1
-        term_str <- paste0("+ ", new_name)
-      } else if (abs(val + 1) < 1e-15) {
-        # val == -1
-        term_str <- paste0("- ", new_name)
-      } else {
-        # Some other numeric coefficient => e.g. "+ 0.5 * col"
-        sign_str <- ifelse(val >= 0, "+ ", "- ")
-        term_str <- paste0(sign_str, format(abs(val), digits = 3), " * ", new_name)
+    # Create terms for each numeric column
+    term_list <- list()
+    for (colname in numeric_cols) {
+      vals <- as.numeric(design_matrix[[colname]])
+      new_name <- new_names[colname]
+
+      # Vectorized term creation
+      term_strs <- rep("", length(vals))
+
+      pos_idx <- abs(vals - 1) < 1e-15
+      neg_idx <- abs(vals + 1) < 1e-15
+      zero_idx <- abs(vals) < 1e-15
+      other_idx <- !(pos_idx | neg_idx | zero_idx)
+
+      term_strs[pos_idx] <- paste0("+ ", new_name)
+      term_strs[neg_idx] <- paste0("- ", new_name)
+      if (any(other_idx)) {
+        sign_str <- ifelse(vals[other_idx] >= 0, "+ ", "- ")
+        term_strs[other_idx] <- paste0(sign_str, format(abs(vals[other_idx]), digits = 3), " * ", new_name)
       }
-      # if(colname %in% names(formatted_trends)) trend_terms <- c(trend_terms, formatted_trends[[colname]])
-      eq_terms <- c(eq_terms, term_str)
+      term_list[[colname]] <- term_strs
     }
 
-    if (length(eq_terms) == 0) {
-      # If everything was zero
-      return("0")
-    }
-
-    # Combine eq_terms
-    eq_string <- paste(eq_terms, collapse = " ")
-    # for(i in trend_terms) eq_string <- paste0(eq_string, '; ', i)
-    # Remove the leading '+ ' if present
-    sub("^\\+ ", "", eq_string)
+    # Combine all terms row-wise
+    eq_strings <- do.call(paste, c(term_list, sep = " "))
+    # Clean up: remove multiple spaces and leading '+ '
+    eq_strings <- gsub("\\s+", " ", eq_strings)
+    eq_strings <- sub("^\\s+", "", eq_strings)
+    eq_strings <- sub("^\\+ ", "", eq_strings)
+    # Handle rows that ended up as empty string (all zeros)
+    eq_strings[eq_strings == ""] <- "0"
   }
-  # 3. Compute the equation string for each row
-  eq_strings <- apply(design_matrix, 1, make_equation_string)
 
-  # 4. Determine the widths needed for each factor column
+  # 3. Determine the widths needed for each factor column
   #    so everything lines up in columns nicely.
   col_widths <- sapply(factor_cols, function(fc) {
     # The width must accommodate either the column name or the largest factor level
@@ -354,33 +360,34 @@ generate_design_equations <- function(design_matrix,
   ## else: add a component to the end of the equation string, either before or after the
   ## closing parentheses depending on the transform factor
 
-  # 6. Print each row: factor columns in their spaces, then ": <equation>"
-  for (i in seq_len(nrow(design_matrix))) {
-    row_factor_str <- paste(mapply(function(fc, w) {
-      # Each factor value is left-justified in the same width as the header
-      sprintf("%-*s", w, as.character(design_matrix[[fc]][i]))
-    }, factor_cols, col_widths),
-    collapse = "  ")
+  # 6. Pre-calculate row factor strings and other loop invariants
+  if (length(factor_cols) > 0) {
+    formatted_factors <- lapply(factor_cols, function(fc) {
+      sprintf("%-*s", col_widths[fc], as.character(design_matrix[[fc]]))
+    })
+    row_factor_strs <- do.call(paste, c(formatted_factors, sep = "  "))
+  } else {
+    row_factor_strs <- rep('intercept', nrow(design_matrix))
+  }
 
-    if(row_factor_str == '') row_factor_str = 'intercept'
-
-    closing_parenthesis <- ')'
-    if(length(formatted_trends) > 0) {
-      if(!attr(trend, 'premap')) {
-        if(transform == 'identity' || attr(trend, 'pretransform')) {
-          for(trend_name in names(trend)) {
-            eq_strings[i] <- paste0(eq_strings[i], ' + ', paste0(trend_name, '_t'))
-          }
-        }
-      }
-
-      if(!attr(trend, 'pretransform') & !attr(trend, 'premap')) {
-        for(trend_name in names(trend)) {
-          closing_parenthesis <- paste0(closing_parenthesis, ' + ', paste0(trend_name, '_t'))
-        }
+  closing_parenthesis <- ')'
+  if (length(formatted_trends) > 0) {
+    if (!attr(trend, 'premap')) {
+      if (transform == 'identity' || attr(trend, 'pretransform')) {
+        trend_suffix <- paste0(' + ', paste0(names(trend), '_t'), collapse = '')
+        eq_strings <- paste0(eq_strings, trend_suffix)
       }
     }
 
+    if (!attr(trend, 'pretransform') & !attr(trend, 'premap')) {
+      trend_suffix <- paste0(' + ', paste0(names(trend), '_t'), collapse = '')
+      closing_parenthesis <- paste0(closing_parenthesis, trend_suffix)
+    }
+  }
+
+  # 7. Print each row: factor columns in their spaces, then ": <equation>"
+  for (i in seq_len(nrow(design_matrix))) {
+    row_factor_str <- row_factor_strs[i]
     if(transform == "identity") {
       cat(" ", row_factor_str, "  : ", eq_strings[i], "\n", sep="")
     } else {
