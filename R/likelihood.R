@@ -310,7 +310,8 @@ log_likelihood_race_missing <- function(pars,dadm,model,min_ll=log(1e-10))
       if (n_acc==2) {
         ll <- ll + lds[!dadm$winner]
       } else {
-        ll <- ll + apply(matrix(lds[!dadm$winner],nrow=n_acc-1),2,sum)
+        # Optimization: Replace explicit matrix sum apply(..., 2, sum) with colSums
+        ll <- ll + colSums(matrix(lds[!dadm$winner],nrow=n_acc-1))
       }
     } else ll <- lds
     ll[is.na(ll) | is.nan(ll)] <- -Inf
