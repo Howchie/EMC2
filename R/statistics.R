@@ -261,7 +261,7 @@ IC <- function(emc,stage="sample",filter=0,use_best_fit=TRUE,
     ll <- get_pars(emc, stage = stage, filter = filter, selection = "LL", merge_chains = TRUE,subject=subject)
     alpha <- get_pars(emc,selection="alpha",stage=stage,filter=filter, by_subject = TRUE, merge_chains = TRUE,subject=subject)
   }
-  minDs <- -2*apply(ll[[1]][[1]], 2, min)
+  minDs <- -2*apply(ll[[1]][[1]], 2, max)
   mean_lls <- colMeans(ll[[1]][[1]])
   mean_pars <- lapply(alpha,function(x){colMeans(do.call(rbind,x))})
   # log-likelihood for each subject using their mean parameter vector
@@ -629,4 +629,3 @@ model_averaging <- function(IC_for, IC_against) {
     Factor = bayes_factor
   ))
 }
-

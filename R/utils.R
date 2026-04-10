@@ -65,11 +65,40 @@ na_locf <- function(x, na.rm = FALSE) {
   if ((length(finite_rt_unique) + length(other_unique)) != n_unique_trials) return(FALSE)
 
   valid_idx <- function(x) {
-    if (!is.numeric(x)) return(FALSE)
+    if (!is.numeric(x) && !is.integer(x)) return(FALSE)
     if (length(x) == 0L) return(TRUE)
-    all(is.finite(x)) && all(x >= 0) && all(x <= (n_unique_trials - 1L))
+    all(is.finite(x)) && all(x == as.integer(x)) &&
+      all(x >= 0L) && all(x <= (n_unique_trials - 1L))
   }
   if (!valid_idx(finite_rt_unique) || !valid_idx(other_unique)) return(FALSE)
+  finite_rt_unique <- as.integer(finite_rt_unique)
+  other_unique <- as.integer(other_unique)
+  if (length(unique(finite_rt_unique)) != length(finite_rt_unique)) return(FALSE)
+  if (length(unique(other_unique)) != length(other_unique)) return(FALSE)
+  if (length(intersect(finite_rt_unique, other_unique)) > 0L) return(FALSE)
+  if (!setequal(c(finite_rt_unique, other_unique), 0:(n_unique_trials - 1L))) return(FALSE)
+
+  # Validate cache partition against current dadm content to guard against stale attributes.
+  rts <- dadm[["rt"]]
+  R_idx <- dadm[["R"]]
+  if (is.null(rts) || is.null(R_idx)) return(FALSE)
+  race_nacc <- if (has_RACE_col) attr(dadm, "RACE_nacc_by_row") else NULL
+  if (has_RACE_col && (is.null(race_nacc) || length(race_nacc) != n_trials)) return(FALSE)
+  finite_set <- finite_rt_unique
+  other_set <- other_unique
+  for (j0 in 0:(n_unique_trials - 1L)) {
+    start_row <- 1L + j0 * n_lR
+    n_lR_j <- if (has_RACE_col) race_nacc[start_row] else n_lR
+    if (!is.finite(n_lR_j) || n_lR_j < 1L || n_lR_j > n_lR) return(FALSE)
+    finite_trial <- is.finite(rts[start_row]) && rts[start_row] > 0 && !is.na(R_idx[start_row])
+    if (finite_trial) {
+      if (!(j0 %in% finite_set)) return(FALSE)
+      rows <- start_row:(start_row + n_lR_j - 1L)
+      if (!all(finite_rt_mask[rows])) return(FALSE)
+    } else {
+      if (!(j0 %in% other_set)) return(FALSE)
+    }
+  }
   TRUE
 }
 
