@@ -1240,8 +1240,9 @@ log_likelihood_race_ss <- function(pars,dadm,model,min_ll=log(1e-10))
           rt=dadm$rt[ispGOwin],pars=pars[ispGOwin,,drop=FALSE]))
         if (n_accG >1) {  # Looser survivor go accumulator(s)
           ispGOloss <- !ispStop & !dadm$winner & ispGOacc # Looser go accumulator rows
-          like[tGO] <- like[tGO] + apply(matrix(log(1-model$pfunG(
-            rt=dadm$rt[ispGOloss],pars=pars[ispGOloss,,drop=FALSE])),nrow=n_accG-1),2,sum)
+          # Optimization: Replace explicit matrix sum apply(..., 2, sum) with colSums
+          like[tGO] <- like[tGO] + colSums(matrix(log(1-model$pfunG(
+            rt=dadm$rt[ispGOloss],pars=pars[ispGOloss,,drop=FALSE])),nrow=n_accG-1))
         }
         # Transform back to densities to include go failure
         like[tGO] <- (1-gf[tGO])*exp(like[tGO])
@@ -1266,9 +1267,10 @@ log_likelihood_race_ss <- function(pars,dadm,model,min_ll=log(1e-10))
             rt=dadm$rt[ispGOwin],pars=pars[ispGOwin,,drop=FALSE]))
           if (n_accG > 1) {  # Looser survivor gp accumulators
             ispGOloss <- ispSGO & !dadm$winner & ispGOacc
-            like[tGO] <- like[tGO] + apply(matrix(log(1-model$pfunG(
+            # Optimization: Replace explicit matrix sum apply(..., 2, sum) with colSums
+            like[tGO] <- like[tGO] + colSums(matrix(log(1-model$pfunG(
               rt=dadm$rt[ispGOloss],pars=pars[ispGOloss,,drop=FALSE])),
-              nrow=n_accG-1),2,sum)
+              nrow=n_accG-1))
           }
           # trigger stop, add in stop survivor
           ts <- like[tGO] + log(1-model$pfunS(
@@ -1276,10 +1278,11 @@ log_likelihood_race_ss <- function(pars,dadm,model,min_ll=log(1e-10))
           # ST loosers
           if (n_accST == 0) stl <- 0 else {
             ispSTloss <- ispSGO & !ispGOacc
-            stl <- apply(matrix(log(1-model$pfunG(
+            # Optimization: Replace explicit matrix sum apply(..., 2, sum) with colSums
+            stl <- colSums(matrix(log(1-model$pfunG(
               rt=dadm$rt[ispSTloss]-pars[ispSTloss,"SSD"], # correct for SSD
               pars=pars[ispSTloss,,drop=FALSE])),
-              nrow=n_accST),2,sum)
+              nrow=n_accST))
           }
           
           # Transform back to densities to include failures
@@ -1309,13 +1312,15 @@ log_likelihood_race_ss <- function(pars,dadm,model,min_ll=log(1e-10))
               pars=pars[ispSSTloss,,drop=FALSE]))
             if (n_accST == 2) # Could remove branch, maybe faster as no matrix sum?
               like[tST] <- like[tST] + llST else
-                like[tST] <- like[tST] + apply(matrix(llST,nrow=n_accST-1),2,sum)
+                # Optimization: Replace explicit matrix sum apply(..., 2, sum) with colSums
+                like[tST] <- like[tST] + colSums(matrix(llST,nrow=n_accST-1))
           }
           # Go looser survivor
           ispSGloss <- ispSST & ispGOacc
-          llG <- apply(matrix(log(1-model$pfunG(
+          # Optimization: Replace explicit matrix sum apply(..., 2, sum) with colSums
+          llG <- colSums(matrix(log(1-model$pfunG(
             rt=dadm$rt[ispSGloss],pars=pars[ispSGloss,,drop=FALSE])),
-            nrow=n_accG),2,sum)
+            nrow=n_accG))
           like[tST] <- (1-tf[tST])*(                 # Never trigger failure
             gf[tST]*exp(like[tST]) +             # Case 2, gf only ST race
               (1-gf[tST])*(pStop*exp(like[tST]) +      # Case 1b, no gf, stop beats go, ST race
