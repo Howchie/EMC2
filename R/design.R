@@ -47,6 +47,10 @@
 #' if the conventional bound aren't desired.
 #' see `DDM()` for an example of such bounds. Bounds are used to set limits to
 #' the likelihood landscape that cannot reasonable be achieved with `transform`
+#' @param LT Lower truncation bound (scalar, vector, or column name), default NULL (no truncation).
+#' @param LC Lower censoring bound, default NULL (no censoring).
+#' @param UC Upper censoring bound, default NULL (no censoring).
+#' @param UT Upper truncation bound, default NULL (no truncation).
 #' @param ... Additional, optional arguments
 #'
 #' @return A design list.

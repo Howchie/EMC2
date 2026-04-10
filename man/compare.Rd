@@ -10,6 +10,7 @@ compare(
   filter = NULL,
   use_best_fit = TRUE,
   BayesFactor = TRUE,
+  WAIC = TRUE,
   cores_for_props = 4,
   cores_per_prop = 1,
   print_summary = TRUE,
@@ -26,10 +27,14 @@ compare(
 \item{filter}{An integer or vector. If it's an integer, iterations up until the value set by \code{filter} will be excluded.
 If a vector is supplied, only the iterations in the vector will be considered.}
 
-\item{use_best_fit}{Boolean; defaults to \code{TRUE} If \code{TRUE}, uses the smaller of (i) the deviance at the posterior mean parameters and (ii) the lowest deviance across posterior draws (i.e., the best-fitting draw). If \code{FALSE}, uses only the deviance at the posterior mean parameters (i.e., standard DIC/BPIC).}
+\item{use_best_fit}{Boolean, defaults to \code{TRUE}, uses the minimal or mean likelihood (whichever is better) in the
+calculation, otherwise always uses the mean likelihood.}
 
 \item{BayesFactor}{Boolean, defaults to \code{TRUE}. Include marginal likelihoods as estimated using WARP-III bridge sampling.
 Usually takes a minute per model added to calculate}
+
+\item{WAIC}{Boolean, defaults to \code{TRUE}. Include WAIC (Watanabe-Akaike Information Criterion) computed
+via the \code{loo} package. Requires computing per-trial log-likelihoods across all posterior samples.}
 
 \item{cores_for_props}{Integer, how many cores to use for the Bayes factor calculation, here 4 is the default for the 4 different proposal densities to evaluate, only 1, 2 and 4 are sensible.}
 
@@ -48,15 +53,7 @@ Matrix of effective number of parameters, mean deviance, deviance of
 mean, DIC, BPIC, Marginal Deviance (if \code{BayesFactor=TRUE}) and associated weights.
 }
 \description{
-Returns the BPIC/DIC and optionally marginal deviance (-2*marginal likelihood) for a list of samples objects.
-}
-\details{
-Computes DIC and BPIC using a joint deviance based on both the data likelihood and the hierarchical prior over subject-level parameters.
-
-If \code{use_best_fit = TRUE} (default), the deviance anchor is taken as the better
-of the deviance at the posterior mean parameters and the best-fitting posterior
-draw. If FALSE, only the deviance at the posterior mean parameters is used
-(standard DIC/BPIC).
+Returns the BPIC/DIC or marginal deviance (-2*marginal likelihood) for a list of samples objects.
 }
 \examples{
 \donttest{

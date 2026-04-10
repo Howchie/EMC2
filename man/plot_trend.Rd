@@ -40,7 +40,8 @@ Plots the trend for selected parameters of a model. Can be used either with a p_
 from predict()
 }
 \examples{
-dat <- EMC2:::add_trials(forstmann)
+\dontrun{
+dat <- add_trials(forstmann)
 dat$trials2 <- dat$trials/1000
 
 lin_trend <- make_trend(cov_names='trials2',
@@ -64,4 +65,5 @@ p_vector <- c('B'=1, 'v'=1, 'v_lMTRUE'=1, 't0'=0.1, 'B.w'=1, 'B.d_ei'=1)
 plot_trend(p_vector, emc=emc,
            par_name='B', subject='as1t',
            filter=function(d) d$lR=='right', main='Threshold for right')
+}
 }

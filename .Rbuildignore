@@ -1,2 +1,5 @@
 ^.*\.Rproj$
 ^\.Rproj\.user$
+^WorkingTests$
+^docs$
+^pkgdown$

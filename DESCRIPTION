@@ -67,9 +67,9 @@ Imports:
     colorspace,
     psych,
     utils,
+    loo,
     lpSolve,
-    WienR,
-    RcppArmadillo
+    WienR
 SystemRequirements: GSL (>= 1.15)
 LinkingTo: 
     Rcpp,

@@ -10,6 +10,8 @@
 #' calculation, otherwise always uses the mean likelihood.
 #' @param BayesFactor Boolean, defaults to `TRUE`. Include marginal likelihoods as estimated using WARP-III bridge sampling.
 #' Usually takes a minute per model added to calculate
+#' @param WAIC Boolean, defaults to `TRUE`. Include WAIC (Watanabe-Akaike Information Criterion) computed
+#' via the `loo` package. Requires computing per-trial log-likelihoods across all posterior samples.
 #' @param cores_for_props Integer, how many cores to use for the Bayes factor calculation, here 4 is the default for the 4 different proposal densities to evaluate, only 1, 2 and 4 are sensible.
 #' @param cores_per_prop Integer, how many cores to use for the Bayes factor calculation if you have more than 4 cores available. Cores used will be cores_for_props * cores_per_prop. Best to prioritize cores_for_props being 4 or 2
 #' @param print_summary Boolean (default `TRUE`), print table of results
@@ -45,7 +47,7 @@
 #' @export
 
 compare <- function(sList,stage="sample",filter=NULL,use_best_fit=TRUE,
-                        BayesFactor = TRUE, cores_for_props =4, cores_per_prop = 1,
+                        BayesFactor = TRUE, WAIC = TRUE, cores_for_props =4, cores_per_prop = 1,
                         print_summary=TRUE,digits=0,digits_p=3, ...) {
   if(is(sList, "emc")) sList <- list(sList)
   getp <- function(IC) {
@@ -66,6 +68,29 @@ compare <- function(sList,stage="sample",filter=NULL,use_best_fit=TRUE,
   BPICp <- getp(ICs$BPIC)
   out <- cbind.data.frame(DIC=ICs$DIC,wDIC=DICp,BPIC=ICs$BPIC,wBPIC=BPICp,ICs[,-c(1:2)])
 
+  if(WAIC){
+    subj <- list(...)$subject
+    WAICs <- numeric(length(sList))
+    for(i in seq_along(WAICs)){
+      tryCatch({
+        if(!is.null(subj)){
+          WAICs[i] <- waic_subject(sList[[i]], stage=stage, filter=sflist[[i]], subject=subj)
+        } else {
+          WAICs[i] <- waic_pooled(sList[[i]], stage=stage, filter=sflist[[i]])
+        }
+      }, error = function(e) {
+        warning("WAIC computation failed for model ", i, ": ", conditionMessage(e), call. = FALSE)
+        WAICs[i] <<- NA_real_
+      })
+    }
+    if(!all(is.na(WAICs))){
+      WAICp <- getp(WAICs)
+      out <- cbind.data.frame(WAIC=WAICs, wWAIC=WAICp, out)
+    } else {
+      WAIC <- FALSE  # suppress printing weight column
+    }
+  }
+
   if(BayesFactor){
     MLLs <- numeric(length(sList))
     for(i in 1:length(MLLs)){
@@ -78,14 +103,12 @@ compare <- function(sList,stage="sample",filter=NULL,use_best_fit=TRUE,
   }
   if (print_summary) {
     tmp <- out
-    tmp$wDIC <- round(tmp$wDIC,digits_p)
-    tmp$wBPIC <- round(tmp$wBPIC,digits_p)
-    if(BayesFactor){
-      tmp$wMD <- round(tmp$wMD, digits_p)
-      tmp[,-c(2,4,6)] <- round(tmp[,-c(2,4,6)],digits=digits)
-    } else{
-      tmp[,-c(2,4)] <- round(tmp[,-c(2,4)],digits=digits)
-    }
+    weight_cols <- c("wDIC","wBPIC")
+    if(WAIC) weight_cols <- c(weight_cols, "wWAIC")
+    if(BayesFactor) weight_cols <- c(weight_cols, "wMD")
+    w_idx <- which(names(tmp) %in% weight_cols)
+    for(wc in weight_cols) if(wc %in% names(tmp)) tmp[[wc]] <- round(tmp[[wc]], digits_p)
+    tmp[,-w_idx] <- round(tmp[,-w_idx], digits=digits)
     print(tmp)
   }
   invisible(out)
@@ -348,6 +371,7 @@ get_BayesFactor <- function(MLL1, MLL2){
 #' @param digits Integer, significant digits in printed table
 #' @param n_cores Number of cores for parallel processing
 #' @param subject Used to select subset of subjects (integer or character vector)
+#' @param WAIC Boolean, defaults to `TRUE`. Include WAIC computed via the `loo` package for each subject.
 #'
 #' @return List of matrices for each subject of effective number of parameters,
 #' mean deviance, deviance of mean, DIC, BPIC and associated weights.
@@ -358,11 +382,11 @@ get_BayesFactor <- function(MLL1, MLL2){
 #' compare_subject(list(m0 = samples_LNR, m1 = samples_LNR))
 #' @export
 compare_subject <- function(sList,stage="sample",filter=0,use_best_fit=TRUE,
-  print_summary=TRUE,digits=3,return_summary=FALSE,n_cores=1,subject=NULL) {
+  print_summary=TRUE,digits=3,return_summary=FALSE,n_cores=1,subject=NULL,WAIC=TRUE) {
 
   compare_one <- function(subject,sList,stage,filter,use_best_fit)
     compare(sList,subject=subject,stage=stage,filter=filter,use_best_fit=use_best_fit,
-            BayesFactor=FALSE,print_summary=FALSE)
+            BayesFactor=FALSE,WAIC=WAIC,print_summary=FALSE)
 
   if(is(sList, "emc")) sList <- list(sList)
   subjects <- names(sList[[1]][[1]]$data)
@@ -390,29 +414,34 @@ compare_subject <- function(sList,stage="sample",filter=0,use_best_fit=TRUE,
       setNames(data.frame(t(x)),paste("wDIC",rownames(x),sep="_"))}))
   pBPIC <- do.call(rbind,lapply(wBPIC,function(x){
       setNames(data.frame(t(x)),paste("wBPIC",rownames(x),sep="_"))}))
+  has_waic <- WAIC && !is.null(out[[1]]$wWAIC)
+  if(has_waic){
+    wWAIC <- lapply(out,function(x)x["wWAIC"])
+    pWAIC <- do.call(rbind,lapply(wWAIC,function(x){
+        setNames(data.frame(t(x)),paste("wWAIC",rownames(x),sep="_"))}))
+  }
   if (print_summary) {
-    # WILL NEED FORMAT FIXES IF REINCLUDED
-    # if (BayesFactor) {
-    #   pMD <- do.call(rbind,lapply(wMD,function(x){
-    #   setNames(data.frame(t(x)),paste("wMD",rownames(x),sep="_"))}))
-    #   print(round(cbind(pDIC,pBPIC,pMD),digits))
-    #   mnams <- unlist(lapply(strsplit(dimnames(pDIC)[[2]],"_"),function(x){x[[2]]}))
-    #   cat("\nWinners\n")
-    #   print(rbind(DIC=table(mnams[apply(pDIC,1,which.max)]),
-    #               BPIC=table(mnams[apply(pBPIC,1,which.max)]),
-    #               MD=table(mnams[apply(pMD,1,which.max)])))
-    #
-    # } else {
-    print(list(DIC=round(pDIC,digits),BPIC=round(pBPIC,digits)))
+    if(has_waic){
+      print(list(WAIC=round(pWAIC,digits),DIC=round(pDIC,digits),BPIC=round(pBPIC,digits)))
+    } else {
+      print(list(DIC=round(pDIC,digits),BPIC=round(pBPIC,digits)))
+    }
     mnams <- unlist(lapply(strsplit(dimnames(pDIC)[[2]],"_"),function(x){
       if (length(x)==2) x[[2]] else paste(x[-1],collapse="_")
     }))
     cat("\nWinners\n")
-    print(rbind(DIC=table(mnams[apply(pDIC,1,which.max)]),
-                BPIC=table(mnams[apply(pBPIC,1,which.max)])))
-    # }
+    if(has_waic){
+      print(rbind(WAIC=table(mnams[apply(pWAIC,1,which.max)]),
+                  DIC=table(mnams[apply(pDIC,1,which.max)]),
+                  BPIC=table(mnams[apply(pBPIC,1,which.max)])))
+    } else {
+      print(rbind(DIC=table(mnams[apply(pDIC,1,which.max)]),
+                  BPIC=table(mnams[apply(pBPIC,1,which.max)])))
+    }
   }
-  if (return_summary) out <- list(DIC=pDIC,BPIC=pBPIC)
+  if (return_summary) {
+    out <- if(has_waic) list(WAIC=pWAIC,DIC=pDIC,BPIC=pBPIC) else list(DIC=pDIC,BPIC=pBPIC)
+  }
   invisible(out)
 }
 

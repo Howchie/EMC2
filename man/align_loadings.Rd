@@ -38,6 +38,7 @@ in Bayesian factor analysis. It implements a parallelized version of the code an
 algorithm proposed by Papastamoulis and Ntzoufras (2022)
 }
 \examples{
+\dontrun{
 # This function works natively with emc objects, but also factor arrays:
 # Simulate a small example with 5 variables, 2 factors, and 10 MCMC iterations
 set.seed(123)
@@ -75,6 +76,7 @@ result <- align_loadings(lambda = lambda, verbose = TRUE, n_cores = 1)
 
 # Examine the aligned loadings
 print(result)
+}
 
 }
 \references{

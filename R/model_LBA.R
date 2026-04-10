@@ -207,6 +207,9 @@ rLBA <- function(lR,pars,p_types=c("v","sv","b","A","t0"),
 #' Brown, S. D., & Heathcote, A. (2008). The simplest complete model of choice response time: Linear ballistic accumulation.
 #' *Cognitive Psychology, 57*(3), 153-178. https://doi.org/10.1016/j.cogpsych.2007.12.002
 #'
+#' @param posdrift Logical, default TRUE. If TRUE, drift rates are truncated at zero
+#'   (positive-drift LBA). If FALSE, negative rates are allowed (intrinsic-omissions
+#'   variant, LBAIO).
 #' @return A model list with all the necessary functions for EMC2 to sample
 #' @examples
 #' # When working with lM it is useful to design  an "average and difference"
@@ -249,8 +252,8 @@ LBA <- function(posdrift=TRUE){
     pfun=ifelse(posdrift,function(rt,pars) pLBA(rt,pars,posdrift=TRUE),
                 function(rt,pars) pLBA(rt,pars,posdrift=FALSE)),
     # Race likelihood combining pfun and dfun
-    log_likelihood=function(pars,dadm,model,min_ll=log(1e-10)){
-      log_likelihood_race_missing(pars=pars, dadm = dadm, model = model, min_ll = min_ll)
+    log_likelihood=function(pars,dadm,model,min_ll=log(1e-10),...){
+      log_likelihood_race_missing(pars=pars, dadm = dadm, model = model, min_ll = min_ll, ...)
     }
   )
 }

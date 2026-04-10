@@ -149,7 +149,7 @@ softmax <- function(){
     # probability of choice between lower and upper thresholds (lt & ut)
     pfun=function(trials,pars) pSOFTMAX(trials,pars),
     # Likelihood, lb is lower bound threshold for first response
-    log_likelihood=function(pars,dadm,model,min_ll=log(1e-10)){
+    log_likelihood=function(pars,dadm,model,min_ll=log(1e-10),...){
       log_likelihood_softmax(pars=pars, dadm = dadm, model = model, min_ll = min_ll)
     })
 }

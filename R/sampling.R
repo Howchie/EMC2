@@ -718,6 +718,31 @@ calc_ll_manager <- function(proposals, dadm, model, component = NULL, r_cores = 
   return(lls)
 }
 
+calc_ll_manager_pw <- function(proposals, dadm, model){
+  model <- model()
+  dadm <- .cache_ll_data_attrs(dadm)
+  c_name <- model$c_name
+  unsupported <- c("MRI", "MRI_AR1", "SSEXG", "SSRDEX", "SOFTMAX")
+  if(!is.null(c_name) && c_name %in% unsupported)
+    stop("WAIC is not supported for model type '", c_name, "'")
+  uses_rcpp <- !is.null(c_name) && grepl("DDM|LBA|LNR|RDM", c_name)
+  if(uses_rcpp){
+    p_types <- names(model$p_types)
+    designs <- list()
+    for(p in p_types){
+      designs[[p]] <- attr(dadm,"designs")[[p]][attr(attr(dadm,"designs")[[p]],"expand"),,drop=FALSE]
+    }
+    constants <- attr(dadm, "constants")
+    if(is.null(constants)) constants <- NA
+    calc_ll_oo_pw(proposals, dadm, constants=constants, designs=designs,
+                  type=c_name, model$bound, model$transform, model$pre_transform,
+                  p_types=p_types, min_ll=log(1e-10), model$trend)
+  } else {
+    t(sapply(1:nrow(proposals), function(i)
+      calc_ll_R(proposals[i,], model=model, dadm=dadm, trialwise=TRUE)))
+  }
+}
+
 merge_group_level <- function(tmu, tmu_nuis, tvar, tvar_nuis, is_nuisance, subj_mu){
   n_pars <- length(is_nuisance)
   tmu_out <- numeric(n_pars)

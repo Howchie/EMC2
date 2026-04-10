@@ -46,6 +46,7 @@
 #'   \item{c_vectors}{Matrix of sign-switching vectors}
 #'
 #' @examples
+#' \dontrun{
 #' # This function works natively with emc objects, but also factor arrays:
 #' # Simulate a small example with 5 variables, 2 factors, and 10 MCMC iterations
 #' set.seed(123)
@@ -83,6 +84,7 @@
 #'
 #' # Examine the aligned loadings
 #' print(result)
+#' }
 #'
 #' @export
 align_loadings <- function (emc = NULL, lambda = NULL, n_cores = 1, verbose = TRUE, rotate_fun = NULL)

@@ -364,7 +364,7 @@ profile_plot <- function (data, design, p_vector, range = 0.5, layout = NA, p_mi
       }
       constants <- attr(dadm,"constants")
       if (is.null(constants)) constants <- NA
-      EMC2:::calc_ll(p_matrix, dadm, constants,designs,model$c_name,
+      calc_ll(p_matrix, dadm, constants,designs,model$c_name,
         model$bound,model$transform,model$pre_transform,p_types,log(1e-10),model$trend)
     } else calc_ll_R(p_vector, attr(dadm, "model")(), dadm)
   }
@@ -418,9 +418,9 @@ profile_plot <- function (data, design, p_vector, range = 0.5, layout = NA, p_mi
             ll <- unlist(mclapply(1:length(x), lfun, dadm = dadm, use_c = use_c,
                 x = x, p_vector = p_vector, pname = cur_name,
                 mc.cores = n_cores))
-            do.call(plot, c(list(x, ll), EMC2:::fix_dots_plot(EMC2:::add_defaults(dots,
+            do.call(plot, c(list(x, ll), fix_dots_plot(add_defaults(dots,
                 type = "l", xlab = cur_name, ylab = "LL"))))
-            do.call(abline, c(list(v = cur_par), EMC2:::fix_dots_plot(EMC2:::add_defaults(true_args,
+            do.call(abline, c(list(v = cur_par), fix_dots_plot(add_defaults(true_args,
                 lty = 2))))
             out[cur_name, ] <- c(p_vector[cur_name], x[which.max(ll)],
                 p_vector[cur_name] - x[which.max(ll)])
@@ -832,7 +832,8 @@ coda_setmfrow <- function (Nchains = 1, Nparms = 1, nplots = 1, sepplot = FALSE)
 #' @export
 #'
 #' @examples
-#' dat <- EMC2:::add_trials(forstmann)
+#' \dontrun{
+#' dat <- add_trials(forstmann)
 #' dat$trials2 <- dat$trials/1000
 #'
 #' lin_trend <- make_trend(cov_names='trials2',
@@ -856,6 +857,7 @@ coda_setmfrow <- function (Nchains = 1, Nparms = 1, nplots = 1, sepplot = FALSE)
 #' plot_trend(p_vector, emc=emc,
 #'            par_name='B', subject='as1t',
 #'            filter=function(d) d$lR=='right', main='Threshold for right')
+#' }
 plot_trend <- function(input_data, emc, par_name, subject=1,
                        filter=NULL, on_x_axis='trials',
                        pp_shaded=TRUE,
@@ -876,9 +878,9 @@ plot_trend <- function(input_data, emc, par_name, subject=1,
     }
   }
   if(!is.list(input_data)) {
-    updated <- get_pars_matrix(p_vector=input_data,
-                               dadm=dadm,
-                               model=emc[[1]]$model())
+    updated <- get_pars_matrix_oo(p_vector=input_data,
+                                  dadm=dadm,
+                                  model=emc[[1]]$model())
     trend <- updated[row_filter, par_name]
     credible_interval <- NULL
     ylim <- range(trend)

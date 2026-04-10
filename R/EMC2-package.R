@@ -93,10 +93,17 @@
 #' @importFrom stats var
 #' @importFrom stats varimax
 #' @importFrom utils combn
+#' @importFrom utils hasName
 #' @importFrom utils head
+#' @importFrom utils tail
 #' @importFrom WienR dWDM
 #' @importFrom WienR pWDM
 #' @importFrom WienR rWDM
 #' @useDynLib EMC2, .registration = TRUE
 ## usethis namespace: end
 NULL
+
+# Suppress R CMD check NOTEs for functions called but not yet implemented.
+# check_staircase: used in make_data() for stop-signal staircase validation.
+# log_likelihood_softmax: used in the SOFTMAX model; implementation pending.
+utils::globalVariables(c("check_staircase", "log_likelihood_softmax"))

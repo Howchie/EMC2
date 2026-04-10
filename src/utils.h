@@ -52,13 +52,14 @@ double c_log_likelihood_race(Rcpp::NumericMatrix pars, Rcpp::DataFrame dadm,
                                         const int n_trials,
                                         const Rcpp::LogicalVector winner,
                                         const Rcpp::IntegerVector
-                                        expand,   
-                                        double min_ll, 
+                                        expand,
+                                        double min_ll,
                                         const Rcpp::LogicalVector
                                         ok_params, // Parameter validity for each row in 'pars' matrix
                                         int n_lR, // Number of accumulators in the race
                                         void *model_context_for_funcs,
-                                        bool all_finite_trials
+                                        bool all_finite_trials,
+                                        Rcpp::NumericVector* pw_out = nullptr
 );
 
 // Exported wrappers

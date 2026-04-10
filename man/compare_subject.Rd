@@ -13,7 +13,8 @@ compare_subject(
   digits = 3,
   return_summary = FALSE,
   n_cores = 1,
-  subject = NULL
+  subject = NULL,
+  WAIC = TRUE
 )
 }
 \arguments{
@@ -36,6 +37,8 @@ If a vector is supplied, only the iterations in the vector will be considered.}
 \item{n_cores}{Number of cores for parallel processing}
 
 \item{subject}{Used to select subset of subjects (integer or character vector)}
+
+\item{WAIC}{Boolean, defaults to \code{TRUE}. Include WAIC computed via the \code{loo} package for each subject.}
 }
 \value{
 List of matrices for each subject of effective number of parameters,

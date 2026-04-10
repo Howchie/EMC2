@@ -521,7 +521,8 @@ double c_log_likelihood_ss(
 
 double c_log_likelihood_DDM(NumericMatrix pars, DataFrame data,
                             const int n_trials, IntegerVector expand,
-                            double min_ll, LogicalVector is_ok, bool gng){
+                            double min_ll, LogicalVector is_ok, bool gng,
+                            Rcpp::NumericVector* pw_out = nullptr){
   const int n_out = expand.length();
   NumericVector rts = data["rt"];
   IntegerVector R = data["R"];
@@ -679,6 +680,7 @@ double c_log_likelihood_DDM(NumericMatrix pars, DataFrame data,
   lls_exp[is_na(lls_exp)] = min_ll;
   lls_exp[is_infinite(lls_exp)] = min_ll;
   lls_exp[lls_exp < min_ll] = min_ll;
+  if (pw_out) { *pw_out = lls_exp; return 0.0; }
   return(sum(lls_exp));
 }
 
@@ -978,6 +980,105 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
   return lls;
 }
 
+
+
+// [[Rcpp::export]]
+NumericMatrix calc_ll_oo_pw(NumericMatrix particle_matrix, DataFrame data, NumericVector constants,
+                            List designs, String type, List bounds, List transforms, List pretransforms,
+                            CharacterVector p_types, double min_ll, Rcpp::Nullable<Rcpp::List> trend = R_NilValue) {
+  const int n_particles = particle_matrix.nrow();
+  const int n_trials = data.nrow();
+  LogicalVector is_ok(n_trials);
+  NumericMatrix pars;
+
+  NumericMatrix minmax = bounds["minmax"];
+  CharacterVector mm_names = colnames(minmax);
+  std::vector<BoundSpec> bound_specs;
+  CharacterVector p_names = colnames(particle_matrix);
+  std::string type_std = Rcpp::as<std::string>(Rcpp::wrap(type));
+
+  NumericMatrix one_particle(1, particle_matrix.ncol());
+  colnames(one_particle) = p_names;
+  IntegerVector kernel_output_codes = IntegerVector::create(1);
+  auto pars_for_particle = [&](int i) -> NumericMatrix {
+    for (int j = 0; j < particle_matrix.ncol(); ++j) {
+      one_particle(0, j) = particle_matrix(i, j);
+    }
+    return get_pars_c_wrapper_oo_core(one_particle, data, constants, designs, bounds, transforms,
+                                      pretransforms, trend, false, false, kernel_output_codes);
+  };
+
+  if (type_std.find("DDM") != std::string::npos) {
+    bool gng = (type_std.find("GNG") != std::string::npos);
+    IntegerVector expand = data.attr("expand");
+    const int n_out = expand.length();
+    NumericMatrix result(n_particles, n_out);
+    for (int i = 0; i < n_particles; ++i) {
+      pars = pars_for_particle(i);
+      if (i == 0) bound_specs = make_bound_specs(minmax, mm_names, pars, bounds);
+      is_ok = c_do_bound(pars, bound_specs);
+      NumericVector row_vec(n_out);
+      c_log_likelihood_DDM(pars, data, n_trials, expand, min_ll, is_ok, gng, &row_vec);
+      result(i, _) = row_vec;
+    }
+    return result;
+  } else if (type == "MRI" || type == "MRI_AR1" ||
+             type_std.find("SS") != std::string::npos ||
+             type_std.find("SOFTMAX") != std::string::npos) {
+    Rcpp::stop("calc_ll_oo_pw: not implemented for model type '%s'", type_std.c_str());
+  } else {
+    // Race models (LBA, LNR, RDM, ...)
+    IntegerVector expand = data.attr("expand");
+    LogicalVector winner = data["winner"];
+
+    RaceModelAdapter adapter = resolve_race_model_adapter(type_std, "calc_ll_oo_pw");
+    adapter.ctx.min_lik_for_pdf = std::exp(min_ll);
+
+    NumericVector lR = data["lR"];
+    int n_lR = unique(lR).length();
+    bool all_finite_trials = false;
+    if (data.hasAttribute("emc2_all_finite_trials")) {
+      Rcpp::LogicalVector v = data.attr("emc2_all_finite_trials");
+      if (v.size() == 1 && v[0] != NA_LOGICAL) {
+        all_finite_trials = v[0];
+      }
+    } else if (n_trials > 0 && n_lR > 0 && (n_trials % n_lR) == 0) {
+      all_finite_trials = true;
+      NumericVector rts = data["rt"];
+      IntegerVector R_idx = data["R"];
+      for (int start_row_idx = 0; start_row_idx < n_trials; start_row_idx += n_lR) {
+        const double rt_j = rts[start_row_idx];
+        const int R_j_idx = R_idx[start_row_idx];
+        if (!(R_FINITE(rt_j) && rt_j > 0.0 && R_j_idx != NA_INTEGER)) {
+          all_finite_trials = false;
+          break;
+        }
+      }
+    }
+
+    const int n_out_race = (expand.length() > 0) ? expand.length() : (n_trials / n_lR);
+    NumericMatrix result(n_particles, n_out_race);
+    for (int i = 0; i < n_particles; ++i) {
+      pars = pars_for_particle(i);
+      if (i == 0) bound_specs = make_bound_specs(minmax, mm_names, pars, bounds);
+      is_ok = c_do_bound(pars, bound_specs);
+      is_ok = lr_all(is_ok, n_lR);
+      NumericVector row_vec(n_out_race);
+      c_log_likelihood_race(pars, data,
+                            adapter.model_dfun_ptr, adapter.model_pfun_ptr,
+                            adapter.pdf1_ptr, adapter.cdf1_ptr,
+                            n_trials,
+                            winner, expand, min_ll, is_ok, n_lR,
+                            &adapter.ctx,
+                            all_finite_trials,
+                            &row_vec);
+      result(i, _) = row_vec;
+    }
+    return result;
+  }
+  // unreachable
+  return NumericMatrix(0, 0);
+}
 
 
 // [[Rcpp::export]]
@@ -1332,7 +1433,8 @@ double c_log_likelihood_race(
     const Rcpp::LogicalVector isok,   // Parameter validity for each row in 'pars' matrix
     int n_lR,                              // Number of accumulators in the race (must be > 0 if data exists)
     void* model_context_for_funcs,          // Context for model_dfun/model_pfun (e.g., contains posdrift for LBA)
-    bool all_finite_trials             // Data-only hint: all trials finite/in-bounds/known response
+    bool all_finite_trials,           // Data-only hint: all trials finite/in-bounds/known response
+    Rcpp::NumericVector* pw_out        // If non-null, per-trial LLs are stored here (no summation)
 ) {
   
   // Only allocate a GSL workspace if/when numerical integration is needed.
@@ -1787,7 +1889,7 @@ double c_log_likelihood_race(
         double log1m_pC = std::log1p(-pC); // log(1-pC) todo: check if one of the safe helpers is appropriate here
         int start_row_idx = j * n_lR;
         double rt_j = rts_dadm[start_row_idx];
-        
+
         if (rt_j == R_PosInf) {
           double term1 = std::log(pC);
           double term2 = log1m_pC + ll_unique[j]; //pIO + pD
@@ -1795,8 +1897,14 @@ double c_log_likelihood_race(
         } else {
           ll_unique[j] = log1m_pC + ll_unique[j];    // pRT * 1-pC
         }
-        
+
       }
+    }
+    if (pw_out) {
+      for (int i = 0; i < expand.length(); ++i) {
+        (*pw_out)[i] = ll_unique[expand[i] - 1];
+      }
+      return 0.0;
     }
     for (int i = 0; i < expand.length(); ++i) {
       total_ll += ll_unique[expand[i] - 1];
@@ -1808,7 +1916,7 @@ double c_log_likelihood_race(
         double log1m_pC = std::log1p(-pC);
         int start_row_idx = j * n_lR;
         double rt_j = rts_dadm[start_row_idx];
-        
+
         if (R_FINITE(rt_j)) {
           ll_unique[j] = log1m_pC + ll_unique[j];
         } else {
@@ -1817,9 +1925,14 @@ double c_log_likelihood_race(
           ll_unique[j] = log_sum_exp(term1, term2);
         }
       }
-      total_ll += ll_unique[j];
+      if (pw_out) {
+        (*pw_out)[j] = ll_unique[j];
+      } else {
+        total_ll += ll_unique[j];
+      }
     }
+    if (pw_out) return 0.0;
   }
-  
+
   return total_ll;
 }

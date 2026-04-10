@@ -783,7 +783,7 @@ SSEXG <- function() {
       return(rSSexGaussian(data, pars, ok = attr(pars, "ok")))
     },
     # Race likelihood combining pfun and dfun
-    log_likelihood = function(pars, dadm, model, min_ll = log(1e-10)) {
+    log_likelihood = function(pars, dadm, model, min_ll = log(1e-10), ...) {
       return(log_likelihood_race_ss(pars, dadm, model, min_ll = min_ll))
     }
   )
@@ -1131,7 +1131,7 @@ SSRDEX <- function() {
       return(rSShybrid(data, pars, ok = attr(pars, "ok")))
     },
     # Race likelihood combining pfun and dfun
-    log_likelihood = function(pars, dadm, model, min_ll = log(1e-10)) {
+    log_likelihood = function(pars, dadm, model, min_ll = log(1e-10), ...) {
       return(log_likelihood_race_ss(pars, dadm, model, min_ll = min_ll))
     }
   )

@@ -39,9 +39,10 @@ default list structure: list(p=.25,SSD0=.25,stairstep=.05,stairmin=0,stairmax=In
 
 \item{return_functions}{Logical, should factors created by functions be returned, default FALSE.}
 
-\item{...}{Additional optional arguments}
+\item{TC}{A list of truncation/censoring arguments passed to \code{make_missing}. If NULL
+(default) truncation/censoring settings are taken from the data or design.}
 
-\item{missing}{List named with the arguments of the make_missing function (except data).}
+\item{...}{Additional optional arguments}
 }
 \value{
 A data frame with simulated data
