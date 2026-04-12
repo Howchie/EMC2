@@ -466,10 +466,11 @@ check_rt <- function(b, d, upper = TRUE)
   b <- b[idx]
   if (!length(d)) return(invisible(TRUE))
   b_num <- as.numeric(as.character(b))
+  tol <- sqrt(.Machine$double.eps) * pmax(1, abs(b_num), abs(d))
   if (upper) {
-    ok <- d <= b_num
+    ok <- d <= (b_num + tol)
   } else {
-    ok <- d >= b_num
+    ok <- d >= (b_num - tol)
   }
   if (!all(ok)) stop("Bound not respected in data")
   invisible(TRUE)
@@ -491,7 +492,10 @@ rt_check_function <- function(data){
   }
   if ("UT"%in%colnames(data) & "LT"%in%colnames(data)) {
     DT <- data$UT - data$LT
-    if (!is.null(DT) && any(DT<0)) stop("UT must be greater than LT")
+    if (!is.null(DT)) {
+      tol <- sqrt(.Machine$double.eps) * pmax(1, abs(data$UT), abs(data$LT))
+      if (any(DT < -tol, na.rm = TRUE)) stop("UT must be greater than LT")
+    }
   }
 
   # Censoring
@@ -516,7 +520,10 @@ rt_check_function <- function(data){
     stop("Data must have an UC attribute if any rt = Inf")
   if ("UC"%in%colnames(data) & "LC"%in%colnames(data)) {
     DC <- data$UC - data$LC
-    if (!is.null(DC) && any(DC<0)) stop("UC must be greater than LC")
+    if (!is.null(DC)) {
+      tol <- sqrt(.Machine$double.eps) * pmax(1, abs(data$UC), abs(data$LC))
+      if (any(DC < -tol, na.rm = TRUE)) stop("UC must be greater than LC")
+    }
   }
 }
 
@@ -608,7 +615,7 @@ design_model <- function(data,design,model=NULL,
   out <- lapply(design$Flist, make_dm, da = da, Fcovariates = design$Fcovariates,
                 add_da = add_da, all_cells_dm = all_cells_dm, compress_dms = compress_dms)
   if (!is.null(rt_resolution) & !is.null(da$rt))
-    da$rt <- floor(da$rt/rt_resolution)*rt_resolution
+    da$rt <- .floor_to_rt_resolution(da$rt, rt_resolution)
   if (compress){
     dadm <- compress_dadm(da,designs=out, Fcov=design$Fcovariates,Ffun=names(design$Ffunctions))
     # Change expansion names
@@ -860,6 +867,7 @@ dm_list <- function(dadm)
       attr(dl[[i]], "other_unique_trial_indices") <- NULL
       attr(dl[[i]], "RACE_nacc_by_row") <- NULL
       attr(dl[[i]], "RACE_mask") <- NULL
+      dl[[i]] <- .cache_ll_data_attrs(dl[[i]], force_rebuild = TRUE)
     }
   }
 

@@ -37,6 +37,19 @@ na_locf <- function(x, na.rm = FALSE) {
   return(result)
 }
 
+.floor_to_rt_resolution <- function(x, rt_resolution) {
+  if (is.null(rt_resolution)) return(x)
+  finite <- is.finite(x)
+  if (!any(finite)) return(x)
+
+  # Avoid dropping exact-bin values one bin lower due to binary rounding, e.g.
+  # floor(0.7 / 0.05) == 13 instead of 14 on typical platforms.
+  q <- x[finite] / rt_resolution
+  tol <- 16 * .Machine$double.eps * pmax(1, abs(q))
+  x[finite] <- floor(q + tol) * rt_resolution
+  x
+}
+
 .emc2_ll_cache_version <- 2L
 
 .is_valid_ll_cache <- function(dadm, n_trials, n_lR, has_RACE_col) {
@@ -102,7 +115,7 @@ na_locf <- function(x, na.rm = FALSE) {
   TRUE
 }
 
-.cache_ll_data_attrs <- function(dadm) {
+.cache_ll_data_attrs <- function(dadm, force_rebuild = FALSE) {
   if (!is.data.frame(dadm)) return(dadm)
 
   cols <- names(dadm)
@@ -117,7 +130,19 @@ na_locf <- function(x, na.rm = FALSE) {
   n_lR <- length(unique(lR_codes))
 
   has_RACE_col <- "RACE" %in% cols && is.factor(dadm[["RACE"]])
-  if (.is_valid_ll_cache(dadm, n_trials = n_trials, n_lR = n_lR, has_RACE_col = has_RACE_col)) return(dadm)
+  if (!isTRUE(force_rebuild) &&
+      .is_valid_ll_cache(dadm, n_trials = n_trials, n_lR = n_lR, has_RACE_col = has_RACE_col)) {
+    return(dadm)
+  }
+
+  if (isTRUE(force_rebuild)) {
+    attr(dadm, "emc2_all_finite_trials") <- NULL
+    attr(dadm, "finite_rt_mask") <- NULL
+    attr(dadm, "finite_rt_unique_trial_indices") <- NULL
+    attr(dadm, "other_unique_trial_indices") <- NULL
+    attr(dadm, "RACE_nacc_by_row") <- NULL
+    attr(dadm, "RACE_mask") <- NULL
+  }
   if (has_RACE_col) {
     race_idx <- dadm[["RACE"]]
     race_levels <- levels(race_idx)

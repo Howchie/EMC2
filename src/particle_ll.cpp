@@ -11,6 +11,9 @@
 #include "trend.h"
 #include "utils.h"
 #include "gsl_utils.h"
+#include "ParamTable.h"
+#include "TrendEngine.h"
+#include "transform_utils.h"
 #include <gsl/gsl_integration.h>
 #include <gsl/gsl_errno.h> // For GSL error handling
 #include <cmath>
@@ -173,6 +176,126 @@ NumericMatrix get_pars_matrix(NumericVector p_vector, NumericVector constants, c
   return(pars);
 }
 
+static NumericMatrix get_pars_matrix_oo_fast(ParamTable& param_table,
+                                             const Rcpp::List& designs,
+                                             TrendRuntime* trend_runtime,
+                                             const std::vector<TransformSpec>& full_specs,
+                                             const Rcpp::CharacterVector& keep_names) {
+  if (trend_runtime) trend_runtime->reset_all_kernels();
+
+  const int n_designs = designs.size();
+  LogicalVector map_next(n_designs, false);
+  std::unordered_set<std::string> transform_next;
+  std::unordered_set<std::string> empty_set;
+
+  const auto& premap_set = trend_runtime ? trend_runtime->premap_trend_params() : empty_set;
+  const auto& pretransform_set = trend_runtime ? trend_runtime->pretransform_trend_params() : empty_set;
+
+  if (trend_runtime && trend_runtime->has_premap()) {
+    map_next = trend_runtime->premap_design_mask(designs);
+    param_table.map_from_designs(designs, map_next);
+
+    transform_next = premap_set;
+    if (!transform_next.empty()) {
+      auto specs_premap = filter_specs_by_param_set(param_table, full_specs, transform_next);
+      c_do_transform_pt(param_table, specs_premap);
+    }
+
+    for (std::size_t i = 0; i < trend_runtime->premap_ops.size(); ++i) {
+      trend_runtime->apply_base_for_op(trend_runtime->premap_ops[i], param_table);
+    }
+  }
+
+  for (int i = 0; i < n_designs; ++i) {
+    bool is_premap = (trend_runtime && trend_runtime->has_premap()) ? map_next[i] : false;
+    map_next[i] = !is_premap;
+  }
+  param_table.map_from_designs(designs, map_next);
+
+  if (trend_runtime && trend_runtime->has_pretransform()) {
+    transform_next = pretransform_set;
+    if (!transform_next.empty()) {
+      auto specs_pretransform = filter_specs_by_param_set(param_table, full_specs, transform_next);
+      c_do_transform_pt(param_table, specs_pretransform);
+    }
+
+    for (std::size_t i = 0; i < trend_runtime->pretransform_ops.size(); ++i) {
+      trend_runtime->apply_base_for_op(trend_runtime->pretransform_ops[i], param_table);
+    }
+  }
+
+  transform_next = param_names_excluding(param_table, { &premap_set, &pretransform_set });
+  auto postmap_specs = filter_specs_by_param_set(param_table, full_specs, transform_next);
+  c_do_transform_pt(param_table, postmap_specs);
+
+  if (trend_runtime && trend_runtime->has_posttransform()) {
+    for (std::size_t i = 0; i < trend_runtime->posttransform_ops.size(); ++i) {
+      trend_runtime->apply_base_for_op(trend_runtime->posttransform_ops[i], param_table);
+    }
+  }
+
+  return param_table.materialize_by_param_names(keep_names);
+}
+
+static bool ddm_data_all_finite_untruncated(const Rcpp::DataFrame& data,
+                                            const int n_trials) {
+  Rcpp::NumericVector rts = data["rt"];
+  Rcpp::IntegerVector R = data["R"];
+
+  for (int i = 0; i < n_trials; ++i) {
+    if (!R_FINITE(rts[i]) || Rcpp::NumericVector::is_na(rts[i])) return false;
+    if (R[i] == NA_INTEGER) return false;
+  }
+
+  if (data.containsElementNamed("LT")) {
+    Rcpp::NumericVector LT = data["LT"];
+    for (int i = 0; i < n_trials; ++i) {
+      if (LT[i] != 0.0) return false;
+    }
+  }
+
+  if (data.containsElementNamed("UT")) {
+    Rcpp::NumericVector UT = data["UT"];
+    for (int i = 0; i < n_trials; ++i) {
+      if (R_FINITE(UT[i])) return false;
+    }
+  }
+
+  return true;
+}
+
+static bool race_data_all_finite_untruncated(const Rcpp::DataFrame& data,
+                                             const int n_trials,
+                                             const int n_lR) {
+  if (n_trials <= 0 || n_lR <= 0 || (n_trials % n_lR) != 0) return false;
+
+  Rcpp::NumericVector rts = data["rt"];
+  Rcpp::IntegerVector R = data["R"];
+
+  for (int start = 0; start < n_trials; start += n_lR) {
+    if (!R_FINITE(rts[start]) || Rcpp::NumericVector::is_na(rts[start]) || rts[start] <= 0.0) {
+      return false;
+    }
+    if (R[start] == NA_INTEGER) return false;
+  }
+
+  if (data.containsElementNamed("LT")) {
+    Rcpp::NumericVector LT = data["LT"];
+    for (int start = 0; start < n_trials; start += n_lR) {
+      if (LT[start] != 0.0) return false;
+    }
+  }
+
+  if (data.containsElementNamed("UT")) {
+    Rcpp::NumericVector UT = data["UT"];
+    for (int start = 0; start < n_trials; start += n_lR) {
+      if (R_FINITE(UT[start])) return false;
+    }
+  }
+
+  return true;
+}
+
 
 // SS helper pointer types
 using ss_go_pdf_fn = NumericVector (*)(NumericVector, NumericMatrix, LogicalVector, double);
@@ -194,6 +317,8 @@ struct RaceModelAdapter {
   RaceCdfFun model_pfun_ptr = nullptr;
   RacePdf1Fun pdf1_ptr = nullptr;
   RaceCdf1Fun cdf1_ptr = nullptr;
+  RaceRawFun model_dfun_raw = nullptr;  // fast-path: write log-density to pre-allocated buffer
+  RaceRawFun model_pfun_raw = nullptr;  // fast-path: write log-survivor to pre-allocated buffer
   ContextForRaceModels ctx;
 };
 
@@ -209,6 +334,8 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
     out.model_pfun_ptr = &lba_pfun_adapter;
     out.pdf1_ptr = &dlba_scalar;
     out.cdf1_ptr = &plba_scalar;
+    out.model_dfun_raw = &dlba_raw;
+    out.model_pfun_raw = &plba_raw;
     if (type_std.find("IO") != std::string::npos) {
       out.ctx.use_posdrift = false;
     }
@@ -217,11 +344,15 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
     out.model_pfun_ptr = &rdm_pfun_adapter;
     out.pdf1_ptr = &drdm_scalar;
     out.cdf1_ptr = &prdm_scalar;
+    out.model_dfun_raw = &drdm_raw;
+    out.model_pfun_raw = &prdm_raw;
   } else if (type_std.find("LNR") != std::string::npos) {
     out.model_dfun_ptr = &lnr_dfun_adapter;
     out.model_pfun_ptr = &lnr_pfun_adapter;
     out.pdf1_ptr = &dlnr_scalar;
     out.cdf1_ptr = &plnr_scalar;
+    out.model_dfun_raw = &dlnr_raw;
+    out.model_pfun_raw = &plnr_raw;
   } else {
     Rcpp::stop("Unsupported race model type string in %s: %s", caller.c_str(), type_std.c_str());
   }
@@ -521,19 +652,60 @@ double c_log_likelihood_ss(
 
 double c_log_likelihood_DDM(NumericMatrix pars, DataFrame data,
                             const int n_trials, IntegerVector expand,
-                            double min_ll, LogicalVector is_ok, bool gng){
+                            double min_ll, LogicalVector is_ok, bool gng,
+                            bool all_finite_untruncated = false){
   const int n_out = expand.length();
   NumericVector rts = data["rt"];
   IntegerVector R = data["R"];
+  const double* rt_ptr = rts.begin();
+  const int* R_ptr = R.begin();
+  const double* pars_cm = pars.begin();
+
+  if (all_finite_untruncated) {
+    std::vector<double> lls(static_cast<size_t>(n_trials), min_ll);
+    std::vector<int> mask(static_cast<size_t>(n_trials), 1);
+    std::vector<int> ok_int(static_cast<size_t>(n_trials), 0);
+    for (int i = 0; i < n_trials; ++i) ok_int[static_cast<size_t>(i)] = is_ok[i] ? 1 : 0;
+    d_DDM_Wien_raw(rt_ptr, R_ptr, pars_cm, n_trials, pars.ncol(),
+                   mask.data(), ok_int.data(), lls.data(), min_ll);
+    const double* lls_ptr = lls.data();
+    const int* expand_ptr = expand.begin();
+    double sum_ll = 0.0;
+
+    #pragma omp simd reduction(+:sum_ll)
+    for (int i = 0; i < n_out; ++i) {
+      const int idx = expand_ptr[i] - 1; // expand is 1-based
+      double v = lls_ptr[idx];
+      if (!std::isfinite(v) || v < min_ll) {
+        v = min_ll;
+      }
+      sum_ll += v;
+    }
+
+    return sum_ll;
+  }
+
   NumericVector LT = get_col_with_default(data, "LT", 0.0);
   NumericVector UT = get_col_with_default(data, "UT", R_PosInf);
   NumericVector LC = get_col_with_default(data, "LC", 0.0);
   NumericVector UC = get_col_with_default(data, "UC", R_PosInf);
-  NumericVector lls(n_trials);
-  NumericVector lls_exp(n_out);
-  LogicalVector finite = !is_na(rts) & is_finite(rts);
-  LogicalVector ok_finite = is_ok & finite;
-  LogicalVector ok_nonfinite = is_ok & !finite;
+  std::vector<double> lls(static_cast<size_t>(n_trials), R_NegInf);
+  std::vector<int> finite_mask(static_cast<size_t>(n_trials), 0);
+  std::vector<int> ok_int(static_cast<size_t>(n_trials), 0);
+  std::vector<int> nonfinite_idx;
+  bool any_ok_finite = false;
+  bool any_ok_nonfinite = false;
+  for (int i = 0; i < n_trials; ++i) {
+    ok_int[static_cast<size_t>(i)] = is_ok[i] ? 1 : 0;
+    const bool finite_i = R_FINITE(rts[i]);
+    if (finite_i) {
+      finite_mask[static_cast<size_t>(i)] = 1;
+      if (is_ok[i]) any_ok_finite = true;
+    } else {
+      nonfinite_idx.push_back(i);
+      if (is_ok[i]) any_ok_nonfinite = true;
+    }
+  }
 
   auto log_interval_mass = [&](double logF_low, double logF_high) -> double {
     if (!R_FINITE(logF_high)) return R_NegInf;
@@ -541,33 +713,77 @@ double c_log_likelihood_DDM(NumericMatrix pars, DataFrame data,
     return log_diff_exp(logF_high, logF_low);
   };
   
-  if (is_true(any(ok_finite))) {
-    lls = d_DDM_Wien(rts, R, pars, ok_finite); // Inf rts will get passed back with R_NegInf ll here
-  } else {
-    lls.fill(R_NegInf);
+  if (any_ok_finite) {
+    d_DDM_Wien_raw(rt_ptr, R_ptr, pars_cm, n_trials, pars.ncol(),
+                   finite_mask.data(), ok_int.data(), lls.data(), min_ll);
   }
 
   // Apply truncation normaliser to finite trials for standard DDM only.
   // (For DDMGNG we preserve the existing semantics and do not apply truncation.)
-  if (!gng && is_true(any(ok_finite))) {
-    IntegerVector R1_for_cdf(n_trials, 1);
-    IntegerVector R2_for_cdf(n_trials, 2);
-    NumericVector logF_LT_1 = p_DDM_Wien(LT, R1_for_cdf, pars, ok_finite);
-    NumericVector logF_LT_2 = p_DDM_Wien(LT, R2_for_cdf, pars, ok_finite);
-    NumericVector logF_UT_1 = p_DDM_Wien(UT, R1_for_cdf, pars, ok_finite);
-    NumericVector logF_UT_2 = p_DDM_Wien(UT, R2_for_cdf, pars, ok_finite);
+  if (!gng && any_ok_finite) {
+    // Early-out: skip all 4 expensive p_DDM_Wien (CDF) calls if no trial has truncation.
+    // p_DDM_Wien with sv/SZ nonzero uses pdiff() with Neval=6000 numerical integration —
+    // calling it unconditionally even when LT==0 and UT==Inf for all trials was the main
+    // cause of ~100x slowdown vs the upstream SIMD branch for DDM/WDM.
+    bool needs_truncation = false;
     for (int i = 0; i < n_trials; ++i) {
-      if (!ok_finite[i]) continue;
-      if (LT[i] == 0.0 && !R_FINITE(UT[i])) continue; // no truncation
-      const double logF_LT_all = log_sum_exp(logF_LT_1[i], logF_LT_2[i]);
-      const double logF_UT_all = R_FINITE(UT[i]) ? log_sum_exp(logF_UT_1[i], logF_UT_2[i]) : 0.0; // log(1)
-      const double logZ = log_interval_mass(logF_LT_all, logF_UT_all);
-      if (R_FINITE(logZ)) lls[i] -= logZ;
-      else lls[i] = min_ll;
+      if (is_ok[i] && finite_mask[static_cast<size_t>(i)] &&
+          (LT[i] != 0.0 || R_FINITE(UT[i]))) {
+        needs_truncation = true;
+        break;
+      }
     }
+    if (needs_truncation) {
+      LogicalVector ok_finite(n_trials);
+      for (int i = 0; i < n_trials; ++i) {
+        ok_finite[i] = is_ok[i] && finite_mask[static_cast<size_t>(i)];
+      }
+      IntegerVector R1_for_cdf(n_trials, 1);
+      IntegerVector R2_for_cdf(n_trials, 2);
+      NumericVector logF_LT_1 = p_DDM_Wien(LT, R1_for_cdf, pars, ok_finite);
+      NumericVector logF_LT_2 = p_DDM_Wien(LT, R2_for_cdf, pars, ok_finite);
+      NumericVector logF_UT_1 = p_DDM_Wien(UT, R1_for_cdf, pars, ok_finite);
+      NumericVector logF_UT_2 = p_DDM_Wien(UT, R2_for_cdf, pars, ok_finite);
+      for (int i = 0; i < n_trials; ++i) {
+        if (!ok_finite[i]) continue;
+        if (LT[i] == 0.0 && !R_FINITE(UT[i])) continue; // no truncation
+        const double logF_LT_all = log_sum_exp(logF_LT_1[i], logF_LT_2[i]);
+        const double logF_UT_all = R_FINITE(UT[i]) ? log_sum_exp(logF_UT_1[i], logF_UT_2[i]) : 0.0; // log(1)
+        const double logZ = log_interval_mass(logF_LT_all, logF_UT_all);
+        if (R_FINITE(logZ)) lls[i] -= logZ;
+        else lls[i] = min_ll;
+      }
+    } // end if (needs_truncation)
   }
 
-  if (is_true(any(ok_nonfinite))) {
+  if (any_ok_nonfinite) {
+    const int n_nonfinite = static_cast<int>(nonfinite_idx.size());
+    NumericMatrix pars_nf(n_nonfinite, pars.ncol());
+    LogicalVector ok_nf(n_nonfinite);
+    for (int row = 0; row < n_nonfinite; ++row) {
+      const int src = nonfinite_idx[static_cast<size_t>(row)];
+      ok_nf[row] = is_ok[src];
+      for (int col = 0; col < pars.ncol(); ++col) {
+        pars_nf(row, col) = pars(src, col);
+      }
+    }
+    Rcpp::List pars_dn = pars.attr("dimnames");
+    if (!Rf_isNull(pars_dn)) {
+      Rcpp::List nf_dn = Rcpp::List::create(R_NilValue, pars_dn[1]);
+      pars_nf.attr("dimnames") = nf_dn;
+    }
+    auto compact_bound = [&](NumericVector source) {
+      NumericVector out(n_nonfinite);
+      for (int row = 0; row < n_nonfinite; ++row) {
+        out[row] = source[nonfinite_idx[static_cast<size_t>(row)]];
+      }
+      return out;
+    };
+    NumericVector LT_nf = compact_bound(LT);
+    NumericVector UT_nf = compact_bound(UT);
+    NumericVector LC_nf = compact_bound(LC);
+    NumericVector UC_nf = compact_bound(UC);
+
     if (gng) {
       // Preserve current right-censoring semantics for go/no-go, and add LC-aware
       // handling for rt == -Inf / NA without introducing truncation correction.
@@ -589,97 +805,108 @@ double c_log_likelihood_DDM(NumericMatrix pars, DataFrame data,
       if (go_idx == -1) {
         go_idx = 1;
         for (int i = 0; i < n_trials; ++i) {
-          if (finite[i] && R[i] != NA_INTEGER) {
+          if (finite_mask[static_cast<size_t>(i)] && R[i] != NA_INTEGER) {
             go_idx = R[i];
             break;
           }
         }
       }
 
-      IntegerVector R_go_for_cdf(n_trials, go_idx);
-      NumericVector logcdf_U_go = p_DDM_Wien(UC, R_go_for_cdf, pars, ok_nonfinite);
-      NumericVector logcdf_L_go = p_DDM_Wien(LC, R_go_for_cdf, pars, ok_nonfinite);
+      IntegerVector R_go_for_cdf(n_nonfinite, go_idx);
+      NumericVector logcdf_U_go = p_DDM_Wien(UC_nf, R_go_for_cdf, pars_nf, ok_nf);
+      NumericVector logcdf_L_go = p_DDM_Wien(LC_nf, R_go_for_cdf, pars_nf, ok_nf);
 
-      for (int i = 0; i < n_trials; ++i) {
-        if (!ok_nonfinite[i]) continue;
+      for (int row = 0; row < n_nonfinite; ++row) {
+        const int i = nonfinite_idx[static_cast<size_t>(row)];
+        if (!is_ok[i]) continue;
         if (rts[i] == R_PosInf) {
           // Keep existing right-censoring behavior: no go-boundary hit before UC.
-          lls[i] = log1m_exp(logcdf_U_go[i]);
+          lls[static_cast<size_t>(i)] = log1m_exp(logcdf_U_go[row]);
         } else if (rts[i] == R_NegInf) {
           // LC support: go-boundary hit by LC.
-          lls[i] = logcdf_L_go[i];
+          lls[static_cast<size_t>(i)] = logcdf_L_go[row];
         } else {
           // NA non-response/censored coding can represent left or right censoring.
-          lls[i] = log_sum_exp(logcdf_L_go[i], log1m_exp(logcdf_U_go[i]));
+          lls[static_cast<size_t>(i)] = log_sum_exp(logcdf_L_go[row], log1m_exp(logcdf_U_go[row]));
         }
       }
     } else {
       // Standard DDM: full LC/UC/LT/UT interval handling for non-finite RTs.
-      IntegerVector R1_for_cdf(n_trials, 1);
-      IntegerVector R2_for_cdf(n_trials, 2);
-      NumericVector logF_LT_1 = p_DDM_Wien(LT, R1_for_cdf, pars, ok_nonfinite);
-      NumericVector logF_LT_2 = p_DDM_Wien(LT, R2_for_cdf, pars, ok_nonfinite);
-      NumericVector logF_LC_1 = p_DDM_Wien(LC, R1_for_cdf, pars, ok_nonfinite);
-      NumericVector logF_LC_2 = p_DDM_Wien(LC, R2_for_cdf, pars, ok_nonfinite);
-      NumericVector logF_UC_1 = p_DDM_Wien(UC, R1_for_cdf, pars, ok_nonfinite);
-      NumericVector logF_UC_2 = p_DDM_Wien(UC, R2_for_cdf, pars, ok_nonfinite);
-      NumericVector logF_UT_1 = p_DDM_Wien(UT, R1_for_cdf, pars, ok_nonfinite);
-      NumericVector logF_UT_2 = p_DDM_Wien(UT, R2_for_cdf, pars, ok_nonfinite);
+      IntegerVector R1_for_cdf(n_nonfinite, 1);
+      IntegerVector R2_for_cdf(n_nonfinite, 2);
+      NumericVector logF_LT_1 = p_DDM_Wien(LT_nf, R1_for_cdf, pars_nf, ok_nf);
+      NumericVector logF_LT_2 = p_DDM_Wien(LT_nf, R2_for_cdf, pars_nf, ok_nf);
+      NumericVector logF_LC_1 = p_DDM_Wien(LC_nf, R1_for_cdf, pars_nf, ok_nf);
+      NumericVector logF_LC_2 = p_DDM_Wien(LC_nf, R2_for_cdf, pars_nf, ok_nf);
+      NumericVector logF_UC_1 = p_DDM_Wien(UC_nf, R1_for_cdf, pars_nf, ok_nf);
+      NumericVector logF_UC_2 = p_DDM_Wien(UC_nf, R2_for_cdf, pars_nf, ok_nf);
+      NumericVector logF_UT_1 = p_DDM_Wien(UT_nf, R1_for_cdf, pars_nf, ok_nf);
+      NumericVector logF_UT_2 = p_DDM_Wien(UT_nf, R2_for_cdf, pars_nf, ok_nf);
 
-      for (int i = 0; i < n_trials; ++i) {
-        if (!ok_nonfinite[i]) continue;
+      for (int row = 0; row < n_nonfinite; ++row) {
+        const int i = nonfinite_idx[static_cast<size_t>(row)];
+        if (!is_ok[i]) continue;
 
         const bool r_known = (R[i] != NA_INTEGER);
         const int r_idx = r_known ? R[i] : 0;
 
-        const double logF_LT_all = log_sum_exp(logF_LT_1[i], logF_LT_2[i]);
-        const double logF_LC_all = log_sum_exp(logF_LC_1[i], logF_LC_2[i]);
-        const double logF_UC_all = log_sum_exp(logF_UC_1[i], logF_UC_2[i]);
-        const double logF_UT_all = R_FINITE(UT[i]) ? log_sum_exp(logF_UT_1[i], logF_UT_2[i]) : 0.0; // log(1)
+        const double logF_LT_all = log_sum_exp(logF_LT_1[row], logF_LT_2[row]);
+        const double logF_LC_all = log_sum_exp(logF_LC_1[row], logF_LC_2[row]);
+        const double logF_UC_all = log_sum_exp(logF_UC_1[row], logF_UC_2[row]);
+        const double logF_UT_all = R_FINITE(UT[i]) ? log_sum_exp(logF_UT_1[row], logF_UT_2[row]) : 0.0; // log(1)
 
         if (rts[i] == R_NegInf) {
           // Left-censored interval (LT, LC]
           if (!r_known) {
-            lls[i] = log_interval_mass(logF_LT_all, logF_LC_all);
+            lls[static_cast<size_t>(i)] = log_interval_mass(logF_LT_all, logF_LC_all);
           } else if (r_idx == 1) {
-            lls[i] = log_interval_mass(logF_LT_1[i], logF_LC_1[i]);
+            lls[static_cast<size_t>(i)] = log_interval_mass(logF_LT_1[row], logF_LC_1[row]);
           } else {
-            lls[i] = log_interval_mass(logF_LT_2[i], logF_LC_2[i]);
+            lls[static_cast<size_t>(i)] = log_interval_mass(logF_LT_2[row], logF_LC_2[row]);
           }
         } else if (rts[i] == R_PosInf) {
           // Right-censored interval (UC, UT]
           if (!r_known) {
-            lls[i] = log_interval_mass(logF_UC_all, logF_UT_all);
+            lls[static_cast<size_t>(i)] = log_interval_mass(logF_UC_all, logF_UT_all);
           } else if (r_idx == 1) {
-            lls[i] = log_interval_mass(logF_UC_1[i], logF_UT_1[i]);
+            lls[static_cast<size_t>(i)] = log_interval_mass(logF_UC_1[row], logF_UT_1[row]);
           } else {
-            lls[i] = log_interval_mass(logF_UC_2[i], logF_UT_2[i]);
+            lls[static_cast<size_t>(i)] = log_interval_mass(logF_UC_2[row], logF_UT_2[row]);
           }
         } else {
           // rt == NA: union of left and right censored intervals
           if (!r_known) {
             const double ll_left = log_interval_mass(logF_LT_all, logF_LC_all);
             const double ll_right = log_interval_mass(logF_UC_all, logF_UT_all);
-            lls[i] = log_sum_exp(ll_left, ll_right);
+            lls[static_cast<size_t>(i)] = log_sum_exp(ll_left, ll_right);
           } else if (r_idx == 1) {
-            const double ll_left = log_interval_mass(logF_LT_1[i], logF_LC_1[i]);
-            const double ll_right = log_interval_mass(logF_UC_1[i], logF_UT_1[i]);
-            lls[i] = log_sum_exp(ll_left, ll_right);
+            const double ll_left = log_interval_mass(logF_LT_1[row], logF_LC_1[row]);
+            const double ll_right = log_interval_mass(logF_UC_1[row], logF_UT_1[row]);
+            lls[static_cast<size_t>(i)] = log_sum_exp(ll_left, ll_right);
           } else {
-            const double ll_left = log_interval_mass(logF_LT_2[i], logF_LC_2[i]);
-            const double ll_right = log_interval_mass(logF_UC_2[i], logF_UT_2[i]);
-            lls[i] = log_sum_exp(ll_left, ll_right);
+            const double ll_left = log_interval_mass(logF_LT_2[row], logF_LC_2[row]);
+            const double ll_right = log_interval_mass(logF_UC_2[row], logF_UT_2[row]);
+            lls[static_cast<size_t>(i)] = log_sum_exp(ll_left, ll_right);
           }
         }
       }
     }
   }
-  lls_exp = c_expand(lls, expand); // decompress
-  // lls_exp = lls;
-  lls_exp[is_na(lls_exp)] = min_ll;
-  lls_exp[is_infinite(lls_exp)] = min_ll;
-  lls_exp[lls_exp < min_ll] = min_ll;
-  return(sum(lls_exp));
+  const double* lls_ptr = lls.data();
+  const int* expand_ptr = expand.begin();
+  double sum_ll = 0.0;
+
+  #pragma omp simd reduction(+:sum_ll)
+  for (int i = 0; i < n_out; ++i) {
+    const int idx = expand_ptr[i] - 1; // expand is 1-based
+    double v = lls_ptr[idx];
+    if (!std::isfinite(v) || v < min_ll) {
+      v = min_ll;
+    }
+    sum_ll += v;
+  }
+
+  return sum_ll;
 }
 
 // [[Rcpp::export]]
@@ -711,6 +938,7 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
   if(type_std.find("DDM") != std::string::npos){
     bool gng = (type_std.find("GNG") != std::string::npos);
     IntegerVector expand = data.attr("expand");
+    const bool all_finite_untruncated = ddm_data_all_finite_untruncated(data, n_trials);
     for(int i = 0; i < n_particles; i++){
       p_vector = p_matrix(i, _);
       p_vector.names() = p_names;
@@ -727,7 +955,8 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
         bound_specs = make_bound_specs(minmax,mm_names,pars,bounds);
       }
       is_ok = c_do_bound(pars, bound_specs);
-      lls[i] = c_log_likelihood_DDM(pars, data, n_trials, expand, min_ll, is_ok, gng);
+      lls[i] = c_log_likelihood_DDM(pars, data, n_trials, expand, min_ll, is_ok,
+                                    gng, all_finite_untruncated);
     }
   } else if(type == "MRI" || type == "MRI_AR1"){
     int n_pars = p_types.length();
@@ -845,7 +1074,9 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
                                        n_trials,
                                        winner, expand, min_ll, is_ok, n_lR,
                                        &adapter.ctx,
-                                       all_finite_trials);
+                                       all_finite_trials,
+                                       adapter.model_dfun_raw,
+                                       adapter.model_pfun_raw);
       }
   }
   return(lls);
@@ -867,10 +1098,15 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
   CharacterVector p_names = colnames(particle_matrix);
   std::string type_std = Rcpp::as<std::string>(Rcpp::wrap(type));
 
+  const bool is_ddm_type = type_std.find("DDM") != std::string::npos;
+  const bool is_mri_type = (type == "MRI" || type == "MRI_AR1");
+  const bool is_ss_type = type_std.find("SS") != std::string::npos;
+  const bool use_pt_mapping = is_ddm_type || (!is_mri_type && !is_ss_type);
+
   NumericMatrix one_particle(1, particle_matrix.ncol());
   colnames(one_particle) = p_names;
   IntegerVector kernel_output_codes = IntegerVector::create(1);
-  auto pars_for_particle = [&](int i) -> NumericMatrix {
+  auto pars_for_particle_generic = [&](int i) -> NumericMatrix {
     for (int j = 0; j < particle_matrix.ncol(); ++j) {
       one_particle(0, j) = particle_matrix(i, j);
     }
@@ -878,22 +1114,79 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
                                       pretransforms, trend, false, false, kernel_output_codes);
   };
 
-  if (type_std.find("DDM") != std::string::npos) {
+  NumericMatrix particle_matrix_pt;
+  ParamTable param_table_template;
+  std::vector<TransformSpec> transform_specs_pt;
+  std::unique_ptr<TrendPlan> trend_plan;
+  std::unique_ptr<TrendRuntime> trend_runtime;
+  Rcpp::CharacterVector keep_names;
+  std::vector<int> pm_col_to_base_idx;
+
+  if (use_pt_mapping) {
+    std::vector<TransformSpec> pre_specs = make_transform_specs(particle_matrix, pretransforms);
+    particle_matrix_pt = c_do_transform(particle_matrix, pre_specs);
+
+    const bool has_constants = !(constants.size() == 1 &&
+                                 Rcpp::NumericVector::is_na(constants[0]));
+    if (has_constants) {
+      particle_matrix_pt = add_constants_columns(particle_matrix_pt, constants);
+    }
+
+    NumericVector p_vector = particle_matrix_pt(0, _);
+    p_vector.attr("names") = colnames(particle_matrix_pt);
+    param_table_template = ParamTable::from_p_vector_and_designs(p_vector, designs, n_trials);
+    transform_specs_pt = make_transform_specs_for_paramtable(param_table_template, transforms);
+
+    Rcpp::CharacterVector pm_names = colnames(particle_matrix_pt);
+    pm_col_to_base_idx.assign(pm_names.size(), -1);
+    for (int j = 0; j < pm_names.size(); ++j) {
+      std::string nm = Rcpp::as<std::string>(pm_names[j]);
+      auto it = param_table_template.name_to_base_idx.find(nm);
+      if (it != param_table_template.name_to_base_idx.end()) {
+        pm_col_to_base_idx[j] = it->second;
+      }
+    }
+
+    if (!trend.isNull()) {
+      trend_plan.reset(new TrendPlan(trend, data));
+      trend_runtime.reset(new TrendRuntime(*trend_plan));
+      trend_runtime->bind_all_ops_to_paramtable(param_table_template);
+
+      Rcpp::CharacterVector dnames = designs.names();
+      const auto& trend_params = trend_runtime->all_trend_params();
+      keep_names = names_excluding(dnames, { &trend_params });
+    } else {
+      keep_names = designs.names();
+    }
+  }
+
+  TrendRuntime* trend_runtime_ptr = trend_runtime ? trend_runtime.get() : nullptr;
+
+  if (is_ddm_type) {
     bool gng = (type_std.find("GNG") != std::string::npos);
     IntegerVector expand = data.attr("expand");
+    const bool all_finite_untruncated = ddm_data_all_finite_untruncated(data, n_trials);
     for (int i = 0; i < n_particles; ++i) {
-      pars = pars_for_particle(i);
-      if (i == 0) {
-        bound_specs = make_bound_specs(minmax, mm_names, pars, bounds);
+      if (i > 0) {
+        param_table_template.fill_from_particle_row(particle_matrix_pt, i, pm_col_to_base_idx);
       }
-      is_ok = c_do_bound(pars, bound_specs);
-      lls[i] = c_log_likelihood_DDM(pars, data, n_trials, expand, min_ll, is_ok, gng);
+      pars = get_pars_matrix_oo_fast(param_table_template,
+                                     designs,
+                                     trend_runtime_ptr,
+                                     transform_specs_pt,
+                                     keep_names);
+      if (i == 0) {
+        bound_specs = make_bound_specs_pt(minmax, mm_names, param_table_template, bounds);
+      }
+      is_ok = c_do_bound_pt(param_table_template, bound_specs);
+      lls[i] = c_log_likelihood_DDM(pars, data, n_trials, expand, min_ll, is_ok,
+                                    gng, all_finite_untruncated);
     }
-  } else if (type == "MRI" || type == "MRI_AR1") {
+  } else if (is_mri_type) {
     int n_pars = p_types.length();
     NumericVector y = extract_y(data);
     for (int i = 0; i < n_particles; ++i) {
-      pars = pars_for_particle(i);
+      pars = pars_for_particle_generic(i);
       if (i == 0) {
         bound_specs = make_bound_specs(minmax, mm_names, pars, bounds);
       }
@@ -904,7 +1197,7 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
         lls[i] = c_log_likelihood_MRI_white(pars, y, is_ok, n_trials, n_pars, min_ll);
       }
     }
-  } else if (type_std.find("SS") != std::string::npos) {
+  } else if (is_ss_type) {
     IntegerVector expand = data.attr("expand");
     NumericVector lR = data["lR"];
     int n_lR = unique(lR).length();
@@ -918,7 +1211,7 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
     int idx_gf = is_exg ? 7 : 9;
 
     for (int i = 0; i < n_particles; ++i) {
-      pars = pars_for_particle(i);
+      pars = pars_for_particle_generic(i);
       if (i == 0) {
         bound_specs = make_bound_specs(minmax, mm_names, pars, bounds);
       }
@@ -959,20 +1252,138 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
       }
     }
 
-    for (int i = 0; i < n_particles; ++i) {
-      pars = pars_for_particle(i);
-      if (i == 0) {
-        bound_specs = make_bound_specs(minmax, mm_names, pars, bounds);
+    bool has_RACE_col_fp = data.containsElementNamed("RACE");
+    bool has_RACE_attrs_fp = false;
+    Rcpp::IntegerVector RACE_fp;
+    Rcpp::LogicalVector RACE_mask_fp;
+    if (has_RACE_col_fp &&
+        data.hasAttribute("RACE_nacc_by_row") &&
+        data.hasAttribute("RACE_mask")) {
+      RACE_fp = data.attr("RACE_nacc_by_row");
+      RACE_mask_fp = data.attr("RACE_mask");
+      has_RACE_attrs_fp = (RACE_fp.size() == n_trials && RACE_mask_fp.size() == n_trials);
+    }
+
+    // --- Fast path: all-finite RTs, no truncation ---
+    // Pre-allocates buffers once outside the particle loop; each particle writes
+    // log-density/log-survivor directly into raw double arrays, bypassing all
+    // Rcpp vector allocations inside c_log_likelihood_race.
+    // Variable-accumulator RACE designs are supported when cache attrs are
+    // present: inactive accumulator rows are masked out and not included in the
+    // unique-trial sum.
+    // pContaminant is handled inline: log(1-pC) shift for finite RTs (no-op when pC=0).
+    const bool use_raw_fast_path =
+      race_data_all_finite_untruncated(data, n_trials, n_lR) &&
+      (!has_RACE_col_fp || has_RACE_attrs_fp) &&
+      adapter.model_pfun_raw != nullptr &&
+      adapter.model_dfun_raw != nullptr;
+
+    const int n_unique_fp = n_trials / n_lR;
+    std::vector<double> lds_buf;
+    std::vector<double> ll_uniq_buf;
+    std::vector<int> winner_int_buf;
+    std::vector<int> loser_int_buf;
+    std::vector<int> isok_int_fp;
+    NumericVector rts_fp_hold;
+    const double* rt_ptr = nullptr;
+    const int* expand_ptr = expand.begin();
+    const int n_exp = expand.length();
+    int fast_pc_col = -2;  // -2: not yet searched; -1: not present in pars
+
+    if (use_raw_fast_path) {
+      lds_buf.resize(n_trials);
+      ll_uniq_buf.resize(n_unique_fp);
+      winner_int_buf.resize(n_trials);
+      loser_int_buf.resize(n_trials);
+      isok_int_fp.resize(n_trials);
+      // winner/loser masks are data-fixed; fill once
+      for (int j = 0; j < n_trials; ++j) {
+        const bool active = !has_RACE_col_fp || RACE_mask_fp[j];
+        winner_int_buf[j] = (active && winner[j]) ? 1 : 0;
+        loser_int_buf[j]  = (active && n_lR > 1 && !winner[j]) ? 1 : 0;
       }
-      is_ok = c_do_bound(pars, bound_specs);
+      rts_fp_hold = data["rt"];
+      rt_ptr = rts_fp_hold.begin();
+    }
+
+    for (int i = 0; i < n_particles; ++i) {
+      if (i > 0) {
+        param_table_template.fill_from_particle_row(particle_matrix_pt, i, pm_col_to_base_idx);
+      }
+      pars = get_pars_matrix_oo_fast(param_table_template,
+                                     designs,
+                                     trend_runtime_ptr,
+                                     transform_specs_pt,
+                                     keep_names);
+      if (i == 0) {
+        bound_specs = make_bound_specs_pt(minmax, mm_names, param_table_template, bounds);
+      }
+      is_ok = c_do_bound_pt(param_table_template, bound_specs);
       is_ok = lr_all(is_ok, n_lR);
-      lls[i] = c_log_likelihood_race(pars, data,
-                                     adapter.model_dfun_ptr, adapter.model_pfun_ptr,
-                                     adapter.pdf1_ptr, adapter.cdf1_ptr,
-                                     n_trials,
-                                     winner, expand, min_ll, is_ok, n_lR,
-                                     &adapter.ctx,
-                                     all_finite_trials);
+
+      if (use_raw_fast_path) {
+        // Locate pContaminant column once from first particle's pars dimnames
+        if (fast_pc_col == -2) {
+          fast_pc_col = -1;
+          Rcpp::List dn = pars.attr("dimnames");
+          if (!Rf_isNull(dn)) {
+            Rcpp::CharacterVector cn = Rcpp::as<Rcpp::CharacterVector>(dn[1]);
+            for (int j = 0; j < cn.size(); ++j) {
+              if (Rcpp::as<std::string>(cn[j]) == "pContaminant") { fast_pc_col = j; break; }
+            }
+          }
+        }
+
+        // Fill per-particle isok buffer
+        for (int j = 0; j < n_trials; ++j) isok_int_fp[j] = is_ok[j] ? 1 : 0;
+
+        const double* pars_cm = pars.begin();  // column-major: col j at pars_cm + j*n_trials
+
+        // Log-density for winner rows
+        adapter.model_dfun_raw(rt_ptr, pars_cm, n_trials,
+                               winner_int_buf.data(), isok_int_fp.data(),
+                               lds_buf.data(), min_ll, &adapter.ctx);
+
+        // Log-survivor for loser rows (writes into same buffer, different slots)
+        if (n_lR > 1) {
+          adapter.model_pfun_raw(rt_ptr, pars_cm, n_trials,
+                                 loser_int_buf.data(), isok_int_fp.data(),
+                                 lds_buf.data(), min_ll, &adapter.ctx);
+        }
+
+        // Sum n_lR rows per unique trial; apply pC correction (no-op when pC=0).
+        // For all-finite RTs: ll_trial = log(1-pC) + sum_k(lds[k])
+        for (int j = 0; j < n_unique_fp; ++j) {
+          double s = 0.0;
+          const int base = j * n_lR;
+          const int n_lR_j = has_RACE_col_fp ? RACE_fp[base] : n_lR;
+          for (int k = 0; k < n_lR_j; ++k) s += lds_buf[base + k];
+          s = s < min_ll ? min_ll : s;
+          if (fast_pc_col >= 0) {
+            const double pC = pars_cm[fast_pc_col * n_trials + base];
+            if (pC != 0.0) s += std::log1p(-pC);
+          }
+          ll_uniq_buf[j] = s;
+        }
+
+        // Expand unique-trial LLs and accumulate (1-based expand indices)
+        double total_ll = 0.0;
+        #pragma omp simd reduction(+:total_ll)
+        for (int ei = 0; ei < n_exp; ++ei) {
+          total_ll += ll_uniq_buf[expand_ptr[ei] - 1];
+        }
+        lls[i] = total_ll;
+      } else {
+        lls[i] = c_log_likelihood_race(pars, data,
+                                       adapter.model_dfun_ptr, adapter.model_pfun_ptr,
+                                       adapter.pdf1_ptr, adapter.cdf1_ptr,
+                                       n_trials,
+                                       winner, expand, min_ll, is_ok, n_lR,
+                                       &adapter.ctx,
+                                       all_finite_trials,
+                                       adapter.model_dfun_raw,
+                                       adapter.model_pfun_raw);
+      }
     }
   }
   return lls;
@@ -1332,7 +1743,9 @@ double c_log_likelihood_race(
     const Rcpp::LogicalVector isok,   // Parameter validity for each row in 'pars' matrix
     int n_lR,                              // Number of accumulators in the race (must be > 0 if data exists)
     void* model_context_for_funcs,          // Context for model_dfun/model_pfun (e.g., contains posdrift for LBA)
-    bool all_finite_trials             // Data-only hint: all trials finite/in-bounds/known response
+    bool all_finite_trials,             // Data-only hint: all trials finite/in-bounds/known response
+    RaceRawFun model_dfun_raw,
+    RaceRawFun model_pfun_raw
 ) {
   
   // Only allocate a GSL workspace if/when numerical integration is needed.
@@ -1495,7 +1908,28 @@ double c_log_likelihood_race(
     Rcpp::LogicalVector idx_loss;
     bool any_win = false;
     bool any_loss = false;
-    if (use_full_finite_batch && !has_RACE_col) {
+    const bool use_raw_finite_batch = model_dfun_raw != nullptr && model_pfun_raw != nullptr;
+    std::vector<int> idx_win_int;
+    std::vector<int> idx_loss_int;
+    std::vector<int> isok_int_all;
+
+    if (use_raw_finite_batch) {
+      idx_win_int.assign(static_cast<size_t>(n_trials), 0);
+      idx_loss_int.assign(static_cast<size_t>(n_trials), 0);
+      isok_int_all.assign(static_cast<size_t>(n_trials), 0);
+      for (int i = 0; i < n_trials; ++i) {
+        isok_int_all[static_cast<size_t>(i)] = isok[i] ? 1 : 0;
+        if (has_RACE_col && !RACE_mask[i]) continue;
+        if (!use_full_finite_batch && !finite_rt_mask[i]) continue;
+        if (winner[i]) {
+          idx_win_int[static_cast<size_t>(i)] = 1;
+          any_win = true;
+        } else if (n_lR > 1) {
+          idx_loss_int[static_cast<size_t>(i)] = 1;
+          any_loss = true;
+        }
+      }
+    } else if (use_full_finite_batch && !has_RACE_col) {
       idx_win = winner;
       any_win = true;
       if (n_lR > 1) {
@@ -1512,8 +1946,21 @@ double c_log_likelihood_race(
         else { idx_loss[i] = true; any_loss = true; }
       }
     }
-    
-    if (any_win) {
+
+    if (use_raw_finite_batch) {
+      const double* rt_ptr = rts_dadm.begin();
+      const double* pars_cm = pars.begin();
+      if (any_win) {
+        model_dfun_raw(rt_ptr, pars_cm, n_trials,
+                       idx_win_int.data(), isok_int_all.data(),
+                       lds.begin(), min_ll, dense_ctx_ptr);
+      }
+      if (n_lR > 1 && any_loss) {
+        model_pfun_raw(rt_ptr, pars_cm, n_trials,
+                       idx_loss_int.data(), isok_int_all.data(),
+                       lds.begin(), min_ll, dense_ctx_ptr);
+      }
+    } else if (any_win) {
       Rcpp::NumericVector win_pdf = model_dfun(rts_dadm, pars, idx_win, isok, dense_ctx_ptr);
       int out_i = 0;
       for (int i = 0; i < n_trials; ++i) {
@@ -1523,7 +1970,7 @@ double c_log_likelihood_race(
       }
     }
     
-    if (n_lR > 1 && any_loss) {
+    if (!use_raw_finite_batch && n_lR > 1 && any_loss) {
       Rcpp::NumericVector loss_cdf = model_pfun(rts_dadm, pars, idx_loss, isok, dense_ctx_ptr);
       int out_i = 0;
       for (int i = 0; i < n_trials; ++i) {
@@ -1779,45 +2226,51 @@ double c_log_likelihood_race(
   
   
   // --- Summation of log-likelihoods for all unique trials ---
+  // pC modification (if any) is kept in a separate pass so the final summation
+  // loop is a pure reduction — allowing #pragma omp simd to vectorize it.
   double total_ll = 0;
-  if (expand.length() > 0) { // If an expansion vector is provided (e.g. from non-compressed dadm)
-    if (use_pC) { // multiply all likelihoods by the appropriate pC adjustment if it's present
+  if (expand.length() > 0) { // non-compressed dadm: sum via expand index vector
+    if (use_pC) {
       for (int j = 0; j < n_unique_trials; ++j) {
-        double pC = pC_values[j];
-        double log1m_pC = std::log1p(-pC); // log(1-pC) todo: check if one of the safe helpers is appropriate here
-        int start_row_idx = j * n_lR;
-        double rt_j = rts_dadm[start_row_idx];
-        
-        if (rt_j == R_PosInf) {
-          double term1 = std::log(pC);
-          double term2 = log1m_pC + ll_unique[j]; //pIO + pD
-          ll_unique[j] = log_sum_exp(term1, term2); // pC * pIO * pD
-        } else {
-          ll_unique[j] = log1m_pC + ll_unique[j];    // pRT * 1-pC
-        }
-        
-      }
-    }
-    for (int i = 0; i < expand.length(); ++i) {
-      total_ll += ll_unique[expand[i] - 1];
-    }
-  } else { // Default: sum ll_unique directly (each unique trial counted once)
-    for (int j = 0; j < n_unique_trials; ++j) {
-      if (use_pC) {
         double pC = pC_values[j];
         double log1m_pC = std::log1p(-pC);
         int start_row_idx = j * n_lR;
         double rt_j = rts_dadm[start_row_idx];
-        
+        if (rt_j == R_PosInf) {
+          ll_unique[j] = log_sum_exp(std::log(pC), log1m_pC + ll_unique[j]);
+        } else {
+          ll_unique[j] = log1m_pC + ll_unique[j];
+        }
+      }
+    }
+    // Gather + reduce: indirect indexing prevents full SIMD gather, but the
+    // reduction itself still benefits from the pragma.
+    const double* ll_ptr = ll_unique.begin();
+    const int*    ex_ptr = expand.begin();
+    const int     n_exp  = expand.length();
+    #pragma omp simd reduction(+:total_ll)
+    for (int i = 0; i < n_exp; ++i) {
+      total_ll += ll_ptr[ex_ptr[i] - 1];
+    }
+  } else { // compressed dadm: each unique trial counted once
+    if (use_pC) {
+      for (int j = 0; j < n_unique_trials; ++j) {
+        double pC = pC_values[j];
+        double log1m_pC = std::log1p(-pC);
+        int start_row_idx = j * n_lR;
+        double rt_j = rts_dadm[start_row_idx];
         if (R_FINITE(rt_j)) {
           ll_unique[j] = log1m_pC + ll_unique[j];
         } else {
-          double term1 = std::log(pC);
-          double term2 = log1m_pC + ll_unique[j];
-          ll_unique[j] = log_sum_exp(term1, term2);
+          ll_unique[j] = log_sum_exp(std::log(pC), log1m_pC + ll_unique[j]);
         }
       }
-      total_ll += ll_unique[j];
+    }
+    // Pure sequential reduction — fully vectorizable.
+    const double* ll_ptr = ll_unique.begin();
+    #pragma omp simd reduction(+:total_ll)
+    for (int j = 0; j < n_unique_trials; ++j) {
+      total_ll += ll_ptr[j];
     }
   }
   

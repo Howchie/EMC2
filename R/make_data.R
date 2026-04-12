@@ -121,11 +121,11 @@ make_missing <- function(data, LT = NULL, UT = NULL, LC = NULL, UC = NULL,
   data$UC[!no_censor] <- as.numeric(UC[!no_censor])
 
   if (!is.null(rt_resolution)) {
-    data$rt <- floor(data$rt/rt_resolution)*rt_resolution
-    data$LC <- floor(data$LC/rt_resolution)*rt_resolution
-    data$UC <- floor(data$UC/rt_resolution)*rt_resolution
-    data$LT <- floor(data$LT/rt_resolution)*rt_resolution
-    data$UT <- floor(data$UT/rt_resolution)*rt_resolution
+    data$rt <- .floor_to_rt_resolution(data$rt, rt_resolution)
+    data$LC <- .floor_to_rt_resolution(data$LC, rt_resolution)
+    data$UC <- .floor_to_rt_resolution(data$UC, rt_resolution)
+    data$LT <- .floor_to_rt_resolution(data$LT, rt_resolution)
+    data$UT <- .floor_to_rt_resolution(data$UT, rt_resolution)
   }
 
   LCresponse <- get_missing(LCresponse, data, "LCresponse",FALSE,"logical")
@@ -149,8 +149,10 @@ make_missing <- function(data, LT = NULL, UT = NULL, LC = NULL, UC = NULL,
     UCresponse[isgng] <- FALSE
   }
 
-  if (any(LT_eff>LC_eff & LC_eff!=0)) stop("LT > LC not allowed")
-  if (any(UC_eff>UT_eff & UC_eff!=Inf)) stop("UC > UT not allowed")
+  tol_l <- sqrt(.Machine$double.eps) * pmax(1, abs(LT_eff), abs(LC_eff))
+  tol_u <- sqrt(.Machine$double.eps) * pmax(1, abs(UC_eff), abs(UT_eff))
+  if (any((LT_eff - LC_eff) > tol_l & LC_eff != 0, na.rm = TRUE)) stop("LT > LC not allowed")
+  if (any((UC_eff - UT_eff) > tol_u & UC_eff != Inf, na.rm = TRUE)) stop("UC > UT not allowed")
 
   # Only keep trials in LT-UT (inclusive) or infinite or NA
   cutL <- is.finite(data$rt) & (data$rt < LT_eff)

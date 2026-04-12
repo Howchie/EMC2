@@ -45,6 +45,54 @@ NumericVector d_DDM_Wien(NumericVector rts, IntegerVector Rs, NumericMatrix pars
   return(out);
 }
 
+inline void d_DDM_Wien_raw(const double* rts, const int* Rs, const double* pars_cm,
+                           int n_rows, int n_pars, const int* mask,
+                           const int* is_ok, double* out, double min_ll) {
+  (void)n_pars;
+  int Epsflag = 1;
+  double eps = 5e-3;
+  int K = 0;
+  int Neval = 6000;
+  int choice = 0;
+
+  const double* v_   = pars_cm + 0 * n_rows;
+  const double* a_   = pars_cm + 1 * n_rows;
+  const double* sv_  = pars_cm + 2 * n_rows;
+  const double* t0_  = pars_cm + 3 * n_rows;
+  const double* st0_ = pars_cm + 4 * n_rows;
+  const double* s_   = pars_cm + 5 * n_rows;
+  const double* Z_   = pars_cm + 6 * n_rows;
+  const double* SZ_  = pars_cm + 7 * n_rows;
+
+  for (int i = 0; i < n_rows; ++i) {
+    if (!mask[i]) continue;
+    if (!is_ok[i]) {
+      out[i] = min_ll;
+      continue;
+    }
+
+    const double pm = (Rs[i] == 1) ? -1.0 : 1.0;
+    if (SZ_[i] == 0.0 && st0_[i] == 0.0) {
+      const double new_rt = rts[i] - t0_[i];
+      if (new_rt > 0.0) {
+        out[i] = dwiener(new_rt * pm, a_[i] / s_[i], v_[i] / s_[i],
+                         Z_[i], sv_[i] / s_[i], eps, K, Epsflag);
+      } else {
+        out[i] = min_ll;
+      }
+    } else {
+      double Rval;
+      double Rerr;
+      const double sz = (Z_[i] < (1.0 - Z_[i])) ? 2.0 * SZ_[i] * Z_[i]
+                                                : 2.0 * SZ_[i] * (1.0 - Z_[i]);
+      ddiff(choice, rts[i], pm, a_[i] / s_[i], v_[i] / s_[i], t0_[i],
+            Z_[i], sz, sv_[i] / s_[i], st0_[i], eps, K, Epsflag, Neval,
+            &Rval, &Rerr);
+      out[i] = (Rval > 0.0 && std::isfinite(Rval)) ? std::log(Rval) : min_ll;
+    }
+  }
+}
+
 NumericVector p_DDM_Wien(NumericVector rts, IntegerVector Rs, NumericMatrix pars, LogicalVector is_ok){
   static int ddm_debug_prints_left = 20; // shared across calls; keep noise bounded
   const bool ddm_debug = (std::getenv("EMC2_DEBUG_DDM") != nullptr);

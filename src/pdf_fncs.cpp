@@ -41,6 +41,31 @@ double logfs(double t, double w, int K) {
 	return  -0.5 * M_LN2 - M_LN_SQRT_PI - 1.5 * std::log(t) + logdiff(fplus, fminus);
 }
 
+double logfs_linear(double t, double w, int K) {
+  if (w == 0.0) return R_NegInf;
+  if (K < 0) K = 0;
+
+  const double inv_twot = 1.0 / (2.0 * t);
+  double sum_plus = 0.0;
+  double sum_minus = 0.0;
+
+  if (K > 0) {
+    #pragma omp simd reduction(+:sum_plus,sum_minus)
+    for (int k = 1; k <= K; ++k) {
+      const double temp1 = w + 2.0 * k;
+      const double temp2 = w - 2.0 * k;
+      sum_plus += temp1 * std::exp(-temp1 * temp1 * inv_twot);
+      sum_minus += (-temp2) * std::exp(-temp2 * temp2 * inv_twot);
+    }
+  }
+
+  sum_plus += w * std::exp(-w * w * inv_twot);
+  const double sum = sum_plus - sum_minus;
+  if (!(sum > 0.0)) return R_NegInf;
+
+  return -0.5 * M_LN2 - M_LN_SQRT_PI - 1.5 * std::log(t) + std::log(sum);
+}
+
 /* calculate terms of the sum for large t */
 double logfl(double q, double v, double w, int K) {
 	if (w == 0) return R_NegInf;
@@ -53,6 +78,29 @@ double logfl(double q, double v, double w, int K) {
 		else fminus = logsum(std::log(static_cast<double>(k)) - temp * temp * halfq + std::log(-check), fminus);
 	}
 	return	logdiff(fplus, fminus) + M_LNPI;
+}
+
+double logfl_linear(double q, double v, double w, int K) {
+  (void)v;
+  if (w == 0.0) return R_NegInf;
+  if (K <= 0) return R_NegInf;
+
+  const double halfq = q / 2.0;
+  double sum_plus = 0.0;
+  double sum_minus = 0.0;
+
+  #pragma omp simd reduction(+:sum_plus,sum_minus)
+  for (int k = 1; k <= K; ++k) {
+    const double temp = k * M_PI;
+    const double base = k * std::sin(temp * w) * std::exp(-(temp * temp) * halfq);
+    sum_plus += (base > 0.0) ? base : 0.0;
+    sum_minus += (base < 0.0) ? -base : 0.0;
+  }
+
+  const double sum = sum_plus - sum_minus;
+  if (!(sum > 0.0)) return R_NegInf;
+
+  return std::log(sum) + M_LNPI;
 }
 
 /* calculate density */
@@ -95,12 +143,12 @@ double dwiener(double q, double a, double vn, double wn, double sv, double err, 
 	// if small t is better
 	if (2 * kss <= kll) {
 		if((epsFLAG && kss<K) || !epsFLAG) kss = K;
-		ans = lg1 + logfs(q_asq, w, static_cast<int>(kss));
+		ans = lg1 + logfs_linear(q_asq, w, static_cast<int>(kss));
 	}
 	// if large t is better
 	else {
 		if((epsFLAG && kll<K) || !epsFLAG) kll = K;
-		ans = lg1 + logfl(q_asq, v, w, static_cast<int>(kll));
+		ans = lg1 + logfl_linear(q_asq, v, w, static_cast<int>(kll));
 	}
 
 	return ans;

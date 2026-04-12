@@ -21,6 +21,19 @@ typedef Rcpp::NumericVector (*RaceCdfFun)(Rcpp::NumericVector rt,
 typedef double (*RacePdf1Fun)(double rt, const double* par, void* model_specific_context);
 typedef double (*RaceCdf1Fun)(double rt, const double* par, void* model_specific_context);
 
+// Raw-buffer variants for the all-finite-no-truncation fast path.
+// Iterates all n_rows; where mask[i]==1 writes log-density (dfun) or log(1-cdf) (pfun)
+// into out[i].  Where mask[i]==0 out[i] is left unchanged.
+// pars_cm is column-major: column j starts at pars_cm + j * n_rows.
+typedef void (*RaceRawFun)(const double* rt,
+                           const double* pars_cm,
+                           int n_rows,
+                           const int* mask,
+                           const int* isok,
+                           double* out,
+                           double min_ll,
+                           void* ctx);
+
 // function pointers for integration helpers (truncation and censoring)
 struct gsl_race_params {const Rcpp::NumericMatrix* p_trial;
 	                    Rcpp::LogicalVector winner;
@@ -58,7 +71,9 @@ double c_log_likelihood_race(Rcpp::NumericMatrix pars, Rcpp::DataFrame dadm,
                                         ok_params, // Parameter validity for each row in 'pars' matrix
                                         int n_lR, // Number of accumulators in the race
                                         void *model_context_for_funcs,
-                                        bool all_finite_trials
+                                        bool all_finite_trials,
+                                        RaceRawFun model_dfun_raw = nullptr,
+                                        RaceRawFun model_pfun_raw = nullptr
 );
 
 // Exported wrappers
@@ -151,7 +166,128 @@ inline double plnr_scalar(double t, const double* par, void* /*ctx_*/) {
   return R::plnorm(tt, m, s, TRUE, FALSE);
 }
 
-// Adapter prototypes							 
+// ---- Raw-buffer implementations (log-density and log-survivor) ----
+// These avoid per-particle Rcpp vector allocation in the all-finite-no-truncation fast path.
+// Each function writes into out[i] for every i where mask[i]==1; other slots are untouched.
+
+// LBA: column layout v=0, sv=1, B=2, A=3, t0=4
+inline void dlba_raw(const double* rt, const double* pars_cm, int n_rows,
+                     const int* mask, const int* isok,
+                     double* out, double min_ll, void* ctx_) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  const bool pd = ctx->use_posdrift;
+  const double* v_  = pars_cm + 0 * n_rows;
+  const double* sv_ = pars_cm + 1 * n_rows;
+  const double* B_  = pars_cm + 2 * n_rows;
+  const double* A_  = pars_cm + 3 * n_rows;
+  const double* t0_ = pars_cm + 4 * n_rows;
+  for (int i = 0; i < n_rows; ++i) {
+    if (!mask[i]) continue;
+    if (R_IsNA(v_[i]) || !isok[i]) { out[i] = min_ll; continue; }
+    const double tt = rt[i] - t0_[i];
+    if (tt <= 0.0) { out[i] = min_ll; continue; }
+    const double pdf = dlba_norm(tt, A_[i], B_[i] + A_[i], v_[i], sv_[i], pd);
+    out[i] = (pdf > 0.0 && std::isfinite(pdf)) ? std::log(pdf) : min_ll;
+  }
+}
+
+inline void plba_raw(const double* rt, const double* pars_cm, int n_rows,
+                     const int* mask, const int* isok,
+                     double* out, double min_ll, void* ctx_) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  const bool pd = ctx->use_posdrift;
+  const double* v_  = pars_cm + 0 * n_rows;
+  const double* sv_ = pars_cm + 1 * n_rows;
+  const double* B_  = pars_cm + 2 * n_rows;
+  const double* A_  = pars_cm + 3 * n_rows;
+  const double* t0_ = pars_cm + 4 * n_rows;
+  for (int i = 0; i < n_rows; ++i) {
+    if (!mask[i]) continue;
+    if (R_IsNA(v_[i]) || !isok[i]) { out[i] = 0.0; continue; }
+    const double tt = rt[i] - t0_[i];
+    if (tt <= 0.0) { out[i] = 0.0; continue; }
+    const double cdf = plba_norm(tt, A_[i], B_[i] + A_[i], v_[i], sv_[i], pd);
+    // log(1 - cdf); plba_norm guarantees cdf in [0,1]
+    if (cdf >= 1.0) { out[i] = min_ll; continue; }
+    out[i] = (cdf <= 0.0) ? 0.0 : std::log1p(-cdf);
+  }
+}
+
+// RDM: column layout v=0, B=1, A=2, t0=3, s=4
+inline void drdm_raw(const double* rt, const double* pars_cm, int n_rows,
+                     const int* mask, const int* isok,
+                     double* out, double min_ll, void* /*ctx_*/) {
+  const double* v_  = pars_cm + 0 * n_rows;
+  const double* B_  = pars_cm + 1 * n_rows;
+  const double* A_  = pars_cm + 2 * n_rows;
+  const double* t0_ = pars_cm + 3 * n_rows;
+  const double* s_  = pars_cm + 4 * n_rows;
+  for (int i = 0; i < n_rows; ++i) {
+    if (!mask[i]) continue;
+    if (R_IsNA(v_[i]) || !isok[i]) { out[i] = min_ll; continue; }
+    const double tt = rt[i] - t0_[i];
+    if (tt <= 0.0) { out[i] = min_ll; continue; }
+    const double pdf = digt(tt, B_[i] / s_[i] + 0.5 * A_[i] / s_[i],
+                            v_[i] / s_[i], 0.5 * A_[i] / s_[i]);
+    out[i] = (pdf > 0.0 && std::isfinite(pdf)) ? std::log(pdf) : min_ll;
+  }
+}
+
+inline void prdm_raw(const double* rt, const double* pars_cm, int n_rows,
+                     const int* mask, const int* isok,
+                     double* out, double min_ll, void* /*ctx_*/) {
+  const double* v_  = pars_cm + 0 * n_rows;
+  const double* B_  = pars_cm + 1 * n_rows;
+  const double* A_  = pars_cm + 2 * n_rows;
+  const double* t0_ = pars_cm + 3 * n_rows;
+  const double* s_  = pars_cm + 4 * n_rows;
+  for (int i = 0; i < n_rows; ++i) {
+    if (!mask[i]) continue;
+    if (R_IsNA(v_[i]) || !isok[i]) { out[i] = 0.0; continue; }
+    const double tt = rt[i] - t0_[i];
+    if (tt <= 0.0) { out[i] = 0.0; continue; }
+    const double cdf = pigt(tt, B_[i] / s_[i] + 0.5 * A_[i] / s_[i],
+                            v_[i] / s_[i], 0.5 * A_[i] / s_[i]);
+    if (cdf >= 1.0) { out[i] = min_ll; continue; }
+    out[i] = (cdf <= 0.0) ? 0.0 : std::log1p(-cdf);
+  }
+}
+
+// LNR: column layout m=0, s=1, t0=2
+inline void dlnr_raw(const double* rt, const double* pars_cm, int n_rows,
+                     const int* mask, const int* isok,
+                     double* out, double min_ll, void* /*ctx_*/) {
+  const double* m_  = pars_cm + 0 * n_rows;
+  const double* s_  = pars_cm + 1 * n_rows;
+  const double* t0_ = pars_cm + 2 * n_rows;
+  for (int i = 0; i < n_rows; ++i) {
+    if (!mask[i]) continue;
+    if (R_IsNA(m_[i]) || !isok[i]) { out[i] = min_ll; continue; }
+    const double tt = rt[i] - t0_[i];
+    if (tt <= 0.0) { out[i] = min_ll; continue; }
+    const double pdf = R::dlnorm(tt, m_[i], s_[i], FALSE);
+    out[i] = (pdf > 0.0 && std::isfinite(pdf)) ? std::log(pdf) : min_ll;
+  }
+}
+
+inline void plnr_raw(const double* rt, const double* pars_cm, int n_rows,
+                     const int* mask, const int* isok,
+                     double* out, double min_ll, void* /*ctx_*/) {
+  const double* m_  = pars_cm + 0 * n_rows;
+  const double* s_  = pars_cm + 1 * n_rows;
+  const double* t0_ = pars_cm + 2 * n_rows;
+  for (int i = 0; i < n_rows; ++i) {
+    if (!mask[i]) continue;
+    if (R_IsNA(m_[i]) || !isok[i]) { out[i] = 0.0; continue; }
+    const double tt = rt[i] - t0_[i];
+    if (tt <= 0.0) { out[i] = 0.0; continue; }
+    const double cdf = R::plnorm(tt, m_[i], s_[i], TRUE, FALSE);
+    if (cdf >= 1.0) { out[i] = min_ll; continue; }
+    out[i] = (cdf <= 0.0) ? 0.0 : std::log1p(-cdf);
+  }
+}
+
+// Adapter prototypes
 Rcpp::NumericVector lba_dfun_adapter(Rcpp::NumericVector rt,
                                             Rcpp::NumericMatrix pars,
                                             Rcpp::LogicalVector winner,

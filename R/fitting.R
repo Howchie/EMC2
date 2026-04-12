@@ -775,19 +775,24 @@ make_emc <- function(data,design,model=NULL,
   ## SM END
 
   dadm_list <- vector(mode="list",length=length(data))
-  rt_resolution <- rep(rt_resolution,length.out=length(data))
+  if (is.null(rt_resolution)) {
+    rt_resolution <- rep(list(NULL), length(data))
+  } else {
+    rt_resolution <- as.list(rep(rt_resolution, length.out = length(data)))
+  }
   for (i in 1:length(dadm_list)) {
     message("Processing data set ",i)
     if(is.null(attr(design[[i]], "custom_ll"))){
       dadm_list[[i]] <- design_model(data=data[[i]],design=design[[i]],
-                                     compress=compress[[i]],model=model[[i]],rt_resolution=rt_resolution[i])
+                                     compress=compress[[i]],model=model[[i]],rt_resolution=rt_resolution[[i]])
       sampled_p_names <- names(attr(design[[i]],"p_vector"))
     } else{
       dadm_list[[i]] <- design_model_custom_ll(data = data[[i]],
                                                design = design[[i]],model=model[[i]])
       sampled_p_names <- attr(design[[i]],"sampled_p_names")
     }
-    dadm_list[[i]] <- .cache_ll_data_attrs(dadm_list[[i]])
+    # Rebuild LL cache at make_emc-time to avoid carrying over stale attributes.
+    dadm_list[[i]] <- .cache_ll_data_attrs(dadm_list[[i]], force_rebuild = TRUE)
     if(length(prior_list) == length(data)){
       if(!is.null(prior_list[[i]])){
         prior_list[[i]] <- check_prior(prior_list[[i]], sampled_p_names, group_design)

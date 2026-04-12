@@ -3,12 +3,15 @@
 
 #include <RcppArmadillo.h>
 #include "utility_functions.h"
+#include "wald_functions.h"  // pnorm_std() — fast normal CDF under USE_FAST_PNORM
 
 using namespace Rcpp;
 
+// Route through pnorm_std so USE_FAST_PNORM applies to LBA as well as RDM/Wald.
+// pnorm(q, mean, sd) = pnorm_std((q - mean) / sd) for sd > 0.
 double pnormP(double q, double mean = 0.0, double sd = 1.0,
               bool lower = true, bool log = false){
-  return R::pnorm(q, mean, sd, lower, log);
+  return pnorm_std((q - mean) / sd, lower, log);
 }
 
 double dnormP(double x, double mean = 0.0, double sd = 1.0,
