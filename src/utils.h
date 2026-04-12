@@ -34,6 +34,23 @@ typedef void (*RaceRawFun)(const double* rt,
                            double min_ll,
                            void* ctx);
 
+// Batch log-survivor at a scalar time point t.
+// For each unique trial j where trunc_mask[j]==1:
+//   logS_out[j] = sum_{k=0}^{n_lR-1} log(1 - F_k(t, pars[j*n_lR + k]))
+// pars_cm is column-major: column c starts at pars_cm + c * n_rows_total.
+typedef void (*RaceLogSAtTFun)(
+    double t,
+    const double* pars_cm,
+    int n_rows_total,
+    int n_lR,
+    int n_par,
+    const int* trunc_mask,
+    int n_unique_trials,
+    const int* isok_all,
+    void* ctx,
+    double* logS_out
+);
+
 // function pointers for integration helpers (truncation and censoring)
 struct gsl_race_params {const Rcpp::NumericMatrix* p_trial;
 	                    Rcpp::LogicalVector winner;
@@ -57,6 +74,8 @@ struct gsl_race_params_scalar {
 
 double gsl_f_race_scalar(double t, void* p);
 
+struct RaceSharedState;  // defined in particle_ll.cpp
+
 double c_log_likelihood_race(Rcpp::NumericMatrix pars, Rcpp::DataFrame dadm,
                                         RacePdfFun model_dfun, // Pointer to the model's PDF adapter function
                                         RaceCdfFun model_pfun, // Pointer to the model's CDF adapter function
@@ -65,15 +84,17 @@ double c_log_likelihood_race(Rcpp::NumericMatrix pars, Rcpp::DataFrame dadm,
                                         const int n_trials,
                                         const Rcpp::LogicalVector winner,
                                         const Rcpp::IntegerVector
-                                        expand,   
-                                        double min_ll, 
+                                        expand,
+                                        double min_ll,
                                         const Rcpp::LogicalVector
                                         ok_params, // Parameter validity for each row in 'pars' matrix
                                         int n_lR, // Number of accumulators in the race
                                         void *model_context_for_funcs,
                                         bool all_finite_trials,
                                         RaceRawFun model_dfun_raw = nullptr,
-                                        RaceRawFun model_pfun_raw = nullptr
+                                        RaceRawFun model_pfun_raw = nullptr,
+                                        RaceLogSAtTFun logS_at_t = nullptr,
+                                        RaceSharedState* shared = nullptr
 );
 
 // Exported wrappers
@@ -284,6 +305,91 @@ inline void plnr_raw(const double* rt, const double* pars_cm, int n_rows,
     const double cdf = R::plnorm(tt, m_[i], s_[i], TRUE, FALSE);
     if (cdf >= 1.0) { out[i] = min_ll; continue; }
     out[i] = (cdf <= 0.0) ? 0.0 : std::log1p(-cdf);
+  }
+}
+
+// LBA: column layout v=0, sv=1, B=2, A=3, t0=4
+inline void lba_logS_at_t(double t, const double* pars_cm,
+                            int n_rows_total, int n_lR, int /*n_par*/,
+                            const int* trunc_mask, int n_unique_trials,
+                            const int* isok_all, void* ctx_, double* logS_out) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  const bool pd = ctx->use_posdrift;
+  const double* v_  = pars_cm + 0 * n_rows_total;
+  const double* sv_ = pars_cm + 1 * n_rows_total;
+  const double* B_  = pars_cm + 2 * n_rows_total;
+  const double* A_  = pars_cm + 3 * n_rows_total;
+  const double* t0_ = pars_cm + 4 * n_rows_total;
+  for (int j = 0; j < n_unique_trials; ++j) {
+    if (!trunc_mask[j]) continue;
+    const int start = j * n_lR;
+    double logS = 0.0;
+    bool bad = false;
+    for (int k = 0; k < n_lR && !bad; ++k) {
+      const int r = start + k;
+      if (!isok_all[r] || R_IsNA(v_[r])) { bad = true; break; }
+      const double tt = t - t0_[r];
+      if (tt <= 0.0) continue;            // CDF(t)=0 → log(1-0)=0, no contribution
+      const double cdf = plba_norm(tt, A_[r], B_[r] + A_[r], v_[r], sv_[r], pd);
+      if (cdf >= 1.0) { bad = true; break; }
+      if (cdf > 0.0) logS += std::log1p(-cdf);
+    }
+    logS_out[j] = bad ? R_NegInf : logS;
+  }
+}
+
+// RDM: column layout v=0, B=1, A=2, t0=3, s=4
+inline void rdm_logS_at_t(double t, const double* pars_cm,
+                            int n_rows_total, int n_lR, int /*n_par*/,
+                            const int* trunc_mask, int n_unique_trials,
+                            const int* isok_all, void* /*ctx_*/, double* logS_out) {
+  const double* v_  = pars_cm + 0 * n_rows_total;
+  const double* B_  = pars_cm + 1 * n_rows_total;
+  const double* A_  = pars_cm + 2 * n_rows_total;
+  const double* t0_ = pars_cm + 3 * n_rows_total;
+  const double* s_  = pars_cm + 4 * n_rows_total;
+  for (int j = 0; j < n_unique_trials; ++j) {
+    if (!trunc_mask[j]) continue;
+    const int start = j * n_lR;
+    double logS = 0.0;
+    bool bad = false;
+    for (int k = 0; k < n_lR && !bad; ++k) {
+      const int r = start + k;
+      if (!isok_all[r] || R_IsNA(v_[r])) { bad = true; break; }
+      const double tt = t - t0_[r];
+      if (tt <= 0.0) continue;
+      const double cdf = pigt(tt, B_[r] / s_[r] + 0.5 * A_[r] / s_[r],
+                              v_[r] / s_[r], 0.5 * A_[r] / s_[r]);
+      if (cdf >= 1.0) { bad = true; break; }
+      if (cdf > 0.0) logS += std::log1p(-cdf);
+    }
+    logS_out[j] = bad ? R_NegInf : logS;
+  }
+}
+
+// LNR: column layout m=0, s=1, t0=2
+inline void lnr_logS_at_t(double t, const double* pars_cm,
+                            int n_rows_total, int n_lR, int /*n_par*/,
+                            const int* trunc_mask, int n_unique_trials,
+                            const int* isok_all, void* /*ctx_*/, double* logS_out) {
+  const double* m_  = pars_cm + 0 * n_rows_total;
+  const double* s_  = pars_cm + 1 * n_rows_total;
+  const double* t0_ = pars_cm + 2 * n_rows_total;
+  for (int j = 0; j < n_unique_trials; ++j) {
+    if (!trunc_mask[j]) continue;
+    const int start = j * n_lR;
+    double logS = 0.0;
+    bool bad = false;
+    for (int k = 0; k < n_lR && !bad; ++k) {
+      const int r = start + k;
+      if (!isok_all[r] || R_IsNA(m_[r])) { bad = true; break; }
+      const double tt = t - t0_[r];
+      if (tt <= 0.0) continue;
+      const double cdf = R::plnorm(tt, m_[r], s_[r], TRUE, FALSE);
+      if (cdf >= 1.0) { bad = true; break; }
+      if (cdf > 0.0) logS += std::log1p(-cdf);
+    }
+    logS_out[j] = bad ? R_NegInf : logS;
   }
 }
 

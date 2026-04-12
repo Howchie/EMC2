@@ -13,8 +13,9 @@ PKG_CXXFLAGS += -std=gnu++17 -Wfatal-errors -fmax-errors=1 -ftemplate-backtrace-
 # *after* Makeconf's CXXFLAGS assignment, so the last -O wins.
 override CXXFLAGS += -O3 -march=native -ffast-math -fno-math-errno -DUSE_FAST_PNORM
 
-# Add the package headers path and RcppArmadillo flags
-PKG_CPPFLAGS += -I../inst/include $(RCPP_ARMA_CXXFLAGS) -Wfatal-errors -fmax-errors=1 -ftemplate-backtrace-limit=5
+# Add the package headers path, RcppArmadillo flags, and bundled GSL headers.
+# -Igsl_bundled makes <config.h> and <gsl/...> resolve to src/gsl_bundled/
+PKG_CPPFLAGS += -I../inst/include $(RCPP_ARMA_CXXFLAGS) -Wfatal-errors -fmax-errors=1 -ftemplate-backtrace-limit=5 -Igsl_bundled
 
-# Link libs
-PKG_LIBS     += $(RCPP_ARMA_LIBS) -lgsl -lgslcblas
+# Link libs — no -lgsl/-lgslcblas needed; GSL is compiled in via gsl_bundled.c
+PKG_LIBS     += $(RCPP_ARMA_LIBS)

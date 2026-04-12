@@ -1,4 +1,4 @@
-PKG_CPPFLAGS = $(RCPP_ARMA_CXXFLAGS) -I../inst/include -finput-charset=utf-8 -Wfatal-errors -fmax-errors=1 -ftemplate-backtrace-limit=5 -DUSE_FAST_PNORM
-# Link against GSL for integration routines
-PKG_LIBS = $(LAPACK_LIBS) $(BLAS_LIBS) $(FLIBS) -lgsl -lgslcblas
+PKG_CPPFLAGS = $(RCPP_ARMA_CXXFLAGS) -I../inst/include -Igsl_bundled -finput-charset=utf-8 -Wfatal-errors -fmax-errors=1 -ftemplate-backtrace-limit=5 -DUSE_FAST_PNORM
+# GSL integration is compiled in via gsl_bundled.c — no system GSL needed
+PKG_LIBS = $(LAPACK_LIBS) $(BLAS_LIBS) $(FLIBS)
 //CXX_STD = C++11

@@ -317,8 +317,9 @@ struct RaceModelAdapter {
   RaceCdfFun model_pfun_ptr = nullptr;
   RacePdf1Fun pdf1_ptr = nullptr;
   RaceCdf1Fun cdf1_ptr = nullptr;
-  RaceRawFun model_dfun_raw = nullptr;  // fast-path: write log-density to pre-allocated buffer
-  RaceRawFun model_pfun_raw = nullptr;  // fast-path: write log-survivor to pre-allocated buffer
+  RaceRawFun model_dfun_raw = nullptr;   // fast-path: write log-density to pre-allocated buffer
+  RaceRawFun model_pfun_raw = nullptr;   // fast-path: write log-survivor to pre-allocated buffer
+  RaceLogSAtTFun logS_at_t_ptr = nullptr; // batch: log-survivor at scalar t for truncation norms
   ContextForRaceModels ctx;
 };
 
@@ -336,6 +337,7 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
     out.cdf1_ptr = &plba_scalar;
     out.model_dfun_raw = &dlba_raw;
     out.model_pfun_raw = &plba_raw;
+    out.logS_at_t_ptr = &lba_logS_at_t;
     if (type_std.find("IO") != std::string::npos) {
       out.ctx.use_posdrift = false;
     }
@@ -346,6 +348,7 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
     out.cdf1_ptr = &prdm_scalar;
     out.model_dfun_raw = &drdm_raw;
     out.model_pfun_raw = &prdm_raw;
+    out.logS_at_t_ptr = &rdm_logS_at_t;
   } else if (type_std.find("LNR") != std::string::npos) {
     out.model_dfun_ptr = &lnr_dfun_adapter;
     out.model_pfun_ptr = &lnr_pfun_adapter;
@@ -353,6 +356,7 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
     out.cdf1_ptr = &plnr_scalar;
     out.model_dfun_raw = &dlnr_raw;
     out.model_pfun_raw = &plnr_raw;
+    out.logS_at_t_ptr = &lnr_logS_at_t;
   } else {
     Rcpp::stop("Unsupported race model type string in %s: %s", caller.c_str(), type_std.c_str());
   }
@@ -362,6 +366,28 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
   }
   return out;
 }
+
+// Pre-computed per-data state for c_log_likelihood_race.
+// Built once outside the particle loop; reused across particles to eliminate
+// per-particle R-heap allocations and repeated attribute/column reads.
+struct RaceSharedState {
+  bool valid = false;
+  // Pre-read censoring/truncation bounds (Rcpp vectors keep memory alive)
+  Rcpp::NumericVector LT_vec, UT_vec, LC_vec, UC_vec;
+  // Pre-computed finite/other trial partition
+  Rcpp::LogicalVector finite_mask;       // length n_trials; shared ref from dadm attr
+  std::vector<int>    finite_unique_idx; // indices of finite unique trials
+  std::vector<int>    other_unique_idx;  // indices of other (non-finite) unique trials
+  // Pre-allocated mutable scratch buffers (length n_trials)
+  std::vector<double> lds_buf;   // log-density; NOT re-initialised between particles
+  std::vector<int>    idx_win;   // data-fixed winner mask  (finite rows only)
+  std::vector<int>    idx_loss;  // data-fixed loser mask   (finite rows only)
+  std::vector<int>    isok_buf;  // per-particle validity   (re-filled each call)
+  bool any_win  = false;
+  bool any_loss = false;
+  // pContaminant column: -2=not yet searched, -1=absent, >=0=column index
+  int  pc_col   = -2;
+};
 
 double c_log_likelihood_ss(
     NumericMatrix pars,
@@ -734,21 +760,47 @@ double c_log_likelihood_DDM(NumericMatrix pars, DataFrame data,
       }
     }
     if (needs_truncation) {
+      // Extra scan: detect whether all truncated trials have LT==0 (very common —
+      // avoids 2 of the 4 p_DDM_Wien CDF calls since pwiener/pdiff at t=0 always
+      // returns R_NegInf when t0 > 0, so logF_LT_all is unconditionally R_NegInf).
+      // Likewise detect whether any truncated trial has finite UT; if none do, the
+      // UT CDFs are superfluous (log F_any(Inf) = 0 is used analytically).
+      bool all_LT_zero   = true;
+      bool any_finite_UT = false;
+      for (int i = 0; i < n_trials; ++i) {
+        if (!is_ok[i] || !finite_mask[static_cast<size_t>(i)]) continue;
+        if (LT[i] == 0.0 && !R_FINITE(UT[i])) continue; // trial not truncated
+        if (LT[i] != 0.0) all_LT_zero   = false;
+        if (R_FINITE(UT[i])) any_finite_UT = true;
+      }
+
       LogicalVector ok_finite(n_trials);
       for (int i = 0; i < n_trials; ++i) {
         ok_finite[i] = is_ok[i] && finite_mask[static_cast<size_t>(i)];
       }
       IntegerVector R1_for_cdf(n_trials, 1);
       IntegerVector R2_for_cdf(n_trials, 2);
-      NumericVector logF_LT_1 = p_DDM_Wien(LT, R1_for_cdf, pars, ok_finite);
-      NumericVector logF_LT_2 = p_DDM_Wien(LT, R2_for_cdf, pars, ok_finite);
-      NumericVector logF_UT_1 = p_DDM_Wien(UT, R1_for_cdf, pars, ok_finite);
-      NumericVector logF_UT_2 = p_DDM_Wien(UT, R2_for_cdf, pars, ok_finite);
+
+      // Compute only the CDF vectors that are actually required.
+      NumericVector logF_LT_1, logF_LT_2, logF_UT_1, logF_UT_2;
+      if (!all_LT_zero) {
+        logF_LT_1 = p_DDM_Wien(LT, R1_for_cdf, pars, ok_finite);
+        logF_LT_2 = p_DDM_Wien(LT, R2_for_cdf, pars, ok_finite);
+      }
+      if (any_finite_UT) {
+        logF_UT_1 = p_DDM_Wien(UT, R1_for_cdf, pars, ok_finite);
+        logF_UT_2 = p_DDM_Wien(UT, R2_for_cdf, pars, ok_finite);
+      }
+
       for (int i = 0; i < n_trials; ++i) {
         if (!ok_finite[i]) continue;
-        if (LT[i] == 0.0 && !R_FINITE(UT[i])) continue; // no truncation
-        const double logF_LT_all = log_sum_exp(logF_LT_1[i], logF_LT_2[i]);
-        const double logF_UT_all = R_FINITE(UT[i]) ? log_sum_exp(logF_UT_1[i], logF_UT_2[i]) : 0.0; // log(1)
+        if (LT[i] == 0.0 && !R_FINITE(UT[i])) continue; // no truncation for this trial
+        // logF_LT_all: R_NegInf when LT==0 (CDF(0-t0)<0→R_NegInf), otherwise from vector.
+        const double logF_LT_all = all_LT_zero ? R_NegInf
+            : log_sum_exp(logF_LT_1[i], logF_LT_2[i]);
+        // logF_UT_all: 0 (= log 1) when UT==Inf, otherwise from vector.
+        const double logF_UT_all = R_FINITE(UT[i])
+            ? log_sum_exp(logF_UT_1[i], logF_UT_2[i]) : 0.0;
         const double logZ = log_interval_mass(logF_LT_all, logF_UT_all);
         if (R_FINITE(logZ)) lls[i] -= logZ;
         else lls[i] = min_ll;
@@ -831,62 +883,128 @@ double c_log_likelihood_DDM(NumericMatrix pars, DataFrame data,
         }
       }
     } else {
-      // Standard DDM: full LC/UC/LT/UT interval handling for non-finite RTs.
+      // Standard DDM: classify non-finite trials by RT type and R value to avoid
+      // computing CDFs that are never used.
+      //
+      //   has_left_cens  → need (LT, LC] CDFs
+      //   has_right_cens → need (UC, UT] CDFs
+      //   has_na_rt      → need both sides
+      //   all_r_known + uniform R → compute only one boundary's CDFs
+      bool has_left_cens  = false;  // rt == R_NegInf
+      bool has_right_cens = false;  // rt == R_PosInf
+      bool has_na_rt      = false;  // rt == NA
+      bool all_r_known    = true;
+      bool has_r1_only    = true;   // every r_known trial has R == 1
+      bool has_r2_only    = true;   // every r_known trial has R == 2
+      bool any_finite_UT  = false;  // at least one non-finite trial has finite UT
+
+      for (int row = 0; row < n_nonfinite; ++row) {
+        if (!ok_nf[row]) continue;
+        const int src = nonfinite_idx[static_cast<size_t>(row)];
+        const double rt = rts[src];
+        if      (rt == R_NegInf) has_left_cens  = true;
+        else if (rt == R_PosInf) has_right_cens = true;
+        else                      has_na_rt      = true;
+        if (R[src] == NA_INTEGER) {
+          all_r_known = false; has_r1_only = false; has_r2_only = false;
+        } else {
+          if (R[src] != 1) has_r1_only = false;
+          if (R[src] != 2) has_r2_only = false;
+        }
+        if (R_FINITE(UT_nf[row])) any_finite_UT = true;
+      }
+
+      // Which CDFs are required?
+      const bool need_left  = has_left_cens  || has_na_rt;
+      const bool need_right = has_right_cens || has_na_rt;
+      // Boundary-specific: skip a boundary when all r_known trials share the other.
+      // need_r1=false only when every trial has R==2; need_r2=false only when R==1.
+      const bool need_r1 = !all_r_known || !has_r2_only;
+      const bool need_r2 = !all_r_known || !has_r1_only;
+      // UT CDFs: only needed for the right side AND when some trial has finite UT.
+      // When UT == Inf the log-CDF is log(1) = 0 and needs no function call.
+      const bool need_UT = need_right && any_finite_UT;
+
       IntegerVector R1_for_cdf(n_nonfinite, 1);
       IntegerVector R2_for_cdf(n_nonfinite, 2);
-      NumericVector logF_LT_1 = p_DDM_Wien(LT_nf, R1_for_cdf, pars_nf, ok_nf);
-      NumericVector logF_LT_2 = p_DDM_Wien(LT_nf, R2_for_cdf, pars_nf, ok_nf);
-      NumericVector logF_LC_1 = p_DDM_Wien(LC_nf, R1_for_cdf, pars_nf, ok_nf);
-      NumericVector logF_LC_2 = p_DDM_Wien(LC_nf, R2_for_cdf, pars_nf, ok_nf);
-      NumericVector logF_UC_1 = p_DDM_Wien(UC_nf, R1_for_cdf, pars_nf, ok_nf);
-      NumericVector logF_UC_2 = p_DDM_Wien(UC_nf, R2_for_cdf, pars_nf, ok_nf);
-      NumericVector logF_UT_1 = p_DDM_Wien(UT_nf, R1_for_cdf, pars_nf, ok_nf);
-      NumericVector logF_UT_2 = p_DDM_Wien(UT_nf, R2_for_cdf, pars_nf, ok_nf);
+
+      NumericVector logF_LT_1, logF_LT_2, logF_LC_1, logF_LC_2;
+      NumericVector logF_UC_1, logF_UC_2, logF_UT_1, logF_UT_2;
+
+      if (need_left) {
+        if (need_r1) logF_LT_1 = p_DDM_Wien(LT_nf, R1_for_cdf, pars_nf, ok_nf);
+        if (need_r2) logF_LT_2 = p_DDM_Wien(LT_nf, R2_for_cdf, pars_nf, ok_nf);
+        if (need_r1) logF_LC_1 = p_DDM_Wien(LC_nf, R1_for_cdf, pars_nf, ok_nf);
+        if (need_r2) logF_LC_2 = p_DDM_Wien(LC_nf, R2_for_cdf, pars_nf, ok_nf);
+      }
+      if (need_right) {
+        if (need_r1) logF_UC_1 = p_DDM_Wien(UC_nf, R1_for_cdf, pars_nf, ok_nf);
+        if (need_r2) logF_UC_2 = p_DDM_Wien(UC_nf, R2_for_cdf, pars_nf, ok_nf);
+        if (need_UT) {
+          if (need_r1) logF_UT_1 = p_DDM_Wien(UT_nf, R1_for_cdf, pars_nf, ok_nf);
+          if (need_r2) logF_UT_2 = p_DDM_Wien(UT_nf, R2_for_cdf, pars_nf, ok_nf);
+        }
+      }
+
+      // Safe indexed access into a possibly-empty vector.
+      // Returns R_NegInf when the vector was not computed (boundary not needed).
+      auto lF = [](const NumericVector& v, int row) -> double {
+        return v.size() > 0 ? v[row] : R_NegInf;
+      };
+      // UT log-CDF: log(1) = 0 when UT == Inf, otherwise from pre-computed vector.
+      auto lF_UT = [&](const NumericVector& v, int row) -> double {
+        return R_FINITE(UT_nf[row]) ? (v.size() > 0 ? v[row] : R_NegInf) : 0.0;
+      };
 
       for (int row = 0; row < n_nonfinite; ++row) {
         const int i = nonfinite_idx[static_cast<size_t>(row)];
         if (!is_ok[i]) continue;
 
         const bool r_known = (R[i] != NA_INTEGER);
-        const int r_idx = r_known ? R[i] : 0;
-
-        const double logF_LT_all = log_sum_exp(logF_LT_1[row], logF_LT_2[row]);
-        const double logF_LC_all = log_sum_exp(logF_LC_1[row], logF_LC_2[row]);
-        const double logF_UC_all = log_sum_exp(logF_UC_1[row], logF_UC_2[row]);
-        const double logF_UT_all = R_FINITE(UT[i]) ? log_sum_exp(logF_UT_1[row], logF_UT_2[row]) : 0.0; // log(1)
+        const int  r_idx   = r_known ? R[i] : 0;
 
         if (rts[i] == R_NegInf) {
-          // Left-censored interval (LT, LC]
+          // Left-censored: probability in (LT, LC]
           if (!r_known) {
+            const double logF_LT_all = log_sum_exp(lF(logF_LT_1, row), lF(logF_LT_2, row));
+            const double logF_LC_all = log_sum_exp(lF(logF_LC_1, row), lF(logF_LC_2, row));
             lls[static_cast<size_t>(i)] = log_interval_mass(logF_LT_all, logF_LC_all);
           } else if (r_idx == 1) {
-            lls[static_cast<size_t>(i)] = log_interval_mass(logF_LT_1[row], logF_LC_1[row]);
+            lls[static_cast<size_t>(i)] = log_interval_mass(lF(logF_LT_1, row), lF(logF_LC_1, row));
           } else {
-            lls[static_cast<size_t>(i)] = log_interval_mass(logF_LT_2[row], logF_LC_2[row]);
+            lls[static_cast<size_t>(i)] = log_interval_mass(lF(logF_LT_2, row), lF(logF_LC_2, row));
           }
         } else if (rts[i] == R_PosInf) {
-          // Right-censored interval (UC, UT]
+          // Right-censored: probability in (UC, UT]
           if (!r_known) {
+            const double logF_UC_all = log_sum_exp(lF(logF_UC_1, row), lF(logF_UC_2, row));
+            const double logF_UT_all = R_FINITE(UT[i])
+                ? log_sum_exp(lF_UT(logF_UT_1, row), lF_UT(logF_UT_2, row)) : 0.0;
             lls[static_cast<size_t>(i)] = log_interval_mass(logF_UC_all, logF_UT_all);
           } else if (r_idx == 1) {
-            lls[static_cast<size_t>(i)] = log_interval_mass(logF_UC_1[row], logF_UT_1[row]);
+            lls[static_cast<size_t>(i)] = log_interval_mass(lF(logF_UC_1, row), lF_UT(logF_UT_1, row));
           } else {
-            lls[static_cast<size_t>(i)] = log_interval_mass(logF_UC_2[row], logF_UT_2[row]);
+            lls[static_cast<size_t>(i)] = log_interval_mass(lF(logF_UC_2, row), lF_UT(logF_UT_2, row));
           }
         } else {
-          // rt == NA: union of left and right censored intervals
+          // rt == NA: union of left (LT, LC] and right (UC, UT] intervals
           if (!r_known) {
-            const double ll_left = log_interval_mass(logF_LT_all, logF_LC_all);
-            const double ll_right = log_interval_mass(logF_UC_all, logF_UT_all);
-            lls[static_cast<size_t>(i)] = log_sum_exp(ll_left, ll_right);
+            const double logF_LT_all = log_sum_exp(lF(logF_LT_1, row), lF(logF_LT_2, row));
+            const double logF_LC_all = log_sum_exp(lF(logF_LC_1, row), lF(logF_LC_2, row));
+            const double logF_UC_all = log_sum_exp(lF(logF_UC_1, row), lF(logF_UC_2, row));
+            const double logF_UT_all = R_FINITE(UT[i])
+                ? log_sum_exp(lF_UT(logF_UT_1, row), lF_UT(logF_UT_2, row)) : 0.0;
+            lls[static_cast<size_t>(i)] = log_sum_exp(
+                log_interval_mass(logF_LT_all, logF_LC_all),
+                log_interval_mass(logF_UC_all, logF_UT_all));
           } else if (r_idx == 1) {
-            const double ll_left = log_interval_mass(logF_LT_1[row], logF_LC_1[row]);
-            const double ll_right = log_interval_mass(logF_UC_1[row], logF_UT_1[row]);
-            lls[static_cast<size_t>(i)] = log_sum_exp(ll_left, ll_right);
+            lls[static_cast<size_t>(i)] = log_sum_exp(
+                log_interval_mass(lF(logF_LT_1, row), lF(logF_LC_1, row)),
+                log_interval_mass(lF(logF_UC_1, row), lF_UT(logF_UT_1, row)));
           } else {
-            const double ll_left = log_interval_mass(logF_LT_2[row], logF_LC_2[row]);
-            const double ll_right = log_interval_mass(logF_UC_2[row], logF_UT_2[row]);
-            lls[static_cast<size_t>(i)] = log_sum_exp(ll_left, ll_right);
+            lls[static_cast<size_t>(i)] = log_sum_exp(
+                log_interval_mass(lF(logF_LT_2, row), lF(logF_LC_2, row)),
+                log_interval_mass(lF(logF_UC_2, row), lF_UT(logF_UT_2, row)));
           }
         }
       }
@@ -1076,7 +1194,8 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
                                        &adapter.ctx,
                                        all_finite_trials,
                                        adapter.model_dfun_raw,
-                                       adapter.model_pfun_raw);
+                                       adapter.model_pfun_raw,
+                                       adapter.logS_at_t_ptr);
       }
   }
   return(lls);
@@ -1306,6 +1425,51 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
       rt_ptr = rts_fp_hold.begin();
     }
 
+    // --- Build shared state for the mixed (non-raw-fast) path ---
+    // Pre-compute all data-fixed structures once so c_log_likelihood_race can skip
+    // per-particle R-heap allocations, column reads, and attribute lookups.
+    RaceSharedState race_shared;
+    if (!use_raw_fast_path && adapter.model_dfun_raw != nullptr && !all_finite_trials) {
+      const bool has_part =
+        data.hasAttribute("finite_rt_mask") &&
+        data.hasAttribute("finite_rt_unique_trial_indices") &&
+        data.hasAttribute("other_unique_trial_indices");
+      if (has_part) {
+        race_shared.finite_mask = data.attr("finite_rt_mask");
+        Rcpp::IntegerVector fa = data.attr("finite_rt_unique_trial_indices");
+        Rcpp::IntegerVector oa = data.attr("other_unique_trial_indices");
+        race_shared.finite_unique_idx.assign(fa.begin(), fa.end());
+        race_shared.other_unique_idx.assign(oa.begin(), oa.end());
+
+        // Pre-read censoring/truncation bounds once
+        race_shared.LT_vec = get_col_with_default(data, "LT", 0.0);
+        race_shared.UT_vec = get_col_with_default(data, "UT", R_PosInf);
+        race_shared.LC_vec = get_col_with_default(data, "LC", 0.0);
+        race_shared.UC_vec = get_col_with_default(data, "UC", R_PosInf);
+
+        // Pre-allocate mutable scratch buffers
+        race_shared.lds_buf.resize(static_cast<size_t>(n_trials)); // no init needed
+        race_shared.idx_win.assign(static_cast<size_t>(n_trials), 0);
+        race_shared.idx_loss.assign(static_cast<size_t>(n_trials), 0);
+        race_shared.isok_buf.resize(static_cast<size_t>(n_trials));
+
+        // Fill data-fixed winner/loser masks (finite trials only)
+        const Rcpp::LogicalVector& fmask = race_shared.finite_mask;
+        for (int j = 0; j < n_trials; ++j) {
+          if (!fmask[j]) continue;
+          if (has_RACE_col_fp && !RACE_mask_fp[j]) continue;
+          if (winner[j]) {
+            race_shared.idx_win[static_cast<size_t>(j)] = 1;
+            race_shared.any_win = true;
+          } else if (n_lR > 1) {
+            race_shared.idx_loss[static_cast<size_t>(j)] = 1;
+            race_shared.any_loss = true;
+          }
+        }
+        race_shared.valid = true;
+      }
+    }
+
     for (int i = 0; i < n_particles; ++i) {
       if (i > 0) {
         param_table_template.fill_from_particle_row(particle_matrix_pt, i, pm_col_to_base_idx);
@@ -1382,7 +1546,9 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
                                        &adapter.ctx,
                                        all_finite_trials,
                                        adapter.model_dfun_raw,
-                                       adapter.model_pfun_raw);
+                                       adapter.model_pfun_raw,
+                                       adapter.logS_at_t_ptr,
+                                       race_shared.valid ? &race_shared : nullptr);
       }
     }
   }
@@ -1695,8 +1861,15 @@ double get_trunc_normaliser_rowmajor_cpp(const double* pars_rowmajor,
                                          void* model_specific_context,
                                          GslWorkspacePtr& workspace) {
   const double log_prob_eps = std::log(std::numeric_limits<double>::epsilon());
-  const double logS_LT = log_survivor_rowmajor(LT, pars_rowmajor, isok_int, n_lR, n_par, cdf1, model_specific_context);
-  if (!R_FINITE(logS_LT)) return R_NegInf;
+  // When LT == 0, every proper distribution has CDF(0) = 0 → S(0) = 1 → log = 0.
+  // Skip the n_lR scalar cdf1 calls in this common case.
+  double logS_LT;
+  if (LT == 0.0) {
+    logS_LT = 0.0;
+  } else {
+    logS_LT = log_survivor_rowmajor(LT, pars_rowmajor, isok_int, n_lR, n_par, cdf1, model_specific_context);
+    if (!R_FINITE(logS_LT)) return R_NegInf;
+  }
   if (UT == R_PosInf) return logS_LT;
   
   const double logS_UT = log_survivor_rowmajor(UT, pars_rowmajor, isok_int, n_lR, n_par, cdf1, model_specific_context);
@@ -1745,17 +1918,35 @@ double c_log_likelihood_race(
     void* model_context_for_funcs,          // Context for model_dfun/model_pfun (e.g., contains posdrift for LBA)
     bool all_finite_trials,             // Data-only hint: all trials finite/in-bounds/known response
     RaceRawFun model_dfun_raw,
-    RaceRawFun model_pfun_raw
+    RaceRawFun model_pfun_raw,
+    RaceLogSAtTFun logS_at_t,            // batch log-survivor at scalar t (for truncation norms)
+    RaceSharedState* shared              // optional pre-computed per-data state (nullptr = compute per-call)
 ) {
-  
+
   // Only allocate a GSL workspace if/when numerical integration is needed.
   GslWorkspacePtr workspace(nullptr, &gsl_integration_workspace_free);
-  
-  // Fetch censoring and truncation values from dadm columns. These are passed across all rows for ease of access, but should be identical at least at the subject level as they don't correspond to a data entry. Attributes probably a better fit here but clunky.
-  Rcpp::NumericVector LT = get_col_with_default(dadm, "LT", 0.0);
-  Rcpp::NumericVector UT = get_col_with_default(dadm, "UT", R_PosInf);
-  Rcpp::NumericVector LC = get_col_with_default(dadm, "LC", 0.0);
-  Rcpp::NumericVector UC = get_col_with_default(dadm, "UC", R_PosInf);
+
+  const bool use_shared = (shared != nullptr && shared->valid);
+
+  // Fetch censoring and truncation columns only when we actually need them.
+  // When all_finite_trials=true the caller guarantees LT=0, UT=Inf, no censoring —
+  // deferring these reads avoids O(n_trials) allocation+fill per particle call.
+  // When use_shared=true the pre-read vectors are reused directly (no allocation).
+  const bool may_need_ct = !all_finite_trials;
+  Rcpp::NumericVector LT, UT, LC, UC;
+  if (may_need_ct) {
+    if (use_shared) {
+      LT = shared->LT_vec;   // shared reference, no copy
+      UT = shared->UT_vec;
+      LC = shared->LC_vec;
+      UC = shared->UC_vec;
+    } else {
+      LT = get_col_with_default(dadm, "LT", 0.0);
+      UT = get_col_with_default(dadm, "UT", R_PosInf);
+      LC = get_col_with_default(dadm, "LC", 0.0);
+      UC = get_col_with_default(dadm, "UC", R_PosInf);
+    }
+  }
   // Fast default controls for MCMC throughput, with an automatic stricter retry.
   // Retry settings match the old behaviour (rel_tol=1e-7, limit=1000).
   const GslIntegrationControls gsl_ctl{
@@ -1769,7 +1960,18 @@ double c_log_likelihood_race(
   int n_lR_j = n_lR;
   Rcpp::NumericVector rts_dadm = dadm["rt"];
   Rcpp::IntegerVector R_idxs_dadm = dadm["R"];
-  NumericVector lds(n_trials, min_ll); // initialise at min_ll
+  // Use pre-allocated std::vector when shared state is available; avoids per-particle
+  // R-heap allocation.  The buffer does NOT need re-initialisation between particles:
+  // dfun_raw/pfun_raw overwrite every finite-trial slot before it is read, and
+  // other-trial slots are computed independently in the "other trials" loop below.
+  std::vector<double> lds_local;
+  double* lds_ptr;
+  if (use_shared && static_cast<int>(shared->lds_buf.size()) == n_trials) {
+    lds_ptr = shared->lds_buf.data();
+  } else {
+    lds_local.assign(static_cast<size_t>(n_trials), min_ll);
+    lds_ptr = lds_local.data();
+  }
   // If a RACE column exists, set parameters of accumulators not present on a
   // given trial to NA so the density functions return zero for them. This
   // mirrors logic from the old c_log_likelihood_race implementation.
@@ -1793,19 +1995,27 @@ double c_log_likelihood_race(
   if (n_trials % n_lR != 0) Rcpp::stop("c_log_likelihood_race: dadm nrows not a multiple of n_lR.");
   
   // Here we check for a pC parameter corresponding to probability of contaminant OMISSION.
-  // Index the column (if it exists)
+  // The column index is data-structure-fixed so we cache it in shared state after the
+  // first search.  The "all zeroes" check still runs per particle (values change).
   bool use_pC = false;
   int pc_col = -1;
-  Rcpp::List dimnames = pars.attr("dimnames");
-  Rcpp::CharacterVector colnames = as<Rcpp::CharacterVector>(dimnames[1]);
-  for (int j = 0; j < colnames.size(); ++j) {
-    if (as<std::string>(colnames[j]) == "pContaminant") {
-      pc_col = j;
-      use_pC = true;
-      break;
+  if (use_shared && shared->pc_col != -2) {
+    // Fast path: use cached result from a previous particle call
+    pc_col = shared->pc_col;
+    use_pC = (pc_col >= 0);
+  } else {
+    Rcpp::List dimnames = pars.attr("dimnames");
+    Rcpp::CharacterVector colnames = as<Rcpp::CharacterVector>(dimnames[1]);
+    for (int j = 0; j < colnames.size(); ++j) {
+      if (as<std::string>(colnames[j]) == "pContaminant") {
+        pc_col = j;
+        use_pC = true;
+        break;
+      }
     }
+    if (use_shared) shared->pc_col = pc_col; // cache for subsequent particles
   }
-  // Also check that pC is not all zeroes (i.e. a model that has pC optional but is not using it here)
+  // Per-particle check: pC column present but all values zero → treat as absent
   if (use_pC) {
     bool all_zero = true;
     for (int i = 0; i < pars.nrow(); ++i) {
@@ -1820,11 +2030,14 @@ double c_log_likelihood_race(
   }
   
   int n_unique_trials = n_trials / n_lR;
-  Rcpp::NumericVector ll_unique(n_unique_trials, min_ll);
-  Rcpp::NumericVector pC_values(n_unique_trials);
+  // Use std::vector to avoid per-particle R-heap allocation overhead.
+  std::vector<double> ll_unique(static_cast<size_t>(n_unique_trials), min_ll);
+  std::vector<double> pC_values(static_cast<size_t>(n_unique_trials), 0.0);
+  // Raw pointer into pars matrix: col-major layout, element (row,col) = pars_cm_ptr[col*n_trials+row]
+  const double* pars_cm_ptr = pars.begin();
   if (use_pC) {
     for (int j = 0; j < n_unique_trials; ++j) {
-      pC_values[j] = pars(j * n_lR, pc_col);
+      pC_values[static_cast<size_t>(j)] = pars_cm_ptr[static_cast<size_t>(pc_col) * n_trials + j * n_lR];
     }
   }
   
@@ -1844,46 +2057,57 @@ double c_log_likelihood_race(
   std::vector<double> pars_rowmajor_buffer(static_cast<size_t>(n_lR) * n_par);
   std::vector<int> isok_int_buffer(static_cast<size_t>(n_lR), 0);
   std::vector<double> logS_k_buffer(static_cast<size_t>(n_lR), R_NegInf);
+
+  // fill_trial_buffers: copies one trial's params into row-major scratch (for GSL/rowmajor helpers).
+  // Uses raw column-major pointer to avoid Rcpp subscript overhead.
   auto fill_trial_buffers = [&](int start_row_idx, int n_lR_j) {
     for (int k = 0; k < n_lR_j; ++k) {
-      isok_int_buffer[k] = isok[start_row_idx + k] ? 1 : 0;
-      for (int c = 0; c < n_par; ++c) {
-        pars_rowmajor_buffer[static_cast<size_t>(k) * n_par + c] = pars(start_row_idx + k, c);
-      }
+      const int row = start_row_idx + k;
+      isok_int_buffer[static_cast<size_t>(k)] = isok[row] ? 1 : 0;
+      for (int c = 0; c < n_par; ++c)
+        pars_rowmajor_buffer[static_cast<size_t>(k) * n_par + c] =
+            pars_cm_ptr[static_cast<size_t>(c) * n_trials + row];
     }
   };
-  
+
   // Fast path hint: computed once per calc_ll call (data-only), to avoid re-scanning per particle.
   const bool use_full_finite_batch = all_finite_trials;
   Rcpp::LogicalVector finite_rt_mask;
   std::vector<int> finite_rt_unique_trial_indices;
   std::vector<int> other_unique_trial_indices;
   if (!use_full_finite_batch) {
-    const bool has_partition_attrs =
-      dadm.hasAttribute("finite_rt_mask") &&
-      dadm.hasAttribute("finite_rt_unique_trial_indices") &&
-      dadm.hasAttribute("other_unique_trial_indices");
-
-    if (has_partition_attrs) {
-      finite_rt_mask = dadm.attr("finite_rt_mask");
-      Rcpp::IntegerVector finite_attr = dadm.attr("finite_rt_unique_trial_indices");
-      Rcpp::IntegerVector other_attr = dadm.attr("other_unique_trial_indices");
-      finite_rt_unique_trial_indices.assign(finite_attr.begin(), finite_attr.end());
-      other_unique_trial_indices.assign(other_attr.begin(), other_attr.end());
+    if (use_shared && static_cast<int>(shared->finite_mask.size()) == n_trials) {
+      // Fast path: re-use pre-read partition from shared state (no attr lookup, no copy)
+      finite_rt_mask = shared->finite_mask;
+      finite_rt_unique_trial_indices = shared->finite_unique_idx;
+      other_unique_trial_indices     = shared->other_unique_idx;
     } else {
-      // Fallback path for direct calc_ll/calc_ll_oo callers that bypass
-      // .cache_ll_data_attrs(): derive finite/other unique-trial partitions.
-      finite_rt_mask = Rcpp::LogicalVector(n_trials, false);
-      for (int unique_trial_idx = 0; unique_trial_idx < n_unique_trials; ++unique_trial_idx) {
-        const int start_row_idx = unique_trial_idx * n_lR;
-        const int n_lR_j = has_RACE_col ? RACE[start_row_idx] : n_lR;
-        const double rt_j = rts_dadm[start_row_idx];
-        const int R_j_idx = R_idxs_dadm[start_row_idx];
-        if (R_FINITE(rt_j) && rt_j > 0.0 && R_j_idx != NA_INTEGER) {
-          finite_rt_unique_trial_indices.push_back(unique_trial_idx);
-          for (int k = 0; k < n_lR_j; ++k) finite_rt_mask[start_row_idx + k] = true;
-        } else {
-          other_unique_trial_indices.push_back(unique_trial_idx);
+      const bool has_partition_attrs =
+        dadm.hasAttribute("finite_rt_mask") &&
+        dadm.hasAttribute("finite_rt_unique_trial_indices") &&
+        dadm.hasAttribute("other_unique_trial_indices");
+
+      if (has_partition_attrs) {
+        finite_rt_mask = dadm.attr("finite_rt_mask");
+        Rcpp::IntegerVector finite_attr = dadm.attr("finite_rt_unique_trial_indices");
+        Rcpp::IntegerVector other_attr = dadm.attr("other_unique_trial_indices");
+        finite_rt_unique_trial_indices.assign(finite_attr.begin(), finite_attr.end());
+        other_unique_trial_indices.assign(other_attr.begin(), other_attr.end());
+      } else {
+        // Fallback path for direct calc_ll/calc_ll_oo callers that bypass
+        // .cache_ll_data_attrs(): derive finite/other unique-trial partitions.
+        finite_rt_mask = Rcpp::LogicalVector(n_trials, false);
+        for (int unique_trial_idx = 0; unique_trial_idx < n_unique_trials; ++unique_trial_idx) {
+          const int start_row_idx = unique_trial_idx * n_lR;
+          const int n_lR_j = has_RACE_col ? RACE[start_row_idx] : n_lR;
+          const double rt_j = rts_dadm[start_row_idx];
+          const int R_j_idx = R_idxs_dadm[start_row_idx];
+          if (R_FINITE(rt_j) && rt_j > 0.0 && R_j_idx != NA_INTEGER) {
+            finite_rt_unique_trial_indices.push_back(unique_trial_idx);
+            for (int k = 0; k < n_lR_j; ++k) finite_rt_mask[start_row_idx + k] = true;
+          } else {
+            other_unique_trial_indices.push_back(unique_trial_idx);
+          }
         }
       }
     }
@@ -1902,6 +2126,24 @@ double c_log_likelihood_race(
   bool gng=ctx->gng;
   bool posdrift=ctx->use_posdrift;
   
+  // log_surv_cm: log S(t) = sum_k log(1-F_k(t)) read directly from column-major pars.
+  // Used by the "other trials" path for analytical survivor calls — avoids the
+  // row-major copy that fill_trial_buffers performs.
+  auto log_surv_cm = [&](double t, int start_row_idx, int n_lR_j) -> double {
+    double logS = 0.0;
+    double par_buf[16];
+    for (int k = 0; k < n_lR_j; ++k) {
+      const int row = start_row_idx + k;
+      if (!isok[row]) return R_NegInf;
+      for (int c = 0; c < n_par; ++c)
+        par_buf[c] = pars_cm_ptr[static_cast<size_t>(c) * n_trials + row];
+      const double Fk = cdf1(t, par_buf, model_context_for_funcs);
+      if (Fk >= 1.0) return R_NegInf;
+      logS += std::log1p(-Fk);
+    }
+    return logS;
+  };
+
   const bool has_finite_batch = use_full_finite_batch || (finite_rt_unique_trial_indices.size() > 0);
   if (has_finite_batch) {
     Rcpp::LogicalVector idx_win;
@@ -1909,25 +2151,47 @@ double c_log_likelihood_race(
     bool any_win = false;
     bool any_loss = false;
     const bool use_raw_finite_batch = model_dfun_raw != nullptr && model_pfun_raw != nullptr;
-    std::vector<int> idx_win_int;
-    std::vector<int> idx_loss_int;
-    std::vector<int> isok_int_all;
+    // Local fallback storage (used when shared state is not available)
+    std::vector<int> idx_win_int_local;
+    std::vector<int> idx_loss_int_local;
+    std::vector<int> isok_int_all_local;
+    // Pointers resolved below (point into shared or local storage)
+    const int* idx_win_ptr  = nullptr;
+    const int* idx_loss_ptr = nullptr;
+    int*       isok_ptr     = nullptr;
 
     if (use_raw_finite_batch) {
-      idx_win_int.assign(static_cast<size_t>(n_trials), 0);
-      idx_loss_int.assign(static_cast<size_t>(n_trials), 0);
-      isok_int_all.assign(static_cast<size_t>(n_trials), 0);
-      for (int i = 0; i < n_trials; ++i) {
-        isok_int_all[static_cast<size_t>(i)] = isok[i] ? 1 : 0;
-        if (has_RACE_col && !RACE_mask[i]) continue;
-        if (!use_full_finite_batch && !finite_rt_mask[i]) continue;
-        if (winner[i]) {
-          idx_win_int[static_cast<size_t>(i)] = 1;
-          any_win = true;
-        } else if (n_lR > 1) {
-          idx_loss_int[static_cast<size_t>(i)] = 1;
-          any_loss = true;
+      const bool use_shared_bufs = use_shared &&
+        static_cast<int>(shared->idx_win.size()) == n_trials;
+
+      if (use_shared_bufs) {
+        // Per-particle: only fill isok (winner/loser masks are data-fixed)
+        for (int i = 0; i < n_trials; ++i)
+          shared->isok_buf[static_cast<size_t>(i)] = isok[i] ? 1 : 0;
+        idx_win_ptr  = shared->idx_win.data();
+        idx_loss_ptr = shared->idx_loss.data();
+        isok_ptr     = shared->isok_buf.data();
+        any_win      = shared->any_win;
+        any_loss     = shared->any_loss;
+      } else {
+        idx_win_int_local.assign(static_cast<size_t>(n_trials), 0);
+        idx_loss_int_local.assign(static_cast<size_t>(n_trials), 0);
+        isok_int_all_local.assign(static_cast<size_t>(n_trials), 0);
+        for (int i = 0; i < n_trials; ++i) {
+          isok_int_all_local[static_cast<size_t>(i)] = isok[i] ? 1 : 0;
+          if (has_RACE_col && !RACE_mask[i]) continue;
+          if (!use_full_finite_batch && !finite_rt_mask[i]) continue;
+          if (winner[i]) {
+            idx_win_int_local[static_cast<size_t>(i)] = 1;
+            any_win = true;
+          } else if (n_lR > 1) {
+            idx_loss_int_local[static_cast<size_t>(i)] = 1;
+            any_loss = true;
+          }
         }
+        idx_win_ptr  = idx_win_int_local.data();
+        idx_loss_ptr = idx_loss_int_local.data();
+        isok_ptr     = isok_int_all_local.data();
       }
     } else if (use_full_finite_batch && !has_RACE_col) {
       idx_win = winner;
@@ -1952,13 +2216,13 @@ double c_log_likelihood_race(
       const double* pars_cm = pars.begin();
       if (any_win) {
         model_dfun_raw(rt_ptr, pars_cm, n_trials,
-                       idx_win_int.data(), isok_int_all.data(),
-                       lds.begin(), min_ll, dense_ctx_ptr);
+                       idx_win_ptr, isok_ptr,
+                       lds_ptr, min_ll, dense_ctx_ptr);
       }
       if (n_lR > 1 && any_loss) {
         model_pfun_raw(rt_ptr, pars_cm, n_trials,
-                       idx_loss_int.data(), isok_int_all.data(),
-                       lds.begin(), min_ll, dense_ctx_ptr);
+                       idx_loss_ptr, isok_ptr,
+                       lds_ptr, min_ll, dense_ctx_ptr);
       }
     } else if (any_win) {
       Rcpp::NumericVector win_pdf = model_dfun(rts_dadm, pars, idx_win, isok, dense_ctx_ptr);
@@ -1966,10 +2230,10 @@ double c_log_likelihood_race(
       for (int i = 0; i < n_trials; ++i) {
         if (!idx_win[i]) continue;
         const double pdf = win_pdf[out_i++];
-        lds[i] = (pdf > 0.0 && std::isfinite(pdf)) ? std::log(pdf) : R_NegInf;
+        lds_ptr[i] = (pdf > 0.0 && std::isfinite(pdf)) ? std::log(pdf) : R_NegInf;
       }
     }
-    
+
     if (!use_raw_finite_batch && n_lR > 1 && any_loss) {
       Rcpp::NumericVector loss_cdf = model_pfun(rts_dadm, pars, idx_loss, isok, dense_ctx_ptr);
       int out_i = 0;
@@ -1977,58 +2241,143 @@ double c_log_likelihood_race(
         if (!idx_loss[i]) continue;
         double cdf = loss_cdf[out_i++];
         cdf = clamp_cdf01_race(cdf);
-        lds[i] = safe_log1m_race(cdf);
+        lds_ptr[i] = safe_log1m_race(cdf);
+      }
+    }
+
+    // --- Pre-compute truncation normalisers in batch when possible ---
+    // When may_need_ct AND logS_at_t is available, we can replace per-trial
+    // fill_trial_buffers + get_trunc_normaliser_rowmajor_cpp with a single
+    // column-major pass: eliminates n_lR*n_par row copies per truncated trial.
+    //
+    // Fast-batch conditions: LT == 0 everywhere (logS_LT = 0 analytically),
+    // UT is uniform across all truncated trials, and logS_at_t_ptr is provided.
+    // Trials that fail the fast path fall back to the per-trial scalar route.
+    bool batch_trunc_done = false;
+    std::vector<double> logZ_batch;  // length n_unique_trials, filled when batch_trunc_done
+    const int n_finite_unique = use_full_finite_batch
+        ? n_unique_trials
+        : static_cast<int>(finite_rt_unique_trial_indices.size());
+
+    if (may_need_ct && logS_at_t != nullptr) {
+      // Pass 1: scan for truncated trials; check uniformity of LT/UT.
+      double uniform_UT = R_PosInf;
+      bool all_LT_zero = true;
+      bool uniform_UT_ok = true;
+      bool any_trunc = false;
+      std::vector<int> trunc_mask(static_cast<size_t>(n_unique_trials), 0);
+
+      for (int i = 0; i < n_finite_unique; ++i) {
+        const int j = use_full_finite_batch
+            ? i : finite_rt_unique_trial_indices[static_cast<size_t>(i)];
+        const int start = j * n_lR;
+        const double LTj = LT[start];
+        const double UTj = UT[start];
+        if (LTj != 0.0 || UTj != R_PosInf) {
+          trunc_mask[static_cast<size_t>(j)] = 1;
+          any_trunc = true;
+          if (LTj != 0.0) all_LT_zero = false;
+          if (uniform_UT == R_PosInf) uniform_UT = UTj;
+          else if (UTj != uniform_UT) uniform_UT_ok = false;
+        }
+      }
+
+      if (any_trunc && all_LT_zero && uniform_UT_ok && uniform_UT != R_PosInf) {
+        // Pass 2: batch-compute log S(UT) for all truncated trials at once.
+        // logS_LT = 0 (LT==0), so logZ = log(1 - exp(logS_UT)) = log_diff_exp(0, logS_UT).
+        // Reuse shared isok buffer when available (already filled above); else build locally.
+        std::vector<int> isok_all_int_local;
+        const int* isok_all_ptr_trunc;
+        if (isok_ptr != nullptr) {
+          isok_all_ptr_trunc = isok_ptr;  // already filled per-particle above
+        } else {
+          isok_all_int_local.resize(static_cast<size_t>(n_trials));
+          for (int r = 0; r < n_trials; ++r)
+            isok_all_int_local[static_cast<size_t>(r)] = isok[r] ? 1 : 0;
+          isok_all_ptr_trunc = isok_all_int_local.data();
+        }
+
+        std::vector<double> logS_UT_vec(static_cast<size_t>(n_unique_trials), 0.0);
+        logS_at_t(uniform_UT,
+                  pars.begin(), n_trials, n_lR, n_par,
+                  trunc_mask.data(), n_unique_trials,
+                  isok_all_ptr_trunc,
+                  model_context_for_funcs,
+                  logS_UT_vec.data());
+
+        logZ_batch.assign(static_cast<size_t>(n_unique_trials), 0.0);
+        for (int j = 0; j < n_unique_trials; ++j) {
+          if (!trunc_mask[static_cast<size_t>(j)]) continue;
+          const double logS_UT_j = logS_UT_vec[static_cast<size_t>(j)];
+          if (!R_FINITE(logS_UT_j)) { logZ_batch[static_cast<size_t>(j)] = R_NegInf; continue; }
+          // logZ = log(S(LT=0) - S(UT)) = log(1 - S(UT)) = log_diff_exp(0, logS_UT)
+          const double logP = log_diff_exp(0.0, logS_UT_j);
+          // Use the same epsilon threshold as the scalar fallback path.
+          static const double kLogProbEps = std::log(std::numeric_limits<double>::epsilon());
+          if (R_FINITE(logP) && logP > kLogProbEps) {
+            logZ_batch[static_cast<size_t>(j)] = logP;
+          } else {
+            // Catastrophic cancellation: fall back to per-trial GSL path below.
+            // Signal with NaN so the per-trial check recomputes it.
+            logZ_batch[static_cast<size_t>(j)] = std::numeric_limits<double>::quiet_NaN();
+          }
+        }
+        batch_trunc_done = true;
       }
     }
 
     // Apply truncation correction and calculate log-likelihood for each trial in the batch
-    const int n_finite_unique = use_full_finite_batch
-    ? n_unique_trials
-    : static_cast<int>(finite_rt_unique_trial_indices.size());
     for (int i = 0; i < n_finite_unique; ++i) {
       // When all unique trials are finite, iterate in order 0..n_unique_trials-1.
       // Otherwise, iterate over the precomputed subset of finite-RT unique trials.
-      int unique_trial_idx = use_full_finite_batch
-      ? i
-      : finite_rt_unique_trial_indices[static_cast<size_t>(i)];
-      int start_row_idx = unique_trial_idx * n_lR;
+      const int unique_trial_idx = use_full_finite_batch
+          ? i : finite_rt_unique_trial_indices[static_cast<size_t>(i)];
+      const int start_row_idx = unique_trial_idx * n_lR;
       n_lR_j = has_RACE_col ? RACE[start_row_idx] : n_lR;
       log_Z_this = 0.0;
-      const double LTj = LT[start_row_idx];
-      const double UTj = UT[start_row_idx];
-      if (LTj != 0.0 || UTj != R_PosInf) { // truncation active
-        fill_trial_buffers(start_row_idx, n_lR_j);
-        log_Z_this = get_trunc_normaliser_rowmajor_cpp(pars_rowmajor_buffer.data(),
-                                                       isok_int_buffer.data(),
-                                                       pdf1,
-                                                       cdf1,
-                                                       LTj,
-                                                       UTj,
-                                                       n_lR_j,
-                                                       n_par,
-                                                       gsl_ctl,
-                                                       model_context_for_funcs,
-                                                       workspace);
+
+      if (may_need_ct) {
+        const double LTj = LT[start_row_idx];
+        const double UTj = UT[start_row_idx];
+        if (LTj != 0.0 || UTj != R_PosInf) { // truncation active
+          bool need_scalar = true;
+          if (batch_trunc_done) {
+            const double bz = logZ_batch[static_cast<size_t>(unique_trial_idx)];
+            if (!std::isnan(bz)) {       // NaN flags a fallback case
+              log_Z_this = bz;
+              need_scalar = false;
+            }
+          }
+          if (need_scalar) {
+            fill_trial_buffers(start_row_idx, n_lR_j);
+            log_Z_this = get_trunc_normaliser_rowmajor_cpp(pars_rowmajor_buffer.data(),
+                                                           isok_int_buffer.data(),
+                                                           pdf1, cdf1,
+                                                           LTj, UTj,
+                                                           n_lR_j, n_par,
+                                                           gsl_ctl,
+                                                           model_context_for_funcs,
+                                                           workspace);
+          }
+          double current_trial_ll_sum = 0.0;
+          for (int k = 0; k < n_lR_j; ++k)
+            current_trial_ll_sum += lds_ptr[start_row_idx + k];
+          if (NumericVector::is_na(log_Z_this) || !R_FINITE(log_Z_this)) {
+            ll_unique[unique_trial_idx] = min_ll;
+          } else {
+            ll_unique[unique_trial_idx] = std::max(min_ll, current_trial_ll_sum - log_Z_this);
+          }
+          continue;
+        }
       }
+
+      // No truncation (or all_finite_trials guarantees none): plain sum.
       double current_trial_ll_sum = 0.0;
-      for(int k=0; k < n_lR_j; ++k) {
-        int dadm_row_idx = start_row_idx + k; // Correct index into lds
-        current_trial_ll_sum += lds[dadm_row_idx];
-      }
-      
-      if ((LT[start_row_idx] != 0 || UT[start_row_idx] != R_PosInf) && (NumericVector::is_na(log_Z_this) || !R_FINITE(log_Z_this))) {
-        // If truncation active but inv_Z is bad, probability is effectively zero. Could mean the probability of observing an untruncated RT is zero, which would be bad.
-        ll_unique[unique_trial_idx] = min_ll;
-        continue;
-      }
-      else if (LT[start_row_idx] != 0 || UT[start_row_idx] != R_PosInf) { // Truncation active and inv_Z is good
-        current_trial_ll_sum -=  log_Z_this;
-      }
-      
-      ll_unique[unique_trial_idx] = current_trial_ll_sum;
-      ll_unique[unique_trial_idx] = std::max(min_ll, ll_unique[unique_trial_idx]);
+      for (int k = 0; k < n_lR_j; ++k)
+        current_trial_ll_sum += lds_ptr[start_row_idx + k];
+      ll_unique[unique_trial_idx] = std::max(min_ll, current_trial_ll_sum);
     }
-    
+
   }
   // --- Process other trials (Infinite RTs, NA RTs, or finite RTs outside truncation) ---
   // These trials require individual processing, often involving numerical integration for censored intervals.
@@ -2054,36 +2403,30 @@ double c_log_likelihood_race(
       continue;
     }
     
-    fill_trial_buffers(start_row_idx, n_lR_j);
-    
+    // Lazy row-major buffer fill — only when GSL integration or row-major
+    // helper functions are actually needed.  Pure survivor / CDF calls use
+    // log_surv_cm which reads column-major directly.
+    bool buffers_filled = false;
+    auto ensure_buffers = [&]() {
+      if (!buffers_filled) {
+        fill_trial_buffers(start_row_idx, n_lR_j);
+        buffers_filled = true;
+      }
+    };
+
     auto integrate_interval = [&](int k_winner_1based, double low, double upp) -> double {
+      ensure_buffers();
       gsl_integration_workspace* w = ensure_gsl_workspace(workspace);
       return integrate_for_kth_winner_rowmajor_cpp(k_winner_1based,
                                                    pars_rowmajor_buffer.data(),
                                                    isok_int_buffer.data(),
-                                                   low,
-                                                   upp,
-                                                   pdf1,
-                                                   cdf1,
-                                                   n_lR_j,
-                                                   n_par,
-                                                   gsl_ctl,
-                                                   model_context_for_funcs,
-                                                   w);
-    };
-    
-    auto log_survivor = [&](double t) -> double {
-      return log_survivor_rowmajor(t,
-                                   pars_rowmajor_buffer.data(),
-                                   isok_int_buffer.data(),
-                                   n_lR_j,
-                                   n_par,
-                                   cdf1,
-                                   model_context_for_funcs);
+                                                   low, upp, pdf1, cdf1,
+                                                   n_lR_j, n_par, gsl_ctl,
+                                                   model_context_for_funcs, w);
     };
 
     current_ll_val = R_NegInf;
-    if (rt_j == R_NegInf) { 
+    if (rt_j == R_NegInf) {
       lower_for_trial = LTj;
       upper_for_trial = LCj;
       if (R_j_idx == NA_INTEGER) {
@@ -2102,11 +2445,9 @@ double c_log_likelihood_race(
             current_ll_val = log_sum_exp(current_ll_val, integrate_interval(k_win, lower_for_trial, upper_for_trial));
           }
         } else {
-          // Left-censoring with unknown winner: probability the *minimum* finishes in (LT, LC].
-          // This is S(LT) - S(LC), where S(t)=P(min > t)=prod_k (1 - F_k(t)).
-          // Note: this works for both posdrift and intrinsic-omission (posdrift=FALSE) cases;
-          // any mass at +Inf cancels in the survivor difference.
-          const double logP = log_diff_exp(log_survivor(lower_for_trial), log_survivor(upper_for_trial));
+          // Left-censoring with unknown winner: S(LT) - S(LC), S(t)=prod_k(1-F_k(t)).
+          const double logP = log_diff_exp(log_surv_cm(lower_for_trial, start_row_idx, n_lR_j),
+                                           log_surv_cm(upper_for_trial, start_row_idx, n_lR_j));
           if (R_FINITE(logP) && logP > log_prob_eps) {
             current_ll_val = logP;
           } else {
@@ -2135,31 +2476,28 @@ double c_log_likelihood_race(
           n_true = 1;
         }
         if (n_true != 1) Rcpp::stop("No winner identified in go/no-go withheld response");
-        const double logA = integrate_interval(k_nogo, lower_for_trial, upper_for_trial); // probability of no-go winning
-        const double logB = log_survivor(upper_for_trial); // For LBAIO this includes "all accumulators never finished" 
+        const double logA = integrate_interval(k_nogo, lower_for_trial, upper_for_trial);
+        const double logB = log_surv_cm(upper_for_trial, start_row_idx, n_lR_j); // incl. LBAIO mass at +Inf
         current_ll_val = log_sum_exp(logA, logB);
       } else {
         lower_for_trial = UCj;
         upper_for_trial = UTj;
-        if (n_lR_j == 1) {
-          const double cdf = cdf1(lower_for_trial, pars_rowmajor_buffer.data(), model_context_for_funcs);
-          current_ll_val = safe_log1m_race(clamp_cdf01_race(cdf));
-        } else if (R_j_idx == NA_INTEGER) {
+        if (R_j_idx == NA_INTEGER) {
           const double logP = posdrift
-          ? log_diff_exp(log_survivor(lower_for_trial), log_survivor(upper_for_trial))
-          : log_survivor(lower_for_trial); // For LBAIO this includes "all accumulators never finished" 
+            ? log_diff_exp(log_surv_cm(lower_for_trial, start_row_idx, n_lR_j),
+                           log_surv_cm(upper_for_trial, start_row_idx, n_lR_j))
+            : log_surv_cm(lower_for_trial, start_row_idx, n_lR_j); // LBAIO: incl. intrinsic-omission mass
           if (R_FINITE(logP) && logP > log_prob_eps) {
             current_ll_val = logP;
-          } else { // numerical integration fallback integrates across each winner case
+          } else { // numerical integration fallback
             for (int k_win = 1; k_win <= n_lR_j; ++k_win) {
               current_ll_val = log_sum_exp(current_ll_val, integrate_interval(k_win, lower_for_trial, upper_for_trial));
             }
-            // For the fallback we need to add in pIO
-            if (!posdrift) { // should only ever be false for models with intrinsic omissions
+            if (!posdrift) { // intrinsic-omission models only
+              ensure_buffers();
               const double log_p_I = log_pIO_rowmajor(pars_rowmajor_buffer.data(),
-                                                                        isok_int_buffer.data(),
-                                                                        n_lR_j,
-                                                                        n_par);
+                                                      isok_int_buffer.data(),
+                                                      n_lR_j, n_par);
               current_ll_val = log_sum_exp(current_ll_val, log_p_I);
             }
           }
@@ -2176,8 +2514,12 @@ double c_log_likelihood_race(
         current_ll_val = log_sum_exp(integrate_interval(R_j_idx, lower1, upper1),
                                      integrate_interval(R_j_idx, lower2, upper2));
       } else {
-        const double logP1 = log_diff_exp(log_survivor(lower1), log_survivor(upper1));
-        const double logP2 = posdrift ? log_diff_exp(log_survivor(lower2), log_survivor(upper2)) : log_survivor(lower2);
+        const double logP1 = log_diff_exp(log_surv_cm(lower1, start_row_idx, n_lR_j),
+                                          log_surv_cm(upper1, start_row_idx, n_lR_j));
+        const double logP2 = posdrift
+          ? log_diff_exp(log_surv_cm(lower2, start_row_idx, n_lR_j),
+                         log_surv_cm(upper2, start_row_idx, n_lR_j))
+          : log_surv_cm(lower2, start_row_idx, n_lR_j);
         const double logPsum = log_sum_exp(logP1, logP2);
         if (R_FINITE(logPsum) && logPsum > log_prob_eps) {
           current_ll_val = logPsum;
@@ -2188,32 +2530,28 @@ double c_log_likelihood_race(
             current_ll_val = log_sum_exp(current_ll_val, log_sum_exp(ll_L_k, ll_U_k));
           }
           if (!posdrift) {
+            ensure_buffers();
             const double log_p_I = log_pIO_rowmajor(pars_rowmajor_buffer.data(), isok_int_buffer.data(), n_lR_j, n_par);
             current_ll_val = log_sum_exp(current_ll_val, log_p_I);
           }
         }
       }
     } else if (R_FINITE(rt_j) && rt_j > 0.0 && R_j_idx == NA_INTEGER) {
+      ensure_buffers();
       current_ll_val = log_min_density_rowmajor(rt_j,
                                                 pars_rowmajor_buffer.data(),
                                                 isok_int_buffer.data(),
-                                                n_lR_j,
-                                                n_par,
-                                                pdf1,
-                                                cdf1,
+                                                n_lR_j, n_par, pdf1, cdf1,
                                                 model_context_for_funcs,
                                                 logS_k_buffer);
     }
-    
+
     if (current_ll_val > min_ll && has_trunc) {
+      ensure_buffers();
       log_Z_this = get_trunc_normaliser_rowmajor_cpp(pars_rowmajor_buffer.data(),
                                                      isok_int_buffer.data(),
-                                                     pdf1,
-                                                     cdf1,
-                                                     LTj,
-                                                     UTj,
-                                                     n_lR_j,
-                                                     n_par,
+                                                     pdf1, cdf1,
+                                                     LTj, UTj, n_lR_j, n_par,
                                                      gsl_ctl,
                                                      model_context_for_funcs,
                                                      workspace);
@@ -2245,7 +2583,7 @@ double c_log_likelihood_race(
     }
     // Gather + reduce: indirect indexing prevents full SIMD gather, but the
     // reduction itself still benefits from the pragma.
-    const double* ll_ptr = ll_unique.begin();
+    const double* ll_ptr = ll_unique.data();
     const int*    ex_ptr = expand.begin();
     const int     n_exp  = expand.length();
     #pragma omp simd reduction(+:total_ll)
@@ -2267,7 +2605,7 @@ double c_log_likelihood_race(
       }
     }
     // Pure sequential reduction — fully vectorizable.
-    const double* ll_ptr = ll_unique.begin();
+    const double* ll_ptr = ll_unique.data();
     #pragma omp simd reduction(+:total_ll)
     for (int j = 0; j < n_unique_trials; ++j) {
       total_ll += ll_ptr[j];

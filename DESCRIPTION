@@ -70,8 +70,7 @@ Imports:
     lpSolve,
     WienR,
     RcppArmadillo
-SystemRequirements: GSL (>= 1.15)
-LinkingTo: 
+LinkingTo:
     Rcpp,
     RcppArmadillo
 Depends: 
