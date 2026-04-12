@@ -62,28 +62,24 @@ std::unordered_set<std::string> param_names_excluding(const ParamTable& pt,
 // Little helper for constants
 Rcpp::NumericMatrix add_constants_columns(Rcpp::NumericMatrix p_matrix,
                                           Rcpp::NumericVector constants) {
-  const int n_rows = p_matrix.nrow();
-  const int p_old  = p_matrix.ncol();
-  const int p_add  = constants.size();
-  const int p_new  = p_old + p_add;
+  int n_rows = p_matrix.nrow();
+  int p_old = p_matrix.ncol();
+  int p_add = constants.size();
+  int p_new = p_old + p_add;
 
   // allocate new matrix
   Rcpp::NumericMatrix out(n_rows, p_new);
 
   // copy existing data
   for (int j = 0; j < p_old; ++j) {
-    for (int i = 0; i < n_rows; ++i) {
-      out(i, j) = p_matrix(i, j);
-    }
+    std::copy(&p_matrix(0, j), &p_matrix(0, j) + n_rows, &out(0, j));
   }
 
   // fill new columns with constants (same value for all rows)
   for (int k = 0; k < p_add; ++k) {
     double val = constants[k];
     int j = p_old + k;
-    for (int i = 0; i < n_rows; ++i) {
-      out(i, j) = val;
-    }
+    std::fill(&out(0, j), &out(0, j) + n_rows, val);
   }
 
   // set column names: old names + names(constants)
@@ -102,3 +98,4 @@ Rcpp::NumericMatrix add_constants_columns(Rcpp::NumericMatrix p_matrix,
 
   return out;
 }
+

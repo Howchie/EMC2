@@ -1,5 +1,6 @@
 #include <RcppArmadillo.h>
 #include <unordered_set>
+#include "utility_types.h"
 #include "kernels.h"
 #include "ParamTable.h"
 
@@ -229,6 +230,12 @@ struct TrendRuntime {
   std::vector<TrendOpRuntime> pretransform_ops;
   std::vector<TrendOpRuntime> posttransform_ops;
 
+  // Cached filtered specs for each phase
+  std::vector<TransformSpec> premap_specs_;
+  std::vector<TransformSpec> pretransform_specs_;
+  std::vector<TransformSpec> postmap_specs_;
+  bool specs_initialized_ = false;
+
   TrendRuntime(const TrendPlan& plan_);
 
   bool has_premap()        const { return plan->has_premap(); }
@@ -256,6 +263,13 @@ struct TrendRuntime {
   void run_kernels_for_op(TrendOpRuntime& op, ParamTable& pt);
   void apply_base_for_op(TrendOpRuntime& op, ParamTable& pt);
   void reset_all_kernels();
+
+  // One-time initialization of filtered specs
+  void init_cached_specs(const ParamTable& pt, const std::vector<TransformSpec>& full_specs);
+
+  const std::vector<TransformSpec>& premap_specs() const { return premap_specs_; }
+  const std::vector<TransformSpec>& pretransform_specs() const { return pretransform_specs_; }
+  const std::vector<TransformSpec>& postmap_specs() const { return postmap_specs_; }
 
   Rcpp::NumericMatrix all_kernel_outputs(ParamTable& pt);
   Rcpp::NumericMatrix all_kernel_outputs(ParamTable& pt, const std::vector<int>& codes);

@@ -38,4 +38,9 @@ std::vector<TransformSpec> complement_specs_for_premap(
   const std::vector<TransformSpec>& full_specs,
   const std::unordered_set<std::string>& premap_set);
 
+std::vector<TransformSpec> complement_specs_for_phases(
+  const ParamTable& pt,
+  const std::vector<TransformSpec>& full_specs,
+  std::initializer_list<const std::unordered_set<std::string>*> sets);
+
 #endif

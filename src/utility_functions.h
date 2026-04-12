@@ -149,10 +149,17 @@ NumericMatrix submat_rcpp(NumericMatrix X, LogicalVector condition) {
     return X;
   }
   NumericMatrix out(to_keep, k);
-  for (int i = 0, j = 0; i < n; i++) {
-    if (condition[i]) {
-      out(j, _) = X(i, _);
-      j++;
+  
+  // Use column-major access for better performance
+  for (int col = 0; col < k; col++) {
+    double* x_col = &X(0, col);
+    double* out_col = &out(0, col);
+    int j = 0;
+    for (int i = 0; i < n; i++) {
+      if (condition[i]) {
+        out_col[j] = x_col[i];
+        j++;
+      }
     }
   }
   colnames(out) = colnames(X);
@@ -213,10 +220,8 @@ CharacterVector c_add_charvectors(CharacterVector x, CharacterVector y) {
 struct RowHash {
   std::size_t operator()(const std::vector<double> &v) const {
     std::size_t seed = 0;
-    std::hash<double> hash_double;
     for (double d : v) {
-      // A standard hash combination approach (based on boost::hash_combine)
-      seed ^= hash_double(d) + 0x9e3779b97f4a7c16ULL + (seed << 6) + (seed >> 2);
+      seed ^= std::hash<double>{}(d) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
     }
     return seed;
   }
@@ -233,6 +238,7 @@ struct RowEqual {
   }
 };
 
+// More efficient duplicated_matrix using a reusable buffer
 Rcpp::LogicalVector duplicated_matrix(Rcpp::NumericMatrix x) {
   int n = x.nrow();
   int m = x.ncol();
@@ -252,11 +258,12 @@ Rcpp::LogicalVector duplicated_matrix(Rcpp::NumericMatrix x) {
     }
 
     // Check if we have seen this row before
-    if (seen.find(buffer) != seen.end()) {
+    auto it = seen.find(buffer);
+    if (it != seen.end()) {
       dup[i] = true;
     } else {
-      // Insert a copy of the current row
-      seen.insert(std::vector<double>(buffer.begin(), buffer.end()));
+      // Still need one copy for the set, but we avoid many temporary vectors
+      seen.insert(buffer);
     }
   }
 

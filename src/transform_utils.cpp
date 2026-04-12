@@ -65,18 +65,21 @@ make_transform_specs_for_paramtable_from_full(
   const CharacterVector& full_names,
   const std::vector<TransformSpec>& full_specs)
 {
+  std::unordered_map<std::string, int> name_to_full_idx;
+  for (int k = 0; k < full_names.size(); ++k) {
+    name_to_full_idx[as<std::string>(full_names[k])] = k;
+  }
+
   std::vector<TransformSpec> out;
   out.reserve(pt.base_names.size());
 
   for (int j = 0; j < pt.base_names.size(); ++j) {
     std::string nm = as<std::string>(pt.base_names[j]);
-    for (int k = 0; k < full_names.size(); ++k) {
-      if (nm == as<std::string>(full_names[k])) {
-        TransformSpec s = full_specs[k];
-        s.col_idx = j;
-        out.push_back(s);
-        break;
-      }
+    auto it = name_to_full_idx.find(nm);
+    if (it != name_to_full_idx.end()) {
+      TransformSpec s = full_specs[it->second];
+      s.col_idx = j;
+      out.push_back(s);
     }
   }
   return out;
@@ -170,13 +173,28 @@ std::vector<TransformSpec> complement_specs_for_premap(
   const std::vector<TransformSpec>& full_specs,
   const std::unordered_set<std::string>& premap_set)
 {
+  return complement_specs_for_phases(pt, full_specs, { &premap_set });
+}
+
+std::vector<TransformSpec> complement_specs_for_phases(
+  const ParamTable& pt,
+  const std::vector<TransformSpec>& full_specs,
+  std::initializer_list<const std::unordered_set<std::string>*> sets)
+{
   std::vector<TransformSpec> out;
   out.reserve(full_specs.size());
 
   for (const auto& sp : full_specs) {
     int base_idx = sp.col_idx;
     std::string nm = Rcpp::as<std::string>(pt.base_names[base_idx]);
-    if (premap_set.find(nm) == premap_set.end()) out.push_back(sp);
+    bool excluded = false;
+    for (const auto* s_ptr : sets) {
+      if (s_ptr->find(nm) != s_ptr->end()) {
+        excluded = true;
+        break;
+      }
+    }
+    if (!excluded) out.push_back(sp);
   }
   return out;
 }

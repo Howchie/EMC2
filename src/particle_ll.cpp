@@ -1,4 +1,3 @@
-#include <RcppArmadillo.h>
 #include "utility_functions.h"
 #include "model_lnr.h"
 #include "model_LBA.h"
@@ -22,7 +21,6 @@
 #include <array>
 
 using namespace Rcpp;
-//todo check whether all the includes are still required
 
 NumericMatrix get_pars_c_wrapper_oo_core(NumericMatrix particle_matrix,
                                          DataFrame data,
@@ -195,9 +193,8 @@ static NumericMatrix get_pars_matrix_oo_fast(ParamTable& param_table,
     map_next = trend_runtime->premap_design_mask(designs);
     param_table.map_from_designs(designs, map_next);
 
-    transform_next = premap_set;
-    if (!transform_next.empty()) {
-      auto specs_premap = filter_specs_by_param_set(param_table, full_specs, transform_next);
+    const auto& specs_premap = trend_runtime->premap_specs();
+    if (!specs_premap.empty()) {
       c_do_transform_pt(param_table, specs_premap);
     }
 
@@ -213,9 +210,8 @@ static NumericMatrix get_pars_matrix_oo_fast(ParamTable& param_table,
   param_table.map_from_designs(designs, map_next);
 
   if (trend_runtime && trend_runtime->has_pretransform()) {
-    transform_next = pretransform_set;
-    if (!transform_next.empty()) {
-      auto specs_pretransform = filter_specs_by_param_set(param_table, full_specs, transform_next);
+    const auto& specs_pretransform = trend_runtime->pretransform_specs();
+    if (!specs_pretransform.empty()) {
       c_do_transform_pt(param_table, specs_pretransform);
     }
 
@@ -1220,6 +1216,8 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
   const bool is_ddm_type = type_std.find("DDM") != std::string::npos;
   const bool is_mri_type = (type == "MRI" || type == "MRI_AR1");
   const bool is_ss_type = type_std.find("SS") != std::string::npos;
+  // For now, SS models (SSEXG, SSRDEX) use Ttransform in R which isn't easily
+  // handled by the cached-spec fast path.
   const bool use_pt_mapping = is_ddm_type || (!is_mri_type && !is_ss_type);
 
   NumericMatrix one_particle(1, particle_matrix.ncol());
@@ -1270,6 +1268,7 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
       trend_plan.reset(new TrendPlan(trend, data));
       trend_runtime.reset(new TrendRuntime(*trend_plan));
       trend_runtime->bind_all_ops_to_paramtable(param_table_template);
+      trend_runtime->init_cached_specs(param_table_template, transform_specs_pt);
 
       Rcpp::CharacterVector dnames = designs.names();
       const auto& trend_params = trend_runtime->all_trend_params();

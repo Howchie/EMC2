@@ -589,6 +589,18 @@ void TrendRuntime::bind_all_ops_to_paramtable(const ParamTable& pt) {
   for (const auto& op : posttransform_ops) validate_par_inputs(op);
 }
 
+#include "transform_utils.h"
+
+void TrendRuntime::init_cached_specs(const ParamTable& pt, const std::vector<TransformSpec>& full_specs) {
+  if (specs_initialized_) return;
+
+  premap_specs_        = filter_specs_by_param_set(pt, full_specs, premap_trend_params());
+  pretransform_specs_ = filter_specs_by_param_set(pt, full_specs, pretransform_trend_params());
+  postmap_specs_       = complement_specs_for_phases(pt, full_specs, { &premap_trend_params(), &pretransform_trend_params() });
+  
+  specs_initialized_ = true;
+}
+
 
 void TrendRuntime::run_kernels_for_op(TrendOpRuntime& op,
                                       ParamTable& pt)
