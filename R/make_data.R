@@ -473,6 +473,8 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
   }
   if (any(names(data)=="RACE")) {
       Rrt <- RACE_rfun(data, pars, model)
+  } else if (any(names(data)=="LogicalRule") && grepl("LogicalRules", model()$c_name)) {
+    Rrt <- LogicalRules_rfun(data, pars, model)
   } else Rrt <- model()$rfun(data,pars)
   
   if (is.null(TC$pContaminant) & any(dimnames(pars)[[2]]=="pContaminant"))
@@ -530,6 +532,93 @@ RACE_rfun <- function(data, pars, model){
   Rrt <- data.frame(Rrt)
   Rrt$R <- factor(Rrt$R, labels = levels(data$lR), levels = 1:length(levels(data$lR)))
   return(Rrt)
+}
+
+LogicalRules_rfun <- function(data, pars, model) {
+  # Simulates a two-channel architecture with local sub-races:
+  # Channel A: A vs n_A
+  # Channel B: B vs n_B
+  #
+  # LogicalRule:
+  #   "OR"  : YES if either channel's target wins its local race; NO if both lose
+  #   "AND" : YES only if both targets win; NO as soon as any target loses
+  #   "ID"  : Identify stimulus class: NT, A, B, DT (exhaustive over channels)
+  #
+  
+  posdrift <- model()$posdrift
+  n_trials <- dim(data)[1] / length(levels(data$lR)) # number of unique trials
+  Rrti <- matrix(ncol = length(levels(data$lR)), nrow = n_trials,
+                 dimnames = list(NULL, levels(data$lR)))
+  RACE <- levels(data$lR) # should be 4 unless using a non-standard implementation
+  df <- data.frame(
+    LogicalRule = data$LogicalRule[data$lR == levels(data$lR)[1]]
+  )
+  racers <- c("A", "n_A", "B", "n_B")
+  if (!all(df$LogicalRule %in% c("OR", "AND", "ID"))) {
+    stop("LogicalRule must be one of: OR, AND, ID")
+  }
+  if (!all(racers %in% RACE)) stop("RACE must have: A, n_A, B, n_B")
+  # --- Simulate finishing times for each accumulator ---
+  Rrti <- matrix(NA_real_, nrow = n_trials, ncol = length(RACE),
+                 dimnames = list(NULL, RACE))
+  
+  for (i in RACE) {
+    pick <- data$lR==i
+    data_in <- data[pick, ]
+    data_in$lR <- factor(data$lR[pick])
+    p <- pars[pick, , drop = FALSE]
+    attr(p, "ok") <- rep(TRUE, ifelse(is.null(dim(p)), 1, nrow(p)))
+    Rrti[, i] <- model()$rfun(data_in, p, posdrift = posdrift)$rt
+  }
+  
+  A_t   <- Rrti[, "A"]
+  nA_t  <- Rrti[, "n_A"]
+  B_t   <- Rrti[, "B"]
+  nB_t  <- Rrti[, "n_B"]
+  
+  is_or <- df$LogicalRule == "OR"
+  is_and <- df$LogicalRule == "AND"
+  is_id <- df$LogicalRule == "ID"
+  
+  R <- rep(NA_character_, n_trials)
+  rt <- rep(NA_real_, n_trials)
+  
+  A_yes <- A_t < nA_t
+  B_yes <- B_t < nB_t
+  
+  tieA <- A_t == nA_t
+  tieB <- B_t == nB_t
+  if (any(tieA)) A_yes[tieA] <- runif(sum(tieA)) < 0.5
+  if (any(tieB)) B_yes[tieB] <- runif(sum(tieB)) < 0.5
+  
+  tA <- pmin(A_t, nA_t)
+  tB <- pmin(B_t, nB_t)
+  
+  if (any(is_or)) {
+    R[is_or]  <- ifelse(A_yes[is_or] | B_yes[is_or], "yes", "no")
+    RT_yes_or <- pmin(ifelse(A_yes, A_t, Inf), ifelse(B_yes, B_t, Inf))
+    RT_no_or  <- pmax(nA_t, nB_t)
+    rt[is_or] <- ifelse(R[is_or] == "yes", RT_yes_or[is_or], RT_no_or[is_or])
+  }
+  if (any(is_and)) {
+    R[is_and]  <- ifelse(A_yes[is_and] & B_yes[is_and], "yes", "no")
+    RT_yes_and <- pmax(A_t, B_t)
+    RT_no_and  <- pmin(ifelse(!A_yes, nA_t, Inf), ifelse(!B_yes, nB_t, Inf))
+    rt[is_and] <- ifelse(R[is_and] == "yes", RT_yes_and[is_and], RT_no_and[is_and])
+  }
+  if (any(is_id)) {
+    R[is_id]  <- ifelse(!A_yes[is_id] & !B_yes[is_id], "NN",
+                 ifelse( A_yes[is_id] & !B_yes[is_id], "AN",
+                 ifelse(!A_yes[is_id] &  B_yes[is_id], "NB", "AB")))
+    rt[is_id] <- pmax(tA[is_id], tB[is_id])
+  }
+
+  if (any(is_id)) {
+    R <- factor(R, levels = c("NN", "AN", "NB", "AB"))
+  } else {
+    R <- factor(R, levels = c("no", "yes"))
+  }
+  data.frame(R = R, rt = rt)
 }
 
 add_Ffunctions <- function(data,design)

@@ -78,7 +78,8 @@ design <- function(formula = NULL,factors = NULL,Rlevels = NULL,model,data=NULL,
                    contrasts=NULL,matchfun=NULL,constants=NULL,covariates=NULL,
                    functions=NULL,report_p_vector=TRUE, custom_p_vector = NULL,
                    trend=NULL,
-                   transform = NULL, bound = NULL, LT=NULL,LC=NULL,UC=NULL,UT=NULL,...){
+                   transform = NULL, bound = NULL, LT=NULL,LC=NULL,UC=NULL,UT=NULL,
+                   fixed_accumulator_roles = NULL,...){
 
   optionals <- list(...)
   if (is.list(model) && !is.function(model)) {
@@ -171,7 +172,8 @@ design <- function(formula = NULL,factors = NULL,Rlevels = NULL,model,data=NULL,
 
   design <- list(Flist=formula,Ffactors=factors,Rlevels=Rlevels,
                  Clist=contrasts,matchfun=matchfun,constants=constants,
-                 Fcovariates=covariates,Ffunctions=functions,model=model,LT=LT,LC=LC,UC=UC,UT=UT)
+                 Fcovariates=covariates,Ffunctions=functions,model=model,LT=LT,LC=LC,UC=UC,UT=UT,
+                 fixed_accumulator_roles = fixed_accumulator_roles)
   class(design) <- "emc.design"
   if (!is.null(trend)) {
     # check for at = 'lR'
@@ -310,11 +312,50 @@ contr.anova <- function(n) {
   contr/rep(2*apply(abs(contr),2,max),each=dim(contr)[1])
 }
 
-add_accumulators <- function(data,matchfun=NULL,simulate=FALSE, type = "RACE", Fcovariates=NULL) {
+add_accumulators <- function(data,matchfun=NULL,simulate=FALSE, type = "RACE", Fcovariates=NULL, fixed_accumulator_roles = NULL) {
   if(is.null(type) || !type %in% c("RACE", "RACEGNG", "SDT", "MT", "TC")) return(data)
   if (!is.factor(data$R)) stop("data must have a factor R")
   factors <- names(data)[!names(data) %in% c("R","rt","trials",Fcovariates)]
-  if (type %in% c("RACE","SDT", "RACEGNG")) {
+  if (!is.null(fixed_accumulator_roles)) {
+    # New logic branch for fixed accumulator roles
+    if (!is.factor(fixed_accumulator_roles) || length(fixed_accumulator_roles) == 0) {
+      stop("fixed_accumulator_roles must be a factor with at least one role name and ordered levels.")
+    }
+    if (!"R" %in% names(data)) {
+      stop("Input 'data' must contain an 'R' column with observed 'yes'/'no' responses when using fixed_accumulator_roles.")
+    }
+    if (!"LogicalRule" %in% factors) {
+      stop("Input 'data' must contain a 'LogicalRule' column with 'OR/AND' coding when using fixed_accumulator_roles.")
+    }
+    # It's good practice to ensure data$R is a factor if it's not already for consistency,
+    # though the likelihood will check its values.
+    
+    role_levels <- levels(fixed_accumulator_roles)
+    nacc <- length(role_levels)
+    datar <- data[rep(seq_len(nrow(data)), times = nacc), , drop = FALSE]
+    datar$lR <- factor(rep(role_levels, each = nrow(data)), levels = role_levels)
+    datar <- datar[order(rep(seq_len(nrow(data)), nacc), datar$lR), , drop = FALSE]
+    # datar$R already contains the replicated observed "yes"/"no" responses from the original data$R.
+    # Create datar$lR as the accumulator role factor
+    datar$lR <- factor(rep(role_levels, length.out = nrow(datar)), levels = role_levels)
+    
+    if (!is.null(matchfun)) {
+      lM_values <- matchfun(datar) # matchfun sees d$R as "yes/no", d$lR as role
+      if (!is.factor(lM_values)) {
+        datar$lM <- factor(lM_values)
+      } else {
+        datar$lM <- factor(lM_values, levels = levels(lM_values))
+      }
+    } else {
+      datar$lM <- factor(rep(NA, nrow(datar))) # Ensure lM column exists
+    }
+    
+    datar$winner <- FALSE # Not used by the new likelihood in the traditional sense
+    
+    # Other columns like 'trials', 'subjects', 'rt', and covariates are replicated from 'data'.
+    # Factors from original 'data' other than 'R' are also replicated.
+    # Fcovariates are handled by design_model after this function.
+  } else if (type %in% c("RACE","SDT", "RACEGNG")) {
     nacc <- length(levels(data$R))
     datar <- cbind(do.call(rbind,lapply(1:nacc,function(x){data})),
                    lR=factor(rep(levels(data$R),each=dim(data)[1]),levels=levels(data$R)))
@@ -536,6 +577,7 @@ design_model <- function(data,design,model=NULL,
     attr(dadm,"sampled_p_names") <- sampled_p_names
     return(dadm)
   }
+  fixed_accumulator_roles <- design$fixed_accumulator_roles # Defaults to NULL if not present
   if (any(names(model()$p_types) %in% names(data)))
     stop("Data cannot have columns with the same names as model parameters")
   if (!is.factor(data$subjects)) {
@@ -544,9 +586,13 @@ design_model <- function(data,design,model=NULL,
   }
 
   if (!any(names(data)=="trials")) data$trials <- 1:dim(data)[1]
+  if(is.null(data$LT) && !is.null(design$LT)) data$LT <- design$LT
+  if(is.null(data$UT) && !is.null(design$UT)) data$UT <- design$UT
+  if(is.null(data$LC) && !is.null(design$LC)) data$LC <- design$LC
+  if(is.null(data$UC) && !is.null(design$UC)) data$UC <- design$UC
   if(rt_check){rt_check_function(data)}
   if (!add_acc) da <- data else
-    da <- add_accumulators(data,design$matchfun,type=model()$type,Fcovariates=design$Fcovariates)
+    da <- add_accumulators(data,design$matchfun,type=model()$type,Fcovariates=design$Fcovariates,fixed_accumulator_roles = fixed_accumulator_roles)
   order_idx <- order(da$subjects)
   da <- da[order_idx,] # fixes different sort in add_accumulators depending on subject type
 

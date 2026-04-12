@@ -1005,7 +1005,13 @@ get_data.emc <- function(emc) {
       design <- get_design(emc)[[i]]
       tmp <- do.call(rbind,lapply(emc[[1]]$data,function(x){
         cur <- x[[i]]
-        if(!is.null(cur$winner) && (length(unique(cur$lR)) > 1)){
+        ## Todo check this, I know predict was failing but not sure this is the best fix
+        if("LogicalRule"%in%names(cur)){
+          # Logical rules can duplicate trial rows across lR. Keep the first level
+          # to recover the original trial-level data
+          cur <- cur[cur$lR==levels(cur$lR)[1],]
+        }
+        if(!is.null(cur$winner) && (length(unique(cur$lR)) > 1) && !"LogicalRule"%in%names(x)){
           cur <- cur[cur$winner,]
         }
         expand <- attr(cur,"expand")
@@ -1020,11 +1026,16 @@ get_data.emc <- function(emc) {
   } else{
     design <- get_design(emc)[[1]]
     dat <- do.call(rbind,lapply(emc[[1]]$data,function(x){
-      if(!is.null(x$winner) && (length(unique(x$lR)) > 1)){
+      if(!is.null(x$winner) && (length(unique(x$lR)) > 1) && !"LogicalRule"%in%names(x)){
         # Only expand winner for race models
         x <- x[x$winner,]
       }
+      if("LogicalRule"%in%names(x)){
+        # Logical rules can duplicate trial rows across lR. Keep the first level
+        # to recover the original trial-level data
+        x <- x[x$lR==levels(x$lR)[1],]
 
+      }
       expand <- attr(x,"expand")
       if(is.null(expand)) expand <- 1:nrow(x)
       return(x[expand,])

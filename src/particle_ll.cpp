@@ -14,6 +14,7 @@
 #include <gsl/gsl_integration.h>
 #include <gsl/gsl_errno.h> // For GSL error handling
 #include <cmath>
+#include <cstring>
 #include <string>
 #include <memory>
 #include <array>
@@ -660,7 +661,7 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
     LogicalVector winner = data["winner"];
     // Standardize incoming model type string from R
     // For race models: e.g. "LBA", "LBAIO", "LBAGNG", "RDM", "RDMGNG", "LNR", "LNRGNG"
-
+    const bool is_logicalrules = (type_std.find("LogicalRules") != std::string::npos);
     RacePdfFun model_dfun_ptr = nullptr;
     RaceCdfFun model_pfun_ptr = nullptr;
     RacePdf1Fun pdf1_ptr = nullptr;
@@ -704,7 +705,9 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
     if (type_std.find("GNG") != std::string::npos) {
         current_model_ctx.gng = true;
     }
-    
+    current_model_ctx.pdf1 = pdf1_ptr;
+    current_model_ctx.cdf1 = cdf1_ptr;
+
     NumericVector lR = data["lR"];
     int n_lR = unique(lR).length();
     
@@ -731,13 +734,20 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
         }
         is_ok = c_do_bound(pars, bound_specs);
         is_ok = lr_all(is_ok, n_lR);
-        lls[i] = c_log_likelihood_race(pars, data,
+        if (is_logicalrules){
+          lls[i] = c_log_likelihood_logicalrules(pars, data,
+                                                 model_dfun_ptr, model_pfun_ptr,
+                                                 n_trials, expand, min_ll, is_ok,
+                                                 n_lR, &current_model_ctx);
+        }
+        else {
+          lls[i] = c_log_likelihood_race(pars, data,
                                                     model_dfun_ptr, model_pfun_ptr,
-                                                    pdf1_ptr, cdf1_ptr,
                                                     n_trials,
                                                     winner, expand, min_ll, is_ok, n_lR,
                                                     &current_model_ctx,
-                                                    all_finite_trials);
+                                                  all_finite_trials);
+        }
       }
   }
   return(lls);
@@ -804,16 +814,17 @@ double gsl_f_race_scalar(double t, void* p) {
   const int w = P->winner_idx0;
   if (w < 0 || w >= P->n_lR) return 0.0;
   if (!P->isok[w]) return 0.0;
-  
+
+  auto* race_ctx = static_cast<ContextForRaceModels*>(P->ctx);
   const double* par_w = P->pars + static_cast<size_t>(w) * P->n_par;
-  double out = P->pdf1(t, par_w, P->ctx);
+  double out = race_ctx->pdf1(t, par_w, P->ctx);
   if (!(out > 0.0) || !std::isfinite(out)) return 0.0;
-  
+
   for (int j = 0; j < P->n_lR; ++j) {
     if (j == w) continue;
     if (!P->isok[j]) return 0.0;
     const double* par_j = P->pars + static_cast<size_t>(j) * P->n_par;
-    const double cdf = P->cdf1(t, par_j, P->ctx);
+    const double cdf = race_ctx->cdf1(t, par_j, P->ctx);
     if (!(cdf > 0.0)) continue;
     if (cdf >= 1.0 || !std::isfinite(cdf)) return 0.0;
     out *= (1.0 - cdf);
@@ -856,10 +867,10 @@ inline double log_survivor_rowmajor(double t,
                                     const int* isok_int,
                                     int n_lR,
                                     int n_par,
-                                    RaceCdf1Fun cdf1,
                                     void* ctx) {
+  auto* race_ctx = static_cast<ContextForRaceModels*>(ctx);
+  RaceCdf1Fun cdf1 = race_ctx->cdf1;
   if (t == R_PosInf) {
-    auto* race_ctx = static_cast<ContextForRaceModels*>(ctx);
     if (race_ctx && !race_ctx->use_posdrift) {
       return log_pIO_rowmajor(pars_rowmajor, isok_int, n_lR, n_par);
     }
@@ -870,8 +881,8 @@ inline double log_survivor_rowmajor(double t,
     if (!isok_int[k]) return R_NegInf;
     const double* par_k = pars_rowmajor + static_cast<size_t>(k) * n_par;
     double cdf = cdf1(t, par_k, ctx);
-    cdf = clamp_cdf01_race(cdf);
-    const double ll = safe_log1m_race(cdf);
+    cdf = clamp_prob01_race(cdf);
+    const double ll = safe_log1m_prob(cdf);
     if (!std::isfinite(ll)) return R_NegInf;
     logS += ll;
   }
@@ -883,10 +894,10 @@ inline double log_cdf_rowmajor(double t,
                                const int* isok_int,
                                int n_lR,
                                int n_par,
-                               RaceCdf1Fun cdf1,
                                void* ctx) {
+  auto* race_ctx = static_cast<ContextForRaceModels*>(ctx);
+  RaceCdf1Fun cdf1 = race_ctx->cdf1;
   if (t == R_PosInf) {
-      auto* race_ctx = static_cast<ContextForRaceModels*>(ctx);
       if (race_ctx && !race_ctx->use_posdrift) {
           double logC = 0.0;
           for (int k = 0; k < n_lR; ++k) {
@@ -909,7 +920,7 @@ inline double log_cdf_rowmajor(double t,
     if (!isok_int[k]) return R_NegInf;
     const double* par_k = pars_rowmajor + static_cast<size_t>(k) * n_par;
     double cdf = cdf1(t, par_k, ctx);
-    cdf = clamp_cdf01_race(cdf);
+    cdf = clamp_prob01_race(cdf);
     const double ll = std::log(cdf);
     if (!std::isfinite(ll)) return R_NegInf;
     logC += ll;
@@ -922,10 +933,11 @@ inline double log_min_density_rowmajor(double t,
                                        const int* isok_int,
                                        int n_lR,
                                        int n_par,
-                                       RacePdf1Fun pdf1,
-                                       RaceCdf1Fun cdf1,
                                        void* ctx,
                                        std::vector<double>& logS_k) {
+  auto* race_ctx = static_cast<ContextForRaceModels*>(ctx);
+  RacePdf1Fun pdf1 = race_ctx->pdf1;
+  RaceCdf1Fun cdf1 = race_ctx->cdf1;
   // Log density of the minimum (no known winner) at time t:
   //   f_min(t) = sum_k f_k(t) * prod_{j != k} (1 - F_j(t))
   //
@@ -946,8 +958,8 @@ inline double log_min_density_rowmajor(double t,
     if (!isok_int[k]) return R_NegInf;
     const double* par_k = pars_rowmajor + static_cast<size_t>(k) * n_par;
     double cdf = cdf1(t, par_k, ctx);
-    cdf = clamp_cdf01_race(cdf);
-    const double ll = safe_log1m_race(cdf);
+    cdf = clamp_prob01_race(cdf);
+    const double ll = safe_log1m_prob(cdf);
     if (!std::isfinite(ll)) return R_NegInf;
     logS_k[static_cast<size_t>(k)] = ll;
     logS_all += ll;
@@ -970,8 +982,6 @@ double integrate_for_kth_winner_rowmajor_cpp(
     const int* isok_int,
     double low,
     double upp,
-    RacePdf1Fun pdf1,
-    RaceCdf1Fun cdf1,
     int n_lR_j,
     int n_par,
     const GslIntegrationControls& gsl_ctl,
@@ -993,8 +1003,6 @@ double integrate_for_kth_winner_rowmajor_cpp(
   params_struct.n_par = n_par;
   params_struct.winner_idx0 = k_winner_idx - 1;
   params_struct.isok = isok_int;
-  params_struct.pdf1 = pdf1;
-  params_struct.cdf1 = cdf1;
   params_struct.ctx = model_specific_context;
   
   F.function = &gsl_f_race_scalar;
@@ -1030,8 +1038,6 @@ double integrate_for_kth_winner_rowmajor_cpp(
 
 double get_trunc_normaliser_rowmajor_cpp(const double* pars_rowmajor,
                                          const int* isok_int,
-                                         RacePdf1Fun pdf1,
-                                         RaceCdf1Fun cdf1,
                                          double LT,
                                          double UT,
                                          int n_lR,
@@ -1040,14 +1046,14 @@ double get_trunc_normaliser_rowmajor_cpp(const double* pars_rowmajor,
                                          void* model_specific_context,
                                          GslWorkspacePtr& workspace) {
   const double log_prob_eps = std::log(std::numeric_limits<double>::epsilon());
-  const double logS_LT = log_survivor_rowmajor(LT, pars_rowmajor, isok_int, n_lR, n_par, cdf1, model_specific_context);
+  const double logS_LT = log_survivor_rowmajor(LT, pars_rowmajor, isok_int, n_lR, n_par, model_specific_context);
   if (!R_FINITE(logS_LT)) return R_NegInf;
   if (UT == R_PosInf) return logS_LT;
-  
-  const double logS_UT = log_survivor_rowmajor(UT, pars_rowmajor, isok_int, n_lR, n_par, cdf1, model_specific_context);
+
+  const double logS_UT = log_survivor_rowmajor(UT, pars_rowmajor, isok_int, n_lR, n_par, model_specific_context);
   double logP = log_diff_exp(logS_LT, logS_UT);
   if (R_FINITE(logP) && logP > log_prob_eps) return logP;
-  
+
   // Only falls back to GSL integration if the analytic trick fails (e.g. due to catastrophic cancellation)
   gsl_integration_workspace* w = ensure_gsl_workspace(workspace);
   double log_total = R_NegInf;
@@ -1057,8 +1063,6 @@ double get_trunc_normaliser_rowmajor_cpp(const double* pars_rowmajor,
                                                                isok_int,
                                                                LT,
                                                                UT,
-                                                               pdf1,
-                                                               cdf1,
                                                                n_lR,
                                                                n_par,
                                                                gsl_ctl,
@@ -1079,8 +1083,6 @@ double c_log_likelihood_race(
     Rcpp::DataFrame dadm,                   // Data for unique trial conditions, structured for all accumulators
     RacePdfFun model_dfun,                  // Pointer to the model's PDF adapter function
     RaceCdfFun model_pfun,                  // Pointer to the model's CDF adapter function
-    RacePdf1Fun pdf1,                       // Scalar PDF (for GSL)
-    RaceCdf1Fun cdf1,                       // Scalar CDF (for GSL)
     const int n_trials,
     LogicalVector winner,
     Rcpp::IntegerVector expand,  // Vector for expanding unique LLs to full trial count
@@ -1267,8 +1269,8 @@ double c_log_likelihood_race(
       for (int i = 0; i < n_trials; ++i) {
         if (!idx_loss[i]) continue;
         double cdf = loss_cdf[out_i++];
-        cdf = clamp_cdf01_race(cdf);
-        lds[i] = safe_log1m_race(cdf);
+        cdf = clamp_prob01_race(cdf);
+        lds[i] = safe_log1m_prob(cdf);
       }
     }
     
@@ -1291,8 +1293,6 @@ double c_log_likelihood_race(
         fill_trial_buffers(start_row_idx, n_lR_j);
         log_Z_this = get_trunc_normaliser_rowmajor_cpp(pars_rowmajor_buffer.data(),
                                                        isok_int_buffer.data(),
-                                                       pdf1,
-                                                       cdf1,
                                                        LTj,
                                                        UTj,
                                                        n_lR_j,
@@ -1354,8 +1354,6 @@ double c_log_likelihood_race(
                                                    isok_int_buffer.data(),
                                                    low,
                                                    upp,
-                                                   pdf1,
-                                                   cdf1,
                                                    n_lR_j,
                                                    n_par,
                                                    gsl_ctl,
@@ -1369,7 +1367,6 @@ double c_log_likelihood_race(
                                    isok_int_buffer.data(),
                                    n_lR_j,
                                    n_par,
-                                   cdf1,
                                    model_context_for_funcs);
     };
 
@@ -1433,8 +1430,8 @@ double c_log_likelihood_race(
         lower_for_trial = UCj;
         upper_for_trial = UTj;
         if (n_lR_j == 1) {
-          const double cdf = cdf1(lower_for_trial, pars_rowmajor_buffer.data(), model_context_for_funcs);
-          current_ll_val = safe_log1m_race(clamp_cdf01_race(cdf));
+          const double cdf = static_cast<ContextForRaceModels*>(model_context_for_funcs)->cdf1(lower_for_trial, pars_rowmajor_buffer.data(), model_context_for_funcs);
+          current_ll_val = safe_log1m_prob(clamp_prob01_race(cdf));
         } else if (R_j_idx == NA_INTEGER) {
           const double logP = posdrift
           ? log_diff_exp(log_survivor(lower_for_trial), log_survivor(upper_for_trial))
@@ -1490,8 +1487,6 @@ double c_log_likelihood_race(
                                                 isok_int_buffer.data(),
                                                 n_lR_j,
                                                 n_par,
-                                                pdf1,
-                                                cdf1,
                                                 model_context_for_funcs,
                                                 logS_k_buffer);
     }
@@ -1499,8 +1494,6 @@ double c_log_likelihood_race(
     if (current_ll_val > min_ll && has_trunc) {
       log_Z_this = get_trunc_normaliser_rowmajor_cpp(pars_rowmajor_buffer.data(),
                                                      isok_int_buffer.data(),
-                                                     pdf1,
-                                                     cdf1,
                                                      LTj,
                                                      UTj,
                                                      n_lR_j,
@@ -1561,3 +1554,396 @@ double c_log_likelihood_race(
   
   return total_ll;
 }
+
+// Computes P(par_target wins its local two-accumulator race by time t),
+// i.e. integral_0^t f_target(u) * S_nontarget(u) du.
+// Uses the analytic CDF difference for the [t0_tgt, min(t,t0_nt)] region
+// (where S_nontarget = 1), then delegates the remaining numeric interval to
+// integrate_for_kth_winner_rowmajor_cpp — the same GSL machinery used by the
+// standard race likelihood.
+// Returns NA_REAL if the numeric integration fails.
+static double compute_local_race_cdf(
+    double t,
+    const double* par_target,
+    const double* par_nontarget,
+    int n_par,
+    int t0_idx,
+    ContextForRaceModels* ctx,
+    const GslIntegrationControls& gsl_ctl,
+    gsl_integration_workspace* w,
+    double* pars_2buf,   // caller-owned scratch, length 2*n_par
+    int* isok_2buf)      // caller-owned scratch, length 2
+{
+    double t0_tgt = (t0_idx >= 0) ? par_target[t0_idx]    : 0.0;
+    double t0_nt  = (t0_idx >= 0) ? par_nontarget[t0_idx] : 0.0;
+    if (t0_tgt < 0.0) t0_tgt = 0.0;
+    if (t0_nt  < 0.0) t0_nt  = 0.0;
+
+    if (t <= t0_tgt) return 0.0;
+
+    // Analytic term for [t0_tgt, min(t, t0_nt)] where S_nontarget = 1
+    double term1 = 0.0;
+    const double split = std::min(t, t0_nt);
+    if (split > t0_tgt) {
+        term1 = ctx->cdf1(split, par_target, ctx) - ctx->cdf1(t0_tgt, par_target, ctx);
+        if (term1 < 0.0) term1 = 0.0;
+        if (term1 > 1.0) term1 = 1.0;
+    }
+
+    const double low_limit = std::max(t0_tgt, t0_nt);
+    if (t <= low_limit) return term1;
+
+    // Numeric integral over [low_limit, t]: pack target (row 0) + nontarget (row 1)
+    std::memcpy(pars_2buf,         par_target,    static_cast<size_t>(n_par) * sizeof(double));
+    std::memcpy(pars_2buf + n_par, par_nontarget, static_cast<size_t>(n_par) * sizeof(double));
+    isok_2buf[0] = 1;
+    isok_2buf[1] = 1;
+
+    const double log_G = integrate_for_kth_winner_rowmajor_cpp(
+        1,            // winner = target (row 0, 1-based index)
+        pars_2buf, isok_2buf,
+        low_limit, t,
+        2, n_par, gsl_ctl, ctx, w);
+
+    if (!R_FINITE(log_G)) return NA_REAL;
+    double G = term1 + std::exp(log_G);
+    if (G < 0.0) G = 0.0;
+    if (G > 1.0) G = 1.0;
+    return G;
+}
+
+double c_log_likelihood_logicalrules(
+    Rcpp::NumericMatrix pars,
+    Rcpp::DataFrame dadm,
+    RacePdfFun model_dfun,
+    RaceCdfFun model_pfun,
+    const int n_trials,
+    const Rcpp::IntegerVector expand,
+    double min_ll,
+    const Rcpp::LogicalVector ok_params,
+    int n_acc,
+    void* model_specific_context) {
+  
+  if (n_trials == 0) return 0.0;
+  if (n_acc <= 0) Rcpp::stop("c_log_likelihood_redundant_target_race: n_acc must be positive");
+  if (n_trials % n_acc != 0) Rcpp::stop("c_log_likelihood_redundant_target_race: dadm rows must be multiple of n_acc");
+  if (pars.nrow() != n_trials) Rcpp::stop("c_log_likelihood_redundant_target_race: pars nrow must match n_trials");
+  if (ok_params.size() != n_trials) Rcpp::stop("c_log_likelihood_redundant_target_race: ok_params length must match n_trials");
+  if (!dadm.containsElementNamed("rt") ||
+      !dadm.containsElementNamed("lR") ||
+      !dadm.containsElementNamed("R") ||
+      !dadm.containsElementNamed("LogicalRule")) {
+      Rcpp::stop("c_log_likelihood_redundant_target_race: dadm must contain columns rt, lR, R, LogicalRule");
+  }
+  
+  Rcpp::NumericVector rts = dadm["rt"];
+  SEXP role_sexp = dadm["lR"];
+  SEXP resp_sexp = dadm["R"];
+  SEXP rule_sexp = dadm["LogicalRule"];
+  if (rts.size() != n_trials ||
+      Rf_length(role_sexp) != n_trials ||
+      Rf_length(resp_sexp) != n_trials ||
+      Rf_length(rule_sexp) != n_trials) {
+    Rcpp::stop("c_log_likelihood_redundant_target_race: dadm column lengths must match n_trials");
+  }
+  
+  // Avoid repeated factor -> character coercion (very costly inside PMwG likelihood loops).
+  const bool role_is_factor = Rf_inherits(role_sexp, "factor");
+  const bool resp_is_factor = Rf_inherits(resp_sexp, "factor");
+  const bool rule_is_factor = Rf_inherits(rule_sexp, "factor");
+  
+  Rcpp::IntegerVector role_code;
+  Rcpp::IntegerVector resp_code;
+  Rcpp::IntegerVector rule_code;
+  Rcpp::CharacterVector role_chr;
+  Rcpp::CharacterVector resp_chr;
+  Rcpp::CharacterVector rule_chr;
+  
+  auto level_code = [](const Rcpp::CharacterVector& levels, const std::string& target) -> int {
+    for (int i = 0; i < levels.size(); ++i) {
+      if (Rcpp::as<std::string>(levels[i]) == target) return i + 1; // factor codes are 1-based
+    }
+    return -1;
+  };
+  
+  int codeA = -1, codeB = -1, codenA = -1, codenB = -1;
+  int codeYes = -1, codeNo = -1;
+  int codeAND = -1, codeOR = -1;
+  
+  if (role_is_factor) {
+    role_code = Rcpp::IntegerVector(role_sexp);
+    const Rcpp::CharacterVector lev = role_code.attr("levels");
+    codeA = level_code(lev, "A");
+    codeB = level_code(lev, "B");
+    codenA = level_code(lev, "n_A");
+    codenB = level_code(lev, "n_B");
+  } else {
+    role_chr = Rcpp::CharacterVector(role_sexp);
+  }
+  
+  if (resp_is_factor) {
+    resp_code = Rcpp::IntegerVector(resp_sexp);
+    const Rcpp::CharacterVector lev = resp_code.attr("levels");
+    codeYes = level_code(lev, "yes");
+    codeNo = level_code(lev, "no");
+  } else {
+    resp_chr = Rcpp::CharacterVector(resp_sexp);
+  }
+  
+  if (rule_is_factor) {
+    rule_code = Rcpp::IntegerVector(rule_sexp);
+    const Rcpp::CharacterVector lev = rule_code.attr("levels");
+    codeAND = level_code(lev, "AND");
+    codeOR = level_code(lev, "OR");
+  } else {
+    rule_chr = Rcpp::CharacterVector(rule_sexp);
+  }
+  
+  // No concept of "winner" here: request PDF/CDF for all accumulators, respecting ok_params bounds.
+  Rcpp::LogicalVector winner_all(n_trials, true);
+  Rcpp::NumericVector f_all = model_dfun(rts, pars, winner_all, ok_params, model_specific_context);
+  Rcpp::NumericVector F_all = model_pfun(rts, pars, winner_all, ok_params, model_specific_context);
+  const double* f_ptr = f_all.begin();
+  const double* F_ptr = F_all.begin();
+  
+  const int n_unique_trials = n_trials / n_acc;
+  Rcpp::NumericVector ll_unique(n_unique_trials, min_ll);
+  
+  // set up parameters
+  double p_j = 0.0;
+  
+  // Workspace for numerical integration (local-race CDF terms).
+  GslWorkspacePtr workspace(nullptr, &gsl_integration_workspace_free);
+  auto ensure_workspace = [&]() {
+    if (!workspace) workspace.reset(gsl_integration_workspace_alloc(1000));
+  };
+  
+  auto* ctx = static_cast<ContextForRaceModels*>(model_specific_context);
+  int t0_idx = -1;
+  if (ctx->pdf1 == &dlba_scalar) {
+    t0_idx = 4;
+  } else if (ctx->pdf1 == &drdm_scalar) {
+    t0_idx = 3;
+  } else if (ctx->pdf1 == &dlnr_scalar) {
+    t0_idx = 2;
+  }
+
+  const GslIntegrationControls gsl_ctl{1e-10, 1e-5, 200, 0.0, 1e-7, 1000};
+  const int n_par = pars.ncol();
+
+  // Reuse buffers to avoid per-trial allocations.
+  std::vector<double> parA(static_cast<size_t>(n_par));
+  std::vector<double> parB(static_cast<size_t>(n_par));
+  std::vector<double> parnA(static_cast<size_t>(n_par));
+  std::vector<double> parnB(static_cast<size_t>(n_par));
+  std::vector<double> pars_2buf(static_cast<size_t>(2 * n_par));
+  int isok_2buf[2] = {1, 1};
+  
+  for(int j=0; j<n_unique_trials; ++j){
+    int start = j*n_acc;
+    p_j = 0.0;
+    double fA = NA_REAL, fB = NA_REAL, fnA = NA_REAL, fnB = NA_REAL;
+    double FA = NA_REAL, FB = NA_REAL, FnA = NA_REAL, FnB = NA_REAL;
+    int idxA = -1, idxB = -1, idxnA = -1, idxnB = -1;
+    for(int k=0;k<n_acc;++k){
+      int idx = start+k;
+      if (role_is_factor) {
+        const int rc = role_code[idx];
+        if (rc == codeA) { fA = f_ptr[idx]; FA = F_ptr[idx]; idxA = idx; }
+        else if (rc == codeB) { fB = f_ptr[idx]; FB = F_ptr[idx]; idxB = idx; }
+        else if (rc == codenA) { fnA = f_ptr[idx]; FnA = F_ptr[idx]; idxnA = idx; }
+        else if (rc == codenB) { fnB = f_ptr[idx]; FnB = F_ptr[idx]; idxnB = idx; }
+      } else {
+        const Rcpp::String r = role_chr[idx];
+        if (r == "A") { fA = f_ptr[idx]; FA = F_ptr[idx]; idxA = idx; }
+        else if (r == "B") { fB = f_ptr[idx]; FB = F_ptr[idx]; idxB = idx; }
+        else if (r == "n_A") { fnA = f_ptr[idx]; FnA = F_ptr[idx]; idxnA = idx; }
+        else if (r == "n_B") { fnB = f_ptr[idx]; FnB = F_ptr[idx]; idxnB = idx; }
+      }
+    }
+    
+    // Guard: if any required pieces are missing/non-finite, return min_ll for this unique trial.
+    if (!R_FINITE(fA) || !R_FINITE(fB) || !R_FINITE(fnA) || !R_FINITE(fnB) ||
+        !R_FINITE(FA) || !R_FINITE(FB) || !R_FINITE(FnA) || !R_FINITE(FnB)) {
+        ll_unique[j] = min_ll;
+      continue;
+    }
+    if (idxA < 0 || idxB < 0 || idxnA < 0 || idxnB < 0) {
+      ll_unique[j] = min_ll;
+      continue;
+    }
+    
+    if (!ok_params[idxA] || !ok_params[idxB] || !ok_params[idxnA] || !ok_params[idxnB]) {
+      ll_unique[j] = min_ll;
+      continue;
+    }
+    
+    if (fA < 0.0) fA = 0.0;
+    if (fB < 0.0) fB = 0.0;
+    if (fnA < 0.0) fnA = 0.0;
+    if (fnB < 0.0) fnB = 0.0;
+    FA = clamp_prob01(FA);
+    FB = clamp_prob01(FB);
+    FnA = clamp_prob01(FnA);
+    FnB = clamp_prob01(FnB);
+    if (!R_FINITE(FA) || !R_FINITE(FB) || !R_FINITE(FnA) || !R_FINITE(FnB)) {
+      ll_unique[j] = min_ll;
+      continue;
+    }
+    
+    const double one_m_FB = safe_surv_from_cdf(FB);
+    const double one_m_FA = safe_surv_from_cdf(FA);
+    const double one_m_FnB = safe_surv_from_cdf(FnB);
+    const double one_m_FnA = safe_surv_from_cdf(FnA);
+    if (!R_FINITE(one_m_FB) || !R_FINITE(one_m_FA) || !R_FINITE(one_m_FnB) ||
+        !R_FINITE(one_m_FnA)) {
+        ll_unique[j] = min_ll;
+      continue;
+    }
+    
+    const bool rule_is_or = rule_is_factor ? (rule_code[start] == codeOR) : (Rcpp::String(rule_chr[start]) == "OR");
+    const bool rule_is_and = rule_is_factor ? (rule_code[start] == codeAND) : (Rcpp::String(rule_chr[start]) == "AND");
+    if (!(rule_is_or || rule_is_and)) {
+      ll_unique[j] = min_ll;
+      continue;
+    }
+    const bool resp_is_yes = resp_is_factor ? (resp_code[start] == codeYes) : (Rcpp::String(resp_chr[start]) == "yes");
+    const bool resp_is_no = resp_is_factor ? (resp_code[start] == codeNo) : (Rcpp::String(resp_chr[start]) == "no");
+    if (!(resp_is_yes || resp_is_no)) {
+      ll_unique[j] = min_ll;
+      continue;
+    }
+    
+    // Parameters for local (two-accumulator) races, copied into contiguous row-major buffers.
+    for (int c = 0; c < n_par; ++c) {
+      parA[static_cast<size_t>(c)] = pars(idxA, c);
+      parB[static_cast<size_t>(c)] = pars(idxB, c);
+      parnA[static_cast<size_t>(c)] = pars(idxnA, c);
+      parnB[static_cast<size_t>(c)] = pars(idxnB, c);
+    }
+    
+    // Subdistribution CDFs and densities for local races.
+    // We compute specific integrals based on the logical rule to avoid numerical subtraction issues.
+    // For OR rules, we need GA_no and GB_no (prob of "No" winning in channel).
+    // For AND rules, we need GA_yes and GB_yes (prob of "Yes" winning in channel).
+    // The other quantities are derived additively: S(G_yes) = G_no + (1-G_dec).
+    if (!ctx || !ctx->pdf1 || !ctx->cdf1) {
+      ll_unique[j] = min_ll;
+      continue;
+    }
+    const double t = rts[start];
+
+    // Local winner densities at time t (analytic).
+    const double gA_yes = fA * one_m_FnA;
+    const double gB_yes = fB * one_m_FnB;
+    const double gA_no = fnA * one_m_FA;
+    const double gB_no = fnB * one_m_FB;
+
+    // "Survival of decision": probability that neither accumulator in the channel has finished by t.
+    // S_dec = (1 - FA) * (1 - FnA)
+    const double S_dec_A = one_m_FA * one_m_FnA;
+    const double S_dec_B = one_m_FB * one_m_FnB;
+
+    double GA_yes = NA_REAL, GB_yes = NA_REAL;
+    double GA_no = NA_REAL, GB_no = NA_REAL;
+    double S_GA_yes = NA_REAL, S_GB_yes = NA_REAL; // S(G_yes) = 1 - G_yes
+    double S_GA_no = NA_REAL, S_GB_no = NA_REAL;   // S(G_no) = 1 - G_no
+
+    if (rule_is_or) {
+      // OR rule requires robust GA_no, GB_no.
+      // integrate(nA, A) gives P(nA wins), i.e., G_no.
+      ensure_workspace();
+      GA_no = compute_local_race_cdf(t, parnA.data(), parA.data(), n_par, t0_idx, ctx, gsl_ctl, workspace.get(), pars_2buf.data(), isok_2buf);
+
+      if (parnA == parnB && parA == parB) {
+        GB_no = GA_no;
+      } else {
+        GB_no = compute_local_race_cdf(t, parnB.data(), parB.data(), n_par, t0_idx, ctx, gsl_ctl, workspace.get(), pars_2buf.data(), isok_2buf);
+      }
+
+      if (!R_FINITE(GA_no) || !R_FINITE(GB_no)) {
+        ll_unique[j] = min_ll;
+        continue;
+      }
+      // Clamp
+      if (GA_no < 0.0) GA_no = 0.0; if (GA_no > 1.0) GA_no = 1.0;
+      if (GB_no < 0.0) GB_no = 0.0; if (GB_no > 1.0) GB_no = 1.0;
+
+      // For OR-Yes (Min-Yes), we need S(G_yes) = P(Yes hasn't happened) = P(No happened) + P(Neither).
+      // S(G_yes) = G_no + S_dec.
+      S_GA_yes = GA_no + S_dec_A;
+      S_GB_yes = GB_no + S_dec_B;
+      // Clamp survivors
+      if (S_GA_yes > 1.0) S_GA_yes = 1.0; if (S_GA_yes < kMinSurv) S_GA_yes = kMinSurv;
+      if (S_GB_yes > 1.0) S_GB_yes = 1.0; if (S_GB_yes < kMinSurv) S_GB_yes = kMinSurv;
+      if (resp_is_yes) {
+        // Min(A_yes, B_yes)
+        p_j = gA_yes * S_GB_yes + gB_yes * S_GA_yes;
+      } else if (resp_is_no) {
+        // Max(A_no, B_no)
+        p_j = gA_no * GB_no + gB_no * GA_no;
+      }
+
+    } else if (rule_is_and) {
+      // AND rule requires robust GA_yes, GB_yes.
+      // integrate(A, nA) gives P(A wins), i.e., G_yes.
+      ensure_workspace();
+      GA_yes = compute_local_race_cdf(t, parA.data(), parnA.data(), n_par, t0_idx, ctx, gsl_ctl, workspace.get(), pars_2buf.data(), isok_2buf);
+
+      if (parA == parB && parnA == parnB) {
+        GB_yes = GA_yes;
+      } else {
+        GB_yes = compute_local_race_cdf(t, parB.data(), parnB.data(), n_par, t0_idx, ctx, gsl_ctl, workspace.get(), pars_2buf.data(), isok_2buf);
+      }
+
+      if (!R_FINITE(GA_yes) || !R_FINITE(GB_yes)) {
+        ll_unique[j] = min_ll;
+        continue;
+      }
+      // Clamp
+      if (GA_yes < 0.0) GA_yes = 0.0; if (GA_yes > 1.0) GA_yes = 1.0;
+      if (GB_yes < 0.0) GB_yes = 0.0; if (GB_yes > 1.0) GB_yes = 1.0;
+      
+      // For AND-No (Min-No), we need S(G_no) = P(No hasn't happened) = P(Yes happened) + P(Neither).
+      // S(G_no) = G_yes + S_dec.
+      S_GA_no = GA_yes + S_dec_A;
+      S_GB_no = GB_yes + S_dec_B;
+      // Clamp survivors
+      if (S_GA_no > 1.0) S_GA_no = 1.0; if (S_GA_no < kMinSurv) S_GA_no = kMinSurv;
+      if (S_GB_no > 1.0) S_GB_no = 1.0; if (S_GB_no < kMinSurv) S_GB_no = kMinSurv;
+      
+      if (resp_is_no) {
+        // Min(A_no, B_no)
+        p_j = gA_no * S_GB_no + gB_no * S_GA_no;
+      } else if (resp_is_yes) {
+        // Max(A_yes, B_yes)
+        p_j = gA_yes * GB_yes + gB_yes * GA_yes;
+      }
+    }
+    
+    if (p_j <= 0.0 || !R_FINITE(p_j)) {
+      ll_unique[j] = min_ll;
+    } else {
+      ll_unique[j] = std::log(p_j);
+    }
+  }
+  
+  double sum_ll = 0.0;
+  if (expand.length() > 0) {
+    Rcpp::NumericVector ll_exp = c_expand(ll_unique, expand);
+    for (int i = 0; i < ll_exp.size(); ++i) {
+      double val = ll_exp[i];
+      if (!R_FINITE(val) || Rcpp::NumericVector::is_na(val) || val < min_ll) val = min_ll;
+      sum_ll += val;
+    }
+  } else {
+    for (int j = 0; j < ll_unique.size(); ++j) {
+      double val = ll_unique[j];
+      if (!R_FINITE(val) || Rcpp::NumericVector::is_na(val) || val < min_ll) val = min_ll;
+      sum_ll += val;
+    }
+  }
+  
+  return sum_ll;
+}
+

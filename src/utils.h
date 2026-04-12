@@ -37,8 +37,6 @@ struct gsl_race_params_scalar {
   int n_par;
   int winner_idx0;      // 0-based
   const int* isok;      // length n_lR, 0/1
-  RacePdf1Fun pdf1;
-  RaceCdf1Fun cdf1;
   void* ctx;
 };
 
@@ -47,8 +45,6 @@ double gsl_f_race_scalar(double t, void* p);
 double c_log_likelihood_race(Rcpp::NumericMatrix pars, Rcpp::DataFrame dadm,
                                         RacePdfFun model_dfun, // Pointer to the model's PDF adapter function
                                         RaceCdfFun model_pfun, // Pointer to the model's CDF adapter function
-                                        RacePdf1Fun pdf1,      // Scalar PDF for integration
-                                        RaceCdf1Fun cdf1,      // Scalar CDF for integration
                                         const int n_trials,
                                         const Rcpp::LogicalVector winner,
                                         const Rcpp::IntegerVector
@@ -76,6 +72,9 @@ struct ContextForRaceModels {
 	bool log_out=false;
 	bool gng=false;
 	std::string LogicalRule;
+    // Scalar PDF/CDF function pointers for LogicalRules integration (set in calc_ll).
+    RacePdf1Fun pdf1 = nullptr;
+    RaceCdf1Fun cdf1 = nullptr;
 };
 
 // Scalar adapters (single-RT, single-parameter-row) used by GSL integration.

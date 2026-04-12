@@ -341,7 +341,7 @@ inline double log_mean_exp(const Rcpp::NumericVector& x) {
 }
 
 
-inline double clamp_cdf01_race(double cdf) {
+inline double clamp_prob01_race(double cdf) {
   // Keep CDF values in a stable range for downstream log/1-CDF operations.
   // Centralizing this avoids repeating the same "near 0/near 1/NaN/Inf" guards
   // throughout the hot loops.
@@ -362,6 +362,39 @@ inline double safe_log1m_race(double p) {
   if (p >= 1.0) return R_NegInf;
   if (p > 1.0 - 1e-15) p = 1.0 - 1e-15;
   return std::log1p(-p);
+}
+
+// Stable log(1 - p) for p in [0,1]. Non-finite input => -Inf.
+inline double safe_log1m_prob(double p, double one_minus_eps = 1e-15) {
+  if (!std::isfinite(p)) return -std::numeric_limits<double>::infinity();
+  if (p <= 0.0) return 0.0;
+  if (p >= 1.0) return -std::numeric_limits<double>::infinity();
+  if (p > 1.0 - one_minus_eps) p = 1.0 - one_minus_eps;
+  return std::log1p(-p);
+}
+
+// Clamp finite values to [0, 1]. Non-finite values are passed through unchanged.
+inline double clamp_prob01(double p) {
+  if (!std::isfinite(p)) return p;
+  if (p < 0.0) return 0.0;
+  if (p > 1.0) return 1.0;
+  return p;
+}
+
+constexpr double kMinSurv = 1e-12;
+
+inline double safe_surv_from_cdf(double cdf) {
+  const double F = clamp_prob01(cdf);
+  if (!R_FINITE(F)) return NA_REAL;
+  const double s = std::fma(-F, 1.0, 1.0); // 1 - F
+  return (s >= kMinSurv) ? s : kMinSurv;
+}
+inline double safe_surv_from_prod_cdf(double cdf1, double cdf2) {
+  const double F1 = clamp_prob01(cdf1);
+  const double F2 = clamp_prob01(cdf2);
+  if (!R_FINITE(F1) || !R_FINITE(F2)) return NA_REAL;
+  const double s = std::fma(-F1, F2, 1.0); // 1 - F1*F2 (single-rounding)
+  return (s >= kMinSurv) ? s : kMinSurv;
 }
 
 #endif // composite_functions_h
