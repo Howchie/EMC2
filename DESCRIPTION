@@ -71,7 +71,6 @@ Imports:
     loo,
     lpSolve,
     WienR,
-    RcppArmadillo,
     statmod
 LinkingTo:
     Rcpp,

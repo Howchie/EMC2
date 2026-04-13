@@ -308,7 +308,6 @@ run_trend_rcpp <- function(data, trend, param, trend_pars, pars_full, return_ker
 c_add_charvectors <- function(x, y) {
     .Call(`_EMC2_c_add_charvectors`, x, y)
 }
-
 pigt <- function(t, k = 1, l = 1, a = .1, threshold = 1e-10) {
     .Call(`_EMC2_pigt`, t, k, l, a, threshold)
 }
@@ -316,4 +315,3 @@ pigt <- function(t, k = 1, l = 1, a = .1, threshold = 1e-10) {
 digt <- function(t, k = 1., l = 1., a = .1, threshold = 1e-10) {
     .Call(`_EMC2_digt`, t, k, l, a, threshold)
 }
-
