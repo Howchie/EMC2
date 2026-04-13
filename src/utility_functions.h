@@ -391,6 +391,22 @@ std::vector<BoundSpec> make_bound_specs(NumericMatrix minmax,
 
 std::vector<TransformSpec> make_transform_specs(NumericMatrix pars, List transform)
 {
+  int ncol = pars.ncol();
+  std::vector<TransformSpec> specs(ncol);
+  CharacterVector cparnames = colnames(pars);
+
+  if (transform.size() == 0) {
+    for (int j = 0; j < ncol; j++) {
+      TransformSpec sp;
+      sp.col_idx = j;
+      sp.code    = IDENTITY;
+      sp.lower   = 0.0;
+      sp.upper   = 1.0;
+      specs[j]   = sp;
+    }
+    return specs;
+  }
+
   // gather 'func', 'lower', 'upper'
   CharacterVector func_charvec = transform["func"];
   NumericVector lower_numvec   = transform["lower"];
@@ -490,6 +506,21 @@ inline std::vector<TransformSpec> make_transform_specs_from_full(
 
 std::vector<PreTransformSpec> make_pretransform_specs(NumericVector p_vector, List transform)
 {
+  int n = p_vector.size();
+  std::vector<PreTransformSpec> specs(n);
+
+  if (transform.size() == 0) {
+    for (int i = 0; i < n; i++) {
+      PreTransformSpec s;
+      s.index = i;
+      s.code = PTF_NONE;
+      s.lower = 0.0;
+      s.upper = 1.0;
+      specs[i] = s;
+    }
+    return specs;
+  }
+
   // e.g. transform["func"], transform["lower"], transform["upper"]
   CharacterVector func   = transform["func"];
   NumericVector lowervec = transform["lower"];
