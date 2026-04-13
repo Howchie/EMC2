@@ -199,24 +199,25 @@ static inline double ss_texg_stop_success_lpdf(
   double tauS = pars(0, 5);
   double lbS  = pars(0, 9);
   double ub_heur = muS + k_sigma * sigS + k_tau * tauS;
-  upper = std::isfinite(upper) ? upper : ub_heur;
+  // Use emc2_isfinite / emc2_isinf (not std:: versions) — -ffast-math breaks them
+  upper = emc2_isfinite(upper) ? upper : ub_heur;
   if (!(upper > lbS)) return min_ll;
 
   static thread_local GslWorkspacePtr ws_ptr(nullptr, &gsl_integration_workspace_free);
   gsl_integration_workspace* workspace = ensure_gsl_workspace(ws_ptr, max_subdiv);
   double res, err;
   gsl_error_handler_t* old_handler = gsl_set_error_handler_off();
-  
+
   int status;
-  if (std::isinf(upper)) {
+  if (emc2_isinf(upper)) {
     status = gsl_integration_qagiu(&F, lbS, abs_tol, rel_tol, max_subdiv, workspace, &res, &err);
   } else {
     status = gsl_integration_qags(&F, lbS, upper, abs_tol, rel_tol, max_subdiv, workspace, &res, &err);
   }
-  
+
   gsl_set_error_handler(old_handler);
-  
-  if (status != GSL_SUCCESS || !std::isfinite(res) || res <= 0.0) return min_ll;
+
+  if (status != GSL_SUCCESS || !emc2_isfinite(res) || res <= 0.0) return min_ll;
   return std::log(res);
 }
 
@@ -411,7 +412,7 @@ static inline double ss_exg_stop_success_lpdf(
   
   gsl_set_error_handler(old_handler);
   
-  if (status != GSL_SUCCESS || !std::isfinite(res) || res <= 0.0) return min_ll;
+  if (status != GSL_SUCCESS || !emc2_isfinite(res) || res <= 0.0) return min_ll;
   return std::log(res);
 }
 

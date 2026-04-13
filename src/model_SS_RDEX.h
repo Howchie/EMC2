@@ -4,6 +4,7 @@
 #include <cmath>
 #include <vector>
 #include <RcppArmadillo.h>
+#include "utility_functions.h"
 #include "wald_functions.h"
 #include "exgaussian_functions.h"
 #include "gsl_utils.h"
@@ -231,24 +232,25 @@ static inline double ss_rdex_stop_success_lpdf(
   double tauS = pars(0, 7);
   double lbS  = pars(0, 10);
   double ub_heur = muS + k_sigma * sigS + k_tau * tauS;
-  double ub = std::isfinite(upper) ? upper : ub_heur;
+  // Use emc2_isfinite / emc2_isinf (not std:: versions) — -ffast-math breaks them
+  double ub = emc2_isfinite(upper) ? upper : ub_heur;
   if (!(ub > lbS)) ub = lbS + 1e-12;
 
   static thread_local GslWorkspacePtr ws_ptr(nullptr, &gsl_integration_workspace_free);
   gsl_integration_workspace* workspace = ensure_gsl_workspace(ws_ptr, max_subdiv);
   double res, err;
   gsl_error_handler_t* old_handler = gsl_set_error_handler_off();
-  
+
   int status;
-  if (std::isinf(ub)) {
+  if (emc2_isinf(ub)) {
     status = gsl_integration_qagiu(&F, lbS, abs_tol, rel_tol, max_subdiv, workspace, &res, &err);
   } else {
     status = gsl_integration_qags(&F, lbS, ub, abs_tol, rel_tol, max_subdiv, workspace, &res, &err);
   }
-  
+
   gsl_set_error_handler(old_handler);
-  
-  if (status != GSL_SUCCESS || !std::isfinite(res) || res <= 0.0) return min_ll;
+
+  if (status != GSL_SUCCESS || !emc2_isfinite(res) || res <= 0.0) return min_ll;
   return std::log(res);
 }
 

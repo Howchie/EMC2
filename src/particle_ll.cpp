@@ -457,7 +457,8 @@ double c_log_likelihood_ss(
     
     double rt = RT[start_row];
     bool response_observed = R[start_row] != NA_INTEGER;
-    bool stop_signal_presented = std::isfinite(SSD[start_row]);
+    // Use R_FINITE (not std::isfinite) — -ffast-math breaks std::isfinite for Inf values
+    bool stop_signal_presented = emc2_isfinite(SSD[start_row]);
     // Added UC handling
     double uc = UC[start_row];
     // Identify whether observed response is GO or ST (when response observed)
@@ -503,7 +504,7 @@ double c_log_likelihood_ss(
         continue;
       }
       // stop trial, no response observed
-      if (!has_deadline) { 
+      if (!has_deadline) {
         if (n_accST == 0) {
           // Stop trial, no ST accumulators: gf + (1-gf)*(1-tf)*pStop
           NumericMatrix P_go = submat_rcpp(P, is_go);

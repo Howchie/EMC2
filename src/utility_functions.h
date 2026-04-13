@@ -9,6 +9,28 @@
 #include "utility_types.h"
 using namespace Rcpp;
 
+// ---------------------------------------------------------------------------
+// Fast-math-safe floating-point predicates.
+//
+// -ffast-math (used in src/Makevars) enables -ffinite-math-only, which
+// lets the compiler assume all doubles are finite.  As a result the C++
+// standard functions std::isfinite / std::isinf / std::isnan are
+// constant-folded to true / false / false and never inspect the actual
+// bit pattern.  Whenever we need to test whether a VALUE (not a compile-
+// time constant) could be Inf or NaN, we must use R's bit-pattern macros
+// (R_FINITE, ISNAN) which are defined in <Rinternals.h> and are
+// implemented as calls to the corresponding C99 functions that the
+// compiler cannot optimise away.
+//
+// Use these replacements everywhere in EMC2 C++ code:
+//   emc2_isfinite(x)  →  R_FINITE(x)           (0 for Inf AND NaN)
+//   emc2_isinf(x)     →  !R_FINITE(x) && !ISNAN(x)
+//   emc2_isnan(x)     →  ISNAN(x)
+// ---------------------------------------------------------------------------
+static inline bool emc2_isfinite(double x) { return (bool)R_FINITE(x); }
+static inline bool emc2_isinf(double x)    { return !R_FINITE(x) && !ISNAN(x); }
+static inline bool emc2_isnan(double x)    { return (bool)ISNAN(x); }
+
 LogicalVector contains(CharacterVector sv, std::string txt) {
   LogicalVector res(sv.size());
   for (int i = 0; i < sv.size(); i ++) {

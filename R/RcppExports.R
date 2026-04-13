@@ -248,3 +248,4 @@ run_trend_rcpp <- function(data, trend, param, trend_pars, pars_full, return_ker
 c_add_charvectors <- function(x, y) {
     .Call(`_EMC2_c_add_charvectors`, x, y)
 }
+
