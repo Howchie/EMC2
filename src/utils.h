@@ -94,7 +94,8 @@ double c_log_likelihood_race(Rcpp::NumericMatrix pars, Rcpp::DataFrame dadm,
                                         RaceRawFun model_dfun_raw = nullptr,
                                         RaceRawFun model_pfun_raw = nullptr,
                                         RaceLogSAtTFun logS_at_t = nullptr,
-                                        RaceSharedState* shared = nullptr
+                                        RaceSharedState* shared = nullptr,
+                                        Rcpp::NumericVector* trial_ll_out = nullptr
 );
 
 // Exported wrappers

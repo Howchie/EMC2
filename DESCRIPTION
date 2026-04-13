@@ -67,9 +67,9 @@ Imports:
     colorspace,
     psych,
     utils,
+    loo,
     lpSolve,
-    WienR,
-    RcppArmadillo
+    WienR
 LinkingTo:
     Rcpp,
     RcppArmadillo

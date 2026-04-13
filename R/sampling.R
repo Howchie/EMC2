@@ -718,6 +718,84 @@ calc_ll_manager <- function(proposals, dadm, model, component = NULL, r_cores = 
   return(lls)
 }
 
+.waic_trial_row_groups <- function(dadm, model_type = NULL) {
+  n_rows <- nrow(dadm)
+  if (n_rows == 0) return(list(integer(0)))
+  if (is.null(model_type)) model_type <- ""
+  if (!("lR" %in% names(dadm)) || grepl("DDM", model_type)) {
+    return(as.list(seq_len(n_rows)))
+  }
+
+  lR_codes <- as.integer(dadm$lR)
+  first_code <- suppressWarnings(min(lR_codes, na.rm = TRUE))
+  if (!is.finite(first_code)) return(as.list(seq_len(n_rows)))
+
+  starts <- which(lR_codes == first_code)
+  if (length(starts) == 0) return(as.list(seq_len(n_rows)))
+  ends <- c(starts[-1] - 1L, n_rows)
+  Map(seq.int, starts, ends)
+}
+
+.waic_subset_dadm <- function(dadm, rows) {
+  out <- dadm[rows, , drop = FALSE]
+  designs <- attr(dadm, "designs")
+  if (!is.null(designs)) {
+    out_designs <- lapply(designs, function(dm) {
+      dm_out <- dm[rows, , drop = FALSE]
+      dm_expand <- attr(dm, "expand")
+      if (!is.null(dm_expand)) attr(dm_out, "expand") <- dm_expand[rows]
+      dm_out
+    })
+    attr(out, "designs") <- out_designs
+  }
+  attr(out, "constants") <- attr(dadm, "constants")
+  attr(out, "expand") <- 1L
+  out
+}
+
+calc_ll_manager_pw <- function(proposals, dadm, model, r_cores = 1){
+  model <- model()
+  dadm <- .cache_ll_data_attrs(dadm)
+  c_name <- model$c_name
+  unsupported <- c("MRI", "MRI_AR1", "SSEXG", "SSRDEX", "SOFTMAX")
+  if(!is.null(c_name) && c_name %in% unsupported)
+    stop("WAIC is not supported for model type '", c_name, "'")
+
+  if (!is.null(c_name) && exists("calc_ll_oo_pw", mode = "function", inherits = TRUE)) {
+    p_types <- names(model$p_types)
+    designs <- list()
+    for (p in p_types) {
+      designs[[p]] <- attr(dadm, "designs")[[p]][attr(attr(dadm, "designs")[[p]], "expand"), , drop = FALSE]
+    }
+    constants <- attr(dadm, "constants")
+    if (is.null(constants)) constants <- NA
+    return(calc_ll_oo_pw(proposals, dadm, constants = constants, designs = designs,
+                         type = c_name, model$bound, model$transform, model$pre_transform,
+                         p_types = p_types, min_ll = log(1e-10), model$trend))
+  }
+
+  # Fallback for non-C models or environments without calc_ll_oo_pw.
+  trial_groups <- .waic_trial_row_groups(dadm, c_name)
+  if (length(trial_groups) == 0) {
+    return(matrix(numeric(0), nrow = nrow(proposals), ncol = 0))
+  }
+
+  model_fun <- function() model
+  ll_unique <- vapply(trial_groups, function(rows) {
+    trial_dadm <- .waic_subset_dadm(dadm, rows)
+    calc_ll_manager(proposals, trial_dadm, model = model_fun, r_cores = r_cores)
+  }, numeric(nrow(proposals)))
+  if (is.null(dim(ll_unique))) ll_unique <- matrix(ll_unique, ncol = 1)
+
+  expand_map <- attr(dadm, "expand")
+  if (is.null(expand_map)) return(ll_unique)
+  expand_map <- as.integer(expand_map)
+  if (anyNA(expand_map) || any(expand_map < 1L) || any(expand_map > ncol(ll_unique))) {
+    stop("Invalid 'expand' mapping while computing WAIC pointwise log-likelihoods.")
+  }
+  ll_unique[, expand_map, drop = FALSE]
+}
+
 merge_group_level <- function(tmu, tmu_nuis, tvar, tvar_nuis, is_nuisance, subj_mu){
   n_pars <- length(is_nuisance)
   tmu_out <- numeric(n_pars)

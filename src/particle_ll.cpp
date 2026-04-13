@@ -675,7 +675,8 @@ double c_log_likelihood_ss(
 double c_log_likelihood_DDM(NumericMatrix pars, DataFrame data,
                             const int n_trials, IntegerVector expand,
                             double min_ll, LogicalVector is_ok, bool gng,
-                            bool all_finite_untruncated = false){
+                            bool all_finite_untruncated = false,
+                            Rcpp::NumericVector* trial_ll_out = nullptr){
   const int n_out = expand.length();
   NumericVector rts = data["rt"];
   IntegerVector R = data["R"];
@@ -694,14 +695,26 @@ double c_log_likelihood_DDM(NumericMatrix pars, DataFrame data,
     const int* expand_ptr = expand.begin();
     double sum_ll = 0.0;
 
-    #pragma omp simd reduction(+:sum_ll)
-    for (int i = 0; i < n_out; ++i) {
-      const int idx = expand_ptr[i] - 1; // expand is 1-based
-      double v = lls_ptr[idx];
-      if (!std::isfinite(v) || v < min_ll) {
-        v = min_ll;
+    if (trial_ll_out != nullptr) {
+      for (int i = 0; i < n_out; ++i) {
+        const int idx = expand_ptr[i] - 1; // expand is 1-based
+        double v = lls_ptr[idx];
+        if (!std::isfinite(v) || v < min_ll) {
+          v = min_ll;
+        }
+        (*trial_ll_out)[i] = v;
+        sum_ll += v;
       }
-      sum_ll += v;
+    } else {
+      #pragma omp simd reduction(+:sum_ll)
+      for (int i = 0; i < n_out; ++i) {
+        const int idx = expand_ptr[i] - 1; // expand is 1-based
+        double v = lls_ptr[idx];
+        if (!std::isfinite(v) || v < min_ll) {
+          v = min_ll;
+        }
+        sum_ll += v;
+      }
     }
 
     return sum_ll;
@@ -1010,14 +1023,26 @@ double c_log_likelihood_DDM(NumericMatrix pars, DataFrame data,
   const int* expand_ptr = expand.begin();
   double sum_ll = 0.0;
 
-  #pragma omp simd reduction(+:sum_ll)
-  for (int i = 0; i < n_out; ++i) {
-    const int idx = expand_ptr[i] - 1; // expand is 1-based
-    double v = lls_ptr[idx];
-    if (!std::isfinite(v) || v < min_ll) {
-      v = min_ll;
+  if (trial_ll_out != nullptr) {
+    for (int i = 0; i < n_out; ++i) {
+      const int idx = expand_ptr[i] - 1; // expand is 1-based
+      double v = lls_ptr[idx];
+      if (!std::isfinite(v) || v < min_ll) {
+        v = min_ll;
+      }
+      (*trial_ll_out)[i] = v;
+      sum_ll += v;
     }
-    sum_ll += v;
+  } else {
+    #pragma omp simd reduction(+:sum_ll)
+    for (int i = 0; i < n_out; ++i) {
+      const int idx = expand_ptr[i] - 1; // expand is 1-based
+      double v = lls_ptr[idx];
+      if (!std::isfinite(v) || v < min_ll) {
+        v = min_ll;
+      }
+      sum_ll += v;
+    }
   }
 
   return sum_ll;
@@ -1554,6 +1579,109 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
   return lls;
 }
 
+// [[Rcpp::export]]
+NumericMatrix calc_ll_oo_pw(NumericMatrix particle_matrix, DataFrame data, NumericVector constants,
+                            List designs, String type, List bounds, List transforms, List pretransforms,
+                            CharacterVector p_types, double min_ll, Rcpp::Nullable<Rcpp::List> trend = R_NilValue) {
+  const int n_particles = particle_matrix.nrow();
+  const int n_trials = data.nrow();
+  LogicalVector is_ok(n_trials);
+  NumericMatrix pars;
+
+  NumericMatrix minmax = bounds["minmax"];
+  CharacterVector mm_names = colnames(minmax);
+  std::vector<BoundSpec> bound_specs;
+  CharacterVector p_names = colnames(particle_matrix);
+  std::string type_std = Rcpp::as<std::string>(Rcpp::wrap(type));
+
+  NumericMatrix one_particle(1, particle_matrix.ncol());
+  colnames(one_particle) = p_names;
+  IntegerVector kernel_output_codes = IntegerVector::create(1);
+  auto pars_for_particle = [&](int i) -> NumericMatrix {
+    for (int j = 0; j < particle_matrix.ncol(); ++j) {
+      one_particle(0, j) = particle_matrix(i, j);
+    }
+    return get_pars_c_wrapper_oo_core(one_particle, data, constants, designs, bounds, transforms,
+                                      pretransforms, trend, false, false, kernel_output_codes);
+  };
+
+  if (type_std.find("DDM") != std::string::npos) {
+    bool gng = (type_std.find("GNG") != std::string::npos);
+    IntegerVector expand = data.attr("expand");
+    const int n_out = expand.length();
+    const bool all_finite_untruncated = ddm_data_all_finite_untruncated(data, n_trials);
+    NumericMatrix result(n_particles, n_out);
+    for (int i = 0; i < n_particles; ++i) {
+      pars = pars_for_particle(i);
+      if (i == 0) bound_specs = make_bound_specs(minmax, mm_names, pars, bounds);
+      is_ok = c_do_bound(pars, bound_specs);
+      NumericVector row_vec(n_out);
+      c_log_likelihood_DDM(pars, data, n_trials, expand, min_ll, is_ok,
+                           gng, all_finite_untruncated, &row_vec);
+      result(i, _) = row_vec;
+    }
+    return result;
+  } else if (type == "MRI" || type == "MRI_AR1" ||
+             type_std.find("SS") != std::string::npos ||
+             type_std.find("SOFTMAX") != std::string::npos) {
+    Rcpp::stop("calc_ll_oo_pw: not implemented for model type '%s'", type_std.c_str());
+  } else {
+    IntegerVector expand = data.attr("expand");
+    LogicalVector winner = data["winner"];
+
+    RaceModelAdapter adapter = resolve_race_model_adapter(type_std, "calc_ll_oo_pw");
+    adapter.ctx.min_lik_for_pdf = std::exp(min_ll);
+
+    NumericVector lR = data["lR"];
+    int n_lR = unique(lR).length();
+    bool all_finite_trials = false;
+    if (data.hasAttribute("emc2_all_finite_trials")) {
+      Rcpp::LogicalVector v = data.attr("emc2_all_finite_trials");
+      if (v.size() == 1 && v[0] != NA_LOGICAL) {
+        all_finite_trials = v[0];
+      }
+    } else if (n_trials > 0 && n_lR > 0 && (n_trials % n_lR) == 0) {
+      all_finite_trials = true;
+      NumericVector rts = data["rt"];
+      IntegerVector R_idx = data["R"];
+      for (int start_row_idx = 0; start_row_idx < n_trials; start_row_idx += n_lR) {
+        const double rt_j = rts[start_row_idx];
+        const int R_j_idx = R_idx[start_row_idx];
+        if (!(R_FINITE(rt_j) && rt_j > 0.0 && R_j_idx != NA_INTEGER)) {
+          all_finite_trials = false;
+          break;
+        }
+      }
+    }
+
+    const int n_out_race = (expand.length() > 0) ? expand.length() : (n_trials / n_lR);
+    NumericMatrix result(n_particles, n_out_race);
+    for (int i = 0; i < n_particles; ++i) {
+      pars = pars_for_particle(i);
+      if (i == 0) bound_specs = make_bound_specs(minmax, mm_names, pars, bounds);
+      is_ok = c_do_bound(pars, bound_specs);
+      is_ok = lr_all(is_ok, n_lR);
+      NumericVector row_vec(n_out_race);
+      c_log_likelihood_race(pars, data,
+                            adapter.model_dfun_ptr, adapter.model_pfun_ptr,
+                            adapter.pdf1_ptr, adapter.cdf1_ptr,
+                            n_trials,
+                            winner, expand, min_ll, is_ok, n_lR,
+                            &adapter.ctx,
+                            all_finite_trials,
+                            adapter.model_dfun_raw,
+                            adapter.model_pfun_raw,
+                            adapter.logS_at_t_ptr,
+                            nullptr,
+                            &row_vec);
+      result(i, _) = row_vec;
+    }
+    return result;
+  }
+
+  return NumericMatrix(0, 0);
+}
+
 
 
 // [[Rcpp::export]]
@@ -1919,7 +2047,8 @@ double c_log_likelihood_race(
     RaceRawFun model_dfun_raw,
     RaceRawFun model_pfun_raw,
     RaceLogSAtTFun logS_at_t,            // batch log-survivor at scalar t (for truncation norms)
-    RaceSharedState* shared              // optional pre-computed per-data state (nullptr = compute per-call)
+    RaceSharedState* shared,             // optional pre-computed per-data state (nullptr = compute per-call)
+    NumericVector* trial_ll_out
 ) {
 
   // Only allocate a GSL workspace if/when numerical integration is needed.
@@ -2580,14 +2709,22 @@ double c_log_likelihood_race(
         }
       }
     }
-    // Gather + reduce: indirect indexing prevents full SIMD gather, but the
-    // reduction itself still benefits from the pragma.
     const double* ll_ptr = ll_unique.data();
-    const int*    ex_ptr = expand.begin();
-    const int     n_exp  = expand.length();
-    #pragma omp simd reduction(+:total_ll)
-    for (int i = 0; i < n_exp; ++i) {
-      total_ll += ll_ptr[ex_ptr[i] - 1];
+    const int* ex_ptr = expand.begin();
+    const int n_exp = expand.length();
+    if (trial_ll_out != nullptr) {
+      for (int i = 0; i < n_exp; ++i) {
+        const double v = ll_ptr[ex_ptr[i] - 1];
+        (*trial_ll_out)[i] = v;
+        total_ll += v;
+      }
+    } else {
+      // Gather + reduce: indirect indexing prevents full SIMD gather, but the
+      // reduction itself still benefits from the pragma.
+      #pragma omp simd reduction(+:total_ll)
+      for (int i = 0; i < n_exp; ++i) {
+        total_ll += ll_ptr[ex_ptr[i] - 1];
+      }
     }
   } else { // compressed dadm: each unique trial counted once
     if (use_pC) {
@@ -2603,11 +2740,19 @@ double c_log_likelihood_race(
         }
       }
     }
-    // Pure sequential reduction — fully vectorizable.
     const double* ll_ptr = ll_unique.data();
-    #pragma omp simd reduction(+:total_ll)
-    for (int j = 0; j < n_unique_trials; ++j) {
-      total_ll += ll_ptr[j];
+    if (trial_ll_out != nullptr) {
+      for (int j = 0; j < n_unique_trials; ++j) {
+        const double v = ll_ptr[j];
+        (*trial_ll_out)[j] = v;
+        total_ll += v;
+      }
+    } else {
+      // Pure sequential reduction — fully vectorizable.
+      #pragma omp simd reduction(+:total_ll)
+      for (int j = 0; j < n_unique_trials; ++j) {
+        total_ll += ll_ptr[j];
+      }
     }
   }
   
