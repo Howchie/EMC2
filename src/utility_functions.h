@@ -446,10 +446,6 @@ std::vector<TransformSpec> make_transform_specs(NumericMatrix pars, List transfo
   }
 
   // Now fill specs for each col in pars
-  int ncol = pars.ncol();
-  std::vector<TransformSpec> specs(ncol);
-
-  CharacterVector cparnames = colnames(pars);
   for (int j = 0; j < ncol; j++) {
     std::string colname = Rcpp::as<std::string>(cparnames[j]);
     TransformSpec sp;
@@ -556,8 +552,6 @@ std::vector<PreTransformSpec> make_pretransform_specs(NumericVector p_vector, Li
 
   // Now create PreTransformSpec for each element in p_vector
   CharacterVector p_names = p_vector.names();
-  int n = p_vector.size();
-  std::vector<PreTransformSpec> specs(n);
   for (int i = 0; i < n; i++) {
     std::string pname = Rcpp::as<std::string>(p_names[i]);
     PreTransformSpec s;
