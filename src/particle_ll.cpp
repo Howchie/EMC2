@@ -309,8 +309,6 @@ static inline double stop_logsurv_rdex_fn(double q, NumericMatrix P) {
 }
 
 struct RaceModelAdapter {
-  RacePdfFun model_dfun_ptr = nullptr;
-  RaceCdfFun model_pfun_ptr = nullptr;
   RacePdf1Fun pdf1_ptr = nullptr;
   RaceCdf1Fun cdf1_ptr = nullptr;
   RaceRawFun model_dfun_raw = nullptr;   // fast-path: write log-density to pre-allocated buffer
@@ -327,8 +325,6 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
   out.ctx.gng = false;
 
   if (type_std.find("LBA") != std::string::npos) {
-    out.model_dfun_ptr = &lba_dfun_adapter;
-    out.model_pfun_ptr = &lba_pfun_adapter;
     out.pdf1_ptr = &dlba_scalar;
     out.cdf1_ptr = &plba_scalar;
     out.model_dfun_raw = &dlba_raw;
@@ -338,16 +334,12 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
       out.ctx.use_posdrift = false;
     }
   } else if (type_std.find("RDM") != std::string::npos) {
-    out.model_dfun_ptr = &rdm_dfun_adapter;
-    out.model_pfun_ptr = &rdm_pfun_adapter;
     out.pdf1_ptr = &drdm_scalar;
     out.cdf1_ptr = &prdm_scalar;
     out.model_dfun_raw = &drdm_raw;
     out.model_pfun_raw = &prdm_raw;
     out.logS_at_t_ptr = &rdm_logS_at_t;
   } else if (type_std.find("LNR") != std::string::npos) {
-    out.model_dfun_ptr = &lnr_dfun_adapter;
-    out.model_pfun_ptr = &lnr_pfun_adapter;
     out.pdf1_ptr = &dlnr_scalar;
     out.cdf1_ptr = &plnr_scalar;
     out.model_dfun_raw = &dlnr_raw;
@@ -1208,7 +1200,6 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
         is_ok = c_do_bound(pars, bound_specs);
         is_ok = lr_all(is_ok, n_lR);
         lls[i] = c_log_likelihood_race(pars, data,
-                                       adapter.model_dfun_ptr, adapter.model_pfun_ptr,
                                        adapter.pdf1_ptr, adapter.cdf1_ptr,
                                        n_trials,
                                        winner, expand, min_ll, is_ok, n_lR,
@@ -1563,7 +1554,6 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
         lls[i] = total_ll;
       } else {
         lls[i] = c_log_likelihood_race(pars, data,
-                                       adapter.model_dfun_ptr, adapter.model_pfun_ptr,
                                        adapter.pdf1_ptr, adapter.cdf1_ptr,
                                        n_trials,
                                        winner, expand, min_ll, is_ok, n_lR,
@@ -1663,7 +1653,6 @@ NumericMatrix calc_ll_oo_pw(NumericMatrix particle_matrix, DataFrame data, Numer
       is_ok = lr_all(is_ok, n_lR);
       NumericVector row_vec(n_out_race);
       c_log_likelihood_race(pars, data,
-                            adapter.model_dfun_ptr, adapter.model_pfun_ptr,
                             adapter.pdf1_ptr, adapter.cdf1_ptr,
                             n_trials,
                             winner, expand, min_ll, is_ok, n_lR,
@@ -2032,8 +2021,6 @@ double get_trunc_normaliser_rowmajor_cpp(const double* pars_rowmajor,
 double c_log_likelihood_race(
     Rcpp::NumericMatrix pars,               // Parameters for one particle, covering all dadm rows for that particle
     Rcpp::DataFrame dadm,                   // Data for unique trial conditions, structured for all accumulators
-    RacePdfFun model_dfun,                  // Pointer to the model's PDF adapter function
-    RaceCdfFun model_pfun,                  // Pointer to the model's CDF adapter function
     RacePdf1Fun pdf1,                       // Scalar PDF (for GSL)
     RaceCdf1Fun cdf1,                       // Scalar CDF (for GSL)
     const int n_trials,
@@ -2274,11 +2261,8 @@ double c_log_likelihood_race(
 
   const bool has_finite_batch = use_full_finite_batch || (finite_rt_unique_trial_indices.size() > 0);
   if (has_finite_batch) {
-    Rcpp::LogicalVector idx_win;
-    Rcpp::LogicalVector idx_loss;
     bool any_win = false;
     bool any_loss = false;
-    const bool use_raw_finite_batch = model_dfun_raw != nullptr && model_pfun_raw != nullptr;
     // Local fallback storage (used when shared state is not available)
     std::vector<int> idx_win_int_local;
     std::vector<int> idx_loss_int_local;
@@ -2288,89 +2272,50 @@ double c_log_likelihood_race(
     const int* idx_loss_ptr = nullptr;
     int*       isok_ptr     = nullptr;
 
-    if (use_raw_finite_batch) {
-      const bool use_shared_bufs = use_shared &&
-        static_cast<int>(shared->idx_win.size()) == n_trials;
+    const bool use_shared_bufs = use_shared &&
+      static_cast<int>(shared->idx_win.size()) == n_trials;
 
-      if (use_shared_bufs) {
-        // Per-particle: only fill isok (winner/loser masks are data-fixed)
-        for (int i = 0; i < n_trials; ++i)
-          shared->isok_buf[static_cast<size_t>(i)] = isok[i] ? 1 : 0;
-        idx_win_ptr  = shared->idx_win.data();
-        idx_loss_ptr = shared->idx_loss.data();
-        isok_ptr     = shared->isok_buf.data();
-        any_win      = shared->any_win;
-        any_loss     = shared->any_loss;
-      } else {
-        idx_win_int_local.assign(static_cast<size_t>(n_trials), 0);
-        idx_loss_int_local.assign(static_cast<size_t>(n_trials), 0);
-        isok_int_all_local.assign(static_cast<size_t>(n_trials), 0);
-        for (int i = 0; i < n_trials; ++i) {
-          isok_int_all_local[static_cast<size_t>(i)] = isok[i] ? 1 : 0;
-          if (has_RACE_col && !RACE_mask[i]) continue;
-          if (!use_full_finite_batch && !finite_rt_mask[i]) continue;
-          if (winner[i]) {
-            idx_win_int_local[static_cast<size_t>(i)] = 1;
-            any_win = true;
-          } else if (n_lR > 1) {
-            idx_loss_int_local[static_cast<size_t>(i)] = 1;
-            any_loss = true;
-          }
-        }
-        idx_win_ptr  = idx_win_int_local.data();
-        idx_loss_ptr = idx_loss_int_local.data();
-        isok_ptr     = isok_int_all_local.data();
-      }
-    } else if (use_full_finite_batch && !has_RACE_col) {
-      idx_win = winner;
-      any_win = true;
-      if (n_lR > 1) {
-        idx_loss = !winner;
-        any_loss = true;
-      }
+    if (use_shared_bufs) {
+      // Per-particle: only fill isok (winner/loser masks are data-fixed)
+      for (int i = 0; i < n_trials; ++i)
+        shared->isok_buf[static_cast<size_t>(i)] = isok[i] ? 1 : 0;
+      idx_win_ptr  = shared->idx_win.data();
+      idx_loss_ptr = shared->idx_loss.data();
+      isok_ptr     = shared->isok_buf.data();
+      any_win      = shared->any_win;
+      any_loss     = shared->any_loss;
     } else {
-      idx_win = Rcpp::LogicalVector(n_trials, false);
-      idx_loss = Rcpp::LogicalVector(n_trials, false);
+      idx_win_int_local.assign(static_cast<size_t>(n_trials), 0);
+      idx_loss_int_local.assign(static_cast<size_t>(n_trials), 0);
+      isok_int_all_local.assign(static_cast<size_t>(n_trials), 0);
       for (int i = 0; i < n_trials; ++i) {
+        isok_int_all_local[static_cast<size_t>(i)] = isok[i] ? 1 : 0;
         if (has_RACE_col && !RACE_mask[i]) continue;
         if (!use_full_finite_batch && !finite_rt_mask[i]) continue;
-        if (winner[i]) { idx_win[i] = true; any_win = true; }
-        else { idx_loss[i] = true; any_loss = true; }
+        if (winner[i]) {
+          idx_win_int_local[static_cast<size_t>(i)] = 1;
+          any_win = true;
+        } else if (n_lR > 1) {
+          idx_loss_int_local[static_cast<size_t>(i)] = 1;
+          any_loss = true;
+        }
       }
+      idx_win_ptr  = idx_win_int_local.data();
+      idx_loss_ptr = idx_loss_int_local.data();
+      isok_ptr     = isok_int_all_local.data();
     }
 
-    if (use_raw_finite_batch) {
-      const double* rt_ptr = rts_dadm.begin();
-      const double* pars_cm = pars.begin();
-      if (any_win) {
-        model_dfun_raw(rt_ptr, pars_cm, n_trials,
-                       idx_win_ptr, isok_ptr,
-                       lds_ptr, min_ll, dense_ctx_ptr);
-      }
-      if (n_lR > 1 && any_loss) {
-        model_pfun_raw(rt_ptr, pars_cm, n_trials,
-                       idx_loss_ptr, isok_ptr,
-                       lds_ptr, min_ll, dense_ctx_ptr);
-      }
-    } else if (any_win) {
-      Rcpp::NumericVector win_pdf = model_dfun(rts_dadm, pars, idx_win, isok, dense_ctx_ptr);
-      int out_i = 0;
-      for (int i = 0; i < n_trials; ++i) {
-        if (!idx_win[i]) continue;
-        const double pdf = win_pdf[out_i++];
-        lds_ptr[i] = (pdf > 0.0 && std::isfinite(pdf)) ? std::log(pdf) : R_NegInf;
-      }
+    const double* rt_ptr = rts_dadm.begin();
+    const double* pars_cm = pars.begin();
+    if (any_win) {
+      model_dfun_raw(rt_ptr, pars_cm, n_trials,
+                     idx_win_ptr, isok_ptr,
+                     lds_ptr, min_ll, dense_ctx_ptr);
     }
-
-    if (!use_raw_finite_batch && n_lR > 1 && any_loss) {
-      Rcpp::NumericVector loss_cdf = model_pfun(rts_dadm, pars, idx_loss, isok, dense_ctx_ptr);
-      int out_i = 0;
-      for (int i = 0; i < n_trials; ++i) {
-        if (!idx_loss[i]) continue;
-        double cdf = loss_cdf[out_i++];
-        cdf = clamp_cdf01_race(cdf);
-        lds_ptr[i] = safe_log1m_race(cdf);
-      }
+    if (n_lR > 1 && any_loss) {
+      model_pfun_raw(rt_ptr, pars_cm, n_trials,
+                     idx_loss_ptr, isok_ptr,
+                     lds_ptr, min_ll, dense_ctx_ptr);
     }
 
     // --- Pre-compute truncation normalisers in batch when possible ---

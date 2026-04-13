@@ -1,4 +1,4 @@
-remotes::install_github("Howchie/EMC2", ref="dev-oo")
+#remotes::install_github("Howchie/EMC2", ref="dev-oo")
 
 rm(list=ls())
 ## messing around with SIMD

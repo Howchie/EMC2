@@ -84,6 +84,21 @@ static NumericMatrix get_pars_matrix_oo_core(ParamTable& param_table,
   if (trend_runtime) trend_runtime->reset_all_kernels();
 
   const int n_designs = designs.size();
+  if (!trend_runtime) {
+    if (return_kernel_matrix) {
+      Rcpp::stop("return_kernel_matrix=TRUE requires a non-NULL trend");
+    }
+
+    // Common fast path: no trend operations, so we can map all designs in one pass
+    // and apply full transforms directly without any parameter-set filtering.
+    LogicalVector include_all(n_designs, true);
+    param_table.map_from_designs(designs, include_all);
+    if (!full_specs.empty()) c_do_transform_pt(param_table, full_specs);
+
+    if (return_all_pars) return param_table.materialize();
+    return param_table.materialize_by_param_names(keep_names);
+  }
+
   LogicalVector map_next(n_designs, false);
   std::unordered_set<std::string> transform_next;
   std::unordered_set<std::string> empty_set;
