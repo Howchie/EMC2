@@ -9,6 +9,18 @@ sp_new <- function(iter, lambda_varimax, q, p, dim_all_c, all_c, lambda_hat, st,
     .Call(`_EMC2_sp_new`, iter, lambda_varimax, q, p, dim_all_c, all_c, lambda_hat, st, cost_matrix, perm)
 }
 
+pbvn_tsay <- function(h, k, rho) {
+    .Call(`_EMC2_pbvn_tsay`, h, k, rho)
+}
+
+pbvn_tvpack <- function(h, k, rho) {
+    .Call(`_EMC2_pbvn_tvpack`, h, k, rho)
+}
+
+pbvn_drezner <- function(h, k, rho) {
+    .Call(`_EMC2_pbvn_drezner`, h, k, rho)
+}
+
 calculate_subject_means <- function(group_designs, params) {
     .Call(`_EMC2_calculate_subject_means`, group_designs, params)
 }
@@ -25,12 +37,60 @@ plba <- function(t, A, b, v, sv, posdrift = TRUE) {
     .Call(`_EMC2_plba`, t, A, b, v, sv, posdrift)
 }
 
+pleakyba_norm <- function(t, A, b, v, sv, k, posdrift = TRUE, log_out = FALSE) {
+    .Call(`_EMC2_pleakyba_norm`, t, A, b, v, sv, k, posdrift, log_out)
+}
+
+dleakyba_norm <- function(t, A, b, v, sv, k, posdrift = TRUE, log_out = FALSE) {
+    .Call(`_EMC2_dleakyba_norm`, t, A, b, v, sv, k, posdrift, log_out)
+}
+
+dleakyba <- function(t, A, b, v, sv, k, posdrift = TRUE) {
+    .Call(`_EMC2_dleakyba`, t, A, b, v, sv, k, posdrift)
+}
+
+pleakyba <- function(t, A, b, v, sv, k, posdrift = TRUE) {
+    .Call(`_EMC2_pleakyba`, t, A, b, v, sv, k, posdrift)
+}
+
 dWald <- function(t, v, B, A, t0) {
     .Call(`_EMC2_dWald`, t, v, B, A, t0)
 }
 
 pWald <- function(t, v, B, A, t0) {
     .Call(`_EMC2_pWald`, t, v, B, A, t0)
+}
+
+dwald <- function(t, b, mu, sigma = 1.0, A = 0.0, log_out = FALSE) {
+    .Call(`_EMC2_dwald`, t, b, mu, sigma, A, log_out)
+}
+
+pwald <- function(t, b, mu, sigma = 1.0, A = 0.0, log_out = FALSE) {
+    .Call(`_EMC2_pwald`, t, b, mu, sigma, A, log_out)
+}
+
+dswtn <- function(t_adj, threshold, mu_drift, sv, s = 1.0, c = 0.0, log_out = FALSE) {
+    .Call(`_EMC2_dswtn`, t_adj, threshold, mu_drift, sv, s, c, log_out)
+}
+
+pswtn <- function(t_adj, threshold, mu_drift, sv, s = 1.0, c = 0.0, log_out = FALSE) {
+    .Call(`_EMC2_pswtn`, t_adj, threshold, mu_drift, sv, s, c, log_out)
+}
+
+drdmswtn <- function(t_adj, b, mu_drift, A, sv, s = 1.0, c = 0.0, n_gauss_nodes = 20L, log_out = FALSE) {
+    .Call(`_EMC2_drdmswtn`, t_adj, b, mu_drift, A, sv, s, c, n_gauss_nodes, log_out)
+}
+
+prdmswtn <- function(t_adj, b, mu_drift, A, sv, s = 1.0, c = 0.0, n_gauss_nodes = 20L, log_out = FALSE) {
+    .Call(`_EMC2_prdmswtn`, t_adj, b, mu_drift, A, sv, s, c, n_gauss_nodes, log_out)
+}
+
+dSWTNspv <- function(t, v, b, A, t0, sv, s = 1.0, c = 0.0, n_gauss_nodes = 20L, log_out = FALSE) {
+    .Call(`_EMC2_dSWTNspv`, t, v, b, A, t0, sv, s, c, n_gauss_nodes, log_out)
+}
+
+pSWTNspv <- function(t, v, b, A, t0, sv, s = 1.0, c = 0.0, n_gauss_nodes = 20L, log_out = FALSE) {
+    .Call(`_EMC2_pSWTNspv`, t, v, b, A, t0, sv, s, c, n_gauss_nodes, log_out)
 }
 
 dEXGrace <- function(dt, mu, sigma, tau, min_ll) {

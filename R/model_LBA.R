@@ -255,3 +255,119 @@ LBA <- function(posdrift=TRUE){
   )
 }
 
+#### BAwL (Ballistic Accumulator with Leak) ----
+
+dBAwL <- function(rt, pars, posdrift = TRUE) {
+  dt  <- rt - pars[, "t0"]
+  ok  <- (dt > 0) & (pars[, "b"] >= pars[, "A"])
+  ok[is.na(ok) | !is.finite(dt)] <- FALSE
+  out <- numeric(length(dt))
+  out[ok] <- dleakyba(t  = dt[ok],
+                      A  = pars[ok, "A"],
+                      b  = pars[ok, "b"],
+                      v  = pars[ok, "v"],
+                      sv = pars[ok, "sv"],
+                      k  = pars[ok, "k"],
+                      posdrift = posdrift)
+  out
+}
+
+pBAwL <- function(rt, pars, posdrift = TRUE) {
+  dt  <- rt - pars[, "t0"]
+  ok  <- (dt > 0) & (pars[, "b"] >= pars[, "A"])
+  ok[is.na(ok) | !is.finite(dt)] <- FALSE
+  out <- numeric(length(dt))
+  out[ok] <- pleakyba(t  = dt[ok],
+                      A  = pars[ok, "A"],
+                      b  = pars[ok, "b"],
+                      v  = pars[ok, "v"],
+                      sv = pars[ok, "sv"],
+                      k  = pars[ok, "k"],
+                      posdrift = posdrift)
+  out
+}
+
+rBAwL <- function(lR, pars, ok = rep(TRUE, length(lR)),
+                  p_types = c("v", "sv", "b", "A", "t0", "k"),
+                  posdrift = TRUE, eps = 1e-10) {
+  bad  <- rep(NA, length(lR) / length(levels(lR)))
+  out  <- data.frame(R = bad, rt = bad)
+  nr   <- length(levels(lR))
+  dt   <- matrix(Inf, nrow = nr, ncol = nrow(pars) / nr)
+  t0   <- pars[, "t0"]
+  pars <- pars[ok, ]
+  if (!all(p_types %in% dimnames(pars)[[2]]))
+    stop("pars must have columns ", paste(p_types, collapse = " "))
+  lower  <- if (posdrift) 0 else -Inf
+  drifts <- msm::rtnorm(nrow(pars), mean = pars[, "v"], sd = pars[, "sv"], lower = lower)
+
+  small_k <- pars[, "k"] < eps
+  if (any(small_k))
+    dt[small_k] <- (pars[small_k, "b"] - pars[small_k, "A"] * runif(sum(small_k))) /
+                   drifts[small_k]
+
+  big_k <- !small_k & (drifts > pars[, "k"] * pars[, "b"])
+  if (any(big_k)) {
+    num        <- drifts[big_k] - pars[big_k, "k"] * pars[big_k, "b"]
+    den        <- drifts[big_k] - pars[big_k, "k"] * pars[big_k, "A"] * runif(sum(big_k))
+    ratio      <- num / den
+    ratio      <- pmin(pmax(ratio, .Machine$double.xmin), 1 - 1e-15)
+    dt[big_k]  <- (-1 / pars[big_k, "k"]) * log(ratio)
+  }
+  dt[dt < 0] <- Inf
+  bad_col <- apply(dt, 2, function(x) all(is.infinite(x)))
+  R   <- apply(dt, 2, which.min)
+  pick <- cbind(R, 1:dim(dt)[2])
+  rt   <- matrix(t0, nrow = nr)[pick] + dt[pick]
+  R    <- factor(levels(lR)[R], levels = levels(lR))
+  R[bad_col]  <- NA
+  rt[bad_col] <- Inf
+  ok  <- matrix(ok, nrow = length(levels(lR)))[1, ]
+  out$R[ok]   <- levels(lR)[R][ok]
+  out$R       <- factor(out$R, levels = levels(lR))
+  out$rt[ok]  <- rt[ok]
+  out
+}
+
+#' The Ballistic Accumulator with Leak (BAwL)
+#'
+#' Race model where each accumulator follows a leaky-integration trajectory.
+#' Setting k=0 recovers the standard LBA exactly.
+#'
+#' Parameters as in LBA plus:
+#' * k: leak rate (log scale, [0, Inf); default log(0) = effectively 0).
+#'
+#' @export
+BAwL <- function(posdrift = TRUE) {
+  list(
+    type   = "RACE",
+    c_name = ifelse(posdrift, "BAwL", "BAwLIO"),
+    p_types = c("v"  = 1, "sv" = log(1), "B" = log(1), "A" = log(0),
+                "t0" = log(0), "k" = log(0), "pContaminant" = qnorm(0)),
+    transform = list(func = c(v = "identity", sv = "exp", B = "exp",
+                              A = "exp", t0 = "exp", k = "exp",
+                              pContaminant = "pnorm")),
+    bound = list(
+      minmax = cbind(v  = c(-Inf, Inf), sv = c(0, Inf),
+                     A  = c(1e-4, Inf), B  = c(1e-4, Inf),
+                     t0 = c(0.05, Inf), k  = c(1e-4, Inf),
+                     pContaminant = c(0.001, 0.999)),
+      exception = c(A = 0, pContaminant = 0, k = 0)),
+    Ttransform = function(pars, dadm) {
+      cbind(pars, b = pars[, "B"] + pars[, "A"])
+    },
+    rfun = ifelse(posdrift,
+                  function(data, pars) rBAwL(data$lR, pars, ok = attr(pars, "ok"), posdrift = TRUE),
+                  function(data, pars) rBAwL(data$lR, pars, ok = attr(pars, "ok"), posdrift = FALSE)),
+    dfun = ifelse(posdrift,
+                  function(rt, pars) dBAwL(rt, pars, posdrift = TRUE),
+                  function(rt, pars) dBAwL(rt, pars, posdrift = FALSE)),
+    pfun = ifelse(posdrift,
+                  function(rt, pars) pBAwL(rt, pars, posdrift = TRUE),
+                  function(rt, pars) pBAwL(rt, pars, posdrift = FALSE)),
+    log_likelihood = function(pars, dadm, model, min_ll = log(1e-10)) {
+      log_likelihood_race_missing(pars = pars, dadm = dadm, model = model, min_ll = min_ll)
+    }
+  )
+}
+

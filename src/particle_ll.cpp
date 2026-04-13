@@ -326,7 +326,26 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
   out.ctx.use_posdrift = true;
   out.ctx.gng = false;
 
-  if (type_std.find("LBA") != std::string::npos) {
+  if (type_std.find("RDMSWTN") != std::string::npos) {
+    // Must be checked before "RDM" since "RDMSWTN" contains "RDM"
+    out.pdf1_ptr       = &drdmswtn_scalar;
+    out.cdf1_ptr       = &prdmswtn_scalar;
+    out.model_dfun_raw = &drdmswtn_raw;
+    out.model_pfun_raw = &prdmswtn_raw;
+    out.logS_at_t_ptr  = &rdmswtn_logS_at_t;
+  } else if (type_std.find("BAwL") != std::string::npos) {
+    out.pdf1_ptr       = &dbawl_scalar;
+    out.cdf1_ptr       = &pbawl_scalar;
+    out.model_dfun_raw = &dbawl_raw;
+    out.model_pfun_raw = &pbawl_raw;
+    out.logS_at_t_ptr  = &bawl_logS_at_t;
+    // Leaky ballistic accumulators can have defective upper tails (never-finish
+    // mass) even when posdrift=TRUE.
+    out.ctx.defective_upper_tail = true;
+    if (type_std.find("IO") != std::string::npos) {
+      out.ctx.use_posdrift = false;
+    }
+  } else if (type_std.find("LBA") != std::string::npos) {
     out.pdf1_ptr = &dlba_scalar;
     out.cdf1_ptr = &plba_scalar;
     out.model_dfun_raw = &dlba_raw;
@@ -334,6 +353,7 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
     out.logS_at_t_ptr = &lba_logS_at_t;
     if (type_std.find("IO") != std::string::npos) {
       out.ctx.use_posdrift = false;
+      out.ctx.defective_upper_tail = true;
     }
   } else if (type_std.find("RDM") != std::string::npos) {
     out.pdf1_ptr = &drdm_scalar;
@@ -1530,7 +1550,6 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
 
       is_ok = c_do_bound_pt(param_table_template, bound_specs);
       is_ok = lr_all(is_ok, n_lR);
-
       if (use_raw_fast_path) {
         // Fill per-particle isok buffer
         for (int j = 0; j < n_trials; ++j) isok_int_fp[j] = is_ok[j] ? 1 : 0;
@@ -1546,6 +1565,19 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
                       static_cast<size_t>(n_trials) * sizeof(double));
         }
         const double* pars_cm = race_staging_buf.data();
+        adapter.ctx.mode_hint = 0;
+        // Set once-per-particle mode hints so raw kernels can skip per-row
+        // variability checks in common zero-variability cases.
+        if (type_std.find("RDMSWTN") != std::string::npos) {
+          const double* sv_col = pars_cm + 5 * n_trials;
+          bool sv_zero = true;
+          for (int j = 0; j < n_trials; ++j) {
+            if (!isok_int_fp[j]) continue;
+            const double sv = sv_col[j];
+            if (std::isfinite(sv) && std::fabs(sv) > 1e-10) { sv_zero = false; break; }
+          }
+          adapter.ctx.mode_hint = sv_zero ? 1 : 2;
+        }
 
         // Log-density for winner rows
         adapter.model_dfun_raw(rt_ptr, pars_cm, n_trials,
@@ -1808,8 +1840,18 @@ inline double log_survivor_rowmajor(double t,
                                     void* ctx) {
   if (t == R_PosInf) {
     auto* race_ctx = static_cast<ContextForRaceModels*>(ctx);
-    if (race_ctx && !race_ctx->use_posdrift) {
-      return log_pIO_rowmajor(pars_rowmajor, isok_int, n_lR, n_par);
+    if (race_ctx && race_ctx->defective_upper_tail) {
+      double logS = 0.0;
+      for (int k = 0; k < n_lR; ++k) {
+        if (!isok_int[k]) return R_NegInf;
+        const double* par_k = pars_rowmajor + static_cast<size_t>(k) * n_par;
+        double cdf_inf = cdf1(R_PosInf, par_k, ctx);
+        cdf_inf = clamp_cdf01_race(cdf_inf);
+        const double ll = safe_log1m_race(cdf_inf);
+        if (!std::isfinite(ll)) return R_NegInf;
+        logS += ll;
+      }
+      return logS;
     }
     return R_NegInf;
   }
@@ -1835,15 +1877,14 @@ inline double log_cdf_rowmajor(double t,
                                void* ctx) {
   if (t == R_PosInf) {
       auto* race_ctx = static_cast<ContextForRaceModels*>(ctx);
-      if (race_ctx && !race_ctx->use_posdrift) {
+      if (race_ctx && race_ctx->defective_upper_tail) {
           double logC = 0.0;
           for (int k = 0; k < n_lR; ++k) {
             if (!isok_int[k]) return R_NegInf;
             const double* par_k = pars_rowmajor + static_cast<size_t>(k) * n_par;
-            const double v = par_k[0];
-            const double sv = par_k[1];
-            if (!emc2_isfinite(v) || !emc2_isfinite(sv) || sv <= 0.0) return R_NegInf;
-            const double ll = pnorm_std(-v / sv, false, true);
+            double cdf_inf = cdf1(R_PosInf, par_k, ctx);
+            cdf_inf = clamp_cdf01_race(cdf_inf);
+            const double ll = std::log(cdf_inf);
             if (!emc2_isfinite(ll)) return R_NegInf;
             logC += ll;
           }
@@ -2249,7 +2290,7 @@ double c_log_likelihood_race(
   dense_ctx.min_lik_for_pdf = 0.0;
   void* dense_ctx_ptr = static_cast<void*>(&dense_ctx);
   bool gng=ctx->gng;
-  bool posdrift=ctx->use_posdrift;
+  const bool defective_upper_tail = ctx->defective_upper_tail;
   
   // log_surv_cm: log S(t) = sum_k log(1-F_k(t)) read directly from column-major pars.
   // Used by the "other trials" path for analytical survivor calls — avoids the
@@ -2258,16 +2299,18 @@ double c_log_likelihood_race(
     if (t == R_PosInf) {
       auto* race_ctx = static_cast<ContextForRaceModels*>(model_context_for_funcs);
       // Proper race models have S(Inf)=0 => log S(Inf) = -Inf.
-      // Defective intrinsic-omission models (e.g., LBAIO) retain mass at +Inf.
-      if (race_ctx && !race_ctx->use_posdrift) {
+      // Defective-tail models (e.g., LBAIO / BAwL) retain mass at +Inf.
+      if (race_ctx && race_ctx->defective_upper_tail) {
         double log_p = 0.0;
+        double par_buf_inf[16];
         for (int k = 0; k < n_lR_j; ++k) {
           const int row = start_row_idx + k;
           if (!isok[row]) return R_NegInf;
-          const double v = pars_cm_ptr[0 * n_trials + row];
-          const double sv = pars_cm_ptr[1 * n_trials + row];
-          if (!emc2_isfinite(v) || !emc2_isfinite(sv) || sv <= 0.0) return R_NegInf;
-          const double ll = pnorm_std(-v / sv, true, true);
+          for (int c = 0; c < n_par; ++c)
+            par_buf_inf[c] = pars_cm_ptr[static_cast<size_t>(c) * n_trials + row];
+          double Fk_inf = cdf1(R_PosInf, par_buf_inf, model_context_for_funcs);
+          Fk_inf = clamp_cdf01_race(Fk_inf);
+          const double ll = safe_log1m_race(Fk_inf);
           if (!emc2_isfinite(ll)) return R_NegInf;
           log_p += ll;
         }
@@ -2630,28 +2673,24 @@ double c_log_likelihood_race(
         lower_for_trial = UCj;
         upper_for_trial = UTj;
         if (R_j_idx == NA_INTEGER) {
-          // Fast exit: when no upper censoring (UCj=Inf) and model is posdrift,
-          // P(RT=Inf) = S(Inf) - S(Inf) = 0.  Avoids log_diff_exp(-Inf,-Inf)
-          // triggering a degenerate GSL call with bounds [Inf,Inf].
-          // The pC pass handles contaminant-omission probability separately.
-          if (posdrift && !R_FINITE(lower_for_trial)) {
+          // Fast exit: when no upper censoring (UCj=Inf) and model has no
+          // defective upper tail, P(RT=Inf)=0. Avoid log_diff_exp(-Inf,-Inf)
+          // and degenerate integration bounds [Inf,Inf].
+          if (!defective_upper_tail && !R_FINITE(lower_for_trial)) {
             // current_ll_val stays at min_ll
           } else {
-            const double logP = posdrift
+            const double logP = (!defective_upper_tail)
               ? log_diff_exp(log_surv_cm(lower_for_trial, start_row_idx, n_lR_j),
                              log_surv_cm(upper_for_trial, start_row_idx, n_lR_j))
-              : log_surv_cm(lower_for_trial, start_row_idx, n_lR_j); // LBAIO: incl. intrinsic-omission mass
+              : log_surv_cm(lower_for_trial, start_row_idx, n_lR_j); // include intrinsic never-finish mass
             if (R_FINITE(logP) && logP > log_prob_eps) {
               current_ll_val = logP;
             } else { // numerical integration fallback
               for (int k_win = 1; k_win <= n_lR_j; ++k_win) {
                 current_ll_val = log_sum_exp(current_ll_val, integrate_interval(k_win, lower_for_trial, upper_for_trial));
               }
-              if (!posdrift) { // intrinsic-omission models only
-                ensure_buffers();
-                const double log_p_I = log_pIO_rowmajor(pars_rowmajor_buffer.data(),
-                                                        isok_int_buffer.data(),
-                                                        n_lR_j, n_par);
+              if (defective_upper_tail) { // include defective upper-tail mass
+                const double log_p_I = log_surv_cm(R_PosInf, start_row_idx, n_lR_j);
                 current_ll_val = log_sum_exp(current_ll_val, log_p_I);
               }
             }
@@ -2671,7 +2710,7 @@ double c_log_likelihood_race(
       } else {
         const double logP1 = log_diff_exp(log_surv_cm(lower1, start_row_idx, n_lR_j),
                                           log_surv_cm(upper1, start_row_idx, n_lR_j));
-        const double logP2 = posdrift
+        const double logP2 = (!defective_upper_tail)
           ? log_diff_exp(log_surv_cm(lower2, start_row_idx, n_lR_j),
                          log_surv_cm(upper2, start_row_idx, n_lR_j))
           : log_surv_cm(lower2, start_row_idx, n_lR_j);
@@ -2684,9 +2723,8 @@ double c_log_likelihood_race(
             const double ll_U_k = integrate_interval(k_win, lower2, upper2);
             current_ll_val = log_sum_exp(current_ll_val, log_sum_exp(ll_L_k, ll_U_k));
           }
-          if (!posdrift) {
-            ensure_buffers();
-            const double log_p_I = log_pIO_rowmajor(pars_rowmajor_buffer.data(), isok_int_buffer.data(), n_lR_j, n_par);
+          if (defective_upper_tail) {
+            const double log_p_I = log_surv_cm(R_PosInf, start_row_idx, n_lR_j);
             current_ll_val = log_sum_exp(current_ll_val, log_p_I);
           }
         }

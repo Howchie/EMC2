@@ -85,9 +85,15 @@ Rcpp::NumericVector calc_ll(Rcpp::NumericMatrix p_matrix, Rcpp::DataFrame data,
 struct ContextForRaceModels {
     double min_lik_for_pdf;
     bool use_posdrift=true;
+    // Whether the race can place non-zero probability mass at +Inf.
+    // This controls omission/right-tail bookkeeping in likelihood code.
+    bool defective_upper_tail=false;
 	bool log_out=false;
 	bool gng=false;
 	std::string LogicalRule;
+    // Optional per-particle fast-kernel hint:
+    // 0 = auto detect in kernel; 1 = zero-variability branch; 2 = nonzero branch.
+    int mode_hint = 0;
 };
 
 // Scalar adapters (single-RT, single-parameter-row) used by GSL integration.
@@ -373,6 +379,449 @@ inline void lnr_logS_at_t(double t, const double* pars_cm,
   }
 }
 
+// Adapter prototypes
+Rcpp::NumericVector lba_dfun_adapter(Rcpp::NumericVector rt,
+                                            Rcpp::NumericMatrix pars,
+                                            Rcpp::LogicalVector winner,
+                                            Rcpp::LogicalVector is_ok,
+                                            void* context) {
+    ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context);
+    // Pass use_posdrift from context to dlba_c
+    return dlba_c(rt, pars, winner, ctx->min_lik_for_pdf, is_ok, ctx->use_posdrift);
+}
+
+Rcpp::NumericVector lba_pfun_adapter(Rcpp::NumericVector rt,
+                                            Rcpp::NumericMatrix pars,
+                                            Rcpp::LogicalVector winner,
+                                            Rcpp::LogicalVector is_ok,
+                                            void* context) {
+    ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context);
+    // Pass use_posdrift from context to plba_c
+    return plba_c(rt, pars, winner, ctx->min_lik_for_pdf, is_ok, ctx->use_posdrift);
+}
+
+// Static adapter for RDM dfun
+Rcpp::NumericVector rdm_dfun_adapter(Rcpp::NumericVector rt,
+                                            Rcpp::NumericMatrix pars,
+                                            Rcpp::LogicalVector winner,
+                                            Rcpp::LogicalVector is_ok,
+                                            void* context) {
+    ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context);
+    return drdm_c(rt, pars, winner, ctx->min_lik_for_pdf, is_ok);
+}
+
+// Static adapter for RDM pfun
+Rcpp::NumericVector rdm_pfun_adapter(Rcpp::NumericVector rt,
+                                            Rcpp::NumericMatrix pars,
+                                            Rcpp::LogicalVector winner,
+                                            Rcpp::LogicalVector is_ok,
+                                            void* context) {
+    ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context);
+    return prdm_c(rt, pars, winner, ctx->min_lik_for_pdf, is_ok);
+}
+
+// Static adapter for LNR dfun
+Rcpp::NumericVector lnr_dfun_adapter(Rcpp::NumericVector rt,
+                                            Rcpp::NumericMatrix pars,
+                                            Rcpp::LogicalVector winner,
+                                            Rcpp::LogicalVector is_ok,
+                                            void* context) {
+    ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context); // Reusing same context struct
+    return dlnr_c(rt, pars, winner, ctx->min_lik_for_pdf, is_ok);
+}
+
+// Static adapter for LNR pfun
+Rcpp::NumericVector lnr_pfun_adapter(Rcpp::NumericVector rt,
+                                            Rcpp::NumericMatrix pars,
+                                            Rcpp::LogicalVector winner,
+                                            Rcpp::LogicalVector is_ok,
+                                            void* context) {
+    ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context); // Reusing same context struct
+    return plnr_c(rt, pars, winner, ctx->min_lik_for_pdf, is_ok);
+}
+
+// ============================================================
+// BAwL (Ballistic Accumulator with Leak) adapters
+// Column layout: v=0, sv=1, B=2, A=3, t0=4, k=5
+// ============================================================
+
+inline double dbawl_scalar(double t, const double* par, void* ctx_) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  if (R_IsNA(par[0])) return 0.0;
+  const double tt = t - par[4];
+  if (tt <= 0.0) return 0.0;
+  // Route through the leaky kernel in all cases; its internal k->0 branch
+  // handles the exact LBA limit.
+  return dleakyba_norm(tt, par[3], par[2] + par[3], par[0], par[1], par[5],
+                       ctx->use_posdrift);
+}
+
+inline double pbawl_scalar(double t, const double* par, void* ctx_) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  if (R_IsNA(par[0])) return 0.0;
+  const double tt = t - par[4];
+  if (tt <= 0.0) return 0.0;
+  // Route through the leaky kernel in all cases; its internal k->0 branch
+  // handles the exact LBA limit.
+  return pleakyba_norm(tt, par[3], par[2] + par[3], par[0], par[1], par[5],
+                       ctx->use_posdrift);
+}
+
+inline void dbawl_raw(const double* rt, const double* pars_cm, int n_rows,
+                      const int* mask, const int* isok,
+                      double* out, double min_ll, void* ctx_) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  const bool pd    = ctx->use_posdrift;
+  const double* v_  = pars_cm + 0 * n_rows;
+  const double* sv_ = pars_cm + 1 * n_rows;
+  const double* B_  = pars_cm + 2 * n_rows;
+  const double* A_  = pars_cm + 3 * n_rows;
+  const double* t0_ = pars_cm + 4 * n_rows;
+  const double* k_  = pars_cm + 5 * n_rows;
+  for (int i = 0; i < n_rows; ++i) {
+    if (!mask[i]) continue;
+    if (R_IsNA(v_[i]) || !isok[i]) { out[i] = min_ll; continue; }
+    const double tt = rt[i] - t0_[i];
+    if (tt <= 0.0) { out[i] = min_ll; continue; }
+    const double pdf = dleakyba_norm(tt, A_[i], B_[i] + A_[i], v_[i], sv_[i], k_[i], pd);
+    out[i] = (pdf > 0.0 && std::isfinite(pdf)) ? std::log(pdf) : min_ll;
+  }
+}
+
+inline void pbawl_raw(const double* rt, const double* pars_cm, int n_rows,
+                      const int* mask, const int* isok,
+                      double* out, double min_ll, void* ctx_) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  const bool pd    = ctx->use_posdrift;
+  const double* v_  = pars_cm + 0 * n_rows;
+  const double* sv_ = pars_cm + 1 * n_rows;
+  const double* B_  = pars_cm + 2 * n_rows;
+  const double* A_  = pars_cm + 3 * n_rows;
+  const double* t0_ = pars_cm + 4 * n_rows;
+  const double* k_  = pars_cm + 5 * n_rows;
+  for (int i = 0; i < n_rows; ++i) {
+    if (!mask[i]) continue;
+    if (R_IsNA(v_[i]) || !isok[i]) { out[i] = 0.0; continue; }
+    const double tt = rt[i] - t0_[i];
+    if (tt <= 0.0) { out[i] = 0.0; continue; }
+    const double cdf = pleakyba_norm(tt, A_[i], B_[i] + A_[i], v_[i], sv_[i], k_[i], pd);
+    if (cdf >= 1.0) { out[i] = min_ll; continue; }
+    out[i] = (cdf <= 0.0) ? 0.0 : std::log1p(-cdf);
+  }
+}
+
+// BAwL: column layout v=0, sv=1, B=2, A=3, t0=4, k=5
+inline void bawl_logS_at_t(double t, const double* pars_cm,
+                            int n_rows_total, int n_lR, int /*n_par*/,
+                            const int* trunc_mask, int n_unique_trials,
+                            const int* isok_all, void* ctx_, double* logS_out) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  const bool pd    = ctx->use_posdrift;
+  const double* v_  = pars_cm + 0 * n_rows_total;
+  const double* sv_ = pars_cm + 1 * n_rows_total;
+  const double* B_  = pars_cm + 2 * n_rows_total;
+  const double* A_  = pars_cm + 3 * n_rows_total;
+  const double* t0_ = pars_cm + 4 * n_rows_total;
+  const double* k_  = pars_cm + 5 * n_rows_total;
+  for (int j = 0; j < n_unique_trials; ++j) {
+    if (!trunc_mask[j]) continue;
+    const int start = j * n_lR;
+    double logS = 0.0;
+    bool bad = false;
+    for (int kk = 0; kk < n_lR && !bad; ++kk) {
+      const int r = start + kk;
+      if (!isok_all[r] || R_IsNA(v_[r])) { bad = true; break; }
+      const double tt = t - t0_[r];
+      if (tt <= 0.0) continue;
+      const double cdf = pleakyba_norm(tt, A_[r], B_[r] + A_[r], v_[r], sv_[r], k_[r], pd);
+      if (cdf >= 1.0) { bad = true; break; }
+      if (cdf > 0.0) logS += std::log1p(-cdf);
+    }
+    logS_out[j] = bad ? R_NegInf : logS;
+  }
+}
+
+Rcpp::NumericVector bawl_dfun_adapter(Rcpp::NumericVector rt,
+                                      Rcpp::NumericMatrix pars,
+                                      Rcpp::LogicalVector winner,
+                                      Rcpp::LogicalVector is_ok,
+                                      void* context) {
+  ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context);
+  return dleakyba_c(rt, pars, winner, ctx->min_lik_for_pdf, is_ok, ctx->use_posdrift);
+}
+
+Rcpp::NumericVector bawl_pfun_adapter(Rcpp::NumericVector rt,
+                                      Rcpp::NumericMatrix pars,
+                                      Rcpp::LogicalVector winner,
+                                      Rcpp::LogicalVector is_ok,
+                                      void* context) {
+  ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context);
+  return pleakyba_c(rt, pars, winner, ctx->min_lik_for_pdf, is_ok, ctx->use_posdrift);
+}
+
+// ============================================================
+// RDMSWTN adapters
+// Column layout: v=0, B=1, A=2, t0=3, s=4, sv=5
+// ============================================================
+
+inline double drdmswtn_scalar(double t, const double* par, void* /*ctx_*/) {
+  if (R_IsNA(par[0])) return 0.0;
+  const double tt = t - par[3];
+  if (tt <= 0.0) return 0.0;
+  const double inv_s = 1.0 / par[4];
+  return drdmswtn(tt,
+                  (par[1] + par[2]) * inv_s,  // b = (B+A)/s
+                  par[0] * inv_s,              // v/s
+                  par[2] * inv_s,              // A/s
+                  par[5] * inv_s,              // sv/s
+                  1.0, 0.0, 20, false);
+}
+
+inline double prdmswtn_scalar(double t, const double* par, void* /*ctx_*/) {
+  if (R_IsNA(par[0])) return 0.0;
+  const double tt = t - par[3];
+  if (tt <= 0.0) return 0.0;
+  const double inv_s = 1.0 / par[4];
+  return prdmswtn(tt,
+                  (par[1] + par[2]) * inv_s,
+                  par[0] * inv_s,
+                  par[2] * inv_s,
+                  par[5] * inv_s,
+                  1.0, 0.0, 20, false);
+}
+
+inline void drdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
+                         const int* mask, const int* isok,
+                         double* out, double min_ll, void* ctx_) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  const int mode_hint = ctx ? ctx->mode_hint : 0;
+  const double* v_  = pars_cm + 0 * n_rows;
+  const double* B_  = pars_cm + 1 * n_rows;
+  const double* A_  = pars_cm + 2 * n_rows;
+  const double* t0_ = pars_cm + 3 * n_rows;
+  const double* s_  = pars_cm + 4 * n_rows;
+  const double* sv_ = pars_cm + 5 * n_rows;
+  const double sv_eps = 1e-10;
+
+  bool all_sv_zero = (mode_hint == 1);
+  if (mode_hint == 0) {
+    all_sv_zero = true;
+    for (int i = 0; i < n_rows; ++i) {
+      if (!mask[i]) continue;
+      if (R_IsNA(v_[i]) || !isok[i]) continue;
+      const double tt = rt[i] - t0_[i];
+      if (tt <= 0.0) continue;
+      const double sv_i = sv_[i];
+      if (std::isfinite(sv_i) && std::fabs(sv_i) > sv_eps) {
+        all_sv_zero = false;
+        break;
+      }
+    }
+  }
+
+  if (all_sv_zero) {
+    for (int i = 0; i < n_rows; ++i) {
+      if (!mask[i]) continue;
+      if (R_IsNA(v_[i]) || !isok[i]) { out[i] = min_ll; continue; }
+      const double tt = rt[i] - t0_[i];
+      if (tt <= 0.0) { out[i] = min_ll; continue; }
+      const double inv_s = 1.0 / s_[i];
+      const double pdf = dwald(tt,
+                               (B_[i] + A_[i]) * inv_s,
+                               v_[i] * inv_s,
+                               1.0,
+                               A_[i] * inv_s,
+                               false);
+      out[i] = (pdf > 0.0 && std::isfinite(pdf)) ? std::log(pdf) : min_ll;
+    }
+    return;
+  }
+
+  for (int i = 0; i < n_rows; ++i) {
+    if (!mask[i]) continue;
+    if (R_IsNA(v_[i]) || !isok[i]) { out[i] = min_ll; continue; }
+    const double tt = rt[i] - t0_[i];
+    if (tt <= 0.0) { out[i] = min_ll; continue; }
+    double pdf;
+    if (!std::isfinite(sv_[i]) || std::fabs(sv_[i]) <= sv_eps) {
+      const double inv_s = 1.0 / s_[i];
+      pdf = dwald(tt,
+                  (B_[i] + A_[i]) * inv_s,
+                  v_[i] * inv_s,
+                  1.0,
+                  A_[i] * inv_s,
+                  false);
+    } else {
+      const double inv_s = 1.0 / s_[i];
+      pdf = drdmswtn(tt,
+                     (B_[i] + A_[i]) * inv_s,
+                     v_[i]  * inv_s,
+                     A_[i]  * inv_s,
+                     sv_[i] * inv_s,
+                     1.0, 0.0, 20, false);
+    }
+    out[i] = (pdf > 0.0 && std::isfinite(pdf)) ? std::log(pdf) : min_ll;
+  }
+}
+
+inline void prdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
+                         const int* mask, const int* isok,
+                         double* out, double min_ll, void* ctx_) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  const int mode_hint = ctx ? ctx->mode_hint : 0;
+  const double* v_  = pars_cm + 0 * n_rows;
+  const double* B_  = pars_cm + 1 * n_rows;
+  const double* A_  = pars_cm + 2 * n_rows;
+  const double* t0_ = pars_cm + 3 * n_rows;
+  const double* s_  = pars_cm + 4 * n_rows;
+  const double* sv_ = pars_cm + 5 * n_rows;
+  const double sv_eps = 1e-10;
+
+  bool all_sv_zero = (mode_hint == 1);
+  if (mode_hint == 0) {
+    all_sv_zero = true;
+    for (int i = 0; i < n_rows; ++i) {
+      if (!mask[i]) continue;
+      if (R_IsNA(v_[i]) || !isok[i]) continue;
+      const double tt = rt[i] - t0_[i];
+      if (tt <= 0.0) continue;
+      const double sv_i = sv_[i];
+      if (std::isfinite(sv_i) && std::fabs(sv_i) > sv_eps) {
+        all_sv_zero = false;
+        break;
+      }
+    }
+  }
+
+  if (all_sv_zero) {
+    for (int i = 0; i < n_rows; ++i) {
+      if (!mask[i]) continue;
+      if (R_IsNA(v_[i]) || !isok[i]) { out[i] = 0.0; continue; }
+      const double tt = rt[i] - t0_[i];
+      if (tt <= 0.0) { out[i] = 0.0; continue; }
+      const double inv_s = 1.0 / s_[i];
+      const double cdf = pwald(tt,
+                               (B_[i] + A_[i]) * inv_s,
+                               v_[i] * inv_s,
+                               1.0,
+                               A_[i] * inv_s,
+                               false);
+      if (cdf >= 1.0) { out[i] = min_ll; continue; }
+      out[i] = (cdf <= 0.0) ? 0.0 : std::log1p(-cdf);
+    }
+    return;
+  }
+
+  for (int i = 0; i < n_rows; ++i) {
+    if (!mask[i]) continue;
+    if (R_IsNA(v_[i]) || !isok[i]) { out[i] = 0.0; continue; }
+    const double tt = rt[i] - t0_[i];
+    if (tt <= 0.0) { out[i] = 0.0; continue; }
+    double cdf;
+    if (!std::isfinite(sv_[i]) || std::fabs(sv_[i]) <= sv_eps) {
+      const double inv_s = 1.0 / s_[i];
+      cdf = pwald(tt,
+                  (B_[i] + A_[i]) * inv_s,
+                  v_[i] * inv_s,
+                  1.0,
+                  A_[i] * inv_s,
+                  false);
+    } else {
+      const double inv_s = 1.0 / s_[i];
+      cdf = prdmswtn(tt,
+                     (B_[i] + A_[i]) * inv_s,
+                     v_[i]  * inv_s,
+                     A_[i]  * inv_s,
+                     sv_[i] * inv_s,
+                     1.0, 0.0, 20, false);
+    }
+    if (cdf >= 1.0) { out[i] = min_ll; continue; }
+    out[i] = (cdf <= 0.0) ? 0.0 : std::log1p(-cdf);
+  }
+}
+
+// RDMSWTN: column layout v=0, B=1, A=2, t0=3, s=4, sv=5
+inline void rdmswtn_logS_at_t(double t, const double* pars_cm,
+                               int n_rows_total, int n_lR, int /*n_par*/,
+                               const int* trunc_mask, int n_unique_trials,
+                               const int* isok_all, void* ctx_, double* logS_out) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  const int mode_hint = ctx ? ctx->mode_hint : 0;
+  const double* v_  = pars_cm + 0 * n_rows_total;
+  const double* B_  = pars_cm + 1 * n_rows_total;
+  const double* A_  = pars_cm + 2 * n_rows_total;
+  const double* t0_ = pars_cm + 3 * n_rows_total;
+  const double* s_  = pars_cm + 4 * n_rows_total;
+  const double* sv_ = pars_cm + 5 * n_rows_total;
+  const double sv_eps = 1e-10;
+  for (int j = 0; j < n_unique_trials; ++j) {
+    if (!trunc_mask[j]) continue;
+    const int start = j * n_lR;
+    double logS = 0.0;
+    bool bad = false;
+    for (int k = 0; k < n_lR && !bad; ++k) {
+      const int r = start + k;
+      if (!isok_all[r] || R_IsNA(v_[r])) { bad = true; break; }
+      const double tt = t - t0_[r];
+      if (tt <= 0.0) continue;
+      double cdf;
+      if (mode_hint == 1) {
+        const double inv_s = 1.0 / s_[r];
+        cdf = pwald(tt,
+                    (B_[r] + A_[r]) * inv_s,
+                    v_[r] * inv_s,
+                    1.0,
+                    A_[r] * inv_s,
+                    false);
+      } else if (mode_hint == 2) {
+        const double inv_s = 1.0 / s_[r];
+        cdf = prdmswtn(tt,
+                       (B_[r] + A_[r]) * inv_s,
+                       v_[r]  * inv_s,
+                       A_[r]  * inv_s,
+                       sv_[r] * inv_s,
+                       1.0, 0.0, 20, false);
+      } else if (!std::isfinite(sv_[r]) || std::fabs(sv_[r]) <= sv_eps) {
+        const double inv_s = 1.0 / s_[r];
+        cdf = pwald(tt,
+                    (B_[r] + A_[r]) * inv_s,
+                    v_[r] * inv_s,
+                    1.0,
+                    A_[r] * inv_s,
+                    false);
+      } else {
+        const double inv_s = 1.0 / s_[r];
+        cdf = prdmswtn(tt,
+                       (B_[r] + A_[r]) * inv_s,
+                       v_[r]  * inv_s,
+                       A_[r]  * inv_s,
+                       sv_[r] * inv_s,
+                       1.0, 0.0, 20, false);
+      }
+      if (cdf >= 1.0) { bad = true; break; }
+      if (cdf > 0.0) logS += std::log1p(-cdf);
+    }
+    logS_out[j] = bad ? R_NegInf : logS;
+  }
+}
+
+Rcpp::NumericVector rdmswtn_dfun_adapter(Rcpp::NumericVector rt,
+                                         Rcpp::NumericMatrix pars,
+                                         Rcpp::LogicalVector winner,
+                                         Rcpp::LogicalVector is_ok,
+                                         void* context) {
+  ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context);
+  return drdmswtn_c(rt, pars, winner, ctx->min_lik_for_pdf, is_ok);
+}
+
+Rcpp::NumericVector rdmswtn_pfun_adapter(Rcpp::NumericVector rt,
+                                         Rcpp::NumericMatrix pars,
+                                         Rcpp::LogicalVector winner,
+                                         Rcpp::LogicalVector is_ok,
+                                         void* context) {
+  ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context);
+  return prdmswtn_c(rt, pars, winner, ctx->min_lik_for_pdf, is_ok);
+}
 // Helper to safely get a column from a DataFrame with a default value if missing
 // Also fills NA values with the default for backward compatibility.
 inline Rcpp::NumericVector get_col_with_default(const Rcpp::DataFrame& df, const std::string& name, double default_val) {

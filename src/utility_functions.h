@@ -705,5 +705,27 @@ inline bool row_is_finite(const Rcpp::NumericMatrix& mat, int row) {
   return true;
 }
 
+// Gauss quadrature via statmod::gauss.quad — initialised once at DLL load.
+// Used by gaussian.h (bivariate normal via Legendre rules) and by RDMSWTN quadrature.
+static const Rcpp::Environment statmodNS = Rcpp::Environment::namespace_env("statmod");
+static const Rcpp::Function    gauss_quad = statmodNS["gauss.quad"];
+
+// Hardcoded GL20 for hot-path speed and thread-safety (reduces R callbacks).
+static const Rcpp::List gl20 = Rcpp::List::create(
+  Rcpp::Named("nodes") = Rcpp::NumericVector({
+    -0.993128599185095, -0.963971927277914, -0.912234428251326, -0.839116971822219,
+    -0.746331906460151, -0.636053680726515, -0.510867001950827, -0.37370608871542,
+    -0.227785851141645, -0.0765265211334976, 0.0765265211334975, 0.227785851141645,
+    0.37370608871542, 0.510867001950827, 0.636053680726515, 0.746331906460151,
+    0.839116971822219, 0.912234428251326, 0.963971927277914, 0.993128599185095
+  }),
+  Rcpp::Named("weights") = Rcpp::NumericVector({
+    0.017614007139152, 0.0406014298003868, 0.0626720483341094, 0.0832767415767049,
+    0.101930119817241, 0.118194531961518, 0.131688638449177, 0.142096109318382,
+    0.149172986472604, 0.152753387130726, 0.152753387130726, 0.149172986472604,
+    0.142096109318382, 0.131688638449177, 0.118194531961518, 0.101930119817241,
+    0.0832767415767048, 0.0626720483341087, 0.0406014298003866, 0.0176140071391521
+  })
+);
 
 #endif

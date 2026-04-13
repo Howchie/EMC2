@@ -70,7 +70,9 @@ Imports:
     utils,
     loo,
     lpSolve,
-    WienR
+    WienR,
+    RcppArmadillo,
+    statmod
 LinkingTo:
     Rcpp,
     RcppArmadillo

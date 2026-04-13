@@ -359,4 +359,14 @@ inline double safe_log1m_race(double p) {
   return std::log1p(-p);
 }
 
+// Clamp x to be at least floor_val (for denominators / log arguments that must be > 0).
+inline double clamp_pos(double x, double floor_val = 1e-300) {
+  return (std::isfinite(x) && x > floor_val) ? x : floor_val;
+}
+
+// Safe log: clamps argument away from zero before taking log.
+inline double safe_log(double x, double floor_val = 1e-300) {
+  return std::log(clamp_pos(x, floor_val));
+}
+
 #endif // composite_functions_h
