@@ -10,6 +10,11 @@ RNGkind("L'Ecuyer-CMRG")
 #   2. call EMC2:::calc_ll directly
 #   3. compare against a pure-R TEXG reference that does not use any EMC2 code
 #
+# Root bugs caught by this suite:
+#   * -ffast-math breaks std::isfinite / std::isinf for R's Inf values.
+#     stop_signal_presented was always TRUE → every NR trial went to the
+#     stop-signal path; pStop was evaluated with upper=Inf via the wrong GSL
+#     integrator → GSL failed → log_pstop = min_ll → NR-stop LL ≈ log(gf).
 # ──────────────────────────────────────────────────────────────────────────────
 
 

@@ -491,7 +491,7 @@ double c_log_likelihood_ss(
     
     double rt = RT[start_row];
     bool response_observed = R[start_row] != NA_INTEGER;
-    // Use R_FINITE (not emc2_isfinite) — -ffast-math breaks emc2_isfinite for Inf values
+    // Use R_FINITE (not std::isfinite) — -ffast-math breaks std::isfinite for Inf values
     bool stop_signal_presented = emc2_isfinite(SSD[start_row]);
     // Added UC handling
     double uc = UC[start_row];
