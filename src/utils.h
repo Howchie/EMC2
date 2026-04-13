@@ -1,6 +1,7 @@
 #ifndef PARTICLE_LL_UTILS_H
 #define PARTICLE_LL_UTILS_H
 #include <RcppArmadillo.h>
+#include "utility_types.h"
 #include "utility_functions.h" // For any existing utilities we might use
 #include "lnr_functions.h"
 #include "wald_functions.h"
@@ -379,67 +380,6 @@ inline void lnr_logS_at_t(double t, const double* pars_cm,
   }
 }
 
-// Adapter prototypes
-Rcpp::NumericVector lba_dfun_adapter(Rcpp::NumericVector rt,
-                                            Rcpp::NumericMatrix pars,
-                                            Rcpp::LogicalVector winner,
-                                            Rcpp::LogicalVector is_ok,
-                                            void* context) {
-    ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context);
-    // Pass use_posdrift from context to dlba_c
-    return dlba_c(rt, pars, winner, ctx->min_lik_for_pdf, is_ok, ctx->use_posdrift);
-}
-
-Rcpp::NumericVector lba_pfun_adapter(Rcpp::NumericVector rt,
-                                            Rcpp::NumericMatrix pars,
-                                            Rcpp::LogicalVector winner,
-                                            Rcpp::LogicalVector is_ok,
-                                            void* context) {
-    ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context);
-    // Pass use_posdrift from context to plba_c
-    return plba_c(rt, pars, winner, ctx->min_lik_for_pdf, is_ok, ctx->use_posdrift);
-}
-
-// Static adapter for RDM dfun
-Rcpp::NumericVector rdm_dfun_adapter(Rcpp::NumericVector rt,
-                                            Rcpp::NumericMatrix pars,
-                                            Rcpp::LogicalVector winner,
-                                            Rcpp::LogicalVector is_ok,
-                                            void* context) {
-    ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context);
-    return drdm_c(rt, pars, winner, ctx->min_lik_for_pdf, is_ok);
-}
-
-// Static adapter for RDM pfun
-Rcpp::NumericVector rdm_pfun_adapter(Rcpp::NumericVector rt,
-                                            Rcpp::NumericMatrix pars,
-                                            Rcpp::LogicalVector winner,
-                                            Rcpp::LogicalVector is_ok,
-                                            void* context) {
-    ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context);
-    return prdm_c(rt, pars, winner, ctx->min_lik_for_pdf, is_ok);
-}
-
-// Static adapter for LNR dfun
-Rcpp::NumericVector lnr_dfun_adapter(Rcpp::NumericVector rt,
-                                            Rcpp::NumericMatrix pars,
-                                            Rcpp::LogicalVector winner,
-                                            Rcpp::LogicalVector is_ok,
-                                            void* context) {
-    ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context); // Reusing same context struct
-    return dlnr_c(rt, pars, winner, ctx->min_lik_for_pdf, is_ok);
-}
-
-// Static adapter for LNR pfun
-Rcpp::NumericVector lnr_pfun_adapter(Rcpp::NumericVector rt,
-                                            Rcpp::NumericMatrix pars,
-                                            Rcpp::LogicalVector winner,
-                                            Rcpp::LogicalVector is_ok,
-                                            void* context) {
-    ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context); // Reusing same context struct
-    return plnr_c(rt, pars, winner, ctx->min_lik_for_pdf, is_ok);
-}
-
 // ============================================================
 // BAwL (Ballistic Accumulator with Leak) adapters
 // Column layout: v=0, sv=1, B=2, A=3, t0=4, k=5
@@ -539,24 +479,6 @@ inline void bawl_logS_at_t(double t, const double* pars_cm,
     }
     logS_out[j] = bad ? R_NegInf : logS;
   }
-}
-
-Rcpp::NumericVector bawl_dfun_adapter(Rcpp::NumericVector rt,
-                                      Rcpp::NumericMatrix pars,
-                                      Rcpp::LogicalVector winner,
-                                      Rcpp::LogicalVector is_ok,
-                                      void* context) {
-  ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context);
-  return dleakyba_c(rt, pars, winner, ctx->min_lik_for_pdf, is_ok, ctx->use_posdrift);
-}
-
-Rcpp::NumericVector bawl_pfun_adapter(Rcpp::NumericVector rt,
-                                      Rcpp::NumericMatrix pars,
-                                      Rcpp::LogicalVector winner,
-                                      Rcpp::LogicalVector is_ok,
-                                      void* context) {
-  ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context);
-  return pleakyba_c(rt, pars, winner, ctx->min_lik_for_pdf, is_ok, ctx->use_posdrift);
 }
 
 // ============================================================
@@ -805,23 +727,6 @@ inline void rdmswtn_logS_at_t(double t, const double* pars_cm,
   }
 }
 
-Rcpp::NumericVector rdmswtn_dfun_adapter(Rcpp::NumericVector rt,
-                                         Rcpp::NumericMatrix pars,
-                                         Rcpp::LogicalVector winner,
-                                         Rcpp::LogicalVector is_ok,
-                                         void* context) {
-  ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context);
-  return drdmswtn_c(rt, pars, winner, ctx->min_lik_for_pdf, is_ok);
-}
-
-Rcpp::NumericVector rdmswtn_pfun_adapter(Rcpp::NumericVector rt,
-                                         Rcpp::NumericMatrix pars,
-                                         Rcpp::LogicalVector winner,
-                                         Rcpp::LogicalVector is_ok,
-                                         void* context) {
-  ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(context);
-  return prdmswtn_c(rt, pars, winner, ctx->min_lik_for_pdf, is_ok);
-}
 // Helper to safely get a column from a DataFrame with a default value if missing
 // Also fills NA values with the default for backward compatibility.
 inline Rcpp::NumericVector get_col_with_default(const Rcpp::DataFrame& df, const std::string& name, double default_val) {

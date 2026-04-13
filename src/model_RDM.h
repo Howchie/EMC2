@@ -10,65 +10,6 @@
 
 using namespace Rcpp;
 
-NumericVector drdm_c(NumericVector rts, NumericMatrix pars, LogicalVector idx, double min_ll, LogicalVector is_ok){
-  //v = 0, B = 1, A = 2, t0 = 3, s = 4
-  const int n_rows = rts.size();
-  NumericVector out(sum(idx));
-  const double* rt = rts.begin();
-  const double* v  = &pars(0, 0);
-  const double* B  = &pars(0, 1);
-  const double* A  = &pars(0, 2);
-  const double* t0 = &pars(0, 3);
-  const double* s  = &pars(0, 4);
-  int* idx_ptr = LOGICAL(idx);
-  int* ok_ptr = LOGICAL(is_ok);
-  int k = 0;
-  for(int i = 0; i < n_rows; i++){
-    if(idx_ptr[i]){
-      if(R_IsNA(v[i])){
-        out[k] = 0.0;
-      } else if((rt[i] - t0[i] > 0.0) && ok_ptr[i]){
-        const double inv_s = 1.0 / s[i];
-        out[k] = digt(rt[i] - t0[i], B[i] * inv_s + 0.5 * A[i] * inv_s, v[i] * inv_s, 0.5 * A[i] * inv_s);
-      } else{
-        out[k] = min_ll;
-      }
-      k++;
-    }
-  }
-
-  return(out);
-}
-
-NumericVector prdm_c(NumericVector rts, NumericMatrix pars, LogicalVector idx, double min_ll, LogicalVector is_ok){
-  //v = 0, B = 1, A = 2, t0 = 3, s = 4
-  const int n_rows = rts.size();
-  NumericVector out(sum(idx));
-  const double* rt = rts.begin();
-  const double* v  = &pars(0, 0);
-  const double* B  = &pars(0, 1);
-  const double* A  = &pars(0, 2);
-  const double* t0 = &pars(0, 3);
-  const double* s  = &pars(0, 4);
-  int* idx_ptr = LOGICAL(idx);
-  int* ok_ptr = LOGICAL(is_ok);
-  int k = 0;
-  for(int i = 0; i < n_rows; i++){
-    if(idx_ptr[i]){
-      if(R_IsNA(v[i])){
-        out[k] = 0.0;
-      } else if((rt[i] - t0[i] > 0.0) && ok_ptr[i]){
-        const double inv_s = 1.0 / s[i];
-        out[k] = pigt(rt[i] - t0[i], B[i] * inv_s + 0.5 * A[i] * inv_s, v[i] * inv_s, 0.5 * A[i] * inv_s);
-      } else{
-        out[k] = min_ll;
-      }
-      k++;
-    }
-  }
-
-  return(out);
-}
 // [[Rcpp::export]]
 NumericVector dWald(NumericVector t, NumericVector v,
                     NumericVector B, NumericVector A, NumericVector t0){
@@ -448,53 +389,5 @@ NumericVector pSWTNspv(NumericVector t, NumericVector v, NumericVector b,
 //   v=0, B=1, A=2, t0=3, s=4, sv=5  [pContaminant and b follow, ignored here]
 // Scaling convention: absorb s inside kernel; pass s=1 to drdmswtn/prdmswtn.
 // --------------------------------------------------------------------------
-
-NumericVector drdmswtn_c(NumericVector rts, NumericMatrix pars,
-                         LogicalVector idx, double min_ll, LogicalVector is_ok) {
-  // v=0, B=1, A=2, t0=3, s=4, sv=5
-  const int n_rows = rts.size();
-  NumericVector out(sum(idx));
-  int k = 0;
-  for (int i = 0; i < n_rows; ++i) {
-    if (!idx[i]) continue;
-    if (R_IsNA(pars(i, 0))) {
-      out[k++] = 0.0;
-    } else if ((rts[i] - pars(i, 3) > 0.0) && (is_ok[i] == TRUE)) {
-      const double inv_s = 1.0 / pars(i, 4);
-      const double b_s   = (pars(i, 1) + pars(i, 2)) * inv_s;
-      const double v_s   =  pars(i, 0) * inv_s;
-      const double A_s   =  pars(i, 2) * inv_s;
-      const double sv_s  =  pars(i, 5) * inv_s;
-      out[k++] = drdmswtn(rts[i] - pars(i, 3), b_s, v_s, A_s, sv_s, 1.0, 0.0, 20, false);
-    } else {
-      out[k++] = min_ll;
-    }
-  }
-  return out;
-}
-
-NumericVector prdmswtn_c(NumericVector rts, NumericMatrix pars,
-                         LogicalVector idx, double min_ll, LogicalVector is_ok) {
-  // v=0, B=1, A=2, t0=3, s=4, sv=5
-  const int n_rows = rts.size();
-  NumericVector out(sum(idx));
-  int k = 0;
-  for (int i = 0; i < n_rows; ++i) {
-    if (!idx[i]) continue;
-    if (R_IsNA(pars(i, 0))) {
-      out[k++] = 0.0;
-    } else if ((rts[i] - pars(i, 3) > 0.0) && (is_ok[i] == TRUE)) {
-      const double inv_s = 1.0 / pars(i, 4);
-      const double b_s   = (pars(i, 1) + pars(i, 2)) * inv_s;
-      const double v_s   =  pars(i, 0) * inv_s;
-      const double A_s   =  pars(i, 2) * inv_s;
-      const double sv_s  =  pars(i, 5) * inv_s;
-      out[k++] = prdmswtn(rts[i] - pars(i, 3), b_s, v_s, A_s, sv_s, 1.0, 0.0, 20, false);
-    } else {
-      out[k++] = min_ll;
-    }
-  }
-  return out;
-}
 
 #endif

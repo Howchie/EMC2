@@ -99,7 +99,6 @@ static NumericMatrix get_pars_matrix_oo_core(ParamTable& param_table,
     if (return_all_pars) return param_table.materialize();
     return param_table.materialize_by_param_names(keep_names);
   }
-
   LogicalVector map_next(n_designs, false);
   std::unordered_set<std::string> transform_next;
   std::unordered_set<std::string> empty_set;

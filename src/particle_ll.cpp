@@ -2080,7 +2080,7 @@ double c_log_likelihood_race(
     double min_ll,                          // Minimum log-likelihood value
     const Rcpp::LogicalVector isok,   // Parameter validity for each row in 'pars' matrix
     int n_lR,                              // Number of accumulators in the race (must be > 0 if data exists)
-    void* model_context_for_funcs,          // Context for model_dfun/model_pfun (e.g., contains posdrift for LBA)
+    void* model_context_for_funcs,          // Context for model functions (e.g., contains posdrift for LBA)
     bool all_finite_trials,             // Data-only hint: all trials finite/in-bounds/known response
     RaceRawFun model_dfun_raw,
     RaceRawFun model_pfun_raw,

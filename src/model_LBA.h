@@ -287,48 +287,5 @@ NumericVector pleakyba(NumericVector t,
   return cdf;
 }
 
-// Vectorised adapters (column layout: v=0, sv=1, B=2, A=3, t0=4, k=5).
-NumericVector dleakyba_c(NumericVector rts, NumericMatrix pars, LogicalVector idx,
-                         double min_ll, LogicalVector is_ok, bool posdrift = true) {
-  const int n_rows = rts.size();
-  const int n_out  = sum(idx);
-  NumericVector out(n_out);
-  int j = 0;
-  for (int i = 0; i < n_rows; ++i) {
-    if (!idx[i]) continue;
-    if (NumericVector::is_na(pars(i, 0))) {
-      out[j++] = 0.0;
-    } else if ((rts[i] - pars(i, 4) > 0.0) && (is_ok[i] == TRUE)) {
-      out[j++] = dleakyba_norm(rts[i] - pars(i, 4),
-                               pars(i, 3), pars(i, 2) + pars(i, 3),
-                               pars(i, 0), pars(i, 1), pars(i, 5), posdrift);
-    } else {
-      out[j++] = min_ll;
-    }
-  }
-  return out;
-}
-
-NumericVector pleakyba_c(NumericVector rts, NumericMatrix pars, LogicalVector idx,
-                         double min_ll, LogicalVector is_ok, bool posdrift = true) {
-  const int n_rows = rts.size();
-  const int n_out  = sum(idx);
-  NumericVector out(n_out);
-  int j = 0;
-  for (int i = 0; i < n_rows; ++i) {
-    if (!idx[i]) continue;
-    if (NumericVector::is_na(pars(i, 0))) {
-      out[j++] = 0.0;
-    } else if ((rts[i] - pars(i, 4) > 0.0) && (is_ok[i] == TRUE)) {
-      out[j++] = pleakyba_norm(rts[i] - pars(i, 4),
-                               pars(i, 3), pars(i, 2) + pars(i, 3),
-                               pars(i, 0), pars(i, 1), pars(i, 5), posdrift);
-    } else {
-      out[j++] = min_ll;
-    }
-  }
-  return out;
-}
-
 #endif
 
