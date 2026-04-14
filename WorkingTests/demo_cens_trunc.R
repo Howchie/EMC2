@@ -20,7 +20,7 @@ Cfun <- function(d) as.numeric(d$S)==as.numeric(d$R)
 
 #### LBA ----
 run_lba_demo <- function(p_contaminant = 0, estimate_contaminant = FALSE,
-                         n_trials = 500, UC = NULL, UT=NULL, LC=NULL, LT=NULL,range=1,
+                         n_trials = 10000, UC = NULL, UT=NULL, LC=NULL, LT=NULL,range=1,
                          cores_for_chains = 3,layout=c(2,3),natural=TRUE,cores_per_chain = 3,
                          LCresponse = FALSE, UCresponse = FALSE,
                          LCdirection = TRUE, UCdirection = TRUE,
@@ -37,27 +37,28 @@ run_lba_demo <- function(p_contaminant = 0, estimate_contaminant = FALSE,
     matchfun = matchfun,
     model = LBA(posdrift=posdrift), 
     formula = c(
-      list(B ~ 1, v ~ 0+lM, A ~ 1, t0 ~ 1, sv ~ 0+lM),
+      list(B ~ 1, v ~ lM, A ~ 1, t0 ~ 1, sv ~ 1),
       if (estimate_contaminant) list(pContaminant ~ 1) else list()
     ),
-    constants = c(A = log(0.4))
+    constants = c(A = log(0.5))
   )
 
   # Set simulation parameters (on the transformed scale expected by p_types)
   p_vector <- sampled_pars(designLBA, doMap = FALSE)
   
   # Threshold / start-point / non-decision time
-  if ("B" %in% names(p_vector)) p_vector[["B"]] <- log(1.2)
-  if ("A" %in% names(p_vector)) p_vector[["A"]] <- log(.4)
-  if ("t0" %in% names(p_vector)) p_vector[["t0"]] <- log(0.15)
+  if ("B" %in% names(p_vector)) p_vector[["B"]] <- log(2)
+  if ("A" %in% names(p_vector)) p_vector[["A"]] <- log(.5)
+  if ("t0" %in% names(p_vector)) p_vector[["t0"]] <- log(0.2)
   
   # Drift means for mismatch vs match accumulators
-  if ("v_lMFALSE" %in% names(p_vector)) p_vector[["v_lMFALSE"]] <- .4
-  if ("v_lMTRUE" %in% names(p_vector)) p_vector[["v_lMTRUE"]] <- 1.2
+  if ("v" %in% names(p_vector)) p_vector[["v"]] <- 1
+  if ("v_lMTRUE" %in% names(p_vector)) p_vector[["v_lMTRUE"]] <- 1.25
   
   # Sv for match accumulator
-  if ("sv_lMFALSE" %in% names(p_vector)) p_vector[["sv_lMFALSE"]] <- log(1.2)
-  if ("sv_lMTRUE" %in% names(p_vector)) p_vector[["sv_lMTRUE"]] <- log(1)
+  if ("sv" %in% names(p_vector)) p_vector[["sv"]] <- log(1)
+  if ("sv_lMFALSE" %in% names(p_vector)) p_vector[["sv_lMFALSE"]] <- log(1)
+  if ("sv_lMTRUE" %in% names(p_vector)) p_vector[["sv_lMTRUE"]] <- log(0.8)
 
   # Contaminant omissions: pContaminant is on probit scale (transformed via pnorm)
   if (estimate_contaminant) {
@@ -99,7 +100,7 @@ run_lba_demo <- function(p_contaminant = 0, estimate_contaminant = FALSE,
   
   if(!posdrift){
     cat("\nExpected Intrinsic Omissions:\n")
-    print(pnorm(0,p_vector["v_lMFALSE"],exp(p_vector["sv_lMFALSE"]))*pnorm(0,p_vector["v_lMTRUE"],exp(p_vector["sv_lMTRUE"])))
+    print(pnorm(0,p_vector["v"],exp(p_vector["sv"]))*pnorm(0,p_vector["v_lMTRUE"],exp(p_vector["sv"])))
   }
 
   cat("\n")
@@ -133,7 +134,7 @@ run_lba_demo <- function(p_contaminant = 0, estimate_contaminant = FALSE,
 }
 
 RNGkind("L'Ecuyer-CMRG")
-set.seed(123)
+set.seed(42)
 
 res_no_cens_trunc <- run_lba_demo(
   p_contaminant = 0,
@@ -143,7 +144,9 @@ res_no_cens_trunc <- run_lba_demo(
 )
 
 if (RUN_FITS) print(recovery(res_no_cens_trunc$emc, true_pars = res_no_cens_trunc$true_pars))
-
+if (RUN_FITS) plot_cdf(res_no_cens_trunc$dat, post_predict=res_no_cens_trunc$pp, functions=list(Correct=Cfun), defective_factor = "Correct", factors="S")
+if (RUN_FITS) plot_stat(res_no_cens_trunc$dat, post_predict=res_no_cens_trunc$pp, factors="S", stat_name = "MeanCorrect",
+                        stat_fun = function(d){mean(d$Correct, na.rm = TRUE)}, functions=list(Correct=Cfun))
 # Test 2: Censored RTs ----
 
 # upper
@@ -155,7 +158,9 @@ res_uc <- run_lba_demo(
   label = "uc"
 )
 if (RUN_FITS) print(recovery(res_uc$emc, true_pars = res_uc$true_pars))
-
+if (RUN_FITS) plot_cdf(res_uc$dat, post_predict=res_uc$pp, functions=list(Correct=Cfun), defective_factor = "Correct", factors="S")
+if (RUN_FITS) plot_stat(res_uc$dat, post_predict=res_uc$pp, factors="S", stat_name = "MeanCorrect",
+                        stat_fun = function(d){mean(d$Correct, na.rm = TRUE)}, functions=list(Correct=Cfun))
 # lower
 res_lc <- run_lba_demo(
   p_contaminant = 0,
@@ -205,6 +210,10 @@ res_ut <- run_lba_demo(
   label = "ut"
 )
 if (RUN_FITS) print(recovery(res_ut$emc, true_pars = res_ut$true_pars))
+if (RUN_FITS) plot_cdf(res_ut$data, post_predict = res_ut$pp, functions = list(Correct = Cfun), defective_factor = "Correct", factors = "S")
+if (RUN_FITS) plot_density(res_ut$data, post_predict = res_ut$pp, functions = list(Correct = Cfun), defective_factor = "Correct", factors = "S")
+if (RUN_FITS) plot_stat(res_ut$data, post_predict = res_ut$pp, factors = "S", stat_name = "MeanCorrect_Finite",
+                        stat_fun = function(d) mean(d$Correct,na.rm=TRUE), functions = list(Correct = Cfun))
 
 res_lt <- run_lba_demo(
   p_contaminant = 0,
@@ -238,7 +247,12 @@ res_cens_trunc <- run_lba_demo(
   label = "cens_trunc"
 )
 if (RUN_FITS) print(recovery(res_cens_trunc$emc, true_pars = res_cens_trunc$true_pars))
-
+if (RUN_FITS) plot_cdf(res_cens_trunc$data, post_predict = res_cens_trunc$pp, functions = list(Correct = Cfun), defective_factor = "Correct", factors = "S")
+if (RUN_FITS) plot_density(res_cens_trunc$data, post_predict = res_cens_trunc$pp, functions = list(Correct = Cfun), defective_factor = "Correct", factors = "S")
+if (RUN_FITS) plot_stat(res_cens_trunc$data, post_predict = res_cens_trunc$pp, factors = "S", stat_name = "MeanCorrect_Finite",
+                        stat_fun = function(d) mean(d$Correct,na.rm=TRUE), functions = list(Correct = Cfun))
+if (RUN_FITS) plot_stat(res_cens_trunc$data, post_predict = res_cens_trunc$pp, factors = "S", stat_name = "MeanOmissions",
+                        stat_fun = function(d) mean(is.na(d$R)), functions = list(Correct = Cfun))
 
 # Test 5: Contaminant omissions  ------------
 

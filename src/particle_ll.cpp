@@ -2332,9 +2332,12 @@ double c_log_likelihood_race(
         : static_cast<int>(finite_rt_unique_trial_indices.size());
 
     if (may_need_ct && logS_at_t != nullptr) {
-      // Pass 1: scan for truncated trials; check uniformity of LT/UT.
-      double uniform_UT = R_PosInf;
-      bool all_LT_zero = true;
+      // Pass 1: scan for truncated trials; check uniformity of LT and UT separately.
+      // We can batch the normaliser whenever all truncated finite-RT trials share the
+      // same LT value AND the same UT value (each may be 0/Inf trivially).
+      double uniform_LT = -1.0;   // -1 = not yet observed (LT >= 0 always)
+      double uniform_UT = -1.0;   // -1 = not yet observed
+      bool uniform_LT_ok = true;
       bool uniform_UT_ok = true;
       bool any_trunc = false;
       std::vector<int> trunc_mask(static_cast<size_t>(n_unique_trials), 0);
@@ -2348,15 +2351,28 @@ double c_log_likelihood_race(
         if (LTj != 0.0 || UTj != R_PosInf) {
           trunc_mask[static_cast<size_t>(j)] = 1;
           any_trunc = true;
-          if (LTj != 0.0) all_LT_zero = false;
-          if (uniform_UT == R_PosInf) uniform_UT = UTj;
+          if (uniform_LT < 0.0) uniform_LT = LTj;
+          else if (LTj != uniform_LT) uniform_LT_ok = false;
+          if (uniform_UT < 0.0) uniform_UT = UTj;
           else if (UTj != uniform_UT) uniform_UT_ok = false;
         }
       }
+      // Resolve sentinels: if no truncated trial was seen, treat as trivial.
+      if (uniform_LT < 0.0) uniform_LT = 0.0;
+      if (uniform_UT < 0.0) uniform_UT = R_PosInf;
 
-      if (any_trunc && all_LT_zero && uniform_UT_ok && uniform_UT != R_PosInf) {
-        // Pass 2: batch-compute log S(UT) for all truncated trials at once.
-        // logS_LT = 0 (LT==0), so logZ = log(1 - exp(logS_UT)) = log_diff_exp(0, logS_UT).
+      if (any_trunc && uniform_LT_ok && uniform_UT_ok && !has_RACE_col) {
+        // Pass 2: batch-compute logZ = log_diff_exp(logS(LT), logS(UT)) for all
+        // truncated trials simultaneously.
+        // RACE models are excluded: lba/rdm/lnr_logS_at_t always loops over the
+        // global n_lR, but RACE trials may have fewer active accumulators (inactive
+        // rows are NA-masked).  The per-trial scalar path handles n_lR_j correctly.
+        //
+        // Trivial endpoints:
+        //   LT == 0   → logS(LT) = 0  (S(0)=1 for any proper distribution)
+        //   UT == Inf → logS(UT) = -Inf (S(∞)=0 for any proper distribution)
+        // For non-trivial endpoints we call logS_at_t in batch.
+        //
         // Reuse shared isok buffer when available (already filled above); else build locally.
         std::vector<int> isok_all_int_local;
         const int* isok_all_ptr_trunc;
@@ -2369,28 +2385,47 @@ double c_log_likelihood_race(
           isok_all_ptr_trunc = isok_all_int_local.data();
         }
 
-        std::vector<double> logS_UT_vec(static_cast<size_t>(n_unique_trials), 0.0);
-        logS_at_t(uniform_UT,
-                  pars.begin(), n_trials, n_lR, n_par,
-                  trunc_mask.data(), n_unique_trials,
-                  isok_all_ptr_trunc,
-                  model_context_for_funcs,
-                  logS_UT_vec.data());
+        // logS_LT: 0 when LT==0 (trivial), otherwise computed in batch.
+        std::vector<double> logS_LT_vec(static_cast<size_t>(n_unique_trials), 0.0);
+        if (uniform_LT != 0.0) {
+          logS_at_t(uniform_LT,
+                    pars.begin(), n_trials, n_lR, n_par,
+                    trunc_mask.data(), n_unique_trials,
+                    isok_all_ptr_trunc,
+                    model_context_for_funcs,
+                    logS_LT_vec.data());
+        }
 
+        // logS_UT: -Inf when UT==Inf (trivial for proper distributions), else computed.
+        std::vector<double> logS_UT_vec(static_cast<size_t>(n_unique_trials), R_NegInf);
+        if (uniform_UT != R_PosInf) {
+          logS_at_t(uniform_UT,
+                    pars.begin(), n_trials, n_lR, n_par,
+                    trunc_mask.data(), n_unique_trials,
+                    isok_all_ptr_trunc,
+                    model_context_for_funcs,
+                    logS_UT_vec.data());
+        }
+
+        // logZ = log(S(LT) - S(UT)) = log_diff_exp(logS_LT, logS_UT)
+        // log_diff_exp handles R_NegInf inputs correctly:
+        //   log_diff_exp(0, -Inf)  = 0   (LT=0,  UT=Inf → P=1)
+        //   log_diff_exp(x, -Inf)  = x   (UT=Inf  → P=S(LT))
+        //   log_diff_exp(0, y)     = log(1-exp(y)) (LT=0 → original UT-only case)
+        // NaN from logS_at_t (bad params) propagates through log_diff_exp as NA_REAL,
+        // which is caught by std::isnan and sent to the per-trial fallback.
         logZ_batch.assign(static_cast<size_t>(n_unique_trials), 0.0);
+        static const double kLogProbEps = std::log(std::numeric_limits<double>::epsilon());
         for (int j = 0; j < n_unique_trials; ++j) {
           if (!trunc_mask[static_cast<size_t>(j)]) continue;
+          const double logS_LT_j = logS_LT_vec[static_cast<size_t>(j)];
           const double logS_UT_j = logS_UT_vec[static_cast<size_t>(j)];
-          if (!R_FINITE(logS_UT_j)) { logZ_batch[static_cast<size_t>(j)] = R_NegInf; continue; }
-          // logZ = log(S(LT=0) - S(UT)) = log(1 - S(UT)) = log_diff_exp(0, logS_UT)
-          const double logP = log_diff_exp(0.0, logS_UT_j);
-          // Use the same epsilon threshold as the scalar fallback path.
-          static const double kLogProbEps = std::log(std::numeric_limits<double>::epsilon());
+          const double logP = log_diff_exp(logS_LT_j, logS_UT_j);
           if (R_FINITE(logP) && logP > kLogProbEps) {
             logZ_batch[static_cast<size_t>(j)] = logP;
           } else {
-            // Catastrophic cancellation: fall back to per-trial GSL path below.
-            // Signal with NaN so the per-trial check recomputes it.
+            // NaN (bad params), catastrophic cancellation, or P≈0:
+            // fall back to the per-trial scalar/GSL path.
             logZ_batch[static_cast<size_t>(j)] = std::numeric_limits<double>::quiet_NaN();
           }
         }

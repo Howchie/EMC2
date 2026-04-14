@@ -12,7 +12,7 @@ lfun <- function(i, x, p_vector, pname, dadm, use_c) {
     }
     constants <- attr(dadm,"constants")
     if (is.null(constants)) constants <- NA
-    EMC2:::calc_ll(p_matrix, dadm, constants,designs,model$c_name,
+    EMC2:::calc_ll_oo(p_matrix, dadm, constants,designs,model$c_name,
                    model$bound,model$transform,model$pre_transform,p_types,log(1e-10),model$trend)
   } else {
     EMC2:::calc_ll_R(p_vector, attr(dadm, "model")(), dadm)
