@@ -1186,28 +1186,82 @@ log_likelihood_race_ss <- function(pars,dadm,model,min_ll=log(1e-10))
     # Go response names
     GoR <- as.character(dadm[1:n_acc,"lR"][dadm[1:n_acc,"lI"]==2])
     
+    # UC column: Inf means no deadline (default if column absent)
+    UC_ss <- if (!is.null(dadm$UC)) dadm$UC else rep(Inf, nrow(dadm))
+
     # No response
     ispNR <- is.na(dadm$R)
-    if ( any(ispNR) ) {  # Note by definition no ST present
-      
-      # Go failures
-      ispgoNR <- ispNR & !ispStop            # No response and no stop signal
-      tgoNR <- c(1:sum(isp1))[ispgoNR[isp1]] # trial number
-      if (any(ispgoNR))
-        allLL[allok][tgoNR] <- log(gf[tgoNR])
-      
-      # Stop trial with no response and no ST accumulator
-      ispstopNR <- ispNR & ispStop & (n_accST == 0)
-      if ( any(ispstopNR) ) { # Stop trial probability
-        # Non-response and stop trial & go/stop accumulator parameters
-        pStop <- pmin(1,pmax(0,  # protection to keep in 0-1
-                             model$sfun(
-                               pars[ispNR & ispStop & ispGOacc,,drop=FALSE],n_acc=n_accG)
+    if ( any(ispNR) ) {
+
+      # ── NR go trials (no stop signal) ──────────────────────────────────────
+      # No deadline:   log(gf)
+      # With deadline: log(gf + (1-gf)*S_go(UC))
+      # Unified: S_go(Inf)=0 so the deadline formula reduces to log(gf) ✓
+      ispgoNR <- ispNR & !ispStop
+      if (any(ispgoNR)) {
+        tgoNR <- trials[ispgoNR[isp1]]
+        uc_go <- UC_ss[ispgoNR & ispGOacc]   # n_accG values per trial (same UC each)
+        log_S_go_UC <- colSums(matrix(
+          log(1 - model$pfunG(rt=uc_go, pars=pars[ispgoNR & ispGOacc,,drop=FALSE])),
+          nrow=n_accG))
+        allLL[allok][tgoNR] <- log(gf[tgoNR] + (1-gf[tgoNR]) * exp(log_S_go_UC))
+      }
+
+      # ── NR stop trials ─────────────────────────────────────────────────────
+      ispstopNR_all <- ispNR & ispStop
+      if (any(ispstopNR_all)) {
+        tstopNR <- trials[ispstopNR_all[isp1]]
+
+        # Per-trial UC and upper integration bound for pStop integral
+        uc_stop <- UC_ss[ispstopNR_all & isp1]
+        ssd_stop <- pars[ispstopNR_all & isp1, "SSD"]
+        upper_sfun <- pmax(0, uc_stop - ssd_stop)  # Inf when no deadline
+
+        # S_go(UC): product of go acc survivors at UC  [0 when UC=Inf] ✓
+        uc_go_stop <- UC_ss[ispstopNR_all & ispGOacc]
+        log_S_go_UC <- colSums(matrix(
+          log(1 - model$pfunG(rt=uc_go_stop, pars=pars[ispstopNR_all & ispGOacc,,drop=FALSE])),
+          nrow=n_accG))
+        S_go_UC <- exp(log_S_go_UC)
+
+        # S_stop(UC-SSD): pfunS subtracts SSD internally  [0 when UC=Inf] ✓
+        S_stop_UC <- 1 - model$pfunS(
+          rt=uc_stop, pars=pars[ispstopNR_all & isp1,,drop=FALSE])
+
+        # pStop(UC): stop-success integral up to UC-SSD  [full integral when UC=Inf] ✓
+        pStop <- pmin(1, pmax(0,
+          model$sfun(pars[ispstopNR_all & ispGOacc,,drop=FALSE], n_accG, upper=upper_sfun)
         ))
-        # Fill in stop-trial non-response probabilities, either 1) go failure
-        # 2) not go failure and not trigger failure and stop wins
-        tstopNR <- trials[ispstopNR[isp1]]  # trial number
-        allLL[allok][tstopNR] <- log(gf[tstopNR] + (1-gf[tstopNR])*(1-tf[tstopNR])*pStop)
+
+        if (n_accST == 0) {
+          # No ST accumulators:
+          #   gf + (1-gf)*(tf*S_go(UC) + (1-tf)*(pStop(UC) + S_go(UC)*S_stop(UC-SSD)))
+          # Reduces to gf + (1-gf)*(1-tf)*pStop when UC=Inf ✓
+          allLL[allok][tstopNR] <- log(
+            gf[tstopNR] + (1-gf[tstopNR]) * (
+              tf[tstopNR] * S_go_UC +
+              (1-tf[tstopNR]) * (pStop + S_go_UC * S_stop_UC)
+            )
+          )
+        } else {
+          # With ST accumulators:
+          # No deadline: gf*tf (both go-failure and trigger-failure required)
+          # With deadline: tf*(gf + (1-gf)*S_go(UC)) +
+          #                (1-tf)*S_st(UC-SSD)*(gf + (1-gf)*(pStop(UC) + S_go(UC)*S_stop(UC-SSD)))
+          # Unified: S_st(Inf)=0 so deadline formula reduces to tf*gf when UC=Inf ✓
+          uc_st_vals <- pmax(0, UC_ss[ispstopNR_all & !ispGOacc] -
+                               pars[ispstopNR_all & !ispGOacc, "SSD"])
+          log_S_st_UC <- colSums(matrix(
+            log(1 - model$pfunG(rt=uc_st_vals, pars=pars[ispstopNR_all & !ispGOacc,,drop=FALSE])),
+            nrow=n_accST))
+          S_st_UC <- exp(log_S_st_UC)
+
+          core <- gf[tstopNR] + (1-gf[tstopNR]) * (pStop + S_go_UC * S_stop_UC)
+          allLL[allok][tstopNR] <- log(
+            tf[tstopNR] * (gf[tstopNR] + (1-gf[tstopNR]) * S_go_UC) +
+            (1-tf[tstopNR]) * S_st_UC * core
+          )
+        }
       }
     }
     

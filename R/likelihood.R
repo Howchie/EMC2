@@ -75,6 +75,10 @@ log_likelihood_race_missing <- function(pars,dadm,model,min_ll=log(1e-10))
     
     is_gng <- !is.null(dadm$lR) && ("nogo" %in% levels(dadm$lR))
     nogo_idx <- if (is_gng) match("nogo", levels(dadm$lR)) else NA_integer_
+    # Defective distribution: total response probability < 1 (e.g. LBAIO with
+    # posdrift=FALSE). The intrinsic-omission mass at T=Inf must be added to the
+    # no-response likelihood. Currently only LBAIO triggers this path.
+    is_defective <- isTRUE(!is.null(model$c_name) && grepl("IO", model$c_name, fixed=TRUE))
 
     lds <- numeric(dim(dadm)[1]) # log pdf (winner) or survivor (losers)
     lds[dadm$winner] <- -Inf # Cases where winner is due only to contamination
@@ -170,24 +174,44 @@ log_likelihood_race_missing <- function(pars,dadm,model,min_ll=log(1e-10))
       for (i in 1:dim(mpars)[2]) {
         if (dim(mpars)[[1]]==1) pi <- t(as.matrix(mpars[,i,])) else
           pi <- mpars[,i,]
-        pc <- my_integrate(f,lower=LTs[i],upper=LCs[i],p=pi,
-                           dfun=model$dfun,pfun=model$pfun)
-        if (inherits(pc, "try-error") || suppressWarnings(is.nan(pc$value)))
-          p <- NA else p <- pmax(0,pmin(pc$value,1))
-        if (!is.na(p)) {
-          if (p != 0 && !(LTs[i]==0 & UTs[i]==Inf))
-            cf <- pr_pt(LTs[i],UTs[i],mpars[,i,],dadm,model) else cf <- 1
-            if (!is.na(cf)) p <- p*cf
-        }
-        if (!is.na(p) & n_acc>1) for (j in 2:n_acc) {
-          pc <- my_integrate(f,lower=LTs[i],upper=LCs[i],p=mpars[,i,][c(j,c(1:n_acc)[-j]),],
-                             dfun=model$dfun,pfun=model$pfun)
-          if (inherits(pc, "try-error") || suppressWarnings(is.nan(pc$value))) {
-            p <- NA; break
+        if (is_gng && !is.na(nogo_idx)) {
+          # rt==-Inf codes an observed (fast) response: the nogo accumulator
+          # cannot have won (nogo winning means inhibition, not a response).
+          p <- 0
+          for (j in 1:n_acc) {
+            if (j == nogo_idx) next
+            pj_pi <- mpars[,i,][c(j, c(1:n_acc)[-j]),]
+            pc <- my_integrate(f, lower=LTs[i], upper=LCs[i], p=pj_pi,
+                               dfun=model$dfun, pfun=model$pfun)
+            if (inherits(pc, "try-error") || suppressWarnings(is.nan(pc$value))) {
+              p <- NA; break
+            }
+            p_j <- pmax(0, pmin(pc$value, 1))
+            cf <- if (p_j != 0 && !(LTs[i]==0 & UTs[i]==Inf))
+              pr_pt(LTs[i], UTs[i], mpars[,i,], dadm, model) else 1
+            if (is.na(cf)) { p <- NA; break }
+            p <- p + p_j * cf
           }
-          if (pc$value != 0 & !(LTs[i]==0 & UTs[i]==Inf))
-            cf <- pr_pt(LTs[i],UTs[i],mpars[,i,][c(j,c(1:n_acc)[-j]),],dadm,model) else cf <- 1
-            if (!is.na(cf)) p <- p + pc$value*cf
+        } else {
+          pc <- my_integrate(f,lower=LTs[i],upper=LCs[i],p=pi,
+                             dfun=model$dfun,pfun=model$pfun)
+          if (inherits(pc, "try-error") || suppressWarnings(is.nan(pc$value)))
+            p <- NA else p <- pmax(0,pmin(pc$value,1))
+          if (!is.na(p)) {
+            if (p != 0 && !(LTs[i]==0 & UTs[i]==Inf))
+              cf <- pr_pt(LTs[i],UTs[i],mpars[,i,],dadm,model) else cf <- 1
+              if (!is.na(cf)) p <- p*cf
+          }
+          if (!is.na(p) & n_acc>1) for (j in 2:n_acc) {
+            pc <- my_integrate(f,lower=LTs[i],upper=LCs[i],p=mpars[,i,][c(j,c(1:n_acc)[-j]),],
+                               dfun=model$dfun,pfun=model$pfun)
+            if (inherits(pc, "try-error") || suppressWarnings(is.nan(pc$value))) {
+              p <- NA; break
+            }
+            if (pc$value != 0 & !(LTs[i]==0 & UTs[i]==Inf))
+              cf <- pr_pt(LTs[i],UTs[i],mpars[,i,][c(j,c(1:n_acc)[-j]),],dadm,model) else cf <- 1
+              if (!is.na(cf)) p <- p + pc$value*cf
+          }
         }
         lp <- log(p)
         if (!is.nan(lp) & !is.na(lp)) lds[tofixfast][i] <- lp else lds[tofixfast][i] <- -Inf
@@ -239,6 +263,18 @@ log_likelihood_race_missing <- function(pars,dadm,model,min_ll=log(1e-10))
             if (pc$value != 0 & !(LTs[i]==0 & UTs[i]==Inf))
               cf <- pr_pt(LTs[i],UTs[i],mpars[,i,][c(j,c(1:n_acc)[-j]),],dadm,model) else cf <- 1
             if (!is.na(cf)) p <- p + pc$value*cf
+          }
+          # Defective distributions (e.g. LBAIO, posdrift=FALSE): add probability
+          # mass for intrinsic omissions (all accumulators have negative drift, T=Inf).
+          # pr_pt already includes this mass in its denominator via 1-pfun(LT) for
+          # each accumulator; we must add it to the numerator here.
+          if (is_defective && !is.na(p)) {
+            p_IO <- prod(pnorm(0, pi[, "v"], pi[, "sv"]))
+            if (is.finite(p_IO) && p_IO > 0) {
+              cf_d <- if (!(LTs[i]==0 & UTs[i]==Inf))
+                pr_pt(LTs[i], UTs[i], mpars[,i,], dadm, model) else 1
+              if (!is.na(cf_d)) p <- p + p_IO * cf_d
+            }
           }
         }
         lp <- log(p)
