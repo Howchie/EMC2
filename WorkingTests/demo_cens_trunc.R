@@ -200,13 +200,24 @@ res_lbaio <- run_lba_demo(
 )
 if (RUN_FITS) print(recovery(res_lbaio$emc, true_pars = res_lbaio$true_pars))
 
+# LBAIO with moderate lower censoring (to test the "LC means finite response" logic)
+res_lbaio_lc <- run_lba_demo(
+  p_contaminant = 0,
+  estimate_contaminant = FALSE,
+  n_trials = 10000,
+  UC = 3,
+  LC = 0.8,
+  posdrift=FALSE,
+  label = "lbaio-uc"
+)
+if (RUN_FITS) print(recovery(res_lbaio_lc$emc, true_pars = res_lbaio_lc$true_pars))
 # Test 3: Truncated RTs ------------
 
 res_ut <- run_lba_demo(
   p_contaminant = 0,
   estimate_contaminant = FALSE,
   n_trials = 10000,
-  UT = 1.8,
+  UT = 1.5,
   label = "ut"
 )
 if (RUN_FITS) print(recovery(res_ut$emc, true_pars = res_ut$true_pars))
@@ -255,7 +266,7 @@ if (RUN_FITS) plot_stat(res_cens_trunc$data, post_predict = res_cens_trunc$pp, f
                         stat_fun = function(d) mean(is.na(d$R)), functions = list(Correct = Cfun))
 
 # Test 5: Contaminant omissions  ------------
-
+# test with no UC< this means rt=Inf is by definition a contaminant and gives a clean test of the likelihood
 res_contam <- run_lba_demo(
   p_contaminant = 0.15,
   estimate_contaminant = TRUE,
@@ -264,6 +275,7 @@ res_contam <- run_lba_demo(
 )
 if (RUN_FITS) print(recovery(res_contam$emc, true_pars = res_contam$true_pars))
 
+# test with finite uc (omissions now come from both censoring AND contamination and the model has to tell them apart)
 res_contam_lbaio <- run_lba_demo(
   p_contaminant = .15,
   estimate_contaminant = TRUE,
