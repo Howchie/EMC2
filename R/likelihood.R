@@ -40,6 +40,31 @@ pLU <- function(LT,LC,UC,UT,ps,dadm,model)
   pmax(0,pmin(pL$value,1))+pmax(0,pmin(pU$value,1))
 }
 
+log_surv_race <- function(t, ps, model, is_defective = FALSE) {
+  # log S(t) for a race model, S(t) = prod_k (1 - F_k(t))
+  if (is.infinite(t)) {
+    if (is_defective) {
+      return(sum(pnorm(0, ps[, "v"], ps[, "sv"], log.p = TRUE)))
+    }
+    return(-Inf)
+  }
+  p <- model$pfun(rep(t, nrow(ps)), ps)
+  if (any(is.na(p)) || any(!is.finite(p))) return(NA_real_)
+  p <- pmax(0, pmin(p, 1))
+  if (any(p >= 1)) return(-Inf)
+  sum(log1p(-p))
+}
+
+log_diff_exp_R <- function(log_hi, log_lo) {
+  # Stable log(exp(log_hi) - exp(log_lo)) for log_hi >= log_lo.
+  if (is.na(log_hi) || is.na(log_lo)) return(NA_real_)
+  if (log_hi == -Inf) return(-Inf)
+  if (log_lo == -Inf) return(log_hi)
+  if (log_lo > log_hi) return(NA_real_)
+  if (log_lo == log_hi) return(-Inf)
+  log_hi + log1p(-exp(log_lo - log_hi))
+}
+
 f <- function(t,p,dfun,pfun) {
   # Called by integrate to get race density for vector of times t given
   # matrix of parameters where first row is the winner.
@@ -193,24 +218,14 @@ log_likelihood_race_missing <- function(pars,dadm,model,min_ll=log(1e-10))
             p <- p + p_j * cf
           }
         } else {
-          pc <- my_integrate(f,lower=LTs[i],upper=LCs[i],p=pi,
-                             dfun=model$dfun,pfun=model$pfun)
-          if (inherits(pc, "try-error") || suppressWarnings(is.nan(pc$value)))
-            p <- NA else p <- pmax(0,pmin(pc$value,1))
-          if (!is.na(p)) {
-            if (p != 0 && !(LTs[i]==0 & UTs[i]==Inf))
+          logP <- log_diff_exp_R(log_surv_race(LTs[i], mpars[,i,], model, is_defective),
+                                 log_surv_race(LCs[i], mpars[,i,], model, is_defective))
+          if (is.na(logP)) {
+            p <- NA
+          } else {
+            if (!(LTs[i]==0 & UTs[i]==Inf))
               cf <- pr_pt(LTs[i],UTs[i],mpars[,i,],dadm,model) else cf <- 1
-              if (!is.na(cf)) p <- p*cf
-          }
-          if (!is.na(p) & n_acc>1) for (j in 2:n_acc) {
-            pc <- my_integrate(f,lower=LTs[i],upper=LCs[i],p=mpars[,i,][c(j,c(1:n_acc)[-j]),],
-                               dfun=model$dfun,pfun=model$pfun)
-            if (inherits(pc, "try-error") || suppressWarnings(is.nan(pc$value))) {
-              p <- NA; break
-            }
-            if (pc$value != 0 & !(LTs[i]==0 & UTs[i]==Inf))
-              cf <- pr_pt(LTs[i],UTs[i],mpars[,i,][c(j,c(1:n_acc)[-j]),],dadm,model) else cf <- 1
-              if (!is.na(cf)) p <- p + pc$value*cf
+            if (!is.na(cf)) p <- exp(logP + log(cf)) else p <- NA
           }
         }
         lp <- log(p)
@@ -245,24 +260,14 @@ log_likelihood_race_missing <- function(pars,dadm,model,min_ll=log(1e-10))
             if (!is.na(cf)) p <- p*cf
           }
         } else {
-          pc <- my_integrate(f,lower=UCs[i],upper=UTs[i],p=pi,
-                             dfun=model$dfun,pfun=model$pfun)
-          if (inherits(pc, "try-error") || suppressWarnings(is.nan(pc$value)))
-            p <- NA else p <- pmax(0,pmin(pc$value,1))
-          if (!is.na(p)) {
-            if (p != 0 && !(LTs[i]==0 & UTs[i]==Inf))
+          logP <- log_diff_exp_R(log_surv_race(UCs[i], mpars[,i,], model, is_defective),
+                                 log_surv_race(UTs[i], mpars[,i,], model, is_defective))
+          if (is.na(logP)) {
+            p <- NA
+          } else {
+            if (!(LTs[i]==0 & UTs[i]==Inf))
               cf <- pr_pt(LTs[i],UTs[i],mpars[,i,],dadm,model) else cf <- 1
-            if (!is.na(cf)) p <- p*cf
-          }
-          if (!is.na(p) & n_acc>1) for (j in 2:n_acc) {
-            pc <- my_integrate(f,lower=UCs[i],upper=UTs[i],p=mpars[,i,][c(j,c(1:n_acc)[-j]),],
-                               dfun=model$dfun,pfun=model$pfun)
-            if (inherits(pc, "try-error") || suppressWarnings(is.nan(pc$value))) {
-              p <- NA; break
-            }
-            if (pc$value != 0 & !(LTs[i]==0 & UTs[i]==Inf))
-              cf <- pr_pt(LTs[i],UTs[i],mpars[,i,][c(j,c(1:n_acc)[-j]),],dadm,model) else cf <- 1
-            if (!is.na(cf)) p <- p + pc$value*cf
+            if (!is.na(cf)) p <- exp(logP + log(cf)) else p <- NA
           }
           # Defective distributions (e.g. LBAIO, posdrift=FALSE): add probability
           # mass for intrinsic omissions (all accumulators have negative drift, T=Inf).
