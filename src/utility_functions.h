@@ -364,7 +364,7 @@ LogicalVector lr_all(LogicalVector ok, int n_side)
     }
 
     // replicate result to each entry of the column
-    std::fill(o + i, o + i + n_side, state);
+    for (int j = 0; j < n_side; ++j) o[i + j] = state;
   }
   return out;
 }

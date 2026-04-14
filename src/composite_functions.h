@@ -24,7 +24,8 @@
 inline double log1m(double x) {
   if (ISNAN(x)) return NA_REAL;
   if (x >= 1.0) return R_NegInf;  // log(1 - x) = log(0 or negative)
-  if (x == R_NegInf) return 0.0;  // log(1 - (-Inf)) = log(Inf) = Inf, but we return 0 for log(1)
+  // Defensive clamp for invalid negative-infinite inputs: treat as 0 probability.
+  if (x == R_NegInf) return 0.0;
 
   return std::log1p(-x);
 }

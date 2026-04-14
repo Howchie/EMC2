@@ -34,6 +34,10 @@ NumericMatrix get_pars_c_wrapper_oo_core(NumericMatrix particle_matrix,
                                          bool return_all_pars,
                                          IntegerVector kernel_output_codes);
 
+NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericVector constants,
+                         List designs, String type, List bounds, List transforms, List pretransforms,
+                         CharacterVector p_types, double min_ll, Rcpp::Nullable<Rcpp::List> trend);
+
 // [[Rcpp::export]]
 Rcpp::NumericMatrix do_transform(Rcpp::NumericMatrix pars, Rcpp::List transform) {
   // Build the specs for these parameters
@@ -172,65 +176,6 @@ NumericMatrix get_pars_matrix(NumericVector p_vector, NumericVector constants, c
   }
   // ok is calculated afterwards and Ttransform applied in the function
   return(pars);
-}
-
-static NumericMatrix get_pars_matrix_oo_fast(ParamTable& param_table,
-                                             const Rcpp::List& designs,
-                                             TrendRuntime* trend_runtime,
-                                             const std::vector<TransformSpec>& full_specs,
-                                             const Rcpp::CharacterVector& keep_names) {
-  if (trend_runtime) trend_runtime->reset_all_kernels();
-
-  const int n_designs = designs.size();
-  LogicalVector map_next(n_designs, false);
-  std::unordered_set<std::string> transform_next;
-  std::unordered_set<std::string> empty_set;
-
-  const auto& premap_set = trend_runtime ? trend_runtime->premap_trend_params() : empty_set;
-  const auto& pretransform_set = trend_runtime ? trend_runtime->pretransform_trend_params() : empty_set;
-
-  if (trend_runtime && trend_runtime->has_premap()) {
-    map_next = trend_runtime->premap_design_mask(designs);
-    param_table.map_from_designs(designs, map_next);
-
-    const auto& specs_premap = trend_runtime->premap_specs();
-    if (!specs_premap.empty()) {
-      c_do_transform_pt(param_table, specs_premap);
-    }
-
-    for (std::size_t i = 0; i < trend_runtime->premap_ops.size(); ++i) {
-      trend_runtime->apply_base_for_op(trend_runtime->premap_ops[i], param_table);
-    }
-  }
-
-  for (int i = 0; i < n_designs; ++i) {
-    bool is_premap = (trend_runtime && trend_runtime->has_premap()) ? map_next[i] : false;
-    map_next[i] = !is_premap;
-  }
-  param_table.map_from_designs(designs, map_next);
-
-  if (trend_runtime && trend_runtime->has_pretransform()) {
-    const auto& specs_pretransform = trend_runtime->pretransform_specs();
-    if (!specs_pretransform.empty()) {
-      c_do_transform_pt(param_table, specs_pretransform);
-    }
-
-    for (std::size_t i = 0; i < trend_runtime->pretransform_ops.size(); ++i) {
-      trend_runtime->apply_base_for_op(trend_runtime->pretransform_ops[i], param_table);
-    }
-  }
-
-  transform_next = param_names_excluding(param_table, { &premap_set, &pretransform_set });
-  auto postmap_specs = filter_specs_by_param_set(param_table, full_specs, transform_next);
-  c_do_transform_pt(param_table, postmap_specs);
-
-  if (trend_runtime && trend_runtime->has_posttransform()) {
-    for (std::size_t i = 0; i < trend_runtime->posttransform_ops.size(); ++i) {
-      trend_runtime->apply_base_for_op(trend_runtime->posttransform_ops[i], param_table);
-    }
-  }
-
-  return param_table.materialize_by_param_names(keep_names);
 }
 
 static void update_pt_only(ParamTable& param_table,
@@ -482,9 +427,9 @@ double c_log_likelihood_ss(
   NumericVector unique_lR = unique(lR);
   const int n_acc = unique_lR.length();
   
+  NumericVector tt(n_acc);
   auto log_surv_mask = [&](double t, const NumericMatrix& Pcur,
                            const LogicalVector& mask) -> double {
-                             NumericVector tt(n_acc);
                              tt.fill(t);
                              NumericVector ls = go_lccdf_ptr(tt, Pcur, mask, min_ll);
                              double out = 0.0;
@@ -817,16 +762,24 @@ double c_log_likelihood_DDM_pt(const double* pars_cm,
   // Pre-calculate truncation normalizers (logZ) for all trials
   std::vector<double> logZ(static_cast<size_t>(n_trials), 0.0);
   if (!gng) {
+    // These buffers are also consumed by the censored (non-finite RT) branch
+    // below. Even when truncation is inactive, keep them sized with stable
+    // defaults corresponding to LT=0 and UT=Inf:
+    //   logF(LT=0) = -Inf, logF(UT=Inf) = 0
+    if (shared->logF_LT_1.size() != static_cast<size_t>(n_trials)) shared->logF_LT_1.resize(n_trials);
+    if (shared->logF_LT_2.size() != static_cast<size_t>(n_trials)) shared->logF_LT_2.resize(n_trials);
+    if (shared->logF_UT_1.size() != static_cast<size_t>(n_trials)) shared->logF_UT_1.resize(n_trials);
+    if (shared->logF_UT_2.size() != static_cast<size_t>(n_trials)) shared->logF_UT_2.resize(n_trials);
+    std::fill(shared->logF_LT_1.begin(), shared->logF_LT_1.end(), R_NegInf);
+    std::fill(shared->logF_LT_2.begin(), shared->logF_LT_2.end(), R_NegInf);
+    std::fill(shared->logF_UT_1.begin(), shared->logF_UT_1.end(), 0.0);
+    std::fill(shared->logF_UT_2.begin(), shared->logF_UT_2.end(), 0.0);
+
     bool any_trunc = false;
     for (int i = 0; i < n_trials; ++i) {
       if (is_ok[i] && (LT[i] != 0.0 || R_FINITE(UT[i]))) { any_trunc = true; break; }
     }
     if (any_trunc) {
-      if (shared->logF_LT_1.size() != static_cast<size_t>(n_trials)) shared->logF_LT_1.resize(n_trials);
-      if (shared->logF_LT_2.size() != static_cast<size_t>(n_trials)) shared->logF_LT_2.resize(n_trials);
-      if (shared->logF_UT_1.size() != static_cast<size_t>(n_trials)) shared->logF_UT_1.resize(n_trials);
-      if (shared->logF_UT_2.size() != static_cast<size_t>(n_trials)) shared->logF_UT_2.resize(n_trials);
-
       Rcpp::IntegerVector R1(n_trials, 1), R2(n_trials, 2);
       std::vector<int> all_ones(n_trials, 1);
       
@@ -856,7 +809,9 @@ double c_log_likelihood_DDM_pt(const double* pars_cm,
 
       for (int i = 0; i < n_trials; ++i) {
         if (is_ok[i] && shared->finite_mask_int[i]) {
-          if (R_FINITE(logZ[i])) shared->res_buf[i] -= logZ[i];
+          if (R_FINITE(logZ[i])) {
+            if (shared->res_buf[i] > min_ll) shared->res_buf[i] -= logZ[i];
+          }
           else shared->res_buf[i] = min_ll;
         }
       }
@@ -1015,28 +970,9 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
   }
   std::string type_std = Rcpp::as<std::string>(Rcpp::wrap(type));
   if(type_std.find("DDM") != std::string::npos){
-    bool gng = (type_std.find("GNG") != std::string::npos);
-    IntegerVector expand = data.attr("expand");
-    const bool all_finite_untruncated = ddm_data_all_finite_untruncated(data, n_trials);
-    for(int i = 0; i < n_particles; i++){
-      p_vector = p_matrix(i, _);
-      p_vector.names() = p_names;
-      if(i == 0){
-        p_specs = make_pretransform_specs(p_vector, pretransforms);
-        // Precompute transform specs for all p_types using a one-time dummy
-        NumericMatrix dummy(1, p_types.size());
-        colnames(dummy) = p_types;
-        full_t_specs = make_transform_specs(dummy, transforms);
-      }
-      pars = get_pars_matrix(p_vector, constants, p_specs, p_types, designs, n_trials, data, trend_list, full_t_specs);
-      // Precompute specs
-      if (i == 0) {                            // first particle only, just to get colnames
-        bound_specs = make_bound_specs(minmax,mm_names,pars,bounds);
-      }
-      is_ok = c_do_bound(pars, bound_specs);
-      lls[i] = c_log_likelihood_DDM(pars, data, n_trials, expand, min_ll, is_ok,
-                                    gng, all_finite_untruncated);
-    }
+    // Canonical DDM path lives in calc_ll_oo; keep legacy entry point as a wrapper.
+    return calc_ll_oo(p_matrix, data, constants, designs, type, bounds, transforms,
+                      pretransforms, p_types, min_ll, trend);
   } else if(type == "MRI" || type == "MRI_AR1"){
     int n_pars = p_types.length();
     NumericVector y = extract_y(data);
@@ -1234,7 +1170,8 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
 
   ModelSharedState ddm_shared;
   std::vector<int> ddm_p_idx;
-  if (is_ddm_type && use_pt_mapping) {
+  bool ddm_raw_ready = true;
+  if (is_ddm_type) {
       ddm_shared.LT_vec = get_col_with_default(data, "LT", 0.0);
       ddm_shared.UT_vec = get_col_with_default(data, "UT", R_PosInf);
       ddm_shared.LC_vec = get_col_with_default(data, "LC", 0.0);
@@ -1248,8 +1185,10 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
       
       const std::vector<std::string> ddm_names = {"v", "a", "sv", "t0", "st0", "s", "Z", "SZ"};
       for(const auto& nm : ddm_names) {
-          auto it = param_table_template.name_to_base_idx.find(nm);
-          ddm_p_idx.push_back(it != param_table_template.name_to_base_idx.end() ? it->second : -1);
+        auto it = param_table_template.name_to_base_idx.find(nm);
+        int idx = (it != param_table_template.name_to_base_idx.end()) ? it->second : -1;
+        ddm_p_idx.push_back(idx);
+        if (idx < 0) ddm_raw_ready = false;
       }
   }
 
@@ -1272,12 +1211,17 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
         bound_specs = make_bound_specs_pt(minmax, mm_names, param_table_template, bounds);
       }
       is_ok = c_do_bound_pt(param_table_template, bound_specs);
-      for(int j=0; j<n_trials; ++j) ddm_shared.ok_int_buf[j] = is_ok[j] ? 1 : 0;
-
-      lls[i] = c_log_likelihood_DDM_pt(param_table_template.base.begin(),
-                                      rt_ptr, R_ptr, n_trials, expand_ptr, n_out,
-                                      min_ll, ddm_shared.ok_int_buf.data(), gng,
-                                      all_finite_untruncated, ddm_p_idx, &ddm_shared);
+      if (ddm_raw_ready) {
+        for(int j = 0; j < n_trials; ++j) ddm_shared.ok_int_buf[j] = is_ok[j] ? 1 : 0;
+        lls[i] = c_log_likelihood_DDM_pt(param_table_template.base.begin(),
+                                        rt_ptr, R_ptr, n_trials, expand_ptr, n_out,
+                                        min_ll, ddm_shared.ok_int_buf.data(), gng,
+                                        all_finite_untruncated, ddm_p_idx, &ddm_shared);
+      } else {
+        pars = param_table_template.materialize_by_param_names(keep_names);
+        lls[i] = c_log_likelihood_DDM(pars, data, n_trials, expand, min_ll, is_ok,
+                                      gng, all_finite_untruncated);
+      }
     }
   }
  else if (is_mri_type) {
