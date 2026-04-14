@@ -173,6 +173,9 @@ na_locf <- function(x, na.rm = FALSE) {
       rts <- dadm[["rt"]][start_idx]
       R_idx <- dadm[["R"]][start_idx]
       ok <- is.finite(rts) & rts > 0 & !is.na(R_idx)
+      LT <- if ("LT" %in% cols) dadm[["LT"]][start_idx] else rep(0, length(start_idx))
+      UT <- if ("UT" %in% cols) dadm[["UT"]][start_idx] else rep(Inf, length(start_idx))
+      ok <- ok & (LT == 0) & is.infinite(UT)
       if (!all(ok)) all_finite_trials <- FALSE
     }
   }

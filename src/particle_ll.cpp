@@ -1171,17 +1171,9 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
       }
     } else if (n_trials > 0 && n_lR > 0 && (n_trials % n_lR) == 0) {
       // Fallback for direct calc_ll callers that bypass R-side cache setup.
-      all_finite_trials = true;
-      NumericVector rts = data["rt"];
-      IntegerVector R_idx = data["R"];
-      for (int start_row_idx = 0; start_row_idx < n_trials; start_row_idx += n_lR) {
-        const double rt_j = rts[start_row_idx];
-        const int R_j_idx = R_idx[start_row_idx];
-        if (!(R_FINITE(rt_j) && rt_j > 0.0 && R_j_idx != NA_INTEGER)) {
-          all_finite_trials = false;
-          break;
-        }
-      }
+      // Keep semantics identical to the fast-path guard: only treat as
+      // all-finite when data are also untruncated (LT==0, UT==Inf).
+      all_finite_trials = race_data_all_finite_untruncated(data, n_trials, n_lR);
     }
       
     for (int i = 0; i < n_particles; ++i) {
@@ -1374,17 +1366,9 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
       }
     } else if (n_trials > 0 && n_lR > 0 && (n_trials % n_lR) == 0) {
       // Fallback for direct calc_ll_oo callers that bypass R-side cache setup.
-      all_finite_trials = true;
-      NumericVector rts = data["rt"];
-      IntegerVector R_idx = data["R"];
-      for (int start_row_idx = 0; start_row_idx < n_trials; start_row_idx += n_lR) {
-        const double rt_j = rts[start_row_idx];
-        const int R_j_idx = R_idx[start_row_idx];
-        if (!(R_FINITE(rt_j) && rt_j > 0.0 && R_j_idx != NA_INTEGER)) {
-          all_finite_trials = false;
-          break;
-        }
-      }
+      // Keep semantics identical to the fast-path guard: only treat as
+      // all-finite when data are also untruncated (LT==0, UT==Inf).
+      all_finite_trials = race_data_all_finite_untruncated(data, n_trials, n_lR);
     }
 
     bool has_RACE_col_fp = data.containsElementNamed("RACE");
@@ -1632,17 +1616,8 @@ NumericMatrix calc_ll_oo_pw(NumericMatrix particle_matrix, DataFrame data, Numer
         all_finite_trials = v[0];
       }
     } else if (n_trials > 0 && n_lR > 0 && (n_trials % n_lR) == 0) {
-      all_finite_trials = true;
-      NumericVector rts = data["rt"];
-      IntegerVector R_idx = data["R"];
-      for (int start_row_idx = 0; start_row_idx < n_trials; start_row_idx += n_lR) {
-        const double rt_j = rts[start_row_idx];
-        const int R_j_idx = R_idx[start_row_idx];
-        if (!(R_FINITE(rt_j) && rt_j > 0.0 && R_j_idx != NA_INTEGER)) {
-          all_finite_trials = false;
-          break;
-        }
-      }
+      // Keep this fallback consistent with calc_ll/calc_ll_oo race semantics.
+      all_finite_trials = race_data_all_finite_untruncated(data, n_trials, n_lR);
     }
 
     const int n_out_race = (expand.length() > 0) ? expand.length() : (n_trials / n_lR);
@@ -2253,9 +2228,11 @@ double c_log_likelihood_race(
       if (!isok[row]) return R_NegInf;
       for (int c = 0; c < n_par; ++c)
         par_buf[c] = pars_cm_ptr[static_cast<size_t>(c) * n_trials + row];
-      const double Fk = cdf1(t, par_buf, model_context_for_funcs);
-      if (Fk >= 1.0) return R_NegInf;
-      logS += std::log1p(-Fk);
+      double Fk = cdf1(t, par_buf, model_context_for_funcs);
+      Fk = clamp_cdf01_race(Fk);
+      const double ll = safe_log1m_race(Fk);
+      if (!R_FINITE(ll)) return R_NegInf;
+      logS += ll;
     }
     return logS;
   };
