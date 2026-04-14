@@ -1267,27 +1267,17 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
       if (i > 0) {
         param_table_template.fill_from_particle_row(particle_matrix_pt, i, pm_col_to_base_idx);
       }
-      if (use_pt_mapping) {
-          update_pt_only(param_table_template, designs, trend_runtime_ptr, transform_specs_pt);
-          if (i == 0) {
-            bound_specs = make_bound_specs_pt(minmax, mm_names, param_table_template, bounds);
-          }
-          is_ok = c_do_bound_pt(param_table_template, bound_specs);
-          for(int j=0; j<n_trials; ++j) ddm_shared.ok_int_buf[j] = is_ok[j] ? 1 : 0;
-
-          lls[i] = c_log_likelihood_DDM_pt(param_table_template.base.begin(),
-                                          rt_ptr, R_ptr, n_trials, expand_ptr, n_out,
-                                          min_ll, ddm_shared.ok_int_buf.data(), gng,
-                                          all_finite_untruncated, ddm_p_idx, &ddm_shared);
-      } else {
-          pars = get_pars_matrix_oo_fast(param_table_template, designs, trend_runtime_ptr, transform_specs_pt, keep_names);
-          if (i == 0) {
-            bound_specs = make_bound_specs_pt(minmax, mm_names, param_table_template, bounds);
-          }
-          is_ok = c_do_bound_pt(param_table_template, bound_specs);
-          lls[i] = c_log_likelihood_DDM(pars, data, n_trials, expand, min_ll, is_ok,
-                                        gng, all_finite_untruncated);
+      update_pt_only(param_table_template, designs, trend_runtime_ptr, transform_specs_pt);
+      if (i == 0) {
+        bound_specs = make_bound_specs_pt(minmax, mm_names, param_table_template, bounds);
       }
+      is_ok = c_do_bound_pt(param_table_template, bound_specs);
+      for(int j=0; j<n_trials; ++j) ddm_shared.ok_int_buf[j] = is_ok[j] ? 1 : 0;
+
+      lls[i] = c_log_likelihood_DDM_pt(param_table_template.base.begin(),
+                                      rt_ptr, R_ptr, n_trials, expand_ptr, n_out,
+                                      min_ll, ddm_shared.ok_int_buf.data(), gng,
+                                      all_finite_untruncated, ddm_p_idx, &ddm_shared);
     }
   }
  else if (is_mri_type) {
@@ -1415,20 +1405,18 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
       rts_fp_hold = data["rt"];
       rt_ptr = rts_fp_hold.begin();
 
-      if (use_pt_mapping) {
-        // Build column-order mapping: keep_names[j] → base column index
-        const int n_kn = keep_names.size();
-        race_base_col_order.resize(n_kn, -1);
-        for (int j = 0; j < n_kn; ++j) {
-          std::string nm = Rcpp::as<std::string>(keep_names[j]);
-          auto it = param_table_template.name_to_base_idx.find(nm);
-          if (it != param_table_template.name_to_base_idx.end()) {
-            race_base_col_order[j] = it->second;
-          }
-          if (nm == "pContaminant") fast_pc_staging_col = j;
+      // Build column-order mapping: keep_names[j] -> base column index
+      const int n_kn = keep_names.size();
+      race_base_col_order.resize(n_kn, -1);
+      for (int j = 0; j < n_kn; ++j) {
+        std::string nm = Rcpp::as<std::string>(keep_names[j]);
+        auto it = param_table_template.name_to_base_idx.find(nm);
+        if (it != param_table_template.name_to_base_idx.end()) {
+          race_base_col_order[j] = it->second;
         }
-        race_staging_buf.resize(static_cast<size_t>(n_trials) * n_kn);
+        if (nm == "pContaminant") fast_pc_staging_col = j;
       }
+      race_staging_buf.resize(static_cast<size_t>(n_trials) * n_kn);
     }
 
     // --- Build shared state for the mixed (non-raw-fast) path ---
@@ -1481,26 +1469,15 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
         param_table_template.fill_from_particle_row(particle_matrix_pt, i, pm_col_to_base_idx);
       }
       
-      if (use_pt_mapping) {
-        update_pt_only(param_table_template, designs, trend_runtime_ptr, transform_specs_pt);
-        if (i == 0) {
-          bound_specs = make_bound_specs_pt(minmax, mm_names, param_table_template, bounds);
-        }
-      } else {
-        pars = get_pars_matrix_oo_fast(param_table_template,
-                                       designs,
-                                       trend_runtime_ptr,
-                                       transform_specs_pt,
-                                       keep_names);
-        if (i == 0) {
-          bound_specs = make_bound_specs_pt(minmax, mm_names, param_table_template, bounds);
-        }
+      update_pt_only(param_table_template, designs, trend_runtime_ptr, transform_specs_pt);
+      if (i == 0) {
+        bound_specs = make_bound_specs_pt(minmax, mm_names, param_table_template, bounds);
       }
 
       is_ok = c_do_bound_pt(param_table_template, bound_specs);
       is_ok = lr_all(is_ok, n_lR);
 
-      if (use_raw_fast_path && use_pt_mapping) {
+      if (use_raw_fast_path) {
         // Fill per-particle isok buffer
         for (int j = 0; j < n_trials; ++j) isok_int_fp[j] = is_ok[j] ? 1 : 0;
 
@@ -1550,9 +1527,7 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
         }
         lls[i] = total_ll;
       } else {
-        if (use_pt_mapping) {
-          pars = param_table_template.materialize_by_param_names(keep_names);
-        }
+        pars = param_table_template.materialize_by_param_names(keep_names);
         lls[i] = c_log_likelihood_race(pars, data,
                                        adapter.pdf1_ptr, adapter.cdf1_ptr,
                                        n_trials,
