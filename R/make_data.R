@@ -25,9 +25,8 @@ get_missing <- function(supplied, data, bound_name, default,type) {
 #' Columns corresponding to LC, UT, LC, UC, and pContaminant arguments are added
 #' to the return, specifying, respectively, if a row is subject to lower or upper
 #' truncation, lower or upper censoring, or contamination with the given probability.
-#' Contamination makes R = NA and the rt = Inf, is applied before any other
-#' missing operation and any row subject to contamination is not affected by
-#' truncation or censoring. Truncation removes rows. Lower/upper  censoring sets
+#' Truncation removes rows. Contamination makes R = NA and the rt = Inf, and is
+#' applied after truncation but before censoring. Lower/upper censoring sets
 #'   R = NA if LCresponse/UCresponse = TRUE and
 #'   rt = -Inf/Inf if LCdireciton/UCdireciton = TRUE (else NA).
 #' All of these arguments can be: 1) NULL, in which case if the data frame has a column
@@ -76,19 +75,6 @@ make_missing <- function(data, LT = NULL, UT = NULL, LC = NULL, UC = NULL,
   no_truncate=FALSE,no_censor=FALSE,
   pContaminant=NULL,verbose=FALSE,rt_resolution=1/60,digits = 2)
 {
-
-  pContaminant <- get_missing(pContaminant, data, "pContaminant",0,"numeric")
-  if (!all(pContaminant==0)) {
-    contam <- rbinom(nrow(data), 1, pContaminant) == 1
-    data[contam, "rt"] <- Inf
-    data[contam, "R"] <- NA
-    if (verbose) {
-      if (!attr(pContaminant,"subjectwise")) stat <- mean(contam) else
-      stat <- tapply(contam,data$subjects,mean)
-      message("% contaminated")
-      print(round(100*stat,digits))
-    }
-  }
 
   no_truncate <- get_missing(no_truncate, data, "no_truncate",FALSE,"logical")
   LT <- get_missing(LT, data, "LT",0,"numeric")
@@ -185,6 +171,19 @@ make_missing <- function(data, LT = NULL, UT = NULL, LC = NULL, UC = NULL,
   LCdirection <- LCdirection[!cutL & !cutU]
   UCdirection <- UCdirection[!cutL & !cutU]
   no_censor <- no_censor[!cutL & !cutU]
+
+  pContaminant <- get_missing(pContaminant, data, "pContaminant",0,"numeric")
+  if (!all(pContaminant==0)) {
+    contam <- rbinom(nrow(data), 1, pContaminant) == 1
+    data[contam, "rt"] <- Inf
+    data[contam, "R"] <- NA
+    if (verbose) {
+      if (!attr(pContaminant,"subjectwise")) stat <- mean(contam) else
+      stat <- tapply(contam,data$subjects,mean)
+      message("% contaminated")
+      print(round(100*stat,digits))
+    }
+  }
 
   # Censoring proportions (like truncation dont censor if equal to LC or UC)
   cutL <- is.finite(data$rt) & (data$rt < LC_eff)

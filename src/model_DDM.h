@@ -38,8 +38,11 @@ NumericVector d_DDM_Wien(NumericVector rts, IntegerVector Rs, NumericMatrix pars
         double Rerr;
         double sz = (pars(i,6) < (1 - pars(i,6))) ? 2*pars(i,7)*pars(i,6) : 2*pars(i,7)*(1-pars(i,6));
         ddiff(choice, rts[i], pm, pars(i, 1)/pars(i,5), pars(i, 0)/pars(i,5), pars(i, 3), pars(i, 6), sz, pars(i, 2)/pars(i,5), pars(i,4), eps, K, Epsflag, Neval, &Rval, &Rerr);
-        out[i] = log(Rval);
+        out[i] = (Rval > 0.0 && R_FINITE(Rval)) ? log(Rval) : R_NegInf;
       }
+      // PDF log-probabilities should always be finite; clamp any numerical
+      // pathologies to log(0) so caller-level min_ll flooring can handle them.
+      if (!R_FINITE(out[i])) out[i] = R_NegInf;
     }
   }
   return(out);
@@ -88,7 +91,7 @@ inline void d_DDM_Wien_raw(const double* rts, const int* Rs, const double* pars_
       ddiff(choice, rts[i], pm, a_[i] / s_[i], v_[i] / s_[i], t0_[i],
             Z_[i], sz, sv_[i] / s_[i], st0_[i], eps, K, Epsflag, Neval,
             &Rval, &Rerr);
-      out[i] = (Rval > 0.0 && std::isfinite(Rval)) ? std::log(Rval) : min_ll;
+      out[i] = (Rval > 0.0 && R_FINITE(Rval)) ? std::log(Rval) : min_ll;
     }
   }
 }
@@ -140,7 +143,14 @@ NumericVector p_DDM_Wien(NumericVector rts, IntegerVector Rs, NumericMatrix pars
         double pm = (Rs[i]==1) ? -1 : 1;
         double sz = (pars(i,6) < (1 - pars(i,6))) ? 2*pars(i,7)*pars(i,6) : 2*pars(i,7)*(1-pars(i,6));
         pdiff(choice, rts[i], pm, pars(i, 1)/pars(i,5), pars(i, 0)/pars(i,5), pars(i, 3), pars(i, 6), sz, pars(i, 2)/pars(i,5), pars(i,4), eps, K, Epsflag, Neval, &Rval, &Rerr);
-        out[i] = log(Rval);
+        out[i] = (Rval > 0.0 && R_FINITE(Rval)) ? log(Rval) : R_NegInf;
+      }
+      // CDF log-probabilities should always be finite and <= 0; guard against
+      // occasional numerical spillover in backend routines.
+      if (!R_FINITE(out[i])) {
+        out[i] = R_NegInf;
+      } else if (out[i] > 0.0) {
+        out[i] = 0.0;
       }
     }
   }

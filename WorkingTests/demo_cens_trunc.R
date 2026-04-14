@@ -276,6 +276,28 @@ res_contam <- run_lba_demo(
 if (RUN_FITS) print(recovery(res_contam$emc, true_pars = res_contam$true_pars))
 
 # test with finite uc (omissions now come from both censoring AND contamination and the model has to tell them apart)
+res_contam_uc <- run_lba_demo(
+  p_contaminant = .15,
+  estimate_contaminant = TRUE,
+  n_trials = 10000,
+  UC = 2,
+  posdrift=TRUE,
+  label = "contam_lbaio"
+)
+if (RUN_FITS) print(recovery(res_contam_uc$emc, true_pars = res_contam_uc$true_pars))
+
+# test with finite ut (I reordered the make_missing function so that truncation occurs before misses are injected so we can still observe them)
+res_contam_ut <- run_lba_demo(
+  p_contaminant = .15,
+  estimate_contaminant = TRUE,
+  n_trials = 10000,
+  UT = 2,
+  posdrift=TRUE,
+  label = "contam_lbaio"
+)
+if (RUN_FITS) print(recovery(res_contam_ut$emc, true_pars = res_contam_ut$true_pars))
+
+# test lbaio with omissions (omissions can come from contam, negative drift, or upper censor)
 res_contam_lbaio <- run_lba_demo(
   p_contaminant = .15,
   estimate_contaminant = TRUE,
@@ -286,6 +308,7 @@ res_contam_lbaio <- run_lba_demo(
 )
 if (RUN_FITS) print(recovery(res_contam_lbaio$emc, true_pars = res_contam_lbaio$true_pars))
 
+# not sure this one makes sense, underestimates pContam but it is pretty heavily chopped up
 res_cens_trunc_contam <- run_lba_demo(
   p_contaminant = .15,
   estimate_contaminant = TRUE,
