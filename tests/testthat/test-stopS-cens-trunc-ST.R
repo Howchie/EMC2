@@ -117,11 +117,12 @@ RNGkind("L'Ecuyer-CMRG")
 
 
 # ── Test 1: no ST, UC = Inf ───────────────────────────────────────────────────
-# Verifies that the C++ path produces finite, non-degenerate likelihoods for
-# every trial type (go response, stop-trial go response, NR go, NR stop-win).
-# Note: calc_ll_R / log_likelihood_race_ss does not implement the full SS NR-trial
-# likelihood, so R is not a valid reference here.  C++ is the authoritative path.
-test_that("SSEXG no ST, UC=Inf: C++ LL is finite for all trial types", {
+# R and C++ should agree on every trial type:
+#   - go trials with response
+#   - stop trials with go response
+#   - NR on go trials (go failure)
+#   - NR on stop trials (stop win: gf + (1−gf)(1−tf)·pStop)
+test_that("SSEXG no ST, UC=Inf: R == C++ for all trial types", {
   set.seed(44)
   design_ss <- .make_design_no_st()
   p_vector  <- .set_pars_no_st(sampled_pars(design_ss, doMap = FALSE))
@@ -136,10 +137,9 @@ test_that("SSEXG no ST, UC=Inf: C++ LL is finite for all trial types", {
   expect_true(any(is_stop &  is.na(dat$R)),         "expected stop-trial NR (stop wins)")
   expect_true(any(!is_stop & is.na(dat$R)),         "expected go-trial NR (go failures)")
 
+  ll_r <- .r_ll(p_vector, dadm)
   ll_c <- .cpp_ll(p_vector, dadm)
-  expect_true(is.finite(ll_c), "C++ LL should be finite")
-  n_trials <- length(unique(dadm$trials))
-  expect_gt(ll_c, log(1e-10) * n_trials)
+  expect_equal(as.numeric(ll_c), as.numeric(ll_r), tolerance = 1e-4)
 })
 
 
@@ -180,11 +180,9 @@ test_that("SSEXG no ST, UC=1.2: finite-RT R==C++; full-dataset C++ is finite", {
 #   (b) stop-trial go response  (stop lost to go, ST lost)
 #   (c) stop-trial ST response  (stop won, ST produced overt response)
 #
-# calc_ll_R / log_likelihood_race_ss does not correctly handle SS with ST
-# accumulators (it mishandles NR stop trials and go-failure trials in the ST
-# design).  C++ is the authoritative path; we verify it is finite and
-# non-degenerate across all observed trial types.
-test_that("SSEXG with ST, UC=Inf: C++ LL is finite for all observed-response trial types", {
+# The R likelihood now handles the NR stop-trial case in the ST design, so we
+# compare the full dataset directly rather than dropping those rows.
+test_that("SSEXG with ST, UC=Inf: R == C++ for all observed-response trial types", {
   set.seed(46)
   design_st <- .make_design_st()
   p_vector  <- .set_pars_st(sampled_pars(design_st, doMap = FALSE))
@@ -199,10 +197,9 @@ test_that("SSEXG with ST, UC=Inf: C++ LL is finite for all observed-response tri
               "expected stop-trial go responses")
   expect_true(any(is_st_resp), "expected ST responses on stop trials")
 
+  ll_r <- .r_ll(p_vector, dadm)
   ll_c <- .cpp_ll(p_vector, dadm)
-  expect_true(is.finite(ll_c), "C++ LL should be finite")
-  n_trials <- length(unique(dadm$trials))
-  expect_gt(ll_c, log(1e-10) * n_trials)
+  expect_equal(as.numeric(ll_c), as.numeric(ll_r), tolerance = 1e-4)
 })
 
 

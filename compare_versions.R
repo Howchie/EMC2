@@ -150,7 +150,7 @@ cat("Running NEW Architecture (calc_ll)\n")
 cat("=========================================\n")
 new_results <- callr::r(
   func = benchmark_script,
-  libpath = c(file.path(getwd(), "r_libs/new_version"), .libPaths())
+  libpath = c(file.path(getwd(), "r_libs/new-dev"), .libPaths())
 )
 
 for (nm in names(new_results)) {
