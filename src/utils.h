@@ -2,6 +2,7 @@
 #define PARTICLE_LL_UTILS_H
 #include <RcppArmadillo.h>
 #include "utility_functions.h" // For any existing utilities we might use
+#include "wald_functions.h"
 #include <gsl/gsl_integration.h>
 
 // Scalar (single-RT / single-accumulator) model helpers for fast GSL integration.
@@ -147,7 +148,7 @@ inline double dlnr_scalar(double t, const double* par, void* /*ctx_*/) {
   if (R_IsNA(m)) return 0.0;
   const double tt = t - t0;
   if (tt <= 0.0) return 0.0;
-  return R::dlnorm(tt, m, s, FALSE);
+  return dlnorm_std(tt, m, s, false);
 }
 
 inline double plnr_scalar(double t, const double* par, void* /*ctx_*/) {
@@ -158,7 +159,7 @@ inline double plnr_scalar(double t, const double* par, void* /*ctx_*/) {
   if (R_IsNA(m)) return 0.0;
   const double tt = t - t0;
   if (tt <= 0.0) return 0.0;
-  return R::plnorm(tt, m, s, TRUE, FALSE);
+  return plnorm_std(tt, m, s, true, false);
 }
 
 // ---- Raw-buffer implementations (log-density and log-survivor) ----
@@ -176,6 +177,7 @@ inline void dlba_raw(const double* rt, const double* pars_cm, int n_rows,
   const double* B_  = pars_cm + 2 * n_rows;
   const double* A_  = pars_cm + 3 * n_rows;
   const double* t0_ = pars_cm + 4 * n_rows;
+  #pragma omp simd
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
     if (R_IsNA(v_[i]) || !isok[i]) { out[i] = min_ll; continue; }
@@ -196,6 +198,7 @@ inline void plba_raw(const double* rt, const double* pars_cm, int n_rows,
   const double* B_  = pars_cm + 2 * n_rows;
   const double* A_  = pars_cm + 3 * n_rows;
   const double* t0_ = pars_cm + 4 * n_rows;
+  #pragma omp simd
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
     if (R_IsNA(v_[i]) || !isok[i]) { out[i] = 0.0; continue; }
@@ -217,6 +220,7 @@ inline void drdm_raw(const double* rt, const double* pars_cm, int n_rows,
   const double* A_  = pars_cm + 2 * n_rows;
   const double* t0_ = pars_cm + 3 * n_rows;
   const double* s_  = pars_cm + 4 * n_rows;
+  #pragma omp simd
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
     if (R_IsNA(v_[i]) || !isok[i]) { out[i] = min_ll; continue; }
@@ -236,6 +240,7 @@ inline void prdm_raw(const double* rt, const double* pars_cm, int n_rows,
   const double* A_  = pars_cm + 2 * n_rows;
   const double* t0_ = pars_cm + 3 * n_rows;
   const double* s_  = pars_cm + 4 * n_rows;
+  #pragma omp simd
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
     if (R_IsNA(v_[i]) || !isok[i]) { out[i] = 0.0; continue; }
@@ -255,12 +260,13 @@ inline void dlnr_raw(const double* rt, const double* pars_cm, int n_rows,
   const double* m_  = pars_cm + 0 * n_rows;
   const double* s_  = pars_cm + 1 * n_rows;
   const double* t0_ = pars_cm + 2 * n_rows;
+  #pragma omp simd
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
     if (R_IsNA(m_[i]) || !isok[i]) { out[i] = min_ll; continue; }
     const double tt = rt[i] - t0_[i];
     if (tt <= 0.0) { out[i] = min_ll; continue; }
-    const double pdf = R::dlnorm(tt, m_[i], s_[i], FALSE);
+    const double pdf = dlnorm_std(tt, m_[i], s_[i], false);
     out[i] = (pdf > 0.0 && std::isfinite(pdf)) ? std::log(pdf) : min_ll;
   }
 }
@@ -271,14 +277,14 @@ inline void plnr_raw(const double* rt, const double* pars_cm, int n_rows,
   const double* m_  = pars_cm + 0 * n_rows;
   const double* s_  = pars_cm + 1 * n_rows;
   const double* t0_ = pars_cm + 2 * n_rows;
+  #pragma omp simd
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
     if (R_IsNA(m_[i]) || !isok[i]) { out[i] = 0.0; continue; }
     const double tt = rt[i] - t0_[i];
     if (tt <= 0.0) { out[i] = 0.0; continue; }
-    const double cdf = R::plnorm(tt, m_[i], s_[i], TRUE, FALSE);
-    if (cdf >= 1.0) { out[i] = min_ll; continue; }
-    out[i] = (cdf <= 0.0) ? 0.0 : std::log1p(-cdf);
+    const double logS = lnorm_log_surv_std(tt, m_[i], s_[i]);
+    out[i] = R_FINITE(logS) ? logS : min_ll;
   }
 }
 
@@ -359,9 +365,9 @@ inline void lnr_logS_at_t(double t, const double* pars_cm,
       if (!isok_all[r] || R_IsNA(m_[r])) { bad = true; break; }
       const double tt = t - t0_[r];
       if (tt <= 0.0) continue;
-      const double cdf = R::plnorm(tt, m_[r], s_[r], TRUE, FALSE);
-      if (cdf >= 1.0) { bad = true; break; }
-      if (cdf > 0.0) logS += std::log1p(-cdf);
+      const double logSk = lnorm_log_surv_std(tt, m_[r], s_[r]);
+      if (!R_FINITE(logSk)) { bad = true; break; }
+      logS += logSk;
     }
     logS_out[j] = bad ? R_NegInf : logS;
   }
