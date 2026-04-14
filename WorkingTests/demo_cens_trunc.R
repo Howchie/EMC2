@@ -337,7 +337,7 @@ if (RUN_FITS) print(recovery(res_cens_contam_lbaio$emc, true_pars = res_cens_con
 #### DDM using Henrich & Klauer (2026) ----
 
 run_DDM_demo <- function(
-    n_trials = 500, UC = NULL, UT = NULL, LC = NULL, LT = NULL, range = 1,
+    n_trials = 10000, UC = NULL, UT = NULL, LC = NULL, LT = NULL, range = 1,
     cores_for_chains = 3, layout = c(2, 3), natural = TRUE, cores_per_chain = 3,
     LCresponse = FALSE, UCresponse = FALSE,
     LCdirection = TRUE, UCdirection = TRUE,
@@ -425,7 +425,7 @@ run_DDM_demo <- function(
 }
 
 RNGkind("L'Ecuyer-CMRG")
-set.seed(123)
+set.seed(42)
 
 # 1. uncensored/truncated
 res_ddm_uncensored <- run_DDM_demo(
@@ -465,6 +465,7 @@ res_ddm_both <- run_DDM_demo(
 )
 if (RUN_FITS) print(recovery(res_ddm_both$emc, true_pars = res_ddm_both$true_pars))
 
+## TODO fix truncation
 # 5. upper trunc only
 res_ddm_ut <- run_DDM_demo(
   n_trials = 10000,
@@ -604,7 +605,7 @@ run_RDM_demo <- function(p_contaminant = 0, estimate_contaminant = FALSE,
 
 
 RNGkind("L'Ecuyer-CMRG")
-set.seed(123)
+set.seed(42)
 
 # Test 1 - Uncensored
 
@@ -622,8 +623,8 @@ res_rdm_cens <- run_RDM_demo(
   p_contaminant = 0,
   estimate_contaminant = FALSE,
   n_trials = 10000,
-  UC = 1.6,
-  LC = .85,
+  UC = 1.7,
+  LC = .6,
   label = "rdm_cens"
 )
 if (RUN_FITS) print(recovery(res_rdm_cens$emc, true_pars = res_rdm_cens$true_pars))

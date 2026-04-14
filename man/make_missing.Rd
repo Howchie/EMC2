@@ -60,9 +60,8 @@ A filtered and modified data frame with added/updated LC, UC, LT and UT columns
 Columns corresponding to LC, UT, LC, UC, and pContaminant arguments are added
 to the return, specifying, respectively, if a row is subject to lower or upper
 truncation, lower or upper censoring, or contamination with the given probability.
-Contamination makes R = NA and the rt = Inf, is applied before any other
-missing operation and any row subject to contamination is not affected by
-truncation or censoring. Truncation removes rows. Lower/upper  censoring sets
+Truncation removes rows. Contamination makes R = NA and the rt = Inf, and is
+applied after truncation but before censoring. Lower/upper censoring sets
 R = NA if LCresponse/UCresponse = TRUE and
 rt = -Inf/Inf if LCdireciton/UCdireciton = TRUE (else NA).
 All of these arguments can be: 1) NULL, in which case if the data frame has a column

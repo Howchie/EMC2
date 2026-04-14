@@ -1172,9 +1172,7 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
   const bool is_ddm_type = type_std.find("DDM") != std::string::npos;
   const bool is_mri_type = (type == "MRI" || type == "MRI_AR1");
   const bool is_ss_type = type_std.find("SS") != std::string::npos;
-  // For now, SS models (SSEXG, SSRDEX) use Ttransform in R which isn't easily
-  // handled by the cached-spec fast path.
-  const bool use_pt_mapping = is_ddm_type || (!is_mri_type && !is_ss_type);
+  const bool use_pt_mapping = !is_mri_type;
 
   NumericMatrix one_particle(1, particle_matrix.ncol());
   colnames(one_particle) = p_names;
@@ -1319,27 +1317,17 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
     ss_stop_success_fn stop_success_ptr = is_exg ? ss_texg_stop_success_lpdf : ss_rdex_stop_success_lpdf;
     int idx_tf = is_exg ? 6 : 8;
     int idx_gf = is_exg ? 7 : 9;
-    NumericVector p_vector_ss(particle_matrix.ncol());
-    p_vector_ss.names() = p_names;
-    std::vector<PreTransformSpec> p_specs_ss;
-    std::vector<TransformSpec> full_t_specs_ss;
-    Rcpp::List trend_list_ss = trend.isNull() ? Rcpp::List::create() : Rcpp::List(trend);
 
     for (int i = 0; i < n_particles; ++i) {
-      p_vector_ss = particle_matrix(i, _);
-      p_vector_ss.names() = p_names;
-      if (i == 0) {
-        p_specs_ss = make_pretransform_specs(p_vector_ss, pretransforms);
-        NumericMatrix dummy(1, p_types.size());
-        colnames(dummy) = p_types;
-        full_t_specs_ss = make_transform_specs(dummy, transforms);
+      if (i > 0) {
+        param_table_template.fill_from_particle_row(particle_matrix_pt, i, pm_col_to_base_idx);
       }
-      pars = get_pars_matrix(p_vector_ss, constants, p_specs_ss, p_types, designs,
-                             n_trials, data, trend_list_ss, full_t_specs_ss);
+      update_pt_only(param_table_template, designs, trend_runtime_ptr, transform_specs_pt);
       if (i == 0) {
-        bound_specs = make_bound_specs(minmax, mm_names, pars, bounds);
+        bound_specs = make_bound_specs_pt(minmax, mm_names, param_table_template, bounds);
       }
-      is_ok = c_do_bound(pars, bound_specs);
+      pars = param_table_template.materialize_by_param_names(keep_names);
+      is_ok = c_do_bound_pt(param_table_template, bound_specs);
       is_ok = lr_all(is_ok, n_lR);
       lls[i] = c_log_likelihood_ss(pars, data, n_trials_ss, expand, min_ll, is_ok,
                                    go_lpdf_ptr, go_lccdf_ptr,

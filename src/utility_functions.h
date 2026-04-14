@@ -221,9 +221,15 @@ NumericVector c_add_vectors(NumericVector x1, NumericVector x2){
   CharacterVector all_names(x1.size() + x2.size());
   CharacterVector x1_names = x1.names();
   CharacterVector x2_names = x2.names();
-  std::copy(x1_names.begin(), x1_names.end(), all_names.begin());
-  std::copy(x2_names.begin(), x2_names.end(), all_names.begin() + x1.size());
-  output.names() = all_names;
+  if (x1_names.size() > 0) {
+    std::copy(x1_names.begin(), x1_names.end(), all_names.begin());
+  }
+  if (x2_names.size() > 0) {
+    std::copy(x2_names.begin(), x2_names.end(), all_names.begin() + x1.size());
+  }
+  if (x1_names.size() > 0 || x2_names.size() > 0) {
+    output.names() = all_names;
+  }
   return output;
 }
 

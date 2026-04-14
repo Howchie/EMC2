@@ -1,6 +1,6 @@
 # compare_versions.R
 library(callr)
-
+rm(list=ls())
 benchmark_script_dev <- function() {
   library(EMC2)
   
@@ -252,10 +252,26 @@ for (nm in names(upstream_results)) {
   print(upstream_results[[nm]])
 }
 
-res = matrix(NA,ncol=5,nrow=4,dimnames=list(c("old_dev","oo_calc_ll","upstream_calc_ll_oo","zach_calc_ll_oo"),c("LBA","RDM","LNR","WDM","DDM")))
+cat("\n=========================================\n")
+cat("Running OPTIMIZED Branch (Newest build)\n")
+cat("=========================================\n")
+optimized_results <- callr::r(
+  func = benchmark_script_new,
+  show = TRUE,
+  libpath = c("/tmp/r_libs/optimized_version", .libPaths())
+)
+
+for (nm in names(optimized_results)) {
+  cat("\n---", nm, "---\n")
+  print(optimized_results[[nm]])
+}
+
+res = matrix(NA,ncol=5,nrow=5,dimnames=list(c("old_dev","oo_calc_ll","upstream_calc_ll_oo","zach_calc_ll_oo","optimized_calc_ll_oo"),c("LBA","RDM","LNR","WDM","DDM")))
 for (m in c("LBA","RDM","LNR","WDM","DDM")) {
     res[1,m] = median(dev_results[[m]]$time[dev_results[[m]]$expr=="f1"]) * 1e-6
     res[2,m] = median(upstream_results[[m]]$time[upstream_results[[m]]$expr=="f1_old_calc_ll"]) * 1e-6
     res[3,m] = median(upstream_results[[m]]$time[upstream_results[[m]]$expr=="f2_calc_ll_oo"])* 1e-6
     res[4,m] = median(new_results[[m]]$time[new_results[[m]]$expr=="f2_calc_ll_oo"]) * 1e-6  
+    res[5,m] = median(optimized_results[[m]]$time[optimized_results[[m]]$expr=="f2_calc_ll_oo"]) * 1e-6
 }
+print(res)
