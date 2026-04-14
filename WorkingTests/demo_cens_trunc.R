@@ -206,7 +206,7 @@ res_ut <- run_lba_demo(
   p_contaminant = 0,
   estimate_contaminant = FALSE,
   n_trials = 10000,
-  UT = 1.5,
+  UT = 1.8,
   label = "ut"
 )
 if (RUN_FITS) print(recovery(res_ut$emc, true_pars = res_ut$true_pars))

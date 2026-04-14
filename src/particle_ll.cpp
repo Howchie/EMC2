@@ -2467,9 +2467,15 @@ double c_log_likelihood_race(
                                                            workspace);
           }
           double current_trial_ll_sum = 0.0;
-          for (int k = 0; k < n_lR_j; ++k)
-            current_trial_ll_sum += lds_ptr[start_row_idx + k];
+          bool hit_min_ll = false;
+          for (int k = 0; k < n_lR_j; ++k) {
+            double v = lds_ptr[start_row_idx + k];
+            if (v <= min_ll) hit_min_ll = true;
+            current_trial_ll_sum += v;
+          }
           if (NumericVector::is_na(log_Z_this) || !R_FINITE(log_Z_this)) {
+            ll_unique[unique_trial_idx] = min_ll;
+          } else if (hit_min_ll) {
             ll_unique[unique_trial_idx] = min_ll;
           } else {
             ll_unique[unique_trial_idx] = std::max(min_ll, current_trial_ll_sum - log_Z_this);
