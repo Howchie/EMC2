@@ -3,7 +3,6 @@
 #include <RcppArmadillo.h>
 #include "utility_types.h"
 #include "utility_functions.h" // For any existing utilities we might use
-#include "lnr_functions.h"
 #include "wald_functions.h"
 #include <gsl/gsl_integration.h>
 
