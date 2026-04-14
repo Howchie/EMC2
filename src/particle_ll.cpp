@@ -2221,6 +2221,27 @@ double c_log_likelihood_race(
   // Used by the "other trials" path for analytical survivor calls — avoids the
   // row-major copy that fill_trial_buffers performs.
   auto log_surv_cm = [&](double t, int start_row_idx, int n_lR_j) -> double {
+    if (t == R_PosInf) {
+      auto* race_ctx = static_cast<ContextForRaceModels*>(model_context_for_funcs);
+      // Proper race models have S(Inf)=0 => log S(Inf) = -Inf.
+      // Defective intrinsic-omission models (e.g., LBAIO) retain mass at +Inf.
+      if (race_ctx && !race_ctx->use_posdrift) {
+        double log_p = 0.0;
+        for (int k = 0; k < n_lR_j; ++k) {
+          const int row = start_row_idx + k;
+          if (!isok[row]) return R_NegInf;
+          const double v = pars_cm_ptr[0 * n_trials + row];
+          const double sv = pars_cm_ptr[1 * n_trials + row];
+          if (!std::isfinite(v) || !std::isfinite(sv) || sv <= 0.0) return R_NegInf;
+          const double ll = R::pnorm(0.0, v, sv, 1, 1);
+          if (!std::isfinite(ll)) return R_NegInf;
+          log_p += ll;
+        }
+        return log_p;
+      }
+      return R_NegInf;
+    }
+
     double logS = 0.0;
     double par_buf[16];
     for (int k = 0; k < n_lR_j; ++k) {
