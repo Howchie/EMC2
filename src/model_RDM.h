@@ -22,11 +22,11 @@ NumericVector dWald(NumericVector t, NumericVector v,
   int n = t.size();
   NumericVector pdf(n);
   for (int i = 0; i < n; i++){
-    t[i] = t[i] - t0[i];
-    if (t[i] <= 0){
+    double ti = t[i] - t0[i];
+    if (ti <= 0){
       pdf[i] = 0.;
     } else {
-      pdf[i] = digt(t[i], B[i] + .5 * A[i], v[i], .5 * A[i]);
+      pdf[i] = digt_impl(ti, B[i] + .5 * A[i], v[i], .5 * A[i]);
     }
   }
   return pdf;
@@ -39,11 +39,11 @@ NumericVector pWald(NumericVector t, NumericVector v,
   int n = t.size();
   NumericVector cdf(n);
   for (int i = 0; i < n; i++){
-    t[i] = t[i] - t0[i];
-    if (t[i] <= 0){
+    double ti = t[i] - t0[i];
+    if (ti <= 0){
       cdf[i] = 0.;
     } else {
-      cdf[i] = pigt(t[i], B[i] + .5 * A[i], v[i], .5 * A[i]);
+      cdf[i] = pigt_impl(ti, B[i] + .5 * A[i], v[i], .5 * A[i]);
     }
   }
   return cdf;

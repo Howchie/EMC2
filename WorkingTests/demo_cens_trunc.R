@@ -477,7 +477,7 @@ if (RUN_FITS) print(recovery(res_ddm_ut$emc, true_pars = res_ddm_ut$true_pars))
 # 6. lower trunc only
 res_ddm_lt <- run_DDM_demo(
   n_trials = 10000,
-  LT = 0.35,
+  LT = 0.4,
   label = "ddm_lt"
 )
 if (RUN_FITS) print(recovery(res_ddm_lt$emc, true_pars = res_ddm_lt$true_pars))

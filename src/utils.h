@@ -127,7 +127,7 @@ inline double drdm_scalar(double t, const double* par, void* /*ctx_*/) {
   const double B = par[1];
   const double A = par[2];
   const double s = par[4];
-  return digt(tt, B / s + 0.5 * A / s, v / s, 0.5 * A / s);
+  return digt_impl(tt, B / s + 0.5 * A / s, v / s, 0.5 * A / s);
 }
 
 inline double prdm_scalar(double t, const double* par, void* /*ctx_*/) {
@@ -138,7 +138,7 @@ inline double prdm_scalar(double t, const double* par, void* /*ctx_*/) {
   const double B = par[1];
   const double A = par[2];
   const double s = par[4];
-  return pigt(tt, B / s + 0.5 * A / s, v / s, 0.5 * A / s);
+  return pigt_impl(tt, B / s + 0.5 * A / s, v / s, 0.5 * A / s);
 }
 
 inline double dlnr_scalar(double t, const double* par, void* /*ctx_*/) {
@@ -227,7 +227,7 @@ inline void drdm_raw(const double* rt, const double* pars_cm, int n_rows,
     if (R_IsNA(v_[i]) || !isok[i]) { out[i] = min_ll; continue; }
     const double tt = rt[i] - t0_[i];
     if (tt <= 0.0) { out[i] = min_ll; continue; }
-    const double pdf = digt(tt, B_[i] / s_[i] + 0.5 * A_[i] / s_[i],
+    const double pdf = digt_impl(tt, B_[i] / s_[i] + 0.5 * A_[i] / s_[i],
                             v_[i] / s_[i], 0.5 * A_[i] / s_[i]);
     out[i] = (pdf > 0.0 && std::isfinite(pdf)) ? std::log(pdf) : min_ll;
   }
@@ -247,7 +247,7 @@ inline void prdm_raw(const double* rt, const double* pars_cm, int n_rows,
     if (R_IsNA(v_[i]) || !isok[i]) { out[i] = 0.0; continue; }
     const double tt = rt[i] - t0_[i];
     if (tt <= 0.0) { out[i] = 0.0; continue; }
-    const double cdf = pigt(tt, B_[i] / s_[i] + 0.5 * A_[i] / s_[i],
+    const double cdf = pigt_impl(tt, B_[i] / s_[i] + 0.5 * A_[i] / s_[i],
                             v_[i] / s_[i], 0.5 * A_[i] / s_[i]);
     if (cdf >= 1.0) { out[i] = min_ll; continue; }
     out[i] = (cdf <= 0.0) ? 0.0 : std::log1p(-cdf);
@@ -339,7 +339,7 @@ inline void rdm_logS_at_t(double t, const double* pars_cm,
       if (!isok_all[r] || R_IsNA(v_[r])) { bad = true; break; }
       const double tt = t - t0_[r];
       if (tt <= 0.0) continue;
-      const double cdf = pigt(tt, B_[r] / s_[r] + 0.5 * A_[r] / s_[r],
+      const double cdf = pigt_impl(tt, B_[r] / s_[r] + 0.5 * A_[r] / s_[r],
                               v_[r] / s_[r], 0.5 * A_[r] / s_[r]);
       if (cdf >= 1.0) { bad = true; break; }
       if (cdf > 0.0) logS += std::log1p(-cdf);

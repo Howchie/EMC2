@@ -311,3 +311,4 @@ for (m in names(optimized_results$results)) {
   res2[3,m] = max(abs(optimized_results$lls[[m]]-dev_results$lls[[m]]))
   res2[4,m] = max(abs(hybrid_results$lls[[m]]-dev_results$lls[[m]]))
 }
+print(res2)

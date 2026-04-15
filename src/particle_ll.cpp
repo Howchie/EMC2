@@ -380,6 +380,10 @@ struct ModelSharedState {
 
   // DDM-specific data
   std::vector<double> logF_LT_1, logF_LT_2, logF_UT_1, logF_UT_2;
+  // Pre-allocated scratch buffers for nonfinite/trunc path; avoids per-particle R heap.
+  std::vector<double> lF_LC_1_buf, lF_LC_2_buf, lF_UC_1_buf, lF_UC_2_buf;
+  std::vector<int>    R1_int_buf, R2_int_buf;  // constant all-1 / all-2 response vectors
+  std::vector<int>    all_ones_int_buf;        // constant all-1 mask
   bool any_ok_finite = false;
   bool any_ok_nonfinite = false;
   SEXP shared_R_levels = R_NilValue;     // Cached response levels for Go/No-go logic
@@ -775,22 +779,49 @@ double c_log_likelihood_DDM_pt(const double* pars_cm,
     std::fill(shared->logF_UT_1.begin(), shared->logF_UT_1.end(), 0.0);
     std::fill(shared->logF_UT_2.begin(), shared->logF_UT_2.end(), 0.0);
 
-    bool any_trunc = false;
+    bool any_LT = false, any_UT_finite = false;
     for (int i = 0; i < n_trials; ++i) {
-      if (is_ok[i] && (LT[i] != 0.0 || R_FINITE(UT[i]))) { any_trunc = true; break; }
+      if (is_ok[i]) {
+        if (LT[i] != 0.0) any_LT = true;
+        if (R_FINITE(UT[i])) any_UT_finite = true;
+      }
+      if (any_LT && any_UT_finite) break;
     }
+    const bool any_trunc = any_LT || any_UT_finite;
     if (any_trunc) {
-      Rcpp::IntegerVector R1(n_trials, 1), R2(n_trials, 2);
-      std::vector<int> all_ones(n_trials, 1);
-      
-      p_DDM_Wien_raw(shared->LT_vec.begin(), R1.begin(), pars_cm, n_trials, (int)p_idx.size(),
-                     all_ones.data(), is_ok, shared->logF_LT_1.data(), R_NegInf, p_idx);
-      p_DDM_Wien_raw(shared->LT_vec.begin(), R2.begin(), pars_cm, n_trials, (int)p_idx.size(),
-                     all_ones.data(), is_ok, shared->logF_LT_2.data(), R_NegInf, p_idx);
-      p_DDM_Wien_raw(shared->UT_vec.begin(), R1.begin(), pars_cm, n_trials, (int)p_idx.size(),
-                     all_ones.data(), is_ok, shared->logF_UT_1.data(), R_NegInf, p_idx);
-      p_DDM_Wien_raw(shared->UT_vec.begin(), R2.begin(), pars_cm, n_trials, (int)p_idx.size(),
-                     all_ones.data(), is_ok, shared->logF_UT_2.data(), R_NegInf, p_idx);
+      // Use pre-allocated buffers from shared state (avoids per-particle R heap)
+      const int* R1_ptr = shared->R1_int_buf.empty()
+          ? nullptr : shared->R1_int_buf.data();
+      const int* R2_ptr = shared->R2_int_buf.empty()
+          ? nullptr : shared->R2_int_buf.data();
+      const int* ones_ptr = shared->all_ones_int_buf.empty()
+          ? nullptr : shared->all_ones_int_buf.data();
+      // Fallback local buffers for the c_log_likelihood_DDM (non-pt) compatibility path
+      Rcpp::IntegerVector R1_local, R2_local;
+      std::vector<int> all_ones_local;
+      if (!R1_ptr || !R2_ptr || !ones_ptr) {
+        R1_local = Rcpp::IntegerVector(n_trials, 1);
+        R2_local = Rcpp::IntegerVector(n_trials, 2);
+        all_ones_local.assign(n_trials, 1);
+        R1_ptr  = R1_local.begin();
+        R2_ptr  = R2_local.begin();
+        ones_ptr = all_ones_local.data();
+      }
+      // Only call p_DDM at LT when some trial has LT > 0 — avoids p_DDM(0,...) calls.
+      // Only call p_DDM at UT when some trial has finite UT — avoids p_DDM(Inf,...) calls
+      // which trigger expensive/degenerate Wiener evaluations at t=Inf.
+      if (any_LT) {
+        p_DDM_Wien_raw(shared->LT_vec.begin(), R1_ptr, pars_cm, n_trials, (int)p_idx.size(),
+                       ones_ptr, is_ok, shared->logF_LT_1.data(), R_NegInf, p_idx);
+        p_DDM_Wien_raw(shared->LT_vec.begin(), R2_ptr, pars_cm, n_trials, (int)p_idx.size(),
+                       ones_ptr, is_ok, shared->logF_LT_2.data(), R_NegInf, p_idx);
+      }
+      if (any_UT_finite) {
+        p_DDM_Wien_raw(shared->UT_vec.begin(), R1_ptr, pars_cm, n_trials, (int)p_idx.size(),
+                       ones_ptr, is_ok, shared->logF_UT_1.data(), R_NegInf, p_idx);
+        p_DDM_Wien_raw(shared->UT_vec.begin(), R2_ptr, pars_cm, n_trials, (int)p_idx.size(),
+                       ones_ptr, is_ok, shared->logF_UT_2.data(), R_NegInf, p_idx);
+      }
 
       for (int i = 0; i < n_trials; ++i) {
         if (!is_ok[i]) continue;
@@ -849,18 +880,50 @@ double c_log_likelihood_DDM_pt(const double* pars_cm,
         else shared->res_buf[i] = log_sum_exp(logcdf_L[i], log1m_exp(logcdf_U[i]));
       }
     } else {
-      // Standard DDM censored trials
-      Rcpp::IntegerVector R1(n_trials, 1), R2(n_trials, 2);
-      Rcpp::NumericVector lF_LC_1(n_trials), lF_LC_2(n_trials), lF_UC_1(n_trials), lF_UC_2(n_trials);
-      std::vector<int> all_ones(n_trials, 1);
-      p_DDM_Wien_raw(shared->LC_vec.begin(), R1.begin(), pars_cm, n_trials, (int)p_idx.size(),
-                     all_ones.data(), is_ok, lF_LC_1.begin(), R_NegInf, p_idx);
-      p_DDM_Wien_raw(shared->LC_vec.begin(), R2.begin(), pars_cm, n_trials, (int)p_idx.size(),
-                     all_ones.data(), is_ok, lF_LC_2.begin(), R_NegInf, p_idx);
-      p_DDM_Wien_raw(shared->UC_vec.begin(), R1.begin(), pars_cm, n_trials, (int)p_idx.size(),
-                     all_ones.data(), is_ok, lF_UC_1.begin(), R_NegInf, p_idx);
-      p_DDM_Wien_raw(shared->UC_vec.begin(), R2.begin(), pars_cm, n_trials, (int)p_idx.size(),
-                     all_ones.data(), is_ok, lF_UC_2.begin(), R_NegInf, p_idx);
+      // Standard DDM censored trials — use pre-allocated shared buffers to avoid
+      // per-particle R heap allocation (critical for LT path where n_nonfinite > 0).
+      const bool have_shared_bufs = (shared != nullptr &&
+                                     !shared->R1_int_buf.empty() &&
+                                     (int)shared->R1_int_buf.size() >= n_trials);
+      // Fallback allocations (only used when called outside calc_ll_oo, e.g. standalone)
+      Rcpp::IntegerVector R1_fb, R2_fb;
+      Rcpp::NumericVector lF_LC_1_fb, lF_LC_2_fb, lF_UC_1_fb, lF_UC_2_fb;
+      std::vector<int> all_ones_fb;
+      int*    R1_ptr;    int*    R2_ptr;    int*    ones_ptr;
+      double* lF_LC_1;  double* lF_LC_2;
+      double* lF_UC_1;  double* lF_UC_2;
+      if (have_shared_bufs) {
+        R1_ptr   = shared->R1_int_buf.data();
+        R2_ptr   = shared->R2_int_buf.data();
+        ones_ptr = shared->all_ones_int_buf.data();
+        lF_LC_1  = shared->lF_LC_1_buf.data();
+        lF_LC_2  = shared->lF_LC_2_buf.data();
+        lF_UC_1  = shared->lF_UC_1_buf.data();
+        lF_UC_2  = shared->lF_UC_2_buf.data();
+      } else {
+        R1_fb = Rcpp::IntegerVector(n_trials, 1);
+        R2_fb = Rcpp::IntegerVector(n_trials, 2);
+        lF_LC_1_fb = Rcpp::NumericVector(n_trials);
+        lF_LC_2_fb = Rcpp::NumericVector(n_trials);
+        lF_UC_1_fb = Rcpp::NumericVector(n_trials);
+        lF_UC_2_fb = Rcpp::NumericVector(n_trials);
+        all_ones_fb.assign(n_trials, 1);
+        R1_ptr   = R1_fb.begin();
+        R2_ptr   = R2_fb.begin();
+        ones_ptr = all_ones_fb.data();
+        lF_LC_1  = lF_LC_1_fb.begin();
+        lF_LC_2  = lF_LC_2_fb.begin();
+        lF_UC_1  = lF_UC_1_fb.begin();
+        lF_UC_2  = lF_UC_2_fb.begin();
+      }
+      p_DDM_Wien_raw(shared->LC_vec.begin(), R1_ptr, pars_cm, n_trials, (int)p_idx.size(),
+                     ones_ptr, is_ok, lF_LC_1, R_NegInf, p_idx);
+      p_DDM_Wien_raw(shared->LC_vec.begin(), R2_ptr, pars_cm, n_trials, (int)p_idx.size(),
+                     ones_ptr, is_ok, lF_LC_2, R_NegInf, p_idx);
+      p_DDM_Wien_raw(shared->UC_vec.begin(), R1_ptr, pars_cm, n_trials, (int)p_idx.size(),
+                     ones_ptr, is_ok, lF_UC_1, R_NegInf, p_idx);
+      p_DDM_Wien_raw(shared->UC_vec.begin(), R2_ptr, pars_cm, n_trials, (int)p_idx.size(),
+                     ones_ptr, is_ok, lF_UC_2, R_NegInf, p_idx);
 
       for (int i = 0; i < n_trials; ++i) {
         if (!is_ok[i] || shared->finite_mask_int[i]) continue;
@@ -872,14 +935,41 @@ double c_log_likelihood_DDM_pt(const double* pars_cm,
           else if (r_idx == 1) mass = log_interval_mass(shared->logF_LT_1[i], lF_LC_1[i]);
           else mass = log_interval_mass(shared->logF_LT_2[i], lF_LC_2[i]);
         } else if (rt_ptr[i] == R_PosInf) {
-          if (!r_known) mass = log_sum_cdf(log_interval_mass(lF_UC_1[i], shared->logF_UT_1[i]), log_interval_mass(lF_UC_2[i], shared->logF_UT_2[i]));
-          else if (r_idx == 1) mass = log_interval_mass(lF_UC_1[i], shared->logF_UT_1[i]);
-          else mass = log_interval_mass(lF_UC_2[i], shared->logF_UT_2[i]);
+          // P(UC < RT < UT).
+          // When UT is finite, logF_UT_r = log F_r(UT) (computed above), and the
+          // interval formula is correct: (F_1(UT)-F_1(UC)) + (F_2(UT)-F_2(UC)).
+          // When UT=Inf, logF_UT_r was initialised to 0 (representing F_r(Inf)=1),
+          // but the DDM CDF is DEFECTIVE: F_1(Inf)+F_2(Inf)=1, not F_r(Inf)=1
+          // individually.  Using logF_UT_r=0 gives (1-F_1)+(1-F_2)=2-F_total >= 1,
+          // which log_sum_cdf clamps to 0 — every censored trial contributes mass=1
+          // regardless of parameters.  The correct mass is 1-F_total(UC).
+          if (!r_known) {
+            if (R_FINITE(UT[i])) {
+              mass = log_sum_cdf(log_interval_mass(lF_UC_1[i], shared->logF_UT_1[i]),
+                                 log_interval_mass(lF_UC_2[i], shared->logF_UT_2[i]));
+            } else {
+              // P(RT > UC) = 1 - F_1(UC) - F_2(UC)
+              mass = log_diff_exp(0.0, log_sum_exp(lF_UC_1[i], lF_UC_2[i]));
+            }
+          } else if (r_idx == 1) {
+            mass = log_interval_mass(lF_UC_1[i], shared->logF_UT_1[i]);
+          } else {
+            mass = log_interval_mass(lF_UC_2[i], shared->logF_UT_2[i]);
+          }
         } else { // NA
           double m1 = (!r_known) ? log_sum_cdf(log_interval_mass(shared->logF_LT_1[i], lF_LC_1[i]), log_interval_mass(shared->logF_LT_2[i], lF_LC_2[i]))
                                  : (r_idx == 1) ? log_interval_mass(shared->logF_LT_1[i], lF_LC_1[i]) : log_interval_mass(shared->logF_LT_2[i], lF_LC_2[i]);
-          double m2 = (!r_known) ? log_sum_cdf(log_interval_mass(lF_UC_1[i], shared->logF_UT_1[i]), log_interval_mass(lF_UC_2[i], shared->logF_UT_2[i]))
-                                 : (r_idx == 1) ? log_interval_mass(lF_UC_1[i], shared->logF_UT_1[i]) : log_interval_mass(lF_UC_2[i], shared->logF_UT_2[i]);
+          // Same defective-CDF fix as the R_PosInf branch above.
+          double m2;
+          if (!r_known) {
+            m2 = R_FINITE(UT[i])
+              ? log_sum_cdf(log_interval_mass(lF_UC_1[i], shared->logF_UT_1[i]),
+                            log_interval_mass(lF_UC_2[i], shared->logF_UT_2[i]))
+              : log_diff_exp(0.0, log_sum_exp(lF_UC_1[i], lF_UC_2[i]));
+          } else {
+            m2 = (r_idx == 1) ? log_interval_mass(lF_UC_1[i], shared->logF_UT_1[i])
+                               : log_interval_mass(lF_UC_2[i], shared->logF_UT_2[i]);
+          }
           mass = log_sum_exp(m1, m2);
         }
         if (R_FINITE(logZ[i])) shared->res_buf[i] = mass - logZ[i];
@@ -1179,6 +1269,14 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
       ddm_shared.finite_mask_int.resize(n_trials);
       ddm_shared.res_buf.resize(n_trials);
       ddm_shared.ok_int_buf.resize(n_trials);
+      // Pre-allocate DDM scratch buffers (avoids per-particle R heap in trunc/cens paths)
+      ddm_shared.lF_LC_1_buf.resize(n_trials);
+      ddm_shared.lF_LC_2_buf.resize(n_trials);
+      ddm_shared.lF_UC_1_buf.resize(n_trials);
+      ddm_shared.lF_UC_2_buf.resize(n_trials);
+      ddm_shared.R1_int_buf.assign(n_trials, 1);
+      ddm_shared.R2_int_buf.assign(n_trials, 2);
+      ddm_shared.all_ones_int_buf.assign(n_trials, 1);
       Rcpp::IntegerVector R_col = data["R"];
       ddm_shared.shared_R_levels = R_col.attr("levels");
       ddm_shared.valid = true;
@@ -2530,22 +2628,30 @@ double c_log_likelihood_race(
         lower_for_trial = UCj;
         upper_for_trial = UTj;
         if (R_j_idx == NA_INTEGER) {
-          const double logP = posdrift
-            ? log_diff_exp(log_surv_cm(lower_for_trial, start_row_idx, n_lR_j),
-                           log_surv_cm(upper_for_trial, start_row_idx, n_lR_j))
-            : log_surv_cm(lower_for_trial, start_row_idx, n_lR_j); // LBAIO: incl. intrinsic-omission mass
-          if (R_FINITE(logP) && logP > log_prob_eps) {
-            current_ll_val = logP;
-          } else { // numerical integration fallback
-            for (int k_win = 1; k_win <= n_lR_j; ++k_win) {
-              current_ll_val = log_sum_exp(current_ll_val, integrate_interval(k_win, lower_for_trial, upper_for_trial));
-            }
-            if (!posdrift) { // intrinsic-omission models only
-              ensure_buffers();
-              const double log_p_I = log_pIO_rowmajor(pars_rowmajor_buffer.data(),
-                                                      isok_int_buffer.data(),
-                                                      n_lR_j, n_par);
-              current_ll_val = log_sum_exp(current_ll_val, log_p_I);
+          // Fast exit: when no upper censoring (UCj=Inf) and model is posdrift,
+          // P(RT=Inf) = S(Inf) - S(Inf) = 0.  Avoids log_diff_exp(-Inf,-Inf)
+          // triggering a degenerate GSL call with bounds [Inf,Inf].
+          // The pC pass handles contaminant-omission probability separately.
+          if (posdrift && !R_FINITE(lower_for_trial)) {
+            // current_ll_val stays at min_ll
+          } else {
+            const double logP = posdrift
+              ? log_diff_exp(log_surv_cm(lower_for_trial, start_row_idx, n_lR_j),
+                             log_surv_cm(upper_for_trial, start_row_idx, n_lR_j))
+              : log_surv_cm(lower_for_trial, start_row_idx, n_lR_j); // LBAIO: incl. intrinsic-omission mass
+            if (R_FINITE(logP) && logP > log_prob_eps) {
+              current_ll_val = logP;
+            } else { // numerical integration fallback
+              for (int k_win = 1; k_win <= n_lR_j; ++k_win) {
+                current_ll_val = log_sum_exp(current_ll_val, integrate_interval(k_win, lower_for_trial, upper_for_trial));
+              }
+              if (!posdrift) { // intrinsic-omission models only
+                ensure_buffers();
+                const double log_p_I = log_pIO_rowmajor(pars_rowmajor_buffer.data(),
+                                                        isok_int_buffer.data(),
+                                                        n_lR_j, n_par);
+                current_ll_val = log_sum_exp(current_ll_val, log_p_I);
+              }
             }
           }
         } else {

@@ -42,7 +42,7 @@ NumericVector rdex_go_lpdf(
     double log_d = R_NegInf;
     if (dt_i > 0.) {
       log_d = std::log(
-        digt(
+        digt_impl(
           dt_i,
           (pars(i, 1) / pars(i, 4)) + .5 * (pars(i, 2) / pars(i, 4)),
           pars(i, 0) / pars(i, 4),
@@ -85,7 +85,7 @@ NumericVector rdex_go_lccdf(
     double log_s = 0.; // log(1)
     if (dt_i > 0.) {
       log_s = log1m(
-        pigt(
+        pigt_impl(
           dt_i,
           (pars(i, 1) / pars(i, 4)) + .5 * (pars(i, 2) / pars(i, 4)),
           pars(i, 0) / pars(i, 4),
@@ -129,14 +129,14 @@ double ss_rdex_go_lpdf(
     if (winner[i]) {
       double ld = R_NegInf;
       if (dt_i > 0.) {
-        ld = std::log(digt(dt_i, alpha, nu, gamma));
+        ld = std::log(digt_impl(dt_i, alpha, nu, gamma));
       }
       logpdf_winner += std::isfinite(ld) ? ld : min_ll;
       winner_found = true;
     } else {
       double ls = 0.; // log(1)
       if (dt_i > 0.) {
-        ls = log1m(pigt(dt_i, alpha, nu, gamma));
+        ls = log1m(pigt_impl(dt_i, alpha, nu, gamma));
       }
       logsurv_losers += std::isfinite(ls) ? ls : min_ll;
     }
@@ -216,7 +216,7 @@ static inline double ss_rdex_stop_success_lpdf(
       double dt_i = (x + wp->SSD) - t0;
       double Si = 1.0;
       if (dt_i > 0.) {
-        Si = 1.0 - pigt(dt_i, alpha, nu, gamma);
+        Si = 1.0 - pigt_impl(dt_i, alpha, nu, gamma);
       }
       S_go_all *= Si;
       if (S_go_all <= 0.0) return 0.0;
@@ -351,7 +351,7 @@ NumericVector dWald_RDEX_old(NumericVector t, double v,
     if (t[i] <= 0){
       pdf[i] = 0.;
     } else {
-      pdf[i] = digt(t[i], B + .5 * A, v, .5 * A);
+      pdf[i] = digt_impl(t[i], B + .5 * A, v, .5 * A);
     }
   }
   return pdf;
@@ -368,7 +368,7 @@ NumericVector dWald_RDEX(
     t[i] = t[i] - t0;
     pdf[i] = 0.;
     if (t[i] > 0.) {
-      pdf[i] = digt(t[i], (B/s) + .5 * (A/s), (v/s), .5 * (A/s));
+      pdf[i] = digt_impl(t[i], (B/s) + .5 * (A/s), (v/s), .5 * (A/s));
     }
   }
   return pdf;
@@ -385,7 +385,7 @@ NumericVector pWald_RDEX_old(NumericVector t, double v,
     if (t[i] <= 0){
       cdf[i] = 0.;
     } else {
-      cdf[i] = pigt(t[i], B + .5 * A, v, .5 * A);
+      cdf[i] = pigt_impl(t[i], B + .5 * A, v, .5 * A);
     }
   }
   return cdf;
@@ -402,7 +402,7 @@ NumericVector pWald_RDEX(
     t[i] = t[i] - t0;
     cdf[i] = 0.;
     if (t[i] > 0.) {
-      cdf[i] = pigt(t[i], (B/s) + .5 * (A/s), (v/s), .5 * (A/s));
+      cdf[i] = pigt_impl(t[i], (B/s) + .5 * (A/s), (v/s), .5 * (A/s));
     }
   }
   return cdf;
