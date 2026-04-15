@@ -106,6 +106,7 @@ benchmark_script_dev <- function() {
     
     results[[nm]] <- bm
   }
+  gc()
   return(list(results=results,lls=out_old))
 }
 
@@ -219,6 +220,7 @@ benchmark_script_new <- function() {
     
     results[[nm]] <- bm
   }
+  gc()
   return(list(results=results,lls=out_new))
 }
 
@@ -231,11 +233,6 @@ dev_results <- callr::r(
   libpath = c(dev_lib, .libPaths())
 )
 
-for (nm in names(dev_results$results)) {
-  cat("\n---", nm, "---\n")
-  print(dev_results[[nm]])
-}
-
 cat("\n=========================================\n")
 cat("Running DEV-OO Branch (New calc_ll and calc_ll_oo)\n")
 cat("=========================================\n")
@@ -243,11 +240,6 @@ new_results <- callr::r(
   func = benchmark_script_new,
   libpath = c(new_lib, .libPaths())
 )
-
-for (nm in names(new_results$results)) {
-  cat("\n---", nm, "---\n")
-  print(new_results$results[[nm]])
-}
 
 cat("\n=========================================\n")
 cat("Running UPSTREAM OO Branch (oo_refactor_simd)\n")
@@ -258,10 +250,6 @@ upstream_results <- callr::r(
   libpath = c(upstream_lib, .libPaths())
 )
 
-for (nm in names(upstream_results$results)) {
-  cat("\n---", nm, "---\n")
-  print(upstream_results$results[[nm]])
-}
 
 cat("\n=========================================\n")
 cat("Running OPTIMIZED Branch (Newest build)\n")
@@ -272,11 +260,6 @@ optimized_results <- callr::r(
   libpath = c(optimized_lib, .libPaths())
 )
 
-for (nm in names(optimized_results$results)) {
-  cat("\n---", nm, "---\n")
-  print(optimized_results$results[[nm]])
-}
-
 cat("\n=========================================\n")
 cat("Running HYBRID Branch (Newest build)\n")
 cat("=========================================\n")
@@ -285,11 +268,6 @@ hybrid_results <- callr::r(
   show = TRUE,
   libpath = c(hybrid_lib, .libPaths())
 )
-
-for (nm in names(hybrid_results$results)) {
-  cat("\n---", nm, "---\n")
-  print(hybrid_results$results[[nm]])
-}
 
 res = matrix(NA,ncol=5,nrow=6,dimnames=list(c("old_dev","oo_calc_ll","upstream_calc_ll_oo","zach_calc_ll_oo","optimized_calc_ll_oo","hybrid_calc_ll_oo"),c("LBA","RDM","LNR","WDM","DDM")))
 for (m in c("LBA","RDM","LNR","WDM","DDM")) {

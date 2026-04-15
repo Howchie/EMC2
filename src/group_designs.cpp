@@ -1,6 +1,7 @@
 // [[Rcpp::depends(RcppArmadillo)]]
 // [[Rcpp::plugins(cpp17)]]
 #include <RcppArmadillo.h>
+#include "utility_functions.h"
 
 // Numerically safe dot for partial rows: sum_{k<j} L(i,k)*L(j,k)
 inline double dot_partial(const arma::mat& L, arma::uword i, arma::uword j) {
@@ -69,9 +70,9 @@ inline bool chol_lower_nolapack(const arma::mat& Ain,
       double s = 0.0;
       for (arma::uword k = 0; k < i; ++k) s += L(i, k) * L(i, k);
       double d = A(i, i) - s;
-      if (!(d > 0.0) || !std::isfinite(d)) { ok = false; break; }
+      if (!(d > 0.0) || !emc2_isfinite(d)) { ok = false; break; }
       double lii = std::sqrt(d);
-      if (!std::isfinite(lii) || lii <= 0.0) { ok = false; break; }
+      if (!emc2_isfinite(lii) || lii <= 0.0) { ok = false; break; }
       L(i, i) = lii;
 
       // Off-diagonals below the diagonal: j = i+1..p-1 (but we fill as "row i" in lower form),
@@ -81,7 +82,7 @@ inline bool chol_lower_nolapack(const arma::mat& Ain,
         for (arma::uword k = 0; k < i; ++k) s2 += L(r, k) * L(i, k);
         double num = A(r, i) - s2;
         double val = num / lii;
-        if (!std::isfinite(val)) { ok = false; break; }
+        if (!emc2_isfinite(val)) { ok = false; break; }
         L(r, i) = val;
       }
     }

@@ -3,6 +3,7 @@
 
 #include <cmath>
 #include <algorithm>
+#include "utility_functions.h"
 #include "tools.h"
 
 /* DENSITY HELPERS */
@@ -215,7 +216,7 @@ inline double pwiener_inline(double q, double a, double v, double w, double err,
     else if (!epsFLAG && K > 0) err = -27.63102;
     else if (epsFLAG) err = std::log(err);
 
-    if (std::isinf(q)) return ddm_logP(0, a, v, w);
+    if (emc2_isinf(q)) return ddm_logP(0, a, v, w);
 
     Kss = ddm_Ks(q, v, a, w, err);
     Kll = ddm_Kl(q, v, a, w, err);

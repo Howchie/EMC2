@@ -51,7 +51,7 @@ NumericVector rdex_go_lpdf(
       );
     }
     
-    out[k] = std::isfinite(log_d) ? log_d : R_NegInf;
+    out[k] = R_FINITE(log_d) ? log_d : R_NegInf;
     
     k++;
   }
@@ -94,7 +94,7 @@ NumericVector rdex_go_lccdf(
       );
     }
     
-    out[k] = std::isfinite(log_s) ? log_s : R_NegInf;
+    out[k] = emc2_isfinite(log_s) ? log_s : R_NegInf;
     
     k++;
   }
@@ -131,19 +131,19 @@ double ss_rdex_go_lpdf(
       if (dt_i > 0.) {
         ld = std::log(digt_impl(dt_i, alpha, nu, gamma));
       }
-      logpdf_winner += std::isfinite(ld) ? ld : min_ll;
+      logpdf_winner += emc2_isfinite(ld) ? ld : min_ll;
       winner_found = true;
     } else {
       double ls = 0.; // log(1)
       if (dt_i > 0.) {
         ls = log1m(pigt_impl(dt_i, alpha, nu, gamma));
       }
-      logsurv_losers += std::isfinite(ls) ? ls : min_ll;
+      logsurv_losers += emc2_isfinite(ls) ? ls : min_ll;
     }
   }
   if (!winner_found) return min_ll;
   double out = logpdf_winner + logsurv_losers;
-  return std::isfinite(out) ? out : min_ll;
+  return emc2_isfinite(out) ? out : min_ll;
 }
 
 // go vs stop race log likelihood function for the case of stop trials with
@@ -169,7 +169,7 @@ double ss_rdex_stop_fail_lpdf(
   double stop_survivor_lprob = ptexg(
     RT - SSD, pars(0, 5), pars(0, 6), pars(0, 7), pars(0, 10), R_PosInf, false, true
   );
-  if (!std::isfinite(stop_survivor_lprob)) {
+  if (!emc2_isfinite(stop_survivor_lprob)) {
     stop_survivor_lprob = min_ll;
   }
   // final output of race model is summed log likelihood

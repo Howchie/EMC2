@@ -123,22 +123,18 @@ inline double drdm_scalar(double t, const double* par, void* /*ctx_*/) {
   if (R_IsNA(par[0])) return 0.0;
   const double tt = t - par[3];
   if (tt <= 0.0) return 0.0;
-  const double v = par[0];
-  const double B = par[1];
-  const double A = par[2];
-  const double s = par[4];
-  return digt_impl(tt, B / s + 0.5 * A / s, v / s, 0.5 * A / s);
+  const double inv_s = 1.0 / par[4];
+  return digt_impl(tt, par[1] * inv_s + 0.5 * par[2] * inv_s,
+                       par[0] * inv_s, 0.5 * par[2] * inv_s);
 }
 
 inline double prdm_scalar(double t, const double* par, void* /*ctx_*/) {
   if (R_IsNA(par[0])) return 0.0;
   const double tt = t - par[3];
   if (tt <= 0.0) return 0.0;
-  const double v = par[0];
-  const double B = par[1];
-  const double A = par[2];
-  const double s = par[4];
-  return pigt_impl(tt, B / s + 0.5 * A / s, v / s, 0.5 * A / s);
+  const double inv_s = 1.0 / par[4];
+  return pigt_impl(tt, par[1] * inv_s + 0.5 * par[2] * inv_s,
+                       par[0] * inv_s, 0.5 * par[2] * inv_s);
 }
 
 inline double dlnr_scalar(double t, const double* par, void* /*ctx_*/) {
@@ -185,7 +181,7 @@ inline void dlba_raw(const double* rt, const double* pars_cm, int n_rows,
     const double tt = rt[i] - t0_[i];
     if (tt <= 0.0) { out[i] = min_ll; continue; }
     const double pdf = dlba_norm(tt, A_[i], B_[i] + A_[i], v_[i], sv_[i], pd);
-    out[i] = (pdf > 0.0 && std::isfinite(pdf)) ? std::log(pdf) : min_ll;
+    out[i] = (pdf > 0.0 && emc2_isfinite(pdf)) ? std::log(pdf) : min_ll;
   }
 }
 
@@ -227,9 +223,10 @@ inline void drdm_raw(const double* rt, const double* pars_cm, int n_rows,
     if (R_IsNA(v_[i]) || !isok[i]) { out[i] = min_ll; continue; }
     const double tt = rt[i] - t0_[i];
     if (tt <= 0.0) { out[i] = min_ll; continue; }
-    const double pdf = digt_impl(tt, B_[i] / s_[i] + 0.5 * A_[i] / s_[i],
-                            v_[i] / s_[i], 0.5 * A_[i] / s_[i]);
-    out[i] = (pdf > 0.0 && std::isfinite(pdf)) ? std::log(pdf) : min_ll;
+    const double inv_s = 1.0 / s_[i];  // one division, three multiplications below
+    const double pdf = digt_impl(tt, B_[i] * inv_s + 0.5 * A_[i] * inv_s,
+                            v_[i] * inv_s, 0.5 * A_[i] * inv_s);
+    out[i] = (pdf > 0.0 && R_FINITE(pdf)) ? std::log(pdf) : min_ll;
   }
 }
 
@@ -247,8 +244,9 @@ inline void prdm_raw(const double* rt, const double* pars_cm, int n_rows,
     if (R_IsNA(v_[i]) || !isok[i]) { out[i] = 0.0; continue; }
     const double tt = rt[i] - t0_[i];
     if (tt <= 0.0) { out[i] = 0.0; continue; }
-    const double cdf = pigt_impl(tt, B_[i] / s_[i] + 0.5 * A_[i] / s_[i],
-                            v_[i] / s_[i], 0.5 * A_[i] / s_[i]);
+    const double inv_s = 1.0 / s_[i];  // one division, three multiplications below
+    const double cdf = pigt_impl(tt, B_[i] * inv_s + 0.5 * A_[i] * inv_s,
+                            v_[i] * inv_s, 0.5 * A_[i] * inv_s);
     if (cdf >= 1.0) { out[i] = min_ll; continue; }
     out[i] = (cdf <= 0.0) ? 0.0 : std::log1p(-cdf);
   }
@@ -268,7 +266,7 @@ inline void dlnr_raw(const double* rt, const double* pars_cm, int n_rows,
     const double tt = rt[i] - t0_[i];
     if (tt <= 0.0) { out[i] = min_ll; continue; }
     const double pdf = dlnorm_std(tt, m_[i], s_[i], false);
-    out[i] = (pdf > 0.0 && std::isfinite(pdf)) ? std::log(pdf) : min_ll;
+    out[i] = (pdf > 0.0 && emc2_isfinite(pdf)) ? std::log(pdf) : min_ll;
   }
 }
 
@@ -339,8 +337,9 @@ inline void rdm_logS_at_t(double t, const double* pars_cm,
       if (!isok_all[r] || R_IsNA(v_[r])) { bad = true; break; }
       const double tt = t - t0_[r];
       if (tt <= 0.0) continue;
-      const double cdf = pigt_impl(tt, B_[r] / s_[r] + 0.5 * A_[r] / s_[r],
-                              v_[r] / s_[r], 0.5 * A_[r] / s_[r]);
+      const double inv_s = 1.0 / s_[r];
+      const double cdf = pigt_impl(tt, B_[r] * inv_s + 0.5 * A_[r] * inv_s,
+                              v_[r] * inv_s, 0.5 * A_[r] * inv_s);
       if (cdf >= 1.0) { bad = true; break; }
       if (cdf > 0.0) logS += std::log1p(-cdf);
     }

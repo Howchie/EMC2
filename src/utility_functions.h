@@ -31,7 +31,7 @@ static inline bool emc2_isfinite(double x) { return (bool)R_FINITE(x); }
 static inline bool emc2_isinf(double x)    { return !R_FINITE(x) && !ISNAN(x); }
 static inline bool emc2_isnan(double x)    { return (bool)ISNAN(x); }
 
-LogicalVector contains(CharacterVector sv, std::string txt) {
+inline LogicalVector contains(CharacterVector sv, std::string txt) {
   LogicalVector res(sv.size());
   for (int i = 0; i < sv.size(); i ++) {
     res[i] = (sv[i] == txt);
@@ -39,7 +39,7 @@ LogicalVector contains(CharacterVector sv, std::string txt) {
   return res;
 }
 
-NumericVector vector_pow(NumericVector x1, NumericVector x2){
+inline NumericVector vector_pow(NumericVector x1, NumericVector x2){
   NumericVector out(x1.length());
   for(unsigned int i = 0; i < out.length(); i ++){
     out[i] = pow(x1[i], x2[i]);
@@ -47,7 +47,7 @@ NumericVector vector_pow(NumericVector x1, NumericVector x2){
   return(out);
 }
 
-NumericVector pnorm_multiple(NumericVector x){
+inline NumericVector pnorm_multiple(NumericVector x){
   NumericVector out(x.size());
   for(int i = 0; i < x.size(); i++){
     out[i] = R::pnorm(x[i], 0, 1, TRUE, FALSE);
@@ -55,7 +55,7 @@ NumericVector pnorm_multiple(NumericVector x){
   return out;
 }
 
-LogicalVector contains_multiple(CharacterVector sv, CharacterVector inputs) {
+inline LogicalVector contains_multiple(CharacterVector sv, CharacterVector inputs) {
   LogicalVector res(sv.size());
   for (int i = 0; i < sv.size(); i ++) {
     int k = 0;
@@ -69,7 +69,7 @@ LogicalVector contains_multiple(CharacterVector sv, CharacterVector inputs) {
   return res;
 }
 
-NumericMatrix submat_rcpp_col(NumericMatrix X, LogicalVector condition) {
+inline NumericMatrix submat_rcpp_col(NumericMatrix X, LogicalVector condition) {
   int n = X.nrow();
   int k = X.ncol();
 
@@ -116,7 +116,7 @@ NumericMatrix submat_rcpp_col(NumericMatrix X, LogicalVector condition) {
   return out;
 }
 
-NumericMatrix submat_rcpp_col_by_names(NumericMatrix X, CharacterVector cols) {
+inline NumericMatrix submat_rcpp_col_by_names(NumericMatrix X, CharacterVector cols) {
   int n = X.nrow();
   int k = X.ncol();
   int m = cols.size();
@@ -163,7 +163,7 @@ NumericMatrix submat_rcpp_col_by_names(NumericMatrix X, CharacterVector cols) {
   return out;
 }
 
-NumericMatrix submat_rcpp(NumericMatrix X, LogicalVector condition) {
+inline NumericMatrix submat_rcpp(NumericMatrix X, LogicalVector condition) {
   int n = X.nrow(), k = X.ncol();
   int to_keep = sum(condition);
   // If all rows match, just return X (this avoids copying)
@@ -189,7 +189,7 @@ NumericMatrix submat_rcpp(NumericMatrix X, LogicalVector condition) {
 }
 
 
-NumericVector c_expand(NumericVector x1, IntegerVector expand){
+inline NumericVector c_expand(NumericVector x1, IntegerVector expand){
   const int n_out = expand.length();
   NumericVector out(n_out);
   int curr_idx;
@@ -200,7 +200,7 @@ NumericVector c_expand(NumericVector x1, IntegerVector expand){
   return(out);
 }
 
-LogicalVector c_bool_expand(LogicalVector x1, IntegerVector expand){
+inline LogicalVector c_bool_expand(LogicalVector x1, IntegerVector expand){
   const int n_out = expand.length();
   LogicalVector out(n_out);
   int curr_idx;
@@ -211,7 +211,7 @@ LogicalVector c_bool_expand(LogicalVector x1, IntegerVector expand){
   return(out);
 }
 
-NumericVector c_add_vectors(NumericVector x1, NumericVector x2){
+inline NumericVector c_add_vectors(NumericVector x1, NumericVector x2){
   if(is_na(x2)[0] ){
     return(x1);
   }
@@ -234,7 +234,7 @@ NumericVector c_add_vectors(NumericVector x1, NumericVector x2){
 }
 
 // [[Rcpp::export]]
-CharacterVector c_add_charvectors(CharacterVector x, CharacterVector y) {
+inline CharacterVector c_add_charvectors(CharacterVector x, CharacterVector y) {
   // Create a new vector of length = length(x) + length(y)
   CharacterVector z(x.size() + y.size());
   // Copy x into z
@@ -267,7 +267,7 @@ struct RowEqual {
 };
 
 // More efficient duplicated_matrix using a reusable buffer
-Rcpp::LogicalVector duplicated_matrix(Rcpp::NumericMatrix x) {
+inline Rcpp::LogicalVector duplicated_matrix(Rcpp::NumericMatrix x) {
   int n = x.nrow();
   int m = x.ncol();
 
@@ -298,7 +298,7 @@ Rcpp::LogicalVector duplicated_matrix(Rcpp::NumericMatrix x) {
   return dup;
 }
 
-IntegerVector cumsum_logical(LogicalVector x) {
+inline IntegerVector cumsum_logical(LogicalVector x) {
   int n = x.size();
   IntegerVector out(n);
   int running_total = 0;
@@ -314,7 +314,7 @@ IntegerVector cumsum_logical(LogicalVector x) {
   return out;
 }
 
-IntegerVector which_rcpp(LogicalVector x) {
+inline IntegerVector which_rcpp(LogicalVector x) {
   int n = x.size();
   int count = 0;
   // First pass: count how many TRUE
@@ -336,7 +336,7 @@ IntegerVector which_rcpp(LogicalVector x) {
   return out;
 }
 
-LogicalVector lr_all(LogicalVector ok, int n_side)
+inline LogicalVector lr_all(LogicalVector ok, int n_side)
 {
   const R_xlen_t n = ok.size();
   if (n % n_side)
@@ -369,7 +369,7 @@ LogicalVector lr_all(LogicalVector ok, int n_side)
   return out;
 }
 
-std::vector<BoundSpec> make_bound_specs(NumericMatrix minmax,
+inline std::vector<BoundSpec> make_bound_specs(NumericMatrix minmax,
                                         CharacterVector minmax_colnames,
                                         NumericMatrix pars,
                                         List bound)
@@ -417,7 +417,7 @@ std::vector<BoundSpec> make_bound_specs(NumericMatrix minmax,
   return specs;
 }
 
-std::vector<TransformSpec> make_transform_specs(NumericMatrix pars, List transform)
+inline std::vector<TransformSpec> make_transform_specs(NumericMatrix pars, List transform)
 {
   int ncol = pars.ncol();
   std::vector<TransformSpec> specs(ncol);
@@ -528,7 +528,7 @@ inline std::vector<TransformSpec> make_transform_specs_from_full(
   return specs;
 }
 
-std::vector<PreTransformSpec> make_pretransform_specs(NumericVector p_vector, List transform)
+inline std::vector<PreTransformSpec> make_pretransform_specs(NumericVector p_vector, List transform)
 {
   int n = p_vector.size();
   std::vector<PreTransformSpec> specs(n);
@@ -598,7 +598,7 @@ std::vector<PreTransformSpec> make_pretransform_specs(NumericVector p_vector, Li
   return specs;
 }
 
-LogicalVector c_do_bound(NumericMatrix pars,
+inline LogicalVector c_do_bound(NumericMatrix pars,
                          const std::vector<BoundSpec>& specs)
 {
   int nrows = pars.nrow();
@@ -630,7 +630,7 @@ LogicalVector c_do_bound(NumericMatrix pars,
   return result;
 }
 
-NumericVector c_do_pre_transform(NumericVector p_vector,
+inline NumericVector c_do_pre_transform(NumericVector p_vector,
                                  const std::vector<PreTransformSpec>& specs)
 {
   for (size_t i = 0; i < specs.size(); i++) {
@@ -658,7 +658,7 @@ NumericVector c_do_pre_transform(NumericVector p_vector,
   return p_vector;
 }
 
-NumericMatrix c_do_transform(NumericMatrix pars,
+inline NumericMatrix c_do_transform(NumericMatrix pars,
                              const std::vector<TransformSpec>& specs)
 {
   int nrow = pars.nrow();
@@ -697,14 +697,13 @@ NumericMatrix c_do_transform(NumericMatrix pars,
   return pars;
 }
 
-bool row_is_finite(const Rcpp::NumericMatrix& mat, int row) {
+inline bool row_is_finite(const Rcpp::NumericMatrix& mat, int row) {
   // Convenience helper for sanity checks on parameter rows.
   for (int j = 0; j < mat.ncol(); ++j) {
-    if (!R_finite(mat(row, j))) return false;
+    if (!R_FINITE(mat(row, j))) return false;
   }
   return true;
 }
 
 
 #endif
-

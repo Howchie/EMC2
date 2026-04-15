@@ -338,7 +338,8 @@ inline double clamp_cdf01_race(double cdf) {
   // Keep CDF values in a stable range for downstream log/1-CDF operations.
   // Centralizing this avoids repeating the same "near 0/near 1/NaN/Inf" guards
   // throughout the hot loops.
-  if (!std::isfinite(cdf)) return NA_REAL;
+  // Use R_FINITE (not emc2_isfinite): -ffast-math folds emc2_isfinite to true.
+  if (!R_FINITE(cdf)) return NA_REAL;
   if (cdf <= 0.0) return 0.0;
   if (cdf >= 1.0) return 1.0;
   if (cdf > 1.0 - 1e-15) return 1.0 - 1e-15;
@@ -350,7 +351,8 @@ inline double safe_log1m_race(double p) {
   // - p <= 0 => log(1) = 0
   // - p >= 1 => log(0) = -Inf
   // - p ~ 1  => clamp away from 1 to avoid hitting log(0) in finite arithmetic
-  if (!std::isfinite(p)) return R_NegInf; //
+  // Use R_FINITE (not emc2_isfinite): -ffast-math folds emc2_isfinite to true.
+  if (!R_FINITE(p)) return R_NegInf;
   if (p <= 0.0) return 0.0;
   if (p >= 1.0) return R_NegInf;
   if (p > 1.0 - 1e-15) p = 1.0 - 1e-15;

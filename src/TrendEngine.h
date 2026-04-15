@@ -1,5 +1,6 @@
 #include <RcppArmadillo.h>
 #include <unordered_set>
+#include "utility_functions.h"
 #include "utility_types.h"
 #include "kernels.h"
 #include "ParamTable.h"

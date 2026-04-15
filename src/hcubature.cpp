@@ -343,7 +343,7 @@
 //     numevals += 2 * evals_per_box;
 //     delete_box(box);
 //     free(ma); free(mb);
-//     if (((err[0] <= std::max(reqRelError * fabs(val[0]), reqAbsError)) || ((maxEval != 0) && (numevals >= maxEval))) || !(std::isfinite(val[0])) ) {
+//     if (((err[0] <= std::max(reqRelError * fabs(val[0]), reqAbsError)) || ((maxEval != 0) && (numevals >= maxEval))) || !(emc2_isfinite(val[0])) ) {
 //       break;
 //     }
 //   }
@@ -365,6 +365,7 @@
 
 
 #include "gauss.h"
+#include "utility_functions.h"
 #include <queue>
 #include <cmath>
 #include <cstring>
@@ -688,7 +689,7 @@ int hcubature(int integrand(unsigned dim, const double* x, void* p, unsigned fdi
     numevals += 2 * evals_per_box;
     delete_box(box);
     free(ma); free(mb);
-    if (((err[0] <= std::max(reqRelError * fabs(val[0]), reqAbsError)) || ((maxEval != 0) && (numevals >= static_cast<int>(maxEval)))) || !(std::isfinite(val[0])) ) {
+    if (((err[0] <= std::max(reqRelError * fabs(val[0]), reqAbsError)) || ((maxEval != 0) && (numevals >= static_cast<int>(maxEval)))) || !(emc2_isfinite(val[0])) ) {
       break;
     }
   }

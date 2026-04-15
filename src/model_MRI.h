@@ -97,7 +97,7 @@ double c_log_likelihood_MRI_white(NumericMatrix pars, NumericVector y, LogicalVe
 
   // Replace NA, -Inf, or very low likelihoods with min_ll.
   for (int i = 0; i < n; i++) {
-    if (ISNAN(ll[i]) || !R_finite(ll[i]) || ll[i] < min_ll){
+    if (ISNAN(ll[i]) || !R_FINITE(ll[i]) || ll[i] < min_ll){
       ll[i] = min_ll;
     }
   }
@@ -226,4 +226,3 @@ NumericVector extract_y(DataFrame data) {
 // }
 
 #endif
-

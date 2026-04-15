@@ -4,6 +4,8 @@
 #include <RcppArmadillo.h>
 #include <Rcpp.h>
 
+#include "utility_functions.h"
+
 using namespace Rcpp;
 
 #ifdef RCPP_USE_GLOBAL_ROSTREAM
@@ -936,7 +938,7 @@ BEGIN_RCPP
 END_RCPP
 }
 // run_trend_rcpp
-inline NumericVector run_trend_rcpp(DataFrame data, List trend, NumericVector param, NumericMatrix trend_pars, NumericMatrix pars_full, bool return_kernel);
+NumericVector run_trend_rcpp(DataFrame data, List trend, NumericVector param, NumericMatrix trend_pars, NumericMatrix pars_full, bool return_kernel);
 RcppExport SEXP _EMC2_run_trend_rcpp(SEXP dataSEXP, SEXP trendSEXP, SEXP paramSEXP, SEXP trend_parsSEXP, SEXP pars_fullSEXP, SEXP return_kernelSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;

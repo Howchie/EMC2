@@ -42,10 +42,10 @@ double dexg(
   // compute Phi term
   double z = (x - mu) / sig_p - sig_p / tau_p;
   double log_phi = R::pnorm(z, 0.0, 1.0, true, true);
-  if (std::isnan(log_phi)) {
+  if (emc2_isnan(log_phi)) {
     return NA_REAL;
   }
-  if (std::isinf(log_phi)) {
+  if (emc2_isinf(log_phi)) {
     return log_d ? log_phi : std::exp(log_phi);
   }
 
@@ -72,7 +72,7 @@ double pexg(
   if (sigma <= 0. || tau <= 0.) return NA_REAL;
 
   // handle infinite q
-  if (std::isinf(q)) {
+  if (emc2_isinf(q)) {
     double out = (q < 0.) ? 0. : 1.;
     if (!lower_tail) out = 1. - out;
     return log_p ? std::log(out) : out;

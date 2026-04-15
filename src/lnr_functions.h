@@ -15,7 +15,7 @@ inline double plnorm_std(double x, double meanlog, double sdlog,
     if (log_p) return lower_tail ? R_NegInf : 0.0;
     return lower_tail ? 0.0 : 1.0;
   }
-  if (!std::isfinite(sdlog) || !(sdlog > 0.0)) {
+  if (!emc2_isfinite(sdlog) || !(sdlog > 0.0)) {
     return R::plnorm(x, meanlog, sdlog, lower_tail, log_p);
   }
   const double z = (std::log(x) - meanlog) / sdlog;
@@ -25,7 +25,7 @@ inline double plnorm_std(double x, double meanlog, double sdlog,
 inline double dlnorm_std(double x, double meanlog, double sdlog,
                          bool log_p = false) {
   if (x <= 0.0) return log_p ? R_NegInf : 0.0;
-  if (!std::isfinite(sdlog) || !(sdlog > 0.0)) {
+  if (!emc2_isfinite(sdlog) || !(sdlog > 0.0)) {
     return R::dlnorm(x, meanlog, sdlog, log_p);
   }
   const double z = (std::log(x) - meanlog) / sdlog;
@@ -35,7 +35,7 @@ inline double dlnorm_std(double x, double meanlog, double sdlog,
 
 inline double lnorm_log_surv_std(double x, double meanlog, double sdlog) {
   if (x <= 0.0) return 0.0;
-  if (!std::isfinite(sdlog) || !(sdlog > 0.0)) {
+  if (!emc2_isfinite(sdlog) || !(sdlog > 0.0)) {
     const double cdf = R::plnorm(x, meanlog, sdlog, true, false);
     if (cdf >= 1.0) return R_NegInf;
     if (cdf <= 0.0) return 0.0;

@@ -2,20 +2,14 @@
 
 // [[Rcpp::export]]
 double pigt_old(double t, double k = 1, double l = 1, double a = .1, double threshold = 1e-10) {
-    const PigtEval direct = pigt_direct_eval(t, k, l, a, threshold);
-    if (direct.value < 0. || !std::isfinite(direct.value)) {
-        return 0.;
-    }
-    return direct.value;
+    const double v = pigt_try_direct(t, k, l, a, threshold);
+    return v < 0. ? 0. : v;
 }
 
 // [[Rcpp::export]]
 double digt_old(double t, double k = 1., double l = 1., double a = .1, double threshold= 1e-10) {
-    const DigtEval direct = digt_direct_eval(t, k, l, a, threshold);
-    if (direct.value < 0. || !std::isfinite(direct.value)) {
-        return 0.;
-    }
-    return direct.value;
+    const double v = digt_try_direct(t, k, l, a, threshold);
+    return v < 0. ? 0. : v;
 }
 
 // [[Rcpp::export]]

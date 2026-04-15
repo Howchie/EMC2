@@ -760,7 +760,7 @@ void TrendRuntime::apply_base_for_op(TrendOpRuntime& op,
 
   for (int r = 0; r < n; ++r) {
     double p = target_col[r];
-    if (NumericVector::is_na(p) || std::isnan(p)) continue;
+    if (NumericVector::is_na(p) || emc2_isnan(p)) continue;
 
     double contrib = 0.0;
 
@@ -774,7 +774,7 @@ void TrendRuntime::apply_base_for_op(TrendOpRuntime& op,
       for (int k = 0; k < K; ++k) {
         const KernelSlotSpec& slot = *op.kernels[k].spec;
         double q = (*trajs[k])[r];
-        if (NumericVector::is_na(q) || std::isnan(q)) q = 0.0;
+        if (NumericVector::is_na(q) || emc2_isnan(q)) q = 0.0;
 
         for (int m = 0; m < n_maps; ++m) {
           double base_val = pt.base(r, op.base_par_indices[m]);
@@ -788,7 +788,7 @@ void TrendRuntime::apply_base_for_op(TrendOpRuntime& op,
       double q_combined = 0.0;
       for (int k = 0; k < K; ++k) {
         double q = (*trajs[k])[r];
-        if (NumericVector::is_na(q) || std::isnan(q)) q = 0.0;
+        if (NumericVector::is_na(q) || emc2_isnan(q)) q = 0.0;
         q_combined += q;
       }
 
