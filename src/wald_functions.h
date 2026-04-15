@@ -4,6 +4,7 @@
 #define _USE_MATH_DEFINES
 #include <cmath>
 #include <Rcpp.h>
+#include "composite_functions.h"
 
 using namespace Rcpp;
 
@@ -60,40 +61,179 @@ inline double pnorm_std(double x, bool lower = true, bool log_p = false) {
 
 // Fast log-normal CDF/PDF wrappers.
 // For sdlog <= 0 or non-finite sdlog, fall back to R's implementation to preserve semantics.
-inline double plnorm_std(double x, double meanlog, double sdlog,
-                         bool lower_tail = true, bool log_p = false) {
-  if (x <= 0.0) {
-    if (log_p) return lower_tail ? R_NegInf : 0.0;
-    return lower_tail ? 0.0 : 1.0;
-  }
-  if (!std::isfinite(sdlog) || !(sdlog > 0.0)) {
-    return R::plnorm(x, meanlog, sdlog, lower_tail, log_p);
-  }
-  const double z = (std::log(x) - meanlog) / sdlog;
-  return pnorm_std(z, lower_tail, log_p);
+struct SignedLogTerm {
+  int sign;       // -1, 0, +1
+  double logabs;  // log(|x|), or -Inf for zero
+};
+
+inline SignedLogTerm signed_log_zero() {
+  return {0, R_NegInf};
 }
 
-inline double dlnorm_std(double x, double meanlog, double sdlog,
-                         bool log_p = false) {
-  if (x <= 0.0) return log_p ? R_NegInf : 0.0;
-  if (!std::isfinite(sdlog) || !(sdlog > 0.0)) {
-    return R::dlnorm(x, meanlog, sdlog, log_p);
-  }
-  const double z = (std::log(x) - meanlog) / sdlog;
-  const double log_pdf = -std::log(x) - std::log(sdlog) - 0.5 * z * z - LOG_SQRT_2PI;
-  return log_p ? log_pdf : std::exp(log_pdf);
+inline SignedLogTerm signed_log_from_value(double x) {
+  if (!std::isfinite(x) || x == 0.0) return signed_log_zero();
+  return {x < 0.0 ? -1 : 1, std::log(std::fabs(x))};
 }
 
-inline double lnorm_log_surv_std(double x, double meanlog, double sdlog) {
-  if (x <= 0.0) return 0.0;
-  if (!std::isfinite(sdlog) || !(sdlog > 0.0)) {
-    const double cdf = R::plnorm(x, meanlog, sdlog, true, false);
-    if (cdf >= 1.0) return R_NegInf;
-    if (cdf <= 0.0) return 0.0;
-    return std::log1p(-cdf);
+inline SignedLogTerm signed_log_from_logabs(double logabs, int sign = 1) {
+  if (sign == 0 || logabs == R_NegInf) return signed_log_zero();
+  return {sign < 0 ? -1 : 1, logabs};
+}
+
+inline SignedLogTerm signed_log_mul(SignedLogTerm a, SignedLogTerm b) {
+  if (a.sign == 0 || b.sign == 0) return signed_log_zero();
+  if (!std::isfinite(a.logabs) || !std::isfinite(b.logabs)) return signed_log_zero();
+  return {a.sign * b.sign, a.logabs + b.logabs};
+}
+
+inline SignedLogTerm signed_log_scale(SignedLogTerm a, double scale) {
+  if (a.sign == 0 || scale == 0.0) return signed_log_zero();
+  if (!std::isfinite(scale)) return signed_log_zero();
+  return {a.sign * (scale < 0.0 ? -1 : 1), a.logabs + std::log(std::fabs(scale))};
+}
+
+inline SignedLogTerm signed_log_scale_logabs(SignedLogTerm a, double log_scale, int scale_sign = 1) {
+  if (a.sign == 0 || scale_sign == 0 || !std::isfinite(log_scale)) return signed_log_zero();
+  return {a.sign * (scale_sign < 0 ? -1 : 1), a.logabs + log_scale};
+}
+
+inline SignedLogTerm signed_log_add(SignedLogTerm a, SignedLogTerm b) {
+  if (a.sign == 0) return b;
+  if (b.sign == 0) return a;
+
+  if (a.sign == b.sign) {
+    return {a.sign, log_sum_exp(a.logabs, b.logabs)};
   }
-  const double z = (std::log(x) - meanlog) / sdlog;
-  return pnorm_std(z, false, true);
+
+  if (a.logabs == b.logabs) return signed_log_zero();
+  if (a.logabs > b.logabs) {
+    return {a.sign, log_diff_exp(a.logabs, b.logabs)};
+  }
+  return {b.sign, log_diff_exp(b.logabs, a.logabs)};
+}
+
+inline SignedLogTerm signed_log_diff_exp(double log_a, double log_b) {
+  if (!std::isfinite(log_a) || !std::isfinite(log_b)) return signed_log_zero();
+  if (log_a == log_b) return signed_log_zero();
+  if (log_a > log_b) return {1, log_diff_exp(log_a, log_b)};
+  return {-1, log_diff_exp(log_b, log_a)};
+}
+
+inline SignedLogTerm signed_log_2phi_minus1(double z) {
+  const double log2 = std::log(2.0);
+  if (z >= 0.0) {
+    double log_q = pnorm_std(z, false, true);
+    if (!std::isfinite(log_q)) return signed_log_zero();
+    double arg = log2 + log_q;
+    if (arg > 0.0) arg = 0.0;
+    return signed_log_from_logabs(log1m_exp(arg), 1);
+  }
+
+  double log_p = pnorm_std(z, true, true);
+  if (!std::isfinite(log_p)) return signed_log_zero();
+  double arg = log2 + log_p;
+  if (arg > 0.0) arg = 0.0;
+  return signed_log_from_logabs(log1m_exp(arg), -1);
+}
+
+double pigt0(double t, double k, double l);
+double digt0(double t, double k, double l);
+double pigt0_log(double t, double k, double l);
+double digt0_log(double t, double k, double l);
+
+struct PigtEval {
+  double value;
+  double raw_sum;
+  double abs_sum;
+};
+
+struct DigtEval {
+  double value;
+  double raw_sum;
+  double abs_sum;
+};
+
+inline bool needs_logspace(double raw_sum, double abs_sum, double rel_threshold = 1e-12) {
+  if (!std::isfinite(raw_sum) || !std::isfinite(abs_sum) || abs_sum <= 0.0) return true;
+  return std::fabs(raw_sum) <= rel_threshold * abs_sum;
+}
+
+inline PigtEval pigt_direct_eval(double t, double k = 1., double l = 1., double a = .1, double threshold = 1e-10) {
+  if (t <= 0.) {
+    return {0.0, 0.0, 0.0};
+  }
+  if (a < threshold) {
+    const double value = pigt0(t, k, l);
+    return {value, value, std::fabs(value)};
+  }
+
+  const double sqt = std::sqrt(t);
+  const double lgt = std::log(t);
+
+  if (l < threshold) {
+    const double t5a = 2. * pnorm_std((k + a) / sqt, true, false) - 1;
+    const double t5b = 2. * pnorm_std((- k - a) / sqt, true, false) - 1;
+    const double t6a = - .5 * ((k + a) * (k + a) / t - M_LN2 - L_PI + lgt) - std::log(a);
+    const double t6b = - .5 * ((k - a) * (k - a) / t - M_LN2 - L_PI + lgt) - std::log(a);
+
+    const double e6a = std::exp(t6a);
+    const double e6b = std::exp(t6b);
+    const double cross = ((- k + a) * t5a - (k - a) * t5b) / (2. * a);
+    const double raw = 1.0 + e6a - e6b + cross;
+    const double cdf = 0.5 * raw / a;
+    const double abs_sum = 1.0 + e6a + e6b + std::fabs(cross);
+    return {cdf, raw, abs_sum};
+  }
+
+  const double t1a = std::exp(- .5 * (k - a - t * l) * (k - a - t * l) / t);
+  const double t1b = std::exp(- .5 * (a + k - t * l) * (a + k - t * l) / t);
+  const double t1 = std::exp(.5* (lgt - M_LN2 - L_PI)) * (t1a - t1b);
+
+  const double t2a = std::exp(2. * l * (k - a) + pnorm_std(- (k - a + t * l) / sqt, true, true));
+  const double t2b = std::exp(2. * l * (k + a) + pnorm_std(- (k + a + t * l) / sqt, true, true));
+  const double t2 = a + (t2b - t2a) / (2. * l);
+
+  const double t4a = 2. * pnorm_std((k + a) / sqt - sqt * l, true, false) - 1.;
+  const double t4b = 2. * pnorm_std((k - a) / sqt - sqt * l, true, false) - 1.;
+  const double t4 = .5 * (t * l - a - k + .5 / l) * t4a + .5 * (k - a - t * l - .5 / l) * t4b;
+
+  const double raw = t4 + t2 + t1;
+  const double cdf = .5 * raw / a;
+  const double abs_sum = std::fabs(t4) + std::fabs(t2) + std::fabs(t1);
+  return {cdf, raw, abs_sum};
+}
+
+inline DigtEval digt_direct_eval(double t, double k = 1., double l = 1., double a = .1, double threshold = 1e-10) {
+  if (t <= 0.) {
+    return {0.0, 0.0, 0.0};
+  }
+  if (a < threshold) {
+    const double value = digt0(t, k, l);
+    return {value, value, std::fabs(value)};
+  }
+
+  if (l < threshold) {
+    const double term1 = std::exp(- (k - a) * (k - a) / (2. * t));
+    const double term2 = std::exp(- (k + a) * (k + a) / (2. * t));
+    const double term = term1 - term2;
+    const double value = std::exp(-.5 * (M_LN2 + L_PI + std::log(t)) + std::log(term) - M_LN2 - std::log(a));
+    return {value, term, term1 + term2};
+  }
+
+  const double sqt = std::sqrt(t);
+
+  const double t1a = - (a - k + t * l) * (a - k + t * l) / (2. * t);
+  const double t1b = - (a + k - t * l) * (a + k - t * l) / (2. * t);
+  const double t1 = M_SQRT1_2 * (std::exp(t1a) - std::exp(t1b)) / (std::sqrt(M_PI) * sqt);
+
+  const double t2a = 2. * pnorm_std((- k + a) / sqt + sqt * l, true, false) - 1.;
+  const double t2b = 2. * pnorm_std((k + a) / sqt - sqt * l, true, false) - 1.;
+  const double t2 = std::exp(std::log(.5) + std::log(l)) * (t2a + t2b);
+
+  const double raw = t1 + t2;
+  const double value = std::exp(std::log(raw) - M_LN2 - std::log(a));
+  const double abs_sum = std::fabs(t1) + std::fabs(t2);
+  return {value, raw, abs_sum};
 }
 
 double pigt0(double t, double k = 1., double l = 1.){
@@ -107,6 +247,18 @@ double pigt0(double t, double k = 1., double l = 1.){
   double p2 = pnorm_std(std::sqrt(lambda/t) * (1. - t/mu), false, false);
 
   return std::exp(std::exp(std::log(2. * lambda) - std::log(mu)) + std::log(p1)) + p2;
+}
+
+double pigt0_log(double t, double k = 1., double l = 1.){
+  if (t <= 0.) {
+    return R_NegInf;
+  }
+  const double mu = k / l;
+  const double lambda = k * k;
+  const double log_p1 = pnorm_std(std::sqrt(lambda/t) * (1. + t/mu), false, true);
+  const double log_p2 = pnorm_std(std::sqrt(lambda/t) * (1. - t/mu), false, true);
+  const double log_term1 = std::exp(std::log(2. * lambda) - std::log(mu)) + log_p1;
+  return log_sum_exp(log_term1, log_p2);
 }
 
 double digt0(double t, double k = 1., double l = 1.){
@@ -124,75 +276,164 @@ double digt0(double t, double k = 1., double l = 1.){
   return std::exp(e + .5 * std::log(lambda) - .5 * std::log(2. * t * t * t * M_PI));
 }
 
-double pigt(double t, double k = 1, double l = 1, double a = .1, double threshold = 1e-10){
-  if (t <= 0.){
-    return 0.;
+double digt0_log(double t, double k = 1., double l = 1.){
+  if (t <= 0.) {
+    return R_NegInf;
   }
-  if (a < threshold){
-    return pigt0(t, k, l);
-  }
-
-  double sqt = std::sqrt(t);
-  double lgt = std::log(t);
-  double cdf;
-
-  if (l < threshold){
-    double t5a = 2. * pnorm_std((k + a) / sqt, true, false) - 1;
-    double t5b = 2. * pnorm_std((- k - a) / sqt, true, false) - 1;
-
-    double t6a = - .5 * ((k + a) * (k + a) / t - M_LN2 - L_PI + lgt) - std::log(a);
-    double t6b = - .5 * ((k - a) * (k - a) / t - M_LN2 - L_PI + lgt) - std::log(a);
-
-    cdf = 1. + std::exp(t6a) - std::exp(t6b) + ((- k + a) * t5a - (k - a) * t5b) / (2. * a);
+  const double lambda = k * k;
+  double e;
+  if (l == 0.) {
+    e = -.5 * lambda / t;
   } else {
-    double t1a = std::exp(- .5 * (k - a - t * l) * (k - a - t * l) / t);
-    double t1b = std::exp(- .5 * (a + k - t * l) * (a + k - t * l) / t);
-    double t1 = std::exp(.5* (lgt - M_LN2 - L_PI)) * (t1a - t1b);
-
-    double t2a = std::exp(2. * l * (k - a) + pnorm_std(- (k - a + t * l) / sqt, true, true));
-    double t2b = std::exp(2. * l * (k + a) + pnorm_std(- (k + a + t * l) / sqt, true, true));
-    double t2 = a + (t2b - t2a) / (2. * l);
-
-    double t4a = 2. * pnorm_std((k + a) / sqt - sqt * l, true, false) - 1.;
-    double t4b = 2. * pnorm_std((k - a) / sqt - sqt * l, true, false) - 1.;
-    double t4 = .5 * (t * l - a - k + .5 / l) * t4a + .5 * (k - a - t * l - .5 / l) * t4b;
-
-    cdf = .5 * (t4 + t2 + t1) / a;
+    const double mu = k / l;
+    e = - (lambda / (2. * t)) * ((t * t) / (mu * mu) - 2. * t / mu + 1.);
   }
-  if (cdf < 0. || std::isnan(cdf)) {
-    return 0.;
-  }
-  return cdf;
+  return e + .5 * std::log(lambda) - .5 * std::log(2. * t * t * t * M_PI);
 }
 
-double digt(double t, double k = 1., double l = 1., double a = .1, double threshold= 1e-10){
+// [[Rcpp::export]]
+double pigt_old(double t, double k = 1, double l = 1, double a = .1, double threshold = 1e-10){
+  const PigtEval direct = pigt_direct_eval(t, k, l, a, threshold);
+  if (direct.value < 0. || std::isnan(direct.value)) {
+    return 0.;
+  }
+  return direct.value;
+}
+
+// [[Rcpp::export]]
+double digt_old(double t, double k = 1., double l = 1., double a = .1, double threshold= 1e-10){
+  const DigtEval direct = digt_direct_eval(t, k, l, a, threshold);
+  if (direct.value < 0. || std::isnan(direct.value)) {
+    return 0.;
+  }
+  return direct.value;
+}
+
+// [[Rcpp::export]]
+double pigt_log(double t, double k = 1, double l = 1, double a = .1, double threshold = 1e-10){
   if (t <= 0.){
     return 0.;
   }
   if (a < threshold){
-    return digt0(t, k, l);
+    return std::exp(pigt0_log(t, k, l));
   }
-  double pdf;
+
+  const double sqt = std::sqrt(t);
+  const double lgt = std::log(t);
+
   if (l < threshold){
-    double term = std::exp(- (k - a) * (k - a) / (2. * t)) - std::exp(- (k + a) * (k + a) / (2. * t));
-    pdf = std::exp(-.5 * (M_LN2 + L_PI + std::log(t)) + std::log(term) - M_LN2 - std::log(a));
-  } else {
-    double sqt = std::sqrt(t);
+    const SignedLogTerm t5a = signed_log_2phi_minus1((k + a) / sqt);
+    const SignedLogTerm t5b = signed_log_2phi_minus1((- k - a) / sqt);
 
-    double t1a = - (a - k + t * l) * (a - k + t * l) / (2. * t);
-    double t1b = - (a + k - t * l) * (a + k - t * l) / (2. * t);
-    double t1 = M_SQRT1_2 * (std::exp(t1a) - std::exp(t1b)) / (std::sqrt(M_PI) * sqt);
+    const double log_a = std::log(a);
+    const double t6a = - .5 * ((k + a) * (k + a) / t - M_LN2 - L_PI + lgt) - log_a;
+    const double t6b = - .5 * ((k - a) * (k - a) / t - M_LN2 - L_PI + lgt) - log_a;
 
-    double t2a = 2. * pnorm_std((- k + a) / sqt + sqt * l, true, false) - 1.;
-    double t2b = 2. * pnorm_std((k + a) / sqt - sqt * l, true, false) - 1.;
-    double t2 = std::exp(std::log(.5) + std::log(l)) * (t2a + t2b);
+    SignedLogTerm out = signed_log_from_value(1.0);
+    out = signed_log_add(out, signed_log_from_logabs(t6a, 1));
+    out = signed_log_add(out, signed_log_from_logabs(t6b, -1));
 
-    pdf = std::exp(std::log(t1 + t2) - M_LN2 - std::log(a));
+    const SignedLogTerm c1 = signed_log_from_value((-k + a) / (2.0 * a));
+    const SignedLogTerm c2 = signed_log_from_value(-(k - a) / (2.0 * a));
+    out = signed_log_add(out, signed_log_mul(c1, t5a));
+    out = signed_log_add(out, signed_log_mul(c2, t5b));
+
+    if (out.sign <= 0 || !std::isfinite(out.logabs)) {
+      return 0.;
+    }
+    const double cdf = std::exp(out.logabs);
+    return (cdf < 0. || std::isnan(cdf)) ? 0. : cdf;
   }
-  if (pdf < 0. || std::isnan(pdf)) {
+
+  const double lt1a = - .5 * (k - a - t * l) * (k - a - t * l) / t;
+  const double lt1b = - .5 * (a + k - t * l) * (a + k - t * l) / t;
+  const SignedLogTerm t1 = signed_log_scale_logabs(
+    signed_log_diff_exp(lt1a, lt1b),
+    .5 * (lgt - M_LN2 - L_PI)
+  );
+
+  const double lt2a = 2. * l * (k - a) + pnorm_std(- (k - a + t * l) / sqt, true, true);
+  const double lt2b = 2. * l * (k + a) + pnorm_std(- (k + a + t * l) / sqt, true, true);
+  SignedLogTerm t2 = signed_log_from_value(a);
+  t2 = signed_log_add(
+    t2,
+    signed_log_scale_logabs(
+      signed_log_diff_exp(lt2b, lt2a),
+      -std::log(2.0 * std::fabs(l)),
+      l < 0.0 ? -1 : 1
+    )
+  );
+
+  const SignedLogTerm t4a = signed_log_2phi_minus1((k + a) / sqt - sqt * l);
+  const SignedLogTerm t4b = signed_log_2phi_minus1((k - a) / sqt - sqt * l);
+  const SignedLogTerm c1 = signed_log_from_value(.5 * (t * l - a - k + .5 / l));
+  const SignedLogTerm c2 = signed_log_from_value(.5 * (k - a - t * l - .5 / l));
+  const SignedLogTerm t4 = signed_log_add(signed_log_mul(c1, t4a), signed_log_mul(c2, t4b));
+
+  SignedLogTerm sum = signed_log_add(signed_log_add(t4, t2), t1);
+  if (sum.sign <= 0 || !std::isfinite(sum.logabs)) return 0.;
+
+  const double log_cdf = sum.logabs - M_LN2 - std::log(a);
+  if (!std::isfinite(log_cdf)) return 0.;
+  if (log_cdf >= 0.) return 1.;
+  const double cdf = std::exp(log_cdf);
+  return (cdf < 0. || std::isnan(cdf)) ? 0. : cdf;
+}
+
+// [[Rcpp::export]]
+double digt_log(double t, double k = 1., double l = 1., double a = .1, double threshold= 1e-10){
+  if (t <= 0.){
     return 0.;
   }
-  return pdf;
+  if (a < threshold){
+    return std::exp(digt0_log(t, k, l));
+  }
+
+  const double sqt = std::sqrt(t);
+
+  if (l < threshold){
+    const double term = std::exp(- (k - a) * (k - a) / (2. * t)) - std::exp(- (k + a) * (k + a) / (2. * t));
+    const double pdf = std::exp(-.5 * (M_LN2 + L_PI + std::log(t)) + std::log(term) - M_LN2 - std::log(a));
+    if (pdf < 0. || std::isnan(pdf)) return 0.;
+    return pdf;
+  }
+
+  const double lt1a = - (a - k + t * l) * (a - k + t * l) / (2. * t);
+  const double lt1b = - (a + k - t * l) * (a + k - t * l) / (2. * t);
+  const SignedLogTerm t1 = signed_log_scale_logabs(
+    signed_log_diff_exp(lt1a, lt1b),
+    -.5 * (M_LN2 + L_PI + std::log(t))
+  );
+
+  const SignedLogTerm t2a = signed_log_2phi_minus1((- k + a) / sqt + sqt * l);
+  const SignedLogTerm t2b = signed_log_2phi_minus1((k + a) / sqt - sqt * l);
+  const SignedLogTerm t2 = signed_log_scale(signed_log_add(t2a, t2b), 0.5 * l);
+
+  SignedLogTerm sum = signed_log_add(t1, t2);
+  if (sum.sign <= 0 || !std::isfinite(sum.logabs)) return 0.;
+
+  const double log_pdf = sum.logabs - M_LN2 - std::log(a);
+  if (!std::isfinite(log_pdf)) return 0.;
+  const double pdf = std::exp(log_pdf);
+  return (pdf < 0. || std::isnan(pdf)) ? 0. : pdf;
+}
+
+// [[Rcpp::export]]
+double pigt(double t, double k = 1, double l = 1, double a = .1, double threshold = 1e-10){
+  const PigtEval direct = pigt_direct_eval(t, k, l, a, threshold);
+  if (needs_logspace(direct.raw_sum, direct.abs_sum) || direct.value < 0. || direct.value > 1. || !std::isfinite(direct.value)) {
+    return pigt_log(t, k, l, a, threshold);
+  }
+  return direct.value;
+}
+
+// [[Rcpp::export]]
+double digt(double t, double k = 1., double l = 1., double a = .1, double threshold= 1e-10){
+  const DigtEval direct = digt_direct_eval(t, k, l, a, threshold);
+  if (needs_logspace(direct.raw_sum, direct.abs_sum) || direct.value < 0. || !std::isfinite(direct.value)) {
+    return digt_log(t, k, l, a, threshold);
+  }
+  return direct.value;
 }
 
 #endif

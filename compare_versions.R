@@ -1,6 +1,12 @@
 # compare_versions.R
 library(callr)
 rm(list=ls())
+dev_lib <- Sys.getenv("EMC2_DEV_LIB", "/tmp/r_libs/dev_version")
+new_lib <- Sys.getenv("EMC2_NEW_LIB", "/tmp/r_libs/new_version")
+upstream_lib <- Sys.getenv("EMC2_UPSTREAM_LIB", "/tmp/r_libs/upstream_version")
+optimized_lib <- Sys.getenv("EMC2_OPTIMIZED_LIB", "/tmp/r_libs/optimized_version")
+hybrid_lib <- Sys.getenv("EMC2_HYBRID_LIB", "/tmp/r_libs/hybrid_version")
+
 benchmark_script_dev <- function() {
   library(EMC2)
   
@@ -50,8 +56,9 @@ benchmark_script_dev <- function() {
                                 'LBA'=list(p_vector=p_vector21, emc=LBA_s),
                                 'WDM'=list(p_vector=p_vector3, emc=WDM_s),
                                 'DDM'=list(p_vector=p_vector4, emc=DDM_s))
-  
+
   results <- list()
+  out_old <- list()
   for(i in 1:length(designs_and_p_vectors)) {
     nm <- names(designs_and_p_vectors)[i]
     emc <- designs_and_p_vectors[[nm]][['emc']]
@@ -87,7 +94,9 @@ benchmark_script_dev <- function() {
     trend <- if (!is.null(model$trend)) model$trend else list()
     
     print(paste("c_name is:", c_name))
-    
+    out_old[[nm]] <- EMC2:::calc_ll(p_mat, dadm, constants = constants, designs = designs, type = c_name,
+                                    model$bound, model$transform, model$pre_transform, p_types = p_types, min_ll = log(1e-10),
+                                    trend)
     bm <- microbenchmark::microbenchmark(
       f1 = EMC2:::calc_ll(p_mat, dadm, constants = constants, designs = designs, type = c_name,
                           model$bound, model$transform, model$pre_transform, p_types = p_types, min_ll = log(1e-10),
@@ -97,7 +106,7 @@ benchmark_script_dev <- function() {
     
     results[[nm]] <- bm
   }
-  return(results)
+  return(list(results=results,lls=out_old))
 }
 
 benchmark_script_new <- function() {
@@ -112,8 +121,8 @@ benchmark_script_new <- function() {
   design_LNR <- design(data = dat,model=LNR,matchfun=matchfun,
                        formula=list(m~lM,s~1,t0~1),
                        contrasts=list(m=list(lM=ADmat)))
-  LNR_s1 <- make_emc(dat, design_LNR, rt_resolution = 1/60, n_chains = 2, compress=FALSE)
-  p_vector1 <- sampled_pars(LNR_s1)
+  LNR_s <- make_emc(dat, design_LNR, rt_resolution = 1/60, n_chains = 2, compress=FALSE)
+  p_vector1 <- sampled_pars(LNR_s)
   p_vector1[['s']] = 1; p_vector1[['m']] = 1; p_vector1[['m_lMd']] = .5; p_vector1[['t0']] = .2
   
   design_RDM <- design(data = dat,model=RDM,matchfun=matchfun,
@@ -144,13 +153,15 @@ benchmark_script_new <- function() {
   p_vector4 <- sampled_pars(DDM_s)
   p_vector4[1:length(p_vector4)] <- c(1, 1, .3, .5, .1, .1)
   
-  designs_and_p_vectors <- list('LNR'=list(p_vector=p_vector1, emc=LNR_s1),
+  designs_and_p_vectors <- list('LNR'=list(p_vector=p_vector1, emc=LNR_s),
                                 'RDM'=list(p_vector=p_vector2, emc=RDM_s),
                                 'LBA'=list(p_vector=p_vector21, emc=LBA_s),
                                 'WDM'=list(p_vector=p_vector3, emc=WDM_s),
                                 'DDM'=list(p_vector=p_vector4, emc=DDM_s))
-  
+
   results <- list()
+  out_old <- list()
+  out_new <- list()
   for(i in 1:length(designs_and_p_vectors)) {
     nm <- names(designs_and_p_vectors)[i]
     emc <- designs_and_p_vectors[[nm]][['emc']]
@@ -188,13 +199,13 @@ benchmark_script_new <- function() {
     print(paste("c_name is:", c_name))
     
     # Check that outputs are identical before benchmarking
-    out_old <- EMC2:::calc_ll(p_mat, dadm, constants = constants, designs = designs, type = c_name,
+    out_old[[nm]] <- EMC2:::calc_ll(p_mat, dadm, constants = constants, designs = designs, type = c_name,
                         model$bound, model$transform, model$pre_transform, p_types = p_types, min_ll = log(1e-10),
                         model$trend)
-    out_new <- EMC2:::calc_ll_oo(p_mat, dadm, constants = constants, designs = designs, type = c_name,
+    out_new[[nm]] <- EMC2:::calc_ll_oo(p_mat, dadm, constants = constants, designs = designs, type = c_name,
                         model$bound, model$transform, model$pre_transform, p_types = p_types, min_ll = log(1e-10),
                         model$trend)
-    print(paste("Outputs identical:", isTRUE(all.equal(out_old, out_new))))
+    print(paste("Outputs identical:", isTRUE(all.equal(out_old[[nm]], out_new[[nm]]))))
     
     bm <- microbenchmark::microbenchmark(
       f1_old_calc_ll=EMC2:::calc_ll(p_mat, dadm, constants = constants, designs = designs, type = c_name,
@@ -208,7 +219,7 @@ benchmark_script_new <- function() {
     
     results[[nm]] <- bm
   }
-  return(results)
+  return(list(results=results,lls=out_new))
 }
 
 cat("=========================================\n")
@@ -217,10 +228,10 @@ cat("=========================================\n")
 dev_results <- callr::r(
   func = benchmark_script_dev,
   show = TRUE,
-  libpath = c("/tmp/r_libs/dev_version", .libPaths())
+  libpath = c(dev_lib, .libPaths())
 )
 
-for (nm in names(dev_results)) {
+for (nm in names(dev_results$results)) {
   cat("\n---", nm, "---\n")
   print(dev_results[[nm]])
 }
@@ -230,12 +241,12 @@ cat("Running DEV-OO Branch (New calc_ll and calc_ll_oo)\n")
 cat("=========================================\n")
 new_results <- callr::r(
   func = benchmark_script_new,
-  libpath = c("/tmp/r_libs/new_version", .libPaths())
+  libpath = c(new_lib, .libPaths())
 )
 
-for (nm in names(new_results)) {
+for (nm in names(new_results$results)) {
   cat("\n---", nm, "---\n")
-  print(new_results[[nm]])
+  print(new_results$results[[nm]])
 }
 
 cat("\n=========================================\n")
@@ -244,12 +255,12 @@ cat("=========================================\n")
 upstream_results <- callr::r(
   func = benchmark_script_new,
   show = TRUE,
-  libpath = c("/tmp/r_libs/upstream_version", .libPaths())
+  libpath = c(upstream_lib, .libPaths())
 )
 
-for (nm in names(upstream_results)) {
+for (nm in names(upstream_results$results)) {
   cat("\n---", nm, "---\n")
-  print(upstream_results[[nm]])
+  print(upstream_results$results[[nm]])
 }
 
 cat("\n=========================================\n")
@@ -258,20 +269,45 @@ cat("=========================================\n")
 optimized_results <- callr::r(
   func = benchmark_script_new,
   show = TRUE,
-  libpath = c("/tmp/r_libs/optimized_version", .libPaths())
+  libpath = c(optimized_lib, .libPaths())
 )
 
-for (nm in names(optimized_results)) {
+for (nm in names(optimized_results$results)) {
   cat("\n---", nm, "---\n")
-  print(optimized_results[[nm]])
+  print(optimized_results$results[[nm]])
 }
 
-res = matrix(NA,ncol=5,nrow=5,dimnames=list(c("old_dev","oo_calc_ll","upstream_calc_ll_oo","zach_calc_ll_oo","optimized_calc_ll_oo"),c("LBA","RDM","LNR","WDM","DDM")))
+cat("\n=========================================\n")
+cat("Running HYBRID Branch (Newest build)\n")
+cat("=========================================\n")
+hybrid_results <- callr::r(
+  func = benchmark_script_new,
+  show = TRUE,
+  libpath = c(hybrid_lib, .libPaths())
+)
+
+for (nm in names(hybrid_results$results)) {
+  cat("\n---", nm, "---\n")
+  print(hybrid_results$results[[nm]])
+}
+
+res = matrix(NA,ncol=5,nrow=6,dimnames=list(c("old_dev","oo_calc_ll","upstream_calc_ll_oo","zach_calc_ll_oo","optimized_calc_ll_oo","hybrid_calc_ll_oo"),c("LBA","RDM","LNR","WDM","DDM")))
 for (m in c("LBA","RDM","LNR","WDM","DDM")) {
-    res[1,m] = median(dev_results[[m]]$time[dev_results[[m]]$expr=="f1"]) * 1e-6
-    res[2,m] = median(upstream_results[[m]]$time[upstream_results[[m]]$expr=="f1_old_calc_ll"]) * 1e-6
-    res[3,m] = median(upstream_results[[m]]$time[upstream_results[[m]]$expr=="f2_calc_ll_oo"])* 1e-6
-    res[4,m] = median(new_results[[m]]$time[new_results[[m]]$expr=="f2_calc_ll_oo"]) * 1e-6  
-    res[5,m] = median(optimized_results[[m]]$time[optimized_results[[m]]$expr=="f2_calc_ll_oo"]) * 1e-6
+    res[1,m] = median(dev_results$results[[m]]$time[dev_results$results[[m]]$expr=="f1"]) * 1e-6
+    res[2,m] = median(upstream_results$results[[m]]$time[upstream_results$results[[m]]$expr=="f1_old_calc_ll"]) * 1e-6
+    res[3,m] = median(upstream_results$results[[m]]$time[upstream_results$results[[m]]$expr=="f2_calc_ll_oo"])* 1e-6
+    res[4,m] = median(new_results$results[[m]]$time[new_results$results[[m]]$expr=="f2_calc_ll_oo"]) * 1e-6  
+    res[5,m] = median(optimized_results$results[[m]]$time[optimized_results$results[[m]]$expr=="f2_calc_ll_oo"]) * 1e-6
+    res[6,m] = median(hybrid_results$results[[m]]$time[hybrid_results$results[[m]]$expr=="f2_calc_ll_oo"]) * 1e-6
 }
 print(res)
+
+## Compare numerical accuracy
+res2 = matrix(NA,ncol=5,nrow=4,dimnames=list(c("upstream vs dev","zach vs dev", "optimized vs dev", "hybrid vs dev"),
+                                             c("LBA","RDM","LNR","WDM","DDM")))
+for (m in names(optimized_results$results)) {
+  res2[1,m] = max(abs(upstream_results$lls[[m]]-dev_results$lls[[m]]))
+  res2[2,m] = max(abs(new_results$lls[[m]]-dev_results$lls[[m]]))
+  res2[3,m] = max(abs(optimized_results$lls[[m]]-dev_results$lls[[m]]))
+  res2[4,m] = max(abs(hybrid_results$lls[[m]]-dev_results$lls[[m]]))
+}

@@ -8,6 +8,14 @@
 
 using namespace Rcpp;
 
+// Force the linker to retain the exported comparison helpers.
+// They are only used from R and would otherwise be eligible for dead-strip
+// under the package's LTO build.
+namespace {
+  double (*EMC2_keep_pigt_old)(double, double, double, double, double) = &pigt_old;
+  double (*EMC2_keep_digt_old)(double, double, double, double, double) = &digt_old;
+}
+
 // [[Rcpp::export]]
 NumericVector dWald(NumericVector t, NumericVector v,
                     NumericVector B, NumericVector A, NumericVector t0){

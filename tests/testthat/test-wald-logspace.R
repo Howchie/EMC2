@@ -1,0 +1,10 @@
+test_that("log-space Wald helpers match exact R formulas and improve stability", {
+  source(file.path("..", "..", "tools", "compare_wald_logspace.R"), local = TRUE)
+  res <- compare_wald_logspace()
+  expect_lt(res$pigt$max_abs_hybrid_exact, 1e-10)
+  expect_lt(res$pigt$max_abs_log_exact, 1e-10)
+  expect_lt(res$digt$max_abs_hybrid_exact, 1e-10)
+  expect_lt(res$digt$max_abs_log_exact, 1e-10)
+  expect_lte(res$pigt$max_abs_hybrid_exact, res$pigt$max_abs_old_exact + 1e-12)
+  expect_lte(res$digt$max_abs_hybrid_exact, res$digt$max_abs_old_exact + 1e-12)
+})
