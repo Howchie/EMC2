@@ -50,9 +50,17 @@ inline double fast_norm_phi(double x) {
 
 inline double pnorm_std(double x, bool lower = true, bool log_p = false) {
 #ifdef USE_FAST_PNORM
+  // In log-space, use fast approximation in the central region and defer to
+  // R's stable tail implementation for extreme |x| values where cancellation
+  // can dominate.
+  if (log_p) {
+    if (x <= -8.0 || x >= 8.0) return R::pnorm(x, 0.0, 1.0, lower, true);
+    double p = fast_norm_phi(x);
+    if (!lower) p = 1.0 - p;
+    return (p <= 0.0) ? R_NegInf : std::log(p);
+  }
   double p = fast_norm_phi(x);
   if (!lower) p = 1.0 - p;
-  if (log_p) return (p <= 0.0) ? R_NegInf : std::log(p);
   return p;
 #else
   return R::pnorm(x, 0.0, 1.0, lower, log_p);
@@ -70,7 +78,7 @@ inline SignedLogTerm signed_log_zero() {
 }
 
 inline SignedLogTerm signed_log_from_value(double x) {
-  if (!emc2_isfinite(x) || x == 0.0) return signed_log_zero();
+  if (!R_FINITE(x) || x == 0.0) return signed_log_zero();
   return {x < 0.0 ? -1 : 1, std::log(std::fabs(x))};
 }
 
@@ -81,18 +89,18 @@ inline SignedLogTerm signed_log_from_logabs(double logabs, int sign = 1) {
 
 inline SignedLogTerm signed_log_mul(SignedLogTerm a, SignedLogTerm b) {
   if (a.sign == 0 || b.sign == 0) return signed_log_zero();
-  if (!emc2_isfinite(a.logabs) || !emc2_isfinite(b.logabs)) return signed_log_zero();
+  if (!R_FINITE(a.logabs) || !R_FINITE(b.logabs)) return signed_log_zero();
   return {a.sign * b.sign, a.logabs + b.logabs};
 }
 
 inline SignedLogTerm signed_log_scale(SignedLogTerm a, double scale) {
   if (a.sign == 0 || scale == 0.0) return signed_log_zero();
-  if (!emc2_isfinite(scale)) return signed_log_zero();
+  if (!R_FINITE(scale)) return signed_log_zero();
   return {a.sign * (scale < 0.0 ? -1 : 1), a.logabs + std::log(std::fabs(scale))};
 }
 
 inline SignedLogTerm signed_log_scale_logabs(SignedLogTerm a, double log_scale, int scale_sign = 1) {
-  if (a.sign == 0 || scale_sign == 0 || !emc2_isfinite(log_scale)) return signed_log_zero();
+  if (a.sign == 0 || scale_sign == 0 || !R_FINITE(log_scale)) return signed_log_zero();
   return {a.sign * (scale_sign < 0 ? -1 : 1), a.logabs + log_scale};
 }
 
@@ -112,7 +120,7 @@ inline SignedLogTerm signed_log_add(SignedLogTerm a, SignedLogTerm b) {
 }
 
 inline SignedLogTerm signed_log_diff_exp(double log_a, double log_b) {
-  if (!emc2_isfinite(log_a) || !emc2_isfinite(log_b)) return signed_log_zero();
+  if (!R_FINITE(log_a) || !R_FINITE(log_b)) return signed_log_zero();
   if (log_a == log_b) return signed_log_zero();
   if (log_a > log_b) return {1, log_diff_exp(log_a, log_b)};
   return {-1, log_diff_exp(log_b, log_a)};
@@ -122,21 +130,21 @@ inline SignedLogTerm signed_log_2phi_minus1(double z) {
   const double log2 = std::log(2.0);
   if (z >= 0.0) {
     double log_q = pnorm_std(z, false, true);
-    if (!emc2_isfinite(log_q)) return signed_log_zero();
+    if (!R_FINITE(log_q)) return signed_log_zero();
     double arg = log2 + log_q;
     if (arg > 0.0) arg = 0.0;
     return signed_log_from_logabs(log1m_exp(arg), 1);
   }
 
   double log_p = pnorm_std(z, true, true);
-  if (!emc2_isfinite(log_p)) return signed_log_zero();
+  if (!R_FINITE(log_p)) return signed_log_zero();
   double arg = log2 + log_p;
   if (arg > 0.0) arg = 0.0;
   return signed_log_from_logabs(log1m_exp(arg), -1);
 }
 
 // Cancellation threshold for the hybrid direct/log-space switch.
-static constexpr double LOGSPACE_REL_THRESHOLD = 1e-12;
+static constexpr double LOGSPACE_REL_THRESHOLD = 1e-15;
 
 inline double pigt0(double t, double k, double l){
   double mu = k / l;
@@ -194,8 +202,8 @@ inline double pigt_try_direct(double t, double k, double l, double a, double thr
   if (t <= 0.) return 0.0;
   if (a < threshold) {
     const double v = pigt0(t, k, l);
-    if (v < 0. || !R_FINITE(v)) return -1.0;
-    return v > 1.0 ? 1.0 : v;
+    if (v < 0. || v > 1.0 || !R_FINITE(v)) return -1.0;
+    return v;
   }
 
   const double sqt = std::sqrt(t);
@@ -214,8 +222,8 @@ inline double pigt_try_direct(double t, double k, double l, double a, double thr
     if (!R_FINITE(raw) || !R_FINITE(abs_sum) || abs_sum <= 0.0 ||
         std::fabs(raw) <= LOGSPACE_REL_THRESHOLD * abs_sum) return -1.0;
     const double cdf = 0.5 * raw / a;
-    if (cdf < 0.) return -1.0;
-    return cdf > 1.0 ? 1.0 : cdf;
+    if (cdf < 0. || cdf > 1.0) return -1.0;
+    return cdf;
   }
 
   const double t1a = std::exp(- .5 * (k - a - t * l) * (k - a - t * l) / t);
@@ -235,8 +243,8 @@ inline double pigt_try_direct(double t, double k, double l, double a, double thr
   if (!R_FINITE(raw) || !R_FINITE(abs_sum) || abs_sum <= 0.0 ||
       std::fabs(raw) <= LOGSPACE_REL_THRESHOLD * abs_sum) return -1.0;
   const double cdf = .5 * raw / a;
-  if (cdf < 0.) return -1.0;
-  return cdf > 1.0 ? 1.0 : cdf;
+  if (cdf < 0. || cdf > 1.0) return -1.0;
+  return cdf;
 }
 
 // Returns the PDF value (>= 0) if direct computation is numerically accurate,
@@ -309,13 +317,13 @@ inline double pigt_log_internal(double t, double k, double l, double a, double t
     out = signed_log_add(out, signed_log_mul(c1, t5a));
     out = signed_log_add(out, signed_log_mul(c2, t5b));
 
-    if (out.sign <= 0 || !emc2_isfinite(out.logabs)) {
+    if (out.sign <= 0 || !R_FINITE(out.logabs)) {
       return 0.;
     }
     const double log_cdf = out.logabs - log_a - M_LN2;
     if (log_cdf >= 0.0) return 1.0;
     const double cdf = std::exp(log_cdf);
-    return (cdf < 0. || emc2_isnan(cdf)) ? 0. : cdf;
+    return (cdf < 0. || ISNAN(cdf)) ? 0. : cdf;
   }
 
   const double lt1a = - .5 * (k - a - t * l) * (k - a - t * l) / t;
@@ -344,13 +352,13 @@ inline double pigt_log_internal(double t, double k, double l, double a, double t
   const SignedLogTerm t4 = signed_log_add(signed_log_mul(c1, t4a), signed_log_mul(c2, t4b));
 
   SignedLogTerm sum = signed_log_add(signed_log_add(t4, t2), t1);
-  if (sum.sign <= 0 || !emc2_isfinite(sum.logabs)) return 0.;
+  if (sum.sign <= 0 || !R_FINITE(sum.logabs)) return 0.;
 
   const double log_cdf = sum.logabs - M_LN2 - std::log(a);
-  if (!emc2_isfinite(log_cdf)) return 0.;
+  if (!R_FINITE(log_cdf)) return 0.;
   if (log_cdf >= 0.) return 1.;
   const double cdf = std::exp(log_cdf);
-  return (cdf < 0. || emc2_isnan(cdf)) ? 0. : cdf;
+  return (cdf < 0. || ISNAN(cdf)) ? 0. : cdf;
 }
 
 inline double digt_log_internal(double t, double k, double l, double a, double threshold){
@@ -366,7 +374,7 @@ inline double digt_log_internal(double t, double k, double l, double a, double t
   if (l < threshold){
     const SignedLogTerm term = signed_log_diff_exp(- (k - a) * (k - a) / (2. * t), - (k + a) * (k + a) / (2. * t));
     const double log_pdf = - .5 * (M_LN2 + L_PI + std::log(t)) + term.logabs - M_LN2 - std::log(a);
-    if (!emc2_isfinite(log_pdf)) return 0.;
+    if (!R_FINITE(log_pdf)) return 0.;
     return std::exp(log_pdf);
   }
 
@@ -382,12 +390,12 @@ inline double digt_log_internal(double t, double k, double l, double a, double t
   const SignedLogTerm t2 = signed_log_scale(signed_log_add(t2a, t2b), 0.5 * l);
 
   SignedLogTerm sum = signed_log_add(t1, t2);
-  if (sum.sign <= 0 || !emc2_isfinite(sum.logabs)) return 0.;
+  if (sum.sign <= 0 || !R_FINITE(sum.logabs)) return 0.;
 
   const double log_pdf = sum.logabs - M_LN2 - std::log(a);
-  if (!emc2_isfinite(log_pdf)) return 0.;
+  if (!R_FINITE(log_pdf)) return 0.;
   const double pdf = std::exp(log_pdf);
-  return (pdf < 0. || emc2_isnan(pdf)) ? 0. : pdf;
+  return (pdf < 0. || ISNAN(pdf)) ? 0. : pdf;
 }
 
 inline double pigt_impl(double t, double k = 1, double l = 1, double a = .1, double threshold = 1e-10){
