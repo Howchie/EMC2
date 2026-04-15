@@ -1,17 +1,25 @@
-.flat_loc_stats_per_col <- function(mat, p1 = 1/3, p2 = 1/3) {
+.flat_loc_stats_per_col <- function(mat, p1 = 1/3, p2 = 1/3, n_chains = 1) {
   if (!is.matrix(mat) || ncol(mat) == 0) return(numeric(0))
-  if (nrow(mat) < 10) return(rep(Inf, ncol(mat)))
-
-  n <- nrow(mat)
-  xlen <- max(1L, round(n * p1))
-  ylen <- max(1L, round(n * p2))
+  n_total <- nrow(mat)
+  n_iter <- n_total / n_chains
+  if (n_iter < 10) return(rep(Inf, ncol(mat)))
 
   apply(mat, 2, function(x) {
-    denom <- stats::IQR(x)
-    if (!is.finite(denom) || denom == 0) return(0)
-    m1 <- stats::median(x[1:xlen])
-    m2 <- stats::median(x[(n - ylen + 1):n])
-    abs(m1 - m2) / denom
+    max_d <- 0
+    for(c in seq_len(n_chains)) {
+      xc <- x[seq(c, n_total, by = n_chains)]
+      n <- length(xc)
+      xlen <- max(1L, round(n * p1))
+      ylen <- max(1L, round(n * p2))
+      denom <- stats::IQR(xc)
+      if (!is.finite(denom) || denom == 0) {
+        return(Inf)
+      }
+      m1 <- stats::median(xc[1:xlen])
+      m2 <- stats::median(xc[(n - ylen + 1):n])
+      max_d <- max(max_d, abs(m1 - m2) / denom)
+    }
+    return(max_d)
   })
 }
 
@@ -131,7 +139,7 @@
   for (sel in flat_selection) {
     mat <- .get_flat_matrix(emc, sel, stage = stage)
     if (is.null(mat)) next
-    cur <- .flat_loc_stats_per_col(mat, p1 = flat_p1, p2 = flat_p2)
+    cur <- .flat_loc_stats_per_col(mat, p1 = flat_p1, p2 = flat_p2, n_chains = length(emc))
     if (length(cur) == 0) next
     stats_by_sel[[sel]] <- cur
     max_by_sel[sel] <- max(cur, na.rm = TRUE)
