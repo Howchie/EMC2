@@ -289,6 +289,68 @@ inline double digt_try_direct(double t, double k, double l, double a, double thr
   return value;
 }
 
+// Direct evaluation only (no cancellation checks, no log-space diversion).
+inline double pigt_direct_only(double t, double k, double l, double a, double threshold) {
+  if (t <= 0.) return 0.0;
+  if (a < threshold) return pigt0(t, k, l);
+
+  const double sqt = std::sqrt(t);
+  const double lgt = std::log(t);
+
+  if (l < threshold) {
+    const double t5a = 2. * pnorm_std((k + a) / sqt, true, false) - 1;
+    const double t5b = 2. * pnorm_std((- k - a) / sqt, true, false) - 1;
+    const double t6a = - .5 * ((k + a) * (k + a) / t - M_LN2 - L_PI + lgt) - std::log(a);
+    const double t6b = - .5 * ((k - a) * (k - a) / t - M_LN2 - L_PI + lgt) - std::log(a);
+    const double e6a = std::exp(t6a);
+    const double e6b = std::exp(t6b);
+    const double cross = ((- k + a) * t5a - (k - a) * t5b) / (2. * a);
+    const double raw = 1.0 + e6a - e6b + cross;
+    return 0.5 * raw / a;
+  }
+
+  const double t1a = std::exp(- .5 * (k - a - t * l) * (k - a - t * l) / t);
+  const double t1b = std::exp(- .5 * (a + k - t * l) * (a + k - t * l) / t);
+  const double t1 = std::exp(.5 * (lgt - M_LN2 - L_PI)) * (t1a - t1b);
+
+  const double t2a = std::exp(2. * l * (k - a) + pnorm_std(- (k - a + t * l) / sqt, true, true));
+  const double t2b = std::exp(2. * l * (k + a) + pnorm_std(- (k + a + t * l) / sqt, true, true));
+  const double t2 = a + (t2b - t2a) / (2. * l);
+
+  const double t4a = 2. * pnorm_std((k + a) / sqt - sqt * l, true, false) - 1.;
+  const double t4b = 2. * pnorm_std((k - a) / sqt - sqt * l, true, false) - 1.;
+  const double t4 = .5 * (t * l - a - k + .5 / l) * t4a + .5 * (k - a - t * l - .5 / l) * t4b;
+
+  const double raw = t4 + t2 + t1;
+  return .5 * raw / a;
+}
+
+// Direct evaluation only (no cancellation checks, no log-space diversion).
+inline double digt_direct_only(double t, double k, double l, double a, double threshold) {
+  if (t <= 0.) return 0.0;
+  if (a < threshold) return digt0(t, k, l);
+
+  if (l < threshold) {
+    const double term1 = std::exp(- (k - a) * (k - a) / (2. * t));
+    const double term2 = std::exp(- (k + a) * (k + a) / (2. * t));
+    const double raw = term1 - term2;
+    return std::exp(-.5 * (M_LN2 + L_PI + std::log(t)) + std::log(raw) - M_LN2 - std::log(a));
+  }
+
+  const double sqt = std::sqrt(t);
+
+  const double t1a = - (a - k + t * l) * (a - k + t * l) / (2. * t);
+  const double t1b = - (a + k - t * l) * (a + k - t * l) / (2. * t);
+  const double t1 = M_SQRT1_2 * (std::exp(t1a) - std::exp(t1b)) / (std::sqrt(M_PI) * sqt);
+
+  const double t2a = 2. * pnorm_std((- k + a) / sqt + sqt * l, true, false) - 1.;
+  const double t2b = 2. * pnorm_std((k + a) / sqt - sqt * l, true, false) - 1.;
+  const double t2 = std::exp(std::log(.5) + std::log(l)) * (t2a + t2b);
+
+  const double raw = t1 + t2;
+  return std::exp(std::log(raw) - M_LN2 - std::log(a));
+}
+
 inline double pigt_log_internal(double t, double k, double l, double a, double threshold){
   if (t <= 0.){
     return 0.;
@@ -398,13 +460,19 @@ inline double digt_log_internal(double t, double k, double l, double a, double t
   return (pdf < 0. || ISNAN(pdf)) ? 0. : pdf;
 }
 
-inline double pigt_impl(double t, double k = 1, double l = 1, double a = .1, double threshold = 1e-10){
+inline double pigt_impl(double t, double k = 1, double l = 1, double a = .1, double threshold = 1e-10, bool use_logspace_diversion = false){
+  if (!use_logspace_diversion) {
+    return pigt_direct_only(t, k, l, a, threshold);
+  }
   const double direct = pigt_try_direct(t, k, l, a, threshold);
   if (direct < 0.) return pigt_log_internal(t, k, l, a, threshold);
   return direct;
 }
 
-inline double digt_impl(double t, double k = 1., double l = 1., double a = .1, double threshold = 1e-10){
+inline double digt_impl(double t, double k = 1., double l = 1., double a = .1, double threshold = 1e-10, bool use_logspace_diversion = false){
+  if (!use_logspace_diversion) {
+    return digt_direct_only(t, k, l, a, threshold);
+  }
   const double direct = digt_try_direct(t, k, l, a, threshold);
   if (direct < 0.) return digt_log_internal(t, k, l, a, threshold);
   return direct;
