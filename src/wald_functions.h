@@ -66,9 +66,7 @@ inline double pnorm_std(double x, bool lower = true, bool log_p = false) {
   if (log_p) {
     const bool want_tail = (x >= 0.0) == (!lower);
     if (want_tail) {
-      double p = fast_norm_phi(x);
-      if (!lower) p = 1.0 - p;
-      return (p <= 0.0) ? R_NegInf : std::log(p);
+      return lower ? fast_log_upper_tail(-x) : fast_log_upper_tail(x);
     }
     // Bulk side: fast_norm_phi(-|x|) gives the small lower-tail probability (≤ 0.5),
     // so log1p is stable — no cancellation.
@@ -89,7 +87,7 @@ inline double pigt0(double t, double k, double l){
   double p1 = pnorm_std(std::sqrt(lambda/t) * (1. + t/mu), false, false);
   double p2 = pnorm_std(std::sqrt(lambda/t) * (1. - t/mu), false, false);
 
-  return std::exp(std::exp(std::log(2. * lambda) - std::log(mu)) + std::log(p1)) + p2;
+  return std::exp(2.0 * k * l + std::log(p1)) + p2;
 }
 
 inline double digt0(double t, double k, double l){
@@ -112,17 +110,15 @@ inline double pigt_impl(double t, double k = 1, double l = 1, double a = .1, dou
   const double lgt = std::log(t);
 
   if (l < threshold) {
-    const double t5a = 2. * pnorm_std((k + a) / sqt, true, false) - 1;
-    const double t5b = 2. * pnorm_std((- k - a) / sqt, true, false) - 1;
-    const double t6a = - .5 * ((k + a) * (k + a) / t - M_LN2 - L_PI + lgt) - std::log(a);
-    const double t6b = - .5 * ((k - a) * (k - a) / t - M_LN2 - L_PI + lgt) - std::log(a);
-    // Note: a is already embedded in t6a/t6b via -log(a), so raw IS the CDF.
-    return 1. + std::exp(t6a) - std::exp(t6b) + ((- k + a) * t5a - (k - a) * t5b) / (2. * a);
+    const double p1 = pnorm_std((k + a) / sqt, true, false);
+    const double p2 = pnorm_std((k - a) / sqt, true, false);
+    const double t1 = sqt * (std::exp(-0.5 * (k - a) * (k - a) / t) - std::exp(-0.5 * (k + a) * (k + a) / t)) / FAST_NORM_RT2PI;
+    return (t1 + (k + a) * (1.0 - p1) - (k - a) * (1.0 - p2)) / a;
   }
 
   const double t1a = std::exp(- .5 * (k - a - t * l) * (k - a - t * l) / t);
   const double t1b = std::exp(- .5 * (a + k - t * l) * (a + k - t * l) / t);
-  const double t1 = std::exp(.5 * (lgt - M_LN2 - L_PI)) * (t1a - t1b);
+  const double t1 = sqt * (t1a - t1b) / FAST_NORM_RT2PI;
 
   const double t2a = std::exp(2. * l * (k - a) + pnorm_std(- (k - a + t * l) / sqt, true, true));
   const double t2b = std::exp(2. * l * (k + a) + pnorm_std(- (k + a + t * l) / sqt, true, true));
@@ -153,9 +149,9 @@ inline double digt_impl(double t, double k = 1., double l = 1., double a = .1, d
 
   const double t2a = 2. * pnorm_std((- k + a) / sqt + sqt * l, true, false) - 1.;
   const double t2b = 2. * pnorm_std((k + a) / sqt - sqt * l, true, false) - 1.;
-  const double t2 = std::exp(std::log(.5) + std::log(l)) * (t2a + t2b);
+  const double t2 = 0.5 * l * (t2a + t2b);
 
-  return std::exp(std::log(t1 + t2) - M_LN2 - std::log(a));
+  return (t1 + t2) / (2.0 * a);
 }
 
 // Global symbols for exported functions (defined with [[Rcpp::export]] in wald_functions.cpp)
