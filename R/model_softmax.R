@@ -53,12 +53,9 @@ rSOFTMAX <- function(lR,pars,p_types=c("x","beta"))
   hit_mat <- matrix(is_hit, nrow = nr, ncol = n)
 
   # First TRUE per column (trial); returns NA if none
-  chosen <- apply(hit_mat, 2, function(x) {
-    w <- which(x)
-    if (length(w) == 0) return(nr)   # fallback (rare)
-    w[1]
-  })
-
+  # ZH replace slow apply loop with vectorized C-level primitive max.col
+  chosen <- max.col(t(hit_mat), ties.method = "first")
+  chosen[colSums(hit_mat) == 0] <- nr # fallback (rare)
 
   # # cumulative probability per trial
   # cp <- ave(p, trial_id, FUN=cumsum)

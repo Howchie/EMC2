@@ -66,6 +66,9 @@ inline double pnorm_std(double x, bool lower = true, bool log_p = false) {
   if (log_p) {
     const bool want_tail = (x >= 0.0) == (!lower);
     if (want_tail) {
+      double p = fast_norm_phi(x);
+      if (!lower) p = 1.0 - p;
+      if (p > 1e-10) return std::log(p);
       return lower ? fast_log_upper_tail(-x) : fast_log_upper_tail(x);
     }
     // Bulk side: fast_norm_phi(-|x|) gives the small lower-tail probability (≤ 0.5),

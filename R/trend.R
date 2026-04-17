@@ -1323,7 +1323,7 @@ make_data_unconditional <- function(data, pars, design, model,
       }
     }
     if(return_trialwise_parameters) {
-      trialwise_parameters <- rbind(trialwise_parameters, sub_trialwise_parameters)
+      trialwise_parameters <- c(trialwise_parameters, list(sub_trialwise_parameters))
     }
   }
   # Re-run with newly updated data to ensure Ffunctions correspond to the simulated data
@@ -1332,6 +1332,9 @@ make_data_unconditional <- function(data, pars, design, model,
   if(is.null(data$lR)) data$lR <- 1
   data <- data[data$lR == unique(data$lR)[1], unique(c(includeColumns, "R", "rt"))]
   data <- data[,!colnames(data) %in% c('lR', 'lM')]
+  if (return_trialwise_parameters && length(trialwise_parameters) > 0) {
+    trialwise_parameters <- do.call(rbind, trialwise_parameters)
+  }
   return(list(data = data, trialwise_parameters = trialwise_parameters))
 }
 
@@ -1381,15 +1384,16 @@ make_data_unconditional_vectorised <- function(data, pars, design, model, return
                                   pretransformed = TRUE, constants_included = TRUE,
                                   return_kernel_matrix = TRUE,
                                   kernel_output_codes = kernel_output_codes)
-        trialwise_parameters <- rbind(trialwise_parameters, cbind(pm, covariates))
+        trialwise_parameters <- c(trialwise_parameters, list(cbind(pm, covariates)))
       }
 
       # We extract only the *current* trials of this subject
       current_trial_in_dm <- cur_dm$trials == current_trial
       cur_dm <- cur_dm[current_trial_in_dm,]
       pr <- model_list$Ttransform(pm[current_trial_in_dm,,drop=FALSE], cur_dm)
-      all_pars <- rbind(all_pars, pr)
+      all_pars <- c(all_pars, list(pr))
     }
+    all_pars <- do.call(rbind, all_pars)
     all_pars <- add_bound(all_pars, model_list$bound, dm$lR)
 
     # Identify current-trial rows inside the prefix design
@@ -1433,6 +1437,9 @@ make_data_unconditional_vectorised <- function(data, pars, design, model, return
   if(is.null(data$lR)) data$lR <- 1
   data <- data[data$lR == unique(data$lR)[1], unique(c(includeColumns, "R", "rt"))]
   data <- data[,!colnames(data) %in% c('lR', 'lM')]
+  if (return_trialwise_parameters && length(trialwise_parameters) > 0) {
+    trialwise_parameters <- do.call(rbind, trialwise_parameters)
+  }
   return(list(data = data, trialwise_parameters = trialwise_parameters))
 }
 

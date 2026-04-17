@@ -92,5 +92,5 @@ accept_rate <- function(pmwgs, window_size = 200) {
   }
   vals <- pmwgs$samples$alpha[1, , start:end]
   if (is.null(dim(vals))) return(mean(diff(vals)!=0))
-  colMeans(apply(vals, 1, diff) != 0)
+  rowMeans(vals[,-1, drop = FALSE] != vals[,-ncol(vals), drop = FALSE])
 }

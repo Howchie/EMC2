@@ -504,7 +504,8 @@ plot_density <- function(input, post_predict = NULL, prior_predict = NULL,
           # mat_y is 512 x #postn
           if (!is.null(mat_y)) {
             # dimension checks
-            q_y <- apply(mat_y, 1, quantile, probs = quantiles, na.rm = TRUE)
+            # ZH optimization: Replace row-wise apply(..., 1, quantile) with transposed matrixStats::rowQuantiles
+            q_y <- t(matrixStats::rowQuantiles(mat_y, probs = quantiles, na.rm = TRUE, drop = FALSE))
             out[[lev]] <- q_y
           } else {
             out[[lev]] <- NULL
@@ -819,14 +820,16 @@ plot_cdf <- function(input,
           # quantile of x at each index, and median of y at each index
           # We'll include 50% in quants to do median for x as well.
           # Then we combine them in a matrix with 4 rows => x_lower, x_median, x_upper, y_median
-          qx <- apply(x_mat, 1, quantile, probs = sort(c(quants, 0.5)), na.rm = TRUE)
+          qx <- t(matrixStats::rowQuantiles(x_mat, probs = sort(c(quants, 0.5)), na.rm = TRUE, drop = FALSE))
 
           # }
           # Ensure quantiles include 0.5 and are unique/sorted
           quants <- sort(quants)
           probs_qx <- sort(unique(c(quants, 0.5)))
-          qx <- apply(x_mat, 1, quantile, probs = probs_qx, na.rm = TRUE)
-          ym <- apply(y_mat, 1, median, na.rm=TRUE)
+          # ZH optimization: Replace row-wise apply(..., 1, quantile) with transposed matrixStats::rowQuantiles
+          qx <- t(matrixStats::rowQuantiles(x_mat, probs = probs_qx, na.rm = TRUE, drop = FALSE))
+          # ZH optimization: Replace row-wise apply(..., 1, median) with matrixStats::rowMedians
+          ym <- matrixStats::rowMedians(y_mat, na.rm=TRUE)
 
           # rbind them, naming the median row 'ym'
           out[[lev]] <- rbind(qx, ym = ym)
@@ -1124,8 +1127,10 @@ plot_delta <- function(input,
       # Ensure quantiles include 0.5 and are unique/sorted
       quants <- sort(quants)
       probs_qy <- sort(unique(c(quants, 0.5)))
-      qy <- apply(y_mat, 1, quantile, probs = probs_qy, na.rm = TRUE)
-      xm <- apply(x_mat, 1, median, na.rm=TRUE)
+      # ZH optimization: Replace row-wise apply(..., 1, quantile) with transposed matrixStats::rowQuantiles
+      qy <- t(matrixStats::rowQuantiles(y_mat, probs = probs_qy, na.rm = TRUE, drop = FALSE))
+      # ZH optimization: Replace row-wise apply(..., 1, median) with matrixStats::rowMedians
+      xm <- matrixStats::rowMedians(x_mat, na.rm=TRUE)
       # rbind them, naming the median row 'xm'
       out[[1]] <- rbind(qy, xm = xm)
       out
@@ -1432,7 +1437,8 @@ plot_caf <- function(input,
           # Ensure quantiles include 0.5 and are unique/sorted
           quants <- sort(quants)
           probs_qy <- sort(unique(c(quants, 0.5)))
-          xm <- apply(x_mat, 1, median, na.rm=TRUE)
+          # ZH optimization: Replace row-wise apply(..., 1, median) with matrixStats::rowMedians
+          xm <- matrixStats::rowMedians(x_mat, na.rm=TRUE)
           qy <- apply(y_mat, 1, quantile, probs = probs_qy, na.rm = TRUE)
 
           # rbind them, naming the median row 'xm'

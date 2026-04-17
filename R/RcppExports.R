@@ -249,22 +249,6 @@ c_add_charvectors <- function(x, y) {
     .Call(`_EMC2_c_add_charvectors`, x, y)
 }
 
-pigt_old <- function(t, k = 1, l = 1, a = .1, threshold = 1e-10) {
-    .Call(`_EMC2_pigt_old`, t, k, l, a, threshold)
-}
-
-digt_old <- function(t, k = 1., l = 1., a = .1, threshold = 1e-10) {
-    .Call(`_EMC2_digt_old`, t, k, l, a, threshold)
-}
-
-pigt_log <- function(t, k = 1, l = 1, a = .1, threshold = 1e-10) {
-    .Call(`_EMC2_pigt_log`, t, k, l, a, threshold)
-}
-
-digt_log <- function(t, k = 1., l = 1., a = .1, threshold = 1e-10) {
-    .Call(`_EMC2_digt_log`, t, k, l, a, threshold)
-}
-
 pigt <- function(t, k = 1, l = 1, a = .1, threshold = 1e-10) {
     .Call(`_EMC2_pigt`, t, k, l, a, threshold)
 }

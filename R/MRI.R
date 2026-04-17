@@ -304,7 +304,8 @@ convolve_design_matrix <- function(timeseries, events, factors = NULL, contrasts
   }
   if(scale){
     full_dm <- do.call(rbind, all_dms)
-    maxs <- apply(full_dm, 2, max)
+    # ZH optimization: Replace col-wise apply loop with vectorized C-level primitive
+    maxs <- full_dm[cbind(max.col(t(full_dm), ties.method="first"), 1:ncol(full_dm))]
     all_dms <- lapply(all_dms, function(x){
       for(i in 1:ncol(x)){
         x[,i] <- x[,i]/maxs[i]
@@ -821,7 +822,9 @@ plot_design_fmri <- function(design_matrix, TRs = 100, events = NULL, remove_nui
   }
   enames <- colnames(design_matrix)
   if(remove_nuisance & is.null(events)){
-    is_nuisance <- grepl("drift", enames) | grepl("poly", enames) | grepl("derivative", enames) | apply(design_matrix, 2, sd) == 0
+    # ZH optimization: Replace inefficient col-wise sd == 0 apply loop with extremely fast, vectorized constant check
+    is_constant <- colSums(design_matrix != rep(design_matrix[1,], each=nrow(design_matrix))) == 0
+    is_nuisance <- grepl("drift", enames) | grepl("poly", enames) | grepl("derivative", enames) | is_constant
     design_matrix <- design_matrix[,!is_nuisance, drop = F]
   }
   enames <- colnames(design_matrix)

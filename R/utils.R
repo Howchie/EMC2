@@ -37,7 +37,7 @@ na_locf <- function(x, na.rm = FALSE) {
   return(result)
 }
 
-.floor_to_rt_resolution <- function(x, rt_resolution) {
+.floor_to_rt_resolution <- function(x, rt_resolution=1/60) {
   if (is.null(rt_resolution)) return(x)
   finite <- is.finite(x)
   if (!any(finite)) return(x)

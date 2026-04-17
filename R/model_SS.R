@@ -619,9 +619,9 @@ pstopTEXG <- function(
   if (length(upper)==1) upper <- rep(upper,length.out=ntrials)
   pgo <- array(parstop[,gpars],dim=c(n_acc,ntrials,length(gpars)),
                dimnames=list(NULL,NULL,gpars))
-  cells <- apply(
-    cbind(SSDs,ps,upper,matrix(as.vector(aperm(pgo,c(2,1,3))),nrow=ntrials))
-    ,1,paste,collapse="")
+  # ZH: optimization: Use vectorized do.call(paste, ...) instead of slow row-wise apply(..., 1, paste)
+  mat <- cbind(SSDs, ps, upper, matrix(as.vector(aperm(pgo, c(2, 1, 3))), nrow = ntrials))
+  cells <- do.call(paste, c(unname(as.data.frame(mat)), sep = ""))
   # cells <- character(ntrials)
   # for (i in 1:ntrials)
   #   cells[i] <- paste(SSDs[i],ps[i,],pgo[,i,],upper[i],collapse="")
@@ -977,9 +977,9 @@ pstopHybrid <- function(
   if (length(upper)==1) upper <- rep(upper,length.out=ntrials)
   pgo <- array(parstop[,gpars],dim=c(n_acc,ntrials,length(gpars)),
                dimnames=list(NULL,NULL,gpars))
-  cells <- apply(
-    cbind(SSDs,ps,upper,matrix(as.vector(aperm(pgo,c(2,1,3))),nrow=ntrials))
-    ,1,paste,collapse="")
+  # ZH optimization: Use vectorized do.call(paste, ...) instead of slow row-wise apply(..., 1, paste)
+  mat <- cbind(SSDs, ps, upper, matrix(as.vector(aperm(pgo, c(2, 1, 3))), nrow = ntrials))
+  cells <- do.call(paste, c(unname(as.data.frame(mat)), sep = ""))
   uniq <- !duplicated(cells)
   ups <- sapply(which(uniq),function(i){
     my.integrate(

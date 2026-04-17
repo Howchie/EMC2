@@ -381,7 +381,8 @@ set_tune_ess <- function(emc, alpha_gd = NULL, mean_gd = NULL, max_gd = NULL){
     mean_alpha_ok <- rep(T, nrow(alpha_gd))
   }
   if(!is.null(max_gd)){
-    max_alpha_ok <- apply(alpha_gd, 1, max) < 1+(max_gd-1)*.5
+    # ZH optimization: Replace row-wise apply loop with vectorized C-level primitive
+    max_alpha_ok <- alpha_gd[cbind(1:nrow(alpha_gd), max.col(alpha_gd, ties.method="first"))] < 1+(max_gd-1)*.5
   } else{
     max_alpha_ok <- rep(T, nrow(alpha_gd))
   }
@@ -981,7 +982,8 @@ weighted_moments <- function(chain, ll = NULL) {
   }
 
   # Compute the weighted mean of the chain.
-  weighted_mean <- colSums(apply(chain, 1, function(x) x*weights))
+  # ZH added more efficient syntax for same outcome
+  weighted_mean <- as.vector(drop(chain %*% weights))
   # NIEK THIS CAUSES ERRORS
   # # Compute the weighted covariance matrix.
   # cov_matrix <- matrix(0, nrow = d, ncol = d)

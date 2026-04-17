@@ -47,7 +47,8 @@ plot_roc <- function(data,signalFactor="S",zROC=FALSE,qfun=NULL,main="",lim=NULL
     abline(a=0,b=1,lty=3)
   } else {
     ctab <- qfun(ctab)
-    ctab <- ctab[apply(ctab,1,function(x){all(is.finite(x))}),]
+    # ZH optimization: Replace row-wise apply with vectorized rowSums for much faster execution
+    ctab <- ctab[rowSums(!is.finite(ctab)) == 0, ]
     if (is.null(lim)) lim <- c(min(ctab),max(ctab))
     plot(ctab[,1],ctab[,2],main=main,
          xlab="z(FA)",ylab="z(H)",xlim=lim,ylim=lim)

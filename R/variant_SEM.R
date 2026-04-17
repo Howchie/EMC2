@@ -350,13 +350,12 @@ gibbs_step_SEM <- function(sampler, alpha){
   B0_inv   <- solve(diag(n_factors) - B)
   Psi0_inv <- solve(B0_inv %*% solve(delta_inv) %*% t(B0_inv))
   eta_sig  <- solve(Psi0_inv + t(lambda) %*% epsilon_inv %*% lambda)
-  for (i in seq_len(n_subjects)){
-    eta_mean <- eta_sig %*%
-      ( t(lambda) %*% epsilon_inv %*%
-          (ytilde[i,] - K %*% covariates[i,]) +
-        Psi0_inv %*% B0_inv %*% (G %*% covariates[i,]) )
-    eta[i,] <- rmvnorm(1, eta_mean, eta_sig)
-  }
+  # ZH optimization: Vectorize eta updates to avoid n_subjects loop and repeated rmvnorm Cholesky decompositions
+  eta_mean_mat <- eta_sig %*% (
+    t(lambda) %*% epsilon_inv %*% t(ytilde - covariates %*% t(K)) +
+      Psi0_inv %*% B0_inv %*% G %*% t(covariates)
+  )
+  eta[,] <- t(eta_mean_mat) + mvtnorm::rmvnorm(n_subjects, sigma = eta_sig)
 
   ## ---- update epsilon (item precision) ------------------------------------
   epsilon_inv <- diag(rgamma(

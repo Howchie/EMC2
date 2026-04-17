@@ -288,9 +288,13 @@ IC <- function(emc,stage="sample",filter=0,use_best_fit=TRUE,
     ll <- get_pars(emc, stage = stage, filter = filter, selection = "LL", merge_chains = TRUE,subject=subject)
     alpha <- get_pars(emc,selection="alpha",stage=stage,filter=filter, by_subject = TRUE, merge_chains = TRUE,subject=subject)
   }
-  minDs <- -2*apply(ll[[1]][[1]], 2, max)
-  mean_lls <- colMeans(ll[[1]][[1]])
-  mean_pars <- lapply(alpha,function(x){colMeans(do.call(rbind,x))})
+  # ZH optimization: Replace col-wise apply loop with vectorized C-level primitive
+  ll_mat <- ll[[1]][[1]]
+  minDs <- -2*ll_mat[cbind(max.col(t(ll_mat), ties.method="first"), 1:ncol(ll_mat))]
+  mean_lls <- colMeans(ll_mat)
+  mean_pars <- lapply(alpha, function(x) {
+    rowSums(vapply(x, colSums, numeric(ncol(x[[1]])))) / sum(vapply(x, nrow, numeric(1)))
+  })
   # log-likelihood for each subject using their mean parameter vector
   data <- emc[[1]]$data
   mean_pars_lls <- setNames(numeric(length(mean_pars)),names(mean_pars))
@@ -435,12 +439,14 @@ compare_subject <- function(sList,stage="sample",filter=0,use_best_fit=TRUE,
     }))
     cat("\nWinners\n")
     if(has_waic){
-      print(rbind(WAIC=table(mnams[apply(pWAIC,1,which.max)]),
-                  DIC=table(mnams[apply(pDIC,1,which.max)]),
-                  BPIC=table(mnams[apply(pBPIC,1,which.max)])))
+      # ZH: optimization: Replace row-wise apply(..., 1, which.max) with vectorized max.col
+      print(rbind(WAIC=table(mnams[max.col(pWAIC, ties.method = "first")]),
+                  DIC=table(mnams[max.col(pDIC, ties.method = "first")]),
+                  BPIC=table(mnams[max.col(pBPIC, ties.method = "first")])))
     } else {
-      print(rbind(DIC=table(mnams[apply(pDIC,1,which.max)]),
-                  BPIC=table(mnams[apply(pBPIC,1,which.max)])))
+      # ZH: optimization: Replace row-wise apply(..., 1, which.max) with vectorized max.col
+      print(rbind(DIC=table(mnams[max.col(pDIC, ties.method = "first")]),
+                  BPIC=table(mnams[max.col(pBPIC, ties.method = "first")])))
     }
   }
   if (return_summary) {

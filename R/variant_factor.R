@@ -222,7 +222,8 @@ gibbs_step_factor <- function(sampler, alpha){
   # Update eta (latent factors)
   eta_sig <- solve(psi_inv + t(lambda) %*% sig_err_inv %*% lambda)
   eta_mu <- eta_sig %*% t(lambda) %*% sig_err_inv %*% t(alphatilde)
-  eta[,] <- t(apply(eta_mu, 2, FUN = function(x){ rmvnorm(1, x, eta_sig) }))
+  # ZH vectorized rmvnorm: draw zero-mean samples and add the means
+  eta[,] <- t(eta_mu) + rmvnorm(n_subjects, sigma = eta_sig)
 
   # Update sig_err (error precisions)
   sig_err_inv <- diag(rgamma(n_pars, shape = prior$as + n_subjects/2,
