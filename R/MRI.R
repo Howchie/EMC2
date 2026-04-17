@@ -303,7 +303,7 @@ convolve_design_matrix <- function(timeseries, events, factors = NULL, contrasts
     all_dms[[as.character(subject)]] <- dms_sub
   }
   if(scale){
-    full_dm <- do.call(rbind, all_dms)
+    full_dm <- as.matrix(do.call(rbind, all_dms))
     # Optimization: Use matrixStats::colMaxs for better readability and performance
     maxs <- matrixStats::colMaxs(full_dm)
     all_dms <- lapply(all_dms, function(x){

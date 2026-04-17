@@ -5,22 +5,22 @@
     Output
       $v 
         covariate           E         
-       -0.513716908811104  speed     : v - 0.514 * v_covariate
-       0.601813121611908   neutral   : v + 0.602 * v_covariate + v_Eneutral + 0.602 * v_covariate:Eneutral
-       -1.54982186331112   accuracy  : v - 1.55 * v_covariate + v_Eaccuracy - 1.55 * v_covariate:Eaccuracy
-       -1.70962282511647   speed     : v - 1.71 * v_covariate
-       0.7701488026301     neutral   : v + 0.77 * v_covariate + v_Eneutral + 0.77 * v_covariate:Eneutral
+       -0.513716908811104  speed     : v - 0.514 * v_covariate 
+       0.601813121611908   neutral   : v + 0.602 * v_covariate + v_Eneutral + 0.602 * v_covariate:Eneutral 
+       -1.54982186331112   accuracy  : v - 1.550 * v_covariate + v_Eaccuracy - 1.550 * v_covariate:Eaccuracy
+       -1.70962282511647   speed     : v - 1.710 * v_covariate 
+       0.7701488026301     neutral   : v + 0.770 * v_covariate + v_Eneutral + 0.770 * v_covariate:Eneutral 
        -0.716873043602934  accuracy  : v - 0.717 * v_covariate + v_Eaccuracy - 0.717 * v_covariate:Eaccuracy
       
       $B 
         E         
-       speed     : exp(B)
-       neutral   : exp(B + B_Eneutral)
+       speed     : exp(B )
+       neutral   : exp(B + B_Eneutral )
        accuracy  : exp(B + B_Eaccuracy)
       
       $t0 
         S      
-       left   : exp(t0)
+       left   : exp(t0 )
        right  : exp(t0 + t0_Sright)
       
 
