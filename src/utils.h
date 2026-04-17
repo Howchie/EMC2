@@ -265,8 +265,8 @@ inline void dlnr_raw(const double* rt, const double* pars_cm, int n_rows,
     if (R_IsNA(m_[i]) || !isok[i]) { out[i] = min_ll; continue; }
     const double tt = rt[i] - t0_[i];
     if (tt <= 0.0) { out[i] = min_ll; continue; }
-    const double pdf = dlnorm_std(tt, m_[i], s_[i], false);
-    out[i] = (pdf > 0.0 && emc2_isfinite(pdf)) ? std::log(pdf) : min_ll;
+    const double log_pdf = dlnorm_std(tt, m_[i], s_[i], true);
+    out[i] = (R_FINITE(log_pdf) && log_pdf > min_ll) ? log_pdf : min_ll;
   }
 }
 

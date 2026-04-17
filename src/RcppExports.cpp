@@ -4,8 +4,6 @@
 #include <RcppArmadillo.h>
 #include <Rcpp.h>
 
-#include "utility_functions.h"
-
 using namespace Rcpp;
 
 #ifdef RCPP_USE_GLOBAL_ROSTREAM
@@ -954,7 +952,7 @@ BEGIN_RCPP
 END_RCPP
 }
 // c_add_charvectors
-CharacterVector c_add_charvectors(CharacterVector x, CharacterVector y);
+inline CharacterVector c_add_charvectors(CharacterVector x, CharacterVector y);
 RcppExport SEXP _EMC2_c_add_charvectors(SEXP xSEXP, SEXP ySEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
@@ -962,66 +960,6 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< CharacterVector >::type x(xSEXP);
     Rcpp::traits::input_parameter< CharacterVector >::type y(ySEXP);
     rcpp_result_gen = Rcpp::wrap(c_add_charvectors(x, y));
-    return rcpp_result_gen;
-END_RCPP
-}
-// pigt_old
-double pigt_old(double t, double k, double l, double a, double threshold);
-RcppExport SEXP _EMC2_pigt_old(SEXP tSEXP, SEXP kSEXP, SEXP lSEXP, SEXP aSEXP, SEXP thresholdSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< double >::type t(tSEXP);
-    Rcpp::traits::input_parameter< double >::type k(kSEXP);
-    Rcpp::traits::input_parameter< double >::type l(lSEXP);
-    Rcpp::traits::input_parameter< double >::type a(aSEXP);
-    Rcpp::traits::input_parameter< double >::type threshold(thresholdSEXP);
-    rcpp_result_gen = Rcpp::wrap(pigt_old(t, k, l, a, threshold));
-    return rcpp_result_gen;
-END_RCPP
-}
-// digt_old
-double digt_old(double t, double k, double l, double a, double threshold);
-RcppExport SEXP _EMC2_digt_old(SEXP tSEXP, SEXP kSEXP, SEXP lSEXP, SEXP aSEXP, SEXP thresholdSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< double >::type t(tSEXP);
-    Rcpp::traits::input_parameter< double >::type k(kSEXP);
-    Rcpp::traits::input_parameter< double >::type l(lSEXP);
-    Rcpp::traits::input_parameter< double >::type a(aSEXP);
-    Rcpp::traits::input_parameter< double >::type threshold(thresholdSEXP);
-    rcpp_result_gen = Rcpp::wrap(digt_old(t, k, l, a, threshold));
-    return rcpp_result_gen;
-END_RCPP
-}
-// pigt_log
-double pigt_log(double t, double k, double l, double a, double threshold);
-RcppExport SEXP _EMC2_pigt_log(SEXP tSEXP, SEXP kSEXP, SEXP lSEXP, SEXP aSEXP, SEXP thresholdSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< double >::type t(tSEXP);
-    Rcpp::traits::input_parameter< double >::type k(kSEXP);
-    Rcpp::traits::input_parameter< double >::type l(lSEXP);
-    Rcpp::traits::input_parameter< double >::type a(aSEXP);
-    Rcpp::traits::input_parameter< double >::type threshold(thresholdSEXP);
-    rcpp_result_gen = Rcpp::wrap(pigt_log(t, k, l, a, threshold));
-    return rcpp_result_gen;
-END_RCPP
-}
-// digt_log
-double digt_log(double t, double k, double l, double a, double threshold);
-RcppExport SEXP _EMC2_digt_log(SEXP tSEXP, SEXP kSEXP, SEXP lSEXP, SEXP aSEXP, SEXP thresholdSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< double >::type t(tSEXP);
-    Rcpp::traits::input_parameter< double >::type k(kSEXP);
-    Rcpp::traits::input_parameter< double >::type l(lSEXP);
-    Rcpp::traits::input_parameter< double >::type a(aSEXP);
-    Rcpp::traits::input_parameter< double >::type threshold(thresholdSEXP);
-    rcpp_result_gen = Rcpp::wrap(digt_log(t, k, l, a, threshold));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -1119,10 +1057,6 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_get_pars_c_wrapper_oo", (DL_FUNC) &_EMC2_get_pars_c_wrapper_oo, 11},
     {"_EMC2_run_trend_rcpp", (DL_FUNC) &_EMC2_run_trend_rcpp, 6},
     {"_EMC2_c_add_charvectors", (DL_FUNC) &_EMC2_c_add_charvectors, 2},
-    {"_EMC2_pigt_old", (DL_FUNC) &_EMC2_pigt_old, 5},
-    {"_EMC2_digt_old", (DL_FUNC) &_EMC2_digt_old, 5},
-    {"_EMC2_pigt_log", (DL_FUNC) &_EMC2_pigt_log, 5},
-    {"_EMC2_digt_log", (DL_FUNC) &_EMC2_digt_log, 5},
     {"_EMC2_pigt", (DL_FUNC) &_EMC2_pigt, 5},
     {"_EMC2_digt", (DL_FUNC) &_EMC2_digt, 5},
     {NULL, NULL, 0}

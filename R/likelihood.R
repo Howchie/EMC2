@@ -458,8 +458,8 @@ log_likelihood_joint <- function(proposals, dadms, model_list, component = NULL)
           attr(dadm, "designs") <- attr(dadms[[ref_idx]], "designs")
         }
         parPrefix <- parPreFixs[k]
-        # Unfortunately indexing can't get quicker than this as far as I can tell.
-        columns_to_use <- sapply(strsplit(colnames(proposals), "|", fixed = TRUE), function(x) x == parPrefix)[1,]
+        # Optimization: Use startsWith to match parameter prefixes
+        columns_to_use <- startsWith(colnames(proposals), paste0(parPrefix, "|"))
         currentPars <- proposals[,columns_to_use, drop = F]
         colnames(currentPars) <- gsub(".*[|]", "", colnames(currentPars))
         total_ll <- total_ll +  calc_ll_manager(currentPars, dadm, model_list[[i]])

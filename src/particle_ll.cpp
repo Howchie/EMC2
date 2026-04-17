@@ -9,6 +9,7 @@
 #include "composite_functions.h"
 #include "trend.h"
 #include "utils.h"
+#include "wald_functions.h"
 #include "gsl_utils.h"
 #include "ParamTable.h"
 #include "TrendEngine.h"
@@ -1781,7 +1782,7 @@ inline double log_pIO_rowmajor(const double* pars_rowmajor,
     const double v = par_k[0];
     const double sv = par_k[1];
     if (!emc2_isfinite(v) || !emc2_isfinite(sv) || sv <= 0.0) return R_NegInf;
-    const double ll = R::pnorm(0.0, v, sv, 1, 1); // check if should use fast pnorm
+    const double ll = pnorm_std(-v / sv, true, true); 
     if (!emc2_isfinite(ll)) return R_NegInf;
     log_p += ll;
   }
@@ -1842,8 +1843,7 @@ inline double log_cdf_rowmajor(double t,
             const double v = par_k[0];
             const double sv = par_k[1];
             if (!emc2_isfinite(v) || !emc2_isfinite(sv) || sv <= 0.0) return R_NegInf;
-            const double lp_neg = R::pnorm(0.0, v, sv, 1, 1); // check if should use fast pnorm
-            const double ll = log1m_exp(lp_neg);
+            const double ll = pnorm_std(-v / sv, false, true);
             if (!emc2_isfinite(ll)) return R_NegInf;
             logC += ll;
           }
@@ -2267,7 +2267,7 @@ double c_log_likelihood_race(
           const double v = pars_cm_ptr[0 * n_trials + row];
           const double sv = pars_cm_ptr[1 * n_trials + row];
           if (!emc2_isfinite(v) || !emc2_isfinite(sv) || sv <= 0.0) return R_NegInf;
-          const double ll = R::pnorm(0.0, v, sv, 1, 1); // check if should use fast pnorm
+          const double ll = pnorm_std(-v / sv, true, true);
           if (!emc2_isfinite(ll)) return R_NegInf;
           log_p += ll;
         }

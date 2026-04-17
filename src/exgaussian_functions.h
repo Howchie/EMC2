@@ -5,6 +5,7 @@
 using namespace Rcpp;
 #include <cmath>
 #include "composite_functions.h"
+#include "wald_functions.h"
 #ifndef M_PI
 #define M_PI 3.141592653589793238462643383279502884
 #endif
@@ -41,7 +42,7 @@ double dexg(
 
   // compute Phi term
   double z = (x - mu) / sig_p - sig_p / tau_p;
-  double log_phi = R::pnorm(z, 0.0, 1.0, true, true);
+  double log_phi = pnorm_std(z, true, true);
   if (emc2_isnan(log_phi)) {
     return NA_REAL;
   }
@@ -83,9 +84,9 @@ double pexg(
   double sig_p = std::max(sigma, SIG_TAU_EPS);
 
   // compute the two Phi terms
-  double log_phi_1 = R::pnorm((q - mu) / sig_p, 0.0, 1.0, true, true);
-  double log_phi_2 = R::pnorm(
-    (q - mu) / sig_p - sig_p / tau_p, 0.0, 1.0, true, true
+  double log_phi_1 = pnorm_std((q - mu) / sig_p, true, true);
+  double log_phi_2 = pnorm_std(
+    (q - mu) / sig_p - sig_p / tau_p, true, true
   );
 
   // compute the exp term in log space

@@ -3,6 +3,7 @@
 #include "ParamTable.h"
 #include "TrendEngine.h"   // contains TrendEngine definition
 #include "transform_utils.h"
+#include "wald_functions.h"
 #include <unordered_map>
 using namespace Rcpp;
 
@@ -51,7 +52,7 @@ static NumericVector apply_pretransforms_cpp(NumericVector p_vector, List pretra
       p_vector[i] = lw + std::exp(val);
     } else if (f == "pnorm") {
       const double range = up - lw;
-      p_vector[i] = lw + range * R::pnorm(val, 0.0, 1.0, 1, 0);
+      p_vector[i] = lw + range * pnorm_std(val);
     }
   }
   return p_vector;

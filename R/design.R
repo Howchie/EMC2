@@ -307,7 +307,7 @@ contr.anova <- function(n) {
   levels <- as.character(levels)
   n <- length(levels)
   contr <- stats::contr.helmert(n)
-  contr/rep(2*apply(abs(contr),2,max),each=dim(contr)[1])
+  contr/rep(2*matrixStats::colMaxs(abs(contr)),each=dim(contr)[1])
 }
 
 add_accumulators <- function(data,matchfun=NULL,simulate=FALSE, type = "RACE", Fcovariates=NULL) {

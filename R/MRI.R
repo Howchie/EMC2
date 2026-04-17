@@ -304,8 +304,8 @@ convolve_design_matrix <- function(timeseries, events, factors = NULL, contrasts
   }
   if(scale){
     full_dm <- do.call(rbind, all_dms)
-    # ZH optimization: Replace col-wise apply loop with vectorized C-level primitive
-    maxs <- full_dm[cbind(max.col(t(full_dm), ties.method="first"), 1:ncol(full_dm))]
+    # Optimization: Use matrixStats::colMaxs for better readability and performance
+    maxs <- matrixStats::colMaxs(full_dm)
     all_dms <- lapply(all_dms, function(x){
       for(i in 1:ncol(x)){
         x[,i] <- x[,i]/maxs[i]

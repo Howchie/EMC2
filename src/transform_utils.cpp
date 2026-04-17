@@ -1,4 +1,5 @@
 #include "transform_utils.h"
+#include "wald_functions.h"
 #include <unordered_map>
 
 using namespace Rcpp;
@@ -141,7 +142,7 @@ void c_do_transform_pt(ParamTable& pt,
     case PNORM: {
       const double range = up - lw;
       for (int i = 0; i < nrow; ++i) {
-        col[i] = lw + range * R::pnorm(col[i], 0.0, 1.0, 1, 0);
+        col[i] = lw + range * pnorm_std(col[i]);
       }
       break;
     }

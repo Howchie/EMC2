@@ -281,9 +281,9 @@ NumericVector pEXG_RDEX(NumericVector q,
       if (tau > .05 * sigma){
         double z_i = q[i] - mu - (sigma * sigma) / tau;
         double mu_term = mu + (sigma * sigma / tau);
-        cdf[i] = R::pnorm((q[i] - mu) / sigma, 0., 1., true, false) - std::exp(std::log(R::pnorm(z_i / sigma, 0., 1., true, false)) + (mu_term * mu_term - mu * mu - 2. * q[i] * (sigma * sigma / tau)) / (2. * sigma * sigma));
+        cdf[i] = pnorm_std((q[i] - mu) / sigma) - std::exp(pnorm_std(z_i / sigma, true, true) + (mu_term * mu_term - mu * mu - 2. * q[i] * (sigma * sigma / tau)) / (2. * sigma * sigma));
       } else {
-        cdf[i] = R::pnorm(q[i], mu, sigma, true, false);
+        cdf[i] = pnorm_std((q[i] - mu) / sigma);
       }
     } else {
       if (q[i] < 0) {
@@ -327,7 +327,7 @@ NumericVector dEXG_RDEX(NumericVector x,
   for (int i = 0; i < n; i++){
     if (tau > .05 * sigma){
       double z_i = x[i] - mu - (sigma * sigma) / tau;
-      pdf[i] = - std::log(tau) - (z_i + (sigma * sigma)/(2. * tau)) / tau + std::log(R::pnorm(z_i / sigma, 0., 1., true, false));
+      pdf[i] = - std::log(tau) - (z_i + (sigma * sigma)/(2. * tau)) / tau + pnorm_std(z_i / sigma, true, true);
     } else {
       pdf[i] = R::dnorm(x[i], mu, sigma, true);
     }
