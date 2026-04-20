@@ -441,5 +441,5 @@ plot_sbc_ecdf <- function(ranks, layout = NA, add_stats = TRUE, main = NULL, K =
 
 get_ranks_ESS <- function(posterior, ESS, prior){
   posterior <- posterior[seq(1, length(posterior), length.out = ESS)]
-  return(rank(c(prior, posterior))[1]/(ESS+1))
+  return(pmin(1,rank(c(prior, posterior))[1]/(ESS+1)))
 }
