@@ -66,6 +66,7 @@ Imports:
     corrplot,
     colorspace,
     psych,
+    matrixStats,
     utils,
     loo,
     lpSolve,

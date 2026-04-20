@@ -820,9 +820,6 @@ plot_cdf <- function(input,
           # quantile of x at each index, and median of y at each index
           # We'll include 50% in quants to do median for x as well.
           # Then we combine them in a matrix with 4 rows => x_lower, x_median, x_upper, y_median
-          qx <- t(matrixStats::rowQuantiles(x_mat, probs = sort(c(quants, 0.5)), na.rm = TRUE, drop = FALSE))
-
-          # }
           # Ensure quantiles include 0.5 and are unique/sorted
           quants <- sort(quants)
           probs_qx <- sort(unique(c(quants, 0.5)))
@@ -1619,4 +1616,3 @@ plot_caf <- function(input,
 
   invisible(NULL)
 }
-
