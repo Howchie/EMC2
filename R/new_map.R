@@ -53,8 +53,14 @@ minimal_design <- function(design, covariates = NULL, drop_subjects = TRUE,
           }
         }
         if(!cv %in% names(covariates)){
-          if(dots$verbose) message(paste0("Imputing ", cv, " with random values"))
-          vec <- rnorm(n)
+          if (cv == "LT") vec <- rep(0,n) else
+          if (cv == "LC") vec <- rep(0,n) else
+          if (cv == "UT") vec <- rep(Inf,n) else
+          if (cv == "UC") vec <- rep(Inf,n) else {
+            if(dots$verbose)
+              message(paste0("Imputing ", cv, " with random values"))
+            vec <- rnorm(n)
+          }
         } else{
           vec <- covariates[[cv]]
           if(length(vec) < nrow(fac_df)){
