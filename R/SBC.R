@@ -48,7 +48,7 @@ SBC_hierarchical <- function(design_in, prior_in, replicates = 250, trials = 100
   # Should at a later point go to predict
   prior_mu <- plot(prior_in, design_in, do_plot = F, N = replicates, selection = "mu", return_mcmc = FALSE, map = FALSE)[[1]]
   prior_var <- plot(prior_in, design_in, do_plot = F, N = replicates, selection = "Sigma", return_mcmc = FALSE,
-                          map = FALSE)[[1]]
+                          remove_constants = FALSE,map=FALSE)[[1]]
   rank_mu <- data.frame()
   rank_var <- data.frame()
   par_names <- names(sampled_pars(design_in))
