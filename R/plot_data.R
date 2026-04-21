@@ -1,7 +1,7 @@
 create_group_key <- function(df, factors) {
   if (length(factors) == 0) return(rep("All Data", nrow(df)))
-  formatted_cols <- lapply(factors, function(f) paste(f, df[[f]], sep = "="))
-  key <- do.call(paste, c(formatted_cols, sep = " "))
+  key <- apply(df[, factors, drop = FALSE], 1, function(x)
+    paste(paste(factors, x, sep = "="), collapse = " "))
   levs <- lapply(df[,factors],levels)
   for (i in 1:length(factors)) levs[[i]] <- paste(factors[i],levs[[i]],sep="=")
   lev <- levs[[1]]
@@ -18,51 +18,62 @@ create_group_key <- function(df, factors) {
 # }
 
 
-check_data_plot <- function(data, defective_factor, subject, factors) 
-{
+check_data_plot <- function(data, defective_factor, subject, factors, remove_na = TRUE) {
+
+  # Check required columns
   required_cols_post <- c("rt", "subjects", defective_factor)
   missing_cols_post <- setdiff(required_cols_post, names(data))
   if (length(missing_cols_post) > 0) {
-    stop("Ensure data has columns: ", paste(missing_cols_post, 
-                                            collapse = ", "))
+    stop("Ensure data has columns: ", paste(missing_cols_post, collapse = ", "))
   }
+
+  # Handle factors argument
   if (!is.null(factors) && !all(factors %in% names(data))) {
     stop("factors must name factors in data")
   }
   n_bins <- 4
-  for (fact in factors) {
-    if (is.numeric(data[, fact])) {
-      if (length(unique(data[, fact])) > 6) {
-        quartile_breaks <- quantile(unique(data[, fact]), 
-                                    probs = seq(0, 1, length.out = n_bins + 1), 
-                                    na.rm = TRUE)
-        data[, fact] <- cut(data[, fact], breaks = quartile_breaks, 
-                            include.lowest = TRUE, labels = paste0("Q", 
-                                                                   1:n_bins))
+  for(fact in factors){
+    if(is.numeric(data[,fact])){
+      if(length(unique(data[,fact])) > 6){
+        quartile_breaks <- quantile(unique(data[,fact]), probs = seq(0, 1, length.out = n_bins + 1), na.rm = TRUE)
+        # Bin the data into quartiles using these breakpoints
+        data[,fact] <- cut(data[,fact], breaks = quartile_breaks, include.lowest = TRUE, labels = paste0("Q", 1:n_bins))
       }
     }
   }
+  # Handle subject argument
   if (!is.null(subject)) {
-    if (is.numeric(subject)) {
-      data <- data[data$subjects %in% unique(data$subjects)[subject], 
-      ]
-    }
-    else {
+    if(is.numeric(subject)) {
+      data <- data[data$subjects %in% unique(data$subjects)[subject], ]
+    } else {
       data <- data[data$subjects %in% subject, ]
     }
     data$subjects <- factor(data$subjects)
   }
-  
-  # Changed: keep NA and Infinite RT rows, drop only non-finite non-missing RTs
-  data <- data[is.na(data$rt) | is.finite(data$rt) | is.infinite(data$rt), , drop = FALSE]
-  
+
+  if(remove_na){
+    # Remove missing or infinite rt
+    data <- data[is.finite(data$rt), ]
+  }
+
+  # --- Faster group_key creation when postn is present ---
   grp_cols <- unique(c("subjects", defective_factor, factors))
-  grp_cols <- intersect(grp_cols, names(data))
-  tmp_unique <- data[!duplicated(data[, grp_cols, drop = FALSE]), 
-                     grp_cols, drop = FALSE]
+  grp_cols <- intersect(grp_cols, names(data))  # Just to be safe
+
+  # 2. Extract the rows that are unique with respect to these columns (excluding 'postn')
+  tmp_unique <- data[!duplicated(data[, grp_cols, drop = FALSE]), grp_cols, drop = FALSE]
+
+  # 3. Create one group_key per unique row
   tmp_unique$group_key <- create_group_key(tmp_unique, factors)
-  data <- merge(x = data, y = tmp_unique, by = grp_cols, all.x = TRUE, 
-                sort = FALSE)
+
+  # 4. Merge back group_key into the full data (by the grouping columns)
+  data <- merge(
+    x = data,
+    y = tmp_unique,
+    by = grp_cols,
+    all.x = TRUE,
+    sort = FALSE
+  )
   return(data)
 }
 
@@ -85,136 +96,116 @@ calc_functions <- function(functions, input){
   return(input)
 }
 
-prep_data_plot <- function(input, post_predict, prior_predict, to_plot, limits, 
-                           factors = NULL, defective_factor = NULL, subject = NULL, 
-                           n_cores, n_post, functions) 
-{
-  if (!is.data.frame(input) && !inherits(input, "emc") && !is.null(post_predict) && 
-      length(input) != length(post_predict)) {
+prep_data_plot <- function(input, post_predict, prior_predict, to_plot, limits,
+                           factors = NULL, defective_factor = NULL, subject = NULL,
+                           n_cores, n_post, functions, remove_na = TRUE){
+  if(!is.data.frame(input) && !inherits(input, "emc") && !is.null(post_predict) && length(input) != length(post_predict)){
     stop("If input is a list, post_predict must be a list of the same length")
   }
-  if (!is.data.frame(input) && !inherits(input, "emc") && !is.null(prior_predict) && 
-      length(input) != length(prior_predict)) {
+  if(!is.data.frame(input) && !inherits(input, "emc") && !is.null(prior_predict) && length(input) != length(prior_predict)){
     stop("If input is a list, prior_predict must be a list of the same length")
   }
-  
   datasets <- list()
   sources <- c()
-  
-  if (!is.data.frame(input) && !inherits(input, "emc")) {
-    if (is.null(names(input))) 
-      stop("If input is a list, it must have names")
-    is_emc <- lapply(input, function(x) inherits(x, "emc"))
-    if (!all(is_emc) || all(is_emc)) {
+  # Check for regular input
+  if(!is.data.frame(input) && !inherits(input, "emc")){
+    if(is.null(names(input))) stop("If input is a list, it must have names")
+    is_emc <- unlist(lapply(input, function(x) inherits(x, "emc")))
+    if(!(all(is_emc) || all(!is_emc))){
       stop("Input must be either all emc objects or no emc objects")
     }
-  } else {
+  } else{
     input <- list(data = input)
   }
-  
-  if (!is.data.frame(post_predict) && is.list(post_predict)) {
-    if (is.null(names(post_predict))) 
-      stop("If post_predict is a list, it must have names")
+  # Check for post_predict and prior_predict
+  if(!is.data.frame(post_predict) && is.list(post_predict)){
+    if(is.null(names(post_predict))) stop("If post_predict is a list, it must have names")
     datasets[names(post_predict)] <- post_predict
-    sources[names(post_predict)] <- "posterior"
-  } else if (!is.null(post_predict)) {
-    datasets[["posterior"]] <- post_predict
-    sources["posterior"] <- "posterior"
-  } else {
+    sources[names(post_predict)] <- 'posterior'
+  } else if(!is.null(post_predict)){
+    datasets[['posterior']] <- post_predict
+    sources['posterior'] <- 'posterior'
+  } else{
     post_predict <- vector("list", length(input))
   }
-  
-  if (!is.data.frame(prior_predict) && is.list(prior_predict)) {
-    if (is.null(names(prior_predict))) 
-      stop("If prior_predict is a list, it must have names")
+  if(!is.data.frame(prior_predict)  && is.list(prior_predict)){
+    if(is.null(names(prior_predict))) stop("If prior_predict is a list, it must have names")
     datasets[names(prior_predict)] <- prior_predict
-    sources[names(prior_predict)] <- "prior"
-  } else if (!is.null(prior_predict)) {
-    datasets[["prior"]] <- prior_predict
-    sources["prior"] <- "prior"
-  } else {
+    sources[names(prior_predict)] <- 'prior'
+  } else if(!is.null(prior_predict)){
+    datasets[['prior']] <- prior_predict
+    sources['prior'] <- 'prior'
+  }  else{
     prior_predict <- vector("list", length(input))
   }
-  
+
   all_data <- list()
-  for (k in 1:length(input)) {
+  # Check if regular input is data or emc
+  for(k in 1:length(input)){
+    # Prepare data
     if (inherits(input[[k]], "emc")) {
       all_data[[names(input)[k]]] <- get_data(input[[k]])
       functions <- c(get_emc_functions(input[[k]]), functions)
-    } else {
-      all_data[names(input)[k]] <- input[k]
-    }
+    } else all_data[names(input)[k]] <- input[k]
   }
-  
-  if (length(unique(all_data)) == 1) {
+  if(length(unique(all_data)) == 1){
     all_data <- all_data[1]
-    datasets["data"] <- all_data
-    sources["data"] <- "data"
-  } else {
+    datasets['data'] <- all_data
+    sources['data'] <- 'data'
+  } else{
     datasets[names(input)] <- all_data
-    sources[names(input)] <- "data"
+    sources[names(input)] <- 'data'
   }
-  
-  for (k in 1:length(input)) {
-    if (is.null(post_predict[[k]]) & ("posterior" %in% to_plot) & 
-        inherits(input[[k]], "emc")) {
-      if (length(all_data) > 1 && !("prior" %in% to_plot)) {
-        datasets[[paste0(names(input)[k], " - posterior")]] <- predict(input[[k]], 
-                                                                       n_post = n_post, n_cores = n_cores)
-        sources[paste0(names(input)[k], " - posterior")] <- "posterior"
-      } else {
-        datasets[["posterior"]] <- predict(input[[k]], 
-                                           n_post = n_post, n_cores = n_cores)
-        sources["posterior"] <- "posterior"
+  # Check if posterior or prior predictives need to be generated
+  for(k in 1:length(input)){
+    # Generate posterior predictives
+    if (is.null(post_predict[[k]]) & ('posterior' %in% to_plot) & inherits(input[[k]], "emc")) {
+      # In this case we provided multiple emc datasets but they have the same data
+      # Just give them the name of the emc data if there is no prior to be plotted
+      # as well.
+      if(length(all_data) > 1 && !('prior' %in% to_plot)){
+        datasets[[paste0(names(input)[k], ' - posterior')]] <- predict(input[[k]], n_post = n_post, n_cores = n_cores)
+        sources[paste0(names(input)[k], ' - posterior')] <- 'posterior'
+      } else{
+        datasets[['posterior']] <- predict(input[[k]], n_post = n_post, n_cores = n_cores)
+        sources['posterior'] <- 'posterior'
       }
     }
-    
-    if (is.null(prior_predict[[k]]) & ("prior" %in% to_plot) & 
-        inherits(input[[k]], "emc")) {
-      if (length(all_data) > 1 && !("posterior" %in% to_plot)) {
-        datasets[[paste0(names(input)[k], " - prior")]] <- predict(input[[k]], 
-                                                                   n_post = n_post, n_cores = n_cores)
-        sources[paste0(names(input)[k], " - prior")] <- "prior"
-      } else {
-        datasets[["prior"]] <- predict(get_prior(input[[k]]), 
-                                       data = get_data(input[[k]]), n_post = n_post, 
-                                       n_cores = n_cores)
-        sources["prior"] <- "prior"
+    # See if we also want to generate prior predictives
+    if (is.null(prior_predict[[k]]) & ('prior' %in% to_plot) & inherits(input[[k]], "emc")) {
+      # Same logic as for posterior
+      if(length(all_data) > 1 && !('posterior' %in% to_plot)){
+        datasets[[paste0(names(input)[k], ' - prior')]] <- predict(input[[k]], n_post = n_post, n_cores = n_cores)
+        sources[paste0(names(input)[k], ' - prior')] <- 'prior'
+      } else{
+        datasets[['prior']] <- predict(get_prior(input[[k]]), data = get_data(input[[k]]), n_post = n_post, n_cores = n_cores)
+        sources['prior'] <- 'prior'
       }
     }
   }
-  
   xlim <- NULL
-  for (j in 1:length(datasets)) {
-    datasets[[j]] <- EMC2:::calc_functions(functions, datasets[[j]])
-    datasets[[j]] <- EMC2:::check_data_plot(datasets[[j]], defective_factor, 
-                                            subject, factors)
-    
-    if (sources[j] %in% limits) {
-      if (sources[j] == "prior") {
+  # Compute xlim based on quantiles and perform checks
+  for(j in 1:length(datasets)){
+    datasets[[j]] <- calc_functions(functions, datasets[[j]])
+    datasets[[j]] <- check_data_plot(datasets[[j]], defective_factor, subject, factors, remove_na)
+    if(sources[j] %in% limits){
+      if(sources[j] == "prior"){
         x_lim_probs <- c(0, 0.95)
-      } else {
+      } else{
         x_lim_probs <- c(0, 0.99)
       }
-      
-      # Filter for finite RTs before calculating xlim
-      finite_df <- datasets[[j]][is.finite(datasets[[j]]$rt), , drop = FALSE]
-      if (nrow(finite_df) > 0) {
-        quants <- aggregate(rt ~ group_key, finite_df, 
-                            quantile, probs = x_lim_probs)
-        xlim <- range(xlim, unlist(quants$rt), na.rm = TRUE)
-      }
+      quants <- aggregate(rt ~ group_key, datasets[[j]], quantile, probs = x_lim_probs)
+      xlim <- range(xlim, unlist(quants$rt))
     }
   }
-  if (is.null(xlim) || !all(is.finite(xlim))) xlim <- c(0, 1) # Default fallback
-  
-  # Changed: Keep NA and Infinite RT rows so no-go/nonresponses remain in the denominator
-  datasets <- lapply(datasets, function(x) {
-    keep <- is.na(x$rt) | is.infinite(x$rt) | (x$rt > xlim[1] & x$rt < xlim[2])
-    x <- x[keep, , drop = FALSE]
-    return(x)
-  })
-  
+
+  if(remove_na){
+    datasets <- lapply(datasets, function(x){
+      x <- x[x$rt > xlim[1] & x$rt < xlim[2],]
+      return(x)
+    })
+  }
+
   return(list(datasets = datasets, sources = sources, xlim = xlim))
 }
 
@@ -231,7 +222,7 @@ prep_data_plot <- function(input, post_predict, prior_predict, to_plot, limits,
 #'
 #' @examples
 #' # For example plot the observed and predicted response accuracy
-# correct_fun <- function(d) mean(ifelse(is.na(d$R), is.na(d$S), d$R == d$S), na.rm = TRUE)
+# correct_fun <- function(data) mean(data$S == data$R)
 # plot_stat(samples_LNR, stat_fun = correct_fun, n_post = 10)
 #' # Can also apply more sophisticated statistics
 #' drt <- function(data) diff(tapply(data$rt,data[,c("E")],mean))
@@ -295,16 +286,13 @@ plot_stat <- function(input, post_predict = NULL, prior_predict = NULL, stat_fun
                                  quantile_stats)
       dens <- lapply(split(src_stats_df, src_stats_df$group_key), function(x){
         lapply(stat_names, function(y){
-          vals <- x[,y]
-          vals <- vals[is.finite(vals)]
-          if(length(vals) < 2) return(list(x = NA, y = 0))
-          do.call(density, c(list(vals), fix_dots(dots, density.default, consider_dots = F)))
+          do.call(density, c(list(x[,y]), fix_dots(dots, density.default, consider_dots = F)))
         })
       })
       dens_sources[[src_name]] <- dens
       if(src_type %in% use_lim){
-        max_y <- max(max_y, max(sapply(unlist(dens, recursive = F), function(x) return(max(x$y, na.rm = TRUE)))), na.rm = TRUE)
-        xlim <- range(xlim, range(sapply(unlist(dens, recursive = F), function(x) return(quantile(x$x, probs = c(0.01, 0.99), na.rm = TRUE))), na.rm = TRUE), na.rm = TRUE)
+        max_y <- max(max_y, max(sapply(unlist(dens, recursive = F), function(x) return(max(x$y)))))
+        xlim <- range(xlim, range(sapply(unlist(dens, recursive = F), function(x) return(quantile(x$x, probs = c(0.01, 0.99))))))
       }
     } else{
       split_src <- split(src_data, src_data$group_key)
@@ -323,7 +311,7 @@ plot_stat <- function(input, post_predict = NULL, prior_predict = NULL, stat_fun
       stat_names <- names(summary_df)[!(names(summary_df) %in% c('group_key', factors))]
 
       if('data' %in% use_lim){
-        xlim <- range(xlim, summary_df[,stat_names], na.rm = TRUE)
+        xlim <- range(xlim, summary_df[,stat_names])
       }
       line_sources[[src_name]] <- summary_sources[[src_name]] <- summary_df
     }
@@ -396,7 +384,7 @@ plot_stat <- function(input, post_predict = NULL, prior_predict = NULL, stat_fun
 
 # A small function to compute the defective densities across factor levels
 compute_def_dens <- function(dat, defective_factor, dargs, from = NULL, to = NULL) {
-  p_defective <- table(dat[[defective_factor]]) / nrow(dat)
+  p_defective <- prop.table(table(dat[[defective_factor]]))
   # We'll call density() on each subset of rt, then multiply by proportion
   # so that the sum across factor levels is 1
   # We'll use the from/to in dargs
@@ -404,13 +392,11 @@ compute_def_dens <- function(dat, defective_factor, dargs, from = NULL, to = NUL
   out <- list()
   for (lev in names(by_deflev)) {
     subdat <- by_deflev[[lev]]
-    # Filter for finite RTs only for density estimation
-    rt_finite <- subdat$rt[is.finite(subdat$rt)]
-    if (length(rt_finite) < 2) {
+    if (nrow(subdat) < 2) {
       # avoid error
       out[[lev]] <- rep(0, 512)
     } else {
-      dd <- do.call(density, c(list(x = rt_finite, from = from, to = to), fix_dots(dargs, density.default, consider_dots = FALSE)))
+      dd <- do.call(density, c(list(x = subdat$rt, from = from, to = to), fix_dots(dargs, density.default, consider_dots = FALSE)))
       out[[lev]] <- dd$y * p_defective[lev]
     }
   }
@@ -459,8 +445,7 @@ plot_density <- function(input, post_predict = NULL, prior_predict = NULL,
   data <- data_sources[[which(sources == "data")[1]]]
   defective_levels <- if (!is.null(data)) levels(factor(data[[defective_factor]])) else character(0)
   line_types <- seq_along(defective_levels)
-  quants <- sort(quants)
-  quantiles <- sort(unique(c(quants, 0.5)))
+  quantiles <- sort(c(quants, 0.5))
 
   # We'll keep track of the defective density results:
   # For single dataset => a single vector of y for each level
@@ -504,8 +489,7 @@ plot_density <- function(input, post_predict = NULL, prior_predict = NULL,
           # mat_y is 512 x #postn
           if (!is.null(mat_y)) {
             # dimension checks
-            # ZH optimization: Replace row-wise apply(..., 1, quantile) with transposed matrixStats::rowQuantiles
-            q_y <- t(matrixStats::rowQuantiles(mat_y, probs = quantiles, na.rm = TRUE, drop = FALSE))
+            q_y <- apply(mat_y, 1, quantile, probs = quantiles, na.rm = TRUE)
             out[[lev]] <- q_y
           } else {
             out[[lev]] <- NULL
@@ -620,32 +604,26 @@ plot_density <- function(input, post_predict = NULL, prior_predict = NULL,
             m <- cur_quants[[lev]]
             if (!is.null(m)) {
               # m => matrix of size length(quantiles) x 512
-              idx_med <- which(quantiles == 0.5)[1]
-              y_med   <- m[idx_med,]
+              # typically row 1 => lower, row 2 => median, row 3 => upper
+              # Let's define row indexes:
+              y_lower <- m[1,]
+              y_med   <- m[2,]
+              y_upper <- m[3,]
 
-              # polygons first
-              n_bands <- length(quants) %/% 2
-              for(j in 1:n_bands){
-                idx_low <- which(quantiles == quants[j])[1]
-                idx_high <- which(quantiles == quants[length(quants) - j + 1])[1]
-                y_low <- m[idx_low,]
-                y_high <- m[idx_high,]
-                
-                adj_color <- do.call(adjustcolor, fix_dots(add_defaults(src_args, alpha.f = .2), adjustcolor))
-                polygon_args <- src_args
-                polygon_args$col <- adj_color
-                polygon_args <- fix_dots_plot(polygon_args)
-                do.call(polygon, c(list(
-                  x = c(x_grid, rev(x_grid)),
-                  y = c(y_low, rev(y_high)),
-                  border = NA
-                ), polygon_args))
-              }
-
-              # line on top
               lines_args <- add_defaults(src_args, lty = line_types[i])
               lines_args <- fix_dots_plot(lines_args)
               do.call(lines, c(list(x = x_grid, y = y_med), lines_args))
+
+              # polygon
+              adj_color <- do.call(adjustcolor, fix_dots(add_defaults(src_args, alpha.f = .2), adjustcolor))
+              polygon_args <- src_args
+              polygon_args$col <- adj_color
+              polygon_args <- fix_dots_plot(polygon_args)
+              do.call(polygon, c(list(
+                x = c(x_grid, rev(x_grid)),
+                y = c(y_lower, rev(y_upper)),
+                border = NA
+              ), polygon_args))
             }
           }
         }
@@ -668,24 +646,27 @@ plot_density <- function(input, post_predict = NULL, prior_predict = NULL,
 ###############################################################################
 ## Helper: get_def_cdf
 ###############################################################################
-get_def_cdf <- function(x, defective_factor, dots)
-{
+get_def_cdf <- function(x, defective_factor, dots) {
+  # Computes a single defective CDF for each level of 'defective_factor'
+  # across the RT distribution (0.01 to 0.99).
   probs <- seq(0.01, 0.99, by = 0.01)
-  n_total <- nrow(x)
-  resp <- x[[defective_factor]]
-  resp_levels <- unique(resp[!is.na(resp)])
-  
-  out <- lapply(resp_levels, function(lev) {
-    inp <- x[!is.na(resp) & resp == lev, , drop = FALSE]
-    prop_share <- nrow(inp) / n_total
-    # rtquants will contain Inf for No-Go trials, which is handled by the plotting limits
-    rtquants <- quantile(inp$rt, probs = probs, type = 1, na.rm = TRUE)
-    yvals <- probs * prop_share
-    cbind(x = rtquants, y = yvals)
-  })
-  
-  names(out) <- resp_levels
-  out
+  p_defective <- prop.table(table(x[[defective_factor]]))
+
+  # For each level, compute the empirical CDF and scale by that level's proportion
+  out <- mapply(
+    split(x, x[[defective_factor]]),
+    p_defective,
+    FUN = function(inp, prop_share) {
+      # quantile of RTs
+      rtquants <- quantile(inp$rt, probs = probs, type = 1, na.rm = TRUE)
+      # defective cdf = empirical cdf (probs) times the proportion
+      yvals <- probs * prop_share
+      cbind(x = rtquants, y = yvals)
+    },
+    SIMPLIFY = FALSE
+  )
+  # 'out' is now a list whose names are the factor levels; each entry is a 2-col matrix (x,y).
+  return(out)
 }
 
 ###############################################################################
@@ -751,6 +732,12 @@ plot_cdf <- function(input,
     if (!all(add_percentiles %in% 1:99))
       stop("add_percentiles must be a vector of integers from 1:99")
   }
+
+  # # EXTRA FUNCTIONALITY: Expand defective factor automatically rather than have to pass
+  # if (!is.null(dots$panel_factor)) {
+  #
+  # }
+
   check <- prep_data_plot(input, post_predict, prior_predict, to_plot, use_lim,
                           factors, defective_factor, subject, n_cores, n_post,
                           functions)
@@ -769,7 +756,11 @@ plot_cdf <- function(input,
   if (is.null(defective_levels) || length(defective_levels) == 0) {
     defective_levels <- "Level1"  # fallback
   }
-  line_types <- seq_along(defective_levels)
+
+  # Allow line types to be set for defective factor
+  if (is.null(dots$line_types))
+     line_types <- seq_along(defective_levels) else
+     line_types <- dots$line_types
 
   # We'll store single-CDF results or multi-postn quantile results in these:
   cdf_list        <- list() # single
@@ -813,6 +804,7 @@ plot_cdf <- function(input,
           # gather all x and y columns across draws
           x_mat <- do.call(cbind, lapply(postn_list, function(lst) lst[[lev]][,"x"]))
           y_mat <- do.call(cbind, lapply(postn_list, function(lst) lst[[lev]][,"y"]))
+          # }
           # row-wise quantiles for x, plus median for y
           # Just as in your older code: we do quantiles on x across draws, median on y
           # Or you might do quantiles on both x and y.
@@ -820,19 +812,32 @@ plot_cdf <- function(input,
           # quantile of x at each index, and median of y at each index
           # We'll include 50% in quants to do median for x as well.
           # Then we combine them in a matrix with 4 rows => x_lower, x_median, x_upper, y_median
-          # Ensure quantiles include 0.5 and are unique/sorted
-          quants <- sort(quants)
-          probs_qx <- sort(unique(c(quants, 0.5)))
-          # ZH optimization: Replace row-wise apply(..., 1, quantile) with transposed matrixStats::rowQuantiles
-          qx <- t(matrixStats::rowQuantiles(x_mat, probs = probs_qx, na.rm = TRUE, drop = FALSE))
-          # ZH optimization: Replace row-wise apply(..., 1, median) with matrixStats::rowMedians
-          ym <- matrixStats::rowMedians(y_mat, na.rm=TRUE)
+          qx <- apply(x_mat, 1, quantile, probs = sort(c(quants, 0.5)), na.rm = TRUE)
+          ym <- apply(y_mat, 1, median, na.rm=TRUE)
 
-          # rbind them, naming the median row 'ym'
-          out[[lev]] <- rbind(qx, ym = ym)
+          # rbind them
+          # row 1 => x_lower
+          # row 2 => x_mid (0.5)
+          # row 3 => x_upper
+          # row 4 => y_median
+          # (If you used 3 quantiles, that's 3 rows for x, plus 1 for y.)
+          out[[lev]] <- rbind(qx, ym)
         }
         out
       })
+
+      if (!is.null(dots$panel_factor)) {
+        ns <- lapply(splitted,function(x){
+          mult <- table(x[[dots$panel_factor]])
+          sum(mult)/mult
+        })
+        for (i in 1:length(ns)) {
+          nlev <- length(cdf_quants_list[[sname]][[i]])
+          ns[[i]] <- rep(ns[[i]],length.out=nlev)
+          for (j in 1:nlev)
+            cdf_quants_list[[sname]][[i]][[j]]["ym",] <- ns[[i]][j]*cdf_quants_list[[sname]][[i]][[j]]["ym",]
+        }
+      }
 
       # If we use this dataset to define y-limit ...
       if (styp %in% use_lim) {
@@ -850,7 +855,18 @@ plot_cdf <- function(input,
     } else {
       # single dataset => cdf_list[[sname]] => group_key => get_def_cdf => named list by factor level
       cdf_list[[sname]] <- lapply(splitted, get_def_cdf, defective_factor, dots)
-
+      if (!is.null(dots$panel_factor)) {
+        ns <- lapply(splitted,function(x){
+          mult <- table(x[[dots$panel_factor]])
+          sum(mult)/mult
+        })
+        for (i in 1:length(ns)) {
+          nlev <- length(cdf_list[[sname]][[i]])
+          ns[[i]] <- rep(ns[[i]],length.out=nlev)
+          for (j in 1:nlev)
+            cdf_list[[sname]][[i]][[j]][,"y"] <- ns[[i]][j]*cdf_list[[sname]][[i]][[j]][,"y"]
+        }
+      }
       # If we use this dataset for y-limit, find max
       if (styp %in% use_lim) {
         # find max y across all group_keys & factor-levels
@@ -902,6 +918,12 @@ plot_cdf <- function(input,
     plot_args <- add_defaults(dots, xlim=xlim, ylim=ylim,
                               main=group_key, xlab="RT", ylab="Defective CDF")
     plot_args <- fix_dots_plot(plot_args)
+    if (!is.null(dots$main)) {
+      if (dots$main=="") plot_args$main <- "" else {
+        if (group_key=="All Data")  gk <- "" else gk <- group_key
+        plot_args$main <- paste0(dots$main, gk)
+      }
+    }
     do.call(plot, c(list(NA), plot_args))
 
     # draw lines for each dataset
@@ -959,39 +981,28 @@ plot_cdf <- function(input,
               for (lev in defective_levels) {
                 mat4 <- cdf_quants_for_group[[lev]]
                 if (!is.null(mat4)) {
-                  probs_qx <- sort(unique(c(quants, 0.5)))
-                  y_median <- mat4["ym", ]
-                  idx_med <- which(probs_qx == 0.5)[1]
-                  x_med <- mat4[idx_med, ]
+                  # mat4 => e.g. 4 rows x (length(probs)) columns: row1 => x_lower, row2 => x_mid, row3 => x_upper, row4 => y_median
+                  x_lower <- mat4[1,]
+                  x_med   <- mat4[2,]
+                  x_upper <- mat4[3,]
+                  y_median<- mat4[4,]
 
                   lines_args <- add_defaults(src_args, lty=line_types[ilev])
                   lines_args <- fix_dots_plot(lines_args)
-
-                  # Draw ribbons first (from widest to narrowest)
-                  n_bands <- length(quants) %/% 2
-                  if (n_bands > 0) {
-                    for (j in 1:n_bands) {
-                      idx_low <- which(probs_qx == quants[j])[1]
-                      idx_high <- which(probs_qx == quants[length(quants) - j + 1])[1]
-                      x_low <- mat4[idx_low, ]
-                      x_high <- mat4[idx_high, ]
-                      
-                      adj_color <- do.call(adjustcolor, fix_dots(add_defaults(src_args, alpha.f=0.2), adjustcolor))
-                      poly_args <- src_args
-                      poly_args$col <- adj_color
-                      poly_args <- fix_dots_plot(poly_args)
-                      # Connection using median Y height
-                      do.call(polygon, c(list(
-                        x = c(x_low, rev(x_high)),
-                        y = c(y_median, rev(y_median)),
-                        border = NA
-                      ), poly_args))
-                    }
-                  }
-
-                  # Draw the median line on top
                   do.call(lines, c(list(x=x_med, y=y_median), lines_args))
 
+                  # polygon for the ribbon
+                  adj_color <- do.call(adjustcolor, fix_dots(add_defaults(src_args, alpha.f=0.2), adjustcolor))
+                  poly_args <- src_args
+                  poly_args$col <- adj_color
+                  poly_args <- fix_dots_plot(poly_args)
+                  # We connect (x_lower, y_median) -> (x_upper, rev(y_median))
+                  # (the original code uses horizontal ribbons).
+                  do.call(polygon, c(list(
+                    x = c(x_lower, rev(x_upper)),
+                    y = c(y_median, rev(y_median)),
+                    border = NA
+                  ), poly_args))
                   if (!is.null(add_percentiles)) {
                      points(x_med[add_percentiles],y_median[add_percentiles],
                            pch=1,col=lines_args$col[1])
@@ -1007,8 +1018,12 @@ plot_cdf <- function(input,
 
     # Factor-level legend
     if(!is.na(legendpos[1])){
-      legend(legendpos[1], legend=defective_levels, lty=line_types, col="black",
-             title=defective_factor, bty="n")
+      if (is.null(dots$defective_legend))
+        legend(legendpos[1], legend=defective_levels, lty=line_types, col="black",
+                title=defective_factor, bty="n") else
+        legend(legendpos[1], legend=dots$defective_legend$legend,
+               lty=dots$defective_legend$lty, pch=dots$defective_legend$pch,col="black",
+                title=dots$defective_legend$title, bty="n")
     }
 
 
@@ -1121,16 +1136,23 @@ plot_delta <- function(input,
     # gather all x and y columns across draws
     x_mat <- do.call(cbind, lapply(postn_list, function(lst) lst[,"x"]))
     y_mat <- do.call(cbind, lapply(postn_list, function(lst) lst[,"y"]))
-      # Ensure quantiles include 0.5 and are unique/sorted
-      quants <- sort(quants)
-      probs_qy <- sort(unique(c(quants, 0.5)))
-      # ZH optimization: Replace row-wise apply(..., 1, quantile) with transposed matrixStats::rowQuantiles
-      qy <- t(matrixStats::rowQuantiles(y_mat, probs = probs_qy, na.rm = TRUE, drop = FALSE))
-      # ZH optimization: Replace row-wise apply(..., 1, median) with matrixStats::rowMedians
-      xm <- matrixStats::rowMedians(x_mat, na.rm=TRUE)
-      # rbind them, naming the median row 'xm'
-      out[[1]] <- rbind(qy, xm = xm)
-      out
+      # row-wise quantiles for x, plus median for y
+      # Just as in your older code: we do quantiles on x across draws, median on y
+      # Or you might do quantiles on both x and y.
+      # Typically, to replicate your older approach:
+      # quantile of x at each index, and median of y at each index
+      # We'll include 50% in quants to do median for x as well.
+      # Then we combine them in a matrix with 4 rows => x_lower, x_median, x_upper, y_median
+    qy <- apply(y_mat, 1, quantile, probs = sort(c(quants, 0.5)), na.rm = TRUE)
+    xm <- apply(x_mat, 1, median, na.rm=TRUE)
+      # rbind them
+      # row 1 => y_lower
+      # row 2 => y_mid (0.5)
+      # row 3 => y_upper
+      # row 4 => x_median
+      # (If you used 3 quantiles, that's 3 rows for x, plus 1 for y.)
+    out[[1]] <- rbind(qy,xm)
+    out
     })
     xlimp <- c(min(unlist(lapply(cdf_list[["posterior"]],function(x) lapply(x,function(y) min(y[,"x"]))))),
              max(unlist(lapply(cdf_list[["posterior"]],function(x) lapply(x,function(y) max(y[,"x"]))))))
@@ -1169,6 +1191,12 @@ plot_delta <- function(input,
       main=group_key,"\n", xlab=paste0("Average RT (seconds)"),
       ylab=paste0("RT(",delta_name,")"))
     plot_args <- fix_dots_plot(plot_args)
+    if (!is.null(dots$main)) {
+      if (dots$main=="") plot_args$main <- "" else {
+        if (group_key=="All Data")  gk <- "" else gk <- group_key
+        plot_args$main <- paste0(dots$main, gk)
+      }
+    }
     do.call(plot, c(list(NA), plot_args))
 
     # draw lines for each dataset
@@ -1223,40 +1251,31 @@ plot_delta <- function(input,
               lev <- ilev <- 1
               mat4 <- cdf_quants_for_group[[lev]]
               if (!is.null(mat4)) {
-                probs_qy <- sort(unique(c(quants, 0.5)))
-                x_median <- mat4["xm", ]
-                idx_med <- which(probs_qy == 0.5)[1]
-                y_med <- mat4[idx_med,]
+                # mat4 => e.g. 4 rows x (length(probs)) columns: row1 => x_lower, row2 => x_mid, row3 => x_upper, row4 => y_median
+                y_lower <- mat4[1,]
+                y_median <- mat4[2,]
+                y_upper <- mat4[3,]
+                x_median <- mat4[4,]
 
                 lines_args <- add_defaults(src_args, lty=1)
                 lines_args <- fix_dots_plot(lines_args)
+                do.call(lines, c(list(x=x_median, y=y_median), lines_args))
 
-                # Draw ribbons first
-                n_bands <- length(quants) %/% 2
-                if (n_bands > 0) {
-                  for (j in 1:n_bands) {
-                    idx_low <- which(probs_qy == quants[j])[1]
-                    idx_high <- which(probs_qy == quants[length(quants) - j + 1])[1]
-                    y_low <- mat4[idx_low, ]
-                    y_high <- mat4[idx_high, ]
-                    
-                    adj_color <- do.call(adjustcolor, fix_dots(add_defaults(src_args, alpha.f=0.2), adjustcolor))
-                    poly_args <- src_args
-                    poly_args$col <- adj_color
-                    poly_args <- fix_dots_plot(poly_args)
-                    do.call(polygon, c(list(
-                      x = c(x_median, rev(x_median)),
-                      y = c(y_low, rev(y_high)),
-                      border = NA
-                    ), poly_args))
-                  }
-                }
-
-                # Draw line on top
-                do.call(lines, c(list(x=x_median, y=y_med), lines_args))
-
+                # polygon for the ribbon
+                adj_color <- do.call(adjustcolor,
+                  fix_dots(add_defaults(src_args, alpha.f=0.2), adjustcolor))
+                poly_args <- src_args
+                poly_args$col <- adj_color
+                poly_args <- fix_dots_plot(poly_args)
+                  # We connect (x_lower, y_median) -> (x_upper, rev(y_median))
+                  # (the original code uses horizontal ribbons).
+                do.call(polygon, c(list(
+                  x = c(x_median, rev(x_median)),
+                  y = c(y_lower, rev(y_upper)),
+                  border = NA
+                ), poly_args))
                 if (!is.null(add_percentiles)) {
-                    points(x_median[add_percentiles],y_med[add_percentiles],
+                    points(x_median[add_percentiles],y_median[add_percentiles],
                          pch=1,col=lines_args$col[1])
                 }
               }
@@ -1285,7 +1304,7 @@ get_caf <- function(x, caf_factor, smooth_window, accuracy_function, dots) {
   # Computes a single defective CDF for each level of 'defective_factor'
   # across the RT distribution (0.01 to 0.99).
   probs <- seq(0.01, 0.99, by = 0.01)
-  p_defective <- table(x[[caf_factor]]) / nrow(x)
+  p_defective <- prop.table(table(x[[caf_factor]]))
 
   # For each level, compute the empirical CDF and scale by that level's proportion
   out <- mapply(
@@ -1310,7 +1329,7 @@ get_caf <- function(x, caf_factor, smooth_window, accuracy_function, dots) {
     d <- x[x[[caf_factor]]==cond,]
     for (i in 1:(100-smooth_window+1)) {
       bp[i,"y"] <- 100*mean(accuracy_function(
-        d[d$rt >= m[i,"x"] & d$rt < m[i+smooth_window,"x"],]), na.rm = TRUE)
+        d[d$rt >= m[i,"x"] & d$rt < m[i+smooth_window,"x"],]))
       bp[i,"x"] <- i - 1 + smooth_window/2
     }
     caf[[cond]] <- bp
@@ -1328,7 +1347,7 @@ get_caf <- function(x, caf_factor, smooth_window, accuracy_function, dots) {
 #'
 #' @inheritParams plot_cdf
 #' @param caf_factor The name of within-panel factor
-#' @param accuracy_function Accuracy score, default: function(d) ifelse(is.na(d$S), is.na(d$R), d$R == d$S),
+#' @param accuracy_function Accuracy score, default: function(d) d$S==d$R,
 #' @param smooth_window, range of RT over which calculate accuracy, default 5
 #' @param which_plot which of levels of caf_factor to plot, default is both
 #' i.e,. which_plot = 1:2
@@ -1358,7 +1377,7 @@ plot_caf <- function(input,
                      legendpos = c('bottomleft', 'bottomright'),
                      posterior_args = list(),
                      prior_args = list(),
-                     accuracy_function = function(d) ifelse(is.na(d$S), is.na(d$R), d$R == d$S),
+                     accuracy_function = function(d) d$S==d$R,
                      smooth_window = 5,
                      which_plot=1:2,
                      ...) {
@@ -1431,15 +1450,23 @@ plot_caf <- function(input,
           x_mat <- do.call(cbind, lapply(postn_list, function(lst) lst[[lev]][,"x"]))
           y_mat <- do.call(cbind, lapply(postn_list, function(lst) lst[[lev]][,"y"]))
 
-          # Ensure quantiles include 0.5 and are unique/sorted
-          quants <- sort(quants)
-          probs_qy <- sort(unique(c(quants, 0.5)))
-          # ZH optimization: Replace row-wise apply(..., 1, median) with matrixStats::rowMedians
-          xm <- matrixStats::rowMedians(x_mat, na.rm=TRUE)
-          qy <- apply(y_mat, 1, quantile, probs = probs_qy, na.rm = TRUE)
+          # row-wise quantiles for x, plus median for y
+          # Just as in your older code: we do quantiles on x across draws, median on y
+          # Or you might do quantiles on both x and y.
+          # Typically, to replicate your older approach:
+          # quantile of x at each index, and median of y at each index
+          # We'll include 50% in quants to do median for x as well.
+          # Then we combine them in a matrix with 4 rows => x_lower, x_median, x_upper, y_median
+          xm <- apply(x_mat, 1, median, na.rm=TRUE)
+          qy <- apply(y_mat, 1, quantile, probs = sort(c(quants, 0.5)), na.rm = TRUE)
 
-          # rbind them, naming the median row 'xm'
-          out[[lev]] <- rbind(xm = xm, qy)
+          # rbind them
+          # row 2 => y_lower
+          # row 3 => y_mid (0.5)
+          # row 4 => y_upper
+          # row 1 => x_median
+          # (If you used 3 quantiles, that's 3 rows for x, plus 1 for y.)
+          out[[lev]] <- rbind(xm, qy)
         }
         out
       })
@@ -1503,6 +1530,12 @@ plot_caf <- function(input,
     plot_args <- add_defaults(dots, xlim=xlim, ylim=ylim,
                               main=group_key, xlab="Bin Centre (%)", ylab="CAF (%)")
     plot_args <- fix_dots_plot(plot_args)
+    if (!is.null(dots$main)) {
+      if (dots$main=="") plot_args$main <- "" else {
+        if (group_key=="All Data")  gk <- "" else gk <- group_key
+        plot_args$main <- paste0(dots$main, gk)
+      }
+    }
     do.call(plot, c(list(NA), plot_args))
 
     # draw lines for each dataset
@@ -1558,37 +1591,28 @@ plot_caf <- function(input,
               for (lev in dl) {
                 mat4 <- cdf_quants_for_group[[lev]]
                 if (!is.null(mat4)) {
-                  probs_qy <- sort(unique(c(quants, 0.5)))
-                  x_median <- mat4["xm", ]
-                  idx_med <- which(probs_qy == 0.5)[1] + 1
-                  y_median <- mat4[idx_med, ]
+                  # mat4 => e.g. 4 rows x (length(probs)) columns: row1 => x_lower, row2 => x_mid, row3 => x_upper, row4 => y_median
+                  y_lower <- mat4[2,]
+                  y_median <- mat4[3,]
+                  y_upper <- mat4[4,]
+                  x_median <- mat4[1,]
 
                   lines_args <- add_defaults(src_args, lty=line_types[ilev])
                   lines_args <- fix_dots_plot(lines_args)
-
-                  # Draw ribbons first
-                  n_bands <- length(quants) %/% 2
-                  if (n_bands > 0) {
-                    for (j in 1:n_bands) {
-                      idx_low <- which(probs_qy == quants[j])[1] + 1
-                      idx_high <- which(probs_qy == quants[length(quants) - j + 1])[1] + 1
-                      y_low <- mat4[idx_low, ]
-                      y_high <- mat4[idx_high, ]
-                      
-                      adj_color <- do.call(adjustcolor, fix_dots(add_defaults(src_args, alpha.f=0.2), adjustcolor))
-                      poly_args <- src_args
-                      poly_args$col <- adj_color
-                      poly_args <- fix_dots_plot(poly_args)
-                      do.call(polygon, c(list(
-                        x = c(x_median, rev(x_median)),
-                        y = c(y_low, rev(y_high)),
-                        border = NA
-                      ), poly_args))
-                    }
-                  }
-
-                  # Draw line on top
                   do.call(lines, c(list(x=x_median, y=y_median), lines_args))
+
+                  # polygon for the ribbon
+                  adj_color <- do.call(adjustcolor, fix_dots(add_defaults(src_args, alpha.f=0.2), adjustcolor))
+                  poly_args <- src_args
+                  poly_args$col <- adj_color
+                  poly_args <- fix_dots_plot(poly_args)
+                  # We connect (x_lower, y_median) -> (x_upper, rev(y_median))
+                  # (the original code uses horizontal ribbons).
+                  do.call(polygon, c(list(
+                    x = c(x_median, rev(x_median)),
+                    y = c(y_lower, rev(y_upper)),
+                    border = NA
+                  ), poly_args))
                 }
                 ilev <- ilev+1
               }
@@ -1616,3 +1640,4 @@ plot_caf <- function(input,
 
   invisible(NULL)
 }
+
