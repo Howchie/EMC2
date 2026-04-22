@@ -226,6 +226,9 @@ prep_data_plot <- function(input, post_predict, prior_predict, to_plot, limits,
 #' @inheritParams plot_cdf
 #' @param stat_fun A function that can be applied to the data and returns a single value or a vector of values.
 #' @param stat_name The name of the calculated quantity
+#' @param support Optional support for the statistic as `c(lower, upper)`. Use `Inf` or `-Inf`
+#'   for open-ended bounds. This support is used to constrain the kernel density estimate and
+#'   x-axis limits. Defaults to `c(0, Inf)`.
 #' @return an invisible data frame with the stat applied to the real data, posterior predictives and/or prior predictives
 #' @export
 #'
@@ -240,6 +243,7 @@ prep_data_plot <- function(input, post_predict, prior_predict, to_plot, limits,
 plot_stat <- function(input, post_predict = NULL, prior_predict = NULL, stat_fun, stat_name = NULL,
                       subject = NULL, factors = NULL, n_cores = 1, n_post = 50,
                       quants = c(0.025, 0.5, 0.975), functions = NULL,
+                      support = c(0, Inf),
                       layout = NA, to_plot = c('data', 'posterior', 'prior')[1:2], use_lim = c('data', 'posterior', 'prior')[1:2],
                       legendpos = c('topleft', 'top'), posterior_args = list(), prior_args = list(), ...) {
   
@@ -258,6 +262,30 @@ plot_stat <- function(input, post_predict = NULL, prior_predict = NULL, stat_fun
   summary_sources <- list()
   max_y <- .5
   xlim <- NULL
+  if (length(support) != 2 || !is.numeric(support)) {
+    stop("support must be a numeric vector of length 2")
+  }
+  support <- as.numeric(support)
+  if (support[1] > support[2]) {
+    stop("support[1] must be less than or equal to support[2]")
+  }
+  make_stat_density <- function(vals) {
+    vals <- vals[is.finite(vals)]
+    if (!length(vals)) return(NULL)
+    if (length(unique(vals)) < 2) {
+      return(structure(list(x = vals[1]), class = "plot_stat_point_mass"))
+    }
+    dens_args <- fix_dots(dots, density.default, consider_dots = FALSE)
+    if (is.finite(support[1])) dens_args$from <- support[1]
+    if (is.finite(support[2])) dens_args$to <- support[2]
+    dens <- do.call(density, c(list(vals), dens_args))
+    if (is.null(dens_args$bw) && is.null(dens_args$adjust) && is.finite(max(dens$y)) && max(dens$y) > 50) {
+      spread <- diff(range(vals))
+      dens_args$bw <- max(stats::bw.nrd0(vals), 0.02, spread * 0.25)
+      dens <- do.call(density, c(list(vals), dens_args))
+    }
+    dens
+  }
   
   # First big loop - calculating stats
   for (k in 1:length(data_sources)) {
@@ -295,16 +323,28 @@ plot_stat <- function(input, post_predict = NULL, prior_predict = NULL, stat_fun
                                             quantile_stats)
       dens <- lapply(split(src_stats_df, src_stats_df$group_key), function(x){
         lapply(stat_names, function(y){
-          vals <- x[,y]
-          vals <- vals[is.finite(vals)]
-          if(length(vals) < 2) return(list(x = NA, y = 0))
-          do.call(density, c(list(vals), fix_dots(dots, density.default, consider_dots = F)))
+          make_stat_density(x[, y])
         })
       })
       dens_sources[[src_name]] <- dens
       if(src_type %in% use_lim){
-        max_y <- max(max_y, max(sapply(unlist(dens, recursive = F), function(x) return(max(x$y, na.rm = TRUE)))), na.rm = TRUE)
-        xlim <- range(xlim, range(sapply(unlist(dens, recursive = F), function(x) return(quantile(x$x, probs = c(0.01, 0.99), na.rm = TRUE))), na.rm = TRUE), na.rm = TRUE)
+        dens_curves <- unlist(dens, recursive = FALSE)
+        dens_curves <- Filter(function(x) !is.null(x) && !inherits(x, "plot_stat_point_mass"), dens_curves)
+        if (length(dens_curves)) {
+          max_y <- max(max_y, max(sapply(dens_curves, function(x) return(max(x$y, na.rm = TRUE)))), na.rm = TRUE)
+          if (!is.finite(support[1]) || !is.finite(support[2])) {
+            dens_x <- unlist(lapply(dens_curves, function(x) x$x))
+            dens_x <- dens_x[is.finite(dens_x)]
+            if (length(dens_x)) {
+              xlim <- range(xlim, dens_x, na.rm = TRUE)
+            }
+          }
+        }
+        finite_vals <- unlist(src_stats_df[, stat_names, drop = FALSE])
+        finite_vals <- finite_vals[is.finite(finite_vals)]
+        if (length(finite_vals)) {
+          xlim <- range(xlim, finite_vals, na.rm = TRUE)
+        }
       }
     } else{
       split_src <- split(src_data, src_data$group_key)
@@ -327,6 +367,54 @@ plot_stat <- function(input, post_predict = NULL, prior_predict = NULL, stat_fun
       }
       line_sources[[src_name]] <- summary_sources[[src_name]] <- summary_df
     }
+  }
+
+  plot_x_vals <- numeric(0)
+  for (src_name in names(line_sources)) {
+    if (!(src_name %in% names(sources))) next
+    src_idx <- match(src_name, names(sources))
+    if (!(sources[src_idx] %in% use_lim)) next
+    vals <- unlist(line_sources[[src_name]][, stat_names, drop = FALSE], use.names = FALSE)
+    vals <- vals[is.finite(vals)]
+    plot_x_vals <- c(plot_x_vals, vals)
+  }
+  for (src_name in names(dens_sources)) {
+    if (!(src_name %in% names(sources))) next
+    src_idx <- match(src_name, names(sources))
+    if (!(sources[src_idx] %in% use_lim)) next
+    dens_curves <- unlist(dens_sources[[src_name]], recursive = FALSE)
+    for (curve in dens_curves) {
+      if (is.null(curve)) next
+      if (inherits(curve, "plot_stat_point_mass")) {
+        if (is.finite(curve$x)) plot_x_vals <- c(plot_x_vals, curve$x)
+      } else {
+        vals <- curve$x[is.finite(curve$x)]
+        plot_x_vals <- c(plot_x_vals, vals)
+      }
+    }
+  }
+
+  if (length(plot_x_vals)) {
+    xlim <- range(plot_x_vals, na.rm = TRUE)
+  } else if (is.null(xlim)) {
+    xlim <- c(if (is.finite(support[1])) support[1] else 0,
+              if (is.finite(support[2])) support[2] else 1)
+  }
+  if (is.finite(support[1])) xlim[1] <- support[1]
+  if (is.finite(support[2])) xlim[2] <- support[2]
+  if (!is.finite(xlim[1]) || !is.finite(xlim[2])) {
+    finite_x <- xlim[is.finite(xlim)]
+    if (!length(finite_x)) {
+      finite_x <- c(0, 1)
+    }
+    if (!is.finite(xlim[1])) xlim[1] <- min(finite_x) - max(abs(diff(range(finite_x))), 1) * 0.05
+    if (!is.finite(xlim[2])) xlim[2] <- max(finite_x) + max(abs(diff(range(finite_x))), 1) * 0.05
+  }
+  if (xlim[1] == xlim[2]) {
+    pad <- max(abs(xlim[1]) * 0.05, 0.01)
+    xlim <- xlim + c(-pad, pad)
+    if (is.finite(support[1])) xlim[1] <- support[1]
+    if (is.finite(support[2])) xlim[2] <- support[2]
   }
   
   # Second big loop - Plotting loop
@@ -377,8 +465,15 @@ plot_stat <- function(input, post_predict = NULL, prior_predict = NULL, stat_fun
         do.call(abline, c(list(v = summary_df[summary_df$group_key == group_key, stat_names]), lines_args))
       } else{
         cur_dens <- dens_sources[[src_name]]
-        mapply(cur_dens[[group_key]], lty, FUN = function(x, y) do.call(lines, c(list(x), lty = y,
-                                                                                 lines_args[names(lines_args) != "lty"])))
+        mapply(cur_dens[[group_key]], lty, FUN = function(x, y) {
+          if (is.null(x)) {
+            return(invisible(NULL))
+          }
+          if (inherits(x, "plot_stat_point_mass")) {
+            return(do.call(abline, c(list(v = x$x, lty = y), lines_args[names(lines_args) != "lty"])))
+          }
+          do.call(lines, c(list(x), lty = y, lines_args[names(lines_args) != "lty"]))
+        })
       }
     }
     if(length(stat_names) > 1){
