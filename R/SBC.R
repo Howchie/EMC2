@@ -90,17 +90,27 @@ SBC_hierarchical <- function(design_in, prior_in, replicates = 250, trials = 100
 }
 
 
+sbc_running_counter <- function(i, temp_dir) {
+  if (!is.null(temp_dir)) {
+    writeLines("", file.path(temp_dir, paste0("started_", i, ".flag")))
+    length(list.files(temp_dir, pattern = "^started_.*\\.flag$"))
+  } else {
+    i
+  }
+}
+
 run_SBC_hierarchical_rep <- function(i, design_in, prior_mu, prior_var, trials, n_subjects,
                                      prior_in, type, dots, temp_dir) {
   dots[["cores_per_chain"]] <- 1L
   dots[["verbose"]] <- FALSE
   dots[["verboseProgress"]] <- FALSE
+  message("Running data set ", sbc_running_counter(i, temp_dir))
   rand_effects <- make_random_effects(design_in, prior_mu[, i], n_subj = n_subjects,
                                       covariances = prior_var[,, i])
   data <- do.call(make_data, c(list(rand_effects, design_in, trials, model = design_in$model),
                                fix_dots(dots, make_data)))
-  emc <- do.call(make_emc, c(list(data = data, design = design_in, prior_list = prior_in, type = type),
-                              fix_dots(dots, make_emc)))
+  emc <- suppressMessages(do.call(make_emc, c(list(data = data, design = design_in, prior_list = prior_in, type = type),
+                              fix_dots(dots, make_emc))))
   emc <- do.call(fit, c(list(emc = emc), fix_dots(dots, fit)))
 
   ESS_mu  <- round(pmin(unlist(ess_summary(emc, selection = "mu",    stat = NULL)), chain_n(emc)[1, "sample"]))
@@ -178,8 +188,8 @@ SBC_hierarchical_parallel <- function(design_in, prior_in, replicates = 250, tri
   missing_reps <- setdiff(1:replicates, as.integer(names(completed_results)))
 
   if (length(missing_reps) > 0) {
-    if (dots[["cores_per_chain"]] > 1 && verbose)
-      message("cores_per_chain = ", dots[["cores_per_chain"]], ": estimating multiple replicates simultaneously")
+    if (verbose)
+      message("Processing ", dots[["cores_per_chain"]], " data sets in parallel")
     res_new <- auto_mclapply(
       X   = missing_reps,
       FUN = run_SBC_hierarchical_rep,
@@ -223,9 +233,10 @@ SBC_hierarchical_parallel <- function(design_in, prior_in, replicates = 250, tri
 run_SBC_subject <- function(rep, design_in, prior_alpha, trials, prior_in, dots, temp_dir){
   dots[["verbose"]] <- FALSE
   dots[["verboseProgress"]] <- FALSE
+  message("Running data set ", sbc_running_counter(rep, temp_dir))
   p_vector <- prior_alpha[rep,]
   data <- do.call(make_data, c(list(parameters = p_vector, design = design_in, n_trials = trials), fix_dots(dots, make_data)))
-  emc <-  do.call(make_emc, c(list(data = data, design = design_in, prior_list = prior_in, type = "single"), fix_dots(dots, make_emc)))
+  emc <- suppressMessages(do.call(make_emc, c(list(data = data, design = design_in, prior_list = prior_in, type = "single"), fix_dots(dots, make_emc))))
 
   fit_result <- tryCatch({
     do.call(fit, c(list(emc = emc), fix_dots(dots, fit)))
@@ -338,8 +349,8 @@ SBC_single <- function(
   missing_reps <- setdiff(1:replicates, as.integer(names(completed_results)))
 
   if (length(missing_reps) > 0) {
-    if (dots[["cores_per_chain"]] > 1 && verbose)
-      message("cores_per_chain = ", dots[["cores_per_chain"]], ": estimating multiple data sets simultaneously")
+    if (verbose)
+      message("Processing ", dots[["cores_per_chain"]], " data sets in parallel")
     res_new <- auto_mclapply(
       X = missing_reps,
       FUN = run_SBC_subject,
