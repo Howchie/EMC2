@@ -26,8 +26,9 @@ run_sbc <- function(design_in, prior_in, replicates = 250, trials = 100, n_subje
     out <- SBC_single(design_in, prior_in, replicates, trials,
                       plot_data, verbose, fileName, ...)
   } else{
-    out <- SBC_hierarchical(design_in, prior_in, replicates, trials, n_subjects,
-                    plot_data, verbose, fileName, ...)
+    if(plot_data) warning("Hierarchical SBC does not support plotting")
+    out <- SBC_hierarchical_parallel(design_in, prior_in, replicates, trials, n_subjects,
+                                     verbose, fileName, ...)
   }
   return(out)
 }
@@ -89,57 +90,176 @@ SBC_hierarchical <- function(design_in, prior_in, replicates = 250, trials = 100
 }
 
 
-run_SBC_subject <- function(rep, design_in, prior_alpha, trials, prior_in, dots){
+run_SBC_hierarchical_rep <- function(i, design_in, prior_mu, prior_var, trials, n_subjects,
+                                     prior_in, type, dots, temp_dir) {
+  dots[["cores_per_chain"]] <- 1L
+  rand_effects <- make_random_effects(design_in, prior_mu[, i], n_subj = n_subjects,
+                                      covariances = prior_var[,, i])
+  data <- do.call(make_data, c(list(rand_effects, design_in, trials, model = design_in$model),
+                               fix_dots(dots, make_data)))
+  emc <- do.call(make_emc, c(list(data = data, design = design_in, prior_list = prior_in, type = type),
+                              fix_dots(dots, make_emc)))
+  emc <- do.call(fit, c(list(emc = emc), fix_dots(dots, fit)))
+
+  ESS_mu  <- round(pmin(unlist(ess_summary(emc, selection = "mu",    stat = NULL)), chain_n(emc)[1, "sample"]))
+  mu_rec  <- get_pars(emc, selection = "mu",    return_mcmc = FALSE, merge_chains = TRUE, flatten = TRUE)
+  rank_mu_row <- mapply(get_ranks_ESS, split(mu_rec, row(mu_rec)), t(ESS_mu), prior_mu[, i])
+
+  ESS_var         <- round(pmin(unlist(ess_summary(emc, selection = "Sigma", stat = NULL)), chain_n(emc)[1, "sample"]))
+  var_rec         <- get_pars(emc, selection = "Sigma", return_mcmc = FALSE, merge_chains = TRUE, flatten = TRUE)
+  prior_var_input <- get_pars(emc, selection = "Sigma", flatten = TRUE, true_pars = prior_var[,, i])[[1]][[1]]
+  rank_var_row    <- mapply(get_ranks_ESS, split(var_rec, row(var_rec)), t(ESS_var), prior_var_input)
+
+  result <- list(rank_mu_row   = rank_mu_row,
+                 rank_var_row  = rank_var_row,
+                 var_col_names = colnames(prior_var_input),
+                 rand_effects  = rand_effects)
+  if (!is.null(temp_dir))
+    saveRDS(result, file.path(temp_dir, paste0("rep_", i, ".rds")))
+  result
+}
+
+
+SBC_hierarchical_parallel <- function(design_in, prior_in, replicates = 250, trials = 100,
+                                      n_subjects = 30, verbose = TRUE,
+                                      fileName = NULL, ...) {
+  dots <- add_defaults(list(...), max_tries = 50, compress = FALSE, rt_resolution = 1e-12,
+                       stop_criteria = list(min_es = 100, max_gd = 1.1,
+                                            selection = c("alpha", "mu", "Sigma")),
+                       cores_per_chain = 1)
+  dots$verbose <- verbose
+  type <- attr(prior_in, "type")
+  if (type != "diagonal-gamma")
+    warning("SBC in EMC2 is frequently biased for prior structures with heavy variance mass around 0 \n
+             please consider using 'type = diagonal-gamma' to test your model. See also vignettes")
+
+  temp_dir <- if (!is.null(fileName))
+    paste0(tools::file_path_sans_ext(fileName), "_temp")
+  else NULL
+
+  # --- restart: recover completed replicates from temp_dir ---
+  completed_results <- list()
+  if (!is.null(temp_dir) && dir.exists(temp_dir)) {
+    prior_samples <- readRDS(file.path(temp_dir, "prior_samples.rds"))
+    prior_mu  <- prior_samples$prior_mu
+    prior_var <- prior_samples$prior_var
+    existing  <- list.files(temp_dir, pattern = "^rep_[0-9]+\\.rds$", full.names = TRUE)
+    for (f in existing) {
+      result <- tryCatch(readRDS(f), error = function(e) NULL)
+      if (is.null(result)) {
+        file.remove(f)
+        if (verbose) message("Deleted unreadable temp file: ", basename(f))
+      } else {
+        i <- as.integer(sub(".*rep_([0-9]+)\\.rds$", "\\1", f))
+        completed_results[[as.character(i)]] <- result
+      }
+    }
+    if (verbose)
+      message("Restarting: ", length(completed_results), " of ", replicates,
+              " replicates already complete, running remaining ",
+              replicates - length(completed_results))
+  } else {
+    # Fresh run — draw prior samples and set up temp_dir
+    prior_mu  <- plot(prior_in, design_in, do_plot = FALSE, N = replicates, selection = "mu",
+                      return_mcmc = FALSE, map = FALSE)[[1]]
+    prior_var <- plot(prior_in, design_in, do_plot = FALSE, N = replicates, selection = "Sigma",
+                      return_mcmc = FALSE, remove_constants = FALSE, map = FALSE)[[1]]
+    if (!is.null(temp_dir)) {
+      dir.create(temp_dir, showWarnings = FALSE)
+      saveRDS(list(prior_mu = prior_mu, prior_var = prior_var),
+              file.path(temp_dir, "prior_samples.rds"))
+    }
+    if (!is.null(fileName)) save(prior_mu, prior_var, file = fileName)
+  }
+
+  par_names    <- names(sampled_pars(design_in))
+  missing_reps <- setdiff(1:replicates, as.integer(names(completed_results)))
+
+  if (length(missing_reps) > 0) {
+    if (dots[["cores_per_chain"]] > 1 && verbose)
+      message("cores_per_chain = ", dots[["cores_per_chain"]], ": estimating multiple replicates simultaneously")
+    res_new <- auto_mclapply(
+      X   = missing_reps,
+      FUN = run_SBC_hierarchical_rep,
+      design_in, prior_mu, prior_var, trials, n_subjects, prior_in, type, dots, temp_dir,
+      mc.cores = dots[["cores_per_chain"]]
+    )
+    # recover from disk for any workers that returned NULL
+    for (idx in seq_along(missing_reps)) {
+      i <- missing_reps[[idx]]
+      if (is.null(res_new[[idx]]) && !is.null(temp_dir)) {
+        f <- file.path(temp_dir, paste0("rep_", i, ".rds"))
+        if (file.exists(f)) res_new[[idx]] <- readRDS(f)
+      }
+      if (!is.null(res_new[[idx]]))
+        completed_results[[as.character(i)]] <- res_new[[idx]]
+    }
+  }
+
+  # Assemble in replicate order
+  res <- lapply(as.character(1:replicates), function(k) completed_results[[k]])
+
+  rank_mu          <- do.call(rbind, lapply(res, `[[`, "rank_mu_row"))
+  rank_var         <- do.call(rbind, lapply(res, `[[`, "rank_var_row"))
+  all_rand_effects <- lapply(res, `[[`, "rand_effects")
+
+  colnames(rank_mu)  <- par_names
+  colnames(rank_var) <- res[[1]][["var_col_names"]]
+
+  out <- list(rank         = list(mu = rank_mu, var = rank_var),
+              prior        = list(mu = prior_mu, var = prior_var),
+              rand_effects = all_rand_effects)
+  if (!is.null(fileName)) {
+    SBC_temp <- out
+    save(SBC_temp, file = fileName)
+    unlink(temp_dir, recursive = TRUE)
+  }
+  return(out)
+}
+
+
+run_SBC_subject <- function(rep, design_in, prior_alpha, trials, prior_in, dots, temp_dir){
   p_vector <- prior_alpha[rep,]
   data <- do.call(make_data, c(list(parameters = p_vector, design = design_in, n_trials = trials), fix_dots(dots, make_data)))
   emc <-  do.call(make_emc, c(list(data = data, design = design_in, prior_list = prior_in, type = "single"), fix_dots(dots, make_emc)))
 
-  # Protection wrapper for the fit call
   fit_result <- tryCatch({
     do.call(fit, c(list(emc = emc), fix_dots(dots, fit)))
   }, warning = function(w) {
-    # Save the problematic p_vector
     filename <- paste0("p_vector_rep", rep, ".Rdata")
     save(p_vector, file = filename)
     warning("A warning occurred during fitting for replication ", rep,
             ". The input parameters have been saved as ", filename,
             ". Warning message: ", w$message)
-    # Re-throw the warning
     warning(w)
-    # Return NULL to indicate failure
     return(NULL)
   }, error = function(e) {
-    # Save the problematic p_vector
     filename <- paste0("p_vector_rep", rep, ".Rdata")
     save(p_vector, file = filename)
     warning("An error occurred during fitting for replication ", rep,
             ". The input parameters have been saved as ", filename,
             ". Error message: ", e$message)
-    # Return NULL to indicate failure
     return(NULL)
   })
 
-  # Check if fitting failed
-  if (is.null(fit_result)) {
-    # Return a structure that indicates failure but doesn't break the overall process
+  if (is.null(fit_result))
     return(list(rank = NULL, med = NULL, bias = NULL, coverage = NULL, failed = TRUE))
-  }
 
   emc <- fit_result
 
-  # Return ESS
-  ESS <- ess_summary(emc, stat = NULL)[[1]]
-  # Rank
+  ESS       <- ess_summary(emc, stat = NULL)[[1]]
   alpha_rec <- get_pars(emc, selection = "alpha", return_mcmc = F, merge_chains = T, flatten = T)[,1,]
-  rank <- mapply(get_ranks_ESS, split(alpha_rec, row(alpha_rec)), t(ESS), p_vector)
+  rank      <- mapply(get_ranks_ESS, split(alpha_rec, row(alpha_rec)), t(ESS), p_vector)
   names(rank) <- names(sampled_pars(design_in))
-  # For Bias
-  CI <- credint(emc)[[1]]
-  med <- CI[,2] # And return this for precision
-  bias <- med - p_vector
-  # For coverage
-  coverage <- p_vector > CI[,1] & p_vector < CI[,3]
-  return(list(rank = rank, med = med, bias = bias, coverage = coverage))
+  CI       <- credint(emc)[[1]]
+  med      <- CI[, 2]
+  bias     <- med - p_vector
+  coverage <- p_vector > CI[, 1] & p_vector < CI[, 3]
+
+  result <- list(rank = rank, med = med, bias = bias, coverage = coverage)
+  if (!is.null(temp_dir))
+    saveRDS(result, file.path(temp_dir, paste0("rep_", rep, ".rds")))
+  result
 }
 
 split_list_to_dfs <- function(lst, type = "alpha") {
@@ -178,26 +298,66 @@ SBC_single <- function(
     cores_per_chain = 1
   )
   dots[["verbose"]] <- verbose
-  # Draw prior samples
-  prior_alpha <- parameters(prior_in, N = replicates, selection = "alpha")
-  rank_alpha <- data.frame()
-  if (!is.null(fileName)) {
-    save(prior_alpha, file = fileName)
+
+  temp_dir <- if (!is.null(fileName))
+    paste0(tools::file_path_sans_ext(fileName), "_temp")
+  else NULL
+
+  # --- restart: recover completed replicates from temp_dir ---
+  completed_results <- list()
+  if (!is.null(temp_dir) && dir.exists(temp_dir)) {
+    prior_alpha <- readRDS(file.path(temp_dir, "prior_samples.rds"))
+    existing    <- list.files(temp_dir, pattern = "^rep_[0-9]+\\.rds$", full.names = TRUE)
+    for (f in existing) {
+      result <- tryCatch(readRDS(f), error = function(e) NULL)
+      if (is.null(result)) {
+        file.remove(f)
+        if (verbose) message("Deleted unreadable temp file: ", basename(f))
+      } else {
+        i <- as.integer(sub(".*rep_([0-9]+)\\.rds$", "\\1", f))
+        completed_results[[as.character(i)]] <- result
+      }
+    }
+    if (verbose)
+      message("Restarting: ", length(completed_results), " of ", replicates,
+              " replicates already complete, running remaining ",
+              replicates - length(completed_results))
+  } else {
+    prior_alpha <- parameters(prior_in, N = replicates, selection = "alpha")
+    if (!is.null(temp_dir)) {
+      dir.create(temp_dir, showWarnings = FALSE)
+      saveRDS(prior_alpha, file.path(temp_dir, "prior_samples.rds"))
+    }
+    if (!is.null(fileName)) save(prior_alpha, file = fileName)
   }
-  i <- 1
-  if (dots[["cores_per_chain"]] > 1 && verbose) {
-    print("Since cores_per_chain > 1, estimating multiple data sets simultaneously")
+
+  missing_reps <- setdiff(1:replicates, as.integer(names(completed_results)))
+
+  if (length(missing_reps) > 0) {
+    if (dots[["cores_per_chain"]] > 1 && verbose)
+      message("cores_per_chain = ", dots[["cores_per_chain"]], ": estimating multiple data sets simultaneously")
+    res_new <- auto_mclapply(
+      X = missing_reps,
+      FUN = run_SBC_subject,
+      design_in, prior_alpha, trials, prior_in, dots, temp_dir,
+      mc.cores = dots[["cores_per_chain"]]
+    )
+    for (idx in seq_along(missing_reps)) {
+      i <- missing_reps[[idx]]
+      if (is.null(res_new[[idx]]) && !is.null(temp_dir)) {
+        f <- file.path(temp_dir, paste0("rep_", i, ".rds"))
+        if (file.exists(f)) res_new[[idx]] <- readRDS(f)
+      }
+      if (!is.null(res_new[[idx]]))
+        completed_results[[as.character(i)]] <- res_new[[idx]]
+    }
   }
-  par_names <- names(sampled_pars(design_in))
-  res <- auto_mclapply(
-    X = 1:replicates,
-    FUN = run_SBC_subject,
-    design_in, prior_alpha, trials, prior_in, dots,
-    mc.cores = dots[["cores_per_chain"]]
-  )
+
+  res <- lapply(as.character(1:replicates), function(k) completed_results[[k]])
   SBC <- split_list_to_dfs(res)
-  if(!is.null(fileName)) {
+  if (!is.null(fileName)) {
     save(SBC, prior_alpha, file = fileName)
+    unlink(temp_dir, recursive = TRUE)
   }
   return(SBC)
 }
