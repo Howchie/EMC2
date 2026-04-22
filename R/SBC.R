@@ -90,21 +90,21 @@ SBC_hierarchical <- function(design_in, prior_in, replicates = 250, trials = 100
 }
 
 
-sbc_running_counter <- function(i, temp_dir) {
+sbc_running_counter <- function(i, temp_dir, offset = 0L) {
   if (!is.null(temp_dir)) {
     writeLines("", file.path(temp_dir, paste0("started_", i, ".flag")))
-    length(list.files(temp_dir, pattern = "^started_.*\\.flag$"))
+    length(list.files(temp_dir, pattern = "^started_.*\\.flag$")) + offset
   } else {
     i
   }
 }
 
 run_SBC_hierarchical_rep <- function(i, design_in, prior_mu, prior_var, trials, n_subjects,
-                                     prior_in, type, dots, temp_dir) {
+                                     prior_in, type, dots, temp_dir, offset = 0L) {
   dots[["cores_per_chain"]] <- 1L
   dots[["verbose"]] <- FALSE
   dots[["verboseProgress"]] <- FALSE
-  message("Running data set ", sbc_running_counter(i, temp_dir))
+  message("Running data set ", sbc_running_counter(i, temp_dir, offset))
   rand_effects <- make_random_effects(design_in, prior_mu[, i], n_subj = n_subjects,
                                       covariances = prior_var[,, i])
   data <- do.call(make_data, c(list(rand_effects, design_in, trials, model = design_in$model),
@@ -151,6 +151,7 @@ SBC_hierarchical_parallel <- function(design_in, prior_in, replicates = 250, tri
 
   # --- restart: recover completed replicates from temp_dir ---
   completed_results <- list()
+  offset <- 0L
   if (!is.null(temp_dir) && dir.exists(temp_dir)) {
     prior_samples <- readRDS(file.path(temp_dir, "prior_samples.rds"))
     prior_mu  <- prior_samples$prior_mu
@@ -166,10 +167,12 @@ SBC_hierarchical_parallel <- function(design_in, prior_in, replicates = 250, tri
         completed_results[[as.character(i)]] <- result
       }
     }
+    offset <- length(completed_results)
+    file.remove(list.files(temp_dir, pattern = "^started_.*\\.flag$", full.names = TRUE))
     if (verbose)
-      message("Restarting: ", length(completed_results), " of ", replicates,
+      message("Restarting: ", offset, " of ", replicates,
               " replicates already complete, running remaining ",
-              replicates - length(completed_results))
+              replicates - offset)
   } else {
     # Fresh run — draw prior samples and set up temp_dir
     prior_mu  <- plot(prior_in, design_in, do_plot = FALSE, N = replicates, selection = "mu",
@@ -193,7 +196,7 @@ SBC_hierarchical_parallel <- function(design_in, prior_in, replicates = 250, tri
     res_new <- auto_mclapply(
       X   = missing_reps,
       FUN = run_SBC_hierarchical_rep,
-      design_in, prior_mu, prior_var, trials, n_subjects, prior_in, type, dots, temp_dir,
+      design_in, prior_mu, prior_var, trials, n_subjects, prior_in, type, dots, temp_dir, offset,
       mc.cores = dots[["cores_per_chain"]]
     )
     # recover from disk for any workers that returned NULL
@@ -230,10 +233,10 @@ SBC_hierarchical_parallel <- function(design_in, prior_in, replicates = 250, tri
 }
 
 
-run_SBC_subject <- function(rep, design_in, prior_alpha, trials, prior_in, dots, temp_dir){
+run_SBC_subject <- function(rep, design_in, prior_alpha, trials, prior_in, dots, temp_dir, offset = 0L){
   dots[["verbose"]] <- FALSE
   dots[["verboseProgress"]] <- FALSE
-  message("Running data set ", sbc_running_counter(rep, temp_dir))
+  message("Running data set ", sbc_running_counter(rep, temp_dir, offset))
   p_vector <- prior_alpha[rep,]
   data <- do.call(make_data, c(list(parameters = p_vector, design = design_in, n_trials = trials), fix_dots(dots, make_data)))
   emc <- suppressMessages(do.call(make_emc, c(list(data = data, design = design_in, prior_list = prior_in, type = "single"), fix_dots(dots, make_emc))))
@@ -321,6 +324,7 @@ SBC_single <- function(
 
   # --- restart: recover completed replicates from temp_dir ---
   completed_results <- list()
+  offset <- 0L
   if (!is.null(temp_dir) && dir.exists(temp_dir)) {
     prior_alpha <- readRDS(file.path(temp_dir, "prior_samples.rds"))
     existing    <- list.files(temp_dir, pattern = "^rep_[0-9]+\\.rds$", full.names = TRUE)
@@ -334,10 +338,12 @@ SBC_single <- function(
         completed_results[[as.character(i)]] <- result
       }
     }
+    offset <- length(completed_results)
+    file.remove(list.files(temp_dir, pattern = "^started_.*\\.flag$", full.names = TRUE))
     if (verbose)
-      message("Restarting: ", length(completed_results), " of ", replicates,
+      message("Restarting: ", offset, " of ", replicates,
               " replicates already complete, running remaining ",
-              replicates - length(completed_results))
+              replicates - offset)
   } else {
     prior_alpha <- parameters(prior_in, N = replicates, selection = "alpha")
     if (!is.null(temp_dir)) {
@@ -355,7 +361,7 @@ SBC_single <- function(
     res_new <- auto_mclapply(
       X = missing_reps,
       FUN = run_SBC_subject,
-      design_in, prior_alpha, trials, prior_in, dots, temp_dir,
+      design_in, prior_alpha, trials, prior_in, dots, temp_dir, offset,
       mc.cores = dots[["cores_per_chain"]]
     )
     for (idx in seq_along(missing_reps)) {
