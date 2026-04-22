@@ -18,7 +18,7 @@ create_group_key <- function(df, factors) {
 # }
 
 
-check_data_plot <- function(data, defective_factor, subject, factors) 
+check_data_plot <- function(data, defective_factor, subject, factors, remove_na = TRUE) 
 {
   required_cols_post <- c("rt", "subjects", defective_factor)
   missing_cols_post <- setdiff(required_cols_post, names(data))
@@ -53,8 +53,9 @@ check_data_plot <- function(data, defective_factor, subject, factors)
     data$subjects <- factor(data$subjects)
   }
   
-  # Changed: keep NA and Infinite RT rows, drop only non-finite non-missing RTs
-  data <- data[is.na(data$rt) | is.finite(data$rt) | is.infinite(data$rt), , drop = FALSE]
+  if (remove_na) {
+    data <- data[is.finite(data$rt), , drop = FALSE]
+  }
   
   grp_cols <- unique(c("subjects", defective_factor, factors))
   grp_cols <- intersect(grp_cols, names(data))
@@ -87,7 +88,7 @@ calc_functions <- function(functions, input){
 
 prep_data_plot <- function(input, post_predict, prior_predict, to_plot, limits, 
                            factors = NULL, defective_factor = NULL, subject = NULL, 
-                           n_cores, n_post, functions) 
+                           n_cores, n_post, functions, remove_na = TRUE) 
 {
   if (!is.data.frame(input) && !inherits(input, "emc") && !is.null(post_predict) && 
       length(input) != length(post_predict)) {
@@ -188,7 +189,7 @@ prep_data_plot <- function(input, post_predict, prior_predict, to_plot, limits,
   for (j in 1:length(datasets)) {
     datasets[[j]] <- EMC2:::calc_functions(functions, datasets[[j]])
     datasets[[j]] <- EMC2:::check_data_plot(datasets[[j]], defective_factor, 
-                                            subject, factors)
+                                            subject, factors, remove_na = remove_na)
     
     if (sources[j] %in% limits) {
       if (sources[j] == "prior") {
@@ -208,9 +209,12 @@ prep_data_plot <- function(input, post_predict, prior_predict, to_plot, limits,
   }
   if (is.null(xlim) || !all(is.finite(xlim))) xlim <- c(0, 1) # Default fallback
   
-  # Changed: Keep NA and Infinite RT rows so no-go/nonresponses remain in the denominator
   datasets <- lapply(datasets, function(x) {
-    keep <- is.na(x$rt) | is.infinite(x$rt) | (x$rt > xlim[1] & x$rt < xlim[2])
+    if (remove_na) {
+      keep <- x$rt > xlim[1] & x$rt < xlim[2]
+    } else {
+      keep <- is.na(x$rt) | is.infinite(x$rt) | (x$rt > xlim[1] & x$rt < xlim[2])
+    }
     x <- x[keep, , drop = FALSE]
     return(x)
   })
@@ -228,7 +232,7 @@ prep_data_plot <- function(input, post_predict, prior_predict, to_plot, limits,
 #' @param stat_name The name of the calculated quantity
 #' @param support Optional support for the statistic as `c(lower, upper)`. Use `Inf` or `-Inf`
 #'   for open-ended bounds. This support is used to constrain the kernel density estimate and
-#'   x-axis limits. Defaults to `c(0, Inf)`.
+#'   x-axis limits. Defaults to `c(-Inf, Inf)`.
 #' @return an invisible data frame with the stat applied to the real data, posterior predictives and/or prior predictives
 #' @export
 #'
@@ -243,12 +247,13 @@ prep_data_plot <- function(input, post_predict, prior_predict, to_plot, limits,
 plot_stat <- function(input, post_predict = NULL, prior_predict = NULL, stat_fun, stat_name = NULL,
                       subject = NULL, factors = NULL, n_cores = 1, n_post = 50,
                       quants = c(0.025, 0.5, 0.975), functions = NULL,
-                      support = c(0, Inf),
+                      support = c(-Inf, Inf),
                       layout = NA, to_plot = c('data', 'posterior', 'prior')[1:2], use_lim = c('data', 'posterior', 'prior')[1:2],
                       legendpos = c('topleft', 'top'), posterior_args = list(), prior_args = list(), ...) {
   
   check <- prep_data_plot(input, post_predict, prior_predict, to_plot, use_lim,
-                          factors, defective_factor = NULL, subject, n_cores, n_post, functions)
+                          factors, defective_factor = NULL, subject, n_cores, n_post, functions,
+                          remove_na = FALSE)
   data_sources <- check$datasets
   sources <- check$sources
   
@@ -278,13 +283,7 @@ plot_stat <- function(input, post_predict = NULL, prior_predict = NULL, stat_fun
     dens_args <- fix_dots(dots, density.default, consider_dots = FALSE)
     if (is.finite(support[1])) dens_args$from <- support[1]
     if (is.finite(support[2])) dens_args$to <- support[2]
-    dens <- do.call(density, c(list(vals), dens_args))
-    if (is.null(dens_args$bw) && is.null(dens_args$adjust) && is.finite(max(dens$y)) && max(dens$y) > 50) {
-      spread <- diff(range(vals))
-      dens_args$bw <- max(stats::bw.nrd0(vals), 0.02, spread * 0.25)
-      dens <- do.call(density, c(list(vals), dens_args))
-    }
-    dens
+    do.call(density, c(list(vals), dens_args))
   }
   
   # First big loop - calculating stats
@@ -332,18 +331,26 @@ plot_stat <- function(input, post_predict = NULL, prior_predict = NULL, stat_fun
         dens_curves <- Filter(function(x) !is.null(x) && !inherits(x, "plot_stat_point_mass"), dens_curves)
         if (length(dens_curves)) {
           max_y <- max(max_y, max(sapply(dens_curves, function(x) return(max(x$y, na.rm = TRUE)))), na.rm = TRUE)
-          if (!is.finite(support[1]) || !is.finite(support[2])) {
-            dens_x <- unlist(lapply(dens_curves, function(x) x$x))
-            dens_x <- dens_x[is.finite(dens_x)]
-            if (length(dens_x)) {
-              xlim <- range(xlim, dens_x, na.rm = TRUE)
+          if ((is.finite(support[1]) && is.finite(support[2])) ||
+              (!is.finite(support[1]) && !is.finite(support[2]))) {
+            xlim <- range(xlim, range(sapply(dens_curves, function(x) return(quantile(x$x, probs = c(0.01, 0.99), na.rm = TRUE))), na.rm = TRUE), na.rm = TRUE)
+          } else {
+            x_vals <- unlist(lapply(dens_curves, function(x) x$x), use.names = FALSE)
+            x_vals <- x_vals[is.finite(x_vals)]
+            finite_vals <- unlist(src_stats_df[, stat_names, drop = FALSE], use.names = FALSE)
+            finite_vals <- finite_vals[is.finite(finite_vals)]
+            lim_vals <- c(x_vals, finite_vals)
+            lim_vals <- lim_vals[is.finite(lim_vals)]
+            if (length(lim_vals)) {
+              xlim <- range(xlim, lim_vals, na.rm = TRUE)
             }
           }
-        }
-        finite_vals <- unlist(src_stats_df[, stat_names, drop = FALSE])
-        finite_vals <- finite_vals[is.finite(finite_vals)]
-        if (length(finite_vals)) {
-          xlim <- range(xlim, finite_vals, na.rm = TRUE)
+        } else {
+          finite_vals <- unlist(src_stats_df[, stat_names, drop = FALSE], use.names = FALSE)
+          finite_vals <- finite_vals[is.finite(finite_vals)]
+          if (length(finite_vals)) {
+            xlim <- range(xlim, finite_vals, na.rm = TRUE)
+          }
         }
       }
     } else{
@@ -368,48 +375,20 @@ plot_stat <- function(input, post_predict = NULL, prior_predict = NULL, stat_fun
       line_sources[[src_name]] <- summary_sources[[src_name]] <- summary_df
     }
   }
-
-  plot_x_vals <- numeric(0)
-  for (src_name in names(line_sources)) {
-    if (!(src_name %in% names(sources))) next
-    src_idx <- match(src_name, names(sources))
-    if (!(sources[src_idx] %in% use_lim)) next
-    vals <- unlist(line_sources[[src_name]][, stat_names, drop = FALSE], use.names = FALSE)
-    vals <- vals[is.finite(vals)]
-    plot_x_vals <- c(plot_x_vals, vals)
-  }
-  for (src_name in names(dens_sources)) {
-    if (!(src_name %in% names(sources))) next
-    src_idx <- match(src_name, names(sources))
-    if (!(sources[src_idx] %in% use_lim)) next
-    dens_curves <- unlist(dens_sources[[src_name]], recursive = FALSE)
-    for (curve in dens_curves) {
-      if (is.null(curve)) next
-      if (inherits(curve, "plot_stat_point_mass")) {
-        if (is.finite(curve$x)) plot_x_vals <- c(plot_x_vals, curve$x)
-      } else {
-        vals <- curve$x[is.finite(curve$x)]
-        plot_x_vals <- c(plot_x_vals, vals)
-      }
+  if (is.null(xlim) || !all(is.finite(xlim))) {
+    finite_data <- unlist(lapply(summary_sources, function(ss) {
+      vals <- unlist(ss[, setdiff(colnames(ss), c("group_key", factors)), drop = FALSE], use.names = FALSE)
+      vals[is.finite(vals)]
+    }), use.names = FALSE)
+    if (length(finite_data)) {
+      xlim <- range(finite_data, na.rm = TRUE)
+    } else {
+      xlim <- c(if (is.finite(support[1])) support[1] else 0,
+                if (is.finite(support[2])) support[2] else 1)
     }
-  }
-
-  if (length(plot_x_vals)) {
-    xlim <- range(plot_x_vals, na.rm = TRUE)
-  } else if (is.null(xlim)) {
-    xlim <- c(if (is.finite(support[1])) support[1] else 0,
-              if (is.finite(support[2])) support[2] else 1)
   }
   if (is.finite(support[1])) xlim[1] <- support[1]
   if (is.finite(support[2])) xlim[2] <- support[2]
-  if (!is.finite(xlim[1]) || !is.finite(xlim[2])) {
-    finite_x <- xlim[is.finite(xlim)]
-    if (!length(finite_x)) {
-      finite_x <- c(0, 1)
-    }
-    if (!is.finite(xlim[1])) xlim[1] <- min(finite_x) - max(abs(diff(range(finite_x))), 1) * 0.05
-    if (!is.finite(xlim[2])) xlim[2] <- max(finite_x) + max(abs(diff(range(finite_x))), 1) * 0.05
-  }
   if (xlim[1] == xlim[2]) {
     pad <- max(abs(xlim[1]) * 0.05, 0.01)
     xlim <- xlim + c(-pad, pad)
@@ -466,9 +445,7 @@ plot_stat <- function(input, post_predict = NULL, prior_predict = NULL, stat_fun
       } else{
         cur_dens <- dens_sources[[src_name]]
         mapply(cur_dens[[group_key]], lty, FUN = function(x, y) {
-          if (is.null(x)) {
-            return(invisible(NULL))
-          }
+          if (is.null(x)) return(invisible(NULL))
           if (inherits(x, "plot_stat_point_mass")) {
             return(do.call(abline, c(list(v = x$x, lty = y), lines_args[names(lines_args) != "lty"])))
           }
@@ -542,11 +519,13 @@ plot_density <- function(input, post_predict = NULL, prior_predict = NULL,
                          layout = NA,
                          to_plot = c('data', 'posterior', 'prior')[1:2],
                          use_lim = c('data', 'posterior', 'prior')[1:2],
+                         remove_na = TRUE,
                          legendpos = c("topright", "top"),
                          posterior_args = list(), prior_args = list(), ...) {
   # 1) prep_data_plot
   check <- prep_data_plot(input, post_predict, prior_predict, to_plot, use_lim,
-                          factors, defective_factor, subject, n_cores, n_post, functions)
+                          factors, defective_factor, subject, n_cores, n_post, functions,
+                          remove_na = remove_na)
   data_sources <- check$datasets
   sources <- check$sources
   xlim <- check$xlim
@@ -774,27 +753,20 @@ plot_density <- function(input, post_predict = NULL, prior_predict = NULL,
 get_def_cdf <- function(x, defective_factor, dots)
 {
   probs <- seq(0.01, 0.99, by = 0.01)
-  defective_levels <- dots$defective_levels
-  if (is.null(defective_levels)) {
-    defective_levels <- levels(factor(x[[defective_factor]]))
-  }
-  split_x <- split(x, factor(x[[defective_factor]], levels = defective_levels), drop = FALSE)
-  p_defective <- prop.table(table(factor(x[[defective_factor]], levels = defective_levels)))
-
-  out <- mapply(
-    split_x,
-    p_defective,
-    FUN = function(inp, prop_share) {
-      if (!nrow(inp)) {
-        return(cbind(x = rep(Inf, length(probs)), y = probs * 0))
-      }
-      # rtquants will contain Inf for No-Go trials, which is handled by the plotting limits
-      rtquants <- quantile(inp$rt, probs = probs, type = 1, na.rm = TRUE)
-      yvals <- probs * prop_share
-      cbind(x = rtquants, y = yvals)
-    },
-    SIMPLIFY = FALSE
-  )
+  n_total <- nrow(x)
+  resp <- x[[defective_factor]]
+  resp_levels <- unique(resp[!is.na(resp)])
+  
+  out <- lapply(resp_levels, function(lev) {
+    inp <- x[!is.na(resp) & resp == lev, , drop = FALSE]
+    prop_share <- nrow(inp) / n_total
+    # rtquants will contain Inf for No-Go trials, which is handled by the plotting limits
+    rtquants <- quantile(inp$rt, probs = probs, type = 1, na.rm = TRUE)
+    yvals <- probs * prop_share
+    cbind(x = rtquants, y = yvals)
+  })
+  
+  names(out) <- resp_levels
   out
 }
 
@@ -822,6 +794,8 @@ get_def_cdf <- function(x, defective_factor, dots)
 #' @param layout Numeric vector used in `par(mfrow=...)`; use `NA` for auto-layout.
 #' @param to_plot Character vector: any of `"data"`, `"posterior"`, `"prior"`.
 #' @param use_lim Character vector controlling which source(s) define `xlim`.
+#' @param remove_na Logical; if `TRUE` (default), remove non-finite RT rows before
+#'   computing summaries. Set to `FALSE` to retain `NA`/`Inf` RT rows in denominators.
 #' @param legendpos Character vector controlling the positions of the legends
 #' @param posterior_args Optional list of graphical parameters for posterior lines/ribbons.
 #' @param prior_args Optional list of graphical parameters for prior lines/ribbons.
@@ -850,6 +824,7 @@ plot_cdf <- function(input,
                      layout = NA,
                      to_plot = c('data','posterior','prior')[1:2],
                      use_lim = c('data','posterior','prior')[1:2],
+                     remove_na = TRUE,
                      legendpos = c('topleft', 'right'),
                      posterior_args = list(),
                      prior_args = list(),
@@ -863,7 +838,7 @@ plot_cdf <- function(input,
   }
   check <- prep_data_plot(input, post_predict, prior_predict, to_plot, use_lim,
                           factors, defective_factor, subject, n_cores, n_post,
-                          functions)
+                          functions, remove_na = remove_na)
   data_sources <- check$datasets
   sources <- check$sources
   xlim <- check$xlim
@@ -923,9 +898,32 @@ plot_cdf <- function(input,
         # postn_list => e.g. 100 draws => each draw is a named list of factor-level => cbind(x,y)
         out <- list()
         for (lev in defective_levels) {
+          first_mat <- NULL
+          for (lst in postn_list) {
+            if (!is.null(lst[[lev]])) {
+              first_mat <- lst[[lev]]
+              break
+            }
+          }
+          n_prob <- if (is.null(first_mat)) 99L else nrow(first_mat)
           # gather all x and y columns across draws
-          x_mat <- do.call(cbind, lapply(postn_list, function(lst) lst[[lev]][,"x"]))
-          y_mat <- do.call(cbind, lapply(postn_list, function(lst) lst[[lev]][,"y"]))
+          # Missing levels in some postn draws are represented as NA columns and ignored by na.rm=TRUE.
+          x_cols <- lapply(postn_list, function(lst) {
+            m <- lst[[lev]]
+            if (is.null(m)) rep(NA_real_, n_prob)
+            else m[, "x"]
+          })
+          y_cols <- lapply(postn_list, function(lst) {
+            m <- lst[[lev]]
+            if (is.null(m)) rep(NA_real_, n_prob)
+            else m[, "y"]
+          })
+          x_mat <- do.call(cbind, x_cols)
+          y_mat <- do.call(cbind, y_cols)
+          if (all(!is.finite(x_mat)) || all(!is.finite(y_mat))) {
+            out[[lev]] <- NULL
+            next
+          }
           # row-wise quantiles for x, plus median for y
           # Just as in your older code: we do quantiles on x across draws, median on y
           # Or you might do quantiles on both x and y.
@@ -1177,6 +1175,7 @@ plot_delta <- function(input,
                        layout = NA,
                        to_plot = c('data','posterior','prior')[1:2],
                        use_lim = c('data','posterior','prior')[1:2],
+                       remove_na = TRUE,
                        legendpos = c('topleft'),
                        posterior_args = list(),
                        prior_args = list(),
@@ -1195,7 +1194,7 @@ plot_delta <- function(input,
                        prior_predict = prior_predict, quants = quants, functions = functions,
                        factors = factors, defective_factor = delta_factor,
                        n_cores = n_cores, n_post = n_post, layout = layout,
-                       to_plot = to_plot, use_lim = use_lim, legendpos = legendpos,
+                       to_plot = to_plot, use_lim = use_lim, remove_na = remove_na, legendpos = legendpos,
                        posterior_args = list(), prior_args = prior_args,
                        add_percentiles = add_percentiles, return_cdf=TRUE)
   
@@ -1468,6 +1467,7 @@ plot_caf <- function(input,
                      layout = NA,
                      to_plot = c('data','posterior','prior')[1:2],
                      use_lim = c('data','posterior','prior')[1:2],
+                     remove_na = TRUE,
                      legendpos = c('bottomleft', 'bottomright'),
                      posterior_args = list(),
                      prior_args = list(),
@@ -1483,7 +1483,8 @@ plot_caf <- function(input,
   if (caf_factor== "R") stop("caf_factor cannot be R")
   # 1) prep_data_plot
   check <- prep_data_plot(input, post_predict, prior_predict, to_plot, use_lim,
-                          factors, caf_factor, subject, n_cores, n_post, functions)
+                          factors, caf_factor, subject, n_cores, n_post, functions,
+                          remove_na = remove_na)
   data_sources <- check$datasets
   sources <- check$sources
   xlim <- c(0,100)
