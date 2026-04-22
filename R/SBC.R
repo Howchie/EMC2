@@ -238,10 +238,11 @@ run_SBC_subject <- function(rep, design_in, prior_alpha, trials, prior_in, dots,
   data <- do.call(make_data, c(list(parameters = p_vector, design = design_in, n_trials = trials), fix_dots(dots, make_data)))
   emc <- suppressMessages(do.call(make_emc, c(list(data = data, design = design_in, prior_list = prior_in, type = "single"), fix_dots(dots, make_emc))))
 
+  p_vector_dir <- if (!is.null(temp_dir)) temp_dir else "."
   fit_result <- tryCatch({
     do.call(fit, c(list(emc = emc), fix_dots(dots, fit)))
   }, warning = function(w) {
-    filename <- paste0("p_vector_rep", rep, ".Rdata")
+    filename <- file.path(p_vector_dir, paste0("p_vector_rep", rep, ".Rdata"))
     save(p_vector, file = filename)
     warning("A warning occurred during fitting for replication ", rep,
             ". The input parameters have been saved as ", filename,
@@ -249,7 +250,7 @@ run_SBC_subject <- function(rep, design_in, prior_alpha, trials, prior_in, dots,
     warning(w)
     return(NULL)
   }, error = function(e) {
-    filename <- paste0("p_vector_rep", rep, ".Rdata")
+    filename <- file.path(p_vector_dir, paste0("p_vector_rep", rep, ".Rdata"))
     save(p_vector, file = filename)
     warning("An error occurred during fitting for replication ", rep,
             ". The input parameters have been saved as ", filename,
