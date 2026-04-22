@@ -1,7 +1,7 @@
 
 // Chair of Social Psychology, University of Freiburg
 // Authors: Christoph Klauer and Raphael Hartmann
-#define R_NO_REMAP
+// #define R_NO_REMAP -- commented out due to the makevars addition
 //#include <cmath>
 #include <mutex>
 #include "tools.h"
