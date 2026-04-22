@@ -453,8 +453,10 @@ plot.emc.prior <- function(x, selection = "mu", do_plot = TRUE, covariates = NUL
   prior <- x
   design <- get_design(prior)
   dots <- add_defaults(list(...), breaks = 30, cut_off = 0.0015, prob = TRUE, by_subject = TRUE, map = TRUE)
-  oldpar <- par(no.readonly = TRUE) # code line i
-  if (do_plot) on.exit(par(oldpar)) # code line i + 1
+  if (do_plot) {
+    oldpar <- par(no.readonly = TRUE)
+    on.exit(par(oldpar))
+  }
   if(is.null(design[[1]]$Ffactors)){
     if(selection %in% c('alpha', 'mu', "sigma2", "Sigma", "correlation", "covariance") & dots$map){
       warning("For this type of design, map = TRUE is not yet implemented")
