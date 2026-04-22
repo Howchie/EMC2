@@ -119,8 +119,8 @@ double pwald(double t, double b, double mu, double sigma = 1.0, double A = 0.0,
 
     const double term1_arg = (mu * t - dist) / sqrt_var;
     const double term2_arg = (-mu * t - dist) / sqrt_var;
-    const double cdf1 = gaussian_cdf(term1_arg, 0.0, 1.0);
-    const double cdf2 = gaussian_cdf(term2_arg, 0.0, 1.0);
+    const double cdf1 = pnorm_std(term1_arg, true, false);
+    const double cdf2 = pnorm_std(term2_arg, true, false);
     const double exp_term = std::exp(2.0 * mu * dist / (sigma * sigma));
 
     double cdf_val = cdf1 + exp_term * cdf2;
