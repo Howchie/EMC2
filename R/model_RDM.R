@@ -301,6 +301,7 @@ rRDMGBM <- function(lR, pars, p_types=c("v", "B", "A", "t0"), ok=rep(TRUE, dim(p
 #' Equivalent parameterization to RDMSWTN without `sv`.
 #'
 #' @export
+#' 
 RDMGBM <- function() {
   list(
     type = "RACE",
@@ -331,7 +332,9 @@ RDMGBM <- function() {
 # ============================================================================
 
 #' RDMSWTN Model
-#'
+#' 
+#' @details
+#' 
 #' Racing Diffusion Model with Shifted Wald Truncated Normal (SWTN) accumulators.
 #' Supports between-trial drift variability (sv) and start-point variability (A).
 #' When sv=0 and A=0 the model reduces to a point Wald; when sv=0 it reduces
@@ -339,14 +342,17 @@ RDMGBM <- function() {
 #'
 #' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Interpretation**                        |
 #' |-----------|-----------|---------------|---------|---------------------------------------|
-#' | *v*       | log       | [0, Inf]      | log(1)  | Mean drift rate                        |
-#' | *B*       | log       | [0, Inf]      | log(1)  | Response threshold (before A offset)   |
-#' | *A*       | log       | [0, Inf]      | log(0)  | Start-point variability range          |
-#' | *t0*      | log       | [0, Inf]      | log(0)  | Non-decision time                      |
-#' | *s*       | log       | [0, Inf]      | log(1)  | Within-trial SD of drift rate          |
-#' | *sv*      | log       | [0, Inf]      | log(0)  | Between-trial SD of drift rate         |
-#'
+#' | *v*       | log       | \[0, Inf\]      | log(1)  | Mean drift rate                        |
+#' | *B*       | log       | \[0, Inf\]      | log(1)  | Response threshold (before A offset)   |
+#' | *A*       | log       | \[0, Inf\]      | log(0)  | Start-point variability range          |
+#' | *t0*      | log       | \[0, Inf\]      | log(0)  | Non-decision time                      |
+#' | *s*       | log       | \[0, Inf\]      | log(1)  | Within-trial SD of drift rate          |
+#' | *sv*      | log       | \[0, Inf\]      | log(0)  | Between-trial SD of drift rate         |
+#' 
+#' @return a list of parameters
+#' 
 #' @export
+#' 
 RDMSWTN <- function(){
   list(
     type="RACE",

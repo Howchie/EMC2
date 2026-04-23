@@ -6,20 +6,23 @@
 \usage{
 RDMSWTN()
 }
+\value{
+a list of parameters
+}
 \description{
+RDMSWTN Model
+}
+\details{
 Racing Diffusion Model with Shifted Wald Truncated Normal (SWTN) accumulators.
 Supports between-trial drift variability (sv) and start-point variability (A).
 When sv=0 and A=0 the model reduces to a point Wald; when sv=0 it reduces
-to the standard RDM.
-}
-\details{
-\tabular{lllll}{
+to the standard RDM.\tabular{lllll}{
    \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Interpretation} \cr
-   \emph{v} \tab log \tab \link{0, Inf} \tab log(1) \tab Mean drift rate \cr
-   \emph{B} \tab log \tab \link{0, Inf} \tab log(1) \tab Response threshold (before A offset) \cr
-   \emph{A} \tab log \tab \link{0, Inf} \tab log(0) \tab Start-point variability range \cr
-   \emph{t0} \tab log \tab \link{0, Inf} \tab log(0) \tab Non-decision time \cr
-   \emph{s} \tab log \tab \link{0, Inf} \tab log(1) \tab Within-trial SD of drift rate \cr
-   \emph{sv} \tab log \tab \link{0, Inf} \tab log(0) \tab Between-trial SD of drift rate \cr
+   \emph{v} \tab log \tab [0, Inf] \tab log(1) \tab Mean drift rate \cr
+   \emph{B} \tab log \tab [0, Inf] \tab log(1) \tab Response threshold (before A offset) \cr
+   \emph{A} \tab log \tab [0, Inf] \tab log(0) \tab Start-point variability range \cr
+   \emph{t0} \tab log \tab [0, Inf] \tab log(0) \tab Non-decision time \cr
+   \emph{s} \tab log \tab [0, Inf] \tab log(1) \tab Within-trial SD of drift rate \cr
+   \emph{sv} \tab log \tab [0, Inf] \tab log(0) \tab Between-trial SD of drift rate \cr
 }
 }

@@ -333,7 +333,7 @@ add_accumulators <- function(data,matchfun=NULL,simulate=FALSE, type = "RACE", F
         datar$lM <- factor(lM,levels=levels(lM))
       }
     }
-    datar$winner <- FALSE
+    
   } else if (type %in% c("RACE","SDT", "RACEGNG")) {
     nacc <- length(levels(data$R))
     datar <- cbind(do.call(rbind,lapply(1:nacc,function(x){data})),
@@ -385,12 +385,16 @@ add_accumulators <- function(data,matchfun=NULL,simulate=FALSE, type = "RACE", F
       datar$rt <- NA
     }
   } else {
-    R <- datar$R
-    R[is.na(R)] <- levels(datar$lR)[1]
-
-    if (type %in% c("MT","TC")) datar$winner <- NA else
+    if (!is.null(fixed_accumulator_roles)) {
+      datar$winner <- FALSE
+    } else if (type %in% c("MT","TC")) {
+      datar$winner <- NA
+    } else {
+      R <- datar$R
+      R[is.na(R)] <- levels(datar$lR)[1]
       datar$winner <- as.character(datar$lR) == as.character(R)
-    if ("RACEGNG"%in%type) {
+    }
+    if (is.null(fixed_accumulator_roles) && "RACEGNG"%in%type) {
       is_inf <- is.infinite(datar$rt)
       if (any(is_inf)) {
         datar$winner[is_inf] <- datar$lR[is_inf] == "nogo" # here we code all missing responses as "nogo" winner because the make_missing trick doesn't handle that

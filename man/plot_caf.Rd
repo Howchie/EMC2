@@ -18,10 +18,11 @@ plot_caf(
   layout = NA,
   to_plot = c("data", "posterior", "prior")[1:2],
   use_lim = c("data", "posterior", "prior")[1:2],
+  remove_na = TRUE,
   legendpos = c("bottomleft", "bottomright"),
   posterior_args = list(),
   prior_args = list(),
-  accuracy_function = function(d) d$S == d$R,
+  accuracy_function = function(d) ifelse(is.na(d$S), is.na(d$R), d$R == d$S),
   smooth_window = 5,
   which_plot = 1:2,
   ...
@@ -55,13 +56,16 @@ defaults to plotting full data set ungrouped by factors if \code{NULL}.}
 
 \item{use_lim}{Character vector controlling which source(s) define \code{xlim}.}
 
+\item{remove_na}{Logical; if \code{TRUE} (default), remove non-finite RT rows before
+computing summaries. Set to \code{FALSE} to retain \code{NA}/\code{Inf} RT rows in denominators.}
+
 \item{legendpos}{Character vector controlling the positions of the legends}
 
 \item{posterior_args}{Optional list of graphical parameters for posterior lines/ribbons.}
 
 \item{prior_args}{Optional list of graphical parameters for prior lines/ribbons.}
 
-\item{accuracy_function}{Accuracy score, default: function(d) d$S==d$R,}
+\item{accuracy_function}{Accuracy score, default: function(d) ifelse(is.na(d$S), is.na(d$R), d$R == d$S),}
 
 \item{smooth_window, }{range of RT over which calculate accuracy, default 5}
 

@@ -455,7 +455,14 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
     return(data)
   } else {
     data <- design_model(
-      add_accumulators(data, design$matchfun, simulate = TRUE, type = model()$type, Fcovariates = design$Fcovariates),
+      add_accumulators(
+        data,
+        design$matchfun,
+        simulate = TRUE,
+        type = model()$type,
+        Fcovariates = design$Fcovariates,
+        fixed_accumulator_roles = design$fixed_accumulator_roles
+      ),
       design, model,
       add_acc = FALSE, compress = FALSE, verbose = FALSE,
       rt_check = FALSE
@@ -503,7 +510,7 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
   if (is.null(TC$pContaminant) & any(dimnames(pars)[[2]]=="pContaminant"))
     TC$pContaminant <- pars[,"pContaminant"][data$lR==levels(data$lR)[1]]
 
-  dropNames <- c("lR","lM")
+  dropNames <- c("lR","lM","winner")
   if (!return_functions && !is.null(design$Ffunctions))
     dropNames <- c(dropNames,names(design$Ffunctions))
   # ZH added to protect SSD simulation

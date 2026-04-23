@@ -343,7 +343,14 @@ par_data_map <- function(par_mcmc, design, n_trials = NULL, data = NULL,
 
   model <- design$model
   data <- design_model(
-    add_accumulators(data,design$matchfun,simulate=TRUE,type=model()$type,Fcovariates=design$Fcovariates),
+    add_accumulators(
+      data,
+      design$matchfun,
+      simulate=TRUE,
+      type=model()$type,
+      Fcovariates=design$Fcovariates,
+      fixed_accumulator_roles = design$fixed_accumulator_roles
+    ),
     design,model,add_acc=FALSE,compress=FALSE,verbose=FALSE,
     rt_check=FALSE)
 

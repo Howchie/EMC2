@@ -265,10 +265,10 @@ LogicalRulesLBA <- function(posdrift = TRUE, fast_path=TRUE){
     # Keep this in sync so likelihood and simulation use the same setting.
     c_name = paste0("LBA_LogicalRules",ifelse(posdrift,"","IO")),
     # p_vector transform, sets sv as a scaling parameter
-    p_types=c("v" = 1,"sv" = log(1),"B" = log(1),"A" = log(0),"t0" = log(0), "p"=qnorm(1),"q"=qnorm(0.5)),
-    transform=list(func=c(v = "identity",sv = "exp", B = "exp", A = "exp",t0 = "exp",p="pnorm",q="pnorm")),
-    bound=list(minmax=cbind(v=c(-Inf,Inf),sv = c(0, Inf), A=c(1e-4,Inf),B=c(0,Inf),t0=c(0.05,Inf),p=c(0.01,0.99),q=c(0.01,0.99)),
-               exception=c(A=0,p=1,q=1)),
+    p_types=c("v" = 1,"sv" = log(1),"B" = log(1),"A" = log(0),"t0" = log(0)),
+    transform=list(func=c(v = "identity",sv = "exp", B = "exp", A = "exp",t0 = "exp")),
+    bound=list(minmax=cbind(v=c(-Inf,Inf),sv = c(0, Inf), A=c(1e-4,Inf),B=c(0,Inf),t0=c(0.05,Inf)),
+               exception=c(A=0)),
     # Transform to natural scale
     # Trial dependent parameter transform
     Ttransform = function(pars,dadm) {
@@ -290,6 +290,7 @@ LogicalRulesLBA <- function(posdrift = TRUE, fast_path=TRUE){
 
 #' LBA Redundant Target Race Model
 #' @export
+#' 
 RedundantTargetLBA <- function(posdrift = TRUE){
   list(
     type = "RACE",

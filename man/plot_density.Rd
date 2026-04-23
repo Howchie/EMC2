@@ -18,6 +18,7 @@ plot_density(
   layout = NA,
   to_plot = c("data", "posterior", "prior")[1:2],
   use_lim = c("data", "posterior", "prior")[1:2],
+  remove_na = TRUE,
   legendpos = c("topright", "top"),
   posterior_args = list(),
   prior_args = list(),
@@ -51,6 +52,9 @@ defaults to plotting full data set ungrouped by factors if \code{NULL}.}
 \item{to_plot}{Character vector: any of \code{"data"}, \code{"posterior"}, \code{"prior"}.}
 
 \item{use_lim}{Character vector controlling which source(s) define \code{xlim}.}
+
+\item{remove_na}{Logical; if \code{TRUE} (default), remove non-finite RT rows before
+computing summaries. Set to \code{FALSE} to retain \code{NA}/\code{Inf} RT rows in denominators.}
 
 \item{legendpos}{Character vector controlling the positions of the legends}
 
