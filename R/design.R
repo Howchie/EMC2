@@ -78,7 +78,8 @@ design <- function(formula = NULL,factors = NULL,Rlevels = NULL,model,data=NULL,
                    contrasts=NULL,matchfun=NULL,constants=NULL,covariates=NULL,
                    functions=NULL,report_p_vector=TRUE, custom_p_vector = NULL,
                    trend=NULL,
-                   transform = NULL, bound = NULL, LT=NULL,LC=NULL,UC=NULL,UT=NULL,...){
+                   transform = NULL, bound = NULL, LT=NULL,LC=NULL,UC=NULL,UT=NULL,
+                   fixed_accumulator_roles = NULL,...){
 
   optionals <- list(...)
   if (is.list(model) && !is.function(model)) {
@@ -171,7 +172,8 @@ design <- function(formula = NULL,factors = NULL,Rlevels = NULL,model,data=NULL,
 
   design <- list(Flist=formula,Ffactors=factors,Rlevels=Rlevels,
                  Clist=contrasts,matchfun=matchfun,constants=constants,
-                 Fcovariates=covariates,Ffunctions=functions,model=model,LT=LT,LC=LC,UC=UC,UT=UT)
+                 Fcovariates=covariates,Ffunctions=functions,model=model,LT=LT,LC=LC,UC=UC,UT=UT,
+                 fixed_accumulator_roles = fixed_accumulator_roles)
   class(design) <- "emc.design"
   if (!is.null(trend)) {
     # check for at = 'lR'
@@ -310,11 +312,29 @@ contr.anova <- function(n) {
   contr/rep(2*matrixStats::colMaxs(abs(contr)),each=dim(contr)[1])
 }
 
-add_accumulators <- function(data,matchfun=NULL,simulate=FALSE, type = "RACE", Fcovariates=NULL) {
+add_accumulators <- function(data,matchfun=NULL,simulate=FALSE, type = "RACE", Fcovariates=NULL, fixed_accumulator_roles = NULL) {
   if(is.null(type) || !type %in% c("RACE", "RACEGNG", "SDT", "MT", "TC")) return(data)
   if (!is.factor(data$R)) stop("data must have a factor R")
   factors <- names(data)[!names(data) %in% c("R","rt","trials",Fcovariates)]
-  if (type %in% c("RACE","SDT", "RACEGNG")) {
+  if (!is.null(fixed_accumulator_roles)) {
+    if (!is.factor(fixed_accumulator_roles) || length(fixed_accumulator_roles) == 0) {
+      stop("fixed_accumulator_roles must be a factor with at least one level.")
+    }
+    role_levels <- levels(fixed_accumulator_roles)
+    nacc <- length(role_levels)
+    datar <- data[rep(seq_len(nrow(data)), times = nacc), , drop = FALSE]
+    datar$lR <- factor(rep(role_levels, each = nrow(data)), levels = role_levels)
+    datar <- datar[order(rep(seq_len(nrow(data)), nacc), datar$lR), , drop = FALSE]
+    if (!is.null(matchfun)) {
+      lM <- matchfun(datar)
+      if (!is.factor(lM)){
+        datar$lM <- factor(lM)
+      } else{
+        datar$lM <- factor(lM,levels=levels(lM))
+      }
+    }
+    datar$winner <- FALSE
+  } else if (type %in% c("RACE","SDT", "RACEGNG")) {
     nacc <- length(levels(data$R))
     datar <- cbind(do.call(rbind,lapply(1:nacc,function(x){data})),
                    lR=factor(rep(levels(data$R),each=dim(data)[1]),levels=levels(data$R)))
@@ -369,7 +389,7 @@ add_accumulators <- function(data,matchfun=NULL,simulate=FALSE, type = "RACE", F
     R[is.na(R)] <- levels(datar$lR)[1]
 
     if (type %in% c("MT","TC")) datar$winner <- NA else
-      datar$winner <- datar$lR==R
+      datar$winner <- as.character(datar$lR) == as.character(R)
     if ("RACEGNG"%in%type) {
       is_inf <- is.infinite(datar$rt)
       if (any(is_inf)) {
@@ -539,6 +559,7 @@ design_model <- function(data,design,model=NULL,
     model <- design$model
   }
   if (model()$type=="SDT") rt_check <- FALSE
+  fixed_accumulator_roles <- design$fixed_accumulator_roles
   if(grepl("MRI", model()$type)){
     dadm <- data
     attr(dadm, "design_matrix") <- attr(design, "design_matrix")
@@ -559,7 +580,7 @@ design_model <- function(data,design,model=NULL,
   if (!any(names(data)=="trials")) data$trials <- 1:dim(data)[1]
   if(rt_check){rt_check_function(data)}
   if (!add_acc) da <- data else
-    da <- add_accumulators(data,design$matchfun,type=model()$type,Fcovariates=design$Fcovariates)
+    da <- add_accumulators(data,design$matchfun,type=model()$type,Fcovariates=design$Fcovariates,fixed_accumulator_roles=fixed_accumulator_roles)
   order_idx <- order(da$subjects)
   da <- da[order_idx,] # fixes different sort in add_accumulators depending on subject type
 

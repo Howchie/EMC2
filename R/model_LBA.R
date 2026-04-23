@@ -255,6 +255,70 @@ LBA <- function(posdrift=TRUE){
   )
 }
 
+#' LBA Logical Rules Model
+#' @export
+#'
+LogicalRulesLBA <- function(posdrift = TRUE, fast_path=TRUE){
+  list(
+    type="RACE",
+    # Note: `calc_ll()` infers LBA `posdrift` from whether `c_name` contains "IO".
+    # Keep this in sync so likelihood and simulation use the same setting.
+    c_name = paste0("LBA_LogicalRules",ifelse(posdrift,"","IO")),
+    # p_vector transform, sets sv as a scaling parameter
+    p_types=c("v" = 1,"sv" = log(1),"B" = log(1),"A" = log(0),"t0" = log(0), "p"=qnorm(1),"q"=qnorm(0.5)),
+    transform=list(func=c(v = "identity",sv = "exp", B = "exp", A = "exp",t0 = "exp",p="pnorm",q="pnorm")),
+    bound=list(minmax=cbind(v=c(-Inf,Inf),sv = c(0, Inf), A=c(1e-4,Inf),B=c(0,Inf),t0=c(0.05,Inf),p=c(0.01,0.99),q=c(0.01,0.99)),
+               exception=c(A=0,p=1,q=1)),
+    # Transform to natural scale
+    # Trial dependent parameter transform
+    Ttransform = function(pars,dadm) {
+      pars <- cbind(pars,b=pars[,"B"] + pars[,"A"])
+      pars
+    },
+    # Random function for racing accumulator
+    rfun=function(data,pars) rLBA(data$lR,pars,ok = attr(pars, "ok"),posdrift=ifelse(posdrift,TRUE,FALSE)),
+    # Density function (PDF) for single accumulator
+    dfun=function(rt,pars) dLBA(rt,pars,posdrift=ifelse(posdrift,TRUE,FALSE)),
+    # Probability function (CDF) for single accumulator
+    pfun=function(rt,pars) pLBA(rt,pars,posdrift=ifelse(posdrift,TRUE,FALSE)),
+    # Race likelihood combining pfun and dfun
+    log_likelihood=function(pars,dadm,model,min_ll=log(1e-10)){
+      log_likelihood_redundant_target_race(pars=pars, dadm = dadm, model = model, min_ll = min_ll)
+    }
+  )
+}
+
+#' LBA Redundant Target Race Model
+#' @export
+RedundantTargetLBA <- function(posdrift = TRUE){
+  list(
+    type = "RACE",
+    c_name = paste0("LBA_RedundantTarget", ifelse(posdrift, "", "IO")),
+    p_types = c("v" = 1, "sv" = log(1), "B" = log(1), "A" = log(0), "t0" = log(0), "pContaminant" = qnorm(0)),
+    transform = list(func = c(v = "identity", sv = "exp", B = "exp", A = "exp", t0 = "exp", pContaminant = "pnorm")),
+    bound = list(
+      minmax = cbind(v = c(-Inf, Inf), sv = c(0, Inf), A = c(1e-4, Inf), B = c(1e-4, Inf), t0 = c(0.05, Inf), pContaminant = c(0.001, 0.999)),
+      exception = c(A = 0, pContaminant = 0)
+    ),
+    Ttransform = function(pars,dadm) {
+      pars <- cbind(pars, b = pars[, "B"] + pars[, "A"])
+      pars
+    },
+    rfun = ifelse(posdrift,
+      function(data,pars) rLBA(data$lR,pars,ok = attr(pars, "ok"),posdrift = TRUE),
+      function(data,pars) rLBA(data$lR,pars,ok = attr(pars, "ok"),posdrift = FALSE)),
+    dfun = ifelse(posdrift,
+      function(rt,pars) dLBA(rt,pars,posdrift = TRUE),
+      function(rt,pars) dLBA(rt,pars,posdrift = FALSE)),
+    pfun = ifelse(posdrift,
+      function(rt,pars) pLBA(rt,pars,posdrift = TRUE),
+      function(rt,pars) pLBA(rt,pars,posdrift = FALSE)),
+    log_likelihood = function(pars,dadm,model,min_ll = log(1e-10)){
+      log_likelihood_redundant_target_race(pars = pars, dadm = dadm, model = model, min_ll = min_ll)
+    }
+  )
+}
+
 #### BAwL (Ballistic Accumulator with Leak) ----
 
 dBAwL <- function(rt, pars, posdrift = TRUE) {
@@ -370,4 +434,3 @@ BAwL <- function(posdrift = TRUE) {
     }
   )
 }
-

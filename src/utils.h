@@ -91,6 +91,9 @@ struct ContextForRaceModels {
 	bool log_out=false;
 	bool gng=false;
 	std::string LogicalRule;
+    // Index of t0-like non-decision-time parameter for local two-race helper.
+    // -1 means "no explicit t0 field".
+    int t0_index = -1;
     // Optional per-particle fast-kernel hint:
     // 0 = auto detect in kernel; 1 = zero-variability branch; 2 = nonzero branch.
     int mode_hint = 0;
@@ -141,6 +144,32 @@ inline double prdm_scalar(double t, const double* par, void* /*ctx_*/) {
   const double inv_s = 1.0 / par[4];
   return pigt_impl(tt, par[1] * inv_s + 0.5 * par[2] * inv_s,
                        par[0] * inv_s, 0.5 * par[2] * inv_s);
+}
+
+inline double drdmgbm_scalar(double t, const double* par, void* /*ctx_*/) {
+  if (R_IsNA(par[0])) return 0.0;
+  const double tt = t - par[3];
+  if (tt <= 0.0) return 0.0;
+  const double inv_s = 1.0 / par[4];
+  return dgbm(tt,
+              1.0 + (par[1] + par[2]) * inv_s, // b = 1 + (B + A) / s
+              par[0] * inv_s,            // v / s
+              1.0,
+              par[2] * inv_s,            // A / s
+              false);
+}
+
+inline double prdmgbm_scalar(double t, const double* par, void* /*ctx_*/) {
+  if (R_IsNA(par[0])) return 0.0;
+  const double tt = t - par[3];
+  if (tt <= 0.0) return 0.0;
+  const double inv_s = 1.0 / par[4];
+  return pgbm(tt,
+              1.0 + (par[1] + par[2]) * inv_s,
+              par[0] * inv_s,
+              1.0,
+              par[2] * inv_s,
+              false);
 }
 
 inline double dlnr_scalar(double t, const double* par, void* /*ctx_*/) {
@@ -258,6 +287,58 @@ inline void prdm_raw(const double* rt, const double* pars_cm, int n_rows,
   }
 }
 
+// RDMGBM: column layout v=0, B=1, A=2, t0=3, s=4
+inline void drdmgbm_raw(const double* rt, const double* pars_cm, int n_rows,
+                        const int* mask, const int* isok,
+                        double* out, double min_ll, void* /*ctx_*/) {
+  const double* v_  = pars_cm + 0 * n_rows;
+  const double* B_  = pars_cm + 1 * n_rows;
+  const double* A_  = pars_cm + 2 * n_rows;
+  const double* t0_ = pars_cm + 3 * n_rows;
+  const double* s_  = pars_cm + 4 * n_rows;
+  #pragma omp simd
+  for (int i = 0; i < n_rows; ++i) {
+    if (!mask[i]) continue;
+    if (R_IsNA(v_[i]) || !isok[i]) { out[i] = min_ll; continue; }
+    const double tt = rt[i] - t0_[i];
+    if (tt <= 0.0) { out[i] = min_ll; continue; }
+    const double inv_s = 1.0 / s_[i];
+    const double pdf = dgbm(tt,
+                            1.0 + (B_[i] + A_[i]) * inv_s,
+                            v_[i] * inv_s,
+                            1.0,
+                            A_[i] * inv_s,
+                            false);
+    out[i] = (pdf > 0.0 && std::isfinite(pdf)) ? std::log(pdf) : min_ll;
+  }
+}
+
+inline void prdmgbm_raw(const double* rt, const double* pars_cm, int n_rows,
+                        const int* mask, const int* isok,
+                        double* out, double min_ll, void* /*ctx_*/) {
+  const double* v_  = pars_cm + 0 * n_rows;
+  const double* B_  = pars_cm + 1 * n_rows;
+  const double* A_  = pars_cm + 2 * n_rows;
+  const double* t0_ = pars_cm + 3 * n_rows;
+  const double* s_  = pars_cm + 4 * n_rows;
+  #pragma omp simd
+  for (int i = 0; i < n_rows; ++i) {
+    if (!mask[i]) continue;
+    if (R_IsNA(v_[i]) || !isok[i]) { out[i] = 0.0; continue; }
+    const double tt = rt[i] - t0_[i];
+    if (tt <= 0.0) { out[i] = 0.0; continue; }
+    const double inv_s = 1.0 / s_[i];
+    const double cdf = pgbm(tt,
+                            1.0 + (B_[i] + A_[i]) * inv_s,
+                            v_[i] * inv_s,
+                            1.0,
+                            A_[i] * inv_s,
+                            false);
+    if (cdf >= 1.0) { out[i] = min_ll; continue; }
+    out[i] = (cdf <= 0.0) ? 0.0 : std::log1p(-cdf);
+  }
+}
+
 // LNR: column layout m=0, s=1, t0=2
 inline void dlnr_raw(const double* rt, const double* pars_cm, int n_rows,
                      const int* mask, const int* isok,
@@ -346,6 +427,40 @@ inline void rdm_logS_at_t(double t, const double* pars_cm,
       const double inv_s = 1.0 / s_[r];
       const double cdf = pigt_impl(tt, B_[r] * inv_s + 0.5 * A_[r] * inv_s,
                               v_[r] * inv_s, 0.5 * A_[r] * inv_s);
+      if (cdf >= 1.0) { bad = true; break; }
+      if (cdf > 0.0) logS += std::log1p(-cdf);
+    }
+    logS_out[j] = bad ? R_NegInf : logS;
+  }
+}
+
+// RDMGBM: column layout v=0, B=1, A=2, t0=3, s=4
+inline void rdmgbm_logS_at_t(double t, const double* pars_cm,
+                             int n_rows_total, int n_lR, int /*n_par*/,
+                             const int* trunc_mask, int n_unique_trials,
+                             const int* isok_all, void* /*ctx_*/, double* logS_out) {
+  const double* v_  = pars_cm + 0 * n_rows_total;
+  const double* B_  = pars_cm + 1 * n_rows_total;
+  const double* A_  = pars_cm + 2 * n_rows_total;
+  const double* t0_ = pars_cm + 3 * n_rows_total;
+  const double* s_  = pars_cm + 4 * n_rows_total;
+  for (int j = 0; j < n_unique_trials; ++j) {
+    if (!trunc_mask[j]) continue;
+    const int start = j * n_lR;
+    double logS = 0.0;
+    bool bad = false;
+    for (int k = 0; k < n_lR && !bad; ++k) {
+      const int r = start + k;
+      if (!isok_all[r] || R_IsNA(v_[r])) { bad = true; break; }
+      const double tt = t - t0_[r];
+      if (tt <= 0.0) continue;
+      const double inv_s = 1.0 / s_[r];
+      const double cdf = pgbm(tt,
+                              1.0 + (B_[r] + A_[r]) * inv_s,
+                              v_[r] * inv_s,
+                              1.0,
+                              A_[r] * inv_s,
+                              false);
       if (cdf >= 1.0) { bad = true; break; }
       if (cdf > 0.0) logS += std::log1p(-cdf);
     }

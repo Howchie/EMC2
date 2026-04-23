@@ -20,6 +20,7 @@
 #include <string>
 #include <memory>
 #include <array>
+#include <cstring>
 
 using namespace Rcpp;
 
@@ -333,12 +334,22 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
     out.model_dfun_raw = &drdmswtn_raw;
     out.model_pfun_raw = &prdmswtn_raw;
     out.logS_at_t_ptr  = &rdmswtn_logS_at_t;
+    out.ctx.t0_index   = 3;
+  } else if (type_std.find("GBM") != std::string::npos) {
+    // Must be checked before "RDM" since "RDMGBM" contains "RDM"
+    out.pdf1_ptr       = &drdmgbm_scalar;
+    out.cdf1_ptr       = &prdmgbm_scalar;
+    out.model_dfun_raw = &drdmgbm_raw;
+    out.model_pfun_raw = &prdmgbm_raw;
+    out.logS_at_t_ptr  = &rdmgbm_logS_at_t;
+    out.ctx.t0_index   = 3;
   } else if (type_std.find("BAwL") != std::string::npos) {
     out.pdf1_ptr       = &dbawl_scalar;
     out.cdf1_ptr       = &pbawl_scalar;
     out.model_dfun_raw = &dbawl_raw;
     out.model_pfun_raw = &pbawl_raw;
     out.logS_at_t_ptr  = &bawl_logS_at_t;
+    out.ctx.t0_index   = 4;
     // Leaky ballistic accumulators can have defective upper tails (never-finish
     // mass) even when posdrift=TRUE.
     out.ctx.defective_upper_tail = true;
@@ -351,6 +362,7 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
     out.model_dfun_raw = &dlba_raw;
     out.model_pfun_raw = &plba_raw;
     out.logS_at_t_ptr = &lba_logS_at_t;
+    out.ctx.t0_index = 4;
     if (type_std.find("IO") != std::string::npos) {
       out.ctx.use_posdrift = false;
       out.ctx.defective_upper_tail = true;
@@ -361,12 +373,14 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
     out.model_dfun_raw = &drdm_raw;
     out.model_pfun_raw = &prdm_raw;
     out.logS_at_t_ptr = &rdm_logS_at_t;
+    out.ctx.t0_index = 3;
   } else if (type_std.find("LNR") != std::string::npos) {
     out.pdf1_ptr = &dlnr_scalar;
     out.cdf1_ptr = &plnr_scalar;
     out.model_dfun_raw = &dlnr_raw;
     out.model_pfun_raw = &plnr_raw;
     out.logS_at_t_ptr = &lnr_logS_at_t;
+    out.ctx.t0_index = 2;
   } else {
     Rcpp::stop("Unsupported race model type string in %s: %s", caller.c_str(), type_std.c_str());
   }
@@ -412,6 +426,80 @@ struct ModelSharedState {
 
 struct RaceSharedState : ModelSharedState {};
 using DDMSharedState = ModelSharedState;
+
+struct LogicalRulesSharedState {
+  bool valid = false;
+  int n_trials = 0;
+  int n_acc = 0;
+  int n_unique_trials = 0;
+  std::vector<int> idxA;
+  std::vector<int> idxB;
+  std::vector<int> idxnA;
+  std::vector<int> idxnB;
+  // Rule code: 1=OR, 2=AND, 3=XOR, 4=ID
+  std::vector<int> rule_code;
+  // Response code: 1=yes, 2=no, 3=NN, 4=AN, 5=NB, 6=AB
+  std::vector<int> resp_code;
+  std::vector<double> rt_unique;
+};
+
+struct RedundantTargetSharedState {
+  bool valid = false;
+  int n_trials = 0;
+  int n_acc = 0;
+  int n_unique_trials = 0;
+  bool has_nogo = false;
+  std::vector<int> idxA;
+  std::vector<int> idxB;
+  std::vector<int> idxNogo;
+  std::vector<int> cond_code;  // 1=A, 2=B, 3=AB
+  // Response code per unique trial: 0=missing/omission, 1=go response, 2=nogo.
+  std::vector<int> resp_code;
+  std::vector<double> rt_unique;
+};
+
+static LogicalRulesSharedState build_logicalrules_shared_state(const Rcpp::DataFrame& dadm,
+                                                               int n_trials,
+                                                               int n_acc);
+static RedundantTargetSharedState build_redundant_target_shared_state(const Rcpp::DataFrame& dadm,
+                                                                      int n_trials,
+                                                                      int n_acc);
+
+static double local_race_helper(double t,
+                                const double* par_target,
+                                const double* par_nontarget,
+                                int n_par,
+                                ContextForRaceModels* ctx,
+                                RacePdf1Fun pdf1,
+                                RaceCdf1Fun cdf1,
+                                const GslIntegrationControls& gsl_ctl,
+                                gsl_integration_workspace* w,
+                                double* pars_2buf,
+                                int* isok_2buf);
+
+static double c_log_likelihood_logicalrules(
+    const Rcpp::NumericMatrix& pars,
+    const Rcpp::IntegerVector& expand,
+    double min_ll,
+    const Rcpp::LogicalVector& ok_params,
+    int n_acc,
+    ContextForRaceModels* model_ctx,
+    RacePdf1Fun pdf1,
+    RaceCdf1Fun cdf1,
+    const LogicalRulesSharedState& shared,
+    Rcpp::NumericVector* trial_ll_out = nullptr);
+
+static double c_log_likelihood_redundant_target_race(
+    const Rcpp::NumericMatrix& pars,
+    const Rcpp::IntegerVector& expand,
+    double min_ll,
+    const Rcpp::LogicalVector& ok_params,
+    int n_acc,
+    ContextForRaceModels* model_ctx,
+    RacePdf1Fun pdf1,
+    RaceCdf1Fun cdf1,
+    const RedundantTargetSharedState& shared,
+    Rcpp::NumericVector* trial_ll_out = nullptr);
 
 double c_log_likelihood_ss(
     NumericMatrix pars,
@@ -1107,6 +1195,350 @@ static inline SSModelAdapter resolve_ss_adapter(const std::string& type_std) {
   return a;
 }
 
+static LogicalRulesSharedState build_logicalrules_shared_state(const Rcpp::DataFrame& dadm,
+                                                               int n_trials,
+                                                               int n_acc) {
+  LogicalRulesSharedState out;
+  out.n_trials = n_trials;
+  out.n_acc = n_acc;
+
+  if (n_trials <= 0 || n_acc <= 0 || (n_trials % n_acc) != 0) {
+    Rcpp::stop("LogicalRules likelihood expects n_trials > 0 and n_trials %% n_acc == 0.");
+  }
+  if (!dadm.containsElementNamed("rt") ||
+      !dadm.containsElementNamed("lR") ||
+      !dadm.containsElementNamed("R") ||
+      !dadm.containsElementNamed("LogicalRule")) {
+    Rcpp::stop("LogicalRules likelihood requires dadm columns: rt, lR, R, LogicalRule.");
+  }
+
+  Rcpp::NumericVector rts = dadm["rt"];
+  SEXP role_sexp = dadm["lR"];
+  SEXP resp_sexp = dadm["R"];
+  SEXP rule_sexp = dadm["LogicalRule"];
+  if (rts.size() != n_trials ||
+      Rf_length(role_sexp) != n_trials ||
+      Rf_length(resp_sexp) != n_trials ||
+      Rf_length(rule_sexp) != n_trials) {
+    Rcpp::stop("LogicalRules likelihood: dadm column lengths must match n_trials.");
+  }
+
+  const bool role_is_factor = Rf_inherits(role_sexp, "factor");
+  const bool resp_is_factor = Rf_inherits(resp_sexp, "factor");
+  const bool rule_is_factor = Rf_inherits(rule_sexp, "factor");
+
+  Rcpp::IntegerVector role_code;
+  Rcpp::IntegerVector resp_code;
+  Rcpp::IntegerVector rule_code;
+  Rcpp::CharacterVector role_chr;
+  Rcpp::CharacterVector resp_chr;
+  Rcpp::CharacterVector rule_chr;
+
+  auto level_code = [](const Rcpp::CharacterVector& levels, const std::string& target) -> int {
+    for (int i = 0; i < levels.size(); ++i) {
+      if (Rcpp::as<std::string>(levels[i]) == target) return i + 1;
+    }
+    return -1;
+  };
+
+  int codeA = -1, codeB = -1, codenA = -1, codenB = -1;
+  int codeYes = -1, codeNo = -1;
+  int codeNN = -1, codeAN = -1, codeNB = -1, codeAB = -1;
+  int codeAND = -1, codeOR = -1, codeXOR = -1, codeID = -1;
+
+  if (role_is_factor) {
+    role_code = Rcpp::IntegerVector(role_sexp);
+    Rcpp::CharacterVector lev = role_code.attr("levels");
+    codeA = level_code(lev, "A");
+    codeB = level_code(lev, "B");
+    codenA = level_code(lev, "n_A");
+    codenB = level_code(lev, "n_B");
+    if (codeA < 0 || codeB < 0 || codenA < 0 || codenB < 0) {
+      Rcpp::stop("LogicalRules likelihood: lR levels must include A, B, n_A, n_B.");
+    }
+  } else {
+    role_chr = Rcpp::CharacterVector(role_sexp);
+  }
+
+  if (resp_is_factor) {
+    resp_code = Rcpp::IntegerVector(resp_sexp);
+    Rcpp::CharacterVector lev = resp_code.attr("levels");
+    codeYes = level_code(lev, "yes");
+    codeNo = level_code(lev, "no");
+    codeNN = level_code(lev, "NN");
+    codeAN = level_code(lev, "AN");
+    codeNB = level_code(lev, "NB");
+    codeAB = level_code(lev, "AB");
+    if (codeYes < 0 && codeNo < 0 && codeNN < 0 && codeAN < 0 && codeNB < 0 && codeAB < 0) {
+      Rcpp::stop("LogicalRules likelihood: response levels must include binary (yes/no) and/or ID (NN/AN/NB/AB) codes.");
+    }
+  } else {
+    resp_chr = Rcpp::CharacterVector(resp_sexp);
+  }
+
+  if (rule_is_factor) {
+    rule_code = Rcpp::IntegerVector(rule_sexp);
+    Rcpp::CharacterVector lev = rule_code.attr("levels");
+    codeAND = level_code(lev, "AND");
+    codeOR = level_code(lev, "OR");
+    codeXOR = level_code(lev, "XOR");
+    codeID = level_code(lev, "ID");
+    if (codeAND < 0 && codeOR < 0 && codeXOR < 0 && codeID < 0) {
+      Rcpp::stop("LogicalRules likelihood: LogicalRule levels must include at least one of AND, OR, XOR, ID.");
+    }
+  } else {
+    rule_chr = Rcpp::CharacterVector(rule_sexp);
+  }
+
+  out.n_unique_trials = n_trials / n_acc;
+  out.idxA.assign(out.n_unique_trials, -1);
+  out.idxB.assign(out.n_unique_trials, -1);
+  out.idxnA.assign(out.n_unique_trials, -1);
+  out.idxnB.assign(out.n_unique_trials, -1);
+  out.rule_code.assign(out.n_unique_trials, 0);
+  out.resp_code.assign(out.n_unique_trials, 0);
+  out.rt_unique.assign(out.n_unique_trials, NA_REAL);
+
+  for (int j = 0; j < out.n_unique_trials; ++j) {
+    const int start = j * n_acc;
+    out.rt_unique[static_cast<size_t>(j)] = rts[start];
+
+    int rcode = 0;
+    if (rule_is_factor) {
+      const int rc = rule_code[start];
+      if (rc == codeOR) rcode = 1;
+      else if (rc == codeAND) rcode = 2;
+      else if (rc == codeXOR) rcode = 3;
+      else if (rc == codeID) rcode = 4;
+    } else {
+      const std::string rv = Rcpp::as<std::string>(rule_chr[start]);
+      if (rv == "OR") rcode = 1;
+      else if (rv == "AND") rcode = 2;
+      else if (rv == "XOR") rcode = 3;
+      else if (rv == "ID") rcode = 4;
+    }
+    if (rcode == 0) {
+      Rcpp::stop("LogicalRules likelihood: each unique trial must have rule AND, OR, XOR, or ID.");
+    }
+    out.rule_code[static_cast<size_t>(j)] = rcode;
+
+    int resp = 0;
+    if (resp_is_factor) {
+      const int rc = resp_code[start];
+      if (rc == codeYes) resp = 1;
+      else if (rc == codeNo) resp = 2;
+      else if (rc == codeNN) resp = 3;
+      else if (rc == codeAN) resp = 4;
+      else if (rc == codeNB) resp = 5;
+      else if (rc == codeAB) resp = 6;
+    } else {
+      const std::string rv = Rcpp::as<std::string>(resp_chr[start]);
+      if (rv == "yes") resp = 1;
+      else if (rv == "no") resp = 2;
+      else if (rv == "NN") resp = 3;
+      else if (rv == "AN") resp = 4;
+      else if (rv == "NB") resp = 5;
+      else if (rv == "AB") resp = 6;
+    }
+    if (resp == 0) {
+      Rcpp::stop("LogicalRules likelihood: response must be yes/no/NN/AN/NB/AB on each unique trial.");
+    }
+    out.resp_code[static_cast<size_t>(j)] = resp;
+
+    for (int k = 0; k < n_acc; ++k) {
+      const int idx = start + k;
+      if (role_is_factor) {
+        const int rc = role_code[idx];
+        if (rc == codeA) out.idxA[static_cast<size_t>(j)] = idx;
+        else if (rc == codeB) out.idxB[static_cast<size_t>(j)] = idx;
+        else if (rc == codenA) out.idxnA[static_cast<size_t>(j)] = idx;
+        else if (rc == codenB) out.idxnB[static_cast<size_t>(j)] = idx;
+      } else {
+        const std::string rv = Rcpp::as<std::string>(role_chr[idx]);
+        if (rv == "A") out.idxA[static_cast<size_t>(j)] = idx;
+        else if (rv == "B") out.idxB[static_cast<size_t>(j)] = idx;
+        else if (rv == "n_A") out.idxnA[static_cast<size_t>(j)] = idx;
+        else if (rv == "n_B") out.idxnB[static_cast<size_t>(j)] = idx;
+      }
+    }
+
+    if (out.idxA[static_cast<size_t>(j)] < 0 ||
+        out.idxB[static_cast<size_t>(j)] < 0 ||
+        out.idxnA[static_cast<size_t>(j)] < 0 ||
+        out.idxnB[static_cast<size_t>(j)] < 0) {
+      Rcpp::stop("LogicalRules likelihood: each unique trial requires A, B, n_A, n_B accumulators.");
+    }
+  }
+
+  out.valid = true;
+  return out;
+}
+
+static RedundantTargetSharedState build_redundant_target_shared_state(const Rcpp::DataFrame& dadm,
+                                                                      int n_trials,
+                                                                      int n_acc) {
+  RedundantTargetSharedState out;
+  out.n_trials = n_trials;
+  out.n_acc = n_acc;
+  if (n_trials <= 0 || n_acc <= 0 || (n_trials % n_acc) != 0) {
+    Rcpp::stop("RedundantTarget likelihood expects n_trials > 0 and n_trials %% n_acc == 0.");
+  }
+  if (!dadm.containsElementNamed("rt") || !dadm.containsElementNamed("lR")) {
+    Rcpp::stop("RedundantTarget likelihood requires dadm columns: rt and lR.");
+  }
+
+  std::string stim_col;
+  if (dadm.containsElementNamed("S")) stim_col = "S";
+  else if (dadm.containsElementNamed("stimulus")) stim_col = "stimulus";
+  else if (dadm.containsElementNamed("condition")) stim_col = "condition";
+  else {
+    Rcpp::stop("RedundantTarget likelihood requires trial-wise stimulus column `S` (or `stimulus`/`condition`).");
+  }
+
+  Rcpp::NumericVector rts = dadm["rt"];
+  SEXP role_sexp = dadm["lR"];
+  SEXP stim_sexp = dadm[stim_col];
+  const bool has_resp_col = dadm.containsElementNamed("R");
+  SEXP resp_sexp = has_resp_col ? static_cast<SEXP>(dadm["R"]) : R_NilValue;
+  if (rts.size() != n_trials || Rf_length(role_sexp) != n_trials || Rf_length(stim_sexp) != n_trials ||
+      (has_resp_col && Rf_length(resp_sexp) != n_trials)) {
+    Rcpp::stop("RedundantTarget likelihood: dadm column lengths must match n_trials.");
+  }
+
+  const bool role_is_factor = Rf_inherits(role_sexp, "factor");
+  const bool stim_is_factor = Rf_inherits(stim_sexp, "factor");
+  const bool resp_is_factor = has_resp_col && Rf_inherits(resp_sexp, "factor");
+  Rcpp::IntegerVector role_code;
+  Rcpp::CharacterVector role_chr;
+  Rcpp::IntegerVector stim_code;
+  Rcpp::CharacterVector stim_chr;
+  Rcpp::IntegerVector resp_code;
+  Rcpp::CharacterVector resp_chr;
+
+  auto level_code = [](const Rcpp::CharacterVector& levels, const std::string& target) -> int {
+    for (int i = 0; i < levels.size(); ++i) {
+      if (Rcpp::as<std::string>(levels[i]) == target) return i + 1;
+    }
+    return -1;
+  };
+
+  int codeA = -1, codeB = -1, codeNogo = -1;
+  int stimA = -1, stimB = -1, stimAB = -1;
+  if (role_is_factor) {
+    role_code = Rcpp::IntegerVector(role_sexp);
+    Rcpp::CharacterVector lev = role_code.attr("levels");
+    codeA = level_code(lev, "A");
+    codeB = level_code(lev, "B");
+    if (codeA < 0 || codeB < 0) {
+      Rcpp::stop("RedundantTarget likelihood: lR levels must include A and B.");
+    }
+    codeNogo = level_code(lev, "nogo");
+  } else {
+    role_chr = Rcpp::CharacterVector(role_sexp);
+  }
+
+  if (stim_is_factor) {
+    stim_code = Rcpp::IntegerVector(stim_sexp);
+    Rcpp::CharacterVector lev = stim_code.attr("levels");
+    stimA = level_code(lev, "A");
+    stimB = level_code(lev, "B");
+    stimAB = level_code(lev, "AB");
+    if (stimAB < 0) {
+      const int sBA = level_code(lev, "BA");
+      if (sBA > 0) stimAB = sBA;
+    }
+    if (stimA < 0 || stimB < 0 || stimAB < 0) {
+      Rcpp::stop("RedundantTarget likelihood: stimulus levels must include A, B, AB.");
+    }
+  } else {
+    stim_chr = Rcpp::CharacterVector(stim_sexp);
+  }
+
+  int respNogo = -1;
+  if (has_resp_col) {
+    if (resp_is_factor) {
+      resp_code = Rcpp::IntegerVector(resp_sexp);
+      Rcpp::CharacterVector lev = resp_code.attr("levels");
+      respNogo = level_code(lev, "nogo");
+    } else {
+      resp_chr = Rcpp::CharacterVector(resp_sexp);
+    }
+  }
+
+  out.n_unique_trials = n_trials / n_acc;
+  out.idxA.assign(out.n_unique_trials, -1);
+  out.idxB.assign(out.n_unique_trials, -1);
+  out.idxNogo.assign(out.n_unique_trials, -1);
+  out.cond_code.assign(out.n_unique_trials, 0);
+  out.resp_code.assign(out.n_unique_trials, 0);
+  out.rt_unique.assign(out.n_unique_trials, NA_REAL);
+  out.has_nogo = false;
+
+  for (int j = 0; j < out.n_unique_trials; ++j) {
+    const int start = j * n_acc;
+    out.rt_unique[static_cast<size_t>(j)] = rts[start];
+
+    int cond = 0;
+    if (stim_is_factor) {
+      const int sc = stim_code[start];
+      if (sc == stimA) cond = 1;
+      else if (sc == stimB) cond = 2;
+      else if (sc == stimAB) cond = 3;
+    } else {
+      std::string s = Rcpp::as<std::string>(stim_chr[start]);
+      if (s == "A") cond = 1;
+      else if (s == "B") cond = 2;
+      else if (s == "AB" || s == "BA" || s == "A+B" || s == "B+A") cond = 3;
+    }
+    if (cond == 0) {
+      Rcpp::stop("RedundantTarget likelihood: each unique trial must have stimulus A, B, or AB.");
+    }
+    out.cond_code[static_cast<size_t>(j)] = cond;
+
+    int resp = 0;
+    if (has_resp_col) {
+      if (resp_is_factor) {
+        const int rc = resp_code[start];
+        if (rc == NA_INTEGER) resp = 0;
+        else if (respNogo > 0 && rc == respNogo) resp = 2;
+        else resp = 1;
+      } else {
+        if (resp_chr[start] == NA_STRING) resp = 0;
+        else {
+          const std::string rv = Rcpp::as<std::string>(resp_chr[start]);
+          if (rv == "nogo") resp = 2;
+          else resp = 1;
+        }
+      }
+    } else {
+      resp = (R_FINITE(out.rt_unique[static_cast<size_t>(j)]) && out.rt_unique[static_cast<size_t>(j)] > 0.0) ? 1 : 0;
+    }
+    out.resp_code[static_cast<size_t>(j)] = resp;
+
+    for (int k = 0; k < n_acc; ++k) {
+      const int idx = start + k;
+      if (role_is_factor) {
+        const int rc = role_code[idx];
+        if (rc == codeA) out.idxA[static_cast<size_t>(j)] = idx;
+        else if (rc == codeB) out.idxB[static_cast<size_t>(j)] = idx;
+        else if (codeNogo > 0 && rc == codeNogo) out.idxNogo[static_cast<size_t>(j)] = idx;
+      } else {
+        const std::string r = Rcpp::as<std::string>(role_chr[idx]);
+        if (r == "A") out.idxA[static_cast<size_t>(j)] = idx;
+        else if (r == "B") out.idxB[static_cast<size_t>(j)] = idx;
+        else if (r == "nogo") out.idxNogo[static_cast<size_t>(j)] = idx;
+      }
+    }
+    if (out.idxA[static_cast<size_t>(j)] < 0 || out.idxB[static_cast<size_t>(j)] < 0) {
+      Rcpp::stop("RedundantTarget likelihood: each unique trial requires A and B accumulators.");
+    }
+    if (out.idxNogo[static_cast<size_t>(j)] >= 0) out.has_nogo = true;
+  }
+
+  out.valid = true;
+  return out;
+}
+
 // [[Rcpp::export]]
 NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector constants,
                       List designs, String type, List bounds, List transforms, List pretransforms,
@@ -1189,15 +1621,24 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
                                      ssa.stop_logsurv_ptr, ssa.stop_success_ptr,
                                      ssa.idx_tf, ssa.idx_gf);
       }
-    } else {
+  } else {
     IntegerVector expand = data.attr("expand");
     LogicalVector winner = data["winner"];
+    const bool is_logicalrules = (type_std.find("LogicalRules") != std::string::npos);
+    const bool is_redundant_target = (type_std.find("RedundantTarget") != std::string::npos);
 
     RaceModelAdapter adapter = resolve_race_model_adapter(type_std, "calc_ll");
     adapter.ctx.min_lik_for_pdf = std::exp(min_ll);
 
     NumericVector lR = data["lR"];
     int n_lR = unique(lR).length();
+    LogicalRulesSharedState logicalrules_shared;
+    RedundantTargetSharedState redundant_target_shared;
+    if (is_logicalrules) {
+      logicalrules_shared = build_logicalrules_shared_state(data, n_trials, n_lR);
+    } else if (is_redundant_target) {
+      redundant_target_shared = build_redundant_target_shared_state(data, n_trials, n_lR);
+    }
 
     const bool all_finite_trials = read_all_finite_trials_attr(data, n_trials, n_lR);
       
@@ -1217,15 +1658,25 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
         }
         is_ok = c_do_bound(pars, bound_specs);
         is_ok = lr_all(is_ok, n_lR);
-        lls[i] = c_log_likelihood_race(pars, data,
-                                       adapter.pdf1_ptr, adapter.cdf1_ptr,
-                                       n_trials,
-                                       winner, expand, min_ll, is_ok, n_lR,
-                                       &adapter.ctx,
-                                       all_finite_trials,
-                                       adapter.model_dfun_raw,
-                                       adapter.model_pfun_raw,
-                                       adapter.logS_at_t_ptr);
+        if (is_logicalrules) {
+          lls[i] = c_log_likelihood_logicalrules(pars, expand, min_ll, is_ok, n_lR,
+                                                 &adapter.ctx, adapter.pdf1_ptr, adapter.cdf1_ptr,
+                                                 logicalrules_shared, nullptr);
+        } else if (is_redundant_target) {
+          lls[i] = c_log_likelihood_redundant_target_race(pars, expand, min_ll, is_ok, n_lR,
+                                                          &adapter.ctx, adapter.pdf1_ptr, adapter.cdf1_ptr,
+                                                          redundant_target_shared, nullptr);
+        } else {
+          lls[i] = c_log_likelihood_race(pars, data,
+                                         adapter.pdf1_ptr, adapter.cdf1_ptr,
+                                         n_trials,
+                                         winner, expand, min_ll, is_ok, n_lR,
+                                         &adapter.ctx,
+                                         all_finite_trials,
+                                         adapter.model_dfun_raw,
+                                         adapter.model_pfun_raw,
+                                         adapter.logS_at_t_ptr);
+        }
       }
   }
   return(lls);
@@ -1412,12 +1863,57 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
   } else {
     IntegerVector expand = data.attr("expand");
     LogicalVector winner = data["winner"];
+    const bool is_logicalrules = (type_std.find("LogicalRules") != std::string::npos);
+    const bool is_redundant_target = (type_std.find("RedundantTarget") != std::string::npos);
 
     RaceModelAdapter adapter = resolve_race_model_adapter(type_std, "calc_ll_oo");
     adapter.ctx.min_lik_for_pdf = std::exp(min_ll);
 
     NumericVector lR = data["lR"];
     int n_lR = unique(lR).length();
+
+    if (is_logicalrules) {
+      LogicalRulesSharedState logicalrules_shared =
+        build_logicalrules_shared_state(data, n_trials, n_lR);
+
+      for (int i = 0; i < n_particles; ++i) {
+        if (i > 0) {
+          param_table_template.fill_from_particle_row(particle_matrix_pt, i, pm_col_to_base_idx);
+        }
+        update_pt_only(param_table_template, designs, trend_runtime_ptr, transform_specs_pt);
+        if (i == 0) {
+          bound_specs = make_bound_specs_pt(minmax, mm_names, param_table_template, bounds);
+        }
+        is_ok = c_do_bound_pt(param_table_template, bound_specs);
+        is_ok = lr_all(is_ok, n_lR);
+        pars = param_table_template.materialize_by_param_names(keep_names);
+        lls[i] = c_log_likelihood_logicalrules(pars, expand, min_ll, is_ok, n_lR,
+                                               &adapter.ctx, adapter.pdf1_ptr, adapter.cdf1_ptr,
+                                               logicalrules_shared, nullptr);
+      }
+      return lls;
+    }
+    if (is_redundant_target) {
+      RedundantTargetSharedState redundant_target_shared =
+        build_redundant_target_shared_state(data, n_trials, n_lR);
+
+      for (int i = 0; i < n_particles; ++i) {
+        if (i > 0) {
+          param_table_template.fill_from_particle_row(particle_matrix_pt, i, pm_col_to_base_idx);
+        }
+        update_pt_only(param_table_template, designs, trend_runtime_ptr, transform_specs_pt);
+        if (i == 0) {
+          bound_specs = make_bound_specs_pt(minmax, mm_names, param_table_template, bounds);
+        }
+        is_ok = c_do_bound_pt(param_table_template, bound_specs);
+        is_ok = lr_all(is_ok, n_lR);
+        pars = param_table_template.materialize_by_param_names(keep_names);
+        lls[i] = c_log_likelihood_redundant_target_race(pars, expand, min_ll, is_ok, n_lR,
+                                                        &adapter.ctx, adapter.pdf1_ptr, adapter.cdf1_ptr,
+                                                        redundant_target_shared, nullptr);
+      }
+      return lls;
+    }
     const bool all_finite_trials = read_all_finite_trials_attr(data, n_trials, n_lR);
 
     bool has_RACE_col_fp = data.containsElementNamed("RACE");
@@ -1679,6 +2175,8 @@ NumericMatrix calc_ll_oo_pw(NumericMatrix particle_matrix, DataFrame data, Numer
   } else {
     IntegerVector expand = data.attr("expand");
     LogicalVector winner = data["winner"];
+    const bool is_logicalrules = (type_std.find("LogicalRules") != std::string::npos);
+    const bool is_redundant_target = (type_std.find("RedundantTarget") != std::string::npos);
 
     RaceModelAdapter adapter = resolve_race_model_adapter(type_std, "calc_ll_oo_pw");
     adapter.ctx.min_lik_for_pdf = std::exp(min_ll);
@@ -1689,23 +2187,40 @@ NumericMatrix calc_ll_oo_pw(NumericMatrix particle_matrix, DataFrame data, Numer
 
     const int n_out_race = (expand.length() > 0) ? expand.length() : (n_trials / n_lR);
     NumericMatrix result(n_particles, n_out_race);
+    LogicalRulesSharedState logicalrules_shared;
+    RedundantTargetSharedState redundant_target_shared;
+    if (is_logicalrules) {
+      logicalrules_shared = build_logicalrules_shared_state(data, n_trials, n_lR);
+    } else if (is_redundant_target) {
+      redundant_target_shared = build_redundant_target_shared_state(data, n_trials, n_lR);
+    }
     for (int i = 0; i < n_particles; ++i) {
       pars = pars_for_particle(i);
       if (i == 0) bound_specs = make_bound_specs(minmax, mm_names, pars, bounds);
       is_ok = c_do_bound(pars, bound_specs);
       is_ok = lr_all(is_ok, n_lR);
       NumericVector row_vec(n_out_race);
-      c_log_likelihood_race(pars, data,
-                            adapter.pdf1_ptr, adapter.cdf1_ptr,
-                            n_trials,
-                            winner, expand, min_ll, is_ok, n_lR,
-                            &adapter.ctx,
-                            all_finite_trials,
-                            adapter.model_dfun_raw,
-                            adapter.model_pfun_raw,
-                            adapter.logS_at_t_ptr,
-                            nullptr,
-                            &row_vec);
+      if (is_logicalrules) {
+        c_log_likelihood_logicalrules(pars, expand, min_ll, is_ok, n_lR,
+                                      &adapter.ctx, adapter.pdf1_ptr, adapter.cdf1_ptr,
+                                      logicalrules_shared, &row_vec);
+      } else if (is_redundant_target) {
+        c_log_likelihood_redundant_target_race(pars, expand, min_ll, is_ok, n_lR,
+                                               &adapter.ctx, adapter.pdf1_ptr, adapter.cdf1_ptr,
+                                               redundant_target_shared, &row_vec);
+      } else {
+        c_log_likelihood_race(pars, data,
+                              adapter.pdf1_ptr, adapter.cdf1_ptr,
+                              n_trials,
+                              winner, expand, min_ll, is_ok, n_lR,
+                              &adapter.ctx,
+                              all_finite_trials,
+                              adapter.model_dfun_raw,
+                              adapter.model_pfun_raw,
+                              adapter.logS_at_t_ptr,
+                              nullptr,
+                              &row_vec);
+      }
       result(i, _) = row_vec;
     }
     return result;
@@ -2063,6 +2578,480 @@ double get_trunc_normaliser_rowmajor_cpp(const double* pars_rowmajor,
   }
   if (R_FINITE(log_total) && log_total > log_prob_eps) return log_total;
   return R_NegInf;
+}
+
+static inline void copy_par_row_colmajor(const double* pars_cm_ptr,
+                                         int n_rows,
+                                         int n_par,
+                                         int row_idx,
+                                         double* out_row) {
+  for (int c = 0; c < n_par; ++c) {
+    out_row[c] = pars_cm_ptr[static_cast<size_t>(c) * n_rows + row_idx];
+  }
+}
+
+static inline bool row_equal_colmajor(const double* pars_cm_ptr,
+                                      int n_rows,
+                                      int n_par,
+                                      int row_a,
+                                      int row_b) {
+  for (int c = 0; c < n_par; ++c) {
+    if (pars_cm_ptr[static_cast<size_t>(c) * n_rows + row_a] !=
+        pars_cm_ptr[static_cast<size_t>(c) * n_rows + row_b]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+static double local_race_helper(double t,
+                                const double* par_target,
+                                const double* par_nontarget,
+                                int n_par,
+                                ContextForRaceModels* ctx,
+                                RacePdf1Fun pdf1,
+                                RaceCdf1Fun cdf1,
+                                const GslIntegrationControls& gsl_ctl,
+                                gsl_integration_workspace* w,
+                                double* pars_2buf,
+                                int* isok_2buf) {
+  if (!(t > 0.0) || !R_FINITE(t)) return 0.0;
+  if (ctx == nullptr || pdf1 == nullptr || cdf1 == nullptr || w == nullptr) return NA_REAL;
+
+  const int t0_idx = ctx->t0_index;
+  double t0_tgt = (t0_idx >= 0 && t0_idx < n_par) ? par_target[t0_idx] : 0.0;
+  double t0_nt  = (t0_idx >= 0 && t0_idx < n_par) ? par_nontarget[t0_idx] : 0.0;
+  if (t0_tgt < 0.0) t0_tgt = 0.0;
+  if (t0_nt < 0.0) t0_nt = 0.0;
+
+  if (t <= t0_tgt) return 0.0;
+
+  double term1 = 0.0;
+  const double split = std::min(t, t0_nt);
+  if (split > t0_tgt) {
+    double c_hi = cdf1(split, par_target, ctx);
+    double c_lo = cdf1(t0_tgt, par_target, ctx);
+    c_hi = clamp_cdf01_race(c_hi);
+    c_lo = clamp_cdf01_race(c_lo);
+    if (emc2_isnan(c_hi) || emc2_isnan(c_lo)) return NA_REAL;
+    term1 = c_hi - c_lo;
+    if (term1 < 0.0) term1 = 0.0;
+    if (term1 > 1.0) term1 = 1.0;
+  }
+
+  const double low_limit = std::max(t0_tgt, t0_nt);
+  if (t <= low_limit) return term1;
+
+  std::memcpy(pars_2buf, par_target, static_cast<size_t>(n_par) * sizeof(double));
+  std::memcpy(pars_2buf + n_par, par_nontarget, static_cast<size_t>(n_par) * sizeof(double));
+  isok_2buf[0] = 1;
+  isok_2buf[1] = 1;
+
+  const double log_g = integrate_for_kth_winner_rowmajor_cpp(
+    1,
+    pars_2buf,
+    isok_2buf,
+    low_limit,
+    t,
+    pdf1,
+    cdf1,
+    2,
+    n_par,
+    gsl_ctl,
+    ctx,
+    w);
+  if (!R_FINITE(log_g)) return NA_REAL;
+  double g = term1 + std::exp(log_g);
+  if (g < 0.0) g = 0.0;
+  if (g > 1.0) g = 1.0;
+  return g;
+}
+
+static double c_log_likelihood_logicalrules(
+    const Rcpp::NumericMatrix& pars,
+    const Rcpp::IntegerVector& expand,
+    double min_ll,
+    const Rcpp::LogicalVector& ok_params,
+    int n_acc,
+    ContextForRaceModels* model_ctx,
+    RacePdf1Fun pdf1,
+    RaceCdf1Fun cdf1,
+    const LogicalRulesSharedState& shared,
+    Rcpp::NumericVector* trial_ll_out) {
+  if (!shared.valid || n_acc <= 0 || pdf1 == nullptr || cdf1 == nullptr || model_ctx == nullptr) {
+    Rcpp::stop("c_log_likelihood_logicalrules: invalid logical-rules configuration.");
+  }
+  const int n_trials = shared.n_trials;
+  if (pars.nrow() != n_trials || ok_params.size() != n_trials) {
+    Rcpp::stop("c_log_likelihood_logicalrules: pars/ok_params sizes must match shared data.");
+  }
+  if (n_trials == 0) return 0.0;
+
+  static const double kMinSurv = 1e-300;
+  const int n_par = pars.ncol();
+  const int n_unique_trials = shared.n_unique_trials;
+  const double* pars_cm_ptr = pars.begin();
+  std::vector<double> ll_unique(static_cast<size_t>(n_unique_trials), min_ll);
+
+  const GslIntegrationControls gsl_ctl{1e-10, 1e-5, 200, 0.0, 1e-7, 1000};
+  GslWorkspacePtr workspace(nullptr, &gsl_integration_workspace_free);
+  workspace.reset(gsl_integration_workspace_alloc(gsl_ctl.retry_limit));
+  gsl_integration_workspace* w = workspace.get();
+
+  std::vector<double> parA(static_cast<size_t>(n_par));
+  std::vector<double> parB(static_cast<size_t>(n_par));
+  std::vector<double> parnA(static_cast<size_t>(n_par));
+  std::vector<double> parnB(static_cast<size_t>(n_par));
+  std::vector<double> pars_2buf(static_cast<size_t>(2 * n_par));
+  int isok_2buf[2] = {1, 1};
+
+  for (int j = 0; j < n_unique_trials; ++j) {
+    const int idxA = shared.idxA[static_cast<size_t>(j)];
+    const int idxB = shared.idxB[static_cast<size_t>(j)];
+    const int idxnA = shared.idxnA[static_cast<size_t>(j)];
+    const int idxnB = shared.idxnB[static_cast<size_t>(j)];
+
+    if (idxA < 0 || idxB < 0 || idxnA < 0 || idxnB < 0 ||
+        !ok_params[idxA] || !ok_params[idxB] || !ok_params[idxnA] || !ok_params[idxnB]) {
+      ll_unique[static_cast<size_t>(j)] = min_ll;
+      continue;
+    }
+
+    const double t = shared.rt_unique[static_cast<size_t>(j)];
+    if (!(t > 0.0) || !R_FINITE(t)) {
+      ll_unique[static_cast<size_t>(j)] = min_ll;
+      continue;
+    }
+
+    copy_par_row_colmajor(pars_cm_ptr, n_trials, n_par, idxA, parA.data());
+    copy_par_row_colmajor(pars_cm_ptr, n_trials, n_par, idxB, parB.data());
+    copy_par_row_colmajor(pars_cm_ptr, n_trials, n_par, idxnA, parnA.data());
+    copy_par_row_colmajor(pars_cm_ptr, n_trials, n_par, idxnB, parnB.data());
+
+    auto eval_pdf_cdf = [&](const double* p_row, double& f_out, double& F_out) -> bool {
+      const double f = pdf1(t, p_row, model_ctx);
+      if (!R_FINITE(f) || f < 0.0) return false;
+      double F = cdf1(t, p_row, model_ctx);
+      F = clamp_cdf01_race(F);
+      if (!R_FINITE(F) || emc2_isnan(F)) return false;
+      f_out = f;
+      F_out = F;
+      return true;
+    };
+
+    double fA = 0.0, fB = 0.0, fnA = 0.0, fnB = 0.0;
+    double FA = 0.0, FB = 0.0, FnA = 0.0, FnB = 0.0;
+    if (!eval_pdf_cdf(parA.data(), fA, FA) ||
+        !eval_pdf_cdf(parB.data(), fB, FB) ||
+        !eval_pdf_cdf(parnA.data(), fnA, FnA) ||
+        !eval_pdf_cdf(parnB.data(), fnB, FnB)) {
+      ll_unique[static_cast<size_t>(j)] = min_ll;
+      continue;
+    }
+
+    const double one_m_FA = std::max(kMinSurv, 1.0 - FA);
+    const double one_m_FB = std::max(kMinSurv, 1.0 - FB);
+    const double one_m_FnA = std::max(kMinSurv, 1.0 - FnA);
+    const double one_m_FnB = std::max(kMinSurv, 1.0 - FnB);
+
+    const double gA_yes = fA * one_m_FnA;
+    const double gB_yes = fB * one_m_FnB;
+    const double gA_no = fnA * one_m_FA;
+    const double gB_no = fnB * one_m_FB;
+
+    const double S_dec_A = one_m_FA * one_m_FnA;
+    const double S_dec_B = one_m_FB * one_m_FnB;
+
+    const int rule_code = shared.rule_code[static_cast<size_t>(j)];
+    const int resp_code = shared.resp_code[static_cast<size_t>(j)];
+    const bool is_or_rule = (rule_code == 1);
+    const bool is_and_rule = (rule_code == 2);
+    const bool is_xor_rule = (rule_code == 3);
+    const bool is_id_rule = (rule_code == 4);
+
+    double p_j = 0.0;
+    if (is_or_rule || is_and_rule) {
+      const double GA_no = local_race_helper(t, parnA.data(), parA.data(), n_par, model_ctx,
+                                             pdf1, cdf1, gsl_ctl, w, pars_2buf.data(), isok_2buf);
+      double GB_no = GA_no;
+      if (!row_equal_colmajor(pars_cm_ptr, n_trials, n_par, idxnA, idxnB) ||
+          !row_equal_colmajor(pars_cm_ptr, n_trials, n_par, idxA, idxB)) {
+        GB_no = local_race_helper(t, parnB.data(), parB.data(), n_par, model_ctx,
+                                  pdf1, cdf1, gsl_ctl, w, pars_2buf.data(), isok_2buf);
+      }
+      if (!R_FINITE(GA_no) || !R_FINITE(GB_no)) {
+        ll_unique[static_cast<size_t>(j)] = min_ll;
+        continue;
+      }
+      const double s_GA_yes = std::min(1.0, std::max(kMinSurv, GA_no + S_dec_A));
+      const double s_GB_yes = std::min(1.0, std::max(kMinSurv, GB_no + S_dec_B));
+      if (is_or_rule) {
+        if (resp_code == 1) p_j = gA_yes * s_GB_yes + gB_yes * s_GA_yes; // yes
+        else if (resp_code == 2) p_j = gA_no * GB_no + gB_no * GA_no;    // no
+      } else { // AND
+        const double GA_yes = std::min(1.0, std::max(0.0, 1.0 - S_dec_A - GA_no));
+        const double GB_yes = std::min(1.0, std::max(0.0, 1.0 - S_dec_B - GB_no));
+        const double s_GA_no = std::min(1.0, std::max(kMinSurv, GA_yes + S_dec_A));
+        const double s_GB_no = std::min(1.0, std::max(kMinSurv, GB_yes + S_dec_B));
+        if (resp_code == 1) p_j = gA_yes * GB_yes + gB_yes * GA_yes;      // yes
+        else if (resp_code == 2) p_j = gA_no * s_GB_no + gB_no * s_GA_no; // no
+      }
+    } else if (is_xor_rule || is_id_rule) {
+      const double GA_yes = local_race_helper(t, parA.data(), parnA.data(), n_par, model_ctx,
+                                              pdf1, cdf1, gsl_ctl, w, pars_2buf.data(), isok_2buf);
+      double GB_yes = GA_yes;
+      if (!row_equal_colmajor(pars_cm_ptr, n_trials, n_par, idxA, idxB) ||
+          !row_equal_colmajor(pars_cm_ptr, n_trials, n_par, idxnA, idxnB)) {
+        GB_yes = local_race_helper(t, parB.data(), parnB.data(), n_par, model_ctx,
+                                   pdf1, cdf1, gsl_ctl, w, pars_2buf.data(), isok_2buf);
+      }
+      if (!R_FINITE(GA_yes) || !R_FINITE(GB_yes)) {
+        ll_unique[static_cast<size_t>(j)] = min_ll;
+        continue;
+      }
+      const double GA_no = std::min(1.0, std::max(0.0, 1.0 - S_dec_A - GA_yes));
+      const double GB_no = std::min(1.0, std::max(0.0, 1.0 - S_dec_B - GB_yes));
+      const double dAB = gA_yes * GB_yes + gB_yes * GA_yes;
+      const double dAN = gA_yes * GB_no + gB_no * GA_yes;
+      const double dNB = gA_no * GB_yes + gB_yes * GA_no;
+      const double dNN = gA_no * GB_no + gB_no * GA_no;
+
+      if (is_id_rule) {
+        if (resp_code == 6) p_j = dAB;
+        else if (resp_code == 4) p_j = dAN;
+        else if (resp_code == 5) p_j = dNB;
+        else if (resp_code == 3) p_j = dNN;
+      } else { // XOR
+        if (resp_code == 1) p_j = dAN + dNB; // yes
+        else if (resp_code == 2) p_j = dAB + dNN; // no
+      }
+    } else {
+      ll_unique[static_cast<size_t>(j)] = min_ll;
+      continue;
+    }
+
+    if (!(p_j > 0.0) || !R_FINITE(p_j)) {
+      ll_unique[static_cast<size_t>(j)] = min_ll;
+    } else {
+      const double ll = std::log(p_j);
+      ll_unique[static_cast<size_t>(j)] = (R_FINITE(ll) && ll > min_ll) ? ll : min_ll;
+    }
+  }
+
+  double sum_ll = 0.0;
+  if (expand.length() > 0) {
+    const int n_out = expand.length();
+    if (trial_ll_out != nullptr && trial_ll_out->size() != n_out) {
+      Rcpp::stop("c_log_likelihood_logicalrules: trial_ll_out size mismatch (expand path).");
+    }
+    for (int i = 0; i < n_out; ++i) {
+      double val = ll_unique[static_cast<size_t>(expand[i] - 1)];
+      if (!R_FINITE(val) || val < min_ll) val = min_ll;
+      if (trial_ll_out != nullptr) (*trial_ll_out)[i] = val;
+      sum_ll += val;
+    }
+  } else {
+    const int n_out = n_unique_trials;
+    if (trial_ll_out != nullptr && trial_ll_out->size() != n_out) {
+      Rcpp::stop("c_log_likelihood_logicalrules: trial_ll_out size mismatch (compressed path).");
+    }
+    for (int j = 0; j < n_unique_trials; ++j) {
+      double val = ll_unique[static_cast<size_t>(j)];
+      if (!R_FINITE(val) || val < min_ll) val = min_ll;
+      if (trial_ll_out != nullptr) (*trial_ll_out)[j] = val;
+      sum_ll += val;
+    }
+  }
+  return sum_ll;
+}
+
+// Port of redundant-target race likelihood adapted to the refactored scalar
+// adapters and column-major parameter storage used in calc_ll_oo.
+// This function is intentionally kept standalone for now (wrapper wiring can
+// be added via a dedicated c_name tag when model wrappers are ready).
+static double c_log_likelihood_redundant_target_race(
+    const Rcpp::NumericMatrix& pars,
+    const Rcpp::IntegerVector& expand,
+    double min_ll,
+    const Rcpp::LogicalVector& ok_params,
+    int n_acc,
+    ContextForRaceModels* model_ctx,
+    RacePdf1Fun pdf1,
+    RaceCdf1Fun cdf1,
+    const RedundantTargetSharedState& shared,
+    Rcpp::NumericVector* trial_ll_out) {
+  if (!shared.valid || n_acc <= 0 || pdf1 == nullptr || cdf1 == nullptr || model_ctx == nullptr) {
+    Rcpp::stop("c_log_likelihood_redundant_target_race: invalid redundant-target configuration.");
+  }
+  const int n_trials = shared.n_trials;
+  if (pars.nrow() != n_trials || ok_params.size() != n_trials) {
+    Rcpp::stop("c_log_likelihood_redundant_target_race: pars/ok_params sizes must match shared data.");
+  }
+  if (n_trials == 0) return 0.0;
+
+  static const double kMinSurv = 1e-12;
+  const int n_par = pars.ncol();
+  const int n_unique_trials = shared.n_unique_trials;
+  const double* pars_cm_ptr = pars.begin();
+  std::vector<double> ll_unique(static_cast<size_t>(n_unique_trials), min_ll);
+  std::vector<double> parA(static_cast<size_t>(n_par));
+  std::vector<double> parB(static_cast<size_t>(n_par));
+  std::vector<double> parN(static_cast<size_t>(n_par));
+  std::vector<double> pars_rowmajor_buf(static_cast<size_t>(3 * n_par));
+  int isok_buf[3] = {1, 1, 1};
+
+  const GslIntegrationControls gsl_ctl{1e-10, 1e-5, 200, 0.0, 1e-7, 1000};
+  GslWorkspacePtr workspace(nullptr, &gsl_integration_workspace_free);
+  workspace.reset(gsl_integration_workspace_alloc(gsl_ctl.retry_limit));
+  gsl_integration_workspace* w = workspace.get();
+
+  auto eval_pdf_cdf = [&](double t, const double* p_row, double& f_out, double& F_out) -> bool {
+    const double f = pdf1(t, p_row, model_ctx);
+    if (!R_FINITE(f) || f < 0.0) return false;
+    double F = cdf1(t, p_row, model_ctx);
+    F = clamp_cdf01_race(F);
+    if (!R_FINITE(F) || emc2_isnan(F)) return false;
+    f_out = f;
+    F_out = F;
+    return true;
+  };
+
+  auto safe_surv_inf = [&](const double* p_row) -> double {
+    double F_inf = cdf1(R_PosInf, p_row, model_ctx);
+    F_inf = clamp_cdf01_race(F_inf);
+    if (!R_FINITE(F_inf) || emc2_isnan(F_inf)) return 0.0;
+    return std::max(kMinSurv, 1.0 - F_inf);
+  };
+
+  for (int j = 0; j < n_unique_trials; ++j) {
+    const int idxA = shared.idxA[static_cast<size_t>(j)];
+    const int idxB = shared.idxB[static_cast<size_t>(j)];
+    const int idxN = shared.idxNogo[static_cast<size_t>(j)];
+    const bool use_nogo = (idxN >= 0);
+
+    if (idxA < 0 || idxB < 0 || !ok_params[idxA] || !ok_params[idxB] ||
+        (use_nogo && !ok_params[idxN])) {
+      ll_unique[static_cast<size_t>(j)] = min_ll;
+      continue;
+    }
+
+    copy_par_row_colmajor(pars_cm_ptr, n_trials, n_par, idxA, parA.data());
+    copy_par_row_colmajor(pars_cm_ptr, n_trials, n_par, idxB, parB.data());
+    if (use_nogo) copy_par_row_colmajor(pars_cm_ptr, n_trials, n_par, idxN, parN.data());
+
+    const double t = shared.rt_unique[static_cast<size_t>(j)];
+    const int cond = shared.cond_code[static_cast<size_t>(j)];
+    const int resp = shared.resp_code[static_cast<size_t>(j)];
+    const bool finite_rt = (R_FINITE(t) && t > 0.0);
+
+    double p = 0.0;
+    if (cond < 1 || cond > 3) {
+      ll_unique[static_cast<size_t>(j)] = min_ll;
+      continue;
+    }
+
+    if (finite_rt) {
+      if (resp != 1) {
+        ll_unique[static_cast<size_t>(j)] = min_ll;
+        continue;
+      }
+
+      double fA = 0.0, FA = 0.0, fB = 0.0, FB = 0.0, fN = 0.0, FN = 0.0;
+      if (!eval_pdf_cdf(t, parA.data(), fA, FA) || !eval_pdf_cdf(t, parB.data(), fB, FB)) {
+        ll_unique[static_cast<size_t>(j)] = min_ll;
+        continue;
+      }
+      if (use_nogo && !eval_pdf_cdf(t, parN.data(), fN, FN)) {
+        ll_unique[static_cast<size_t>(j)] = min_ll;
+        continue;
+      }
+
+      const double S_A = std::max(kMinSurv, 1.0 - FA);
+      const double S_B = std::max(kMinSurv, 1.0 - FB);
+      const double S_N = use_nogo ? std::max(kMinSurv, 1.0 - FN) : 1.0;
+      if (cond == 1) {
+        p = fA * S_N;
+      } else if (cond == 2) {
+        p = fB * S_N;
+      } else { // AB
+        p = (fA * S_B + fB * S_A) * S_N;
+      }
+    } else {
+      // Omission / no-response path: allow missing response code and explicit "nogo".
+      if (resp != 0 && resp != 2) {
+        ll_unique[static_cast<size_t>(j)] = min_ll;
+        continue;
+      }
+
+      const double S_A_inf = safe_surv_inf(parA.data());
+      const double S_B_inf = safe_surv_inf(parB.data());
+      if (!use_nogo) {
+        if (cond == 1) p = S_A_inf;
+        else if (cond == 2) p = S_B_inf;
+        else p = S_A_inf * S_B_inf;
+      } else {
+        const double S_N_inf = safe_surv_inf(parN.data());
+        double p_none = 0.0;
+        if (cond == 1) p_none = S_A_inf * S_N_inf;
+        else if (cond == 2) p_none = S_B_inf * S_N_inf;
+        else p_none = S_A_inf * S_B_inf * S_N_inf;
+
+        // Integrate probability that nogo wins the race at finite times.
+        std::memcpy(pars_rowmajor_buf.data(), parN.data(), static_cast<size_t>(n_par) * sizeof(double));
+        int n_active = 1;
+        if (cond == 1) {
+          std::memcpy(pars_rowmajor_buf.data() + n_par, parA.data(), static_cast<size_t>(n_par) * sizeof(double));
+          n_active = 2;
+        } else if (cond == 2) {
+          std::memcpy(pars_rowmajor_buf.data() + n_par, parB.data(), static_cast<size_t>(n_par) * sizeof(double));
+          n_active = 2;
+        } else {
+          std::memcpy(pars_rowmajor_buf.data() + n_par, parA.data(), static_cast<size_t>(n_par) * sizeof(double));
+          std::memcpy(pars_rowmajor_buf.data() + 2 * n_par, parB.data(), static_cast<size_t>(n_par) * sizeof(double));
+          n_active = 3;
+        }
+        for (int k = 0; k < n_active; ++k) isok_buf[k] = 1;
+        const double log_nogo_win = integrate_for_kth_winner_rowmajor_cpp(
+          1, pars_rowmajor_buf.data(), isok_buf, 0.0, R_PosInf, pdf1, cdf1,
+          n_active, n_par, gsl_ctl, model_ctx, w);
+        const double p_nogo_win = R_FINITE(log_nogo_win) ? std::exp(log_nogo_win) : 0.0;
+        p = p_nogo_win + p_none;
+      }
+    }
+
+    if (!(p > 0.0) || !R_FINITE(p)) {
+      ll_unique[static_cast<size_t>(j)] = min_ll;
+    } else {
+      const double ll = std::log(p);
+      ll_unique[static_cast<size_t>(j)] = (R_FINITE(ll) && ll > min_ll) ? ll : min_ll;
+    }
+  }
+
+  double sum_ll = 0.0;
+  if (expand.length() > 0) {
+    const int n_out = expand.length();
+    if (trial_ll_out != nullptr && trial_ll_out->size() != n_out) {
+      Rcpp::stop("c_log_likelihood_redundant_target_race: trial_ll_out size mismatch (expand path).");
+    }
+    for (int i = 0; i < n_out; ++i) {
+      double val = ll_unique[static_cast<size_t>(expand[i] - 1)];
+      if (!R_FINITE(val) || val < min_ll) val = min_ll;
+      if (trial_ll_out != nullptr) (*trial_ll_out)[i] = val;
+      sum_ll += val;
+    }
+  } else {
+    const int n_out = n_unique_trials;
+    if (trial_ll_out != nullptr && trial_ll_out->size() != n_out) {
+      Rcpp::stop("c_log_likelihood_redundant_target_race: trial_ll_out size mismatch (compressed path).");
+    }
+    for (int j = 0; j < n_unique_trials; ++j) {
+      double val = ll_unique[static_cast<size_t>(j)];
+      if (!R_FINITE(val) || val < min_ll) val = min_ll;
+      if (trial_ll_out != nullptr) (*trial_ll_out)[j] = val;
+      sum_ll += val;
+    }
+  }
+  return sum_ll;
 }
 
 // Main C++ function for censored/truncated race likelihood calculation

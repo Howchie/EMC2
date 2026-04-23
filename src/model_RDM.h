@@ -155,6 +155,112 @@ double pwald(double t, double b, double mu, double sigma = 1.0, double A = 0.0,
 }
 
 // --------------------------------------------------------------------------
+// GBM first-passage with physical-space start-point variability.
+// Process: dX_t = mu X_t dt + sigma X_t dW_t, start X0 ~ Unif(1, 1 + A).
+// Boundary: absorb at X_t = b (b > 0).
+// In log-space this is a Wald kernel with drift (mu - 0.5*sigma^2), diffusion
+// sigma, and start range [log(1), log(1 + A)] weighted by exp(x0).
+// --------------------------------------------------------------------------
+// [[Rcpp::export]]
+double dgbm(double t, double b, double mu, double sigma = 1.0, double A = 0.0,
+            bool log_out = false) {
+  if (!(t > FPM_EPSILON) || !(sigma > FPM_EPSILON) || !(b > FPM_EPSILON) || !(A >= 0.0)) {
+    return log_out ? R_NegInf : 0.0;
+  }
+
+  const double x_lo = 0.0;
+  const double x_hi = std::log1p(A);
+  const double log_b = std::log(b);
+  const double log_mu = mu - 0.5 * sigma * sigma;
+  const double var = sigma * sigma * t;
+  const double span = x_hi - x_lo;
+
+  // Point-start fallback: A = 0 -> X0 = 1.
+  if (span <= FPM_EPSILON) {
+    const double d = log_b - x_hi;
+    if (d <= 0.0) return (t == 0.0) ? std::numeric_limits<double>::infinity() : (log_out ? R_NegInf : 0.0);
+    const double delta = d - log_mu * t;
+    const double pdf_val = d / t * Gstar(var, delta);
+    if (!(pdf_val > 0.0) || !std::isfinite(pdf_val)) return log_out ? R_NegInf : 0.0;
+    return log_out ? std::log(pdf_val) : pdf_val;
+  }
+
+  // Normalization for start density on [1, 1 + A] mapped to log-space.
+  const double norm_const = A;
+  if (!(norm_const > FPM_EPSILON)) return log_out ? R_NegInf : 0.0;
+
+  // Complete-the-square form of the weighted Gaussian integral.
+  const double mu_new_exp = log_b - log_mu * t + var;
+  const double exp_factor = std::exp(log_b - log_mu * t + 0.5 * var);
+  const double pdf_hi = Gstar(var, x_hi - mu_new_exp);
+  const double pdf_lo = Gstar(var, x_lo - mu_new_exp);
+  const double cdf_integral = Gstar_Integral(var, mu_new_exp, x_lo, x_hi);
+
+  const double integral_term1 = (log_mu * t - var) * cdf_integral;
+  const double integral_term2 = var * (pdf_hi - pdf_lo);
+  const double integral_result = integral_term1 + integral_term2;
+  const double pdf_val = (exp_factor * integral_result) / (norm_const * t);
+
+  if (!(pdf_val > 0.0) || !std::isfinite(pdf_val)) return log_out ? R_NegInf : 0.0;
+  return log_out ? std::log(pdf_val) : pdf_val;
+}
+
+// [[Rcpp::export]]
+double pgbm(double t, double b, double mu, double sigma = 1.0, double A = 0.0,
+            bool log_out = false) {
+  if (!(b > FPM_EPSILON) || !(sigma > FPM_EPSILON) || !(A >= 0.0)) {
+    return log_out ? R_NegInf : 0.0;
+  }
+  if (t <= FPM_EPSILON) return log_out ? R_NegInf : 0.0;
+
+  const double x_lo = 0.0;
+  const double x_hi = std::log1p(A);
+  const double log_b = std::log(b);
+  const double log_mu = mu - 0.5 * sigma * sigma;
+  const double st = sigma * std::sqrt(t);
+  const double norm_const = A;
+
+  // Point-start fallback: A = 0 -> X0 = 1.
+  if (!(norm_const > FPM_EPSILON)) {
+    const double dist = log_b - x_hi;
+    if (st <= FPM_EPSILON) {
+      const double cdf_val = (log_mu > 0.0) ? 1.0 : 0.0;
+      return log_out ? std::log(cdf_val) : cdf_val;
+    }
+    const double term1_arg = (log_mu * t - dist) / st;
+    const double term2_arg = (-log_mu * t - dist) / st;
+    const double cdf1 = pnorm_std(term1_arg, true, false);
+    const double cdf2 = pnorm_std(term2_arg, true, false);
+    const double exp_term = std::exp(2.0 * log_mu * dist / (sigma * sigma));
+
+    double cdf_val = cdf1 + exp_term * cdf2;
+    if (!std::isfinite(exp_term)) cdf_val = 1.0;
+    cdf_val = std::fmax(0.0, std::fmin(1.0, cdf_val));
+    if (cdf_val <= 0.0) return log_out ? R_NegInf : 0.0;
+    return log_out ? std::log(cdf_val) : cdf_val;
+  }
+
+  if (st <= FPM_EPSILON) {
+    const double cdf_val = (log_mu > 0.0) ? 1.0 : 0.0;
+    return log_out ? std::log(cdf_val) : cdf_val;
+  }
+
+  const double k_log = 2.0 * log_mu / (sigma * sigma);
+
+  // (1/A) * ∫_{log(1)}^{log(1+A)} F(t | x0) * exp(x0) dx0
+  const double term1_integral =
+    integrate_exp_times_normal_cdf(1.0, 1.0 / st, (log_mu * t - log_b) / st, x_lo, x_hi);
+  const double term2_integral =
+    std::exp(k_log * log_b) *
+    integrate_exp_times_normal_cdf(1.0 - k_log, 1.0 / st, (-log_mu * t - log_b) / st, x_lo, x_hi);
+
+  double cdf_val = (term1_integral + term2_integral) / norm_const;
+  cdf_val = std::fmax(0.0, std::fmin(1.0, cdf_val));
+  if (cdf_val <= 0.0) return log_out ? R_NegInf : 0.0;
+  return log_out ? std::log(cdf_val) : cdf_val;
+}
+
+// --------------------------------------------------------------------------
 // SWTN: Shifted Wald with Truncated-Normal drift variability.
 // No start-point variability (fixed threshold = threshold param).
 // sv  = SD of between-trial drift distribution N(mu_drift, sv^2) [truncated at 0].
@@ -379,6 +485,43 @@ NumericVector pSWTNspv(NumericVector t, NumericVector v, NumericVector b,
     if (t_adj <= 0.0) { cdf[i] = log_out ? R_NegInf : 0.0; continue; }
     cdf[i] = prdmswtn(t_adj, pick(b, i), pick(v, i), pick(A, i),
                       pick(sv, i), pick(s, i), pick(c, i), n_gauss_nodes, log_out);
+  }
+  return cdf;
+}
+
+// --------------------------------------------------------------------------
+// GBM vectorized wrappers.
+// --------------------------------------------------------------------------
+// [[Rcpp::export]]
+NumericVector dGBMspv(NumericVector t, NumericVector v, NumericVector b,
+                      NumericVector A, NumericVector t0, NumericVector s = 1.0,
+                      bool log_out = false) {
+  const int n = t.size();
+  NumericVector pdf(n);
+  auto pick = [](const NumericVector& vec, int i) -> double {
+    return vec.size() == 1 ? vec[0] : vec[i];
+  };
+  for (int i = 0; i < n; ++i) {
+    const double t_adj = t[i] - pick(t0, i);
+    if (t_adj <= 0.0) { pdf[i] = log_out ? R_NegInf : 0.0; continue; }
+    pdf[i] = dgbm(t_adj, pick(b, i), pick(v, i), pick(s, i), pick(A, i), log_out);
+  }
+  return pdf;
+}
+
+// [[Rcpp::export]]
+NumericVector pGBMspv(NumericVector t, NumericVector v, NumericVector b,
+                      NumericVector A, NumericVector t0, NumericVector s = 1.0,
+                      bool log_out = false) {
+  const int n = t.size();
+  NumericVector cdf(n);
+  auto pick = [](const NumericVector& vec, int i) -> double {
+    return vec.size() == 1 ? vec[0] : vec[i];
+  };
+  for (int i = 0; i < n; ++i) {
+    const double t_adj = t[i] - pick(t0, i);
+    if (t_adj <= 0.0) { cdf[i] = log_out ? R_NegInf : 0.0; continue; }
+    cdf[i] = pgbm(t_adj, pick(b, i), pick(v, i), pick(s, i), pick(A, i), log_out);
   }
   return cdf;
 }

@@ -200,6 +200,132 @@ RDM <- function(){
 }
 
 # ============================================================================
+# RDMGBM: Racing Geometric Brownian Motion with start-point variability
+# ============================================================================
+
+dRDMGBM <- function(rt, pars) {
+  if (is.null(dim(pars)) || (dim(pars)[1] == 1 & length(rt) > 1)) {
+    original_names <- names(pars); if (is.null(original_names)) original_names <- colnames(pars)
+    pars <- matrix(pars, nrow=length(rt), ncol=length(pars),
+                   dimnames=list(NULL, original_names), byrow=TRUE)
+  }
+  if (!("b" %in% colnames(pars)) && all(c("B", "A") %in% colnames(pars))) {
+    pars <- cbind(pars, b=1 + pars[, "B"] + pars[, "A"])
+  }
+  out <- rep(NaN, length(rt))
+  ok <- rt > pars[, "t0", drop=FALSE] & !pars[, "v", drop=FALSE] < 0
+  ok[is.na(ok)] <- FALSE
+  if (any(ok)) {
+    if ("s" %in% colnames(pars)) {
+      pars_ok <- pars[ok, , drop=FALSE]
+      pars_ok[, c("A", "b", "v")] <- pars_ok[, c("A", "b", "v")] / pars_ok[, "s"]
+      pars[ok, ] <- pars_ok
+    }
+    out[ok] <- dGBMspv(rt[ok], v=pars[ok, "v", drop=FALSE], b=pars[ok, "b", drop=FALSE],
+                       A=pars[ok, "A", drop=FALSE], t0=pars[ok, "t0", drop=FALSE])
+  }
+  out
+}
+
+pRDMGBM <- function(rt, pars) {
+  if (is.null(dim(pars)) || (dim(pars)[1] == 1 & length(rt) > 1)) {
+    original_names <- names(pars); if (is.null(original_names)) original_names <- colnames(pars)
+    pars <- matrix(pars, nrow=length(rt), ncol=length(pars),
+                   dimnames=list(NULL, original_names), byrow=TRUE)
+  }
+  if (!("b" %in% colnames(pars)) && all(c("B", "A") %in% colnames(pars))) {
+    pars <- cbind(pars, b=1 + pars[, "B"] + pars[, "A"])
+  }
+  out <- rep(NaN, length(rt))
+  ok <- rt > pars[, "t0", drop=FALSE] & !pars[, "v", drop=FALSE] < 0
+  ok[is.na(ok)] <- FALSE
+  if (any(ok)) {
+    if ("s" %in% colnames(pars)) {
+      pars_ok <- pars[ok, , drop=FALSE]
+      pars_ok[, c("A", "b", "v")] <- pars_ok[, c("A", "b", "v")] / pars_ok[, "s"]
+      pars[ok, ] <- pars_ok
+    }
+    out[ok] <- pGBMspv(rt[ok], v=pars[ok, "v", drop=FALSE], b=pars[ok, "b", drop=FALSE],
+                       A=pars[ok, "A", drop=FALSE], t0=pars[ok, "t0", drop=FALSE])
+  }
+  out
+}
+
+rGBM <- function(n, b, v, A) {
+  out <- rep(Inf, n)
+  if (n <= 0) return(out)
+  if (n > 1 && all(length(b) == 1, length(v) == 1, length(A) == 1)) {
+    b <- rep(b, n); v <- rep(v, n); A <- rep(A, n)
+  }
+  A[A < 0] <- 0
+  x0 <- 1 + runif(n, 0, A)
+  d <- log(b / x0)
+  mu_log <- v - 0.5
+  ok <- is.finite(mu_log) & (mu_log > 0) & is.finite(d) & (d > 0)
+  if (any(ok)) {
+    out[ok] <- statmod::rinvgauss(sum(ok), mean=d[ok] / mu_log[ok], shape=d[ok]^2)
+  }
+  out
+}
+
+rRDMGBM <- function(lR, pars, p_types=c("v", "B", "A", "t0"), ok=rep(TRUE, dim(pars)[1])) {
+  if (!("b" %in% dimnames(pars)[[2]]) && all(c("B", "A") %in% dimnames(pars)[[2]])) {
+    pars <- cbind(pars, b=1 + pars[, "B"] + pars[, "A"])
+  }
+  required <- c("v", "b", "A", "t0")
+  if (!all(required %in% dimnames(pars)[[2]]))
+    stop("pars must have columns ", paste(required, collapse = " "))
+  if (any(dimnames(pars)[[2]] == "s"))
+    pars[, c("A", "b", "v")] <- pars[, c("A", "b", "v")] / pars[, "s"]
+  pars[, "b"][pars[, "b"] < 1 + 1e-8] <- 1 + 1e-8
+  pars[, "A"][pars[, "A"] < 0] <- 0
+  bad <- rep(NA, length(lR) / length(levels(lR)))
+  out <- data.frame(R = bad, rt = bad)
+  nr <- length(levels(lR))
+  dt <- matrix(Inf, nrow = nr, ncol = nrow(pars) / nr)
+  t0 <- pars[, "t0"]
+  pars <- pars[ok, , drop = FALSE]
+  dt[ok] <- rGBM(sum(ok), b = pars[, "b"], v = pars[, "v"], A = pars[, "A"])
+  R <- max.col(-t(dt), ties.method = "first")
+  pick <- cbind(R, 1:dim(dt)[2])
+  rt <- matrix(t0, nrow = nr)[pick] + dt[pick]
+  out$R <- levels(lR)[R]
+  out$R <- factor(out$R, levels = levels(lR))
+  out$rt <- rt
+  out
+}
+
+#' RDMGBM Model
+#'
+#' Racing geometric Brownian first-passage model with start-point variability.
+#' Equivalent parameterization to RDMSWTN without `sv`.
+#'
+#' @export
+RDMGBM <- function() {
+  list(
+    type = "RACE",
+    c_name = "RDMGBM",
+    p_types = c("v"=log(1), "B"=log(1), "A"=log(0), "t0"=log(0),
+                "s"=log(1), "pContaminant"=qnorm(0)),
+    transform = list(func = c(v="exp", B="exp", A="exp", t0="exp",
+                               s="exp", pContaminant="pnorm")),
+    bound = list(minmax = cbind(v=c(1e-3, Inf), B=c(0, Inf), A=c(0, Inf),
+                                t0=c(0.05, Inf), s=c(0, Inf), pContaminant=c(0.001, 0.999)),
+                 exception = c(A=0, v=0, pContaminant=0)),
+    Ttransform = function(pars, dadm) {
+      pars <- cbind(pars, b=1 + pars[, "B"] + pars[, "A"])
+      pars
+    },
+    rfun = function(data=NULL, pars) rRDMGBM(data$lR, pars, ok=attr(pars, "ok")),
+    dfun = function(rt, pars) dRDMGBM(rt, pars),
+    pfun = function(rt, pars) pRDMGBM(rt, pars),
+    log_likelihood = function(pars, dadm, model, min_ll=log(1e-10)) {
+      log_likelihood_race_missing(pars=pars, dadm=dadm, model=model, min_ll=min_ll)
+    }
+  )
+}
+
+# ============================================================================
 # RDMSWTN: Racing Diffusion Model with Shifted Wald Truncated Normal
 # Superset of RDM: sv=0,A=0 reduces to point Wald; sv=0 reduces to standard RDM
 # ============================================================================

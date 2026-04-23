@@ -69,6 +69,14 @@ pwald <- function(t, b, mu, sigma = 1.0, A = 0.0, log_out = FALSE) {
     .Call(`_EMC2_pwald`, t, b, mu, sigma, A, log_out)
 }
 
+dgbm <- function(t, b, mu, sigma = 1.0, A = 0.0, log_out = FALSE) {
+    .Call(`_EMC2_dgbm`, t, b, mu, sigma, A, log_out)
+}
+
+pgbm <- function(t, b, mu, sigma = 1.0, A = 0.0, log_out = FALSE) {
+    .Call(`_EMC2_pgbm`, t, b, mu, sigma, A, log_out)
+}
+
 dswtn <- function(t_adj, threshold, mu_drift, sv, s = 1.0, c = 0.0, log_out = FALSE) {
     .Call(`_EMC2_dswtn`, t_adj, threshold, mu_drift, sv, s, c, log_out)
 }
@@ -91,6 +99,14 @@ dSWTNspv <- function(t, v, b, A, t0, sv, s = 1.0, c = 0.0, n_gauss_nodes = 20L, 
 
 pSWTNspv <- function(t, v, b, A, t0, sv, s = 1.0, c = 0.0, n_gauss_nodes = 20L, log_out = FALSE) {
     .Call(`_EMC2_pSWTNspv`, t, v, b, A, t0, sv, s, c, n_gauss_nodes, log_out)
+}
+
+dGBMspv <- function(t, v, b, A, t0, s = 1.0, log_out = FALSE) {
+    .Call(`_EMC2_dGBMspv`, t, v, b, A, t0, s, log_out)
+}
+
+pGBMspv <- function(t, v, b, A, t0, s = 1.0, log_out = FALSE) {
+    .Call(`_EMC2_pGBMspv`, t, v, b, A, t0, s, log_out)
 }
 
 dEXGrace <- function(dt, mu, sigma, tau, min_ll) {
@@ -308,6 +324,7 @@ run_trend_rcpp <- function(data, trend, param, trend_pars, pars_full, return_ker
 c_add_charvectors <- function(x, y) {
     .Call(`_EMC2_c_add_charvectors`, x, y)
 }
+
 pigt <- function(t, k = 1, l = 1, a = .1, threshold = 1e-10) {
     .Call(`_EMC2_pigt`, t, k, l, a, threshold)
 }
@@ -315,3 +332,4 @@ pigt <- function(t, k = 1, l = 1, a = .1, threshold = 1e-10) {
 digt <- function(t, k = 1., l = 1., a = .1, threshold = 1e-10) {
     .Call(`_EMC2_digt`, t, k, l, a, threshold)
 }
+
