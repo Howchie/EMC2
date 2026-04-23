@@ -272,16 +272,24 @@ rRDMGBM <- function(lR, pars, p_types=c("v", "B", "A", "t0", "s"), ok=rep(TRUE, 
   bad <- rep(NA, length(lR) / length(levels(lR)))
   out <- data.frame(R = bad, rt = bad)
   nr <- length(levels(lR))
-  dt <- matrix(Inf, nrow = nr, ncol = nrow(pars) / nr)
+  n_trials <- nrow(pars) / nr
+  if (length(ok) != nrow(pars)) stop("ok must have length nrow(pars).")
+  trial_ok <- colSums(matrix(ok, nrow = nr)) == nr
+  dt <- matrix(NA_real_, nrow = nr, ncol = n_trials)
   t0 <- pars[, "t0"]
-  pars <- pars[ok, , drop = FALSE]
-  dt[ok] <- rGBM(sum(ok), b = pars[, "b"], v = pars[, "v"], A = pars[, "A"], s = pars[, "s"])
-  R <- max.col(-t(dt), ties.method = "first")
-  pick <- cbind(R, 1:dim(dt)[2])
-  rt <- matrix(t0, nrow = nr)[pick] + dt[pick]
-  out$R <- levels(lR)[R]
+  pars_ok <- pars[ok, , drop = FALSE]
+  if (nrow(pars_ok) > 0) {
+    dt[ok] <- rGBM(sum(ok), b = pars_ok[, "b"], v = pars_ok[, "v"], A = pars_ok[, "A"], s = pars_ok[, "s"])
+  }
+  if (any(trial_ok)) {
+    dt_valid <- dt[, trial_ok, drop = FALSE]
+    R <- max.col(-t(dt_valid), ties.method = "first")
+    pick <- cbind(R, which(trial_ok))
+    rt <- matrix(t0, nrow = nr)[pick] + dt[pick]
+    out$R[trial_ok] <- levels(lR)[R]
+    out$rt[trial_ok] <- rt
+  }
   out$R <- factor(out$R, levels = levels(lR))
-  out$rt <- rt
   out
 }
 
@@ -300,9 +308,18 @@ RDMGBM <- function() {
                 "s"=log(1), "pContaminant"=qnorm(0)),
     transform = list(func = c(v="exp", B="exp", A="exp", t0="exp",
                                s="exp", pContaminant="pnorm")),
-    bound = list(minmax = cbind(v=c(1e-3, Inf), B=c(0, Inf), A=c(0, Inf),
-                                t0=c(0.05, Inf), s=c(0, Inf), pContaminant=c(0.001, 0.999)),
-                 exception = c(A=0, v=0, pContaminant=0)),
+    bound = list(
+      minmax = cbind(v=c(1e-3, Inf), B=c(0, Inf), A=c(0, Inf),
+                     t0=c(0.05, Inf), s=c(0, Inf), pContaminant=c(0.001, 0.999)),
+      exception = c(A=0, v=0, pContaminant=0),
+      # Joint validity for GBM first-passage parameterization.
+      # Enforces positive effective log-drift so simulators do not emit NA RTs.
+      joint_ok = function(pars) {
+        if (!all(c("v", "s") %in% colnames(pars))) return(rep(TRUE, nrow(pars)))
+        is.finite(pars[, "v"]) & is.finite(pars[, "s"]) &
+          pars[, "s"] > 0 & (pars[, "v"] > 0.5 * pars[, "s"]^2)
+      }
+    ),
     Ttransform = function(pars, dadm) {
       pars <- cbind(pars, b=1 + pars[, "B"] + pars[, "A"])
       pars
