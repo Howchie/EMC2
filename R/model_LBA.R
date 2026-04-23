@@ -283,7 +283,7 @@ LogicalRulesLBA <- function(posdrift = TRUE, fast_path=TRUE){
     pfun=function(rt,pars) pLBA(rt,pars,posdrift=ifelse(posdrift,TRUE,FALSE)),
     # Race likelihood combining pfun and dfun
     log_likelihood=function(pars,dadm,model,min_ll=log(1e-10)){
-      log_likelihood_redundant_target_race(pars=pars, dadm = dadm, model = model, min_ll = min_ll)
+      stop("LogicalRulesLBA: R likelihood path not implemented. Use fast_path=TRUE (the default).")
     }
   )
 }
@@ -315,7 +315,7 @@ RedundantTargetLBA <- function(posdrift = TRUE){
       function(rt,pars) pLBA(rt,pars,posdrift = TRUE),
       function(rt,pars) pLBA(rt,pars,posdrift = FALSE)),
     log_likelihood = function(pars,dadm,model,min_ll = log(1e-10)){
-      log_likelihood_redundant_target_race(pars = pars, dadm = dadm, model = model, min_ll = min_ll)
+      stop("RedundantTargetLBA: R likelihood path not implemented. Use the C++ path (default).")
     }
   )
 }

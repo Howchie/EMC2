@@ -1345,28 +1345,14 @@ static LogicalRulesSharedState build_logicalrules_shared_state(const Rcpp::DataF
     }
     out.resp_code[static_cast<size_t>(j)] = resp;
 
-    for (int k = 0; k < n_acc; ++k) {
-      const int idx = start + k;
-      if (role_is_factor) {
-        const int rc = role_code[idx];
-        if (rc == codeA) out.idxA[static_cast<size_t>(j)] = idx;
-        else if (rc == codeB) out.idxB[static_cast<size_t>(j)] = idx;
-        else if (rc == codenA) out.idxnA[static_cast<size_t>(j)] = idx;
-        else if (rc == codenB) out.idxnB[static_cast<size_t>(j)] = idx;
-      } else {
-        const std::string rv = Rcpp::as<std::string>(role_chr[idx]);
-        if (rv == "A") out.idxA[static_cast<size_t>(j)] = idx;
-        else if (rv == "B") out.idxB[static_cast<size_t>(j)] = idx;
-        else if (rv == "n_A") out.idxnA[static_cast<size_t>(j)] = idx;
-        else if (rv == "n_B") out.idxnB[static_cast<size_t>(j)] = idx;
-      }
-    }
-
-    if (out.idxA[static_cast<size_t>(j)] < 0 ||
-        out.idxB[static_cast<size_t>(j)] < 0 ||
-        out.idxnA[static_cast<size_t>(j)] < 0 ||
-        out.idxnB[static_cast<size_t>(j)] < 0) {
-      Rcpp::stop("LogicalRules likelihood: each unique trial requires A, B, n_A, n_B accumulators.");
+    // Use accumulator order: A, B, n_A, n_B
+    if (n_acc >= 4) {
+      out.idxA[static_cast<size_t>(j)] = start + 0;
+      out.idxB[static_cast<size_t>(j)] = start + 1;
+      out.idxnA[static_cast<size_t>(j)] = start + 2;
+      out.idxnB[static_cast<size_t>(j)] = start + 3;
+    } else {
+      Rcpp::stop("LogicalRules likelihood requires at least 4 accumulators per trial.");
     }
   }
 
@@ -1515,24 +1501,42 @@ static RedundantTargetSharedState build_redundant_target_shared_state(const Rcpp
     }
     out.resp_code[static_cast<size_t>(j)] = resp;
 
+    // First, find 'nogo' (inhibition) accumulator if it exists
+    int nogo_in_trial = -1;
     for (int k = 0; k < n_acc; ++k) {
       const int idx = start + k;
+      bool is_nogo = false;
       if (role_is_factor) {
-        const int rc = role_code[idx];
-        if (rc == codeA) out.idxA[static_cast<size_t>(j)] = idx;
-        else if (rc == codeB) out.idxB[static_cast<size_t>(j)] = idx;
-        else if (codeNogo > 0 && rc == codeNogo) out.idxNogo[static_cast<size_t>(j)] = idx;
+        if (codeNogo > 0 && role_code[idx] == codeNogo) is_nogo = true;
       } else {
-        const std::string r = Rcpp::as<std::string>(role_chr[idx]);
-        if (r == "A") out.idxA[static_cast<size_t>(j)] = idx;
-        else if (r == "B") out.idxB[static_cast<size_t>(j)] = idx;
-        else if (r == "nogo") out.idxNogo[static_cast<size_t>(j)] = idx;
+        if (Rcpp::as<std::string>(role_chr[idx]) == "nogo") is_nogo = true;
+      }
+      if (is_nogo) {
+        nogo_in_trial = idx;
+        out.idxNogo[static_cast<size_t>(j)] = idx;
+        out.has_nogo = true;
+        break;
       }
     }
-    if (out.idxA[static_cast<size_t>(j)] < 0 || out.idxB[static_cast<size_t>(j)] < 0) {
-      Rcpp::stop("RedundantTarget likelihood: each unique trial requires A and B accumulators.");
+
+    // Then assign A and B to the first two non-nogo accumulators
+    int found_targets = 0;
+    for (int k = 0; k < n_acc; ++k) {
+      const int idx = start + k;
+      if (idx == nogo_in_trial) continue;
+      if (found_targets == 0) {
+        out.idxA[static_cast<size_t>(j)] = idx;
+        found_targets++;
+      } else if (found_targets == 1) {
+        out.idxB[static_cast<size_t>(j)] = idx;
+        found_targets++;
+        break;
+      }
     }
-    if (out.idxNogo[static_cast<size_t>(j)] >= 0) out.has_nogo = true;
+
+    if (found_targets < 2) {
+      Rcpp::stop("RedundantTarget likelihood requires at least 2 target accumulators (non-nogo).");
+    }
   }
 
   out.valid = true;

@@ -216,13 +216,9 @@ dRDMGBM <- function(rt, pars) {
   ok <- rt > pars[, "t0", drop=FALSE] & !pars[, "v", drop=FALSE] < 0
   ok[is.na(ok)] <- FALSE
   if (any(ok)) {
-    if ("s" %in% colnames(pars)) {
-      pars_ok <- pars[ok, , drop=FALSE]
-      pars_ok[, c("A", "b", "v")] <- pars_ok[, c("A", "b", "v")] / pars_ok[, "s"]
-      pars[ok, ] <- pars_ok
-    }
     out[ok] <- dGBMspv(rt[ok], v=pars[ok, "v", drop=FALSE], b=pars[ok, "b", drop=FALSE],
-                       A=pars[ok, "A", drop=FALSE], t0=pars[ok, "t0", drop=FALSE])
+                       A=pars[ok, "A", drop=FALSE], t0=pars[ok, "t0", drop=FALSE],
+                       s=pars[ok, "s", drop=FALSE])
   }
   out
 }
@@ -240,43 +236,37 @@ pRDMGBM <- function(rt, pars) {
   ok <- rt > pars[, "t0", drop=FALSE] & !pars[, "v", drop=FALSE] < 0
   ok[is.na(ok)] <- FALSE
   if (any(ok)) {
-    if ("s" %in% colnames(pars)) {
-      pars_ok <- pars[ok, , drop=FALSE]
-      pars_ok[, c("A", "b", "v")] <- pars_ok[, c("A", "b", "v")] / pars_ok[, "s"]
-      pars[ok, ] <- pars_ok
-    }
     out[ok] <- pGBMspv(rt[ok], v=pars[ok, "v", drop=FALSE], b=pars[ok, "b", drop=FALSE],
-                       A=pars[ok, "A", drop=FALSE], t0=pars[ok, "t0", drop=FALSE])
+                       A=pars[ok, "A", drop=FALSE], t0=pars[ok, "t0", drop=FALSE],
+                       s=pars[ok, "s", drop=FALSE])
   }
   out
 }
 
-rGBM <- function(n, b, v, A) {
+rGBM <- function(n, b, v, A, s = 1) {
   out <- rep(Inf, n)
   if (n <= 0) return(out)
-  if (n > 1 && all(length(b) == 1, length(v) == 1, length(A) == 1)) {
-    b <- rep(b, n); v <- rep(v, n); A <- rep(A, n)
+  if (n > 1 && all(length(b) == 1, length(v) == 1, length(A) == 1, length(s) == 1)) {
+    b <- rep(b, n); v <- rep(v, n); A <- rep(A, n); s <- rep(s, n)
   }
   A[A < 0] <- 0
   x0 <- 1 + runif(n, 0, A)
   d <- log(b / x0)
-  mu_log <- v - 0.5
-  ok <- is.finite(mu_log) & (mu_log > 0) & is.finite(d) & (d > 0)
+  mu_log <- v - 0.5 * s^2
+  ok <- is.finite(mu_log) & is.finite(d) & (d > 0)
   if (any(ok)) {
-    out[ok] <- statmod::rinvgauss(sum(ok), mean=d[ok] / mu_log[ok], shape=d[ok]^2)
+    out[ok] <- statmod::rinvgauss(sum(ok), mean=d[ok] / mu_log[ok], shape=d[ok]^2 / s[ok]^2)
   }
   out
 }
 
-rRDMGBM <- function(lR, pars, p_types=c("v", "B", "A", "t0"), ok=rep(TRUE, dim(pars)[1])) {
+rRDMGBM <- function(lR, pars, p_types=c("v", "B", "A", "t0", "s"), ok=rep(TRUE, dim(pars)[1])) {
   if (!("b" %in% dimnames(pars)[[2]]) && all(c("B", "A") %in% dimnames(pars)[[2]])) {
     pars <- cbind(pars, b=1 + pars[, "B"] + pars[, "A"])
   }
-  required <- c("v", "b", "A", "t0")
+  required <- c("v", "b", "A", "t0", "s")
   if (!all(required %in% dimnames(pars)[[2]]))
     stop("pars must have columns ", paste(required, collapse = " "))
-  if (any(dimnames(pars)[[2]] == "s"))
-    pars[, c("A", "b", "v")] <- pars[, c("A", "b", "v")] / pars[, "s"]
   pars[, "b"][pars[, "b"] < 1 + 1e-8] <- 1 + 1e-8
   pars[, "A"][pars[, "A"] < 0] <- 0
   bad <- rep(NA, length(lR) / length(levels(lR)))
@@ -285,7 +275,7 @@ rRDMGBM <- function(lR, pars, p_types=c("v", "B", "A", "t0"), ok=rep(TRUE, dim(p
   dt <- matrix(Inf, nrow = nr, ncol = nrow(pars) / nr)
   t0 <- pars[, "t0"]
   pars <- pars[ok, , drop = FALSE]
-  dt[ok] <- rGBM(sum(ok), b = pars[, "b"], v = pars[, "v"], A = pars[, "A"])
+  dt[ok] <- rGBM(sum(ok), b = pars[, "b"], v = pars[, "v"], A = pars[, "A"], s = pars[, "s"])
   R <- max.col(-t(dt), ties.method = "first")
   pick <- cbind(R, 1:dim(dt)[2])
   rt <- matrix(t0, nrow = nr)[pick] + dt[pick]
