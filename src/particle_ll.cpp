@@ -21,6 +21,7 @@
 #include <memory>
 #include <array>
 #include <cstring>
+#include <mutex>
 
 using namespace Rcpp;
 
@@ -2736,15 +2737,17 @@ static double c_log_likelihood_logicalrules(
   GslIntegrationControls gsl_ctl = default_gsl_controls();
   gsl_ctl.try_qng_first_finite = true;
   gsl_ctl.qag_key = GSL_INTEG_GAUSS21;
-  static thread_local GslWorkspacePtr workspace_tls(nullptr, &gsl_integration_workspace_free);
-  gsl_integration_workspace* w = ensure_gsl_workspace(workspace_tls, gsl_ctl.retry_limit);
+  gsl_ctl.rel_tol = 1e-4;  // tighter than default unnecessary for log-likelihood accuracy
 
-  std::vector<double> parA(static_cast<size_t>(n_par));
-  std::vector<double> parB(static_cast<size_t>(n_par));
-  std::vector<double> parnA(static_cast<size_t>(n_par));
-  std::vector<double> parnB(static_cast<size_t>(n_par));
-  std::vector<double> pars_2buf(static_cast<size_t>(2 * n_par));
-  int isok_2buf[2] = {1, 1};
+  // Change 3: skip the raw batch (and all integration) if every parameter row is invalid.
+  bool any_ok = false;
+  for (int i = 0; i < n_trials && !any_ok; ++i) any_ok = (bool)ok_params[i];
+  if (!any_ok) {
+    const int n_out = expand.length() > 0 ? (int)expand.length() : n_unique_trials;
+    if (trial_ll_out != nullptr) for (int i = 0; i < n_out; ++i) (*trial_ll_out)[i] = min_ll;
+    return static_cast<double>(n_out) * min_ll;
+  }
+
   std::vector<double> logf_all;
   std::vector<double> logS_all;
   std::vector<int> all_mask;
@@ -2762,6 +2765,155 @@ static double c_log_likelihood_logicalrules(
                    all_mask.data(), isok_int_all.data(),
                    logS_all.data(), min_ll, model_ctx);
   }
+
+  // ---- Gauss-Legendre batch integration pre-pass ----
+  // Replaces per-trial local_race_helper (serial GSL) with N_GL vectorised batch sweeps.
+  // GA_no_gl[j] = P(nontarget-A wins channel-A sub-race before RT_j)  [linear probability]
+  // GB_no_gl[j] = same for channel B, or = GA_no_gl[j] when channels are equal.
+  // OR/AND rules use GA_no_gl directly; XOR/ID rules derive GA_yes = 1 - GA_no_gl - S_dec_A.
+  const bool use_gl_pass = use_raw_local;
+  std::vector<double> GA_no_gl, GB_no_gl;
+  std::vector<bool> ch_eq_vec;
+
+  if (use_gl_pass) {
+    static constexpr int N_GL = 31;
+    static std::once_flag s_gl_flag;
+    static std::vector<double> s_gl_x, s_gl_w;
+    std::call_once(s_gl_flag, []() {
+      // Newton iteration on the Legendre polynomial P_N to find GL nodes/weights.
+      // No LAPACK required; converges to machine precision in ~4 iterations per root.
+      s_gl_x.resize(N_GL); s_gl_w.resize(N_GL);
+      const int M = (N_GL + 1) / 2;
+      for (int i = 1; i <= M; ++i) {
+        double x = std::cos(M_PI * (i - 0.25) / (N_GL + 0.5));
+        double p1, p2, p3, dp, dx;
+        do {
+          p1 = 1.0; p2 = 0.0;
+          for (int j = 1; j <= N_GL; ++j) {
+            p3 = p2; p2 = p1;
+            p1 = ((2*j - 1) * x * p2 - (j - 1) * p3) / j;
+          }
+          dp = N_GL * (x * p1 - p2) / (x * x - 1.0);
+          dx = p1 / dp;
+          x -= dx;
+        } while (std::abs(dx) > 1e-15);
+        s_gl_x[i - 1]       = -x;
+        s_gl_x[N_GL - i]    =  x;
+        const double w = 2.0 / ((1.0 - x * x) * dp * dp);
+        s_gl_w[i - 1] = s_gl_w[N_GL - i] = w;
+      }
+    });
+    const double* gl_x = s_gl_x.data();
+    const double* gl_w = s_gl_w.data();
+
+    // Per-trial GL parameters: half-length h_j, midpoint mid_j, channels-equal flag.
+    const int t0_col = model_ctx->t0_index;
+    std::vector<double> gl_h(n_unique_trials), gl_mid(n_unique_trials);
+    ch_eq_vec.resize(n_unique_trials);
+    bool any_unequal = false;
+    for (int j = 0; j < n_unique_trials; ++j) {
+      const int iA  = shared.idxA[j],  inA = shared.idxnA[j];
+      const int iB  = shared.idxB[j],  inB = shared.idxnB[j];
+      const double t0 = (t0_col >= 0 && t0_col < n_par)
+                        ? pars_cm_ptr[static_cast<size_t>(t0_col) * n_trials + iA] : 0.0;
+      const double RT = shared.rt_unique[j];
+      const double lo = std::max(0.0, t0);
+      gl_h[j]   = (RT > lo) ? (RT - lo) * 0.5 : 0.0;
+      gl_mid[j] = (RT + lo) * 0.5;
+      ch_eq_vec[j] = row_equal_colmajor(pars_cm_ptr, n_trials, n_par, iA, iB)
+                  && row_equal_colmajor(pars_cm_ptr, n_trials, n_par, inA, inB);
+      if (!ch_eq_vec[j]) any_unequal = true;
+    }
+
+    // Compact column-major parameter matrices (n_unique_trials rows) for each accumulator role.
+    // Avoids iterating over the full n_trials parameter matrix with sparse masks.
+    const size_t cpt = static_cast<size_t>(n_unique_trials * n_par);
+    std::vector<double> pars_nA(cpt), pars_A(cpt), pars_nB, pars_B;
+    std::vector<int> isok_nA(n_unique_trials), isok_A(n_unique_trials), isok_nB, isok_B;
+    std::vector<int> mask_ne;
+    if (any_unequal) {
+      pars_nB.resize(cpt); pars_B.resize(cpt);
+      isok_nB.resize(n_unique_trials); isok_B.resize(n_unique_trials);
+      mask_ne.assign(n_unique_trials, 0);
+    }
+    for (int p = 0; p < n_par; ++p) {
+      const double* src = pars_cm_ptr + static_cast<size_t>(p) * n_trials;
+      double* d_nA = pars_nA.data() + static_cast<size_t>(p) * n_unique_trials;
+      double* d_A  = pars_A.data()  + static_cast<size_t>(p) * n_unique_trials;
+      for (int j = 0; j < n_unique_trials; ++j) {
+        d_nA[j] = src[shared.idxnA[j]];
+        d_A[j]  = src[shared.idxA[j]];
+      }
+      if (any_unequal) {
+        double* d_nB = pars_nB.data() + static_cast<size_t>(p) * n_unique_trials;
+        double* d_B  = pars_B.data()  + static_cast<size_t>(p) * n_unique_trials;
+        for (int j = 0; j < n_unique_trials; ++j) {
+          d_nB[j] = src[shared.idxnB[j]];
+          d_B[j]  = src[shared.idxB[j]];
+        }
+      }
+    }
+    for (int j = 0; j < n_unique_trials; ++j) {
+      isok_nA[j] = isok_int_all[shared.idxnA[j]];
+      isok_A[j]  = isok_int_all[shared.idxA[j]];
+      if (any_unequal) {
+        isok_nB[j] = isok_int_all[shared.idxnB[j]];
+        isok_B[j]  = isok_int_all[shared.idxB[j]];
+        mask_ne[j] = ch_eq_vec[j] ? 0 : 1;
+      }
+    }
+    std::vector<int> all1(n_unique_trials, 1);
+
+    // GL time buffer and batch output buffers (compact, n_unique_trials rows).
+    std::vector<double> gl_rt(n_unique_trials);
+    std::vector<double> lf_nA(n_unique_trials, min_ll), lS_A(n_unique_trials, min_ll);
+    // B buffers pre-initialised to min_ll; mask=0 rows are never written → stay at min_ll.
+    std::vector<double> lf_nB(any_unequal ? n_unique_trials : 1, min_ll);
+    std::vector<double> lS_B(any_unequal ? n_unique_trials : 1, min_ll);
+
+    GA_no_gl.assign(n_unique_trials, 0.0);
+    GB_no_gl.assign(n_unique_trials, 0.0);
+
+    for (int k = 0; k < N_GL; ++k) {
+      const double xi = gl_x[k], wt = gl_w[k];
+
+      for (int j = 0; j < n_unique_trials; ++j)
+        gl_rt[j] = gl_mid[j] + gl_h[j] * xi;
+
+      // Channel A: f_nA (winner density) × S_A (loser survivor)
+      model_dfun_raw(gl_rt.data(), pars_nA.data(), n_unique_trials,
+                     all1.data(), isok_nA.data(), lf_nA.data(), min_ll, model_ctx);
+      model_pfun_raw(gl_rt.data(), pars_A.data(),  n_unique_trials,
+                     all1.data(), isok_A.data(),  lS_A.data(),  min_ll, model_ctx);
+      #pragma omp simd
+      for (int j = 0; j < n_unique_trials; ++j)
+        GA_no_gl[j] += wt * gl_h[j] * std::exp(lf_nA[j] + lS_A[j]);
+
+      if (any_unequal) {
+        // Channel B: only for trials where B params differ from A (mask_ne).
+        // ch_eq rows stay at min_ll in lf_nB/lS_B → exp contribution ≈ 0.
+        model_dfun_raw(gl_rt.data(), pars_nB.data(), n_unique_trials,
+                       mask_ne.data(), isok_nB.data(), lf_nB.data(), min_ll, model_ctx);
+        model_pfun_raw(gl_rt.data(), pars_B.data(),  n_unique_trials,
+                       mask_ne.data(), isok_B.data(),  lS_B.data(),  min_ll, model_ctx);
+        #pragma omp simd
+        for (int j = 0; j < n_unique_trials; ++j)
+          GB_no_gl[j] += wt * gl_h[j] * std::exp(lf_nB[j] + lS_B[j]);
+      }
+    }
+    // Channels-equal trials: B sub-race is identical to A — no separate integration needed.
+    for (int j = 0; j < n_unique_trials; ++j)
+      if (ch_eq_vec[j]) GB_no_gl[j] = GA_no_gl[j];
+  }
+
+  static thread_local GslWorkspacePtr workspace_tls(nullptr, &gsl_integration_workspace_free);
+  gsl_integration_workspace* w = ensure_gsl_workspace(workspace_tls, gsl_ctl.retry_limit);
+  std::vector<double> parA(static_cast<size_t>(n_par));
+  std::vector<double> parB(static_cast<size_t>(n_par));
+  std::vector<double> parnA(static_cast<size_t>(n_par));
+  std::vector<double> parnB(static_cast<size_t>(n_par));
+  std::vector<double> pars_2buf(static_cast<size_t>(2 * n_par));
+  int isok_2buf[2] = {1, 1};
 
   for (int j = 0; j < n_unique_trials; ++j) {
     const int idxA = shared.idxA[static_cast<size_t>(j)];
@@ -2840,22 +2992,28 @@ static double c_log_likelihood_logicalrules(
     const bool is_and_rule = (rule_code == 2);
     const bool is_xor_rule = (rule_code == 3);
     const bool is_id_rule = (rule_code == 4);
-    const bool channels_equal =
-      row_equal_colmajor(pars_cm_ptr, n_trials, n_par, idxA, idxB) &&
-      row_equal_colmajor(pars_cm_ptr, n_trials, n_par, idxnA, idxnB);
+    const bool channels_equal = use_gl_pass ? ch_eq_vec[static_cast<size_t>(j)]
+        : (row_equal_colmajor(pars_cm_ptr, n_trials, n_par, idxA, idxB) &&
+           row_equal_colmajor(pars_cm_ptr, n_trials, n_par, idxnA, idxnB));
 
     double p_j = 0.0;
     if (is_or_rule || is_and_rule) {
-      const double GA_no = local_race_helper(t, parnA.data(), parA.data(), n_par, model_ctx,
-                                             pdf1, cdf1, gsl_ctl, w, pars_2buf.data(), isok_2buf);
-      double GB_no = GA_no;
-      if (!channels_equal) {
-        GB_no = local_race_helper(t, parnB.data(), parB.data(), n_par, model_ctx,
+      double GA_no, GB_no;
+      if (use_gl_pass) {
+        GA_no = std::max(0.0, std::min(GA_no_gl[static_cast<size_t>(j)], 1.0));
+        GB_no = channels_equal ? GA_no
+                               : std::max(0.0, std::min(GB_no_gl[static_cast<size_t>(j)], 1.0));
+      } else {
+        GA_no = local_race_helper(t, parnA.data(), parA.data(), n_par, model_ctx,
                                   pdf1, cdf1, gsl_ctl, w, pars_2buf.data(), isok_2buf);
-      }
-      if (!R_FINITE(GA_no) || !R_FINITE(GB_no)) {
-        ll_unique[static_cast<size_t>(j)] = min_ll;
-        continue;
+        GB_no = GA_no;
+        if (!channels_equal)
+          GB_no = local_race_helper(t, parnB.data(), parB.data(), n_par, model_ctx,
+                                    pdf1, cdf1, gsl_ctl, w, pars_2buf.data(), isok_2buf);
+        if (!R_FINITE(GA_no) || !R_FINITE(GB_no)) {
+          ll_unique[static_cast<size_t>(j)] = min_ll;
+          continue;
+        }
       }
       const double s_GA_yes = std::min(1.0, std::max(kMinSurv, GA_no + S_dec_A));
       const double s_GB_yes = std::min(1.0, std::max(kMinSurv, GB_no + S_dec_B));
@@ -2871,16 +3029,25 @@ static double c_log_likelihood_logicalrules(
         else if (resp_code == 2) p_j = gA_no * s_GB_no + gB_no * s_GA_no; // no
       }
     } else if (is_xor_rule || is_id_rule) {
-      const double GA_yes = local_race_helper(t, parA.data(), parnA.data(), n_par, model_ctx,
-                                              pdf1, cdf1, gsl_ctl, w, pars_2buf.data(), isok_2buf);
-      double GB_yes = GA_yes;
-      if (!channels_equal) {
-        GB_yes = local_race_helper(t, parB.data(), parnB.data(), n_par, model_ctx,
+      double GA_yes, GB_yes;
+      if (use_gl_pass) {
+        // Derive GA_yes from GA_no_gl: GA_yes + GA_no + S_dec_A = 1.
+        const double GA_no = std::max(0.0, std::min(GA_no_gl[static_cast<size_t>(j)], 1.0));
+        const double GB_no = channels_equal ? GA_no
+                                            : std::max(0.0, std::min(GB_no_gl[static_cast<size_t>(j)], 1.0));
+        GA_yes = std::min(1.0, std::max(0.0, 1.0 - S_dec_A - GA_no));
+        GB_yes = std::min(1.0, std::max(0.0, 1.0 - S_dec_B - GB_no));
+      } else {
+        GA_yes = local_race_helper(t, parA.data(), parnA.data(), n_par, model_ctx,
                                    pdf1, cdf1, gsl_ctl, w, pars_2buf.data(), isok_2buf);
-      }
-      if (!R_FINITE(GA_yes) || !R_FINITE(GB_yes)) {
-        ll_unique[static_cast<size_t>(j)] = min_ll;
-        continue;
+        GB_yes = GA_yes;
+        if (!channels_equal)
+          GB_yes = local_race_helper(t, parB.data(), parnB.data(), n_par, model_ctx,
+                                     pdf1, cdf1, gsl_ctl, w, pars_2buf.data(), isok_2buf);
+        if (!R_FINITE(GA_yes) || !R_FINITE(GB_yes)) {
+          ll_unique[static_cast<size_t>(j)] = min_ll;
+          continue;
+        }
       }
       const double GA_no = std::min(1.0, std::max(0.0, 1.0 - S_dec_A - GA_yes));
       const double GB_no = std::min(1.0, std::max(0.0, 1.0 - S_dec_B - GB_yes));
@@ -2973,17 +3140,20 @@ static double c_log_likelihood_redundant_target_race(
      model_pfun_raw != nullptr &&
      static_cast<int>(shared.rt_by_row.size()) == n_trials);
   std::vector<double> ll_unique(static_cast<size_t>(n_unique_trials), min_ll);
-  std::vector<double> parA(static_cast<size_t>(n_par));
-  std::vector<double> parB(static_cast<size_t>(n_par));
-  std::vector<double> parN(static_cast<size_t>(n_par));
-  std::vector<double> pars_rowmajor_buf(static_cast<size_t>(3 * n_par));
-  int isok_buf[3] = {1, 1, 1};
 
   GslIntegrationControls gsl_ctl = default_gsl_controls();
   gsl_ctl.try_qng_first_finite = true;
   gsl_ctl.qag_key = GSL_INTEG_GAUSS21;
-  static thread_local GslWorkspacePtr workspace_tls(nullptr, &gsl_integration_workspace_free);
-  gsl_integration_workspace* w = ensure_gsl_workspace(workspace_tls, gsl_ctl.retry_limit);
+  gsl_ctl.rel_tol = 1e-4;  // tighter than default unnecessary for log-likelihood accuracy
+
+  // Change 3: skip the raw batch (and all integration) if every parameter row is invalid.
+  bool any_ok = false;
+  for (int i = 0; i < n_trials && !any_ok; ++i) any_ok = (bool)ok_params[i];
+  if (!any_ok) {
+    const int n_out = expand.length() > 0 ? (int)expand.length() : n_unique_trials;
+    if (trial_ll_out != nullptr) for (int i = 0; i < n_out; ++i) (*trial_ll_out)[i] = min_ll;
+    return static_cast<double>(n_out) * min_ll;
+  }
 
   std::vector<double> logf_all;
   std::vector<double> logS_all;
@@ -3003,6 +3173,7 @@ static double c_log_likelihood_redundant_target_race(
                    logS_all.data(), min_ll, model_ctx);
   }
 
+  // eval_pdf_cdf and safe_surv_at only capture read-only shared state; thread-safe.
   auto eval_pdf_cdf = [&](double t, int idx, const double* p_row, double& f_out, double& F_out) -> bool {
     if (use_raw_local && R_FINITE(t) && t > 0.0) {
       const double lf = logf_all[static_cast<size_t>(idx)];
@@ -3035,6 +3206,13 @@ static double c_log_likelihood_redundant_target_race(
     return std::max(kMinSurv, 1.0 - F);
   };
 
+  static thread_local GslWorkspacePtr workspace_tls(nullptr, &gsl_integration_workspace_free);
+  gsl_integration_workspace* w = ensure_gsl_workspace(workspace_tls, gsl_ctl.retry_limit);
+  std::vector<double> parA(static_cast<size_t>(n_par));
+  std::vector<double> parB(static_cast<size_t>(n_par));
+  std::vector<double> parN(static_cast<size_t>(n_par));
+  std::vector<double> pars_rowmajor_buf(static_cast<size_t>(3 * n_par));
+  int isok_buf[3] = {1, 1, 1};
   for (int j = 0; j < n_unique_trials; ++j) {
     const int idxA = shared.idxA[static_cast<size_t>(j)];
     const int idxB = shared.idxB[static_cast<size_t>(j)];
@@ -3230,6 +3408,9 @@ double c_log_likelihood_race(
   // Fast default controls for MCMC throughput, with an automatic stricter retry.
   // Retry settings match the old behaviour (rel_tol=1e-7, limit=1000).
   GslIntegrationControls gsl_ctl = default_gsl_controls();
+  gsl_ctl.try_qng_first_finite = true;   // try fixed-point QNG before adaptive QAG on finite intervals
+  gsl_ctl.qag_key = GSL_INTEG_GAUSS21;  // fallback rule when QNG fails
+  gsl_ctl.rel_tol = 1e-4;               // sufficient accuracy for log-likelihood; reduces QAG subdivisions
   int n_lR_j = n_lR;
   Rcpp::NumericVector rts_dadm = dadm["rt"];
   Rcpp::IntegerVector R_idxs_dadm = dadm["R"];
