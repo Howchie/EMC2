@@ -233,7 +233,6 @@ inline NumericVector c_add_vectors(NumericVector x1, NumericVector x2){
   return output;
 }
 
-// [[Rcpp::export]]
 inline CharacterVector c_add_charvectors(CharacterVector x, CharacterVector y) {
   // Create a new vector of length = length(x) + length(y)
   CharacterVector z(x.size() + y.size());

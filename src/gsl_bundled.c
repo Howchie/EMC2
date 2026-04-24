@@ -1,7 +1,7 @@
 /*
  * gsl_bundled.c — single compilation unit for the minimal GSL subset used by EMC2.
  *
- * Only the integration (QAGS/QAGIU/workspace) and error-handler routines are
+ * Only the integration (QAGS/QAGIU/QAG/QNG/workspace) and error-handler routines are
  * included; all statistical GSL functions (erfc, gaussian_tail, …) are already
  * reimplemented as emc2_* variants in tools.cpp and are NOT compiled here.
  *
@@ -30,3 +30,5 @@
 
 /* --- QAGS + QAGIU (qags.c pulls in its own helpers via relative #includes) - */
 #include "gsl_bundled/integration/qags.c"
+/* QAG and QNG are compiled in separate TUs (gsl_bundled_qag/qng.c) to avoid
+ * helper symbol collisions from nested #includes inside the original sources. */

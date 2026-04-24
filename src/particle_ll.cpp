@@ -441,6 +441,8 @@ struct LogicalRulesSharedState {
   // Response code: 1=yes, 2=no, 3=NN, 4=AN, 5=NB, 6=AB
   std::vector<int> resp_code;
   std::vector<double> rt_unique;
+  // Per-row RTs (length n_trials) for raw dfun/pfun kernels.
+  std::vector<double> rt_by_row;
 };
 
 struct RedundantTargetSharedState {
@@ -456,6 +458,11 @@ struct RedundantTargetSharedState {
   // Response code per unique trial: 0=missing/omission, 1=go response, 2=nogo.
   std::vector<int> resp_code;
   std::vector<double> rt_unique;
+  // Per-unique-trial bounds for go/no-go omission handling.
+  std::vector<double> LT_unique;
+  std::vector<double> UC_unique;
+  // Per-row RTs (length n_trials) for raw dfun/pfun kernels.
+  std::vector<double> rt_by_row;
 };
 
 static LogicalRulesSharedState build_logicalrules_shared_state(const Rcpp::DataFrame& dadm,
@@ -486,6 +493,8 @@ static double c_log_likelihood_logicalrules(
     ContextForRaceModels* model_ctx,
     RacePdf1Fun pdf1,
     RaceCdf1Fun cdf1,
+    RaceRawFun model_dfun_raw,
+    RaceRawFun model_pfun_raw,
     const LogicalRulesSharedState& shared,
     Rcpp::NumericVector* trial_ll_out = nullptr);
 
@@ -498,6 +507,8 @@ static double c_log_likelihood_redundant_target_race(
     ContextForRaceModels* model_ctx,
     RacePdf1Fun pdf1,
     RaceCdf1Fun cdf1,
+    RaceRawFun model_dfun_raw,
+    RaceRawFun model_pfun_raw,
     const RedundantTargetSharedState& shared,
     Rcpp::NumericVector* trial_ll_out = nullptr);
 
@@ -1298,6 +1309,7 @@ static LogicalRulesSharedState build_logicalrules_shared_state(const Rcpp::DataF
   out.rule_code.assign(out.n_unique_trials, 0);
   out.resp_code.assign(out.n_unique_trials, 0);
   out.rt_unique.assign(out.n_unique_trials, NA_REAL);
+  out.rt_by_row.assign(rts.begin(), rts.end());
 
   for (int j = 0; j < out.n_unique_trials; ++j) {
     const int start = j * n_acc;
@@ -1396,11 +1408,14 @@ static RedundantTargetSharedState build_redundant_target_shared_state(const Rcpp
   }
 
   Rcpp::NumericVector rts = dadm["rt"];
+  Rcpp::NumericVector LT = get_col_with_default(dadm, "LT", 0.0);
+  Rcpp::NumericVector UC = get_col_with_default(dadm, "UC", R_PosInf);
   SEXP role_sexp = dadm["lR"];
   SEXP stim_sexp = dadm[stim_col];
   const bool has_resp_col = dadm.containsElementNamed("R");
   SEXP resp_sexp = has_resp_col ? static_cast<SEXP>(dadm["R"]) : R_NilValue;
-  if (rts.size() != n_trials || Rf_length(role_sexp) != n_trials || Rf_length(stim_sexp) != n_trials ||
+  if (rts.size() != n_trials || LT.size() != n_trials || UC.size() != n_trials ||
+      Rf_length(role_sexp) != n_trials || Rf_length(stim_sexp) != n_trials ||
       (has_resp_col && Rf_length(resp_sexp) != n_trials)) {
     Rcpp::stop("RedundantTarget likelihood: dadm column lengths must match n_trials.");
   }
@@ -1472,11 +1487,16 @@ static RedundantTargetSharedState build_redundant_target_shared_state(const Rcpp
   out.cond_code.assign(out.n_unique_trials, 0);
   out.resp_code.assign(out.n_unique_trials, 0);
   out.rt_unique.assign(out.n_unique_trials, NA_REAL);
+  out.LT_unique.assign(out.n_unique_trials, 0.0);
+  out.UC_unique.assign(out.n_unique_trials, R_PosInf);
+  out.rt_by_row.assign(rts.begin(), rts.end());
   out.has_nogo = false;
 
   for (int j = 0; j < out.n_unique_trials; ++j) {
     const int start = j * n_acc;
     out.rt_unique[static_cast<size_t>(j)] = rts[start];
+    out.LT_unique[static_cast<size_t>(j)] = LT[start];
+    out.UC_unique[static_cast<size_t>(j)] = UC[start];
 
     int cond = 0;
     if (stim_is_factor) {
@@ -1661,10 +1681,12 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
         if (is_logicalrules) {
           lls[i] = c_log_likelihood_logicalrules(pars, expand, min_ll, is_ok, n_lR,
                                                  &adapter.ctx, adapter.pdf1_ptr, adapter.cdf1_ptr,
+                                                 adapter.model_dfun_raw, adapter.model_pfun_raw,
                                                  logicalrules_shared, nullptr);
         } else if (is_redundant_target) {
           lls[i] = c_log_likelihood_redundant_target_race(pars, expand, min_ll, is_ok, n_lR,
                                                           &adapter.ctx, adapter.pdf1_ptr, adapter.cdf1_ptr,
+                                                          adapter.model_dfun_raw, adapter.model_pfun_raw,
                                                           redundant_target_shared, nullptr);
         } else {
           lls[i] = c_log_likelihood_race(pars, data,
@@ -1889,6 +1911,7 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
         pars = param_table_template.materialize_by_param_names(keep_names);
         lls[i] = c_log_likelihood_logicalrules(pars, expand, min_ll, is_ok, n_lR,
                                                &adapter.ctx, adapter.pdf1_ptr, adapter.cdf1_ptr,
+                                               adapter.model_dfun_raw, adapter.model_pfun_raw,
                                                logicalrules_shared, nullptr);
       }
       return lls;
@@ -1909,8 +1932,9 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
         is_ok = lr_all(is_ok, n_lR);
         pars = param_table_template.materialize_by_param_names(keep_names);
         lls[i] = c_log_likelihood_redundant_target_race(pars, expand, min_ll, is_ok, n_lR,
-                                                        &adapter.ctx, adapter.pdf1_ptr, adapter.cdf1_ptr,
-                                                        redundant_target_shared, nullptr);
+                                                       &adapter.ctx, adapter.pdf1_ptr, adapter.cdf1_ptr,
+                                                       adapter.model_dfun_raw, adapter.model_pfun_raw,
+                                                       redundant_target_shared, nullptr);
       }
       return lls;
     }
@@ -2203,10 +2227,12 @@ NumericMatrix calc_ll_oo_pw(NumericMatrix particle_matrix, DataFrame data, Numer
       if (is_logicalrules) {
         c_log_likelihood_logicalrules(pars, expand, min_ll, is_ok, n_lR,
                                       &adapter.ctx, adapter.pdf1_ptr, adapter.cdf1_ptr,
+                                      adapter.model_dfun_raw, adapter.model_pfun_raw,
                                       logicalrules_shared, &row_vec);
       } else if (is_redundant_target) {
         c_log_likelihood_redundant_target_race(pars, expand, min_ll, is_ok, n_lR,
                                                &adapter.ctx, adapter.pdf1_ptr, adapter.cdf1_ptr,
+                                               adapter.model_dfun_raw, adapter.model_pfun_raw,
                                                redundant_target_shared, &row_vec);
       } else {
         c_log_likelihood_race(pars, data,
@@ -2517,6 +2543,14 @@ double integrate_for_kth_winner_rowmajor_cpp(
       }
       return gsl_integration_qagiu(&F, low, abs_tol, rel_tol, limit, w, &result, &error);
     }
+    if (gsl_ctl.try_qng_first_finite) {
+      size_t neval = 0;
+      const int qng_status = gsl_integration_qng(&F, low, upp, abs_tol, rel_tol,
+                                                 &result, &error, &neval);
+      if (qng_status == GSL_SUCCESS && R_FINITE(result)) return GSL_SUCCESS;
+      return gsl_integration_qag(&F, low, upp, abs_tol, rel_tol, limit, gsl_ctl.qag_key,
+                                 w, &result, &error);
+    }
     return gsl_integration_qags(&F, low, upp, abs_tol, rel_tol, limit, w, &result, &error);
   };
   status = run_integral(gsl_ctl.abs_tol, gsl_ctl.rel_tol, gsl_ctl.limit);
@@ -2676,6 +2710,8 @@ static double c_log_likelihood_logicalrules(
     ContextForRaceModels* model_ctx,
     RacePdf1Fun pdf1,
     RaceCdf1Fun cdf1,
+    RaceRawFun model_dfun_raw,
+    RaceRawFun model_pfun_raw,
     const LogicalRulesSharedState& shared,
     Rcpp::NumericVector* trial_ll_out) {
   if (!shared.valid || n_acc <= 0 || pdf1 == nullptr || cdf1 == nullptr || model_ctx == nullptr) {
@@ -2692,11 +2728,16 @@ static double c_log_likelihood_logicalrules(
   const int n_unique_trials = shared.n_unique_trials;
   const double* pars_cm_ptr = pars.begin();
   std::vector<double> ll_unique(static_cast<size_t>(n_unique_trials), min_ll);
+  const bool use_raw_local =
+    (model_dfun_raw != nullptr &&
+     model_pfun_raw != nullptr &&
+     static_cast<int>(shared.rt_by_row.size()) == n_trials);
 
-  const GslIntegrationControls gsl_ctl{1e-10, 1e-5, 200, 0.0, 1e-7, 1000};
-  GslWorkspacePtr workspace(nullptr, &gsl_integration_workspace_free);
-  workspace.reset(gsl_integration_workspace_alloc(gsl_ctl.retry_limit));
-  gsl_integration_workspace* w = workspace.get();
+  GslIntegrationControls gsl_ctl = default_gsl_controls();
+  gsl_ctl.try_qng_first_finite = true;
+  gsl_ctl.qag_key = GSL_INTEG_GAUSS21;
+  static thread_local GslWorkspacePtr workspace_tls(nullptr, &gsl_integration_workspace_free);
+  gsl_integration_workspace* w = ensure_gsl_workspace(workspace_tls, gsl_ctl.retry_limit);
 
   std::vector<double> parA(static_cast<size_t>(n_par));
   std::vector<double> parB(static_cast<size_t>(n_par));
@@ -2704,6 +2745,23 @@ static double c_log_likelihood_logicalrules(
   std::vector<double> parnB(static_cast<size_t>(n_par));
   std::vector<double> pars_2buf(static_cast<size_t>(2 * n_par));
   int isok_2buf[2] = {1, 1};
+  std::vector<double> logf_all;
+  std::vector<double> logS_all;
+  std::vector<int> all_mask;
+  std::vector<int> isok_int_all;
+  if (use_raw_local) {
+    logf_all.resize(static_cast<size_t>(n_trials), min_ll);
+    logS_all.resize(static_cast<size_t>(n_trials), min_ll);
+    all_mask.assign(static_cast<size_t>(n_trials), 1);
+    isok_int_all.resize(static_cast<size_t>(n_trials), 0);
+    for (int i = 0; i < n_trials; ++i) isok_int_all[static_cast<size_t>(i)] = ok_params[i] ? 1 : 0;
+    model_dfun_raw(shared.rt_by_row.data(), pars_cm_ptr, n_trials,
+                   all_mask.data(), isok_int_all.data(),
+                   logf_all.data(), min_ll, model_ctx);
+    model_pfun_raw(shared.rt_by_row.data(), pars_cm_ptr, n_trials,
+                   all_mask.data(), isok_int_all.data(),
+                   logS_all.data(), min_ll, model_ctx);
+  }
 
   for (int j = 0; j < n_unique_trials; ++j) {
     const int idxA = shared.idxA[static_cast<size_t>(j)];
@@ -2728,7 +2786,21 @@ static double c_log_likelihood_logicalrules(
     copy_par_row_colmajor(pars_cm_ptr, n_trials, n_par, idxnA, parnA.data());
     copy_par_row_colmajor(pars_cm_ptr, n_trials, n_par, idxnB, parnB.data());
 
-    auto eval_pdf_cdf = [&](const double* p_row, double& f_out, double& F_out) -> bool {
+    auto eval_pdf_cdf = [&](int idx, const double* p_row, double& f_out, double& F_out) -> bool {
+      if (use_raw_local) {
+        const double lf = logf_all[static_cast<size_t>(idx)];
+        const double ls = logS_all[static_cast<size_t>(idx)];
+        if (!R_FINITE(lf) || !R_FINITE(ls)) return false;
+        const double f = (lf <= min_ll) ? 0.0 : std::exp(lf);
+        double S = (ls <= min_ll) ? 0.0 : std::exp(ls);
+        if (!(S >= 0.0) || !R_FINITE(S)) return false;
+        if (S > 1.0) S = 1.0;
+        const double F = clamp_cdf01_race(1.0 - S);
+        if (!R_FINITE(f) || !R_FINITE(F) || emc2_isnan(F)) return false;
+        f_out = f;
+        F_out = F;
+        return true;
+      }
       const double f = pdf1(t, p_row, model_ctx);
       if (!R_FINITE(f) || f < 0.0) return false;
       double F = cdf1(t, p_row, model_ctx);
@@ -2741,10 +2813,10 @@ static double c_log_likelihood_logicalrules(
 
     double fA = 0.0, fB = 0.0, fnA = 0.0, fnB = 0.0;
     double FA = 0.0, FB = 0.0, FnA = 0.0, FnB = 0.0;
-    if (!eval_pdf_cdf(parA.data(), fA, FA) ||
-        !eval_pdf_cdf(parB.data(), fB, FB) ||
-        !eval_pdf_cdf(parnA.data(), fnA, FnA) ||
-        !eval_pdf_cdf(parnB.data(), fnB, FnB)) {
+    if (!eval_pdf_cdf(idxA, parA.data(), fA, FA) ||
+        !eval_pdf_cdf(idxB, parB.data(), fB, FB) ||
+        !eval_pdf_cdf(idxnA, parnA.data(), fnA, FnA) ||
+        !eval_pdf_cdf(idxnB, parnB.data(), fnB, FnB)) {
       ll_unique[static_cast<size_t>(j)] = min_ll;
       continue;
     }
@@ -2768,14 +2840,16 @@ static double c_log_likelihood_logicalrules(
     const bool is_and_rule = (rule_code == 2);
     const bool is_xor_rule = (rule_code == 3);
     const bool is_id_rule = (rule_code == 4);
+    const bool channels_equal =
+      row_equal_colmajor(pars_cm_ptr, n_trials, n_par, idxA, idxB) &&
+      row_equal_colmajor(pars_cm_ptr, n_trials, n_par, idxnA, idxnB);
 
     double p_j = 0.0;
     if (is_or_rule || is_and_rule) {
       const double GA_no = local_race_helper(t, parnA.data(), parA.data(), n_par, model_ctx,
                                              pdf1, cdf1, gsl_ctl, w, pars_2buf.data(), isok_2buf);
       double GB_no = GA_no;
-      if (!row_equal_colmajor(pars_cm_ptr, n_trials, n_par, idxnA, idxnB) ||
-          !row_equal_colmajor(pars_cm_ptr, n_trials, n_par, idxA, idxB)) {
+      if (!channels_equal) {
         GB_no = local_race_helper(t, parnB.data(), parB.data(), n_par, model_ctx,
                                   pdf1, cdf1, gsl_ctl, w, pars_2buf.data(), isok_2buf);
       }
@@ -2800,8 +2874,7 @@ static double c_log_likelihood_logicalrules(
       const double GA_yes = local_race_helper(t, parA.data(), parnA.data(), n_par, model_ctx,
                                               pdf1, cdf1, gsl_ctl, w, pars_2buf.data(), isok_2buf);
       double GB_yes = GA_yes;
-      if (!row_equal_colmajor(pars_cm_ptr, n_trials, n_par, idxA, idxB) ||
-          !row_equal_colmajor(pars_cm_ptr, n_trials, n_par, idxnA, idxnB)) {
+      if (!channels_equal) {
         GB_yes = local_race_helper(t, parB.data(), parnB.data(), n_par, model_ctx,
                                    pdf1, cdf1, gsl_ctl, w, pars_2buf.data(), isok_2buf);
       }
@@ -2878,6 +2951,8 @@ static double c_log_likelihood_redundant_target_race(
     ContextForRaceModels* model_ctx,
     RacePdf1Fun pdf1,
     RaceCdf1Fun cdf1,
+    RaceRawFun model_dfun_raw,
+    RaceRawFun model_pfun_raw,
     const RedundantTargetSharedState& shared,
     Rcpp::NumericVector* trial_ll_out) {
   if (!shared.valid || n_acc <= 0 || pdf1 == nullptr || cdf1 == nullptr || model_ctx == nullptr) {
@@ -2893,6 +2968,10 @@ static double c_log_likelihood_redundant_target_race(
   const int n_par = pars.ncol();
   const int n_unique_trials = shared.n_unique_trials;
   const double* pars_cm_ptr = pars.begin();
+  const bool use_raw_local =
+    (model_dfun_raw != nullptr &&
+     model_pfun_raw != nullptr &&
+     static_cast<int>(shared.rt_by_row.size()) == n_trials);
   std::vector<double> ll_unique(static_cast<size_t>(n_unique_trials), min_ll);
   std::vector<double> parA(static_cast<size_t>(n_par));
   std::vector<double> parB(static_cast<size_t>(n_par));
@@ -2900,12 +2979,45 @@ static double c_log_likelihood_redundant_target_race(
   std::vector<double> pars_rowmajor_buf(static_cast<size_t>(3 * n_par));
   int isok_buf[3] = {1, 1, 1};
 
-  const GslIntegrationControls gsl_ctl{1e-10, 1e-5, 200, 0.0, 1e-7, 1000};
-  GslWorkspacePtr workspace(nullptr, &gsl_integration_workspace_free);
-  workspace.reset(gsl_integration_workspace_alloc(gsl_ctl.retry_limit));
-  gsl_integration_workspace* w = workspace.get();
+  GslIntegrationControls gsl_ctl = default_gsl_controls();
+  gsl_ctl.try_qng_first_finite = true;
+  gsl_ctl.qag_key = GSL_INTEG_GAUSS21;
+  static thread_local GslWorkspacePtr workspace_tls(nullptr, &gsl_integration_workspace_free);
+  gsl_integration_workspace* w = ensure_gsl_workspace(workspace_tls, gsl_ctl.retry_limit);
 
-  auto eval_pdf_cdf = [&](double t, const double* p_row, double& f_out, double& F_out) -> bool {
+  std::vector<double> logf_all;
+  std::vector<double> logS_all;
+  std::vector<int> all_mask;
+  std::vector<int> isok_int_all;
+  if (use_raw_local) {
+    logf_all.resize(static_cast<size_t>(n_trials), min_ll);
+    logS_all.resize(static_cast<size_t>(n_trials), min_ll);
+    all_mask.assign(static_cast<size_t>(n_trials), 1);
+    isok_int_all.resize(static_cast<size_t>(n_trials), 0);
+    for (int i = 0; i < n_trials; ++i) isok_int_all[static_cast<size_t>(i)] = ok_params[i] ? 1 : 0;
+    model_dfun_raw(shared.rt_by_row.data(), pars_cm_ptr, n_trials,
+                   all_mask.data(), isok_int_all.data(),
+                   logf_all.data(), min_ll, model_ctx);
+    model_pfun_raw(shared.rt_by_row.data(), pars_cm_ptr, n_trials,
+                   all_mask.data(), isok_int_all.data(),
+                   logS_all.data(), min_ll, model_ctx);
+  }
+
+  auto eval_pdf_cdf = [&](double t, int idx, const double* p_row, double& f_out, double& F_out) -> bool {
+    if (use_raw_local && R_FINITE(t) && t > 0.0) {
+      const double lf = logf_all[static_cast<size_t>(idx)];
+      const double ls = logS_all[static_cast<size_t>(idx)];
+      if (!R_FINITE(lf) || !R_FINITE(ls)) return false;
+      const double f = (lf <= min_ll) ? 0.0 : std::exp(lf);
+      double S = (ls <= min_ll) ? 0.0 : std::exp(ls);
+      if (!(S >= 0.0) || !R_FINITE(S)) return false;
+      if (S > 1.0) S = 1.0;
+      const double F = clamp_cdf01_race(1.0 - S);
+      if (!R_FINITE(f) || !R_FINITE(F) || emc2_isnan(F)) return false;
+      f_out = f;
+      F_out = F;
+      return true;
+    }
     const double f = pdf1(t, p_row, model_ctx);
     if (!R_FINITE(f) || f < 0.0) return false;
     double F = cdf1(t, p_row, model_ctx);
@@ -2916,11 +3028,11 @@ static double c_log_likelihood_redundant_target_race(
     return true;
   };
 
-  auto safe_surv_inf = [&](const double* p_row) -> double {
-    double F_inf = cdf1(R_PosInf, p_row, model_ctx);
-    F_inf = clamp_cdf01_race(F_inf);
-    if (!R_FINITE(F_inf) || emc2_isnan(F_inf)) return 0.0;
-    return std::max(kMinSurv, 1.0 - F_inf);
+  auto safe_surv_at = [&](const double* p_row, double t_eval) -> double {
+    double F = cdf1(t_eval, p_row, model_ctx);
+    F = clamp_cdf01_race(F);
+    if (!R_FINITE(F) || emc2_isnan(F)) return 0.0;
+    return std::max(kMinSurv, 1.0 - F);
   };
 
   for (int j = 0; j < n_unique_trials; ++j) {
@@ -2942,6 +3054,8 @@ static double c_log_likelihood_redundant_target_race(
     const double t = shared.rt_unique[static_cast<size_t>(j)];
     const int cond = shared.cond_code[static_cast<size_t>(j)];
     const int resp = shared.resp_code[static_cast<size_t>(j)];
+    const double LTj = shared.LT_unique[static_cast<size_t>(j)];
+    const double UCj = shared.UC_unique[static_cast<size_t>(j)];
     const bool finite_rt = (R_FINITE(t) && t > 0.0);
 
     double p = 0.0;
@@ -2957,11 +3071,11 @@ static double c_log_likelihood_redundant_target_race(
       }
 
       double fA = 0.0, FA = 0.0, fB = 0.0, FB = 0.0, fN = 0.0, FN = 0.0;
-      if (!eval_pdf_cdf(t, parA.data(), fA, FA) || !eval_pdf_cdf(t, parB.data(), fB, FB)) {
+      if (!eval_pdf_cdf(t, idxA, parA.data(), fA, FA) || !eval_pdf_cdf(t, idxB, parB.data(), fB, FB)) {
         ll_unique[static_cast<size_t>(j)] = min_ll;
         continue;
       }
-      if (use_nogo && !eval_pdf_cdf(t, parN.data(), fN, FN)) {
+      if (use_nogo && !eval_pdf_cdf(t, idxN, parN.data(), fN, FN)) {
         ll_unique[static_cast<size_t>(j)] = min_ll;
         continue;
       }
@@ -2983,20 +3097,27 @@ static double c_log_likelihood_redundant_target_race(
         continue;
       }
 
-      const double S_A_inf = safe_surv_inf(parA.data());
-      const double S_B_inf = safe_surv_inf(parB.data());
+      const double S_A_inf = safe_surv_at(parA.data(), R_PosInf);
+      const double S_B_inf = safe_surv_at(parB.data(), R_PosInf);
       if (!use_nogo) {
         if (cond == 1) p = S_A_inf;
         else if (cond == 2) p = S_B_inf;
         else p = S_A_inf * S_B_inf;
       } else {
-        const double S_N_inf = safe_surv_inf(parN.data());
+        if (!R_FINITE(UCj)) {
+          Rcpp::stop("RedundantTarget likelihood: finite UC is required for no-go/omission trials with a nogo accumulator.");
+        }
+        const double low = std::max(0.0, LTj);
+        const double upp = UCj;
+        const double S_A_uc = safe_surv_at(parA.data(), upp);
+        const double S_B_uc = safe_surv_at(parB.data(), upp);
+        const double S_N_uc = safe_surv_at(parN.data(), upp);
         double p_none = 0.0;
-        if (cond == 1) p_none = S_A_inf * S_N_inf;
-        else if (cond == 2) p_none = S_B_inf * S_N_inf;
-        else p_none = S_A_inf * S_B_inf * S_N_inf;
+        if (cond == 1) p_none = S_A_uc * S_N_uc;
+        else if (cond == 2) p_none = S_B_uc * S_N_uc;
+        else p_none = S_A_uc * S_B_uc * S_N_uc;
 
-        // Integrate probability that nogo wins the race at finite times.
+        // Integrate probability that nogo wins before UC (and after LT if truncated).
         std::memcpy(pars_rowmajor_buf.data(), parN.data(), static_cast<size_t>(n_par) * sizeof(double));
         int n_active = 1;
         if (cond == 1) {
@@ -3011,9 +3132,12 @@ static double c_log_likelihood_redundant_target_race(
           n_active = 3;
         }
         for (int k = 0; k < n_active; ++k) isok_buf[k] = 1;
-        const double log_nogo_win = integrate_for_kth_winner_rowmajor_cpp(
-          1, pars_rowmajor_buf.data(), isok_buf, 0.0, R_PosInf, pdf1, cdf1,
-          n_active, n_par, gsl_ctl, model_ctx, w);
+        double log_nogo_win = R_NegInf;
+        if (upp > low) {
+          log_nogo_win = integrate_for_kth_winner_rowmajor_cpp(
+            1, pars_rowmajor_buf.data(), isok_buf, low, upp, pdf1, cdf1,
+            n_active, n_par, gsl_ctl, model_ctx, w);
+        }
         const double p_nogo_win = R_FINITE(log_nogo_win) ? std::exp(log_nogo_win) : 0.0;
         p = p_nogo_win + p_none;
       }
@@ -3078,8 +3202,9 @@ double c_log_likelihood_race(
     NumericVector* trial_ll_out
 ) {
 
-  // Only allocate a GSL workspace if/when numerical integration is needed.
-  GslWorkspacePtr workspace(nullptr, &gsl_integration_workspace_free);
+  // Reuse one workspace per thread across particles/model fits.
+  static thread_local GslWorkspacePtr workspace_tls(nullptr, &gsl_integration_workspace_free);
+  GslWorkspacePtr& workspace = workspace_tls;
 
   const bool use_shared = (shared != nullptr && shared->valid);
 
@@ -3104,14 +3229,7 @@ double c_log_likelihood_race(
   }
   // Fast default controls for MCMC throughput, with an automatic stricter retry.
   // Retry settings match the old behaviour (rel_tol=1e-7, limit=1000).
-  const GslIntegrationControls gsl_ctl{
-    1e-10, // abs_tol
-    1e-5,  // rel_tol
-    200,   // max subintervals
-    0.0,   // retry_abs_tol
-    1e-7,  // retry_rel_tol
-    1000   // retry max subintervals
-  };
+  GslIntegrationControls gsl_ctl = default_gsl_controls();
   int n_lR_j = n_lR;
   Rcpp::NumericVector rts_dadm = dadm["rt"];
   Rcpp::IntegerVector R_idxs_dadm = dadm["R"];

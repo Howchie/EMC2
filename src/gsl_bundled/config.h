@@ -17,5 +17,9 @@
 #ifndef VERSION
 #  define VERSION "2.7.1"
 #endif
+/* Used by qag.c in newer GSL releases; harmless no-op coercion for our build. */
+#ifndef GSL_COERCE_DBL
+#  define GSL_COERCE_DBL(x) (x)
+#endif
 
 #endif /* GSL_BUNDLED_CONFIG_H */

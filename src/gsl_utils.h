@@ -25,6 +25,10 @@ struct GslIntegrationControls {
   double retry_abs_tol;
   double retry_rel_tol;
   size_t retry_limit;
+  // Optional finite-interval hybrid: try QNG first, then adaptive QAG fallback.
+  bool try_qng_first_finite;
+  // Quadrature key passed to gsl_integration_qag when hybrid mode is active.
+  int qag_key;
 };
 
 // Default controls matching the existing logic
@@ -35,7 +39,9 @@ inline GslIntegrationControls default_gsl_controls() {
     200,   // max subintervals
     0.0,   // retry_abs_tol
     1e-7,  // retry_rel_tol
-    1000   // retry max subintervals
+    1000,  // retry max subintervals
+    false, // try_qng_first_finite
+    GSL_INTEG_GAUSS21 // qag_key
   };
 }
 
