@@ -22,6 +22,7 @@
 #include <array>
 #include <cstring>
 #include <mutex>
+#include <cstdlib>
 
 using namespace Rcpp;
 
@@ -2639,6 +2640,157 @@ static inline bool row_equal_colmajor(const double* pars_cm_ptr,
   return true;
 }
 
+static void fill_legendre_rule(int n, std::vector<double>& x, std::vector<double>& w) {
+  x.resize(static_cast<size_t>(n));
+  w.resize(static_cast<size_t>(n));
+  const int m = (n + 1) / 2;
+  for (int i = 1; i <= m; ++i) {
+    double z = std::cos(M_PI * (i - 0.25) / (n + 0.5));
+    double p1 = 0.0, p2 = 0.0, p3 = 0.0, dp = 0.0, dz = 0.0;
+    do {
+      p1 = 1.0;
+      p2 = 0.0;
+      for (int j = 1; j <= n; ++j) {
+        p3 = p2;
+        p2 = p1;
+        p1 = ((2 * j - 1) * z * p2 - (j - 1) * p3) / j;
+      }
+      dp = n * (z * p1 - p2) / (z * z - 1.0);
+      dz = p1 / dp;
+      z -= dz;
+    } while (std::abs(dz) > 1e-15);
+    x[static_cast<size_t>(i - 1)] = -z;
+    x[static_cast<size_t>(n - i)] = z;
+    const double wi = 2.0 / ((1.0 - z * z) * dp * dp);
+    w[static_cast<size_t>(i - 1)] = wi;
+    w[static_cast<size_t>(n - i)] = wi;
+  }
+}
+
+struct LogicalRulesGlRules {
+  std::vector<double> x31, w31;
+};
+
+static const LogicalRulesGlRules& logicalrules_gl_rules() {
+  static std::once_flag once;
+  static LogicalRulesGlRules rules;
+  std::call_once(once, []() {
+    fill_legendre_rule(31, rules.x31, rules.w31);
+  });
+  return rules;
+}
+
+struct LogicalRulesScratch {
+  std::vector<double> ll_unique;
+  std::vector<double> logf_all;
+  std::vector<double> logS_all;
+  std::vector<int> all_mask;
+  std::vector<int> isok_int_all;
+  std::vector<double> GA_no_gl;
+  std::vector<double> GB_no_gl;
+  std::vector<unsigned char> ch_eq_vec;
+  std::vector<unsigned char> pair_ok_A;
+  std::vector<unsigned char> pair_ok_B;
+  std::vector<double> gl_h_A;
+  std::vector<double> gl_h_B;
+  std::vector<double> pars_nA;
+  std::vector<double> pars_A;
+  std::vector<double> pars_nB;
+  std::vector<double> pars_B;
+  std::vector<int> isok_nA;
+  std::vector<int> isok_A;
+  std::vector<int> isok_nB;
+  std::vector<int> isok_B;
+  std::vector<int> all1;
+  std::vector<int> b_map;
+  std::vector<double> tmpA1;
+  std::vector<double> tmpA2;
+  std::vector<double> tmpB1;
+  std::vector<double> tmpB2;
+  std::vector<double> parA;
+  std::vector<double> parB;
+  std::vector<double> parnA;
+  std::vector<double> parnB;
+  std::vector<double> pars_2buf;
+};
+
+static inline void resize_assign_double(std::vector<double>& x, size_t n, double value) {
+  x.assign(n, value);
+}
+
+static inline void resize_assign_int(std::vector<int>& x, size_t n, int value) {
+  x.assign(n, value);
+}
+
+static void lba_logicalrules_pair_gl(const std::vector<double>& nodes,
+                                     const std::vector<double>& weights,
+                                     const std::vector<int>* rows,
+                                     const std::vector<double>& h,
+                                     const std::vector<double>& pars_no,
+                                     const std::vector<double>& pars_yes,
+                                     const std::vector<int>& isok_no,
+                                     const std::vector<int>& isok_yes,
+                                     int n_rows,
+                                     bool posdrift,
+                                     std::vector<double>& out,
+                                     bool reset_rows) {
+  if (reset_rows) {
+    if (rows == nullptr) {
+      std::fill(out.begin(), out.begin() + n_rows, 0.0);
+    } else {
+      for (int r : *rows) out[static_cast<size_t>(r)] = 0.0;
+    }
+  }
+
+  const double* v_no  = pars_no.data() + 0 * n_rows;
+  const double* sv_no = pars_no.data() + 1 * n_rows;
+  const double* B_no  = pars_no.data() + 2 * n_rows;
+  const double* A_no  = pars_no.data() + 3 * n_rows;
+  const double* v_yes  = pars_yes.data() + 0 * n_rows;
+  const double* sv_yes = pars_yes.data() + 1 * n_rows;
+  const double* B_yes  = pars_yes.data() + 2 * n_rows;
+  const double* A_yes  = pars_yes.data() + 3 * n_rows;
+
+  const int n_nodes = static_cast<int>(nodes.size());
+  for (int k = 0; k < n_nodes; ++k) {
+    const double xi = nodes[static_cast<size_t>(k)];
+    const double wt = weights[static_cast<size_t>(k)];
+    if (rows == nullptr) {
+      #pragma omp simd
+      for (int r = 0; r < n_rows; ++r) {
+        if (!isok_no[r] || !isok_yes[r] || !(h[static_cast<size_t>(r)] > 0.0)) continue;
+        const double tt = h[static_cast<size_t>(r)] * (1.0 + xi);
+        const double pdf_no = dlba_norm(tt, A_no[r], B_no[r] + A_no[r],
+                                        v_no[r], sv_no[r], posdrift);
+        if (!(pdf_no > 0.0) || !R_FINITE(pdf_no)) continue;
+        double cdf_yes = plba_norm(tt, A_yes[r], B_yes[r] + A_yes[r],
+                                   v_yes[r], sv_yes[r], posdrift);
+        cdf_yes = clamp_cdf01_race(cdf_yes);
+        if (!R_FINITE(cdf_yes)) continue;
+        out[static_cast<size_t>(r)] += wt * h[static_cast<size_t>(r)] *
+          pdf_no * std::max(0.0, 1.0 - cdf_yes);
+      }
+    } else {
+      const int n_active = static_cast<int>(rows->size());
+      #pragma omp simd
+      for (int ii = 0; ii < n_active; ++ii) {
+        const int r = (*rows)[static_cast<size_t>(ii)];
+        if (!isok_no[r] || !isok_yes[r] || !(h[static_cast<size_t>(r)] > 0.0)) continue;
+        const double tt = h[static_cast<size_t>(r)] * (1.0 + xi);
+        const double pdf_no = dlba_norm(tt, A_no[r], B_no[r] + A_no[r],
+                                        v_no[r], sv_no[r], posdrift);
+        if (!(pdf_no > 0.0) || !R_FINITE(pdf_no)) continue;
+        double cdf_yes = plba_norm(tt, A_yes[r], B_yes[r] + A_yes[r],
+                                   v_yes[r], sv_yes[r], posdrift);
+        cdf_yes = clamp_cdf01_race(cdf_yes);
+        if (!R_FINITE(cdf_yes)) continue;
+        out[static_cast<size_t>(r)] += wt * h[static_cast<size_t>(r)] *
+          pdf_no * std::max(0.0, 1.0 - cdf_yes);
+      }
+    }
+  }
+}
+
 static double local_race_helper(double t,
                                 const double* par_target,
                                 const double* par_nontarget,
@@ -2728,11 +2880,15 @@ static double c_log_likelihood_logicalrules(
   const int n_par = pars.ncol();
   const int n_unique_trials = shared.n_unique_trials;
   const double* pars_cm_ptr = pars.begin();
-  std::vector<double> ll_unique(static_cast<size_t>(n_unique_trials), min_ll);
+  static thread_local LogicalRulesScratch scratch;
+  resize_assign_double(scratch.ll_unique, static_cast<size_t>(n_unique_trials), min_ll);
+  std::vector<double>& ll_unique = scratch.ll_unique;
   const bool use_raw_local =
     (model_dfun_raw != nullptr &&
      model_pfun_raw != nullptr &&
      static_cast<int>(shared.rt_by_row.size()) == n_trials);
+  const bool use_fused_lba_gl =
+    (use_raw_local && n_par >= 5 && model_ctx->t0_index == 4);
 
   GslIntegrationControls gsl_ctl = default_gsl_controls();
   gsl_ctl.try_qng_first_finite = true;
@@ -2748,15 +2904,15 @@ static double c_log_likelihood_logicalrules(
     return static_cast<double>(n_out) * min_ll;
   }
 
-  std::vector<double> logf_all;
-  std::vector<double> logS_all;
-  std::vector<int> all_mask;
-  std::vector<int> isok_int_all;
+  std::vector<double>& logf_all = scratch.logf_all;
+  std::vector<double>& logS_all = scratch.logS_all;
+  std::vector<int>& all_mask = scratch.all_mask;
+  std::vector<int>& isok_int_all = scratch.isok_int_all;
   if (use_raw_local) {
-    logf_all.resize(static_cast<size_t>(n_trials), min_ll);
-    logS_all.resize(static_cast<size_t>(n_trials), min_ll);
-    all_mask.assign(static_cast<size_t>(n_trials), 1);
-    isok_int_all.resize(static_cast<size_t>(n_trials), 0);
+    resize_assign_double(logf_all, static_cast<size_t>(n_trials), min_ll);
+    resize_assign_double(logS_all, static_cast<size_t>(n_trials), min_ll);
+    resize_assign_int(all_mask, static_cast<size_t>(n_trials), 1);
+    isok_int_all.resize(static_cast<size_t>(n_trials));
     for (int i = 0; i < n_trials; ++i) isok_int_all[static_cast<size_t>(i)] = ok_params[i] ? 1 : 0;
     model_dfun_raw(shared.rt_by_row.data(), pars_cm_ptr, n_trials,
                    all_mask.data(), isok_int_all.data(),
@@ -2772,69 +2928,70 @@ static double c_log_likelihood_logicalrules(
   // GB_no_gl[j] = same for channel B, or = GA_no_gl[j] when channels are equal.
   // OR/AND rules use GA_no_gl directly; XOR/ID rules derive GA_yes = 1 - GA_no_gl - S_dec_A.
   const bool use_gl_pass = use_raw_local;
-  std::vector<double> GA_no_gl, GB_no_gl;
-  std::vector<bool> ch_eq_vec;
+  std::vector<double>& GA_no_gl = scratch.GA_no_gl;
+  std::vector<double>& GB_no_gl = scratch.GB_no_gl;
+  std::vector<unsigned char>& ch_eq_vec = scratch.ch_eq_vec;
 
   if (use_gl_pass) {
-    static constexpr int N_GL = 31;
-    static std::once_flag s_gl_flag;
-    static std::vector<double> s_gl_x, s_gl_w;
-    std::call_once(s_gl_flag, []() {
-      // Newton iteration on the Legendre polynomial P_N to find GL nodes/weights.
-      // No LAPACK required; converges to machine precision in ~4 iterations per root.
-      s_gl_x.resize(N_GL); s_gl_w.resize(N_GL);
-      const int M = (N_GL + 1) / 2;
-      for (int i = 1; i <= M; ++i) {
-        double x = std::cos(M_PI * (i - 0.25) / (N_GL + 0.5));
-        double p1, p2, p3, dp, dx;
-        do {
-          p1 = 1.0; p2 = 0.0;
-          for (int j = 1; j <= N_GL; ++j) {
-            p3 = p2; p2 = p1;
-            p1 = ((2*j - 1) * x * p2 - (j - 1) * p3) / j;
-          }
-          dp = N_GL * (x * p1 - p2) / (x * x - 1.0);
-          dx = p1 / dp;
-          x -= dx;
-        } while (std::abs(dx) > 1e-15);
-        s_gl_x[i - 1]       = -x;
-        s_gl_x[N_GL - i]    =  x;
-        const double w = 2.0 / ((1.0 - x * x) * dp * dp);
-        s_gl_w[i - 1] = s_gl_w[N_GL - i] = w;
-      }
-    });
-    const double* gl_x = s_gl_x.data();
-    const double* gl_w = s_gl_w.data();
+    const LogicalRulesGlRules& gl_rules = logicalrules_gl_rules();
 
     // Per-trial GL parameters: half-length h_j, midpoint mid_j, channels-equal flag.
     const int t0_col = model_ctx->t0_index;
-    std::vector<double> gl_h(n_unique_trials), gl_mid(n_unique_trials);
-    ch_eq_vec.resize(n_unique_trials);
+    std::vector<double>& gl_h_A = scratch.gl_h_A;
+    std::vector<double>& gl_h_B = scratch.gl_h_B;
+    std::vector<unsigned char>& pair_ok_A = scratch.pair_ok_A;
+    std::vector<unsigned char>& pair_ok_B = scratch.pair_ok_B;
+    gl_h_A.resize(static_cast<size_t>(n_unique_trials));
+    gl_h_B.resize(static_cast<size_t>(n_unique_trials));
+    ch_eq_vec.resize(static_cast<size_t>(n_unique_trials));
+    pair_ok_A.resize(static_cast<size_t>(n_unique_trials));
+    pair_ok_B.resize(static_cast<size_t>(n_unique_trials));
     bool any_unequal = false;
+    int n_b_active = 0;
     for (int j = 0; j < n_unique_trials; ++j) {
       const int iA  = shared.idxA[j],  inA = shared.idxnA[j];
       const int iB  = shared.idxB[j],  inB = shared.idxnB[j];
-      const double t0 = (t0_col >= 0 && t0_col < n_par)
+      const double t0A = (t0_col >= 0 && t0_col < n_par)
                         ? pars_cm_ptr[static_cast<size_t>(t0_col) * n_trials + iA] : 0.0;
+      const double t0B = (t0_col >= 0 && t0_col < n_par)
+                        ? pars_cm_ptr[static_cast<size_t>(t0_col) * n_trials + iB] : 0.0;
       const double RT = shared.rt_unique[j];
-      const double lo = std::max(0.0, t0);
-      gl_h[j]   = (RT > lo) ? (RT - lo) * 0.5 : 0.0;
-      gl_mid[j] = (RT + lo) * 0.5;
+      const double loA = std::max(0.0, t0A);
+      const double loB = std::max(0.0, t0B);
+      gl_h_A[static_cast<size_t>(j)] = (RT > loA) ? (RT - loA) * 0.5 : 0.0;
+      gl_h_B[static_cast<size_t>(j)] = (RT > loB) ? (RT - loB) * 0.5 : 0.0;
       ch_eq_vec[j] = row_equal_colmajor(pars_cm_ptr, n_trials, n_par, iA, iB)
                   && row_equal_colmajor(pars_cm_ptr, n_trials, n_par, inA, inB);
       if (!ch_eq_vec[j]) any_unequal = true;
+      pair_ok_A[static_cast<size_t>(j)] =
+        (iA >= 0 && inA >= 0 && ok_params[iA] && ok_params[inA] &&
+         RT > 0.0 && R_FINITE(RT) && gl_h_A[static_cast<size_t>(j)] > 0.0) ? 1 : 0;
+      pair_ok_B[static_cast<size_t>(j)] =
+        (iB >= 0 && inB >= 0 && ok_params[iB] && ok_params[inB] &&
+         RT > 0.0 && R_FINITE(RT) && gl_h_B[static_cast<size_t>(j)] > 0.0) ? 1 : 0;
+      if (any_unequal && !ch_eq_vec[j] && pair_ok_B[static_cast<size_t>(j)]) ++n_b_active;
     }
 
     // Compact column-major parameter matrices (n_unique_trials rows) for each accumulator role.
     // Avoids iterating over the full n_trials parameter matrix with sparse masks.
     const size_t cpt = static_cast<size_t>(n_unique_trials * n_par);
-    std::vector<double> pars_nA(cpt), pars_A(cpt), pars_nB, pars_B;
-    std::vector<int> isok_nA(n_unique_trials), isok_A(n_unique_trials), isok_nB, isok_B;
-    std::vector<int> mask_ne;
+    std::vector<double>& pars_nA = scratch.pars_nA;
+    std::vector<double>& pars_A = scratch.pars_A;
+    std::vector<double>& pars_nB = scratch.pars_nB;
+    std::vector<double>& pars_B = scratch.pars_B;
+    std::vector<int>& isok_nA = scratch.isok_nA;
+    std::vector<int>& isok_A = scratch.isok_A;
+    std::vector<int>& isok_nB = scratch.isok_nB;
+    std::vector<int>& isok_B = scratch.isok_B;
+    pars_nA.resize(cpt);
+    pars_A.resize(cpt);
+    isok_nA.resize(static_cast<size_t>(n_unique_trials));
+    isok_A.resize(static_cast<size_t>(n_unique_trials));
     if (any_unequal) {
-      pars_nB.resize(cpt); pars_B.resize(cpt);
-      isok_nB.resize(n_unique_trials); isok_B.resize(n_unique_trials);
-      mask_ne.assign(n_unique_trials, 0);
+      pars_nB.resize(cpt);
+      pars_B.resize(cpt);
+      isok_nB.resize(static_cast<size_t>(n_unique_trials));
+      isok_B.resize(static_cast<size_t>(n_unique_trials));
     }
     for (int p = 0; p < n_par; ++p) {
       const double* src = pars_cm_ptr + static_cast<size_t>(p) * n_trials;
@@ -2854,65 +3011,97 @@ static double c_log_likelihood_logicalrules(
       }
     }
     for (int j = 0; j < n_unique_trials; ++j) {
-      isok_nA[j] = isok_int_all[shared.idxnA[j]];
-      isok_A[j]  = isok_int_all[shared.idxA[j]];
+      isok_nA[j] = pair_ok_A[static_cast<size_t>(j)] ? isok_int_all[shared.idxnA[j]] : 0;
+      isok_A[j]  = pair_ok_A[static_cast<size_t>(j)] ? isok_int_all[shared.idxA[j]] : 0;
       if (any_unequal) {
-        isok_nB[j] = isok_int_all[shared.idxnB[j]];
-        isok_B[j]  = isok_int_all[shared.idxB[j]];
-        mask_ne[j] = ch_eq_vec[j] ? 0 : 1;
+        isok_nB[j] = (!ch_eq_vec[j] && pair_ok_B[static_cast<size_t>(j)]) ? isok_int_all[shared.idxnB[j]] : 0;
+        isok_B[j]  = (!ch_eq_vec[j] && pair_ok_B[static_cast<size_t>(j)]) ? isok_int_all[shared.idxB[j]] : 0;
       }
     }
-    std::vector<int> all1(n_unique_trials, 1);
 
-    // GL time buffer and batch output buffers (compact, n_unique_trials rows).
-    std::vector<double> gl_rt(n_unique_trials);
-    std::vector<double> lf_nA(n_unique_trials, min_ll), lS_A(n_unique_trials, min_ll);
-    // B buffers pre-initialised to min_ll; mask=0 rows are never written → stay at min_ll.
-    std::vector<double> lf_nB(any_unequal ? n_unique_trials : 1, min_ll);
-    std::vector<double> lS_B(any_unequal ? n_unique_trials : 1, min_ll);
+    resize_assign_double(GA_no_gl, static_cast<size_t>(n_unique_trials), 0.0);
+    resize_assign_double(GB_no_gl, static_cast<size_t>(n_unique_trials), 0.0);
 
-    GA_no_gl.assign(n_unique_trials, 0.0);
-    GB_no_gl.assign(n_unique_trials, 0.0);
-
-    for (int k = 0; k < N_GL; ++k) {
-      const double xi = gl_x[k], wt = gl_w[k];
-
-      for (int j = 0; j < n_unique_trials; ++j)
-        gl_rt[j] = gl_mid[j] + gl_h[j] * xi;
-
-      // Channel A: f_nA (winner density) × S_A (loser survivor)
-      model_dfun_raw(gl_rt.data(), pars_nA.data(), n_unique_trials,
-                     all1.data(), isok_nA.data(), lf_nA.data(), min_ll, model_ctx);
-      model_pfun_raw(gl_rt.data(), pars_A.data(),  n_unique_trials,
-                     all1.data(), isok_A.data(),  lS_A.data(),  min_ll, model_ctx);
-      #pragma omp simd
-      for (int j = 0; j < n_unique_trials; ++j)
-        GA_no_gl[j] += wt * gl_h[j] * std::exp(lf_nA[j] + lS_A[j]);
+    if (use_fused_lba_gl) {
+      const bool posdrift = model_ctx->use_posdrift;
+      lba_logicalrules_pair_gl(gl_rules.x31, gl_rules.w31, nullptr, gl_h_A,
+                               pars_nA, pars_A, isok_nA, isok_A,
+                               n_unique_trials, posdrift, GA_no_gl, true);
 
       if (any_unequal) {
-        // Channel B: only for trials where B params differ from A (mask_ne).
-        // ch_eq rows stay at min_ll in lf_nB/lS_B → exp contribution ≈ 0.
-        model_dfun_raw(gl_rt.data(), pars_nB.data(), n_unique_trials,
-                       mask_ne.data(), isok_nB.data(), lf_nB.data(), min_ll, model_ctx);
-        model_pfun_raw(gl_rt.data(), pars_B.data(),  n_unique_trials,
-                       mask_ne.data(), isok_B.data(),  lS_B.data(),  min_ll, model_ctx);
+        std::vector<int>& b_map = scratch.b_map;
+        b_map.clear();
+        b_map.reserve(static_cast<size_t>(n_b_active));
+        for (int j = 0; j < n_unique_trials; ++j) {
+          if (!ch_eq_vec[static_cast<size_t>(j)] && pair_ok_B[static_cast<size_t>(j)]) {
+            b_map.push_back(j);
+          }
+        }
+        if (!b_map.empty()) {
+          lba_logicalrules_pair_gl(gl_rules.x31, gl_rules.w31, &b_map, gl_h_B,
+                                   pars_nB, pars_B, isok_nB, isok_B,
+                                   n_unique_trials, posdrift, GB_no_gl, true);
+        }
+      }
+    } else {
+      std::vector<int>& all1 = scratch.all1;
+      resize_assign_int(all1, static_cast<size_t>(n_unique_trials), 1);
+      std::vector<double>& gl_rt = scratch.tmpA1;
+      std::vector<double>& lf_nA = scratch.tmpA2;
+      std::vector<double>& lS_A = scratch.tmpB1;
+      std::vector<double>& lf_nB = scratch.tmpB2;
+      std::vector<double>& lS_B = scratch.parA;
+      gl_rt.resize(static_cast<size_t>(n_unique_trials));
+      resize_assign_double(lf_nA, static_cast<size_t>(n_unique_trials), min_ll);
+      resize_assign_double(lS_A, static_cast<size_t>(n_unique_trials), min_ll);
+      resize_assign_double(lf_nB, static_cast<size_t>(n_unique_trials), min_ll);
+      resize_assign_double(lS_B, static_cast<size_t>(n_unique_trials), min_ll);
+
+      for (size_t k = 0; k < gl_rules.x31.size(); ++k) {
+        const double xi = gl_rules.x31[k], wt = gl_rules.w31[k];
+        for (int j = 0; j < n_unique_trials; ++j) {
+          const double t0A = pars_cm_ptr[static_cast<size_t>(t0_col) * n_trials + shared.idxA[j]];
+          gl_rt[static_cast<size_t>(j)] = t0A + gl_h_A[static_cast<size_t>(j)] * (1.0 + xi);
+        }
+        model_dfun_raw(gl_rt.data(), pars_nA.data(), n_unique_trials,
+                       all1.data(), isok_nA.data(), lf_nA.data(), min_ll, model_ctx);
+        model_pfun_raw(gl_rt.data(), pars_A.data(),  n_unique_trials,
+                       all1.data(), isok_A.data(),  lS_A.data(),  min_ll, model_ctx);
         #pragma omp simd
         for (int j = 0; j < n_unique_trials; ++j)
-          GB_no_gl[j] += wt * gl_h[j] * std::exp(lf_nB[j] + lS_B[j]);
+          GA_no_gl[j] += wt * gl_h_A[j] * std::exp(lf_nA[j] + lS_A[j]);
+        if (any_unequal) {
+          for (int j = 0; j < n_unique_trials; ++j) {
+            const double t0B = pars_cm_ptr[static_cast<size_t>(t0_col) * n_trials + shared.idxB[j]];
+            gl_rt[static_cast<size_t>(j)] = t0B + gl_h_B[static_cast<size_t>(j)] * (1.0 + xi);
+          }
+          model_dfun_raw(gl_rt.data(), pars_nB.data(), n_unique_trials,
+                         all1.data(), isok_nB.data(), lf_nB.data(), min_ll, model_ctx);
+          model_pfun_raw(gl_rt.data(), pars_B.data(),  n_unique_trials,
+                         all1.data(), isok_B.data(),  lS_B.data(),  min_ll, model_ctx);
+          #pragma omp simd
+          for (int j = 0; j < n_unique_trials; ++j)
+            GB_no_gl[j] += wt * gl_h_B[j] * std::exp(lf_nB[j] + lS_B[j]);
+        }
       }
     }
-    // Channels-equal trials: B sub-race is identical to A — no separate integration needed.
-    for (int j = 0; j < n_unique_trials; ++j)
-      if (ch_eq_vec[j]) GB_no_gl[j] = GA_no_gl[j];
+    for (int j = 0; j < n_unique_trials; ++j) {
+      if (ch_eq_vec[static_cast<size_t>(j)]) GB_no_gl[static_cast<size_t>(j)] = GA_no_gl[static_cast<size_t>(j)];
+    }
   }
 
   static thread_local GslWorkspacePtr workspace_tls(nullptr, &gsl_integration_workspace_free);
   gsl_integration_workspace* w = ensure_gsl_workspace(workspace_tls, gsl_ctl.retry_limit);
-  std::vector<double> parA(static_cast<size_t>(n_par));
-  std::vector<double> parB(static_cast<size_t>(n_par));
-  std::vector<double> parnA(static_cast<size_t>(n_par));
-  std::vector<double> parnB(static_cast<size_t>(n_par));
-  std::vector<double> pars_2buf(static_cast<size_t>(2 * n_par));
+  std::vector<double>& parA = scratch.parA;
+  std::vector<double>& parB = scratch.parB;
+  std::vector<double>& parnA = scratch.parnA;
+  std::vector<double>& parnB = scratch.parnB;
+  std::vector<double>& pars_2buf = scratch.pars_2buf;
+  parA.resize(static_cast<size_t>(n_par));
+  parB.resize(static_cast<size_t>(n_par));
+  parnA.resize(static_cast<size_t>(n_par));
+  parnB.resize(static_cast<size_t>(n_par));
+  pars_2buf.resize(static_cast<size_t>(2 * n_par));
   int isok_2buf[2] = {1, 1};
 
   for (int j = 0; j < n_unique_trials; ++j) {
