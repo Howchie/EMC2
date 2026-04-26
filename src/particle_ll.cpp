@@ -434,15 +434,21 @@ struct LogicalRulesSharedState {
   int n_trials = 0;
   int n_acc = 0;
   int n_unique_trials = 0;
+  bool has_nogo = false;
   std::vector<int> idxA;
   std::vector<int> idxB;
   std::vector<int> idxnA;
   std::vector<int> idxnB;
-  // Rule code: 1=OR, 2=AND, 3=XOR, 4=ID
+  std::vector<int> idxNogo;
+  // Rule code: 1=OR, 2=AND, 3=XOR, 4=ID, 5=OR_DETECTION_ANALYTIC, 6=OR_DETECTION_GNG
   std::vector<int> rule_code;
-  // Response code: 1=yes, 2=no, 3=NN, 4=AN, 5=NB, 6=AB
+  // Stimulus code for detection rules: 0=NN, 1=AN/A, 2=NB/B, 3=AB
+  std::vector<int> cond_code;
+  // Response code: 0=missing, 1=yes, 2=no/nogo, 3=NN, 4=AN, 5=NB, 6=AB
   std::vector<int> resp_code;
   std::vector<double> rt_unique;
+  std::vector<double> LT_unique;
+  std::vector<double> UC_unique;
   // Per-row RTs (length n_trials) for raw dfun/pfun kernels.
   std::vector<double> rt_by_row;
 };
@@ -513,6 +519,53 @@ static double c_log_likelihood_redundant_target_race(
     RaceRawFun model_pfun_raw,
     const RedundantTargetSharedState& shared,
     Rcpp::NumericVector* trial_ll_out = nullptr);
+
+static inline bool eval_pdf_cdf_race_scalar(
+    bool use_raw_local,
+    int idx,
+    double t,
+    const double* p_row,
+    double min_ll,
+    RacePdf1Fun pdf1,
+    RaceCdf1Fun cdf1,
+    ContextForRaceModels* model_ctx,
+    const std::vector<double>& logf_all,
+    const std::vector<double>& logS_all,
+    double& f_out,
+    double& F_out);
+
+static inline double safe_surv_at_race_scalar(
+    const double* p_row,
+    double t_eval,
+    double min_surv,
+    RaceCdf1Fun cdf1,
+    ContextForRaceModels* model_ctx);
+
+static double logicalrules_detection_trial_ll(
+    int rule_code,
+    int cond,
+    int resp,
+    double t,
+    double LTj,
+    double UCj,
+    int idxA,
+    int idxB,
+    int idxN,
+    int n_par,
+    double min_ll,
+    double min_surv,
+    bool use_raw_local,
+    const std::vector<double>& logf_all,
+    const std::vector<double>& logS_all,
+    const double* parA,
+    const double* parB,
+    const double* parN,
+    RacePdf1Fun pdf1,
+    RaceCdf1Fun cdf1,
+    ContextForRaceModels* model_ctx,
+    const GslIntegrationControls& gsl_ctl,
+    gsl_integration_workspace* w,
+    std::vector<double>& pars_rowmajor_buf);
 
 double c_log_likelihood_ss(
     NumericMatrix pars,
@@ -1229,6 +1282,22 @@ static LogicalRulesSharedState build_logicalrules_shared_state(const Rcpp::DataF
   SEXP role_sexp = dadm["lR"];
   SEXP resp_sexp = dadm["R"];
   SEXP rule_sexp = dadm["LogicalRule"];
+  Rcpp::NumericVector LT = get_col_with_default(dadm, "LT", 0.0);
+  Rcpp::NumericVector UC = get_col_with_default(dadm, "UC", R_PosInf);
+  const bool has_stim_col = dadm.containsElementNamed("S") ||
+                            dadm.containsElementNamed("stimulus") ||
+                            dadm.containsElementNamed("condition");
+  SEXP stim_sexp = R_NilValue;
+  bool stim_is_factor = false;
+  Rcpp::IntegerVector stim_code;
+  Rcpp::CharacterVector stim_chr;
+  int stimNN = -1, stimA = -1, stimB = -1, stimAB = -1;
+  if (has_stim_col) {
+    if (dadm.containsElementNamed("S")) stim_sexp = dadm["S"];
+    else if (dadm.containsElementNamed("stimulus")) stim_sexp = dadm["stimulus"];
+    else stim_sexp = dadm["condition"];
+    stim_is_factor = Rf_inherits(stim_sexp, "factor");
+  }
   if (rts.size() != n_trials ||
       Rf_length(role_sexp) != n_trials ||
       Rf_length(resp_sexp) != n_trials ||
@@ -1254,10 +1323,10 @@ static LogicalRulesSharedState build_logicalrules_shared_state(const Rcpp::DataF
     return -1;
   };
 
-  int codeA = -1, codeB = -1, codenA = -1, codenB = -1;
+  int codeA = -1, codeB = -1, codenA = -1, codenB = -1, codeNogo = -1;
   int codeYes = -1, codeNo = -1;
   int codeNN = -1, codeAN = -1, codeNB = -1, codeAB = -1;
-  int codeAND = -1, codeOR = -1, codeXOR = -1, codeID = -1;
+  int codeAND = -1, codeOR = -1, codeXOR = -1, codeID = -1, codeORDet = -1, codeORGng = -1;
 
   if (role_is_factor) {
     role_code = Rcpp::IntegerVector(role_sexp);
@@ -1266,8 +1335,9 @@ static LogicalRulesSharedState build_logicalrules_shared_state(const Rcpp::DataF
     codeB = level_code(lev, "B");
     codenA = level_code(lev, "n_A");
     codenB = level_code(lev, "n_B");
-    if (codeA < 0 || codeB < 0 || codenA < 0 || codenB < 0) {
-      Rcpp::stop("LogicalRules likelihood: lR levels must include A, B, n_A, n_B.");
+    codeNogo = level_code(lev, "nogo");
+    if (codeA < 0 || codeB < 0) {
+      Rcpp::stop("LogicalRules likelihood: lR levels must include A and B.");
     }
   } else {
     role_chr = Rcpp::CharacterVector(role_sexp);
@@ -1296,11 +1366,27 @@ static LogicalRulesSharedState build_logicalrules_shared_state(const Rcpp::DataF
     codeOR = level_code(lev, "OR");
     codeXOR = level_code(lev, "XOR");
     codeID = level_code(lev, "ID");
-    if (codeAND < 0 && codeOR < 0 && codeXOR < 0 && codeID < 0) {
-      Rcpp::stop("LogicalRules likelihood: LogicalRule levels must include at least one of AND, OR, XOR, ID.");
+    codeORDet = level_code(lev, "OR_DETECTION_ANALYTIC");
+    codeORGng = level_code(lev, "OR_DETECTION_GNG");
+    if (codeAND < 0 && codeOR < 0 && codeXOR < 0 && codeID < 0 &&
+        codeORDet < 0 && codeORGng < 0) {
+      Rcpp::stop("LogicalRules likelihood: LogicalRule levels must include AND, OR, XOR, ID, OR_DETECTION_ANALYTIC, or OR_DETECTION_GNG.");
     }
   } else {
     rule_chr = Rcpp::CharacterVector(rule_sexp);
+  }
+
+  if (has_stim_col && stim_is_factor) {
+    stim_code = Rcpp::IntegerVector(stim_sexp);
+    Rcpp::CharacterVector lev = stim_code.attr("levels");
+    stimNN = level_code(lev, "NN");
+    stimA = level_code(lev, "AN");
+    if (stimA < 0) stimA = level_code(lev, "A");
+    stimB = level_code(lev, "NB");
+    if (stimB < 0) stimB = level_code(lev, "B");
+    stimAB = level_code(lev, "AB");
+  } else if (has_stim_col) {
+    stim_chr = Rcpp::CharacterVector(stim_sexp);
   }
 
   out.n_unique_trials = n_trials / n_acc;
@@ -1308,14 +1394,20 @@ static LogicalRulesSharedState build_logicalrules_shared_state(const Rcpp::DataF
   out.idxB.assign(out.n_unique_trials, -1);
   out.idxnA.assign(out.n_unique_trials, -1);
   out.idxnB.assign(out.n_unique_trials, -1);
+  out.idxNogo.assign(out.n_unique_trials, -1);
   out.rule_code.assign(out.n_unique_trials, 0);
+  out.cond_code.assign(out.n_unique_trials, 0);
   out.resp_code.assign(out.n_unique_trials, 0);
   out.rt_unique.assign(out.n_unique_trials, NA_REAL);
+  out.LT_unique.assign(out.n_unique_trials, 0.0);
+  out.UC_unique.assign(out.n_unique_trials, R_PosInf);
   out.rt_by_row.assign(rts.begin(), rts.end());
 
   for (int j = 0; j < out.n_unique_trials; ++j) {
     const int start = j * n_acc;
     out.rt_unique[static_cast<size_t>(j)] = rts[start];
+    out.LT_unique[static_cast<size_t>(j)] = LT[start];
+    out.UC_unique[static_cast<size_t>(j)] = UC[start];
 
     int rcode = 0;
     if (rule_is_factor) {
@@ -1324,40 +1416,72 @@ static LogicalRulesSharedState build_logicalrules_shared_state(const Rcpp::DataF
       else if (rc == codeAND) rcode = 2;
       else if (rc == codeXOR) rcode = 3;
       else if (rc == codeID) rcode = 4;
+      else if (rc == codeORDet) rcode = 5;
+      else if (rc == codeORGng) rcode = 6;
     } else {
       const std::string rv = Rcpp::as<std::string>(rule_chr[start]);
       if (rv == "OR") rcode = 1;
       else if (rv == "AND") rcode = 2;
       else if (rv == "XOR") rcode = 3;
       else if (rv == "ID") rcode = 4;
+      else if (rv == "OR_DETECTION_ANALYTIC") rcode = 5;
+      else if (rv == "OR_DETECTION_GNG") rcode = 6;
     }
     if (rcode == 0) {
-      Rcpp::stop("LogicalRules likelihood: each unique trial must have rule AND, OR, XOR, or ID.");
+      Rcpp::stop("LogicalRules likelihood: each unique trial must have a supported rule.");
     }
     out.rule_code[static_cast<size_t>(j)] = rcode;
 
     int resp = 0;
     if (resp_is_factor) {
       const int rc = resp_code[start];
-      if (rc == codeYes) resp = 1;
+      if (rc == NA_INTEGER) resp = 0;
+      else if (rc == codeYes) resp = 1;
       else if (rc == codeNo) resp = 2;
       else if (rc == codeNN) resp = 3;
       else if (rc == codeAN) resp = 4;
       else if (rc == codeNB) resp = 5;
       else if (rc == codeAB) resp = 6;
     } else {
-      const std::string rv = Rcpp::as<std::string>(resp_chr[start]);
-      if (rv == "yes") resp = 1;
-      else if (rv == "no") resp = 2;
-      else if (rv == "NN") resp = 3;
-      else if (rv == "AN") resp = 4;
-      else if (rv == "NB") resp = 5;
-      else if (rv == "AB") resp = 6;
+      if (resp_chr[start] == NA_STRING) resp = 0;
+      else {
+        const std::string rv = Rcpp::as<std::string>(resp_chr[start]);
+        if (rv == "yes") resp = 1;
+        else if (rv == "no" || rv == "nogo") resp = 2;
+        else if (rv == "NN") resp = 3;
+        else if (rv == "AN") resp = 4;
+        else if (rv == "NB") resp = 5;
+        else if (rv == "AB") resp = 6;
+      }
     }
-    if (resp == 0) {
+    if (resp == 0 && rcode <= 4) {
       Rcpp::stop("LogicalRules likelihood: response must be yes/no/NN/AN/NB/AB on each unique trial.");
     }
     out.resp_code[static_cast<size_t>(j)] = resp;
+
+    int cond = 0;
+    if (rcode >= 5) {
+      if (!has_stim_col) {
+        Rcpp::stop("LogicalRules detection rules require stimulus column `S` (or `stimulus`/`condition`).");
+      }
+      if (stim_is_factor) {
+        const int sc = stim_code[start];
+        if (sc == stimNN) cond = 0;
+        else if (sc == stimA) cond = 1;
+        else if (sc == stimB) cond = 2;
+        else if (sc == stimAB) cond = 3;
+      } else {
+        const std::string sv = Rcpp::as<std::string>(stim_chr[start]);
+        if (sv == "NN" || sv == "none") cond = 0;
+        else if (sv == "AN" || sv == "A") cond = 1;
+        else if (sv == "NB" || sv == "B") cond = 2;
+        else if (sv == "AB" || sv == "BA" || sv == "A+B" || sv == "B+A") cond = 3;
+      }
+      if (cond < 0 || cond > 3) {
+        Rcpp::stop("LogicalRules detection rules require stimulus NN/AN/NB/AB (or A/B/AB).");
+      }
+    }
+    out.cond_code[static_cast<size_t>(j)] = cond;
 
     for (int k = 0; k < n_acc; ++k) {
       const int idx = start + k;
@@ -1367,20 +1491,35 @@ static LogicalRulesSharedState build_logicalrules_shared_state(const Rcpp::DataF
         else if (rc == codeB) out.idxB[static_cast<size_t>(j)] = idx;
         else if (rc == codenA) out.idxnA[static_cast<size_t>(j)] = idx;
         else if (rc == codenB) out.idxnB[static_cast<size_t>(j)] = idx;
+        else if (rc == codeNogo) out.idxNogo[static_cast<size_t>(j)] = idx;
       } else {
         const std::string rv = Rcpp::as<std::string>(role_chr[idx]);
         if (rv == "A") out.idxA[static_cast<size_t>(j)] = idx;
         else if (rv == "B") out.idxB[static_cast<size_t>(j)] = idx;
         else if (rv == "n_A") out.idxnA[static_cast<size_t>(j)] = idx;
         else if (rv == "n_B") out.idxnB[static_cast<size_t>(j)] = idx;
+        else if (rv == "nogo") out.idxNogo[static_cast<size_t>(j)] = idx;
       }
     }
+    if (out.idxNogo[static_cast<size_t>(j)] >= 0) out.has_nogo = true;
 
-    if (out.idxA[static_cast<size_t>(j)] < 0 ||
-        out.idxB[static_cast<size_t>(j)] < 0 ||
-        out.idxnA[static_cast<size_t>(j)] < 0 ||
-        out.idxnB[static_cast<size_t>(j)] < 0) {
-      Rcpp::stop("LogicalRules likelihood: each unique trial requires A, B, n_A, n_B accumulators.");
+    if (rcode <= 4) {
+      if (out.idxA[static_cast<size_t>(j)] < 0 ||
+          out.idxB[static_cast<size_t>(j)] < 0 ||
+          out.idxnA[static_cast<size_t>(j)] < 0 ||
+          out.idxnB[static_cast<size_t>(j)] < 0) {
+        Rcpp::stop("LogicalRules likelihood: OR/AND/XOR/ID trials require A, B, n_A, n_B accumulators.");
+      }
+    } else if (rcode == 5) {
+      if (out.idxA[static_cast<size_t>(j)] < 0 || out.idxB[static_cast<size_t>(j)] < 0) {
+        Rcpp::stop("LogicalRules likelihood: OR_DETECTION_ANALYTIC trials require A and B accumulators.");
+      }
+    } else if (rcode == 6) {
+      if (out.idxA[static_cast<size_t>(j)] < 0 ||
+          out.idxB[static_cast<size_t>(j)] < 0 ||
+          out.idxNogo[static_cast<size_t>(j)] < 0) {
+        Rcpp::stop("LogicalRules likelihood: OR_DETECTION_GNG trials require A, B, and nogo accumulators.");
+      }
     }
   }
 
@@ -2792,6 +2931,161 @@ static double local_race_helper(double t,
   return g;
 }
 
+static inline bool eval_pdf_cdf_race_scalar(
+    bool use_raw_local,
+    int idx,
+    double t,
+    const double* p_row,
+    double min_ll,
+    RacePdf1Fun pdf1,
+    RaceCdf1Fun cdf1,
+    ContextForRaceModels* model_ctx,
+    const std::vector<double>& logf_all,
+    const std::vector<double>& logS_all,
+    double& f_out,
+    double& F_out) {
+  if (use_raw_local) {
+    const double lf = logf_all[static_cast<size_t>(idx)];
+    const double ls = logS_all[static_cast<size_t>(idx)];
+    if (!R_FINITE(lf) || !R_FINITE(ls)) return false;
+    const double f = (lf <= min_ll) ? 0.0 : std::exp(lf);
+    double S = (ls <= min_ll) ? 0.0 : std::exp(ls);
+    if (!(S >= 0.0) || !R_FINITE(S)) return false;
+    if (S > 1.0) S = 1.0;
+    const double F = clamp_cdf01_race(1.0 - S);
+    if (!R_FINITE(f) || !R_FINITE(F) || emc2_isnan(F)) return false;
+    f_out = f;
+    F_out = F;
+    return true;
+  }
+  const double f = pdf1(t, p_row, model_ctx);
+  if (!R_FINITE(f) || f < 0.0) return false;
+  double F = cdf1(t, p_row, model_ctx);
+  F = clamp_cdf01_race(F);
+  if (!R_FINITE(F) || emc2_isnan(F)) return false;
+  f_out = f;
+  F_out = F;
+  return true;
+}
+
+static inline double safe_surv_at_race_scalar(
+    const double* p_row,
+    double t_eval,
+    double min_surv,
+    RaceCdf1Fun cdf1,
+    ContextForRaceModels* model_ctx) {
+  double F = cdf1(t_eval, p_row, model_ctx);
+  F = clamp_cdf01_race(F);
+  if (!R_FINITE(F) || emc2_isnan(F)) return 0.0;
+  return std::max(min_surv, 1.0 - F);
+}
+
+static double logicalrules_detection_trial_ll(
+    int rule_code,
+    int cond,
+    int resp,
+    double t,
+    double LTj,
+    double UCj,
+    int idxA,
+    int idxB,
+    int idxN,
+    int n_par,
+    double min_ll,
+    double min_surv,
+    bool use_raw_local,
+    const std::vector<double>& logf_all,
+    const std::vector<double>& logS_all,
+    const double* parA,
+    const double* parB,
+    const double* parN,
+    RacePdf1Fun pdf1,
+    RaceCdf1Fun cdf1,
+    ContextForRaceModels* model_ctx,
+    const GslIntegrationControls& gsl_ctl,
+    gsl_integration_workspace* w,
+    std::vector<double>& pars_rowmajor_buf) {
+  const bool finite_rt = (R_FINITE(t) && t > 0.0);
+  double p_j = 0.0;
+
+  if (finite_rt) {
+    if (resp != 1) return min_ll;
+    double fA = 0.0, FA = 0.0, fB = 0.0, FB = 0.0;
+    if (!eval_pdf_cdf_race_scalar(use_raw_local, idxA, t, parA, min_ll, pdf1, cdf1, model_ctx, logf_all, logS_all, fA, FA) ||
+        !eval_pdf_cdf_race_scalar(use_raw_local, idxB, t, parB, min_ll, pdf1, cdf1, model_ctx, logf_all, logS_all, fB, FB)) {
+      return min_ll;
+    }
+    const double S_A = std::max(min_surv, 1.0 - FA);
+    const double S_B = std::max(min_surv, 1.0 - FB);
+    if (rule_code == 5) {
+      if (cond == 0) p_j = 0.0;
+      else if (cond == 1) p_j = fA;
+      else if (cond == 2) p_j = fB;
+      else p_j = fA * S_B + fB * S_A;
+    } else {
+      double fN = 0.0, FN = 0.0;
+      if (!eval_pdf_cdf_race_scalar(use_raw_local, idxN, t, parN, min_ll, pdf1, cdf1, model_ctx, logf_all, logS_all, fN, FN)) {
+        return min_ll;
+      }
+      const double S_N = std::max(min_surv, 1.0 - FN);
+      if (cond == 0) p_j = 0.0;
+      else if (cond == 1) p_j = fA * S_N;
+      else if (cond == 2) p_j = fB * S_N;
+      else p_j = (fA * S_B + fB * S_A) * S_N;
+    }
+  } else {
+    if (resp != 0 && resp != 2) return min_ll;
+    if (rule_code == 5) {
+      const double S_A_inf = safe_surv_at_race_scalar(parA, R_PosInf, min_surv, cdf1, model_ctx);
+      const double S_B_inf = safe_surv_at_race_scalar(parB, R_PosInf, min_surv, cdf1, model_ctx);
+      if (cond == 0) p_j = 1.0;
+      else if (cond == 1) p_j = S_A_inf;
+      else if (cond == 2) p_j = S_B_inf;
+      else p_j = S_A_inf * S_B_inf;
+    } else {
+      if (!R_FINITE(UCj)) {
+        Rcpp::stop("LogicalRules OR_DETECTION_GNG requires finite UC for no-go/omission trials.");
+      }
+      const double S_A_uc = safe_surv_at_race_scalar(parA, UCj, min_surv, cdf1, model_ctx);
+      const double S_B_uc = safe_surv_at_race_scalar(parB, UCj, min_surv, cdf1, model_ctx);
+      const double S_N_uc = safe_surv_at_race_scalar(parN, UCj, min_surv, cdf1, model_ctx);
+      double p_none = 0.0;
+      if (cond == 0) p_none = S_N_uc;
+      else if (cond == 1) p_none = S_A_uc * S_N_uc;
+      else if (cond == 2) p_none = S_B_uc * S_N_uc;
+      else p_none = S_A_uc * S_B_uc * S_N_uc;
+
+      pars_rowmajor_buf.resize(static_cast<size_t>(3 * n_par));
+      int isok_buf[3] = {1, 1, 1};
+      std::memcpy(pars_rowmajor_buf.data(), parN, static_cast<size_t>(n_par) * sizeof(double));
+      int n_active = 1;
+      if (cond == 1) {
+        std::memcpy(pars_rowmajor_buf.data() + n_par, parA, static_cast<size_t>(n_par) * sizeof(double));
+        n_active = 2;
+      } else if (cond == 2) {
+        std::memcpy(pars_rowmajor_buf.data() + n_par, parB, static_cast<size_t>(n_par) * sizeof(double));
+        n_active = 2;
+      } else if (cond == 3) {
+        std::memcpy(pars_rowmajor_buf.data() + n_par, parA, static_cast<size_t>(n_par) * sizeof(double));
+        std::memcpy(pars_rowmajor_buf.data() + 2 * n_par, parB, static_cast<size_t>(n_par) * sizeof(double));
+        n_active = 3;
+      }
+      double log_nogo_win = R_NegInf;
+      if (UCj > std::max(0.0, LTj)) {
+        log_nogo_win = integrate_for_kth_winner_rowmajor_cpp(
+          1, pars_rowmajor_buf.data(), isok_buf, std::max(0.0, LTj), UCj,
+          pdf1, cdf1, n_active, n_par, gsl_ctl, model_ctx, w);
+      }
+      const double p_nogo_win = R_FINITE(log_nogo_win) ? std::exp(log_nogo_win) : 0.0;
+      p_j = p_nogo_win + p_none;
+    }
+  }
+
+  if (!(p_j > 0.0) || !R_FINITE(p_j)) return min_ll;
+  const double ll = std::log(p_j);
+  return (R_FINITE(ll) && ll > min_ll) ? ll : min_ll;
+}
+
 static double c_log_likelihood_logicalrules(
     const Rcpp::NumericMatrix& pars,
     const Rcpp::IntegerVector& expand,
@@ -3012,10 +3306,13 @@ static double c_log_likelihood_logicalrules(
   std::vector<double>& parnA = scratch.parnA;
   std::vector<double>& parnB = scratch.parnB;
   std::vector<double>& pars_2buf = scratch.pars_2buf;
+  std::vector<double>& parN = scratch.tmpA1;
+  std::vector<double>& pars_3buf = scratch.tmpA2;
   parA.resize(static_cast<size_t>(n_par));
   parB.resize(static_cast<size_t>(n_par));
   parnA.resize(static_cast<size_t>(n_par));
   parnB.resize(static_cast<size_t>(n_par));
+  parN.resize(static_cast<size_t>(n_par));
   pars_2buf.resize(static_cast<size_t>(2 * n_par));
   int isok_2buf[2] = {1, 1};
 
@@ -3027,52 +3324,67 @@ static double c_log_likelihood_logicalrules(
 
     if (idxA < 0 || idxB < 0 || idxnA < 0 || idxnB < 0 ||
         !ok_params[idxA] || !ok_params[idxB] || !ok_params[idxnA] || !ok_params[idxnB]) {
-      ll_unique[static_cast<size_t>(j)] = min_ll;
-      continue;
+      if (shared.rule_code[static_cast<size_t>(j)] <= 4) {
+        ll_unique[static_cast<size_t>(j)] = min_ll;
+        continue;
+      }
     }
 
     const double t = shared.rt_unique[static_cast<size_t>(j)];
+    copy_par_row_colmajor(pars_cm_ptr, n_trials, n_par, idxA, parA.data());
+    copy_par_row_colmajor(pars_cm_ptr, n_trials, n_par, idxB, parB.data());
+    if (idxnA >= 0) copy_par_row_colmajor(pars_cm_ptr, n_trials, n_par, idxnA, parnA.data());
+    if (idxnB >= 0) copy_par_row_colmajor(pars_cm_ptr, n_trials, n_par, idxnB, parnB.data());
+    const int rule_code = shared.rule_code[static_cast<size_t>(j)];
+    if (rule_code == 6) {
+      const int idxN = shared.idxNogo[static_cast<size_t>(j)];
+      if (idxN < 0 || !ok_params[idxN]) {
+        ll_unique[static_cast<size_t>(j)] = min_ll;
+        continue;
+      }
+      copy_par_row_colmajor(pars_cm_ptr, n_trials, n_par, idxN, parN.data());
+    }
+
+    if (rule_code >= 5) {
+      ll_unique[static_cast<size_t>(j)] = logicalrules_detection_trial_ll(
+        rule_code,
+        shared.cond_code[static_cast<size_t>(j)],
+        shared.resp_code[static_cast<size_t>(j)],
+        t,
+        shared.LT_unique[static_cast<size_t>(j)],
+        shared.UC_unique[static_cast<size_t>(j)],
+        idxA,
+        idxB,
+        shared.idxNogo[static_cast<size_t>(j)],
+        n_par,
+        min_ll,
+        kMinSurv,
+        use_raw_local,
+        logf_all,
+        logS_all,
+        parA.data(),
+        parB.data(),
+        parN.data(),
+        pdf1,
+        cdf1,
+        model_ctx,
+        gsl_ctl,
+        w,
+        pars_3buf);
+      continue;
+    }
+
     if (!(t > 0.0) || !R_FINITE(t)) {
       ll_unique[static_cast<size_t>(j)] = min_ll;
       continue;
     }
 
-    copy_par_row_colmajor(pars_cm_ptr, n_trials, n_par, idxA, parA.data());
-    copy_par_row_colmajor(pars_cm_ptr, n_trials, n_par, idxB, parB.data());
-    copy_par_row_colmajor(pars_cm_ptr, n_trials, n_par, idxnA, parnA.data());
-    copy_par_row_colmajor(pars_cm_ptr, n_trials, n_par, idxnB, parnB.data());
-
-    auto eval_pdf_cdf = [&](int idx, const double* p_row, double& f_out, double& F_out) -> bool {
-      if (use_raw_local) {
-        const double lf = logf_all[static_cast<size_t>(idx)];
-        const double ls = logS_all[static_cast<size_t>(idx)];
-        if (!R_FINITE(lf) || !R_FINITE(ls)) return false;
-        const double f = (lf <= min_ll) ? 0.0 : std::exp(lf);
-        double S = (ls <= min_ll) ? 0.0 : std::exp(ls);
-        if (!(S >= 0.0) || !R_FINITE(S)) return false;
-        if (S > 1.0) S = 1.0;
-        const double F = clamp_cdf01_race(1.0 - S);
-        if (!R_FINITE(f) || !R_FINITE(F) || emc2_isnan(F)) return false;
-        f_out = f;
-        F_out = F;
-        return true;
-      }
-      const double f = pdf1(t, p_row, model_ctx);
-      if (!R_FINITE(f) || f < 0.0) return false;
-      double F = cdf1(t, p_row, model_ctx);
-      F = clamp_cdf01_race(F);
-      if (!R_FINITE(F) || emc2_isnan(F)) return false;
-      f_out = f;
-      F_out = F;
-      return true;
-    };
-
     double fA = 0.0, fB = 0.0, fnA = 0.0, fnB = 0.0;
     double FA = 0.0, FB = 0.0, FnA = 0.0, FnB = 0.0;
-    if (!eval_pdf_cdf(idxA, parA.data(), fA, FA) ||
-        !eval_pdf_cdf(idxB, parB.data(), fB, FB) ||
-        !eval_pdf_cdf(idxnA, parnA.data(), fnA, FnA) ||
-        !eval_pdf_cdf(idxnB, parnB.data(), fnB, FnB)) {
+    if (!eval_pdf_cdf_race_scalar(use_raw_local, idxA, t, parA.data(), min_ll, pdf1, cdf1, model_ctx, logf_all, logS_all, fA, FA) ||
+        !eval_pdf_cdf_race_scalar(use_raw_local, idxB, t, parB.data(), min_ll, pdf1, cdf1, model_ctx, logf_all, logS_all, fB, FB) ||
+        !eval_pdf_cdf_race_scalar(use_raw_local, idxnA, t, parnA.data(), min_ll, pdf1, cdf1, model_ctx, logf_all, logS_all, fnA, FnA) ||
+        !eval_pdf_cdf_race_scalar(use_raw_local, idxnB, t, parnB.data(), min_ll, pdf1, cdf1, model_ctx, logf_all, logS_all, fnB, FnB)) {
       ll_unique[static_cast<size_t>(j)] = min_ll;
       continue;
     }
@@ -3090,12 +3402,12 @@ static double c_log_likelihood_logicalrules(
     const double S_dec_A = one_m_FA * one_m_FnA;
     const double S_dec_B = one_m_FB * one_m_FnB;
 
-    const int rule_code = shared.rule_code[static_cast<size_t>(j)];
+    const int rule_code_lr = shared.rule_code[static_cast<size_t>(j)];
     const int resp_code = shared.resp_code[static_cast<size_t>(j)];
-    const bool is_or_rule = (rule_code == 1);
-    const bool is_and_rule = (rule_code == 2);
-    const bool is_xor_rule = (rule_code == 3);
-    const bool is_id_rule = (rule_code == 4);
+    const bool is_or_rule = (rule_code_lr == 1);
+    const bool is_and_rule = (rule_code_lr == 2);
+    const bool is_xor_rule = (rule_code_lr == 3);
+    const bool is_id_rule = (rule_code_lr == 4);
     const bool channels_equal = use_gl_pass ? ch_eq_vec[static_cast<size_t>(j)]
         : (row_equal_colmajor(pars_cm_ptr, n_trials, n_par, idxA, idxB) &&
            row_equal_colmajor(pars_cm_ptr, n_trials, n_par, idxnA, idxnB));

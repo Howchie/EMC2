@@ -633,13 +633,12 @@ apply_logical_rules <- function(LogicalRule, A_t, nA_t, B_t, nB_t) {
 LogicalRules_rfun <- function(data, pars, model) {
   n_trials <- dim(data)[1] / length(levels(data$lR))
   races <- levels(data$lR)
-  required_racers <- c("A", "n_A", "B", "n_B")
-  if (!all(required_racers %in% races)) stop("RACE must have: A, n_A, B, n_B")
+  if (!all(c("A", "B") %in% races)) stop("LogicalRules requires accumulator roles A and B.")
 
   logical_rule <- as.character(data$LogicalRule[data$lR == races[1]])
-  allowed_rules <- c("OR", "AND", "XOR", "ID")
+  allowed_rules <- c("OR", "AND", "XOR", "ID", "OR_DETECTION_ANALYTIC", "OR_DETECTION_GNG")
   if (!all(logical_rule %in% allowed_rules)) {
-    stop("LogicalRule must be one of: OR, AND, XOR, ID")
+    stop("LogicalRule must be one of: OR, AND, XOR, ID, OR_DETECTION_ANALYTIC, OR_DETECTION_GNG")
   }
 
   # Simulate finishing times for each accumulator role.
@@ -654,16 +653,72 @@ LogicalRules_rfun <- function(data, pars, model) {
     Rrti[, i] <- model()$rfun(data_in, p)$rt
   }
 
-  out <- apply_logical_rules(
-    LogicalRule = logical_rule,
-    A_t = Rrti[, "A"],
-    nA_t = Rrti[, "n_A"],
-    B_t = Rrti[, "B"],
-    nB_t = Rrti[, "n_B"]
-  )
+  is_detection <- logical_rule %in% c("OR_DETECTION_ANALYTIC", "OR_DETECTION_GNG")
+  if (any(is_detection)) {
+    stim_col <- if ("S" %in% names(data)) {
+      "S"
+    } else if ("stimulus" %in% names(data)) {
+      "stimulus"
+    } else if ("condition" %in% names(data)) {
+      "condition"
+    } else {
+      stop("LogicalRules detection rules require stimulus column `S` (or `stimulus`/`condition`).")
+    }
+    cond <- as.character(data[data$lR == races[1], stim_col])
+    cond[cond %in% c("BA", "A+B", "B+A")] <- "AB"
+    cond[cond == "A"] <- "AN"
+    cond[cond == "B"] <- "NB"
+    if (!all(cond %in% c("NN", "AN", "NB", "AB"))) {
+      stop("LogicalRules detection rules require stimulus NN/AN/NB/AB (or A/B/AB).")
+    }
+  }
+
+  out <- data.frame(R = rep(NA_character_, n_trials), rt = rep(Inf, n_trials))
+
+  legacy <- !is_detection
+  if (any(legacy)) {
+    required_racers <- c("A", "n_A", "B", "n_B")
+    if (!all(required_racers %in% races)) stop("LogicalRules OR/AND/XOR/ID requires A, n_A, B, n_B.")
+    out_legacy <- apply_logical_rules(
+      LogicalRule = logical_rule[legacy],
+      A_t = Rrti[legacy, "A"],
+      nA_t = Rrti[legacy, "n_A"],
+      B_t = Rrti[legacy, "B"],
+      nB_t = Rrti[legacy, "n_B"]
+    )
+    out[legacy, ] <- out_legacy
+  }
+
+  if (any(is_detection)) {
+    tA <- Rrti[is_detection, "A"]
+    tB <- Rrti[is_detection, "B"]
+    cond_d <- cond[is_detection]
+    is_gng <- logical_rule[is_detection] == "OR_DETECTION_GNG"
+    tN <- if ("nogo" %in% races) Rrti[is_detection, "nogo"] else rep(Inf, sum(is_detection))
+
+    go_t <- rep(Inf, sum(is_detection))
+    go_t[cond_d == "AN"] <- tA[cond_d == "AN"]
+    go_t[cond_d == "NB"] <- tB[cond_d == "NB"]
+    go_t[cond_d == "AB"] <- pmin(tA[cond_d == "AB"], tB[cond_d == "AB"])
+
+    emit <- is.finite(go_t) & (!is_gng | (go_t < tN))
+    det_idx <- which(is_detection)
+    out$rt[det_idx[emit]] <- go_t[emit]
+    out$R[det_idx[emit]] <- "yes"
+
+    if (any(is_gng & !emit)) {
+      out$rt[det_idx[is_gng & !emit]] <- Inf
+      out$R[det_idx[is_gng & !emit]] <- NA_character_
+    }
+
+    if (any(!is_gng & !emit)) {
+      out$rt[det_idx[!is_gng & !emit]] <- Inf
+      out$R[det_idx[!is_gng & !emit]] <- NA_character_
+    }
+  }
 
   has_id <- any(logical_rule == "ID")
-  has_binary <- any(logical_rule %in% c("OR", "AND", "XOR"))
+  has_binary <- any(logical_rule %in% c("OR", "AND", "XOR", "OR_DETECTION_ANALYTIC", "OR_DETECTION_GNG"))
   if (has_id && has_binary) {
     out$R <- factor(out$R, levels = c("no", "yes", "NN", "AN", "NB", "AB"))
   } else if (has_id) {
