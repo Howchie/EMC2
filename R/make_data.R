@@ -20,6 +20,27 @@ get_missing <- function(supplied, data, bound_name, default,type) {
   out
 }
 
+.active_nogo_rows <- function(data) {
+  if (!("R" %in% names(data)) || !is.factor(data$R)) {
+    return(rep(FALSE, nrow(data)))
+  }
+  nogo_code <- match("nogo", levels(data$R))
+  if (is.na(nogo_code)) {
+    return(rep(FALSE, nrow(data)))
+  }
+  active_nogo <- rep(TRUE, nrow(data))
+  if ("RACE" %in% names(data) && is.factor(data$RACE)) {
+    nacc_by_level <- suppressWarnings(as.integer(levels(data$RACE)))
+    if (!anyNA(nacc_by_level)) {
+      race_codes <- as.integer(data$RACE)
+      active_nogo[] <- FALSE
+      ok <- !is.na(race_codes)
+      active_nogo[ok] <- nacc_by_level[race_codes[ok]] >= nogo_code
+    }
+  }
+  active_nogo
+}
+
 #' Add information about missing values to data and modify/filter accordingly.
 #'
 #' Columns corresponding to LC, UT, LC, UC, and pContaminant arguments are added
@@ -35,7 +56,7 @@ get_missing <- function(supplied, data, bound_name, default,type) {
 #' (same value for each subject), 4) a vector with length matching data rows, or
 #' 5) a function taking data as it argument that creates a column of appropriate
 #' values. Note that if this function returns a subject named vector it will be
-#' expanded as in case (3). For rows with response (column R) "nogo" the following
+#' expanded as in case (3). For rows where a nogo response is active, the following
 #' are enforced: UC=LC=LT=0, UT=Inf, UCdirection=UCresponse=TRUE
 #'
 #' @param data Data frame to be modified
@@ -82,21 +103,15 @@ make_missing <- function(data, LT = NULL, UT = NULL, LC = NULL, UC = NULL,
   UT <- get_missing(UT, data, "UT",Inf,"numeric")
   data$UT[!no_truncate] <- as.numeric(UT[!no_truncate])
 
-  # Go/no-go data are defined by explicit non-responses. Truncation is not a
-  # coherent missing-data mechanism in this setting, so disable LT/UT globally.
-  is_gng_data <- FALSE
-  if ("R" %in% names(data)) {
-    if (is.factor(data$R)) is_gng_data <- "nogo" %in% levels(data$R)
-    if (!is_gng_data) is_gng_data <- any(data$R == "nogo", na.rm = TRUE)
-  }
-  if (is_gng_data) {
-    requested_trunc <- any(((data$LT != 0) | is.finite(data$UT)) & !no_truncate, na.rm = TRUE)
+  active_nogo <- .active_nogo_rows(data)
+  if (any(active_nogo)) {
+    requested_trunc <- any(((data$LT != 0) | is.finite(data$UT)) & !no_truncate & active_nogo, na.rm = TRUE)
     if (requested_trunc) {
-      warning("Ignoring LT/UT truncation for go/no-go data (R includes 'nogo').")
+      warning("Ignoring LT/UT truncation for rows with an active nogo response.")
     }
-    no_truncate[] <- TRUE
-    data$LT[] <- 0
-    data$UT[] <- Inf
+    no_truncate[active_nogo] <- TRUE
+    data$LT[active_nogo] <- 0
+    data$UT[active_nogo] <- Inf
   }
 
 
@@ -124,7 +139,7 @@ make_missing <- function(data, LT = NULL, UT = NULL, LC = NULL, UC = NULL,
   UT_eff <- data$UT
   UC_eff <- data$UC
 
-  isgng <- data$R == "nogo"
+  isgng <- active_nogo & data$R == "nogo"
   isgng[is.na(isgng)] <- FALSE
   if (any(isgng)) {
     UC_eff[isgng] <- 0

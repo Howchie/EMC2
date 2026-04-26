@@ -50,7 +50,7 @@ na_locf <- function(x, na.rm = FALSE) {
   x
 }
 
-.emc2_ll_cache_version <- 2L
+.emc2_ll_cache_version <- 3L
 
 .is_valid_ll_cache <- function(dadm, n_trials, n_lR, has_RACE_col) {
   if (!is.data.frame(dadm)) return(FALSE)
@@ -73,9 +73,12 @@ na_locf <- function(x, na.rm = FALSE) {
   finite_rt_mask <- attr(dadm, "finite_rt_mask")
   finite_rt_unique <- attr(dadm, "finite_rt_unique_trial_indices")
   other_unique <- attr(dadm, "other_unique_trial_indices")
-  if (is.null(finite_rt_mask) || is.null(finite_rt_unique) || is.null(other_unique)) return(FALSE)
+  active_nogo_trial_mask <- attr(dadm, "active_nogo_trial_mask")
+  if (is.null(finite_rt_mask) || is.null(finite_rt_unique) || is.null(other_unique) ||
+      is.null(active_nogo_trial_mask)) return(FALSE)
   if (length(finite_rt_mask) != n_trials) return(FALSE)
   if ((length(finite_rt_unique) + length(other_unique)) != n_unique_trials) return(FALSE)
+  if (!is.logical(active_nogo_trial_mask) || length(active_nogo_trial_mask) != n_unique_trials) return(FALSE)
 
   valid_idx <- function(x) {
     if (!is.numeric(x) && !is.integer(x)) return(FALSE)
@@ -95,7 +98,10 @@ na_locf <- function(x, na.rm = FALSE) {
   rts <- dadm[["rt"]]
   R_idx <- dadm[["R"]]
   if (is.null(rts) || is.null(R_idx)) return(FALSE)
+  lR_codes <- as.integer(dadm[["lR"]])
+  nogo_code <- match("nogo", levels(dadm[["lR"]]))
   race_nacc <- if (has_RACE_col) attr(dadm, "RACE_nacc_by_row") else NULL
+  race_mask <- if (has_RACE_col) attr(dadm, "RACE_mask") else NULL
   if (has_RACE_col && (is.null(race_nacc) || length(race_nacc) != n_trials)) return(FALSE)
   finite_set <- finite_rt_unique
   other_set <- other_unique
@@ -103,10 +109,18 @@ na_locf <- function(x, na.rm = FALSE) {
     start_row <- 1L + j0 * n_lR
     n_lR_j <- if (has_RACE_col) race_nacc[start_row] else n_lR
     if (!is.finite(n_lR_j) || n_lR_j < 1L || n_lR_j > n_lR) return(FALSE)
+    rows <- start_row:(start_row + n_lR_j - 1L)
+    has_active_nogo <- FALSE
+    if (!is.na(nogo_code) && length(rows) > 0L) {
+      active_rows <- if (has_RACE_col) rows[which(race_mask[rows])] else rows
+      if (length(active_rows) > 0L) {
+        has_active_nogo <- any(lR_codes[active_rows] == nogo_code, na.rm = TRUE)
+      }
+    }
+    if (!identical(active_nogo_trial_mask[[j0 + 1L]], has_active_nogo)) return(FALSE)
     finite_trial <- is.finite(rts[start_row]) && rts[start_row] > 0 && !is.na(R_idx[start_row])
     if (finite_trial) {
       if (!(j0 %in% finite_set)) return(FALSE)
-      rows <- start_row:(start_row + n_lR_j - 1L)
       if (!all(finite_rt_mask[rows])) return(FALSE)
     } else {
       if (!(j0 %in% other_set)) return(FALSE)
@@ -140,6 +154,7 @@ na_locf <- function(x, na.rm = FALSE) {
     attr(dadm, "finite_rt_mask") <- NULL
     attr(dadm, "finite_rt_unique_trial_indices") <- NULL
     attr(dadm, "other_unique_trial_indices") <- NULL
+    attr(dadm, "active_nogo_trial_mask") <- NULL
     attr(dadm, "RACE_nacc_by_row") <- NULL
     attr(dadm, "RACE_mask") <- NULL
   }
@@ -186,11 +201,14 @@ na_locf <- function(x, na.rm = FALSE) {
     finite_rt_mask <- rep.int(FALSE, n_trials)
     finite_rt_unique_trial_indices <- integer(0)
     other_unique_trial_indices <- integer(0)
+    active_nogo_trial_mask <- rep.int(FALSE, n_unique_trials)
 
     start_idx <- seq.int(1L, n_trials, by = n_lR)
     rts_dadm <- dadm[["rt"]]
     R_idxs_dadm <- dadm[["R"]]
     race_nacc_by_row <- if (has_RACE_col) attr(dadm, "RACE_nacc_by_row") else NULL
+    race_mask <- if (has_RACE_col) attr(dadm, "RACE_mask") else NULL
+    nogo_code <- match("nogo", levels(lR))
 
     for (j0 in 0:(n_unique_trials - 1L)) {
       start_row_idx <- start_idx[j0 + 1L]
@@ -201,9 +219,16 @@ na_locf <- function(x, na.rm = FALSE) {
       } else {
         n_lR
       }
+      rows <- start_row_idx + 0:(n_lR_j - 1L)
+      if (!is.na(nogo_code) && length(rows) > 0L) {
+        active_rows <- if (has_RACE_col) rows[which(race_mask[rows])] else rows
+        if (length(active_rows) > 0L) {
+          active_nogo_trial_mask[j0 + 1L] <- any(lR_codes[active_rows] == nogo_code, na.rm = TRUE)
+        }
+      }
       if (is.finite(rt_j) && rt_j > 0 && !is.na(R_j)) {
         finite_rt_unique_trial_indices <- c(finite_rt_unique_trial_indices, j0)
-        finite_rt_mask[start_row_idx + 0:(n_lR_j - 1L)] <- TRUE
+        finite_rt_mask[rows] <- TRUE
       } else {
         other_unique_trial_indices <- c(other_unique_trial_indices, j0)
       }
@@ -212,6 +237,7 @@ na_locf <- function(x, na.rm = FALSE) {
     attr(dadm, "finite_rt_mask") <- finite_rt_mask
     attr(dadm, "finite_rt_unique_trial_indices") <- finite_rt_unique_trial_indices
     attr(dadm, "other_unique_trial_indices") <- other_unique_trial_indices
+    attr(dadm, "active_nogo_trial_mask") <- active_nogo_trial_mask
   }
 
   attr(dadm, "emc2_ll_cache_version") <- .emc2_ll_cache_version

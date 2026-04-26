@@ -22,7 +22,6 @@
 #include <array>
 #include <cstring>
 #include <mutex>
-#include <cstdlib>
 
 using namespace Rcpp;
 
@@ -405,6 +404,7 @@ struct ModelSharedState {
   std::vector<int>    finite_mask_int;   // 0/1 representation (for DDM/SIMD)
   std::vector<int>    finite_unique_idx; // indices of finite unique trials
   std::vector<int>    other_unique_idx;  // indices of other (non-finite) unique trials
+  std::vector<int>    active_nogo_trial_mask; // per-unique-trial 0/1 nogo-active dispatch flag
   // Pre-allocated mutable scratch buffers (length n_trials)
   std::vector<double> res_buf;   // log-density or result; NOT re-initialised between particles
   std::vector<int>    idx_win;   // data-fixed winner mask  (finite rows only)
@@ -1493,6 +1493,10 @@ static RedundantTargetSharedState build_redundant_target_shared_state(const Rcpp
   out.UC_unique.assign(out.n_unique_trials, R_PosInf);
   out.rt_by_row.assign(rts.begin(), rts.end());
   out.has_nogo = false;
+  Rcpp::LogicalVector race_mask;
+  const bool has_race_mask =
+    dadm.hasAttribute("RACE_mask") &&
+    static_cast<int>((race_mask = dadm.attr("RACE_mask")).size()) == n_trials;
 
   for (int j = 0; j < out.n_unique_trials; ++j) {
     const int start = j * n_acc;
@@ -1539,6 +1543,7 @@ static RedundantTargetSharedState build_redundant_target_shared_state(const Rcpp
 
     for (int k = 0; k < n_acc; ++k) {
       const int idx = start + k;
+      if (has_race_mask && !race_mask[idx]) continue;
       if (role_is_factor) {
         const int rc = role_code[idx];
         if (rc == codeA) out.idxA[static_cast<size_t>(j)] = idx;
@@ -2023,13 +2028,16 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
       const bool has_part =
         data.hasAttribute("finite_rt_mask") &&
         data.hasAttribute("finite_rt_unique_trial_indices") &&
-        data.hasAttribute("other_unique_trial_indices");
+        data.hasAttribute("other_unique_trial_indices") &&
+        data.hasAttribute("active_nogo_trial_mask");
       if (has_part) {
         race_shared.finite_mask = data.attr("finite_rt_mask");
         Rcpp::IntegerVector fa = data.attr("finite_rt_unique_trial_indices");
         Rcpp::IntegerVector oa = data.attr("other_unique_trial_indices");
+        Rcpp::LogicalVector ng = data.attr("active_nogo_trial_mask");
         race_shared.finite_unique_idx.assign(fa.begin(), fa.end());
         race_shared.other_unique_idx.assign(oa.begin(), oa.end());
+        race_shared.active_nogo_trial_mask.assign(ng.begin(), ng.end());
 
         // Pre-read censoring/truncation bounds once
         race_shared.LT_vec = get_col_with_default(data, "LT", 0.0);
@@ -2702,7 +2710,6 @@ struct LogicalRulesScratch {
   std::vector<int> isok_nB;
   std::vector<int> isok_B;
   std::vector<int> all1;
-  std::vector<int> b_map;
   std::vector<double> tmpA1;
   std::vector<double> tmpA2;
   std::vector<double> tmpB1;
@@ -2720,75 +2727,6 @@ static inline void resize_assign_double(std::vector<double>& x, size_t n, double
 
 static inline void resize_assign_int(std::vector<int>& x, size_t n, int value) {
   x.assign(n, value);
-}
-
-static void lba_logicalrules_pair_gl(const std::vector<double>& nodes,
-                                     const std::vector<double>& weights,
-                                     const std::vector<int>* rows,
-                                     const std::vector<double>& h,
-                                     const std::vector<double>& pars_no,
-                                     const std::vector<double>& pars_yes,
-                                     const std::vector<int>& isok_no,
-                                     const std::vector<int>& isok_yes,
-                                     int n_rows,
-                                     bool posdrift,
-                                     std::vector<double>& out,
-                                     bool reset_rows) {
-  if (reset_rows) {
-    if (rows == nullptr) {
-      std::fill(out.begin(), out.begin() + n_rows, 0.0);
-    } else {
-      for (int r : *rows) out[static_cast<size_t>(r)] = 0.0;
-    }
-  }
-
-  const double* v_no  = pars_no.data() + 0 * n_rows;
-  const double* sv_no = pars_no.data() + 1 * n_rows;
-  const double* B_no  = pars_no.data() + 2 * n_rows;
-  const double* A_no  = pars_no.data() + 3 * n_rows;
-  const double* v_yes  = pars_yes.data() + 0 * n_rows;
-  const double* sv_yes = pars_yes.data() + 1 * n_rows;
-  const double* B_yes  = pars_yes.data() + 2 * n_rows;
-  const double* A_yes  = pars_yes.data() + 3 * n_rows;
-
-  const int n_nodes = static_cast<int>(nodes.size());
-  for (int k = 0; k < n_nodes; ++k) {
-    const double xi = nodes[static_cast<size_t>(k)];
-    const double wt = weights[static_cast<size_t>(k)];
-    if (rows == nullptr) {
-      #pragma omp simd
-      for (int r = 0; r < n_rows; ++r) {
-        if (!isok_no[r] || !isok_yes[r] || !(h[static_cast<size_t>(r)] > 0.0)) continue;
-        const double tt = h[static_cast<size_t>(r)] * (1.0 + xi);
-        const double pdf_no = dlba_norm(tt, A_no[r], B_no[r] + A_no[r],
-                                        v_no[r], sv_no[r], posdrift);
-        if (!(pdf_no > 0.0) || !R_FINITE(pdf_no)) continue;
-        double cdf_yes = plba_norm(tt, A_yes[r], B_yes[r] + A_yes[r],
-                                   v_yes[r], sv_yes[r], posdrift);
-        cdf_yes = clamp_cdf01_race(cdf_yes);
-        if (!R_FINITE(cdf_yes)) continue;
-        out[static_cast<size_t>(r)] += wt * h[static_cast<size_t>(r)] *
-          pdf_no * std::max(0.0, 1.0 - cdf_yes);
-      }
-    } else {
-      const int n_active = static_cast<int>(rows->size());
-      #pragma omp simd
-      for (int ii = 0; ii < n_active; ++ii) {
-        const int r = (*rows)[static_cast<size_t>(ii)];
-        if (!isok_no[r] || !isok_yes[r] || !(h[static_cast<size_t>(r)] > 0.0)) continue;
-        const double tt = h[static_cast<size_t>(r)] * (1.0 + xi);
-        const double pdf_no = dlba_norm(tt, A_no[r], B_no[r] + A_no[r],
-                                        v_no[r], sv_no[r], posdrift);
-        if (!(pdf_no > 0.0) || !R_FINITE(pdf_no)) continue;
-        double cdf_yes = plba_norm(tt, A_yes[r], B_yes[r] + A_yes[r],
-                                   v_yes[r], sv_yes[r], posdrift);
-        cdf_yes = clamp_cdf01_race(cdf_yes);
-        if (!R_FINITE(cdf_yes)) continue;
-        out[static_cast<size_t>(r)] += wt * h[static_cast<size_t>(r)] *
-          pdf_no * std::max(0.0, 1.0 - cdf_yes);
-      }
-    }
-  }
 }
 
 static double local_race_helper(double t,
@@ -2887,8 +2825,6 @@ static double c_log_likelihood_logicalrules(
     (model_dfun_raw != nullptr &&
      model_pfun_raw != nullptr &&
      static_cast<int>(shared.rt_by_row.size()) == n_trials);
-  const bool use_fused_lba_gl =
-    (use_raw_local && n_par >= 5 && model_ctx->t0_index == 4);
 
   GslIntegrationControls gsl_ctl = default_gsl_controls();
   gsl_ctl.try_qng_first_finite = true;
@@ -2947,7 +2883,6 @@ static double c_log_likelihood_logicalrules(
     pair_ok_A.resize(static_cast<size_t>(n_unique_trials));
     pair_ok_B.resize(static_cast<size_t>(n_unique_trials));
     bool any_unequal = false;
-    int n_b_active = 0;
     for (int j = 0; j < n_unique_trials; ++j) {
       const int iA  = shared.idxA[j],  inA = shared.idxnA[j];
       const int iB  = shared.idxB[j],  inB = shared.idxnB[j];
@@ -2969,7 +2904,6 @@ static double c_log_likelihood_logicalrules(
       pair_ok_B[static_cast<size_t>(j)] =
         (iB >= 0 && inB >= 0 && ok_params[iB] && ok_params[inB] &&
          RT > 0.0 && R_FINITE(RT) && gl_h_B[static_cast<size_t>(j)] > 0.0) ? 1 : 0;
-      if (any_unequal && !ch_eq_vec[j] && pair_ok_B[static_cast<size_t>(j)]) ++n_b_active;
     }
 
     // Compact column-major parameter matrices (n_unique_trials rows) for each accumulator role.
@@ -3022,67 +2956,48 @@ static double c_log_likelihood_logicalrules(
     resize_assign_double(GA_no_gl, static_cast<size_t>(n_unique_trials), 0.0);
     resize_assign_double(GB_no_gl, static_cast<size_t>(n_unique_trials), 0.0);
 
-    if (use_fused_lba_gl) {
-      const bool posdrift = model_ctx->use_posdrift;
-      lba_logicalrules_pair_gl(gl_rules.x31, gl_rules.w31, nullptr, gl_h_A,
-                               pars_nA, pars_A, isok_nA, isok_A,
-                               n_unique_trials, posdrift, GA_no_gl, true);
+    std::vector<int>& all1 = scratch.all1;
+    resize_assign_int(all1, static_cast<size_t>(n_unique_trials), 1);
+    std::vector<double>& gl_rt = scratch.tmpA1;
+    std::vector<double>& lf_nA = scratch.tmpA2;
+    std::vector<double>& lS_A = scratch.tmpB1;
+    std::vector<double>& lf_nB = scratch.tmpB2;
+    std::vector<double>& lS_B = scratch.parA;
+    gl_rt.resize(static_cast<size_t>(n_unique_trials));
+    resize_assign_double(lf_nA, static_cast<size_t>(n_unique_trials), min_ll);
+    resize_assign_double(lS_A, static_cast<size_t>(n_unique_trials), min_ll);
+    resize_assign_double(lf_nB, static_cast<size_t>(n_unique_trials), min_ll);
+    resize_assign_double(lS_B, static_cast<size_t>(n_unique_trials), min_ll);
 
-      if (any_unequal) {
-        std::vector<int>& b_map = scratch.b_map;
-        b_map.clear();
-        b_map.reserve(static_cast<size_t>(n_b_active));
-        for (int j = 0; j < n_unique_trials; ++j) {
-          if (!ch_eq_vec[static_cast<size_t>(j)] && pair_ok_B[static_cast<size_t>(j)]) {
-            b_map.push_back(j);
-          }
-        }
-        if (!b_map.empty()) {
-          lba_logicalrules_pair_gl(gl_rules.x31, gl_rules.w31, &b_map, gl_h_B,
-                                   pars_nB, pars_B, isok_nB, isok_B,
-                                   n_unique_trials, posdrift, GB_no_gl, true);
-        }
+    for (size_t k = 0; k < gl_rules.x31.size(); ++k) {
+      const double xi = gl_rules.x31[k], wt = gl_rules.w31[k];
+      for (int j = 0; j < n_unique_trials; ++j) {
+        const double t0A = (t0_col >= 0 && t0_col < n_par)
+          ? pars_cm_ptr[static_cast<size_t>(t0_col) * n_trials + shared.idxA[j]]
+          : 0.0;
+        gl_rt[static_cast<size_t>(j)] = t0A + gl_h_A[static_cast<size_t>(j)] * (1.0 + xi);
       }
-    } else {
-      std::vector<int>& all1 = scratch.all1;
-      resize_assign_int(all1, static_cast<size_t>(n_unique_trials), 1);
-      std::vector<double>& gl_rt = scratch.tmpA1;
-      std::vector<double>& lf_nA = scratch.tmpA2;
-      std::vector<double>& lS_A = scratch.tmpB1;
-      std::vector<double>& lf_nB = scratch.tmpB2;
-      std::vector<double>& lS_B = scratch.parA;
-      gl_rt.resize(static_cast<size_t>(n_unique_trials));
-      resize_assign_double(lf_nA, static_cast<size_t>(n_unique_trials), min_ll);
-      resize_assign_double(lS_A, static_cast<size_t>(n_unique_trials), min_ll);
-      resize_assign_double(lf_nB, static_cast<size_t>(n_unique_trials), min_ll);
-      resize_assign_double(lS_B, static_cast<size_t>(n_unique_trials), min_ll);
-
-      for (size_t k = 0; k < gl_rules.x31.size(); ++k) {
-        const double xi = gl_rules.x31[k], wt = gl_rules.w31[k];
+      model_dfun_raw(gl_rt.data(), pars_nA.data(), n_unique_trials,
+                     all1.data(), isok_nA.data(), lf_nA.data(), min_ll, model_ctx);
+      model_pfun_raw(gl_rt.data(), pars_A.data(),  n_unique_trials,
+                     all1.data(), isok_A.data(),  lS_A.data(),  min_ll, model_ctx);
+      #pragma omp simd
+      for (int j = 0; j < n_unique_trials; ++j)
+        GA_no_gl[j] += wt * gl_h_A[j] * std::exp(lf_nA[j] + lS_A[j]);
+      if (any_unequal) {
         for (int j = 0; j < n_unique_trials; ++j) {
-          const double t0A = pars_cm_ptr[static_cast<size_t>(t0_col) * n_trials + shared.idxA[j]];
-          gl_rt[static_cast<size_t>(j)] = t0A + gl_h_A[static_cast<size_t>(j)] * (1.0 + xi);
+          const double t0B = (t0_col >= 0 && t0_col < n_par)
+            ? pars_cm_ptr[static_cast<size_t>(t0_col) * n_trials + shared.idxB[j]]
+            : 0.0;
+          gl_rt[static_cast<size_t>(j)] = t0B + gl_h_B[static_cast<size_t>(j)] * (1.0 + xi);
         }
-        model_dfun_raw(gl_rt.data(), pars_nA.data(), n_unique_trials,
-                       all1.data(), isok_nA.data(), lf_nA.data(), min_ll, model_ctx);
-        model_pfun_raw(gl_rt.data(), pars_A.data(),  n_unique_trials,
-                       all1.data(), isok_A.data(),  lS_A.data(),  min_ll, model_ctx);
+        model_dfun_raw(gl_rt.data(), pars_nB.data(), n_unique_trials,
+                       all1.data(), isok_nB.data(), lf_nB.data(), min_ll, model_ctx);
+        model_pfun_raw(gl_rt.data(), pars_B.data(),  n_unique_trials,
+                       all1.data(), isok_B.data(),  lS_B.data(),  min_ll, model_ctx);
         #pragma omp simd
         for (int j = 0; j < n_unique_trials; ++j)
-          GA_no_gl[j] += wt * gl_h_A[j] * std::exp(lf_nA[j] + lS_A[j]);
-        if (any_unequal) {
-          for (int j = 0; j < n_unique_trials; ++j) {
-            const double t0B = pars_cm_ptr[static_cast<size_t>(t0_col) * n_trials + shared.idxB[j]];
-            gl_rt[static_cast<size_t>(j)] = t0B + gl_h_B[static_cast<size_t>(j)] * (1.0 + xi);
-          }
-          model_dfun_raw(gl_rt.data(), pars_nB.data(), n_unique_trials,
-                         all1.data(), isok_nB.data(), lf_nB.data(), min_ll, model_ctx);
-          model_pfun_raw(gl_rt.data(), pars_B.data(),  n_unique_trials,
-                         all1.data(), isok_B.data(),  lS_B.data(),  min_ll, model_ctx);
-          #pragma omp simd
-          for (int j = 0; j < n_unique_trials; ++j)
-            GB_no_gl[j] += wt * gl_h_B[j] * std::exp(lf_nB[j] + lS_B[j]);
-        }
+          GB_no_gl[j] += wt * gl_h_B[j] * std::exp(lf_nB[j] + lS_B[j]);
       }
     }
     for (int j = 0; j < n_unique_trials; ++j) {
@@ -3718,33 +3633,58 @@ double c_log_likelihood_race(
   Rcpp::LogicalVector finite_rt_mask;
   std::vector<int> finite_rt_unique_trial_indices;
   std::vector<int> other_unique_trial_indices;
+  std::vector<int> active_nogo_trial_mask;
   if (!use_full_finite_batch) {
     if (use_shared && static_cast<int>(shared->finite_mask.size()) == n_trials) {
       // Fast path: re-use pre-read partition from shared state (no attr lookup, no copy)
       finite_rt_mask = shared->finite_mask;
       finite_rt_unique_trial_indices = shared->finite_unique_idx;
       other_unique_trial_indices     = shared->other_unique_idx;
+      active_nogo_trial_mask         = shared->active_nogo_trial_mask;
     } else {
       const bool has_partition_attrs =
         dadm.hasAttribute("finite_rt_mask") &&
         dadm.hasAttribute("finite_rt_unique_trial_indices") &&
-        dadm.hasAttribute("other_unique_trial_indices");
+        dadm.hasAttribute("other_unique_trial_indices") &&
+        dadm.hasAttribute("active_nogo_trial_mask");
 
       if (has_partition_attrs) {
         finite_rt_mask = dadm.attr("finite_rt_mask");
         Rcpp::IntegerVector finite_attr = dadm.attr("finite_rt_unique_trial_indices");
         Rcpp::IntegerVector other_attr = dadm.attr("other_unique_trial_indices");
+        Rcpp::LogicalVector nogo_attr = dadm.attr("active_nogo_trial_mask");
         finite_rt_unique_trial_indices.assign(finite_attr.begin(), finite_attr.end());
         other_unique_trial_indices.assign(other_attr.begin(), other_attr.end());
+        active_nogo_trial_mask.assign(nogo_attr.begin(), nogo_attr.end());
       } else {
         // Fallback path for direct calc_ll/calc_ll_oo callers that bypass
         // .cache_ll_data_attrs(): derive finite/other unique-trial partitions.
         finite_rt_mask = Rcpp::LogicalVector(n_trials, false);
+        active_nogo_trial_mask.assign(static_cast<size_t>(n_unique_trials), 0);
+        const SEXP lR_sexp = dadm["lR"];
+        const Rcpp::IntegerVector lR_code(lR_sexp);
+        const Rcpp::CharacterVector lR_levels = lR_code.attr("levels");
+        int nogo_code = -1;
+        for (int i = 0; i < lR_levels.size(); ++i) {
+          if (Rcpp::as<std::string>(lR_levels[i]) == "nogo") {
+            nogo_code = i + 1;
+            break;
+          }
+        }
         for (int unique_trial_idx = 0; unique_trial_idx < n_unique_trials; ++unique_trial_idx) {
           const int start_row_idx = unique_trial_idx * n_lR;
           const int n_lR_j = has_RACE_col ? RACE[start_row_idx] : n_lR;
           const double rt_j = rts_dadm[start_row_idx];
           const int R_j_idx = R_idxs_dadm[start_row_idx];
+          if (nogo_code > 0) {
+            bool has_active_nogo = false;
+            for (int k = 0; k < n_lR_j; ++k) {
+              const int row = start_row_idx + k;
+              if (has_RACE_col && static_cast<int>(RACE_mask.size()) == n_trials && !RACE_mask[row]) continue;
+              if (lR_code[row] == nogo_code) { has_active_nogo = true; break; }
+            }
+            active_nogo_trial_mask[static_cast<size_t>(unique_trial_idx)] = has_active_nogo ? 1 : 0;
+          }
           if (R_FINITE(rt_j) && rt_j > 0.0 && R_j_idx != NA_INTEGER) {
             finite_rt_unique_trial_indices.push_back(unique_trial_idx);
             for (int k = 0; k < n_lR_j; ++k) finite_rt_mask[start_row_idx + k] = true;
@@ -3766,7 +3706,6 @@ double c_log_likelihood_race(
   ContextForRaceModels dense_ctx = *ctx;
   dense_ctx.min_lik_for_pdf = 0.0;
   void* dense_ctx_ptr = static_cast<void*>(&dense_ctx);
-  bool gng=ctx->gng;
   const bool defective_upper_tail = ctx->defective_upper_tail;
   
   // log_surv_cm: log S(t) = sum_k log(1-F_k(t)) read directly from column-major pars.
@@ -4062,6 +4001,9 @@ double c_log_likelihood_race(
     const double LCj = LC[start_row_idx];
     const double UCj = UC[start_row_idx];
     const bool has_trunc = (LTj != 0.0 || UTj != R_PosInf);
+    const bool trial_has_active_nogo =
+      (static_cast<size_t>(unique_trial_idx) < active_nogo_trial_mask.size()) &&
+      (active_nogo_trial_mask[static_cast<size_t>(unique_trial_idx)] != 0);
     
     const bool needs_model = (rt_j == R_NegInf) || (rt_j == R_PosInf) || Rcpp::NumericVector::is_na(rt_j) ||
       (R_FINITE(rt_j) && rt_j > 0.0 && R_j_idx == NA_INTEGER);
@@ -4097,7 +4039,7 @@ double c_log_likelihood_race(
       lower_for_trial = LTj;
       upper_for_trial = LCj;
       if (R_j_idx == NA_INTEGER) {
-        if (gng) {
+        if (trial_has_active_nogo) {
           // For go/no-go, rt == -Inf means an observed response below LC.
           // The no-go accumulator cannot be the winner for this event, so we
           // skip that winner index when summing winner-specific densities.
@@ -4127,7 +4069,7 @@ double c_log_likelihood_race(
         current_ll_val = integrate_interval(R_j_idx, lower_for_trial, upper_for_trial);
       }
     } else if (rt_j == R_PosInf) {
-      if (gng) {
+      if (trial_has_active_nogo) {
         lower_for_trial = LTj;
         upper_for_trial = UCj;
         int k_nogo = -1; // 1-based

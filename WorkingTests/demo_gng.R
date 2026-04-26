@@ -142,8 +142,63 @@ run_lba_demo <- function(p_contaminant = 0, estimate_contaminant = FALSE,
   invisible(list(data = dat, design = designLBA, true_pars = p_vector))
 }
 
+run_mixed_lba_demo <- function(n_trials_per_cell = 250, UC = 0.8, UT = 0.9, LT = 0.2) {
+  template <- data.frame(
+    subjects = factor(rep("s1", 4)),
+    Condition = factor(c("2afc", "2afc", "gng", "gng"), levels = c("2afc", "gng")),
+    S = factor(c("left", "right", "left", "stop"), levels = c("left", "right", "stop")),
+    RACE = factor(c("2", "2", "3", "3"), levels = c("2", "3")),
+    R = factor(rep(NA_character_, 4), levels = c("left", "right", "nogo"))
+  )
+
+  matchfun <- function(d) {
+    (d$Condition == "2afc" & as.character(d$S) == as.character(d$lR)) |
+      (d$Condition == "gng" &
+         ((d$S == "left" & d$lR == "left") | (d$S == "stop" & d$lR == "nogo")))
+  }
+
+  design_mixed <- design(
+    data = template,
+    Rlevels = c("left", "right", "nogo"),
+    matchfun = matchfun,
+    model = LBA,
+    formula = list(v ~ Condition + lM, B ~ 0 + lR, t0 ~ 1, A ~ 1),
+    constants = c(sv = log(1))
+  )
+
+  p_vector <- sampled_pars(design_mixed, doMap = FALSE)
+  if ("v" %in% names(p_vector)) p_vector[["v"]] <- 0.3
+  if ("v_Conditiongng" %in% names(p_vector)) p_vector[["v_Conditiongng"]] <- 0.1
+  if ("v_lMTRUE" %in% names(p_vector)) p_vector[["v_lMTRUE"]] <- 1.2
+  if ("B_lRleft" %in% names(p_vector)) p_vector[["B_lRleft"]] <- log(0.8)
+  if ("B_lRright" %in% names(p_vector)) p_vector[["B_lRright"]] <- log(0.8)
+  if ("B_lRnogo" %in% names(p_vector)) p_vector[["B_lRnogo"]] <- log(0.6)
+  if ("t0" %in% names(p_vector)) p_vector[["t0"]] <- log(0.2)
+  if ("A" %in% names(p_vector)) p_vector[["A"]] <- log(0.3)
+
+  dat <- make_data(
+    p_vector,
+    design_mixed,
+    data = template,
+    expand = n_trials_per_cell,
+    TC = list(UC = UC, UT = UT, LT = LT)
+  )
+
+  cat("\n--- Mixed 2AFC + GNG LBA demo ---\n")
+  cat("Counts by condition and response (NA = omission):\n")
+  print(with(dat, table(Condition, addNA(R))))
+  cat("\nLT/UT by condition:\n")
+  print(with(dat, aggregate(cbind(LT, UT) ~ Condition, FUN = unique)))
+  cat("\nOmission rate by condition:\n")
+  print(with(dat, tapply(is.na(R), Condition, mean)))
+
+  invisible(list(data = dat, design = design_mixed, true_pars = p_vector, template = template))
+}
+
 RNGkind("L'Ecuyer-CMRG")
 set.seed(123)
+
+res_lba_mixed <- run_mixed_lba_demo()
 
 
 # Test 1: Mild upper Censor (GNG must have a finite UC)
