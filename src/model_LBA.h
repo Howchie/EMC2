@@ -21,7 +21,7 @@ double dnormP(double x, double mean = 0.0, double sd = 1.0,
 }
 
 double plba_norm(double t, double A, double b, double v, double sv,
-                 bool posdrift = true){
+                 bool posdrift = true, bool log_out = false){
   double denom = 1.;
   if (posdrift) {
     denom = pnormP(v / sv, 0., 1., true, false);
@@ -44,15 +44,15 @@ double plba_norm(double t, double A, double b, double v, double sv,
   }
 
   if (cdf < 0.) {
-    return 0.;
+    return log_out ? R_NegInf : 0.0;
   } else if (cdf > 1.){
-    return 1.;
+    return log_out ? 0.0 : 1.0;
   }
-  return cdf;
+  return log_out ? std::log(cdf) : cdf;
 }
 
 double dlba_norm(double t, double A,double b, double v, double sv,
-                 bool posdrift = true){
+                 bool posdrift = true, bool log_out = false){
   double denom = 1.;
   if (posdrift) {
     denom = pnormP(v / sv, 0., 1., true, false);
@@ -74,22 +74,22 @@ double dlba_norm(double t, double A,double b, double v, double sv,
   }
 
   if (pdf < 0.) {
-    return 0.;
+    return log_out ? R_NegInf : 0.0;
   }
-  return pdf;
+  return log_out ? std::log(pdf) : pdf;
 }
 
 // [[Rcpp::export]]
 NumericVector dlba(NumericVector t,
                    NumericVector A, NumericVector b, NumericVector v, NumericVector sv,
-                   bool posdrift = true)
+                   bool posdrift = true, bool log_out = false)
 
 {
   int n = t.size();
   NumericVector pdf(n);
 
   for (int i = 0; i < n; i++){
-    pdf[i] = dlba_norm(t[i], A[i], b[i], v[i], sv[i], posdrift);
+    pdf[i] = dlba_norm(t[i], A[i], b[i], v[i], sv[i], posdrift, log_out);
   }
   return pdf;
 }
@@ -97,14 +97,14 @@ NumericVector dlba(NumericVector t,
 // [[Rcpp::export]]
 NumericVector plba(NumericVector t,
                    NumericVector A, NumericVector b, NumericVector v, NumericVector sv,
-                   bool posdrift = true)
+                   bool posdrift = true, bool log_out = false)
 
 {
   int n = t.size();
   NumericVector cdf(n);
 
   for (int i = 0; i < n; i++){
-    cdf[i] = plba_norm(t[i], A[i], b[i], v[i], sv[i], posdrift);
+    cdf[i] = plba_norm(t[i], A[i], b[i], v[i], sv[i], posdrift, log_out);
   }
   return cdf;
 }

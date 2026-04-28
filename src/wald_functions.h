@@ -8,8 +8,8 @@
 
 using namespace Rcpp;
 
-const double L_PI = 1.1447298858494001741434;  // std::log(M_PI)
-
+constexpr double L_PI = 1.1447298858494001741434; 
+constexpr double LOG_2PI = 1.83787706640934548356; 
 constexpr double FAST_NORM_RT2PI = 2.506628274631000502415765284811;
 constexpr double FAST_NORM_SPLIT = 7.07106781186547;
 constexpr double FAST_NORM_N0 = 220.206867912376;

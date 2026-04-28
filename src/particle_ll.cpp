@@ -448,6 +448,7 @@ struct LogicalRulesSharedState {
   std::vector<int> resp_code;
   std::vector<double> rt_unique;
   std::vector<double> LT_unique;
+  std::vector<double> LC_unique;
   std::vector<double> UC_unique;
   // Per-row RTs (length n_trials) for raw dfun/pfun kernels.
   std::vector<double> rt_by_row;
@@ -468,6 +469,7 @@ struct RedundantTargetSharedState {
   std::vector<double> rt_unique;
   // Per-unique-trial bounds for go/no-go omission handling.
   std::vector<double> LT_unique;
+  std::vector<double> LC_unique;
   std::vector<double> UC_unique;
   // Per-row RTs (length n_trials) for raw dfun/pfun kernels.
   std::vector<double> rt_by_row;
@@ -547,6 +549,7 @@ static double logicalrules_detection_trial_ll(
     int resp,
     double t,
     double LTj,
+    double LCj,
     double UCj,
     int idxA,
     int idxB,
@@ -1283,6 +1286,7 @@ static LogicalRulesSharedState build_logicalrules_shared_state(const Rcpp::DataF
   SEXP resp_sexp = dadm["R"];
   SEXP rule_sexp = dadm["LogicalRule"];
   Rcpp::NumericVector LT = get_col_with_default(dadm, "LT", 0.0);
+  Rcpp::NumericVector LC = get_col_with_default(dadm, "LC", 0.0);
   Rcpp::NumericVector UC = get_col_with_default(dadm, "UC", R_PosInf);
   const bool has_stim_col = dadm.containsElementNamed("S") ||
                             dadm.containsElementNamed("stimulus") ||
@@ -1400,6 +1404,7 @@ static LogicalRulesSharedState build_logicalrules_shared_state(const Rcpp::DataF
   out.resp_code.assign(out.n_unique_trials, 0);
   out.rt_unique.assign(out.n_unique_trials, NA_REAL);
   out.LT_unique.assign(out.n_unique_trials, 0.0);
+  out.LC_unique.assign(out.n_unique_trials, 0.0);
   out.UC_unique.assign(out.n_unique_trials, R_PosInf);
   out.rt_by_row.assign(rts.begin(), rts.end());
 
@@ -1407,6 +1412,7 @@ static LogicalRulesSharedState build_logicalrules_shared_state(const Rcpp::DataF
     const int start = j * n_acc;
     out.rt_unique[static_cast<size_t>(j)] = rts[start];
     out.LT_unique[static_cast<size_t>(j)] = LT[start];
+    out.LC_unique[static_cast<size_t>(j)] = LC[start];
     out.UC_unique[static_cast<size_t>(j)] = UC[start];
 
     int rcode = 0;
@@ -1550,6 +1556,7 @@ static RedundantTargetSharedState build_redundant_target_shared_state(const Rcpp
 
   Rcpp::NumericVector rts = dadm["rt"];
   Rcpp::NumericVector LT = get_col_with_default(dadm, "LT", 0.0);
+  Rcpp::NumericVector LC = get_col_with_default(dadm, "LC", 0.0);
   Rcpp::NumericVector UC = get_col_with_default(dadm, "UC", R_PosInf);
   SEXP role_sexp = dadm["lR"];
   SEXP stim_sexp = dadm[stim_col];
@@ -1629,6 +1636,7 @@ static RedundantTargetSharedState build_redundant_target_shared_state(const Rcpp
   out.resp_code.assign(out.n_unique_trials, 0);
   out.rt_unique.assign(out.n_unique_trials, NA_REAL);
   out.LT_unique.assign(out.n_unique_trials, 0.0);
+  out.LC_unique.assign(out.n_unique_trials, 0.0);
   out.UC_unique.assign(out.n_unique_trials, R_PosInf);
   out.rt_by_row.assign(rts.begin(), rts.end());
   out.has_nogo = false;
@@ -1641,6 +1649,7 @@ static RedundantTargetSharedState build_redundant_target_shared_state(const Rcpp
     const int start = j * n_acc;
     out.rt_unique[static_cast<size_t>(j)] = rts[start];
     out.LT_unique[static_cast<size_t>(j)] = LT[start];
+    out.LC_unique[static_cast<size_t>(j)] = LC[start];
     out.UC_unique[static_cast<size_t>(j)] = UC[start];
 
     int cond = 0;
@@ -2986,6 +2995,7 @@ static double logicalrules_detection_trial_ll(
     int resp,
     double t,
     double LTj,
+    double LCj,
     double UCj,
     int idxA,
     int idxB,
@@ -3036,48 +3046,100 @@ static double logicalrules_detection_trial_ll(
   } else {
     if (resp != 0 && resp != 2) return min_ll;
     if (rule_code == 5) {
-      const double S_A_inf = safe_surv_at_race_scalar(parA, R_PosInf, min_surv, cdf1, model_ctx);
-      const double S_B_inf = safe_surv_at_race_scalar(parB, R_PosInf, min_surv, cdf1, model_ctx);
-      if (cond == 0) p_j = 1.0;
-      else if (cond == 1) p_j = S_A_inf;
-      else if (cond == 2) p_j = S_B_inf;
-      else p_j = S_A_inf * S_B_inf;
+      // Upper censor (rt = +Inf): neither detector fired by UC.
+      // Lower censor (rt = -Inf): at least one detector fired before LC.
+      // Both mirror the standard race: S_joint(UC) and S_joint(LT) - S_joint(LC).
+      if (t > 0.0) {
+        if (!R_FINITE(UCj))
+          Rcpp::stop("LogicalRules OR_DETECTION_ANALYTIC requires finite UC for upper-censored trials.");
+        const double S_A_uc = safe_surv_at_race_scalar(parA, UCj, min_surv, cdf1, model_ctx);
+        const double S_B_uc = safe_surv_at_race_scalar(parB, UCj, min_surv, cdf1, model_ctx);
+        if (cond == 0) p_j = 1.0;
+        else if (cond == 1) p_j = S_A_uc;
+        else if (cond == 2) p_j = S_B_uc;
+        else p_j = S_A_uc * S_B_uc;
+      } else {
+        const double lo = std::max(0.0, LTj);
+        const double hi = std::max(lo, LCj);
+        if (cond == 0) {
+          p_j = 0.0;
+        } else if (cond == 1) {
+          const double S_A_lo = safe_surv_at_race_scalar(parA, lo, min_surv, cdf1, model_ctx);
+          const double S_A_hi = safe_surv_at_race_scalar(parA, hi, min_surv, cdf1, model_ctx);
+          p_j = std::max(0.0, S_A_lo - S_A_hi);
+        } else if (cond == 2) {
+          const double S_B_lo = safe_surv_at_race_scalar(parB, lo, min_surv, cdf1, model_ctx);
+          const double S_B_hi = safe_surv_at_race_scalar(parB, hi, min_surv, cdf1, model_ctx);
+          p_j = std::max(0.0, S_B_lo - S_B_hi);
+        } else {
+          const double S_A_lo = safe_surv_at_race_scalar(parA, lo, min_surv, cdf1, model_ctx);
+          const double S_B_lo = safe_surv_at_race_scalar(parB, lo, min_surv, cdf1, model_ctx);
+          const double S_A_hi = safe_surv_at_race_scalar(parA, hi, min_surv, cdf1, model_ctx);
+          const double S_B_hi = safe_surv_at_race_scalar(parB, hi, min_surv, cdf1, model_ctx);
+          p_j = std::max(0.0, S_A_lo * S_B_lo - S_A_hi * S_B_hi);
+        }
+      }
     } else {
-      if (!R_FINITE(UCj)) {
-        Rcpp::stop("LogicalRules OR_DETECTION_GNG requires finite UC for no-go/omission trials.");
-      }
-      const double S_A_uc = safe_surv_at_race_scalar(parA, UCj, min_surv, cdf1, model_ctx);
-      const double S_B_uc = safe_surv_at_race_scalar(parB, UCj, min_surv, cdf1, model_ctx);
-      const double S_N_uc = safe_surv_at_race_scalar(parN, UCj, min_surv, cdf1, model_ctx);
-      double p_none = 0.0;
-      if (cond == 0) p_none = S_N_uc;
-      else if (cond == 1) p_none = S_A_uc * S_N_uc;
-      else if (cond == 2) p_none = S_B_uc * S_N_uc;
-      else p_none = S_A_uc * S_B_uc * S_N_uc;
+      if (t > 0.0) {
+        // Upper censor: nogo wins in [LT, UC] or nobody fires by UC.
+        if (!R_FINITE(UCj))
+          Rcpp::stop("LogicalRules OR_DETECTION_GNG requires finite UC for upper-censored trials.");
+        const double S_A_uc = safe_surv_at_race_scalar(parA, UCj, min_surv, cdf1, model_ctx);
+        const double S_B_uc = safe_surv_at_race_scalar(parB, UCj, min_surv, cdf1, model_ctx);
+        const double S_N_uc = safe_surv_at_race_scalar(parN, UCj, min_surv, cdf1, model_ctx);
+        double p_none = 0.0;
+        if (cond == 0) p_none = S_N_uc;
+        else if (cond == 1) p_none = S_A_uc * S_N_uc;
+        else if (cond == 2) p_none = S_B_uc * S_N_uc;
+        else p_none = S_A_uc * S_B_uc * S_N_uc;
 
-      pars_rowmajor_buf.resize(static_cast<size_t>(3 * n_par));
-      int isok_buf[3] = {1, 1, 1};
-      std::memcpy(pars_rowmajor_buf.data(), parN, static_cast<size_t>(n_par) * sizeof(double));
-      int n_active = 1;
-      if (cond == 1) {
-        std::memcpy(pars_rowmajor_buf.data() + n_par, parA, static_cast<size_t>(n_par) * sizeof(double));
-        n_active = 2;
-      } else if (cond == 2) {
-        std::memcpy(pars_rowmajor_buf.data() + n_par, parB, static_cast<size_t>(n_par) * sizeof(double));
-        n_active = 2;
-      } else if (cond == 3) {
-        std::memcpy(pars_rowmajor_buf.data() + n_par, parA, static_cast<size_t>(n_par) * sizeof(double));
-        std::memcpy(pars_rowmajor_buf.data() + 2 * n_par, parB, static_cast<size_t>(n_par) * sizeof(double));
-        n_active = 3;
+        pars_rowmajor_buf.resize(static_cast<size_t>(3 * n_par));
+        int isok_buf[3] = {1, 1, 1};
+        std::memcpy(pars_rowmajor_buf.data(), parN, static_cast<size_t>(n_par) * sizeof(double));
+        int n_active = 1;
+        if (cond == 1) {
+          std::memcpy(pars_rowmajor_buf.data() + n_par, parA, static_cast<size_t>(n_par) * sizeof(double));
+          n_active = 2;
+        } else if (cond == 2) {
+          std::memcpy(pars_rowmajor_buf.data() + n_par, parB, static_cast<size_t>(n_par) * sizeof(double));
+          n_active = 2;
+        } else if (cond == 3) {
+          std::memcpy(pars_rowmajor_buf.data() + n_par, parA, static_cast<size_t>(n_par) * sizeof(double));
+          std::memcpy(pars_rowmajor_buf.data() + 2 * n_par, parB, static_cast<size_t>(n_par) * sizeof(double));
+          n_active = 3;
+        }
+        double log_nogo_win = R_NegInf;
+        if (UCj > std::max(0.0, LTj)) {
+          log_nogo_win = integrate_for_kth_winner_rowmajor_cpp(
+            1, pars_rowmajor_buf.data(), isok_buf, std::max(0.0, LTj), UCj,
+            pdf1, cdf1, n_active, n_par, gsl_ctl, model_ctx, w);
+        }
+        const double p_nogo_win = R_FINITE(log_nogo_win) ? std::exp(log_nogo_win) : 0.0;
+        p_j = p_nogo_win + p_none;
+      } else {
+        // Lower censor: some accumulator (go or nogo) fired before LC.
+        const double lo = std::max(0.0, LTj);
+        const double hi = std::max(lo, LCj);
+        const double S_N_lo = safe_surv_at_race_scalar(parN, lo, min_surv, cdf1, model_ctx);
+        const double S_N_hi = safe_surv_at_race_scalar(parN, hi, min_surv, cdf1, model_ctx);
+        if (cond == 0) {
+          p_j = std::max(0.0, S_N_lo - S_N_hi);
+        } else if (cond == 1) {
+          const double S_A_lo = safe_surv_at_race_scalar(parA, lo, min_surv, cdf1, model_ctx);
+          const double S_A_hi = safe_surv_at_race_scalar(parA, hi, min_surv, cdf1, model_ctx);
+          p_j = std::max(0.0, S_A_lo * S_N_lo - S_A_hi * S_N_hi);
+        } else if (cond == 2) {
+          const double S_B_lo = safe_surv_at_race_scalar(parB, lo, min_surv, cdf1, model_ctx);
+          const double S_B_hi = safe_surv_at_race_scalar(parB, hi, min_surv, cdf1, model_ctx);
+          p_j = std::max(0.0, S_B_lo * S_N_lo - S_B_hi * S_N_hi);
+        } else {
+          const double S_A_lo = safe_surv_at_race_scalar(parA, lo, min_surv, cdf1, model_ctx);
+          const double S_B_lo = safe_surv_at_race_scalar(parB, lo, min_surv, cdf1, model_ctx);
+          const double S_A_hi = safe_surv_at_race_scalar(parA, hi, min_surv, cdf1, model_ctx);
+          const double S_B_hi = safe_surv_at_race_scalar(parB, hi, min_surv, cdf1, model_ctx);
+          p_j = std::max(0.0, S_A_lo * S_B_lo * S_N_lo - S_A_hi * S_B_hi * S_N_hi);
+        }
       }
-      double log_nogo_win = R_NegInf;
-      if (UCj > std::max(0.0, LTj)) {
-        log_nogo_win = integrate_for_kth_winner_rowmajor_cpp(
-          1, pars_rowmajor_buf.data(), isok_buf, std::max(0.0, LTj), UCj,
-          pdf1, cdf1, n_active, n_par, gsl_ctl, model_ctx, w);
-      }
-      const double p_nogo_win = R_FINITE(log_nogo_win) ? std::exp(log_nogo_win) : 0.0;
-      p_j = p_nogo_win + p_none;
     }
   }
 
@@ -3189,8 +3251,9 @@ static double c_log_likelihood_logicalrules(
       const double loB = std::max(0.0, t0B);
       gl_h_A[static_cast<size_t>(j)] = (RT > loA) ? (RT - loA) * 0.5 : 0.0;
       gl_h_B[static_cast<size_t>(j)] = (RT > loB) ? (RT - loB) * 0.5 : 0.0;
-      ch_eq_vec[j] = row_equal_colmajor(pars_cm_ptr, n_trials, n_par, iA, iB)
-                  && row_equal_colmajor(pars_cm_ptr, n_trials, n_par, inA, inB);
+      ch_eq_vec[j] = (inA >= 0 && inB >= 0) &&
+                     row_equal_colmajor(pars_cm_ptr, n_trials, n_par, iA, iB) &&
+                     row_equal_colmajor(pars_cm_ptr, n_trials, n_par, inA, inB);
       if (!ch_eq_vec[j]) any_unequal = true;
       pair_ok_A[static_cast<size_t>(j)] =
         (iA >= 0 && inA >= 0 && ok_params[iA] && ok_params[inA] &&
@@ -3226,14 +3289,16 @@ static double c_log_likelihood_logicalrules(
       double* d_nA = pars_nA.data() + static_cast<size_t>(p) * n_unique_trials;
       double* d_A  = pars_A.data()  + static_cast<size_t>(p) * n_unique_trials;
       for (int j = 0; j < n_unique_trials; ++j) {
-        d_nA[j] = src[shared.idxnA[j]];
+        const int inA_j = shared.idxnA[j];
+        d_nA[j] = (inA_j >= 0) ? src[inA_j] : 0.0;
         d_A[j]  = src[shared.idxA[j]];
       }
       if (any_unequal) {
         double* d_nB = pars_nB.data() + static_cast<size_t>(p) * n_unique_trials;
         double* d_B  = pars_B.data()  + static_cast<size_t>(p) * n_unique_trials;
         for (int j = 0; j < n_unique_trials; ++j) {
-          d_nB[j] = src[shared.idxnB[j]];
+          const int inB_j = shared.idxnB[j];
+          d_nB[j] = (inB_j >= 0) ? src[inB_j] : 0.0;
           d_B[j]  = src[shared.idxB[j]];
         }
       }
@@ -3269,7 +3334,7 @@ static double c_log_likelihood_logicalrules(
         const double t0A = (t0_col >= 0 && t0_col < n_par)
           ? pars_cm_ptr[static_cast<size_t>(t0_col) * n_trials + shared.idxA[j]]
           : 0.0;
-        gl_rt[static_cast<size_t>(j)] = t0A + gl_h_A[static_cast<size_t>(j)] * (1.0 + xi);
+        gl_rt[static_cast<size_t>(j)] = std::max(0.0, t0A) + gl_h_A[static_cast<size_t>(j)] * (1.0 + xi);
       }
       model_dfun_raw(gl_rt.data(), pars_nA.data(), n_unique_trials,
                      all1.data(), isok_nA.data(), lf_nA.data(), min_ll, model_ctx);
@@ -3283,7 +3348,7 @@ static double c_log_likelihood_logicalrules(
           const double t0B = (t0_col >= 0 && t0_col < n_par)
             ? pars_cm_ptr[static_cast<size_t>(t0_col) * n_trials + shared.idxB[j]]
             : 0.0;
-          gl_rt[static_cast<size_t>(j)] = t0B + gl_h_B[static_cast<size_t>(j)] * (1.0 + xi);
+          gl_rt[static_cast<size_t>(j)] = std::max(0.0, t0B) + gl_h_B[static_cast<size_t>(j)] * (1.0 + xi);
         }
         model_dfun_raw(gl_rt.data(), pars_nB.data(), n_unique_trials,
                        all1.data(), isok_nB.data(), lf_nB.data(), min_ll, model_ctx);
@@ -3352,6 +3417,7 @@ static double c_log_likelihood_logicalrules(
         shared.resp_code[static_cast<size_t>(j)],
         t,
         shared.LT_unique[static_cast<size_t>(j)],
+        shared.LC_unique[static_cast<size_t>(j)],
         shared.UC_unique[static_cast<size_t>(j)],
         idxA,
         idxB,
@@ -3375,7 +3441,70 @@ static double c_log_likelihood_logicalrules(
     }
 
     if (!(t > 0.0) || !R_FINITE(t)) {
-      ll_unique[static_cast<size_t>(j)] = min_ll;
+      double p_j = 0.0;
+      const int rule_code_nc = shared.rule_code[static_cast<size_t>(j)];
+      if (!R_FINITE(t) && t > 0.0) {
+        // Upper censor (+Inf): probability no overt response fires by UC.
+        // Semantics depend on rule because each rule has a different "first response" trigger.
+        //   XOR/ID : response fires when both channels resolve  → omit iff either channel undecided
+        //   OR     : yes = first yes; no = second no           → omit = P(no yes by UC) − P(both no by UC)
+        //   AND    : yes = second yes; no = first no           → omit = P(no no by UC) − P(both yes by UC)
+        // In the OR/AND case these share the same formula structure using the channel race CDF at UC.
+        const double UCj = shared.UC_unique[static_cast<size_t>(j)];
+        if (!R_FINITE(UCj)) { ll_unique[static_cast<size_t>(j)] = min_ll; continue; }
+
+        const double S_A_uc  = safe_surv_at_race_scalar(parA.data(),  UCj, kMinSurv, cdf1, model_ctx);
+        const double S_nA_uc = safe_surv_at_race_scalar(parnA.data(), UCj, kMinSurv, cdf1, model_ctx);
+        const double S_B_uc  = safe_surv_at_race_scalar(parB.data(),  UCj, kMinSurv, cdf1, model_ctx);
+        const double S_nB_uc = safe_surv_at_race_scalar(parnB.data(), UCj, kMinSurv, cdf1, model_ctx);
+        const double S_dec_A = S_A_uc * S_nA_uc;
+        const double S_dec_B = S_B_uc * S_nB_uc;
+
+        if (rule_code_nc == 3 || rule_code_nc == 4) {
+          // XOR/ID: omit iff at least one channel undecided at UC.
+          p_j = 1.0 - (1.0 - S_dec_A) * (1.0 - S_dec_B);
+        } else {
+          // OR : G_A = P(n_A wins A sub-race by UC)  [first arg = nontarget]
+          // AND: G_A = P(A wins A sub-race by UC)    [first arg = target]
+          const double* first_A  = (rule_code_nc == 1) ? parnA.data() : parA.data();
+          const double* second_A = (rule_code_nc == 1) ? parA.data()  : parnA.data();
+          const double* first_B  = (rule_code_nc == 1) ? parnB.data() : parB.data();
+          const double* second_B = (rule_code_nc == 1) ? parB.data()  : parnB.data();
+
+          const bool ch_eq_uc =
+            row_equal_colmajor(pars_cm_ptr, n_trials, n_par, idxA, idxB) &&
+            row_equal_colmajor(pars_cm_ptr, n_trials, n_par, idxnA, idxnB);
+          double G_A_uc = local_race_helper(UCj, first_A, second_A, n_par, model_ctx,
+                                            pdf1, cdf1, gsl_ctl, w, pars_2buf.data(), isok_2buf);
+          double G_B_uc = ch_eq_uc ? G_A_uc
+                        : local_race_helper(UCj, first_B, second_B, n_par, model_ctx,
+                                            pdf1, cdf1, gsl_ctl, w, pars_2buf.data(), isok_2buf);
+          if (!R_FINITE(G_A_uc) || !R_FINITE(G_B_uc)) { ll_unique[static_cast<size_t>(j)] = min_ll; continue; }
+          const double Q_A = G_A_uc + S_dec_A;
+          const double Q_B = G_B_uc + S_dec_B;
+          p_j = std::max(0.0, Q_A * Q_B - G_A_uc * G_B_uc);
+        }
+      } else if (!R_FINITE(t) && t < 0.0) {
+        // Lower censor (-Inf): winner unknown, some accumulator fired in [LT, LC].
+        // Rule-independent: P = S_joint(LT) − S_joint(LC).
+        const double lo = std::max(0.0, shared.LT_unique[static_cast<size_t>(j)]);
+        const double hi = std::max(lo,  shared.LC_unique[static_cast<size_t>(j)]);
+        const double Slo = safe_surv_at_race_scalar(parA.data(),  lo, kMinSurv, cdf1, model_ctx)
+                         * safe_surv_at_race_scalar(parnA.data(), lo, kMinSurv, cdf1, model_ctx)
+                         * safe_surv_at_race_scalar(parB.data(),  lo, kMinSurv, cdf1, model_ctx)
+                         * safe_surv_at_race_scalar(parnB.data(), lo, kMinSurv, cdf1, model_ctx);
+        const double Shi = safe_surv_at_race_scalar(parA.data(),  hi, kMinSurv, cdf1, model_ctx)
+                         * safe_surv_at_race_scalar(parnA.data(), hi, kMinSurv, cdf1, model_ctx)
+                         * safe_surv_at_race_scalar(parB.data(),  hi, kMinSurv, cdf1, model_ctx)
+                         * safe_surv_at_race_scalar(parnB.data(), hi, kMinSurv, cdf1, model_ctx);
+        p_j = std::max(0.0, Slo - Shi);
+      }
+      if (!(p_j > 0.0) || !R_FINITE(p_j)) {
+        ll_unique[static_cast<size_t>(j)] = min_ll;
+      } else {
+        const double ll = std::log(p_j);
+        ll_unique[static_cast<size_t>(j)] = (R_FINITE(ll) && ll > min_ll) ? ll : min_ll;
+      }
       continue;
     }
 
@@ -3547,7 +3676,7 @@ static double c_log_likelihood_redundant_target_race(
   }
   if (n_trials == 0) return 0.0;
 
-  static const double kMinSurv = 1e-12;
+  static const double kMinSurv = 1e-300;
   const int n_par = pars.ncol();
   const int n_unique_trials = shared.n_unique_trials;
   const double* pars_cm_ptr = pars.begin();
@@ -3649,6 +3778,7 @@ static double c_log_likelihood_redundant_target_race(
     const int cond = shared.cond_code[static_cast<size_t>(j)];
     const int resp = shared.resp_code[static_cast<size_t>(j)];
     const double LTj = shared.LT_unique[static_cast<size_t>(j)];
+    const double LCj = shared.LC_unique[static_cast<size_t>(j)];
     const double UCj = shared.UC_unique[static_cast<size_t>(j)];
     const bool finite_rt = (R_FINITE(t) && t > 0.0);
 
@@ -3685,55 +3815,97 @@ static double c_log_likelihood_redundant_target_race(
         p = (fA * S_B + fB * S_A) * S_N;
       }
     } else {
-      // Omission / no-response path: allow missing response code and explicit "nogo".
+      // Non-finite RT: upper censor (t > 0, i.e. +Inf) or lower censor (t < 0).
       if (resp != 0 && resp != 2) {
         ll_unique[static_cast<size_t>(j)] = min_ll;
         continue;
       }
 
-      const double S_A_inf = safe_surv_at(parA.data(), R_PosInf);
-      const double S_B_inf = safe_surv_at(parB.data(), R_PosInf);
-      if (!use_nogo) {
-        if (cond == 1) p = S_A_inf;
-        else if (cond == 2) p = S_B_inf;
-        else p = S_A_inf * S_B_inf;
-      } else {
-        if (!R_FINITE(UCj)) {
-          Rcpp::stop("RedundantTarget likelihood: finite UC is required for no-go/omission trials with a nogo accumulator.");
-        }
-        const double low = std::max(0.0, LTj);
-        const double upp = UCj;
-        const double S_A_uc = safe_surv_at(parA.data(), upp);
-        const double S_B_uc = safe_surv_at(parB.data(), upp);
-        const double S_N_uc = safe_surv_at(parN.data(), upp);
-        double p_none = 0.0;
-        if (cond == 1) p_none = S_A_uc * S_N_uc;
-        else if (cond == 2) p_none = S_B_uc * S_N_uc;
-        else p_none = S_A_uc * S_B_uc * S_N_uc;
-
-        // Integrate probability that nogo wins before UC (and after LT if truncated).
-        std::memcpy(pars_rowmajor_buf.data(), parN.data(), static_cast<size_t>(n_par) * sizeof(double));
-        int n_active = 1;
-        if (cond == 1) {
-          std::memcpy(pars_rowmajor_buf.data() + n_par, parA.data(), static_cast<size_t>(n_par) * sizeof(double));
-          n_active = 2;
-        } else if (cond == 2) {
-          std::memcpy(pars_rowmajor_buf.data() + n_par, parB.data(), static_cast<size_t>(n_par) * sizeof(double));
-          n_active = 2;
+      if (t > 0.0) {
+        // Upper censor: neither go accumulator (nor nogo) fired by UC.
+        if (!use_nogo) {
+          if (!R_FINITE(UCj))
+            Rcpp::stop("RedundantTarget likelihood: finite UC is required for upper-censored analytic-detection trials.");
+          const double S_A_uc = safe_surv_at(parA.data(), UCj);
+          const double S_B_uc = safe_surv_at(parB.data(), UCj);
+          if (cond == 1) p = S_A_uc;
+          else if (cond == 2) p = S_B_uc;
+          else p = S_A_uc * S_B_uc;
         } else {
-          std::memcpy(pars_rowmajor_buf.data() + n_par, parA.data(), static_cast<size_t>(n_par) * sizeof(double));
-          std::memcpy(pars_rowmajor_buf.data() + 2 * n_par, parB.data(), static_cast<size_t>(n_par) * sizeof(double));
-          n_active = 3;
+          if (!R_FINITE(UCj))
+            Rcpp::stop("RedundantTarget likelihood: finite UC is required for no-go/omission trials with a nogo accumulator.");
+          const double low = std::max(0.0, LTj);
+          const double upp = UCj;
+          const double S_A_uc = safe_surv_at(parA.data(), upp);
+          const double S_B_uc = safe_surv_at(parB.data(), upp);
+          const double S_N_uc = safe_surv_at(parN.data(), upp);
+          double p_none = 0.0;
+          if (cond == 1) p_none = S_A_uc * S_N_uc;
+          else if (cond == 2) p_none = S_B_uc * S_N_uc;
+          else p_none = S_A_uc * S_B_uc * S_N_uc;
+
+          std::memcpy(pars_rowmajor_buf.data(), parN.data(), static_cast<size_t>(n_par) * sizeof(double));
+          int n_active = 1;
+          if (cond == 1) {
+            std::memcpy(pars_rowmajor_buf.data() + n_par, parA.data(), static_cast<size_t>(n_par) * sizeof(double));
+            n_active = 2;
+          } else if (cond == 2) {
+            std::memcpy(pars_rowmajor_buf.data() + n_par, parB.data(), static_cast<size_t>(n_par) * sizeof(double));
+            n_active = 2;
+          } else {
+            std::memcpy(pars_rowmajor_buf.data() + n_par, parA.data(), static_cast<size_t>(n_par) * sizeof(double));
+            std::memcpy(pars_rowmajor_buf.data() + 2 * n_par, parB.data(), static_cast<size_t>(n_par) * sizeof(double));
+            n_active = 3;
+          }
+          for (int k = 0; k < n_active; ++k) isok_buf[k] = 1;
+          double log_nogo_win = R_NegInf;
+          if (upp > low) {
+            log_nogo_win = integrate_for_kth_winner_rowmajor_cpp(
+              1, pars_rowmajor_buf.data(), isok_buf, low, upp, pdf1, cdf1,
+              n_active, n_par, gsl_ctl, model_ctx, w);
+          }
+          const double p_nogo_win = R_FINITE(log_nogo_win) ? std::exp(log_nogo_win) : 0.0;
+          p = p_nogo_win + p_none;
         }
-        for (int k = 0; k < n_active; ++k) isok_buf[k] = 1;
-        double log_nogo_win = R_NegInf;
-        if (upp > low) {
-          log_nogo_win = integrate_for_kth_winner_rowmajor_cpp(
-            1, pars_rowmajor_buf.data(), isok_buf, low, upp, pdf1, cdf1,
-            n_active, n_par, gsl_ctl, model_ctx, w);
+      } else {
+        // Lower censor: some accumulator fired before LC (winner unknown).
+        const double lo = std::max(0.0, LTj);
+        const double hi = std::max(lo, LCj);
+        if (!use_nogo) {
+          if (cond == 1) {
+            const double S_A_lo = safe_surv_at(parA.data(), lo);
+            const double S_A_hi = safe_surv_at(parA.data(), hi);
+            p = std::max(0.0, S_A_lo - S_A_hi);
+          } else if (cond == 2) {
+            const double S_B_lo = safe_surv_at(parB.data(), lo);
+            const double S_B_hi = safe_surv_at(parB.data(), hi);
+            p = std::max(0.0, S_B_lo - S_B_hi);
+          } else {
+            const double S_A_lo = safe_surv_at(parA.data(), lo);
+            const double S_B_lo = safe_surv_at(parB.data(), lo);
+            const double S_A_hi = safe_surv_at(parA.data(), hi);
+            const double S_B_hi = safe_surv_at(parB.data(), hi);
+            p = std::max(0.0, S_A_lo * S_B_lo - S_A_hi * S_B_hi);
+          }
+        } else {
+          const double S_N_lo = safe_surv_at(parN.data(), lo);
+          const double S_N_hi = safe_surv_at(parN.data(), hi);
+          if (cond == 1) {
+            const double S_A_lo = safe_surv_at(parA.data(), lo);
+            const double S_A_hi = safe_surv_at(parA.data(), hi);
+            p = std::max(0.0, S_A_lo * S_N_lo - S_A_hi * S_N_hi);
+          } else if (cond == 2) {
+            const double S_B_lo = safe_surv_at(parB.data(), lo);
+            const double S_B_hi = safe_surv_at(parB.data(), hi);
+            p = std::max(0.0, S_B_lo * S_N_lo - S_B_hi * S_N_hi);
+          } else {
+            const double S_A_lo = safe_surv_at(parA.data(), lo);
+            const double S_B_lo = safe_surv_at(parB.data(), lo);
+            const double S_A_hi = safe_surv_at(parA.data(), hi);
+            const double S_B_hi = safe_surv_at(parB.data(), hi);
+            p = std::max(0.0, S_A_lo * S_B_lo * S_N_lo - S_A_hi * S_B_hi * S_N_hi);
+          }
         }
-        const double p_nogo_win = R_FINITE(log_nogo_win) ? std::exp(log_nogo_win) : 0.0;
-        p = p_nogo_win + p_none;
       }
     }
 

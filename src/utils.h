@@ -597,7 +597,7 @@ inline void bawl_logS_at_t(double t, const double* pars_cm,
 
 // ============================================================
 // RDMSWTN adapters
-// Column layout: v=0, B=1, A=2, t0=3, s=4, sv=5
+// Column layout: v=0, B=1, A=2, t0=3, s=4, sv=5, k=6
 // ============================================================
 
 inline double drdmswtn_scalar(double t, const double* par, void* /*ctx_*/) {
@@ -610,7 +610,7 @@ inline double drdmswtn_scalar(double t, const double* par, void* /*ctx_*/) {
                   par[0] * inv_s,              // v/s
                   par[2] * inv_s,              // A/s
                   par[5] * inv_s,              // sv/s
-                  1.0, 0.0, 20, false);
+                  1.0, par[6], 0.0, 20, false);
 }
 
 inline double prdmswtn_scalar(double t, const double* par, void* /*ctx_*/) {
@@ -623,7 +623,7 @@ inline double prdmswtn_scalar(double t, const double* par, void* /*ctx_*/) {
                   par[0] * inv_s,
                   par[2] * inv_s,
                   par[5] * inv_s,
-                  1.0, 0.0, 20, false);
+                  1.0, 0.0, par[6], 20, false);
 }
 
 inline void drdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
@@ -637,6 +637,7 @@ inline void drdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
   const double* t0_ = pars_cm + 3 * n_rows;
   const double* s_  = pars_cm + 4 * n_rows;
   const double* sv_ = pars_cm + 5 * n_rows;
+  const double* k_  = pars_cm + 6 * n_rows;
   const double sv_eps = 1e-10;
 
   bool all_sv_zero = (mode_hint == 1);
@@ -662,13 +663,14 @@ inline void drdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
       const double tt = rt[i] - t0_[i];
       if (tt <= 0.0) { out[i] = min_ll; continue; }
       const double inv_s = 1.0 / s_[i];
-      const double pdf = dwald(tt,
-                               (B_[i] + A_[i]) * inv_s,
-                               v_[i] * inv_s,
-                               1.0,
-                               A_[i] * inv_s,
-                               false);
-      out[i] = (pdf > 0.0 && std::isfinite(pdf)) ? std::log(pdf) : min_ll;
+      const double log_pdf = dwald(tt,
+                                   (B_[i] + A_[i]) * inv_s,
+                                   v_[i] * inv_s,
+                                   1.0,
+                                   A_[i] * inv_s,
+                                   k_[i],
+                                   true);
+      out[i] = (R_FINITE(log_pdf) && log_pdf > min_ll) ? log_pdf : min_ll;
     }
     return;
   }
@@ -678,25 +680,28 @@ inline void drdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
     if (R_IsNA(v_[i]) || !isok[i]) { out[i] = min_ll; continue; }
     const double tt = rt[i] - t0_[i];
     if (tt <= 0.0) { out[i] = min_ll; continue; }
-    double pdf;
+    double log_pdf;
     if (!std::isfinite(sv_[i]) || std::fabs(sv_[i]) <= sv_eps) {
       const double inv_s = 1.0 / s_[i];
-      pdf = dwald(tt,
-                  (B_[i] + A_[i]) * inv_s,
-                  v_[i] * inv_s,
-                  1.0,
-                  A_[i] * inv_s,
-                  false);
+      log_pdf = dwald(tt,
+                      (B_[i] + A_[i]) * inv_s,
+                      v_[i] * inv_s,
+                      1.0,
+                      A_[i] * inv_s,
+                      k_[i],
+                      true);
     } else {
       const double inv_s = 1.0 / s_[i];
-      pdf = drdmswtn(tt,
-                     (B_[i] + A_[i]) * inv_s,
-                     v_[i]  * inv_s,
-                     A_[i]  * inv_s,
-                     sv_[i] * inv_s,
-                     1.0, 0.0, 20, false);
+      log_pdf = drdmswtn(tt,
+                         (B_[i] + A_[i]) * inv_s,
+                         v_[i]  * inv_s,
+                         A_[i]  * inv_s,
+                         sv_[i] * inv_s,
+                         1.0,
+                         k_[i],
+                         0.0, 20, true);
     }
-    out[i] = (pdf > 0.0 && std::isfinite(pdf)) ? std::log(pdf) : min_ll;
+    out[i] = (R_FINITE(log_pdf) && log_pdf > min_ll) ? log_pdf : min_ll;
   }
 }
 
@@ -711,6 +716,7 @@ inline void prdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
   const double* t0_ = pars_cm + 3 * n_rows;
   const double* s_  = pars_cm + 4 * n_rows;
   const double* sv_ = pars_cm + 5 * n_rows;
+  const double* k_  = pars_cm + 6 * n_rows;
   const double sv_eps = 1e-10;
 
   bool all_sv_zero = (mode_hint == 1);
@@ -736,14 +742,16 @@ inline void prdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
       const double tt = rt[i] - t0_[i];
       if (tt <= 0.0) { out[i] = 0.0; continue; }
       const double inv_s = 1.0 / s_[i];
-      const double cdf = pwald(tt,
-                               (B_[i] + A_[i]) * inv_s,
-                               v_[i] * inv_s,
-                               1.0,
-                               A_[i] * inv_s,
-                               false);
-      if (cdf >= 1.0) { out[i] = min_ll; continue; }
-      out[i] = (cdf <= 0.0) ? 0.0 : std::log1p(-cdf);
+      const double log_cdf = pwald(tt,
+                                   (B_[i] + A_[i]) * inv_s,
+                                   v_[i] * inv_s,
+                                   1.0,
+                                   A_[i] * inv_s,
+                                   k_[i],
+                                   true);
+      if (!R_FINITE(log_cdf)) { out[i] = 0.0; continue; }
+      if (log_cdf >= 0.0) { out[i] = min_ll; continue; }
+      out[i] = log1m_exp(log_cdf);
     }
     return;
   }
@@ -753,26 +761,29 @@ inline void prdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
     if (R_IsNA(v_[i]) || !isok[i]) { out[i] = 0.0; continue; }
     const double tt = rt[i] - t0_[i];
     if (tt <= 0.0) { out[i] = 0.0; continue; }
-    double cdf;
+    double log_cdf;
     if (!std::isfinite(sv_[i]) || std::fabs(sv_[i]) <= sv_eps) {
       const double inv_s = 1.0 / s_[i];
-      cdf = pwald(tt,
-                  (B_[i] + A_[i]) * inv_s,
-                  v_[i] * inv_s,
-                  1.0,
-                  A_[i] * inv_s,
-                  false);
+      log_cdf = pwald(tt,
+                      (B_[i] + A_[i]) * inv_s,
+                      v_[i] * inv_s,
+                      1.0,
+                      A_[i] * inv_s,
+                      k_[i],
+                      true);
     } else {
       const double inv_s = 1.0 / s_[i];
-      cdf = prdmswtn(tt,
-                     (B_[i] + A_[i]) * inv_s,
-                     v_[i]  * inv_s,
-                     A_[i]  * inv_s,
-                     sv_[i] * inv_s,
-                     1.0, 0.0, 20, false);
+      log_cdf = prdmswtn(tt,
+                         (B_[i] + A_[i]) * inv_s,
+                         v_[i]  * inv_s,
+                         A_[i]  * inv_s,
+                         sv_[i] * inv_s,
+                         1.0,
+                         0.0, k_[i], 20, true);
     }
-    if (cdf >= 1.0) { out[i] = min_ll; continue; }
-    out[i] = (cdf <= 0.0) ? 0.0 : std::log1p(-cdf);
+    if (!R_FINITE(log_cdf)) { out[i] = 0.0; continue; }
+    if (log_cdf >= 0.0) { out[i] = min_ll; continue; }
+    out[i] = log1m_exp(log_cdf);
   }
 }
 
@@ -789,6 +800,7 @@ inline void rdmswtn_logS_at_t(double t, const double* pars_cm,
   const double* t0_ = pars_cm + 3 * n_rows_total;
   const double* s_  = pars_cm + 4 * n_rows_total;
   const double* sv_ = pars_cm + 5 * n_rows_total;
+  const double* k_  = pars_cm + 6 * n_rows_total;
   const double sv_eps = 1e-10;
   for (int j = 0; j < n_unique_trials; ++j) {
     if (!trunc_mask[j]) continue;
@@ -800,42 +812,46 @@ inline void rdmswtn_logS_at_t(double t, const double* pars_cm,
       if (!isok_all[r] || R_IsNA(v_[r])) { bad = true; break; }
       const double tt = t - t0_[r];
       if (tt <= 0.0) continue;
-      double cdf;
+      double log_cdf;
       if (mode_hint == 1) {
         const double inv_s = 1.0 / s_[r];
-        cdf = pwald(tt,
-                    (B_[r] + A_[r]) * inv_s,
-                    v_[r] * inv_s,
-                    1.0,
-                    A_[r] * inv_s,
-                    false);
+        log_cdf = pwald(tt,
+                        (B_[r] + A_[r]) * inv_s,
+                        v_[r] * inv_s,
+                        1.0,
+                        A_[r] * inv_s,
+                        k_[r],
+                        true);
       } else if (mode_hint == 2) {
         const double inv_s = 1.0 / s_[r];
-        cdf = prdmswtn(tt,
-                       (B_[r] + A_[r]) * inv_s,
-                       v_[r]  * inv_s,
-                       A_[r]  * inv_s,
-                       sv_[r] * inv_s,
-                       1.0, 0.0, 20, false);
+        log_cdf = prdmswtn(tt,
+                           (B_[r] + A_[r]) * inv_s,
+                           v_[r]  * inv_s,
+                           A_[r]  * inv_s,
+                           sv_[r] * inv_s,
+                           1.0,
+                           0.0, k_[r], 20, true);
       } else if (!std::isfinite(sv_[r]) || std::fabs(sv_[r]) <= sv_eps) {
         const double inv_s = 1.0 / s_[r];
-        cdf = pwald(tt,
-                    (B_[r] + A_[r]) * inv_s,
-                    v_[r] * inv_s,
-                    1.0,
-                    A_[r] * inv_s,
-                    false);
+        log_cdf = pwald(tt,
+                        (B_[r] + A_[r]) * inv_s,
+                        v_[r] * inv_s,
+                        1.0,
+                        A_[r] * inv_s,
+                        k_[r],
+                        true);
       } else {
         const double inv_s = 1.0 / s_[r];
-        cdf = prdmswtn(tt,
-                       (B_[r] + A_[r]) * inv_s,
-                       v_[r]  * inv_s,
-                       A_[r]  * inv_s,
-                       sv_[r] * inv_s,
-                       1.0, 0.0, 20, false);
+        log_cdf = prdmswtn(tt,
+                           (B_[r] + A_[r]) * inv_s,
+                           v_[r]  * inv_s,
+                           A_[r]  * inv_s,
+                           sv_[r] * inv_s,
+                           1.0,
+                           0.0, k_[r], 20, true);
       }
-      if (cdf >= 1.0) { bad = true; break; }
-      if (cdf > 0.0) logS += std::log1p(-cdf);
+      if (log_cdf >= 0.0) { bad = true; break; }
+      if (R_FINITE(log_cdf)) logS += log1m_exp(log_cdf);
     }
     logS_out[j] = bad ? R_NegInf : logS;
   }

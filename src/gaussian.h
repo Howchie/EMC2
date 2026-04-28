@@ -16,43 +16,98 @@ using namespace Rcpp;
 constexpr double sqrt2 = 1.4142135623730950488;
 constexpr double sqrt_twoPI = 2.5066282746310005024;
 constexpr double inv_sqrt2_pi = 0.39894228040143267794;
+constexpr double log_twoPI = 1.83787706640934548356;
 constexpr double inv3sqrt2pi = 0.13298076013381089265;
 constexpr double fourPI = 12.566370614359172953;
 constexpr double minus_inv_twoPI = -0.15915494309189533577;
 
 // Useful Distribution Functions
-inline double gaussian_pdf(double x, double mean = 0.0, double var = 1.0) {
-  if (!(var > 0.0) || !std::isfinite(var)) return 0.0;
+inline double gaussian_pdf(double x, double mean = 0.0, double var = 1.0, bool log_p = false) {
+  if (!(var > 0.0) || !std::isfinite(var)) return log_p ? R_NegInf : 0.0;;
+  
   const double z = x - mean;
+
+  if (log_p) {
+    return -0.5 * (log_twoPI + std::log(var) + z * z / var);
+  }
+
   return inv_sqrt2_pi / std::sqrt(var) * std::exp(-0.5 * z * z / var);
 }
 
-
-inline double gaussian_cdf(double x, double mean = 0.0, double var = 1.0) {
-  if (!(var > 0.0) || !std::isfinite(var)) return (x < mean) ? 0.0 : 1.0;
-  return pnorm_std((x - mean) / std::sqrt(var));
+inline double gaussian_cdf(double x, double mean = 0.0, double var = 1.0, bool log_p=false) {
+  if (!(var > 0.0) || !std::isfinite(var)) {
+    if (log_p) {
+      return (x < mean) ? R_NegInf : 0.0;
+    }
+    return (x < mean) ? 0.0 : 1.0;
+  }
+  return pnorm_std((x - mean) / std::sqrt(var), true, log_p);
 }
 
 // Heat kernel G*(t, delta) = N(delta | 0, t)
-inline double Gstar(double var, double delta) {
-  if (var <= 0.0) return 0.0;
-  return gaussian_pdf(delta, 0.0, var);
+inline double Gstar(double var, double delta, bool log_p = false) {
+  if (var <= 0.0) return log_p ? R_NegInf : 0.0;
+  return gaussian_pdf(delta, 0.0, var, log_p);
 }
 
 // CDF of heat kernel N(mean, t) at x
-inline double Gstar_CDF(double var, double mean, double x) {
-  if (var <= 0.0) return (x < mean) ? 0.0 : 1.0;
-  return gaussian_cdf(x, mean, var);
+inline double Gstar_CDF(double var, double mean, double x, bool log_p = false) {
+  if (!(var > 0.0) || !std::isfinite(var)) {
+    if (log_p) {
+      return (x < mean) ? R_NegInf : 0.0;
+    }
+    return (x < mean) ? 0.0 : 1.0;
+  }
+
+  return gaussian_cdf(x, mean, var, log_p);
+}
+
+inline double log_pnorm_diff(double z_lo, double z_hi) {
+  // log(Phi(z_hi) - Phi(z_lo)), assuming z_hi >= z_lo
+  if (z_hi <= z_lo) return R_NegInf;
+
+  // Both on left side: lower-tail difference is stable.
+  if (z_hi <= 0.0) {
+    const double log_hi = pnorm_std(z_hi, true, true);
+    const double log_lo = pnorm_std(z_lo, true, true);
+    return log_diff_exp(log_hi, log_lo);
+  }
+
+  // Both on right side: upper-tail difference is stable.
+  if (z_lo >= 0.0) {
+    const double log_lo_upper = pnorm_std(z_lo, false, true);
+    const double log_hi_upper = pnorm_std(z_hi, false, true);
+    return log_diff_exp(log_lo_upper, log_hi_upper);
+  }
+
+  // Interval crosses zero, direct probability difference is usually fine.
+  const double p_hi = pnorm_std(z_hi, true, false);
+  const double p_lo = pnorm_std(z_lo, true, false);
+  const double diff = p_hi - p_lo;
+
+  return diff > 0.0 ? std::log(diff) : R_NegInf;
 }
 
 // Definite integral ∫_{x_lo}^{x_hi} N(mean, t) dx
-inline double Gstar_Integral(double t, double mean, double x_lo, double x_hi) {
-  if (t <= 0.0) {
-    // Dirac delta at mean; match your half-open convention (x_lo, x_hi]
-    return (mean > x_lo && mean <= x_hi) ? 1.0 : 0.0;
+inline double Gstar_Integral(double var, double mean,
+                             double x_lo, double x_hi,
+                             bool log_p = false) {
+  if (var <= 0.0 ) {
+    const double p = (mean > x_lo && mean <= x_hi) ? 1.0 : 0.0;
+    return log_p ? std::log(p) : p;
   }
-  if (x_hi <= x_lo) return 0.0;
-  return Gstar_CDF(t, mean, x_hi) - Gstar_CDF(t, mean, x_lo);
+
+  if (x_hi <= x_lo) return log_p ? R_NegInf : 0.0;
+
+  if (!log_p) {
+    return Gstar_CDF(var, mean, x_hi) - Gstar_CDF(var, mean, x_lo);
+  }
+
+  const double sd = std::sqrt(var);
+  const double z_lo = (x_lo - mean) / sd;
+  const double z_hi = (x_hi - mean) / sd;
+
+  return log_pnorm_diff(z_lo, z_hi);
 }
 
 /**
@@ -101,6 +156,120 @@ inline double integrate_exp_times_normal_cdf(double k, double a, double c, doubl
   };
   
   return eval_integral(x_hi) - eval_integral(x_lo);
+}
+
+inline double log_h_gaussian_cdf_integral(double u) {
+  // h(u) = u * Phi(u) + phi(u)
+  // Used by ∫ Phi(ax+c) dx.
+  const double log_phi = Gstar(1.0, u, true);
+  const double log_Phi = pnorm_std(u, true, true);
+
+  if (u == 0.0) return log_phi;
+
+  if (u > 0.0) {
+    return log_sum_exp(std::log(u) + log_Phi, log_phi);
+  }
+
+  // u < 0: h(u) = phi(u) - |u| Phi(u)
+  const double log_sub = std::log(-u) + log_Phi;
+  const double ratio_log = log_sub - log_phi;
+
+  if (ratio_log >= 0.0) {
+    // Extreme left-tail fallback:
+    // h(u) ≈ phi(u) / u^2
+    return log_phi - 2.0 * std::log(-u);
+  }
+
+  return log_phi + log1m_exp(ratio_log);
+}
+
+inline double log_integrate_gaussian_cdf(double a, double c,
+                                         double x_lo, double x_hi) {
+  if (x_hi <= x_lo) return R_NegInf;
+
+  if (std::abs(a) < FPM_EPSILON) {
+    const double log_C = pnorm_std(c, true, true);
+    return log_C + std::log(x_hi - x_lo);
+  }
+
+  auto eval_integral_log = [&](double x) {
+    const double u = a * x + c;
+    return make_signed_log(
+      log_h_gaussian_cdf_integral(u) - std::log(std::abs(a)),
+      a > 0.0 ? 1 : -1
+    );
+  };
+
+  signed_log hi = eval_integral_log(x_hi);
+  signed_log lo = eval_integral_log(x_lo);
+  signed_log out = signed_log_sub(hi, lo);
+
+  if (out.sign <= 0) return R_NegInf;
+  return out.log_abs;
+}
+
+/**
+ * @brief Computes log ∫[x_lo, x_hi] exp(kx) * Φ(ax+c) dx
+ */
+inline double log_integrate_exp_times_normal_cdf(double k, double a, double c,
+                                                 double x_lo, double x_hi) {
+  if (x_hi <= x_lo) return R_NegInf;
+
+  if (std::abs(k) < FPM_EPSILON) {
+    return log_integrate_gaussian_cdf(a, c, x_lo, x_hi);
+  }
+
+  if (std::abs(a) < FPM_EPSILON) {
+    const double log_C = pnorm_std(c, true, true);
+
+    if (k > 0.0) {
+      return log_C +
+        log_diff_exp(k * x_hi, k * x_lo) -
+        std::log(k);
+    } else {
+      return log_C +
+        log_diff_exp(k * x_lo, k * x_hi) -
+        std::log(-k);
+    }
+  }
+
+  const double log_abs_k = std::log(std::abs(k));
+  const int sign_k = k > 0.0 ? 1 : -1;
+
+  const double log_exp_factor =
+    k * k / (2.0 * a * a) - k * c / a;
+
+  auto eval_integral = [&](double x) {
+    const double u = a * x + c;
+    const double u_shifted = a * x + c - k / a;
+
+    // term1 = exp(k*x) / k * Phi(u)
+    signed_log term1 = make_signed_log(
+      k * x - log_abs_k + pnorm_std(u, true, true),
+      sign_k
+    );
+
+    // term2 = exp_factor / k * Phi(u_shifted)
+    // eval = term1 - term2
+    signed_log term2 = make_signed_log(
+      log_exp_factor - log_abs_k + pnorm_std(u_shifted, true, true),
+      sign_k
+    );
+
+    return signed_log_sub(term1, term2);
+  };
+
+  signed_log hi = eval_integral(x_hi);
+  signed_log lo = eval_integral(x_lo);
+  signed_log out = signed_log_sub(hi, lo);
+
+  if (out.sign <= 0 || out.log_abs == R_NegInf) {
+    // Rare numerical fallback. This keeps the sampler from detonating.
+    const double val = integrate_exp_times_normal_cdf(k, a, c, x_lo, x_hi);
+    return val > 0.0 ? std::log(val) : R_NegInf;
+  }
+
+  return out.log_abs;
 }
 
 // Bivariate Normal CDF Functions

@@ -12,15 +12,16 @@ using namespace Rcpp;
 
 // [[Rcpp::export]]
 NumericVector dWald(NumericVector t, NumericVector v,
-                    NumericVector B, NumericVector A, NumericVector t0){
+                    NumericVector B, NumericVector A, NumericVector t0,
+                    bool log_out = false){
   int n = t.size();
   NumericVector pdf(n);
   for (int i = 0; i < n; i++){
     double ti = t[i] - t0[i];
     if (ti <= 0){
-      pdf[i] = 0.;
+      pdf[i] = log_out? R_NegInf : 0.0;
     } else {
-      pdf[i] = digt_impl(ti, B[i] + .5 * A[i], v[i], .5 * A[i]);
+      pdf[i] = digt_impl(ti, B[i] + .5 * A[i], v[i], .5 * A[i], log_out);
     }
   }
   return pdf;
@@ -29,15 +30,16 @@ NumericVector dWald(NumericVector t, NumericVector v,
 
 // [[Rcpp::export]]
 NumericVector pWald(NumericVector t, NumericVector v,
-                    NumericVector B, NumericVector A, NumericVector t0){
+                    NumericVector B, NumericVector A, NumericVector t0,
+                    bool log_out = false){
   int n = t.size();
   NumericVector cdf(n);
   for (int i = 0; i < n; i++){
     double ti = t[i] - t0[i];
     if (ti <= 0){
-      cdf[i] = 0.;
+      cdf[i] = log_out? 0.0 : R_NegInf;
     } else {
-      cdf[i] = pigt_impl(ti, B[i] + .5 * A[i], v[i], .5 * A[i]);
+      cdf[i] = pigt_impl(ti, B[i] + .5 * A[i], v[i], .5 * A[i], log_out);
     }
   }
   return cdf;
@@ -68,13 +70,13 @@ NumericVector pWald(NumericVector t, NumericVector v,
 // A    = start-point variability range (0 = point start at b).
 // --------------------------------------------------------------------------
 // [[Rcpp::export]]
-double dwald(double t, double b, double mu, double sigma = 1.0, double A = 0.0,
-             bool log_out = false) {
-  double x_lo = 0.0;
-  double x_hi = x_lo + A;
-
+double dwald_old(double t, double b, double mu, double sigma = 1.0, double A = 0.0,
+             bool log_out = false, double k = 0.0) {
+  double x_lo = 0.0; double x_hi = x_lo + A; 
   const double var = sigma * sigma * t;
-  if (var <= FPM_EPSILON) return 0.0;
+  if (var <= FPM_EPSILON || t <= FPM_EPSILON || sigma <= 0.0 || k < 0.0) {
+    return log_out ? R_NegInf : 0.0;
+  }
 
   if (x_hi < x_lo) std::swap(x_lo, x_hi);
   const double span = x_hi - x_lo;
@@ -82,27 +84,220 @@ double dwald(double t, double b, double mu, double sigma = 1.0, double A = 0.0,
   // Point-start Wald at fixed boundary distance d = b - x.
   if (span <= FPM_EPSILON) {
     const double d = b - x_hi;
-    if (d <= 0.0) return (t == 0.0) ? std::numeric_limits<double>::infinity() : 0.0;
+    if (d <= 0.0) {
+      if (t == 0.0) {
+        return log_out ? R_PosInf : std::numeric_limits<double>::infinity();
+      }
+      return log_out ? R_NegInf : 0.0;
+    }
     const double delta = d - mu * t;
-    const double pdf_val = d / t * Gstar(var, delta);
-    return log_out ? std::log(pdf_val) : pdf_val;
+    const double log_pdf = std::log(d / t * Gstar(var, delta)) - k*t; 
+    return log_out ? log_pdf : std::exp(log_pdf);
+  }
+    const double mu_new = b - mu * t;
+    const double pdf_hi = Gstar(var, x_hi - mu_new);
+    const double pdf_lo = Gstar(var, x_lo - mu_new);
+    const double cdf_integral = Gstar_Integral(var, mu_new, x_lo, x_hi);
+    const double term1 = mu * t * cdf_integral; 
+    const double term2 = var * (pdf_hi - pdf_lo); 
+    // todo is there a more efficient handling of the log here? It seems important for numerical stability because k could be very small 
+    const double log_pdf = std::log(((1.0 / t) * (term1 + term2)) / span) - k*t;
+    return log_out ? log_pdf : std::exp(log_pdf);
+}
+
+// [[Rcpp::export]]
+double dwald(double t, double b, double mu, double sigma = 1.0, double A = 0.0, double k = 0.0,
+             bool log_out = false) {
+  double x_lo = 0.0;
+  double x_hi = x_lo + A;
+
+  const double var = sigma * sigma * t;
+  if (var <= FPM_EPSILON || t <= FPM_EPSILON || sigma <= 0.0 || k < 0.0) {
+    return log_out ? R_NegInf : 0.0;
+  }
+
+  if (x_hi < x_lo) std::swap(x_lo, x_hi);
+  const double span = x_hi - x_lo;
+  double log_pdf = R_NegInf;
+  // Point-start Wald at fixed boundary distance d = b - x.
+  const double logt = std::log(t);
+  if (span <= FPM_EPSILON) {
+    const double d = b - x_hi;
+    if (d <= 0.0) {
+      if (t == 0.0) {
+        return log_out ? R_PosInf : std::numeric_limits<double>::infinity();
+      }
+      return log_out ? R_NegInf : 0.0;
+    }
+    const double delta = d - mu * t;
+    log_pdf = std::log(d) - logt + Gstar(var, delta, true) - k * t;
+    return log_out ? log_pdf : std::exp(log_pdf);
   }
 
   // Canonical SPV form: integrate over start-point x in [0, A].
   const double mu_new = b - mu * t;
-  const double pdf_hi = Gstar(var, x_hi - mu_new);
-  const double pdf_lo = Gstar(var, x_lo - mu_new);
-  const double cdf_integral = Gstar_Integral(var, mu_new, x_lo, x_hi);
+  const double log_pdf_hi = Gstar(var, x_hi - mu_new, true);
+  const double log_pdf_lo = Gstar(var, x_lo - mu_new, true);
+  const double log_cdf_integral = Gstar_Integral(var, mu_new, x_lo, x_hi, true);
 
-  const double term1 = mu * t * cdf_integral;
-  const double term2 = var * (pdf_hi - pdf_lo);
-  const double pdf_val = ((1.0 / t) * (term1 + term2)) / span;
+  // term1 = mu * t * cdf_integral
+  signed_log term1 = make_signed_log(R_NegInf, 0);
+  if (std::abs(mu) > FPM_EPSILON && log_cdf_integral != R_NegInf) {
+    term1 = make_signed_log(
+      std::log(std::abs(mu)) + logt + log_cdf_integral,
+      mu > 0.0 ? 1 : -1
+    );
+  }
+  // term2 = var * (pdf_hi - pdf_lo)
+  signed_log pdf_hi = make_signed_log(log_pdf_hi, 1);
+  signed_log pdf_lo = make_signed_log(log_pdf_lo, 1);
+  signed_log pdf_diff = signed_log_sub(pdf_hi, pdf_lo);
 
-  return log_out ? std::log(pdf_val) : pdf_val;
+  signed_log term2 = make_signed_log(R_NegInf, 0);
+  if (pdf_diff.sign != 0) {
+    term2 = make_signed_log(std::log(var) + pdf_diff.log_abs, pdf_diff.sign);
+  }
+  signed_log total = signed_log_add(term1, term2);
+
+  if (total.sign <= 0 || total.log_abs == R_NegInf) {
+    return log_out ? R_NegInf : 0.0;
+  }
+
+  log_pdf =
+    total.log_abs -
+    logt -
+    std::log(span) -
+    k * t;
+
+  return log_out ? log_pdf : std::exp(log_pdf);
+}
+
+// --------------------------------------------------------------------------
+// Wald / killed Wald CDF with uniform start-point variability.
+// Returns sub-CDF:
+//   P(T_wald <= t AND T_kill > T_wald)
+// k = 0 gives standard Wald, nested.
+// t = Inf returns total finite-response probability.
+// --------------------------------------------------------------------------
+// [[Rcpp::export]]
+double pwald(double t, double b, double mu, double sigma = 1.0, double A = 0.0,
+             double k = 0.0, bool log_out = false) {
+  auto finish = [&](double log_p) {
+    if (ISNAN(log_p)) return NA_REAL;
+
+    if (log_p > 0.0 && log_p < 1e-10) log_p = 0.0;
+    if (log_p > 0.0) log_p = 0.0;
+
+    return log_out ? log_p : std::exp(log_p);
+  };
+
+  if (sigma <= 0.0 || k < 0.0) {
+    return NA_REAL;
+  }
+
+  if (t <= FPM_EPSILON) {
+    return log_out ? R_NegInf : 0.0;
+  }
+
+  double x_lo = 0.0;
+  double x_hi = x_lo + A;
+  if (x_hi < x_lo) std::swap(x_lo, x_hi);
+
+  const double span = x_hi - x_lo;
+  const double sig2 = sigma * sigma;
+
+  const double nu = std::sqrt(mu * mu + 2.0 * sig2 * k);
+  const double eta1 = (mu - nu) / sig2;
+
+  auto log_p_inf = [&]() {
+    if (span <= FPM_EPSILON) {
+      const double d = b - x_hi;
+      if (d <= 0.0) return 0.0;
+      return eta1 * d;
+    }
+
+    if (std::abs(eta1) < FPM_EPSILON) {
+      return 0.0;
+    }
+
+    // ∫ exp(eta1 * (b - x)) dx / span
+    // eta1 is <= 0 for k >= 0.
+    const double q = -eta1;
+
+    if (q <= FPM_EPSILON) {
+      return 0.0;
+    }
+
+    return
+      eta1 * b +
+      log_diff_exp(q * x_hi, q * x_lo) -
+      std::log(q) -
+      std::log(span);
+  };
+
+  if (!std::isfinite(t)) {
+    return finish(log_p_inf());
+  }
+
+  const double st = sigma * std::sqrt(t);
+  if (st <= FPM_EPSILON) {
+    return log_out ? R_NegInf : 0.0;
+  }
+
+  // Point-start case.
+  if (span <= FPM_EPSILON) {
+    const double d = b - x_hi;
+
+    if (d <= 0.0) {
+      return log_out ? 0.0 : 1.0;
+    }
+
+    const double log_prefactor = d * (mu - nu) / sig2;
+
+    const double term1_arg = (nu * t - d) / st;
+    const double term2_arg = (-nu * t - d) / st;
+
+    const double log_cdf1 = pnorm_std(term1_arg, true, true);
+    const double log_cdf2 = pnorm_std(term2_arg, true, true);
+
+    const double log_exp_term = 2.0 * nu * d / sig2;
+
+    const double log_cdf_nu =
+      log_sum_exp(log_cdf1, log_exp_term + log_cdf2);
+
+    return finish(log_prefactor + log_cdf_nu);
+  }
+
+  // SPV case.
+  const double a = 1.0 / st;
+
+  // First term:
+  // exp[(mu - nu)(b-x)/sig2] *
+  // Phi((x + nu*t - b) / st)
+  const double c1 = (nu * t - b) / st;
+
+  const double log_term1 =
+    eta1 * b +
+    log_integrate_exp_times_normal_cdf(-eta1, a, c1, x_lo, x_hi);
+
+  // Second term:
+  // exp[(mu + nu)(b-x)/sig2] *
+  // Phi((x - nu*t - b) / st)
+  const double eta2 = (mu + nu) / sig2;
+  const double c2 = (-nu * t - b) / st;
+
+  const double log_term2 =
+    eta2 * b +
+    log_integrate_exp_times_normal_cdf(-eta2, a, c2, x_lo, x_hi);
+
+  const double log_cdf_val =
+    log_sum_exp(log_term1, log_term2) - std::log(span);
+
+  return finish(log_cdf_val);
 }
 
 // [[Rcpp::export]]
-double pwald(double t, double b, double mu, double sigma = 1.0, double A = 0.0,
+double pwald_old(double t, double b, double mu, double sigma = 1.0, double A = 0.0,
              bool log_out = false) {
   if (t <= FPM_EPSILON) return log_out ? -std::numeric_limits<double>::infinity() : 0.0;
 
@@ -152,6 +347,153 @@ double pwald(double t, double b, double mu, double sigma = 1.0, double A = 0.0,
   if (cdf_val > 1.0) cdf_val = 1.0;
 
   return log_out ? std::log(cdf_val) : cdf_val;
+}
+
+// --------------------------------------------------------------------------
+// Killed / defective Wald CDF with uniform start-point variability.
+// Returns sub-CDF:
+//   P(T_wald <= t AND T_kill > T_wald)
+// where T_kill ~ Exponential(k).
+//
+// k = 0 gives the ordinary Wald CDF.
+// t = Inf returns total finite-response probability.
+// --------------------------------------------------------------------------
+// [[Rcpp::export]]
+double pwald_old_k(double t, double b, double mu, double sigma = 1.0, double A = 0.0,
+             double k = 0.0, bool log_out = false) {
+
+  if (sigma <= 0.0 || k < 0.0) {
+    return std::numeric_limits<double>::quiet_NaN();
+  }
+
+  double x_lo = 0.0;
+  double x_hi = x_lo + A;
+  if (x_hi < x_lo) std::swap(x_lo, x_hi);
+
+  const double span = x_hi - x_lo;
+  const double sig2 = sigma * sigma;
+
+  // Tilted drift induced by exponential killing.
+  const double nu = std::sqrt(mu * mu + 2.0 * sig2 * k);
+
+  // Total finite-response probability:
+  // F_k(Inf) = E[exp(-k * T_wald)]
+  auto p_inf = [&]() {
+    if (span <= FPM_EPSILON) {
+      const double d = b - x_hi;
+      if (d <= 0.0) return 1.0;
+
+      const double eta = (mu - nu) / sig2;
+      return std::exp(eta * d);
+    }
+
+    const double eta = (mu - nu) / sig2;
+
+    if (std::abs(eta) < FPM_EPSILON) {
+      return 1.0;
+    }
+
+    // ∫ exp(eta * (b - x)) dx over [x_lo, x_hi]
+    const double integral =
+      std::exp(eta * b) *
+      (std::exp(-eta * x_lo) - std::exp(-eta * x_hi)) / eta;
+
+    return integral / span;
+  };
+
+  if (!std::isfinite(t)) {
+    return log_out? R_NegInf : 0.0;
+  }
+
+  if (t <= FPM_EPSILON) {
+    return log_out? R_NegInf : 0.0;
+  }
+
+  const double st = sigma * std::sqrt(t);
+  if (st <= FPM_EPSILON) {
+    return log_out? R_NegInf : 0.0;
+  }
+
+  // ------------------------------------------------------------------------
+  // Point-start case.
+  // F_k(t; mu) =
+  //   exp(d * (mu - nu) / sigma^2) * F_wald(t; nu)
+  // ------------------------------------------------------------------------
+  if (span <= FPM_EPSILON) {
+    const double d = b - x_hi;
+
+    if (d <= 0.0) {
+      return log_out? 0.0 : 1.0;
+    }
+
+    const double prefactor = std::exp(d * (mu - nu) / sig2);
+
+    const double term1_arg = (nu * t - d) / st;
+    const double term2_arg = (-nu * t - d) / st;
+
+    const double cdf1 = pnorm_std(term1_arg, true, false);
+    const double cdf2 = pnorm_std(term2_arg, true, false);
+
+    const double exp_arg = 2.0 * nu * d / sig2;
+    double cdf_nu;
+
+    if (exp_arg > 700.0) {
+      // Same spirit as your existing safeguard.
+      // In this regime the Wald CDF with positive drift nu is effectively 1
+      // for practical MCMC purposes.
+      cdf_nu = 1.0;
+    } else {
+      cdf_nu = cdf1 + std::exp(exp_arg) * cdf2;
+    }
+
+    return log_out? std::log(prefactor) + std::log(cdf_nu) : prefactor * cdf_nu;
+  }
+
+  // ------------------------------------------------------------------------
+  // Uniform start-point variability case.
+  //
+  // For d = b - x:
+  //
+  // F_k(t)
+  // = 1/A ∫ exp[d(mu - nu)/sigma^2] F_wald(t; d, nu, sigma) dx
+  //
+  // This becomes two integrals of exp(kx) * Phi(ax+c), using your helper.
+  // ------------------------------------------------------------------------
+
+  const double a = 1.0 / st;
+
+  // First Wald-CDF term:
+  // exp[(mu - nu)(b-x)/sig2] *
+  // Phi((x + nu*t - b) / st)
+  const double eta1 = (mu - nu) / sig2;
+  const double c1 = (nu * t - b) / st;
+
+  const double term1 =
+    std::exp(eta1 * b) *
+    integrate_exp_times_normal_cdf(-eta1, a, c1, x_lo, x_hi);
+
+  // Second Wald-CDF term:
+  // exp[(mu - nu)(b-x)/sig2] *
+  // exp[2*nu*(b-x)/sig2] *
+  // Phi((x - nu*t - b) / st)
+  //
+  // Combined exponent:
+  // exp[(mu + nu)(b-x)/sig2]
+  const double eta2 = (mu + nu) / sig2;
+  const double c2 = (-nu * t - b) / st;
+
+  const double term2 =
+    std::exp(eta2 * b) *
+    integrate_exp_times_normal_cdf(-eta2, a, c2, x_lo, x_hi);
+
+  const double cdf = (term1 + term2) / span;
+
+  if (cdf < 0.0) {
+    return log_out ? R_NegInf : 0.0;
+  } else if (cdf > 1.0){
+    return log_out ? 0.0 : 1.0;
+  }
+  return log_out ? std::log(cdf) : cdf;
 }
 
 // --------------------------------------------------------------------------
@@ -269,7 +611,7 @@ double pgbm(double t, double b, double mu, double sigma = 1.0, double A = 0.0,
 // --------------------------------------------------------------------------
 // [[Rcpp::export]]
 double dswtn(double t_adj, double threshold, double mu_drift,
-             double sv, double s = 1.0, double c = 0.0, bool log_out = false) {
+             double sv, double s = 1.0, double k=0.0, double c = 0.0, bool log_out = false) {
   if (t_adj <= 1e-10) return log_out ? R_NegInf : 0.0;
   if (threshold <= 1e-10) return log_out ? R_NegInf : 0.0;
   if (sv < 0.0) return R_NaN;
@@ -278,7 +620,7 @@ double dswtn(double t_adj, double threshold, double mu_drift,
   // sv == 0: reduces to standard Wald
   if (sv <= 1e-10) {
     if (mu_drift <= 1e-10) return log_out ? R_NegInf : 0.0;
-    return dwald(t_adj, threshold, mu_drift, s, 0.0, log_out);
+    return dwald(t_adj, threshold, mu_drift, s, 0.0, k, log_out);
   }
 
   const double v  = sv * sv;
@@ -303,7 +645,7 @@ double dswtn(double t_adj, double threshold, double mu_drift,
   const double term_log_int = pnorm_std((c - mu_new) / sigma_new, false, true);
 
   const double log_pdf = term_log_threshold + term_log_denom +
-                         (-log_prob_gt_c) + term_log_exp + term_log_int;
+                         (-log_prob_gt_c) + term_log_exp + term_log_int -k*t_adj; // added k
   if (std::isnan(log_pdf)) return log_out ? R_NegInf : 0.0;
   return log_out ? log_pdf : std::exp(log_pdf);
 }
@@ -311,16 +653,181 @@ double dswtn(double t_adj, double threshold, double mu_drift,
 // --------------------------------------------------------------------------
 // SWTN CDF.
 // --------------------------------------------------------------------------
+inline double pswtn_killed_quad(double t_adj, double threshold, double mu_drift,
+                                double sv, double s, double c, double k,
+                                int n_gauss_nodes = 20) {
+  const int n_nodes = std::max(1, n_gauss_nodes);
+  Rcpp::List gl = (n_nodes == 20) ? gl20
+                                  : Rcpp::as<Rcpp::List>(gauss_quad(n_nodes, "legendre"));
+  const Rcpp::NumericVector gl_nodes   = gl["nodes"];
+  const Rcpp::NumericVector gl_weights = gl["weights"];
+
+  const double alpha = pnorm_std((c - mu_drift) / sv, true, false);
+  if (!(alpha < 1.0)) return 0.0;
+
+  double integral = 0.0;
+  for (int j = 0; j < n_nodes; ++j) {
+    const double u = 0.5 * (gl_nodes[j] + 1.0);  // map [-1,1] -> [0,1]
+    const double p = alpha + (1.0 - alpha) * u;
+    const double drift_j = mu_drift + sv * R::qnorm(p, 0.0, 1.0, true, false);
+    integral += gl_weights[j] * pwald(t_adj, threshold, drift_j, s, 0.0, k, false);
+  }
+
+  return 0.5 * integral;
+}
+
+inline double pswtn_killed_inf_quad(double threshold, double mu_drift,
+                                    double sv, double s, double c, double k,
+                                    int n_gauss_nodes = 20,
+                                    bool log_out = false) {
+  auto finish_log = [&](double log_p) {
+    if (ISNAN(log_p)) return NA_REAL;
+    if (log_p > 0.0 && log_p < 1e-10) log_p = 0.0;
+    if (log_p > 0.0) log_p = 0.0;
+    return log_out ? log_p : std::exp(log_p);
+  };
+
+  if (threshold <= 1e-10) return log_out ? 0.0 : 1.0;
+  if (s <= 1e-10 || sv < 0.0 || k < 0.0) return NA_REAL;
+
+  const double s2 = s * s;
+
+  if (sv <= 1e-10) {
+    const double nu = std::sqrt(mu_drift * mu_drift + 2.0 * s2 * k);
+    return finish_log(threshold * (mu_drift - nu) / s2);
+  }
+
+  const double alpha = pnorm_std((c - mu_drift) / sv, true, false);
+  if (!(alpha < 1.0)) return log_out ? R_NegInf : 0.0;
+
+  const int n_nodes = std::max(1, n_gauss_nodes);
+  Rcpp::List gl = (n_nodes == 20) ? gl20
+                                  : Rcpp::as<Rcpp::List>(gauss_quad(n_nodes, "legendre"));
+  const Rcpp::NumericVector gl_nodes   = gl["nodes"];
+  const Rcpp::NumericVector gl_weights = gl["weights"];
+
+  double log_integral = R_NegInf;
+  for (int j = 0; j < n_nodes; ++j) {
+    const double u = 0.5 * (gl_nodes[j] + 1.0);
+    double p = alpha + (1.0 - alpha) * u;
+    p = std::fmax(0.0, std::fmin(std::nextafter(1.0, 0.0), p));
+
+    const double drift_j = mu_drift + sv * R::qnorm(p, 0.0, 1.0, true, false);
+    const double nu_j = std::sqrt(drift_j * drift_j + 2.0 * s2 * k);
+    const double log_hit_j = threshold * (drift_j - nu_j) / s2;
+
+    if (gl_weights[j] > 0.0) {
+      log_integral = log_sum_exp(log_integral, std::log(gl_weights[j]) + log_hit_j);
+    }
+  }
+
+  return finish_log(log_integral - M_LN2);
+}
+
+inline double log_uniform_threshold_hit(double eta, double b, double A) {
+  if (A <= 1e-10) {
+    const double d = std::fmax(b, 0.0);
+    return eta * d;
+  }
+
+  const double d_lo_raw = b - A;
+  const double d_hi_raw = b;
+
+  if (d_hi_raw <= 0.0) return 0.0;
+
+  const double zero_width = std::fmax(0.0, std::fmin(d_hi_raw, 0.0) - d_lo_raw);
+  const double d_lo = std::fmax(d_lo_raw, 0.0);
+  const double d_hi = d_hi_raw;
+
+  double log_pos_integral = R_NegInf;
+  if (d_hi > d_lo) {
+    if (std::abs(eta) < 1e-12) {
+      log_pos_integral = std::log(d_hi - d_lo);
+    } else if (eta < 0.0) {
+      log_pos_integral = log_diff_exp(eta * d_lo, eta * d_hi) - std::log(-eta);
+    } else {
+      log_pos_integral = log_diff_exp(eta * d_hi, eta * d_lo) - std::log(eta);
+    }
+  }
+
+  double log_total = log_pos_integral;
+  if (zero_width > 0.0) {
+    log_total = log_sum_exp(log_total, std::log(zero_width));
+  }
+
+  return log_total - std::log(A);
+}
+
+inline double prdmswtn_killed_inf_quad(double b, double mu_drift, double A,
+                                       double sv, double s, double c, double k,
+                                       int n_gauss_nodes = 20,
+                                       bool log_out = false) {
+  auto finish_log = [&](double log_p) {
+    if (ISNAN(log_p)) return NA_REAL;
+    if (log_p > 0.0 && log_p < 1e-10) log_p = 0.0;
+    if (log_p > 0.0) log_p = 0.0;
+    return log_out ? log_p : std::exp(log_p);
+  };
+
+  if (b <= 1e-10) return log_out ? 0.0 : 1.0;
+  if (s <= 1e-10 || sv < 0.0 || A < 0.0 || k < 0.0) return NA_REAL;
+
+  const double s2 = s * s;
+
+  if (sv <= 1e-10) {
+    const double nu = std::sqrt(mu_drift * mu_drift + 2.0 * s2 * k);
+    const double eta = (mu_drift - nu) / s2;
+    return finish_log(log_uniform_threshold_hit(eta, b, A));
+  }
+
+  const double alpha = pnorm_std((c - mu_drift) / sv, true, false);
+  if (!(alpha < 1.0)) return log_out ? R_NegInf : 0.0;
+
+  const int n_nodes = std::max(1, n_gauss_nodes);
+  Rcpp::List gl = (n_nodes == 20) ? gl20
+                                  : Rcpp::as<Rcpp::List>(gauss_quad(n_nodes, "legendre"));
+  const Rcpp::NumericVector gl_nodes   = gl["nodes"];
+  const Rcpp::NumericVector gl_weights = gl["weights"];
+
+  double log_integral = R_NegInf;
+  for (int j = 0; j < n_nodes; ++j) {
+    const double u = 0.5 * (gl_nodes[j] + 1.0);
+    double p = alpha + (1.0 - alpha) * u;
+    p = std::fmax(0.0, std::fmin(std::nextafter(1.0, 0.0), p));
+
+    const double drift_j = mu_drift + sv * R::qnorm(p, 0.0, 1.0, true, false);
+    const double nu_j = std::sqrt(drift_j * drift_j + 2.0 * s2 * k);
+    const double eta_j = (drift_j - nu_j) / s2;
+    const double log_hit_j = log_uniform_threshold_hit(eta_j, b, A);
+
+    if (gl_weights[j] > 0.0) {
+      log_integral = log_sum_exp(log_integral, std::log(gl_weights[j]) + log_hit_j);
+    }
+  }
+
+  return finish_log(log_integral - M_LN2);
+}
+
 // [[Rcpp::export]]
 double pswtn(double t_adj, double threshold, double mu_drift,
-             double sv, double s = 1.0, double c = 0.0, bool log_out = false) {
+             double sv, double s = 1.0, double c = 0.0, double k = 0.0,bool log_out = false) {
   if (t_adj <= 1e-10) return log_out ? R_NegInf : 0.0;
   if (threshold <= 1e-10) return log_out ? 0.0 : 1.0;
   if (sv < 0.0) return R_NaN;
 
   if (sv <= 1e-10) {
     if (mu_drift <= 1e-10) return log_out ? R_NegInf : 0.0;
-    return pwald(t_adj, threshold, mu_drift, s, 0.0, log_out);
+    return pwald(t_adj, threshold, mu_drift, s, 0.0, k, log_out);
+  }
+
+  if (k > 1e-10) {
+    if (!std::isfinite(t_adj)) {
+      return pswtn_killed_inf_quad(threshold, mu_drift, sv, s, c, k, 20, log_out);
+    }
+    const double cdf = pswtn_killed_quad(t_adj, threshold, mu_drift, sv, s, c, k, 20);
+    if (!(cdf > 0.0)) return log_out ? R_NegInf : 0.0;
+    if (cdf >= 1.0) return log_out ? 0.0 : 1.0;
+    return log_out ? std::log(cdf) : cdf;
   }
 
   const double v   = sv * sv;
@@ -363,9 +870,13 @@ double pswtn(double t_adj, double threshold, double mu_drift,
   const double log_cdf       = log_numerator - log_prob_gt_c;
 
   if (std::isnan(log_cdf)) return log_out ? R_NegInf : 0.0;
-  double cdf_val = std::exp(log_cdf);
-  cdf_val = std::fmax(0.0, std::fmin(1.0, cdf_val));
-  return log_out ? std::log(cdf_val) : cdf_val;
+  double cdf = std::exp(log_cdf);
+  if (cdf < 0.0) {
+    return log_out ? R_NegInf : 0.0;
+  } else if (cdf > 1.0){
+    return log_out ? 0.0 : 1.0;
+  }
+  return log_out ? std::log(cdf) : cdf;
 }
 
 // --------------------------------------------------------------------------
@@ -375,7 +886,7 @@ double pswtn(double t_adj, double threshold, double mu_drift,
 // --------------------------------------------------------------------------
 // [[Rcpp::export]]
 double drdmswtn(double t_adj, double b, double mu_drift, double A,
-                double sv, double s = 1.0, double c = 0.0,
+                double sv, double s = 1.0, double k = 0.0, double c = 0.0,
                 int n_gauss_nodes = 20, bool log_out = false) {
   if (t_adj <= 1e-10) return log_out ? R_NegInf : 0.0;
   if (b <= 1e-7) return log_out ? R_NegInf : 0.0;
@@ -386,10 +897,10 @@ double drdmswtn(double t_adj, double b, double mu_drift, double A,
   if (no_sv) {
     // sv=0: standard Wald with start-point variability A (dwald handles A=0 internally)
     if (mu_drift <= 1e-10) return log_out ? R_NegInf : 0.0;
-    return dwald(t_adj, b, mu_drift, s, A, log_out);
+    return dwald(t_adj, b, mu_drift, s, A, k, log_out);
   } else if (no_A && !no_sv) {
     // SWTN with fixed threshold b
-    return dswtn(t_adj, b, mu_drift, sv, s, c, log_out);
+    return dswtn(t_adj, b, mu_drift, sv, s, k, c, log_out);
   } else {
     // Full model: integrate dswtn over threshold ~ Unif(b-A, b)
     const int n_nodes = std::max(1, n_gauss_nodes);
@@ -403,18 +914,19 @@ double drdmswtn(double t_adj, double b, double mu_drift, double A,
     double integral = 0.0;
     for (int j = 0; j < n_nodes; ++j) {
       const double thresh_j = center + half_width * gl_nodes[j];
-      integral += gl_weights[j] * dswtn(t_adj, thresh_j, mu_drift, sv, s, c, false);
+      integral += gl_weights[j] * dswtn(t_adj, thresh_j, mu_drift, sv, s, 0.0, c, false);
     }
     // Scale: GL on [-1,1]→[b-A,b] gives factor half_width; divide by A (uniform density)
-    const double out_val = integral * half_width / A;   // = integral * 0.5
+    const double out_val_unkilled = integral * half_width / A;   // = integral * 0.5
+    const double out_val = out_val_unkilled * std::exp(-k * t_adj);
     if (out_val < 0.0 || std::isnan(out_val)) return log_out ? R_NegInf : 0.0;
-    return log_out ? std::log(out_val) : out_val;
+    return log_out ? std::log(out_val_unkilled) - k * t_adj : out_val;
   }
 }
 
 // [[Rcpp::export]]
 double prdmswtn(double t_adj, double b, double mu_drift, double A,
-                double sv, double s = 1.0, double c = 0.0,
+                double sv, double s = 1.0, double c = 0.0, double k = 0.0,
                 int n_gauss_nodes = 20, bool log_out = false) {
   if (t_adj <= 1e-10) return log_out ? R_NegInf : 0.0;
   if (b <= 1e-7) return log_out ? 0.0 : 1.0;
@@ -422,12 +934,16 @@ double prdmswtn(double t_adj, double b, double mu_drift, double A,
   const bool no_A  = (A  < 1e-7);
   const bool no_sv = (sv < 1e-7);
 
+  if (!std::isfinite(t_adj) && k > 1e-10) {
+    return prdmswtn_killed_inf_quad(b, mu_drift, A, sv, s, c, k, n_gauss_nodes, log_out);
+  }
+
   if (no_sv) {
     // sv=0: standard Wald with start-point variability A (pwald handles A=0 internally)
     if (mu_drift <= 1e-7) return log_out ? R_NegInf : 0.0;
-    return pwald(t_adj, b, mu_drift, s, A, log_out);
+    return pwald(t_adj, b, mu_drift, s, A, k, log_out);
   } else if (no_A && !no_sv) {
-    return pswtn(t_adj, b, mu_drift, sv, s, c, log_out);
+    return pswtn(t_adj, b, mu_drift, sv, s, c, k, log_out);
   } else {
     const int n_nodes = std::max(1, n_gauss_nodes);
     Rcpp::List gl = (n_nodes == 20) ? gl20
@@ -439,7 +955,7 @@ double prdmswtn(double t_adj, double b, double mu_drift, double A,
     double integral = 0.0;
     for (int j = 0; j < n_nodes; ++j) {
       const double thresh_j = center + half_width * gl_nodes[j];
-      integral += gl_weights[j] * pswtn(t_adj, thresh_j, mu_drift, sv, s, c, false);
+      integral += gl_weights[j] * pswtn(t_adj, thresh_j, mu_drift, sv, s, c, k, false);
     }
     double out_val = integral * half_width / A;
     out_val = std::fmax(0.0, std::fmin(1.0, out_val));
@@ -454,7 +970,7 @@ double prdmswtn(double t_adj, double b, double mu_drift, double A,
 // [[Rcpp::export]]
 NumericVector dSWTNspv(NumericVector t, NumericVector v, NumericVector b,
                        NumericVector A, NumericVector t0, NumericVector sv,
-                       NumericVector s = 1.0, NumericVector c = 0.0,
+                       NumericVector s = 1.0, NumericVector c = 0.0, NumericVector k = 0.0,
                        int n_gauss_nodes = 20, bool log_out = false) {
   const int n = t.size();
   NumericVector pdf(n);
@@ -465,7 +981,7 @@ NumericVector dSWTNspv(NumericVector t, NumericVector v, NumericVector b,
     const double t_adj = t[i] - pick(t0, i);
     if (t_adj <= 0.0) { pdf[i] = log_out ? R_NegInf : 0.0; continue; }
     pdf[i] = drdmswtn(t_adj, pick(b, i), pick(v, i), pick(A, i),
-                      pick(sv, i), pick(s, i), pick(c, i), n_gauss_nodes, log_out);
+                      pick(sv, i), pick(s, i), pick(k, i), pick(c, i), n_gauss_nodes, log_out);
   }
   return pdf;
 }
@@ -473,7 +989,7 @@ NumericVector dSWTNspv(NumericVector t, NumericVector v, NumericVector b,
 // [[Rcpp::export]]
 NumericVector pSWTNspv(NumericVector t, NumericVector v, NumericVector b,
                        NumericVector A, NumericVector t0, NumericVector sv,
-                       NumericVector s = 1.0, NumericVector c = 0.0,
+                       NumericVector s = 1.0, NumericVector c = 0.0, NumericVector k = 0.0,
                        int n_gauss_nodes = 20, bool log_out = false) {
   const int n = t.size();
   NumericVector cdf(n);
@@ -484,7 +1000,7 @@ NumericVector pSWTNspv(NumericVector t, NumericVector v, NumericVector b,
     const double t_adj = t[i] - pick(t0, i);
     if (t_adj <= 0.0) { cdf[i] = log_out ? R_NegInf : 0.0; continue; }
     cdf[i] = prdmswtn(t_adj, pick(b, i), pick(v, i), pick(A, i),
-                      pick(sv, i), pick(s, i), pick(c, i), n_gauss_nodes, log_out);
+                      pick(sv, i), pick(s, i), pick(c, i), pick(k, i),n_gauss_nodes, log_out);
   }
   return cdf;
 }

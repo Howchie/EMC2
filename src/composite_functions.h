@@ -369,4 +369,38 @@ inline double safe_log(double x, double floor_val = 1e-300) {
   return std::log(clamp_pos(x, floor_val));
 }
 
+struct signed_log {
+  double log_abs;
+  int sign; // -1, 0, +1
+};
+
+inline signed_log make_signed_log(double log_abs, int sign) {
+  if (sign == 0 || log_abs == R_NegInf || !std::isfinite(log_abs)) {
+    return {R_NegInf, 0};
+  }
+  return {log_abs, sign > 0 ? 1 : -1};
+}
+
+inline signed_log signed_log_add(signed_log a, signed_log b) {
+  if (a.sign == 0) return b;
+  if (b.sign == 0) return a;
+
+  if (a.sign == b.sign) {
+    return {log_sum_exp(a.log_abs, b.log_abs), a.sign};
+  }
+
+  if (a.log_abs > b.log_abs) {
+    return {log_diff_exp(a.log_abs, b.log_abs), a.sign};
+  } else if (b.log_abs > a.log_abs) {
+    return {log_diff_exp(b.log_abs, a.log_abs), b.sign};
+  } else {
+    return {R_NegInf, 0};
+  }
+}
+
+inline signed_log signed_log_sub(signed_log a, signed_log b) {
+  b.sign = -b.sign;
+  return signed_log_add(a, b);
+}
+
 #endif // composite_functions_h
