@@ -361,10 +361,10 @@ RDMGBM <- function() {
 #' 
 #' @export
 #' 
-RDMSWTN <- function(){
+RDMSWTN <- function(erlang = 1L){
   list(
     type="RACE",
-    c_name = "RDMSWTN",
+    c_name = if (erlang >= 2L) "RDMSWTN_E2" else "RDMSWTN",
     p_types=c("v"=log(1), "B"=log(1), "A"=log(0), "t0"=log(0),
               "s"=log(1), "sv"=log(0), "lambda"=log(0), "pContaminant"=qnorm(0)),
     transform=list(func=c(v="exp", B="exp", A="exp", t0="exp",
@@ -373,25 +373,20 @@ RDMSWTN <- function(){
                             t0=c(0.05,Inf), s=c(0,Inf), sv=c(0,Inf), lambda=c(1e-4,Inf),
                             pContaminant=c(0.001,0.999)),
                exception=c(A=0, v=0, sv=0, lambda=0, pContaminant=0)),
-    # Trial dependent parameter transform
     Ttransform = function(pars, dadm) {
       pars <- cbind(pars, b=pars[,"B"] + pars[,"A"])
       pars
     },
-    # Random function for racing accumulators
-    rfun=function(data=NULL, pars) rRDMSWTN(data$lR, pars, ok=attr(pars, "ok")),
-    # Density function (PDF) for single accumulator
-    dfun=function(rt, pars) dRDMSWTN(rt, pars),
-    # Probability function (CDF) for single accumulator
-    pfun=function(rt, pars) pRDMSWTN(rt, pars),
-    # Race likelihood combining pfun and dfun
+    rfun=function(data=NULL, pars) rRDMSWTN(data$lR, pars, ok=attr(pars, "ok"), erlang=erlang),
+    dfun=function(rt, pars) dRDMSWTN(rt, pars, erlang=erlang),
+    pfun=function(rt, pars) pRDMSWTN(rt, pars, erlang=erlang),
     log_likelihood=function(pars, dadm, model, min_ll=log(1e-10)){
       log_likelihood_race_missing(pars=pars, dadm=dadm, model=model, min_ll=min_ll)
     }
   )
 }
 
-dRDMSWTN <- function(rt, pars) {
+dRDMSWTN <- function(rt, pars, erlang = 1L) {
   if (is.null(dim(pars)) || (dim(pars)[1]==1 & length(rt)>1)) {
     original_names <- names(pars); if (is.null(original_names)) original_names <- colnames(pars)
     pars <- matrix(pars, nrow=length(rt), ncol=length(pars),
@@ -409,12 +404,13 @@ dRDMSWTN <- function(rt, pars) {
     }
     out[ok] <- dSWTNspv(rt[ok], v=pars[ok,"v",drop=FALSE], b=pars[ok,"b",drop=FALSE],
                         A=pars[ok,"A",drop=FALSE], t0=pars[ok,"t0",drop=FALSE],
-                        sv=pars[ok,"sv",drop=FALSE], lambda=pars[ok,"lambda",drop=FALSE])
+                        sv=pars[ok,"sv",drop=FALSE], lambda=pars[ok,"lambda",drop=FALSE],
+                        kill_shape=erlang)
   }
   out
 }
 
-pRDMSWTN <- function(rt, pars) {
+pRDMSWTN <- function(rt, pars, erlang = 1L) {
   if (is.null(dim(pars)) || (dim(pars)[1]==1 & length(rt)>1)) {
     original_names <- names(pars); if (is.null(original_names)) original_names <- colnames(pars)
     pars <- matrix(pars, nrow=length(rt), ncol=length(pars),
@@ -432,12 +428,14 @@ pRDMSWTN <- function(rt, pars) {
     }
     out[ok] <- pSWTNspv(rt[ok], v=pars[ok,"v",drop=FALSE], b=pars[ok,"b",drop=FALSE],
                         A=pars[ok,"A",drop=FALSE], t0=pars[ok,"t0",drop=FALSE],
-                        sv=pars[ok,"sv",drop=FALSE], lambda=pars[ok,"lambda",drop=FALSE])
+                        sv=pars[ok,"sv",drop=FALSE], lambda=pars[ok,"lambda",drop=FALSE],
+                        kill_shape=erlang)
   }
   out
 }
 
-rRDMSWTN <- function(lR, pars, p_types=c("v","b","A","t0","sv","lambda"), ok=rep(TRUE, dim(pars)[1])) {
+rRDMSWTN <- function(lR, pars, p_types=c("v","b","A","t0","sv","lambda"),
+                     ok=rep(TRUE, dim(pars)[1]), erlang=1L) {
   if (!is.null(attr(pars, "ok"))) ok <- attr(pars, "ok")
   if (is.null(dim(pars)) || (dim(pars)[1]==1 & length(lR)>1)) {
     original_names <- names(pars); if (is.null(original_names)) original_names <- colnames(pars)
@@ -457,7 +455,8 @@ rRDMSWTN <- function(lR, pars, p_types=c("v","b","A","t0","sv","lambda"), ok=rep
   dt <- matrix(Inf, nrow=nr, ncol=nrow(pars)/nr)
   t0 <- pars[,"t0"]
   pars <- pars[ok,,drop=FALSE]
-  dt[ok] <- rSWTN(sum(ok), b=pars[,"b"], v=pars[,"v"], A=pars[,"A"], sv=pars[,"sv"], k=pars[,"lambda"])
+  dt[ok] <- rSWTN(sum(ok), b=pars[,"b"], v=pars[,"v"], A=pars[,"A"], sv=pars[,"sv"],
+                  k=pars[,"lambda"], erlang=erlang)
   bad_col <- apply(dt, 2, function(x) all(is.infinite(x)))
   R <- apply(dt, 2, which.min)
   pick <- cbind(R, 1:dim(dt)[2])
@@ -470,7 +469,7 @@ rRDMSWTN <- function(lR, pars, p_types=c("v","b","A","t0","sv","lambda"), ok=rep
   out
 }
 
-rSWTN <- function(n, b, v, A, sv, s=1, k=0) {
+rSWTN <- function(n, b, v, A, sv, s=1, k=0, erlang=1L) {
   out <- numeric(n)
   if (n > 1 & all(length(A)==1, length(v)==1, length(b)==1, length(sv)==1, length(k)==1)) {
     A  <- rep(A, n)
@@ -486,7 +485,9 @@ rSWTN <- function(n, b, v, A, sv, s=1, k=0) {
   out[ok] <- statmod::rinvgauss(nok, mean=(b[ok]/s) / (l[ok]/s), shape=(b[ok]/s)^2)
   kill_ok <- ok & (k > 0)
   if (any(kill_ok)) {
-    t_kill <- rexp(sum(kill_ok), rate=k[kill_ok])
+    nk <- sum(kill_ok)
+    t_kill <- rexp(nk, rate=k[kill_ok])
+    if (erlang >= 2L) t_kill <- t_kill + rexp(nk, rate=k[kill_ok])  # Erlang-2 = sum of 2 Exp
     kill_idx <- which(kill_ok)
     out[kill_idx[t_kill <= out[kill_idx]]] <- Inf
   }

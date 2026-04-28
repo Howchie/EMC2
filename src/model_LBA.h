@@ -118,6 +118,14 @@ NumericVector plba(NumericVector t,
 // k -> 0 limit recovers standard LBA exactly.
 // --------------------------------------------------------------------------
 
+// Erlang-n kill survival in log space: log(exp(-lt) * sum_{m=0}^{n-1} (lt)^m/m!)
+// n=1: exponential; n=2: Erlang-2.  Duplicated from model_RDM.h to avoid coupling.
+inline double lba_erlang_log_surv(double t, double lambda, int n) {
+  if (lambda <= 0.0) return 0.0;
+  if (n <= 1) return -lambda * t;
+  return -lambda * t + std::log1p(lambda * t);
+}
+
 // Stable exp(-kt) and 1-exp(-kt).
 inline void leak_terms(double k, double t, double &E, double &G) {
   E = std::exp(-k * t);
@@ -256,38 +264,40 @@ double dleakyba_norm(double t, double A, double b,
   return log_out ? safe_log(f) : f;
 }
 
-// Killed-leaky BA density: f_hit(t) = f_leaky(t) * exp(-lambda * t)
+// Killed-leaky BA density: f_hit(t) = f_leaky(t) * S_K(t)
+// kill_shape=1: S_K = exp(-lambda*t); kill_shape=2: S_K = exp(-lambda*t)*(1+lambda*t).
 inline double dkilledleakyba_norm(double t, double A, double b,
                                   double v, double sv, double k, double lambda,
-                                  bool posdrift = true, bool log_out = false) {
+                                  bool posdrift = true, bool log_out = false,
+                                  int kill_shape = 1) {
   if (t <= 0.0) return log_out ? R_NegInf : 0.0;
   if (lambda <= 0.0) return dleakyba_norm(t, A, b, v, sv, k, posdrift, log_out);
-  const double log_f = dleakyba_norm(t, A, b, v, sv, k, posdrift, true) - lambda * t;
+  const double log_f = dleakyba_norm(t, A, b, v, sv, k, posdrift, true)
+                       + lba_erlang_log_surv(t, lambda, kill_shape);
   return log_out ? log_f : std::exp(log_f);
 }
 
 // Killed-leaky BA sub-CDF:
-// P(T_R <= t, T_R < T_K) = \int g(D) J(D,t) dD with 1D quadrature over D.
+// P(T_R <= t, T_R < T_K) with kill_shape=1 (exponential) or kill_shape=2 (Erlang-2).
 inline double pkilledleakyba_norm(double t, double A, double b,
                                   double v, double sv, double k, double lambda,
-                                  bool posdrift = true, bool log_out = false) {
+                                  bool posdrift = true, bool log_out = false,
+                                  int kill_shape = 1) {
   if (t <= 0.0) return log_out ? R_NegInf : 0.0;
   if (lambda <= 0.0) return pleakyba_norm(t, A, b, v, sv, k, posdrift, log_out);
   const double eps = 1e-10;
   if (sv <= 0.0 || A <= 0.0 || b <= A) return log_out ? R_NegInf : 0.0;
 
-  // k -> 0 uses standard LBA hit time in the survival tilt.
-  if (std::fabs(k) < eps) {
-    // Fallback to numerical integration in time domain:
-    // F_k(t) = \int_0^t f_leaky(u) exp(-lambda*u) du
+  // k -> 0: GL integration in time domain (both Erlang shapes handled via survival factor).
+  if (std::fabs(k) < eps || kill_shape >= 2) {
     const Rcpp::List& gl = get_gl20();
     const Rcpp::NumericVector nodes = gl["nodes"];
     const Rcpp::NumericVector weights = gl["weights"];
     double acc = 0.0;
     for (int j = 0; j < nodes.size(); ++j) {
-      const double u = 0.5 * t * (nodes[j] + 1.0);
-      const double fu = dleakyba_norm(u, A, b, v, sv, k, posdrift, false) * std::exp(-lambda * u);
-      acc += weights[j] * fu;
+      const double u  = 0.5 * t * (nodes[j] + 1.0);
+      const double sk = std::exp(lba_erlang_log_surv(u, lambda, kill_shape));
+      acc += weights[j] * dleakyba_norm(u, A, b, v, sv, k, posdrift, false) * sk;
     }
     double out = 0.5 * t * acc;
     out = std::max(0.0, std::min(1.0, out));

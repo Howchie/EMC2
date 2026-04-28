@@ -322,7 +322,15 @@ RedundantTargetLBA <- function(posdrift = TRUE){
 
 #### BAwL (Ballistic Accumulator with Leak) ----
 
-dBAwL <- function(rt, pars, posdrift = TRUE) {
+# Erlang-n kill survival: exp(-lambda*t) * sum_{m=0}^{n-1} (lambda*t)^m / m!
+# n=1: exponential; n=2: Erlang-2.
+erlang_surv <- function(t, lambda, n = 1L) {
+  s <- exp(-lambda * t)
+  if (n >= 2L) s <- s * (1 + lambda * t)
+  s
+}
+
+dBAwL <- function(rt, pars, posdrift = TRUE, erlang = 1L) {
   dt  <- rt - pars[, "t0"]
   ok  <- (dt > 0) & (pars[, "b"] >= pars[, "A"])
   ok[is.na(ok) | !is.finite(dt)] <- FALSE
@@ -334,11 +342,11 @@ dBAwL <- function(rt, pars, posdrift = TRUE) {
                    sv = pars[ok, "sv"],
                    k  = pars[ok, "k"],
                    posdrift = posdrift)
-  out[ok] <- base * exp(-pars[ok, "lambda"] * dt[ok])
+  out[ok] <- base * erlang_surv(dt[ok], pars[ok, "lambda"], erlang)
   out
 }
 
-pBAwL <- function(rt, pars, posdrift = TRUE) {
+pBAwL <- function(rt, pars, posdrift = TRUE, erlang = 1L) {
   dt  <- rt - pars[, "t0"]
   ok  <- (dt > 0) & (pars[, "b"] >= pars[, "A"])
   ok[is.na(ok) | !is.finite(dt)] <- FALSE
@@ -350,7 +358,7 @@ pBAwL <- function(rt, pars, posdrift = TRUE) {
           dleakyba(
             t = x, A = pars[i, "A"], b = pars[i, "b"], v = pars[i, "v"],
             sv = pars[i, "sv"], k = pars[i, "k"], posdrift = posdrift
-          ) * exp(-pars[i, "lambda"] * x)
+          ) * erlang_surv(x, pars[i, "lambda"], erlang)
         },
         lower = 0, upper = dt[i], subdivisions = 200L, rel.tol = 1e-6
       )$value
@@ -361,7 +369,7 @@ pBAwL <- function(rt, pars, posdrift = TRUE) {
 
 rBAwL <- function(lR, pars, ok = rep(TRUE, length(lR)),
                   p_types = c("v", "sv", "b", "A", "t0", "k", "lambda"),
-                  posdrift = TRUE, eps = 1e-10) {
+                  posdrift = TRUE, eps = 1e-10, erlang = 1L) {
   bad  <- rep(NA, length(lR) / length(levels(lR)))
   out  <- data.frame(R = bad, rt = bad)
   nr   <- length(levels(lR))
@@ -387,7 +395,10 @@ rBAwL <- function(lR, pars, ok = rep(TRUE, length(lR)),
     dt[big_k]  <- (-1 / pars[big_k, "k"]) * log(ratio)
   }
   dt[dt < 0] <- Inf
-  tk <- ifelse(pars[, "lambda"] > 0, rexp(nrow(pars), pars[, "lambda"]), Inf)
+  lam_pos <- pars[, "lambda"] > 0
+  tk <- ifelse(lam_pos, rexp(nrow(pars), pars[, "lambda"]), Inf)
+  if (erlang >= 2L && any(lam_pos))
+    tk[lam_pos] <- tk[lam_pos] + rexp(sum(lam_pos), pars[lam_pos, "lambda"])
   dt <- ifelse(dt < tk, dt, Inf)
   bad_col <- apply(dt, 2, function(x) all(is.infinite(x)))
   R   <- apply(dt, 2, which.min)
@@ -415,10 +426,10 @@ rBAwL <- function(lR, pars, ok = rep(TRUE, length(lR)),
 #' * lambda: killing/expiry rate (log scale, [0, Inf); default log(0) = 0).
 #'
 #' @export
-BAwL <- function(posdrift = TRUE) {
+BAwL <- function(posdrift = TRUE, erlang = 1L) {
   list(
     type   = "RACE",
-    c_name = ifelse(posdrift, "BAwL", "BAwLIO"),
+    c_name = paste0(ifelse(posdrift, "BAwL", "BAwLIO"), if (erlang >= 2L) "_E2" else ""),
     p_types = c("v"  = 1, "sv" = log(1), "B" = log(1), "A" = log(0),
                 "t0" = log(0), "k" = log(0), "lambda" = log(0), "pContaminant" = qnorm(0)),
     transform = list(func = c(v = "identity", sv = "exp", B = "exp",
@@ -433,15 +444,18 @@ BAwL <- function(posdrift = TRUE) {
     Ttransform = function(pars, dadm) {
       cbind(pars, b = pars[, "B"] + pars[, "A"])
     },
-    rfun = ifelse(posdrift,
-                  function(data, pars) rBAwL(data$lR, pars, ok = attr(pars, "ok"), posdrift = TRUE),
-                  function(data, pars) rBAwL(data$lR, pars, ok = attr(pars, "ok"), posdrift = FALSE)),
-    dfun = ifelse(posdrift,
-                  function(rt, pars) dBAwL(rt, pars, posdrift = TRUE),
-                  function(rt, pars) dBAwL(rt, pars, posdrift = FALSE)),
-    pfun = ifelse(posdrift,
-                  function(rt, pars) pBAwL(rt, pars, posdrift = TRUE),
-                  function(rt, pars) pBAwL(rt, pars, posdrift = FALSE)),
+    rfun = if (posdrift)
+             function(data, pars) rBAwL(data$lR, pars, ok = attr(pars, "ok"), posdrift = TRUE,  erlang = erlang)
+           else
+             function(data, pars) rBAwL(data$lR, pars, ok = attr(pars, "ok"), posdrift = FALSE, erlang = erlang),
+    dfun = if (posdrift)
+             function(rt, pars) dBAwL(rt, pars, posdrift = TRUE,  erlang = erlang)
+           else
+             function(rt, pars) dBAwL(rt, pars, posdrift = FALSE, erlang = erlang),
+    pfun = if (posdrift)
+             function(rt, pars) pBAwL(rt, pars, posdrift = TRUE,  erlang = erlang)
+           else
+             function(rt, pars) pBAwL(rt, pars, posdrift = FALSE, erlang = erlang),
     log_likelihood = function(pars, dadm, model, min_ll = log(1e-10)) {
       log_likelihood_race_missing(pars = pars, dadm = dadm, model = model, min_ll = min_ll)
     }
