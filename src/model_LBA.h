@@ -288,8 +288,8 @@ inline double pkilledleakyba_norm(double t, double A, double b,
   const double eps = 1e-10;
   if (sv <= 0.0 || A <= 0.0 || b <= A) return log_out ? R_NegInf : 0.0;
 
-  // k -> 0: GL integration in time domain (both Erlang shapes handled via survival factor).
-  if (std::fabs(k) < eps || kill_shape >= 2) {
+  // k -> 0: GL integration in time domain.
+  if (std::fabs(k) < eps) {
     const Rcpp::List& gl = get_gl20();
     const Rcpp::NumericVector nodes = gl["nodes"];
     const Rcpp::NumericVector weights = gl["weights"];
@@ -312,7 +312,7 @@ inline double pkilledleakyba_norm(double t, double A, double b,
   const double Dmin = std::max(k * b, Dmin_time);
   const double rho = lambda / k;
 
-  auto J_inner = [&](double D) -> double {
+  auto J_inner_exp = [&](double D, double rho_local) -> double {
     if (!(D > k * b)) return 0.0;
     const double L = (C1 - D) / C2;
     const double Ls = std::max(0.0, L);
@@ -321,11 +321,45 @@ inline double pkilledleakyba_norm(double t, double A, double b,
     const double DkA = D - k * A;
     const double Dkb = D - k * b;
     if (DkL <= 0.0 || DkA <= 0.0 || Dkb <= 0.0) return 0.0;
-    if (std::fabs(rho - 1.0) < 1e-8) {
+    if (std::fabs(rho_local - 1.0) < 1e-8) {
       return (Dkb / (A * k)) * std::log(DkL / DkA);
     }
-    return (std::pow(Dkb, rho) / (A * k * (1.0 - rho))) *
-      (std::pow(DkL, 1.0 - rho) - std::pow(DkA, 1.0 - rho));
+    return (std::pow(Dkb, rho_local) / (A * k * (1.0 - rho_local))) *
+      (std::pow(DkL, 1.0 - rho_local) - std::pow(DkA, 1.0 - rho_local));
+  };
+
+  auto J_inner = [&](double D) -> double {
+    const double J1 = J_inner_exp(D, rho);
+    if (kill_shape <= 1) return J1;
+    // Erlang-2 semianalytic identity from erlang.tex:
+    // A_rho - rho * dA_rho/drho, where A_rho is the Erlang-1 inner integral.
+    const double L = (C1 - D) / C2;
+    const double Ls = std::max(0.0, L);
+    if (!(Ls < A)) return 0.0;
+    const double DkL = D - k * Ls;
+    const double DkA = D - k * A;
+    const double Dkb = D - k * b;
+    if (DkL <= 0.0 || DkA <= 0.0 || Dkb <= 0.0) return 0.0;
+
+    const double M = 1.0 - rho;
+    double dJ = 0.0;
+    if (std::fabs(M) < 1e-6) {
+      const double h = 1e-6 * (1.0 + std::fabs(rho));
+      const double Jp = J_inner_exp(D, rho + h);
+      const double Jm = J_inner_exp(D, rho - h);
+      dJ = (Jp - Jm) / (2.0 * h);
+    } else {
+      const double P = std::pow(Dkb, rho);
+      const double U1 = std::pow(DkL, M);
+      const double U2 = std::pow(DkA, M);
+      const double U = U1 - U2;
+      const double logDkb = std::log(Dkb);
+      const double dU = -std::log(DkL) * U1 + std::log(DkA) * U2;
+      const double base = P / (A * k);
+      dJ = base * (logDkb * U / M + dU / M + U / (M * M));
+    }
+    const double J2 = J1 - rho * dJ;
+    return std::fmax(0.0, J2);
   };
 
   auto gD = [&](double D) -> double {
@@ -353,6 +387,44 @@ inline double pkilledleakyba_norm(double t, double A, double b,
   double out = 0.5 * acc;
   out = std::max(0.0, std::min(1.0, out));
   return log_out ? safe_log(out) : out;
+}
+
+// [[Rcpp::export]]
+NumericVector dkilledleakyba(NumericVector t,
+                             NumericVector A, NumericVector b,
+                             NumericVector v, NumericVector sv, NumericVector k,
+                             NumericVector lambda,
+                             bool posdrift = true, bool log_out = false,
+                             int kill_shape = 1) {
+  int n = t.size();
+  NumericVector pdf(n);
+  auto pick = [](const NumericVector& vec, int i) -> double {
+    return vec.size() == 1 ? vec[0] : vec[i];
+  };
+  for (int i = 0; i < n; i++) {
+    pdf[i] = dkilledleakyba_norm(t[i], pick(A,i), pick(b,i), pick(v,i), pick(sv,i),
+                                 pick(k,i), pick(lambda,i), posdrift, log_out, kill_shape);
+  }
+  return pdf;
+}
+
+// [[Rcpp::export]]
+NumericVector pkilledleakyba(NumericVector t,
+                             NumericVector A, NumericVector b,
+                             NumericVector v, NumericVector sv, NumericVector k,
+                             NumericVector lambda,
+                             bool posdrift = true, bool log_out = false,
+                             int kill_shape = 1) {
+  int n = t.size();
+  NumericVector cdf(n);
+  auto pick = [](const NumericVector& vec, int i) -> double {
+    return vec.size() == 1 ? vec[0] : vec[i];
+  };
+  for (int i = 0; i < n; i++) {
+    cdf[i] = pkilledleakyba_norm(t[i], pick(A,i), pick(b,i), pick(v,i), pick(sv,i),
+                                 pick(k,i), pick(lambda,i), posdrift, log_out, kill_shape);
+  }
+  return cdf;
 }
 
 // Vectorised R-callable wrappers (recycle scalar parameters).

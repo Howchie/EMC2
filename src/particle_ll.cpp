@@ -327,6 +327,7 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
   out.ctx.min_lik_for_pdf = std::exp(std::log(1e-10));
   out.ctx.use_posdrift = true;
   out.ctx.gng = false;
+  out.ctx.kill_shape = (type_std.find("_E2") != std::string::npos) ? 2 : 1;
 
   if (type_std.find("RDMSWTN") != std::string::npos) {
     // Must be checked before "RDM" since "RDMSWTN" contains "RDM"

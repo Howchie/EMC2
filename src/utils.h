@@ -97,6 +97,8 @@ struct ContextForRaceModels {
     // Optional per-particle fast-kernel hint:
     // 0 = auto detect in kernel; 1 = zero-variability branch; 2 = nonzero branch.
     int mode_hint = 0;
+    // Kill-process shape: 1 = exponential, 2 = Erlang-2.
+    int kill_shape = 1;
     // Tri-state caches for optional accumulator levels:
     // -2 = unresolved (detect from data once), -1 = absent, >0 = factor code.
     int time_code = -2;
@@ -618,7 +620,7 @@ inline double dbawl_scalar(double t, const double* par, void* ctx_) {
   // Route through the leaky kernel in all cases; its internal k->0 branch
   // handles the exact LBA limit.
   return dkilledleakyba_norm(tt, par[3], par[2] + par[3], par[0], par[1], par[5], par[6],
-                             ctx->use_posdrift);
+                             ctx->use_posdrift, false, ctx->kill_shape);
 }
 
 inline double pbawl_scalar(double t, const double* par, void* ctx_) {
@@ -629,7 +631,7 @@ inline double pbawl_scalar(double t, const double* par, void* ctx_) {
   // Route through the leaky kernel in all cases; its internal k->0 branch
   // handles the exact LBA limit.
   return pkilledleakyba_norm(tt, par[3], par[2] + par[3], par[0], par[1], par[5], par[6],
-                             ctx->use_posdrift);
+                             ctx->use_posdrift, false, ctx->kill_shape);
 }
 
 inline void dbawl_raw(const double* rt, const double* pars_cm, int n_rows,
@@ -649,7 +651,7 @@ inline void dbawl_raw(const double* rt, const double* pars_cm, int n_rows,
     if (R_IsNA(v_[i]) || !isok[i]) { out[i] = min_ll; continue; }
     const double tt = rt[i] - t0_[i];
     if (tt <= 0.0) { out[i] = min_ll; continue; }
-    const double pdf = dkilledleakyba_norm(tt, A_[i], B_[i] + A_[i], v_[i], sv_[i], k_[i], l_[i], pd);
+    const double pdf = dkilledleakyba_norm(tt, A_[i], B_[i] + A_[i], v_[i], sv_[i], k_[i], l_[i], pd, false, ctx->kill_shape);
     out[i] = (pdf > 0.0 && std::isfinite(pdf)) ? std::log(pdf) : min_ll;
   }
 }
@@ -671,7 +673,7 @@ inline void pbawl_raw(const double* rt, const double* pars_cm, int n_rows,
     if (R_IsNA(v_[i]) || !isok[i]) { out[i] = 0.0; continue; }
     const double tt = rt[i] - t0_[i];
     if (tt <= 0.0) { out[i] = 0.0; continue; }
-    const double cdf = pkilledleakyba_norm(tt, A_[i], B_[i] + A_[i], v_[i], sv_[i], k_[i], l_[i], pd);
+    const double cdf = pkilledleakyba_norm(tt, A_[i], B_[i] + A_[i], v_[i], sv_[i], k_[i], l_[i], pd, false, ctx->kill_shape);
     if (cdf >= 1.0) { out[i] = min_ll; continue; }
     out[i] = (cdf <= 0.0) ? 0.0 : std::log1p(-cdf);
   }
@@ -701,7 +703,7 @@ inline void bawl_logS_at_t(double t, const double* pars_cm,
       if (!isok_all[r] || R_IsNA(v_[r])) { bad = true; break; }
       const double tt = t - t0_[r];
       if (tt <= 0.0) continue;
-      const double cdf = pkilledleakyba_norm(tt, A_[r], B_[r] + A_[r], v_[r], sv_[r], k_[r], l_[r], pd);
+      const double cdf = pkilledleakyba_norm(tt, A_[r], B_[r] + A_[r], v_[r], sv_[r], k_[r], l_[r], pd, false, ctx->kill_shape);
       if (cdf >= 1.0) { bad = true; break; }
       if (cdf > 0.0) logS += std::log1p(-cdf);
     }
@@ -714,7 +716,8 @@ inline void bawl_logS_at_t(double t, const double* pars_cm,
 // Column layout: v=0, B=1, A=2, t0=3, s=4, sv=5, lambda=6
 // ============================================================
 
-inline double drdmswtn_scalar(double t, const double* par, void* /*ctx_*/) {
+inline double drdmswtn_scalar(double t, const double* par, void* ctx_) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
   if (R_IsNA(par[0])) return 0.0;
   const double tt = t - par[3];
   if (tt <= 0.0) return 0.0;
@@ -724,10 +727,11 @@ inline double drdmswtn_scalar(double t, const double* par, void* /*ctx_*/) {
                   par[0] * inv_s,              // v/s
                   par[2] * inv_s,              // A/s
                   par[5] * inv_s,              // sv/s
-                  1.0, par[6], 0.0, 20, false);
+                  1.0, par[6], 0.0, 20, false, ctx->kill_shape);
 }
 
-inline double prdmswtn_scalar(double t, const double* par, void* /*ctx_*/) {
+inline double prdmswtn_scalar(double t, const double* par, void* ctx_) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
   if (R_IsNA(par[0])) return 0.0;
   const double tt = t - par[3];
   if (tt <= 0.0) return 0.0;
@@ -737,7 +741,7 @@ inline double prdmswtn_scalar(double t, const double* par, void* /*ctx_*/) {
                   par[0] * inv_s,
                   par[2] * inv_s,
                   par[5] * inv_s,
-                  1.0, 0.0, par[6], 20, false);
+                  1.0, 0.0, par[6], 20, false, ctx->kill_shape);
 }
 
 inline void drdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
@@ -783,7 +787,7 @@ inline void drdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
                                    1.0,
                                    A_[i] * inv_s,
                                    k_[i],
-                                   true);
+                                   true, ctx->kill_shape);
       out[i] = (R_FINITE(log_pdf) && log_pdf > min_ll) ? log_pdf : min_ll;
     }
     return;
@@ -803,7 +807,7 @@ inline void drdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
                       1.0,
                       A_[i] * inv_s,
                       k_[i],
-                      true);
+                      true, ctx->kill_shape);
     } else {
       const double inv_s = 1.0 / s_[i];
       log_pdf = drdmswtn(tt,
@@ -813,7 +817,7 @@ inline void drdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
                          sv_[i] * inv_s,
                          1.0,
                          k_[i],
-                         0.0, 20, true);
+                         0.0, 20, true, ctx->kill_shape);
     }
     out[i] = (R_FINITE(log_pdf) && log_pdf > min_ll) ? log_pdf : min_ll;
   }
@@ -862,7 +866,7 @@ inline void prdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
                                    1.0,
                                    A_[i] * inv_s,
                                    k_[i],
-                                   true);
+                                   true, ctx->kill_shape);
       if (!R_FINITE(log_cdf)) { out[i] = 0.0; continue; }
       if (log_cdf >= 0.0) { out[i] = min_ll; continue; }
       out[i] = log1m_exp(log_cdf);
@@ -884,7 +888,7 @@ inline void prdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
                       1.0,
                       A_[i] * inv_s,
                       k_[i],
-                      true);
+                      true, ctx->kill_shape);
     } else {
       const double inv_s = 1.0 / s_[i];
       log_cdf = prdmswtn(tt,
@@ -893,7 +897,7 @@ inline void prdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
                          A_[i]  * inv_s,
                          sv_[i] * inv_s,
                          1.0,
-                         0.0, k_[i], 20, true);
+                         0.0, k_[i], 20, true, ctx->kill_shape);
     }
     if (!R_FINITE(log_cdf)) { out[i] = 0.0; continue; }
     if (log_cdf >= 0.0) { out[i] = min_ll; continue; }
@@ -935,7 +939,7 @@ inline void rdmswtn_logS_at_t(double t, const double* pars_cm,
                         1.0,
                         A_[r] * inv_s,
                         k_[r],
-                        true);
+                        true, ctx->kill_shape);
       } else if (mode_hint == 2) {
         const double inv_s = 1.0 / s_[r];
         log_cdf = prdmswtn(tt,
@@ -944,7 +948,7 @@ inline void rdmswtn_logS_at_t(double t, const double* pars_cm,
                            A_[r]  * inv_s,
                            sv_[r] * inv_s,
                            1.0,
-                           0.0, k_[r], 20, true);
+                           0.0, k_[r], 20, true, ctx->kill_shape);
       } else if (!std::isfinite(sv_[r]) || std::fabs(sv_[r]) <= sv_eps) {
         const double inv_s = 1.0 / s_[r];
         log_cdf = pwald(tt,
@@ -953,7 +957,7 @@ inline void rdmswtn_logS_at_t(double t, const double* pars_cm,
                         1.0,
                         A_[r] * inv_s,
                         k_[r],
-                        true);
+                        true, ctx->kill_shape);
       } else {
         const double inv_s = 1.0 / s_[r];
         log_cdf = prdmswtn(tt,
@@ -962,7 +966,7 @@ inline void rdmswtn_logS_at_t(double t, const double* pars_cm,
                            A_[r]  * inv_s,
                            sv_[r] * inv_s,
                            1.0,
-                           0.0, k_[r], 20, true);
+                           0.0, k_[r], 20, true, ctx->kill_shape);
       }
       if (log_cdf >= 0.0) { bad = true; break; }
       if (R_FINITE(log_cdf)) logS += log1m_exp(log_cdf);

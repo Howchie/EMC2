@@ -178,6 +178,46 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// dkilledleakyba
+NumericVector dkilledleakyba(NumericVector t, NumericVector A, NumericVector b, NumericVector v, NumericVector sv, NumericVector k, NumericVector lambda, bool posdrift, bool log_out, int kill_shape);
+RcppExport SEXP _EMC2_dkilledleakyba(SEXP tSEXP, SEXP ASEXP, SEXP bSEXP, SEXP vSEXP, SEXP svSEXP, SEXP kSEXP, SEXP lambdaSEXP, SEXP posdriftSEXP, SEXP log_outSEXP, SEXP kill_shapeSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type t(tSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type A(ASEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type b(bSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type v(vSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type sv(svSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type k(kSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type lambda(lambdaSEXP);
+    Rcpp::traits::input_parameter< bool >::type posdrift(posdriftSEXP);
+    Rcpp::traits::input_parameter< bool >::type log_out(log_outSEXP);
+    Rcpp::traits::input_parameter< int >::type kill_shape(kill_shapeSEXP);
+    rcpp_result_gen = Rcpp::wrap(dkilledleakyba(t, A, b, v, sv, k, lambda, posdrift, log_out, kill_shape));
+    return rcpp_result_gen;
+END_RCPP
+}
+// pkilledleakyba
+NumericVector pkilledleakyba(NumericVector t, NumericVector A, NumericVector b, NumericVector v, NumericVector sv, NumericVector k, NumericVector lambda, bool posdrift, bool log_out, int kill_shape);
+RcppExport SEXP _EMC2_pkilledleakyba(SEXP tSEXP, SEXP ASEXP, SEXP bSEXP, SEXP vSEXP, SEXP svSEXP, SEXP kSEXP, SEXP lambdaSEXP, SEXP posdriftSEXP, SEXP log_outSEXP, SEXP kill_shapeSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type t(tSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type A(ASEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type b(bSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type v(vSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type sv(svSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type k(kSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type lambda(lambdaSEXP);
+    Rcpp::traits::input_parameter< bool >::type posdrift(posdriftSEXP);
+    Rcpp::traits::input_parameter< bool >::type log_out(log_outSEXP);
+    Rcpp::traits::input_parameter< int >::type kill_shape(kill_shapeSEXP);
+    rcpp_result_gen = Rcpp::wrap(pkilledleakyba(t, A, b, v, sv, k, lambda, posdrift, log_out, kill_shape));
+    return rcpp_result_gen;
+END_RCPP
+}
 // dleakyba
 NumericVector dleakyba(NumericVector t, NumericVector A, NumericVector b, NumericVector v, NumericVector sv, NumericVector k, bool posdrift);
 RcppExport SEXP _EMC2_dleakyba(SEXP tSEXP, SEXP ASEXP, SEXP bSEXP, SEXP vSEXP, SEXP svSEXP, SEXP kSEXP, SEXP posdriftSEXP) {
@@ -1455,6 +1495,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_plba", (DL_FUNC) &_EMC2_plba, 7},
     {"_EMC2_pleakyba_norm", (DL_FUNC) &_EMC2_pleakyba_norm, 8},
     {"_EMC2_dleakyba_norm", (DL_FUNC) &_EMC2_dleakyba_norm, 8},
+    {"_EMC2_dkilledleakyba", (DL_FUNC) &_EMC2_dkilledleakyba, 10},
+    {"_EMC2_pkilledleakyba", (DL_FUNC) &_EMC2_pkilledleakyba, 10},
     {"_EMC2_dleakyba", (DL_FUNC) &_EMC2_dleakyba, 7},
     {"_EMC2_pleakyba", (DL_FUNC) &_EMC2_pleakyba, 7},
     {"_EMC2_dkilledlba_norm", (DL_FUNC) &_EMC2_dkilledlba_norm, 8},

@@ -45,6 +45,14 @@ dleakyba_norm <- function(t, A, b, v, sv, k, posdrift = TRUE, log_out = FALSE) {
     .Call(`_EMC2_dleakyba_norm`, t, A, b, v, sv, k, posdrift, log_out)
 }
 
+dkilledleakyba <- function(t, A, b, v, sv, k, lambda, posdrift = TRUE, log_out = FALSE, kill_shape = 1L) {
+    .Call(`_EMC2_dkilledleakyba`, t, A, b, v, sv, k, lambda, posdrift, log_out, kill_shape)
+}
+
+pkilledleakyba <- function(t, A, b, v, sv, k, lambda, posdrift = TRUE, log_out = FALSE, kill_shape = 1L) {
+    .Call(`_EMC2_pkilledleakyba`, t, A, b, v, sv, k, lambda, posdrift, log_out, kill_shape)
+}
+
 dleakyba <- function(t, A, b, v, sv, k, posdrift = TRUE) {
     .Call(`_EMC2_dleakyba`, t, A, b, v, sv, k, posdrift)
 }

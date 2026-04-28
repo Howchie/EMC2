@@ -322,27 +322,19 @@ RedundantTargetLBA <- function(posdrift = TRUE){
 
 #### BAwL (Ballistic Accumulator with Leak) ----
 
-# Erlang-n kill survival: exp(-lambda*t) * sum_{m=0}^{n-1} (lambda*t)^m / m!
-# n=1: exponential; n=2: Erlang-2.
-erlang_surv <- function(t, lambda, n = 1L) {
-  s <- exp(-lambda * t)
-  if (n >= 2L) s <- s * (1 + lambda * t)
-  s
-}
-
 dBAwL <- function(rt, pars, posdrift = TRUE, erlang = 1L) {
   dt  <- rt - pars[, "t0"]
   ok  <- (dt > 0) & (pars[, "b"] >= pars[, "A"])
   ok[is.na(ok) | !is.finite(dt)] <- FALSE
   out <- numeric(length(dt))
-  base <- dleakyba(t  = dt[ok],
-                   A  = pars[ok, "A"],
-                   b  = pars[ok, "b"],
-                   v  = pars[ok, "v"],
-                   sv = pars[ok, "sv"],
-                   k  = pars[ok, "k"],
-                   posdrift = posdrift)
-  out[ok] <- base * erlang_surv(dt[ok], pars[ok, "lambda"], erlang)
+  if (any(ok)) {
+    out[ok] <- dkilledleakyba(
+      t = dt[ok], A = pars[ok, "A"], b = pars[ok, "b"],
+      v = pars[ok, "v"], sv = pars[ok, "sv"], k = pars[ok, "k"],
+      lambda = pars[ok, "lambda"], posdrift = posdrift, log_out = FALSE,
+      kill_shape = as.integer(erlang)
+    )
+  }
   out
 }
 
@@ -352,17 +344,12 @@ pBAwL <- function(rt, pars, posdrift = TRUE, erlang = 1L) {
   ok[is.na(ok) | !is.finite(dt)] <- FALSE
   out <- numeric(length(dt))
   if (any(ok)) {
-    out[ok] <- vapply(which(ok), function(i) {
-      stats::integrate(
-        f = function(x) {
-          dleakyba(
-            t = x, A = pars[i, "A"], b = pars[i, "b"], v = pars[i, "v"],
-            sv = pars[i, "sv"], k = pars[i, "k"], posdrift = posdrift
-          ) * erlang_surv(x, pars[i, "lambda"], erlang)
-        },
-        lower = 0, upper = dt[i], subdivisions = 200L, rel.tol = 1e-6
-      )$value
-    }, numeric(1))
+    out[ok] <- pkilledleakyba(
+      t = dt[ok], A = pars[ok, "A"], b = pars[ok, "b"],
+      v = pars[ok, "v"], sv = pars[ok, "sv"], k = pars[ok, "k"],
+      lambda = pars[ok, "lambda"], posdrift = posdrift, log_out = FALSE,
+      kill_shape = as.integer(erlang)
+    )
   }
   out
 }
