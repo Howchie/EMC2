@@ -577,13 +577,13 @@ RACE_rfun <- function(data, pars, model){
     if (!is.null(attr(pars, "staircase"))) attr(tmp, "staircase") <- attr(pars, "staircase")
     Rrti <- model()$rfun(data_in,tmp)
     
-    # Timed-race logic: if "time" wins, choose a random non-time response.
+    # Timed-race logic: if "time" wins, choose a random non-time, non-nogo response.
     if (length(time_idx) > 0) {
       r_chr <- as.character(Rrti$R)
       is_time <- r_chr == "time"
       if (any(is_time)) {
         n_time <- sum(is_time)
-        resp_levels <- lR_levels[lR_levels != "time"]
+        resp_levels <- lR_levels[!lR_levels %in% c("time", "nogo")]
         if (length(resp_levels) > 0) {
           r_chr[is_time] <- sample(resp_levels, n_time, replace = TRUE)
           Rrti$R <- factor(r_chr, levels = lR_levels)
@@ -709,8 +709,17 @@ LogicalRules_rfun <- function(data, pars, model) {
     if ("time" %in% races) {
       tT <- Rrti[legacy, "time"]
       emit_T <- is.finite(tT) & (tT < out_legacy$rt)
-      out_legacy$rt[emit_T] <- tT[emit_T]
-      out_legacy$R[emit_T] <- "yes"
+      if (any(emit_T)) {
+        rule_T <- logical_rule[legacy][emit_T]
+        is_id_T <- rule_T == "ID"
+        guess_R <- character(sum(emit_T))
+        if (any(is_id_T))
+          guess_R[is_id_T] <- sample(c("NN", "AN", "NB", "AB"), sum(is_id_T), replace = TRUE)
+        if (any(!is_id_T))
+          guess_R[!is_id_T] <- sample(c("yes", "no"), sum(!is_id_T), replace = TRUE)
+        out_legacy$rt[emit_T] <- tT[emit_T]
+        out_legacy$R[emit_T] <- guess_R
+      }
     }
     out[legacy, ] <- out_legacy
   }
@@ -822,12 +831,6 @@ RedundantTarget_rfun <- function(data, pars, model) {
     emit_T <- is.finite(tT) & (tT < go_t) & (tT < tN)
     rt[emit_T] <- tT[emit_T]
     R[emit_T] <- go_resp
-  }
-
-  if (has_nogo) {
-    emit_N <- is.finite(tN) & (tN < go_t) & (tN < tT)
-    rt[emit_N] <- tN[emit_N]
-    R[emit_N] <- "nogo"
   }
 
   data.frame(R = factor(R, levels = levels(data$R)), rt = rt)

@@ -415,8 +415,9 @@ struct ModelSharedState {
   // pContaminant column: -2=not yet searched, -1=absent, >=0=column index
   int  pc_col   = -2;
   int time_code = -1;
+  int nogo_code = -1;
   std::vector<int> idx_time_only;   // time-accumulator mask (finite rows only)
-  std::vector<int> n_resp;          // per-unique-trial response accumulator count
+  std::vector<int> n_resp;          // per-unique-trial guessable accumulator count (excl. time, nogo)
   std::vector<double> alt_res_buf;  // scratch for timed-race f_T and S_W
 
   // DDM-specific data
@@ -2055,13 +2056,14 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
     const Rcpp::IntegerVector lR_code_vec(static_cast<SEXP>(lR));
     const Rcpp::CharacterVector lR_levels = lR_code_vec.attr("levels");
     int time_code = -1;
+    int nogo_code = -1;
     for (int j = 0; j < lR_levels.size(); ++j) {
-      if (Rcpp::as<std::string>(lR_levels[j]) == "time") {
-        time_code = j + 1;
-        break;
-      }
+      std::string lev = Rcpp::as<std::string>(lR_levels[j]);
+      if (lev == "time") time_code = j + 1;
+      else if (lev == "nogo") nogo_code = j + 1;
     }
     adapter.ctx.time_code = time_code;
+    adapter.ctx.nogo_code = nogo_code;
 
     if (is_logicalrules) {
       LogicalRulesSharedState logicalrules_shared =
@@ -2183,7 +2185,8 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
           int start = j * n_lR;
           int n_lR_curr = has_RACE_col_fp ? RACE_fp[start] : n_lR;
           for (int k = 0; k < n_lR_curr; ++k) {
-            if (lR_code_vec[start+k] != time_code) count++;
+            int code = lR_code_vec[start + k];
+            if (code != time_code && code != nogo_code) count++;
           }
           n_resp_fp[j] = count;
         }
@@ -2239,6 +2242,7 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
         // Fill data-fixed winner/loser masks (finite trials only)
         const Rcpp::LogicalVector& fmask = race_shared.finite_mask;
         race_shared.time_code = time_code;
+        race_shared.nogo_code = nogo_code;
         if (time_code != -1) {
           race_shared.idx_time_only.assign(static_cast<size_t>(n_trials), 0);
           race_shared.n_resp.assign(static_cast<size_t>(n_unique_fp), 0);
@@ -2264,7 +2268,8 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
             int start = j * n_lR;
             int n_lR_curr = has_RACE_col_fp ? RACE_fp[start] : n_lR;
             for (int k = 0; k < n_lR_curr; ++k) {
-              if (lR_code_vec[start + k] != time_code) count++;
+              int code = lR_code_vec[start + k];
+              if (code != time_code && code != nogo_code) count++;
             }
             race_shared.n_resp[static_cast<size_t>(j)] = count;
           }
@@ -4268,26 +4273,31 @@ double c_log_likelihood_race(
   double upper_for_trial = R_PosInf;
   ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(model_context_for_funcs);
   int time_code = ctx->time_code;
-  if (time_code == -2 && use_shared && shared->time_code != -1) {
-    time_code = shared->time_code;
+  int nogo_code = ctx->nogo_code;
+  // Use pre-resolved codes from shared state when available.
+  if (use_shared) {
+    if (time_code == -2) time_code = shared->time_code;
+    if (nogo_code == -2) nogo_code = shared->nogo_code;
   }
-  if (time_code == -2) {
+  // Fall back to scanning the factor levels when still unresolved.
+  if (time_code == -2 || nogo_code == -2) {
     const SEXP lR_sexp = dadm["lR"];
     if (Rf_inherits(lR_sexp, "factor")) {
-      Rcpp::IntegerVector lR_code(lR_sexp);
-      Rcpp::CharacterVector lR_levels = lR_code.attr("levels");
-      time_code = -1;
-      for (int j = 0; j < lR_levels.size(); ++j) {
-        if (Rcpp::as<std::string>(lR_levels[j]) == "time") {
-          time_code = j + 1;
-          break;
-        }
+      Rcpp::IntegerVector lR_code_tmp(lR_sexp);
+      Rcpp::CharacterVector lR_levels_tmp = lR_code_tmp.attr("levels");
+      if (time_code == -2) time_code = -1;
+      if (nogo_code == -2) nogo_code = -1;
+      for (int j = 0; j < lR_levels_tmp.size(); ++j) {
+        std::string lev = Rcpp::as<std::string>(lR_levels_tmp[j]);
+        if (lev == "time") time_code = j + 1;
+        else if (lev == "nogo") nogo_code = j + 1;
       }
     } else {
-      time_code = -1;
+      if (time_code == -2) time_code = -1;
+      if (nogo_code == -2) nogo_code = -1;
     }
-    // Persist resolution for subsequent particles/calls.
-    ctx->time_code = time_code;
+    if (ctx->time_code == -2) ctx->time_code = time_code;
+    if (ctx->nogo_code == -2) ctx->nogo_code = nogo_code;
   }
   const bool has_time = (time_code > 0);
 
@@ -4425,7 +4435,8 @@ double c_log_likelihood_race(
           int start = j * n_lR;
           int n_lR_curr = has_RACE_col ? RACE[start] : n_lR;
           for (int k = 0; k < n_lR_curr; ++k) {
-            if (lR_code_vec_int[start + k] != time_code) count++;
+            int code = lR_code_vec_int[start + k];
+            if (code != time_code && code != nogo_code) count++;
           }
           n_resp_local[j] = count;
         }
@@ -4695,8 +4706,9 @@ double c_log_likelihood_race(
       const SEXP lR_sexp = dadm["lR"];
       Rcpp::IntegerVector lR_code_vec_int(lR_sexp);
       for (int k = 0; k < n_lR_j; ++k) {
-        if (lR_code_vec_int[start_row_idx + k] == time_code) idx_T_1based = k + 1;
-        else n_resp_j++;
+        int code = lR_code_vec_int[start_row_idx + k];
+        if (code == time_code) idx_T_1based = k + 1;
+        else if (code != nogo_code) n_resp_j++;
       }
     }
 
