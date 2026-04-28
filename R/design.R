@@ -313,7 +313,7 @@ contr.anova <- function(n) {
 }
 
 add_accumulators <- function(data,matchfun=NULL,simulate=FALSE, type = "RACE", Fcovariates=NULL, fixed_accumulator_roles = NULL) {
-  if(is.null(type) || !type %in% c("RACE", "RACEGNG", "SDT", "MT", "TC")) return(data)
+  if(is.null(type) || !type %in% c("RACE", "RACEGNG", "SDT", "MT", "TC", "timed")) return(data)
   if (!is.factor(data$R)) stop("data must have a factor R")
   factors <- names(data)[!names(data) %in% c("R","rt","trials",Fcovariates)]
   if (!is.null(fixed_accumulator_roles)) {
@@ -334,11 +334,16 @@ add_accumulators <- function(data,matchfun=NULL,simulate=FALSE, type = "RACE", F
       }
     }
     
-  } else if (type %in% c("RACE","SDT", "RACEGNG")) {
-    nacc <- length(levels(data$R))
-    datar <- cbind(do.call(rbind,lapply(1:nacc,function(x){data})),
-                   lR=factor(rep(levels(data$R),each=dim(data)[1]),levels=levels(data$R)))
-    datar <- datar[order(rep(1:dim(data)[1],nacc),datar$lR),]
+  } else if (type %in% c("RACE","SDT", "RACEGNG", "timed")) {
+    r_levels <- levels(data$R)
+    if (type == "timed") {
+      if ("time" %in% r_levels) stop("Data already has 'time' response level")
+      r_levels <- c(r_levels, "time")
+    }
+    nacc <- length(r_levels)
+    datar <- data[rep(seq_len(nrow(data)), times = nacc), , drop = FALSE]
+    datar$lR <- factor(rep(r_levels, each = nrow(data)), levels = r_levels)
+    datar <- datar[order(rep(seq_len(nrow(data)), nacc), datar$lR), , drop = FALSE]
     if (!is.null(matchfun)) {
       lM <- matchfun(datar)
       if (!is.factor(lM)){

@@ -414,6 +414,10 @@ struct ModelSharedState {
   bool any_loss = false;
   // pContaminant column: -2=not yet searched, -1=absent, >=0=column index
   int  pc_col   = -2;
+  int time_code = -1;
+  std::vector<int> idx_time_only;   // time-accumulator mask (finite rows only)
+  std::vector<int> n_resp;          // per-unique-trial response accumulator count
+  std::vector<double> alt_res_buf;  // scratch for timed-race f_T and S_W
 
   // DDM-specific data
   std::vector<double> logF_LT_1, logF_LT_2, logF_UT_1, logF_UT_2;
@@ -2048,6 +2052,16 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
 
     NumericVector lR = data["lR"];
     int n_lR = unique(lR).length();
+    const Rcpp::IntegerVector lR_code_vec(static_cast<SEXP>(lR));
+    const Rcpp::CharacterVector lR_levels = lR_code_vec.attr("levels");
+    int time_code = -1;
+    for (int j = 0; j < lR_levels.size(); ++j) {
+      if (Rcpp::as<std::string>(lR_levels[j]) == "time") {
+        time_code = j + 1;
+        break;
+      }
+    }
+    adapter.ctx.time_code = time_code;
 
     if (is_logicalrules) {
       LogicalRulesSharedState logicalrules_shared =
@@ -2139,17 +2153,40 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
     std::vector<double> race_staging_buf;     // n_trials * keep_names.size()
     int fast_pc_staging_col = -1;             // keep_names position of pContaminant
 
+    std::vector<int> time_win_int_buf;
+    std::vector<double> alt_res_buf_fp;
+    std::vector<int> n_resp_fp;
+
     if (use_raw_fast_path) {
       res_buf.resize(n_trials);
       ll_uniq_buf.resize(n_unique_fp);
       winner_int_buf.resize(n_trials);
       loser_int_buf.resize(n_trials);
       isok_int_fp.resize(n_trials);
+      if (time_code != -1) {
+        time_win_int_buf.assign(n_trials, 0);
+        alt_res_buf_fp.resize(n_trials);
+        n_resp_fp.assign(n_unique_fp, 0);
+      }
       // winner/loser masks are data-fixed; fill once
       for (int j = 0; j < n_trials; ++j) {
         const bool active = !has_RACE_col_fp || RACE_mask_fp[j];
         winner_int_buf[j] = (active && winner[j]) ? 1 : 0;
         loser_int_buf[j]  = (active && n_lR > 1 && !winner[j]) ? 1 : 0;
+        if (time_code != -1 && active && lR_code_vec[j] == time_code) {
+          time_win_int_buf[j] = 1;
+        }
+      }
+      if (time_code != -1) {
+        for (int j = 0; j < n_unique_fp; ++j) {
+          int count = 0;
+          int start = j * n_lR;
+          int n_lR_curr = has_RACE_col_fp ? RACE_fp[start] : n_lR;
+          for (int k = 0; k < n_lR_curr; ++k) {
+            if (lR_code_vec[start+k] != time_code) count++;
+          }
+          n_resp_fp[j] = count;
+        }
       }
       rts_fp_hold = data["rt"];
       rt_ptr = rts_fp_hold.begin();
@@ -2201,6 +2238,12 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
 
         // Fill data-fixed winner/loser masks (finite trials only)
         const Rcpp::LogicalVector& fmask = race_shared.finite_mask;
+        race_shared.time_code = time_code;
+        if (time_code != -1) {
+          race_shared.idx_time_only.assign(static_cast<size_t>(n_trials), 0);
+          race_shared.n_resp.assign(static_cast<size_t>(n_unique_fp), 0);
+          race_shared.alt_res_buf.resize(static_cast<size_t>(n_trials));
+        }
         for (int j = 0; j < n_trials; ++j) {
           if (!fmask[j]) continue;
           if (has_RACE_col_fp && !RACE_mask_fp[j]) continue;
@@ -2210,6 +2253,20 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
           } else if (n_lR > 1) {
             race_shared.idx_loss[static_cast<size_t>(j)] = 1;
             race_shared.any_loss = true;
+          }
+          if (time_code != -1 && lR_code_vec[j] == time_code) {
+            race_shared.idx_time_only[static_cast<size_t>(j)] = 1;
+          }
+        }
+        if (time_code != -1) {
+          for (int j = 0; j < n_unique_fp; ++j) {
+            int count = 0;
+            int start = j * n_lR;
+            int n_lR_curr = has_RACE_col_fp ? RACE_fp[start] : n_lR;
+            for (int k = 0; k < n_lR_curr; ++k) {
+              if (lR_code_vec[start + k] != time_code) count++;
+            }
+            race_shared.n_resp[static_cast<size_t>(j)] = count;
           }
         }
         race_shared.valid = true;
@@ -2269,12 +2326,35 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
                                  res_buf.data(), min_ll, &adapter.ctx);
         }
 
+        if (time_code != -1) {
+          // Get f_T
+          adapter.model_dfun_raw(rt_ptr, pars_cm, n_trials,
+                                 time_win_int_buf.data(), isok_int_fp.data(),
+                                 alt_res_buf_fp.data(), min_ll, &adapter.ctx);
+          // Get S_W
+          adapter.model_pfun_raw(rt_ptr, pars_cm, n_trials,
+                                 winner_int_buf.data(), isok_int_fp.data(),
+                                 alt_res_buf_fp.data(), min_ll, &adapter.ctx);
+        }
+
         // Sum n_lR rows per unique trial; apply pC correction (no-op when pC=0).
         for (int j = 0; j < n_unique_fp; ++j) {
           double s = 0.0;
           const int base = j * n_lR;
           const int n_lR_j = has_RACE_col_fp ? RACE_fp[base] : n_lR;
           for (int k = 0; k < n_lR_j; ++k) s += res_buf[base + k];
+          if (time_code != -1 && n_resp_fp[j] > 0) {
+            int idx_W = -1, idx_T = -1;
+            for (int k = 0; k < n_lR_j; ++k) {
+              if (winner_int_buf[base + k]) idx_W = k;
+              if (time_win_int_buf[base + k]) idx_T = k;
+            }
+            if (idx_W != -1 && idx_T != -1) {
+              double s_T = s - res_buf[base + idx_W] - res_buf[base + idx_T] +
+                alt_res_buf_fp[base + idx_T] + alt_res_buf_fp[base + idx_W];
+              s = log_sum_exp(s, s_T - std::log(n_resp_fp[j]));
+            }
+          }
           s = s < min_ll ? min_ll : s;
           if (fast_pc_staging_col >= 0) {
             const double pC = pars_cm[fast_pc_staging_col * n_trials + base];
@@ -4187,6 +4267,30 @@ double c_log_likelihood_race(
   double lower_for_trial = 0;
   double upper_for_trial = R_PosInf;
   ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(model_context_for_funcs);
+  int time_code = ctx->time_code;
+  if (time_code == -2 && use_shared && shared->time_code != -1) {
+    time_code = shared->time_code;
+  }
+  if (time_code == -2) {
+    const SEXP lR_sexp = dadm["lR"];
+    if (Rf_inherits(lR_sexp, "factor")) {
+      Rcpp::IntegerVector lR_code(lR_sexp);
+      Rcpp::CharacterVector lR_levels = lR_code.attr("levels");
+      time_code = -1;
+      for (int j = 0; j < lR_levels.size(); ++j) {
+        if (Rcpp::as<std::string>(lR_levels[j]) == "time") {
+          time_code = j + 1;
+          break;
+        }
+      }
+    } else {
+      time_code = -1;
+    }
+    // Persist resolution for subsequent particles/calls.
+    ctx->time_code = time_code;
+  }
+  const bool has_time = (time_code > 0);
+
   ContextForRaceModels dense_ctx = *ctx;
   dense_ctx.min_lik_for_pdf = 0.0;
   void* dense_ctx_ptr = static_cast<void*>(&dense_ctx);
@@ -4292,6 +4396,49 @@ double c_log_likelihood_race(
       model_pfun_raw(rt_ptr, pars_cm, n_trials,
                      idx_loss_ptr, isok_ptr,
                      lds_ptr, min_ll, dense_ctx_ptr);
+    }
+
+    std::vector<int> idx_time_only_local;
+    const int* idx_time_only_ptr = nullptr;
+    std::vector<double> alt_lds_local;
+    double* alt_lds_ptr = nullptr;
+    std::vector<int> n_resp_local;
+    const int* n_resp_ptr = nullptr;
+
+    if (has_time) {
+      if (use_shared && !shared->idx_time_only.empty()) {
+        idx_time_only_ptr = shared->idx_time_only.data();
+        alt_lds_ptr = shared->alt_res_buf.data();
+        n_resp_ptr = shared->n_resp.data();
+      } else {
+        idx_time_only_local.assign(n_trials, 0);
+        alt_lds_local.assign(n_trials, min_ll);
+        n_resp_local.assign(static_cast<size_t>(n_unique_trials), 0);
+        const SEXP lR_sexp = dadm["lR"];
+        Rcpp::IntegerVector lR_code_vec_int(lR_sexp);
+        for (int j = 0; j < n_trials; ++j) {
+          const bool active = !has_RACE_col || RACE_mask[j];
+          if (active && lR_code_vec_int[j] == time_code) idx_time_only_local[j] = 1;
+        }
+        for (int j = 0; j < n_unique_trials; ++j) {
+          int count = 0;
+          int start = j * n_lR;
+          int n_lR_curr = has_RACE_col ? RACE[start] : n_lR;
+          for (int k = 0; k < n_lR_curr; ++k) {
+            if (lR_code_vec_int[start + k] != time_code) count++;
+          }
+          n_resp_local[j] = count;
+        }
+        idx_time_only_ptr = idx_time_only_local.data();
+        alt_lds_ptr = alt_lds_local.data();
+        n_resp_ptr = n_resp_local.data();
+      }
+      model_dfun_raw(rt_ptr, pars_cm, n_trials,
+                     idx_time_only_ptr, isok_ptr,
+                     alt_lds_ptr, min_ll, dense_ctx_ptr);
+      model_pfun_raw(rt_ptr, pars_cm, n_trials,
+                     idx_win_ptr, isok_ptr,
+                     alt_lds_ptr, min_ll, dense_ctx_ptr);
     }
 
     // --- Pre-compute truncation normalisers in batch when possible ---
@@ -4450,6 +4597,18 @@ double c_log_likelihood_race(
             if (v <= min_ll) hit_min_ll = true;
             current_trial_ll_sum += v;
           }
+          if (has_time && n_resp_ptr[unique_trial_idx] > 0) {
+            int idx_W = -1, idx_T = -1;
+            for (int k = 0; k < n_lR_j; ++k) {
+              if (idx_win_ptr[start_row_idx + k]) idx_W = k;
+              if (idx_time_only_ptr[start_row_idx + k]) idx_T = k;
+            }
+            if (idx_W != -1 && idx_T != -1) {
+              double s_T = current_trial_ll_sum - lds_ptr[start_row_idx + idx_W] - lds_ptr[start_row_idx + idx_T] +
+                alt_lds_ptr[start_row_idx + idx_T] + alt_lds_ptr[start_row_idx + idx_W];
+              current_trial_ll_sum = log_sum_exp(current_trial_ll_sum, s_T - std::log(n_resp_ptr[unique_trial_idx]));
+            }
+          }
           if (NumericVector::is_na(log_Z_this) || !R_FINITE(log_Z_this)) {
             ll_unique[unique_trial_idx] = min_ll;
           } else if (hit_min_ll) {
@@ -4465,6 +4624,18 @@ double c_log_likelihood_race(
       double current_trial_ll_sum = 0.0;
       for (int k = 0; k < n_lR_j; ++k)
         current_trial_ll_sum += lds_ptr[start_row_idx + k];
+      if (has_time && n_resp_ptr[unique_trial_idx] > 0) {
+        int idx_W = -1, idx_T = -1;
+        for (int k = 0; k < n_lR_j; ++k) {
+          if (idx_win_ptr[start_row_idx + k]) idx_W = k;
+          if (idx_time_only_ptr[start_row_idx + k]) idx_T = k;
+        }
+        if (idx_W != -1 && idx_T != -1) {
+          double s_T = current_trial_ll_sum - lds_ptr[start_row_idx + idx_W] - lds_ptr[start_row_idx + idx_T] +
+            alt_lds_ptr[start_row_idx + idx_T] + alt_lds_ptr[start_row_idx + idx_W];
+          current_trial_ll_sum = log_sum_exp(current_trial_ll_sum, s_T - std::log(n_resp_ptr[unique_trial_idx]));
+        }
+      }
       ll_unique[unique_trial_idx] = std::max(min_ll, current_trial_ll_sum);
     }
 
@@ -4518,6 +4689,26 @@ double c_log_likelihood_race(
                                                    model_context_for_funcs, w);
     };
 
+    int idx_T_1based = -1;
+    int n_resp_j = 0;
+    if (has_time) {
+      const SEXP lR_sexp = dadm["lR"];
+      Rcpp::IntegerVector lR_code_vec_int(lR_sexp);
+      for (int k = 0; k < n_lR_j; ++k) {
+        if (lR_code_vec_int[start_row_idx + k] == time_code) idx_T_1based = k + 1;
+        else n_resp_j++;
+      }
+    }
+
+    auto integrate_timed = [&](int k_winner_1based, double low, double upp) -> double {
+      double ll = integrate_interval(k_winner_1based, low, upp);
+      if (idx_T_1based != -1 && k_winner_1based != idx_T_1based && n_resp_j > 0) {
+        double ll_T = integrate_interval(idx_T_1based, low, upp);
+        ll = log_sum_exp(ll, ll_T - std::log(n_resp_j));
+      }
+      return ll;
+    };
+
     current_ll_val = R_NegInf;
     if (rt_j == R_NegInf) {
       lower_for_trial = LTj;
@@ -4550,7 +4741,7 @@ double c_log_likelihood_race(
           }
         }
       } else {
-        current_ll_val = integrate_interval(R_j_idx, lower_for_trial, upper_for_trial);
+        current_ll_val = integrate_timed(R_j_idx, lower_for_trial, upper_for_trial);
       }
     } else if (rt_j == R_PosInf) {
       if (trial_has_active_nogo) {
@@ -4599,7 +4790,7 @@ double c_log_likelihood_race(
             }
           }
         } else {
-          current_ll_val = integrate_interval(R_j_idx, lower_for_trial, upper_for_trial);
+          current_ll_val = integrate_timed(R_j_idx, lower_for_trial, upper_for_trial);
         }
       }
     } else if (Rcpp::NumericVector::is_na(rt_j)) {
@@ -4608,8 +4799,8 @@ double c_log_likelihood_race(
       const double lower2 = UCj;
       const double upper2 = UTj;
       if (R_j_idx != NA_INTEGER) {
-        current_ll_val = log_sum_exp(integrate_interval(R_j_idx, lower1, upper1),
-                                     integrate_interval(R_j_idx, lower2, upper2));
+        current_ll_val = log_sum_exp(integrate_timed(R_j_idx, lower1, upper1),
+                                     integrate_timed(R_j_idx, lower2, upper2));
       } else {
         const double logP1 = log_diff_exp(log_surv_cm(lower1, start_row_idx, n_lR_j),
                                           log_surv_cm(upper1, start_row_idx, n_lR_j));

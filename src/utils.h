@@ -97,6 +97,9 @@ struct ContextForRaceModels {
     // Optional per-particle fast-kernel hint:
     // 0 = auto detect in kernel; 1 = zero-variability branch; 2 = nonzero branch.
     int mode_hint = 0;
+    // Tri-state cache for the optional "time" accumulator level:
+    // -2 = unresolved (detect from data once), -1 = absent, >0 = factor code.
+    int time_code = -2;
 };
 
 // Scalar adapters (single-RT, single-parameter-row) used by GSL integration.

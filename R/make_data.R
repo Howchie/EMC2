@@ -559,10 +559,15 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
 
 
 RACE_rfun <- function(data, pars, model){
-  Rrt <- matrix(ncol=2,nrow=dim(data)[1]/length(levels(data$lR)),
+  lR_levels <- levels(data$lR)
+  n_acc <- length(lR_levels)
+  n_trials <- dim(data)[1]/n_acc
+  Rrt <- matrix(ncol=2,nrow=n_trials,
          dimnames=list(NULL,c("R","rt")))
-  RACE <- data[data$lR==levels(data$lR)[1],"RACE"]
+  RACE <- data[data$lR==lR_levels[1],"RACE"]
   ok <- as.numeric(data$lR) <= as.numeric(as.character(data$RACE))
+  time_idx <- which(lR_levels == "time")
+  
   for (i in levels(RACE)) {
     pick <- data$RACE==i
     data_in <- data[pick & ok,]
@@ -571,11 +576,26 @@ RACE_rfun <- function(data, pars, model){
     attr(tmp, "ok") <- rep(T, nrow(tmp))
     if (!is.null(attr(pars, "staircase"))) attr(tmp, "staircase") <- attr(pars, "staircase")
     Rrti <- model()$rfun(data_in,tmp)
+    
+    # Timed-race logic: if "time" wins, choose a random non-time response.
+    if (length(time_idx) > 0) {
+      r_chr <- as.character(Rrti$R)
+      is_time <- r_chr == "time"
+      if (any(is_time)) {
+        n_time <- sum(is_time)
+        resp_levels <- lR_levels[lR_levels != "time"]
+        if (length(resp_levels) > 0) {
+          r_chr[is_time] <- sample(resp_levels, n_time, replace = TRUE)
+          Rrti$R <- factor(r_chr, levels = lR_levels)
+        }
+      }
+    }
+    
     Rrti$R <- as.numeric(Rrti$R)
     Rrt[RACE==i,] <- as.matrix(Rrti)
   }
   Rrt <- data.frame(Rrt)
-  Rrt$R <- factor(Rrt$R, labels = levels(data$lR), levels = 1:length(levels(data$lR)))
+  Rrt$R <- factor(Rrt$R, labels = lR_levels, levels = 1:n_acc)
   return(Rrt)
 }
 
@@ -686,6 +706,12 @@ LogicalRules_rfun <- function(data, pars, model) {
       B_t = Rrti[legacy, "B"],
       nB_t = Rrti[legacy, "n_B"]
     )
+    if ("time" %in% races) {
+      tT <- Rrti[legacy, "time"]
+      emit_T <- is.finite(tT) & (tT < out_legacy$rt)
+      out_legacy$rt[emit_T] <- tT[emit_T]
+      out_legacy$R[emit_T] <- "yes"
+    }
     out[legacy, ] <- out_legacy
   }
 
@@ -695,16 +721,24 @@ LogicalRules_rfun <- function(data, pars, model) {
     cond_d <- cond[is_detection]
     is_gng <- logical_rule[is_detection] == "OR_DETECTION_GNG"
     tN <- if ("nogo" %in% races) Rrti[is_detection, "nogo"] else rep(Inf, sum(is_detection))
+    tT <- if ("time" %in% races) Rrti[is_detection, "time"] else rep(Inf, sum(is_detection))
 
     go_t <- rep(Inf, sum(is_detection))
     go_t[cond_d == "AN"] <- tA[cond_d == "AN"]
     go_t[cond_d == "NB"] <- tB[cond_d == "NB"]
     go_t[cond_d == "AB"] <- pmin(tA[cond_d == "AB"], tB[cond_d == "AB"])
 
-    emit <- is.finite(go_t) & (!is_gng | (go_t < tN))
+    emit <- is.finite(go_t) & (!is_gng | (go_t < tN)) & (go_t < tT)
     det_idx <- which(is_detection)
     out$rt[det_idx[emit]] <- go_t[emit]
     out$R[det_idx[emit]] <- "yes"
+
+    if ("time" %in% races) {
+      emit_T <- is.finite(tT) & (tT < go_t) & (!is_gng | (tT < tN))
+      out$rt[det_idx[emit_T]] <- tT[emit_T]
+      out$R[det_idx[emit_T]] <- "yes"
+    }
+
 
     if (any(is_gng & !emit)) {
       out$rt[det_idx[is_gng & !emit]] <- Inf
@@ -773,15 +807,28 @@ RedundantTarget_rfun <- function(data, pars, model) {
   tA <- Rrti[, "A"]
   tB <- Rrti[, "B"]
   tN <- if (has_nogo) Rrti[, "nogo"] else rep(Inf, n_trials)
+  tT <- if ("time" %in% races) Rrti[, "time"] else rep(Inf, n_trials)
 
   go_t <- rep(Inf, n_trials)
   go_t[cond == "A"] <- tA[cond == "A"]
   go_t[cond == "B"] <- tB[cond == "B"]
   go_t[cond == "AB"] <- pmin(tA[cond == "AB"], tB[cond == "AB"])
 
-  emitted <- is.finite(go_t) & (go_t < tN)
+  emitted <- is.finite(go_t) & (go_t < tN) & (go_t < tT)
   rt[emitted] <- go_t[emitted]
   R[emitted] <- go_resp
+
+  if ("time" %in% races) {
+    emit_T <- is.finite(tT) & (tT < go_t) & (tT < tN)
+    rt[emit_T] <- tT[emit_T]
+    R[emit_T] <- go_resp
+  }
+
+  if (has_nogo) {
+    emit_N <- is.finite(tN) & (tN < go_t) & (tN < tT)
+    rt[emit_N] <- tN[emit_N]
+    R[emit_N] <- "nogo"
+  }
 
   data.frame(R = factor(R, levels = levels(data$R)), rt = rt)
 }
