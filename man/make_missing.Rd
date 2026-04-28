@@ -70,7 +70,7 @@ of that name it is used, or if not the default is used (see argument definition)
 (same value for each subject), 4) a vector with length matching data rows, or
 5) a function taking data as it argument that creates a column of appropriate
 values. Note that if this function returns a subject named vector it will be
-expanded as in case (3). For rows with response (column R) "nogo" the following
+expanded as in case (3). For rows where a nogo response is active, the following
 are enforced: UC=LC=LT=0, UT=Inf, UCdirection=UCresponse=TRUE
 }
 \examples{

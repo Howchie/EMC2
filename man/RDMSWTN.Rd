@@ -24,5 +24,6 @@ to the standard RDM.\tabular{lllll}{
    \emph{t0} \tab log \tab [0, Inf] \tab log(0) \tab Non-decision time \cr
    \emph{s} \tab log \tab [0, Inf] \tab log(1) \tab Within-trial SD of drift rate \cr
    \emph{sv} \tab log \tab [0, Inf] \tab log(0) \tab Between-trial SD of drift rate \cr
+   \emph{lambda} \tab log \tab [0, Inf] \tab log(0) \tab Exponential killing rate \cr
 }
 }

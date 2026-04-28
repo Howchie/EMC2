@@ -356,12 +356,20 @@ pBAwL <- function(rt, pars, posdrift = TRUE, erlang = 1L) {
 
 rBAwL <- function(lR, pars, ok = rep(TRUE, length(lR)),
                   p_types = c("v", "sv", "b", "A", "t0", "k", "lambda"),
-                  posdrift = TRUE, eps = 1e-10, erlang = 1L) {
+                  posdrift = TRUE, eps = 1e-10, erlang = 1L, guess = FALSE) {
   bad  <- rep(NA, length(lR) / length(levels(lR)))
   out  <- data.frame(R = bad, rt = bad)
   nr   <- length(levels(lR))
   dt   <- matrix(Inf, nrow = nr, ncol = nrow(pars) / nr)
   t0   <- pars[, "t0"]
+  # If guessing, drawn ONE kill process per trial
+  if (guess) {
+    n_trials <- nrow(pars)/nr
+    lambda_trials <- matrix(pars[,"lambda"], nrow=nr)[1,]
+    tk <- rexp(n_trials, rate=lambda_trials)
+    if (erlang >= 2L) tk <- tk + rexp(n_trials, rate=lambda_trials)
+    pars[,"lambda"] <- 0
+  }
   pars <- pars[ok, ]
   if (!all(p_types %in% dimnames(pars)[[2]]))
     stop("pars must have columns ", paste(p_types, collapse = " "))
@@ -382,11 +390,29 @@ rBAwL <- function(lR, pars, ok = rep(TRUE, length(lR)),
     dt[big_k]  <- (-1 / pars[big_k, "k"]) * log(ratio)
   }
   dt[dt < 0] <- Inf
-  lam_pos <- pars[, "lambda"] > 0
-  tk <- ifelse(lam_pos, rexp(nrow(pars), pars[, "lambda"]), Inf)
-  if (erlang >= 2L && any(lam_pos))
-    tk[lam_pos] <- tk[lam_pos] + rexp(sum(lam_pos), pars[lam_pos, "lambda"])
-  dt <- ifelse(dt < tk, dt, Inf)
+  if (!guess) {
+    lam_pos <- pars[, "lambda"] > 0
+    tk <- ifelse(lam_pos, rexp(nrow(pars), pars[, "lambda"]), Inf)
+    if (erlang >= 2L && any(lam_pos))
+      tk[lam_pos] <- tk[lam_pos] + rexp(sum(lam_pos), pars[lam_pos, "lambda"])
+    dt <- ifelse(dt < tk, dt, Inf)
+  } else {
+    # Response is a guess if tk < any(dt)
+    is_guess <- tk < apply(dt, 2, min)
+    if (any(is_guess)) {
+      dt[, is_guess] <- Inf
+      ok_mat <- matrix(ok, nrow=nr)
+      # For each guess trial, pick one of the active, non-nogo accumulators
+      for (trial_idx in which(is_guess)) {
+        active_indices <- which(ok_mat[, trial_idx] & levels(lR) != "nogo")
+        if (length(active_indices) > 0) {
+          # Use sample safely
+          winner_acc <- if (length(active_indices) > 1) sample(active_indices, 1) else active_indices
+          dt[winner_acc, trial_idx] <- tk[trial_idx]
+        }
+      }
+    }
+  }
   bad_col <- apply(dt, 2, function(x) all(is.infinite(x)))
   R   <- apply(dt, 2, which.min)
   pick <- cbind(R, 1:dim(dt)[2])
@@ -413,10 +439,10 @@ rBAwL <- function(lR, pars, ok = rep(TRUE, length(lR)),
 #' * lambda: killing/expiry rate (log scale, [0, Inf); default log(0) = 0).
 #'
 #' @export
-BAwL <- function(posdrift = TRUE, erlang = 1L) {
+BAwL <- function(posdrift = TRUE, erlang = 1L, guess = FALSE) {
   list(
     type   = "RACE",
-    c_name = paste0(ifelse(posdrift, "BAwL", "BAwLIO"), if (erlang >= 2L) "_E2" else ""),
+    c_name = paste0(ifelse(posdrift, "BAwL", "BAwLIO"), if (erlang >= 2L) "_E2" else "", if (guess) "_GUESS" else ""),
     p_types = c("v"  = 1, "sv" = log(1), "B" = log(1), "A" = log(0),
                 "t0" = log(0), "k" = log(0), "lambda" = log(0), "pContaminant" = qnorm(0)),
     transform = list(func = c(v = "identity", sv = "exp", B = "exp",
@@ -432,9 +458,9 @@ BAwL <- function(posdrift = TRUE, erlang = 1L) {
       cbind(pars, b = pars[, "B"] + pars[, "A"])
     },
     rfun = if (posdrift)
-             function(data, pars) rBAwL(data$lR, pars, ok = attr(pars, "ok"), posdrift = TRUE,  erlang = erlang)
+             function(data, pars) rBAwL(data$lR, pars, ok = attr(pars, "ok"), posdrift = TRUE,  erlang = erlang, guess = guess)
            else
-             function(data, pars) rBAwL(data$lR, pars, ok = attr(pars, "ok"), posdrift = FALSE, erlang = erlang),
+             function(data, pars) rBAwL(data$lR, pars, ok = attr(pars, "ok"), posdrift = FALSE, erlang = erlang, guess = guess),
     dfun = if (posdrift)
              function(rt, pars) dBAwL(rt, pars, posdrift = TRUE,  erlang = erlang)
            else

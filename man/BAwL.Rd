@@ -4,15 +4,18 @@
 \alias{BAwL}
 \title{The Ballistic Accumulator with Leak (BAwL)}
 \usage{
-BAwL(posdrift = TRUE)
+BAwL(posdrift = TRUE, erlang = 1L)
 }
 \description{
-Race model where each accumulator follows a leaky-integration trajectory.
-Setting k=0 recovers the standard LBA exactly.
+Race model where each accumulator follows a leaky-integration trajectory and
+races against an independent kill clock.
+Setting k=0 recovers the standard LBA decision dynamics; setting lambda=0
+removes killing.
 }
 \details{
 Parameters as in LBA plus:
 \itemize{
 \item k: leak rate (log scale, [0, Inf); default log(0) = effectively 0).
+\item lambda: killing/expiry rate (log scale, [0, Inf); default log(0) = 0).
 }
 }

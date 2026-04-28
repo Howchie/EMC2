@@ -99,6 +99,8 @@ struct ContextForRaceModels {
     int mode_hint = 0;
     // Kill-process shape: 1 = exponential, 2 = Erlang-2.
     int kill_shape = 1;
+    // Whether killing produces guesses rather than omissions.
+    bool erlang_is_guess = false;
     // Tri-state caches for optional accumulator levels:
     // -2 = unresolved (detect from data once), -1 = absent, >0 = factor code.
     int time_code = -2;
@@ -328,12 +330,15 @@ inline void pkilledlba_raw(const double* rt, const double* pars_cm, int n_rows,
 // RDM: column layout v=0, B=1, A=2, t0=3, s=4
 inline void drdm_raw(const double* rt, const double* pars_cm, int n_rows,
                      const int* mask, const int* isok,
-                     double* out, double min_ll, void* /*ctx_*/) {
+                     double* out, double min_ll, void* ctx_) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  const bool guess = ctx ? ctx->erlang_is_guess : false;
   const double* v_  = pars_cm + 0 * n_rows;
   const double* B_  = pars_cm + 1 * n_rows;
   const double* A_  = pars_cm + 2 * n_rows;
   const double* t0_ = pars_cm + 3 * n_rows;
   const double* s_  = pars_cm + 4 * n_rows;
+  const double* k_  = (pars_cm + 5 * n_rows); // placeholder for lambda if added to model, not yet here for standard RDM
   #pragma omp simd
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
@@ -349,7 +354,9 @@ inline void drdm_raw(const double* rt, const double* pars_cm, int n_rows,
 
 inline void prdm_raw(const double* rt, const double* pars_cm, int n_rows,
                      const int* mask, const int* isok,
-                     double* out, double min_ll, void* /*ctx_*/) {
+                     double* out, double min_ll, void* ctx_) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  const bool guess = ctx ? ctx->erlang_is_guess : false;
   const double* v_  = pars_cm + 0 * n_rows;
   const double* B_  = pars_cm + 1 * n_rows;
   const double* A_  = pars_cm + 2 * n_rows;
@@ -372,7 +379,9 @@ inline void prdm_raw(const double* rt, const double* pars_cm, int n_rows,
 // RDMGBM: column layout v=0, B=1, A=2, t0=3, s=4
 inline void drdmgbm_raw(const double* rt, const double* pars_cm, int n_rows,
                         const int* mask, const int* isok,
-                        double* out, double min_ll, void* /*ctx_*/) {
+                        double* out, double min_ll, void* ctx_) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  const bool guess = ctx ? ctx->erlang_is_guess : false;
   const double* v_  = pars_cm + 0 * n_rows;
   const double* B_  = pars_cm + 1 * n_rows;
   const double* A_  = pars_cm + 2 * n_rows;
@@ -397,7 +406,9 @@ inline void drdmgbm_raw(const double* rt, const double* pars_cm, int n_rows,
 
 inline void prdmgbm_raw(const double* rt, const double* pars_cm, int n_rows,
                         const int* mask, const int* isok,
-                        double* out, double min_ll, void* /*ctx_*/) {
+                        double* out, double min_ll, void* ctx_) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  const bool guess = ctx ? ctx->erlang_is_guess : false;
   const double* v_  = pars_cm + 0 * n_rows;
   const double* B_  = pars_cm + 1 * n_rows;
   const double* A_  = pars_cm + 2 * n_rows;
@@ -748,6 +759,7 @@ inline void drdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
                          const int* mask, const int* isok,
                          double* out, double min_ll, void* ctx_) {
   auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  const bool guess = ctx ? ctx->erlang_is_guess : false;
   const int mode_hint = ctx ? ctx->mode_hint : 0;
   const double* v_  = pars_cm + 0 * n_rows;
   const double* B_  = pars_cm + 1 * n_rows;
@@ -781,12 +793,13 @@ inline void drdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
       const double tt = rt[i] - t0_[i];
       if (tt <= 0.0) { out[i] = min_ll; continue; }
       const double inv_s = 1.0 / s_[i];
+      const double k_use = guess ? 0.0 : k_[i];
       const double log_pdf = dwald(tt,
                                    (B_[i] + A_[i]) * inv_s,
                                    v_[i] * inv_s,
                                    1.0,
                                    A_[i] * inv_s,
-                                   k_[i],
+                                   k_use,
                                    true, ctx->kill_shape);
       out[i] = (R_FINITE(log_pdf) && log_pdf > min_ll) ? log_pdf : min_ll;
     }
@@ -799,6 +812,7 @@ inline void drdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
     const double tt = rt[i] - t0_[i];
     if (tt <= 0.0) { out[i] = min_ll; continue; }
     double log_pdf;
+    const double k_use = guess ? 0.0 : k_[i];
     if (!std::isfinite(sv_[i]) || std::fabs(sv_[i]) <= sv_eps) {
       const double inv_s = 1.0 / s_[i];
       log_pdf = dwald(tt,
@@ -806,7 +820,7 @@ inline void drdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
                       v_[i] * inv_s,
                       1.0,
                       A_[i] * inv_s,
-                      k_[i],
+                      k_use,
                       true, ctx->kill_shape);
     } else {
       const double inv_s = 1.0 / s_[i];
@@ -816,7 +830,7 @@ inline void drdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
                          A_[i]  * inv_s,
                          sv_[i] * inv_s,
                          1.0,
-                         k_[i],
+                         k_use,
                          0.0, 20, true, ctx->kill_shape);
     }
     out[i] = (R_FINITE(log_pdf) && log_pdf > min_ll) ? log_pdf : min_ll;
@@ -827,6 +841,7 @@ inline void prdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
                          const int* mask, const int* isok,
                          double* out, double min_ll, void* ctx_) {
   auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  const bool guess = ctx ? ctx->erlang_is_guess : false;
   const int mode_hint = ctx ? ctx->mode_hint : 0;
   const double* v_  = pars_cm + 0 * n_rows;
   const double* B_  = pars_cm + 1 * n_rows;
@@ -860,12 +875,13 @@ inline void prdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
       const double tt = rt[i] - t0_[i];
       if (tt <= 0.0) { out[i] = 0.0; continue; }
       const double inv_s = 1.0 / s_[i];
+      const double k_use = guess ? 0.0 : k_[i];
       const double log_cdf = pwald(tt,
                                    (B_[i] + A_[i]) * inv_s,
                                    v_[i] * inv_s,
                                    1.0,
                                    A_[i] * inv_s,
-                                   k_[i],
+                                   k_use,
                                    true, ctx->kill_shape);
       if (!R_FINITE(log_cdf)) { out[i] = 0.0; continue; }
       if (log_cdf >= 0.0) { out[i] = min_ll; continue; }
@@ -880,6 +896,7 @@ inline void prdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
     const double tt = rt[i] - t0_[i];
     if (tt <= 0.0) { out[i] = 0.0; continue; }
     double log_cdf;
+    const double k_use = guess ? 0.0 : k_[i];
     if (!std::isfinite(sv_[i]) || std::fabs(sv_[i]) <= sv_eps) {
       const double inv_s = 1.0 / s_[i];
       log_cdf = pwald(tt,
@@ -887,7 +904,7 @@ inline void prdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
                       v_[i] * inv_s,
                       1.0,
                       A_[i] * inv_s,
-                      k_[i],
+                      k_use,
                       true, ctx->kill_shape);
     } else {
       const double inv_s = 1.0 / s_[i];
@@ -897,7 +914,7 @@ inline void prdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
                          A_[i]  * inv_s,
                          sv_[i] * inv_s,
                          1.0,
-                         0.0, k_[i], 20, true, ctx->kill_shape);
+                         0.0, k_use, 20, true, ctx->kill_shape);
     }
     if (!R_FINITE(log_cdf)) { out[i] = 0.0; continue; }
     if (log_cdf >= 0.0) { out[i] = min_ll; continue; }
@@ -908,6 +925,74 @@ inline void prdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
 // RDMSWTN: column layout v=0, B=1, A=2, t0=3, s=4, sv=5
 inline void rdmswtn_logS_at_t(double t, const double* pars_cm,
                                int n_rows_total, int n_lR, int /*n_par*/,
+                               const int* trunc_mask, int n_unique_trials,
+                               const int* isok_all, void* ctx_, double* logS_out) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  const bool guess = ctx ? ctx->erlang_is_guess : false;
+  const int mode_hint = ctx ? ctx->mode_hint : 0;
+  const double* v_  = pars_cm + 0 * n_rows_total;
+  const double* B_  = pars_cm + 1 * n_rows_total;
+  const double* A_  = pars_cm + 2 * n_rows_total;
+  const double* t0_ = pars_cm + 3 * n_rows_total;
+  const double* s_  = pars_cm + 4 * n_rows_total;
+  const double* sv_ = pars_cm + 5 * n_rows_total;
+  const double* k_  = pars_cm + 6 * n_rows_total;
+  const double sv_eps = 1e-10;
+  for (int j = 0; j < n_unique_trials; ++j) {
+    if (!trunc_mask[j]) continue;
+    const int start = j * n_lR;
+    double logS = 0.0;
+    bool bad = false;
+    for (int k = 0; k < n_lR && !bad; ++k) {
+      const int r = start + k;
+      if (!isok_all[r] || R_IsNA(v_[r])) { bad = true; break; }
+      const double tt = t - t0_[r];
+      if (tt <= 0.0) continue;
+      double log_cdf;
+      const double k_use = guess ? 0.0 : k_[r];
+      if (mode_hint == 1) {
+        const double inv_s = 1.0 / s_[r];
+        log_cdf = pwald(tt,
+                        (B_[r] + A_[r]) * inv_s,
+                        v_[r] * inv_s,
+                        1.0,
+                        A_[r] * inv_s,
+                        k_use,
+                        true, ctx->kill_shape);
+      } else if (mode_hint == 2) {
+        const double inv_s = 1.0 / s_[r];
+        log_cdf = prdmswtn(tt,
+                           (B_[r] + A_[r]) * inv_s,
+                           v_[r]  * inv_s,
+                           A_[r]  * inv_s,
+                           sv_[r] * inv_s,
+                           1.0,
+                           0.0, k_use, 20, true, ctx->kill_shape);
+      } else if (!std::isfinite(sv_[r]) || std::fabs(sv_[r]) <= sv_eps) {
+        const double inv_s = 1.0 / s_[r];
+        log_cdf = pwald(tt,
+                        (B_[r] + A_[r]) * inv_s,
+                        v_[r] * inv_s,
+                        1.0,
+                        A_[r] * inv_s,
+                        k_use,
+                        true, ctx->kill_shape);
+      } else {
+        const double inv_s = 1.0 / s_[r];
+        log_cdf = prdmswtn(tt,
+                           (B_[r] + A_[r]) * inv_s,
+                           v_[r]  * inv_s,
+                           A_[r]  * inv_s,
+                           sv_[r] * inv_s,
+                           1.0,
+                           0.0, k_use, 20, true, ctx->kill_shape);
+      }
+      if (log_cdf >= 0.0) { bad = true; break; }
+      if (R_FINITE(log_cdf)) logS += log1m_exp(log_cdf);
+    }
+    logS_out[j] = bad ? R_NegInf : logS;
+  }
+}
                                const int* trunc_mask, int n_unique_trials,
                                const int* isok_all, void* ctx_, double* logS_out) {
   auto* ctx = static_cast<ContextForRaceModels*>(ctx_);

@@ -22,3 +22,22 @@ test_that("design", {
     str(design_custom, give.attr = FALSE)
   )
 })
+
+test_that("auto covariate detection ignores unused numeric columns", {
+  dat <- data.frame(forstmann, CO = seq_len(nrow(forstmann)),
+                    UNUSED_NUM = seq_len(nrow(forstmann)))
+  des <- design(
+    data = dat,
+    model = LBA,
+    matchfun = function(d) d$S == d$lR,
+    formula = list(v ~ lM, sv ~ lM, B ~ E + lR, t0 ~ E2 + CO),
+    contrasts = list(v = list(lM = matrix(c(-1/2, 1/2), ncol = 1, dimnames = list(NULL, "d")))),
+    constants = c(sv = log(1)),
+    functions = list(
+      E2 = function(d) factor(d$E != "speed", labels = c("speed", "nonspeed"))
+    )
+  )
+
+  expect_true("CO" %in% des$Fcovariates)
+  expect_false("UNUSED_NUM" %in% des$Fcovariates)
+})

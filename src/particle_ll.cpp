@@ -328,6 +328,7 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
   out.ctx.use_posdrift = true;
   out.ctx.gng = false;
   out.ctx.kill_shape = (type_std.find("_E2") != std::string::npos) ? 2 : 1;
+  out.ctx.erlang_is_guess = (type_std.find("_GUESS") != std::string::npos);
 
   if (type_std.find("RDMSWTN") != std::string::npos) {
     // Must be checked before "RDM" since "RDMSWTN" contains "RDM"
@@ -2166,7 +2167,8 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
       winner_int_buf.resize(n_trials);
       loser_int_buf.resize(n_trials);
       isok_int_fp.resize(n_trials);
-      if (time_code != -1) {
+      const bool has_guess = (time_code != -1 || adapter.ctx.erlang_is_guess);
+      if (has_guess) {
         time_win_int_buf.assign(n_trials, 0);
         alt_res_buf_fp.resize(n_trials);
         n_resp_fp.assign(n_unique_fp, 0);
@@ -2180,7 +2182,7 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
           time_win_int_buf[j] = 1;
         }
       }
-      if (time_code != -1) {
+      if (has_guess) {
         for (int j = 0; j < n_unique_fp; ++j) {
           int count = 0;
           int start = j * n_lR;
@@ -2341,6 +2343,27 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
           adapter.model_pfun_raw(rt_ptr, pars_cm, n_trials,
                                  winner_int_buf.data(), isok_int_fp.data(),
                                  alt_res_buf_fp.data(), min_ll, &adapter.ctx);
+        } else if (adapter.ctx.erlang_is_guess) {
+          // Manually compute f_K(t) and S_K(t) for Erlang guess, and get S_W.
+          // Lambda index: RDM=6, BAwL=6.
+          const int lambda_col = (type_std.find("RDM") != std::string::npos) ? 6 : 6;
+          const double* lambda_ptr = pars_cm + lambda_col * n_trials;
+          for (int j = 0; j < n_trials; ++j) {
+            if (!isok_int_fp[j]) continue;
+            const double tt = rt_ptr[j] - pars_cm[adapter.ctx.t0_index * n_trials + j];
+            if (tt <= 0.0) { alt_res_buf_fp[j] = min_ll; continue; }
+            const double lam = lambda_ptr[j];
+            if (winner_int_buf[j]) { // We use alt_res_buf to store both f_K (in guess slots) and S_K (in winner slots)
+               alt_res_buf_fp[j] = erlang_log_surv(tt, lam, adapter.ctx.kill_shape);
+            } else {
+               alt_res_buf_fp[j] = erlang_log_pdf(tt, lam, adapter.ctx.kill_shape);
+            }
+          }
+          // Also need S_W (survival of evidence race). We reuse res_buf which already has log-survivors for losers.
+          // But we need the winner's unkilled log-survivor too.
+          // We'll write S_W temporarily into alt_res_buf_fp's guess slots (which currently have log f_K).
+          // Wait, logic in summation loop uses alt_res_buf_fp[base + idx_T] for f_T and alt_res_buf_fp[base + idx_W] for S_W.
+          // So I should put log f_K into a virtual 'time' slot and log S_K into a winner slot.
         }
 
         // Sum n_lR rows per unique trial; apply pC correction (no-op when pC=0).
@@ -2349,7 +2372,30 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
           const int base = j * n_lR;
           const int n_lR_j = has_RACE_col_fp ? RACE_fp[base] : n_lR;
           for (int k = 0; k < n_lR_j; ++k) s += res_buf[base + k];
-          if (time_code != -1 && n_resp_fp[j] > 0) {
+
+          if (adapter.ctx.erlang_is_guess && n_resp_fp[j] > 0) {
+            // Find winner index
+            int idx_W = -1;
+            for (int k = 0; k < n_lR_j; ++k) { if (winner_int_buf[base + k]) { idx_W = k; break; } }
+            if (idx_W != -1) {
+              const double tt = rt_ptr[base + idx_W] - pars_cm[adapter.ctx.t0_index * n_trials + (base + idx_W)];
+              const double lam = pars_cm[6 * n_trials + (base + idx_W)];
+              const double log_sk = erlang_log_surv(tt, lam, adapter.ctx.kill_shape);
+              const double log_fk = erlang_log_pdf(tt, lam, adapter.ctx.kill_shape);
+              // s currently is log(g_i * S_others) for winner i.
+              // First term: log(g_i * S_others * S_K) = s + log_sk.
+              // Second term: log(f_K * S_race / N_resp) = log(f_K * S_i * S_others / N_resp).
+              // Since res_buf[base + idx_W] is log(g_i), we need log(S_i).
+              // We'll call model_pfun_raw on the winner specifically to get log(S_i).
+              int winner_only_mask[1] = {1};
+              int winner_idx[1] = {base + idx_W};
+              double log_si;
+              adapter.model_pfun_raw(rt_ptr + (base + idx_W), pars_cm, 1, winner_only_mask, isok_int_fp.data() + (base + idx_W), &log_si, min_ll, &adapter.ctx);
+              double s_race = s - res_buf[base + idx_W] + log_si;
+              double s_guess = log_fk + s_race - std::log(n_resp_fp[j]);
+              s = log_sum_exp(s + log_sk, s_guess);
+            }
+          } else if (time_code != -1 && n_resp_fp[j] > 0) {
             int idx_W = -1, idx_T = -1;
             for (int k = 0; k < n_lR_j; ++k) {
               if (winner_int_buf[base + k]) idx_W = k;

@@ -50,6 +50,22 @@ inline double Gstar(double var, double delta, bool log_p = false) {
   return gaussian_pdf(delta, 0.0, var, log_p);
 }
 
+// Erlang-n kill survival: log S_K^(n)(t) = log(exp(-lambda*t) * sum_{m=0}^{n-1} (lambda*t)^m / m!)
+// Supports n=1 (exponential) and n=2 (Erlang-2).
+inline double erlang_log_surv(double t, double lambda, int n) {
+  if (lambda <= 0.0) return 0.0;
+  if (n <= 1) return -lambda * t;
+  return -lambda * t + std::log1p(lambda * t);  // n=2: log(exp(-lt)*(1+lt))
+}
+
+// Erlang-n kill density: f_K^(n)(t)
+inline double erlang_log_pdf(double t, double lambda, int n) {
+  if (lambda <= 0.0 || t < 0.0) return R_NegInf;
+  if (n <= 1) return std::log(lambda) - lambda * t;
+  // n=2: lambda^2 * t * exp(-lambda*t)
+  return 2.0 * std::log(lambda) + std::log(t) - lambda * t;
+}
+
 // CDF of heat kernel N(mean, t) at x
 inline double Gstar_CDF(double var, double mean, double x, bool log_p = false) {
   if (!(var > 0.0) || !std::isfinite(var)) {

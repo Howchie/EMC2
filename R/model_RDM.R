@@ -361,10 +361,10 @@ RDMGBM <- function() {
 #' 
 #' @export
 #' 
-RDMSWTN <- function(erlang = 1L){
+RDMSWTN <- function(erlang = 1L, guess = FALSE){
   list(
     type="RACE",
-    c_name = if (erlang >= 2L) "RDMSWTN_E2" else "RDMSWTN",
+    c_name = paste0(if (erlang >= 2L) "RDMSWTN_E2" else "RDMSWTN", if (guess) "_GUESS" else ""),
     p_types=c("v"=log(1), "B"=log(1), "A"=log(0), "t0"=log(0),
               "s"=log(1), "sv"=log(0), "lambda"=log(0), "pContaminant"=qnorm(0)),
     transform=list(func=c(v="exp", B="exp", A="exp", t0="exp",
@@ -377,7 +377,7 @@ RDMSWTN <- function(erlang = 1L){
       pars <- cbind(pars, b=pars[,"B"] + pars[,"A"])
       pars
     },
-    rfun=function(data=NULL, pars) rRDMSWTN(data$lR, pars, ok=attr(pars, "ok"), erlang=erlang),
+    rfun=function(data=NULL, pars) rRDMSWTN(data$lR, pars, ok=attr(pars, "ok"), erlang=erlang, guess=guess),
     dfun=function(rt, pars) dRDMSWTN(rt, pars, erlang=erlang),
     pfun=function(rt, pars) pRDMSWTN(rt, pars, erlang=erlang),
     log_likelihood=function(pars, dadm, model, min_ll=log(1e-10)){
@@ -435,7 +435,7 @@ pRDMSWTN <- function(rt, pars, erlang = 1L) {
 }
 
 rRDMSWTN <- function(lR, pars, p_types=c("v","b","A","t0","sv","lambda"),
-                     ok=rep(TRUE, dim(pars)[1]), erlang=1L) {
+                     ok=rep(TRUE, dim(pars)[1]), erlang=1L, guess=FALSE) {
   if (!is.null(attr(pars, "ok"))) ok <- attr(pars, "ok")
   if (is.null(dim(pars)) || (dim(pars)[1]==1 & length(lR)>1)) {
     original_names <- names(pars); if (is.null(original_names)) original_names <- colnames(pars)
@@ -454,9 +454,38 @@ rRDMSWTN <- function(lR, pars, p_types=c("v","b","A","t0","sv","lambda"),
   nr <- length(levels(lR))
   dt <- matrix(Inf, nrow=nr, ncol=nrow(pars)/nr)
   t0 <- pars[,"t0"]
+  # If guessing, drawn ONE kill process per trial
+  if (guess) {
+    n_trials <- nrow(pars)/nr
+    # lambda is constant across accumulators for a trial in RDMSWTN
+    lambda_trials <- matrix(pars[,"lambda"], nrow=nr)[1,]
+    tk <- rexp(n_trials, rate=lambda_trials)
+    if (erlang >= 2L) tk <- tk + rexp(n_trials, rate=lambda_trials)
+    # Simulator rSWTN without killing (k=0)
+    pars[,"lambda"] <- 0
+  }
   pars <- pars[ok,,drop=FALSE]
   dt[ok] <- rSWTN(sum(ok), b=pars[,"b"], v=pars[,"v"], A=pars[,"A"], sv=pars[,"sv"],
                   k=pars[,"lambda"], erlang=erlang)
+  
+  if (guess) {
+    # Response is a guess if tk < any(dt)
+    is_guess <- tk < apply(dt, 2, min)
+    if (any(is_guess)) {
+      dt[, is_guess] <- Inf
+      ok_mat <- matrix(ok, nrow=nr)
+      # For each guess trial, pick one of the active, non-nogo accumulators
+      for (trial_idx in which(is_guess)) {
+        active_indices <- which(ok_mat[, trial_idx] & levels(lR) != "nogo")
+        if (length(active_indices) > 0) {
+          # Use sample safely
+          winner_acc <- if (length(active_indices) > 1) sample(active_indices, 1) else active_indices
+          dt[winner_acc, trial_idx] <- tk[trial_idx]
+        }
+      }
+    }
+  }
+
   bad_col <- apply(dt, 2, function(x) all(is.infinite(x)))
   R <- apply(dt, 2, which.min)
   pick <- cbind(R, 1:dim(dt)[2])
