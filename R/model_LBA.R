@@ -327,13 +327,14 @@ dBAwL <- function(rt, pars, posdrift = TRUE) {
   ok  <- (dt > 0) & (pars[, "b"] >= pars[, "A"])
   ok[is.na(ok) | !is.finite(dt)] <- FALSE
   out <- numeric(length(dt))
-  out[ok] <- dleakyba(t  = dt[ok],
-                      A  = pars[ok, "A"],
-                      b  = pars[ok, "b"],
-                      v  = pars[ok, "v"],
-                      sv = pars[ok, "sv"],
-                      k  = pars[ok, "k"],
-                      posdrift = posdrift)
+  base <- dleakyba(t  = dt[ok],
+                   A  = pars[ok, "A"],
+                   b  = pars[ok, "b"],
+                   v  = pars[ok, "v"],
+                   sv = pars[ok, "sv"],
+                   k  = pars[ok, "k"],
+                   posdrift = posdrift)
+  out[ok] <- base * exp(-pars[ok, "lambda"] * dt[ok])
   out
 }
 
@@ -342,18 +343,24 @@ pBAwL <- function(rt, pars, posdrift = TRUE) {
   ok  <- (dt > 0) & (pars[, "b"] >= pars[, "A"])
   ok[is.na(ok) | !is.finite(dt)] <- FALSE
   out <- numeric(length(dt))
-  out[ok] <- pleakyba(t  = dt[ok],
-                      A  = pars[ok, "A"],
-                      b  = pars[ok, "b"],
-                      v  = pars[ok, "v"],
-                      sv = pars[ok, "sv"],
-                      k  = pars[ok, "k"],
-                      posdrift = posdrift)
+  if (any(ok)) {
+    out[ok] <- vapply(which(ok), function(i) {
+      stats::integrate(
+        f = function(x) {
+          dleakyba(
+            t = x, A = pars[i, "A"], b = pars[i, "b"], v = pars[i, "v"],
+            sv = pars[i, "sv"], k = pars[i, "k"], posdrift = posdrift
+          ) * exp(-pars[i, "lambda"] * x)
+        },
+        lower = 0, upper = dt[i], subdivisions = 200L, rel.tol = 1e-6
+      )$value
+    }, numeric(1))
+  }
   out
 }
 
 rBAwL <- function(lR, pars, ok = rep(TRUE, length(lR)),
-                  p_types = c("v", "sv", "b", "A", "t0", "k"),
+                  p_types = c("v", "sv", "b", "A", "t0", "k", "lambda"),
                   posdrift = TRUE, eps = 1e-10) {
   bad  <- rep(NA, length(lR) / length(levels(lR)))
   out  <- data.frame(R = bad, rt = bad)
@@ -380,6 +387,8 @@ rBAwL <- function(lR, pars, ok = rep(TRUE, length(lR)),
     dt[big_k]  <- (-1 / pars[big_k, "k"]) * log(ratio)
   }
   dt[dt < 0] <- Inf
+  tk <- ifelse(pars[, "lambda"] > 0, rexp(nrow(pars), pars[, "lambda"]), Inf)
+  dt <- ifelse(dt < tk, dt, Inf)
   bad_col <- apply(dt, 2, function(x) all(is.infinite(x)))
   R   <- apply(dt, 2, which.min)
   pick <- cbind(R, 1:dim(dt)[2])
@@ -396,11 +405,14 @@ rBAwL <- function(lR, pars, ok = rep(TRUE, length(lR)),
 
 #' The Ballistic Accumulator with Leak (BAwL)
 #'
-#' Race model where each accumulator follows a leaky-integration trajectory.
-#' Setting k=0 recovers the standard LBA exactly.
+#' Race model where each accumulator follows a leaky-integration trajectory and
+#' races against an independent exponential killing clock.
+#' Setting k=0 recovers the standard LBA decision dynamics; setting lambda=0
+#' removes killing.
 #'
 #' Parameters as in LBA plus:
 #' * k: leak rate (log scale, [0, Inf); default log(0) = effectively 0).
+#' * lambda: killing/expiry rate (log scale, [0, Inf); default log(0) = 0).
 #'
 #' @export
 BAwL <- function(posdrift = TRUE) {
@@ -408,16 +420,16 @@ BAwL <- function(posdrift = TRUE) {
     type   = "RACE",
     c_name = ifelse(posdrift, "BAwL", "BAwLIO"),
     p_types = c("v"  = 1, "sv" = log(1), "B" = log(1), "A" = log(0),
-                "t0" = log(0), "k" = log(0), "pContaminant" = qnorm(0)),
+                "t0" = log(0), "k" = log(0), "lambda" = log(0), "pContaminant" = qnorm(0)),
     transform = list(func = c(v = "identity", sv = "exp", B = "exp",
-                              A = "exp", t0 = "exp", k = "exp",
+                              A = "exp", t0 = "exp", k = "exp", lambda = "exp",
                               pContaminant = "pnorm")),
     bound = list(
       minmax = cbind(v  = c(-Inf, Inf), sv = c(0, Inf),
                      A  = c(1e-4, Inf), B  = c(1e-4, Inf),
-                     t0 = c(0.05, Inf), k  = c(1e-4, Inf),
+                     t0 = c(0.05, Inf), k  = c(1e-4, Inf), lambda = c(1e-4, Inf),
                      pContaminant = c(0.001, 0.999)),
-      exception = c(A = 0, pContaminant = 0, k = 0)),
+      exception = c(A = 0, pContaminant = 0, k = 0, lambda = 0)),
     Ttransform = function(pars, dadm) {
       cbind(pars, b = pars[, "B"] + pars[, "A"])
     },

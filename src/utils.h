@@ -128,6 +128,36 @@ inline double plba_scalar(double t, const double* par, void* ctx_) {
   return plba_norm(tt, A, b, v, sv, ctx->use_posdrift);
 }
 
+inline double dkilledlba_scalar(double t, const double* par, void* ctx_) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  const double v  = par[0];
+  const double sv = par[1];
+  const double b  = par[2] + par[3];
+  const double A  = par[3];
+  const double t0 = par[4];
+  const double k  = par[5];
+
+  if (R_IsNA(v)) return 0.0;
+  const double tt = t - t0;
+  if (tt <= 0.0) return 0.0;
+  return dkilledlba_norm(tt, A, b, v, sv, k, ctx->use_posdrift);
+}
+
+inline double pkilledlba_scalar(double t, const double* par, void* ctx_) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  const double v  = par[0];
+  const double sv = par[1];
+  const double b  = par[2] + par[3];
+  const double A  = par[3];
+  const double t0 = par[4];
+  const double k  = par[5];
+
+  if (R_IsNA(v)) return 0.0;
+  const double tt = t - t0;
+  if (tt <= 0.0) return 0.0;
+  return pkilledlba_norm(tt, A, b, v, sv, k, ctx->use_posdrift);
+}
+
 inline double drdm_scalar(double t, const double* par, void* /*ctx_*/) {
   if (R_IsNA(par[0])) return 0.0;
   const double tt = t - par[3];
@@ -238,6 +268,52 @@ inline void plba_raw(const double* rt, const double* pars_cm, int n_rows,
     if (tt <= 0.0) { out[i] = 0.0; continue; }
     const double cdf = plba_norm(tt, A_[i], B_[i] + A_[i], v_[i], sv_[i], pd);
     // log(1 - cdf); plba_norm guarantees cdf in [0,1]
+    if (cdf >= 1.0) { out[i] = min_ll; continue; }
+    out[i] = (cdf <= 0.0) ? 0.0 : std::log1p(-cdf);
+  }
+}
+
+// Killed LBA: column layout v=0, sv=1, B=2, A=3, t0=4, k=5
+inline void dkilledlba_raw(const double* rt, const double* pars_cm, int n_rows,
+                           const int* mask, const int* isok,
+                           double* out, double min_ll, void* ctx_) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  const bool pd = ctx->use_posdrift;
+  const double* v_  = pars_cm + 0 * n_rows;
+  const double* sv_ = pars_cm + 1 * n_rows;
+  const double* B_  = pars_cm + 2 * n_rows;
+  const double* A_  = pars_cm + 3 * n_rows;
+  const double* t0_ = pars_cm + 4 * n_rows;
+  const double* k_  = pars_cm + 5 * n_rows;
+  #pragma omp simd
+  for (int i = 0; i < n_rows; ++i) {
+    if (!mask[i]) continue;
+    if (R_IsNA(v_[i]) || !isok[i]) { out[i] = min_ll; continue; }
+    const double tt = rt[i] - t0_[i];
+    if (tt <= 0.0) { out[i] = min_ll; continue; }
+    const double pdf = dkilledlba_norm(tt, A_[i], B_[i] + A_[i], v_[i], sv_[i], k_[i], pd);
+    out[i] = (pdf > 0.0 && emc2_isfinite(pdf)) ? std::log(pdf) : min_ll;
+  }
+}
+
+inline void pkilledlba_raw(const double* rt, const double* pars_cm, int n_rows,
+                           const int* mask, const int* isok,
+                           double* out, double min_ll, void* ctx_) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  const bool pd = ctx->use_posdrift;
+  const double* v_  = pars_cm + 0 * n_rows;
+  const double* sv_ = pars_cm + 1 * n_rows;
+  const double* B_  = pars_cm + 2 * n_rows;
+  const double* A_  = pars_cm + 3 * n_rows;
+  const double* t0_ = pars_cm + 4 * n_rows;
+  const double* k_  = pars_cm + 5 * n_rows;
+  #pragma omp simd
+  for (int i = 0; i < n_rows; ++i) {
+    if (!mask[i]) continue;
+    if (R_IsNA(v_[i]) || !isok[i]) { out[i] = 0.0; continue; }
+    const double tt = rt[i] - t0_[i];
+    if (tt <= 0.0) { out[i] = 0.0; continue; }
+    const double cdf = pkilledlba_norm(tt, A_[i], B_[i] + A_[i], v_[i], sv_[i], k_[i], pd);
     if (cdf >= 1.0) { out[i] = min_ll; continue; }
     out[i] = (cdf <= 0.0) ? 0.0 : std::log1p(-cdf);
   }
@@ -404,6 +480,37 @@ inline void lba_logS_at_t(double t, const double* pars_cm,
   }
 }
 
+// Killed LBA: column layout v=0, sv=1, B=2, A=3, t0=4, k=5
+inline void killedlba_logS_at_t(double t, const double* pars_cm,
+                                int n_rows_total, int n_lR, int /*n_par*/,
+                                const int* trunc_mask, int n_unique_trials,
+                                const int* isok_all, void* ctx_, double* logS_out) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  const bool pd = ctx->use_posdrift;
+  const double* v_  = pars_cm + 0 * n_rows_total;
+  const double* sv_ = pars_cm + 1 * n_rows_total;
+  const double* B_  = pars_cm + 2 * n_rows_total;
+  const double* A_  = pars_cm + 3 * n_rows_total;
+  const double* t0_ = pars_cm + 4 * n_rows_total;
+  const double* k_  = pars_cm + 5 * n_rows_total;
+  for (int j = 0; j < n_unique_trials; ++j) {
+    if (!trunc_mask[j]) continue;
+    const int start = j * n_lR;
+    double logS = 0.0;
+    bool bad = false;
+    for (int k = 0; k < n_lR && !bad; ++k) {
+      const int r = start + k;
+      if (!isok_all[r] || R_IsNA(v_[r])) { bad = true; break; }
+      const double tt = t - t0_[r];
+      if (tt <= 0.0) continue;
+      const double cdf = pkilledlba_norm(tt, A_[r], B_[r] + A_[r], v_[r], sv_[r], k_[r], pd);
+      if (cdf >= 1.0) { bad = true; break; }
+      if (cdf > 0.0) logS += std::log1p(-cdf);
+    }
+    logS_out[j] = bad ? R_NegInf : logS;
+  }
+}
+
 // RDM: column layout v=0, B=1, A=2, t0=3, s=4
 inline void rdm_logS_at_t(double t, const double* pars_cm,
                             int n_rows_total, int n_lR, int /*n_par*/,
@@ -495,8 +602,8 @@ inline void lnr_logS_at_t(double t, const double* pars_cm,
 }
 
 // ============================================================
-// BAwL (Ballistic Accumulator with Leak) adapters
-// Column layout: v=0, sv=1, B=2, A=3, t0=4, k=5
+// BAwL (Ballistic Accumulator with Leak + exponential killing) adapters
+// Column layout: v=0, sv=1, B=2, A=3, t0=4, k=5, lambda=6
 // ============================================================
 
 inline double dbawl_scalar(double t, const double* par, void* ctx_) {
@@ -506,8 +613,8 @@ inline double dbawl_scalar(double t, const double* par, void* ctx_) {
   if (tt <= 0.0) return 0.0;
   // Route through the leaky kernel in all cases; its internal k->0 branch
   // handles the exact LBA limit.
-  return dleakyba_norm(tt, par[3], par[2] + par[3], par[0], par[1], par[5],
-                       ctx->use_posdrift);
+  return dkilledleakyba_norm(tt, par[3], par[2] + par[3], par[0], par[1], par[5], par[6],
+                             ctx->use_posdrift);
 }
 
 inline double pbawl_scalar(double t, const double* par, void* ctx_) {
@@ -517,8 +624,8 @@ inline double pbawl_scalar(double t, const double* par, void* ctx_) {
   if (tt <= 0.0) return 0.0;
   // Route through the leaky kernel in all cases; its internal k->0 branch
   // handles the exact LBA limit.
-  return pleakyba_norm(tt, par[3], par[2] + par[3], par[0], par[1], par[5],
-                       ctx->use_posdrift);
+  return pkilledleakyba_norm(tt, par[3], par[2] + par[3], par[0], par[1], par[5], par[6],
+                             ctx->use_posdrift);
 }
 
 inline void dbawl_raw(const double* rt, const double* pars_cm, int n_rows,
@@ -532,12 +639,13 @@ inline void dbawl_raw(const double* rt, const double* pars_cm, int n_rows,
   const double* A_  = pars_cm + 3 * n_rows;
   const double* t0_ = pars_cm + 4 * n_rows;
   const double* k_  = pars_cm + 5 * n_rows;
+  const double* l_  = pars_cm + 6 * n_rows;
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
     if (R_IsNA(v_[i]) || !isok[i]) { out[i] = min_ll; continue; }
     const double tt = rt[i] - t0_[i];
     if (tt <= 0.0) { out[i] = min_ll; continue; }
-    const double pdf = dleakyba_norm(tt, A_[i], B_[i] + A_[i], v_[i], sv_[i], k_[i], pd);
+    const double pdf = dkilledleakyba_norm(tt, A_[i], B_[i] + A_[i], v_[i], sv_[i], k_[i], l_[i], pd);
     out[i] = (pdf > 0.0 && std::isfinite(pdf)) ? std::log(pdf) : min_ll;
   }
 }
@@ -553,18 +661,19 @@ inline void pbawl_raw(const double* rt, const double* pars_cm, int n_rows,
   const double* A_  = pars_cm + 3 * n_rows;
   const double* t0_ = pars_cm + 4 * n_rows;
   const double* k_  = pars_cm + 5 * n_rows;
+  const double* l_  = pars_cm + 6 * n_rows;
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
     if (R_IsNA(v_[i]) || !isok[i]) { out[i] = 0.0; continue; }
     const double tt = rt[i] - t0_[i];
     if (tt <= 0.0) { out[i] = 0.0; continue; }
-    const double cdf = pleakyba_norm(tt, A_[i], B_[i] + A_[i], v_[i], sv_[i], k_[i], pd);
+    const double cdf = pkilledleakyba_norm(tt, A_[i], B_[i] + A_[i], v_[i], sv_[i], k_[i], l_[i], pd);
     if (cdf >= 1.0) { out[i] = min_ll; continue; }
     out[i] = (cdf <= 0.0) ? 0.0 : std::log1p(-cdf);
   }
 }
 
-// BAwL: column layout v=0, sv=1, B=2, A=3, t0=4, k=5
+// BAwL: column layout v=0, sv=1, B=2, A=3, t0=4, k=5, lambda=6
 inline void bawl_logS_at_t(double t, const double* pars_cm,
                             int n_rows_total, int n_lR, int /*n_par*/,
                             const int* trunc_mask, int n_unique_trials,
@@ -577,6 +686,7 @@ inline void bawl_logS_at_t(double t, const double* pars_cm,
   const double* A_  = pars_cm + 3 * n_rows_total;
   const double* t0_ = pars_cm + 4 * n_rows_total;
   const double* k_  = pars_cm + 5 * n_rows_total;
+  const double* l_  = pars_cm + 6 * n_rows_total;
   for (int j = 0; j < n_unique_trials; ++j) {
     if (!trunc_mask[j]) continue;
     const int start = j * n_lR;
@@ -587,7 +697,7 @@ inline void bawl_logS_at_t(double t, const double* pars_cm,
       if (!isok_all[r] || R_IsNA(v_[r])) { bad = true; break; }
       const double tt = t - t0_[r];
       if (tt <= 0.0) continue;
-      const double cdf = pleakyba_norm(tt, A_[r], B_[r] + A_[r], v_[r], sv_[r], k_[r], pd);
+      const double cdf = pkilledleakyba_norm(tt, A_[r], B_[r] + A_[r], v_[r], sv_[r], k_[r], l_[r], pd);
       if (cdf >= 1.0) { bad = true; break; }
       if (cdf > 0.0) logS += std::log1p(-cdf);
     }
@@ -597,7 +707,7 @@ inline void bawl_logS_at_t(double t, const double* pars_cm,
 
 // ============================================================
 // RDMSWTN adapters
-// Column layout: v=0, B=1, A=2, t0=3, s=4, sv=5, k=6
+// Column layout: v=0, B=1, A=2, t0=3, s=4, sv=5, lambda=6
 // ============================================================
 
 inline double drdmswtn_scalar(double t, const double* par, void* /*ctx_*/) {

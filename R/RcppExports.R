@@ -53,6 +53,22 @@ pleakyba <- function(t, A, b, v, sv, k, posdrift = TRUE) {
     .Call(`_EMC2_pleakyba`, t, A, b, v, sv, k, posdrift)
 }
 
+dkilledlba_norm <- function(t, A, b, v, sv, k, posdrift = TRUE, log_out = FALSE) {
+    .Call(`_EMC2_dkilledlba_norm`, t, A, b, v, sv, k, posdrift, log_out)
+}
+
+pkilledlba_norm <- function(t, A, b, v, sv, k, posdrift = TRUE, log_out = FALSE) {
+    .Call(`_EMC2_pkilledlba_norm`, t, A, b, v, sv, k, posdrift, log_out)
+}
+
+dkilledlba <- function(t, A, b, v, sv, k, posdrift = TRUE, log_out = FALSE) {
+    .Call(`_EMC2_dkilledlba`, t, A, b, v, sv, k, posdrift, log_out)
+}
+
+pkilledlba <- function(t, A, b, v, sv, k, posdrift = TRUE, log_out = FALSE) {
+    .Call(`_EMC2_pkilledlba`, t, A, b, v, sv, k, posdrift, log_out)
+}
+
 dWald <- function(t, v, B, A, t0, log_out = FALSE) {
     .Call(`_EMC2_dWald`, t, v, B, A, t0, log_out)
 }
@@ -89,28 +105,28 @@ pgbm <- function(t, b, mu, sigma = 1.0, A = 0.0, log_out = FALSE) {
     .Call(`_EMC2_pgbm`, t, b, mu, sigma, A, log_out)
 }
 
-dswtn <- function(t_adj, threshold, mu_drift, sv, s = 1.0, k = 0.0, c = 0.0, log_out = FALSE) {
-    .Call(`_EMC2_dswtn`, t_adj, threshold, mu_drift, sv, s, k, c, log_out)
+dswtn <- function(t_adj, threshold, mu_drift, sv, s = 1.0, lambda = 0.0, c = 0.0, log_out = FALSE) {
+    .Call(`_EMC2_dswtn`, t_adj, threshold, mu_drift, sv, s, lambda, c, log_out)
 }
 
-pswtn <- function(t_adj, threshold, mu_drift, sv, s = 1.0, c = 0.0, k = 0.0, log_out = FALSE) {
-    .Call(`_EMC2_pswtn`, t_adj, threshold, mu_drift, sv, s, c, k, log_out)
+pswtn <- function(t_adj, threshold, mu_drift, sv, s = 1.0, c = 0.0, lambda = 0.0, log_out = FALSE) {
+    .Call(`_EMC2_pswtn`, t_adj, threshold, mu_drift, sv, s, c, lambda, log_out)
 }
 
-drdmswtn <- function(t_adj, b, mu_drift, A, sv, s = 1.0, k = 0.0, c = 0.0, n_gauss_nodes = 20L, log_out = FALSE) {
-    .Call(`_EMC2_drdmswtn`, t_adj, b, mu_drift, A, sv, s, k, c, n_gauss_nodes, log_out)
+drdmswtn <- function(t_adj, b, mu_drift, A, sv, s = 1.0, lambda = 0.0, c = 0.0, n_gauss_nodes = 20L, log_out = FALSE) {
+    .Call(`_EMC2_drdmswtn`, t_adj, b, mu_drift, A, sv, s, lambda, c, n_gauss_nodes, log_out)
 }
 
-prdmswtn <- function(t_adj, b, mu_drift, A, sv, s = 1.0, c = 0.0, k = 0.0, n_gauss_nodes = 20L, log_out = FALSE) {
-    .Call(`_EMC2_prdmswtn`, t_adj, b, mu_drift, A, sv, s, c, k, n_gauss_nodes, log_out)
+prdmswtn <- function(t_adj, b, mu_drift, A, sv, s = 1.0, c = 0.0, lambda = 0.0, n_gauss_nodes = 20L, log_out = FALSE) {
+    .Call(`_EMC2_prdmswtn`, t_adj, b, mu_drift, A, sv, s, c, lambda, n_gauss_nodes, log_out)
 }
 
-dSWTNspv <- function(t, v, b, A, t0, sv, s = 1.0, c = 0.0, k = 0.0, n_gauss_nodes = 20L, log_out = FALSE) {
-    .Call(`_EMC2_dSWTNspv`, t, v, b, A, t0, sv, s, c, k, n_gauss_nodes, log_out)
+dSWTNspv <- function(t, v, b, A, t0, sv, s = 1.0, c = 0.0, lambda = 0.0, n_gauss_nodes = 20L, log_out = FALSE) {
+    .Call(`_EMC2_dSWTNspv`, t, v, b, A, t0, sv, s, c, lambda, n_gauss_nodes, log_out)
 }
 
-pSWTNspv <- function(t, v, b, A, t0, sv, s = 1.0, c = 0.0, k = 0.0, n_gauss_nodes = 20L, log_out = FALSE) {
-    .Call(`_EMC2_pSWTNspv`, t, v, b, A, t0, sv, s, c, k, n_gauss_nodes, log_out)
+pSWTNspv <- function(t, v, b, A, t0, sv, s = 1.0, c = 0.0, lambda = 0.0, n_gauss_nodes = 20L, log_out = FALSE) {
+    .Call(`_EMC2_pSWTNspv`, t, v, b, A, t0, sv, s, c, lambda, n_gauss_nodes, log_out)
 }
 
 dGBMspv <- function(t, v, b, A, t0, s = 1.0, log_out = FALSE) {

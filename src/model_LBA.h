@@ -256,6 +256,95 @@ double dleakyba_norm(double t, double A, double b,
   return log_out ? safe_log(f) : f;
 }
 
+// Killed-leaky BA density: f_hit(t) = f_leaky(t) * exp(-lambda * t)
+inline double dkilledleakyba_norm(double t, double A, double b,
+                                  double v, double sv, double k, double lambda,
+                                  bool posdrift = true, bool log_out = false) {
+  if (t <= 0.0) return log_out ? R_NegInf : 0.0;
+  if (lambda <= 0.0) return dleakyba_norm(t, A, b, v, sv, k, posdrift, log_out);
+  const double log_f = dleakyba_norm(t, A, b, v, sv, k, posdrift, true) - lambda * t;
+  return log_out ? log_f : std::exp(log_f);
+}
+
+// Killed-leaky BA sub-CDF:
+// P(T_R <= t, T_R < T_K) = \int g(D) J(D,t) dD with 1D quadrature over D.
+inline double pkilledleakyba_norm(double t, double A, double b,
+                                  double v, double sv, double k, double lambda,
+                                  bool posdrift = true, bool log_out = false) {
+  if (t <= 0.0) return log_out ? R_NegInf : 0.0;
+  if (lambda <= 0.0) return pleakyba_norm(t, A, b, v, sv, k, posdrift, log_out);
+  const double eps = 1e-10;
+  if (sv <= 0.0 || A <= 0.0 || b <= A) return log_out ? R_NegInf : 0.0;
+
+  // k -> 0 uses standard LBA hit time in the survival tilt.
+  if (std::fabs(k) < eps) {
+    // Fallback to numerical integration in time domain:
+    // F_k(t) = \int_0^t f_leaky(u) exp(-lambda*u) du
+    const Rcpp::List& gl = get_gl20();
+    const Rcpp::NumericVector nodes = gl["nodes"];
+    const Rcpp::NumericVector weights = gl["weights"];
+    double acc = 0.0;
+    for (int j = 0; j < nodes.size(); ++j) {
+      const double u = 0.5 * t * (nodes[j] + 1.0);
+      const double fu = dleakyba_norm(u, A, b, v, sv, k, posdrift, false) * std::exp(-lambda * u);
+      acc += weights[j] * fu;
+    }
+    double out = 0.5 * t * acc;
+    out = std::max(0.0, std::min(1.0, out));
+    return log_out ? safe_log(out) : out;
+  }
+
+  const double E = std::exp(-k * t);
+  const double G = std::max(1e-300, -std::expm1(-k * t));
+  const double C1 = (k * b) / G;
+  const double C2 = (k * E) / G;
+  const double Dmin_time = C1 - C2 * A;
+  const double Dmin = std::max(k * b, Dmin_time);
+  const double rho = lambda / k;
+
+  auto J_inner = [&](double D) -> double {
+    if (!(D > k * b)) return 0.0;
+    const double L = (C1 - D) / C2;
+    const double Ls = std::max(0.0, L);
+    if (!(Ls < A)) return 0.0;
+    const double DkL = D - k * Ls;
+    const double DkA = D - k * A;
+    const double Dkb = D - k * b;
+    if (DkL <= 0.0 || DkA <= 0.0 || Dkb <= 0.0) return 0.0;
+    if (std::fabs(rho - 1.0) < 1e-8) {
+      return (Dkb / (A * k)) * std::log(DkL / DkA);
+    }
+    return (std::pow(Dkb, rho) / (A * k * (1.0 - rho))) *
+      (std::pow(DkL, 1.0 - rho) - std::pow(DkA, 1.0 - rho));
+  };
+
+  auto gD = [&](double D) -> double {
+    if (posdrift) {
+      const double Z = std::max(1e-300, pnorm_std(v / sv));
+      if (D <= 0.0) return 0.0;
+      return dnormP((D - v) / sv) / (sv * Z);
+    }
+    return dnormP((D - v) / sv) / sv;
+  };
+
+  // Integrate D = Dmin + x, x in [0, +inf) using GL on [0,1): x = q/(1-q)
+  const Rcpp::List& gl = get_gl20();
+  const Rcpp::NumericVector nodes = gl["nodes"];
+  const Rcpp::NumericVector weights = gl["weights"];
+  double acc = 0.0;
+  for (int j = 0; j < nodes.size(); ++j) {
+    const double q = 0.5 * (nodes[j] + 1.0); // [0,1]
+    const double qq = std::min(1.0 - 1e-12, std::max(1e-15, q));
+    const double x = qq / (1.0 - qq);
+    const double D = Dmin + x;
+    const double jac = 1.0 / ((1.0 - qq) * (1.0 - qq));
+    acc += weights[j] * gD(D) * J_inner(D) * jac;
+  }
+  double out = 0.5 * acc;
+  out = std::max(0.0, std::min(1.0, out));
+  return log_out ? safe_log(out) : out;
+}
+
 // Vectorised R-callable wrappers (recycle scalar parameters).
 // [[Rcpp::export]]
 NumericVector dleakyba(NumericVector t,
@@ -287,5 +376,108 @@ NumericVector pleakyba(NumericVector t,
   return cdf;
 }
 
-#endif
+// --------------------------------------------------------------------------
+// Killed LBA: standard LBA hits truncated by an exponential expiry clock
+// T_kill ~ Exp(k).
+// --------------------------------------------------------------------------
 
+// PDF of killed LBA: f_k(t) = f_lba(t) * exp(-k*t)
+// [[Rcpp::export]]
+double dkilledlba_norm(double t, double A, double b, double v, double sv, double k,
+                       bool posdrift = true, bool log_out = false) {
+  if (t <= 0.0) return log_out ? R_NegInf : 0.0;
+  if (k <= 0.0) return dlba_norm(t, A, b, v, sv, posdrift, log_out);
+
+  double log_pdf = dlba_norm(t, A, b, v, sv, posdrift, true) - k * t;
+  return log_out ? log_pdf : std::exp(log_pdf);
+}
+
+// Sub-CDF of killed LBA: P(T_lba < t AND T_lba < T_kill)
+// Uses 20-point Gauss-Legendre quadrature over the drift distribution.
+// [[Rcpp::export]]
+double pkilledlba_norm(double t, double A, double b, double v, double sv, double k,
+                       bool posdrift = true, bool log_out = false) {
+  if (t <= 0.0) return log_out ? R_NegInf : 0.0;
+  if (k <= 0.0) return plba_norm(t, A, b, v, sv, posdrift, log_out);
+
+  const double d0 = b - A;
+  const double eps = 1e-10;
+
+  auto get_subcdf_fixed_v = [&](double drift) {
+    if (drift <= 0.0) return 0.0;
+    double t_start = d0 / drift;
+    if (t <= t_start) return 0.0;
+    double t_end = b / drift;
+    double t_upper = std::min(t, t_end);
+    if (t_upper <= t_start) return 0.0;
+    // Integral_{t_start}^{t_upper} (drift/A) * exp(-k*tau) dtau
+    return (drift / (A * k)) * (std::exp(-k * t_start) - std::exp(-k * t_upper));
+  };
+
+  double cdf = 0.0;
+  if (sv < eps) {
+    cdf = get_subcdf_fixed_v(v);
+  } else {
+    // Integrate over drift distribution
+    const Rcpp::List& gl = get_gl20();
+    const Rcpp::NumericVector nodes = gl["nodes"];
+    const Rcpp::NumericVector weights = gl["weights"];
+    const int n_nodes = nodes.size();
+
+    double alpha = pnorm_std(-v / sv); // P(V < 0)
+
+    for (int j = 0; j < n_nodes; j++) {
+      double u = 0.5 * (nodes[j] + 1.0);
+      double p = alpha + (1.0 - alpha) * u;
+      // Clamp p for stability
+      p = std::max(1e-15, std::min(1.0 - 1e-15, p));
+      double drift_j = v + sv * R::qnorm(p, 0.0, 1.0, true, false);
+      cdf += weights[j] * get_subcdf_fixed_v(drift_j);
+    }
+    cdf *= 0.5;
+    if (!posdrift) {
+      cdf *= (1.0 - alpha);
+    }
+    // Note: if posdrift=true, we should NOT divide by (1-alpha) here because
+    // the integral itself is over the truncated density.
+    // Wait, if posdrift=true, g(r) = phi(r)/ (1-alpha).
+    // The integral over p from 0 to 1 gives the integral over the truncated density.
+    // Yes, 0.5 * sum(w * f(r)) integrates over the truncated space.
+  }
+
+  if (cdf < 0.0) cdf = 0.0;
+  if (cdf > 1.0) cdf = 1.0;
+  return log_out ? std::log(cdf) : cdf;
+}
+
+// [[Rcpp::export]]
+NumericVector dkilledlba(NumericVector t,
+                         NumericVector A, NumericVector b,
+                         NumericVector v, NumericVector sv, NumericVector k,
+                         bool posdrift = true, bool log_out = false) {
+  int n = t.size();
+  NumericVector pdf(n);
+  auto pick = [](const NumericVector& vec, int i) -> double {
+    return vec.size() == 1 ? vec[0] : vec[i];
+  };
+  for (int i = 0; i < n; i++)
+    pdf[i] = dkilledlba_norm(t[i], pick(A,i), pick(b,i), pick(v,i), pick(sv,i), pick(k,i), posdrift, log_out);
+  return pdf;
+}
+
+// [[Rcpp::export]]
+NumericVector pkilledlba(NumericVector t,
+                         NumericVector A, NumericVector b,
+                         NumericVector v, NumericVector sv, NumericVector k,
+                         bool posdrift = true, bool log_out = false) {
+  int n = t.size();
+  NumericVector cdf(n);
+  auto pick = [](const NumericVector& vec, int i) -> double {
+    return vec.size() == 1 ? vec[0] : vec[i];
+  };
+  for (int i = 0; i < n; i++)
+    cdf[i] = pkilledlba_norm(t[i], pick(A,i), pick(b,i), pick(v,i), pick(sv,i), pick(k,i), posdrift, log_out);
+  return cdf;
+}
+
+#endif

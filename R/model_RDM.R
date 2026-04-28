@@ -355,7 +355,7 @@ RDMGBM <- function() {
 #' | *t0*      | log       | \[0, Inf\]      | log(0)  | Non-decision time                      |
 #' | *s*       | log       | \[0, Inf\]      | log(1)  | Within-trial SD of drift rate          |
 #' | *sv*      | log       | \[0, Inf\]      | log(0)  | Between-trial SD of drift rate         |
-#' | *k*       | log       | \[0, Inf\]      | log(0)  | Exponential killing rate               |
+#' | *lambda*  | log       | \[0, Inf\]      | log(0)  | Exponential killing rate               |
 #' 
 #' @return a list of parameters
 #' 
@@ -366,13 +366,13 @@ RDMSWTN <- function(){
     type="RACE",
     c_name = "RDMSWTN",
     p_types=c("v"=log(1), "B"=log(1), "A"=log(0), "t0"=log(0),
-              "s"=log(1), "sv"=log(0), "k"=log(0), "pContaminant"=qnorm(0)),
+              "s"=log(1), "sv"=log(0), "lambda"=log(0), "pContaminant"=qnorm(0)),
     transform=list(func=c(v="exp", B="exp", A="exp", t0="exp",
-                          s="exp", sv="exp", k="exp", pContaminant="pnorm")),
+                          s="exp", sv="exp", lambda="exp", pContaminant="pnorm")),
     bound=list(minmax=cbind(v=c(1e-3,Inf), B=c(0,Inf), A=c(0,Inf),
-                            t0=c(0.05,Inf), s=c(0,Inf), sv=c(0,Inf), k=c(1e-4,Inf),
+                            t0=c(0.05,Inf), s=c(0,Inf), sv=c(0,Inf), lambda=c(1e-4,Inf),
                             pContaminant=c(0.001,0.999)),
-               exception=c(A=0, v=0, sv=0, k=0, pContaminant=0)),
+               exception=c(A=0, v=0, sv=0, lambda=0, pContaminant=0)),
     # Trial dependent parameter transform
     Ttransform = function(pars, dadm) {
       pars <- cbind(pars, b=pars[,"B"] + pars[,"A"])
@@ -401,7 +401,7 @@ dRDMSWTN <- function(rt, pars) {
   ok <- rt > pars[,"t0",drop=FALSE] & !pars[,"v",drop=FALSE] < 0
   ok[is.na(ok)] <- FALSE
   if (any(ok)) {
-    if (!("k" %in% colnames(pars))) pars <- cbind(pars, k=0)
+    if (!("lambda" %in% colnames(pars))) stop("RDMSWTN requires parameter column 'lambda'.")
     if (any(dimnames(pars)[[2]] == "s")) {
       pars_ok <- pars[ok,,drop=FALSE]
       pars_ok[,c("A","b","v","sv")] <- pars_ok[,c("A","b","v","sv")] / pars_ok[,"s"]
@@ -409,7 +409,7 @@ dRDMSWTN <- function(rt, pars) {
     }
     out[ok] <- dSWTNspv(rt[ok], v=pars[ok,"v",drop=FALSE], b=pars[ok,"b",drop=FALSE],
                         A=pars[ok,"A",drop=FALSE], t0=pars[ok,"t0",drop=FALSE],
-                        sv=pars[ok,"sv",drop=FALSE], k=pars[ok,"k",drop=FALSE])
+                        sv=pars[ok,"sv",drop=FALSE], lambda=pars[ok,"lambda",drop=FALSE])
   }
   out
 }
@@ -424,7 +424,7 @@ pRDMSWTN <- function(rt, pars) {
   ok <- rt > pars[,"t0",drop=FALSE] & !pars[,"v",drop=FALSE] < 0
   ok[is.na(ok)] <- FALSE
   if (any(ok)) {
-    if (!("k" %in% colnames(pars))) pars <- cbind(pars, k=0)
+    if (!("lambda" %in% colnames(pars))) stop("RDMSWTN requires parameter column 'lambda'.")
     if (any(dimnames(pars)[[2]] == "s")) {
       pars_ok <- pars[ok,,drop=FALSE]
       pars_ok[,c("A","b","v","sv")] <- pars_ok[,c("A","b","v","sv")] / pars_ok[,"s"]
@@ -432,19 +432,19 @@ pRDMSWTN <- function(rt, pars) {
     }
     out[ok] <- pSWTNspv(rt[ok], v=pars[ok,"v",drop=FALSE], b=pars[ok,"b",drop=FALSE],
                         A=pars[ok,"A",drop=FALSE], t0=pars[ok,"t0",drop=FALSE],
-                        sv=pars[ok,"sv",drop=FALSE], k=pars[ok,"k",drop=FALSE])
+                        sv=pars[ok,"sv",drop=FALSE], lambda=pars[ok,"lambda",drop=FALSE])
   }
   out
 }
 
-rRDMSWTN <- function(lR, pars, p_types=c("v","b","A","t0","sv","k"), ok=rep(TRUE, dim(pars)[1])) {
+rRDMSWTN <- function(lR, pars, p_types=c("v","b","A","t0","sv","lambda"), ok=rep(TRUE, dim(pars)[1])) {
   if (!is.null(attr(pars, "ok"))) ok <- attr(pars, "ok")
   if (is.null(dim(pars)) || (dim(pars)[1]==1 & length(lR)>1)) {
     original_names <- names(pars); if (is.null(original_names)) original_names <- colnames(pars)
     pars <- matrix(pars, nrow=length(lR), ncol=length(pars),
                    dimnames=list(NULL, original_names), byrow=TRUE)
   }
-  if (!("k" %in% colnames(pars))) pars <- cbind(pars, k=0)
+  if (!("lambda" %in% colnames(pars))) stop("RDMSWTN requires parameter column 'lambda'.")
   if (!all(p_types %in% dimnames(pars)[[2]]))
     stop("pars must have columns ", paste(p_types, collapse=" "))
   if (any(dimnames(pars)[[2]] == "s"))
@@ -457,7 +457,7 @@ rRDMSWTN <- function(lR, pars, p_types=c("v","b","A","t0","sv","k"), ok=rep(TRUE
   dt <- matrix(Inf, nrow=nr, ncol=nrow(pars)/nr)
   t0 <- pars[,"t0"]
   pars <- pars[ok,,drop=FALSE]
-  dt[ok] <- rSWTN(sum(ok), b=pars[,"b"], v=pars[,"v"], A=pars[,"A"], sv=pars[,"sv"], k=pars[,"k"])
+  dt[ok] <- rSWTN(sum(ok), b=pars[,"b"], v=pars[,"v"], A=pars[,"A"], sv=pars[,"sv"], k=pars[,"lambda"])
   bad_col <- apply(dt, 2, function(x) all(is.infinite(x)))
   R <- apply(dt, 2, which.min)
   pick <- cbind(R, 1:dim(dt)[2])

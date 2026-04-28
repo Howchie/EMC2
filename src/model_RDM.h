@@ -610,14 +610,14 @@ double pgbm(double t, double b, double mu, double sigma = 1.0, double A = 0.0,
 // c   = lower truncation for drift (default 0 for positive-drift assumption).
 // --------------------------------------------------------------------------
 inline double dswtn_core(double t_adj, double threshold, double mu_drift,
-                         double sv, double s, double k, double c,
+                         double sv, double s, double lambda, double c,
                          double log_prob_gt_c, bool log_out);
 
 inline Rcpp::List get_gl_nodes_weights(int n_gauss_nodes);
 
 // [[Rcpp::export]]
 double dswtn(double t_adj, double threshold, double mu_drift,
-             double sv, double s = 1.0, double k=0.0, double c = 0.0, bool log_out = false) {
+             double sv, double s = 1.0, double lambda=0.0, double c = 0.0, bool log_out = false) {
   if (t_adj <= 1e-10) return log_out ? R_NegInf : 0.0;
   if (threshold <= 1e-10) return log_out ? R_NegInf : 0.0;
   if (sv < 0.0) return R_NaN;
@@ -626,14 +626,14 @@ double dswtn(double t_adj, double threshold, double mu_drift,
   // sv == 0: reduces to standard Wald
   if (sv <= 1e-10) {
     if (mu_drift <= 1e-10) return log_out ? R_NegInf : 0.0;
-    return dwald(t_adj, threshold, mu_drift, s, 0.0, k, log_out);
+    return dwald(t_adj, threshold, mu_drift, s, 0.0, lambda, log_out);
   }
 
   // Normalisation P(xi > c) for xi ~ N(mu_drift, sv^2)
   const double log_prob_gt_c = pnorm_std((c - mu_drift) / sv, false, true);
   if (emc2_isinf(log_prob_gt_c) && log_prob_gt_c < 0.0) return log_out ? R_NegInf : 0.0;
 
-  return dswtn_core(t_adj, threshold, mu_drift, sv, s, k, c, log_prob_gt_c, log_out);
+  return dswtn_core(t_adj, threshold, mu_drift, sv, s, lambda, c, log_prob_gt_c, log_out);
 }
 
 // --------------------------------------------------------------------------
@@ -646,7 +646,7 @@ inline Rcpp::List get_gl_nodes_weights(int n_gauss_nodes) {
 }
 
 inline double dswtn_core(double t_adj, double threshold, double mu_drift,
-                         double sv, double s, double k, double c,
+                         double sv, double s, double lambda, double c,
                          double log_prob_gt_c, bool log_out) {
   const double v  = sv * sv;
   const double s2 = s * s;
@@ -665,13 +665,13 @@ inline double dswtn_core(double t_adj, double threshold, double mu_drift,
   const double term_log_int = pnorm_std((c - mu_new) / sigma_new, false, true);
 
   const double log_pdf = term_log_threshold + term_log_denom +
-                         (-log_prob_gt_c) + term_log_exp + term_log_int - k * t_adj;
+                         (-log_prob_gt_c) + term_log_exp + term_log_int - lambda * t_adj;
   if (ISNAN(log_pdf)) return log_out ? R_NegInf : 0.0;
   return log_out ? log_pdf : std::exp(log_pdf);
 }
 
 inline double pswtn_killed_quad(double t_adj, double threshold, double mu_drift,
-                                double sv, double s, double c, double k,
+                                double sv, double s, double c, double lambda,
                                 int n_gauss_nodes = 20) {
   const int n_nodes = std::max(1, n_gauss_nodes);
   Rcpp::List gl = get_gl_nodes_weights(n_nodes);
@@ -686,14 +686,14 @@ inline double pswtn_killed_quad(double t_adj, double threshold, double mu_drift,
     const double u = 0.5 * (gl_nodes[j] + 1.0);  // map [-1,1] -> [0,1]
     const double p = alpha + (1.0 - alpha) * u;
     const double drift_j = mu_drift + sv * R::qnorm(p, 0.0, 1.0, true, false);
-    integral += gl_weights[j] * pwald(t_adj, threshold, drift_j, s, 0.0, k, false);
+    integral += gl_weights[j] * pwald(t_adj, threshold, drift_j, s, 0.0, lambda, false);
   }
 
   return 0.5 * integral;
 }
 
 inline double pswtn_killed_inf_quad(double threshold, double mu_drift,
-                                    double sv, double s, double c, double k,
+                                    double sv, double s, double c, double lambda,
                                     int n_gauss_nodes = 20,
                                     bool log_out = false) {
   auto finish_log = [&](double log_p) {
@@ -704,12 +704,12 @@ inline double pswtn_killed_inf_quad(double threshold, double mu_drift,
   };
 
   if (threshold <= 1e-10) return log_out ? 0.0 : 1.0;
-  if (s <= 1e-10 || sv < 0.0 || k < 0.0) return NA_REAL;
+  if (s <= 1e-10 || sv < 0.0 || lambda < 0.0) return NA_REAL;
 
   const double s2 = s * s;
 
   if (sv <= 1e-10) {
-    const double nu = std::sqrt(mu_drift * mu_drift + 2.0 * s2 * k);
+    const double nu = std::sqrt(mu_drift * mu_drift + 2.0 * s2 * lambda);
     return finish_log(threshold * (mu_drift - nu) / s2);
   }
 
@@ -728,7 +728,7 @@ inline double pswtn_killed_inf_quad(double threshold, double mu_drift,
     p = std::fmax(0.0, std::fmin(std::nextafter(1.0, 0.0), p));
 
     const double drift_j = mu_drift + sv * R::qnorm(p, 0.0, 1.0, true, false);
-    const double nu_j = std::sqrt(drift_j * drift_j + 2.0 * s2 * k);
+    const double nu_j = std::sqrt(drift_j * drift_j + 2.0 * s2 * lambda);
     const double log_hit_j = threshold * (drift_j - nu_j) / s2;
 
     if (gl_weights[j] > 0.0) {
@@ -774,7 +774,7 @@ inline double log_uniform_threshold_hit(double eta, double b, double A) {
 }
 
 inline double prdmswtn_killed_inf_quad(double b, double mu_drift, double A,
-                                       double sv, double s, double c, double k,
+                                       double sv, double s, double c, double lambda,
                                        int n_gauss_nodes = 20,
                                        bool log_out = false) {
   auto finish_log = [&](double log_p) {
@@ -785,12 +785,12 @@ inline double prdmswtn_killed_inf_quad(double b, double mu_drift, double A,
   };
 
   if (b <= 1e-10) return log_out ? 0.0 : 1.0;
-  if (s <= 1e-10 || sv < 0.0 || A < 0.0 || k < 0.0) return NA_REAL;
+  if (s <= 1e-10 || sv < 0.0 || A < 0.0 || lambda < 0.0) return NA_REAL;
 
   const double s2 = s * s;
 
   if (sv <= 1e-10) {
-    const double nu = std::sqrt(mu_drift * mu_drift + 2.0 * s2 * k);
+    const double nu = std::sqrt(mu_drift * mu_drift + 2.0 * s2 * lambda);
     const double eta = (mu_drift - nu) / s2;
     return finish_log(log_uniform_threshold_hit(eta, b, A));
   }
@@ -810,7 +810,7 @@ inline double prdmswtn_killed_inf_quad(double b, double mu_drift, double A,
     p = std::fmax(0.0, std::fmin(std::nextafter(1.0, 0.0), p));
 
     const double drift_j = mu_drift + sv * R::qnorm(p, 0.0, 1.0, true, false);
-    const double nu_j = std::sqrt(drift_j * drift_j + 2.0 * s2 * k);
+    const double nu_j = std::sqrt(drift_j * drift_j + 2.0 * s2 * lambda);
     const double eta_j = (drift_j - nu_j) / s2;
     const double log_hit_j = log_uniform_threshold_hit(eta_j, b, A);
 
@@ -824,21 +824,21 @@ inline double prdmswtn_killed_inf_quad(double b, double mu_drift, double A,
 
 // [[Rcpp::export]]
 double pswtn(double t_adj, double threshold, double mu_drift,
-             double sv, double s = 1.0, double c = 0.0, double k = 0.0,bool log_out = false) {
+             double sv, double s = 1.0, double c = 0.0, double lambda = 0.0,bool log_out = false) {
   if (t_adj <= 1e-10) return log_out ? R_NegInf : 0.0;
   if (threshold <= 1e-10) return log_out ? 0.0 : 1.0;
   if (sv < 0.0) return R_NaN;
 
   if (sv <= 1e-10) {
     if (mu_drift <= 1e-10) return log_out ? R_NegInf : 0.0;
-    return pwald(t_adj, threshold, mu_drift, s, 0.0, k, log_out);
+    return pwald(t_adj, threshold, mu_drift, s, 0.0, lambda, log_out);
   }
 
-  if (k > 1e-10) {
+  if (lambda > 1e-10) {
     if (!emc2_isfinite(t_adj)) {
-      return pswtn_killed_inf_quad(threshold, mu_drift, sv, s, c, k, 20, log_out);
+      return pswtn_killed_inf_quad(threshold, mu_drift, sv, s, c, lambda, 20, log_out);
     }
-    const double cdf = pswtn_killed_quad(t_adj, threshold, mu_drift, sv, s, c, k, 20);
+    const double cdf = pswtn_killed_quad(t_adj, threshold, mu_drift, sv, s, c, lambda, 20);
     if (!(cdf > 0.0)) return log_out ? R_NegInf : 0.0;
     if (cdf >= 1.0) return log_out ? 0.0 : 1.0;
     return log_out ? std::log(cdf) : cdf;
@@ -900,7 +900,7 @@ double pswtn(double t_adj, double threshold, double mu_drift,
 // --------------------------------------------------------------------------
 // [[Rcpp::export]]
 double drdmswtn(double t_adj, double b, double mu_drift, double A,
-                double sv, double s = 1.0, double k = 0.0, double c = 0.0,
+                double sv, double s = 1.0, double lambda = 0.0, double c = 0.0,
                 int n_gauss_nodes = 20, bool log_out = false) {
   if (t_adj <= 1e-10) return log_out ? R_NegInf : 0.0;
   if (b <= 1e-7) return log_out ? R_NegInf : 0.0;
@@ -911,10 +911,10 @@ double drdmswtn(double t_adj, double b, double mu_drift, double A,
   if (no_sv) {
     // sv=0: standard Wald with start-point variability A (dwald handles A=0 internally)
     if (mu_drift <= 1e-10) return log_out ? R_NegInf : 0.0;
-    return dwald(t_adj, b, mu_drift, s, A, k, log_out);
+    return dwald(t_adj, b, mu_drift, s, A, lambda, log_out);
   } else if (no_A && !no_sv) {
     // SWTN with fixed threshold b
-    return dswtn(t_adj, b, mu_drift, sv, s, k, c, log_out);
+    return dswtn(t_adj, b, mu_drift, sv, s, lambda, c, log_out);
   } else {
     // Full model: integrate dswtn over threshold ~ Unif(b-A, b)
     const int n_nodes = std::max(1, n_gauss_nodes);
@@ -935,15 +935,15 @@ double drdmswtn(double t_adj, double b, double mu_drift, double A,
     }
     // Scale: GL on [-1,1]→[b-A,b] gives factor half_width; divide by A (uniform density)
     const double out_val_unkilled = integral * half_width / A;   // = integral * 0.5
-    const double out_val = out_val_unkilled * std::exp(-k * t_adj);
+    const double out_val = out_val_unkilled * std::exp(-lambda * t_adj);
     if (out_val < 0.0 || ISNAN(out_val)) return log_out ? R_NegInf : 0.0;
-    return log_out ? std::log(out_val_unkilled) - k * t_adj : out_val;
+    return log_out ? std::log(out_val_unkilled) - lambda * t_adj : out_val;
   }
 }
 
 // [[Rcpp::export]]
 double prdmswtn(double t_adj, double b, double mu_drift, double A,
-                double sv, double s = 1.0, double c = 0.0, double k = 0.0,
+                double sv, double s = 1.0, double c = 0.0, double lambda = 0.0,
                 int n_gauss_nodes = 20, bool log_out = false) {
   if (t_adj <= 1e-10) return log_out ? R_NegInf : 0.0;
   if (b <= 1e-7) return log_out ? 0.0 : 1.0;
@@ -951,16 +951,16 @@ double prdmswtn(double t_adj, double b, double mu_drift, double A,
   const bool no_A  = (A  < 1e-7);
   const bool no_sv = (sv < 1e-7);
 
-  if (!emc2_isfinite(t_adj) && k > 1e-10) {
-    return prdmswtn_killed_inf_quad(b, mu_drift, A, sv, s, c, k, n_gauss_nodes, log_out);
+  if (!emc2_isfinite(t_adj) && lambda > 1e-10) {
+    return prdmswtn_killed_inf_quad(b, mu_drift, A, sv, s, c, lambda, n_gauss_nodes, log_out);
   }
 
   if (no_sv) {
     // sv=0: standard Wald with start-point variability A (pwald handles A=0 internally)
     if (mu_drift <= 1e-7) return log_out ? R_NegInf : 0.0;
-    return pwald(t_adj, b, mu_drift, s, A, k, log_out);
+    return pwald(t_adj, b, mu_drift, s, A, lambda, log_out);
   } else if (no_A && !no_sv) {
-    return pswtn(t_adj, b, mu_drift, sv, s, c, k, log_out);
+    return pswtn(t_adj, b, mu_drift, sv, s, c, lambda, log_out);
   } else {
     const int n_nodes = std::max(1, n_gauss_nodes);
     Rcpp::List gl = get_gl_nodes_weights(n_nodes);
@@ -973,7 +973,7 @@ double prdmswtn(double t_adj, double b, double mu_drift, double A,
       const double u = 0.5 * (gl_nodes[j] + 1.0);
       const double p = alpha + (1.0 - alpha) * u;
       const double drift_j = mu_drift + sv * R::qnorm(p, 0.0, 1.0, true, false);
-      integral += gl_weights[j] * pwald(t_adj, b, drift_j, s, A, k, false);
+      integral += gl_weights[j] * pwald(t_adj, b, drift_j, s, A, lambda, false);
     }
     double out_val = 0.5 * integral;
     out_val = std::fmax(0.0, std::fmin(1.0, out_val));
@@ -988,7 +988,7 @@ double prdmswtn(double t_adj, double b, double mu_drift, double A,
 // [[Rcpp::export]]
 NumericVector dSWTNspv(NumericVector t, NumericVector v, NumericVector b,
                        NumericVector A, NumericVector t0, NumericVector sv,
-                       NumericVector s = 1.0, NumericVector c = 0.0, NumericVector k = 0.0,
+                       NumericVector s = 1.0, NumericVector c = 0.0, NumericVector lambda = 0.0,
                        int n_gauss_nodes = 20, bool log_out = false) {
   const int n = t.size();
   NumericVector pdf(n);
@@ -999,7 +999,7 @@ NumericVector dSWTNspv(NumericVector t, NumericVector v, NumericVector b,
     const double t_adj = t[i] - pick(t0, i);
     if (t_adj <= 0.0) { pdf[i] = log_out ? R_NegInf : 0.0; continue; }
     pdf[i] = drdmswtn(t_adj, pick(b, i), pick(v, i), pick(A, i),
-                      pick(sv, i), pick(s, i), pick(k, i), pick(c, i), n_gauss_nodes, log_out);
+                      pick(sv, i), pick(s, i), pick(lambda, i), pick(c, i), n_gauss_nodes, log_out);
   }
   return pdf;
 }
@@ -1007,7 +1007,7 @@ NumericVector dSWTNspv(NumericVector t, NumericVector v, NumericVector b,
 // [[Rcpp::export]]
 NumericVector pSWTNspv(NumericVector t, NumericVector v, NumericVector b,
                        NumericVector A, NumericVector t0, NumericVector sv,
-                       NumericVector s = 1.0, NumericVector c = 0.0, NumericVector k = 0.0,
+                       NumericVector s = 1.0, NumericVector c = 0.0, NumericVector lambda = 0.0,
                        int n_gauss_nodes = 20, bool log_out = false) {
   const int n = t.size();
   NumericVector cdf(n);
@@ -1018,7 +1018,7 @@ NumericVector pSWTNspv(NumericVector t, NumericVector v, NumericVector b,
     const double t_adj = t[i] - pick(t0, i);
     if (t_adj <= 0.0) { cdf[i] = log_out ? R_NegInf : 0.0; continue; }
     cdf[i] = prdmswtn(t_adj, pick(b, i), pick(v, i), pick(A, i),
-                      pick(sv, i), pick(s, i), pick(c, i), pick(k, i),n_gauss_nodes, log_out);
+                      pick(sv, i), pick(s, i), pick(c, i), pick(lambda, i),n_gauss_nodes, log_out);
   }
   return cdf;
 }
