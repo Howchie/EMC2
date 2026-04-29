@@ -230,6 +230,7 @@ LBA <- function(posdrift=TRUE){
     c_name = ifelse(posdrift,"LBA","LBAIO"),
     # p_vector transform, sets sv as a scaling parameter
     p_types=c("v" = 1,"sv" = log(1),"B" = log(1),"A" = log(0),"t0" = log(0), "pContaminant"=qnorm(0)),
+    p_types_canonical = c("v", "sv", "B", "A", "t0"),
     transform=list(func=c(v = "identity",sv = "exp", B = "exp", A = "exp",t0 = "exp",pContaminant="pnorm")),
     bound=list(minmax=cbind(v=c(-Inf,Inf),sv = c(0, Inf), A=c(1e-4,Inf),B=c(1e-4,Inf),t0=c(0.05,Inf),pContaminant=c(0.001,0.999)),
                exception=c(A=0,pContaminant=0)),
@@ -296,6 +297,7 @@ RedundantTargetLBA <- function(posdrift = TRUE){
     type = "RACE",
     c_name = paste0("LBA_RedundantTarget", ifelse(posdrift, "", "IO")),
     p_types = c("v" = 1, "sv" = log(1), "B" = log(1), "A" = log(0), "t0" = log(0), "pContaminant" = qnorm(0)),
+    p_types_canonical = c("v", "sv", "B", "A", "t0"),
     transform = list(func = c(v = "identity", sv = "exp", B = "exp", A = "exp", t0 = "exp", pContaminant = "pnorm")),
     bound = list(
       minmax = cbind(v = c(-Inf, Inf), sv = c(0, Inf), A = c(1e-4, Inf), B = c(1e-4, Inf), t0 = c(0.05, Inf), pContaminant = c(0.001, 0.999)),
@@ -365,7 +367,10 @@ rBAwL <- function(lR, pars, ok = rep(TRUE, length(lR)),
   # If guessing or global omission, drawn ONE kill process per trial
   if (guess || global) {
     n_trials <- nrow(pars)/nr
-    lambda_trials <- matrix(pars[,"lambda"], nrow=nr)[1,]
+    lambda_mat <- matrix(pars[,"lambda"], nrow=nr)
+    if (global && any(apply(lambda_mat, 2, function(x) length(unique(x)) > 1)))
+      stop("global=TRUE requires lambda to be constant across accumulators (lambda must not vary by any accumulator-level factor)")
+    lambda_trials <- lambda_mat[1,]
     tk <- rexp(n_trials, rate=lambda_trials)
     if (erlang >= 2L) tk <- tk + rexp(n_trials, rate=lambda_trials)
     pars[,"lambda"] <- 0
@@ -456,6 +461,7 @@ BAwL <- function(posdrift = TRUE, erlang = 1L, guess = FALSE, global = FALSE) {
     c_name = paste0(ifelse(posdrift, "BAwL", "BAwLIO"), if (erlang >= 2L) "_E2" else "", if (guess) "_GUESS" else "", if (global) "_GLOBAL" else ""),
     p_types = c("v"  = 1, "sv" = log(1), "B" = log(1), "A" = log(0),
                 "t0" = log(0), "k" = log(0), "lambda" = log(0), "pContaminant" = qnorm(0)),
+    p_types_canonical = c("v", "sv", "B", "A", "t0", "k"),
     transform = list(func = c(v = "identity", sv = "exp", B = "exp",
                               A = "exp", t0 = "exp", k = "exp", lambda = "exp",
                               pContaminant = "pnorm")),

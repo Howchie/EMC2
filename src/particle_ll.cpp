@@ -2646,9 +2646,10 @@ double gsl_f_race_scalar(double t, void* p) {
     if (j == w) continue;
     if (!P->isok[j]) return 0.0;
     const double* par_j = P->pars + static_cast<size_t>(j) * P->n_par;
-    const double cdf = P->cdf1(t, par_j, P->ctx);
-    if (!(cdf > 0.0)) continue;
-    if (cdf >= 1.0 || !emc2_isfinite(cdf)) return 0.0;
+    const double cdf_raw = P->cdf1(t, par_j, P->ctx);
+    if (!R_FINITE(cdf_raw)) return 0.0;
+    if (!(cdf_raw > 0.0)) continue;  // S_j(t)=1, skip multiply
+    const double cdf = cdf_raw >= 1.0 ? 1.0 - 1e-15 : cdf_raw;
     out *= (1.0 - cdf);
     if (!(out > 0.0) || !emc2_isfinite(out)) return 0.0;
   }

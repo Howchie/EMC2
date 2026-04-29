@@ -90,6 +90,7 @@ LNR <- function() {
     type="RACE",
     c_name = "LNR",
     p_types=c("m" = 1,"s" = log(1),"t0" = log(0), "pContaminant"=qnorm(0)),
+    p_types_canonical = c("m", "s", "t0"),
     transform=list(func=c(m = "identity",s = "exp", t0 = "exp", pContaminant="pnorm")),
     bound=list(minmax=cbind(m=c(-Inf,Inf),s = c(0, Inf), t0=c(0.05,Inf)),pContaminant=c(0.001,0.999)),
     # Trial dependent parameter transform

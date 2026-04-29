@@ -162,7 +162,10 @@ design <- function(formula = NULL,factors = NULL,Rlevels = NULL,model,data=NULL,
   if (!all(sort(names(model()$p_types)) %in% sort(nams)) & is.null(custom_p_vector)){
     p_types <- model()$p_types
     not_specified <- sort(names(p_types))[!sort(names(p_types)) %in% sort(nams)]
-    message(paste0("Parameter(s) ", paste0(not_specified, collapse = ", "), " not specified in formula and assumed constant."))
+    canonical <- model()$p_types_canonical
+    warn_pars <- if (!is.null(canonical)) intersect(not_specified, canonical) else not_specified
+    if (length(warn_pars) > 0)
+      message(paste0("Parameter(s) ", paste0(warn_pars, collapse = ", "), " not specified in formula and assumed constant."))
     additional_constants <- p_types[not_specified]
     names(additional_constants) <- not_specified
     constants <- c(constants, additional_constants[!names(additional_constants) %in% names(constants)])

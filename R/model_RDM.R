@@ -178,6 +178,7 @@ RDM <- function(){
     type="RACE",
     c_name = "RDM",
     p_types=c("v" = log(1),"B" = log(1),"A" = log(0),"t0" = log(0),"s" = log(1), "pContaminant"=qnorm(0)),
+    p_types_canonical = c("v", "B", "A", "t0", "s"),
     transform=list(func=c(v = "exp", B = "exp", A = "exp",t0 = "exp", s = "exp",pContaminant="pnorm")),
     bound=list(minmax=cbind(v=c(1e-3,Inf), B=c(0,Inf), A=c(1e-4,Inf),t0=c(0.05,Inf), s=c(0,Inf),pContaminant=c(0.001,0.999)),
                exception=c(A=0, v=0,pContaminant=0)),
@@ -306,6 +307,7 @@ RDMGBM <- function() {
     c_name = "RDMGBM",
     p_types = c("v"=log(1), "B"=log(1), "A"=log(0), "t0"=log(0),
                 "s"=log(1), "pContaminant"=qnorm(0)),
+    p_types_canonical = c("v", "B", "A", "t0", "s"),
     transform = list(func = c(v="exp", B="exp", A="exp", t0="exp",
                                s="exp", pContaminant="pnorm")),
     bound = list(
@@ -371,6 +373,7 @@ RDMSWTN <- function(erlang = 1L, guess = FALSE, global = FALSE){
     c_name = paste0(if (erlang >= 2L) "RDMSWTN_E2" else "RDMSWTN", if (guess) "_GUESS" else "", if (global) "_GLOBAL" else ""),
     p_types=c("v"=log(1), "B"=log(1), "A"=log(0), "t0"=log(0),
               "s"=log(1), "sv"=log(0), "lambda"=log(0), "pContaminant"=qnorm(0)),
+    p_types_canonical = c("v", "B", "A", "t0", "s", "sv"),
     transform=list(func=c(v="exp", B="exp", A="exp", t0="exp",
                           s="exp", sv="exp", lambda="exp", pContaminant="pnorm")),
     bound=list(minmax=cbind(v=c(1e-3,Inf), B=c(0,Inf), A=c(0,Inf),
@@ -461,8 +464,10 @@ rRDMSWTN <- function(lR, pars, p_types=c("v","b","A","t0","sv","lambda"),
   # If guessing or global omission, drawn ONE kill process per trial
   if (guess || global) {
     n_trials <- nrow(pars)/nr
-    # lambda is constant across accumulators for a trial in RDMSWTN
-    lambda_trials <- matrix(pars[,"lambda"], nrow=nr)[1,]
+    lambda_mat <- matrix(pars[,"lambda"], nrow=nr)
+    if (global && any(apply(lambda_mat, 2, function(x) length(unique(x)) > 1)))
+      stop("global=TRUE requires lambda to be constant across accumulators (lambda must not vary by any accumulator-level factor)")
+    lambda_trials <- lambda_mat[1,]
     tk <- rexp(n_trials, rate=lambda_trials)
     if (erlang >= 2L) tk <- tk + rexp(n_trials, rate=lambda_trials)
     # Simulator rSWTN without killing (k=0)
