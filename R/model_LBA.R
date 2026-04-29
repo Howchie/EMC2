@@ -356,14 +356,14 @@ pBAwL <- function(rt, pars, posdrift = TRUE, erlang = 1L) {
 
 rBAwL <- function(lR, pars, ok = rep(TRUE, length(lR)),
                   p_types = c("v", "sv", "b", "A", "t0", "k", "lambda"),
-                  posdrift = TRUE, eps = 1e-10, erlang = 1L, guess = FALSE) {
+                  posdrift = TRUE, eps = 1e-10, erlang = 1L, guess = FALSE, global = FALSE) {
   bad  <- rep(NA, length(lR) / length(levels(lR)))
   out  <- data.frame(R = bad, rt = bad)
   nr   <- length(levels(lR))
   dt   <- matrix(Inf, nrow = nr, ncol = nrow(pars) / nr)
   t0   <- pars[, "t0"]
-  # If guessing, drawn ONE kill process per trial
-  if (guess) {
+  # If guessing or global omission, drawn ONE kill process per trial
+  if (guess || global) {
     n_trials <- nrow(pars)/nr
     lambda_trials <- matrix(pars[,"lambda"], nrow=nr)[1,]
     tk <- rexp(n_trials, rate=lambda_trials)
@@ -390,13 +390,13 @@ rBAwL <- function(lR, pars, ok = rep(TRUE, length(lR)),
     dt[big_k]  <- (-1 / pars[big_k, "k"]) * log(ratio)
   }
   dt[dt < 0] <- Inf
-  if (!guess) {
+  if (!guess && !global) {
     lam_pos <- pars[, "lambda"] > 0
     tk <- ifelse(lam_pos, rexp(nrow(pars), pars[, "lambda"]), Inf)
     if (erlang >= 2L && any(lam_pos))
       tk[lam_pos] <- tk[lam_pos] + rexp(sum(lam_pos), pars[lam_pos, "lambda"])
     dt <- ifelse(dt < tk, dt, Inf)
-  } else {
+  } else if (guess) {
     # Response is a guess if tk < any(dt)
     is_guess <- tk < apply(dt, 2, min)
     if (any(is_guess)) {
@@ -411,6 +411,12 @@ rBAwL <- function(lR, pars, ok = rep(TRUE, length(lR)),
           dt[winner_acc, trial_idx] <- tk[trial_idx]
         }
       }
+    }
+  } else if (global) {
+    # Response is killed (omission) if tk < any(dt)
+    is_killed <- tk < apply(dt, 2, min)
+    if (any(is_killed)) {
+      dt[, is_killed] <- Inf
     }
   }
   bad_col <- apply(dt, 2, function(x) all(is.infinite(x)))
@@ -438,11 +444,16 @@ rBAwL <- function(lR, pars, ok = rep(TRUE, length(lR)),
 #' * k: leak rate (log scale, [0, Inf); default log(0) = effectively 0).
 #' * lambda: killing/expiry rate (log scale, [0, Inf); default log(0) = 0).
 #'
+#' @param posdrift logical, if TRUE drifts are truncated to be positive.
+#' @param erlang integer shape of the killing process (1=exponential, 2=Erlang-2)
+#' @param guess logical, if TRUE killing produces guesses (random responses)
+#' @param global logical, if TRUE killing process is global to the race (one clock per trial)
+#'
 #' @export
-BAwL <- function(posdrift = TRUE, erlang = 1L, guess = FALSE) {
+BAwL <- function(posdrift = TRUE, erlang = 1L, guess = FALSE, global = FALSE) {
   list(
     type   = "RACE",
-    c_name = paste0(ifelse(posdrift, "BAwL", "BAwLIO"), if (erlang >= 2L) "_E2" else "", if (guess) "_GUESS" else ""),
+    c_name = paste0(ifelse(posdrift, "BAwL", "BAwLIO"), if (erlang >= 2L) "_E2" else "", if (guess) "_GUESS" else "", if (global) "_GLOBAL" else ""),
     p_types = c("v"  = 1, "sv" = log(1), "B" = log(1), "A" = log(0),
                 "t0" = log(0), "k" = log(0), "lambda" = log(0), "pContaminant" = qnorm(0)),
     transform = list(func = c(v = "identity", sv = "exp", B = "exp",
@@ -458,9 +469,9 @@ BAwL <- function(posdrift = TRUE, erlang = 1L, guess = FALSE) {
       cbind(pars, b = pars[, "B"] + pars[, "A"])
     },
     rfun = if (posdrift)
-             function(data, pars) rBAwL(data$lR, pars, ok = attr(pars, "ok"), posdrift = TRUE,  erlang = erlang, guess = guess)
+             function(data, pars) rBAwL(data$lR, pars, ok = attr(pars, "ok"), posdrift = TRUE,  erlang = erlang, guess = guess, global = global)
            else
-             function(data, pars) rBAwL(data$lR, pars, ok = attr(pars, "ok"), posdrift = FALSE, erlang = erlang, guess = guess),
+             function(data, pars) rBAwL(data$lR, pars, ok = attr(pars, "ok"), posdrift = FALSE, erlang = erlang, guess = guess, global = global),
     dfun = if (posdrift)
              function(rt, pars) dBAwL(rt, pars, posdrift = TRUE,  erlang = erlang)
            else

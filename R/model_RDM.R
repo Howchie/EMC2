@@ -357,14 +357,18 @@ RDMGBM <- function() {
 #' | *sv*      | log       | \[0, Inf\]      | log(0)  | Between-trial SD of drift rate         |
 #' | *lambda*  | log       | \[0, Inf\]      | log(0)  | Exponential killing rate               |
 #' 
+#' @param erlang integer shape of the killing process (1=exponential, 2=Erlang-2)
+#' @param guess logical, if TRUE killing produces guesses (random responses)
+#' @param global logical, if TRUE killing process is global to the race (one clock per trial)
+#' 
 #' @return a list of parameters
 #' 
 #' @export
 #' 
-RDMSWTN <- function(erlang = 1L, guess = FALSE){
+RDMSWTN <- function(erlang = 1L, guess = FALSE, global = FALSE){
   list(
     type="RACE",
-    c_name = paste0(if (erlang >= 2L) "RDMSWTN_E2" else "RDMSWTN", if (guess) "_GUESS" else ""),
+    c_name = paste0(if (erlang >= 2L) "RDMSWTN_E2" else "RDMSWTN", if (guess) "_GUESS" else "", if (global) "_GLOBAL" else ""),
     p_types=c("v"=log(1), "B"=log(1), "A"=log(0), "t0"=log(0),
               "s"=log(1), "sv"=log(0), "lambda"=log(0), "pContaminant"=qnorm(0)),
     transform=list(func=c(v="exp", B="exp", A="exp", t0="exp",
@@ -377,7 +381,7 @@ RDMSWTN <- function(erlang = 1L, guess = FALSE){
       pars <- cbind(pars, b=pars[,"B"] + pars[,"A"])
       pars
     },
-    rfun=function(data=NULL, pars) rRDMSWTN(data$lR, pars, ok=attr(pars, "ok"), erlang=erlang, guess=guess),
+    rfun=function(data=NULL, pars) rRDMSWTN(data$lR, pars, ok=attr(pars, "ok"), erlang=erlang, guess=guess, global=global),
     dfun=function(rt, pars) dRDMSWTN(rt, pars, erlang=erlang),
     pfun=function(rt, pars) pRDMSWTN(rt, pars, erlang=erlang),
     log_likelihood=function(pars, dadm, model, min_ll=log(1e-10)){
@@ -435,7 +439,7 @@ pRDMSWTN <- function(rt, pars, erlang = 1L) {
 }
 
 rRDMSWTN <- function(lR, pars, p_types=c("v","b","A","t0","sv","lambda"),
-                     ok=rep(TRUE, dim(pars)[1]), erlang=1L, guess=FALSE) {
+                     ok=rep(TRUE, dim(pars)[1]), erlang=1L, guess=FALSE, global=FALSE) {
   if (!is.null(attr(pars, "ok"))) ok <- attr(pars, "ok")
   if (is.null(dim(pars)) || (dim(pars)[1]==1 & length(lR)>1)) {
     original_names <- names(pars); if (is.null(original_names)) original_names <- colnames(pars)
@@ -454,8 +458,8 @@ rRDMSWTN <- function(lR, pars, p_types=c("v","b","A","t0","sv","lambda"),
   nr <- length(levels(lR))
   dt <- matrix(Inf, nrow=nr, ncol=nrow(pars)/nr)
   t0 <- pars[,"t0"]
-  # If guessing, drawn ONE kill process per trial
-  if (guess) {
+  # If guessing or global omission, drawn ONE kill process per trial
+  if (guess || global) {
     n_trials <- nrow(pars)/nr
     # lambda is constant across accumulators for a trial in RDMSWTN
     lambda_trials <- matrix(pars[,"lambda"], nrow=nr)[1,]
@@ -483,6 +487,12 @@ rRDMSWTN <- function(lR, pars, p_types=c("v","b","A","t0","sv","lambda"),
           dt[winner_acc, trial_idx] <- tk[trial_idx]
         }
       }
+    }
+  } else if (global) {
+    # Response is killed (omission) if tk < any(dt)
+    is_killed <- tk < apply(dt, 2, min)
+    if (any(is_killed)) {
+      dt[, is_killed] <- Inf
     }
   }
 

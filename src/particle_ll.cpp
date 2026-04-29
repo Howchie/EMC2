@@ -329,6 +329,8 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
   out.ctx.gng = false;
   out.ctx.kill_shape = (type_std.find("_E2") != std::string::npos) ? 2 : 1;
   out.ctx.erlang_is_guess = (type_std.find("_GUESS") != std::string::npos);
+  out.ctx.erlang_is_global_omission = (type_std.find("_GLOBAL") != std::string::npos);
+  if (out.ctx.erlang_is_global_omission) out.ctx.defective_upper_tail = true;
 
   if (type_std.find("RDMSWTN") != std::string::npos) {
     // Must be checked before "RDM" since "RDMSWTN" contains "RDM"
@@ -338,6 +340,8 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
     out.model_pfun_raw = &prdmswtn_raw;
     out.logS_at_t_ptr  = &rdmswtn_logS_at_t;
     out.ctx.t0_index   = 3;
+    out.ctx.lambda_index = 6;
+    out.ctx.defective_upper_tail = true;
   } else if (type_std.find("GBM") != std::string::npos) {
     // Must be checked before "RDM" since "RDMGBM" contains "RDM"
     out.pdf1_ptr       = &drdmgbm_scalar;
@@ -353,6 +357,7 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
     out.model_pfun_raw = &pbawl_raw;
     out.logS_at_t_ptr  = &bawl_logS_at_t;
     out.ctx.t0_index   = 4;
+    out.ctx.lambda_index = 6;
     // Leaky ballistic accumulators can have defective upper tails (never-finish
     // mass) even when posdrift=TRUE.
     out.ctx.defective_upper_tail = true;
@@ -2167,7 +2172,7 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
       winner_int_buf.resize(n_trials);
       loser_int_buf.resize(n_trials);
       isok_int_fp.resize(n_trials);
-      const bool has_guess = (time_code != -1 || adapter.ctx.erlang_is_guess);
+      const bool has_guess = (time_code != -1 || adapter.ctx.erlang_is_guess || adapter.ctx.erlang_is_global_omission);
       if (has_guess) {
         time_win_int_buf.assign(n_trials, 0);
         alt_res_buf_fp.resize(n_trials);
@@ -2343,8 +2348,8 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
           adapter.model_pfun_raw(rt_ptr, pars_cm, n_trials,
                                  winner_int_buf.data(), isok_int_fp.data(),
                                  alt_res_buf_fp.data(), min_ll, &adapter.ctx);
-        } else if (adapter.ctx.erlang_is_guess) {
-          // Manually compute f_K(t) and S_K(t) for Erlang guess, and get S_W.
+        } else if (adapter.ctx.erlang_is_guess || adapter.ctx.erlang_is_global_omission) {
+          // Manually compute f_K(t) and S_K(t) for Erlang guess/omission, and get S_W.
           // Lambda index: RDM=6, BAwL=6.
           const int lambda_col = (type_std.find("RDM") != std::string::npos) ? 6 : 6;
           const double* lambda_ptr = pars_cm + lambda_col * n_trials;
@@ -2353,17 +2358,14 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
             const double tt = rt_ptr[j] - pars_cm[adapter.ctx.t0_index * n_trials + j];
             if (tt <= 0.0) { alt_res_buf_fp[j] = min_ll; continue; }
             const double lam = lambda_ptr[j];
-            if (winner_int_buf[j]) { // We use alt_res_buf to store both f_K (in guess slots) and S_K (in winner slots)
+            if (winner_int_buf[j] || adapter.ctx.erlang_is_global_omission) {
+               // For winner slots (guess) or all slots (omission), store log S_K
                alt_res_buf_fp[j] = erlang_log_surv(tt, lam, adapter.ctx.kill_shape);
             } else {
+               // For guess model, store log f_K in non-winner slots (to be used as guess density)
                alt_res_buf_fp[j] = erlang_log_pdf(tt, lam, adapter.ctx.kill_shape);
             }
           }
-          // Also need S_W (survival of evidence race). We reuse res_buf which already has log-survivors for losers.
-          // But we need the winner's unkilled log-survivor too.
-          // We'll write S_W temporarily into alt_res_buf_fp's guess slots (which currently have log f_K).
-          // Wait, logic in summation loop uses alt_res_buf_fp[base + idx_T] for f_T and alt_res_buf_fp[base + idx_W] for S_W.
-          // So I should put log f_K into a virtual 'time' slot and log S_K into a winner slot.
         }
 
         // Sum n_lR rows per unique trial; apply pC correction (no-op when pC=0).
@@ -2373,7 +2375,13 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
           const int n_lR_j = has_RACE_col_fp ? RACE_fp[base] : n_lR;
           for (int k = 0; k < n_lR_j; ++k) s += res_buf[base + k];
 
-          if (adapter.ctx.erlang_is_guess && n_resp_fp[j] > 0) {
+          if (adapter.ctx.erlang_is_global_omission) {
+            int idx_W = -1;
+            for (int k = 0; k < n_lR_j; ++k) { if (winner_int_buf[base + k]) { idx_W = k; break; } }
+            if (idx_W != -1) {
+              s += alt_res_buf_fp[base + idx_W]; // alt_res_buf_fp[base+idx_W] is log S_K
+            }
+          } else if (adapter.ctx.erlang_is_guess && n_resp_fp[j] > 0) {
             // Find winner index
             int idx_W = -1;
             for (int k = 0; k < n_lR_j; ++k) { if (winner_int_buf[base + k]) { idx_W = k; break; } }
@@ -4228,6 +4236,7 @@ double c_log_likelihood_race(
     Rcpp::stop("c_log_likelihood_race: isok size does not match pars matrix rows.");
   }
   const int n_par = pars.ncol();
+  const Rcpp::IntegerVector lR_code_all(static_cast<SEXP>(dadm["lR"]));
   std::vector<double> pars_rowmajor_buffer(static_cast<size_t>(n_lR) * n_par);
   std::vector<int> isok_int_buffer(static_cast<size_t>(n_lR), 0);
   std::vector<double> logS_k_buffer(static_cast<size_t>(n_lR), R_NegInf);
@@ -4357,10 +4366,55 @@ double c_log_likelihood_race(
   // Used by the "other trials" path for analytical survivor calls — avoids the
   // row-major copy that fill_trial_buffers performs.
   auto log_surv_cm = [&](double t, int start_row_idx, int n_lR_j) -> double {
+    auto* race_ctx = static_cast<ContextForRaceModels*>(model_context_for_funcs);
     if (t == R_PosInf) {
-      auto* race_ctx = static_cast<ContextForRaceModels*>(model_context_for_funcs);
       // Proper race models have S(Inf)=0 => log S(Inf) = -Inf.
       // Defective-tail models (e.g., LBAIO / BAwL) retain mass at +Inf.
+      if (race_ctx && race_ctx->erlang_is_global_omission) {
+        // Global omission probability: Integral f_K(u) * S_race(u) du on [0, Inf).
+        // Use Gauss-Legendre quadrature (20 nodes) with mapping u -> t = -1/lam * log(1-u).
+        const double* lambda_ptr = pars_cm_ptr + 6 * n_trials;
+        const double lam = lambda_ptr[start_row_idx];
+        if (lam <= 0.0) return R_NegInf;
+        const int n_nodes = 20;
+        Rcpp::List gl = get_gl_nodes_weights(n_nodes);
+        const Rcpp::NumericVector gl_nodes = gl[0];
+        const Rcpp::NumericVector gl_weights = gl[1];
+        double prob = 0.0;
+        for (int j = 0; j < n_nodes; ++j) {
+          const double u = 0.5 * (gl_nodes[j] + 1.0);
+          const double tt = -std::log(1.0 - u) / lam;
+          // Calculate S_race(tt)
+          double logS_race_tt = 0.0;
+          double par_buf[16];
+          bool bad_tt = false;
+          for (int acc = 0; acc < n_lR_j; ++acc) {
+            const int row = start_row_idx + acc;
+            if (!isok[row]) { bad_tt = true; break; }
+            for (int c = 0; c < n_par; ++c)
+              par_buf[c] = pars_cm_ptr[static_cast<size_t>(c) * n_trials + row];
+            double Fk = cdf1(tt, par_buf, model_context_for_funcs);
+            Fk = clamp_cdf01_race(Fk);
+            const double ll = safe_log1m_race(Fk);
+            if (!R_FINITE(ll)) { bad_tt = true; break; }
+            logS_race_tt += ll;
+          }
+          if (bad_tt) continue;
+          double sk_jac;
+          if (race_ctx->kill_shape >= 2) {
+            // Erlang-2: d_K(t) = lam^2 * t * exp(-lam * t)
+            // Jac: dt/du = 1 / (lam * (1-u))
+            // f_K(t) * Jac = lam * t = -log(1-u)
+            sk_jac = -std::log(1.0 - u);
+          } else {
+            // Exponential: d_K(t) = lam * exp(-lam * t)
+            // f_K(t) * Jac = 1
+            sk_jac = 1.0;
+          }
+          prob += 0.5 * gl_weights[j] * std::exp(logS_race_tt) * sk_jac;
+        }
+        return (prob > 0.0) ? std::log(prob) : R_NegInf;
+      }
       if (race_ctx && race_ctx->defective_upper_tail) {
         double log_p = 0.0;
         double par_buf_inf[16];
@@ -4392,6 +4446,14 @@ double c_log_likelihood_race(
       const double ll = safe_log1m_race(Fk);
       if (!R_FINITE(ll)) return R_NegInf;
       logS += ll;
+    }
+    if (race_ctx && race_ctx->erlang_is_global_omission) {
+      const double* lambda_ptr = pars_cm_ptr + 6 * n_trials;
+      const double* t0_ptr = pars_cm_ptr + race_ctx->t0_index * n_trials;
+      const double tt = t - t0_ptr[start_row_idx];
+      if (tt > 0.0) {
+        logS += erlang_log_surv(tt, lambda_ptr[start_row_idx], race_ctx->kill_shape);
+      }
     }
     return logS;
   };
@@ -4623,6 +4685,7 @@ double c_log_likelihood_race(
           ? i : finite_rt_unique_trial_indices[static_cast<size_t>(i)];
       const int start_row_idx = unique_trial_idx * n_lR;
       n_lR_j = has_RACE_col ? RACE[start_row_idx] : n_lR;
+      const double rt_j = rts_dadm[start_row_idx];
       log_Z_this = 0.0;
 
       if (may_need_ct) {
@@ -4666,6 +4729,35 @@ double c_log_likelihood_race(
                 alt_lds_ptr[start_row_idx + idx_T] + alt_lds_ptr[start_row_idx + idx_W];
               current_trial_ll_sum = log_sum_exp(current_trial_ll_sum, s_T - std::log(n_resp_ptr[unique_trial_idx]));
             }
+          } else if (ctx && ctx->erlang_is_global_omission) {
+            const double tt = rt_j - pars(start_row_idx, ctx->t0_index);
+            if (tt > 0.0) {
+              const double lam = pars(start_row_idx, ctx->lambda_index);
+              current_trial_ll_sum += erlang_log_surv(tt, lam, ctx->kill_shape);
+            }
+          } else if (ctx && ctx->erlang_is_guess) {
+            int n_resp_j = 0;
+            int idx_W = -1;
+            for (int k = 0; k < n_lR_j; ++k) {
+              if (idx_win_ptr[start_row_idx + k]) idx_W = k;
+              if (lR_code_all[start_row_idx + k] != nogo_code) n_resp_j++;
+            }
+            if (idx_W != -1 && n_resp_j > 0) {
+              const double tt = rt_j - pars(start_row_idx, ctx->t0_index);
+              if (tt > 0.0) {
+                const double lam = pars(start_row_idx, ctx->lambda_index);
+                const double log_sk = erlang_log_surv(tt, lam, ctx->kill_shape);
+                const double log_fk = erlang_log_pdf(tt, lam, ctx->kill_shape);
+                // current_trial_ll_sum is log(g_i * S_others)
+                // log_si = log(S_i)
+                double par_buf[16];
+                for(int c=0; c<n_par; ++c) par_buf[c] = pars(start_row_idx + idx_W, c);
+                const double log_si = std::log1p(-clamp_cdf01_race(cdf1(tt, par_buf, ctx)));
+                double s_race = current_trial_ll_sum - lds_ptr[start_row_idx + idx_W] + log_si;
+                double s_guess = log_fk + s_race - std::log(n_resp_j);
+                current_trial_ll_sum = log_sum_exp(current_trial_ll_sum + log_sk, s_guess);
+              }
+            }
           }
           if (NumericVector::is_na(log_Z_this) || !R_FINITE(log_Z_this)) {
             ll_unique[unique_trial_idx] = min_ll;
@@ -4692,6 +4784,33 @@ double c_log_likelihood_race(
           double s_T = current_trial_ll_sum - lds_ptr[start_row_idx + idx_W] - lds_ptr[start_row_idx + idx_T] +
             alt_lds_ptr[start_row_idx + idx_T] + alt_lds_ptr[start_row_idx + idx_W];
           current_trial_ll_sum = log_sum_exp(current_trial_ll_sum, s_T - std::log(n_resp_ptr[unique_trial_idx]));
+        }
+      } else if (ctx && ctx->erlang_is_global_omission) {
+        const double tt = rt_j - pars(start_row_idx, ctx->t0_index);
+        if (tt > 0.0) {
+          const double lam = pars(start_row_idx, ctx->lambda_index);
+          current_trial_ll_sum += erlang_log_surv(tt, lam, ctx->kill_shape);
+        }
+      } else if (ctx && ctx->erlang_is_guess) {
+        int n_resp_j = 0;
+        int idx_W = -1;
+        for (int k = 0; k < n_lR_j; ++k) {
+          if (idx_win_ptr[start_row_idx + k]) idx_W = k;
+          if (lR_code_all[start_row_idx + k] != nogo_code) n_resp_j++;
+        }
+        if (idx_W != -1 && n_resp_j > 0) {
+          const double tt = rt_j - pars(start_row_idx, ctx->t0_index);
+          if (tt > 0.0) {
+            const double lam = pars(start_row_idx, ctx->lambda_index);
+            const double log_sk = erlang_log_surv(tt, lam, ctx->kill_shape);
+            const double log_fk = erlang_log_pdf(tt, lam, ctx->kill_shape);
+            double par_buf[16];
+            for(int c=0; c<n_par; ++c) par_buf[c] = pars(start_row_idx + idx_W, c);
+            const double log_si = std::log1p(-clamp_cdf01_race(cdf1(tt, par_buf, ctx)));
+            double s_race = current_trial_ll_sum - lds_ptr[start_row_idx + idx_W] + log_si;
+            double s_guess = log_fk + s_race - std::log(n_resp_j);
+            current_trial_ll_sum = log_sum_exp(current_trial_ll_sum + log_sk, s_guess);
+          }
         }
       }
       ll_unique[unique_trial_idx] = std::max(min_ll, current_trial_ll_sum);
