@@ -312,8 +312,13 @@ rRDMGBM <- function(lR, pars, p_types = c("v", "b", "A", "t0", "s", "lambda"),
     if (global && any(apply(lambda_mat, 2, function(x) length(unique(x)) > 1)))
       stop("global=TRUE requires lambda to be constant across accumulators")
     lambda_trials <- lambda_mat[1, ]
-    tk <- rexp(n_trials, rate = lambda_trials)
-    if (erlang >= 2L) tk <- tk + rexp(n_trials, rate = lambda_trials)
+    tk <- rep(Inf, n_trials)
+    kill_ok <- !is.na(lambda_trials) & lambda_trials > 0
+    if (any(kill_ok)) {
+      tk[kill_ok] <- rexp(sum(kill_ok), rate = lambda_trials[kill_ok])
+      if (erlang >= 2L)
+        tk[kill_ok] <- tk[kill_ok] + rexp(sum(kill_ok), rate = lambda_trials[kill_ok])
+    }
     pars[, "lambda"] <- 0  # accumulators race without kill; kill applied post-hoc
   }
 

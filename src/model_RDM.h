@@ -10,6 +10,251 @@
 
 using namespace Rcpp;
 
+// --------------------------------------------------------------------------
+// Analytic helpers for SPV + Erlang-2 killed Wald CDF
+//
+// Computes:
+//   J(q) = ∫_lo^hi exp(q*x) Phi(a*x + c) dx
+//   K(q) = ∫_lo^hi x exp(q*x) Phi(a*x + c) dx
+//
+// Then:
+//   ∫ exp[eta*(b-x)] Phi(a*x+c) dx
+//     = exp(eta*b) J(-eta)
+//
+//   ∫ (b-x) exp[eta*(b-x)] Phi(a*x+c) dx
+//     = exp(eta*b) { b J(-eta) - K(-eta) }
+//
+// Assumes a > 0 and usually b > x_hi.
+// --------------------------------------------------------------------------
+
+inline signed_log slog_int_exp_pnorm(
+    double q, double a, double c,
+    double x_lo, double x_hi
+) {
+  if (x_hi <= x_lo) return make_signed_log(R_NegInf, 0);
+
+  const double y_lo = a * x_lo + c;
+  const double y_hi = a * x_hi + c;
+
+  // q = 0:
+  // ∫ Phi(a*x+c) dx = [y Phi(y) + phi(y)] / a
+  if (std::abs(q) <= FPM_EPSILON) {
+    auto G0 = [](double y) {
+      return y * R::pnorm(y, 0.0, 1.0, 1, 0) +
+             R::dnorm(y, 0.0, 1.0, 0);
+    };
+
+    const double val = (G0(y_hi) - G0(y_lo)) / a;
+    return signed_from_real(val);
+  }
+
+  const double r = q / a;
+  const double log_C = -q * c / a + 0.5 * r * r;
+
+  // Numerator:
+  // exp(q*x_hi) Phi(y_hi)
+  // - exp(q*x_lo) Phi(y_lo)
+  // - C [Phi(y_hi-r) - Phi(y_lo-r)]
+  signed_log num = make_signed_log(R_NegInf, 0);
+
+  const double log_A =
+    q * x_hi + pnorm_std(y_hi, true, true);
+  const double log_B =
+    q * x_lo + pnorm_std(y_lo, true, true);
+  const double log_D =
+    log_C + log_pnorm_diff(y_lo - r, y_hi - r);
+
+  num = signed_log_add(num, make_signed_log(log_A,  1));
+  num = signed_log_sub(num, make_signed_log(log_B,  1));
+
+  if (log_D != R_NegInf) {
+    num = signed_log_sub(num, make_signed_log(log_D, 1));
+  }
+
+  if (num.sign == 0 || num.log_abs == R_NegInf) {
+    return make_signed_log(R_NegInf, 0);
+  }
+
+  // divide by q
+  return make_signed_log(
+    num.log_abs - std::log(std::abs(q)),
+    num.sign * (q > 0.0 ? 1 : -1)
+  );
+}
+
+inline signed_log slog_int_x_exp_pnorm(
+    double q, double a, double c,
+    double x_lo, double x_hi
+) {
+  if (x_hi <= x_lo) return make_signed_log(R_NegInf, 0);
+
+  const double y_lo = a * x_lo + c;
+  const double y_hi = a * x_hi + c;
+
+  // q = 0:
+  // K = ∫ x Phi(a*x+c) dx
+  // y = a*x+c
+  // x = (y-c)/a
+  //
+  // ∫ Phi(y) dy = y Phi(y) + phi(y)
+  // ∫ y Phi(y) dy = 0.5 * ((y^2 - 1) Phi(y) + y phi(y))
+  if (std::abs(q) <= FPM_EPSILON) {
+    auto G0 = [](double y) {
+      return y * R::pnorm(y, 0.0, 1.0, 1, 0) +
+             R::dnorm(y, 0.0, 1.0, 0);
+    };
+
+    auto G1 = [](double y) {
+      const double Phi = R::pnorm(y, 0.0, 1.0, 1, 0);
+      const double phi = R::dnorm(y, 0.0, 1.0, 0);
+      return 0.5 * ((y * y - 1.0) * Phi + y * phi);
+    };
+
+    const double val =
+      ((G1(y_hi) - G1(y_lo)) -
+       c * (G0(y_hi) - G0(y_lo))) / (a * a);
+
+    return signed_from_real(val);
+  }
+
+  const double abs_q = std::abs(q);
+  const double q2 = q * q;
+
+  // Boundary term:
+  // [ exp(q*x) * (x/q - 1/q^2) * Phi(a*x+c) ]_lo^hi
+  auto boundary_piece = [&](double x, double y) -> signed_log {
+    const double coef = x / q - 1.0 / q2;
+    if (std::abs(coef) <= FPM_EPSILON) {
+      return make_signed_log(R_NegInf, 0);
+    }
+
+    return make_signed_log(
+      q * x + std::log(std::abs(coef)) + pnorm_std(y, true, true),
+      coef > 0.0 ? 1 : -1
+    );
+  };
+
+  signed_log upper = boundary_piece(x_hi, y_hi);
+  signed_log lower = boundary_piece(x_lo, y_lo);
+  signed_log out = signed_log_sub(upper, lower);
+
+  // L0 = ∫ exp(q*x) phi(a*x+c) dx
+  // L1 = ∫ x exp(q*x) phi(a*x+c) dx
+  const double r = q / a;
+  const double z_lo = y_lo - r;
+  const double z_hi = y_hi - r;
+  const double log_C = -q * c / a + 0.5 * r * r;
+
+  const double log_dPhi = log_pnorm_diff(z_lo, z_hi);
+
+  if (log_dPhi != R_NegInf) {
+    // L0 = C/a * DeltaPhi
+    signed_log L0 = make_signed_log(
+      log_C - std::log(a) + log_dPhi,
+      1
+    );
+
+    // bracket for L1:
+    // (r-c) DeltaPhi + phi(z_lo) - phi(z_hi)
+    signed_log bracket = make_signed_log(R_NegInf, 0);
+
+    const double rc = r - c;
+    if (std::abs(rc) > FPM_EPSILON) {
+      bracket = signed_log_add(
+        bracket,
+        make_signed_log(
+          std::log(std::abs(rc)) + log_dPhi,
+          rc > 0.0 ? 1 : -1
+        )
+      );
+    }
+
+    bracket = signed_log_add(
+      bracket,
+      make_signed_log(Gstar(1.0, z_lo, true), 1)
+    );
+
+    bracket = signed_log_sub(
+      bracket,
+      make_signed_log(Gstar(1.0, z_hi, true), 1)
+    );
+
+    signed_log L1 = make_signed_log(R_NegInf, 0);
+    if (bracket.sign != 0 && bracket.log_abs != R_NegInf) {
+      L1 = make_signed_log(
+        log_C - 2.0 * std::log(a) + bracket.log_abs,
+        bracket.sign
+      );
+    }
+
+    // K = boundary - (a/q) L1 + (a/q^2) L0
+    if (L1.sign != 0 && L1.log_abs != R_NegInf) {
+      const int s = -1 * (q > 0.0 ? 1 : -1) * L1.sign;
+      out = signed_log_add(
+        out,
+        make_signed_log(
+          std::log(a) - std::log(abs_q) + L1.log_abs,
+          s
+        )
+      );
+    }
+
+    out = signed_log_add(
+      out,
+      make_signed_log(
+        std::log(a) - 2.0 * std::log(abs_q) + L0.log_abs,
+        1
+      )
+    );
+  }
+
+  return out;
+}
+
+inline signed_log slog_int_eta_pnorm(
+    double eta, double b, double a, double c,
+    double x_lo, double x_hi
+) {
+  signed_log J = slog_int_exp_pnorm(-eta, a, c, x_lo, x_hi);
+
+  if (J.sign == 0 || J.log_abs == R_NegInf) {
+    return J;
+  }
+
+  return make_signed_log(
+    eta * b + J.log_abs,
+    J.sign
+  );
+}
+
+inline signed_log slog_int_d_eta_pnorm(
+    double eta, double b, double a, double c,
+    double x_lo, double x_hi
+) {
+  const double q = -eta;
+
+  signed_log J = slog_int_exp_pnorm(q, a, c, x_lo, x_hi);
+  signed_log K = slog_int_x_exp_pnorm(q, a, c, x_lo, x_hi);
+
+  signed_log bJ = make_signed_log(R_NegInf, 0);
+
+  if (J.sign != 0 && J.log_abs != R_NegInf && b > 0.0) {
+    bJ = make_signed_log(std::log(b) + J.log_abs, J.sign);
+  }
+
+  // bJ - K
+  signed_log inside = signed_log_sub(bJ, K);
+
+  if (inside.sign == 0 || inside.log_abs == R_NegInf) {
+    return make_signed_log(R_NegInf, 0);
+  }
+
+  return make_signed_log(
+    eta * b + inside.log_abs,
+    inside.sign
+  );
+}
+
 // [[Rcpp::export]]
 NumericVector dWald(NumericVector t, NumericVector v,
                     NumericVector B, NumericVector A, NumericVector t0,
@@ -219,23 +464,27 @@ double pwald(double t, double b, double mu, double sigma = 1.0, double A = 0.0,
       return log_p1 + std::log1p(k * d / nu);
     }
 
-    if (kill_shape >= 2) {
-      // GL20 over x in [x_lo, x_hi]: (1/span) * int exp(eta1*(b-x))*(1+k*(b-x)/nu) dx
-      const Rcpp::List& gl = get_gl20();
-      const Rcpp::NumericVector nodes = gl["nodes"];
-      const Rcpp::NumericVector weights = gl["weights"];
-      const double center = 0.5 * (x_lo + x_hi);
-      const double half   = 0.5 * span;
-      double acc = 0.0;
-      for (int j = 0; j < nodes.size(); ++j) {
-        const double x  = center + half * nodes[j];
-        const double d  = b - x;
-        const double hj = (d <= 0.0) ? 1.0
-                                      : std::exp(eta1 * d) * (1.0 + k * d / nu);
-        acc += weights[j] * hj;
+    if (kill_shape >= 2 && k > FPM_EPSILON) {
+      // Analytic: (1/span) * int_{d_lo}^{d_hi} exp(eta1*d)*(1 + k*d/nu) dd
+      // where d = b - x, d_lo = b - x_hi, d_hi = b - x_lo.
+      if (b <= x_hi) return NA_REAL;
+      const double d_lo = b - x_hi;
+      const double d_hi = b - x_lo;
+      double I0, I1;
+      if (std::abs(eta1) <= FPM_EPSILON) {
+        I0 = d_hi - d_lo;
+        I1 = 0.5 * (d_hi * d_hi - d_lo * d_lo);
+      } else {
+        const double e_hi = std::exp(eta1 * d_hi);
+        const double e_lo = std::exp(eta1 * d_lo);
+        I0 = (e_hi - e_lo) / eta1;
+        I1 = e_hi * (d_hi / eta1 - 1.0 / (eta1 * eta1)) -
+             e_lo * (d_lo / eta1 - 1.0 / (eta1 * eta1));
       }
-      const double out = std::max(0.0, std::min(1.0, 0.5 * acc));
-      return std::log(out);
+      const double p = (I0 + (k / nu) * I1) / span;
+      if (p <= 0.0) return R_NegInf;
+      if (p >= 1.0) return 0.0;
+      return std::log(p);
     }
 
     if (std::abs(eta1) < FPM_EPSILON) {
@@ -300,25 +549,28 @@ double pwald(double t, double b, double mu, double sigma = 1.0, double A = 0.0,
     return finish(log_prefactor + log_cdf_nu);
   }
 
-  if (kill_shape >= 2) {
-    // SPV + Erlang-2: GL20 over start points, delegating to point-start formula.
-    const Rcpp::List& gl = get_gl20();
-    const Rcpp::NumericVector nodes = gl["nodes"];
-    const Rcpp::NumericVector weights = gl["weights"];
-    const double center = 0.5 * (x_lo + x_hi);
-    const double half   = 0.5 * span;
-    double acc = 0.0;
-    for (int j = 0; j < nodes.size(); ++j) {
-      const double x  = center + half * nodes[j];
-      const double d  = b - x;
-      // pwald(t, d, mu, sigma, A=0, k, log_out=false, kill_shape=2)
-      const double ps = (d <= FPM_EPSILON)
-                          ? 1.0
-                          : pwald(t, d, mu, sigma, 0.0, k, false, kill_shape);
-      acc += weights[j] * ps;
+  if (kill_shape >= 2 && k > FPM_EPSILON) {
+    // SPV + Erlang-2: analytic via slog_int_{eta,d_eta}_pnorm.
+    // total = (T1 + T2 + (k/nu)*(D1-D2)) / span
+    if (b <= x_hi) return NA_REAL;
+    const double a    = 1.0 / st;
+    const double c1   = (nu * t - b) / st;
+    const double c2   = (-nu * t - b) / st;
+    const double eta2 = (mu + nu) / sig2;
+    signed_log T1 = slog_int_eta_pnorm(eta1, b, a, c1, x_lo, x_hi);
+    signed_log T2 = slog_int_eta_pnorm(eta2, b, a, c2, x_lo, x_hi);
+    signed_log D1 = slog_int_d_eta_pnorm(eta1, b, a, c1, x_lo, x_hi);
+    signed_log D2 = slog_int_d_eta_pnorm(eta2, b, a, c2, x_lo, x_hi);
+    signed_log total  = signed_log_add(T1, T2);
+    signed_log Ddiff  = signed_log_sub(D1, D2);
+    if (Ddiff.sign != 0 && Ddiff.log_abs != R_NegInf) {
+      signed_log extra = make_signed_log(
+        std::log(k) - std::log(nu) + Ddiff.log_abs, Ddiff.sign);
+      total = signed_log_add(total, extra);
     }
-    const double out = std::max(0.0, std::min(1.0, 0.5 * acc));
-    return finish(std::log(out));
+    if (total.sign <= 0 || total.log_abs == R_NegInf)
+      return log_out ? R_NegInf : 0.0;
+    return finish(total.log_abs - std::log(span));
   }
 
   // SPV + Erlang-1: analytic.
@@ -562,6 +814,7 @@ double dgbm(double t, double b, double mu, double sigma = 1.0, double A = 0.0,
   if (!(t > FPM_EPSILON) || !(sigma > FPM_EPSILON) || !(b > FPM_EPSILON) || !(A >= 0.0) || k < 0.0) {
     return log_out ? R_NegInf : 0.0;
   }
+  if (A > b) return log_out ? R_NegInf : 0.0;
 
   const double x_lo = 0.0;
   const double x_hi = std::log1p(A);
@@ -611,6 +864,7 @@ double pgbm(double t, double b, double mu, double sigma = 1.0, double A = 0.0,
   if (!(b > FPM_EPSILON) || !(sigma > FPM_EPSILON) || !(A >= 0.0) || k < 0.0) {
     return log_out ? R_NegInf : 0.0;
   }
+  if (A > b) return log_out ? R_NegInf : 0.0;
 
   const double x_lo = 0.0;
   const double x_hi = std::log1p(A);
@@ -636,21 +890,24 @@ double pgbm(double t, double b, double mu, double sigma = 1.0, double A = 0.0,
     }
 
     if (kill_shape >= 2) {
-      // GL20 over y0 in [0, log1p(A)]; weight by exp(y0) / A.
-      const Rcpp::List& gl = get_gl20();
-      const Rcpp::NumericVector nodes   = gl["nodes"];
-      const Rcpp::NumericVector weights = gl["weights"];
-      const double half = 0.5 * x_hi;
-      double acc = 0.0;
-      for (int j = 0; j < nodes.size(); ++j) {
-        const double y = half + half * nodes[j];
-        const double d = log_b - y;
-        const double hit_j = (d <= 0.0) ? 1.0
-                             : std::exp(c_eta * d) * (1.0 + k * d / ak);
-        acc += weights[j] * std::exp(y) * hit_j;
+      // P(hit before Erlang-2 kill) =
+      // exp(c_eta*log_b)/A * [I0 + (k/ak)*I1],
+      // I0 = int exp(qy)dy, I1 = int (log_b-y)exp(qy)dy, y in [0, x_hi].
+      const double log_prefactor = c_eta * log_b - std::log(norm_const);
+      double I0, I1;
+      if (std::abs(q) <= FPM_EPSILON) {
+        I0 = x_hi;
+        I1 = log_b * x_hi - 0.5 * x_hi * x_hi;
+      } else {
+        const double e_hi = std::exp(q * x_hi);
+        I0 = (e_hi - 1.0) / q;
+        I1 = (e_hi * (log_b / q - x_hi / q + 1.0 / (q * q)) -
+              (log_b / q + 1.0 / (q * q)));
       }
-      const double out = std::max(0.0, std::min(1.0, 0.5 * acc * x_hi / norm_const));
-      return (out > 0.0) ? std::log(out) : R_NegInf;
+      const double p = std::exp(log_prefactor) * (I0 + (k / ak) * I1);
+      if (p <= 0.0) return R_NegInf;
+      if (p >= 1.0) return 0.0;
+      return std::log(p);
     }
 
     // Erlang-1 SPV analytic:
@@ -701,23 +958,47 @@ double pgbm(double t, double b, double mu, double sigma = 1.0, double A = 0.0,
     return finish(log_prefactor + log_cdf_ak);
   }
 
-  // ---- SPV + Erlang-2: GL20 over log-space start points ----
+  // ---- SPV + Erlang-2 ----
   if (kill_shape >= 2) {
-    const Rcpp::List& gl = get_gl20();
-    const Rcpp::NumericVector nodes   = gl["nodes"];
-    const Rcpp::NumericVector weights = gl["weights"];
-    const double half = 0.5 * x_hi;
-    double acc = 0.0;
-    for (int j = 0; j < nodes.size(); ++j) {
-      const double y = half + half * nodes[j];
-      const double d = log_b - y;
-      // Point-start killed GBM CDF with log-distance d: threshold = exp(d), A = 0.
-      const double ps = (d <= FPM_EPSILON) ? 1.0
-                        : pgbm(t, std::exp(d), mu, sigma, 0.0, k, false, kill_shape);
-      acc += weights[j] * std::exp(y) * ps;
+    // Analytic for the common case where all starts are below boundary (log_b > x_hi):
+    // F_K(t) = exp(c_eta*log_b)/A * [T1 + T2 + (k/ak)(D1-D2)]
+    // with
+    // T1 = int exp(qy) Phi(a*y + c1) dy
+    // T2 = exp(k_log*log_b) int exp((q-k_log)y) Phi(a*y + c2) dy
+    // D1 = int (log_b-y) exp(qy) Phi(a*y + c1) dy
+    // D2 = exp(k_log*log_b) int (log_b-y) exp((q-k_log)y) Phi(a*y + c2) dy
+    signed_log J1 = slog_int_exp_pnorm(q, a, c1, x_lo, x_hi);
+    signed_log J2 = slog_int_exp_pnorm(q - k_log, a, c2, x_lo, x_hi);
+    signed_log K1 = slog_int_x_exp_pnorm(q, a, c1, x_lo, x_hi);
+    signed_log K2 = slog_int_x_exp_pnorm(q - k_log, a, c2, x_lo, x_hi);
+
+    signed_log T1 = J1;
+    signed_log T2 = J2;
+    if (T2.sign != 0 && T2.log_abs != R_NegInf)
+      T2 = make_signed_log(T2.log_abs + k_log * log_b, T2.sign);
+
+    signed_log bJ1 = make_signed_log(R_NegInf, 0);
+    if (J1.sign != 0 && J1.log_abs != R_NegInf && log_b > 0.0)
+      bJ1 = make_signed_log(std::log(log_b) + J1.log_abs, J1.sign);
+    signed_log D1 = signed_log_sub(bJ1, K1);
+
+    signed_log bJ2 = make_signed_log(R_NegInf, 0);
+    if (J2.sign != 0 && J2.log_abs != R_NegInf && log_b > 0.0)
+      bJ2 = make_signed_log(std::log(log_b) + J2.log_abs, J2.sign);
+    signed_log D2 = signed_log_sub(bJ2, K2);
+    if (D2.sign != 0 && D2.log_abs != R_NegInf)
+      D2 = make_signed_log(D2.log_abs + k_log * log_b, D2.sign);
+
+    signed_log total = signed_log_add(T1, T2);
+    signed_log Ddiff = signed_log_sub(D1, D2);
+    if (Ddiff.sign != 0 && Ddiff.log_abs != R_NegInf) {
+      signed_log extra = make_signed_log(
+        std::log(k) - std::log(ak) + Ddiff.log_abs, Ddiff.sign);
+      total = signed_log_add(total, extra);
     }
-    const double out = std::max(0.0, std::min(1.0, 0.5 * acc * x_hi / norm_const));
-    return finish((out > 0.0) ? std::log(out) : R_NegInf);
+    if (total.sign <= 0 || total.log_abs == R_NegInf)
+      return log_out ? R_NegInf : 0.0;
+    return finish(c_eta * log_b + total.log_abs - std::log(norm_const));
   }
 
   // ---- SPV + Erlang-1: analytic (log-stable) ----

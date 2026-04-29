@@ -823,7 +823,7 @@ plot_design_fmri <- function(design_matrix, TRs = 100, events = NULL, remove_nui
   enames <- colnames(design_matrix)
   if(remove_nuisance & is.null(events)){
     # ZH optimization: Replace inefficient col-wise sd == 0 apply loop with extremely fast, vectorized constant check
-    is_constant <- colSums(design_matrix != rep(design_matrix[1,], each=nrow(design_matrix))) == 0
+    is_constant <- colSums(design_matrix != design_matrix[rep(1, nrow(design_matrix)), ]) == 0
     is_nuisance <- grepl("drift", enames) | grepl("poly", enames) | grepl("derivative", enames) | is_constant
     design_matrix <- design_matrix[,!is_nuisance, drop = F]
   }

@@ -2407,10 +2407,10 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
               // and avoids the stride mismatch of calling model_pfun_raw with n_rows=1
               // on a full n_trials-stride staging buffer.
               const int n_cols = static_cast<int>(race_base_col_order.size());
-              double par_buf_w[16] = {};
-              for (int c = 0; c < n_cols && c < 16; ++c)
-                par_buf_w[c] = pars_cm[c * n_trials + w_row];
-              const double fi = adapter.cdf1_ptr(tt, par_buf_w, &adapter.ctx);
+              std::vector<double> par_buf_w(static_cast<size_t>(n_cols), 0.0);
+              for (int c = 0; c < n_cols; ++c)
+                par_buf_w[static_cast<size_t>(c)] = pars_cm[c * n_trials + w_row];
+              const double fi = adapter.cdf1_ptr(tt, par_buf_w.data(), &adapter.ctx);
               const double log_si = std::log1p(-clamp_cdf01_race(fi));
               // s = log(g_i * S_others).  Two competing terms:
               //   responded normally: log(g_i * S_others * S_K) = s + log_sk
@@ -4400,7 +4400,7 @@ double c_log_likelihood_race(
         double prob = 0.0;
         for (int j = 0; j < n_nodes; ++j) {
           const double u = 0.5 * (gl_nodes[j] + 1.0);
-          const double tt = -std::log(1.0 - u) / lam;
+          const double tt = -std::log(std::max(1e-15, 1.0 - u)) / lam;
           // Calculate S_race(tt)
           double logS_race_tt = 0.0;
           double par_buf[16];
@@ -4422,7 +4422,7 @@ double c_log_likelihood_race(
             // Erlang-2: d_K(t) = lam^2 * t * exp(-lam * t)
             // Jac: dt/du = 1 / (lam * (1-u))
             // f_K(t) * Jac = lam * t = -log(1-u)
-            sk_jac = -std::log(1.0 - u);
+            sk_jac = -std::log1p(-u);
           } else {
             // Exponential: d_K(t) = lam * exp(-lam * t)
             // f_K(t) * Jac = 1
@@ -4452,7 +4452,7 @@ double c_log_likelihood_race(
     }
 
     double logS = 0.0;
-    double par_buf[16];
+    double par_buf[64];
     for (int k = 0; k < n_lR_j; ++k) {
       const int row = start_row_idx + k;
       if (!isok[row]) return R_NegInf;

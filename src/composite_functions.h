@@ -381,6 +381,13 @@ inline signed_log make_signed_log(double log_abs, int sign) {
   return {log_abs, sign > 0 ? 1 : -1};
 }
 
+inline signed_log signed_from_real(double x) {
+  constexpr double signed_log_zero_tol = 1e-12;
+  if (!std::isfinite(x)) return make_signed_log(NA_REAL, 0);
+  if (std::abs(x) <= signed_log_zero_tol) return make_signed_log(R_NegInf, 0);
+  return make_signed_log(std::log(std::abs(x)), x > 0.0 ? 1 : -1);
+}
+
 inline signed_log signed_log_add(signed_log a, signed_log b) {
   if (a.sign == 0) return b;
   if (b.sign == 0) return a;
