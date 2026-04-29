@@ -14,3 +14,4 @@ src/*.so
 /DDM_Censoring
 plan.md
 samples_*.RData
+.positai
