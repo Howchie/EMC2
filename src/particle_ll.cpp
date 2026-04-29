@@ -362,7 +362,9 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
     out.model_dfun_raw = &drdmgbm_raw;
     out.model_pfun_raw = &prdmgbm_raw;
     out.logS_at_t_ptr  = &rdmgbm_logS_at_t;
-    out.ctx.t0_index   = 3;
+    out.ctx.t0_index     = 3;
+    out.ctx.lambda_index = 5;
+    out.ctx.defective_upper_tail = true;
   } else if (type_std.find("BAwL") != std::string::npos) {
     out.pdf1_ptr       = &dbawl_scalar;
     out.cdf1_ptr       = &pbawl_scalar;

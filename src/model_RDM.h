@@ -558,8 +558,8 @@ double pwald_old_k(double t, double b, double mu, double sigma = 1.0, double A =
 // --------------------------------------------------------------------------
 // [[Rcpp::export]]
 double dgbm(double t, double b, double mu, double sigma = 1.0, double A = 0.0,
-            bool log_out = false) {
-  if (!(t > FPM_EPSILON) || !(sigma > FPM_EPSILON) || !(b > FPM_EPSILON) || !(A >= 0.0)) {
+            double k = 0.0, bool log_out = false, int kill_shape = 1) {
+  if (!(t > FPM_EPSILON) || !(sigma > FPM_EPSILON) || !(b > FPM_EPSILON) || !(A >= 0.0) || k < 0.0) {
     return log_out ? R_NegInf : 0.0;
   }
 
@@ -568,22 +568,19 @@ double dgbm(double t, double b, double mu, double sigma = 1.0, double A = 0.0,
   const double log_b = std::log(b);
   const double log_mu = mu - 0.5 * sigma * sigma;
   const double var = sigma * sigma * t;
-  const double span = x_hi - x_lo;
+  const double norm_const = A;
 
   // Point-start fallback: A = 0 -> X0 = 1.
-  if (span <= FPM_EPSILON) {
-    const double d = log_b - x_hi;
+  if (!(norm_const > FPM_EPSILON)) {
+    const double d = log_b - x_hi;  // = log_b when A = 0
     if (d <= 0.0) return (t == 0.0) ? std::numeric_limits<double>::infinity() : (log_out ? R_NegInf : 0.0);
     const double delta = d - log_mu * t;
-    const double pdf_val = d / t * Gstar(var, delta);
-    if (!(pdf_val > 0.0) || !std::isfinite(pdf_val)) return log_out ? R_NegInf : 0.0;
-    return log_out ? std::log(pdf_val) : pdf_val;
+    const double log_pdf = std::log(d) - std::log(t) + Gstar(var, delta, true)
+                           + erlang_log_surv(t, k, kill_shape);
+    return log_out ? log_pdf : std::exp(log_pdf);
   }
 
-  // Normalization for start density on [1, 1 + A] mapped to log-space.
-  const double norm_const = A;
-  if (!(norm_const > FPM_EPSILON)) return log_out ? R_NegInf : 0.0;
-
+  // SPV: normalization for start density on [1, 1 + A] mapped to log-space.
   // Complete-the-square form of the weighted Gaussian integral.
   const double mu_new_exp = log_b - log_mu * t + var;
   const double exp_factor = std::exp(log_b - log_mu * t + 0.5 * var);
@@ -597,62 +594,144 @@ double dgbm(double t, double b, double mu, double sigma = 1.0, double A = 0.0,
   const double pdf_val = (exp_factor * integral_result) / (norm_const * t);
 
   if (!(pdf_val > 0.0) || !std::isfinite(pdf_val)) return log_out ? R_NegInf : 0.0;
-  return log_out ? std::log(pdf_val) : pdf_val;
+  const double log_surv = erlang_log_surv(t, k, kill_shape);
+  return log_out ? (std::log(pdf_val) + log_surv) : (pdf_val * std::exp(log_surv));
 }
 
 // [[Rcpp::export]]
 double pgbm(double t, double b, double mu, double sigma = 1.0, double A = 0.0,
-            bool log_out = false) {
-  if (!(b > FPM_EPSILON) || !(sigma > FPM_EPSILON) || !(A >= 0.0)) {
+            double k = 0.0, bool log_out = false, int kill_shape = 1) {
+  auto finish = [&](double log_p) {
+    if (ISNAN(log_p)) return NA_REAL;
+    if (log_p > 0.0 && log_p < 1e-10) log_p = 0.0;
+    if (log_p > 0.0) log_p = 0.0;
+    return log_out ? log_p : std::exp(log_p);
+  };
+
+  if (!(b > FPM_EPSILON) || !(sigma > FPM_EPSILON) || !(A >= 0.0) || k < 0.0) {
     return log_out ? R_NegInf : 0.0;
   }
-  if (t <= FPM_EPSILON) return log_out ? R_NegInf : 0.0;
 
   const double x_lo = 0.0;
   const double x_hi = std::log1p(A);
   const double log_b = std::log(b);
-  const double log_mu = mu - 0.5 * sigma * sigma;
-  const double st = sigma * std::sqrt(t);
+  const double alpha = mu - 0.5 * sigma * sigma;  // log-space drift
+  const double sig2 = sigma * sigma;
   const double norm_const = A;
 
-  // Point-start fallback: A = 0 -> X0 = 1.
-  if (!(norm_const > FPM_EPSILON)) {
-    const double dist = log_b - x_hi;
-    if (st <= FPM_EPSILON) {
-      const double cdf_val = (log_mu > 0.0) ? 1.0 : 0.0;
-      return log_out ? std::log(cdf_val) : cdf_val;
+  // Tilted log-space drift for kill (= |alpha| when k = 0).
+  const double ak     = std::sqrt(alpha * alpha + 2.0 * sig2 * k);
+  const double c_eta  = (alpha - ak) / sig2;   // eta1 in log-space
+  const double q      = 1.0 - c_eta;           // Jacobian-corrected coefficient (1 - eta1)
+  const double k_log  = 2.0 * ak / sig2;       // 2*ak/sigma^2
+
+  // ---- t = Inf: total finite-response probability ----
+  auto log_p_inf = [&]() -> double {
+    if (!(norm_const > FPM_EPSILON)) {
+      // Point-start: P(hit before kill) = b^c_eta, Erlang-2 adds log1p correction.
+      double log_hit = c_eta * log_b;
+      if (kill_shape >= 2 && ak > FPM_EPSILON)
+        log_hit += std::log1p(k * log_b / ak);
+      return log_hit;
     }
-    const double term1_arg = (log_mu * t - dist) / st;
-    const double term2_arg = (-log_mu * t - dist) / st;
-    const double cdf1 = pnorm_std(term1_arg, true, false);
-    const double cdf2 = pnorm_std(term2_arg, true, false);
-    const double exp_term = std::exp(2.0 * log_mu * dist / (sigma * sigma));
 
-    double cdf_val = cdf1 + exp_term * cdf2;
-    if (!std::isfinite(exp_term)) cdf_val = 1.0;
-    cdf_val = std::fmax(0.0, std::fmin(1.0, cdf_val));
-    if (cdf_val <= 0.0) return log_out ? R_NegInf : 0.0;
-    return log_out ? std::log(cdf_val) : cdf_val;
+    if (kill_shape >= 2) {
+      // GL20 over y0 in [0, log1p(A)]; weight by exp(y0) / A.
+      const Rcpp::List& gl = get_gl20();
+      const Rcpp::NumericVector nodes   = gl["nodes"];
+      const Rcpp::NumericVector weights = gl["weights"];
+      const double half = 0.5 * x_hi;
+      double acc = 0.0;
+      for (int j = 0; j < nodes.size(); ++j) {
+        const double y = half + half * nodes[j];
+        const double d = log_b - y;
+        const double hit_j = (d <= 0.0) ? 1.0
+                             : std::exp(c_eta * d) * (1.0 + k * d / ak);
+        acc += weights[j] * std::exp(y) * hit_j;
+      }
+      const double out = std::max(0.0, std::min(1.0, 0.5 * acc * x_hi / norm_const));
+      return (out > 0.0) ? std::log(out) : R_NegInf;
+    }
+
+    // Erlang-1 SPV analytic:
+    // exp(c_eta * log_b) / A * integral_0^{log1p(A)} exp(q * y) dy
+    const double log_prefactor = c_eta * log_b - std::log(norm_const);
+    if (std::abs(q) < FPM_EPSILON)
+      return log_prefactor + std::log(x_hi);   // q = 0: integral = x_hi
+    if (q > 0.0)
+      return log_prefactor + log_diff_exp(q * x_hi, 0.0) - std::log(q);
+    return log_prefactor + log_diff_exp(0.0, q * x_hi) - std::log(-q);
+  };
+
+  if (!emc2_isfinite(t)) {
+    return finish(log_p_inf());
   }
 
-  if (st <= FPM_EPSILON) {
-    const double cdf_val = (log_mu > 0.0) ? 1.0 : 0.0;
-    return log_out ? std::log(cdf_val) : cdf_val;
+  if (t <= FPM_EPSILON) return log_out ? R_NegInf : 0.0;
+
+  const double st = sigma * std::sqrt(t);
+  if (st <= FPM_EPSILON) return log_out ? R_NegInf : 0.0;
+
+  const double a  = 1.0 / st;
+  const double c1 = (ak * t - log_b) / st;   // c for Phi in term1
+  const double c2 = (-ak * t - log_b) / st;  // c for Phi in term2
+
+  // ---- Point-start: A = 0 ----
+  if (!(norm_const > FPM_EPSILON)) {
+    const double d = log_b - x_hi;  // = log_b when A = 0
+
+    if (d <= 0.0) return log_out ? 0.0 : 1.0;
+
+    const double log_prefactor = c_eta * d;
+
+    const double log_cdf1    = pnorm_std((ak * t - d) / st, true, true);
+    const double log_cdf2    = pnorm_std((-ak * t - d) / st, true, true);
+    const double log_exp_t   = k_log * d;
+    const double log_cdf_ak  = log_sum_exp(log_cdf1, log_exp_t + log_cdf2);
+
+    if (kill_shape >= 2 && k > FPM_EPSILON && ak > FPM_EPSILON) {
+      const double log_b2  = log_exp_t + log_cdf2;
+      const double log_mw  = (log_cdf1 > log_b2) ? log_diff_exp(log_cdf1, log_b2) : R_NegInf;
+      const double log_w   = std::log(k) + std::log(d) - std::log(ak);
+      const double log_e2  = (log_mw > R_NegInf) ? log_sum_exp(log_cdf_ak, log_w + log_mw)
+                                                  : log_cdf_ak;
+      return finish(log_prefactor + log_e2);
+    }
+
+    return finish(log_prefactor + log_cdf_ak);
   }
 
-  const double k_log = 2.0 * log_mu / (sigma * sigma);
+  // ---- SPV + Erlang-2: GL20 over log-space start points ----
+  if (kill_shape >= 2) {
+    const Rcpp::List& gl = get_gl20();
+    const Rcpp::NumericVector nodes   = gl["nodes"];
+    const Rcpp::NumericVector weights = gl["weights"];
+    const double half = 0.5 * x_hi;
+    double acc = 0.0;
+    for (int j = 0; j < nodes.size(); ++j) {
+      const double y = half + half * nodes[j];
+      const double d = log_b - y;
+      // Point-start killed GBM CDF with log-distance d: threshold = exp(d), A = 0.
+      const double ps = (d <= FPM_EPSILON) ? 1.0
+                        : pgbm(t, std::exp(d), mu, sigma, 0.0, k, false, kill_shape);
+      acc += weights[j] * std::exp(y) * ps;
+    }
+    const double out = std::max(0.0, std::min(1.0, 0.5 * acc * x_hi / norm_const));
+    return finish((out > 0.0) ? std::log(out) : R_NegInf);
+  }
 
-  // (1/A) * ∫_{log(1)}^{log(1+A)} F(t | x0) * exp(x0) dx0
-  const double term1_integral =
-    integrate_exp_times_normal_cdf(1.0, 1.0 / st, (log_mu * t - log_b) / st, x_lo, x_hi);
-  const double term2_integral =
-    std::exp(k_log * log_b) *
-    integrate_exp_times_normal_cdf(1.0 - k_log, 1.0 / st, (-log_mu * t - log_b) / st, x_lo, x_hi);
+  // ---- SPV + Erlang-1: analytic (log-stable) ----
+  // F_K(t) = (exp(c_eta * log_b) / A) *
+  //   [ ∫_0^{x_hi} exp(q * y) Phi(a*y + c1) dy
+  //   + exp(k_log*log_b) * ∫_0^{x_hi} exp((q-k_log)*y) Phi(a*y + c2) dy ]
+  const double log_term1 = c_eta * log_b +
+    log_integrate_exp_times_normal_cdf(q, a, c1, x_lo, x_hi);
+  const double log_term2 = (c_eta + k_log) * log_b +
+    log_integrate_exp_times_normal_cdf(q - k_log, a, c2, x_lo, x_hi);
 
-  double cdf_val = (term1_integral + term2_integral) / norm_const;
-  cdf_val = std::fmax(0.0, std::fmin(1.0, cdf_val));
-  if (cdf_val <= 0.0) return log_out ? R_NegInf : 0.0;
-  return log_out ? std::log(cdf_val) : cdf_val;
+  const double log_cdf_val = log_sum_exp(log_term1, log_term2) - std::log(norm_const);
+
+  return finish(log_cdf_val);
 }
 
 // --------------------------------------------------------------------------
@@ -1104,7 +1183,7 @@ NumericVector pSWTNspv(NumericVector t, NumericVector v, NumericVector b,
 // [[Rcpp::export]]
 NumericVector dGBMspv(NumericVector t, NumericVector v, NumericVector b,
                       NumericVector A, NumericVector t0, NumericVector s = 1.0,
-                      bool log_out = false) {
+                      NumericVector lambda = 0.0, bool log_out = false, int kill_shape = 1) {
   const int n = t.size();
   NumericVector pdf(n);
   auto pick = [](const NumericVector& vec, int i) -> double {
@@ -1113,7 +1192,8 @@ NumericVector dGBMspv(NumericVector t, NumericVector v, NumericVector b,
   for (int i = 0; i < n; ++i) {
     const double t_adj = t[i] - pick(t0, i);
     if (t_adj <= 0.0) { pdf[i] = log_out ? R_NegInf : 0.0; continue; }
-    pdf[i] = dgbm(t_adj, pick(b, i), pick(v, i), pick(s, i), pick(A, i), log_out);
+    pdf[i] = dgbm(t_adj, pick(b, i), pick(v, i), pick(s, i), pick(A, i),
+                  pick(lambda, i), log_out, kill_shape);
   }
   return pdf;
 }
@@ -1121,7 +1201,7 @@ NumericVector dGBMspv(NumericVector t, NumericVector v, NumericVector b,
 // [[Rcpp::export]]
 NumericVector pGBMspv(NumericVector t, NumericVector v, NumericVector b,
                       NumericVector A, NumericVector t0, NumericVector s = 1.0,
-                      bool log_out = false) {
+                      NumericVector lambda = 0.0, bool log_out = false, int kill_shape = 1) {
   const int n = t.size();
   NumericVector cdf(n);
   auto pick = [](const NumericVector& vec, int i) -> double {
@@ -1130,7 +1210,8 @@ NumericVector pGBMspv(NumericVector t, NumericVector v, NumericVector b,
   for (int i = 0; i < n; ++i) {
     const double t_adj = t[i] - pick(t0, i);
     if (t_adj <= 0.0) { cdf[i] = log_out ? R_NegInf : 0.0; continue; }
-    cdf[i] = pgbm(t_adj, pick(b, i), pick(v, i), pick(s, i), pick(A, i), log_out);
+    cdf[i] = pgbm(t_adj, pick(b, i), pick(v, i), pick(s, i), pick(A, i),
+                  pick(lambda, i), log_out, kill_shape);
   }
   return cdf;
 }

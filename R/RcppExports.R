@@ -105,12 +105,12 @@ pwald_old_k <- function(t, b, mu, sigma = 1.0, A = 0.0, k = 0.0, log_out = FALSE
     .Call(`_EMC2_pwald_old_k`, t, b, mu, sigma, A, k, log_out)
 }
 
-dgbm <- function(t, b, mu, sigma = 1.0, A = 0.0, log_out = FALSE) {
-    .Call(`_EMC2_dgbm`, t, b, mu, sigma, A, log_out)
+dgbm <- function(t, b, mu, sigma = 1.0, A = 0.0, k = 0.0, log_out = FALSE, kill_shape = 1L) {
+    .Call(`_EMC2_dgbm`, t, b, mu, sigma, A, k, log_out, kill_shape)
 }
 
-pgbm <- function(t, b, mu, sigma = 1.0, A = 0.0, log_out = FALSE) {
-    .Call(`_EMC2_pgbm`, t, b, mu, sigma, A, log_out)
+pgbm <- function(t, b, mu, sigma = 1.0, A = 0.0, k = 0.0, log_out = FALSE, kill_shape = 1L) {
+    .Call(`_EMC2_pgbm`, t, b, mu, sigma, A, k, log_out, kill_shape)
 }
 
 dswtn <- function(t_adj, threshold, mu_drift, sv, s = 1.0, lambda = 0.0, c = 0.0, log_out = FALSE, kill_shape = 1L) {
@@ -137,12 +137,12 @@ pSWTNspv <- function(t, v, b, A, t0, sv, s = 1.0, c = 0.0, lambda = 0.0, n_gauss
     .Call(`_EMC2_pSWTNspv`, t, v, b, A, t0, sv, s, c, lambda, n_gauss_nodes, log_out, kill_shape)
 }
 
-dGBMspv <- function(t, v, b, A, t0, s = 1.0, log_out = FALSE) {
-    .Call(`_EMC2_dGBMspv`, t, v, b, A, t0, s, log_out)
+dGBMspv <- function(t, v, b, A, t0, s = 1.0, lambda = 0.0, log_out = FALSE, kill_shape = 1L) {
+    .Call(`_EMC2_dGBMspv`, t, v, b, A, t0, s, lambda, log_out, kill_shape)
 }
 
-pGBMspv <- function(t, v, b, A, t0, s = 1.0, log_out = FALSE) {
-    .Call(`_EMC2_pGBMspv`, t, v, b, A, t0, s, log_out)
+pGBMspv <- function(t, v, b, A, t0, s = 1.0, lambda = 0.0, log_out = FALSE, kill_shape = 1L) {
+    .Call(`_EMC2_pGBMspv`, t, v, b, A, t0, s, lambda, log_out, kill_shape)
 }
 
 dEXGrace <- function(dt, mu, sigma, tau, min_ll) {

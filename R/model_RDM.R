@@ -1,105 +1,107 @@
-
-dRDM <- function(rt,pars)
-  # density for single accumulator
+dRDM <- function(rt, pars)
+# density for single accumulator
 {
   out <- numeric(length(rt))
-  ok <- rt > pars[,"t0"] & !pars[,"v"] < 0  # code handles rate zero case
+  ok <- rt > pars[, "t0"] & !pars[, "v"] < 0 # code handles rate zero case
   ok[is.na(ok)] <- FALSE
-  if (any(dimnames(pars)[[2]]=="s")) # rescale
-    pars[ok,c("A","B","v")] <- pars[ok,c("A","B","v")]/pars[ok,"s"]
-  out[ok] <- dWald(rt[ok],v=pars[ok,"v"],B=pars[ok,"B"],A=pars[ok,"A"],t0=pars[ok,"t0"])
+  if (any(dimnames(pars)[[2]] == "s")) { # rescale
+    pars[ok, c("A", "B", "v")] <- pars[ok, c("A", "B", "v")] / pars[ok, "s"]
+  }
+  out[ok] <- dWald(rt[ok], v = pars[ok, "v"], B = pars[ok, "B"], A = pars[ok, "A"], t0 = pars[ok, "t0"])
   out
 }
 
 
-pRDM <- function(rt,pars)
-  # cumulative density for single accumulator
+pRDM <- function(rt, pars)
+# cumulative density for single accumulator
 {
   out <- numeric(length(rt))
-  ok <- rt > pars[,"t0"] & !pars[,"v"] < 0  # code handles rate zero case
+  ok <- rt > pars[, "t0"] & !pars[, "v"] < 0 # code handles rate zero case
   ok[is.na(ok)] <- FALSE
-  if (any(dimnames(pars)[[2]]=="s")) # rescale
-    pars[ok,c("A","B","v")] <- pars[ok,c("A","B","v")]/pars[ok,"s"]
-  out[ok] <- pWald(rt[ok],v=pars[ok,"v"],B=pars[ok,"B"],A=pars[ok,"A"],t0=pars[ok,"t0"])
+  if (any(dimnames(pars)[[2]] == "s")) { # rescale
+    pars[ok, c("A", "B", "v")] <- pars[ok, c("A", "B", "v")] / pars[ok, "s"]
+  }
+  out[ok] <- pWald(rt[ok], v = pars[ok, "v"], B = pars[ok, "B"], A = pars[ok, "A"], t0 = pars[ok, "t0"])
   out
 }
 
 #### random
 
-rWald <- function(n,B,v,A)
-  # random function for single accumulator
+rWald <- function(n, B, v, A)
+# random function for single accumulator
 {
-
-  rwaldt <- function(n,k,l,tiny=1e-6) {
+  rwaldt <- function(n, k, l, tiny = 1e-6) {
     # random sample of n from a Wald (or Inverse Gaussian)
     # k = criterion, l = rate, assumes sigma=1 Browninan motion
     # about same speed as statmod rinvgauss
 
-    rlevy <- function(n=1, m=0, c=1) {
-      if (any(c<0)) stop("c must be positive")
-      c/qnorm(1-runif(n)/2)^2+m
+    rlevy <- function(n = 1, m = 0, c = 1) {
+      if (any(c < 0)) stop("c must be positive")
+      c / qnorm(1 - runif(n) / 2)^2 + m
     }
 
-    flag <- l>tiny
-    x <- rep(NA,times=n)
+    flag <- l > tiny
+    x <- rep(NA, times = n)
 
-    x[!flag] <- rlevy(sum(!flag),0,k[!flag]^2)
-    mu <- k/l
+    x[!flag] <- rlevy(sum(!flag), 0, k[!flag]^2)
+    mu <- k / l
     lambda <- k^2
 
     y <- rnorm(sum(flag))^2
     mu.0 <- mu[flag]
     lambda.0 <- lambda[flag]
 
-    x.0 <- mu.0 + mu.0^2*y/(2*lambda.0) -
-      sqrt(4*mu.0*lambda.0*y + mu.0^2*y^2)*mu.0/(2*lambda.0)
+    x.0 <- mu.0 + mu.0^2 * y / (2 * lambda.0) -
+      sqrt(4 * mu.0 * lambda.0 * y + mu.0^2 * y^2) * mu.0 / (2 * lambda.0)
 
     z <- runif(length(x.0))
-    test <- mu.0/(mu.0+x.0)
-    x.0[z>test] <- mu.0[z>test]^2/x.0[z>test]
+    test <- mu.0 / (mu.0 + x.0)
+    x.0[z > test] <- mu.0[z > test]^2 / x.0[z > test]
     x[flag] <- x.0
-    x[x<0] <- max(x)
+    x[x < 0] <- max(x)
     x
   }
 
   # Kluge to return Inf for negative rates
   out <- numeric(n)
-  ok <- !v<0
+  ok <- !v < 0
   nok <- sum(ok)
-  bs <- B[ok]+runif(nok,0,A[ok])
-  out[ok] <- rwaldt(nok,k=bs,l=v[ok])
+  bs <- B[ok] + runif(nok, 0, A[ok])
+  out[ok] <- rwaldt(nok, k = bs, l = v[ok])
   out[!ok] <- Inf
   out
 }
 
-rRDM <- function(lR,pars,p_types=c("v","B","A","t0"),ok=rep(TRUE,dim(pars)[1]))
-  # lR is an empty latent response factor lR with one level for each accumulator.
-  # pars is a matrix of corresponding parameter values named as in p_types
-  # pars must be sorted so accumulators and parameter for each trial are in
-  # contiguous rows. "s" parameter will be used but can be ommitted
-  #
-  # test
-  # pars=cbind(B=c(1,2),v=c(1,1),A=c(0,0),t0=c(.2,.2)); lR=factor(c(1,2))
+rRDM <- function(lR, pars, p_types=c("v", "B", "A", "t0"), ok=rep(TRUE, dim(pars)[1]))
+                 # lR is an empty latent response factor lR with one level for each accumulator.
+                 # pars is a matrix of corresponding parameter values named as in p_types
+                 # pars must be sorted so accumulators and parameter for each trial are in
+                 # contiguous rows. "s" parameter will be used but can be ommitted
+                 #
+                 # test
+# pars=cbind(B=c(1,2),v=c(1,1),A=c(0,0),t0=c(.2,.2)); lR=factor(c(1,2))
 {
-  if (!all(p_types %in% dimnames(pars)[[2]]))
-    stop("pars must have columns ",paste(p_types,collapse = " "))
-  if (any(dimnames(pars)[[2]]=="s")) # rescale
-    pars[,c("A","B","v")] <- pars[,c("A","B","v")]/pars[,"s"]
-  pars[,"B"][pars[,"B"]<0] <- 0 # Protection for negatives
-  pars[,"A"][pars[,"A"]<0] <- 0
-  bad <- rep(NA, length(lR)/length(levels(lR)))
+  if (!all(p_types %in% dimnames(pars)[[2]])) {
+    stop("pars must have columns ", paste(p_types, collapse = " "))
+  }
+  if (any(dimnames(pars)[[2]] == "s")) { # rescale
+    pars[, c("A", "B", "v")] <- pars[, c("A", "B", "v")] / pars[, "s"]
+  }
+  pars[, "B"][pars[, "B"] < 0] <- 0 # Protection for negatives
+  pars[, "A"][pars[, "A"] < 0] <- 0
+  bad <- rep(NA, length(lR) / length(levels(lR)))
   out <- data.frame(R = bad, rt = bad)
   nr <- length(levels(lR))
-  dt <- matrix(Inf,nrow=nr,ncol=nrow(pars)/nr)
-  t0 <- pars[,"t0"]
-  pars <- pars[ok,]
-  dt[ok] <- rWald(sum(ok),B=pars[,"B"],v=pars[,"v"],A=pars[,"A"])
-  R <- max.col(-t(dt), ties.method='first')
-  pick <- cbind(R,1:dim(dt)[2]) # Matrix to pick winner
+  dt <- matrix(Inf, nrow = nr, ncol = nrow(pars) / nr)
+  t0 <- pars[, "t0"]
+  pars <- pars[ok, ]
+  dt[ok] <- rWald(sum(ok), B = pars[, "B"], v = pars[, "v"], A = pars[, "A"])
+  R <- max.col(-t(dt), ties.method = "first")
+  pick <- cbind(R, 1:dim(dt)[2]) # Matrix to pick winner
   # Any t0 difference with lR due to response production time (no effect on race)
-  rt <- matrix(t0,nrow=nr)[pick] + dt[pick]
+  rt <- matrix(t0, nrow = nr)[pick] + dt[pick]
   out$R <- levels(lR)[R]
-  out$R <- factor(out$R,levels=levels(lR))
+  out$R <- factor(out$R, levels = levels(lR))
   out$rt <- rt
   out
 }
@@ -173,29 +175,31 @@ rRDM <- function(lR,pars,p_types=c("v","B","A","t0"),ok=rep(TRUE,dim(pars)[1]))
 #' # (see Table above).
 #' @export
 
-RDM <- function(){
+RDM <- function() {
   list(
-    type="RACE",
+    type = "RACE",
     c_name = "RDM",
-    p_types=c("v" = log(1),"B" = log(1),"A" = log(0),"t0" = log(0),"s" = log(1), "pContaminant"=qnorm(0)),
+    p_types = c("v" = log(1), "B" = log(1), "A" = log(0), "t0" = log(0), "s" = log(1), "pContaminant" = qnorm(0)),
     p_types_canonical = c("v", "B", "A", "t0", "s"),
-    transform=list(func=c(v = "exp", B = "exp", A = "exp",t0 = "exp", s = "exp",pContaminant="pnorm")),
-    bound=list(minmax=cbind(v=c(1e-3,Inf), B=c(0,Inf), A=c(1e-4,Inf),t0=c(0.05,Inf), s=c(0,Inf),pContaminant=c(0.001,0.999)),
-               exception=c(A=0, v=0,pContaminant=0)),
+    transform = list(func = c(v = "exp", B = "exp", A = "exp", t0 = "exp", s = "exp", pContaminant = "pnorm")),
+    bound = list(
+      minmax = cbind(v = c(1e-3, Inf), B = c(0, Inf), A = c(1e-4, Inf), t0 = c(0.05, Inf), s = c(0, Inf), pContaminant = c(0.001, 0.999)),
+      exception = c(A = 0, v = 0, pContaminant = 0)
+    ),
     # Trial dependent parameter transform
-    Ttransform = function(pars,dadm) {
-      pars <- cbind(pars,b=pars[,"B"] + pars[,"A"])
+    Ttransform = function(pars, dadm) {
+      pars <- cbind(pars, b = pars[, "B"] + pars[, "A"])
       pars
     },
     # Random function for racing accumulators
-    rfun=function(data=NULL,pars)  rRDM(data$lR,pars,ok=attr(pars, "ok")),
+    rfun = function(data = NULL, pars) rRDM(data$lR, pars, ok = attr(pars, "ok")),
     # Density function (PDF) for single accumulator
-    dfun=function(rt,pars) dRDM(rt,pars),
+    dfun = function(rt, pars) dRDM(rt, pars),
     # Probability function (CDF) for single accumulator
-    pfun=function(rt,pars) pRDM(rt,pars),
+    pfun = function(rt, pars) pRDM(rt, pars),
     # Race likelihood combining pfun and dfun
-    log_likelihood=function(pars,dadm,model,min_ll=log(1e-10)){
-      log_likelihood_race_missing(pars=pars, dadm = dadm, model = model, min_ll = min_ll)
+    log_likelihood = function(pars, dadm, model, min_ll = log(1e-10)) {
+      log_likelihood_race_missing(pars = pars, dadm = dadm, model = model, min_ll = min_ll)
     }
   )
 }
@@ -204,51 +208,70 @@ RDM <- function(){
 # RDMGBM: Racing Geometric Brownian Motion with start-point variability
 # ============================================================================
 
-dRDMGBM <- function(rt, pars) {
+dRDMGBM <- function(rt, pars, erlang = 1L) {
   if (is.null(dim(pars)) || (dim(pars)[1] == 1 & length(rt) > 1)) {
-    original_names <- names(pars); if (is.null(original_names)) original_names <- colnames(pars)
-    pars <- matrix(pars, nrow=length(rt), ncol=length(pars),
-                   dimnames=list(NULL, original_names), byrow=TRUE)
+    original_names <- names(pars)
+    if (is.null(original_names)) original_names <- colnames(pars)
+    pars <- matrix(pars,
+      nrow = length(rt), ncol = length(pars),
+      dimnames = list(NULL, original_names), byrow = TRUE
+    )
   }
   if (!("b" %in% colnames(pars)) && all(c("B", "A") %in% colnames(pars))) {
-    pars <- cbind(pars, b=1 + pars[, "B"] + pars[, "A"])
+    pars <- cbind(pars, b = 1 + pars[, "B"] + pars[, "A"])
   }
+  if (!("lambda" %in% colnames(pars))) stop("RDMGBM requires parameter column 'lambda'.")
   out <- rep(NaN, length(rt))
-  ok <- rt > pars[, "t0", drop=FALSE] & !pars[, "v", drop=FALSE] < 0
+  ok <- rt > pars[, "t0", drop = FALSE] & !pars[, "v", drop = FALSE] < 0
   ok[is.na(ok)] <- FALSE
   if (any(ok)) {
-    out[ok] <- dGBMspv(rt[ok], v=pars[ok, "v", drop=FALSE], b=pars[ok, "b", drop=FALSE],
-                       A=pars[ok, "A", drop=FALSE], t0=pars[ok, "t0", drop=FALSE],
-                       s=pars[ok, "s", drop=FALSE])
+    out[ok] <- dGBMspv(rt[ok],
+      v = pars[ok, "v", drop = FALSE], b = pars[ok, "b", drop = FALSE],
+      A = pars[ok, "A", drop = FALSE], t0 = pars[ok, "t0", drop = FALSE],
+      s = pars[ok, "s", drop = FALSE], lambda = pars[ok, "lambda", drop = FALSE],
+      kill_shape = erlang
+    )
   }
   out
 }
 
-pRDMGBM <- function(rt, pars) {
+pRDMGBM <- function(rt, pars, erlang = 1L) {
   if (is.null(dim(pars)) || (dim(pars)[1] == 1 & length(rt) > 1)) {
-    original_names <- names(pars); if (is.null(original_names)) original_names <- colnames(pars)
-    pars <- matrix(pars, nrow=length(rt), ncol=length(pars),
-                   dimnames=list(NULL, original_names), byrow=TRUE)
+    original_names <- names(pars)
+    if (is.null(original_names)) original_names <- colnames(pars)
+    pars <- matrix(pars,
+      nrow = length(rt), ncol = length(pars),
+      dimnames = list(NULL, original_names), byrow = TRUE
+    )
   }
   if (!("b" %in% colnames(pars)) && all(c("B", "A") %in% colnames(pars))) {
-    pars <- cbind(pars, b=1 + pars[, "B"] + pars[, "A"])
+    pars <- cbind(pars, b = 1 + pars[, "B"] + pars[, "A"])
   }
+  if (!("lambda" %in% colnames(pars))) stop("RDMGBM requires parameter column 'lambda'.")
   out <- rep(NaN, length(rt))
-  ok <- rt > pars[, "t0", drop=FALSE] & !pars[, "v", drop=FALSE] < 0
+  ok <- rt > pars[, "t0", drop = FALSE] & !pars[, "v", drop = FALSE] < 0
   ok[is.na(ok)] <- FALSE
   if (any(ok)) {
-    out[ok] <- pGBMspv(rt[ok], v=pars[ok, "v", drop=FALSE], b=pars[ok, "b", drop=FALSE],
-                       A=pars[ok, "A", drop=FALSE], t0=pars[ok, "t0", drop=FALSE],
-                       s=pars[ok, "s", drop=FALSE])
+    out[ok] <- pGBMspv(rt[ok],
+      v = pars[ok, "v", drop = FALSE], b = pars[ok, "b", drop = FALSE],
+      A = pars[ok, "A", drop = FALSE], t0 = pars[ok, "t0", drop = FALSE],
+      s = pars[ok, "s", drop = FALSE], lambda = pars[ok, "lambda", drop = FALSE],
+      kill_shape = erlang
+    )
   }
   out
 }
 
 rGBM <- function(n, b, v, A, s = 1) {
   out <- rep(Inf, n)
-  if (n <= 0) return(out)
+  if (n <= 0) {
+    return(out)
+  }
   if (n > 1 && all(length(b) == 1, length(v) == 1, length(A) == 1, length(s) == 1)) {
-    b <- rep(b, n); v <- rep(v, n); A <- rep(A, n); s <- rep(s, n)
+    b <- rep(b, n)
+    v <- rep(v, n)
+    A <- rep(A, n)
+    s <- rep(s, n)
   }
   A[A < 0] <- 0
   x0 <- 1 + runif(n, 0, A)
@@ -256,18 +279,22 @@ rGBM <- function(n, b, v, A, s = 1) {
   mu_log <- v - 0.5 * s^2
   ok <- is.finite(mu_log) & is.finite(d) & (d > 0)
   if (any(ok)) {
-    out[ok] <- statmod::rinvgauss(sum(ok), mean=d[ok] / mu_log[ok], shape=d[ok]^2 / s[ok]^2)
+    out[ok] <- statmod::rinvgauss(sum(ok), mean = d[ok] / mu_log[ok], shape = d[ok]^2 / s[ok]^2)
   }
   out
 }
 
-rRDMGBM <- function(lR, pars, p_types=c("v", "B", "A", "t0", "s"), ok=rep(TRUE, dim(pars)[1])) {
+rRDMGBM <- function(lR, pars, p_types = c("v", "b", "A", "t0", "s", "lambda"),
+                    ok = rep(TRUE, dim(pars)[1]), erlang = 1L, guess = FALSE, global = FALSE) {
+  if (!is.null(attr(pars, "ok"))) ok <- attr(pars, "ok")
   if (!("b" %in% dimnames(pars)[[2]]) && all(c("B", "A") %in% dimnames(pars)[[2]])) {
-    pars <- cbind(pars, b=1 + pars[, "B"] + pars[, "A"])
+    pars <- cbind(pars, b = 1 + pars[, "B"] + pars[, "A"])
   }
-  required <- c("v", "b", "A", "t0", "s")
-  if (!all(required %in% dimnames(pars)[[2]]))
+  if (!("lambda" %in% colnames(pars))) stop("RDMGBM requires parameter column 'lambda'.")
+  required <- c("v", "b", "A", "t0", "s", "lambda")
+  if (!all(required %in% dimnames(pars)[[2]])) {
     stop("pars must have columns ", paste(required, collapse = " "))
+  }
   pars[, "b"][pars[, "b"] < 1 + 1e-8] <- 1 + 1e-8
   pars[, "A"][pars[, "A"] < 0] <- 0
   bad <- rep(NA, length(lR) / length(levels(lR)))
@@ -276,46 +303,105 @@ rRDMGBM <- function(lR, pars, p_types=c("v", "B", "A", "t0", "s"), ok=rep(TRUE, 
   n_trials <- nrow(pars) / nr
   if (length(ok) != nrow(pars)) stop("ok must have length nrow(pars).")
   trial_ok <- colSums(matrix(ok, nrow = nr)) == nr
-  dt <- matrix(NA_real_, nrow = nr, ncol = n_trials)
+  dt <- matrix(Inf, nrow = nr, ncol = n_trials)
   t0 <- pars[, "t0"]
+
+  # Draw one kill timer per trial for guess/global omission modes.
+  if (guess || global) {
+    lambda_mat <- matrix(pars[, "lambda"], nrow = nr)
+    if (global && any(apply(lambda_mat, 2, function(x) length(unique(x)) > 1)))
+      stop("global=TRUE requires lambda to be constant across accumulators")
+    lambda_trials <- lambda_mat[1, ]
+    tk <- rexp(n_trials, rate = lambda_trials)
+    if (erlang >= 2L) tk <- tk + rexp(n_trials, rate = lambda_trials)
+    pars[, "lambda"] <- 0  # accumulators race without kill; kill applied post-hoc
+  }
+
   pars_ok <- pars[ok, , drop = FALSE]
   if (nrow(pars_ok) > 0) {
-    dt[ok] <- rGBM(sum(ok), b = pars_ok[, "b"], v = pars_ok[, "v"], A = pars_ok[, "A"], s = pars_ok[, "s"])
+    dt[ok] <- rGBM_killed(sum(ok),
+      b = pars_ok[, "b"], v = pars_ok[, "v"], A = pars_ok[, "A"],
+      s = pars_ok[, "s"], k = pars_ok[, "lambda"], erlang = erlang
+    )
   }
-  if (any(trial_ok)) {
-    dt_valid <- dt[, trial_ok, drop = FALSE]
-    R <- max.col(-t(dt_valid), ties.method = "first")
-    pick <- cbind(R, which(trial_ok))
-    rt <- matrix(t0, nrow = nr)[pick] + dt[pick]
-    out$R[trial_ok] <- levels(lR)[R]
-    out$rt[trial_ok] <- rt
+
+  if (guess) {
+    is_guess <- tk < apply(dt, 2, min)
+    if (any(is_guess)) {
+      dt[, is_guess] <- Inf
+      ok_mat <- matrix(ok, nrow = nr)
+      for (trial_idx in which(is_guess)) {
+        active <- which(ok_mat[, trial_idx] & levels(lR) != "nogo")
+        if (length(active) > 0) {
+          winner <- if (length(active) > 1) sample(active, 1) else active
+          dt[winner, trial_idx] <- tk[trial_idx]
+        }
+      }
+    }
+  } else if (global) {
+    is_killed <- tk < apply(dt, 2, min)
+    if (any(is_killed)) dt[, is_killed] <- Inf
   }
+
+  bad_col <- apply(dt, 2, function(x) all(is.infinite(x)))
+  R <- apply(dt, 2, which.min)
+  pick <- cbind(R, 1:dim(dt)[2])
+  rt <- matrix(t0, nrow = nr)[pick] + dt[pick]
+  out$R <- levels(lR)[R]
   out$R <- factor(out$R, levels = levels(lR))
+  out$rt <- rt
+  out$R[bad_col] <- NA
+  out$rt[bad_col] <- Inf
+  out
+}
+
+rGBM_killed <- function(n, b, v, A, s = 1, k = 0, erlang = 1L) {
+  out <- rGBM(n, b = b, v = v, A = A, s = s)
+  kill_idx <- which(k > 0)
+  if (length(kill_idx) > 0) {
+    tk <- rexp(length(kill_idx), rate = k[kill_idx])
+    if (erlang >= 2L) tk <- tk + rexp(length(kill_idx), rate = k[kill_idx])
+    out[kill_idx[tk <= out[kill_idx]]] <- Inf
+  }
   out
 }
 
 #' RDMGBM Model
 #'
 #' Racing geometric Brownian first-passage model with start-point variability.
-#' Equivalent parameterization to RDMSWTN without `sv`.
+#' Supports exponential killing (omission / guessing) via the `lambda` parameter.
+#'
+#' @param erlang integer shape of the killing process (1 = exponential, 2 = Erlang-2)
+#' @param guess logical; if TRUE killing produces guesses (random responses) rather than omissions
+#' @param global logical; if TRUE a single kill clock is shared across all accumulators per trial
 #'
 #' @export
-#' 
-RDMGBM <- function() {
+#'
+RDMGBM <- function(erlang = 1L, guess = FALSE, global = FALSE) {
   list(
     type = "RACE",
-    c_name = "RDMGBM",
-    p_types = c("v"=log(1), "B"=log(1), "A"=log(0), "t0"=log(0),
-                "s"=log(1), "pContaminant"=qnorm(0)),
+    c_name = paste0(
+      if (erlang >= 2L) "RDMGBM_E2" else "RDMGBM",
+      if (guess) "_GUESS" else "",
+      if (global) "_GLOBAL" else ""
+    ),
+    p_types = c(
+      "v" = log(1), "B" = log(1), "A" = log(0), "t0" = log(0),
+      "s" = log(1), "lambda" = log(0), "pContaminant" = qnorm(0)
+    ),
     p_types_canonical = c("v", "B", "A", "t0", "s"),
-    transform = list(func = c(v="exp", B="exp", A="exp", t0="exp",
-                               s="exp", pContaminant="pnorm")),
+    transform = list(func = c(
+      v = "exp", B = "exp", A = "exp", t0 = "exp",
+      s = "exp", lambda = "exp", pContaminant = "pnorm"
+    )),
     bound = list(
-      minmax = cbind(v=c(1e-3, Inf), B=c(0, Inf), A=c(0, Inf),
-                     t0=c(0.05, Inf), s=c(0, Inf), pContaminant=c(0.001, 0.999)),
-      exception = c(A=0, v=0, pContaminant=0),
-      # Joint validity for GBM first-passage parameterization.
-      # Enforces positive effective log-drift so simulators do not emit NA RTs.
+      minmax = cbind(
+        v = c(1e-3, Inf), B = c(0, Inf), A = c(0, Inf),
+        t0 = c(0.05, Inf), s = c(0, Inf), lambda = c(1e-4, Inf),
+        pContaminant = c(0.001, 0.999)
+      ),
+      exception = c(A = 0, v = 0, lambda = 0, pContaminant = 0),
+      # Joint validity: positive log-space drift required for finite-time simulation.
       joint_ok = function(pars) {
         if (!all(c("v", "s") %in% colnames(pars))) return(rep(TRUE, nrow(pars)))
         is.finite(pars[, "v"]) & is.finite(pars[, "s"]) &
@@ -323,14 +409,16 @@ RDMGBM <- function() {
       }
     ),
     Ttransform = function(pars, dadm) {
-      pars <- cbind(pars, b=1 + pars[, "B"] + pars[, "A"])
+      pars <- cbind(pars, b = 1 + pars[, "B"] + pars[, "A"])
       pars
     },
-    rfun = function(data=NULL, pars) rRDMGBM(data$lR, pars, ok=attr(pars, "ok")),
-    dfun = function(rt, pars) dRDMGBM(rt, pars),
-    pfun = function(rt, pars) pRDMGBM(rt, pars),
-    log_likelihood = function(pars, dadm, model, min_ll=log(1e-10)) {
-      log_likelihood_race_missing(pars=pars, dadm=dadm, model=model, min_ll=min_ll)
+    rfun = function(data = NULL, pars) {
+      rRDMGBM(data$lR, pars, ok = attr(pars, "ok"), erlang = erlang, guess = guess, global = global)
+    },
+    dfun = function(rt, pars) dRDMGBM(rt, pars, erlang = erlang),
+    pfun = function(rt, pars) pRDMGBM(rt, pars, erlang = erlang),
+    log_likelihood = function(pars, dadm, model, min_ll = log(1e-10)) {
+      log_likelihood_race_missing(pars = pars, dadm = dadm, model = model, min_ll = min_ll)
     }
   )
 }
@@ -341,9 +429,9 @@ RDMGBM <- function() {
 # ============================================================================
 
 #' RDMSWTN Model
-#' 
+#'
 #' @details
-#' 
+#'
 #' Racing Diffusion Model with Shifted Wald Truncated Normal (SWTN) accumulators.
 #' Supports between-trial drift variability (sv) and start-point variability (A).
 #' When sv=0 and A=0 the model reduces to a point Wald; when sv=0 it reduces
@@ -358,131 +446,163 @@ RDMGBM <- function() {
 #' | *s*       | log       | \[0, Inf\]      | log(1)  | Within-trial SD of drift rate          |
 #' | *sv*      | log       | \[0, Inf\]      | log(0)  | Between-trial SD of drift rate         |
 #' | *lambda*  | log       | \[0, Inf\]      | log(0)  | Exponential killing rate               |
-#' 
+#'
 #' @param erlang integer shape of the killing process (1=exponential, 2=Erlang-2)
 #' @param guess logical, if TRUE killing produces guesses (random responses)
 #' @param global logical, if TRUE killing process is global to the race (one clock per trial)
-#' 
+#'
 #' @return a list of parameters
-#' 
+#'
 #' @export
-#' 
-RDMSWTN <- function(erlang = 1L, guess = FALSE, global = FALSE){
+#'
+RDMSWTN <- function(erlang = 1L, guess = FALSE, global = TRUE) {
   list(
-    type="RACE",
+    type = "RACE",
     c_name = paste0(if (erlang >= 2L) "RDMSWTN_E2" else "RDMSWTN", if (guess) "_GUESS" else "", if (global) "_GLOBAL" else ""),
-    p_types=c("v"=log(1), "B"=log(1), "A"=log(0), "t0"=log(0),
-              "s"=log(1), "sv"=log(0), "lambda"=log(0), "pContaminant"=qnorm(0)),
+    p_types = c(
+      "v" = log(1), "B" = log(1), "A" = log(0), "t0" = log(0),
+      "s" = log(1), "sv" = log(0), "lambda" = log(0), "pContaminant" = qnorm(0)
+    ),
     p_types_canonical = c("v", "B", "A", "t0", "s", "sv"),
-    transform=list(func=c(v="exp", B="exp", A="exp", t0="exp",
-                          s="exp", sv="exp", lambda="exp", pContaminant="pnorm")),
-    bound=list(minmax=cbind(v=c(1e-3,Inf), B=c(0,Inf), A=c(0,Inf),
-                            t0=c(0.05,Inf), s=c(0,Inf), sv=c(0,Inf), lambda=c(1e-4,Inf),
-                            pContaminant=c(0.001,0.999)),
-               exception=c(A=0, v=0, sv=0, lambda=0, pContaminant=0)),
+    transform = list(func = c(
+      v = "exp", B = "exp", A = "exp", t0 = "exp",
+      s = "exp", sv = "exp", lambda = "exp", pContaminant = "pnorm"
+    )),
+    bound = list(
+      minmax = cbind(
+        v = c(1e-3, Inf), B = c(0, Inf), A = c(0, Inf),
+        t0 = c(0.05, Inf), s = c(0, Inf), sv = c(0, Inf), lambda = c(1e-4, Inf),
+        pContaminant = c(0.001, 0.999)
+      ),
+      exception = c(A = 0, v = 0, sv = 0, lambda = 0, pContaminant = 0)
+    ),
     Ttransform = function(pars, dadm) {
-      pars <- cbind(pars, b=pars[,"B"] + pars[,"A"])
+      pars <- cbind(pars, b = pars[, "B"] + pars[, "A"])
       pars
     },
-    rfun=function(data=NULL, pars) rRDMSWTN(data$lR, pars, ok=attr(pars, "ok"), erlang=erlang, guess=guess, global=global),
-    dfun=function(rt, pars) dRDMSWTN(rt, pars, erlang=erlang),
-    pfun=function(rt, pars) pRDMSWTN(rt, pars, erlang=erlang),
-    log_likelihood=function(pars, dadm, model, min_ll=log(1e-10)){
-      log_likelihood_race_missing(pars=pars, dadm=dadm, model=model, min_ll=min_ll)
+    rfun = function(data = NULL, pars) rRDMSWTN(data$lR, pars, ok = attr(pars, "ok"), erlang = erlang, guess = guess, global = global),
+    dfun = function(rt, pars) dRDMSWTN(rt, pars, erlang = erlang),
+    pfun = function(rt, pars) pRDMSWTN(rt, pars, erlang = erlang),
+    log_likelihood = function(pars, dadm, model, min_ll = log(1e-10)) {
+      log_likelihood_race_missing(pars = pars, dadm = dadm, model = model, min_ll = min_ll)
     }
   )
 }
 
 dRDMSWTN <- function(rt, pars, erlang = 1L) {
-  if (is.null(dim(pars)) || (dim(pars)[1]==1 & length(rt)>1)) {
-    original_names <- names(pars); if (is.null(original_names)) original_names <- colnames(pars)
-    pars <- matrix(pars, nrow=length(rt), ncol=length(pars),
-                   dimnames=list(NULL, original_names), byrow=TRUE)
+  if (is.null(dim(pars)) || (dim(pars)[1] == 1 & length(rt) > 1)) {
+    original_names <- names(pars)
+    if (is.null(original_names)) original_names <- colnames(pars)
+    pars <- matrix(pars,
+      nrow = length(rt), ncol = length(pars),
+      dimnames = list(NULL, original_names), byrow = TRUE
+    )
   }
   out <- rep(NaN, length(rt))
-  ok <- rt > pars[,"t0",drop=FALSE] & !pars[,"v",drop=FALSE] < 0
+  ok <- rt > pars[, "t0", drop = FALSE] & !pars[, "v", drop = FALSE] < 0
   ok[is.na(ok)] <- FALSE
   if (any(ok)) {
     if (!("lambda" %in% colnames(pars))) stop("RDMSWTN requires parameter column 'lambda'.")
     if (any(dimnames(pars)[[2]] == "s")) {
-      pars_ok <- pars[ok,,drop=FALSE]
-      pars_ok[,c("A","b","v","sv")] <- pars_ok[,c("A","b","v","sv")] / pars_ok[,"s"]
-      pars[ok,] <- pars_ok
+      pars_ok <- pars[ok, , drop = FALSE]
+      pars_ok[, c("A", "b", "v", "sv")] <- pars_ok[, c("A", "b", "v", "sv")] / pars_ok[, "s"]
+      pars[ok, ] <- pars_ok
     }
-    out[ok] <- dSWTNspv(rt[ok], v=pars[ok,"v",drop=FALSE], b=pars[ok,"b",drop=FALSE],
-                        A=pars[ok,"A",drop=FALSE], t0=pars[ok,"t0",drop=FALSE],
-                        sv=pars[ok,"sv",drop=FALSE], lambda=pars[ok,"lambda",drop=FALSE],
-                        kill_shape=erlang)
+    out[ok] <- dSWTNspv(rt[ok],
+      v = pars[ok, "v", drop = FALSE], b = pars[ok, "b", drop = FALSE],
+      A = pars[ok, "A", drop = FALSE], t0 = pars[ok, "t0", drop = FALSE],
+      sv = pars[ok, "sv", drop = FALSE], lambda = pars[ok, "lambda", drop = FALSE],
+      kill_shape = erlang
+    )
   }
   out
 }
 
 pRDMSWTN <- function(rt, pars, erlang = 1L) {
-  if (is.null(dim(pars)) || (dim(pars)[1]==1 & length(rt)>1)) {
-    original_names <- names(pars); if (is.null(original_names)) original_names <- colnames(pars)
-    pars <- matrix(pars, nrow=length(rt), ncol=length(pars),
-                   dimnames=list(NULL, original_names), byrow=TRUE)
+  if (is.null(dim(pars)) || (dim(pars)[1] == 1 & length(rt) > 1)) {
+    original_names <- names(pars)
+    if (is.null(original_names)) original_names <- colnames(pars)
+    pars <- matrix(pars,
+      nrow = length(rt), ncol = length(pars),
+      dimnames = list(NULL, original_names), byrow = TRUE
+    )
   }
   out <- rep(NaN, length(rt))
-  ok <- rt > pars[,"t0",drop=FALSE] & !pars[,"v",drop=FALSE] < 0
+  ok <- rt > pars[, "t0", drop = FALSE] & !pars[, "v", drop = FALSE] < 0
   ok[is.na(ok)] <- FALSE
   if (any(ok)) {
     if (!("lambda" %in% colnames(pars))) stop("RDMSWTN requires parameter column 'lambda'.")
     if (any(dimnames(pars)[[2]] == "s")) {
-      pars_ok <- pars[ok,,drop=FALSE]
-      pars_ok[,c("A","b","v","sv")] <- pars_ok[,c("A","b","v","sv")] / pars_ok[,"s"]
-      pars[ok,] <- pars_ok
+      pars_ok <- pars[ok, , drop = FALSE]
+      pars_ok[, c("A", "b", "v", "sv")] <- pars_ok[, c("A", "b", "v", "sv")] / pars_ok[, "s"]
+      pars[ok, ] <- pars_ok
     }
-    out[ok] <- pSWTNspv(rt[ok], v=pars[ok,"v",drop=FALSE], b=pars[ok,"b",drop=FALSE],
-                        A=pars[ok,"A",drop=FALSE], t0=pars[ok,"t0",drop=FALSE],
-                        sv=pars[ok,"sv",drop=FALSE], lambda=pars[ok,"lambda",drop=FALSE],
-                        kill_shape=erlang)
+    out[ok] <- pSWTNspv(rt[ok],
+      v = pars[ok, "v", drop = FALSE], b = pars[ok, "b", drop = FALSE],
+      A = pars[ok, "A", drop = FALSE], t0 = pars[ok, "t0", drop = FALSE],
+      sv = pars[ok, "sv", drop = FALSE], lambda = pars[ok, "lambda", drop = FALSE],
+      kill_shape = erlang
+    )
   }
   out
 }
 
-rRDMSWTN <- function(lR, pars, p_types=c("v","b","A","t0","sv","lambda"),
-                     ok=rep(TRUE, dim(pars)[1]), erlang=1L, guess=FALSE, global=FALSE) {
+rRDMSWTN <- function(lR, pars, p_types = c("v", "b", "A", "t0", "sv", "lambda"),
+                     ok = rep(TRUE, dim(pars)[1]), erlang = 1L, guess = FALSE, global = FALSE) {
   if (!is.null(attr(pars, "ok"))) ok <- attr(pars, "ok")
-  if (is.null(dim(pars)) || (dim(pars)[1]==1 & length(lR)>1)) {
-    original_names <- names(pars); if (is.null(original_names)) original_names <- colnames(pars)
-    pars <- matrix(pars, nrow=length(lR), ncol=length(pars),
-                   dimnames=list(NULL, original_names), byrow=TRUE)
+  if (is.null(dim(pars)) || (dim(pars)[1] == 1 & length(lR) > 1)) {
+    original_names <- names(pars)
+    if (is.null(original_names)) original_names <- colnames(pars)
+    pars <- matrix(pars,
+      nrow = length(lR), ncol = length(pars),
+      dimnames = list(NULL, original_names), byrow = TRUE
+    )
   }
   if (!("lambda" %in% colnames(pars))) stop("RDMSWTN requires parameter column 'lambda'.")
-  if (!all(p_types %in% dimnames(pars)[[2]]))
-    stop("pars must have columns ", paste(p_types, collapse=" "))
-  if (any(dimnames(pars)[[2]] == "s"))
-    pars[,c("A","b","v","sv")] <- pars[,c("A","b","v","sv")] / pars[,"s"]
-  pars[,"b"][pars[,"b"] < 0] <- 0
-  pars[,"A"][pars[,"A"] < 0] <- 0
-  bad <- rep(NA, length(lR)/length(levels(lR)))
-  out <- data.frame(R=bad, rt=bad)
+  if (!all(p_types %in% dimnames(pars)[[2]])) {
+    stop("pars must have columns ", paste(p_types, collapse = " "))
+  }
+  if (any(dimnames(pars)[[2]] == "s")) {
+    pars[, c("A", "b", "v", "sv")] <- pars[, c("A", "b", "v", "sv")] / pars[, "s"]
+  }
+  pars[, "b"][pars[, "b"] < 0] <- 0
+  pars[, "A"][pars[, "A"] < 0] <- 0
+  bad <- rep(NA, length(lR) / length(levels(lR)))
+  out <- data.frame(R = bad, rt = bad)
   nr <- length(levels(lR))
-  dt <- matrix(Inf, nrow=nr, ncol=nrow(pars)/nr)
-  t0 <- pars[,"t0"]
+  dt <- matrix(Inf, nrow = nr, ncol = nrow(pars) / nr)
+  t0 <- pars[, "t0"]
   # If guessing or global omission, drawn ONE kill process per trial
   if (guess || global) {
-    n_trials <- nrow(pars)/nr
-    lambda_mat <- matrix(pars[,"lambda"], nrow=nr)
-    if (global && any(apply(lambda_mat, 2, function(x) length(unique(x)) > 1)))
+    n_trials <- nrow(pars) / nr
+    lambda_mat <- matrix(pars[, "lambda"], nrow = nr)
+    if (global && any(apply(lambda_mat, 2, function(x) length(unique(x)) > 1))) {
       stop("global=TRUE requires lambda to be constant across accumulators (lambda must not vary by any accumulator-level factor)")
-    lambda_trials <- lambda_mat[1,]
-    tk <- rexp(n_trials, rate=lambda_trials)
-    if (erlang >= 2L) tk <- tk + rexp(n_trials, rate=lambda_trials)
+    }
+    lambda_trials <- lambda_mat[1, ]
+    tk <- rep(Inf, n_trials)
+    kill_ok <- !is.na(lambda_trials) & lambda_trials > 0
+    if (any(kill_ok)) {
+      tk[kill_ok] <- rexp(sum(kill_ok), rate = lambda_trials[kill_ok])
+      if (erlang >= 2L) {
+        tk[kill_ok] <- tk[kill_ok] + rexp(sum(kill_ok), rate = lambda_trials[kill_ok])
+      }
+    }
     # Simulator rSWTN without killing (k=0)
-    pars[,"lambda"] <- 0
+    pars[, "lambda"] <- 0
   }
-  pars <- pars[ok,,drop=FALSE]
-  dt[ok] <- rSWTN(sum(ok), b=pars[,"b"], v=pars[,"v"], A=pars[,"A"], sv=pars[,"sv"],
-                  k=pars[,"lambda"], erlang=erlang)
-  
+  pars <- pars[ok, , drop = FALSE]
+  dt[ok] <- rSWTN(sum(ok),
+    b = pars[, "b"], v = pars[, "v"], A = pars[, "A"], sv = pars[, "sv"],
+    k = pars[, "lambda"], erlang = erlang
+  )
+
   if (guess) {
     # Response is a guess if tk < any(dt)
     is_guess <- tk < apply(dt, 2, min)
     if (any(is_guess)) {
       dt[, is_guess] <- Inf
-      ok_mat <- matrix(ok, nrow=nr)
+      ok_mat <- matrix(ok, nrow = nr)
       # For each guess trial, pick one of the active, non-nogo accumulators
       for (trial_idx in which(is_guess)) {
         active_indices <- which(ok_mat[, trial_idx] & levels(lR) != "nogo")
@@ -504,34 +624,34 @@ rRDMSWTN <- function(lR, pars, p_types=c("v","b","A","t0","sv","lambda"),
   bad_col <- apply(dt, 2, function(x) all(is.infinite(x)))
   R <- apply(dt, 2, which.min)
   pick <- cbind(R, 1:dim(dt)[2])
-  rt <- matrix(t0, nrow=nr)[pick] + dt[pick]
+  rt <- matrix(t0, nrow = nr)[pick] + dt[pick]
   out$R <- levels(lR)[R]
-  out$R <- factor(out$R, levels=levels(lR))
+  out$R <- factor(out$R, levels = levels(lR))
   out$rt <- rt
   out$R[bad_col] <- NA
   out$rt[bad_col] <- Inf
   out
 }
 
-rSWTN <- function(n, b, v, A, sv, s=1, k=0, erlang=1L) {
+rSWTN <- function(n, b, v, A, sv, s = 1, k = 0, erlang = 1L) {
   out <- numeric(n)
-  if (n > 1 & all(length(A)==1, length(v)==1, length(b)==1, length(sv)==1, length(k)==1)) {
-    A  <- rep(A, n)
-    b  <- rep(b, n)
-    v  <- rep(v, n)
+  if (n > 1 & all(length(A) == 1, length(v) == 1, length(b) == 1, length(sv) == 1, length(k) == 1)) {
+    A <- rep(A, n)
+    b <- rep(b, n)
+    v <- rep(v, n)
     sv <- rep(sv, n)
-    k  <- rep(k, n)
+    k <- rep(k, n)
   }
-  b <- ifelse(A==0, b, runif(n, b-A, b))
-  l <- ifelse(sv==0, v, msm::rtnorm(n, mean=v, sd=sv, lower=0, upper=Inf))
+  b <- ifelse(A == 0, b, runif(n, b - A, b))
+  l <- ifelse(sv == 0, v, msm::rtnorm(n, mean = v, sd = sv, lower = 0, upper = Inf))
   ok <- !l < 0
   nok <- sum(ok)
-  out[ok] <- statmod::rinvgauss(nok, mean=(b[ok]/s) / (l[ok]/s), shape=(b[ok]/s)^2)
+  out[ok] <- statmod::rinvgauss(nok, mean = (b[ok] / s) / (l[ok] / s), shape = (b[ok] / s)^2)
   kill_ok <- ok & (k > 0)
   if (any(kill_ok)) {
     nk <- sum(kill_ok)
-    t_kill <- rexp(nk, rate=k[kill_ok])
-    if (erlang >= 2L) t_kill <- t_kill + rexp(nk, rate=k[kill_ok])  # Erlang-2 = sum of 2 Exp
+    t_kill <- rexp(nk, rate = k[kill_ok])
+    if (erlang >= 2L) t_kill <- t_kill + rexp(nk, rate = k[kill_ok]) # Erlang-2 = sum of 2 Exp
     kill_idx <- which(kill_ok)
     out[kill_idx[t_kill <= out[kill_idx]]] <- Inf
   }

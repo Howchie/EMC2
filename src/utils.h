@@ -188,30 +188,37 @@ inline double prdm_scalar(double t, const double* par, void* /*ctx_*/) {
                        par[0] * inv_s, 0.5 * par[2] * inv_s);
 }
 
-inline double drdmgbm_scalar(double t, const double* par, void* /*ctx_*/) {
+// Column layout: v=0, B=1, A=2, t0=3, s=4, lambda=5
+inline double drdmgbm_scalar(double t, const double* par, void* ctx_) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
   if (R_IsNA(par[0])) return 0.0;
   const double tt = t - par[3];
   if (tt <= 0.0) return 0.0;
   const double inv_s = 1.0 / par[4];
+  const double k_use = (ctx && ctx->has_global_kill()) ? 0.0 : par[5];
+  const int ks = ctx ? ctx->kill_shape : 1;
   return dgbm(tt,
-              1.0 + (par[1] + par[2]) * inv_s, // b = 1 + (B + A) / s
-              par[0] * inv_s,            // v / s
+              1.0 + (par[1] + par[2]) * inv_s,  // b = 1 + (B + A) / s
+              par[0] * inv_s,                    // v / s
               1.0,
-              par[2] * inv_s,            // A / s
-              false);
+              par[2] * inv_s,                    // A / s
+              k_use, false, ks);
 }
 
-inline double prdmgbm_scalar(double t, const double* par, void* /*ctx_*/) {
+inline double prdmgbm_scalar(double t, const double* par, void* ctx_) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
   if (R_IsNA(par[0])) return 0.0;
   const double tt = t - par[3];
   if (tt <= 0.0) return 0.0;
   const double inv_s = 1.0 / par[4];
+  const double k_use = (ctx && ctx->has_global_kill()) ? 0.0 : par[5];
+  const int ks = ctx ? ctx->kill_shape : 1;
   return pgbm(tt,
               1.0 + (par[1] + par[2]) * inv_s,
               par[0] * inv_s,
               1.0,
               par[2] * inv_s,
-              false);
+              k_use, false, ks);
 }
 
 inline double dlnr_scalar(double t, const double* par, void* /*ctx_*/) {
@@ -375,55 +382,64 @@ inline void prdm_raw(const double* rt, const double* pars_cm, int n_rows,
   }
 }
 
-// RDMGBM: column layout v=0, B=1, A=2, t0=3, s=4
+// RDMGBM: column layout v=0, B=1, A=2, t0=3, s=4, lambda=5
 inline void drdmgbm_raw(const double* rt, const double* pars_cm, int n_rows,
                         const int* mask, const int* isok,
                         double* out, double min_ll, void* ctx_) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  const bool global_kill = ctx ? ctx->has_global_kill() : false;
+  const int ks = ctx ? ctx->kill_shape : 1;
   const double* v_  = pars_cm + 0 * n_rows;
   const double* B_  = pars_cm + 1 * n_rows;
   const double* A_  = pars_cm + 2 * n_rows;
   const double* t0_ = pars_cm + 3 * n_rows;
   const double* s_  = pars_cm + 4 * n_rows;
-  #pragma omp simd
+  const double* k_  = pars_cm + 5 * n_rows;
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
     if (R_IsNA(v_[i]) || !isok[i]) { out[i] = min_ll; continue; }
     const double tt = rt[i] - t0_[i];
     if (tt <= 0.0) { out[i] = min_ll; continue; }
     const double inv_s = 1.0 / s_[i];
-    const double pdf = dgbm(tt,
-                            1.0 + (B_[i] + A_[i]) * inv_s,
-                            v_[i] * inv_s,
-                            1.0,
-                            A_[i] * inv_s,
-                            false);
-    out[i] = (pdf > 0.0 && std::isfinite(pdf)) ? std::log(pdf) : min_ll;
+    const double k_use = global_kill ? 0.0 : k_[i];
+    const double log_pdf = dgbm(tt,
+                                1.0 + (B_[i] + A_[i]) * inv_s,
+                                v_[i] * inv_s,
+                                1.0,
+                                A_[i] * inv_s,
+                                k_use, true, ks);
+    out[i] = (R_FINITE(log_pdf) && log_pdf > min_ll) ? log_pdf : min_ll;
   }
 }
 
 inline void prdmgbm_raw(const double* rt, const double* pars_cm, int n_rows,
                         const int* mask, const int* isok,
                         double* out, double min_ll, void* ctx_) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  const bool global_kill = ctx ? ctx->has_global_kill() : false;
+  const int ks = ctx ? ctx->kill_shape : 1;
   const double* v_  = pars_cm + 0 * n_rows;
   const double* B_  = pars_cm + 1 * n_rows;
   const double* A_  = pars_cm + 2 * n_rows;
   const double* t0_ = pars_cm + 3 * n_rows;
   const double* s_  = pars_cm + 4 * n_rows;
-  #pragma omp simd
+  const double* k_  = pars_cm + 5 * n_rows;
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
     if (R_IsNA(v_[i]) || !isok[i]) { out[i] = 0.0; continue; }
     const double tt = rt[i] - t0_[i];
     if (tt <= 0.0) { out[i] = 0.0; continue; }
     const double inv_s = 1.0 / s_[i];
-    const double cdf = pgbm(tt,
-                            1.0 + (B_[i] + A_[i]) * inv_s,
-                            v_[i] * inv_s,
-                            1.0,
-                            A_[i] * inv_s,
-                            false);
-    if (cdf >= 1.0) { out[i] = min_ll; continue; }
-    out[i] = (cdf <= 0.0) ? 0.0 : std::log1p(-cdf);
+    const double k_use = global_kill ? 0.0 : k_[i];
+    const double log_cdf = pgbm(tt,
+                                1.0 + (B_[i] + A_[i]) * inv_s,
+                                v_[i] * inv_s,
+                                1.0,
+                                A_[i] * inv_s,
+                                k_use, true, ks);
+    if (!R_FINITE(log_cdf)) { out[i] = 0.0; continue; }
+    if (log_cdf >= 0.0) { out[i] = min_ll; continue; }
+    out[i] = log1m_exp(log_cdf);
   }
 }
 
@@ -553,35 +569,41 @@ inline void rdm_logS_at_t(double t, const double* pars_cm,
   }
 }
 
-// RDMGBM: column layout v=0, B=1, A=2, t0=3, s=4
+// RDMGBM: column layout v=0, B=1, A=2, t0=3, s=4, lambda=5
 inline void rdmgbm_logS_at_t(double t, const double* pars_cm,
                              int n_rows_total, int n_lR, int /*n_par*/,
                              const int* trunc_mask, int n_unique_trials,
-                             const int* isok_all, void* /*ctx_*/, double* logS_out) {
+                             const int* isok_all, void* ctx_, double* logS_out) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  const bool global_kill = ctx ? ctx->has_global_kill() : false;
+  const int ks = ctx ? ctx->kill_shape : 1;
   const double* v_  = pars_cm + 0 * n_rows_total;
   const double* B_  = pars_cm + 1 * n_rows_total;
   const double* A_  = pars_cm + 2 * n_rows_total;
   const double* t0_ = pars_cm + 3 * n_rows_total;
   const double* s_  = pars_cm + 4 * n_rows_total;
+  const double* k_  = pars_cm + 5 * n_rows_total;
   for (int j = 0; j < n_unique_trials; ++j) {
     if (!trunc_mask[j]) continue;
     const int start = j * n_lR;
     double logS = 0.0;
     bool bad = false;
-    for (int k = 0; k < n_lR && !bad; ++k) {
-      const int r = start + k;
+    for (int kk = 0; kk < n_lR && !bad; ++kk) {
+      const int r = start + kk;
       if (!isok_all[r] || R_IsNA(v_[r])) { bad = true; break; }
       const double tt = t - t0_[r];
       if (tt <= 0.0) continue;
       const double inv_s = 1.0 / s_[r];
-      const double cdf = pgbm(tt,
-                              1.0 + (B_[r] + A_[r]) * inv_s,
-                              v_[r] * inv_s,
-                              1.0,
-                              A_[r] * inv_s,
-                              false);
-      if (cdf >= 1.0) { bad = true; break; }
-      if (cdf > 0.0) logS += std::log1p(-cdf);
+      const double k_use = global_kill ? 0.0 : k_[r];
+      const double log_cdf = pgbm(tt,
+                                  1.0 + (B_[r] + A_[r]) * inv_s,
+                                  v_[r] * inv_s,
+                                  1.0,
+                                  A_[r] * inv_s,
+                                  k_use, true, ks);
+      if (!R_FINITE(log_cdf)) { bad = true; break; }
+      if (log_cdf >= 0.0) { bad = true; break; }
+      logS += log1m_exp(log_cdf);
     }
     logS_out[j] = bad ? R_NegInf : logS;
   }
