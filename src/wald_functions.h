@@ -199,4 +199,67 @@ inline double digt_impl(double t, double k = 1., double l = 1., double a = .1, d
 double pigt(double t, double k, double l, double a, double threshold);
 double digt(double t, double k, double l, double a, double threshold);
 
+// --------------------------------------------------------------------------
+// Wald SPV CDF/PDF without kill, sigma = 1 (caller pre-scales).
+// Parameterised in canonical form: b = upper threshold distance (when x=0),
+// A = full start-point range, so d = b-x ~ U[b-A, b].
+// Equivalent to pigt_impl/digt_impl with the substitution k=b-A/2, a=A/2
+// but using the natural parameters directly.
+// --------------------------------------------------------------------------
+inline double pwald_k0(double t, double b, double mu, double A) {
+  if (t <= 0.0 || b <= 0.0) return 0.0;
+  const double b_lo   = b - A;
+  if (A <= 1e-12) return pigt0(t, b, mu);
+  const double sqt    = std::sqrt(t);
+  const double inv_A2 = 2.0 / A;   // 1/(A/2) — identical normalisation to pigt_impl's /a
+
+  if (std::abs(mu) <= 1e-12) {
+    const double p1 = pnorm_std( b    / sqt, true, false);
+    const double p2 = pnorm_std( b_lo / sqt, true, false);
+    const double t1 = sqt * (std::exp(-0.5 * b_lo * b_lo / t)
+                            -std::exp(-0.5 * b    * b    / t)) / FAST_NORM_RT2PI;
+    return (t1 + b * (1.0 - p1) - b_lo * (1.0 - p2)) * inv_A2;
+  }
+
+  const double t1a = std::exp(-0.5 * (b_lo - t * mu) * (b_lo - t * mu) / t);
+  const double t1b = std::exp(-0.5 * (b    - t * mu) * (b    - t * mu) / t);
+  const double t1  = sqt * (t1a - t1b) / FAST_NORM_RT2PI;
+
+  const double t2a = std::exp(2.0 * mu * b_lo + pnorm_std(-(b_lo + t * mu) / sqt, true, true));
+  const double t2b = std::exp(2.0 * mu * b    + pnorm_std(-(b    + t * mu) / sqt, true, true));
+  const double t2  = A + (t2b - t2a) / (2.0 * mu);
+
+  const double t4a = 2.0 * pnorm_std(b    / sqt - sqt * mu, true, false) - 1.0;
+  const double t4b = 2.0 * pnorm_std(b_lo / sqt - sqt * mu, true, false) - 1.0;
+  const double t4  = 0.5 * (t * mu - b    + 0.5 / mu) * t4a
+                   + 0.5 * (b_lo   - t * mu - 0.5 / mu) * t4b;
+
+  return 0.5 * (t4 + t2 + t1) * inv_A2;
+}
+
+inline double dwald_k0(double t, double b, double mu, double A) {
+  if (t <= 0.0 || b <= 0.0) return 0.0;
+  const double b_lo  = b - A;
+  if (A <= 1e-12) return digt0(t, b, mu);
+  const double sqt   = std::sqrt(t);
+  const double inv_A = 1.0 / A;
+
+  if (std::abs(mu) <= 1e-12) {
+    const double t1 = M_SQRT1_2 * (std::exp(-0.5 * b_lo * b_lo / t)
+                                  -std::exp(-0.5 * b    * b    / t))
+                    / (std::sqrt(M_PI) * sqt);
+    return t1 * inv_A;
+  }
+
+  const double t1a = -(b_lo - t * mu) * (b_lo - t * mu) / (2.0 * t);
+  const double t1b = -(b    - t * mu) * (b    - t * mu) / (2.0 * t);
+  const double t1  = M_SQRT1_2 * (std::exp(t1a) - std::exp(t1b)) / (std::sqrt(M_PI) * sqt);
+
+  const double t2a = 2.0 * pnorm_std(-b_lo / sqt + sqt * mu, true, false) - 1.0;
+  const double t2b = 2.0 * pnorm_std( b    / sqt - sqt * mu, true, false) - 1.0;
+  const double t2  = 0.5 * mu * (t2a + t2b);
+
+  return (t1 + t2) * inv_A;
+}
+
 #endif

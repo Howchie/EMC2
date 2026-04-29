@@ -78,6 +78,59 @@ SDT <- function(){
   qfun=function(p) qnorm(p),
   # Likelihood, lb is lower bound threshold for first response
   log_likelihood=function(pars,dadm,model,min_ll=log(1e-10)){
-    log_likelihood_sdt(pars=pars, dadm = dadm, model = model, min_ll = min_ll, lb=-Inf)
+  log_likelihood_sdt(pars=pars, dadm = dadm, model = model, min_ll = min_ll, lb=-Inf)
   })
-}
+  }
+
+  #' Hierarchical Unequal-Variance Signal Detection (hUVSD) Model for Binary Responses
+  #'
+  #' Binary choice SDT model parameterized with sensitivity (d) and bias (c),
+  #' following Lages (2024).
+  #'
+  #' Model parameters are:
+  #'    d (sensitivity, distance between signal and noise means)
+  #'    c (bias, deviation from the midpoint between means)
+  #'    sd (standard deviation of the signal distribution, noise SD fixed at 1)
+  #'
+  #' @return A model list with all the necessary functions to sample
+  #' @export
+  hUVSD <- function(){
+  list(
+  type="SDT",
+  c_name="hUVSD",
+  p_types=c("d" = 0,"c" = 0,"sd" = log(1)),
+  # Trial dependent parameter transform
+  transform=list(func=c(d = "identity",c = "identity",sd = "exp")),
+  bound=list(minmax=cbind(d=c(-Inf,Inf),c = c(-Inf,Inf), sd=c(0,Inf))),
+  Ttransform = function(pars,dadm) {
+  pars
+  },
+  # Random function for discrete choices
+  rfun=function(data=NULL,pars) {
+  # Assume level 2 is Signal and Yes
+  is_signal <- data$S == levels(data$S)[2]
+  m <- ifelse(is_signal, 0.5 * pars[,"d"], -0.5 * pars[,"d"])
+  s <- ifelse(is_signal, pars[,"sd"], 1.0)
+  p_yes <- pnorm((m - pars[,"c"]) / s)
+  R <- factor(ifelse(runif(length(p_yes)) < p_yes, levels(data$R)[2], levels(data$R)[1]),
+              levels=levels(data$R))
+  cbind.data.frame(R=R,rt=NA)
+  },
+  # quantile function, p = probability, used in making linear ROCs
+  qfun=function(p) qnorm(p),
+  # Likelihood
+  log_likelihood=function(pars,dadm,model,min_ll=log(1e-10)){
+  # R implementation for completeness/fallback
+  is_signal <- dadm$S == levels(dadm$S)[2]
+  chosen_yes <- dadm$R == levels(dadm$R)[2]
+  mu <- ifelse(is_signal, 0.5 * pars[,"d"], -0.5 * pars[,"d"])
+  s <- ifelse(is_signal, pars[,"sd"], 1.0)
+  z <- (mu - pars[,"c"]) / s
+  p_yes <- pnorm(z)
+  p <- ifelse(chosen_yes, p_yes, 1-p_yes)
+  # Handle expand attribute for unique trials
+  p_uniq <- p[dadm$winner]
+  sum(log(pmax(exp(min_ll), p_uniq[attr(dadm,"expand")])))
+  })
+  }
+

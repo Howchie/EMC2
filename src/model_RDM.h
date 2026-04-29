@@ -40,8 +40,8 @@ inline signed_log slog_int_exp_pnorm(
   // ∫ Phi(a*x+c) dx = [y Phi(y) + phi(y)] / a
   if (std::abs(q) <= FPM_EPSILON) {
     auto G0 = [](double y) {
-      return y * R::pnorm(y, 0.0, 1.0, 1, 0) +
-             R::dnorm(y, 0.0, 1.0, 0);
+      return y * pnorm_std(y, true, false) +
+             std::exp(-0.5 * y * y - LOG_SQRT_2PI);
     };
 
     const double val = (G0(y_hi) - G0(y_lo)) / a;
@@ -100,13 +100,13 @@ inline signed_log slog_int_x_exp_pnorm(
   // ∫ y Phi(y) dy = 0.5 * ((y^2 - 1) Phi(y) + y phi(y))
   if (std::abs(q) <= FPM_EPSILON) {
     auto G0 = [](double y) {
-      return y * R::pnorm(y, 0.0, 1.0, 1, 0) +
-             R::dnorm(y, 0.0, 1.0, 0);
+      return y * pnorm_std(y, true, false) +
+             std::exp(-0.5 * y * y - LOG_SQRT_2PI);
     };
 
     auto G1 = [](double y) {
-      const double Phi = R::pnorm(y, 0.0, 1.0, 1, 0);
-      const double phi = R::dnorm(y, 0.0, 1.0, 0);
+      const double Phi = pnorm_std(y, true, false);
+      const double phi = std::exp(-0.5 * y * y - LOG_SQRT_2PI);
       return 0.5 * ((y * y - 1.0) * Phi + y * phi);
     };
 
@@ -364,6 +364,15 @@ double dwald(double t, double b, double mu, double sigma = 1.0, double A = 0.0, 
   if (x_hi < x_lo) std::swap(x_lo, x_hi);
   const double span = x_hi - x_lo;
   double log_pdf = R_NegInf;
+
+  // Fast path: no kill — use canonical Wald SPV (sigma pre-scaled, zero overhead).
+  if (k <= 0.0) {
+    const double inv_s = 1.0 / sigma;
+    const double pdf = dwald_k0(t, b * inv_s, mu * inv_s, A * inv_s);
+    if (log_out) return (pdf > 0.0 && std::isfinite(pdf)) ? std::log(pdf) : R_NegInf;
+    return pdf;
+  }
+
   // Point-start Wald at fixed boundary distance d = b - x.
   const double logt = std::log(t);
   if (span <= FPM_EPSILON) {
@@ -450,6 +459,18 @@ double pwald(double t, double b, double mu, double sigma = 1.0, double A = 0.0,
 
   const double span = x_hi - x_lo;
   const double sig2 = sigma * sigma;
+
+  // Fast path: no kill — use canonical Wald SPV for finite t.
+  if (k <= 0.0) {
+    if (emc2_isfinite(t)) {
+      const double inv_s = 1.0 / sigma;
+      const double cdf = pwald_k0(t, b * inv_s, mu * inv_s, A * inv_s);
+      const double cl = std::max(0.0, std::min(1.0, cdf));
+      if (log_out) return (cl <= 0.0) ? R_NegInf : std::log(cl);
+      return cl;
+    }
+    // t = Inf with k=0: fall through — log_p_inf() handles it via nu = |mu|, eta1 correct.
+  }
 
   const double nu = std::sqrt(mu * mu + 2.0 * sig2 * k);
   const double eta1 = (mu - nu) / sig2;

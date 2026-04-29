@@ -3,6 +3,7 @@
 #include "model_LBA.h"
 #include "model_RDM.h"
 #include "model_DDM.h"
+#include "model_SDT.h"
 #include "model_MRI.h"
 #include "model_SS_EXG.h"
 #include "model_SS_RDEX.h"
@@ -197,7 +198,9 @@ NumericMatrix get_pars_matrix(NumericVector p_vector, NumericVector constants, c
 static void update_pt_only(ParamTable& param_table,
                            const Rcpp::List& designs,
                            TrendRuntime* trend_runtime,
-                           const std::vector<TransformSpec>& full_specs) {
+                           const std::vector<TransformSpec>& full_specs,
+                           const Rcpp::LogicalVector* invariant_design_mask = nullptr,
+                           const std::unordered_set<std::string>* invariant_param_names = nullptr) {
   if (trend_runtime) trend_runtime->reset_all_kernels();
 
   const int n_designs = designs.size();
@@ -224,7 +227,9 @@ static void update_pt_only(ParamTable& param_table,
 
   for (int i = 0; i < n_designs; ++i) {
     bool is_premap = (trend_runtime && trend_runtime->has_premap()) ? map_next[i] : false;
-    map_next[i] = !is_premap;
+    const bool is_invariant = (invariant_design_mask && i < invariant_design_mask->size())
+      ? static_cast<bool>((*invariant_design_mask)[i]) : false;
+    map_next[i] = (!is_premap) && (!is_invariant);
   }
   param_table.map_from_designs(designs, map_next);
 
@@ -240,6 +245,9 @@ static void update_pt_only(ParamTable& param_table,
   }
 
   transform_next = param_names_excluding(param_table, { &premap_set, &pretransform_set });
+  if (invariant_param_names && !invariant_param_names->empty()) {
+    for (const auto& nm : *invariant_param_names) transform_next.erase(nm);
+  }
   auto postmap_specs = filter_specs_by_param_set(param_table, full_specs, transform_next);
   c_do_transform_pt(param_table, postmap_specs);
 
@@ -1886,6 +1894,51 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
   return(lls);
 }
 
+double c_log_likelihood_huvsd(Rcpp::NumericMatrix pars, Rcpp::DataFrame data,
+                              const int n_trials, Rcpp::IntegerVector expand,
+                              double min_ll, Rcpp::LogicalVector is_ok,
+                              Rcpp::NumericVector* trial_ll_out = nullptr) {
+    Rcpp::IntegerVector S = data["S"];
+    Rcpp::IntegerVector R = data["R"];
+    Rcpp::CharacterVector S_levels = S.attr("levels");
+    Rcpp::CharacterVector R_levels = R.attr("levels");
+    
+    int signal_level = 2; 
+    for(int i=0; i<S_levels.size(); ++i) {
+        std::string lev = Rcpp::as<std::string>(S_levels[i]);
+        if(lev == "Signal" || lev == "S" || lev == "signal") { signal_level = i+1; break; }
+    }
+    int yes_level = 2;
+    for(int i=0; i<R_levels.size(); ++i) {
+        std::string lev = Rcpp::as<std::string>(R_levels[i]);
+        if(lev == "Yes" || lev == "Y" || lev == "yes" || lev == "Hit" || lev == "hit") { yes_level = i+1; break; }
+    }
+
+    Rcpp::CharacterVector p_types = colnames(pars);
+    int d_idx = -1, c_idx = -1, sd_idx = -1;
+    for(int j=0; j<p_types.size(); ++j) {
+        if(p_types[j] == "d") d_idx = j;
+        else if(p_types[j] == "c") c_idx = j;
+        else if(p_types[j] == "sd") sd_idx = j;
+    }
+    if(d_idx == -1 || c_idx == -1 || sd_idx == -1) Rcpp::stop("hUVSD model requires parameters d, c, and sd");
+
+    const int n_out = expand.length();
+    double total_ll = 0.0;
+    for(int j=0; j<n_out; ++j) {
+        int row = expand[j] - 1;
+        double ll = min_ll;
+        if(is_ok[row]) {
+            ll = log_likelihood_huvsd_single(pars(row, d_idx), pars(row, c_idx), pars(row, sd_idx),
+                                             S[row] == signal_level, R[row] == yes_level, min_ll);
+        }
+        if(trial_ll_out) (*trial_ll_out)[j] = ll;
+        total_ll += ll;
+    }
+    return total_ll;
+}
+
+
 // [[Rcpp::export]]
 NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericVector constants,
                          List designs, String type, List bounds, List transforms, List pretransforms,
@@ -1961,6 +2014,43 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
   }
 
   TrendRuntime* trend_runtime_ptr = trend_runtime ? trend_runtime.get() : nullptr;
+  Rcpp::LogicalVector invariant_design_mask;
+  std::unordered_set<std::string> invariant_param_names;
+  const Rcpp::LogicalVector* invariant_design_mask_ptr = nullptr;
+  const std::unordered_set<std::string>* invariant_param_names_ptr = nullptr;
+
+  if (use_pt_mapping && n_particles > 1 && trend_runtime_ptr == nullptr) {
+    std::unordered_set<std::string> sampled_coef_names;
+    sampled_coef_names.reserve(p_names.size());
+    for (int j = 0; j < p_names.size(); ++j) {
+      sampled_coef_names.insert(Rcpp::as<std::string>(p_names[j]));
+    }
+
+    invariant_design_mask = Rcpp::LogicalVector(designs.size(), false);
+    Rcpp::CharacterVector design_names = designs.names();
+    for (int i = 0; i < designs.size(); ++i) {
+      Rcpp::NumericMatrix d = designs[i];
+      Rcpp::CharacterVector dcols = colnames(d);
+      bool invariant = true;
+      for (int c = 0; c < dcols.size(); ++c) {
+        if (sampled_coef_names.find(Rcpp::as<std::string>(dcols[c])) != sampled_coef_names.end()) {
+          invariant = false;
+          break;
+        }
+      }
+      invariant_design_mask[i] = invariant;
+      if (invariant) {
+        std::string pnm;
+        if (design_names.size() == designs.size()) pnm = Rcpp::as<std::string>(design_names[i]);
+        else if (i < keep_names.size()) pnm = Rcpp::as<std::string>(keep_names[i]);
+        if (!pnm.empty()) invariant_param_names.insert(pnm);
+      }
+    }
+    if (!invariant_param_names.empty()) {
+      invariant_design_mask_ptr = &invariant_design_mask;
+      invariant_param_names_ptr = &invariant_param_names;
+    }
+  }
 
   ModelSharedState ddm_shared;
   std::vector<int> ddm_p_idx;
@@ -2008,7 +2098,8 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
       if (i > 0) {
         param_table_template.fill_from_particle_row(particle_matrix_pt, i, pm_col_to_base_idx);
       }
-      update_pt_only(param_table_template, designs, trend_runtime_ptr, transform_specs_pt);
+      update_pt_only(param_table_template, designs, trend_runtime_ptr, transform_specs_pt,
+                     invariant_design_mask_ptr, invariant_param_names_ptr);
       if (i == 0) {
         bound_specs = make_bound_specs_pt(minmax, mm_names, param_table_template, bounds);
       }
@@ -2024,6 +2115,21 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
         lls[i] = c_log_likelihood_DDM(pars, data, n_trials, expand, min_ll, is_ok,
                                       gng, all_finite_untruncated);
       }
+    }
+  } else if (type_std == "hUVSD") {
+    IntegerVector expand = data.attr("expand");
+    for (int i = 0; i < n_particles; ++i) {
+      if (i > 0) {
+        param_table_template.fill_from_particle_row(particle_matrix_pt, i, pm_col_to_base_idx);
+      }
+      update_pt_only(param_table_template, designs, trend_runtime_ptr, transform_specs_pt,
+                     invariant_design_mask_ptr, invariant_param_names_ptr);
+      if (i == 0) {
+        bound_specs = make_bound_specs_pt(minmax, mm_names, param_table_template, bounds);
+      }
+      is_ok = c_do_bound_pt(param_table_template, bound_specs);
+      pars = param_table_template.materialize_by_param_names(keep_names);
+      lls[i] = c_log_likelihood_huvsd(pars, data, n_trials, expand, min_ll, is_ok);
     }
   }
  else if (is_mri_type) {
@@ -2052,7 +2158,8 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
       if (i > 0) {
         param_table_template.fill_from_particle_row(particle_matrix_pt, i, pm_col_to_base_idx);
       }
-      update_pt_only(param_table_template, designs, trend_runtime_ptr, transform_specs_pt);
+      update_pt_only(param_table_template, designs, trend_runtime_ptr, transform_specs_pt,
+                     invariant_design_mask_ptr, invariant_param_names_ptr);
       if (i == 0) {
         bound_specs = make_bound_specs_pt(minmax, mm_names, param_table_template, bounds);
       }
@@ -2095,7 +2202,8 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
         if (i > 0) {
           param_table_template.fill_from_particle_row(particle_matrix_pt, i, pm_col_to_base_idx);
         }
-        update_pt_only(param_table_template, designs, trend_runtime_ptr, transform_specs_pt);
+        update_pt_only(param_table_template, designs, trend_runtime_ptr, transform_specs_pt,
+                       invariant_design_mask_ptr, invariant_param_names_ptr);
         if (i == 0) {
           bound_specs = make_bound_specs_pt(minmax, mm_names, param_table_template, bounds);
         }
@@ -2117,7 +2225,8 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
         if (i > 0) {
           param_table_template.fill_from_particle_row(particle_matrix_pt, i, pm_col_to_base_idx);
         }
-        update_pt_only(param_table_template, designs, trend_runtime_ptr, transform_specs_pt);
+        update_pt_only(param_table_template, designs, trend_runtime_ptr, transform_specs_pt,
+                       invariant_design_mask_ptr, invariant_param_names_ptr);
         if (i == 0) {
           bound_specs = make_bound_specs_pt(minmax, mm_names, param_table_template, bounds);
         }
@@ -2308,7 +2417,8 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
         param_table_template.fill_from_particle_row(particle_matrix_pt, i, pm_col_to_base_idx);
       }
       
-      update_pt_only(param_table_template, designs, trend_runtime_ptr, transform_specs_pt);
+      update_pt_only(param_table_template, designs, trend_runtime_ptr, transform_specs_pt,
+                     invariant_design_mask_ptr, invariant_param_names_ptr);
       if (i == 0) {
         bound_specs = make_bound_specs_pt(minmax, mm_names, param_table_template, bounds);
       }
@@ -2331,15 +2441,26 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
         }
         const double* pars_cm = race_staging_buf.data();
         adapter.ctx.mode_hint = 0;
+        adapter.ctx.global_kill_active = true;
         // Set once-per-particle mode hints so raw kernels can skip per-row
         // variability checks in common zero-variability cases.
         if (type_std.find("RDMSWTN") != std::string::npos) {
           const double* sv_col = pars_cm + 5 * n_trials;
+          const double* lambda_col = pars_cm + 6 * n_trials;
           bool sv_zero = true;
+          bool lambda_active = false;
           for (int j = 0; j < n_trials; ++j) {
             if (!isok_int_fp[j]) continue;
             const double sv = sv_col[j];
             if (std::isfinite(sv) && std::fabs(sv) > 1e-10) { sv_zero = false; break; }
+          }
+          if (adapter.ctx.erlang_is_global_omission) {
+            for (int j = 0; j < n_trials; ++j) {
+              if (!isok_int_fp[j] || !winner_int_buf[j]) continue;
+              const double lam = lambda_col[j];
+              if (std::isfinite(lam) && lam > 1e-12) { lambda_active = true; break; }
+            }
+            adapter.ctx.global_kill_active = lambda_active;
           }
           adapter.ctx.mode_hint = sv_zero ? 1 : 2;
         }
@@ -2365,7 +2486,7 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
           adapter.model_pfun_raw(rt_ptr, pars_cm, n_trials,
                                  winner_int_buf.data(), isok_int_fp.data(),
                                  alt_res_buf_fp.data(), min_ll, &adapter.ctx);
-        } else if (adapter.ctx.erlang_is_global_omission) {
+        } else if (adapter.ctx.erlang_is_global_omission && adapter.ctx.global_kill_active) {
           // Pre-fill log S_K at the winner row for each trial.  Only winner slots
           // are read in the accumulation loop below; non-winner slots are skipped.
           const double* lambda_ptr = pars_cm + adapter.ctx.lambda_index * n_trials;
@@ -2388,7 +2509,7 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
           const int n_lR_j = has_RACE_col_fp ? RACE_fp[base] : n_lR;
           for (int k = 0; k < n_lR_j; ++k) s += res_buf[base + k];
 
-          if (adapter.ctx.erlang_is_global_omission) {
+          if (adapter.ctx.erlang_is_global_omission && adapter.ctx.global_kill_active) {
             int idx_W = -1;
             for (int k = 0; k < n_lR_j; ++k) { if (winner_int_buf[base + k]) { idx_W = k; break; } }
             if (idx_W != -1) {
@@ -2503,6 +2624,19 @@ NumericMatrix calc_ll_oo_pw(NumericMatrix particle_matrix, DataFrame data, Numer
       NumericVector row_vec(n_out);
       c_log_likelihood_DDM(pars, data, n_trials, expand, min_ll, is_ok,
                            gng, all_finite_untruncated, &row_vec);
+      result(i, _) = row_vec;
+    }
+    return result;
+  } else if (type_std == "hUVSD") {
+    IntegerVector expand = data.attr("expand");
+    const int n_out = expand.length();
+    NumericMatrix result(n_particles, n_out);
+    for (int i = 0; i < n_particles; ++i) {
+      pars = pars_for_particle(i);
+      if (i == 0) bound_specs = make_bound_specs(minmax, mm_names, pars, bounds);
+      is_ok = c_do_bound(pars, bound_specs);
+      NumericVector row_vec(n_out);
+      c_log_likelihood_huvsd(pars, data, n_trials, expand, min_ll, is_ok, &row_vec);
       result(i, _) = row_vec;
     }
     return result;
@@ -4253,7 +4387,6 @@ double c_log_likelihood_race(
     Rcpp::stop("c_log_likelihood_race: isok size does not match pars matrix rows.");
   }
   const int n_par = pars.ncol();
-  const Rcpp::IntegerVector lR_code_all(static_cast<SEXP>(dadm["lR"]));
   std::vector<double> pars_rowmajor_buffer(static_cast<size_t>(n_lR) * n_par);
   std::vector<int> isok_int_buffer(static_cast<size_t>(n_lR), 0);
   std::vector<double> logS_k_buffer(static_cast<size_t>(n_lR), R_NegInf);
@@ -4374,65 +4507,148 @@ double c_log_likelihood_race(
   }
   const bool has_time = (time_code > 0);
 
+  // For global-omission models, disable kill bookkeeping when lambda is
+  // identically zero for this particle (nested-model fast path).
+  if (ctx && ctx->erlang_is_global_omission && ctx->lambda_index >= 0) {
+    bool lambda_active = false;
+    const double* lambda_ptr = pars_cm_ptr + static_cast<size_t>(ctx->lambda_index) * n_trials;
+    for (int row = 0; row < n_trials; ++row) {
+      if (!winner[row] || !isok[row]) continue;
+      const double lam = lambda_ptr[row];
+      if (std::isfinite(lam) && lam > 1e-12) { lambda_active = true; break; }
+    }
+    ctx->global_kill_active = lambda_active;
+  } else if (ctx) {
+    ctx->global_kill_active = true;
+  }
+
   ContextForRaceModels dense_ctx = *ctx;
   dense_ctx.min_lik_for_pdf = 0.0;
   void* dense_ctx_ptr = static_cast<void*>(&dense_ctx);
   const bool defective_upper_tail = ctx->defective_upper_tail;
+  const bool global_omission_active = (ctx && ctx->erlang_is_global_omission && ctx->global_kill_active);
+
+  // Cache 20-point Gauss-Legendre nodes/weights for the global-kill t=Inf branch.
+  // This avoids per-trial Rcpp List/Vector allocation and repeated node transforms.
+  std::array<double, 20> gl_u{};
+  std::array<double, 20> gl_w_half{};
+  std::array<double, 20> gl_jac_erlang2{};
+  std::array<double, 20> gl_log1m_u{};
+  bool gl20_ready = false;
+  if (global_omission_active) {
+    const int n_nodes = 20;
+    Rcpp::List gl = get_gl_nodes_weights(n_nodes);
+    const Rcpp::NumericVector gl_nodes = gl[0];
+    const Rcpp::NumericVector gl_weights = gl[1];
+    for (int j = 0; j < n_nodes; ++j) {
+      const double u = 0.5 * (gl_nodes[j] + 1.0);
+      gl_u[static_cast<size_t>(j)] = u;
+      gl_w_half[static_cast<size_t>(j)] = 0.5 * gl_weights[j];
+      gl_log1m_u[static_cast<size_t>(j)] = std::log1p(-u);
+      gl_jac_erlang2[static_cast<size_t>(j)] = -gl_log1m_u[static_cast<size_t>(j)];
+    }
+    gl20_ready = true;
+  }
+
+  // Cache log_surv_cm(+Inf) per unique trial across all models/branches.
+  std::vector<double> global_log_surv_inf_by_trial;
+  std::vector<uint8_t> global_log_surv_inf_ready;
+  global_log_surv_inf_by_trial.assign(static_cast<size_t>(n_unique_trials), R_NaN);
+  global_log_surv_inf_ready.assign(static_cast<size_t>(n_unique_trials), 0);
   
   // log_surv_cm: log S(t) = sum_k log(1-F_k(t)) read directly from column-major pars.
   // Used by the "other trials" path for analytical survivor calls — avoids the
   // row-major copy that fill_trial_buffers performs.
   auto log_surv_cm = [&](double t, int start_row_idx, int n_lR_j) -> double {
     auto* race_ctx = static_cast<ContextForRaceModels*>(model_context_for_funcs);
+    const int unique_trial_idx = start_row_idx / n_lR;
     if (t == R_PosInf) {
+      if (global_log_surv_inf_ready[static_cast<size_t>(unique_trial_idx)]) {
+        return global_log_surv_inf_by_trial[static_cast<size_t>(unique_trial_idx)];
+      }
       // Proper race models have S(Inf)=0 => log S(Inf) = -Inf.
       // Defective-tail models (e.g., LBAIO / BAwL) retain mass at +Inf.
-      if (race_ctx && race_ctx->erlang_is_global_omission) {
+      if (race_ctx && race_ctx->erlang_is_global_omission && race_ctx->global_kill_active) {
         // Global omission probability: Integral f_K(u) * S_race(u) du on [0, Inf).
         // Use Gauss-Legendre quadrature (20 nodes) with mapping u -> t = -1/lam * log(1-u).
         const double* lambda_ptr = pars_cm_ptr + race_ctx->lambda_index * n_trials;
         const double lam = lambda_ptr[start_row_idx];
-        if (lam <= 0.0) return R_NegInf;
+        if (lam <= 0.0) {
+          global_log_surv_inf_by_trial[static_cast<size_t>(unique_trial_idx)] = R_NegInf;
+          global_log_surv_inf_ready[static_cast<size_t>(unique_trial_idx)] = 1;
+          return R_NegInf;
+        }
+        // Single-accumulator global-kill case is analytic:
+        // P(omission) = 1 - P(hit by Inf) where P(hit by Inf) is model CDF at +Inf.
+        if (n_lR_j == 1 && isok[start_row_idx]) {
+          double par_buf_inf[64];
+          for (int c = 0; c < n_par; ++c)
+            par_buf_inf[c] = pars_cm_ptr[static_cast<size_t>(c) * n_trials + start_row_idx];
+          double F_inf = cdf1(R_PosInf, par_buf_inf, model_context_for_funcs);
+          F_inf = clamp_cdf01_race(F_inf);
+          const double ans = safe_log1m_race(F_inf);
+          global_log_surv_inf_by_trial[static_cast<size_t>(unique_trial_idx)] = ans;
+          global_log_surv_inf_ready[static_cast<size_t>(unique_trial_idx)] = 1;
+          return ans;
+        }
+        // Build row-major trial buffer once; avoids re-packing parameter rows per node.
+        fill_trial_buffers(start_row_idx, n_lR_j);
+        if (!gl20_ready) {
+          global_log_surv_inf_by_trial[static_cast<size_t>(unique_trial_idx)] = R_NegInf;
+          global_log_surv_inf_ready[static_cast<size_t>(unique_trial_idx)] = 1;
+          return R_NegInf;
+        }
         const int n_nodes = 20;
-        Rcpp::List gl = get_gl_nodes_weights(n_nodes);
-        const Rcpp::NumericVector gl_nodes = gl[0];
-        const Rcpp::NumericVector gl_weights = gl[1];
+        const bool is_erlang2 = (race_ctx->kill_shape >= 2);
+        const double inv_lam = 1.0 / lam;
+        int active_count = 0;
+        std::array<const double*, 64> par_rows{};
+        for (int acc = 0; acc < n_lR_j; ++acc) {
+          if (!isok_int_buffer[static_cast<size_t>(acc)]) continue;
+          par_rows[static_cast<size_t>(active_count++)] =
+            pars_rowmajor_buffer.data() + static_cast<size_t>(acc) * n_par;
+        }
+        if (active_count == 0) {
+          global_log_surv_inf_by_trial[static_cast<size_t>(unique_trial_idx)] = R_NegInf;
+          global_log_surv_inf_ready[static_cast<size_t>(unique_trial_idx)] = 1;
+          return R_NegInf;
+        }
         double prob = 0.0;
         for (int j = 0; j < n_nodes; ++j) {
-          const double u = 0.5 * (gl_nodes[j] + 1.0);
-          const double tt = -std::log(std::max(1e-15, 1.0 - u)) / lam;
+          const double tt = -gl_log1m_u[static_cast<size_t>(j)] * inv_lam;
           // Calculate S_race(tt)
           double logS_race_tt = 0.0;
-          double par_buf[16];
-          bool bad_tt = false;
-          for (int acc = 0; acc < n_lR_j; ++acc) {
-            const int row = start_row_idx + acc;
-            if (!isok[row]) { bad_tt = true; break; }
-            for (int c = 0; c < n_par; ++c)
-              par_buf[c] = pars_cm_ptr[static_cast<size_t>(c) * n_trials + row];
-            double Fk = cdf1(tt, par_buf, model_context_for_funcs);
+          for (int acc = 0; acc < active_count; ++acc) {
+            const double* par_row = par_rows[static_cast<size_t>(acc)];
+            double Fk = cdf1(tt, par_row, model_context_for_funcs);
             Fk = clamp_cdf01_race(Fk);
             const double ll = safe_log1m_race(Fk);
-            if (!R_FINITE(ll)) { bad_tt = true; break; }
+            if (!R_FINITE(ll)) { logS_race_tt = R_NegInf; break; }
             logS_race_tt += ll;
           }
-          if (bad_tt) continue;
-          double sk_jac;
-          if (race_ctx->kill_shape >= 2) {
-            // Erlang-2: d_K(t) = lam^2 * t * exp(-lam * t)
-            // Jac: dt/du = 1 / (lam * (1-u))
-            // f_K(t) * Jac = lam * t = -log(1-u)
-            sk_jac = -std::log1p(-u);
-          } else {
-            // Exponential: d_K(t) = lam * exp(-lam * t)
-            // f_K(t) * Jac = 1
-            sk_jac = 1.0;
-          }
-          prob += 0.5 * gl_weights[j] * std::exp(logS_race_tt) * sk_jac;
+          if (!R_FINITE(logS_race_tt)) continue;
+          const double sk_jac = is_erlang2
+            ? gl_jac_erlang2[static_cast<size_t>(j)]
+            : 1.0;
+          prob += gl_w_half[static_cast<size_t>(j)] * std::exp(logS_race_tt) * sk_jac;
         }
-        return (prob > 0.0) ? std::log(prob) : R_NegInf;
+        const double ans = (prob > 0.0) ? std::log(prob) : R_NegInf;
+        global_log_surv_inf_by_trial[static_cast<size_t>(unique_trial_idx)] = ans;
+        global_log_surv_inf_ready[static_cast<size_t>(unique_trial_idx)] = 1;
+        return ans;
       }
       if (race_ctx && race_ctx->defective_upper_tail) {
+        if (n_lR_j == 1 && isok[start_row_idx]) {
+          double par_buf_inf[64];
+          for (int c = 0; c < n_par; ++c)
+            par_buf_inf[c] = pars_cm_ptr[static_cast<size_t>(c) * n_trials + start_row_idx];
+          double F_inf = cdf1(R_PosInf, par_buf_inf, model_context_for_funcs);
+          F_inf = clamp_cdf01_race(F_inf);
+          const double ans = safe_log1m_race(F_inf);
+          global_log_surv_inf_by_trial[static_cast<size_t>(unique_trial_idx)] = ans;
+          global_log_surv_inf_ready[static_cast<size_t>(unique_trial_idx)] = 1;
+          return ans;
+        }
         double log_p = 0.0;
         double par_buf_inf[16];
         for (int k = 0; k < n_lR_j; ++k) {
@@ -4446,9 +4662,31 @@ double c_log_likelihood_race(
           if (!emc2_isfinite(ll)) return R_NegInf;
           log_p += ll;
         }
+        global_log_surv_inf_by_trial[static_cast<size_t>(unique_trial_idx)] = log_p;
+        global_log_surv_inf_ready[static_cast<size_t>(unique_trial_idx)] = 1;
         return log_p;
       }
+      global_log_surv_inf_by_trial[static_cast<size_t>(unique_trial_idx)] = R_NegInf;
+      global_log_surv_inf_ready[static_cast<size_t>(unique_trial_idx)] = 1;
       return R_NegInf;
+    }
+
+    if (n_lR_j == 1) {
+      if (!isok[start_row_idx]) return R_NegInf;
+      double par_buf[64];
+      for (int c = 0; c < n_par; ++c)
+        par_buf[c] = pars_cm_ptr[static_cast<size_t>(c) * n_trials + start_row_idx];
+      double Fk = cdf1(t, par_buf, model_context_for_funcs);
+      Fk = clamp_cdf01_race(Fk);
+      double logS = safe_log1m_race(Fk);
+      if (!R_FINITE(logS)) return R_NegInf;
+      if (race_ctx && race_ctx->erlang_is_global_omission && race_ctx->global_kill_active) {
+        const double* lambda_ptr = pars_cm_ptr + race_ctx->lambda_index * n_trials;
+        const double* t0_ptr = pars_cm_ptr + race_ctx->t0_index * n_trials;
+        const double tt = t - t0_ptr[start_row_idx];
+        if (tt > 0.0) logS += erlang_log_surv(tt, lambda_ptr[start_row_idx], race_ctx->kill_shape);
+      }
+      return logS;
     }
 
     double logS = 0.0;
@@ -4464,7 +4702,7 @@ double c_log_likelihood_race(
       if (!R_FINITE(ll)) return R_NegInf;
       logS += ll;
     }
-    if (race_ctx && race_ctx->erlang_is_global_omission) {
+    if (race_ctx && race_ctx->erlang_is_global_omission && race_ctx->global_kill_active) {
       const double* lambda_ptr = pars_cm_ptr + race_ctx->lambda_index * n_trials;
       const double* t0_ptr = pars_cm_ptr + race_ctx->t0_index * n_trials;
       const double tt = t - t0_ptr[start_row_idx];
@@ -4476,6 +4714,30 @@ double c_log_likelihood_race(
   };
 
   const bool has_finite_batch = use_full_finite_batch || (finite_rt_unique_trial_indices.size() > 0);
+  std::vector<int> winner_row_by_trial;
+  std::vector<double> global_log_sk_by_trial;
+  if (ctx && ctx->erlang_is_global_omission && ctx->global_kill_active) {
+    winner_row_by_trial.assign(static_cast<size_t>(n_unique_trials), -1);
+    global_log_sk_by_trial.assign(static_cast<size_t>(n_unique_trials), 0.0);
+    const double* t0_ptr = pars_cm_ptr + static_cast<size_t>(ctx->t0_index) * n_trials;
+    const double* lambda_ptr = pars_cm_ptr + static_cast<size_t>(ctx->lambda_index) * n_trials;
+    for (int j = 0; j < n_unique_trials; ++j) {
+      const int start = j * n_lR;
+      const int n_lR_j = has_RACE_col ? RACE[start] : n_lR;
+      int idx_w = -1;
+      for (int k = 0; k < n_lR_j; ++k) {
+        const int row = start + k;
+        if (winner[row]) { idx_w = row; break; }
+      }
+      winner_row_by_trial[static_cast<size_t>(j)] = idx_w;
+      if (idx_w >= 0) {
+        const double tt = rts_dadm[idx_w] - t0_ptr[idx_w];
+        global_log_sk_by_trial[static_cast<size_t>(j)] =
+          (tt > 0.0) ? erlang_log_surv(tt, lambda_ptr[idx_w], ctx->kill_shape) : min_ll;
+      }
+    }
+  }
+
   if (has_finite_batch) {
     bool any_win = false;
     bool any_loss = false;
@@ -4755,12 +5017,8 @@ double c_log_likelihood_race(
                 alt_lds_ptr[start_row_idx + idx_T] + alt_lds_ptr[start_row_idx + idx_W];
               current_trial_ll_sum = log_sum_exp(current_trial_ll_sum, s_T - std::log(n_resp_ptr[unique_trial_idx]));
             }
-          } else if (ctx && ctx->erlang_is_global_omission) {
-            const double tt = rt_j - pars(start_row_idx, ctx->t0_index);
-            if (tt > 0.0) {
-              const double lam = pars(start_row_idx, ctx->lambda_index);
-              current_trial_ll_sum += erlang_log_surv(tt, lam, ctx->kill_shape);
-            }
+          } else if (ctx && ctx->erlang_is_global_omission && ctx->global_kill_active) {
+            current_trial_ll_sum += global_log_sk_by_trial[static_cast<size_t>(unique_trial_idx)];
           } else if (ctx && ctx->erlang_is_guess) {
             const int n_resp_j = n_resp_ptr ? n_resp_ptr[unique_trial_idx] : 0;
             int idx_W = -1;
@@ -4771,7 +5029,7 @@ double c_log_likelihood_race(
                 const double lam = pars(start_row_idx, ctx->lambda_index);
                 const double log_sk = erlang_log_surv(tt, lam, ctx->kill_shape);
                 const double log_fk = erlang_log_pdf(tt, lam, ctx->kill_shape);
-                double par_buf[16];
+                double par_buf[64];
                 for (int c = 0; c < n_par; ++c) par_buf[c] = pars(start_row_idx + idx_W, c);
                 const double log_si = std::log1p(-clamp_cdf01_race(cdf1(tt, par_buf, ctx)));
                 double s_race = current_trial_ll_sum - lds_ptr[start_row_idx + idx_W] + log_si;
@@ -4806,12 +5064,8 @@ double c_log_likelihood_race(
             alt_lds_ptr[start_row_idx + idx_T] + alt_lds_ptr[start_row_idx + idx_W];
           current_trial_ll_sum = log_sum_exp(current_trial_ll_sum, s_T - std::log(n_resp_ptr[unique_trial_idx]));
         }
-      } else if (ctx && ctx->erlang_is_global_omission) {
-        const double tt = rt_j - pars(start_row_idx, ctx->t0_index);
-        if (tt > 0.0) {
-          const double lam = pars(start_row_idx, ctx->lambda_index);
-          current_trial_ll_sum += erlang_log_surv(tt, lam, ctx->kill_shape);
-        }
+      } else if (ctx && ctx->erlang_is_global_omission && ctx->global_kill_active) {
+        current_trial_ll_sum += global_log_sk_by_trial[static_cast<size_t>(unique_trial_idx)];
       } else if (ctx && ctx->erlang_is_guess) {
         const int n_resp_j = n_resp_ptr ? n_resp_ptr[unique_trial_idx] : 0;
         int idx_W = -1;
@@ -4822,7 +5076,7 @@ double c_log_likelihood_race(
             const double lam = pars(start_row_idx, ctx->lambda_index);
             const double log_sk = erlang_log_surv(tt, lam, ctx->kill_shape);
             const double log_fk = erlang_log_pdf(tt, lam, ctx->kill_shape);
-            double par_buf[16];
+            double par_buf[64];
             for (int c = 0; c < n_par; ++c) par_buf[c] = pars(start_row_idx + idx_W, c);
             const double log_si = std::log1p(-clamp_cdf01_race(cdf1(tt, par_buf, ctx)));
             double s_race = current_trial_ll_sum - lds_ptr[start_row_idx + idx_W] + log_si;
@@ -4963,6 +5217,24 @@ double c_log_likelihood_race(
         lower_for_trial = UCj;
         upper_for_trial = UTj;
         if (R_j_idx == NA_INTEGER) {
+          if (global_omission_active && n_lR_j == 1 && !trial_has_active_nogo) {
+            // Single-accumulator analytic branch.
+            double par_buf[64];
+            for (int c = 0; c < n_par; ++c)
+              par_buf[c] = pars_cm_ptr[static_cast<size_t>(c) * n_trials + start_row_idx];
+            const auto logS_single = [&](double t) -> double {
+              double F = cdf1(t, par_buf, model_context_for_funcs);
+              F = clamp_cdf01_race(F);
+              return safe_log1m_race(F);
+            };
+            const double logP = (!defective_upper_tail)
+              ? log_diff_exp(logS_single(lower_for_trial), logS_single(upper_for_trial))
+              : logS_single(lower_for_trial);
+            if (R_FINITE(logP) && logP > log_prob_eps) {
+              current_ll_val = logP;
+              goto apply_trial_trunc;
+            }
+          }
           // Fast exit: when no upper censoring (UCj=Inf) and model has no
           // defective upper tail, P(RT=Inf)=0. Avoid log_diff_exp(-Inf,-Inf)
           // and degenerate integration bounds [Inf,Inf].
@@ -4998,6 +5270,26 @@ double c_log_likelihood_race(
         current_ll_val = log_sum_exp(integrate_timed(R_j_idx, lower1, upper1),
                                      integrate_timed(R_j_idx, lower2, upper2));
       } else {
+        if (global_omission_active && n_lR_j == 1 && !trial_has_active_nogo) {
+          // Single-accumulator analytic branch for missing RT interval union.
+          double par_buf[64];
+          for (int c = 0; c < n_par; ++c)
+            par_buf[c] = pars_cm_ptr[static_cast<size_t>(c) * n_trials + start_row_idx];
+          const auto logS_single = [&](double t) -> double {
+            double F = cdf1(t, par_buf, model_context_for_funcs);
+            F = clamp_cdf01_race(F);
+            return safe_log1m_race(F);
+          };
+          const double logP1 = log_diff_exp(logS_single(lower1), logS_single(upper1));
+          const double logP2 = (!defective_upper_tail)
+            ? log_diff_exp(logS_single(lower2), logS_single(upper2))
+            : logS_single(lower2);
+          const double logPsum = log_sum_exp(logP1, logP2);
+          if (R_FINITE(logPsum) && logPsum > log_prob_eps) {
+            current_ll_val = logPsum;
+            goto apply_trial_trunc;
+          }
+        }
         const double logP1 = log_diff_exp(log_surv_cm(lower1, start_row_idx, n_lR_j),
                                           log_surv_cm(upper1, start_row_idx, n_lR_j));
         const double logP2 = (!defective_upper_tail)
@@ -5029,6 +5321,7 @@ double c_log_likelihood_race(
                                                 logS_k_buffer);
     }
 
+apply_trial_trunc:
     if (current_ll_val > min_ll && has_trunc) {
       ensure_buffers();
       log_Z_this = get_trunc_normaliser_rowmajor_cpp(pars_rowmajor_buffer.data(),
