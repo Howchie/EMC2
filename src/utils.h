@@ -108,6 +108,7 @@ struct ContextForRaceModels {
     // -2 = unresolved (detect from data once), -1 = absent, >0 = factor code.
     int time_code = -2;
     int nogo_code = -2;
+    bool has_global_kill() const { return erlang_is_guess || erlang_is_global_omission; }
 };
 
 // Scalar adapters (single-RT, single-parameter-row) used by GSL integration.
@@ -334,8 +335,6 @@ inline void pkilledlba_raw(const double* rt, const double* pars_cm, int n_rows,
 inline void drdm_raw(const double* rt, const double* pars_cm, int n_rows,
                      const int* mask, const int* isok,
                      double* out, double min_ll, void* ctx_) {
-  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
-  const bool guess = ctx ? (ctx->erlang_is_guess || ctx->erlang_is_global_omission) : false;
   const double* v_  = pars_cm + 0 * n_rows;
   const double* B_  = pars_cm + 1 * n_rows;
   const double* A_  = pars_cm + 2 * n_rows;
@@ -357,8 +356,6 @@ inline void drdm_raw(const double* rt, const double* pars_cm, int n_rows,
 inline void prdm_raw(const double* rt, const double* pars_cm, int n_rows,
                      const int* mask, const int* isok,
                      double* out, double min_ll, void* ctx_) {
-  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
-  const bool guess = ctx ? (ctx->erlang_is_guess || ctx->erlang_is_global_omission) : false;
   const double* v_  = pars_cm + 0 * n_rows;
   const double* B_  = pars_cm + 1 * n_rows;
   const double* A_  = pars_cm + 2 * n_rows;
@@ -382,8 +379,6 @@ inline void prdm_raw(const double* rt, const double* pars_cm, int n_rows,
 inline void drdmgbm_raw(const double* rt, const double* pars_cm, int n_rows,
                         const int* mask, const int* isok,
                         double* out, double min_ll, void* ctx_) {
-  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
-  const bool guess = ctx ? (ctx->erlang_is_guess || ctx->erlang_is_global_omission) : false;
   const double* v_  = pars_cm + 0 * n_rows;
   const double* B_  = pars_cm + 1 * n_rows;
   const double* A_  = pars_cm + 2 * n_rows;
@@ -409,8 +404,6 @@ inline void drdmgbm_raw(const double* rt, const double* pars_cm, int n_rows,
 inline void prdmgbm_raw(const double* rt, const double* pars_cm, int n_rows,
                         const int* mask, const int* isok,
                         double* out, double min_ll, void* ctx_) {
-  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
-  const bool guess = ctx ? (ctx->erlang_is_guess || ctx->erlang_is_global_omission) : false;
   const double* v_  = pars_cm + 0 * n_rows;
   const double* B_  = pars_cm + 1 * n_rows;
   const double* A_  = pars_cm + 2 * n_rows;
@@ -630,7 +623,7 @@ inline double dbawl_scalar(double t, const double* par, void* ctx_) {
   if (R_IsNA(par[0])) return 0.0;
   const double tt = t - par[4];
   if (tt <= 0.0) return 0.0;
-  const double k_use = (ctx->erlang_is_guess || ctx->erlang_is_global_omission) ? 0.0 : par[6];
+  const double k_use = ctx->has_global_kill() ? 0.0 : par[6];
   // Route through the leaky kernel in all cases; its internal k->0 branch
   // handles the exact LBA limit.
   return dkilledleakyba_norm(tt, par[3], par[2] + par[3], par[0], par[1], par[5], k_use,
@@ -642,7 +635,7 @@ inline double pbawl_scalar(double t, const double* par, void* ctx_) {
   if (R_IsNA(par[0])) return 0.0;
   const double tt = t - par[4];
   if (tt <= 0.0) return 0.0;
-  const double k_use = (ctx->erlang_is_guess || ctx->erlang_is_global_omission) ? 0.0 : par[6];
+  const double k_use = ctx->has_global_kill() ? 0.0 : par[6];
   // Route through the leaky kernel in all cases; its internal k->0 branch
   // handles the exact LBA limit.
   return pkilledleakyba_norm(tt, par[3], par[2] + par[3], par[0], par[1], par[5], k_use,
@@ -654,7 +647,7 @@ inline void dbawl_raw(const double* rt, const double* pars_cm, int n_rows,
                       double* out, double min_ll, void* ctx_) {
   auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
   const bool pd    = ctx->use_posdrift;
-  const bool guess = (ctx->erlang_is_guess || ctx->erlang_is_global_omission);
+  const bool guess = ctx->has_global_kill();
   const double* v_  = pars_cm + 0 * n_rows;
   const double* sv_ = pars_cm + 1 * n_rows;
   const double* B_  = pars_cm + 2 * n_rows;
@@ -678,7 +671,7 @@ inline void pbawl_raw(const double* rt, const double* pars_cm, int n_rows,
                       double* out, double min_ll, void* ctx_) {
   auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
   const bool pd    = ctx->use_posdrift;
-  const bool guess = (ctx->erlang_is_guess || ctx->erlang_is_global_omission);
+  const bool guess = ctx->has_global_kill();
   const double* v_  = pars_cm + 0 * n_rows;
   const double* sv_ = pars_cm + 1 * n_rows;
   const double* B_  = pars_cm + 2 * n_rows;
@@ -705,7 +698,7 @@ inline void bawl_logS_at_t(double t, const double* pars_cm,
                             const int* isok_all, void* ctx_, double* logS_out) {
   auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
   const bool pd    = ctx->use_posdrift;
-  const bool guess = (ctx->erlang_is_guess || ctx->erlang_is_global_omission);
+  const bool guess = ctx->has_global_kill();
   const double* v_  = pars_cm + 0 * n_rows_total;
   const double* sv_ = pars_cm + 1 * n_rows_total;
   const double* B_  = pars_cm + 2 * n_rows_total;
@@ -743,7 +736,7 @@ inline double drdmswtn_scalar(double t, const double* par, void* ctx_) {
   const double tt = t - par[3];
   if (tt <= 0.0) return 0.0;
   const double inv_s = 1.0 / par[4];
-  const double k_use = (ctx->erlang_is_guess || ctx->erlang_is_global_omission) ? 0.0 : par[6];
+  const double k_use = ctx->has_global_kill() ? 0.0 : par[6];
   return drdmswtn(tt,
                   (par[1] + par[2]) * inv_s,  // b = (B+A)/s
                   par[0] * inv_s,              // v/s
@@ -758,7 +751,7 @@ inline double prdmswtn_scalar(double t, const double* par, void* ctx_) {
   const double tt = t - par[3];
   if (tt <= 0.0) return 0.0;
   const double inv_s = 1.0 / par[4];
-  const double k_use = (ctx->erlang_is_guess || ctx->erlang_is_global_omission) ? 0.0 : par[6];
+  const double k_use = ctx->has_global_kill() ? 0.0 : par[6];
   return prdmswtn(tt,
                   (par[1] + par[2]) * inv_s,
                   par[0] * inv_s,
@@ -771,7 +764,7 @@ inline void drdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
                          const int* mask, const int* isok,
                          double* out, double min_ll, void* ctx_) {
   auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
-  const bool guess = ctx ? (ctx->erlang_is_guess || ctx->erlang_is_global_omission) : false;
+  const bool guess = ctx ? ctx->has_global_kill() : false;
   const int mode_hint = ctx ? ctx->mode_hint : 0;
   const double* v_  = pars_cm + 0 * n_rows;
   const double* B_  = pars_cm + 1 * n_rows;
@@ -853,7 +846,7 @@ inline void prdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
                          const int* mask, const int* isok,
                          double* out, double min_ll, void* ctx_) {
   auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
-  const bool guess = ctx ? (ctx->erlang_is_guess || ctx->erlang_is_global_omission) : false;
+  const bool guess = ctx ? ctx->has_global_kill() : false;
   const int mode_hint = ctx ? ctx->mode_hint : 0;
   const double* v_  = pars_cm + 0 * n_rows;
   const double* B_  = pars_cm + 1 * n_rows;
@@ -940,7 +933,7 @@ inline void rdmswtn_logS_at_t(double t, const double* pars_cm,
                                const int* trunc_mask, int n_unique_trials,
                                const int* isok_all, void* ctx_, double* logS_out) {
   auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
-  const bool guess = ctx ? (ctx->erlang_is_guess || ctx->erlang_is_global_omission) : false;
+  const bool guess = ctx ? ctx->has_global_kill() : false;
   const int mode_hint = ctx ? ctx->mode_hint : 0;
   const double* v_  = pars_cm + 0 * n_rows_total;
   const double* B_  = pars_cm + 1 * n_rows_total;
