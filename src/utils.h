@@ -11,6 +11,56 @@
 
 using namespace Rcpp;
 
+// Function pointer types for race model PDF/CDF adapters
+typedef Rcpp::NumericVector (*RacePdfFun)(Rcpp::NumericVector rt,
+                                          Rcpp::NumericMatrix pars,
+                                          Rcpp::LogicalVector winner,
+                                          Rcpp::LogicalVector is_ok,
+                                          void* model_specific_context);
+typedef Rcpp::NumericVector (*RaceCdfFun)(Rcpp::NumericVector rt,
+                                          Rcpp::NumericMatrix pars,
+                                          Rcpp::LogicalVector winner,
+                                          Rcpp::LogicalVector is_ok,
+                                          void* model_specific_context);
+
+// Scalar (single-RT / single-accumulator) helpers for GSL integration
+typedef double (*RacePdf1Fun)(double rt, const double* par, void* model_specific_context);
+typedef double (*RaceCdf1Fun)(double rt, const double* par, void* model_specific_context);
+
+// Fast-path batch raw kernel: writes log-density or log-survivor to pre-allocated buffer
+typedef void (*RaceRawFun)(const double* rt, const double* pars_cm, int n_rows,
+                           const int* mask, const int* isok,
+                           double* out, double min_ll, void* ctx_);
+
+// Batch log-survivor at scalar t for truncation normalisation
+typedef void (*RaceLogSAtTFun)(double t, const double* pars_cm,
+                               int n_rows_total, int n_lR, int n_par,
+                               const int* trunc_mask, int n_unique_trials,
+                               const int* isok_all, void* ctx_, double* logS_out);
+
+struct gsl_race_params {
+  const Rcpp::NumericMatrix* p_trial;
+  Rcpp::LogicalVector winner;
+  Rcpp::LogicalVector isok;
+  RacePdfFun model_dfun;
+  RaceCdfFun model_pfun;
+  int n_lR;
+  void* model_specific_context;
+};
+
+struct gsl_race_params_scalar {
+  const double* pars;   // row-major, length n_lR * n_par
+  int n_lR;
+  int n_par;
+  int winner_idx0;      // 0-based
+  const int* isok;      // length n_lR, 0/1
+  RacePdf1Fun pdf1;
+  RaceCdf1Fun cdf1;
+  void* ctx;
+};
+
+double gsl_f_race_scalar(double t, void* p);
+
 // --------------------------------------------------------------------------
 // Context object for race models, holding metadata and switches.
 // --------------------------------------------------------------------------
@@ -28,8 +78,9 @@ struct ContextForRaceModels {
     // Kill-process shape: 1 = exponential, 2 = Erlang-2.
     int kill_shape = 1;
 
-    // Erlang process flags
+    // 2x2 Model Flags
     bool is_local_guess = false;
+    bool is_global_guess = false;
     bool is_global_kill = false;
     bool is_local_kill = false;
 
@@ -42,7 +93,7 @@ struct ContextForRaceModels {
     int nogo_code = -2;
 
     bool has_global_kill() const {
-      return is_global_kill && kill_active;
+      return (is_global_guess || is_global_kill) && kill_active;
     }
 };
 
@@ -140,6 +191,48 @@ inline double plnr_scalar(double t, const double* par, void* /*ctx_*/) {
   return plnorm_std(tt, m, s, true, false);
 }
 
+// RDM: column layout v=0, B=1, A=2, t0=3, s=4
+inline void drdm_raw(const double* rt, const double* pars_cm, int n_rows,
+                     const int* mask, const int* isok,
+                     double* out, double min_ll, void* /*ctx_*/) {
+  const double* v_  = pars_cm + 0 * n_rows;
+  const double* B_  = pars_cm + 1 * n_rows;
+  const double* A_  = pars_cm + 2 * n_rows;
+  const double* t0_ = pars_cm + 3 * n_rows;
+  const double* s_  = pars_cm + 4 * n_rows;
+  for (int i = 0; i < n_rows; ++i) {
+    if (!mask[i]) continue;
+    if (R_IsNA(v_[i]) || !isok[i]) { out[i] = min_ll; continue; }
+    const double tt = rt[i] - t0_[i];
+    if (tt <= 0.0) { out[i] = min_ll; continue; }
+    const double inv_s = 1.0 / s_[i];
+    const double pdf = digt_impl(tt, (B_[i] + 0.5 * A_[i]) * inv_s,
+                                     v_[i] * inv_s, 0.5 * A_[i] * inv_s);
+    out[i] = (pdf > 0.0 && std::isfinite(pdf)) ? std::log(pdf) : min_ll;
+  }
+}
+
+inline void prdm_raw(const double* rt, const double* pars_cm, int n_rows,
+                     const int* mask, const int* isok,
+                     double* out, double min_ll, void* /*ctx_*/) {
+  const double* v_  = pars_cm + 0 * n_rows;
+  const double* B_  = pars_cm + 1 * n_rows;
+  const double* A_  = pars_cm + 2 * n_rows;
+  const double* t0_ = pars_cm + 3 * n_rows;
+  const double* s_  = pars_cm + 4 * n_rows;
+  for (int i = 0; i < n_rows; ++i) {
+    if (!mask[i]) continue;
+    if (R_IsNA(v_[i]) || !isok[i]) { out[i] = 0.0; continue; }
+    const double tt = rt[i] - t0_[i];
+    if (tt <= 0.0) { out[i] = 0.0; continue; }
+    const double inv_s = 1.0 / s_[i];
+    const double cdf = pigt_impl(tt, (B_[i] + 0.5 * A_[i]) * inv_s,
+                                     v_[i] * inv_s, 0.5 * A_[i] * inv_s);
+    if (cdf >= 1.0) { out[i] = min_ll; continue; }
+    out[i] = (cdf <= 0.0) ? 0.0 : std::log1p(-cdf);
+  }
+}
+
 // Truncation survivor helpers (log-survivor at a scalar T, used for normalization)
 inline void rdm_logS_at_t(double t, const double* pars_cm,
                             int n_rows_total, int n_lR, int /*n_par*/,
@@ -167,6 +260,70 @@ inline void rdm_logS_at_t(double t, const double* pars_cm,
       if (cdf > 0.0) logS += std::log1p(-cdf);
     }
     logS_out[j] = bad ? R_NegInf : logS;
+  }
+}
+
+inline void drdmgbm_raw(const double* rt, const double* pars_cm, int n_rows,
+                        const int* mask, const int* isok,
+                        double* out, double min_ll, void* ctx_) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  const bool global_kill = ctx ? ctx->has_global_kill() : false;
+  const int kill_shape   = ctx ? ctx->kill_shape : 1;
+  const bool is_guess    = ctx ? ctx->is_local_guess : false;
+  const double* v_       = pars_cm + 0 * n_rows;
+  const double* B_       = pars_cm + 1 * n_rows;
+  const double* A_       = pars_cm + 2 * n_rows;
+  const double* t0_      = pars_cm + 3 * n_rows;
+  const double* s_       = pars_cm + 4 * n_rows;
+  const double* lambda_  = pars_cm + 5 * n_rows;
+
+  for (int i = 0; i < n_rows; ++i) {
+    if (!mask[i]) continue;
+    if (R_IsNA(v_[i]) || !isok[i]) { out[i] = min_ll; continue; }
+    const double tt = rt[i] - t0_[i];
+    if (tt <= 0.0) { out[i] = min_ll; continue; }
+    const double inv_s = 1.0 / s_[i];
+    const double k_use = (global_kill || !ctx->kill_active) ? 0.0 : lambda_[i];
+    const double log_pdf = dgbm(tt,
+                                1.0 + (B_[i] + A_[i]) * inv_s,
+                                v_[i] * inv_s,
+                                1.0,
+                                A_[i] * inv_s,
+                                k_use, true, kill_shape, is_guess && k_use > 1e-12);
+    out[i] = (R_FINITE(log_pdf) && log_pdf > min_ll) ? log_pdf : min_ll;
+  }
+}
+
+inline void prdmgbm_raw(const double* rt, const double* pars_cm, int n_rows,
+                        const int* mask, const int* isok,
+                        double* out, double min_ll, void* ctx_) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  const bool global_kill = ctx ? ctx->has_global_kill() : false;
+  const int kill_shape   = ctx ? ctx->kill_shape : 1;
+  const bool is_guess    = ctx ? ctx->is_local_guess : false;
+  const double* v_       = pars_cm + 0 * n_rows;
+  const double* B_       = pars_cm + 1 * n_rows;
+  const double* A_       = pars_cm + 2 * n_rows;
+  const double* t0_      = pars_cm + 3 * n_rows;
+  const double* s_       = pars_cm + 4 * n_rows;
+  const double* lambda_  = pars_cm + 5 * n_rows;
+
+  for (int i = 0; i < n_rows; ++i) {
+    if (!mask[i]) continue;
+    if (R_IsNA(v_[i]) || !isok[i]) { out[i] = 0.0; continue; }
+    const double tt = rt[i] - t0_[i];
+    if (tt <= 0.0) { out[i] = 0.0; continue; }
+    const double inv_s = 1.0 / s_[i];
+    const double k_use = (global_kill || !ctx->kill_active) ? 0.0 : lambda_[i];
+    const double log_cdf = pgbm(tt,
+                                1.0 + (B_[i] + A_[i]) * inv_s,
+                                v_[i] * inv_s,
+                                1.0,
+                                A_[i] * inv_s,
+                                k_use, true, kill_shape, is_guess && k_use > 1e-12);
+    if (!R_FINITE(log_cdf)) { out[i] = 0.0; continue; }
+    if (log_cdf >= 0.0) { out[i] = min_ll; continue; }
+    out[i] = log1m_exp(log_cdf);
   }
 }
 
@@ -212,6 +369,39 @@ inline void rdmgbm_logS_at_t(double t, const double* pars_cm,
 }
 
 // LNR: column layout m=0, s=1, t0=2
+inline void dlnr_raw(const double* rt, const double* pars_cm, int n_rows,
+                     const int* mask, const int* isok,
+                     double* out, double min_ll, void* /*ctx_*/) {
+  const double* m_  = pars_cm + 0 * n_rows;
+  const double* s_  = pars_cm + 1 * n_rows;
+  const double* t0_ = pars_cm + 2 * n_rows;
+  for (int i = 0; i < n_rows; ++i) {
+    if (!mask[i]) continue;
+    if (R_IsNA(m_[i]) || !isok[i]) { out[i] = min_ll; continue; }
+    const double tt = rt[i] - t0_[i];
+    if (tt <= 0.0) { out[i] = min_ll; continue; }
+    const double pdf = dlnorm_std(tt, m_[i], s_[i], false);
+    out[i] = (pdf > 0.0 && std::isfinite(pdf)) ? std::log(pdf) : min_ll;
+  }
+}
+
+inline void plnr_raw(const double* rt, const double* pars_cm, int n_rows,
+                     const int* mask, const int* isok,
+                     double* out, double min_ll, void* /*ctx_*/) {
+  const double* m_  = pars_cm + 0 * n_rows;
+  const double* s_  = pars_cm + 1 * n_rows;
+  const double* t0_ = pars_cm + 2 * n_rows;
+  for (int i = 0; i < n_rows; ++i) {
+    if (!mask[i]) continue;
+    if (R_IsNA(m_[i]) || !isok[i]) { out[i] = 0.0; continue; }
+    const double tt = rt[i] - t0_[i];
+    if (tt <= 0.0) { out[i] = 0.0; continue; }
+    const double logS = lnorm_log_surv_std(tt, m_[i], s_[i]);
+    if (!R_FINITE(logS)) { out[i] = 0.0; continue; }
+    out[i] = logS;
+  }
+}
+
 inline void lnr_logS_at_t(double t, const double* pars_cm,
                             int n_rows_total, int n_lR, int /*n_par*/,
                             const int* trunc_mask, int n_unique_trials,
@@ -232,6 +422,80 @@ inline void lnr_logS_at_t(double t, const double* pars_cm,
       const double logSk = lnorm_log_surv_std(tt, m_[r], s_[r]);
       if (!R_FINITE(logSk)) { bad = true; break; }
       logS += logSk;
+    }
+    logS_out[j] = bad ? R_NegInf : logS;
+  }
+}
+
+// LBA: column layout v=0, sv=1, B=2, A=3, t0=4, s=5
+inline void dlba_raw(const double* rt, const double* pars_cm, int n_rows,
+                     const int* mask, const int* isok,
+                     double* out, double min_ll, void* ctx_) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  const bool pd = ctx ? ctx->use_posdrift : true;
+  const double* v_  = pars_cm + 0 * n_rows;
+  const double* sv_ = pars_cm + 1 * n_rows;
+  const double* B_  = pars_cm + 2 * n_rows;
+  const double* A_  = pars_cm + 3 * n_rows;
+  const double* t0_ = pars_cm + 4 * n_rows;
+  const double* s_  = pars_cm + 5 * n_rows;
+  for (int i = 0; i < n_rows; ++i) {
+    if (!mask[i]) continue;
+    if (R_IsNA(v_[i]) || !isok[i]) { out[i] = min_ll; continue; }
+    const double tt = rt[i] - t0_[i];
+    if (tt <= 0.0) { out[i] = min_ll; continue; }
+    const double pdf = dlba_norm(tt, A_[i], B_[i] + A_[i], v_[i], sv_[i], s_[i], pd);
+    out[i] = (pdf > 0.0 && std::isfinite(pdf)) ? std::log(pdf) : min_ll;
+  }
+}
+
+inline void plba_raw(const double* rt, const double* pars_cm, int n_rows,
+                     const int* mask, const int* isok,
+                     double* out, double min_ll, void* ctx_) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  const bool pd = ctx ? ctx->use_posdrift : true;
+  const double* v_  = pars_cm + 0 * n_rows;
+  const double* sv_ = pars_cm + 1 * n_rows;
+  const double* B_  = pars_cm + 2 * n_rows;
+  const double* A_  = pars_cm + 3 * n_rows;
+  const double* t0_ = pars_cm + 4 * n_rows;
+  const double* s_  = pars_cm + 5 * n_rows;
+  for (int i = 0; i < n_rows; ++i) {
+    if (!mask[i]) continue;
+    if (R_IsNA(v_[i]) || !isok[i]) { out[i] = 0.0; continue; }
+    const double tt = rt[i] - t0_[i];
+    if (tt <= 0.0) { out[i] = 0.0; continue; }
+    const double cdf = plba_norm(tt, A_[i], B_[i] + A_[i], v_[i], sv_[i], s_[i], pd);
+    if (cdf >= 1.0) { out[i] = min_ll; continue; }
+    out[i] = (cdf <= 0.0) ? 0.0 : std::log1p(-cdf);
+  }
+}
+
+inline void lba_logS_at_t(double t, const double* pars_cm,
+                           int n_rows_total, int n_lR, int /*n_par*/,
+                           const int* trunc_mask, int n_unique_trials,
+                           const int* isok_all, void* ctx_, double* logS_out) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  const bool pd = ctx ? ctx->use_posdrift : true;
+  const double* v_  = pars_cm + 0 * n_rows_total;
+  const double* sv_ = pars_cm + 1 * n_rows_total;
+  const double* B_  = pars_cm + 2 * n_rows_total;
+  const double* A_  = pars_cm + 3 * n_rows_total;
+  const double* t0_ = pars_cm + 4 * n_rows_total;
+  const double* s_  = pars_cm + 5 * n_rows_total;
+  for (int j = 0; j < n_unique_trials; ++j) {
+    if (!trunc_mask[j]) continue;
+    const int start = j * n_lR;
+    double logS = 0.0;
+    bool bad = false;
+    for (int k = 0; k < n_lR && !bad; ++k) {
+      const int r = start + k;
+      if (!isok_all[r] || R_IsNA(v_[r])) { bad = true; break; }
+      const double tt = t - t0_[r];
+      if (tt <= 0.0) continue;
+      const double cdf = plba_norm(tt, A_[r], B_[r] + A_[r], v_[r], sv_[r], s_[r], pd);
+      if (cdf >= 1.0) { bad = true; break; }
+      if (cdf > 0.0) logS += std::log1p(-cdf);
     }
     logS_out[j] = bad ? R_NegInf : logS;
   }

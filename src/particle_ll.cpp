@@ -538,6 +538,25 @@ static double local_race_helper(double t,
                                 double* pars_2buf,
                                 int* isok_2buf);
 
+double c_log_likelihood_race(
+    Rcpp::NumericMatrix pars,
+    Rcpp::DataFrame dadm,
+    RacePdf1Fun pdf1,
+    RaceCdf1Fun cdf1,
+    const int n_trials,
+    LogicalVector winner,
+    Rcpp::IntegerVector expand,
+    double min_ll,
+    const Rcpp::LogicalVector isok,
+    int n_lR,
+    void* model_context_for_funcs,
+    bool all_finite_trials,
+    RaceRawFun model_dfun_raw,
+    RaceRawFun model_pfun_raw,
+    RaceLogSAtTFun logS_at_t,
+    RaceSharedState* shared = nullptr,
+    NumericVector* trial_ll_out = nullptr);
+
 static double c_log_likelihood_logicalrules(
     const Rcpp::NumericMatrix& pars,
     const Rcpp::IntegerVector& expand,
@@ -5030,8 +5049,6 @@ double c_log_likelihood_race(
         }
       } else if (ctx && ctx->is_global_kill && ctx->kill_active) {
         current_trial_ll_sum += global_log_sk_by_trial[static_cast<size_t>(unique_trial_idx)];
-          }
-        }
       }
       ll_unique[unique_trial_idx] = std::max(min_ll, current_trial_ll_sum);
     }
