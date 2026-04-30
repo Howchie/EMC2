@@ -349,9 +349,23 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
   out.ctx.use_posdrift = true;
   out.ctx.gng = false;
   out.ctx.kill_shape = (type_std.find("_E2") != std::string::npos) ? 2 : 1;
-  out.ctx.erlang_is_guess = (type_std.find("_GUESS") != std::string::npos);
-  out.ctx.erlang_is_global_omission = (type_std.find("_GLOBAL") != std::string::npos);
-  if (out.ctx.erlang_is_global_omission) out.ctx.defective_upper_tail = true;
+
+  // 2x2 Model Flag Resolution
+  out.ctx.is_local_guess  = (type_std.find("_LOCAL_GUESS") != std::string::npos);
+  out.ctx.is_global_guess = (type_std.find("_GLOBAL_GUESS") != std::string::npos);
+  out.ctx.is_global_kill  = (type_std.find("_GLOBAL_KILL") != std::string::npos);
+  out.ctx.is_local_kill   = (type_std.find("_LOCAL_KILL") != std::string::npos);
+
+  // Backward compatibility for legacy _GUESS and _GLOBAL flags
+  if (!out.ctx.is_local_guess && !out.ctx.is_global_guess && !out.ctx.is_global_kill && !out.ctx.is_local_kill) {
+    bool has_guess  = (type_std.find("_GUESS")  != std::string::npos);
+    bool has_global = (type_std.find("_GLOBAL") != std::string::npos);
+    if (has_guess && has_global) out.ctx.is_global_guess = true;
+    else if (has_guess)          out.ctx.is_global_guess = true; // Legacy GUESS was global
+    else if (has_global)         out.ctx.is_global_kill  = true;
+  }
+
+  if (out.ctx.is_global_kill) out.ctx.defective_upper_tail = true;
 
   if (type_std.find("RDMSWTN") != std::string::npos) {
     // Must be checked before "RDM" since "RDMSWTN" contains "RDM"
@@ -2304,9 +2318,9 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
         time_win_int_buf.assign(n_trials, 0);
         alt_res_buf_fp.resize(n_trials);
         n_resp_fp.assign(n_unique_fp, 0);
-      } else if (adapter.ctx.erlang_is_global_omission) {
+      } else if (adapter.ctx.is_global_kill) {
         alt_res_buf_fp.resize(n_trials);
-      } else if (adapter.ctx.erlang_is_guess) {
+      } else if (adapter.ctx.is_global_guess) {
         n_resp_fp.assign(n_unique_fp, 0);
       }
       // winner/loser masks are data-fixed; fill once
@@ -2382,7 +2396,7 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
           race_shared.idx_time_only.assign(static_cast<size_t>(n_trials), 0);
           race_shared.alt_res_buf.resize(static_cast<size_t>(n_trials));
         }
-        const bool needs_n_resp_shared = (time_code != -1 || adapter.ctx.erlang_is_guess);
+        const bool needs_n_resp_shared = (time_code != -1 || adapter.ctx.is_global_guess);
         if (needs_n_resp_shared) {
           race_shared.n_resp.assign(static_cast<size_t>(n_unique_fp), 0);
         }
@@ -2441,7 +2455,7 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
         }
         const double* pars_cm = race_staging_buf.data();
         adapter.ctx.mode_hint = 0;
-        adapter.ctx.global_kill_active = true;
+        adapter.ctx.kill_active = true;
         // Set once-per-particle mode hints so raw kernels can skip per-row
         // variability checks in common zero-variability cases.
         if (type_std.find("RDMSWTN") != std::string::npos) {
@@ -2454,13 +2468,17 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
             const double sv = sv_col[j];
             if (std::isfinite(sv) && std::fabs(sv) > 1e-10) { sv_zero = false; break; }
           }
-          if (adapter.ctx.erlang_is_global_omission) {
+          // For any Erlang variant, disable kill bookkeeping when all lambdas are zero
+          // so kernels fall through to standard Wald without computing mixtures.
+          const bool any_erlang = adapter.ctx.is_global_kill || adapter.ctx.is_local_kill ||
+                                  adapter.ctx.is_global_guess || adapter.ctx.is_local_guess;
+          if (any_erlang) {
             for (int j = 0; j < n_trials; ++j) {
-              if (!isok_int_fp[j] || !winner_int_buf[j]) continue;
+              if (!isok_int_fp[j]) continue;
               const double lam = lambda_col[j];
               if (std::isfinite(lam) && lam > 1e-12) { lambda_active = true; break; }
             }
-            adapter.ctx.global_kill_active = lambda_active;
+            adapter.ctx.kill_active = lambda_active;
           }
           adapter.ctx.mode_hint = sv_zero ? 1 : 2;
         }
@@ -2486,9 +2504,8 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
           adapter.model_pfun_raw(rt_ptr, pars_cm, n_trials,
                                  winner_int_buf.data(), isok_int_fp.data(),
                                  alt_res_buf_fp.data(), min_ll, &adapter.ctx);
-        } else if (adapter.ctx.erlang_is_global_omission && adapter.ctx.global_kill_active) {
-          // Pre-fill log S_K at the winner row for each trial.  Only winner slots
-          // are read in the accumulation loop below; non-winner slots are skipped.
+        } else if (adapter.ctx.is_global_kill && adapter.ctx.kill_active) {
+          // Pre-fill log S_K at the winner row for each trial.
           const double* lambda_ptr = pars_cm + adapter.ctx.lambda_index * n_trials;
           const double* t0_ptr     = pars_cm + adapter.ctx.t0_index     * n_trials;
           for (int j = 0; j < n_trials; ++j) {
@@ -2499,7 +2516,7 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
                 : min_ll;
           }
         }
-        // No pre-fill for erlang_is_guess: log_sk and log_fk are computed
+        // No pre-fill for is_global_guess: log_sk and log_fk are computed
         // inline from the winner row during the per-trial accumulation below.
 
         // Sum n_lR rows per unique trial; apply pC correction (no-op when pC=0).
@@ -2509,13 +2526,13 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
           const int n_lR_j = has_RACE_col_fp ? RACE_fp[base] : n_lR;
           for (int k = 0; k < n_lR_j; ++k) s += res_buf[base + k];
 
-          if (adapter.ctx.erlang_is_global_omission && adapter.ctx.global_kill_active) {
+          if (adapter.ctx.is_global_kill && adapter.ctx.kill_active) {
             int idx_W = -1;
             for (int k = 0; k < n_lR_j; ++k) { if (winner_int_buf[base + k]) { idx_W = k; break; } }
             if (idx_W != -1) {
               s += alt_res_buf_fp[base + idx_W]; // alt_res_buf_fp[base+idx_W] is log S_K
             }
-          } else if (adapter.ctx.erlang_is_guess && n_resp_fp[j] > 0) {
+          } else if (adapter.ctx.is_global_guess && n_resp_fp[j] > 0) {
             int idx_W = -1;
             for (int k = 0; k < n_lR_j; ++k) { if (winner_int_buf[base + k]) { idx_W = k; break; } }
             if (idx_W != -1) {
@@ -2524,18 +2541,13 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
               const double lam = pars_cm[adapter.ctx.lambda_index * n_trials + w_row];
               const double log_sk = erlang_log_surv(tt, lam, adapter.ctx.kill_shape);
               const double log_fk = erlang_log_pdf(tt, lam, adapter.ctx.kill_shape);
-              // Compute log(S_i) using the scalar CDF — mirrors the slow-path approach
-              // and avoids the stride mismatch of calling model_pfun_raw with n_rows=1
-              // on a full n_trials-stride staging buffer.
+              // Compute log(S_i) using the scalar CDF
               const int n_cols = static_cast<int>(race_base_col_order.size());
               std::vector<double> par_buf_w(static_cast<size_t>(n_cols), 0.0);
               for (int c = 0; c < n_cols; ++c)
                 par_buf_w[static_cast<size_t>(c)] = pars_cm[c * n_trials + w_row];
               const double fi = adapter.cdf1_ptr(tt, par_buf_w.data(), &adapter.ctx);
               const double log_si = std::log1p(-clamp_cdf01_race(fi));
-              // s = log(g_i * S_others).  Two competing terms:
-              //   responded normally: log(g_i * S_others * S_K) = s + log_sk
-              //   guess response:     log(f_K * S_race / N_resp) = log_fk + (s - log_g_i + log_si) - log(N_resp)
               double s_race = s - res_buf[w_row] + log_si;
               double s_guess = log_fk + s_race - std::log(n_resp_fp[j]);
               s = log_sum_exp(s + log_sk, s_guess);
@@ -4507,26 +4519,29 @@ double c_log_likelihood_race(
   }
   const bool has_time = (time_code > 0);
 
-  // For global-omission models, disable kill bookkeeping when lambda is
-  // identically zero for this particle (nested-model fast path).
-  if (ctx && ctx->erlang_is_global_omission && ctx->lambda_index >= 0) {
+  // For any Erlang variant, disable kill bookkeeping when lambda is identically
+  // zero for this particle so kernels use the standard (non-mixture) forms.
+  const bool any_erlang_ctx = ctx && ctx->lambda_index >= 0 &&
+    (ctx->is_global_kill || ctx->is_local_kill ||
+     ctx->is_global_guess || ctx->is_local_guess);
+  if (any_erlang_ctx) {
     bool lambda_active = false;
     const double* lambda_ptr = pars_cm_ptr + static_cast<size_t>(ctx->lambda_index) * n_trials;
     for (int row = 0; row < n_trials; ++row) {
-      if (!winner[row] || !isok[row]) continue;
+      if (!isok[row]) continue;
       const double lam = lambda_ptr[row];
       if (std::isfinite(lam) && lam > 1e-12) { lambda_active = true; break; }
     }
-    ctx->global_kill_active = lambda_active;
+    ctx->kill_active = lambda_active;
   } else if (ctx) {
-    ctx->global_kill_active = true;
+    ctx->kill_active = true;
   }
 
   ContextForRaceModels dense_ctx = *ctx;
   dense_ctx.min_lik_for_pdf = 0.0;
   void* dense_ctx_ptr = static_cast<void*>(&dense_ctx);
   const bool defective_upper_tail = ctx->defective_upper_tail;
-  const bool global_omission_active = (ctx && ctx->erlang_is_global_omission && ctx->global_kill_active);
+  const bool global_omission_active = (ctx && ctx->is_global_kill && ctx->kill_active);
 
   // Cache 20-point Gauss-Legendre nodes/weights for the global-kill t=Inf branch.
   // This avoids per-trial Rcpp List/Vector allocation and repeated node transforms.
@@ -4568,7 +4583,7 @@ double c_log_likelihood_race(
       }
       // Proper race models have S(Inf)=0 => log S(Inf) = -Inf.
       // Defective-tail models (e.g., LBAIO / BAwL) retain mass at +Inf.
-      if (race_ctx && race_ctx->erlang_is_global_omission && race_ctx->global_kill_active) {
+      if (race_ctx && race_ctx->is_global_kill && race_ctx->kill_active) {
         // Global omission probability: Integral f_K(u) * S_race(u) du on [0, Inf).
         // Use Gauss-Legendre quadrature (20 nodes) with mapping u -> t = -1/lam * log(1-u).
         const double* lambda_ptr = pars_cm_ptr + race_ctx->lambda_index * n_trials;
@@ -4680,7 +4695,7 @@ double c_log_likelihood_race(
       Fk = clamp_cdf01_race(Fk);
       double logS = safe_log1m_race(Fk);
       if (!R_FINITE(logS)) return R_NegInf;
-      if (race_ctx && race_ctx->erlang_is_global_omission && race_ctx->global_kill_active) {
+      if (race_ctx && race_ctx->is_global_kill && race_ctx->kill_active) {
         const double* lambda_ptr = pars_cm_ptr + race_ctx->lambda_index * n_trials;
         const double* t0_ptr = pars_cm_ptr + race_ctx->t0_index * n_trials;
         const double tt = t - t0_ptr[start_row_idx];
@@ -4702,7 +4717,7 @@ double c_log_likelihood_race(
       if (!R_FINITE(ll)) return R_NegInf;
       logS += ll;
     }
-    if (race_ctx && race_ctx->erlang_is_global_omission && race_ctx->global_kill_active) {
+    if (race_ctx && race_ctx->is_global_kill && race_ctx->kill_active) {
       const double* lambda_ptr = pars_cm_ptr + race_ctx->lambda_index * n_trials;
       const double* t0_ptr = pars_cm_ptr + race_ctx->t0_index * n_trials;
       const double tt = t - t0_ptr[start_row_idx];
@@ -4716,7 +4731,7 @@ double c_log_likelihood_race(
   const bool has_finite_batch = use_full_finite_batch || (finite_rt_unique_trial_indices.size() > 0);
   std::vector<int> winner_row_by_trial;
   std::vector<double> global_log_sk_by_trial;
-  if (ctx && ctx->erlang_is_global_omission && ctx->global_kill_active) {
+  if (ctx && ctx->is_global_kill && ctx->kill_active) {
     winner_row_by_trial.assign(static_cast<size_t>(n_unique_trials), -1);
     global_log_sk_by_trial.assign(static_cast<size_t>(n_unique_trials), 0.0);
     const double* t0_ptr = pars_cm_ptr + static_cast<size_t>(ctx->t0_index) * n_trials;
@@ -4805,7 +4820,7 @@ double c_log_likelihood_race(
 
     // Pre-compute n_resp (guessable accumulator count per unique trial) for
     // both the timed-race path (has_time) and the Erlang-guess path.
-    const bool needs_n_resp = has_time || (ctx && ctx->erlang_is_guess);
+    const bool needs_n_resp = has_time || (ctx && ctx->is_global_guess);
     if (needs_n_resp) {
       if (use_shared && !shared->n_resp.empty()) {
         n_resp_ptr = shared->n_resp.data();
@@ -5017,9 +5032,9 @@ double c_log_likelihood_race(
                 alt_lds_ptr[start_row_idx + idx_T] + alt_lds_ptr[start_row_idx + idx_W];
               current_trial_ll_sum = log_sum_exp(current_trial_ll_sum, s_T - std::log(n_resp_ptr[unique_trial_idx]));
             }
-          } else if (ctx && ctx->erlang_is_global_omission && ctx->global_kill_active) {
+          } else if (ctx && ctx->is_global_kill && ctx->kill_active) {
             current_trial_ll_sum += global_log_sk_by_trial[static_cast<size_t>(unique_trial_idx)];
-          } else if (ctx && ctx->erlang_is_guess) {
+          } else if (ctx && ctx->is_global_guess) {
             const int n_resp_j = n_resp_ptr ? n_resp_ptr[unique_trial_idx] : 0;
             int idx_W = -1;
             for (int k = 0; k < n_lR_j; ++k) { if (idx_win_ptr[start_row_idx + k]) { idx_W = k; break; } }
@@ -5064,9 +5079,9 @@ double c_log_likelihood_race(
             alt_lds_ptr[start_row_idx + idx_T] + alt_lds_ptr[start_row_idx + idx_W];
           current_trial_ll_sum = log_sum_exp(current_trial_ll_sum, s_T - std::log(n_resp_ptr[unique_trial_idx]));
         }
-      } else if (ctx && ctx->erlang_is_global_omission && ctx->global_kill_active) {
+      } else if (ctx && ctx->is_global_kill && ctx->kill_active) {
         current_trial_ll_sum += global_log_sk_by_trial[static_cast<size_t>(unique_trial_idx)];
-      } else if (ctx && ctx->erlang_is_guess) {
+      } else if (ctx && ctx->is_global_guess) {
         const int n_resp_j = n_resp_ptr ? n_resp_ptr[unique_trial_idx] : 0;
         int idx_W = -1;
         for (int k = 0; k < n_lR_j; ++k) { if (idx_win_ptr[start_row_idx + k]) { idx_W = k; break; } }
