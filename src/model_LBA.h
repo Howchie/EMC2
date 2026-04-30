@@ -5,6 +5,7 @@
 #include "utility_functions.h"
 #include "wald_functions.h"  // pnorm_std() — fast normal CDF under USE_FAST_PNORM
 #include "composite_functions.h"  // clamp_pos, safe_log
+#include "gaussian.h"
 
 using namespace Rcpp;
 
@@ -117,14 +118,6 @@ NumericVector plba(NumericVector t,
 // Hits threshold b when x(t) >= b.
 // k -> 0 limit recovers standard LBA exactly.
 // --------------------------------------------------------------------------
-
-// Erlang-n kill survival in log space: log(exp(-lt) * sum_{m=0}^{n-1} (lt)^m/m!)
-// n=1: exponential; n=2: Erlang-2.  Duplicated from model_RDM.h to avoid coupling.
-inline double lba_erlang_log_surv(double t, double lambda, int n) {
-  if (lambda <= 0.0) return 0.0;
-  if (n <= 1) return -lambda * t;
-  return -lambda * t + std::log1p(lambda * t);
-}
 
 // Stable exp(-kt) and 1-exp(-kt).
 inline void leak_terms(double k, double t, double &E, double &G) {
@@ -273,7 +266,7 @@ inline double dkilledleakyba_norm(double t, double A, double b,
   if (t <= 0.0) return log_out ? R_NegInf : 0.0;
   if (lambda <= 0.0) return dleakyba_norm(t, A, b, v, sv, k, posdrift, log_out);
   const double log_f = dleakyba_norm(t, A, b, v, sv, k, posdrift, true)
-                       + lba_erlang_log_surv(t, lambda, kill_shape);
+                       + erlang_log_surv(t, lambda, kill_shape);
   return log_out ? log_f : std::exp(log_f);
 }
 
@@ -296,7 +289,7 @@ inline double pkilledleakyba_norm(double t, double A, double b,
     double acc = 0.0;
     for (int j = 0; j < nodes.size(); ++j) {
       const double u  = 0.5 * t * (nodes[j] + 1.0);
-      const double sk = std::exp(lba_erlang_log_surv(u, lambda, kill_shape));
+      const double sk = std::exp(erlang_log_surv(u, lambda, kill_shape));
       acc += weights[j] * dleakyba_norm(u, A, b, v, sv, k, posdrift, false) * sk;
     }
     double out = 0.5 * t * acc;
