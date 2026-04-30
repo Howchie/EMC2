@@ -126,6 +126,12 @@ inline double lba_erlang_log_surv(double t, double lambda, int n) {
   return -lambda * t + std::log1p(lambda * t);
 }
 
+inline double lba_erlang_log_pdf(double t, double lambda, int n) {
+  if (lambda <= 0.0 || t <= 0.0) return R_NegInf;
+  if (n <= 1) return std::log(lambda) - lambda * t;
+  return 2.0 * std::log(lambda) + std::log(t) - lambda * t;
+}
+
 // Stable exp(-kt) and 1-exp(-kt).
 inline void leak_terms(double k, double t, double &E, double &G) {
   E = std::exp(-k * t);
@@ -269,22 +275,37 @@ double dleakyba_norm(double t, double A, double b,
 inline double dkilledleakyba_norm(double t, double A, double b,
                                   double v, double sv, double k, double lambda,
                                   bool posdrift = true, bool log_out = false,
-                                  int kill_shape = 1) {
+                                  int kill_shape = 1, bool guess = false) {
   if (t <= 0.0) return log_out ? R_NegInf : 0.0;
   if (lambda <= 0.0) return dleakyba_norm(t, A, b, v, sv, k, posdrift, log_out);
-  const double log_f = dleakyba_norm(t, A, b, v, sv, k, posdrift, true)
-                       + lba_erlang_log_surv(t, lambda, kill_shape);
-  return log_out ? log_f : std::exp(log_f);
+  const double log_f_hit = dleakyba_norm(t, A, b, v, sv, k, posdrift, true)
+                           + lba_erlang_log_surv(t, lambda, kill_shape);
+  if (!guess) return log_out ? log_f_hit : std::exp(log_f_hit);
+  // Guess component: f_K(t) * S_R(t)
+  const double cdf_r = pleakyba_norm(t, A, b, v, sv, k, posdrift, false);
+  const double log_sr = std::log1p(-std::max(0.0, std::min(1.0, cdf_r)));
+  const double log_fk = lba_erlang_log_pdf(t, lambda, kill_shape);
+  const double log_f_guess = log_fk + log_sr;
+  const double log_pdf = log_sum_exp(log_f_hit, log_f_guess);
+  return log_out ? log_pdf : std::exp(log_pdf);
 }
 
 // Killed-leaky BA sub-CDF:
 // P(T_R <= t, T_R < T_K) with kill_shape=1 (exponential) or kill_shape=2 (Erlang-2).
+// With guess=true: mixture CDF = 1 - S_R(t)*S_K(t).
 inline double pkilledleakyba_norm(double t, double A, double b,
                                   double v, double sv, double k, double lambda,
                                   bool posdrift = true, bool log_out = false,
-                                  int kill_shape = 1) {
+                                  int kill_shape = 1, bool guess = false) {
   if (t <= 0.0) return log_out ? R_NegInf : 0.0;
   if (lambda <= 0.0) return pleakyba_norm(t, A, b, v, sv, k, posdrift, log_out);
+  if (guess) {
+    const double cdf_r = pleakyba_norm(t, A, b, v, sv, k, posdrift, false);
+    const double log_sr = std::log1p(-std::max(0.0, std::min(1.0, cdf_r)));
+    const double log_sk = lba_erlang_log_surv(t, lambda, kill_shape);
+    const double log_val = std::log1p(-std::exp(log_sr + log_sk));
+    return log_out ? log_val : std::exp(log_val);
+  }
   const double eps = 1e-10;
   if (sv <= 0.0 || A <= 0.0 || b <= A) return log_out ? R_NegInf : 0.0;
 

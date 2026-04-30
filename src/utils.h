@@ -511,11 +511,10 @@ inline double dbawl_scalar(double t, const double* par, void* ctx_) {
   if (R_IsNA(par[0])) return 0.0;
   const double tt = t - par[4];
   if (tt <= 0.0) return 0.0;
+  const bool local_guess = ctx && ctx->is_local_guess;
   const double k_use = (ctx && (ctx->has_global_kill() || !ctx->kill_active)) ? 0.0 : par[6];
-  // Route through the leaky kernel in all cases; its internal k->0 branch
-  // handles the exact LBA limit.
   return dkilledleakyba_norm(tt, par[3], par[2] + par[3], par[0], par[1], par[5], k_use,
-                             ctx->use_posdrift, false, ctx->kill_shape);
+                             ctx->use_posdrift, false, ctx->kill_shape, local_guess);
 }
 
 inline double pbawl_scalar(double t, const double* par, void* ctx_) {
@@ -523,11 +522,10 @@ inline double pbawl_scalar(double t, const double* par, void* ctx_) {
   if (R_IsNA(par[0])) return 0.0;
   const double tt = t - par[4];
   if (tt <= 0.0) return 0.0;
+  const bool local_guess = ctx && ctx->is_local_guess;
   const double k_use = (ctx && (ctx->has_global_kill() || !ctx->kill_active)) ? 0.0 : par[6];
-  // Route through the leaky kernel in all cases; its internal k->0 branch
-  // handles the exact LBA limit.
   return pkilledleakyba_norm(tt, par[3], par[2] + par[3], par[0], par[1], par[5], k_use,
-                             ctx->use_posdrift, false, ctx->kill_shape);
+                             ctx->use_posdrift, false, ctx->kill_shape, local_guess);
 }
 
 inline void dbawl_raw(const double* rt, const double* pars_cm, int n_rows,
@@ -536,6 +534,7 @@ inline void dbawl_raw(const double* rt, const double* pars_cm, int n_rows,
   auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
   const bool pd          = ctx->use_posdrift;
   const bool global_kill = ctx->has_global_kill();
+  const bool local_guess = ctx->is_local_guess;
   const double* v_  = pars_cm + 0 * n_rows;
   const double* sv_ = pars_cm + 1 * n_rows;
   const double* B_  = pars_cm + 2 * n_rows;
@@ -549,7 +548,7 @@ inline void dbawl_raw(const double* rt, const double* pars_cm, int n_rows,
     const double tt = rt[i] - t0_[i];
     if (tt <= 0.0) { out[i] = min_ll; continue; }
     const double k_use = (global_kill || !ctx->kill_active) ? 0.0 : l_[i];
-    const double pdf = dkilledleakyba_norm(tt, A_[i], B_[i] + A_[i], v_[i], sv_[i], k_[i], k_use, pd, false, ctx->kill_shape);
+    const double pdf = dkilledleakyba_norm(tt, A_[i], B_[i] + A_[i], v_[i], sv_[i], k_[i], k_use, pd, false, ctx->kill_shape, local_guess);
     out[i] = (pdf > 0.0 && std::isfinite(pdf)) ? std::log(pdf) : min_ll;
   }
 }
@@ -560,6 +559,7 @@ inline void pbawl_raw(const double* rt, const double* pars_cm, int n_rows,
   auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
   const bool pd          = ctx->use_posdrift;
   const bool global_kill = ctx->has_global_kill();
+  const bool local_guess = ctx->is_local_guess;
   const double* v_  = pars_cm + 0 * n_rows;
   const double* sv_ = pars_cm + 1 * n_rows;
   const double* B_  = pars_cm + 2 * n_rows;
@@ -573,7 +573,7 @@ inline void pbawl_raw(const double* rt, const double* pars_cm, int n_rows,
     const double tt = rt[i] - t0_[i];
     if (tt <= 0.0) { out[i] = 0.0; continue; }
     const double k_use = (global_kill || !ctx->kill_active) ? 0.0 : l_[i];
-    const double cdf = pkilledleakyba_norm(tt, A_[i], B_[i] + A_[i], v_[i], sv_[i], k_[i], k_use, pd, false, ctx->kill_shape);
+    const double cdf = pkilledleakyba_norm(tt, A_[i], B_[i] + A_[i], v_[i], sv_[i], k_[i], k_use, pd, false, ctx->kill_shape, local_guess);
     if (cdf >= 1.0) { out[i] = min_ll; continue; }
     out[i] = (cdf <= 0.0) ? 0.0 : std::log1p(-cdf);
   }

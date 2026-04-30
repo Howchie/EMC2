@@ -460,10 +460,16 @@ rBAwL <- function(lR, pars, ok = rep(TRUE, length(lR)),
 #' @param global logical, if TRUE killing process is global to the race (one clock per trial)
 #'
 #' @export
-BAwL <- function(posdrift = TRUE, erlang = 1L, guess = FALSE, global = FALSE) {
+BAwL <- function(posdrift = TRUE, erlang = 1L,
+                 erlang_type = c("none", "local_kill", "global_kill", "local_guess")) {
+  erlang_type <- match.arg(erlang_type)
   list(
     type   = "RACE",
-    c_name = paste0(ifelse(posdrift, "BAwL", "BAwLIO"), if (erlang >= 2L) "_E2" else "", if (guess) "_GUESS" else "", if (global) "_GLOBAL" else ""),
+    c_name = paste0(ifelse(posdrift, "BAwL", "BAwLIO"),
+                    if (erlang >= 2L) "_E2" else "",
+                    if (erlang_type == "local_guess") "_LOCAL_GUESS"
+                    else if (erlang_type == "global_kill") "_GLOBAL_KILL"
+                    else ""),
     p_types = c("v"  = 1, "sv" = log(1), "B" = log(1), "A" = log(0),
                 "t0" = log(0), "k" = log(0), "lambda" = log(0), "pContaminant" = qnorm(0)),
     p_types_canonical = c("v", "sv", "B", "A", "t0", "k"),
@@ -480,9 +486,13 @@ BAwL <- function(posdrift = TRUE, erlang = 1L, guess = FALSE, global = FALSE) {
       cbind(pars, b = pars[, "B"] + pars[, "A"])
     },
     rfun = if (posdrift)
-             function(data, pars) rBAwL(data$lR, pars, ok = attr(pars, "ok"), posdrift = TRUE,  erlang = erlang, guess = guess, global = global)
+             function(data, pars) rBAwL(data$lR, pars, ok = attr(pars, "ok"), posdrift = TRUE,
+                                        erlang = erlang, guess = erlang_type == "local_guess",
+                                        global = erlang_type == "global_kill")
            else
-             function(data, pars) rBAwL(data$lR, pars, ok = attr(pars, "ok"), posdrift = FALSE, erlang = erlang, guess = guess, global = global),
+             function(data, pars) rBAwL(data$lR, pars, ok = attr(pars, "ok"), posdrift = FALSE,
+                                        erlang = erlang, guess = erlang_type == "local_guess",
+                                        global = erlang_type == "global_kill"),
     dfun = if (posdrift)
              function(rt, pars) dBAwL(rt, pars, posdrift = TRUE,  erlang = erlang)
            else
