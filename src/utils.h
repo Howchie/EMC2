@@ -28,9 +28,8 @@ struct ContextForRaceModels {
     // Kill-process shape: 1 = exponential, 2 = Erlang-2.
     int kill_shape = 1;
 
-    // 2x2 Model Flags
+    // Erlang process flags
     bool is_local_guess = false;
-    bool is_global_guess = false;
     bool is_global_kill = false;
     bool is_local_kill = false;
 
@@ -43,7 +42,7 @@ struct ContextForRaceModels {
     int nogo_code = -2;
 
     bool has_global_kill() const {
-      return (is_global_guess || is_global_kill) && kill_active;
+      return is_global_kill && kill_active;
     }
 };
 
