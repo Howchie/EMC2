@@ -82,13 +82,13 @@ run_lba_demo <- function(p_contaminant = 0, estimate_contaminant = FALSE,
     # Fixed to 0 contaminant probability (i.e., pnorm(-Inf) = 0)
     if ("pContaminant" %in% names(p_vector)) p_vector[["pContaminant"]] <- qnorm(0)
   }
-  
+
   if (n_subj>1) {
     # Hierarchical simulation for recovery should use an explicit covariance matrix.
     # The default make_random_effects() scales variances by abs(mean), which can
     # create very large variances and exact zero variances (if a mean is 0).
     # I modified it to baseline at natural mean on the transformed scale zero (e.g. for the default log(1)=0, we'd get a variance of variance_prop * exp(0))
-    
+
     tmp <- make_random_effects(designLBA,p_vector,n_subj=n_subj, variance_proportion = .1)
     dat <- make_data(tmp,designLBA,n_trials = n_trials,
                      TC=list(UC = UC, UT = UT, LC = LC, LT = LT))
@@ -118,7 +118,7 @@ run_lba_demo <- function(p_contaminant = 0, estimate_contaminant = FALSE,
   # Profile plots. Use n_cores=1 on Windows.
   library(parallel)
   par(mfrow=layout)
-  
+
   rtct <- system.time({rtc <- profile_plot_test(dat, designLBA, p_vector, n_cores = cores_for_chains, range=range,
                                                 layout = NULL, use_c = TRUE,  figure_title = paste("C++:", label), natural=natural)})
   flat_selection = ifelse(n_subj>1, c("alpha", "subj_ll"), c("alpha", "subj_ll","theta_mu"))
@@ -135,7 +135,7 @@ run_lba_demo <- function(p_contaminant = 0, estimate_contaminant = FALSE,
         max_sample_iter = 5000
       ),cores_per_chain=cores_per_chain, cores_for_chains = cores_for_chains), max_tries = 30)
     post_predict <- predict(emc, n_post = 50)
-    plot_pars(emc, post_predict = post_predict, true_pars = p_vector)
+    plot_pars(emc, post_predict = post_predict, true_pars = p_vector, use_prior_lim = FALSE)
     return(invisible(list(data = dat, design = designLBA, true_pars = p_vector,emc=emc,pp=post_predict)))
   }
 
@@ -148,7 +148,8 @@ set.seed(123)
 
 # Test 1: Mild upper Censor (GNG must have a finite UC)
 # With current design +  parameters burn is a struggle and sampling takes a while
-# I think sv:lM, v_match:S, B_lR it's hard to identify, but does converge. Parameters aren't "right" but the posterior predicted data is.
+# I think sv:lM, v_match:S, B_lR it's hard to identify, but does converge.
+# Parameters aren't "right" but the posterior predicted data is.
 # See gng_unidentifiabilities.R for more thorough tests
 res_lba_gng <- run_lba_demo(
   n_trials = 10000,
@@ -165,6 +166,8 @@ if (RUN_FITS) plot_stat(res_lba_gng$data, post_predict = res_lba_gng$pp, factors
                         stat_fun = function(d) mean(d$Correct,na.rm=TRUE), functions = list(Correct = Cfun))
 if (RUN_FITS) plot_stat(res_lba_gng$data, post_predict = res_lba_gng$pp, factors = "S", stat_name = "MeanOmissions",
                         stat_fun = function(d) mean(is.na(d$R)), functions = list(Correct = Cfun))
+
+# Wont converge
 res_lba_gng_lc <- run_lba_demo(
   n_trials = 10000,
   UC = 1.8,
@@ -176,7 +179,7 @@ res_lba_gng_hierarchical <- run_lba_demo(
   n_trials = 200,
   UC = 3,
   n_subj=30,
-  Load = c("L","M","H"),
+  load = c("L","M","H"),
   label = "GNG-LBA Hierarchical + Load UC=3"
 )
 
@@ -214,7 +217,7 @@ run_ddmgng_R_demo <- function(
     n_trials = n_trials,
     TC = list(UC = UC, LC = LC)
   )
-  
+
   if (print_stats) {
     cat("\n--- DDM GNG demo ---\n")
     cat("Counts by response (NA = omission):\n")
@@ -257,7 +260,7 @@ run_ddmgng_R_demo <- function(
       max_tries = 30
     )
     post_predict <- predict(emc, n_post = 50)
-    plot_pars(emc, post_predict = post_predict, true_pars = p_vector)
+    plot_pars(emc, post_predict = post_predict, true_pars = p_vector, use_prior_lim = FALSE)
     return(invisible(list(data = dat, design = designDDM, true_pars = p_vector, emc = emc, pp = post_predict)))
   }
 
@@ -343,7 +346,7 @@ run_ddmgng_C_demo <- function(
       max_tries = 30
     )
     post_predict <- predict(emc, n_post = 50)
-    plot_pars(emc, post_predict = post_predict, true_pars = p_vector)
+    plot_pars(emc, post_predict = post_predict, true_pars = p_vector, use_prior_lim = FALSE)
     return(invisible(list(data = dat, design = designDDM, true_pars = p_vector, emc = emc, pp = post_predict)))
   }
 
@@ -366,7 +369,9 @@ res_ddmgng_c_lc <- run_ddmgng_C_demo(
   LC = 0.3,
   label = "GNG-DDM (C++) UC=2, LC=.3"
 )
-if (RUN_FITS) print(recovery(res_ddm_canonical_lc$emc, true_pars = res_ddm_canonical_lc$true_pars))
+
+
+if (RUN_FITS) print(recovery(res_ddmgng_c_lc$emc, true_pars = res_ddmgng_c_lc$true_pars))
 
 #### RDM ----
 
@@ -380,7 +385,7 @@ run_rdm_demo <- function(p_contaminant = 0,estimate_contaminant = FALSE,
 
   # Base 2-choice design; lM is automatically constructed from matchfun.
   designRDM <- design(
-    factors = list(subjects = 1, S = c("nogo", "nogo","nogo","go")), # showing the order doesn't matter
+    factors = list(subjects = 1:n_subj, S = c("nogo", "nogo","nogo","go")), # showing the order doesn't matter
     Rlevels = c("go", "nogo"),
     matchfun = matchfun,
     functions = list(
@@ -393,7 +398,7 @@ run_rdm_demo <- function(p_contaminant = 0,estimate_contaminant = FALSE,
     ),
     constants = c(s = log(1), A = log(.4))
   )
-  
+
   # Set simulation parameters (on the transformed scale expected by p_types)
   p_vector <- sampled_pars(designRDM, doMap = FALSE)
 
@@ -453,11 +458,11 @@ run_rdm_demo <- function(p_contaminant = 0,estimate_contaminant = FALSE,
   library(parallel)
   par(mfrow=layout)
 
-  
+
   #  C _race_cens_trunc
   rtct <- system.time({rtc <- profile_plot_test(dat, designRDM, p_vector, n_cores = cores_for_chains, range=range,
   layout = NULL, use_c = TRUE, figure_title = "C Likelihood RDM",natural=natural)})
-  
+
   flat_selection = ifelse(n_subj>1, c("alpha", "subj_ll"), c("alpha", "subj_ll","theta_mu"))
   if (isTRUE(RUN_FITS)) {
     emc <- make_emc(dat, designRDM, type = ifelse(n_subj>1,"standard","single"))
@@ -472,10 +477,10 @@ run_rdm_demo <- function(p_contaminant = 0,estimate_contaminant = FALSE,
         max_sample_iter = 5000
       ),cores_per_chain=cores_per_chain, cores_for_chains = cores_for_chains), max_tries = 30)
     post_predict <- predict(emc, n_post = 50)
-    plot_pars(emc, post_predict = post_predict, true_pars = p_vector)
+    plot_pars(emc, post_predict = post_predict, true_pars = p_vector, use_prior_lim = FALSE)
     return(invisible(list(data = dat, design = designRDM, true_pars = p_vector,emc=emc,pp=post_predict)))
   }
-  
+
 
   invisible(list(data = dat, design = designRDM, true_pars = p_vector))
 }
@@ -499,8 +504,8 @@ if (RUN_FITS) plot_stat(res_rdm_gng$dat, post_predict=res_rdm_gng$pp, factors="S
 # LC makes gng even slower because there's numerical integration required
 res_rdm_gng_lc <- run_rdm_demo(
   n_trials = 10000,
-  UC = 4,
-  LC = .2,
+  UC = 1.8,
+  LC = .7,
   label = "GNG-RDM UC=1.8, LC=.7"
 )
 
@@ -509,11 +514,12 @@ if (RUN_FITS) plot_cdf(res_rdm_gng_lc$dat, post_predict=res_rdm_gng_lc$pp, funct
 if (RUN_FITS) plot_stat(res_rdm_gng_lc$dat, post_predict=res_rdm_gng_lc$pp, factors="S", stat_name = "MeanCorrect",
                         stat_fun = function(d){mean(d$Correct, na.rm = TRUE)}, functions=list(Correct=Cfun))
 
+
 res_rdm_gng_hierarchical <- run_rdm_demo(
   n_trials = 200,
   UC = 3,
   n_subj=30,
-  Load = c("L","M","H"),
+  load = c("L","M","H"),
   label = "GNG-RDM Hierarchical + Load UC=3"
 )
 
@@ -607,7 +613,7 @@ run_LNR_demo <- function(p_contaminant = 0, estimate_contaminant = FALSE,
     emc <- make_emc(dat, designLNR, type = "single")
     emc <- fit(emc, cores_for_chains = cores_for_chains, fileName = sample_file)
     post_predict <- predict(emc, n_post = 50)
-    plot_pars(emc, post_predict = post_predict, true_pars = p_vector)
+    plot_pars(emc, post_predict = post_predict, true_pars = p_vector, use_prior_lim = FALSE)
   }
 
   invisible(list(data = dat, design = designLNR, true_pars = p_vector))
