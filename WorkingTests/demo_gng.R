@@ -21,9 +21,9 @@ Cfun = function(d) dplyr::case_when(d$S=="go" & d$R =="go"~ TRUE,d$S=="nogo" & i
 #### LBA ----
 
 run_lba_demo <- function(p_contaminant = 0, estimate_contaminant = FALSE,
-                         n_trials = 500, UC = 3, UT=NULL, LC=NULL, LT=NULL,range=1,
+                         n_trials = 500, UC = NULL, UT=NULL, LC=NULL, LT=NULL,range=1,
                          cores_for_chains = 3,layout=c(2,3),natural=TRUE,cores_per_chain=3,
-                         print_stats=TRUE,
+                         print_stats=TRUE,response_window=NULL,truncate_window=FALSE,
                          label = NULL, n_subj = 1, load = c("L")) {
 
   matchfun <- function(d) as.numeric(d$S) == as.numeric(d$lR)
@@ -37,7 +37,7 @@ run_lba_demo <- function(p_contaminant = 0, estimate_contaminant = FALSE,
       match = function(d) ifelse(d$lM==TRUE, 1, 0),
       mismatch = function(d) ifelse(d$lM==TRUE, 0, 1)
     ),
-    model=LBA,UC=3,
+    model=LBA,
     formula = c(
       list(B ~ 0+lR), if(length(load)>1) list(v~0+mismatch + S:match:L) else list(v~0+mismatch + S:match), list(A ~ 1, t0 ~ 1, sv ~ 1),
       if (estimate_contaminant) list(pContaminant ~ 1) else list()
@@ -99,6 +99,23 @@ run_lba_demo <- function(p_contaminant = 0, estimate_contaminant = FALSE,
       TC=list(UC = UC, UT = UT, LC = LC, LT = LT))
   }
 
+  if (!is.null(response_window)) {
+    cat("\n Removing data outside a response window but not taking account of that in the fit\n")
+    fast <- dat$rt<response_window[1]
+    slow <- dat$rt>response_window[2]
+    fast[is.na(fast)] <- TRUE
+    fast[is.infinite(dat$rt)] <- FALSE
+    slow[is.na(slow)] <- TRUE
+    slow[is.infinite(dat$rt)] <- FALSE
+    cat("Removing ",round(100*mean(fast),1),"% of fast rts \n")
+    cat("Removing ",round(100*mean(slow),1),"% of slow rts \n")
+    if (truncate_window) dat <- dat[!(fast|slow),] else {
+      dat[fast,"rt"] <- -Inf
+      dat[slow,"rt"] <- Inf
+      dat$R[fast | slow] <- NA
+    }
+  }
+
   if (print_stats) {
 
   cat("\n--- LBA demo ---\n")
@@ -145,6 +162,51 @@ run_lba_demo <- function(p_contaminant = 0, estimate_contaminant = FALSE,
 RNGkind("L'Ecuyer-CMRG")
 set.seed(123)
 
+# Test 0: No censoring, not reasonable given there should always be a resposne
+#         window but this is the method used by Ratcliff. Also prodies a pure
+#         test of the GNG compoment (i.e., only nogo trials treated as censored)
+
+res_lba_gng <- run_lba_demo(
+  n_trials = 10000,
+  load = c("L","M"),
+  label = "GNG-LBA"
+)
+
+
+if (RUN_FITS) print(recovery(res_lba_gng$emc, true_pars = res_lba_gng$true_pars))
+if (RUN_FITS) plot_cdf(res_lba_gng$dat, post_predict=res_lba_gng$pp, functions=list(Correct=Cfun), defective_factor = "Correct", factors="S")
+if (RUN_FITS) plot_density(res_lba_gng$data, post_predict = res_lba_gng$pp, functions = list(Correct = Cfun), defective_factor = "Correct", factors = "S")
+if (RUN_FITS) plot_stat(res_lba_gng$data, post_predict = res_lba_gng$pp, factors = "S", stat_name = "MeanCorrect_Finite",
+                        stat_fun = function(d) mean(d$Correct,na.rm=TRUE), functions = list(Correct = Cfun))
+if (RUN_FITS) plot_stat(res_lba_gng$data, post_predict = res_lba_gng$pp, factors = "S", stat_name = "MeanOmissions",
+                        stat_fun = function(d) mean(is.na(d$R)), functions = list(Correct = Cfun))
+
+# Test 0a: Like test 0 but with an unaccounted for response window, censor case
+res_lba_gng <- run_lba_demo(
+  n_trials = 10000,
+  load = c("L","M"),
+  response_window=c(0,1),
+  label = "GNG-LBA"
+)
+
+# Test 0b: Like test 0 but with an unaccounted for response window, censor case
+res_lba_gng <- run_lba_demo(
+  n_trials = 10000,
+  load = c("L","M"),
+  response_window=c(0,1),
+  truncate_window=TRUE,
+  label = "GNG-LBA"
+)
+
+
+if (RUN_FITS) print(recovery(res_lba_gng$emc, true_pars = res_lba_gng$true_pars))
+if (RUN_FITS) plot_cdf(res_lba_gng$dat, post_predict=res_lba_gng$pp, functions=list(Correct=Cfun), defective_factor = "Correct", factors="S")
+if (RUN_FITS) plot_density(res_lba_gng$data, post_predict = res_lba_gng$pp, functions = list(Correct = Cfun), defective_factor = "Correct", factors = "S")
+if (RUN_FITS) plot_stat(res_lba_gng$data, post_predict = res_lba_gng$pp, factors = "S", stat_name = "MeanCorrect_Finite",
+                        stat_fun = function(d) mean(d$Correct,na.rm=TRUE), functions = list(Correct = Cfun))
+if (RUN_FITS) plot_stat(res_lba_gng$data, post_predict = res_lba_gng$pp, factors = "S", stat_name = "MeanOmissions",
+                        stat_fun = function(d) mean(is.na(d$R)), functions = list(Correct = Cfun))
+
 
 # Test 1: Mild upper Censor (GNG must have a finite UC)
 # With current design +  parameters burn is a struggle and sampling takes a while
@@ -186,7 +248,7 @@ res_lba_gng_hierarchical <- run_lba_demo(
 #### DDM ----
 
 run_ddmgng_R_demo <- function(
-    n_trials = 500, UC = 3, LC = NULL, range = 1,
+    n_trials = 500, UC = 3, LC = NULL, range = 1,response_window=NULL,truncate_window=FALSE,
     cores_for_chains = 3, layout = c(2, 3), natural = TRUE, cores_per_chain = 3,
     print_stats = TRUE, label = NULL
 ) {
@@ -217,6 +279,24 @@ run_ddmgng_R_demo <- function(
     n_trials = n_trials,
     TC = list(UC = UC, LC = LC)
   )
+
+  if (!is.null(response_window)) {
+    cat("\n Removing data outside a response window but not taking account of that in the fit\n")
+    fast <- dat$rt<response_window[1]
+    slow <- dat$rt>response_window[2]
+    fast[is.na(fast)] <- TRUE
+    fast[is.infinite(dat$rt)] <- FALSE
+    slow[is.na(slow)] <- TRUE
+    slow[is.infinite(dat$rt)] <- FALSE
+    cat("Removing ",round(100*mean(fast),1),"% of fast rts \n")
+    cat("Removing ",round(100*mean(slow),1),"% of slow rts \n")
+    if (truncate_window) dat <- dat[!(fast|slow),] else {
+      dat[fast,"rt"] <- -Inf
+      dat[slow,"rt"] <- Inf
+      dat$R[fast | slow] <- NA
+    }
+  }
+
 
   if (print_stats) {
     cat("\n--- DDM GNG demo ---\n")
@@ -266,6 +346,33 @@ run_ddmgng_R_demo <- function(
 
   invisible(list(data = dat, design = designDDM, true_pars = p_vector))
 }
+
+
+# Check response window omission
+res_ddm_gng_R <- run_ddmgng_R_demo(
+  n_trials = 10000,
+  label = "GNG-DDM"
+)
+
+res_ddm_gng_R <- run_ddmgng_R_demo(
+  n_trials = 10000,
+  response_window=c(0,1.25),
+  label = "GNG-DDM"
+)
+
+res_ddm_gng_R <- run_ddmgng_R_demo(
+  n_trials = 10000,
+  response_window=c(0,1.25),
+  truncate_window = TRUE,
+  label = "GNG-DDM"
+)
+
+
+if (RUN_FITS) print(recovery(res_ddm_gng_R$emc, true_pars = res_ddm_gng_R$true_pars))
+if (RUN_FITS) plot_cdf(res_ddm_gng_R$data, post_predict = res_ddm_gng_R$pp, functions = list(Correct = Cfun), defective_factor = "Correct", factors = "S")
+if (RUN_FITS) plot_stat(res_ddm_gng_R$data, post_predict = res_ddm_gng_R$pp, factors = "S", stat_name = "MeanCorrect",
+                        stat_fun = function(d) mean(d$Correct, na.rm = TRUE), functions = list(Correct = Cfun))
+
 
 res_ddm_gng_R <- run_ddmgng_R_demo(
   n_trials = 10000,
