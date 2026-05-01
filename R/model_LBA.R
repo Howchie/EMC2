@@ -324,7 +324,10 @@ RedundantTargetLBA <- function(posdrift = TRUE){
 
 #### BAwL (Ballistic Accumulator with Leak) ----
 
-dBAwL <- function(rt, pars, posdrift = TRUE, erlang = 1L) {
+dBAwL <- function(rt, pars, posdrift = TRUE, erlang = 1L, guess = FALSE) {
+  if (!all(c("lambda_g", "lambda_k") %in% colnames(pars))) {
+    stop("BAwL requires parameter columns 'lambda_g' and 'lambda_k'.")
+  }
   dt  <- rt - pars[, "t0"]
   ok  <- (dt > 0) & (pars[, "b"] >= pars[, "A"])
   ok[is.na(ok) | !is.finite(dt)] <- FALSE
@@ -333,14 +336,18 @@ dBAwL <- function(rt, pars, posdrift = TRUE, erlang = 1L) {
     out[ok] <- dkilledleakyba(
       t = dt[ok], A = pars[ok, "A"], b = pars[ok, "b"],
       v = pars[ok, "v"], sv = pars[ok, "sv"], k = pars[ok, "k"],
-      lambda = pars[ok, "lambda"], posdrift = posdrift, log_out = FALSE,
-      kill_shape = as.integer(erlang)
+      lambda_g = pars[ok, "lambda_g"], lambda_k = pars[ok, "lambda_k"],
+      posdrift = posdrift, log_out = FALSE,
+      kill_shape = as.integer(erlang), guess = guess
     )
   }
   out
 }
 
-pBAwL <- function(rt, pars, posdrift = TRUE, erlang = 1L) {
+pBAwL <- function(rt, pars, posdrift = TRUE, erlang = 1L, guess = FALSE) {
+  if (!all(c("lambda_g", "lambda_k") %in% colnames(pars))) {
+    stop("BAwL requires parameter columns 'lambda_g' and 'lambda_k'.")
+  }
   dt  <- rt - pars[, "t0"]
   ok  <- (dt > 0) & (pars[, "b"] >= pars[, "A"])
   ok[is.na(ok) | !is.finite(dt)] <- FALSE
@@ -349,38 +356,42 @@ pBAwL <- function(rt, pars, posdrift = TRUE, erlang = 1L) {
     out[ok] <- pkilledleakyba(
       t = dt[ok], A = pars[ok, "A"], b = pars[ok, "b"],
       v = pars[ok, "v"], sv = pars[ok, "sv"], k = pars[ok, "k"],
-      lambda = pars[ok, "lambda"], posdrift = posdrift, log_out = FALSE,
-      kill_shape = as.integer(erlang)
+      lambda_g = pars[ok, "lambda_g"], lambda_k = pars[ok, "lambda_k"],
+      posdrift = posdrift, log_out = FALSE,
+      kill_shape = as.integer(erlang), guess = guess
     )
   }
   out
 }
 
 rBAwL <- function(lR, pars, ok = rep(TRUE, length(lR)),
-                  p_types = c("v", "sv", "b", "A", "t0", "k", "lambda"),
+                  p_types = c("v", "sv", "b", "A", "t0", "k", "lambda_g", "lambda_k"),
                   posdrift = TRUE, eps = 1e-10, erlang = 1L, guess = FALSE, global = FALSE) {
+  if (!all(c("lambda_g", "lambda_k") %in% colnames(pars))) {
+    stop("BAwL requires parameter columns 'lambda_g' and 'lambda_k'.")
+  }
   bad  <- rep(NA, length(lR) / length(levels(lR)))
   out  <- data.frame(R = bad, rt = bad)
   nr   <- length(levels(lR))
+  n_trials <- nrow(pars) / nr
   dt   <- matrix(Inf, nrow = nr, ncol = nrow(pars) / nr)
   t0   <- pars[, "t0"]
-  # If guessing or global omission, drawn ONE kill process per trial
-  if (guess || global) {
-    n_trials <- nrow(pars)/nr
-    lambda_mat <- matrix(pars[,"lambda"], nrow=nr)
-    if (global && any(apply(lambda_mat, 2, function(x) length(unique(x)) > 1)))
-      stop("global=TRUE requires lambda to be constant across accumulators (lambda must not vary by any accumulator-level factor)")
-    lambda_trials <- lambda_mat[1,]
-    tk <- rep(Inf, n_trials)
+
+  if (global) {
+    lambda_mat <- matrix(pars[, "lambda_k"], nrow = nr)
+    if (any(apply(lambda_mat, 2, function(x) length(unique(x)) > 1))) {
+      stop("global=TRUE requires lambda_k to be constant across accumulators (lambda_k must not vary by any accumulator-level factor)")
+    }
+    lambda_trials <- lambda_mat[1, ]
+    tk_global <- rep(Inf, n_trials)
     kill_ok <- !is.na(lambda_trials) & lambda_trials > 0
     if (any(kill_ok)) {
-      tk[kill_ok] <- rexp(sum(kill_ok), rate = lambda_trials[kill_ok])
-      if (erlang >= 2L)
-        tk[kill_ok] <- tk[kill_ok] + rexp(sum(kill_ok), rate = lambda_trials[kill_ok])
+      tk_global[kill_ok] <- rgamma(sum(kill_ok), shape = erlang, rate = lambda_trials[kill_ok])
     }
-    pars[,"lambda"] <- 0
   }
-  pars <- pars[ok, ]
+
+  pars_all <- pars
+  pars <- pars[ok, , drop = FALSE]
   if (!all(p_types %in% dimnames(pars)[[2]]))
     stop("pars must have columns ", paste(p_types, collapse = " "))
   lower  <- if (posdrift) 0 else -Inf
@@ -400,34 +411,43 @@ rBAwL <- function(lR, pars, ok = rep(TRUE, length(lR)),
     dt[big_k]  <- (-1 / pars[big_k, "k"]) * log(ratio)
   }
   dt[dt < 0] <- Inf
-  if (!guess && !global) {
-    lam_pos <- pars[, "lambda"] > 0
-    tk <- ifelse(lam_pos, rexp(nrow(pars), pars[, "lambda"]), Inf)
-    if (erlang >= 2L && any(lam_pos))
-      tk[lam_pos] <- tk[lam_pos] + rexp(sum(lam_pos), pars[lam_pos, "lambda"])
-    dt <- ifelse(dt < tk, dt, Inf)
-  } else if (guess) {
-    # Response is a guess if tk < any(dt)
-    is_guess <- tk < apply(dt, 2, min)
-    if (any(is_guess)) {
-      dt[, is_guess] <- Inf
-      ok_mat <- matrix(ok, nrow=nr)
-      # For each guess trial, pick one of the active, non-nogo accumulators
-      for (trial_idx in which(is_guess)) {
-        active_indices <- which(ok_mat[, trial_idx] & levels(lR) != "nogo")
-        if (length(active_indices) > 0) {
-          # Use sample safely
-          winner_acc <- if (length(active_indices) > 1) sample(active_indices, 1) else active_indices
-          dt[winner_acc, trial_idx] <- tk[trial_idx]
-        }
+
+  if (guess || !global) {
+    tg_local <- matrix(Inf, nrow = nr, ncol = n_trials)
+    tk_local <- matrix(Inf, nrow = nr, ncol = n_trials)
+
+    if (!global) {
+      lambda_k_local <- matrix(0, nrow = nr, ncol = n_trials)
+      lambda_k_local[matrix(ok, nrow = nr)] <- pars[, "lambda_k"]
+      kill_ok_mat <- lambda_k_local > 0
+      if (any(kill_ok_mat)) {
+        tk_local[kill_ok_mat] <- rgamma(sum(kill_ok_mat), shape = erlang, rate = lambda_k_local[kill_ok_mat])
       }
     }
-  } else if (global) {
-    # Response is killed (omission) if tk < any(dt)
-    is_killed <- tk < apply(dt, 2, min)
-    if (any(is_killed)) {
-      dt[, is_killed] <- Inf
+
+    lambda_g_local <- matrix(0, nrow = nr, ncol = n_trials)
+    active_guess <- matrix(ok, nrow = nr) & (levels(lR) != "nogo")
+    if (guess) {
+      lambda_g_local[active_guess] <- pars_all[, "lambda_g"][active_guess]
+      guess_ok_mat <- lambda_g_local > 0
+      if (any(guess_ok_mat)) {
+        tg_local[guess_ok_mat] <- rgamma(sum(guess_ok_mat), shape = erlang, rate = lambda_g_local[guess_ok_mat])
+      }
     }
+
+    if (guess && !global) {
+      dt_candidate <- pmin(dt, tg_local)
+      dt <- ifelse(dt_candidate < tk_local, dt_candidate, Inf)
+    } else if (guess) {
+      dt <- pmin(dt, tg_local)
+    } else {
+      dt <- ifelse(dt < tk_local, dt, Inf)
+    }
+  }
+
+  if (global) {
+    is_killed <- tk_global < apply(dt, 2, min)
+    if (any(is_killed)) dt[, is_killed] <- Inf
   }
   bad_col <- apply(dt, 2, function(x) all(is.infinite(x)))
   R   <- apply(dt, 2, which.min)
@@ -446,61 +466,67 @@ rBAwL <- function(lR, pars, ok = rep(TRUE, length(lR)),
 #' The Ballistic Accumulator with Leak (BAwL)
 #'
 #' Race model where each accumulator follows a leaky-integration trajectory and
-#' races against an independent exponential killing clock.
-#' Setting k=0 recovers the standard LBA decision dynamics; setting lambda=0
-#' removes killing.
+#' races against independent guess and kill clocks.
+#' Setting k=0 recovers the standard LBA decision dynamics; setting
+#' lambda_g=lambda_k=0 removes clock effects.
 #'
 #' Parameters as in LBA plus:
 #' * k: leak rate (log scale, [0, Inf); default log(0) = effectively 0).
-#' * lambda: killing/expiry rate (log scale, [0, Inf); default log(0) = 0).
+#' * lambda_g: guessing rate (log scale, [0, Inf); default log(0) = 0).
+#' * lambda_k: killing/expiry rate (log scale, [0, Inf); default log(0) = 0).
 #'
 #' @param posdrift logical, if TRUE drifts are truncated to be positive.
 #' @param erlang integer shape of the killing process (1=exponential, 2=Erlang-2)
-#' @param guess logical, if TRUE killing produces guesses (random responses)
-#' @param global logical, if TRUE killing process is global to the race (one clock per trial)
+#' @param erlang_type string, one of "none", "local_kill", "global_kill", "local_guess", "local_kill_guess"
 #'
 #' @export
 BAwL <- function(posdrift = TRUE, erlang = 1L,
-                 erlang_type = c("none", "local_kill", "global_kill", "local_guess")) {
+                 erlang_type = c("none", "local_kill", "global_kill", "local_guess", "local_kill_guess")) {
   erlang_type <- match.arg(erlang_type)
   list(
     type   = "RACE",
     c_name = paste0(ifelse(posdrift, "BAwL", "BAwLIO"),
                     if (erlang >= 2L) "_E2" else "",
                     if (erlang_type == "local_guess") "_LOCAL_GUESS"
+                    else if (erlang_type == "local_kill_guess") "_LOCAL_KILL_GUESS"
+                    else if (erlang_type == "local_kill") "_LOCAL_KILL"
                     else if (erlang_type == "global_kill") "_GLOBAL_KILL"
                     else ""),
     p_types = c("v"  = 1, "sv" = log(1), "B" = log(1), "A" = log(0),
-                "t0" = log(0), "k" = log(0), "lambda" = log(0), "pContaminant" = qnorm(0)),
+                "t0" = log(0), "k" = log(0), "lambda_g" = log(0), "lambda_k" = log(0), "pContaminant" = qnorm(0)),
     p_types_canonical = c("v", "sv", "B", "A", "t0", "k"),
     transform = list(func = c(v = "identity", sv = "exp", B = "exp",
-                              A = "exp", t0 = "exp", k = "exp", lambda = "exp",
+                              A = "exp", t0 = "exp", k = "exp", lambda_g = "exp", lambda_k = "exp",
                               pContaminant = "pnorm")),
     bound = list(
       minmax = cbind(v  = c(-Inf, Inf), sv = c(0, Inf),
                      A  = c(1e-4, Inf), B  = c(1e-4, Inf),
-                     t0 = c(0.05, Inf), k  = c(1e-4, Inf), lambda = c(1e-4, Inf),
+                     t0 = c(0.05, Inf), k  = c(1e-4, Inf), lambda_g = c(1e-4, Inf), lambda_k = c(1e-4, Inf),
                      pContaminant = c(0.001, 0.999)),
-      exception = c(A = 0, pContaminant = 0, k = 0, lambda = 0)),
+      exception = c(A = 0, pContaminant = 0, k = 0, lambda_g = 0, lambda_k = 0)),
     Ttransform = function(pars, dadm) {
       cbind(pars, b = pars[, "B"] + pars[, "A"])
     },
     rfun = if (posdrift)
              function(data, pars) rBAwL(data$lR, pars, ok = attr(pars, "ok"), posdrift = TRUE,
-                                        erlang = erlang, guess = erlang_type == "local_guess",
+                                        erlang = erlang, guess = erlang_type %in% c("local_guess", "local_kill_guess"),
                                         global = erlang_type == "global_kill")
            else
              function(data, pars) rBAwL(data$lR, pars, ok = attr(pars, "ok"), posdrift = FALSE,
-                                        erlang = erlang, guess = erlang_type == "local_guess",
+                                        erlang = erlang, guess = erlang_type %in% c("local_guess", "local_kill_guess"),
                                         global = erlang_type == "global_kill"),
     dfun = if (posdrift)
-             function(rt, pars) dBAwL(rt, pars, posdrift = TRUE,  erlang = erlang)
+             function(rt, pars) dBAwL(rt, pars, posdrift = TRUE,  erlang = erlang,
+                                      guess = erlang_type %in% c("local_guess", "local_kill_guess"))
            else
-             function(rt, pars) dBAwL(rt, pars, posdrift = FALSE, erlang = erlang),
+             function(rt, pars) dBAwL(rt, pars, posdrift = FALSE, erlang = erlang,
+                                      guess = erlang_type %in% c("local_guess", "local_kill_guess")),
     pfun = if (posdrift)
-             function(rt, pars) pBAwL(rt, pars, posdrift = TRUE,  erlang = erlang)
+             function(rt, pars) pBAwL(rt, pars, posdrift = TRUE,  erlang = erlang,
+                                      guess = erlang_type %in% c("local_guess", "local_kill_guess"))
            else
-             function(rt, pars) pBAwL(rt, pars, posdrift = FALSE, erlang = erlang),
+             function(rt, pars) pBAwL(rt, pars, posdrift = FALSE, erlang = erlang,
+                                      guess = erlang_type %in% c("local_guess", "local_kill_guess")),
     log_likelihood = function(pars, dadm, model, min_ll = log(1e-10)) {
       log_likelihood_race_missing(pars = pars, dadm = dadm, model = model, min_ll = min_ll)
     }

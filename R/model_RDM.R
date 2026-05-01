@@ -220,7 +220,9 @@ dRDMGBM <- function(rt, pars, erlang = 1L) {
   if (!("b" %in% colnames(pars)) && all(c("B", "A") %in% colnames(pars))) {
     pars <- cbind(pars, b = 1 + pars[, "B"] + pars[, "A"])
   }
-  if (!("lambda" %in% colnames(pars))) stop("RDMGBM requires parameter column 'lambda'.")
+  if (!all(c("lambda_g", "lambda_k") %in% colnames(pars))) {
+    stop("RDMGBM requires parameter columns 'lambda_g' and 'lambda_k'.")
+  }
   out <- rep(NaN, length(rt))
   ok <- rt > pars[, "t0", drop = FALSE] & !pars[, "v", drop = FALSE] < 0
   ok[is.na(ok)] <- FALSE
@@ -228,7 +230,8 @@ dRDMGBM <- function(rt, pars, erlang = 1L) {
     out[ok] <- dGBMspv(rt[ok],
       v = pars[ok, "v", drop = FALSE], b = pars[ok, "b", drop = FALSE],
       A = pars[ok, "A", drop = FALSE], t0 = pars[ok, "t0", drop = FALSE],
-      s = pars[ok, "s", drop = FALSE], lambda = pars[ok, "lambda", drop = FALSE],
+      s = pars[ok, "s", drop = FALSE], lambda_g = pars[ok, "lambda_g", drop = FALSE],
+      lambda_k = pars[ok, "lambda_k", drop = FALSE],
       kill_shape = erlang
     )
   }
@@ -247,7 +250,9 @@ pRDMGBM <- function(rt, pars, erlang = 1L) {
   if (!("b" %in% colnames(pars)) && all(c("B", "A") %in% colnames(pars))) {
     pars <- cbind(pars, b = 1 + pars[, "B"] + pars[, "A"])
   }
-  if (!("lambda" %in% colnames(pars))) stop("RDMGBM requires parameter column 'lambda'.")
+  if (!all(c("lambda_g", "lambda_k") %in% colnames(pars))) {
+    stop("RDMGBM requires parameter columns 'lambda_g' and 'lambda_k'.")
+  }
   out <- rep(NaN, length(rt))
   ok <- rt > pars[, "t0", drop = FALSE] & !pars[, "v", drop = FALSE] < 0
   ok[is.na(ok)] <- FALSE
@@ -255,7 +260,8 @@ pRDMGBM <- function(rt, pars, erlang = 1L) {
     out[ok] <- pGBMspv(rt[ok],
       v = pars[ok, "v", drop = FALSE], b = pars[ok, "b", drop = FALSE],
       A = pars[ok, "A", drop = FALSE], t0 = pars[ok, "t0", drop = FALSE],
-      s = pars[ok, "s", drop = FALSE], lambda = pars[ok, "lambda", drop = FALSE],
+      s = pars[ok, "s", drop = FALSE], lambda_g = pars[ok, "lambda_g", drop = FALSE],
+      lambda_k = pars[ok, "lambda_k", drop = FALSE],
       kill_shape = erlang
     )
   }
@@ -284,14 +290,16 @@ rGBM <- function(n, b, v, A, s = 1) {
   out
 }
 
-rRDMGBM <- function(lR, pars, p_types = c("v", "b", "A", "t0", "s", "lambda"),
+rRDMGBM <- function(lR, pars, p_types = c("v", "b", "A", "t0", "s", "lambda_g", "lambda_k"),
                     ok = rep(TRUE, dim(pars)[1]), erlang_shape = 1L, erlang_type = "none") {
   if (!is.null(attr(pars, "ok"))) ok <- attr(pars, "ok")
   if (!("b" %in% dimnames(pars)[[2]]) && all(c("B", "A") %in% dimnames(pars)[[2]])) {
     pars <- cbind(pars, b = 1 + pars[, "B"] + pars[, "A"])
   }
-  if (!("lambda" %in% colnames(pars))) stop("RDMGBM requires parameter column 'lambda'.")
-  required <- c("v", "b", "A", "t0", "s", "lambda")
+  if (!all(c("lambda_g", "lambda_k") %in% colnames(pars))) {
+    stop("RDMGBM requires parameter columns 'lambda_g' and 'lambda_k'.")
+  }
+  required <- c("v", "b", "A", "t0", "s", "lambda_g", "lambda_k")
   if (!all(required %in% dimnames(pars)[[2]])) {
     stop("pars must have columns ", paste(required, collapse = " "))
   }
@@ -305,72 +313,73 @@ rRDMGBM <- function(lR, pars, p_types = c("v", "b", "A", "t0", "s", "lambda"),
   dt <- matrix(Inf, nrow = nr, ncol = n_trials)
   t0 <- pars[, "t0"]
 
-  guess  <- grepl("guess",  erlang_type)
-  global <- grepl("global", erlang_type)
-  local  <- grepl("local",  erlang_type)
+  guess  <- erlang_type == "local_guess" || erlang_type == "local_kill_guess"
+  global <- erlang_type == "global_kill"
+  local_kill <- erlang_type == "local_kill" || erlang_type == "local_kill_guess"
 
-  # global_kill / global_guess: draw one shared Erlang timer per trial
+  # global_kill: draw one shared Erlang timer per trial
   if (global) {
-    lambda_mat <- matrix(pars[, "lambda"], nrow = nr)
+    lambda_mat <- matrix(pars[, "lambda_k"], nrow = nr)
     if (any(apply(lambda_mat, 2, function(x) length(unique(x)) > 1)))
-      stop("global erlang types require lambda to be constant across accumulators")
+      stop("global_kill requires lambda_k to be constant across accumulators")
     lambda_trials <- lambda_mat[1, ]
     tk <- rep(Inf, n_trials)
     kill_ok <- !is.na(lambda_trials) & lambda_trials > 0
     if (any(kill_ok)) {
       tk[kill_ok] <- rgamma(sum(kill_ok), shape = erlang_shape, rate = lambda_trials[kill_ok])
     }
-    pars[, "lambda"] <- 0  # accumulators race purely on evidence; timer applied post-hoc
-  }
-
-  # local_guess: evidence races without internal kill; guess timers applied below
-  if (guess && local) {
-    lambda_local_orig <- pars[, "lambda"]
-    pars[, "lambda"] <- 0
   }
 
   pars_ok <- pars[ok, , drop = FALSE]
   if (nrow(pars_ok) > 0) {
+    # In the combined local kill+guess case, handle both clocks jointly below.
+    k_vec <- if (local_kill && !guess) pars_ok[, "lambda_k"] else rep(0, nrow(pars_ok))
     dt[ok] <- rGBM_killed(sum(ok),
       b = pars_ok[, "b"], v = pars_ok[, "v"], A = pars_ok[, "A"],
-      s = pars_ok[, "s"], k = pars_ok[, "lambda"], erlang = erlang_shape
+      s = pars_ok[, "s"], k = k_vec, erlang = erlang_shape
     )
   }
 
-  if (guess && global) {
-    # Global guess: the shared timer fires → uniform random accumulator responds
-    is_guess <- tk < apply(dt, 2, min)
-    if (any(is_guess)) {
-      dt[, is_guess] <- Inf
-      ok_mat <- matrix(ok, nrow = nr)
-      for (trial_idx in which(is_guess)) {
-        active <- which(ok_mat[, trial_idx] & levels(lR) != "nogo")
-        if (length(active) > 0) {
-          winner <- if (length(active) > 1) sample(active, 1) else active
-          dt[winner, trial_idx] <- tk[trial_idx]
-        }
+  if (guess || local_kill) {
+    tg_local <- matrix(Inf, nrow = nr, ncol = n_trials)
+    tk_local <- matrix(Inf, nrow = nr, ncol = n_trials)
+
+    if (guess) {
+      lambda_g_local <- matrix(0, nrow = nr, ncol = n_trials)
+      active_guess <- matrix(ok, nrow = nr) & (levels(lR) != "nogo")
+      lambda_g_local[active_guess] <- pars[, "lambda_g"][active_guess]
+      guess_ok_mat <- lambda_g_local > 0
+      if (any(guess_ok_mat)) {
+        tg_local[guess_ok_mat] <- rgamma(sum(guess_ok_mat), shape = erlang_shape,
+                                         rate = lambda_g_local[guess_ok_mat])
       }
     }
-  } else if (guess && local) {
-    # Local guess: each accumulator independently races its evidence against its own
-    # Erlang(erlang_shape, lambda) timer.  N iid draws → pmin selects winning accumulator.
-    # NOTE: this differs from global_guess, which uses a single Erlang(erlang_shape, lambda)
-    # draw for the whole trial (not min-of-N iid).
-    lambda_local <- matrix(0, nrow = nr, ncol = n_trials)
-    lambda_local[matrix(ok, nrow = nr)] <- lambda_local_orig[ok]
-    tk_local <- matrix(Inf, nrow = nr, ncol = n_trials)
-    kill_ok_mat <- lambda_local > 0
-    if (any(kill_ok_mat)) {
-      tk_local[kill_ok_mat] <- rgamma(sum(kill_ok_mat), shape = erlang_shape,
-                                       rate = lambda_local[kill_ok_mat])
+
+    if (local_kill) {
+      lambda_k_local <- matrix(0, nrow = nr, ncol = n_trials)
+      lambda_k_local[matrix(ok, nrow = nr)] <- pars[ok, "lambda_k"]
+      kill_ok_mat <- lambda_k_local > 0
+      if (any(kill_ok_mat)) {
+        tk_local[kill_ok_mat] <- rgamma(sum(kill_ok_mat), shape = erlang_shape,
+                                        rate = lambda_k_local[kill_ok_mat])
+      }
     }
-    dt <- pmin(dt, tk_local)
-  } else if (global) {
-    # Global kill (omission): shared timer fires → no response this trial
+
+    if (guess && local_kill) {
+      dt_candidate <- pmin(dt, tg_local)
+      dt <- ifelse(dt_candidate < tk_local, dt_candidate, Inf)
+    } else if (guess) {
+      dt <- pmin(dt, tg_local)
+    } else {
+      dt <- ifelse(dt < tk_local, dt, Inf)
+    }
+  }
+
+  if (global) {
+    # Global kill: shared timer fires → no response this trial
     is_killed <- tk < apply(dt, 2, min)
     if (any(is_killed)) dt[, is_killed] <- Inf
   }
-  # local_kill: already handled inside rGBM_killed via k = pars[,"lambda"]
 
   bad_col <- apply(dt, 2, function(x) all(is.infinite(x)))
   R <- apply(dt, 2, which.min)
@@ -394,24 +403,48 @@ rGBM_killed <- function(n, b, v, A, s = 1, k = 0, erlang = 1L) {
   out
 }
 
+rSWTN <- function(n, b, v, A, sv, k = 0, erlang = 1L) {
+  if (n <= 0) return(numeric(0))
+  out <- rep(Inf, n)
+  # Draw positive drifts from N(v, sv^2) truncated at 0.
+  v_draw <- v
+  var_idx <- which(is.finite(sv) & sv > 1e-12)
+  if (length(var_idx) > 0) {
+    rem <- var_idx
+    while (length(rem) > 0) {
+      z <- rnorm(length(rem), mean = v[rem], sd = sv[rem])
+      ok <- is.finite(z) & z > 0
+      if (any(ok)) v_draw[rem[ok]] <- z[ok]
+      rem <- rem[!ok]
+    }
+  }
+  out <- rWald(n, B = b, v = v_draw, A = A)
+  kill_idx <- which(k > 0)
+  if (length(kill_idx) > 0) {
+    tk <- rgamma(length(kill_idx), shape = erlang, rate = k[kill_idx])
+    out[kill_idx[tk <= out[kill_idx]]] <- Inf
+  }
+  out
+}
+
 #' RDMGBM Model
 #'
 #' Racing geometric Brownian first-passage model with start-point variability.
-#' Supports exponential killing (omission / guessing) via the `lambda` parameter.
+#' Supports exponential killing (omission / guessing) via the `lambda_g` and `lambda_k` parameters.
 #'
 #' @param erlang_shape integer shape of the killing process (1 = exponential, 2 = Erlang-2)
-#' @param erlang_type string, one of "none", "local_kill", "global_kill", "local_guess", "global_guess"
+#' @param erlang_type string, one of "none", "local_kill", "global_kill", "local_guess", "local_kill_guess"
 #'
 #' @export
 #'
 RDMGBM <- function(erlang_shape = 1L, erlang_type = "none") {
-  erlang_type <- match.arg(erlang_type, c("none", "local_kill", "global_kill", "local_guess", "global_guess"))
+  erlang_type <- match.arg(erlang_type, c("none", "local_kill", "global_kill", "local_guess", "local_kill_guess"))
   type_suffix <- switch(erlang_type,
     "none" = "",
     "local_kill" = "_LOCAL_KILL",
     "global_kill" = "_GLOBAL_KILL",
     "local_guess" = "_LOCAL_GUESS",
-    "global_guess" = "_GLOBAL_GUESS"
+    "local_kill_guess" = "_LOCAL_KILL_GUESS"
   )
   list(
     type = "RACE",
@@ -421,20 +454,20 @@ RDMGBM <- function(erlang_shape = 1L, erlang_type = "none") {
     ),
     p_types = c(
       "v" = log(1), "B" = log(1), "A" = log(0), "t0" = log(0),
-      "s" = log(1), "lambda" = log(0), "pContaminant" = qnorm(0)
+      "s" = log(1), "lambda_g" = log(0), "lambda_k" = log(0), "pContaminant" = qnorm(0)
     ),
     p_types_canonical = c("v", "B", "A", "t0", "s"),
     transform = list(func = c(
       v = "exp", B = "exp", A = "exp", t0 = "exp",
-      s = "exp", lambda = "exp", pContaminant = "pnorm"
+      s = "exp", lambda_g = "exp", lambda_k = "exp", pContaminant = "pnorm"
     )),
     bound = list(
       minmax = cbind(
         v = c(1e-3, Inf), B = c(0, Inf), A = c(0, Inf),
-        t0 = c(0.05, Inf), s = c(0, Inf), lambda = c(1e-4, Inf),
+        t0 = c(0.05, Inf), s = c(0, Inf), lambda_g = c(1e-4, Inf), lambda_k = c(1e-4, Inf),
         pContaminant = c(0.001, 0.999)
       ),
-      exception = c(A = 0, v = 0, lambda = 0, pContaminant = 0),
+      exception = c(A = 0, v = 0, lambda_g = 0, lambda_k = 0, pContaminant = 0),
       # Joint validity: positive log-space drift required for finite-time simulation.
       joint_ok = function(pars) {
         if (!all(c("v", "s") %in% colnames(pars))) return(rep(TRUE, nrow(pars)))
@@ -479,43 +512,45 @@ RDMGBM <- function(erlang_shape = 1L, erlang_type = "none") {
 #' | *t0*      | log       | \[0, Inf\]      | log(0)  | Non-decision time                      |
 #' | *s*       | log       | \[0, Inf\]      | log(1)  | Within-trial SD of drift rate          |
 #' | *sv*      | log       | \[0, Inf\]      | log(0)  | Between-trial SD of drift rate         |
-#' | *lambda*  | log       | \[0, Inf\]      | log(0)  | Exponential killing rate               |
+#' | *lambda_g*| log       | \[0, Inf\]      | log(0)  | Exponential guessing rate              |
+#' | *lambda_k*| log       | \[0, Inf\]      | log(0)  | Exponential killing rate               |
 #'
 #' @param erlang_shape integer shape of the killing process (1=exponential, 2=Erlang-2)
-#' @param erlang_type string, one of "none", "local_kill", "global_kill", "local_guess", "global_guess"
+#' @param erlang_type string, one of "none", "local_kill", "global_kill", "local_guess", "local_kill_guess"
 #'
 #' @return a list of parameters
 #'
 #' @export
 #'
 RDMSWTN <- function(erlang_shape = 1L, erlang_type = "none") {
-  erlang_type <- match.arg(erlang_type, c("none", "local_kill", "global_kill", "local_guess", "global_guess"))
+  erlang_type <- match.arg(erlang_type, c("none", "local_kill", "global_kill", "local_guess", "local_kill_guess"))
   type_suffix <- switch(erlang_type,
     "none" = "",
     "local_kill" = "_LOCAL_KILL",
     "global_kill" = "_GLOBAL_KILL",
     "local_guess" = "_LOCAL_GUESS",
-    "global_guess" = "_GLOBAL_GUESS"
+    "local_kill_guess" = "_LOCAL_KILL_GUESS"
   )
   list(
     type = "RACE",
     c_name = paste0(if (erlang_shape >= 2L) "RDMSWTN_E2" else "RDMSWTN", type_suffix),
     p_types = c(
       "v" = log(1), "B" = log(1), "A" = log(0), "t0" = log(0),
-      "s" = log(1), "sv" = log(0), "lambda" = log(0), "pContaminant" = qnorm(0)
+      "s" = log(1), "sv" = log(0), "lambda_g" = log(0), "lambda_k" = log(0), "pContaminant" = qnorm(0)
     ),
     p_types_canonical = c("v", "B", "A", "t0", "s", "sv"),
     transform = list(func = c(
       v = "exp", B = "exp", A = "exp", t0 = "exp",
-      s = "exp", sv = "exp", lambda = "exp", pContaminant = "pnorm"
+      s = "exp", sv = "exp", lambda_g = "exp", lambda_k = "exp", pContaminant = "pnorm"
     )),
     bound = list(
       minmax = cbind(
         v = c(1e-3, Inf), B = c(0, Inf), A = c(0, Inf),
-        t0 = c(0.05, Inf), s = c(0, Inf), sv = c(0, Inf), lambda = c(1e-4, Inf),
+        t0 = c(0.05, Inf), s = c(0, Inf), sv = c(0, Inf),
+        lambda_g = c(1e-4, Inf), lambda_k = c(1e-4, Inf),
         pContaminant = c(0.001, 0.999)
       ),
-      exception = c(A = 0, v = 0, sv = 0, lambda = 0, pContaminant = 0)
+      exception = c(A = 0, v = 0, sv = 0, lambda_g = 0, lambda_k = 0, pContaminant = 0)
     ),
     Ttransform = function(pars, dadm) {
       pars <- cbind(pars, b = pars[, "B"] + pars[, "A"])
@@ -543,7 +578,9 @@ dRDMSWTN <- function(rt, pars, erlang = 1L) {
   ok <- rt > pars[, "t0", drop = FALSE] & !pars[, "v", drop = FALSE] < 0
   ok[is.na(ok)] <- FALSE
   if (any(ok)) {
-    if (!("lambda" %in% colnames(pars))) stop("RDMSWTN requires parameter column 'lambda'.")
+    if (!all(c("lambda_g", "lambda_k") %in% colnames(pars))) {
+      stop("RDMSWTN requires parameter columns 'lambda_g' and 'lambda_k'.")
+    }
     if (any(dimnames(pars)[[2]] == "s")) {
       pars_ok <- pars[ok, , drop = FALSE]
       pars_ok[, c("A", "b", "v", "sv")] <- pars_ok[, c("A", "b", "v", "sv")] / pars_ok[, "s"]
@@ -552,7 +589,8 @@ dRDMSWTN <- function(rt, pars, erlang = 1L) {
     out[ok] <- dSWTNspv(rt[ok],
       v = pars[ok, "v", drop = FALSE], b = pars[ok, "b", drop = FALSE],
       A = pars[ok, "A", drop = FALSE], t0 = pars[ok, "t0", drop = FALSE],
-      sv = pars[ok, "sv", drop = FALSE], lambda = pars[ok, "lambda", drop = FALSE],
+      sv = pars[ok, "sv", drop = FALSE], lambda_g = pars[ok, "lambda_g", drop = FALSE],
+      lambda_k = pars[ok, "lambda_k", drop = FALSE],
       kill_shape = erlang
     )
   }
@@ -572,7 +610,9 @@ pRDMSWTN <- function(rt, pars, erlang = 1L) {
   ok <- rt > pars[, "t0", drop = FALSE] & !pars[, "v", drop = FALSE] < 0
   ok[is.na(ok)] <- FALSE
   if (any(ok)) {
-    if (!("lambda" %in% colnames(pars))) stop("RDMSWTN requires parameter column 'lambda'.")
+    if (!all(c("lambda_g", "lambda_k") %in% colnames(pars))) {
+      stop("RDMSWTN requires parameter columns 'lambda_g' and 'lambda_k'.")
+    }
     if (any(dimnames(pars)[[2]] == "s")) {
       pars_ok <- pars[ok, , drop = FALSE]
       pars_ok[, c("A", "b", "v", "sv")] <- pars_ok[, c("A", "b", "v", "sv")] / pars_ok[, "s"]
@@ -581,14 +621,15 @@ pRDMSWTN <- function(rt, pars, erlang = 1L) {
     out[ok] <- pSWTNspv(rt[ok],
       v = pars[ok, "v", drop = FALSE], b = pars[ok, "b", drop = FALSE],
       A = pars[ok, "A", drop = FALSE], t0 = pars[ok, "t0", drop = FALSE],
-      sv = pars[ok, "sv", drop = FALSE], lambda = pars[ok, "lambda", drop = FALSE],
+      sv = pars[ok, "sv", drop = FALSE], lambda_g = pars[ok, "lambda_g", drop = FALSE],
+      lambda_k = pars[ok, "lambda_k", drop = FALSE],
       kill_shape = erlang
     )
   }
   out
 }
 
-rRDMSWTN <- function(lR, pars, p_types = c("v", "b", "A", "t0", "sv", "lambda"),
+rRDMSWTN <- function(lR, pars, p_types = c("v", "b", "A", "t0", "sv", "lambda_g", "lambda_k"),
                      ok = rep(TRUE, dim(pars)[1]), erlang_shape = 1L, erlang_type = "none") {
   if (!is.null(attr(pars, "ok"))) ok <- attr(pars, "ok")
   if (is.null(dim(pars)) || (dim(pars)[1] == 1 & length(lR) > 1)) {
@@ -599,7 +640,9 @@ rRDMSWTN <- function(lR, pars, p_types = c("v", "b", "A", "t0", "sv", "lambda"),
       dimnames = list(NULL, original_names), byrow = TRUE
     )
   }
-  if (!("lambda" %in% colnames(pars))) stop("RDMSWTN requires parameter column 'lambda'.")
+  if (!all(c("lambda_g", "lambda_k") %in% colnames(pars))) {
+    stop("RDMSWTN requires parameter columns 'lambda_g' and 'lambda_k'.")
+  }
   if (!all(p_types %in% dimnames(pars)[[2]])) {
     stop("pars must have columns ", paste(p_types, collapse = " "))
   }
@@ -611,19 +654,19 @@ rRDMSWTN <- function(lR, pars, p_types = c("v", "b", "A", "t0", "sv", "lambda"),
   bad <- rep(NA, length(lR) / length(levels(lR)))
   out <- data.frame(R = bad, rt = bad)
   nr <- length(levels(lR))
-  dt <- matrix(Inf, nrow = nr, ncol = nrow(pars) / nr)
+  n_trials <- nrow(pars) / nr
+  dt <- matrix(Inf, nrow = nr, ncol = n_trials)
   t0 <- pars[, "t0"]
 
-  guess <- grepl("guess", erlang_type)
-  global <- grepl("global", erlang_type)
-  local <- grepl("local", erlang_type)
+  guess  <- erlang_type == "local_guess" || erlang_type == "local_kill_guess"
+  global <- erlang_type == "global_kill"
+  local_kill <- erlang_type == "local_kill" || erlang_type == "local_kill_guess"
 
-  # If guessing or global omission, drawn ONE kill process per trial
+  # global_kill: draw one shared Erlang timer per trial
   if (global) {
-    n_trials <- nrow(pars) / nr
-    lambda_mat <- matrix(pars[, "lambda"], nrow = nr)
+    lambda_mat <- matrix(pars[, "lambda_k"], nrow = nr)
     if (any(apply(lambda_mat, 2, function(x) length(unique(x)) > 1))) {
-      stop("global erlang types require lambda to be constant across accumulators (lambda must not vary by any accumulator-level factor)")
+      stop("global_kill requires lambda_k to be constant across accumulators")
     }
     lambda_trials <- lambda_mat[1, ]
     tk <- rep(Inf, n_trials)
@@ -631,49 +674,54 @@ rRDMSWTN <- function(lR, pars, p_types = c("v", "b", "A", "t0", "sv", "lambda"),
     if (any(kill_ok)) {
       tk[kill_ok] <- rgamma(sum(kill_ok), shape = erlang_shape, rate = lambda_trials[kill_ok])
     }
-    # Simulator rSWTN without global killing inside the kernel
-    pars[, "lambda"] <- 0
   }
 
+  pars_all <- pars
   pars <- pars[ok, , drop = FALSE]
-  # local_kill: rSWTN handles the per-accumulator kill timer internally via k=lambda.
-  # local_guess and global variants are handled post-hoc below.
+  # In the combined local kill+guess case, handle both clocks jointly below.
+  k_vec <- if (local_kill && !guess) pars[, "lambda_k"] else rep(0, nrow(pars))
   dt[ok] <- rSWTN(sum(ok),
     b = pars[, "b"], v = pars[, "v"], A = pars[, "A"], sv = pars[, "sv"],
-    k = pars[, "lambda"], erlang = erlang_shape
+    k = k_vec, erlang = erlang_shape
   )
 
-  if (guess && global) {
-    # Global guess: shared timer fires → uniform random accumulator responds.
-    is_guess <- tk < apply(dt, 2, min)
-    if (any(is_guess)) {
-      dt[, is_guess] <- Inf
-      ok_mat <- matrix(ok, nrow = nr)
-      for (trial_idx in which(is_guess)) {
-        active_indices <- which(ok_mat[, trial_idx] & levels(lR) != "nogo")
-        if (length(active_indices) > 0) {
-          winner_acc <- if (length(active_indices) > 1) sample(active_indices, 1) else active_indices
-          dt[winner_acc, trial_idx] <- tk[trial_idx]
-        }
+  if (guess || local_kill) {
+    tg_local <- matrix(Inf, nrow = nr, ncol = n_trials)
+    tk_local <- matrix(Inf, nrow = nr, ncol = n_trials)
+
+    if (guess) {
+      lambda_g_local <- matrix(0, nrow = nr, ncol = n_trials)
+      active_guess <- matrix(ok, nrow = nr) & (levels(lR) != "nogo")
+      lambda_g_local[active_guess] <- pars_all[, "lambda_g"][active_guess]
+      guess_ok_mat <- lambda_g_local > 0
+      if (any(guess_ok_mat)) {
+        tg_local[guess_ok_mat] <- rgamma(sum(guess_ok_mat), shape = erlang_shape,
+                                         rate = lambda_g_local[guess_ok_mat])
       }
     }
-  } else if (guess && local) {
-    # Local guess: each accumulator independently races evidence against its own
-    # Erlang(erlang_shape, lambda) timer.  N iid draws → pmin selects winning accumulator.
-    # NOTE: differs from global_guess — global uses one Erlang(shape, lambda) draw
-    # for the trial, not min-of-N iid (rates differ by factor N; for Erlang-2
-    # the min-of-iid distribution is not Erlang at all).
-    n_trials <- ncol(dt)
-    tk_local <- matrix(Inf, nrow = nr, ncol = n_trials)
-    lambda_local <- matrix(0, nrow = nr, ncol = n_trials)
-    lambda_local[matrix(ok, nrow = nr)] <- pars[, "lambda"]
-    kill_ok <- lambda_local > 0
-    if (any(kill_ok)) {
-      tk_local[kill_ok] <- rgamma(sum(kill_ok), shape = erlang_shape, rate = lambda_local[kill_ok])
+
+    if (local_kill) {
+      lambda_k_local <- matrix(0, nrow = nr, ncol = n_trials)
+      lambda_k_local[matrix(ok, nrow = nr)] <- pars[, "lambda_k"]
+      kill_ok_mat <- lambda_k_local > 0
+      if (any(kill_ok_mat)) {
+        tk_local[kill_ok_mat] <- rgamma(sum(kill_ok_mat), shape = erlang_shape,
+                                        rate = lambda_k_local[kill_ok_mat])
+      }
     }
-    dt <- pmin(dt, tk_local)
-  } else if (global) {
-    # Global kill (omission): shared timer fires → no response this trial.
+
+    if (guess && local_kill) {
+      dt_candidate <- pmin(dt, tg_local)
+      dt <- ifelse(dt_candidate < tk_local, dt_candidate, Inf)
+    } else if (guess) {
+      dt <- pmin(dt, tg_local)
+    } else {
+      dt <- ifelse(dt < tk_local, dt, Inf)
+    }
+  }
+
+  if (global) {
+    # Global kill: shared timer fires → no response this trial.
     is_killed <- tk < apply(dt, 2, min)
     if (any(is_killed)) {
       dt[, is_killed] <- Inf
@@ -689,30 +737,5 @@ rRDMSWTN <- function(lR, pars, p_types = c("v", "b", "A", "t0", "sv", "lambda"),
   out$rt <- rt
   out$R[bad_col] <- NA
   out$rt[bad_col] <- Inf
-  out
-}
-
-rSWTN <- function(n, b, v, A, sv, s = 1, k = 0, erlang = 1L) {
-  out <- numeric(n)
-  if (n > 1 & all(length(A) == 1, length(v) == 1, length(b) == 1, length(sv) == 1, length(k) == 1)) {
-    A <- rep(A, n)
-    b <- rep(b, n)
-    v <- rep(v, n)
-    sv <- rep(sv, n)
-    k <- rep(k, n)
-  }
-  b <- ifelse(A == 0, b, runif(n, b - A, b))
-  l <- ifelse(sv == 0, v, msm::rtnorm(n, mean = v, sd = sv, lower = 0, upper = Inf))
-  ok <- !l < 0
-  nok <- sum(ok)
-  out[ok] <- statmod::rinvgauss(nok, mean = (b[ok] / s) / (l[ok] / s), shape = (b[ok] / s)^2)
-  kill_ok <- ok & (k > 0)
-  if (any(kill_ok)) {
-    nk <- sum(kill_ok)
-    t_kill <- rgamma(nk, shape = erlang, rate = k[kill_ok])
-    kill_idx <- which(kill_ok)
-    out[kill_idx[t_kill <= out[kill_idx]]] <- Inf
-  }
-  out[!ok] <- Inf
   out
 }

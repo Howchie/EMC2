@@ -1,409 +1,675 @@
-# Exponential and Erlang Kill Processes for Evidence Accumulation Models
-
-## Objective
-
-The aim is to augment a standard evidence accumulation model with a stochastic timeout process that can produce omissions, or time-based guesses, without treating these outcomes as unrelated contaminants. The response process remains interpretable in terms of conventional accumulation parameters such as drift, threshold, and non-decision time, while the timeout process controls the temporal probability that the trial remains response-eligible.
-
-## Base response process
+For a **single-accumulator** (local) case:
 
 Let
 
 [
-T_R
+T_D = \text{decision/detection time}
 ]
 
-denote the first-passage time of the response process. For a one-choice Wald model,
-
 [
-T_R \sim \operatorname{Wald}(a, v, \sigma),
+T_G = \text{guess time}
 ]
 
-where (a) is the response threshold, (v) is drift rate, and (\sigma) is the diffusion coefficient. Observed reaction time is
-
 [
-RT = t_0 + T_R,
+T_K = \text{kill/omission time}
 ]
 
-where (t_0) is non-decision time.
+with all three independent. A response is observed if either the Wald decision wins or the guess clock wins. An omission occurs if the kill clock wins.
 
-The standard model predicts an observed response whenever (T_R) occurs before the experimental cutoff (U - t_0). This can create difficulty when omission rates are non-zero but observed reaction times show little or no density near the cutoff.
-
-## Independent timeout process
-
-Introduce an independent timeout process
+So the observed response density is
 
 [
-T_K,
+p_R(t)
+======
+
+\underbrace{f_D(t)S_G(t)S_K(t)}*{\text{decision wins}}
++
+\underbrace{f_G(t)S_D(t)S_K(t)}*{\text{guess wins}}
 ]
 
-where (K) denotes killing, expiry, or abandonment of the response opportunity. A response is observed only if
+and the omission probability is
 
 [
-T_R < T_K.
+p_O
+===
+
+\int_0^\infty f_K(t)S_D(t)S_G(t),dt .
 ]
 
-If (T_K < T_R), the trial produces an omission or, in a choice model, a time-based guess.
+Here (f_D) and (S_D) are the Wald density and survivor.
 
-For a detection task with upper response window (u = U - t_0), the probability of observing a hit is
+---
+
+## Wald decision process
+
+Let the Wald decision time be
 
 [
-P(\text{hit before } u)
-= \int_0^u f_R(t) S_K(t),dt,
+T_D = \tau + X
 ]
 
-where (f_R(t)) is the response-time density of the evidence process and
+where (X) is a one-boundary diffusion first-passage time with threshold (b), drift (\nu), and diffusion coefficient (\sigma).
+
+The Laplace transform is
 
 [
-S_K(t)=P(T_K>t)
-]
+L_D(s)
+======
 
-is the survival function of the timeout process.
+# \mathbb{E}\left[e^{-sT_D}\right]
 
-The omission probability is therefore
-
-[
-P(\text{omission by } u)
-= 1 - \int_0^u f_R(t) S_K(t),dt.
-]
-
-## Exponential kill process
-
-The simplest timeout model assumes
-
-[
-T_K \sim \operatorname{Exponential}(\lambda).
-]
-
-Then
-
-[
-S_K(t)=e^{-\lambda t},
-]
-
-and the observed hit density is
-
-[
-f_{\text{hit}}(t)
-= f_R(t)e^{-\lambda t}.
-]
-
-The parameter (\lambda) is the constant hazard of response-opportunity expiry:
-
-[
-h_K(t)=\lambda.
-]
-
-This process selectively downweights long response times. It therefore converts some otherwise late responses into omissions while preserving the shape of the early and modal response-time distribution.
-
-For a Wald response process, the eventual hit probability is available through the Laplace transform of the Wald distribution:
-
-[
-L(s)=\mathbb{E}\left[e^{-sT_R}\right]
-= \exp\left[
-\frac{a}{\sigma^2}
+\exp\left[
+-s\tau
++
+\frac{b}{\sigma^2}
 \left(
-v - \sqrt{v^2 + 2\sigma^2 s}
+\nu-\sqrt{\nu^2+2\sigma^2s}
 \right)
 \right].
 ]
 
-Thus, under exponential killing,
+This is the little magic key. Anything involving
 
 [
-P(\text{eventual hit})=L(\lambda),
+\int_0^\infty e^{-st}S_D(t),dt
+]
+
+can be written using (L_D(s)).
+
+Specifically,
+
+[
+I_0(s)
+======
+
+# \int_0^\infty e^{-st}S_D(t),dt
+
+\frac{1-L_D(s)}{s}.
+]
+
+Also,
+
+[
+I_1(s)
+======
+
+# \int_0^\infty t e^{-st}S_D(t),dt
+
+-I_0'(s),
 ]
 
 and
 
 [
-P(\text{eventual omission})=1-L(\lambda).
+I_2(s)
+======
+
+# \int_0^\infty t^2 e^{-st}S_D(t),dt
+
+I_0''(s).
 ]
 
-With a finite cutoff (u), define
+Explicitly,
 
 [
-v_\lambda = \sqrt{v^2 + 2\sigma^2\lambda}.
+I_1(s)
+======
+
+\frac{1-L_D(s)}{s^2}
++
+\frac{L_D'(s)}{s},
+]
+
+and
+
+[
+I_2(s)
+======
+
+\frac{2(1-L_D(s))}{s^3}
++
+\frac{2L_D'(s)}{s^2}
+--------------------
+
+\frac{L_D''(s)}{s}.
+]
+
+For the Wald transform, write
+
+[
+r(s)=\sqrt{\nu^2+2\sigma^2s}.
 ]
 
 Then
 
 [
-f_W(t\mid a,v,\sigma)e^{-\lambda t}
-===================================
+L_D'(s)
+=======
 
-\exp\left[
-\frac{a}{\sigma^2}(v-v_\lambda)
-\right]
-f_W(t\mid a,v_\lambda,\sigma),
+L_D(s)
+\left(
+-\tau-\frac{b}{r(s)}
+\right),
 ]
 
-so
+and
 
 [
-P(\text{hit before }u)
-======================
+L_D''(s)
+========
 
-\exp\left[
-\frac{a}{\sigma^2}(v-v_\lambda)
-\right]
-F_W(u\mid a,v_\lambda,\sigma).
-]
-
-This provides a fully analytic censored likelihood for the killed Wald model.
-
-## Erlang-2 kill process
-
-A limitation of the exponential kill process is its constant hazard. This implies that expiry can occur immediately after stimulus onset with the same instantaneous risk as later in the trial.
-
-A minimal extension uses a two-stage Erlang timeout process:
-
-[
-T_K \sim \operatorname{Erlang}(2,\lambda).
-]
-
-Its survival function is
-
-[
-S_K(t)=e^{-\lambda t}(1+\lambda t),
-]
-
-and its density is
-
-[
-f_K(t)=\lambda^2 t e^{-\lambda t}.
-]
-
-The corresponding hazard is
-
-[
-h_K(t)=\frac{\lambda^2 t}{1+\lambda t}.
-]
-
-This hazard satisfies
-
-[
-h_K(0)=0,
-]
-
-and increases monotonically toward (\lambda). The process therefore implements a simple form of increasing time pressure while preserving a compact analytic structure.
-
-For a detection task, the observed hit density becomes
-
-[
-f_{\text{hit}}(t)
-= f_R(t)e^{-\lambda t}(1+\lambda t).
-]
-
-The eventual hit probability is
-
-[
-P(\text{eventual hit})
-= \mathbb{E}\left[e^{-\lambda T_R}(1+\lambda T_R)\right].
-]
-
-Using the Laplace transform (L(s)), this is
-
-[
-P(\text{eventual hit})
-= L(\lambda)-\lambda L'(\lambda).
-]
-
-For the Wald model,
-
-[
-L'(\lambda)
-= -\frac{a}{\sqrt{v^2+2\sigma^2\lambda}}L(\lambda),
-]
-
-so
-
-[
-P(\text{eventual hit})
-======================
-
-L(\lambda)
+L_D(s)
 \left[
-1 + \frac{\lambda a}{\sqrt{v^2+2\sigma^2\lambda}}
+\left(
+-\tau-\frac{b}{r(s)}
+\right)^2
++
+\frac{b\sigma^2}{r(s)^3}
 \right].
 ]
 
-The finite-cutoff probability is
+So the omission probability can be evaluated analytically once you reduce it to (I_0,I_1,I_2).
 
-[
-P(\text{hit before }u)
-= \int_0^u f_W(t\mid a,v,\sigma)e^{-\lambda t}(1+\lambda t),dt.
-]
+---
 
-Because
+# Case 1: Erlang-1 guess and Erlang-1 kill
 
-[
-f_W(t\mid a,v,\sigma)e^{-\lambda t}
-===================================
-
-C_\lambda f_W(t\mid a,v_\lambda,\sigma),
-]
-
-where
-
-[
-C_\lambda=
-\exp\left[
-\frac{a}{\sigma^2}(v-v_\lambda)
-\right],
-]
-
-the finite-cutoff probability can be written as
-
-[
-P(\text{hit before }u)
-= C_\lambda
-\left[
-F_W(u\mid a,v_\lambda,\sigma)
-
-* \lambda M_W(u\mid a,v_\lambda,\sigma)
-  \right],
-  ]
-
-where
-
-[
-M_W(u\mid a,v_\lambda,\sigma)
-= \int_0^u t f_W(t\mid a,v_\lambda,\sigma),dt
-]
-
-is the lower incomplete first moment of the transformed Wald distribution.
+Erlang-1 is just exponential.
 
 Let
 
 [
-q=v_\lambda,
+T_G \sim \text{Exp}(\lambda_G),
 \qquad
-\mu_q=\frac{a}{q},
-\qquad
-\eta=\frac{a^2}{\sigma^2}.
+T_K \sim \text{Exp}(\lambda_K).
 ]
 
-The Wald CDF is
+Then
 
 [
-F_W(u\mid a,q,\sigma)
-=====================
+f_G(t)=\lambda_G e^{-\lambda_G t},
+\qquad
+S_G(t)=e^{-\lambda_G t},
+]
 
-\Phi\left(\frac{q u-a}{\sigma\sqrt{u}}\right)
+and
+
+[
+f_K(t)=\lambda_K e^{-\lambda_K t},
+\qquad
+S_K(t)=e^{-\lambda_K t}.
+]
+
+Define
+
+[
+a=\lambda_G+\lambda_K.
+]
+
+The response density is
+
+[
+p_R(t)
+======
+
+f_D(t)e^{-at}
 +
-\exp\left(\frac{2aq}{\sigma^2}\right)
-\Phi\left(-\frac{q u+a}{\sigma\sqrt{u}}\right),
+\lambda_G e^{-\lambda_G t}S_D(t)e^{-\lambda_K t}.
 ]
 
-and the lower incomplete first moment is
+So
 
 [
-M_W(u\mid a,q,\sigma)
-=====================
+p_R(t)
+======
 
-\mu_q
+e^{-at}
 \left[
-\Phi\left(\frac{q u-a}{\sigma\sqrt{u}}\right)
----------------------------------------------
-
-\exp\left(\frac{2aq}{\sigma^2}\right)
-\Phi\left(-\frac{q u+a}{\sigma\sqrt{u}}\right)
+f_D(t)+\lambda_G S_D(t)
 \right].
 ]
 
-Therefore the Erlang-2 killed Wald has a closed-form finite-window hit probability:
+The omission density, if omission time were observed, is
 
 [
-P(\text{hit before }u)
-= C_\lambda
-\left{
-F_W(u\mid a,q,\sigma)
+p_O(t)
+======
 
-* \lambda M_W(u\mid a,q,\sigma)
-  \right},
-  \qquad q=v_\lambda.
-  ]
-
-## Choice-response extension with time-based guessing
-
-For a choice model with evidence-based response densities (g_i(t)) and total evidence survival
-
-[
-S_E(t)=P(T_R>t),
+\lambda_K e^{-at}S_D(t).
 ]
 
-the timeout process may produce either omissions or guesses.
-
-If a timeout produces a guess with response probabilities (\pi_i), then the response density for option (i) is
+Usually omission time is not observed, so we integrate:
 
 [
-p_i(t)
+p_O
+===
+
+\lambda_K
+\int_0^\infty e^{-at}S_D(t),dt.
+]
+
+Using (I_0(a)),
+
+[
+p_O
+===
+
+\lambda_K I_0(a).
+]
+
+Therefore
+
+[
+\boxed{
+p_O
+===
+
+\lambda_K
+\frac{1-L_D(a)}{a}
+}
+]
+
+where
+
+[
+a=\lambda_G+\lambda_K.
+]
+
+The total probability of a genuine decision response is
+
+[
+p_D
+===
+
+# \int_0^\infty f_D(t)e^{-at},dt
+
+L_D(a).
+]
+
+The total probability of a guess response is
+
+[
+p_G
+===
+
+# \lambda_G I_0(a)
+
+\lambda_G
+\frac{1-L_D(a)}{a}.
+]
+
+So the three possible outcomes are
+
+[
+\boxed{
+p_D=L_D(a)
+}
+]
+
+[
+\boxed{
+p_G=\lambda_G\frac{1-L_D(a)}{a}
+}
+]
+
+[
+\boxed{
+p_O=\lambda_K\frac{1-L_D(a)}{a}
+}
+]
+
+and they sum to one:
+
+[
+p_D+p_G+p_O=1.
+]
+
+Very tidy. Erlang-1 is the little glass bead case.
+
+---
+
+# Case 2: Erlang-2 guess and Erlang-2 kill
+
+Now let both guess and kill be Erlang-2, using the R convention
+
+[
+\texttt{rgamma(shape = 2, rate = }\lambda\texttt{)}.
+]
+
+So
+
+[
+T_G \sim \text{Gamma}(2,\lambda_G),
+\qquad
+T_K \sim \text{Gamma}(2,\lambda_K).
+]
+
+The density and survivor are
+
+[
+f_G(t)=\lambda_G^2 t e^{-\lambda_G t},
+\qquad
+S_G(t)=e^{-\lambda_G t}(1+\lambda_G t),
+]
+
+and
+
+[
+f_K(t)=\lambda_K^2 t e^{-\lambda_K t},
+\qquad
+S_K(t)=e^{-\lambda_K t}(1+\lambda_K t).
+]
+
+Again define
+
+[
+a=\lambda_G+\lambda_K.
+]
+
+The response density is
+
+[
+p_R(t)
 ======
 
-g_i(t)S_K(t)
-
-* \pi_i f_K(t)S_E(t).
-  ]
-
-For exponential killing,
-
-[
-p_i(t)
-======
-
-g_i(t)e^{-\lambda t}
-
-* \pi_i \lambda e^{-\lambda t}S_E(t).
-  ]
-
-For Erlang-2 killing,
-
-[
-p_i(t)
-======
-
-g_i(t)e^{-\lambda t}(1+\lambda t)
-
-* \pi_i \lambda^2 t e^{-\lambda t}S_E(t).
-  ]
-
-If the timeout produces omissions rather than guesses, the second term is omitted from the response density and contributes instead to the omission probability.
-
-With an upper response window (u), the no-response probability is
-
-[
-P(\text{no response by }u)
-==========================
-
-S_E(u)S_K(u)
+f_D(t)S_G(t)S_K(t)
 +
-\int_0^u f_K(t)S_E(t),dt
+f_G(t)S_D(t)S_K(t).
 ]
 
-when timeouts produce omissions. If timeouts always produce guesses, then the no-response probability reduces to
+Substitute the Erlang-2 forms:
 
 [
-P(\text{no response by }u)=S_E(u)S_K(u),
+p_R(t)
+======
+
+f_D(t)
+e^{-at}
+(1+\lambda_G t)(1+\lambda_K t)
++
+\lambda_G^2t e^{-\lambda_G t}
+S_D(t)
+e^{-\lambda_K t}(1+\lambda_K t).
 ]
 
-because either the evidence process or the timeout process would have generated an observable response before (u).
+So
+
+[
+\boxed{
+p_R(t)
+======
+
+e^{-at}
+\left[
+f_D(t)(1+\lambda_G t)(1+\lambda_K t)
++
+\lambda_G^2t S_D(t)(1+\lambda_K t)
+\right]
+}
+]
+
+This is still closed-form for observed RTs because it only uses the Wald density and survivor at (t).
+
+Now the omission probability:
+
+[
+p_O
+===
+
+\int_0^\infty f_K(t)S_D(t)S_G(t),dt.
+]
+
+Substitute:
+
+[
+p_O
+===
+
+\int_0^\infty
+\lambda_K^2t e^{-\lambda_K t}
+S_D(t)
+e^{-\lambda_G t}(1+\lambda_G t)
+,dt.
+]
+
+Combine exponentials:
+
+[
+p_O
+===
+
+\lambda_K^2
+\int_0^\infty
+t e^{-at}(1+\lambda_G t)S_D(t)
+,dt.
+]
+
+Expand the polynomial:
+
+[
+p_O
+===
+
+\lambda_K^2
+\left[
+\int_0^\infty t e^{-at}S_D(t),dt
++
+\lambda_G
+\int_0^\infty t^2 e^{-at}S_D(t),dt
+\right].
+]
+
+Using (I_1(a)) and (I_2(a)),
+
+[
+\boxed{
+p_O
+===
+
+\lambda_K^2
+\left[
+I_1(a)+\lambda_G I_2(a)
+\right]
+}
+]
+
+where
+
+[
+I_1(a)
+======
+
+\frac{1-L_D(a)}{a^2}
++
+\frac{L_D'(a)}{a},
+]
+
+and
+
+[
+I_2(a)
+======
+
+\frac{2(1-L_D(a))}{a^3}
++
+\frac{2L_D'(a)}{a^2}
+--------------------
+
+\frac{L_D''(a)}{a}.
+]
+
+So fully expanded:
+
+[
+\boxed{
+p_O
+===
+
+\lambda_K^2
+\left[
+\frac{1-L_D(a)}{a^2}
++
+\frac{L_D'(a)}{a}
++
+\lambda_G
+\left(
+\frac{2(1-L_D(a))}{a^3}
++
+\frac{2L_D'(a)}{a^2}
+--------------------
+
+\frac{L_D''(a)}{a}
+\right)
+\right]
+}
+]
+
+with
+
+[
+a=\lambda_G+\lambda_K.
+]
+
+---
+
+## Total probabilities in Erlang-2 case
+
+The probability that the Wald decision wins is
+
+[
+p_D
+===
+
+\int_0^\infty
+f_D(t)
+e^{-at}
+(1+\lambda_G t)(1+\lambda_K t)
+,dt.
+]
+
+Expand:
+
+[
+(1+\lambda_G t)(1+\lambda_K t)
+==============================
+
+1+(\lambda_G+\lambda_K)t+\lambda_G\lambda_Kt^2.
+]
+
+So
+
+[
+p_D
+===
+
+## L_D(a)
+
+(\lambda_G+\lambda_K)L_D'(a)
++
+\lambda_G\lambda_K L_D''(a).
+]
+
+Thus
+
+[
+\boxed{
+p_D
+===
+
+## L_D(a)
+
+aL_D'(a)
++
+\lambda_G\lambda_KL_D''(a)
+}
+]
+
+The probability that the guess clock wins is symmetric to the kill expression:
+
+[
+\boxed{
+p_G
+===
+
+\lambda_G^2
+\left[
+I_1(a)+\lambda_K I_2(a)
+\right]
+}
+]
+
+and the omission probability is
+
+[
+\boxed{
+p_O
+===
+
+\lambda_K^2
+\left[
+I_1(a)+\lambda_G I_2(a)
+\right]
+}
+]
+
+with
+
+[
+p_D+p_G+p_O=1.
+]
+
+---
 
 ## Interpretation
 
-The evidence accumulation process determines the ordinary response-time distribution and retains its standard psychological interpretation. The timeout process determines how long the trial remains response-eligible.
-
-The exponential model assumes a constant risk of expiry:
+For Erlang-1,
 
 [
-h_K(t)=\lambda.
+h_G(t)=\lambda_G,
+\qquad
+h_K(t)=\lambda_K.
 ]
 
-The Erlang-2 model assumes expiry risk starts at zero and increases over time:
+So guess and kill are constant-hazard processes. They can happen immediately, and their urgency does not build over time.
+
+For Erlang-2,
 
 [
-h_K(t)=\frac{\lambda^2 t}{1+\lambda t}.
+h_G(t)=\frac{\lambda_G^2t}{1+\lambda_G t},
+\qquad
+h_K(t)=\frac{\lambda_K^2t}{1+\lambda_K t}.
 ]
 
-The Erlang-2 process is therefore a minimal analytic approximation to a timing accumulator. It introduces increasing temporal pressure without requiring a full additional accumulation process with its own threshold, drift, and diffusion parameters.
+These start at zero:
 
-In detection tasks, the timeout process provides a principled mechanism for omissions without requiring a long unobserved response-time tail. In choice tasks, the same mechanism can be used to generate time-based guesses, omissions, or both.
+[
+h_G(0)=0,
+\qquad
+h_K(0)=0,
+]
+
+then rise over time:
+
+[
+h_G(t)\to \lambda_G,
+\qquad
+h_K(t)\to \lambda_K.
+]
+
+So (\lambda_G) controls how quickly timed guessing pressure ramps up, and (\lambda_K) controls how quickly omission pressure ramps up.
+
+In likelihood form:
+
+[
+\ell(t,\text{response})=\log p_R(t)
+]
+
+for observed responses, and
+
+[
+\ell(\text{omission})=\log p_O
+]
+
+for omitted trials.
+
+That gives you a single-accumulator Wald model with both **timed responding** and **timed omission**, still analytic for Erlang-1 and Erlang-2.

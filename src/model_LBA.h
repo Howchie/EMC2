@@ -5,6 +5,7 @@
 #include "utility_functions.h"
 #include "wald_functions.h"  // pnorm_std() — fast normal CDF under USE_FAST_PNORM
 #include "composite_functions.h"  // clamp_pos, safe_log
+#include "gaussian.h"
 
 using namespace Rcpp;
 
@@ -117,20 +118,6 @@ NumericVector plba(NumericVector t,
 // Hits threshold b when x(t) >= b.
 // k -> 0 limit recovers standard LBA exactly.
 // --------------------------------------------------------------------------
-
-// Erlang-n kill survival in log space: log(exp(-lt) * sum_{m=0}^{n-1} (lt)^m/m!)
-// n=1: exponential; n=2: Erlang-2.  Duplicated from model_RDM.h to avoid coupling.
-inline double lba_erlang_log_surv(double t, double lambda, int n) {
-  if (lambda <= 0.0) return 0.0;
-  if (n <= 1) return -lambda * t;
-  return -lambda * t + std::log1p(lambda * t);
-}
-
-inline double lba_erlang_log_pdf(double t, double lambda, int n) {
-  if (lambda <= 0.0 || t <= 0.0) return R_NegInf;
-  if (n <= 1) return std::log(lambda) - lambda * t;
-  return 2.0 * std::log(lambda) + std::log(t) - lambda * t;
-}
 
 // Stable exp(-kt) and 1-exp(-kt).
 inline void leak_terms(double k, double t, double &E, double &G) {
@@ -273,19 +260,25 @@ double dleakyba_norm(double t, double A, double b,
 // Killed-leaky BA density: f_hit(t) = f_leaky(t) * S_K(t)
 // kill_shape=1: S_K = exp(-lambda*t); kill_shape=2: S_K = exp(-lambda*t)*(1+lambda*t).
 inline double dkilledleakyba_norm(double t, double A, double b,
-                                  double v, double sv, double k, double lambda,
+                                  double v, double sv, double k,
+                                  double lambda_g, double lambda_k,
                                   bool posdrift = true, bool log_out = false,
                                   int kill_shape = 1, bool guess = false) {
   if (t <= 0.0) return log_out ? R_NegInf : 0.0;
-  if (lambda <= 0.0) return dleakyba_norm(t, A, b, v, sv, k, posdrift, log_out);
-  const double log_f_hit = dleakyba_norm(t, A, b, v, sv, k, posdrift, true)
-                           + lba_erlang_log_surv(t, lambda, kill_shape);
-  if (!guess) return log_out ? log_f_hit : std::exp(log_f_hit);
-  // Guess component: f_K(t) * S_R(t)
+  const bool use_guess = guess && (lambda_g > 0.0);
+  const bool use_kill = (lambda_k > 0.0);
+  if (!use_guess && !use_kill) return dleakyba_norm(t, A, b, v, sv, k, posdrift, log_out);
+
+  const double log_fR = dleakyba_norm(t, A, b, v, sv, k, posdrift, true);
+  const double log_sK = use_kill ? erlang_log_surv(t, lambda_k, kill_shape) : 0.0;
+  const double log_sG = use_guess ? erlang_log_surv(t, lambda_g, kill_shape) : 0.0;
+  const double log_f_hit = log_fR + log_sK + log_sG;
+  if (!use_guess) return log_out ? log_f_hit : std::exp(log_f_hit);
+
   const double cdf_r = pleakyba_norm(t, A, b, v, sv, k, posdrift, false);
   const double log_sr = std::log1p(-std::max(0.0, std::min(1.0, cdf_r)));
-  const double log_fk = lba_erlang_log_pdf(t, lambda, kill_shape);
-  const double log_f_guess = log_fk + log_sr;
+  const double log_fG = erlang_log_pdf(t, lambda_g, kill_shape);
+  const double log_f_guess = log_fG + log_sK + log_sr;
   const double log_pdf = log_sum_exp(log_f_hit, log_f_guess);
   return log_out ? log_pdf : std::exp(log_pdf);
 }
@@ -294,30 +287,55 @@ inline double dkilledleakyba_norm(double t, double A, double b,
 // P(T_R <= t, T_R < T_K) with kill_shape=1 (exponential) or kill_shape=2 (Erlang-2).
 // With guess=true: mixture CDF = 1 - S_R(t)*S_K(t).
 inline double pkilledleakyba_norm(double t, double A, double b,
-                                  double v, double sv, double k, double lambda,
+                                  double v, double sv, double k,
+                                  double lambda_g, double lambda_k,
                                   bool posdrift = true, bool log_out = false,
                                   int kill_shape = 1, bool guess = false) {
   if (t <= 0.0) return log_out ? R_NegInf : 0.0;
-  if (lambda <= 0.0) return pleakyba_norm(t, A, b, v, sv, k, posdrift, log_out);
-  if (guess) {
-    const double cdf_r = pleakyba_norm(t, A, b, v, sv, k, posdrift, false);
-    const double log_sr = std::log1p(-std::max(0.0, std::min(1.0, cdf_r)));
-    const double log_sk = lba_erlang_log_surv(t, lambda, kill_shape);
-    const double log_val = std::log1p(-std::exp(log_sr + log_sk));
-    return log_out ? log_val : std::exp(log_val);
-  }
-  const double eps = 1e-10;
-  if (sv <= 0.0 || A <= 0.0 || b <= A) return log_out ? R_NegInf : 0.0;
+  const bool use_guess = guess && (lambda_g > 0.0);
+  const bool use_kill = (lambda_k > 0.0);
+  if (!use_guess && !use_kill) return pleakyba_norm(t, A, b, v, sv, k, posdrift, log_out);
 
-  // k -> 0: GL integration in time domain.
-  if (std::fabs(k) < eps) {
+  if (use_guess && use_kill) {
+    // Combined local kill+guess path: one GL20 loop over time.
     const Rcpp::List& gl = get_gl20();
     const Rcpp::NumericVector nodes = gl["nodes"];
     const Rcpp::NumericVector weights = gl["weights"];
     double acc = 0.0;
     for (int j = 0; j < nodes.size(); ++j) {
       const double u  = 0.5 * t * (nodes[j] + 1.0);
-      const double sk = std::exp(lba_erlang_log_surv(u, lambda, kill_shape));
+      const double fR = dleakyba_norm(u, A, b, v, sv, k, posdrift, false);
+      const double SR = std::max(0.0, std::min(1.0, 1.0 - pleakyba_norm(u, A, b, v, sv, k, posdrift, false)));
+      const double SG = std::exp(erlang_log_surv(u, lambda_g, kill_shape));
+      const double SK = std::exp(erlang_log_surv(u, lambda_k, kill_shape));
+      const double fG = std::exp(erlang_log_pdf(u, lambda_g, kill_shape));
+      acc += weights[j] * (fR * SG * SK + fG * SK * SR);
+    }
+    double out = 0.5 * t * acc;
+    out = std::max(0.0, std::min(1.0, out));
+    return log_out ? safe_log(out) : out;
+  }
+
+  const double lambda = use_guess ? lambda_g : lambda_k;
+  if (use_guess) {
+    const double cdf_r = pleakyba_norm(t, A, b, v, sv, k, posdrift, false);
+    const double log_sr = std::log1p(-std::max(0.0, std::min(1.0, cdf_r)));
+    const double log_sk = erlang_log_surv(t, lambda, kill_shape);
+    const double log_val = std::log1p(-std::exp(log_sr + log_sk));
+    return log_out ? log_val : std::exp(log_val);
+  }
+  const double eps = 1e-10;
+  if (sv <= 0.0 || b < A || b <= 0.0) return log_out ? R_NegInf : 0.0;
+
+  // Point-start and k -> 0 fallback: integrate in time domain.
+  if (A <= 0.0 || std::fabs(k) < eps) {
+    const Rcpp::List& gl = get_gl20();
+    const Rcpp::NumericVector nodes = gl["nodes"];
+    const Rcpp::NumericVector weights = gl["weights"];
+    double acc = 0.0;
+    for (int j = 0; j < nodes.size(); ++j) {
+      const double u  = 0.5 * t * (nodes[j] + 1.0);
+      const double sk = std::exp(erlang_log_surv(u, lambda, kill_shape));
       acc += weights[j] * dleakyba_norm(u, A, b, v, sv, k, posdrift, false) * sk;
     }
     double out = 0.5 * t * acc;
@@ -414,9 +432,9 @@ inline double pkilledleakyba_norm(double t, double A, double b,
 NumericVector dkilledleakyba(NumericVector t,
                              NumericVector A, NumericVector b,
                              NumericVector v, NumericVector sv, NumericVector k,
-                             NumericVector lambda,
+                             NumericVector lambda_g, NumericVector lambda_k,
                              bool posdrift = true, bool log_out = false,
-                             int kill_shape = 1) {
+                             int kill_shape = 1, bool guess = false) {
   int n = t.size();
   NumericVector pdf(n);
   auto pick = [](const NumericVector& vec, int i) -> double {
@@ -424,7 +442,8 @@ NumericVector dkilledleakyba(NumericVector t,
   };
   for (int i = 0; i < n; i++) {
     pdf[i] = dkilledleakyba_norm(t[i], pick(A,i), pick(b,i), pick(v,i), pick(sv,i),
-                                 pick(k,i), pick(lambda,i), posdrift, log_out, kill_shape);
+                                 pick(k,i), pick(lambda_g,i), pick(lambda_k,i),
+                                 posdrift, log_out, kill_shape, guess);
   }
   return pdf;
 }
@@ -433,9 +452,9 @@ NumericVector dkilledleakyba(NumericVector t,
 NumericVector pkilledleakyba(NumericVector t,
                              NumericVector A, NumericVector b,
                              NumericVector v, NumericVector sv, NumericVector k,
-                             NumericVector lambda,
+                             NumericVector lambda_g, NumericVector lambda_k,
                              bool posdrift = true, bool log_out = false,
-                             int kill_shape = 1) {
+                             int kill_shape = 1, bool guess = false) {
   int n = t.size();
   NumericVector cdf(n);
   auto pick = [](const NumericVector& vec, int i) -> double {
@@ -443,7 +462,8 @@ NumericVector pkilledleakyba(NumericVector t,
   };
   for (int i = 0; i < n; i++) {
     cdf[i] = pkilledleakyba_norm(t[i], pick(A,i), pick(b,i), pick(v,i), pick(sv,i),
-                                 pick(k,i), pick(lambda,i), posdrift, log_out, kill_shape);
+                                 pick(k,i), pick(lambda_g,i), pick(lambda_k,i),
+                                 posdrift, log_out, kill_shape, guess);
   }
   return cdf;
 }

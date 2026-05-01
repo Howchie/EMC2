@@ -43,33 +43,77 @@ test_that("killed swtn cdf is locally consistent with the pdf", {
   expect_equal(slope, pdf, tolerance = 2e-4)
 })
 
+test_that("combined local guess+kill SWTN Erlang-2 cdf is locally consistent with the pdf", {
+  t <- 0.85
+  h <- 1e-5
+  b <- 1.25
+  v <- 1.05
+  sv <- 0.35
+  s <- 1.0
+  lambda_g <- 0.4
+  lambda_k <- 0.7
+
+  pdf <- EMC2:::dSWTNspv(
+    t = t, v = v, b = b, A = 0, t0 = 0, sv = sv, s = s,
+    lambda_g = lambda_g, lambda_k = lambda_k, kill_shape = 2L
+  )
+  slope <- (
+    EMC2:::pSWTNspv(
+      t = t + h, v = v, b = b, A = 0, t0 = 0, sv = sv, s = s,
+      lambda_g = lambda_g, lambda_k = lambda_k, kill_shape = 2L
+    ) -
+    EMC2:::pSWTNspv(
+      t = t - h, v = v, b = b, A = 0, t0 = 0, sv = sv, s = s,
+      lambda_g = lambda_g, lambda_k = lambda_k, kill_shape = 2L
+    )
+  ) / (2 * h)
+
+  expect_equal(slope, pdf, tolerance = 5e-4)
+})
+
+test_that("rRDMSWTN local kill+guess yields both omissions and responses", {
+  set.seed(11)
+  n_trials <- 1000
+  lR <- factor(rep(c("r1", "r2"), n_trials), levels = c("r1", "r2"))
+  trial_rows <- rbind(
+    c(v = 1e-6, b = 1.1, A = 0.1, t0 = 0.2, sv = 1e-8, lambda_g = 0.35, lambda_k = 1.0),
+    c(v = 1e-6, b = 1.1, A = 0.1, t0 = 0.2, sv = 1e-8, lambda_g = 0.0, lambda_k = 1.0)
+  )
+  pars <- trial_rows[rep(seq_len(nrow(trial_rows)), n_trials), , drop = FALSE]
+
+  sim <- EMC2:::rRDMSWTN(lR, pars, erlang_shape = 2L, erlang_type = "local_kill_guess")
+
+  expect_gt(mean(is.na(sim$R)), 0.05)
+  expect_gt(mean(!is.na(sim$R)), 0.05)
+})
+
 test_that("rRDMSWTN returns omissions when killing wins the race", {
   set.seed(1)
 
   n_trials <- 200
   lR <- factor(rep(c("r1", "r2"), n_trials), levels = c("r1", "r2"))
   pars <- matrix(
-    rep(c(v = 1.0, b = 1.1, A = 0.1, t0 = 0.2, sv = 0.25, lambda = 1e6), 2 * n_trials),
-    ncol = 6,
+    rep(c(v = 1.0, b = 1.1, A = 0.1, t0 = 0.2, sv = 0.25, lambda_g = 0, lambda_k = 1e6), 2 * n_trials),
+    ncol = 7,
     byrow = TRUE,
-    dimnames = list(NULL, c("v", "b", "A", "t0", "sv", "lambda"))
+    dimnames = list(NULL, c("v", "b", "A", "t0", "sv", "lambda_g", "lambda_k"))
   )
 
-  sim <- EMC2:::rRDMSWTN(lR, pars)
+  sim <- EMC2:::rRDMSWTN(lR, pars, erlang_type = "local_kill")
 
   expect_true(all(is.na(sim$R)))
   expect_true(all(is.infinite(sim$rt)))
 })
 
-test_that("rRDMSWTN nests to the no-kill model when lambda is zero", {
+test_that("rRDMSWTN nests to the no-kill model when lambda_k is zero", {
   set.seed(1)
 
   designRDMSWTN <- design(
     factors = list(S = "Target", subjects = 1, L = c("L", "M", "H")),
     Rlevels = c("Go"),
-    formula = list(v ~ L, B ~ 1, A ~ 1, t0 ~ 1, s ~ 1, sv ~ 1, lambda ~ 1),
+    formula = list(v ~ L, B ~ 1, A ~ 1, t0 ~ 1, s ~ 1, sv ~ 1, lambda_k ~ 1),
     constants = c(s = log(1)),
-    model = RDMSWTN(),
+    model = RDMSWTN(erlang_type = "local_kill"),
     UC = 3,
     report_p_vector = FALSE
   )
@@ -80,7 +124,7 @@ test_that("rRDMSWTN nests to the no-kill model when lambda is zero", {
   p_vec["A"] <- log(0.4)
   p_vec["t0"] <- log(0.2)
   p_vec["sv"] <- log(0.25)
-  p_vec["lambda"] <- log(0)
+  p_vec["lambda_k"] <- log(0)
 
   expect_silent(dat <- make_data(p_vec, design = designRDMSWTN, n_trials = 200))
   expect_true(is.data.frame(dat))
@@ -88,15 +132,15 @@ test_that("rRDMSWTN nests to the no-kill model when lambda is zero", {
   expect_false(anyNA(dat$R))
 })
 
-test_that("RDMSWTN requires lambda in model-level parameter matrices", {
+test_that("RDMSWTN requires lambda_g/lambda_k in model-level parameter matrices", {
   rt <- c(0.5, 0.8)
-  pars_lambda <- cbind(v = 1.1, b = 1.4, A = 0.2, t0 = 0.1, sv = 0.3, s = 1.0, lambda = 0.4)
+  pars_lambda <- cbind(v = 1.1, b = 1.4, A = 0.2, t0 = 0.1, sv = 0.3, s = 1.0, lambda_g = 0.0, lambda_k = 0.4)
 
   d1 <- EMC2:::dRDMSWTN(rt, pars_lambda)
   p1 <- EMC2:::pRDMSWTN(rt, pars_lambda)
 
   expect_true(all(is.finite(d1)))
   expect_true(all(is.finite(p1)))
-  expect_error(EMC2:::dRDMSWTN(rt, cbind(v = 1.1, b = 1.4, A = 0.2, t0 = 0.1, sv = 0.3, s = 1.0, k = 0.4)), "requires parameter column 'lambda'")
-  expect_error(EMC2:::pRDMSWTN(rt, cbind(v = 1.1, b = 1.4, A = 0.2, t0 = 0.1, sv = 0.3, s = 1.0, k = 0.4)), "requires parameter column 'lambda'")
+  expect_error(EMC2:::dRDMSWTN(rt, cbind(v = 1.1, b = 1.4, A = 0.2, t0 = 0.1, sv = 0.3, s = 1.0, k = 0.4)), "lambda_g")
+  expect_error(EMC2:::pRDMSWTN(rt, cbind(v = 1.1, b = 1.4, A = 0.2, t0 = 0.1, sv = 0.3, s = 1.0, k = 0.4)), "lambda_g")
 })

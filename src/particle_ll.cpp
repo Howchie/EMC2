@@ -354,11 +354,14 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
   out.ctx.is_local_guess = (type_std.find("_LOCAL_GUESS") != std::string::npos);
   out.ctx.is_global_kill = (type_std.find("_GLOBAL_KILL") != std::string::npos);
   out.ctx.is_local_kill  = (type_std.find("_LOCAL_KILL")  != std::string::npos);
+  out.ctx.is_local_kill_guess = (type_std.find("_LOCAL_KILL_GUESS") != std::string::npos);
 
   // Backward compatibility: bare _GLOBAL maps to global_kill
-  if (!out.ctx.is_local_guess && !out.ctx.is_global_kill && !out.ctx.is_local_kill) {
+  if (!out.ctx.is_local_guess && !out.ctx.is_global_kill && !out.ctx.is_local_kill && !out.ctx.is_local_kill_guess) {
     if (type_std.find("_GLOBAL") != std::string::npos) out.ctx.is_global_kill = true;
   }
+
+  out.ctx.apply_lk_to_racers = !out.ctx.is_global_kill;
 
   if (out.ctx.is_global_kill) out.ctx.defective_upper_tail = true;
 
@@ -370,7 +373,8 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
     out.model_pfun_raw = &prdmswtn_raw;
     out.logS_at_t_ptr  = &rdmswtn_logS_at_t;
     out.ctx.t0_index   = 3;
-    out.ctx.lambda_index = 6;
+    out.ctx.lambda_g_index = 6;
+    out.ctx.lambda_k_index = 7;
     out.ctx.defective_upper_tail = true;
   } else if (type_std.find("GBM") != std::string::npos) {
     // Must be checked before "RDM" since "RDMGBM" contains "RDM"
@@ -380,7 +384,8 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
     out.model_pfun_raw = &prdmgbm_raw;
     out.logS_at_t_ptr  = &rdmgbm_logS_at_t;
     out.ctx.t0_index     = 3;
-    out.ctx.lambda_index = 5;
+    out.ctx.lambda_g_index = 5;
+    out.ctx.lambda_k_index = 6;
     out.ctx.defective_upper_tail = true;
   } else if (type_std.find("BAwL") != std::string::npos) {
     out.pdf1_ptr       = &dbawl_scalar;
@@ -389,7 +394,8 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
     out.model_pfun_raw = &pbawl_raw;
     out.logS_at_t_ptr  = &bawl_logS_at_t;
     out.ctx.t0_index   = 4;
-    out.ctx.lambda_index = 6;
+    out.ctx.lambda_g_index = 6;
+    out.ctx.lambda_k_index = 7;
     // Leaky ballistic accumulators can have defective upper tails (never-finish
     // mass) even when posdrift=TRUE.
     out.ctx.defective_upper_tail = true;
@@ -2472,7 +2478,8 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
         // variability checks in common zero-variability cases.
         if (type_std.find("RDMSWTN") != std::string::npos) {
           const double* sv_col = pars_cm + 5 * n_trials;
-          const double* lambda_col = pars_cm + 6 * n_trials;
+          const double* lambda_g_col = pars_cm + 6 * n_trials;
+          const double* lambda_k_col = pars_cm + 7 * n_trials;
           bool sv_zero = true;
           bool lambda_active = false;
           for (int j = 0; j < n_trials; ++j) {
@@ -2483,12 +2490,16 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
           // For any Erlang variant, disable kill bookkeeping when all lambdas are zero
           // so kernels fall through to standard Wald without computing mixtures.
           const bool any_erlang = adapter.ctx.is_global_kill || adapter.ctx.is_local_kill ||
-                                  adapter.ctx.is_local_guess;
+                                  adapter.ctx.is_local_guess || adapter.ctx.is_local_kill_guess;
           if (any_erlang) {
             for (int j = 0; j < n_trials; ++j) {
               if (!isok_int_fp[j]) continue;
-              const double lam = lambda_col[j];
-              if (std::isfinite(lam) && lam > 1e-12) { lambda_active = true; break; }
+              const double lg = lambda_g_col[j];
+              const double lk = lambda_k_col[j];
+              if ((std::isfinite(lg) && lg > 1e-12) || (std::isfinite(lk) && lk > 1e-12)) {
+                lambda_active = true;
+                break;
+              }
             }
             adapter.ctx.kill_active = lambda_active;
           }
@@ -2518,7 +2529,7 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
                                  alt_res_buf_fp.data(), min_ll, &adapter.ctx);
         } else if (adapter.ctx.is_global_kill && adapter.ctx.kill_active) {
           // Pre-fill log S_K at the winner row for each trial.
-          const double* lambda_ptr = pars_cm + adapter.ctx.lambda_index * n_trials;
+          const double* lambda_ptr = pars_cm + adapter.ctx.lambda_k_index * n_trials;
           const double* t0_ptr     = pars_cm + adapter.ctx.t0_index     * n_trials;
           for (int j = 0; j < n_trials; ++j) {
             if (!isok_int_fp[j] || !winner_int_buf[j]) continue;
@@ -4055,19 +4066,26 @@ static double c_log_likelihood_redundant_target_race(
     const int idxB = shared.idxB[static_cast<size_t>(j)];
     const int idxN = shared.idxNogo[static_cast<size_t>(j)];
     const bool use_nogo = (idxN >= 0);
+    const int cond = shared.cond_code[static_cast<size_t>(j)];
+    const bool need_A = (cond != 2);
+    const bool need_B = (cond != 1);
 
-    if (idxA < 0 || idxB < 0 || !ok_params[idxA] || !ok_params[idxB] ||
+    if (cond < 1 || cond > 3) {
+      ll_unique[static_cast<size_t>(j)] = min_ll;
+      continue;
+    }
+    if ((need_A && (idxA < 0 || !ok_params[idxA])) ||
+        (need_B && (idxB < 0 || !ok_params[idxB])) ||
         (use_nogo && !ok_params[idxN])) {
       ll_unique[static_cast<size_t>(j)] = min_ll;
       continue;
     }
 
-    copy_par_row_colmajor(pars_cm_ptr, n_trials, n_par, idxA, parA.data());
-    copy_par_row_colmajor(pars_cm_ptr, n_trials, n_par, idxB, parB.data());
+    if (need_A) copy_par_row_colmajor(pars_cm_ptr, n_trials, n_par, idxA, parA.data());
+    if (need_B) copy_par_row_colmajor(pars_cm_ptr, n_trials, n_par, idxB, parB.data());
     if (use_nogo) copy_par_row_colmajor(pars_cm_ptr, n_trials, n_par, idxN, parN.data());
 
     const double t = shared.rt_unique[static_cast<size_t>(j)];
-    const int cond = shared.cond_code[static_cast<size_t>(j)];
     const int resp = shared.resp_code[static_cast<size_t>(j)];
     const double LTj = shared.LT_unique[static_cast<size_t>(j)];
     const double LCj = shared.LC_unique[static_cast<size_t>(j)];
@@ -4087,7 +4105,11 @@ static double c_log_likelihood_redundant_target_race(
       }
 
       double fA = 0.0, FA = 0.0, fB = 0.0, FB = 0.0, fN = 0.0, FN = 0.0;
-      if (!eval_pdf_cdf(t, idxA, parA.data(), fA, FA) || !eval_pdf_cdf(t, idxB, parB.data(), fB, FB)) {
+      if (need_A && !eval_pdf_cdf(t, idxA, parA.data(), fA, FA)) {
+        ll_unique[static_cast<size_t>(j)] = min_ll;
+        continue;
+      }
+      if (need_B && !eval_pdf_cdf(t, idxB, parB.data(), fB, FB)) {
         ll_unique[static_cast<size_t>(j)] = min_ll;
         continue;
       }
@@ -4096,8 +4118,8 @@ static double c_log_likelihood_redundant_target_race(
         continue;
       }
 
-      const double S_A = std::max(kMinSurv, 1.0 - FA);
-      const double S_B = std::max(kMinSurv, 1.0 - FB);
+      const double S_A = need_A ? std::max(kMinSurv, 1.0 - FA) : 1.0;
+      const double S_B = need_B ? std::max(kMinSurv, 1.0 - FB) : 1.0;
       const double S_N = use_nogo ? std::max(kMinSurv, 1.0 - FN) : 1.0;
       if (cond == 1) {
         p = fA * S_N;
@@ -4128,8 +4150,8 @@ static double c_log_likelihood_redundant_target_race(
             Rcpp::stop("RedundantTarget likelihood: finite UC is required for no-go/omission trials with a nogo accumulator.");
           const double low = std::max(0.0, LTj);
           const double upp = UCj;
-          const double S_A_uc = safe_surv_at(parA.data(), upp);
-          const double S_B_uc = safe_surv_at(parB.data(), upp);
+          const double S_A_uc = need_A ? safe_surv_at(parA.data(), upp) : 1.0;
+          const double S_B_uc = need_B ? safe_surv_at(parB.data(), upp) : 1.0;
           const double S_N_uc = safe_surv_at(parN.data(), upp);
           double p_none = 0.0;
           if (cond == 1) p_none = S_A_uc * S_N_uc;
@@ -4510,15 +4532,21 @@ double c_log_likelihood_race(
 
   // For any Erlang variant, disable kill bookkeeping when lambda is identically
   // zero for this particle so kernels use the standard (non-mixture) forms.
-  const bool any_erlang_ctx = ctx && ctx->lambda_index >= 0 &&
-    (ctx->is_global_kill || ctx->is_local_kill || ctx->is_local_guess);
+  const bool any_erlang_ctx = ctx && (ctx->lambda_k_index >= 0 || ctx->lambda_g_index >= 0) &&
+    (ctx->is_global_kill || ctx->is_local_kill || ctx->is_local_guess || ctx->is_local_kill_guess);
   if (any_erlang_ctx) {
     bool lambda_active = false;
-    const double* lambda_ptr = pars_cm_ptr + static_cast<size_t>(ctx->lambda_index) * n_trials;
+    const double* lambda_k_ptr = (ctx->lambda_k_index >= 0)
+      ? (pars_cm_ptr + static_cast<size_t>(ctx->lambda_k_index) * n_trials) : nullptr;
+    const double* lambda_g_ptr = (ctx->lambda_g_index >= 0)
+      ? (pars_cm_ptr + static_cast<size_t>(ctx->lambda_g_index) * n_trials) : nullptr;
     for (int row = 0; row < n_trials; ++row) {
       if (!isok[row]) continue;
-      const double lam = lambda_ptr[row];
-      if (std::isfinite(lam) && lam > 1e-12) { lambda_active = true; break; }
+      const double lk = lambda_k_ptr ? lambda_k_ptr[row] : 0.0;
+      const double lg = lambda_g_ptr ? lambda_g_ptr[row] : 0.0;
+      if ((std::isfinite(lk) && lk > 1e-12) || (std::isfinite(lg) && lg > 1e-12)) {
+        lambda_active = true; break;
+      }
     }
     ctx->kill_active = lambda_active;
   } else if (ctx) {
@@ -4574,7 +4602,7 @@ double c_log_likelihood_race(
       if (race_ctx && race_ctx->is_global_kill && race_ctx->kill_active) {
         // Global omission probability: Integral f_K(u) * S_race(u) du on [0, Inf).
         // Use Gauss-Legendre quadrature (20 nodes) with mapping u -> t = -1/lam * log(1-u).
-        const double* lambda_ptr = pars_cm_ptr + race_ctx->lambda_index * n_trials;
+        const double* lambda_ptr = pars_cm_ptr + race_ctx->lambda_k_index * n_trials;
         const double lam = lambda_ptr[start_row_idx];
         if (lam <= 0.0) {
           global_log_surv_inf_by_trial[static_cast<size_t>(unique_trial_idx)] = R_NegInf;
@@ -4587,7 +4615,11 @@ double c_log_likelihood_race(
           double par_buf_inf[64];
           for (int c = 0; c < n_par; ++c)
             par_buf_inf[c] = pars_cm_ptr[static_cast<size_t>(c) * n_trials + start_row_idx];
-          double F_inf = cdf1(R_PosInf, par_buf_inf, model_context_for_funcs);
+          ContextForRaceModels* race_ctx_local = static_cast<ContextForRaceModels*>(model_context_for_funcs);
+          const bool old_apply = race_ctx_local->apply_lk_to_racers;
+          race_ctx_local->apply_lk_to_racers = true;
+          double F_inf = cdf1(R_PosInf, par_buf_inf, race_ctx_local);
+          race_ctx_local->apply_lk_to_racers = old_apply;
           F_inf = clamp_cdf01_race(F_inf);
           const double ans = safe_log1m_race(F_inf);
           global_log_surv_inf_by_trial[static_cast<size_t>(unique_trial_idx)] = ans;
@@ -4684,7 +4716,7 @@ double c_log_likelihood_race(
       double logS = safe_log1m_race(Fk);
       if (!R_FINITE(logS)) return R_NegInf;
       if (race_ctx && race_ctx->is_global_kill && race_ctx->kill_active) {
-        const double* lambda_ptr = pars_cm_ptr + race_ctx->lambda_index * n_trials;
+        const double* lambda_ptr = pars_cm_ptr + race_ctx->lambda_k_index * n_trials;
         const double* t0_ptr = pars_cm_ptr + race_ctx->t0_index * n_trials;
         const double tt = t - t0_ptr[start_row_idx];
         if (tt > 0.0) logS += erlang_log_surv(tt, lambda_ptr[start_row_idx], race_ctx->kill_shape);
@@ -4706,7 +4738,7 @@ double c_log_likelihood_race(
       logS += ll;
     }
     if (race_ctx && race_ctx->is_global_kill && race_ctx->kill_active) {
-      const double* lambda_ptr = pars_cm_ptr + race_ctx->lambda_index * n_trials;
+      const double* lambda_ptr = pars_cm_ptr + race_ctx->lambda_k_index * n_trials;
       const double* t0_ptr = pars_cm_ptr + race_ctx->t0_index * n_trials;
       const double tt = t - t0_ptr[start_row_idx];
       if (tt > 0.0) {
@@ -4723,7 +4755,7 @@ double c_log_likelihood_race(
     winner_row_by_trial.assign(static_cast<size_t>(n_unique_trials), -1);
     global_log_sk_by_trial.assign(static_cast<size_t>(n_unique_trials), 0.0);
     const double* t0_ptr = pars_cm_ptr + static_cast<size_t>(ctx->t0_index) * n_trials;
-    const double* lambda_ptr = pars_cm_ptr + static_cast<size_t>(ctx->lambda_index) * n_trials;
+    const double* lambda_ptr = pars_cm_ptr + static_cast<size_t>(ctx->lambda_k_index) * n_trials;
     for (int j = 0; j < n_unique_trials; ++j) {
       const int start = j * n_lR;
       const int n_lR_j = has_RACE_col ? RACE[start] : n_lR;
@@ -5188,7 +5220,11 @@ double c_log_likelihood_race(
             for (int c = 0; c < n_par; ++c)
               par_buf[c] = pars_cm_ptr[static_cast<size_t>(c) * n_trials + start_row_idx];
             const auto logS_single = [&](double t) -> double {
-              double F = cdf1(t, par_buf, model_context_for_funcs);
+              ContextForRaceModels* ctx_loc = static_cast<ContextForRaceModels*>(model_context_for_funcs);
+              const bool old_apply = ctx_loc->apply_lk_to_racers;
+              ctx_loc->apply_lk_to_racers = true;
+              double F = cdf1(t, par_buf, ctx_loc);
+              ctx_loc->apply_lk_to_racers = old_apply;
               F = clamp_cdf01_race(F);
               return safe_log1m_race(F);
             };
@@ -5241,7 +5277,11 @@ double c_log_likelihood_race(
           for (int c = 0; c < n_par; ++c)
             par_buf[c] = pars_cm_ptr[static_cast<size_t>(c) * n_trials + start_row_idx];
           const auto logS_single = [&](double t) -> double {
-            double F = cdf1(t, par_buf, model_context_for_funcs);
+            ContextForRaceModels* ctx_loc = static_cast<ContextForRaceModels*>(model_context_for_funcs);
+            const bool old_apply = ctx_loc->apply_lk_to_racers;
+            ctx_loc->apply_lk_to_racers = true;
+            double F = cdf1(t, par_buf, ctx_loc);
+            ctx_loc->apply_lk_to_racers = old_apply;
             F = clamp_cdf01_race(F);
             return safe_log1m_race(F);
           };
