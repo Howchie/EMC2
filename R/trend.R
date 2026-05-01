@@ -786,8 +786,8 @@ check_trend <- function(trend, covariates = NULL, model = NULL, formula = NULL) 
     }, logical(1))
     if (!all(ok)) stop("pretransform/posttransform trend has a parameter name not in the model")
   }
-  if (is.null(covariates)) stop("must specify covariates when using trend")
   covnames <- unlist(lapply(trend,function(x)x$covariate))
+  if (length(covnames) > 0 && is.null(covariates)) stop("must specify covariates when using trend")
   # if (!all(covnames %in% covariates)){
   #   stop("trend has covnames not in covariates")
   # }

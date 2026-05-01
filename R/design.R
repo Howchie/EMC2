@@ -133,9 +133,26 @@ design <- function(formula = NULL,factors = NULL,Rlevels = NULL,model,data=NULL,
     factors <- facs[names(facs)!="R"]
     nfacs <- nfacs[!(names(nfacs) %in% c("trials","rt"))]
     all_preds <- unlist(lapply(lapply(formula, `[[`, 3L), all.vars))
+    
+    # Identify variables needed from matchfun
+    match_vars <- if (!is.null(matchfun)) all.vars(body(matchfun)) else NULL
+    
+    # Identify variables needed from trends
+    trend_vars <- if (!is.null(trend)) {
+      unique(c(
+        unlist(lapply(trend, function(x) x$covariate)),
+        unlist(lapply(trend, function(x) x$at))
+      ))
+    } else NULL
+
+    # Required factors: used in formula, matchfun, or trend, plus 'subjects'
+    needed_factors <- unique(c(all_preds, match_vars, trend_vars, "subjects"))
+    factors <- factors[names(factors) %in% needed_factors]
+
     if (length(nfacs)>0){
       covariates <- names(nfacs)
-      covariates <- covariates[covariates %in% all_preds]
+      # Covariates must be in the set of all predictors or specifically used in trends
+      covariates <- covariates[covariates %in% c(all_preds, trend_vars)]
       if(length(covariates) == 0) covariates <- NULL
     }
     if(is.null(LT)){if("LT"%in%colnames(data)) LT=data$LT else{LT <- attr(data,"LT")}}; if (is.null(LT)) LT <- 0
