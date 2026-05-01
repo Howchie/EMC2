@@ -2086,6 +2086,17 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
     }
   }
 
+  // Precompute base column indices for invariant parameters so fill_from_particle_row
+  // can preserve their natural-scale values across reset_base_to_zero.
+  std::vector<int> invariant_base_idx_vec;
+  if (invariant_param_names_ptr) {
+    for (const auto& nm : *invariant_param_names_ptr) {
+      auto it = param_table_template.name_to_base_idx.find(nm);
+      if (it != param_table_template.name_to_base_idx.end())
+        invariant_base_idx_vec.push_back(it->second);
+    }
+  }
+
   ModelSharedState ddm_shared;
   std::vector<int> ddm_p_idx;
   bool ddm_raw_ready = true;
@@ -2130,10 +2141,14 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
     const bool all_finite_untruncated = ddm_data_all_finite_untruncated(data, n_trials);
     for (int i = 0; i < n_particles; ++i) {
       if (i > 0) {
-        param_table_template.fill_from_particle_row(particle_matrix_pt, i, pm_col_to_base_idx);
+        param_table_template.fill_from_particle_row(particle_matrix_pt, i, pm_col_to_base_idx, invariant_base_idx_vec);
       }
+      // Invariant optimization only valid for i>0: the template (i==0) must be
+      // fully computed (including exp-transforms for constant parameters) before
+      // subsequent particles can inherit those values.
       update_pt_only(param_table_template, designs, trend_runtime_ptr, transform_specs_pt,
-                     invariant_design_mask_ptr, invariant_param_names_ptr);
+                     i > 0 ? invariant_design_mask_ptr : nullptr,
+                     i > 0 ? invariant_param_names_ptr : nullptr);
       if (i == 0) {
         bound_specs = make_bound_specs_pt(minmax, mm_names, param_table_template, bounds);
       }
@@ -2154,10 +2169,11 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
     IntegerVector expand = data.attr("expand");
     for (int i = 0; i < n_particles; ++i) {
       if (i > 0) {
-        param_table_template.fill_from_particle_row(particle_matrix_pt, i, pm_col_to_base_idx);
+        param_table_template.fill_from_particle_row(particle_matrix_pt, i, pm_col_to_base_idx, invariant_base_idx_vec);
       }
       update_pt_only(param_table_template, designs, trend_runtime_ptr, transform_specs_pt,
-                     invariant_design_mask_ptr, invariant_param_names_ptr);
+                     i > 0 ? invariant_design_mask_ptr : nullptr,
+                     i > 0 ? invariant_param_names_ptr : nullptr);
       if (i == 0) {
         bound_specs = make_bound_specs_pt(minmax, mm_names, param_table_template, bounds);
       }
@@ -2190,10 +2206,11 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
 
     for (int i = 0; i < n_particles; ++i) {
       if (i > 0) {
-        param_table_template.fill_from_particle_row(particle_matrix_pt, i, pm_col_to_base_idx);
+        param_table_template.fill_from_particle_row(particle_matrix_pt, i, pm_col_to_base_idx, invariant_base_idx_vec);
       }
       update_pt_only(param_table_template, designs, trend_runtime_ptr, transform_specs_pt,
-                     invariant_design_mask_ptr, invariant_param_names_ptr);
+                     i > 0 ? invariant_design_mask_ptr : nullptr,
+                     i > 0 ? invariant_param_names_ptr : nullptr);
       if (i == 0) {
         bound_specs = make_bound_specs_pt(minmax, mm_names, param_table_template, bounds);
       }
@@ -2234,10 +2251,11 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
 
       for (int i = 0; i < n_particles; ++i) {
         if (i > 0) {
-          param_table_template.fill_from_particle_row(particle_matrix_pt, i, pm_col_to_base_idx);
+          param_table_template.fill_from_particle_row(particle_matrix_pt, i, pm_col_to_base_idx, invariant_base_idx_vec);
         }
         update_pt_only(param_table_template, designs, trend_runtime_ptr, transform_specs_pt,
-                       invariant_design_mask_ptr, invariant_param_names_ptr);
+                       i > 0 ? invariant_design_mask_ptr : nullptr,
+                       i > 0 ? invariant_param_names_ptr : nullptr);
         if (i == 0) {
           bound_specs = make_bound_specs_pt(minmax, mm_names, param_table_template, bounds);
         }
@@ -2257,10 +2275,11 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
 
       for (int i = 0; i < n_particles; ++i) {
         if (i > 0) {
-          param_table_template.fill_from_particle_row(particle_matrix_pt, i, pm_col_to_base_idx);
+          param_table_template.fill_from_particle_row(particle_matrix_pt, i, pm_col_to_base_idx, invariant_base_idx_vec);
         }
         update_pt_only(param_table_template, designs, trend_runtime_ptr, transform_specs_pt,
-                       invariant_design_mask_ptr, invariant_param_names_ptr);
+                       i > 0 ? invariant_design_mask_ptr : nullptr,
+                       i > 0 ? invariant_param_names_ptr : nullptr);
         if (i == 0) {
           bound_specs = make_bound_specs_pt(minmax, mm_names, param_table_template, bounds);
         }
@@ -2446,11 +2465,12 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
 
     for (int i = 0; i < n_particles; ++i) {
       if (i > 0) {
-        param_table_template.fill_from_particle_row(particle_matrix_pt, i, pm_col_to_base_idx);
+        param_table_template.fill_from_particle_row(particle_matrix_pt, i, pm_col_to_base_idx, invariant_base_idx_vec);
       }
-      
+
       update_pt_only(param_table_template, designs, trend_runtime_ptr, transform_specs_pt,
-                     invariant_design_mask_ptr, invariant_param_names_ptr);
+                     i > 0 ? invariant_design_mask_ptr : nullptr,
+                     i > 0 ? invariant_param_names_ptr : nullptr);
       if (i == 0) {
         bound_specs = make_bound_specs_pt(minmax, mm_names, param_table_template, bounds);
       }

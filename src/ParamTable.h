@@ -503,24 +503,55 @@ struct ParamTable {
   }
 
   // Or pass a matrix and the row to fill. Should be faster due to the pre-defined
-  // pm_col_to_base_idx vector
+  // pm_col_to_base_idx vector.
+  // When invariant_base_indices is non-empty, those columns (already in natural
+  // scale from the template particle) are preserved across the reset so the
+  // invariant-parameter optimization can skip re-transforming them.
   void fill_from_particle_row(const Rcpp::NumericMatrix& particles,
                               int row,
-                              const std::vector<int>& pm_col_to_base_idx)
+                              const std::vector<int>& pm_col_to_base_idx,
+                              const std::vector<int>& invariant_base_indices = {})
   {
     const int ncols = particles.ncol();
-    const int n_trials = this->n_trials; // from ParamTable
+    const int n_trials = this->n_trials;
 
-    // Zero everything once per particle
-    reset_base_to_zero();
-
-    for (int j = 0; j < ncols; ++j) {
-      int base_idx = pm_col_to_base_idx[j];
-      if (base_idx < 0) continue;   // particle has a param we don't use
-      double val = particles(row, j);
-      double* col = &base(0, base_idx);
-      for (int r = 0; r < n_trials; ++r) {
-        col[r] = val;
+    if (invariant_base_indices.empty()) {
+      reset_base_to_zero();
+      for (int j = 0; j < ncols; ++j) {
+        int base_idx = pm_col_to_base_idx[j];
+        if (base_idx < 0) continue;
+        double val = particles(row, j);
+        double* col = &base(0, base_idx);
+        for (int r = 0; r < n_trials; ++r) col[r] = val;
+      }
+    } else {
+      // Save natural-scale invariant column values from the template (i=0),
+      // reset, fill only non-invariant columns from the particle row (log scale),
+      // then restore the invariant columns. update_pt_only will be called with
+      // invariant skip, so only the non-invariant columns get exp-transformed.
+      const int n_inv = static_cast<int>(invariant_base_indices.size());
+      std::vector<double> saved(static_cast<size_t>(n_inv) * n_trials);
+      for (int k = 0; k < n_inv; ++k) {
+        const int bidx = invariant_base_indices[k];
+        for (int r = 0; r < n_trials; ++r)
+          saved[static_cast<size_t>(k) * n_trials + r] = base(r, bidx);
+      }
+      reset_base_to_zero();
+      // Build a fast-lookup set of invariant base indices to skip in the fill loop.
+      std::unordered_set<int> inv_set(invariant_base_indices.begin(),
+                                      invariant_base_indices.end());
+      for (int j = 0; j < ncols; ++j) {
+        int base_idx = pm_col_to_base_idx[j];
+        if (base_idx < 0 || inv_set.count(base_idx)) continue;
+        double val = particles(row, j);
+        double* col = &base(0, base_idx);
+        for (int r = 0; r < n_trials; ++r) col[r] = val;
+      }
+      // Restore natural-scale invariant values.
+      for (int k = 0; k < n_inv; ++k) {
+        const int bidx = invariant_base_indices[k];
+        for (int r = 0; r < n_trials; ++r)
+          base(r, bidx) = saved[static_cast<size_t>(k) * n_trials + r];
       }
     }
   }
