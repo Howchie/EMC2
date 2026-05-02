@@ -38,7 +38,7 @@ inline signed_log slog_int_exp_pnorm(
 
   // q = 0:
   // ∫ Phi(a*x+c) dx = [y Phi(y) + phi(y)] / a
-  if (std::abs(q) <= FPM_EPSILON) {
+  if (std::abs(q) <= 1e-8) {
     auto G0 = [](double y) {
       return y * pnorm_std(y, true, false) +
              std::exp(-0.5 * y * y - LOG_SQRT_2PI);
@@ -98,7 +98,7 @@ inline signed_log slog_int_x_exp_pnorm(
   //
   // ∫ Phi(y) dy = y Phi(y) + phi(y)
   // ∫ y Phi(y) dy = 0.5 * ((y^2 - 1) Phi(y) + y phi(y))
-  if (std::abs(q) <= FPM_EPSILON) {
+  if (std::abs(q) <= 1e-8) {
     auto G0 = [](double y) {
       return y * pnorm_std(y, true, false) +
              std::exp(-0.5 * y * y - LOG_SQRT_2PI);
@@ -308,7 +308,7 @@ NumericVector pWald(NumericVector t, NumericVector v,
 // ==========================================================================
 
 double pwald(double t, double b, double mu, double sigma, double A,
-             double k, bool log_out, int kill_shape, bool guess, double t0 = 0.0);
+             double k, bool log_out, int kill_shape, bool guess, double t0);
 
 // [[Rcpp::export]]
 double dwald(double t, double b, double mu, double sigma = 1.0, double A = 0.0, double k = 0.0,
@@ -319,12 +319,13 @@ double dwald(double t, double b, double mu, double sigma = 1.0, double A = 0.0, 
     return log_out ? R_NegInf : 0.0;
   }
   const double t_eam = t - t0;
+  const double k_eff = (k <= 1e-8 ? 0.0 : k);
 
   // When rt < t0 the EAM hasn't started: f_EAM = 0, S_R = 1.
   // Only the erlang guess component contributes.
   if (t_eam <= FPM_EPSILON) {
-    if (!guess || k <= 0.0) return log_out ? R_NegInf : 0.0;
-    const double log_fG = erlang_log_pdf(t, k, kill_shape);
+    if (!guess || k_eff <= 0.0) return log_out ? R_NegInf : 0.0;
+    const double log_fG = erlang_log_pdf(t, k_eff, kill_shape);
     return log_out ? log_fG : std::exp(log_fG);
   }
 
@@ -350,7 +351,7 @@ double dwald(double t, double b, double mu, double sigma = 1.0, double A = 0.0, 
       return log_out ? R_NegInf : 0.0;
     }
     const double delta = d - mu * t_eam;
-    log_f_hit = std::log(d) - std::log(t_eam) + Gstar(var, delta, true) + erlang_log_surv(t, k, kill_shape);
+    log_f_hit = std::log(d) - std::log(t_eam) + Gstar(var, delta, true) + erlang_log_surv(t, k_eff, kill_shape);
   } else {
     // SPV form
     const double mu_new = b - mu * t_eam;
@@ -372,18 +373,18 @@ double dwald(double t, double b, double mu, double sigma = 1.0, double A = 0.0, 
     signed_log total = signed_log_add(term1, term2);
 
     if (total.sign > 0 && total.log_abs != R_NegInf) {
-      log_f_hit = total.log_abs - std::log(t_eam) - std::log(span) + erlang_log_surv(t, k, kill_shape);
+      log_f_hit = total.log_abs - std::log(t_eam) - std::log(span) + erlang_log_surv(t, k_eff, kill_shape);
     }
   }
 
-  if (!guess || k <= 0.0) {
+  if (!guess || k_eff <= 0.0) {
     return log_out ? log_f_hit : std::exp(log_f_hit);
   }
 
   // 2. Guess-based density (f_K * S_R)
   // Erlang uses raw t; EAM survivor uses t_eam (k=0 → no kill in survivor)
-  const double log_sk = erlang_log_pdf(t, k, kill_shape);
-  const double log_sr = std::log1p(-std::max(0.0, std::min(1.0, pwald(t_eam, b, mu, sigma, A, 0.0, false, 1, false))));
+  const double log_sk = erlang_log_pdf(t, k_eff, kill_shape);
+  const double log_sr = std::log1p(-std::max(0.0, std::min(1.0, pwald(t_eam, b, mu, sigma, A, 0.0, false, 1, false, 0.0))));
   const double log_f_guess = log_sk + log_sr;
 
   const double log_pdf = log_sum_exp(log_f_hit, log_f_guess);
@@ -400,7 +401,7 @@ double dwald(double t, double b, double mu, double sigma = 1.0, double A = 0.0, 
 // [[Rcpp::export]]
 double pwald(double t, double b, double mu, double sigma = 1.0, double A = 0.0,
              double k = 0.0, bool log_out = false, int kill_shape = 1, bool guess = false,
-             double t0) {
+             double t0 = 0.0) {
   // t is raw rt; t_eam = t - t0 is the EAM-adjusted time.
   // Erlang processes use raw t; EAM uses t_eam.
   auto finish = [&](double log_p) {
@@ -415,6 +416,7 @@ double pwald(double t, double b, double mu, double sigma = 1.0, double A = 0.0,
   if (sigma <= 0.0 || k < 0.0) {
     return NA_REAL;
   }
+  const double k_eff = (k <= 1e-8 ? 0.0 : k);
 
   if (t <= FPM_EPSILON) {
     return log_out ? R_NegInf : 0.0;
@@ -422,14 +424,14 @@ double pwald(double t, double b, double mu, double sigma = 1.0, double A = 0.0,
 
   const double t_eam = t - t0;
 
-  if (guess && k > 0.0) {
+  if (guess && k_eff > 0.0) {
     // Mixture CDF: F_i(t) = 1 - S_R,i(t_eam) * S_K,i(t)
     // When t_eam <= 0, EAM hasn't started: S_R = 1, CDF = 1 - S_K(t)
-    const double log_sk = erlang_log_surv(t, k, kill_shape);
+    const double log_sk = erlang_log_surv(t, k_eff, kill_shape);
     if (t_eam <= FPM_EPSILON) {
       return finish(std::log1p(-std::exp(log_sk)));
     }
-    const double fw = std::max(0.0, std::min(1.0, pwald(t_eam, b, mu, sigma, A, 0.0, false, 1, false)));
+    const double fw = std::max(0.0, std::min(1.0, pwald(t_eam, b, mu, sigma, A, 0.0, false, 1, false, 0.0)));
     const double log_sr = std::log1p(-fw);
     return finish(std::log1p(-std::exp(log_sr + log_sk)));
   }
@@ -447,7 +449,7 @@ double pwald(double t, double b, double mu, double sigma = 1.0, double A = 0.0,
   const double sig2 = sigma * sigma;
 
   // Fast path: no kill — use canonical Wald SPV for finite t_eam.
-  if (k <= 0.0) {
+  if (k_eff <= 0.0) {
     if (emc2_isfinite(t_eam)) {
       const double inv_s = 1.0 / sigma;
       const double cdf = pwald_k0(t_eam, b * inv_s, mu * inv_s, A * inv_s);
@@ -458,7 +460,7 @@ double pwald(double t, double b, double mu, double sigma = 1.0, double A = 0.0,
     // t_eam = Inf with k=0: fall through — log_p_inf() handles it.
   }
 
-  const double nu = std::sqrt(mu * mu + 2.0 * sig2 * k);
+  const double nu = std::sqrt(mu * mu + 2.0 * sig2 * k_eff);
   const double eta1 = (mu - nu) / sig2;
 
   auto log_p_inf = [&]() -> double {
@@ -468,10 +470,10 @@ double pwald(double t, double b, double mu, double sigma = 1.0, double A = 0.0,
       const double log_p1 = eta1 * d;
       if (kill_shape <= 1 || nu <= FPM_EPSILON) return log_p1;
       // Erlang-2 eventual hit: exp(eta1*d) * (1 + lambda*d/nu)
-      return log_p1 + std::log1p(k * d / nu);
+      return log_p1 + std::log1p(k_eff * d / nu);
     }
 
-    if (kill_shape >= 2 && k > FPM_EPSILON) {
+    if (kill_shape >= 2 && k_eff > FPM_EPSILON) {
       // Analytic: (1/span) * int_{d_lo}^{d_hi} exp(eta1*d)*(1 + k*d/nu) dd
       // where d = b - x, d_lo = b - x_hi, d_hi = b - x_lo.
       if (b <= x_hi) return NA_REAL;
@@ -488,7 +490,7 @@ double pwald(double t, double b, double mu, double sigma = 1.0, double A = 0.0,
         I1 = e_hi * (d_hi / eta1 - 1.0 / (eta1 * eta1)) -
              e_lo * (d_lo / eta1 - 1.0 / (eta1 * eta1));
       }
-      const double p = (I0 + (k / nu) * I1) / span;
+      const double p = (I0 + (k_eff / nu) * I1) / span;
       if (p <= 0.0) return R_NegInf;
       if (p >= 1.0) return 0.0;
       return std::log(p);
@@ -539,14 +541,14 @@ double pwald(double t, double b, double mu, double sigma = 1.0, double A = 0.0,
     const double log_cdf_nu =
       log_sum_exp(log_cdf1, log_exp_term + log_cdf2);
 
-    if (kill_shape >= 2 && k > FPM_EPSILON && nu > FPM_EPSILON) {
+    if (kill_shape >= 2 && k_eff > FPM_EPSILON && nu > FPM_EPSILON) {
       // Erlang-2: add lambda * M_W term.
       // M_W (unnorm) = Phi(z1) - exp_term*Phi(z2), which equals C^{-1} * dL/d(-lambda).
       const double log_b2 = log_exp_term + log_cdf2;
       const double log_mw = (log_cdf1 > log_b2)
                               ? log_diff_exp(log_cdf1, log_b2)
                               : R_NegInf;
-      const double log_w = std::log(k) + std::log(d) - std::log(nu);  // log(lambda*d/nu)
+      const double log_w = std::log(k_eff) + std::log(d) - std::log(nu);  // log(lambda*d/nu)
       const double log_cdf_e2 = (log_mw > R_NegInf)
                                   ? log_sum_exp(log_cdf_nu, log_w + log_mw)
                                   : log_cdf_nu;
@@ -556,7 +558,7 @@ double pwald(double t, double b, double mu, double sigma = 1.0, double A = 0.0,
     return finish(log_prefactor + log_cdf_nu);
   }
 
-  if (kill_shape >= 2 && k > FPM_EPSILON) {
+  if (kill_shape >= 2 && k_eff > FPM_EPSILON) {
     // SPV + Erlang-2: analytic via slog_int_{eta,d_eta}_pnorm.
     // total = (T1 + T2 + (k/nu)*(D1-D2)) / span
     if (b <= x_hi) return NA_REAL;
@@ -572,7 +574,7 @@ double pwald(double t, double b, double mu, double sigma = 1.0, double A = 0.0,
     signed_log Ddiff  = signed_log_sub(D1, D2);
     if (Ddiff.sign != 0 && Ddiff.log_abs != R_NegInf) {
       signed_log extra = make_signed_log(
-        std::log(k) - std::log(nu) + Ddiff.log_abs, Ddiff.sign);
+        std::log(k_eff) - std::log(nu) + Ddiff.log_abs, Ddiff.sign);
       total = signed_log_add(total, extra);
     }
     if (total.sign <= 0 || total.log_abs == R_NegInf)
@@ -616,7 +618,7 @@ double pwald(double t, double b, double mu, double sigma = 1.0, double A = 0.0,
 // sigma, and start range [log(1), log(1 + A)] weighted by exp(x0).
 // --------------------------------------------------------------------------
 double pgbm(double t, double b, double mu, double sigma, double A,
-            double k, bool log_out, int kill_shape, bool guess, double t0 = 0.0);
+            double k, bool log_out, int kill_shape, bool guess, double t0);
 
 // [[Rcpp::export]]
 double dgbm(double t, double b, double mu, double sigma = 1.0, double A = 0.0,
@@ -629,11 +631,12 @@ double dgbm(double t, double b, double mu, double sigma = 1.0, double A = 0.0,
   if (A > b) return log_out ? R_NegInf : 0.0;
 
   const double t_eam = t - t0;
+  const double k_eff = (k <= 1e-8 ? 0.0 : k);
 
   // EAM hasn't started; only erlang guess contributes (S_R = 1).
   if (t_eam <= FPM_EPSILON) {
-    if (!guess || k <= 0.0) return log_out ? R_NegInf : 0.0;
-    const double log_fG = erlang_log_pdf(t, k, kill_shape);
+    if (!guess || k_eff <= 0.0) return log_out ? R_NegInf : 0.0;
+    const double log_fG = erlang_log_pdf(t, k_eff, kill_shape);
     return log_out ? log_fG : std::exp(log_fG);
   }
 
@@ -654,7 +657,7 @@ double dgbm(double t, double b, double mu, double sigma = 1.0, double A = 0.0,
     } else {
       const double delta = d - log_mu * t_eam;
       log_f_hit = std::log(d) - std::log(t_eam) + Gstar(var, delta, true)
-                  + erlang_log_surv(t, k, kill_shape);
+                  + erlang_log_surv(t, k_eff, kill_shape);
     }
   } else {
     // SPV: normalization for start density on [1, 1 + A] mapped to log-space.
@@ -668,18 +671,18 @@ double dgbm(double t, double b, double mu, double sigma = 1.0, double A = 0.0,
     const double integral_term2 = var * (pdf_hi - pdf_lo);
     const double integral_result = integral_term1 + integral_term2;
     const double pdf_val = (std::exp(exp_factor_log) * integral_result) / (norm_const * t_eam);
-    if (pdf_val > 0.0 && std::isfinite(pdf_val)) {
-       log_f_hit = std::log(pdf_val) + erlang_log_surv(t, k, kill_shape);
+    if (pdf_val > 0.0 && emc2_isfinite(pdf_val)) {
+       log_f_hit = std::log(pdf_val) + erlang_log_surv(t, k_eff, kill_shape);
     }
   }
 
-  if (!guess || k <= 0.0) {
+  if (!guess || k_eff <= 0.0) {
     return log_out ? log_f_hit : std::exp(log_f_hit);
   }
 
   // 2. Guess density (f_K * S_R); erlang uses raw t, EAM survivor uses t_eam
-  const double log_sk = erlang_log_pdf(t, k, kill_shape);
-  const double log_sr = std::log1p(-std::max(0.0, std::min(1.0, pgbm(t_eam, b, mu, sigma, A, 0.0, false, 1, false))));
+  const double log_sk = erlang_log_pdf(t, k_eff, kill_shape);
+  const double log_sr = std::log1p(-std::max(0.0, std::min(1.0, pgbm(t_eam, b, mu, sigma, A, 0.0, false, 1, false, 0.0))));
   const double log_f_guess = log_sk + log_sr;
 
   const double log_pdf = log_sum_exp(log_f_hit, log_f_guess);
@@ -689,7 +692,7 @@ double dgbm(double t, double b, double mu, double sigma = 1.0, double A = 0.0,
 // [[Rcpp::export]]
 double pgbm(double t, double b, double mu, double sigma = 1.0, double A = 0.0,
             double k = 0.0, bool log_out = false, int kill_shape = 1, bool guess = false,
-            double t0) {
+            double t0 = 0.0) {
   // t is raw rt; t_eam = t - t0 is EAM-adjusted time. Erlang uses raw t.
   auto finish = [&](double log_p) {
     if (ISNAN(log_p)) return NA_REAL;
@@ -704,14 +707,15 @@ double pgbm(double t, double b, double mu, double sigma = 1.0, double A = 0.0,
   if (A > b) return log_out ? R_NegInf : 0.0;
 
   const double t_eam = t - t0;
+  const double k_eff = (k <= 1e-8 ? 0.0 : k);
 
-  if (guess && k > 0.0) {
+  if (guess && k_eff > 0.0) {
     // Mixture CDF: F_i(t) = 1 - S_R,i(t_eam) * S_K,i(t)
-    const double log_sk = erlang_log_surv(t, k, kill_shape);
+    const double log_sk = erlang_log_surv(t, k_eff, kill_shape);
     if (t_eam <= FPM_EPSILON) {
       return finish(std::log1p(-std::exp(log_sk)));
     }
-    const double fw = std::max(0.0, std::min(1.0, pgbm(t_eam, b, mu, sigma, A, 0.0, false, 1, false)));
+    const double fw = std::max(0.0, std::min(1.0, pgbm(t_eam, b, mu, sigma, A, 0.0, false, 1, false, 0.0)));
     const double log_sr = std::log1p(-fw);
     return finish(std::log1p(-std::exp(log_sr + log_sk)));
   }
@@ -729,7 +733,7 @@ double pgbm(double t, double b, double mu, double sigma = 1.0, double A = 0.0,
   const double norm_const = A;
 
   // Tilted log-space drift for kill (= |alpha| when k = 0).
-  const double ak     = std::sqrt(alpha * alpha + 2.0 * sig2 * k);
+  const double ak     = std::sqrt(alpha * alpha + 2.0 * sig2 * k_eff);
   const double c_eta  = (alpha - ak) / sig2;   // eta1 in log-space
   const double q      = 1.0 - c_eta;           // Jacobian-corrected coefficient (1 - eta1)
   const double k_log  = 2.0 * ak / sig2;       // 2*ak/sigma^2
@@ -740,7 +744,7 @@ double pgbm(double t, double b, double mu, double sigma = 1.0, double A = 0.0,
       // Point-start: P(hit before kill) = b^c_eta, Erlang-2 adds log1p correction.
       double log_hit = c_eta * log_b;
       if (kill_shape >= 2 && ak > FPM_EPSILON)
-        log_hit += std::log1p(k * log_b / ak);
+        log_hit += std::log1p(k_eff * log_b / ak);
       return log_hit;
     }
 
@@ -750,16 +754,16 @@ double pgbm(double t, double b, double mu, double sigma = 1.0, double A = 0.0,
       // I0 = int exp(qy)dy, I1 = int (log_b-y)exp(qy)dy, y in [0, x_hi].
       const double log_prefactor = c_eta * log_b - std::log(norm_const);
       double I0, I1;
-      if (std::abs(q) <= FPM_EPSILON) {
+      if (std::abs(q) <= 1e-8) {
         I0 = x_hi;
         I1 = log_b * x_hi - 0.5 * x_hi * x_hi;
       } else {
-        const double e_hi = std::exp(q * x_hi);
-        I0 = (e_hi - 1.0) / q;
-        I1 = (e_hi * (log_b / q - x_hi / q + 1.0 / (q * q)) -
-              (log_b / q + 1.0 / (q * q)));
+        const double u = q * x_hi;
+        I0 = std::expm1(u) / q;
+        const double J = (std::exp(u) * (u - 1.0) + 1.0) / (q * q);  // int_0^x y exp(qy) dy
+        I1 = log_b * I0 - J;
       }
-      const double p = std::exp(log_prefactor) * (I0 + (k / ak) * I1);
+      const double p = std::exp(log_prefactor) * (I0 + (k_eff / ak) * I1);
       if (p <= 0.0) return R_NegInf;
       if (p >= 1.0) return 0.0;
       return std::log(p);
@@ -768,11 +772,11 @@ double pgbm(double t, double b, double mu, double sigma = 1.0, double A = 0.0,
     // Erlang-1 SPV analytic:
     // exp(c_eta * log_b) / A * integral_0^{log1p(A)} exp(q * y) dy
     const double log_prefactor = c_eta * log_b - std::log(norm_const);
-    if (std::abs(q) < FPM_EPSILON)
+    if (std::abs(q) < 1e-8)
       return log_prefactor + std::log(x_hi);   // q = 0: integral = x_hi
     if (q > 0.0)
-      return log_prefactor + log_diff_exp(q * x_hi, 0.0) - std::log(q);
-    return log_prefactor + log_diff_exp(0.0, q * x_hi) - std::log(-q);
+      return log_prefactor + std::log(std::expm1(q * x_hi)) - std::log(q);
+    return log_prefactor + std::log(-std::expm1(q * x_hi)) - std::log(-q);
   };
 
   if (!emc2_isfinite(t_eam)) {
@@ -799,10 +803,10 @@ double pgbm(double t, double b, double mu, double sigma = 1.0, double A = 0.0,
     const double log_exp_t   = k_log * d;
     const double log_cdf_ak  = log_sum_exp(log_cdf1, log_exp_t + log_cdf2);
 
-    if (kill_shape >= 2 && k > FPM_EPSILON && ak > FPM_EPSILON) {
+    if (kill_shape >= 2 && k_eff > FPM_EPSILON && ak > FPM_EPSILON) {
       const double log_b2  = log_exp_t + log_cdf2;
       const double log_mw  = (log_cdf1 > log_b2) ? log_diff_exp(log_cdf1, log_b2) : R_NegInf;
-      const double log_w   = std::log(k) + std::log(d) - std::log(ak);
+      const double log_w   = std::log(k_eff) + std::log(d) - std::log(ak);
       const double log_e2  = (log_mw > R_NegInf) ? log_sum_exp(log_cdf_ak, log_w + log_mw)
                                                   : log_cdf_ak;
       return finish(log_prefactor + log_e2);
@@ -846,7 +850,7 @@ double pgbm(double t, double b, double mu, double sigma = 1.0, double A = 0.0,
     signed_log Ddiff = signed_log_sub(D1, D2);
     if (Ddiff.sign != 0 && Ddiff.log_abs != R_NegInf) {
       signed_log extra = make_signed_log(
-        std::log(k) - std::log(ak) + Ddiff.log_abs, Ddiff.sign);
+        std::log(k_eff) - std::log(ak) + Ddiff.log_abs, Ddiff.sign);
       total = signed_log_add(total, extra);
     }
     if (total.sign <= 0 || total.log_abs == R_NegInf)
@@ -880,9 +884,9 @@ inline double dswtn_core(double t_adj, double threshold, double mu_drift,
                          double log_prob_gt_c, bool log_out, int kill_shape = 1, bool guess = false,
                          double t0 = 0.0);
 
-double pswtn(double t_adj, double threshold, double mu_drift,
+double pswtn(double t, double threshold, double mu_drift,
              double sv, double s, double lambda, double c,
-             bool log_out, int kill_shape, bool guess, double t0 = 0.0);
+             bool log_out, int kill_shape, bool guess, double t0);
 
 inline Rcpp::List get_gl_nodes_weights(int n_gauss_nodes);
 
@@ -932,10 +936,10 @@ inline Rcpp::List get_gl_nodes_weights(int n_gauss_nodes) {
 
 double drdmswtn(double t, double b, double mu_drift, double A,
                 double sv, double s, double lambda, double c,
-                int n_gauss_nodes, bool log_out, int kill_shape, bool guess, double t0 = 0.0);
+                int n_gauss_nodes, bool log_out, int kill_shape, bool guess, double t0);
 double prdmswtn(double t, double b, double mu_drift, double A,
                 double sv, double s, double lambda, double c,
-                int n_gauss_nodes, bool log_out, int kill_shape, bool guess, double t0 = 0.0);
+                int n_gauss_nodes, bool log_out, int kill_shape, bool guess, double t0);
 
 template <typename DensityFn>
 inline double integrate_density_gl20_finite(double t_upper, DensityFn&& density_fn) {
@@ -975,11 +979,11 @@ inline double local_combo_response_pdf(double t, double f_decision, double F_dec
   const bool use_guess = lambda_g > 0.0;
   const bool use_kill  = lambda_k > 0.0;
   if (!use_guess && !use_kill) {
-    if (!(f_decision > 0.0) || !std::isfinite(f_decision)) return log_out ? R_NegInf : 0.0;
+    if (!(f_decision > 0.0) || !emc2_isfinite(f_decision)) return log_out ? R_NegInf : 0.0;
     return log_out ? std::log(f_decision) : f_decision;
   }
 
-  const double log_fD = (f_decision > 0.0 && std::isfinite(f_decision)) ? std::log(f_decision) : R_NegInf;
+  const double log_fD = (f_decision > 0.0 && emc2_isfinite(f_decision)) ? std::log(f_decision) : R_NegInf;
   const double log_sG = use_guess ? erlang_log_surv(t, lambda_g, kill_shape) : 0.0;
   const double log_sK = use_kill  ? erlang_log_surv(t, lambda_k, kill_shape) : 0.0;
   const double log_hit = log_fD + log_sG + log_sK;
@@ -1001,9 +1005,9 @@ inline double drdmswtn_local_combo(double t, double b, double mu_drift, double A
   // EAM density/CDF computed at EAM time (t - t0); erlang uses raw t.
   const double t_eam = t - t0;
   const double f_decision = drdmswtn(t_eam, b, mu_drift, A, sv, s, 0.0, c,
-                                     n_gauss_nodes, false, 1, false);
+                                     n_gauss_nodes, false, 1, false, 0.0);
   const double F_decision = prdmswtn(t_eam, b, mu_drift, A, sv, s, 0.0, c,
-                                     n_gauss_nodes, false, 1, false);
+                                     n_gauss_nodes, false, 1, false, 0.0);
   return local_combo_response_pdf(t, f_decision, F_decision,
                                   lambda_g, lambda_k, kill_shape, log_out);
 }
@@ -1033,7 +1037,7 @@ inline double dgbm_local_combo(double t, double b, double mu, double sigma, doub
   // EAM computed at t - t0; erlang uses raw t.
   const double t_eam = t - t0;
   const double f_decision = dgbm(t_eam, b, mu, sigma, A, 0.0, false, 1, false);
-  const double F_decision = pgbm(t_eam, b, mu, sigma, A, 0.0, false, 1, false);
+  const double F_decision = pgbm(t_eam, b, mu, sigma, A, 0.0, false, 1, false, 0.0);
   return local_combo_response_pdf(t, f_decision, F_decision,
                                   lambda_g, lambda_k, kill_shape, log_out);
 }
@@ -1096,7 +1100,7 @@ inline double dswtn_core(double t_adj, double threshold, double mu_drift,
 
   // Guess density: f_K(t_raw) * S_R(t_adj); EAM survivor uses EAM time
   const double log_sk = erlang_log_pdf(t_raw, lambda, kill_shape);
-  const double log_sr = std::log1p(-std::max(0.0, std::min(1.0, pswtn(t_adj, threshold, mu_drift, sv, s, 0.0, c, false, 1, false))));
+  const double log_sr = std::log1p(-std::max(0.0, std::min(1.0, pswtn(t_raw, threshold, mu_drift, sv, s, 0.0, c, false, 1, false, t0))));
   const double log_f_guess = log_sk + log_sr;
 
   const double log_pdf = log_sum_exp(log_f_hit, log_f_guess);
@@ -1233,7 +1237,7 @@ inline double prdmswtn_killed_inf_quad(double b, double mu_drift, double A,
   if (sv <= 1e-10) {
     if (kill_shape >= 2) {
       // Erlang-2: pwald(Inf,...) handles SPV via GL20
-      return finish_log(pwald(R_PosInf, b, mu_drift, s, A, lambda, true, kill_shape));
+      return finish_log(pwald(R_PosInf, b, mu_drift, s, A, lambda, true, kill_shape, false, 0.0));
     }
     const double nu = std::sqrt(mu_drift * mu_drift + 2.0 * s2 * lambda);
     const double eta = (mu_drift - nu) / s2;
@@ -1258,7 +1262,7 @@ inline double prdmswtn_killed_inf_quad(double b, double mu_drift, double A,
     double log_hit_j;
     if (kill_shape >= 2) {
       // Erlang-2: pwald(Inf, ...) with SPV via GL20
-      log_hit_j = pwald(R_PosInf, b, drift_j, s, A, lambda, true, kill_shape);
+      log_hit_j = pwald(R_PosInf, b, drift_j, s, A, lambda, true, kill_shape, false, 0.0);
     } else {
       const double nu_j  = std::sqrt(drift_j * drift_j + 2.0 * s2 * lambda);
       const double eta_j = (drift_j - nu_j) / s2;
@@ -1274,11 +1278,12 @@ inline double prdmswtn_killed_inf_quad(double b, double mu_drift, double A,
 }
 
 // [[Rcpp::export]]
-double pswtn(double t_adj, double threshold, double mu_drift,
+double pswtn(double t, double threshold, double mu_drift,
              double sv, double s = 1.0, double lambda = 0.0, double c = 0.0,
-             bool log_out = false, int kill_shape = 1, bool guess = false, double t0) {
-  // t_adj is EAM time; t_adj + t0 is raw rt. Erlang uses raw rt.
-  if (t_adj <= 1e-10) {
+             bool log_out = false, int kill_shape = 1, bool guess = false, double t0 = 0.0) {
+  // t is raw rt; dt = t - t0 is EAM decision time.
+  const double dt = t - t0;
+  if (dt <= 1e-10) {
     // EAM not started; only erlang guess can contribute (S_R = 1).
     if (!guess || lambda <= 0.0) return log_out ? R_NegInf : 0.0;
     auto finish = [&](double log_p) {
@@ -1286,13 +1291,12 @@ double pswtn(double t_adj, double threshold, double mu_drift,
       if (log_p > 0.0) log_p = 0.0;
       return log_out ? log_p : std::exp(log_p);
     };
-    const double t_raw = t_adj + t0;
-    return finish(std::log1p(-std::exp(erlang_log_surv(t_raw, lambda, kill_shape))));
+    return finish(std::log1p(-std::exp(erlang_log_surv(t, lambda, kill_shape))));
   }
   if (threshold <= 1e-10) return log_out ? 0.0 : 1.0;
   if (sv < 0.0) return R_NaN;
 
-  const double t_raw = t_adj + t0;  // raw rt for erlang
+  const double t_raw = t;  // raw rt for erlang
 
   if (guess && lambda > 0.0) {
     auto finish = [&](double log_p) {
@@ -1300,7 +1304,7 @@ double pswtn(double t_adj, double threshold, double mu_drift,
       if (log_p > 0.0) log_p = 0.0;
       return log_out ? log_p : std::exp(log_p);
     };
-    const double fw = std::max(0.0, std::min(1.0, pswtn(t_adj, threshold, mu_drift, sv, s, 0.0, c, false, 1, false)));
+    const double fw = std::max(0.0, std::min(1.0, pswtn(t, threshold, mu_drift, sv, s, 0.0, c, false, 1, false, t0)));
     const double log_sr = std::log1p(-fw);
     const double log_sk = erlang_log_surv(t_raw, lambda, kill_shape);
     return finish(std::log1p(-std::exp(log_sr + log_sk)));
@@ -1313,10 +1317,10 @@ double pswtn(double t_adj, double threshold, double mu_drift,
   }
 
   if (lambda > 1e-10) {
-    if (!emc2_isfinite(t_adj)) {
+    if (!emc2_isfinite(dt)) {
       return pswtn_killed_inf_quad(threshold, mu_drift, sv, s, lambda, c, 20, log_out, kill_shape);
     }
-    const double cdf = pswtn_killed_quad(t_adj, threshold, mu_drift, sv, s, lambda, c, 20, kill_shape, t0);
+    const double cdf = pswtn_killed_quad(dt, threshold, mu_drift, sv, s, lambda, c, 20, kill_shape, t0);
     if (!(cdf > 0.0)) return log_out ? R_NegInf : 0.0;
     if (cdf >= 1.0) return log_out ? 0.0 : 1.0;
     return log_out ? std::log(cdf) : cdf;
@@ -1324,7 +1328,7 @@ double pswtn(double t_adj, double threshold, double mu_drift,
 
   const double v   = sv * sv;
   const double s2  = s * s;
-  const double tv  = t_adj * v;
+  const double tv  = dt * v;
   const double th2 = threshold * threshold;
 
   // P(xi > c) for xi ~ N(mu_drift, sv^2)
@@ -1332,11 +1336,11 @@ double pswtn(double t_adj, double threshold, double mu_drift,
   if (emc2_isinf(log_prob_gt_c) && log_prob_gt_c < 0.0) return log_out ? R_NegInf : 0.0;
 
   // Shared denominator term
-  const double s_denom_new = std::sqrt(t_adj * (s2 + tv));
-  const double rho_new     = (std::sqrt(t_adj) * sv) / std::sqrt(s2 + tv);
+  const double s_denom_new = std::sqrt(dt * (s2 + tv));
+  const double rho_new     = (std::sqrt(dt) * sv) / std::sqrt(s2 + tv);
 
   // Term 1: bivariate normal
-  const double h1 = (mu_drift * t_adj - threshold) / s_denom_new;
+  const double h1 = (mu_drift * dt - threshold) / s_denom_new;
   const double k1 = (mu_drift - c) / sv;
   double term1;
   if (std::fabs(rho_new) > 0.9999 || std::fabs(h1) > 8.0 || std::fabs(k1) > 8.0)
@@ -1349,7 +1353,7 @@ double pswtn(double t_adj, double threshold, double mu_drift,
   const double log_exp_term = (2.0 * threshold * mu_drift / s2) +
                                (2.0 * th2 * v / (s2 * s2));
   const double mu_p  = mu_drift + 2.0 * threshold * v / s2;
-  const double h2    = (-mu_p * t_adj - threshold) / s_denom_new;
+  const double h2    = (-mu_p * dt - threshold) / s_denom_new;
   const double k2    = (mu_p - c) / sv;
   double term2;
   if (std::fabs(rho_new) > 0.9999 || std::fabs(h2) > 8.0 || std::fabs(k2) > 8.0)
@@ -1380,7 +1384,7 @@ double pswtn(double t_adj, double threshold, double mu_drift,
 double drdmswtn(double t, double b, double mu_drift, double A,
                 double sv, double s = 1.0, double lambda = 0.0, double c = 0.0,
                 int n_gauss_nodes = 20, bool log_out = false, int kill_shape = 1, bool guess = false,
-                double t0) {
+                double t0 = 0.0) {
   // t is raw rt; t_eam = t - t0 is EAM-adjusted time. Erlang uses raw t.
   if (t <= 0.0) return log_out ? R_NegInf : 0.0;
   if (b <= 1e-7) return log_out ? R_NegInf : 0.0;
@@ -1425,7 +1429,7 @@ double drdmswtn(double t, double b, double mu_drift, double A,
 double prdmswtn(double t, double b, double mu_drift, double A,
                 double sv, double s = 1.0, double lambda = 0.0, double c = 0.0,
                 int n_gauss_nodes = 20, bool log_out = false, int kill_shape = 1, bool guess = false,
-                double t0) {
+                double t0 = 0.0) {
   // t is raw rt; t_eam = t - t0 is EAM-adjusted time. Erlang uses raw t.
   if (t <= 0.0) return log_out ? R_NegInf : 0.0;
   if (b <= 1e-7) return log_out ? 0.0 : 1.0;
@@ -1450,7 +1454,7 @@ double prdmswtn(double t, double b, double mu_drift, double A,
       // EAM hasn't started: S_R = 1, CDF = 1 - S_K(t)
       return finish(std::log1p(-std::exp(log_sk)));
     }
-    const double fw = std::max(0.0, std::min(1.0, prdmswtn(t_eam, b, mu_drift, A, sv, s, 0.0, c, n_gauss_nodes, false, 1, false)));
+    const double fw = std::max(0.0, std::min(1.0, prdmswtn(t_eam, b, mu_drift, A, sv, s, 0.0, c, n_gauss_nodes, false, 1, false, 0.0)));
     const double log_sr = std::log1p(-fw);
     return finish(std::log1p(-std::exp(log_sr + log_sk)));
   }
@@ -1463,8 +1467,8 @@ double prdmswtn(double t, double b, double mu_drift, double A,
     // Pass raw t and t0 to pwald so erlang inside uses physical time.
     return pwald(t, b, mu_drift, s, A, lambda, log_out, kill_shape, guess, t0);
   } else if (no_A && !no_sv) {
-    // pswtn receives t_adj = t_eam plus t0 for erlang correction inside.
-    return pswtn(t_eam, b, mu_drift, sv, s, lambda, c, log_out, kill_shape, guess, t0);
+    // pswtn receives raw t and uses t0 internally to form dt.
+    return pswtn(t, b, mu_drift, sv, s, lambda, c, log_out, kill_shape, guess, t0);
   } else {
     const int n_nodes = std::max(1, n_gauss_nodes);
     Rcpp::List gl = get_gl_nodes_weights(n_nodes);
@@ -1502,22 +1506,24 @@ NumericVector dSWTNspv(NumericVector t, NumericVector v, NumericVector b,
     return vec.size() == 1 ? vec[0] : vec[i];
   };
   for (int i = 0; i < n; ++i) {
-    const double t_adj = t[i] - pick(t0, i);
-    if (t_adj <= 0.0) { pdf[i] = log_out ? R_NegInf : 0.0; continue; }
+    const double t0_i = pick(t0, i);
+    const double dt = t[i] - t0_i;
     const double lg = pick(lambda_g, i);
     const double lk = pick(lambda_k, i);
+    const bool erl = (lg > 0.0 || lk > 0.0);
+    if (t[i] <= 0.0 || (dt <= 0.0 && !erl)) { pdf[i] = log_out ? R_NegInf : 0.0; continue; }
     if (lg > 0.0 && lk > 0.0) {
-      pdf[i] = drdmswtn_local_combo(t_adj, pick(b, i), pick(v, i), pick(A, i),
+      pdf[i] = drdmswtn_local_combo(t[i], pick(b, i), pick(v, i), pick(A, i),
                                     pick(sv, i), pick(s, i), pick(c, i),
-                                    lg, lk, n_gauss_nodes, log_out, kill_shape);
+                                    lg, lk, n_gauss_nodes, log_out, kill_shape, t0_i);
     } else if (lg > 0.0) {
-      pdf[i] = drdmswtn(t_adj, pick(b, i), pick(v, i), pick(A, i),
+      pdf[i] = drdmswtn(t[i], pick(b, i), pick(v, i), pick(A, i),
                         pick(sv, i), pick(s, i), lg, pick(c, i),
-                        n_gauss_nodes, log_out, kill_shape, true);
+                        n_gauss_nodes, log_out, kill_shape, true, t0_i);
     } else {
-      pdf[i] = drdmswtn(t_adj, pick(b, i), pick(v, i), pick(A, i),
+      pdf[i] = drdmswtn(t[i], pick(b, i), pick(v, i), pick(A, i),
                         pick(sv, i), pick(s, i), lk, pick(c, i),
-                        n_gauss_nodes, log_out, kill_shape, false);
+                        n_gauss_nodes, log_out, kill_shape, false, t0_i);
     }
   }
   return pdf;
@@ -1535,22 +1541,24 @@ NumericVector pSWTNspv(NumericVector t, NumericVector v, NumericVector b,
     return vec.size() == 1 ? vec[0] : vec[i];
   };
   for (int i = 0; i < n; ++i) {
-    const double t_adj = t[i] - pick(t0, i);
-    if (t_adj <= 0.0) { cdf[i] = log_out ? R_NegInf : 0.0; continue; }
+    const double t0_i = pick(t0, i);
+    const double dt = t[i] - t0_i;
     const double lg = pick(lambda_g, i);
     const double lk = pick(lambda_k, i);
+    const bool erl = (lg > 0.0 || lk > 0.0);
+    if (t[i] <= 0.0 || (dt <= 0.0 && !erl)) { cdf[i] = log_out ? R_NegInf : 0.0; continue; }
     if (lg > 0.0 && lk > 0.0) {
-      cdf[i] = prdmswtn_local_combo(t_adj, pick(b, i), pick(v, i), pick(A, i),
+      cdf[i] = prdmswtn_local_combo(t[i], pick(b, i), pick(v, i), pick(A, i),
                                     pick(sv, i), pick(s, i), pick(c, i),
-                                    lg, lk, n_gauss_nodes, log_out, kill_shape);
+                                    lg, lk, n_gauss_nodes, log_out, kill_shape, t0_i);
     } else if (lg > 0.0) {
-      cdf[i] = prdmswtn(t_adj, pick(b, i), pick(v, i), pick(A, i),
+      cdf[i] = prdmswtn(t[i], pick(b, i), pick(v, i), pick(A, i),
                         pick(sv, i), pick(s, i), lg, pick(c, i),
-                        n_gauss_nodes, log_out, kill_shape, true);
+                        n_gauss_nodes, log_out, kill_shape, true, t0_i);
     } else {
-      cdf[i] = prdmswtn(t_adj, pick(b, i), pick(v, i), pick(A, i),
+      cdf[i] = prdmswtn(t[i], pick(b, i), pick(v, i), pick(A, i),
                         pick(sv, i), pick(s, i), lk, pick(c, i),
-                        n_gauss_nodes, log_out, kill_shape, false);
+                        n_gauss_nodes, log_out, kill_shape, false, t0_i);
     }
   }
   return cdf;
@@ -1570,19 +1578,21 @@ NumericVector dGBMspv(NumericVector t, NumericVector v, NumericVector b,
     return vec.size() == 1 ? vec[0] : vec[i];
   };
   for (int i = 0; i < n; ++i) {
-    const double t_adj = t[i] - pick(t0, i);
-    if (t_adj <= 0.0) { pdf[i] = log_out ? R_NegInf : 0.0; continue; }
+    const double t0_i = pick(t0, i);
+    const double dt = t[i] - t0_i;
     const double lg = pick(lambda_g, i);
     const double lk = pick(lambda_k, i);
+    const bool erl = (lg > 0.0 || lk > 0.0);
+    if (t[i] <= 0.0 || (dt <= 0.0 && !erl)) { pdf[i] = log_out ? R_NegInf : 0.0; continue; }
     if (lg > 0.0 && lk > 0.0) {
-      pdf[i] = dgbm_local_combo(t_adj, pick(b, i), pick(v, i), pick(s, i), pick(A, i),
-                                lg, lk, log_out, kill_shape);
+      pdf[i] = dgbm_local_combo(t[i], pick(b, i), pick(v, i), pick(s, i), pick(A, i),
+                                lg, lk, log_out, kill_shape, t0_i);
     } else if (lg > 0.0) {
-      pdf[i] = dgbm(t_adj, pick(b, i), pick(v, i), pick(s, i), pick(A, i),
-                    lg, log_out, kill_shape, true);
+      pdf[i] = dgbm(t[i], pick(b, i), pick(v, i), pick(s, i), pick(A, i),
+                    lg, log_out, kill_shape, true, t0_i);
     } else {
-      pdf[i] = dgbm(t_adj, pick(b, i), pick(v, i), pick(s, i), pick(A, i),
-                    lk, log_out, kill_shape, false);
+      pdf[i] = dgbm(t[i], pick(b, i), pick(v, i), pick(s, i), pick(A, i),
+                    lk, log_out, kill_shape, false, t0_i);
     }
   }
   return pdf;
@@ -1599,19 +1609,21 @@ NumericVector pGBMspv(NumericVector t, NumericVector v, NumericVector b,
     return vec.size() == 1 ? vec[0] : vec[i];
   };
   for (int i = 0; i < n; ++i) {
-    const double t_adj = t[i] - pick(t0, i);
-    if (t_adj <= 0.0) { cdf[i] = log_out ? R_NegInf : 0.0; continue; }
+    const double t0_i = pick(t0, i);
+    const double dt = t[i] - t0_i;
     const double lg = pick(lambda_g, i);
     const double lk = pick(lambda_k, i);
+    const bool erl = (lg > 0.0 || lk > 0.0);
+    if (t[i] <= 0.0 || (dt <= 0.0 && !erl)) { cdf[i] = log_out ? R_NegInf : 0.0; continue; }
     if (lg > 0.0 && lk > 0.0) {
-      cdf[i] = pgbm_local_combo(t_adj, pick(b, i), pick(v, i), pick(s, i), pick(A, i),
-                                lg, lk, log_out, kill_shape);
+      cdf[i] = pgbm_local_combo(t[i], pick(b, i), pick(v, i), pick(s, i), pick(A, i),
+                                lg, lk, log_out, kill_shape, t0_i);
     } else if (lg > 0.0) {
-      cdf[i] = pgbm(t_adj, pick(b, i), pick(v, i), pick(s, i), pick(A, i),
-                    lg, log_out, kill_shape, true);
+      cdf[i] = pgbm(t[i], pick(b, i), pick(v, i), pick(s, i), pick(A, i),
+                    lg, log_out, kill_shape, true, t0_i);
     } else {
-      cdf[i] = pgbm(t_adj, pick(b, i), pick(v, i), pick(s, i), pick(A, i),
-                    lk, log_out, kill_shape, false);
+      cdf[i] = pgbm(t[i], pick(b, i), pick(v, i), pick(s, i), pick(A, i),
+                    lk, log_out, kill_shape, false, t0_i);
     }
   }
   return cdf;

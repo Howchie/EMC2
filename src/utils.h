@@ -231,7 +231,7 @@ inline void drdm_raw(const double* rt, const double* pars_cm, int n_rows,
     const double inv_s = 1.0 / s_[i];
     const double pdf = digt_impl(tt, (B_[i] + 0.5 * A_[i]) * inv_s,
                                      v_[i] * inv_s, 0.5 * A_[i] * inv_s);
-    out[i] = (pdf > 0.0 && std::isfinite(pdf)) ? std::log(pdf) : min_ll;
+    out[i] = (pdf > 0.0 && emc2_isfinite(pdf)) ? std::log(pdf) : min_ll;
   }
 }
 
@@ -452,7 +452,7 @@ inline void dlnr_raw(const double* rt, const double* pars_cm, int n_rows,
     const double tt = rt[i] - t0_[i];
     if (tt <= 0.0) { out[i] = min_ll; continue; }
     const double pdf = dlnorm_std(tt, m_[i], s_[i], false);
-    out[i] = (pdf > 0.0 && std::isfinite(pdf)) ? std::log(pdf) : min_ll;
+    out[i] = (pdf > 0.0 && emc2_isfinite(pdf)) ? std::log(pdf) : min_ll;
   }
 }
 
@@ -515,7 +515,7 @@ inline void dlba_raw(const double* rt, const double* pars_cm, int n_rows,
     const double tt = rt[i] - t0_[i];
     if (tt <= 0.0) { out[i] = min_ll; continue; }
     const double pdf = dlba_norm(tt, A_[i], B_[i] + A_[i], v_[i], sv_[i], pd);
-    out[i] = (pdf > 0.0 && std::isfinite(pdf)) ? std::log(pdf) : min_ll;
+    out[i] = (pdf > 0.0 && emc2_isfinite(pdf)) ? std::log(pdf) : min_ll;
   }
 }
 
@@ -587,7 +587,7 @@ inline double dbawl_scalar(double t, const double* par, void* ctx_) {
   if (t <= 0.0) return 0.0;
   // Pass raw t and t0_val; core function splits EAM (t - t0) from erlang (t).
   return dkilledleakyba_norm(t, par[3], par[2] + par[3], par[0], par[1], par[5], lg, lk,
-                             ctx->use_posdrift, false, ctx->kill_shape, local_guess, t0_val);
+                             t0_val, ctx->use_posdrift, false, ctx->kill_shape, local_guess);
 }
 
 inline double pbawl_scalar(double t, const double* par, void* ctx_) {
@@ -602,7 +602,7 @@ inline double pbawl_scalar(double t, const double* par, void* ctx_) {
   if (tt <= 0.0 && !erl) return 0.0;
   if (t <= 0.0) return 0.0;
   return pkilledleakyba_norm(t, par[3], par[2] + par[3], par[0], par[1], par[5], lg, lk,
-                             ctx->use_posdrift, false, ctx->kill_shape, local_guess, t0_val);
+                             t0_val, ctx->use_posdrift, false, ctx->kill_shape, local_guess);
 }
 
 inline void dbawl_raw(const double* rt, const double* pars_cm, int n_rows,
@@ -630,8 +630,8 @@ inline void dbawl_raw(const double* rt, const double* pars_cm, int n_rows,
     if (tt <= 0.0 && !erl) { out[i] = min_ll; continue; }
     if (rt[i] <= 0.0) { out[i] = min_ll; continue; }
     // Pass raw rt and t0; core function uses t0 to split EAM vs erlang time.
-    const double pdf = dkilledleakyba_norm(rt[i], A_[i], B_[i] + A_[i], v_[i], sv_[i], k_[i], lg, lk, pd, false, ctx->kill_shape, local_guess, t0_i);
-    out[i] = (pdf > 0.0 && std::isfinite(pdf)) ? std::log(pdf) : min_ll;
+    const double pdf = dkilledleakyba_norm(rt[i], A_[i], B_[i] + A_[i], v_[i], sv_[i], k_[i], lg, lk, t0_i, pd, false, ctx->kill_shape, local_guess);
+    out[i] = (pdf > 0.0 && emc2_isfinite(pdf)) ? std::log(pdf) : min_ll;
   }
 }
 
@@ -659,7 +659,7 @@ inline void pbawl_raw(const double* rt, const double* pars_cm, int n_rows,
     const bool erl = (lg > 1e-12 || lk > 1e-12);
     if (tt <= 0.0 && !erl) { out[i] = 0.0; continue; }
     if (rt[i] <= 0.0) { out[i] = 0.0; continue; }
-    const double cdf = pkilledleakyba_norm(rt[i], A_[i], B_[i] + A_[i], v_[i], sv_[i], k_[i], lg, lk, pd, false, ctx->kill_shape, local_guess, t0_i);
+    const double cdf = pkilledleakyba_norm(rt[i], A_[i], B_[i] + A_[i], v_[i], sv_[i], k_[i], lg, lk, t0_i, pd, false, ctx->kill_shape, local_guess);
     if (cdf >= 1.0) { out[i] = min_ll; continue; }
     out[i] = (cdf <= 0.0) ? 0.0 : std::log1p(-cdf);
   }
@@ -708,7 +708,7 @@ inline void bawl_logS_at_t(double t, const double* pars_cm,
         continue;
       }
       // Both EAM and erlang contribute; pass raw t and t0_r.
-      const double cdf = pkilledleakyba_norm(t, A_[r], B_[r] + A_[r], v_[r], sv_[r], k_[r], lg, lk, pd, false, ctx->kill_shape, local_guess, t0_r);
+      const double cdf = pkilledleakyba_norm(t, A_[r], B_[r] + A_[r], v_[r], sv_[r], k_[r], lg, lk, t0_r, pd, false, ctx->kill_shape, local_guess);
       if (cdf >= 1.0) { bad = true; break; }
       if (cdf > 0.0) logS += std::log1p(-cdf);
     }
@@ -807,13 +807,13 @@ inline void drdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
       log_pdf = drdmswtn_local_combo(rt[i], (B_[i] + A_[i]) * inv_s, v_[i] * inv_s,
                                      A_[i] * inv_s, sv_[i] * inv_s, 1.0, 0.0,
                                      lg, lk, 20, true, kill_shape, t0_i);
-    } else if (!std::isfinite(sv_[i]) || std::fabs(sv_[i]) <= sv_eps) {
+    } else if (!emc2_isfinite(sv_[i]) || std::fabs(sv_[i]) <= sv_eps) {
       const double k_use = (is_guess_type ? lg : 0.0) + lk;
       if (k_use <= 0.0) {
         // No kill, no sv, no erlang: canonical Wald using EAM time directly.
         if (tt <= 0.0) { out[i] = min_ll; continue; }
         const double pdf = dwald_k0(tt, (B_[i] + A_[i]) * inv_s, v_[i] * inv_s, A_[i] * inv_s);
-        log_pdf = (pdf > 0.0 && std::isfinite(pdf)) ? std::log(pdf) : min_ll;
+        log_pdf = (pdf > 0.0 && emc2_isfinite(pdf)) ? std::log(pdf) : min_ll;
       } else {
         // Pass raw rt and t0 to dwald.
         log_pdf = dwald(rt[i], (B_[i] + A_[i]) * inv_s, v_[i] * inv_s, 1.0,
@@ -868,7 +868,7 @@ inline void prdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
     }
     const double k_use = (is_guess_type ? lg : 0.0) + lk;
     double log_cdf;
-    if (!std::isfinite(sv_[i]) || std::fabs(sv_[i]) <= sv_eps) {
+    if (!emc2_isfinite(sv_[i]) || std::fabs(sv_[i]) <= sv_eps) {
       if (k_use <= 0.0) {
         // No kill, no erlang: canonical Wald using EAM time.
         if (tt <= 0.0) { out[i] = 0.0; continue; }
@@ -965,7 +965,7 @@ inline void rdmswtn_logS_at_t(double t, const double* pars_cm,
                            sv_[r] * inv_s,
                            1.0,
                            k_use, 0.0, 20, true, kill_shape, is_guess_type && k_use > 1e-12, t0_r);
-      } else if (!std::isfinite(sv_[r]) || std::fabs(sv_[r]) <= sv_eps) {
+      } else if (!emc2_isfinite(sv_[r]) || std::fabs(sv_[r]) <= sv_eps) {
         if (k_use <= 0.0) {
           const double cdf = pwald_k0(tt, (B_[r] + A_[r]) * inv_s, v_[r] * inv_s, A_[r] * inv_s);
           const double cl  = std::max(0.0, std::min(1.0, cdf));

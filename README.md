@@ -12,6 +12,22 @@ Or for the development version:
 
 `remotes::install_github("ampl-psych/EMC2",dependencies=TRUE)`
 
+## Running tests
+
+Run tests in package mode (this avoids `test_dir()` worker startup issues in
+directory mode):
+
+``` r
+testthat::test_local()
+```
+
+or from shell:
+
+```bash
+Rscript tools/test-local.R
+Rscript tools/test-local.R rdmswtn-k
+```
+
 ## Simple DDM Example
 
 ``` r

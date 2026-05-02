@@ -262,9 +262,9 @@ double dleakyba_norm(double t, double A, double b,
 inline double dkilledleakyba_norm(double t, double A, double b,
                                   double v, double sv, double k,
                                   double lambda_g, double lambda_k,
+                                  double t0 = 0.0,
                                   bool posdrift = true, bool log_out = false,
-                                  int kill_shape = 1, bool guess = false,
-                                  double t0 = 0.0) {
+                                  int kill_shape = 1, bool guess = false) {
   if (t <= 0.0) return log_out ? R_NegInf : 0.0;
   const double t_eam = t - t0;
   const bool use_guess = guess && (lambda_g > 0.0);
@@ -304,9 +304,9 @@ inline double dkilledleakyba_norm(double t, double A, double b,
 inline double pkilledleakyba_norm(double t, double A, double b,
                                   double v, double sv, double k,
                                   double lambda_g, double lambda_k,
+                                  double t0 = 0.0,
                                   bool posdrift = true, bool log_out = false,
-                                  int kill_shape = 1, bool guess = false,
-                                  double t0 = 0.0) {
+                                  int kill_shape = 1, bool guess = false) {
   if (t <= 0.0) return log_out ? R_NegInf : 0.0;
   const double t_eam = t - t0;
   const bool use_guess = guess && (lambda_g > 0.0);
@@ -478,7 +478,7 @@ NumericVector dkilledleakyba(NumericVector t,
   for (int i = 0; i < n; i++) {
     pdf[i] = dkilledleakyba_norm(t[i], pick(A,i), pick(b,i), pick(v,i), pick(sv,i),
                                  pick(k,i), pick(lambda_g,i), pick(lambda_k,i),
-                                 posdrift, log_out, kill_shape, guess);
+                                 0.0, posdrift, log_out, kill_shape, guess);
   }
   return pdf;
 }
@@ -498,7 +498,7 @@ NumericVector pkilledleakyba(NumericVector t,
   for (int i = 0; i < n; i++) {
     cdf[i] = pkilledleakyba_norm(t[i], pick(A,i), pick(b,i), pick(v,i), pick(sv,i),
                                  pick(k,i), pick(lambda_g,i), pick(lambda_k,i),
-                                 posdrift, log_out, kill_shape, guess);
+                                 0.0, posdrift, log_out, kill_shape, guess);
   }
   return cdf;
 }

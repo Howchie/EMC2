@@ -105,8 +105,8 @@ dswtn <- function(t, threshold, mu_drift, sv, s = 1.0, lambda = 0.0, c = 0.0, lo
     .Call(`_EMC2_dswtn`, t, threshold, mu_drift, sv, s, lambda, c, log_out, kill_shape, guess, t0)
 }
 
-pswtn <- function(t_adj, threshold, mu_drift, sv, s = 1.0, lambda = 0.0, c = 0.0, log_out = FALSE, kill_shape = 1L, guess = FALSE, t0 = 0.0) {
-    .Call(`_EMC2_pswtn`, t_adj, threshold, mu_drift, sv, s, lambda, c, log_out, kill_shape, guess, t0)
+pswtn <- function(t, threshold, mu_drift, sv, s = 1.0, lambda = 0.0, c = 0.0, log_out = FALSE, kill_shape = 1L, guess = FALSE, t0 = 0.0) {
+    .Call(`_EMC2_pswtn`, t, threshold, mu_drift, sv, s, lambda, c, log_out, kill_shape, guess, t0)
 }
 
 drdmswtn <- function(t, b, mu_drift, A, sv, s = 1.0, lambda = 0.0, c = 0.0, n_gauss_nodes = 20L, log_out = FALSE, kill_shape = 1L, guess = FALSE, t0 = 0.0) {

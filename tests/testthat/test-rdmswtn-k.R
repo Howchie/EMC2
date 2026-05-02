@@ -43,6 +43,24 @@ test_that("killed swtn cdf is locally consistent with the pdf", {
   expect_equal(slope, pdf, tolerance = 2e-4)
 })
 
+test_that("wald small-k limit is numerically stable (q near 0 regime)", {
+  t <- 0.95
+  b <- 1.35
+  mu <- 1.05
+  sigma <- 1.0
+  A <- 0.25
+  t0 <- 0.2
+  k_small <- 1e-10
+
+  cdf0 <- EMC2:::pwald(t, b, mu, sigma = sigma, A = A, t0 = t0, k = 0.0, guess = FALSE)
+  cdfk <- EMC2:::pwald(t, b, mu, sigma = sigma, A = A, t0 = t0, k = k_small, guess = FALSE)
+  pdf0 <- EMC2:::dwald(t, b, mu, sigma = sigma, A = A, t0 = t0, k = 0.0, guess = FALSE)
+  pdfk <- EMC2:::dwald(t, b, mu, sigma = sigma, A = A, t0 = t0, k = k_small, guess = FALSE)
+
+  expect_equal(cdfk, cdf0, tolerance = 1e-8)
+  expect_equal(pdfk, pdf0, tolerance = 1e-7)
+})
+
 test_that("combined local guess+kill SWTN Erlang-2 cdf is locally consistent with the pdf", {
   t <- 0.85
   h <- 1e-5

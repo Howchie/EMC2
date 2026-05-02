@@ -462,12 +462,12 @@ BEGIN_RCPP
 END_RCPP
 }
 // pswtn
-double pswtn(double t_adj, double threshold, double mu_drift, double sv, double s, double lambda, double c, bool log_out, int kill_shape, bool guess, double t0);
-RcppExport SEXP _EMC2_pswtn(SEXP t_adjSEXP, SEXP thresholdSEXP, SEXP mu_driftSEXP, SEXP svSEXP, SEXP sSEXP, SEXP lambdaSEXP, SEXP cSEXP, SEXP log_outSEXP, SEXP kill_shapeSEXP, SEXP guessSEXP, SEXP t0SEXP) {
+double pswtn(double t, double threshold, double mu_drift, double sv, double s, double lambda, double c, bool log_out, int kill_shape, bool guess, double t0);
+RcppExport SEXP _EMC2_pswtn(SEXP tSEXP, SEXP thresholdSEXP, SEXP mu_driftSEXP, SEXP svSEXP, SEXP sSEXP, SEXP lambdaSEXP, SEXP cSEXP, SEXP log_outSEXP, SEXP kill_shapeSEXP, SEXP guessSEXP, SEXP t0SEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< double >::type t_adj(t_adjSEXP);
+    Rcpp::traits::input_parameter< double >::type t(tSEXP);
     Rcpp::traits::input_parameter< double >::type threshold(thresholdSEXP);
     Rcpp::traits::input_parameter< double >::type mu_drift(mu_driftSEXP);
     Rcpp::traits::input_parameter< double >::type sv(svSEXP);
@@ -478,7 +478,7 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< int >::type kill_shape(kill_shapeSEXP);
     Rcpp::traits::input_parameter< bool >::type guess(guessSEXP);
     Rcpp::traits::input_parameter< double >::type t0(t0SEXP);
-    rcpp_result_gen = Rcpp::wrap(pswtn(t_adj, threshold, mu_drift, sv, s, lambda, c, log_out, kill_shape, guess, t0));
+    rcpp_result_gen = Rcpp::wrap(pswtn(t, threshold, mu_drift, sv, s, lambda, c, log_out, kill_shape, guess, t0));
     return rcpp_result_gen;
 END_RCPP
 }
