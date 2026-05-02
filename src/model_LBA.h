@@ -138,6 +138,10 @@ double pleakyba_norm(double t, double A, double b,
   const double eps        = 1e-10;
   const double denom_floor = 1e-300;
 
+  if (t <= 0.0 || !(sv > 0.0) || !(b >= A) || !(b > 0.0)) {
+    return log_out ? R_NegInf : 0.0;
+  }
+
   double denom = 1.0;
   if (posdrift) {
     denom = pnorm_std(v / sv);
@@ -194,6 +198,10 @@ double dleakyba_norm(double t, double A, double b,
                      bool posdrift = true, bool log_out = false) {
   const double eps        = 1e-10;
   const double denom_floor = 1e-300;
+
+  if (t <= 0.0 || !(sv > 0.0) || !(b >= A) || !(b > 0.0)) {
+    return log_out ? R_NegInf : 0.0;
+  }
 
   double denom = 1.0;
   if (posdrift) {
@@ -296,6 +304,41 @@ inline double dkilledleakyba_norm(double t, double v, double b, double A,
   return log_out ? log_pdf : std::exp(log_pdf);
 }
 
+inline double integrate_bawl_pdf_raw(double t, double v, double b, double A,
+                                     double sv, double t0, double k,
+                                     double lambda_g, double lambda_k,
+                                     bool posdrift, int kill_shape, bool guess) {
+  const Rcpp::List& gl = get_gl20();
+  const Rcpp::NumericVector nodes = gl["nodes"];
+  const Rcpp::NumericVector weights = gl["weights"];
+  double acc = 0.0;
+
+  if (t == R_PosInf) {
+    // Clocked defective mass over [0, Inf).  Scale the transform by the
+    // active Erlang rates because the clock survival terms set the tail scale.
+    const double rate = std::max(1e-8, (guess ? lambda_g : 0.0) + lambda_k);
+    for (int j = 0; j < nodes.size(); ++j) {
+      const double q = std::min(1.0 - 1e-12, std::max(1e-15, 0.5 * (nodes[j] + 1.0)));
+      const double u = -std::log1p(-q) / rate;
+      const double jac = 1.0 / (rate * (1.0 - q));
+      acc += weights[j] * dkilledleakyba_norm(
+        u, v, b, A, sv, t0, k, lambda_g, lambda_k, posdrift, false, kill_shape, guess
+      ) * jac;
+    }
+    double out = 0.5 * acc;
+    return std::max(0.0, std::min(1.0, out));
+  }
+
+  for (int j = 0; j < nodes.size(); ++j) {
+    const double u = 0.5 * t * (nodes[j] + 1.0);
+    acc += weights[j] * dkilledleakyba_norm(
+      u, v, b, A, sv, t0, k, lambda_g, lambda_k, posdrift, false, kill_shape, guess
+    );
+  }
+  double out = 0.5 * t * acc;
+  return std::max(0.0, std::min(1.0, out));
+}
+
 // Killed-leaky BA sub-CDF:
 // P(T_R <= t, T_R < T_K) with kill_shape=1 (exponential) or kill_shape=2 (Erlang-2).
 // With guess=true: mixture CDF = 1 - S_R(t_eam)*S_K(t)*S_G(t).
@@ -312,35 +355,36 @@ inline double pkilledleakyba_norm(double t, double v, double b, double A,
 
   // When EAM hasn't started: P(EAM fires by t_eam) = 0, S_R = 1.
   if (t_eam <= 0.0) {
-    if (!use_guess && !use_kill) return log_out ? R_NegInf : 0.0;
-    // Mixture CDF = 1 - S_G(t)*S_K(t)
-    const double log_sG = use_guess ? erlang_log_surv(t, lambda_g, kill_shape) : 0.0;
-    const double log_sK = use_kill  ? erlang_log_surv(t, lambda_k, kill_shape) : 0.0;
-    const double log_val = std::log1p(-std::exp(log_sG + log_sK));
-    return log_out ? log_val : std::exp(log_val);
-  }
-
-  if (!use_guess && !use_kill) return pleakyba_norm(t_eam, A, b, v, sv, k, posdrift, log_out);
-
-  if (use_guess && use_kill) {
-    // Combined local kill+guess path: GL20 loop over raw time [0, t].
-    // At each node u: erlang uses u (raw time), EAM uses max(0, u - t0).
+    if (!use_guess) return log_out ? R_NegInf : 0.0;
+    if (!use_kill) {
+      // Guess-only response process before EAM onset.
+      const double log_sG = erlang_log_surv(t, lambda_g, kill_shape);
+      const double out = -std::expm1(log_sG);
+      return log_out ? safe_log(out) : out;
+    }
+    // Before EAM onset, the only observed response is a guess before the kill clock:
+    // integral_0^t f_G(u) S_K(u) du.  Kill wins are omissions, not CDF mass.
     const Rcpp::List& gl = get_gl20();
     const Rcpp::NumericVector nodes = gl["nodes"];
     const Rcpp::NumericVector weights = gl["weights"];
     double acc = 0.0;
     for (int j = 0; j < nodes.size(); ++j) {
-      const double u      = 0.5 * t * (nodes[j] + 1.0);   // raw time node
-      const double u_eam  = std::max(0.0, u - t0);          // EAM time
-      const double fR = dleakyba_norm(u_eam, A, b, v, sv, k, posdrift, false);
-      const double SR = std::max(0.0, std::min(1.0, 1.0 - pleakyba_norm(u_eam, A, b, v, sv, k, posdrift, false)));
-      const double SG = std::exp(erlang_log_surv(u, lambda_g, kill_shape));
-      const double SK = std::exp(erlang_log_surv(u, lambda_k, kill_shape));
-      const double fG = std::exp(erlang_log_pdf(u, lambda_g, kill_shape));
-      acc += weights[j] * (fR * SG * SK + fG * SK * SR);
+      const double u = 0.5 * t * (nodes[j] + 1.0);
+      const double log_fG = erlang_log_pdf(u, lambda_g, kill_shape);
+      const double log_sK = erlang_log_surv(u, lambda_k, kill_shape);
+      acc += weights[j] * std::exp(log_fG + log_sK);
     }
     double out = 0.5 * t * acc;
     out = std::max(0.0, std::min(1.0, out));
+    return log_out ? safe_log(out) : out;
+  }
+
+  if (!use_guess && !use_kill) return pleakyba_norm(t_eam, A, b, v, sv, k, posdrift, log_out);
+
+  if (use_guess && use_kill) {
+    const double out = integrate_bawl_pdf_raw(
+      t, v, b, A, sv, t0, k, lambda_g, lambda_k, posdrift, kill_shape, true
+    );
     return log_out ? safe_log(out) : out;
   }
 
@@ -353,111 +397,13 @@ inline double pkilledleakyba_norm(double t, double v, double b, double A,
     const double log_val = std::log1p(-std::exp(log_sr + log_sk));
     return log_out ? log_val : std::exp(log_val);
   }
-  const double eps = 1e-10;
   if (sv <= 0.0 || b < A || b <= 0.0) return log_out ? R_NegInf : 0.0;
 
-  // Pure kill path: integrate f_EAM(u_eam) * S_K(u) over raw [0, t].
-  // For t0 > 0, use GL20 to correctly separate EAM time and erlang time.
-  if (t0 > 0.0 || A <= 0.0 || std::fabs(k) < eps) {
-    const Rcpp::List& gl = get_gl20();
-    const Rcpp::NumericVector nodes = gl["nodes"];
-    const Rcpp::NumericVector weights = gl["weights"];
-    double acc = 0.0;
-    for (int j = 0; j < nodes.size(); ++j) {
-      const double u     = 0.5 * t * (nodes[j] + 1.0);   // raw time node
-      const double u_eam = std::max(0.0, u - t0);          // EAM time
-      const double sk = std::exp(erlang_log_surv(u, lambda, kill_shape));
-      acc += weights[j] * dleakyba_norm(u_eam, A, b, v, sv, k, posdrift, false) * sk;
-    }
-    double out = 0.5 * t * acc;
-    out = std::max(0.0, std::min(1.0, out));
-    return log_out ? safe_log(out) : out;
-  }
-
-  // t0 == 0 and A > 0 and k > 0: use the original analytic path (below).
-
-  const double E = std::exp(-k * t);
-  const double G = std::max(1e-300, -std::expm1(-k * t));
-  const double C1 = (k * b) / G;
-  const double C2 = (k * E) / G;
-  const double Dmin_time = C1 - C2 * A;
-  const double Dmin = std::max(k * b, Dmin_time);
-  const double rho = lambda / k;
-
-  auto J_inner_exp = [&](double D, double rho_local) -> double {
-    if (!(D > k * b)) return 0.0;
-    const double L = (C1 - D) / C2;
-    const double Ls = std::max(0.0, L);
-    if (!(Ls < A)) return 0.0;
-    const double DkL = D - k * Ls;
-    const double DkA = D - k * A;
-    const double Dkb = D - k * b;
-    if (DkL <= 0.0 || DkA <= 0.0 || Dkb <= 0.0) return 0.0;
-    if (std::fabs(rho_local - 1.0) < 1e-8) {
-      return (Dkb / (A * k)) * std::log(DkL / DkA);
-    }
-    return (std::pow(Dkb, rho_local) / (A * k * (1.0 - rho_local))) *
-      (std::pow(DkL, 1.0 - rho_local) - std::pow(DkA, 1.0 - rho_local));
-  };
-
-  auto J_inner = [&](double D) -> double {
-    const double J1 = J_inner_exp(D, rho);
-    if (kill_shape <= 1) return J1;
-    // Erlang-2 semianalytic identity from erlang.tex:
-    // A_rho - rho * dA_rho/drho, where A_rho is the Erlang-1 inner integral.
-    const double L = (C1 - D) / C2;
-    const double Ls = std::max(0.0, L);
-    if (!(Ls < A)) return 0.0;
-    const double DkL = D - k * Ls;
-    const double DkA = D - k * A;
-    const double Dkb = D - k * b;
-    if (DkL <= 0.0 || DkA <= 0.0 || Dkb <= 0.0) return 0.0;
-
-    const double M = 1.0 - rho;
-    double dJ = 0.0;
-    if (std::fabs(M) < 1e-6) {
-      const double h = 1e-6 * (1.0 + std::fabs(rho));
-      const double Jp = J_inner_exp(D, rho + h);
-      const double Jm = J_inner_exp(D, rho - h);
-      dJ = (Jp - Jm) / (2.0 * h);
-    } else {
-      const double P = std::pow(Dkb, rho);
-      const double U1 = std::pow(DkL, M);
-      const double U2 = std::pow(DkA, M);
-      const double U = U1 - U2;
-      const double logDkb = std::log(Dkb);
-      const double dU = -std::log(DkL) * U1 + std::log(DkA) * U2;
-      const double base = P / (A * k);
-      dJ = base * (logDkb * U / M + dU / M + U / (M * M));
-    }
-    const double J2 = J1 - rho * dJ;
-    return std::fmax(0.0, J2);
-  };
-
-  auto gD = [&](double D) -> double {
-    if (posdrift) {
-      const double Z = std::max(1e-300, pnorm_std(v / sv));
-      if (D <= 0.0) return 0.0;
-      return dnormP((D - v) / sv) / (sv * Z);
-    }
-    return dnormP((D - v) / sv) / sv;
-  };
-
-  // Integrate D = Dmin + x, x in [0, +inf) using GL on [0,1): x = q/(1-q)
-  const Rcpp::List& gl = get_gl20();
-  const Rcpp::NumericVector nodes = gl["nodes"];
-  const Rcpp::NumericVector weights = gl["weights"];
-  double acc = 0.0;
-  for (int j = 0; j < nodes.size(); ++j) {
-    const double q = 0.5 * (nodes[j] + 1.0); // [0,1]
-    const double qq = std::min(1.0 - 1e-12, std::max(1e-15, q));
-    const double x = qq / (1.0 - qq);
-    const double D = Dmin + x;
-    const double jac = 1.0 / ((1.0 - qq) * (1.0 - qq));
-    acc += weights[j] * gD(D) * J_inner(D) * jac;
-  }
-  double out = 0.5 * acc;
-  out = std::max(0.0, std::min(1.0, out));
+  // Pure kill path: integrate f_EAM(u - t0) * S_K(u) over raw time.
+  // No closed normal-form primitive remains once leak and clock survival are combined.
+  const double out = integrate_bawl_pdf_raw(
+    t, v, b, A, sv, t0, k, 0.0, lambda, posdrift, kill_shape, false
+  );
   return log_out ? safe_log(out) : out;
 }
 

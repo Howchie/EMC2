@@ -352,7 +352,7 @@ pBAwL <- function(rt, pars, posdrift = TRUE, erlang = 1L, guess = FALSE) {
   dt  <- rt - pars[, "t0"]
   erl <- (pars[, "lambda_g"] > 0) | (pars[, "lambda_k"] > 0)
   ok  <- (rt > 0) & ((dt > 0) | erl) & (pars[, "b"] >= pars[, "A"])
-  ok[is.na(ok) | !is.finite(dt)] <- FALSE
+  ok[is.na(ok)] <- FALSE
   out <- numeric(length(dt))
   if (any(ok)) {
     out[ok] <- pkilledleakyba(

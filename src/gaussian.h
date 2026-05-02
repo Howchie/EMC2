@@ -53,6 +53,7 @@ inline double Gstar(double var, double delta, bool log_p = false) {
 // Erlang-n kill survival: log S_K^(n)(t) = log(exp(-lambda*t) * sum_{m=0}^{n-1} (lambda*t)^m / m!)
 inline double erlang_log_surv(double t, double lambda, int n) {
   if (lambda <= 0.0 || t <= 0.0) return 0.0;
+  if (t == R_PosInf) return R_NegInf;
   if (n <= 1) return -lambda * t;
   if (n == 2) return -lambda * t + std::log1p(lambda * t);
   
@@ -70,6 +71,7 @@ inline double erlang_log_surv(double t, double lambda, int n) {
 // Erlang-n kill density: f_K^(n)(t)
 inline double erlang_log_pdf(double t, double lambda, int n) {
   if (lambda <= 0.0 || t < 0.0) return R_NegInf;
+  if (t == R_PosInf) return R_NegInf;
   if (n <= 1) return std::log(lambda) - lambda * t;
   if (n == 2) return 2.0 * std::log(lambda) + std::log(t) - lambda * t;
   
