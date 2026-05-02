@@ -201,40 +201,46 @@ double digt(double t, double k, double l, double a, double threshold);
 
 // --------------------------------------------------------------------------
 // Wald SPV CDF/PDF without kill, sigma = 1 (caller pre-scales).
-// Parameterised in canonical form: b = upper threshold distance (when x=0),
-// A = full start-point range, so d = b-x ~ U[b-A, b].
-// Equivalent to pigt_impl/digt_impl with the substitution k=b-A/2, a=A/2
-// but using the natural parameters directly.
+// Parameterised in canonical Wald form:
+//   start x ~ U[0, A], threshold b, so distance d = b - x ~ U[b-A, b].
+// The CDF is the closed-form integral of the point-Wald CDF over d.
 // --------------------------------------------------------------------------
 inline double pwald_k0(double t, double b, double mu, double A) {
   if (t <= 0.0 || b <= 0.0) return 0.0;
-  const double b_lo   = b - A;
   if (A <= 1e-12) return pigt0(t, b, mu);
-  const double sqt    = std::sqrt(t);
-  const double inv_A2 = 2.0 / A;   // 1/(A/2) — identical normalisation to pigt_impl's /a
+  if (A <= 0.0) return 0.0;
+
+  const double d_raw_lo = b - A;
+  const double d_lo = std::fmax(0.0, d_raw_lo);
+  const double d_hi = b;
+  const double immediate = (d_raw_lo < 0.0) ? std::fmin(-d_raw_lo, A) : 0.0;
+  if (d_hi <= d_lo) return std::fmax(0.0, std::fmin(1.0, immediate / A));
+
+  const double sqt = std::sqrt(t);
+  auto phi_std = [](double z) {
+    return std::exp(-0.5 * z * z) / FAST_NORM_RT2PI;
+  };
 
   if (std::abs(mu) <= 1e-12) {
-    const double p1 = pnorm_std( b    / sqt, true, false);
-    const double p2 = pnorm_std( b_lo / sqt, true, false);
-    const double t1 = sqt * (std::exp(-0.5 * b_lo * b_lo / t)
-                            -std::exp(-0.5 * b    * b    / t)) / FAST_NORM_RT2PI;
-    return (t1 + b * (1.0 - p1) - b_lo * (1.0 - p2)) * inv_A2;
+    auto antideriv_mu0 = [&](double d) {
+      const double z = -d / sqt;
+      return 2.0 * (d * pnorm_std(z, true, false) - sqt * phi_std(z));
+    };
+    const double p = (immediate + antideriv_mu0(d_hi) - antideriv_mu0(d_lo)) / A;
+    return std::fmax(0.0, std::fmin(1.0, p));
   }
 
-  const double t1a = std::exp(-0.5 * (b_lo - t * mu) * (b_lo - t * mu) / t);
-  const double t1b = std::exp(-0.5 * (b    - t * mu) * (b    - t * mu) / t);
-  const double t1  = sqt * (t1a - t1b) / FAST_NORM_RT2PI;
+  auto antideriv = [&](double d) {
+    const double z1 = (mu * t - d) / sqt;
+    const double z2 = -(d + mu * t) / sqt;
+    const double term1 = (d - mu * t) * pnorm_std(z1, true, false) - sqt * phi_std(z1);
+    const double term2 = (std::exp(2.0 * mu * d + pnorm_std(z2, true, true)) -
+                          pnorm_std(z1, true, false)) / (2.0 * mu);
+    return term1 + term2;
+  };
 
-  const double t2a = std::exp(2.0 * mu * b_lo + pnorm_std(-(b_lo + t * mu) / sqt, true, true));
-  const double t2b = std::exp(2.0 * mu * b    + pnorm_std(-(b    + t * mu) / sqt, true, true));
-  const double t2  = A + (t2b - t2a) / (2.0 * mu);
-
-  const double t4a = 2.0 * pnorm_std(b    / sqt - sqt * mu, true, false) - 1.0;
-  const double t4b = 2.0 * pnorm_std(b_lo / sqt - sqt * mu, true, false) - 1.0;
-  const double t4  = 0.5 * (t * mu - b    + 0.5 / mu) * t4a
-                   + 0.5 * (b_lo   - t * mu - 0.5 / mu) * t4b;
-
-  return 0.5 * (t4 + t2 + t1) * inv_A2;
+  const double p = (immediate + antideriv(d_hi) - antideriv(d_lo)) / A;
+  return std::fmax(0.0, std::fmin(1.0, p));
 }
 
 inline double dwald_k0(double t, double b, double mu, double A) {
