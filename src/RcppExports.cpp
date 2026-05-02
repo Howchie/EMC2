@@ -363,8 +363,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // pwald
-double pwald(double t, double mu, double b, double A, double sigma, double t0, double k, bool log_out, int kill_shape, bool guess);
-RcppExport SEXP _EMC2_pwald(SEXP tSEXP, SEXP muSEXP, SEXP bSEXP, SEXP ASEXP, SEXP sigmaSEXP, SEXP t0SEXP, SEXP kSEXP, SEXP log_outSEXP, SEXP kill_shapeSEXP, SEXP guessSEXP) {
+double pwald(double t, double mu, double b, double A, double sigma, double t0, double lambda_g, double lambda_k, bool log_out, int kill_shape, bool guess);
+RcppExport SEXP _EMC2_pwald(SEXP tSEXP, SEXP muSEXP, SEXP bSEXP, SEXP ASEXP, SEXP sigmaSEXP, SEXP t0SEXP, SEXP lambda_gSEXP, SEXP lambda_kSEXP, SEXP log_outSEXP, SEXP kill_shapeSEXP, SEXP guessSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -374,17 +374,18 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< double >::type A(ASEXP);
     Rcpp::traits::input_parameter< double >::type sigma(sigmaSEXP);
     Rcpp::traits::input_parameter< double >::type t0(t0SEXP);
-    Rcpp::traits::input_parameter< double >::type k(kSEXP);
+    Rcpp::traits::input_parameter< double >::type lambda_g(lambda_gSEXP);
+    Rcpp::traits::input_parameter< double >::type lambda_k(lambda_kSEXP);
     Rcpp::traits::input_parameter< bool >::type log_out(log_outSEXP);
     Rcpp::traits::input_parameter< int >::type kill_shape(kill_shapeSEXP);
     Rcpp::traits::input_parameter< bool >::type guess(guessSEXP);
-    rcpp_result_gen = Rcpp::wrap(pwald(t, mu, b, A, sigma, t0, k, log_out, kill_shape, guess));
+    rcpp_result_gen = Rcpp::wrap(pwald(t, mu, b, A, sigma, t0, lambda_g, lambda_k, log_out, kill_shape, guess));
     return rcpp_result_gen;
 END_RCPP
 }
 // dwald
-double dwald(double t, double mu, double b, double A, double sigma, double t0, double k, bool log_out, int kill_shape, bool guess);
-RcppExport SEXP _EMC2_dwald(SEXP tSEXP, SEXP muSEXP, SEXP bSEXP, SEXP ASEXP, SEXP sigmaSEXP, SEXP t0SEXP, SEXP kSEXP, SEXP log_outSEXP, SEXP kill_shapeSEXP, SEXP guessSEXP) {
+double dwald(double t, double mu, double b, double A, double sigma, double t0, double lambda_g, double lambda_k, bool log_out, int kill_shape, bool guess);
+RcppExport SEXP _EMC2_dwald(SEXP tSEXP, SEXP muSEXP, SEXP bSEXP, SEXP ASEXP, SEXP sigmaSEXP, SEXP t0SEXP, SEXP lambda_gSEXP, SEXP lambda_kSEXP, SEXP log_outSEXP, SEXP kill_shapeSEXP, SEXP guessSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -394,17 +395,18 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< double >::type A(ASEXP);
     Rcpp::traits::input_parameter< double >::type sigma(sigmaSEXP);
     Rcpp::traits::input_parameter< double >::type t0(t0SEXP);
-    Rcpp::traits::input_parameter< double >::type k(kSEXP);
+    Rcpp::traits::input_parameter< double >::type lambda_g(lambda_gSEXP);
+    Rcpp::traits::input_parameter< double >::type lambda_k(lambda_kSEXP);
     Rcpp::traits::input_parameter< bool >::type log_out(log_outSEXP);
     Rcpp::traits::input_parameter< int >::type kill_shape(kill_shapeSEXP);
     Rcpp::traits::input_parameter< bool >::type guess(guessSEXP);
-    rcpp_result_gen = Rcpp::wrap(dwald(t, mu, b, A, sigma, t0, k, log_out, kill_shape, guess));
+    rcpp_result_gen = Rcpp::wrap(dwald(t, mu, b, A, sigma, t0, lambda_g, lambda_k, log_out, kill_shape, guess));
     return rcpp_result_gen;
 END_RCPP
 }
 // dgbm
-double dgbm(double t, double mu, double b, double A, double sigma, double t0, double k, bool log_out, int kill_shape, bool guess);
-RcppExport SEXP _EMC2_dgbm(SEXP tSEXP, SEXP muSEXP, SEXP bSEXP, SEXP ASEXP, SEXP sigmaSEXP, SEXP t0SEXP, SEXP kSEXP, SEXP log_outSEXP, SEXP kill_shapeSEXP, SEXP guessSEXP) {
+double dgbm(double t, double mu, double b, double A, double sigma, double t0, double lambda_g, double lambda_k, bool log_out, int kill_shape, bool guess);
+RcppExport SEXP _EMC2_dgbm(SEXP tSEXP, SEXP muSEXP, SEXP bSEXP, SEXP ASEXP, SEXP sigmaSEXP, SEXP t0SEXP, SEXP lambda_gSEXP, SEXP lambda_kSEXP, SEXP log_outSEXP, SEXP kill_shapeSEXP, SEXP guessSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -414,17 +416,18 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< double >::type A(ASEXP);
     Rcpp::traits::input_parameter< double >::type sigma(sigmaSEXP);
     Rcpp::traits::input_parameter< double >::type t0(t0SEXP);
-    Rcpp::traits::input_parameter< double >::type k(kSEXP);
+    Rcpp::traits::input_parameter< double >::type lambda_g(lambda_gSEXP);
+    Rcpp::traits::input_parameter< double >::type lambda_k(lambda_kSEXP);
     Rcpp::traits::input_parameter< bool >::type log_out(log_outSEXP);
     Rcpp::traits::input_parameter< int >::type kill_shape(kill_shapeSEXP);
     Rcpp::traits::input_parameter< bool >::type guess(guessSEXP);
-    rcpp_result_gen = Rcpp::wrap(dgbm(t, mu, b, A, sigma, t0, k, log_out, kill_shape, guess));
+    rcpp_result_gen = Rcpp::wrap(dgbm(t, mu, b, A, sigma, t0, lambda_g, lambda_k, log_out, kill_shape, guess));
     return rcpp_result_gen;
 END_RCPP
 }
 // pgbm
-double pgbm(double t, double mu, double b, double A, double sigma, double t0, double k, bool log_out, int kill_shape, bool guess);
-RcppExport SEXP _EMC2_pgbm(SEXP tSEXP, SEXP muSEXP, SEXP bSEXP, SEXP ASEXP, SEXP sigmaSEXP, SEXP t0SEXP, SEXP kSEXP, SEXP log_outSEXP, SEXP kill_shapeSEXP, SEXP guessSEXP) {
+double pgbm(double t, double mu, double b, double A, double sigma, double t0, double lambda_g, double lambda_k, bool log_out, int kill_shape, bool guess);
+RcppExport SEXP _EMC2_pgbm(SEXP tSEXP, SEXP muSEXP, SEXP bSEXP, SEXP ASEXP, SEXP sigmaSEXP, SEXP t0SEXP, SEXP lambda_gSEXP, SEXP lambda_kSEXP, SEXP log_outSEXP, SEXP kill_shapeSEXP, SEXP guessSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -434,17 +437,18 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< double >::type A(ASEXP);
     Rcpp::traits::input_parameter< double >::type sigma(sigmaSEXP);
     Rcpp::traits::input_parameter< double >::type t0(t0SEXP);
-    Rcpp::traits::input_parameter< double >::type k(kSEXP);
+    Rcpp::traits::input_parameter< double >::type lambda_g(lambda_gSEXP);
+    Rcpp::traits::input_parameter< double >::type lambda_k(lambda_kSEXP);
     Rcpp::traits::input_parameter< bool >::type log_out(log_outSEXP);
     Rcpp::traits::input_parameter< int >::type kill_shape(kill_shapeSEXP);
     Rcpp::traits::input_parameter< bool >::type guess(guessSEXP);
-    rcpp_result_gen = Rcpp::wrap(pgbm(t, mu, b, A, sigma, t0, k, log_out, kill_shape, guess));
+    rcpp_result_gen = Rcpp::wrap(pgbm(t, mu, b, A, sigma, t0, lambda_g, lambda_k, log_out, kill_shape, guess));
     return rcpp_result_gen;
 END_RCPP
 }
 // dswtn
-double dswtn(double t, double mu_drift, double threshold, double s, double t0, double sv, double lambda, double c, bool log_out, int kill_shape, bool guess);
-RcppExport SEXP _EMC2_dswtn(SEXP tSEXP, SEXP mu_driftSEXP, SEXP thresholdSEXP, SEXP sSEXP, SEXP t0SEXP, SEXP svSEXP, SEXP lambdaSEXP, SEXP cSEXP, SEXP log_outSEXP, SEXP kill_shapeSEXP, SEXP guessSEXP) {
+double dswtn(double t, double mu_drift, double threshold, double s, double t0, double sv, double lambda_g, double lambda_k, double c, bool log_out, int kill_shape, bool guess);
+RcppExport SEXP _EMC2_dswtn(SEXP tSEXP, SEXP mu_driftSEXP, SEXP thresholdSEXP, SEXP sSEXP, SEXP t0SEXP, SEXP svSEXP, SEXP lambda_gSEXP, SEXP lambda_kSEXP, SEXP cSEXP, SEXP log_outSEXP, SEXP kill_shapeSEXP, SEXP guessSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -454,18 +458,19 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< double >::type s(sSEXP);
     Rcpp::traits::input_parameter< double >::type t0(t0SEXP);
     Rcpp::traits::input_parameter< double >::type sv(svSEXP);
-    Rcpp::traits::input_parameter< double >::type lambda(lambdaSEXP);
+    Rcpp::traits::input_parameter< double >::type lambda_g(lambda_gSEXP);
+    Rcpp::traits::input_parameter< double >::type lambda_k(lambda_kSEXP);
     Rcpp::traits::input_parameter< double >::type c(cSEXP);
     Rcpp::traits::input_parameter< bool >::type log_out(log_outSEXP);
     Rcpp::traits::input_parameter< int >::type kill_shape(kill_shapeSEXP);
     Rcpp::traits::input_parameter< bool >::type guess(guessSEXP);
-    rcpp_result_gen = Rcpp::wrap(dswtn(t, mu_drift, threshold, s, t0, sv, lambda, c, log_out, kill_shape, guess));
+    rcpp_result_gen = Rcpp::wrap(dswtn(t, mu_drift, threshold, s, t0, sv, lambda_g, lambda_k, c, log_out, kill_shape, guess));
     return rcpp_result_gen;
 END_RCPP
 }
 // drdmswtn
-double drdmswtn(double t, double mu_drift, double b, double A, double s, double t0, double sv, double lambda, double c, int n_gauss_nodes, bool log_out, int kill_shape, bool guess);
-RcppExport SEXP _EMC2_drdmswtn(SEXP tSEXP, SEXP mu_driftSEXP, SEXP bSEXP, SEXP ASEXP, SEXP sSEXP, SEXP t0SEXP, SEXP svSEXP, SEXP lambdaSEXP, SEXP cSEXP, SEXP n_gauss_nodesSEXP, SEXP log_outSEXP, SEXP kill_shapeSEXP, SEXP guessSEXP) {
+double drdmswtn(double t, double mu_drift, double b, double A, double s, double t0, double sv, double lambda_g, double lambda_k, double c, int n_gauss_nodes, bool log_out, int kill_shape, bool guess);
+RcppExport SEXP _EMC2_drdmswtn(SEXP tSEXP, SEXP mu_driftSEXP, SEXP bSEXP, SEXP ASEXP, SEXP sSEXP, SEXP t0SEXP, SEXP svSEXP, SEXP lambda_gSEXP, SEXP lambda_kSEXP, SEXP cSEXP, SEXP n_gauss_nodesSEXP, SEXP log_outSEXP, SEXP kill_shapeSEXP, SEXP guessSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -476,19 +481,20 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< double >::type s(sSEXP);
     Rcpp::traits::input_parameter< double >::type t0(t0SEXP);
     Rcpp::traits::input_parameter< double >::type sv(svSEXP);
-    Rcpp::traits::input_parameter< double >::type lambda(lambdaSEXP);
+    Rcpp::traits::input_parameter< double >::type lambda_g(lambda_gSEXP);
+    Rcpp::traits::input_parameter< double >::type lambda_k(lambda_kSEXP);
     Rcpp::traits::input_parameter< double >::type c(cSEXP);
     Rcpp::traits::input_parameter< int >::type n_gauss_nodes(n_gauss_nodesSEXP);
     Rcpp::traits::input_parameter< bool >::type log_out(log_outSEXP);
     Rcpp::traits::input_parameter< int >::type kill_shape(kill_shapeSEXP);
     Rcpp::traits::input_parameter< bool >::type guess(guessSEXP);
-    rcpp_result_gen = Rcpp::wrap(drdmswtn(t, mu_drift, b, A, s, t0, sv, lambda, c, n_gauss_nodes, log_out, kill_shape, guess));
+    rcpp_result_gen = Rcpp::wrap(drdmswtn(t, mu_drift, b, A, s, t0, sv, lambda_g, lambda_k, c, n_gauss_nodes, log_out, kill_shape, guess));
     return rcpp_result_gen;
 END_RCPP
 }
 // prdmswtn
-double prdmswtn(double t, double mu_drift, double b, double A, double s, double t0, double sv, double lambda, double c, int n_gauss_nodes, bool log_out, int kill_shape, bool guess);
-RcppExport SEXP _EMC2_prdmswtn(SEXP tSEXP, SEXP mu_driftSEXP, SEXP bSEXP, SEXP ASEXP, SEXP sSEXP, SEXP t0SEXP, SEXP svSEXP, SEXP lambdaSEXP, SEXP cSEXP, SEXP n_gauss_nodesSEXP, SEXP log_outSEXP, SEXP kill_shapeSEXP, SEXP guessSEXP) {
+double prdmswtn(double t, double mu_drift, double b, double A, double s, double t0, double sv, double lambda_g, double lambda_k, double c, int n_gauss_nodes, bool log_out, int kill_shape, bool guess);
+RcppExport SEXP _EMC2_prdmswtn(SEXP tSEXP, SEXP mu_driftSEXP, SEXP bSEXP, SEXP ASEXP, SEXP sSEXP, SEXP t0SEXP, SEXP svSEXP, SEXP lambda_gSEXP, SEXP lambda_kSEXP, SEXP cSEXP, SEXP n_gauss_nodesSEXP, SEXP log_outSEXP, SEXP kill_shapeSEXP, SEXP guessSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -499,19 +505,20 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< double >::type s(sSEXP);
     Rcpp::traits::input_parameter< double >::type t0(t0SEXP);
     Rcpp::traits::input_parameter< double >::type sv(svSEXP);
-    Rcpp::traits::input_parameter< double >::type lambda(lambdaSEXP);
+    Rcpp::traits::input_parameter< double >::type lambda_g(lambda_gSEXP);
+    Rcpp::traits::input_parameter< double >::type lambda_k(lambda_kSEXP);
     Rcpp::traits::input_parameter< double >::type c(cSEXP);
     Rcpp::traits::input_parameter< int >::type n_gauss_nodes(n_gauss_nodesSEXP);
     Rcpp::traits::input_parameter< bool >::type log_out(log_outSEXP);
     Rcpp::traits::input_parameter< int >::type kill_shape(kill_shapeSEXP);
     Rcpp::traits::input_parameter< bool >::type guess(guessSEXP);
-    rcpp_result_gen = Rcpp::wrap(prdmswtn(t, mu_drift, b, A, s, t0, sv, lambda, c, n_gauss_nodes, log_out, kill_shape, guess));
+    rcpp_result_gen = Rcpp::wrap(prdmswtn(t, mu_drift, b, A, s, t0, sv, lambda_g, lambda_k, c, n_gauss_nodes, log_out, kill_shape, guess));
     return rcpp_result_gen;
 END_RCPP
 }
 // pswtn
-double pswtn(double t, double mu_drift, double threshold, double s, double t0, double sv, double lambda, double c, bool log_out, int kill_shape, bool guess);
-RcppExport SEXP _EMC2_pswtn(SEXP tSEXP, SEXP mu_driftSEXP, SEXP thresholdSEXP, SEXP sSEXP, SEXP t0SEXP, SEXP svSEXP, SEXP lambdaSEXP, SEXP cSEXP, SEXP log_outSEXP, SEXP kill_shapeSEXP, SEXP guessSEXP) {
+double pswtn(double t, double mu_drift, double threshold, double s, double t0, double sv, double lambda_g, double lambda_k, double c, bool log_out, int kill_shape, bool guess);
+RcppExport SEXP _EMC2_pswtn(SEXP tSEXP, SEXP mu_driftSEXP, SEXP thresholdSEXP, SEXP sSEXP, SEXP t0SEXP, SEXP svSEXP, SEXP lambda_gSEXP, SEXP lambda_kSEXP, SEXP cSEXP, SEXP log_outSEXP, SEXP kill_shapeSEXP, SEXP guessSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -521,12 +528,13 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< double >::type s(sSEXP);
     Rcpp::traits::input_parameter< double >::type t0(t0SEXP);
     Rcpp::traits::input_parameter< double >::type sv(svSEXP);
-    Rcpp::traits::input_parameter< double >::type lambda(lambdaSEXP);
+    Rcpp::traits::input_parameter< double >::type lambda_g(lambda_gSEXP);
+    Rcpp::traits::input_parameter< double >::type lambda_k(lambda_kSEXP);
     Rcpp::traits::input_parameter< double >::type c(cSEXP);
     Rcpp::traits::input_parameter< bool >::type log_out(log_outSEXP);
     Rcpp::traits::input_parameter< int >::type kill_shape(kill_shapeSEXP);
     Rcpp::traits::input_parameter< bool >::type guess(guessSEXP);
-    rcpp_result_gen = Rcpp::wrap(pswtn(t, mu_drift, threshold, s, t0, sv, lambda, c, log_out, kill_shape, guess));
+    rcpp_result_gen = Rcpp::wrap(pswtn(t, mu_drift, threshold, s, t0, sv, lambda_g, lambda_k, c, log_out, kill_shape, guess));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -1489,14 +1497,14 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_pkilledlba", (DL_FUNC) &_EMC2_pkilledlba, 8},
     {"_EMC2_dWald", (DL_FUNC) &_EMC2_dWald, 6},
     {"_EMC2_pWald", (DL_FUNC) &_EMC2_pWald, 6},
-    {"_EMC2_pwald", (DL_FUNC) &_EMC2_pwald, 10},
-    {"_EMC2_dwald", (DL_FUNC) &_EMC2_dwald, 10},
-    {"_EMC2_dgbm", (DL_FUNC) &_EMC2_dgbm, 10},
-    {"_EMC2_pgbm", (DL_FUNC) &_EMC2_pgbm, 10},
-    {"_EMC2_dswtn", (DL_FUNC) &_EMC2_dswtn, 11},
-    {"_EMC2_drdmswtn", (DL_FUNC) &_EMC2_drdmswtn, 13},
-    {"_EMC2_prdmswtn", (DL_FUNC) &_EMC2_prdmswtn, 13},
-    {"_EMC2_pswtn", (DL_FUNC) &_EMC2_pswtn, 11},
+    {"_EMC2_pwald", (DL_FUNC) &_EMC2_pwald, 11},
+    {"_EMC2_dwald", (DL_FUNC) &_EMC2_dwald, 11},
+    {"_EMC2_dgbm", (DL_FUNC) &_EMC2_dgbm, 11},
+    {"_EMC2_pgbm", (DL_FUNC) &_EMC2_pgbm, 11},
+    {"_EMC2_dswtn", (DL_FUNC) &_EMC2_dswtn, 12},
+    {"_EMC2_drdmswtn", (DL_FUNC) &_EMC2_drdmswtn, 14},
+    {"_EMC2_prdmswtn", (DL_FUNC) &_EMC2_prdmswtn, 14},
+    {"_EMC2_pswtn", (DL_FUNC) &_EMC2_pswtn, 12},
     {"_EMC2_dSWTNspv", (DL_FUNC) &_EMC2_dSWTNspv, 13},
     {"_EMC2_pSWTNspv", (DL_FUNC) &_EMC2_pSWTNspv, 13},
     {"_EMC2_dGBMspv", (DL_FUNC) &_EMC2_dGBMspv, 10},

@@ -6,18 +6,18 @@ test_that("pswtn reduces to pwald when sv is zero", {
   lambda <- 0.35
 
   expect_equal(
-    EMC2:::pswtn(t, v, b, sv = 0, s = s, lambda = lambda),
-    EMC2:::pwald(t, v, b, sigma = s, A = 0, k = lambda),
+    EMC2:::pswtn(t, v, b, sv = 0, s = s, lambda_k = lambda),
+    EMC2:::pwald(t, v, b, sigma = s, A = 0, lambda_k = lambda),
     tolerance = 1e-12
   )
 })
 
 test_that("killed wald and rdmswtn infinite-time masses are defective", {
-  p_wald_inf <- EMC2:::pwald(Inf, mu = 3, b = 2, sigma = 1, A = 0.4, k = 1, log_out = FALSE)
+  p_wald_inf <- EMC2:::pwald(Inf, mu = 3, b = 2, sigma = 1, A = 0.4, lambda_k = 1, log_out = FALSE)
   p_rdmswtn_sv0_inf <- EMC2:::prdmswtn(Inf, mu_drift = 3, b = 2, A = 0.4, sv = 0,
-                                s = 1, c = 1, lambda = 1, n_gauss_nodes = 20, log_out = FALSE)
+                                s = 1, c = 1, lambda_k = 1, n_gauss_nodes = 20, log_out = FALSE)
   p_rdmswtn_sv1_inf <- EMC2:::prdmswtn(Inf, mu_drift = 3, b = 2, A = 0.4, sv = 1,
-                                s = 1, c = 1, lambda = 1, n_gauss_nodes = 20, log_out = FALSE)
+                                s = 1, c = 1, lambda_k = 1, n_gauss_nodes = 20, log_out = FALSE)
 
   expect_gt(p_wald_inf, 0)
   expect_lte(p_wald_inf, 1)
@@ -36,9 +36,9 @@ test_that("killed swtn cdf is locally consistent with the pdf", {
   s <- 1.0
   lambda <- 0.6
 
-  pdf <- EMC2:::dswtn(t, v, b, sv = sv, s = s, lambda = lambda)
-  slope <- (EMC2:::pswtn(t + h, v, b, sv = sv, s = s, lambda = lambda) -
-            EMC2:::pswtn(t - h, v, b, sv = sv, s = s, lambda = lambda)) / (2 * h)
+  pdf <- EMC2:::dswtn(t, v, b, sv = sv, s = s, lambda_k = lambda)
+  slope <- (EMC2:::pswtn(t + h, v, b, sv = sv, s = s, lambda_k = lambda) -
+            EMC2:::pswtn(t - h, v, b, sv = sv, s = s, lambda_k = lambda)) / (2 * h)
 
   expect_equal(slope, pdf, tolerance = 2e-4)
 })
@@ -52,10 +52,10 @@ test_that("wald small-k limit is numerically stable (q near 0 regime)", {
   t0 <- 0.2
   k_small <- 1e-10
 
-  cdf0 <- EMC2:::pwald(t, mu, b, sigma = sigma, A = A, t0 = t0, k = 0.0, guess = FALSE)
-  cdfk <- EMC2:::pwald(t, mu, b, sigma = sigma, A = A, t0 = t0, k = k_small, guess = FALSE)
-  pdf0 <- EMC2:::dwald(t, mu, b, sigma = sigma, A = A, t0 = t0, k = 0.0, guess = FALSE)
-  pdfk <- EMC2:::dwald(t, mu, b, sigma = sigma, A = A, t0 = t0, k = k_small, guess = FALSE)
+  cdf0 <- EMC2:::pwald(t, mu, b, sigma = sigma, A = A, t0 = t0, lambda_k = 0.0, guess = FALSE)
+  cdfk <- EMC2:::pwald(t, mu, b, sigma = sigma, A = A, t0 = t0, lambda_k = k_small, guess = FALSE)
+  pdf0 <- EMC2:::dwald(t, mu, b, sigma = sigma, A = A, t0 = t0, lambda_k = 0.0, guess = FALSE)
+  pdfk <- EMC2:::dwald(t, mu, b, sigma = sigma, A = A, t0 = t0, lambda_k = k_small, guess = FALSE)
 
   expect_equal(cdfk, cdf0, tolerance = 1e-8)
   expect_equal(pdfk, pdf0, tolerance = 1e-7)
@@ -73,16 +73,16 @@ test_that("combined local guess+kill SWTN Erlang-2 cdf is locally consistent wit
 
   pdf <- EMC2:::dSWTNspv(
     t = t, v = v, b = b, A = 0, t0 = 0, sv = sv, s = s,
-    lambda_g = lambda_g, lambda_k = lambda_k, kill_shape = 2L
+    c = 0, lambda_g = lambda_g, lambda_k = lambda_k, kill_shape = 2L
   )
   slope <- (
     EMC2:::pSWTNspv(
       t = t + h, v = v, b = b, A = 0, t0 = 0, sv = sv, s = s,
-      lambda_g = lambda_g, lambda_k = lambda_k, kill_shape = 2L
+      c = 0, lambda_g = lambda_g, lambda_k = lambda_k, kill_shape = 2L
     ) -
     EMC2:::pSWTNspv(
       t = t - h, v = v, b = b, A = 0, t0 = 0, sv = sv, s = s,
-      lambda_g = lambda_g, lambda_k = lambda_k, kill_shape = 2L
+      c = 0, lambda_g = lambda_g, lambda_k = lambda_k, kill_shape = 2L
     )
   ) / (2 * h)
 
@@ -129,7 +129,7 @@ test_that("rRDMSWTN nests to the no-kill model when lambda_k is zero", {
   designRDMSWTN <- design(
     factors = list(S = "Target", subjects = 1, L = c("L", "M", "H")),
     Rlevels = c("Go"),
-    formula = list(v ~ L, B ~ 1, A ~ 1, t0 ~ 1, s ~ 1, sv ~ 1, lambda_k ~ 1),
+    formula = list(v ~ L, B ~ 1, A ~ 1, t0 ~ 1, s ~ 1, sv ~ 1, lambda_g ~ 1, lambda_k ~ 1),
     constants = c(s = log(1)),
     model = RDMSWTN(erlang_type = "local_kill"),
     UC = 3,
@@ -142,6 +142,7 @@ test_that("rRDMSWTN nests to the no-kill model when lambda_k is zero", {
   p_vec["A"] <- log(0.4)
   p_vec["t0"] <- log(0.2)
   p_vec["sv"] <- log(0.25)
+  p_vec["lambda_g"] <- log(0)
   p_vec["lambda_k"] <- log(0)
 
   expect_silent(dat <- make_data(p_vec, design = designRDMSWTN, n_trials = 200))

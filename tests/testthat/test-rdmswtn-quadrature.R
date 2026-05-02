@@ -16,11 +16,11 @@ test_that("prdmswtn matches direct threshold quadrature after integration swap",
 
   direct <- sum(gl$weights * vapply(gl$nodes, function(node) {
     threshold <- center + half_width * node
-    EMC2:::pswtn(t, v, threshold, sv = sv, s = s, c = c, lambda = lambda)
+    EMC2:::pswtn(t, v, threshold, sv = sv, s = s, c = c, lambda_k = lambda)
   }, numeric(1))) * half_width / A
 
   expect_equal(
-    EMC2:::prdmswtn(t, v, b, A, sv = sv, s = s, c = c, lambda = lambda, n_gauss_nodes = 20),
+    EMC2:::prdmswtn(t, v, b, A, sv = sv, s = s, c = c, lambda_k = lambda, n_gauss_nodes = 20),
     direct,
     tolerance = 1e-8
   )

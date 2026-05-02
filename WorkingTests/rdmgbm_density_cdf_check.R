@@ -19,7 +19,9 @@ par_row <- c(
   B = runif(1, 0.15, 1.25),
   A = runif(1, 0.05, 0.65),
   t0 = runif(1, 0.10, 0.35),
-  s = s_draw
+  s = s_draw,
+  lambda_g = 0,
+  lambda_k = 0
 )
 
 # Repeat one parameter set over trials for the model rfun.

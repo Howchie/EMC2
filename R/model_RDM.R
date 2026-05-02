@@ -581,13 +581,13 @@ dRDMSWTN <- function(rt, pars, erlang = 1L) {
     )
   }
   out <- rep(NaN, length(rt))
+  if (!all(c("lambda_g", "lambda_k") %in% colnames(pars))) {
+    stop("RDMSWTN requires parameter columns 'lambda_g' and 'lambda_k'.")
+  }
   erl <- (pars[, "lambda_g", drop = FALSE] > 0) | (pars[, "lambda_k", drop = FALSE] > 0)
   ok <- (rt > 0) & ((rt > pars[, "t0", drop = FALSE]) | erl) & !(pars[, "v", drop = FALSE] < 0)
   ok[is.na(ok)] <- FALSE
   if (any(ok)) {
-    if (!all(c("lambda_g", "lambda_k") %in% colnames(pars))) {
-      stop("RDMSWTN requires parameter columns 'lambda_g' and 'lambda_k'.")
-    }
     if (any(dimnames(pars)[[2]] == "s")) {
       pars_ok <- pars[ok, , drop = FALSE]
       pars_ok[, c("A", "b", "v", "sv")] <- pars_ok[, c("A", "b", "v", "sv")] / pars_ok[, "s"]
@@ -617,13 +617,13 @@ pRDMSWTN <- function(rt, pars, erlang = 1L) {
     )
   }
   out <- rep(NaN, length(rt))
+  if (!all(c("lambda_g", "lambda_k") %in% colnames(pars))) {
+    stop("RDMSWTN requires parameter columns 'lambda_g' and 'lambda_k'.")
+  }
   erl <- (pars[, "lambda_g", drop = FALSE] > 0) | (pars[, "lambda_k", drop = FALSE] > 0)
   ok <- (rt > 0) & ((rt > pars[, "t0", drop = FALSE]) | erl) & !(pars[, "v", drop = FALSE] < 0)
   ok[is.na(ok)] <- FALSE
   if (any(ok)) {
-    if (!all(c("lambda_g", "lambda_k") %in% colnames(pars))) {
-      stop("RDMSWTN requires parameter columns 'lambda_g' and 'lambda_k'.")
-    }
     if (any(dimnames(pars)[[2]] == "s")) {
       pars_ok <- pars[ok, , drop = FALSE]
       pars_ok[, c("A", "b", "v", "sv")] <- pars_ok[, c("A", "b", "v", "sv")] / pars_ok[, "s"]
