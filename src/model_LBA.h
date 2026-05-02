@@ -257,25 +257,39 @@ double dleakyba_norm(double t, double A, double b,
   return log_out ? safe_log(f) : f;
 }
 
-// Killed-leaky BA density: f_hit(t) = f_leaky(t) * S_K(t)
-// kill_shape=1: S_K = exp(-lambda*t); kill_shape=2: S_K = exp(-lambda*t)*(1+lambda*t).
+// Killed-leaky BA density: f_hit(t_eam) * S_K(t) + f_K(t) * S_R(t_eam)
+// t is raw rt; t_eam = t - t0 is EAM-adjusted time. Erlang uses raw t.
 inline double dkilledleakyba_norm(double t, double A, double b,
                                   double v, double sv, double k,
                                   double lambda_g, double lambda_k,
                                   bool posdrift = true, bool log_out = false,
-                                  int kill_shape = 1, bool guess = false) {
+                                  int kill_shape = 1, bool guess = false,
+                                  double t0 = 0.0) {
   if (t <= 0.0) return log_out ? R_NegInf : 0.0;
+  const double t_eam = t - t0;
   const bool use_guess = guess && (lambda_g > 0.0);
   const bool use_kill = (lambda_k > 0.0);
-  if (!use_guess && !use_kill) return dleakyba_norm(t, A, b, v, sv, k, posdrift, log_out);
 
-  const double log_fR = dleakyba_norm(t, A, b, v, sv, k, posdrift, true);
-  const double log_sK = use_kill ? erlang_log_surv(t, lambda_k, kill_shape) : 0.0;
+  // Erlang survivals always use raw t
+  const double log_sK = use_kill  ? erlang_log_surv(t, lambda_k, kill_shape) : 0.0;
   const double log_sG = use_guess ? erlang_log_surv(t, lambda_g, kill_shape) : 0.0;
+
+  // When EAM hasn't started: f_EAM = 0, S_EAM = 1.
+  if (t_eam <= 0.0) {
+    if (!use_guess) return log_out ? R_NegInf : 0.0;
+    // Only guess path contributes: f_G(t) * S_K(t) * S_R(0) = f_G(t) * S_K(t) * 1
+    const double log_fG = erlang_log_pdf(t, lambda_g, kill_shape);
+    const double log_f_guess = log_fG + log_sK;
+    return log_out ? log_f_guess : std::exp(log_f_guess);
+  }
+
+  if (!use_guess && !use_kill) return dleakyba_norm(t_eam, A, b, v, sv, k, posdrift, log_out);
+
+  const double log_fR = dleakyba_norm(t_eam, A, b, v, sv, k, posdrift, true);
   const double log_f_hit = log_fR + log_sK + log_sG;
   if (!use_guess) return log_out ? log_f_hit : std::exp(log_f_hit);
 
-  const double cdf_r = pleakyba_norm(t, A, b, v, sv, k, posdrift, false);
+  const double cdf_r = pleakyba_norm(t_eam, A, b, v, sv, k, posdrift, false);
   const double log_sr = std::log1p(-std::max(0.0, std::min(1.0, cdf_r)));
   const double log_fG = erlang_log_pdf(t, lambda_g, kill_shape);
   const double log_f_guess = log_fG + log_sK + log_sr;
@@ -285,27 +299,43 @@ inline double dkilledleakyba_norm(double t, double A, double b,
 
 // Killed-leaky BA sub-CDF:
 // P(T_R <= t, T_R < T_K) with kill_shape=1 (exponential) or kill_shape=2 (Erlang-2).
-// With guess=true: mixture CDF = 1 - S_R(t)*S_K(t).
+// With guess=true: mixture CDF = 1 - S_R(t_eam)*S_K(t)*S_G(t).
+// t is raw rt; t_eam = t - t0 is EAM-adjusted time. Erlang uses raw t.
 inline double pkilledleakyba_norm(double t, double A, double b,
                                   double v, double sv, double k,
                                   double lambda_g, double lambda_k,
                                   bool posdrift = true, bool log_out = false,
-                                  int kill_shape = 1, bool guess = false) {
+                                  int kill_shape = 1, bool guess = false,
+                                  double t0 = 0.0) {
   if (t <= 0.0) return log_out ? R_NegInf : 0.0;
+  const double t_eam = t - t0;
   const bool use_guess = guess && (lambda_g > 0.0);
   const bool use_kill = (lambda_k > 0.0);
-  if (!use_guess && !use_kill) return pleakyba_norm(t, A, b, v, sv, k, posdrift, log_out);
+
+  // When EAM hasn't started: P(EAM fires by t_eam) = 0, S_R = 1.
+  if (t_eam <= 0.0) {
+    if (!use_guess && !use_kill) return log_out ? R_NegInf : 0.0;
+    // Mixture CDF = 1 - S_G(t)*S_K(t)
+    const double log_sG = use_guess ? erlang_log_surv(t, lambda_g, kill_shape) : 0.0;
+    const double log_sK = use_kill  ? erlang_log_surv(t, lambda_k, kill_shape) : 0.0;
+    const double log_val = std::log1p(-std::exp(log_sG + log_sK));
+    return log_out ? log_val : std::exp(log_val);
+  }
+
+  if (!use_guess && !use_kill) return pleakyba_norm(t_eam, A, b, v, sv, k, posdrift, log_out);
 
   if (use_guess && use_kill) {
-    // Combined local kill+guess path: one GL20 loop over time.
+    // Combined local kill+guess path: GL20 loop over raw time [0, t].
+    // At each node u: erlang uses u (raw time), EAM uses max(0, u - t0).
     const Rcpp::List& gl = get_gl20();
     const Rcpp::NumericVector nodes = gl["nodes"];
     const Rcpp::NumericVector weights = gl["weights"];
     double acc = 0.0;
     for (int j = 0; j < nodes.size(); ++j) {
-      const double u  = 0.5 * t * (nodes[j] + 1.0);
-      const double fR = dleakyba_norm(u, A, b, v, sv, k, posdrift, false);
-      const double SR = std::max(0.0, std::min(1.0, 1.0 - pleakyba_norm(u, A, b, v, sv, k, posdrift, false)));
+      const double u      = 0.5 * t * (nodes[j] + 1.0);   // raw time node
+      const double u_eam  = std::max(0.0, u - t0);          // EAM time
+      const double fR = dleakyba_norm(u_eam, A, b, v, sv, k, posdrift, false);
+      const double SR = std::max(0.0, std::min(1.0, 1.0 - pleakyba_norm(u_eam, A, b, v, sv, k, posdrift, false)));
       const double SG = std::exp(erlang_log_surv(u, lambda_g, kill_shape));
       const double SK = std::exp(erlang_log_surv(u, lambda_k, kill_shape));
       const double fG = std::exp(erlang_log_pdf(u, lambda_g, kill_shape));
@@ -318,7 +348,8 @@ inline double pkilledleakyba_norm(double t, double A, double b,
 
   const double lambda = use_guess ? lambda_g : lambda_k;
   if (use_guess) {
-    const double cdf_r = pleakyba_norm(t, A, b, v, sv, k, posdrift, false);
+    // 1 - S_R(t_eam) * S_G(t); erlang uses raw t
+    const double cdf_r = pleakyba_norm(t_eam, A, b, v, sv, k, posdrift, false);
     const double log_sr = std::log1p(-std::max(0.0, std::min(1.0, cdf_r)));
     const double log_sk = erlang_log_surv(t, lambda, kill_shape);
     const double log_val = std::log1p(-std::exp(log_sr + log_sk));
@@ -327,21 +358,25 @@ inline double pkilledleakyba_norm(double t, double A, double b,
   const double eps = 1e-10;
   if (sv <= 0.0 || b < A || b <= 0.0) return log_out ? R_NegInf : 0.0;
 
-  // Point-start and k -> 0 fallback: integrate in time domain.
-  if (A <= 0.0 || std::fabs(k) < eps) {
+  // Pure kill path: integrate f_EAM(u_eam) * S_K(u) over raw [0, t].
+  // For t0 > 0, use GL20 to correctly separate EAM time and erlang time.
+  if (t0 > 0.0 || A <= 0.0 || std::fabs(k) < eps) {
     const Rcpp::List& gl = get_gl20();
     const Rcpp::NumericVector nodes = gl["nodes"];
     const Rcpp::NumericVector weights = gl["weights"];
     double acc = 0.0;
     for (int j = 0; j < nodes.size(); ++j) {
-      const double u  = 0.5 * t * (nodes[j] + 1.0);
+      const double u     = 0.5 * t * (nodes[j] + 1.0);   // raw time node
+      const double u_eam = std::max(0.0, u - t0);          // EAM time
       const double sk = std::exp(erlang_log_surv(u, lambda, kill_shape));
-      acc += weights[j] * dleakyba_norm(u, A, b, v, sv, k, posdrift, false) * sk;
+      acc += weights[j] * dleakyba_norm(u_eam, A, b, v, sv, k, posdrift, false) * sk;
     }
     double out = 0.5 * t * acc;
     out = std::max(0.0, std::min(1.0, out));
     return log_out ? safe_log(out) : out;
   }
+
+  // t0 == 0 and A > 0 and k > 0: use the original analytic path (below).
 
   const double E = std::exp(-k * t);
   const double G = std::max(1e-300, -std::expm1(-k * t));
