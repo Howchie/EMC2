@@ -427,6 +427,13 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
     out.model_pfun_raw = &plnr_raw;
     out.logS_at_t_ptr = &lnr_logS_at_t;
     out.ctx.t0_index = 2;
+  } else if (type_std.find("RGAMMA") != std::string::npos) {
+    out.pdf1_ptr = &drgamma_scalar;
+    out.cdf1_ptr = &prgamma_scalar;
+    out.model_dfun_raw = &drgamma_raw;
+    out.model_pfun_raw = &prgamma_raw;
+    out.logS_at_t_ptr = &rgamma_logS_at_t;
+    out.ctx.t0_index = -1;
   } else {
     Rcpp::stop("Unsupported race model type string in %s: %s", caller.c_str(), type_std.c_str());
   }
@@ -2550,10 +2557,9 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
         } else if (adapter.ctx.is_global_kill && adapter.ctx.kill_active) {
           // Pre-fill log S_K at the winner row for each trial.
           const double* lambda_ptr = pars_cm + adapter.ctx.lambda_k_index * n_trials;
-          const double* t0_ptr     = pars_cm + adapter.ctx.t0_index     * n_trials;
           for (int j = 0; j < n_trials; ++j) {
             if (!isok_int_fp[j] || !winner_int_buf[j]) continue;
-            const double tt = rt_ptr[j] - t0_ptr[j];
+            const double tt = rt_ptr[j];
             alt_res_buf_fp[j] = (tt > 0.0)
                 ? erlang_log_surv(tt, lambda_ptr[j], adapter.ctx.kill_shape)
                 : min_ll;
@@ -4737,9 +4743,7 @@ double c_log_likelihood_race(
       if (!R_FINITE(logS)) return R_NegInf;
       if (race_ctx && race_ctx->is_global_kill && race_ctx->kill_active) {
         const double* lambda_ptr = pars_cm_ptr + race_ctx->lambda_k_index * n_trials;
-        const double* t0_ptr = pars_cm_ptr + race_ctx->t0_index * n_trials;
-        const double tt = t - t0_ptr[start_row_idx];
-        if (tt > 0.0) logS += erlang_log_surv(tt, lambda_ptr[start_row_idx], race_ctx->kill_shape);
+        if (t > 0.0) logS += erlang_log_surv(t, lambda_ptr[start_row_idx], race_ctx->kill_shape);
       }
       return logS;
     }
@@ -4759,10 +4763,8 @@ double c_log_likelihood_race(
     }
     if (race_ctx && race_ctx->is_global_kill && race_ctx->kill_active) {
       const double* lambda_ptr = pars_cm_ptr + race_ctx->lambda_k_index * n_trials;
-      const double* t0_ptr = pars_cm_ptr + race_ctx->t0_index * n_trials;
-      const double tt = t - t0_ptr[start_row_idx];
-      if (tt > 0.0) {
-        logS += erlang_log_surv(tt, lambda_ptr[start_row_idx], race_ctx->kill_shape);
+      if (t > 0.0) {
+        logS += erlang_log_surv(t, lambda_ptr[start_row_idx], race_ctx->kill_shape);
       }
     }
     return logS;
@@ -4774,7 +4776,6 @@ double c_log_likelihood_race(
   if (ctx && ctx->is_global_kill && ctx->kill_active) {
     winner_row_by_trial.assign(static_cast<size_t>(n_unique_trials), -1);
     global_log_sk_by_trial.assign(static_cast<size_t>(n_unique_trials), 0.0);
-    const double* t0_ptr = pars_cm_ptr + static_cast<size_t>(ctx->t0_index) * n_trials;
     const double* lambda_ptr = pars_cm_ptr + static_cast<size_t>(ctx->lambda_k_index) * n_trials;
     for (int j = 0; j < n_unique_trials; ++j) {
       const int start = j * n_lR;
@@ -4786,7 +4787,7 @@ double c_log_likelihood_race(
       }
       winner_row_by_trial[static_cast<size_t>(j)] = idx_w;
       if (idx_w >= 0) {
-        const double tt = rts_dadm[idx_w] - t0_ptr[idx_w];
+        const double tt = rts_dadm[idx_w];
         global_log_sk_by_trial[static_cast<size_t>(j)] =
           (tt > 0.0) ? erlang_log_surv(tt, lambda_ptr[idx_w], ctx->kill_shape) : min_ll;
       }

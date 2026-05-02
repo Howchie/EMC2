@@ -109,5 +109,74 @@ LNR <- function() {
 }
 
 
+#' The Shifted-Gamma Race Model
+#'
+#' Model file for a race model where each accumulator follows a Gamma
+#' distribution with free rate, shape, and shift parameters.
+#'
+#' Setting `shape` to `1` or `2` via model constants nests Erlang-1 / Erlang-2.
+#' Setting `shift` to `0` via model constants gives the non-shifted special case.
+#'
+#' @return A model list compatible with `design()`.
+#' @export
+RGAMMA <- function() {
+  dRGAMMA <- function(rt, pars) {
+    out <- numeric(length(rt))
+    tt <- rt - pars[, "shift"]
+    ok <- tt > 0 & is.finite(tt) & pars[, "lambda"] > 0 & pars[, "shape"] > 0
+    ok[is.na(ok)] <- FALSE
+    out[ok] <- stats::dgamma(tt[ok], shape = pars[ok, "shape"], rate = pars[ok, "lambda"])
+    out
+  }
 
+  pRGAMMA <- function(rt, pars) {
+    out <- numeric(length(rt))
+    tt <- rt - pars[, "shift"]
+    ok <- tt > 0 & is.finite(tt) & pars[, "lambda"] > 0 & pars[, "shape"] > 0
+    ok[is.na(ok)] <- FALSE
+    out[ok] <- stats::pgamma(tt[ok], shape = pars[ok, "shape"], rate = pars[ok, "lambda"])
+    out
+  }
+
+  rRGAMMA <- function(lR, pars, p_types = c("lambda", "shape", "shift"), ok = rep(TRUE, dim(pars)[1])) {
+    if (!all(p_types %in% dimnames(pars)[[2]])) {
+      stop("pars must have columns ", paste(p_types, collapse = " "))
+    }
+    nr <- length(levels(lR))
+    dt <- matrix(Inf, ncol = nrow(pars) / nr, nrow = nr)
+    idx_ok <- which(ok)
+    pars <- pars[idx_ok, , drop = FALSE]
+    lam <- pars[, "lambda"]
+    shp <- pars[, "shape"]
+    shf <- pars[, "shift"]
+    ok_draw <- is.finite(lam) & is.finite(shp) & is.finite(shf) & lam > 0 & shp > 0
+    if (any(ok_draw)) {
+      dt[idx_ok[ok_draw]] <- stats::rgamma(sum(ok_draw), shape = shp[ok_draw], rate = lam[ok_draw]) + shf[ok_draw]
+    }
+    R <- max.col(-t(dt), ties.method = "first")
+    pick <- cbind(R, seq_len(ncol(dt)))
+    rt <- dt[pick]
+    R <- factor(levels(lR)[R], levels = levels(lR))
+    cbind.data.frame(R = R, rt = rt)
+  }
+
+  list(
+    type = "RACE",
+    c_name = "RGAMMA",
+    p_types = c("lambda" = log(1), "shape" = log(1), "shift" = log(0), "pContaminant" = qnorm(0)),
+    p_types_canonical = c("lambda", "shape", "shift"),
+    transform = list(func = c(lambda = "exp", shape = "exp", shift = "exp", pContaminant = "pnorm")),
+    bound = list(
+      minmax = cbind(lambda = c(1e-6, Inf), shape = c(1e-6, Inf), shift = c(0, Inf), pContaminant = c(0.001, 0.999)),
+      exception = c(shift = 0, pContaminant = 0)
+    ),
+    Ttransform = function(pars, dadm) pars,
+    rfun = function(data = NULL, pars) rRGAMMA(data$lR, pars, ok = attr(pars, "ok")),
+    dfun = function(rt, pars) dRGAMMA(rt, pars),
+    pfun = function(rt, pars) pRGAMMA(rt, pars),
+    log_likelihood = function(pars, dadm, model, min_ll = log(1e-10)) {
+      log_likelihood_race_missing(pars = pars, dadm = dadm, model = model, min_ll = min_ll)
+    }
+  )
+}
 

@@ -101,11 +101,27 @@ test_that("BAwL Erlang-2 CDF matches direct numerical integration", {
         EMC2:::dleakyba(
           t = x, A = pars[i, "A"], b = pars[i, "b"], v = pars[i, "v"],
           sv = pars[i, "sv"], k = pars[i, "k"], posdrift = TRUE
-        ) * exp(-pars[i, "lambda_k"] * x) * (1 + pars[i, "lambda_k"] * x)
+        ) * exp(-pars[i, "lambda_k"] * (x + pars[i, "t0"])) *
+          (1 + pars[i, "lambda_k"] * (x + pars[i, "t0"]))
       },
       lower = 0, upper = dt, subdivisions = 400L, rel.tol = 1e-8
     )$value
   }, numeric(1))
 
   expect_lt(max(abs(approx - direct)), 2e-3)
+})
+
+test_that("BAwL wrapper preserves rt<t0 Erlang guess mass", {
+  rt <- c(0.05, 0.12, 0.20)
+  t0 <- 0.35
+  ks <- 2L
+  lg <- 0.8
+
+  pars <- cbind(v = 1.0, sv = 0.2, A = 0.1, b = 1.2, t0 = t0, k = 0.15, lambda_g = lg, lambda_k = 0.0)
+  pars <- pars[rep(1, length(rt)), , drop = FALSE]
+
+  expect_equal(EMC2:::dBAwL(rt, pars, erlang = ks, guess = TRUE),
+               dgamma(rt, shape = ks, rate = lg), tolerance = 5e-6)
+  expect_equal(EMC2:::pBAwL(rt, pars, erlang = ks, guess = TRUE),
+               pgamma(rt, shape = ks, rate = lg), tolerance = 5e-6)
 })

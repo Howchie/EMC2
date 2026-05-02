@@ -6,17 +6,17 @@ test_that("pswtn reduces to pwald when sv is zero", {
   lambda <- 0.35
 
   expect_equal(
-    EMC2:::pswtn(t, b, v, sv = 0, s = s, lambda = lambda),
-    EMC2:::pwald(t, b, v, sigma = s, A = 0, k = lambda),
+    EMC2:::pswtn(t, v, b, sv = 0, s = s, lambda = lambda),
+    EMC2:::pwald(t, v, b, sigma = s, A = 0, k = lambda),
     tolerance = 1e-12
   )
 })
 
 test_that("killed wald and rdmswtn infinite-time masses are defective", {
-  p_wald_inf <- EMC2:::pwald(Inf, b = 2, mu = 3, sigma = 1, A = 0.4, k = 1, log_out = FALSE)
-  p_rdmswtn_sv0_inf <- EMC2:::prdmswtn(Inf, b = 2, mu_drift = 3, A = 0.4, sv = 0,
+  p_wald_inf <- EMC2:::pwald(Inf, mu = 3, b = 2, sigma = 1, A = 0.4, k = 1, log_out = FALSE)
+  p_rdmswtn_sv0_inf <- EMC2:::prdmswtn(Inf, mu_drift = 3, b = 2, A = 0.4, sv = 0,
                                 s = 1, c = 1, lambda = 1, n_gauss_nodes = 20, log_out = FALSE)
-  p_rdmswtn_sv1_inf <- EMC2:::prdmswtn(Inf, b = 2, mu_drift = 3, A = 0.4, sv = 1,
+  p_rdmswtn_sv1_inf <- EMC2:::prdmswtn(Inf, mu_drift = 3, b = 2, A = 0.4, sv = 1,
                                 s = 1, c = 1, lambda = 1, n_gauss_nodes = 20, log_out = FALSE)
 
   expect_gt(p_wald_inf, 0)
@@ -36,9 +36,9 @@ test_that("killed swtn cdf is locally consistent with the pdf", {
   s <- 1.0
   lambda <- 0.6
 
-  pdf <- EMC2:::dswtn(t, b, v, sv = sv, s = s, lambda = lambda)
-  slope <- (EMC2:::pswtn(t + h, b, v, sv = sv, s = s, lambda = lambda) -
-            EMC2:::pswtn(t - h, b, v, sv = sv, s = s, lambda = lambda)) / (2 * h)
+  pdf <- EMC2:::dswtn(t, v, b, sv = sv, s = s, lambda = lambda)
+  slope <- (EMC2:::pswtn(t + h, v, b, sv = sv, s = s, lambda = lambda) -
+            EMC2:::pswtn(t - h, v, b, sv = sv, s = s, lambda = lambda)) / (2 * h)
 
   expect_equal(slope, pdf, tolerance = 2e-4)
 })
@@ -52,10 +52,10 @@ test_that("wald small-k limit is numerically stable (q near 0 regime)", {
   t0 <- 0.2
   k_small <- 1e-10
 
-  cdf0 <- EMC2:::pwald(t, b, mu, sigma = sigma, A = A, t0 = t0, k = 0.0, guess = FALSE)
-  cdfk <- EMC2:::pwald(t, b, mu, sigma = sigma, A = A, t0 = t0, k = k_small, guess = FALSE)
-  pdf0 <- EMC2:::dwald(t, b, mu, sigma = sigma, A = A, t0 = t0, k = 0.0, guess = FALSE)
-  pdfk <- EMC2:::dwald(t, b, mu, sigma = sigma, A = A, t0 = t0, k = k_small, guess = FALSE)
+  cdf0 <- EMC2:::pwald(t, mu, b, sigma = sigma, A = A, t0 = t0, k = 0.0, guess = FALSE)
+  cdfk <- EMC2:::pwald(t, mu, b, sigma = sigma, A = A, t0 = t0, k = k_small, guess = FALSE)
+  pdf0 <- EMC2:::dwald(t, mu, b, sigma = sigma, A = A, t0 = t0, k = 0.0, guess = FALSE)
+  pdfk <- EMC2:::dwald(t, mu, b, sigma = sigma, A = A, t0 = t0, k = k_small, guess = FALSE)
 
   expect_equal(cdfk, cdf0, tolerance = 1e-8)
   expect_equal(pdfk, pdf0, tolerance = 1e-7)
@@ -161,4 +161,22 @@ test_that("RDMSWTN requires lambda_g/lambda_k in model-level parameter matrices"
   expect_true(all(is.finite(p1)))
   expect_error(EMC2:::dRDMSWTN(rt, cbind(v = 1.1, b = 1.4, A = 0.2, t0 = 0.1, sv = 0.3, s = 1.0, k = 0.4)), "lambda_g")
   expect_error(EMC2:::pRDMSWTN(rt, cbind(v = 1.1, b = 1.4, A = 0.2, t0 = 0.1, sv = 0.3, s = 1.0, k = 0.4)), "lambda_g")
+})
+
+test_that("RDMSWTN and RDMGBM wrappers preserve rt<t0 Erlang guess mass", {
+  rt <- c(0.05, 0.12, 0.20)
+  t0 <- 0.35
+  ks <- 2L
+  lg <- 0.8
+
+  ref_pdf <- dgamma(rt, shape = ks, rate = lg)
+  ref_cdf <- pgamma(rt, shape = ks, rate = lg)
+
+  pars_swtn <- cbind(v = 1.0, b = 1.2, A = 0.1, t0 = t0, sv = 0.2, s = 1.0, lambda_g = lg, lambda_k = 0.0)
+  pars_gbm  <- cbind(v = 1.0, b = 1.2, A = 0.1, t0 = t0, s = 1.0, lambda_g = lg, lambda_k = 0.0)
+
+  expect_equal(EMC2:::dRDMSWTN(rt, pars_swtn, erlang = ks), ref_pdf, tolerance = 5e-6)
+  expect_equal(EMC2:::pRDMSWTN(rt, pars_swtn, erlang = ks), ref_cdf, tolerance = 5e-6)
+  expect_equal(EMC2:::dRDMGBM(rt, pars_gbm, erlang = ks), ref_pdf, tolerance = 5e-6)
+  expect_equal(EMC2:::pRDMGBM(rt, pars_gbm, erlang = ks), ref_cdf, tolerance = 5e-6)
 })

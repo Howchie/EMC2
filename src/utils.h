@@ -154,16 +154,17 @@ inline double drdmgbm_scalar(double t, const double* par, void* ctx_) {
   if (tt <= 0.0 && !erl) return 0.0;
   if (t <= 0.0) return 0.0;
   if (ctx && ctx->is_local_kill_guess && lg > 1e-12 && lk > 1e-12) {
-    return dgbm_local_combo(t, 1.0 + (par[1] + par[2]) * inv_s, par[0] * inv_s,
-                            1.0, par[2] * inv_s, lg, lk, false, ks, t0_val);
+    return dgbm_local_combo(t, par[0] * inv_s, 1.0 + (par[1] + par[2]) * inv_s,
+                            par[2] * inv_s, 1.0, t0_val, lg, lk, false, ks);
   }
   const double k_use = (is_guess ? lg : 0.0) + lk;
   return dgbm(t,
-              1.0 + (par[1] + par[2]) * inv_s,  // b = 1 + (B + A) / s
               par[0] * inv_s,                    // v / s
-              1.0,
+              1.0 + (par[1] + par[2]) * inv_s,  // b = 1 + (B + A) / s
               par[2] * inv_s,                    // A / s
-              k_use, false, ks, is_guess && k_use > 1e-12, t0_val);
+              1.0,                               // sigma = 1.0
+              t0_val,
+              k_use, false, ks, is_guess && k_use > 1e-12);
 }
 
 inline double prdmgbm_scalar(double t, const double* par, void* ctx_) {
@@ -180,16 +181,17 @@ inline double prdmgbm_scalar(double t, const double* par, void* ctx_) {
   if (tt <= 0.0 && !erl) return 0.0;
   if (t <= 0.0) return 0.0;
   if (ctx && ctx->is_local_kill_guess && lg > 1e-12 && lk > 1e-12) {
-    return pgbm_local_combo(t, 1.0 + (par[1] + par[2]) * inv_s, par[0] * inv_s,
-                            1.0, par[2] * inv_s, lg, lk, false, ks, t0_val);
+    return pgbm_local_combo(t, par[0] * inv_s, 1.0 + (par[1] + par[2]) * inv_s,
+                            par[2] * inv_s, 1.0, t0_val, lg, lk, false, ks);
   }
   const double k_use = (is_guess ? lg : 0.0) + lk;
   return pgbm(t,
-              1.0 + (par[1] + par[2]) * inv_s,
               par[0] * inv_s,
-              1.0,
+              1.0 + (par[1] + par[2]) * inv_s,
               par[2] * inv_s,
-              k_use, false, ks, is_guess && k_use > 1e-12, t0_val);
+              1.0,
+              t0_val,
+              k_use, false, ks, is_guess && k_use > 1e-12);
 }
 
 inline double dlnr_scalar(double t, const double* par, void* /*ctx_*/) {
@@ -314,16 +316,17 @@ inline void drdmgbm_raw(const double* rt, const double* pars_cm, int n_rows,
     if (rt[i] <= 0.0)      { out[i] = min_ll; continue; }
     double log_pdf;
     if (ctx->is_local_kill_guess && lg > 1e-12 && lk > 1e-12) {
-      log_pdf = dgbm_local_combo(rt[i], 1.0 + (B_[i] + A_[i]) * inv_s, v_[i] * inv_s,
-                                 1.0, A_[i] * inv_s, lg, lk, true, kill_shape, t0_i);
+      log_pdf = dgbm_local_combo(rt[i], v_[i] * inv_s, 1.0 + (B_[i] + A_[i]) * inv_s,
+                                 A_[i] * inv_s, 1.0, t0_i, lg, lk, true, kill_shape);
     } else {
       const double k_use = (is_guess ? lg : 0.0) + lk;
       log_pdf = dgbm(rt[i],
-                     1.0 + (B_[i] + A_[i]) * inv_s,
                      v_[i] * inv_s,
-                     1.0,
+                     1.0 + (B_[i] + A_[i]) * inv_s,
                      A_[i] * inv_s,
-                     k_use, true, kill_shape, is_guess && k_use > 1e-12, t0_i);
+                     1.0,
+                     t0_i,
+                     k_use, true, kill_shape, is_guess && k_use > 1e-12);
     }
     out[i] = (R_FINITE(log_pdf) && log_pdf > min_ll) ? log_pdf : min_ll;
   }
@@ -356,8 +359,8 @@ inline void prdmgbm_raw(const double* rt, const double* pars_cm, int n_rows,
     if (tt <= 0.0 && !erl) { out[i] = 0.0; continue; }
     if (rt[i] <= 0.0)      { out[i] = 0.0; continue; }
     if (ctx->is_local_kill_guess && lg > 1e-12 && lk > 1e-12) {
-      const double log_cdf = pgbm_local_combo(rt[i], 1.0 + (B_[i] + A_[i]) * inv_s, v_[i] * inv_s,
-                                              1.0, A_[i] * inv_s, lg, lk, true, kill_shape, t0_i);
+      const double log_cdf = pgbm_local_combo(rt[i], v_[i] * inv_s, 1.0 + (B_[i] + A_[i]) * inv_s,
+                                              A_[i] * inv_s, 1.0, t0_i, lg, lk, true, kill_shape);
       if (!R_FINITE(log_cdf)) { out[i] = 0.0; continue; }
       if (log_cdf >= 0.0) { out[i] = min_ll; continue; }
       out[i] = log1m_exp(log_cdf);
@@ -365,11 +368,12 @@ inline void prdmgbm_raw(const double* rt, const double* pars_cm, int n_rows,
     }
     const double k_use = (is_guess ? lg : 0.0) + lk;
     const double log_cdf = pgbm(rt[i],
-                                1.0 + (B_[i] + A_[i]) * inv_s,
                                 v_[i] * inv_s,
-                                1.0,
+                                1.0 + (B_[i] + A_[i]) * inv_s,
                                 A_[i] * inv_s,
-                                k_use, true, kill_shape, is_guess && k_use > 1e-12, t0_i);
+                                1.0,
+                                t0_i,
+                                k_use, true, kill_shape, is_guess && k_use > 1e-12);
     if (!R_FINITE(log_cdf)) { out[i] = 0.0; continue; }
     if (log_cdf >= 0.0) { out[i] = min_ll; continue; }
     out[i] = log1m_exp(log_cdf);
@@ -418,19 +422,20 @@ inline void rdmgbm_logS_at_t(double t, const double* pars_cm,
         continue;
       }
       if (ctx->is_local_kill_guess && lg > 1e-12 && lk > 1e-12) {
-        const double log_cdf = pgbm_local_combo(t, 1.0 + (B_[r] + A_[r]) * inv_s, v_[r] * inv_s,
-                                                1.0, A_[r] * inv_s, lg, lk, true, ks, t0_r);
+        const double log_cdf = pgbm_local_combo(t, v_[r] * inv_s, 1.0 + (B_[r] + A_[r]) * inv_s,
+                                                A_[r] * inv_s, 1.0, t0_r, lg, lk, true, ks);
         if (!R_FINITE(log_cdf) || log_cdf >= 0.0) { bad = true; break; }
         logS += log1m_exp(log_cdf);
         continue;
       }
       const double k_use = (is_guess ? lg : 0.0) + lk;
       const double log_cdf = pgbm(t,
-                                  1.0 + (B_[r] + A_[r]) * inv_s,
                                   v_[r] * inv_s,
-                                  1.0,
+                                  1.0 + (B_[r] + A_[r]) * inv_s,
                                   A_[r] * inv_s,
-                                  k_use, true, ks, is_guess && k_use > 1e-12, t0_r);
+                                  1.0,
+                                  t0_r,
+                                  k_use, true, ks, is_guess && k_use > 1e-12);
       if (!R_FINITE(log_cdf)) { bad = true; break; }
       if (log_cdf >= 0.0) { bad = true; break; }
       logS += log1m_exp(log_cdf);
@@ -493,6 +498,95 @@ inline void lnr_logS_at_t(double t, const double* pars_cm,
       const double logSk = lnorm_log_surv_std(tt, m_[r], s_[r]);
       if (!R_FINITE(logSk)) { bad = true; break; }
       logS += logSk;
+    }
+    logS_out[j] = bad ? R_NegInf : logS;
+  }
+}
+
+// RGAMMA: column layout lambda=0, shape=1, shift=2
+inline double drgamma_scalar(double t, const double* par, void* ctx_) {
+  (void)ctx_;
+  if (R_IsNA(par[0]) || R_IsNA(par[1]) || R_IsNA(par[2])) return 0.0;
+  if (par[0] <= 0.0 || par[1] <= 0.0) return 0.0;
+  const double tt = t - par[2];
+  if (tt <= 0.0) return 0.0;
+  return R::dgamma(tt, par[1], 1.0 / par[0], false);
+}
+
+inline double prgamma_scalar(double t, const double* par, void* ctx_) {
+  (void)ctx_;
+  if (R_IsNA(par[0]) || R_IsNA(par[1]) || R_IsNA(par[2])) return 0.0;
+  if (par[0] <= 0.0 || par[1] <= 0.0) return 0.0;
+  const double tt = t - par[2];
+  if (tt <= 0.0) return 0.0;
+  return R::pgamma(tt, par[1], 1.0 / par[0], true, false);
+}
+
+inline void drgamma_raw(const double* rt, const double* pars_cm, int n_rows,
+                        const int* mask, const int* isok,
+                        double* out, double min_ll, void* ctx_) {
+  (void)ctx_;
+  const double* lambda_ = pars_cm + 0 * n_rows;
+  const double* shape_  = pars_cm + 1 * n_rows;
+  const double* shift_  = pars_cm + 2 * n_rows;
+  for (int i = 0; i < n_rows; ++i) {
+    if (!mask[i]) continue;
+    if (R_IsNA(lambda_[i]) || R_IsNA(shape_[i]) || R_IsNA(shift_[i]) ||
+        !isok[i] || lambda_[i] <= 0.0 || shape_[i] <= 0.0) {
+      out[i] = min_ll;
+      continue;
+    }
+    const double tt = rt[i] - shift_[i];
+    if (tt <= 0.0) { out[i] = min_ll; continue; }
+    const double pdf = R::dgamma(tt, shape_[i], 1.0 / lambda_[i], false);
+    out[i] = (pdf > 0.0 && emc2_isfinite(pdf)) ? std::log(pdf) : min_ll;
+  }
+}
+
+inline void prgamma_raw(const double* rt, const double* pars_cm, int n_rows,
+                        const int* mask, const int* isok,
+                        double* out, double min_ll, void* ctx_) {
+  (void)ctx_;
+  const double* lambda_ = pars_cm + 0 * n_rows;
+  const double* shape_  = pars_cm + 1 * n_rows;
+  const double* shift_  = pars_cm + 2 * n_rows;
+  for (int i = 0; i < n_rows; ++i) {
+    if (!mask[i]) continue;
+    if (R_IsNA(lambda_[i]) || R_IsNA(shape_[i]) || R_IsNA(shift_[i]) ||
+        !isok[i] || lambda_[i] <= 0.0 || shape_[i] <= 0.0) {
+      out[i] = 0.0;
+      continue;
+    }
+    const double tt = rt[i] - shift_[i];
+    if (tt <= 0.0) { out[i] = 0.0; continue; }
+    const double cdf = R::pgamma(tt, shape_[i], 1.0 / lambda_[i], true, false);
+    if (cdf >= 1.0) { out[i] = min_ll; continue; }
+    out[i] = (cdf <= 0.0) ? 0.0 : std::log1p(-cdf);
+  }
+}
+
+inline void rgamma_logS_at_t(double t, const double* pars_cm,
+                             int n_rows_total, int n_lR, int /*n_par*/,
+                             const int* trunc_mask, int n_unique_trials,
+                             const int* isok_all, void* ctx_, double* logS_out) {
+  (void)ctx_;
+  const double* lambda_ = pars_cm + 0 * n_rows_total;
+  const double* shape_  = pars_cm + 1 * n_rows_total;
+  const double* shift_  = pars_cm + 2 * n_rows_total;
+  for (int j = 0; j < n_unique_trials; ++j) {
+    if (!trunc_mask[j]) continue;
+    const int start = j * n_lR;
+    double logS = 0.0;
+    bool bad = false;
+    for (int k = 0; k < n_lR && !bad; ++k) {
+      const int r = start + k;
+      if (!isok_all[r] || R_IsNA(lambda_[r]) || R_IsNA(shape_[r]) || R_IsNA(shift_[r]) ||
+          lambda_[r] <= 0.0 || shape_[r] <= 0.0) { bad = true; break; }
+      const double tt = t - shift_[r];
+      if (tt <= 0.0) continue;
+      const double cdf = R::pgamma(tt, shape_[r], 1.0 / lambda_[r], true, false);
+      if (cdf >= 1.0) { bad = true; break; }
+      if (cdf > 0.0) logS += std::log1p(-cdf);
     }
     logS_out[j] = bad ? R_NegInf : logS;
   }
@@ -586,8 +680,10 @@ inline double dbawl_scalar(double t, const double* par, void* ctx_) {
   if (tt <= 0.0 && !erl) return 0.0;
   if (t <= 0.0) return 0.0;
   // Pass raw t and t0_val; core function splits EAM (t - t0) from erlang (t).
-  return dkilledleakyba_norm(t, par[3], par[2] + par[3], par[0], par[1], par[5], lg, lk,
-                             t0_val, ctx->use_posdrift, false, ctx->kill_shape, local_guess);
+  return dkilledleakyba_norm(
+    t, par[0], par[2] + par[3], par[3], par[1], t0_val, par[5], lg, lk,
+    ctx->use_posdrift, false, ctx->kill_shape, local_guess
+  );
 }
 
 inline double pbawl_scalar(double t, const double* par, void* ctx_) {
@@ -601,8 +697,10 @@ inline double pbawl_scalar(double t, const double* par, void* ctx_) {
   const bool erl = (lg > 1e-12 || lk > 1e-12);
   if (tt <= 0.0 && !erl) return 0.0;
   if (t <= 0.0) return 0.0;
-  return pkilledleakyba_norm(t, par[3], par[2] + par[3], par[0], par[1], par[5], lg, lk,
-                             t0_val, ctx->use_posdrift, false, ctx->kill_shape, local_guess);
+  return pkilledleakyba_norm(
+    t, par[0], par[2] + par[3], par[3], par[1], t0_val, par[5], lg, lk,
+    ctx->use_posdrift, false, ctx->kill_shape, local_guess
+  );
 }
 
 inline void dbawl_raw(const double* rt, const double* pars_cm, int n_rows,
@@ -630,7 +728,10 @@ inline void dbawl_raw(const double* rt, const double* pars_cm, int n_rows,
     if (tt <= 0.0 && !erl) { out[i] = min_ll; continue; }
     if (rt[i] <= 0.0) { out[i] = min_ll; continue; }
     // Pass raw rt and t0; core function uses t0 to split EAM vs erlang time.
-    const double pdf = dkilledleakyba_norm(rt[i], A_[i], B_[i] + A_[i], v_[i], sv_[i], k_[i], lg, lk, t0_i, pd, false, ctx->kill_shape, local_guess);
+    const double pdf = dkilledleakyba_norm(
+      rt[i], v_[i], B_[i] + A_[i], A_[i], sv_[i], t0_i, k_[i], lg, lk,
+      pd, false, ctx->kill_shape, local_guess
+    );
     out[i] = (pdf > 0.0 && emc2_isfinite(pdf)) ? std::log(pdf) : min_ll;
   }
 }
@@ -659,7 +760,10 @@ inline void pbawl_raw(const double* rt, const double* pars_cm, int n_rows,
     const bool erl = (lg > 1e-12 || lk > 1e-12);
     if (tt <= 0.0 && !erl) { out[i] = 0.0; continue; }
     if (rt[i] <= 0.0) { out[i] = 0.0; continue; }
-    const double cdf = pkilledleakyba_norm(rt[i], A_[i], B_[i] + A_[i], v_[i], sv_[i], k_[i], lg, lk, t0_i, pd, false, ctx->kill_shape, local_guess);
+    const double cdf = pkilledleakyba_norm(
+      rt[i], v_[i], B_[i] + A_[i], A_[i], sv_[i], t0_i, k_[i], lg, lk,
+      pd, false, ctx->kill_shape, local_guess
+    );
     if (cdf >= 1.0) { out[i] = min_ll; continue; }
     out[i] = (cdf <= 0.0) ? 0.0 : std::log1p(-cdf);
   }
@@ -708,7 +812,10 @@ inline void bawl_logS_at_t(double t, const double* pars_cm,
         continue;
       }
       // Both EAM and erlang contribute; pass raw t and t0_r.
-      const double cdf = pkilledleakyba_norm(t, A_[r], B_[r] + A_[r], v_[r], sv_[r], k_[r], lg, lk, t0_r, pd, false, ctx->kill_shape, local_guess);
+      const double cdf = pkilledleakyba_norm(
+        t, v_[r], B_[r] + A_[r], A_[r], sv_[r], t0_r, k_[r], lg, lk,
+        pd, false, ctx->kill_shape, local_guess
+      );
       if (cdf >= 1.0) { bad = true; break; }
       if (cdf > 0.0) logS += std::log1p(-cdf);
     }
@@ -736,16 +843,16 @@ inline double drdmswtn_scalar(double t, const double* par, void* ctx_) {
   if (t <= 0.0) return 0.0;
   // Pass raw t and t0_val; core functions split EAM (t - t0) from erlang (t).
   if (ctx && ctx->is_local_kill_guess && lg > 1e-12 && lk > 1e-12) {
-    return drdmswtn_local_combo(t, (par[1] + par[2]) * inv_s, par[0] * inv_s,
-                                par[2] * inv_s, par[5] * inv_s, 1.0, 0.0,
-                                lg, lk, 20, false, ks, t0_val);
+    return drdmswtn_local_combo(t, par[0] * inv_s, (par[1] + par[2]) * inv_s,
+                                par[2] * inv_s, 1.0, t0_val, par[5] * inv_s,
+                                lg, lk, 0.0, 20, false, ks);
   }
   return drdmswtn(t,
-                  (par[1] + par[2]) * inv_s,
                   par[0] * inv_s,
+                  (par[1] + par[2]) * inv_s,
                   par[2] * inv_s,
-                  par[5] * inv_s,
-                  1.0, (is_guess ? lg : 0.0) + lk, 0.0, 20, false, ks, is_guess, t0_val);
+                  1.0, t0_val, par[5] * inv_s,
+                  (is_guess ? lg : 0.0) + lk, 0.0, 20, false, ks, is_guess);
 }
 
 inline double prdmswtn_scalar(double t, const double* par, void* ctx_) {
@@ -762,16 +869,16 @@ inline double prdmswtn_scalar(double t, const double* par, void* ctx_) {
   if (tt <= 0.0 && !erl) return 0.0;
   if (t <= 0.0) return 0.0;
   if (ctx && ctx->is_local_kill_guess && lg > 1e-12 && lk > 1e-12) {
-    return prdmswtn_local_combo(t, (par[1] + par[2]) * inv_s, par[0] * inv_s,
-                                par[2] * inv_s, par[5] * inv_s, 1.0, 0.0,
-                                lg, lk, 20, false, ks, t0_val);
+    return prdmswtn_local_combo(t, par[0] * inv_s, (par[1] + par[2]) * inv_s,
+                                par[2] * inv_s, 1.0, t0_val, par[5] * inv_s,
+                                lg, lk, 0.0, 20, false, ks);
   }
   return prdmswtn(t,
-                  (par[1] + par[2]) * inv_s,
                   par[0] * inv_s,
+                  (par[1] + par[2]) * inv_s,
                   par[2] * inv_s,
-                  par[5] * inv_s,
-                  1.0, (is_guess ? lg : 0.0) + lk, 0.0, 20, false, ks, is_guess, t0_val);
+                  1.0, t0_val, par[5] * inv_s,
+                  (is_guess ? lg : 0.0) + lk, 0.0, 20, false, ks, is_guess);
 }
 
 inline void drdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
@@ -804,9 +911,9 @@ inline void drdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
     double log_pdf;
     if (ctx->is_local_kill_guess && lg > 1e-12 && lk > 1e-12) {
       // Pass raw rt and t0; combo function splits EAM vs erlang time.
-      log_pdf = drdmswtn_local_combo(rt[i], (B_[i] + A_[i]) * inv_s, v_[i] * inv_s,
-                                     A_[i] * inv_s, sv_[i] * inv_s, 1.0, 0.0,
-                                     lg, lk, 20, true, kill_shape, t0_i);
+      log_pdf = drdmswtn_local_combo(rt[i], v_[i] * inv_s, (B_[i] + A_[i]) * inv_s,
+                                     A_[i] * inv_s, 1.0, t0_i, sv_[i] * inv_s,
+                                     lg, lk, 0.0, 20, true, kill_shape);
     } else if (!emc2_isfinite(sv_[i]) || std::fabs(sv_[i]) <= sv_eps) {
       const double k_use = (is_guess_type ? lg : 0.0) + lk;
       if (k_use <= 0.0) {
@@ -816,15 +923,15 @@ inline void drdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
         log_pdf = (pdf > 0.0 && emc2_isfinite(pdf)) ? std::log(pdf) : min_ll;
       } else {
         // Pass raw rt and t0 to dwald.
-        log_pdf = dwald(rt[i], (B_[i] + A_[i]) * inv_s, v_[i] * inv_s, 1.0,
-                        A_[i] * inv_s, k_use, true, kill_shape, is_guess_type, t0_i);
+        log_pdf = dwald(rt[i], v_[i] * inv_s, (B_[i] + A_[i]) * inv_s, A_[i] * inv_s,
+                        1.0, t0_i, k_use, true, kill_shape, is_guess_type);
       }
     } else {
       const double k_use = (is_guess_type ? lg : 0.0) + lk;
       // Pass raw rt and t0; drdmswtn splits EAM vs erlang time.
-      log_pdf = drdmswtn(rt[i], (B_[i] + A_[i]) * inv_s, v_[i] * inv_s,
-                         A_[i] * inv_s, sv_[i] * inv_s, 1.0,
-                         k_use, 0.0, 20, true, kill_shape, is_guess_type && k_use > 1e-12, t0_i);
+      log_pdf = drdmswtn(rt[i], v_[i] * inv_s, (B_[i] + A_[i]) * inv_s,
+                         A_[i] * inv_s, 1.0, t0_i, sv_[i] * inv_s,
+                         k_use, 0.0, 20, true, kill_shape, is_guess_type && k_use > 1e-12);
     }
     out[i] = (R_FINITE(log_pdf) && log_pdf > min_ll) ? log_pdf : min_ll;
   }
@@ -858,9 +965,9 @@ inline void prdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
     if (tt <= 0.0 && !erl) { out[i] = 0.0; continue; }
     if (rt[i] <= 0.0) { out[i] = 0.0; continue; }
     if (ctx->is_local_kill_guess && lg > 1e-12 && lk > 1e-12) {
-      const double log_cdf = prdmswtn_local_combo(rt[i], (B_[i] + A_[i]) * inv_s, v_[i] * inv_s,
-                                                  A_[i] * inv_s, sv_[i] * inv_s, 1.0, 0.0,
-                                                  lg, lk, 20, true, kill_shape, t0_i);
+      const double log_cdf = prdmswtn_local_combo(rt[i], v_[i] * inv_s, (B_[i] + A_[i]) * inv_s,
+                                                  A_[i] * inv_s, 1.0, t0_i, sv_[i] * inv_s,
+                                                  lg, lk, 0.0, 20, true, kill_shape);
       if (!R_FINITE(log_cdf)) { out[i] = 0.0; continue; }
       if (log_cdf >= 0.0) { out[i] = min_ll; continue; }
       out[i] = log1m_exp(log_cdf);
@@ -877,12 +984,12 @@ inline void prdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
         out[i] = (cl <= 0.0) ? 0.0 : (cl >= 1.0) ? min_ll : std::log1p(-cl);
         continue;
       }
-      log_cdf = pwald(rt[i], (B_[i] + A_[i]) * inv_s, v_[i] * inv_s, 1.0,
-                      A_[i] * inv_s, k_use, true, kill_shape, is_guess_type, t0_i);
+      log_cdf = pwald(rt[i], v_[i] * inv_s, (B_[i] + A_[i]) * inv_s, A_[i] * inv_s,
+                      1.0, t0_i, k_use, true, kill_shape, is_guess_type);
     } else {
-      log_cdf = prdmswtn(rt[i], (B_[i] + A_[i]) * inv_s, v_[i] * inv_s,
-                         A_[i] * inv_s, sv_[i] * inv_s, 1.0,
-                         k_use, 0.0, 20, true, kill_shape, is_guess_type && k_use > 1e-12, t0_i);
+      log_cdf = prdmswtn(rt[i], v_[i] * inv_s, (B_[i] + A_[i]) * inv_s,
+                         A_[i] * inv_s, 1.0, t0_i, sv_[i] * inv_s,
+                         k_use, 0.0, 20, true, kill_shape, is_guess_type && k_use > 1e-12);
     }
     if (!R_FINITE(log_cdf)) { out[i] = 0.0; continue; }
     if (log_cdf >= 0.0) { out[i] = min_ll; continue; }
@@ -935,9 +1042,9 @@ inline void rdmswtn_logS_at_t(double t, const double* pars_cm,
       }
       double log_cdf;
       if (ctx->is_local_kill_guess && lg > 1e-12 && lk > 1e-12) {
-        log_cdf = prdmswtn_local_combo(t, (B_[r] + A_[r]) * inv_s, v_[r] * inv_s,
-                                       A_[r] * inv_s, sv_[r] * inv_s, 1.0, 0.0,
-                                       lg, lk, 20, true, kill_shape, t0_r);
+        log_cdf = prdmswtn_local_combo(t, v_[r] * inv_s, (B_[r] + A_[r]) * inv_s,
+                                       A_[r] * inv_s, 1.0, t0_r, sv_[r] * inv_s,
+                                       lg, lk, 0.0, 20, true, kill_shape);
         if (!R_FINITE(log_cdf) || log_cdf >= 0.0) { bad = true; break; }
         logS += log1m_exp(log_cdf);
         continue;
@@ -950,21 +1057,23 @@ inline void rdmswtn_logS_at_t(double t, const double* pars_cm,
           log_cdf = (cl <= 0.0) ? R_NegInf : (cl >= 1.0 ? 0.0 : std::log(cl));
         } else {
           log_cdf = pwald(t,
-                          (B_[r] + A_[r]) * inv_s,
                           v_[r] * inv_s,
-                          1.0,
+                          (B_[r] + A_[r]) * inv_s,
                           A_[r] * inv_s,
+                          1.0,
+                          t0_r,
                           k_use,
-                          true, kill_shape, is_guess_type, t0_r);
+                          true, kill_shape, is_guess_type);
         }
       } else if (mode_hint == 2) {
         log_cdf = prdmswtn(t,
-                           (B_[r] + A_[r]) * inv_s,
                            v_[r]  * inv_s,
+                           (B_[r] + A_[r]) * inv_s,
                            A_[r]  * inv_s,
-                           sv_[r] * inv_s,
                            1.0,
-                           k_use, 0.0, 20, true, kill_shape, is_guess_type && k_use > 1e-12, t0_r);
+                           t0_r,
+                           sv_[r] * inv_s,
+                           k_use, 0.0, 20, true, kill_shape, is_guess_type && k_use > 1e-12);
       } else if (!emc2_isfinite(sv_[r]) || std::fabs(sv_[r]) <= sv_eps) {
         if (k_use <= 0.0) {
           const double cdf = pwald_k0(tt, (B_[r] + A_[r]) * inv_s, v_[r] * inv_s, A_[r] * inv_s);
@@ -972,21 +1081,23 @@ inline void rdmswtn_logS_at_t(double t, const double* pars_cm,
           log_cdf = (cl <= 0.0) ? R_NegInf : (cl >= 1.0 ? 0.0 : std::log(cl));
         } else {
           log_cdf = pwald(t,
-                          (B_[r] + A_[r]) * inv_s,
                           v_[r] * inv_s,
-                          1.0,
+                          (B_[r] + A_[r]) * inv_s,
                           A_[r] * inv_s,
+                          1.0,
+                          t0_r,
                           k_use,
-                          true, kill_shape, is_guess_type, t0_r);
+                          true, kill_shape, is_guess_type);
         }
       } else {
         log_cdf = prdmswtn(t,
-                           (B_[r] + A_[r]) * inv_s,
                            v_[r]  * inv_s,
+                           (B_[r] + A_[r]) * inv_s,
                            A_[r]  * inv_s,
-                           sv_[r] * inv_s,
                            1.0,
-                           k_use, 0.0, 20, true, kill_shape, is_guess_type && k_use > 1e-12, t0_r);
+                           t0_r,
+                           sv_[r] * inv_s,
+                           k_use, 0.0, 20, true, kill_shape, is_guess_type && k_use > 1e-12);
       }
       if (log_cdf >= 0.0) { bad = true; break; }
       if (R_FINITE(log_cdf)) logS += log1m_exp(log_cdf);

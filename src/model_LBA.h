@@ -259,10 +259,9 @@ double dleakyba_norm(double t, double A, double b,
 
 // Killed-leaky BA density: f_hit(t_eam) * S_K(t) + f_K(t) * S_R(t_eam)
 // t is raw rt; t_eam = t - t0 is EAM-adjusted time. Erlang uses raw t.
-inline double dkilledleakyba_norm(double t, double A, double b,
-                                  double v, double sv, double k,
-                                  double lambda_g, double lambda_k,
-                                  double t0 = 0.0,
+inline double dkilledleakyba_norm(double t, double v, double b, double A,
+                                  double sv, double t0 = 0.0,
+                                  double k = 0.0, double lambda_g = 0.0, double lambda_k = 0.0,
                                   bool posdrift = true, bool log_out = false,
                                   int kill_shape = 1, bool guess = false) {
   if (t <= 0.0) return log_out ? R_NegInf : 0.0;
@@ -301,10 +300,9 @@ inline double dkilledleakyba_norm(double t, double A, double b,
 // P(T_R <= t, T_R < T_K) with kill_shape=1 (exponential) or kill_shape=2 (Erlang-2).
 // With guess=true: mixture CDF = 1 - S_R(t_eam)*S_K(t)*S_G(t).
 // t is raw rt; t_eam = t - t0 is EAM-adjusted time. Erlang uses raw t.
-inline double pkilledleakyba_norm(double t, double A, double b,
-                                  double v, double sv, double k,
-                                  double lambda_g, double lambda_k,
-                                  double t0 = 0.0,
+inline double pkilledleakyba_norm(double t, double v, double b, double A,
+                                  double sv, double t0 = 0.0,
+                                  double k = 0.0, double lambda_g = 0.0, double lambda_k = 0.0,
                                   bool posdrift = true, bool log_out = false,
                                   int kill_shape = 1, bool guess = false) {
   if (t <= 0.0) return log_out ? R_NegInf : 0.0;
@@ -465,9 +463,9 @@ inline double pkilledleakyba_norm(double t, double A, double b,
 
 // [[Rcpp::export]]
 NumericVector dkilledleakyba(NumericVector t,
-                             NumericVector A, NumericVector b,
-                             NumericVector v, NumericVector sv, NumericVector k,
-                             NumericVector lambda_g, NumericVector lambda_k,
+                             NumericVector v, NumericVector b, NumericVector A,
+                             NumericVector sv, NumericVector t0,
+                             NumericVector k, NumericVector lambda_g, NumericVector lambda_k,
                              bool posdrift = true, bool log_out = false,
                              int kill_shape = 1, bool guess = false) {
   int n = t.size();
@@ -476,18 +474,18 @@ NumericVector dkilledleakyba(NumericVector t,
     return vec.size() == 1 ? vec[0] : vec[i];
   };
   for (int i = 0; i < n; i++) {
-    pdf[i] = dkilledleakyba_norm(t[i], pick(A,i), pick(b,i), pick(v,i), pick(sv,i),
+    pdf[i] = dkilledleakyba_norm(t[i], pick(v,i), pick(b,i), pick(A,i), pick(sv,i), pick(t0,i),
                                  pick(k,i), pick(lambda_g,i), pick(lambda_k,i),
-                                 0.0, posdrift, log_out, kill_shape, guess);
+                                 posdrift, log_out, kill_shape, guess);
   }
   return pdf;
 }
 
 // [[Rcpp::export]]
 NumericVector pkilledleakyba(NumericVector t,
-                             NumericVector A, NumericVector b,
-                             NumericVector v, NumericVector sv, NumericVector k,
-                             NumericVector lambda_g, NumericVector lambda_k,
+                             NumericVector v, NumericVector b, NumericVector A,
+                             NumericVector sv, NumericVector t0,
+                             NumericVector k, NumericVector lambda_g, NumericVector lambda_k,
                              bool posdrift = true, bool log_out = false,
                              int kill_shape = 1, bool guess = false) {
   int n = t.size();
@@ -496,9 +494,9 @@ NumericVector pkilledleakyba(NumericVector t,
     return vec.size() == 1 ? vec[0] : vec[i];
   };
   for (int i = 0; i < n; i++) {
-    cdf[i] = pkilledleakyba_norm(t[i], pick(A,i), pick(b,i), pick(v,i), pick(sv,i),
+    cdf[i] = pkilledleakyba_norm(t[i], pick(v,i), pick(b,i), pick(A,i), pick(sv,i), pick(t0,i),
                                  pick(k,i), pick(lambda_g,i), pick(lambda_k,i),
-                                 0.0, posdrift, log_out, kill_shape, guess);
+                                 posdrift, log_out, kill_shape, guess);
   }
   return cdf;
 }

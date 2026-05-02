@@ -329,13 +329,14 @@ dBAwL <- function(rt, pars, posdrift = TRUE, erlang = 1L, guess = FALSE) {
     stop("BAwL requires parameter columns 'lambda_g' and 'lambda_k'.")
   }
   dt  <- rt - pars[, "t0"]
-  ok  <- (dt > 0) & (pars[, "b"] >= pars[, "A"])
+  erl <- (pars[, "lambda_g"] > 0) | (pars[, "lambda_k"] > 0)
+  ok  <- (rt > 0) & ((dt > 0) | erl) & (pars[, "b"] >= pars[, "A"])
   ok[is.na(ok) | !is.finite(dt)] <- FALSE
   out <- numeric(length(dt))
   if (any(ok)) {
     out[ok] <- dkilledleakyba(
-      t = dt[ok], A = pars[ok, "A"], b = pars[ok, "b"],
-      v = pars[ok, "v"], sv = pars[ok, "sv"], k = pars[ok, "k"],
+      t = rt[ok], v = pars[ok, "v"], b = pars[ok, "b"], A = pars[ok, "A"],
+      sv = pars[ok, "sv"], t0 = pars[ok, "t0"], k = pars[ok, "k"],
       lambda_g = pars[ok, "lambda_g"], lambda_k = pars[ok, "lambda_k"],
       posdrift = posdrift, log_out = FALSE,
       kill_shape = as.integer(erlang), guess = guess
@@ -349,13 +350,14 @@ pBAwL <- function(rt, pars, posdrift = TRUE, erlang = 1L, guess = FALSE) {
     stop("BAwL requires parameter columns 'lambda_g' and 'lambda_k'.")
   }
   dt  <- rt - pars[, "t0"]
-  ok  <- (dt > 0) & (pars[, "b"] >= pars[, "A"])
+  erl <- (pars[, "lambda_g"] > 0) | (pars[, "lambda_k"] > 0)
+  ok  <- (rt > 0) & ((dt > 0) | erl) & (pars[, "b"] >= pars[, "A"])
   ok[is.na(ok) | !is.finite(dt)] <- FALSE
   out <- numeric(length(dt))
   if (any(ok)) {
     out[ok] <- pkilledleakyba(
-      t = dt[ok], A = pars[ok, "A"], b = pars[ok, "b"],
-      v = pars[ok, "v"], sv = pars[ok, "sv"], k = pars[ok, "k"],
+      t = rt[ok], v = pars[ok, "v"], b = pars[ok, "b"], A = pars[ok, "A"],
+      sv = pars[ok, "sv"], t0 = pars[ok, "t0"], k = pars[ok, "k"],
       lambda_g = pars[ok, "lambda_g"], lambda_k = pars[ok, "lambda_k"],
       posdrift = posdrift, log_out = FALSE,
       kill_shape = as.integer(erlang), guess = guess
@@ -411,6 +413,8 @@ rBAwL <- function(lR, pars, ok = rep(TRUE, length(lR)),
     dt[big_k]  <- (-1 / pars[big_k, "k"]) * log(ratio)
   }
   dt[dt < 0] <- Inf
+  # Put EAM on the same raw-time axis as Erlang clocks.
+  dt <- dt + matrix(t0, nrow = nr)
 
   if (guess || !global) {
     tg_local <- matrix(Inf, nrow = nr, ncol = n_trials)
@@ -452,7 +456,7 @@ rBAwL <- function(lR, pars, ok = rep(TRUE, length(lR)),
   bad_col <- apply(dt, 2, function(x) all(is.infinite(x)))
   R   <- apply(dt, 2, which.min)
   pick <- cbind(R, 1:dim(dt)[2])
-  rt   <- matrix(t0, nrow = nr)[pick] + dt[pick]
+  rt   <- dt[pick]
   R    <- factor(levels(lR)[R], levels = levels(lR))
   R[bad_col]  <- NA
   rt[bad_col] <- Inf

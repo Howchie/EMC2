@@ -224,7 +224,8 @@ dRDMGBM <- function(rt, pars, erlang = 1L) {
     stop("RDMGBM requires parameter columns 'lambda_g' and 'lambda_k'.")
   }
   out <- rep(NaN, length(rt))
-  ok <- rt > pars[, "t0", drop = FALSE] & !pars[, "v", drop = FALSE] < 0
+  erl <- (pars[, "lambda_g", drop = FALSE] > 0) | (pars[, "lambda_k", drop = FALSE] > 0)
+  ok <- (rt > 0) & ((rt > pars[, "t0", drop = FALSE]) | erl) & !(pars[, "v", drop = FALSE] < 0)
   ok[is.na(ok)] <- FALSE
   if (any(ok)) {
     out[ok] <- dGBMspv(rt[ok],
@@ -254,7 +255,8 @@ pRDMGBM <- function(rt, pars, erlang = 1L) {
     stop("RDMGBM requires parameter columns 'lambda_g' and 'lambda_k'.")
   }
   out <- rep(NaN, length(rt))
-  ok <- rt > pars[, "t0", drop = FALSE] & !pars[, "v", drop = FALSE] < 0
+  erl <- (pars[, "lambda_g", drop = FALSE] > 0) | (pars[, "lambda_k", drop = FALSE] > 0)
+  ok <- (rt > 0) & ((rt > pars[, "t0", drop = FALSE]) | erl) & !(pars[, "v", drop = FALSE] < 0)
   ok[is.na(ok)] <- FALSE
   if (any(ok)) {
     out[ok] <- pGBMspv(rt[ok],
@@ -339,6 +341,8 @@ rRDMGBM <- function(lR, pars, p_types = c("v", "b", "A", "t0", "s", "lambda_g", 
       s = pars_ok[, "s"], k = k_vec, erlang = erlang_shape
     )
   }
+  # Put EAM on the same raw-time axis as Erlang clocks.
+  dt <- dt + matrix(t0, nrow = nr)
 
   if (guess || local_kill) {
     tg_local <- matrix(Inf, nrow = nr, ncol = n_trials)
@@ -378,13 +382,15 @@ rRDMGBM <- function(lR, pars, p_types = c("v", "b", "A", "t0", "s", "lambda_g", 
   if (global) {
     # Global kill: shared timer fires → no response this trial
     is_killed <- tk < apply(dt, 2, min)
-    if (any(is_killed)) dt[, is_killed] <- Inf
+    if (any(is_killed)) {
+      dt[, is_killed] <- Inf
+    }
   }
 
   bad_col <- apply(dt, 2, function(x) all(is.infinite(x)))
   R <- apply(dt, 2, which.min)
   pick <- cbind(R, 1:dim(dt)[2])
-  rt <- matrix(t0, nrow = nr)[pick] + dt[pick]
+  rt <- dt[pick]
   out$R <- levels(lR)[R]
   out$R <- factor(out$R, levels = levels(lR))
   out$rt <- rt
@@ -575,7 +581,8 @@ dRDMSWTN <- function(rt, pars, erlang = 1L) {
     )
   }
   out <- rep(NaN, length(rt))
-  ok <- rt > pars[, "t0", drop = FALSE] & !pars[, "v", drop = FALSE] < 0
+  erl <- (pars[, "lambda_g", drop = FALSE] > 0) | (pars[, "lambda_k", drop = FALSE] > 0)
+  ok <- (rt > 0) & ((rt > pars[, "t0", drop = FALSE]) | erl) & !(pars[, "v", drop = FALSE] < 0)
   ok[is.na(ok)] <- FALSE
   if (any(ok)) {
     if (!all(c("lambda_g", "lambda_k") %in% colnames(pars))) {
@@ -588,9 +595,12 @@ dRDMSWTN <- function(rt, pars, erlang = 1L) {
     }
     out[ok] <- dSWTNspv(rt[ok],
       v = pars[ok, "v", drop = FALSE], b = pars[ok, "b", drop = FALSE],
-      A = pars[ok, "A", drop = FALSE], t0 = pars[ok, "t0", drop = FALSE],
+      A = pars[ok, "A", drop = FALSE],
+      s = if ("s" %in% colnames(pars)) pars[ok, "s", drop = FALSE] else 1,
+      t0 = pars[ok, "t0", drop = FALSE],
       sv = pars[ok, "sv", drop = FALSE], lambda_g = pars[ok, "lambda_g", drop = FALSE],
       lambda_k = pars[ok, "lambda_k", drop = FALSE],
+      c = if ("c" %in% colnames(pars)) pars[ok, "c", drop = FALSE] else 0,
       kill_shape = erlang
     )
   }
@@ -607,7 +617,8 @@ pRDMSWTN <- function(rt, pars, erlang = 1L) {
     )
   }
   out <- rep(NaN, length(rt))
-  ok <- rt > pars[, "t0", drop = FALSE] & !pars[, "v", drop = FALSE] < 0
+  erl <- (pars[, "lambda_g", drop = FALSE] > 0) | (pars[, "lambda_k", drop = FALSE] > 0)
+  ok <- (rt > 0) & ((rt > pars[, "t0", drop = FALSE]) | erl) & !(pars[, "v", drop = FALSE] < 0)
   ok[is.na(ok)] <- FALSE
   if (any(ok)) {
     if (!all(c("lambda_g", "lambda_k") %in% colnames(pars))) {
@@ -620,9 +631,12 @@ pRDMSWTN <- function(rt, pars, erlang = 1L) {
     }
     out[ok] <- pSWTNspv(rt[ok],
       v = pars[ok, "v", drop = FALSE], b = pars[ok, "b", drop = FALSE],
-      A = pars[ok, "A", drop = FALSE], t0 = pars[ok, "t0", drop = FALSE],
+      A = pars[ok, "A", drop = FALSE],
+      s = if ("s" %in% colnames(pars)) pars[ok, "s", drop = FALSE] else 1,
+      t0 = pars[ok, "t0", drop = FALSE],
       sv = pars[ok, "sv", drop = FALSE], lambda_g = pars[ok, "lambda_g", drop = FALSE],
       lambda_k = pars[ok, "lambda_k", drop = FALSE],
+      c = if ("c" %in% colnames(pars)) pars[ok, "c", drop = FALSE] else 0,
       kill_shape = erlang
     )
   }
@@ -684,6 +698,8 @@ rRDMSWTN <- function(lR, pars, p_types = c("v", "b", "A", "t0", "sv", "lambda_g"
     b = pars[, "b"], v = pars[, "v"], A = pars[, "A"], sv = pars[, "sv"],
     k = k_vec, erlang = erlang_shape
   )
+  # Put EAM on the same raw-time axis as Erlang clocks.
+  dt <- dt + matrix(t0, nrow = nr)
 
   if (guess || local_kill) {
     tg_local <- matrix(Inf, nrow = nr, ncol = n_trials)
@@ -731,7 +747,7 @@ rRDMSWTN <- function(lR, pars, p_types = c("v", "b", "A", "t0", "sv", "lambda_g"
   bad_col <- apply(dt, 2, function(x) all(is.infinite(x)))
   R <- apply(dt, 2, which.min)
   pick <- cbind(R, 1:dim(dt)[2])
-  rt <- matrix(t0, nrow = nr)[pick] + dt[pick]
+  rt <- dt[pick]
   out$R <- levels(lR)[R]
   out$R <- factor(out$R, levels = levels(lR))
   out$rt <- rt
