@@ -167,221 +167,6 @@ test_that("make_data supports pooled mixed 2AFC and GNG race templates", {
   expect_true(all(dat$UT[dat$Condition == "2afc"] == 0.9))
 })
 
-test_that("OR_DETECTION_ANALYTIC matches RedundantTarget analytic likelihood", {
-  rt_template <- data.frame(
-    subjects = factor(rep("s1", 3)),
-    S = factor(c("A", "B", "AB"), levels = c("A", "B", "AB")),
-    R = factor(rep(NA_character_, 3), levels = c("yes"))
-  )
-  rt_matchfun <- function(d) {
-    (d$S == "A" & d$lR == "A") | (d$S == "B" & d$lR == "B") | (d$S == "AB")
-  }
-  rt_design <- design(
-    data = rt_template,
-    Rlevels = c("yes"),
-    fixed_accumulator_roles = factor(c("A", "B"), levels = c("A", "B")),
-    matchfun = rt_matchfun,
-    model = RedundantTargetLBA,
-    formula = list(v ~ 0 + GoA + GoB, B ~ 0 + GoA + GoB, t0 ~ 1, A ~ 1),
-    constants = c(sv = log(1), pContaminant = qnorm(0)),
-    functions = detection_funcs
-  )
-  p_rt <- sampled_pars(rt_design, doMap = FALSE)
-  p_rt <- set_detection_params(
-    p_rt,
-    c(v_GoA = 1.4, v_GoB = 1.1, B_GoA = log(0.8), B_GoB = log(0.75), t0 = log(0.2), A = log(0.3))
-  )
-  dat_rt <- make_data(p_rt, rt_design, data = rt_template, expand = 80)
-  rt_ctx <- build_ll_ctx(dat_rt, rt_design)
-
-  lr_data <- within(dat_rt, {
-    LogicalRule <- factor("OR_DETECTION_ANALYTIC", levels = c("OR_DETECTION_ANALYTIC", "OR"))
-  })
-  lr_design <- design(
-    data = lr_data,
-    Rlevels = c("yes"),
-    fixed_accumulator_roles = factor(c("A", "B", "n_A", "n_B", "nogo"),
-                                     levels = c("A", "B", "n_A", "n_B", "nogo")),
-    matchfun = function(d) d$lR %in% c("A", "B"),
-    model = LogicalRulesLBA,
-    formula = list(v ~ 0 + GoA + GoB + NoGo, B ~ 0 + GoA + GoB + NoGo, t0 ~ 1, A ~ 1),
-    constants = c(sv = log(1)),
-    functions = detection_funcs
-  )
-  p_lr <- sampled_pars(lr_design, doMap = FALSE)
-  p_lr <- set_detection_params(
-    p_lr,
-    c(v_GoA = 1.4, v_GoB = 1.1, B_GoA = log(0.8), B_GoB = log(0.75),
-      v_NoGo = 0.2, B_NoGo = log(0.9), t0 = log(0.2), A = log(0.3))
-  )
-  lr_ctx <- build_ll_ctx(lr_data, lr_design)
-
-  ll_rt <- calc_ctx_ll(rt_ctx, matrix(p_rt, nrow = 1, dimnames = list(NULL, names(p_rt))))
-  ll_lr <- calc_ctx_ll(lr_ctx, matrix(p_lr, nrow = 1, dimnames = list(NULL, names(p_lr))))
-  expect_equal(ll_lr, ll_rt, tolerance = 1e-8)
-})
-
-test_that("OR_DETECTION_GNG matches RedundantTarget nogo likelihood", {
-  rt_template <- data.frame(
-    subjects = factor(rep("s1", 3)),
-    S = factor(c("A", "B", "AB"), levels = c("A", "B", "AB")),
-    R = factor(rep(NA_character_, 3), levels = c("yes", "nogo"))
-  )
-  rt_matchfun <- function(d) {
-    (d$S == "A" & d$lR == "A") |
-      (d$S == "B" & d$lR == "B") |
-      (d$S == "AB" & d$lR %in% c("A", "B")) |
-      d$lR == "nogo"
-  }
-  rt_design <- design(
-    data = rt_template,
-    Rlevels = c("yes", "nogo"),
-    fixed_accumulator_roles = factor(c("A", "B", "nogo"), levels = c("A", "B", "nogo")),
-    matchfun = rt_matchfun,
-    model = RedundantTargetLBA,
-    formula = list(v ~ 0 + GoA + GoB + NoGo, B ~ 0 + GoA + GoB + NoGo, t0 ~ 1, A ~ 1),
-    constants = c(sv = log(1), pContaminant = qnorm(0)),
-    UC = 0.8,
-    functions = detection_funcs
-  )
-  p_rt <- sampled_pars(rt_design, doMap = FALSE)
-  p_rt <- set_detection_params(
-    p_rt,
-    c(v_GoA = 1.5, v_GoB = 1.2, v_NoGo = 1.8,
-      B_GoA = log(0.8), B_GoB = log(0.75), B_NoGo = log(0.65),
-      t0 = log(0.2), A = log(0.3))
-  )
-  dat_rt <- make_data(p_rt, rt_design, data = rt_template, expand = 80, TC = list(UC = 0.8))
-  rt_ctx <- build_ll_ctx(dat_rt, rt_design)
-
-  lr_data <- within(dat_rt, {
-    LogicalRule <- factor("OR_DETECTION_GNG", levels = c("OR_DETECTION_GNG", "OR"))
-  })
-  lr_design <- design(
-    data = lr_data,
-    Rlevels = c("yes", "nogo"),
-    fixed_accumulator_roles = factor(c("A", "B", "n_A", "n_B", "nogo"),
-                                     levels = c("A", "B", "n_A", "n_B", "nogo")),
-    matchfun = function(d) d$lR %in% c("A", "B", "nogo"),
-    model = LogicalRulesLBA,
-    formula = list(v ~ 0 + GoA + GoB + NoGo, B ~ 0 + GoA + GoB + NoGo, t0 ~ 1, A ~ 1),
-    constants = c(sv = log(1)),
-    UC = 0.8,
-    functions = detection_funcs
-  )
-  p_lr <- sampled_pars(lr_design, doMap = FALSE)
-  p_lr <- set_detection_params(
-    p_lr,
-    c(v_GoA = 1.5, v_GoB = 1.2, v_NoGo = 1.8,
-      B_GoA = log(0.8), B_GoB = log(0.75), B_NoGo = log(0.65),
-      t0 = log(0.2), A = log(0.3))
-  )
-  lr_ctx <- build_ll_ctx(lr_data, lr_design)
-
-  ll_rt <- calc_ctx_ll(rt_ctx, matrix(p_rt, nrow = 1, dimnames = list(NULL, names(p_rt))))
-  ll_lr <- calc_ctx_ll(lr_ctx, matrix(p_lr, nrow = 1, dimnames = list(NULL, names(p_lr))))
-  expect_equal(ll_lr, ll_rt, tolerance = 1e-8)
-})
-
-test_that("pooled analytic and GNG detection rules recover rowwise likelihoods", {
-  pooled_template <- data.frame(
-    subjects = factor(rep("s1", 6)),
-    S = factor(c("A", "B", "AB", "A", "B", "AB"), levels = c("A", "B", "AB")),
-    LogicalRule = factor(
-      c(rep("OR_DETECTION_ANALYTIC", 3), rep("OR_DETECTION_GNG", 3)),
-      levels = c("OR_DETECTION_ANALYTIC", "OR_DETECTION_GNG", "OR")
-    ),
-    R = factor(rep(NA_character_, 6), levels = c("yes", "nogo"))
-  )
-
-  pooled_matchfun <- function(d) {
-    is_analytic <- d$LogicalRule == "OR_DETECTION_ANALYTIC"
-    is_gng <- d$LogicalRule == "OR_DETECTION_GNG"
-    (is_analytic & d$lR %in% c("A", "B")) |
-      (is_gng & d$lR %in% c("A", "B", "nogo"))
-  }
-
-  pooled_design <- design(
-    data = pooled_template,
-    Rlevels = c("yes", "nogo"),
-    fixed_accumulator_roles = factor(c("A", "B", "n_A", "n_B", "nogo"),
-                                     levels = c("A", "B", "n_A", "n_B", "nogo")),
-    matchfun = pooled_matchfun,
-    model = LogicalRulesLBA,
-    formula = list(v ~ 0 + GoA + GoB + NoGo, B ~ 0 + GoA + GoB + NoGo, t0 ~ 1, A ~ 1),
-    constants = c(sv = log(1)),
-    UC = 0.8,
-    functions = detection_funcs
-  )
-  p_pool <- sampled_pars(pooled_design, doMap = FALSE)
-  p_pool <- set_detection_params(
-    p_pool,
-    c(v_GoA = 1.35, v_GoB = 1.1, v_NoGo = 2.2,
-      B_GoA = log(0.8), B_GoB = log(0.75), B_NoGo = log(0.55),
-      t0 = log(0.2), A = log(0.3))
-  )
-
-  set.seed(11)
-  pooled_dat <- make_data(p_pool, pooled_design, data = pooled_template, expand = 200, TC = list(UC = 0.8))
-  pooled_ctx <- build_ll_ctx(pooled_dat, pooled_design)
-
-  analytic_dat <- droplevels(subset(pooled_dat, LogicalRule == "OR_DETECTION_ANALYTIC"))
-  analytic_dat$R <- factor(analytic_dat$R, levels = c("yes"))
-  analytic_design <- design(
-    data = analytic_dat,
-    Rlevels = c("yes"),
-    fixed_accumulator_roles = factor(c("A", "B"), levels = c("A", "B")),
-    matchfun = function(d) {
-      (d$S == "A" & d$lR == "A") | (d$S == "B" & d$lR == "B") | (d$S == "AB")
-    },
-    model = RedundantTargetLBA,
-    formula = list(v ~ 0 + GoA + GoB, B ~ 0 + GoA + GoB, t0 ~ 1, A ~ 1),
-    constants = c(sv = log(1), pContaminant = qnorm(0)),
-    functions = detection_funcs
-  )
-  p_analytic <- sampled_pars(analytic_design, doMap = FALSE)
-  p_analytic <- set_detection_params(
-    p_analytic,
-    c(v_GoA = 1.35, v_GoB = 1.1, B_GoA = log(0.8), B_GoB = log(0.75), t0 = log(0.2), A = log(0.3))
-  )
-  analytic_ctx <- build_ll_ctx(analytic_dat, analytic_design)
-
-  gng_dat <- droplevels(subset(pooled_dat, LogicalRule == "OR_DETECTION_GNG"))
-  gng_dat$R <- factor(gng_dat$R, levels = c("yes", "nogo"))
-  gng_design <- design(
-    data = gng_dat,
-    Rlevels = c("yes", "nogo"),
-    fixed_accumulator_roles = factor(c("A", "B", "nogo"), levels = c("A", "B", "nogo")),
-    matchfun = function(d) {
-      (d$S == "A" & d$lR == "A") |
-        (d$S == "B" & d$lR == "B") |
-        (d$S == "AB" & d$lR %in% c("A", "B")) |
-        d$lR == "nogo"
-    },
-    model = RedundantTargetLBA,
-    formula = list(v ~ 0 + GoA + GoB + NoGo, B ~ 0 + GoA + GoB + NoGo, t0 ~ 1, A ~ 1),
-    constants = c(sv = log(1), pContaminant = qnorm(0)),
-    UC = 0.8,
-    functions = detection_funcs
-  )
-  p_gng <- sampled_pars(gng_design, doMap = FALSE)
-  p_gng <- set_detection_params(
-    p_gng,
-    c(v_GoA = 1.35, v_GoB = 1.1, v_NoGo = 2.2,
-      B_GoA = log(0.8), B_GoB = log(0.75), B_NoGo = log(0.55),
-      t0 = log(0.2), A = log(0.3))
-  )
-  gng_ctx <- build_ll_ctx(gng_dat, gng_design)
-
-  expect_true(any(is.na(gng_dat$R)))
-
-  ll_pool <- calc_ctx_ll(pooled_ctx, matrix(p_pool, nrow = 1, dimnames = list(NULL, names(p_pool))))
-  ll_split <- calc_ctx_ll(analytic_ctx, matrix(p_analytic, nrow = 1, dimnames = list(NULL, names(p_analytic)))) +
-    calc_ctx_ll(gng_ctx, matrix(p_gng, nrow = 1, dimnames = list(NULL, names(p_gng))))
-
-  expect_equal(ll_pool, ll_split, tolerance = 1e-8)
-})
-
 test_that("full four-accumulator OR rules are unchanged by adding a dormant nogo role", {
   or_template <- data.frame(
     subjects = factor(rep("s1", 4)),
@@ -452,4 +237,85 @@ test_that("full four-accumulator OR rules are unchanged by adding a dormant nogo
   ll_pool <- calc_ctx_ll(pooled_ctx, matrix(p_pool, nrow = 1, dimnames = list(NULL, names(p_pool))))
 
   expect_equal(ll_pool, ll_base, tolerance = 1e-8)
+})
+
+test_that("logical-rule GL path handles unequal t0 within target/nontarget pairs", {
+  dat <- data.frame(
+    subjects = factor("s1"),
+    S = factor("AB", levels = "AB"),
+    LogicalRule = factor("OR", levels = "OR"),
+    R = factor("yes", levels = c("yes", "no")),
+    rt = 0.42
+  )
+
+  des <- design(
+    data = dat,
+    Rlevels = c("yes", "no"),
+    fixed_accumulator_roles = factor(c("A", "B", "n_A", "n_B"),
+                                     levels = c("A", "B", "n_A", "n_B")),
+    matchfun = function(d) d$lR %in% c("A", "B", "n_A", "n_B"),
+    model = LogicalRulesLBA,
+    formula = list(v ~ 0 + GoA + GoB + NegA + NegB,
+                   B ~ 0 + GoA + GoB + NegA + NegB,
+                   t0 ~ 0 + GoA + GoB + NegA + NegB,
+                   A ~ 1),
+    constants = c(sv = log(1)),
+    functions = logical_rule_funcs
+  )
+
+  p <- sampled_pars(des, doMap = FALSE)
+  p[] <- 0
+  p[c("v_GoA", "v_GoB", "v_NegA", "v_NegB")] <- c(1.20, 1.10, 1.40, 1.00)
+  p[c("B_GoA", "B_GoB", "B_NegA", "B_NegB")] <- log(c(0.80, 0.85, 0.70, 0.90))
+  p[c("t0_GoA", "t0_GoB", "t0_NegA", "t0_NegB")] <- log(c(0.25, 0.20, 0.05, 0.20))
+  p["A"] <- log(0.20)
+
+  ctx <- build_ll_ctx(dat, des)
+  p_mat <- matrix(p, nrow = 1, dimnames = list(NULL, names(p)))
+  ll_cpp <- calc_ctx_ll(ctx, p_mat)
+
+  pars <- EMC2:::get_pars_c_wrapper_oo(
+    p_mat, ctx$dadm, ctx$constants, ctx$designs,
+    ctx$model$bound, ctx$model$transform, ctx$model$pre_transform,
+    ctx$model$trend, FALSE, TRUE
+  )
+  role_par <- function(role) {
+    row <- match(role, as.character(ctx$dadm$lR))
+    out <- pars[row, c("v", "sv", "B", "A", "t0"), drop = FALSE]
+    out <- cbind(out, b = out[, "B"] + out[, "A"])
+    out
+  }
+  d1 <- function(u, p_row) {
+    p_eval <- p_row[rep(1, length(u)), , drop = FALSE]
+    EMC2:::dLBA(u, p_eval)
+  }
+  p1 <- function(u, p_row) {
+    p_eval <- p_row[rep(1, length(u)), , drop = FALSE]
+    EMC2:::pLBA(u, p_eval)
+  }
+  win_before <- function(t, winner, loser) {
+    if (!(t > 0)) return(0)
+    stats::integrate(
+      function(u) d1(u, winner) * (1 - p1(u, loser)),
+      lower = 0, upper = t, rel.tol = 1e-10, abs.tol = 1e-12
+    )$value
+  }
+
+  t <- ctx$dadm$rt[1]
+  A <- role_par("A")
+  B <- role_par("B")
+  nA <- role_par("n_A")
+  nB <- role_par("n_B")
+
+  FA <- p1(t, A); FB <- p1(t, B)
+  FnA <- p1(t, nA); FnB <- p1(t, nB)
+  gA_yes <- d1(t, A) * (1 - FnA)
+  gB_yes <- d1(t, B) * (1 - FnB)
+  S_dec_A <- (1 - FA) * (1 - FnA)
+  S_dec_B <- (1 - FB) * (1 - FnB)
+  GA_no <- win_before(t, nA, A)
+  GB_no <- win_before(t, nB, B)
+  p_ref <- gA_yes * (GB_no + S_dec_B) + gB_yes * (GA_no + S_dec_A)
+
+  expect_equal(as.numeric(ll_cpp), log(p_ref), tolerance = 2e-4)
 })

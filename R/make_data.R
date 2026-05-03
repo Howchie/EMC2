@@ -516,8 +516,6 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
   c_name <- model()$c_name
   if (any(names(data)=="RACE")) {
       Rrt <- RACE_rfun(data, pars, model)
-  } else if (!is.null(c_name) && grepl("RedundantTarget", c_name, fixed = TRUE)) {
-    Rrt <- RedundantTarget_rfun(data, pars, model)
   } else if (any(names(data)=="LogicalRule") && !is.null(c_name) && grepl("LogicalRules", c_name)) {
     Rrt <- LogicalRules_rfun(data, pars, model)
   } else Rrt <- model()$rfun(data,pars)
@@ -771,69 +769,6 @@ LogicalRules_rfun <- function(data, pars, model) {
   }
 
   out
-}
-
-RedundantTarget_rfun <- function(data, pars, model) {
-  races <- levels(data$lR)
-  if (!all(c("A", "B") %in% races)) stop("RedundantTarget model requires accumulator roles A and B.")
-  has_nogo <- "nogo" %in% races
-  n_trials <- nrow(data) / length(races)
-  if (n_trials <= 0) return(data.frame(R = factor(character(0), levels = levels(data$R)), rt = numeric(0)))
-
-  stim_col <- if ("S" %in% names(data)) {
-    "S"
-  } else if ("stimulus" %in% names(data)) {
-    "stimulus"
-  } else if ("condition" %in% names(data)) {
-    "condition"
-  } else {
-    stop("RedundantTarget model requires stimulus column `S` (or `stimulus`/`condition`).")
-  }
-  cond <- as.character(data[data$lR == races[1], stim_col])
-  cond[cond %in% c("BA", "A+B", "B+A")] <- "AB"
-  if (!all(cond %in% c("A", "B", "AB"))) {
-    stop("RedundantTarget stimulus must be one of A, B, AB.")
-  }
-
-  Rrti <- matrix(Inf, nrow = n_trials, ncol = length(races), dimnames = list(NULL, races))
-  for (i in races) {
-    pick <- data$lR == i
-    data_in <- data[pick, , drop = FALSE]
-    data_in$lR <- factor(data$lR[pick], levels = i)
-    p <- pars[pick, , drop = FALSE]
-    attr(p, "ok") <- rep(TRUE, nrow(p))
-    if (!is.null(attr(pars, "staircase"))) attr(p, "staircase") <- attr(pars, "staircase")
-    Rrti[, i] <- model()$rfun(data_in, p)$rt
-  }
-
-  go_levels <- levels(data$R)
-  go_levels <- go_levels[go_levels != "nogo"]
-  go_resp <- if ("yes" %in% go_levels) "yes" else if (length(go_levels) > 0) go_levels[1] else "yes"
-
-  rt <- rep(Inf, n_trials)
-  R <- rep(NA_character_, n_trials)
-
-  tA <- Rrti[, "A"]
-  tB <- Rrti[, "B"]
-  tN <- if (has_nogo) Rrti[, "nogo"] else rep(Inf, n_trials)
-  tT <- if ("time" %in% races) Rrti[, "time"] else rep(Inf, n_trials)
-
-  go_t <- rep(Inf, n_trials)
-  go_t[cond == "A"] <- tA[cond == "A"]
-  go_t[cond == "B"] <- tB[cond == "B"]
-  go_t[cond == "AB"] <- pmin(tA[cond == "AB"], tB[cond == "AB"])
-
-  emitted <- is.finite(go_t) & (go_t < tN) & (go_t < tT)
-  rt[emitted] <- go_t[emitted]
-  R[emitted] <- go_resp
-
-  if ("time" %in% races) {
-    emit_T <- is.finite(tT) & (tT < go_t) & (tT < tN)
-    rt[emit_T] <- tT[emit_T]
-    R[emit_T] <- go_resp
-  }
-
-  data.frame(R = factor(R, levels = levels(data$R)), rt = rt)
 }
 
 add_Ffunctions <- function(data,design)

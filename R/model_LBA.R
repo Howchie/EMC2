@@ -289,39 +289,6 @@ LogicalRulesLBA <- function(posdrift = TRUE, fast_path=TRUE){
   )
 }
 
-#' LBA Redundant Target Race Model
-#' @export
-#' 
-RedundantTargetLBA <- function(posdrift = TRUE){
-  list(
-    type = "RACE",
-    c_name = paste0("LBA_RedundantTarget", ifelse(posdrift, "", "IO")),
-    p_types = c("v" = 1, "sv" = log(1), "B" = log(1), "A" = log(0), "t0" = log(0), "pContaminant" = qnorm(0)),
-    p_types_canonical = c("v", "sv", "B", "A", "t0"),
-    transform = list(func = c(v = "identity", sv = "exp", B = "exp", A = "exp", t0 = "exp", pContaminant = "pnorm")),
-    bound = list(
-      minmax = cbind(v = c(-Inf, Inf), sv = c(0, Inf), A = c(1e-4, Inf), B = c(1e-4, Inf), t0 = c(0.05, Inf), pContaminant = c(0.001, 0.999)),
-      exception = c(A = 0, pContaminant = 0)
-    ),
-    Ttransform = function(pars,dadm) {
-      pars <- cbind(pars, b = pars[, "B"] + pars[, "A"])
-      pars
-    },
-    rfun = ifelse(posdrift,
-      function(data,pars) rLBA(data$lR,pars,ok = attr(pars, "ok"),posdrift = TRUE),
-      function(data,pars) rLBA(data$lR,pars,ok = attr(pars, "ok"),posdrift = FALSE)),
-    dfun = ifelse(posdrift,
-      function(rt,pars) dLBA(rt,pars,posdrift = TRUE),
-      function(rt,pars) dLBA(rt,pars,posdrift = FALSE)),
-    pfun = ifelse(posdrift,
-      function(rt,pars) pLBA(rt,pars,posdrift = TRUE),
-      function(rt,pars) pLBA(rt,pars,posdrift = FALSE)),
-    log_likelihood = function(pars,dadm,model,min_ll = log(1e-10)){
-      stop("RedundantTargetLBA: R likelihood path not implemented. Use the C++ path (default).")
-    }
-  )
-}
-
 #### BAwL (Ballistic Accumulator with Leak) ----
 
 dBAwL <- function(rt, pars, posdrift = TRUE, erlang = 1L, guess = FALSE) {
