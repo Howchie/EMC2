@@ -61,6 +61,176 @@ test_that("wald small-k limit is numerically stable (q near 0 regime)", {
   expect_equal(pdfk, pdf0, tolerance = 1e-7)
 })
 
+test_that("joint A and sv RDMSWTN density matches explicit GL over thresholds", {
+  gl <- statmod::gauss.quad(80, kind = "legendre")
+  ref_density <- function(rt, v, b, A, s, t0, sv, c) {
+    center <- b - 0.5 * A
+    half_width <- 0.5 * A
+    thresholds <- center + half_width * gl$nodes
+    0.5 * sum(gl$weights * vapply(thresholds, function(threshold) {
+      EMC2:::dswtn(
+        t = rt, mu_drift = v, threshold = threshold, s = s, t0 = t0,
+        sv = sv, lambda_g = 0, lambda_k = 0, c = c, log_out = FALSE
+      )
+    }, numeric(1)))
+  }
+
+  cases <- data.frame(
+    rt = c(0.55, 0.95, 1.7, 3.0),
+    v = c(1.1, 0.8, 1.6, 0.35),
+    b = c(1.4, 1.2, 1.8, 1.1),
+    A = c(0.25, 0.45, 0.65, 0.2),
+    s = c(1.0, 0.8, 1.2, 0.9),
+    t0 = c(0.15, 0.2, 0.1, 0.25),
+    sv = c(0.35, 0.6, 0.25, 0.9),
+    c = c(0.0, 0.0, 0.2, -0.1)
+  )
+
+  for (i in seq_len(nrow(cases))) {
+    pars <- cases[i, ]
+    closed <- EMC2:::drdmswtn(
+      t = pars$rt, mu_drift = pars$v, b = pars$b, A = pars$A, s = pars$s,
+      t0 = pars$t0, sv = pars$sv, lambda_g = 0, lambda_k = 0, c = pars$c,
+      n_gauss_nodes = 20, log_out = FALSE
+    )
+    gl_ref <- ref_density(pars$rt, pars$v, pars$b, pars$A, pars$s,
+                          pars$t0, pars$sv, pars$c)
+    expect_equal(closed, gl_ref, tolerance = 1e-6)
+  }
+})
+
+test_that("joint A and sv RDMSWTN log density is consistent with density scale", {
+  args <- list(t = 1.1, mu_drift = 0.9, b = 1.35, A = 0.3, s = 0.95,
+               t0 = 0.2, sv = 0.5, lambda_g = 0, lambda_k = 0, c = 0.0,
+               n_gauss_nodes = 20)
+  dens <- do.call(EMC2:::drdmswtn, c(args, list(log_out = FALSE)))
+  log_dens <- do.call(EMC2:::drdmswtn, c(args, list(log_out = TRUE)))
+
+  expect_equal(log_dens, log(dens), tolerance = 1e-12)
+})
+
+test_that("combined local guess+kill exponential cdf matches independent pdf integration", {
+  rt <- 0.95
+  t0 <- 0.2
+  lambda_g <- 0.45
+  lambda_k <- 0.8
+
+  swtn_cdf <- EMC2:::pSWTNspv(
+    t = rt, v = 1.1, b = 1.35, A = 0.25, t0 = t0, sv = 0.0, s = 1.0,
+    c = 0, lambda_g = lambda_g, lambda_k = lambda_k, kill_shape = 1L
+  )
+  swtn_int <- integrate(function(x) {
+    EMC2:::dSWTNspv(
+      t = x, v = 1.1, b = 1.35, A = 0.25, t0 = t0, sv = 0.0, s = 1.0,
+      c = 0, lambda_g = lambda_g, lambda_k = lambda_k, kill_shape = 1L
+    )
+  }, lower = 0, upper = rt, subdivisions = 200L, rel.tol = 1e-10)$value
+
+  gbm_cdf <- EMC2:::pGBMspv(
+    t = rt, v = 1.0, b = 1.55, A = 0.25, t0 = t0, s = 0.9,
+    lambda_g = lambda_g, lambda_k = lambda_k, kill_shape = 1L
+  )
+  gbm_int <- integrate(function(x) {
+    EMC2:::dGBMspv(
+      t = x, v = 1.0, b = 1.55, A = 0.25, t0 = t0, s = 0.9,
+      lambda_g = lambda_g, lambda_k = lambda_k, kill_shape = 1L
+    )
+  }, lower = 0, upper = rt, subdivisions = 200L, rel.tol = 1e-10)$value
+
+  expect_equal(swtn_cdf, swtn_int, tolerance = 1e-7)
+  expect_equal(gbm_cdf, gbm_int, tolerance = 1e-7)
+})
+
+test_that("combined local guess+kill exponential cdf preserves pre-t0 guess domain", {
+  rt <- 0.08
+  t0 <- 0.3
+  lambda_g <- 0.6
+  lambda_k <- 0.9
+  rate <- lambda_g + lambda_k
+  expected <- lambda_g / rate * (1 - exp(-rate * rt))
+
+  expect_equal(
+    EMC2:::pSWTNspv(
+      t = rt, v = 1.1, b = 1.35, A = 0.2, t0 = t0, sv = 0.1, s = 1.0,
+      c = 0, lambda_g = lambda_g, lambda_k = lambda_k, kill_shape = 1L
+    ),
+    expected,
+    tolerance = 1e-12
+  )
+  expect_equal(
+    EMC2:::pGBMspv(
+      t = rt, v = 1.0, b = 1.5, A = 0.2, t0 = t0, s = 1.0,
+      lambda_g = lambda_g, lambda_k = lambda_k, kill_shape = 1L
+    ),
+    expected,
+    tolerance = 1e-12
+  )
+})
+
+test_that("combined local guess+kill Erlang-2 point-start cdf is closed form for Wald and GBM", {
+  rt <- 0.95
+  t0 <- 0.2
+  lambda_g <- 0.45
+  lambda_k <- 0.8
+
+  wald_cdf <- EMC2:::pSWTNspv(
+    t = rt, v = 1.1, b = 1.35, A = 0, t0 = t0, sv = 0, s = 1.0,
+    c = 0, lambda_g = lambda_g, lambda_k = lambda_k, kill_shape = 2L
+  )
+  wald_int <- integrate(function(x) {
+    EMC2:::dSWTNspv(
+      t = x, v = 1.1, b = 1.35, A = 0, t0 = t0, sv = 0, s = 1.0,
+      c = 0, lambda_g = lambda_g, lambda_k = lambda_k, kill_shape = 2L
+    )
+  }, lower = 0, upper = rt, subdivisions = 500L, rel.tol = 1e-10)$value
+
+  gbm_cdf <- EMC2:::pGBMspv(
+    t = rt, v = 1.0, b = 1.55, A = 0, t0 = t0, s = 0.9,
+    lambda_g = lambda_g, lambda_k = lambda_k, kill_shape = 2L
+  )
+  gbm_int <- integrate(function(x) {
+    EMC2:::dGBMspv(
+      t = x, v = 1.0, b = 1.55, A = 0, t0 = t0, s = 0.9,
+      lambda_g = lambda_g, lambda_k = lambda_k, kill_shape = 2L
+    )
+  }, lower = 0, upper = rt, subdivisions = 500L, rel.tol = 1e-10)$value
+
+  expect_equal(wald_cdf, wald_int, tolerance = 1e-10)
+  expect_equal(gbm_cdf, gbm_int, tolerance = 1e-10)
+})
+
+test_that("combined local guess+kill Erlang-2 SPV cdf is closed form for Wald and GBM", {
+  rt <- 0.95
+  t0 <- 0.2
+  lambda_g <- 0.45
+  lambda_k <- 0.8
+
+  wald_cdf <- EMC2:::pSWTNspv(
+    t = rt, v = 1.1, b = 1.35, A = 0.25, t0 = t0, sv = 0, s = 1.0,
+    c = 0, lambda_g = lambda_g, lambda_k = lambda_k, kill_shape = 2L
+  )
+  wald_int <- integrate(function(x) {
+    EMC2:::dSWTNspv(
+      t = x, v = 1.1, b = 1.35, A = 0.25, t0 = t0, sv = 0, s = 1.0,
+      c = 0, lambda_g = lambda_g, lambda_k = lambda_k, kill_shape = 2L
+    )
+  }, lower = 0, upper = rt, subdivisions = 800L, rel.tol = 1e-10)$value
+
+  gbm_cdf <- EMC2:::pGBMspv(
+    t = rt, v = 1.0, b = 1.55, A = 0.25, t0 = t0, s = 0.9,
+    lambda_g = lambda_g, lambda_k = lambda_k, kill_shape = 2L
+  )
+  gbm_int <- integrate(function(x) {
+    EMC2:::dGBMspv(
+      t = x, v = 1.0, b = 1.55, A = 0.25, t0 = t0, s = 0.9,
+      lambda_g = lambda_g, lambda_k = lambda_k, kill_shape = 2L
+    )
+  }, lower = 0, upper = rt, subdivisions = 800L, rel.tol = 1e-10)$value
+
+  expect_equal(wald_cdf, wald_int, tolerance = 1e-10)
+  expect_equal(gbm_cdf, gbm_int, tolerance = 1e-10)
+})
+
 test_that("combined local guess+kill SWTN Erlang-2 cdf is locally consistent with the pdf", {
   t <- 0.85
   h <- 1e-5

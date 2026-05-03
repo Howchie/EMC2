@@ -983,6 +983,60 @@ inline Rcpp::List get_gl_nodes_weights(int n_gauss_nodes) {
                          : Rcpp::as<Rcpp::List>(gauss_quad(n_nodes, "legendre"));
 }
 
+inline double norm_cdf_2d_stable(double x, double y, double rho) {
+  if (std::fabs(rho) > 0.9999 || std::fabs(x) > 8.0 || std::fabs(y) > 8.0)
+    return norm_cdf_2d(x, y, rho);
+  return norm_cdf_2d_fast(x, y, rho);
+}
+
+inline double drdmswtn_joint_A_sv_density(double t_adj, double mu_drift, double b,
+                                          double A, double s, double sv, double c,
+                                          bool log_out) {
+  if (t_adj <= 0.0 || b <= 1e-7 || A <= 1e-7 || s <= 1e-10 || sv <= 1e-10)
+    return log_out ? R_NegInf : 0.0;
+
+  const double d_lo = b - A;
+  const double d_hi = b;
+  if (d_hi <= d_lo) return log_out ? R_NegInf : 0.0;
+
+  const double z_norm = pnorm_std((c - mu_drift) / sv, false, false);
+  if (!(z_norm > 0.0)) return log_out ? R_NegInf : 0.0;
+
+  const double s2 = s * s;
+  const double sv2 = sv * sv;
+  const double mean_d = mu_drift * t_adj;
+  const double var_d = sv2 * t_adj * t_adj + s2 * t_adj;
+  if (!(var_d > 0.0)) return log_out ? R_NegInf : 0.0;
+
+  const double sd_d = std::sqrt(var_d);
+  const double rho = std::fmin(1.0 - 1e-14,
+                               std::fmax(0.0, sv * std::sqrt(t_adj) /
+                                                std::sqrt(s2 + sv2 * t_adj)));
+  const double rho_sd = std::sqrt(std::fmax(1e-14, 1.0 - rho * rho));
+  const double alpha_lo = (d_lo - mean_d) / sd_d;
+  const double alpha_hi = (d_hi - mean_d) / sd_d;
+  const double gamma = (c - mu_drift) / sv;
+
+  const double strip = gaussian_cdf(alpha_hi) - gaussian_cdf(alpha_lo);
+  const double lower_x = norm_cdf_2d_stable(alpha_hi, gamma, rho) -
+                         norm_cdf_2d_stable(alpha_lo, gamma, rho);
+  double prob_rect = strip - lower_x;
+  prob_rect = std::fmax(0.0, std::fmin(1.0, prob_rect));
+
+  auto moment_primitive = [&](double y) {
+    const double tail_given_y = gaussian_cdf((rho * y - gamma) / rho_sd);
+    const double shifted_y = gaussian_cdf((y - rho * gamma) / rho_sd);
+    return -gaussian_pdf(y) * tail_given_y +
+           rho * gaussian_pdf(gamma) * shifted_y;
+  };
+  const double moment_rect = moment_primitive(alpha_hi) - moment_primitive(alpha_lo);
+  double dens = (mean_d * prob_rect + sd_d * moment_rect) / (A * z_norm * t_adj);
+  dens = std::fmax(0.0, dens);
+
+  if (!std::isfinite(dens) || dens <= 0.0) return log_out ? R_NegInf : 0.0;
+  return log_out ? std::log(dens) : dens;
+}
+
 // [[Rcpp::export]]
 double drdmswtn(double t, double mu_drift, double b, double A,
                 double s = 1.0, double t0 = 0.0, double sv = 0.0,
@@ -1052,6 +1106,404 @@ inline double local_combo_response_pdf(double t, double f_decision, double F_dec
   return log_out ? log_pdf : std::exp(log_pdf);
 }
 
+inline double local_combo_response_cdf_exp(double t, double F_decision,
+                                           double F_decision_killed,
+                                           double lambda_g, double lambda_k,
+                                           bool log_out) {
+  const double rate = lambda_g + lambda_k;
+  if (!(t > 0.0) || !(rate > 0.0)) return log_out ? R_NegInf : 0.0;
+
+  const double D = std::fmax(0.0, std::fmin(1.0, F_decision_killed));
+  const double S = 1.0 - std::fmax(0.0, std::fmin(1.0, F_decision));
+  const double tail = emc2_isfinite(t) ? std::exp(-rate * t) * S : 0.0;
+  const double A0 = (1.0 - tail - D) / rate;
+  double out = D + lambda_g * std::fmax(0.0, A0);
+  out = std::fmax(0.0, std::fmin(1.0, out));
+  return log_out ? ((out > 0.0) ? std::log(out) : R_NegInf) : out;
+}
+
+inline void exp_poly_moments_0_1_2(double upper, double rate,
+                                   double& e0, double& e1, double& e2) {
+  if (!(upper > 0.0)) {
+    e0 = e1 = e2 = 0.0;
+    return;
+  }
+  if (!emc2_isfinite(upper)) {
+    e0 = 1.0 / rate;
+    e1 = 1.0 / (rate * rate);
+    e2 = 2.0 / (rate * rate * rate);
+    return;
+  }
+
+  const double ru = rate * upper;
+  if (std::abs(ru) < 1e-5) {
+    const double u2 = upper * upper;
+    const double u3 = u2 * upper;
+    const double u4 = u3 * upper;
+    const double u5 = u4 * upper;
+    e0 = upper - 0.5 * rate * u2 + (rate * rate) * u3 / 6.0;
+    e1 = 0.5 * u2 - rate * u3 / 3.0 + (rate * rate) * u4 / 8.0;
+    e2 = u3 / 3.0 - rate * u4 / 4.0 + (rate * rate) * u5 / 10.0;
+    return;
+  }
+
+  const double er = std::exp(-ru);
+  const double r2 = rate * rate;
+  const double r3 = r2 * rate;
+  e0 = -std::expm1(-ru) / rate;
+  e1 = (1.0 - er * (1.0 + ru)) / r2;
+  e2 = (2.0 - er * (ru * ru + 2.0 * ru + 2.0)) / r3;
+}
+
+struct tilted_wald_moments_0_1_2 {
+  bool ok;
+  double F;
+  double M0;
+  double M1;
+  double M2;
+};
+
+inline tilted_wald_moments_0_1_2 point_wald_tilted_moments_0_1_2(
+    double upper, double distance, double drift, double sigma, double rate) {
+  tilted_wald_moments_0_1_2 out{false, 0.0, 0.0, 0.0, 0.0};
+  if (!(distance > 0.0) || !(sigma > 0.0) || !(rate > 0.0)) return out;
+
+  const double sig2 = sigma * sigma;
+  if (!emc2_isfinite(upper)) {
+    out.F = (drift >= 0.0) ? 1.0 : std::exp(2.0 * distance * drift / sig2);
+  } else if (upper > 0.0) {
+    out.F = std::fmax(0.0, std::fmin(1.0,
+      pwald(upper, drift, distance, 0.0, sigma, 0.0,
+            0.0, 0.0, false, 1, false)));
+  } else {
+    out.ok = true;
+    return out;
+  }
+
+  const double q = std::sqrt(drift * drift + 2.0 * sig2 * rate);
+  const double beta = emc2_isfinite(upper) ? q * std::sqrt(upper) / sigma : 1.0;
+  if (!(q > 1e-12) || (emc2_isfinite(upper) && std::abs(beta) < 1e-7)) {
+    return out;
+  }
+
+  const double L = std::exp(distance * (drift - q) / sig2);
+  if (!emc2_isfinite(upper)) {
+    out.M0 = L;
+    out.M1 = L * distance / q;
+    out.M2 = L * (distance * distance / (q * q) +
+                  distance * sig2 / (q * q * q));
+    out.ok = true;
+    return out;
+  }
+
+  const double sqrt_u = std::sqrt(upper);
+  const double st = sigma * sqrt_u;
+  const double d_minus = (q * upper - distance) / st;
+  const double phi_minus = std::exp(-0.5 * d_minus * d_minus - LOG_SQRT_2PI);
+
+  out.M0 = std::fmax(0.0, std::fmin(1.0,
+    pwald(upper, drift, distance, 0.0, sigma, 0.0,
+          0.0, rate, false, 1, false)));
+  const double erlang2_cdf = std::fmax(0.0, std::fmin(1.0,
+    pwald(upper, drift, distance, 0.0, sigma, 0.0,
+          0.0, rate, false, 2, false)));
+  out.M1 = std::fmax(0.0, (erlang2_cdf - out.M0) / rate);
+  out.M2 = (distance * distance / (q * q)) * out.M0 +
+           (sig2 / (q * q)) * out.M1 -
+           L * (2.0 * distance * sigma * sqrt_u / (q * q)) * phi_minus;
+
+  out.M0 = std::fmax(0.0, out.M0);
+  out.M1 = std::fmax(0.0, out.M1);
+  out.M2 = std::fmax(0.0, out.M2);
+  out.ok = true;
+  return out;
+}
+
+inline double primitive_K1(double eta, double c, double a, double S) {
+  const double z = (c - a) / S;
+  const double h = z + eta * S;
+  const double E = std::exp(eta * c + 0.5 * eta * eta * S * S);
+  const double m = c + eta * S * S;
+  return -S * E * (m * pnorm_std(h, true, false) +
+                   S * std::exp(-0.5 * h * h - LOG_SQRT_2PI));
+}
+
+inline double primitive_K2(double eta, double c, double a, double S) {
+  const double z = (c - a) / S;
+  const double h = z + eta * S;
+  const double E = std::exp(eta * c + 0.5 * eta * eta * S * S);
+  const double m = c + eta * S * S;
+  const double phi_h = std::exp(-0.5 * h * h - LOG_SQRT_2PI);
+  return -S * E * ((m * m + S * S) * pnorm_std(h, true, false) +
+                   S * (2.0 * m - S * h) * phi_h);
+}
+
+inline double primitive_K3(double eta, double c, double a, double S) {
+  const double z = (c - a) / S;
+  const double h = z + eta * S;
+  const double E = std::exp(eta * c + 0.5 * eta * eta * S * S);
+  const double m = c + eta * S * S;
+  const double phi_h = std::exp(-0.5 * h * h - LOG_SQRT_2PI);
+  return -S * E * ((m * m * m + 3.0 * m * S * S) * pnorm_std(h, true, false) +
+                   S * (3.0 * m * m - 3.0 * m * S * h +
+                        S * S * (h * h + 2.0)) * phi_h);
+}
+
+inline double primitive_H0(double eta, double c, double a, double S) {
+  const double z = (c - a) / S;
+  const double h = z + eta * S;
+  const double E = std::exp(eta * c + 0.5 * eta * eta * S * S);
+  return (std::exp(eta * a) * pnorm_std(z, true, false) -
+          E * pnorm_std(h, true, false)) / eta;
+}
+
+inline double primitive_H1(double eta, double c, double a, double S) {
+  const double z = (c - a) / S;
+  if (std::abs(eta) <= 1e-8) {
+    return 0.5 * a * a * pnorm_std(z, true, false) +
+           primitive_K2(0.0, c, a, S) / (2.0 * S);
+  }
+  return a * std::exp(eta * a) * pnorm_std(z, true, false) / eta -
+         primitive_H0(eta, c, a, S) / eta +
+         primitive_K1(eta, c, a, S) / (eta * S);
+}
+
+inline double primitive_H2(double eta, double c, double a, double S) {
+  const double z = (c - a) / S;
+  if (std::abs(eta) <= 1e-8) {
+    return (a * a * a / 3.0) * pnorm_std(z, true, false) +
+           primitive_K3(0.0, c, a, S) / (3.0 * S);
+  }
+  return a * a * std::exp(eta * a) * pnorm_std(z, true, false) / eta -
+         2.0 * primitive_H1(eta, c, a, S) / eta +
+         primitive_K2(eta, c, a, S) / (eta * S);
+}
+
+inline double primitive_exp_a1(double eta, double a) {
+  if (std::abs(eta) <= 1e-8) return 0.5 * a * a;
+  return std::exp(eta * a) * (a / eta - 1.0 / (eta * eta));
+}
+
+inline double primitive_exp_a2(double eta, double a) {
+  if (std::abs(eta) <= 1e-8) return a * a * a / 3.0;
+  return std::exp(eta * a) *
+         (a * a / eta - 2.0 * a / (eta * eta) + 2.0 / (eta * eta * eta));
+}
+
+inline double primitive_spv_m2_finite(double endpoint, double upper,
+                                      double drift, double sigma, double rate,
+                                      bool gbm_weighted) {
+  const double sig2 = sigma * sigma;
+  const double q = std::sqrt(drift * drift + 2.0 * sig2 * rate);
+  if (!(q > 0.0) || !(upper > 0.0)) return NA_REAL;
+  const double S = sigma * std::sqrt(upper);
+  const double eta_m = (drift - q) / sig2 - (gbm_weighted ? 1.0 : 0.0);
+  const double eta_p = (drift + q) / sig2 - (gbm_weighted ? 1.0 : 0.0);
+  const double c_m = q * upper;
+  const double c_p = -q * upper;
+  const double q2 = q * q;
+  const double q3 = q2 * q;
+  return (primitive_H2(eta_m, c_m, endpoint, S) +
+          primitive_H2(eta_p, c_p, endpoint, S)) / q2 +
+         (sig2 / q3) *
+          (primitive_H1(eta_m, c_m, endpoint, S) -
+           primitive_H1(eta_p, c_p, endpoint, S)) -
+         (2.0 * S / q2) * primitive_K1(eta_m, c_m, endpoint, S);
+}
+
+inline double primitive_spv_m2_infinite(double endpoint,
+                                        double drift, double sigma, double rate,
+                                        bool gbm_weighted) {
+  const double sig2 = sigma * sigma;
+  const double q = std::sqrt(drift * drift + 2.0 * sig2 * rate);
+  if (!(q > 0.0)) return NA_REAL;
+  const double eta = (drift - q) / sig2 - (gbm_weighted ? 1.0 : 0.0);
+  const double q2 = q * q;
+  const double q3 = q2 * q;
+  return primitive_exp_a2(eta, endpoint) / q2 +
+         sig2 * primitive_exp_a1(eta, endpoint) / q3;
+}
+
+inline double spv_wald_m2(double upper, double b, double A,
+                          double drift, double sigma, double rate) {
+  if (A <= 1e-8) {
+    return point_wald_tilted_moments_0_1_2(upper, b, drift, sigma, rate).M2;
+  }
+  const double lo = b - A;
+  if (!(lo > 0.0)) return NA_REAL;
+  const double hi = b;
+  const double p_hi = emc2_isfinite(upper)
+    ? primitive_spv_m2_finite(hi, upper, drift, sigma, rate, false)
+    : primitive_spv_m2_infinite(hi, drift, sigma, rate, false);
+  const double p_lo = emc2_isfinite(upper)
+    ? primitive_spv_m2_finite(lo, upper, drift, sigma, rate, false)
+    : primitive_spv_m2_infinite(lo, drift, sigma, rate, false);
+  return (p_hi - p_lo) / A;
+}
+
+inline double gbm_spv_m2(double upper, double b, double A,
+                         double drift, double sigma, double rate) {
+  if (A <= 1e-8) {
+    return point_wald_tilted_moments_0_1_2(upper, std::log(b), drift, sigma, rate).M2;
+  }
+  if (!(b > 1.0 + A)) return NA_REAL;
+  const double lo = std::log(b / (1.0 + A));
+  const double hi = std::log(b);
+  const double p_hi = emc2_isfinite(upper)
+    ? primitive_spv_m2_finite(hi, upper, drift, sigma, rate, true)
+    : primitive_spv_m2_infinite(hi, drift, sigma, rate, true);
+  const double p_lo = emc2_isfinite(upper)
+    ? primitive_spv_m2_finite(lo, upper, drift, sigma, rate, true)
+    : primitive_spv_m2_infinite(lo, drift, sigma, rate, true);
+  return (b / A) * (p_hi - p_lo);
+}
+
+inline tilted_wald_moments_0_1_2 spv_wald_tilted_moments_0_1_2(
+    double upper, double b, double A, double drift, double sigma, double rate) {
+  tilted_wald_moments_0_1_2 out{false, 0.0, 0.0, 0.0, 0.0};
+  if (A <= 1e-8) return point_wald_tilted_moments_0_1_2(upper, b, drift, sigma, rate);
+  if (emc2_isfinite(upper) && upper <= 0.0) {
+    out.ok = true;
+    return out;
+  }
+  if (!(b - A > 0.0)) return out;
+  out.F = std::fmax(0.0, std::fmin(1.0,
+    pwald(upper, drift, b, A, sigma, 0.0, 0.0, 0.0, false, 1, false)));
+  out.M0 = std::fmax(0.0, std::fmin(1.0,
+    pwald(upper, drift, b, A, sigma, 0.0, 0.0, rate, false, 1, false)));
+  const double erlang2_cdf = std::fmax(0.0, std::fmin(1.0,
+    pwald(upper, drift, b, A, sigma, 0.0, 0.0, rate, false, 2, false)));
+  out.M1 = std::fmax(0.0, (erlang2_cdf - out.M0) / rate);
+  out.M2 = spv_wald_m2(upper, b, A, drift, sigma, rate);
+  out.ok = emc2_isfinite(out.M2) && out.M2 >= 0.0;
+  return out;
+}
+
+inline tilted_wald_moments_0_1_2 gbm_tilted_moments_0_1_2(
+    double upper, double mu, double b, double A, double sigma, double rate) {
+  tilted_wald_moments_0_1_2 out{false, 0.0, 0.0, 0.0, 0.0};
+  const double drift = mu - 0.5 * sigma * sigma;
+  if (A <= 1e-8) return point_wald_tilted_moments_0_1_2(upper, std::log(b), drift, sigma, rate);
+  if (emc2_isfinite(upper) && upper <= 0.0) {
+    out.ok = true;
+    return out;
+  }
+  if (!(b > 1.0 + A)) return out;
+  out.F = std::fmax(0.0, std::fmin(1.0,
+    pgbm(upper, mu, b, A, sigma, 0.0, 0.0, 0.0, false, 1, false)));
+  out.M0 = std::fmax(0.0, std::fmin(1.0,
+    pgbm(upper, mu, b, A, sigma, 0.0, 0.0, rate, false, 1, false)));
+  const double erlang2_cdf = std::fmax(0.0, std::fmin(1.0,
+    pgbm(upper, mu, b, A, sigma, 0.0, 0.0, rate, false, 2, false)));
+  out.M1 = std::fmax(0.0, (erlang2_cdf - out.M0) / rate);
+  out.M2 = gbm_spv_m2(upper, b, A, drift, sigma, rate);
+  out.ok = emc2_isfinite(out.M2) && out.M2 >= 0.0;
+  return out;
+}
+
+inline double point_wald_local_combo_cdf_erlang2(
+    double t, double distance, double drift, double sigma, double t0,
+    double lambda_g, double lambda_k, bool log_out) {
+  if (!(t > 0.0) || !(lambda_g > 0.0) || !(lambda_k > 0.0)) {
+    return log_out ? R_NegInf : 0.0;
+  }
+  const double rate = lambda_g + lambda_k;
+  double pre0, pre1, pre2;
+  const double pre_upper = emc2_isfinite(t) ? std::fmin(t, std::fmax(0.0, t0))
+                                            : std::fmax(0.0, t0);
+  exp_poly_moments_0_1_2(pre_upper, rate, pre0, pre1, pre2);
+  const double pre_guess = lambda_g * lambda_g * (pre1 + lambda_k * pre2);
+
+  if (emc2_isfinite(t) && t <= t0) {
+    const double out = std::fmax(0.0, std::fmin(1.0, pre_guess));
+    return log_out ? ((out > 0.0) ? std::log(out) : R_NegInf) : out;
+  }
+
+  const double upper = emc2_isfinite(t) ? t - t0 : R_PosInf;
+  tilted_wald_moments_0_1_2 m =
+    point_wald_tilted_moments_0_1_2(upper, distance, drift, sigma, rate);
+  if (!m.ok) return NA_REAL;
+
+  const double gk = lambda_g * lambda_k;
+  const double t02 = t0 * t0;
+  const double a0 = 1.0 + rate * t0 + gk * t02;
+  const double a1 = rate + 2.0 * gk * t0;
+  const double a2 = gk;
+  const double exp_t0 = std::exp(-rate * t0);
+  const double decision = exp_t0 * (a0 * m.M0 + a1 * m.M1 + a2 * m.M2);
+
+  double p0, p1, p2;
+  exp_poly_moments_0_1_2(upper, rate, p0, p1, p2);
+
+  const double r2 = rate * rate;
+  const double r3 = r2 * rate;
+  const double J0 = p0 * m.F - (m.F - m.M0) / rate;
+  const double J1 = p1 * m.F - (m.F - m.M0 - rate * m.M1) / r2;
+  const double J2 = p2 * m.F -
+    (2.0 * m.F - 2.0 * m.M0 - 2.0 * rate * m.M1 - r2 * m.M2) / r3;
+
+  const double c0 = t0 + lambda_k * t02;
+  const double c1 = 1.0 + 2.0 * lambda_k * t0;
+  const double c2 = lambda_k;
+  const double post_surv_int =
+    c0 * std::fmax(0.0, p0 - J0) +
+    c1 * std::fmax(0.0, p1 - J1) +
+    c2 * std::fmax(0.0, p2 - J2);
+  const double post_guess = lambda_g * lambda_g * exp_t0 * post_surv_int;
+
+  double out = pre_guess + decision + post_guess;
+  out = std::fmax(0.0, std::fmin(1.0, out));
+  return log_out ? ((out > 0.0) ? std::log(out) : R_NegInf) : out;
+}
+
+inline double local_combo_cdf_erlang2_from_moments(
+    double t, double t0, double lambda_g, double lambda_k,
+    const tilted_wald_moments_0_1_2& m, bool log_out) {
+  const double rate = lambda_g + lambda_k;
+  double pre0, pre1, pre2;
+  const double pre_upper = emc2_isfinite(t) ? std::fmin(t, std::fmax(0.0, t0))
+                                            : std::fmax(0.0, t0);
+  exp_poly_moments_0_1_2(pre_upper, rate, pre0, pre1, pre2);
+  const double pre_guess = lambda_g * lambda_g * (pre1 + lambda_k * pre2);
+
+  if (emc2_isfinite(t) && t <= t0) {
+    const double out = std::fmax(0.0, std::fmin(1.0, pre_guess));
+    return log_out ? ((out > 0.0) ? std::log(out) : R_NegInf) : out;
+  }
+
+  const double gk = lambda_g * lambda_k;
+  const double t02 = t0 * t0;
+  const double a0 = 1.0 + rate * t0 + gk * t02;
+  const double a1 = rate + 2.0 * gk * t0;
+  const double a2 = gk;
+  const double exp_t0 = std::exp(-rate * t0);
+  const double decision = exp_t0 * (a0 * m.M0 + a1 * m.M1 + a2 * m.M2);
+
+  const double upper = emc2_isfinite(t) ? t - t0 : R_PosInf;
+  double p0, p1, p2;
+  exp_poly_moments_0_1_2(upper, rate, p0, p1, p2);
+
+  const double r2 = rate * rate;
+  const double r3 = r2 * rate;
+  const double J0 = p0 * m.F - (m.F - m.M0) / rate;
+  const double J1 = p1 * m.F - (m.F - m.M0 - rate * m.M1) / r2;
+  const double J2 = p2 * m.F -
+    (2.0 * m.F - 2.0 * m.M0 - 2.0 * rate * m.M1 - r2 * m.M2) / r3;
+
+  const double c0 = t0 + lambda_k * t02;
+  const double c1 = 1.0 + 2.0 * lambda_k * t0;
+  const double c2 = lambda_k;
+  const double post_surv_int =
+    c0 * std::fmax(0.0, p0 - J0) +
+    c1 * std::fmax(0.0, p1 - J1) +
+    c2 * std::fmax(0.0, p2 - J2);
+  const double post_guess = lambda_g * lambda_g * exp_t0 * post_surv_int;
+
+  double out = pre_guess + decision + post_guess;
+  out = std::fmax(0.0, std::fmin(1.0, out));
+  return log_out ? ((out > 0.0) ? std::log(out) : R_NegInf) : out;
+}
+
 inline double drdmswtn_local_combo(double t, double mu_drift, double b, double A,
                                    double s, double t0, double sv,
                                    double lambda_g, double lambda_k,
@@ -1069,8 +1521,32 @@ inline double prdmswtn_local_combo(double t, double mu_drift, double b, double A
                                    double lambda_g, double lambda_k,
                                    double c = 0.0, int n_gauss_nodes = 20,
                                    bool log_out = false, int kill_shape = 1) {
-  // Integrate from 0 to raw t; at each node u, erlang uses u, EAM uses u - t0.
   if (!(t > 0.0)) return log_out ? R_NegInf : 0.0;
+
+  if (kill_shape <= 1) {
+    const double rate = lambda_g + lambda_k;
+    const double F_decision = prdmswtn(t, mu_drift, b, A, s, t0, sv,
+                                       0.0, 0.0, c, n_gauss_nodes,
+                                       false, 1, false);
+    const double F_decision_killed = prdmswtn(t, mu_drift, b, A, s, t0, sv,
+                                              0.0, rate, c, n_gauss_nodes,
+                                              false, 1, false);
+    return local_combo_response_cdf_exp(t, F_decision, F_decision_killed,
+                                        lambda_g, lambda_k, log_out);
+  }
+
+  if (kill_shape == 2 && sv < 1e-7) {
+    const double upper = emc2_isfinite(t) ? t - t0 : R_PosInf;
+    tilted_wald_moments_0_1_2 m =
+      spv_wald_tilted_moments_0_1_2(upper, b, A, mu_drift, s, lambda_g + lambda_k);
+    if (m.ok) {
+      return local_combo_cdf_erlang2_from_moments(
+        t, t0, lambda_g, lambda_k, m, log_out);
+    }
+  }
+
+  // Drift-variability cases still need the drift mixture of the second tilted
+  // moment; keep raw-time integration there.
   const double rate_scale = lambda_g + lambda_k;
   const auto density_fn = [&](double u) {
     return drdmswtn_local_combo(u, mu_drift, b, A, s, t0, sv,
@@ -1098,8 +1574,29 @@ inline double pgbm_local_combo(double t, double mu, double b, double A,
                                double sigma, double t0,
                                double lambda_g, double lambda_k,
                                bool log_out = false, int kill_shape = 1) {
-  // Integrate from 0 to raw t; at each node u, erlang uses u, EAM uses u - t0.
   if (!(t > 0.0)) return log_out ? R_NegInf : 0.0;
+
+  if (kill_shape <= 1) {
+    const double rate = lambda_g + lambda_k;
+    const double F_decision = pgbm(t, mu, b, A, sigma, t0,
+                                   0.0, 0.0, false, 1, false);
+    const double F_decision_killed = pgbm(t, mu, b, A, sigma, t0,
+                                          0.0, rate, false, 1, false);
+    return local_combo_response_cdf_exp(t, F_decision, F_decision_killed,
+                                        lambda_g, lambda_k, log_out);
+  }
+
+  if (kill_shape == 2) {
+    const double upper = emc2_isfinite(t) ? t - t0 : R_PosInf;
+    tilted_wald_moments_0_1_2 m =
+      gbm_tilted_moments_0_1_2(upper, mu, b, A, sigma, lambda_g + lambda_k);
+    if (m.ok) {
+      return local_combo_cdf_erlang2_from_moments(
+        t, t0, lambda_g, lambda_k, m, log_out);
+    }
+  }
+
+  // Fallback for numerical edge cases.
   const double rate_scale = lambda_g + lambda_k;
   const auto density_fn = [&](double u) {
     return dgbm_local_combo(u, mu, b, A, sigma, t0, lambda_g, lambda_k, false, kill_shape);
@@ -1449,14 +1946,16 @@ double drdmswtn(double t, double mu_drift, double b, double A,
     // sv=0: standard Wald (dwald handles t_eam <= 0 internally via its t0 param)
     if (mu_drift <= 1e-10 && t_eam > 1e-10) return log_out ? R_NegInf : 0.0;
     return dwald(t, mu_drift, b, A, s, t0, lambda, lambda, log_out, kill_shape, guess);
-  }
- else if (no_A && !no_sv) {
-   // SWTN with fixed threshold b (dswtn handles t_eam <= 0 via its t0 param)
-   return dswtn(t, mu_drift, b, s, t0, sv,
-                guess ? lambda : 0.0, guess ? 0.0 : lambda,
-                c, log_out, kill_shape, guess);
- }
- else {
+  } else if (no_A && !no_sv) {
+    // SWTN with fixed threshold b (dswtn handles t_eam <= 0 via its t0 param)
+    return dswtn(t, mu_drift, b, s, t0, sv,
+                 guess ? lambda : 0.0, guess ? 0.0 : lambda,
+                 c, log_out, kill_shape, guess);
+  } else {
+    if (!guess && lambda <= 1e-10) {
+      return drdmswtn_joint_A_sv_density(t_eam, mu_drift, b, A, s, sv, c, log_out);
+    }
+
     // Full model: integrate dswtn_core over threshold ~ Unif(b-A, b).
     // dswtn_core receives t_eam and t0 so erlang uses t_eam + t0 = raw t.
     const int n_nodes = std::max(1, n_gauss_nodes);
