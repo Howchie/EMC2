@@ -366,6 +366,30 @@ double dwald(double t, double mu, double b, double A = 0.0, double sigma = 1.0,
   return log_out ? log_pdf : std::exp(log_pdf);
 }
 
+// [[Rcpp::export]]
+NumericVector dWald(NumericVector t, NumericVector v,
+                    NumericVector B, NumericVector A, NumericVector t0,
+                    bool log_out = false) {
+  int n = t.size();
+  NumericVector res(n);
+  for (int i = 0; i < n; i++) {
+    res[i] = dwald(t[i], v[i], B[i] + A[i], A[i], 1.0, t0[i], 0.0, 0.0, log_out, 1, false);
+  }
+  return res;
+}
+
+// [[Rcpp::export]]
+NumericVector pWald(NumericVector t, NumericVector v,
+                    NumericVector B, NumericVector A, NumericVector t0,
+                    bool log_out = false) {
+  int n = t.size();
+  NumericVector res(n);
+  for (int i = 0; i < n; i++) {
+    res[i] = pwald(t[i], v[i], B[i] + A[i], A[i], 1.0, t0[i], 0.0, 0.0, log_out, 1, false);
+  }
+  return res;
+}
+
 // --------------------------------------------------------------------------
 // Wald / killed Wald CDF with uniform start-point variability.
 // Returns sub-CDF:

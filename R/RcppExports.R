@@ -85,6 +85,14 @@ dwald <- function(t, mu, b, A = 0.0, sigma = 1.0, t0 = 0.0, lambda_g = 0.0, lamb
     .Call(`_EMC2_dwald`, t, mu, b, A, sigma, t0, lambda_g, lambda_k, log_out, kill_shape, guess)
 }
 
+dWald <- function(t, v, B, A, t0, log_out = FALSE) {
+    .Call(`_EMC2_dWald`, t, v, B, A, t0, log_out)
+}
+
+pWald <- function(t, v, B, A, t0, log_out = FALSE) {
+    .Call(`_EMC2_pWald`, t, v, B, A, t0, log_out)
+}
+
 dgbm <- function(t, mu, b, A = 0.0, sigma = 1.0, t0 = 0.0, lambda_g = 0.0, lambda_k = 0.0, log_out = FALSE, kill_shape = 1L, guess = FALSE) {
     .Call(`_EMC2_dgbm`, t, mu, b, A, sigma, t0, lambda_g, lambda_k, log_out, kill_shape, guess)
 }

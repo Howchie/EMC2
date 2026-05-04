@@ -262,7 +262,7 @@ LBA <- function(posdrift=TRUE){
 LogicalRulesLBA <- function(posdrift = TRUE, fast_path=TRUE){
   list(
     type="RACE",
-    # Note: `calc_ll()` infers LBA `posdrift` from whether `c_name` contains "IO".
+    # Note: `calc_ll_oo()` infers LBA `posdrift` from whether `c_name` contains "IO".
     # Keep this in sync so likelihood and simulation use the same setting.
     c_name = paste0("LBA_LogicalRules",ifelse(posdrift,"","IO")),
     # p_vector transform, sets sv as a scaling parameter

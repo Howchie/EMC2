@@ -877,9 +877,9 @@ plot_trend <- function(input_data, emc, par_name, subject=1,
     }
   }
   if(!is.list(input_data)) {
-    updated <- get_pars_matrix(p_vector=input_data,
-                               dadm=dadm,
-                               model=emc[[1]]$model())
+    updated <- get_pars_matrix_oo(p_vector=input_data,
+                                  dadm=dadm,
+                                  model=emc[[1]]$model())
     trend <- updated[row_filter, par_name]
     credible_interval <- NULL
     ylim <- range(trend)

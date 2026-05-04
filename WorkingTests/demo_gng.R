@@ -217,9 +217,9 @@ if (RUN_FITS) print(recovery(res_lba_gng$emc, true_pars = res_lba_gng$true_pars)
 if (RUN_FITS) plot_cdf(res_lba_gng$dat, post_predict=res_lba_gng$pp, functions=list(Correct=Cfun), defective_factor = "Correct", factors="S")
 if (RUN_FITS) plot_density(res_lba_gng$data, post_predict = res_lba_gng$pp, functions = list(Correct = Cfun), defective_factor = "Correct", factors = "S")
 if (RUN_FITS) plot_stat(res_lba_gng$data, post_predict = res_lba_gng$pp, factors = "S", stat_name = "MeanCorrect_Finite",
-                        stat_fun = function(d) mean(d$Correct,na.rm=TRUE), functions = list(Correct = Cfun), remove_na = FALSE)
+                        stat_fun = function(d) mean(d$Correct,na.rm=TRUE), functions = list(Correct = Cfun))
 if (RUN_FITS) plot_stat(res_lba_gng$data, post_predict = res_lba_gng$pp, factors = "S", stat_name = "MeanOmissions",
-                        stat_fun = function(d) mean(is.na(d$R)), functions = list(Correct = Cfun), remove_na = FALSE)
+                        stat_fun = function(d) mean(is.na(d$R)), functions = list(Correct = Cfun))
 res_lba_gng_lc <- run_lba_demo(
   n_trials = 10000,
   UC = 1.8,

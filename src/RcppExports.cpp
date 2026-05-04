@@ -372,6 +372,38 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// dWald
+NumericVector dWald(NumericVector t, NumericVector v, NumericVector B, NumericVector A, NumericVector t0, bool log_out);
+RcppExport SEXP _EMC2_dWald(SEXP tSEXP, SEXP vSEXP, SEXP BSEXP, SEXP ASEXP, SEXP t0SEXP, SEXP log_outSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type t(tSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type v(vSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type B(BSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type A(ASEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type t0(t0SEXP);
+    Rcpp::traits::input_parameter< bool >::type log_out(log_outSEXP);
+    rcpp_result_gen = Rcpp::wrap(dWald(t, v, B, A, t0, log_out));
+    return rcpp_result_gen;
+END_RCPP
+}
+// pWald
+NumericVector pWald(NumericVector t, NumericVector v, NumericVector B, NumericVector A, NumericVector t0, bool log_out);
+RcppExport SEXP _EMC2_pWald(SEXP tSEXP, SEXP vSEXP, SEXP BSEXP, SEXP ASEXP, SEXP t0SEXP, SEXP log_outSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type t(tSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type v(vSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type B(BSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type A(ASEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type t0(t0SEXP);
+    Rcpp::traits::input_parameter< bool >::type log_out(log_outSEXP);
+    rcpp_result_gen = Rcpp::wrap(pWald(t, v, B, A, t0, log_out));
+    return rcpp_result_gen;
+END_RCPP
+}
 // dgbm
 double dgbm(double t, double mu, double b, double A, double sigma, double t0, double lambda_g, double lambda_k, bool log_out, int kill_shape, bool guess);
 RcppExport SEXP _EMC2_dgbm(SEXP tSEXP, SEXP muSEXP, SEXP bSEXP, SEXP ASEXP, SEXP sigmaSEXP, SEXP t0SEXP, SEXP lambda_gSEXP, SEXP lambda_kSEXP, SEXP log_outSEXP, SEXP kill_shapeSEXP, SEXP guessSEXP) {
@@ -1411,6 +1443,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_pkilledlba", (DL_FUNC) &_EMC2_pkilledlba, 8},
     {"_EMC2_pwald", (DL_FUNC) &_EMC2_pwald, 11},
     {"_EMC2_dwald", (DL_FUNC) &_EMC2_dwald, 11},
+    {"_EMC2_dWald", (DL_FUNC) &_EMC2_dWald, 6},
+    {"_EMC2_pWald", (DL_FUNC) &_EMC2_pWald, 6},
     {"_EMC2_dgbm", (DL_FUNC) &_EMC2_dgbm, 11},
     {"_EMC2_pgbm", (DL_FUNC) &_EMC2_pgbm, 11},
     {"_EMC2_dswtn", (DL_FUNC) &_EMC2_dswtn, 12},
