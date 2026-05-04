@@ -564,8 +564,6 @@ RACE_rfun <- function(data, pars, model){
          dimnames=list(NULL,c("R","rt")))
   RACE <- data[data$lR==lR_levels[1],"RACE"]
   ok <- as.numeric(data$lR) <= as.numeric(as.character(data$RACE))
-  time_idx <- which(lR_levels == "time")
-  
   for (i in levels(RACE)) {
     pick <- data$RACE==i
     data_in <- data[pick & ok,]
@@ -574,21 +572,7 @@ RACE_rfun <- function(data, pars, model){
     attr(tmp, "ok") <- rep(T, nrow(tmp))
     if (!is.null(attr(pars, "staircase"))) attr(tmp, "staircase") <- attr(pars, "staircase")
     Rrti <- model()$rfun(data_in,tmp)
-    
-    # Timed-race logic: if "time" wins, choose a random non-time, non-nogo response.
-    if (length(time_idx) > 0) {
-      r_chr <- as.character(Rrti$R)
-      is_time <- r_chr == "time"
-      if (any(is_time)) {
-        n_time <- sum(is_time)
-        resp_levels <- lR_levels[!lR_levels %in% c("time", "nogo")]
-        if (length(resp_levels) > 0) {
-          r_chr[is_time] <- sample(resp_levels, n_time, replace = TRUE)
-          Rrti$R <- factor(r_chr, levels = lR_levels)
-        }
-      }
-    }
-    
+    Rrti <- .apply_timed_guess_winner(Rrti, lR_levels)
     Rrti$R <- as.numeric(Rrti$R)
     Rrt[RACE==i,] <- as.matrix(Rrti)
   }

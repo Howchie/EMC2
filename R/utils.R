@@ -50,6 +50,27 @@ na_locf <- function(x, na.rm = FALSE) {
   x
 }
 
+.apply_timed_guess_winner <- function(out, lR_levels) {
+  if (is.null(out$R) || !("time" %in% lR_levels)) return(out)
+
+  r_chr <- as.character(out$R)
+  is_time <- !is.na(r_chr) & r_chr == "time"
+  if (!any(is_time)) {
+    out$R <- factor(r_chr, levels = lR_levels)
+    return(out)
+  }
+
+  guess_levels <- lR_levels[!lR_levels %in% c("time", "nogo")]
+  if (length(guess_levels) == 0L) {
+    out$R <- factor(r_chr, levels = lR_levels)
+    return(out)
+  }
+
+  r_chr[is_time] <- sample(guess_levels, sum(is_time), replace = TRUE)
+  out$R <- factor(r_chr, levels = lR_levels)
+  out
+}
+
 .emc2_ll_cache_version <- 3L
 
 .is_valid_ll_cache <- function(dadm, n_trials, n_lR, has_RACE_col) {

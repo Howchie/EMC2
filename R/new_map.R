@@ -319,9 +319,12 @@ par_data_map <- function(par_mcmc, design, n_trials = NULL, data = NULL,
     if ( is.null(n_trials) )
       stop("If data is not provided need to specify number of trials")
     design$Fcovariates <- design$Fcovariates[!design$Fcovariates %in% names(functions)]
+    # Accumulators are expanded later via `add_accumulators()`/`design_model()`.
+    # Avoid evaluating design$Ffunctions here because they may depend on
+    # accumulator columns (e.g., `lR`) that are not yet available.
     data <- minimal_design(design, covariates = list(...)$covariates,
                            drop_subjects = F, n_trials = n_trials, add_acc=F,
-                           drop_R = F, group_design = group_design)
+                           do_functions = FALSE, drop_R = F, group_design = group_design)
   }
   if(!is.null(functions)){
     for(i in 1:length(functions)){

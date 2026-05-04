@@ -154,6 +154,7 @@ rLBA <- function(lR,pars,p_types=c("v","sv","b","A","t0"),
   out$R[ok] <- levels(lR)[R][ok]
   out$R <- factor(out$R,levels=levels(lR))
   out$rt[ok] <- rt[ok]
+  out <- .apply_timed_guess_winner(out, levels(lR))
   out
 }
 #### Model functions ----
@@ -431,6 +432,7 @@ rBAwL <- function(lR, pars, ok = rep(TRUE, length(lR)),
   out$R[ok]   <- levels(lR)[R][ok]
   out$R       <- factor(out$R, levels = levels(lR))
   out$rt[ok]  <- rt[ok]
+  out <- .apply_timed_guess_winner(out, levels(lR))
   out
 }
 

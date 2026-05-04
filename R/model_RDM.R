@@ -103,6 +103,7 @@ rRDM <- function(lR, pars, p_types=c("v", "B", "A", "t0"), ok=rep(TRUE, dim(pars
   out$R <- levels(lR)[R]
   out$R <- factor(out$R, levels = levels(lR))
   out$rt <- rt
+  out <- .apply_timed_guess_winner(out, levels(lR))
   out
 }
 
@@ -396,6 +397,7 @@ rRDMGBM <- function(lR, pars, p_types = c("v", "b", "A", "t0", "s", "lambda_g", 
   out$rt <- rt
   out$R[bad_col] <- NA
   out$rt[bad_col] <- Inf
+  out <- .apply_timed_guess_winner(out, levels(lR))
   out
 }
 
@@ -753,5 +755,6 @@ rRDMSWTN <- function(lR, pars, p_types = c("v", "b", "A", "t0", "sv", "lambda_g"
   out$rt <- rt
   out$R[bad_col] <- NA
   out$rt[bad_col] <- Inf
+  out <- .apply_timed_guess_winner(out, levels(lR))
   out
 }

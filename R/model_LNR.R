@@ -31,7 +31,8 @@ rLNR <- function(lR,pars,p_types=c("m","s","t0"),ok=rep(TRUE,dim(pars)[1])){
   # Any t0 difference with lR due to response production time (no effect on race)
   rt <- matrix(t0,nrow=nr)[pick] + dt[pick]
   R <- factor(levels(lR)[R],levels=levels(lR))
-  cbind.data.frame(R=R,rt=rt)
+  out <- cbind.data.frame(R=R,rt=rt)
+  .apply_timed_guess_winner(out, levels(lR))
 }
 
 
@@ -157,7 +158,8 @@ RGAMMA <- function() {
     pick <- cbind(R, seq_len(ncol(dt)))
     rt <- dt[pick]
     R <- factor(levels(lR)[R], levels = levels(lR))
-    cbind.data.frame(R = R, rt = rt)
+    out <- cbind.data.frame(R = R, rt = rt)
+    .apply_timed_guess_winner(out, levels(lR))
   }
 
   list(
@@ -179,4 +181,3 @@ RGAMMA <- function() {
     }
   )
 }
-

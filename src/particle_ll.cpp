@@ -304,6 +304,10 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
   return out;
 }
 
+static inline bool is_stop_signal_type(const std::string& type_std) {
+  return type_std == "SSEXG" || type_std == "SSRDEX";
+}
+
 // Pre-computed per-data state for likelihood functions (Race, DDM, etc.).
 // Built once outside the particle loop; reused across particles to eliminate
 // per-particle R-heap allocations and repeated attribute/column reads.
@@ -1496,7 +1500,7 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
 
   const bool is_ddm_type = type_std.find("DDM") != std::string::npos;
   const bool is_mri_type = (type == "MRI" || type == "MRI_AR1");
-  const bool is_ss_type = type_std.find("SS") != std::string::npos;
+  const bool is_ss_type = is_stop_signal_type(type_std);
   const bool use_pt_mapping = !is_mri_type;
 
   NumericMatrix one_particle(1, particle_matrix.ncol());
@@ -2152,7 +2156,7 @@ NumericMatrix calc_ll_oo_pw(NumericMatrix particle_matrix, DataFrame data, Numer
     }
     return result;
   } else if (type == "MRI" || type == "MRI_AR1" ||
-             type_std.find("SS") != std::string::npos ||
+             is_stop_signal_type(type_std) ||
              type_std.find("SOFTMAX") != std::string::npos) {
     Rcpp::stop("calc_ll_oo_pw: not implemented for model type '%s'", type_std.c_str());
   } else {
