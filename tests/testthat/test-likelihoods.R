@@ -22,13 +22,10 @@ calc_ll_context <- function(emc, n_particles=1e3, particle_sd=1) {
   p_mat <- matrix(rnorm(n_particles*length(p_types), sd = particle_sd), ncol=length(p_types))
   colnames(p_mat) <- p_types
 
-  lls_old <- EMC2:::calc_ll(p_mat, dadm, constants = constants, designs = designs, type = model$c_name,
-                            model$bound, model$transform, model$pre_transform, p_types = p_types,
-                            min_ll = log(1e-10), model$trend)
   lls_new <- EMC2:::calc_ll_oo(p_mat, dadm, constants = constants, designs = designs, type = model$c_name,
                                model$bound, model$transform, model$pre_transform, p_types = p_types,
                                min_ll = log(1e-10), model$trend)
-  list(old = lls_old, new = lls_new, dadm = dadm, p_mat = p_mat,
+  list(new = lls_new, dadm = dadm, p_mat = p_mat,
        constants = constants, designs = designs, model = model, p_types = p_types)
 }
 
@@ -54,12 +51,6 @@ expect_uc_path <- function(base, mild, moderate, label, n_particles=5000,
 
   expect_true(all(is.finite(mild_ctx$new)))
   expect_true(all(is.finite(moderate_ctx$new)))
-  mild_ok <- is.finite(mild_ctx$old) & is.finite(mild_ctx$new)
-  moderate_ok <- is.finite(moderate_ctx$old) & is.finite(moderate_ctx$new)
-  expect_true(any(mild_ok))
-  expect_true(any(moderate_ok))
-  expect_lt(max(abs(mild_ctx$old[mild_ok] - mild_ctx$new[mild_ok])), 1e-8)
-  expect_lt(max(abs(moderate_ctx$old[moderate_ok] - moderate_ctx$new[moderate_ok])), 1e-8)
   expect_gt(censored_rt_count(mild), 0)
   expect_gte(censored_rt_count(moderate), censored_rt_count(mild))
   expect_gt(mild_input_censored, 0)

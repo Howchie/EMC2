@@ -91,7 +91,7 @@ RNGkind("L'Ecuyer-CMRG")
       d[attr(d, "expand"), , drop = FALSE]
     }), p_types)
   as.numeric(
-    EMC2:::calc_ll(p_mat, dadm,
+    EMC2:::calc_ll_oo(p_mat, dadm,
                    constants     = consts,
                    designs       = designs,
                    type          = model$c_name,

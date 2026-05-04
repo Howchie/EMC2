@@ -670,7 +670,6 @@ check_prop_performance <- function(prop_performance, stage){
 }
 
 calc_ll_manager <- function(proposals, dadm, model, component = NULL, r_cores = 1){
-  use_oo <- getOption("emc2.use_oo", TRUE)
   if(!is.data.frame(dadm)){
     lls <- log_likelihood_joint(proposals, dadm, model, component)
   } else{
@@ -690,27 +689,15 @@ calc_ll_manager <- function(proposals, dadm, model, component = NULL, r_cores = 
       constants <- attr(dadm, "constants")
       if(is.null(constants)) constants <- NA
       if (nrow(proposals) <= r_cores) {
-        if (!use_oo) {
-          lls <- calc_ll(proposals, dadm, constants = constants, designs = designs, type = model$c_name,
-                         model$bound, model$transform, model$pre_transform, p_types = p_types, min_ll = log(1e-10),
-                         model$trend)
-        } else {
-          lls <- calc_ll_oo(proposals, dadm, constants = constants, designs = designs, type = model$c_name,
-                            model$bound, model$transform, model$pre_transform, p_types = p_types, min_ll = log(1e-10),
-                            model$trend)
-        }
+        lls <- calc_ll_oo(proposals, dadm, constants = constants, designs = designs, type = model$c_name,
+                          model$bound, model$transform, model$pre_transform, p_types = p_types, min_ll = log(1e-10),
+                          model$trend)
       } else {
         idx <- rep(1:r_cores,each=1+(nrow(proposals) %/% r_cores))[1:nrow(proposals)]
         lls <- unlist(auto_mclapply(1:r_cores,function(i) {
-          if (!use_oo) {
-            calc_ll(proposals[idx==i,,drop=FALSE], dadm, constants = constants,
-                    designs = designs, type = model$c_name, model$bound, model$transform,
-                    model$pre_transform, p_types = p_types, min_ll = log(1e-10),model$trend)
-          } else {
-            calc_ll_oo(proposals[idx==i,,drop=FALSE], dadm, constants = constants,
-                       designs = designs, type = model$c_name, model$bound, model$transform,
-                       model$pre_transform, p_types = p_types, min_ll = log(1e-10),model$trend)
-          }
+          calc_ll_oo(proposals[idx==i,,drop=FALSE], dadm, constants = constants,
+                     designs = designs, type = model$c_name, model$bound, model$transform,
+                     model$pre_transform, p_types = p_types, min_ll = log(1e-10),model$trend)
         },mc.cores=r_cores))
       }
     }

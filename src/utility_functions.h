@@ -211,28 +211,6 @@ inline LogicalVector c_bool_expand(LogicalVector x1, IntegerVector expand){
   return(out);
 }
 
-inline NumericVector c_add_vectors(NumericVector x1, NumericVector x2){
-  if(is_na(x2)[0] ){
-    return(x1);
-  }
-  NumericVector output(x1.size() + x2.size());
-  std::copy(x1.begin(), x1.end(), output.begin());
-  std::copy(x2.begin(), x2.end(), output.begin() + x1.size());
-  CharacterVector all_names(x1.size() + x2.size());
-  CharacterVector x1_names = x1.names();
-  CharacterVector x2_names = x2.names();
-  if (x1_names.size() > 0) {
-    std::copy(x1_names.begin(), x1_names.end(), all_names.begin());
-  }
-  if (x2_names.size() > 0) {
-    std::copy(x2_names.begin(), x2_names.end(), all_names.begin() + x1.size());
-  }
-  if (x1_names.size() > 0 || x2_names.size() > 0) {
-    output.names() = all_names;
-  }
-  return output;
-}
-
 inline CharacterVector c_add_charvectors(CharacterVector x, CharacterVector y) {
   // Create a new vector of length = length(x) + length(y)
   CharacterVector z(x.size() + y.size());
@@ -492,111 +470,6 @@ inline std::vector<TransformSpec> make_transform_specs(NumericMatrix pars, List 
   return specs;
 }
 
-// Build TransformSpec for any matrix using precomputed full specs for all p_types
-inline std::vector<TransformSpec> make_transform_specs_from_full(
-    NumericMatrix pars,
-    CharacterVector full_names,
-    const std::vector<TransformSpec>& full_specs)
-{
-  // Create a quick lookup name -> index in full_names/specs
-  std::unordered_map<std::string,int> name_to_idx;
-  for (int i = 0; i < full_names.size(); ++i) {
-    name_to_idx[Rcpp::as<std::string>(full_names[i])] = i;
-  }
-
-  int ncol = pars.ncol();
-  std::vector<TransformSpec> specs(ncol);
-  CharacterVector cparnames = colnames(pars);
-  for (int j = 0; j < ncol; j++) {
-    std::string colname = Rcpp::as<std::string>(cparnames[j]);
-    auto it = name_to_idx.find(colname);
-    TransformSpec sp;
-    sp.col_idx = j;
-    if (it != name_to_idx.end()) {
-      const TransformSpec& base = full_specs[it->second];
-      sp.code  = base.code;
-      sp.lower = base.lower;
-      sp.upper = base.upper;
-    } else {
-      sp.code  = IDENTITY;
-      sp.lower = 0.0;
-      sp.upper = 1.0;
-    }
-    specs[j] = sp;
-  }
-  return specs;
-}
-
-inline std::vector<PreTransformSpec> make_pretransform_specs(NumericVector p_vector, List transform)
-{
-  int n = p_vector.size();
-  std::vector<PreTransformSpec> specs(n);
-
-  if (transform.size() == 0) {
-    for (int i = 0; i < n; i++) {
-      PreTransformSpec s;
-      s.index = i;
-      s.code = PTF_NONE;
-      s.lower = 0.0;
-      s.upper = 1.0;
-      specs[i] = s;
-    }
-    return specs;
-  }
-
-  // e.g. transform["func"], transform["lower"], transform["upper"]
-  CharacterVector func   = transform["func"];
-  NumericVector lowervec = transform["lower"];
-  NumericVector uppervec = transform["upper"];
-
-  // Build a map param_name -> code
-  std::unordered_map<std::string,PreTFCode> codeMap;
-  CharacterVector fnames = func.names();
-  for (int i = 0; i < func.size(); i++) {
-    std::string name = Rcpp::as<std::string>(fnames[i]);
-    std::string f    = Rcpp::as<std::string>(func[i]);
-    if (f == "exp") {
-      codeMap[name] = PTF_EXP;
-    } else if (f == "pnorm") {
-      codeMap[name] = PTF_PNORM;
-    } else {
-      codeMap[name] = PTF_NONE;
-    }
-  }
-
-  // Build a map param_name -> (lower, upper)
-  std::unordered_map<std::string, std::pair<double,double>> boundMap;
-  {
-    CharacterVector ln = lowervec.names();
-    for (int i = 0; i < lowervec.size(); i++) {
-      boundMap[ Rcpp::as<std::string>(ln[i]) ].first = lowervec[i];
-    }
-    CharacterVector un = uppervec.names();
-    for (int i = 0; i < uppervec.size(); i++) {
-      boundMap[ Rcpp::as<std::string>(un[i]) ].second = uppervec[i];
-    }
-  }
-
-  // Now create PreTransformSpec for each element in p_vector
-  CharacterVector p_names = p_vector.names();
-  for (int i = 0; i < n; i++) {
-    std::string pname = Rcpp::as<std::string>(p_names[i]);
-    PreTransformSpec s;
-    s.index = i;
-    s.code = codeMap[pname];
-    auto it = boundMap.find(pname);
-    if (it != boundMap.end()) {
-      s.lower = it->second.first;
-      s.upper = it->second.second;
-    } else {
-      s.lower = 0.0;
-      s.upper = 1.0;
-    }
-    specs[i] = s;
-  }
-  return specs;
-}
-
 inline LogicalVector c_do_bound(NumericMatrix pars,
                          const std::vector<BoundSpec>& specs)
 {
@@ -627,34 +500,6 @@ inline LogicalVector c_do_bound(NumericMatrix pars,
     }
   }
   return result;
-}
-
-inline NumericVector c_do_pre_transform(NumericVector p_vector,
-                                 const std::vector<PreTransformSpec>& specs)
-{
-  for (size_t i = 0; i < specs.size(); i++) {
-    const PreTransformSpec& s = specs[i];
-    double val = p_vector[s.index];
-
-    switch (s.code) {
-    case PTF_EXP: {
-      // lower + exp(real)
-      p_vector[s.index] = s.lower + std::exp(val);
-      break;
-    }
-    case PTF_PNORM: {
-      double range = s.upper - s.lower;
-      // lower + range * Φ(real)
-      p_vector[s.index] = s.lower +
-        range * R::pnorm(val, 0.0, 1.0, /*lower_tail=*/1, /*log_p=*/0);
-      break;
-    }
-    default:
-      // no transform
-      break;
-    }
-  }
-  return p_vector;
 }
 
 inline NumericMatrix c_do_transform(NumericMatrix pars,

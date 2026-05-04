@@ -77,14 +77,6 @@ pkilledlba <- function(t, A, b, v, sv, k, posdrift = TRUE, log_out = FALSE) {
     .Call(`_EMC2_pkilledlba`, t, A, b, v, sv, k, posdrift, log_out)
 }
 
-dWald <- function(t, v, B, A, t0, log_out = FALSE) {
-    .Call(`_EMC2_dWald`, t, v, B, A, t0, log_out)
-}
-
-pWald <- function(t, v, B, A, t0, log_out = FALSE) {
-    .Call(`_EMC2_pWald`, t, v, B, A, t0, log_out)
-}
-
 pwald <- function(t, mu, b, A = 0.0, sigma = 1.0, t0 = 0.0, lambda_g = 0.0, lambda_k = 0.0, log_out = FALSE, kill_shape = 1L, guess = FALSE) {
     .Call(`_EMC2_pwald`, t, mu, b, A, sigma, t0, lambda_g, lambda_k, log_out, kill_shape, guess)
 }
@@ -317,24 +309,12 @@ TrendEngine_apply_posttransform_bases <- function(param_table_ptr, trend_engine_
     invisible(.Call(`_EMC2_TrendEngine_apply_posttransform_bases`, param_table_ptr, trend_engine_ptr))
 }
 
-do_transform <- function(pars, transform) {
-    .Call(`_EMC2_do_transform`, pars, transform)
-}
-
-calc_ll <- function(p_matrix, data, constants, designs, type, bounds, transforms, pretransforms, p_types, min_ll, trend = NULL) {
-    .Call(`_EMC2_calc_ll`, p_matrix, data, constants, designs, type, bounds, transforms, pretransforms, p_types, min_ll, trend)
-}
-
 calc_ll_oo <- function(particle_matrix, data, constants, designs, type, bounds, transforms, pretransforms, p_types, min_ll, trend = NULL) {
     .Call(`_EMC2_calc_ll_oo`, particle_matrix, data, constants, designs, type, bounds, transforms, pretransforms, p_types, min_ll, trend)
 }
 
 calc_ll_oo_pw <- function(particle_matrix, data, constants, designs, type, bounds, transforms, pretransforms, p_types, min_ll, trend = NULL) {
     .Call(`_EMC2_calc_ll_oo_pw`, particle_matrix, data, constants, designs, type, bounds, transforms, pretransforms, p_types, min_ll, trend)
-}
-
-get_pars_c_wrapper <- function(p_matrix, data, constants, designs, bounds, transforms, pretransforms, p_types, trend = NULL, return_kernel_matrix = FALSE, drop_trend_pars = TRUE) {
-    .Call(`_EMC2_get_pars_c_wrapper`, p_matrix, data, constants, designs, bounds, transforms, pretransforms, p_types, trend, return_kernel_matrix, drop_trend_pars)
 }
 
 get_pars_c_wrapper_oo <- function(particle_matrix, data, constants, designs, bounds, transforms, pretransforms, trend = NULL, return_kernel_matrix = FALSE, return_all_pars = FALSE, kernel_output_codes = 1L) {

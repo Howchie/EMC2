@@ -330,38 +330,6 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
-// dWald
-NumericVector dWald(NumericVector t, NumericVector v, NumericVector B, NumericVector A, NumericVector t0, bool log_out);
-RcppExport SEXP _EMC2_dWald(SEXP tSEXP, SEXP vSEXP, SEXP BSEXP, SEXP ASEXP, SEXP t0SEXP, SEXP log_outSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< NumericVector >::type t(tSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type v(vSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type B(BSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type A(ASEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type t0(t0SEXP);
-    Rcpp::traits::input_parameter< bool >::type log_out(log_outSEXP);
-    rcpp_result_gen = Rcpp::wrap(dWald(t, v, B, A, t0, log_out));
-    return rcpp_result_gen;
-END_RCPP
-}
-// pWald
-NumericVector pWald(NumericVector t, NumericVector v, NumericVector B, NumericVector A, NumericVector t0, bool log_out);
-RcppExport SEXP _EMC2_pWald(SEXP tSEXP, SEXP vSEXP, SEXP BSEXP, SEXP ASEXP, SEXP t0SEXP, SEXP log_outSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< NumericVector >::type t(tSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type v(vSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type B(BSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type A(ASEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type t0(t0SEXP);
-    Rcpp::traits::input_parameter< bool >::type log_out(log_outSEXP);
-    rcpp_result_gen = Rcpp::wrap(pWald(t, v, B, A, t0, log_out));
-    return rcpp_result_gen;
-END_RCPP
-}
 // pwald
 double pwald(double t, double mu, double b, double A, double sigma, double t0, double lambda_g, double lambda_k, bool log_out, int kill_shape, bool guess);
 RcppExport SEXP _EMC2_pwald(SEXP tSEXP, SEXP muSEXP, SEXP bSEXP, SEXP ASEXP, SEXP sigmaSEXP, SEXP t0SEXP, SEXP lambda_gSEXP, SEXP lambda_kSEXP, SEXP log_outSEXP, SEXP kill_shapeSEXP, SEXP guessSEXP) {
@@ -1311,39 +1279,6 @@ BEGIN_RCPP
     return R_NilValue;
 END_RCPP
 }
-// do_transform
-Rcpp::NumericMatrix do_transform(Rcpp::NumericMatrix pars, Rcpp::List transform);
-RcppExport SEXP _EMC2_do_transform(SEXP parsSEXP, SEXP transformSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< Rcpp::NumericMatrix >::type pars(parsSEXP);
-    Rcpp::traits::input_parameter< Rcpp::List >::type transform(transformSEXP);
-    rcpp_result_gen = Rcpp::wrap(do_transform(pars, transform));
-    return rcpp_result_gen;
-END_RCPP
-}
-// calc_ll
-NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector constants, List designs, String type, List bounds, List transforms, List pretransforms, CharacterVector p_types, double min_ll, Rcpp::Nullable<Rcpp::List> trend);
-RcppExport SEXP _EMC2_calc_ll(SEXP p_matrixSEXP, SEXP dataSEXP, SEXP constantsSEXP, SEXP designsSEXP, SEXP typeSEXP, SEXP boundsSEXP, SEXP transformsSEXP, SEXP pretransformsSEXP, SEXP p_typesSEXP, SEXP min_llSEXP, SEXP trendSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< NumericMatrix >::type p_matrix(p_matrixSEXP);
-    Rcpp::traits::input_parameter< DataFrame >::type data(dataSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type constants(constantsSEXP);
-    Rcpp::traits::input_parameter< List >::type designs(designsSEXP);
-    Rcpp::traits::input_parameter< String >::type type(typeSEXP);
-    Rcpp::traits::input_parameter< List >::type bounds(boundsSEXP);
-    Rcpp::traits::input_parameter< List >::type transforms(transformsSEXP);
-    Rcpp::traits::input_parameter< List >::type pretransforms(pretransformsSEXP);
-    Rcpp::traits::input_parameter< CharacterVector >::type p_types(p_typesSEXP);
-    Rcpp::traits::input_parameter< double >::type min_ll(min_llSEXP);
-    Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::List> >::type trend(trendSEXP);
-    rcpp_result_gen = Rcpp::wrap(calc_ll(p_matrix, data, constants, designs, type, bounds, transforms, pretransforms, p_types, min_ll, trend));
-    return rcpp_result_gen;
-END_RCPP
-}
 // calc_ll_oo
 NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericVector constants, List designs, String type, List bounds, List transforms, List pretransforms, CharacterVector p_types, double min_ll, Rcpp::Nullable<Rcpp::List> trend);
 RcppExport SEXP _EMC2_calc_ll_oo(SEXP particle_matrixSEXP, SEXP dataSEXP, SEXP constantsSEXP, SEXP designsSEXP, SEXP typeSEXP, SEXP boundsSEXP, SEXP transformsSEXP, SEXP pretransformsSEXP, SEXP p_typesSEXP, SEXP min_llSEXP, SEXP trendSEXP) {
@@ -1383,27 +1318,6 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< double >::type min_ll(min_llSEXP);
     Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::List> >::type trend(trendSEXP);
     rcpp_result_gen = Rcpp::wrap(calc_ll_oo_pw(particle_matrix, data, constants, designs, type, bounds, transforms, pretransforms, p_types, min_ll, trend));
-    return rcpp_result_gen;
-END_RCPP
-}
-// get_pars_c_wrapper
-NumericMatrix get_pars_c_wrapper(NumericMatrix p_matrix, DataFrame data, NumericVector constants, List designs, List bounds, List transforms, List pretransforms, CharacterVector p_types, Rcpp::Nullable<Rcpp::List> trend, bool return_kernel_matrix, bool drop_trend_pars);
-RcppExport SEXP _EMC2_get_pars_c_wrapper(SEXP p_matrixSEXP, SEXP dataSEXP, SEXP constantsSEXP, SEXP designsSEXP, SEXP boundsSEXP, SEXP transformsSEXP, SEXP pretransformsSEXP, SEXP p_typesSEXP, SEXP trendSEXP, SEXP return_kernel_matrixSEXP, SEXP drop_trend_parsSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< NumericMatrix >::type p_matrix(p_matrixSEXP);
-    Rcpp::traits::input_parameter< DataFrame >::type data(dataSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type constants(constantsSEXP);
-    Rcpp::traits::input_parameter< List >::type designs(designsSEXP);
-    Rcpp::traits::input_parameter< List >::type bounds(boundsSEXP);
-    Rcpp::traits::input_parameter< List >::type transforms(transformsSEXP);
-    Rcpp::traits::input_parameter< List >::type pretransforms(pretransformsSEXP);
-    Rcpp::traits::input_parameter< CharacterVector >::type p_types(p_typesSEXP);
-    Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::List> >::type trend(trendSEXP);
-    Rcpp::traits::input_parameter< bool >::type return_kernel_matrix(return_kernel_matrixSEXP);
-    Rcpp::traits::input_parameter< bool >::type drop_trend_pars(drop_trend_parsSEXP);
-    rcpp_result_gen = Rcpp::wrap(get_pars_c_wrapper(p_matrix, data, constants, designs, bounds, transforms, pretransforms, p_types, trend, return_kernel_matrix, drop_trend_pars));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -1495,8 +1409,6 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_pkilledlba_norm", (DL_FUNC) &_EMC2_pkilledlba_norm, 8},
     {"_EMC2_dkilledlba", (DL_FUNC) &_EMC2_dkilledlba, 8},
     {"_EMC2_pkilledlba", (DL_FUNC) &_EMC2_pkilledlba, 8},
-    {"_EMC2_dWald", (DL_FUNC) &_EMC2_dWald, 6},
-    {"_EMC2_pWald", (DL_FUNC) &_EMC2_pWald, 6},
     {"_EMC2_pwald", (DL_FUNC) &_EMC2_pwald, 11},
     {"_EMC2_dwald", (DL_FUNC) &_EMC2_dwald, 11},
     {"_EMC2_dgbm", (DL_FUNC) &_EMC2_dgbm, 11},
@@ -1555,11 +1467,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_TrendEngine_apply_premap_bases", (DL_FUNC) &_EMC2_TrendEngine_apply_premap_bases, 2},
     {"_EMC2_TrendEngine_apply_pretransform_bases", (DL_FUNC) &_EMC2_TrendEngine_apply_pretransform_bases, 2},
     {"_EMC2_TrendEngine_apply_posttransform_bases", (DL_FUNC) &_EMC2_TrendEngine_apply_posttransform_bases, 2},
-    {"_EMC2_do_transform", (DL_FUNC) &_EMC2_do_transform, 2},
-    {"_EMC2_calc_ll", (DL_FUNC) &_EMC2_calc_ll, 11},
     {"_EMC2_calc_ll_oo", (DL_FUNC) &_EMC2_calc_ll_oo, 11},
     {"_EMC2_calc_ll_oo_pw", (DL_FUNC) &_EMC2_calc_ll_oo_pw, 11},
-    {"_EMC2_get_pars_c_wrapper", (DL_FUNC) &_EMC2_get_pars_c_wrapper, 11},
     {"_EMC2_get_pars_c_wrapper_oo", (DL_FUNC) &_EMC2_get_pars_c_wrapper_oo, 11},
     {"_EMC2_run_trend_rcpp", (DL_FUNC) &_EMC2_run_trend_rcpp, 6},
     {"_EMC2_pigt", (DL_FUNC) &_EMC2_pigt, 5},

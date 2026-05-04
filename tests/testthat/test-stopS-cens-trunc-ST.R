@@ -36,7 +36,7 @@ RNGkind("L'Ecuyer-CMRG")
   p_mat   <- matrix(p_vector, nrow = 1); colnames(p_mat) <- names(p_vector)
   p_types <- names(model$p_types)
   consts  <- attr(dadm, "constants"); if (is.null(consts)) consts <- NA
-  EMC2:::calc_ll(p_mat, dadm, constants = consts,
+  EMC2:::calc_ll_oo(p_mat, dadm, constants = consts,
                  designs   = .get_designs(dadm, p_types),
                  type    = model$c_name,
                  bound     = model$bound,

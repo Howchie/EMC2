@@ -260,41 +260,6 @@ inline signed_log slog_int_d_eta_pnorm(
   );
 }
 
-// [[Rcpp::export]]
-NumericVector dWald(NumericVector t, NumericVector v,
-                    NumericVector B, NumericVector A, NumericVector t0,
-                    bool log_out = false){
-  int n = t.size();
-  NumericVector pdf(n);
-  for (int i = 0; i < n; i++){
-    double ti = t[i] - t0[i];
-    if (ti <= 0){
-      pdf[i] = log_out? R_NegInf : 0.0;
-    } else {
-      pdf[i] = digt_impl(ti, B[i] + .5 * A[i], v[i], .5 * A[i], log_out);
-    }
-  }
-  return pdf;
-}
-
-
-// [[Rcpp::export]]
-NumericVector pWald(NumericVector t, NumericVector v,
-                    NumericVector B, NumericVector A, NumericVector t0,
-                    bool log_out = false){
-  int n = t.size();
-  NumericVector cdf(n);
-  for (int i = 0; i < n; i++){
-    double ti = t[i] - t0[i];
-    if (ti <= 0){
-      cdf[i] = log_out? 0.0 : R_NegInf;
-    } else {
-      cdf[i] = pigt_impl(ti, B[i] + .5 * A[i], v[i], .5 * A[i], log_out);
-    }
-  }
-  return cdf;
-}
-
 // ==========================================================================
 // RDMSWTN: Racing Diffusion Model with Shifted Wald / Truncated-Normal drift
 // ==========================================================================
@@ -1399,61 +1364,6 @@ inline tilted_wald_moments_0_1_2 gbm_tilted_moments_0_1_2(
   out.M2 = gbm_spv_m2(upper, b, A, drift, sigma, rate);
   out.ok = emc2_isfinite(out.M2) && out.M2 >= 0.0;
   return out;
-}
-
-inline double point_wald_local_combo_cdf_erlang2(
-    double t, double distance, double drift, double sigma, double t0,
-    double lambda_g, double lambda_k, bool log_out) {
-  if (!(t > 0.0) || !(lambda_g > 0.0) || !(lambda_k > 0.0)) {
-    return log_out ? R_NegInf : 0.0;
-  }
-  const double rate = lambda_g + lambda_k;
-  double pre0, pre1, pre2;
-  const double pre_upper = emc2_isfinite(t) ? std::fmin(t, std::fmax(0.0, t0))
-                                            : std::fmax(0.0, t0);
-  exp_poly_moments_0_1_2(pre_upper, rate, pre0, pre1, pre2);
-  const double pre_guess = lambda_g * lambda_g * (pre1 + lambda_k * pre2);
-
-  if (emc2_isfinite(t) && t <= t0) {
-    const double out = std::fmax(0.0, std::fmin(1.0, pre_guess));
-    return log_out ? ((out > 0.0) ? std::log(out) : R_NegInf) : out;
-  }
-
-  const double upper = emc2_isfinite(t) ? t - t0 : R_PosInf;
-  tilted_wald_moments_0_1_2 m =
-    point_wald_tilted_moments_0_1_2(upper, distance, drift, sigma, rate);
-  if (!m.ok) return NA_REAL;
-
-  const double gk = lambda_g * lambda_k;
-  const double t02 = t0 * t0;
-  const double a0 = 1.0 + rate * t0 + gk * t02;
-  const double a1 = rate + 2.0 * gk * t0;
-  const double a2 = gk;
-  const double exp_t0 = std::exp(-rate * t0);
-  const double decision = exp_t0 * (a0 * m.M0 + a1 * m.M1 + a2 * m.M2);
-
-  double p0, p1, p2;
-  exp_poly_moments_0_1_2(upper, rate, p0, p1, p2);
-
-  const double r2 = rate * rate;
-  const double r3 = r2 * rate;
-  const double J0 = p0 * m.F - (m.F - m.M0) / rate;
-  const double J1 = p1 * m.F - (m.F - m.M0 - rate * m.M1) / r2;
-  const double J2 = p2 * m.F -
-    (2.0 * m.F - 2.0 * m.M0 - 2.0 * rate * m.M1 - r2 * m.M2) / r3;
-
-  const double c0 = t0 + lambda_k * t02;
-  const double c1 = 1.0 + 2.0 * lambda_k * t0;
-  const double c2 = lambda_k;
-  const double post_surv_int =
-    c0 * std::fmax(0.0, p0 - J0) +
-    c1 * std::fmax(0.0, p1 - J1) +
-    c2 * std::fmax(0.0, p2 - J2);
-  const double post_guess = lambda_g * lambda_g * exp_t0 * post_surv_int;
-
-  double out = pre_guess + decision + post_guess;
-  out = std::fmax(0.0, std::fmin(1.0, out));
-  return log_out ? ((out > 0.0) ? std::log(out) : R_NegInf) : out;
 }
 
 inline double local_combo_cdf_erlang2_from_moments(
