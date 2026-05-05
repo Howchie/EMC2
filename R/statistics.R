@@ -223,39 +223,6 @@ logdinvGamma <- function(x, shape, rate){
   dgamma(1/x, shape, rate, log = TRUE) - 2 * log(x)
 }
 
-split_mcl <- function(mcl)
-  # Doubles chains by splitting into first and secon half
-{
-  if (!is.list(mcl)) mcl <- list(mcl)
-  mcl2 <- mcl
-  half <- floor(unlist(lapply(mcl,nrow))/2)
-  for (i in 1:length(half)) {
-    mcl2[[i]] <- coda::as.mcmc(mcl2[[i]][c((half[i]+1):(2*half[i])),])
-    mcl[[i]] <- coda::as.mcmc(mcl[[i]][1:half[i],])
-  }
-  coda::as.mcmc.list(c(mcl,mcl2))
-}
-
-gelman_diag_robust <- function(mcl,autoburnin = FALSE,transform = TRUE, omit_mpsrf = TRUE)
-{
-  mcl <- split_mcl(mcl)
-  gd <- try(gelman.diag(mcl,autoburnin=autoburnin,transform=transform, multivariate = !omit_mpsrf),silent=TRUE)
-  gd_out <- gd[[1]][,1] # Remove CI
-  if(!omit_mpsrf){
-    gd_out <- c(gd_out, gd$mpsrf)
-    names(gd_out)[length(gd_out)] <- "mpsrf"
-  }
-
-  if (is(gd, "try-error")){
-    if(omit_mpsrf){
-      return(list(psrf=matrix(Inf)))
-    } else{
-      return(list(psrf=matrix(Inf),mpsrf=Inf))
-    }
-  } else{
-    return(gd_out)
-  }
-}
 
 # #' Calculate information criteria (DIC, BPIC), effective number of parameters and
 # #' constituent posterior deviance (D) summaries (meanD = mean of D, Dmean = D

@@ -50,7 +50,7 @@ summary.emc <- function(object, selection = c("mu", "sigma2", "alpha"), probs = 
   }
   out_list <- list()
   for(select in selection){
-    stats <- do.call(get_summary_stat, c(list(object, fun = c(get_posterior_quantiles, gelman_diag_robust, effectiveSize), probs = probs,
+    stats <- do.call(get_summary_stat, c(list(object, fun = c(get_posterior_quantiles, r_hat, n_eff), probs = probs,
                      stat_name = c(paste0(probs*100, "%"), "Rhat", "ESS"), selection = select), dots))
     for(i in 1:length(stats)){
       stat <- round(stats[[i]], digits)
@@ -228,7 +228,7 @@ To override this behavior, pass `conditional_on_data=TRUE` to predict().')
 #' @rdname check
 #' @export
 check.emc <- function(emc, selection = c('mu', 'sigma2', 'alpha'), digits = 3,
-                      plot_worst = TRUE, ...){
+                      plot_worst = TRUE, version = "old", ...){
   oldpar <- par(no.readonly = TRUE) # code line i
   on.exit(par(oldpar)) # code line i + 1
   dots <- list(...)
@@ -244,7 +244,7 @@ check.emc <- function(emc, selection = c('mu', 'sigma2', 'alpha'), digits = 3,
     dots$flatten <- ifelse(select == "alpha", FALSE, TRUE)
     dots$by_subject <- TRUE
     ESS <- do.call(ess_summary, c(list(emc, selection = select, stat= NULL), fix_dots(dots, ess_summary)))
-    gds <- do.call(gd_summary, c(list(emc, selection = select, stat= NULL), fix_dots(dots, gd_summary)))
+    gds <- do.call(gd_summary, c(list(emc, selection = select, stat= NULL, version = version), fix_dots(dots, gd_summary)))
     out <- list()
     max_gd <- -Inf
     for(name in names(ESS)){
@@ -389,7 +389,7 @@ fit.emc <- function(emc, stage = NULL, iter = 1000, stop_criteria = NULL,
                     search_width = 1, step_size = 100, verbose = TRUE, fileName = NULL,
                     particle_factor=50, cores_per_chain = 1,
                     cores_for_chains = length(emc), max_tries = 20,
-                    thin = FALSE,
+                    thin = FALSE, rhat_version = "old",
                     ...){
 
   dots <- add_defaults(list(...), n_blocks = 1, verboseProgress = FALSE,
@@ -428,7 +428,7 @@ fit.emc <- function(emc, stage = NULL, iter = 1000, stop_criteria = NULL,
                    step_size = step_size,  verbose = verbose, verboseProgress = dots$verboseProgress,
                    fileName = fileName, particle_factor =  particle_factor, trim = dots$trim,
                    cores_per_chain = cores_per_chain, max_tries = max_tries, thin = thin, n_blocks = dots$n_blocks,
-                   r_cores = dots$r_cores)
+                   r_cores = dots$r_cores, rhat_version = rhat_version)
   }
   if (verbose) print(Sys.time()-start_time)
   return(emc)
@@ -909,19 +909,22 @@ subset.emc <- function(x, stage = "sample", filter = NULL, thin = 1, keep_stages
 
 #' @rdname gd_summary
 #' @export
-gd_summary.emc <- function(emc,selection="mu", omit_mpsrf = TRUE,
-                           stat = "max", stat_only = FALSE, digits = 3, ...){
-  out <- get_summary_stat(emc, selection, gelman_diag_robust, stat = stat,
-                          stat_only = stat_only, digits = digits, omit_mpsrf = omit_mpsrf, ...)
+gd_summary.emc <- function(emc, selection = "mu", omit_mpsrf = TRUE,
+                           stat = "max", stat_only = FALSE, digits = 3,
+                           version = "old", ...){
+  out <- get_summary_stat(emc, selection, r_hat, stat = stat,
+                          stat_only = stat_only, digits = digits,
+                          omit_mpsrf = omit_mpsrf, version = version, ...)
   return(out)
 }
 
 #' @rdname ess_summary
 #' @export
-ess_summary.emc <- function(emc,selection="mu", stat = "min", stat_only = FALSE,
-                           digits = 1, ...){
-  out <- get_summary_stat(emc, selection, effectiveSize,
-                          stat = stat, stat_only = stat_only, digits = digits, ...)
+ess_summary.emc <- function(emc, selection = "mu", stat = "min", stat_only = FALSE,
+                           digits = 1, version = "old", ...){
+  out <- get_summary_stat(emc, selection, n_eff,
+                          stat = stat, stat_only = stat_only, digits = digits,
+                          version = version, ...)
   return(out)
 }
 

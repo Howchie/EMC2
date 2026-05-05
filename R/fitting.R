@@ -100,7 +100,7 @@ run_emc <- function(emc, stage, stop_criteria,
                     search_width = 1, step_size = 100, verbose = FALSE, verboseProgress = FALSE,
                     fileName = NULL,particle_factor=50, cores_per_chain = 1,
                     cores_for_chains = length(emc), max_tries = 20, n_blocks = 1,
-                    thin = FALSE, trim = TRUE, r_cores=1){
+                    thin = FALSE, trim = TRUE, r_cores=1, rhat_version = "old"){
   emc <- restore_duplicates(emc)
   if(Sys.info()[1] == "Windows" & cores_per_chain > 1) stop("only cores_for_chains can be set on Windows")
   if (verbose) message(paste0("Running ", stage, " stage"))
@@ -110,7 +110,7 @@ run_emc <- function(emc, stage, stop_criteria,
   } else{
     iter <- stop_criteria[["iter"]]
   }
-  progress <- check_progress(emc, stage, iter, stop_criteria, max_tries, step_size, cores_per_chain*cores_for_chains, verbose, n_blocks = n_blocks)
+  progress <- check_progress(emc, stage, iter, stop_criteria, max_tries, step_size, cores_per_chain*cores_for_chains, verbose, n_blocks = n_blocks, rhat_version = rhat_version)
   emc <- progress$emc
   progress <- progress[!names(progress) == 'emc']
   # We need to multiply step_size by thin to make an accurate guess for good step_size.
@@ -157,7 +157,7 @@ run_emc <- function(emc, stage, stop_criteria,
       emc <- .trim_sample_stage(emc, stop_criteria$max_sample_iter)
     }
     progress <- check_progress(emc, stage, iter, stop_criteria, max_tries, step_size, cores_per_chain*cores_for_chains,
-                               verbose, progress,n_blocks)
+                               verbose, progress, n_blocks, rhat_version = rhat_version)
     emc <- progress$emc
     progress <- progress[!names(progress) == 'emc']
     if(!is.null(fileName)){
@@ -214,7 +214,7 @@ add_proposals <- function(emc, stage, n_cores, n_blocks){
 
 check_progress <- function (emc, stage, iter, stop_criteria,
                             max_tries, step_size, n_cores, verbose, progress = NULL,
-                            n_blocks)
+                            n_blocks, rhat_version = "old")
 {
   min_es <- stop_criteria$min_es
   if(is.null(min_es)) min_es <- 0
@@ -233,7 +233,7 @@ check_progress <- function (emc, stage, iter, stop_criteria,
   }
   gd <- check_gd(emc, stage, stop_criteria[["max_gd"]], stop_criteria[["mean_gd"]], trys, verbose,
                  iter = total_iters_stage, selection, omit_mpsrf = stop_criteria[["omit_mpsrf"]],
-                 n_blocks)
+                 n_blocks, rhat_version = rhat_version)
   iter_done <- ifelse(is.null(iter) || length(iter) == 0, TRUE, total_iters_stage >= iter)
   if (min_es == 0) {
     es_done <- TRUE
@@ -268,6 +268,7 @@ check_progress <- function (emc, stage, iter, stop_criteria,
     adapted <- TRUE
   }
   flat_done <- TRUE
+  flat_out  <- NULL
   if(stage == "sample" && !is.null(stop_criteria$max_flat_loc)){
     flat_out <- .check_flatness_stop(
       emc = emc,
@@ -293,19 +294,40 @@ check_progress <- function (emc, stage, iter, stop_criteria,
             sample, if run for long enough, sample usually converges eventually.")
     }
   }
-  return(list(emc = gd$emc, done = done, step_size = step_size,
+
+  # Append a convergence log entry to the first chain object
+  log_entry <- list(
+    stage     = stage,
+    iter      = total_iters_stage,
+    try       = trys,
+    gd        = list(
+      values    = gd$gd,         # named per-parameter Rhat vector (NULL when no GR criteria set)
+      selection = selection,
+      version   = rhat_version
+    ),
+    flat      = if (!is.null(flat_out)) list(
+      max_flat         = flat_out$max_flat,
+      max_by_selection = flat_out$max_by_selection,
+      stats_by_selection = flat_out$stats_by_selection
+    ) else NULL
+  )
+  out_emc <- gd$emc
+  out_emc[[1]]$convergence_log <- c(out_emc[[1]]$convergence_log, list(log_entry))
+
+  return(list(emc = out_emc, done = done, step_size = step_size,
               trys = trys, n_blocks = gd$n_blocks))
 }
 
 check_gd <- function(emc, stage, max_gd, mean_gd, omit_mpsrf, trys, verbose,
-                     selection, iter, n_blocks = 1)
+                     selection, iter, n_blocks = 1, rhat_version = "old")
 {
-  get_gds <- function(emc,omit_mpsrf, selection, stage) {
+  get_gds <- function(emc, omit_mpsrf, selection, stage, rhat_version) {
     gd_out <- c()
     alpha <- NULL
     for(select in selection){
       gd <- unlist(gd_summary.emc(emc, selection = select, stage = stage,
-                                  omit_mpsrf = omit_mpsrf, stat = NULL))
+                                  omit_mpsrf = omit_mpsrf, stat = NULL,
+                                  version = rhat_version))
       gd_out <- c(gd_out, c(gd))
       if(select == "alpha"){
         alpha <- gd
@@ -314,11 +336,11 @@ check_gd <- function(emc, stage, max_gd, mean_gd, omit_mpsrf, trys, verbose,
     gd_out[is.na(gd_out)] <- Inf
     return(list(gd = gd_out, alpha = alpha))
   }
-  if(is.null(max_gd) & is.null(mean_gd)) return(list(gd_done = TRUE, emc = emc))
+  if(is.null(max_gd) & is.null(mean_gd)) return(list(gd_done = TRUE, emc = emc, gd = NULL))
   if(!emc[[1]]$init | !stage %in% emc[[1]]$samples$stage)
-    return(list(gd_done = FALSE, emc = emc))
+    return(list(gd_done = FALSE, emc = emc, gd = NULL))
   if(is.null(omit_mpsrf)) omit_mpsrf <- TRUE
-  gd <- get_gds(emc,omit_mpsrf,selection, stage)
+  gd <- get_gds(emc, omit_mpsrf, selection, stage, rhat_version)
   alpha_gd <- gd$alpha
   gd <- gd$gd
   if(!is.null(max_gd)){
@@ -339,7 +361,7 @@ check_gd <- function(emc, stage, max_gd, mean_gd, omit_mpsrf, trys, verbose,
     if (is(samplers_short,"try-error")){
       gd_short <- Inf
     } else{
-      gd_short <- get_gds(samplers_short,omit_mpsrf,selection, stage)
+      gd_short <- get_gds(samplers_short, omit_mpsrf, selection, stage, rhat_version)
       alpha_gd_short <- gd_short$alpha
       gd_short <- gd_short$gd
     }
