@@ -143,7 +143,7 @@ make_missing <- function(data, LT = NULL, UT = NULL, LC = NULL, UC = NULL,
   # Only keep trials in LT-UT (inclusive) or infinite or NA
   cutL <- is.finite(data$rt) & (data$rt < LT_eff)
   cutL[is.na(cutL)] <- FALSE; cutL[no_truncate] <- FALSE
-  cutU <- (data$rt > UT_eff)
+  cutU <- is.finite(data$rt) & (data$rt > UT_eff)
   cutU[is.na(cutU)] <- FALSE; cutU[no_truncate] <- FALSE
   if (verbose) {
     if (!all(LT_eff==0)) {
@@ -159,7 +159,7 @@ make_missing <- function(data, LT = NULL, UT = NULL, LC = NULL, UC = NULL,
       print(round(100*stat,digits))
     }
   }
-  
+
   # Truncate
   data <- data[!cutL & !cutU, ]
   LT_eff <- LT_eff[!cutL & !cutU]
@@ -188,7 +188,7 @@ make_missing <- function(data, LT = NULL, UT = NULL, LC = NULL, UC = NULL,
   # Censoring proportions (like truncation dont censor if equal to LC or UC)
   cutL <- is.finite(data$rt) & (data$rt < LC_eff)
   cutL[is.na(cutL)] <- TRUE; cutL[no_censor] <- FALSE
-  cutU <- (data$rt > UC_eff)
+  cutU <- is.finite(data$rt) & (data$rt > UC_eff)
   cutU[is.na(cutU)] <- TRUE; cutU[no_censor] <- FALSE
   if (verbose) {
     if (!all(LC_eff==0)) {
@@ -494,7 +494,7 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
   if (any(names(data)=="RACE")) {
       Rrt <- RACE_rfun(data, pars, model)
   } else Rrt <- model()$rfun(data,pars)
-  
+
   if (is.null(TC$pContaminant) & any(dimnames(pars)[[2]]=="pContaminant"))
     TC$pContaminant <- pars[,"pContaminant"][data$lR==levels(data$lR)[1]]
 
@@ -510,8 +510,8 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
     attr(pars, "staircase") <- ssd_meta
   }
   for (i in dimnames(Rrt)[[2]]) data[[i]] <- Rrt[, i]
-  
-  
+
+
 
   data <- make_missing(data,LT=TC$LT,LC=TC$LC,UC=TC$UC,UT=TC$UT,
     LCresponse = TC$LCresponse, UCresponse = TC$UCresponse,
