@@ -141,9 +141,9 @@ make_missing <- function(data, LT = NULL, UT = NULL, LC = NULL, UC = NULL,
   if (any((UC_eff - UT_eff) > tol_u & UC_eff != Inf, na.rm = TRUE)) stop("UC > UT not allowed")
 
   # Only keep trials in LT-UT (inclusive) or infinite or NA
-  cutL <- is.finite(data$rt) & (data$rt < LT_eff)
+  cutL <- is.finite(data$rt) & (data$rt < LT_eff & is.finite(data$rt))
   cutL[is.na(cutL)] <- FALSE; cutL[no_truncate] <- FALSE
-  cutU <- is.finite(data$rt) & (data$rt > UT_eff)
+  cutU <- (data$rt > UT_eff & is.finite(data$rt))
   cutU[is.na(cutU)] <- FALSE; cutU[no_truncate] <- FALSE
   if (verbose) {
     if (!all(LT_eff==0)) {
@@ -188,7 +188,7 @@ make_missing <- function(data, LT = NULL, UT = NULL, LC = NULL, UC = NULL,
   # Censoring proportions (like truncation dont censor if equal to LC or UC)
   cutL <- is.finite(data$rt) & (data$rt < LC_eff)
   cutL[is.na(cutL)] <- TRUE; cutL[no_censor] <- FALSE
-  cutU <- is.finite(data$rt) & (data$rt > UC_eff)
+  cutU <- (data$rt > UC_eff)
   cutU[is.na(cutU)] <- TRUE; cutU[no_censor] <- FALSE
   if (verbose) {
     if (!all(LC_eff==0)) {
