@@ -682,10 +682,7 @@ calc_ll_manager <- function(proposals, dadm, model, component = NULL, r_cores = 
          mc.cores=r_cores))
     } else {
       p_types <- names(model$p_types)
-      designs <- list()
-      for(p in p_types){
-        designs[[p]] <- attr(dadm,"designs")[[p]][attr(attr(dadm,"designs")[[p]],"expand"),,drop=FALSE]
-      }
+      designs <- .oo_expanded_designs(dadm)
       constants <- attr(dadm, "constants")
       if(is.null(constants)) constants <- NA
       if (nrow(proposals) <= r_cores) {
@@ -750,10 +747,7 @@ calc_ll_manager_pw <- function(proposals, dadm, model, r_cores = 1){
 
   if (!is.null(c_name) && exists("calc_ll_oo_pw", mode = "function", inherits = TRUE)) {
     p_types <- names(model$p_types)
-    designs <- list()
-    for (p in p_types) {
-      designs[[p]] <- attr(dadm, "designs")[[p]][attr(attr(dadm, "designs")[[p]], "expand"), , drop = FALSE]
-    }
+    designs <- .oo_expanded_designs(dadm)
     constants <- attr(dadm, "constants")
     if (is.null(constants)) constants <- NA
     return(calc_ll_oo_pw(proposals, dadm, constants = constants, designs = designs,

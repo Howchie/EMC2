@@ -413,6 +413,11 @@ rGBM_killed <- function(n, b, v, A, s = 1, k = 0, erlang = 1L) {
 
 rSWTN <- function(n, b, v, A, sv, k = 0, erlang = 1L) {
   if (n <= 0) return(numeric(0))
+  b <- rep(b, length.out = n)
+  v <- rep(v, length.out = n)
+  A <- rep(A, length.out = n)
+  sv <- rep(sv, length.out = n)
+  k <- rep(k, length.out = n)
   out <- rep(Inf, n)
   # For sv == 0, preserve the legacy Wald convention: v <= 0 never finishes.
   # For sv > 0, draw trial drifts from N(v, sv^2) truncated at 0.
@@ -429,7 +434,10 @@ rSWTN <- function(n, b, v, A, sv, k = 0, erlang = 1L) {
   }
   hit_idx <- which(is.finite(v_draw) & v_draw > 0)
   if (length(hit_idx) > 0) {
-    out[hit_idx] <- rWald(length(hit_idx), B = b[hit_idx], v = v_draw[hit_idx], A = A[hit_idx])
+    out[hit_idx] <- rWald(length(hit_idx),
+                          B = b[hit_idx] - A[hit_idx],
+                          v = v_draw[hit_idx],
+                          A = A[hit_idx])
   }
   kill_idx <- which(k > 0)
   if (length(kill_idx) > 0) {
@@ -586,12 +594,15 @@ dRDMSWTN <- function(rt, pars, erlang = 1L) {
       dimnames = list(NULL, original_names), byrow = TRUE
     )
   }
+  if (length(rt) == 1 && !is.null(dim(pars)) && nrow(pars) > 1) {
+    rt <- rep(rt, nrow(pars))
+  }
   out <- rep(NaN, length(rt))
   if (!all(c("lambda_g", "lambda_k") %in% colnames(pars))) {
     stop("RDMSWTN requires parameter columns 'lambda_g' and 'lambda_k'.")
   }
-  erl <- (pars[, "lambda_g", drop = FALSE] > 0) | (pars[, "lambda_k", drop = FALSE] > 0)
-  ok <- (rt > 0) & ((rt > pars[, "t0", drop = FALSE]) | erl) & !(pars[, "v", drop = FALSE] < 0)
+  erl <- (pars[, "lambda_g"] > 0) | (pars[, "lambda_k"] > 0)
+  ok <- (rt > 0) & ((rt > pars[, "t0"]) | erl) & !(pars[, "v"] < 0)
   ok[is.na(ok)] <- FALSE
   if (any(ok)) {
     if (any(dimnames(pars)[[2]] == "s")) {
@@ -622,12 +633,15 @@ pRDMSWTN <- function(rt, pars, erlang = 1L) {
       dimnames = list(NULL, original_names), byrow = TRUE
     )
   }
+  if (length(rt) == 1 && !is.null(dim(pars)) && nrow(pars) > 1) {
+    rt <- rep(rt, nrow(pars))
+  }
   out <- rep(NaN, length(rt))
   if (!all(c("lambda_g", "lambda_k") %in% colnames(pars))) {
     stop("RDMSWTN requires parameter columns 'lambda_g' and 'lambda_k'.")
   }
-  erl <- (pars[, "lambda_g", drop = FALSE] > 0) | (pars[, "lambda_k", drop = FALSE] > 0)
-  ok <- (rt > 0) & ((rt > pars[, "t0", drop = FALSE]) | erl) & !(pars[, "v", drop = FALSE] < 0)
+  erl <- (pars[, "lambda_g"] > 0) | (pars[, "lambda_k"] > 0)
+  ok <- (rt > 0) & ((rt > pars[, "t0"]) | erl) & !(pars[, "v"] < 0)
   ok[is.na(ok)] <- FALSE
   if (any(ok)) {
     if (any(dimnames(pars)[[2]] == "s")) {

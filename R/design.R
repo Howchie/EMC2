@@ -728,7 +728,6 @@ design_model <- function(data,design,model=NULL,
 
   out <- lapply(design$Flist, make_dm, da = da, Fcovariates = design$Fcovariates,
                 add_da = add_da, all_cells_dm = all_cells_dm, compress_dms = compress_dms)
-  attr(out, "emc2_transform") <- model()$transform
   if (!is.null(rt_resolution) & !is.null(da$rt))
     da$rt <- .floor_to_rt_resolution(da$rt, rt_resolution)
   if (compress){
@@ -896,10 +895,10 @@ dm_list <- function(dadm)
 {
 
   sub_design <- function(designs,isin)
-    structure(lapply(designs,function(x) {
+    lapply(designs,function(x) {
       attr(x,"expand") <- attr(x,"expand")[isin]
       x
-    }), emc2_transform = attr(designs, "emc2_transform"))
+    })
 
   if("LT"%in%colnames(dadm))LT=dadm$LT else{LT <- attr(dadm,"LT")}; if (is.null(LT)) LT <- 0
   if("UT"%in%colnames(dadm))UT=dadm$UT else{UT <- attr(dadm,"UT")}; if (is.null(UT)) UT <- Inf

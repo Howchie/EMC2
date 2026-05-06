@@ -46,6 +46,9 @@ struct ParamTable {
 
   // keep track of parameters that have an intercept-only design
   std::vector<char> design_is_self_intercept;
+  std::unordered_map<std::string, std::unordered_set<std::string>> pre_sum_term_map_;
+  std::unordered_map<std::string, TransformCode> split_code_map_;
+  std::unordered_map<std::string, std::pair<double, double>> split_bounds_map_;
 
   ParamTable() = default;
 
@@ -134,6 +137,50 @@ struct ParamTable {
   //   active_cols.swap(new_active);
   // }
 
+  void set_transform_metadata(const Rcpp::List& transform) {
+    pre_sum_term_map_.clear();
+    split_code_map_.clear();
+    split_bounds_map_.clear();
+
+    if (!transform.containsElementNamed("pre_sum_terms")) return;
+    Rcpp::List pre_sum_terms = transform["pre_sum_terms"];
+    Rcpp::CharacterVector pre_sum_names = pre_sum_terms.names();
+    for (int i = 0; i < pre_sum_terms.size(); ++i) {
+      std::string param = Rcpp::as<std::string>(pre_sum_names[i]);
+      Rcpp::CharacterVector term_names = pre_sum_terms[i];
+      auto& cur_set = pre_sum_term_map_[param];
+      for (int j = 0; j < term_names.size(); ++j) {
+        cur_set.insert(Rcpp::as<std::string>(term_names[j]));
+      }
+    }
+
+    if (transform.containsElementNamed("func")) {
+      Rcpp::CharacterVector func = transform["func"];
+      Rcpp::CharacterVector fnames = func.names();
+      for (int i = 0; i < func.size(); ++i) {
+        std::string name = Rcpp::as<std::string>(fnames[i]);
+        std::string f = Rcpp::as<std::string>(func[i]);
+        if (f == "exp") split_code_map_[name] = EXP;
+        else if (f == "pnorm") split_code_map_[name] = PNORM;
+        else split_code_map_[name] = IDENTITY;
+      }
+    }
+    if (transform.containsElementNamed("lower")) {
+      Rcpp::NumericVector lower = transform["lower"];
+      Rcpp::CharacterVector lnames = lower.names();
+      for (int i = 0; i < lower.size(); ++i) {
+        split_bounds_map_[Rcpp::as<std::string>(lnames[i])].first = lower[i];
+      }
+    }
+    if (transform.containsElementNamed("upper")) {
+      Rcpp::NumericVector upper = transform["upper"];
+      Rcpp::CharacterVector unames = upper.names();
+      for (int i = 0; i < upper.size(); ++i) {
+        split_bounds_map_[Rcpp::as<std::string>(unames[i])].second = upper[i];
+      }
+    }
+  }
+
   void init_design_plan(const Rcpp::List& designs) {
     using namespace Rcpp;
     using std::string;
@@ -145,52 +192,6 @@ struct ParamTable {
     CharacterVector design_names = designs.names();
     if (design_names.size() != n_params) {
       stop("ParamTable::init_design_plan: designs must be a named list");
-    }
-
-    std::unordered_map<std::string, std::unordered_set<std::string>> pre_sum_term_map;
-    std::unordered_map<std::string, TransformCode> split_code_map;
-    std::unordered_map<std::string, std::pair<double, double>> split_bounds_map;
-
-    if (designs.hasAttribute("emc2_transform")) {
-      List transform = designs.attr("emc2_transform");
-      if (transform.containsElementNamed("pre_sum_terms")) {
-        List pre_sum_terms = transform["pre_sum_terms"];
-        CharacterVector pre_sum_names = pre_sum_terms.names();
-        for (int i = 0; i < pre_sum_terms.size(); ++i) {
-          std::string param = as<string>(pre_sum_names[i]);
-          CharacterVector term_names = pre_sum_terms[i];
-          auto& cur_set = pre_sum_term_map[param];
-          for (int j = 0; j < term_names.size(); ++j) {
-            cur_set.insert(as<string>(term_names[j]));
-          }
-        }
-
-        if (transform.containsElementNamed("func")) {
-          CharacterVector func = transform["func"];
-          CharacterVector fnames = func.names();
-          for (int i = 0; i < func.size(); ++i) {
-            std::string name = as<string>(fnames[i]);
-            std::string f = as<std::string>(func[i]);
-            if (f == "exp") split_code_map[name] = EXP;
-            else if (f == "pnorm") split_code_map[name] = PNORM;
-            else split_code_map[name] = IDENTITY;
-          }
-        }
-        if (transform.containsElementNamed("lower")) {
-          NumericVector lower = transform["lower"];
-          CharacterVector lnames = lower.names();
-          for (int i = 0; i < lower.size(); ++i) {
-            split_bounds_map[as<string>(lnames[i])].first = lower[i];
-          }
-        }
-        if (transform.containsElementNamed("upper")) {
-          NumericVector upper = transform["upper"];
-          CharacterVector unames = upper.names();
-          for (int i = 0; i < upper.size(); ++i) {
-            split_bounds_map[as<string>(unames[i])].second = upper[i];
-          }
-        }
-      }
     }
 
     const int T = base.nrow();
@@ -232,13 +233,13 @@ struct ParamTable {
       entry.coef_in_pre_sum.assign(K, 0);
       entry.uses_self = false;
 
-      auto split_it = pre_sum_term_map.find(out_name);
-      if (split_it != pre_sum_term_map.end()) {
+      auto split_it = pre_sum_term_map_.find(out_name);
+      if (split_it != pre_sum_term_map_.end()) {
         entry.split_transform = true;
-        auto code_it = split_code_map.find(out_name);
-        if (code_it != split_code_map.end()) entry.split_code = code_it->second;
-        auto bound_it = split_bounds_map.find(out_name);
-        if (bound_it != split_bounds_map.end()) {
+        auto code_it = split_code_map_.find(out_name);
+        if (code_it != split_code_map_.end()) entry.split_code = code_it->second;
+        auto bound_it = split_bounds_map_.find(out_name);
+        if (bound_it != split_bounds_map_.end()) {
           entry.split_lower = bound_it->second.first;
           entry.split_upper = bound_it->second.second;
         }
@@ -340,7 +341,8 @@ struct ParamTable {
 
   static ParamTable from_p_vector_and_designs(const Rcpp::NumericVector& p_vector,
                                               const Rcpp::List& designs,
-                                              int n_trials) {
+                                              int n_trials,
+                                              const Rcpp::List& transforms = Rcpp::List::create()) {
     using std::string;
     using Rcpp::as;
     using Rcpp::CharacterVector;
@@ -426,6 +428,7 @@ struct ParamTable {
 
     // 5) Construct ParamTable
     ParamTable pt(base, base_names);
+    pt.set_transform_metadata(transforms);
     pt.n_trials = n_trials;  // (already set in ctor, but fine to be explicit)
 
     // cache "self-intercept-only" designs
@@ -495,11 +498,7 @@ struct ParamTable {
 
     // Lazy initialisation of the plan
     if (design_plan.size() != (size_t)n_params) {
-      if (designs.hasAttribute("emc2_transform")) {
-        init_design_plan(designs);
-      } else {
       init_design_plan(designs);
-      }
     }
 
     const int T = n_trials;

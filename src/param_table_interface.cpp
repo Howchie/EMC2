@@ -74,6 +74,7 @@ static NumericVector add_constants_cpp(const NumericVector& p_vector, const Nume
   return out;
 }
 
+
 static NumericMatrix get_pars_matrix_oo_core(ParamTable& param_table,
                                              const Rcpp::List& designs,
                                              TrendRuntime* trend_runtime,
@@ -191,7 +192,7 @@ NumericMatrix get_pars_c_wrapper_oo_core(NumericMatrix particle_matrix,
   p_vector = apply_pretransforms_cpp(p_vector, pretransforms);
   p_vector = add_constants_cpp(p_vector, constants);
 
-  ParamTable param_table = ParamTable::from_p_vector_and_designs(p_vector, designs, n_trials);
+  ParamTable param_table = ParamTable::from_p_vector_and_designs(p_vector, designs, n_trials, transforms);
   std::vector<TransformSpec> full_specs = make_transform_specs_for_paramtable(param_table, transforms);
 
   std::unique_ptr<TrendPlan> trend_plan;

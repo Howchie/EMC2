@@ -55,6 +55,7 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
                          List designs, String type, List bounds, List transforms, List pretransforms,
                          CharacterVector p_types, double min_ll, Rcpp::Nullable<Rcpp::List> trend);
 
+
 static void update_pt_only(ParamTable& param_table,
                            const Rcpp::List& designs,
                            TrendRuntime* trend_runtime,
@@ -1536,7 +1537,7 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
 
     NumericVector p_vector = particle_matrix_pt(0, _);
     p_vector.attr("names") = colnames(particle_matrix_pt);
-    param_table_template = ParamTable::from_p_vector_and_designs(p_vector, designs, n_trials);
+    param_table_template = ParamTable::from_p_vector_and_designs(p_vector, designs, n_trials, transforms);
     transform_specs_pt = make_transform_specs_for_paramtable(param_table_template, transforms);
 
     Rcpp::CharacterVector pm_names = colnames(particle_matrix_pt);
