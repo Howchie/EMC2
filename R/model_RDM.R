@@ -452,9 +452,9 @@ rSWTN <- function(n, b, v, A, sv, k = 0, erlang = 1L, posdrift = TRUE) {
   }
   # sv==0, v<0, posdrift=FALSE: include in hit candidates; rWald handles Bernoulli
   if (!posdrift) {
-    hit_idx <- which(is.finite(v_draw) & v_draw != 0)
+    hit_idx <- which(is.finite(v_draw))
   } else {
-    hit_idx <- which(is.finite(v_draw) & v_draw > 0)
+    hit_idx <- which(is.finite(v_draw) & v_draw >= 0)
   }
   if (length(hit_idx) > 0) {
     out[hit_idx] <- rWald(length(hit_idx),

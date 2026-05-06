@@ -122,6 +122,7 @@ inline double lnorm_log_surv_std(double x, double meanlog, double sdlog) {
 }
 
 inline double pigt0(double t, double k, double l){
+  if (l == 0.0) return 2.0 * pnorm_std(-k / std::sqrt(t), true, false);
   double mu = k / l;
   double lambda = k * k;
 
@@ -150,7 +151,7 @@ inline double pigt_impl(double t, double k = 1, double l = 1, double a = .1, dou
   const double sqt = std::sqrt(t);
   const double lgt = std::log(t);
 
-  if (l >= 0.0 && l < threshold) {
+  if (std::abs(l) < threshold) {
     const double p1 = pnorm_std((k + a) / sqt, true, false);
     const double p2 = pnorm_std((k - a) / sqt, true, false);
     const double t1 = sqt * (std::exp(-0.5 * (k - a) * (k - a) / t) - std::exp(-0.5 * (k + a) * (k + a) / t)) / FAST_NORM_RT2PI;
@@ -176,7 +177,7 @@ inline double digt_impl(double t, double k = 1., double l = 1., double a = .1, d
   if (t <= 0.) return 0.;
   if (a < threshold) return digt0(t, k, l);
 
-  if (l >= 0.0 && l < threshold) {
+  if (std::abs(l) < threshold) {
     const double term1 = std::exp(- (k - a) * (k - a) / (2. * t));
     const double term2 = std::exp(- (k + a) * (k + a) / (2. * t));
     return std::exp(-.5 * (M_LN2 + L_PI + std::log(t)) + std::log(term1 - term2) - M_LN2 - std::log(a));
