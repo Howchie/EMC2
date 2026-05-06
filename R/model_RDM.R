@@ -27,7 +27,7 @@ pRDM <- function(rt, pars)
 
 #### random
 
-rWald <- function(n, B, v, A)
+rWald <- function(n, B, v, A, posdrift = TRUE)
 # random function for single accumulator
 {
   rwaldt <- function(n, k, l, tiny = 1e-6) {
@@ -62,13 +62,30 @@ rWald <- function(n, B, v, A)
     x
   }
 
-  # Kluge to return Inf for negative rates
-  out <- numeric(n)
-  ok <- !v < 0
-  nok <- sum(ok)
-  bs <- B[ok] + runif(nok, 0, A[ok])
-  out[ok] <- rwaldt(nok, k = bs, l = v[ok])
-  out[!ok] <- Inf
+  out <- rep(Inf, n)
+  pos <- !v < 0  # v >= 0
+
+  # positive (or zero) drift: standard inverse Gaussian
+  npos <- sum(pos)
+  if (npos > 0) {
+    bs <- B[pos] + runif(npos, 0, A[pos])
+    out[pos] <- rwaldt(npos, k = bs, l = v[pos])
+  }
+
+  # negative drift with posdrift=FALSE: defective Wald via Bernoulli(p_hit)
+  # Conditional FPT given hitting equals Wald with |v| (Girsanov / time-reversal)
+  neg <- v < 0
+  if (!posdrift && any(neg)) {
+    nneg <- sum(neg)
+    bs_neg <- B[neg] + runif(nneg, 0, A[neg])
+    p_hit <- exp(2 * v[neg] * bs_neg)  # v < 0, bs > 0 → 0 < p_hit < 1
+    hit <- as.logical(rbinom(nneg, 1, p_hit))
+    if (any(hit)) {
+      out[which(neg)[hit]] <- rwaldt(sum(hit), k = bs_neg[hit], l = -v[neg][hit])
+    }
+    # non-hitting trials remain Inf
+  }
+
   out
 }
 
@@ -411,7 +428,7 @@ rGBM_killed <- function(n, b, v, A, s = 1, k = 0, erlang = 1L) {
   out
 }
 
-rSWTN <- function(n, b, v, A, sv, k = 0, erlang = 1L) {
+rSWTN <- function(n, b, v, A, sv, k = 0, erlang = 1L, posdrift = TRUE) {
   if (n <= 0) return(numeric(0))
   b <- rep(b, length.out = n)
   v <- rep(v, length.out = n)
@@ -419,8 +436,9 @@ rSWTN <- function(n, b, v, A, sv, k = 0, erlang = 1L) {
   sv <- rep(sv, length.out = n)
   k <- rep(k, length.out = n)
   out <- rep(Inf, n)
-  # For sv == 0, preserve the legacy Wald convention: v <= 0 never finishes.
-  # For sv > 0, draw trial drifts from N(v, sv^2) truncated at 0.
+  # For sv > 0, draw per-trial drifts from N(v, sv^2) truncated to (0, Inf).
+  # Negative mean drift with sv > 0 is fine: truncnorm always gives positive draws.
+  # For sv == 0 and v < 0 with posdrift=FALSE: Bernoulli(p_hit) sampling.
   v_draw <- v
   var_idx <- which(is.finite(sv) & sv > 1e-12)
   if (length(var_idx) > 0) {
@@ -432,12 +450,18 @@ rSWTN <- function(n, b, v, A, sv, k = 0, erlang = 1L) {
       rem <- rem[!ok]
     }
   }
-  hit_idx <- which(is.finite(v_draw) & v_draw > 0)
+  # sv==0, v<0, posdrift=FALSE: include in hit candidates; rWald handles Bernoulli
+  if (!posdrift) {
+    hit_idx <- which(is.finite(v_draw) & v_draw != 0)
+  } else {
+    hit_idx <- which(is.finite(v_draw) & v_draw > 0)
+  }
   if (length(hit_idx) > 0) {
     out[hit_idx] <- rWald(length(hit_idx),
                           B = b[hit_idx] - A[hit_idx],
                           v = v_draw[hit_idx],
-                          A = A[hit_idx])
+                          A = A[hit_idx],
+                          posdrift = posdrift)
   }
   kill_idx <- which(k > 0)
   if (length(kill_idx) > 0) {
@@ -542,7 +566,7 @@ RDMGBM <- function(erlang_shape = 1L, erlang_type = "none") {
 #'
 #' @export
 #'
-RDMSWTN <- function(erlang_shape = 1L, erlang_type = "none") {
+RDMSWTN <- function(erlang_shape = 1L, erlang_type = "none", posdrift = TRUE) {
   erlang_type <- match.arg(erlang_type, c("none", "local_kill", "global_kill", "local_guess", "local_kill_guess"))
   type_suffix <- switch(erlang_type,
     "none" = "",
@@ -551,21 +575,22 @@ RDMSWTN <- function(erlang_shape = 1L, erlang_type = "none") {
     "local_guess" = "_LOCAL_GUESS",
     "local_kill_guess" = "_LOCAL_KILL_GUESS"
   )
+  base_name <- paste0(if (erlang_shape >= 2L) "RDMSWTN_E2" else "RDMSWTN", type_suffix)
   list(
     type = "RACE",
-    c_name = paste0(if (erlang_shape >= 2L) "RDMSWTN_E2" else "RDMSWTN", type_suffix),
+    c_name = if (posdrift) base_name else paste0(base_name, "_IO"),
     p_types = c(
-      "v" = log(1), "B" = log(1), "A" = log(0), "t0" = log(0),
+      "v" = if (posdrift) log(1) else 1, "B" = log(1), "A" = log(0), "t0" = log(0),
       "s" = log(1), "sv" = log(0), "lambda_g" = log(0), "lambda_k" = log(0), "pContaminant" = qnorm(0)
     ),
     p_types_canonical = c("v", "B", "A", "t0", "s", "sv"),
     transform = list(func = c(
-      v = "exp", B = "exp", A = "exp", t0 = "exp",
+      v = if (posdrift) "exp" else "identity", B = "exp", A = "exp", t0 = "exp",
       s = "exp", sv = "exp", lambda_g = "exp", lambda_k = "exp", pContaminant = "pnorm"
     )),
     bound = list(
       minmax = cbind(
-        v = c(1e-3, Inf), B = c(0, Inf), A = c(0, Inf),
+        v = c(if (posdrift) 0 else -Inf, Inf), B = c(0, Inf), A = c(0, Inf),
         t0 = c(0.05, Inf), s = c(0, Inf), sv = c(0, Inf),
         lambda_g = c(1e-4, Inf), lambda_k = c(1e-4, Inf),
         pContaminant = c(0.001, 0.999)
@@ -576,16 +601,18 @@ RDMSWTN <- function(erlang_shape = 1L, erlang_type = "none") {
       pars <- cbind(pars, b = pars[, "B"] + pars[, "A"])
       pars
     },
-    rfun = function(data = NULL, pars) rRDMSWTN(data$lR, pars, ok = attr(pars, "ok"), erlang_shape = erlang_shape, erlang_type = erlang_type),
-    dfun = function(rt, pars) dRDMSWTN(rt, pars, erlang = erlang_shape),
-    pfun = function(rt, pars) pRDMSWTN(rt, pars, erlang = erlang_shape),
+    rfun = function(data = NULL, pars) rRDMSWTN(data$lR, pars, ok = attr(pars, "ok"),
+                                                erlang_shape = erlang_shape, erlang_type = erlang_type,
+                                                posdrift = posdrift),
+    dfun = function(rt, pars) dRDMSWTN(rt, pars, erlang = erlang_shape, posdrift = posdrift),
+    pfun = function(rt, pars) pRDMSWTN(rt, pars, erlang = erlang_shape, posdrift = posdrift),
     log_likelihood = function(pars, dadm, model, min_ll = log(1e-10)) {
       log_likelihood_race_missing(pars = pars, dadm = dadm, model = model, min_ll = min_ll)
     }
   )
 }
 
-dRDMSWTN <- function(rt, pars, erlang = 1L) {
+dRDMSWTN <- function(rt, pars, erlang = 1L, posdrift = TRUE) {
   if (is.null(dim(pars)) || (dim(pars)[1] == 1 & length(rt) > 1)) {
     original_names <- names(pars)
     if (is.null(original_names)) original_names <- colnames(pars)
@@ -602,7 +629,7 @@ dRDMSWTN <- function(rt, pars, erlang = 1L) {
     stop("RDMSWTN requires parameter columns 'lambda_g' and 'lambda_k'.")
   }
   erl <- (pars[, "lambda_g"] > 0) | (pars[, "lambda_k"] > 0)
-  ok <- (rt > 0) & ((rt > pars[, "t0"]) | erl) & !(pars[, "v"] < 0)
+  ok <- (rt > 0) & ((rt > pars[, "t0"]) | erl) & (if (posdrift) !(pars[, "v"] < 0) else TRUE)
   ok[is.na(ok)] <- FALSE
   if (any(ok)) {
     if (any(dimnames(pars)[[2]] == "s")) {
@@ -624,7 +651,7 @@ dRDMSWTN <- function(rt, pars, erlang = 1L) {
   out
 }
 
-pRDMSWTN <- function(rt, pars, erlang = 1L) {
+pRDMSWTN <- function(rt, pars, erlang = 1L, posdrift = TRUE) {
   if (is.null(dim(pars)) || (dim(pars)[1] == 1 & length(rt) > 1)) {
     original_names <- names(pars)
     if (is.null(original_names)) original_names <- colnames(pars)
@@ -641,7 +668,7 @@ pRDMSWTN <- function(rt, pars, erlang = 1L) {
     stop("RDMSWTN requires parameter columns 'lambda_g' and 'lambda_k'.")
   }
   erl <- (pars[, "lambda_g"] > 0) | (pars[, "lambda_k"] > 0)
-  ok <- (rt > 0) & ((rt > pars[, "t0"]) | erl) & !(pars[, "v"] < 0)
+  ok <- (rt > 0) & ((rt > pars[, "t0"]) | erl) & (if (posdrift) !(pars[, "v"] < 0) else TRUE)
   ok[is.na(ok)] <- FALSE
   if (any(ok)) {
     if (any(dimnames(pars)[[2]] == "s")) {
@@ -664,7 +691,8 @@ pRDMSWTN <- function(rt, pars, erlang = 1L) {
 }
 
 rRDMSWTN <- function(lR, pars, p_types = c("v", "b", "A", "t0", "sv", "lambda_g", "lambda_k"),
-                     ok = rep(TRUE, dim(pars)[1]), erlang_shape = 1L, erlang_type = "none") {
+                     ok = rep(TRUE, dim(pars)[1]), erlang_shape = 1L, erlang_type = "none",
+                     posdrift = TRUE) {
   if (!is.null(attr(pars, "ok"))) ok <- attr(pars, "ok")
   if (is.null(dim(pars)) || (dim(pars)[1] == 1 & length(lR) > 1)) {
     original_names <- names(pars)
@@ -716,7 +744,7 @@ rRDMSWTN <- function(lR, pars, p_types = c("v", "b", "A", "t0", "sv", "lambda_g"
   k_vec <- if (local_kill && !guess) pars[, "lambda_k"] else rep(0, nrow(pars))
   dt[ok] <- rSWTN(sum(ok),
     b = pars[, "b"], v = pars[, "v"], A = pars[, "A"], sv = pars[, "sv"],
-    k = k_vec, erlang = erlang_shape
+    k = k_vec, erlang = erlang_shape, posdrift = posdrift
   )
   # Put EAM on the same raw-time axis as Erlang clocks.
   dt <- dt + matrix(t0, nrow = nr)

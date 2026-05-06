@@ -239,6 +239,9 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
     out.ctx.lambda_g_index = 6;
     out.ctx.lambda_k_index = 7;
     out.ctx.defective_upper_tail = true;
+    if (type_std.find("_IO") != std::string::npos) {
+      out.ctx.use_posdrift = false;
+    }
   } else if (type_std.find("GBM") != std::string::npos) {
     // Must be checked before "RDM" since "RDMGBM" contains "RDM"
     out.pdf1_ptr       = &drdmgbm_scalar;

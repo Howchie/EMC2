@@ -1878,7 +1878,7 @@ double drdmswtn(double t, double mu_drift, double b, double A,
 
   if (no_sv) {
     // sv=0: standard Wald (dwald handles t_eam <= 0 internally via its t0 param)
-    if (mu_drift <= 1e-10 && t_eam > 1e-10) return log_out ? R_NegInf : 0.0;
+    // Allow zero and negative drift (defective distribution).
     return dwald(t, mu_drift, b, A, s, t0, lambda, lambda, log_out, kill_shape, guess);
   } else if (no_A && !no_sv) {
     // SWTN with fixed threshold b (dswtn handles t_eam <= 0 via its t0 param)
@@ -1951,7 +1951,7 @@ double prdmswtn(double t, double mu_drift, double b, double A,
   if (t_eam <= 1e-10) return log_out ? R_NegInf : 0.0;
 
   if (no_sv) {
-    if (mu_drift <= 1e-7) return log_out ? R_NegInf : 0.0;
+    // Allow zero and negative drift (defective distribution).
     // Pass raw t and t0 to pwald so erlang inside uses physical time.
     return pwald(t, mu_drift, b, A, s, t0, lambda, lambda, log_out, kill_shape, guess);
   } else if (no_A && !no_sv) {
