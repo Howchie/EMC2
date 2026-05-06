@@ -25,6 +25,7 @@
   })
 
   names(out) <- names(designs)
+  attr(out, "emc2_transform") <- attr(designs, "emc2_transform")
   out
 }
 

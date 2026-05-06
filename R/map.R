@@ -46,7 +46,10 @@ do_bound <- function(pars,bound, lR = NULL) {
   bound <- colSums(ok) == nrow(ok)
   if(!is.null(lR)){
     lvl <- length(unique(lR))
-    bound <- rep(colSums(matrix(bound, lvl)) == lvl, each = lvl)
+    n_bound <- length(bound)
+    if (lvl > 0 && (n_bound %% lvl) == 0) {
+      bound <- rep(colSums(matrix(bound, nrow = lvl)) == lvl, each = lvl)
+    }
   }
   return(bound)
 }
@@ -79,7 +82,10 @@ fix_bound <- function(pars,bound, lR = NULL,fix=FALSE) {
 
   if(!is.null(lR)){
     lvl <- length(unique(lR))
-    bounds <- rep(colSums(matrix(bounds, lvl)) == lvl, each = lvl)
+    n_bounds <- length(bounds)
+    if (lvl > 0 && (n_bounds %% lvl) == 0) {
+      bounds <- rep(colSums(matrix(bounds, nrow = lvl)) == lvl, each = lvl)
+    }
   }
   attr(pars,"ok") <- bounds
   return(pars)
@@ -218,7 +224,11 @@ fill_transform <- function(transform, model, p_vector,
   # Remainers must be identity and have no bounds
   filled_lower[is.na(filled_lower)] <- -Inf
   filled_upper[is.na(filled_upper)] <- Inf
-  return(list(func=filled_func,lower=filled_lower,upper=filled_upper))
+  out <- list(func=filled_func,lower=filled_lower,upper=filled_upper)
+  if (!is.null(transform$pre_sum_terms) && !is_pre) {
+    out$pre_sum_terms <- transform$pre_sum_terms
+  }
+  return(out)
 }
 
 fill_bound <- function(bound, model) {

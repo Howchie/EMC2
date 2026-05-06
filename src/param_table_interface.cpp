@@ -94,7 +94,15 @@ static NumericMatrix get_pars_matrix_oo_core(ParamTable& param_table,
     // and apply full transforms directly without any parameter-set filtering.
     LogicalVector include_all(n_designs, true);
     param_table.map_from_designs(designs, include_all);
-    if (!full_specs.empty()) c_do_transform_pt(param_table, full_specs);
+    if (!full_specs.empty()) {
+      const auto split_set = param_table.split_transform_params();
+      if (split_set.empty()) {
+        c_do_transform_pt(param_table, full_specs);
+      } else {
+        auto postmap_specs = complement_specs_for_phases(param_table, full_specs, { &split_set });
+        c_do_transform_pt(param_table, postmap_specs);
+      }
+    }
 
     if (return_all_pars) return param_table.materialize();
     return param_table.materialize_by_param_names(keep_names);
@@ -138,7 +146,9 @@ static NumericMatrix get_pars_matrix_oo_core(ParamTable& param_table,
     }
   }
 
+  const auto split_set = param_table.split_transform_params();
   transform_next = param_names_excluding(param_table, { &premap_set, &pretransform_set });
+  for (const auto& nm : split_set) transform_next.erase(nm);
   auto postmap_specs = filter_specs_by_param_set(param_table, full_specs, transform_next);
   c_do_transform_pt(param_table, postmap_specs);
 

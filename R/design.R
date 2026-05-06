@@ -40,6 +40,10 @@
 #' @param custom_p_vector A character vector. If specified, a custom likelihood
 #' function can be supplied.
 #' @param trend A trend list, as made by \code{\link{make_trend}}
+#' @param pre_transform_terms Optional named list keyed by model parameter. Each
+#' element is a character vector naming design-matrix coefficients that should be
+#' summed on the transformed scale before the model transform is applied, with
+#' the remaining coefficients added linearly on the natural scale.
 #' @param transform A list with custom transformations to be applied to the parameters of the model,
 #' if the conventional transformations aren't desired.
 #' See `DDM()` for an example of such transformations
@@ -78,6 +82,7 @@ design <- function(formula = NULL,factors = NULL,Rlevels = NULL,model,data=NULL,
                    contrasts=NULL,matchfun=NULL,constants=NULL,covariates=NULL,
                    functions=NULL,report_p_vector=TRUE, custom_p_vector = NULL,
                    trend=NULL,
+                   pre_transform_terms = NULL,
                    transform = NULL, bound = NULL, LT=NULL,LC=NULL,UC=NULL,UT=NULL,
                    fixed_accumulator_roles = NULL,...){
 
@@ -216,6 +221,11 @@ design <- function(formula = NULL,factors = NULL,Rlevels = NULL,model,data=NULL,
   }
   model_list <- model()
   model_list$transform <- fill_transform(transform,model)
+  model_list$transform$pre_sum_terms <- validate_pre_transform_terms(
+    pre_transform_terms = pre_transform_terms,
+    design = design,
+    model = model
+  )
   model_list$bound <- fill_bound(bound,model)
   model_list$pre_transform <- fill_transform(pre_transform, model = model, p_vector = p_vector, is_pre = TRUE)
   model <- function(){return(model_list)}
@@ -225,6 +235,60 @@ design <- function(formula = NULL,factors = NULL,Rlevels = NULL,model,data=NULL,
     summary(design, data = data)
   }
   return(design)
+}
+
+validate_pre_transform_terms <- function(pre_transform_terms, design, model) {
+  if (is.null(pre_transform_terms)) return(NULL)
+  if (!is.list(pre_transform_terms) || is.null(names(pre_transform_terms)) ||
+      any(names(pre_transform_terms) == "")) {
+    stop("pre_transform_terms must be a named list keyed by model parameter")
+  }
+
+  model_pars <- names(model()$p_types)
+  if (!all(names(pre_transform_terms) %in% model_pars)) {
+    bad <- setdiff(names(pre_transform_terms), model_pars)
+    stop("pre_transform_terms has parameter(s) not in model p_types: ",
+         paste(bad, collapse = ", "))
+  }
+
+  min_design <- minimal_design(
+    design,
+    drop_subjects = FALSE,
+    drop_R = FALSE,
+    add_acc = TRUE,
+    do_functions = FALSE,
+    verbose = FALSE
+  )
+  dadm <- design_model(
+    min_design,
+    design,
+    model,
+    add_acc = FALSE,
+    compress = FALSE,
+    verbose = FALSE,
+    rt_check = FALSE
+  )
+  dm_names <- names(attr(dadm, "designs"))
+
+  out <- vector("list", length(pre_transform_terms))
+  names(out) <- names(pre_transform_terms)
+  for (param in names(pre_transform_terms)) {
+    terms <- pre_transform_terms[[param]]
+    if (!is.character(terms) || length(terms) < 1 || anyNA(terms)) {
+      stop("pre_transform_terms$", param, " must be a non-empty character vector")
+    }
+    if (!param %in% dm_names) {
+      stop("pre_transform_terms$", param, " refers to a parameter with no design matrix")
+    }
+    param_terms <- colnames(attr(dadm, "designs")[[param]])
+    if (!all(terms %in% param_terms)) {
+      bad <- setdiff(terms, param_terms)
+      stop("pre_transform_terms$", param, " contains coefficient(s) not in the design: ",
+           paste(bad, collapse = ", "))
+    }
+    out[[param]] <- unique(terms)
+  }
+  out
 }
 
 #' Contrast Enforcing Equal Prior Variance on each Level
@@ -664,6 +728,7 @@ design_model <- function(data,design,model=NULL,
 
   out <- lapply(design$Flist, make_dm, da = da, Fcovariates = design$Fcovariates,
                 add_da = add_da, all_cells_dm = all_cells_dm, compress_dms = compress_dms)
+  attr(out, "emc2_transform") <- model()$transform
   if (!is.null(rt_resolution) & !is.null(da$rt))
     da$rt <- .floor_to_rt_resolution(da$rt, rt_resolution)
   if (compress){
@@ -831,10 +896,10 @@ dm_list <- function(dadm)
 {
 
   sub_design <- function(designs,isin)
-    lapply(designs,function(x) {
+    structure(lapply(designs,function(x) {
       attr(x,"expand") <- attr(x,"expand")[isin]
       x
-    })
+    }), emc2_transform = attr(designs, "emc2_transform"))
 
   if("LT"%in%colnames(dadm))LT=dadm$LT else{LT <- attr(dadm,"LT")}; if (is.null(LT)) LT <- 0
   if("UT"%in%colnames(dadm))UT=dadm$UT else{UT <- attr(dadm,"UT")}; if (is.null(UT)) UT <- Inf

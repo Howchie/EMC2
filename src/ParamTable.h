@@ -4,6 +4,7 @@
 #include <unordered_set>
 #include <unordered_map>
 #include <numeric>
+#include "utility_types.h"
 // #include <RcppArmadillo.h>
 using Rcpp::_;
 // using arma::mat;
@@ -15,6 +16,11 @@ struct DesignEntry {
   int out_idx;                   // column index in base to write into
   std::vector<int> coef_idx;     // length K; -1 for unused
   bool uses_self;                // does any coef refer to out_idx?
+  bool split_transform;          // transform(sum(pre terms)) + sum(post terms)
+  TransformCode split_code;      // transform to apply to pre-sum
+  double split_lower;
+  double split_upper;
+  std::vector<char> coef_in_pre_sum; // length K; whether this design column contributes to pre-sum
 };
 
 // View-based ParamTable: one base matrix + active column indices
@@ -141,11 +147,61 @@ struct ParamTable {
       stop("ParamTable::init_design_plan: designs must be a named list");
     }
 
+    std::unordered_map<std::string, std::unordered_set<std::string>> pre_sum_term_map;
+    std::unordered_map<std::string, TransformCode> split_code_map;
+    std::unordered_map<std::string, std::pair<double, double>> split_bounds_map;
+
+    if (designs.hasAttribute("emc2_transform")) {
+      List transform = designs.attr("emc2_transform");
+      if (transform.containsElementNamed("pre_sum_terms")) {
+        List pre_sum_terms = transform["pre_sum_terms"];
+        CharacterVector pre_sum_names = pre_sum_terms.names();
+        for (int i = 0; i < pre_sum_terms.size(); ++i) {
+          std::string param = as<string>(pre_sum_names[i]);
+          CharacterVector term_names = pre_sum_terms[i];
+          auto& cur_set = pre_sum_term_map[param];
+          for (int j = 0; j < term_names.size(); ++j) {
+            cur_set.insert(as<string>(term_names[j]));
+          }
+        }
+
+        if (transform.containsElementNamed("func")) {
+          CharacterVector func = transform["func"];
+          CharacterVector fnames = func.names();
+          for (int i = 0; i < func.size(); ++i) {
+            std::string name = as<string>(fnames[i]);
+            std::string f = as<std::string>(func[i]);
+            if (f == "exp") split_code_map[name] = EXP;
+            else if (f == "pnorm") split_code_map[name] = PNORM;
+            else split_code_map[name] = IDENTITY;
+          }
+        }
+        if (transform.containsElementNamed("lower")) {
+          NumericVector lower = transform["lower"];
+          CharacterVector lnames = lower.names();
+          for (int i = 0; i < lower.size(); ++i) {
+            split_bounds_map[as<string>(lnames[i])].first = lower[i];
+          }
+        }
+        if (transform.containsElementNamed("upper")) {
+          NumericVector upper = transform["upper"];
+          CharacterVector unames = upper.names();
+          for (int i = 0; i < upper.size(); ++i) {
+            split_bounds_map[as<string>(unames[i])].second = upper[i];
+          }
+        }
+      }
+    }
+
     const int T = base.nrow();
 
     for (int i = 0; i < n_params; ++i) {
       DesignEntry& entry = design_plan[i];
       entry.valid = false;
+      entry.split_transform = false;
+      entry.split_code = IDENTITY;
+      entry.split_lower = 0.0;
+      entry.split_upper = 1.0;
 
       if (designs[i] == R_NilValue) continue;
 
@@ -173,7 +229,20 @@ struct ParamTable {
       CharacterVector coef_names = colnames(design);
 
       entry.coef_idx.assign(K, -1);
+      entry.coef_in_pre_sum.assign(K, 0);
       entry.uses_self = false;
+
+      auto split_it = pre_sum_term_map.find(out_name);
+      if (split_it != pre_sum_term_map.end()) {
+        entry.split_transform = true;
+        auto code_it = split_code_map.find(out_name);
+        if (code_it != split_code_map.end()) entry.split_code = code_it->second;
+        auto bound_it = split_bounds_map.find(out_name);
+        if (bound_it != split_bounds_map.end()) {
+          entry.split_lower = bound_it->second.first;
+          entry.split_upper = bound_it->second.second;
+        }
+      }
 
       for (int j = 0; j < K; ++j) {
         string coef_name = as<string>(coef_names[j]);
@@ -183,9 +252,25 @@ struct ParamTable {
         int cidx = it->second;
         entry.coef_idx[j] = cidx;
         if (cidx == entry.out_idx) entry.uses_self = true;
+        if (entry.split_transform && split_it->second.find(coef_name) != split_it->second.end()) {
+          entry.coef_in_pre_sum[j] = 1;
+        }
       }
 
       entry.valid = true;
+    }
+  }
+
+  static inline double apply_split_transform_scalar(double x, TransformCode code,
+                                                    double lower, double upper) {
+    switch (code) {
+    case EXP:
+      return lower + std::exp(x);
+    case PNORM:
+      return lower + (upper - lower) * R::pnorm(x, 0.0, 1.0, 1, 0);
+    case IDENTITY:
+    default:
+      return x;
     }
   }
 
@@ -410,7 +495,11 @@ struct ParamTable {
 
     // Lazy initialisation of the plan
     if (design_plan.size() != (size_t)n_params) {
+      if (designs.hasAttribute("emc2_transform")) {
+        init_design_plan(designs);
+      } else {
       init_design_plan(designs);
+      }
     }
 
     const int T = n_trials;
@@ -445,24 +534,60 @@ struct ParamTable {
       // Clear output
       std::fill(out, out + T, 0.0);
 
-      // Main accumulation loop (unchanged logic)
-      for (int j = 0; j < K; ++j) {
-        int cidx = entry.coef_idx[j];
-        if (cidx < 0) continue;
+      if (entry.split_transform) {
+        std::vector<double> pre_acc(T, 0.0);
+        std::vector<double> post_acc(T, 0.0);
 
-        const double* coef =
-          (entry.uses_self && cidx == out_idx)
-          ? self_copy.data()
-            : &base(0, cidx);
+        for (int j = 0; j < K; ++j) {
+          int cidx = entry.coef_idx[j];
+          if (cidx < 0) continue;
 
-        const double* d = &design(0, j);
+          const double* coef =
+            (entry.uses_self && cidx == out_idx)
+            ? self_copy.data()
+              : &base(0, cidx);
+
+          const double* d = &design(0, j);
+          double* acc = entry.coef_in_pre_sum[j] ? pre_acc.data() : post_acc.data();
+          for (int r = 0; r < T; ++r) {
+            acc[r] += coef[r] * d[r];
+          }
+        }
 
         for (int r = 0; r < T; ++r) {
-          double v = coef[r] * d[r];
-          out[r] += v;
+          out[r] = apply_split_transform_scalar(
+            pre_acc[r], entry.split_code, entry.split_lower, entry.split_upper
+          ) + post_acc[r];
+        }
+      } else {
+        for (int j = 0; j < K; ++j) {
+          int cidx = entry.coef_idx[j];
+          if (cidx < 0) continue;
+
+          const double* coef =
+            (entry.uses_self && cidx == out_idx)
+            ? self_copy.data()
+              : &base(0, cidx);
+
+          const double* d = &design(0, j);
+
+          for (int r = 0; r < T; ++r) {
+            double v = coef[r] * d[r];
+            out[r] += v;
+          }
         }
       }
     }
+  }
+
+  std::unordered_set<std::string> split_transform_params() const {
+    std::unordered_set<std::string> out;
+    out.reserve(design_plan.size());
+    for (const auto& entry : design_plan) {
+      if (!entry.valid || !entry.split_transform) continue;
+      out.insert(Rcpp::as<std::string>(base_names[entry.out_idx]));
+    }
+    return out;
   }
 
 

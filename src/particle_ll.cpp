@@ -104,7 +104,9 @@ static void update_pt_only(ParamTable& param_table,
     }
   }
 
+  const auto split_set = param_table.split_transform_params();
   transform_next = param_names_excluding(param_table, { &premap_set, &pretransform_set });
+  for (const auto& nm : split_set) transform_next.erase(nm);
   if (invariant_param_names && !invariant_param_names->empty()) {
     for (const auto& nm : *invariant_param_names) transform_next.erase(nm);
   }

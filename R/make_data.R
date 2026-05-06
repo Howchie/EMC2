@@ -492,7 +492,9 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
     pars_ok <- attr(pars, 'ok')
     if(mean(!pars_ok) > .1){
       warning("More than 10% of parameter values fall out of model bounds, see <model_name>$bounds()")
-      return(FALSE)
+      if (!isTRUE(optionals$check_bounds)) {
+        return(FALSE)
+      }
     }
   }
   if (expand>1) {

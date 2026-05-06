@@ -201,12 +201,15 @@ To override this behavior, pass `conditional_on_data=TRUE` to predict().')
       do.call(make_data, c(list(pars[[i]],design=design[[j]],data=data[[j]]), fix_dots(dots, make_data)))
     },mc.cores=n_cores))
     in_bounds <- !sapply(simDat, is.logical)
-    if(all(!in_bounds)) stop("All samples fall outside of model bounds")
     if(any(!in_bounds)){
       good_post <- sample(1:n_post, sum(!in_bounds))
       simDat[!in_bounds] <- suppressWarnings(mclapply(good_post,function(i){
         do.call(make_data, c(list(pars[[i]],design=design[[j]],data=data[[j]], check_bounds = TRUE), fix_dots(dots, make_data)))
       },mc.cores=n_cores))
+      in_bounds <- !sapply(simDat, is.logical)
+    }
+    if(all(!in_bounds)) {
+      stop("All samples fall outside of model bounds")
     }
     out <- cbind(postn=rep(1:n_post,times=unlist(lapply(simDat,function(x)dim(x)[1]))),do.call(rbind,simDat))
     if (n_post==1) pars <- pars[[1]]
