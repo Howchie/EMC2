@@ -414,7 +414,8 @@ rGBM_killed <- function(n, b, v, A, s = 1, k = 0, erlang = 1L) {
 rSWTN <- function(n, b, v, A, sv, k = 0, erlang = 1L) {
   if (n <= 0) return(numeric(0))
   out <- rep(Inf, n)
-  # Draw positive drifts from N(v, sv^2) truncated at 0.
+  # For sv == 0, preserve the legacy Wald convention: v <= 0 never finishes.
+  # For sv > 0, draw trial drifts from N(v, sv^2) truncated at 0.
   v_draw <- v
   var_idx <- which(is.finite(sv) & sv > 1e-12)
   if (length(var_idx) > 0) {
@@ -426,7 +427,10 @@ rSWTN <- function(n, b, v, A, sv, k = 0, erlang = 1L) {
       rem <- rem[!ok]
     }
   }
-  out <- rWald(n, B = b, v = v_draw, A = A)
+  hit_idx <- which(is.finite(v_draw) & v_draw > 0)
+  if (length(hit_idx) > 0) {
+    out[hit_idx] <- rWald(length(hit_idx), B = b[hit_idx], v = v_draw[hit_idx], A = A[hit_idx])
+  }
   kill_idx <- which(k > 0)
   if (length(kill_idx) > 0) {
     tk <- rgamma(length(kill_idx), shape = erlang, rate = k[kill_idx])
