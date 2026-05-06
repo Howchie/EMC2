@@ -88,6 +88,10 @@ struct ContextForRaceModels {
     // Per-particle switch: disable kill bookkeeping when lambda is zero
     bool kill_active = true;
 
+    // Raw race kernels historically floor log probabilities to min_ll.  Timed
+    // race mixtures need unfloored components before the final log_sum_exp.
+    bool floor_raw_log_lik = true;
+
     // When false, adapters ignore lambda_k (for global kill races).
     // Set to false in global-kill models, and true in single-accumulator analytic paths.
     bool apply_lk_to_racers = true;
@@ -101,6 +105,20 @@ struct ContextForRaceModels {
       return is_global_kill && kill_active;
     }
 };
+
+inline bool raw_floor_log_lik(void* ctx_) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  return ctx == nullptr || ctx->floor_raw_log_lik;
+}
+
+inline double raw_log_zero(double min_ll, bool floor_raw) {
+  return floor_raw ? min_ll : R_NegInf;
+}
+
+inline double raw_log_value(double log_x, double min_ll, bool floor_raw) {
+  if (!R_FINITE(log_x)) return raw_log_zero(min_ll, floor_raw);
+  return floor_raw ? ((log_x > min_ll) ? log_x : min_ll) : log_x;
+}
 
 // Scalar adapters (single-RT, single-parameter-row) used by GSL integration.
 inline double dlba_scalar(double t, const double* par, void* ctx_) {
@@ -219,7 +237,8 @@ inline double plnr_scalar(double t, const double* par, void* /*ctx_*/) {
 // RDM: column layout v=0, B=1, A=2, t0=3, s=4
 inline void drdm_raw(const double* rt, const double* pars_cm, int n_rows,
                      const int* mask, const int* isok,
-                     double* out, double min_ll, void* /*ctx_*/) {
+                     double* out, double min_ll, void* ctx_) {
+  const bool floor_raw = raw_floor_log_lik(ctx_);
   const double* v_  = pars_cm + 0 * n_rows;
   const double* B_  = pars_cm + 1 * n_rows;
   const double* A_  = pars_cm + 2 * n_rows;
@@ -227,19 +246,20 @@ inline void drdm_raw(const double* rt, const double* pars_cm, int n_rows,
   const double* s_  = pars_cm + 4 * n_rows;
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
-    if (R_IsNA(v_[i]) || !isok[i]) { out[i] = min_ll; continue; }
+    if (R_IsNA(v_[i]) || !isok[i]) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
     const double tt = rt[i] - t0_[i];
-    if (tt <= 0.0) { out[i] = min_ll; continue; }
+    if (tt <= 0.0) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
     const double inv_s = 1.0 / s_[i];
     const double pdf = digt_impl(tt, (B_[i] + 0.5 * A_[i]) * inv_s,
                                      v_[i] * inv_s, 0.5 * A_[i] * inv_s);
-    out[i] = (pdf > 0.0 && emc2_isfinite(pdf)) ? std::log(pdf) : min_ll;
+    out[i] = (pdf > 0.0 && emc2_isfinite(pdf)) ? raw_log_value(std::log(pdf), min_ll, floor_raw) : raw_log_zero(min_ll, floor_raw);
   }
 }
 
 inline void prdm_raw(const double* rt, const double* pars_cm, int n_rows,
                      const int* mask, const int* isok,
-                     double* out, double min_ll, void* /*ctx_*/) {
+                     double* out, double min_ll, void* ctx_) {
+  const bool floor_raw = raw_floor_log_lik(ctx_);
   const double* v_  = pars_cm + 0 * n_rows;
   const double* B_  = pars_cm + 1 * n_rows;
   const double* A_  = pars_cm + 2 * n_rows;
@@ -253,7 +273,7 @@ inline void prdm_raw(const double* rt, const double* pars_cm, int n_rows,
     const double inv_s = 1.0 / s_[i];
     const double cdf = pigt_impl(tt, (B_[i] + 0.5 * A_[i]) * inv_s,
                                      v_[i] * inv_s, 0.5 * A_[i] * inv_s);
-    if (cdf >= 1.0) { out[i] = min_ll; continue; }
+    if (cdf >= 1.0) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
     out[i] = (cdf <= 0.0) ? 0.0 : std::log1p(-cdf);
   }
 }
@@ -292,6 +312,7 @@ inline void drdmgbm_raw(const double* rt, const double* pars_cm, int n_rows,
                         const int* mask, const int* isok,
                         double* out, double min_ll, void* ctx_) {
   auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  const bool floor_raw = raw_floor_log_lik(ctx_);
   const bool global_kill = ctx ? ctx->has_global_kill() : false;
   const int kill_shape   = ctx ? ctx->kill_shape : 1;
   const bool is_guess    = ctx ? (ctx->is_local_guess || ctx->is_local_kill_guess) : false;
@@ -305,14 +326,14 @@ inline void drdmgbm_raw(const double* rt, const double* pars_cm, int n_rows,
 
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
-    if (R_IsNA(v_[i]) || !isok[i]) { out[i] = min_ll; continue; }
+    if (R_IsNA(v_[i]) || !isok[i]) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
     const double t0_i = t0_[i];
     const double tt = rt[i] - t0_i;
     const double lg = (!ctx->kill_active) ? 0.0 : lambda_g_[i];
     const double lk = (global_kill || !ctx->kill_active) ? 0.0 : lambda_k_[i];
     const bool erl = (lg > 1e-12 || lk > 1e-12);
-    if (tt <= 0.0 && !erl) { out[i] = min_ll; continue; }
-    if (rt[i] <= 0.0)      { out[i] = min_ll; continue; }
+    if (tt <= 0.0 && !erl) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
+    if (rt[i] <= 0.0)      { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
     double log_pdf;
     if (lg > 1e-12 && lk > 1e-12) {
       log_pdf = dgbm_local_combo(rt[i], v_[i], 1.0 + B_[i] + A_[i],
@@ -328,7 +349,7 @@ inline void drdmgbm_raw(const double* rt, const double* pars_cm, int n_rows,
                      t0_i,
                      lg_use, lk_use, true, kill_shape, is_guess && lg_use > 1e-12);
     }
-    out[i] = (R_FINITE(log_pdf) && log_pdf > min_ll) ? log_pdf : min_ll;
+    out[i] = raw_log_value(log_pdf, min_ll, floor_raw);
   }
 }
 
@@ -336,6 +357,7 @@ inline void prdmgbm_raw(const double* rt, const double* pars_cm, int n_rows,
                         const int* mask, const int* isok,
                         double* out, double min_ll, void* ctx_) {
   auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  const bool floor_raw = raw_floor_log_lik(ctx_);
   const bool global_kill = ctx ? ctx->has_global_kill() : false;
   const int kill_shape   = ctx ? ctx->kill_shape : 1;
   const bool is_guess    = ctx ? (ctx->is_local_guess || ctx->is_local_kill_guess) : false;
@@ -361,7 +383,7 @@ inline void prdmgbm_raw(const double* rt, const double* pars_cm, int n_rows,
       const double log_cdf = pgbm_local_combo(rt[i], v_[i], 1.0 + B_[i] + A_[i],
                                               A_[i], s_[i], t0_i, lg, lk, true, kill_shape);
       if (!R_FINITE(log_cdf)) { out[i] = 0.0; continue; }
-      if (log_cdf >= 0.0) { out[i] = min_ll; continue; }
+      if (log_cdf >= 0.0) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
       out[i] = log1m_exp(log_cdf);
       continue;
     }
@@ -375,7 +397,7 @@ inline void prdmgbm_raw(const double* rt, const double* pars_cm, int n_rows,
                                 t0_i,
                                 lg_use, lk_use, true, kill_shape, is_guess && lg_use > 1e-12);
     if (!R_FINITE(log_cdf)) { out[i] = 0.0; continue; }
-    if (log_cdf >= 0.0) { out[i] = min_ll; continue; }
+    if (log_cdf >= 0.0) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
     out[i] = log1m_exp(log_cdf);
   }
 }
@@ -447,17 +469,18 @@ inline void rdmgbm_logS_at_t(double t, const double* pars_cm,
 // LNR: column layout m=0, s=1, t0=2
 inline void dlnr_raw(const double* rt, const double* pars_cm, int n_rows,
                      const int* mask, const int* isok,
-                     double* out, double min_ll, void* /*ctx_*/) {
+                     double* out, double min_ll, void* ctx_) {
+  const bool floor_raw = raw_floor_log_lik(ctx_);
   const double* m_  = pars_cm + 0 * n_rows;
   const double* s_  = pars_cm + 1 * n_rows;
   const double* t0_ = pars_cm + 2 * n_rows;
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
-    if (R_IsNA(m_[i]) || !isok[i]) { out[i] = min_ll; continue; }
+    if (R_IsNA(m_[i]) || !isok[i]) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
     const double tt = rt[i] - t0_[i];
-    if (tt <= 0.0) { out[i] = min_ll; continue; }
+    if (tt <= 0.0) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
     const double pdf = dlnorm_std(tt, m_[i], s_[i], false);
-    out[i] = (pdf > 0.0 && emc2_isfinite(pdf)) ? std::log(pdf) : min_ll;
+    out[i] = (pdf > 0.0 && emc2_isfinite(pdf)) ? raw_log_value(std::log(pdf), min_ll, floor_raw) : raw_log_zero(min_ll, floor_raw);
   }
 }
 
@@ -525,7 +548,7 @@ inline double prgamma_scalar(double t, const double* par, void* ctx_) {
 inline void drgamma_raw(const double* rt, const double* pars_cm, int n_rows,
                         const int* mask, const int* isok,
                         double* out, double min_ll, void* ctx_) {
-  (void)ctx_;
+  const bool floor_raw = raw_floor_log_lik(ctx_);
   const double* lambda_ = pars_cm + 0 * n_rows;
   const double* shape_  = pars_cm + 1 * n_rows;
   const double* shift_  = pars_cm + 2 * n_rows;
@@ -533,20 +556,20 @@ inline void drgamma_raw(const double* rt, const double* pars_cm, int n_rows,
     if (!mask[i]) continue;
     if (R_IsNA(lambda_[i]) || R_IsNA(shape_[i]) || R_IsNA(shift_[i]) ||
         !isok[i] || lambda_[i] <= 0.0 || shape_[i] <= 0.0) {
-      out[i] = min_ll;
+      out[i] = raw_log_zero(min_ll, floor_raw);
       continue;
     }
     const double tt = rt[i] - shift_[i];
-    if (tt <= 0.0) { out[i] = min_ll; continue; }
+    if (tt <= 0.0) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
     const double pdf = R::dgamma(tt, shape_[i], 1.0 / lambda_[i], false);
-    out[i] = (pdf > 0.0 && emc2_isfinite(pdf)) ? std::log(pdf) : min_ll;
+    out[i] = (pdf > 0.0 && emc2_isfinite(pdf)) ? raw_log_value(std::log(pdf), min_ll, floor_raw) : raw_log_zero(min_ll, floor_raw);
   }
 }
 
 inline void prgamma_raw(const double* rt, const double* pars_cm, int n_rows,
                         const int* mask, const int* isok,
                         double* out, double min_ll, void* ctx_) {
-  (void)ctx_;
+  const bool floor_raw = raw_floor_log_lik(ctx_);
   const double* lambda_ = pars_cm + 0 * n_rows;
   const double* shape_  = pars_cm + 1 * n_rows;
   const double* shift_  = pars_cm + 2 * n_rows;
@@ -560,7 +583,7 @@ inline void prgamma_raw(const double* rt, const double* pars_cm, int n_rows,
     const double tt = rt[i] - shift_[i];
     if (tt <= 0.0) { out[i] = 0.0; continue; }
     const double cdf = R::pgamma(tt, shape_[i], 1.0 / lambda_[i], true, false);
-    if (cdf >= 1.0) { out[i] = min_ll; continue; }
+    if (cdf >= 1.0) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
     out[i] = (cdf <= 0.0) ? 0.0 : std::log1p(-cdf);
   }
 }
@@ -597,6 +620,7 @@ inline void dlba_raw(const double* rt, const double* pars_cm, int n_rows,
                      const int* mask, const int* isok,
                      double* out, double min_ll, void* ctx_) {
   auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  const bool floor_raw = raw_floor_log_lik(ctx_);
   const bool pd = ctx ? ctx->use_posdrift : true;
   const double* v_  = pars_cm + 0 * n_rows;
   const double* sv_ = pars_cm + 1 * n_rows;
@@ -605,11 +629,11 @@ inline void dlba_raw(const double* rt, const double* pars_cm, int n_rows,
   const double* t0_ = pars_cm + 4 * n_rows;
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
-    if (R_IsNA(v_[i]) || !isok[i]) { out[i] = min_ll; continue; }
+    if (R_IsNA(v_[i]) || !isok[i]) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
     const double tt = rt[i] - t0_[i];
-    if (tt <= 0.0) { out[i] = min_ll; continue; }
+    if (tt <= 0.0) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
     const double pdf = dlba_norm(tt, A_[i], B_[i] + A_[i], v_[i], sv_[i], pd);
-    out[i] = (pdf > 0.0 && emc2_isfinite(pdf)) ? std::log(pdf) : min_ll;
+    out[i] = (pdf > 0.0 && emc2_isfinite(pdf)) ? raw_log_value(std::log(pdf), min_ll, floor_raw) : raw_log_zero(min_ll, floor_raw);
   }
 }
 
@@ -617,6 +641,7 @@ inline void plba_raw(const double* rt, const double* pars_cm, int n_rows,
                      const int* mask, const int* isok,
                      double* out, double min_ll, void* ctx_) {
   auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  const bool floor_raw = raw_floor_log_lik(ctx_);
   const bool pd = ctx ? ctx->use_posdrift : true;
   const double* v_  = pars_cm + 0 * n_rows;
   const double* sv_ = pars_cm + 1 * n_rows;
@@ -629,7 +654,7 @@ inline void plba_raw(const double* rt, const double* pars_cm, int n_rows,
     const double tt = rt[i] - t0_[i];
     if (tt <= 0.0) { out[i] = 0.0; continue; }
     const double cdf = plba_norm(tt, A_[i], B_[i] + A_[i], v_[i], sv_[i], pd);
-    if (cdf >= 1.0) { out[i] = min_ll; continue; }
+    if (cdf >= 1.0) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
     out[i] = (cdf <= 0.0) ? 0.0 : std::log1p(-cdf);
   }
 }
@@ -707,6 +732,7 @@ inline void dbawl_raw(const double* rt, const double* pars_cm, int n_rows,
                       const int* mask, const int* isok,
                       double* out, double min_ll, void* ctx_) {
   auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  const bool floor_raw = raw_floor_log_lik(ctx_);
   const bool pd          = ctx->use_posdrift;
   const bool local_guess = ctx->is_local_guess || ctx->is_local_kill_guess;
   const double* v_  = pars_cm + 0 * n_rows;
@@ -719,20 +745,20 @@ inline void dbawl_raw(const double* rt, const double* pars_cm, int n_rows,
   const double* lk_ = pars_cm + 7 * n_rows;
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
-    if (R_IsNA(v_[i]) || !isok[i]) { out[i] = min_ll; continue; }
+    if (R_IsNA(v_[i]) || !isok[i]) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
     const double t0_i = t0_[i];
     const double tt = rt[i] - t0_i;
     const double lg = (!ctx->kill_active) ? 0.0 : lg_[i];
     const double lk = (!ctx->kill_active || !ctx->apply_lk_to_racers) ? 0.0 : lk_[i];
     const bool erl = (lg > 1e-12 || lk > 1e-12);
-    if (tt <= 0.0 && !erl) { out[i] = min_ll; continue; }
-    if (rt[i] <= 0.0) { out[i] = min_ll; continue; }
+    if (tt <= 0.0 && !erl) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
+    if (rt[i] <= 0.0) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
     // Pass raw rt and t0; core function uses t0 to split EAM vs erlang time.
     const double pdf = dkilledleakyba_norm(
       rt[i], v_[i], B_[i] + A_[i], A_[i], sv_[i], t0_i, k_[i], lg, lk,
       pd, false, ctx->kill_shape, local_guess
     );
-    out[i] = (pdf > 0.0 && emc2_isfinite(pdf)) ? std::log(pdf) : min_ll;
+    out[i] = (pdf > 0.0 && emc2_isfinite(pdf)) ? raw_log_value(std::log(pdf), min_ll, floor_raw) : raw_log_zero(min_ll, floor_raw);
   }
 }
 
@@ -740,6 +766,7 @@ inline void pbawl_raw(const double* rt, const double* pars_cm, int n_rows,
                       const int* mask, const int* isok,
                       double* out, double min_ll, void* ctx_) {
   auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  const bool floor_raw = raw_floor_log_lik(ctx_);
   const bool pd          = ctx->use_posdrift;
   const bool local_guess = ctx->is_local_guess || ctx->is_local_kill_guess;
   const double* v_  = pars_cm + 0 * n_rows;
@@ -764,7 +791,7 @@ inline void pbawl_raw(const double* rt, const double* pars_cm, int n_rows,
       rt[i], v_[i], B_[i] + A_[i], A_[i], sv_[i], t0_i, k_[i], lg, lk,
       pd, false, ctx->kill_shape, local_guess
     );
-    if (cdf >= 1.0) { out[i] = min_ll; continue; }
+    if (cdf >= 1.0) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
     out[i] = (cdf <= 0.0) ? 0.0 : std::log1p(-cdf);
   }
 }
@@ -889,6 +916,7 @@ inline void drdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
                          const int* mask, const int* isok,
                          double* out, double min_ll, void* ctx_) {
   auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  const bool floor_raw = raw_floor_log_lik(ctx_);
   const int kill_shape   = ctx ? ctx->kill_shape : 1;
   const bool is_guess_type = ctx ? (ctx->is_local_guess || ctx->is_local_kill_guess) : false;
   const double* v_       = pars_cm + 0 * n_rows;
@@ -903,15 +931,15 @@ inline void drdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
 
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
-    if (R_IsNA(v_[i]) || !isok[i]) { out[i] = min_ll; continue; }
+    if (R_IsNA(v_[i]) || !isok[i]) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
     const double t0_i  = t0_[i];
     const double tt    = rt[i] - t0_i;
     const double inv_s = 1.0 / s_[i];
     const double lg = (!ctx->kill_active) ? 0.0 : lambda_g_[i];
     const double lk = (!ctx->kill_active || !ctx->apply_lk_to_racers) ? 0.0 : lambda_k_[i];
     const bool erl = (lg > 1e-12 || lk > 1e-12);
-    if (tt <= 0.0 && !erl) { out[i] = min_ll; continue; }
-    if (rt[i] <= 0.0) { out[i] = min_ll; continue; }
+    if (tt <= 0.0 && !erl) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
+    if (rt[i] <= 0.0) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
     double log_pdf;
     if (lg > 1e-12 && lk > 1e-12) {
       // Pass raw rt and t0; combo function splits EAM vs erlang time.
@@ -923,9 +951,9 @@ inline void drdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
       const double lk_use = is_guess_type ? 0.0 : lk;
       if (lg_use <= 0.0 && lk_use <= 0.0) {
         // No kill, no sv, no erlang: canonical Wald using EAM time directly.
-        if (tt <= 0.0) { out[i] = min_ll; continue; }
+        if (tt <= 0.0) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
         const double pdf = dwald_k0(tt, (B_[i] + A_[i]) * inv_s, v_[i] * inv_s, A_[i] * inv_s);
-        log_pdf = (pdf > 0.0 && emc2_isfinite(pdf)) ? std::log(pdf) : min_ll;
+        log_pdf = (pdf > 0.0 && emc2_isfinite(pdf)) ? std::log(pdf) : R_NegInf;
       } else {
         // Pass raw rt and t0 to dwald.
         log_pdf = dwald(rt[i], v_[i] * inv_s, (B_[i] + A_[i]) * inv_s, A_[i] * inv_s,
@@ -939,7 +967,7 @@ inline void drdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
                          A_[i] * inv_s, 1.0, t0_i, sv_[i] * inv_s,
                          lg_use, lk_use, 0.0, 20, true, kill_shape, is_guess_type && lg_use > 1e-12);
     }
-    out[i] = (R_FINITE(log_pdf) && log_pdf > min_ll) ? log_pdf : min_ll;
+    out[i] = raw_log_value(log_pdf, min_ll, floor_raw);
   }
 }
 
@@ -947,6 +975,7 @@ inline void prdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
                          const int* mask, const int* isok,
                          double* out, double min_ll, void* ctx_) {
   auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  const bool floor_raw = raw_floor_log_lik(ctx_);
   const int kill_shape   = ctx ? ctx->kill_shape : 1;
   const bool is_guess_type = ctx ? (ctx->is_local_guess || ctx->is_local_kill_guess) : false;
   const double* v_       = pars_cm + 0 * n_rows;
@@ -975,7 +1004,7 @@ inline void prdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
                                                   A_[i] * inv_s, 1.0, t0_i, sv_[i] * inv_s,
                                                   lg, lk, 0.0, 20, true, kill_shape);
       if (!R_FINITE(log_cdf)) { out[i] = 0.0; continue; }
-      if (log_cdf >= 0.0) { out[i] = min_ll; continue; }
+      if (log_cdf >= 0.0) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
       out[i] = log1m_exp(log_cdf);
       continue;
     }
@@ -988,7 +1017,7 @@ inline void prdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
         if (tt <= 0.0) { out[i] = 0.0; continue; }
         const double cdf = pwald_k0(tt, (B_[i] + A_[i]) * inv_s, v_[i] * inv_s, A_[i] * inv_s);
         const double cl  = std::max(0.0, std::min(1.0, cdf));
-        out[i] = (cl <= 0.0) ? 0.0 : (cl >= 1.0) ? min_ll : std::log1p(-cl);
+        out[i] = (cl <= 0.0) ? 0.0 : (cl >= 1.0) ? raw_log_zero(min_ll, floor_raw) : std::log1p(-cl);
         continue;
       }
       log_cdf = pwald(rt[i], v_[i] * inv_s, (B_[i] + A_[i]) * inv_s, A_[i] * inv_s,
@@ -999,7 +1028,7 @@ inline void prdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
                          lg_use, lk_use, 0.0, 20, true, kill_shape, is_guess_type && lg_use > 1e-12);
     }
     if (!R_FINITE(log_cdf)) { out[i] = 0.0; continue; }
-    if (log_cdf >= 0.0) { out[i] = min_ll; continue; }
+    if (log_cdf >= 0.0) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
     out[i] = log1m_exp(log_cdf);
   }
 }

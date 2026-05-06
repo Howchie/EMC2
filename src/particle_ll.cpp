@@ -2012,6 +2012,9 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
           adapter.ctx.mode_hint = sv_zero ? 1 : 2;
         }
 
+        const bool floor_raw_log_lik_prev = adapter.ctx.floor_raw_log_lik;
+        if (time_code != -1) adapter.ctx.floor_raw_log_lik = false;
+
         // Log-density for winner rows
         adapter.model_dfun_raw(rt_ptr, pars_cm, n_trials,
                                winner_int_buf.data(), isok_int_fp.data(),
@@ -2033,6 +2036,7 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
           adapter.model_pfun_raw(rt_ptr, pars_cm, n_trials,
                                  winner_int_buf.data(), isok_int_fp.data(),
                                  alt_res_buf_fp.data(), min_ll, &adapter.ctx);
+          adapter.ctx.floor_raw_log_lik = floor_raw_log_lik_prev;
         } else if (adapter.ctx.is_global_kill && adapter.ctx.kill_active) {
           // Pre-fill log S_K at the winner row for each trial.
           const double* lambda_ptr = pars_cm + adapter.ctx.lambda_k_index * n_trials;
@@ -2044,6 +2048,7 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
                 : min_ll;
           }
         }
+        if (time_code == -1) adapter.ctx.floor_raw_log_lik = floor_raw_log_lik_prev;
         // Sum n_lR rows per unique trial; apply pC correction (no-op when pC=0).
         for (int j = 0; j < n_unique_fp; ++j) {
           double s = 0.0;
@@ -2064,8 +2069,12 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
               if (time_win_int_buf[base + k]) idx_T = k;
             }
             if (idx_W != -1 && idx_T != -1) {
-              double s_T = s - res_buf[base + idx_W] - res_buf[base + idx_T] +
-                alt_res_buf_fp[base + idx_T] + alt_res_buf_fp[base + idx_W];
+              double s_T = 0.0;
+              for (int k = 0; k < n_lR_j; ++k) {
+                if (k == idx_W) s_T += alt_res_buf_fp[base + idx_W];
+                else if (k == idx_T) s_T += alt_res_buf_fp[base + idx_T];
+                else s_T += res_buf[base + k];
+              }
               s = log_sum_exp(s, s_T - std::log(n_resp_fp[j]));
             }
           }
@@ -3965,6 +3974,8 @@ double c_log_likelihood_race(
 
     const double* rt_ptr = rts_dadm.begin();
     const double* pars_cm = pars.begin();
+    const bool dense_floor_raw_log_lik_prev = dense_ctx.floor_raw_log_lik;
+    if (has_time) dense_ctx.floor_raw_log_lik = false;
     if (any_win) {
       model_dfun_raw(rt_ptr, pars_cm, n_trials,
                      idx_win_ptr, isok_ptr,
@@ -4026,6 +4037,7 @@ double c_log_likelihood_race(
                      idx_win_ptr, isok_ptr,
                      alt_lds_ptr, min_ll, dense_ctx_ptr);
     }
+    dense_ctx.floor_raw_log_lik = dense_floor_raw_log_lik_prev;
 
     // --- Pre-compute truncation normalisers in batch when possible ---
     // When may_need_ct AND logS_at_t is available, we can replace per-trial
@@ -4181,7 +4193,7 @@ double c_log_likelihood_race(
           bool hit_min_ll = false;
           for (int k = 0; k < n_lR_j; ++k) {
             double v = lds_ptr[start_row_idx + k];
-            if (v <= min_ll) hit_min_ll = true;
+            if (!has_time && v <= min_ll) hit_min_ll = true;
             current_trial_ll_sum += v;
           }
           if (has_time && n_resp_ptr[unique_trial_idx] > 0) {
@@ -4191,8 +4203,12 @@ double c_log_likelihood_race(
               if (idx_time_only_ptr[start_row_idx + k]) idx_T = k;
             }
             if (idx_W != -1 && idx_T != -1) {
-              double s_T = current_trial_ll_sum - lds_ptr[start_row_idx + idx_W] - lds_ptr[start_row_idx + idx_T] +
-                alt_lds_ptr[start_row_idx + idx_T] + alt_lds_ptr[start_row_idx + idx_W];
+              double s_T = 0.0;
+              for (int k = 0; k < n_lR_j; ++k) {
+                if (k == idx_W) s_T += alt_lds_ptr[start_row_idx + idx_W];
+                else if (k == idx_T) s_T += alt_lds_ptr[start_row_idx + idx_T];
+                else s_T += lds_ptr[start_row_idx + k];
+              }
               current_trial_ll_sum = log_sum_exp(current_trial_ll_sum, s_T - std::log(n_resp_ptr[unique_trial_idx]));
             }
           } else if (ctx && ctx->is_global_kill && ctx->kill_active) {
@@ -4220,8 +4236,12 @@ double c_log_likelihood_race(
           if (idx_time_only_ptr[start_row_idx + k]) idx_T = k;
         }
         if (idx_W != -1 && idx_T != -1) {
-          double s_T = current_trial_ll_sum - lds_ptr[start_row_idx + idx_W] - lds_ptr[start_row_idx + idx_T] +
-            alt_lds_ptr[start_row_idx + idx_T] + alt_lds_ptr[start_row_idx + idx_W];
+          double s_T = 0.0;
+          for (int k = 0; k < n_lR_j; ++k) {
+            if (k == idx_W) s_T += alt_lds_ptr[start_row_idx + idx_W];
+            else if (k == idx_T) s_T += alt_lds_ptr[start_row_idx + idx_T];
+            else s_T += lds_ptr[start_row_idx + k];
+          }
           current_trial_ll_sum = log_sum_exp(current_trial_ll_sum, s_T - std::log(n_resp_ptr[unique_trial_idx]));
         }
       } else if (ctx && ctx->is_global_kill && ctx->kill_active) {
