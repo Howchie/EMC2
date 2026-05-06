@@ -1,6 +1,8 @@
-remotes::install_github("https://github.com/Howchie/EMC2/",ref="censoring_truncation_ah")
+# remotes::install_github("https://github.com/Howchie/EMC2/", ref="dev-oo",dependencies=TRUE)
+
 rm(list=ls())
 library(EMC2)
+
 ## This is a helper function to directly check likelihoods
 lfun <- function(p_vector, dadm, use_c=T) {
   if (use_c) {
@@ -20,7 +22,8 @@ lfun <- function(p_vector, dadm, use_c=T) {
     EMC2:::calc_ll_R(p_vector, attr(dadm, "model")(), dadm)
   }
 }
-pdf("Censoring Test/Test_Plots.pdf")
+
+# pdf("Censoring Test/Test_Plots.pdf")
 
 #### Using make_missing to censor and truncate data ----
 
@@ -94,7 +97,8 @@ p_vector["pContaminant"] <- qnorm(.1)
 dat <- make_data(p_vector, designRDM,n_trials = 5000,
                  TC=list(verbose=TRUE))
 
-# Note that the parameter setting is overridden if pContaminant is supplied
+# Note that the parameter setting is overridden if pContaminant is supplied to
+# make_data
 dat <- make_data(p_vector, designRDM,n_trials = 5000,
                  TC=list(pContaminant=.2,verbose=TRUE))
 
@@ -107,7 +111,7 @@ dat <- make_data(p_vector, designRDM,n_trials = 5000,
 #     for make_emc (1/60), whereas for make_data the default is no binning
 #     (i.e., the same was was the case previously).
 
-# Default no binning
+# By default make_data does no binning of the values of TC assumed
 dat <- make_data(p_vector, designRDM,n_trials = 2,TC=list(LT=.69,LC=.76,UC=1.59,UT=1.71))
 dat
 
@@ -226,12 +230,12 @@ emc <- make_emc(dat,designRDM,type="single")
 
 # Fit C
 system.time({emcc <- fit(emc)})
-# Time difference of 17.11186 secs
+# Time difference of 5.12575 secs
 
 # Fit R
 emc <- make_emc(dat,designRDM1,type="single")
 system.time({emcr <- fit(emc)})
-# Time difference of 41.82084 secs
+# Time difference of 34.22548 secs
 
 # Check recovery
 print(recovery(emcc,p_vector,selection="alpha"))
@@ -282,12 +286,12 @@ lfun(p_vector,dadmR,use_c = F)
 # Fit C
 emc <- make_emc(dat,designRDM,type="single")
 system.time({emcc <- fit(emc)})
-# Time difference of 1.29533 mins
+# Time difference of 8.414226 secs
 
 # Fit R
 emc <- make_emc(dat,designRDM1,type="single")
 system.time({emcr <- fit(emc)})
-# Time difference of 1.10279 mins
+# Time difference of 1.058821 mins
 
 # Check recovery
 print(recovery(emcc,p_vector,selection="alpha"))
@@ -311,10 +315,10 @@ lfun(p_vector,dadmR,use_c = F)
 # Fitting
 emc <- make_emc(datC,designRDM,type="single")
 system.time({emccC <- fit(emc)})
-# Time difference of 1.930384 mins
+# Time difference of 8.190309 secs
 emc <- make_emc(datC,designRDM1,type="single")
 system.time({emcrC <- fit(emc)})
-# Time difference of 3.344983 mins
+# Time difference of 1.220619 mins
 
 # Check recovery
 print(recovery(emccC,p_vector,selection="alpha"))
@@ -335,10 +339,10 @@ lfun(p_vector,dadmR,use_c = F)
 # Fitting
 emc <- make_emc(datT,designRDM,type="single")
 system.time({emccT <- fit(emc)})
-# Time difference of 1.79773 mins
+# Time difference of 8.366729 secs
 emc <- make_emc(datT,designRDM1,type="single")
 system.time({emcrT <- fit(emc)})
-# Time difference of 3.282718 mins
+# Time difference of 1.206895 mins
 
 # Recovery
 print(recovery(emccT,p_vector,selection="alpha"))
@@ -358,10 +362,10 @@ lfun(p_vector,dadmR,use_c = F)
 # Fitting
 emc <- make_emc(datCT,designRDM,type="single")
 system.time({emccCT <- fit(emc)})
-# Time difference of 5.866442 mins
+# Time difference of 11.07353 secs
 emc <- make_emc(datCT,designRDM1,type="single")
 system.time({emcrCT <- fit(emc)})
-# Time difference of 3.282171 mins
+# Time difference of 1.440308 mins
 
 
 print(recovery(emccCT,p_vector,selection="alpha"))
@@ -413,11 +417,11 @@ lfun(p_vector,dadmC)
 
 # Fitting
 emc <- make_emc(datCT,designLBA,type="single")
-emccCT <- profile_fit_rss_live(fit(emc), label = "fit: LBA (C)")
-# Time difference of 8.741704 mins
+system.time({emccCT <- fit(emc)})
+# Time difference of 16.9934 secs
 emc <- make_emc(datCT,designLBA1,type="single")
-emcrCT <- profile_fit_rss_live(fit(emc), label = "fit: LBA (R)")
-# Time difference of 2.771561 mins
+system.time({emcrCT <- fit(emc)})
+# Time difference of 20.11558 secs
 
 print(recovery(emccCT,p_vector,selection="alpha"))
 print(recovery(emcrCT,p_vector,selection="alpha"))
@@ -481,7 +485,10 @@ print(recovery(emcrCT,p_vector,selection="alpha"))
 # save(datCT,emccCT,emcrCT,file="Censoring TEST/LNR.RData")
 
 dev.off()
-### GNG LBA
+
+#### GNG ----
+
+### GNG LBA ----
 
 #load("Censoring Test/GNG.RData")
 LBAR <- function() {
@@ -489,6 +496,9 @@ LBAR <- function() {
   m$c_name=NULL
   m
 }
+
+### LBA 2 choice ----
+
 # Go/NoGo designs are detected via the use of a "nogo" level in the response.
 designLBA <- design(
   factors=list(subjects=1,S=c("go","nogo")),Rlevels=c("go","nogo"),
@@ -528,10 +538,10 @@ print(profile_plot(dat,designLBA1,p_vector,n_cores=1,layout=c(2,2),use_c=FALSE))
 # Fitting
 emc <- make_emc(dat,designLBA,type="single")
 system.time({emcc <- fit(emc)})
-# Time difference of 26.37225 secs
+# Time difference of 6.427324 secs
 emc <- make_emc(dat,designLBA1,type="single")
 system.time({emcr <- fit(emc)})
-# Time difference of 1.736852 mins
+# Time difference of 1.24255 mins
 
 # Both good
 print(recovery(emcc,p_vector,selection="alpha"))
@@ -543,11 +553,188 @@ tapply(is.na(dat$R),dat$S,mean)
 tapply(is.na(pred$R),pred$S,mean)
 tapply(dat$rt,dat$S,function(x) {mean(x[is.finite(x)])})
 tapply(pred$rt,pred$S,function(x) {mean(x[is.finite(x)])})
+
+### LBA 3 choice ----
+
+# Go/NoGo designs are detected via the use of a "nogo" level in the response.
+designLBA <- design(
+  factors=list(subjects=1,S=c("left","right","nogo")),Rlevels=c("left","right","nogo"),
+  matchfun=function(d) as.numeric(d$S)==as.numeric(d$lR),
+  model=LBA,UC=3,
+  formula=list(v~lM,B~1,t0~1)
+)
+
+designLBA1 <- design(
+  factors=list(subjects=1,S=c("left","right","nogo")),Rlevels=c("left","right","nogo"),
+  matchfun=function(d) as.numeric(d$S)==as.numeric(d$lR),
+  model=LBAR,UC=3,
+  formula=list(v~lM,B~1,t0~1)
+)
+
+p_vector <- sampled_pars(designLBA,doMap = FALSE)
+p_vector[] <- c(1, 2, log(1), log(0.2))
+dat <- make_data(p_vector,designLBA,n_trials=10000)
+
+# All responses that would have been nogo are coded as NA with rt=Inf
+tail(dat)
+unique(dat$R)
+
+# Response probabilities as expected
+tapply(is.na(dat$R),dat$S,mean)
+
+# Compare likelihoods
+dadmC <- EMC2:::design_model(dat,designLBA)
+dadmR <- EMC2:::design_model(dat,designLBA1)
+lfun(p_vector,dadmC)
+lfun(p_vector,dadmR,use_c = F)
+
+# Profiles
+print(profile_plot(dat,designLBA,p_vector,n_cores=1,layout=c(2,2)))
+print(profile_plot(dat,designLBA1,p_vector,n_cores=1,layout=c(2,2),use_c=FALSE)) # NB R code seems to have a weird bump might be integration noise
+
+# Fitting
+emc <- make_emc(dat,designLBA,type="single")
+system.time({emcc <- fit(emc)})
+# Time difference of 13.49044 secs
+emc <- make_emc(dat,designLBA1,type="single")
+system.time({emcr <- fit(emc)})
+# Time difference of 2.295908 mins
+
+# Both good
+print(recovery(emcc,p_vector,selection="alpha"))
+print(recovery(emcr,p_vector,selection="alpha"))
+
+### RDM 3 choice ----
+
+RDMR <- function() {
+  m <- RDM()
+  m$c_name=NULL
+  m
+}
+
+
+# Go/NoGo designs are detected via the use of a "nogo" level in the response.
+designRDM <- design(
+  factors=list(subjects=1,S=c("left","right","nogo")),Rlevels=c("left","right","nogo"),
+  matchfun=function(d) as.numeric(d$S)==as.numeric(d$lR),
+  model=RDM,UC=3,
+  formula=list(v~lM,B~1,t0~1)
+)
+
+designRDM1 <- design(
+  factors=list(subjects=1,S=c("left","right","nogo")),Rlevels=c("left","right","nogo"),
+  matchfun=function(d) as.numeric(d$S)==as.numeric(d$lR),
+  model=RDMR,UC=3,
+  formula=list(v~lM,B~1,t0~1)
+)
+
+p_vector <- sampled_pars(designRDM,doMap = FALSE)
+p_vector[] <- c(log(1), log(3), log(2), log(0.2))
+dat <- make_data(p_vector,designRDM,n_trials=10000)
+
+# All responses that would have been nogo are coded as NA with rt=Inf
+tail(dat)
+unique(dat$R)
+
+# Response probabilities as expected
+tapply(is.na(dat$R),dat$S,mean)
+
+# Compare likelihoods
+dadmC <- EMC2:::design_model(dat,designRDM)
+dadmR <- EMC2:::design_model(dat,designRDM1)
+lfun(p_vector,dadmC)
+lfun(p_vector,dadmR,use_c = F)
+
+# Profiles
+print(profile_plot(dat,designRDM,p_vector,n_cores=1,layout=c(2,2)))
+print(profile_plot(dat,designRDM1,p_vector,n_cores=1,layout=c(2,2),use_c=FALSE))
+
+# Fitting
+emc <- make_emc(dat,designRDM,type="single")
+system.time({emcc <- fit(emc)})
+# Time difference of 19.23704 secs
+emc <- make_emc(dat,designRDM1,type="single")
+system.time({emcr <- fit(emc)})
+# Time difference of 2.540988 mins
+
+# Both good
+print(recovery(emcc,p_vector,selection="alpha"))
+print(recovery(emcr,p_vector,selection="alpha"))
+
+### GNG LNR 2 Choice ----
+
+# Race models allow go/nogo with more than two choices, here with an LNR
+designLNR <- design(
+  factors=list(subjects=1,S=c("go","nogo")),Rlevels=c("go","nogo"),
+  matchfun=function(d) as.numeric(d$S)==as.numeric(d$lR),
+  model=LNR,
+  formula=list(m~lM,s~1,t0~1)
+)
+
+p_vector <- sampled_pars(designLNR,doMap = FALSE)
+p_vector[] <- c(log(1.5),log(.3), log(1), log(0.3))
+
+dat <- make_data(p_vector,designLNR,n_trials=10000)
+
+# All responses that would have been nogo are coded as NA with rt=Inf
+unique(dat$R)
+
+# Response probabilities as expected, about 80% accuracy
+mean(dat$S==dat$R,na.rm=TRUE)
+
+
+LNRR <- function() {
+  m <- LNR()
+  m$log_likelihood <- function(pars, dadm, model, min_ll = log(1e-10)) {
+    EMC2:::log_likelihood_race_missing(pars, dadm, model, min_ll = min_ll)}
+  m$c_name=NULL
+  m
+}
+designLNR1 <- design(
+  factors=list(subjects=1,S=c("go","nogo")),Rlevels=c("go","nogo"),
+  matchfun=function(d) as.numeric(d$S)==as.numeric(d$lR),
+  model=LNRR,
+  formula=list(m~lM,s~1,t0~1)
+)
+
+# # Compare likelihoods
+# dadmC <- EMC2:::design_model(dat,designLNR)
+# dadmR <- EMC2:::design_model(dat,designLNR1)
+# lfun(p_vector,dadmC)
+# lfun(p_vector,dadmR,use_c = F)
+#
+# bad <- abs(llC-llRC)>1e-3
+# cbind(C=llC,R=llRC)[bad,]
+# dadmR[rep(bad,each=2),]
+#
+# debug(lfun)
+# debug(EMC2:::log_likelihood_race_missing)
+# debug(EMC2:::calc_ll_manager_pw)
+
+# Profiles
+print(profile_plot(dat,designLNR,p_vector,n_cores=1,layout=c(2,2)))
+print(profile_plot(dat,designLNR1,p_vector,n_cores=1,layout=c(2,2),use_c=FALSE))
+
+
+# Fitting
+emc <- make_emc(dat,designLNR,type="single")
+system.time({emcc <- fit(emc)})
+# Time difference of 8.482687 secs
+emc <- make_emc(dat,designLNR1,type="single")
+system.time({emcr <- fit(emc)})
+# Time difference of 8.684021 secs
+
+# Both good
+print(recovery(emcc,p_vector,selection="alpha"))
+print(recovery(emcr,p_vector,selection="alpha"))
+
+
+
 ### GNG LNR 3 Choice ----
 
 # Race models allow go/nogo with more than two choices, here with an LNR
 designLNR <- design(
-  factors=list(subjects=1,S=c("left","right","stop")),Rlevels=c("left","right","nogo"),
+  factors=list(subjects=1,S=c("left","right","nogo")),Rlevels=c("left","right","nogo"),
   matchfun=function(d) as.numeric(d$S)==as.numeric(d$lR),
   model=LNR,
   formula=list(m~lM,s~1,t0~1)
@@ -574,7 +761,7 @@ LNRR <- function() {
   m
 }
 designLNR1 <- design(
-  factors=list(subjects=1,S=c("left","right","stop")),Rlevels=c("left","right","nogo"),
+  factors=list(subjects=1,S=c("left","right","nogo")),Rlevels=c("left","right","nogo"),
   matchfun=function(d) as.numeric(d$S)==as.numeric(d$lR),
   model=LNRR,
   formula=list(m~lM,s~1,t0~1)
@@ -594,10 +781,10 @@ print(profile_plot(dat3,designLNR1,p_vector,n_cores=1,layout=c(2,2),use_c=FALSE)
 # Fitting
 emc <- make_emc(dat3,designLNR,type="single")
 system.time({emcc3 <- fit(emc)})
-# Time difference of 48.19057 secs
+# Time difference of 17.55192 secs
 emc <- make_emc(dat3,designLNR1,type="single")
 system.time({emcr3 <- fit(emc)})
-# Time difference of 5.302002 mins
+# Time difference of 1.581536 secs
 
 # Both good
 print(recovery(emcc3,p_vector,selection="alpha"))
@@ -643,23 +830,27 @@ tapply(is.infinite(datR$rt),datR$S,mean)
 plot(density(datC$rt), type='l', col='blue')
 lines(density(datR$rt), col='red')
 dadmC <- EMC2:::design_model(datC, designDDM)
-dadmR <- EMC2:::design_model(datR, designDDMGNG)
+# dadmR <- EMC2:::design_model(datR, designDDMGNG)
+dadmCR <- EMC2:::design_model(datC, designDDMGNG)
 
-c_ll <- lfun(p_vector, dadmC, use_c = TRUE)
-r_ll <- lfun(p_vector, dadmR, use_c = FALSE)
+lfun(p_vector, dadmC, use_c = TRUE)
+# lfun(p_vector, dadmR, use_c = FALSE)
+lfun(p_vector, dadmCR, use_c = FALSE)
 
 # Fitting
 emc <- make_emc(datC,designDDM,type="single")
 system.time({emcC <- fit(emc)})
+# Time difference of 9.945179 secs
 
-emc <- make_emc(datR,designDDMGNG,type="single")
+emc <- make_emc(datC,designDDMGNG,type="single")
 system.time({emcR <- fit(emc)})
+# Time difference of 1.363013 mins
 
 print(recovery(emcC,p_vector,selection="alpha"))
 print(recovery(emcR,p_vector,selection="alpha"))
 # save(dat,emcc,emcr,dat3,emcc3,emcr3,datR,emcrD,file="Censoring TEST/GNG.RData")
 
-## Quick test of the DDM UC path. It seems a lot worse than race models.
+## Quick test of the DDM UC path.
 designDDM <- design(Rlevels = c("left","right"),
                     factors=list(subjects=1,S=c("left","right")),
                     formula=list(v~S,a~1, Z~1, t0~1),
