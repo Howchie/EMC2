@@ -56,7 +56,7 @@ NumericMatrix c_map_p(NumericVector p_vector,
                       List trend,
                       const std::vector<TransformSpec>& full_specs,
                       bool drop_trend_pars=true) {
-  
+
   // Extract information about trends
   const bool has_trend = (trend.length() > 0);
   bool premap = false;
@@ -71,7 +71,7 @@ NumericMatrix c_map_p(NumericVector p_vector,
       if (ph == "pretransform") pretransform = true;
     }
   }
-  
+
   const int n_params = p_types.size();
   NumericMatrix pars(n_trials, n_params);
   colnames(pars) = p_types;
@@ -87,7 +87,7 @@ NumericMatrix c_map_p(NumericVector p_vector,
       p_lookup[Rcpp::as<std::string>(pv_names[i])] = p_vector[i];
     }
   }
-  
+
   // Prepare trend parameter columns when needed
   NumericMatrix trend_pars;
   LogicalVector trend_index(n_params, FALSE);
@@ -103,7 +103,7 @@ NumericMatrix c_map_p(NumericVector p_vector,
     trend_pnames = colnames(trend_pars);
     trend_index = contains_multiple(p_types, trend_pnames);
   }
-  
+
   // Map non-trend parameters from designs, applying premap trends if requested
   for (int i = 0; i < n_params; i++) {
     if (trend_index[i] == TRUE) continue; // skip trend parameters here
@@ -123,7 +123,7 @@ NumericMatrix c_map_p(NumericVector p_vector,
       pars(_, i) = pars(_, i) + p_mult_design;
     }
   }
-  
+
   // If using pretransform trends, copy the pre-transformed trend cols into pars by name
   if (has_trend && pretransform) {
     // Only fill columns for pretransform entries
@@ -131,7 +131,7 @@ NumericMatrix c_map_p(NumericVector p_vector,
     NumericMatrix trend_pars_tf = (tf_names.size() > 0) ? submat_rcpp_col_by_names(trend_pars, tf_names) : NumericMatrix(n_trials, 0);
     fill_trend_columns_for_pretransform(pars, p_types, trend_pars_tf);
   }
-  
+
   // If premap, trend parameter columns are not part of the final matrix
   if (has_trend && premap && drop_trend_pars) {
     CharacterVector names_premap = collect_trend_param_names_phase(trend, "premap");
@@ -408,7 +408,7 @@ double c_log_likelihood_ss(
     int idx_gf
 ) {
 
-  
+
   // initialise local variables
   const int n_out = expand.length();
   if (is_true(all(!is_ok))) {
@@ -425,13 +425,13 @@ double c_log_likelihood_ss(
   NumericVector LC = get_col_with_default(data, "LC", 0.0);
   bool has_lI = data.containsElementNamed("lI");
   IntegerVector lI = has_lI ? as<IntegerVector>(data["lI"]) : IntegerVector(lR.size(), 2);
-  
+
   // dimensional expectations: pars has one row per accumulator per trial
-  
+
   // compute log likelihoods (generalized, matching R's log_likelihood_race_ss)
   NumericVector unique_lR = unique(lR);
   const int n_acc = unique_lR.length();
-  
+
   NumericVector tt(n_acc);
   auto log_surv_mask = [&](double t, const NumericMatrix& Pcur,
                            const LogicalVector& mask) -> double {
@@ -446,7 +446,7 @@ double c_log_likelihood_ss(
   // n_trials equals data rows grouped by accumulators
   for (int trial = 0; trial < n_trials; trial++) {
     if (is_ok[trial * n_acc] != 1) { lls[trial] = min_ll; continue; }
-    
+
     int start_row = trial * n_acc;
     int end_row   = (trial + 1) * n_acc - 1;
     // basic bounds are guaranteed by correct n_trials passed into this function
@@ -465,10 +465,10 @@ double c_log_likelihood_ss(
     }
     int n_accG = sum(is_go);
     int n_accST = sum(is_st);
-    
+
     double tf = P(0, idx_tf);
     double gf = P(0, idx_gf);
-    
+
     double rt = RT[start_row];
     bool response_observed = R[start_row] != NA_INTEGER;
     // Use R_FINITE (not emc2_isfinite) — -ffast-math breaks emc2_isfinite for Inf values
@@ -486,13 +486,13 @@ double c_log_likelihood_ss(
         }
       }
     }
-    
+
     // Build rt vectors for go and st contexts
     NumericVector rt_go(n_acc, rt);
     double rt_st_val = rt - SSD[start_row];
     if (rt_st_val < 0.0) rt_st_val = 0.0;
     NumericVector rt_st(n_acc, rt_st_val);
-    
+
     // GO masks for current trial
     LogicalVector win_mask = winner[Range(start_row, end_row)];
     LogicalVector go_win_mask(n_acc); // winner and go
@@ -501,7 +501,7 @@ double c_log_likelihood_ss(
       go_win_mask[i] = (win_mask[i] && is_go[i]);
       go_loss_mask[i] = (!win_mask[i] && is_go[i]);
     }
-    
+
     if (!response_observed) {
       bool has_deadline = R_FINITE(uc) && !Rcpp::NumericVector::is_na(uc);
       if (!stop_signal_presented) {
@@ -535,19 +535,19 @@ double c_log_likelihood_ss(
         }
         continue;
       }
-      
+
       // Deadline-censored stop trial: "stop win by UC OR Go/St unfinished by UC"
       // GO survivor by UC
       double logS_go = (n_accG > 0) ? log_surv_mask(uc, P, is_go) : 0.0;
-      
+
       // stop survivor by UC (duration scale: UC-SSD, clamp at 0)
       double uc_eff = uc-SSD[start_row];
       if (!R_FINITE(uc_eff) || uc_eff <= 0.0) uc_eff = 0.0;
       bool stop_can_act = R_FINITE(uc_eff) && (uc_eff > 0.0);
-      
+
       double log_pstop = R_NegInf;
       double logS_stop = 0.0; // log(1)
-      
+
       // pStop(UC): stop finishes before GO and before UC-SSD
       // integral from SSD to UC (integrand function adds SSD to go accumulators so we use uc here)
       NumericMatrix P_go = submat_rcpp(P, is_go);
@@ -556,11 +556,11 @@ double c_log_likelihood_ss(
         log_pstop = stop_success_ptr(SSD[start_row], P_go, min_ll, uc_eff, 100, 1e-8, 1e-6, 8.0, 16.0);
         if (!R_FINITE(log_pstop)) log_pstop = R_NegInf;
       }
-      
+
       // Triggered, go-not-failed core no-response by UC:
       // p = pStop(UC) + S_go(UC)*S_stop(UC-SSD)
       double log_core_trig = log_sum_exp(log_pstop, logS_go + logS_stop);
-      
+
       if (n_accST == 0) {
         // No ST accumulators:
         // p = gf + (1-gf) * [ tf*S_go + (1-tf)*core_trig ]
@@ -568,17 +568,17 @@ double c_log_likelihood_ss(
         lls[trial] = log_sum_exp(std::log(gf), log1m(gf) + log_no_nogf);
         continue;
       }
-      
-      // Stop-triggered case - 
+
+      // Stop-triggered case -
       double logS_st = log_surv_mask(uc_eff, P, is_st);
       double log_trig = logS_st + log_sum_exp(std::log(gf), log1m(gf) + log_core_trig);
-      
+
       double log_tfbranch = log_sum_exp(std::log(gf), log1m(gf) + logS_go);
-      
+
       lls[trial] = log_mix(tf, log_tfbranch, log_trig);
       continue;
     }
-    
+
     // Response observed
     if (!stop_signal_presented) {
       // GO trial with response: (1-gf) * GO race ll
@@ -595,7 +595,7 @@ double c_log_likelihood_ss(
       lls[trial] = log1m(gf) + go_lprob;
       continue;
     }
-    
+
     // Stop trial with response
     if (response_is_go) {
       // GO wins on stop trial: (1-gf) * [ tf * go + (1-tf) * (go + stop_surv + st_loss) ]
@@ -663,7 +663,7 @@ double c_log_likelihood_ss(
       double log_pstop = stop_success_ptr(SSD[start_row], P_go, min_ll, rt_eff,
                                           100, 1e-8, 1e-6, 8.0, 16.0);
       if (!R_FINITE(log_pstop)) log_pstop = R_NegInf;
-      
+
       double st_base = st_winner_logpdf + st_loss_sum;
       double term_gf = std::log(gf) + st_base; // go failure -> only ST race
       double term_stop_win = log1m(gf) + log_pstop + st_base; // stop beats go -> only ST race
@@ -705,7 +705,7 @@ double c_log_likelihood_DDM_pt(const double* pars_cm,
     }
     d_DDM_Wien_raw(rt_ptr, R_ptr, pars_cm, n_trials, (int)p_idx.size(),
                    shared->all_ones_int_buf.data(), is_ok, shared->res_buf.data(), min_ll, p_idx);
-    
+
     const double* lls_ptr = shared->res_buf.data();
     double total_ll = 0.0;
     if (trial_ll_out != nullptr) {
@@ -731,11 +731,11 @@ double c_log_likelihood_DDM_pt(const double* pars_cm,
   // 2. Comprehensive Path: Handles truncation, censoring, and non-finite RTs
   const double* LT = shared->LT_vec.begin();
   const double* UT = shared->UT_vec.begin();
-  
+
   std::fill(shared->res_buf.begin(), shared->res_buf.end(), min_ll);
   shared->any_ok_finite = false;
   shared->any_ok_nonfinite = false;
-  
+
   for (int i = 0; i < n_trials; ++i) {
     if (R_FINITE(rt_ptr[i])) {
       shared->finite_mask_int[static_cast<size_t>(i)] = 1;
@@ -761,7 +761,7 @@ double c_log_likelihood_DDM_pt(const double* pars_cm,
     if (hi == R_NegInf) return R_NegInf;
     if (lo == R_NegInf) return hi;
     // Allow slight numerical noise where lo > hi due to integration error
-    if (hi <= lo + 1e-14) return R_NegInf; 
+    if (hi <= lo + 1e-14) return R_NegInf;
     return log_diff_exp(hi, lo);
   };
 
@@ -1034,12 +1034,12 @@ double c_log_likelihood_DDM(Rcpp::NumericMatrix pars, Rcpp::DataFrame data,
   Rcpp::IntegerVector R = data["R"];
   const int* expand_ptr = expand.begin();
   const int n_out = expand.length();
-  
+
   std::vector<int> ok_int(n_trials);
   for(int i=0; i<n_trials; ++i) ok_int[i] = is_ok[i] ? 1 : 0;
 
   // Use a fixed identity mapping for the old path
-  std::vector<int> p_idx = {0, 1, 2, 3, 4, 5, 6, 7}; 
+  std::vector<int> p_idx = {0, 1, 2, 3, 4, 5, 6, 7};
 
   return c_log_likelihood_DDM_pt(pars.begin(), rts.begin(), R.begin(),
                                  n_trials, expand_ptr, n_out, min_ll,
@@ -1099,7 +1099,7 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
   NumericMatrix pars(n_trials, p_types.length());
   p_vector.names() = p_names;
   LogicalVector is_ok(n_trials);
-  
+
   // Once (outside the main loop over particles):
   NumericMatrix minmax = bounds["minmax"];
   CharacterVector mm_names = colnames(minmax);
@@ -1180,7 +1180,7 @@ NumericVector calc_ll(NumericMatrix p_matrix, DataFrame data, NumericVector cons
     int n_lR = unique(lR).length();
 
     const bool all_finite_trials = read_all_finite_trials_attr(data, n_trials, n_lR);
-      
+
     for (int i = 0; i < n_particles; ++i) {
         p_vector = p_matrix(i, Rcpp::_);
         p_vector.names() = p_names;
@@ -1309,7 +1309,7 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
       Rcpp::IntegerVector R_col = data["R"];
       ddm_shared.shared_R_levels = R_col.attr("levels");
       ddm_shared.valid = true;
-      
+
       const std::vector<std::string> ddm_names = {"v", "a", "sv", "t0", "st0", "s", "Z", "SZ"};
       for(const auto& nm : ddm_names) {
         auto it = param_table_template.name_to_base_idx.find(nm);
@@ -1522,7 +1522,7 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
       if (i > 0) {
         param_table_template.fill_from_particle_row(particle_matrix_pt, i, pm_col_to_base_idx);
       }
-      
+
       update_pt_only(param_table_template, designs, trend_runtime_ptr, transform_specs_pt);
       if (i == 0) {
         bound_specs = make_bound_specs_pt(minmax, mm_names, param_table_template, bounds);
@@ -1752,11 +1752,11 @@ double gsl_f_race_scalar(double t, void* p) {
   const int w = P->winner_idx0;
   if (w < 0 || w >= P->n_lR) return 0.0;
   if (!P->isok[w]) return 0.0;
-  
+
   const double* par_w = P->pars + static_cast<size_t>(w) * P->n_par;
   double out = P->pdf1(t, par_w, P->ctx);
   if (!(out > 0.0) || !emc2_isfinite(out)) return 0.0;
-  
+
   for (int j = 0; j < P->n_lR; ++j) {
     if (j == w) continue;
     if (!P->isok[j]) return 0.0;
@@ -1782,7 +1782,7 @@ inline double log_pIO_rowmajor(const double* pars_rowmajor,
     const double v = par_k[0];
     const double sv = par_k[1];
     if (!emc2_isfinite(v) || !emc2_isfinite(sv) || sv <= 0.0) return R_NegInf;
-    const double ll = pnorm_std(-v / sv, true, true); 
+    const double ll = pnorm_std(-v / sv, true, true);
     if (!emc2_isfinite(ll)) return R_NegInf;
     log_p += ll;
   }
@@ -1924,7 +1924,7 @@ double integrate_for_kth_winner_rowmajor_cpp(
     const GslIntegrationControls& gsl_ctl,
     void* model_specific_context,
     gsl_integration_workspace* w) {
-  
+
   // Integrate the k-th winner density over an interval [low, upp] for a single
   // unique trial, using rowmajor buffers (raw pointers). This is the fast path
   // used by truncation/censoring normalisers and by go/no-go branches; it avoids
@@ -1932,7 +1932,7 @@ double integrate_for_kth_winner_rowmajor_cpp(
   if (low >= upp && !(low == 0 && upp == R_PosInf)) return R_NegInf;
   if (k_winner_idx < 1 || k_winner_idx > n_lR_j) return R_NegInf;
   if (w == nullptr) Rcpp::stop("integrate_for_kth_winner_rowmajor_cpp: GSL workspace is null.");
-  
+
   gsl_function F;
   gsl_race_params_scalar params_struct;
   params_struct.pars = pars_rowmajor;
@@ -1943,10 +1943,10 @@ double integrate_for_kth_winner_rowmajor_cpp(
   params_struct.pdf1 = pdf1;
   params_struct.cdf1 = cdf1;
   params_struct.ctx = model_specific_context;
-  
+
   F.function = &gsl_f_race_scalar;
   F.params = &params_struct;
-  
+
   gsl_error_handler_t* old_handler = gsl_set_error_handler_off();
   int status;
   double result = 0.0;
@@ -1968,7 +1968,7 @@ double integrate_for_kth_winner_rowmajor_cpp(
   if (status != GSL_SUCCESS) {
     status = run_integral(gsl_ctl.retry_abs_tol, gsl_ctl.retry_rel_tol, gsl_ctl.retry_limit);
   }
-  
+
   gsl_set_error_handler(old_handler);
   if (status != GSL_SUCCESS) return R_NegInf;
   if (!(result > 0.0) || !R_FINITE(result)) return R_NegInf;
@@ -1997,11 +1997,11 @@ double get_trunc_normaliser_rowmajor_cpp(const double* pars_rowmajor,
     if (!R_FINITE(logS_LT)) return R_NegInf;
   }
   if (UT == R_PosInf) return logS_LT;
-  
+
   const double logS_UT = log_survivor_rowmajor(UT, pars_rowmajor, isok_int, n_lR, n_par, cdf1, model_specific_context);
   double logP = log_diff_exp(logS_LT, logS_UT);
   if (R_FINITE(logP) && logP > log_prob_eps) return logP;
-  
+
   // Only falls back to GSL integration if the analytic trick fails (e.g. due to catastrophic cancellation)
   gsl_integration_workspace* w = ensure_gsl_workspace(workspace);
   double log_total = R_NegInf;
@@ -2115,10 +2115,10 @@ double c_log_likelihood_race(
     }
   }
   if (n_trials == 0) return 0.0; // No data, no likelihood
-  
+
   if (n_lR <= 0) Rcpp::stop("c_log_likelihood_race: n_lR must be positive and correctly determined before this call.");
   if (n_trials % n_lR != 0) Rcpp::stop("c_log_likelihood_race: dadm nrows not a multiple of n_lR.");
-  
+
   // Here we check for a pC parameter corresponding to probability of contaminant OMISSION.
   // The column index is data-structure-fixed so we cache it in shared state after the
   // first search.  The "all zeroes" check still runs per particle (values change).
@@ -2153,7 +2153,7 @@ double c_log_likelihood_race(
       use_pC = false;
     }
   }
-  
+
   int n_unique_trials = n_trials / n_lR;
   // Use std::vector to avoid per-particle R-heap allocation overhead.
   std::vector<double> ll_unique(static_cast<size_t>(n_unique_trials), min_ll);
@@ -2165,7 +2165,7 @@ double c_log_likelihood_race(
       pC_values[static_cast<size_t>(j)] = pars_cm_ptr[static_cast<size_t>(pc_col) * n_trials + j * n_lR];
     }
   }
-  
+
   // Parameter matrix and validity vector checks
   if (pars.nrow() != n_trials) {
     Rcpp::Rcout << "pars.nrow(): " << pars.nrow() << ", n_trials: " << n_trials << std::endl;
@@ -2250,7 +2250,7 @@ double c_log_likelihood_race(
   void* dense_ctx_ptr = static_cast<void*>(&dense_ctx);
   bool gng=ctx->gng;
   bool posdrift=ctx->use_posdrift;
-  
+
   // log_surv_cm: log S(t) = sum_k log(1-F_k(t)) read directly from column-major pars.
   // Used by the "other trials" path for analytical survivor calls — avoids the
   // row-major copy that fill_trial_buffers performs.
@@ -2542,14 +2542,14 @@ double c_log_likelihood_race(
     const double LCj = LC[start_row_idx];
     const double UCj = UC[start_row_idx];
     const bool has_trunc = (LTj != 0.0 || UTj != R_PosInf);
-    
+
     const bool needs_model = (rt_j == R_NegInf) || (rt_j == R_PosInf) || Rcpp::NumericVector::is_na(rt_j) ||
       (R_FINITE(rt_j) && rt_j > 0.0 && R_j_idx == NA_INTEGER);
     if (!needs_model) {
       ll_unique[unique_trial_idx] = min_ll;
       continue;
     }
-    
+
     // Lazy row-major buffer fill — only when GSL integration or row-major
     // helper functions are actually needed.  Pure survivor / CDF calls use
     // log_surv_cm which reads column-major directly.
@@ -2713,11 +2713,12 @@ double c_log_likelihood_race(
       if (!R_FINITE(log_Z_this)) current_ll_val = min_ll;
       else current_ll_val -= log_Z_this;
     }
-    
+
     ll_unique[unique_trial_idx] = std::max(min_ll, current_ll_val);
   }
-  
-  
+
+//  Environment::global_env()["llC"] = ll_unique;
+
   // --- Summation of log-likelihoods for all unique trials ---
   // pC modification (if any) is kept in a separate pass so the final summation
   // loop is a pure reduction — allowing #pragma omp simd to vectorize it.
@@ -2782,6 +2783,6 @@ double c_log_likelihood_race(
       }
     }
   }
-  
+
   return total_ll;
 }
