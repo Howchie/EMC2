@@ -91,7 +91,7 @@ inline double plnorm_std(double x, double meanlog, double sdlog,
     if (log_p) return lower_tail ? R_NegInf : 0.0;
     return lower_tail ? 0.0 : 1.0;
   }
-  if (!std::isfinite(sdlog) || !(sdlog > 0.0)) {
+  if (!emc2_isfinite(sdlog) || !(sdlog > 0.0)) {
     return R::plnorm(x, meanlog, sdlog, lower_tail, log_p);
   }
   const double z = (std::log(x) - meanlog) / sdlog;
@@ -101,7 +101,7 @@ inline double plnorm_std(double x, double meanlog, double sdlog,
 inline double dlnorm_std(double x, double meanlog, double sdlog,
                          bool log_p = false) {
   if (x <= 0.0) return log_p ? R_NegInf : 0.0;
-  if (!std::isfinite(sdlog) || !(sdlog > 0.0)) {
+  if (!emc2_isfinite(sdlog) || !(sdlog > 0.0)) {
     return R::dlnorm(x, meanlog, sdlog, log_p);
   }
   const double z = (std::log(x) - meanlog) / sdlog;
@@ -111,7 +111,7 @@ inline double dlnorm_std(double x, double meanlog, double sdlog,
 
 inline double lnorm_log_surv_std(double x, double meanlog, double sdlog) {
   if (x <= 0.0) return 0.0;
-  if (!std::isfinite(sdlog) || !(sdlog > 0.0)) {
+  if (!emc2_isfinite(sdlog) || !(sdlog > 0.0)) {
     const double cdf = R::plnorm(x, meanlog, sdlog, true, false);
     if (cdf >= 1.0) return R_NegInf;
     if (cdf <= 0.0) return 0.0;
@@ -126,10 +126,10 @@ inline double pigt0(double t, double k, double l){
   double mu = k / l;
   double lambda = k * k;
 
-  double p1 = pnorm_std(std::sqrt(lambda/t) * (1. + t/mu), false, false);
+  double p1 = pnorm_std(std::sqrt(lambda/t) * (1. + t/mu), false, true);
   double p2 = pnorm_std(std::sqrt(lambda/t) * (1. - t/mu), false, false);
 
-  return std::exp(2.0 * k * l + std::log(p1)) + p2;
+  return std::exp(2.0 * k * l + p1) + p2;
 }
 
 inline double digt0(double t, double k, double l){
@@ -149,12 +149,12 @@ inline double pigt_impl(double t, double k = 1, double l = 1, double a = .1, dou
   if (a < threshold) return pigt0(t, k, l);
 
   const double sqt = std::sqrt(t);
-  const double lgt = std::log(t);
 
   if (std::abs(l) < threshold) {
     const double p1 = pnorm_std((k + a) / sqt, true, false);
     const double p2 = pnorm_std((k - a) / sqt, true, false);
-    const double t1 = sqt * (std::exp(-0.5 * (k - a) * (k - a) / t) - std::exp(-0.5 * (k + a) * (k + a) / t)) / FAST_NORM_RT2PI;
+    const double diff_sq = (k + a) * (k + a) - (k - a) * (k - a);
+    const double t1 = sqt * std::exp(-0.5 * (k - a) * (k - a) / t) * (-std::expm1(-0.5 * diff_sq / t)) / FAST_NORM_RT2PI;
     return (t1 + (k + a) * (1.0 - p1) - (k - a) * (1.0 - p2)) / a;
   }
 
@@ -178,9 +178,9 @@ inline double digt_impl(double t, double k = 1., double l = 1., double a = .1, d
   if (a < threshold) return digt0(t, k, l);
 
   if (std::abs(l) < threshold) {
-    const double term1 = std::exp(- (k - a) * (k - a) / (2. * t));
-    const double term2 = std::exp(- (k + a) * (k + a) / (2. * t));
-    return std::exp(-.5 * (M_LN2 + L_PI + std::log(t)) + std::log(term1 - term2) - M_LN2 - std::log(a));
+    const double diff_sq = (k + a) * (k + a) - (k - a) * (k - a);
+    const double log_term = -0.5 * (k - a) * (k - a) / t + std::log(-std::expm1(-0.5 * diff_sq / t));
+    return std::exp(-0.5 * (LOG_2PI + std::log(t)) + log_term - std::log(2.0 * a));
   }
 
   const double sqt = std::sqrt(t);

@@ -43,10 +43,13 @@ pLU <- function(LT,LC,UC,UT,ps,dadm,model)
 log_surv_race <- function(t, ps, model, is_defective = FALSE) {
   # log S(t) for a race model, S(t) = prod_k (1 - F_k(t))
   if (is.infinite(t)) {
-    if (is_defective) {
-      return(sum(pnorm(0, ps[, "v"], ps[, "sv"], log.p = TRUE)))
-    }
-    return(-Inf)
+    if (!is_defective) return(-Inf)
+    # For defective distributions pfun(Inf) returns the finite hitting mass,
+    # so 1 - pfun(Inf) is the omission probability per accumulator.
+    p <- model$pfun(rep(Inf, nrow(ps)), ps)
+    if (any(is.na(p)) || any(!is.finite(p))) return(NA_real_)
+    p <- pmax(0, pmin(p, 1))
+    return(sum(log1p(-p)))
   }
   p <- model$pfun(rep(t, nrow(ps)), ps)
   if (any(is.na(p)) || any(!is.finite(p))) return(NA_real_)

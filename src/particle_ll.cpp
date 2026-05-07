@@ -556,7 +556,7 @@ double c_log_likelihood_ss(
     
     double rt = RT[start_row];
     bool response_observed = R[start_row] != NA_INTEGER;
-    // Use R_FINITE (not std::isfinite) — -ffast-math breaks std::isfinite for Inf values
+    // Use R_FINITE (not emc2_isfinite) — -ffast-math breaks emc2_isfinite for Inf values
     bool stop_signal_presented = emc2_isfinite(SSD[start_row]);
     // Added UC handling
     double uc = UC[start_row];
@@ -1995,7 +1995,7 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
           for (int j = 0; j < n_trials; ++j) {
             if (!isok_int_fp[j]) continue;
             const double sv = sv_col[j];
-            if (std::isfinite(sv) && std::fabs(sv) > 1e-10) { sv_zero = false; break; }
+            if (emc2_isfinite(sv) && std::fabs(sv) > 1e-10) { sv_zero = false; break; }
           }
           // For any Erlang variant, disable kill bookkeeping when all lambdas are zero
           // so kernels fall through to standard Wald without computing mixtures.
@@ -2006,7 +2006,7 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
               if (!isok_int_fp[j]) continue;
               const double lg = lambda_g_col[j];
               const double lk = lambda_k_col[j];
-              if ((std::isfinite(lg) && lg > 1e-12) || (std::isfinite(lk) && lk > 1e-12)) {
+              if ((emc2_isfinite(lg) && lg > 1e-12) || (emc2_isfinite(lk) && lk > 1e-12)) {
                 lambda_active = true;
                 break;
               }
@@ -2315,7 +2315,7 @@ inline double log_survivor_rowmajor(double t,
         double cdf_inf = cdf1(R_PosInf, par_k, ctx);
         cdf_inf = clamp_cdf01_race(cdf_inf);
         const double ll = safe_log1m_race(cdf_inf);
-        if (!std::isfinite(ll)) return R_NegInf;
+        if (!emc2_isfinite(ll)) return R_NegInf;
         logS += ll;
       }
       return logS;
@@ -3707,7 +3707,7 @@ double c_log_likelihood_race(
       if (!isok[row]) continue;
       const double lk = lambda_k_ptr ? lambda_k_ptr[row] : 0.0;
       const double lg = lambda_g_ptr ? lambda_g_ptr[row] : 0.0;
-      if ((std::isfinite(lk) && lk > 1e-12) || (std::isfinite(lg) && lg > 1e-12)) {
+      if ((emc2_isfinite(lk) && lk > 1e-12) || (emc2_isfinite(lg) && lg > 1e-12)) {
         lambda_active = true; break;
       }
     }

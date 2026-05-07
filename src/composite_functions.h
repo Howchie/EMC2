@@ -383,7 +383,7 @@ inline double safe_log1m_race(double p) {
 
 // Clamp x to be at least floor_val (for denominators / log arguments that must be > 0).
 inline double clamp_pos(double x, double floor_val = 1e-300) {
-  return (std::isfinite(x) && x > floor_val) ? x : floor_val;
+  return (emc2_isfinite(x) && x > floor_val) ? x : floor_val;
 }
 
 // Safe log: clamps argument away from zero before taking log.
@@ -397,7 +397,7 @@ struct signed_log {
 };
 
 inline signed_log make_signed_log(double log_abs, int sign) {
-  if (sign == 0 || log_abs == R_NegInf || !std::isfinite(log_abs)) {
+  if (sign == 0 || log_abs == R_NegInf || !emc2_isfinite(log_abs)) {
     return {R_NegInf, 0};
   }
   return {log_abs, sign > 0 ? 1 : -1};
@@ -405,7 +405,7 @@ inline signed_log make_signed_log(double log_abs, int sign) {
 
 inline signed_log signed_from_real(double x) {
   constexpr double signed_log_zero_tol = 1e-12;
-  if (!std::isfinite(x)) return make_signed_log(NA_REAL, 0);
+  if (!emc2_isfinite(x)) return make_signed_log(NA_REAL, 0);
   if (std::abs(x) <= signed_log_zero_tol) return make_signed_log(R_NegInf, 0);
   return make_signed_log(std::log(std::abs(x)), x > 0.0 ? 1 : -1);
 }

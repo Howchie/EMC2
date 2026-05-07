@@ -19,6 +19,23 @@ Authors@R:
       person("Przemyslaw", "Sliwa", role=c("ctb")),
       person("Jason H.", "Stover", role=c("ctb")),
 	    person("Zachary L.", "Howard", role=c("ctb")))
+Author: Niek Stevenson [aut, cre],
+    Michelle Donzallaz [aut],
+    Andrew Heathcote [aut],
+    Steven Miletić [aut],
+    Luke Strickland [ctb],
+    Frank Hezemans [ctb],
+    Raphael Hartmann [ctb],
+    Karl C. Klauer [ctb],
+    Steven G. Johnson [ctb],
+    Jean M. Linhart [ctb],
+    Brian Gough [ctb],
+    Gerard Jungman [ctb],
+    Rudolf Schuerer [ctb],
+    Przemyslaw Sliwa [ctb],
+    Jason H. Stover [ctb],
+    Zachary L. Howard [ctb]
+Maintainer: Niek Stevenson <niek.stevenson@gmail.com>
 Description: Fit Bayesian (hierarchical) cognitive models
     using a linear modeling language interface using particle Metropolis Markov
     chain Monte Carlo sampling with Gibbs steps. The diffusion decision model (DDM), 

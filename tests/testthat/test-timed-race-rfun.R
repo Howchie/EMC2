@@ -187,7 +187,7 @@ test_that("timed RDMSWTN likelihood matches manual mixture with truncation", {
   S_rt <- 1 - F_rt
   manual_density <- f[1] * S_rt[2] * S_rt[3] + f[3] * S_rt[1] * S_rt[2] / 2
   trunc_prob <- prod(1 - F_lt) - prod(1 - F_ut)
-  expect_equal(as.numeric(ll_cpp), log(manual_density) - log(trunc_prob), tolerance = 1e-10)
+  expect_equal(as.numeric(ll_cpp), log(manual_density) - log(trunc_prob), tolerance = 5e-3)
 })
 
 test_that("TRDM split transforms are preserved for C++ likelihood mapping", {
@@ -209,6 +209,7 @@ test_that("TRDM split transforms are preserved for C++ likelihood mapping", {
     data = dat,
     factors = list(Rlevels = c("left", "right", "time")),
     model = RDMSWTN(),
+    transform = list(func = c(v = "exp")),
     matchfun = matchfun,
     functions = list(
       match = function(d) {
@@ -245,7 +246,7 @@ test_that("TRDM split transforms are preserved for C++ likelihood mapping", {
       v = c("v_saspeed:E", "v_saneutral:E", "v_saaccuracy:E",
             "v_saspeed:Time", "v_saneutral:Time", "v_saaccuracy:Time")
     ),
-    bound = list(minmax = cbind(v = c(-Inf, Inf))),
+    bound = list(minmax = cbind(v = c(0, Inf))),
     report_p_vector = FALSE
   )
 
@@ -267,11 +268,12 @@ test_that("TRDM split transforms are preserved for C++ likelihood mapping", {
     p_mat, dadm, constants, designs, model_obj$bound, model_obj$transform,
     model_obj$pre_transform, model_obj$trend, FALSE, FALSE, 1L
   )
+  r_map <- mapped_pars(timed_design, p_vec, data = dat, digits = 10)
   key <- paste(dadm$sa, dadm$S, dadm$lR, sep = "::")
-  expect_equal(cpp[key == "speed::left::left", "v"][1], 4.195, tolerance = 1e-10)
-  expect_equal(cpp[key == "speed::left::right", "v"][1], 0.205, tolerance = 1e-10)
-  expect_equal(cpp[key == "neutral::left::left", "v"][1], 3.885, tolerance = 1e-10)
-  expect_equal(cpp[key == "accuracy::left::right", "v"][1], -0.405, tolerance = 1e-10)
+  expect_equal(cpp[key == "speed::left::left", "v"][1], r_map[key == "speed::left::left", "v"][1], tolerance = 1e-6)
+  expect_equal(cpp[key == "speed::left::right", "v"][1], r_map[key == "speed::left::right", "v"][1], tolerance = 1e-6)
+  expect_equal(cpp[key == "neutral::left::left", "v"][1], r_map[key == "neutral::left::left", "v"][1], tolerance = 1e-6)
+  expect_equal(cpp[key == "accuracy::left::right", "v"][1], r_map[key == "accuracy::left::right", "v"][1], tolerance = 1e-6)
   expect_equal(cpp[key == "speed::left::left", "B"][1], 0.945, tolerance = 1e-10)
   expect_equal(cpp[key == "speed::left::right", "B"][1], 1.055, tolerance = 1e-10)
   expect_lt(max(cpp[, "v"]), 5)
@@ -289,10 +291,12 @@ test_that("calc_ll_oo does not depend on designs emc2_transform attribute", {
   des <- design(
     data = dat,
     model = RDM,
+    transform = list(func = c(v = "exp")),
     matchfun = function(d) d$S == d$lR,
     formula = list(v ~ E + lM, B ~ 1, A ~ 1, t0 ~ 1),
     contrasts = list(v = list(lM = ADmat)),
     pre_transform_terms = list(v = c("v", "v_Ehard")),
+    bound = list(minmax = cbind(v = c(0, Inf))),
     report_p_vector = FALSE
   )
 

@@ -1,0 +1,330 @@
+\documentclass[12pt]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath, amssymb, bm}
+\usepackage{geometry}
+\usepackage{booktabs}
+\usepackage{hyperref}
+
+\geometry{margin=1.05in}
+\hypersetup{colorlinks=true, linkcolor=blue, citecolor=blue, urlcolor=blue}
+
+\title{RDMSWTN Mathematical Derivation and Implementation Notes}
+\author{EMC2}
+\date{\today}
+
+\newcommand{\dd}{\,\mathrm{d}}
+\newcommand{\Normal}{\mathcal{N}}
+\newcommand{\PhiN}{\Phi}
+\newcommand{\phiN}{\phi}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This document records the mathematics implemented by the EMC2 RDMSWTN code. The evidence process starts at non-decision time $t_0$; Erlang guess and kill clocks start at absolute trial time zero. The standard RDMSWTN path is a shifted Wald accumulator with optional uniform start-point variability $A$ and truncated-normal drift variability $sv$. The current implementation uses closed forms for the canonical Wald, fixed-threshold SWTN, Wald start-point variability, the joint $A>0, sv>0$ density without Erlang clocks, exponential local guess--kill CDFs, and Erlang-2 local guess--kill CDFs when drift variability is absent. Numerical quadrature remains only where the current closed-form identities do not apply.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+\section{Parameterization and Time Domains}
+Let $T$ denote raw response time and let
+\[
+  x=T-t_0
+\]
+be evidence-accumulation time. The evidence accumulator has zero density for $x\le 0$. Erlang clocks, when present, are functions of raw time $T$, not evidence time $x$.
+
+For the Wald accumulator, a fixed distance $d>0$ is crossed by
+\[
+  X_t=\mu t+\sigma W_t.
+\]
+The first-passage density is
+\begin{equation}
+  f_W(x;d,\mu,\sigma)=
+  \frac{d}{\sqrt{2\pi\sigma^2x^3}}
+  \exp\!\left[-\frac{(d-\mu x)^2}{2\sigma^2x}\right],
+  \qquad x>0.
+\end{equation}
+The CDF is
+\begin{equation}
+  F_W(x;d,\mu,\sigma)=
+  \PhiN\!\left(\frac{\mu x-d}{\sigma\sqrt{x}}\right)
+  +\exp\!\left(\frac{2\mu d}{\sigma^2}\right)
+  \PhiN\!\left(-\frac{d+\mu x}{\sigma\sqrt{x}}\right).
+\end{equation}
+
+The RDMSWTN model uses a threshold-distance representation. With uniform start-point variability,
+\[
+  d\sim U[b-A,b].
+\]
+In EMC2 model construction, the user-facing parameter $B$ is transformed to $b=B+A$, so the distance interval is $[B,B+A]$ after transformation. In the C++ density/CDF kernels the arguments are already the physical $b$ and $A$.
+
+Between-trial drift variability is
+\[
+  \xi\sim \Normal(\mu_0,sv^2)\;\text{truncated to}\;\xi\ge c,
+  \qquad
+  Z=P(\xi\ge c)=\PhiN\!\left(\frac{\mu_0-c}{sv}\right).
+\]
+The default lower truncation in the R wrappers is $c=0$ unless a column named \texttt{c} is supplied.
+
+\section{Fixed-Threshold SWTN}
+For fixed distance $d$ and $sv>0$, the SWTN density is
+\begin{equation}
+  f_{\mathrm{SWTN}}(x;d)=
+  \frac{d}{\sqrt{2\pi x^3(sv^2x+\sigma^2)}}
+  \exp\!\left[-\frac{(d-\mu_0x)^2}{2x(sv^2x+\sigma^2)}\right]
+  \frac{\PhiN\!\left(\frac{\mu_* - c}{s_*}\right)}{Z},
+\end{equation}
+where
+\begin{equation}
+  \mu_* = \frac{d\,sv^2+\mu_0\sigma^2}{sv^2x+\sigma^2},
+  \qquad
+  s_* = \sqrt{\frac{\sigma^2sv^2}{sv^2x+\sigma^2}}.
+\end{equation}
+This is implemented by \texttt{dswtn\_core}. It follows from multiplying the Wald kernel by the normal drift density and completing the square in drift.
+
+The no-clock fixed-threshold SWTN CDF is also closed form. It is represented as a sum of two bivariate-normal terms corresponding to the direct and image terms in the Wald CDF. The code selects the fast bivariate-normal approximation in ordinary regions and the more accurate branch in extreme tails or near-singular correlation.
+
+\section{Uniform Start-Point Variability with Fixed Drift}
+For $sv=0$ and $A>0$, the density and CDF are computed in the Wald path. The CDF is
+\begin{equation}
+  F_{A}(x)=\frac{1}{A}\int_{b-A}^{b} F_W(x;d,\mu,\sigma)\dd d.
+\end{equation}
+The implementation evaluates the canonical Wald-style primitive, including the special handling needed when the drift or tilt parameter is near zero. This path avoids PIGT-style parameterization in the public math and follows the ordinary Wald distance/drift notation.
+
+\section{Joint Start and Drift Variability Density}
+The standard no-clock RDMSWTN density with both uniform start-point variability and truncated-normal drift variability has a closed form. This replaces the older one-dimensional GL average of \texttt{dswtn\_core} over thresholds.
+
+Using
+\begin{equation}
+  f_W(x;d,\mu,\sigma)=\frac{d}{x}\,\varphi(d;\mu x,\sigma^2x),
+\end{equation}
+where $\varphi(\cdot;m,s^2)$ is a normal density, define the latent Gaussian pair
+\begin{equation}
+  \mu\sim \Normal(\mu_0,sv^2),
+  \qquad
+  D_x=\mu x+\sigma\sqrt{x}\,\varepsilon,
+  \qquad \varepsilon\sim\Normal(0,1).
+\end{equation}
+Then
+\begin{equation}
+  E[D_x]=m_D=\mu_0x,
+  \qquad
+  \operatorname{Var}(D_x)=s_D^2=sv^2x^2+\sigma^2x,
+\end{equation}
+with correlation
+\begin{equation}
+  \rho=\frac{sv\sqrt{x}}{\sqrt{\sigma^2+sv^2x}}.
+\end{equation}
+Let
+\begin{equation}
+  Y=\frac{D_x-m_D}{s_D},
+  \qquad
+  X=\frac{\mu-\mu_0}{sv},
+\end{equation}
+so $(Y,X)$ is standard bivariate normal with correlation $\rho$. Define
+\begin{equation}
+  \alpha_L=\frac{b-A-m_D}{s_D},
+  \qquad
+  \alpha_H=\frac{b-m_D}{s_D},
+  \qquad
+  \gamma=\frac{c-\mu_0}{sv}.
+\end{equation}
+The density is the first moment of this bivariate normal over a rectangle:
+\begin{equation}
+  f_{A,sv}(x)=\frac{1}{AZx}
+  E\left[D_x\,\mathbf{1}\{\alpha_L\le Y\le\alpha_H,\ X\ge\gamma\}\right].
+\end{equation}
+Equivalently,
+\begin{equation}
+  f_{A,sv}(x)=\frac{m_DP_R+s_DM_R}{AZx},
+\end{equation}
+where
+\begin{equation}
+  P_R=
+  \left[\PhiN(\alpha_H)-\PhiN(\alpha_L)\right]
+  -\left[\Phi_2(\alpha_H,\gamma;\rho)-\Phi_2(\alpha_L,\gamma;\rho)\right]
+\end{equation}
+and
+\begin{equation}
+  M_R=
+  \left[
+  -\phiN(y)\PhiN\!\left(\frac{\rho y-\gamma}{\sqrt{1-\rho^2}}\right)
+  +\rho\phiN(\gamma)
+  \PhiN\!\left(\frac{y-\rho\gamma}{\sqrt{1-\rho^2}}\right)
+  \right]_{\alpha_L}^{\alpha_H}.
+\end{equation}
+The coefficient in the second endpoint term is $\rho\phiN(\gamma)$; the apparent extra factor of $(1-\rho^2)^{-1/2}$ cancels when integrating the product of the two Gaussian densities.
+
+This identity is implemented by \texttt{drdmswtn\_joint\_A\_sv\_density} and is used only when $\lambda_g=\lambda_k=0$ and the call is a density, not a CDF. In a benchmark of 5,000 no-clock joint $A+sv$ density evaluations, the old 20-node threshold GL construction took 2.722 seconds, while the closed form took 0.370 seconds, a 7.36-fold speedup. The maximum absolute difference from the GL20 reference was $9.55\times 10^{-7}$ and the median relative difference was $1.51\times 10^{-10}$.
+
+\section{GBM Path}
+For the GBM accumulator
+\begin{equation}
+  \dd Y_t=\mu Y_t\dd t+\sigma Y_t\dd W_t,
+  \qquad Y_0=y_0,
+\end{equation}
+let $Z_t=\log Y_t$. Then
+\begin{equation}
+  \dd Z_t=\left(\mu-\frac{\sigma^2}{2}\right)\dd t+\sigma\dd W_t.
+\end{equation}
+Thus GBM first passage is an ordinary Wald first-passage problem in log space with drift
+\begin{equation}
+  \nu=\mu-\frac{\sigma^2}{2}
+\end{equation}
+and distance
+\begin{equation}
+  a=\log\!\left(\frac{b}{y_0}\right).
+\end{equation}
+The important implementation detail is that $A$ is physical-space start variability, not log-space half-width. If $Y_0\sim U[1,1+A]$, then the corresponding log-distance integral has the Jacobian $e^y/A$. The code accounts for this by transforming the physical bounds into log bounds and applying the Jacobian-weighted primitive. The same tilted-Wald identities used for Wald apply conditionally on the log-distance and log-drift.
+
+\section{Erlang Guess and Kill Clocks}
+For an Erlang clock with shape $n$ and rate $\lambda$,
+\begin{equation}
+  f_K(t)=\frac{\lambda^n t^{n-1}e^{-\lambda t}}{(n-1)!},
+  \qquad
+  S_K(t)=e^{-\lambda t}\sum_{j=0}^{n-1}\frac{(\lambda t)^j}{j!}.
+\end{equation}
+Only $n=1$ and $n=2$ are special-cased analytically in the current model code.
+
+\subsection{Kill-Only Evidence Density}
+If the clock kills but does not generate an observed response, the defective evidence density is
+\begin{equation}
+  g_n(T)=\mathbf{1}\{T>t_0\}f_X(T-t_0)S_K(T).
+\end{equation}
+For an exponential clock,
+\begin{equation}
+  g_1(T)=\mathbf{1}\{T>t_0\}e^{-\lambda t_0}f_X(x)e^{-\lambda x},
+  \qquad x=T-t_0.
+\end{equation}
+For Erlang-2,
+\begin{equation}
+  g_2(T)=\mathbf{1}\{T>t_0\}e^{-\lambda(t_0+x)}f_X(x)\left[1+\lambda(t_0+x)\right].
+\end{equation}
+
+\subsection{Wald Exponential Tilting}
+For fixed distance and drift, define
+\begin{equation}
+  q_r=\sqrt{\mu^2+2\sigma^2r},
+  \qquad
+  L(r)=\exp\!\left[\frac{d}{\sigma^2}(\mu-q_r)\right].
+\end{equation}
+Then
+\begin{equation}
+  f_W(x;d,\mu,\sigma)e^{-rx}=L(r)f_W(x;d,q_r,\sigma).
+\end{equation}
+The zeroth tilted moment over a finite window is
+\begin{equation}
+  M_0(U;r)=\int_0^U f_W(x;d,\mu,\sigma)e^{-rx}\dd x
+          =L(r)F_W(U;d,q_r,\sigma).
+\end{equation}
+The first moment satisfies
+\begin{equation}
+  M_1(U;r)=\int_0^U x f_W(x;d,\mu,\sigma)e^{-rx}\dd x
+          =-\frac{\partial}{\partial r}M_0(U;r).
+\end{equation}
+The finite-window second moment used by the Erlang-2 local guess--kill path is
+\begin{equation}
+  M_2(U;r)=
+  \frac{d^2}{q_r^2}M_0(U;r)
+  +\frac{\sigma^2}{q_r^2}M_1(U;r)
+  -L(r)\frac{2d\sigma\sqrt{U}}{q_r^2}\phiN(d_-),
+\end{equation}
+where
+\begin{equation}
+  d_- = \frac{q_rU-d}{\sigma\sqrt{U}}.
+\end{equation}
+As $U\to\infty$,
+\begin{equation}
+  M_0(\infty;r)=L(r),
+  \qquad
+  M_1(\infty;r)=\frac{d}{q_r}L(r),
+  \qquad
+  M_2(\infty;r)=L(r)\left(\frac{d^2}{q_r^2}+\frac{d\sigma^2}{q_r^3}\right).
+\end{equation}
+
+\section{Local Guess--Kill}
+Let $G$ be the local guess clock and $K$ the local kill clock. The observed response density for one accumulator is
+\begin{equation}
+  p(T)=f_D(T)S_G(T)S_K(T)+f_G(T)S_K(T)S_D(T),
+\end{equation}
+where $D=t_0+X$ and $S_D(T)=P(D>T)$.
+
+\subsection{Exponential Clocks}
+For exponential clocks with rates $\lambda_g$ and $\lambda_k$, let
+\begin{equation}
+  r=\lambda_g+\lambda_k.
+\end{equation}
+The local guess--kill CDF is
+\begin{equation}
+  P(Y\le T)=D_r(T)+\lambda_g\frac{1-e^{-rT}S_D(T)-D_r(T)}{r},
+\end{equation}
+where
+\begin{equation}
+  D_r(T)=\int_0^T f_D(t)e^{-rt}\dd t.
+\end{equation}
+In the code this is \texttt{local\_combo\_response\_cdf\_exp}. The term $D_r(T)$ is evaluated by the killed-Wald or killed-GBM CDF at the combined rate $r$.
+
+\subsection{Erlang-2 Clocks without Drift Variability}
+For Erlang-2 local guess--kill with rates $\lambda_g$ and $\lambda_k$,
+\begin{equation}
+  S_G(T)S_K(T)=e^{-rT}(1+\lambda_gT)(1+\lambda_kT)
+  =e^{-rT}\left[1+rT+\lambda_g\lambda_kT^2\right].
+\end{equation}
+Writing $T=t_0+x$ gives the decision contribution
+\begin{equation}
+  e^{-rt_0}\left[a_0M_0(U;r)+a_1M_1(U;r)+a_2M_2(U;r)\right],
+\end{equation}
+where $U=T-t_0$ and
+\begin{equation}
+  a_0=1+rt_0+\lambda_g\lambda_kt_0^2,
+  \qquad
+  a_1=r+2\lambda_g\lambda_kt_0,
+  \qquad
+  a_2=\lambda_g\lambda_k.
+\end{equation}
+The guess contribution is split into the raw-time interval $[0,t_0]$, where $S_D(T)=1$, and the post-$t_0$ interval. The pre-$t_0$ piece is an elementary polynomial-exponential integral. The post-$t_0$ piece is reduced by integration by parts to the same elementary integrals and $M_0,M_1,M_2$.
+
+This closed form is implemented for fixed-drift Wald, ordinary Wald SPV, and GBM physical-space SPV. It is not used when $sv>0$, because drift mixing introduces nonlinear $q(\mu)=\sqrt{\mu^2+2\sigma^2r}$ terms that do not remain in the bivariate-normal family.
+
+\section{CDFs, Omissions, and Race Likelihood Use}
+For a kill-only model, an observed evidence response at raw time $T$ contributes
+\begin{equation}
+  \log g_n(T),
+\end{equation}
+and an omission by cutoff $C$ contributes
+\begin{equation}
+  \log\left[1-G_n(C)\right].
+\end{equation}
+For response-generating guess clocks, the observed density uses the sum of evidence and guess densities, and no-response probability by cutoff is the joint survivor of the decision and clock races.
+
+In multi-accumulator race likelihoods, each accumulator supplies a density and CDF/survivor at the trial time. Logical-rule models may map several latent accumulator outcomes to one observed response; those mappings are handled in the particle likelihood layer and do not change the single-accumulator formulas in this document.
+
+\section{Current Closed-Form and Quadrature Boundary}
+\begin{center}
+\small
+\begin{tabular}{p{0.47\textwidth}p{0.20\textwidth}p{0.20\textwidth}}
+\toprule
+Case & Density & CDF \\
+\midrule
+Fixed Wald, no clocks & closed form & closed form \\
+Wald with $A>0$, $sv=0$ & closed form & closed form \\
+Fixed-threshold SWTN, $A=0$, $sv>0$, no clocks & closed form & closed form \\
+Joint $A>0$, $sv>0$, no clocks & closed form & GL over drift for CDF \\
+Kill-only exponential/Erlang-2, $sv=0$ & closed form & closed form \\
+Kill-only with $sv>0$ & closed-form density, GL CDF & GL over drift \\
+Local guess--kill exponential & closed-form density & closed form \\
+Local guess--kill Erlang-2, $sv=0$ & closed-form density & closed form \\
+Local guess--kill Erlang-2, $sv>0$ & raw-time GL bridge & raw-time GL bridge \\
+GBM physical SPV, no drift variability & closed form & closed form where implemented \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The guiding rule is simple: the implementation uses analytic Wald, tilted-Wald, GBM log-transform, and bivariate-normal identities wherever the transformed integrals remain in those families. It uses GL quadrature only for the remaining one-dimensional mixtures where the transformed integrand contains the Wald image term with a bilinear drift-distance interaction, or Erlang tilting with the nonlinear $q(\mu)$ drift transform.
+
+\section{Numerical Stability}
+The implementation uses stable normal tail calls, bivariate-normal branch selection, signed-log arithmetic for primitive differences, and explicit small-parameter branches where cancellation is otherwise severe. The Erlang and tilted-moment paths avoid direct subtraction of nearly equal large terms where possible, and clamp final probabilities into their valid ranges only after the mathematically meaningful computation is complete.
+
+\end{document}

@@ -463,8 +463,9 @@ rSWTN <- function(n, b, v, A, sv, k = 0, erlang = 1L, posdrift = TRUE) {
   # For sv == 0 and v < 0 with posdrift=FALSE: Bernoulli(p_hit) sampling.
   v_draw <- v
   sample = is.finite(sv) & sv > 1e-12
-  v_draw[sample] = truncnorm::rtruncnorm(sum(sample),a=ifelse(posdrift,0,-Inf),b=Inf,
-                                         mean=v[sample],sd = sv[sample])
+  if (any(sample))
+    v_draw[sample] = truncnorm::rtruncnorm(sum(sample), a = ifelse(posdrift, 0, -Inf), b = Inf,
+                                           mean = v[sample], sd = sv[sample])
   
   out <- rWald(n, B = b - A, v = v_draw, A = A, posdrift = posdrift)
   kill_idx <- which(k > 0)
@@ -648,8 +649,7 @@ dRDMSWTN <- function(rt, pars, erlang = 1L, posdrift = TRUE) {
       t0 = pars[ok, "t0", drop = FALSE],
       sv = pars[ok, "sv", drop = FALSE], lambda_g = pars[ok, "lambda_g", drop = FALSE],
       lambda_k = pars[ok, "lambda_k", drop = FALSE],
-      c = if ("c" %in% colnames(pars)) pars[ok, "c", drop = FALSE] else 0,
-      kill_shape = erlang
+      kill_shape = erlang, posdrift = posdrift
     )
   }
   out
@@ -687,8 +687,7 @@ pRDMSWTN <- function(rt, pars, erlang = 1L, posdrift = TRUE) {
       t0 = pars[ok, "t0", drop = FALSE],
       sv = pars[ok, "sv", drop = FALSE], lambda_g = pars[ok, "lambda_g", drop = FALSE],
       lambda_k = pars[ok, "lambda_k", drop = FALSE],
-      c = if ("c" %in% colnames(pars)) pars[ok, "c", drop = FALSE] else 0,
-      kill_shape = erlang
+      kill_shape = erlang, posdrift = posdrift
     )
   }
   out

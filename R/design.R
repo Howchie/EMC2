@@ -646,6 +646,14 @@ design_model <- function(data,design,model=NULL,
                          compress=TRUE,rt_check=TRUE, add_da = FALSE, all_cells_dm = FALSE,
                          compress_dms = TRUE)
 {
+  add_bound_column_if_needed <- function(df, col, value, default) {
+    if (col %in% names(df)) return(df)
+    if (is.null(value)) return(df)
+    if (length(value) == 1 && isTRUE(all.equal(as.numeric(value), as.numeric(default)))) return(df)
+    df[[col]] <- rep_len(value, nrow(df))
+    df
+  }
+
   if (is.null(model)) {
     if (is.null(design$model))
       stop("Model must be supplied if it has not been added to design")
@@ -671,6 +679,10 @@ design_model <- function(data,design,model=NULL,
   }
 
   if (!any(names(data)=="trials")) data$trials <- 1:dim(data)[1]
+  data <- add_bound_column_if_needed(data, "LT", design$LT, 0)
+  data <- add_bound_column_if_needed(data, "LC", design$LC, 0)
+  data <- add_bound_column_if_needed(data, "UT", design$UT, Inf)
+  data <- add_bound_column_if_needed(data, "UC", design$UC, Inf)
   if(rt_check){rt_check_function(data)}
   if (!add_acc) da <- data else
     da <- add_accumulators(data,design$matchfun,type=model()$type,Fcovariates=design$Fcovariates,fixed_accumulator_roles=fixed_accumulator_roles)

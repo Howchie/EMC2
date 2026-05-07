@@ -1,0 +1,268 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+
+\title{Finite-Window Tilted Wald Second Moment for Erlang-2 Local Guess--Kill}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section{Canonical Wald Moment}
+
+Let
+\[
+X\sim\mathrm{Wald}(a,v,\sigma),\qquad a>0,\quad \sigma>0,
+\]
+with density
+\[
+f_X(x;a,v,\sigma)=
+\frac{a}{\sqrt{2\pi\sigma^2x^3}}
+\exp\left[-\frac{(a-vx)^2}{2\sigma^2x}\right].
+\]
+For a tilt rate $r\ge0$, define
+\[
+q_r=\sqrt{v^2+2\sigma^2r},
+\qquad
+L(r)=\exp\left[\frac{a}{\sigma^2}(v-q_r)\right].
+\]
+Then
+\[
+f_X(x;a,v,\sigma)e^{-rx}=L(r)f_X(x;a,q_r,\sigma).
+\]
+The required second tilted raw moment is
+\[
+M_2(U;r)=\int_0^U x^2f_X(x;a,v,\sigma)e^{-rx}\,dx
+       =L(r)I_2(U;q_r),
+\]
+where
+\[
+I_2(U;q)=\int_0^U x^2f_X(x;a,q,\sigma)\,dx.
+\]
+For finite $U>0$, define
+\[
+d_- = \frac{qU-a}{\sigma\sqrt U},
+\qquad
+d_+ = -\frac{qU+a}{\sigma\sqrt U},
+\qquad
+c=\frac{2aq}{\sigma^2},
+\]
+\[
+A=\Phi(d_-),
+\qquad
+B=e^c\Phi(d_+).
+\]
+Then
+\[
+I_0(U;q)=A+B,
+\qquad
+I_1(U;q)=\frac{a}{q}(A-B),
+\]
+and
+\[
+I_2(U;q)=
+\left(\frac{a^2}{q^2}+\frac{a\sigma^2}{q^3}\right)A
++
+\left(\frac{a^2}{q^2}-\frac{a\sigma^2}{q^3}\right)B
+-
+\frac{2a\sigma\sqrt U}{q^2}\phi(d_-).
+\]
+Equivalently, using stable implementations of $M_0$ and $M_1$,
+\[
+M_2(U;r)=
+\frac{a^2}{q_r^2}M_0(U;r)
++
+\frac{\sigma^2}{q_r^2}M_1(U;r)
+-L(r)\frac{2a\sigma\sqrt U}{q_r^2}\phi(d_-).
+\]
+The infinite-window limit is
+\[
+M_2(\infty;r)=L(r)\left(\frac{a^2}{q_r^2}+\frac{a\sigma^2}{q_r^3}\right).
+\]
+
+\section{Erlang-2 Local Guess--Kill CDF}
+
+Let
+\[
+D=t_0+X,
+\qquad
+G\sim\mathrm{Erlang}(2,\lambda_g),
+\qquad
+K\sim\mathrm{Erlang}(2,\lambda_k),
+\]
+where the Erlang clocks start at raw trial time $0$ and the evidence process starts at $t_0$. Let
+\[
+r=\lambda_g+\lambda_k,
+\qquad
+U=T-t_0.
+\]
+The decision-response CDF term is
+\[
+\int_0^U f_X(x)S_G(t_0+x)S_K(t_0+x)\,dx.
+\]
+Since
+\[
+S_G(t)S_K(t)=e^{-rt}(1+\lambda_gt)(1+\lambda_kt)
+=e^{-rt}\left[1+rt+\lambda_g\lambda_kt^2\right],
+\]
+this term equals
+\[
+e^{-rt_0}\left[a_0M_0(U;r)+a_1M_1(U;r)+a_2M_2(U;r)\right],
+\]
+where
+\[
+a_0=1+rt_0+\lambda_g\lambda_kt_0^2,
+\qquad
+a_1=r+2\lambda_g\lambda_kt_0,
+\qquad
+a_2=\lambda_g\lambda_k.
+\]
+The guess-response term is split at $t_0$. For $t<t_0$, $S_D(t)=1$ and the integral is elementary. For $t\ge t_0$, integration by parts reduces the polynomial-exponential integrals involving $F_X(t-t_0)$ to elementary boundary terms plus the same $M_0$, $M_1$, and $M_2$.
+
+\section{Uniform Start-Point Variability}
+
+For ordinary Wald SPV, the distance $a$ is uniform on
+\[
+a\in[a_L,a_H]=[b-A,b].
+\]
+Let
+\[
+S=\sigma\sqrt U,
+\qquad
+q=q_r,
+\qquad
+\eta_- = \frac{v-q}{\sigma^2},
+\qquad
+\eta_+ = \frac{v+q}{\sigma^2}.
+\]
+The SPV second moment is
+\[
+M^{\mathrm{spv}}_2(U;r)=
+\frac{1}{A}\left[\mathcal P(a)\right]_{a_L}^{a_H},
+\]
+with
+\[
+\mathcal P(a)=
+\frac{H_2(\eta_-,qU;a)+H_2(\eta_+,-qU;a)}{q^2}
++
+\frac{\sigma^2}{q^3}\left[H_1(\eta_-,qU;a)-H_1(\eta_+,-qU;a)\right]
+-
+\frac{2S}{q^2}K_1(\eta_-,qU;a).
+\]
+The primitive helpers are
+\[
+H_n(\eta,c;a)=\int a^n e^{\eta a}\Phi\left(\frac{c-a}{S}\right)da,
+\qquad
+K_n(\eta,c;a)=\int a^n e^{\eta a}\phi\left(\frac{c-a}{S}\right)da.
+\]
+Define
+\[
+z=\frac{c-a}{S},
+\qquad
+h=z+\eta S,
+\qquad
+E=\exp\left(\eta c+\frac12\eta^2S^2\right),
+\qquad
+m=c+\eta S^2.
+\]
+Then
+\[
+K_1=-SE\left[m\Phi(h)+S\phi(h)\right],
+\]
+\[
+K_2=-SE\left[(m^2+S^2)\Phi(h)+S(2m-Sh)\phi(h)\right],
+\]
+\[
+K_3=-SE\left[(m^3+3mS^2)\Phi(h)+S\{3m^2-3mSh+S^2(h^2+2)\}\phi(h)\right].
+\]
+For $\eta\ne0$,
+\[
+H_0=\frac{e^{\eta a}\Phi(z)-E\Phi(h)}{\eta},
+\]
+\[
+H_1=\frac{ae^{\eta a}\Phi(z)}{\eta}-\frac{H_0}{\eta}+\frac{K_1}{\eta S},
+\]
+\[
+H_2=\frac{a^2e^{\eta a}\Phi(z)}{\eta}-\frac{2H_1}{\eta}+\frac{K_2}{\eta S}.
+\]
+For $\eta=0$, use the polynomial primitives
+\[
+H_1(0,c;a)=\frac{a^2}{2}\Phi(z)+\frac{K_2(0,c;a)}{2S},
+\]
+\[
+H_2(0,c;a)=\frac{a^3}{3}\Phi(z)+\frac{K_3(0,c;a)}{3S}.
+\]
+For $U=\infty$,
+\[
+M^{\mathrm{spv}}_2(\infty;r)=
+\frac{1}{A}\left[
+\frac{e^{\eta_-a}}{q^2}
+\left(\frac{a^2}{\eta_-}-\frac{2a}{\eta_-^2}+\frac{2}{\eta_-^3}\right)
++
+\frac{\sigma^2e^{\eta_-a}}{q^3}
+\left(\frac{a}{\eta_-}-\frac{1}{\eta_-^2}\right)
+\right]_{a_L}^{a_H},
+\]
+with the polynomial limit used when $\eta_-=0$.
+
+\section{GBM Physical Start-Point Variability}
+
+For GBM,
+\[
+dY_t=\mu Y_t\,dt+\sigma Y_t\,dW_t,
+\]
+the log process has Wald drift
+\[
+v=\mu-\frac12\sigma^2.
+\]
+For physical start-point variability,
+\[
+Y_0\sim U(1,1+A),
+\]
+let $z=\log Y_0$ and $a=\log b-z$. Then
+\[
+e^z=be^{-a},
+\qquad
+dz=-da,
+\]
+and
+\[
+a_L=\log\left(\frac{b}{1+A}\right),
+\qquad
+a_H=\log b.
+\]
+Therefore
+\[
+M^{\mathrm{gbm-spv}}_2(U;r)=
+\frac{b}{A}\int_{a_L}^{a_H}e^{-a}M_2(U;r,a,v,\sigma)\,da.
+\]
+This is the same primitive machinery as ordinary SPV, but with shifted exponents
+\[
+\tilde\eta_- = \frac{v-q}{\sigma^2}-1,
+\qquad
+\tilde\eta_+ = \frac{v+q}{\sigma^2}-1,
+\]
+and bounds $[a_L,a_H]$. Thus
+\[
+M^{\mathrm{gbm-spv}}_2(U;r)=
+\frac{b}{A}\left[\mathcal P_{\mathrm{gbm}}(a)\right]_{a_L}^{a_H},
+\]
+where
+\[
+\mathcal P_{\mathrm{gbm}}(a)=
+\frac{H_2(\tilde\eta_-,qU;a)+H_2(\tilde\eta_+,-qU;a)}{q^2}
++
+\frac{\sigma^2}{q^3}\left[H_1(\tilde\eta_-,qU;a)-H_1(\tilde\eta_+,-qU;a)\right]
+-
+\frac{2S}{q^2}K_1(\tilde\eta_-,qU;a).
+\]
+The infinite-window expression is obtained from the ordinary SPV infinite expression by replacing $\eta_-$ with $\tilde\eta_-$, changing the bounds to $[a_L,a_H]$, and multiplying by $b/A$.
+
+\section{Implementation Status}
+
+The code uses this closed-form $M_2$ for Erlang-2 local guess--kill when $sv=0$, including ordinary Wald SPV and GBM physical-SPV. The existing stable killed-CDF paths supply $M_0$ and $M_1$; the primitive formula supplies the missing $M_2$. Drift variability $sv>0$ still uses the existing GL integration because it requires the drift-mixture of these moments.
+
+\end{document}

@@ -23,7 +23,7 @@ constexpr double minus_inv_twoPI = -0.15915494309189533577;
 
 // Useful Distribution Functions
 inline double gaussian_pdf(double x, double mean = 0.0, double var = 1.0, bool log_p = false) {
-  if (!(var > 0.0) || !std::isfinite(var)) return log_p ? R_NegInf : 0.0;;
+  if (!(var > 0.0) || !emc2_isfinite(var)) return log_p ? R_NegInf : 0.0;;
   
   const double z = x - mean;
 
@@ -35,7 +35,7 @@ inline double gaussian_pdf(double x, double mean = 0.0, double var = 1.0, bool l
 }
 
 inline double gaussian_cdf(double x, double mean = 0.0, double var = 1.0, bool log_p=false) {
-  if (!(var > 0.0) || !std::isfinite(var)) {
+  if (!(var > 0.0) || !emc2_isfinite(var)) {
     if (log_p) {
       return (x < mean) ? R_NegInf : 0.0;
     }
@@ -82,7 +82,7 @@ inline double erlang_log_pdf(double t, double lambda, int n) {
 
 // CDF of heat kernel N(mean, t) at x
 inline double Gstar_CDF(double var, double mean, double x, bool log_p = false) {
-  if (!(var > 0.0) || !std::isfinite(var)) {
+  if (!(var > 0.0) || !emc2_isfinite(var)) {
     if (log_p) {
       return (x < mean) ? R_NegInf : 0.0;
     }

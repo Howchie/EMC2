@@ -75,24 +75,24 @@ guess_dispatch_cases <- list(
     formula = list(v ~ 1, B ~ 1, A ~ 1, t0 ~ 1, s ~ 1, lambda_g ~ 1, lambda_k ~ 1),
     pars = c(v = log(1.2), B = log(1.1), A = log(0.2), t0 = log(0.3), s = log(1.0),
              lambda_g = log(0.8), lambda_k = log(0.6)),
-    local_guess = RDMGBM(erlang_type = "local_guess"),
-    local_kill_guess = RDMGBM(erlang_type = "local_kill_guess")
+    local_guess = EMC2::RDMGBM(erlang_type = "local_guess"),
+    local_kill_guess = EMC2::RDMGBM(erlang_type = "local_kill_guess")
   ),
   list(
     label = "RDMSWTN",
     formula = list(v ~ 1, B ~ 1, A ~ 1, t0 ~ 1, s ~ 1, sv ~ 1, lambda_g ~ 1, lambda_k ~ 1),
-    pars = c(v = log(1.2), B = log(1.1), A = log(0.2), t0 = log(0.3), s = log(1.0),
+    pars = c(v = 1.2, B = log(1.1), A = log(0.2), t0 = log(0.3), s = log(1.0),
              sv = log(0.25), lambda_g = log(0.8), lambda_k = log(0.6)),
-    local_guess = RDMSWTN(erlang_type = "local_guess"),
-    local_kill_guess = RDMSWTN(erlang_type = "local_kill_guess")
+    local_guess = EMC2::RDMSWTN(erlang_type = "local_guess"),
+    local_kill_guess = EMC2::RDMSWTN(erlang_type = "local_kill_guess")
   ),
   list(
     label = "BAwL",
     formula = list(v ~ 1, sv ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1, lambda_g ~ 1, lambda_k ~ 1),
     pars = c(v = 1.2, sv = log(1.0), B = log(1.1), A = log(0.2), t0 = log(0.3),
              k = log(0.15), lambda_g = log(0.8), lambda_k = log(0.6)),
-    local_guess = BAwL(erlang_type = "local_guess"),
-    local_kill_guess = BAwL(erlang_type = "local_kill_guess")
+    local_guess = EMC2::BAwL(erlang_type = "local_guess"),
+    local_kill_guess = EMC2::BAwL(erlang_type = "local_kill_guess")
   )
 )
 

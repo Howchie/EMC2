@@ -101,28 +101,28 @@ pgbm <- function(t, mu, b, A = 0.0, sigma = 1.0, t0 = 0.0, lambda_g = 0.0, lambd
     .Call(`_EMC2_pgbm`, t, mu, b, A, sigma, t0, lambda_g, lambda_k, log_out, kill_shape, guess)
 }
 
-dswtn <- function(t, mu_drift, threshold, s = 1.0, t0 = 0.0, sv = 0.0, lambda_g = 0.0, lambda_k = 0.0, c = 0.0, log_out = FALSE, kill_shape = 1L, guess = FALSE) {
-    .Call(`_EMC2_dswtn`, t, mu_drift, threshold, s, t0, sv, lambda_g, lambda_k, c, log_out, kill_shape, guess)
+dswtn <- function(t, mu_drift, threshold, s = 1.0, t0 = 0.0, sv = 0.0, lambda_g = 0.0, lambda_k = 0.0, log_out = FALSE, kill_shape = 1L, guess = FALSE, posdrift = TRUE) {
+    .Call(`_EMC2_dswtn`, t, mu_drift, threshold, s, t0, sv, lambda_g, lambda_k, log_out, kill_shape, guess, posdrift)
 }
 
-drdmswtn <- function(t, mu_drift, b, A, s = 1.0, t0 = 0.0, sv = 0.0, lambda_g = 0.0, lambda_k = 0.0, c = 0.0, n_gauss_nodes = 20L, log_out = FALSE, kill_shape = 1L, guess = FALSE) {
-    .Call(`_EMC2_drdmswtn`, t, mu_drift, b, A, s, t0, sv, lambda_g, lambda_k, c, n_gauss_nodes, log_out, kill_shape, guess)
+pswtn <- function(t, mu_drift, threshold, s = 1.0, t0 = 0.0, sv = 0.0, lambda_g = 0.0, lambda_k = 0.0, log_out = FALSE, kill_shape = 1L, guess = FALSE, posdrift = TRUE) {
+    .Call(`_EMC2_pswtn`, t, mu_drift, threshold, s, t0, sv, lambda_g, lambda_k, log_out, kill_shape, guess, posdrift)
 }
 
-prdmswtn <- function(t, mu_drift, b, A, s = 1.0, t0 = 0.0, sv = 0.0, lambda_g = 0.0, lambda_k = 0.0, c = 0.0, n_gauss_nodes = 20L, log_out = FALSE, kill_shape = 1L, guess = FALSE) {
-    .Call(`_EMC2_prdmswtn`, t, mu_drift, b, A, s, t0, sv, lambda_g, lambda_k, c, n_gauss_nodes, log_out, kill_shape, guess)
+drdmswtn <- function(t, mu_drift, b, A, s = 1.0, t0 = 0.0, sv = 0.0, lambda_g = 0.0, lambda_k = 0.0, n_gauss_nodes = 20L, log_out = FALSE, kill_shape = 1L, guess = FALSE, posdrift = TRUE) {
+    .Call(`_EMC2_drdmswtn`, t, mu_drift, b, A, s, t0, sv, lambda_g, lambda_k, n_gauss_nodes, log_out, kill_shape, guess, posdrift)
 }
 
-pswtn <- function(t, mu_drift, threshold, s = 1.0, t0 = 0.0, sv = 0.0, lambda_g = 0.0, lambda_k = 0.0, c = 0.0, log_out = FALSE, kill_shape = 1L, guess = FALSE) {
-    .Call(`_EMC2_pswtn`, t, mu_drift, threshold, s, t0, sv, lambda_g, lambda_k, c, log_out, kill_shape, guess)
+prdmswtn <- function(t, mu_drift, b, A, s = 1.0, t0 = 0.0, sv = 0.0, lambda_g = 0.0, lambda_k = 0.0, n_gauss_nodes = 20L, log_out = FALSE, kill_shape = 1L, guess = FALSE, posdrift = TRUE) {
+    .Call(`_EMC2_prdmswtn`, t, mu_drift, b, A, s, t0, sv, lambda_g, lambda_k, n_gauss_nodes, log_out, kill_shape, guess, posdrift)
 }
 
-dSWTNspv <- function(t, v, b, A, s = 1.0, t0 = 0.0, sv = 0.0, c = 0.0, lambda_g = 0.0, lambda_k = 0.0, n_gauss_nodes = 20L, log_out = FALSE, kill_shape = 1L) {
-    .Call(`_EMC2_dSWTNspv`, t, v, b, A, s, t0, sv, c, lambda_g, lambda_k, n_gauss_nodes, log_out, kill_shape)
+dSWTNspv <- function(t, v, b, A, s = 1.0, t0 = 0.0, sv = 0.0, lambda_g = 0.0, lambda_k = 0.0, n_gauss_nodes = 20L, log_out = FALSE, kill_shape = 1L, posdrift = TRUE) {
+    .Call(`_EMC2_dSWTNspv`, t, v, b, A, s, t0, sv, lambda_g, lambda_k, n_gauss_nodes, log_out, kill_shape, posdrift)
 }
 
-pSWTNspv <- function(t, v, b, A, s = 1.0, t0 = 0.0, sv = 0.0, c = 0.0, lambda_g = 0.0, lambda_k = 0.0, n_gauss_nodes = 20L, log_out = FALSE, kill_shape = 1L) {
-    .Call(`_EMC2_pSWTNspv`, t, v, b, A, s, t0, sv, c, lambda_g, lambda_k, n_gauss_nodes, log_out, kill_shape)
+pSWTNspv <- function(t, v, b, A, s = 1.0, t0 = 0.0, sv = 0.0, lambda_g = 0.0, lambda_k = 0.0, n_gauss_nodes = 20L, log_out = FALSE, kill_shape = 1L, posdrift = TRUE) {
+    .Call(`_EMC2_pSWTNspv`, t, v, b, A, s, t0, sv, lambda_g, lambda_k, n_gauss_nodes, log_out, kill_shape, posdrift)
 }
 
 dGBMspv <- function(t, v, b, A, t0 = 0.0, s = 1.0, lambda_g = 0.0, lambda_k = 0.0, log_out = FALSE, kill_shape = 1L) {
@@ -340,3 +340,4 @@ pigt <- function(t, k = 1, l = 1, a = .1, threshold = 1e-10) {
 digt <- function(t, k = 1., l = 1., a = .1, threshold = 1e-10) {
     .Call(`_EMC2_digt`, t, k, l, a, threshold)
 }
+

@@ -562,12 +562,15 @@ RACE_rfun <- function(data, pars, model){
   lR_levels <- levels(data$lR)
   n_acc <- length(lR_levels)
   n_trials <- dim(data)[1]/n_acc
-  Rrt <- matrix(ncol=2,nrow=n_trials,
-         dimnames=list(NULL,c("R","rt")))
+  Rrt <- data.frame(
+    R = rep(NA_real_, n_trials),
+    rt = rep(NA_real_, n_trials)
+  )
   RACE <- data[data$lR==lR_levels[1],"RACE"]
   ok <- as.numeric(data$lR) <= as.numeric(as.character(data$RACE))
   for (i in levels(RACE)) {
     pick <- data$RACE==i
+    rows <- which(RACE == i)
     data_in <- data[pick & ok,]
     data_in$lR <- factor(data$lR[pick & ok])
     tmp <- pars[pick & ok,]
@@ -576,9 +579,14 @@ RACE_rfun <- function(data, pars, model){
     Rrti <- model()$rfun(data_in,tmp)
     Rrti <- .apply_timed_guess_winner(Rrti, lR_levels)
     Rrti$R <- as.numeric(Rrti$R)
-    Rrt[RACE==i,] <- as.matrix(Rrti)
+    for (nm in setdiff(names(Rrti), names(Rrt))) {
+      Rrt[[nm]] <- NA
+    }
+    for (nm in setdiff(names(Rrt), names(Rrti))) {
+      Rrti[[nm]] <- NA
+    }
+    Rrt[rows, names(Rrt)] <- Rrti[, names(Rrt), drop = FALSE]
   }
-  Rrt <- data.frame(Rrt)
   Rrt$R <- factor(Rrt$R, labels = lR_levels, levels = 1:n_acc)
   return(Rrt)
 }
