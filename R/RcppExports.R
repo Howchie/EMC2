@@ -77,12 +77,12 @@ pkilledlba <- function(t, A, b, v, sv, k, posdrift = TRUE, log_out = FALSE) {
     .Call(`_EMC2_pkilledlba`, t, A, b, v, sv, k, posdrift, log_out)
 }
 
-pwald <- function(t, mu, b, A = 0.0, sigma = 1.0, t0 = 0.0, lambda_g = 0.0, lambda_k = 0.0, log_out = FALSE, kill_shape = 1L, guess = FALSE) {
-    .Call(`_EMC2_pwald`, t, mu, b, A, sigma, t0, lambda_g, lambda_k, log_out, kill_shape, guess)
+pwald <- function(t, mu, b, A = 0.0, sigma = 1.0, t0 = 0.0, lambda_g = 0.0, lambda_k = 0.0, log_out = FALSE, kill_shape = 1L, guess = FALSE, posdrift = TRUE) {
+    .Call(`_EMC2_pwald`, t, mu, b, A, sigma, t0, lambda_g, lambda_k, log_out, kill_shape, guess, posdrift)
 }
 
-dwald <- function(t, mu, b, A = 0.0, sigma = 1.0, t0 = 0.0, lambda_g = 0.0, lambda_k = 0.0, log_out = FALSE, kill_shape = 1L, guess = FALSE) {
-    .Call(`_EMC2_dwald`, t, mu, b, A, sigma, t0, lambda_g, lambda_k, log_out, kill_shape, guess)
+dwald <- function(t, mu, b, A = 0.0, sigma = 1.0, t0 = 0.0, lambda_g = 0.0, lambda_k = 0.0, log_out = FALSE, kill_shape = 1L, guess = FALSE, posdrift = TRUE) {
+    .Call(`_EMC2_dwald`, t, mu, b, A, sigma, t0, lambda_g, lambda_k, log_out, kill_shape, guess, posdrift)
 }
 
 dWald <- function(t, v, B, A, t0, log_out = FALSE) {
@@ -340,4 +340,3 @@ pigt <- function(t, k = 1, l = 1, a = .1, threshold = 1e-10) {
 digt <- function(t, k = 1., l = 1., a = .1, threshold = 1e-10) {
     .Call(`_EMC2_digt`, t, k, l, a, threshold)
 }
-

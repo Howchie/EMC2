@@ -52,14 +52,14 @@ na_locf <- function(x, na.rm = FALSE) {
 
 .apply_timed_guess_winner <- function(out, lR_levels) {
   if (is.null(out$R) || !("time" %in% lR_levels)) return(out)
-
+  
   r_chr <- as.character(out$R)
   is_time <- !is.na(r_chr) & r_chr == "time"
   if (!any(is_time)) {
     out$R <- factor(r_chr, levels = lR_levels)
     return(out)
   }
-
+  out$isTime = ifelse(is_time,TRUE,FALSE)
   guess_levels <- lR_levels[!lR_levels %in% c("time", "nogo")]
   if (length(guess_levels) == 0L) {
     out$R <- factor(r_chr, levels = lR_levels)

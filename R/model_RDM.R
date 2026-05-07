@@ -40,7 +40,7 @@ rWald <- function(n, B, v, A, posdrift = TRUE)
       c / qnorm(1 - runif(n) / 2)^2 + m
     }
 
-    flag <- l > tiny
+    flag <- l > abs(tiny)
     x <- rep(NA, times = n)
 
     x[!flag] <- rlevy(sum(!flag), 0, k[!flag]^2)
@@ -61,9 +61,26 @@ rWald <- function(n, B, v, A, posdrift = TRUE)
     x[x < 0] <- max(x)
     x
   }
+  
+  rtruncexp_tilt <- function(n, lo, hi, eta) {
+    u <- runif(n)
+    
+    small <- abs(eta) < 1e-10
+    out <- numeric(n)
+    
+    out[small] <- lo[small] + u[small] * (hi[small] - lo[small])
+    
+    if (any(!small)) {
+      e_lo <- exp(eta[!small] * lo[!small])
+      e_hi <- exp(eta[!small] * hi[!small])
+      out[!small] <- log(e_lo + u[!small] * (e_hi - e_lo)) / eta[!small]
+    }
+    
+    out
+  }
 
   out <- rep(Inf, n)
-  pos <- !v < 0  # v >= 0
+  pos <- v >= 0 
 
   # positive (or zero) drift: standard inverse Gaussian
   npos <- sum(pos)
@@ -75,15 +92,20 @@ rWald <- function(n, B, v, A, posdrift = TRUE)
   # negative drift with posdrift=FALSE: defective Wald via Bernoulli(p_hit)
   # Conditional FPT given hitting equals Wald with |v| (Girsanov / time-reversal)
   neg <- v < 0
-  if (!posdrift && any(neg)) {
+  if (any(neg)) {
     nneg <- sum(neg)
-    bs_neg <- B[neg] + runif(nneg, 0, A[neg])
-    p_hit <- exp(2 * v[neg] * bs_neg)  # v < 0, bs > 0 → 0 < p_hit < 1
-    hit <- as.logical(rbinom(nneg, 1, p_hit))
-    if (any(hit)) {
-      out[which(neg)[hit]] <- rwaldt(sum(hit), k = bs_neg[hit], l = -v[neg][hit])
+    if (posdrift) { # truncate the distribution positive
+      bs_neg <- rtruncexp_tilt(nneg, lo = B[neg], hi = B[neg] + A[neg], eta = 2 * v[neg])
+      out[which(neg)] <- rwaldt(nneg, k = bs_neg, l = abs(v[neg]))
+    } else { # sample bernoulli hitting probability and use the absolute value of v for the finite finishes
+      bs_neg <- B[neg] + runif(nneg, 0, A[neg])
+      p_hit <- exp(2 * v[neg] * bs_neg)  # v < 0, bs > 0 → 0 < p_hit < 1
+      hit <- as.logical(rbinom(nneg, 1, p_hit))
+      if (any(hit)) {
+        out[which(neg)[hit]] <- rwaldt(sum(hit), k = bs_neg[hit], l = abs(v[neg][hit]))
+      }
     }
-    # non-hitting trials remain Inf
+    
   }
 
   out
@@ -440,29 +462,11 @@ rSWTN <- function(n, b, v, A, sv, k = 0, erlang = 1L, posdrift = TRUE) {
   # Negative mean drift with sv > 0 is fine: truncnorm always gives positive draws.
   # For sv == 0 and v < 0 with posdrift=FALSE: Bernoulli(p_hit) sampling.
   v_draw <- v
-  var_idx <- which(is.finite(sv) & sv > 1e-12)
-  if (length(var_idx) > 0) {
-    rem <- var_idx
-    while (length(rem) > 0) {
-      z <- rnorm(length(rem), mean = v[rem], sd = sv[rem])
-      ok <- is.finite(z) & z > 0
-      if (any(ok)) v_draw[rem[ok]] <- z[ok]
-      rem <- rem[!ok]
-    }
-  }
-  # sv==0, v<0, posdrift=FALSE: include in hit candidates; rWald handles Bernoulli
-  if (!posdrift) {
-    hit_idx <- which(is.finite(v_draw))
-  } else {
-    hit_idx <- which(is.finite(v_draw) & v_draw >= 0)
-  }
-  if (length(hit_idx) > 0) {
-    out[hit_idx] <- rWald(length(hit_idx),
-                          B = b[hit_idx] - A[hit_idx],
-                          v = v_draw[hit_idx],
-                          A = A[hit_idx],
-                          posdrift = posdrift)
-  }
+  sample = is.finite(sv) & sv > 1e-12
+  v_draw[sample] = truncnorm::rtruncnorm(sum(sample),a=ifelse(posdrift,0,-Inf),b=Inf,
+                                         mean=v[sample],sd = sv[sample])
+  
+  out <- rWald(n, B = b - A, v = v_draw, A = A, posdrift = posdrift)
   kill_idx <- which(k > 0)
   if (length(kill_idx) > 0) {
     tk <- rgamma(length(kill_idx), shape = erlang, rate = k[kill_idx])
@@ -580,17 +584,17 @@ RDMSWTN <- function(erlang_shape = 1L, erlang_type = "none", posdrift = TRUE) {
     type = "RACE",
     c_name = if (posdrift) base_name else paste0(base_name, "_IO"),
     p_types = c(
-      "v" = if (posdrift) log(1) else 1, "B" = log(1), "A" = log(0), "t0" = log(0),
+      "v" = 1, "B" = log(1), "A" = log(0), "t0" = log(0),
       "s" = log(1), "sv" = log(0), "lambda_g" = log(0), "lambda_k" = log(0), "pContaminant" = qnorm(0)
     ),
     p_types_canonical = c("v", "B", "A", "t0", "s", "sv"),
     transform = list(func = c(
-      v = if (posdrift) "exp" else "identity", B = "exp", A = "exp", t0 = "exp",
+      v = "identity", B = "exp", A = "exp", t0 = "exp",
       s = "exp", sv = "exp", lambda_g = "exp", lambda_k = "exp", pContaminant = "pnorm"
     )),
     bound = list(
       minmax = cbind(
-        v = c(if (posdrift) 0 else -Inf, Inf), B = c(0, Inf), A = c(0, Inf),
+        v = c(-Inf, Inf), B = c(0, Inf), A = c(0, Inf),
         t0 = c(0.05, Inf), s = c(0, Inf), sv = c(0, Inf),
         lambda_g = c(1e-4, Inf), lambda_k = c(1e-4, Inf),
         pContaminant = c(0.001, 0.999)
@@ -629,7 +633,7 @@ dRDMSWTN <- function(rt, pars, erlang = 1L, posdrift = TRUE) {
     stop("RDMSWTN requires parameter columns 'lambda_g' and 'lambda_k'.")
   }
   erl <- (pars[, "lambda_g"] > 0) | (pars[, "lambda_k"] > 0)
-  ok <- (rt > 0) & ((rt > pars[, "t0"]) | erl) & (if (posdrift) !(pars[, "v"] < 0) else TRUE)
+  ok <- (rt > 0) & ((rt > pars[, "t0"]) | erl)
   ok[is.na(ok)] <- FALSE
   if (any(ok)) {
     if (any(dimnames(pars)[[2]] == "s")) {
@@ -668,7 +672,7 @@ pRDMSWTN <- function(rt, pars, erlang = 1L, posdrift = TRUE) {
     stop("RDMSWTN requires parameter columns 'lambda_g' and 'lambda_k'.")
   }
   erl <- (pars[, "lambda_g"] > 0) | (pars[, "lambda_k"] > 0)
-  ok <- (rt > 0) & ((rt > pars[, "t0"]) | erl) & (if (posdrift) !(pars[, "v"] < 0) else TRUE)
+  ok <- (rt > 0) & ((rt > pars[, "t0"]) | erl)
   ok[is.na(ok)] <- FALSE
   if (any(ok)) {
     if (any(dimnames(pars)[[2]] == "s")) {
@@ -748,7 +752,6 @@ rRDMSWTN <- function(lR, pars, p_types = c("v", "b", "A", "t0", "sv", "lambda_g"
   )
   # Put EAM on the same raw-time axis as Erlang clocks.
   dt <- dt + matrix(t0, nrow = nr)
-
   if (guess || local_kill) {
     tg_local <- matrix(Inf, nrow = nr, ncol = n_trials)
     tk_local <- matrix(Inf, nrow = nr, ncol = n_trials)
@@ -775,9 +778,11 @@ rRDMSWTN <- function(lR, pars, p_types = c("v", "b", "A", "t0", "sv", "lambda_g"
     }
 
     if (guess && local_kill) {
+      guess_win = tg_local<dt & tg_local<tk_local
       dt_candidate <- pmin(dt, tg_local)
       dt <- ifelse(dt_candidate < tk_local, dt_candidate, Inf)
     } else if (guess) {
+      guess_win = tg_local<dt
       dt <- pmin(dt, tg_local)
     } else {
       dt <- ifelse(dt < tk_local, dt, Inf)
@@ -802,5 +807,9 @@ rRDMSWTN <- function(lR, pars, p_types = c("v", "b", "A", "t0", "sv", "lambda_g"
   out$R[bad_col] <- NA
   out$rt[bad_col] <- Inf
   out <- .apply_timed_guess_winner(out, levels(lR))
+  if (guess) {
+    out$isTime <- rep(NA, n_trials)
+    out$isTime[!bad_col] <- guess_win[pick][!bad_col]
+  }
   out
 }

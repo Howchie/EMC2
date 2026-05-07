@@ -278,22 +278,34 @@ inline signed_log slog_int_d_eta_pnorm(
 // parameters have been pre-scaled by s.
 // ==========================================================================
 
+inline double log_wald_posdrift_hit_normalizer(bool posdrift, double mu, double sigma,
+                                               double b, double x_lo, double x_hi) {
+  if (!posdrift || mu >= 0.0 || sigma <= 0.0) return 0.0;
+  if (x_hi < x_lo) std::swap(x_lo, x_hi);
+  const double span = x_hi - x_lo;
+  const double eta  = 2.0 * mu / (sigma * sigma);
+  if (span <= FPM_EPSILON) {
+    return eta * (b - x_hi);
+  }
+  return eta * (b - x_hi) + log_expm1_ratio_neg(eta * span);
+}
+
 // [[Rcpp::export]]
 double pwald(double t, double mu, double b, double A = 0.0, double sigma = 1.0,
              double t0 = 0.0, double lambda_g = 0.0, double lambda_k = 0.0, bool log_out = false,
-             int kill_shape = 1, bool guess = false);
+             int kill_shape = 1, bool guess = false, bool posdrift = true);
 
 // [[Rcpp::export]]
 double dwald(double t, double mu, double b, double A = 0.0, double sigma = 1.0,
              double t0 = 0.0, double lambda_g = 0.0, double lambda_k = 0.0, bool log_out = false,
-             int kill_shape = 1, bool guess = false) {
+             int kill_shape = 1, bool guess = false, bool posdrift = true) {
   // t is raw rt; t_eam is the EAM-adjusted time (rt - t0).
   // Erlang processes start at physical t=0 and use raw t; EAM uses t_eam.
   if (t <= 0.0 || sigma <= 0.0 || lambda_g < 0.0 || lambda_k < 0.0) {
     return log_out ? R_NegInf : 0.0;
   }
   const double t_eam = t - t0;
-  const double lambda = guess ? lambda_g : lambda_k;
+  const double lambda = guess ? lambda_g : lambda_k; // TODO don't we have a local kill+guess path how does that work here?
   const double k_eff = (lambda <= 1e-8 ? 0.0 : lambda);
 
   // When rt < t0 the EAM hasn't started: f_EAM = 0, S_R = 1.
@@ -314,6 +326,7 @@ double dwald(double t, double mu, double b, double A = 0.0, double sigma = 1.0,
 
   if (x_hi < x_lo) std::swap(x_lo, x_hi);
   const double span = x_hi - x_lo;
+  const double log_hit_norm = log_wald_posdrift_hit_normalizer(posdrift, mu, sigma, b, x_lo, x_hi);
   double log_f_hit = R_NegInf;
 
   // 1. Evidence-based hit density (f_R * S_K)
@@ -326,7 +339,10 @@ double dwald(double t, double mu, double b, double A = 0.0, double sigma = 1.0,
       return log_out ? R_NegInf : 0.0;
     }
     const double delta = d - mu * t_eam;
-    log_f_hit = std::log(d) - std::log(t_eam) + Gstar(var, delta, true) + erlang_log_surv(t, k_eff, kill_shape);
+    log_f_hit = std::log(d) - std::log(t_eam) + Gstar(var, delta, true) - log_hit_norm;
+    if (guess || k_eff > 0.0) {
+      log_f_hit += erlang_log_surv(t, k_eff, kill_shape);
+    } 
   } else {
     // SPV form
     const double mu_new = b - mu * t_eam;
@@ -348,7 +364,10 @@ double dwald(double t, double mu, double b, double A = 0.0, double sigma = 1.0,
     signed_log total = signed_log_add(term1, term2);
 
     if (total.sign > 0 && total.log_abs != R_NegInf) {
-      log_f_hit = total.log_abs - std::log(t_eam) - std::log(span) + erlang_log_surv(t, k_eff, kill_shape);
+      log_f_hit = total.log_abs - std::log(t_eam) - std::log(span) - log_hit_norm;
+      if (guess || k_eff > 0.0) {
+        log_f_hit+= erlang_log_surv(t, k_eff, kill_shape);
+      }
     }
   }
 
@@ -359,7 +378,7 @@ double dwald(double t, double mu, double b, double A = 0.0, double sigma = 1.0,
   // 2. Guess-based density (f_K * S_R)
   // Erlang uses raw t; EAM survivor uses t_eam (k=0 → no kill in survivor)
   const double log_sk = erlang_log_pdf(t, k_eff, kill_shape);
-  const double log_sr = std::log1p(-std::max(0.0, std::min(1.0, pwald(t, mu, b, A, sigma, t0, 0.0, 0.0, false, 1, false))));
+  const double log_sr = std::log1p(-std::max(0.0, std::min(1.0, pwald(t, mu, b, A, sigma, t0, 0.0, 0.0, false, 1, false, posdrift))));
   const double log_f_guess = log_sk + log_sr;
 
   const double log_pdf = log_sum_exp(log_f_hit, log_f_guess);
@@ -398,7 +417,7 @@ NumericVector pWald(NumericVector t, NumericVector v,
 // t = Inf returns total finite-response probability.
 // --------------------------------------------------------------------------
 double pwald(double t, double mu, double b, double A, double sigma,
-             double t0, double lambda_g, double lambda_k, bool log_out, int kill_shape, bool guess) {
+             double t0, double lambda_g, double lambda_k, bool log_out, int kill_shape, bool guess, bool posdrift) {
   // t is raw rt; t_eam = t - t0 is the EAM-adjusted time.
   // Erlang processes use raw t; EAM uses t_eam.
   auto finish = [&](double log_p) {
@@ -413,7 +432,7 @@ double pwald(double t, double mu, double b, double A, double sigma,
   if (sigma <= 0.0 || lambda_g < 0.0 || lambda_k < 0.0) {
     return NA_REAL;
   }
-  const double lambda = guess ? lambda_g : lambda_k;
+  const double lambda = guess ? lambda_g : lambda_k; // TODO don't we have a local kill+guess path how does that work here?
   const double k_eff = (lambda <= 1e-8 ? 0.0 : lambda);
 
   if (t <= FPM_EPSILON) {
@@ -429,7 +448,7 @@ double pwald(double t, double mu, double b, double A, double sigma,
     if (t_eam <= FPM_EPSILON) {
       return finish(std::log1p(-std::exp(log_sk)));
     }
-    const double fw = std::max(0.0, std::min(1.0, pwald(t, mu, b, A, sigma, t0, 0.0, 0.0, false, 1, false)));
+    const double fw = std::max(0.0, std::min(1.0, pwald(t, mu, b, A, sigma, t0, 0.0, 0.0, false, 1, false, posdrift)));
     const double log_sr = std::log1p(-fw);
     return finish(std::log1p(-std::exp(log_sr + log_sk)));
   }
@@ -445,11 +464,11 @@ double pwald(double t, double mu, double b, double A, double sigma,
   // For Erlang-2: S_K(u) = (1 + k*u)*exp(-k*u) = exp(-k*t0) * [ (1 + k*t0)*exp(-k*v) + k*v*exp(-k*v) ]
   if (!guess && k_eff > 1e-10 && t0 > 1e-10) {
     const double log_sk_t0 = -k_eff * t0; // Exp part of S_K(t0)
-    const double F1 = pwald(t - t0, mu, b, A, sigma, 0.0, 0.0, k_eff, false, 1, false);
+    const double F1 = pwald(t - t0, mu, b, A, sigma, 0.0, 0.0, k_eff, false, 1, false, posdrift);
     if (kill_shape <= 1) {
       return finish(log_sk_t0 + std::log(std::fmax(0.0, F1)));
     }
-    const double F2 = pwald(t - t0, mu, b, A, sigma, 0.0, 0.0, k_eff, false, 2, false);
+    const double F2 = pwald(t - t0, mu, b, A, sigma, 0.0, 0.0, k_eff, false, 2, false, posdrift);
     // Erlang-2 with shifted t0:
     // exp(-k*t0) * [(1 + k*t0) * B0 + k * B1], with F2 = B0 + k*B1.
     // So use exp(-k*t0) * [k*t0 * B0 + F2].
@@ -463,13 +482,14 @@ double pwald(double t, double mu, double b, double A, double sigma,
 
   const double span = x_hi - x_lo;
   const double sig2 = sigma * sigma;
+  const double log_hit_norm = log_wald_posdrift_hit_normalizer(posdrift, mu, sigma, b, x_lo, x_hi);
 
   // Fast path: no kill — use canonical Wald SPV for finite t_eam.
   if (k_eff <= 0.0) {
     if (emc2_isfinite(t_eam)) {
       const double inv_s = 1.0 / sigma;
       const double cdf = pwald_k0(t_eam, b * inv_s, mu * inv_s, A * inv_s);
-      const double cl = std::max(0.0, std::min(1.0, cdf));
+      const double cl = std::max(0.0, std::min(1.0, cdf * std::exp(-log_hit_norm)));
       if (log_out) return (cl <= 0.0) ? R_NegInf : std::log(cl);
       return cl;
     }
@@ -484,9 +504,9 @@ double pwald(double t, double mu, double b, double A, double sigma,
       const double d = b - x_hi;
       if (d <= 0.0) return 0.0;
       const double log_p1 = eta1 * d;
-      if (kill_shape <= 1 || nu <= FPM_EPSILON) return log_p1;
+      if (kill_shape <= 1 || nu <= FPM_EPSILON) return log_p1 - log_hit_norm;
       // Erlang-2 eventual hit: exp(eta1*d) * (1 + lambda*d/nu)
-      return log_p1 + std::log1p(k_eff * d / nu);
+      return log_p1 + std::log1p(k_eff * d / nu) - log_hit_norm;
     }
 
     if (kill_shape >= 2 && k_eff > FPM_EPSILON) {
@@ -509,11 +529,11 @@ double pwald(double t, double mu, double b, double A, double sigma,
       const double p = (I0 + (k_eff / nu) * I1) / span;
       if (p <= 0.0) return R_NegInf;
       if (p >= 1.0) return 0.0;
-      return std::log(p);
+      return std::log(p) - log_hit_norm;
     }
 
     if (std::abs(eta1) < FPM_EPSILON) {
-      return 0.0;
+      return -log_hit_norm;
     }
 
     // Erlang-1 SPV: (1/span) * int_0^A exp(eta1*(b-x)) dx
@@ -524,7 +544,8 @@ double pwald(double t, double mu, double b, double A, double sigma,
     return eta1 * b +
            log_diff_exp(q * x_hi, q * x_lo) -  // log(exp(q*A)-1), x_hi=A, x_lo=0
            std::log(q) -
-           std::log(span);
+           std::log(span) -
+           log_hit_norm;
   };
 
   if (!emc2_isfinite(t_eam)) {
@@ -568,10 +589,10 @@ double pwald(double t, double mu, double b, double A, double sigma,
       const double log_cdf_e2 = (log_mw > R_NegInf)
                                   ? log_sum_exp(log_cdf_nu, log_w + log_mw)
                                   : log_cdf_nu;
-      return finish(log_prefactor + log_cdf_e2);
+      return finish(log_prefactor + log_cdf_e2 - log_hit_norm);
     }
 
-    return finish(log_prefactor + log_cdf_nu);
+    return finish(log_prefactor + log_cdf_nu - log_hit_norm);
   }
 
   if (kill_shape >= 2 && k_eff > FPM_EPSILON) {
@@ -595,7 +616,7 @@ double pwald(double t, double mu, double b, double A, double sigma,
     }
     if (total.sign <= 0 || total.log_abs == R_NegInf)
       return log_out ? R_NegInf : 0.0;
-    return finish(total.log_abs - std::log(span));
+    return finish(total.log_abs - std::log(span) - log_hit_norm);
   }
 
   // SPV + Erlang-1: analytic.
@@ -623,7 +644,7 @@ double pwald(double t, double mu, double b, double A, double sigma,
   const double log_cdf_val =
     log_sum_exp(log_term1, log_term2) - std::log(span);
 
-  return finish(log_cdf_val);
+  return finish(log_cdf_val - log_hit_norm);
 }
 
 // --------------------------------------------------------------------------
@@ -936,7 +957,7 @@ double dswtn(double t, double mu_drift, double threshold, double s = 1.0,
   if (s <= 1e-10) return log_out ? R_NegInf : 0.0;
 
   const double t_eam = t - t0;
-  const double lambda = guess ? lambda_g : lambda_k;
+  const double lambda = guess ? lambda_g : lambda_k; // TODO not using combined case?
 
   // sv == 0: reduces to standard Wald (which handles t_eam <= 0 internally)
   if (sv <= 1e-10) {

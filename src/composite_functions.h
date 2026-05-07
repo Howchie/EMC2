@@ -109,6 +109,28 @@ inline double log1m_exp(double x) {
   }
 }
 
+inline double log_expm1_ratio(double x) {
+  // x < 0
+  // returns log((1 - exp(x)) / (-x))
+  const double ax = std::abs(x);
+  
+  if (ax < 1e-5) {
+    const double x2 = x * x;
+    return 0.5 * x + x2 / 24.0 - (x2 * x2) / 2880.0;
+  }
+  
+  return log1m_exp(x) - std::log(-x);
+}
+
+inline Rcpp::NumericVector log_expm1_ratio(const Rcpp::NumericVector& x) {
+  int n = x.size();
+  Rcpp::NumericVector result(n);
+  for (int i = 0; i < n; i++) {
+    result[i] = log_expm1_ratio(x[i]);
+  }
+  return result;
+}
+
 /**
  * @brief Compute log(1 - exp(x)) for vectors in a numerically stable way
  *
