@@ -94,10 +94,7 @@ rWald <- function(n, B, v, A, posdrift = TRUE)
   neg <- v < 0
   if (any(neg)) {
     nneg <- sum(neg)
-    if (posdrift) { # truncate the distribution positive
-      bs_neg <- rtruncexp_tilt(nneg, lo = B[neg], hi = B[neg] + A[neg], eta = 2 * v[neg])
-      out[which(neg)] <- rwaldt(nneg, k = bs_neg, l = abs(v[neg]))
-    } else { # sample bernoulli hitting probability and use the absolute value of v for the finite finishes
+    if (!posdrift) { # sample bernoulli hitting probability and use the absolute value of v for the finite finishes
       bs_neg <- B[neg] + runif(nneg, 0, A[neg])
       p_hit <- exp(2 * v[neg] * bs_neg)  # v < 0, bs > 0 → 0 < p_hit < 1
       hit <- as.logical(rbinom(nneg, 1, p_hit))
@@ -458,13 +455,20 @@ rSWTN <- function(n, b, v, A, sv, k = 0, erlang = 1L, posdrift = TRUE) {
   sv <- rep(sv, length.out = n)
   k <- rep(k, length.out = n)
   out <- rep(Inf, n)
-  # For sv > 0, draw per-trial drifts from N(v, sv^2) without truncation and
-  # pass them through to rWald, which handles posdrift/defective behavior.
+  # For sv > 0 and posdrift=TRUE, draw per-trial drifts from N(v, sv^2)
+  # truncated at zero. Otherwise draw from the full normal and let rWald
+  # handle defective negative-drift finite hits when posdrift=FALSE.
   # For sv == 0 and v < 0 with posdrift=FALSE: Bernoulli(p_hit) sampling in rWald.
   v_draw <- v
   sample <- is.finite(sv) & sv > 1e-12
   if (any(sample)) {
-    v_draw[sample] <- rnorm(sum(sample), mean = v[sample], sd = sv[sample])
+    if (posdrift) {
+      lo <- pnorm(0, mean = v[sample], sd = sv[sample])
+      u <- lo + runif(sum(sample)) * (1 - lo)
+      v_draw[sample] <- qnorm(u, mean = v[sample], sd = sv[sample])
+    } else {
+      v_draw[sample] <- rnorm(sum(sample), mean = v[sample], sd = sv[sample])
+    }
   }
   
   out <- rWald(n, B = b - A, v = v_draw, A = A, posdrift = posdrift)

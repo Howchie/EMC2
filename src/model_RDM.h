@@ -1006,6 +1006,30 @@ double pswtn(double t, double mu_drift, double threshold, double s,
 
 inline Rcpp::List get_gl_nodes_weights(int n_gauss_nodes);
 
+inline double dswtn_positive_drift_quad(double t, double mu_drift, double threshold,
+                                        double s, double t0, double sv,
+                                        double lambda_g, double lambda_k,
+                                        bool log_out, int kill_shape, bool guess,
+                                        int n_gauss_nodes);
+inline double pswtn_positive_drift_quad(double t, double mu_drift, double threshold,
+                                        double s, double t0, double sv,
+                                        double lambda_g, double lambda_k,
+                                        bool log_out, int kill_shape, bool guess,
+                                        int n_gauss_nodes);
+inline double drdmswtn_positive_drift_quad(double t, double mu_drift, double b, double A,
+                                           double s, double t0, double sv,
+                                           double lambda_g, double lambda_k,
+                                           int n_gauss_nodes, bool log_out,
+                                           int kill_shape, bool guess);
+inline double prdmswtn_positive_drift_quad(double t, double mu_drift, double b, double A,
+                                           double s, double t0, double sv,
+                                           double lambda_g, double lambda_k,
+                                           int n_gauss_nodes, bool log_out,
+                                           int kill_shape, bool guess);
+inline double local_combo_response_pdf(double t, double f_decision, double F_decision,
+                                       double lambda_g, double lambda_k,
+                                       int kill_shape, bool log_out);
+
 // [[Rcpp::export]]
 double dswtn(double t, double mu_drift, double threshold, double s = 1.0,
              double t0 = 0.0, double sv = 0.0, double lambda_g = 0.0, double lambda_k = 0.0,
@@ -1015,6 +1039,8 @@ double dswtn(double t, double mu_drift, double threshold, double s = 1.0,
   if (threshold <= 1e-10) return log_out ? R_NegInf : 0.0;
   if (sv < 0.0) return R_NaN;
   if (s <= 1e-10) return log_out ? R_NegInf : 0.0;
+  if (posdrift && sv <= 1e-10 && mu_drift <= 0.0)
+    return log_out ? R_NegInf : 0.0;
 
   const double t_eam = t - t0;
   const double lambda = guess ? lambda_g : lambda_k; // TODO not using combined case?
@@ -1023,7 +1049,7 @@ double dswtn(double t, double mu_drift, double threshold, double s = 1.0,
   if (sv <= 1e-10) {
     return dwald(t, mu_drift, threshold, 0.0, s, t0,
                  guess ? lambda : 0.0, guess ? 0.0 : lambda,
-                 log_out, kill_shape, guess, posdrift);
+                 log_out, kill_shape, guess, false);
   }
 
   // Handle t_eam <= 0: EAM hasn't started; only erlang guess contributes.
@@ -1033,14 +1059,15 @@ double dswtn(double t, double mu_drift, double threshold, double s = 1.0,
     return log_out ? log_fG : std::exp(log_fG);
   }
 
-  // log_norm = 0 means defective density; dswtn_core normalises by exp(log_norm).
-  // Overall posdrift normalisation is applied inside dswtn_core via posdrift param.
-  const double log_norm = posdrift
-    ? log_swtn_hit_mass(mu_drift, sv, s, threshold)
-    : 0.0;
-  if (emc2_isinf(log_norm) && log_norm < 0.0) return log_out ? R_NegInf : 0.0;
+  if (posdrift) {
+    return dswtn_positive_drift_quad(t, mu_drift, threshold, s, t0, sv,
+                                     lambda_g, lambda_k, log_out, kill_shape,
+                                     guess, 20);
+  }
 
-  return dswtn_core(t_eam, mu_drift, threshold, s, t0, sv, lambda, log_norm, log_out, kill_shape, guess, posdrift);
+  // log_norm = 0 means defective density; dswtn_core normalises by exp(log_norm).
+  return dswtn_core(t_eam, mu_drift, threshold, s, t0, sv, lambda, 0.0,
+                    log_out, kill_shape, guess, false);
 }
 
 // --------------------------------------------------------------------------
@@ -1056,6 +1083,170 @@ inline double norm_cdf_2d_stable(double x, double y, double rho) {
   if (std::fabs(rho) > 0.9999 || std::fabs(x) > 8.0 || std::fabs(y) > 8.0)
     return norm_cdf_2d(x, y, rho);
   return norm_cdf_2d_fast(x, y, rho);
+}
+
+inline double positive_trunc_swtn_cdf_k0(double t, double mu_drift,
+                                         double threshold, double s,
+                                         double t0, double sv,
+                                         bool log_out) {
+  const double dt = t - t0;
+  if (dt <= 1e-10) return log_out ? R_NegInf : 0.0;
+  if (threshold <= 1e-10) return log_out ? 0.0 : 1.0;
+  if (!(s > 1e-10) || !(sv > 1e-10) || sv < 0.0) return NA_REAL;
+  if (!emc2_isfinite(dt)) return log_out ? 0.0 : 1.0;
+
+  const double log_denom = pnorm_std(mu_drift / sv, true, true);
+  if (log_denom == R_NegInf) return log_out ? R_NegInf : 0.0;
+
+  const double sv2 = sv * sv;
+  const double s2 = s * s;
+  const double Q = s2 + sv2 * dt;
+  const double sqrt_Q = std::sqrt(Q);
+  const double denom = std::sqrt(dt * Q);
+  const double rho_mag = sv * std::sqrt(dt) / sqrt_Q;
+  const double z0 = -mu_drift / sv;
+
+  const double h1 = (mu_drift * dt - threshold) / denom;
+  const double phi_h1 = pnorm_std(h1, true, false);
+  const double biv1 = norm_cdf_2d_stable(z0, h1, -rho_mag);
+  const double term1 = std::fmax(0.0, phi_h1 - biv1);
+
+  const double alpha = 2.0 * threshold / s2;
+  const double mu_p = mu_drift + alpha * sv2;
+  const double h2 = (-mu_p * dt - threshold) / denom;
+  const double z0_p = -mu_p / sv;
+  const double phi_h2 = pnorm_std(h2, true, false);
+  const double biv2 = norm_cdf_2d_stable(z0_p, h2, rho_mag);
+  const double term2_core = std::fmax(0.0, phi_h2 - biv2);
+
+  const double log_exp_term = alpha * mu_drift + 0.5 * alpha * alpha * sv2;
+  double log_num = R_NegInf;
+  if (term1 > 0.0) log_num = log_sum_exp(log_num, std::log(term1));
+  if (term2_core > 0.0) log_num = log_sum_exp(log_num, log_exp_term + std::log(term2_core));
+  if (log_num == R_NegInf) return log_out ? R_NegInf : 0.0;
+
+  double log_cdf = log_num - log_denom;
+  if (ISNAN(log_cdf)) return log_out ? R_NegInf : 0.0;
+  if (log_cdf > 0.0 && log_cdf < 1e-10) log_cdf = 0.0;
+  if (log_cdf > 0.0) log_cdf = 0.0;
+  return log_out ? log_cdf : std::exp(log_cdf);
+}
+
+inline double positive_trunc_swtn_density_k0(double t, double mu_drift,
+                                             double threshold, double s,
+                                             double t0, double sv,
+                                             bool log_out) {
+  const double dt = t - t0;
+  if (dt <= 1e-10 || threshold <= 1e-10) return log_out ? R_NegInf : 0.0;
+  if (!(s > 1e-10) || !(sv > 1e-10) || sv < 0.0) return NA_REAL;
+
+  const double v = sv * sv;
+  const double s2 = s * s;
+  const double den_common = dt * v + s2;
+  const double log_full =
+    std::log(threshold) -
+    0.5 * (std::log(M_PI) + M_LN2 + 3.0 * std::log(dt) + std::log(den_common)) -
+    (std::pow(threshold - mu_drift * dt, 2.0)) / (2.0 * dt * den_common);
+
+  const double mu_new = (threshold * v + mu_drift * s2) / den_common;
+  const double sigma_new = std::sqrt(s2 * v / den_common);
+  const double log_tail = pnorm_std(mu_new / sigma_new, true, true);
+  const double log_denom = pnorm_std(mu_drift / sv, true, true);
+  const double log_pdf = log_full + log_tail - log_denom;
+
+  if (ISNAN(log_pdf) || log_pdf == R_NegInf) return log_out ? R_NegInf : 0.0;
+  return log_out ? log_pdf : std::exp(log_pdf);
+}
+
+template <typename KernelFn>
+inline double integrate_positive_drift_gl(double mu_drift, double sv,
+                                          int n_gauss_nodes, KernelFn&& kernel_fn) {
+  if (!(sv > 1e-10) || !emc2_isfinite(sv)) {
+    return kernel_fn(mu_drift);
+  }
+
+  const double lower_p_raw = pnorm_std(-mu_drift / sv, true, false);
+  const double upper_p = std::nextafter(1.0, 0.0);
+  const double lower_p = std::fmax(0.0, std::fmin(lower_p_raw, upper_p));
+  const double mass = upper_p - lower_p;
+  if (!(mass > 0.0)) return 0.0;
+
+  const int n_nodes = std::max(1, n_gauss_nodes);
+  Rcpp::List gl = get_gl_nodes_weights(n_nodes);
+  const Rcpp::NumericVector gl_nodes   = gl["nodes"];
+  const Rcpp::NumericVector gl_weights = gl["weights"];
+
+  double integral = 0.0;
+  for (int j = 0; j < n_nodes; ++j) {
+    const double p = lower_p + 0.5 * mass * (gl_nodes[j] + 1.0);
+    const double p_safe = std::fmin(upper_p, std::fmax(1e-15, p));
+    const double drift_j = mu_drift + sv * R::qnorm(p_safe, 0.0, 1.0, true, false);
+    integral += gl_weights[j] * kernel_fn(drift_j);
+  }
+
+  // The mass cancels against the truncated-normal normalizer.
+  return 0.5 * integral;
+}
+
+inline double dswtn_positive_drift_quad(double t, double mu_drift, double threshold,
+                                        double s, double t0, double sv,
+                                        double lambda_g, double lambda_k,
+                                        bool log_out, int kill_shape, bool guess,
+                                        int n_gauss_nodes = 20) {
+  const double lambda = guess ? lambda_g : lambda_k;
+  if (lambda <= 1e-10) {
+    return positive_trunc_swtn_density_k0(t, mu_drift, threshold, s, t0, sv, log_out);
+  }
+  if (guess && lambda_k <= 1e-10) {
+    const double f_decision =
+      positive_trunc_swtn_density_k0(t, mu_drift, threshold, s, t0, sv, false);
+    const double F_decision =
+      positive_trunc_swtn_cdf_k0(t, mu_drift, threshold, s, t0, sv, false);
+    return local_combo_response_pdf(t, f_decision, F_decision,
+                                    lambda_g, 0.0, kill_shape, log_out);
+  }
+
+  const auto kernel = [&](double drift) {
+    return dwald(t, drift, threshold, 0.0, s, t0,
+                 guess ? lambda : 0.0, guess ? 0.0 : lambda,
+                 false, kill_shape, guess, false);
+  };
+  const double out = integrate_positive_drift_gl(mu_drift, sv, n_gauss_nodes, kernel);
+  if (!(out > 0.0) || !emc2_isfinite(out)) return log_out ? R_NegInf : 0.0;
+  return log_out ? std::log(out) : out;
+}
+
+inline double pswtn_positive_drift_quad(double t, double mu_drift, double threshold,
+                                        double s, double t0, double sv,
+                                        double lambda_g, double lambda_k,
+                                        bool log_out, int kill_shape, bool guess,
+                                        int n_gauss_nodes = 20) {
+  const double lambda = guess ? lambda_g : lambda_k;
+  if (lambda <= 1e-10) {
+    return positive_trunc_swtn_cdf_k0(t, mu_drift, threshold, s, t0, sv, log_out);
+  }
+  if (guess && lambda_k <= 1e-10) {
+    auto finish = [&](double log_p) {
+      if (ISNAN(log_p)) return NA_REAL;
+      if (log_p > 0.0) log_p = 0.0;
+      return log_out ? log_p : std::exp(log_p);
+    };
+    const double fw = std::max(0.0, std::min(1.0,
+      positive_trunc_swtn_cdf_k0(t, mu_drift, threshold, s, t0, sv, false)));
+    const double log_sr = std::log1p(-fw);
+    const double log_sk = erlang_log_surv(t, lambda_g, kill_shape);
+    return finish(std::log1p(-std::exp(log_sr + log_sk)));
+  }
+
+  const auto kernel = [&](double drift) {
+    return pwald(t, drift, threshold, 0.0, s, t0,
+                 guess ? lambda : 0.0, guess ? 0.0 : lambda,
+                 false, kill_shape, guess, false);
+  };
+  double out = integrate_positive_drift_gl(mu_drift, sv, n_gauss_nodes, kernel);
+  out = std::fmax(0.0, std::fmin(1.0, out));
+  if (!(out > 0.0)) return log_out ? R_NegInf : 0.0;
+  return log_out ? std::log(out) : out;
 }
 
 // TODO check this
@@ -1097,6 +1288,51 @@ inline double drdmswtn_joint_A_sv_density_fullgauss(
   }
   
   return log_out ? std::log(dens) : dens;
+}
+
+inline double drdmswtn_positive_drift_quad(double t, double mu_drift, double b, double A,
+                                           double s, double t0, double sv,
+                                           double lambda_g, double lambda_k,
+                                           int n_gauss_nodes, bool log_out,
+                                           int kill_shape, bool guess) {
+  if (A < 1e-7) {
+    return dswtn_positive_drift_quad(t, mu_drift, b, s, t0, sv,
+                                     lambda_g, lambda_k, log_out, kill_shape,
+                                     guess, n_gauss_nodes);
+  }
+
+  const double lambda = guess ? lambda_g : lambda_k;
+  const auto kernel = [&](double drift) {
+    return dwald(t, drift, b, A, s, t0,
+                 guess ? lambda : 0.0, guess ? 0.0 : lambda,
+                 false, kill_shape, guess, false);
+  };
+  const double out = integrate_positive_drift_gl(mu_drift, sv, n_gauss_nodes, kernel);
+  if (!(out > 0.0) || !emc2_isfinite(out)) return log_out ? R_NegInf : 0.0;
+  return log_out ? std::log(out) : out;
+}
+
+inline double prdmswtn_positive_drift_quad(double t, double mu_drift, double b, double A,
+                                           double s, double t0, double sv,
+                                           double lambda_g, double lambda_k,
+                                           int n_gauss_nodes, bool log_out,
+                                           int kill_shape, bool guess) {
+  if (A < 1e-7) {
+    return pswtn_positive_drift_quad(t, mu_drift, b, s, t0, sv,
+                                     lambda_g, lambda_k, log_out, kill_shape,
+                                     guess, n_gauss_nodes);
+  }
+
+  const double lambda = guess ? lambda_g : lambda_k;
+  const auto kernel = [&](double drift) {
+    return pwald(t, drift, b, A, s, t0,
+                 guess ? lambda : 0.0, guess ? 0.0 : lambda,
+                 false, kill_shape, guess, false);
+  };
+  double out = integrate_positive_drift_gl(mu_drift, sv, n_gauss_nodes, kernel);
+  out = std::fmax(0.0, std::fmin(1.0, out));
+  if (!(out > 0.0)) return log_out ? R_NegInf : 0.0;
+  return log_out ? std::log(out) : out;
 }
 
 double drdmswtn(double t, double mu_drift, double b, double A,
@@ -1777,10 +2013,10 @@ inline double prdmswtn_killed_inf_quad(double b, double mu_drift, double A,
     } else {
       const double nu = std::sqrt(mu_drift * mu_drift + 2.0 * s2 * lambda);
       const double eta = (mu_drift - nu) / s2;
-      log_p = log_wald_posdrift_hit_normalizer(true, 0.5 * eta, 1.0, b, b - A, b);
+      log_p = log_wald_posdrift_hit_normalizer(true, 0.5 * eta * s2, s, b, 0.0, A);
     }
     if (posdrift) {
-      log_p -= log_wald_posdrift_hit_normalizer(true, mu_drift, s, b, b - A, b);
+      log_p -= log_wald_posdrift_hit_normalizer(true, mu_drift, s, b, 0.0, A);
     }
     return finish_log(log_p);
   }
@@ -1806,7 +2042,7 @@ inline double prdmswtn_killed_inf_quad(double b, double mu_drift, double A,
     } else {
       const double nu_j  = std::sqrt(drift_j * drift_j + 2.0 * s2 * lambda);
       const double eta_j = (drift_j - nu_j) / s2;
-      log_hit_j = log_wald_posdrift_hit_normalizer(true, 0.5 * eta_j, 1.0, b, b - A, b);
+      log_hit_j = log_wald_posdrift_hit_normalizer(true, 0.5 * eta_j * s2, s, b, 0.0, A);
     }
 
     if (gl_weights[j] > 0.0) {
@@ -1823,6 +2059,9 @@ double pswtn(double t, double mu_drift, double threshold, double s = 1.0,
              double t0 = 0.0, double sv = 0.0, double lambda_g = 0.0, double lambda_k = 0.0,
              bool log_out = false, int kill_shape = 1, bool guess = false, bool posdrift = true) {
   const double lambda = guess ? lambda_g : lambda_k;
+  if (sv < 0.0) return R_NaN;
+  if (posdrift && sv <= 1e-10 && mu_drift <= 0.0)
+    return log_out ? R_NegInf : 0.0;
 
   // t is raw rt; dt = t - t0 is EAM decision time.
   const double dt = t - t0;
@@ -1837,11 +2076,15 @@ double pswtn(double t, double mu_drift, double threshold, double s = 1.0,
     return finish(std::log1p(-std::exp(erlang_log_surv(t, lambda, kill_shape))));
   }
   if (threshold <= 1e-10) return log_out ? 0.0 : 1.0;
-  if (sv < 0.0) return R_NaN;
 
   const double t_raw = t;  // raw rt for erlang
 
   if (guess && lambda > 0.0) {
+    if (sv > 1e-10 && posdrift) {
+      return pswtn_positive_drift_quad(t, mu_drift, threshold, s, t0, sv,
+                                       lambda_g, lambda_k, log_out, kill_shape,
+                                       true, 20);
+    }
     auto finish = [&](double log_p) {
       if (ISNAN(log_p)) return NA_REAL;
       if (log_p > 0.0) log_p = 0.0;
@@ -1855,7 +2098,14 @@ double pswtn(double t, double mu_drift, double threshold, double s = 1.0,
 
   if (sv <= 1e-10) {
     // Pass raw time and t0 to pwald so erlang uses physical time; allow negative drift.
-    return pwald(t_raw, mu_drift, threshold, 0.0, s, t0, lambda, lambda, log_out, kill_shape, guess, posdrift);
+    return pwald(t_raw, mu_drift, threshold, 0.0, s, t0, lambda, lambda,
+                 log_out, kill_shape, guess, false);
+  }
+
+  if (posdrift) {
+    return pswtn_positive_drift_quad(t, mu_drift, threshold, s, t0, sv,
+                                     lambda_g, lambda_k, log_out, kill_shape,
+                                     false, 20);
   }
 
   if (lambda > 1e-10) {
@@ -1894,11 +2144,7 @@ double pswtn(double t, double mu_drift, double threshold, double s = 1.0,
   
   const double log_num = log_sum_exp(log_A, log_B);
   
-  const double log_norm = posdrift
-    ? log_swtn_hit_mass(mu_drift, sv, s, threshold)
-    : 0.0;
-  
-  const double log_cdf = log_num - log_norm;
+  const double log_cdf = log_num;
   
   if (ISNAN(log_cdf)) return log_out ? R_NegInf : 0.0;
   if (log_cdf > 0.0){
@@ -1926,10 +2172,19 @@ double drdmswtn(double t, double mu_drift, double b, double A,
   const double lambda = guess ? lambda_g : lambda_k;
   const bool no_A  = (A  < 1e-7);
   const bool no_sv = (sv < 1e-7);
+  if (posdrift && no_sv && mu_drift <= 0.0)
+    return log_out ? R_NegInf : 0.0;
 
   if (no_sv) {
     // sv=0: standard Wald (dwald handles t_eam <= 0 and neg drift internally).
-    return dwald(t, mu_drift, b, A, s, t0, lambda, lambda, log_out, kill_shape, guess, posdrift);
+    return dwald(t, mu_drift, b, A, s, t0, lambda, lambda,
+                 log_out, kill_shape, guess, false);
+  } else if (posdrift) {
+    return drdmswtn_positive_drift_quad(t, mu_drift, b, A, s, t0, sv,
+                                        guess ? lambda : 0.0,
+                                        guess ? 0.0 : lambda,
+                                        n_gauss_nodes, log_out,
+                                        kill_shape, guess);
   } else if (no_A && !no_sv) {
     // SWTN with fixed threshold b (dswtn handles t_eam <= 0 via its t0 param).
     return dswtn(t, mu_drift, b, s, t0, sv,
@@ -1937,7 +2192,7 @@ double drdmswtn(double t, double mu_drift, double b, double A,
                  log_out, kill_shape, guess, posdrift);
   } else {
     if (!guess && lambda <= 1e-10) {
-      return drdmswtn_joint_A_sv_density_fullgauss(t_eam, mu_drift, b, A, s, sv, posdrift, n_gauss_nodes, log_out);
+      return drdmswtn_joint_A_sv_density_fullgauss(t_eam, mu_drift, b, A, s, sv, false, n_gauss_nodes, log_out);
     }
 
     // Full model: integrate defective dswtn_core over threshold ~ Unif(b-A, b),
@@ -1956,8 +2211,6 @@ double drdmswtn(double t, double mu_drift, double b, double A,
       );
     }
     double out_val = integral * 0.5;
-    if (posdrift)
-      out_val *= std::exp(-log_swtn_spv_hit_mass_full(mu_drift, sv, s, b, A, n_gauss_nodes));
     if (out_val < 0.0 || ISNAN(out_val)) return log_out ? R_NegInf : 0.0;
     return log_out ? std::log(out_val) : out_val;
   }
@@ -1977,21 +2230,15 @@ double prdmswtn(double t, double mu_drift, double b, double A,
   const double lambda = guess ? lambda_g : lambda_k;
   const bool no_A  = (A  < 1e-7);
   const bool no_sv = (sv < 1e-7);
+  if (posdrift && no_sv && mu_drift <= 0.0)
+    return log_out ? R_NegInf : 0.0;
 
-  if (!emc2_isfinite(t_eam) && lambda > 1e-10) {
-    return prdmswtn_killed_inf_quad(b, mu_drift, A, sv, s, lambda, n_gauss_nodes, log_out, kill_shape, posdrift);
-  }
-
-  if (!emc2_isfinite(t_eam) && lambda <= 1e-10) {
-    // At t=Inf with no killing the defective mass is exactly the hit probability.
-    // Return 1.0 (or log 0.0) for posdrift=TRUE; the hit mass for posdrift=FALSE.
-    if (posdrift) return log_out ? 0.0 : 1.0;
-    const double log_mass = no_sv
-        ? log_swtn_hit_mass(mu_drift, 0.0, s, b)
-        : no_A
-            ? log_swtn_hit_mass(mu_drift, sv, s, b)
-            : log_swtn_spv_hit_mass_full(mu_drift, sv, s, b, A, n_gauss_nodes);
-    return log_out ? log_mass : std::exp(log_mass);
+  if (posdrift && !no_sv) {
+    return prdmswtn_positive_drift_quad(t, mu_drift, b, A, s, t0, sv,
+                                        guess ? lambda : 0.0,
+                                        guess ? 0.0 : lambda,
+                                        n_gauss_nodes, log_out,
+                                        kill_shape, guess);
   }
 
   if (guess && lambda > 0.0) {
@@ -2006,9 +2253,25 @@ double prdmswtn(double t, double mu_drift, double b, double A,
       // EAM hasn't started: S_R = 1, CDF = 1 - S_K(t)
       return finish(std::log1p(-std::exp(log_sk)));
     }
-    const double fw = std::max(0.0, std::min(1.0, prdmswtn(t_eam, mu_drift, b, A, s, 0.0, sv, 0.0, 0.0, n_gauss_nodes, false, 1, false, posdrift)));
+    const double fw = std::max(0.0, std::min(1.0, prdmswtn(t_eam, mu_drift, b, A, s, 0.0, sv, 0.0, 0.0, n_gauss_nodes, false, 1, false, false)));
     const double log_sr = std::log1p(-fw);
     return finish(std::log1p(-std::exp(log_sr + log_sk)));
+  }
+
+  if (!emc2_isfinite(t_eam) && lambda > 1e-10) {
+    return prdmswtn_killed_inf_quad(b, mu_drift, A, sv, s, lambda,
+                                    n_gauss_nodes, log_out, kill_shape, false);
+  }
+
+  if (!emc2_isfinite(t_eam) && lambda <= 1e-10) {
+    // At t=Inf with no killing the defective mass is exactly the hit probability.
+    const double log_mass = no_sv
+        ? pwald(R_PosInf, mu_drift, b, A, s, 0.0, 0.0, 0.0,
+                true, 1, false, false)
+        : no_A
+            ? log_swtn_hit_mass(mu_drift, sv, s, b)
+            : log_swtn_spv_hit_mass_full(mu_drift, sv, s, b, A, n_gauss_nodes);
+    return log_out ? log_mass : std::exp(log_mass);
   }
 
   // No-guess path: return 0 if EAM hasn't started.
@@ -2017,7 +2280,8 @@ double prdmswtn(double t, double mu_drift, double b, double A,
   if (no_sv) {
     // Allow zero and negative drift (defective distribution).
     // Pass raw t and t0 to pwald so erlang inside uses physical time.
-    return pwald(t, mu_drift, b, A, s, t0, lambda, lambda, log_out, kill_shape, guess);
+    return pwald(t, mu_drift, b, A, s, t0, lambda, lambda,
+                 log_out, kill_shape, guess, false);
   } else if (no_A && !no_sv) {
     // pswtn receives raw t and uses t0 internally to form dt.
     return pswtn(t, mu_drift, b, s, t0, sv, lambda, lambda, log_out, kill_shape, guess, posdrift);
@@ -2045,11 +2309,6 @@ double prdmswtn(double t, double mu_drift, double b, double A,
     }
     double out_val = 0.5 * integral;
     
-    if (posdrift) {
-      out_val *= std::exp(
-        -log_swtn_spv_hit_mass_full(mu_drift, sv, s, b, A, n_gauss_nodes)
-      );
-    }
     out_val = std::fmax(0.0, std::fmin(1.0, out_val));
     return log_out ? std::log(out_val) : out_val;
   }

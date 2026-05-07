@@ -865,6 +865,7 @@ inline double drdmswtn_scalar(double t, const double* par, void* ctx_) {
   const double lk = (ctx && ctx->kill_active && ctx->apply_lk_to_racers) ? par[7] : 0.0;
   const int ks = ctx ? ctx->kill_shape : 1;
   const bool is_guess = ctx ? (ctx->is_local_guess || ctx->is_local_kill_guess) : false;
+  const bool pd = ctx ? ctx->use_posdrift : true;
   const bool erl = (lg > 1e-12 || lk > 1e-12);
   if (tt <= 0.0 && !erl) return 0.0;
   if (t <= 0.0) return 0.0;
@@ -872,7 +873,7 @@ inline double drdmswtn_scalar(double t, const double* par, void* ctx_) {
   if (lg > 1e-12 && lk > 1e-12) {
     return drdmswtn_local_combo(t, par[0] * inv_s, (par[1] + par[2]) * inv_s,
                                 par[2] * inv_s, 1.0, t0_val, par[5] * inv_s,
-                                lg, lk, 0.0, 20, false, ks);
+                                lg, lk, 20, false, ks, pd);
   }
   const double lg_use = is_guess ? lg : 0.0;
   const double lk_use = is_guess ? 0.0 : lk;
@@ -881,7 +882,7 @@ inline double drdmswtn_scalar(double t, const double* par, void* ctx_) {
                   (par[1] + par[2]) * inv_s,
                   par[2] * inv_s,
                   1.0, t0_val, par[5] * inv_s,
-                  lg_use, lk_use, 0.0, 20, false, ks, is_guess);
+                  lg_use, lk_use, 20, false, ks, is_guess, pd);
 }
 
 inline double prdmswtn_scalar(double t, const double* par, void* ctx_) {
@@ -894,13 +895,14 @@ inline double prdmswtn_scalar(double t, const double* par, void* ctx_) {
   const double lk = (ctx && ctx->kill_active && ctx->apply_lk_to_racers) ? par[7] : 0.0;
   const int ks = ctx ? ctx->kill_shape : 1;
   const bool is_guess = ctx ? (ctx->is_local_guess || ctx->is_local_kill_guess) : false;
+  const bool pd = ctx ? ctx->use_posdrift : true;
   const bool erl = (lg > 1e-12 || lk > 1e-12);
   if (tt <= 0.0 && !erl) return 0.0;
   if (t <= 0.0) return 0.0;
   if (lg > 1e-12 && lk > 1e-12) {
     return prdmswtn_local_combo(t, par[0] * inv_s, (par[1] + par[2]) * inv_s,
                                 par[2] * inv_s, 1.0, t0_val, par[5] * inv_s,
-                                lg, lk, 0.0, 20, false, ks);
+                                lg, lk, 20, false, ks, pd);
   }
   const double lg_use = is_guess ? lg : 0.0;
   const double lk_use = is_guess ? 0.0 : lk;
@@ -909,7 +911,7 @@ inline double prdmswtn_scalar(double t, const double* par, void* ctx_) {
                   (par[1] + par[2]) * inv_s,
                   par[2] * inv_s,
                   1.0, t0_val, par[5] * inv_s,
-                  lg_use, lk_use, 0.0, 20, false, ks, is_guess);
+                  lg_use, lk_use, 20, false, ks, is_guess, pd);
 }
 
 inline void drdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
@@ -919,6 +921,7 @@ inline void drdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
   const bool floor_raw = raw_floor_log_lik(ctx_);
   const int kill_shape   = ctx ? ctx->kill_shape : 1;
   const bool is_guess_type = ctx ? (ctx->is_local_guess || ctx->is_local_kill_guess) : false;
+  const bool pd = ctx ? ctx->use_posdrift : true;
   const double* v_       = pars_cm + 0 * n_rows;
   const double* B_       = pars_cm + 1 * n_rows;
   const double* A_       = pars_cm + 2 * n_rows;
@@ -945,11 +948,11 @@ inline void drdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
       // Pass raw rt and t0; combo function splits EAM vs erlang time.
       log_pdf = drdmswtn_local_combo(rt[i], v_[i] * inv_s, (B_[i] + A_[i]) * inv_s,
                                      A_[i] * inv_s, 1.0, t0_i, sv_[i] * inv_s,
-                                     lg, lk, 0.0, 20, true, kill_shape);
+                                     lg, lk, 20, true, kill_shape, pd);
     } else if (!emc2_isfinite(sv_[i]) || std::fabs(sv_[i]) <= sv_eps) {
       const double lg_use = is_guess_type ? lg : 0.0;
       const double lk_use = is_guess_type ? 0.0 : lk;
-      if (lg_use <= 0.0 && lk_use <= 0.0) {
+      if (lg_use <= 0.0 && lk_use <= 0.0 && !pd) {
         // No kill, no sv, no erlang: canonical Wald using EAM time directly.
         if (tt <= 0.0) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
         const double pdf = dwald_k0(tt, (B_[i] + A_[i]) * inv_s, v_[i] * inv_s, A_[i] * inv_s);
@@ -957,7 +960,7 @@ inline void drdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
       } else {
         // Pass raw rt and t0 to dwald.
         log_pdf = dwald(rt[i], v_[i] * inv_s, (B_[i] + A_[i]) * inv_s, A_[i] * inv_s,
-                        1.0, t0_i, lg_use, lk_use, true, kill_shape, is_guess_type);
+                        1.0, t0_i, lg_use, lk_use, true, kill_shape, is_guess_type, pd);
       }
     } else {
       const double lg_use = is_guess_type ? lg : 0.0;
@@ -965,7 +968,7 @@ inline void drdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
       // Pass raw rt and t0; drdmswtn splits EAM vs erlang time.
       log_pdf = drdmswtn(rt[i], v_[i] * inv_s, (B_[i] + A_[i]) * inv_s,
                          A_[i] * inv_s, 1.0, t0_i, sv_[i] * inv_s,
-                         lg_use, lk_use, 0.0, 20, true, kill_shape, is_guess_type && lg_use > 1e-12);
+                         lg_use, lk_use, 20, true, kill_shape, is_guess_type && lg_use > 1e-12, pd);
     }
     out[i] = raw_log_value(log_pdf, min_ll, floor_raw);
   }
@@ -978,6 +981,7 @@ inline void prdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
   const bool floor_raw = raw_floor_log_lik(ctx_);
   const int kill_shape   = ctx ? ctx->kill_shape : 1;
   const bool is_guess_type = ctx ? (ctx->is_local_guess || ctx->is_local_kill_guess) : false;
+  const bool pd = ctx ? ctx->use_posdrift : true;
   const double* v_       = pars_cm + 0 * n_rows;
   const double* B_       = pars_cm + 1 * n_rows;
   const double* A_       = pars_cm + 2 * n_rows;
@@ -1002,7 +1006,7 @@ inline void prdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
     if (lg > 1e-12 && lk > 1e-12) {
       const double log_cdf = prdmswtn_local_combo(rt[i], v_[i] * inv_s, (B_[i] + A_[i]) * inv_s,
                                                   A_[i] * inv_s, 1.0, t0_i, sv_[i] * inv_s,
-                                                  lg, lk, 0.0, 20, true, kill_shape);
+                                                  lg, lk, 20, true, kill_shape, pd);
       if (!R_FINITE(log_cdf)) { out[i] = 0.0; continue; }
       if (log_cdf >= 0.0) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
       out[i] = log1m_exp(log_cdf);
@@ -1012,7 +1016,7 @@ inline void prdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
     const double lk_use = is_guess_type ? 0.0 : lk;
     double log_cdf;
     if (!emc2_isfinite(sv_[i]) || std::fabs(sv_[i]) <= sv_eps) {
-      if (lg_use <= 0.0 && lk_use <= 0.0) {
+      if (lg_use <= 0.0 && lk_use <= 0.0 && !pd) {
         // No kill, no erlang: canonical Wald using EAM time.
         if (tt <= 0.0) { out[i] = 0.0; continue; }
         const double cdf = pwald_k0(tt, (B_[i] + A_[i]) * inv_s, v_[i] * inv_s, A_[i] * inv_s);
@@ -1021,11 +1025,11 @@ inline void prdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
         continue;
       }
       log_cdf = pwald(rt[i], v_[i] * inv_s, (B_[i] + A_[i]) * inv_s, A_[i] * inv_s,
-                      1.0, t0_i, lg_use, lk_use, true, kill_shape, is_guess_type);
+                      1.0, t0_i, lg_use, lk_use, true, kill_shape, is_guess_type, pd);
     } else {
       log_cdf = prdmswtn(rt[i], v_[i] * inv_s, (B_[i] + A_[i]) * inv_s,
                          A_[i] * inv_s, 1.0, t0_i, sv_[i] * inv_s,
-                         lg_use, lk_use, 0.0, 20, true, kill_shape, is_guess_type && lg_use > 1e-12);
+                         lg_use, lk_use, 20, true, kill_shape, is_guess_type && lg_use > 1e-12, pd);
     }
     if (!R_FINITE(log_cdf)) { out[i] = 0.0; continue; }
     if (log_cdf >= 0.0) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
@@ -1042,6 +1046,7 @@ inline void rdmswtn_logS_at_t(double t, const double* pars_cm,
   const int kill_shape   = ctx ? ctx->kill_shape : 1;
   const bool is_guess_type = ctx ? (ctx->is_local_guess || ctx->is_local_kill_guess) : false;
   const int mode_hint = ctx ? ctx->mode_hint : 0;
+  const bool pd = ctx ? ctx->use_posdrift : true;
   const double* v_      = pars_cm + 0 * n_rows_total;
   const double* B_      = pars_cm + 1 * n_rows_total;
   const double* A_      = pars_cm + 2 * n_rows_total;
@@ -1080,7 +1085,7 @@ inline void rdmswtn_logS_at_t(double t, const double* pars_cm,
       if (lg > 1e-12 && lk > 1e-12) {
         log_cdf = prdmswtn_local_combo(t, v_[r] * inv_s, (B_[r] + A_[r]) * inv_s,
                                        A_[r] * inv_s, 1.0, t0_r, sv_[r] * inv_s,
-                                       lg, lk, 0.0, 20, true, kill_shape);
+                                       lg, lk, 20, true, kill_shape, pd);
         if (!R_FINITE(log_cdf) || log_cdf >= 0.0) { bad = true; break; }
         logS += log1m_exp(log_cdf);
         continue;
@@ -1088,7 +1093,7 @@ inline void rdmswtn_logS_at_t(double t, const double* pars_cm,
       const double lg_use = is_guess_type ? lg : 0.0;
       const double lk_use = is_guess_type ? 0.0 : lk;
       if (mode_hint == 1) {
-        if (lg_use <= 0.0 && lk_use <= 0.0) {
+        if (lg_use <= 0.0 && lk_use <= 0.0 && !pd) {
           const double cdf = pwald_k0(tt, (B_[r] + A_[r]) * inv_s, v_[r] * inv_s, A_[r] * inv_s);
           const double cl  = std::max(0.0, std::min(1.0, cdf));
           log_cdf = (cl <= 0.0) ? R_NegInf : (cl >= 1.0 ? 0.0 : std::log(cl));
@@ -1100,7 +1105,7 @@ inline void rdmswtn_logS_at_t(double t, const double* pars_cm,
                           1.0,
                           t0_r,
                           lg_use, lk_use,
-                          true, kill_shape, is_guess_type);
+                          true, kill_shape, is_guess_type, pd);
         }
       } else if (mode_hint == 2) {
         log_cdf = prdmswtn(t,
@@ -1110,9 +1115,9 @@ inline void rdmswtn_logS_at_t(double t, const double* pars_cm,
                            1.0,
                            t0_r,
                            sv_[r] * inv_s,
-                           lg_use, lk_use, 0.0, 20, true, kill_shape, is_guess_type && lg_use > 1e-12);
+                           lg_use, lk_use, 20, true, kill_shape, is_guess_type && lg_use > 1e-12, pd);
       } else if (!emc2_isfinite(sv_[r]) || std::fabs(sv_[r]) <= sv_eps) {
-        if (lg_use <= 0.0 && lk_use <= 0.0) {
+        if (lg_use <= 0.0 && lk_use <= 0.0 && !pd) {
           const double cdf = pwald_k0(tt, (B_[r] + A_[r]) * inv_s, v_[r] * inv_s, A_[r] * inv_s);
           const double cl  = std::max(0.0, std::min(1.0, cdf));
           log_cdf = (cl <= 0.0) ? R_NegInf : (cl >= 1.0 ? 0.0 : std::log(cl));
@@ -1124,7 +1129,7 @@ inline void rdmswtn_logS_at_t(double t, const double* pars_cm,
                           1.0,
                           t0_r,
                           lg_use, lk_use,
-                          true, kill_shape, is_guess_type);
+                          true, kill_shape, is_guess_type, pd);
         }
       } else {
         log_cdf = prdmswtn(t,
@@ -1134,7 +1139,7 @@ inline void rdmswtn_logS_at_t(double t, const double* pars_cm,
                            1.0,
                            t0_r,
                            sv_[r] * inv_s,
-                           lg_use, lk_use, 0.0, 20, true, kill_shape, is_guess_type && lg_use > 1e-12);
+                           lg_use, lk_use, 20, true, kill_shape, is_guess_type && lg_use > 1e-12, pd);
       }
       if (log_cdf >= 0.0) { bad = true; break; }
       if (R_FINITE(log_cdf)) logS += log1m_exp(log_cdf);

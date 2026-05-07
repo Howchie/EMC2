@@ -142,7 +142,7 @@ test_that("timed RDMSWTN likelihood matches manual mixture with truncation", {
   p_vec <- sampled_pars(timed_design, doMap = FALSE)
   p_vec[] <- 0
   p_vec["v_lRleft"] <- log(3)
-  p_vec["v_lRright"] <- log(1)
+  p_vec["v_lRright"] <- log(1.2)
   p_vec["v_lRtime"] <- log(2)
   p_vec["B"] <- log(1)
   p_vec["A"] <- log(0)
@@ -188,6 +188,72 @@ test_that("timed RDMSWTN likelihood matches manual mixture with truncation", {
   manual_density <- f[1] * S_rt[2] * S_rt[3] + f[3] * S_rt[1] * S_rt[2] / 2
   trunc_prob <- prod(1 - F_lt) - prod(1 - F_ut)
   expect_equal(as.numeric(ll_cpp), log(manual_density) - log(trunc_prob), tolerance = 5e-3)
+})
+
+test_that("RDMSWTN IO C++ likelihood keeps defective Wald normalization with truncation", {
+  timed_design <- design(
+    factors = list(subjects = 1, S = "stim"),
+    Rlevels = c("left", "right"),
+    matchfun = function(d) as.character(d$S) == as.character(d$lR),
+    model = RDMSWTN(posdrift = FALSE),
+    formula = list(v ~ 0 + lR, B ~ 1, A ~ 1, t0 ~ 1, s ~ 1, sv ~ 1),
+    constants = c(lambda_g = log(0), lambda_k = log(0), sv = log(0)),
+    report_p_vector = FALSE
+  )
+
+  dat <- data.frame(
+    subjects = factor(1),
+    S = factor("stim"),
+    R = factor("left", levels = c("left", "right")),
+    rt = 0.7,
+    LT = 0.2,
+    UT = 2.0
+  )
+  emc <- make_emc(dat, timed_design, type = "single", compress = FALSE, n_chains = 1)
+  model_obj <- emc[[1]]$model()
+  dadm <- emc[[1]]$data[[1]]
+
+  p_vec <- sampled_pars(timed_design, doMap = FALSE)
+  p_vec[] <- 0
+  p_vec["v_lRleft"] <- -0.7
+  p_vec["v_lRright"] <- -0.4
+  p_vec["B"] <- log(1.0)
+  p_vec["A"] <- log(0.2)
+  p_vec["t0"] <- log(0.1)
+  p_vec["s"] <- log(1)
+
+  p_mat <- matrix(p_vec, nrow = 1, dimnames = list(NULL, names(p_vec)))
+  ll_cpp <- EMC2:::calc_ll_oo(
+    p_mat, dadm,
+    constants = attr(dadm, "constants"),
+    designs = EMC2:::.oo_expanded_designs(dadm),
+    type = model_obj$c_name,
+    bounds = model_obj$bound,
+    transforms = model_obj$transform,
+    pretransforms = model_obj$pre_transform,
+    p_types = names(model_obj$p_types),
+    min_ll = log(1e-10),
+    trend = model_obj$trend
+  )
+
+  pars <- as.matrix(mapped_pars(timed_design, p_vec, data = dat)[, names(model_obj$p_types), drop = FALSE])
+  pars <- cbind(pars, b = pars[, "B"] + pars[, "A"])
+  f <- EMC2:::dSWTNspv(rep(dat$rt, 2), pars[, "v"], pars[, "b"], pars[, "A"],
+                       pars[, "s"], pars[, "t0"], pars[, "sv"],
+                       lambda_g = 0, lambda_k = 0, posdrift = FALSE)
+  F_rt <- EMC2:::pSWTNspv(rep(dat$rt, 2), pars[, "v"], pars[, "b"], pars[, "A"],
+                          pars[, "s"], pars[, "t0"], pars[, "sv"],
+                          lambda_g = 0, lambda_k = 0, posdrift = FALSE)
+  F_lt <- EMC2:::pSWTNspv(rep(dat$LT, 2), pars[, "v"], pars[, "b"], pars[, "A"],
+                          pars[, "s"], pars[, "t0"], pars[, "sv"],
+                          lambda_g = 0, lambda_k = 0, posdrift = FALSE)
+  F_ut <- EMC2:::pSWTNspv(rep(dat$UT, 2), pars[, "v"], pars[, "b"], pars[, "A"],
+                          pars[, "s"], pars[, "t0"], pars[, "sv"],
+                          lambda_g = 0, lambda_k = 0, posdrift = FALSE)
+  manual_density <- f[1] * (1 - F_rt[2])
+  trunc_prob <- prod(1 - F_lt) - prod(1 - F_ut)
+
+  expect_equal(as.numeric(ll_cpp), log(manual_density) - log(trunc_prob), tolerance = 1e-8)
 })
 
 test_that("TRDM split transforms are preserved for C++ likelihood mapping", {

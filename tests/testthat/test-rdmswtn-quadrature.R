@@ -1,4 +1,4 @@
-test_that("prdmswtn matches direct threshold quadrature after integration swap", {
+test_that("prdmswtn matches direct integrations after integration swap", {
   skip_if_not_installed("statmod")
 
   t <- 0.85
@@ -26,12 +26,23 @@ test_that("prdmswtn matches direct threshold quadrature after integration swap",
     tolerance = 1e-6
   )
 
-  # posdrift=TRUE: normalised result should equal defective / hit_mass
-  p_pos  <- EMC2:::prdmswtn(t, v, b, A, sv = sv, s = s, lambda_k = lambda,
-                             n_gauss_nodes = 20, posdrift = TRUE)
-  p_inf  <- EMC2:::prdmswtn(Inf, v, b, A, sv = sv, s = s, lambda_k = 0,
-                             n_gauss_nodes = 20, posdrift = FALSE)
-  expect_equal(p_pos, direct_defective / p_inf, tolerance = 1e-5)
+  # posdrift=TRUE: integrate fixed-A Wald CDFs over the zero-truncated drift
+  # distribution. This avoids threshold quadrature over expensive SWTN CDFs.
+  gl_drift <- statmod::gauss.quad(20, "legendre")
+  alpha <- pnorm(-v / sv)
+  direct_pos <- 0.5 * sum(gl_drift$weights * vapply(gl_drift$nodes, function(node) {
+    u <- 0.5 * (node + 1)
+    p <- alpha + (1 - alpha) * u
+    drift <- v + sv * qnorm(p)
+    EMC2:::pwald(t, drift, b, A = A, sigma = s, lambda_k = lambda, posdrift = FALSE)
+  }, numeric(1)))
+
+  expect_equal(
+    EMC2:::prdmswtn(t, v, b, A, sv = sv, s = s, lambda_k = lambda,
+                    n_gauss_nodes = 20, posdrift = TRUE),
+    direct_pos,
+    tolerance = 1e-6
+  )
 })
 
 test_that("infinite-time SWTN/RDMSWTN masses match analytic hit-mass identities", {

@@ -12,6 +12,20 @@ test_that("pswtn reduces to pwald when sv is zero", {
   )
 })
 
+test_that("prdmswtn forwards posdrift in the sv=0 Wald path", {
+  t <- 0.8
+  b <- 1.4
+  A <- 0.25
+  v <- -0.6
+  s <- 1.0
+
+  expect_equal(
+    EMC2:::prdmswtn(t, v, b, A, sv = 0, s = s, posdrift = FALSE),
+    EMC2:::pwald(t, v, b, A = A, sigma = s, posdrift = FALSE),
+    tolerance = 1e-12
+  )
+})
+
 test_that("killed wald and rdmswtn infinite-time masses are defective", {
   p_wald_inf <- EMC2:::pwald(Inf, mu = 3, b = 2, sigma = 1, A = 0.4, lambda_k = 1,
                               log_out = FALSE, posdrift = FALSE)
@@ -30,10 +44,10 @@ test_that("killed wald and rdmswtn infinite-time masses are defective", {
   expect_lt(p_rdmswtn_sv1_inf, 1)
 })
 
-test_that("posdrift=TRUE gives CDF=1 at Inf; posdrift=FALSE gives hit mass", {
+test_that("posdrift=TRUE truncates SWTN drift at zero; posdrift=FALSE gives hit mass", {
   b <- 1.5; A <- 0.4; v <- -0.3; sv <- 0.5; s <- 1.0
 
-  # posdrift=TRUE: conditional distribution integrates to 1
+  # posdrift=TRUE: positive-drift truncated distribution integrates to 1
   expect_equal(EMC2:::prdmswtn(Inf, v, b, A, sv = sv, s = s, posdrift = TRUE),  1.0, tolerance = 1e-12)
   expect_equal(EMC2:::pswtn(Inf, v, b,    sv = sv, s = s, posdrift = TRUE),     1.0, tolerance = 1e-12)
 
@@ -43,11 +57,12 @@ test_that("posdrift=TRUE gives CDF=1 at Inf; posdrift=FALSE gives hit mass", {
   expect_gt(p_rdm,  0); expect_lt(p_rdm,  1)
   expect_gt(p_swtn, 0); expect_lt(p_swtn, 1)
 
-  # Consistency: posdrift=TRUE at finite t = defective CDF / hit mass
+  # Literal positive-drift truncation is not conditional-hit normalization.
   t <- 1.2
   p_def  <- EMC2:::prdmswtn(t, v, b, A, sv = sv, s = s, posdrift = FALSE)
   p_norm <- EMC2:::prdmswtn(t, v, b, A, sv = sv, s = s, posdrift = TRUE)
-  expect_equal(p_norm, p_def / p_rdm, tolerance = 1e-8)
+  expect_true(p_norm > 0 && p_norm < 1)
+  expect_false(isTRUE(all.equal(p_norm, p_def / p_rdm, tolerance = 1e-4)))
 })
 
 test_that("dswtn/drdmswtn posdrift=TRUE integrates to 1", {
