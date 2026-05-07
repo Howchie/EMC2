@@ -1816,7 +1816,6 @@ inline double prdmswtn_killed_inf_quad(double b, double mu_drift, double A,
 
   const double log_mass = log_integral - M_LN2;
   if (!posdrift) return finish_log(log_mass);
-  
   return finish_log(log_mass - log_swtn_spv_hit_mass_full(mu_drift, sv, s, b, A, n_gauss_nodes));
 }
 // [[Rcpp::export]]

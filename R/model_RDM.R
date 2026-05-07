@@ -458,14 +458,14 @@ rSWTN <- function(n, b, v, A, sv, k = 0, erlang = 1L, posdrift = TRUE) {
   sv <- rep(sv, length.out = n)
   k <- rep(k, length.out = n)
   out <- rep(Inf, n)
-  # For sv > 0, draw per-trial drifts from N(v, sv^2) truncated to (0, Inf).
-  # Negative mean drift with sv > 0 is fine: truncnorm always gives positive draws.
-  # For sv == 0 and v < 0 with posdrift=FALSE: Bernoulli(p_hit) sampling.
+  # For sv > 0, draw per-trial drifts from N(v, sv^2) without truncation and
+  # pass them through to rWald, which handles posdrift/defective behavior.
+  # For sv == 0 and v < 0 with posdrift=FALSE: Bernoulli(p_hit) sampling in rWald.
   v_draw <- v
-  sample = is.finite(sv) & sv > 1e-12
-  if (any(sample))
-    v_draw[sample] = truncnorm::rtruncnorm(sum(sample), a = ifelse(posdrift, 0, -Inf), b = Inf,
-                                           mean = v[sample], sd = sv[sample])
+  sample <- is.finite(sv) & sv > 1e-12
+  if (any(sample)) {
+    v_draw[sample] <- rnorm(sum(sample), mean = v[sample], sd = sv[sample])
+  }
   
   out <- rWald(n, B = b - A, v = v_draw, A = A, posdrift = posdrift)
   kill_idx <- which(k > 0)
