@@ -53,10 +53,24 @@ check_data_plot <- function(data, defective_factor, subject, factors, remove_na 
     data$subjects <- factor(data$subjects)
   }
   
-  if (remove_na) {
+  if (remove_na && any(!is.finite(data$rt))) {
+    panel_cols  <- intersect(if (is.null(factors)) character(0) else factors, names(data))
+    context_cols <- detect_context_cols(data, defective_factor, panel_cols)
+    all_group_cols <- unique(c(panel_cols, context_cols))
+    if (length(all_group_cols) == 0) {
+      data$p_finite_rt <- mean(is.finite(data$rt))
+    } else {
+      data$p_finite_rt <- do.call(ave,
+        c(list(as.numeric(is.finite(data$rt))),
+          lapply(all_group_cols, function(col) data[[col]]),
+          list(FUN = mean)))
+    }
     data <- data[is.finite(data$rt), , drop = FALSE]
+  } else {
+    data$p_finite_rt <- 1.0
+    if (remove_na) data <- data[is.finite(data$rt), , drop = FALSE]
   }
-  
+
   grp_cols <- unique(c("subjects", defective_factor, factors))
   grp_cols <- intersect(grp_cols, names(data))
   tmp_unique <- data[!duplicated(data[, grp_cols, drop = FALSE]), 
@@ -472,24 +486,29 @@ compute_def_dens <- function(dat, defective_factor, dargs, from = NULL, to = NUL
   if (is.null(defective_levels)) {
     defective_levels <- levels(factor(dat[[defective_factor]]))
   }
-  p_defective <- table(factor(dat[[defective_factor]], levels = defective_levels)) / nrow(dat)
-  # We'll call density() on each subset of rt, then multiply by proportion
-  # so that the sum across factor levels is 1
-  # We'll use the from/to in dargs
   by_deflev <- split(dat, factor(dat[[defective_factor]], levels = defective_levels), drop = FALSE)
-  out <- list()
+  ctx    <- detect_context_cols(dat, defective_factor)
+  out    <- list()
   n_grid <- if (is.null(dargs$n)) 512L else as.integer(dargs$n[1])
   for (lev in names(by_deflev)) {
-    subdat <- by_deflev[[lev]]
-    # Filter for finite RTs only for density estimation
+    subdat    <- by_deflev[[lev]]
     rt_finite <- subdat$rt[is.finite(subdat$rt)]
     if (length(rt_finite) < 2) {
-      # avoid error
       out[[lev]] <- rep(0, n_grid)
-    } else {
-      dd <- do.call(density, c(list(x = rt_finite, from = from, to = to), fix_dots(dargs, density.default, consider_dots = FALSE)))
-      out[[lev]] <- dd$y * p_defective[lev]
+      next
     }
+    if (length(ctx) == 0L) {
+      n_context <- nrow(dat)
+      p_finite  <- if ("p_finite_rt" %in% names(dat)) dat$p_finite_rt[1L] else 1.0
+    } else {
+      ctx_match <- Reduce(`&`, lapply(ctx, function(col) dat[[col]] == subdat[[col]][1L]))
+      n_context <- sum(ctx_match)
+      p_finite  <- if ("p_finite_rt" %in% names(subdat)) subdat$p_finite_rt[1L] else 1.0
+    }
+    p_lev <- nrow(subdat) / n_context * p_finite
+    dd <- do.call(density, c(list(x = rt_finite, from = from, to = to),
+                             fix_dots(dargs, density.default, consider_dots = FALSE)))
+    out[[lev]] <- dd$y * p_lev
   }
   out
 }
@@ -499,7 +518,9 @@ compute_def_dens <- function(dat, defective_factor, dargs, from = NULL, to = NUL
 #'
 #' Plots panels that contain a set of densities for each level of the specified defective factor in the data.
 #' These densities are defective; their areas are relative to the respective
-#' proportions of the defective factor levels. Across all levels, the area sums to 1.
+#' proportions of the defective factor levels. Across all levels, the area sums to
+#' the probability of a finite RT (per panel, and per context group when the
+#' defective factor is a combination of a stimulus factor and a response factor).
 #' Optionally, posterior/prior predictive densities can be overlaid.
 #'
 #' @inheritParams plot_cdf
@@ -748,24 +769,82 @@ plot_density <- function(input, post_predict = NULL, prior_predict = NULL,
 }
 
 ###############################################################################
+## Helper: detect_context_cols
+## Returns factor/character columns that are (a) constant within every level of
+## defective_factor and (b) have >1 and <n_def unique values, so they partition
+## the defective_factor levels into non-trivial groups used for normalization.
+###############################################################################
+detect_context_cols <- function(data, defective_factor,
+                                exclude_cols = character(0)) {
+  if (is.null(defective_factor) || !defective_factor %in% names(data))
+    return(character(0))
+  resp       <- data[[defective_factor]]
+  def_levels <- unique(resp[!is.na(resp)])
+  n_def      <- length(def_levels)
+  if (n_def <= 1L) return(character(0))
+
+  always_exclude <- c("rt", "subjects", defective_factor,
+                      "R", "lR", "group_key", "p_finite_rt", "postn")
+  candidates <- setdiff(names(data), c(always_exclude, exclude_cols))
+  candidates <- candidates[vapply(candidates, function(col)
+    is.factor(data[[col]]) || is.character(data[[col]]), logical(1))]
+  if (length(candidates) == 0L) return(character(0))
+
+  qualify <- vapply(candidates, function(col) {
+    vals <- as.character(data[[col]])
+    per_level <- tapply(vals, resp,
+                        function(v) length(unique(v[!is.na(v)])) == 1L)
+    if (!all(per_level, na.rm = TRUE)) return(FALSE)
+    n_u <- length(unique(vals[!is.na(vals)]))
+    n_u > 1L && n_u < n_def
+  }, logical(1))
+
+  ctx <- candidates[qualify]
+  if (length(ctx) == 0L) return(character(0))
+
+  # If the combination of all ctx cols uniquely identifies every def level
+  # (trivial), fall back to the single column with the fewest unique values.
+  if (length(ctx) > 1L) {
+    def_keys <- tapply(seq_len(nrow(data)), resp, function(idx)
+      paste(vapply(ctx, function(col)
+        as.character(data[[col]][idx[1L]]), character(1L)),
+        collapse = "|||"))
+    if (length(unique(def_keys)) >= n_def) {
+      n_uniq <- vapply(ctx, function(col)
+        length(unique(as.character(data[[col]][!is.na(data[[col]])]))),
+        integer(1L))
+      ctx <- ctx[which.min(n_uniq)]
+    }
+  }
+  ctx
+}
+
+###############################################################################
 ## Helper: get_def_cdf
 ###############################################################################
 get_def_cdf <- function(x, defective_factor, dots)
 {
-  probs <- seq(0.01, 0.99, by = 0.01)
-  n_total <- nrow(x)
-  resp <- x[[defective_factor]]
+  probs      <- seq(0.01, 0.99, by = 0.01)
+  resp       <- x[[defective_factor]]
   resp_levels <- unique(resp[!is.na(resp)])
-  
+  ctx        <- detect_context_cols(x, defective_factor)
+
   out <- lapply(resp_levels, function(lev) {
     inp <- x[!is.na(resp) & resp == lev, , drop = FALSE]
-    prop_share <- nrow(inp) / n_total
-    # rtquants will contain Inf for No-Go trials, which is handled by the plotting limits
-    rtquants <- quantile(inp$rt, probs = probs, type = 1, na.rm = TRUE)
-    yvals <- probs * prop_share
-    cbind(x = rtquants, y = yvals)
+    if (length(ctx) == 0L) {
+      n_context <- nrow(x)
+      p_finite  <- if ("p_finite_rt" %in% names(x)) x$p_finite_rt[1L] else 1.0
+    } else {
+      ctx_match <- Reduce(`&`, lapply(ctx, function(col)
+        x[[col]] == inp[[col]][1L]))
+      n_context <- sum(ctx_match)
+      p_finite  <- if ("p_finite_rt" %in% names(inp)) inp$p_finite_rt[1L] else 1.0
+    }
+    prop_share <- nrow(inp) / n_context * p_finite
+    rtquants   <- quantile(inp$rt, probs = probs, type = 1, na.rm = TRUE)
+    cbind(x = rtquants, y = probs * prop_share)
   })
-  
+
   names(out) <- resp_levels
   out
 }
