@@ -172,6 +172,18 @@ test_that("timed RDMSWTN likelihood matches manual mixture with truncation", {
     min_ll = log(1e-10),
     trend = model_obj$trend
   )
+  ll_pw <- EMC2:::calc_ll_oo_pw(
+    p_mat, dadm,
+    constants = constants,
+    designs = designs,
+    type = model_obj$c_name,
+    bounds = model_obj$bound,
+    transforms = model_obj$transform,
+    pretransforms = model_obj$pre_transform,
+    p_types = names(model_obj$p_types),
+    min_ll = log(1e-10),
+    trend = model_obj$trend
+  )
 
   pars <- as.matrix(mapped_pars(timed_design, p_vec, data = dat)[, names(model_obj$p_types), drop = FALSE])
   pars <- cbind(pars, b = pars[, "B"] + pars[, "A"])
@@ -188,6 +200,8 @@ test_that("timed RDMSWTN likelihood matches manual mixture with truncation", {
   manual_density <- f[1] * S_rt[2] * S_rt[3] + f[3] * S_rt[1] * S_rt[2] / 2
   trunc_prob <- prod(1 - F_lt) - prod(1 - F_ut)
   expect_equal(as.numeric(ll_cpp), log(manual_density) - log(trunc_prob), tolerance = 5e-3)
+  expect_equal(sum(ll_pw[1, ]), as.numeric(ll_cpp), tolerance = 1e-8)
+  expect_true(any(ll_pw[1, ] > log(1e-10)))
 })
 
 test_that("RDMSWTN IO C++ likelihood keeps defective Wald normalization with truncation", {
@@ -235,6 +249,18 @@ test_that("RDMSWTN IO C++ likelihood keeps defective Wald normalization with tru
     min_ll = log(1e-10),
     trend = model_obj$trend
   )
+  ll_pw <- EMC2:::calc_ll_oo_pw(
+    p_mat, dadm,
+    constants = attr(dadm, "constants"),
+    designs = EMC2:::.oo_expanded_designs(dadm),
+    type = model_obj$c_name,
+    bounds = model_obj$bound,
+    transforms = model_obj$transform,
+    pretransforms = model_obj$pre_transform,
+    p_types = names(model_obj$p_types),
+    min_ll = log(1e-10),
+    trend = model_obj$trend
+  )
 
   pars <- as.matrix(mapped_pars(timed_design, p_vec, data = dat)[, names(model_obj$p_types), drop = FALSE])
   pars <- cbind(pars, b = pars[, "B"] + pars[, "A"])
@@ -254,6 +280,8 @@ test_that("RDMSWTN IO C++ likelihood keeps defective Wald normalization with tru
   trunc_prob <- prod(1 - F_lt) - prod(1 - F_ut)
 
   expect_equal(as.numeric(ll_cpp), log(manual_density) - log(trunc_prob), tolerance = 1e-8)
+  expect_equal(sum(ll_pw[1, ]), as.numeric(ll_cpp), tolerance = 1e-8)
+  expect_true(any(ll_pw[1, ] > log(1e-10)))
 })
 
 test_that("TRDM split transforms are preserved for C++ likelihood mapping", {

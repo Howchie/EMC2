@@ -2133,12 +2133,48 @@ NumericMatrix calc_ll_oo_pw(NumericMatrix particle_matrix, DataFrame data, Numer
   NumericMatrix one_particle(1, particle_matrix.ncol());
   colnames(one_particle) = p_names;
   IntegerVector kernel_output_codes = IntegerVector::create(1);
+  auto reorder_to_p_types = [&](NumericMatrix mat) -> NumericMatrix {
+    if (p_types.size() == 0) return mat;
+    CharacterVector src_names = colnames(mat);
+    if (src_names.size() == 0) return mat;
+    if (src_names.size() == p_types.size()) {
+      bool already_ordered = true;
+      for (int j = 0; j < p_types.size(); ++j) {
+        if (Rcpp::as<std::string>(src_names[j]) != Rcpp::as<std::string>(p_types[j])) {
+          already_ordered = false;
+          break;
+        }
+      }
+      if (already_ordered) return mat;
+    }
+    std::vector<int> src_idx(p_types.size(), -1);
+    for (int j = 0; j < p_types.size(); ++j) {
+      std::string tgt = Rcpp::as<std::string>(p_types[j]);
+      for (int k = 0; k < src_names.size(); ++k) {
+        if (Rcpp::as<std::string>(src_names[k]) == tgt) {
+          src_idx[j] = k;
+          break;
+        }
+      }
+      if (src_idx[j] < 0) {
+        Rcpp::stop("calc_ll_oo_pw: mapped parameter '%s' not found in particle parameter matrix.", tgt.c_str());
+      }
+    }
+    NumericMatrix out(mat.nrow(), p_types.size());
+    colnames(out) = p_types;
+    for (int j = 0; j < p_types.size(); ++j) {
+      const int k = src_idx[j];
+      for (int i = 0; i < mat.nrow(); ++i) out(i, j) = mat(i, k);
+    }
+    return out;
+  };
   auto pars_for_particle = [&](int i) -> NumericMatrix {
     for (int j = 0; j < particle_matrix.ncol(); ++j) {
       one_particle(0, j) = particle_matrix(i, j);
     }
-    return get_pars_c_wrapper_oo_core(one_particle, data, constants, designs, bounds, transforms,
-                                      pretransforms, trend, false, false, kernel_output_codes);
+    NumericMatrix mapped = get_pars_c_wrapper_oo_core(one_particle, data, constants, designs, bounds, transforms,
+                                                     pretransforms, trend, false, false, kernel_output_codes);
+    return reorder_to_p_types(mapped);
   };
 
   if (type_std.find("DDM") != std::string::npos) {
