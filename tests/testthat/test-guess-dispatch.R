@@ -156,3 +156,36 @@ test_that("guess-model calc_ll_oo_pw matches calc_ll_oo", {
     }
   }
 })
+
+test_that("local_kill_guess falls back to local_kill when lambda_g is zero after t0", {
+  for (case in guess_dispatch_cases[c(1, 2)]) {
+    pars_kill_only <- case$pars
+    pars_kill_only["lambda_g"] <- log(0)
+
+    ctx_local_kill <- guess_dispatch_context(
+      if (case$label == "RDMGBM") EMC2::RDMGBM(erlang_type = "local_kill") else EMC2::RDMSWTN(erlang_type = "local_kill"),
+      case$formula,
+      pars_kill_only,
+      rt = 0.8
+    )
+    ctx_local_kill_guess <- guess_dispatch_context(
+      case$local_kill_guess,
+      case$formula,
+      pars_kill_only,
+      rt = 0.8
+    )
+
+    expect_equal(
+      calc_ll_guess(ctx_local_kill_guess),
+      calc_ll_guess(ctx_local_kill),
+      tolerance = 1e-12,
+      info = paste(case$label, "aggregate likelihood should keep the kill branch")
+    )
+    expect_equal(
+      calc_ll_guess_pw(ctx_local_kill_guess),
+      calc_ll_guess_pw(ctx_local_kill),
+      tolerance = 1e-12,
+      info = paste(case$label, "particlewise likelihood should keep the kill branch")
+    )
+  }
+})

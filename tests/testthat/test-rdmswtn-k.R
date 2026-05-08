@@ -324,6 +324,28 @@ test_that("combined local guess+kill SWTN Erlang-2 cdf is locally consistent wit
   expect_equal(slope, pdf, tolerance = 5e-4)
 })
 
+test_that("combined local guess+kill Erlang-2 respects posdrift in the sv=0 analytic CDF path", {
+  rt <- 0.9
+  t0 <- 0.15
+  lambda_g <- 0.45
+  lambda_k <- 0.7
+
+  cdf <- EMC2:::pSWTNspv(
+    t = rt, v = -0.2, b = 1.3, A = 0.25, t0 = t0, sv = 0, s = 1.0,
+    lambda_g = lambda_g, lambda_k = lambda_k, kill_shape = 2L,
+    posdrift = TRUE
+  )
+  pdf_int <- integrate(function(x) {
+    EMC2:::dSWTNspv(
+      t = x, v = -0.2, b = 1.3, A = 0.25, t0 = t0, sv = 0, s = 1.0,
+      lambda_g = lambda_g, lambda_k = lambda_k, kill_shape = 2L,
+      posdrift = TRUE
+    )
+  }, lower = 0, upper = rt, subdivisions = 800L, rel.tol = 1e-10)$value
+
+  expect_equal(cdf, pdf_int, tolerance = 1e-8)
+})
+
 test_that("rRDMSWTN local kill+guess yields both omissions and responses", {
   set.seed(11)
   n_trials <- 1000

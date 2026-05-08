@@ -120,6 +120,34 @@ inline double raw_log_value(double log_x, double min_ll, bool floor_raw) {
   return floor_raw ? ((log_x > min_ll) ? log_x : min_ll) : log_x;
 }
 
+struct TimedLambdaDispatch {
+  double lambda_g;
+  double lambda_k;
+  bool guess;
+  bool use_combo;
+};
+
+inline TimedLambdaDispatch timed_lambda_dispatch(const ContextForRaceModels* ctx,
+                                                 double lambda_g,
+                                                 double lambda_k) {
+  constexpr double kLamEps = 1e-12;
+  const bool local_guess_only = ctx && ctx->is_local_guess;
+  const bool local_kill_guess = ctx && ctx->is_local_kill_guess;
+  const bool has_guess = lambda_g > kLamEps;
+  const bool has_kill  = lambda_k > kLamEps;
+
+  TimedLambdaDispatch out{0.0, 0.0, false, local_kill_guess && has_guess && has_kill};
+  if (out.use_combo) return out;
+
+  if (local_guess_only || (local_kill_guess && has_guess)) {
+    out.lambda_g = lambda_g;
+    out.guess = true;
+  } else if (has_kill) {
+    out.lambda_k = lambda_k;
+  }
+  return out;
+}
+
 // Scalar adapters (single-RT, single-parameter-row) used by GSL integration.
 inline double dlba_scalar(double t, const double* par, void* ctx_) {
   auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
@@ -166,23 +194,22 @@ inline double drdmgbm_scalar(double t, const double* par, void* ctx_) {
   const double lg = (ctx && ctx->kill_active) ? par[5] : 0.0;
   const double lk = (ctx && ctx->kill_active && ctx->apply_lk_to_racers) ? par[6] : 0.0;
   const int ks = ctx ? ctx->kill_shape : 1;
-  const bool is_guess = ctx ? (ctx->is_local_guess || ctx->is_local_kill_guess) : false;
   const bool erl = (lg > 1e-12 || lk > 1e-12);
   if (tt <= 0.0 && !erl) return 0.0;
   if (t <= 0.0) return 0.0;
-  if (lg > 1e-12 && lk > 1e-12) {
+  const TimedLambdaDispatch dispatch = timed_lambda_dispatch(ctx, lg, lk);
+  if (dispatch.use_combo) {
     return dgbm_local_combo(t, par[0], 1.0 + par[1] + par[2],
                             par[2], par[4], t0_val, lg, lk, false, ks);
   }
-  const double lg_use = is_guess ? lg : 0.0;
-  const double lk_use = is_guess ? 0.0 : lk;
   return dgbm(t,
               par[0],
               1.0 + par[1] + par[2],
               par[2],
               par[4],
               t0_val,
-              lg_use, lk_use, false, ks, is_guess && lg_use > 1e-12);
+              dispatch.lambda_g, dispatch.lambda_k,
+              false, ks, dispatch.guess);
 }
 
 inline double prdmgbm_scalar(double t, const double* par, void* ctx_) {
@@ -193,23 +220,22 @@ inline double prdmgbm_scalar(double t, const double* par, void* ctx_) {
   const double lg = (ctx && ctx->kill_active) ? par[5] : 0.0;
   const double lk = (ctx && ctx->kill_active && ctx->apply_lk_to_racers) ? par[6] : 0.0;
   const int ks = ctx ? ctx->kill_shape : 1;
-  const bool is_guess = ctx ? (ctx->is_local_guess || ctx->is_local_kill_guess) : false;
   const bool erl = (lg > 1e-12 || lk > 1e-12);
   if (tt <= 0.0 && !erl) return 0.0;
   if (t <= 0.0) return 0.0;
-  if (lg > 1e-12 && lk > 1e-12) {
+  const TimedLambdaDispatch dispatch = timed_lambda_dispatch(ctx, lg, lk);
+  if (dispatch.use_combo) {
     return pgbm_local_combo(t, par[0], 1.0 + par[1] + par[2],
                             par[2], par[4], t0_val, lg, lk, false, ks);
   }
-  const double lg_use = is_guess ? lg : 0.0;
-  const double lk_use = is_guess ? 0.0 : lk;
   return pgbm(t,
               par[0],
               1.0 + par[1] + par[2],
               par[2],
               par[4],
               t0_val,
-              lg_use, lk_use, false, ks, is_guess && lg_use > 1e-12);
+              dispatch.lambda_g, dispatch.lambda_k,
+              false, ks, dispatch.guess);
 }
 
 inline double dlnr_scalar(double t, const double* par, void* /*ctx_*/) {
@@ -315,7 +341,6 @@ inline void drdmgbm_raw(const double* rt, const double* pars_cm, int n_rows,
   const bool floor_raw = raw_floor_log_lik(ctx_);
   const bool global_kill = ctx ? ctx->has_global_kill() : false;
   const int kill_shape   = ctx ? ctx->kill_shape : 1;
-  const bool is_guess    = ctx ? (ctx->is_local_guess || ctx->is_local_kill_guess) : false;
   const double* v_        = pars_cm + 0 * n_rows;
   const double* B_        = pars_cm + 1 * n_rows;
   const double* A_        = pars_cm + 2 * n_rows;
@@ -335,19 +360,19 @@ inline void drdmgbm_raw(const double* rt, const double* pars_cm, int n_rows,
     if (tt <= 0.0 && !erl) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
     if (rt[i] <= 0.0)      { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
     double log_pdf;
-    if (lg > 1e-12 && lk > 1e-12) {
+    const TimedLambdaDispatch dispatch = timed_lambda_dispatch(ctx, lg, lk);
+    if (dispatch.use_combo) {
       log_pdf = dgbm_local_combo(rt[i], v_[i], 1.0 + B_[i] + A_[i],
                                  A_[i], s_[i], t0_i, lg, lk, true, kill_shape);
     } else {
-      const double lg_use = is_guess ? lg : 0.0;
-      const double lk_use = is_guess ? 0.0 : lk;
       log_pdf = dgbm(rt[i],
                      v_[i],
                      1.0 + B_[i] + A_[i],
                      A_[i],
                      s_[i],
                      t0_i,
-                     lg_use, lk_use, true, kill_shape, is_guess && lg_use > 1e-12);
+                     dispatch.lambda_g, dispatch.lambda_k,
+                     true, kill_shape, dispatch.guess);
     }
     out[i] = raw_log_value(log_pdf, min_ll, floor_raw);
   }
@@ -360,7 +385,6 @@ inline void prdmgbm_raw(const double* rt, const double* pars_cm, int n_rows,
   const bool floor_raw = raw_floor_log_lik(ctx_);
   const bool global_kill = ctx ? ctx->has_global_kill() : false;
   const int kill_shape   = ctx ? ctx->kill_shape : 1;
-  const bool is_guess    = ctx ? (ctx->is_local_guess || ctx->is_local_kill_guess) : false;
   const double* v_        = pars_cm + 0 * n_rows;
   const double* B_        = pars_cm + 1 * n_rows;
   const double* A_        = pars_cm + 2 * n_rows;
@@ -379,7 +403,8 @@ inline void prdmgbm_raw(const double* rt, const double* pars_cm, int n_rows,
     const bool erl = (lg > 1e-12 || lk > 1e-12);
     if (tt <= 0.0 && !erl) { out[i] = 0.0; continue; }
     if (rt[i] <= 0.0)      { out[i] = 0.0; continue; }
-    if (lg > 1e-12 && lk > 1e-12) {
+    const TimedLambdaDispatch dispatch = timed_lambda_dispatch(ctx, lg, lk);
+    if (dispatch.use_combo) {
       const double log_cdf = pgbm_local_combo(rt[i], v_[i], 1.0 + B_[i] + A_[i],
                                               A_[i], s_[i], t0_i, lg, lk, true, kill_shape);
       if (!R_FINITE(log_cdf)) { out[i] = 0.0; continue; }
@@ -387,15 +412,14 @@ inline void prdmgbm_raw(const double* rt, const double* pars_cm, int n_rows,
       out[i] = log1m_exp(log_cdf);
       continue;
     }
-    const double lg_use = is_guess ? lg : 0.0;
-    const double lk_use = is_guess ? 0.0 : lk;
     const double log_cdf = pgbm(rt[i],
                                 v_[i],
                                 1.0 + B_[i] + A_[i],
                                 A_[i],
                                 s_[i],
                                 t0_i,
-                                lg_use, lk_use, true, kill_shape, is_guess && lg_use > 1e-12);
+                                dispatch.lambda_g, dispatch.lambda_k,
+                                true, kill_shape, dispatch.guess);
     if (!R_FINITE(log_cdf)) { out[i] = 0.0; continue; }
     if (log_cdf >= 0.0) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
     out[i] = log1m_exp(log_cdf);
@@ -410,7 +434,6 @@ inline void rdmgbm_logS_at_t(double t, const double* pars_cm,
   auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
   const bool global_kill = ctx ? ctx->has_global_kill() : false;
   const int ks = ctx ? ctx->kill_shape : 1;
-  const bool is_guess = ctx ? (ctx->is_local_guess || ctx->is_local_kill_guess) : false;
   const double* v_        = pars_cm + 0 * n_rows_total;
   const double* B_        = pars_cm + 1 * n_rows_total;
   const double* A_        = pars_cm + 2 * n_rows_total;
@@ -431,33 +454,33 @@ inline void rdmgbm_logS_at_t(double t, const double* pars_cm,
       const double lg = (!ctx->kill_active) ? 0.0 : lambda_g_[r];
       const double lk = (global_kill || !ctx->kill_active) ? 0.0 : lambda_k_[r];
       const bool erl = (lg > 1e-12 || lk > 1e-12);
+      const TimedLambdaDispatch dispatch = timed_lambda_dispatch(ctx, lg, lk);
       if (tt <= 0.0) {
         if (!erl) continue;
         // EAM not started; erlang processes have been running since t=0
-        if (lg > 1e-12 && lk > 1e-12)
+        if (dispatch.use_combo)
           logS += erlang_log_surv(t, lg, ks) + erlang_log_surv(t, lk, ks);
         else {
-          const double lam = is_guess ? lg : lk;
+          const double lam = dispatch.guess ? dispatch.lambda_g : dispatch.lambda_k;
           if (lam > 1e-12) logS += erlang_log_surv(t, lam, ks);
         }
         continue;
       }
-      if (lg > 1e-12 && lk > 1e-12) {
+      if (dispatch.use_combo) {
         const double log_cdf = pgbm_local_combo(t, v_[r], 1.0 + B_[r] + A_[r],
                                                 A_[r], s_[r], t0_r, lg, lk, true, ks);
         if (!R_FINITE(log_cdf) || log_cdf >= 0.0) { bad = true; break; }
         logS += log1m_exp(log_cdf);
         continue;
       }
-      const double lg_use = is_guess ? lg : 0.0;
-      const double lk_use = is_guess ? 0.0 : lk;
       const double log_cdf = pgbm(t,
                                   v_[r],
                                   1.0 + B_[r] + A_[r],
                                   A_[r],
                                   s_[r],
                                   t0_r,
-                                  lg_use, lk_use, true, ks, is_guess && lg_use > 1e-12);
+                                  dispatch.lambda_g, dispatch.lambda_k,
+                                  true, ks, dispatch.guess);
       if (!R_FINITE(log_cdf)) { bad = true; break; }
       if (log_cdf >= 0.0) { bad = true; break; }
       logS += log1m_exp(log_cdf);
@@ -855,6 +878,24 @@ inline void bawl_logS_at_t(double t, const double* pars_cm,
 // Column layout: v=0, B=1, A=2, t0=3, s=4, sv=5, lambda_g=6, lambda_k=7
 // ============================================================
 
+inline double rdmswtn_k0_logpdf(double tt, double mu, double b, double A, bool posdrift) {
+  if (tt <= 0.0) return R_NegInf;
+  if (posdrift && mu <= 0.0) return R_NegInf;
+  const double pdf = dwald_k0(tt, b, mu, A);
+  if (!(pdf > 0.0) || !emc2_isfinite(pdf)) return R_NegInf;
+  return std::log(pdf);
+}
+
+inline double rdmswtn_k0_logsurv(double tt, double mu, double b, double A, bool posdrift) {
+  if (tt <= 0.0) return 0.0;
+  if (posdrift && mu <= 0.0) return 0.0;
+  const double cdf = pwald_k0(tt, b, mu, A);
+  const double cl = std::max(0.0, std::min(1.0, cdf));
+  if (cl <= 0.0) return 0.0;
+  if (cl >= 1.0) return R_NegInf;
+  return std::log1p(-cl);
+}
+
 inline double drdmswtn_scalar(double t, const double* par, void* ctx_) {
   auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
   if (R_IsNA(par[0])) return 0.0;
@@ -864,25 +905,24 @@ inline double drdmswtn_scalar(double t, const double* par, void* ctx_) {
   const double lg = (ctx && ctx->kill_active) ? par[6] : 0.0;
   const double lk = (ctx && ctx->kill_active && ctx->apply_lk_to_racers) ? par[7] : 0.0;
   const int ks = ctx ? ctx->kill_shape : 1;
-  const bool is_guess = ctx ? (ctx->is_local_guess || ctx->is_local_kill_guess) : false;
   const bool pd = ctx ? ctx->use_posdrift : true;
   const bool erl = (lg > 1e-12 || lk > 1e-12);
   if (tt <= 0.0 && !erl) return 0.0;
   if (t <= 0.0) return 0.0;
   // Pass raw t and t0_val; core functions split EAM (t - t0) from erlang (t).
-  if (lg > 1e-12 && lk > 1e-12) {
+  const TimedLambdaDispatch dispatch = timed_lambda_dispatch(ctx, lg, lk);
+  if (dispatch.use_combo) {
     return drdmswtn_local_combo(t, par[0] * inv_s, (par[1] + par[2]) * inv_s,
                                 par[2] * inv_s, 1.0, t0_val, par[5] * inv_s,
                                 lg, lk, 20, false, ks, pd);
   }
-  const double lg_use = is_guess ? lg : 0.0;
-  const double lk_use = is_guess ? 0.0 : lk;
   return drdmswtn(t,
                   par[0] * inv_s,
                   (par[1] + par[2]) * inv_s,
                   par[2] * inv_s,
                   1.0, t0_val, par[5] * inv_s,
-                  lg_use, lk_use, 20, false, ks, is_guess, pd);
+                  dispatch.lambda_g, dispatch.lambda_k,
+                  20, false, ks, dispatch.guess, pd);
 }
 
 inline double prdmswtn_scalar(double t, const double* par, void* ctx_) {
@@ -894,24 +934,23 @@ inline double prdmswtn_scalar(double t, const double* par, void* ctx_) {
   const double lg = (ctx && ctx->kill_active) ? par[6] : 0.0;
   const double lk = (ctx && ctx->kill_active && ctx->apply_lk_to_racers) ? par[7] : 0.0;
   const int ks = ctx ? ctx->kill_shape : 1;
-  const bool is_guess = ctx ? (ctx->is_local_guess || ctx->is_local_kill_guess) : false;
   const bool pd = ctx ? ctx->use_posdrift : true;
   const bool erl = (lg > 1e-12 || lk > 1e-12);
   if (tt <= 0.0 && !erl) return 0.0;
   if (t <= 0.0) return 0.0;
-  if (lg > 1e-12 && lk > 1e-12) {
+  const TimedLambdaDispatch dispatch = timed_lambda_dispatch(ctx, lg, lk);
+  if (dispatch.use_combo) {
     return prdmswtn_local_combo(t, par[0] * inv_s, (par[1] + par[2]) * inv_s,
                                 par[2] * inv_s, 1.0, t0_val, par[5] * inv_s,
                                 lg, lk, 20, false, ks, pd);
   }
-  const double lg_use = is_guess ? lg : 0.0;
-  const double lk_use = is_guess ? 0.0 : lk;
   return prdmswtn(t,
                   par[0] * inv_s,
                   (par[1] + par[2]) * inv_s,
                   par[2] * inv_s,
                   1.0, t0_val, par[5] * inv_s,
-                  lg_use, lk_use, 20, false, ks, is_guess, pd);
+                  dispatch.lambda_g, dispatch.lambda_k,
+                  20, false, ks, dispatch.guess, pd);
 }
 
 inline void drdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
@@ -920,7 +959,6 @@ inline void drdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
   auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
   const bool floor_raw = raw_floor_log_lik(ctx_);
   const int kill_shape   = ctx ? ctx->kill_shape : 1;
-  const bool is_guess_type = ctx ? (ctx->is_local_guess || ctx->is_local_kill_guess) : false;
   const bool pd = ctx ? ctx->use_posdrift : true;
   const double* v_       = pars_cm + 0 * n_rows;
   const double* B_       = pars_cm + 1 * n_rows;
@@ -944,31 +982,30 @@ inline void drdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
     if (tt <= 0.0 && !erl) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
     if (rt[i] <= 0.0) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
     double log_pdf;
-    if (lg > 1e-12 && lk > 1e-12) {
+    const TimedLambdaDispatch dispatch = timed_lambda_dispatch(ctx, lg, lk);
+    if (dispatch.use_combo) {
       // Pass raw rt and t0; combo function splits EAM vs erlang time.
       log_pdf = drdmswtn_local_combo(rt[i], v_[i] * inv_s, (B_[i] + A_[i]) * inv_s,
                                      A_[i] * inv_s, 1.0, t0_i, sv_[i] * inv_s,
                                      lg, lk, 20, true, kill_shape, pd);
     } else if (!emc2_isfinite(sv_[i]) || std::fabs(sv_[i]) <= sv_eps) {
-      const double lg_use = is_guess_type ? lg : 0.0;
-      const double lk_use = is_guess_type ? 0.0 : lk;
-      if (lg_use <= 0.0 && lk_use <= 0.0 && !pd) {
-        // No kill, no sv, no erlang: canonical Wald using EAM time directly.
+      if (dispatch.lambda_g <= 0.0 && dispatch.lambda_k <= 0.0) {
+        // No kill, no sv, no erlang: use the closed-form k=0 Wald directly.
         if (tt <= 0.0) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
-        const double pdf = dwald_k0(tt, (B_[i] + A_[i]) * inv_s, v_[i] * inv_s, A_[i] * inv_s);
-        log_pdf = (pdf > 0.0 && emc2_isfinite(pdf)) ? std::log(pdf) : R_NegInf;
+        log_pdf = rdmswtn_k0_logpdf(tt, v_[i] * inv_s, (B_[i] + A_[i]) * inv_s,
+                                    A_[i] * inv_s, pd);
       } else {
         // Pass raw rt and t0 to dwald.
         log_pdf = dwald(rt[i], v_[i] * inv_s, (B_[i] + A_[i]) * inv_s, A_[i] * inv_s,
-                        1.0, t0_i, lg_use, lk_use, true, kill_shape, is_guess_type, pd);
+                        1.0, t0_i, dispatch.lambda_g, dispatch.lambda_k,
+                        true, kill_shape, dispatch.guess, pd);
       }
     } else {
-      const double lg_use = is_guess_type ? lg : 0.0;
-      const double lk_use = is_guess_type ? 0.0 : lk;
       // Pass raw rt and t0; drdmswtn splits EAM vs erlang time.
       log_pdf = drdmswtn(rt[i], v_[i] * inv_s, (B_[i] + A_[i]) * inv_s,
                          A_[i] * inv_s, 1.0, t0_i, sv_[i] * inv_s,
-                         lg_use, lk_use, 20, true, kill_shape, is_guess_type && lg_use > 1e-12, pd);
+                         dispatch.lambda_g, dispatch.lambda_k,
+                         20, true, kill_shape, dispatch.guess, pd);
     }
     out[i] = raw_log_value(log_pdf, min_ll, floor_raw);
   }
@@ -980,7 +1017,6 @@ inline void prdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
   auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
   const bool floor_raw = raw_floor_log_lik(ctx_);
   const int kill_shape   = ctx ? ctx->kill_shape : 1;
-  const bool is_guess_type = ctx ? (ctx->is_local_guess || ctx->is_local_kill_guess) : false;
   const bool pd = ctx ? ctx->use_posdrift : true;
   const double* v_       = pars_cm + 0 * n_rows;
   const double* B_       = pars_cm + 1 * n_rows;
@@ -1003,7 +1039,8 @@ inline void prdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
     const bool erl = (lg > 1e-12 || lk > 1e-12);
     if (tt <= 0.0 && !erl) { out[i] = 0.0; continue; }
     if (rt[i] <= 0.0) { out[i] = 0.0; continue; }
-    if (lg > 1e-12 && lk > 1e-12) {
+    const TimedLambdaDispatch dispatch = timed_lambda_dispatch(ctx, lg, lk);
+    if (dispatch.use_combo) {
       const double log_cdf = prdmswtn_local_combo(rt[i], v_[i] * inv_s, (B_[i] + A_[i]) * inv_s,
                                                   A_[i] * inv_s, 1.0, t0_i, sv_[i] * inv_s,
                                                   lg, lk, 20, true, kill_shape, pd);
@@ -1012,24 +1049,23 @@ inline void prdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
       out[i] = log1m_exp(log_cdf);
       continue;
     }
-    const double lg_use = is_guess_type ? lg : 0.0;
-    const double lk_use = is_guess_type ? 0.0 : lk;
     double log_cdf;
     if (!emc2_isfinite(sv_[i]) || std::fabs(sv_[i]) <= sv_eps) {
-      if (lg_use <= 0.0 && lk_use <= 0.0 && !pd) {
-        // No kill, no erlang: canonical Wald using EAM time.
+      if (dispatch.lambda_g <= 0.0 && dispatch.lambda_k <= 0.0) {
+        // No kill, no sv, no erlang: use the closed-form k=0 Wald directly.
         if (tt <= 0.0) { out[i] = 0.0; continue; }
-        const double cdf = pwald_k0(tt, (B_[i] + A_[i]) * inv_s, v_[i] * inv_s, A_[i] * inv_s);
-        const double cl  = std::max(0.0, std::min(1.0, cdf));
-        out[i] = (cl <= 0.0) ? 0.0 : (cl >= 1.0) ? raw_log_zero(min_ll, floor_raw) : std::log1p(-cl);
+        out[i] = rdmswtn_k0_logsurv(tt, v_[i] * inv_s, (B_[i] + A_[i]) * inv_s,
+                                    A_[i] * inv_s, pd);
         continue;
       }
       log_cdf = pwald(rt[i], v_[i] * inv_s, (B_[i] + A_[i]) * inv_s, A_[i] * inv_s,
-                      1.0, t0_i, lg_use, lk_use, true, kill_shape, is_guess_type, pd);
+                      1.0, t0_i, dispatch.lambda_g, dispatch.lambda_k,
+                      true, kill_shape, dispatch.guess, pd);
     } else {
       log_cdf = prdmswtn(rt[i], v_[i] * inv_s, (B_[i] + A_[i]) * inv_s,
                          A_[i] * inv_s, 1.0, t0_i, sv_[i] * inv_s,
-                         lg_use, lk_use, 20, true, kill_shape, is_guess_type && lg_use > 1e-12, pd);
+                         dispatch.lambda_g, dispatch.lambda_k,
+                         20, true, kill_shape, dispatch.guess, pd);
     }
     if (!R_FINITE(log_cdf)) { out[i] = 0.0; continue; }
     if (log_cdf >= 0.0) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
@@ -1044,7 +1080,6 @@ inline void rdmswtn_logS_at_t(double t, const double* pars_cm,
                                const int* isok_all, void* ctx_, double* logS_out) {
   auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
   const int kill_shape   = ctx ? ctx->kill_shape : 1;
-  const bool is_guess_type = ctx ? (ctx->is_local_guess || ctx->is_local_kill_guess) : false;
   const int mode_hint = ctx ? ctx->mode_hint : 0;
   const bool pd = ctx ? ctx->use_posdrift : true;
   const double* v_      = pars_cm + 0 * n_rows_total;
@@ -1073,16 +1108,18 @@ inline void rdmswtn_logS_at_t(double t, const double* pars_cm,
       if (tt <= 0.0) {
         if (!erl) continue;  // EAM not started, no erlang → logS += 0
         // EAM not started but erlang running: log-survivor = erlang_log_surv(t, ...)
-        if (lg > 1e-12 && lk > 1e-12) {
+        const TimedLambdaDispatch dispatch = timed_lambda_dispatch(ctx, lg, lk);
+        if (dispatch.use_combo) {
           logS += erlang_log_surv(t, lg, kill_shape) + erlang_log_surv(t, lk, kill_shape);
         } else {
-          const double lam = is_guess_type ? lg : lk;
+          const double lam = dispatch.guess ? dispatch.lambda_g : dispatch.lambda_k;
           if (lam > 1e-12) logS += erlang_log_surv(t, lam, kill_shape);
         }
         continue;
       }
       double log_cdf;
-      if (lg > 1e-12 && lk > 1e-12) {
+      const TimedLambdaDispatch dispatch = timed_lambda_dispatch(ctx, lg, lk);
+      if (dispatch.use_combo) {
         log_cdf = prdmswtn_local_combo(t, v_[r] * inv_s, (B_[r] + A_[r]) * inv_s,
                                        A_[r] * inv_s, 1.0, t0_r, sv_[r] * inv_s,
                                        lg, lk, 20, true, kill_shape, pd);
@@ -1090,13 +1127,12 @@ inline void rdmswtn_logS_at_t(double t, const double* pars_cm,
         logS += log1m_exp(log_cdf);
         continue;
       }
-      const double lg_use = is_guess_type ? lg : 0.0;
-      const double lk_use = is_guess_type ? 0.0 : lk;
       if (mode_hint == 1) {
-        if (lg_use <= 0.0 && lk_use <= 0.0 && !pd) {
-          const double cdf = pwald_k0(tt, (B_[r] + A_[r]) * inv_s, v_[r] * inv_s, A_[r] * inv_s);
-          const double cl  = std::max(0.0, std::min(1.0, cdf));
-          log_cdf = (cl <= 0.0) ? R_NegInf : (cl >= 1.0 ? 0.0 : std::log(cl));
+        if (dispatch.lambda_g <= 0.0 && dispatch.lambda_k <= 0.0 &&
+            (!emc2_isfinite(sv_[r]) || std::fabs(sv_[r]) <= sv_eps)) {
+          logS += rdmswtn_k0_logsurv(tt, v_[r] * inv_s, (B_[r] + A_[r]) * inv_s,
+                                     A_[r] * inv_s, pd);
+          continue;
         } else {
           log_cdf = pwald(t,
                           v_[r] * inv_s,
@@ -1104,8 +1140,8 @@ inline void rdmswtn_logS_at_t(double t, const double* pars_cm,
                           A_[r] * inv_s,
                           1.0,
                           t0_r,
-                          lg_use, lk_use,
-                          true, kill_shape, is_guess_type, pd);
+                          dispatch.lambda_g, dispatch.lambda_k,
+                          true, kill_shape, dispatch.guess, pd);
         }
       } else if (mode_hint == 2) {
         log_cdf = prdmswtn(t,
@@ -1115,12 +1151,13 @@ inline void rdmswtn_logS_at_t(double t, const double* pars_cm,
                            1.0,
                            t0_r,
                            sv_[r] * inv_s,
-                           lg_use, lk_use, 20, true, kill_shape, is_guess_type && lg_use > 1e-12, pd);
+                           dispatch.lambda_g, dispatch.lambda_k,
+                           20, true, kill_shape, dispatch.guess, pd);
       } else if (!emc2_isfinite(sv_[r]) || std::fabs(sv_[r]) <= sv_eps) {
-        if (lg_use <= 0.0 && lk_use <= 0.0 && !pd) {
-          const double cdf = pwald_k0(tt, (B_[r] + A_[r]) * inv_s, v_[r] * inv_s, A_[r] * inv_s);
-          const double cl  = std::max(0.0, std::min(1.0, cdf));
-          log_cdf = (cl <= 0.0) ? R_NegInf : (cl >= 1.0 ? 0.0 : std::log(cl));
+        if (dispatch.lambda_g <= 0.0 && dispatch.lambda_k <= 0.0) {
+          logS += rdmswtn_k0_logsurv(tt, v_[r] * inv_s, (B_[r] + A_[r]) * inv_s,
+                                     A_[r] * inv_s, pd);
+          continue;
         } else {
           log_cdf = pwald(t,
                           v_[r] * inv_s,
@@ -1128,8 +1165,8 @@ inline void rdmswtn_logS_at_t(double t, const double* pars_cm,
                           A_[r] * inv_s,
                           1.0,
                           t0_r,
-                          lg_use, lk_use,
-                          true, kill_shape, is_guess_type, pd);
+                          dispatch.lambda_g, dispatch.lambda_k,
+                          true, kill_shape, dispatch.guess, pd);
         }
       } else {
         log_cdf = prdmswtn(t,
@@ -1139,7 +1176,8 @@ inline void rdmswtn_logS_at_t(double t, const double* pars_cm,
                            1.0,
                            t0_r,
                            sv_[r] * inv_s,
-                           lg_use, lk_use, 20, true, kill_shape, is_guess_type && lg_use > 1e-12, pd);
+                           dispatch.lambda_g, dispatch.lambda_k,
+                           20, true, kill_shape, dispatch.guess, pd);
       }
       if (log_cdf >= 0.0) { bad = true; break; }
       if (R_FINITE(log_cdf)) logS += log1m_exp(log_cdf);

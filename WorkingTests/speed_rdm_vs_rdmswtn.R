@@ -16,7 +16,7 @@ designRDMSWTN <- design(
   Rlevels   = c("left", "right"),
   matchfun  = matchfun,
   model     = RDMSWTN,
-  constants = c(s = log(1), sv = log(0), lambda = log(0)),
+  constants = c(s = log(1), sv = log(0)),
   formula   = list(v ~ lM, B ~ 1, t0 ~ 1, A ~ 1)
 )
 

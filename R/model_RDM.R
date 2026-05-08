@@ -62,27 +62,17 @@ rWald <- function(n, B, v, A, posdrift = TRUE)
     x
   }
   
-  rtruncexp_tilt <- function(n, lo, hi, eta) {
-    u <- runif(n)
-    
-    small <- abs(eta) < 1e-10
-    out <- numeric(n)
-    
-    out[small] <- lo[small] + u[small] * (hi[small] - lo[small])
-    
-    if (any(!small)) {
-      e_lo <- exp(eta[!small] * lo[!small])
-      e_hi <- exp(eta[!small] * hi[!small])
-      out[!small] <- log(e_lo + u[!small] * (e_hi - e_lo)) / eta[!small]
-    }
-    
-    out
+  out <- rep(Inf, n)
+  neg <- rep(FALSE, n)
+  if (posdrift) {
+    pos <- v > 0
+  } else {
+    pos <- v >= 0
+    neg <- v < 0
   }
 
-  out <- rep(Inf, n)
-  pos <- v >= 0 
-
   # positive (or zero) drift: standard inverse Gaussian
+  # With posdrift=TRUE zero is excluded but for posdrift=FALSE it counts because mathematically it is an eventual guaranteed hit.
   npos <- sum(pos)
   if (npos > 0) {
     bs <- B[pos] + runif(npos, 0, A[pos])
@@ -91,7 +81,6 @@ rWald <- function(n, B, v, A, posdrift = TRUE)
 
   # negative drift with posdrift=FALSE: defective Wald via Bernoulli(p_hit)
   # Conditional FPT given hitting equals Wald with |v| (Girsanov / time-reversal)
-  neg <- v < 0
   if (any(neg)) {
     nneg <- sum(neg)
     if (!posdrift) { # sample bernoulli hitting probability and use the absolute value of v for the finite finishes
@@ -102,7 +91,6 @@ rWald <- function(n, B, v, A, posdrift = TRUE)
         out[which(neg)[hit]] <- rwaldt(sum(hit), k = bs_neg[hit], l = abs(v[neg][hit]))
       }
     }
-    
   }
 
   out

@@ -100,3 +100,29 @@
 #' @useDynLib EMC2, .registration = TRUE
 ## usethis namespace: end
 NULL
+
+.emc2_samples_lnr_path <- function(libname, pkgname) {
+  file.path(libname, pkgname, "extdata", "samples_LNR.rds")
+}
+
+.emc2_load_samples_lnr <- function(libname, pkgname) {
+  readRDS(.emc2_samples_lnr_path(libname, pkgname))
+}
+
+.onLoad <- function(libname, pkgname) {
+  ns <- asNamespace(pkgname)
+  delayedAssign(
+    "samples_LNR",
+    .emc2_load_samples_lnr(libname, pkgname),
+    assign.env = ns
+  )
+}
+
+.onAttach <- function(libname, pkgname) {
+  pkg_env <- as.environment(paste0("package:", pkgname))
+  delayedAssign(
+    "samples_LNR",
+    get("samples_LNR", envir = asNamespace(pkgname), inherits = FALSE),
+    assign.env = pkg_env
+  )
+}
