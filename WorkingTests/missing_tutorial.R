@@ -784,7 +784,7 @@ system.time({emcc3 <- fit(emc)})
 # Time difference of 17.55192 secs
 emc <- make_emc(dat3,designLNR1,type="single")
 system.time({emcr3 <- fit(emc)})
-# Time difference of 1.581536 secs
+# Time difference of 2.527963 mins
 
 # Both good
 print(recovery(emcc3,p_vector,selection="alpha"))
