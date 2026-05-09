@@ -371,13 +371,7 @@ log_likelihood_race_missing <- function(pars,dadm,model,min_ll=log(1e-10))
       p[!isMiss] <- (1-pc[!isMiss])*p[!isMiss]
       ll[ispContaminant] <- log(p)
     }
-
     ll <- pmax(min_ll,ll)
-
-        llRC <<- ll
-    expand <<- attr(dadm,"expand")
-
-
     return(sum(ll[attr(dadm,"expand")]))
 }
 
