@@ -16,6 +16,7 @@ plot_stat(
   n_post = 50,
   quants = c(0.025, 0.5, 0.975),
   functions = NULL,
+  support = c(-Inf, Inf),
   layout = NA,
   to_plot = c("data", "posterior", "prior")[1:2],
   use_lim = c("data", "posterior", "prior")[1:2],
@@ -48,6 +49,10 @@ defaults to plotting full data set ungrouped by factors if \code{NULL}.}
 \item{quants}{Numeric vector of credible interval bounds (e.g. \code{c(0.025, 0.975)}).}
 
 \item{functions}{A function (or list of functions) that create new columns in the datasets or predictives}
+
+\item{support}{Optional support for the statistic as \code{c(lower, upper)}. Use \code{Inf} or \code{-Inf}
+for open-ended bounds. This support is used to constrain the kernel density estimate and
+x-axis limits. Defaults to \code{c(-Inf, Inf)}.}
 
 \item{layout}{Numeric vector used in \code{par(mfrow=...)}; use \code{NA} for auto-layout.}
 

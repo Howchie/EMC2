@@ -86,6 +86,14 @@ if the conventional bound aren't desired.
 see \code{DDM()} for an example of such bounds. Bounds are used to set limits to
 the likelihood landscape that cannot reasonable be achieved with \code{transform}}
 
+\item{LT}{Lower truncation bound (default 0).}
+
+\item{LC}{Lower censoring bound (default 0).}
+
+\item{UC}{Upper censoring bound (default Inf).}
+
+\item{UT}{Upper truncation bound (default Inf).}
+
 \item{...}{Additional, optional arguments}
 }
 \value{
