@@ -737,17 +737,24 @@ make_emc <- function(data,design,model=NULL,
   data <- lapply(data,function(d){
     d$subjects <- factor(d$subjects)
     d <- d[order(d$subjects),]
-    LC <- attr(d,"LC")
-    UC <- attr(d,"UC")
-    LT <- attr(d,"LT")
-    UT <- attr(d,"UT")
+    # LC <- attr(d,"LC")
+    # UC <- attr(d,"UC")
+    # LT <- attr(d,"LT")
+    # UT <- attr(d,"UT")
     d <- add_trials(d)
-    attr(d,"LC") <- LC
-    attr(d,"UC") <- UC
-    attr(d,"LT") <- LT
-    attr(d,"UT") <- UT
+    # attr(d,"LC") <- LC
+    # attr(d,"UC") <- UC
+    # attr(d,"LT") <- LT
+    # attr(d,"UT") <- UT
     d
   })
+  for (i in 1:length(data)) {
+    if (class(design)=="emc.design") des <- design else des <- design[[i]]
+    if (!any(names(data[[i]])=="LT") & !is.null(des$LT)) data[[i]]$LT <- des$LT
+    if (!any(names(data[[i]])=="LC") & !is.null(des$LC)) data[[i]]$LC <- des$LC
+    if (!any(names(data[[i]])=="UT") & !is.null(des$UT)) data[[i]]$UT <- des$UT
+    if (!any(names(data[[i]])=="UC") & !is.null(des$UC)) data[[i]]$UC <- des$UC
+  }
   if (!is.null(names(design)[1]) && names(design)[1]=="Flist"){
     design <- list(design)
   }
