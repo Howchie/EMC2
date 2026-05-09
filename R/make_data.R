@@ -54,20 +54,23 @@ get_missing <- function(supplied, data, bound_name, default,type) {
 #' @param rt_resolution A double, see make_emc, specified here so binning of rt and LC/UC/LT/UT is consistent.
 #'        The default is 1/60 as in make_emc, but when make_missing is called by make_data the default is to
 #'        do nothing unless an explicit is value passed in the missing list.
+#' @param digits Integer. Number of decimal places for verbose output, default 2.
 #' @return A filtered and modified data frame with added/updated LC, UC, LT and UT columns
 #' @examples
-#' First make some data
+#' \dontrun{
+#' # First make some data
 #'   designRDM <- design(model = RDM,
 #'   factors = list(subjects = 1:2, S = c("left", "right")),Rlevels = c("left", "right"),
 #'   matchfun = function(d) as.numeric(d$S) == as.numeric(d$lR),
 #'   formula = list(B ~ 1, v ~ lM, A ~ 1, t0 ~ 1, s ~ lM),
 #'   constants = c(s = log(1)))
-#' p_vector <-log(c(B=2,A=.5,t0=0.2,v=1,v_lMTRUE=2,s_lMTRUE=.8)
+#' p_vector <- log(c(B=2,A=.5,t0=0.2,v=1,v_lMTRUE=2,s_lMTRUE=.8))
 #' dat <- make_data(p_vector, designRDM,n_trials = 10)
 #'
-#' Filter data frame without LT/UC/LT/UT columns (as in most real data files)
+#' # Filter data frame without LT/UC/LT/UT columns (as in most real data files)
 #' data <- dat
 #' mdata <- make_missing(dat,LT=.7,LC=.75,UC=1.5,UT=1.6,verbose=TRUE)
+#' }
 #' @export
 
 make_missing <- function(data, LT = NULL, UT = NULL, LC = NULL, UC = NULL,
@@ -243,7 +246,8 @@ make_missing <- function(data, LT = NULL, UT = NULL, LC = NULL, UC = NULL,
 #' default list structure: list(p=.25,SSD0=.25,stairstep=.05,stairmin=0,stairmax=Inf)
 #' @param functions List of functions to create factors used in data generation.
 #' @param return_functions Logical, should factors created by functions be returned, default FALSE.
-#' @param missing List named with the arguments of the make_missing function (except data).
+#' @param TC List of truncation/censoring arguments passed to \code{make_missing}
+#'   (e.g. \code{list(LT=0.1, UC=2)}). NULL means no truncation or censoring is applied.
 #' @param ... Additional optional arguments
 #' @return A data frame with simulated data
 #' @examples
