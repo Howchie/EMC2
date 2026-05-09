@@ -820,6 +820,7 @@ plot_design_fmri <- function(design_matrix, TRs = 100, events = NULL, remove_nui
   if(!is.data.frame(design_matrix) && !is.matrix(design_matrix)){
     if(is.list(design_matrix)) design_matrix <- design_matrix[[subject]]
   }
+  design_matrix <- as.matrix(design_matrix)
   enames <- colnames(design_matrix)
   if(remove_nuisance & is.null(events)){
     # ZH optimization: Replace inefficient col-wise sd == 0 apply loop with extremely fast, vectorized constant check
