@@ -207,6 +207,7 @@ rLBA <- function(lR,pars,p_types=c("v","sv","b","A","t0"),
 #' Brown, S. D., & Heathcote, A. (2008). The simplest complete model of choice response time: Linear ballistic accumulation.
 #' *Cognitive Psychology, 57*(3), 153-178. https://doi.org/10.1016/j.cogpsych.2007.12.002
 #'
+#' @param posdrift Logical. If TRUE (default), drift rates are truncated to be positive.
 #' @return A model list with all the necessary functions for EMC2 to sample
 #' @examples
 #' # When working with lM it is useful to design  an "average and difference"
