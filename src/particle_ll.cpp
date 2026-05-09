@@ -894,7 +894,9 @@ double c_log_likelihood_DDM_pt(const double* pars_cm,
       // per-particle R heap allocation (critical for LT path where n_nonfinite > 0).
       const bool have_shared_bufs = (shared != nullptr &&
                                      !shared->R1_int_buf.empty() &&
-                                     (int)shared->R1_int_buf.size() >= n_trials);
+                                     (int)shared->R1_int_buf.size() >= n_trials &&
+                                     !shared->lF_LC_1_buf.empty() &&
+                                     (int)shared->lF_LC_1_buf.size() >= n_trials);
       // Fallback allocations (only used when called outside calc_ll_oo, e.g. standalone)
       Rcpp::IntegerVector R1_fb, R2_fb;
       Rcpp::NumericVector lF_LC_1_fb, lF_LC_2_fb, lF_UC_1_fb, lF_UC_2_fb;
