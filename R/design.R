@@ -47,6 +47,10 @@
 #' if the conventional bound aren't desired.
 #' see `DDM()` for an example of such bounds. Bounds are used to set limits to
 #' the likelihood landscape that cannot reasonable be achieved with `transform`
+#' @param LT Lower truncation bound (default 0).
+#' @param LC Lower censoring bound (default 0).
+#' @param UC Upper censoring bound (default Inf).
+#' @param UT Upper truncation bound (default Inf).
 #' @param ... Additional, optional arguments
 #'
 #' @return A design list.
@@ -137,15 +141,15 @@ design <- function(formula = NULL,factors = NULL,Rlevels = NULL,model,data=NULL,
       # covariates <- covariates[covariates %in% all_preds]
       if(length(covariates) == 0) covariates <- NULL
     }
-    if(is.null(LT)){if("LT"%in%colnames(data)) LT=data$LT else{LT <- attr(data,"LT")}}; if (is.null(LT)) LT <- 0
-    if(is.null(UT)){if("UT"%in%colnames(data)) UT=data$UT else{UT <- attr(data,"UT")}}; if (is.null(UT)) UT <- Inf
-    if(is.null(LC)){if("LC"%in%colnames(data)) LC=data$LC else{LC <- attr(data,"LC")}}; if (is.null(LC)) LC <- 0
-    if(is.null(UC)){if("UC"%in%colnames(data)) UC=data$UC else{UC <- attr(data,"UC")}}; if (is.null(UC)) UC <- Inf
+    if(is.null(LT)) LT <- 0
+    if(is.null(UT)) UT <- Inf
+    if(is.null(LC)) LC <- 0
+    if(is.null(UC)) UC <- Inf
   } else {if(is.null(Rlevels)) stop("make sure Rlevels is specified")} # this check wasn't present - would break accumulator logic
   if (!is.null(trend)) {
     formula <- check_trend(trend,c(names(functions), covariates), model, formula)
   }
-  
+
   ## Handle GNG models silently
   # ZH This matches Andrew's code in make_data by branching the model likelihood soley based on the presence of "nogo" in Rlevels
   if ("nogo" %in% Rlevels) {
@@ -508,7 +512,7 @@ rt_check_function <- function(data){
   }
   if ("LC"%in%colnames(data)) {
     if (any(data$LC<0)) stop("Lower censor cannot be negative")
-    if (any(data$LC>0)) { 
+    if (any(data$LC>0)) {
       check_rt(data$LC,data$rt,upper=FALSE)
     }
     if ("LT"%in%colnames(data) && any(data$LC!=0 & (data$LT>data$LC)))
@@ -644,7 +648,7 @@ design_model <- function(data,design,model=NULL,
   sampled_p_names <- p_names[!(p_names %in% names(design$constants))]
   attr(dadm,"p_names") <- p_names
   attr(dadm,"sampled_p_names") <- sampled_p_names
- 
+
   # `type` is a length-1 string (e.g. "DDM", "DDMGNG"); `%in%` would fail for "DDMGNG".
   if (grepl("DDM", model()$type)) nunique <- dim(dadm)[1] else
     nunique <- dim(dadm)[1]/length(levels(dadm$lR))
