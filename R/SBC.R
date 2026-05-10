@@ -231,17 +231,56 @@ SBC_hierarchical_parallel <- function(design_in, prior_in, replicates = 250, tri
                 " replicates already complete, running remaining ",
                 replicates - offset)
     } else {
-      # Fresh run — draw prior samples and set up temp_dir
-      prior_mu  <- plot(prior_in, design_in, do_plot = FALSE, N = replicates, selection = "mu",
-                        return_mcmc = FALSE, map = FALSE)[[1]]
-      prior_var <- plot(prior_in, design_in, do_plot = FALSE, N = replicates, selection = "Sigma",
-                        return_mcmc = FALSE, remove_constants = FALSE, map = FALSE)[[1]]
-      if (!is.null(temp_dir)) {
+      # Check for partial SBC_temp saved in fileName (e.g. from an older sequential run)
+      partial_sbc <- NULL
+      if (!is.null(fileName) && file.exists(fileName)) {
+        env <- new.env(parent = emptyenv())
+        loaded_ok <- isTRUE(tryCatch({ load(fileName, envir = env); TRUE }, error = function(e) FALSE))
+        if (loaded_ok && "SBC_temp" %in% ls(env) &&
+            !is.null(env$SBC_temp$rank$mu) && nrow(env$SBC_temp$rank$mu) > 0 &&
+            !is.null(env$SBC_temp$prior$mu) && !is.null(env$SBC_temp$prior$var))
+          partial_sbc <- env$SBC_temp
+      }
+      if (!is.null(partial_sbc)) {
+        n_done    <- min(nrow(partial_sbc$rank$mu), replicates)
+        prior_mu  <- partial_sbc$prior$mu
+        prior_var <- partial_sbc$prior$var
         dir.create(temp_dir, showWarnings = FALSE)
         saveRDS(list(prior_mu = prior_mu, prior_var = prior_var),
                 file.path(temp_dir, "prior_samples.rds"))
+        var_col_names <- colnames(partial_sbc$rank$var)
+        for (k in seq_len(n_done)) {
+          result <- list(
+            rank_mu_row   = unname(as.numeric(partial_sbc$rank$mu[k, ])),
+            rank_var_row  = unname(as.numeric(partial_sbc$rank$var[k, ])),
+            var_col_names = var_col_names,
+            rand_effects  = NULL
+          )
+          saveRDS(result, file.path(temp_dir, paste0("rep_", k, ".rds")))
+          completed_results[[as.character(k)]] <- result
+          if (!is.null(persist_dir) && !is.null(persist_base))
+            saveRDS(result, file.path(persist_dir, paste0(persist_base, "_rep_", k, ".rds")))
+        }
+        offset <- n_done
+        # Overwrite fileName with prior_mu/prior_var so the persist_reps branch works on crash-restart
+        if (!is.null(fileName)) save(prior_mu, prior_var, file = fileName)
+        if (verbose)
+          message("Restarting from partial SBC_temp in ", fileName, ": ",
+                  n_done, " of ", replicates, " replicates complete, running remaining ",
+                  replicates - n_done)
+      } else {
+        # Fresh run — draw prior samples and set up temp_dir
+        prior_mu  <- plot(prior_in, design_in, do_plot = FALSE, N = replicates, selection = "mu",
+                          return_mcmc = FALSE, map = FALSE)[[1]]
+        prior_var <- plot(prior_in, design_in, do_plot = FALSE, N = replicates, selection = "Sigma",
+                          return_mcmc = FALSE, remove_constants = FALSE, map = FALSE)[[1]]
+        if (!is.null(temp_dir)) {
+          dir.create(temp_dir, showWarnings = FALSE)
+          saveRDS(list(prior_mu = prior_mu, prior_var = prior_var),
+                  file.path(temp_dir, "prior_samples.rds"))
+        }
+        if (!is.null(fileName)) save(prior_mu, prior_var, file = fileName)
       }
-      if (!is.null(fileName)) save(prior_mu, prior_var, file = fileName)
     }
   }
 
