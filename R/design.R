@@ -47,10 +47,8 @@
 #' if the conventional bound aren't desired.
 #' see `DDM()` for an example of such bounds. Bounds are used to set limits to
 #' the likelihood landscape that cannot reasonable be achieved with `transform`
-#' @param LT Lower truncation bound (default 0).
-#' @param LC Lower censoring bound (default 0).
-#' @param UC Upper censoring bound (default Inf).
-#' @param UT Upper truncation bound (default Inf).
+#' @param TC List of truncation/censoring arguments passed to \code{make_missing}
+#'   (e.g. \code{list(LT=0.1, UC=2)}). NULL (default) means no truncation or censoring is applied.
 #' @param ... Additional, optional arguments
 #'
 #' @return A design list.
@@ -82,7 +80,9 @@ design <- function(formula = NULL,factors = NULL,Rlevels = NULL,model,data=NULL,
                    contrasts=NULL,matchfun=NULL,constants=NULL,covariates=NULL,
                    functions=NULL,report_p_vector=TRUE, custom_p_vector = NULL,
                    trend=NULL,
-                   transform = NULL, bound = NULL, LT=NULL,LC=NULL,UC=NULL,UT=NULL,...){
+                   transform = NULL, bound = NULL, TC=NULL,...){
+
+  TC <- check_missing(TC)
 
   optionals <- list(...)
   if (is.list(model) && !is.function(model)) {
@@ -141,10 +141,6 @@ design <- function(formula = NULL,factors = NULL,Rlevels = NULL,model,data=NULL,
       # covariates <- covariates[covariates %in% all_preds]
       if(length(covariates) == 0) covariates <- NULL
     }
-    if(is.null(LT)) LT <- 0
-    if(is.null(UT)) UT <- Inf
-    if(is.null(LC)) LC <- 0
-    if(is.null(UC)) UC <- Inf
   } else {if(is.null(Rlevels)) stop("make sure Rlevels is specified")} # this check wasn't present - would break accumulator logic
   if (!is.null(trend)) {
     formula <- check_trend(trend,c(names(functions), covariates), model, formula)
@@ -175,7 +171,7 @@ design <- function(formula = NULL,factors = NULL,Rlevels = NULL,model,data=NULL,
 
   design <- list(Flist=formula,Ffactors=factors,Rlevels=Rlevels,
                  Clist=contrasts,matchfun=matchfun,constants=constants,
-                 Fcovariates=covariates,Ffunctions=functions,model=model,LT=LT,LC=LC,UC=UC,UT=UT)
+                 Fcovariates=covariates,Ffunctions=functions,model=model,TC=TC)
   class(design) <- "emc.design"
   if (!is.null(trend)) {
     # check for at = 'lR'

@@ -124,7 +124,7 @@ make_data(p_vector, designRDM,n_trials = 2,
 
 # Note that we can also indicate truncation and censoring in design
 
-designRDM <- design(model = RDM,UC=1.5,
+designRDM <- design(model = RDM,TC=list(UC=1.5),
   factors = list(subjects = 1:2, S = c("left", "right")),Rlevels = c("left", "right"),
   matchfun = function(d) as.numeric(d$S) == as.numeric(d$lR),
   formula = list(B ~ 1, v ~ lM, A ~ 1, t0 ~ 1, s ~ lM, pContaminant~1),
@@ -151,12 +151,12 @@ dUC <- make_emc(dat,designRDM,type="single")
 # Note also that if the data has censoring or truncation columns they will not
 # be picked up by design (as those columns would be specific to a particular
 # number of trials), instead a value must be passed explicitly.
-designRDM <- design(model = RDM,UC=1.5,data=dat,
+designRDM <- design(model = RDM,TC=list(UC=1.5),data=dat,
   matchfun = function(d) as.numeric(d$S) == as.numeric(d$lR),
   formula = list(B ~ 1, v ~ lM, A ~ 1, t0 ~ 1, s ~ lM, pContaminant~1),
   constants = c(s = log(1)))
 
-designRDM$UC
+designRDM$TC$UC
 
 # Now when we give that design to make_data it adds in the UC value from the
 # design.

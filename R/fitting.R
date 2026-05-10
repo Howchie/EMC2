@@ -750,10 +750,14 @@ make_emc <- function(data,design,model=NULL,
   })
   for (i in 1:length(data)) {
     if (class(design)=="emc.design") des <- design else des <- design[[i]]
-    if (!any(names(data[[i]])=="LT") & !is.null(des$LT)) data[[i]]$LT <- des$LT
-    if (!any(names(data[[i]])=="LC") & !is.null(des$LC)) data[[i]]$LC <- des$LC
-    if (!any(names(data[[i]])=="UT") & !is.null(des$UT)) data[[i]]$UT <- des$UT
-    if (!any(names(data[[i]])=="UC") & !is.null(des$UC)) data[[i]]$UC <- des$UC
+    if (!any(names(data[[i]])=="LT") & !is.null(des$TC$LT))
+      data[[i]]$LT <- des$TC$LT
+    if (!any(names(data[[i]])=="LC") & !is.null(des$TC$LC))
+      data[[i]]$LC <- des$TC$LC
+    if (!any(names(data[[i]])=="UT") & !is.null(des$TC$UT))
+      data[[i]]$UT <- des$TC$UT
+    if (!any(names(data[[i]])=="UC") & !is.null(des$TC$UC))
+      data[[i]]$UC <- des$TC$UC
   }
   if (!is.null(names(design)[1]) && names(design)[1]=="Flist"){
     design <- list(design)
