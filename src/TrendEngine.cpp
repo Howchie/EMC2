@@ -184,7 +184,7 @@ void init_covariate_maps_for_slot(KernelSlotSpec& slot,
 
   string cov_name = as<string>(STRING_ELT(spec["covariate"], 0));
 
-  List maps_spec(spec["map"]);
+  List maps_spec = spec["map"];
   CharacterVector map_names = maps_spec.names();
   if (map_names.size() != maps_spec.size()) {
     stop("Trend: 'map' list must be named");
