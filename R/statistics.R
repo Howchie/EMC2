@@ -177,24 +177,22 @@ extract_pw_ll <- function(emc, stage = "sample", filter = 0, FUN = mean) {
   }
 
   # Get the data
-  # We use the same subjects as get_pars to match .ll_matrix_pooled
-  alpha <- get_pars(emc, selection = "alpha", stage = stage, filter = filter,
-                    by_subject = TRUE, merge_chains = TRUE)
-  subjects <- names(alpha)
-  data <- emc[[1]]$data
+  # We use the standard get_data function to get trial-wise data
+  all_data <- get_data(emc)
+  # For joint models, get_data returns a list. Concatenate them.
+  if (is.list(all_data) && !is.data.frame(all_data)) {
+    all_data <- do.call(rbind, all_data)
+  }
 
-  # Concatenate dadms for those subjects
-  all_dadms <- do.call(rbind, data[subjects])
-
-  if (nrow(all_dadms) != (if(is.null(FUN)) nrow(ll_vals) else length(ll_vals))) {
+  if (nrow(all_data) != (if(is.null(FUN)) nrow(ll_vals) else length(ll_vals))) {
      stop("DADM rows do not match pointwise log-likelihood columns. Check if data was expanded or filtered.")
   }
 
   if (is.null(FUN)) {
-    out <- cbind(all_dadms, ll_vals)
+    out <- cbind(all_data, ll_vals)
   } else {
-    all_dadms$ll <- ll_vals
-    out <- all_dadms
+    all_data$ll <- ll_vals
+    out <- all_data
   }
 
   return(out)

@@ -1025,10 +1025,12 @@ weighted_moments <- function(chain, ll = NULL) {
 #' @noRd
 restore_duplicates <- function(emc) {
   # Restore everything except samples from first entry
-  for (i in 2:length(emc)) {
-    samples <- emc[[i]]$samples
-    emc[[i]] <- emc[[1]]
-    emc[[i]]$samples <- samples
+  if (length(emc) > 1) {
+    for (i in 2:length(emc)) {
+      samples <- emc[[i]]$samples
+      emc[[i]] <- emc[[1]]
+      emc[[i]]$samples <- samples
+    }
   }
   return(emc)
 }

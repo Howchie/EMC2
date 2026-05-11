@@ -53,8 +53,9 @@ waic_warnings <- function() {
   # Try to get cached first
   pw_ll <- get_pars(emc, selection = "pw_ll", stage = stage, filter = filter,
                     merge_chains = TRUE, return_mcmc = FALSE)
-  if (!is.null(pw_ll[[1]])) {
-    ll_mat <- t(pw_ll[[1]])
+  if (!is.null(pw_ll)) {
+    if (is.list(pw_ll)) pw_ll <- pw_ll[[1]]
+    ll_mat <- t(pw_ll)
     if (pointwise == "trial") return(ll_mat)
     # Sum by subject
     subjects <- names(emc[[1]]$data)
