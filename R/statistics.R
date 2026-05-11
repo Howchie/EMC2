@@ -79,6 +79,7 @@ compare <- function(sList,stage="sample",filter=NULL,use_best_fit=TRUE,
     subj <- list(...)$subject
     WAICs <- if(WAIC) rep(NA_real_, length(sList)) else NULL
     LOOs <- if(LOO) rep(NA_real_, length(sList)) else NULL
+    pw_ll_list <- list()
     for(i in seq_along(sList)){
       tryCatch({
         ll_mat <- if(!is.null(subj)) {
@@ -86,6 +87,7 @@ compare <- function(sList,stage="sample",filter=NULL,use_best_fit=TRUE,
         } else {
           .ll_matrix_pooled(sList[[i]], stage=stage, filter=sflist[[i]], pointwise = pointwise)
         }
+        pw_ll_list[[i]] <- ll_mat
         if(WAIC) WAICs[i] <- waic_from_ll(ll_mat)
         if(LOO) LOOs[i] <- loo_from_ll(ll_mat)
       }, error = function(e) {
@@ -93,6 +95,7 @@ compare <- function(sList,stage="sample",filter=NULL,use_best_fit=TRUE,
         if(LOO) warning("LOO computation failed for model ", i, ": ", conditionMessage(e), call. = FALSE)
       })
     }
+    names(pw_ll_list) <- names(sList)
     if(WAIC){
       if(!all(is.na(WAICs))){
         WAICp <- getp(WAICs)
@@ -109,6 +112,7 @@ compare <- function(sList,stage="sample",filter=NULL,use_best_fit=TRUE,
         LOO <- FALSE
       }
     }
+    attr(out, "pw_ll") <- pw_ll_list
   }
 
   if(BayesFactor){
@@ -146,6 +150,96 @@ std_error_IS2 <- function(IS_samples, n_bootstrap = 50000){
     log_marglik_boot[i] <- median(log_weight_boot)
   }
   return(sd(log_marglik_boot))
+}
+
+#' Extract Pointwise Log-Likelihoods
+#'
+#' Extracts the pointwise log-likelihoods for each trial in the data and
+#' appends them to the Data Augmented Design Matrix (DADM).
+#'
+#' @param emc An emc object.
+#' @param stage A string. Specifies which stage the samples are to be taken from `"preburn"`, `"burn"`, `"adapt"`, or `"sample"`.
+#' @param filter An integer or vector. iterations to exclude.
+#' @param FUN A function to aggregate across iterations (e.g., \code{mean}, \code{median}, or \code{NULL} to return all iterations).
+#'
+#' @return A data frame (concatenated DADMs) with an additional `ll` column (or multiple columns if \code{FUN=NULL}).
+#' @export
+extract_pw_ll <- function(emc, stage = "sample", filter = 0, FUN = mean) {
+  # Get the pointwise log-likelihood matrix [n_iter x total_trials]
+  ll_mat <- .ll_matrix_pooled(emc, stage = stage, filter = filter, pointwise = "trial")
+
+  # Aggregation
+  if (!is.null(FUN)) {
+    ll_vals <- apply(ll_mat, 2, FUN)
+  } else {
+    ll_vals <- t(ll_mat)
+    colnames(ll_vals) <- paste0("ll_iter", 1:nrow(ll_mat))
+  }
+
+  # Get the data
+  # We use the same subjects as get_pars to match .ll_matrix_pooled
+  alpha <- get_pars(emc, selection = "alpha", stage = stage, filter = filter,
+                    by_subject = TRUE, merge_chains = TRUE)
+  subjects <- names(alpha)
+  data <- emc[[1]]$data
+
+  # Concatenate dadms for those subjects
+  all_dadms <- do.call(rbind, data[subjects])
+
+  if (nrow(all_dadms) != (if(is.null(FUN)) nrow(ll_vals) else length(ll_vals))) {
+     stop("DADM rows do not match pointwise log-likelihood columns. Check if data was expanded or filtered.")
+  }
+
+  if (is.null(FUN)) {
+    out <- cbind(all_dadms, ll_vals)
+  } else {
+    all_dadms$ll <- ll_vals
+    out <- all_dadms
+  }
+
+  return(out)
+}
+
+#' Add Pointwise Log-Likelihoods to an emc Object
+#'
+#' Calculates the pointwise log-likelihoods for all samples in the emc object
+#' and stores them in the \code{samples} list of each chain. This allows
+#' for faster subsequent calls to \code{compare()} or \code{extract_pw_ll()}.
+#'
+#' @param emc An emc object.
+#' @param cores_for_chains Integer. Number of cores to use for parallel calculation across chains.
+#'
+#' @return The same emc object with \code{pw_ll} added to each chain's samples.
+#' @export
+add_pw_ll <- function(emc, cores_for_chains = 1) {
+  emc <- auto_mclapply(emc, add_pw_ll_chain, mc.cores = cores_for_chains)
+  class(emc) <- "emc"
+  return(emc)
+}
+
+add_pw_ll_chain <- function(chain) {
+  alpha <- chain$samples$alpha
+  n_subjects <- dim(alpha)[2]
+  n_iter <- dim(alpha)[3]
+  data <- chain$data
+  model <- chain$model
+
+  if (chain$type == "single") {
+    # alpha[, 1, ] is matrix [n_pars x n_iter]
+    proposals <- t(alpha[, 1, ])
+    ll_mat <- calc_ll_pw(proposals, data[[1]], model)
+    chain$samples$pw_ll <- t(ll_mat)
+  } else {
+    sub_pw_lls <- lapply(1:n_subjects, function(s) {
+      sub <- chain$subjects[s]
+      # alpha[, s, ] is matrix [n_pars x n_iter]
+      proposals <- t(alpha[, s, ])
+      ll_mat <- calc_ll_pw(proposals, data[[sub]], model)
+      return(t(ll_mat))
+    })
+    chain$samples$pw_ll <- do.call(rbind, sub_pw_lls)
+  }
+  return(chain)
 }
 
 

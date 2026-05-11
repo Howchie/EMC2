@@ -307,7 +307,8 @@ dBAwL <- function(rt, pars, posdrift = TRUE, erlang = 1L, guess = FALSE) {
       sv = pars[ok, "sv"], t0 = pars[ok, "t0"], k = pars[ok, "k"],
       lambda_g = pars[ok, "lambda_g"], lambda_k = pars[ok, "lambda_k"],
       posdrift = posdrift, log_out = FALSE,
-      kill_shape = as.integer(erlang), guess = guess
+      kill_shape = as.integer(erlang), guess = guess,
+      erlang_omega = .rdmswtn_erlang_omega(pars[ok, , drop = FALSE], erlang)
     )
   }
   out
@@ -328,7 +329,8 @@ pBAwL <- function(rt, pars, posdrift = TRUE, erlang = 1L, guess = FALSE) {
       sv = pars[ok, "sv"], t0 = pars[ok, "t0"], k = pars[ok, "k"],
       lambda_g = pars[ok, "lambda_g"], lambda_k = pars[ok, "lambda_k"],
       posdrift = posdrift, log_out = FALSE,
-      kill_shape = as.integer(erlang), guess = guess
+      kill_shape = as.integer(erlang), guess = guess,
+      erlang_omega = .rdmswtn_erlang_omega(pars[ok, , drop = FALSE], erlang)
     )
   }
   out
@@ -340,11 +342,12 @@ rBAwL <- function(lR, pars, ok = rep(TRUE, length(lR)),
   if (!all(c("lambda_g", "lambda_k") %in% colnames(pars))) {
     stop("BAwL requires parameter columns 'lambda_g' and 'lambda_k'.")
   }
+  erlang_omega_all <- .rdmswtn_erlang_omega(pars, erlang)
   bad  <- rep(NA, length(lR) / length(levels(lR)))
   out  <- data.frame(R = bad, rt = bad)
   nr   <- length(levels(lR))
   n_trials <- nrow(pars) / nr
-  dt   <- matrix(Inf, nrow = nr, ncol = nrow(pars) / nr)
+  dt   <- matrix(Inf, nrow = nr, ncol = n_trials)
   t0   <- pars[, "t0"]
 
   if (global) {
@@ -356,7 +359,17 @@ rBAwL <- function(lR, pars, ok = rep(TRUE, length(lR)),
     tk_global <- rep(Inf, n_trials)
     kill_ok <- !is.na(lambda_trials) & lambda_trials > 0
     if (any(kill_ok)) {
-      tk_global[kill_ok] <- rgamma(sum(kill_ok), shape = erlang, rate = lambda_trials[kill_ok])
+      shape_k <- if (as.integer(erlang) == 3L) {
+        ifelse(runif(sum(kill_ok)) <= matrix(erlang_omega_all, nrow = nr)[1, kill_ok], 1L, 2L)
+      } else {
+        as.integer(erlang)
+      }
+      rate_k <- if (as.integer(erlang) == 3L) {
+        ifelse(shape_k == 2L, 2 * lambda_trials[kill_ok], lambda_trials[kill_ok])
+      } else {
+        lambda_trials[kill_ok]
+      }
+      tk_global[kill_ok] <- rgamma(sum(kill_ok), shape = shape_k, rate = rate_k)
     }
   }
 
@@ -393,7 +406,17 @@ rBAwL <- function(lR, pars, ok = rep(TRUE, length(lR)),
       lambda_k_local[matrix(ok, nrow = nr)] <- pars[, "lambda_k"]
       kill_ok_mat <- lambda_k_local > 0
       if (any(kill_ok_mat)) {
-        tk_local[kill_ok_mat] <- rgamma(sum(kill_ok_mat), shape = erlang, rate = lambda_k_local[kill_ok_mat])
+        shape_k <- if (as.integer(erlang) == 3L) {
+          ifelse(runif(sum(kill_ok_mat)) <= matrix(erlang_omega_all, nrow = nr)[kill_ok_mat], 1L, 2L)
+        } else {
+          as.integer(erlang)
+        }
+        rate_k <- if (as.integer(erlang) == 3L) {
+          ifelse(shape_k == 2L, 2 * lambda_k_local[kill_ok_mat], lambda_k_local[kill_ok_mat])
+        } else {
+          lambda_k_local[kill_ok_mat]
+        }
+        tk_local[kill_ok_mat] <- rgamma(sum(kill_ok_mat), shape = shape_k, rate = rate_k)
       }
     }
 
@@ -403,7 +426,17 @@ rBAwL <- function(lR, pars, ok = rep(TRUE, length(lR)),
       lambda_g_local[active_guess] <- pars_all[, "lambda_g"][active_guess]
       guess_ok_mat <- lambda_g_local > 0
       if (any(guess_ok_mat)) {
-        tg_local[guess_ok_mat] <- rgamma(sum(guess_ok_mat), shape = erlang, rate = lambda_g_local[guess_ok_mat])
+        shape_g <- if (as.integer(erlang) == 3L) {
+          ifelse(runif(sum(guess_ok_mat)) <= matrix(erlang_omega_all, nrow = nr)[guess_ok_mat], 1L, 2L)
+        } else {
+          as.integer(erlang)
+        }
+        rate_g <- if (as.integer(erlang) == 3L) {
+          ifelse(shape_g == 2L, 2 * lambda_g_local[guess_ok_mat], lambda_g_local[guess_ok_mat])
+        } else {
+          lambda_g_local[guess_ok_mat]
+        }
+        tg_local[guess_ok_mat] <- rgamma(sum(guess_ok_mat), shape = shape_g, rate = rate_g)
       }
     }
 
@@ -456,50 +489,90 @@ rBAwL <- function(lR, pars, ok = rep(TRUE, length(lR)),
 BAwL <- function(posdrift = TRUE, erlang = 1L,
                  erlang_type = c("none", "local_kill", "global_kill", "local_guess", "local_kill_guess")) {
   erlang_type <- match.arg(erlang_type)
-  list(
-    type   = "RACE",
-    c_name = paste0(ifelse(posdrift, "BAwL", "BAwLIO"),
-                    if (erlang >= 2L) "_E2" else "",
-                    if (erlang_type == "local_guess") "_LOCAL_GUESS"
+  erlang_mixed <- identical(erlang, "mixed")
+  erlang_shape_cpp <- if (erlang_mixed) 3L else as.integer(erlang)
+  
+  has_guess <- erlang_type %in% c("local_guess", "local_kill_guess")
+  has_kill  <- erlang_type %in% c("local_kill", "global_kill", "local_kill_guess")
+  
+  base_name <- paste0(ifelse(posdrift, "BAwL", "BAwLIO"),
+                    if (erlang_mixed) "_EMIX" else if (erlang_shape_cpp >= 2L) "_E2" else "")
+  type_suffix <- if (erlang_type == "local_guess") "_LOCAL_GUESS"
                     else if (erlang_type == "local_kill_guess") "_LOCAL_KILL_GUESS"
                     else if (erlang_type == "local_kill") "_LOCAL_KILL"
                     else if (erlang_type == "global_kill") "_GLOBAL_KILL"
-                    else ""),
-    p_types = c("v"  = 1, "sv" = log(1), "B" = log(1), "A" = log(0),
-                "t0" = log(0), "k" = log(0), "lambda_g" = log(0), "lambda_k" = log(0), "pContaminant" = qnorm(0)),
-    p_types_canonical = c("v", "sv", "B", "A", "t0", "k"),
-    transform = list(func = c(v = "identity", sv = "exp", B = "exp",
-                              A = "exp", t0 = "exp", k = "exp", lambda_g = "exp", lambda_k = "exp",
-                              pContaminant = "pnorm")),
-    bound = list(
-      minmax = cbind(v  = c(-Inf, Inf), sv = c(0, Inf),
+                    else ""
+
+  p_types <- c("v"  = 1, "sv" = log(1), "B" = log(1), "A" = log(0),
+                "t0" = log(0), "k" = log(0))
+  transform <- c(v = "identity", sv = "exp", B = "exp",
+                              A = "exp", t0 = "exp", k = "exp")
+  minmax <- cbind(v  = c(-Inf, Inf), sv = c(0, Inf),
                      A  = c(1e-4, Inf), B  = c(1e-4, Inf),
-                     t0 = c(0.05, Inf), k  = c(1e-4, Inf), lambda_g = c(1e-4, Inf), lambda_k = c(1e-4, Inf),
-                     pContaminant = c(0.001, 0.999)),
-      exception = c(A = 0, pContaminant = 0, k = 0, lambda_g = 0, lambda_k = 0)),
+                     t0 = c(0.05, Inf), k  = c(1e-4, Inf))
+  exception <- c(A = 0, k = 0)
+  
+  p_types <- c(p_types, mG = log(1))
+  transform <- c(transform, mG = "exp")
+  minmax <- cbind(minmax, mG = c(1e-4, Inf))
+
+  p_types <- c(p_types, mK = log(1))
+  transform <- c(transform, mK = "exp")
+  minmax <- cbind(minmax, mK = c(1e-4, Inf))
+
+  if (erlang_mixed) {
+    p_types <- c(p_types, omega = qnorm(0.5))
+    transform <- c(transform, omega = "pnorm")
+    minmax <- cbind(minmax, omega = c(0, 1))
+    exception <- c(exception, omega = 0)
+  }
+  
+  p_types <- c(p_types, pContaminant = qnorm(0))
+  transform <- c(transform, pContaminant = "pnorm")
+  minmax <- cbind(minmax, pContaminant = c(0.001, 0.999))
+  exception <- c(exception, pContaminant = 0)
+
+  list(
+    type   = "RACE",
+    c_name = paste0(base_name, type_suffix),
+    p_types = p_types,
+    p_types_canonical = c("v", "sv", "B", "A", "t0", "k"),
+    transform = list(func = transform),
+    bound = list(
+      minmax = minmax,
+      exception = exception),
     Ttransform = function(pars, dadm) {
-      cbind(pars, b = pars[, "B"] + pars[, "A"])
+      lambda_factor <- if (erlang_shape_cpp == 2L) 2 else 1
+      n <- nrow(pars)
+      lg <- if (has_guess) lambda_factor / pars[, "mG"] else rep(0, n)
+      lk <- if (has_kill)  lambda_factor / pars[, "mK"] else rep(0, n)
+      timed <- cbind(lambda_g = lg, lambda_k = lk)
+      extra_drop <- c("v", "sv", "B", "A", "t0", "k", "mG", "mK", "omega")
+      extra <- pars[, setdiff(colnames(pars), extra_drop), drop = FALSE]
+      if (erlang_mixed) {
+        pars <- cbind(
+          pars[, c("v", "sv", "B", "A", "t0", "k"), drop = FALSE],
+          timed,
+          omega = pars[, "omega"],
+          extra
+        )
+      } else {
+        pars <- cbind(
+          pars[, c("v", "sv", "B", "A", "t0", "k"), drop = FALSE],
+          timed,
+          extra
+        )
+      }
+      pars <- cbind(pars, b = pars[, "B"] + pars[, "A"])
+      pars
     },
-    rfun = if (posdrift)
-             function(data, pars) rBAwL(data$lR, pars, ok = attr(pars, "ok"), posdrift = TRUE,
-                                        erlang = erlang, guess = erlang_type %in% c("local_guess", "local_kill_guess"),
-                                        global = erlang_type == "global_kill")
-           else
-             function(data, pars) rBAwL(data$lR, pars, ok = attr(pars, "ok"), posdrift = FALSE,
-                                        erlang = erlang, guess = erlang_type %in% c("local_guess", "local_kill_guess"),
+    rfun = function(data, pars) rBAwL(data$lR, pars, ok = attr(pars, "ok"), posdrift = posdrift,
+                                        erlang = erlang_shape_cpp, guess = has_guess,
                                         global = erlang_type == "global_kill"),
-    dfun = if (posdrift)
-             function(rt, pars) dBAwL(rt, pars, posdrift = TRUE,  erlang = erlang,
-                                      guess = erlang_type %in% c("local_guess", "local_kill_guess"))
-           else
-             function(rt, pars) dBAwL(rt, pars, posdrift = FALSE, erlang = erlang,
-                                      guess = erlang_type %in% c("local_guess", "local_kill_guess")),
-    pfun = if (posdrift)
-             function(rt, pars) pBAwL(rt, pars, posdrift = TRUE,  erlang = erlang,
-                                      guess = erlang_type %in% c("local_guess", "local_kill_guess"))
-           else
-             function(rt, pars) pBAwL(rt, pars, posdrift = FALSE, erlang = erlang,
-                                      guess = erlang_type %in% c("local_guess", "local_kill_guess")),
+    dfun = function(rt, pars) dBAwL(rt, pars, posdrift = posdrift,  erlang = erlang_shape_cpp,
+                                      guess = has_guess),
+    pfun = function(rt, pars) pBAwL(rt, pars, posdrift = posdrift,  erlang = erlang_shape_cpp,
+                                      guess = has_guess),
     log_likelihood = function(pars, dadm, model, min_ll = log(1e-10)) {
       log_likelihood_race_missing(pars = pars, dadm = dadm, model = model, min_ll = min_ll)
     }

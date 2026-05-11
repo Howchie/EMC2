@@ -74,7 +74,7 @@ add_prior_names <- function(prior, design, ...){
 
 get_objects_diag_gamma <- function(selection, sample_prior, return_prior, design = NULL,
                              prior = NULL, stage = 'sample', N = 1e5, sampler = NULL,...){
-  acc_selection <- c("mu", "sigma2", "alpha", "LL", "Sigma")
+  acc_selection <- c("mu", "sigma2", "alpha", "LL", "Sigma", "pw_ll")
   if(return_prior & !sample_prior){
     if(is.null(list(...)$return_info)) prior$prior <- get_prior_diag_gamma(design = design, sample = F, prior = prior)
     prior$descriptions <- list(
@@ -118,7 +118,7 @@ get_objects_diag_gamma <- function(selection, sample_prior, return_prior, design
 
 get_objects_standard <- function(selection, sample_prior, return_prior, design = NULL,
                                  prior = NULL, stage = 'sample', N = 1e5, sampler = NULL, ...){
-  acc_selection <- c("mu", "sigma2", "beta", "covariance", "correlation", "alpha", "Sigma", "LL")
+  acc_selection <- c("mu", "sigma2", "beta", "covariance", "correlation", "alpha", "Sigma", "LL", "pw_ll")
   group_design <- sampler[[1]]$group_designs
   if(!is.null(attr(prior, "group_design"))) group_design <- attr(prior, "group_design")
   dots <- add_defaults(list(...), group_design = group_design)
@@ -217,7 +217,7 @@ get_idx <- function(sampler, stage){
 
 get_objects_single <- function(selection, sample_prior, return_prior, design = NULL,
                                  prior = NULL, stage = 'sample', N = 1e5, sampler = NULL,...){
-  acc_selection <- c("alpha", "LL")
+  acc_selection <- c("alpha", "LL", "pw_ll")
   if(return_prior & !sample_prior){
     if(is.null(list(...)$return_info)) prior$prior <- get_prior_single(design = design, sample = F, prior = prior)
     prior$descriptions <- list(
@@ -248,7 +248,7 @@ get_objects_single <- function(selection, sample_prior, return_prior, design = N
 
 get_objects_factor <- function(selection, sample_prior, return_prior, design = NULL,
                                      prior = NULL, stage = 'sample', N = 1e5, sampler = NULL, ...){
-  acc_selection <- c("mu", "sigma2", "covariance", "correlation", "alpha", "Sigma", "loadings", "residuals", "LL",
+  acc_selection <- c("mu", "sigma2", "covariance", "correlation", "alpha", "Sigma", "loadings", "residuals", "LL", "pw_ll",
                      "std_loadings")
   if(return_prior & !sample_prior){
     if(is.null(list(...)$return_info)) prior$prior <- do.call(get_prior_factor, c(list(design = design, sample = F, prior = prior), fix_dots(list(...), get_prior_factor)))
@@ -314,7 +314,7 @@ get_objects_factor <- function(selection, sample_prior, return_prior, design = N
 
 get_objects_infnt_factor <- function(selection, sample_prior, return_prior, design = NULL,
                                  prior = NULL, stage = 'sample', N = 1e5, sampler = NULL, ...){
-  acc_selection <- c("mu", "sigma2", "covariance", "correlation", "alpha", "Sigma", "loadings", "residuals", "LL",
+  acc_selection <- c("mu", "sigma2", "covariance", "correlation", "alpha", "Sigma", "loadings", "residuals", "LL", "pw_ll",
                      "std_loadings")
   if(return_prior & !sample_prior){
     if(is.null(list(...)$return_info)) prior$prior <- do.call(get_prior_infnt_factor, c(list(design = design, sample = F, prior = prior), fix_dots(list(...), get_prior_infnt_factor)))
@@ -379,7 +379,7 @@ get_objects_SEM <- function(selection, sample_prior, return_prior, design = NULL
                                prior = NULL, stage = 'sample', N = 1e5, sampler = NULL, ...){
   acc_selection <- c("mu", "sigma2", "covariance", "alpha", "correlation", "Sigma",
                      "std_loadings", "loadings", "residuals","factor_residuals", "regressors",
-                     "factor_regressors", "structural_regressors","mu_implied", "LL")
+                     "factor_regressors", "structural_regressors","mu_implied", "LL", "pw_ll")
   if(return_prior & !sample_prior){
     if(is.null(list(...)$return_info)) prior$prior <- do.call(get_prior_SEM, c(list(design = design, sample = F, prior = prior), fix_dots(list(...), get_prior_SEM)))
     prior$descriptions <- list(
@@ -479,6 +479,8 @@ get_base <- function(sampler, idx, selection){
     return(lapply(sampler, FUN = function(x) return(x$samples$alpha[,,idx, drop = F])))
   } else if(selection == "LL"){
     return(lapply(sampler, FUN = function(x) return(x$samples$subj_ll[,idx, drop = F])))
+  } else if(selection == "pw_ll"){
+    return(lapply(sampler, FUN = function(x) return(x$samples$pw_ll[,idx, drop = F])))
   } else if(selection == "mu"){
     return(lapply(sampler, FUN = function(x) return(x$samples$theta_mu[,idx, drop = F])))
   } else if(selection == "beta"){

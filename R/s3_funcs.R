@@ -393,6 +393,7 @@ fit.emc <- function(emc, stage = NULL, iter = 1000, stop_criteria = NULL,
                     particle_factor=50, cores_per_chain = 1,
                     cores_for_chains = length(emc), max_tries = 20,
                     thin = FALSE, rhat_version = "old",
+                    save_pw_ll = FALSE,
                     ...){
 
   dots <- add_defaults(list(...), n_blocks = 1, verboseProgress = FALSE,
@@ -432,6 +433,10 @@ fit.emc <- function(emc, stage = NULL, iter = 1000, stop_criteria = NULL,
                    fileName = fileName, particle_factor =  particle_factor, trim = dots$trim,
                    cores_per_chain = cores_per_chain, max_tries = max_tries, thin = thin, n_blocks = dots$n_blocks,
                    r_cores = dots$r_cores, rhat_version = rhat_version)
+  }
+  if (save_pw_ll) {
+    if (verbose) message("Calculating pointwise log-likelihoods...")
+    emc <- add_pw_ll(emc, cores_for_chains = cores_for_chains)
   }
   if (verbose) print(Sys.time()-start_time)
   return(emc)

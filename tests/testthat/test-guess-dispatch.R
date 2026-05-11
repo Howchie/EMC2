@@ -54,21 +54,6 @@ calc_ll_guess <- function(ctx) {
   )
 }
 
-calc_ll_guess_pw <- function(ctx) {
-  EMC2:::calc_ll_oo_pw(
-    ctx$p_mat, ctx$dadm,
-    constants = ctx$constants,
-    designs = ctx$designs,
-    type = ctx$model$c_name,
-    bounds = ctx$model$bound,
-    transforms = ctx$model$transform,
-    pretransforms = ctx$model$pre_transform,
-    p_types = ctx$p_types,
-    min_ll = log(1e-10),
-    trend = ctx$model$trend
-  )
-}
-
 guess_dispatch_cases <- list(
   list(
     label = "RDMGBM",
@@ -80,9 +65,9 @@ guess_dispatch_cases <- list(
   ),
   list(
     label = "RDMSWTN",
-    formula = list(v ~ 1, B ~ 1, A ~ 1, t0 ~ 1, s ~ 1, sv ~ 1, lambda_g ~ 1, lambda_k ~ 1),
+    formula = list(v ~ 1, B ~ 1, A ~ 1, t0 ~ 1, s ~ 1, sv ~ 1, mG ~ 1, mK ~ 1),
     pars = c(v = 1.2, B = log(1.1), A = log(0.2), t0 = log(0.3), s = log(1.0),
-             sv = log(0.25), lambda_g = log(0.8), lambda_k = log(0.6)),
+             sv = log(0.25), mG = log(1 / 0.8), mK = log(1 / 0.6)),
     local_guess = EMC2::RDMSWTN(erlang_type = "local_guess"),
     local_kill_guess = EMC2::RDMSWTN(erlang_type = "local_kill_guess")
   ),
@@ -102,7 +87,7 @@ test_that("guess-model calc_ll_oo dispatch handles rt<t0 correctly", {
   for (case in guess_dispatch_cases) {
     ctx_guess <- guess_dispatch_context(case$local_guess, case$formula, case$pars)
     pars_no_guess <- case$pars
-    pars_no_guess["lambda_g"] <- log(0)
+    if (case$label == "RDMSWTN") pars_no_guess["mG"] <- log(1e14) else pars_no_guess["lambda_g"] <- log(0)
     ctx_guess_off <- guess_dispatch_context(case$local_guess, case$formula, pars_no_guess)
     ctx_kill_guess <- guess_dispatch_context(case$local_kill_guess, case$formula, case$pars)
     ctx_kill_guess_off <- guess_dispatch_context(case$local_kill_guess, case$formula, pars_no_guess)
@@ -140,7 +125,8 @@ test_that("guess-model calc_ll_oo_pw matches calc_ll_oo", {
     for (variant in c("local_guess", "local_kill_guess")) {
       ctx <- guess_dispatch_context(case[[variant]], case$formula, case$pars)
       ll <- calc_ll_guess(ctx)
-      ll_pw <- calc_ll_guess_pw(ctx)
+      model_fun <- function() ctx$model
+      ll_pw <- calc_ll_pw(ctx$p_mat, ctx$dadm, model_fun)
 
       expect_equal(nrow(ll_pw), 1L, info = paste(case$label, variant))
       expect_equal(
@@ -157,10 +143,26 @@ test_that("guess-model calc_ll_oo_pw matches calc_ll_oo", {
   }
 })
 
+test_that("mixed RDMSWTN guess dispatch carries omega through particle likelihood", {
+  formula <- list(v ~ 1, B ~ 1, A ~ 1, t0 ~ 1, s ~ 1, sv ~ 1, mG ~ 1, mK ~ 1, omega ~ 1)
+  pars <- c(v = 1.2, B = log(1.1), A = log(0.2), t0 = log(0.3), s = log(1.0),
+            sv = log(0.25), mG = log(1 / 0.8), mK = log(1 / 0.6), omega = qnorm(0.35))
+  model <- EMC2::RDMSWTN(erlang_shape = "mixed", erlang_type = "local_kill_guess")
+  ctx <- guess_dispatch_context(model, formula, pars)
+
+  ll <- calc_ll_guess(ctx)
+  model_fun <- function() ctx$model
+  ll_pw <- calc_ll_pw(ctx$p_mat, ctx$dadm, model_fun)
+
+  expect_match(ctx$model$c_name, "RDMSWTN_EMIX")
+  expect_true(is.finite(ll) && ll > log(1e-10))
+  expect_equal(sum(ll_pw[1, ]), ll, tolerance = 1e-12)
+})
+
 test_that("local_kill_guess falls back to local_kill when lambda_g is zero after t0", {
   for (case in guess_dispatch_cases[c(1, 2)]) {
     pars_kill_only <- case$pars
-    pars_kill_only["lambda_g"] <- log(0)
+    if (case$label == "RDMSWTN") pars_kill_only["mG"] <- log(1e14) else pars_kill_only["lambda_g"] <- log(0)
 
     ctx_local_kill <- guess_dispatch_context(
       if (case$label == "RDMGBM") EMC2::RDMGBM(erlang_type = "local_kill") else EMC2::RDMSWTN(erlang_type = "local_kill"),
@@ -181,9 +183,13 @@ test_that("local_kill_guess falls back to local_kill when lambda_g is zero after
       tolerance = 1e-12,
       info = paste(case$label, "aggregate likelihood should keep the kill branch")
     )
+
+    model_fun_kill <- function() ctx_local_kill$model
+    model_fun_kill_guess <- function() ctx_local_kill_guess$model
+
     expect_equal(
-      calc_ll_guess_pw(ctx_local_kill_guess),
-      calc_ll_guess_pw(ctx_local_kill),
+      calc_ll_pw(ctx_local_kill_guess$p_mat, ctx_local_kill_guess$dadm, model_fun_kill_guess),
+      calc_ll_pw(ctx_local_kill$p_mat, ctx_local_kill$dadm, model_fun_kill),
       tolerance = 1e-12,
       info = paste(case$label, "particlewise likelihood should keep the kill branch")
     )

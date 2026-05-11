@@ -123,7 +123,6 @@ test_that("timed RDMSWTN likelihood matches manual mixture with truncation", {
     matchfun = function(d) as.character(d$S) == as.character(d$lR),
     model = RDMSWTN(),
     formula = list(v ~ 0 + lR, B ~ 1, A ~ 1, t0 ~ 0 + lR, s ~ 1, sv ~ 1),
-    constants = c(lambda_g = log(0), lambda_k = log(0)),
     report_p_vector = FALSE
   )
 
@@ -211,7 +210,7 @@ test_that("RDMSWTN IO C++ likelihood keeps defective Wald normalization with tru
     matchfun = function(d) as.character(d$S) == as.character(d$lR),
     model = RDMSWTN(posdrift = FALSE),
     formula = list(v ~ 0 + lR, B ~ 1, A ~ 1, t0 ~ 1, s ~ 1, sv ~ 1),
-    constants = c(lambda_g = log(0), lambda_k = log(0), sv = log(0)),
+    constants = c(sv = log(0)),
     report_p_vector = FALSE
   )
 
@@ -332,7 +331,7 @@ test_that("TRDM split transforms are preserved for C++ likelihood mapping", {
       sv ~ 1
     ),
     constants = c(
-      A = log(0), sv = log(0), lambda_g = log(0), lambda_k = log(0),
+      A = log(0), sv = log(0),
       "B_saspeed:E" = log(1), "B_Time" = log(1), t0_Time = log(0.05)
     ),
     pre_transform_terms = list(

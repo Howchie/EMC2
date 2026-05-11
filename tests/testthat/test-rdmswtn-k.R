@@ -386,7 +386,7 @@ test_that("rRDMSWTN nests to the no-kill model when lambda_k is zero", {
   designRDMSWTN <- design(
     factors = list(S = "Target", subjects = 1, L = c("L", "M", "H")),
     Rlevels = c("Go"),
-    formula = list(v ~ L, B ~ 1, A ~ 1, t0 ~ 1, s ~ 1, sv ~ 1, lambda_g ~ 1, lambda_k ~ 1),
+    formula = list(v ~ L, B ~ 1, A ~ 1, t0 ~ 1, s ~ 1, sv ~ 1, mG ~ 1, mK ~ 1),
     constants = c(s = log(1)),
     model = RDMSWTN(erlang_type = "local_kill"),
     report_p_vector = FALSE
@@ -398,8 +398,8 @@ test_that("rRDMSWTN nests to the no-kill model when lambda_k is zero", {
   p_vec["A"] <- log(0.4)
   p_vec["t0"] <- log(0.2)
   p_vec["sv"] <- log(0.25)
-  p_vec["lambda_g"] <- log(0)
-  p_vec["lambda_k"] <- log(0)
+  p_vec["mG"] <- log(1e10)
+  p_vec["mK"] <- log(1e10)
 
   expect_silent(dat <- make_data(p_vec, design = designRDMSWTN, n_trials = 200))
   expect_true(is.data.frame(dat))
@@ -439,4 +439,68 @@ test_that("RDMSWTN and RDMGBM wrappers preserve rt<t0 Erlang guess mass", {
   expect_equal(EMC2:::pRDMSWTN(rt, pars_swtn, erlang = ks), ref_cdf, tolerance = 5e-6)
   expect_equal(EMC2:::dRDMGBM(rt, pars_gbm, erlang = ks), ref_pdf, tolerance = 5e-6)
   expect_equal(EMC2:::pRDMGBM(rt, pars_gbm, erlang = ks), ref_cdf, tolerance = 5e-6)
+})
+
+test_that("mixed RDMSWTN local Erlang mode weights Erlang-1 and Erlang-2 kernels", {
+  rt <- 0.8
+  args <- list(
+    t = rt, v = 1.1, b = 1.35, A = 0.25, s = 1.0, t0 = 0.2, sv = 0.1,
+    lambda_g = 0.45, lambda_k = 0.8, posdrift = TRUE
+  )
+  omega <- 0.35
+
+  d1 <- do.call(EMC2:::dSWTNspv, c(args, list(kill_shape = 1L)))
+  args_e2 <- args
+  args_e2$lambda_g <- 2 * args_e2$lambda_g
+  args_e2$lambda_k <- 2 * args_e2$lambda_k
+  d2 <- do.call(EMC2:::dSWTNspv, c(args_e2, list(kill_shape = 2L)))
+  p1 <- do.call(EMC2:::pSWTNspv, c(args, list(kill_shape = 1L)))
+  p2 <- do.call(EMC2:::pSWTNspv, c(args_e2, list(kill_shape = 2L)))
+
+  expect_equal(
+    do.call(EMC2:::dSWTNspv, c(args, list(kill_shape = 3L, erlang_omega = omega))),
+    omega * d1 + (1 - omega) * d2,
+    tolerance = 1e-12
+  )
+  expect_equal(
+    do.call(EMC2:::pSWTNspv, c(args, list(kill_shape = 3L, erlang_omega = omega))),
+    omega * p1 + (1 - omega) * p2,
+    tolerance = 1e-12
+  )
+})
+
+test_that("RDMSWTN timer means are transformed to likelihood rates by Erlang shape", {
+  pars_base <- cbind(v = 1, B = 1, A = 0.2, t0 = 0.2, s = 1, sv = 0.1,
+                     mG = 2, mK = 4)
+  pars_mixed <- cbind(pars_base, omega = 0.25)
+
+  fixed_e1 <- RDMSWTN(erlang_shape = 1L, erlang_type = "local_kill_guess")$Ttransform(pars_base, NULL)
+  fixed_e2 <- RDMSWTN(erlang_shape = 2L, erlang_type = "local_kill_guess")$Ttransform(pars_base, NULL)
+  mixed    <- RDMSWTN(erlang_shape = "mixed", erlang_type = "local_kill_guess")$Ttransform(pars_mixed, NULL)
+
+  expect_equal(unname(fixed_e1[, "lambda_g"]), unname(1 / pars_base[, "mG"]), tolerance = 1e-12)
+  expect_equal(unname(fixed_e1[, "lambda_k"]), unname(1 / pars_base[, "mK"]), tolerance = 1e-12)
+  expect_equal(unname(fixed_e2[, "lambda_g"]), unname(2 / pars_base[, "mG"]), tolerance = 1e-12)
+  expect_equal(unname(fixed_e2[, "lambda_k"]), unname(2 / pars_base[, "mK"]), tolerance = 1e-12)
+  expect_equal(unname(mixed[, "lambda_g"]), unname(1 / pars_base[, "mG"]), tolerance = 1e-12)
+  expect_equal(unname(mixed[, "lambda_k"]), unname(1 / pars_base[, "mK"]), tolerance = 1e-12)
+})
+
+test_that("mixed RDMSWTN rfun supports local Erlang simulation only", {
+  model <- RDMSWTN(erlang_shape = "mixed", erlang_type = "local_kill_guess")
+  lR <- factor(rep(c("left", "right"), 20), levels = c("left", "right"))
+  pars <- matrix(
+    rep(c(v = 1.1, B = 1.0, A = 0.2, t0 = 0.1, s = 1.0, sv = 0.2,
+          lambda_g = 0.8, lambda_k = 0.6, omega = 0.35, b = 1.2), 20),
+    ncol = 10, byrow = TRUE,
+    dimnames = list(NULL, c("v", "B", "A", "t0", "s", "sv", "lambda_g", "lambda_k", "omega", "b"))
+  )
+
+  expect_silent(sim <- model$rfun(list(lR = lR), pars))
+  expect_s3_class(sim, "data.frame")
+  expect_equal(nrow(sim), length(lR) / length(levels(lR)))
+  expect_error(
+    RDMSWTN(erlang_shape = "mixed", erlang_type = "global_kill"),
+    "local Erlang processes only"
+  )
 })

@@ -258,7 +258,7 @@ dRDMGBM <- function(rt, pars, erlang = 1L) {
       A = pars[ok, "A", drop = FALSE], t0 = pars[ok, "t0", drop = FALSE],
       s = pars[ok, "s", drop = FALSE], lambda_g = pars[ok, "lambda_g", drop = FALSE],
       lambda_k = pars[ok, "lambda_k", drop = FALSE],
-      kill_shape = erlang
+      kill_shape = erlang, erlang_omega = .rdmswtn_erlang_omega(pars[ok, , drop = FALSE], erlang)
     )
   }
   out
@@ -289,7 +289,7 @@ pRDMGBM <- function(rt, pars, erlang = 1L) {
       A = pars[ok, "A", drop = FALSE], t0 = pars[ok, "t0", drop = FALSE],
       s = pars[ok, "s", drop = FALSE], lambda_g = pars[ok, "lambda_g", drop = FALSE],
       lambda_k = pars[ok, "lambda_k", drop = FALSE],
-      kill_shape = erlang
+      kill_shape = erlang, erlang_omega = .rdmswtn_erlang_omega(pars[ok, , drop = FALSE], erlang)
     )
   }
   out
@@ -326,6 +326,7 @@ rRDMGBM <- function(lR, pars, p_types = c("v", "b", "A", "t0", "s", "lambda_g", 
   if (!all(c("lambda_g", "lambda_k") %in% colnames(pars))) {
     stop("RDMGBM requires parameter columns 'lambda_g' and 'lambda_k'.")
   }
+  erlang_omega_all <- .rdmswtn_erlang_omega(pars, erlang_shape)
   required <- c("v", "b", "A", "t0", "s", "lambda_g", "lambda_k")
   if (!all(required %in% dimnames(pars)[[2]])) {
     stop("pars must have columns ", paste(required, collapse = " "))
@@ -353,7 +354,17 @@ rRDMGBM <- function(lR, pars, p_types = c("v", "b", "A", "t0", "s", "lambda_g", 
     tk <- rep(Inf, n_trials)
     kill_ok <- !is.na(lambda_trials) & lambda_trials > 0
     if (any(kill_ok)) {
-      tk[kill_ok] <- rgamma(sum(kill_ok), shape = erlang_shape, rate = lambda_trials[kill_ok])
+      shape_k <- if (as.integer(erlang_shape) == 3L) {
+        ifelse(runif(sum(kill_ok)) <= matrix(erlang_omega_all, nrow = nr)[1, kill_ok], 1L, 2L)
+      } else {
+        as.integer(erlang_shape)
+      }
+      rate_k <- if (as.integer(erlang_shape) == 3L) {
+        ifelse(shape_k == 2L, 2 * lambda_trials[kill_ok], lambda_trials[kill_ok])
+      } else {
+        lambda_trials[kill_ok]
+      }
+      tk[kill_ok] <- rgamma(sum(kill_ok), shape = shape_k, rate = rate_k)
     }
   }
 
@@ -363,7 +374,8 @@ rRDMGBM <- function(lR, pars, p_types = c("v", "b", "A", "t0", "s", "lambda_g", 
     k_vec <- if (local_kill && !guess) pars_ok[, "lambda_k"] else rep(0, nrow(pars_ok))
     dt[ok] <- rGBM_killed(sum(ok),
       b = pars_ok[, "b"], v = pars_ok[, "v"], A = pars_ok[, "A"],
-      s = pars_ok[, "s"], k = k_vec, erlang = erlang_shape
+      s = pars_ok[, "s"], k = k_vec, erlang = erlang_shape,
+      erlang_omega = erlang_omega_all[ok]
     )
   }
   # Put EAM on the same raw-time axis as Erlang clocks.
@@ -379,8 +391,18 @@ rRDMGBM <- function(lR, pars, p_types = c("v", "b", "A", "t0", "s", "lambda_g", 
       lambda_g_local[active_guess] <- pars[, "lambda_g"][active_guess]
       guess_ok_mat <- lambda_g_local > 0
       if (any(guess_ok_mat)) {
-        tg_local[guess_ok_mat] <- rgamma(sum(guess_ok_mat), shape = erlang_shape,
-                                         rate = lambda_g_local[guess_ok_mat])
+        shape_g <- if (as.integer(erlang_shape) == 3L) {
+          ifelse(runif(sum(guess_ok_mat)) <= matrix(erlang_omega_all, nrow = nr)[guess_ok_mat], 1L, 2L)
+        } else {
+          as.integer(erlang_shape)
+        }
+        rate_g <- if (as.integer(erlang_shape) == 3L) {
+          ifelse(shape_g == 2L, 2 * lambda_g_local[guess_ok_mat], lambda_g_local[guess_ok_mat])
+        } else {
+          lambda_g_local[guess_ok_mat]
+        }
+        tg_local[guess_ok_mat] <- rgamma(sum(guess_ok_mat), shape = shape_g,
+                                         rate = rate_g)
       }
     }
 
@@ -389,15 +411,27 @@ rRDMGBM <- function(lR, pars, p_types = c("v", "b", "A", "t0", "s", "lambda_g", 
       lambda_k_local[matrix(ok, nrow = nr)] <- pars[ok, "lambda_k"]
       kill_ok_mat <- lambda_k_local > 0
       if (any(kill_ok_mat)) {
-        tk_local[kill_ok_mat] <- rgamma(sum(kill_ok_mat), shape = erlang_shape,
-                                        rate = lambda_k_local[kill_ok_mat])
+        shape_k <- if (as.integer(erlang_shape) == 3L) {
+          ifelse(runif(sum(kill_ok_mat)) <= matrix(erlang_omega_all, nrow = nr)[kill_ok_mat], 1L, 2L)
+        } else {
+          as.integer(erlang_shape)
+        }
+        rate_k <- if (as.integer(erlang_shape) == 3L) {
+          ifelse(shape_k == 2L, 2 * lambda_k_local[kill_ok_mat], lambda_k_local[kill_ok_mat])
+        } else {
+          lambda_k_local[kill_ok_mat]
+        }
+        tk_local[kill_ok_mat] <- rgamma(sum(kill_ok_mat), shape = shape_k,
+                                        rate = rate_k)
       }
     }
 
     if (guess && local_kill) {
+      guess_win = tg_local<dt & tg_local<tk_local
       dt_candidate <- pmin(dt, tg_local)
       dt <- ifelse(dt_candidate < tk_local, dt_candidate, Inf)
     } else if (guess) {
+      guess_win = tg_local<dt
       dt <- pmin(dt, tg_local)
     } else {
       dt <- ifelse(dt < tk_local, dt, Inf)
@@ -422,26 +456,41 @@ rRDMGBM <- function(lR, pars, p_types = c("v", "b", "A", "t0", "s", "lambda_g", 
   out$R[bad_col] <- NA
   out$rt[bad_col] <- Inf
   out <- .apply_timed_guess_winner(out, levels(lR))
+  if (guess) {
+    out$isTime <- rep(NA, n_trials)
+    out$isTime[!bad_col] <- guess_win[pick][!bad_col]
+  }
   out
 }
 
-rGBM_killed <- function(n, b, v, A, s = 1, k = 0, erlang = 1L) {
+rGBM_killed <- function(n, b, v, A, s = 1, k = 0, erlang = 1L, erlang_omega = 1) {
   out <- rGBM(n, b = b, v = v, A = A, s = s)
   kill_idx <- which(k > 0)
   if (length(kill_idx) > 0) {
-    tk <- rgamma(length(kill_idx), shape = erlang, rate = k[kill_idx])
+    shape <- if (as.integer(erlang) == 3L) {
+      ifelse(runif(length(kill_idx)) <= erlang_omega[kill_idx], 1L, 2L)
+    } else {
+      as.integer(erlang)
+    }
+    rate <- if (as.integer(erlang) == 3L) {
+      ifelse(shape == 2L, 2 * k[kill_idx], k[kill_idx])
+    } else {
+      k[kill_idx]
+    }
+    tk <- rgamma(length(kill_idx), shape = shape, rate = rate)
     out[kill_idx[tk <= out[kill_idx]]] <- Inf
   }
   out
 }
 
-rSWTN <- function(n, b, v, A, sv, k = 0, erlang = 1L, posdrift = TRUE) {
+rSWTN <- function(n, b, v, A, sv, k = 0, erlang = 1L, erlang_omega = 1, posdrift = TRUE) {
   if (n <= 0) return(numeric(0))
   b <- rep(b, length.out = n)
   v <- rep(v, length.out = n)
   A <- rep(A, length.out = n)
   sv <- rep(sv, length.out = n)
   k <- rep(k, length.out = n)
+  erlang_omega <- rep(erlang_omega, length.out = n)
   out <- rep(Inf, n)
   # For sv > 0 and posdrift=TRUE, draw per-trial drifts from N(v, sv^2)
   # truncated at zero. Otherwise draw from the full normal and let rWald
@@ -462,7 +511,17 @@ rSWTN <- function(n, b, v, A, sv, k = 0, erlang = 1L, posdrift = TRUE) {
   out <- rWald(n, B = b - A, v = v_draw, A = A, posdrift = posdrift)
   kill_idx <- which(k > 0)
   if (length(kill_idx) > 0) {
-    tk <- rgamma(length(kill_idx), shape = erlang, rate = k[kill_idx])
+    shape <- if (as.integer(erlang) == 3L) {
+      ifelse(runif(length(kill_idx)) <= erlang_omega[kill_idx], 1L, 2L)
+    } else {
+      as.integer(erlang)
+    }
+    rate <- if (as.integer(erlang) == 3L) {
+      ifelse(shape == 2L, 2 * k[kill_idx], k[kill_idx])
+    } else {
+      k[kill_idx]
+    }
+    tk <- rgamma(length(kill_idx), shape = shape, rate = rate)
     out[kill_idx[tk <= out[kill_idx]]] <- Inf
   }
   out
@@ -480,6 +539,11 @@ rSWTN <- function(n, b, v, A, sv, k = 0, erlang = 1L, posdrift = TRUE) {
 #'
 RDMGBM <- function(erlang_shape = 1L, erlang_type = "none") {
   erlang_type <- match.arg(erlang_type, c("none", "local_kill", "global_kill", "local_guess", "local_kill_guess"))
+  erlang_mixed <- identical(erlang_shape, "mixed")
+  if (erlang_mixed && erlang_type == "global_kill") {
+    stop("RDMGBM erlang_shape = 'mixed' is currently implemented for local Erlang processes only.")
+  }
+  erlang_shape_cpp <- if (erlang_mixed) 3L else as.integer(erlang_shape)
   type_suffix <- switch(erlang_type,
     "none" = "",
     "local_kill" = "_LOCAL_KILL",
@@ -487,28 +551,52 @@ RDMGBM <- function(erlang_shape = 1L, erlang_type = "none") {
     "local_guess" = "_LOCAL_GUESS",
     "local_kill_guess" = "_LOCAL_KILL_GUESS"
   )
+  base_name <- if (erlang_mixed) "RDMGBM_EMIX" else if (erlang_shape_cpp >= 2L) "RDMGBM_E2" else "RDMGBM"
+  
+  has_guess <- erlang_type %in% c("local_guess", "local_kill_guess")
+  has_kill  <- erlang_type %in% c("local_kill", "global_kill", "local_kill_guess")
+  
+  p_types <- c(
+    "v" = log(1), "B" = log(1), "A" = log(0), "t0" = log(0), "s" = log(1)
+  )
+  transform <- c(
+    v = "exp", B = "exp", A = "exp", t0 = "exp", s = "exp"
+  )
+  minmax <- cbind(
+    v = c(1e-3, Inf), B = c(0, Inf), A = c(0, Inf),
+    t0 = c(0.05, Inf), s = c(0, Inf)
+  )
+  exception <- c(A = 0, v = 0)
+  
+  p_types  <- c(p_types,  mG = log(1))
+  transform <- c(transform, mG = "exp")
+  minmax   <- cbind(minmax, mG = c(1e-4, Inf))
+
+  p_types  <- c(p_types,  mK = log(1))
+  transform <- c(transform, mK = "exp")
+  minmax   <- cbind(minmax, mK = c(1e-4, Inf))
+
+  if (erlang_mixed) {
+    p_types  <- c(p_types,  omega = qnorm(0.5))
+    transform <- c(transform, omega = "pnorm")
+    minmax   <- cbind(minmax, omega = c(0, 1))
+    exception <- c(exception, omega = 0)
+  }
+  
+  p_types  <- c(p_types,  pContaminant = qnorm(0))
+  transform <- c(transform, pContaminant = "pnorm")
+  minmax   <- cbind(minmax, pContaminant = c(0.001, 0.999))
+  exception <- c(exception, pContaminant = 0)
+
   list(
     type = "RACE",
-    c_name = paste0(
-      if (erlang_shape >= 2L) "RDMGBM_E2" else "RDMGBM",
-      type_suffix
-    ),
-    p_types = c(
-      "v" = log(1), "B" = log(1), "A" = log(0), "t0" = log(0),
-      "s" = log(1), "lambda_g" = log(0), "lambda_k" = log(0), "pContaminant" = qnorm(0)
-    ),
+    c_name = paste0(base_name, type_suffix),
+    p_types = p_types,
     p_types_canonical = c("v", "B", "A", "t0", "s"),
-    transform = list(func = c(
-      v = "exp", B = "exp", A = "exp", t0 = "exp",
-      s = "exp", lambda_g = "exp", lambda_k = "exp", pContaminant = "pnorm"
-    )),
+    transform = list(func = transform),
     bound = list(
-      minmax = cbind(
-        v = c(1e-3, Inf), B = c(0, Inf), A = c(0, Inf),
-        t0 = c(0.05, Inf), s = c(0, Inf), lambda_g = c(1e-4, Inf), lambda_k = c(1e-4, Inf),
-        pContaminant = c(0.001, 0.999)
-      ),
-      exception = c(A = 0, v = 0, lambda_g = 0, lambda_k = 0, pContaminant = 0),
+      minmax = minmax,
+      exception = exception,
       # Joint validity: positive log-space drift required for finite-time simulation.
       joint_ok = function(pars) {
         if (!all(c("v", "s") %in% colnames(pars))) return(rep(TRUE, nrow(pars)))
@@ -517,14 +605,37 @@ RDMGBM <- function(erlang_shape = 1L, erlang_type = "none") {
       }
     ),
     Ttransform = function(pars, dadm) {
+      lambda_factor <- if (erlang_shape_cpp == 2L) 2 else 1
+      n <- nrow(pars)
+      lg <- if (has_guess) lambda_factor / pars[, "mG"] else rep(0, n)
+      lk <- if (has_kill)  lambda_factor / pars[, "mK"] else rep(0, n)
+      timed <- cbind(lambda_g = lg, lambda_k = lk)
+      extra_drop <- c("v", "B", "A", "t0", "s", "mG", "mK", "omega")
+      extra <- pars[, setdiff(colnames(pars), extra_drop), drop = FALSE]
+      if (erlang_mixed) {
+        pars <- cbind(
+          pars[, c("v", "B", "A", "t0", "s"), drop = FALSE],
+          timed,
+          omega = pars[, "omega"],
+          extra
+        )
+      } else {
+        pars <- cbind(
+          pars[, c("v", "B", "A", "t0", "s"), drop = FALSE],
+          timed,
+          extra
+        )
+      }
       pars <- cbind(pars, b = 1 + pars[, "B"] + pars[, "A"])
       pars
     },
     rfun = function(data = NULL, pars) {
-      rRDMGBM(data$lR, pars, ok = attr(pars, "ok"), erlang_shape = erlang_shape, erlang_type = erlang_type)
+      ok <- attr(pars, "ok")
+      if (is.null(ok)) ok <- rep(TRUE, nrow(pars))
+      rRDMGBM(data$lR, pars, ok = ok, erlang_shape = erlang_shape_cpp, erlang_type = erlang_type)
     },
-    dfun = function(rt, pars) dRDMGBM(rt, pars, erlang = erlang_shape),
-    pfun = function(rt, pars) pRDMGBM(rt, pars, erlang = erlang_shape),
+    dfun = function(rt, pars) dRDMGBM(rt, pars, erlang = erlang_shape_cpp),
+    pfun = function(rt, pars) pRDMGBM(rt, pars, erlang = erlang_shape_cpp),
     log_likelihood = function(pars, dadm, model, min_ll = log(1e-10)) {
       log_likelihood_race_missing(pars = pars, dadm = dadm, model = model, min_ll = min_ll)
     }
@@ -553,10 +664,11 @@ RDMGBM <- function(erlang_shape = 1L, erlang_type = "none") {
 #' | *t0*      | log       | \[0, Inf\]      | log(0)  | Non-decision time                      |
 #' | *s*       | log       | \[0, Inf\]      | log(1)  | Within-trial SD of drift rate          |
 #' | *sv*      | log       | \[0, Inf\]      | log(0)  | Between-trial SD of drift rate         |
-#' | *lambda_g*| log       | \[0, Inf\]      | log(0)  | Exponential guessing rate              |
-#' | *lambda_k*| log       | \[0, Inf\]      | log(0)  | Exponential killing rate               |
+#' | *mG*      | log       | \[0, Inf\]      | log(1)  | Local guessing timer mean              |
+#' | *mK*      | log       | \[0, Inf\]      | log(1)  | Local killing timer mean               |
+#' | *omega*   | pnorm     | \[0, 1\]        | qnorm(.5)| Erlang-1 mixture weight (mixed only)    |
 #'
-#' @param erlang_shape integer shape of the killing process (1=exponential, 2=Erlang-2)
+#' @param erlang_shape integer shape of the killing process (1=exponential, 2=Erlang-2) or "mixed"
 #' @param erlang_type string, one of "none", "local_kill", "global_kill", "local_guess", "local_kill_guess"
 #'
 #' @return a list of parameters
@@ -565,6 +677,11 @@ RDMGBM <- function(erlang_shape = 1L, erlang_type = "none") {
 #'
 RDMSWTN <- function(erlang_shape = 1L, erlang_type = "none", posdrift = TRUE) {
   erlang_type <- match.arg(erlang_type, c("none", "local_kill", "global_kill", "local_guess", "local_kill_guess"))
+  erlang_mixed <- identical(erlang_shape, "mixed")
+  if (erlang_mixed && erlang_type == "global_kill") {
+    stop("RDMSWTN erlang_shape = 'mixed' is currently implemented for local Erlang processes only.")
+  }
+  erlang_shape_cpp <- if (erlang_mixed) 3L else as.integer(erlang_shape)
   type_suffix <- switch(erlang_type,
     "none" = "",
     "local_kill" = "_LOCAL_KILL",
@@ -572,41 +689,102 @@ RDMSWTN <- function(erlang_shape = 1L, erlang_type = "none", posdrift = TRUE) {
     "local_guess" = "_LOCAL_GUESS",
     "local_kill_guess" = "_LOCAL_KILL_GUESS"
   )
-  base_name <- paste0(if (erlang_shape >= 2L) "RDMSWTN_E2" else "RDMSWTN", type_suffix)
+  base_name <- paste0(
+    if (erlang_mixed) "RDMSWTN_EMIX" else if (erlang_shape_cpp >= 2L) "RDMSWTN_E2" else "RDMSWTN",
+    type_suffix
+  )
+  has_guess <- erlang_type %in% c("local_guess", "local_kill_guess")
+  has_kill  <- erlang_type %in% c("local_kill", "global_kill", "local_kill_guess")
+  p_types <- c(
+    "v" = log(1), "B" = log(1), "A" = log(0), "t0" = log(0),
+    "s" = log(1), "sv" = log(0)
+  )
+  transform <- c(
+    v = "exp", B = "exp", A = "exp", t0 = "exp",
+    s = "exp", sv = "exp"
+  )
+  minmax <- cbind(
+    v = c(1e-3, Inf), B = c(0, Inf), A = c(0, Inf),
+    t0 = c(0.05, Inf), s = c(0, Inf), sv = c(0, Inf)
+  )
+  exception <- c(A = 0, v = 0, sv = 0)
+  p_types  <- c(p_types,  mG = log(1))
+  transform <- c(transform, mG = "exp")
+  minmax   <- cbind(minmax, mG = c(1e-4, Inf))
+
+  p_types  <- c(p_types,  mK = log(1))
+  transform <- c(transform, mK = "exp")
+  minmax   <- cbind(minmax, mK = c(1e-4, Inf))
+
+  if (erlang_mixed) {
+    p_types  <- c(p_types,  omega = qnorm(0.5))
+    transform <- c(transform, omega = "pnorm")
+    minmax   <- cbind(minmax, omega = c(0, 1))
+    exception <- c(exception, omega = 0)
+  }
+
+  p_types  <- c(p_types,  pContaminant = qnorm(0))
+  transform <- c(transform, pContaminant = "pnorm")
+  minmax   <- cbind(minmax, pContaminant = c(0.001, 0.999))
+  exception <- c(exception, pContaminant = 0)
   list(
     type = "RACE",
     c_name = if (posdrift) base_name else paste0(base_name, "_IO"),
-    p_types = c(
-      "v" = 1, "B" = log(1), "A" = log(0), "t0" = log(0),
-      "s" = log(1), "sv" = log(0), "lambda_g" = log(0), "lambda_k" = log(0), "pContaminant" = qnorm(0)
-    ),
+    p_types = p_types,
     p_types_canonical = c("v", "B", "A", "t0", "s", "sv"),
-    transform = list(func = c(
-      v = "identity", B = "exp", A = "exp", t0 = "exp",
-      s = "exp", sv = "exp", lambda_g = "exp", lambda_k = "exp", pContaminant = "pnorm"
-    )),
+    transform = list(func = transform),
     bound = list(
-      minmax = cbind(
-        v = c(-Inf, Inf), B = c(0, Inf), A = c(0, Inf),
-        t0 = c(0.05, Inf), s = c(0, Inf), sv = c(0, Inf),
-        lambda_g = c(1e-4, Inf), lambda_k = c(1e-4, Inf),
-        pContaminant = c(0.001, 0.999)
-      ),
-      exception = c(A = 0, v = 0, sv = 0, lambda_g = 0, lambda_k = 0, pContaminant = 0)
+      minmax = minmax,
+      exception = exception
     ),
     Ttransform = function(pars, dadm) {
+      lambda_factor <- if (erlang_shape_cpp == 2L) 2 else 1
+      n <- nrow(pars)
+      lg <- if (has_guess) lambda_factor / pars[, "mG"] else rep(0, n)
+      lk <- if (has_kill)  lambda_factor / pars[, "mK"] else rep(0, n)
+      timed <- cbind(lambda_g = lg, lambda_k = lk)
+      extra_drop <- c("v", "B", "A", "t0", "s", "sv", "mG", "mK", "omega")
+      extra <- pars[, setdiff(colnames(pars), extra_drop), drop = FALSE]
+      if (erlang_mixed) {
+        pars <- cbind(
+          pars[, c("v", "B", "A", "t0", "s", "sv"), drop = FALSE],
+          timed,
+          omega = pars[, "omega"],
+          extra
+        )
+      } else {
+        pars <- cbind(
+          pars[, c("v", "B", "A", "t0", "s", "sv"), drop = FALSE],
+          timed,
+          extra
+        )
+      }
       pars <- cbind(pars, b = pars[, "B"] + pars[, "A"])
       pars
     },
-    rfun = function(data = NULL, pars) rRDMSWTN(data$lR, pars, ok = attr(pars, "ok"),
-                                                erlang_shape = erlang_shape, erlang_type = erlang_type,
-                                                posdrift = posdrift),
-    dfun = function(rt, pars) dRDMSWTN(rt, pars, erlang = erlang_shape, posdrift = posdrift),
-    pfun = function(rt, pars) pRDMSWTN(rt, pars, erlang = erlang_shape, posdrift = posdrift),
+    rfun = function(data = NULL, pars) {
+      ok <- attr(pars, "ok")
+      if (is.null(ok)) ok <- rep(TRUE, nrow(pars))
+      rRDMSWTN(data$lR, pars, ok = ok, erlang_shape = erlang_shape_cpp,
+               erlang_type = erlang_type, posdrift = posdrift)
+    },
+    dfun = function(rt, pars) dRDMSWTN(rt, pars, erlang = erlang_shape_cpp, posdrift = posdrift),
+    pfun = function(rt, pars) pRDMSWTN(rt, pars, erlang = erlang_shape_cpp, posdrift = posdrift),
     log_likelihood = function(pars, dadm, model, min_ll = log(1e-10)) {
       log_likelihood_race_missing(pars = pars, dadm = dadm, model = model, min_ll = min_ll)
     }
   )
+}
+
+.rdmswtn_erlang_omega <- function(pars, erlang) {
+  n <- nrow(pars)
+  if (is.null(n)) n <- length(pars) > 0
+  if (as.integer(erlang) <= 1L) return(rep(1, n))
+  if (as.integer(erlang) == 2L) return(rep(0, n))
+  if (!"omega" %in% colnames(pars)) {
+    stop("mixed RDMSWTN Erlang mode requires parameter column 'omega'.")
+  }
+  pars[, "omega"]
 }
 
 dRDMSWTN <- function(rt, pars, erlang = 1L, posdrift = TRUE) {
@@ -637,11 +815,12 @@ dRDMSWTN <- function(rt, pars, erlang = 1L, posdrift = TRUE) {
     out[ok] <- dSWTNspv(rt[ok],
       v = pars[ok, "v", drop = FALSE], b = pars[ok, "b", drop = FALSE],
       A = pars[ok, "A", drop = FALSE],
-      s = if ("s" %in% colnames(pars)) pars[ok, "s", drop = FALSE] else 1,
+      s = 1,
       t0 = pars[ok, "t0", drop = FALSE],
       sv = pars[ok, "sv", drop = FALSE], lambda_g = pars[ok, "lambda_g", drop = FALSE],
       lambda_k = pars[ok, "lambda_k", drop = FALSE],
-      kill_shape = erlang, posdrift = posdrift
+      kill_shape = erlang, erlang_omega = .rdmswtn_erlang_omega(pars[ok, , drop = FALSE], erlang),
+      posdrift = posdrift
     )
   }
   out
@@ -675,11 +854,12 @@ pRDMSWTN <- function(rt, pars, erlang = 1L, posdrift = TRUE) {
     out[ok] <- pSWTNspv(rt[ok],
       v = pars[ok, "v", drop = FALSE], b = pars[ok, "b", drop = FALSE],
       A = pars[ok, "A", drop = FALSE],
-      s = if ("s" %in% colnames(pars)) pars[ok, "s", drop = FALSE] else 1,
+      s = 1,
       t0 = pars[ok, "t0", drop = FALSE],
       sv = pars[ok, "sv", drop = FALSE], lambda_g = pars[ok, "lambda_g", drop = FALSE],
       lambda_k = pars[ok, "lambda_k", drop = FALSE],
-      kill_shape = erlang, posdrift = posdrift
+      kill_shape = erlang, erlang_omega = .rdmswtn_erlang_omega(pars[ok, , drop = FALSE], erlang),
+      posdrift = posdrift
     )
   }
   out
@@ -700,6 +880,7 @@ rRDMSWTN <- function(lR, pars, p_types = c("v", "b", "A", "t0", "sv", "lambda_g"
   if (!all(c("lambda_g", "lambda_k") %in% colnames(pars))) {
     stop("RDMSWTN requires parameter columns 'lambda_g' and 'lambda_k'.")
   }
+  erlang_omega_all <- .rdmswtn_erlang_omega(pars, erlang_shape)
   if (!all(p_types %in% dimnames(pars)[[2]])) {
     stop("pars must have columns ", paste(p_types, collapse = " "))
   }
@@ -739,7 +920,8 @@ rRDMSWTN <- function(lR, pars, p_types = c("v", "b", "A", "t0", "sv", "lambda_g"
   k_vec <- if (local_kill && !guess) pars[, "lambda_k"] else rep(0, nrow(pars))
   dt[ok] <- rSWTN(sum(ok),
     b = pars[, "b"], v = pars[, "v"], A = pars[, "A"], sv = pars[, "sv"],
-    k = k_vec, erlang = erlang_shape, posdrift = posdrift
+    k = k_vec, erlang = erlang_shape, erlang_omega = erlang_omega_all[ok],
+    posdrift = posdrift
   )
   # Put EAM on the same raw-time axis as Erlang clocks.
   dt <- dt + matrix(t0, nrow = nr)
@@ -753,8 +935,18 @@ rRDMSWTN <- function(lR, pars, p_types = c("v", "b", "A", "t0", "sv", "lambda_g"
       lambda_g_local[active_guess] <- pars_all[, "lambda_g"][active_guess]
       guess_ok_mat <- lambda_g_local > 0
       if (any(guess_ok_mat)) {
-        tg_local[guess_ok_mat] <- rgamma(sum(guess_ok_mat), shape = erlang_shape,
-                                         rate = lambda_g_local[guess_ok_mat])
+        shape_g <- if (as.integer(erlang_shape) == 3L) {
+          ifelse(runif(sum(guess_ok_mat)) <= matrix(erlang_omega_all, nrow = nr)[guess_ok_mat], 1L, 2L)
+        } else {
+          as.integer(erlang_shape)
+        }
+        rate_g <- if (as.integer(erlang_shape) == 3L) {
+          ifelse(shape_g == 2L, 2 * lambda_g_local[guess_ok_mat], lambda_g_local[guess_ok_mat])
+        } else {
+          lambda_g_local[guess_ok_mat]
+        }
+        tg_local[guess_ok_mat] <- rgamma(sum(guess_ok_mat), shape = shape_g,
+                                         rate = rate_g)
       }
     }
 
@@ -763,8 +955,18 @@ rRDMSWTN <- function(lR, pars, p_types = c("v", "b", "A", "t0", "sv", "lambda_g"
       lambda_k_local[matrix(ok, nrow = nr)] <- pars[, "lambda_k"]
       kill_ok_mat <- lambda_k_local > 0
       if (any(kill_ok_mat)) {
-        tk_local[kill_ok_mat] <- rgamma(sum(kill_ok_mat), shape = erlang_shape,
-                                        rate = lambda_k_local[kill_ok_mat])
+        shape_k <- if (as.integer(erlang_shape) == 3L) {
+          ifelse(runif(sum(kill_ok_mat)) <= matrix(erlang_omega_all, nrow = nr)[kill_ok_mat], 1L, 2L)
+        } else {
+          as.integer(erlang_shape)
+        }
+        rate_k <- if (as.integer(erlang_shape) == 3L) {
+          ifelse(shape_k == 2L, 2 * lambda_k_local[kill_ok_mat], lambda_k_local[kill_ok_mat])
+        } else {
+          lambda_k_local[kill_ok_mat]
+        }
+        tk_local[kill_ok_mat] <- rgamma(sum(kill_ok_mat), shape = shape_k,
+                                        rate = rate_k)
       }
     }
 

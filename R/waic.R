@@ -34,23 +34,47 @@ waic_warnings <- function() {
 
 # Compute the pointwise log-likelihood matrix for one subject.
 .ll_matrix_subject <- function(emc, stage = "sample", filter = 0, subject) {
+  # Try to get cached first
+  pw_ll <- get_pars(emc, selection = "pw_ll", stage = stage, filter = filter,
+                    merge_chains = TRUE, return_mcmc = FALSE, subject = subject)
+  if (!is.null(pw_ll[[1]])) {
+    return(t(pw_ll[[1]]))
+  }
   alpha <- get_pars(emc, selection = "alpha", stage = stage, filter = filter,
                     by_subject = TRUE, merge_chains = TRUE)
   proposals <- do.call(rbind, alpha[[subject]])   # [n_iter x n_pars]
-  calc_ll_manager_pw(proposals, emc[[1]]$data[[subject]], emc[[1]]$model)
+  calc_ll_pw(proposals, emc[[1]]$data[[subject]], emc[[1]]$model)
 }
 
 # Concatenate pointwise log-likelihood matrices across subjects.
 .ll_matrix_pooled <- function(emc, stage = "sample", filter = 0,
                               pointwise = c("trial", "subject")) {
   pointwise <- match.arg(pointwise)
+  # Try to get cached first
+  pw_ll <- get_pars(emc, selection = "pw_ll", stage = stage, filter = filter,
+                    merge_chains = TRUE, return_mcmc = FALSE)
+  if (!is.null(pw_ll[[1]])) {
+    ll_mat <- t(pw_ll[[1]])
+    if (pointwise == "trial") return(ll_mat)
+    # Sum by subject
+    subjects <- names(emc[[1]]$data)
+    trial_counts <- sapply(emc[[1]]$data[subjects], nrow)
+    cum_trials <- c(0, cumsum(trial_counts))
+    ll_by_subject <- matrix(nrow = nrow(ll_mat), ncol = length(subjects))
+    colnames(ll_by_subject) <- subjects
+    for (i in seq_along(subjects)) {
+      idx_sub <- (cum_trials[i] + 1):cum_trials[i+1]
+      ll_by_subject[, i] <- rowSums(ll_mat[, idx_sub, drop = FALSE])
+    }
+    return(ll_by_subject)
+  }
   alpha <- get_pars(emc, selection = "alpha", stage = stage, filter = filter,
                     by_subject = TRUE, merge_chains = TRUE)
   data  <- emc[[1]]$data
   model <- emc[[1]]$model
   ll_list <- lapply(names(alpha), function(sub) {
     proposals <- do.call(rbind, alpha[[sub]])     # [n_iter x n_pars]
-    calc_ll_manager_pw(proposals, data[[sub]], model)  # [n_iter x n_trials_sub]
+    calc_ll_pw(proposals, data[[sub]], model)  # [n_iter x n_trials_sub]
   })
   if (pointwise == "trial") {
     return(do.call(cbind, ll_list))              # [n_iter x total_trials]

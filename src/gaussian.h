@@ -51,12 +51,21 @@ inline double Gstar(double var, double delta, bool log_p = false) {
 }
 
 // Erlang-n kill survival: log S_K^(n)(t) = log(exp(-lambda*t) * sum_{m=0}^{n-1} (lambda*t)^m / m!)
-inline double erlang_log_surv(double t, double lambda, int n) {
+// n=3 is mixture: omega*E(1, lam) + (1-omega)*E(2, 2*lam)
+inline double erlang_log_surv(double t, double lambda, int n, double omega = 1.0) {
   if (lambda <= 0.0 || t <= 0.0) return 0.0;
   if (t == R_PosInf) return R_NegInf;
+  if (n == 3) {
+    const double s1 = erlang_log_surv(t, lambda, 1);
+    const double s2 = erlang_log_surv(t, 2.0 * lambda, 2);
+    const double w = std::fmax(0.0, std::fmin(1.0, omega));
+    if (w >= 1.0) return s1;
+    if (w <= 0.0) return s2;
+    return log_sum_exp(std::log(w) + s1, std::log1p(-w) + s2);
+  }
   if (n <= 1) return -lambda * t;
   if (n == 2) return -lambda * t + std::log1p(lambda * t);
-  
+
   // General n: use a loop for the sum to avoid factorials
   double sum_term = 1.0;
   double current_term = 1.0;
@@ -69,17 +78,24 @@ inline double erlang_log_surv(double t, double lambda, int n) {
 }
 
 // Erlang-n kill density: f_K^(n)(t)
-inline double erlang_log_pdf(double t, double lambda, int n) {
+inline double erlang_log_pdf(double t, double lambda, int n, double omega = 1.0) {
   if (lambda <= 0.0 || t < 0.0) return R_NegInf;
   if (t == R_PosInf) return R_NegInf;
+  if (n == 3) {
+    const double f1 = erlang_log_pdf(t, lambda, 1);
+    const double f2 = erlang_log_pdf(t, 2.0 * lambda, 2);
+    const double w = std::fmax(0.0, std::fmin(1.0, omega));
+    if (w >= 1.0) return f1;
+    if (w <= 0.0) return f2;
+    return log_sum_exp(std::log(w) + f1, std::log1p(-w) + f2);
+  }
   if (n <= 1) return std::log(lambda) - lambda * t;
   if (n == 2) return 2.0 * std::log(lambda) + std::log(t) - lambda * t;
-  
+
   // General n: log(lambda^n * t^(n-1) / (n-1)! * exp(-lambda*t))
-  return n * std::log(lambda) + (n - 1.0) * std::log(t) - 
+  return n * std::log(lambda) + (n - 1.0) * std::log(t) -
          std::lgamma(static_cast<double>(n)) - lambda * t;
 }
-
 // CDF of heat kernel N(mean, t) at x
 inline double Gstar_CDF(double var, double mean, double x, bool log_p = false) {
   if (!(var > 0.0) || !emc2_isfinite(var)) {

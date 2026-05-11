@@ -211,7 +211,8 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
   out.ctx.min_lik_for_pdf = std::exp(std::log(1e-10));
   out.ctx.use_posdrift = true;
   out.ctx.gng = false;
-  out.ctx.kill_shape = (type_std.find("_E2") != std::string::npos) ? 2 : 1;
+  out.ctx.kill_shape = (type_std.find("_EMIX") != std::string::npos) ? 3 :
+                       ((type_std.find("_E2") != std::string::npos) ? 2 : 1);
 
   // Erlang process flag resolution
   out.ctx.is_local_guess = (type_std.find("_LOCAL_GUESS") != std::string::npos);
@@ -238,6 +239,7 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
     out.ctx.t0_index   = 3;
     out.ctx.lambda_g_index = 6;
     out.ctx.lambda_k_index = 7;
+    out.ctx.erlang_omega_index = (out.ctx.kill_shape == 3) ? 8 : -1;
     out.ctx.defective_upper_tail = true;
     if (type_std.find("_IO") != std::string::npos) {
       out.ctx.use_posdrift = false;
@@ -252,6 +254,7 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
     out.ctx.t0_index     = 3;
     out.ctx.lambda_g_index = 5;
     out.ctx.lambda_k_index = 6;
+    out.ctx.erlang_omega_index = (out.ctx.kill_shape == 3) ? 7 : -1;
     out.ctx.defective_upper_tail = true;
   } else if (type_std.find("BAwL") != std::string::npos) {
     out.pdf1_ptr       = &dbawl_scalar;
@@ -262,12 +265,15 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
     out.ctx.t0_index   = 4;
     out.ctx.lambda_g_index = 6;
     out.ctx.lambda_k_index = 7;
+    out.ctx.erlang_omega_index = (out.ctx.kill_shape == 3) ? 8 : -1;
     // Leaky ballistic accumulators can have defective upper tails (never-finish
     // mass) even when posdrift=TRUE.
     out.ctx.defective_upper_tail = true;
     if (type_std.find("IO") != std::string::npos) {
       out.ctx.use_posdrift = false;
     }
+    if (type_std.find("_E2") != std::string::npos) out.ctx.kill_shape = 2;
+    if (type_std.find("_EMIX") != std::string::npos) out.ctx.kill_shape = 3;
   } else if (type_std.find("LBA") != std::string::npos) {
     out.pdf1_ptr = &dlba_scalar;
     out.cdf1_ptr = &plba_scalar;
