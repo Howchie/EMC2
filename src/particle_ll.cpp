@@ -799,7 +799,14 @@ double c_log_likelihood_DDM_pt(const double* pars_cm,
     
     const double* lls_ptr = shared->res_buf.data();
     double total_ll = 0.0;
-    if (trial_ll_out != nullptr) {
+    if (expand_ptr == nullptr) {
+      for (int i = 0; i < n_trials; ++i) {
+        double v = lls_ptr[i];
+        if (!R_FINITE(v) || v < min_ll) v = min_ll;
+        if (trial_ll_out != nullptr) (*trial_ll_out)[i] = v;
+        total_ll += v;
+      }
+    } else if (trial_ll_out != nullptr) {
       for (int i = 0; i < n_out; ++i) {
         const int idx = expand_ptr[i] - 1;
         double v = lls_ptr[idx];
@@ -1082,7 +1089,14 @@ double c_log_likelihood_DDM_pt(const double* pars_cm,
   // 3. Accumulate results
   const double* res_ptr = shared->res_buf.data();
   double total_ll = 0.0;
-  if (trial_ll_out != nullptr) {
+  if (expand_ptr == nullptr) {
+    for (int i = 0; i < n_trials; ++i) {
+      double v = res_ptr[i];
+      if (!R_FINITE(v) || v < min_ll) v = min_ll;
+      if (trial_ll_out != nullptr) (*trial_ll_out)[i] = v;
+      total_ll += v;
+    }
+  } else if (trial_ll_out != nullptr) {
     for (int i = 0; i < n_out; ++i) {
       double v = res_ptr[expand_ptr[i] - 1];
       if (!R_FINITE(v) || v < min_ll) v = min_ll;
@@ -1123,20 +1137,19 @@ double c_log_likelihood_DDM(Rcpp::NumericMatrix pars, Rcpp::DataFrame data,
 
   Rcpp::NumericVector rts = data["rt"];
   Rcpp::IntegerVector R = data["R"];
-  const int* expand_ptr = expand.begin();
-  const int n_out = expand.length();
-  
+  const int* expand_ptr = (expand.length() > 0) ? expand.begin() : nullptr;
+  const int n_out_val = (expand.length() > 0) ? expand.length() : n_trials;
+
   std::vector<int> ok_int(n_trials);
   for(int i=0; i<n_trials; ++i) ok_int[i] = is_ok[i] ? 1 : 0;
 
   // Use a fixed identity mapping for the old path
-  std::vector<int> p_idx = {0, 1, 2, 3, 4, 5, 6, 7}; 
+  std::vector<int> p_idx = {0, 1, 2, 3, 4, 5, 6, 7};
 
   return c_log_likelihood_DDM_pt(pars.begin(), rts.begin(), R.begin(),
-                                 n_trials, expand_ptr, n_out, min_ll,
+                                 n_trials, expand_ptr, n_out_val, min_ll,
                                  ok_int.data(), gng, all_finite_untruncated,
-                                 p_idx, &shared, trial_ll_out);
-}
+                                 p_idx, &shared, trial_ll_out);}
 
 // ---------------------------------------------------------------------------
 // Shared helpers used by calc_ll, calc_ll_oo, and calc_ll_oo_pw
@@ -1478,10 +1491,10 @@ double c_log_likelihood_huvsd(Rcpp::NumericMatrix pars, Rcpp::DataFrame data,
     }
     if(d_idx == -1 || c_idx == -1 || sd_idx == -1) Rcpp::stop("hUVSD model requires parameters d, c, and sd");
 
-    const int n_out = expand.length();
+    const int n_out = (expand.length() > 0) ? expand.length() : n_trials;
     double total_ll = 0.0;
     for(int j=0; j<n_out; ++j) {
-        int row = expand[j] - 1;
+        int row = (expand.length() > 0) ? (expand[j] - 1) : j;
         double ll = min_ll;
         if(is_ok[row]) {
             ll = log_likelihood_huvsd_single(pars(row, d_idx), pars(row, c_idx), pars(row, sd_idx),
@@ -2190,7 +2203,7 @@ NumericMatrix calc_ll_oo_pw(NumericMatrix particle_matrix, DataFrame data, Numer
   if (type_std.find("DDM") != std::string::npos) {
     bool gng = (type_std.find("GNG") != std::string::npos);
     IntegerVector expand = data.attr("expand");
-    const int n_out = expand.length();
+    const int n_out = (expand.length() > 0) ? expand.length() : n_trials;
     const bool all_finite_untruncated = ddm_data_all_finite_untruncated(data, n_trials);
     NumericMatrix result(n_particles, n_out);
     for (int i = 0; i < n_particles; ++i) {
@@ -2205,7 +2218,7 @@ NumericMatrix calc_ll_oo_pw(NumericMatrix particle_matrix, DataFrame data, Numer
     return result;
   } else if (type_std == "hUVSD") {
     IntegerVector expand = data.attr("expand");
-    const int n_out = expand.length();
+    const int n_out = (expand.length() > 0) ? expand.length() : n_trials;
     NumericMatrix result(n_particles, n_out);
     for (int i = 0; i < n_particles; ++i) {
       pars = pars_for_particle(i);

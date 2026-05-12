@@ -275,3 +275,4 @@ test_that("prior map=TRUE path respects pre_transform_terms in mapped values", {
   expect_equal(mean(mapped$v_Ehard_lMFALSE), 4 - 0.25, tolerance = 1e-3)
   expect_equal(mean(mapped$v_Ehard_lMTRUE), 4 + 0.25, tolerance = 1e-3)
 })
+

@@ -33,6 +33,11 @@ test_that("pw_ll extraction with race models (LBA/LNR)", {
   # pw_ll should have 810 rows (one per trial).
   expect_equal(nrow(emc[[1]]$samples$pw_ll), nrow(dat))
   
+  # Verify that sum of pointwise matches aggregate subject LL
+  proposals <- t(emc[[1]]$samples$alpha[, 1, ])
+  agg_ll <- EMC2:::calc_ll_manager(proposals, emc[[1]]$data[[1]], emc[[1]]$model)
+  expect_equal(colSums(emc[[1]]$samples$pw_ll), as.numeric(agg_ll), tolerance = 1e-10)
+  
   # 2. Test extract_pw_ll
   pw_ll_df <- extract_pw_ll(emc, stage = "sample")
   # Should have one row per trial
@@ -62,4 +67,9 @@ test_that("pw_ll extraction with DDM (already trial-wise)", {
   pw_ll_df <- extract_pw_ll(emc, stage = "sample")
   
   expect_equal(nrow(pw_ll_df), nrow(dat))
+
+  # Verify that sum of pointwise matches aggregate subject LL
+  proposals <- t(emc[[1]]$samples$alpha[, 1, ])
+  agg_ll <- EMC2:::calc_ll_manager(proposals, emc[[1]]$data[[1]], emc[[1]]$model)
+  expect_equal(colSums(emc[[1]]$samples$pw_ll), as.numeric(agg_ll), tolerance = 1e-10)
 })

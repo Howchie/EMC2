@@ -224,21 +224,14 @@ add_pw_ll_chain <- function(chain) {
   model <- chain$model
   type <- if (is.null(chain$type)) "" else chain$type
 
-  if (type == "single" || n_subjects == 1) {
-    # alpha[, 1, ] is matrix [n_pars x n_iter]
-    proposals <- t(alpha[, 1, ])
-    ll_mat <- calc_ll_pw(proposals, data[[1]], model)
-    chain$samples$pw_ll <- t(ll_mat)
-  } else {
-    sub_pw_lls <- lapply(1:n_subjects, function(s) {
-      sub <- chain$subjects[s]
-      # alpha[, s, ] is matrix [n_pars x n_iter]
-      proposals <- t(alpha[, s, ])
-      ll_mat <- calc_ll_pw(proposals, data[[sub]], model)
-      return(t(ll_mat))
-    })
-    chain$samples$pw_ll <- do.call(rbind, sub_pw_lls)
-  }
+  sub_pw_lls <- lapply(1:n_subjects, function(s) {
+    sub <- chain$subjects[s]
+    # alpha[, s, ] is matrix [n_pars x n_iter]
+    proposals <- t(alpha[, s, ])
+    ll_mat <- calc_ll_pw(proposals, data[[sub]], model)
+    return(t(ll_mat))
+  })
+  chain$samples$pw_ll <- do.call(rbind, sub_pw_lls)
   return(chain)
 }
 
