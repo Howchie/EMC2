@@ -184,7 +184,7 @@ test_that("timed RDMSWTN likelihood matches manual mixture with truncation", {
     trend = model_obj$trend
   )
 
-  pars <- as.matrix(mapped_pars(timed_design, p_vec, data = dat)[, names(model_obj$p_types), drop = FALSE])
+  pars <- as.matrix(mapped_pars(timed_design, p_vec, data = dat, digits = 15)[, model_obj$p_types_canonical, drop = FALSE])
   pars <- cbind(pars, b = pars[, "B"] + pars[, "A"])
   rt <- 0.55
   f <- EMC2:::dSWTNspv(rep(rt, 3), pars[, "v"], pars[, "b"], pars[, "A"],
@@ -261,7 +261,7 @@ test_that("RDMSWTN IO C++ likelihood keeps defective Wald normalization with tru
     trend = model_obj$trend
   )
 
-  pars <- as.matrix(mapped_pars(timed_design, p_vec, data = dat)[, names(model_obj$p_types), drop = FALSE])
+  pars <- as.matrix(mapped_pars(timed_design, p_vec, data = dat, digits = 15)[, model_obj$p_types_canonical, drop = FALSE])
   pars <- cbind(pars, b = pars[, "B"] + pars[, "A"])
   f <- EMC2:::dSWTNspv(rep(dat$rt, 2), pars[, "v"], pars[, "b"], pars[, "A"],
                        pars[, "s"], pars[, "t0"], pars[, "sv"],

@@ -102,7 +102,11 @@
 NULL
 
 .emc2_samples_lnr_path <- function(libname, pkgname) {
-  file.path(libname, pkgname, "extdata", "samples_LNR.rds")
+  path <- file.path(libname, pkgname, "extdata", "samples_LNR.rds")
+  if (!file.exists(path)) {
+    path <- system.file("extdata", "samples_LNR.rds", package = pkgname)
+  }
+  return(path)
 }
 
 .emc2_load_samples_lnr <- function(libname, pkgname) {

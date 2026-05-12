@@ -135,7 +135,10 @@ extract_samples <- function(sampler, stage = c("adapt", "sample"), max_n_sample 
 }
 
 filter_emc <- function(samples, thin = 1, length.out = NULL, filter = NULL){
-  max_dim <- dim(samples)[length(dim(samples))]
+  d <- dim(samples)
+  if(is.null(d)) return(samples)
+  max_dim <- d[length(d)]
+  if(max_dim == 0) return(samples)
   if(!is.null(filter)){
     if(length(filter) == 1){
       if(filter > max_dim) stop("filter larger than available iterations")
@@ -144,14 +147,19 @@ filter_emc <- function(samples, thin = 1, length.out = NULL, filter = NULL){
       if(length(filter) > max_dim) stop("filter larger than available iterations")
       keep <- filter
     }
-    if(length(dim(samples)) > 2){
+    if (any(keep == 0)) keep <- keep[keep != 0]
+    if (length(keep) == 0) return(samples[,,integer(0), drop = F]) # Best guess for 3D
+    
+    if(length(d) > 2){
       samples <- samples[,,keep, drop = F]
     } else{
       samples <- samples[,keep, drop = F]
     }
   }
 
-  max_dim <- dim(samples)[length(dim(samples))]
+  d <- dim(samples)
+  max_dim <- d[length(d)]
+  if(max_dim == 0) return(samples)
   if(!is.null(length.out)){
     if(length.out > max_dim) stop("Length.out longer than available samples")
     keep <- round(seq(1, max_dim, length.out = length.out))

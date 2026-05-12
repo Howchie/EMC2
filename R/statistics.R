@@ -217,12 +217,14 @@ add_pw_ll <- function(emc, cores_for_chains = 1) {
 
 add_pw_ll_chain <- function(chain) {
   alpha <- chain$samples$alpha
+  if (is.null(alpha) || length(dim(alpha)) < 3 || dim(alpha)[3] == 0) return(chain)
   n_subjects <- dim(alpha)[2]
   n_iter <- dim(alpha)[3]
   data <- chain$data
   model <- chain$model
+  type <- if (is.null(chain$type)) "" else chain$type
 
-  if (chain$type == "single") {
+  if (type == "single" || n_subjects == 1) {
     # alpha[, 1, ] is matrix [n_pars x n_iter]
     proposals <- t(alpha[, 1, ])
     ll_mat <- calc_ll_pw(proposals, data[[1]], model)

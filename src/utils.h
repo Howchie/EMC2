@@ -205,9 +205,9 @@ inline double drdmgbm_scalar(double t, const double* par, void* ctx_) {
   if (R_IsNA(par[0])) return 0.0;
   const double t0_val = par[3];
   const double tt = t - t0_val;
-  const double lg = (ctx && ctx->kill_active) ? par[5] : 0.0;
-  const double lk = (ctx && ctx->kill_active && ctx->apply_lk_to_racers) ? par[6] : 0.0;
   const int ks = ctx ? ctx->kill_shape : 1;
+  const double lg = (ctx && ctx->kill_active) ? erlang_lambda_from_mean(par[5], ks) : 0.0;
+  const double lk = (ctx && ctx->kill_active && ctx->apply_lk_to_racers) ? erlang_lambda_from_mean(par[6], ks) : 0.0;
   const double omega = erlang_omega_for_shape(ks, par, ctx ? ctx->erlang_omega_index : -1);
   const bool erl = (lg > 1e-12 || lk > 1e-12);
   if (tt <= 0.0 && !erl) return 0.0;
@@ -232,9 +232,9 @@ inline double prdmgbm_scalar(double t, const double* par, void* ctx_) {
   if (R_IsNA(par[0])) return 0.0;
   const double t0_val = par[3];
   const double tt = t - t0_val;
-  const double lg = (ctx && ctx->kill_active) ? par[5] : 0.0;
-  const double lk = (ctx && ctx->kill_active && ctx->apply_lk_to_racers) ? par[6] : 0.0;
   const int ks = ctx ? ctx->kill_shape : 1;
+  const double lg = (ctx && ctx->kill_active) ? erlang_lambda_from_mean(par[5], ks) : 0.0;
+  const double lk = (ctx && ctx->kill_active && ctx->apply_lk_to_racers) ? erlang_lambda_from_mean(par[6], ks) : 0.0;
   const double omega = erlang_omega_for_shape(ks, par, ctx ? ctx->erlang_omega_index : -1);
   const bool erl = (lg > 1e-12 || lk > 1e-12);
   if (tt <= 0.0 && !erl) return 0.0;
@@ -371,8 +371,8 @@ inline void drdmgbm_raw(const double* rt, const double* pars_cm, int n_rows,
     if (R_IsNA(v_[i]) || !isok[i]) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
     const double t0_i = t0_[i];
     const double tt = rt[i] - t0_i;
-    const double lg = (!ctx->kill_active) ? 0.0 : lambda_g_[i];
-    const double lk = (global_kill || !ctx->kill_active) ? 0.0 : lambda_k_[i];
+    const double lg = (!ctx->kill_active) ? 0.0 : erlang_lambda_from_mean(lambda_g_[i], kill_shape);
+    const double lk = (global_kill || !ctx->kill_active) ? 0.0 : erlang_lambda_from_mean(lambda_k_[i], kill_shape);
     const double omega = (kill_shape == 3 && omega_ != nullptr) ? std::fmax(0.0, std::fmin(1.0, omega_[i])) :
                          erlang_omega_for_shape(kill_shape);
     const bool erl = (lg > 1e-12 || lk > 1e-12);
@@ -418,8 +418,8 @@ inline void prdmgbm_raw(const double* rt, const double* pars_cm, int n_rows,
     if (R_IsNA(v_[i]) || !isok[i]) { out[i] = 0.0; continue; }
     const double t0_i = t0_[i];
     const double tt = rt[i] - t0_i;
-    const double lg = (!ctx->kill_active) ? 0.0 : lambda_g_[i];
-    const double lk = (global_kill || !ctx->kill_active) ? 0.0 : lambda_k_[i];
+    const double lg = (!ctx->kill_active) ? 0.0 : erlang_lambda_from_mean(lambda_g_[i], kill_shape);
+    const double lk = (global_kill || !ctx->kill_active) ? 0.0 : erlang_lambda_from_mean(lambda_k_[i], kill_shape);
     const double omega = (kill_shape == 3 && omega_ != nullptr) ? std::fmax(0.0, std::fmin(1.0, omega_[i])) :
                          erlang_omega_for_shape(kill_shape);
     const bool erl = (lg > 1e-12 || lk > 1e-12);
@@ -475,8 +475,8 @@ inline void rdmgbm_logS_at_t(double t, const double* pars_cm,
       if (!isok_all[r] || R_IsNA(v_[r])) { bad = true; break; }
       const double t0_r = t0_[r];
       const double tt = t - t0_r;
-      const double lg = (!ctx->kill_active) ? 0.0 : lambda_g_[r];
-      const double lk = (global_kill || !ctx->kill_active) ? 0.0 : lambda_k_[r];
+      const double lg = (!ctx->kill_active) ? 0.0 : erlang_lambda_from_mean(lambda_g_[r], ks);
+      const double lk = (global_kill || !ctx->kill_active) ? 0.0 : erlang_lambda_from_mean(lambda_k_[r], ks);
       const double omega = (ks == 3 && omega_ != nullptr) ? std::fmax(0.0, std::fmin(1.0, omega_[r])) :
                            erlang_omega_for_shape(ks);
       const bool erl = (lg > 1e-12 || lk > 1e-12);
@@ -748,9 +748,9 @@ inline double dbawl_scalar(double t, const double* par, void* ctx_) {
   const double t0_val = par[4];
   const double tt = t - t0_val;
   const bool local_guess = ctx && (ctx->is_local_guess || ctx->is_local_kill_guess);
-  const double lg = (ctx && ctx->kill_active) ? par[6] : 0.0;
-  const double lk = (ctx && ctx->kill_active && ctx->apply_lk_to_racers) ? par[7] : 0.0;
   const int ks = ctx ? ctx->kill_shape : 1;
+  const double lg = (ctx && ctx->kill_active) ? erlang_lambda_from_mean(par[6], ks) : 0.0;
+  const double lk = (ctx && ctx->kill_active && ctx->apply_lk_to_racers) ? erlang_lambda_from_mean(par[7], ks) : 0.0;
   const double omega = erlang_omega_for_shape(ks, par, ctx ? ctx->erlang_omega_index : -1);
   const bool erl = (lg > 1e-12 || lk > 1e-12);
   if (tt <= 0.0 && !erl) return 0.0;
@@ -768,9 +768,9 @@ inline double pbawl_scalar(double t, const double* par, void* ctx_) {
   const double t0_val = par[4];
   const double tt = t - t0_val;
   const bool local_guess = ctx && (ctx->is_local_guess || ctx->is_local_kill_guess);
-  const double lg = (ctx && ctx->kill_active) ? par[6] : 0.0;
-  const double lk = (ctx && ctx->kill_active && ctx->apply_lk_to_racers) ? par[7] : 0.0;
   const int ks = ctx ? ctx->kill_shape : 1;
+  const double lg = (ctx && ctx->kill_active) ? erlang_lambda_from_mean(par[6], ks) : 0.0;
+  const double lk = (ctx && ctx->kill_active && ctx->apply_lk_to_racers) ? erlang_lambda_from_mean(par[7], ks) : 0.0;
   const double omega = erlang_omega_for_shape(ks, par, ctx ? ctx->erlang_omega_index : -1);
   const bool erl = (lg > 1e-12 || lk > 1e-12);
   if (tt <= 0.0 && !erl) return 0.0;
@@ -803,8 +803,8 @@ inline void dbawl_raw(const double* rt, const double* pars_cm, int n_rows,
     if (R_IsNA(v_[i]) || !isok[i]) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
     const double t0_i = t0_[i];
     const double tt = rt[i] - t0_i;
-    const double lg = (!ctx->kill_active) ? 0.0 : lg_[i];
-    const double lk = (!ctx->kill_active || !ctx->apply_lk_to_racers) ? 0.0 : lk_[i];
+    const double lg = (!ctx->kill_active) ? 0.0 : erlang_lambda_from_mean(lg_[i], ks);
+    const double lk = (!ctx->kill_active || !ctx->apply_lk_to_racers) ? 0.0 : erlang_lambda_from_mean(lk_[i], ks);
     const double omega = (ks == 3 && omega_ != nullptr) ? std::fmax(0.0, std::fmin(1.0, omega_[i])) :
                          erlang_omega_for_shape(ks);
     const bool erl = (lg > 1e-12 || lk > 1e-12);
@@ -841,8 +841,8 @@ inline void pbawl_raw(const double* rt, const double* pars_cm, int n_rows,
     if (R_IsNA(v_[i]) || !isok[i]) { out[i] = 0.0; continue; }
     const double t0_i = t0_[i];
     const double tt = rt[i] - t0_i;
-    const double lg = (!ctx->kill_active) ? 0.0 : lg_[i];
-    const double lk = (!ctx->kill_active || !ctx->apply_lk_to_racers) ? 0.0 : lk_[i];
+    const double lg = (!ctx->kill_active) ? 0.0 : erlang_lambda_from_mean(lg_[i], ks);
+    const double lk = (!ctx->kill_active || !ctx->apply_lk_to_racers) ? 0.0 : erlang_lambda_from_mean(lk_[i], ks);
     const double omega = (ks == 3 && omega_ != nullptr) ? std::fmax(0.0, std::fmin(1.0, omega_[i])) :
                          erlang_omega_for_shape(ks);
     const bool erl = (lg > 1e-12 || lk > 1e-12);
@@ -885,8 +885,8 @@ inline void bawl_logS_at_t(double t, const double* pars_cm,
       if (!isok_all[r] || R_IsNA(v_[r])) { bad = true; break; }
       const double t0_r = t0_[r];
       const double tt = t - t0_r;
-      const double lg = (!ctx->kill_active) ? 0.0 : lg_[r];
-      const double lk = (!ctx->kill_active || !ctx->apply_lk_to_racers) ? 0.0 : lk_[r];
+      const double lg = (!ctx->kill_active) ? 0.0 : erlang_lambda_from_mean(lg_[r], ks);
+      const double lk = (!ctx->kill_active || !ctx->apply_lk_to_racers) ? 0.0 : erlang_lambda_from_mean(lk_[r], ks);
       const double omega = (ks == 3 && omega_ != nullptr) ? std::fmax(0.0, std::fmin(1.0, omega_[r])) :
                            erlang_omega_for_shape(ks);
       const bool local_guess = ctx && (ctx->is_local_guess || ctx->is_local_kill_guess);
@@ -946,8 +946,8 @@ inline double drdmswtn_scalar(double t, const double* par, void* ctx_) {
   const double inv_s = 1.0 / par[4];
   const int ks = ctx ? ctx->kill_shape : 1;
   const double omega = erlang_omega_for_shape(ks, par, ctx ? ctx->erlang_omega_index : -1);
-  const double lg = (ctx && ctx->kill_active) ? par[6] : 0.0;
-  const double lk = (ctx && ctx->kill_active && ctx->apply_lk_to_racers) ? par[7] : 0.0;
+  const double lg = (ctx && ctx->kill_active) ? erlang_lambda_from_mean(par[6], ks) : 0.0;
+  const double lk = (ctx && ctx->kill_active && ctx->apply_lk_to_racers) ? erlang_lambda_from_mean(par[7], ks) : 0.0;
   const bool pd = ctx ? ctx->use_posdrift : true;
   const bool erl = (lg > 1e-12 || lk > 1e-12);
   if (tt <= 0.0 && !erl) return 0.0;
@@ -976,8 +976,8 @@ inline double prdmswtn_scalar(double t, const double* par, void* ctx_) {
   const double inv_s = 1.0 / par[4];
   const int ks = ctx ? ctx->kill_shape : 1;
   const double omega = erlang_omega_for_shape(ks, par, ctx ? ctx->erlang_omega_index : -1);
-  const double lg = (ctx && ctx->kill_active) ? par[6] : 0.0;
-  const double lk = (ctx && ctx->kill_active && ctx->apply_lk_to_racers) ? par[7] : 0.0;
+  const double lg = (ctx && ctx->kill_active) ? erlang_lambda_from_mean(par[6], ks) : 0.0;
+  const double lk = (ctx && ctx->kill_active && ctx->apply_lk_to_racers) ? erlang_lambda_from_mean(par[7], ks) : 0.0;
   const bool pd = ctx ? ctx->use_posdrift : true;
   const bool erl = (lg > 1e-12 || lk > 1e-12);
   if (tt <= 0.0 && !erl) return 0.0;
@@ -1023,8 +1023,8 @@ inline void drdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
     const double inv_s = 1.0 / s_[i];
     const double omega = (kill_shape == 3 && omega_ != nullptr) ? std::fmax(0.0, std::fmin(1.0, omega_[i])) :
                          erlang_omega_for_shape(kill_shape);
-    const double lg = (!ctx->kill_active) ? 0.0 : lg_[i];
-    const double lk = (!ctx->kill_active || !ctx->apply_lk_to_racers) ? 0.0 : lk_[i];
+    const double lg = (!ctx->kill_active) ? 0.0 : erlang_lambda_from_mean(lg_[i], kill_shape);
+    const double lk = (!ctx->kill_active || !ctx->apply_lk_to_racers) ? 0.0 : erlang_lambda_from_mean(lk_[i], kill_shape);
     const bool erl = (lg > 1e-12 || lk > 1e-12);
     if (tt <= 0.0 && !erl) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
     if (rt[i] <= 0.0) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
@@ -1084,8 +1084,8 @@ inline void prdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
     const double inv_s = 1.0 / s_[i];
     const double omega = (kill_shape == 3 && omega_ != nullptr) ? std::fmax(0.0, std::fmin(1.0, omega_[i])) :
                          erlang_omega_for_shape(kill_shape);
-    const double lg = (!ctx->kill_active) ? 0.0 : lg_[i];
-    const double lk = (!ctx->kill_active || !ctx->apply_lk_to_racers) ? 0.0 : lk_[i];
+    const double lg = (!ctx->kill_active) ? 0.0 : erlang_lambda_from_mean(lg_[i], kill_shape);
+    const double lk = (!ctx->kill_active || !ctx->apply_lk_to_racers) ? 0.0 : erlang_lambda_from_mean(lk_[i], kill_shape);
     const bool erl = (lg > 1e-12 || lk > 1e-12);
     if (tt <= 0.0 && !erl) { out[i] = 0.0; continue; }
     if (rt[i] <= 0.0) { out[i] = 0.0; continue; }
@@ -1155,8 +1155,8 @@ inline void rdmswtn_logS_at_t(double t, const double* pars_cm,
       const double inv_s = 1.0 / s_[r];
       const double omega = (kill_shape == 3 && omega_ != nullptr) ? std::fmax(0.0, std::fmin(1.0, omega_[r])) :
                            erlang_omega_for_shape(kill_shape);
-      const double lg = (!ctx->kill_active) ? 0.0 : lg_[r];
-      const double lk = (!ctx->kill_active || !ctx->apply_lk_to_racers) ? 0.0 : lk_[r];
+      const double lg = (!ctx->kill_active) ? 0.0 : erlang_lambda_from_mean(lg_[r], kill_shape);
+      const double lk = (!ctx->kill_active || !ctx->apply_lk_to_racers) ? 0.0 : erlang_lambda_from_mean(lk_[r], kill_shape);
       const bool erl = (lg > 1e-12 || lk > 1e-12);
       if (tt <= 0.0) {
         if (!erl) continue;  // EAM not started, no erlang → logS += 0

@@ -214,26 +214,30 @@ test_that("predict.emc propagates pre_transform_terms through make_data", {
 
   emc_obj <- samples_LNR
 
-  pred <- testthat::with_mocked_bindings(
-    {
-      EMC2:::predict.emc(
-        emc_obj,
-        n_post = 1,
-        stat = "mean",
-        n_cores = 1,
-        return_trialwise_parameters = TRUE
-      )
-    },
-    get_design = function(x) list(design_nat),
-    make_data = function(parameters, design, data, ...) {
-      make_data_called <<- TRUE
-      expect_identical(design$model()$transform$pre_sum_terms$v, c("v", "v_Ehard"))
-      out <- data
-      out$rt <- 0.5
-      out$R <- factor(data$R, levels = levels(data$R))
-      out
-    },
-    .env = asNamespace("EMC2")
+  ns <- asNamespace("EMC2")
+  orig_get_design <- get("get_design", envir = ns)
+  orig_make_data  <- get("make_data",  envir = ns)
+  on.exit({
+    unlockBinding("get_design", ns); assign("get_design", orig_get_design, envir = ns)
+    unlockBinding("make_data",  ns); assign("make_data",  orig_make_data,  envir = ns)
+  }, add = TRUE)
+  unlockBinding("get_design", ns)
+  assign("get_design", function(x) list(design_nat), envir = ns)
+  unlockBinding("make_data", ns)
+  assign("make_data", function(parameters, design, data, ...) {
+    make_data_called <<- TRUE
+    expect_identical(design$model()$transform$pre_sum_terms$v, c("v", "v_Ehard"))
+    out <- data
+    out$rt <- 0.5
+    out$R <- factor(data$R, levels = levels(data$R))
+    out
+  }, envir = ns)
+  pred <- EMC2:::predict.emc(
+    emc_obj,
+    n_post = 1,
+    stat = "mean",
+    n_cores = 1,
+    return_trialwise_parameters = TRUE
   )
   expect_true(make_data_called)
   expect_true(is.data.frame(pred))

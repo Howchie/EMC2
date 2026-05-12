@@ -38,6 +38,9 @@ do_pre_transform <- function(p_vector, transform)
 
 # This form used in random number generation
 do_bound <- function(pars,bound, lR = NULL) {
+  bound$minmax <- bound$minmax[, colnames(bound$minmax) %in% colnames(pars), drop = FALSE]
+  if (!is.null(bound$exception))
+    bound$exception <- bound$exception[names(bound$exception) %in% colnames(pars)]
   tpars <- t(pars[,colnames(bound$minmax),drop=FALSE])
   ok <- tpars > bound$minmax[1,] & tpars < bound$minmax[2,]
   if (!is.null(bound$exception)) ok[names(bound$exception),] <-

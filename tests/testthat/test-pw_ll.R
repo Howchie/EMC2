@@ -23,6 +23,8 @@ test_that("pw_ll extraction with race models (LBA/LNR)", {
   dimnames(emc[[1]]$samples$alpha) <- list(c("v", "sv", "B", "A", "t0"), "as1t", NULL)
   emc[[1]]$samples$stage <- rep("sample", 10)
   emc[[1]]$samples$idx <- 10
+  # Add subj_ll for compare to work
+  emc[[1]]$samples$subj_ll <- matrix(0, nrow = 1, ncol = 10)
   
   # 1. Test add_pw_ll
   emc <- add_pw_ll(emc)
@@ -53,6 +55,8 @@ test_that("pw_ll extraction with DDM (already trial-wise)", {
   dimnames(emc[[1]]$samples$alpha) <- list(c("v", "a", "sv", "t0", "st0", "Z", "SZ"), "as1t", NULL)
   emc[[1]]$samples$stage <- rep("sample", 10)
   emc[[1]]$samples$idx <- 10
+  # Add subj_ll for compare to work
+  emc[[1]]$samples$subj_ll <- matrix(0, nrow = 1, ncol = 10)
   
   emc <- add_pw_ll(emc)
   pw_ll_df <- extract_pw_ll(emc, stage = "sample")

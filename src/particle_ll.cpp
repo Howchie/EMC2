@@ -2010,14 +2010,18 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
           if (any_erlang) {
             for (int j = 0; j < n_trials; ++j) {
               if (!isok_int_fp[j]) continue;
-              const double lg = lambda_g_col[j];
-              const double lk = lambda_k_col[j];
+              const double lg = erlang_lambda_from_mean(lambda_g_col[j], adapter.ctx.kill_shape);
+              const double lk = erlang_lambda_from_mean(lambda_k_col[j], adapter.ctx.kill_shape);
               if ((emc2_isfinite(lg) && lg > 1e-12) || (emc2_isfinite(lk) && lk > 1e-12)) {
                 lambda_active = true;
                 break;
               }
             }
             adapter.ctx.kill_active = lambda_active;
+          } else {
+            // No erlang type active: disable kill so scalar kernels don't read
+            // past the end of the parameter block (col 7 doesn't exist for "none").
+            adapter.ctx.kill_active = false;
           }
           adapter.ctx.mode_hint = sv_zero ? 1 : 2;
         }
@@ -2054,7 +2058,7 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
             if (!isok_int_fp[j] || !winner_int_buf[j]) continue;
             const double tt = rt_ptr[j];
             alt_res_buf_fp[j] = (tt > 0.0)
-                ? erlang_log_surv(tt, lambda_ptr[j], adapter.ctx.kill_shape)
+                ? erlang_log_surv(tt, erlang_lambda_from_mean(lambda_ptr[j], adapter.ctx.kill_shape), adapter.ctx.kill_shape)
                 : min_ll;
           }
         }
@@ -3747,15 +3751,21 @@ double c_log_likelihood_race(
       ? (pars_cm_ptr + static_cast<size_t>(ctx->lambda_g_index) * n_trials) : nullptr;
     for (int row = 0; row < n_trials; ++row) {
       if (!isok[row]) continue;
-      const double lk = lambda_k_ptr ? lambda_k_ptr[row] : 0.0;
-      const double lg = lambda_g_ptr ? lambda_g_ptr[row] : 0.0;
+      const double lk = lambda_k_ptr ? erlang_lambda_from_mean(lambda_k_ptr[row], ctx->kill_shape) : 0.0;
+      const double lg = lambda_g_ptr ? erlang_lambda_from_mean(lambda_g_ptr[row], ctx->kill_shape) : 0.0;
       if ((emc2_isfinite(lk) && lk > 1e-12) || (emc2_isfinite(lg) && lg > 1e-12)) {
         lambda_active = true; break;
       }
     }
     ctx->kill_active = lambda_active;
   } else if (ctx) {
-    ctx->kill_active = true;
+    // If erlang column indices are registered but no erlang type flag is active
+    // (e.g. RDMSWTN with erlang_type="none"), disable kill to prevent scalar
+    // kernels from reading past the parameter block at par[lambda_k_index].
+    const bool has_erlang_indices = (ctx->lambda_k_index >= 0 || ctx->lambda_g_index >= 0);
+    const bool has_erlang_type = ctx->is_global_kill || ctx->is_local_kill ||
+                                 ctx->is_local_guess  || ctx->is_local_kill_guess;
+    ctx->kill_active = !has_erlang_indices || has_erlang_type;
   }
 
   ContextForRaceModels dense_ctx = *ctx;

@@ -57,9 +57,9 @@ calc_ll_guess <- function(ctx) {
 guess_dispatch_cases <- list(
   list(
     label = "RDMGBM",
-    formula = list(v ~ 1, B ~ 1, A ~ 1, t0 ~ 1, s ~ 1, lambda_g ~ 1, lambda_k ~ 1),
+    formula = list(v ~ 1, B ~ 1, A ~ 1, t0 ~ 1, s ~ 1, mG ~ 1, mK ~ 1),
     pars = c(v = log(1.2), B = log(1.1), A = log(0.2), t0 = log(0.3), s = log(1.0),
-             lambda_g = log(0.8), lambda_k = log(0.6)),
+             mG = log(1 / 0.8), mK = log(1 / 0.6)),
     local_guess = EMC2::RDMGBM(erlang_type = "local_guess"),
     local_kill_guess = EMC2::RDMGBM(erlang_type = "local_kill_guess")
   ),
@@ -73,9 +73,9 @@ guess_dispatch_cases <- list(
   ),
   list(
     label = "BAwL",
-    formula = list(v ~ 1, sv ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1, lambda_g ~ 1, lambda_k ~ 1),
+    formula = list(v ~ 1, sv ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1, mG ~ 1, mK ~ 1),
     pars = c(v = 1.2, sv = log(1.0), B = log(1.1), A = log(0.2), t0 = log(0.3),
-             k = log(0.15), lambda_g = log(0.8), lambda_k = log(0.6)),
+             k = log(0.15), mG = log(1 / 0.8), mK = log(1 / 0.6)),
     local_guess = EMC2::BAwL(erlang_type = "local_guess"),
     local_kill_guess = EMC2::BAwL(erlang_type = "local_kill_guess")
   )
@@ -87,7 +87,7 @@ test_that("guess-model calc_ll_oo dispatch handles rt<t0 correctly", {
   for (case in guess_dispatch_cases) {
     ctx_guess <- guess_dispatch_context(case$local_guess, case$formula, case$pars)
     pars_no_guess <- case$pars
-    if (case$label == "RDMSWTN") pars_no_guess["mG"] <- log(1e14) else pars_no_guess["lambda_g"] <- log(0)
+    pars_no_guess["mG"] <- log(1e14)
     ctx_guess_off <- guess_dispatch_context(case$local_guess, case$formula, pars_no_guess)
     ctx_kill_guess <- guess_dispatch_context(case$local_kill_guess, case$formula, case$pars)
     ctx_kill_guess_off <- guess_dispatch_context(case$local_kill_guess, case$formula, pars_no_guess)
@@ -162,7 +162,7 @@ test_that("mixed RDMSWTN guess dispatch carries omega through particle likelihoo
 test_that("local_kill_guess falls back to local_kill when lambda_g is zero after t0", {
   for (case in guess_dispatch_cases[c(1, 2)]) {
     pars_kill_only <- case$pars
-    if (case$label == "RDMSWTN") pars_kill_only["mG"] <- log(1e14) else pars_kill_only["lambda_g"] <- log(0)
+    pars_kill_only["mG"] <- log(1e14)
 
     ctx_local_kill <- guess_dispatch_context(
       if (case$label == "RDMGBM") EMC2::RDMGBM(erlang_type = "local_kill") else EMC2::RDMSWTN(erlang_type = "local_kill"),
