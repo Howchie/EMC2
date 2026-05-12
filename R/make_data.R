@@ -315,7 +315,7 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
   }
 
   # This handles censoring and truncation where TC is not specified -- first check data, then design as a fallback (need to agree on the accepted order)
-  TC <- check_missing(TC,design=design)
+  TC <- check_missing(TC,design=design,data=data)
 
   # check_bounds <- FALSE
 
