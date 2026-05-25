@@ -2,6 +2,7 @@
 #define PARTICLE_LL_UTILS_H
 #include <RcppArmadillo.h>
 #include "utility_functions.h" // For any existing utilities we might use
+#include "exgaussian_functions.h"
 #include "lnr_functions.h"
 #include "wald_functions.h"
 #include <gsl/gsl_integration.h>
@@ -368,6 +369,69 @@ inline void lnr_logS_at_t(double t, const double* pars_cm,
       const double logSk = lnorm_log_surv_std(tt, m_[r], s_[r]);
       if (!R_FINITE(logSk)) { bad = true; break; }
       logS += logSk;
+    }
+    logS_out[j] = bad ? R_NegInf : logS;
+  }
+}
+
+inline void drexg_raw(const double* rt, const double* pars_cm, int n_rows,
+                      const int* mask, const int* isok,
+                      double* out, double min_ll, void* ctx_) {
+  (void)ctx_;
+  const double* mu_    = pars_cm + 0 * n_rows;
+  const double* sigma_ = pars_cm + 1 * n_rows;
+  const double* tau_   = pars_cm + 2 * n_rows;
+  for (int i = 0; i < n_rows; ++i) {
+    if (!mask[i]) continue;
+    if (R_IsNA(mu_[i]) || R_IsNA(sigma_[i]) || R_IsNA(tau_[i]) ||
+        !isok[i] || sigma_[i] <= 0.0 || tau_[i] <= 0.0) {
+      out[i] = min_ll;
+      continue;
+    }
+    const double pdf = dexg(rt[i], mu_[i], sigma_[i], tau_[i], false);
+    out[i] = (pdf > 0.0 && emc2_isfinite(pdf)) ? std::max(std::log(pdf), min_ll) : min_ll;
+  }
+}
+
+inline void prexg_raw(const double* rt, const double* pars_cm, int n_rows,
+                      const int* mask, const int* isok,
+                      double* out, double min_ll, void* ctx_) {
+  (void)ctx_;
+  const double* mu_    = pars_cm + 0 * n_rows;
+  const double* sigma_ = pars_cm + 1 * n_rows;
+  const double* tau_   = pars_cm + 2 * n_rows;
+  for (int i = 0; i < n_rows; ++i) {
+    if (!mask[i]) continue;
+    if (R_IsNA(mu_[i]) || R_IsNA(sigma_[i]) || R_IsNA(tau_[i]) ||
+        !isok[i] || sigma_[i] <= 0.0 || tau_[i] <= 0.0) {
+      out[i] = 0.0;
+      continue;
+    }
+    const double cdf = pexg(rt[i], mu_[i], sigma_[i], tau_[i], true, false);
+    if (cdf >= 1.0) { out[i] = min_ll; continue; }
+    out[i] = (cdf <= 0.0) ? 0.0 : std::log1p(-cdf);
+  }
+}
+
+inline void rexg_logS_at_t(double t, const double* pars_cm,
+                           int n_rows_total, int n_lR, int /*n_par*/,
+                           const int* trunc_mask, int n_unique_trials,
+                           const int* isok_all, void* /*ctx_*/, double* logS_out) {
+  const double* mu_    = pars_cm + 0 * n_rows_total;
+  const double* sigma_ = pars_cm + 1 * n_rows_total;
+  const double* tau_   = pars_cm + 2 * n_rows_total;
+  for (int j = 0; j < n_unique_trials; ++j) {
+    if (!trunc_mask[j]) continue;
+    const int start = j * n_lR;
+    double logS = 0.0;
+    bool bad = false;
+    for (int k = 0; k < n_lR && !bad; ++k) {
+      const int r = start + k;
+      if (!isok_all[r] || R_IsNA(mu_[r]) || R_IsNA(sigma_[r]) || R_IsNA(tau_[r]) ||
+          sigma_[r] <= 0.0 || tau_[r] <= 0.0) { bad = true; break; }
+      const double cdf = pexg(t, mu_[r], sigma_[r], tau_[r], true, false);
+      if (cdf >= 1.0) { bad = true; break; }
+      if (cdf > 0.0) logS += std::log1p(-cdf);
     }
     logS_out[j] = bad ? R_NegInf : logS;
   }
