@@ -416,11 +416,70 @@ print(recovery(emcrCT,p_vector,selection="alpha"))
 # save(dat,emcc,emcr,datC,emccC,emcrC,datT,emccT,emcrT,datCT,emccCT,emcrCT,
 #      file="Censoring TEST/RDM.RData")
 
+## This is a hack to remove c_name
+LNRR <- function() {
+  m <- LNR()
+  m$c_name=NULL
+  m
+}
+
+# and the design that uses it.
+designLNR1 <- design(
+  factors=list(subjects=1,S=c("left","right")),Rlevels=c("left","right"),
+  matchfun=function(d) as.numeric(d$S)==as.numeric(d$lR),
+  model=LNRR,
+  formula=list(m~lM,s~1,t0~1,pContaminant~1)
+)
+
+TC=list(LT=.4,UT=2.2,LC=.45,UC=1.8,verbose=TRUE)
+datCT <- make_data(p_vector,designLNR,n_trials=10000,TC=TC)
+
+# Compare likelihoods
+dadmC <- EMC2:::design_model(datCT,designLNR)
+dadmR <- EMC2:::design_model(datCT,designLNR1)
+lfun(p_vector,dadmC)
+lfun(p_vector,dadmR,use_c = F)
+
+
+# Fitting
+emc <- make_emc(datCT,designLNR,type="single")
+system.time({emccCT <- fit(emc)})
+# Time difference of 9.157945 mins
+emc <- make_emc(datCT,designLNR1,type="single")
+system.time({emcrCT <- fit(emc)})
+# Time difference of 2.199915 mins
+
+print(recovery(emccCT,p_vector,selection="alpha"))
+print(recovery(emcrCT,p_vector,selection="alpha"))
+
+# save(datCT,emccCT,emcrCT,file="Censoring TEST/LNR.RData")
+
+dev.off()
+
+#### LNR, Parameter recovery, all three only ----
+
+#load("Censoring Test/LNR.RData")
+
+# Here is a simple 5 parameter RDM model with contamination that uses Zach's C
+designLNR <- design(
+  factors=list(subjects=1,S=c("left","right")),Rlevels=c("left","right"),
+  matchfun=function(d) as.numeric(d$S)==as.numeric(d$lR),
+  model=LNR,
+  formula=list(m~lM,s~1,t0~1,pContaminant~1)
+)
+
+# This parameter vector produces reasonable RTs and accuracies with a small
+# level of contamination.
+p_vector <- sampled_pars(designLNR,doMap = FALSE)
+p_vector[] <- c(log(1.5),log(.4), log(1), log(0.3),qnorm(.05))
+
+
+
 #### LBA, Parameter recovery, test memory consumption of old vs new C ----
 
 # load("Censoring Test/LBA.RData")
 
-# Here is a simple 5 parameter RDM model with contamination that uses Zach's C
+# Here is a simple 5 parameter LBA model with contamination that uses Zach's C
 designLBA <- design(
   factors=list(subjects=1,S=c("left","right")),Rlevels=c("left","right"),
   matchfun=function(d) as.numeric(d$S)==as.numeric(d$lR),
@@ -470,63 +529,22 @@ print(recovery(emcrCT,p_vector,selection="alpha"))
 
 # save(datCT,emccCT,emcrCT,file="Censoring TEST/LBA.RData")
 
-#### LNR, Parameter recovery, all three only ----
+##### LBAIO ----
 
-#load("Censoring Test/LNR.RData")
-
-# Here is a simple 5 parameter RDM model with contamination that uses Zach's C
-designLNR <- design(
-  factors=list(subjects=1,S=c("left","right")),Rlevels=c("left","right"),
+designLBA <- design(
+  factors=list(subjects=1,S=1:2),Rlevels=1:2,
   matchfun=function(d) as.numeric(d$S)==as.numeric(d$lR),
-  model=LNR,
-  formula=list(m~lM,s~1,t0~1,pContaminant~1)
+  model=LBA(T),TC=list(UC=1.5),
+  formula=list(v~lM,B~1,t0~1)
 )
 
-# This parameter vector produces reasonable RTs and accuracies with a small
-# level of contamination.
-p_vector <- sampled_pars(designLNR,doMap = FALSE)
-p_vector[] <- c(log(1.5),log(.4), log(1), log(0.3),qnorm(.05))
+p_vector <- sampled_pars(designLBA,doMap = FALSE)
+p_vector[] <- c(0, 1, log(1), log(0.2))
+dat <- make_data(p_vector,designLBA,n_trials=10000)
+mean(dat$S==dat$R,na.rm=T)
+max(dat$rt[is.finite(dat$rt)])
+mean(100*is.infinite(dat$rt))
 
-
-## This is a hack to remove c_name
-LNRR <- function() {
-  m <- LNR()
-  m$c_name=NULL
-  m
-}
-
-# and the design that uses it.
-designLNR1 <- design(
-  factors=list(subjects=1,S=c("left","right")),Rlevels=c("left","right"),
-  matchfun=function(d) as.numeric(d$S)==as.numeric(d$lR),
-  model=LNRR,
-  formula=list(m~lM,s~1,t0~1,pContaminant~1)
-)
-
-TC=list(LT=.4,UT=2.2,LC=.45,UC=1.8,verbose=TRUE)
-datCT <- make_data(p_vector,designLNR,n_trials=10000,TC=TC)
-
-# Compare likelihoods
-dadmC <- EMC2:::design_model(datCT,designLNR)
-dadmR <- EMC2:::design_model(datCT,designLNR1)
-lfun(p_vector,dadmC)
-lfun(p_vector,dadmR,use_c = F)
-
-
-# Fitting
-emc <- make_emc(datCT,designLNR,type="single")
-system.time({emccCT <- fit(emc)})
-# Time difference of 9.157945 mins
-emc <- make_emc(datCT,designLNR1,type="single")
-system.time({emcrCT <- fit(emc)})
-# Time difference of 2.199915 mins
-
-print(recovery(emccCT,p_vector,selection="alpha"))
-print(recovery(emcrCT,p_vector,selection="alpha"))
-
-# save(datCT,emccCT,emcrCT,file="Censoring TEST/LNR.RData")
-
-dev.off()
 
 #### GNG ----
 
@@ -538,6 +556,7 @@ LBAR <- function() {
   m$c_name=NULL
   m
 }
+
 
 ### LBA 2 choice ----
 
