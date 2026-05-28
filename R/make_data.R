@@ -22,6 +22,8 @@ get_missing <- function(supplied, data, bound_name, default,type) {
 
 #' Add information about missing values to data and modify/filter accordingly.
 #'
+#' @details
+#'
 #' Columns corresponding to LC, UT, LC, UC, and pContaminant arguments are added
 #' to the return, specifying, respectively, if a row is subject to lower or upper
 #' truncation, lower or upper censoring, or contamination with the given probability.
