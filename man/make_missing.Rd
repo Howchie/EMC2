@@ -2,7 +2,7 @@
 % Please edit documentation in R/make_data.R
 \name{make_missing}
 \alias{make_missing}
-\title{Add information about missing values modify data accordingly.}
+\title{Add information about missing values to data and modify/filter accordingly.}
 \usage{
 make_missing(
   data,
@@ -59,35 +59,24 @@ do nothing unless an explicit is value passed in the missing list.}
 A filtered and modified data frame with added/updated LC, UC, LT and UT columns
 }
 \description{
-Add information about missing values modify data accordingly.
+Add information about missing values to data and modify/filter accordingly.
 }
 \details{
-Lower and upper truncation is specified through the LT and UT argument
-respectively and lower and upper censoring by the LC and UC arguments respectively.
+Columns corresponding to LC, UT, LC, UC, and pContaminant arguments are added
+to the return, specifying, respectively, if a row is subject to lower or upper
+truncation, lower or upper censoring, or contamination with the given probability.
 Truncation removes rows. Contamination makes R = NA and the rt = Inf, and is
 applied after truncation but before censoring. Lower/upper censoring sets
 R = NA if LCresponse/UCresponse = TRUE and
 rt = -Inf/Inf if LCdireciton/UCdireciton = TRUE (else NA).
-
-All of these arguments can be:
-\enumerate{
-\item NULL, in which case if the data frame has a column
+All of these arguments can be: 1) NULL, in which case if the data frame has a column
 of that name it is used, or if not the default is used (see argument definition),
-\item a scalar/logical (same value for every data row),
-\item a subject-named  vector
-(same value for each subject),
-\item a vector with length matching data rows, or
-\item a function taking data as it argument that creates a column of appropriate
-values.
-}
-
-Note that if this function returns a subject named vector it will be
+2) a scalar/logical (same value for every data row), 3) a subject-named  vector
+(same value for each subject), 4) a vector with length matching data rows, or
+5) a function taking data as it argument that creates a column of appropriate
+values. Note that if this function returns a subject named vector it will be
 expanded as in case (3). For rows with response (column R) "nogo" the following
 are enforced: UC=LC=LT=0, UT=Inf, UCdirection=UCresponse=TRUE
-
-Columns corresponding to LC, UT, LC, UC, and pContaminant arguments are added
-to the return, specifying, respectively, if a row is subject to lower or upper
-truncation, lower or upper censoring, or contamination with the given probability.
 }
 \examples{
 \dontrun{
