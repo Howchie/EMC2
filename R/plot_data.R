@@ -765,7 +765,14 @@ plot_density <- function(input, post_predict = NULL, prior_predict = NULL,
                lwd = lwd_map)
       }
     }
+    if (!is.null(dots$ablines)) for (abs in dots$ablines) {
+      if (is.null(attr(abs,"lty"))) lty <- 3 else lty <- attr(abs,"lty")
+      if (names(abs)[1]=="h") abline(h=abs[1],lty=lty)
+      if (names(abs)[1]=="v") abline(v=abs[1],lty=lty) else
+        abline(coef=abs,lty=lty)
+    }
   }
+  invisible(check)
 }
 
 ###############################################################################
