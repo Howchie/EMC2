@@ -1142,6 +1142,7 @@ plot_cdf <- function(input,
               }
               if (!is.null(add_percentiles)) {
                 points_args <- lines_args
+                if (is.null(points_args$pch)) points_args$pch <- 16
                 points_args$col <- lines_args$col[1]
                 do.call(points, c(list(x = cmat[add_percentiles, "x"][],
                   y = cmat[add_percentiles, "y"][]), points_args))
@@ -1195,9 +1196,9 @@ plot_cdf <- function(input,
 
                   if (!is.null(add_percentiles)) {
                     points_args <- lines_args
+                    if (is.null(points_args$pch)) points_args$pch <- 16
                     points_args$col <- lines_args$col[1]
-                    points_args$pch <- 1
-                    do.call(points, c(list(x_med[add_percentiles],y_median[add_percentiles]),
+                     do.call(points, c(list(x_med[add_percentiles],y_median[add_percentiles]),
                                       points_args))
                     # points(x_med[add_percentiles],y_median[add_percentiles],
                     #        pch=1,col=lines_args$col[1])
