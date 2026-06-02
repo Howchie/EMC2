@@ -93,7 +93,7 @@ align_loadings <- function (emc = NULL, lambda = NULL, n_cores = 1, verbose = TR
   if(is.null(lambda)){
     lambda <- get_pars(emc, selection = "loadings", merge_chains = TRUE, return_mcmc = FALSE)
   }
-  energy <- colMeans(lambda^2)          # length q
+  energy <- apply(lambda^2, 2, mean)    # length q: mean squared loading per factor
   lambda <- lambda[,energy / max(energy) > 0.0075,, drop = F]
   q <- ncol(lambda)
   p <- nrow(lambda)

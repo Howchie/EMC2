@@ -83,8 +83,15 @@ design <- function(formula = NULL,factors = NULL,Rlevels = NULL,model,data=NULL,
                    functions=NULL,report_p_vector=TRUE, custom_p_vector = NULL,
                    trend=NULL,
                    pre_transform_terms = NULL,
-                   transform = NULL, bound = NULL, LT=NULL,LC=NULL,UC=NULL,UT=NULL,
+                   transform = NULL, bound = NULL, TC = NULL,
+                   LT=NULL,LC=NULL,UC=NULL,UT=NULL,
                    fixed_accumulator_roles = NULL,...){
+
+  TC <- check_missing(TC, data = data)
+  if (!is.null(LT)) TC$LT <- LT
+  if (!is.null(LC)) TC$LC <- LC
+  if (!is.null(UC)) TC$UC <- UC
+  if (!is.null(UT)) TC$UT <- UT
 
   optionals <- list(...)
   if (is.list(model) && !is.function(model)) {
@@ -160,10 +167,6 @@ design <- function(formula = NULL,factors = NULL,Rlevels = NULL,model,data=NULL,
       covariates <- covariates[covariates %in% c(all_preds, trend_vars)]
       if(length(covariates) == 0) covariates <- NULL
     }
-    if(is.null(LT)){if("LT"%in%colnames(data)) LT=data$LT else{LT <- attr(data,"LT")}}; if (is.null(LT)) LT <- 0
-    if(is.null(UT)){if("UT"%in%colnames(data)) UT=data$UT else{UT <- attr(data,"UT")}}; if (is.null(UT)) UT <- Inf
-    if(is.null(LC)){if("LC"%in%colnames(data)) LC=data$LC else{LC <- attr(data,"LC")}}; if (is.null(LC)) LC <- 0
-    if(is.null(UC)){if("UC"%in%colnames(data)) UC=data$UC else{UC <- attr(data,"UC")}}; if (is.null(UC)) UC <- Inf
   } else {if(is.null(Rlevels)) stop("make sure Rlevels is specified")} # this check wasn't present - would break accumulator logic
   if (!is.null(trend)) {
     formula <- check_trend(trend,c(names(functions), covariates), model, formula)
@@ -197,7 +200,8 @@ design <- function(formula = NULL,factors = NULL,Rlevels = NULL,model,data=NULL,
 
   design <- list(Flist=formula,Ffactors=factors,Rlevels=Rlevels,
                  Clist=contrasts,matchfun=matchfun,constants=constants,
-                 Fcovariates=covariates,Ffunctions=functions,model=model,LT=LT,LC=LC,UC=UC,UT=UT,
+                 Fcovariates=covariates,Ffunctions=functions,model=model,
+                 TC=TC,LT=TC$LT,LC=TC$LC,UC=TC$UC,UT=TC$UT,
                  fixed_accumulator_roles = fixed_accumulator_roles)
   class(design) <- "emc.design"
   if (!is.null(trend)) {

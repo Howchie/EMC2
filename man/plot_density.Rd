@@ -67,7 +67,9 @@ computing summaries. Set to \code{FALSE} to retain \code{NA}/\code{Inf} RT rows 
 \description{
 Plots panels that contain a set of densities for each level of the specified defective factor in the data.
 These densities are defective; their areas are relative to the respective
-proportions of the defective factor levels. Across all levels, the area sums to 1.
+proportions of the defective factor levels. Across all levels, the area sums to
+the probability of a finite RT (per panel, and per context group when the
+defective factor is a combination of a stimulus factor and a response factor).
 Optionally, posterior/prior predictive densities can be overlaid.
 }
 \examples{

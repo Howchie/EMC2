@@ -22,7 +22,7 @@ pr_pt <- function(LT,UT,ps,dadm,model)
       if (inherits(pri, "try-error") || suppressWarnings(is.nan(pri$value))) return(NA)
       pr <- pr + pri$value
     }
-    
+
     1/pmax(0,pmin(pr,1))
     if (is.finite(pr)) return(pr) else return(NA)
 }
@@ -71,7 +71,7 @@ log_diff_exp_R <- function(log_hi, log_lo) {
 f <- function(t,p,dfun,pfun) {
   # Called by integrate to get race density for vector of times t given
   # matrix of parameters where first row is the winner.
-  
+
   out <- dfun(t,
               matrix(rep(p[1,],each=length(t)),nrow=length(t),dimnames=list(NULL,dimnames(p)[[2]])))
   if (dim(p)[1]>1) for (i in 2:dim(p)[1])
@@ -94,13 +94,13 @@ my_integrate <- function(...,upper=Inf,big=10)
 log_likelihood_race_missing <- function(pars,dadm,model,min_ll=log(1e-10))
   # Race model summed log likelihood for models allowing missing values
 {
-  
+
   if (any(names(dadm)=="RACE")) # Some accumulators not present
     pars[as.numeric(dadm$lR)>as.numeric(as.character(dadm$RACE)),] <- NA
-  
+
   if (is.null(attr(pars,"ok")))
     ok <- !logical(dim(pars)[1]) else ok <- attr(pars,"ok")
-    
+
     is_gng <- !is.null(dadm$lR) && ("nogo" %in% levels(dadm$lR))
     nogo_idx <- if (is_gng) match("nogo", levels(dadm$lR)) else NA_integer_
     # Defective distribution: total response probability < 1 (e.g. LBAIO with
@@ -117,16 +117,16 @@ log_likelihood_race_missing <- function(pars,dadm,model,min_ll=log(1e-10))
     if (n_acc>1) lds[fix] <-
       log(1-model$pfun(rt=dadm$rt[fix],pars=pars[fix,,drop=FALSE]))
     lds[is.na(lds) | !ok] <- -Inf
-    
+
     # Calculate truncation?
     LT <- dadm$LT
     UT <- dadm$UT
     dotrunc <- !(all(LT ==0) & all(is.infinite(UT)))
-    
+
     # Calculate censoring
     LC <- dadm$LC
     UC <- dadm$UC
-    
+
     # Response known
     # Fast
     nort <- dadm$rt==-Inf; nort[is.na(nort)] <- FALSE; nort <- nort & !is.na(dadm$R) & ok
@@ -188,7 +188,7 @@ log_likelihood_race_missing <- function(pars,dadm,model,min_ll=log(1e-10))
         lds[tofix][i] <- log(pmax(0,pmin(p,1)))
       }
     }
-    
+
     # Response unknown.
     # Fast
     nort <- dadm$rt==-Inf; nort[is.na(nort)] <- FALSE; nort <- nort & is.na(dadm$R) & ok
@@ -213,12 +213,12 @@ log_likelihood_race_missing <- function(pars,dadm,model,min_ll=log(1e-10))
                                dfun=model$dfun, pfun=model$pfun)
             if (inherits(pc, "try-error") || suppressWarnings(is.nan(pc$value))) {
               p <- NA; break
-            }
-            p_j <- pmax(0, pmin(pc$value, 1))
-            cf <- if (p_j != 0 && !(LTs[i]==0 & UTs[i]==Inf))
-              pr_pt(LTs[i], UTs[i], mpars[,i,], dadm, model) else 1
-            if (is.na(cf)) { p <- NA; break }
-            p <- p + p_j * cf
+            } else p <- pmax(0, pmin(pc$value, 1))
+            # p_j <- pmax(0, pmin(pc$value, 1))
+            # cf <- if (p_j != 0 && !(LTs[i]==0 & UTs[i]==Inf))
+            #   pr_pt(LTs[i], UTs[i], mpars[,i,], dadm, model) else 1
+            # if (is.na(cf)) { p <- NA; break }
+            # p <- p + p_j * cf
           }
         } else {
           logP <- log_diff_exp_R(log_surv_race(LTs[i], mpars[,i,], model, is_defective),
@@ -244,7 +244,7 @@ log_likelihood_race_missing <- function(pars,dadm,model,min_ll=log(1e-10))
                      dimnames = list(NULL,NULL,colnames(pars)))
       winner <- matrix(dadm$winner[nort],nrow=n_acc)
       tofixslow <- dadm$winner & nort
-      for (i in 1:dim(mpars)[2]) if (UCs[i] < UTs[i]) {
+      for (i in 1:dim(mpars)[2]) {
         if (dim(mpars)[[1]]==1) pi <- t(as.matrix(mpars[,i,])) else
           pi <- mpars[,i,]
         if (is_gng && !is.na(nogo_idx)) {
@@ -252,16 +252,17 @@ log_likelihood_race_missing <- function(pars,dadm,model,min_ll=log(1e-10))
                              dfun=model$dfun,pfun=model$pfun)
           if (inherits(pc, "try-error") || suppressWarnings(is.nan(pc$value))) {
             p <- NA
-          } else {
-            p <- pmax(0,pmin(pc$value,1))
-            psurv <- prod(1 - model$pfun(rt=rep(UCs[i],n_acc),pars=pi))
-            if (!is.na(psurv) & !is.nan(psurv)) p <- p + pmax(0,pmin(psurv,1)) else p <- NA
-          }
-          if (!is.na(p)) {
-            if (p != 0 && !(LTs[i]==0 & UTs[i]==Inf))
-              cf <- pr_pt(LTs[i],UTs[i],mpars[,i,],dadm,model) else cf <- 1
-            if (!is.na(cf)) p <- p*cf
-          }
+          } else p <- pmax(0,pmin(pc$value,1))
+          # else {
+          #   p <- pmax(0,pmin(pc$value,1))
+          #   psurv <- prod(1 - model$pfun(rt=rep(UCs[i],n_acc),pars=pi))
+          #   if (!is.na(psurv) & !is.nan(psurv)) p <- p + pmax(0,pmin(psurv,1)) else p <- NA
+          # }
+          # if (!is.na(p)) {
+          #   if (p != 0 && !(LTs[i]==0 & UTs[i]==Inf))
+          #     cf <- pr_pt(LTs[i],UTs[i],mpars[,i,],dadm,model) else cf <- 1
+          #   if (!is.na(cf)) p <- p*cf
+          # }
         } else {
           logP <- log_diff_exp_R(log_surv_race(UCs[i], mpars[,i,], model, is_defective),
                                  log_surv_race(UTs[i], mpars[,i,], model, is_defective))
@@ -323,8 +324,8 @@ log_likelihood_race_missing <- function(pars,dadm,model,min_ll=log(1e-10))
         if (!is.nan(lp) & !is.na(lp)) lds[tofix][i] <- lp
       }
     }
-    
-    
+
+
     # Truncation
     if ( dotrunc ) {
       okT <- attr(dadm,"unique_nortR") & dadm$winner & ok
@@ -347,8 +348,8 @@ log_likelihood_race_missing <- function(pars,dadm,model,min_ll=log(1e-10))
         }
       }
     }
-    
-    
+
+
     if (n_acc>1) {
       ll <- lds[dadm$winner]
       if (n_acc==2) {
@@ -359,9 +360,9 @@ log_likelihood_race_missing <- function(pars,dadm,model,min_ll=log(1e-10))
       }
     } else ll <- lds
     ll[is.na(ll) | is.nan(ll)] <- -Inf
-    
+
     #  llR <<- ll
-    
+
     # Non-process (contaminant) miss.
     ispContaminant <- pars[dadm$winner & ok,"pContaminant"]>0
     if ( any(ispContaminant) ) {
@@ -373,9 +374,6 @@ log_likelihood_race_missing <- function(pars,dadm,model,min_ll=log(1e-10))
       p[!isMiss] <- (1-pc[!isMiss])*p[!isMiss]
       ll[ispContaminant] <- log(p)
     }
-    
-    #  llRC <<- ll
-    
     ll <- pmax(min_ll,ll)
     return(sum(ll[attr(dadm,"expand")]))
 }
@@ -390,7 +388,7 @@ log_likelihood_ddm <- function(pars,dadm,model,min_ll=log(1e-10))
                                         pars[attr(pars,"ok"),,drop=FALSE])
   like[attr(pars,"ok")][is.na(like[attr(pars,"ok")])] <- 0
   sum(pmax(min_ll,log(like[attr(dadm,"expand")])))
-} 
+}
 
 log_likelihood_ddmgng <- function(pars,dadm,model,min_ll=log(1e-10))
   # DDM summed log likelihood for go/nogo model

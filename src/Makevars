@@ -1,6 +1,6 @@
 ## ---- src/Makevars ----
 # Force modern C++ on the compile line
-PKG_CXXFLAGS += -std=gnu++17 -Wfatal-errors -fmax-errors=1 -ftemplate-backtrace-limit=5    # (or: CXX_STD = CXX17)
+PKG_CXXFLAGS += -std=gnu++17 -Wfatal-errors -ftemplate-backtrace-limit=5    # (or: CXX_STD = CXX17)
 
 # Performance flags matching upstream oo_refactor_simd branch:
 #   -O3           : full optimization (upstream uses -O3; R defaults to -O2)
@@ -15,7 +15,7 @@ override CXXFLAGS += -O3 -march=native -ffast-math -fno-math-errno -DUSE_FAST_PN
 
 # Add the package headers path, RcppArmadillo flags, and bundled GSL headers.
 # -Igsl_bundled makes <config.h> and <gsl/...> resolve to src/gsl_bundled/
-PKG_CPPFLAGS += -I../inst/include $(RCPP_ARMA_CXXFLAGS) -Wfatal-errors -fmax-errors=1 -Igsl_bundled -DRCPP_NO_R_HEADERS_CHECK -DARMA_DONT_PRINT_FAST_MATH_WARNING -DR_NO_REMAP
+PKG_CPPFLAGS += -I../inst/include $(RCPP_ARMA_CXXFLAGS) -Wfatal-errors -Igsl_bundled -DRCPP_NO_R_HEADERS_CHECK -DARMA_DONT_PRINT_FAST_MATH_WARNING -DR_NO_REMAP
 
 # Link libs — no -lgsl/-lgslcblas needed; GSL is compiled in via gsl_bundled.c
 PKG_LIBS     += $(RCPP_ARMA_LIBS)

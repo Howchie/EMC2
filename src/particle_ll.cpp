@@ -292,6 +292,13 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
     out.model_pfun_raw = &prdm_raw;
     out.logS_at_t_ptr = &rdm_logS_at_t;
     out.ctx.t0_index = 3;
+  } else if (type_std.find("REXG") != std::string::npos) {
+    out.pdf1_ptr = &dexg_scalar;
+    out.cdf1_ptr = &pexg_scalar;
+    out.model_dfun_raw = &drexg_raw;
+    out.model_pfun_raw = &prexg_raw;
+    out.logS_at_t_ptr = &rexg_logS_at_t;
+    out.ctx.t0_index = -1;
   } else if (type_std.find("LNR") != std::string::npos) {
     out.pdf1_ptr = &dlnr_scalar;
     out.cdf1_ptr = &plnr_scalar;

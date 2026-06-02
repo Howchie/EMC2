@@ -20,6 +20,7 @@ design(
   trend = NULL,
   transform = NULL,
   bound = NULL,
+  TC = NULL,
   LT = NULL,
   LC = NULL,
   UC = NULL,

@@ -2,6 +2,7 @@
 #define utils_h
 
 #include <RcppArmadillo.h>
+#include "exgaussian_functions.h"
 #include <vector>
 #include <string>
 #include <unordered_map>
@@ -657,6 +658,69 @@ inline void rgamma_logS_at_t(double t, const double* pars_cm,
       const double tt = t - shift_[r];
       if (tt <= 0.0) continue;
       const double cdf = R::pgamma(tt, shape_[r], 1.0 / lambda_[r], true, false);
+      if (cdf >= 1.0) { bad = true; break; }
+      if (cdf > 0.0) logS += std::log1p(-cdf);
+    }
+    logS_out[j] = bad ? R_NegInf : logS;
+  }
+}
+
+inline void drexg_raw(const double* rt, const double* pars_cm, int n_rows,
+                      const int* mask, const int* isok,
+                      double* out, double min_ll, void* ctx_) {
+  const bool floor_raw = raw_floor_log_lik(ctx_);
+  const double* mu_    = pars_cm + 0 * n_rows;
+  const double* sigma_ = pars_cm + 1 * n_rows;
+  const double* tau_   = pars_cm + 2 * n_rows;
+  for (int i = 0; i < n_rows; ++i) {
+    if (!mask[i]) continue;
+    if (R_IsNA(mu_[i]) || R_IsNA(sigma_[i]) || R_IsNA(tau_[i]) ||
+        !isok[i] || sigma_[i] <= 0.0 || tau_[i] <= 0.0) {
+      out[i] = raw_log_zero(min_ll, floor_raw);
+      continue;
+    }
+    const double pdf = dexg(rt[i], mu_[i], sigma_[i], tau_[i], false);
+    out[i] = (pdf > 0.0 && emc2_isfinite(pdf)) ? raw_log_value(std::log(pdf), min_ll, floor_raw) : raw_log_zero(min_ll, floor_raw);
+  }
+}
+
+inline void prexg_raw(const double* rt, const double* pars_cm, int n_rows,
+                      const int* mask, const int* isok,
+                      double* out, double min_ll, void* ctx_) {
+  const bool floor_raw = raw_floor_log_lik(ctx_);
+  const double* mu_    = pars_cm + 0 * n_rows;
+  const double* sigma_ = pars_cm + 1 * n_rows;
+  const double* tau_   = pars_cm + 2 * n_rows;
+  for (int i = 0; i < n_rows; ++i) {
+    if (!mask[i]) continue;
+    if (R_IsNA(mu_[i]) || R_IsNA(sigma_[i]) || R_IsNA(tau_[i]) ||
+        !isok[i] || sigma_[i] <= 0.0 || tau_[i] <= 0.0) {
+      out[i] = 0.0;
+      continue;
+    }
+    const double cdf = pexg(rt[i], mu_[i], sigma_[i], tau_[i], true, false);
+    if (cdf >= 1.0) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
+    out[i] = (cdf <= 0.0) ? 0.0 : std::log1p(-cdf);
+  }
+}
+
+inline void rexg_logS_at_t(double t, const double* pars_cm,
+                           int n_rows_total, int n_lR, int /*n_par*/,
+                           const int* trunc_mask, int n_unique_trials,
+                           const int* isok_all, void* /*ctx_*/, double* logS_out) {
+  const double* mu_    = pars_cm + 0 * n_rows_total;
+  const double* sigma_ = pars_cm + 1 * n_rows_total;
+  const double* tau_   = pars_cm + 2 * n_rows_total;
+  for (int j = 0; j < n_unique_trials; ++j) {
+    if (!trunc_mask[j]) continue;
+    const int start = j * n_lR;
+    double logS = 0.0;
+    bool bad = false;
+    for (int k = 0; k < n_lR && !bad; ++k) {
+      const int r = start + k;
+      if (!isok_all[r] || R_IsNA(mu_[r]) || R_IsNA(sigma_[r]) || R_IsNA(tau_[r]) ||
+          sigma_[r] <= 0.0 || tau_[r] <= 0.0) { bad = true; break; }
+      const double cdf = pexg(t, mu_[r], sigma_[r], tau_[r], true, false);
       if (cdf >= 1.0) { bad = true; break; }
       if (cdf > 0.0) logS += std::log1p(-cdf);
     }

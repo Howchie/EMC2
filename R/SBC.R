@@ -35,6 +35,32 @@ run_sbc <- function(design_in, prior_in, replicates = 250, trials = 100, n_subje
 
 
 
+# Internal helpers --------------------------------------------------------
+
+.sbc_load_persist_reps <- function(persist_dir, persist_base) {
+  if (is.null(persist_dir) || is.null(persist_base)) return(list())
+  pattern <- paste0("^", persist_base, "_rep_[0-9]+\\.rds$")
+  files   <- list.files(persist_dir, pattern = pattern, full.names = TRUE)
+  out <- list()
+  for (f in files) {
+    result <- tryCatch(readRDS(f), error = function(e) NULL)
+    if (!is.null(result)) {
+      nm       <- sub(paste0(".*", persist_base, "_rep_([0-9]+)\\.rds$"), "\\1", f)
+      out[[nm]] <- result
+    }
+  }
+  out
+}
+
+.sbc_cleanup_persist_reps <- function(persist_dir, persist_base) {
+  if (is.null(persist_dir) || is.null(persist_base)) return(invisible(NULL))
+  pattern <- paste0("^", persist_base, "_rep_[0-9]+\\.rds$")
+  files   <- list.files(persist_dir, pattern = pattern, full.names = TRUE)
+  if (length(files)) file.remove(files)
+  invisible(NULL)
+}
+
+
 SBC_hierarchical <- function(design_in, prior_in, replicates = 250, trials = 100, n_subjects = 30,
                              plot_data = FALSE, verbose = TRUE,
                              fileName = NULL, ...){
@@ -100,7 +126,8 @@ sbc_running_counter <- function(i, temp_dir, offset = 0L) {
 }
 
 run_SBC_hierarchical_rep <- function(i, design_in, prior_mu, prior_var, trials, n_subjects,
-                                     prior_in, type, dots, temp_dir, offset = 0L) {
+                                     prior_in, type, dots, temp_dir, offset = 0L,
+                                     persist_dir = NULL, persist_base = NULL) {
   dots[["cores_per_chain"]] <- 1L
   dots[["verbose"]] <- FALSE
   dots[["verboseProgress"]] <- FALSE
@@ -115,12 +142,12 @@ run_SBC_hierarchical_rep <- function(i, design_in, prior_mu, prior_var, trials, 
 
   ESS_mu  <- round(pmin(unlist(ess_summary(emc, selection = "mu",    stat = NULL)), chain_n(emc)[1, "sample"]))
   mu_rec  <- get_pars(emc, selection = "mu",    return_mcmc = FALSE, merge_chains = TRUE, flatten = TRUE)
-  rank_mu_row <- mapply(get_ranks_ESS, split(mu_rec, row(mu_rec)), t(ESS_mu), prior_mu[, i])
+  rank_mu_row <- unname(mapply(get_ranks_ESS, split(mu_rec, row(mu_rec)), t(ESS_mu), prior_mu[, i]))
 
   ESS_var         <- round(pmin(unlist(ess_summary(emc, selection = "Sigma", stat = NULL)), chain_n(emc)[1, "sample"]))
   var_rec         <- get_pars(emc, selection = "Sigma", return_mcmc = FALSE, merge_chains = TRUE, flatten = TRUE)
   prior_var_input <- get_pars(emc, selection = "Sigma", flatten = TRUE, true_pars = prior_var[,, i])[[1]][[1]]
-  rank_var_row    <- mapply(get_ranks_ESS, split(var_rec, row(var_rec)), t(ESS_var), prior_var_input)
+  rank_var_row    <- unname(mapply(get_ranks_ESS, split(var_rec, row(var_rec)), t(ESS_var), prior_var_input))
 
   result <- list(rank_mu_row   = rank_mu_row,
                  rank_var_row  = rank_var_row,
@@ -128,6 +155,9 @@ run_SBC_hierarchical_rep <- function(i, design_in, prior_mu, prior_var, trials, 
                  rand_effects  = rand_effects)
   if (!is.null(temp_dir))
     saveRDS(result, file.path(temp_dir, paste0("rep_", i, ".rds")))
+  # Also write to persistent storage (survives node-local temp cleanup)
+  if (!is.null(persist_dir) && !is.null(persist_base))
+    saveRDS(result, file.path(persist_dir, paste0(persist_base, "_rep_", i, ".rds")))
   result
 }
 
@@ -149,10 +179,15 @@ SBC_hierarchical_parallel <- function(design_in, prior_in, replicates = 250, tri
     paste0(tools::file_path_sans_ext(fileName), "_temp")
   else NULL
 
-  # --- restart: recover completed replicates from temp_dir ---
+  # Persistent storage alongside fileName (survives node-local temp cleanup)
+  persist_dir  <- if (!is.null(fileName)) dirname(normalizePath(fileName, mustWork = FALSE)) else NULL
+  persist_base <- if (!is.null(fileName)) tools::file_path_sans_ext(basename(fileName)) else NULL
+
+  # --- restart: recover completed replicates ---
   completed_results <- list()
   offset <- 0L
   if (!is.null(temp_dir) && dir.exists(temp_dir)) {
+    # Normal restart: temp_dir survived
     prior_samples <- readRDS(file.path(temp_dir, "prior_samples.rds"))
     prior_mu  <- prior_samples$prior_mu
     prior_var <- prior_samples$prior_var
@@ -174,17 +209,79 @@ SBC_hierarchical_parallel <- function(design_in, prior_in, replicates = 250, tri
               " replicates already complete, running remaining ",
               replicates - offset)
   } else {
-    # Fresh run — draw prior samples and set up temp_dir
-    prior_mu  <- plot(prior_in, design_in, do_plot = FALSE, N = replicates, selection = "mu",
-                      return_mcmc = FALSE, map = FALSE)[[1]]
-    prior_var <- plot(prior_in, design_in, do_plot = FALSE, N = replicates, selection = "Sigma",
-                      return_mcmc = FALSE, remove_constants = FALSE, map = FALSE)[[1]]
-    if (!is.null(temp_dir)) {
+    # Check for persistent rep files written alongside fileName (survive node cleanup)
+    persist_reps <- .sbc_load_persist_reps(persist_dir, persist_base)
+    if (length(persist_reps) > 0) {
+      env <- new.env(parent = emptyenv())
+      load(fileName, envir = env)
+      if (!all(c("prior_mu", "prior_var") %in% ls(env)))
+        stop("Cannot restart: prior_mu/prior_var not found in ", fileName)
+      prior_mu <- env$prior_mu
+      prior_var <- env$prior_var
       dir.create(temp_dir, showWarnings = FALSE)
       saveRDS(list(prior_mu = prior_mu, prior_var = prior_var),
               file.path(temp_dir, "prior_samples.rds"))
+      for (nm in names(persist_reps)) {
+        saveRDS(persist_reps[[nm]], file.path(temp_dir, paste0("rep_", nm, ".rds")))
+        completed_results[[nm]] <- persist_reps[[nm]]
+      }
+      offset <- length(completed_results)
+      if (verbose)
+        message("Restarting from persistent rep files: ", offset, " of ", replicates,
+                " replicates already complete, running remaining ",
+                replicates - offset)
+    } else {
+      # Check for partial SBC_temp saved in fileName (e.g. from an older sequential run)
+      partial_sbc <- NULL
+      if (!is.null(fileName) && file.exists(fileName)) {
+        env <- new.env(parent = emptyenv())
+        loaded_ok <- isTRUE(tryCatch({ load(fileName, envir = env); TRUE }, error = function(e) FALSE))
+        if (loaded_ok && "SBC_temp" %in% ls(env) &&
+            !is.null(env$SBC_temp$rank$mu) && nrow(env$SBC_temp$rank$mu) > 0 &&
+            !is.null(env$SBC_temp$prior$mu) && !is.null(env$SBC_temp$prior$var))
+          partial_sbc <- env$SBC_temp
+      }
+      if (!is.null(partial_sbc)) {
+        n_done    <- min(nrow(partial_sbc$rank$mu), replicates)
+        prior_mu  <- partial_sbc$prior$mu
+        prior_var <- partial_sbc$prior$var
+        dir.create(temp_dir, showWarnings = FALSE)
+        saveRDS(list(prior_mu = prior_mu, prior_var = prior_var),
+                file.path(temp_dir, "prior_samples.rds"))
+        var_col_names <- colnames(partial_sbc$rank$var)
+        for (k in seq_len(n_done)) {
+          result <- list(
+            rank_mu_row   = unname(as.numeric(partial_sbc$rank$mu[k, ])),
+            rank_var_row  = unname(as.numeric(partial_sbc$rank$var[k, ])),
+            var_col_names = var_col_names,
+            rand_effects  = NULL
+          )
+          saveRDS(result, file.path(temp_dir, paste0("rep_", k, ".rds")))
+          completed_results[[as.character(k)]] <- result
+          if (!is.null(persist_dir) && !is.null(persist_base))
+            saveRDS(result, file.path(persist_dir, paste0(persist_base, "_rep_", k, ".rds")))
+        }
+        offset <- n_done
+        # Overwrite fileName with prior_mu/prior_var so the persist_reps branch works on crash-restart
+        if (!is.null(fileName)) save(prior_mu, prior_var, file = fileName)
+        if (verbose)
+          message("Restarting from partial SBC_temp in ", fileName, ": ",
+                  n_done, " of ", replicates, " replicates complete, running remaining ",
+                  replicates - n_done)
+      } else {
+        # Fresh run — draw prior samples and set up temp_dir
+        prior_mu  <- plot(prior_in, design_in, do_plot = FALSE, N = replicates, selection = "mu",
+                          return_mcmc = FALSE, map = FALSE)[[1]]
+        prior_var <- plot(prior_in, design_in, do_plot = FALSE, N = replicates, selection = "Sigma",
+                          return_mcmc = FALSE, remove_constants = FALSE, map = FALSE)[[1]]
+        if (!is.null(temp_dir)) {
+          dir.create(temp_dir, showWarnings = FALSE)
+          saveRDS(list(prior_mu = prior_mu, prior_var = prior_var),
+                  file.path(temp_dir, "prior_samples.rds"))
+        }
+        if (!is.null(fileName)) save(prior_mu, prior_var, file = fileName)
+      }
     }
-    if (!is.null(fileName)) save(prior_mu, prior_var, file = fileName)
   }
 
   par_names    <- names(sampled_pars(design_in))
@@ -197,14 +294,20 @@ SBC_hierarchical_parallel <- function(design_in, prior_in, replicates = 250, tri
       X   = missing_reps,
       FUN = run_SBC_hierarchical_rep,
       design_in, prior_mu, prior_var, trials, n_subjects, prior_in, type, dots, temp_dir, offset,
+      persist_dir, persist_base,
       mc.cores = dots[["cores_per_chain"]]
     )
     # recover from disk for any workers that returned NULL
     for (idx in seq_along(missing_reps)) {
       i <- missing_reps[[idx]]
-      if (is.null(res_new[[idx]]) && !is.null(temp_dir)) {
-        f <- file.path(temp_dir, paste0("rep_", i, ".rds"))
-        if (file.exists(f)) res_new[[idx]] <- readRDS(f)
+      if (is.null(res_new[[idx]])) {
+        f_temp <- if (!is.null(temp_dir)) file.path(temp_dir, paste0("rep_", i, ".rds")) else NULL
+        f_pers <- if (!is.null(persist_dir) && !is.null(persist_base))
+          file.path(persist_dir, paste0(persist_base, "_rep_", i, ".rds")) else NULL
+        if (!is.null(f_temp) && file.exists(f_temp))
+          res_new[[idx]] <- readRDS(f_temp)
+        else if (!is.null(f_pers) && file.exists(f_pers))
+          res_new[[idx]] <- readRDS(f_pers)
       }
       if (!is.null(res_new[[idx]]))
         completed_results[[as.character(i)]] <- res_new[[idx]]
@@ -228,12 +331,15 @@ SBC_hierarchical_parallel <- function(design_in, prior_in, replicates = 250, tri
     SBC_temp <- out
     save(SBC_temp, file = fileName)
     unlink(temp_dir, recursive = TRUE)
+    # Clean up persistent rep files now that the main file is complete
+    .sbc_cleanup_persist_reps(persist_dir, persist_base)
   }
   return(out)
 }
 
 
-run_SBC_subject <- function(rep, design_in, prior_alpha, trials, prior_in, dots, temp_dir, offset = 0L){
+run_SBC_subject <- function(rep, design_in, prior_alpha, trials, prior_in, dots, temp_dir, offset = 0L,
+                            persist_dir = NULL, persist_base = NULL){
   dots[["verbose"]] <- FALSE
   dots[["verboseProgress"]] <- FALSE
   message("Running data set ", sbc_running_counter(rep, temp_dir, offset))
@@ -278,6 +384,8 @@ run_SBC_subject <- function(rep, design_in, prior_alpha, trials, prior_in, dots,
   result <- list(rank = rank, med = med, bias = bias, coverage = coverage)
   if (!is.null(temp_dir))
     saveRDS(result, file.path(temp_dir, paste0("rep_", rep, ".rds")))
+  if (!is.null(persist_dir) && !is.null(persist_base))
+    saveRDS(result, file.path(persist_dir, paste0(persist_base, "_rep_", rep, ".rds")))
   result
 }
 
@@ -322,7 +430,10 @@ SBC_single <- function(
     paste0(tools::file_path_sans_ext(fileName), "_temp")
   else NULL
 
-  # --- restart: recover completed replicates from temp_dir ---
+  persist_dir  <- if (!is.null(fileName)) dirname(normalizePath(fileName, mustWork = FALSE)) else NULL
+  persist_base <- if (!is.null(fileName)) tools::file_path_sans_ext(basename(fileName)) else NULL
+
+  # --- restart: recover completed replicates ---
   completed_results <- list()
   offset <- 0L
   if (!is.null(temp_dir) && dir.exists(temp_dir)) {
@@ -345,12 +456,32 @@ SBC_single <- function(
               " replicates already complete, running remaining ",
               replicates - offset)
   } else {
-    prior_alpha <- parameters(prior_in, N = replicates, selection = "alpha")
-    if (!is.null(temp_dir)) {
+    persist_reps <- .sbc_load_persist_reps(persist_dir, persist_base)
+    if (length(persist_reps) > 0) {
+      env <- new.env(parent = emptyenv())
+      load(fileName, envir = env)
+      if (!"prior_alpha" %in% ls(env))
+        stop("Cannot restart: prior_alpha not found in ", fileName)
+      prior_alpha <- env$prior_alpha
       dir.create(temp_dir, showWarnings = FALSE)
       saveRDS(prior_alpha, file.path(temp_dir, "prior_samples.rds"))
+      for (nm in names(persist_reps)) {
+        saveRDS(persist_reps[[nm]], file.path(temp_dir, paste0("rep_", nm, ".rds")))
+        completed_results[[nm]] <- persist_reps[[nm]]
+      }
+      offset <- length(completed_results)
+      if (verbose)
+        message("Restarting from persistent rep files: ", offset, " of ", replicates,
+                " replicates already complete, running remaining ",
+                replicates - offset)
+    } else {
+      prior_alpha <- parameters(prior_in, N = replicates, selection = "alpha")
+      if (!is.null(temp_dir)) {
+        dir.create(temp_dir, showWarnings = FALSE)
+        saveRDS(prior_alpha, file.path(temp_dir, "prior_samples.rds"))
+      }
+      if (!is.null(fileName)) save(prior_alpha, file = fileName)
     }
-    if (!is.null(fileName)) save(prior_alpha, file = fileName)
   }
 
   missing_reps <- setdiff(1:replicates, as.integer(names(completed_results)))
@@ -362,13 +493,19 @@ SBC_single <- function(
       X = missing_reps,
       FUN = run_SBC_subject,
       design_in, prior_alpha, trials, prior_in, dots, temp_dir, offset,
+      persist_dir, persist_base,
       mc.cores = dots[["cores_per_chain"]]
     )
     for (idx in seq_along(missing_reps)) {
       i <- missing_reps[[idx]]
-      if (is.null(res_new[[idx]]) && !is.null(temp_dir)) {
-        f <- file.path(temp_dir, paste0("rep_", i, ".rds"))
-        if (file.exists(f)) res_new[[idx]] <- readRDS(f)
+      if (is.null(res_new[[idx]])) {
+        f_temp <- if (!is.null(temp_dir)) file.path(temp_dir, paste0("rep_", i, ".rds")) else NULL
+        f_pers <- if (!is.null(persist_dir) && !is.null(persist_base))
+          file.path(persist_dir, paste0(persist_base, "_rep_", i, ".rds")) else NULL
+        if (!is.null(f_temp) && file.exists(f_temp))
+          res_new[[idx]] <- readRDS(f_temp)
+        else if (!is.null(f_pers) && file.exists(f_pers))
+          res_new[[idx]] <- readRDS(f_pers)
       }
       if (!is.null(res_new[[idx]]))
         completed_results[[as.character(i)]] <- res_new[[idx]]
@@ -380,6 +517,7 @@ SBC_single <- function(
   if (!is.null(fileName)) {
     save(SBC, prior_alpha, file = fileName)
     unlink(temp_dir, recursive = TRUE)
+    .sbc_cleanup_persist_reps(persist_dir, persist_base)
   }
   return(SBC)
 }

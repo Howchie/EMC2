@@ -43,6 +43,8 @@ get_missing <- function(supplied, data, bound_name, default,type) {
 
 #' Add information about missing values to data and modify/filter accordingly.
 #'
+#' @details
+#'
 #' Columns corresponding to LC, UT, LC, UC, and pContaminant arguments are added
 #' to the return, specifying, respectively, if a row is subject to lower or upper
 #' truncation, lower or upper censoring, or contamination with the given probability.
@@ -75,20 +77,23 @@ get_missing <- function(supplied, data, bound_name, default,type) {
 #' @param rt_resolution A double, see make_emc, specified here so binning of rt and LC/UC/LT/UT is consistent.
 #'        The default is 1/60 as in make_emc, but when make_missing is called by make_data the default is to
 #'        do nothing unless an explicit is value passed in the missing list.
+#' @param digits Integer. Number of decimal places for verbose output, default 2.
 #' @return A filtered and modified data frame with added/updated LC, UC, LT and UT columns
 #' @examples
-#' First make some data
+#' \dontrun{
+#' # First make some data
 #'   designRDM <- design(model = RDM,
 #'   factors = list(subjects = 1:2, S = c("left", "right")),Rlevels = c("left", "right"),
 #'   matchfun = function(d) as.numeric(d$S) == as.numeric(d$lR),
 #'   formula = list(B ~ 1, v ~ lM, A ~ 1, t0 ~ 1, s ~ lM),
 #'   constants = c(s = log(1)))
-#' p_vector <-log(c(B=2,A=.5,t0=0.2,v=1,v_lMTRUE=2,s_lMTRUE=.8)
+#' p_vector <- log(c(B=2,A=.5,t0=0.2,v=1,v_lMTRUE=2,s_lMTRUE=.8))
 #' dat <- make_data(p_vector, designRDM,n_trials = 10)
 #'
-#' Filter data frame without LT/UC/LT/UT columns (as in most real data files)
+#' # Filter data frame without LT/UC/LT/UT columns (as in most real data files)
 #' data <- dat
 #' mdata <- make_missing(dat,LT=.7,LC=.75,UC=1.5,UT=1.6,verbose=TRUE)
+#' }
 #' @export
 
 make_missing <- function(data, LT = NULL, UT = NULL, LC = NULL, UC = NULL,
@@ -156,9 +161,9 @@ make_missing <- function(data, LT = NULL, UT = NULL, LC = NULL, UC = NULL,
   if (any((UC_eff - UT_eff) > tol_u & UC_eff != Inf, na.rm = TRUE)) stop("UC > UT not allowed")
 
   # Only keep trials in LT-UT (inclusive) or infinite or NA
-  cutL <- is.finite(data$rt) & (data$rt < LT_eff)
+  cutL <- is.finite(data$rt) & (data$rt < LT_eff & is.finite(data$rt))
   cutL[is.na(cutL)] <- FALSE; cutL[no_truncate] <- FALSE
-  cutU <- (data$rt > UT_eff)
+  cutU <- (data$rt > UT_eff & is.finite(data$rt))
   cutU[is.na(cutU)] <- FALSE; cutU[no_truncate] <- FALSE
   if (verbose) {
     if (!all(LT_eff==0)) {
@@ -174,7 +179,7 @@ make_missing <- function(data, LT = NULL, UT = NULL, LC = NULL, UC = NULL,
       print(round(100*stat,digits))
     }
   }
-  
+
   # Truncate
   data <- data[!cutL & !cutU, ]
   LT_eff <- LT_eff[!cutL & !cutU]
@@ -234,6 +239,35 @@ make_missing <- function(data, LT = NULL, UT = NULL, LC = NULL, UC = NULL,
 }
 
 
+check_missing <- function(TC,data=NULL,design=NULL) {
+  # This handles censoring and truncation where TC is not specified.
+  # First check data, then design
+  if (is.null(TC)) {
+    TC <- list()
+    TC <- add_defaults(TC,LT=0,LC=0,UT=Inf,UC=Inf,
+      no_truncate=FALSE,no_censor=FALSE,verbose=FALSE,digits=2,
+      LCresponse=FALSE,UCresponse=FALSE,LCdirection=TRUE,UCdirection=TRUE,
+      pContaminant=NULL,rt_resolution=NULL
+    )
+    if (!is.null(data)) {
+      for (i in c("LT","LC","UC","UT")) {
+        if (!is.null(data[[i]])) TC[[i]] <- data[[i]]
+      }
+    } else if (!is.null(design) && !is.null(design$TC)) {
+        for (i in names(TC)) TC[[i]] <- design$TC[[i]]
+    }
+  } else {
+    if (!is.list(TC)) stop("TC must be a list")
+    TC <- add_defaults(TC,LT=0,LC=0,UT=Inf,UC=Inf,
+      no_truncate=FALSE,no_censor=FALSE,verbose=FALSE,digits=2,
+      LCresponse=FALSE,UCresponse=FALSE,LCdirection=TRUE,UCdirection=TRUE,
+      pContaminant=NULL,rt_resolution=NULL
+    )
+  }
+  TC
+}
+
+
 #' Simulate Data
 #'
 #' Simulates data based on a model design and a parameter vector (`p_vector`) by one of two methods:
@@ -258,7 +292,8 @@ make_missing <- function(data, LT = NULL, UT = NULL, LC = NULL, UC = NULL,
 #' default list structure: list(p=.25,SSD0=.25,stairstep=.05,stairmin=0,stairmax=Inf)
 #' @param functions List of functions to create factors used in data generation.
 #' @param return_functions Logical, should factors created by functions be returned, default FALSE.
-#' @param missing List named with the arguments of the make_missing function (except data).
+#' @param TC List of truncation/censoring arguments passed to \code{make_missing}
+#'   (e.g. \code{list(LT=0.1, UC=2)}). NULL means no truncation or censoring is applied.
 #' @param ... Additional optional arguments
 #' @return A data frame with simulated data
 #' @examples
@@ -295,32 +330,9 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
   if (!is.null(staircase)){
     staircase <- check_staircase(staircase)
   }
+
   # This handles censoring and truncation where TC is not specified -- first check data, then design as a fallback (need to agree on the accepted order)
-  if (is.null(TC)) {
-    TC <- list()
-    TC <- add_defaults(TC,
-      no_truncate=FALSE,no_censor=FALSE,verbose=FALSE,digits=2,
-      LCresponse=FALSE,UCresponse=FALSE,LCdirection=TRUE,UCdirection=TRUE,
-      pContaminant=NULL,rt_resolution=NULL
-    )
-    if (is.null(data)) {
-      missing_cols <- c("LT","LC","UC","UT")
-    } else {
-      missing_cols <- c("LT","LC","UC","UT")[!(c("LT","LC","UC","UT") %in% names(data))]
-    }
-    if (length(missing_cols) > 0) {
-      for (nm in missing_cols) {
-        if (!is.null(design[[nm]])) TC[[nm]] <- design[[nm]]
-      }
-    }
-  } else {
-    if (!is.list(TC)) stop("TC must be a list")
-    TC <- add_defaults(TC,
-      no_truncate=FALSE,no_censor=FALSE,verbose=FALSE,digits=2,
-      LCresponse=FALSE,UCresponse=FALSE,LCdirection=TRUE,UCdirection=TRUE,
-      pContaminant=NULL,rt_resolution=NULL
-    )
-  }
+  TC <- check_missing(TC,design=design,data=data)
 
   # check_bounds <- FALSE
 
@@ -521,7 +533,7 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
   } else if (any(names(data)=="LogicalRule") && !is.null(c_name) && grepl("LogicalRules", c_name)) {
     Rrt <- LogicalRules_rfun(data, pars, model)
   } else Rrt <- model()$rfun(data,pars)
-  
+
   if (is.null(TC$pContaminant) & any(dimnames(pars)[[2]]=="pContaminant"))
     TC$pContaminant <- pars[,"pContaminant"][data$lR==levels(data$lR)[1]]
 
@@ -537,8 +549,8 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
     attr(pars, "staircase") <- ssd_meta
   }
   for (i in dimnames(Rrt)[[2]]) data[[i]] <- Rrt[, i]
-  
-  
+
+
 
   data <- make_missing(data,LT=TC$LT,LC=TC$LC,UC=TC$UC,UT=TC$UT,
     LCresponse = TC$LCresponse, UCresponse = TC$UCresponse,
