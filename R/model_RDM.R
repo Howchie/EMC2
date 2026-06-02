@@ -567,14 +567,16 @@ RDMGBM <- function(erlang_shape = 1L, erlang_type = "none") {
     t0 = c(0.05, Inf), s = c(0, Inf)
   )
   exception <- c(A = 0, v = 0)
-  
+
   p_types  <- c(p_types,  mG = log(1))
   transform <- c(transform, mG = "exp")
   minmax   <- cbind(minmax, mG = c(1e-4, Inf))
+  exception <- c(exception, mG = 0)
 
   p_types  <- c(p_types,  mK = log(1))
   transform <- c(transform, mK = "exp")
   minmax   <- cbind(minmax, mK = c(1e-4, Inf))
+  exception <- c(exception, mK = 0)
 
   if (erlang_mixed) {
     p_types  <- c(p_types,  omega = qnorm(0.5))
@@ -582,7 +584,7 @@ RDMGBM <- function(erlang_shape = 1L, erlang_type = "none") {
     minmax   <- cbind(minmax, omega = c(0, 1))
     exception <- c(exception, omega = 0)
   }
-  
+
   p_types  <- c(p_types,  pContaminant = qnorm(0))
   transform <- c(transform, pContaminant = "pnorm")
   minmax   <- cbind(minmax, pContaminant = c(0.001, 0.999))
@@ -607,8 +609,10 @@ RDMGBM <- function(erlang_shape = 1L, erlang_type = "none") {
     Ttransform = function(pars, dadm) {
       lambda_factor <- if (erlang_shape_cpp == 2L) 2 else 1
       n <- nrow(pars)
-      lg <- if (has_guess) lambda_factor / pars[, "mG"] else rep(0, n)
-      lk <- if (has_kill)  lambda_factor / pars[, "mK"] else rep(0, n)
+      mG_val <- pars[, "mG"]
+      mK_val <- pars[, "mK"]
+      lg <- if (has_guess) ifelse(mG_val <= 0, 0, lambda_factor / mG_val) else rep(0, n)
+      lk <- if (has_kill)  ifelse(mK_val <= 0, 0, lambda_factor / mK_val) else rep(0, n)
       timed <- cbind(lambda_g = lg, lambda_k = lk)
       extra_drop <- c("v", "B", "A", "t0", "s", "mG", "mK", "omega")
       extra <- pars[, setdiff(colnames(pars), extra_drop), drop = FALSE]
@@ -711,10 +715,12 @@ RDMSWTN <- function(erlang_shape = 1L, erlang_type = "none", posdrift = TRUE) {
   p_types  <- c(p_types,  mG = log(1))
   transform <- c(transform, mG = "exp")
   minmax   <- cbind(minmax, mG = c(1e-4, Inf))
+  exception <- c(exception, mG = 0)
 
   p_types  <- c(p_types,  mK = log(1))
   transform <- c(transform, mK = "exp")
   minmax   <- cbind(minmax, mK = c(1e-4, Inf))
+  exception <- c(exception, mK = 0)
 
   if (erlang_mixed) {
     p_types  <- c(p_types,  omega = qnorm(0.5))
@@ -740,8 +746,10 @@ RDMSWTN <- function(erlang_shape = 1L, erlang_type = "none", posdrift = TRUE) {
     Ttransform = function(pars, dadm) {
       lambda_factor <- if (erlang_shape_cpp == 2L) 2 else 1
       n <- nrow(pars)
-      lg <- if (has_guess) lambda_factor / pars[, "mG"] else rep(0, n)
-      lk <- if (has_kill)  lambda_factor / pars[, "mK"] else rep(0, n)
+      mG_val <- pars[, "mG"]
+      mK_val <- pars[, "mK"]
+      lg <- if (has_guess) ifelse(mG_val <= 0, 0, lambda_factor / mG_val) else rep(0, n)
+      lk <- if (has_kill)  ifelse(mK_val <= 0, 0, lambda_factor / mK_val) else rep(0, n)
       timed <- cbind(lambda_g = lg, lambda_k = lk)
       extra_drop <- c("v", "B", "A", "t0", "s", "sv", "mG", "mK", "omega")
       extra <- pars[, setdiff(colnames(pars), extra_drop), drop = FALSE]

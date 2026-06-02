@@ -196,6 +196,259 @@ static inline double stop_logsurv_rdex_fn(double q, NumericMatrix P) {
   return ptexg(q, P(0, 5), P(0, 6), P(0, 7), P(0, 10), R_PosInf, false, true);
 }
 
+static inline double sum_log_terms(const NumericVector& x) {
+  double out = 0.0;
+  for (int i = 0; i < x.size(); ++i) out += x[i];
+  return out;
+}
+
+static inline double ss_log_go_density_for_winner(
+    double rt,
+    const NumericMatrix& P,
+    const LogicalVector& is_go,
+    int winner_idx,
+    ss_go_pdf_fn go_lpdf_ptr,
+    ss_go_pdf_fn go_lccdf_ptr,
+    double min_ll
+) {
+  const int n_acc = P.nrow();
+  NumericVector rt_go(n_acc, rt);
+  LogicalVector go_win_mask(n_acc, false);
+  LogicalVector go_loss_mask(n_acc, false);
+  int go_loss_count = 0;
+  for (int i = 0; i < n_acc; ++i) {
+    const bool go_i = (is_go[i] == TRUE);
+    if (!go_i) continue;
+    if (i == winner_idx) go_win_mask[i] = true;
+    else {
+      go_loss_mask[i] = true;
+      ++go_loss_count;
+    }
+  }
+
+  NumericVector lw = go_lpdf_ptr(rt_go, P, go_win_mask, min_ll);
+  double out = (lw.size() > 0) ? sum_log_terms(lw) : R_NegInf;
+  if (!R_FINITE(out)) return R_NegInf;
+
+  if (go_loss_count == 0) return out;
+
+  NumericVector ls = go_lccdf_ptr(rt_go, P, go_loss_mask, min_ll);
+  return out + sum_log_terms(ls);
+}
+
+static inline double ss_log_st_density_for_winner(
+    double rt,
+    double SSD,
+    const NumericMatrix& P,
+    const LogicalVector& is_st,
+    int winner_idx,
+    ss_go_pdf_fn go_lpdf_ptr,
+    ss_go_pdf_fn go_lccdf_ptr,
+    double min_ll
+) {
+  const int n_acc = P.nrow();
+  double rt_st_val = rt - SSD;
+  if (rt_st_val < 0.0) rt_st_val = 0.0;
+  NumericVector rt_st(n_acc, rt_st_val);
+  LogicalVector st_win_mask(n_acc, false);
+  LogicalVector st_loss_mask(n_acc, false);
+  int st_loss_count = 0;
+  for (int i = 0; i < n_acc; ++i) {
+    const bool st_i = (is_st[i] == TRUE);
+    if (!st_i) continue;
+    if (i == winner_idx) st_win_mask[i] = true;
+    else {
+      st_loss_mask[i] = true;
+      ++st_loss_count;
+    }
+  }
+
+  NumericVector lw = go_lpdf_ptr(rt_st, P, st_win_mask, min_ll);
+  double out = (lw.size() > 0) ? sum_log_terms(lw) : R_NegInf;
+  if (!R_FINITE(out)) return R_NegInf;
+
+  if (st_loss_count == 0) return out;
+
+  NumericVector ls = go_lccdf_ptr(rt_st, P, st_loss_mask, min_ll);
+  return out + sum_log_terms(ls);
+}
+
+static inline double ss_trial_log_response_density(
+    double rt,
+    const NumericMatrix& P,
+    const NumericVector& lR_trial,
+    const LogicalVector& is_go,
+    const LogicalVector& is_st,
+    double SSD,
+    bool stop_signal_presented,
+    double tf,
+    double gf,
+    ss_go_pdf_fn go_lpdf_ptr,
+    ss_go_pdf_fn go_lccdf_ptr,
+    ss_stop_surv_fn stop_logsurv_ptr,
+    ss_stop_success_fn stop_success_ptr,
+    double min_ll,
+    int response_code = NA_INTEGER
+) {
+  const int n_acc = P.nrow();
+  const bool response_known = response_code != NA_INTEGER;
+  int n_accG = 0;
+  int n_accST = 0;
+  for (int i = 0; i < n_acc; ++i) {
+    if (is_go[i] == TRUE) ++n_accG;
+    if (is_st[i] == TRUE) ++n_accST;
+  }
+
+  double log_go_any = R_NegInf;
+  for (int i = 0; i < n_acc; ++i) {
+    if (is_go[i] != TRUE) continue;
+    if (response_known && lR_trial[i] != response_code) continue;
+
+    const double go_lprob = ss_log_go_density_for_winner(
+      rt, P, is_go, i, go_lpdf_ptr, go_lccdf_ptr, min_ll
+    );
+    if (!R_FINITE(go_lprob)) continue;
+
+    double log_term = log1m(gf) + go_lprob;
+    if (stop_signal_presented && rt > SSD) {
+      double rt_eff = rt - SSD;
+      if (rt_eff < 0.0) rt_eff = 0.0;
+      double log_stop_surv = stop_logsurv_ptr(rt_eff, P);
+      if (!R_FINITE(log_stop_surv)) log_stop_surv = min_ll;
+
+      double st_loss_sum = 0.0;
+      if (n_accST > 0) {
+        NumericVector rt_st(n_acc, rt_eff);
+        LogicalVector st_loss_mask(n_acc, false);
+        int st_loss_count = 0;
+        for (int j = 0; j < n_acc; ++j) {
+          st_loss_mask[j] = (is_st[j] == TRUE);
+          if (st_loss_mask[j] == TRUE) ++st_loss_count;
+        }
+        if (st_loss_count > 0) {
+          NumericVector ls_st = go_lccdf_ptr(rt_st, P, st_loss_mask, min_ll);
+          st_loss_sum = sum_log_terms(ls_st);
+        }
+      }
+
+      const double comp_tf = go_lprob;
+      const double comp_notf = go_lprob + log_stop_surv + st_loss_sum;
+      log_term = log1m(gf) + log_mix(tf, comp_tf, comp_notf);
+    }
+
+    log_go_any = log_sum_exp(log_go_any, log_term);
+  }
+
+  if (!stop_signal_presented || n_accST == 0) return log_go_any;
+
+  double log_st_any = R_NegInf;
+  NumericMatrix P_go = submat_rcpp(P, is_go);
+  for (int i = 0; i < n_acc; ++i) {
+    if (is_st[i] != TRUE) continue;
+    if (response_known && lR_trial[i] != response_code) continue;
+    if (rt <= SSD) continue;
+
+    const double st_base = ss_log_st_density_for_winner(
+      rt, SSD, P, is_st, i, go_lpdf_ptr, go_lccdf_ptr, min_ll
+    );
+    if (!R_FINITE(st_base)) continue;
+
+    double go_loss_sum = 0.0;
+    if (n_accG > 0) {
+      NumericVector rt_go(n_acc, rt);
+      NumericVector ls_go = go_lccdf_ptr(rt_go, P, is_go, min_ll);
+      go_loss_sum = sum_log_terms(ls_go);
+    }
+
+    double rt_eff = rt - SSD;
+    if (rt_eff < 0.0) rt_eff = 0.0;
+    double log_pstop = stop_success_ptr(SSD, P_go, min_ll, rt_eff,
+                                        100, 1e-8, 1e-6, 8.0, 16.0);
+    if (!R_FINITE(log_pstop)) log_pstop = R_NegInf;
+
+    const double term_gf = std::log(gf) + st_base;
+    const double term_stop_win = log1m(gf) + log_pstop + st_base;
+    const double term_stop_lose =
+      log1m(gf) + log1m_exp(log_pstop) + st_base + go_loss_sum;
+    const double log_term =
+      log1m(tf) + log_sum_exp(term_gf, log_sum_exp(term_stop_win, term_stop_lose));
+
+    log_st_any = log_sum_exp(log_st_any, log_term);
+  }
+
+  return log_sum_exp(log_go_any, log_st_any);
+}
+
+struct SsLcIntegrandData {
+  NumericMatrix P;
+  NumericVector lR_trial;
+  LogicalVector is_go;
+  LogicalVector is_st;
+  double SSD;
+  bool stop_signal_presented;
+  double tf;
+  double gf;
+  ss_go_pdf_fn go_lpdf_ptr;
+  ss_go_pdf_fn go_lccdf_ptr;
+  ss_stop_surv_fn stop_logsurv_ptr;
+  ss_stop_success_fn stop_success_ptr;
+  double min_ll;
+  int response_code;
+};
+
+static double ss_lc_integrand(double x, void* params) {
+  SsLcIntegrandData* d = static_cast<SsLcIntegrandData*>(params);
+  const double logf = ss_trial_log_response_density(
+    x, d->P, d->lR_trial, d->is_go, d->is_st, d->SSD, d->stop_signal_presented,
+    d->tf, d->gf, d->go_lpdf_ptr, d->go_lccdf_ptr, d->stop_logsurv_ptr,
+    d->stop_success_ptr, d->min_ll, d->response_code
+  );
+  if (!R_FINITE(logf)) return 0.0;
+  return std::exp(logf);
+}
+
+static inline double ss_integrate_lc_response_mass(
+    double lower,
+    double upper,
+    const NumericMatrix& P,
+    const NumericVector& lR_trial,
+    const LogicalVector& is_go,
+    const LogicalVector& is_st,
+    double SSD,
+    bool stop_signal_presented,
+    double tf,
+    double gf,
+    ss_go_pdf_fn go_lpdf_ptr,
+    ss_go_pdf_fn go_lccdf_ptr,
+    ss_stop_surv_fn stop_logsurv_ptr,
+    ss_stop_success_fn stop_success_ptr,
+    double min_ll,
+    int response_code = NA_INTEGER
+) {
+  if (!(upper > lower)) return min_ll;
+
+  SsLcIntegrandData data{
+    P, lR_trial, is_go, is_st, SSD, stop_signal_presented, tf, gf,
+    go_lpdf_ptr, go_lccdf_ptr, stop_logsurv_ptr, stop_success_ptr, min_ll,
+    response_code
+  };
+
+  gsl_function F;
+  F.function = &ss_lc_integrand;
+  F.params = &data;
+
+  static thread_local GslWorkspacePtr ws_ptr(nullptr, &gsl_integration_workspace_free);
+  gsl_integration_workspace* workspace = ensure_gsl_workspace(ws_ptr, 200);
+  double res = 0.0;
+  double err = 0.0;
+  gsl_error_handler_t* old_handler = gsl_set_error_handler_off();
+  int status = gsl_integration_qags(&F, lower, upper, 1e-8, 1e-6, 200, workspace, &res, &err);
+  gsl_set_error_handler(old_handler);
+
+  if (status != GSL_SUCCESS || !R_FINITE(res) || res <= 0.0) return min_ll;
+  return std::log(res);
+}
+
 struct RaceModelAdapter {
   RacePdf1Fun pdf1_ptr = nullptr;
   RaceCdf1Fun cdf1_ptr = nullptr;
@@ -519,6 +772,7 @@ double c_log_likelihood_ss(
   NumericVector SSD = data["SSD"];
   NumericVector lR = data["lR"];
   LogicalVector winner = data["winner"];
+  NumericVector LT = get_col_with_default(data, "LT", 0.0);
   NumericVector UC = get_col_with_default(data, "UC", R_PosInf);
   NumericVector LC = get_col_with_default(data, "LC", 0.0);
   bool has_lI = data.containsElementNamed("lI");
@@ -549,6 +803,7 @@ double c_log_likelihood_ss(
     int end_row   = (trial + 1) * n_acc - 1;
     // basic bounds are guaranteed by correct n_trials passed into this function
     NumericMatrix P = pars(Range(start_row, end_row), _);
+    NumericVector lR_trial = lR[Range(start_row, end_row)];
     IntegerVector lI_trial = lI[Range(start_row, end_row)];
     LogicalVector is_go(n_acc, true), is_st(n_acc, false);
     // determine go/ST accumulators if present
@@ -598,6 +853,17 @@ double c_log_likelihood_ss(
     for (int i = 0; i < n_acc; i++) {
       go_win_mask[i] = (win_mask[i] && is_go[i]);
       go_loss_mask[i] = (!win_mask[i] && is_go[i]);
+    }
+
+    bool lower_censored = (rt == R_NegInf);
+    if (lower_censored) {
+      const double upper = LC[start_row];
+      lls[trial] = ss_integrate_lc_response_mass(
+        LT[start_row], upper, P, lR_trial, is_go, is_st, SSD[start_row], stop_signal_presented,
+        tf, gf, go_lpdf_ptr, go_lccdf_ptr, stop_logsurv_ptr, stop_success_ptr,
+        min_ll, response_observed ? R[start_row] : NA_INTEGER
+      );
+      continue;
     }
     
     if (!response_observed) {

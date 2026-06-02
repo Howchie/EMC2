@@ -516,10 +516,12 @@ BAwL <- function(posdrift = TRUE, erlang = 1L,
   p_types <- c(p_types, mG = log(1))
   transform <- c(transform, mG = "exp")
   minmax <- cbind(minmax, mG = c(1e-4, Inf))
+  exception <- c(exception, mG = 0)
 
   p_types <- c(p_types, mK = log(1))
   transform <- c(transform, mK = "exp")
   minmax <- cbind(minmax, mK = c(1e-4, Inf))
+  exception <- c(exception, mK = 0)
 
   if (erlang_mixed) {
     p_types <- c(p_types, omega = qnorm(0.5))
@@ -527,7 +529,7 @@ BAwL <- function(posdrift = TRUE, erlang = 1L,
     minmax <- cbind(minmax, omega = c(0, 1))
     exception <- c(exception, omega = 0)
   }
-  
+
   p_types <- c(p_types, pContaminant = qnorm(0))
   transform <- c(transform, pContaminant = "pnorm")
   minmax <- cbind(minmax, pContaminant = c(0.001, 0.999))
@@ -545,8 +547,10 @@ BAwL <- function(posdrift = TRUE, erlang = 1L,
     Ttransform = function(pars, dadm) {
       lambda_factor <- if (erlang_shape_cpp == 2L) 2 else 1
       n <- nrow(pars)
-      lg <- if (has_guess) lambda_factor / pars[, "mG"] else rep(0, n)
-      lk <- if (has_kill)  lambda_factor / pars[, "mK"] else rep(0, n)
+      mG_val <- pars[, "mG"]
+      mK_val <- pars[, "mK"]
+      lg <- if (has_guess) ifelse(mG_val <= 0, 0, lambda_factor / mG_val) else rep(0, n)
+      lk <- if (has_kill)  ifelse(mK_val <= 0, 0, lambda_factor / mK_val) else rep(0, n)
       timed <- cbind(lambda_g = lg, lambda_k = lk)
       extra_drop <- c("v", "sv", "B", "A", "t0", "k", "mG", "mK", "omega")
       extra <- pars[, setdiff(colnames(pars), extra_drop), drop = FALSE]

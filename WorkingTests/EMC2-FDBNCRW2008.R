@@ -1,10 +1,3 @@
-## Production EMC2 script for the Forstmann et al. (2008) perceptual data.
-## This mirrors the TRDM specification used in the paper:
-## - race model with an additional timing accumulator
-## - evidence drift and threshold vary by speed/neutral/accuracy
-## - timer threshold and timer onset are fixed
-## - across-trial drift variability is fixed to zero
-
 rm(list = ls())
 library(EMC2)
 library(dplyr)
@@ -46,8 +39,6 @@ design_TRDM <- design(
   constants = c(
     A = log(0),
     sv = log(0),
-    lambda_g = log(0),
-    lambda_k = log(0),
     "B_saspeed:E" = log(1),
     "B_Time" = log(1),
     t0_Time = log(0.05)
@@ -69,7 +60,7 @@ fit_TRDM <- fit(emc, cores_for_chains=3,cores_per_chain = 3,stop_criteria = list
     flat_p1 = 1/3,
     flat_p2 = 1/3,
     max_sample_iter = 5000
-  )), max_tries = 50, fileName  = "samples.RData",rhat_version = "new")
+  )), max_tries = 50, fileName  = "samples.RData",rhat_version = "new", save_pw_ll = TRUE)
 pp_TRDM = predict(fit_TRDM,cores=4)
 
 summary_TRDM = pp_TRDM %>%
@@ -90,7 +81,7 @@ summary_TRDM = pp_TRDM %>%
 plot_cdf(data_trdm, post_predict=pp_TRDM, functions=list(Correct=Cfun), defective_factor = "Correct", factors="sa")
 plot_subj_estimates(data_trdm,pp_TRDM,factor="sa")
 
-save.image(file = "modelFits/fit_TRDM.RData")
+save.image(file = "modelFits/fit.RData")
 
 ## Fit the Erlang Process model with exponential timing (constant hazard)
 load("data/FDBNCRW2008.RData")
@@ -119,12 +110,11 @@ design_Erlang1 <- design(
     s ~ 1,
     A ~ 1,
     sv ~ 1,
-    lambda_g ~ 0 + sa
+    mG ~ 0 + sa
   ),
   constants = c(
     A = log(0),
     sv = log(0),
-    lambda_k = log(0),
     "B_saspeed" = log(1)
   )
 )
@@ -141,7 +131,7 @@ fit_Erlang1 <- fit(emc, cores_for_chains=3,cores_per_chain = 4,stop_criteria = l
     flat_p1 = 1/3,
     flat_p2 = 1/3,
     max_sample_iter = 5000
-  )), max_tries = 50, fileName  = "samples.RData",rhat_version = "new")
+  )), max_tries = 50, fileName  = "samples.RData",rhat_version = "new", save_pw_ll = TRUE)
 
 pp_Erlang1 = predict(fit_Erlang1)
 
@@ -162,7 +152,7 @@ summary_Erlang1 = pp_Erlang1 %>%
 
 plot_cdf(data, post_predict=pp_Erlang1, functions=list(Correct=Cfun), defective_factor = "Correct", factors="sa")
 plot_subj_estimates(data,pp_Erlang1,factor="sa")
-save.image(file = "modelFits/fit_Erlang1.RData")
+save.image(file = "modelFits/fit.RData")
 
 ## Erlang2
 design_Erlang2 <- design(
@@ -182,12 +172,11 @@ design_Erlang2 <- design(
     s ~ 1,
     A ~ 1,
     sv ~ 1,
-    lambda_g ~ 0 + sa
+    mG ~ 0 + sa
   ),
   constants = c(
     A = log(0),
     sv = log(0),
-    lambda_k = log(0),
     "B_saspeed" = log(1)
   )
 )
@@ -204,7 +193,7 @@ fit_Erlang2 <- fit(emc, cores_for_chains=3,cores_per_chain = 4,stop_criteria = l
     flat_p1 = 1/3,
     flat_p2 = 1/3,
     max_sample_iter = 5000
-  )), max_tries = 50, fileName  = "samples.RData",rhat_version = "new")
+  )), max_tries = 50, fileName  = "samples.RData",rhat_version = "new", save_pw_ll = TRUE)
 
 pp_Erlang2 = predict(fit_Erlang2)
 
@@ -226,7 +215,71 @@ summary_Erlang2 = pp_Erlang2 %>%
 plot_cdf(data, post_predict=pp_Erlang2, functions=list(Correct=Cfun), defective_factor = "Correct", factors="sa")
 plot_subj_estimates(data,pp_Erlang2,factor="sa")
 
-save.image(file = "modelFits/fit_Erlang2.RData")
+save.image(file = "modelFits/fit.RData")
+
+## Erlang Mixed
+design_Erlang3 <- design(
+  data = data,
+  factors = list(Rlevels=c("left","right")),
+  model = RDMSWTN(erlang_shape = "mixed", erlang_type = "local_guess", posdrift=FALSE),
+  matchfun = matchfun,
+  functions = list(match = function(d){dplyr::case_when(d$lM==TRUE ~ .5,
+                                                        d$lM==FALSE ~-.5)},
+                   Resp = function(d){dplyr::case_when(d$lR=="left" ~ 0.5,
+                                                       d$lR=="right" ~ -.5)}),
+  Rlevels = c("left", "right"),
+  formula = list(
+    v ~ 0 + sa + match,
+    B ~ 0 + sa + Resp,
+    t0 ~ 0 + sa,
+    s ~ 1,
+    A ~ 1,
+    sv ~ 1,
+    mG ~ 0 + sa,
+    omega ~ 0 + sa
+  ),
+  constants = c(
+    A = log(0),
+    sv = log(0),
+    "B_saspeed" = log(1)
+  )
+)
+## Set priors
+prior_Erlang3 = make_priors(design_Erlang3)
+emc <- make_emc(data, design_Erlang3, n_chains = 3, compress = TRUE, prior=prior_Erlang3)
+
+fit_Erlang3 <- fit(emc, cores_for_chains=3,cores_per_chain = 4,stop_criteria = list(
+  sample = list(
+    iter = 1000,
+    max_gd = 1.10,
+    max_flat_loc = .5,
+    flat_selection = c("alpha", "subj_ll","theta_mu"),
+    flat_p1 = 1/3,
+    flat_p2 = 1/3,
+    max_sample_iter = 5000
+  )), max_tries = 50, fileName  = "samples.RData",rhat_version = "new", save_pw_ll = TRUE)
+
+pp_Erlang3 = predict(fit_Erlang3)
+
+summary_Erlang3 = pp_Erlang3 %>%
+  mutate(Correct=Cfun(.)) %>%
+  group_by(sa) %>%
+  summarise(pred_Acc = mean(Correct),
+            pred_Rt_C = mean(rt[Correct]),
+            pred_RT_E = mean(rt[!Correct]),
+            TimedRespErrors = mean(isTime[!Correct]),
+            TimedRespCorrect = mean(isTime[Correct])) %>%
+  left_join(data %>%
+              mutate(Correct=Cfun(.)) %>%
+              group_by(sa) %>%
+              summarise(dat_Acc = mean(Correct),
+                        dat_Rt_C = mean(rt[Correct]),
+                        dat_RT_E = mean(rt[!Correct])))
+
+plot_cdf(data, post_predict=pp_Erlang3, functions=list(Correct=Cfun), defective_factor = "Correct", factors="sa")
+plot_subj_estimates(data,pp_Erlang3,factor="sa")
+
+save.image(file = "modelFits/fit.RData")
 
 ## RDM with no extra accumulator for comparison
 design_RDM <- design(
@@ -249,8 +302,6 @@ design_RDM <- design(
   constants = c(
     A = log(0),
     sv = log(0),
-    lambda_g = log(0),
-    lambda_k = log(0),
     "B_saspeed" = log(1)
   )
 )
@@ -267,7 +318,7 @@ fit_RDM <- fit(emc, cores_for_chains=3,cores_per_chain = 4,stop_criteria = list(
     flat_p1 = 1/3,
     flat_p2 = 1/3,
     max_sample_iter = 5000
-  )), max_tries = 50, fileName  = "samples.RData",rhat_version = "new")
+  )), max_tries = 50, fileName  = "samples.RData",rhat_version = "new", save_pw_ll = TRUE)
 pp_RDM = predict(fit_RDM)
 
 summary_RDM = pp_RDM %>%
@@ -276,7 +327,7 @@ summary_RDM = pp_RDM %>%
   summarise(pred_Acc = mean(Correct),
             pred_Rt_C = mean(rt[Correct]),
             pred_RT_E = mean(rt[!Correct]),
-            TimedResp = 0) %>%
+            TimedRespErrors = 0, TimedRespCorrect=0) %>%
   left_join(data %>%
               mutate(Correct=Cfun(.)) %>%
               group_by(sa) %>%
@@ -287,11 +338,11 @@ summary_RDM = pp_RDM %>%
 plot_cdf(data, post_predict=pp_RDM, functions=list(Correct=Cfun), defective_factor = "Correct", factors="sa")
 plot_subj_estimates(data,pp_RDM,factor="sa")
 
-save.image(file = "modelFits/fit_RDM.RData")
+save.image(file = "modelFits/fit.RData")
 
-models_list = list(fit_TRDM,fit_Erlang1,fit_Erlang2, fit_RDM)
-model_comparison = compare(models_list, cores=4,cores_per_prop = 4)
-
+models_list = list(fit_TRDM,fit_Erlang1,fit_Erlang2, fit_Erlang3, fit_RDM)
+model_comparison = compare(models_list, WAIC = TRUE, LOO = TRUE, cores=4,cores_per_prop = 4)
+model_comparison_subj = compare(models_list, WAIC = TRUE, LOO = TRUE, pointwise = "subject", cores=4,cores_per_prop = 4)
 
 ## Plot all fits
 pdf("FitPlots.pdf")
@@ -301,6 +352,9 @@ plot_cdf(data, post_predict=pp_Erlang1, functions=list(Correct=Cfun), defective_
 mtext("Erlang 1",outer=TRUE,padj=2,side=3)
 plot_cdf(data, post_predict=pp_Erlang2, functions=list(Correct=Cfun), defective_factor = "Correct", factors="sa")
 mtext("Erlang 2",outer=TRUE,padj=2,side=3)
+plot_cdf(data, post_predict=pp_Erlang3, functions=list(Correct=Cfun), defective_factor = "Correct", factors="sa")
+mtext("Erlang 3",outer=TRUE,padj=2,side=3)
 plot_cdf(data, post_predict=pp_RDM, functions=list(Correct=Cfun), defective_factor = "Correct", factors="sa")
 mtext("RDM (no T)",outer=TRUE,padj=2,side=3)
 dev.off()
+save.image(file = "modelFits/fit.RData")

@@ -408,6 +408,10 @@ get_pars <- function(emc,selection= "mu", stage=get_last_stage(emc),thin=1,filte
     true_selection <- selection
     selection <- "alpha"
   }
+  if (selection == "pw_ll") {
+    has_pw_ll <- all(sapply(emc, function(x) is.list(x) && !is.null(x$samples$pw_ll)))
+    if (!has_pw_ll) return(NULL)
+  }
   samples <- get_objects(type = type, sampler = emc, stage = stage,
                          selection = selection)
 

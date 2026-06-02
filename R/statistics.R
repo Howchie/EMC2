@@ -16,8 +16,20 @@
 #' Uses the same pointwise log-likelihood matrix as WAIC and is typically slower.
 #' @param pointwise Character string, one of `"trial"` or `"subject"`, controlling
 #' the unit of prediction for WAIC/LOO in pooled hierarchical comparisons.
-#' `"trial"` treats each trial as one pointwise unit; `"subject"` sums trials within
-#' each subject before computing WAIC/LOO. Ignored unless `WAIC` or `LOO` is `TRUE`.
+#' `"trial"` (default) treats each trial as one pointwise unit. `"subject"` computes
+#' the hierarchical leave-one-subject-out LOO by marginalising subject parameters:
+#' for each posterior draw of the group-level parameters (theta_mu, theta_var),
+#' `K` proposals are drawn from the group distribution and the marginal subject
+#' log-likelihood is estimated via log-mean-exp. This gives well-conditioned PSIS
+#' importance weights where summing conditional per-trial LLs would give Pareto-k >> 1.
+#' Ignored unless `WAIC` or `LOO` is `TRUE`.
+#' @param K Integer (default 200). Number of importance samples drawn from the group
+#' prior per posterior iteration when `pointwise = "subject"`. Higher values give a
+#' more accurate marginal likelihood estimate at proportionally higher cost.
+#' @param cores_for_loo Integer (default 1). Cores for WAIC/LOO computation. Used in two places:
+#' (1) parallelises the per-subject log-likelihood computation across subjects, and
+#' (2) passed to \code{loo::loo()} as its \code{cores} argument for internal PSIS parallelism.
+#' Only relevant when \code{WAIC} or \code{LOO} is \code{TRUE} and the pw_ll is not already cached.
 #' @param cores_for_props Integer, how many cores to use for the Bayes factor calculation, here 4 is the default for the 4 different proposal densities to evaluate, only 1, 2 and 4 are sensible.
 #' @param cores_per_prop Integer, how many cores to use for the Bayes factor calculation if you have more than 4 cores available. Cores used will be cores_for_props * cores_per_prop. Best to prioritize cores_for_props being 4 or 2
 #' @param print_summary Boolean (default `TRUE`), print table of results
@@ -53,7 +65,8 @@
 #' @export
 
 compare <- function(sList,stage="sample",filter=NULL,use_best_fit=TRUE,
-                        BayesFactor = TRUE, WAIC = TRUE, LOO = FALSE, pointwise = c("trial", "subject"), cores_for_props =4, cores_per_prop = 1,
+                        BayesFactor = TRUE, WAIC = TRUE, LOO = FALSE, pointwise = c("trial", "subject"),
+                        K = 200, cores_for_loo = 1, cores_for_props = 4, cores_per_prop = 1,
                         print_summary=TRUE,digits=0,digits_p=3, ...) {
   if(is(sList, "emc")) sList <- list(sList)
   pointwise <- match.arg(pointwise)
@@ -84,12 +97,14 @@ compare <- function(sList,stage="sample",filter=NULL,use_best_fit=TRUE,
       tryCatch({
         ll_mat <- if(!is.null(subj)) {
           .ll_matrix_subject(sList[[i]], stage=stage, filter=sflist[[i]], subject=subj)
+        } else if (pointwise == "trial") {
+          .ll_matrix_pooled(sList[[i]], stage=stage, filter=sflist[[i]], cores=cores_for_loo)
         } else {
-          .ll_matrix_pooled(sList[[i]], stage=stage, filter=sflist[[i]], pointwise = pointwise)
+          .marg_ll_matrix(sList[[i]], stage=stage, filter=sflist[[i]], K=K)
         }
         pw_ll_list[[i]] <- ll_mat
         if(WAIC) WAICs[i] <- waic_from_ll(ll_mat)
-        if(LOO) LOOs[i] <- loo_from_ll(ll_mat)
+        if(LOO) LOOs[i] <- loo_from_ll(ll_mat, cores=cores_for_loo)
       }, error = function(e) {
         if(WAIC) warning("WAIC computation failed for model ", i, ": ", conditionMessage(e), call. = FALSE)
         if(LOO) warning("LOO computation failed for model ", i, ": ", conditionMessage(e), call. = FALSE)
@@ -166,7 +181,7 @@ std_error_IS2 <- function(IS_samples, n_bootstrap = 50000){
 #' @export
 extract_pw_ll <- function(emc, stage = "sample", filter = 0, FUN = mean) {
   # Get the pointwise log-likelihood matrix [n_iter x total_trials]
-  ll_mat <- .ll_matrix_pooled(emc, stage = stage, filter = filter, pointwise = "trial")
+  ll_mat <- .ll_matrix_pooled(emc, stage = stage, filter = filter)
 
   # Aggregation
   if (!is.null(FUN)) {
@@ -210,7 +225,17 @@ extract_pw_ll <- function(emc, stage = "sample", filter = 0, FUN = mean) {
 #' @return The same emc object with \code{pw_ll} added to each chain's samples.
 #' @export
 add_pw_ll <- function(emc, cores_for_chains = 1) {
-  emc <- auto_mclapply(emc, add_pw_ll_chain, mc.cores = cores_for_chains)
+  emc <- restore_duplicates(emc)
+  results <- auto_mclapply(emc, add_pw_ll_chain, mc.cores = cores_for_chains)
+  for (i in seq_along(results)) {
+    if (inherits(results[[i]], "try-error")) {
+      cond <- attr(results[[i]], "condition")
+      msg <- if (!is.null(cond)) conditionMessage(cond) else as.character(results[[i]])
+      warning("add_pw_ll: chain ", i, " failed (", msg, "); pw_ll not added for this chain.")
+    } else {
+      emc[[i]] <- results[[i]]
+    }
+  }
   class(emc) <- "emc"
   return(emc)
 }
