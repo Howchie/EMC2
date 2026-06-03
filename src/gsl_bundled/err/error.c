@@ -24,6 +24,7 @@
 
 #include <gsl/gsl_errno.h>
 #include <gsl/gsl_message.h>
+#include <R_ext/Error.h>
 
 gsl_error_handler_t * gsl_error_handler = NULL;
 
@@ -38,13 +39,7 @@ gsl_error (const char * reason, const char * file, int line, int gsl_errno)
       return ;
     }
 
-  gsl_stream_printf ("ERROR", file, line, reason);
-
-  fflush (stdout);
-  fprintf (stderr, "Default GSL error handler invoked.\n");
-  fflush (stderr);
-
-  abort ();
+  Rf_error("GSL error %d at %s:%d: %s", gsl_errno, file, line, reason);
 }
 
 gsl_error_handler_t *
