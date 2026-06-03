@@ -134,7 +134,7 @@ apply_staircase_trials <- function(dts, staircase, accST = NULL) {
   if (inherits(staircase, "emc_staircase") && !is.null(staircase$specs)) {
     return(apply_grouped_staircase(dts, staircase, accST))
   }
-  
+
   stair_fun <- attr(staircase, "staircase_function")
   if (length(accST) > 0) {
     staircase$accST <- 1 + accST
@@ -157,16 +157,16 @@ apply_grouped_staircase <- function(dts, staircase, accST = NULL) {
   if (length(group_id) != ncol(dts)) {
     stop("Grouped staircase information does not match the number of staircase trials.")
   }
-  
+
   res <- list(
     sR = rep(NA_real_, ncol(dts)),
     srt = rep(NA_real_, ncol(dts)),
     SSD = rep(NA_real_, ncol(dts))
   )
-  
+
   base_fun <- attr(staircase, "staircase_function")
   specs_fun <- attr(specs, "staircase_function")
-  
+
   for (lvl in names(specs)) {
     idx <- which(group_id == lvl)
     if (!length(idx)) next
@@ -198,7 +198,7 @@ apply_grouped_staircase <- function(dts, staircase, accST = NULL) {
     if (!is.null(res_group$srt)) res$srt[idx] <- res_group$srt
     if (!is.null(res_group$SSD)) res$SSD[idx] <- res_group$SSD
   }
-  
+
   res
 }
 
@@ -413,7 +413,7 @@ rSSexGaussian <- function(data,pars,ok=rep(TRUE,dim(pars)[1]))
   # lR is an empty latent response factor lR with one level for each accumulator.
   # pars must contain an SSD column and an lI column indicating if an
   # accumulator is triggered by the stop signal (ST = stop-triggered).
-  
+
   # NB1: Go failures will only apply to accumulators where lI = TRUE
   #      and can still have a stop-triggered response on a go-failure trial.
 {
@@ -423,69 +423,69 @@ rSSexGaussian <- function(data,pars,ok=rep(TRUE,dim(pars)[1]))
   is1 <- lR==levels(lR)[1]     # First go accumulator
   acc <- 1:nacc                # choice (go and ST) accumulator index
   allSSD <- data$SSD[is1]
-  
+
   # set default for latent inhibitor: simple stop-signal task
   if(!"lI" %in% colnames(pars)){
     pars <- cbind(pars, lI = 2)
   }
-  
-  
+
+
   # stop-triggered racers
   isST <- pars[,"lI"]==1              # Boolean for all pars
   accST <- acc[pars[1:nacc,"lI"]==1]  # Index of ST accumulator, from 1st trial
-  
+
   # Setup race among nacc+1 (includes stop accumulator)
   # Default Inf finishing time so if not changed always looses
   dt <- matrix(Inf,nrow=nacc+1,ncol=ntrials)
-  
+
   # Go failure trials (rep for each accumulator)
   isgf <- rep(pars[is1,"gf"] > runif(ntrials),each=nacc)
   # Go accumulators that don't fail (removing ST)
   isGO <- !isgf & !isST
   ngo <- sum(isGO)
-  
+
   # Fill in go accumulators (apply lower bound exg_lb)
   if (any(isGO)) dt[-1,][isGO] <- rtexG(
     ngo,
     mu = pars[isGO, "mu"], sigma = pars[isGO, "sigma"], tau = pars[isGO, "tau"],
     lb = pars[isGO, "exg_lb"]
   )
-  
+
   # pick out stop trials and races with SSD that is not Inf (i.e., finite or
   # NA, the latter so a staircase can be filled in)
   isStrial <- !is.infinite(pars[is1,"SSD"])
   isSrace <- rep(isStrial,each=nacc)
-  
+
   # pick out stop trials that are triggered
   isT <- pars[is1,"tf"][isStrial] < runif(sum(isStrial))
-  
+
   # Logical to pick stop-triggered accumulators that are triggered
   isSTT <- logical(ntrials*nacc) # Default false
-  
+
   # Pick out stop-triggered accumulators that are triggered
   # NB: can occur on gf trials
   isSTT[isSrace][rep(isT,each=nacc) & isST[isSrace]] <- TRUE
   nst <- sum(isSTT) # Number of triggered ST accumulators
-  
+
   # Fill in stop-triggered accumulators (apply lower bound exg_lb)
   if (any(isSTT)) dt[-1,][isSTT] <- rtexG(
     nst,
     mu = pars[isSTT, "mu"], sigma = pars[isSTT, "sigma"], tau = pars[isSTT, "tau"],
     lb = pars[isSTT, "exg_lb"]
   )
-  
+
   # pick out triggered stop racers
   isTS <- logical(ntrials)
   isTS[isStrial][isT] <- TRUE
   ns <- sum(isTS)
-  
+
   # Fill in stop accumulators (apply lower bound exgS_lb)
   if (any(isTS)) dt[1, isTS] <- rtexG(
     ns,
     mu = pars[is1, "muS"][isTS], sigma = pars[is1, "sigmaS"][isTS], tau = pars[is1, "tauS"][isTS],
     lb = pars[is1, "exgS_lb"][isTS]
   )
-  
+
   # staircase algorithm
   pstair <- is.na(pars[,"SSD"])
   stair <- pstair[is1]
@@ -493,11 +493,19 @@ rSSexGaussian <- function(data,pars,ok=rep(TRUE,dim(pars)[1]))
     if (is.null(attr(data,"staircase")))
       stop("When SSD has NAs a staircase list must be supplied!")
     staircase <- attr(data,"staircase")
-    
+
+    # Upper censoring for staircase trials
+    UC <- get_missing(staircase$TC$UC,
+      data[data$lR==levels(data$lR)[[1]],], "UT",Inf,"numeric")[stair]
+
     allR <- allrt <- allSSD <- numeric(ncol(dt))  # to store unified results
     allSSD[] <- Inf
     dts <- dt[,stair,drop=F]
-    
+
+    # Set all accumulators finishing times to Inf where fastest accumulator > UC
+    cens <- apply(dts[-1,,drop=FALSE],2,min) > UC
+    dts[-1,cens] <- Inf
+
     # Non-staircase trials
     dt <- dt[,!stair,drop=F]
     spars <- pars[pstair,,drop=F]
@@ -529,28 +537,28 @@ rSSexGaussian <- function(data,pars,ok=rep(TRUE,dim(pars)[1]))
     }
     allSSD[stair] <- stair_res$SSD
   }
-  
-  
+
+
   # All SSD already filled in so return R and rt
-  
+
   # Add SSD to triggered stop accumulators
   if (any(isTS)) dt[1,isTS] <- dt[1,isTS] + pars[is1,"SSD"][isTS]
-  
+
   # Add SSD to stop-triggered accumulators that are triggered
   if (any(isSTT)) dt[-1,][isSTT] <- dt[-1,][isSTT] + pars[isSTT,"SSD"]
-  
+
   # R <- factor(rep(NA,ntrials),levels=levels(lR))
   R <- rt <- rep(NA,ntrials)
-  
+
   # All accumulators Inf (usually when both gf and tf)
   allinf <- colSums(is.infinite(dt)) == nrow(dt)
-  
+
   # get winner of stop and go where there is a race
   r <- c(0, acc)[max.col(-t(dt[,!allinf,drop=FALSE]), ties.method='first')]
-  
+
   # stop wins
   stopwins <- r==0
-  
+
   # First fill in cases where stop looses, can include wins by ST
   if (any(!stopwins)) {
     rgo <- r[!stopwins]
@@ -559,7 +567,7 @@ rSSexGaussian <- function(data,pars,ok=rep(TRUE,dim(pars)[1]))
     rt[!allinf][!stopwins] <-
       dt[-1,!allinf,drop=FALSE][,!stopwins,drop=FALSE][pick]
   }
-  
+
   # then if stop wins and kills go, find ST winner
   if (any(isST) & any(stopwins)) {
     # stop triggered accumulators that are racing
@@ -571,9 +579,9 @@ rSSexGaussian <- function(data,pars,ok=rep(TRUE,dim(pars)[1]))
     pick <- cbind(rtw,1:ncol(rst))
     rt[!allinf][stopwins] <- rst[pick]
   }
-  
+
   rt[is.na(R)] <- NA
-  
+
   if (any(stair)) {
     allrt[!stair] <- rt
     allR[!stair] <- R
@@ -797,81 +805,89 @@ rSShybrid <- function(data,pars,ok=rep(TRUE,dim(pars)[1]))
   # lR is an empty latent response factor lR with one level for each accumulator.
   # pars must contain an SSD column and an lI column indicating if an
   # accumulator is triggered by the stop signal (ST = stop-triggered).
-  
+
   # NB1: Go failures will only apply to accumulators where lI = TRUE
   #      and can still have a stop-triggered response on a go-failure trial.
 {
   lR <- data$lR # For Michelle as an example
   pars[,c("A","B","v")] <- pars[,c("A","B","v")]/pars[ok,"s"]
-  
+
   nacc <- length(levels(lR))   # Does not include stop runner
   ntrials <- dim(pars)[1]/nacc # Number of trials to simulate
   is1 <- lR==levels(lR)[1]     # First go accumulator
   acc <- 1:nacc                # choice (go and ST) accumulator index
   allSSD <- data$SSD[is1]
-  
+
   # stop-triggered racers
   isST <- pars[,"lI"]==1              # Boolean for all pars
   accST <- acc[pars[1:nacc,"lI"]==1]  # Index of ST accumulator, from 1st trial
-  
+
   # Setup race among nacc+1 (includes stop accumulator)
   # Default Inf finishing time so if not changed always looses
   dt <- matrix(Inf,nrow=nacc+1,ncol=ntrials)
-  
+
   # Go failure trials (rep for each accumulator)
   isgf <- rep(pars[is1,"gf"] > runif(ntrials),each=nacc)
   # Go accumulators that don't fail (removing ST)
   isGO <- !isgf & !isST
   ngo <- sum(isGO)
-  
+
   # Fill in go accumulators
   if (any(isGO)) dt[-1,][isGO] <-
     pars[isGO,"t0"] + rWald(ngo,pars[isGO,"B"],pars[isGO,"v"],pars[isGO,"A"])
-  
+
   # pick out stop trials and races with SSD that is not Inf (i.e., finite or
   # NA, the latter so a staircase can be filled in)
   isStrial <- !is.infinite(pars[is1,"SSD"])
   isSrace <- rep(isStrial,each=nacc)
-  
+
   # pick out stop trials that are triggered
   isT <- pars[is1,"tf"][isStrial] < runif(sum(isStrial))
-  
+
   # Logical to pick stop-triggered accumulators that are triggered
   isSTT <- logical(ntrials*nacc) # Default false
-  
+
   # Pick out stop-triggered accumulators that are triggered
   # NB: can occur on gf trials
   isSTT[isSrace][rep(isT,each=nacc) & isST[isSrace]] <- TRUE
   nst <- sum(isSTT)
-  
+
   # Fill in stop-triggered accumulators (ST; Wald go process)
   if (any(isSTT)) dt[-1,][isSTT] <-
     pars[isSTT, "t0"] + rWald(nst, pars[isSTT, "B"], pars[isSTT, "v"], pars[isSTT, "A"])
-  
+
   # pick out triggered stop racers
   isTS <- logical(ntrials)
   isTS[isStrial][isT] <- TRUE
   ns <- sum(isTS)
-  
+
   # Fill in stop accumulators (apply lower bound exgS_lb)
   if (any(isTS)) dt[1, isTS] <- rtexG(
     ns,
     mu = pars[is1, "muS"][isTS], sigma = pars[is1, "sigmaS"][isTS], tau = pars[is1, "tauS"][isTS],
     lb = pars[is1, "exgS_lb"][isTS]
   )
-  
+
   # staircase algorithm
   pstair <- is.na(pars[,"SSD"])
   stair <- pstair[is1]
   if (any(stair)) {
     if (is.null(attr(pars,"staircase")))
       stop("When SSD has NAs a staircase list must be supplied!")
-    
+
     staircase <- attr(pars,"staircase")
-    
+
+    # Upper censoring for staircase trials
+    UC <- get_missing(staircase$TC$UC,
+      data[data$lR==levels(data$lR)[[1]],], "UT",Inf,"numeric")[stair]
+
     allR <- allrt <- numeric(ncol(dt))  # to store unified results
     dts <- dt[,stair,drop=F]
-    
+
+    # Set all accumulators finishing times to Inf where fastest accumulator > UC
+    cens <- apply(dts[-1,,drop=FALSE],2,min) > UC
+    dts[-1,cens] <- Inf
+
     # Non-staircase trials
     dt <- dt[,!stair,drop=F]
     spars <- pars[pstair,,drop=F]
@@ -903,28 +919,28 @@ rSShybrid <- function(data,pars,ok=rep(TRUE,dim(pars)[1]))
     allrt[stair] <- stair_res$srt
     allSSD[stair] <- stair_res$SSD
   }
-  
-  
+
+
   # All SSD already filled in so return R and rt
-  
+
   # Add SSD to triggered stop accumulators
   if (any(isTS)) dt[1,isTS] <- dt[1,isTS] + pars[is1,"SSD"][isTS]
-  
+
   # Add SSD to stop-triggered accumulators that are triggered
   if (any(isSTT)) dt[-1,][isSTT] <- dt[-1,][isSTT] + pars[isSTT,"SSD"]
-  
+
   # R <- factor(rep(NA,ntrials),levels=levels(lR))
   R <- rt <- rep(NA,ntrials)
-  
+
   # All accumulators Inf (usually when both gf and tf)
   allinf <- colSums(is.infinite(dt)) == nrow(dt)
-  
+
   # get winner of stop and go where there is a race
   r <- c(0, acc)[max.col(-t(dt[,!allinf,drop=FALSE]), ties.method='first')]
-  
+
   # stop wins
   stopwins <- r==0
-  
+
   # First fill in cases where stop looses, can include wins by ST
   if (any(!stopwins)) {
     rgo <- r[!stopwins]
@@ -933,7 +949,7 @@ rSShybrid <- function(data,pars,ok=rep(TRUE,dim(pars)[1]))
     rt[!allinf][!stopwins] <-
       dt[-1,!allinf,drop=FALSE][,!stopwins,drop=FALSE][pick]
   }
-  
+
   # then if stop wins and kills go, find ST winner
   if (any(isST) & any(stopwins)) {
     # stop triggered accumulators that are racing
@@ -945,9 +961,9 @@ rSShybrid <- function(data,pars,ok=rep(TRUE,dim(pars)[1]))
     pick <- cbind(rtw,1:ncol(rst))
     rt[!allinf][stopwins] <- rst[pick]
   }
-  
+
   rt[is.na(R)] <- NA
-  
+
   if (any(stair)) {
     allrt[!stair] <- rt
     allR[!stair] <- R
@@ -1144,48 +1160,48 @@ log_likelihood_race_ss <- function(pars,dadm,model,min_ll=log(1e-10))
   if (is.null(attr(pars,"ok")))
     ok <- !logical(dim(pars)[1]) else ok <- attr(pars,"ok")
     if (!any(ok)) return(min_ll*length(attr(dadm, "expand")))
-    
+
     # Nomenclature for indices:
     # "is" = logical, "isp" pars/dadm index,
     # "t" trials index, "ist" logical on trial index
     # "n_" number of integer
-    
+
     # Default for lI is simple stop signal paradigm
     if(is.null(dadm$lI)){
       dadm$lI <- factor(rep(2,nrow(dadm)),levels=1:2)
     }
-    
+
     # Counts
     n_acc <- length(levels(dadm$lR))                   # total number of accumulators
     n_trials <- nrow(dadm)/n_acc                       # number of trials
     n_accG <- sum(as.numeric(dadm[1:n_acc,"lI"])==2)   # go accumulators
     n_accST <- sum(as.numeric(dadm[1:n_acc,"lI"])==1)
-    
+
     # Likelihood for all trials and for ok trials
     allLL <- rep(min_ll,n_trials)
     # used to put results into allLL[allok]
     allok <- ok[dadm$lR==levels(dadm$lR)[1]]
-    
+
     # Remove trials not ok
     pars <- pars[ok,,drop=FALSE]
     dadm <- dadm[ok,,drop=FALSE]
-    
+
     # Only keep OK trials for stop trial computations
     n_trials <- nrow(dadm)/n_acc # number of trials
     trials <- 1:n_trials         # trial number
-    
+
     # Booleans for ok pars/dadm
     isp1 <- dadm$lR==levels(dadm$lR)[1]      # 1st accumulator rows
     ispGOacc <- dadm$lI==levels(dadm$lI)[2]  # Go accumulator rows
     ispStop <- is.finite(dadm$SSD)           # Stop-trial rows
-    
+
     # Failure parameters for each trial
     gf <- pars[isp1,"gf"]
     tf <- pars[isp1,"tf"]
-    
+
     # Go response names
     GoR <- as.character(dadm[1:n_acc,"lR"][dadm[1:n_acc,"lI"]==2])
-    
+
     # UC column: Inf means no deadline (default if column absent)
     UC_ss <- if (!is.null(dadm$UC)) dadm$UC else rep(Inf, nrow(dadm))
 
@@ -1264,7 +1280,7 @@ log_likelihood_race_ss <- function(pars,dadm,model,min_ll=log(1e-10))
         }
       }
     }
-    
+
     # Response made
     if (any(!ispNR)) {
       # Only keep response trials for further computation
@@ -1274,17 +1290,17 @@ log_likelihood_race_ss <- function(pars,dadm,model,min_ll=log(1e-10))
       n_trials <- nrow(dadm)/n_acc # number of trials
       trials <- 1:n_trials
       ptrials <- rep(trials,each=n_acc) # trial number for pars/dadm
-      
+
       isp1 <- dadm$lR==levels(dadm$lR)[1]      # 1st accumulator rows
       ispGOacc <- dadm$lI==levels(dadm$lI)[2]  # Go accumulator rows
       ispStop <- is.finite(dadm$SSD)           # stop-trial rows with a response
       gf <- pars[isp1,"gf"]
       tf <- pars[isp1,"tf"]
-      
+
       # likelihoods for trials with a response (eventually, intermediately probabilities)
       like <- numeric(n_trials)
       lds <- numeric(nrow(dadm)) # log density and survivor, used for both go and stop trials
-      
+
       # Go trials with response
       if (any(!ispStop)) {
         ispGOwin <-  !ispStop & dadm$winner # Winner go accumulator rows
@@ -1301,7 +1317,7 @@ log_likelihood_race_ss <- function(pars,dadm,model,min_ll=log(1e-10))
         # Transform back to densities to include go failure
         like[tGO] <- (1-gf[tGO])*exp(like[tGO])
       }
-      
+
       # Stop trials with a response, occurs if
       # 1) All triggered
       #   a) Stop does not beat go before rt, produces go and ST
@@ -1309,7 +1325,7 @@ log_likelihood_race_ss <- function(pars,dadm,model,min_ll=log(1e-10))
       # 2) go failure, stop triggered, produces ST only
       # 3) go triggered, stop failure, produces go only
       # NB: cant have both go and stop failure as then no response
-      
+
       if (any(ispStop)) {                       # Stop trials
         ispSGO <- ispStop & (dadm$R %in% GoR)   # Go responses
         ispSST <- ispStop & !(dadm$R %in% GoR)  # ST responses
@@ -1338,12 +1354,12 @@ log_likelihood_race_ss <- function(pars,dadm,model,min_ll=log(1e-10))
               pars=pars[ispSTloss,,drop=FALSE])),
               nrow=n_accST))
           }
-          
+
           # Transform back to densities to include failures
           like[tGO] <- (1-gf[tGO])*(tf[tGO]*exp(like[tGO]) +
                                       (1-tf[tGO])*exp(ts+stl))
         }
-        
+
         # ST WINS (never tf)
         if (any(ispSST)) { # Go triggered 1a) with (1-pStop), all race,
           #              1b) with pStop, only ST races
@@ -1383,9 +1399,9 @@ log_likelihood_race_ss <- function(pars,dadm,model,min_ll=log(1e-10))
       }
       allLL[allok][allr] <- log(like)
     }
-    
+
     allLL[is.na(allLL)|is.nan(allLL)] <- min_ll
     allLL <- pmax(min_ll,allLL)
-    
+
     sum(allLL[attr(dadm,"expand")])
 }
