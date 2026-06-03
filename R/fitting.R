@@ -749,7 +749,8 @@ make_emc <- function(data,design,model=NULL,
     d
   })
   for (i in 1:length(data)) {
-    if (class(design)=="emc.design") des <- design else des <- design[[i]]
+    if (inherits(design, "emc.design"))
+      des <- design else des <- design[[i]]
     if (!any(names(data[[i]])=="LT") & !is.null(des$TC$LT))
       data[[i]]$LT <- des$TC$LT
     if (!any(names(data[[i]])=="LC") & !is.null(des$TC$LC))
