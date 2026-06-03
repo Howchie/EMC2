@@ -201,8 +201,8 @@ prep_data_plot <- function(input, post_predict, prior_predict, to_plot, limits,
 
   xlim <- NULL
   for (j in 1:length(datasets)) {
-    datasets[[j]] <- EMC2:::calc_functions(functions, datasets[[j]])
-    datasets[[j]] <- EMC2:::check_data_plot(datasets[[j]], defective_factor,
+    datasets[[j]] <- calc_functions(functions, datasets[[j]])
+    datasets[[j]] <- check_data_plot(datasets[[j]], defective_factor,
                                             subject, factors, remove_na = remove_na)
 
     if (sources[j] %in% limits) {

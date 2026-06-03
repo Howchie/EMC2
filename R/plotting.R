@@ -365,7 +365,7 @@ profile_plot <- function (data, design, p_vector, range = 0.5, layout = NA, p_mi
       }
       constants <- attr(dadm,"constants")
       if (is.null(constants)) constants <- NA
-      EMC2:::calc_ll(p_matrix, dadm, constants,designs,model$c_name,
+      calc_ll(p_matrix, dadm, constants,designs,model$c_name,
         model$bound,model$transform,model$pre_transform,p_types,log(1e-10),model$trend)
     } else calc_ll_R(p_vector, attr(dadm, "model")(), dadm)
   }
@@ -419,9 +419,9 @@ profile_plot <- function (data, design, p_vector, range = 0.5, layout = NA, p_mi
             ll <- unlist(mclapply(1:length(x), lfun, dadm = dadm, use_c = use_c,
                 x = x, p_vector = p_vector, pname = cur_name,
                 mc.cores = n_cores))
-            do.call(plot, c(list(x, ll), EMC2:::fix_dots_plot(EMC2:::add_defaults(dots,
+            do.call(plot, c(list(x, ll), fix_dots_plot(add_defaults(dots,
                 type = "l", xlab = cur_name, ylab = "LL"))))
-            do.call(abline, c(list(v = cur_par), EMC2:::fix_dots_plot(EMC2:::add_defaults(true_args,
+            do.call(abline, c(list(v = cur_par), fix_dots_plot(add_defaults(true_args,
                 lty = 2))))
             out[cur_name, ] <- c(p_vector[cur_name], x[which.max(ll)],
                 p_vector[cur_name] - x[which.max(ll)])
