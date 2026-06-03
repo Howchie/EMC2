@@ -500,6 +500,7 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
         }
       }
     }
+    ssd_meta$TC <- TC$UC
     attr(data, "staircase") <- ssd_meta
     attr(pars, "staircase") <- ssd_meta
   }
