@@ -37,9 +37,10 @@ samples_LNR2 <- subset(samples_LNR, length.out = 45)
 samples_LNR3 <- subset(samples_LNR, length.out = 40)
 samples_LNR4 <- subset(samples_LNR, length.out = 35)
 
-# Run compare on them, BayesFactor = F is set for speed.
+# Run compare on them, BayesFactor = F and cores_for_models = 1 for speed.
 ICs <- compare(list(S1 = samples_LNR, S2 = samples_LNR2,
-                    S3 = samples_LNR3, S4 = samples_LNR4), BayesFactor = FALSE)
+                    S3 = samples_LNR3, S4 = samples_LNR4),
+              BayesFactor = FALSE, cores_for_models = 1)
 
 # Model averaging can either be done with a vector of ICs:
 model_averaging(ICs$BPIC[1:2], ICs$BPIC[2:4])

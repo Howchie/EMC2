@@ -14,6 +14,17 @@
 #' via the `loo` package. Requires computing per-trial log-likelihoods across all posterior samples.
 #' @param cores_for_props Integer, how many cores to use for the Bayes factor calculation, here 4 is the default for the 4 different proposal densities to evaluate, only 1, 2 and 4 are sensible.
 #' @param cores_per_prop Integer, how many cores to use for the Bayes factor calculation if you have more than 4 cores available. Cores used will be cores_for_props * cores_per_prop. Best to prioritize cores_for_props being 4 or 2
+#' @param cores_for_models Scalar integer or integer vector of length `length(sList)`.
+#'   \itemize{
+#'     \item \strong{Scalar} (default \code{length(sList)}): runs that many models in parallel,
+#'       each using 1 core for WAIC subject-level computation.
+#'     \item \strong{Vector}: runs \emph{all} models in parallel simultaneously, and entry \code{i}
+#'       specifies how many cores to use for the within-model WAIC subject loop for model \code{i}.
+#'       Useful when models differ in subject count or WAIC cost, e.g.
+#'       \code{cores_for_models = c(10, 5, 8)}.
+#'       Total cores used for WAIC = \code{sum(cores_for_models)}.
+#'       For \code{BayesFactor}, total cores = \code{length(sList) * cores_for_props * cores_per_prop}.
+#'   }
 #' @param print_summary Boolean (default `TRUE`), print table of results
 #' @param digits Integer, significant digits in printed table for information criteria
 #' @param digits_p Integer, significant digits in printed table for model weights
@@ -48,8 +59,19 @@
 
 compare <- function(sList,stage="sample",filter=NULL,use_best_fit=TRUE,
                         BayesFactor = TRUE, WAIC = TRUE, cores_for_props =4, cores_per_prop = 1,
+                        cores_for_models = length(sList),
                         print_summary=TRUE,digits=0,digits_p=3, ...) {
   if(is(sList, "emc")) sList <- list(sList)
+  if (length(cores_for_models) == 1) {
+    n_parallel_models <- cores_for_models
+    waic_cores        <- rep(1, length(sList))
+  } else {
+    if (length(cores_for_models) != length(sList))
+      stop("`cores_for_models` must be a scalar or a vector of length ", length(sList),
+           " (one entry per model), got length ", length(cores_for_models), ".")
+    n_parallel_models <- length(sList)
+    waic_cores        <- cores_for_models
+  }
   getp <- function(IC) {
     IC <- -(IC - min(IC))/2
     exp(IC)/sum(exp(IC))
@@ -70,19 +92,18 @@ compare <- function(sList,stage="sample",filter=NULL,use_best_fit=TRUE,
 
   if(WAIC){
     subj <- list(...)$subject
-    WAICs <- numeric(length(sList))
-    for(i in seq_along(WAICs)){
+    waic_fn <- function(i) {
       tryCatch({
-        if(!is.null(subj)){
-          WAICs[i] <- waic_subject(sList[[i]], stage=stage, filter=sflist[[i]], subject=subj)
-        } else {
-          WAICs[i] <- waic_pooled(sList[[i]], stage=stage, filter=sflist[[i]])
-        }
+        if (!is.null(subj))
+          waic_subject(sList[[i]], stage=stage, filter=sflist[[i]], subject=subj, r_cores=waic_cores[i])
+        else
+          waic_pooled(sList[[i]], stage=stage, filter=sflist[[i]], r_cores=waic_cores[i])
       }, error = function(e) {
-        warning("WAIC computation failed for model ", i, ": ", conditionMessage(e), call. = FALSE)
-        WAICs[i] <<- NA_real_
+        warning("WAIC computation failed for model ", i, ": ", conditionMessage(e), call.=FALSE)
+        NA_real_
       })
     }
+    WAICs <- unlist(auto_mclapply(seq_along(sList), waic_fn, mc.cores=n_parallel_models))
     if(!all(is.na(WAICs))){
       WAICp <- getp(WAICs)
       out <- cbind.data.frame(WAIC=WAICs, wWAIC=WAICp, out)
@@ -92,14 +113,25 @@ compare <- function(sList,stage="sample",filter=NULL,use_best_fit=TRUE,
   }
 
   if(BayesFactor){
-    MLLs <- numeric(length(sList))
-    for(i in 1:length(MLLs)){
-      MLLs[i] <- run_bridge_sampling(sList[[i]], stage = stage, filter = sflist[[i]], both_splits = FALSE,
-                                     cores_for_props = cores_for_props, cores_per_prop = cores_per_prop)
+    bf_fn <- function(i)
+      tryCatch(
+        run_bridge_sampling(sList[[i]], stage=stage, filter=sflist[[i]], both_splits=FALSE,
+                            cores_for_props=cores_for_props, cores_per_prop=cores_per_prop),
+        error = function(e) NA_real_
+      )
+    MLLs <- unlist(auto_mclapply(seq_along(sList), bf_fn, mc.cores=n_parallel_models))
+    failed <- which(is.na(MLLs))
+    if (length(failed) > 0) {
+      ids <- if (!is.null(names(sList))) names(sList)[failed] else as.character(failed)
+      warning("BayesFactor (MD) failed to converge for model(s): ",
+              paste(ids, collapse=", "),
+              ". MD and wMD set to NA for those model(s).", call.=FALSE)
     }
-    MD <- -2*MLLs
-    modelProbability <- getp(MD)
-    out <- cbind.data.frame(MD = MD, wMD = modelProbability, out)
+    MD  <- -2 * MLLs
+    wMD <- rep(NA_real_, length(MD))
+    ok  <- !is.na(MD)
+    if (any(ok)) wMD[ok] <- getp(MD[ok])
+    out <- cbind.data.frame(MD=MD, wMD=wMD, out)
   }
   if (print_summary) {
     tmp <- out
@@ -116,6 +148,97 @@ compare <- function(sList,stage="sample",filter=NULL,use_best_fit=TRUE,
     print(tmp)
   }
   invisible(out)
+}
+
+#' Print a model-comparison table from compare()
+#'
+#' Formats the invisible output of \code{\link{compare}} into a focused
+#' two-column-per-measure table.  By default the measure values are expressed
+#' relative to the best model (minimum subtracted), which is the conventional
+#' way to present DIC, BPIC, WAIC, or marginal deviance differences.
+#'
+#' @param out Data frame returned (invisibly) by \code{compare()}.
+#' @param selection \code{NULL} (default), a character string, or a character
+#'   vector. Elements must be from \code{"DIC"}, \code{"BPIC"}, \code{"WAIC"},
+#'   and \code{"MD"} (marginal deviance from bridge sampling). \code{NULL}
+#'   displays all measures present in \code{out}; a vector displays the named
+#'   subset in the order supplied. An error is raised for unrecognised names or
+#'   measures not computed in the \code{compare()} call.
+#' @param relative Logical (default \code{TRUE}). If \code{TRUE}, the minimum
+#'   value across models is subtracted per measure so that the best model reads
+#'   0; value columns are prefixed with \code{d} (e.g. \code{dDIC}, \code{dMD}).
+#'   If \code{FALSE}, raw values are shown under the original column names.
+#'   When multiple measures are shown each is made relative independently.
+#' @param ICdigits Integer, digits for rounding IC value columns (default
+#'   \code{0}, matching \code{compare()}'s \code{digits} argument).
+#' @param Wdigits Integer, digits for rounding weight columns (default \code{3},
+#'   matching \code{compare()}'s \code{digits_p} argument).
+#' @param format Character string passed to \code{knitr::kable()} to produce
+#'   output suitable for documents. Common values: \code{"latex"} for LaTeX,
+#'   \code{"pipe"} or \code{"simple"} for Markdown (paste into Word via
+#'   RMarkdown/pandoc), \code{"html"} for HTML. When \code{NULL} (default) a
+#'   plain \code{print()} is used and a data frame is returned invisibly.
+#'   When non-\code{NULL} the \code{knitr::kable} object is returned invisibly.
+#'
+#' @return When \code{format = NULL}: a data frame of (possibly relative) IC
+#'   values and weights, returned invisibly.  When \code{format} is set: a
+#'   \code{knitr_kable} object, returned invisibly.  The table is always
+#'   printed.
+#' @examples \donttest{
+#' out <- compare(list(samples_LNR), cores_for_props = 1, print_summary = FALSE)
+#' printCompare(out)
+#' printCompare(out, selection = c("DIC", "WAIC"))
+#' printCompare(out, selection = "WAIC", relative = FALSE)
+#' printCompare(out, format = "latex")
+#' printCompare(out, format = "pipe")
+#' }
+#' @export
+printCompare <- function(out, selection = NULL, relative = TRUE, ICdigits = 0,
+                         Wdigits = 3, format = NULL) {
+  valid <- c("DIC", "BPIC", "WAIC", "MD")
+
+  if (is.null(selection)) {
+    measures <- valid[valid %in% names(out)]
+    if (length(measures) == 0)
+      stop("No IC measures found in compare() output.")
+  } else {
+    bad     <- selection[!selection %in% valid]
+    missing <- selection[selection %in% valid & !selection %in% names(out)]
+    if (length(bad) > 0)
+      stop("Unrecognised selection: ", paste(bad, collapse = ", "),
+           ". Must be from: ", paste(valid, collapse = ", "), ".")
+    if (length(missing) > 0)
+      stop("Not present in compare() output: ", paste(missing, collapse = ", "),
+           ". Re-run compare() with the relevant options enabled.")
+    measures <- selection
+  }
+
+  tab_list <- lapply(measures, function(sel) {
+    vals       <- out[[sel]]
+    val_col    <- if (relative) paste0("d", sel) else sel
+    weight_col <- paste0("w", sel)
+    if (relative) vals <- vals - min(vals, na.rm = TRUE)
+    data.frame(setNames(list(vals, out[[weight_col]]), c(val_col, weight_col)),
+               row.names = rownames(out))
+  })
+  tab <- do.call(cbind, tab_list)
+
+  tmp <- tab
+  for (sel in measures) {
+    val_col    <- if (relative) paste0("d", sel) else sel
+    weight_col <- paste0("w", sel)
+    tmp[[val_col]]    <- round(tmp[[val_col]],    ICdigits)
+    tmp[[weight_col]] <- round(tmp[[weight_col]], Wdigits)
+  }
+
+  if (is.null(format)) {
+    print(tmp)
+    invisible(tab)
+  } else {
+    k <- knitr::kable(tmp, format = format, booktabs = TRUE)
+    print(k)
+    invisible(k)
+  }
 }
 
 std_error_IS2 <- function(IS_samples, n_bootstrap = 50000){
@@ -621,9 +744,10 @@ get_posterior_quantiles <- function(x, probs = c(0.025, .5, .975)){
 #' samples_LNR3 <- subset(samples_LNR, length.out = 40)
 #' samples_LNR4 <- subset(samples_LNR, length.out = 35)
 #'
-#' # Run compare on them, BayesFactor = F is set for speed.
+#' # Run compare on them, BayesFactor = F for speed
 #' ICs <- compare(list(S1 = samples_LNR, S2 = samples_LNR2,
-#'                     S3 = samples_LNR3, S4 = samples_LNR4), BayesFactor = FALSE)
+#'                     S3 = samples_LNR3, S4 = samples_LNR4),
+#'               BayesFactor = FALSE, cores_for_models = 1)
 #'
 #' # Model averaging can either be done with a vector of ICs:
 #' model_averaging(ICs$BPIC[1:2], ICs$BPIC[2:4])

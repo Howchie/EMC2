@@ -13,6 +13,7 @@ compare(
   WAIC = TRUE,
   cores_for_props = 4,
   cores_per_prop = 1,
+  cores_for_models = length(sList),
   print_summary = TRUE,
   digits = 0,
   digits_p = 3,
@@ -39,6 +40,18 @@ via the \code{loo} package. Requires computing per-trial log-likelihoods across 
 \item{cores_for_props}{Integer, how many cores to use for the Bayes factor calculation, here 4 is the default for the 4 different proposal densities to evaluate, only 1, 2 and 4 are sensible.}
 
 \item{cores_per_prop}{Integer, how many cores to use for the Bayes factor calculation if you have more than 4 cores available. Cores used will be cores_for_props * cores_per_prop. Best to prioritize cores_for_props being 4 or 2}
+
+\item{cores_for_models}{Scalar integer or integer vector of length \code{length(sList)}.
+\itemize{
+\item \strong{Scalar} (default \code{length(sList)}): runs that many models in parallel,
+each using 1 core for WAIC subject-level computation.
+\item \strong{Vector}: runs \emph{all} models in parallel simultaneously, and entry \code{i}
+specifies how many cores to use for the within-model WAIC subject loop for model \code{i}.
+Useful when models differ in subject count or WAIC cost, e.g.
+\code{cores_for_models = c(10, 5, 8)}.
+Total cores used for WAIC = \code{sum(cores_for_models)}.
+For \code{BayesFactor}, total cores = \code{length(sList) * cores_for_props * cores_per_prop}.
+}}
 
 \item{print_summary}{Boolean (default \code{TRUE}), print table of results}
 
