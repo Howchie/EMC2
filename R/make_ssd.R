@@ -30,6 +30,10 @@
 #'   corresponding field.
 #' @param p_stop Default probability of a stop trial for staircase modes (and
 #'   for fixed SSDs when `p` is omitted). Must lie between 0 and 1.
+#' @param p_stop_replace Logical (default `TRUE`). When `TRUE` each trial is
+#'   independently assigned a stop signal with probability `p_stop`
+#'   (Bernoulli). When `FALSE` exactly `round(n * p_stop)` trials per group
+#'   are designated stop trials, with the specific trials chosen at random.
 #' @param factors Character vector of column names that define separate
 #'   staircases. When `NULL`, all trials share the same staircase.
 #' @param formula Optional formula specifying the grouping structure, e.g.
@@ -89,6 +93,7 @@ make_ssd <- function(values = NULL,
                      stairmin = 0,
                      stairmax = Inf,
                      p_stop = 0.25,
+                     p_stop_replace = TRUE,
                      factors = NULL,
                      formula = NULL,
                      staircase_up = NA,
@@ -113,6 +118,9 @@ make_ssd <- function(values = NULL,
 
   if (!is.numeric(p_stop) || length(p_stop) != 1 || is.na(p_stop) || p_stop < 0 || p_stop > 1) {
     stop("`p_stop` must be a single numeric value between 0 and 1.")
+  }
+  if (!is.logical(p_stop_replace) || length(p_stop_replace) != 1 || is.na(p_stop_replace)) {
+    stop("`p_stop_replace` must be TRUE or FALSE.")
   }
 
   normalise_rule <- function(x) {
@@ -149,6 +157,7 @@ make_ssd <- function(values = NULL,
     stairmin = stairmin,
     stairmax = stairmax,
     p = p_stop,
+    replace = p_stop_replace,
     rules = staircase_rules
   )
 
@@ -187,7 +196,7 @@ make_ssd <- function(values = NULL,
     }
 
     if (isFALSE(staircase)) {
-      assign_fixed_ssd(SSD, values, p, p_stop)
+      assign_fixed_ssd(SSD, values, p, p_stop, p_stop_replace)
     } else {
       specs <- build_staircase_specs(group_id, d, staircase, base_spec, group_cols_local,
                                      staircase_rules)
@@ -200,14 +209,26 @@ make_ssd <- function(values = NULL,
 }
 
 
-assign_fixed_ssd <- function(SSD, values, p, p_stop) {
+sample_stop_trials <- function(n, p, replace) {
+  if (replace) {
+    stats::rbinom(n, 1L, p) == 1L
+  } else {
+    n_stop <- round(n * p)
+    out <- logical(n)
+    if (n_stop > 0L) out[sample.int(n, n_stop)] <- TRUE
+    out
+  }
+}
+
+
+assign_fixed_ssd <- function(SSD, values, p, p_stop, p_stop_replace = TRUE) {
   n <- length(SSD)
   if (!length(values)) {
     return(SSD)
   }
 
   prob <- prepare_value_probabilities(values, p, p_stop)
-  stop_trials <- stats::rbinom(n, 1, prob$total_prob) == 1
+  stop_trials <- sample_stop_trials(n, prob$total_prob, p_stop_replace)
   if (any(stop_trials)) {
     SSD[stop_trials] <- sample(values, size = sum(stop_trials), replace = TRUE, prob = prob$weights)
   }
@@ -241,8 +262,10 @@ assign_staircase_ssd <- function(SSD, group_id, data, specs, rules) {
     if (is.null(p_group)) {
       p_group <- attr(specs, "base_spec")$p
     }
-    p_group <- max(min(p_group, 1), 0)
-    is_stop <- stats::rbinom(length(idx), 1, p_group) == 1
+    p_group   <- max(min(p_group, 1), 0)
+    replace_group <- if (!is.null(spec$replace)) spec$replace else
+                     isTRUE(attr(specs, "base_spec")$replace)
+    is_stop <- sample_stop_trials(length(idx), p_group, replace_group)
     if (!any(is_stop)) {
       next
     }
