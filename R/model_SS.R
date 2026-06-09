@@ -503,7 +503,7 @@ rSSexGaussian <- function(data,pars,ok=rep(TRUE,dim(pars)[1]))
 
     # Upper censoring for staircase trials
     UC <- get_missing(staircase$UC,
-      data[data$lR==levels(data$lR)[[1]],], "UT",Inf,"numeric")[stair]
+      data[data$lR==levels(data$lR)[[1]],], "UC",Inf,"numeric")[stair]
 
     allR <- allrt <- allSSD <- numeric(ncol(dt))  # to store unified results
     allSSD[] <- Inf
@@ -886,7 +886,7 @@ rSShybrid <- function(data,pars,ok=rep(TRUE,dim(pars)[1]))
 
     # Upper censoring for staircase trials
     UC <- get_missing(staircase$UC,
-      data[data$lR==levels(data$lR)[[1]],], "UT",Inf,"numeric")[stair]
+      data[data$lR==levels(data$lR)[[1]],], "UC",Inf,"numeric")[stair]
 
     allR <- allrt <- numeric(ncol(dt))  # to store unified results
     dts <- dt[,stair,drop=F]
