@@ -781,10 +781,11 @@ calc_ll_manager_pw <- function(proposals, dadm, model, r_cores = 1){
   }
 
   model_fun <- function() model
-  ll_unique <- vapply(trial_groups, function(rows) {
+  ll_list <- auto_mclapply(trial_groups, function(rows) {
     trial_dadm <- .waic_subset_dadm(dadm, rows)
-    calc_ll_manager(proposals, trial_dadm, model = model_fun, r_cores = r_cores)
-  }, numeric(nrow(proposals)))
+    calc_ll_manager(proposals, trial_dadm, model = model_fun, r_cores = 1)
+  }, mc.cores = r_cores)
+  ll_unique <- do.call(cbind, ll_list)
   if (is.null(dim(ll_unique))) ll_unique <- matrix(ll_unique, ncol = 1)
 
   expand_map <- attr(dadm, "expand")
