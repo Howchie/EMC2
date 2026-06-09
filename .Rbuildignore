@@ -3,6 +3,7 @@
 ^\.positai$
 ^\.claude$
 ^WorkingTests$
+^Rplots\.pdf$
 ^benchmark_rdm\.R$
 ^docs$
 ^pkgdown$

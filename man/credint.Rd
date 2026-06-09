@@ -13,10 +13,20 @@
   digits = 3,
   N = 1000,
   covariates = NULL,
+  plot = FALSE,
+  plot_args = list(),
   ...
 )
 
-\method{credint}{emc}(x, selection = "mu", probs = c(0.025, 0.5, 0.975), digits = 3, ...)
+\method{credint}{emc}(
+  x,
+  selection = "mu",
+  probs = c(0.025, 0.5, 0.975),
+  digits = 3,
+  plot = FALSE,
+  plot_args = list(),
+  ...
+)
 
 credint(x, ...)
 }
@@ -33,10 +43,23 @@ credint(x, ...)
 
 \item{covariates}{A list of covariates to use for the quantile calculation (only for prior.emc objects)}
 
+\item{plot}{Logical. If \code{TRUE}, the credible intervals are plotted after
+computation. Uses \code{\link{plot_credints_map}} when \code{map = TRUE} and
+the result is a single-element list, and \code{\link{plot_credints}} otherwise
+(including multi-element results such as those from \code{selection =
+"correlation"}, \code{"sigma"}, or \code{"alpha"} with \code{map = TRUE}).
+Default \code{FALSE}.}
+
+\item{plot_args}{Named list of additional arguments forwarded to the plotting
+function. \code{quants} (default \code{1:3}) may be included here to control
+which quantile columns are plotted. All other entries are passed directly to
+\code{\link{plot_credints}} or \code{\link{plot_credints_map}}.}
+
 \item{...}{Optional additional arguments that can be passed to \code{get_pars}}
 }
 \value{
-A list of posterior quantiles for each parameter group in the selected parameter type.
+A list of posterior quantiles for each parameter group in the selected
+parameter type, returned invisibly when \code{plot = TRUE}.
 }
 \description{
 Returns the quantiles of the selected parameter type.
