@@ -73,6 +73,22 @@ stopfn_texg <- function(t, mu, sigma, tau, lb, SSD) {
     .Call(`_EMC2_stopfn_texg`, t, mu, sigma, tau, lb, SSD)
 }
 
+emc2_set_stop_method <- function(method = "auto", n_nodes = 64L) {
+    invisible(.Call(`_EMC2_emc2_set_stop_method`, method, n_nodes))
+}
+
+emc2_get_stop_method <- function() {
+    .Call(`_EMC2_emc2_get_stop_method`)
+}
+
+ss_texg_stop_success_auto_branch <- function(SSD, pars, upper = -1.0) {
+    .Call(`_EMC2_ss_texg_stop_success_auto_branch`, SSD, pars, upper)
+}
+
+ss_texg_stop_success_value <- function(SSD, pars, method = "integrate", upper = -1.0, n_nodes = 64L, k_sigma = 8.0, k_tau = 16.0, max_subdiv = 100L, abs_tol = 1e-8, rel_tol = 1e-6) {
+    .Call(`_EMC2_ss_texg_stop_success_value`, SSD, pars, method, upper, n_nodes, k_sigma, k_tau, max_subdiv, abs_tol, rel_tol)
+}
+
 pEXG_RDEX <- function(q, mu = 5., sigma = 1., tau = 1., lower_tail = TRUE, log_p = FALSE) {
     .Call(`_EMC2_pEXG_RDEX`, q, mu, sigma, tau, lower_tail, log_p)
 }
@@ -119,6 +135,10 @@ stopfn_rdex_old <- function(t, n_acc, mu, sigma, tau, v, B, A, t0, SSD) {
 
 stopfn_rdex <- function(t, n_acc, mu, sigma, tau, lb, v, B, A, t0, s, SSD) {
     .Call(`_EMC2_stopfn_rdex`, t, n_acc, mu, sigma, tau, lb, v, B, A, t0, s, SSD)
+}
+
+ss_rdex_stop_success_value <- function(SSD, pars, method = "integrate", upper = -1.0, n_nodes = 64L, k_sigma = 8.0, k_tau = 16.0, max_subdiv = 100L, abs_tol = 1e-8, rel_tol = 1e-6) {
+    .Call(`_EMC2_ss_rdex_stop_success_value`, SSD, pars, method, upper, n_nodes, k_sigma, k_tau, max_subdiv, abs_tol, rel_tol)
 }
 
 fft_convolve_equiv_cpp <- function(x, y, conj_flag = TRUE) {

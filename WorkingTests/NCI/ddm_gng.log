@@ -1,0 +1,139 @@
+==========================================
+Job Started: Wed May 13 18:53:01 AEST 2026
+Nodes in use:     exec_host = gadi-cpu-clx-1404/0*48
+PBS Job ID: 168271644.gadi-pbs
+PBS Working Directory: /scratch/tg53/ajh575/andrew/NCI
+Requested CPUs: 48
+Requested CPUs per Node: 
+Node File: /local/spool/pbs/aux/168271644.gadi-pbs
+Allocated Nodes:
+gadi-cpu-clx-1404.gadi.nci.org.au
+gadi-cpu-clx-1404.gadi.nci.org.au
+gadi-cpu-clx-1404.gadi.nci.org.au
+gadi-cpu-clx-1404.gadi.nci.org.au
+gadi-cpu-clx-1404.gadi.nci.org.au
+gadi-cpu-clx-1404.gadi.nci.org.au
+gadi-cpu-clx-1404.gadi.nci.org.au
+gadi-cpu-clx-1404.gadi.nci.org.au
+gadi-cpu-clx-1404.gadi.nci.org.au
+gadi-cpu-clx-1404.gadi.nci.org.au
+gadi-cpu-clx-1404.gadi.nci.org.au
+gadi-cpu-clx-1404.gadi.nci.org.au
+gadi-cpu-clx-1404.gadi.nci.org.au
+gadi-cpu-clx-1404.gadi.nci.org.au
+gadi-cpu-clx-1404.gadi.nci.org.au
+gadi-cpu-clx-1404.gadi.nci.org.au
+gadi-cpu-clx-1404.gadi.nci.org.au
+gadi-cpu-clx-1404.gadi.nci.org.au
+gadi-cpu-clx-1404.gadi.nci.org.au
+gadi-cpu-clx-1404.gadi.nci.org.au
+gadi-cpu-clx-1404.gadi.nci.org.au
+gadi-cpu-clx-1404.gadi.nci.org.au
+gadi-cpu-clx-1404.gadi.nci.org.au
+gadi-cpu-clx-1404.gadi.nci.org.au
+gadi-cpu-clx-1404.gadi.nci.org.au
+gadi-cpu-clx-1404.gadi.nci.org.au
+gadi-cpu-clx-1404.gadi.nci.org.au
+gadi-cpu-clx-1404.gadi.nci.org.au
+gadi-cpu-clx-1404.gadi.nci.org.au
+gadi-cpu-clx-1404.gadi.nci.org.au
+gadi-cpu-clx-1404.gadi.nci.org.au
+gadi-cpu-clx-1404.gadi.nci.org.au
+gadi-cpu-clx-1404.gadi.nci.org.au
+gadi-cpu-clx-1404.gadi.nci.org.au
+gadi-cpu-clx-1404.gadi.nci.org.au
+gadi-cpu-clx-1404.gadi.nci.org.au
+gadi-cpu-clx-1404.gadi.nci.org.au
+gadi-cpu-clx-1404.gadi.nci.org.au
+gadi-cpu-clx-1404.gadi.nci.org.au
+gadi-cpu-clx-1404.gadi.nci.org.au
+gadi-cpu-clx-1404.gadi.nci.org.au
+gadi-cpu-clx-1404.gadi.nci.org.au
+gadi-cpu-clx-1404.gadi.nci.org.au
+gadi-cpu-clx-1404.gadi.nci.org.au
+gadi-cpu-clx-1404.gadi.nci.org.au
+gadi-cpu-clx-1404.gadi.nci.org.au
+gadi-cpu-clx-1404.gadi.nci.org.au
+gadi-cpu-clx-1404.gadi.nci.org.au
+PBS_NCPUS: 48
+PBS_NUM_PPN: 
+OMP_NUM_THREADS: 1
+MKL_NUM_THREADS: 1
+MC_CORES: 
+Executing R script: ddm_gng.R
+==========================================
+
+ Sampled Parameters: 
+[1] "v"   "a"   "t0"  "Z"   "sv"  "SZ"  "st0"
+
+ Design Matrices: 
+$v
+ v
+ 1
+
+$a
+ a
+ 1
+
+$t0
+ t0
+  1
+
+$s
+ s
+ 1
+
+$Z
+ Z
+ 1
+
+$sv
+ sv
+  1
+
+$SZ
+ SZ
+  1
+
+$st0
+ st0
+   1
+
+Restarting: 147 of 250 replicates already complete, running remaining 103
+Processing 30 data sets in parallel
+Running data set 148
+Running data set 149
+Running data set 150
+Running data set 151
+Running data set 152
+Running data set 154
+Running data set 154
+Running data set 155
+Running data set 156
+Running data set 157
+Running data set 158
+Running data set 159
+Running data set 160
+Running data set 161
+Running data set 162
+Running data set 163
+Running data set 165
+Running data set 166
+Running data set 167
+Running data set 168
+Running data set 169
+Running data set 171
+Running data set 172
+Running data set 173
+Running data set 174
+Running data set 174
+Running data set 175
+Running data set 176
+Running data set 176
+Running data set 177
+Running data set 178
+Running data set 179
+Running data set 180
+Running data set 181
+Running data set 182
+Running data set 183

@@ -4,7 +4,25 @@
 \alias{SSEXG}
 \title{The ex-Gaussian race model of the stop signal task}
 \usage{
-SSEXG()
+SSEXG(
+  stop_method = c("auto", "integrate", "gl", "analytic"),
+  stop_n_nodes = 64L
+)
+}
+\arguments{
+\item{stop_method}{Method for the stop-success integral:
+\code{"auto"} (default) uses an exact closed form when the race has a
+single go accumulator and the closed form is applicable (no
+response-window censoring of the integral, compatible truncation bounds,
+numerically safe parameter region), and otherwise fixed Gauss-Legendre
+quadrature (with an automatic node bump for tight stop densities);
+\code{"integrate"} is the original adaptive-quadrature route (numerically
+unchanged); \code{"gl"} forces fixed Gauss-Legendre with
+\code{stop_n_nodes} nodes; \code{"analytic"} forces the closed form where
+applicable (Gauss-Legendre fallback otherwise).}
+
+\item{stop_n_nodes}{Number of Gauss-Legendre nodes for \code{"gl"} (and the
+base node count for the \code{"auto"}/\code{"analytic"} fallback).}
 }
 \value{
 A model list with all the necessary functions to sample

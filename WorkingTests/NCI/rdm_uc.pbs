@@ -1,0 +1,66 @@
+#!/bin/bash
+#PBS -N job_name
+#PBS -P tg53
+#PBS -q normal
+#PBS -l ncpus=48
+#PBS -l mem=128GB
+#PBS -l place=pack
+#PBS -l jobfs=10GB
+#PBS -l walltime=48:00:00
+#PBS -j oe
+#PBS -l wd
+
+export LD_PRELOAD=/apps/gcc/12.2.0/lib64/libstdc++.so.6
+export OMP_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export VECLIB_MAXIMUM_THREADS=1
+export OMP_DYNAMIC=FALSE   MKL_DYNAMIC=FALSE   OPENBLAS_DYNAMIC=NO
+export KMP_INIT_AT_FORK=FALSE  MKL_DISABLE_FAST_MM=1
+
+# Load R
+module purge
+module load gcc/12.2.0
+module load intel-compiler/2021.10.0
+module load R/4.5.0
+
+# Define R script to run and output log file
+R_SCRIPT="rdm_UC.R"
+LOG_FILE="rdm_UC.log"
+
+# Move to the PBS working directory
+cd $PBS_O_WORKDIR
+
+# Show nodes for job
+exec_host_info=$(qstat -f $PBS_JOBID | grep exec_host)
+echo "Nodes in use: $exec_host_info"
+
+# Print startup information to log file
+{
+  echo "=========================================="
+  echo "Job Started: $(date)"
+  echo "Nodes in use: $exec_host_info"
+  echo "PBS Job ID: $PBS_JOBID"
+  echo "PBS Working Directory: $PBS_O_WORKDIR"
+  echo "Requested CPUs: $PBS_NCPUS"
+  echo "Requested CPUs per Node: $PBS_NUM_PPN"
+  echo "Node File: $PBS_NODEFILE"
+  echo "Allocated Nodes:"
+  cat $PBS_NODEFILE
+  echo "PBS_NCPUS: $PBS_NCPUS"
+  echo "PBS_NUM_PPN: $PBS_NUM_PPN"
+  echo "OMP_NUM_THREADS: $OMP_NUM_THREADS"
+  echo "MKL_NUM_THREADS: $MKL_NUM_THREADS"
+  echo "MC_CORES: $MC_CORES"
+  echo "Executing R script: $R_SCRIPT"
+  echo "=========================================="
+} > "$LOG_FILE"
+
+# Run the R script and log output
+{
+  time Rscript "$R_SCRIPT"
+} >> "$LOG_FILE" 2>&1 || {
+  echo "Error: R script execution failed!" >> "$LOG_FILE"
+  exit 1
+}
+

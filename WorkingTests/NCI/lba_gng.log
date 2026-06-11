@@ -1,0 +1,555 @@
+==========================================
+Job Started: Wed May 13 19:36:24 AEST 2026
+Nodes in use:     exec_host = gadi-cpu-clx-0396/0*48
+PBS Job ID: 168272894.gadi-pbs
+PBS Working Directory: /scratch/tg53/ajh575/andrew/NCI
+Requested CPUs: 48
+Requested CPUs per Node: 
+Node File: /local/spool/pbs/aux/168272894.gadi-pbs
+Allocated Nodes:
+gadi-cpu-clx-0396.gadi.nci.org.au
+gadi-cpu-clx-0396.gadi.nci.org.au
+gadi-cpu-clx-0396.gadi.nci.org.au
+gadi-cpu-clx-0396.gadi.nci.org.au
+gadi-cpu-clx-0396.gadi.nci.org.au
+gadi-cpu-clx-0396.gadi.nci.org.au
+gadi-cpu-clx-0396.gadi.nci.org.au
+gadi-cpu-clx-0396.gadi.nci.org.au
+gadi-cpu-clx-0396.gadi.nci.org.au
+gadi-cpu-clx-0396.gadi.nci.org.au
+gadi-cpu-clx-0396.gadi.nci.org.au
+gadi-cpu-clx-0396.gadi.nci.org.au
+gadi-cpu-clx-0396.gadi.nci.org.au
+gadi-cpu-clx-0396.gadi.nci.org.au
+gadi-cpu-clx-0396.gadi.nci.org.au
+gadi-cpu-clx-0396.gadi.nci.org.au
+gadi-cpu-clx-0396.gadi.nci.org.au
+gadi-cpu-clx-0396.gadi.nci.org.au
+gadi-cpu-clx-0396.gadi.nci.org.au
+gadi-cpu-clx-0396.gadi.nci.org.au
+gadi-cpu-clx-0396.gadi.nci.org.au
+gadi-cpu-clx-0396.gadi.nci.org.au
+gadi-cpu-clx-0396.gadi.nci.org.au
+gadi-cpu-clx-0396.gadi.nci.org.au
+gadi-cpu-clx-0396.gadi.nci.org.au
+gadi-cpu-clx-0396.gadi.nci.org.au
+gadi-cpu-clx-0396.gadi.nci.org.au
+gadi-cpu-clx-0396.gadi.nci.org.au
+gadi-cpu-clx-0396.gadi.nci.org.au
+gadi-cpu-clx-0396.gadi.nci.org.au
+gadi-cpu-clx-0396.gadi.nci.org.au
+gadi-cpu-clx-0396.gadi.nci.org.au
+gadi-cpu-clx-0396.gadi.nci.org.au
+gadi-cpu-clx-0396.gadi.nci.org.au
+gadi-cpu-clx-0396.gadi.nci.org.au
+gadi-cpu-clx-0396.gadi.nci.org.au
+gadi-cpu-clx-0396.gadi.nci.org.au
+gadi-cpu-clx-0396.gadi.nci.org.au
+gadi-cpu-clx-0396.gadi.nci.org.au
+gadi-cpu-clx-0396.gadi.nci.org.au
+gadi-cpu-clx-0396.gadi.nci.org.au
+gadi-cpu-clx-0396.gadi.nci.org.au
+gadi-cpu-clx-0396.gadi.nci.org.au
+gadi-cpu-clx-0396.gadi.nci.org.au
+gadi-cpu-clx-0396.gadi.nci.org.au
+gadi-cpu-clx-0396.gadi.nci.org.au
+gadi-cpu-clx-0396.gadi.nci.org.au
+gadi-cpu-clx-0396.gadi.nci.org.au
+PBS_NCPUS: 48
+PBS_NUM_PPN: 
+OMP_NUM_THREADS: 1
+MKL_NUM_THREADS: 1
+MC_CORES: 
+Executing R script: lba_gng.R
+==========================================
+Parameter(s) pContaminant not specified in formula and assumed constant.
+
+ Sampled Parameters: 
+[1] "v"        "v_lMTRUE" "B"        "t0"       "A"       
+
+ Design Matrices: 
+$v
+    lM v v_lMTRUE
+  TRUE 1        1
+ FALSE 1        0
+
+$B
+ B
+ 1
+
+$t0
+ t0
+  1
+
+$sv
+ sv
+  1
+
+$A
+ A
+ 1
+
+$pContaminant
+ pContaminant
+            1
+
+Processing 30 data sets in parallel
+Running data set 1
+Running data set 3
+Running data set 4
+Running data set 5
+Running data set 7
+Running data set 7
+Running data set 8
+Running data set 10
+Running data set 10
+Running data set 11
+Running data set 13
+Running data set 13
+Running data set 15
+Running data set 15
+Running data set 15
+Running data set 16
+Running data set 17
+Running data set 18
+Running data set 19
+Running data set 20
+Running data set 21
+Running data set 22
+Running data set 23
+Running data set 24
+Running data set 25
+Running data set 26
+Running data set 27
+Running data set 28
+Running data set 30
+Running data set 30
+Running data set 31
+Running data set 32
+Running data set 33
+Running data set 34
+Running data set 35
+Running data set 36
+Running data set 37
+Running data set 38
+Running data set 39
+Running data set 40
+Running data set 41
+Running data set 42
+Running data set 43
+Running data set 44
+Running data set 45
+Running data set 46
+Running data set 47
+Running data set 48
+Running data set 49
+Running data set 50
+Running data set 51
+Running data set 52
+Running data set 53
+Running data set 54
+Running data set 55
+Running data set 56
+Running data set 57
+Running data set 58
+Running data set 59
+Running data set 60
+Running data set 61
+Running data set 62
+Running data set 63
+Running data set 64
+Running data set 65
+Running data set 66
+Running data set 67
+Running data set 68
+Running data set 69
+Running data set 70
+Running data set 71
+Running data set 72
+Running data set 73
+Running data set 74
+Running data set 75
+Running data set 76
+Running data set 77
+Running data set 78
+Running data set 79
+Running data set 80
+Running data set 81
+Running data set 82
+Running data set 83
+Running data set 84
+Running data set 85
+Running data set 86
+Running data set 87
+Running data set 88
+Running data set 89
+Running data set 90
+Running data set 91
+Running data set 92
+Running data set 93
+Running data set 94
+Running data set 95
+Running data set 96
+Running data set 97
+Running data set 98
+Running data set 99
+Running data set 100
+Running data set 101
+Running data set 102
+Running data set 103
+Running data set 104
+Running data set 105
+Running data set 106
+Running data set 107
+Running data set 108
+Running data set 109
+Running data set 110
+Running data set 111
+Running data set 112
+Running data set 113
+Running data set 114
+Running data set 115
+Running data set 116
+Running data set 117
+Running data set 118
+Running data set 119
+Running data set 120
+Running data set 121
+Running data set 122
+Running data set 123
+Running data set 124
+Running data set 125
+Running data set 126
+Running data set 127
+Running data set 128
+Running data set 129
+Running data set 130
+Running data set 131
+Running data set 132
+Running data set 133
+Running data set 134
+Running data set 135
+Running data set 136
+Running data set 137
+Running data set 138
+Running data set 139
+Running data set 140
+Running data set 141
+Running data set 142
+Running data set 143
+Running data set 144
+Running data set 145
+Running data set 146
+Running data set 147
+Running data set 148
+Running data set 149
+Running data set 150
+Running data set 151
+Running data set 152
+Running data set 153
+Running data set 154
+Running data set 155
+Running data set 156
+Running data set 157
+Running data set 158
+Running data set 159
+Running data set 160
+Running data set 161
+Running data set 162
+Running data set 163
+Running data set 164
+Running data set 165
+Running data set 166
+Running data set 167
+Running data set 168
+Running data set 169
+Running data set 170
+Running data set 171
+Running data set 172
+Running data set 173
+Running data set 174
+Running data set 175
+Running data set 176
+Running data set 177
+Running data set 178
+Running data set 179
+Running data set 180
+Running data set 181
+Running data set 182
+Running data set 183
+Running data set 184
+Running data set 185
+Running data set 186
+Running data set 187
+Running data set 188
+Running data set 189
+Running data set 190
+Running data set 191
+Running data set 192
+Running data set 193
+Running data set 194
+Running data set 195
+Running data set 196
+Running data set 197
+Running data set 198
+Running data set 199
+Running data set 200
+Running data set 201
+Running data set 202
+Running data set 203
+Running data set 204
+Running data set 205
+Running data set 206
+Running data set 207
+Running data set 208
+Running data set 209
+Running data set 210
+Running data set 211
+Running data set 212
+Running data set 213
+Running data set 214
+Running data set 215
+Running data set 216
+Running data set 217
+Running data set 218
+Running data set 219
+Running data set 220
+Running data set 221
+Running data set 222
+Running data set 223
+Running data set 224
+Running data set 225
+Running data set 226
+Running data set 227
+Running data set 228
+Running data set 229
+Running data set 230
+Running data set 231
+Running data set 232
+Running data set 233
+Running data set 234
+Running data set 235
+Running data set 236
+Running data set 237
+Running data set 238
+Running data set 239
+Running data set 240
+Running data set 241
+Running data set 242
+Running data set 243
+Running data set 244
+Running data set 245
+Running data set 246
+Running data set 247
+Running data set 248
+Running data set 249
+Running data set 250
+Running data set 251
+Running data set 252
+Running data set 253
+Running data set 254
+Running data set 255
+Running data set 256
+Running data set 257
+Running data set 258
+Running data set 259
+Running data set 260
+Running data set 261
+Running data set 262
+Running data set 263
+Running data set 264
+Running data set 265
+Running data set 266
+Running data set 267
+Running data set 268
+Running data set 269
+Running data set 270
+Running data set 271
+Running data set 272
+Running data set 273
+Running data set 274
+Running data set 275
+Running data set 276
+Running data set 277
+Running data set 278
+Running data set 279
+Running data set 280
+Running data set 281
+Running data set 282
+Running data set 283
+Running data set 284
+Running data set 285
+Running data set 286
+Running data set 287
+Running data set 288
+Running data set 289
+Running data set 290
+Running data set 291
+Running data set 292
+Running data set 293
+Running data set 294
+Running data set 295
+Running data set 296
+Running data set 297
+Running data set 298
+Running data set 299
+Running data set 300
+Running data set 301
+Running data set 302
+Running data set 303
+Running data set 304
+Running data set 305
+Running data set 306
+Running data set 307
+Running data set 308
+Running data set 309
+Running data set 310
+Running data set 311
+Running data set 312
+Running data set 313
+Running data set 314
+Running data set 315
+Running data set 316
+Running data set 317
+Running data set 318
+Running data set 319
+Running data set 320
+Running data set 321
+Running data set 322
+Running data set 323
+Running data set 324
+Running data set 325
+Running data set 326
+Running data set 327
+Running data set 328
+Running data set 329
+Running data set 330
+Running data set 331
+Running data set 332
+Running data set 333
+Running data set 334
+Running data set 335
+Running data set 336
+Running data set 337
+Running data set 338
+Running data set 339
+Running data set 340
+Running data set 341
+Running data set 342
+Running data set 343
+Running data set 344
+Running data set 345
+Running data set 346
+Running data set 347
+Running data set 348
+Running data set 349
+Running data set 350
+Running data set 351
+Running data set 352
+Running data set 353
+Running data set 354
+Running data set 355
+Running data set 356
+Running data set 357
+Running data set 358
+Running data set 359
+Running data set 360
+Running data set 361
+Running data set 362
+Running data set 363
+Running data set 364
+Running data set 365
+Running data set 366
+Running data set 367
+Running data set 368
+Running data set 369
+Running data set 370
+Running data set 371
+Running data set 372
+Running data set 373
+Running data set 374
+Running data set 375
+Running data set 376
+Running data set 377
+Running data set 378
+Running data set 379
+Running data set 380
+Running data set 381
+Running data set 382
+Running data set 383
+Running data set 384
+Running data set 385
+Running data set 386
+Running data set 387
+Running data set 388
+Running data set 389
+Running data set 390
+Running data set 391
+Running data set 392
+Running data set 393
+Running data set 394
+Running data set 395
+Running data set 396
+Running data set 397
+Running data set 398
+Running data set 399
+Running data set 400
+Running data set 401
+Running data set 402
+Running data set 403
+Running data set 404
+Running data set 405
+Running data set 406
+Running data set 407
+Running data set 408
+Running data set 409
+Running data set 410
+Running data set 411
+Running data set 412
+Running data set 413
+Running data set 414
+Running data set 415
+Running data set 416
+Running data set 417
+Running data set 418
+Running data set 419
+Running data set 420
+Running data set 421
+Running data set 422
+Running data set 423
+Running data set 424
+Running data set 425
+Running data set 426
+Running data set 427
+Running data set 428
+Running data set 429
+Running data set 430
+Running data set 431
+Running data set 432
+Running data set 433
+Running data set 434
+Running data set 435
+Running data set 436
+Running data set 437
+Running data set 438
+Running data set 439
+Running data set 440
+Running data set 441
+Running data set 442
+Running data set 443
+Running data set 444
+Running data set 445
+Running data set 446
+Running data set 447
+Running data set 448
+Running data set 449
+Running data set 450
+Running data set 451
+Running data set 452
+Running data set 453
+Running data set 454
+Running data set 455
+Running data set 456
+Running data set 457
+Running data set 458
+Running data set 459

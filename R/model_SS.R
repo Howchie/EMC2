@@ -209,9 +209,7 @@ apply_grouped_staircase <- function(dts, staircase, accST = NULL) {
   res
 }
 
-`%||%` <- function(x, y) {
-  if (is.null(x)) y else x
-}
+# NB: %||% is defined in make_ssd.R
 
 
 
@@ -625,7 +623,8 @@ my.integrate <- function(..., upper = Inf, big = 10) {
 
 pstopTEXG <- function(
     parstop, n_acc, upper=Inf,
-    gpars=c("mu","sigma","tau","exg_lb"), spars=c("muS","sigmaS","tauS","exgS_lb")
+    gpars=c("mu","sigma","tau","exg_lb"), spars=c("muS","sigmaS","tauS","exgS_lb"),
+    method="integrate", n_nodes=64L
 ) {
   sindex <- seq(1,nrow(parstop),by=n_acc)  # Stop accumulator index
   ps <- parstop[sindex,spars,drop=FALSE]   # Stop accumulator parameters
@@ -641,12 +640,17 @@ pstopTEXG <- function(
   # for (i in 1:ntrials)
   #   cells[i] <- paste(SSDs[i],ps[i,],pgo[,i,],upper[i],collapse="")
   uniq <- !duplicated(cells)
+  # method/n_nodes routed through stop_success_texg_R; its "integrate" branch
+  # is the same my.integrate(stopfn_texg, ...) call as always (numerically
+  # untouched). Window k_sigma/k_tau left at their defaults, which mirror the
+  # C++ constants (SS_WINDOW_K_SIGMA/K_TAU in gl_quad.h).
   ups <- sapply(which(uniq),function(i){
-    my.integrate(f=stopfn_texg,lower=ps[i,"exgS_lb"],SSD=SSDs[i],upper=upper[i],
-                 mu=c(ps[i,"muS"],pgo[,i,"mu"]),
-                 sigma=c(ps[i,"sigmaS"],pgo[,i,"sigma"]),
-                 tau=c(ps[i,"tauS"],pgo[,i,"tau"]),
-                 lb=c(ps[i,"exgS_lb"],pgo[,i,"exg_lb"]))
+    stop_success_texg_R(mu=c(ps[i,"muS"],pgo[,i,"mu"]),
+                        sigma=c(ps[i,"sigmaS"],pgo[,i,"sigma"]),
+                        tau=c(ps[i,"tauS"],pgo[,i,"tau"]),
+                        lb=c(ps[i,"exgS_lb"],pgo[,i,"exg_lb"]),
+                        SSD=SSDs[i],upper=upper[i],
+                        method=method,n_nodes=n_nodes)
   })
   ups[as.numeric(factor(cells,levels=cells[uniq]))]
 }
@@ -734,12 +738,31 @@ pstopTEXG <- function(
 #'
 #' Verbruggen, F., Aron, A. R., Band, G. P., Beste, C., Bissett, P. G., Brockett, A. T., ... & Boehler, C. N. (2019). A consensus guide to capturing the ability to inhibit actions and impulsive behaviors in the stop-signal task. *elife*, *8*, e46323. \doi{10.7554/eLife.46323}
 #'
+#' @param stop_method Method for the stop-success integral:
+#'   \code{"auto"} (default) uses an exact closed form when the race has a
+#'   single go accumulator and the closed form is applicable (no
+#'   response-window censoring of the integral, compatible truncation bounds,
+#'   numerically safe parameter region), and otherwise fixed Gauss-Legendre
+#'   quadrature (with an automatic node bump for tight stop densities);
+#'   \code{"integrate"} is the original adaptive-quadrature route (numerically
+#'   unchanged); \code{"gl"} forces fixed Gauss-Legendre with
+#'   \code{stop_n_nodes} nodes; \code{"analytic"} forces the closed form where
+#'   applicable (Gauss-Legendre fallback otherwise).
+#' @param stop_n_nodes Number of Gauss-Legendre nodes for \code{"gl"} (and the
+#'   base node count for the \code{"auto"}/\code{"analytic"} fallback).
 #' @return A model list with all the necessary functions to sample
 #' @export
-SSEXG <- function() {
+SSEXG <- function(stop_method = c("auto", "integrate", "gl", "analytic"),
+                  stop_n_nodes = 64L) {
+  stop_method <- match.arg(stop_method)
+  stop_n_nodes <- as.integer(stop_n_nodes)
+  if (length(stop_n_nodes) != 1L || is.na(stop_n_nodes) || stop_n_nodes < 2L)
+    stop("stop_n_nodes must be a single integer >= 2")
   list(
     type = "RACE",
     c_name = "SSEXG",
+    stop_method = stop_method,
+    stop_n_nodes = stop_n_nodes,
     p_types = c(
       mu = log(.4), sigma = log(.05), tau = log(.1),
       muS = log(.3), sigmaS = log(.025), tauS = log(.05),
@@ -788,9 +811,11 @@ SSEXG <- function() {
       parsS <- pars[ , c("muS", "sigmaS", "tauS", "SSD", "exgS_lb"), drop=FALSE]
       return(ptexGaussianS(rt, parsS))
     },
-    # Stop probability integral
+    # Stop probability integral (stop_method/stop_n_nodes captured from the
+    # SSEXG() call so the R likelihood route honours the same choice as C++)
     sfun = function(pars, n_acc, upper = Inf) {
-      return(pstopTEXG(pars, n_acc, upper = upper))
+      return(pstopTEXG(pars, n_acc, upper = upper,
+                       method = stop_method, n_nodes = stop_n_nodes))
     },
     # Random function for SS race
     # TODO
@@ -991,7 +1016,8 @@ rSShybrid <- function(data,pars,ok=rep(TRUE,dim(pars)[1]))
 
 pstopHybrid <- function(
     parstop, n_acc, upper = Inf,
-    gpars = c("v", "B", "A", "t0", "s"), spars = c("muS", "sigmaS", "tauS", "exgS_lb")
+    gpars = c("v", "B", "A", "t0", "s"), spars = c("muS", "sigmaS", "tauS", "exgS_lb"),
+    method = "integrate", n_nodes = 64L
 ) {
   sindex <- seq(1,nrow(parstop),by=n_acc)  # Stop accumulator index
   ps <- parstop[sindex,spars,drop=FALSE]   # Stop accumulator parameters
@@ -1004,15 +1030,19 @@ pstopHybrid <- function(
   mat <- cbind(SSDs, ps, upper, matrix(as.vector(aperm(pgo, c(2, 1, 3))), nrow = ntrials))
   cells <- do.call(paste, c(unname(as.data.frame(mat)), sep = ""))
   uniq <- !duplicated(cells)
+  # method/n_nodes routed through stop_success_rdex_R; its "integrate" branch
+  # is the same my.integrate(stopfn_rdex, ...) call as always ("auto" maps to
+  # "gl" + node bump there: RDEX has no analytic form). Window k_sigma/k_tau
+  # left at their defaults, which mirror the C++ constants
+  # (SS_WINDOW_K_SIGMA/K_TAU in gl_quad.h).
+  if (identical(method, "analytic")) method <- "auto"
   ups <- sapply(which(uniq),function(i){
-    my.integrate(
-      # args passed to `my.integrate`
-      f = stopfn_rdex, lower = ps[i, "exgS_lb"], upper = upper[i],
-      # args passed to `stopfn_rdex`
+    stop_success_rdex_R(
       n_acc = n_acc,
       mu = ps[i, "muS"], sigma = ps[i, "sigmaS"], tau = ps[i, "tauS"], lb = ps[i, "exgS_lb"],
       v = pgo[ , i, "v"], B = pgo[ , i, "B"], A = pgo[ , i, "A"], t0 = pgo[ , i, "t0"], s = pgo[ , i, "s"],
-      SSD = SSDs[i]
+      SSD = SSDs[i], upper = upper[i],
+      method = method, n_nodes = n_nodes
     )
   })
   ups[as.numeric(factor(cells,levels=cells[uniq]))]
@@ -1087,12 +1117,27 @@ pstopHybrid <- function(
 #'
 #' Tanis, C. C., Heathcote, A., Zrubka, M., & Matzke, D. (2024). A hybrid approach to dynamic cognitive psychometrics: Dynamic cognitive psychometrics. *Behavior Research Methods*, *56*(6), 5647-5666. \doi{10.3758/s13428-023-02295-y}
 #'
+#' @param stop_method Method for the stop-success integral: \code{"auto"}
+#'   (default) uses fixed Gauss-Legendre quadrature with an automatic node
+#'   bump for tight stop densities (no closed form exists for this model);
+#'   \code{"integrate"} is the original adaptive-quadrature route (numerically
+#'   unchanged); \code{"gl"} forces fixed Gauss-Legendre with
+#'   \code{stop_n_nodes} nodes.
+#' @param stop_n_nodes Number of Gauss-Legendre nodes for \code{"gl"} (and the
+#'   base node count for the \code{"auto"} route).
 #' @return A model list with all the necessary functions to sample
 #' @export
-SSRDEX <- function() {
+SSRDEX <- function(stop_method = c("auto", "integrate", "gl"),
+                   stop_n_nodes = 64L) {
+  stop_method <- match.arg(stop_method)
+  stop_n_nodes <- as.integer(stop_n_nodes)
+  if (length(stop_n_nodes) != 1L || is.na(stop_n_nodes) || stop_n_nodes < 2L)
+    stop("stop_n_nodes must be a single integer >= 2")
   list(
     type = "RACE",
     c_name = "SSRDEX",
+    stop_method = stop_method,
+    stop_n_nodes = stop_n_nodes,
     p_types = c(
       v = log(1), B = log(1), A = log(0), t0 = log(0), s = log(1),
       muS = log(.3), sigmaS = log(.025), tauS = log(.05),
@@ -1145,9 +1190,11 @@ SSRDEX <- function() {
       parsS <- pars[ , c("muS", "sigmaS", "tauS", "SSD", "exgS_lb"), drop=FALSE]
       return(ptexGaussianS(rt, parsS))
     },
-    # Stop probability integral
+    # Stop probability integral (stop_method/stop_n_nodes captured from the
+    # SSRDEX() call so the R likelihood route honours the same choice as C++)
     sfun = function(pars, n_acc, upper = Inf) {
-      return(pstopHybrid(pars, n_acc, upper = upper))
+      return(pstopHybrid(pars, n_acc, upper = upper,
+                         method = stop_method, n_nodes = stop_n_nodes))
     },
     # Random function for SS race
     rfun = function(data = NULL, pars) {

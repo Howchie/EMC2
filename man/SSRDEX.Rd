@@ -4,7 +4,18 @@
 \alias{SSRDEX}
 \title{The hybrid Wald / ex-Gaussian race model of the stop signal task}
 \usage{
-SSRDEX()
+SSRDEX(stop_method = c("auto", "integrate", "gl"), stop_n_nodes = 64L)
+}
+\arguments{
+\item{stop_method}{Method for the stop-success integral: \code{"auto"}
+(default) uses fixed Gauss-Legendre quadrature with an automatic node
+bump for tight stop densities (no closed form exists for this model);
+\code{"integrate"} is the original adaptive-quadrature route (numerically
+unchanged); \code{"gl"} forces fixed Gauss-Legendre with
+\code{stop_n_nodes} nodes.}
+
+\item{stop_n_nodes}{Number of Gauss-Legendre nodes for \code{"gl"} (and the
+base node count for the \code{"auto"} route).}
 }
 \value{
 A model list with all the necessary functions to sample

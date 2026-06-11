@@ -477,7 +477,7 @@ static inline double ss_trial_log_response_density(
     double rt_eff = rt - SSD;
     if (rt_eff < 0.0) rt_eff = 0.0;
     double log_pstop = stop_success_ptr(SSD, P_go, min_ll, rt_eff,
-                                        100, 1e-8, 1e-6, 8.0, 16.0);
+                                        100, 1e-8, 1e-6, SS_WINDOW_K_SIGMA, SS_WINDOW_K_TAU);
     if (!R_FINITE(log_pstop)) log_pstop = R_NegInf;
 
     const double term_gf = std::log(gf) + st_base;
@@ -801,7 +801,7 @@ double c_log_likelihood_ss(
           // Stop trial, no ST accumulators: gf + (1-gf)*(1-tf)*pStop
           NumericMatrix P_go = submat_rcpp(P, is_go);
           double log_pstop = stop_success_ptr(SSD[start_row], P_go, min_ll, R_PosInf,
-                                              100, 1e-8, 1e-6, 8.0, 16.0);
+                                              100, 1e-8, 1e-6, SS_WINDOW_K_SIGMA, SS_WINDOW_K_TAU);
           if (!R_FINITE(log_pstop)) log_pstop = R_NegInf;
           double comp1 = std::log(gf);
           double comp2 = log1m(gf) + log1m(tf) + log_pstop;
@@ -831,7 +831,7 @@ double c_log_likelihood_ss(
       NumericMatrix P_go = submat_rcpp(P, is_go);
       if (stop_can_act) {
         logS_stop = stop_logsurv_ptr(uc_eff, P);
-        log_pstop = stop_success_ptr(SSD[start_row], P_go, min_ll, uc_eff, 100, 1e-8, 1e-6, 8.0, 16.0);
+        log_pstop = stop_success_ptr(SSD[start_row], P_go, min_ll, uc_eff, 100, 1e-8, 1e-6, SS_WINDOW_K_SIGMA, SS_WINDOW_K_TAU);
         if (!R_FINITE(log_pstop)) log_pstop = R_NegInf;
       }
 
@@ -939,7 +939,7 @@ double c_log_likelihood_ss(
       double rt_eff = rt - SSD[start_row];
       if (rt_eff < 0.0) rt_eff = 0.0;
       double log_pstop = stop_success_ptr(SSD[start_row], P_go, min_ll, rt_eff,
-                                          100, 1e-8, 1e-6, 8.0, 16.0);
+                                          100, 1e-8, 1e-6, SS_WINDOW_K_SIGMA, SS_WINDOW_K_TAU);
       if (!R_FINITE(log_pstop)) log_pstop = R_NegInf;
 
       double st_base = st_winner_logpdf + st_loss_sum;
@@ -1361,7 +1361,7 @@ static inline SSModelAdapter resolve_ss_adapter(const std::string& type_std) {
   a.go_lpdf_ptr      = is_exg ? texg_go_lpdf          : rdex_go_lpdf;
   a.go_lccdf_ptr     = is_exg ? texg_go_lccdf          : rdex_go_lccdf;
   a.stop_logsurv_ptr = is_exg ? stop_logsurv_texg_fn   : stop_logsurv_rdex_fn;
-  a.stop_success_ptr = is_exg ? ss_texg_stop_success_lpdf : ss_rdex_stop_success_lpdf;
+  a.stop_success_ptr = is_exg ? ss_texg_stop_success_lpdf_live : ss_rdex_stop_success_lpdf_live;
   a.idx_tf           = is_exg ? 6 : 8;
   a.idx_gf           = is_exg ? 7 : 9;
   return a;

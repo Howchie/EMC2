@@ -25,7 +25,7 @@ Authors:
   \item Niek Stevenson \email{niek.stevenson@gmail.com} (\href{https://orcid.org/0000-0003-3206-7544}{ORCID})
   \item Michelle Donzallaz
   \item Andrew Heathcote
-  \item Steven Miletić
+  \item Steven Mileti<c4><87>
 }
 
 Other contributors:

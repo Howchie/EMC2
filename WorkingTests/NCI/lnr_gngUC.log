@@ -1,0 +1,260 @@
+==========================================
+Job Started: Mon May 11 08:56:32 AEST 2026
+Nodes in use:     exec_host = gadi-cpu-clx-0071/0*48
+PBS Job ID: 168038546.gadi-pbs
+PBS Working Directory: /scratch/tg53/ajh575/andrew/NCI
+Requested CPUs: 48
+Requested CPUs per Node: 
+Node File: /local/spool/pbs/aux/168038546.gadi-pbs
+Allocated Nodes:
+gadi-cpu-clx-0071.gadi.nci.org.au
+gadi-cpu-clx-0071.gadi.nci.org.au
+gadi-cpu-clx-0071.gadi.nci.org.au
+gadi-cpu-clx-0071.gadi.nci.org.au
+gadi-cpu-clx-0071.gadi.nci.org.au
+gadi-cpu-clx-0071.gadi.nci.org.au
+gadi-cpu-clx-0071.gadi.nci.org.au
+gadi-cpu-clx-0071.gadi.nci.org.au
+gadi-cpu-clx-0071.gadi.nci.org.au
+gadi-cpu-clx-0071.gadi.nci.org.au
+gadi-cpu-clx-0071.gadi.nci.org.au
+gadi-cpu-clx-0071.gadi.nci.org.au
+gadi-cpu-clx-0071.gadi.nci.org.au
+gadi-cpu-clx-0071.gadi.nci.org.au
+gadi-cpu-clx-0071.gadi.nci.org.au
+gadi-cpu-clx-0071.gadi.nci.org.au
+gadi-cpu-clx-0071.gadi.nci.org.au
+gadi-cpu-clx-0071.gadi.nci.org.au
+gadi-cpu-clx-0071.gadi.nci.org.au
+gadi-cpu-clx-0071.gadi.nci.org.au
+gadi-cpu-clx-0071.gadi.nci.org.au
+gadi-cpu-clx-0071.gadi.nci.org.au
+gadi-cpu-clx-0071.gadi.nci.org.au
+gadi-cpu-clx-0071.gadi.nci.org.au
+gadi-cpu-clx-0071.gadi.nci.org.au
+gadi-cpu-clx-0071.gadi.nci.org.au
+gadi-cpu-clx-0071.gadi.nci.org.au
+gadi-cpu-clx-0071.gadi.nci.org.au
+gadi-cpu-clx-0071.gadi.nci.org.au
+gadi-cpu-clx-0071.gadi.nci.org.au
+gadi-cpu-clx-0071.gadi.nci.org.au
+gadi-cpu-clx-0071.gadi.nci.org.au
+gadi-cpu-clx-0071.gadi.nci.org.au
+gadi-cpu-clx-0071.gadi.nci.org.au
+gadi-cpu-clx-0071.gadi.nci.org.au
+gadi-cpu-clx-0071.gadi.nci.org.au
+gadi-cpu-clx-0071.gadi.nci.org.au
+gadi-cpu-clx-0071.gadi.nci.org.au
+gadi-cpu-clx-0071.gadi.nci.org.au
+gadi-cpu-clx-0071.gadi.nci.org.au
+gadi-cpu-clx-0071.gadi.nci.org.au
+gadi-cpu-clx-0071.gadi.nci.org.au
+gadi-cpu-clx-0071.gadi.nci.org.au
+gadi-cpu-clx-0071.gadi.nci.org.au
+gadi-cpu-clx-0071.gadi.nci.org.au
+gadi-cpu-clx-0071.gadi.nci.org.au
+gadi-cpu-clx-0071.gadi.nci.org.au
+gadi-cpu-clx-0071.gadi.nci.org.au
+PBS_NCPUS: 48
+PBS_NUM_PPN: 
+OMP_NUM_THREADS: 1
+MKL_NUM_THREADS: 1
+MC_CORES: 
+Executing R script: lnr_gngUC.R
+==========================================
+Parameter(s) pContaminant not specified in formula and assumed constant.
+
+ Sampled Parameters: 
+[1] "m"        "m_lMTRUE" "s"        "t0"      
+
+ Design Matrices: 
+$m
+    lM m m_lMTRUE
+  TRUE 1        1
+ FALSE 1        0
+
+$s
+ s
+ 1
+
+$t0
+ t0
+  1
+
+$pContaminant
+ pContaminant
+            1
+
+Restarting from partial SBC_temp in SBC_LNR_gngUC.RData: 335 of 500 replicates complete, running remaining 165
+Processing 30 data sets in parallel
+Running data set 336
+Running data set 337
+Running data set 339
+Running data set 339
+Running data set 340
+Running data set 342
+Running data set 342
+Running data set 343
+Running data set 344
+Running data set 346
+Running data set 346
+Running data set 347
+Running data set 348
+Running data set 350
+Running data set 350
+Running data set 351
+Running data set 353
+Running data set 353
+Running data set 354
+Running data set 355
+Running data set 356
+Running data set 357
+Running data set 358
+Running data set 359
+Running data set 360
+Running data set 361
+Running data set 362
+Running data set 363
+Running data set 364
+Running data set 365
+Running data set 366
+Running data set 367
+Running data set 368
+Running data set 369
+Running data set 370
+Running data set 371
+Running data set 372
+Running data set 373
+Running data set 374
+Running data set 375
+Running data set 376
+Running data set 377
+Running data set 378
+Running data set 379
+Running data set 380
+Running data set 381
+Running data set 382
+Running data set 383
+Running data set 384
+Running data set 385
+Running data set 386
+Running data set 387
+Running data set 388
+Running data set 389
+Running data set 390
+Running data set 391
+Running data set 392
+Running data set 393
+Running data set 394
+Running data set 395
+Running data set 396
+Running data set 397
+Running data set 398
+Running data set 399
+Running data set 400
+Running data set 401
+Running data set 402
+Running data set 403
+Running data set 404
+Running data set 405
+Running data set 406
+Running data set 407
+Running data set 408
+Running data set 409
+Running data set 410
+Running data set 411
+Running data set 412
+Running data set 413
+Running data set 414
+Running data set 415
+Running data set 416
+Running data set 417
+Running data set 418
+Running data set 419
+Running data set 420
+Running data set 421
+Running data set 422
+Running data set 423
+Running data set 424
+Running data set 425
+Running data set 426
+Running data set 427
+Running data set 428
+Running data set 429
+Running data set 430
+Running data set 431
+Running data set 432
+Running data set 433
+Running data set 434
+Running data set 435
+Running data set 436
+Running data set 437
+Running data set 438
+Running data set 439
+Running data set 440
+Running data set 441
+Running data set 442
+Running data set 443
+Running data set 444
+Running data set 445
+Running data set 446
+Running data set 447
+Running data set 448
+Running data set 449
+Running data set 450
+Running data set 451
+Running data set 452
+Running data set 453
+Running data set 454
+Running data set 455
+Running data set 456
+Running data set 457
+Running data set 458
+Running data set 459
+Running data set 460
+Running data set 461
+Running data set 462
+Running data set 463
+Running data set 464
+Running data set 465
+Running data set 466
+Running data set 467
+Running data set 468
+Running data set 469
+Running data set 470
+Running data set 471
+Running data set 472
+Running data set 473
+Running data set 474
+Running data set 475
+Running data set 476
+Running data set 477
+Running data set 478
+Running data set 479
+Running data set 480
+Running data set 481
+Running data set 482
+Running data set 483
+Running data set 484
+Running data set 485
+Running data set 486
+Running data set 487
+Running data set 488
+Running data set 489
+Running data set 490
+Running data set 491
+Running data set 492
+Running data set 493
+Running data set 494
+Running data set 495
+Running data set 496
+Running data set 497
+Running data set 498
+Running data set 499
+Running data set 500
+null device 
+          1 
+
+real	479m29.689s
+user	22068m23.860s
+sys	328m25.831s

@@ -8,9 +8,13 @@
 // Unique pointer for GSL integration workspace with custom deleter
 using GslWorkspacePtr = std::unique_ptr<gsl_integration_workspace, decltype(&gsl_integration_workspace_free)>;
 
-// Ensure a GSL workspace is allocated in the provided pointer
+// Ensure a GSL workspace is allocated in the provided pointer.
+// Must GROW when a caller needs more subdivisions than the cached workspace
+// holds: qags fails outright (GSL_EINVAL -> caller's min_ll path) when its
+// limit argument exceeds ws->limit, so a small first allocation must not pin
+// the size for the rest of the thread's lifetime.
 inline gsl_integration_workspace* ensure_gsl_workspace(GslWorkspacePtr& ws, size_t n = 1000) {
-  if (!ws) {
+  if (!ws || ws->limit < n) {
     ws.reset(gsl_integration_workspace_alloc(n));
     if (!ws) Rcpp::stop("Failed to allocate GSL integration workspace.");
   }

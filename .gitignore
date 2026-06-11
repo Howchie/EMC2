@@ -15,3 +15,4 @@ src/*.so
 plan.md
 samples_*.RData
 .positai
+.DS_Store

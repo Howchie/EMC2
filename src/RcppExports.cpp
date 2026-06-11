@@ -286,6 +286,60 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// emc2_set_stop_method
+void emc2_set_stop_method(std::string method, int n_nodes);
+RcppExport SEXP _EMC2_emc2_set_stop_method(SEXP methodSEXP, SEXP n_nodesSEXP) {
+BEGIN_RCPP
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< std::string >::type method(methodSEXP);
+    Rcpp::traits::input_parameter< int >::type n_nodes(n_nodesSEXP);
+    emc2_set_stop_method(method, n_nodes);
+    return R_NilValue;
+END_RCPP
+}
+// emc2_get_stop_method
+Rcpp::List emc2_get_stop_method();
+RcppExport SEXP _EMC2_emc2_get_stop_method() {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    rcpp_result_gen = Rcpp::wrap(emc2_get_stop_method());
+    return rcpp_result_gen;
+END_RCPP
+}
+// ss_texg_stop_success_auto_branch
+std::string ss_texg_stop_success_auto_branch(double SSD, NumericMatrix pars, double upper);
+RcppExport SEXP _EMC2_ss_texg_stop_success_auto_branch(SEXP SSDSEXP, SEXP parsSEXP, SEXP upperSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< double >::type SSD(SSDSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type pars(parsSEXP);
+    Rcpp::traits::input_parameter< double >::type upper(upperSEXP);
+    rcpp_result_gen = Rcpp::wrap(ss_texg_stop_success_auto_branch(SSD, pars, upper));
+    return rcpp_result_gen;
+END_RCPP
+}
+// ss_texg_stop_success_value
+double ss_texg_stop_success_value(double SSD, NumericMatrix pars, std::string method, double upper, int n_nodes, double k_sigma, double k_tau, int max_subdiv, double abs_tol, double rel_tol);
+RcppExport SEXP _EMC2_ss_texg_stop_success_value(SEXP SSDSEXP, SEXP parsSEXP, SEXP methodSEXP, SEXP upperSEXP, SEXP n_nodesSEXP, SEXP k_sigmaSEXP, SEXP k_tauSEXP, SEXP max_subdivSEXP, SEXP abs_tolSEXP, SEXP rel_tolSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< double >::type SSD(SSDSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type pars(parsSEXP);
+    Rcpp::traits::input_parameter< std::string >::type method(methodSEXP);
+    Rcpp::traits::input_parameter< double >::type upper(upperSEXP);
+    Rcpp::traits::input_parameter< int >::type n_nodes(n_nodesSEXP);
+    Rcpp::traits::input_parameter< double >::type k_sigma(k_sigmaSEXP);
+    Rcpp::traits::input_parameter< double >::type k_tau(k_tauSEXP);
+    Rcpp::traits::input_parameter< int >::type max_subdiv(max_subdivSEXP);
+    Rcpp::traits::input_parameter< double >::type abs_tol(abs_tolSEXP);
+    Rcpp::traits::input_parameter< double >::type rel_tol(rel_tolSEXP);
+    rcpp_result_gen = Rcpp::wrap(ss_texg_stop_success_value(SSD, pars, method, upper, n_nodes, k_sigma, k_tau, max_subdiv, abs_tol, rel_tol));
+    return rcpp_result_gen;
+END_RCPP
+}
 // pEXG_RDEX
 NumericVector pEXG_RDEX(NumericVector q, double mu, double sigma, double tau, bool lower_tail, bool log_p);
 RcppExport SEXP _EMC2_pEXG_RDEX(SEXP qSEXP, SEXP muSEXP, SEXP sigmaSEXP, SEXP tauSEXP, SEXP lower_tailSEXP, SEXP log_pSEXP) {
@@ -491,6 +545,26 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< NumericVector >::type s(sSEXP);
     Rcpp::traits::input_parameter< double >::type SSD(SSDSEXP);
     rcpp_result_gen = Rcpp::wrap(stopfn_rdex(t, n_acc, mu, sigma, tau, lb, v, B, A, t0, s, SSD));
+    return rcpp_result_gen;
+END_RCPP
+}
+// ss_rdex_stop_success_value
+double ss_rdex_stop_success_value(double SSD, NumericMatrix pars, std::string method, double upper, int n_nodes, double k_sigma, double k_tau, int max_subdiv, double abs_tol, double rel_tol);
+RcppExport SEXP _EMC2_ss_rdex_stop_success_value(SEXP SSDSEXP, SEXP parsSEXP, SEXP methodSEXP, SEXP upperSEXP, SEXP n_nodesSEXP, SEXP k_sigmaSEXP, SEXP k_tauSEXP, SEXP max_subdivSEXP, SEXP abs_tolSEXP, SEXP rel_tolSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< double >::type SSD(SSDSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type pars(parsSEXP);
+    Rcpp::traits::input_parameter< std::string >::type method(methodSEXP);
+    Rcpp::traits::input_parameter< double >::type upper(upperSEXP);
+    Rcpp::traits::input_parameter< int >::type n_nodes(n_nodesSEXP);
+    Rcpp::traits::input_parameter< double >::type k_sigma(k_sigmaSEXP);
+    Rcpp::traits::input_parameter< double >::type k_tau(k_tauSEXP);
+    Rcpp::traits::input_parameter< int >::type max_subdiv(max_subdivSEXP);
+    Rcpp::traits::input_parameter< double >::type abs_tol(abs_tolSEXP);
+    Rcpp::traits::input_parameter< double >::type rel_tol(rel_tolSEXP);
+    rcpp_result_gen = Rcpp::wrap(ss_rdex_stop_success_value(SSD, pars, method, upper, n_nodes, k_sigma, k_tau, max_subdiv, abs_tol, rel_tol));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -1013,6 +1087,10 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_dTEXG_vec", (DL_FUNC) &_EMC2_dTEXG_vec, 6},
     {"_EMC2_dTEXGrace", (DL_FUNC) &_EMC2_dTEXGrace, 5},
     {"_EMC2_stopfn_texg", (DL_FUNC) &_EMC2_stopfn_texg, 6},
+    {"_EMC2_emc2_set_stop_method", (DL_FUNC) &_EMC2_emc2_set_stop_method, 2},
+    {"_EMC2_emc2_get_stop_method", (DL_FUNC) &_EMC2_emc2_get_stop_method, 0},
+    {"_EMC2_ss_texg_stop_success_auto_branch", (DL_FUNC) &_EMC2_ss_texg_stop_success_auto_branch, 3},
+    {"_EMC2_ss_texg_stop_success_value", (DL_FUNC) &_EMC2_ss_texg_stop_success_value, 10},
     {"_EMC2_pEXG_RDEX", (DL_FUNC) &_EMC2_pEXG_RDEX, 6},
     {"_EMC2_dEXG_RDEX", (DL_FUNC) &_EMC2_dEXG_RDEX, 5},
     {"_EMC2_dWald_RDEX_old", (DL_FUNC) &_EMC2_dWald_RDEX_old, 5},
@@ -1025,6 +1103,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_dRDEXrace", (DL_FUNC) &_EMC2_dRDEXrace, 11},
     {"_EMC2_stopfn_rdex_old", (DL_FUNC) &_EMC2_stopfn_rdex_old, 10},
     {"_EMC2_stopfn_rdex", (DL_FUNC) &_EMC2_stopfn_rdex, 12},
+    {"_EMC2_ss_rdex_stop_success_value", (DL_FUNC) &_EMC2_ss_rdex_stop_success_value, 10},
     {"_EMC2_fft_convolve_equiv_cpp", (DL_FUNC) &_EMC2_fft_convolve_equiv_cpp, 3},
     {"_EMC2_compute_gamma_diff_hrf", (DL_FUNC) &_EMC2_compute_gamma_diff_hrf, 9},
     {"_EMC2_compute_hrf", (DL_FUNC) &_EMC2_compute_hrf, 9},
