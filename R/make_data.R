@@ -417,11 +417,13 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
   ## For both conditional and unconditional simulations...
   pars <- t(apply(parameters, 1, do_pre_transform, model()$pre_transform))
   pars <- add_constants(pars,design$constants)
-  if (!is.null(staircase)) {
-    attr(pars, "staircase") <- staircase
-  }
   if (simulate_unconditional_on_data) {
     # unconditional simulation must produce R/rt already; do not fall through to rfun below
+    # Grouped make_ssd() staircases ride on ssd_meta (captured from the
+    # `functions` argument loop above); either way attach the UC bound so a
+    # censored response steps the ladder up, as in the conditional path
+    if (!is.null(ssd_meta)) staircase <- ssd_meta
+    if (!is.null(staircase)) staircase$UC <- TC$UC
     if (expand > 1) {
       data_list <- vector("list", expand)
       twp_last <- NULL
@@ -430,13 +432,13 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
           res_i <- make_data_unconditional_vectorised(
             data = data, pars = pars, design = design, model = model,
             return_trialwise_parameters = (rep_i == expand && return_trialwise_parameters),
-            kernel_output_codes = kernel_output_codes
+            kernel_output_codes = kernel_output_codes, staircase = staircase
           )
         } else {
           res_i <- make_data_unconditional(
             data = data, pars = pars, design = design, model = model,
             return_trialwise_parameters = (rep_i == expand && return_trialwise_parameters),
-            kernel_output_codes = kernel_output_codes
+            kernel_output_codes = kernel_output_codes, staircase = staircase
           )
         }
         data_list[[rep_i]] <- cbind(rep = rep_i, res_i$data)
@@ -450,17 +452,31 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
         res <- make_data_unconditional_vectorised(
           data = data, pars = pars, design = design, model = model,
           return_trialwise_parameters = return_trialwise_parameters,
-          kernel_output_codes = kernel_output_codes
+          kernel_output_codes = kernel_output_codes, staircase = staircase
         )
       } else {
         res <- make_data_unconditional(
           data = data, pars = pars, design = design, model = model,
           return_trialwise_parameters = return_trialwise_parameters,
-          kernel_output_codes = kernel_output_codes
+          kernel_output_codes = kernel_output_codes, staircase = staircase
         )
       }
       data <- res$data
       trialwise_parameters <- res$trialwise_parameters
+    }
+    # NB: unlike the conditional path, pContaminant is not auto-derived from
+    # the model parameters here (they are trialwise/trend-dependent); supply
+    # it via TC if contamination is wanted
+    data <- make_missing(data,LT=TC$LT,LC=TC$LC,UC=TC$UC,UT=TC$UT,
+      LCresponse = TC$LCresponse, UCresponse = TC$UCresponse,
+      LCdirection = TC$LCdirection, UCdirection = TC$UCdirection,
+      pContaminant=TC$pContaminant,
+      no_truncate=TC$no_truncate,no_censor=TC$no_censor,
+      verbose=TC$verbose,rt_resolution=TC$rt_resolution,digits=TC$digits)
+    if(!is.null(post_functions)){
+      for(i in 1:length(post_functions)){
+        data[[names(post_functions)[i]]] <- post_functions[[i]](data)
+      }
     }
     attr(data, "p_vector") <- parameters
     if (return_trialwise_parameters) attr(data, "trialwise_parameters") <- trialwise_parameters
@@ -502,7 +518,10 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
     }
     ssd_meta$UC <- TC$UC
     attr(data, "staircase") <- ssd_meta
-    attr(pars, "staircase") <- ssd_meta
+  } else if (!is.null(staircase)) {
+    staircase$labels <- lR_levels
+    staircase$UC     <- TC$UC
+    attr(data, "staircase") <- staircase
   }
   if (any(names(data)=="RACE")) {
       Rrt <- RACE_rfun(data, pars, model)
@@ -516,12 +535,11 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
     dropNames <- c(dropNames,names(design$Ffunctions))
   # ZH added to protect SSD simulation
   if ("SSD"%in%dropNames) {dropNames=dropNames[!grepl("SSD",dropNames)]}
+  staircase_meta <- attr(data, "staircase")
   if(!is.null(data$lR)) data <- data[data$lR == levels(data$lR)[1],]
   data <- data[,!(names(data) %in% dropNames)]
-  if (!is.null(ssd_meta)) {
-    attr(data, "staircase") <- ssd_meta
-    attr(pars, "staircase") <- ssd_meta
-  }
+  # Subsetting strips attributes; re-attach so the returned data carries it
+  if (!is.null(staircase_meta)) attr(data, "staircase") <- staircase_meta
   for (i in dimnames(Rrt)[[2]]) data[[i]] <- Rrt[, i]
 
 
@@ -549,13 +567,15 @@ RACE_rfun <- function(data, pars, model){
          dimnames=list(NULL,c("R","rt")))
   RACE <- data[data$lR==levels(data$lR)[1],"RACE"]
   ok <- as.numeric(data$lR) <= as.numeric(as.character(data$RACE))
+  data_staircase <- attr(data, "staircase")
   for (i in levels(RACE)) {
     pick <- data$RACE==i
     data_in <- data[pick & ok,]
     data_in$lR <- factor(data$lR[pick & ok])
+    # Subsetting strips attributes; re-attach staircase to the data slice
+    if (!is.null(data_staircase)) attr(data_in, "staircase") <- data_staircase
     tmp <- pars[pick & ok,]
     attr(tmp, "ok") <- rep(T, nrow(tmp))
-    if (!is.null(attr(pars, "staircase"))) attr(tmp, "staircase") <- attr(pars, "staircase")
     Rrti <- model()$rfun(data_in,tmp)
     Rrti$R <- as.numeric(Rrti$R)
     Rrt[RACE==i,] <- as.matrix(Rrti)

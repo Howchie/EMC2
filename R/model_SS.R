@@ -57,16 +57,24 @@ check_staircase <- function(staircase) {
   return(staircase)
 }
 
-staircase_function <- function(dts,staircase) {
-  ns <- ncol(dts)
-  SSD <- sR <- srt <- numeric()
-  SSD[1] <- staircase$SSD0
+# The staircase specification travels on data (set by make_data); callers that
+# subset data must re-attach it because subsetting strips attributes.
+get_staircase_attr <- function(data) {
+  staircase <- attr(data, "staircase")
+  if (is.null(staircase))
+    stop("When SSD has NAs a staircase list must be supplied!")
+  staircase
+}
+
+staircase_clamp <- function(SSD, staircase)
+  pmin(pmax(SSD, staircase$stairmin), staircase$stairmax)
+
+# One staircase update: given the trial's response label (NA when no overt
+# response) and whether the stop process won the race, return the next SSD.
+# Default rule (no staircase_up/down): stop wins -> up, go response -> down.
+staircase_step <- function(SSD, label, stop_won, staircase) {
   rules <- staircase$rules
   if (is.null(rules)) rules <- list(up = NULL, down = NULL)
-  labels <- staircase$labels
-  accST <- staircase$accST
-  iSSD <- 1
-  if (!is.null(accST)) iSSD <- c(iSSD, accST)
   match_rule <- function(label, rule) {
     if (is.null(rule) || !length(rule)) return(FALSE)
     if (is.na(label)) {
@@ -75,9 +83,116 @@ staircase_function <- function(dts,staircase) {
       label %in% rule[!is.na(rule)]
     }
   }
+  step_dir <- NULL
+  if (!is.null(rules$up) || !is.null(rules$down)) {
+    success <- match_rule(label, rules$up)
+    failure <- match_rule(label, rules$down)
+    if (!is.null(rules$down) && !is.null(rules$up) && success && failure) {
+      stop("`staircase_up` and `staircase_down` overlap for label ", label)
+    }
+    if (is.null(rules$down) && !is.null(rules$up)) {
+      failure <- !success
+    }
+    if (success) {
+      step_dir <- "up"
+    } else if (failure) {
+      step_dir <- "down"
+    }
+  }
+  if (is.null(step_dir)) {
+    if (stop_won) step_dir <- "up" else step_dir <- "down"
+  }
+  if (identical(step_dir, "up")) {
+    round(SSD + staircase$stairstep,3)
+  } else {
+    round(SSD - staircase$stairstep,3)
+  }
+}
+
+# --- Trial-by-trial staircase (unconditional simulation) -------------------
+# The block staircase below needs all trials in one rfun call; the
+# unconditional simulators in trend.R instead step ladders one trial at a
+# time via these helpers. State is an environment so the simulators can
+# update it inside their loops. Ladders are keyed by subject plus the
+# make_ssd() group id (interaction of group_cols, sep "::"; "all" for the
+# simple `staircase=` list).
+
+stair_state_init <- function(data, staircase) {
+  if (is.null(staircase))
+    stop("When SSD has NAs a staircase list must be supplied!")
+  grouped <- inherits(staircase, "emc_staircase") && !is.null(staircase$specs)
+  custom_fun <- !is.null(attr(staircase, "staircase_function"))
+  if (grouped) {
+    custom_fun <- custom_fun ||
+      !is.null(attr(staircase$specs, "staircase_function")) ||
+      any(vapply(staircase$specs, function(s) is.list(s) &&
+        !(is.null(s$staircase_function) && is.null(attr(s, "staircase_function"))),
+        logical(1)))
+  }
+  if (custom_fun)
+    stop("Custom staircase functions are not supported with conditional_on_data = FALSE")
+  state <- new.env(parent = emptyenv())
+  state$staircase <- staircase
+  state$grouped <- grouped
+  state$group_cols <- if (grouped)
+    staircase$group_cols %||% attr(staircase$specs, "group_cols") else NULL
+  state$ssd <- numeric(0)  # named: subject\rgroup -> next (unclamped) SSD
+  # A response from a stop-triggered (lI == 1) accumulator means the stop
+  # process won the race
+  state$st_labels <- character(0)
+  if (!is.null(data$lI) && !is.null(data$lR))
+    state$st_labels <- unique(as.character(data$lR[as.numeric(data$lI) == 1]))
+  state
+}
+
+stair_group_of <- function(state, data_row) {
+  if (!state$grouped || !length(state$group_cols)) return("all")
+  paste(vapply(state$group_cols, function(cc) as.character(data_row[[cc]][1]),
+               character(1)), collapse = "::")
+}
+
+stair_spec_of <- function(state, grp) {
+  if (!state$grouped) return(state$staircase)
+  spec <- state$staircase$specs[[grp]]
+  # a group combination unseen when the SSD function ran falls back to base
+  if (is.null(spec)) spec <- attr(state$staircase$specs, "base_spec")
+  if (is.null(spec$rules))
+    spec$rules <- state$staircase$rules %||% attr(state$staircase$specs, "rules")
+  spec
+}
+
+# Current (clamped) SSD this ladder should run at, initialising on first use
+stair_ssd_value <- function(state, subj, grp) {
+  key <- paste(subj, grp, sep = "\r")
+  spec <- stair_spec_of(state, grp)
+  if (!key %in% names(state$ssd)) state$ssd[key] <- spec$SSD0
+  staircase_clamp(state$ssd[[key]], spec)
+}
+
+# Step the ladder from the simulated response. An rt beyond the UC bound
+# (from staircase$UC or the data's UC column) counts as no response, like the
+# pre-race censoring in the block staircase.
+stair_advance <- function(state, subj, grp, Rlab, rt, data_row) {
+  spec <- stair_spec_of(state, grp)
+  UC <- get_missing(state$staircase$UC, data_row, "UC", Inf, "numeric")[1]
+  if (!is.na(rt) && is.finite(rt) && rt > UC) Rlab <- NA_character_
+  stop_won <- is.na(Rlab) || Rlab %in% state$st_labels
+  key <- paste(subj, grp, sep = "\r")
+  used <- staircase_clamp(state$ssd[[key]], spec)
+  state$ssd[key] <- staircase_step(used, Rlab, stop_won, spec)
+  invisible(state)
+}
+
+staircase_function <- function(dts,staircase) {
+  ns <- ncol(dts)
+  SSD <- sR <- srt <- numeric()
+  SSD[1] <- staircase$SSD0
+  labels <- staircase$labels
+  accST <- staircase$accST
+  iSSD <- 1
+  if (!is.null(accST)) iSSD <- c(iSSD, accST)
   for (i in 1:ns) {
-    if (SSD[i]<staircase$stairmin) SSD[i] <- staircase$stairmin
-    if (SSD[i]>staircase$stairmax) SSD[i] <- staircase$stairmax
+    SSD[i] <- staircase_clamp(SSD[i], staircase)
     trial <- dts[,i]
     trial[iSSD] <- trial[iSSD] + SSD[i]
     if (all(is.infinite(trial[-1]))) {
@@ -99,39 +214,10 @@ staircase_function <- function(dts,staircase) {
       }
     } else {
       sR[i] <- Ri-1
-      if (Ri==1) {
-        srt[i] <- NA
-      } else {
-        srt[i] <- trial[Ri]
-      }
+      srt[i] <- trial[Ri]
       label <- if (!is.null(labels) && (Ri-1) <= length(labels)) labels[Ri-1] else NA_character_
     }
-    step_dir <- NULL
-    if (!is.null(rules$up) || !is.null(rules$down)) {
-      success <- match_rule(label, rules$up)
-      failure <- match_rule(label, rules$down)
-      if (!is.null(rules$down) && !is.null(rules$up) && success && failure) {
-        stop("`staircase_up` and `staircase_down` overlap for label ", label)
-      }
-      if (is.null(rules$down) && !is.null(rules$up)) {
-        failure <- !success
-      }
-      if (success) {
-        step_dir <- "up"
-      } else if (failure) {
-        step_dir <- "down"
-      }
-    }
-    if (is.null(step_dir)) {
-      if (Ri==1) step_dir <- "up" else step_dir <- "down"
-    }
-    if (i<ns) {
-      if (identical(step_dir, "up")) {
-        SSD[i+1] <- round(SSD[i] + staircase$stairstep,3)
-      } else if (identical(step_dir, "down")) {
-        SSD[i+1] <- round(SSD[i] - staircase$stairstep,3)
-      }
-    }
+    if (i<ns) SSD[i+1] <- staircase_step(SSD[i], label, Ri==1, staircase)
   }
   list(sR=sR,srt=srt,SSD=SSD)
 }
@@ -495,9 +581,7 @@ rSSexGaussian <- function(data,pars,ok=rep(TRUE,dim(pars)[1]))
   pstair <- is.na(pars[,"SSD"])
   stair <- pstair[is1]
   if (any(stair)) {
-    if (is.null(attr(data,"staircase")))
-      stop("When SSD has NAs a staircase list must be supplied!")
-    staircase <- attr(data,"staircase")
+    staircase <- get_staircase_attr(data)
 
     # Upper censoring for staircase trials
     UC <- get_missing(staircase$UC,
@@ -904,10 +988,7 @@ rSShybrid <- function(data,pars,ok=rep(TRUE,dim(pars)[1]))
   pstair <- is.na(pars[,"SSD"])
   stair <- pstair[is1]
   if (any(stair)) {
-    if (is.null(attr(pars,"staircase")))
-      stop("When SSD has NAs a staircase list must be supplied!")
-
-    staircase <- attr(pars,"staircase")
+    staircase <- get_staircase_attr(data)
 
     # Upper censoring for staircase trials
     UC <- get_missing(staircase$UC,

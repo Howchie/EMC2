@@ -1227,7 +1227,7 @@ verbal_trend <- function(design_matrix, trend) {
 
 make_data_unconditional <- function(data, pars, design, model,
                                     return_trialwise_parameters, kernel_output_codes=c(1L),
-                                    optionals=NULL) {
+                                    optionals=NULL, staircase=NULL) {
   model_fun <- model
   model_list <- model()
   includeColumns <- colnames(data)
@@ -1237,6 +1237,13 @@ make_data_unconditional <- function(data, pars, design, model,
     design,model_fun,add_acc=FALSE,compress=FALSE,verbose=FALSE,
     rt_check=FALSE)
   trialwise_parameters <- NULL
+  # Staircase trials are marked by NA SSDs (assigned by the design's SSD
+  # function). The rfun-level staircase needs all trials in one call, but here
+  # we simulate trial by trial, so instead carry per-subject/group SSD state
+  # across the trial loop and give the rfun concrete SSDs.
+  stair_state <- NULL
+  if (!is.null(data$SSD) && anyNA(data$SSD))
+    stair_state <- stair_state_init(data, staircase)
   # Iterate per subject, then per trial
   subj_levels <- levels(data$subjects)
   for (subj in subj_levels) {
@@ -1252,6 +1259,14 @@ make_data_unconditional <- function(data, pars, design, model,
       current_trial <- trial_vals[j]
       prefix_rows <- idx_subj_all[trials_subj %in% trial_vals[seq_len(j)]]
       current_rows <- idx_subj_all[trials_subj == current_trial]
+
+      # Staircase trial: fill in the current SSD before the design/parameters
+      # are built so the rfun sees a concrete value
+      stair_grp <- NULL
+      if (!is.null(stair_state) && anyNA(data$SSD[current_rows])) {
+        stair_grp <- stair_group_of(stair_state, data[current_rows[1], , drop = FALSE])
+        data$SSD[current_rows] <- stair_ssd_value(stair_state, subj, stair_grp)
+      }
 
       # Rebuild design for the current prefix so the mapped parameters see updated feedback data.
       dm <- design_model(data[prefix_rows, ],design, model_fun, add_acc = FALSE, compress = FALSE, verbose = FALSE, rt_check = FALSE, compress_dms=FALSE)
@@ -1297,6 +1312,12 @@ make_data_unconditional <- function(data, pars, design, model,
       target_rows <- prefix_rows[mask_current]
       for (nm in dimnames(Rrt)[[2]]) data[target_rows, nm] <- Rrt[, nm]
 
+      # Step the staircase from the observed response
+      if (!is.null(stair_grp)) {
+        stair_advance(stair_state, subj, stair_grp, as.character(Rrt[1, "R"]),
+                      Rrt[1, "rt"], data[current_rows[1], , drop = FALSE])
+      }
+
       # NS I don't actually think this is necessary couldn't this be specified
       # As a standard function in the design?
 
@@ -1330,7 +1351,8 @@ make_data_unconditional <- function(data, pars, design, model,
   data <- design_model(data, design, model_fun, add_acc = FALSE, compress = FALSE, verbose = FALSE, rt_check = FALSE)
 
   if(is.null(data$lR)) data$lR <- 1
-  data <- data[data$lR == unique(data$lR)[1], unique(c(includeColumns, "R", "rt"))]
+  data <- data[data$lR == unique(data$lR)[1],
+               unique(c(includeColumns, "R", "rt", intersect("SSD", colnames(data))))]
   data <- data[,!colnames(data) %in% c('lR', 'lM')]
   if (return_trialwise_parameters && length(trialwise_parameters) > 0) {
     trialwise_parameters <- do.call(rbind, trialwise_parameters)
@@ -1338,7 +1360,7 @@ make_data_unconditional <- function(data, pars, design, model,
   return(list(data = data, trialwise_parameters = trialwise_parameters))
 }
 
-make_data_unconditional_vectorised <- function(data, pars, design, model, return_trialwise_parameters, kernel_output_codes=c(1L)) {
+make_data_unconditional_vectorised <- function(data, pars, design, model, return_trialwise_parameters, kernel_output_codes=c(1L), staircase=NULL) {
   model_fun <- model
   model_list <- model()
   includeColumns <- colnames(data)
@@ -1348,6 +1370,12 @@ make_data_unconditional_vectorised <- function(data, pars, design, model, return
     design,model_fun,add_acc=FALSE,compress=FALSE,verbose=FALSE,
     rt_check=FALSE)
   trialwise_parameters <- NULL
+  # Staircase trials are marked by NA SSDs; simulate them sequentially by
+  # carrying per-subject/group SSD state across the trial loop (see
+  # make_data_unconditional for rationale)
+  stair_state <- NULL
+  if (!is.null(data$SSD) && anyNA(data$SSD))
+    stair_state <- stair_state_init(data, staircase)
   # Iterate per trial, with an inner loop over subjects to get the parameters
   subj_levels <- levels(data$subjects)
   trial_vals <- sort(unique(data$trials))
@@ -1362,6 +1390,18 @@ make_data_unconditional_vectorised <- function(data, pars, design, model, return
     current_trial <- trial_vals[j]
     prefix_rows <- all_trials[data$trials %in% trial_vals[seq_len(j)]]
     current_rows <- all_trials[data$trials == current_trial]
+
+    # Staircase trials this round: fill in each subject's current SSD before
+    # the design/parameters are built so the rfun sees concrete values
+    stair_rows <- integer(0)
+    if (!is.null(stair_state)) {
+      stair_rows <- current_rows[is.na(data$SSD[current_rows])]
+      for (r in stair_rows) {
+        data$SSD[r] <- stair_ssd_value(
+          stair_state, as.character(data$subjects[r]),
+          stair_group_of(stair_state, data[r, , drop = FALSE]))
+      }
+    }
 
     # Rebuild design for the current prefix so the mapped parameters see updated feedback data.
     # design_model can be used with data of all participants
@@ -1394,21 +1434,33 @@ make_data_unconditional_vectorised <- function(data, pars, design, model, return
       all_pars <- c(all_pars, list(pr))
     }
     all_pars <- do.call(rbind, all_pars)
-    all_pars <- add_bound(all_pars, model_list$bound, dm$lR)
-
-    # Identify current-trial rows inside the prefix design
-
+    # Current-trial rows of the prefix design: all_pars only covers these, and
+    # rfuns/add_bound index data and pars row by row, so they must align
+    dm_cur <- dm[dm$trials == current_trial, , drop = FALSE]
+    all_pars <- add_bound(all_pars, model_list$bound, dm_cur$lR)
 
     # rfun is vectorised so fast
     # Simulate current trial rows
     if (any(names(dm) == "RACE")) {
-      Rrt <- RACE_rfun(dm, all_pars, model_fun)
+      Rrt <- RACE_rfun(dm_cur, all_pars, model_fun)
     } else {
-      Rrt <- model_list$rfun(dm, all_pars)
+      Rrt <- model_list$rfun(dm_cur, all_pars)
     }
     # Write outputs back to original data rows for the current trial
     target_rows <- prefix_rows[dm$trials == current_trial]
     for (nm in dimnames(Rrt)[[2]]) data[target_rows, nm] <- Rrt[, nm]
+
+    # Step each subject's staircase from its observed response
+    if (length(stair_rows)) {
+      stair_subj <- as.character(data$subjects[stair_rows])
+      for (s in unique(stair_subj)) {
+        row1 <- stair_rows[stair_subj == s][1]
+        stair_advance(stair_state, s,
+                      stair_group_of(stair_state, data[row1, , drop = FALSE]),
+                      as.character(data$R[row1]), data$rt[row1],
+                      data[row1, , drop = FALSE])
+      }
+    }
 
     # NS I don't actually think this is necessary couldn't this be specified
     # As a standard function in the design?
@@ -1435,7 +1487,8 @@ make_data_unconditional_vectorised <- function(data, pars, design, model, return
   data <- design_model(data, design, model_fun, add_acc = FALSE, compress = FALSE, verbose = FALSE, rt_check = FALSE)
 
   if(is.null(data$lR)) data$lR <- 1
-  data <- data[data$lR == unique(data$lR)[1], unique(c(includeColumns, "R", "rt"))]
+  data <- data[data$lR == unique(data$lR)[1],
+               unique(c(includeColumns, "R", "rt", intersect("SSD", colnames(data))))]
   data <- data[,!colnames(data) %in% c('lR', 'lM')]
   if (return_trialwise_parameters && length(trialwise_parameters) > 0) {
     trialwise_parameters <- do.call(rbind, trialwise_parameters)

@@ -308,3 +308,178 @@ PASS/FAIL:
   ~10% faster end-to-end. demo_SSEXG.R / demo_SSRDEX.R verified to run
   against the new code (fits/profiles skipped). SSEXG help clarified (closed
   form applicability conditions). 121/121 tests pass.
+
+## 2026-06-12: staircase attribute consolidation — DONE
+The `staircase=` argument to make_data() was broken (attr set on `pars` at
+the top of make_data, then wiped when pars is rebuilt by get_pars_oo at the
+Ttransform stage; the two SS rfuns also disagreed on where to read it —
+SSEXG read attr(data,...), SSRDEX/rSShybrid read attr(pars,...)).
+Now consolidated: `data` is the SINGLE canonical carrier.
+- model_SS.R: new `get_staircase_attr(data)` helper (next to check_staircase);
+  both SSEXG rfun and rSShybrid use it.
+- make_data.R: staircase (enriched with labels = lR levels, UC = TC$UC) is
+  attached to `data` just before the rfun call; all pars-side sets removed.
+  RACE_rfun re-attaches to the data slice after subsetting (R strips
+  attributes on `[`). Returned data also re-carries the attribute.
+- Verified: SSRDEX + SSEXG staircase sims work (513/2000 stop trials at
+  pSSD=.25, SSDs staircase properly); test-stopS.R and
+  test-stopS-cens-trunc-ST.R pass.
+NB: `SSD = NA` in the design's SSD_function marks staircase trials; the `p=`
+key in the staircase list is ignored (stop proportion comes from pSSD).
+
+## DONE (2026-06-12): staircase support for conditional_on_data = FALSE
+Implemented per the plan below (all boxes ticked); 37/37 new assertions pass.
+- `staircase_step(SSD, label, stop_won, staircase)` + `staircase_clamp()`
+  extracted in model_SS.R; `staircase_function` refactored to use them
+  (conditional path verified bit-identical under the same seed).
+- make_data passes `staircase` into both unconditional simulators (trend.R).
+- Both simulators: NA SSDs trigger per-subject SSD state (init SSD0); the
+  current SSD is written into data BEFORE design_model/Ttransform each trial
+  (rfun never sees NA), then stepped from the simulated response. stop_won =
+  R is NA or R is a stop-triggered (lI==1) label. Realised SSDs stay in the
+  returned data (output column selection now keeps SSD).
+- BONUS FIX: the vectorised simulator passed the WHOLE prefix dm to
+  rfun/add_bound/RACE_rfun while all_pars covered only the current trial —
+  row-misaligned (errored for rSShybrid, silently wrong `ok` bounds vector
+  for everything). Now passes dm_cur (current-trial rows only).
+- New test file tests/testthat/test-staircase.R: conditional + unconditional
+  + vectorised for SSEXG and SSRDEX (proportion, SSD0 start, +/-stairstep
+  steps), plus the missing-staircase error. test-trend.R (17), test-stopS.R
+  (2), test-stopS-cens-trunc-ST.R (14), test-stop_success_gl.R (121) all pass.
+- Still unsupported on the unconditional branch: UC censoring (make_missing
+  is never applied there — pre-existing, applies to all models) and grouped
+  make_ssd() staircase specs.
+
+### Original plan (for reference)
+Currently make_data(conditional_on_data = FALSE) routes to
+make_data_unconditional / make_data_unconditional_vectorised (trend.R:1228,
+:1341) and the staircase is silently unsupported there: the staircase arg is
+never attached to anything on that branch, so NA SSDs error in the rfun.
+The blocker is structural: both unconditional variants simulate TRIAL BY
+TRIAL (rebuilding the design each trial for trend/feedback), while
+staircase_function processes a whole block of staircase trials in ONE rfun
+call, carrying SSD state internally from SSD0. Attaching the attr per trial
+would restart the staircase at SSD0 on every trial.
+Steps:
+- [x] Extract a single-step helper from staircase_function (model_SS.R:60),
+      e.g. `staircase_step(label, SSD, staircase)` -> new SSD, reusing the
+      existing match_rule/up/down logic so rules (staircase_up/down) work.
+- [x] make_data.R: pass the enriched staircase into make_data_unconditional
+      and ..._vectorised on the unconditional branch (new argument).
+- [x] make_data_unconditional: keep per-subject state `cur_SSD[subj]`
+      (init SSD0, clamped to stairmin/stairmax). Each trial, for rows where
+      data$SSD is NA: write cur_SSD into the data BEFORE design_model /
+      Ttransform (so pars get a concrete SSD; rfun never sees NA). After
+      simulating, derive the response label from Rrt (NA R = successful
+      stop) and update cur_SSD via staircase_step. Record realised SSD back
+      into data so the returned data has it.
+- [x] ..._vectorised: same, but cur_SSD is a vector over subjects updated
+      once per trial loop iteration (subjects are simulated together; the
+      staircase is per-subject so state must be per-subject).
+- [x] Tests: unconditional staircase sim for SSEXG + SSRDEX; check stop-trial
+      proportion, SSD path starts at SSD0 and steps by ±stairstep within
+      [stairmin, stairmax]; compare distribution against the conditional
+      path with the same seed/params.
+- [x] Gotcha: make_missing/UC handling on the unconditional branch returns
+      early (make_data.R ~line 467) — check censoring interaction for
+      staircase trials (conditional path applies UC inside the rfun via
+      staircase$UC).
+
+## DONE (2026-06-12): unconditional-branch gaps — censoring + grouped staircase
+Implemented per the plan below. All suites green: test-staircase.R 60,
+test-trend.R 17, test-stopS.R 2, test-stopS-cens-trunc-ST.R 14,
+test-stop_success_gl.R 121, test-likelihoods.R 33.
+- Part A: make_data's unconditional branch now runs the same make_missing +
+  post_functions tail as the conditional path before its early return, so
+  censoring/truncation/contamination/rt_resolution work via TC=. Output gains
+  the LT/UT/LC/UC columns (now consistent with conditional; trend_conditional
+  snapshot re-accepted for exactly this).
+- Staircase x UC: make_data attaches TC$UC to the staircase spec; the
+  per-trial stair_advance treats rt > UC as no response (ladder steps up),
+  matching the block staircase's pre-race censoring.
+- Part B: trial-by-trial staircase logic extracted to shared helpers in
+  model_SS.R (stair_state_init / stair_group_of / stair_spec_of /
+  stair_ssd_value / stair_advance; environment state keyed subject\rgroup).
+  Grouped make_ssd() specs: ssd_meta is routed into the simulators, group of
+  a trial re-derived from group_cols (interaction sep "::", matching
+  names(specs)); per-group SSD0/stairstep/min/max/rules honoured. Custom
+  staircase functions error clearly under conditional_on_data = FALSE.
+- DECISION: pContaminant is NOT auto-derived from model pars on the
+  unconditional branch (threading it as a data column broke design_model —
+  "Data cannot have columns with the same names as model parameters" — and
+  polluted parameter mapping). Supply via TC= if wanted; documented in code.
+- NOTE (pre-existing, unchanged): the conditional SIMPLE staircase runs ONE
+  ladder across all subjects' stop trials; the unconditional implementation
+  is per-subject (arguably more correct). Differs only for multi-subject
+  simple-staircase simulations.
+- NOTE: trend feedback_fun sees uncensored responses during the loop
+  (censoring applied once at the end, matching the conditional path).
+
+### Original plan (for reference)
+
+### Background (verified in code)
+- make_data's unconditional branch (make_data.R:420) returns early: make_missing
+  (censoring LC/UC, truncation LT/UT, pContaminant, rt_resolution flooring) and
+  post_functions are never applied — for ALL models, not just stop-signal.
+- Grouped staircases (make_ssd() with factors/formula) ride on attr(SSD,"emc_ssd")
+  captured ONLY via make_data's `functions` argument loop (make_data.R:383-394
+  -> ssd_meta); ssd_meta is not passed to the unconditional simulators, and the
+  rfun-level apply_grouped_staircase (model_SS.R:168) is block-based, so the
+  same trial-by-trial restart problem applies as for the simple staircase.
+- Conditional path precedent for UC x staircase: inside the rfun, go finishing
+  times > UC are set to Inf BEFORE the staircase logic, so a censored response
+  counts as a successful stop and the ladder steps UP (model_SS.R ~519).
+
+### Part A — make_missing on the unconditional branch
+- [x] Pass TC into make_data_unconditional / _vectorised (trend.R), or apply
+      make_missing in make_data itself before the early return (cleaner: the
+      branch already returns res$data; apply the same tail as the conditional
+      path — make_missing + post_functions — to it). Prefer the latter: zero
+      duplication, one call site.
+- [x] pContaminant: conditional path pulls pars[,"pContaminant"] per trial
+      (make_data.R:511). Unconditional pars are trialwise/trend-dependent;
+      mirror by computing it inside the simulators where pars are in scope
+      (first accumulator row per trial) and returning it alongside data.
+- [x] Staircase x UC: the per-trial step decision must see the CENSORED
+      response. In the simulators' stair update: UC_i <- get_missing(
+      staircase$UC, <trial row>, "UC", Inf, "numeric"); if simulated rt > UC_i
+      treat label as NA / stop_won TRUE before staircase_step. (Recorded
+      rt/R masking is then make_missing's job at the end.)
+- [x] DECISION to flag: trend feedback_fun during the loop sees uncensored
+      responses; applying full censoring per-trial would change feedback
+      semantics. Proposed: keep end-of-loop make_missing (matches conditional
+      path), document that feedback sees uncensored data.
+- [x] Tests: unconditional + UC for a non-SS model (e.g. LBA, censored rt ->
+      NA/UC response) and for SSEXG staircase (UC pushes ladder up; compare
+      against conditional path with same UC).
+
+### Part B — grouped make_ssd() staircases, unconditional
+- [x] Plumbing: make_data captures ssd_meta before the unconditional branch
+      only if `functions=` was used; move the functions-loop capture above the
+      branch (it already is — line 383) and pass ssd_meta into both
+      simulators (use it as `staircase` when non-NULL, like the conditional
+      attach at make_data.R:494).
+- [x] State: generalise stair_state from one scalar per subject to a named
+      list keyed by (subject, group). Group of a trial: re-derive from
+      stop_meta$group_cols on the data row (interaction of those columns) —
+      do NOT try to row-match stop_meta$data against the accumulator-expanded
+      reordered data. Each (subject, group) ladder inits at specs[[grp]]$SSD0
+      %||% base_spec$SSD0 and steps with the group's stairstep/min/max and
+      rules (specs[[grp]]$rules %||% global rules) via the existing
+      staircase_step().
+- [x] Refactor first: extract the now-duplicated inline staircase blocks in
+      make_data_unconditional / _vectorised into shared helpers in
+      model_SS.R — stair_init(data, staircase), stair_fill(state, rows, data),
+      stair_update(state, rows, data) — then add grouping inside the helpers
+      so both simulators get it for free.
+- [x] Custom per-group staircase_function (attr on spec): block-based
+      signature (dts, spec) cannot run stepwise. Error clearly:
+      "custom staircase functions are not supported with
+      conditional_on_data = FALSE".
+- [x] Tests: 2-group make_ssd design (e.g. S-dependent SSD0/stairstep),
+      unconditional + vectorised: per-group ladders start at their own SSD0,
+      step by their own stairstep, don't cross-contaminate; error path for
+      custom staircase_function.
+
+### Order: Part A first (Part B's UC-aware stepping depends on it), refactor
+### item of Part B before its grouping work.
