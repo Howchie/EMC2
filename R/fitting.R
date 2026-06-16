@@ -102,7 +102,11 @@ run_emc <- function(emc, stage, stop_criteria,
                     cores_for_chains = length(emc), max_tries = 20, n_blocks = 1,
                     thin = FALSE, trim = TRUE, r_cores=1){
   emc <- restore_duplicates(emc)
-  if(Sys.info()[1] == "Windows" & cores_per_chain > 1) stop("only cores_for_chains can be set on Windows")
+  # OS is stamped on the dadm by fit() (set_os_flag); fall back for direct callers.
+  is_win <- os_flag(emc[[1]]$data)
+  # Within-chain parallelism (cores_per_chain and r_cores) relies on forking,
+  # unavailable on Windows; only across-chain parallelism (cores_for_chains) works.
+  if(is_win & (cores_per_chain > 1 | r_cores > 1)) stop("only cores_for_chains can be set on Windows")
   if (verbose) message(paste0("Running ", stage, " stage"))
   total_iters_stage <- chain_n(emc)[,stage][1]
   if(stage != "preburn"){
@@ -137,7 +141,7 @@ run_emc <- function(emc, stage, stop_criteria,
                              verbose=verbose,  verboseProgress = verboseProgress,
                              particle_factor=particle_factor,search_width=search_width,
                              n_cores=cores_per_chain, mc.cores = cores_for_chains,
-                             r_cores = r_cores)
+                             r_cores = r_cores, is_windows = is_win)
     if(getOption("emc2.print_iteration_duration", FALSE)) { print(Sys.time()-t0) }
     class(sub_emc) <- "emc"
     if(cores_for_chains > 1) sub_emc <- pointer_reset_wrapper(sub_emc, emc)
@@ -938,8 +942,12 @@ extractDadms <- function(dadms, names = NULL){
               dadm_list = dadm_list, subjects = subjects))
 }
 
-auto_mclapply <- function(X, FUN, mc.cores, ...){
-  if(Sys.info()[1] == "Windows"){
+auto_mclapply <- function(X, FUN, mc.cores, ..., is_windows = NULL){
+  # is_windows is looked up once when fit() runs and stored on the dadm (see
+  # set_os_flag()); callers on the sampling hot path pass it through to avoid a
+  # per-call Sys.info(). When absent (e.g. post-processing callers), fall back.
+  if(is.null(is_windows)) is_windows <- Sys.info()[1] == "Windows"
+  if(is_windows){
     cluster <- parallel::makeCluster(mc.cores)
     list_out <- parallel::parLapply(cl = cluster, X,FUN, ...)
     parallel::stopCluster(cluster)
@@ -947,6 +955,33 @@ auto_mclapply <- function(X, FUN, mc.cores, ...){
     list_out <- parallel::mclapply(X, FUN, mc.cores = mc.cores, ...)
   }
   return(list_out)
+}
+
+#' Stamp the host OS onto each subject's dadm so the sampling hot path can route
+#' parallel calls without re-deriving it. Looked up once when fit() runs.
+#' @param emc An emc object (list of pmwgs samplers).
+#' @return The emc object with attr(., "is_windows") set on every subject dadm.
+#' @noRd
+set_os_flag <- function(emc){
+  is_win <- Sys.info()[1] == "Windows"
+  for(i in seq_along(emc)){
+    for(j in seq_along(emc[[i]]$data)){
+      attr(emc[[i]]$data[[j]], "is_windows") <- is_win
+    }
+  }
+  emc
+}
+
+#' Read the OS flag stamped on a dadm list by set_os_flag(); fall back to a
+#' Sys.info() lookup when absent (e.g. an emc fit before this was introduced).
+#' @param data A list of subject dadms (e.g. the data slot of an emc chain or
+#'   of a merged samples object).
+#' @return TRUE on Windows, FALSE otherwise.
+#' @noRd
+os_flag <- function(data){
+  is_win <- attr(data[[1]], "is_windows")
+  if(is.null(is_win)) is_win <- Sys.info()[1] == "Windows"
+  is_win
 }
 
 #' Strip all entries except samples from EMC list entries

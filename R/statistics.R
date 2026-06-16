@@ -62,6 +62,10 @@ compare <- function(sList,stage="sample",filter=NULL,use_best_fit=TRUE,
                         cores_for_models = length(sList),
                         print_summary=TRUE,digits=0,digits_p=3, ...) {
   if(is(sList, "emc")) sList <- list(sList)
+  # Look up the OS once here; stamp each model's dadms so the inner WAIC path
+  # reads the flag, and pass it to the across-models auto_mclapply calls below.
+  sList <- lapply(sList, set_os_flag)
+  is_win <- os_flag(sList[[1]][[1]]$data)
   if (length(cores_for_models) == 1) {
     n_parallel_models <- cores_for_models
     waic_cores        <- rep(1, length(sList))
@@ -103,7 +107,7 @@ compare <- function(sList,stage="sample",filter=NULL,use_best_fit=TRUE,
         NA_real_
       })
     }
-    WAICs <- unlist(auto_mclapply(seq_along(sList), waic_fn, mc.cores=n_parallel_models))
+    WAICs <- unlist(auto_mclapply(seq_along(sList), waic_fn, mc.cores=n_parallel_models, is_windows=is_win))
     if(!all(is.na(WAICs))){
       WAICp <- getp(WAICs)
       out <- cbind.data.frame(WAIC=WAICs, wWAIC=WAICp, out)
@@ -119,7 +123,7 @@ compare <- function(sList,stage="sample",filter=NULL,use_best_fit=TRUE,
                             cores_for_props=cores_for_props, cores_per_prop=cores_per_prop),
         error = function(e) NA_real_
       )
-    MLLs <- unlist(auto_mclapply(seq_along(sList), bf_fn, mc.cores=n_parallel_models))
+    MLLs <- unlist(auto_mclapply(seq_along(sList), bf_fn, mc.cores=n_parallel_models, is_windows=is_win))
     failed <- which(is.na(MLLs))
     if (length(failed) > 0) {
       ids <- if (!is.null(names(sList))) names(sList)[failed] else as.character(failed)
@@ -528,8 +532,9 @@ compare_subject <- function(sList,stage="sample",filter=0,use_best_fit=TRUE,
   # is_single <- sapply(sList, function(x) return(x[[1]]$type == "single"))
   # if(any(!is_single)) warning("subject-by-subject comparison is best done with models of type `single`")
   if (n_cores>1) {
+    is_win <- os_flag(sList[[1]][[1]]$data)
     out <- auto_mclapply(subjects,compare_one,sList=sList,stage=stage,filter=filter,
-                   use_best_fit=use_best_fit,mc.cores=n_cores)
+                   use_best_fit=use_best_fit,mc.cores=n_cores,is_windows=is_win)
     names(out) <- subjects
   } else {
     out <- setNames(vector(mode="list",length=length(subjects)),subjects)

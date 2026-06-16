@@ -47,10 +47,11 @@ waic_pooled <- function(emc, stage = "sample", filter = 0, r_cores = 1) {
                     by_subject = TRUE, merge_chains = TRUE)
   data  <- emc[[1]]$data
   model <- emc[[1]]$model
+  is_win <- os_flag(data)  # stamped on the dadm by fit()/compare(); lookup fallback
   ll_list <- auto_mclapply(names(alpha), function(sub) {
     proposals <- do.call(rbind, alpha[[sub]])     # [n_iter x n_pars]
     calc_ll_manager_pw(proposals, data[[sub]], model, r_cores = 1)  # [n_iter x n_trials_sub]
-  }, mc.cores = r_cores)
+  }, mc.cores = r_cores, is_windows = is_win)
   ll_all <- do.call(cbind, ll_list)              # [n_iter x total_trials]
   .waic_call(function() loo::waic(ll_all)$estimates["waic", "Estimate"])
 }

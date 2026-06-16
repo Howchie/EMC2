@@ -196,16 +196,19 @@ make_missing <- function(data, LT = NULL, UT = NULL, LC = NULL, UC = NULL,
   cutU <- (data$rt > UC_eff)
   cutU[is.na(cutU)] <- TRUE; cutU[no_censor] <- FALSE
   if (verbose) {
+    # Report over response trials only: NA-rt trials (e.g. successful stops) get
+    # the censored encoding below but are not responses exceeding the bound
+    resp <- !is.na(data$rt)
     if (!all(LC_eff==0)) {
-      if (!attr(LT,"subjectwise")) stat <- mean(cutL) else
-        stat <- tapply(cutL,data$subjects,mean)
-      message("% lower censoring (after truncation)")
+      if (!attr(LC,"subjectwise")) stat <- mean(cutL[resp]) else
+        stat <- tapply(cutL[resp],data$subjects[resp],mean)
+      message("% lower censoring of response trials (after truncation)")
       print(round(100*stat,digits))
     }
     if (!all(UC_eff==Inf)) {
-      if (!attr(UT,"subjectwise")) stat <- mean(cutU) else
-        stat <- tapply(cutU,data$subjects,mean)
-      message("% upper censoring (after truncation)")
+      if (!attr(UC,"subjectwise")) stat <- mean(cutU[resp]) else
+        stat <- tapply(cutU[resp],data$subjects[resp],mean)
+      message("% upper censoring of response trials (after truncation)")
       print(round(100*stat,digits))
     }
   }
@@ -393,6 +396,11 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
     }
   }
   if (!is.factor(data$subjects)) data$subjects <- factor(data$subjects)
+  # For staircase simulation the ladder treats an upper-censored stop response as
+  # a non-response (stop success). Force UCresponse = FALSE so the output coding
+  # matches that calculation (make_missing blanks R only when !UCresponse); any
+  # user-supplied UCresponse = TRUE is ignored while a staircase is in play.
+  if (!is.null(staircase) || !is.null(ssd_meta)) TC$UCresponse <- FALSE
   if (!is.null(model)) {
     if (!is.function(model)) stop("model argument must  be a function")
     if ( is.null(model()$p_types) ) stop("model()$p_types must be specified")
