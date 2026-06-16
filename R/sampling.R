@@ -676,12 +676,11 @@ calc_ll_manager <- function(proposals, dadm, model, component = NULL, r_cores = 
   } else{
     model <- model()
     dadm <- .cache_ll_data_attrs(dadm)
-    is_win <- attr(dadm, "is_windows")  # stamped by fit(); NULL -> lookup fallback
     if(is.null(model$c_name)){ # use the R implementation
       lls <- unlist(
         auto_mclapply(1:nrow(proposals),
           function(i) calc_ll_R(proposals[i,], model=model, dadm = dadm),
-         mc.cores=r_cores, is_windows = is_win))
+         mc.cores=r_cores))
     } else {
       # SS models: push stop_method/stop_n_nodes into the process-global C++
       # config once per likelihood call (before any fork, so mclapply workers
@@ -716,7 +715,7 @@ calc_ll_manager <- function(proposals, dadm, model, component = NULL, r_cores = 
                        designs = designs, type = model$c_name, model$bound, model$transform,
                        model$pre_transform, p_types = p_types, min_ll = log(1e-10),model$trend)
           }
-        },mc.cores=r_cores, is_windows = is_win))
+        },mc.cores=r_cores))
       }
     }
   }
@@ -786,11 +785,10 @@ calc_ll_manager_pw <- function(proposals, dadm, model, r_cores = 1){
   }
 
   model_fun <- function() model
-  is_win <- attr(dadm, "is_windows")  # stamped by fit(); NULL -> lookup fallback
   ll_list <- auto_mclapply(trial_groups, function(rows) {
     trial_dadm <- .waic_subset_dadm(dadm, rows)
     calc_ll_manager(proposals, trial_dadm, model = model_fun, r_cores = 1)
-  }, mc.cores = r_cores, is_windows = is_win)
+  }, mc.cores = r_cores)
   ll_unique <- do.call(cbind, ll_list)
   if (is.null(dim(ll_unique))) ll_unique <- matrix(ll_unique, ncol = 1)
 

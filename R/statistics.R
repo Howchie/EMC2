@@ -62,10 +62,6 @@ compare <- function(sList,stage="sample",filter=NULL,use_best_fit=TRUE,
                         cores_for_models = length(sList),
                         print_summary=TRUE,digits=0,digits_p=3, ...) {
   if(is(sList, "emc")) sList <- list(sList)
-  # Look up the OS once here; stamp each model's dadms so the inner WAIC path
-  # reads the flag, and pass it to the across-models auto_mclapply calls below.
-  sList <- lapply(sList, set_os_flag)
-  is_win <- os_flag(sList[[1]][[1]]$data)
   if (length(cores_for_models) == 1) {
     n_parallel_models <- cores_for_models
     waic_cores        <- rep(1, length(sList))
@@ -75,6 +71,21 @@ compare <- function(sList,stage="sample",filter=NULL,use_best_fit=TRUE,
            " (one entry per model), got length ", length(cores_for_models), ".")
     n_parallel_models <- length(sList)
     waic_cores        <- cores_for_models
+  }
+  # Windows has no forking, so parallelism uses PSOCK clusters. Running models in
+  # parallel AND parallelising within each model (props/subjects) would nest
+  # clusters -- each model's PSOCK worker spawning its own cluster -- which is
+  # very slow and can exhaust connections. Parallelise at a single level only:
+  # across models when >1 runs in parallel, otherwise within a model.
+  if (Sys.info()[1] == "Windows" && n_parallel_models > 1 &&
+      (cores_for_props > 1 || cores_per_prop > 1 || any(waic_cores > 1))) {
+    warning("On Windows compare() parallelises across models only; forcing ",
+            "cores_for_props, cores_per_prop and per-model WAIC cores to 1 to ",
+            "avoid nested clusters. Set cores_for_models = 1 to parallelise ",
+            "within a single model instead.", call. = FALSE)
+    cores_for_props <- 1L
+    cores_per_prop  <- 1L
+    waic_cores      <- rep(1L, length(sList))
   }
   getp <- function(IC) {
     IC <- -(IC - min(IC))/2
@@ -107,7 +118,7 @@ compare <- function(sList,stage="sample",filter=NULL,use_best_fit=TRUE,
         NA_real_
       })
     }
-    WAICs <- unlist(auto_mclapply(seq_along(sList), waic_fn, mc.cores=n_parallel_models, is_windows=is_win))
+    WAICs <- unlist(auto_mclapply(seq_along(sList), waic_fn, mc.cores=n_parallel_models))
     if(!all(is.na(WAICs))){
       WAICp <- getp(WAICs)
       out <- cbind.data.frame(WAIC=WAICs, wWAIC=WAICp, out)
@@ -123,7 +134,7 @@ compare <- function(sList,stage="sample",filter=NULL,use_best_fit=TRUE,
                             cores_for_props=cores_for_props, cores_per_prop=cores_per_prop),
         error = function(e) NA_real_
       )
-    MLLs <- unlist(auto_mclapply(seq_along(sList), bf_fn, mc.cores=n_parallel_models, is_windows=is_win))
+    MLLs <- unlist(auto_mclapply(seq_along(sList), bf_fn, mc.cores=n_parallel_models))
     failed <- which(is.na(MLLs))
     if (length(failed) > 0) {
       ids <- if (!is.null(names(sList))) names(sList)[failed] else as.character(failed)
@@ -532,9 +543,8 @@ compare_subject <- function(sList,stage="sample",filter=0,use_best_fit=TRUE,
   # is_single <- sapply(sList, function(x) return(x[[1]]$type == "single"))
   # if(any(!is_single)) warning("subject-by-subject comparison is best done with models of type `single`")
   if (n_cores>1) {
-    is_win <- os_flag(sList[[1]][[1]]$data)
     out <- auto_mclapply(subjects,compare_one,sList=sList,stage=stage,filter=filter,
-                   use_best_fit=use_best_fit,mc.cores=n_cores,is_windows=is_win)
+                   use_best_fit=use_best_fit,mc.cores=n_cores)
     names(out) <- subjects
   } else {
     out <- setNames(vector(mode="list",length=length(subjects)),subjects)

@@ -15,7 +15,7 @@ make_info <- function(samples, type){
 
 
 eval.unnormalized.posterior <- function(samples_iter, gen_samples, data, m, L, info, cores_for_props = 1, cores_per_prop = 1,
-                                        hyper_only = FALSE, is_windows = NULL) {
+                                        hyper_only = FALSE) {
 
   ### evaluate unnormalized posterior for posterior and generated samples
   n_post <- nrow(samples_iter)
@@ -30,7 +30,7 @@ eval.unnormalized.posterior <- function(samples_iter, gen_samples, data, m, L, i
     q21.b = m_plus_gen
   )
   mls <- auto_mclapply(samples_list, h.unnormalized.posterior, data = data, info = info, n_cores = cores_per_prop, hyper_only = hyper_only,
-                  mc.cores = cores_for_props, is_windows = is_windows)
+                  mc.cores = cores_for_props)
   q11 <- log(e^(mls$q11.a) + e^(mls$q11.b))
   q21 <- log(e^(mls$q21.a) + e^(mls$q21.b))
   return(list(q11 = q11, q21 = q21))
@@ -120,11 +120,8 @@ run.iterative.scheme <- function(q11, q12, q21, q22, r0, tol,
 }
 
 bridge_sampling <- function(samples, n_eff, split_idx, cores_for_props = 1, cores_per_prop = 1, maxiter = 5000,
-                            stage = "sample", r0 = 1e-5, tol1 = 1e-10, tol2 = 1e-6, hyper_only = FALSE,
-                            is_windows = NULL){
-  # OS flag is threaded from run_bridge_sampling(); fall back for direct callers.
-  if(is.null(is_windows)) is_windows <- os_flag(samples$data)
-  if(is_windows & cores_per_prop > 1) stop("only cores_for_props can be set on Windows")
+                            stage = "sample", r0 = 1e-5, tol1 = 1e-10, tol2 = 1e-6, hyper_only = FALSE){
+  if(Sys.info()[1] == "Windows" & cores_per_prop > 1) stop("only cores_for_props can be set on Windows")
   type <- samples$type
   data <- samples$data
   info <- make_info(samples, type)
@@ -159,7 +156,7 @@ bridge_sampling <- function(samples, n_eff, split_idx, cores_for_props = 1, core
 
   qList <- eval.unnormalized.posterior(samples_iter = samples_iter, gen_samples = gen_samples,
                                        data = data, m = m, L =L, info = info, cores_for_props = cores_for_props, cores_per_prop = cores_per_prop,
-                                       hyper_only = hyper_only, is_windows = is_windows)
+                                       hyper_only = hyper_only)
 
   q11 <- qList$q11
   q21 <- qList$q21
@@ -251,9 +248,6 @@ run_bridge_sampling <- function(emc, stage = "sample", filter = NULL, repetition
   for (name in names(optionals) ) {
     assign(name, optionals[[name]])
   }
-  # Read the OS flag from the original emc before subset()/merge_chains(), which
-  # may drop custom attributes; thread it into bridge_sampling() below.
-  is_win <- os_flag(emc[[1]]$data)
   emc <-subset(emc, filter = filter, stage = stage)
   n_eff <- round(ess_summary(emc, selection = "alpha", stat = "median", stat_only = TRUE, stage = stage, filter = filter)/2)
   samples <- merge_chains(emc)
@@ -264,18 +258,18 @@ run_bridge_sampling <- function(emc, stage = "sample", filter = NULL, repetition
       split1 <- seq(1, round(sum(idx)/2))
       s1 <- bridge_sampling(samples, n_eff, split1, cores_for_props = cores_for_props, cores_per_prop = cores_per_prop,
                             maxiter = maxiter, stage = stage,
-                            r0 = r0, tol1 = tol1, tol2 = tol2, hyper_only = hyper_only, is_windows = is_win)
+                            r0 = r0, tol1 = tol1, tol2 = tol2, hyper_only = hyper_only)
       split2 <- seq(round(sum(idx)/2 + 1) : sum(idx))
       s2 <- bridge_sampling(samples, n_eff, split2, cores_for_props = cores_for_props, cores_per_prop = cores_per_prop,
                             maxiter = maxiter, stage = stage,
-                            r0 = r0, tol1 = tol1, tol2 = tol2, hyper_only = hyper_only, is_windows = is_win)
+                            r0 = r0, tol1 = tol1, tol2 = tol2, hyper_only = hyper_only)
       if(abs(s1 - s2) > 1) warning("First split and second split marginal likelihood estimates are off by 1 log point. \n This usually means that your MCMC chains aren't completely stable yet. \n Consider running the MCMC chain longer if you need more precise estimates (e.g. when comparing different priors)")
       mls[i] <- mean(c(s1, s2))
     } else{
       split_idx <- seq(1, sum(idx), by = 2)
       mls[i] <- bridge_sampling(samples, n_eff, split_idx, cores_for_props = cores_for_props, cores_per_prop = cores_per_prop,
                                 maxiter = maxiter, stage = stage,
-                                r0 = r0, tol1 = tol1, tol2 = tol2, hyper_only = hyper_only, is_windows = is_win)
+                                r0 = r0, tol1 = tol1, tol2 = tol2, hyper_only = hyper_only)
     }
   }
   return(mls)

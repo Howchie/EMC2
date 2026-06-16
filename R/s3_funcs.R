@@ -416,9 +416,6 @@ fit.emc <- function(emc, stage = NULL, iter = 1000, stop_criteria = NULL,
     if(is.null(fileName)) fileName <- emc
     emc <- loadRData(emc)
   }
-  # Look up the OS once here and store it on each subject's dadm, so the
-  # sampling hot path (auto_mclapply) routes parallel calls without re-deriving it.
-  emc <- set_os_flag(emc)
   if(is.null(stage)){
     last_stage <- get_last_stage(emc)
   } else{
