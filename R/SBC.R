@@ -37,25 +37,6 @@ run_sbc <- function(design_in, prior_in, replicates = 250, trials = 100, n_subje
 
 # Internal helpers --------------------------------------------------------
 
-# When rt_resolution is specified only via TC (the rt/censoring-bound flooring
-# applied during data simulation in make_data), default the top-level
-# rt_resolution (used for fit/make_emc likelihood compression) to match it, so
-# SBC simulates and fits on the same rt grid. An explicit top-level
-# rt_resolution passed to run_sbc still wins. Explicit TC (passed via ...) takes
-# precedence over the design's stored TC, mirroring check_missing()'s order when
-# make_data is called without a data= argument (as it is in every SBC worker).
-.sbc_sync_rt_resolution <- function(dots, design_in) {
-  if (!is.null(dots[["rt_resolution"]])) return(dots)
-  tc <- dots[["TC"]]
-  tc_rt <- if (is.list(tc) && !is.null(tc[["rt_resolution"]])) {
-    tc[["rt_resolution"]]
-  } else if (!is.null(design_in$TC)) {
-    design_in$TC[["rt_resolution"]]
-  } else NULL
-  if (!is.null(tc_rt)) dots[["rt_resolution"]] <- tc_rt
-  dots
-}
-
 .sbc_load_persist_reps <- function(persist_dir, persist_base) {
   if (is.null(persist_dir) || is.null(persist_base)) return(list())
   pattern <- paste0("^", persist_base, "_rep_[0-9]+\\.rds$")
@@ -83,8 +64,7 @@ run_sbc <- function(design_in, prior_in, replicates = 250, trials = 100, n_subje
 SBC_hierarchical <- function(design_in, prior_in, replicates = 250, trials = 100, n_subjects = 30,
                              plot_data = FALSE, verbose = TRUE,
                              fileName = NULL, ...){
-  dots <- .sbc_sync_rt_resolution(list(...), design_in)
-  dots <- add_defaults(dots, max_tries = 50, compress = FALSE, rt_resolution = 1e-12,
+  dots <- add_defaults(list(...), max_tries = 50, compress = FALSE, rt_resolution = 1e-12,
                        stop_criteria = list(min_es = 100, max_gd = 1.1,
                                             selection = c("alpha", "mu", "Sigma")))
   dots$verbose <- verbose
@@ -185,8 +165,7 @@ run_SBC_hierarchical_rep <- function(i, design_in, prior_mu, prior_var, trials, 
 SBC_hierarchical_parallel <- function(design_in, prior_in, replicates = 250, trials = 100,
                                       n_subjects = 30, verbose = TRUE,
                                       fileName = NULL, ...) {
-  dots <- .sbc_sync_rt_resolution(list(...), design_in)
-  dots <- add_defaults(dots, max_tries = 50, compress = FALSE, rt_resolution = 1e-12,
+  dots <- add_defaults(list(...), max_tries = 50, compress = FALSE, rt_resolution = 1e-12,
                        stop_criteria = list(min_es = 100, max_gd = 1.1,
                                             selection = c("alpha", "mu", "Sigma")),
                        cores_per_chain = 1)
@@ -436,9 +415,8 @@ SBC_single <- function(
   if (attr(prior_in, "type") != "single") {
     stop("can only use `type = single`")
   }
-  dots <- .sbc_sync_rt_resolution(list(...), design_in)
   dots <- add_defaults(
-    dots,
+    list(...),
     max_tries = 50,
     compress = FALSE, rt_resolution = 1e-12,
     stop_criteria = list(
