@@ -9,12 +9,21 @@ printCompare(
   selection = NULL,
   relative = TRUE,
   ICdigits = 0,
+  weights = TRUE,
   Wdigits = 3,
   format = NULL
 )
 }
 \arguments{
 \item{out}{Data frame returned (invisibly) by \code{compare()}.}
+
+\item{selection}{\code{NULL} (default), a character string, or a character
+vector. Elements must be from \code{"DIC"}, \code{"BPIC"}, \code{"WAIC"},
+and \code{"MD"} (marginal deviance from bridge sampling), \code{"EffectiveN"},
+\code{"meanD"}, \code{"Dmean"}, \code{"minD"}. \code{NULL}
+displays all measures present in \code{out}; a vector displays the named
+subset in the order supplied. An error is raised for unrecognised names or
+measures not computed in the \code{compare()} call.}
 
 \item{relative}{Logical (default \code{TRUE}). If \code{TRUE}, the minimum
 value across models is subtracted per measure so that the best model reads
@@ -24,6 +33,9 @@ When multiple measures are shown each is made relative independently.}
 
 \item{ICdigits}{Integer, digits for rounding non-weight columns (default
 \code{0}, matching \code{compare()}'s \code{digits} argument).}
+
+\item{weights}{Logical, default TRUE, print weights corresponding to selected
+model selection metrics.}
 
 \item{Wdigits}{Integer, digits for rounding weight columns (default \code{3},
 matching \code{compare()}'s \code{digits_p} argument).}
