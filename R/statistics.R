@@ -175,7 +175,8 @@ compare <- function(sList,stage="sample",filter=NULL,use_best_fit=TRUE,
 #' @param out Data frame returned (invisibly) by \code{compare()}.
 #' @param selection \code{NULL} (default), a character string, or a character
 #'   vector. Elements must be from \code{"DIC"}, \code{"BPIC"}, \code{"WAIC"},
-#'   and \code{"MD"} (marginal deviance from bridge sampling). \code{NULL}
+#'   and \code{"MD"} (marginal deviance from bridge sampling), \code{"EffectiveN"),
+#'   \code{"meanD"}, \code{"Dmean"}, \code{"minD"}. \code{NULL}
 #'   displays all measures present in \code{out}; a vector displays the named
 #'   subset in the order supplied. An error is raised for unrecognised names or
 #'   measures not computed in the \code{compare()} call.
@@ -184,7 +185,7 @@ compare <- function(sList,stage="sample",filter=NULL,use_best_fit=TRUE,
 #'   0; value columns are prefixed with \code{d} (e.g. \code{dDIC}, \code{dMD}).
 #'   If \code{FALSE}, raw values are shown under the original column names.
 #'   When multiple measures are shown each is made relative independently.
-#' @param ICdigits Integer, digits for rounding IC value columns (default
+#' @param ICdigits Integer, digits for rounding non-weight columns (default
 #'   \code{0}, matching \code{compare()}'s \code{digits} argument).
 #' @param Wdigits Integer, digits for rounding weight columns (default \code{3},
 #'   matching \code{compare()}'s \code{digits_p} argument).
@@ -211,12 +212,15 @@ compare <- function(sList,stage="sample",filter=NULL,use_best_fit=TRUE,
 printCompare <- function(out, selection = NULL, relative = TRUE, ICdigits = 0,
                          Wdigits = 3, format = NULL) {
   valid <- c("DIC", "BPIC", "WAIC", "MD")
+  valid1 <- c("EffectiveN","meanD","Dmean","minD")
 
   if (is.null(selection)) {
     measures <- valid[valid %in% names(out)]
     if (length(measures) == 0)
       stop("No IC measures found in compare() output.")
   } else {
+    extras <- selection[selection %in% valid1]
+    selection <- selection[!(selection %in% extras)]
     bad     <- selection[!selection %in% valid]
     missing <- selection[selection %in% valid & !selection %in% names(out)]
     if (length(bad) > 0)
@@ -255,6 +259,63 @@ printCompare <- function(out, selection = NULL, relative = TRUE, ICdigits = 0,
     invisible(k)
   }
 }
+
+
+printCompare <- function(out, selection = NULL, relative = TRUE, ICdigits = 0,
+                         Wdigits = 3, format = NULL) {
+  valid <- c("DIC", "BPIC", "WAIC", "MD","EffectiveN","meanD","Dmean","minD")
+
+  if (is.null(selection)) {
+    measures <- valid[valid %in% names(out)]
+    if (length(measures) == 0)
+      stop("No relevant measures measures found in compare() output.")
+  } else {
+    bad     <- selection[!selection %in% valid]
+    missing <- selection[selection %in% valid & !selection %in% names(out)]
+    if (length(bad) > 0)
+      stop("Unrecognised selection: ", paste(bad, collapse = ", "),
+           ". Must be from: ", paste(valid, collapse = ", "), ".")
+    if (length(missing) > 0)
+      stop("Not present in compare() output: ", paste(missing, collapse = ", "),
+           ". Re-run compare() with the relevant options enabled.")
+    measures <- selection
+  }
+
+  ics <- measures[measures %in% valid[1:4]]
+  tab_list <- lapply(ics, function(sel) {
+    vals       <- out[[sel]]
+    val_col    <- if (relative) paste0("d", sel) else sel
+    weight_col <- paste0("w", sel)
+    if (relative) vals <- vals - min(vals, na.rm = TRUE)
+    data.frame(setNames(list(vals, out[[weight_col]]), c(val_col, weight_col)),
+               row.names = rownames(out))
+  })
+  tab <- do.call(cbind, tab_list)
+
+  tmp <- tab
+  for (sel in ics) {
+    val_col    <- if (relative) paste0("d", sel) else sel
+    weight_col <- paste0("w", sel)
+    tmp[[val_col]]    <- round(tmp[[val_col]],    ICdigits)
+    tmp[[weight_col]] <- round(tmp[[weight_col]], Wdigits)
+  }
+
+  extras <- measures[!(measures %in% valid[1:4])]
+  if (length(extras)>0) {
+    tmp <- cbind(tmp,out[,extras,drop=FALSE])
+    for (i in extras) if (i!="EffectiveN") tmp[,i] <- round(tmp[,i],ICdigits)
+  }
+
+  if (is.null(format)) {
+    print(tmp)
+    invisible(tab)
+  } else {
+    k <- knitr::kable(tmp, format = format, booktabs = TRUE)
+    print(k)
+    invisible(k)
+  }
+}
+
 
 std_error_IS2 <- function(IS_samples, n_bootstrap = 50000){
   log_marglik_boot= array(dim = n_bootstrap)
