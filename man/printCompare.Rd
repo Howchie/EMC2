@@ -16,20 +16,13 @@ printCompare(
 \arguments{
 \item{out}{Data frame returned (invisibly) by \code{compare()}.}
 
-\item{selection}{\code{NULL} (default), a character string, or a character
-vector. Elements must be from \code{"DIC"}, \code{"BPIC"}, \code{"WAIC"},
-and \code{"MD"} (marginal deviance from bridge sampling). \code{NULL}
-displays all measures present in \code{out}; a vector displays the named
-subset in the order supplied. An error is raised for unrecognised names or
-measures not computed in the \code{compare()} call.}
-
 \item{relative}{Logical (default \code{TRUE}). If \code{TRUE}, the minimum
 value across models is subtracted per measure so that the best model reads
 0; value columns are prefixed with \code{d} (e.g. \code{dDIC}, \code{dMD}).
 If \code{FALSE}, raw values are shown under the original column names.
 When multiple measures are shown each is made relative independently.}
 
-\item{ICdigits}{Integer, digits for rounding IC value columns (default
+\item{ICdigits}{Integer, digits for rounding non-weight columns (default
 \code{0}, matching \code{compare()}'s \code{digits} argument).}
 
 \item{Wdigits}{Integer, digits for rounding weight columns (default \code{3},
