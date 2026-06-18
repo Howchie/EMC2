@@ -34,6 +34,156 @@ run_sbc <- function(design_in, prior_in, replicates = 250, trials = 100, n_subje
 }
 
 
+#' Recover Partial or Interrupted SBC Results
+#'
+#' Reassembles the object normally returned by `run_sbc()` from the intermediate
+#' per-replicate files it writes, without running any further replicates. Use
+#' this when a run was interrupted (e.g. a node reboot) or deliberately aborted
+#' and you want to inspect the replicates completed so far (for example with
+#' `plot_sbc_ecdf()` or `plot_sbc_hist()`).
+#'
+#' `run_sbc()` writes one file per completed replicate (in
+#' `<fileName-without-extension>_temp/rep_<i>.rds`, and persistent
+#' `<base>_rep_<i>.rds` files next to `fileName`) plus the prior draws
+#' (`prior_samples.rds` in the temp directory, or `prior_mu`/`prior_var` /
+#' `prior_alpha` in `fileName`). This function gathers whichever replicate files
+#' survive and assembles them exactly as a completed run would.
+#'
+#' To instead *continue* an interrupted run to the target number of replicates,
+#' simply re-issue the original `run_sbc()` call with the same `fileName`: it
+#' resumes from the completed replicates and runs only the missing ones. Note
+#' that faithful resumption requires the original prior draws (`prior_samples.rds`
+#' or the prior saved in `fileName`); if only the `rep_<i>.rds` files survive,
+#' the results can still be inspected here but the run cannot be resumed (a new
+#' run would re-pair replicate indices with different true parameters).
+#'
+#' @param fileName Character. The `fileName` that was passed to `run_sbc()`
+#'   (used to locate the `_temp` directory and persistent rep files).
+#' @param design_in Optional emc design list (the one used for the run). Used to
+#'   name the recovered parameters; for hierarchical recovery it supplies the
+#'   group-mean (`mu`) column names. If `NULL`, names are taken from the rep
+#'   files / prior where available.
+#' @param prior_in Optional emc prior list. Currently only used for validation;
+#'   the prior draws are read from disk, not redrawn.
+#' @param pathName Character or NULL. Where to save the recovered result, in the
+#'   same format `run_sbc()` uses for its `fileName` (so the saved file is
+#'   indistinguishable from a normal run that happened to finish at the recovered
+#'   number of replicates). When `NULL` (the default) the result is saved to
+#'   `"recover_sbc.RData"` in the working directory.
+#' @param type Character. `"auto"` (default) detects single vs hierarchical from
+#'   the rep files; otherwise force `"single"` or `"hierarchical"`.
+#' @param verbose Logical. Whether to print progress/recovery messages.
+#'
+#' @return The same structure `run_sbc()` returns (for single fits an SBC list
+#'   of rank/med/bias/coverage; for hierarchical fits a list with `rank`,
+#'   `prior` and `rand_effects`), as if the run had finished at the recovered
+#'   number of replicates. The integer replicate indices included are stored in
+#'   the `"recovered_reps"` attribute. For hierarchical recovery when the prior
+#'   draws are unavailable, `$prior` is `NULL` (ranks are still fully recovered).
+#'   The same object is also saved to `pathName` (see above): for single fits as
+#'   `SBC` (plus `prior_alpha` when available), for hierarchical fits as
+#'   `SBC_temp`, matching `run_sbc()`.
+#' @export
+recover_sbc <- function(fileName, design_in = NULL, prior_in = NULL,
+                        pathName = NULL,
+                        type = c("auto", "single", "hierarchical"),
+                        verbose = TRUE) {
+  type <- match.arg(type)
+  if (is.null(pathName)) pathName <- "recover_sbc.RData"
+  temp_dir     <- paste0(tools::file_path_sans_ext(fileName), "_temp")
+  persist_dir  <- dirname(normalizePath(fileName, mustWork = FALSE))
+  persist_base <- tools::file_path_sans_ext(basename(fileName))
+
+  # --- gather replicate files (temp dir first, then persistent fallback) ---
+  reps      <- .sbc_read_rep_dir(temp_dir)
+  prior_obj <- NULL
+  from_temp <- length(reps) > 0
+  ps_file   <- file.path(temp_dir, "prior_samples.rds")
+  if (dir.exists(temp_dir) && file.exists(ps_file))
+    prior_obj <- tryCatch(readRDS(ps_file), error = function(e) NULL)
+  if (length(reps) == 0)
+    reps <- .sbc_load_persist_reps(persist_dir, persist_base)
+  if (length(reps) == 0)
+    stop("No replicate files found for '", fileName, "' (looked in ", temp_dir,
+         " and for persistent '", persist_base, "_rep_*.rds' files in ",
+         persist_dir, ")")
+
+  # --- prior fallback from the fileName .RData (prior is saved there too) ---
+  if (is.null(prior_obj) && file.exists(fileName)) {
+    env <- new.env(parent = emptyenv())
+    if (isTRUE(tryCatch({ load(fileName, envir = env); TRUE }, error = function(e) FALSE))) {
+      if (all(c("prior_mu", "prior_var") %in% ls(env)))
+        prior_obj <- list(prior_mu = env$prior_mu, prior_var = env$prior_var)
+      else if ("prior_alpha" %in% ls(env))
+        prior_obj <- env$prior_alpha
+    }
+  }
+
+  # --- detect type from a rep file if not forced ---
+  if (type == "auto") {
+    first <- reps[[1]]
+    type <- if (!is.null(first[["rank_mu_row"]])) "hierarchical"
+            else if (!is.null(first[["rank"]]) || isTRUE(first[["failed"]])) "single"
+            else stop("Could not auto-detect SBC type from rep files; pass type=")
+  }
+
+  par_names <- if (!is.null(design_in)) names(sampled_pars(design_in)) else NULL
+
+  if (type == "single") {
+    out    <- .sbc_assemble_single(reps, par_names = par_names)
+    target <- if (is.matrix(prior_obj)) nrow(prior_obj) else NA_integer_
+  } else {
+    prior_mu <- prior_var <- NULL
+    if (is.list(prior_obj) && !is.null(prior_obj[["prior_mu"]])) {
+      prior_mu  <- prior_obj[["prior_mu"]]
+      prior_var <- prior_obj[["prior_var"]]
+    }
+    out    <- .sbc_assemble_hierarchical(reps, prior_mu, prior_var, par_names)
+    target <- if (!is.null(prior_mu)) ncol(prior_mu) else NA_integer_
+    if (is.null(prior_mu))
+      warning("Prior draws not found (no prior_samples.rds or prior in '",
+              fileName, "'); $prior is NULL. Ranks are fully recovered, but the ",
+              "run cannot be faithfully resumed.")
+  }
+
+  # Save in the same format run_sbc() uses, so the file looks like a normal run
+  # that finished at the recovered number of replicates.
+  if (type == "single") {
+    SBC <- out
+    if (is.matrix(prior_obj)) {
+      prior_alpha <- prior_obj
+      save(SBC, prior_alpha, file = pathName)
+    } else {
+      save(SBC, file = pathName)
+    }
+  } else {
+    SBC_temp <- out
+    save(SBC_temp, file = pathName)
+  }
+
+  used <- attr(out, "recovered_reps")
+  if (verbose) {
+    n_done <- length(used)
+    msg <- paste0("Recovered ", n_done, " ", type, " replicate(s)")
+    if (!is.na(target)) {
+      msg <- paste0(msg, " of ", target, " requested")
+      missing <- setdiff(seq_len(target), used)
+      if (length(missing))
+        msg <- paste0(msg, "; missing: ",
+                      paste(utils::head(missing, 20), collapse = ","),
+                      if (length(missing) > 20) ",..." else "")
+    }
+    resumable <- from_temp && file.exists(ps_file)
+    message(msg, ". Saved to ", pathName, ". ",
+            if (resumable)
+              "Re-run your original run_sbc() call with the same fileName to resume."
+            else
+              "Inspect-only: prior draws for resumption were not found in the temp directory.")
+  }
+  out
+}
+
+
 
 # Internal helpers --------------------------------------------------------
 
@@ -58,6 +208,73 @@ run_sbc <- function(design_in, prior_in, replicates = 250, trials = 100, n_subje
   files   <- list.files(persist_dir, pattern = pattern, full.names = TRUE)
   if (length(files)) file.remove(files)
   invisible(NULL)
+}
+
+# Read all rep_<i>.rds in a temp directory into a list keyed by the (character)
+# replicate index. Unreadable files are skipped.
+.sbc_read_rep_dir <- function(dir) {
+  out <- list()
+  if (is.null(dir) || !dir.exists(dir)) return(out)
+  files <- list.files(dir, pattern = "^rep_[0-9]+\\.rds$", full.names = TRUE)
+  for (f in files) {
+    r <- tryCatch(readRDS(f), error = function(e) NULL)
+    if (!is.null(r)) {
+      i <- sub(".*rep_([0-9]+)\\.rds$", "\\1", basename(f))
+      out[[i]] <- r
+    }
+  }
+  out
+}
+
+# Assemble single (non-hierarchical) SBC replicate results into the object
+# returned by SBC_single(). `reps` is a list keyed by character replicate index
+# (as produced by the restart loaders or .sbc_read_rep_dir); NULL and failed
+# replicates are skipped. The included replicate indices are recorded in the
+# "recovered_reps" attribute. `par_names`, if supplied, overrides the (already
+# named) per-replicate vectors.
+.sbc_assemble_single <- function(reps, par_names = NULL) {
+  idx  <- sort(as.integer(names(reps)))
+  reps <- reps[as.character(idx)]
+  ok   <- vapply(reps, function(r)
+    !is.null(r) && !isTRUE(r$failed) && !is.null(r$rank), logical(1))
+  if (!any(ok)) stop("No completed replicates found to assemble")
+  used_idx <- idx[ok]
+  SBC <- split_list_to_dfs(reps[ok])
+  if (!is.null(par_names)) {
+    for (comp in names(SBC)) colnames(SBC[[comp]][["alpha"]]) <- par_names
+  }
+  attr(SBC, "recovered_reps") <- used_idx
+  SBC
+}
+
+# Assemble hierarchical SBC replicate results into the object returned by
+# SBC_hierarchical_parallel(). NULL replicates are skipped; included indices are
+# recorded in "recovered_reps". prior_mu/prior_var may be NULL (then $prior is
+# NULL). rank_var column names come from the replicates' stored var_col_names;
+# rank_mu column names come from par_names (or rownames(prior_mu) as a fallback).
+.sbc_assemble_hierarchical <- function(reps, prior_mu = NULL, prior_var = NULL,
+                                       par_names = NULL) {
+  idx  <- sort(as.integer(names(reps)))
+  reps <- reps[as.character(idx)]
+  ok   <- vapply(reps, function(r)
+    !is.null(r) && !is.null(r$rank_mu_row), logical(1))
+  if (!any(ok)) stop("No completed replicates found to assemble")
+  used_idx <- idx[ok]
+  reps <- reps[ok]
+
+  rank_mu          <- do.call(rbind, lapply(reps, `[[`, "rank_mu_row"))
+  rank_var         <- do.call(rbind, lapply(reps, `[[`, "rank_var_row"))
+  all_rand_effects <- lapply(reps, `[[`, "rand_effects")
+
+  if (is.null(par_names) && !is.null(prior_mu)) par_names <- rownames(prior_mu)
+  if (!is.null(par_names)) colnames(rank_mu) <- par_names
+  colnames(rank_var) <- reps[[1]][["var_col_names"]]
+
+  out <- list(rank         = list(mu = rank_mu, var = rank_var),
+              prior        = list(mu = prior_mu, var = prior_var),
+              rand_effects = all_rand_effects)
+  attr(out, "recovered_reps") <- used_idx
+  out
 }
 
 
@@ -314,19 +531,9 @@ SBC_hierarchical_parallel <- function(design_in, prior_in, replicates = 250, tri
     }
   }
 
-  # Assemble in replicate order
-  res <- lapply(as.character(1:replicates), function(k) completed_results[[k]])
-
-  rank_mu          <- do.call(rbind, lapply(res, `[[`, "rank_mu_row"))
-  rank_var         <- do.call(rbind, lapply(res, `[[`, "rank_var_row"))
-  all_rand_effects <- lapply(res, `[[`, "rand_effects")
-
-  colnames(rank_mu)  <- par_names
-  colnames(rank_var) <- res[[1]][["var_col_names"]]
-
-  out <- list(rank         = list(mu = rank_mu, var = rank_var),
-              prior        = list(mu = prior_mu, var = prior_var),
-              rand_effects = all_rand_effects)
+  # Assemble in replicate order (shared with recover_sbc)
+  out <- .sbc_assemble_hierarchical(completed_results, prior_mu, prior_var, par_names)
+  attr(out, "recovered_reps") <- NULL
   if (!is.null(fileName)) {
     SBC_temp <- out
     save(SBC_temp, file = fileName)
@@ -512,8 +719,9 @@ SBC_single <- function(
     }
   }
 
-  res <- lapply(as.character(1:replicates), function(k) completed_results[[k]])
-  SBC <- split_list_to_dfs(res)
+  # Assemble in replicate order (shared with recover_sbc)
+  SBC <- .sbc_assemble_single(completed_results)
+  attr(SBC, "recovered_reps") <- NULL
   if (!is.null(fileName)) {
     save(SBC, prior_alpha, file = fileName)
     unlink(temp_dir, recursive = TRUE)
@@ -529,13 +737,109 @@ calc_sbc_stats <- function(stats){
   for(i in 1:length(stats[[1]])){
     out[[out_names[i]]] <- list(
       coverage = colMeans(stats$coverage[[i]]),
-      # precision = apply(stats$med[[i]], 2, sd),
+      # precision: SD across replicates of the posterior median (lower = more precise)
+      precision = apply(stats$med[[i]], 2, sd),
       bias = colMeans(stats$bias[[i]])
     )
   }
   return(out)
 }
 
+
+# Validate the add_to_main argument of the SBC plot functions. add_to_main is
+# NULL (no prefix), a single string (the same prefix for every panel), or a
+# character vector of length n_panels (one prefix per panel).
+.sbc_check_add_to_main <- function(add_to_main, n_panels) {
+  if (is.null(add_to_main)) return(NULL)
+  if (!is.character(add_to_main))
+    stop("add_to_main must be NULL or a character vector")
+  if (length(add_to_main) != 1L && length(add_to_main) != n_panels)
+    stop("add_to_main must be a single string or a character vector of length ",
+         n_panels, " (the number of panels being plotted), not ", length(add_to_main))
+  add_to_main
+}
+
+# Per-panel prefix for add_to_main (see .sbc_check_add_to_main).
+.sbc_main_prefix <- function(add_to_main, panel) {
+  if (is.null(add_to_main)) "" else
+    if (length(add_to_main) == 1L) add_to_main else add_to_main[panel]
+}
+
+# Valid legend() position keywords for add_stats.
+.sbc_legend_keywords <- c("bottomright", "bottom", "bottomleft", "left", "topleft",
+                          "top", "topright", "right", "center")
+
+# Resolve the add_stats argument of the SBC plot functions into a normalized
+# spec, or NULL for none. add_stats is TRUE (all three at defaults), FALSE
+# (none), or a named list keyed by a subset of c("coverage","bias","precision").
+# Each statistic's entry is either a single legend() position keyword (same for
+# every panel), FALSE/NA/NULL to suppress it, or itself a named list/vector keyed
+# by parameter giving a per-panel position (parameters not named use the stat's
+# default; a per-parameter value of FALSE/NA suppresses that one panel). Omitted
+# statistics keep their default position on every panel. The result is a named
+# list (over the shown statistics); each element is list(mode="all", pos=) or
+# list(mode="per", per=<named chr, NA = suppressed>, default=). Query it per
+# panel with .sbc_panel_pos().
+.sbc_resolve_stat_spec <- function(add_stats, all_params) {
+  defaults <- c(coverage = "topleft", bias = "topright", precision = "bottomleft")
+  if (is.logical(add_stats) && length(add_stats) == 1L) {
+    if (isTRUE(add_stats))
+      return(lapply(defaults, function(p) list(mode = "all", pos = unname(p))))
+    return(NULL)
+  }
+  if (!is.list(add_stats))
+    stop("add_stats must be TRUE/FALSE or a named list")
+  bad <- setdiff(names(add_stats), names(defaults))
+  if (is.null(names(add_stats)) || length(bad))
+    stop("add_stats list names must be a subset of 'coverage', 'bias', 'precision'; got: ",
+         paste(bad, collapse = ", "))
+  is_suppress <- function(v) is.null(v) || (length(v) == 1L && (isFALSE(v) || isTRUE(is.na(v))))
+  chk_kw <- function(v, ctx) {
+    if (!(is.character(v) && length(v) == 1L && v %in% .sbc_legend_keywords))
+      stop(ctx, " must be a single legend position keyword (one of: ",
+           paste(.sbc_legend_keywords, collapse = ", "), "), or FALSE/NA to suppress")
+    v
+  }
+  spec <- list()
+  for (stat in names(defaults)) {
+    if (!(stat %in% names(add_stats))) {                       # not mentioned: default everywhere
+      spec[[stat]] <- list(mode = "all", pos = unname(defaults[[stat]])); next
+    }
+    v <- add_stats[[stat]]
+    if (is_suppress(v)) next                                   # suppressed entirely
+    if (is.list(v) || !is.null(names(v))) {                    # per-parameter
+      if (is.null(names(v)) || any(names(v) == ""))
+        stop("add_stats$", stat, " per-parameter entries must all be named by parameter")
+      pbad <- setdiff(names(v), all_params)
+      if (length(pbad))
+        stop("add_stats$", stat, " names unknown parameter(s): ", paste(pbad, collapse = ", "))
+      per <- stats::setNames(rep(NA_character_, length(v)), names(v))
+      for (pn in names(v)) {
+        vv <- if (is.list(v)) v[[pn]] else v[[pn]]
+        per[pn] <- if (is_suppress(vv)) NA_character_ else chk_kw(vv, paste0("add_stats$", stat, "$", pn))
+      }
+      spec[[stat]] <- list(mode = "per", per = per, default = unname(defaults[[stat]]))
+    } else {                                                   # single keyword for all panels
+      spec[[stat]] <- list(mode = "all", pos = chk_kw(v, paste0("add_stats$", stat)))
+    }
+  }
+  if (length(spec) == 0L) NULL else spec
+}
+
+# Positions of the statistics to draw on the panel for parameter `param`, given a
+# spec from .sbc_resolve_stat_spec(). Returns a named character vector (subset of
+# coverage/bias/precision) of legend keywords; suppressed statistics are omitted.
+.sbc_panel_pos <- function(spec, param) {
+  out <- character(0)
+  for (stat in names(spec)) {
+    s <- spec[[stat]]
+    p <- if (identical(s$mode, "all")) s$pos
+         else if (param %in% names(s$per)) s$per[[param]]
+         else s$default
+    if (!is.na(p)) out[stat] <- p
+  }
+  out
+}
 
 #' Plot the Histogram of the Observed Rank Statistics of SBC
 #'
@@ -544,38 +848,72 @@ calc_sbc_stats <- function(stats){
 #'
 #' @param ranks A list of named dataframes of the rank statistic
 #' @param bins An integer specifying the number of bins to use when plotting the histogram
-#' @param layout Optional. A numeric vector specifying the layout using `par(mfrow = layout)`
-#' @param add_stats Boolean. Should coverage, bias and precision be included in the figure.
+#' @param layout Optional. A numeric vector specifying the layout using `par(mfrow = layout)`.
+#'   `NA` (the default) auto-computes a grid. `NULL` leaves the current device
+#'   layout (`mfrow`/`mfcol`) untouched, drawing the panels into the existing
+#'   grid with no new page between them.
+#' @param add_stats Controls the recovery statistics (coverage, bias, precision)
+#'   overlaid on each panel. `TRUE` (the default) shows all three at default
+#'   legend positions (coverage `"topleft"`, bias `"topright"`, precision
+#'   `"bottomleft"`); `FALSE` shows none. Alternatively a named list keyed by a
+#'   subset of `"coverage"`, `"bias"`, `"precision"` may be given: each value is a
+#'   `legend()` position keyword (e.g. `"topright"`, `"bottomleft"`, `"center"`)
+#'   placing that statistic, an entry of `FALSE` or `NA` suppresses it, and
+#'   omitted names keep their default position. A statistic's value may instead
+#'   be a named list/vector keyed by parameter (a subset; parameters not named
+#'   use that statistic's default position) to set its position per panel, with
+#'   `FALSE`/`NA` suppressing it on a given panel. These statistics are only
+#'   available for single-subject SBC; for hierarchical SBC output `add_stats`
+#'   has no effect.
+#' @param add_to_main Optional. `NULL` (the default) does nothing. A single
+#'   string is prepended to the start of the auto-generated main title of every
+#'   panel. A character vector is prepended panel-by-panel and must have the same
+#'   length as the number of panels being plotted (no separator is inserted).
 #' @return No returns
 #' @export
-plot_sbc_hist <- function(ranks, bins = 10, layout = NA, add_stats = TRUE){
+plot_sbc_hist <- function(ranks, bins = 10, layout = NA, add_stats = TRUE,
+                          add_to_main = NULL){
+  stats <- NULL
   if (!is.null(ranks[["rank"]])) {
     stats <- calc_sbc_stats(ranks)
-  }
-  if (!is.null(ranks[["rank"]])) {
     ranks <- ranks[["rank"]]
   }
   selects <- names(ranks)
-  oldpar <- par(no.readonly = TRUE) # code line i
-  on.exit(par(oldpar)) # code line i + 1
+  stat_spec <- .sbc_resolve_stat_spec(add_stats, unique(unlist(lapply(ranks, colnames))))
+  if (!is.null(stat_spec) && is.null(stats))
+    warning("add_stats was requested but no recovery statistics are available; ",
+            "coverage/bias/precision are only produced for single-subject SBC. Skipping.")
+  # layout = NULL means: do not touch the device layout (mfrow/mfcol); draw the
+  # panels into whatever grid is already set up, with no new page between them.
+  # (layout = NA auto-computes a grid; a numeric vector sets it via par(mfrow).)
+  manage_layout <- !is.null(layout)
+  if (manage_layout) {
+    oldpar <- par(no.readonly = TRUE) # code line i
+    on.exit(par(oldpar)) # code line i + 1
+  }
 
   n_sample <- nrow(ranks[[1]])
   low <- qbinom(0.025, n_sample, 1/bins)
   mid <- qbinom(0.5, n_sample, 1/bins)
   high <- qbinom(0.975, n_sample, 1/bins)
   par_names <- colnames(ranks[[1]])
+  add_to_main <- .sbc_check_add_to_main(add_to_main, sum(vapply(ranks, ncol, integer(1))))
+  panel <- 0L
   for (j in seq_along(ranks)) {
-    if (any(is.na(layout))) {
-      par(mfrow = coda_setmfrow(Nparms = ncol(ranks[[1]])))
-    } else {
-      par(mfrow = layout)
+    if (manage_layout) {
+      if (any(is.na(layout))) {
+        par(mfrow = coda_setmfrow(Nparms = ncol(ranks[[1]])))
+      } else {
+        par(mfrow = layout)
+      }
     }
     rank <- ranks[[j]]
     stat <- stats[[j]]
     for (i in 1:ncol(rank)) {
+      panel <- panel + 1L
       hist(
         x = rank[ , i],
-        main = paste0(selects[j], " - ", par_names[i]),
+        main = paste0(.sbc_main_prefix(add_to_main, panel), selects[j], " - ", par_names[i]),
         breaks = bins,
         ylim = c(0, high + 2),
         xlab = "rank"
@@ -583,13 +921,13 @@ plot_sbc_hist <- function(ranks, bins = 10, layout = NA, add_stats = TRUE){
       abline(h = low, lty = 2)
       abline(h = mid, lty = 2)
       abline(h = high, lty = 2)
-      if (!is.null(stat) && add_stats) {
-        coverage_print <- paste0("coverage : ", round(stat[["coverage"]][i], 2))
-        bias_print <- paste0("bias : ", round(stat[["bias"]][i], 3))
-        # precision_print <- paste0("precision : ", round(stat[["precision"]][i], 3))
-        legend(x = "topleft", legend = coverage_print, bty = "n")
-        legend(x = "topright", legend = bias_print, bty = "n")
-        # legend(x = "topright", legend = precision_print, bty = "n")
+      if (!is.null(stat) && !is.null(stat_spec)) {
+        prints <- c(coverage  = paste0("coverage : ",  round(stat[["coverage"]][i], 2)),
+                    bias      = paste0("bias : ",       round(stat[["bias"]][i], 3)),
+                    precision = paste0("precision : ",  round(stat[["precision"]][i], 3)))
+        pos <- .sbc_panel_pos(stat_spec, par_names[i])
+        for (s in names(pos))
+          legend(x = pos[[s]], legend = prints[[s]], bty = "n")
       }
     }
   }
@@ -651,13 +989,34 @@ make_smooth <- function(x, y, N = 1000){
 #' The shaded band is the simultaneous (1 - gamma) envelope for F_hat(z) - z.
 #'
 #' @param ranks A list of named dataframes of the rank statistic (raw or normalized)
-#' @param layout Optional. A numeric vector specifying the layout using `par(mfrow = layout)`
-#' @param add_stats Boolean. Should coverage, bias and precision be included in the figure.
+#' @param layout Optional. A numeric vector specifying the layout using `par(mfrow = layout)`.
+#'   `NA` (the default) auto-computes a grid. `NULL` leaves the current device
+#'   layout (`mfrow`/`mfcol`) untouched, drawing the panels into the existing
+#'   grid with no new page between them.
+#' @param add_stats Controls the recovery statistics (coverage, bias, precision)
+#'   overlaid on each panel. `TRUE` (the default) shows all three at default
+#'   legend positions (coverage `"topleft"`, bias `"topright"`, precision
+#'   `"bottomleft"`); `FALSE` shows none. Alternatively a named list keyed by a
+#'   subset of `"coverage"`, `"bias"`, `"precision"` may be given: each value is a
+#'   `legend()` position keyword (e.g. `"topright"`, `"bottomleft"`, `"center"`)
+#'   placing that statistic, an entry of `FALSE` or `NA` suppresses it, and
+#'   omitted names keep their default position. A statistic's value may instead
+#'   be a named list/vector keyed by parameter (a subset; parameters not named
+#'   use that statistic's default position) to set its position per panel, with
+#'   `FALSE`/`NA` suppressing it on a given panel. These statistics are only
+#'   available for single-subject SBC; for hierarchical SBC output `add_stats`
+#'   has no effect.
 #' @param main Optional. A character specifying plot title.
+#' @param add_to_main Optional. `NULL` (the default) does nothing. A single
+#'   string is prepended to the start of the (auto-generated or `main`) title of
+#'   every panel. A character vector is prepended panel-by-panel and must have
+#'   the same length as the number of panels being plotted (no separator is
+#'   inserted).
 #' @param K Optional. Effective sample size of the MCMC that produced the ranks.
 #' @return No returns
 #' @export
-plot_sbc_ecdf <- function(ranks, layout = NA, add_stats = TRUE, main = NULL, K = 500) {
+plot_sbc_ecdf <- function(ranks, layout = NA, add_stats = TRUE, main = NULL,
+                          add_to_main = NULL, K = 500) {
 
   # stats extraction (keep existing behaviour)
   stats <- NULL
@@ -667,9 +1026,21 @@ plot_sbc_ecdf <- function(ranks, layout = NA, add_stats = TRUE, main = NULL, K =
   }
 
   selects <- names(ranks)
+  add_to_main <- .sbc_check_add_to_main(add_to_main, sum(vapply(ranks, ncol, integer(1))))
+  panel <- 0L
+  stat_spec <- .sbc_resolve_stat_spec(add_stats, unique(unlist(lapply(ranks, colnames))))
+  if (!is.null(stat_spec) && is.null(stats))
+    warning("add_stats was requested but no recovery statistics are available; ",
+            "coverage/bias/precision are only produced for single-subject SBC. Skipping.")
 
-  oldpar <- par(no.readonly = TRUE)
-  on.exit(par(oldpar))
+  # layout = NULL means: do not touch the device layout (mfrow/mfcol); draw the
+  # panels into whatever grid is already set up, with no new page between them.
+  # (layout = NA auto-computes a grid; a numeric vector sets it via par(mfrow).)
+  manage_layout <- !is.null(layout)
+  if (manage_layout) {
+    oldpar <- par(no.readonly = TRUE)
+    on.exit(par(oldpar))
+  }
 
   # N = number of SBC simulations (rows)
   N <- nrow(ranks[[1]])
@@ -680,10 +1051,12 @@ plot_sbc_ecdf <- function(ranks, layout = NA, add_stats = TRUE, main = NULL, K =
 
   for (j in seq_along(ranks)) {
 
-    if (any(is.na(layout))) {
-      par(mfrow = coda_setmfrow(Nparms = ncol(ranks[[j]]), nplots = length(ranks)))
-    } else {
-      par(mfrow = layout)
+    if (manage_layout) {
+      if (any(is.na(layout))) {
+        par(mfrow = coda_setmfrow(Nparms = ncol(ranks[[j]]), nplots = length(ranks)))
+      } else {
+        par(mfrow = layout)
+      }
     }
 
     rank <- ranks[[j]]
@@ -718,7 +1091,9 @@ plot_sbc_ecdf <- function(ranks, layout = NA, add_stats = TRUE, main = NULL, K =
       z <- res[["z"]]
       y <- Fn(z) - z
 
-      main_i <- if (is.null(main)) paste0(selects[j], " - ", par_names[i]) else main
+      panel <- panel + 1L
+      base_main <- if (is.null(main)) paste0(selects[j], " - ", par_names[i]) else main
+      main_i <- paste0(.sbc_main_prefix(add_to_main, panel), base_main)
 
       ylim_lo <- min(res[["lower"]], y, na.rm = TRUE) - 0.01
       ylim_hi <- max(res[["upper"]], y, na.rm = TRUE) + 0.03
@@ -747,11 +1122,13 @@ plot_sbc_ecdf <- function(ranks, layout = NA, add_stats = TRUE, main = NULL, K =
 
       abline(h = 0, lty = 2, col = "gray50")
 
-      if (!is.null(stat) && add_stats) {
-        coverage_print <- paste0("coverage : ", round(stat[["coverage"]][i], 2))
-        bias_print <- paste0("bias : ", round(stat[["bias"]][i], 3))
-        legend(x = "topleft", legend = coverage_print, bty = "n")
-        legend(x = "topright", legend = bias_print, bty = "n")
+      if (!is.null(stat) && !is.null(stat_spec)) {
+        prints <- c(coverage  = paste0("coverage : ",  round(stat[["coverage"]][i], 2)),
+                    bias      = paste0("bias : ",       round(stat[["bias"]][i], 3)),
+                    precision = paste0("precision : ",  round(stat[["precision"]][i], 3)))
+        pos <- .sbc_panel_pos(stat_spec, par_names[i])
+        for (s in names(pos))
+          legend(x = pos[[s]], legend = prints[[s]], bty = "n")
       }
     }
   }
