@@ -238,10 +238,31 @@ run_stage <- function(pmwgs,
     }
     j <- start_iter + i
 
-    # Gibbs step
-    pars <- pars_comb <- gibbs_step(pmwgs, pmwgs$samples$alpha[!nuisance,,j-1], pmwgs$type)
+    # Gibbs step. If a numerical failure occurs here, no subject update has
+    # happened yet, so the safe rejection is to repeat the previous iteration.
+    pars_attempt <- tryCatch(
+      gibbs_step(pmwgs, pmwgs$samples$alpha[!nuisance,,j-1], pmwgs$type),
+      error = identity
+    )
+    if (inherits(pars_attempt, c("error", "try-error"))) {
+      pmwgs$samples <- reject_sample_iteration(pmwgs$samples, j)
+      if(any(nuisance)){
+        pmwgs$sampler_nuis$samples <- reject_sample_iteration(pmwgs$sampler_nuis$samples, j)
+      }
+      next
+    }
+    pars <- pars_comb <- pars_attempt
     if(any(nuisance)){
-      pars_nuis <- gibbs_step(pmwgs$sampler_nuis, pmwgs$samples$alpha[nuisance,,j-1], pmwgs$sampler_nuis$type)
+      pars_nuis_attempt <- tryCatch(
+        gibbs_step(pmwgs$sampler_nuis, pmwgs$samples$alpha[nuisance,,j-1], pmwgs$sampler_nuis$type),
+        error = identity
+      )
+      if (inherits(pars_nuis_attempt, c("error", "try-error"))) {
+        pmwgs$samples <- reject_sample_iteration(pmwgs$samples, j)
+        pmwgs$sampler_nuis$samples <- reject_sample_iteration(pmwgs$sampler_nuis$samples, j)
+        next
+      }
+      pars_nuis <- pars_nuis_attempt
       pars_comb <- merge_group_level(pars$tmu, pars_nuis$tmu, pars$tvar, pars_nuis$tvar, nuisance, pars$subj_mu)
       pars_comb$alpha <- pmwgs$samples$alpha[,,j-1]
       pmwgs$sampler_nuis$samples <- fill_samples(samples = pmwgs$sampler_nuis$samples,
@@ -252,7 +273,7 @@ run_stage <- function(pmwgs,
       pmwgs$sampler_nuis$samples$idx <- j
     }
     # Particle step
-    proposals <- parallel::mcmapply(new_particle, 1:pmwgs$n_subjects, data, pm_settings, eff_mu, eff_var,
+    proposals <- parallel::mcmapply(safe_new_particle, 1:pmwgs$n_subjects, data, pm_settings, eff_mu, eff_var,
                                     chains_mu, chains_var, pmwgs$samples$subj_ll[,j-1],
                                     MoreArgs = list(pars_comb, pmwgs$model, stage,
                                                     pmwgs$type,
@@ -268,6 +289,45 @@ run_stage <- function(pmwgs,
   attr(pmwgs$samples, "pm_settings") <- pm_settings
   if (verboseProgress) close(pb)
   return(pmwgs)
+}
+
+reject_sample_iteration <- function(samples, j) {
+  if (j <= 1) {
+    samples$idx <- j
+    return(samples)
+  }
+  for (nm in names(samples)) {
+    obj <- samples[[nm]]
+    d <- dim(obj)
+    if (is.null(d)) next
+    if (length(d) == 2 && d[2] >= j && d[1] != d[2]) {
+      samples[[nm]][, j] <- samples[[nm]][, j - 1]
+    } else if (length(d) == 3 && d[3] >= j) {
+      samples[[nm]][, , j] <- samples[[nm]][, , j - 1]
+    }
+  }
+  samples$idx <- j
+  samples
+}
+
+safe_new_particle <- function (s, data, pm_settings, eff_mu = NULL,
+                               eff_var = NULL, chains_mu = NULL,
+                               chains_var = NULL, prev_ll,
+                               parameters, model = NULL, stage,
+                               type, tune, r_cores = 1) {
+  attempt <- tryCatch(
+    new_particle(s, data, pm_settings, eff_mu, eff_var, chains_mu, chains_var,
+                 prev_ll, parameters, model, stage, type, tune, r_cores),
+    error = identity
+  )
+  if (inherits(attempt, c("error", "try-error"))) {
+    return(reject_particle(parameters$alpha[, s], prev_ll, pm_settings))
+  }
+  attempt
+}
+
+reject_particle <- function(subj_mu, prev_ll, pm_settings) {
+  list(proposal = subj_mu, ll = prev_ll, pm_settings = pm_settings)
 }
 
 

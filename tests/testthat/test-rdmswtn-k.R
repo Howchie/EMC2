@@ -485,6 +485,113 @@ test_that("RDMSWTN timer means are transformed to likelihood rates by Erlang sha
   expect_equal(unname(mixed[, "lambda_k"]), unname(1 / pars_base[, "mK"]), tolerance = 1e-12)
 })
 
+test_that("local kill rfun miss rate matches likelihood omission mass", {
+  check_local_kill <- function(model, pars_nat, seed) {
+    set.seed(seed)
+    n_trials <- 20000
+    lR <- factor(rep(c("left", "right"), n_trials), levels = c("left", "right"))
+    pars_big_nat <- pars_nat[rep(seq_len(nrow(pars_nat)), n_trials), , drop = FALSE]
+    pars_big <- model$Ttransform(pars_big_nat, NULL)
+
+    sim <- model$rfun(list(lR = lR), pars_big)
+    miss_sim <- mean(is.na(sim$R) | is.infinite(sim$rt))
+    p_resp <- model$pfun(rep(Inf, 2), pars_big[1:2, , drop = FALSE])
+    miss_likelihood <- prod(1 - p_resp)
+
+    expect_equal(miss_sim, miss_likelihood, tolerance = 0.025)
+  }
+
+  swtn_pars <- function(sv) {
+    matrix(
+      rep(c(v = 2, B = 1.2, A = 0.2, t0 = 0.15, s = 1, sv = sv,
+            mG = 1, mK = 0.6), each = 2),
+      nrow = 2,
+      dimnames = list(NULL, c("v", "B", "A", "t0", "s", "sv", "mG", "mK"))
+    )
+  }
+  gbm_pars <- matrix(
+    rep(c(v = 2, B = 1.2, A = 0.2, t0 = 0.15, s = 1, mG = 1, mK = 0.6),
+        each = 2),
+    nrow = 2,
+    dimnames = list(NULL, c("v", "B", "A", "t0", "s", "mG", "mK"))
+  )
+
+  check_local_kill(
+    RDMSWTN(erlang_shape = 2L, erlang_type = "local_kill"),
+    swtn_pars(0),
+    seed = 101
+  )
+  check_local_kill(
+    RDMSWTN(erlang_shape = 2L, erlang_type = "local_kill"),
+    swtn_pars(0.15),
+    seed = 102
+  )
+  check_local_kill(
+    RDMGBM(erlang_shape = 2L, erlang_type = "local_kill"),
+    gbm_pars,
+    seed = 103
+  )
+})
+
+test_that("global kill C++ likelihood uses timer means as raw-time Erlang rates", {
+  model <- RDMSWTN(erlang_shape = 2L, erlang_type = "global_kill")
+  design_obj <- design(
+    factors = list(subjects = 1, S = "stim"),
+    Rlevels = c("left", "right"),
+    formula = list(v ~ 1, B ~ 1, A ~ 1, t0 ~ 1, s ~ 1, sv ~ 1, mK ~ 1),
+    model = model,
+    report_p_vector = FALSE
+  )
+  dat <- data.frame(
+    subjects = factor(1),
+    S = factor("stim"),
+    R = factor("left", levels = c("left", "right")),
+    rt = 0.8
+  )
+  emc <- make_emc(dat, design_obj, type = "single", compress = FALSE, n_chains = 1)
+  model_obj <- emc[[1]]$model()
+  dadm <- emc[[1]]$data[[1]]
+
+  p_vec <- sampled_pars(design_obj, doMap = FALSE)
+  vals <- c(v = log(2), B = log(1.2), A = log(0.2), t0 = log(0.15),
+            s = log(1), sv = log(0.15), mK = log(0.6))
+  p_vec[names(vals)] <- vals
+  p_mat <- matrix(p_vec, nrow = 1, dimnames = list(NULL, names(p_vec)))
+  designs <- lapply(names(model_obj$p_types), function(p) {
+    attr(dadm, "designs")[[p]][attr(attr(dadm, "designs")[[p]], "expand"), , drop = FALSE]
+  })
+  names(designs) <- names(model_obj$p_types)
+
+  ll <- EMC2:::calc_ll_oo(
+    p_mat, dadm,
+    constants = attr(dadm, "constants"),
+    designs = designs,
+    type = model_obj$c_name,
+    bounds = model_obj$bound,
+    transforms = model_obj$transform,
+    pretransforms = model_obj$pre_transform,
+    p_types = names(model_obj$p_types),
+    min_ll = log(1e-10),
+    trend = model_obj$trend
+  )
+
+  pars_nat <- matrix(
+    rep(c(v = 2, B = 1.2, A = 0.2, t0 = 0.15, s = 1, sv = 0.15,
+          mG = 1, mK = 0.6), each = 2),
+    nrow = 2,
+    dimnames = list(NULL, c("v", "B", "A", "t0", "s", "sv", "mG", "mK"))
+  )
+  pars <- model$Ttransform(pars_nat, NULL)
+  pars_no_kill <- pars
+  pars_no_kill[, c("lambda_g", "lambda_k")] <- 0
+  rt <- dat$rt
+  manual <- log(model$dfun(rt, pars_no_kill[1, , drop = FALSE])) +
+    log1p(-model$pfun(rt, pars_no_kill[2, , drop = FALSE])) +
+    stats::pgamma(rt, shape = 2, rate = 2 / 0.6, lower.tail = FALSE, log.p = TRUE)
+
+  expect_equal(ll, manual, tolerance = 1e-10)
+})
+
 test_that("mixed RDMSWTN rfun supports local Erlang simulation only", {
   model <- RDMSWTN(erlang_shape = "mixed", erlang_type = "local_kill_guess")
   lR <- factor(rep(c("left", "right"), 20), levels = c("left", "right"))

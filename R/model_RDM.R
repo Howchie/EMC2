@@ -370,8 +370,9 @@ rRDMGBM <- function(lR, pars, p_types = c("v", "b", "A", "t0", "s", "lambda_g", 
 
   pars_ok <- pars[ok, , drop = FALSE]
   if (nrow(pars_ok) > 0) {
-    # In the combined local kill+guess case, handle both clocks jointly below.
-    k_vec <- if (local_kill && !guess) pars_ok[, "lambda_k"] else rep(0, nrow(pars_ok))
+    # Local Erlang clocks are handled on the raw-time axis below, after t0 is
+    # added to the evidence-accumulation finish times.
+    k_vec <- rep(0, nrow(pars_ok))
     dt[ok] <- rGBM_killed(sum(ok),
       b = pars_ok[, "b"], v = pars_ok[, "v"], A = pars_ok[, "A"],
       s = pars_ok[, "s"], k = k_vec, erlang = erlang_shape,
@@ -924,8 +925,9 @@ rRDMSWTN <- function(lR, pars, p_types = c("v", "b", "A", "t0", "sv", "lambda_g"
 
   pars_all <- pars
   pars <- pars[ok, , drop = FALSE]
-  # In the combined local kill+guess case, handle both clocks jointly below.
-  k_vec <- if (local_kill && !guess) pars[, "lambda_k"] else rep(0, nrow(pars))
+  # Local Erlang clocks are handled on the raw-time axis below, after t0 is
+  # added to the evidence-accumulation finish times.
+  k_vec <- rep(0, nrow(pars))
   dt[ok] <- rSWTN(sum(ok),
     b = pars[, "b"], v = pars[, "v"], A = pars[, "A"], sv = pars[, "sv"],
     k = k_vec, erlang = erlang_shape, erlang_omega = erlang_omega_all[ok],

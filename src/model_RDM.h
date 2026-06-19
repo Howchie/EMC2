@@ -2377,6 +2377,16 @@ double prdmswtn(double t, double mu_drift, double b, double A,
     return finish(std::log1p(-std::exp(log_sr + log_sk)));
   }
 
+  // No-guess path: return 0 if EAM hasn't started.
+  if (t_eam <= 1e-10) return log_out ? R_NegInf : 0.0;
+
+  if (no_sv) {
+    // sv=0: standard Wald under the caller's posdrift semantics.
+    // Pass raw t and t0 to pwald so erlang inside uses physical time.
+    return pwald(t, mu_drift, b, A, s, t0, lambda, lambda,
+                 log_out, kill_shape, guess, posdrift);
+  }
+
   if (!emc2_isfinite(t_eam) && lambda > 1e-10) {
     return prdmswtn_killed_inf_quad(b, mu_drift, A, sv, s, lambda,
                                     n_gauss_nodes, log_out, kill_shape, false);
@@ -2393,15 +2403,7 @@ double prdmswtn(double t, double mu_drift, double b, double A,
     return log_out ? log_mass : std::exp(log_mass);
   }
 
-  // No-guess path: return 0 if EAM hasn't started.
-  if (t_eam <= 1e-10) return log_out ? R_NegInf : 0.0;
-
-  if (no_sv) {
-    // sv=0: standard Wald under the caller's posdrift semantics.
-    // Pass raw t and t0 to pwald so erlang inside uses physical time.
-    return pwald(t, mu_drift, b, A, s, t0, lambda, lambda,
-                 log_out, kill_shape, guess, posdrift);
-  } else if (no_A && !no_sv) {
+  if (no_A && !no_sv) {
     // pswtn receives raw t and uses t0 internally to form dt.
     return pswtn(t, mu_drift, b, s, t0, sv, lambda, lambda, log_out, kill_shape, guess, posdrift);
   } else {

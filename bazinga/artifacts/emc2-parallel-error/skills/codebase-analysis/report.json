@@ -1,0 +1,40 @@
+{
+  "task": "Trace EMC2 fit burn-in parallel error where subset.emc receives atomic vector after mclapply worker failure",
+  "session_id": "emc2-parallel-error",
+  "timestamp": "2026-06-16T01:42:51.817107",
+  "cache_hits": 0,
+  "cache_misses": 3,
+  "timed_out": false,
+  "partial_results": false,
+  "project_patterns": {
+    "test_framework": "unknown (test directory found)",
+    "build_system": "none detected",
+    "package_manager": "none detected",
+    "primary_language": "cpp"
+  },
+  "utilities": [],
+  "similar_features": [
+    {
+      "file": "./src/gsl_bundled/err/strerror.c",
+      "similarity": 0.34888888888888886,
+      "matched_keywords": [
+        "fit",
+        "error",
+        "vector",
+        "failure"
+      ],
+      "patterns": []
+    },
+    {
+      "file": "./src/gsl_bundled/err/error.c",
+      "similarity": 0.30444444444444446,
+      "matched_keywords": [
+        "fit",
+        "error"
+      ],
+      "patterns": []
+    }
+  ],
+  "suggested_approach": "Follow patterns from ./src/gsl_bundled/err/strerror.c (35% similar) | Write tests using unknown (test directory found)",
+  "cache_efficiency": "0.0%"
+}

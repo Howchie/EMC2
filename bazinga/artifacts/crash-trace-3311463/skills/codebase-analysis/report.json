@@ -1,0 +1,19 @@
+{
+  "task": "Trace EMC2 sources of incorrect number of dimensions errors during parallel fit/run_emc from malformed design matrices or sampled parameter vectors",
+  "session_id": "crash-trace-3311463",
+  "timestamp": "2026-06-17T03:14:36.588020",
+  "cache_hits": 0,
+  "cache_misses": 3,
+  "timed_out": false,
+  "partial_results": false,
+  "project_patterns": {
+    "test_framework": "unknown (test directory found)",
+    "build_system": "none detected",
+    "package_manager": "none detected",
+    "primary_language": "cpp"
+  },
+  "utilities": [],
+  "similar_features": [],
+  "suggested_approach": "Write tests using unknown (test directory found)",
+  "cache_efficiency": "0.0%"
+}

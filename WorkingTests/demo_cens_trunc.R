@@ -47,18 +47,18 @@ run_lba_demo <- function(p_contaminant = 0, estimate_contaminant = FALSE,
   p_vector <- sampled_pars(designLBA, doMap = FALSE)
   
   # Threshold / start-point / non-decision time
-  if ("B" %in% names(p_vector)) p_vector[["B"]] <- log(2)
+  if ("B" %in% names(p_vector)) p_vector[["B"]] <- log(1.5)
   if ("A" %in% names(p_vector)) p_vector[["A"]] <- log(.5)
   if ("t0" %in% names(p_vector)) p_vector[["t0"]] <- log(0.2)
   
   # Drift means for mismatch vs match accumulators
-  if ("v" %in% names(p_vector)) p_vector[["v"]] <- 1
-  if ("v_lMTRUE" %in% names(p_vector)) p_vector[["v_lMTRUE"]] <- 1.25
+  if ("v" %in% names(p_vector)) p_vector[["v"]] <- .5
+  if ("v_lMTRUE" %in% names(p_vector)) p_vector[["v_lMTRUE"]] <- .5
   
   # Sv for match accumulator
   if ("sv" %in% names(p_vector)) p_vector[["sv"]] <- log(1)
-  if ("sv_lMFALSE" %in% names(p_vector)) p_vector[["sv_lMFALSE"]] <- log(1)
-  if ("sv_lMTRUE" %in% names(p_vector)) p_vector[["sv_lMTRUE"]] <- log(0.8)
+  if ("sv_lMFALSE" %in% names(p_vector)) p_vector[["sv_lMFALSE"]] <- log(1.5)
+  if ("sv_lMTRUE" %in% names(p_vector)) p_vector[["sv_lMTRUE"]] <- log(1.5)
 
   # Contaminant omissions: pContaminant is on probit scale (transformed via pnorm)
   if (estimate_contaminant) {
@@ -194,7 +194,8 @@ res_lbaio <- run_lba_demo(
   p_contaminant = 0,
   estimate_contaminant = FALSE,
   n_trials = 10000,
-  UC = 3,
+  UC = 4,
+  LT = .3,
   posdrift=FALSE,
   label = "lbaio"
 )

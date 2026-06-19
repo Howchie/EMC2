@@ -4104,7 +4104,8 @@ double c_log_likelihood_race(
         // Global omission probability: Integral f_K(u) * S_race(u) du on [0, Inf).
         // Use Gauss-Legendre quadrature (20 nodes) with mapping u -> t = -1/lam * log(1-u).
         const double* lambda_ptr = pars_cm_ptr + race_ctx->lambda_k_index * n_trials;
-        const double lam = lambda_ptr[start_row_idx];
+        const double lam = erlang_lambda_from_mean(lambda_ptr[start_row_idx],
+                                                   race_ctx->kill_shape);
         if (lam <= 0.0) {
           global_log_surv_inf_by_trial[static_cast<size_t>(unique_trial_idx)] = R_NegInf;
           global_log_surv_inf_ready[static_cast<size_t>(unique_trial_idx)] = 1;
@@ -4218,7 +4219,13 @@ double c_log_likelihood_race(
       if (!R_FINITE(logS)) return R_NegInf;
       if (race_ctx && race_ctx->is_global_kill && race_ctx->kill_active) {
         const double* lambda_ptr = pars_cm_ptr + race_ctx->lambda_k_index * n_trials;
-        if (t > 0.0) logS += erlang_log_surv(t, lambda_ptr[start_row_idx], race_ctx->kill_shape);
+        if (t > 0.0) {
+          logS += erlang_log_surv(
+            t,
+            erlang_lambda_from_mean(lambda_ptr[start_row_idx], race_ctx->kill_shape),
+            race_ctx->kill_shape
+          );
+        }
       }
       return logS;
     }
@@ -4239,7 +4246,11 @@ double c_log_likelihood_race(
     if (race_ctx && race_ctx->is_global_kill && race_ctx->kill_active) {
       const double* lambda_ptr = pars_cm_ptr + race_ctx->lambda_k_index * n_trials;
       if (t > 0.0) {
-        logS += erlang_log_surv(t, lambda_ptr[start_row_idx], race_ctx->kill_shape);
+        logS += erlang_log_surv(
+          t,
+          erlang_lambda_from_mean(lambda_ptr[start_row_idx], race_ctx->kill_shape),
+          race_ctx->kill_shape
+        );
       }
     }
     return logS;
@@ -4264,7 +4275,13 @@ double c_log_likelihood_race(
       if (idx_w >= 0) {
         const double tt = rts_dadm[idx_w];
         global_log_sk_by_trial[static_cast<size_t>(j)] =
-          (tt > 0.0) ? erlang_log_surv(tt, lambda_ptr[idx_w], ctx->kill_shape) : min_ll;
+          (tt > 0.0)
+            ? erlang_log_surv(
+                tt,
+                erlang_lambda_from_mean(lambda_ptr[idx_w], ctx->kill_shape),
+                ctx->kill_shape
+              )
+            : min_ll;
       }
     }
   }
@@ -4460,9 +4477,13 @@ double c_log_likelihood_race(
                     logS_LT_vec.data());
         }
 
-        // logS_UT: -Inf when UT==Inf (trivial for proper distributions), else computed.
+        // logS_UT: -Inf when UT==Inf for proper distributions. Defective
+        // race models (e.g. LBAIO) retain never-finish mass at +Inf, so the
+        // upper endpoint still has to be evaluated.
         std::vector<double> logS_UT_vec(static_cast<size_t>(n_unique_trials), R_NegInf);
-        if (uniform_UT != R_PosInf) {
+        const bool defective_trunc_tail =
+          (ctx != nullptr && ctx->defective_upper_tail);
+        if (uniform_UT != R_PosInf || defective_trunc_tail) {
           logS_at_t(uniform_UT,
                     pars.begin(), n_trials, n_lR, n_par,
                     trunc_mask.data(), n_unique_trials,
@@ -4767,6 +4788,10 @@ double c_log_likelihood_race(
           }
         } else {
           current_ll_val = integrate_timed(R_j_idx, lower_for_trial, upper_for_trial);
+          if (defective_upper_tail && n_lR_j == 1) {
+            current_ll_val = log_sum_exp(current_ll_val,
+                                         log_surv_cm(R_PosInf, start_row_idx, n_lR_j));
+          }
         }
       }
     } else if (Rcpp::NumericVector::is_na(rt_j)) {
