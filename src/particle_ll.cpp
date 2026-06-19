@@ -2710,9 +2710,11 @@ double c_log_likelihood_race(
                     logS_LT_vec.data());
         }
 
-        // logS_UT: -Inf when UT==Inf (trivial for proper distributions), else computed.
+        // logS_UT: -Inf when UT==Inf for proper distributions. LBAIO
+        // retains never-finish mass at +Inf, so the upper endpoint still
+        // has to be evaluated.
         std::vector<double> logS_UT_vec(static_cast<size_t>(n_unique_trials), R_NegInf);
-        if (uniform_UT != R_PosInf) {
+        if (uniform_UT != R_PosInf || !posdrift) {
           logS_at_t(uniform_UT,
                     pars.begin(), n_trials, n_lR, n_par,
                     trunc_mask.data(), n_unique_trials,
@@ -2938,6 +2940,10 @@ double c_log_likelihood_race(
           }
         } else {
           current_ll_val = integrate_interval(R_j_idx, lower_for_trial, upper_for_trial);
+          if (!posdrift && n_lR_j == 1) {
+            current_ll_val = log_sum_exp(current_ll_val,
+                                         log_surv_cm(R_PosInf, start_row_idx, n_lR_j));
+          }
         }
       }
     } else if (Rcpp::NumericVector::is_na(rt_j)) {

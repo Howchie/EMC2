@@ -21,6 +21,10 @@ double dnormP(double x, double mean = 0.0, double sd = 1.0,
 
 double plba_norm(double t, double A, double b, double v, double sv,
                  bool posdrift = true){
+  if (t == R_PosInf) {
+    return posdrift ? 1.0 : pnormP(0.0, v, sv, false, false);
+  }
+
   double denom = 1.;
   if (posdrift) {
     denom = pnormP(v / sv, 0., 1., true, false);
@@ -109,4 +113,3 @@ NumericVector plba(NumericVector t,
 }
 
 #endif
-

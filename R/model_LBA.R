@@ -122,6 +122,12 @@ pLBA <- function (rt, pars, posdrift = TRUE)
   out[ok] <- plba(t = dt[ok], A = pars[ok,"A"], b = pars[ok,"b"],
                          v = pars[ok,"v"], sv = pars[ok,"sv"],
                          posdrift = posdrift)
+  is_inf <- is.infinite(rt) & rt > 0 & (pars[,"b"] >= pars[,"A"])
+  is_inf[is.na(is_inf)] <- FALSE
+  if (any(is_inf)) {
+    out[is_inf] <- if (posdrift) 1 else
+      pnorm(0, mean = pars[is_inf,"v"], sd = pars[is_inf,"sv"], lower.tail = FALSE)
+  }
   out
 }
 
@@ -154,6 +160,7 @@ rLBA <- function(lR,pars,p_types=c("v","sv","b","A","t0"),
   out$R[ok] <- levels(lR)[R][ok]
   out$R <- factor(out$R,levels=levels(lR))
   out$rt[ok] <- rt[ok]
+  out$R[ok & bad] <- NA
   out
 }
 #### Model functions ----
@@ -255,4 +262,3 @@ LBA <- function(posdrift=TRUE){
     }
   )
 }
-

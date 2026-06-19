@@ -153,6 +153,103 @@ test_that("LBA compressed", {
   expect_snapshot(calc_lls(LBA_s2))
 })
 
+test_that("LBAIO keeps intrinsic omission mass at infinity", {
+  design_lbaio <- design(
+    factors = list(subjects = "s1"),
+    Rlevels = c("yes"),
+    model = LBA(posdrift = FALSE),
+    formula = list(v ~ 1, sv ~ 1, B ~ 1, A ~ 1, t0 ~ 1),
+    constants = c(sv = log(1), B = log(1), A = log(0.5), t0 = log(0.2))
+  )
+
+  pars <- matrix(
+    c(v = 0.5, sv = 1, B = 1, A = 0.5, t0 = 0.2, b = 1.5),
+    nrow = 1,
+    dimnames = list(NULL, c("v", "sv", "B", "A", "t0", "b"))
+  )
+  expect_equal(
+    EMC2:::pLBA(Inf, pars, posdrift = FALSE),
+    pnorm(0, mean = 0.5, sd = 1, lower.tail = FALSE),
+    tolerance = 1e-12
+  )
+
+  dat <- data.frame(
+    subjects = factor("s1"),
+    R = factor(NA, levels = "yes"),
+    rt = Inf,
+    UC = Inf
+  )
+  emc <- make_emc(dat, design_lbaio, type = "single", n_chains = 1, compress = FALSE, verbose = FALSE)
+  dadm <- emc[[1]]$data[[1]]
+  model <- emc[[1]]$model()
+  p_mat <- matrix(0.5, nrow = 1, dimnames = list(NULL, "v"))
+  designs <- list(v = attr(dadm, "designs")$v[attr(attr(dadm, "designs")$v, "expand"), , drop = FALSE])
+  ll <- EMC2:::calc_ll_oo(
+    p_mat, dadm,
+    constants = attr(dadm, "constants"),
+    designs = designs,
+    type = model$c_name,
+    bounds = model$bound,
+    transforms = model$transform,
+    pretransforms = model$pre_transform,
+    p_types = names(model$p_types),
+    min_ll = log(1e-10),
+    trend = model$trend
+  )
+
+  expect_equal(as.numeric(ll), pnorm(0, 0.5, 1, log.p = TRUE), tolerance = 1e-8)
+
+  dat_known <- data.frame(
+    subjects = factor("s1"),
+    R = factor("yes", levels = "yes"),
+    rt = Inf,
+    UC = Inf
+  )
+  emc_known <- make_emc(dat_known, design_lbaio, type = "single", n_chains = 1,
+                        compress = FALSE, verbose = FALSE)
+  dadm_known <- emc_known[[1]]$data[[1]]
+  ll_known <- EMC2:::calc_ll_oo(
+    p_mat, dadm_known,
+    constants = attr(dadm_known, "constants"),
+    designs = list(v = attr(dadm_known, "designs")$v[
+      attr(attr(dadm_known, "designs")$v, "expand"), , drop = FALSE
+    ]),
+    type = model$c_name,
+    bounds = model$bound,
+    transforms = model$transform,
+    pretransforms = model$pre_transform,
+    p_types = names(model$p_types),
+    min_ll = log(1e-10),
+    trend = model$trend
+  )
+
+  expect_equal(as.numeric(ll_known), pnorm(0, 0.5, 1, log.p = TRUE), tolerance = 1e-8)
+
+  set.seed(1001)
+  sim <- make_data(p_mat[1, ], design_lbaio, n_trials = 200, TC = list(UC = Inf))
+  expect_true(any(is.infinite(sim$rt)))
+  expect_true(all(is.na(sim$R[is.infinite(sim$rt)])))
+
+  dat_trunc <- data.frame(
+    subjects = factor("s1"),
+    R = factor("yes", levels = "yes"),
+    rt = 0.6,
+    LT = 0.3,
+    UC = Inf
+  )
+  emc_trunc <- make_emc(dat_trunc, design_lbaio, type = "single", n_chains = 1,
+                        compress = FALSE, verbose = FALSE)
+  dat_notrunc <- dat_trunc
+  dat_notrunc$LT <- 0
+  emc_notrunc <- make_emc(dat_notrunc, design_lbaio, type = "single", n_chains = 1,
+                          compress = FALSE, verbose = FALSE)
+  ll_trunc <- EMC2:::calc_ll_manager(p_mat, emc_trunc[[1]]$data[[1]], emc_trunc[[1]]$model)
+  ll_notrunc <- EMC2:::calc_ll_manager(p_mat, emc_notrunc[[1]]$data[[1]], emc_notrunc[[1]]$model)
+  S_LT <- 1 - EMC2:::pLBA(0.3, pars, posdrift = FALSE)
+  S_Inf <- pnorm(0, mean = 0.5, sd = 1)
+  expect_equal(as.numeric(ll_trunc - ll_notrunc), -log(S_LT - S_Inf), tolerance = 1e-8)
+})
+
 
 # WDM ----------------------------------------------------------
 design_WDM <- design(data = dat, model=DDM,
