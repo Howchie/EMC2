@@ -1244,11 +1244,13 @@ plot_spectrum <- function(dat, pp = NULL,
 #'   quantile columns of \code{ci[[1]]} (default \code{1:3}).  Columns are
 #'   interpreted as lower, middle (plotted point), and upper.  Errors if fewer
 #'   than 3 columns exist or indices are out of range.
-#' @param layout Integer vector \code{c(rows, cols)} controlling the panel grid
-#'   per page.  Default \code{NULL}: with exactly 3 factors uses 1 row and
-#'   \code{n_levels_f3} columns; with 4+ factors uses \code{c(2, 4)}.
-#'   Factors beyond the grid iterate across new pages.  When \code{NULL} the
-#'   current \code{par(mfrow)} is left unchanged.
+#' @param layout Controls the panel grid per page.  Default \code{NA}: choose a
+#'   grid automatically -- with exactly 3 factors uses 1 row and
+#'   \code{n_levels_f3} columns, with 4+ factors uses \code{c(2, 4)}; factors
+#'   beyond the grid iterate across new pages.  An integer vector
+#'   \code{c(rows, cols)} sets the grid explicitly.  \code{NULL} leaves the
+#'   current \code{par(mfrow)}/\code{par(mfcol)} untouched, so panels are drawn
+#'   into the caller's existing layout.
 #' @param factor_labels Character vector of length \code{n_factors} \emph{or}
 #'   a named list.  As a \strong{character vector}, overrides the factor names
 #'   shown in axis labels, panel headings, and the legend title.  As a
@@ -1277,9 +1279,16 @@ plot_spectrum <- function(dat, pp = NULL,
 #'   x axis and line factors.  Applied after \code{level_order}, so indices
 #'   refer to the original factor positions as defined by \code{factors}.
 #'   Default \code{NULL} leaves the factor order unchanged.
-#' @param displace Numeric vector of length equal to the number of line groups
-#'   (levels of factor 2; 1 for zero- or one-factor types) giving x-position
-#'   offsets per line group.  Default \code{NULL} uses zero displacement.
+#' @param displace Controls horizontal offsetting of the line groups (levels of
+#'   factor 2) so their points and intervals do not overlap at each x position.
+#'   A single number (default \code{0.1}) spaces the groups evenly and
+#'   symmetrically around each x location with that spacing (e.g. two groups at
+#'   \eqn{\pm}\code{displace}/2; three at \code{-displace, 0, +displace}); set
+#'   it to \code{0} to disable.  Alternatively a numeric vector of length equal
+#'   to the number of line groups gives explicit per-group offsets.  With
+#'   \code{credint(..., plot = TRUE)} this can be set globally via \code{...} or
+#'   per parameter type via \code{plot_args[[type]]$displace}, the latter taking
+#'   precedence.
 #' @param cap_length Numeric.  Half-width of the interval end-caps as a
 #'   fraction of the spacing between adjacent factor-1 x-positions
 #'   (default \code{0.05}).
@@ -1302,10 +1311,19 @@ plot_spectrum <- function(dat, pp = NULL,
 #'     \item{\code{xlab}}{X-axis label.  Default: name of factor 1 (after
 #'       applying \code{factor_labels}), or \code{type} for zero-factor types.}
 #'     \item{\code{ylab}}{Y-axis label.  Default: \code{type}.}
-#'     \item{\code{main}}{Panel title.  Default: \code{names(ci)[1]} when
+#'     \item{\code{main}}{Panel title(s).  Default: \code{names(ci)[1]} when
 #'       there are fewer than three factors; factor-level combination labels
-#'       (e.g. \code{"E: accuracy"}) for three or more factors.  Supplying
-#'       \code{main} overrides all panels.}
+#'       (e.g. \code{"E: accuracy"}) for three or more factors.  A length-1
+#'       \code{main} overrides the title of every panel with the same string;
+#'       a character vector of length equal to the number of panels sets one
+#'       title per panel (in panel-drawing order).  Any other length is an
+#'       error.}
+#'     \item{\code{ylim}}{Y-axis limits.  Default \code{NULL}: computed
+#'       automatically (and independently) for each panel from its data.  A
+#'       length-2 numeric vector \code{c(lower, upper)} applies the same limits
+#'       to every panel; a list of such vectors (length equal to the number of
+#'       panels) sets each panel's limits individually, in panel-drawing
+#'       order.}
 #'     \item{\code{lty}}{Line type(s), vector of length n_lines.
 #'       Default: \code{1:n_lines}.}
 #'     \item{\code{pch}}{Point character(s), vector of length n_lines.
@@ -1346,7 +1364,7 @@ plot_spectrum <- function(dat, pp = NULL,
 plot_credint_map <- function(ci, factors = NULL, type = NULL, quants = 1:3,
                          layout = NA, factor_labels = NULL,
                          level_labels = NULL, level_order = NULL,
-                         factor_order = NULL, displace = NULL,
+                         factor_order = NULL, displace = 0.1,
                          cap_length = 0.05, pt_cex = 1,
                          legend_args = NULL, ...) {
 
@@ -1523,19 +1541,29 @@ plot_credint_map <- function(ci, factors = NULL, type = NULL, quants = 1:3,
   xlab         <- if (!is.null(dots$xlab)) dots$xlab else xlab_default
   ylab         <- if (!is.null(dots$ylab)) dots$ylab else type
   user_main    <- dots$main
+  user_ylim    <- dots$ylim
 
   # par() settings intercepted from ...: applied after par(mfrow=) on each page
   # (par(mfrow=) resets mar/oma to defaults, so they must be re-applied after it)
   par_args <- c("mar","oma","mgp","tcl","las","cex","cex.axis","cex.lab","cex.main")
   par_settings <- dots[intersect(names(dots), par_args)]
   if (is.null(par_settings$mar)) par_settings$mar <- c(4.1, 4.1, 2.1, 0.1)
-  dots[c("lty","pch","cols","xlab","ylab","main","xaxt", names(par_settings))] <- NULL
+  dots[c("lty","pch","cols","xlab","ylab","main","ylim","xaxt", names(par_settings))] <- NULL
 
   # ---- 11. Displace ------------------------------------------------------
-  if (is.null(displace)) displace <- rep(0, n_lines)
-  if (length(displace) != n_lines)
-    stop("`displace` must have length ", n_lines, " (one per line group), got ",
-         length(displace), ".")
+  # Scalar: even, symmetric spacing of the line groups around each x location
+  #   (e.g. 2 lines -> +/- displace/2; 3 lines -> -displace, 0, +displace).
+  # Length-n_lines vector: explicit per-line offsets.
+  if (is.null(displace)) displace <- 0
+  if (length(displace) == 1L) {
+    if (!is.numeric(displace) || !is.finite(displace))
+      stop("`displace` must be a single finite number (spacing) or a length-",
+           n_lines, " vector of offsets.")
+    displace <- (seq_len(n_lines) - (n_lines + 1) / 2) * displace
+  } else if (length(displace) != n_lines) {
+    stop("`displace` must be a single spacing value or have length ", n_lines,
+         " (one per line group), got ", length(displace), ".")
+  }
 
   # ---- 11. X-axis positions ---------------------------------------------
   if (n_factors >= 1L) {
@@ -1563,6 +1591,29 @@ plot_credint_map <- function(ci, factors = NULL, type = NULL, quants = 1:3,
     n_panels <- nrow(panel_combos)
   }
 
+  # `main` may be length 1 (shared by every panel, as before) or length n_panels
+  # (one title per panel).
+  if (!is.null(user_main) && length(user_main) != 1L &&
+      length(user_main) != n_panels)
+    stop("`main` must have length 1 or ", n_panels,
+         " (one per panel), got ", length(user_main), ".")
+
+  # `ylim` may be NULL (auto per panel), a length-2 vector (shared by every
+  # panel), or a list of length-2 vectors (one per panel).
+  if (!is.null(user_ylim)) {
+    if (is.list(user_ylim)) {
+      if (length(user_ylim) != n_panels)
+        stop("`ylim` list must have length ", n_panels,
+             " (one per panel), got ", length(user_ylim), ".")
+      if (!all(vapply(user_ylim,
+                      function(z) is.numeric(z) && length(z) == 2L, logical(1L))))
+        stop("each element of a `ylim` list must be a numeric vector of length 2.")
+    } else if (!is.numeric(user_ylim) || length(user_ylim) != 2L) {
+      stop("`ylim` must be a length-2 numeric vector, or a list of such ",
+           "vectors (one per panel).")
+    }
+  }
+
   # layout: NA = compute & apply default; NULL = don't touch mfrow; c(r,c) = use as-is
   set_layout <- !is.null(layout)
   if (isTRUE(is.na(layout))) {
@@ -1577,7 +1628,9 @@ plot_credint_map <- function(ci, factors = NULL, type = NULL, quants = 1:3,
     }
     layout <- c(nr, nc)
   }
-  panels_per_page <- layout[1L] * layout[2L]
+  # layout = NULL: don't touch mfrow; derive page size from the current device
+  # so the page-boundary bookkeeping below still works.
+  panels_per_page <- if (is.null(layout)) prod(par("mfrow")) else layout[1L] * layout[2L]
 
   # ---- 13. Draw helper --------------------------------------------------
   draw_group <- function(x_pos, grp_data, j) {
@@ -1614,9 +1667,13 @@ plot_credint_map <- function(ci, factors = NULL, type = NULL, quants = 1:3,
       if (length(par_settings)) do.call(par, par_settings)
     }
 
+    # length-1 main is shared by all panels; length-n_panels gives one each
+    um <- if (is.null(user_main)) NULL
+          else if (length(user_main) == 1L) user_main else user_main[panel_idx]
+
     if (is.null(panel_combos)) {
       pdata_panel <- pdata
-      panel_title <- if (!is.null(user_main)) user_main else names(ci)[1L]
+      panel_title <- if (!is.null(um)) um else names(ci)[1L]
     } else {
       combo  <- panel_combos[panel_idx, , drop = FALSE]
       filter <- rep(TRUE, nrow(pdata))
@@ -1625,16 +1682,23 @@ plot_credint_map <- function(ci, factors = NULL, type = NULL, quants = 1:3,
         filter <- filter & (pdata[[paste0("f", f)]] == combo[[k]])
       }
       pdata_panel <- pdata[filter, , drop = FALSE]
-      panel_title <- if (!is.null(user_main)) user_main else
+      panel_title <- if (!is.null(um)) um else
         paste(sapply(seq_along(extra_f), function(k) {
           f <- extra_f[k]
           paste0(display_factor_names[f], ": ", raw_to_display[[f]][combo[[k]]])
         }), collapse = ", ")
     }
 
-    ylim <- range(c(pdata_panel$lower, pdata_panel$upper), na.rm = TRUE)
-    pad  <- 0.05 * diff(ylim);  if (pad == 0) pad <- 0.5
-    ylim <- ylim + c(-pad, pad)
+    ylim <-
+      if (is.null(user_ylim)) {
+        yl  <- range(c(pdata_panel$lower, pdata_panel$upper), na.rm = TRUE)
+        pad <- 0.05 * diff(yl); if (pad == 0) pad <- 0.5
+        yl + c(-pad, pad)
+      } else if (is.list(user_ylim)) {
+        user_ylim[[panel_idx]]
+      } else {
+        user_ylim
+      }
 
     do.call(plot.default,
             c(list(x = numeric(0), y = numeric(0),
@@ -2053,7 +2117,9 @@ plot_credint <- function(ci, type = NULL, quants = 1:3,
     draw_ci(x_eff, eff_arr, col_eff)
     do.call(axis, c(list(side = 4L), right_axis_args))
     if (nchar(ylab_right) > 0L)
-      mtext(ylab_right, side = 4L, line = 3L, cex = ylab_cex)
+      # mtext() cex is absolute, but title() (left ylab) scales by par("cex"),
+      # which shrinks in multi-panel layouts; match it so both labels agree.
+      mtext(ylab_right, side = 4L, line = 3L, cex = ylab_cex * par("cex"))
   }
 
   # X-axis: full-width line (with break if both groups), then ticks only

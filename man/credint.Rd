@@ -50,12 +50,22 @@ the result is a single-element list, and \code{\link{plot_credints}} otherwise
 "correlation"}, \code{"sigma"}, or \code{"alpha"} with \code{map = TRUE}).
 Default \code{FALSE}.}
 
-\item{plot_args}{Named list of additional arguments forwarded to the plotting
-function. \code{quants} (default \code{1:3}) may be included here to control
-which quantile columns are plotted. All other entries are passed directly to
-\code{\link{plot_credints}} or \code{\link{plot_credints_map}}.}
+\item{plot_args}{Named list of arguments controlling the plot. \code{quants}
+(default \code{1:3}) selects which quantile columns are plotted, and
+\code{layout}, \code{order}, \code{effect_only} and \code{intercept_only}
+set top-level layout/ordering. \strong{Any remaining entry is treated as a
+per-parameter-type override and must itself be a named list keyed by
+parameter type}, e.g. \code{plot_args = list(v = list(label_angle = 0))}.
+A flat entry such as \code{plot_args = list(label_angle = 0)} is read as
+settings for a (non-existent) type called \code{label_angle} and is
+therefore silently ignored. To set an argument for \emph{every} panel, pass
+it through \code{...} instead (see \code{...} and Details).}
 
-\item{...}{Optional additional arguments that can be passed to \code{get_pars}}
+\item{...}{Additional arguments. When \code{plot = TRUE} these are forwarded
+to \emph{every} panel of the underlying plotting function, which is the
+simplest way to set a plot control globally, e.g.
+\code{credint(emc, plot = TRUE, label_angle = 0)} to draw horizontal
+x-axis labels. Otherwise passed to \code{\link{get_pars}}.}
 }
 \value{
 A list of posterior quantiles for each parameter group in the selected
@@ -65,6 +75,34 @@ parameter type, returned invisibly when \code{plot = TRUE}.
 Returns the quantiles of the selected parameter type.
 Full range of possible samples manipulations described in \code{get_pars}.
 }
+\details{
+When \code{plot = TRUE}, \code{selection}/\code{map} determine which plotting
+function renders each panel, and the following \code{credint}-specific
+controls may be passed (globally via \code{...}, or per type via
+\code{plot_args}). Standard graphics arguments (e.g. \code{xlab}, \code{main},
+\code{col}, \code{pch}, and \code{\link[graphics]{par}} settings such as
+\code{las} or \code{cex}) are also accepted but are documented with the
+plotting functions below.
+\itemize{
+\item \code{selection = "mu"}, \code{"alpha"} etc. (\code{map = FALSE},
+\code{\link{plot_credint}}): \code{label_angle} (x-axis label rotation,
+default 90), \code{intercept}, \code{effects}, \code{intercept_names},
+\code{effect_names}, \code{col_intercept}, \code{col_effect},
+\code{yleft}, \code{yright}, \code{ylab_right}, \code{cap_length},
+\code{pt_cex}, \code{effect_line}.
+\item \code{map = TRUE} (\code{\link{plot_credint_map}}): \code{factors},
+\code{factor_labels}, \code{level_labels}, \code{level_order},
+\code{factor_order}.
+\item \code{selection = "correlation"}, \code{"covariance"}, \code{"LL"}:
+\code{type}, \code{effect_line}, \code{cap_length}, \code{pt_cex}.
+}
+}
 \examples{
 credint(samples_LNR)
+# Horizontal x-axis labels (passed via ... so it reaches every panel):
+credint(samples_LNR, plot = TRUE, label_angle = 0)
+}
+\seealso{
+\code{\link{plot_credint}} and \code{\link{plot_credint_map}} for the
+full description of these arguments.
 }

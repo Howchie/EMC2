@@ -14,7 +14,7 @@ plot_credint_map(
   level_labels = NULL,
   level_order = NULL,
   factor_order = NULL,
-  displace = NULL,
+  displace = 0.1,
   cap_length = 0.05,
   pt_cex = 1,
   legend_args = NULL,
@@ -46,11 +46,13 @@ quantile columns of \code{ci[[1]]} (default \code{1:3}).  Columns are
 interpreted as lower, middle (plotted point), and upper.  Errors if fewer
 than 3 columns exist or indices are out of range.}
 
-\item{layout}{Integer vector \code{c(rows, cols)} controlling the panel grid
-per page.  Default \code{NULL}: with exactly 3 factors uses 1 row and
-\code{n_levels_f3} columns; with 4+ factors uses \code{c(2, 4)}.
-Factors beyond the grid iterate across new pages.  When \code{NULL} the
-current \code{par(mfrow)} is left unchanged.}
+\item{layout}{Controls the panel grid per page.  Default \code{NA}: choose a
+grid automatically -- with exactly 3 factors uses 1 row and
+\code{n_levels_f3} columns, with 4+ factors uses \code{c(2, 4)}; factors
+beyond the grid iterate across new pages.  An integer vector
+\code{c(rows, cols)} sets the grid explicitly.  \code{NULL} leaves the
+current \code{par(mfrow)}/\code{par(mfcol)} untouched, so panels are drawn
+into the caller's existing layout.}
 
 \item{factor_labels}{Character vector of length \code{n_factors} \emph{or}
 a named list.  As a \strong{character vector}, overrides the factor names
@@ -84,9 +86,16 @@ x axis and line factors.  Applied after \code{level_order}, so indices
 refer to the original factor positions as defined by \code{factors}.
 Default \code{NULL} leaves the factor order unchanged.}
 
-\item{displace}{Numeric vector of length equal to the number of line groups
-(levels of factor 2; 1 for zero- or one-factor types) giving x-position
-offsets per line group.  Default \code{NULL} uses zero displacement.}
+\item{displace}{Controls horizontal offsetting of the line groups (levels of
+factor 2) so their points and intervals do not overlap at each x position.
+A single number (default \code{0.1}) spaces the groups evenly and
+symmetrically around each x location with that spacing (e.g. two groups at
+\eqn{\pm}\code{displace}/2; three at \code{-displace, 0, +displace}); set
+it to \code{0} to disable.  Alternatively a numeric vector of length equal
+to the number of line groups gives explicit per-group offsets.  With
+\code{credint(..., plot = TRUE)} this can be set globally via \code{...} or
+per parameter type via \code{plot_args[[type]]$displace}, the latter taking
+precedence.}
 
 \item{cap_length}{Numeric.  Half-width of the interval end-caps as a
 fraction of the spacing between adjacent factor-1 x-positions
@@ -113,10 +122,19 @@ following are intercepted with defaults before forwarding:
 \item{\code{xlab}}{X-axis label.  Default: name of factor 1 (after
 applying \code{factor_labels}), or \code{type} for zero-factor types.}
 \item{\code{ylab}}{Y-axis label.  Default: \code{type}.}
-\item{\code{main}}{Panel title.  Default: \code{names(ci)[1]} when
+\item{\code{main}}{Panel title(s).  Default: \code{names(ci)[1]} when
 there are fewer than three factors; factor-level combination labels
-(e.g. \code{"E: accuracy"}) for three or more factors.  Supplying
-\code{main} overrides all panels.}
+(e.g. \code{"E: accuracy"}) for three or more factors.  A length-1
+\code{main} overrides the title of every panel with the same string;
+a character vector of length equal to the number of panels sets one
+title per panel (in panel-drawing order).  Any other length is an
+error.}
+\item{\code{ylim}}{Y-axis limits.  Default \code{NULL}: computed
+automatically (and independently) for each panel from its data.  A
+length-2 numeric vector \code{c(lower, upper)} applies the same limits
+to every panel; a list of such vectors (length equal to the number of
+panels) sets each panel's limits individually, in panel-drawing
+order.}
 \item{\code{lty}}{Line type(s), vector of length n_lines.
 Default: \code{1:n_lines}.}
 \item{\code{pch}}{Point character(s), vector of length n_lines.
