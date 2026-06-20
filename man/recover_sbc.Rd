@@ -5,31 +5,35 @@
 \title{Recover Partial or Interrupted SBC Results}
 \usage{
 recover_sbc(
-  fileName,
-  design_in = NULL,
+  tempdir,
+  design,
+  fileName = NULL,
   prior_in = NULL,
-  pathName = NULL,
   type = c("auto", "single", "hierarchical"),
   verbose = TRUE
 )
 }
 \arguments{
-\item{fileName}{Character. The \code{fileName} that was passed to \code{run_sbc()}
-(used to locate the \verb{_temp} directory and persistent rep files).}
+\item{tempdir}{Character. The directory containing the SBC replicate files to
+recover. Either the \verb{_temp} directory \code{run_sbc()} writes (\verb{rep_<i>.rds},
+plus \code{prior_samples.rds}), or a directory holding the persistent
+\verb{<base>_rep_<i>.rds} files; the run's base name is auto-detected in the
+latter case. Must be supplied.}
 
-\item{design_in}{Optional emc design list (the one used for the run). Used to
-name the recovered parameters; for hierarchical recovery it supplies the
-group-mean (\code{mu}) column names. If \code{NULL}, names are taken from the rep
-files / prior where available.}
+\item{design}{The emc design used for the run. Used to name the recovered
+parameters (and, for hierarchical recovery, the group-mean \code{mu} columns).
+Must be supplied. May alternatively be a character vector of the parameter
+names directly.}
+
+\item{fileName}{Character or NULL. Optional save location, behaving as in
+\code{run_sbc()}: the recovered object is written there in \code{run_sbc()}'s format
+(so the file is indistinguishable from a normal run that finished at the
+recovered number of replicates). When \code{NULL} (the default) nothing is
+written to disk; the result is only returned, so the recovered object is
+never placed in \code{tempdir} unless you explicitly point \code{fileName} there.}
 
 \item{prior_in}{Optional emc prior list. Currently only used for validation;
 the prior draws are read from disk, not redrawn.}
-
-\item{pathName}{Character or NULL. Where to save the recovered result, in the
-same format \code{run_sbc()} uses for its \code{fileName} (so the saved file is
-indistinguishable from a normal run that happened to finish at the recovered
-number of replicates). When \code{NULL} (the default) the result is saved to
-\code{"recover_sbc.RData"} in the working directory.}
 
 \item{type}{Character. \code{"auto"} (default) detects single vs hierarchical from
 the rep files; otherwise force \code{"single"} or \code{"hierarchical"}.}
@@ -37,14 +41,14 @@ the rep files; otherwise force \code{"single"} or \code{"hierarchical"}.}
 \item{verbose}{Logical. Whether to print progress/recovery messages.}
 }
 \value{
-The same structure \code{run_sbc()} returns (for single fits an SBC list
-of rank/med/bias/coverage; for hierarchical fits a list with \code{rank},
-\code{prior} and \code{rand_effects}), as if the run had finished at the recovered
-number of replicates. The integer replicate indices included are stored in
+Invisibly, the same structure \code{run_sbc()} returns (for single fits an
+SBC list of rank/med/bias/coverage; for hierarchical fits a list with
+\code{rank}, \code{prior} and \code{rand_effects}), as if the run had finished at the
+recovered number of replicates. The integer replicate indices included are stored in
 the \code{"recovered_reps"} attribute. For hierarchical recovery when the prior
 draws are unavailable, \verb{$prior} is \code{NULL} (ranks are still fully recovered).
-The same object is also saved to \code{pathName} (see above): for single fits as
-\code{SBC} (plus \code{prior_alpha} when available), for hierarchical fits as
+When \code{fileName} is supplied the object is also saved there: for single fits
+as \code{SBC} (plus \code{prior_alpha} when available), for hierarchical fits as
 \code{SBC_temp}, matching \code{run_sbc()}.
 }
 \description{

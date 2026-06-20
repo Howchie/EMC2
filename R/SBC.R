@@ -57,59 +57,63 @@ run_sbc <- function(design_in, prior_in, replicates = 250, trials = 100, n_subje
 #' the results can still be inspected here but the run cannot be resumed (a new
 #' run would re-pair replicate indices with different true parameters).
 #'
-#' @param fileName Character. The `fileName` that was passed to `run_sbc()`
-#'   (used to locate the `_temp` directory and persistent rep files).
-#' @param design_in Optional emc design list (the one used for the run). Used to
-#'   name the recovered parameters; for hierarchical recovery it supplies the
-#'   group-mean (`mu`) column names. If `NULL`, names are taken from the rep
-#'   files / prior where available.
+#' @param tempdir Character. The directory containing the SBC replicate files to
+#'   recover. Either the `_temp` directory `run_sbc()` writes (`rep_<i>.rds`,
+#'   plus `prior_samples.rds`), or a directory holding the persistent
+#'   `<base>_rep_<i>.rds` files; the run's base name is auto-detected in the
+#'   latter case. Must be supplied.
+#' @param design The emc design used for the run. Used to name the recovered
+#'   parameters (and, for hierarchical recovery, the group-mean `mu` columns).
+#'   Must be supplied. May alternatively be a character vector of the parameter
+#'   names directly.
+#' @param fileName Character or NULL. Optional save location, behaving as in
+#'   `run_sbc()`: the recovered object is written there in `run_sbc()`'s format
+#'   (so the file is indistinguishable from a normal run that finished at the
+#'   recovered number of replicates). When `NULL` (the default) nothing is
+#'   written to disk; the result is only returned, so the recovered object is
+#'   never placed in `tempdir` unless you explicitly point `fileName` there.
 #' @param prior_in Optional emc prior list. Currently only used for validation;
 #'   the prior draws are read from disk, not redrawn.
-#' @param pathName Character or NULL. Where to save the recovered result, in the
-#'   same format `run_sbc()` uses for its `fileName` (so the saved file is
-#'   indistinguishable from a normal run that happened to finish at the recovered
-#'   number of replicates). When `NULL` (the default) the result is saved to
-#'   `"recover_sbc.RData"` in the working directory.
 #' @param type Character. `"auto"` (default) detects single vs hierarchical from
 #'   the rep files; otherwise force `"single"` or `"hierarchical"`.
 #' @param verbose Logical. Whether to print progress/recovery messages.
 #'
-#' @return The same structure `run_sbc()` returns (for single fits an SBC list
-#'   of rank/med/bias/coverage; for hierarchical fits a list with `rank`,
-#'   `prior` and `rand_effects`), as if the run had finished at the recovered
-#'   number of replicates. The integer replicate indices included are stored in
+#' @return Invisibly, the same structure `run_sbc()` returns (for single fits an
+#'   SBC list of rank/med/bias/coverage; for hierarchical fits a list with
+#'   `rank`, `prior` and `rand_effects`), as if the run had finished at the
+#'   recovered number of replicates. The integer replicate indices included are stored in
 #'   the `"recovered_reps"` attribute. For hierarchical recovery when the prior
 #'   draws are unavailable, `$prior` is `NULL` (ranks are still fully recovered).
-#'   The same object is also saved to `pathName` (see above): for single fits as
-#'   `SBC` (plus `prior_alpha` when available), for hierarchical fits as
+#'   When `fileName` is supplied the object is also saved there: for single fits
+#'   as `SBC` (plus `prior_alpha` when available), for hierarchical fits as
 #'   `SBC_temp`, matching `run_sbc()`.
 #' @export
-recover_sbc <- function(fileName, design_in = NULL, prior_in = NULL,
-                        pathName = NULL,
+recover_sbc <- function(tempdir, design, fileName = NULL, prior_in = NULL,
                         type = c("auto", "single", "hierarchical"),
                         verbose = TRUE) {
   type <- match.arg(type)
-  if (is.null(pathName)) pathName <- "recover_sbc.RData"
-  temp_dir     <- paste0(tools::file_path_sans_ext(fileName), "_temp")
-  persist_dir  <- dirname(normalizePath(fileName, mustWork = FALSE))
-  persist_base <- tools::file_path_sans_ext(basename(fileName))
+  if (missing(tempdir) || is.null(tempdir) || !dir.exists(tempdir))
+    stop("`tempdir` must be an existing directory containing the SBC replicate ",
+         "files; got: ", if (missing(tempdir)) "<missing>" else tempdir)
+  if (missing(design) || is.null(design))
+    stop("`design` (the emc design used for the run) must be supplied.")
 
-  # --- gather replicate files (temp dir first, then persistent fallback) ---
-  reps      <- .sbc_read_rep_dir(temp_dir)
-  prior_obj <- NULL
+  # --- gather replicate files from `tempdir`: rep_<i>.rds (temp-style) first,
+  #     then auto-detected <base>_rep_<i>.rds (persistent style). ---
+  reps      <- .sbc_read_rep_dir(tempdir)
   from_temp <- length(reps) > 0
-  ps_file   <- file.path(temp_dir, "prior_samples.rds")
-  if (dir.exists(temp_dir) && file.exists(ps_file))
-    prior_obj <- tryCatch(readRDS(ps_file), error = function(e) NULL)
   if (length(reps) == 0)
-    reps <- .sbc_load_persist_reps(persist_dir, persist_base)
+    reps <- .sbc_load_persist_reps(tempdir, persist_base = NULL)
   if (length(reps) == 0)
-    stop("No replicate files found for '", fileName, "' (looked in ", temp_dir,
-         " and for persistent '", persist_base, "_rep_*.rds' files in ",
-         persist_dir, ")")
+    stop("No replicate files found in `tempdir` (", tempdir,
+         "); expected rep_<i>.rds or <base>_rep_<i>.rds files.")
 
-  # --- prior fallback from the fileName .RData (prior is saved there too) ---
-  if (is.null(prior_obj) && file.exists(fileName)) {
+  # --- prior draws: prior_samples.rds in tempdir, else (if given) from fileName ---
+  prior_obj <- NULL
+  ps_file   <- file.path(tempdir, "prior_samples.rds")
+  if (file.exists(ps_file))
+    prior_obj <- tryCatch(readRDS(ps_file), error = function(e) NULL)
+  if (is.null(prior_obj) && !is.null(fileName) && file.exists(fileName)) {
     env <- new.env(parent = emptyenv())
     if (isTRUE(tryCatch({ load(fileName, envir = env); TRUE }, error = function(e) FALSE))) {
       if (all(c("prior_mu", "prior_var") %in% ls(env)))
@@ -127,7 +131,7 @@ recover_sbc <- function(fileName, design_in = NULL, prior_in = NULL,
             else stop("Could not auto-detect SBC type from rep files; pass type=")
   }
 
-  par_names <- if (!is.null(design_in)) names(sampled_pars(design_in)) else NULL
+  par_names <- if (is.character(design)) design else names(sampled_pars(design))
 
   if (type == "single") {
     out    <- .sbc_assemble_single(reps, par_names = par_names)
@@ -141,24 +145,28 @@ recover_sbc <- function(fileName, design_in = NULL, prior_in = NULL,
     out    <- .sbc_assemble_hierarchical(reps, prior_mu, prior_var, par_names)
     target <- if (!is.null(prior_mu)) ncol(prior_mu) else NA_integer_
     if (is.null(prior_mu))
-      warning("Prior draws not found (no prior_samples.rds or prior in '",
-              fileName, "'); $prior is NULL. Ranks are fully recovered, but the ",
+      warning("Prior draws not found (no prior_samples.rds in '", tempdir,
+              "'); $prior is NULL. Ranks are fully recovered, but the ",
               "run cannot be faithfully resumed.")
   }
 
-  # Save in the same format run_sbc() uses, so the file looks like a normal run
-  # that finished at the recovered number of replicates.
-  if (type == "single") {
-    SBC <- out
-    if (is.matrix(prior_obj)) {
-      prior_alpha <- prior_obj
-      save(SBC, prior_alpha, file = pathName)
+  # --- save only if a fileName is given (run_sbc format) ---
+  if (!is.null(fileName)) {
+    out_dir <- dirname(fileName)
+    if (nzchar(out_dir) && !dir.exists(out_dir))
+      dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+    if (type == "single") {
+      SBC <- out
+      if (is.matrix(prior_obj)) {
+        prior_alpha <- prior_obj
+        save(SBC, prior_alpha, file = fileName)
+      } else {
+        save(SBC, file = fileName)
+      }
     } else {
-      save(SBC, file = pathName)
+      SBC_temp <- out
+      save(SBC_temp, file = fileName)
     }
-  } else {
-    SBC_temp <- out
-    save(SBC_temp, file = pathName)
   }
 
   used <- attr(out, "recovered_reps")
@@ -173,22 +181,35 @@ recover_sbc <- function(fileName, design_in = NULL, prior_in = NULL,
                       paste(utils::head(missing, 20), collapse = ","),
                       if (length(missing) > 20) ",..." else "")
     }
+    saved <- if (!is.null(fileName)) paste0(" Saved to ", fileName, ".")
+             else " Not saved (supply fileName to save)."
     resumable <- from_temp && file.exists(ps_file)
-    message(msg, ". Saved to ", pathName, ". ",
+    message(msg, ".", saved, " ",
             if (resumable)
               "Re-run your original run_sbc() call with the same fileName to resume."
             else
               "Inspect-only: prior draws for resumption were not found in the temp directory.")
   }
-  out
+  invisible(out)
 }
 
 
 
 # Internal helpers --------------------------------------------------------
 
-.sbc_load_persist_reps <- function(persist_dir, persist_base) {
-  if (is.null(persist_dir) || is.null(persist_base)) return(list())
+.sbc_load_persist_reps <- function(persist_dir, persist_base = NULL) {
+  if (is.null(persist_dir) || !dir.exists(persist_dir)) return(list())
+  if (is.null(persist_base)) {
+    # auto-detect the run's base name from <base>_rep_<i>.rds files present
+    cand  <- list.files(persist_dir, pattern = "_rep_[0-9]+\\.rds$")
+    bases <- unique(sub("_rep_[0-9]+\\.rds$", "", cand))
+    if (length(bases) == 0L) return(list())
+    if (length(bases) > 1L)
+      stop("Multiple SBC runs found in '", persist_dir, "' (bases: ",
+           paste(bases, collapse = ", "),
+           "); point `tempdir` at a directory with a single run's rep files.")
+    persist_base <- bases
+  }
   pattern <- paste0("^", persist_base, "_rep_[0-9]+\\.rds$")
   files   <- list.files(persist_dir, pattern = pattern, full.names = TRUE)
   out <- list()
@@ -765,6 +786,26 @@ calc_sbc_stats <- function(stats){
     if (length(add_to_main) == 1L) add_to_main else add_to_main[panel]
 }
 
+# Validate the `main` argument of the SBC plot functions: NULL (use the
+# auto-generated per-panel title), a single string (the same title on every
+# panel), or a character vector of length n_panels (one title per panel).
+.sbc_check_main <- function(main, n_panels) {
+  if (is.null(main)) return(NULL)
+  if (!is.character(main))
+    stop("main must be NULL or a character vector")
+  if (length(main) != 1L && length(main) != n_panels)
+    stop("main must be a single string or a character vector of length ",
+         n_panels, " (the number of panels being plotted), not ", length(main))
+  main
+}
+
+# Per-panel title from `main` (see .sbc_check_main): NULL when `main` is NULL so
+# the caller can fall back to its auto-generated title.
+.sbc_main_at <- function(main, panel) {
+  if (is.null(main)) NULL else
+    if (length(main) == 1L) main else main[panel]
+}
+
 # Valid legend() position keywords for add_stats.
 .sbc_legend_keywords <- c("bottomright", "bottom", "bottomleft", "left", "topleft",
                           "top", "topright", "right", "center")
@@ -865,14 +906,19 @@ calc_sbc_stats <- function(stats){
 #'   `FALSE`/`NA` suppressing it on a given panel. These statistics are only
 #'   available for single-subject SBC; for hierarchical SBC output `add_stats`
 #'   has no effect.
+#' @param main Optional. `NULL` (the default) uses the auto-generated per-panel
+#'   title. A single string is used as the title on every panel. A character
+#'   vector sets one title per panel and must have the same length as the number
+#'   of panels being plotted.
 #' @param add_to_main Optional. `NULL` (the default) does nothing. A single
-#'   string is prepended to the start of the auto-generated main title of every
-#'   panel. A character vector is prepended panel-by-panel and must have the same
-#'   length as the number of panels being plotted (no separator is inserted).
+#'   string is prepended to the start of the (auto-generated or `main`) title of
+#'   every panel. A character vector is prepended panel-by-panel and must have
+#'   the same length as the number of panels being plotted (no separator is
+#'   inserted).
 #' @return No returns
 #' @export
 plot_sbc_hist <- function(ranks, bins = 10, layout = NA, add_stats = TRUE,
-                          add_to_main = NULL){
+                          main = NULL, add_to_main = NULL){
   stats <- NULL
   if (!is.null(ranks[["rank"]])) {
     stats <- calc_sbc_stats(ranks)
@@ -897,7 +943,9 @@ plot_sbc_hist <- function(ranks, bins = 10, layout = NA, add_stats = TRUE,
   mid <- qbinom(0.5, n_sample, 1/bins)
   high <- qbinom(0.975, n_sample, 1/bins)
   par_names <- colnames(ranks[[1]])
-  add_to_main <- .sbc_check_add_to_main(add_to_main, sum(vapply(ranks, ncol, integer(1))))
+  n_panels <- sum(vapply(ranks, ncol, integer(1)))
+  add_to_main <- .sbc_check_add_to_main(add_to_main, n_panels)
+  main <- .sbc_check_main(main, n_panels)
   panel <- 0L
   for (j in seq_along(ranks)) {
     if (manage_layout) {
@@ -911,9 +959,11 @@ plot_sbc_hist <- function(ranks, bins = 10, layout = NA, add_stats = TRUE,
     stat <- stats[[j]]
     for (i in 1:ncol(rank)) {
       panel <- panel + 1L
+      base_main <- if (is.null(main)) paste0(selects[j], " - ", par_names[i])
+                   else .sbc_main_at(main, panel)
       hist(
         x = rank[ , i],
-        main = paste0(.sbc_main_prefix(add_to_main, panel), selects[j], " - ", par_names[i]),
+        main = paste0(.sbc_main_prefix(add_to_main, panel), base_main),
         breaks = bins,
         ylim = c(0, high + 2),
         xlab = "rank"
@@ -1006,7 +1056,10 @@ make_smooth <- function(x, y, N = 1000){
 #'   `FALSE`/`NA` suppressing it on a given panel. These statistics are only
 #'   available for single-subject SBC; for hierarchical SBC output `add_stats`
 #'   has no effect.
-#' @param main Optional. A character specifying plot title.
+#' @param main Optional. `NULL` (the default) uses the auto-generated per-panel
+#'   title. A single string is used as the title on every panel. A character
+#'   vector sets one title per panel and must have the same length as the number
+#'   of panels being plotted.
 #' @param add_to_main Optional. `NULL` (the default) does nothing. A single
 #'   string is prepended to the start of the (auto-generated or `main`) title of
 #'   every panel. A character vector is prepended panel-by-panel and must have
@@ -1026,7 +1079,9 @@ plot_sbc_ecdf <- function(ranks, layout = NA, add_stats = TRUE, main = NULL,
   }
 
   selects <- names(ranks)
-  add_to_main <- .sbc_check_add_to_main(add_to_main, sum(vapply(ranks, ncol, integer(1))))
+  n_panels <- sum(vapply(ranks, ncol, integer(1)))
+  add_to_main <- .sbc_check_add_to_main(add_to_main, n_panels)
+  main <- .sbc_check_main(main, n_panels)
   panel <- 0L
   stat_spec <- .sbc_resolve_stat_spec(add_stats, unique(unlist(lapply(ranks, colnames))))
   if (!is.null(stat_spec) && is.null(stats))
@@ -1092,7 +1147,8 @@ plot_sbc_ecdf <- function(ranks, layout = NA, add_stats = TRUE, main = NULL,
       y <- Fn(z) - z
 
       panel <- panel + 1L
-      base_main <- if (is.null(main)) paste0(selects[j], " - ", par_names[i]) else main
+      base_main <- if (is.null(main)) paste0(selects[j], " - ", par_names[i])
+                   else .sbc_main_at(main, panel)
       main_i <- paste0(.sbc_main_prefix(add_to_main, panel), base_main)
 
       ylim_lo <- min(res[["lower"]], y, na.rm = TRUE) - 0.01

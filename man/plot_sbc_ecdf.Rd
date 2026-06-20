@@ -35,7 +35,10 @@ use that statistic's default position) to set its position per panel, with
 available for single-subject SBC; for hierarchical SBC output \code{add_stats}
 has no effect.}
 
-\item{main}{Optional. A character specifying plot title.}
+\item{main}{Optional. \code{NULL} (the default) uses the auto-generated per-panel
+title. A single string is used as the title on every panel. A character
+vector sets one title per panel and must have the same length as the number
+of panels being plotted.}
 
 \item{add_to_main}{Optional. \code{NULL} (the default) does nothing. A single
 string is prepended to the start of the (auto-generated or \code{main}) title of
