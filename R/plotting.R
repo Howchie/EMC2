@@ -1311,15 +1311,17 @@ plot_spectrum <- function(dat, pp = NULL,
 #'     \item{\code{xlab}}{X-axis label.  Default: name of factor 1 (after
 #'       applying \code{factor_labels}), or \code{type} for zero-factor types.}
 #'     \item{\code{ylab}}{Y-axis label.  Default: \code{type}.}
-#'     \item{\code{main}}{Panel title(s).  Default: \code{names(ci)[1]} when
-#'       there are fewer than three factors; factor-level combination labels
-#'       (e.g. \code{"E: accuracy"}) for three or more factors.  A length-1
+#'     \item{\code{main}}{Panel title(s).  Default: empty (\code{""}) for a
+#'       single-panel type (fewer than three factors); factor-level combination
+#'       labels (e.g. \code{"E: accuracy"}) for the multiple panels of a
+#'       three-or-more-factor type.  A length-1
 #'       \code{main} overrides the title of every panel with the same string;
 #'       a character vector of length equal to the number of panels sets one
 #'       title per panel (in panel-drawing order).  Any other length is an
 #'       error.}
-#'     \item{\code{ylim}}{Y-axis limits.  Default \code{NULL}: computed
-#'       automatically (and independently) for each panel from its data.  A
+#'     \item{\code{ylim}}{Y-axis limits.  Default \code{NULL}: a single common
+#'       range computed automatically to span every panel of this parameter
+#'       type, so the panels share one y axis and are directly comparable.  A
 #'       length-2 numeric vector \code{c(lower, upper)} applies the same limits
 #'       to every panel; a list of such vectors (length equal to the number of
 #'       panels) sets each panel's limits individually, in panel-drawing
@@ -1614,6 +1616,14 @@ plot_credint_map <- function(ci, factors = NULL, type = NULL, quants = 1:3,
     }
   }
 
+  # Default (no user `ylim`): a single common y range spanning the intervals of
+  # every panel of this parameter type, so the panels are directly comparable.
+  auto_ylim <- {
+    yl  <- range(c(pdata$lower, pdata$upper), na.rm = TRUE)
+    pad <- 0.05 * diff(yl); if (pad == 0) pad <- 0.5
+    yl + c(-pad, pad)
+  }
+
   # layout: NA = compute & apply default; NULL = don't touch mfrow; c(r,c) = use as-is
   set_layout <- !is.null(layout)
   if (isTRUE(is.na(layout))) {
@@ -1673,7 +1683,7 @@ plot_credint_map <- function(ci, factors = NULL, type = NULL, quants = 1:3,
 
     if (is.null(panel_combos)) {
       pdata_panel <- pdata
-      panel_title <- if (!is.null(um)) um else names(ci)[1L]
+      panel_title <- if (!is.null(um)) um else ""
     } else {
       combo  <- panel_combos[panel_idx, , drop = FALSE]
       filter <- rep(TRUE, nrow(pdata))
@@ -1690,15 +1700,9 @@ plot_credint_map <- function(ci, factors = NULL, type = NULL, quants = 1:3,
     }
 
     ylim <-
-      if (is.null(user_ylim)) {
-        yl  <- range(c(pdata_panel$lower, pdata_panel$upper), na.rm = TRUE)
-        pad <- 0.05 * diff(yl); if (pad == 0) pad <- 0.5
-        yl + c(-pad, pad)
-      } else if (is.list(user_ylim)) {
-        user_ylim[[panel_idx]]
-      } else {
-        user_ylim
-      }
+      if (is.null(user_ylim)) auto_ylim
+      else if (is.list(user_ylim)) user_ylim[[panel_idx]]
+      else user_ylim
 
     do.call(plot.default,
             c(list(x = numeric(0), y = numeric(0),
@@ -1811,6 +1815,11 @@ plot_credint_map <- function(ci, factors = NULL, type = NULL, quants = 1:3,
 #'   Text alignment (\code{adj}) is derived automatically from the angle:
 #'   centred at 0 degrees, right-aligned at 90 degrees.  When non-default angles produce
 #'   long labels, increase the bottom margin via \code{mar} in \code{...}.
+#' @param xtick_stagger Logical.  If \code{TRUE}, every second x-axis tick label
+#'   is dropped onto a lower line so that horizontal labels
+#'   (\code{label_angle = 0}) do not overlap.  Default \code{FALSE}.  With many
+#'   or long labels you may also need a larger bottom margin via \code{mar} in
+#'   \code{...}.
 #' @param ... Additional graphical arguments. The following are intercepted
 #'   with defaults:
 #'   \describe{
@@ -1819,6 +1828,10 @@ plot_credint_map <- function(ci, factors = NULL, type = NULL, quants = 1:3,
 #'     \item{\code{xlab}}{X-axis label. Default: \code{""}.}
 #'     \item{\code{ylab}}{Left y-axis label. Default: \code{"Intercept"}.}
 #'     \item{\code{ylab_right}}{Right y-axis label. Default: \code{"Effect"}.}
+#'     \item{\code{ylim}}{Length-2 numeric limits for the left (intercept)
+#'       y-axis.  Default: computed from the intercept intervals.  Equivalent
+#'       to \code{yleft = list(lim = ...)}, which takes precedence if both are
+#'       given.  The right (effect) axis is set via \code{yright}.}
 #'     \item{\code{mar}}{Plot margins. Default: \code{c(4.1, 4.1, 2.1, 4.1)}
 #'       (extra right margin for the right axis).}
 #'     \item{\code{col_intercept}}{Colour for intercept points and intervals.
@@ -1853,7 +1866,8 @@ plot_credint <- function(ci, type = NULL, quants = 1:3,
                          intercept_names = NULL, effect_names = NULL,
                          layout = NA,
                          cap_length = 0.05, pt_cex = 1,
-                         effect_line = TRUE, label_angle = 90, ...) {
+                         effect_line = TRUE, label_angle = 90,
+                         xtick_stagger = FALSE, ...) {
 
   effects_given <- !missing(effects)
   # layout: NA = c(1,1) for this single-panel function; NULL = don't touch mfrow
@@ -1928,6 +1942,7 @@ plot_credint <- function(ci, type = NULL, quants = 1:3,
 
     pad  <- function(r) { d <- diff(r); if (d == 0) d <- 0.5; r + c(-1,1)*0.05*d }
     ylim <- if (!is.null(yleft$lim)) yleft$lim else
+            if (!is.null(dots$ylim)) dots$ylim else
               pad(range(sub_arr[, c("lower","upper")], na.rm = TRUE))
 
     pars_to_save <- names(par_settings)
@@ -1962,9 +1977,12 @@ plot_credint <- function(ci, type = NULL, quants = 1:3,
 
     cex_axis <- par("cex.axis")
     y_text   <- y0 - line_to_usr * cex_axis
-    for (i in seq_len(n_pars))
-      text(x_pos[i], y_text, labels = x_labels[i],
+    step     <- line_to_usr * cex_axis   # one text line, for staggered labels
+    for (i in seq_len(n_pars)) {
+      off <- if (xtick_stagger && i %% 2L == 0L) step else 0
+      text(x_pos[i], y_text - off, labels = x_labels[i],
            srt = angles[i], xpd = TRUE, adj = adjs[i, ], cex = cex_axis)
+    }
 
     return(invisible(sub_arr))
   }
@@ -2044,6 +2062,7 @@ plot_credint <- function(ci, type = NULL, quants = 1:3,
   # ---- 6. Y limits --------------------------------------------------------
   pad <- function(r) { d <- diff(r); if (d == 0) d <- 0.5; r + c(-1,1)*0.05*d }
   intercept_ylim <- if (!is.null(yleft$lim))  yleft$lim else
+                    if (!is.null(dots$ylim)) dots$ylim else
                     if (n_int > 0L) pad(range(int_arr[, c("lower","upper")], na.rm = TRUE))
   effect_ylim    <- if (!is.null(yright$lim)) yright$lim else
                     if (n_eff > 0L) pad(range(eff_arr[, c("lower","upper")], na.rm = TRUE))
@@ -2141,10 +2160,13 @@ plot_credint <- function(ci, type = NULL, quants = 1:3,
 
   cex_axis <- par("cex.axis")   # picks up cex.axis from par_settings if supplied
   y_text <- y0 - line_to_usr * cex_axis
-  for (i in seq_along(x_all))
-    text(x_all[i], y_text, labels = all_labels[i],
+  step   <- line_to_usr * cex_axis   # one text line, for staggered labels
+  for (i in seq_along(x_all)) {
+    off <- if (xtick_stagger && i %% 2L == 0L) step else 0
+    text(x_all[i], y_text - off, labels = all_labels[i],
          srt = angles[i], xpd = TRUE,
          adj = adjs[i, ], cex = cex_axis)
+  }
 
   invisible(sub_arr)
 }
@@ -2493,14 +2515,16 @@ plot_credints_map <- function(ci, quants = 1:3,
          paste(lines, collapse="\n"))
   }
 
-  # build panels
+  # build panels.  Default titles for map=TRUE: the intercepts (aggregate) panel
+  # and single-panel parameter types are left blank; multi-panel types fall back
+  # to plot_credint_map's per-panel factor-level labels (main = NULL here).
   panels <- list()
   if (length(cl$single_types))
     panels <- c(panels, list(list(kind="agg",
                                   types=cl$single_types,
-                                  main=names(ci)[1L])))
+                                  main="")))
   for (t in ordered_multi)
-    panels <- c(panels, list(list(kind="map", t=t, main=t)))
+    panels <- c(panels, list(list(kind="map", t=t, main=NULL)))
 
   n_panels <- length(panels)
   if (n_panels == 0L) stop("No panels to plot.")

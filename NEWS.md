@@ -4,9 +4,47 @@
 
 -   Fixed some maths that was wrong about the ECDF plot for SBC
 
+-   `credint(..., plot = TRUE)`: the Intercept and Effect y-axis labels in
+    `plot_credint` now render at the same size in multi-panel layouts (the
+    right-hand label previously ignored `par("cex")`).
+
+-   `plot_credint_map`: `layout = NULL` no longer errors and now draws into the
+    current `mfrow`/`mfcol` as intended.
+
+-   `plot_credint_map`: a `ylim` supplied via `plot_args` no longer collides
+    with the automatically computed limits.
+
+-   `plot_credint`: a `ylim` supplied for a panel (e.g. the `intercepts` panel
+    of a `map = TRUE` plot) is now honoured (as an alias for `yleft$lim`).
+
 ## New features
 
 -   Finished general trends implementation (stay tuned; tutorial still on the way)
+
+-   `credint(..., plot = TRUE)` documentation now describes the per-panel plot
+    controls and how they route: arguments in `...` apply to every panel, while
+    `plot_args` is keyed by parameter type (`plot_args[[type]]`).
+
+-   `plot_credint_map` (`map = TRUE`):
+
+    -   `displace` now defaults to `0.1` and accepts a single spacing value that
+        spreads the line groups evenly and symmetrically around each x location
+        (a length-`n_lines` vector still gives explicit per-group offsets).
+
+    -   `main` accepts a character vector (one title per panel) as well as a
+        single shared title.
+
+    -   `ylim` accepts a length-2 vector (shared by all panels) or a list of
+        such vectors (one per panel); by default every panel of a parameter now
+        shares one common y range so the panels are directly comparable.
+
+    -   Default panel titles for `map = TRUE` are now blank for the intercepts
+        panel and single-panel parameter types, while multi-panel types keep
+        their factor-level labels.
+
+-   `plot_credint` (`map = FALSE`): new `xtick_stagger` argument drops every
+    second x-axis tick label onto a lower line so horizontal labels
+    (`label_angle = 0`) do not overlap.
 
 
 # EMC2 3.3.0

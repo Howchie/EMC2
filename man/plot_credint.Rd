@@ -19,6 +19,7 @@ plot_credint(
   pt_cex = 1,
   effect_line = TRUE,
   label_angle = 90,
+  xtick_stagger = FALSE,
   ...
 )
 }
@@ -102,6 +103,12 @@ Text alignment (\code{adj}) is derived automatically from the angle:
 centred at 0 degrees, right-aligned at 90 degrees.  When non-default angles produce
 long labels, increase the bottom margin via \code{mar} in \code{...}.}
 
+\item{xtick_stagger}{Logical.  If \code{TRUE}, every second x-axis tick label
+is dropped onto a lower line so that horizontal labels
+(\code{label_angle = 0}) do not overlap.  Default \code{FALSE}.  With many
+or long labels you may also need a larger bottom margin via \code{mar} in
+\code{...}.}
+
 \item{...}{Additional graphical arguments. The following are intercepted
 with defaults:
 \describe{
@@ -110,6 +117,10 @@ then the name of the first intercept parameter.}
 \item{\code{xlab}}{X-axis label. Default: \code{""}.}
 \item{\code{ylab}}{Left y-axis label. Default: \code{"Intercept"}.}
 \item{\code{ylab_right}}{Right y-axis label. Default: \code{"Effect"}.}
+\item{\code{ylim}}{Length-2 numeric limits for the left (intercept)
+y-axis.  Default: computed from the intercept intervals.  Equivalent
+to \code{yleft = list(lim = ...)}, which takes precedence if both are
+given.  The right (effect) axis is set via \code{yright}.}
 \item{\code{mar}}{Plot margins. Default: \code{c(4.1, 4.1, 2.1, 4.1)}
 (extra right margin for the right axis).}
 \item{\code{col_intercept}}{Colour for intercept points and intervals.

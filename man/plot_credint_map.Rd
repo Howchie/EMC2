@@ -122,15 +122,17 @@ following are intercepted with defaults before forwarding:
 \item{\code{xlab}}{X-axis label.  Default: name of factor 1 (after
 applying \code{factor_labels}), or \code{type} for zero-factor types.}
 \item{\code{ylab}}{Y-axis label.  Default: \code{type}.}
-\item{\code{main}}{Panel title(s).  Default: \code{names(ci)[1]} when
-there are fewer than three factors; factor-level combination labels
-(e.g. \code{"E: accuracy"}) for three or more factors.  A length-1
+\item{\code{main}}{Panel title(s).  Default: empty (\code{""}) for a
+single-panel type (fewer than three factors); factor-level combination
+labels (e.g. \code{"E: accuracy"}) for the multiple panels of a
+three-or-more-factor type.  A length-1
 \code{main} overrides the title of every panel with the same string;
 a character vector of length equal to the number of panels sets one
 title per panel (in panel-drawing order).  Any other length is an
 error.}
-\item{\code{ylim}}{Y-axis limits.  Default \code{NULL}: computed
-automatically (and independently) for each panel from its data.  A
+\item{\code{ylim}}{Y-axis limits.  Default \code{NULL}: a single common
+range computed automatically to span every panel of this parameter
+type, so the panels share one y axis and are directly comparable.  A
 length-2 numeric vector \code{c(lower, upper)} applies the same limits
 to every panel; a list of such vectors (length equal to the number of
 panels) sets each panel's limits individually, in panel-drawing

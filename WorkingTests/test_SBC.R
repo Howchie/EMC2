@@ -81,15 +81,18 @@ for (rep in seq_len(n_partial))
 # Scenario (A): inspect the partial results without running anything more.
 # --------------------------------------------------------------------------
 cat("\n== Scenario A: recover_sbc() on the partial run ==\n")
-# Returns what run_sbc() would have returned at n_partial replicates, AND saves
-# a file in the same format run_sbc() uses (here to an explicit pathName; the
-# default would be "recover_sbc.RData").
-SBC_partial <- recover_sbc(fileName, design_LNR, prior_LNR,
-                           pathName = "TLNR_partial_recovered.RData")
+# Returns what run_sbc() would have returned at n_partial replicates. The first
+# argument is the `temp_dir` holding the rep files; the second is the `design`.
+# `fileName` is optional (as in run_sbc): supply it to also save the result in
+# run_sbc()'s format. Here we save it under a separate name so the original run
+# files are left untouched.
+recovered <- "TLNR_partial_recovered.RData"
+SBC_partial <- recover_sbc(temp_dir, design_LNR, fileName = recovered,
+                           prior_in = prior_LNR)
 cat("recovered_reps:", attr(SBC_partial, "recovered_reps"), "\n")
 stopifnot(nrow(SBC_partial$rank$alpha) == n_partial)
 # the saved file holds SBC (+ prior_alpha), exactly like a normal single run
-local({ e <- new.env(); load("TLNR_partial_recovered.RData", envir = e)
+local({ e <- new.env(); load(recovered, envir = e)
         cat("Saved objects:", paste(ls(e), collapse = ", "), "\n") })
 
 pdf("TLNR_partial.pdf")
@@ -107,10 +110,10 @@ file.rename(ps_bak, paste0(ps_bak, ".bak"))
 fn_bak <- paste0(fileName, ".bak")
 file.rename(fileName, fn_bak)
 
-# fileName (the .RData) no longer exists; recover_sbc still finds rep_<i>.rds in
-# the temp directory it derives from the fileName string.
-SBC_worst <- recover_sbc(fileName, design_LNR, prior_LNR,
-                         pathName = "TLNR_worst_recovered.RData")  # prints "Inspect-only"
+# the prior is gone; recover_sbc still finds rep_<i>.rds in temp_dir and recovers
+# for inspection (prints "Inspect-only").
+SBC_worst <- recover_sbc(temp_dir, design_LNR, fileName = "TLNR_worst_recovered.RData",
+                         prior_in = prior_LNR)
 stopifnot(nrow(SBC_worst$rank$alpha) == n_partial)
 stopifnot(identical(unname(SBC_worst$rank$alpha), unname(SBC_partial$rank$alpha)))
 cat("Worst-case recovery matches the full-prior recovery (ranks identical).\n")
