@@ -30,7 +30,7 @@ run_sbc <- function(design_in, prior_in, replicates = 250, trials = 100, n_subje
     out <- SBC_hierarchical_parallel(design_in, prior_in, replicates, trials, n_subjects,
                                      verbose, fileName, ...)
   }
-  return(out)
+  invisible(out)
 }
 
 

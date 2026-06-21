@@ -1,3 +1,49 @@
+# Task: Truncation SBC mis-calibration (DDM/WDM, LNR, LBA vs RDM)
+
+## Problem
+SBC (WorkingTests/SBC/trunc_SBC.R) shows mis-calibration under truncation for
+WDM/DDM, LNR, LBA but NOT RDM. Censoring is fine. Henrich (Stan, ~/Downloads
+pdf) shows good truncation calibration for a WDM-like model -> suspect a bug.
+Bounds in trunc_SBC.R are DATA-DEPENDENT: LT=quantile(rt,.1), UT=quantile(rt,.9).
+
+## Findings (2026-06-21)
+- Race models (LBA/LNR/RDM) all share `log_likelihood_race_missing` +
+  `pr_pt` (R/likelihood.R:11): cf = 1/(S(LT)-S(UT)), correct given exact
+  pfun/dfun. Identical code for all three -> RDM passing means the shared
+  correction is fine; LNR/LBA differences must be model-specific or in the SBC
+  scheme.
+- DDM/WDM used `log_likelihood_ddm` (R/likelihood.R:379) which applied NO
+  truncation correction at all -> root cause of WDM mis-calibration (t0 KS
+  0.349, rank mean 0.73 = t0 underestimated). WDM has no between-trial
+  variability, so cause is NOT intrinsic-variability.
+- Measured KS (rank uniformity) on existing results: WDM t0=0.349,a=0.157;
+  LNR s=0.125,m_lMTRUE=0.094,t0=0.081; LBA B=0.095,t0=0.090; RDM all<=0.082.
+- THEORY for LNR/LBA residual: data-dependent quantile bounds make the SBC
+  generative density (interior order stats given boundary order stats) NOT
+  proportional to the fixed-bounds truncated likelihood -> intrinsic
+  mis-calibration concentrated in shape/shift params. To confirm via fixed
+  bounds. RDM less affected by its parameterization.
+
+## Done
+- Added truncation correction to `log_likelihood_ddm` (R/likelihood.R): divide
+  each retained trial density by Pin = sum_R (pDDM(UT,R)-pDDM(LT,R)); UT=Inf->1,
+  LT=0->0. Verified dDDM/pDDM mutually consistent to ~1e-7 (integral test), so
+  corrected truncated likelihood integrates to 1 exactly.
+- `log_likelihood_ddmgng` NOT yet updated (go/nogo + censoring semantics) -- TODO.
+
+## In progress
+- Background: fixed-bounds (LT=0.35,UT=1.10 constants) WDM SBC with corrected
+  likelihood, 200 reps -> WorkingTests/SBC/SBC_WDM_fixedT.RData. Expect t0 KS to
+  drop from 0.349 toward <0.1 if fix works. Script /tmp/wdm_fixedbounds_sbc.R.
+
+## Next
+1. Confirm fixed-bounds WDM calibrates (validates the fix).
+2. Fixed-bounds LNR SBC -> separate quantile-scheme (intrinsic) from any LNR bug.
+3. Then LBA; decide whether to address data-dependent bounds (doc/guidance) and
+   port correction to full DDM + ddmgng.
+
+---
+
 # Task: Gauss–Legendre stop-success integral for SS-EXG and SS-RDEX
 
 ## 2026-06-11: Analytic (MVN-CDF) solution found and validated
