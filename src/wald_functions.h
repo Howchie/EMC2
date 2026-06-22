@@ -201,7 +201,9 @@ double pigt(double t, double k, double l, double a, double threshold);
 double digt(double t, double k, double l, double a, double threshold);
 
 // --------------------------------------------------------------------------
-// Wald SPV CDF/PDF without kill, sigma = 1 (caller pre-scales).
+// Wald SPV CDF/PDF without kill. The 4-argument versions are the sigma = 1
+// primitives; the 5-argument versions keep physical-scale parameters at the
+// call site and apply Brownian scale invariance inside this helper.
 // Parameterised in canonical Wald form:
 //   start x ~ U[0, A], threshold b, so distance d = b - x ~ U[b-A, b].
 // The CDF is the closed-form integral of the point-Wald CDF over d.
@@ -244,6 +246,12 @@ inline double pwald_k0(double t, double b, double mu, double A) {
   return std::fmax(0.0, std::fmin(1.0, p));
 }
 
+inline double pwald_k0(double t, double b, double mu, double A, double s) {
+  if (!(s > 0.0)) return 0.0;
+  const double inv_s = 1.0 / s;
+  return pwald_k0(t, b * inv_s, mu * inv_s, A * inv_s);
+}
+
 inline double dwald_k0(double t, double b, double mu, double A) {
   if (t <= 0.0 || b <= 0.0) return 0.0;
   const double b_lo  = b - A;
@@ -267,6 +275,12 @@ inline double dwald_k0(double t, double b, double mu, double A) {
   const double t2  = 0.5 * mu * (t2a + t2b);
 
   return (t1 + t2) * inv_A;
+}
+
+inline double dwald_k0(double t, double b, double mu, double A, double s) {
+  if (!(s > 0.0)) return 0.0;
+  const double inv_s = 1.0 / s;
+  return dwald_k0(t, b * inv_s, mu * inv_s, A * inv_s);
 }
 
 #endif

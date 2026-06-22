@@ -70,8 +70,12 @@ struct ContextForRaceModels {
     bool use_posdrift = true;
     bool gng = false;
     int t0_index = -1;
-    int lambda_g_index = -1;
-    int lambda_k_index = -1;
+    // Column indices for the Erlang timer mean parameters (mG, mK) in the raw
+    // particle parameter matrix that calc_ll_oo passes to the C++ likelihood.
+    // These store the user-visible means, NOT rates.  Call erlang_lambda_from_mean()
+    // before passing values from these columns to erlang_log_surv/erlang_log_pdf.
+    int mean_g_index = -1;   // column of mG (guess-clock mean)
+    int mean_k_index = -1;   // column of mK (kill-clock mean)
     // For models with infinite tails or defective upper mass (like LBA with sv).
     bool defective_upper_tail = false;
     // Optional per-particle fast-kernel hint:
@@ -121,6 +125,14 @@ inline double erlang_omega_for_shape(int kill_shape, const double* par = nullptr
   return std::fmax(0.0, std::fmin(1.0, par[omega_index]));
 }
 
+// Convert a timer mean to the Erlang rate parameter used by erlang_log_surv /
+// erlang_log_pdf.  The C++ particle likelihood receives raw timer means (mG,
+// mK) directly from the sampled parameter space; Ttransform is NOT applied on
+// the C++ path.  This function performs the shape-dependent conversion:
+//   Erlang-1 (exponential): rate = 1 / mean
+//   Erlang-2:               rate = 2 / mean   (so that E[T] = 2/rate = mean)
+//   EMIX (shape 3):         rate = 1 / mean   (each component is rescaled
+//                                               inside erlang_log_surv for n=3)
 inline double erlang_lambda_from_mean(double mean, int kill_shape) {
   if (!(mean > 0.0) || !emc2_isfinite(mean)) return 0.0;
   return ((kill_shape == 2) ? 2.0 : 1.0) / mean;
@@ -200,7 +212,7 @@ inline double prdm_scalar(double t, const double* par, void* /*ctx_*/) {
                        par[0] * inv_s, 0.5 * par[2] * inv_s);
 }
 
-// GBM: column layout v=0, B=1, A=2, t0=3, s=4, lambda_g=5, lambda_k=6
+// GBM: column layout v=0, B=1, A=2, t0=3, s=4, mG=5 (guess-clock mean), mK=6 (kill-clock mean)
 inline double drdmgbm_scalar(double t, const double* par, void* ctx_) {
   auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
   if (R_IsNA(par[0])) return 0.0;
@@ -449,7 +461,7 @@ inline void prdmgbm_raw(const double* rt, const double* pars_cm, int n_rows,
   }
 }
 
-// GBM: column layout v=0, B=1, A=2, t0=3, s=4, lambda_g=5, lambda_k=6
+// GBM: column layout v=0, B=1, A=2, t0=3, s=4, mG=5 (guess-clock mean), mK=6 (kill-clock mean)
 inline void rdmgbm_logS_at_t(double t, const double* pars_cm,
                                int n_rows_total, int n_lR, int /*n_par*/,
                                const int* trunc_mask, int n_unique_trials,
@@ -803,7 +815,7 @@ inline void lba_logS_at_t(double t, const double* pars_cm,
 
 // ============================================================
 // BAwL (Ballistic Accumulator with Leak + killing/guessing) adapters
-// Column layout: v=0, sv=1, B=2, A=3, t0=4, k=5, lambda_g=6, lambda_k=7
+// Column layout: v=0, sv=1, B=2, A=3, t0=4, k=5, mG=6 (guess-clock mean), mK=7 (kill-clock mean)
 // ============================================================
 
 inline double dbawl_scalar(double t, const double* par, void* ctx_) {
@@ -922,7 +934,7 @@ inline void pbawl_raw(const double* rt, const double* pars_cm, int n_rows,
   }
 }
 
-// BAwL: column layout v=0, sv=1, B=2, A=3, t0=4, k=5, lambda_g=6, lambda_k=7
+// BAwL: column layout v=0, sv=1, B=2, A=3, t0=4, k=5, mG=6 (guess-clock mean), mK=7 (kill-clock mean)
 inline void bawl_logS_at_t(double t, const double* pars_cm,
                             int n_rows_total, int n_lR, int /*n_par*/,
                             const int* trunc_mask, int n_unique_trials,
@@ -957,14 +969,16 @@ inline void bawl_logS_at_t(double t, const double* pars_cm,
       const bool erl = (lg > 1e-12 || lk > 1e-12);
       if (tt <= 0.0) {
         if (!erl) continue;  // EAM not started, no erlang → log-survivor += 0
-        // EAM not started but erlang running: log-survivor = erlang_log_surv(t, ...)
-        if (local_guess && lg > 1e-12 && lk > 1e-12) {
-          logS += erlang_log_surv(t, lg, ks, omega) + erlang_log_surv(t, lk, ks, omega);
-        } else {
-          const bool is_g = ctx->is_local_guess || ctx->is_local_kill_guess;
-          const double lam = (is_g ? lg : 0.0) + lk;
-          if (lam > 1e-12) logS += erlang_log_surv(t, lam, ks, omega);
-        }
+        // Before EAM onset, pure kill produces no observed response mass, while
+        // guess paths can.  Use the same CDF logic as the scalar path so kill
+        // before t0 is not treated as an observed hit removed by lower truncation.
+        const double log_cdf = pkilledleakyba_norm(
+          t, v_[r], B_[r] + A_[r], A_[r], sv_[r], t0_r, k_[r], lg, lk,
+          pd, true, ks, local_guess, omega
+        );
+        if (!R_FINITE(log_cdf)) continue;
+        if (log_cdf >= 0.0) { bad = true; break; }
+        logS += log1m_exp(log_cdf);
         continue;
       }
       // Both EAM and erlang contribute; pass raw t and t0_r.
@@ -981,13 +995,21 @@ inline void bawl_logS_at_t(double t, const double* pars_cm,
 
 // ============================================================
 // RDMSWTN adapters
-// Column layout: v=0, B=1, A=2, t0=3, s=4, sv=5, lambda_g=6, lambda_k=7
+// Column layout: v=0, B=1, A=2, t0=3, s=4, sv=5, mG=6 (guess-clock mean), mK=7 (kill-clock mean)
 // ============================================================
 
 inline double rdmswtn_k0_logpdf(double tt, double mu, double b, double A, bool posdrift) {
   if (tt <= 0.0) return R_NegInf;
   if (posdrift && mu <= 0.0) return R_NegInf;
   const double pdf = dwald_k0(tt, b, mu, A);
+  if (!(pdf > 0.0) || !emc2_isfinite(pdf)) return R_NegInf;
+  return std::log(pdf);
+}
+
+inline double rdmswtn_k0_logpdf(double tt, double mu, double b, double A, double s, bool posdrift) {
+  if (tt <= 0.0) return R_NegInf;
+  if (posdrift && mu <= 0.0) return R_NegInf;
+  const double pdf = dwald_k0(tt, b, mu, A, s);
   if (!(pdf > 0.0) || !emc2_isfinite(pdf)) return R_NegInf;
   return std::log(pdf);
 }
@@ -1002,12 +1024,21 @@ inline double rdmswtn_k0_logsurv(double tt, double mu, double b, double A, bool 
   return std::log1p(-cl);
 }
 
+inline double rdmswtn_k0_logsurv(double tt, double mu, double b, double A, double s, bool posdrift) {
+  if (tt <= 0.0) return 0.0;
+  if (posdrift && mu <= 0.0) return 0.0;
+  const double cdf = pwald_k0(tt, b, mu, A, s);
+  const double cl = std::max(0.0, std::min(1.0, cdf));
+  if (cl <= 0.0) return 0.0;
+  if (cl >= 1.0) return R_NegInf;
+  return std::log1p(-cl);
+}
+
 inline double drdmswtn_scalar(double t, const double* par, void* ctx_) {
   auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
   if (R_IsNA(par[0])) return 0.0;
   const double t0_val = par[3];
   const double tt = t - t0_val;
-  const double inv_s = 1.0 / par[4];
   const int ks = ctx ? ctx->kill_shape : 1;
   const double omega = erlang_omega_for_shape(ks, par, ctx ? ctx->erlang_omega_index : -1);
   const double lg = (ctx && ctx->kill_active) ? erlang_lambda_from_mean(par[6], ks) : 0.0;
@@ -1019,15 +1050,15 @@ inline double drdmswtn_scalar(double t, const double* par, void* ctx_) {
   // Pass raw t and t0_val; core functions split EAM (t - t0) from erlang (t).
   const TimedLambdaDispatch dispatch = timed_lambda_dispatch(ctx, lg, lk);
   if (dispatch.use_combo) {
-    return drdmswtn_local_combo(t, par[0] * inv_s, (par[1] + par[2]) * inv_s,
-                                par[2] * inv_s, 1.0, t0_val, par[5] * inv_s,
+    return drdmswtn_local_combo(t, par[0], par[1] + par[2],
+                                par[2], par[4], t0_val, par[5],
                                 lg, lk, 20, false, ks, pd, omega);
   }
   return drdmswtn(t,
-                  par[0] * inv_s,
-                  (par[1] + par[2]) * inv_s,
-                  par[2] * inv_s,
-                  1.0, t0_val, par[5] * inv_s,
+                  par[0],
+                  par[1] + par[2],
+                  par[2],
+                  par[4], t0_val, par[5],
                   dispatch.lambda_g, dispatch.lambda_k,
                   20, false, ks, dispatch.guess, pd, omega);
 }
@@ -1037,7 +1068,6 @@ inline double prdmswtn_scalar(double t, const double* par, void* ctx_) {
   if (R_IsNA(par[0])) return 0.0;
   const double t0_val = par[3];
   const double tt = t - t0_val;
-  const double inv_s = 1.0 / par[4];
   const int ks = ctx ? ctx->kill_shape : 1;
   const double omega = erlang_omega_for_shape(ks, par, ctx ? ctx->erlang_omega_index : -1);
   const double lg = (ctx && ctx->kill_active) ? erlang_lambda_from_mean(par[6], ks) : 0.0;
@@ -1048,15 +1078,15 @@ inline double prdmswtn_scalar(double t, const double* par, void* ctx_) {
   if (t <= 0.0) return 0.0;
   const TimedLambdaDispatch dispatch = timed_lambda_dispatch(ctx, lg, lk);
   if (dispatch.use_combo) {
-    return prdmswtn_local_combo(t, par[0] * inv_s, (par[1] + par[2]) * inv_s,
-                                par[2] * inv_s, 1.0, t0_val, par[5] * inv_s,
+    return prdmswtn_local_combo(t, par[0], par[1] + par[2],
+                                par[2], par[4], t0_val, par[5],
                                 lg, lk, 20, false, ks, pd, omega);
   }
   return prdmswtn(t,
-                  par[0] * inv_s,
-                  (par[1] + par[2]) * inv_s,
-                  par[2] * inv_s,
-                  1.0, t0_val, par[5] * inv_s,
+                  par[0],
+                  par[1] + par[2],
+                  par[2],
+                  par[4], t0_val, par[5],
                   dispatch.lambda_g, dispatch.lambda_k,
                   20, false, ks, dispatch.guess, pd, omega);
 }
@@ -1084,7 +1114,6 @@ inline void drdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
     if (R_IsNA(v_[i]) || !isok[i]) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
     const double t0_i  = t0_[i];
     const double tt    = rt[i] - t0_i;
-    const double inv_s = 1.0 / s_[i];
     const double omega = (kill_shape == 3 && omega_ != nullptr) ? std::fmax(0.0, std::fmin(1.0, omega_[i])) :
                          erlang_omega_for_shape(kill_shape);
     const double lg = (!ctx->kill_active) ? 0.0 : erlang_lambda_from_mean(lg_[i], kill_shape);
@@ -1096,25 +1125,25 @@ inline void drdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
     const TimedLambdaDispatch dispatch = timed_lambda_dispatch(ctx, lg, lk);
     if (dispatch.use_combo) {
       // Pass raw rt and t0; combo function splits EAM vs erlang time.
-      log_pdf = drdmswtn_local_combo(rt[i], v_[i] * inv_s, (B_[i] + A_[i]) * inv_s,
-                                     A_[i] * inv_s, 1.0, t0_i, sv_[i] * inv_s,
+      log_pdf = drdmswtn_local_combo(rt[i], v_[i], B_[i] + A_[i],
+                                     A_[i], s_[i], t0_i, sv_[i],
                                      lg, lk, 20, true, kill_shape, pd, omega);
     } else if (!emc2_isfinite(sv_[i]) || std::fabs(sv_[i]) <= sv_eps) {
       if (dispatch.lambda_g <= 0.0 && dispatch.lambda_k <= 0.0) {
         // No kill, no sv, no erlang: use the closed-form k=0 Wald directly.
         if (tt <= 0.0) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
-        log_pdf = rdmswtn_k0_logpdf(tt, v_[i] * inv_s, (B_[i] + A_[i]) * inv_s,
-                                    A_[i] * inv_s, pd);
+        log_pdf = rdmswtn_k0_logpdf(tt, v_[i], B_[i] + A_[i],
+                                    A_[i], s_[i], pd);
       } else {
         // Pass raw rt and t0 to dwald.
-        log_pdf = dwald(rt[i], v_[i] * inv_s, (B_[i] + A_[i]) * inv_s, A_[i] * inv_s,
-                        1.0, t0_i, dispatch.lambda_g, dispatch.lambda_k,
+        log_pdf = dwald(rt[i], v_[i], B_[i] + A_[i], A_[i],
+                        s_[i], t0_i, dispatch.lambda_g, dispatch.lambda_k,
                         true, kill_shape, dispatch.guess, pd, omega);
       }
     } else {
       // Pass raw rt and t0; drdmswtn splits EAM vs erlang time.
-      log_pdf = drdmswtn(rt[i], v_[i] * inv_s, (B_[i] + A_[i]) * inv_s,
-                         A_[i] * inv_s, 1.0, t0_i, sv_[i] * inv_s,
+      log_pdf = drdmswtn(rt[i], v_[i], B_[i] + A_[i],
+                         A_[i], s_[i], t0_i, sv_[i],
                          dispatch.lambda_g, dispatch.lambda_k,
                          20, true, kill_shape, dispatch.guess, pd, omega);
     }
@@ -1145,7 +1174,6 @@ inline void prdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
     if (R_IsNA(v_[i]) || !isok[i]) { out[i] = 0.0; continue; }
     const double t0_i  = t0_[i];
     const double tt    = rt[i] - t0_i;
-    const double inv_s = 1.0 / s_[i];
     const double omega = (kill_shape == 3 && omega_ != nullptr) ? std::fmax(0.0, std::fmin(1.0, omega_[i])) :
                          erlang_omega_for_shape(kill_shape);
     const double lg = (!ctx->kill_active) ? 0.0 : erlang_lambda_from_mean(lg_[i], kill_shape);
@@ -1155,8 +1183,8 @@ inline void prdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
     if (rt[i] <= 0.0) { out[i] = 0.0; continue; }
     const TimedLambdaDispatch dispatch = timed_lambda_dispatch(ctx, lg, lk);
     if (dispatch.use_combo) {
-      const double log_cdf = prdmswtn_local_combo(rt[i], v_[i] * inv_s, (B_[i] + A_[i]) * inv_s,
-                                                  A_[i] * inv_s, 1.0, t0_i, sv_[i] * inv_s,
+      const double log_cdf = prdmswtn_local_combo(rt[i], v_[i], B_[i] + A_[i],
+                                                  A_[i], s_[i], t0_i, sv_[i],
                                                   lg, lk, 20, true, kill_shape, pd, omega);
       if (!R_FINITE(log_cdf)) { out[i] = 0.0; continue; }
       if (log_cdf >= 0.0) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
@@ -1168,16 +1196,16 @@ inline void prdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
       if (dispatch.lambda_g <= 0.0 && dispatch.lambda_k <= 0.0) {
         // No kill, no sv, no erlang: use the closed-form k=0 Wald directly.
         if (tt <= 0.0) { out[i] = 0.0; continue; }
-        out[i] = rdmswtn_k0_logsurv(tt, v_[i] * inv_s, (B_[i] + A_[i]) * inv_s,
-                                    A_[i] * inv_s, pd);
+        out[i] = rdmswtn_k0_logsurv(tt, v_[i], B_[i] + A_[i],
+                                    A_[i], s_[i], pd);
         continue;
       }
-      log_cdf = pwald(rt[i], v_[i] * inv_s, (B_[i] + A_[i]) * inv_s, A_[i] * inv_s,
-                      1.0, t0_i, dispatch.lambda_g, dispatch.lambda_k,
+      log_cdf = pwald(rt[i], v_[i], B_[i] + A_[i], A_[i],
+                      s_[i], t0_i, dispatch.lambda_g, dispatch.lambda_k,
                       true, kill_shape, dispatch.guess, pd, omega);
     } else {
-      log_cdf = prdmswtn(rt[i], v_[i] * inv_s, (B_[i] + A_[i]) * inv_s,
-                         A_[i] * inv_s, 1.0, t0_i, sv_[i] * inv_s,
+      log_cdf = prdmswtn(rt[i], v_[i], B_[i] + A_[i],
+                         A_[i], s_[i], t0_i, sv_[i],
                          dispatch.lambda_g, dispatch.lambda_k,
                          20, true, kill_shape, dispatch.guess, pd, omega);
     }
@@ -1216,7 +1244,6 @@ inline void rdmswtn_logS_at_t(double t, const double* pars_cm,
       if (!isok_all[r] || R_IsNA(v_[r])) { bad = true; break; }
       const double t0_r = t0_[r];
       const double tt = t - t0_r;
-      const double inv_s = 1.0 / s_[r];
       const double omega = (kill_shape == 3 && omega_ != nullptr) ? std::fmax(0.0, std::fmin(1.0, omega_[r])) :
                            erlang_omega_for_shape(kill_shape);
       const double lg = (!ctx->kill_active) ? 0.0 : erlang_lambda_from_mean(lg_[r], kill_shape);
@@ -1227,8 +1254,8 @@ inline void rdmswtn_logS_at_t(double t, const double* pars_cm,
         // EAM not started but erlang running: log-survivor = erlang_log_surv(t, ...)
         const TimedLambdaDispatch dispatch = timed_lambda_dispatch(ctx, lg, lk);
         if (dispatch.use_combo) {
-          const double log_cdf = prdmswtn_local_combo(t, v_[r] * inv_s, (B_[r] + A_[r]) * inv_s,
-                                                      A_[r] * inv_s, 1.0, t0_r, sv_[r] * inv_s,
+          const double log_cdf = prdmswtn_local_combo(t, v_[r], B_[r] + A_[r],
+                                                      A_[r], s_[r], t0_r, sv_[r],
                                                       lg, lk, 20, true, kill_shape, pd, omega);
           if (!R_FINITE(log_cdf) || log_cdf >= 0.0) { bad = true; break; }
           logS += log1m_exp(log_cdf);
@@ -1236,21 +1263,21 @@ inline void rdmswtn_logS_at_t(double t, const double* pars_cm,
           double log_cdf;
           if (mode_hint == 1 || (!emc2_isfinite(sv_[r]) || std::fabs(sv_[r]) <= sv_eps)) {
             log_cdf = pwald(t,
-                            v_[r] * inv_s,
-                            (B_[r] + A_[r]) * inv_s,
-                            A_[r] * inv_s,
-                            1.0,
+                            v_[r],
+                            B_[r] + A_[r],
+                            A_[r],
+                            s_[r],
                             t0_r,
                             dispatch.lambda_g, dispatch.lambda_k,
                             true, kill_shape, dispatch.guess, pd, omega);
           } else {
             log_cdf = prdmswtn(t,
-                               v_[r]  * inv_s,
-                               (B_[r] + A_[r]) * inv_s,
-                               A_[r]  * inv_s,
-                               1.0,
+                               v_[r],
+                               B_[r] + A_[r],
+                               A_[r],
+                               s_[r],
                                t0_r,
-                               sv_[r] * inv_s,
+                               sv_[r],
                                dispatch.lambda_g, dispatch.lambda_k,
                                20, true, kill_shape, dispatch.guess, pd, omega);
           }
@@ -1262,8 +1289,8 @@ inline void rdmswtn_logS_at_t(double t, const double* pars_cm,
       double log_cdf;
       const TimedLambdaDispatch dispatch = timed_lambda_dispatch(ctx, lg, lk);
       if (dispatch.use_combo) {
-        log_cdf = prdmswtn_local_combo(t, v_[r] * inv_s, (B_[r] + A_[r]) * inv_s,
-                                       A_[r] * inv_s, 1.0, t0_r, sv_[r] * inv_s,
+        log_cdf = prdmswtn_local_combo(t, v_[r], B_[r] + A_[r],
+                                       A_[r], s_[r], t0_r, sv_[r],
                                        lg, lk, 20, true, kill_shape, pd, omega);
         if (!R_FINITE(log_cdf) || log_cdf >= 0.0) { bad = true; break; }
         logS += log1m_exp(log_cdf);
@@ -1272,52 +1299,52 @@ inline void rdmswtn_logS_at_t(double t, const double* pars_cm,
       if (mode_hint == 1) {
         if (dispatch.lambda_g <= 0.0 && dispatch.lambda_k <= 0.0 &&
             (!emc2_isfinite(sv_[r]) || std::fabs(sv_[r]) <= sv_eps)) {
-          logS += rdmswtn_k0_logsurv(tt, v_[r] * inv_s, (B_[r] + A_[r]) * inv_s,
-                                     A_[r] * inv_s, pd);
+          logS += rdmswtn_k0_logsurv(tt, v_[r], B_[r] + A_[r],
+                                     A_[r], s_[r], pd);
           continue;
         } else {
           log_cdf = pwald(t,
-                          v_[r] * inv_s,
-                          (B_[r] + A_[r]) * inv_s,
-                          A_[r] * inv_s,
-                          1.0,
+                          v_[r],
+                          B_[r] + A_[r],
+                          A_[r],
+                          s_[r],
                           t0_r,
                           dispatch.lambda_g, dispatch.lambda_k,
                           true, kill_shape, dispatch.guess, pd, omega);
         }
       } else if (mode_hint == 2) {
         log_cdf = prdmswtn(t,
-                           v_[r]  * inv_s,
-                           (B_[r] + A_[r]) * inv_s,
-                           A_[r]  * inv_s,
-                           1.0,
+                           v_[r],
+                           B_[r] + A_[r],
+                           A_[r],
+                           s_[r],
                            t0_r,
-                           sv_[r] * inv_s,
+                           sv_[r],
                            dispatch.lambda_g, dispatch.lambda_k,
                            20, true, kill_shape, dispatch.guess, pd, omega);
       } else if (!emc2_isfinite(sv_[r]) || std::fabs(sv_[r]) <= sv_eps) {
         if (dispatch.lambda_g <= 0.0 && dispatch.lambda_k <= 0.0) {
-          logS += rdmswtn_k0_logsurv(tt, v_[r] * inv_s, (B_[r] + A_[r]) * inv_s,
-                                     A_[r] * inv_s, pd);
+          logS += rdmswtn_k0_logsurv(tt, v_[r], B_[r] + A_[r],
+                                     A_[r], s_[r], pd);
           continue;
         } else {
           log_cdf = pwald(t,
-                          v_[r] * inv_s,
-                          (B_[r] + A_[r]) * inv_s,
-                          A_[r] * inv_s,
-                          1.0,
+                          v_[r],
+                          B_[r] + A_[r],
+                          A_[r],
+                          s_[r],
                           t0_r,
                           dispatch.lambda_g, dispatch.lambda_k,
                           true, kill_shape, dispatch.guess, pd, omega);
         }
       } else {
         log_cdf = prdmswtn(t,
-                           v_[r]  * inv_s,
-                           (B_[r] + A_[r]) * inv_s,
-                           A_[r]  * inv_s,
-                           1.0,
+                           v_[r],
+                           B_[r] + A_[r],
+                           A_[r],
+                           s_[r],
                            t0_r,
-                           sv_[r] * inv_s,
+                           sv_[r],
                            dispatch.lambda_g, dispatch.lambda_k,
                            20, true, kill_shape, dispatch.guess, pd, omega);
       }

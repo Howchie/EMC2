@@ -383,6 +383,7 @@ rBAwL <- function(lR, pars, ok = rep(TRUE, length(lR)),
 
   pars_all <- pars
   pars <- pars[ok, , drop = FALSE]
+  ok_idx <- which(ok)
   if (!all(p_types %in% dimnames(pars)[[2]]))
     stop("pars must have columns ", paste(p_types, collapse = " "))
   lower  <- if (posdrift) 0 else -Inf
@@ -390,8 +391,8 @@ rBAwL <- function(lR, pars, ok = rep(TRUE, length(lR)),
 
   small_k <- pars[, "k"] < eps
   if (any(small_k))
-    dt[small_k] <- (pars[small_k, "b"] - pars[small_k, "A"] * runif(sum(small_k))) /
-                   drifts[small_k]
+    dt[ok_idx[small_k]] <- (pars[small_k, "b"] - pars[small_k, "A"] * runif(sum(small_k))) /
+                           drifts[small_k]
 
   big_k <- !small_k & (drifts > pars[, "k"] * pars[, "b"])
   if (any(big_k)) {
@@ -399,7 +400,7 @@ rBAwL <- function(lR, pars, ok = rep(TRUE, length(lR)),
     den        <- drifts[big_k] - pars[big_k, "k"] * pars[big_k, "A"] * runif(sum(big_k))
     ratio      <- num / den
     ratio      <- pmin(pmax(ratio, .Machine$double.xmin), 1 - 1e-15)
-    dt[big_k]  <- (-1 / pars[big_k, "k"]) * log(ratio)
+    dt[ok_idx[big_k]] <- (-1 / pars[big_k, "k"]) * log(ratio)
   }
   dt[dt < 0] <- Inf
   # Put EAM on the same raw-time axis as Erlang clocks.
@@ -494,11 +495,11 @@ rBAwL <- function(lR, pars, ok = rep(TRUE, length(lR)),
 #' @param erlang_type string, one of "none", "local_kill", "global_kill", "local_guess", "local_kill_guess"
 #'
 #' @export
-BAwL <- function(posdrift = TRUE, erlang = 1L,
+BAwL <- function(posdrift = TRUE, erlang_shape = 1L,
                  erlang_type = c("none", "local_kill", "global_kill", "local_guess", "local_kill_guess")) {
   erlang_type <- match.arg(erlang_type)
-  erlang_mixed <- identical(erlang, "mixed")
-  erlang_shape_cpp <- if (erlang_mixed) 3L else as.integer(erlang)
+  erlang_mixed <- identical(erlang_shape, "mixed")
+  erlang_shape_cpp <- if (erlang_mixed) 3L else as.integer(erlang_shape)
   
   has_guess <- erlang_type %in% c("local_guess", "local_kill_guess")
   has_kill  <- erlang_type %in% c("local_kill", "global_kill", "local_kill_guess")
@@ -575,8 +576,7 @@ BAwL <- function(posdrift = TRUE, erlang = 1L,
           extra
         )
       }
-      pars <- cbind(pars, b = pars[, "B"] + pars[, "A"])
-      pars
+      cbind(pars, b = pars[, "B"] + pars[, "A"])
     },
     rfun = function(data, pars) rBAwL(data$lR, pars, ok = attr(pars, "ok"), posdrift = posdrift,
                                         erlang = erlang_shape_cpp, guess = has_guess,

@@ -534,6 +534,14 @@ test_that("local kill rfun miss rate matches likelihood omission mass", {
 })
 
 test_that("global kill C++ likelihood uses timer means as raw-time Erlang rates", {
+  # Two independent parameter paths for the Erlang kill clock:
+  #   R path (dfun/pfun):  receives Ttransform output, where lambda_k = 2/mK (rate).
+  #   C++ path (calc_ll_oo): receives raw natural-scale means; calc_ll_oo does NOT
+  #     call Ttransform, so mK arrives as a MEAN and erlang_lambda_from_mean()
+  #     must convert it via rate = 2/mK before passing to erlang_log_surv.
+  # This test verifies the C++ path independently by constructing the manual
+  # log-likelihood from R-level functions and pgamma, then checking both that
+  # the correct rate (2/mK) matches ll AND that the wrong rate (mK directly) does not.
   model <- RDMSWTN(erlang_shape = 2L, erlang_type = "global_kill")
   design_obj <- design(
     factors = list(subjects = 1, S = "stim"),
@@ -590,6 +598,13 @@ test_that("global kill C++ likelihood uses timer means as raw-time Erlang rates"
     stats::pgamma(rt, shape = 2, rate = 2 / 0.6, lower.tail = FALSE, log.p = TRUE)
 
   expect_equal(ll, manual, tolerance = 1e-10)
+
+  # Confirm independence: using mK directly as a rate (wrong; omits the 2/mean
+  # conversion) produces a different value, proving the test would catch a regression.
+  manual_wrong_rate <- log(model$dfun(rt, pars_no_kill[1, , drop = FALSE])) +
+    log1p(-model$pfun(rt, pars_no_kill[2, , drop = FALSE])) +
+    stats::pgamma(rt, shape = 2, rate = 0.6, lower.tail = FALSE, log.p = TRUE)
+  expect_false(isTRUE(all.equal(ll, manual_wrong_rate, tolerance = 1e-10)))
 })
 
 test_that("mixed RDMSWTN rfun supports local Erlang simulation only", {

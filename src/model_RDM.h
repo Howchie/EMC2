@@ -274,8 +274,9 @@ inline signed_log slog_int_d_eta_pnorm(
 //
 // All exported functions take raw time t and internally use t_eam = t - t0.
 // Erlang processes run on raw time t; evidence kernels run on t_eam.
-// The `s` (diffusion) parameter is absorbed by the caller: pass s=1 once
-// parameters have been pre-scaled by s.
+// The `s` (diffusion) parameter is passed explicitly through the Wald/SWTN
+// kernels; callers should keep drift, threshold, and start variability on their
+// physical scale.
 // ==========================================================================
 
 inline double log_wald_posdrift_hit_normalizer(bool posdrift, double mu, double sigma,
@@ -515,8 +516,7 @@ double pwald(double t, double mu, double b, double A, double sigma,
   // Fast path: no kill — use canonical Wald SPV for finite t_eam.
   if (k_eff <= 0.0) {
     if (emc2_isfinite(t_eam)) {
-      const double inv_s = 1.0 / sigma;
-      const double cdf = pwald_k0(t_eam, b * inv_s, mu * inv_s, A * inv_s);
+      const double cdf = pwald_k0(t_eam, b, mu, A, sigma);
       const double cl = std::max(0.0, std::min(1.0, cdf));
       if (log_out) return (cl <= 0.0) ? R_NegInf : std::log(cl);
       return cl;
@@ -2590,7 +2590,8 @@ NumericVector pGBMspv(NumericVector t, NumericVector v, NumericVector b,
 // Vectorised adapters for the EMC2 race-likelihood machinery.
 // Column layout (from Ttransform + p_types reorder):
 //   v=0, B=1, A=2, t0=3, s=4, sv=5  [pContaminant and b follow, ignored here]
-// Scaling convention: absorb s inside kernel; pass s=1 to drdmswtn/prdmswtn.
+// Scaling convention: pass physical-scale parameters and explicit s through to
+// drdmswtn/prdmswtn.
 // --------------------------------------------------------------------------
 
 #endif

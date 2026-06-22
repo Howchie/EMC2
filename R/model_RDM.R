@@ -27,12 +27,12 @@ pRDM <- function(rt, pars)
 
 #### random
 
-rWald <- function(n, B, v, A, posdrift = TRUE)
+rWald <- function(n, B, v, A, s = 1, posdrift = TRUE)
 # random function for single accumulator
 {
-  rwaldt <- function(n, k, l, tiny = 1e-6) {
+  rwaldt <- function(n, k, l, s = 1, tiny = 1e-6) {
     # random sample of n from a Wald (or Inverse Gaussian)
-    # k = criterion, l = rate, assumes sigma=1 Browninan motion
+    # k = criterion, l = rate, s = diffusion SD
     # about same speed as statmod rinvgauss
 
     rlevy <- function(n = 1, m = 0, c = 1) {
@@ -40,12 +40,13 @@ rWald <- function(n, B, v, A, posdrift = TRUE)
       c / qnorm(1 - runif(n) / 2)^2 + m
     }
 
+    s <- rep(s, length.out = n)
     flag <- l > abs(tiny)
     x <- rep(NA, times = n)
 
-    x[!flag] <- rlevy(sum(!flag), 0, k[!flag]^2)
+    x[!flag] <- rlevy(sum(!flag), 0, (k[!flag] / s[!flag])^2)
     mu <- k / l
-    lambda <- k^2
+    lambda <- (k / s)^2
 
     y <- rnorm(sum(flag))^2
     mu.0 <- mu[flag]
@@ -63,6 +64,7 @@ rWald <- function(n, B, v, A, posdrift = TRUE)
   }
   
   out <- rep(Inf, n)
+  s <- rep(s, length.out = n)
   neg <- rep(FALSE, n)
   if (posdrift) {
     pos <- v > 0
@@ -76,7 +78,7 @@ rWald <- function(n, B, v, A, posdrift = TRUE)
   npos <- sum(pos)
   if (npos > 0) {
     bs <- B[pos] + runif(npos, 0, A[pos])
-    out[pos] <- rwaldt(npos, k = bs, l = v[pos])
+    out[pos] <- rwaldt(npos, k = bs, l = v[pos], s = s[pos])
   }
 
   # negative drift with posdrift=FALSE: defective Wald via Bernoulli(p_hit)
@@ -85,10 +87,10 @@ rWald <- function(n, B, v, A, posdrift = TRUE)
     nneg <- sum(neg)
     if (!posdrift) { # sample bernoulli hitting probability and use the absolute value of v for the finite finishes
       bs_neg <- B[neg] + runif(nneg, 0, A[neg])
-      p_hit <- exp(2 * v[neg] * bs_neg)  # v < 0, bs > 0 → 0 < p_hit < 1
+      p_hit <- exp(2 * v[neg] * bs_neg / (s[neg]^2))  # v < 0, bs > 0 -> 0 < p_hit < 1
       hit <- as.logical(rbinom(nneg, 1, p_hit))
       if (any(hit)) {
-        out[which(neg)[hit]] <- rwaldt(sum(hit), k = bs_neg[hit], l = abs(v[neg][hit]))
+        out[which(neg)[hit]] <- rwaldt(sum(hit), k = bs_neg[hit], l = abs(v[neg][hit]), s = s[neg][hit])
       }
     }
   }
@@ -484,12 +486,13 @@ rGBM_killed <- function(n, b, v, A, s = 1, k = 0, erlang = 1L, erlang_omega = 1)
   out
 }
 
-rSWTN <- function(n, b, v, A, sv, k = 0, erlang = 1L, erlang_omega = 1, posdrift = TRUE) {
+rSWTN <- function(n, b, v, A, sv, s = 1, k = 0, erlang = 1L, erlang_omega = 1, posdrift = TRUE) {
   if (n <= 0) return(numeric(0))
   b <- rep(b, length.out = n)
   v <- rep(v, length.out = n)
   A <- rep(A, length.out = n)
   sv <- rep(sv, length.out = n)
+  s <- rep(s, length.out = n)
   k <- rep(k, length.out = n)
   erlang_omega <- rep(erlang_omega, length.out = n)
   out <- rep(Inf, n)
@@ -509,7 +512,7 @@ rSWTN <- function(n, b, v, A, sv, k = 0, erlang = 1L, erlang_omega = 1, posdrift
     }
   }
   
-  out <- rWald(n, B = b - A, v = v_draw, A = A, posdrift = posdrift)
+  out <- rWald(n, B = b - A, v = v_draw, A = A, s = s, posdrift = posdrift)
   kill_idx <- which(k > 0)
   if (length(kill_idx) > 0) {
     shape <- if (as.integer(erlang) == 3L) {
@@ -816,15 +819,11 @@ dRDMSWTN <- function(rt, pars, erlang = 1L, posdrift = TRUE) {
   ok <- (rt > 0) & ((rt > pars[, "t0"]) | erl)
   ok[is.na(ok)] <- FALSE
   if (any(ok)) {
-    if (any(dimnames(pars)[[2]] == "s")) {
-      pars_ok <- pars[ok, , drop = FALSE]
-      pars_ok[, c("A", "b", "v", "sv")] <- pars_ok[, c("A", "b", "v", "sv")] / pars_ok[, "s"]
-      pars[ok, ] <- pars_ok
-    }
+    s_ok <- if ("s" %in% colnames(pars)) pars[ok, "s", drop = FALSE] else 1
     out[ok] <- dSWTNspv(rt[ok],
       v = pars[ok, "v", drop = FALSE], b = pars[ok, "b", drop = FALSE],
       A = pars[ok, "A", drop = FALSE],
-      s = 1,
+      s = s_ok,
       t0 = pars[ok, "t0", drop = FALSE],
       sv = pars[ok, "sv", drop = FALSE], lambda_g = pars[ok, "lambda_g", drop = FALSE],
       lambda_k = pars[ok, "lambda_k", drop = FALSE],
@@ -855,15 +854,11 @@ pRDMSWTN <- function(rt, pars, erlang = 1L, posdrift = TRUE) {
   ok <- (rt > 0) & ((rt > pars[, "t0"]) | erl)
   ok[is.na(ok)] <- FALSE
   if (any(ok)) {
-    if (any(dimnames(pars)[[2]] == "s")) {
-      pars_ok <- pars[ok, , drop = FALSE]
-      pars_ok[, c("A", "b", "v", "sv")] <- pars_ok[, c("A", "b", "v", "sv")] / pars_ok[, "s"]
-      pars[ok, ] <- pars_ok
-    }
+    s_ok <- if ("s" %in% colnames(pars)) pars[ok, "s", drop = FALSE] else 1
     out[ok] <- pSWTNspv(rt[ok],
       v = pars[ok, "v", drop = FALSE], b = pars[ok, "b", drop = FALSE],
       A = pars[ok, "A", drop = FALSE],
-      s = 1,
+      s = s_ok,
       t0 = pars[ok, "t0", drop = FALSE],
       sv = pars[ok, "sv", drop = FALSE], lambda_g = pars[ok, "lambda_g", drop = FALSE],
       lambda_k = pars[ok, "lambda_k", drop = FALSE],
@@ -893,8 +888,8 @@ rRDMSWTN <- function(lR, pars, p_types = c("v", "b", "A", "t0", "sv", "lambda_g"
   if (!all(p_types %in% dimnames(pars)[[2]])) {
     stop("pars must have columns ", paste(p_types, collapse = " "))
   }
-  if (any(dimnames(pars)[[2]] == "s")) {
-    pars[, c("A", "b", "v", "sv")] <- pars[, c("A", "b", "v", "sv")] / pars[, "s"]
+  if (!("s" %in% dimnames(pars)[[2]])) {
+    pars <- cbind(pars, s = 1)
   }
   pars[, "b"][pars[, "b"] < 0] <- 0
   pars[, "A"][pars[, "A"] < 0] <- 0
@@ -930,6 +925,7 @@ rRDMSWTN <- function(lR, pars, p_types = c("v", "b", "A", "t0", "sv", "lambda_g"
   k_vec <- rep(0, nrow(pars))
   dt[ok] <- rSWTN(sum(ok),
     b = pars[, "b"], v = pars[, "v"], A = pars[, "A"], sv = pars[, "sv"],
+    s = pars[, "s"],
     k = k_vec, erlang = erlang_shape, erlang_omega = erlang_omega_all[ok],
     posdrift = posdrift
   )

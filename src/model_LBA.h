@@ -313,7 +313,7 @@ inline double integrate_bawl_pdf_raw(double t, double v, double b, double A,
                                      double sv, double t0, double k,
                                      double lambda_g, double lambda_k,
                                      bool posdrift, int kill_shape, bool guess, double erlang_omega = 1.0) {
-  const Rcpp::List& gl = get_gl20();
+  const Rcpp::List& gl = (t == R_PosInf) ? get_gl20() : get_gl61();
   const Rcpp::NumericVector nodes = gl["nodes"];
   const Rcpp::NumericVector weights = gl["weights"];
   double acc = 0.0;
@@ -334,13 +334,16 @@ inline double integrate_bawl_pdf_raw(double t, double v, double b, double A,
     return std::max(0.0, std::min(1.0, out));
   }
 
+  const double lower = guess ? 0.0 : t0;
+  if (t <= lower) return 0.0;
+  const double width = t - lower;
   for (int j = 0; j < nodes.size(); ++j) {
-    const double u = 0.5 * t * (nodes[j] + 1.0);
+    const double u = lower + 0.5 * width * (nodes[j] + 1.0);
     acc += weights[j] * dkilledleakyba_norm(
       u, v, b, A, sv, t0, k, lambda_g, lambda_k, posdrift, false, kill_shape, guess, erlang_omega
     );
   }
-  double out = 0.5 * t * acc;
+  double out = 0.5 * width * acc;
   return std::max(0.0, std::min(1.0, out));
 }
 
@@ -398,8 +401,8 @@ inline double pkilledleakyba_norm(double t, double v, double b, double A,
     // 1 - S_R(t_eam) * S_G(t); erlang uses raw t
     const double cdf_r = pleakyba_norm(t_eam, A, b, v, sv, k, posdrift, false);
     const double log_sr = std::log1p(-std::max(0.0, std::min(1.0, cdf_r)));
-    const double log_sk = erlang_log_surv(t, lambda, kill_shape, erlang_omega);
-    const double log_val = std::log1p(-std::exp(log_sr + log_sk));
+    const double log_sg = erlang_log_surv(t, lambda, kill_shape, erlang_omega);
+    const double log_val = std::log1p(-std::exp(log_sr + log_sg));
     return log_out ? log_val : std::exp(log_val);
   }
   if (sv <= 0.0 || b < A || b <= 0.0) return log_out ? R_NegInf : 0.0;

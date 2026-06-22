@@ -490,8 +490,8 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
     out.model_pfun_raw = &prdmswtn_raw;
     out.logS_at_t_ptr  = &rdmswtn_logS_at_t;
     out.ctx.t0_index   = 3;
-    out.ctx.lambda_g_index = 6;
-    out.ctx.lambda_k_index = 7;
+    out.ctx.mean_g_index = 6;
+    out.ctx.mean_k_index = 7;
     out.ctx.erlang_omega_index = (out.ctx.kill_shape == 3) ? 8 : -1;
     out.ctx.defective_upper_tail = true;
     if (type_std.find("_IO") != std::string::npos) {
@@ -505,8 +505,8 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
     out.model_pfun_raw = &prdmgbm_raw;
     out.logS_at_t_ptr  = &rdmgbm_logS_at_t;
     out.ctx.t0_index     = 3;
-    out.ctx.lambda_g_index = 5;
-    out.ctx.lambda_k_index = 6;
+    out.ctx.mean_g_index = 5;
+    out.ctx.mean_k_index = 6;
     out.ctx.erlang_omega_index = (out.ctx.kill_shape == 3) ? 7 : -1;
     out.ctx.defective_upper_tail = true;
   } else if (type_std.find("BAwL") != std::string::npos) {
@@ -516,8 +516,8 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
     out.model_pfun_raw = &pbawl_raw;
     out.logS_at_t_ptr  = &bawl_logS_at_t;
     out.ctx.t0_index   = 4;
-    out.ctx.lambda_g_index = 6;
-    out.ctx.lambda_k_index = 7;
+    out.ctx.mean_g_index = 6;
+    out.ctx.mean_k_index = 7;
     out.ctx.erlang_omega_index = (out.ctx.kill_shape == 3) ? 8 : -1;
     // Leaky ballistic accumulators can have defective upper tails (never-finish
     // mass) even when posdrift=TRUE.
@@ -2339,12 +2339,12 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
           adapter.ctx.floor_raw_log_lik = floor_raw_log_lik_prev;
         } else if (adapter.ctx.is_global_kill && adapter.ctx.kill_active) {
           // Pre-fill log S_K at the winner row for each trial.
-          const double* lambda_ptr = pars_cm + adapter.ctx.lambda_k_index * n_trials;
+          const double* mean_k_ptr = pars_cm + adapter.ctx.mean_k_index * n_trials;
           for (int j = 0; j < n_trials; ++j) {
             if (!isok_int_fp[j] || !winner_int_buf[j]) continue;
             const double tt = rt_ptr[j];
             alt_res_buf_fp[j] = (tt > 0.0)
-                ? erlang_log_surv(tt, erlang_lambda_from_mean(lambda_ptr[j], adapter.ctx.kill_shape), adapter.ctx.kill_shape)
+                ? erlang_log_surv(tt, erlang_lambda_from_mean(mean_k_ptr[j], adapter.ctx.kill_shape), adapter.ctx.kill_shape)
                 : min_ll;
           }
         }
@@ -4027,18 +4027,18 @@ double c_log_likelihood_race(
 
   // For any Erlang variant, disable kill bookkeeping when lambda is identically
   // zero for this particle so kernels use the standard (non-mixture) forms.
-  const bool any_erlang_ctx = ctx && (ctx->lambda_k_index >= 0 || ctx->lambda_g_index >= 0) &&
+  const bool any_erlang_ctx = ctx && (ctx->mean_k_index >= 0 || ctx->mean_g_index >= 0) &&
     (ctx->is_global_kill || ctx->is_local_kill || ctx->is_local_guess || ctx->is_local_kill_guess);
   if (any_erlang_ctx) {
     bool lambda_active = false;
-    const double* lambda_k_ptr = (ctx->lambda_k_index >= 0)
-      ? (pars_cm_ptr + static_cast<size_t>(ctx->lambda_k_index) * n_trials) : nullptr;
-    const double* lambda_g_ptr = (ctx->lambda_g_index >= 0)
-      ? (pars_cm_ptr + static_cast<size_t>(ctx->lambda_g_index) * n_trials) : nullptr;
+    const double* mean_k_ptr = (ctx->mean_k_index >= 0)
+      ? (pars_cm_ptr + static_cast<size_t>(ctx->mean_k_index) * n_trials) : nullptr;
+    const double* mean_g_ptr = (ctx->mean_g_index >= 0)
+      ? (pars_cm_ptr + static_cast<size_t>(ctx->mean_g_index) * n_trials) : nullptr;
     for (int row = 0; row < n_trials; ++row) {
       if (!isok[row]) continue;
-      const double lk = lambda_k_ptr ? erlang_lambda_from_mean(lambda_k_ptr[row], ctx->kill_shape) : 0.0;
-      const double lg = lambda_g_ptr ? erlang_lambda_from_mean(lambda_g_ptr[row], ctx->kill_shape) : 0.0;
+      const double lk = mean_k_ptr ? erlang_lambda_from_mean(mean_k_ptr[row], ctx->kill_shape) : 0.0;
+      const double lg = mean_g_ptr ? erlang_lambda_from_mean(mean_g_ptr[row], ctx->kill_shape) : 0.0;
       if ((emc2_isfinite(lk) && lk > 1e-12) || (emc2_isfinite(lg) && lg > 1e-12)) {
         lambda_active = true; break;
       }
@@ -4047,8 +4047,8 @@ double c_log_likelihood_race(
   } else if (ctx) {
     // If erlang column indices are registered but no erlang type flag is active
     // (e.g. RDMSWTN with erlang_type="none"), disable kill to prevent scalar
-    // kernels from reading past the parameter block at par[lambda_k_index].
-    const bool has_erlang_indices = (ctx->lambda_k_index >= 0 || ctx->lambda_g_index >= 0);
+    // kernels from reading past the parameter block at par[mean_k_index].
+    const bool has_erlang_indices = (ctx->mean_k_index >= 0 || ctx->mean_g_index >= 0);
     const bool has_erlang_type = ctx->is_global_kill || ctx->is_local_kill ||
                                  ctx->is_local_guess  || ctx->is_local_kill_guess;
     ctx->kill_active = !has_erlang_indices || has_erlang_type;
@@ -4103,8 +4103,8 @@ double c_log_likelihood_race(
       if (race_ctx && race_ctx->is_global_kill && race_ctx->kill_active) {
         // Global omission probability: Integral f_K(u) * S_race(u) du on [0, Inf).
         // Use Gauss-Legendre quadrature (20 nodes) with mapping u -> t = -1/lam * log(1-u).
-        const double* lambda_ptr = pars_cm_ptr + race_ctx->lambda_k_index * n_trials;
-        const double lam = erlang_lambda_from_mean(lambda_ptr[start_row_idx],
+        const double* mean_k_ptr = pars_cm_ptr + race_ctx->mean_k_index * n_trials;
+        const double lam = erlang_lambda_from_mean(mean_k_ptr[start_row_idx],
                                                    race_ctx->kill_shape);
         if (lam <= 0.0) {
           global_log_surv_inf_by_trial[static_cast<size_t>(unique_trial_idx)] = R_NegInf;
@@ -4218,11 +4218,11 @@ double c_log_likelihood_race(
       double logS = safe_log1m_race(Fk);
       if (!R_FINITE(logS)) return R_NegInf;
       if (race_ctx && race_ctx->is_global_kill && race_ctx->kill_active) {
-        const double* lambda_ptr = pars_cm_ptr + race_ctx->lambda_k_index * n_trials;
+        const double* mean_k_ptr = pars_cm_ptr + race_ctx->mean_k_index * n_trials;
         if (t > 0.0) {
           logS += erlang_log_surv(
             t,
-            erlang_lambda_from_mean(lambda_ptr[start_row_idx], race_ctx->kill_shape),
+            erlang_lambda_from_mean(mean_k_ptr[start_row_idx], race_ctx->kill_shape),
             race_ctx->kill_shape
           );
         }
@@ -4244,11 +4244,11 @@ double c_log_likelihood_race(
       logS += ll;
     }
     if (race_ctx && race_ctx->is_global_kill && race_ctx->kill_active) {
-      const double* lambda_ptr = pars_cm_ptr + race_ctx->lambda_k_index * n_trials;
+      const double* mean_k_ptr = pars_cm_ptr + race_ctx->mean_k_index * n_trials;
       if (t > 0.0) {
         logS += erlang_log_surv(
           t,
-          erlang_lambda_from_mean(lambda_ptr[start_row_idx], race_ctx->kill_shape),
+          erlang_lambda_from_mean(mean_k_ptr[start_row_idx], race_ctx->kill_shape),
           race_ctx->kill_shape
         );
       }
@@ -4262,7 +4262,7 @@ double c_log_likelihood_race(
   if (ctx && ctx->is_global_kill && ctx->kill_active) {
     winner_row_by_trial.assign(static_cast<size_t>(n_unique_trials), -1);
     global_log_sk_by_trial.assign(static_cast<size_t>(n_unique_trials), 0.0);
-    const double* lambda_ptr = pars_cm_ptr + static_cast<size_t>(ctx->lambda_k_index) * n_trials;
+    const double* mean_k_ptr = pars_cm_ptr + static_cast<size_t>(ctx->mean_k_index) * n_trials;
     for (int j = 0; j < n_unique_trials; ++j) {
       const int start = j * n_lR;
       const int n_lR_j = has_RACE_col ? RACE[start] : n_lR;
@@ -4278,7 +4278,7 @@ double c_log_likelihood_race(
           (tt > 0.0)
             ? erlang_log_surv(
                 tt,
-                erlang_lambda_from_mean(lambda_ptr[idx_w], ctx->kill_shape),
+                erlang_lambda_from_mean(mean_k_ptr[idx_w], ctx->kill_shape),
                 ctx->kill_shape
               )
             : min_ll;
