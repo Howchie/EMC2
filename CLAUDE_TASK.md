@@ -31,16 +31,68 @@ Bounds in trunc_SBC.R are DATA-DEPENDENT: LT=quantile(rt,.1), UT=quantile(rt,.9)
   corrected truncated likelihood integrates to 1 exactly.
 - `log_likelihood_ddmgng` NOT yet updated (go/nogo + censoring semantics) -- TODO.
 
-## In progress
-- Background: fixed-bounds (LT=0.35,UT=1.10 constants) WDM SBC with corrected
-  likelihood, 200 reps -> WorkingTests/SBC/SBC_WDM_fixedT.RData. Expect t0 KS to
-  drop from 0.349 toward <0.1 if fix works. Script /tmp/wdm_fixedbounds_sbc.R.
+## Validated
+- Fixed-bounds (LT=0.35,UT=1.10) WDM, corrected likelihood, 200 reps
+  (SBC_WDM_fixedT.RData) CALIBRATES: KS v=.074 a=.059 t0=.066 Z=.056 (crit .096),
+  all mean ranks ~.5. t0 went 0.349/mean .728 -> .066/.468. Fix confirmed.
+
+- Fixed-bounds (LT=0.30,UT=1.20) LNR, 200 reps (SBC_LNR_fixedT.RData)
+  CALIBRATES: KS m=.055 m_lMTRUE=.046 s=.062 t0=.089 (crit .096), means ~.5.
+  Worst offender s went 0.125 -> 0.062. LNR density is exact -> CONFIRMS the
+  LNR/LBA truncation mis-calibration is INTRINSIC to data-dependent (sample-
+  quantile) bounds, NOT an EMC2 bug. (See censoring-vs-truncation note: only
+  truncation has the [F(UT)-F(LT)]^n_kept denominator that the quantile scheme
+  clamps; censoring has no denominator -> immune.)
+
+## Conclusion so far
+- Two separate causes, both resolved:
+  (1) DDM/WDM: real bug (no truncation correction) -> FIXED in log_likelihood_ddm.
+  (2) Race models (LNR confirmed, LBA expected): NOT a bug; the SBC used data-
+      dependent quantile truncation bounds. Recommendation: use FIXED constant
+      LT/UT for truncation SBC (update trunc_SBC.R + add guidance/doc).
+
+## Decisions
+- go/nogo: LEAVE log_likelihood_ddmgng as-is. make_data deliberately disables
+  truncation for GNG (forces LT=0/UT=Inf); a truncation correction there would be
+  dead code or need incoherent semantics for timeout trials. Not doing it.
+- Data-dependent truncation = CENSORING in disguise. To make it valid you must
+  know the per-end dropped counts (proportions pLT,pUT); these CANNOT be inferred
+  from retained data. Given the counts, the correct likelihood is exactly the
+  censoring likelihood: drop the (F(UT)-F(LT))^n_kept denominator and add
+  n_below*log F(LT) + n_above*log(1-F(UT)). So DO NOT build a separate pLT/pUT
+  likelihood branch -- reuse the existing (already-exact, already-tested)
+  censoring path. EMC2 dadm compression dedups the materialised censored rows, so
+  it's also cheap. Routes:
+    (a) SBC / EMC2-generated data: censor at the bounds (LC/UC, direction known)
+        instead of truncating -> exact, zero new likelihood code.
+    (b) Real truncated data + known proportions: optional thin sugar in
+        make_missing that expands pLT/pUT into directional-censored placeholder
+        rows (per design cell) then hands off to the censoring likelihood. UX
+        only, no new math. Build only if users ask.
+  KEEP the fixed-bounds truncation path (DDM Pin denominator / race pr_pt): hard
+  RT cutoffs are a real, common case and that likelihood is correct.
+  Inherent caveat (both routes): need to know which design cell each dropped trial
+  came from; pooled-across-cell truncation loses that -> simulate/censor per cell.
 
 ## Next
-1. Confirm fixed-bounds WDM calibrates (validates the fix).
-2. Fixed-bounds LNR SBC -> separate quantile-scheme (intrinsic) from any LNR bug.
-3. Then LBA; decide whether to address data-dependent bounds (doc/guidance) and
-   port correction to full DDM + ddmgng.
+1. (optional) LBA fixed-bounds SBC -- watch for a small residual from posdrift
+   (truncated-normal drift makes LBA pfun/dfun only approximately consistent).
+2. (optional) SBC full DDM (sv/sz/st0) fixed bounds.
+3. Update WorkingTests/SBC/trunc_SBC.R to fixed bounds; document guidance that
+   truncation SBC must use fixed bounds and data-dependent truncation -> censoring.
+4. DONE: calibration p-values on SBC plots (R/SBC.R). High p = calibrated,
+   "<0.001" floor; deterministic (no RNG). Helpers: .sbc_ks_p/.sbc_chisq_p/
+   .sbc_fmt_p.
+   - plot_sbc_ecdf: keeps the 4-corner add_stats system; p(KS) is the new `pvalue`
+     stat (default corner "bottomright"). Recovery coverage/bias/precision still
+     single-subject only (warning reworded); pvalue from ranks, always shown.
+   - plot_sbc_hist: REDESIGNED -- recovery-stat corner machinery removed. Shows
+     ONLY p(chisq) (over the displayed bins), as a SECOND TITLE ROW. add_stats is
+     now a simple logical (TRUE=show p(chisq) row, FALSE=omit). No warning.
+     Also fixed y-limit: now max(high, bar counts)+2 (per panel) so tall bars from
+     miscalibrated params are no longer clipped (was c(0, high+2), band-only).
+   Test: tests/testthat/test-sbc_calibration_pvalue.R (17 assertions, passing).
+   NEEDS devtools::document() to refresh man/plot_sbc_{hist,ecdf}.Rd.
 
 ---
 

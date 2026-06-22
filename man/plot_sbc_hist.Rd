@@ -23,24 +23,16 @@ plot_sbc_hist(
 layout (\code{mfrow}/\code{mfcol}) untouched, drawing the panels into the existing
 grid with no new page between them.}
 
-\item{add_stats}{Controls the recovery statistics (coverage, bias, precision)
-overlaid on each panel. \code{TRUE} (the default) shows all three at default
-legend positions (coverage \code{"topleft"}, bias \code{"topright"}, precision
-\code{"bottomleft"}); \code{FALSE} shows none. Alternatively a named list keyed by a
-subset of \code{"coverage"}, \code{"bias"}, \code{"precision"} may be given: each value is a
-\code{legend()} position keyword (e.g. \code{"topright"}, \code{"bottomleft"}, \code{"center"})
-placing that statistic, an entry of \code{FALSE} or \code{NA} suppresses it, and
-omitted names keep their default position. A statistic's value may instead
-be a named list/vector keyed by parameter (a subset; parameters not named
-use that statistic's default position) to set its position per panel, with
-\code{FALSE}/\code{NA} suppressing it on a given panel. These statistics are only
-available for single-subject SBC; for hierarchical SBC output \code{add_stats}
-has no effect.}
+\item{add_stats}{Logical. \code{TRUE} (the default) appends a chi-square
+goodness-of-fit-to-uniform p-value, computed over the displayed bins (the
+exact test of the bars drawn; high p = consistent with calibration), as a
+second row of each panel's title. \code{FALSE} omits it.}
 
 \item{main}{Optional. \code{NULL} (the default) uses the auto-generated per-panel
-title. A single string is used as the title on every panel. A character
-vector sets one title per panel and must have the same length as the number
-of panels being plotted.}
+title (the first title row). A single string is used as the title on every
+panel. A character vector sets one title per panel and must have the same
+length as the number of panels being plotted. The \code{add_stats} p-value, when
+shown, is always added as a second title row beneath this.}
 
 \item{add_to_main}{Optional. \code{NULL} (the default) does nothing. A single
 string is prepended to the start of the (auto-generated or \code{main}) title of
