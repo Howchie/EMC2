@@ -131,6 +131,21 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// dexg_c
+NumericVector dexg_c(const NumericVector x, const double mu, const double sigma, const double tau, const bool log_d);
+RcppExport SEXP _EMC2_dexg_c(SEXP xSEXP, SEXP muSEXP, SEXP sigmaSEXP, SEXP tauSEXP, SEXP log_dSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const NumericVector >::type x(xSEXP);
+    Rcpp::traits::input_parameter< const double >::type mu(muSEXP);
+    Rcpp::traits::input_parameter< const double >::type sigma(sigmaSEXP);
+    Rcpp::traits::input_parameter< const double >::type tau(tauSEXP);
+    Rcpp::traits::input_parameter< const bool >::type log_d(log_dSEXP);
+    rcpp_result_gen = Rcpp::wrap(dexg_c(x, mu, sigma, tau, log_d));
+    return rcpp_result_gen;
+END_RCPP
+}
 // dEXGrace
 NumericVector dEXGrace(NumericMatrix dt, NumericVector mu, NumericVector sigma, NumericVector tau, double min_ll);
 RcppExport SEXP _EMC2_dEXGrace(SEXP dtSEXP, SEXP muSEXP, SEXP sigmaSEXP, SEXP tauSEXP, SEXP min_llSEXP) {
@@ -1077,6 +1092,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_plba", (DL_FUNC) &_EMC2_plba, 6},
     {"_EMC2_dWald", (DL_FUNC) &_EMC2_dWald, 5},
     {"_EMC2_pWald", (DL_FUNC) &_EMC2_pWald, 5},
+    {"_EMC2_dexg_c", (DL_FUNC) &_EMC2_dexg_c, 5},
     {"_EMC2_dEXGrace", (DL_FUNC) &_EMC2_dEXGrace, 5},
     {"_EMC2_stopfn_exg", (DL_FUNC) &_EMC2_stopfn_exg, 6},
     {"_EMC2_pEXG_old", (DL_FUNC) &_EMC2_pEXG_old, 6},

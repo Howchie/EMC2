@@ -48,13 +48,19 @@ inline double fast_norm_phi(double x) {
   return x <= 0.0 ? c : 1.0 - c;
 }
 
+// Laplace continued fraction denominator for the Mills ratio.
+// For z > 0, log Phi(-z) = log phi(z) - log(mills_cf_denom(z)).
+// Used by both fast_log_upper_tail and dexg's tail branch.
+inline double mills_cf_denom(double z) {
+  return z + 1.0 / (z + 2.0 / (z + 3.0 / (z + 4.0 / (z + 13.0 / 20.0))));
+}
+
 // log(P(Z > z)) for z >= 0, computed directly without materialising the probability.
 inline double fast_log_upper_tail(double z) {
   if (z > 37.0) return R_NegInf;
   const double z2 = z * z;
   if (z >= FAST_NORM_SPLIT) {
-    const double f = z + 1.0 / (z + 2.0 / (z + 3.0 / (z + 4.0 / (z + 13.0 / 20.0))));
-    return -0.5 * z2 - LOG_SQRT_2PI - std::log(f);
+    return -0.5 * z2 - LOG_SQRT_2PI - std::log(mills_cf_denom(z));
   }
   const double n = (((((FAST_NORM_N6 * z + FAST_NORM_N5) * z + FAST_NORM_N4) * z + FAST_NORM_N3) * z + FAST_NORM_N2) * z + FAST_NORM_N1) * z + FAST_NORM_N0;
   const double d = ((((((FAST_NORM_M7 * z + FAST_NORM_M6) * z + FAST_NORM_M5) * z + FAST_NORM_M4) * z + FAST_NORM_M3) * z + FAST_NORM_M2) * z + FAST_NORM_M1) * z + FAST_NORM_M0;

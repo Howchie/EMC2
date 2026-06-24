@@ -423,6 +423,7 @@ static inline double ss_exg_stop_success_lpdf(
 // OLD STUFF BELOW, KEPT FOR TESTING R CODE
 // ----------------------------------------------------------------------------
 
+// [[Rcpp::export]]
 NumericVector dexg_c(
     const NumericVector x,
     const double mu = 5.,

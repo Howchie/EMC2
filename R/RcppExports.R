@@ -33,6 +33,10 @@ pWald <- function(t, v, B, A, t0) {
     .Call(`_EMC2_pWald`, t, v, B, A, t0)
 }
 
+dexg_c <- function(x, mu = 5., sigma = 1., tau = 1., log_d = FALSE) {
+    .Call(`_EMC2_dexg_c`, x, mu, sigma, tau, log_d)
+}
+
 dEXGrace <- function(dt, mu, sigma, tau, min_ll) {
     .Call(`_EMC2_dEXGrace`, dt, mu, sigma, tau, min_ll)
 }

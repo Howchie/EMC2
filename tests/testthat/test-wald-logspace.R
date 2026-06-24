@@ -67,14 +67,14 @@ grid <- list(
 
 test_that("pigt matches exact R formula", {
   for (args in grid) {
-    expect_equal(do.call(pigt, args), do.call(pigt_exact, args), tolerance = 1e-10,
+    expect_equal(do.call(EMC2:::pigt, args), do.call(pigt_exact, args), tolerance = 1e-10,
                  label = paste0("pigt(t=", args$t, ", k=", args$k, ", l=", args$l, ", a=", args$a, ")"))
   }
 })
 
 test_that("digt matches exact R formula", {
   for (args in grid) {
-    expect_equal(do.call(digt, args), do.call(digt_exact, args), tolerance = 1e-10,
+    expect_equal(do.call(EMC2:::digt, args), do.call(digt_exact, args), tolerance = 1e-10,
                  label = paste0("digt(t=", args$t, ", k=", args$k, ", l=", args$l, ", a=", args$a, ")"))
   }
 })
