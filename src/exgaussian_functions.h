@@ -35,7 +35,7 @@ double dexg(
     double z = y - a;
     if (z < -8.0) {
       double log_out_stable = -std::log(tau_p) - 0.5*std::log(2.0 * M_PI)
-                              - 0.5 * y * y - std::log(-z);
+                              - 0.5 * y * y - std::log(-z) - 1.0 / (z * z);
       return log_d ? log_out_stable : std::exp(log_out_stable);
     }
   }

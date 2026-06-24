@@ -110,3 +110,10 @@ rexgC2 <- fit(rexgC2)
 cat("\nCensored REXG fit:\n")
 print(credint(rexgC2, map = TRUE))
 recovery(rexgC2,true_pars = pexg1)
+
+# Fit SSEXG against race-generated data
+exgC2 <- make_emc(datC_race, design_EXG, type = "single")
+exgC2 <- fit(exgC2)
+cat("\nCensored SSEXG fit:\n")
+print(credint(exgC2, map = TRUE))
+recovery(exgC2,true_pars = pexg1)
