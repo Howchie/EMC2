@@ -186,8 +186,9 @@ test_that("R and C++ analytic routes agree to near machine precision", {
 
 test_that("auto guards fall back to GL and still match integrate", {
   SSD <- 0.15
-  # guard 1: sigS > 4*tauS (dexg tail-branch regime)
-  p_guard <- make_texg_pars(0.50, 0.05, 0.08, 0.05, 0.20, 0.10, 0.01, 0.05)
+  # guard 1: sigS > 10*tauS (ANALYTIC_MAX_SIGS_OVER_TAUS; small-tauS region
+  # where logC0 cancellation/dexg tail erode the closed form -> GL fallback)
+  p_guard <- make_texg_pars(0.50, 0.05, 0.08, 0.05, 0.20, 0.10, 0.005, 0.05)
   expect_identical(ss_texg_stop_success_auto_branch(SSD, p_guard), "gl_guard")
   expect_equal(ss_texg_stop_success_value(SSD, p_guard, method = "auto"),
                ss_texg_stop_success_value(SSD, p_guard, method = "integrate"),
@@ -224,10 +225,11 @@ test_that("R route auto/analytic matches R route integrate", {
   ana  <- stop_success_texg_R(mu, sigma, tau, lb, SSD, method = "analytic")
   expect_equal(auto, ref, tolerance = 1e-6)
   expect_identical(auto, ana)   # both take the analytic branch here
-  # guard-tripping params fall back to (bumped) GL in R too
-  auto_g <- stop_success_texg_R(c(.2, .5), c(.10, .05), c(.01, .08), lb, SSD,
+  # guard-tripping params (sigS = 0.10 > 10*tauS = 0.05) fall back to
+  # (density-bumped) GL in R too
+  auto_g <- stop_success_texg_R(c(.2, .5), c(.10, .05), c(.005, .08), lb, SSD,
                                 method = "auto")
-  ref_g  <- stop_success_texg_R(c(.2, .5), c(.10, .05), c(.01, .08), lb, SSD,
+  ref_g  <- stop_success_texg_R(c(.2, .5), c(.10, .05), c(.005, .08), lb, SSD,
                                 method = "integrate")
   expect_equal(auto_g, ref_g, tolerance = 1e-4)
 })
@@ -342,4 +344,39 @@ test_that("tight stop density needs more nodes (low n under-resolves)", {
   err_high <- abs(ss_texg_stop_success_value(SSD, p, method="gl", n_nodes=256L) - truth)
   expect_gt(err_low, err_high)          # more nodes -> closer to truth
   expect_lt(err_high, 1e-4)
+})
+
+test_that("gl_auto_nodes_R: density floor, quantised, capped", {
+  # narrow window: no bump (returns the floor)
+  expect_identical(gl_auto_nodes_R(64L, 0.10, 0.20, 0.05), 64L)
+  # wide window vs a sharp peak: bump up, quantised to a multiple of 32
+  n <- gl_auto_nodes_R(64L, 0.05, 0.55, 0.025)   # (ub-lo)/sigS = 20 -> want 120
+  expect_identical(n, 128L)
+  expect_identical(n %% 32L, 0L)
+  # never below the requested floor; capped at 256
+  expect_gte(gl_auto_nodes_R(96L, 0.10, 0.20, 0.05), 96L)
+  expect_identical(gl_auto_nodes_R(64L, 0.0, 10.0, 0.01), 256L)  # want huge
+  # shrinking the window past the floor leaves the floor untouched
+  expect_identical(gl_auto_nodes_R(64L, 0.10, 0.10, 0.05), 64L)
+})
+
+test_that("auto stays accurate for a small-tauS sharp stop peak (n_go=1)", {
+  # Colleague's regime: tauS small relative to sigS. With sigS <= 10*tauS the
+  # exact closed form is used; push tauS smaller so the guard hands off to the
+  # density-bumped GL route, and check both still match adaptive integrate.
+  SSD <- 0.20
+  # (a) analytic region: sigS/tauS = 1.9 (true colleague values)
+  p_ana <- make_texg_pars(muG = 0.436, sigG = 0.044, tauG = 0.070, lbG = 0.05,
+                          muS = 0.144, sigS = 0.025, tauS = 0.013, lbS = 0.05)
+  expect_identical(ss_texg_stop_success_auto_branch(SSD, p_ana), "analytic_trunc")
+  expect_equal(ss_texg_stop_success_value(SSD, p_ana, method = "auto"),
+               ss_texg_stop_success_value(SSD, p_ana, method = "integrate"),
+               tolerance = 1e-6)
+  # (b) guard handoff: sigS/tauS = 12.5 -> GL fallback, density bump keeps it tight
+  p_gl <- make_texg_pars(muG = 0.436, sigG = 0.044, tauG = 0.070, lbG = 0.05,
+                         muS = 0.144, sigS = 0.025, tauS = 0.002, lbS = 0.05)
+  expect_identical(ss_texg_stop_success_auto_branch(SSD, p_gl), "gl_guard")
+  expect_equal(ss_texg_stop_success_value(SSD, p_gl, method = "auto"),
+               ss_texg_stop_success_value(SSD, p_gl, method = "integrate"),
+               tolerance = 1e-4)
 })

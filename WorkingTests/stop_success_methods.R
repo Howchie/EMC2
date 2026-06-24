@@ -198,8 +198,8 @@ tau_r  <- matrix(runif(n_rand * 3, .05, .2), n_rand, 3)
 
 # Stress cases: must trigger the auto guard / kink fallback
 stress_cases <- list(
-  # 1. Guard: sigS > 4*tauS -> auto/analytic must fall back to GL
-  list(label = "guard(sigS>4tauS)",
+  # 1. Guard: sigS > 10*tauS (ANALYTIC_MAX_SIGS_OVER_TAUS) -> fall back to GL
+  list(label = "guard(sigS>10tauS)",
        muS = .2, sigS = .2, tauS = .01, lbS = .05,
        muG1 = c(.4), sigG1 = c(.08), tauG1 = c(.05),
        muG2 = c(.4, .45), sigG2 = c(.08, .06), tauG2 = c(.05, .08)),

@@ -832,8 +832,11 @@ pstopTEXG <- function(
 #'   unchanged); \code{"gl"} forces fixed Gauss-Legendre with
 #'   \code{stop_n_nodes} nodes; \code{"analytic"} forces the closed form where
 #'   applicable (Gauss-Legendre fallback otherwise).
-#' @param stop_n_nodes Number of Gauss-Legendre nodes for \code{"gl"} (and the
-#'   base node count for the \code{"auto"}/\code{"analytic"} fallback).
+#' @param stop_n_nodes Number of Gauss-Legendre nodes for \code{"gl"} (exact),
+#'   and the base/minimum node count for the \code{"auto"}/\code{"analytic"}
+#'   Gauss-Legendre fallback, which automatically raises the node count when the
+#'   integration window spans many stop-sigma widths (sharp, small-tauS stop
+#'   densities).
 #' @return A model list with all the necessary functions to sample
 #' @export
 SSEXG <- function(stop_method = c("auto", "integrate", "gl", "analytic"),
@@ -1204,8 +1207,10 @@ pstopHybrid <- function(
 #'   \code{"integrate"} is the original adaptive-quadrature route (numerically
 #'   unchanged); \code{"gl"} forces fixed Gauss-Legendre with
 #'   \code{stop_n_nodes} nodes.
-#' @param stop_n_nodes Number of Gauss-Legendre nodes for \code{"gl"} (and the
-#'   base node count for the \code{"auto"} route).
+#' @param stop_n_nodes Number of Gauss-Legendre nodes for \code{"gl"} (exact),
+#'   and the base/minimum node count for the \code{"auto"} route, which
+#'   automatically raises the node count when the integration window spans many
+#'   stop-sigma widths (sharp, small-tauS stop densities).
 #' @return A model list with all the necessary functions to sample
 #' @export
 SSRDEX <- function(stop_method = c("auto", "integrate", "gl"),

@@ -581,3 +581,64 @@ test-stop_success_gl.R 121, test-likelihoods.R 33.
 
 ### Order: Part A first (Part B's UC-aware stepping depends on it), refactor
 ### item of Part B before its grouping work.
+
+---
+
+# Task (2026-06-24): GL small-tauS robustness (branch TC-ss)
+
+## Trigger
+Colleague's censored SS-EXG recovery (~/Downloads/censored_ss_emc2_0626 copy)
+finds small tauS troublesome: GROUND_TRUTH muS=0.144, sigmaS=0.025, tauS=0.013
+(sigS/tauS ~ 1.9). n_go==1 design (single go accumulator). exgS_lb/exg_lb
+default to 0.05 (finite). His mills.txt patched the dexg Mills tail (+ -1/z^2)
+and he experimented with removing the sigS>4*tauS analytic guard.
+
+## Diagnosis
+- n_go==1: "auto" uses the exact analytic1 when sigS<=4*tauS, else GL. The
+  sampler pushes tauS small (weakly identified near-Gaussian stop); when
+  tauS < sigS/4 the guard flips dispatch from EXACT analytic to a flat-64-node
+  GL of a SHARP spike -> wrong likelihood + an analytic/GL discontinuity right
+  where the sampler lives.
+- gl_auto_nodes bump never fired: (ub-lo)/sigS is dominated by muS/sigS+8 (~20
+  here, below the 40 trigger) and its only tauS term (16*tauS/sigS) SHRANK as
+  the peak sharpened -> heuristic moved the wrong way for small tauS.
+- Mills patch is correct maths (next asymptotic term) but a red herring for HIS
+  params: the z<-8 branch only fires where the stop density is ~e^-47.
+- His "integrate" run also struggling => partly plain identifiability
+  (tauS->0), not a numerics bug.
+
+## Changes made (DONE, needs build+test)
+1. src/exgaussian_functions.h: dexg z<-8 branch now keeps two Mills corrections
+   (-1/z^2 + 2.5/z^4); matches exact to ~4e-6 at the switch (was ~1.5%).
+2. src/gl_quad.h: gl_auto_nodes rewritten to a node-DENSITY floor
+   n_eff = clamp(roundup_32(6*(ub-lo)/sigS), n_nodes, 256). Constants
+   GL_NODES_PER_SIG=6, GL_NODE_STEP=32, GL_MAX_NODES=256. Quantised so the
+   gauleg cache stays tiny. Flows into BOTH EXG and RDEX autodisp automatically.
+3. src/ss_exg_analytic.h: guard sigS>4*tauS -> sigS>ANALYTIC_MAX_SIGS_OVER_TAUS
+   (=10). Lets the exact form cover more small-tauS; ceiling now also justified
+   by logC0 cancellation as tauS->0 (not just dexg matching).
+4. R mirrors in R/stop_success_gl.R: gl_auto_nodes_R (same density rule +
+   constants), analytic1_R guard -> 10. (Note stopfn_texg is C++ via
+   RcppExports, so the Mills fix already covers the R integrate/gl routes; only
+   .sexg_R uses R pnorm.)
+5. R/model_SS.R: SSEXG/SSRDEX stop_n_nodes help reworded (now a base/min count,
+   auto-raised by the density bump).
+6. Tests (tests/testthat/test-stop_success_gl.R): guard-test params moved to
+   sigS>10*tauS; new gl_auto_nodes_R unit test; new small-tauS auto-accuracy
+   test (analytic_trunc region + gl_guard handoff both vs integrate).
+   WorkingTests/stop_success_methods.R stress label refreshed.
+
+## DECISION: explicit "gl" stays LITERAL
+Did NOT auto-bump the explicit stop_method="gl" path (live STOP_METHOD_GL and
+the ss_*_stop_success_value(method="gl") wrapper). It has a documented
+"exactly stop_n_nodes" contract + node-sensitivity tests (lines 81-103, 318,
+337-347). All robustness goes into "auto" (the default), which is what users
+and the colleague should use. One-line change if Andrew wants "gl" bumped too.
+
+## REMAINING / NOT YET RUN
+- [ ] Rcpp::compileAttributes + devtools::document (no exported-signature
+      changes, so RcppExports likely unchanged; document for the Rd reword).
+- [ ] devtools::load_all + test_file("tests/testthat/test-stop_success_gl.R")
+- [ ] Full suite + devtools::check(vignettes=FALSE)
+- [ ] Andrew running the colleague's recovery grid on the server with the
+      tweaks below.
