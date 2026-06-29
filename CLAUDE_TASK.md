@@ -642,3 +642,40 @@ and the colleague should use. One-line change if Andrew wants "gl" bumped too.
 - [ ] Full suite + devtools::check(vignettes=FALSE)
 - [ ] Andrew running the colleague's recovery grid on the server with the
       tweaks below.
+
+---
+
+# Investigation (2026-06-25): auto-vs-integrate recovery bias (TC-ss)
+
+Colleague reported stop_method="auto" over-estimates tauS by ~0.01s / under-
+estimates muS (tradeoff), persisting at 3000 trials; "integrate" unbiased.
+
+## Findings (measured, not theorised)
+- **stop_method is INNOCENT.** auto == integrate everywhere: stop-success
+  integral vs independent R 1e-12 oracle ~1e-14 (upper=Inf, analytic) and ~1e-13
+  (finite upper, GL); full-data calc_ll profiles ~1e-9; wide (muS,tauS) grid
+  INCLUDING the guard region (sigS/tauS up to 12.5) <=5e-7; full 7D and 2D MLEs
+  identical to 4 dp. The guard is NOT tripped along the bias direction (all
+  analytic_trunc). So GL/analytic/Mills work is exonerated as the cause.
+- The finite-upper call site (particle_ll.cpp:479, signal-respond) and the
+  censored-stop call site (:834) both use the live dispatcher, but GL there is
+  also accurate to ~1e-13. Not the source.
+- Recovery bias IS real but METHOD-INDEPENDENT and STATISTICAL: the stop-EXG
+  split (muS vs tauS) is weakly identified (data pin the mean muS+tauS, not the
+  split); single-dataset point MLEs are erratic (flip sign with seed/N/censoring,
+  hit bounds). Prime mechanism: prior on tauS centred at log(0.05) >> truth
+  0.013 pulls the posterior mean up along the ridge. Conclusion: NOT a fixable
+  numerics bug in the stop integral.
+
+## Deliverables (colleague's dir ~/Downloads/censored_ss_emc2_0626 copy/R/)
+- 03_method_equivalence.R  — auto vs integrate, same data/seed (expect identical).
+- 04_prior_sensitivity.R   — original vs truth-centred vs wide prior; bias should
+                             shrink if it's the prior-on-a-ridge effect.
+- 05_sbc_stop_params.R      — run_sbc (single) censored vs uncensored, real prior;
+                             uniform ranks => correct; mis-cal tauS => real bug,
+                             then dig into C++ censored-mass (:791,:817-834).
+Extraction APIs used: credint(emc)[[1]] (quantiles), get_pars(emc,
+selection="alpha", merge_chains=TRUE)[[p]][[1]] (samples). Smoke fit reproduced
+the direction (tauS post-mean ~0.021 vs 0.013).
+
+## Open: if SBC shows mis-calibration with a flat prior -> real censored-mass bug.
