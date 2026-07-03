@@ -61,22 +61,6 @@ pleakyba <- function(t, A, b, v, sv, k, posdrift = TRUE) {
     .Call(`_EMC2_pleakyba`, t, A, b, v, sv, k, posdrift)
 }
 
-dkilledlba_norm <- function(t, A, b, v, sv, k, posdrift = TRUE, log_out = FALSE) {
-    .Call(`_EMC2_dkilledlba_norm`, t, A, b, v, sv, k, posdrift, log_out)
-}
-
-pkilledlba_norm <- function(t, A, b, v, sv, k, posdrift = TRUE, log_out = FALSE) {
-    .Call(`_EMC2_pkilledlba_norm`, t, A, b, v, sv, k, posdrift, log_out)
-}
-
-dkilledlba <- function(t, A, b, v, sv, k, posdrift = TRUE, log_out = FALSE) {
-    .Call(`_EMC2_dkilledlba`, t, A, b, v, sv, k, posdrift, log_out)
-}
-
-pkilledlba <- function(t, A, b, v, sv, k, posdrift = TRUE, log_out = FALSE) {
-    .Call(`_EMC2_pkilledlba`, t, A, b, v, sv, k, posdrift, log_out)
-}
-
 pwald <- function(t, mu, b, A = 0.0, sigma = 1.0, t0 = 0.0, lambda_g = 0.0, lambda_k = 0.0, log_out = FALSE, kill_shape = 1L, guess = FALSE, posdrift = TRUE, erlang_omega = 1.0) {
     .Call(`_EMC2_pwald`, t, mu, b, A, sigma, t0, lambda_g, lambda_k, log_out, kill_shape, guess, posdrift, erlang_omega)
 }

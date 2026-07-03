@@ -4,10 +4,12 @@
 #define _USE_MATH_DEFINES
 #include <cmath>
 #include <RcppArmadillo.h>
+#include "gsl_utils.h"
+#include <gsl/gsl_integration.h>
+#include <gsl/gsl_errno.h>
 #include "wald_functions.h"
 #include "composite_functions.h"
 #include "gaussian.h"
-
 using namespace Rcpp;
 
 static constexpr double RDM_Q_EPSILON = 1e-8;
@@ -1047,23 +1049,27 @@ inline Rcpp::List get_gl_nodes_weights(int n_gauss_nodes);
 inline double dswtn_positive_drift_quad(double t, double mu_drift, double threshold,
                                         double s, double t0, double sv,
                                         double lambda_g, double lambda_k,
-                                        bool log_out, int kill_shape, bool guess,
-                                        int n_gauss_nodes);
+                                        bool log_out, int kill_shape, bool guess);
 inline double pswtn_positive_drift_quad(double t, double mu_drift, double threshold,
                                         double s, double t0, double sv,
                                         double lambda_g, double lambda_k,
-                                        bool log_out, int kill_shape, bool guess,
-                                        int n_gauss_nodes);
+                                        bool log_out, int kill_shape, bool guess);
 inline double drdmswtn_positive_drift_quad(double t, double mu_drift, double b, double A,
                                            double s, double t0, double sv,
                                            double lambda_g, double lambda_k,
-                                           int n_gauss_nodes, bool log_out,
-                                           int kill_shape, bool guess);
+                                           bool log_out, int kill_shape, bool guess);
 inline double prdmswtn_positive_drift_quad(double t, double mu_drift, double b, double A,
                                            double s, double t0, double sv,
                                            double lambda_g, double lambda_k,
-                                           int n_gauss_nodes, bool log_out,
-                                           int kill_shape, bool guess);
+                                           bool log_out, int kill_shape, bool guess);
+inline double positive_trunc_swtn_density_k0(double t, double mu_drift,
+                                             double threshold, double s,
+                                             double t0, double sv,
+                                             bool log_out);
+inline double drdmswtn_joint_A_sv_density_postrunc(
+    double t_adj, double mu, double b, double A,
+    double s, double sv, bool log_out
+);
 inline double local_combo_response_pdf(double t, double f_decision, double F_decision,
                                        double lambda_g, double lambda_k,
                                        int kill_shape, bool log_out);
@@ -1105,10 +1111,19 @@ double dswtn(double t, double mu_drift, double threshold, double s = 1.0,
     return log_out ? log_fG : std::exp(log_fG);
   }
 
+  if (posdrift && !guess && kill_shape <= 1 && lambda > 1e-10) {
+    const double log_sk = erlang_log_surv(t, lambda, kill_shape);
+    const double log_pdf0 = positive_trunc_swtn_density_k0(
+      t, mu_drift, threshold, s, t0, sv, true
+    );
+    if (!R_FINITE(log_pdf0) || !R_FINITE(log_sk)) return log_out ? R_NegInf : 0.0;
+    const double log_pdf = log_pdf0 + log_sk;
+    return log_out ? log_pdf : std::exp(log_pdf);
+  }
+
   if (posdrift) {
     return dswtn_positive_drift_quad(t, mu_drift, threshold, s, t0, sv,
-                                     lambda_g, lambda_k, log_out, kill_shape,
-                                     guess, 20);
+                                     lambda_g, lambda_k, log_out, kill_shape, guess);
   }
 
   // log_norm = 0 means defective density; dswtn_core normalises by exp(log_norm).
@@ -1205,8 +1220,9 @@ inline double positive_trunc_swtn_density_k0(double t, double mu_drift,
 }
 
 template <typename KernelFn>
-inline double integrate_positive_drift_gl(double mu_drift, double sv,
-                                          int n_gauss_nodes, KernelFn&& kernel_fn) {
+inline double integrate_positive_drift_quad(double mu_drift, double sv,
+                                            KernelFn&& kernel_fn,
+                                            int n_gauss_nodes = 20) {
   if (!(sv > 1e-10) || !emc2_isfinite(sv)) {
     return kernel_fn(mu_drift);
   }
@@ -1214,31 +1230,29 @@ inline double integrate_positive_drift_gl(double mu_drift, double sv,
   const double lower_p_raw = pnorm_std(-mu_drift / sv, true, false);
   const double upper_p = std::nextafter(1.0, 0.0);
   const double lower_p = std::fmax(0.0, std::fmin(lower_p_raw, upper_p));
-  const double mass = upper_p - lower_p;
-  if (!(mass > 0.0)) return 0.0;
+  const double width = upper_p - lower_p;
+  if (!(width > 0.0)) return 0.0;
 
   const int n_nodes = std::max(1, n_gauss_nodes);
-  Rcpp::List gl = get_gl_nodes_weights(n_nodes);
-  const Rcpp::NumericVector gl_nodes   = gl["nodes"];
-  const Rcpp::NumericVector gl_weights = gl["weights"];
+  const Rcpp::List gl = get_gl_nodes_weights(n_nodes);
+  const Rcpp::NumericVector nodes = gl["nodes"];
+  const Rcpp::NumericVector weights = gl["weights"];
 
-  double integral = 0.0;
+  double acc = 0.0;
   for (int j = 0; j < n_nodes; ++j) {
-    const double p = lower_p + 0.5 * mass * (gl_nodes[j] + 1.0);
-    const double p_safe = std::fmin(upper_p, std::fmax(1e-15, p));
-    const double drift_j = mu_drift + sv * R::qnorm(p_safe, 0.0, 1.0, true, false);
-    integral += gl_weights[j] * kernel_fn(drift_j);
+    const double p = lower_p + 0.5 * width * (nodes[j] + 1.0);
+    const double drift = mu_drift + sv * R::qnorm(p, 0.0, 1.0, true, false);
+    acc += weights[j] * kernel_fn(drift);
   }
 
-  // The mass cancels against the truncated-normal normalizer.
-  return 0.5 * integral;
+  const double result = 0.5 * acc;
+  return emc2_isfinite(result) ? result : 0.0;
 }
 
 inline double dswtn_positive_drift_quad(double t, double mu_drift, double threshold,
                                         double s, double t0, double sv,
                                         double lambda_g, double lambda_k,
-                                        bool log_out, int kill_shape, bool guess,
-                                        int n_gauss_nodes = 20) {
+                                        bool log_out, int kill_shape, bool guess) {
   const double lambda = guess ? lambda_g : lambda_k;
   if (lambda <= 1e-10) {
     return positive_trunc_swtn_density_k0(t, mu_drift, threshold, s, t0, sv, log_out);
@@ -1257,7 +1271,7 @@ inline double dswtn_positive_drift_quad(double t, double mu_drift, double thresh
                  lambda_g, lambda_k,
                  false, kill_shape, guess, false);
   };
-  const double out = integrate_positive_drift_gl(mu_drift, sv, n_gauss_nodes, kernel);
+  const double out = integrate_positive_drift_quad(mu_drift, sv, kernel);
   if (!(out > 0.0) || !emc2_isfinite(out)) return log_out ? R_NegInf : 0.0;
   return log_out ? std::log(out) : out;
 }
@@ -1265,8 +1279,7 @@ inline double dswtn_positive_drift_quad(double t, double mu_drift, double thresh
 inline double pswtn_positive_drift_quad(double t, double mu_drift, double threshold,
                                         double s, double t0, double sv,
                                         double lambda_g, double lambda_k,
-                                        bool log_out, int kill_shape, bool guess,
-                                        int n_gauss_nodes = 20) {
+                                        bool log_out, int kill_shape, bool guess) {
   const double lambda = guess ? lambda_g : lambda_k;
   if (lambda <= 1e-10) {
     return positive_trunc_swtn_cdf_k0(t, mu_drift, threshold, s, t0, sv, log_out);
@@ -1289,7 +1302,7 @@ inline double pswtn_positive_drift_quad(double t, double mu_drift, double thresh
                  lambda_g, lambda_k,
                  false, kill_shape, guess, false);
   };
-  double out = integrate_positive_drift_gl(mu_drift, sv, n_gauss_nodes, kernel);
+  double out = integrate_positive_drift_quad(mu_drift, sv, kernel);
   out = std::fmax(0.0, std::fmin(1.0, out));
   if (!(out > 0.0)) return log_out ? R_NegInf : 0.0;
   return log_out ? std::log(out) : out;
@@ -1336,15 +1349,93 @@ inline double drdmswtn_joint_A_sv_density_fullgauss(
   return log_out ? std::log(dens) : dens;
 }
 
+inline double drdmswtn_joint_A_sv_density_postrunc(
+    double t_adj, double mu, double b, double A,
+    double s, double sv, bool log_out
+) {
+  if (t_adj <= 1e-10) return log_out ? R_NegInf : 0.0;
+  if (A <= 1e-10) {
+    return positive_trunc_swtn_density_k0(t_adj, mu, b, s, 0.0, sv, log_out);
+  }
+  if (!(s > 1e-10) || !(sv > 1e-10) || !(A > 0.0)) return NA_REAL;
+
+  const double r_lo = b - A;
+  const double r_hi = b;
+  if (!(r_hi > r_lo)) return log_out ? R_NegInf : 0.0;
+
+  const double s2 = s * s;
+  const double sv2 = sv * sv;
+  const double mx = mu * t_adj;
+  const double sD = std::sqrt(t_adj * (s2 + sv2 * t_adj));
+  const double rho = sv * std::sqrt(t_adj) / std::sqrt(s2 + sv2 * t_adj);
+  const double gamma = -mu / sv;
+  const double z_plus = pnorm_std(mu / sv, true, false);
+  if (!(z_plus > 0.0)) return log_out ? R_NegInf : 0.0;
+
+  const double a_lo = (r_lo - mx) / sD;
+  const double a_hi = (r_hi - mx) / sD;
+
+  const double phi_lo = std::exp(-0.5 * a_lo * a_lo - LOG_SQRT_2PI);
+  const double phi_hi = std::exp(-0.5 * a_hi * a_hi - LOG_SQRT_2PI);
+  const double phi_gamma = std::exp(-0.5 * gamma * gamma - LOG_SQRT_2PI);
+
+  const double sqrt_one_minus_rho2 = std::sqrt(std::fmax(1e-15, 1.0 - rho * rho));
+  const auto G = [&](double y, double phi_y) {
+    return -phi_y * pnorm_std((rho * y - gamma) / sqrt_one_minus_rho2, true, false) +
+      rho * phi_gamma * pnorm_std((y - rho * gamma) / sqrt_one_minus_rho2, true, false);
+  };
+
+  const double p_rect =
+    std::fmax(0.0, pnorm_std(a_hi, true, false) - pnorm_std(a_lo, true, false) -
+      (norm_cdf_2d_stable(a_hi, gamma, rho) - norm_cdf_2d_stable(a_lo, gamma, rho)));
+  const double m_rect = G(a_hi, phi_hi) - G(a_lo, phi_lo);
+
+  double dens = (mx * p_rect + sD * m_rect) / (A * z_plus * t_adj);
+  dens = std::fmax(0.0, dens);
+
+  if (!emc2_isfinite(dens) || dens <= 0.0) {
+    return log_out ? R_NegInf : 0.0;
+  }
+  return log_out ? std::log(dens) : dens;
+}
+
+inline double prdmswtn_joint_A_sv_cdf_postrunc(
+    double t, double mu, double b, double A,
+    double s, double t0, double sv,
+    int n_gauss_nodes, bool log_out
+) {
+  const double dt = t - t0;
+  if (dt <= 1e-10) return log_out ? R_NegInf : 0.0;
+  if (A <= 1e-10) {
+    return positive_trunc_swtn_cdf_k0(t, mu, b, s, t0, sv, log_out);
+  }
+
+  const int n_nodes = std::max(1, n_gauss_nodes);
+  Rcpp::List gl = get_gl_nodes_weights(n_nodes);
+  const Rcpp::NumericVector nodes = gl["nodes"];
+  const Rcpp::NumericVector weights = gl["weights"];
+
+  const double center = b - 0.5 * A;
+  const double half_width = 0.5 * A;
+  double acc = 0.0;
+  for (int j = 0; j < n_nodes; ++j) {
+    const double thresh_j = center + half_width * nodes[j];
+    acc += weights[j] *
+      positive_trunc_swtn_cdf_k0(t, mu, thresh_j, s, t0, sv, false);
+  }
+
+  const double cdf = std::fmax(0.0, std::fmin(1.0, 0.5 * acc));
+  if (!(cdf > 0.0)) return log_out ? R_NegInf : 0.0;
+  return log_out ? std::log(cdf) : cdf;
+}
+
 inline double drdmswtn_positive_drift_quad(double t, double mu_drift, double b, double A,
                                            double s, double t0, double sv,
                                            double lambda_g, double lambda_k,
-                                           int n_gauss_nodes, bool log_out,
-                                           int kill_shape, bool guess) {
+                                           bool log_out, int kill_shape, bool guess) {
   if (A < 1e-7) {
     return dswtn_positive_drift_quad(t, mu_drift, b, s, t0, sv,
-                                     lambda_g, lambda_k, log_out, kill_shape,
-                                     guess, n_gauss_nodes);
+                                     lambda_g, lambda_k, log_out, kill_shape, guess);
   }
 
   const auto kernel = [&](double drift) {
@@ -1354,7 +1445,7 @@ inline double drdmswtn_positive_drift_quad(double t, double mu_drift, double b, 
                  lambda_g, lambda_k,
                  false, kill_shape, guess, false);
   };
-  const double out = integrate_positive_drift_gl(mu_drift, sv, n_gauss_nodes, kernel);
+  const double out = integrate_positive_drift_quad(mu_drift, sv, kernel);
   if (!(out > 0.0) || !emc2_isfinite(out)) return log_out ? R_NegInf : 0.0;
   return log_out ? std::log(out) : out;
 }
@@ -1362,12 +1453,10 @@ inline double drdmswtn_positive_drift_quad(double t, double mu_drift, double b, 
 inline double prdmswtn_positive_drift_quad(double t, double mu_drift, double b, double A,
                                            double s, double t0, double sv,
                                            double lambda_g, double lambda_k,
-                                           int n_gauss_nodes, bool log_out,
-                                           int kill_shape, bool guess) {
+                                           bool log_out, int kill_shape, bool guess) {
   if (A < 1e-7) {
     return pswtn_positive_drift_quad(t, mu_drift, b, s, t0, sv,
-                                     lambda_g, lambda_k, log_out, kill_shape,
-                                     guess, n_gauss_nodes);
+                                     lambda_g, lambda_k, log_out, kill_shape, guess);
   }
 
   const auto kernel = [&](double drift) {
@@ -1377,7 +1466,7 @@ inline double prdmswtn_positive_drift_quad(double t, double mu_drift, double b, 
                  lambda_g, lambda_k,
                  false, kill_shape, guess, false);
   };
-  double out = integrate_positive_drift_gl(mu_drift, sv, n_gauss_nodes, kernel);
+  double out = integrate_positive_drift_quad(mu_drift, sv, kernel);
   out = std::fmax(0.0, std::fmin(1.0, out));
   if (!(out > 0.0)) return log_out ? R_NegInf : 0.0;
   return log_out ? std::log(out) : out;
@@ -1425,6 +1514,101 @@ inline double integrate_density_gl20_infinite(double rate_scale, DensityFn&& den
     acc += weights[j] * density_fn(t) * jac;
   }
   return 0.5 * acc;
+}
+
+template <typename DensityFn>
+inline double integrate_density_adaptive_finite(double t_upper, DensityFn&& density_fn) {
+  if (!(t_upper > 0.0)) return 0.0;
+
+  using Fn = std::decay_t<DensityFn>;
+  Fn fn = std::forward<DensityFn>(density_fn);
+  struct Adapter {
+    const Fn* fn;
+  } adapter{&fn};
+
+  gsl_function F;
+  F.function = +[](double x, void* p) -> double {
+    const auto* adapter_ptr = static_cast<const Adapter*>(p);
+    return (*(adapter_ptr->fn))(x);
+  };
+  F.params = &adapter;
+
+  GslIntegrationControls ctl = default_gsl_controls();
+  ctl.try_qng_first_finite = true;
+  ctl.qag_key = GSL_INTEG_GAUSS21;
+  ctl.rel_tol = 1e-6;
+
+  static thread_local GslWorkspacePtr ws(nullptr, &gsl_integration_workspace_free);
+  gsl_integration_workspace* workspace = ensure_gsl_workspace(ws, ctl.retry_limit);
+
+  double result = 0.0;
+  double err = 0.0;
+  int status = GSL_EFAILED;
+  gsl_error_handler_t* old_handler = gsl_set_error_handler_off();
+
+  size_t neval = 0;
+  status = gsl_integration_qng(&F, 0.0, t_upper, ctl.abs_tol, ctl.rel_tol,
+                               &result, &err, &neval);
+  if (status != GSL_SUCCESS || !emc2_isfinite(result)) {
+    status = gsl_integration_qag(&F, 0.0, t_upper,
+                                 ctl.abs_tol, ctl.rel_tol,
+                                 ctl.limit, ctl.qag_key,
+                                 workspace, &result, &err);
+  }
+  if (status != GSL_SUCCESS || !emc2_isfinite(result)) {
+    status = gsl_integration_qags(&F, 0.0, t_upper,
+                                  ctl.retry_abs_tol, ctl.retry_rel_tol,
+                                  ctl.retry_limit, workspace, &result, &err);
+  }
+
+  gsl_set_error_handler(old_handler);
+  if (status != GSL_SUCCESS || !emc2_isfinite(result) || result < 0.0) {
+    return integrate_density_gl20_finite(t_upper, fn);
+  }
+  return result;
+}
+
+template <typename DensityFn>
+inline double integrate_density_adaptive_infinite(double rate_scale, DensityFn&& density_fn) {
+  using Fn = std::decay_t<DensityFn>;
+  Fn fn = std::forward<DensityFn>(density_fn);
+  struct Adapter {
+    const Fn* fn;
+  } adapter{&fn};
+
+  gsl_function F;
+  F.function = +[](double x, void* p) -> double {
+    const auto* adapter_ptr = static_cast<const Adapter*>(p);
+    return (*(adapter_ptr->fn))(x);
+  };
+  F.params = &adapter;
+
+  GslIntegrationControls ctl = default_gsl_controls();
+  ctl.rel_tol = 1e-6;
+  if (rate_scale > 1e-8 && emc2_isfinite(rate_scale)) {
+    ctl.abs_tol = std::min(ctl.abs_tol, 1e-10 / rate_scale);
+  }
+
+  static thread_local GslWorkspacePtr ws(nullptr, &gsl_integration_workspace_free);
+  gsl_integration_workspace* workspace = ensure_gsl_workspace(ws, ctl.retry_limit);
+
+  double result = 0.0;
+  double err = 0.0;
+  int status = GSL_EFAILED;
+  gsl_error_handler_t* old_handler = gsl_set_error_handler_off();
+
+  status = gsl_integration_qagiu(&F, 0.0, ctl.abs_tol, ctl.rel_tol,
+                                 ctl.limit, workspace, &result, &err);
+  if (status != GSL_SUCCESS || !emc2_isfinite(result)) {
+    status = gsl_integration_qagiu(&F, 0.0, ctl.retry_abs_tol, ctl.retry_rel_tol,
+                                   ctl.retry_limit, workspace, &result, &err);
+  }
+
+  gsl_set_error_handler(old_handler);
+  if (status != GSL_SUCCESS || !emc2_isfinite(result) || result < 0.0) {
+    return integrate_density_gl20_infinite(rate_scale, fn);
+  }
+  return result;
 }
 
 inline double local_combo_response_pdf(double t, double f_decision, double F_decision,
@@ -1890,8 +2074,8 @@ inline double prdmswtn_local_combo(double t, double mu_drift, double b, double A
                                 lambda_g, lambda_k, n_gauss_nodes, false, kill_shape, posdrift);
   };
   double out = emc2_isfinite(t)
-    ? integrate_density_gl20_finite(t, density_fn)
-    : integrate_density_gl20_infinite(rate_scale, density_fn);
+    ? integrate_density_adaptive_finite(t, density_fn)
+    : integrate_density_adaptive_infinite(rate_scale, density_fn);
   out = std::fmax(0.0, std::fmin(1.0, out));
   return log_out ? ((out > 0.0) ? std::log(out) : R_NegInf) : out;
 }
@@ -1951,8 +2135,8 @@ inline double pgbm_local_combo(double t, double mu, double b, double A,
     return dgbm_local_combo(u, mu, b, A, sigma, t0, lambda_g, lambda_k, false, kill_shape);
   };
   double out = emc2_isfinite(t)
-    ? integrate_density_gl20_finite(t, density_fn)
-    : integrate_density_gl20_infinite(rate_scale, density_fn);
+    ? integrate_density_adaptive_finite(t, density_fn)
+    : integrate_density_adaptive_infinite(rate_scale, density_fn);
   out = std::fmax(0.0, std::fmin(1.0, out));
   return log_out ? ((out > 0.0) ? std::log(out) : R_NegInf) : out;
 }
@@ -2191,8 +2375,7 @@ double pswtn(double t, double mu_drift, double threshold, double s = 1.0,
   if (guess && lambda > 0.0) {
     if (sv > 1e-10 && posdrift) {
       return pswtn_positive_drift_quad(t, mu_drift, threshold, s, t0, sv,
-                                       lambda_g, lambda_k, log_out, kill_shape,
-                                       true, 20);
+                                       lambda_g, lambda_k, log_out, kill_shape, true);
     }
     auto finish = [&](double log_p) {
       if (ISNAN(log_p)) return NA_REAL;
@@ -2205,6 +2388,11 @@ double pswtn(double t, double mu_drift, double threshold, double s = 1.0,
     return finish(std::log1p(-std::exp(log_sr + log_sk)));
   }
 
+  if (!guess && lambda > 1e-10 && !emc2_isfinite(dt)) {
+    return pswtn_killed_inf_quad(threshold, mu_drift, sv, s, lambda,
+                                 20, log_out, kill_shape, posdrift);
+  }
+
   if (sv <= 1e-10) {
     // Pass raw time and t0 to pwald so erlang uses physical time.
     return pwald(t_raw, mu_drift, threshold, 0.0, s, t0, lambda, lambda,
@@ -2213,8 +2401,7 @@ double pswtn(double t, double mu_drift, double threshold, double s = 1.0,
 
   if (posdrift) {
     return pswtn_positive_drift_quad(t, mu_drift, threshold, s, t0, sv,
-                                     lambda_g, lambda_k, log_out, kill_shape,
-                                     false, 20);
+                                     lambda_g, lambda_k, log_out, kill_shape, false);
   }
 
   if (lambda > 1e-10) {
@@ -2294,11 +2481,26 @@ double drdmswtn(double t, double mu_drift, double b, double A,
     // sv=0: standard Wald under the caller's posdrift semantics.
     return dwald(t, mu_drift, b, A, s, t0, lambda_g, lambda_k,
                  log_out, kill_shape, guess, posdrift, erlang_omega);
+  } else if (posdrift && !guess && kill_shape <= 1 && lambda > 1e-10) {
+    const double log_sk = erlang_log_surv(t, lambda, kill_shape);
+    double log_pdf0;
+    if (no_A) {
+      log_pdf0 = positive_trunc_swtn_density_k0(t, mu_drift, b, s, t0, sv, true);
+    } else {
+      log_pdf0 = drdmswtn_joint_A_sv_density_postrunc(t_eam, mu_drift, b, A, s, sv, true);
+    }
+    if (!R_FINITE(log_pdf0) || !R_FINITE(log_sk)) return log_out ? R_NegInf : 0.0;
+    const double log_pdf = log_pdf0 + log_sk;
+    return log_out ? log_pdf : std::exp(log_pdf);
+  } else if (posdrift && !guess && lambda <= 1e-10) {
+    if (no_A) {
+      return positive_trunc_swtn_density_k0(t, mu_drift, b, s, t0, sv, log_out);
+    }
+    return drdmswtn_joint_A_sv_density_postrunc(t_eam, mu_drift, b, A, s, sv, log_out);
   } else if (posdrift) {
     return drdmswtn_positive_drift_quad(t, mu_drift, b, A, s, t0, sv,
                                         lambda_g, lambda_k,
-                                        n_gauss_nodes, log_out,
-                                        kill_shape, guess);
+                                        log_out, kill_shape, guess);
   } else if (no_A && !no_sv) {
     // SWTN with fixed threshold b (dswtn handles t_eam <= 0 via its t0 param).
     return dswtn(t, mu_drift, b, s, t0, sv,
@@ -2353,11 +2555,20 @@ double prdmswtn(double t, double mu_drift, double b, double A,
   if (posdrift && no_sv && mu_drift <= 0.0)
     return log_out ? R_NegInf : 0.0;
 
+  if (posdrift && !guess && lambda <= 1e-10 && !no_sv) {
+    return prdmswtn_joint_A_sv_cdf_postrunc(t, mu_drift, b, A, s, t0, sv,
+                                            n_gauss_nodes, log_out);
+  }
+
+  if (!guess && lambda > 1e-10 && !emc2_isfinite(t_eam) && !no_sv) {
+    return prdmswtn_killed_inf_quad(b, mu_drift, A, sv, s, lambda,
+                                    n_gauss_nodes, log_out, kill_shape, posdrift);
+  }
+
   if (posdrift && !no_sv) {
     return prdmswtn_positive_drift_quad(t, mu_drift, b, A, s, t0, sv,
                                         lambda_g, lambda_k,
-                                        n_gauss_nodes, log_out,
-                                        kill_shape, guess);
+                                        log_out, kill_shape, guess);
   }
 
   if (guess && lambda > 0.0) {
@@ -2385,11 +2596,6 @@ double prdmswtn(double t, double mu_drift, double b, double A,
     // Pass raw t and t0 to pwald so erlang inside uses physical time.
     return pwald(t, mu_drift, b, A, s, t0, lambda, lambda,
                  log_out, kill_shape, guess, posdrift);
-  }
-
-  if (!emc2_isfinite(t_eam) && lambda > 1e-10) {
-    return prdmswtn_killed_inf_quad(b, mu_drift, A, sv, s, lambda,
-                                    n_gauss_nodes, log_out, kill_shape, false);
   }
 
   if (!emc2_isfinite(t_eam) && lambda <= 1e-10) {

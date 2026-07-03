@@ -42,6 +42,36 @@ test_that("auto covariate detection ignores unused numeric columns", {
   expect_false("UNUSED_NUM" %in% des$Fcovariates)
 })
 
+test_that("auto factor detection keeps factor inputs used by functions", {
+  dat <- data.frame(
+    subjects = factor(c(1, 1, 1, 1)),
+    WB = factor(c("White", "White", "Black", "Black"),
+                levels = c("White", "Black")),
+    NG = factor(c("NoGun", "Gun", "NoGun", "Gun"),
+                levels = c("NoGun", "Gun")),
+    R = factor(c("NoGun", "Gun", "NoGun", "Gun"),
+               levels = c("NoGun", "Gun")),
+    rt = c(0.5, 0.6, 0.55, 0.65)
+  )
+
+  des <- design(
+    data = dat,
+    model = RDM,
+    matchfun = function(d) d$lR == d$NG,
+    functions = list(
+      black_gun = function(d) ifelse((d$WB == "Black") & (d$NG == "Gun"), 1, 0),
+      other = function(d) ifelse((d$WB == "Black") & (d$NG == "Gun"), 0, 1),
+      match = function(d) ifelse(d$lM == TRUE, .5, -.5)
+    ),
+    contrasts = list(lM = matrix(c(-.5, .5), ncol = 1, dimnames = list(NULL, "diff"))),
+    formula = list(v ~ match:other + match:black_gun, t0 ~ 1, B ~ lR, s ~ lM, A ~ 1),
+    constants = c(s = log(1), A = log(0)),
+    report_p_vector = FALSE
+  )
+
+  expect_true(all(c("WB", "NG") %in% names(des$Ffactors)))
+})
+
 test_that("pre_transform_terms applies selected race-model contrasts on the natural scale", {
   dat <- data.frame(
     subjects = factor(c(1, 1, 1, 1)),
@@ -275,4 +305,3 @@ test_that("prior map=TRUE path respects pre_transform_terms in mapped values", {
   expect_equal(mean(mapped$v_Ehard_lMFALSE), 4 - 0.25, tolerance = 1e-3)
   expect_equal(mean(mapped$v_Ehard_lMTRUE), 4 + 0.25, tolerance = 1e-3)
 })
-

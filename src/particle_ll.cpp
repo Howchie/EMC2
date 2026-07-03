@@ -1184,16 +1184,24 @@ double c_log_likelihood_DDM_pt(const double* pars_cm,
       // Only call p_DDM at UT when some trial has finite UT — avoids p_DDM(Inf,...) calls
       // which trigger expensive/degenerate Wiener evaluations at t=Inf.
       if (any_LT) {
+        std::vector<int> LT_mask(n_trials, 0);
+        for (int i = 0; i < n_trials; ++i) {
+          if (is_ok[i] && LT[i] > 0.0) LT_mask[i] = 1;
+        }
         p_DDM_Wien_raw(shared->LT_vec.begin(), R1_ptr, pars_cm, n_trials, (int)p_idx.size(),
-                       ones_ptr, is_ok, shared->logF_LT_1.data(), R_NegInf, p_idx);
+                       LT_mask.data(), is_ok, shared->logF_LT_1.data(), R_NegInf, p_idx);
         p_DDM_Wien_raw(shared->LT_vec.begin(), R2_ptr, pars_cm, n_trials, (int)p_idx.size(),
-                       ones_ptr, is_ok, shared->logF_LT_2.data(), R_NegInf, p_idx);
+                       LT_mask.data(), is_ok, shared->logF_LT_2.data(), R_NegInf, p_idx);
       }
       if (any_UT_finite) {
+        std::vector<int> UT_mask(n_trials, 0);
+        for (int i = 0; i < n_trials; ++i) {
+          if (is_ok[i] && R_FINITE(UT[i])) UT_mask[i] = 1;
+        }
         p_DDM_Wien_raw(shared->UT_vec.begin(), R1_ptr, pars_cm, n_trials, (int)p_idx.size(),
-                       ones_ptr, is_ok, shared->logF_UT_1.data(), R_NegInf, p_idx);
+                       UT_mask.data(), is_ok, shared->logF_UT_1.data(), R_NegInf, p_idx);
         p_DDM_Wien_raw(shared->UT_vec.begin(), R2_ptr, pars_cm, n_trials, (int)p_idx.size(),
-                       ones_ptr, is_ok, shared->logF_UT_2.data(), R_NegInf, p_idx);
+                       UT_mask.data(), is_ok, shared->logF_UT_2.data(), R_NegInf, p_idx);
       }
 
       for (int i = 0; i < n_trials; ++i) {
@@ -1297,14 +1305,20 @@ double c_log_likelihood_DDM_pt(const double* pars_cm,
         lF_UC_1  = lF_UC_1_fb.begin();
         lF_UC_2  = lF_UC_2_fb.begin();
       }
+      
+      std::vector<int> nonfinite_mask(n_trials, 0);
+      for (int i = 0; i < n_trials; ++i) {
+        if (!shared->finite_mask_int[i] && is_ok[i]) nonfinite_mask[i] = 1;
+      }
+      
       p_DDM_Wien_raw(shared->LC_vec.begin(), R1_ptr, pars_cm, n_trials, (int)p_idx.size(),
-                     ones_ptr, is_ok, lF_LC_1, R_NegInf, p_idx);
+                     nonfinite_mask.data(), is_ok, lF_LC_1, R_NegInf, p_idx);
       p_DDM_Wien_raw(shared->LC_vec.begin(), R2_ptr, pars_cm, n_trials, (int)p_idx.size(),
-                     ones_ptr, is_ok, lF_LC_2, R_NegInf, p_idx);
+                     nonfinite_mask.data(), is_ok, lF_LC_2, R_NegInf, p_idx);
       p_DDM_Wien_raw(shared->UC_vec.begin(), R1_ptr, pars_cm, n_trials, (int)p_idx.size(),
-                     ones_ptr, is_ok, lF_UC_1, R_NegInf, p_idx);
+                     nonfinite_mask.data(), is_ok, lF_UC_1, R_NegInf, p_idx);
       p_DDM_Wien_raw(shared->UC_vec.begin(), R2_ptr, pars_cm, n_trials, (int)p_idx.size(),
-                     ones_ptr, is_ok, lF_UC_2, R_NegInf, p_idx);
+                     nonfinite_mask.data(), is_ok, lF_UC_2, R_NegInf, p_idx);
 
       for (int i = 0; i < n_trials; ++i) {
         if (!is_ok[i] || shared->finite_mask_int[i]) continue;
@@ -2844,7 +2858,15 @@ double get_trunc_normaliser_rowmajor_cpp(const double* pars_rowmajor,
     logS_LT = log_survivor_rowmajor(LT, pars_rowmajor, isok_int, n_lR, n_par, cdf1, model_specific_context);
     if (!R_FINITE(logS_LT)) return R_NegInf;
   }
-  if (UT == R_PosInf) return logS_LT;
+  if (UT == R_PosInf) {
+    auto* race_ctx = static_cast<ContextForRaceModels*>(model_specific_context);
+    if (race_ctx && race_ctx->defective_upper_tail) {
+      const double logS_UT = log_survivor_rowmajor(UT, pars_rowmajor, isok_int, n_lR, n_par,
+                                                   cdf1, model_specific_context);
+      return log_diff_exp(logS_LT, logS_UT);
+    }
+    return logS_LT;
+  }
   
   const double logS_UT = log_survivor_rowmajor(UT, pars_rowmajor, isok_int, n_lR, n_par, cdf1, model_specific_context);
   double logP = log_diff_exp(logS_LT, logS_UT);

@@ -260,78 +260,6 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
-// dkilledlba_norm
-double dkilledlba_norm(double t, double A, double b, double v, double sv, double k, bool posdrift, bool log_out);
-RcppExport SEXP _EMC2_dkilledlba_norm(SEXP tSEXP, SEXP ASEXP, SEXP bSEXP, SEXP vSEXP, SEXP svSEXP, SEXP kSEXP, SEXP posdriftSEXP, SEXP log_outSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< double >::type t(tSEXP);
-    Rcpp::traits::input_parameter< double >::type A(ASEXP);
-    Rcpp::traits::input_parameter< double >::type b(bSEXP);
-    Rcpp::traits::input_parameter< double >::type v(vSEXP);
-    Rcpp::traits::input_parameter< double >::type sv(svSEXP);
-    Rcpp::traits::input_parameter< double >::type k(kSEXP);
-    Rcpp::traits::input_parameter< bool >::type posdrift(posdriftSEXP);
-    Rcpp::traits::input_parameter< bool >::type log_out(log_outSEXP);
-    rcpp_result_gen = Rcpp::wrap(dkilledlba_norm(t, A, b, v, sv, k, posdrift, log_out));
-    return rcpp_result_gen;
-END_RCPP
-}
-// pkilledlba_norm
-double pkilledlba_norm(double t, double A, double b, double v, double sv, double k, bool posdrift, bool log_out);
-RcppExport SEXP _EMC2_pkilledlba_norm(SEXP tSEXP, SEXP ASEXP, SEXP bSEXP, SEXP vSEXP, SEXP svSEXP, SEXP kSEXP, SEXP posdriftSEXP, SEXP log_outSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< double >::type t(tSEXP);
-    Rcpp::traits::input_parameter< double >::type A(ASEXP);
-    Rcpp::traits::input_parameter< double >::type b(bSEXP);
-    Rcpp::traits::input_parameter< double >::type v(vSEXP);
-    Rcpp::traits::input_parameter< double >::type sv(svSEXP);
-    Rcpp::traits::input_parameter< double >::type k(kSEXP);
-    Rcpp::traits::input_parameter< bool >::type posdrift(posdriftSEXP);
-    Rcpp::traits::input_parameter< bool >::type log_out(log_outSEXP);
-    rcpp_result_gen = Rcpp::wrap(pkilledlba_norm(t, A, b, v, sv, k, posdrift, log_out));
-    return rcpp_result_gen;
-END_RCPP
-}
-// dkilledlba
-NumericVector dkilledlba(NumericVector t, NumericVector A, NumericVector b, NumericVector v, NumericVector sv, NumericVector k, bool posdrift, bool log_out);
-RcppExport SEXP _EMC2_dkilledlba(SEXP tSEXP, SEXP ASEXP, SEXP bSEXP, SEXP vSEXP, SEXP svSEXP, SEXP kSEXP, SEXP posdriftSEXP, SEXP log_outSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< NumericVector >::type t(tSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type A(ASEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type b(bSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type v(vSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type sv(svSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type k(kSEXP);
-    Rcpp::traits::input_parameter< bool >::type posdrift(posdriftSEXP);
-    Rcpp::traits::input_parameter< bool >::type log_out(log_outSEXP);
-    rcpp_result_gen = Rcpp::wrap(dkilledlba(t, A, b, v, sv, k, posdrift, log_out));
-    return rcpp_result_gen;
-END_RCPP
-}
-// pkilledlba
-NumericVector pkilledlba(NumericVector t, NumericVector A, NumericVector b, NumericVector v, NumericVector sv, NumericVector k, bool posdrift, bool log_out);
-RcppExport SEXP _EMC2_pkilledlba(SEXP tSEXP, SEXP ASEXP, SEXP bSEXP, SEXP vSEXP, SEXP svSEXP, SEXP kSEXP, SEXP posdriftSEXP, SEXP log_outSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< NumericVector >::type t(tSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type A(ASEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type b(bSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type v(vSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type sv(svSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type k(kSEXP);
-    Rcpp::traits::input_parameter< bool >::type posdrift(posdriftSEXP);
-    Rcpp::traits::input_parameter< bool >::type log_out(log_outSEXP);
-    rcpp_result_gen = Rcpp::wrap(pkilledlba(t, A, b, v, sv, k, posdrift, log_out));
-    return rcpp_result_gen;
-END_RCPP
-}
 // pwald
 double pwald(double t, double mu, double b, double A, double sigma, double t0, double lambda_g, double lambda_k, bool log_out, int kill_shape, bool guess, bool posdrift, double erlang_omega);
 RcppExport SEXP _EMC2_pwald(SEXP tSEXP, SEXP muSEXP, SEXP bSEXP, SEXP ASEXP, SEXP sigmaSEXP, SEXP t0SEXP, SEXP lambda_gSEXP, SEXP lambda_kSEXP, SEXP log_outSEXP, SEXP kill_shapeSEXP, SEXP guessSEXP, SEXP posdriftSEXP, SEXP erlang_omegaSEXP) {
@@ -1453,10 +1381,6 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_pkilledleakyba", (DL_FUNC) &_EMC2_pkilledleakyba, 14},
     {"_EMC2_dleakyba", (DL_FUNC) &_EMC2_dleakyba, 7},
     {"_EMC2_pleakyba", (DL_FUNC) &_EMC2_pleakyba, 7},
-    {"_EMC2_dkilledlba_norm", (DL_FUNC) &_EMC2_dkilledlba_norm, 8},
-    {"_EMC2_pkilledlba_norm", (DL_FUNC) &_EMC2_pkilledlba_norm, 8},
-    {"_EMC2_dkilledlba", (DL_FUNC) &_EMC2_dkilledlba, 8},
-    {"_EMC2_pkilledlba", (DL_FUNC) &_EMC2_pkilledlba, 8},
     {"_EMC2_pwald", (DL_FUNC) &_EMC2_pwald, 13},
     {"_EMC2_dwald", (DL_FUNC) &_EMC2_dwald, 13},
     {"_EMC2_dWald", (DL_FUNC) &_EMC2_dWald, 6},

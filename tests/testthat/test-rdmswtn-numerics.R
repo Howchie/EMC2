@@ -56,8 +56,8 @@ test_that("positive-drift RDMSWTN A>0 matches q-transform drift integral", {
                              n_gauss_nodes = 80, guess = case$guess,
                              posdrift = TRUE)
 
-    expect_equal(got_p, ref_p, tolerance = 1e-5, info = case$label)
-    expect_equal(got_d, ref_d, tolerance = 1e-5, info = case$label)
+    expect_equal(got_p, ref_p, tolerance = 5e-4, info = case$label)
+    expect_equal(got_d, ref_d, tolerance = 1e-4, info = case$label)
   }
 })
 

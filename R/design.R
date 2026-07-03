@@ -149,6 +149,13 @@ design <- function(formula = NULL,factors = NULL,Rlevels = NULL,model,data=NULL,
     # Identify variables needed from matchfun
     match_vars <- if (!is.null(matchfun)) all.vars(body(matchfun)) else NULL
     
+    # Identify variables needed from user-defined factor functions
+    function_vars <- if (!is.null(functions)) {
+      unique(unlist(lapply(functions, function(fun) {
+        setdiff(all.vars(body(fun)), names(formals(fun)))
+      })))
+    } else NULL
+
     # Identify variables needed from trends
     trend_vars <- if (!is.null(trend)) {
       unique(c(
@@ -157,8 +164,8 @@ design <- function(formula = NULL,factors = NULL,Rlevels = NULL,model,data=NULL,
       ))
     } else NULL
 
-    # Required factors: used in formula, matchfun, or trend, plus 'subjects'
-    needed_factors <- unique(c(all_preds, match_vars, trend_vars, "subjects"))
+    # Required factors: used in formula, matchfun, functions, or trend, plus 'subjects'
+    needed_factors <- unique(c(all_preds, match_vars, function_vars, trend_vars, "subjects"))
     factors <- factors[names(factors) %in% needed_factors]
 
     if (length(nfacs)>0){

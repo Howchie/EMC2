@@ -13,8 +13,8 @@ designRDMSWTN <- design(
   factors=list(subjects=1,S=c("left","right")),
   Rlevels=c("left","right"),
   matchfun=matchfun,
-  model=RDMSWTN,constants=c(s=log(1),sv=log(0)),
-  formula=list(v~lM,B~1,t0~1,A~1)
+  model=RDMSWTN,constants=c(s=log(1),A=log(0)),
+  formula=list(v~lM,B~1,t0~1,s~1,sv~1,A~1)
 )
 designRDMGBM <- design(
   factors=list(subjects=1,S=c("left","right")),

@@ -6,6 +6,9 @@
 #include "wald_functions.h"  // pnorm_std() — fast normal CDF under USE_FAST_PNORM
 #include "composite_functions.h"  // clamp_pos, safe_log
 #include "gaussian.h"
+#include "gsl_utils.h"
+#include <gsl/gsl_integration.h>
+#include <gsl/gsl_errno.h>
 
 using namespace Rcpp;
 
@@ -313,38 +316,32 @@ inline double integrate_bawl_pdf_raw(double t, double v, double b, double A,
                                      double sv, double t0, double k,
                                      double lambda_g, double lambda_k,
                                      bool posdrift, int kill_shape, bool guess, double erlang_omega = 1.0) {
-  const Rcpp::List& gl = (t == R_PosInf) ? get_gl20() : get_gl61();
-  const Rcpp::NumericVector nodes = gl["nodes"];
-  const Rcpp::NumericVector weights = gl["weights"];
-  double acc = 0.0;
-
-  if (t == R_PosInf) {
-    // Clocked defective mass over [0, Inf).  Scale the transform by the
-    // active Erlang rates because the clock survival terms set the tail scale.
-    const double rate = std::max(1e-8, (guess ? lambda_g : 0.0) + lambda_k);
-    for (int j = 0; j < nodes.size(); ++j) {
-      const double q = std::min(1.0 - 1e-12, std::max(1e-15, 0.5 * (nodes[j] + 1.0)));
-      const double u = -std::log1p(-q) / rate;
-      const double jac = 1.0 / (rate * (1.0 - q));
-      acc += weights[j] * dkilledleakyba_norm(
-        u, v, b, A, sv, t0, k, lambda_g, lambda_k, posdrift, false, kill_shape, guess, erlang_omega
-      ) * jac;
-    }
-    double out = 0.5 * acc;
-    return std::max(0.0, std::min(1.0, out));
-  }
-
   const double lower = guess ? 0.0 : t0;
-  if (t <= lower) return 0.0;
-  const double width = t - lower;
-  for (int j = 0; j < nodes.size(); ++j) {
-    const double u = lower + 0.5 * width * (nodes[j] + 1.0);
-    acc += weights[j] * dkilledleakyba_norm(
-      u, v, b, A, sv, t0, k, lambda_g, lambda_k, posdrift, false, kill_shape, guess, erlang_omega
-    );
+  if (t != R_PosInf && t <= lower) return 0.0;
+
+  std::function<double(double)> fn = [&](double u) -> double {
+    return dkilledleakyba_norm(u, v, b, A, sv, t0, k, lambda_g, lambda_k,
+                               posdrift, false, kill_shape, guess, erlang_omega);
+  };
+  gsl_function F;
+  F.function = [](double u, void* p) -> double {
+    return (*static_cast<std::function<double(double)>*>(p))(u);
+  };
+  F.params = &fn;
+
+  static thread_local GslWorkspacePtr ws(nullptr, &gsl_integration_workspace_free);
+  gsl_integration_workspace* w = ensure_gsl_workspace(ws);
+  double result = 0.0, err = 0.0;
+  gsl_error_handler_t* old = gsl_set_error_handler_off();
+  int status;
+  if (t == R_PosInf) {
+    status = gsl_integration_qagiu(&F, lower, 1e-8, 1e-5, 200, w, &result, &err);
+  } else {
+    status = gsl_integration_qags(&F, lower, t, 1e-8, 1e-5, 200, w, &result, &err);
   }
-  double out = 0.5 * width * acc;
-  return std::max(0.0, std::min(1.0, out));
+  gsl_set_error_handler(old);
+  if (status != GSL_SUCCESS || !R_FINITE(result)) return 0.0;
+  return std::max(0.0, std::min(1.0, result));
 }
 
 // Killed-leaky BA sub-CDF:
@@ -372,17 +369,21 @@ inline double pkilledleakyba_norm(double t, double v, double b, double A,
     }
     // Before EAM onset, the only observed response is a guess before the kill clock:
     // integral_0^t f_G(u) S_K(u) du.  Kill wins are omissions, not CDF mass.
-    const Rcpp::List& gl = get_gl20();
-    const Rcpp::NumericVector nodes = gl["nodes"];
-    const Rcpp::NumericVector weights = gl["weights"];
-    double acc = 0.0;
-    for (int j = 0; j < nodes.size(); ++j) {
-      const double u = 0.5 * t * (nodes[j] + 1.0);
-      const double log_fG = erlang_log_pdf(u, lambda_g, kill_shape, erlang_omega);
-      const double log_sK = erlang_log_surv(u, lambda_k, kill_shape, erlang_omega);
-      acc += weights[j] * std::exp(log_fG + log_sK);
-    }
-    double out = 0.5 * t * acc;
+    std::function<double(double)> fn = [&](double u) -> double {
+      return std::exp(erlang_log_pdf(u, lambda_g, kill_shape, erlang_omega) +
+                      erlang_log_surv(u, lambda_k, kill_shape, erlang_omega));
+    };
+    gsl_function F;
+    F.function = [](double u, void* p) -> double {
+      return (*static_cast<std::function<double(double)>*>(p))(u);
+    };
+    F.params = &fn;
+    static thread_local GslWorkspacePtr ws_pre_eam(nullptr, &gsl_integration_workspace_free);
+    gsl_integration_workspace* w = ensure_gsl_workspace(ws_pre_eam);
+    double out = 0.0, err = 0.0;
+    gsl_error_handler_t* old = gsl_set_error_handler_off();
+    gsl_integration_qags(&F, 0.0, t, 1e-8, 1e-5, 200, w, &out, &err);
+    gsl_set_error_handler(old);
     out = std::max(0.0, std::min(1.0, out));
     return log_out ? safe_log(out) : out;
   }
@@ -489,110 +490,6 @@ NumericVector pleakyba(NumericVector t,
   };
   for (int i = 0; i < n; i++)
     cdf[i] = pleakyba_norm(t[i], pick(A,i), pick(b,i), pick(v,i), pick(sv,i), pick(k,i), posdrift);
-  return cdf;
-}
-
-// --------------------------------------------------------------------------
-// Killed LBA: standard LBA hits truncated by an exponential expiry clock
-// T_kill ~ Exp(k).
-// --------------------------------------------------------------------------
-
-// PDF of killed LBA: f_k(t) = f_lba(t) * exp(-k*t)
-// [[Rcpp::export]]
-double dkilledlba_norm(double t, double A, double b, double v, double sv, double k,
-                       bool posdrift = true, bool log_out = false) {
-  if (t <= 0.0) return log_out ? R_NegInf : 0.0;
-  if (k <= 0.0) return dlba_norm(t, A, b, v, sv, posdrift, log_out);
-
-  double log_pdf = dlba_norm(t, A, b, v, sv, posdrift, true) - k * t;
-  return log_out ? log_pdf : std::exp(log_pdf);
-}
-
-// Sub-CDF of killed LBA: P(T_lba < t AND T_lba < T_kill)
-// Uses 20-point Gauss-Legendre quadrature over the drift distribution.
-// [[Rcpp::export]]
-double pkilledlba_norm(double t, double A, double b, double v, double sv, double k,
-                       bool posdrift = true, bool log_out = false) {
-  if (t <= 0.0) return log_out ? R_NegInf : 0.0;
-  if (k <= 0.0) return plba_norm(t, A, b, v, sv, posdrift, log_out);
-
-  const double d0 = b - A;
-  const double eps = 1e-10;
-
-  auto get_subcdf_fixed_v = [&](double drift) {
-    if (drift <= 0.0) return 0.0;
-    double t_start = d0 / drift;
-    if (t <= t_start) return 0.0;
-    double t_end = b / drift;
-    double t_upper = std::min(t, t_end);
-    if (t_upper <= t_start) return 0.0;
-    // Integral_{t_start}^{t_upper} (drift/A) * exp(-k*tau) dtau
-    return (drift / (A * k)) * (std::exp(-k * t_start) - std::exp(-k * t_upper));
-  };
-
-  double cdf = 0.0;
-  if (sv < eps) {
-    cdf = get_subcdf_fixed_v(v);
-  } else {
-    // Integrate over drift distribution
-    const Rcpp::List& gl = get_gl20();
-    const Rcpp::NumericVector nodes = gl["nodes"];
-    const Rcpp::NumericVector weights = gl["weights"];
-    const int n_nodes = nodes.size();
-
-    double alpha = pnorm_std(-v / sv); // P(V < 0)
-
-    for (int j = 0; j < n_nodes; j++) {
-      double u = 0.5 * (nodes[j] + 1.0);
-      double p = alpha + (1.0 - alpha) * u;
-      // Clamp p for stability
-      p = std::max(1e-15, std::min(1.0 - 1e-15, p));
-      double drift_j = v + sv * R::qnorm(p, 0.0, 1.0, true, false);
-      cdf += weights[j] * get_subcdf_fixed_v(drift_j);
-    }
-    cdf *= 0.5;
-    if (!posdrift) {
-      cdf *= (1.0 - alpha);
-    }
-    // Note: if posdrift=true, we should NOT divide by (1-alpha) here because
-    // the integral itself is over the truncated density.
-    // Wait, if posdrift=true, g(r) = phi(r)/ (1-alpha).
-    // The integral over p from 0 to 1 gives the integral over the truncated density.
-    // Yes, 0.5 * sum(w * f(r)) integrates over the truncated space.
-  }
-
-  if (cdf < 0.0) cdf = 0.0;
-  if (cdf > 1.0) cdf = 1.0;
-  return log_out ? std::log(cdf) : cdf;
-}
-
-// [[Rcpp::export]]
-NumericVector dkilledlba(NumericVector t,
-                         NumericVector A, NumericVector b,
-                         NumericVector v, NumericVector sv, NumericVector k,
-                         bool posdrift = true, bool log_out = false) {
-  int n = t.size();
-  NumericVector pdf(n);
-  auto pick = [](const NumericVector& vec, int i) -> double {
-    return vec.size() == 1 ? vec[0] : vec[i];
-  };
-  for (int i = 0; i < n; i++)
-    pdf[i] = dkilledlba_norm(t[i], pick(A,i), pick(b,i), pick(v,i), pick(sv,i), pick(k,i), posdrift, log_out);
-  return pdf;
-}
-
-// [[Rcpp::export]]
-NumericVector pkilledlba(NumericVector t,
-                         NumericVector A, NumericVector b,
-                         NumericVector v, NumericVector sv, NumericVector k,
-                         bool posdrift = true, bool log_out = false) {
-  int n = t.size();
-  NumericVector cdf(n);
-  auto pick = [](const NumericVector& vec, int i) -> double {
-    return vec.size() == 1 ? vec[0] : vec[i];
-  };
-  for (int i = 0; i < n; i++)
-    cdf[i] = pkilledlba_norm(t[i], pick(A,i), pick(b,i), pick(v,i), pick(sv,i), pick(k,i), posdrift, log_out);
   return cdf;
 }
 
