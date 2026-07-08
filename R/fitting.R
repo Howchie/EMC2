@@ -978,7 +978,9 @@ auto_mclapply <- function(X, FUN, mc.cores, ...){
 #' @noRd
 strip_duplicates <- function(emc, incl_props = TRUE) {
   # Keep only samples in non-first entries
-  for (i in 2:length(emc)) {
+  # (seq_along(emc)[-1] is empty for length-1 emc; 2:length(emc) would wrongly
+  #  give c(2,1) and index a non-existent chain)
+  for (i in seq_along(emc)[-1]) {
     samples <- emc[[i]]$samples
     prop_var <- attr(emc[[i]], "prop_var")
     emc[[i]] <- list(samples = samples)
