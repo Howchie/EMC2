@@ -11,6 +11,7 @@
   stat = "min",
   stat_only = FALSE,
   digits = 1,
+  version = "old",
   ...
 )
 

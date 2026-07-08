@@ -12,6 +12,7 @@
   stat = "max",
   stat_only = FALSE,
   digits = 3,
+  version = "old",
   ...
 )
 

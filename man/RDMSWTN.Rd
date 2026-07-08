@@ -4,7 +4,12 @@
 \alias{RDMSWTN}
 \title{RDMSWTN Model}
 \usage{
-RDMSWTN()
+RDMSWTN(erlang_shape = 1L, erlang_type = "none", posdrift = TRUE)
+}
+\arguments{
+\item{erlang_shape}{integer shape of the killing process (1=exponential, 2=Erlang-2) or "mixed"}
+
+\item{erlang_type}{string, one of "none", "local_kill", "global_kill", "local_guess", "local_kill_guess"}
 }
 \value{
 a list of parameters
@@ -24,6 +29,8 @@ to the standard RDM.\tabular{lllll}{
    \emph{t0} \tab log \tab [0, Inf] \tab log(0) \tab Non-decision time \cr
    \emph{s} \tab log \tab [0, Inf] \tab log(1) \tab Within-trial SD of drift rate \cr
    \emph{sv} \tab log \tab [0, Inf] \tab log(0) \tab Between-trial SD of drift rate \cr
-   \emph{lambda} \tab log \tab [0, Inf] \tab log(0) \tab Exponential killing rate \cr
+   \emph{mG} \tab log \tab [0, Inf] \tab log(1) \tab Local guessing timer mean \cr
+   \emph{mK} \tab log \tab [0, Inf] \tab log(1) \tab Local killing timer mean \cr
+   \emph{omega} \tab pnorm \tab [0, 1] \tab qnorm(.5) \tab Erlang-1 mixture weight (mixed only) \cr
 }
 }

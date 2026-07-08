@@ -4,18 +4,30 @@
 \alias{BAwL}
 \title{The Ballistic Accumulator with Leak (BAwL)}
 \usage{
-BAwL(posdrift = TRUE, erlang = 1L)
+BAwL(
+  posdrift = TRUE,
+  erlang_shape = 1L,
+  erlang_type = c("none", "local_kill", "global_kill", "local_guess", "local_kill_guess")
+)
+}
+\arguments{
+\item{posdrift}{logical, if TRUE drifts are truncated to be positive.}
+
+\item{erlang_type}{string, one of "none", "local_kill", "global_kill", "local_guess", "local_kill_guess"}
+
+\item{erlang}{integer shape of the killing process (1=exponential, 2=Erlang-2)}
 }
 \description{
 Race model where each accumulator follows a leaky-integration trajectory and
-races against an independent kill clock.
-Setting k=0 recovers the standard LBA decision dynamics; setting lambda=0
-removes killing.
+races against independent guess and kill clocks.
+Setting k=0 recovers the standard LBA decision dynamics; setting
+lambda_g=lambda_k=0 removes clock effects.
 }
 \details{
 Parameters as in LBA plus:
 \itemize{
 \item k: leak rate (log scale, [0, Inf); default log(0) = effectively 0).
-\item lambda: killing/expiry rate (log scale, [0, Inf); default log(0) = 0).
+\item lambda_g: guessing rate (log scale, [0, Inf); default log(0) = 0).
+\item lambda_k: killing/expiry rate (log scale, [0, Inf); default log(0) = 0).
 }
 }

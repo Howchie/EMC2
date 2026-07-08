@@ -799,12 +799,12 @@ calc_ll_manager <- function(proposals, dadm, model, component = NULL, r_cores = 
 
 #' Calculate Pointwise Log-Likelihoods
 #'
-#' @param proposals A matrix of parameter proposals [n_iter x n_pars].
+#' @param proposals A matrix of parameter proposals with dimensions `n_iter x n_pars`.
 #' @param dadm A Data Augmented Design Matrix (DADM).
 #' @param model A model function or object.
 #' @param r_cores Number of cores to use (for non-C models).
 #'
-#' @return A matrix of pointwise log-likelihoods [n_iter x n_trials].
+#' @return A matrix of pointwise log-likelihoods with dimensions `n_iter x n_trials`.
 #' @export
 calc_ll_pw <- function(proposals, dadm, model, r_cores = 1){
   model <- model()

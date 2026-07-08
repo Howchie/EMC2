@@ -18,6 +18,7 @@ design(
   report_p_vector = TRUE,
   custom_p_vector = NULL,
   trend = NULL,
+  pre_transform_terms = NULL,
   transform = NULL,
   bound = NULL,
   TC = NULL,
@@ -78,6 +79,11 @@ parameters to be estimated.}
 function can be supplied.}
 
 \item{trend}{A trend list, as made by \code{\link{make_trend}}}
+
+\item{pre_transform_terms}{Optional named list keyed by model parameter. Each
+element is a character vector naming design-matrix coefficients that should be
+summed on the transformed scale before the model transform is applied, with
+the remaining coefficients added linearly on the natural scale.}
 
 \item{transform}{A list with custom transformations to be applied to the parameters of the model,
 if the conventional transformations aren't desired.

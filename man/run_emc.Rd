@@ -20,7 +20,8 @@ run_emc(
   n_blocks = 1,
   thin = FALSE,
   trim = TRUE,
-  r_cores = 1
+  r_cores = 1,
+  rhat_version = "old"
 )
 }
 \arguments{

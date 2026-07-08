@@ -76,4 +76,5 @@
 #'   similarly structured to the overall samples list of one of the MCMC chains.}
 #' }
 #' @source \url{https://www.pnas.org/doi/10.1073/pnas.0805903105}
+#' @export
 "samples_LNR"

@@ -11,8 +11,13 @@ compare(
   use_best_fit = TRUE,
   BayesFactor = TRUE,
   WAIC = TRUE,
+  LOO = FALSE,
+  pointwise = c("trial", "subject"),
+  K = 200,
+  cores_for_loo = 1,
   cores_for_props = 4,
   cores_per_prop = 1,
+  both_splits = FALSE,
   print_summary = TRUE,
   digits = 0,
   digits_p = 3,
@@ -36,9 +41,33 @@ Usually takes a minute per model added to calculate}
 \item{WAIC}{Boolean, defaults to \code{TRUE}. Include WAIC (Watanabe-Akaike Information Criterion) computed
 via the \code{loo} package. Requires computing per-trial log-likelihoods across all posterior samples.}
 
+\item{LOO}{Boolean, defaults to \code{FALSE}. Include PSIS-LOO computed via the \code{loo} package.
+Uses the same pointwise log-likelihood matrix as WAIC and is typically slower.}
+
+\item{pointwise}{Character string, one of \code{"trial"} or \code{"subject"}, controlling
+the unit of prediction for WAIC/LOO in pooled hierarchical comparisons.
+\code{"trial"} (default) treats each trial as one pointwise unit. \code{"subject"} computes
+the hierarchical leave-one-subject-out LOO by marginalising subject parameters:
+for each posterior draw of the group-level parameters (theta_mu, theta_var),
+\code{K} proposals are drawn from the group distribution and the marginal subject
+log-likelihood is estimated via log-mean-exp. This gives well-conditioned PSIS
+importance weights where summing conditional per-trial LLs would give Pareto-k >> 1.
+Ignored unless \code{WAIC} or \code{LOO} is \code{TRUE}.}
+
+\item{K}{Integer (default 200). Number of importance samples drawn from the group
+prior per posterior iteration when \code{pointwise = "subject"}. Higher values give a
+more accurate marginal likelihood estimate at proportionally higher cost.}
+
+\item{cores_for_loo}{Integer (default 1). Cores for WAIC/LOO computation. Used in two places:
+(1) parallelises the per-subject log-likelihood computation across subjects, and
+(2) passed to \code{loo::loo()} as its \code{cores} argument for internal PSIS parallelism.
+Only relevant when \code{WAIC} or \code{LOO} is \code{TRUE} and the pw_ll is not already cached.}
+
 \item{cores_for_props}{Integer, how many cores to use for the Bayes factor calculation, here 4 is the default for the 4 different proposal densities to evaluate, only 1, 2 and 4 are sensible.}
 
 \item{cores_per_prop}{Integer, how many cores to use for the Bayes factor calculation if you have more than 4 cores available. Cores used will be cores_for_props * cores_per_prop. Best to prioritize cores_for_props being 4 or 2}
+
+\item{both_splits}{Boolean. Passed to \code{run_bridge_sampling()} for Bayes factor calculation.}
 
 \item{print_summary}{Boolean (default \code{TRUE}), print table of results}
 

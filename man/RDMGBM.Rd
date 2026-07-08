@@ -4,9 +4,14 @@
 \alias{RDMGBM}
 \title{RDMGBM Model}
 \usage{
-RDMGBM()
+RDMGBM(erlang_shape = 1L, erlang_type = "none")
+}
+\arguments{
+\item{erlang_shape}{integer shape of the killing process (1 = exponential, 2 = Erlang-2)}
+
+\item{erlang_type}{string, one of "none", "local_kill", "global_kill", "local_guess", "local_kill_guess"}
 }
 \description{
 Racing geometric Brownian first-passage model with start-point variability.
-Equivalent parameterization to RDMSWTN without \code{sv}.
+Supports exponential killing (omission / guessing) via the \code{lambda_g} and \code{lambda_k} parameters.
 }

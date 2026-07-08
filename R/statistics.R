@@ -159,6 +159,113 @@ compare <- function(sList,stage="sample",filter=NULL,use_best_fit=TRUE,
   invisible(out)
 }
 
+
+#' Print a model-comparison table from compare()
+#'
+#' Formats the invisible output of \code{compare()} into a focused
+#' two-column-per-measure table. By default the measure values are expressed
+#' relative to the best model (minimum subtracted), which is the conventional
+#' way to present DIC, BPIC, WAIC, or marginal deviance differences.
+#'
+#' @param out Data frame returned (invisibly) by \code{compare()}.
+#' @param selection \code{NULL} (default), a character string, or a character
+#'   vector. Elements must be from \code{"DIC"}, \code{"BPIC"}, \code{"WAIC"},
+#'   and \code{"MD"} (marginal deviance from bridge sampling),
+#'   \code{"EffectiveN"}, \code{"meanD"}, \code{"Dmean"}, \code{"minD"}.
+#'   \code{NULL} displays all measures present in \code{out}; a vector displays
+#'   the named subset in the order supplied. An error is raised for
+#'   unrecognised names or measures not computed in the \code{compare()} call.
+#' @param relative Logical (default \code{TRUE}). If \code{TRUE}, the minimum
+#'   value across models is subtracted per measure so that the best model reads
+#'   0; value columns are prefixed with \code{d} (e.g. \code{dDIC},
+#'   \code{dMD}). If \code{FALSE}, raw values are shown under the original
+#'   column names. When multiple measures are shown each is made relative
+#'   independently.
+#' @param ICdigits Integer, digits for rounding non-weight columns (default
+#'   \code{0}, matching \code{compare()}'s \code{digits} argument).
+#' @param weights Logical, default TRUE, print weights corresponding to
+#'   selected model selection metrics.
+#' @param Wdigits Integer, digits for rounding weight columns (default
+#'   \code{3}, matching \code{compare()}'s \code{digits_p} argument).
+#' @param format Character string passed to \code{knitr::kable()} to produce
+#'   output suitable for documents. Common values: \code{"latex"} for LaTeX,
+#'   \code{"pipe"} or \code{"simple"} for Markdown, \code{"html"} for HTML.
+#'   When \code{NULL} (default) a plain \code{print()} is used and a data frame
+#'   is returned invisibly. When non-\code{NULL} the \code{knitr_kable} object
+#'   is returned invisibly.
+#'
+#' @return When \code{format = NULL}: a data frame of (possibly relative) IC
+#'   values and weights, returned invisibly. When \code{format} is set: a
+#'   \code{knitr_kable} object, returned invisibly. The table is always
+#'   printed.
+#' @examples \donttest{
+#' out <- compare(list(samples_LNR), cores_for_props = 1, print_summary = FALSE)
+#' printCompare(out)
+#' printCompare(out, selection = c("DIC", "WAIC"))
+#' printCompare(out, selection = "WAIC", relative = FALSE)
+#' printCompare(out, format = "latex")
+#' printCompare(out, format = "pipe")
+#' }
+#' @export
+printCompare <- function(out, selection = NULL, relative = TRUE, ICdigits = 0,
+                         weights=TRUE,Wdigits = 3, format = NULL) {
+  valid <- c("DIC", "BPIC", "WAIC", "MD","EffectiveN","meanD","Dmean","minD")
+
+  if (is.null(selection)) {
+    measures <- valid[valid %in% names(out)]
+    if (length(measures) == 0)
+      stop("No relevant measures measures found in compare() output.")
+  } else {
+    bad     <- selection[!selection %in% valid]
+    missing <- selection[selection %in% valid & !selection %in% names(out)]
+    if (length(bad) > 0)
+      stop("Unrecognised selection: ", paste(bad, collapse = ", "),
+           ". Must be from: ", paste(valid, collapse = ", "), ".")
+    if (length(missing) > 0)
+      stop("Not present in compare() output: ", paste(missing, collapse = ", "),
+           ". Re-run compare() with the relevant options enabled.")
+    measures <- selection
+  }
+
+  ics <- measures[measures %in% valid[1:4]]
+  tab_list <- lapply(ics, function(sel) {
+    vals       <- out[[sel]]
+    val_col    <- if (relative) paste0("d", sel) else sel
+    if (relative) vals <- vals - min(vals, na.rm = TRUE)
+    if (weights) {
+      weight_col <- paste0("w", sel)
+      data.frame(setNames(list(vals, out[[weight_col]]), c(val_col, weight_col)),
+               row.names = rownames(out))
+    } else data.frame(setNames(list(vals), val_col),row.names = rownames(out))
+  })
+  tab <- do.call(cbind, tab_list)
+
+  tmp <- tab
+  for (sel in ics) {
+    val_col    <- if (relative) paste0("d", sel) else sel
+    tmp[[val_col]]    <- round(tmp[[val_col]],    ICdigits)
+    if (weights) {
+      weight_col <- paste0("w", sel)
+      tmp[[weight_col]] <- round(tmp[[weight_col]], Wdigits)
+    }
+  }
+
+  extras <- measures[!(measures %in% valid[1:4])]
+  if (length(extras)>0) {
+    tmp <- cbind(tmp,out[,extras,drop=FALSE])
+    for (i in extras) if (i!="EffectiveN") tmp[,i] <- round(tmp[,i],ICdigits)
+  }
+
+  if (is.null(format)) {
+    print(tmp)
+    invisible(tab)
+  } else {
+    k <- knitr::kable(tmp, format = format, booktabs = TRUE)
+    print(k)
+    invisible(k)
+  }
+}
+
 std_error_IS2 <- function(IS_samples, n_bootstrap = 50000){
   log_marglik_boot= array(dim = n_bootstrap)
   for (i in 1:n_bootstrap){

@@ -1202,7 +1202,7 @@ plot_spectrum <- function(dat, pp = NULL,
     }
 
     # Posterior predictive mean
-    lines(freqs_pp, f(colMeans(power_pp)),
+  lines(freqs_pp, f(colMeans(power_pp)),
           col = "darkgreen")
 
     result$pp      <- sp_pp
@@ -1216,4 +1216,912 @@ plot_spectrum <- function(dat, pp = NULL,
   invisible(result)
 }
 
+.classify_types <- function(ci) {
+  rn     <- rownames(ci[[1]])
+  types  <- sub("_.*", "", rn)
+  counts <- table(types)
+  ord    <- match(names(counts), unique(types))
+  counts <- counts[order(ord)]
+  list(
+    all_types    = names(counts),
+    single_types = names(counts[counts == 1L]),
+    multi_types  = names(counts[counts > 1L]),
+    counts       = counts,
+    rn           = rn,
+    types        = types
+  )
+}
 
+.resolve_order <- function(order, multi_types, drop = TRUE) {
+  if (is.null(order)) return(multi_types)
+  if (is.character(order)) {
+    bad <- order[!order %in% multi_types]
+    if (length(bad))
+      stop("`order` contains types not among multi-value types: ",
+           paste(bad, collapse = ", "), ".")
+    return(order)
+  }
+  order <- as.integer(order)
+  if (any(order < 1L) || any(order > length(multi_types)))
+    stop("`order` indices out of range 1:", length(multi_types), ".")
+  multi_types[order]
+}
+
+.panel_call <- function(fn, base_args, type_key, plot_args, dots,
+                        main_override, sub_layout = NULL) {
+  args <- modifyList(dots, if (!is.null(plot_args[[type_key]]))
+                             plot_args[[type_key]] else list())
+  args$main <- if (!is.null(plot_args[[type_key]]$main))
+                 plot_args[[type_key]]$main else main_override
+  layout_val <- if (!is.null(plot_args[[type_key]]$layout))
+                  plot_args[[type_key]]$layout else sub_layout
+  args <- args[names(args) != "layout"]
+  do.call(fn, c(base_args, list(layout = layout_val), args))
+}
+
+.plot_cor_panel <- function(mat, quants = 1:3, type = NULL,
+                             ylab = "Correlation", main = "",
+                             effect_line = TRUE, cap_length = 0.05,
+                             pt_cex = 1, layout = NA, ...) {
+  sub_mat           <- mat[, quants, drop = FALSE]
+  colnames(sub_mat) <- c("lower", "mid", "upper")
+  rn                <- rownames(sub_mat)
+  if (!is.null(type)) {
+    sel <- sub("_.*", "", rn) %in% type
+    if (!any(sel)) stop("None of the specified types found in this element.")
+    sub_mat <- sub_mat[sel, , drop = FALSE]
+    rn      <- rn[sel]
+  }
+  ord     <- order(sub_mat[, "mid"], decreasing = TRUE)
+  sub_mat <- sub_mat[ord, , drop = FALSE]
+  rn      <- rn[ord]
+  n       <- nrow(sub_mat)
+  if (n == 0L) return(invisible(NULL))
+  x_pos   <- seq_len(n)
+  x_range <- c(0.5, n + 0.5)
+  cap_hw  <- cap_length
+  use_alt <- n > 3L
+
+  dots          <- list(...)
+  par_arg_names <- c("mar","oma","mgp","tcl","las","cex","cex.axis","cex.lab","cex.main")
+  par_settings  <- dots[intersect(names(dots), par_arg_names)]
+
+  xlab    <- if (!is.null(dots$xlab)) dots$xlab else ""
+  col     <- if (!is.null(dots$col))  dots$col  else "black"
+  pch     <- if (!is.null(dots$pch))  dots$pch  else 16L
+  las_val <- if (!is.null(dots$las))  dots$las  else 0L
+
+  if (is.null(par_settings$mar))
+    par_settings$mar <- if (!use_alt) c(4.1, 4.1, 2.1, 1.1) else
+                        if (las_val == 0L) c(6.1, 4.1, 6.1, 1.1) else c(4.1, 4.1, 4.1, 1.1)
+
+  pad  <- function(r) { d <- diff(r); if (d == 0) d <- 0.5; r + c(-1,1)*0.05*d }
+  ylim <- if (!is.null(dots$ylim)) dots$ylim else
+            pad(range(sub_mat[, c("lower","upper")], na.rm = TRUE))
+
+  if (isTRUE(is.na(layout))) layout <- c(1L, 1L)
+  pars_to_save <- names(par_settings)
+  if (!is.null(layout)) pars_to_save <- c("mfrow", pars_to_save)
+  if (length(pars_to_save)) {
+    old_par <- setNames(lapply(pars_to_save, par), pars_to_save)
+    on.exit(par(old_par), add = TRUE)
+  }
+  if (!is.null(layout)) par(mfrow = layout)
+  if (length(par_settings)) do.call(par, par_settings)
+
+  plot.default(NA, xlim = x_range, ylim = ylim,
+               axes = FALSE, xlab = xlab, ylab = ylab, main = main)
+  axis(2L)
+
+  if (effect_line)
+    segments(x_range[1L], 0, x_range[2L], 0, col = "grey", lty = 3L)
+
+  for (i in seq_len(n)) {
+    lo <- sub_mat[i,"lower"]; hi <- sub_mat[i,"upper"]; md <- sub_mat[i,"mid"]
+    segments(i, lo, i, hi, col = col)
+    segments(i - cap_hw, lo, i + cap_hw, lo, col = col)
+    segments(i - cap_hw, hi, i + cap_hw, hi, col = col)
+    points(i, md, pch = pch, col = col, cex = pt_cex)
+  }
+
+  if (use_alt) {
+    odd_idx  <- seq(1L, n, by = 2L)
+    even_idx <- seq(2L, n, by = 2L)
+    axis(1L, at = c(1L, n), labels = FALSE, lwd = 1L, lwd.ticks = 0L)
+    axis(3L, at = c(1L, n), labels = FALSE, lwd = 1L, lwd.ticks = 0L)
+    axis(1L, at = odd_idx,  labels = FALSE, lwd = 0L, lwd.ticks = 1L)
+    axis(3L, at = even_idx, labels = FALSE, lwd = 0L, lwd.ticks = 1L)
+    if (length(even_idx)) axis(1L, at = even_idx, labels = FALSE, lwd = 0L, lwd.ticks = 1L)
+    if (length(odd_idx))  axis(3L, at = odd_idx,  labels = FALSE, lwd = 0L, lwd.ticks = 1L)
+    if (las_val == 0L) {
+      line_lo   <- 0.5
+      line_hi   <- 2.0
+      mtext_cex <- par("cex.axis")
+      odd_lo    <- odd_idx[seq(1L, length(odd_idx),  by = 2L)]
+      odd_hi    <- odd_idx[seq(2L, length(odd_idx),  by = 2L)]
+      even_lo   <- even_idx[seq(1L, length(even_idx), by = 2L)]
+      even_hi   <- even_idx[seq(2L, length(even_idx), by = 2L)]
+      if (length(odd_lo))  mtext(rn[odd_lo],  side=1L, at=odd_lo,  line=line_lo, las=0L, cex=mtext_cex, col=col)
+      if (length(odd_hi))  mtext(rn[odd_hi],  side=1L, at=odd_hi,  line=line_hi, las=0L, cex=mtext_cex, col=col)
+      if (length(even_lo)) mtext(rn[even_lo], side=3L, at=even_lo, line=line_lo, las=0L, cex=mtext_cex, col=col)
+      if (length(even_hi)) mtext(rn[even_hi], side=3L, at=even_hi, line=line_hi, las=0L, cex=mtext_cex, col=col)
+    } else {
+      axis(1L, at = odd_idx,  labels = rn[odd_idx],  las = las_val, lwd = 0L, lwd.ticks = 0L)
+      axis(3L, at = even_idx, labels = rn[even_idx], las = las_val, lwd = 0L, lwd.ticks = 0L)
+    }
+  } else {
+    axis(1L, at = x_pos, labels = rn, las = las_val)
+  }
+  invisible(sub_mat)
+}
+
+plot_credint_map <- function(ci, factors = NULL, type = NULL, quants = 1:3,
+                         layout = NA, factor_labels = NULL,
+                         level_labels = NULL, level_order = NULL,
+                         factor_order = NULL, displace = 0.1,
+                         cap_length = 0.05, pt_cex = 1,
+                         legend_args = NULL, ...) {
+  if (!is.list(ci) || length(ci) != 1 || !is.matrix(ci[[1]]))
+    stop("`ci` must be a length-1 list containing a matrix (output of credint(map=TRUE)).")
+  arr <- ci[[1]]
+  if (ncol(arr) < 3)
+    stop("`ci[[1]]` must have at least 3 quantile columns; found ", ncol(arr), ".")
+  if (length(quants) != 3 || !all(diff(quants) > 0))
+    stop("`quants` must be a strictly increasing integer vector of length 3.")
+  if (any(quants < 1L) || any(quants > ncol(arr)))
+    stop("`quants` indices out of range 1:", ncol(arr), ".")
+
+  rn        <- rownames(arr)
+  row_types <- sub("_.*", "", rn)
+  if (is.null(type)) {
+    type <- unique(row_types)[1L]
+    message("type not supplied; using '", type, "'.")
+  }
+  sel <- row_types == type
+  if (!any(sel))
+    stop("Type '", type, "' not found. Available: ",
+         paste(sort(unique(row_types)), collapse = ", "), ".")
+  sub_arr           <- arr[sel, quants, drop = FALSE]
+  colnames(sub_arr) <- c("lower", "mid", "upper")
+  sel_rn            <- rownames(sub_arr)
+
+  n_factors <- nchar(sel_rn[1L]) - nchar(gsub("_", "", sel_rn[1L], fixed = TRUE))
+  nf_all    <- nchar(sel_rn) - nchar(gsub("_", "", sel_rn, fixed = TRUE))
+  if (!all(nf_all == n_factors))
+    stop("Selected rows have inconsistent numbers of '_' separators.")
+
+  if (n_factors > 0L) {
+    remainders <- sub(paste0("^", type, "_"), "", sel_rn)
+    parts      <- strsplit(remainders, "_", fixed = TRUE)
+
+    if (is.null(factors)) {
+      cat("Filtered row names for type '", type, "':\n", sep = "")
+      print(sel_rn)
+      stop("Supply `factors`: a character vector of length ", n_factors,
+           " giving the name prefix for each of the ", n_factors, " factor(s).")
+    }
+    if (length(factors) != n_factors)
+      stop("`factors` must have length ", n_factors, " (one per '_' separator), got ",
+           length(factors), ".")
+
+    raw_lvl_per_row <- lapply(seq_len(n_factors), function(f) {
+      segs <- sapply(parts, `[`, f)
+      bad  <- !startsWith(segs, factors[f])
+      if (any(bad))
+        stop("Factor prefix '", factors[f], "' (position ", f, ") does not match: ",
+             paste(unique(segs[bad]), collapse = ", "), ".")
+      sub(paste0("^", factors[f]), "", segs)
+    })
+
+    pdata <- as.data.frame(sub_arr, stringsAsFactors = FALSE)
+    for (f in seq_len(n_factors))
+      pdata[[paste0("f", f)]] <- raw_lvl_per_row[[f]]
+    factor_levels_list <- lapply(seq_len(n_factors), function(f)
+      unique(raw_lvl_per_row[[f]]))
+    ord   <- do.call(order, lapply(seq_len(n_factors), function(f)
+      match(pdata[[paste0("f", f)]], factor_levels_list[[f]])))
+    pdata <- pdata[ord, , drop = FALSE]
+  } else {
+    pdata              <- as.data.frame(sub_arr, stringsAsFactors = FALSE)
+    factor_levels_list <- list()
+    factors            <- character(0)
+  }
+
+  expand_flist <- function(x, arg) {
+    if (is.null(x)) return(vector("list", n_factors))
+    nms <- names(x)
+    if (is.null(nms)) {
+      if (length(x) != n_factors)
+        stop("`", arg, "` (unnamed) must have length ", n_factors, ", got ", length(x), ".")
+      return(x)
+    }
+    bad <- nms[!nms %in% factors]
+    if (length(bad))
+      stop("Names in `", arg, "` not matching any factor: ",
+           paste(bad, collapse = ", "),
+           ". Available: ", paste(factors, collapse = ", "), ".")
+    out <- vector("list", n_factors)
+    for (i in seq_along(nms)) out[[match(nms[i], factors)]] <- x[[i]]
+    out
+  }
+
+  if (is.list(factor_labels)) {
+    for (nm in names(factor_labels))
+      level_labels[[nm]] <- factor_labels[[nm]]
+    factor_labels <- NULL
+  }
+  if (!is.null(factor_labels) && length(factor_labels) != n_factors)
+    stop("`factor_labels` must have length ", n_factors, ", got ", length(factor_labels), ".")
+
+  ll_full <- expand_flist(level_labels, "level_labels")
+  for (f in seq_len(n_factors)) {
+    if (is.null(ll_full[[f]])) next
+    exp <- length(factor_levels_list[[f]])
+    got <- length(ll_full[[f]])
+    if (got != exp) {
+      nm <- if (!is.null(factor_labels)) factor_labels[f] else factors[f]
+      stop("`level_labels` for factor '", nm, "' must have length ", exp,
+           " matching levels: ", paste(factor_levels_list[[f]], collapse = ", "),
+           ". Got length ", got, ".")
+    }
+  }
+
+  display_factor_names <- if (!is.null(factor_labels)) factor_labels else factors
+  display_levels_list  <- lapply(seq_len(n_factors), function(f)
+    if (!is.null(ll_full[[f]])) ll_full[[f]] else factor_levels_list[[f]])
+
+  lo_full <- expand_flist(level_order, "level_order")
+  for (f in seq_len(n_factors)) {
+    if (is.null(lo_full[[f]])) next
+    n_lev <- length(factor_levels_list[[f]])
+    ord_f <- as.integer(lo_full[[f]])
+    if (length(ord_f) != n_lev || !identical(sort(ord_f), seq_len(n_lev))) {
+      nm <- if (!is.null(factor_labels)) factor_labels[f] else factors[f]
+      stop("`level_order` for factor '", nm, "' must be a permutation of 1:",
+           n_lev, " (", n_lev, " levels).")
+    }
+    factor_levels_list[[f]]  <- factor_levels_list[[f]][ord_f]
+    display_levels_list[[f]] <- display_levels_list[[f]][ord_f]
+  }
+
+  if (!is.null(factor_order)) {
+    if (n_factors == 0L)
+      stop("`factor_order` cannot be used for zero-factor types.")
+    fo <- as.integer(factor_order)
+    if (length(fo) != n_factors || !identical(sort(fo), seq_len(n_factors)))
+      stop("`factor_order` must be a permutation of 1:", n_factors,
+           " (", n_factors, " factor(s)), got: ", paste(factor_order, collapse = ", "), ".")
+    factor_levels_list   <- factor_levels_list[fo]
+    display_levels_list  <- display_levels_list[fo]
+    display_factor_names <- display_factor_names[fo]
+    pdata <- pdata[, c("lower", "mid", "upper", paste0("f", fo)), drop = FALSE]
+    names(pdata)[4L:(3L + n_factors)] <- paste0("f", seq_len(n_factors))
+    ord   <- do.call(order, lapply(seq_len(n_factors), function(f)
+      match(pdata[[paste0("f", f)]], factor_levels_list[[f]])))
+    pdata <- pdata[ord, , drop = FALSE]
+  }
+
+  raw_to_display <- lapply(seq_len(n_factors), function(f)
+    setNames(display_levels_list[[f]], factor_levels_list[[f]]))
+
+  dots    <- list(...)
+  n_lines <- if (n_factors >= 2L) length(factor_levels_list[[2L]]) else 1L
+
+  lty  <- if (!is.null(dots$lty))  dots$lty  else seq_len(n_lines)
+  pch  <- if (!is.null(dots$pch))  dots$pch  else seq_len(n_lines)
+  cols <- if (!is.null(dots$cols)) dots$cols else rep("black", n_lines)
+
+  xlab_default <- if (n_factors >= 1L) display_factor_names[1L] else type
+  xlab         <- if (!is.null(dots$xlab)) dots$xlab else xlab_default
+  ylab         <- if (!is.null(dots$ylab)) dots$ylab else type
+  user_main    <- dots$main
+  user_ylim    <- dots$ylim
+
+  par_args <- c("mar","oma","mgp","tcl","las","cex","cex.axis","cex.lab","cex.main")
+  par_settings <- dots[intersect(names(dots), par_args)]
+  if (is.null(par_settings$mar)) par_settings$mar <- c(4.1, 4.1, 2.1, 0.1)
+  dots[c("lty","pch","cols","xlab","ylab","main","ylim","xaxt", names(par_settings))] <- NULL
+
+  if (is.null(displace)) displace <- 0
+  if (length(displace) == 1L) {
+    if (!is.numeric(displace) || !is.finite(displace))
+      stop("`displace` must be a single finite number (spacing) or a length-",
+           n_lines, " vector of offsets.")
+    displace <- (seq_len(n_lines) - (n_lines + 1) / 2) * displace
+  } else if (length(displace) != n_lines) {
+    stop("`displace` must be a single spacing value or have length ", n_lines,
+         " (one per line group), got ", length(displace), ".")
+  }
+
+  if (n_factors >= 1L) {
+    x_levels_raw  <- factor_levels_list[[1L]]
+    x_levels_disp <- display_levels_list[[1L]]
+    n_x           <- length(x_levels_raw)
+  } else {
+    x_levels_disp <- type
+    n_x           <- 1L
+  }
+  x_base <- seq_len(n_x)
+  cap_hw <- cap_length
+
+  if (n_factors <= 2L) {
+    panel_combos <- NULL
+    n_panels     <- 1L
+    extra_f      <- integer(0)
+  } else {
+    extra_f      <- seq(3L, n_factors)
+    panel_combos <- expand.grid(lapply(extra_f, function(f) factor_levels_list[[f]]),
+                                stringsAsFactors = FALSE, KEEP.OUT.ATTRS = FALSE)
+    names(panel_combos) <- paste0("f", extra_f)
+    n_panels <- nrow(panel_combos)
+  }
+
+  if (!is.null(user_main) && length(user_main) != 1L && length(user_main) != n_panels)
+    stop("`main` must have length 1 or ", n_panels, " (one per panel), got ", length(user_main), ".")
+  if (!is.null(user_ylim)) {
+    if (is.list(user_ylim)) {
+      if (length(user_ylim) != n_panels)
+        stop("`ylim` list must have length ", n_panels, " (one per panel), got ", length(user_ylim), ".")
+      if (!all(vapply(user_ylim, function(z) is.numeric(z) && length(z) == 2L, logical(1L))))
+        stop("each element of a `ylim` list must be a numeric vector of length 2.")
+    } else if (!is.numeric(user_ylim) || length(user_ylim) != 2L) {
+      stop("`ylim` must be a length-2 numeric vector, or a list of such vectors (one per panel).")
+    }
+  }
+
+  auto_ylim <- {
+    yl  <- range(c(pdata$lower, pdata$upper), na.rm = TRUE)
+    pad <- 0.05 * diff(yl); if (pad == 0) pad <- 0.5
+    yl + c(-pad, pad)
+  }
+
+  set_layout <- !is.null(layout)
+  if (isTRUE(is.na(layout))) {
+    if (n_factors == 3L) {
+      nr <- 1L
+      nc <- length(factor_levels_list[[3L]])
+    } else if (n_factors >= 4L) {
+      nr <- 2L
+      nc <- 4L
+    } else {
+      nr <- 1L; nc <- 1L
+    }
+    layout <- c(nr, nc)
+  }
+  panels_per_page <- if (is.null(layout)) prod(par("mfrow")) else layout[1L] * layout[2L]
+
+  draw_group <- function(x_pos, grp_data, j) {
+    if (n_factors >= 1L) {
+      ord      <- match(grp_data$f1, x_levels_raw)
+      grp_data <- grp_data[order(ord), , drop = FALSE]
+    }
+    lines(x_pos,  grp_data$mid, lty = lty[j], col = cols[j])
+    points(x_pos, grp_data$mid, pch = pch[j], col = cols[j], cex = pt_cex)
+    for (xi in seq_along(x_pos)) {
+      x  <- x_pos[xi];  lo <- grp_data$lower[xi];  hi <- grp_data$upper[xi]
+      segments(x,          lo, x,          hi, col = cols[j])
+      segments(x - cap_hw, lo, x + cap_hw, lo, col = cols[j])
+      segments(x - cap_hw, hi, x + cap_hw, hi, col = cols[j])
+    }
+  }
+
+  pars_to_save <- names(par_settings)
+  if (set_layout) pars_to_save <- c("mfrow", pars_to_save)
+  if (length(pars_to_save)) {
+    old_par <- setNames(lapply(pars_to_save, par), pars_to_save)
+    on.exit(par(old_par), add = TRUE)
+  }
+
+  for (panel_idx in seq_len(n_panels)) {
+    if ((panel_idx - 1L) %% panels_per_page == 0L) {
+      if (set_layout) par(mfrow = layout)
+      if (length(par_settings)) do.call(par, par_settings)
+    }
+
+    um <- if (is.null(user_main)) NULL
+          else if (length(user_main) == 1L) user_main else user_main[panel_idx]
+
+    if (is.null(panel_combos)) {
+      pdata_panel <- pdata
+      panel_title <- if (!is.null(um)) um else ""
+    } else {
+      combo  <- panel_combos[panel_idx, , drop = FALSE]
+      filter <- rep(TRUE, nrow(pdata))
+      for (k in seq_along(extra_f)) {
+        f      <- extra_f[k]
+        filter <- filter & (pdata[[paste0("f", f)]] == combo[[k]])
+      }
+      pdata_panel <- pdata[filter, , drop = FALSE]
+      panel_title <- if (!is.null(um)) um else
+        paste(sapply(seq_along(extra_f), function(k) {
+          f <- extra_f[k]
+          paste0(display_factor_names[f], ": ", raw_to_display[[f]][combo[[k]]])
+        }), collapse = ", ")
+    }
+
+    ylim <-
+      if (is.null(user_ylim)) auto_ylim
+      else if (is.list(user_ylim)) user_ylim[[panel_idx]]
+      else user_ylim
+
+    do.call(plot.default,
+            c(list(x = numeric(0), y = numeric(0),
+                   xlim = c(0.5, n_x + 0.5), ylim = ylim,
+                   xaxt = "n", bty = "l",
+                   xlab = xlab, ylab = ylab, main = panel_title),
+              dots))
+    axis(1, at = x_base, labels = x_levels_disp)
+
+    if (n_factors == 0L) {
+      segments(1,          pdata_panel$lower, 1,          pdata_panel$upper, col = cols[1])
+      segments(1 - cap_hw, pdata_panel$lower, 1 + cap_hw, pdata_panel$lower, col = cols[1])
+      segments(1 - cap_hw, pdata_panel$upper, 1 + cap_hw, pdata_panel$upper, col = cols[1])
+      points(1, pdata_panel$mid, pch = pch[1], col = cols[1], cex = pt_cex)
+    } else if (n_factors == 1L) {
+      draw_group(x_base + displace[1L], pdata_panel, 1L)
+    } else {
+      for (j in seq_len(n_lines)) {
+        raw_f2 <- factor_levels_list[[2L]][j]
+        draw_group(x_base + displace[j],
+                   pdata_panel[pdata_panel$f2 == raw_f2, , drop = FALSE], j)
+      }
+      if (n_lines > 1L) {
+        leg_defaults <- list(x     = "topleft",
+                             bty   = "n",
+                             title = display_factor_names[2L],
+                             cex   = 0.75)
+        leg_call <- modifyList(leg_defaults,
+                               if (!is.null(legend_args)) legend_args else list())
+        if (!isTRUE(is.na(leg_call$x)))
+          do.call(legend, c(list(legend = display_levels_list[[2L]],
+                                 lty = lty, pch = pch, col = cols),
+                            leg_call))
+      }
+    }
+  }
+
+  invisible(pdata)
+}
+
+plot_credint <- function(ci, type = NULL, quants = 1:3,
+                         intercept = 1L, effects = NULL,
+                         yleft = NULL, yright = NULL,
+                         intercept_names = NULL, effect_names = NULL,
+                         layout = NA,
+                         cap_length = 0.05, pt_cex = 1,
+                         effect_line = TRUE, label_angle = 90,
+                         xtick_stagger = FALSE, ...) {
+  effects_given <- !missing(effects)
+  if (isTRUE(is.na(layout))) layout <- c(1L, 1L)
+
+  if (!is.list(ci) || !all(vapply(ci, is.matrix, logical(1L))))
+    stop("`ci` must be a list of matrices (output of credint()).")
+  if (length(ci) > 1L)
+    stop("For multi-element `ci` (e.g. correlations/covariances) use `plot_credints()`.")
+  arr <- ci[[1]]
+  if (ncol(arr) < 3)
+    stop("`ci[[1]]` must have at least 3 quantile columns; found ", ncol(arr), ".")
+  if (length(quants) != 3 || !all(diff(quants) > 0))
+    stop("`quants` must be a strictly increasing integer vector of length 3.")
+  if (any(quants < 1L) || any(quants > ncol(arr)))
+    stop("`quants` indices out of range 1:", ncol(arr), ".")
+
+  rn        <- rownames(arr)
+  row_types <- sub("_.*", "", rn)
+  if (is.null(type)) {
+    type <- unique(row_types)[1L]
+    message("type not supplied; using '", type, "'.")
+  }
+
+  if (length(type) > 1L) {
+    sel_rows <- vapply(type, function(t) {
+      idx <- which(row_types == t)
+      if (length(idx) == 0L)
+        stop("Type '", t, "' not found. Available: ",
+             paste(sort(unique(row_types)), collapse = ", "), ".")
+      idx[1L]
+    }, integer(1L))
+    sub_arr           <- arr[sel_rows, quants, drop = FALSE]
+    colnames(sub_arr) <- c("lower", "mid", "upper")
+    n_pars            <- nrow(sub_arr)
+    x_pos             <- seq_len(n_pars)
+    x_range           <- c(0.5, n_pars + 0.5)
+
+    x_labels <- if (!is.null(intercept_names)) {
+      if (length(intercept_names) != n_pars)
+        stop("`intercept_names` must have length ", n_pars,
+             " (one per type), got ", length(intercept_names), ".")
+      intercept_names
+    } else rownames(sub_arr)
+
+    if (length(label_angle) == 1L) {
+      angles <- rep(label_angle, n_pars)
+    } else if (length(label_angle) == n_pars) {
+      angles <- label_angle
+    } else {
+      stop("`label_angle` must have length 1 or ", n_pars,
+           " (one per type), got ", length(label_angle), ".")
+    }
+    adjs <- cbind(sin(angles * pi / 180) * 0.5 + 0.5, 1)
+
+    dots          <- list(...)
+    par_arg_names <- c("mar","oma","mgp","tcl","las","cex",
+                       "cex.axis","cex.lab","cex.main")
+    par_settings  <- dots[intersect(names(dots), par_arg_names)]
+    if (is.null(par_settings$mar)) par_settings$mar <- c(4.1, 4.1, 2.1, 1.1)
+
+    main <- if (!is.null(dots$main)) dots$main else ""
+    xlab <- if (!is.null(dots$xlab)) dots$xlab else ""
+    ylab <- if (!is.null(dots$ylab)) dots$ylab else "Intercept"
+    col  <- if (!is.null(dots$col_intercept)) dots$col_intercept else "black"
+    pch  <- if (!is.null(dots$pch)) dots$pch else 16L
+
+    if (!is.null(yleft$label)) ylab <- yleft$label
+
+    pad  <- function(r) { d <- diff(r); if (d == 0) d <- 0.5; r + c(-1,1)*0.05*d }
+    ylim <- if (!is.null(yleft$lim)) yleft$lim else
+            if (!is.null(dots$ylim)) dots$ylim else
+              pad(range(sub_arr[, c("lower","upper")], na.rm = TRUE))
+
+    pars_to_save <- names(par_settings)
+    if (!is.null(layout)) pars_to_save <- c("mfrow", pars_to_save)
+    if (length(pars_to_save)) {
+      old_par <- setNames(lapply(pars_to_save, par), pars_to_save)
+      on.exit(par(old_par), add = TRUE)
+    }
+    if (!is.null(layout)) par(mfrow = layout)
+    if (length(par_settings)) do.call(par, par_settings)
+
+    plot.default(NA, xlim = x_range, ylim = ylim,
+                 axes = FALSE, xlab = xlab, ylab = ylab, main = main)
+    axis(2L)
+    cap_hw <- cap_length
+    for (i in seq_len(n_pars)) {
+      x  <- x_pos[i]
+      lo <- sub_arr[i,"lower"]; hi <- sub_arr[i,"upper"]; md <- sub_arr[i,"mid"]
+      segments(x, lo, x, hi, col = col)
+      segments(x - cap_hw, lo, x + cap_hw, lo, col = col)
+      segments(x - cap_hw, hi, x + cap_hw, hi, col = col)
+      points(x, md, pch = pch, col = col, cex = pt_cex)
+    }
+
+    y0          <- par("usr")[3L]
+    line_to_usr <- diff(par("usr")[3L:4L]) / par("pin")[2L] *
+                   par("cin")[2L] * par("cex") * par("mgp")[2L]
+    if (n_pars == 1L)
+      segments(x_pos - 0.25, y0, x_pos + 0.25, y0, xpd = TRUE)
+    else
+      axis(1L, at = x_pos, labels = FALSE)
+
+    cex_axis <- par("cex.axis")
+    y_text   <- y0 - line_to_usr * cex_axis
+    step     <- line_to_usr * cex_axis
+    for (i in seq_len(n_pars)) {
+      off <- if (xtick_stagger && i %% 2L == 0L) step else 0
+      text(x_pos[i], y_text - off, labels = x_labels[i],
+           srt = angles[i], xpd = TRUE, adj = adjs[i, ], cex = cex_axis)
+    }
+
+    return(invisible(sub_arr))
+  }
+
+  sel <- row_types == type
+  if (!any(sel))
+    stop("Type '", type, "' not found. Available: ",
+         paste(sort(unique(row_types)), collapse = ", "), ".")
+  sub_arr           <- arr[sel, quants, drop = FALSE]
+  colnames(sub_arr) <- c("lower", "mid", "upper")
+  n_rows            <- nrow(sub_arr)
+
+  if (effects_given) {
+    if (is.null(effects)) {
+      intercept <- seq_len(n_rows)
+    } else {
+      effects <- as.integer(effects)
+      if (any(effects < 1L) || any(effects > n_rows))
+        stop("`effects` indices out of range 1:", n_rows, ".")
+      intercept <- as.integer(setdiff(seq_len(n_rows), effects))
+    }
+  } else {
+    if (is.null(intercept)) intercept <- integer(0L)
+    intercept <- as.integer(intercept)
+    if (length(intercept) > 0L && (any(intercept < 1L) || any(intercept > n_rows)))
+      stop("`intercept` indices out of range 1:", n_rows, ".")
+  }
+  effect_idx   <- setdiff(seq_len(n_rows), intercept)
+  int_arr      <- sub_arr[intercept,  , drop = FALSE]
+  eff_arr      <- sub_arr[effect_idx, , drop = FALSE]
+
+  n_int   <- nrow(int_arr)
+  n_eff   <- nrow(eff_arr)
+  x_int   <- seq_len(n_int)
+  x_eff   <- if (n_int > 0L) seq_len(n_eff) + n_int else seq_len(n_eff)
+  x_range <- c(0.5, max(c(x_int, x_eff), 0) + 0.5)
+
+  if (is.null(intercept_names))
+    intercept_names <- rownames(int_arr)
+  if (is.null(effect_names))
+    effect_names <- sub(paste0("^", type, "_?"), "", rownames(eff_arr))
+
+  if (length(intercept_names) != n_int)
+    stop("`intercept_names` must have length ", n_int, ".")
+  if (length(effect_names) != n_eff)
+    stop("`effect_names` must have length ", n_eff, ".")
+
+  dots <- list(...)
+  par_arg_names <- c("mar","oma","mgp","tcl","las","cex","cex.axis","cex.lab","cex.main")
+  par_settings  <- dots[intersect(names(dots), par_arg_names)]
+  if (is.null(par_settings$mar)) {
+    mar <- c(4.1, 4.1, 2.1, 4.1)
+    if (n_int == 0L) mar[2L] <- 1.1
+    if (n_eff == 0L) mar[4L] <- 1.1
+    par_settings$mar <- mar
+  }
+
+  main       <- if (!is.null(dots$main))       dots$main else
+                  if (n_int > 0L) paste0(names(ci)[1L], ": ", intercept_names[1L])
+                  else paste0(names(ci)[1L], ": ", type)
+  xlab       <- if (!is.null(dots$xlab))       dots$xlab       else ""
+  ylab       <- if (!is.null(dots$ylab))       dots$ylab       else if (n_int > 0L) "Intercept" else ""
+  ylab_right <- if (!is.null(dots$ylab_right)) dots$ylab_right else "Effect"
+  if (!is.null(yleft$label))  ylab       <- yleft$label
+  if (!is.null(yright$label)) ylab_right <- yright$label
+  col_int    <- if (!is.null(dots$col_intercept)) dots$col_intercept else "black"
+  col_eff    <- if (!is.null(dots$col_effect))    dots$col_effect    else "black"
+  pch        <- if (!is.null(dots$pch)) dots$pch else 16L
+
+  pad <- function(r) { d <- diff(r); if (d == 0) d <- 0.5; r + c(-1,1)*0.05*d }
+  intercept_ylim <- if (!is.null(yleft$lim))  yleft$lim else
+                    if (!is.null(dots$ylim)) dots$ylim else
+                    if (n_int > 0L) pad(range(int_arr[, c("lower","upper")], na.rm = TRUE))
+  effect_ylim    <- if (!is.null(yright$lim)) yright$lim else
+                    if (n_eff > 0L) pad(range(eff_arr[, c("lower","upper")], na.rm = TRUE))
+
+  cap_hw <- cap_length
+  draw_ci <- function(x_pos, dat, col) {
+    for (i in seq_along(x_pos)) {
+      x  <- x_pos[i]
+      lo <- dat[i, "lower"];  hi <- dat[i, "upper"];  md <- dat[i, "mid"]
+      segments(x, lo, x, hi, col = col)
+      segments(x - cap_hw, lo, x + cap_hw, lo, col = col)
+      segments(x - cap_hw, hi, x + cap_hw, hi, col = col)
+      points(x, md, pch = pch, col = col, cex = pt_cex)
+    }
+  }
+
+  x_all      <- c(x_int, x_eff)
+  all_labels <- c(intercept_names, effect_names)
+  n_labels   <- length(all_labels)
+
+  if (length(label_angle) == 1L) {
+    angles <- rep(label_angle, n_labels)
+  } else if (length(label_angle) == 2L) {
+    angles <- c(rep(label_angle[1L], n_int), rep(label_angle[2L], n_eff))
+  } else if (length(label_angle) == n_labels) {
+    angles <- label_angle
+  } else {
+    stop("`label_angle` must have length 1, 2, or ", n_labels,
+         " (one per label), got ", length(label_angle), ".")
+  }
+  adjs <- cbind(sin(angles * pi / 180) * 0.5 + 0.5, 1)
+
+  pars_to_save <- names(par_settings)
+  if (!is.null(layout)) pars_to_save <- c("mfrow", pars_to_save)
+  if (length(pars_to_save)) {
+    old_par <- setNames(lapply(pars_to_save, par), pars_to_save)
+    on.exit(par(old_par), add = TRUE)
+  }
+  if (!is.null(layout)) par(mfrow = layout)
+  if (length(par_settings)) do.call(par, par_settings)
+  ylab_cex <- par("cex.lab")
+
+  base_ylim <- if (n_int > 0L) intercept_ylim else effect_ylim
+  plot.default(NA, xlim = x_range, ylim = base_ylim,
+               axes = FALSE, xlab = xlab, ylab = ylab, main = main)
+
+  left_axis_args  <- yleft[!names(yleft)  %in% c("label", "lim")]
+  right_axis_args <- yright[!names(yright) %in% c("label", "lim")]
+
+  if (n_int > 0L) {
+    do.call(axis, c(list(side = 2L), left_axis_args))
+    draw_ci(x_int, int_arr, col_int)
+  }
+
+  if (n_eff > 0L) {
+    if (n_int > 0L) par(new = TRUE)
+    if (n_int > 0L)
+      plot.default(NA, xlim = x_range, ylim = effect_ylim,
+                   axes = FALSE, ann = FALSE, bty = "n")
+    if (effect_line)
+      segments(x_eff[1L] - 0.25, 0, x_eff[length(x_eff)] + 0.25, 0,
+               col = "grey", lty = 3L)
+    draw_ci(x_eff, eff_arr, col_eff)
+    do.call(axis, c(list(side = 4L), right_axis_args))
+    if (nchar(ylab_right) > 0L)
+      mtext(ylab_right, side = 4L, line = 3L, cex = ylab_cex * par("cex"))
+  }
+
+  y0    <- par("usr")[3L]
+  line_to_usr <- diff(par("usr")[3L:4L]) / par("pin")[2L] *
+                 par("cin")[2L] * par("cex") * par("mgp")[2L]
+
+  draw_xaxis_seg <- function(x_pos) {
+    if (length(x_pos) == 1L)
+      segments(x_pos - 0.25, y0, x_pos + 0.25, y0, xpd = TRUE)
+    else
+      axis(1L, at = x_pos, labels = FALSE)
+  }
+  if (n_int > 0L) draw_xaxis_seg(x_int)
+  if (n_eff > 0L) draw_xaxis_seg(x_eff)
+
+  cex_axis <- par("cex.axis")
+  y_text <- y0 - line_to_usr * cex_axis
+  step   <- line_to_usr * cex_axis
+  for (i in seq_along(x_all)) {
+    off <- if (xtick_stagger && i %% 2L == 0L) step else 0
+    text(x_all[i], y_text - off, labels = all_labels[i],
+         srt = angles[i], xpd = TRUE,
+         adj = adjs[i, ], cex = cex_axis)
+  }
+
+  invisible(sub_arr)
+}
+
+plot_credints <- function(ci, quants = 1:3,
+                          effect_only = NULL, intercept_only = NULL,
+                          order = NULL, layout = NA,
+                          plot_args = NULL, ...) {
+  if (is.null(plot_args)) plot_args <- list()
+  if (!is.list(ci) || !all(vapply(ci, is.matrix, logical(1L))))
+    stop("`ci` must be a list of matrices (output of credint()).")
+
+  if (length(ci) > 1L) {
+    elem_names <- names(ci)
+    if (is.null(elem_names) || any(elem_names == ""))
+      stop("All elements of a multi-element `ci` must be named.")
+    dots <- list(...)
+    if (isTRUE(is.na(layout))) {
+      sub_layout <- NA
+    } else if (is.null(layout)) {
+      sub_layout <- NULL
+    } else {
+      par(mfrow = layout)
+      sub_layout <- NULL
+    }
+    for (nm in elem_names) {
+      args <- modifyList(dots, if (!is.null(plot_args[[nm]]))
+                                 plot_args[[nm]] else list())
+      args$main  <- if (!is.null(plot_args[[nm]]$main)) plot_args[[nm]]$main else ""
+      layout_val <- if (!is.null(plot_args[[nm]]$layout)) plot_args[[nm]]$layout else sub_layout
+      args <- args[names(args) != "layout"]
+      if (is.null(args$ylab)) args$ylab <- nm
+      do.call(.plot_cor_panel, c(list(mat=ci[[nm]], quants=quants, layout=layout_val), args))
+    }
+    return(invisible(NULL))
+  }
+
+  cl <- .classify_types(ci)
+  bad_eo <- effect_only[!effect_only %in% cl$all_types]
+  bad_io <- intercept_only[!intercept_only %in% cl$all_types]
+  if (length(bad_eo)) stop("Types in `effect_only` not found: ",
+                            paste(bad_eo, collapse = ", "), ".")
+  if (length(bad_io)) stop("Types in `intercept_only` not found: ",
+                            paste(bad_io, collapse = ", "), ".")
+  both <- intersect(effect_only, intercept_only)
+  if (length(both)) stop("Types in both `effect_only` and `intercept_only`: ",
+                          paste(both, collapse = ", "), ".")
+
+  ordered_multi <- .resolve_order(order, cl$multi_types)
+  dots <- list(...)
+
+  auto_eff <- cl$multi_types[vapply(cl$multi_types, function(t) {
+    all(grepl("_", cl$rn[cl$types == t], fixed = TRUE))
+  }, logical(1L))]
+  new_eff   <- auto_eff[!auto_eff %in% c(effect_only, intercept_only)]
+  effect_only <- c(effect_only, new_eff)
+
+  sv_agg <- cl$single_types[!cl$single_types %in% c(effect_only, intercept_only)]
+  sv_eff <- cl$single_types[cl$single_types %in% effect_only]
+  sv_int <- cl$single_types[cl$single_types %in% intercept_only]
+
+  panels <- list()
+  if (length(sv_agg))
+    panels <- c(panels, list(list(kind="agg",  types=sv_agg,
+                                  main=names(ci)[1L])))
+  for (t in sv_eff)
+    panels <- c(panels, list(list(kind="eff",  t=t, main=t)))
+  for (t in sv_int)
+    panels <- c(panels, list(list(kind="int",  t=t, main=t)))
+  for (t in ordered_multi) {
+    kind <- if (t %in% effect_only) "eff" else
+            if (t %in% intercept_only) "int" else "norm"
+    panels <- c(panels, list(list(kind=kind, t=t, main=t)))
+  }
+
+  n_panels <- length(panels)
+  if (n_panels == 0L) stop("No panels to plot.")
+
+  if (isTRUE(is.na(layout))) {
+    sub_layout <- NA
+  } else if (is.null(layout)) {
+    sub_layout <- NULL
+  } else {
+    par(mfrow = layout)
+    sub_layout <- NULL
+  }
+
+  for (p in panels) {
+    key  <- if (p$kind == "agg") "intercepts" else p$t
+    base <- list(ci = ci, quants = quants)
+    if (p$kind == "agg") {
+      base$type <- p$types
+    } else {
+      base$type <- p$t
+      if (p$kind == "eff") base["intercept"] <- list(NULL)
+      if (p$kind == "int") base["effects"]   <- list(NULL)
+    }
+    .panel_call(plot_credint, base, key, plot_args, dots, p$main, sub_layout)
+  }
+
+  invisible(NULL)
+}
+
+plot_credints_map <- function(ci, quants = 1:3,
+                              order = NULL, layout = NA,
+                              plot_args = NULL, ...) {
+  if (is.null(plot_args)) plot_args <- list()
+  if (!is.list(ci) || length(ci) != 1L || !is.matrix(ci[[1L]]))
+    stop("`ci` must be a length-1 list containing a matrix.")
+
+  cl   <- .classify_types(ci)
+  dots <- list(...)
+
+  ordered_multi <- .resolve_order(order, cl$multi_types)
+
+  missing_f <- ordered_multi[vapply(ordered_multi, function(t)
+    is.null(plot_args[[t]]$factors), logical(1L))]
+  if (length(missing_f)) {
+    lines <- vapply(missing_f, function(t) {
+      rows_t   <- cl$rn[cl$types == t]
+      suffixes <- sub(paste0("^", t, "_?"), "", rows_t)
+      paste0("  ", t, ": row suffixes are [", paste(suffixes, collapse=", "),
+             "] -- supply factors via plot_args$", t, "$factors")
+    }, character(1L))
+    stop("Multi-value type(s) need `factors` in `plot_args`:\n",
+         paste(lines, collapse="\n"))
+  }
+
+  panels <- list()
+  if (length(cl$single_types))
+    panels <- c(panels, list(list(kind="agg",
+                                  types=cl$single_types,
+                                  main="")))
+  for (t in ordered_multi)
+    panels <- c(panels, list(list(kind="map", t=t, main=NULL)))
+
+  n_panels <- length(panels)
+  if (n_panels == 0L) stop("No panels to plot.")
+
+  if (isTRUE(is.na(layout))) {
+    sub_layout <- NA
+  } else if (is.null(layout)) {
+    sub_layout <- NULL
+  } else {
+    par(mfrow = layout)
+    sub_layout <- NULL
+  }
+
+  for (p in panels) {
+    key  <- if (p$kind == "agg") "intercepts" else p$t
+    base <- list(ci = ci, quants = quants)
+    if (p$kind == "agg") {
+      base$type <- p$types
+      .panel_call(plot_credint, base, key, plot_args, dots, p$main, sub_layout)
+    } else {
+      base$type <- p$t
+      .panel_call(plot_credint_map, base, key, plot_args, dots, p$main, sub_layout)
+    }
+  }
+
+  invisible(NULL)
+}

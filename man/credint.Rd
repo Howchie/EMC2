@@ -13,10 +13,20 @@
   digits = 3,
   N = 1000,
   covariates = NULL,
+  plot = FALSE,
+  plot_args = list(),
   ...
 )
 
-\method{credint}{emc}(x, selection = "mu", probs = c(0.025, 0.5, 0.975), digits = 3, ...)
+\method{credint}{emc}(
+  x,
+  selection = "mu",
+  probs = c(0.025, 0.5, 0.975),
+  digits = 3,
+  plot = FALSE,
+  plot_args = list(),
+  ...
+)
 
 credint(x, ...)
 }

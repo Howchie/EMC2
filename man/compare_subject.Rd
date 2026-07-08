@@ -14,7 +14,9 @@ compare_subject(
   return_summary = FALSE,
   n_cores = 1,
   subject = NULL,
-  WAIC = TRUE
+  WAIC = TRUE,
+  LOO = FALSE,
+  pointwise = c("trial", "subject")
 )
 }
 \arguments{
@@ -39,6 +41,12 @@ If a vector is supplied, only the iterations in the vector will be considered.}
 \item{subject}{Used to select subset of subjects (integer or character vector)}
 
 \item{WAIC}{Boolean, defaults to \code{TRUE}. Include WAIC computed via the \code{loo} package for each subject.}
+
+\item{LOO}{Boolean, defaults to \code{FALSE}. Include PSIS-LOO computed via the \code{loo} package for each subject.}
+
+\item{pointwise}{Character string, one of \code{"trial"} or \code{"subject"}, passed to
+\code{compare()} for pooled WAIC/LOO comparisons. If \code{subject} is specified for
+\code{compare_subject()}, the pointwise unit remains the selected subject's trials.}
 }
 \value{
 List of matrices for each subject of effective number of parameters,

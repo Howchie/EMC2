@@ -19,6 +19,8 @@
   cores_for_chains = length(emc),
   max_tries = 20,
   thin = FALSE,
+  rhat_version = "old",
+  save_pw_ll = FALSE,
   ...
 )
 

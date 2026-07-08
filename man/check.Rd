@@ -10,6 +10,7 @@
   selection = c("mu", "sigma2", "alpha"),
   digits = 3,
   plot_worst = TRUE,
+  version = "old",
   ...
 )
 
