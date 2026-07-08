@@ -8,6 +8,8 @@
 #include "wald_functions.h"
 #include "exgaussian_functions.h"
 #include "gsl_utils.h"
+#include "gl_quad.h"
+#include "ss_exg_analytic.h"
 #include <gsl/gsl_integration.h>
 #include <gsl/gsl_errno.h>
 
@@ -155,11 +157,11 @@ static inline double ss_texg_stop_success_lpdf(
     NumericMatrix pars,
     double min_ll,
     double upper = R_PosInf,
-    int max_subdiv = 30,
-    double abs_tol = 1e-5,
-    double rel_tol = 1e-4,
-    double k_sigma = 6.0,
-    double k_tau = 12.0
+    int max_subdiv = 100,
+    double abs_tol = 1e-8,
+    double rel_tol = 1e-6,
+    double k_sigma = SS_WINDOW_K_SIGMA,
+    double k_tau = SS_WINDOW_K_TAU
 ) {
   gsl_function F;
   // Let's pass the NumericMatrix itself via a struct.
@@ -360,11 +362,11 @@ static inline double ss_exg_stop_success_lpdf(
     NumericMatrix pars,
     double min_ll,
     double upper = R_PosInf,
-    int max_subdiv = 30,
-    double abs_tol = 1e-5,
-    double rel_tol = 1e-4,
-    double k_sigma = 6.0,
-    double k_tau = 12.0
+    int max_subdiv = 100,
+    double abs_tol = 1e-8,
+    double rel_tol = 1e-6,
+    double k_sigma = SS_WINDOW_K_SIGMA,
+    double k_tau = SS_WINDOW_K_TAU
 ) {
   gsl_function F;
   struct Wrapper {
@@ -658,6 +660,184 @@ NumericVector stopfn_texg(
   NumericMatrix dt(mu.size(), t.size(), tmp.begin());
   dt(0, _) = dt(0, _) - SSD;
   return dTEXGrace(dt, mu, sigma, tau, lb);
+}
+
+// ----------------------------------------------------------------------------
+// GAUSS-LEGENDRE VARIANTS OF THE STOP-SUCCESS INTEGRALS  (added 2026-06)
+// Reuse the same integrand internals as the adaptive (qags/qagiu) versions
+// above; integrate over the SAME finite window with a fixed n-node GL rule.
+// See gl_quad.h. These are a fast alternative to the GSL adaptive routines.
+// ----------------------------------------------------------------------------
+
+// --- truncated ex-Gaussian stop-success, GL version (LIVE PATH twin) ---
+static inline double ss_texg_stop_success_lpdf_gl(
+    double SSD,
+    NumericMatrix pars,
+    double min_ll,
+    double upper = R_PosInf,
+    int n_nodes = 64,
+    double k_sigma = SS_WINDOW_K_SIGMA,
+    double k_tau = SS_WINDOW_K_TAU
+) {
+  struct Wrapper { NumericMatrix pars; double SSD; } w_params = {pars, SSD};
+  auto integrand = [](double x, void* p) -> double {
+    Wrapper* wp = static_cast<Wrapper*>(p);
+    const int n_acc = wp->pars.nrow();
+    double muS = wp->pars(0,3), sigS = wp->pars(0,4), tauS = wp->pars(0,5);
+    double lbS = wp->pars(0,9);
+    double fS = dtexg(x, muS, sigS, tauS, lbS, R_PosInf, false);
+    if (fS <= 0.0) return 0.0;
+    double S_go_all = 1.0;
+    for (int i = 0; i < n_acc; ++i) {
+      double Si = ptexg(x + wp->SSD, wp->pars(i,0), wp->pars(i,1),
+                        wp->pars(i,2), wp->pars(i,8), R_PosInf, false, false);
+      S_go_all *= Si;
+      if (S_go_all <= 0.0) return 0.0;
+    }
+    return fS * S_go_all;
+  };
+  const double muS = pars(0,3), sigS = pars(0,4), tauS = pars(0,5);
+  const double lbS = pars(0,9);
+  const double ub_heur = muS + k_sigma * sigS + k_tau * tauS;
+  // lbS = -Inf (untruncated stop) needs a finite GL window: mirror the upper
+  // heuristic on the lower side
+  const double lo = emc2_isfinite(lbS) ? lbS
+                                       : muS - k_sigma * sigS - k_tau * tauS;
+  double ub = emc2_isfinite(upper) ? upper : ub_heur;
+  if (!(ub > lo)) return min_ll;
+  double res = gl_integrate(integrand, &w_params, lo, ub, n_nodes);
+  if (!emc2_isfinite(res) || res <= 0.0) return min_ll;
+  return std::log(res);
+}
+
+// --- "auto"/"analytic" dispatch (PLAN, Andrew 2026-06-11) ---------------------
+// n_go == 1 with an infinite upper limit: exact closed form (full-line or
+// truncated; see ss_exg_analytic.h). Guard trips, kinked domains, finite upper
+// limits, and n_go >= 2: GL with an auto node bump for tight stop densities.
+static inline double ss_texg_stop_success_lpdf_autodisp(
+    double SSD, NumericMatrix pars, double min_ll,
+    double upper = R_PosInf, int n_nodes = 64,
+    double k_sigma = SS_WINDOW_K_SIGMA, double k_tau = SS_WINDOW_K_TAU
+) {
+  if (pars.nrow() == 1 && !emc2_isfinite(upper)) {
+    bool ok = false;
+    double p = ss_texg_stop_success_analytic1(
+      SSD, pars(0,0), pars(0,1), pars(0,2), pars(0,8),
+      pars(0,3), pars(0,4), pars(0,5), pars(0,9), ok);
+    if (ok) return std::log(p);
+  }
+  const double muS = pars(0,3), sigS = pars(0,4), tauS = pars(0,5);
+  const double lbS = pars(0,9);
+  const double lo = emc2_isfinite(lbS) ? lbS
+                                       : muS - k_sigma * sigS - k_tau * tauS;
+  const double ub = emc2_isfinite(upper) ? upper
+                                         : muS + k_sigma * sigS + k_tau * tauS;
+  const int n_eff = gl_auto_nodes(n_nodes, lo, ub, sigS);
+  return ss_texg_stop_success_lpdf_gl(SSD, pars, min_ll, upper, n_eff,
+                                      k_sigma, k_tau);
+}
+
+// --- LIVE entry point: matches the ss_stop_success_fn signature so
+//     particle_ll.cpp can point the function pointer at it. Reads the
+//     process-global stop_method_config(), which calc_ll_manager() sets from
+//     SSEXG(stop_method =, stop_n_nodes =) once per likelihood call.
+//     "integrate" is the original qags route, numerically untouched. ---
+static inline double ss_texg_stop_success_lpdf_live(
+    double SSD, NumericMatrix pars, double min_ll,
+    double upper = R_PosInf, int max_subdiv = 100,
+    double abs_tol = 1e-8, double rel_tol = 1e-6,
+    double k_sigma = SS_WINDOW_K_SIGMA, double k_tau = SS_WINDOW_K_TAU
+) {
+  const StopMethodConfig& c = stop_method_config();
+  switch (c.method) {
+  case STOP_METHOD_INTEGRATE:
+    return ss_texg_stop_success_lpdf(SSD, pars, min_ll, upper, max_subdiv,
+                                     abs_tol, rel_tol, k_sigma, k_tau);
+  case STOP_METHOD_GL:
+    return ss_texg_stop_success_lpdf_gl(SSD, pars, min_ll, upper, c.n_nodes,
+                                        k_sigma, k_tau);
+  default:   // STOP_METHOD_AUTO / STOP_METHOD_ANALYTIC
+    return ss_texg_stop_success_lpdf_autodisp(SSD, pars, min_ll, upper,
+                                              c.n_nodes, k_sigma, k_tau);
+  }
+}
+
+// --- stop_method config setter/getter (called from calc_ll_manager and tests).
+//     Process-global; see gl_quad.h for the threading rationale. ---
+// [[Rcpp::export]]
+void emc2_set_stop_method(std::string method = "auto", int n_nodes = 64) {
+  StopMethodConfig& c = stop_method_config();
+  if (method == "auto")           c.method = STOP_METHOD_AUTO;
+  else if (method == "integrate") c.method = STOP_METHOD_INTEGRATE;
+  else if (method == "gl")        c.method = STOP_METHOD_GL;
+  else if (method == "analytic")  c.method = STOP_METHOD_ANALYTIC;
+  else Rcpp::stop("unknown stop_method '" + method + "'");
+  if (n_nodes < 2) Rcpp::stop("stop_n_nodes must be >= 2");
+  c.n_nodes = n_nodes;
+}
+// [[Rcpp::export]]
+Rcpp::List emc2_get_stop_method() {
+  const StopMethodConfig& c = stop_method_config();
+  static const char* method_names[4] = {"auto", "integrate", "gl", "analytic"};
+  return Rcpp::List::create(
+    Rcpp::_["method"]  = std::string(method_names[c.method]),
+    Rcpp::_["n_nodes"] = c.n_nodes);
+}
+
+// --- which branch would "auto" take for this trial? (test/benchmark aid) ---
+// [[Rcpp::export]]
+std::string ss_texg_stop_success_auto_branch(
+    double SSD, NumericMatrix pars, double upper = -1.0
+) {
+  if (upper <= 0.0) upper = R_PosInf;   // sentinel: <=0 means auto/Inf
+  if (pars.nrow() != 1) return "gl_ngo2plus";
+  if (emc2_isfinite(upper)) return "gl_finite_upper";
+  bool ok = false;
+  ss_texg_stop_success_analytic1(
+    SSD, pars(0,0), pars(0,1), pars(0,2), pars(0,8),
+    pars(0,3), pars(0,4), pars(0,5), pars(0,9), ok);
+  if (!ok) return "gl_guard";
+  const bool full_line = (pars(0,9) == R_NegInf) && (pars(0,8) == R_NegInf);
+  return full_line ? "analytic_fullline" : "analytic_trunc";
+}
+
+// --- Rcpp test wrappers: return the INTEGRAL VALUE (not log) for one trial.
+//     method = "integrate" -> pure qags (config-independent),
+//              "gl"        -> explicit fixed Gauss-Legendre with n_nodes,
+//              "analytic"/"auto" -> the auto dispatch rule with n_nodes as the
+//                                   GL fallback base,
+//              "live"      -> the live dispatcher (honours the config set by
+//                             emc2_set_stop_method(), i.e. the real plumbing).
+//     Used by testthat / benchmarking from R. Not on the fitting hot path. ---
+// NB: k_sigma/k_tau defaults are literal copies of SS_WINDOW_K_SIGMA/K_TAU
+// (gl_quad.h) — compileAttributes copies defaults verbatim into the generated
+// R wrapper, so named constants cannot be used in this exported signature.
+// max_subdiv/abs_tol/rel_tol defaults match the LIVE call sites in
+// particle_ll.cpp (100, 1e-8, 1e-6) so wrapper-default results equal live.
+// [[Rcpp::export]]
+double ss_texg_stop_success_value(
+    double SSD, NumericMatrix pars, std::string method = "integrate",
+    double upper = -1.0, int n_nodes = 64,
+    double k_sigma = 8.0, double k_tau = 16.0,
+    int max_subdiv = 100, double abs_tol = 1e-8, double rel_tol = 1e-6
+) {
+  const double min_ll = -1e10;
+  if (upper <= 0.0) upper = R_PosInf;   // sentinel: <=0 means auto/Inf
+  double lp;
+  if (method == "gl") {
+    lp = ss_texg_stop_success_lpdf_gl(SSD, pars, min_ll, upper, n_nodes,
+                                      k_sigma, k_tau);
+  } else if (method == "auto" || method == "analytic") {
+    lp = ss_texg_stop_success_lpdf_autodisp(SSD, pars, min_ll, upper, n_nodes,
+                                            k_sigma, k_tau);
+  } else if (method == "live") {
+    lp = ss_texg_stop_success_lpdf_live(SSD, pars, min_ll, upper, max_subdiv,
+                                        abs_tol, rel_tol, k_sigma, k_tau);
+  } else {
+    lp = ss_texg_stop_success_lpdf(SSD, pars, min_ll, upper, max_subdiv,
+                                   abs_tol, rel_tol, k_sigma, k_tau);
+  }
+  return (lp <= min_ll) ? 0.0 : std::exp(lp);
 }
 
 #endif

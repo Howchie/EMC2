@@ -7,3 +7,6 @@
 ^docs$
 ^pkgdown$
 ^LICENSE\.md$
+^CLAUDE\.md$
+^CLAUDE_TASK\.md$
+^[^/]+\.RData$

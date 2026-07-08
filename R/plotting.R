@@ -358,6 +358,7 @@ profile_plot <- function (data, design, p_vector, range = 0.5, layout = NA, p_mi
       p_matrix <- matrix(p_vector,nrow=1)
       colnames(p_matrix) <- names(p_vector)
       model <- attr(dadm, "model")()
+      set_stop_method_from_model(model)  # SS models: stop_method -> C++ config
       p_types=names(model$p_types)
       designs <- list()
       for (p in p_types) {

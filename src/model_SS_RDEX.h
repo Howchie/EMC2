@@ -8,6 +8,7 @@
 #include "wald_functions.h"
 #include "exgaussian_functions.h"
 #include "gsl_utils.h"
+#include "gl_quad.h"
 #include <gsl/gsl_integration.h>
 #include <gsl/gsl_errno.h>
 using namespace Rcpp;
@@ -183,11 +184,11 @@ static inline double ss_rdex_stop_success_lpdf(
     NumericMatrix pars,
     double min_ll,
     double upper = R_PosInf,
-    int max_subdiv = 30,
-    double abs_tol = 1e-5,
-    double rel_tol = 1e-4,
-    double k_sigma = 6.0,
-    double k_tau = 12.0
+    int max_subdiv = 100,
+    double abs_tol = 1e-8,
+    double rel_tol = 1e-6,
+    double k_sigma = SS_WINDOW_K_SIGMA,
+    double k_tau = SS_WINDOW_K_TAU
 ) {
   gsl_function F;
   struct Wrapper {
@@ -512,6 +513,135 @@ NumericVector stopfn_rdex(
   NumericMatrix dt(n_acc + 1, t.size(), tmp.begin());
   dt(0, _) = dt(0, _) - SSD;
   return dRDEXrace(dt, mu, sigma, tau, lb, v, B, A, t0, s);
+}
+
+// ----------------------------------------------------------------------------
+// GAUSS-LEGENDRE VARIANT OF THE RDEX STOP-SUCCESS INTEGRAL  (added 2026-06)
+// Same integrand as ss_rdex_stop_success_lpdf (truncated ex-Gaussian stop x
+// product of Wald survivors); integrated over [lbS, ub] with a fixed n-node GL
+// rule instead of GSL adaptive qags/qagiu. See gl_quad.h.
+// ----------------------------------------------------------------------------
+static inline double ss_rdex_stop_success_lpdf_gl(
+    double SSD,
+    NumericMatrix pars,
+    double min_ll,
+    double upper = R_PosInf,
+    int n_nodes = 64,
+    double k_sigma = SS_WINDOW_K_SIGMA,
+    double k_tau = SS_WINDOW_K_TAU
+) {
+  struct Wrapper { NumericMatrix pars; double SSD; } w_params = {pars, SSD};
+  auto integrand = [](double x, void* p) -> double {
+    Wrapper* wp = static_cast<Wrapper*>(p);
+    const int n_acc = wp->pars.nrow();
+    double muS = wp->pars(0,5), sigS = wp->pars(0,6), tauS = wp->pars(0,7);
+    double lbS = wp->pars(0,10);
+    double fS = dtexg(x, muS, sigS, tauS, lbS, R_PosInf, false);
+    if (fS <= 0.0) return 0.0;
+    double S_go_all = 1.0;
+    for (int i = 0; i < n_acc; ++i) {
+      double s = wp->pars(i, 4);
+      double alpha = (wp->pars(i, 1) / s) + .5 * (wp->pars(i, 2) / s);
+      double nu    =  wp->pars(i, 0) / s;
+      double gamma = .5 * (wp->pars(i, 2) / s);
+      double t0    =  wp->pars(i, 3);
+      double dt_i  = (x + wp->SSD) - t0;
+      double Si = 1.0;
+      if (dt_i > 0.) Si = 1.0 - pigt_impl(dt_i, alpha, nu, gamma);
+      S_go_all *= Si;
+      if (S_go_all <= 0.0) return 0.0;
+    }
+    return fS * S_go_all;
+  };
+  const double muS = pars(0,5), sigS = pars(0,6), tauS = pars(0,7);
+  const double lbS = pars(0,10);
+  const double ub_heur = muS + k_sigma * sigS + k_tau * tauS;
+  // lbS = -Inf (untruncated stop) needs a finite GL window: mirror the upper
+  // heuristic on the lower side
+  const double lo = emc2_isfinite(lbS) ? lbS
+                                       : muS - k_sigma * sigS - k_tau * tauS;
+  double ub = emc2_isfinite(upper) ? upper : ub_heur;
+  if (!(ub > lo)) ub = lo + 1e-12;
+  double res = gl_integrate(integrand, &w_params, lo, ub, n_nodes);
+  if (!emc2_isfinite(res) || res <= 0.0) return min_ll;
+  return std::log(res);
+}
+
+// --- "auto" dispatch: RDEX has no analytic form (Wald survivor arguments are
+//     nonlinear in t), so auto = GL with the tight-stop-density node bump. ---
+static inline double ss_rdex_stop_success_lpdf_autodisp(
+    double SSD, NumericMatrix pars, double min_ll,
+    double upper = R_PosInf, int n_nodes = 64,
+    double k_sigma = SS_WINDOW_K_SIGMA, double k_tau = SS_WINDOW_K_TAU
+) {
+  const double muS = pars(0,5), sigS = pars(0,6), tauS = pars(0,7);
+  const double lbS = pars(0,10);
+  const double lo = emc2_isfinite(lbS) ? lbS
+                                       : muS - k_sigma * sigS - k_tau * tauS;
+  const double ub = emc2_isfinite(upper) ? upper
+                                         : muS + k_sigma * sigS + k_tau * tauS;
+  const int n_eff = gl_auto_nodes(n_nodes, lo, ub, sigS);
+  return ss_rdex_stop_success_lpdf_gl(SSD, pars, min_ll, upper, n_eff,
+                                      k_sigma, k_tau);
+}
+
+// --- LIVE entry point: matches the ss_stop_success_fn signature (see
+//     particle_ll.cpp). Reads the process-global stop_method_config(), set by
+//     calc_ll_manager() from SSRDEX(stop_method =, stop_n_nodes =) once per
+//     likelihood call. "integrate" is the original qags route, untouched. ---
+static inline double ss_rdex_stop_success_lpdf_live(
+    double SSD, NumericMatrix pars, double min_ll,
+    double upper = R_PosInf, int max_subdiv = 100,
+    double abs_tol = 1e-8, double rel_tol = 1e-6,
+    double k_sigma = SS_WINDOW_K_SIGMA, double k_tau = SS_WINDOW_K_TAU
+) {
+  const StopMethodConfig& c = stop_method_config();
+  switch (c.method) {
+  case STOP_METHOD_INTEGRATE:
+    return ss_rdex_stop_success_lpdf(SSD, pars, min_ll, upper, max_subdiv,
+                                     abs_tol, rel_tol, k_sigma, k_tau);
+  case STOP_METHOD_GL:
+    return ss_rdex_stop_success_lpdf_gl(SSD, pars, min_ll, upper, c.n_nodes,
+                                        k_sigma, k_tau);
+  default:   // STOP_METHOD_AUTO / STOP_METHOD_ANALYTIC (no RDEX analytic form)
+    return ss_rdex_stop_success_lpdf_autodisp(SSD, pars, min_ll, upper,
+                                              c.n_nodes, k_sigma, k_tau);
+  }
+}
+
+// --- Rcpp test wrapper: integral value (not log) for one trial.
+//     method = "integrate" -> pure qags, "gl" -> explicit GL,
+//              "auto" -> the auto dispatch rule (GL + node bump),
+//              "live" -> the live dispatcher (honours emc2_set_stop_method()).
+// NB: k_sigma/k_tau defaults are literal copies of SS_WINDOW_K_SIGMA/K_TAU
+// (gl_quad.h) — compileAttributes copies defaults verbatim into the generated
+// R wrapper, so named constants cannot be used in this exported signature.
+// max_subdiv/abs_tol/rel_tol defaults match the LIVE call sites in
+// particle_ll.cpp (100, 1e-8, 1e-6) so wrapper-default results equal live.
+// [[Rcpp::export]]
+double ss_rdex_stop_success_value(
+    double SSD, NumericMatrix pars, std::string method = "integrate",
+    double upper = -1.0, int n_nodes = 64,
+    double k_sigma = 8.0, double k_tau = 16.0,
+    int max_subdiv = 100, double abs_tol = 1e-8, double rel_tol = 1e-6
+) {
+  const double min_ll = -1e10;
+  if (upper <= 0.0) upper = R_PosInf;   // sentinel: <=0 means auto/Inf
+  double lp;
+  if (method == "gl") {
+    lp = ss_rdex_stop_success_lpdf_gl(SSD, pars, min_ll, upper, n_nodes,
+                                      k_sigma, k_tau);
+  } else if (method == "auto") {
+    lp = ss_rdex_stop_success_lpdf_autodisp(SSD, pars, min_ll, upper, n_nodes,
+                                            k_sigma, k_tau);
+  } else if (method == "live") {
+    lp = ss_rdex_stop_success_lpdf_live(SSD, pars, min_ll, upper, max_subdiv,
+                                        abs_tol, rel_tol, k_sigma, k_tau);
+  } else {
+    lp = ss_rdex_stop_success_lpdf(SSD, pars, min_ll, upper, max_subdiv,
+                                   abs_tol, rel_tol, k_sigma, k_tau);
+  }
+  return (lp <= min_ll) ? 0.0 : std::exp(lp);
 }
 
 #endif

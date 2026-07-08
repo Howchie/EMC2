@@ -18,3 +18,4 @@ samples_*.RData
 Math/*
 .positai
 bazinga*
+.DS_Store

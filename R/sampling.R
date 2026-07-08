@@ -741,6 +741,10 @@ calc_ll_manager <- function(proposals, dadm, model, component = NULL, r_cores = 
           function(i) calc_ll_R(proposals[i,], model=model, dadm = dadm),
          mc.cores=r_cores))
     } else {
+      # SS models: push stop_method/stop_n_nodes into the process-global C++
+      # config once per likelihood call (before any fork, so mclapply workers
+      # inherit it; PSOCK workers run this themselves)
+      set_stop_method_from_model(model)
       p_types <- names(model$p_types)
       designs <- .oo_expanded_designs(dadm)
       constants <- attr(dadm, "constants")
