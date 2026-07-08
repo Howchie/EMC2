@@ -21,6 +21,7 @@ make_ssd(
   stairmin = 0,
   stairmax = Inf,
   p_stop = 0.25,
+  p_stop_replace = TRUE,
   factors = NULL,
   formula = NULL,
   staircase_up = NA,
@@ -51,6 +52,11 @@ corresponding field.}
 
 \item{p_stop}{Default probability of a stop trial for staircase modes (and for
 fixed SSDs when \code{p} is omitted). Must lie between 0 and 1.}
+
+\item{p_stop_replace}{Logical (default \code{TRUE}). When \code{TRUE} each
+trial is independently assigned a stop signal with probability \code{p_stop}
+(Bernoulli). When \code{FALSE} exactly \code{round(n * p_stop)} trials per
+group are designated stop trials, with the specific trials chosen at random.}
 
 \item{factors}{Character vector of column names that define separate
 staircases. When \code{NULL}, all trials share the same staircase.}

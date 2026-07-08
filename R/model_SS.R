@@ -500,11 +500,19 @@ rSSexGaussian <- function(data,pars,ok=rep(TRUE,dim(pars)[1]))
     if (is.null(attr(data,"staircase")))
       stop("When SSD has NAs a staircase list must be supplied!")
     staircase <- attr(data,"staircase")
-    
+
+    # Upper censoring for staircase trials
+    UC <- get_missing(staircase$UC,
+      data[data$lR==levels(data$lR)[[1]],], "UC",Inf,"numeric")[stair]
+
     allR <- allrt <- allSSD <- numeric(ncol(dt))  # to store unified results
     allSSD[] <- Inf
     dts <- dt[,stair,drop=F]
-    
+
+    # Set all accumulators finishing times to Inf where fastest accumulator > UC
+    cens <- apply(dts[-1,,drop=FALSE],2,min) > UC
+    dts[-1,cens] <- Inf
+
     # Non-staircase trials
     dt <- dt[,!stair,drop=F]
     spars <- pars[pstair,,drop=F]
@@ -875,10 +883,18 @@ rSShybrid <- function(data,pars,ok=rep(TRUE,dim(pars)[1]))
       stop("When SSD has NAs a staircase list must be supplied!")
     
     staircase <- attr(pars,"staircase")
-    
+
+    # Upper censoring for staircase trials
+    UC <- get_missing(staircase$UC,
+      data[data$lR==levels(data$lR)[[1]],], "UC",Inf,"numeric")[stair]
+
     allR <- allrt <- numeric(ncol(dt))  # to store unified results
     dts <- dt[,stair,drop=F]
-    
+
+    # Set all accumulators finishing times to Inf where fastest accumulator > UC
+    cens <- apply(dts[-1,,drop=FALSE],2,min) > UC
+    dts[-1,cens] <- Inf
+
     # Non-staircase trials
     dt <- dt[,!stair,drop=F]
     spars <- pars[pstair,,drop=F]
