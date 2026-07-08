@@ -4881,20 +4881,26 @@ apply_trial_trunc:
   // --- Summation of log-likelihoods for all unique trials ---
   // pC modification (if any) is kept in a separate pass so the final summation
   // loop is a pure reduction — allowing #pragma omp simd to vectorize it.
+  //
+  // A contaminant is an intrinsic omission that only manifests as a
+  // never-responded (rt == +Inf) trial, so ONLY those trials pick up the
+  // log(pC) mass; every trial is down-weighted by log(1 - pC). This must match
+  // the R reference (likelihood.R:372-374), which adds the omission mass solely
+  // when rt is +Inf — a left-censored (-Inf) or missing (NA) rt does NOT. One
+  // lambda applied in both the expand and compressed branches so they cannot
+  // drift apart again.
+  auto apply_pC = [&](int j) {
+    const double pC = pC_values[j];
+    const double log1m_pC = log1m(pC);
+    const double rt_j = rts_dadm[j * n_lR];
+    ll_unique[j] = (rt_j == R_PosInf)
+      ? log_sum_exp(std::log(pC), log1m_pC + ll_unique[j])
+      : log1m_pC + ll_unique[j];
+  };
   double total_ll = 0;
   if (expand.length() > 0) { // non-compressed dadm: sum via expand index vector
     if (use_pC) {
-      for (int j = 0; j < n_unique_trials; ++j) {
-        double pC = pC_values[j];
-        double log1m_pC = log1m(pC); // todo double check right helper
-        int start_row_idx = j * n_lR;
-        double rt_j = rts_dadm[start_row_idx];
-        if (rt_j == R_PosInf) {
-          ll_unique[j] = log_sum_exp(std::log(pC), log1m_pC + ll_unique[j]);
-        } else {
-          ll_unique[j] = log1m_pC + ll_unique[j];
-        }
-      }
+      for (int j = 0; j < n_unique_trials; ++j) apply_pC(j);
     }
     const double* ll_ptr = ll_unique.data();
     const int* ex_ptr = expand.begin();
@@ -4915,17 +4921,7 @@ apply_trial_trunc:
     }
   } else { // compressed dadm: each unique trial counted once
     if (use_pC) {
-      for (int j = 0; j < n_unique_trials; ++j) {
-        double pC = pC_values[j];
-        double log1m_pC = std::log1p(-pC);
-        int start_row_idx = j * n_lR;
-        double rt_j = rts_dadm[start_row_idx];
-        if (R_FINITE(rt_j)) {
-          ll_unique[j] = log1m_pC + ll_unique[j];
-        } else {
-          ll_unique[j] = log_sum_exp(std::log(pC), log1m_pC + ll_unique[j]);
-        }
-      }
+      for (int j = 0; j < n_unique_trials; ++j) apply_pC(j);
     }
     const double* ll_ptr = ll_unique.data();
     if (trial_ll_out != nullptr) {
