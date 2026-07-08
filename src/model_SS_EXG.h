@@ -202,7 +202,8 @@ static inline double ss_texg_stop_success_lpdf(
   double tauS = pars(0, 5);
   double lbS  = pars(0, 9);
   double ub_heur = muS + k_sigma * sigS + k_tau * tauS;
-  // Use emc2_isfinite / emc2_isinf (not std:: versions) — -ffast-math breaks them
+  // R_FINITE / emc2_isfinite are libR calls, safe under fast-math; do not
+  // replace with std::isfinite.
   upper = emc2_isfinite(upper) ? upper : ub_heur;
   if (!(upper > lbS)) return min_ll;
 

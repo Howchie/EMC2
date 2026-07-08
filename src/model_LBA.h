@@ -273,8 +273,11 @@ double dleakyba_norm(double t, double A, double b,
   return log_out ? safe_log(f) : f;
 }
 
-// Killed-leaky BA density: f_hit(t_eam) * S_K(t) + f_K(t) * S_R(t_eam)
-// t is raw rt; t_eam = t - t0 is EAM-adjusted time. Erlang uses raw t.
+// Killed-leaky BA density (hit + guess mixture):
+//   f_R(t_eam) * S_K(t) * S_G(t)  +  f_G(t) * S_K(t) * S_R(t_eam)
+// hit term = racer density surviving the kill and guess clocks; guess term =
+// guess density surviving the kill clock and the racer (S_R = 1 - F_R).
+// t is raw rt; t_eam = t - t0 is EAM-adjusted time. Erlang clocks use raw t.
 inline double dkilledleakyba_norm(double t, double v, double b, double A,
                                   double sv, double t0 = 0.0,
                                   double k = 0.0, double lambda_g = 0.0, double lambda_k = 0.0,

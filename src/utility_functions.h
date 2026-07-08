@@ -26,6 +26,11 @@ using namespace Rcpp;
 //   emc2_isfinite(x)  →  R_FINITE(x)           (0 for Inf AND NaN)
 //   emc2_isinf(x)     →  !R_FINITE(x) && !ISNAN(x)
 //   emc2_isnan(x)     →  ISNAN(x)
+// These wrappers exist to give a single home for the fast-math guidance: they
+// forward to libR macros that the compiler cannot fold away. NOTE: the build
+// also passes -fno-finite-math-only (see src/Makevars), which is what keeps raw
+// `x == R_PosInf` / `std::isnan` comparisons honest; these wrappers are correct
+// regardless, so prefer them over std::isfinite/std::isnan in new code.
 // ---------------------------------------------------------------------------
 static inline bool emc2_isfinite(double x) { return (bool)R_FINITE(x); }
 static inline bool emc2_isinf(double x)    { return !R_FINITE(x) && !ISNAN(x); }
