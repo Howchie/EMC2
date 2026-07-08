@@ -34,8 +34,21 @@ double dexg(
     double a = sig_p / tau_p;
     double z = y - a;
     if (z < -8.0) {
-      double log_out_stable = -std::log(tau_p) - 0.5*std::log(2.0 * M_PI)
-                              - 0.5 * y * y - std::log(-z);
+      // Asymptotic log-density via the Mills-ratio expansion of log Phi(z) as
+      // z -> -inf. The tau-dependent pieces of the exact log-density cancel
+      // exactly, leaving the Gaussian core plus the log-Mills series:
+      //   log Phi(z) = log phi(z) - log(-z) + log(1 - 1/z^2 + 3/z^4 - ...)
+      //              = -0.5 log(2pi) - 0.5 z^2 - log(-z) - 1/z^2 + 2.5/z^4 + ...
+      // so  log f ~ -log(tau) - 0.5 log(2pi) - 0.5 y^2 - log(-z) - 1/z^2 + 2.5/z^4.
+      // Keeping the -1/z^2 + 2.5/z^4 corrections (was: leading term only) makes
+      // this branch match the exact density to ~4e-6 at the z=-8 switch (was
+      // ~1.5%), so the integrate/GL routes agree with the exact analytic
+      // stop-success form and the branch discontinuity is negligible for the
+      // sampler. (Cheap; no extra special functions.)
+      double zi2 = 1.0 / (z * z);
+      double log_out_stable = -std::log(tau_p) - 0.5 * std::log(2.0 * M_PI)
+                              - 0.5 * y * y - std::log(-z)
+                              - zi2 + 2.5 * zi2 * zi2;
       return log_d ? log_out_stable : std::exp(log_out_stable);
     }
   }

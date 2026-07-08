@@ -50,11 +50,21 @@ gl_integrate_R <- function(f, lower, upper, n_nodes = 64L, ...) {
   c1 * sum(gl$w * f(x, ...))
 }
 
-# R mirror of C++ gl_auto_nodes() (gl_quad.h): bump the "auto" GL fallback to
-# 128 nodes when the window spans many stop-sigma widths (tight stop density).
+# R mirror of C++ gl_auto_nodes() (gl_quad.h): hold a minimum node DENSITY per
+# stop-sigma across the window so a sharp (small-tauS, near-Gaussian) stop peak
+# is resolved. n_nodes is a floor; quantise up to GL_NODE_STEP, cap at
+# GL_MAX_NODES. Keep these constants in sync with src/gl_quad.h.
+GL_NODES_PER_SIG <- 6
+GL_NODE_STEP     <- 32L
+GL_MAX_NODES     <- 256L
 gl_auto_nodes_R <- function(n_nodes, lower, upper, sigS) {
-  if (sigS > 0 && (upper - lower) / sigS > 40 && n_nodes < 128L) return(128L)
-  as.integer(n_nodes)
+  n_nodes <- as.integer(n_nodes)
+  if (!(sigS > 0) || !(upper > lower)) return(n_nodes)
+  want <- GL_NODES_PER_SIG * (upper - lower) / sigS
+  if (!(want > n_nodes)) return(n_nodes)
+  n_eff <- as.integer(ceiling(want / GL_NODE_STEP)) * GL_NODE_STEP
+  n_eff <- max(n_eff, n_nodes)
+  as.integer(min(n_eff, GL_MAX_NODES))
 }
 
 #' Stop-success integral (truncated ex-Gaussian race), R route, method-selectable
@@ -134,8 +144,9 @@ stop_success_rdex_R <- function(n_acc, mu, sigma, tau, lb, v, B, A, t0, s, SSD,
 # src/ss_exg_analytic.h; derivation in WorkingTests/stop_success_methods.R (Section 1)).
 # Full-line (lbS = lbG = -Inf): 4 pnorm. Truncated: 4 bivariate Phi2 + 2
 # boundary terms. Returns NA when a guard trips (caller falls back to GL):
-#   * sigS > 4*tauS (the C++ dexg() Mills-ratio tail branch would make the
-#     quadrature integrand disagree with the exact form),
+#   * sigS > ANALYTIC_MAX_SIGS_OVER_TAUS * tauS (10; relaxed from 4 once the C++
+#     dexg() tail gained the higher-order Mills corrections, and to bound the
+#     logC0 cancellation as tauS -> 0 — see src/ss_exg_analytic.h),
 #   * kinked domain (lbS + SSD < lbG, or lbS = -Inf with finite lbG),
 #   * any term exponent > 600 (exp overflow) or non-finite intermediate.
 # ---------------------------------------------------------------------------
@@ -150,7 +161,8 @@ stop_success_rdex_R <- function(n_acc, mu, sigma, tau, lb, v, B, A, t0, s, SSD,
 stop_success_texg_analytic1_R <- function(mu, sigma, tau, lb, SSD) {
   muS <- mu[1]; sigS <- sigma[1]; tauS <- tau[1]; lbS <- lb[1]
   muG <- mu[2]; sigG <- sigma[2]; tauG <- tau[2]; lbG <- lb[2]
-  if (sigS > 4 * tauS) return(NA_real_)
+  ANALYTIC_MAX_SIGS_OVER_TAUS <- 10   # keep in sync with src/ss_exg_analytic.h
+  if (sigS > ANALYTIC_MAX_SIGS_OVER_TAUS * tauS) return(NA_real_)
   full_line <- !is.finite(lbS) && !is.finite(lbG)
   if (!full_line) {
     if (!is.finite(lbS)) return(NA_real_)

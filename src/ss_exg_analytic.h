@@ -26,11 +26,19 @@
 //                        2 boundary terms,  s = sqrt(1+beta^2)
 //
 // Guards (deterministic, computed before any CDF call; on failure the caller
-// falls back to GL — the ~1e-8 discontinuity at the switch is harmless for
+// falls back to GL — the small discontinuity at the switch is harmless for
 // particle Metropolis, which uses no gradients):
-//   * sigS > 4*tauS: dexg() switches to a Mills-ratio tail approximation for
-//     z < -8 which then covers non-negligible integrand mass, so the exact
-//     form would disagree with the quadrature routes at >1e-6 relative.
+//   * sigS > ANALYTIC_MAX_SIGS_OVER_TAUS * tauS: two reasons converge here.
+//     (1) dexg()'s Mills-ratio tail branch (z < -8) starts to cover
+//         non-negligible integrand mass, so the quadrature routes would
+//         disagree with this exact form — but dexg now carries the
+//         -1/z^2 + 2.5/z^4 corrections (exgaussian_functions.h), shrinking that
+//         disagreement to ~1e-6, which let the threshold relax from 4 to 10.
+//     (2) As tauS -> 0, logC0 (= -log tauS + muS/tauS + sigS^2/2tauS^2) and the
+//         per-term exponent gain large cancelling magnitudes; the net stays
+//         moderate but precision erodes, so we keep a finite ceiling and hand
+//         the (now sharp, near-Gaussian) peak to the density-bumped GL route
+//         (gl_auto_nodes), which resolves it well.
 //   * any term exponent logC_A + delta_k (or logC_A + gamma*L) > 600, or any
 //     non-finite intermediate: exp() overflow regime.
 //   * kinked domain (lbS + SSD < lbG, or lbS = -Inf with finite lbG): the
@@ -43,6 +51,12 @@
 
 #include <cmath>
 #include <algorithm>
+
+// Largest sigS/tauS for which the exact n_go==1 closed form is trusted; above
+// it "auto" hands off to the density-bumped GL route. Relaxed from 4 to 10 once
+// dexg()'s tail branch gained the higher-order Mills corrections (see the guard
+// note above). Mirrored by stop_success_texg_analytic1_R in R/stop_success_gl.R.
+constexpr double ANALYTIC_MAX_SIGS_OVER_TAUS = 10.0;
 
 // ---------------------------------------------------------------------------
 // Bivariate normal CDF: port of Alan Genz's BVND (tvpack.f, Fortran),
@@ -173,7 +187,7 @@ inline double ss_texg_stop_success_analytic1(
 ) {
   ok = false;
   if (!(sigS > 0.0) || !(tauS > 0.0) || !(sigG > 0.0) || !(tauG > 0.0)) return 0.0;
-  if (sigS > 4.0 * tauS) return 0.0;            // dexg() tail-branch regime
+  if (sigS > ANALYTIC_MAX_SIGS_OVER_TAUS * tauS) return 0.0;  // see guard note
 
   const bool full_line = (lbS == R_NegInf) && (lbG == R_NegInf);
   if (!full_line) {

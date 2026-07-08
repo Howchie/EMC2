@@ -125,13 +125,36 @@ inline StopMethodConfig& stop_method_config() {
   return cfg;
 }
 
-// "auto" GL node bump: a fixed 64-node rule under-resolves a tight stop
-// density when the integration window spans many stop-sigma widths (the Q5
-// "tight stop density" case). Deterministic and cheap; mirrored in R by
-// gl_auto_nodes_R().
+// "auto" GL node-density bump. A fixed n-node rule under-resolves a sharp
+// (near-Gaussian, small-tauS) stop density when the integration window spans
+// many stop-sigma widths. The Gaussian core width is ~sigS and does NOT shrink
+// as tauS -> 0, so we hold a minimum node DENSITY per sigS across the window
+// rather than triggering on a single width ratio. The old rule
+// ((ub-lo)/sigS > 40 -> 128) was blind to the small-tauS regime: its window is
+// dominated by muS/sigS + 8 and the only tauS-dependent term, 16*tauS/sigS,
+// SHRANK toward the trigger exactly as the peak got sharper, so it never fired
+// where it was most needed (e.g. muS/sigS ~ 6, tauS << sigS -> ratio ~ 20).
+//
+//   want  = GL_NODES_PER_SIG * (ub - lo) / sigS               [target nodes]
+//   n_eff = clamp(roundup(want, GL_NODE_STEP), n_nodes, GL_MAX_NODES)
+//
+// n_nodes is a floor (never reduced). Quantising up to a multiple of
+// GL_NODE_STEP keeps only a handful of distinct rules in the thread-local
+// gauleg cache (setup cost is per node-count). Deterministic and cheap;
+// mirrored in R by gl_auto_nodes_R(). Tune GL_NODES_PER_SIG for the
+// accuracy/speed trade-off (6 ~= 14 nodes across the Gaussian-core FWHM).
+constexpr double GL_NODES_PER_SIG = 6.0;
+constexpr int    GL_NODE_STEP     = 32;
+constexpr int    GL_MAX_NODES     = 256;
+
 inline int gl_auto_nodes(int n_nodes, double lo, double ub, double sigS) {
-  if (sigS > 0.0 && (ub - lo) / sigS > 40.0 && n_nodes < 128) return 128;
-  return n_nodes;
+  if (!(sigS > 0.0) || !(ub > lo)) return n_nodes;
+  const double want = GL_NODES_PER_SIG * (ub - lo) / sigS;
+  if (!(want > n_nodes)) return n_nodes;
+  int n_eff = static_cast<int>(std::ceil(want / GL_NODE_STEP)) * GL_NODE_STEP;
+  if (n_eff < n_nodes)     n_eff = n_nodes;
+  if (n_eff > GL_MAX_NODES) n_eff = GL_MAX_NODES;
+  return n_eff;
 }
 
 #endif
