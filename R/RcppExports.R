@@ -117,6 +117,10 @@ pGBMspv <- function(t, v, b, A, t0 = 0.0, s = 1.0, lambda_g = 0.0, lambda_k = 0.
     .Call(`_EMC2_pGBMspv`, t, v, b, A, t0, s, lambda_g, lambda_k, log_out, kill_shape, erlang_omega)
 }
 
+ss_exg_stop_success_value <- function(SSD, pars, upper = -1.0, max_subdiv = 100L, abs_tol = 1e-8, rel_tol = 1e-6, k_sigma, k_tau) {
+    .Call(`_EMC2_ss_exg_stop_success_value`, SSD, pars, upper, max_subdiv, abs_tol, rel_tol, k_sigma, k_tau)
+}
+
 dEXGrace <- function(dt, mu, sigma, tau, min_ll) {
     .Call(`_EMC2_dEXGrace`, dt, mu, sigma, tau, min_ll)
 }

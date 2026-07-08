@@ -568,6 +568,24 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// ss_exg_stop_success_value
+double ss_exg_stop_success_value(double SSD, NumericMatrix pars, double upper, int max_subdiv, double abs_tol, double rel_tol, double k_sigma, double k_tau);
+RcppExport SEXP _EMC2_ss_exg_stop_success_value(SEXP SSDSEXP, SEXP parsSEXP, SEXP upperSEXP, SEXP max_subdivSEXP, SEXP abs_tolSEXP, SEXP rel_tolSEXP, SEXP k_sigmaSEXP, SEXP k_tauSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< double >::type SSD(SSDSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type pars(parsSEXP);
+    Rcpp::traits::input_parameter< double >::type upper(upperSEXP);
+    Rcpp::traits::input_parameter< int >::type max_subdiv(max_subdivSEXP);
+    Rcpp::traits::input_parameter< double >::type abs_tol(abs_tolSEXP);
+    Rcpp::traits::input_parameter< double >::type rel_tol(rel_tolSEXP);
+    Rcpp::traits::input_parameter< double >::type k_sigma(k_sigmaSEXP);
+    Rcpp::traits::input_parameter< double >::type k_tau(k_tauSEXP);
+    rcpp_result_gen = Rcpp::wrap(ss_exg_stop_success_value(SSD, pars, upper, max_subdiv, abs_tol, rel_tol, k_sigma, k_tau));
+    return rcpp_result_gen;
+END_RCPP
+}
 // dEXGrace
 NumericVector dEXGrace(NumericMatrix dt, NumericVector mu, NumericVector sigma, NumericVector tau, double min_ll);
 RcppExport SEXP _EMC2_dEXGrace(SEXP dtSEXP, SEXP muSEXP, SEXP sigmaSEXP, SEXP tauSEXP, SEXP min_llSEXP) {
@@ -1469,6 +1487,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_pSWTNspv", (DL_FUNC) &_EMC2_pSWTNspv, 14},
     {"_EMC2_dGBMspv", (DL_FUNC) &_EMC2_dGBMspv, 11},
     {"_EMC2_pGBMspv", (DL_FUNC) &_EMC2_pGBMspv, 11},
+    {"_EMC2_ss_exg_stop_success_value", (DL_FUNC) &_EMC2_ss_exg_stop_success_value, 8},
     {"_EMC2_dEXGrace", (DL_FUNC) &_EMC2_dEXGrace, 5},
     {"_EMC2_stopfn_exg", (DL_FUNC) &_EMC2_stopfn_exg, 6},
     {"_EMC2_pEXG_old", (DL_FUNC) &_EMC2_pEXG_old, 6},

@@ -405,19 +405,41 @@ static inline double ss_exg_stop_success_lpdf(
   double tauS = pars(0, 5);
   double halfw = k_sigma * sigS + k_tau * tauS;
   double a = muS - halfw;
-  double b = muS + halfw;
+  // Honor a finite `upper` (e.g. a censored stop-success deadline): cap the
+  // heuristic window's upper edge at `upper` when supplied, mirroring the TEXG
+  // variant. Without this the fixed [muS-halfw, muS+halfw] window silently
+  // ignored the argument and integrated past the deadline.
+  double b = emc2_isfinite(upper) ? std::min(upper, muS + halfw) : muS + halfw;
+  if (!(b > a)) return min_ll;
 
   static thread_local GslWorkspacePtr ws_ptr(nullptr, &gsl_integration_workspace_free);
   gsl_integration_workspace* workspace = ensure_gsl_workspace(ws_ptr, max_subdiv);
   double res, err;
   gsl_error_handler_t* old_handler = gsl_set_error_handler_off();
-  
+
   int status = gsl_integration_qags(&F, a, b, abs_tol, rel_tol, max_subdiv, workspace, &res, &err);
   
   gsl_set_error_handler(old_handler);
   
   if (status != GSL_SUCCESS || !emc2_isfinite(res) || res <= 0.0) return min_ll;
   return std::log(res);
+}
+
+// R-visible wrapper around the plain-EXG stop-success integral, mirroring
+// ss_texg_stop_success_value. Exists so the `upper` handling above can be
+// exercised from R. `upper` sentinel <= 0 means auto/Inf (no deadline).
+// [[Rcpp::export]]
+double ss_exg_stop_success_value(
+    double SSD, NumericMatrix pars,
+    double upper = -1.0, int max_subdiv = 100,
+    double abs_tol = 1e-8, double rel_tol = 1e-6,
+    double k_sigma = SS_WINDOW_K_SIGMA, double k_tau = SS_WINDOW_K_TAU
+) {
+  const double min_ll = -1e10;
+  if (upper <= 0.0) upper = R_PosInf;   // sentinel: <=0 means auto/Inf
+  double lp = ss_exg_stop_success_lpdf(SSD, pars, min_ll, upper, max_subdiv,
+                                       abs_tol, rel_tol, k_sigma, k_tau);
+  return (lp <= min_ll) ? 0.0 : std::exp(lp);
 }
 
 // ----------------------------------------------------------------------------
