@@ -960,10 +960,11 @@ extractDadms <- function(dadms, names = NULL){
 }
 
 auto_mclapply <- function(X, FUN, mc.cores, ...){
+  if(mc.cores <= 1) return(lapply(X, FUN, ...))
   if(Sys.info()[1] == "Windows"){
     cluster <- parallel::makeCluster(mc.cores)
+    on.exit(parallel::stopCluster(cluster), add = TRUE)
     list_out <- parallel::parLapply(cl = cluster, X,FUN, ...)
-    parallel::stopCluster(cluster)
   } else{
     list_out <- parallel::mclapply(X, FUN, mc.cores = mc.cores, ...)
   }

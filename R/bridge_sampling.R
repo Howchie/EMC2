@@ -49,7 +49,14 @@ h.unnormalized.posterior <- function(proposals, data, info, n_cores, hyper_only)
   if(hyper_only){
     lw <- 0
   } else{
-    lws <- parallel::mcmapply(calc_ll_manager, proposals_list, data, MoreArgs = list(model = info$model), mc.cores = n_cores)
+    if(n_cores <= 1) {
+      lws <- mapply(calc_ll_manager, proposals_list, data,
+                    MoreArgs = list(model = info$model))
+    } else {
+      lws <- parallel::mcmapply(calc_ll_manager, proposals_list, data,
+                                MoreArgs = list(model = info$model),
+                                mc.cores = n_cores)
+    }
     lw <- rowSums(lws)
   }
   proposals_group <- proposals[,info$group_idx]

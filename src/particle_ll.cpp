@@ -1418,6 +1418,10 @@ double c_log_likelihood_DDM(Rcpp::NumericMatrix pars, Rcpp::DataFrame data,
   shared.all_ones_int_buf.assign(static_cast<size_t>(n_trials), 1);
   shared.R1_int_buf.assign(static_cast<size_t>(n_trials), 1);
   shared.R2_int_buf.assign(static_cast<size_t>(n_trials), 2);
+  shared.lF_LC_1_buf.assign(static_cast<size_t>(n_trials), R_NegInf);
+  shared.lF_LC_2_buf.assign(static_cast<size_t>(n_trials), R_NegInf);
+  shared.lF_UC_1_buf.assign(static_cast<size_t>(n_trials), R_NegInf);
+  shared.lF_UC_2_buf.assign(static_cast<size_t>(n_trials), R_NegInf);
   Rcpp::IntegerVector R_col = data["R"];
   shared.shared_R_levels = R_col.attr("levels");
   shared.valid = true;
