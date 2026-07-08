@@ -822,7 +822,8 @@ calc_sbc_stats <- function(stats){
 # list(mode="per", per=<named chr, NA = suppressed>, default=). Query it per
 # panel with .sbc_panel_pos().
 .sbc_resolve_stat_spec <- function(add_stats, all_params) {
-  defaults <- c(coverage = "topleft", bias = "topright", precision = "bottomleft")
+  defaults <- c(coverage = "topleft", bias = "topright", precision = "bottomleft",
+                pvalue = "bottomright")
   if (is.logical(add_stats) && length(add_stats) == 1L) {
     if (isTRUE(add_stats))
       return(lapply(defaults, function(p) list(mode = "all", pos = unname(p))))
@@ -832,7 +833,7 @@ calc_sbc_stats <- function(stats){
     stop("add_stats must be TRUE/FALSE or a named list")
   bad <- setdiff(names(add_stats), names(defaults))
   if (is.null(names(add_stats)) || length(bad))
-    stop("add_stats list names must be a subset of 'coverage', 'bias', 'precision'; got: ",
+    stop("add_stats list names must be a subset of 'coverage', 'bias', 'precision', 'pvalue'; got: ",
          paste(bad, collapse = ", "))
   is_suppress <- function(v) is.null(v) || (length(v) == 1L && (isFALSE(v) || isTRUE(is.na(v))))
   chk_kw <- function(v, ctx) {
@@ -882,6 +883,35 @@ calc_sbc_stats <- function(stats){
   out
 }
 
+# The three recovery statistics that require single-subject SBC output (and so
+# may be unavailable). The calibration p-value ("pvalue") is computed from the
+# ranks directly and is always available, so it is excluded here.
+.sbc_recovery_stats <- c("coverage", "bias", "precision")
+
+# Format a calibration p-value for display in a panel corner.
+.sbc_fmt_p <- function(p) {
+  if (length(p) != 1L || is.na(p)) return("NA")
+  if (p < 0.001) "<0.001" else formatC(p, format = "f", digits = 3)
+}
+
+# Kolmogorov-Smirnov p-value for uniformity of normalized SBC ranks (used by the
+# ECDF-difference plot, the curve it matches). Deterministic asymptotic p; the
+# ranks are discrete, so this is mildly conservative -- the simultaneous bands on
+# the plot carry the exact visual verdict. High p = consistent with calibration.
+.sbc_ks_p <- function(r_norm) {
+  r_norm <- r_norm[is.finite(r_norm)]
+  if (length(r_norm) < 2L) return(NA_real_)
+  suppressWarnings(stats::ks.test(r_norm, "punif")$p.value)
+}
+
+# Chi-square goodness-of-fit-to-uniform p-value over the displayed histogram bins
+# (used by the rank-histogram plot, so it is the exact test of the bars drawn).
+# `counts` are the per-bin counts; df = number of bins - 1. High p = calibrated.
+.sbc_chisq_p <- function(counts) {
+  if (length(counts) < 2L || sum(counts) == 0) return(NA_real_)
+  suppressWarnings(stats::chisq.test(counts)$p.value)
+}
+
 #' Plot the Histogram of the Observed Rank Statistics of SBC
 #'
 #' Note that this plot is dependent on the number of bins, and a more general
@@ -893,23 +923,15 @@ calc_sbc_stats <- function(stats){
 #'   `NA` (the default) auto-computes a grid. `NULL` leaves the current device
 #'   layout (`mfrow`/`mfcol`) untouched, drawing the panels into the existing
 #'   grid with no new page between them.
-#' @param add_stats Controls the recovery statistics (coverage, bias, precision)
-#'   overlaid on each panel. `TRUE` (the default) shows all three at default
-#'   legend positions (coverage `"topleft"`, bias `"topright"`, precision
-#'   `"bottomleft"`); `FALSE` shows none. Alternatively a named list keyed by a
-#'   subset of `"coverage"`, `"bias"`, `"precision"` may be given: each value is a
-#'   `legend()` position keyword (e.g. `"topright"`, `"bottomleft"`, `"center"`)
-#'   placing that statistic, an entry of `FALSE` or `NA` suppresses it, and
-#'   omitted names keep their default position. A statistic's value may instead
-#'   be a named list/vector keyed by parameter (a subset; parameters not named
-#'   use that statistic's default position) to set its position per panel, with
-#'   `FALSE`/`NA` suppressing it on a given panel. These statistics are only
-#'   available for single-subject SBC; for hierarchical SBC output `add_stats`
-#'   has no effect.
+#' @param add_stats Logical. `TRUE` (the default) appends a chi-square
+#'   goodness-of-fit-to-uniform p-value, computed over the displayed bins (the
+#'   exact test of the bars drawn; high p = consistent with calibration), as a
+#'   second row of each panel's title. `FALSE` omits it.
 #' @param main Optional. `NULL` (the default) uses the auto-generated per-panel
-#'   title. A single string is used as the title on every panel. A character
-#'   vector sets one title per panel and must have the same length as the number
-#'   of panels being plotted.
+#'   title (the first title row). A single string is used as the title on every
+#'   panel. A character vector sets one title per panel and must have the same
+#'   length as the number of panels being plotted. The `add_stats` p-value, when
+#'   shown, is always added as a second title row beneath this.
 #' @param add_to_main Optional. `NULL` (the default) does nothing. A single
 #'   string is prepended to the start of the (auto-generated or `main`) title of
 #'   every panel. A character vector is prepended panel-by-panel and must have
@@ -919,16 +941,11 @@ calc_sbc_stats <- function(stats){
 #' @export
 plot_sbc_hist <- function(ranks, bins = 10, layout = NA, add_stats = TRUE,
                           main = NULL, add_to_main = NULL){
-  stats <- NULL
-  if (!is.null(ranks[["rank"]])) {
-    stats <- calc_sbc_stats(ranks)
-    ranks <- ranks[["rank"]]
-  }
+  if (!is.null(ranks[["rank"]])) ranks <- ranks[["rank"]]
   selects <- names(ranks)
-  stat_spec <- .sbc_resolve_stat_spec(add_stats, unique(unlist(lapply(ranks, colnames))))
-  if (!is.null(stat_spec) && is.null(stats))
-    warning("add_stats was requested but no recovery statistics are available; ",
-            "coverage/bias/precision are only produced for single-subject SBC. Skipping.")
+  # add_stats: TRUE (default) appends the chi-square goodness-of-fit-to-uniform
+  # p-value (over the displayed bins) as a second title row; FALSE omits it.
+  show_p <- !isFALSE(add_stats)
   # layout = NULL means: do not touch the device layout (mfrow/mfcol); draw the
   # panels into whatever grid is already set up, with no new page between them.
   # (layout = NA auto-computes a grid; a numeric vector sets it via par(mfrow).)
@@ -956,29 +973,24 @@ plot_sbc_hist <- function(ranks, bins = 10, layout = NA, add_stats = TRUE,
       }
     }
     rank <- ranks[[j]]
-    stat <- stats[[j]]
     for (i in 1:ncol(rank)) {
       panel <- panel + 1L
       base_main <- if (is.null(main)) paste0(selects[j], " - ", par_names[i])
                    else .sbc_main_at(main, panel)
-      hist(
-        x = rank[ , i],
-        main = paste0(.sbc_main_prefix(add_to_main, panel), base_main),
-        breaks = bins,
-        ylim = c(0, high + 2),
-        xlab = "rank"
-      )
+      title_main <- paste0(.sbc_main_prefix(add_to_main, panel), base_main)
+      h <- hist(rank[ , i], breaks = bins, plot = FALSE)
+      # y-limit must cover both the uniform reference band (high) and the tallest
+      # bar -- bars can exceed the band when miscalibrated -- plus some headroom.
+      ylim_hi <- max(high, h$counts) + 2
+      plot(h, main = "", xlab = "rank", ylim = c(0, ylim_hi))
+      # Second title row: chi-square calibration p-value over the drawn bins.
+      if (show_p)
+        title_main <- paste0(title_main, "\n",
+                             "p(chisq) : ", .sbc_fmt_p(.sbc_chisq_p(h$counts)))
+      title(main = title_main)
       abline(h = low, lty = 2)
       abline(h = mid, lty = 2)
       abline(h = high, lty = 2)
-      if (!is.null(stat) && !is.null(stat_spec)) {
-        prints <- c(coverage  = paste0("coverage : ",  round(stat[["coverage"]][i], 2)),
-                    bias      = paste0("bias : ",       round(stat[["bias"]][i], 3)),
-                    precision = paste0("precision : ",  round(stat[["precision"]][i], 3)))
-        pos <- .sbc_panel_pos(stat_spec, par_names[i])
-        for (s in names(pos))
-          legend(x = pos[[s]], legend = prints[[s]], bty = "n")
-      }
     }
   }
 }
@@ -1043,19 +1055,23 @@ make_smooth <- function(x, y, N = 1000){
 #'   `NA` (the default) auto-computes a grid. `NULL` leaves the current device
 #'   layout (`mfrow`/`mfcol`) untouched, drawing the panels into the existing
 #'   grid with no new page between them.
-#' @param add_stats Controls the recovery statistics (coverage, bias, precision)
-#'   overlaid on each panel. `TRUE` (the default) shows all three at default
-#'   legend positions (coverage `"topleft"`, bias `"topright"`, precision
-#'   `"bottomleft"`); `FALSE` shows none. Alternatively a named list keyed by a
-#'   subset of `"coverage"`, `"bias"`, `"precision"` may be given: each value is a
-#'   `legend()` position keyword (e.g. `"topright"`, `"bottomleft"`, `"center"`)
-#'   placing that statistic, an entry of `FALSE` or `NA` suppresses it, and
-#'   omitted names keep their default position. A statistic's value may instead
-#'   be a named list/vector keyed by parameter (a subset; parameters not named
-#'   use that statistic's default position) to set its position per panel, with
-#'   `FALSE`/`NA` suppressing it on a given panel. These statistics are only
-#'   available for single-subject SBC; for hierarchical SBC output `add_stats`
-#'   has no effect.
+#' @param add_stats Controls the statistics overlaid on each panel: the three
+#'   recovery statistics (coverage, bias, precision) and `pvalue`, a
+#'   Kolmogorov-Smirnov p-value for uniformity of the ranks (the test matching
+#'   the ECDF-difference curve; high p = consistent with calibration). `TRUE`
+#'   (the default) shows all four at default legend positions (coverage
+#'   `"topleft"`, bias `"topright"`, precision `"bottomleft"`, pvalue
+#'   `"bottomright"`); `FALSE` shows none. Alternatively a named list keyed by a
+#'   subset of `"coverage"`, `"bias"`, `"precision"`, `"pvalue"` may be given:
+#'   each value is a `legend()` position keyword (e.g. `"topright"`,
+#'   `"bottomleft"`, `"center"`) placing that statistic, an entry of `FALSE` or
+#'   `NA` suppresses it, and omitted names keep their default position. A
+#'   statistic's value may instead be a named list/vector keyed by parameter (a
+#'   subset; parameters not named use that statistic's default position) to set
+#'   its position per panel, with `FALSE`/`NA` suppressing it on a given panel.
+#'   The three recovery statistics are only available for single-subject SBC
+#'   (omitted, with a warning, for hierarchical SBC output); `pvalue` is computed
+#'   from the ranks and is always shown.
 #' @param main Optional. `NULL` (the default) uses the auto-generated per-panel
 #'   title. A single string is used as the title on every panel. A character
 #'   vector sets one title per panel and must have the same length as the number
@@ -1084,9 +1100,10 @@ plot_sbc_ecdf <- function(ranks, layout = NA, add_stats = TRUE, main = NULL,
   main <- .sbc_check_main(main, n_panels)
   panel <- 0L
   stat_spec <- .sbc_resolve_stat_spec(add_stats, unique(unlist(lapply(ranks, colnames))))
-  if (!is.null(stat_spec) && is.null(stats))
+  if (is.null(stats) && !is.null(stat_spec) && any(names(stat_spec) %in% .sbc_recovery_stats))
     warning("add_stats was requested but no recovery statistics are available; ",
-            "coverage/bias/precision are only produced for single-subject SBC. Skipping.")
+            "coverage/bias/precision are only produced for single-subject SBC. Skipping ",
+            "them (the p(KS) calibration value is still shown).")
 
   # layout = NULL means: do not touch the device layout (mfrow/mfcol); draw the
   # panels into whatever grid is already set up, with no new page between them.
@@ -1178,13 +1195,19 @@ plot_sbc_ecdf <- function(ranks, layout = NA, add_stats = TRUE, main = NULL,
 
       abline(h = 0, lty = 2, col = "gray50")
 
-      if (!is.null(stat) && !is.null(stat_spec)) {
-        prints <- c(coverage  = paste0("coverage : ",  round(stat[["coverage"]][i], 2)),
-                    bias      = paste0("bias : ",       round(stat[["bias"]][i], 3)),
-                    precision = paste0("precision : ",  round(stat[["precision"]][i], 3)))
+      if (!is.null(stat_spec)) {
         pos <- .sbc_panel_pos(stat_spec, par_names[i])
+        prints <- character(0)
+        if (!is.null(stat)) {
+          prints["coverage"]  <- paste0("coverage : ",  round(stat[["coverage"]][i], 2))
+          prints["bias"]      <- paste0("bias : ",       round(stat[["bias"]][i], 3))
+          prints["precision"] <- paste0("precision : ",  round(stat[["precision"]][i], 3))
+        }
+        if ("pvalue" %in% names(pos))
+          prints["pvalue"] <- paste0("p(KS) : ", .sbc_fmt_p(.sbc_ks_p(r_norm)))
         for (s in names(pos))
-          legend(x = pos[[s]], legend = prints[[s]], bty = "n")
+          if (s %in% names(prints))
+            legend(x = pos[[s]], legend = prints[[s]], bty = "n")
       }
     }
   }

@@ -21,19 +21,23 @@ plot_sbc_ecdf(
 layout (\code{mfrow}/\code{mfcol}) untouched, drawing the panels into the existing
 grid with no new page between them.}
 
-\item{add_stats}{Controls the recovery statistics (coverage, bias, precision)
-overlaid on each panel. \code{TRUE} (the default) shows all three at default
-legend positions (coverage \code{"topleft"}, bias \code{"topright"}, precision
-\code{"bottomleft"}); \code{FALSE} shows none. Alternatively a named list keyed by a
-subset of \code{"coverage"}, \code{"bias"}, \code{"precision"} may be given: each value is a
-\code{legend()} position keyword (e.g. \code{"topright"}, \code{"bottomleft"}, \code{"center"})
-placing that statistic, an entry of \code{FALSE} or \code{NA} suppresses it, and
-omitted names keep their default position. A statistic's value may instead
-be a named list/vector keyed by parameter (a subset; parameters not named
-use that statistic's default position) to set its position per panel, with
-\code{FALSE}/\code{NA} suppressing it on a given panel. These statistics are only
-available for single-subject SBC; for hierarchical SBC output \code{add_stats}
-has no effect.}
+\item{add_stats}{Controls the statistics overlaid on each panel: the three
+recovery statistics (coverage, bias, precision) and \code{pvalue}, a
+Kolmogorov-Smirnov p-value for uniformity of the ranks (the test matching
+the ECDF-difference curve; high p = consistent with calibration). \code{TRUE}
+(the default) shows all four at default legend positions (coverage
+\code{"topleft"}, bias \code{"topright"}, precision \code{"bottomleft"}, pvalue
+\code{"bottomright"}); \code{FALSE} shows none. Alternatively a named list keyed by a
+subset of \code{"coverage"}, \code{"bias"}, \code{"precision"}, \code{"pvalue"} may be given:
+each value is a \code{legend()} position keyword (e.g. \code{"topright"},
+\code{"bottomleft"}, \code{"center"}) placing that statistic, an entry of \code{FALSE} or
+\code{NA} suppresses it, and omitted names keep their default position. A
+statistic's value may instead be a named list/vector keyed by parameter (a
+subset; parameters not named use that statistic's default position) to set
+its position per panel, with \code{FALSE}/\code{NA} suppressing it on a given panel.
+The three recovery statistics are only available for single-subject SBC
+(omitted, with a warning, for hierarchical SBC output); \code{pvalue} is computed
+from the ranks and is always shown.}
 
 \item{main}{Optional. \code{NULL} (the default) uses the auto-generated per-panel
 title. A single string is used as the title on every panel. A character
