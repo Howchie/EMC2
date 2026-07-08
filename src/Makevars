@@ -6,12 +6,19 @@ PKG_CXXFLAGS += -std=gnu++17 -Wfatal-errors -ftemplate-backtrace-limit=5    # (o
 #   -O3           : full optimization (upstream uses -O3; R defaults to -O2)
 #   -march=native : enables AVX2/SSE4 SIMD intrinsics on the build machine
 #   -ffast-math   : relaxes IEEE strictness, allows autovectorization of FP loops
+#   -fno-finite-math-only: REQUIRED. -ffast-math implies -ffinite-math-only, which
+#       tells the compiler to assume no NaN/Inf operands and lets it fold
+#       `NaN == x` to TRUE and break `std::isnan`. Our censoring code compares rt
+#       against ±Inf directly and NA_REAL is a NaN, so an NA-rt trial would
+#       silently take the `rt == R_NegInf` left-censor branch in
+#       c_log_likelihood_race / c_log_likelihood_ss. This flag re-enables correct
+#       Inf/NaN comparisons while keeping associative/reciprocal math and SIMD.
 #   -fno-math-errno: avoids errno checks in math functions (pairs with -ffast-math)
 #   -DUSE_FAST_PNORM: enables the fast standard-normal CDF approximation in Wald/RDM code
 # NOTE: R's ALL_CXXFLAGS = PKG_CXXFLAGS ... CXXFLAGS, so CXXFLAGS (-O2) comes last
 # and overrides PKG_CXXFLAGS. The `override` directive forces our flags to append
 # *after* Makeconf's CXXFLAGS assignment, so the last -O wins.
-override CXXFLAGS += -O3 -march=native -ffast-math -fno-math-errno -DUSE_FAST_PNORM
+override CXXFLAGS += -O3 -march=native -ffast-math -fno-finite-math-only -fno-math-errno -DUSE_FAST_PNORM
 
 # Add the package headers path, RcppArmadillo flags, and bundled GSL headers.
 # -Igsl_bundled makes <config.h> and <gsl/...> resolve to src/gsl_bundled/
