@@ -2277,7 +2277,7 @@ inline double pswtn_killed_inf_quad(double threshold, double mu_drift,
 }
 
 inline double prdmswtn_killed_inf_quad(double b, double mu_drift, double A,
-                                       double sv, double s, double lambda,
+                                       double sv, double s, double t0, double lambda,
                                        int n_gauss_nodes = 20,
                                        bool log_out = false, int kill_shape = 1, bool posdrift = true) {
   auto finish_log = [&](double log_p) {
@@ -2296,13 +2296,17 @@ inline double prdmswtn_killed_inf_quad(double b, double mu_drift, double A,
     double log_p;
     if (kill_shape >= 2) {
       // Use the defective fixed-drift kernel here; the SPV posdrift
-      // normalisation is applied explicitly below when requested.
-      log_p = pwald(R_PosInf, mu_drift, b, A, s, 0.0, lambda, lambda, true, kill_shape, false, false);
+      // normalisation is applied explicitly below when requested. pwald
+      // applies the Erlang-2 t0 kill head-start internally (kill clock runs
+      // from stimulus onset, not from evidence onset t0).
+      log_p = pwald(R_PosInf, mu_drift, b, A, s, t0, lambda, lambda, true, kill_shape, false, false);
     } else {
       const double nu = std::sqrt(mu_drift * mu_drift + 2.0 * s2 * lambda);
       const double eta = (mu_drift - nu) / s2;
-      // Closed-form defective eventual hit mass for the killed Wald.
-      log_p = log_wald_posdrift_hit_normalizer(true, 0.5 * eta * s2, s, b, 0.0, A);
+      // Closed-form defective eventual hit mass for the killed Wald (kill from
+      // evidence onset), shifted by exp(-lambda*t0) for the exponential kill's
+      // head-start over [0, t0] before evidence accumulation begins.
+      log_p = log_wald_posdrift_hit_normalizer(true, 0.5 * eta * s2, s, b, 0.0, A) - lambda * t0;
     }
     if (posdrift) {
       log_p -= log_wald_posdrift_hit_normalizer(true, mu_drift, s, b, 0.0, A);
@@ -2326,14 +2330,16 @@ inline double prdmswtn_killed_inf_quad(double b, double mu_drift, double A,
       mu_drift + sv * R::qnorm(p, 0.0, 1.0, true, false);
     double log_hit_j;
     if (kill_shape >= 2) {
-      // Defective fixed-drift kernel inside the drift mixture; apply the SPV
-      // posdrift normaliser once after integration if requested.
-      log_hit_j = pwald(R_PosInf, drift_j, b, A, s, 0.0, lambda, lambda, true, kill_shape, false, false);
+      // Defective fixed-drift kernel inside the drift mixture; pwald applies
+      // the Erlang-2 t0 kill head-start (kill runs from stimulus onset). The
+      // SPV posdrift normaliser is applied once after integration if requested.
+      log_hit_j = pwald(R_PosInf, drift_j, b, A, s, t0, lambda, lambda, true, kill_shape, false, false);
     } else {
       const double nu_j  = std::sqrt(drift_j * drift_j + 2.0 * s2 * lambda);
       const double eta_j = (drift_j - nu_j) / s2;
-      // Closed-form defective eventual hit mass for the fixed-drift kernel.
-      log_hit_j = log_wald_posdrift_hit_normalizer(true, 0.5 * eta_j * s2, s, b, 0.0, A);
+      // Closed-form defective eventual hit mass for the fixed-drift kernel,
+      // shifted by exp(-lambda*t0) for the exponential kill's head-start.
+      log_hit_j = log_wald_posdrift_hit_normalizer(true, 0.5 * eta_j * s2, s, b, 0.0, A) - lambda * t0;
     }
 
     if (gl_weights[j] > 0.0) {
@@ -2565,7 +2571,7 @@ double prdmswtn(double t, double mu_drift, double b, double A,
   }
 
   if (!guess && lambda > 1e-10 && !emc2_isfinite(t_eam) && !no_sv) {
-    return prdmswtn_killed_inf_quad(b, mu_drift, A, sv, s, lambda,
+    return prdmswtn_killed_inf_quad(b, mu_drift, A, sv, s, t0, lambda,
                                     n_gauss_nodes, log_out, kill_shape, posdrift);
   }
 
