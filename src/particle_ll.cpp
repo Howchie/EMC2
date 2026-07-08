@@ -2904,46 +2904,6 @@ static inline bool row_equal_colmajor(const double* pars_cm_ptr,
   return true;
 }
 
-static void fill_legendre_rule(int n, std::vector<double>& x, std::vector<double>& w) {
-  x.resize(static_cast<size_t>(n));
-  w.resize(static_cast<size_t>(n));
-  const int m = (n + 1) / 2;
-  for (int i = 1; i <= m; ++i) {
-    double z = std::cos(M_PI * (i - 0.25) / (n + 0.5));
-    double p1 = 0.0, p2 = 0.0, p3 = 0.0, dp = 0.0, dz = 0.0;
-    do {
-      p1 = 1.0;
-      p2 = 0.0;
-      for (int j = 1; j <= n; ++j) {
-        p3 = p2;
-        p2 = p1;
-        p1 = ((2 * j - 1) * z * p2 - (j - 1) * p3) / j;
-      }
-      dp = n * (z * p1 - p2) / (z * z - 1.0);
-      dz = p1 / dp;
-      z -= dz;
-    } while (std::abs(dz) > 1e-15);
-    x[static_cast<size_t>(i - 1)] = -z;
-    x[static_cast<size_t>(n - i)] = z;
-    const double wi = 2.0 / ((1.0 - z * z) * dp * dp);
-    w[static_cast<size_t>(i - 1)] = wi;
-    w[static_cast<size_t>(n - i)] = wi;
-  }
-}
-
-struct LogicalRulesGlRules {
-  std::vector<double> x31, w31;
-};
-
-static const LogicalRulesGlRules& logicalrules_gl_rules() {
-  static std::once_flag once;
-  static LogicalRulesGlRules rules;
-  std::call_once(once, []() {
-    fill_legendre_rule(31, rules.x31, rules.w31);
-  });
-  return rules;
-}
-
 struct LogicalRulesScratch {
   std::vector<double> ll_unique;
   std::vector<double> logf_all;
@@ -3333,7 +3293,7 @@ static double c_log_likelihood_logicalrules(
   std::vector<unsigned char>& ch_eq_vec = scratch.ch_eq_vec;
 
   if (use_gl_pass) {
-    const LogicalRulesGlRules& gl_rules = logicalrules_gl_rules();
+    const GLRule& gl_rule31 = gl_get_rule(31);   // shared cache, gl_quad.h
 
     // Per-trial GL parameters for GA_no = P(n_A wins before RT) and
     // GB_no = P(n_B wins before RT).  The integration lower bound is the
@@ -3439,8 +3399,8 @@ static double c_log_likelihood_logicalrules(
     resize_assign_double(lf_nB, static_cast<size_t>(n_unique_trials), min_ll);
     resize_assign_double(lS_B, static_cast<size_t>(n_unique_trials), min_ll);
 
-    for (size_t k = 0; k < gl_rules.x31.size(); ++k) {
-      const double xi = gl_rules.x31[k], wt = gl_rules.w31[k];
+    for (size_t k = 0; k < gl_rule31.x.size(); ++k) {
+      const double xi = gl_rule31.x[k], wt = gl_rule31.w[k];
       for (int j = 0; j < n_unique_trials; ++j) {
         const double t0nA = (t0_col >= 0 && t0_col < n_par)
           ? pars_cm_ptr[static_cast<size_t>(t0_col) * n_trials + shared.idxnA[j]]
@@ -4077,9 +4037,9 @@ double c_log_likelihood_race(
   bool gl20_ready = false;
   if (global_omission_active) {
     const int n_nodes = 20;
-    Rcpp::List gl = get_gl_nodes_weights(n_nodes);
-    const Rcpp::NumericVector gl_nodes = gl[0];
-    const Rcpp::NumericVector gl_weights = gl[1];
+    const GLRule& gl = gl_get_rule(n_nodes);
+    const std::vector<double>& gl_nodes = gl.x;
+    const std::vector<double>& gl_weights = gl.w;
     for (int j = 0; j < n_nodes; ++j) {
       const double u = 0.5 * (gl_nodes[j] + 1.0);
       gl_u[static_cast<size_t>(j)] = u;
@@ -4942,4 +4902,14 @@ apply_trial_trunc:
   }
   
   return total_ll;
+}
+
+// Test-only accessor for the shared Gauss-Legendre cache (gl_quad.h). Lets R
+// unit tests pin gl_get_rule() nodes/weights against statmod::gauss.quad.
+// [[Rcpp::export]]
+Rcpp::List gl_rule_nodes_weights(int n) {
+  const GLRule& r = gl_get_rule(n);
+  return Rcpp::List::create(
+      Rcpp::Named("nodes")   = Rcpp::NumericVector(r.x.begin(), r.x.end()),
+      Rcpp::Named("weights") = Rcpp::NumericVector(r.w.begin(), r.w.end()));
 }

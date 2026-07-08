@@ -14,6 +14,7 @@
 #include "wald_functions.h"
 #include "composite_functions.h"
 #include "gaussian.h"
+#include "gl_quad.h"
 using namespace Rcpp;
 
 static constexpr double RDM_Q_EPSILON = 1e-8;
@@ -1006,19 +1007,17 @@ inline double log_swtn_hit_mass(double mu, double sv, double s, double r) {
   return log_sum_exp(log_pos, log_neg);
 }
 
-inline Rcpp::List get_gl_nodes_weights(int n_gauss_nodes);
-
 inline double log_swtn_spv_hit_mass_full(double mu, double sv, double s,
                                          double b, double A,
                                          int n_gauss_nodes = 20) {
   if (A <= 1e-10) {
     return log_swtn_hit_mass(mu, sv, s, b);
   }
-  
+
   const int n_nodes = std::max(1, n_gauss_nodes);
-  Rcpp::List gl = get_gl_nodes_weights(n_nodes);
-  const Rcpp::NumericVector nodes = gl["nodes"];
-  const Rcpp::NumericVector weights = gl["weights"];
+  const GLRule& gl = gl_get_rule(n_nodes);
+  const std::vector<double>& nodes = gl.x;
+  const std::vector<double>& weights = gl.w;
   
   const double center = b - 0.5 * A;
   const double half_width = 0.5 * A;
@@ -1047,8 +1046,6 @@ double pswtn(double t, double mu_drift, double threshold, double s,
              double t0, double sv, double lambda_g, double lambda_k,
              bool log_out, int kill_shape, bool guess, bool posdrift,
              double erlang_omega);
-
-inline Rcpp::List get_gl_nodes_weights(int n_gauss_nodes);
 
 inline double dswtn_positive_drift_quad(double t, double mu_drift, double threshold,
                                         double s, double t0, double sv,
@@ -1138,11 +1135,6 @@ double dswtn(double t, double mu_drift, double threshold, double s = 1.0,
 // --------------------------------------------------------------------------
 // SWTN CDF.
 // --------------------------------------------------------------------------
-inline Rcpp::List get_gl_nodes_weights(int n_gauss_nodes) {
-  const int n_nodes = std::max(1, n_gauss_nodes);
-  return (n_nodes == 20) ? get_gl20()
-                         : Rcpp::as<Rcpp::List>(gauss_quad(n_nodes, "legendre"));
-}
 
 inline double norm_cdf_2d_stable(double x, double y, double rho) {
   if (std::fabs(rho) > 0.9999 || std::fabs(x) > 8.0 || std::fabs(y) > 8.0)
@@ -1238,9 +1230,9 @@ inline double integrate_positive_drift_quad(double mu_drift, double sv,
   if (!(width > 0.0)) return 0.0;
 
   const int n_nodes = std::max(1, n_gauss_nodes);
-  const Rcpp::List gl = get_gl_nodes_weights(n_nodes);
-  const Rcpp::NumericVector nodes = gl["nodes"];
-  const Rcpp::NumericVector weights = gl["weights"];
+  const GLRule& gl = gl_get_rule(n_nodes);
+  const std::vector<double>& nodes = gl.x;
+  const std::vector<double>& weights = gl.w;
 
   double acc = 0.0;
   for (int j = 0; j < n_nodes; ++j) {
@@ -1415,9 +1407,9 @@ inline double prdmswtn_joint_A_sv_cdf_postrunc(
   }
 
   const int n_nodes = std::max(1, n_gauss_nodes);
-  Rcpp::List gl = get_gl_nodes_weights(n_nodes);
-  const Rcpp::NumericVector nodes = gl["nodes"];
-  const Rcpp::NumericVector weights = gl["weights"];
+  const GLRule& gl = gl_get_rule(n_nodes);
+  const std::vector<double>& nodes = gl.x;
+  const std::vector<double>& weights = gl.w;
 
   const double center = b - 0.5 * A;
   const double half_width = 0.5 * A;
@@ -1492,11 +1484,11 @@ double prdmswtn(double t, double mu_drift, double b, double A,
 template <typename DensityFn>
 inline double integrate_density_gl20_finite(double t_upper, DensityFn&& density_fn) {
   if (!(t_upper > 0.0)) return 0.0;
-  const Rcpp::List& gl = get_gl20();
-  const Rcpp::NumericVector nodes = gl["nodes"];
-  const Rcpp::NumericVector weights = gl["weights"];
+  const GLRule& gl = gl_get_rule(20);
+  const std::vector<double>& nodes = gl.x;
+  const std::vector<double>& weights = gl.w;
   double acc = 0.0;
-  for (int j = 0; j < nodes.size(); ++j) {
+  for (int j = 0; j < static_cast<int>(nodes.size()); ++j) {
     const double u = 0.5 * t_upper * (nodes[j] + 1.0);
     acc += weights[j] * density_fn(u);
   }
@@ -1506,11 +1498,11 @@ inline double integrate_density_gl20_finite(double t_upper, DensityFn&& density_
 template <typename DensityFn>
 inline double integrate_density_gl20_infinite(double rate_scale, DensityFn&& density_fn) {
   const double scale = std::fmax(rate_scale, 1e-8);
-  const Rcpp::List& gl = get_gl20();
-  const Rcpp::NumericVector nodes = gl["nodes"];
-  const Rcpp::NumericVector weights = gl["weights"];
+  const GLRule& gl = gl_get_rule(20);
+  const std::vector<double>& nodes = gl.x;
+  const std::vector<double>& weights = gl.w;
   double acc = 0.0;
-  for (int j = 0; j < nodes.size(); ++j) {
+  for (int j = 0; j < static_cast<int>(nodes.size()); ++j) {
     const double q = 0.5 * (nodes[j] + 1.0);
     const double qq = std::fmin(1.0 - 1e-12, std::fmax(1e-15, q));
     const double t = -std::log1p(-qq) / scale;
@@ -2199,9 +2191,9 @@ inline double pswtn_killed_quad(double t_adj, double mu_drift, double threshold,
                                 int n_gauss_nodes, int kill_shape, bool guess, bool posdrift = true) {
   // t_adj is EAM time; t_adj + t0 is raw rt. Pass t0 to pwald so erlang uses raw time.
   const int n_nodes = std::max(1, n_gauss_nodes);
-  Rcpp::List gl = get_gl_nodes_weights(n_nodes);
-  const Rcpp::NumericVector gl_nodes   = gl["nodes"];
-  const Rcpp::NumericVector gl_weights = gl["weights"];
+  const GLRule& gl = gl_get_rule(n_nodes);
+  const std::vector<double>& gl_nodes   = gl.x;
+  const std::vector<double>& gl_weights = gl.w;
 
   double integral = 0.0;
   for (int j = 0; j < n_nodes; ++j) {
@@ -2248,9 +2240,9 @@ inline double pswtn_killed_inf_quad(double threshold, double mu_drift,
   }
 
   const int n_nodes = std::max(1, n_gauss_nodes);
-  Rcpp::List gl = get_gl_nodes_weights(n_nodes);
-  const Rcpp::NumericVector gl_nodes   = gl["nodes"];
-  const Rcpp::NumericVector gl_weights = gl["weights"];
+  const GLRule& gl = gl_get_rule(n_nodes);
+  const std::vector<double>& gl_nodes   = gl.x;
+  const std::vector<double>& gl_weights = gl.w;
 
   double log_integral = R_NegInf;
   for (int j = 0; j < n_nodes; ++j) {
@@ -2315,9 +2307,9 @@ inline double prdmswtn_killed_inf_quad(double b, double mu_drift, double A,
   }
 
   const int n_nodes = std::max(1, n_gauss_nodes);
-  Rcpp::List gl = get_gl_nodes_weights(n_nodes);
-  const Rcpp::NumericVector gl_nodes   = gl["nodes"];
-  const Rcpp::NumericVector gl_weights = gl["weights"];
+  const GLRule& gl = gl_get_rule(n_nodes);
+  const std::vector<double>& gl_nodes   = gl.x;
+  const std::vector<double>& gl_weights = gl.w;
 
   double log_integral = R_NegInf;
   for (int j = 0; j < n_nodes; ++j) {
@@ -2524,9 +2516,9 @@ double drdmswtn(double t, double mu_drift, double b, double A,
     // Full model: integrate defective dswtn_core over threshold ~ Unif(b-A, b),
     // then normalise by the SPV hit mass if posdrift=true.
     const int n_nodes = std::max(1, n_gauss_nodes);
-    Rcpp::List gl = get_gl_nodes_weights(n_nodes);
-    const Rcpp::NumericVector gl_nodes   = gl["nodes"];
-    const Rcpp::NumericVector gl_weights = gl["weights"];
+    const GLRule& gl = gl_get_rule(n_nodes);
+    const std::vector<double>& gl_nodes   = gl.x;
+    const std::vector<double>& gl_weights = gl.w;
     const double center     = b - 0.5 * A;
     const double half_width = 0.5 * A;
     double integral = 0.0;
@@ -2624,9 +2616,9 @@ double prdmswtn(double t, double mu_drift, double b, double A,
     return pswtn(t, mu_drift, b, s, t0, sv, lambda, lambda, log_out, kill_shape, guess, posdrift);
   } else {
     const int n_nodes = std::max(1, n_gauss_nodes);
-    Rcpp::List gl = get_gl_nodes_weights(n_nodes);
-    const Rcpp::NumericVector gl_nodes   = gl["nodes"];
-    const Rcpp::NumericVector gl_weights = gl["weights"];
+    const GLRule& gl = gl_get_rule(n_nodes);
+    const std::vector<double>& gl_nodes   = gl.x;
+    const std::vector<double>& gl_weights = gl.w;
     
     double integral = 0.0;
     for (int j = 0; j < n_nodes; ++j) {

@@ -1410,6 +1410,17 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// gl_rule_nodes_weights
+Rcpp::List gl_rule_nodes_weights(int n);
+RcppExport SEXP _EMC2_gl_rule_nodes_weights(SEXP nSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< int >::type n(nSEXP);
+    rcpp_result_gen = Rcpp::wrap(gl_rule_nodes_weights(n));
+    return rcpp_result_gen;
+END_RCPP
+}
 // run_trend_rcpp
 NumericVector run_trend_rcpp(DataFrame data, List trend, NumericVector param, NumericMatrix trend_pars, NumericMatrix pars_full, bool return_kernel);
 RcppExport SEXP _EMC2_run_trend_rcpp(SEXP dataSEXP, SEXP trendSEXP, SEXP paramSEXP, SEXP trend_parsSEXP, SEXP pars_fullSEXP, SEXP return_kernelSEXP) {
@@ -1542,6 +1553,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_calc_ll_oo", (DL_FUNC) &_EMC2_calc_ll_oo, 11},
     {"_EMC2_calc_ll_oo_pw", (DL_FUNC) &_EMC2_calc_ll_oo_pw, 11},
     {"_EMC2_get_pars_c_wrapper_oo", (DL_FUNC) &_EMC2_get_pars_c_wrapper_oo, 11},
+    {"_EMC2_gl_rule_nodes_weights", (DL_FUNC) &_EMC2_gl_rule_nodes_weights, 1},
     {"_EMC2_run_trend_rcpp", (DL_FUNC) &_EMC2_run_trend_rcpp, 6},
     {"_EMC2_pigt", (DL_FUNC) &_EMC2_pigt, 5},
     {"_EMC2_digt", (DL_FUNC) &_EMC2_digt, 5},
