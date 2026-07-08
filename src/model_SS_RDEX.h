@@ -9,6 +9,7 @@
 #include "exgaussian_functions.h"
 #include "gsl_utils.h"
 #include "gl_quad.h"
+#include "ss_raw.h"
 #include <gsl/gsl_integration.h>
 #include <gsl/gsl_errno.h>
 using namespace Rcpp;
@@ -179,6 +180,31 @@ double ss_rdex_stop_fail_lpdf(
 
 // function to compute the stop success integral, not accounting for trigger
 // failure and go failure
+// Build the raw stop-success context from the go-rows parameter matrix.
+// Canonicalizes the Wald parameters once (alpha/nu/gamma/t0, s divided out) —
+// the same expressions the old integrand re-derived at every quadrature node.
+static inline SsStopCtx ss_rdex_stop_ctx_from_matrix(const NumericMatrix& pars,
+                                                     double SSD) {
+  static thread_local std::vector<double> acc_buf;
+  const int n = pars.nrow();
+  acc_buf.resize(static_cast<size_t>(SS_ACC_STRIDE) * n);
+  for (int i = 0; i < n; ++i) {
+    double* a = acc_buf.data() + SS_ACC_STRIDE * i;
+    const double s = pars(i, 4);
+    a[0] = (pars(i, 1) / s) + .5 * (pars(i, 2) / s);  // alpha
+    a[1] = pars(i, 0) / s;                            // nu
+    a[2] = .5 * (pars(i, 2) / s);                     // gamma
+    a[3] = pars(i, 3);                                // t0
+  }
+  SsStopCtx c;
+  c.SSD = SSD;
+  c.acc_go = acc_buf.data();
+  c.n_go = n;
+  c.muS = pars(0, 5); c.sigS = pars(0, 6); c.tauS = pars(0, 7); c.lbS = pars(0, 10);
+  c.acc_surv = &ss_rdex_acc_surv_raw;
+  return c;
+}
+
 static inline double ss_rdex_stop_success_lpdf(
     double SSD,
     NumericMatrix pars,
@@ -190,69 +216,11 @@ static inline double ss_rdex_stop_success_lpdf(
     double k_sigma = SS_WINDOW_K_SIGMA,
     double k_tau = SS_WINDOW_K_TAU
 ) {
-  gsl_function F;
-  struct Wrapper {
-    NumericMatrix pars;
-    double SSD;
-  } w_params = {pars, SSD};
-  
-  auto integrand = [](double x, void* p) -> double {
-    Wrapper* wp = static_cast<Wrapper*>(p);
-    const int n_acc = wp->pars.nrow();
-    // Stop process (muS=5, sigS=6, tauS=7, lbS=10)
-    double muS = wp->pars(0, 5);
-    double sigS = wp->pars(0, 6);
-    double tauS = wp->pars(0, 7);
-    double lbS  = wp->pars(0, 10);
-    double fS = dtexg(x, muS, sigS, tauS, lbS, R_PosInf, false);
-    if (fS <= 0.0) return 0.0;
-    
-    double S_go_all = 1.0;
-    for (int i = 0; i < n_acc; ++i) {
-      double s = wp->pars(i, 4);
-      double alpha = (wp->pars(i, 1) / s) + .5 * (wp->pars(i, 2) / s);
-      double nu    =  wp->pars(i, 0) / s;
-      double gamma = .5 * (wp->pars(i, 2) / s);
-      double t0    =  wp->pars(i, 3);
-      double dt_i = (x + wp->SSD) - t0;
-      double Si = 1.0;
-      if (dt_i > 0.) {
-        Si = 1.0 - pigt_impl(dt_i, alpha, nu, gamma);
-      }
-      S_go_all *= Si;
-      if (S_go_all <= 0.0) return 0.0;
-    }
-    return fS * S_go_all;
-  };
-
-  F.function = integrand;
-  F.params = &w_params;
-
-  double muS = pars(0, 5);
-  double sigS = pars(0, 6);
-  double tauS = pars(0, 7);
-  double lbS  = pars(0, 10);
-  double ub_heur = muS + k_sigma * sigS + k_tau * tauS;
-  // Use emc2_isfinite / emc2_isinf (not std:: versions) — -ffast-math breaks them
-  double ub = emc2_isfinite(upper) ? upper : ub_heur;
-  if (!(ub > lbS)) ub = lbS + 1e-12;
-
-  static thread_local GslWorkspacePtr ws_ptr(nullptr, &gsl_integration_workspace_free);
-  gsl_integration_workspace* workspace = ensure_gsl_workspace(ws_ptr, max_subdiv);
-  double res, err;
-  gsl_error_handler_t* old_handler = gsl_set_error_handler_off();
-
-  int status;
-  if (emc2_isinf(ub)) {
-    status = gsl_integration_qagiu(&F, lbS, abs_tol, rel_tol, max_subdiv, workspace, &res, &err);
-  } else {
-    status = gsl_integration_qags(&F, lbS, ub, abs_tol, rel_tol, max_subdiv, workspace, &res, &err);
-  }
-
-  gsl_set_error_handler(old_handler);
-
-  if (status != GSL_SUCCESS || !emc2_isfinite(res) || res <= 0.0) return min_ll;
-  return std::log(res);
+  const SsStopCtx c = ss_rdex_stop_ctx_from_matrix(pars, SSD);
+  return ss_stop_success_raw_integrate(c, min_ll, upper,
+                                       /*clamp_empty_window=*/true,
+                                       max_subdiv, abs_tol, rel_tol,
+                                       k_sigma, k_tau);
 }
 
 // ----------------------------------------------------------------------------
@@ -530,41 +498,9 @@ static inline double ss_rdex_stop_success_lpdf_gl(
     double k_sigma = SS_WINDOW_K_SIGMA,
     double k_tau = SS_WINDOW_K_TAU
 ) {
-  struct Wrapper { NumericMatrix pars; double SSD; } w_params = {pars, SSD};
-  auto integrand = [](double x, void* p) -> double {
-    Wrapper* wp = static_cast<Wrapper*>(p);
-    const int n_acc = wp->pars.nrow();
-    double muS = wp->pars(0,5), sigS = wp->pars(0,6), tauS = wp->pars(0,7);
-    double lbS = wp->pars(0,10);
-    double fS = dtexg(x, muS, sigS, tauS, lbS, R_PosInf, false);
-    if (fS <= 0.0) return 0.0;
-    double S_go_all = 1.0;
-    for (int i = 0; i < n_acc; ++i) {
-      double s = wp->pars(i, 4);
-      double alpha = (wp->pars(i, 1) / s) + .5 * (wp->pars(i, 2) / s);
-      double nu    =  wp->pars(i, 0) / s;
-      double gamma = .5 * (wp->pars(i, 2) / s);
-      double t0    =  wp->pars(i, 3);
-      double dt_i  = (x + wp->SSD) - t0;
-      double Si = 1.0;
-      if (dt_i > 0.) Si = 1.0 - pigt_impl(dt_i, alpha, nu, gamma);
-      S_go_all *= Si;
-      if (S_go_all <= 0.0) return 0.0;
-    }
-    return fS * S_go_all;
-  };
-  const double muS = pars(0,5), sigS = pars(0,6), tauS = pars(0,7);
-  const double lbS = pars(0,10);
-  const double ub_heur = muS + k_sigma * sigS + k_tau * tauS;
-  // lbS = -Inf (untruncated stop) needs a finite GL window: mirror the upper
-  // heuristic on the lower side
-  const double lo = emc2_isfinite(lbS) ? lbS
-                                       : muS - k_sigma * sigS - k_tau * tauS;
-  double ub = emc2_isfinite(upper) ? upper : ub_heur;
-  if (!(ub > lo)) ub = lo + 1e-12;
-  double res = gl_integrate(integrand, &w_params, lo, ub, n_nodes);
-  if (!emc2_isfinite(res) || res <= 0.0) return min_ll;
-  return std::log(res);
+  const SsStopCtx c = ss_rdex_stop_ctx_from_matrix(pars, SSD);
+  return ss_stop_success_raw_gl(c, min_ll, upper, n_nodes,
+                                /*clamp_empty_window=*/true, k_sigma, k_tau);
 }
 
 // --- "auto" dispatch: RDEX has no analytic form (Wald survivor arguments are
@@ -574,15 +510,10 @@ static inline double ss_rdex_stop_success_lpdf_autodisp(
     double upper = R_PosInf, int n_nodes = 64,
     double k_sigma = SS_WINDOW_K_SIGMA, double k_tau = SS_WINDOW_K_TAU
 ) {
-  const double muS = pars(0,5), sigS = pars(0,6), tauS = pars(0,7);
-  const double lbS = pars(0,10);
-  const double lo = emc2_isfinite(lbS) ? lbS
-                                       : muS - k_sigma * sigS - k_tau * tauS;
-  const double ub = emc2_isfinite(upper) ? upper
-                                         : muS + k_sigma * sigS + k_tau * tauS;
-  const int n_eff = gl_auto_nodes(n_nodes, lo, ub, sigS);
-  return ss_rdex_stop_success_lpdf_gl(SSD, pars, min_ll, upper, n_eff,
-                                      k_sigma, k_tau);
+  const SsStopCtx c = ss_rdex_stop_ctx_from_matrix(pars, SSD);
+  return ss_stop_success_raw_auto(c, min_ll, upper, n_nodes,
+                                  /*clamp_empty_window=*/true,
+                                  /*try_analytic1=*/false, k_sigma, k_tau);
 }
 
 // --- LIVE entry point: matches the ss_stop_success_fn signature (see

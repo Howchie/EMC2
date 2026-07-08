@@ -22,6 +22,7 @@
 #include <memory>
 #include <array>
 #include <cstring>
+#include <cstdlib>
 #include <mutex>
 
 using namespace Rcpp;
@@ -1045,6 +1046,539 @@ double c_log_likelihood_ss(
   return sum_ll;
 }
 
+// ============================================================================
+// Raw-buffer stop-signal path.
+//
+// c_log_likelihood_ss above re-derived the whole trial structure from Rcpp
+// columns for every trial of every particle (Range() submatrix copies,
+// LogicalVector masks, NumericVector rt broadcasts). Everything data-fixed is
+// now computed ONCE per calc_ll_oo call into SsSharedState, and the
+// per-particle evaluator reads ParamTable base columns directly through the
+// canonical kernel blocks defined in ss_raw.h (see SsRawModel). Numerically
+// identical to c_log_likelihood_ss, which remains as the fallback (and
+// readable reference) when the ParamTable column mapping is unavailable.
+// ============================================================================
+
+enum SsTrialKind : uint8_t {
+  SS_TRIAL_LC_CENSORED = 0,  // rt == -Inf: integrate response mass over [LT, LC)
+  SS_TRIAL_GO_NR_FREE,       // go trial, no response, no deadline
+  SS_TRIAL_GO_NR_DEADLINE,   // go trial, no response by UC
+  SS_TRIAL_STOP_NR_FREE,     // stop trial, no response, no deadline
+  SS_TRIAL_STOP_NR_DEADLINE, // stop trial, no response by UC
+  SS_TRIAL_GO_RESP,          // response on a go trial
+  SS_TRIAL_STOP_GO_RESP,     // go response on a stop trial
+  SS_TRIAL_STOP_ST_RESP      // ST (or unmatched) response on a stop trial
+};
+
+struct SsSharedState {
+  bool valid = false;
+  int n_trials = 0;                       // unique trials
+  int n_acc = 0;                          // accumulators per trial
+  std::vector<uint8_t> kind;              // SsTrialKind per trial
+  std::vector<double> rt, SSD, UC, LC, LT;
+  std::vector<int> resp_code;             // R code, NA_INTEGER if no response
+  std::vector<int> n_go, n_st, first_go_row;   // first_go_row: offset in trial
+  std::vector<uint8_t> is_go_row, is_st_row, win_row;  // n_trials * n_acc
+  std::vector<int> lR_row;                // lR codes, n_trials * n_acc
+};
+
+static SsSharedState build_ss_shared_state(const Rcpp::DataFrame& data,
+                                           int n_trials_ss, int n_acc) {
+  SsSharedState ss;
+  ss.n_trials = n_trials_ss;
+  ss.n_acc = n_acc;
+  if (n_trials_ss <= 0 || n_acc <= 0) return ss;
+  if (!data.containsElementNamed("rt") || !data.containsElementNamed("R") ||
+      !data.containsElementNamed("SSD") || !data.containsElementNamed("lR") ||
+      !data.containsElementNamed("winner")) {
+    return ss;
+  }
+
+  NumericVector RT = data["rt"];
+  IntegerVector R = data["R"];
+  NumericVector SSD = data["SSD"];
+  IntegerVector lR = data["lR"];
+  LogicalVector winner = data["winner"];
+  NumericVector LT = get_col_with_default(data, "LT", 0.0);
+  NumericVector UC = get_col_with_default(data, "UC", R_PosInf);
+  NumericVector LC = get_col_with_default(data, "LC", 0.0);
+  const bool has_lI = data.containsElementNamed("lI");
+  IntegerVector lI = has_lI ? Rcpp::as<IntegerVector>(data["lI"])
+                            : IntegerVector(lR.size(), 2);
+  if (RT.size() != n_trials_ss * n_acc) return ss;
+
+  const int n_rows = n_trials_ss * n_acc;
+  ss.kind.resize(n_trials_ss);
+  ss.rt.resize(n_trials_ss); ss.SSD.resize(n_trials_ss);
+  ss.UC.resize(n_trials_ss); ss.LC.resize(n_trials_ss); ss.LT.resize(n_trials_ss);
+  ss.resp_code.resize(n_trials_ss);
+  ss.n_go.resize(n_trials_ss); ss.n_st.resize(n_trials_ss);
+  ss.first_go_row.resize(n_trials_ss);
+  ss.is_go_row.resize(n_rows); ss.is_st_row.resize(n_rows); ss.win_row.resize(n_rows);
+  ss.lR_row.resize(n_rows);
+
+  for (int trial = 0; trial < n_trials_ss; ++trial) {
+    const int start = trial * n_acc;
+    const double rt = RT[start];
+    const double ssd = SSD[start];
+    const double uc = UC[start];
+    const int r_obs = R[start];
+    const bool response_observed = (r_obs != NA_INTEGER);
+    const bool stop_presented = emc2_isfinite(ssd);
+    const bool has_deadline = R_FINITE(uc) && !Rcpp::NumericVector::is_na(uc);
+
+    ss.rt[trial] = rt; ss.SSD[trial] = ssd; ss.UC[trial] = uc;
+    ss.LC[trial] = LC[start]; ss.LT[trial] = LT[start];
+    ss.resp_code[trial] = r_obs;
+
+    // go/ST partition exactly as before: within-trial max lI code marks go
+    int go_code = lI[start];
+    for (int i = 1; i < n_acc; ++i) {
+      if (lI[start + i] > go_code) go_code = lI[start + i];
+    }
+    int ng = 0, nst = 0, first_go = -1;
+    for (int i = 0; i < n_acc; ++i) {
+      const bool go_i = has_lI ? (lI[start + i] == go_code) : true;
+      ss.is_go_row[start + i] = go_i ? 1 : 0;
+      ss.is_st_row[start + i] = go_i ? 0 : 1;
+      ss.win_row[start + i] = (winner[start + i] == TRUE) ? 1 : 0;
+      ss.lR_row[start + i] = lR[start + i];
+      if (go_i) { ++ng; if (first_go < 0) first_go = i; }
+      else ++nst;
+    }
+    ss.n_go[trial] = ng; ss.n_st[trial] = nst;
+    ss.first_go_row[trial] = (first_go < 0) ? 0 : first_go;
+
+    bool response_is_go = false;
+    if (response_observed) {
+      for (int i = 0; i < n_acc; ++i) {
+        if (lR[start + i] == r_obs) { response_is_go = ss.is_go_row[start + i] != 0; break; }
+      }
+    }
+
+    uint8_t k;
+    if (rt == R_NegInf) {
+      k = SS_TRIAL_LC_CENSORED;
+    } else if (!response_observed) {
+      if (!stop_presented) k = has_deadline ? SS_TRIAL_GO_NR_DEADLINE : SS_TRIAL_GO_NR_FREE;
+      else                 k = has_deadline ? SS_TRIAL_STOP_NR_DEADLINE : SS_TRIAL_STOP_NR_FREE;
+    } else if (!stop_presented) {
+      k = SS_TRIAL_GO_RESP;
+    } else {
+      k = response_is_go ? SS_TRIAL_STOP_GO_RESP : SS_TRIAL_STOP_ST_RESP;
+    }
+    ss.kind[trial] = k;
+  }
+
+  ss.valid = true;
+  return ss;
+}
+
+// Per-trial-per-particle evaluation context: canonical parameter blocks plus
+// the data-fixed masks for this trial. All raw pointers; nothing allocates.
+struct SsTrialEvalCtx {
+  const SsRawModel* M;
+  const double* acc;      // n_acc * SS_ACC_STRIDE canonical blocks (trial order)
+  const double* acc_go;   // n_go * SS_ACC_STRIDE, go rows compacted in order
+  const uint8_t* is_go;   // per trial row
+  const uint8_t* is_st;
+  const int* lR_codes;
+  int n_acc, n_go, n_st;
+  double stop_r0[4];      // stop block from trial row 0   (stop survivor)
+  double stop_g0[4];      // stop block from first go row  (stop-success integral)
+  double tf, gf;
+  double SSD;
+  bool stop_presented;
+  int response_code;      // NA_INTEGER when unconstrained (LC integration)
+  double min_ll;
+};
+
+static inline SsStopCtx ss_make_stop_ctx(const SsTrialEvalCtx& c) {
+  SsStopCtx sc;
+  sc.SSD = c.SSD;
+  sc.acc_go = c.acc_go;
+  sc.n_go = c.n_go;
+  sc.muS = c.stop_g0[0]; sc.sigS = c.stop_g0[1];
+  sc.tauS = c.stop_g0[2]; sc.lbS = c.stop_g0[3];
+  sc.acc_surv = c.M->acc_surv;
+  return sc;
+}
+
+// log survivor of the stop process at duration t (raw twin of
+// stop_logsurv_texg_fn / stop_logsurv_rdex_fn: both models race a TEXG stop).
+static inline double ss_stop_logsurv_raw(double t, const double* stop4) {
+  return ptexg(t, stop4[0], stop4[1], stop4[2], stop4[3], R_PosInf, false, true);
+}
+
+// Sum of protected log survivors over a masked subset of accumulators, at
+// time t. Matches the texg_go_lccdf/rdex_go_lccdf + sum pattern: each element
+// is floored to -Inf when non-finite.
+static inline double ss_masked_lsurv_sum_raw(const SsTrialEvalCtx& c, double t,
+                                             const uint8_t* mask) {
+  double out = 0.0;
+  for (int i = 0; i < c.n_acc; ++i) {
+    if (!mask[i]) continue;
+    const double v = c.M->acc_lsurv(t, c.acc + SS_ACC_STRIDE * i);
+    out += emc2_isfinite(v) ? v : R_NegInf;
+  }
+  return out;
+}
+
+// Full trial response density at rt, marginalizing over candidate winners.
+// Raw twin of ss_trial_log_response_density (used by the LC-censoring path).
+static double ss_trial_log_response_density_raw(double rt, const SsTrialEvalCtx& c) {
+  const SsRawModel& M = *c.M;
+  const bool response_known = (c.response_code != NA_INTEGER);
+
+  double log_go_any = R_NegInf;
+  for (int i = 0; i < c.n_acc; ++i) {
+    if (!c.is_go[i]) continue;
+    if (response_known && c.lR_codes[i] != c.response_code) continue;
+
+    // winner-i go race density (twin of ss_log_go_density_for_winner)
+    const double lw = M.acc_lpdf(rt, c.acc + SS_ACC_STRIDE * i);
+    double go_lprob = emc2_isfinite(lw) ? lw : R_NegInf;
+    if (!R_FINITE(go_lprob)) continue;
+    for (int j = 0; j < c.n_acc; ++j) {
+      if (!c.is_go[j] || j == i) continue;
+      const double ls = M.acc_lsurv(rt, c.acc + SS_ACC_STRIDE * j);
+      go_lprob += emc2_isfinite(ls) ? ls : R_NegInf;
+    }
+    if (!R_FINITE(go_lprob)) continue;
+
+    double log_term = log1m(c.gf) + go_lprob;
+    if (c.stop_presented && rt > c.SSD) {
+      double rt_eff = rt - c.SSD;
+      if (rt_eff < 0.0) rt_eff = 0.0;
+      double log_stop_surv = ss_stop_logsurv_raw(rt_eff, c.stop_r0);
+      if (!R_FINITE(log_stop_surv)) log_stop_surv = c.min_ll;
+      double st_loss_sum = 0.0;
+      if (c.n_st > 0) {
+        st_loss_sum = ss_masked_lsurv_sum_raw(c, rt_eff, c.is_st);
+      }
+      const double comp_tf = go_lprob;
+      const double comp_notf = go_lprob + log_stop_surv + st_loss_sum;
+      log_term = log1m(c.gf) + log_mix(c.tf, comp_tf, comp_notf);
+    }
+    log_go_any = log_sum_exp(log_go_any, log_term);
+  }
+
+  if (!c.stop_presented || c.n_st == 0) return log_go_any;
+
+  double log_st_any = R_NegInf;
+  for (int i = 0; i < c.n_acc; ++i) {
+    if (!c.is_st[i]) continue;
+    if (response_known && c.lR_codes[i] != c.response_code) continue;
+    if (rt <= c.SSD) continue;
+
+    double rt_st = rt - c.SSD;
+    if (rt_st < 0.0) rt_st = 0.0;
+    // winner-i ST race density (twin of ss_log_st_density_for_winner)
+    const double lw = M.acc_lpdf(rt_st, c.acc + SS_ACC_STRIDE * i);
+    double st_base = emc2_isfinite(lw) ? lw : R_NegInf;
+    if (!R_FINITE(st_base)) continue;
+    for (int j = 0; j < c.n_acc; ++j) {
+      if (!c.is_st[j] || j == i) continue;
+      const double ls = M.acc_lsurv(rt_st, c.acc + SS_ACC_STRIDE * j);
+      st_base += emc2_isfinite(ls) ? ls : R_NegInf;
+    }
+    if (!R_FINITE(st_base)) continue;
+
+    double go_loss_sum = 0.0;
+    if (c.n_go > 0) {
+      go_loss_sum = ss_masked_lsurv_sum_raw(c, rt, c.is_go);
+    }
+    double rt_eff = rt - c.SSD;
+    if (rt_eff < 0.0) rt_eff = 0.0;
+    const SsStopCtx sc = ss_make_stop_ctx(c);
+    double log_pstop = ss_stop_success_raw_live(sc, c.min_ll, rt_eff,
+                                                M.clamp_empty_window,
+                                                M.try_analytic1);
+    if (!R_FINITE(log_pstop)) log_pstop = R_NegInf;
+
+    const double term_gf = std::log(c.gf) + st_base;
+    const double term_stop_win = log1m(c.gf) + log_pstop + st_base;
+    const double term_stop_lose =
+      log1m(c.gf) + log1m_exp(log_pstop) + st_base + go_loss_sum;
+    const double log_term =
+      log1m(c.tf) + log_sum_exp(term_gf, log_sum_exp(term_stop_win, term_stop_lose));
+
+    log_st_any = log_sum_exp(log_st_any, log_term);
+  }
+
+  return log_sum_exp(log_go_any, log_st_any);
+}
+
+static double ss_lc_integrand_raw(double x, void* params) {
+  const SsTrialEvalCtx* c = static_cast<const SsTrialEvalCtx*>(params);
+  const double logf = ss_trial_log_response_density_raw(x, *c);
+  if (!R_FINITE(logf)) return 0.0;
+  return std::exp(logf);
+}
+
+// Raw twin of ss_integrate_lc_response_mass (same GSL setup/tolerances).
+static inline double ss_integrate_lc_response_mass_raw(double lower, double upper,
+                                                       const SsTrialEvalCtx& c) {
+  if (!(upper > lower)) return c.min_ll;
+
+  gsl_function F;
+  F.function = &ss_lc_integrand_raw;
+  F.params = const_cast<SsTrialEvalCtx*>(&c);
+
+  static thread_local GslWorkspacePtr ws_ptr(nullptr, &gsl_integration_workspace_free);
+  gsl_integration_workspace* workspace = ensure_gsl_workspace(ws_ptr, 200);
+  double res = 0.0;
+  double err = 0.0;
+  gsl_error_handler_t* old_handler = gsl_set_error_handler_off();
+  int status = gsl_integration_qags(&F, lower, upper, 1e-8, 1e-6, 200, workspace, &res, &err);
+  gsl_set_error_handler(old_handler);
+
+  if (status != GSL_SUCCESS || !R_FINITE(res) || res <= 0.0) return c.min_ll;
+  return std::log(res);
+}
+
+struct SsRawWorkspace {
+  std::vector<double> acc;     // n_acc * SS_ACC_STRIDE
+  std::vector<double> acc_go;  // n_go  * SS_ACC_STRIDE
+  std::vector<double> lls;     // per unique trial
+};
+
+// Raw-path per-particle stop-signal log likelihood. `cols` are pointers to the
+// ParamTable base columns in p_types order (the same layout the materialized
+// matrix had). Branch bodies mirror c_log_likelihood_ss trial by trial.
+static double c_log_likelihood_ss_pt(
+    const double* const* cols,
+    const SsSharedState& ss,
+    const SsRawModel& M,
+    const LogicalVector& is_ok,
+    const IntegerVector& expand,
+    double min_ll,
+    SsRawWorkspace& ws
+) {
+  const int n_out = expand.length();
+  if (is_true(all(!is_ok))) {
+    return static_cast<double>(n_out) * min_ll;
+  }
+  const int n_acc = ss.n_acc;
+  const int n_trials = ss.n_trials;
+  ws.acc.resize(static_cast<size_t>(SS_ACC_STRIDE) * n_acc);
+  ws.acc_go.resize(static_cast<size_t>(SS_ACC_STRIDE) * n_acc);
+  ws.lls.assign(static_cast<size_t>(n_trials), min_ll);
+
+  for (int trial = 0; trial < n_trials; ++trial) {
+    const int start = trial * n_acc;
+    if (is_ok[start] != TRUE) { ws.lls[trial] = min_ll; continue; }
+
+    // canonical parameter blocks for this trial/particle
+    double* acc = ws.acc.data();
+    for (int i = 0; i < n_acc; ++i) {
+      M.fill_acc(cols, start + i, acc + SS_ACC_STRIDE * i);
+    }
+    double* acc_go = ws.acc_go.data();
+    int k = 0;
+    for (int i = 0; i < n_acc; ++i) {
+      if (!ss.is_go_row[start + i]) continue;
+      std::memcpy(acc_go + SS_ACC_STRIDE * k, acc + SS_ACC_STRIDE * i,
+                  SS_ACC_STRIDE * sizeof(double));
+      ++k;
+    }
+
+    SsTrialEvalCtx c;
+    c.M = &M;
+    c.acc = acc;
+    c.acc_go = acc_go;
+    c.is_go = ss.is_go_row.data() + start;
+    c.is_st = ss.is_st_row.data() + start;
+    c.lR_codes = ss.lR_row.data() + start;
+    c.n_acc = n_acc;
+    c.n_go = ss.n_go[trial];
+    c.n_st = ss.n_st[trial];
+    M.fill_stop(cols, start, c.stop_r0);
+    M.fill_stop(cols, start + ss.first_go_row[trial], c.stop_g0);
+    c.tf = cols[M.idx_tf][start];
+    c.gf = cols[M.idx_gf][start];
+    c.SSD = ss.SSD[trial];
+    c.stop_presented = emc2_isfinite(c.SSD);
+    c.response_code = ss.resp_code[trial];
+    c.min_ll = min_ll;
+
+    const uint8_t* win = ss.win_row.data() + start;
+    const double rt = ss.rt[trial];
+    double ll = min_ll;
+
+    switch (ss.kind[trial]) {
+
+    case SS_TRIAL_LC_CENSORED: {
+      ll = ss_integrate_lc_response_mass_raw(ss.LT[trial], ss.LC[trial], c);
+      break;
+    }
+
+    case SS_TRIAL_GO_NR_FREE: {
+      ll = std::log(c.gf);
+      break;
+    }
+
+    case SS_TRIAL_GO_NR_DEADLINE: {
+      const double logS_go = (c.n_go > 0)
+        ? ss_masked_lsurv_sum_raw(c, ss.UC[trial], c.is_go) : 0.0;
+      ll = log_sum_exp(std::log(c.gf), log1m(c.gf) + logS_go);
+      break;
+    }
+
+    case SS_TRIAL_STOP_NR_FREE: {
+      if (c.n_st == 0) {
+        const SsStopCtx sc = ss_make_stop_ctx(c);
+        double log_pstop = ss_stop_success_raw_live(sc, min_ll, R_PosInf,
+                                                    M.clamp_empty_window,
+                                                    M.try_analytic1);
+        if (!R_FINITE(log_pstop)) log_pstop = R_NegInf;
+        ll = log_sum_exp(std::log(c.gf),
+                         log1m(c.gf) + log1m(c.tf) + log_pstop);
+      } else {
+        // NR with an ST accumulator and no deadline: tf AND gf must both fail
+        ll = std::log(c.gf) + std::log(c.tf);
+      }
+      break;
+    }
+
+    case SS_TRIAL_STOP_NR_DEADLINE: {
+      const double uc = ss.UC[trial];
+      const double logS_go = (c.n_go > 0)
+        ? ss_masked_lsurv_sum_raw(c, uc, c.is_go) : 0.0;
+
+      double uc_eff = uc - c.SSD;
+      if (!R_FINITE(uc_eff) || uc_eff <= 0.0) uc_eff = 0.0;
+      const bool stop_can_act = R_FINITE(uc_eff) && (uc_eff > 0.0);
+
+      double log_pstop = R_NegInf;
+      double logS_stop = 0.0;   // log(1)
+      if (stop_can_act) {
+        logS_stop = ss_stop_logsurv_raw(uc_eff, c.stop_r0);
+        const SsStopCtx sc = ss_make_stop_ctx(c);
+        log_pstop = ss_stop_success_raw_live(sc, min_ll, uc_eff,
+                                             M.clamp_empty_window,
+                                             M.try_analytic1);
+        if (!R_FINITE(log_pstop)) log_pstop = R_NegInf;
+      }
+
+      const double log_core_trig = log_sum_exp(log_pstop, logS_go + logS_stop);
+
+      if (c.n_st == 0) {
+        const double log_no_nogf = log_mix(c.tf, logS_go, log_core_trig);
+        ll = log_sum_exp(std::log(c.gf), log1m(c.gf) + log_no_nogf);
+      } else {
+        const double logS_st = ss_masked_lsurv_sum_raw(c, uc_eff, c.is_st);
+        const double log_trig =
+          logS_st + log_sum_exp(std::log(c.gf), log1m(c.gf) + log_core_trig);
+        const double log_tfbranch =
+          log_sum_exp(std::log(c.gf), log1m(c.gf) + logS_go);
+        ll = log_mix(c.tf, log_tfbranch, log_trig);
+      }
+      break;
+    }
+
+    case SS_TRIAL_GO_RESP:
+    case SS_TRIAL_STOP_GO_RESP: {
+      // go race density with the observed (data) winner
+      double go_lprob = 0.0;
+      bool any_win = false;
+      for (int i = 0; i < n_acc; ++i) {
+        if (!(win[i] && c.is_go[i])) continue;
+        const double lw = M.acc_lpdf(rt, acc + SS_ACC_STRIDE * i);
+        go_lprob += emc2_isfinite(lw) ? lw : R_NegInf;
+        any_win = true;
+      }
+      if (!any_win || !R_FINITE(go_lprob)) go_lprob = R_NegInf;
+      if (c.n_go > 1) {
+        for (int i = 0; i < n_acc; ++i) {
+          if (!(!win[i] && c.is_go[i])) continue;
+          const double ls = M.acc_lsurv(rt, acc + SS_ACC_STRIDE * i);
+          go_lprob += emc2_isfinite(ls) ? ls : R_NegInf;
+        }
+      }
+
+      if (ss.kind[trial] == SS_TRIAL_GO_RESP) {
+        ll = log1m(c.gf) + go_lprob;
+        break;
+      }
+
+      // stop trial, go response: mixture over trigger failure
+      double rt_eff = rt - c.SSD;
+      if (rt_eff < 0.0) rt_eff = 0.0;
+      double log_stop_surv = ss_stop_logsurv_raw(rt_eff, c.stop_r0);
+      if (!R_FINITE(log_stop_surv)) log_stop_surv = min_ll;
+      double st_loss_sum = 0.0;
+      if (c.n_st > 0) {
+        for (int i = 0; i < n_acc; ++i) {
+          if (!(c.is_st[i] && !win[i])) continue;
+          const double ls = M.acc_lsurv(rt_eff, acc + SS_ACC_STRIDE * i);
+          st_loss_sum += emc2_isfinite(ls) ? ls : R_NegInf;
+        }
+      }
+      const double comp_tf = go_lprob;
+      const double comp_notf = go_lprob + log_stop_surv + st_loss_sum;
+      ll = log1m(c.gf) + log_mix(c.tf, comp_tf, comp_notf);
+      break;
+    }
+
+    case SS_TRIAL_STOP_ST_RESP: {
+      double rt_st = rt - c.SSD;
+      if (rt_st < 0.0) rt_st = 0.0;
+      // ST winner log pdf at rt - SSD
+      double st_winner_logpdf = 0.0;
+      bool any_win = false;
+      for (int i = 0; i < n_acc; ++i) {
+        if (!(win[i] && c.is_st[i])) continue;
+        const double lw = M.acc_lpdf(rt_st, acc + SS_ACC_STRIDE * i);
+        st_winner_logpdf += emc2_isfinite(lw) ? lw : R_NegInf;
+        any_win = true;
+      }
+      if (!any_win || !R_FINITE(st_winner_logpdf)) st_winner_logpdf = R_NegInf;
+      // ST losers survivors
+      double st_loss_sum = 0.0;
+      if (c.n_st > 1) {
+        for (int i = 0; i < n_acc; ++i) {
+          if (!(!win[i] && c.is_st[i])) continue;
+          const double ls = M.acc_lsurv(rt_st, acc + SS_ACC_STRIDE * i);
+          st_loss_sum += emc2_isfinite(ls) ? ls : R_NegInf;
+        }
+      }
+      // GO losers survivors (all go accumulators, at raw rt)
+      double go_loss_sum = 0.0;
+      if (c.n_go > 0) {
+        go_loss_sum = ss_masked_lsurv_sum_raw(c, rt, c.is_go);
+      }
+      double rt_eff = rt - c.SSD;
+      if (rt_eff < 0.0) rt_eff = 0.0;
+      const SsStopCtx sc = ss_make_stop_ctx(c);
+      double log_pstop = ss_stop_success_raw_live(sc, min_ll, rt_eff,
+                                                  M.clamp_empty_window,
+                                                  M.try_analytic1);
+      if (!R_FINITE(log_pstop)) log_pstop = R_NegInf;
+
+      const double st_base = st_winner_logpdf + st_loss_sum;
+      const double term_gf = std::log(c.gf) + st_base;
+      const double term_stop_win = log1m(c.gf) + log_pstop + st_base;
+      const double term_stop_lose =
+        log1m(c.gf) + log1m_exp(log_pstop) + st_base + go_loss_sum;
+      ll = log1m(c.tf) +
+        log_sum_exp(term_gf, log_sum_exp(term_stop_win, term_stop_lose));
+      break;
+    }
+    }
+
+    // same clamp as the vectorized epilogue of c_log_likelihood_ss
+    if (!R_FINITE(ll) || ll < min_ll) ll = min_ll;
+    ws.lls[trial] = ll;
+  }
+
+  double sum_ll = 0.0;
+  for (int i = 0; i < n_out; ++i) {
+    sum_ll += ws.lls[expand[i] - 1];   // expand created in 1-based R
+  }
+  return sum_ll;
+}
+
 // Raw-buffer variant for DDM to skip materialization and allocations.
 // Handles truncation and censoring with high numerical stability.
 double c_log_likelihood_DDM_pt(const double* pars_cm,
@@ -2030,14 +2564,47 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
     int n_trials_ss = (n_lR > 0) ? (n_trials / n_lR) : n_trials;
     SSModelAdapter ssa = resolve_ss_adapter(type_std);
 
+    // Raw path: data-fixed trial structure once, then read ParamTable columns
+    // directly per particle. Falls back to the materialized NumericMatrix path
+    // if the ParamTable is missing a p_types column (should not happen for
+    // SSEXG/SSRDEX, but the fallback keeps the reference implementation live).
+    const bool ss_is_exg = type_std.find("EXG") != std::string::npos;
+    const SsRawModel& ss_raw_model = ss_is_exg ? ss_texg_raw_model()
+                                               : ss_rdex_raw_model();
+    SsSharedState ss_shared = build_ss_shared_state(data, n_trials_ss, n_lR);
+    std::vector<int> ss_col_base_idx(keep_names.size(), -1);
+    // Test/benchmark hook: force the materialized fallback so the two paths
+    // can be compared from R (see test-ss-raw-path.R).
+    bool ss_raw_ready = ss_shared.valid &&
+                        (std::getenv("EMC2_SS_FORCE_MATERIALIZE") == nullptr);
+    for (int j = 0; j < keep_names.size(); ++j) {
+      auto it = param_table_template.name_to_base_idx.find(
+          Rcpp::as<std::string>(keep_names[j]));
+      if (it == param_table_template.name_to_base_idx.end()) {
+        ss_raw_ready = false;
+        break;
+      }
+      ss_col_base_idx[j] = it->second;
+    }
+    std::vector<const double*> ss_cols(ss_col_base_idx.size(), nullptr);
+    SsRawWorkspace ss_ws;
+
     for (int i = 0; i < n_particles; ++i) {
       is_ok = prepare_particle(i);
       is_ok = lr_all(is_ok, n_lR);
-      pars = param_table_template.materialize_by_param_names(keep_names);
-      lls[i] = c_log_likelihood_ss(pars, data, n_trials_ss, expand, min_ll, is_ok,
-                                   ssa.go_lpdf_ptr, ssa.go_lccdf_ptr,
-                                   ssa.stop_logsurv_ptr, ssa.stop_success_ptr,
-                                   ssa.idx_tf, ssa.idx_gf);
+      if (ss_raw_ready) {
+        for (size_t j = 0; j < ss_col_base_idx.size(); ++j) {
+          ss_cols[j] = &param_table_template.base(0, ss_col_base_idx[j]);
+        }
+        lls[i] = c_log_likelihood_ss_pt(ss_cols.data(), ss_shared, ss_raw_model,
+                                        is_ok, expand, min_ll, ss_ws);
+      } else {
+        pars = param_table_template.materialize_by_param_names(keep_names);
+        lls[i] = c_log_likelihood_ss(pars, data, n_trials_ss, expand, min_ll, is_ok,
+                                     ssa.go_lpdf_ptr, ssa.go_lccdf_ptr,
+                                     ssa.stop_logsurv_ptr, ssa.stop_success_ptr,
+                                     ssa.idx_tf, ssa.idx_gf);
+      }
     }
   } else {
     IntegerVector expand = data.attr("expand");

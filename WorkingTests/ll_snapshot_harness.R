@@ -4,8 +4,17 @@
 #   Rscript ll_harness.R compare <ref.rds> <new.rds> [tol]
 # 'capture' regenerates datasets from fixed seeds, so a later capture on the
 # same seeds + compare against the stored reference detects any ll change.
+#
+# CAUTION: library(EMC2) loads whatever install is first on .libPaths(), which
+# is easy to leave stale — a stale install makes ref-vs-new comparisons pass
+# vacuously (both captures run the same old code). Install the code under test
+# into a dedicated library and run with R_LIBS=<that lib>; the banner below
+# prints the resolved package path and .so mtime so captures are auditable.
 
 suppressMessages({library(EMC2); library(dplyr)})
+cat(sprintf("EMC2 from %s (.so mtime %s)\n", find.package("EMC2"),
+            format(file.info(file.path(find.package("EMC2"), "libs",
+                                       paste0("EMC2", .Platform$dynlib.ext)))$mtime)))
 
 N_TRIALS   <- 300
 N_PART     <- 100
