@@ -638,7 +638,12 @@ group__IC_standard <- function(emc, stage="sample", filter=NULL) {
   # 1) Retrieve draws
   alpha <- get_pars(emc, selection = "alpha", stage = stage, filter = filter,
                     return_mcmc = FALSE, merge_chains = TRUE)
-  theta_mu <- get_pars(emc, selection = "mu", stage = stage, filter = filter,
+  # With group designs the subject-level means are built from the full stacked
+  # coefficient vector (M = intercepts + slopes), so fetch "beta" (theta_beta),
+  # not the mapped p-vector "mu": calculate_subject_means and standard_subj_ll
+  # need the M-vector, and "mu" would abort inside the design projection.
+  mu_selection <- if (is.null(emc[[1]]$group_designs)) "mu" else "beta"
+  theta_mu <- get_pars(emc, selection = mu_selection, stage = stage, filter = filter,
                        return_mcmc = FALSE, merge_chains = TRUE)
   theta_var <- get_pars(emc, selection = "Sigma", stage = stage, filter = filter,
                         return_mcmc = FALSE, merge_chains = TRUE, remove_constants = F)
@@ -647,7 +652,9 @@ group__IC_standard <- function(emc, stage="sample", filter=NULL) {
   n_subj <- dim(alpha)[2]      # number of subjects
   N <- dim(alpha)[3]           # number of samples
 
-  # 2) Averages
+  # 2) Averages. Under group designs theta_mu holds the stacked betas, so
+  # mean_mu is the mean beta vector (length M); with no group design it is the
+  # mean mu vector (length p). Both feed the matching branch below.
   mean_alpha <- rowMeans(alpha, dims = 2)
   mean_mu <- rowMeans(theta_mu)
   mean_var <- rowMeans(theta_var, dims = 2)
@@ -661,8 +668,9 @@ group__IC_standard <- function(emc, stage="sample", filter=NULL) {
   } else{
     # 3) Build design matrices
     group_designs <- add_group_design(emc[[1]]$par_names, emc[[1]]$group_designs, n_subj)
-    # 4) Per-draw log-likelihood
-    lls <- standard_subj_ll(group_designs, theta_var, theta_mu, alpha, n_subj)
+    # 4) Per-draw log-likelihood (argument order must match the signature:
+    #    theta_var, theta_mu, alpha, n_subj, group_designs)
+    lls <- standard_subj_ll(theta_var, theta_mu, alpha, n_subj, group_designs)
     # 5) Likelihood at posterior mean
     # Calculate subject-level means using the mean parameters
     mean_subj_means <- calculate_subject_means(group_designs, mean_mu)
@@ -682,7 +690,10 @@ group__IC_standard <- function(emc, stage="sample", filter=NULL) {
 
 standard_subj_ll <- function(theta_var, theta_mu, alpha, n_subj, group_designs)
 {
-  N <- dim(theta_var)[3];  p <- nrow(theta_mu)
+  # p is the subject-parameter dimension (rows of alpha / Sigma). theta_mu holds
+  # the stacked betas (M rows, M >= p under group designs), so p must come from
+  # alpha, not theta_mu, or the backsolve/quadratic form get the wrong dimension.
+  N <- dim(theta_var)[3];  p <- nrow(alpha)
   log2pi <- log(2*pi)
 
   # pre‑allocate
