@@ -221,11 +221,20 @@ test_that("LBAIO keeps intrinsic omission mass at infinity", {
   expect_true(any(is.infinite(sim$rt)))
   expect_true(all(is.na(sim$R[is.infinite(sim$rt)])))
 
+  # Left-truncation renormalization on a defective (posdrift = FALSE)
+  # distribution. The intrinsic omission mass sits at +Inf, so with an upper
+  # cutoff of UC = Inf it lies INSIDE the retained window [LT, Inf] and must be
+  # kept in the normalizer: Z = P(RT >= LT) = S(LT), where the survival S(LT)
+  # already includes the omission mass. The correct renormalization is therefore
+  # -log(S_LT), NOT -log(S_LT - S_Inf) (which would wrongly discard the omission
+  # mass that UC = Inf retains). LT is chosen large enough that real finite mass
+  # is truncated, so the two candidates are numerically distinct and this pins
+  # omission-retention rather than passing degenerately at S_LT ~ 1.
   dat_trunc <- data.frame(
     subjects = factor("s1"),
     R = factor("yes", levels = "yes"),
-    rt = 0.6,
-    LT = 0.3,
+    rt = 3.0,
+    LT = 2.5,
     UC = Inf
   )
   emc_trunc <- make_emc(dat_trunc, design_lbaio, type = "single", n_chains = 1,
@@ -236,9 +245,8 @@ test_that("LBAIO keeps intrinsic omission mass at infinity", {
                           compress = FALSE, verbose = FALSE)
   ll_trunc <- EMC2:::calc_ll_manager(p_mat, emc_trunc[[1]]$data[[1]], emc_trunc[[1]]$model)
   ll_notrunc <- EMC2:::calc_ll_manager(p_mat, emc_notrunc[[1]]$data[[1]], emc_notrunc[[1]]$model)
-  S_LT <- 1 - EMC2:::pLBA(0.3, pars, posdrift = FALSE)
-  S_Inf <- pnorm(0, mean = 0.5, sd = 1)
-  expect_equal(as.numeric(ll_trunc - ll_notrunc), -log(S_LT - S_Inf), tolerance = 1e-8)
+  S_LT <- 1 - EMC2:::pLBA(2.5, pars, posdrift = FALSE)
+  expect_equal(as.numeric(ll_trunc - ll_notrunc), -log(S_LT), tolerance = 1e-8)
 })
 
 
