@@ -50,6 +50,13 @@ SSD_function <- function(d, SSD=NA, pSSD=.25) {
   out_trial[as.integer(trial_key)]
 }
 
+check_staircase <- function(staircase) {
+  if (!is.list(staircase)) {
+    staircase <- list(SSD0 = .25, stairstep = .05, stairmin = 0, stairmax = Inf)
+  }
+  return(staircase)
+}
+
 staircase_function <- function(dts,staircase) {
   ns <- ncol(dts)
   SSD <- sR <- srt <- numeric()
