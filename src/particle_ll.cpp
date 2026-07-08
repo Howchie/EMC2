@@ -1921,6 +1921,29 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
     }
   }
 
+  // Per-particle prologue shared by every ParamTable model branch (DDM, hUVSD,
+  // SS, logical rules, race): refill the table from particle row i (i == 0
+  // runs on the template exactly as built above), re-run design mapping +
+  // transforms, then evaluate parameter bounds. Returns the per-row bound
+  // mask; the table itself is left holding particle i's natural-scale values.
+  // The invariant-parameter optimization is only valid for i > 0: the template
+  // pass must fully compute every parameter (including transforms of
+  // constants) before later particles can inherit those columns.
+  auto prepare_particle = [&](int i) -> Rcpp::LogicalVector {
+    if (i > 0) {
+      param_table_template.fill_from_particle_row(particle_matrix_pt, i,
+                                                  pm_col_to_base_idx,
+                                                  invariant_base_idx_vec);
+    }
+    update_pt_only(param_table_template, designs, trend_runtime_ptr, transform_specs_pt,
+                   i > 0 ? invariant_design_mask_ptr : nullptr,
+                   i > 0 ? invariant_param_names_ptr : nullptr);
+    if (i == 0) {
+      bound_specs = make_bound_specs_pt(minmax, mm_names, param_table_template, bounds);
+    }
+    return c_do_bound_pt(param_table_template, bound_specs);
+  };
+
   ModelSharedState ddm_shared;
   std::vector<int> ddm_p_idx;
   bool ddm_raw_ready = true;
@@ -1964,19 +1987,7 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
     const int n_out = expand.length();
     const bool all_finite_untruncated = ddm_data_all_finite_untruncated(data, n_trials);
     for (int i = 0; i < n_particles; ++i) {
-      if (i > 0) {
-        param_table_template.fill_from_particle_row(particle_matrix_pt, i, pm_col_to_base_idx, invariant_base_idx_vec);
-      }
-      // Invariant optimization only valid for i>0: the template (i==0) must be
-      // fully computed (including exp-transforms for constant parameters) before
-      // subsequent particles can inherit those values.
-      update_pt_only(param_table_template, designs, trend_runtime_ptr, transform_specs_pt,
-                     i > 0 ? invariant_design_mask_ptr : nullptr,
-                     i > 0 ? invariant_param_names_ptr : nullptr);
-      if (i == 0) {
-        bound_specs = make_bound_specs_pt(minmax, mm_names, param_table_template, bounds);
-      }
-      is_ok = c_do_bound_pt(param_table_template, bound_specs);
+      is_ok = prepare_particle(i);
       if (ddm_raw_ready) {
         for(int j = 0; j < n_trials; ++j) ddm_shared.ok_int_buf[j] = is_ok[j] ? 1 : 0;
         lls[i] = c_log_likelihood_DDM_pt(param_table_template.base.begin(),
@@ -1992,16 +2003,7 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
   } else if (type_std == "hUVSD") {
     IntegerVector expand = data.attr("expand");
     for (int i = 0; i < n_particles; ++i) {
-      if (i > 0) {
-        param_table_template.fill_from_particle_row(particle_matrix_pt, i, pm_col_to_base_idx, invariant_base_idx_vec);
-      }
-      update_pt_only(param_table_template, designs, trend_runtime_ptr, transform_specs_pt,
-                     i > 0 ? invariant_design_mask_ptr : nullptr,
-                     i > 0 ? invariant_param_names_ptr : nullptr);
-      if (i == 0) {
-        bound_specs = make_bound_specs_pt(minmax, mm_names, param_table_template, bounds);
-      }
-      is_ok = c_do_bound_pt(param_table_template, bound_specs);
+      is_ok = prepare_particle(i);
       pars = param_table_template.materialize_by_param_names(keep_names);
       lls[i] = c_log_likelihood_huvsd(pars, data, n_trials, expand, min_ll, is_ok);
     }
@@ -2029,18 +2031,9 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
     SSModelAdapter ssa = resolve_ss_adapter(type_std);
 
     for (int i = 0; i < n_particles; ++i) {
-      if (i > 0) {
-        param_table_template.fill_from_particle_row(particle_matrix_pt, i, pm_col_to_base_idx, invariant_base_idx_vec);
-      }
-      update_pt_only(param_table_template, designs, trend_runtime_ptr, transform_specs_pt,
-                     i > 0 ? invariant_design_mask_ptr : nullptr,
-                     i > 0 ? invariant_param_names_ptr : nullptr);
-      if (i == 0) {
-        bound_specs = make_bound_specs_pt(minmax, mm_names, param_table_template, bounds);
-      }
-      pars = param_table_template.materialize_by_param_names(keep_names);
-      is_ok = c_do_bound_pt(param_table_template, bound_specs);
+      is_ok = prepare_particle(i);
       is_ok = lr_all(is_ok, n_lR);
+      pars = param_table_template.materialize_by_param_names(keep_names);
       lls[i] = c_log_likelihood_ss(pars, data, n_trials_ss, expand, min_ll, is_ok,
                                    ssa.go_lpdf_ptr, ssa.go_lccdf_ptr,
                                    ssa.stop_logsurv_ptr, ssa.stop_success_ptr,
@@ -2073,16 +2066,7 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
         build_logicalrules_shared_state(data, n_trials, n_lR);
 
       for (int i = 0; i < n_particles; ++i) {
-        if (i > 0) {
-          param_table_template.fill_from_particle_row(particle_matrix_pt, i, pm_col_to_base_idx, invariant_base_idx_vec);
-        }
-        update_pt_only(param_table_template, designs, trend_runtime_ptr, transform_specs_pt,
-                       i > 0 ? invariant_design_mask_ptr : nullptr,
-                       i > 0 ? invariant_param_names_ptr : nullptr);
-        if (i == 0) {
-          bound_specs = make_bound_specs_pt(minmax, mm_names, param_table_template, bounds);
-        }
-        is_ok = c_do_bound_pt(param_table_template, bound_specs);
+        is_ok = prepare_particle(i);
         is_ok = lr_all(is_ok, n_lR);
         pars = param_table_template.materialize_by_param_names(keep_names);
         lls[i] = c_log_likelihood_logicalrules(pars, expand, min_ll, is_ok, n_lR,
@@ -2263,18 +2247,7 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
     }
 
     for (int i = 0; i < n_particles; ++i) {
-      if (i > 0) {
-        param_table_template.fill_from_particle_row(particle_matrix_pt, i, pm_col_to_base_idx, invariant_base_idx_vec);
-      }
-
-      update_pt_only(param_table_template, designs, trend_runtime_ptr, transform_specs_pt,
-                     i > 0 ? invariant_design_mask_ptr : nullptr,
-                     i > 0 ? invariant_param_names_ptr : nullptr);
-      if (i == 0) {
-        bound_specs = make_bound_specs_pt(minmax, mm_names, param_table_template, bounds);
-      }
-
-      is_ok = c_do_bound_pt(param_table_template, bound_specs);
+      is_ok = prepare_particle(i);
       is_ok = lr_all(is_ok, n_lR);
       if (use_raw_fast_path) {
         // Fill per-particle isok buffer
