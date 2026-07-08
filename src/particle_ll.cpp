@@ -2843,12 +2843,14 @@ double get_trunc_normaliser_rowmajor_cpp(const double* pars_rowmajor,
     if (!R_FINITE(logS_LT)) return R_NegInf;
   }
   if (UT == R_PosInf) {
-    auto* race_ctx = static_cast<ContextForRaceModels*>(model_specific_context);
-    if (race_ctx && race_ctx->defective_upper_tail) {
-      const double logS_UT = log_survivor_rowmajor(UT, pars_rowmajor, isok_int, n_lR, n_par,
-                                                   cdf1, model_specific_context);
-      return log_diff_exp(logS_LT, logS_UT);
-    }
+    // UT == +Inf means no upper truncation. A defective model's intrinsic
+    // omission mass sits at +Inf, i.e. >= LT, so it stays inside the retained
+    // window [LT, Inf): the truncation normaliser only ever excludes finite
+    // density in [0, LT). This matches the batch path (which leaves
+    // logS_UT == R_NegInf for UT==Inf, defective or not). Upper-truncating a
+    // defective distribution is conceptually ill-posed (an omission is a
+    // never-finish outcome, not a slow response that got cut off) and is
+    // intentionally not supported, so no S(Inf) is subtracted here.
     return logS_LT;
   }
   
