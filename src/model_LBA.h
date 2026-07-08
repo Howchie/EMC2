@@ -1,6 +1,10 @@
 #ifndef lba_h
 #define lba_h
 
+// This header may be included by exactly ONE translation unit (particle_ll.cpp,
+// directly and via utils.h) because it defines [[Rcpp::export]] functions
+// (dlba, plba, …) that RcppExports links to. Non-exported free helpers here are
+// marked `inline`; the exported ones must NOT be inline.
 #include <RcppArmadillo.h>
 #include "utility_functions.h"
 #include "wald_functions.h"  // pnorm_std() — fast normal CDF under USE_FAST_PNORM
@@ -14,17 +18,17 @@ using namespace Rcpp;
 
 // Route through pnorm_std so USE_FAST_PNORM applies to LBA as well as RDM/Wald.
 // pnorm(q, mean, sd) = pnorm_std((q - mean) / sd) for sd > 0.
-double pnormP(double q, double mean = 0.0, double sd = 1.0,
+inline double pnormP(double q, double mean = 0.0, double sd = 1.0,
               bool lower = true, bool log = false){
   return pnorm_std((q - mean) / sd, lower, log);
 }
 
-double dnormP(double x, double mean = 0.0, double sd = 1.0,
+inline double dnormP(double x, double mean = 0.0, double sd = 1.0,
               bool log = false){
   return R::dnorm(x, mean, sd, log);
 }
 
-double plba_norm(double t, double A, double b, double v, double sv,
+inline double plba_norm(double t, double A, double b, double v, double sv,
                  bool posdrift = true, bool log_out = false){
   if (t == R_PosInf) {
     const double cdf = posdrift ? 1.0 : pnormP(0.0, v, sv, false, false);
@@ -60,7 +64,7 @@ double plba_norm(double t, double A, double b, double v, double sv,
   return log_out ? std::log(cdf) : cdf;
 }
 
-double dlba_norm(double t, double A,double b, double v, double sv,
+inline double dlba_norm(double t, double A,double b, double v, double sv,
                  bool posdrift = true, bool log_out = false){
   double denom = 1.;
   if (posdrift) {

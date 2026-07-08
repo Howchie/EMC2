@@ -1,6 +1,10 @@
 #ifndef rdm_h
 #define rdm_h
 
+// This header may be included by exactly ONE translation unit (particle_ll.cpp,
+// directly and via utils.h) because it defines [[Rcpp::export]] functions
+// (dwald, pwald, dgbm, drdmswtn, …) that RcppExports links to; those must NOT be
+// marked `inline`. Non-exported free helpers may be `inline`.
 #define _USE_MATH_DEFINES
 #include <cmath>
 #include <RcppArmadillo.h>

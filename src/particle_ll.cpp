@@ -2618,25 +2618,6 @@ double gsl_f_race_scalar(double t, void* p) {
   return out;
 }
 
-// Log probability of intrinsic omission
-inline double log_pIO_rowmajor(const double* pars_rowmajor,
-                                                 const int* isok_int,
-                                                 int n_lR,
-                                                 int n_par) {
-  double log_p = 0.0;
-  for (int k = 0; k < n_lR; ++k) {
-    if (!isok_int[k]) return R_NegInf;
-    const double* par_k = pars_rowmajor + static_cast<size_t>(k) * n_par;
-    const double v = par_k[0];
-    const double sv = par_k[1];
-    if (!emc2_isfinite(v) || !emc2_isfinite(sv) || sv <= 0.0) return R_NegInf;
-    const double ll = pnorm_std(-v / sv, true, true); 
-    if (!emc2_isfinite(ll)) return R_NegInf;
-    log_p += ll;
-  }
-  return log_p;
-}
-
 // Log survivor and cdf of the race at time t:
 //   log S(t) = sum_k log(1 - F_k(t))
 //
