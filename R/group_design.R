@@ -69,8 +69,15 @@ group_design <- function(formula, data, subject_design, contrasts = NULL){
     stop(paste0("Variable(s) ", paste0(missing_vars, collapse=", "),
                 " in formula not found in data"))
   }
-  summary_data <- data[!duplicated(data$subjects),rhs_terms, drop = F]
-  rownames(summary_data) <- unique(data$subjects)
+  # Key everything on the subject FACTOR levels: this is the order the sampler
+  # imposes (fitting.R sorts data by order(subjects)) and the order the design
+  # matrices below end up in. Building summary_data (the "data" attribute,
+  # consumed by minimal_group_design and summary()) in the same level order
+  # keeps it aligned with the design matrices regardless of input row order.
+  subj_levels <- levels(factor(data$subjects))
+  first_rows <- match(subj_levels, as.character(data$subjects))
+  summary_data <- data[first_rows, rhs_terms, drop = F]
+  rownames(summary_data) <- subj_levels
 
   # Check if any factor has multiple levels per subject
   for (var in rhs_terms) {
@@ -105,23 +112,17 @@ group_design <- function(formula, data, subject_design, contrasts = NULL){
     # Subset data to include only relevant variables
     subset_data <- data[, c("subjects", current_vars), drop = FALSE]
 
-    # Aggregate data by subject
-    agg_data <- setNames(
-      data.frame(unique(subset_data$subjects)),
-      "subjects"
-    )
+    # Build one row per subject in factor-LEVEL order (matching the sampler and
+    # summary_data). Fill covariates by matching each subject to its first
+    # appearing row, so the subjects column and covariate columns stay aligned
+    # regardless of input row order (aggregate()'s level-ordered output silently
+    # relied on this and misaligned the subjects column for unsorted input).
+    subj_rows <- match(subj_levels, as.character(subset_data$subjects))
+    agg_data <- data.frame(subjects = factor(subj_levels, levels = subj_levels))
 
     # For each variable in the formula, add it to the aggregated data
     for (var in current_vars) {
-      # Get unique values per subject
-      var_values <- aggregate(
-        subset_data[[var]],
-        by = list(subjects = subset_data$subjects),
-        FUN = function(x) x[1]
-      )
-
-      # Add to aggregated data
-      agg_data[[var]] <- var_values$x
+      agg_data[[var]] <- subset_data[[var]][subj_rows]
 
       # Preserve factor levels if applicable
       if (is.factor(subset_data[[var]])) {
@@ -147,6 +148,8 @@ group_design <- function(formula, data, subject_design, contrasts = NULL){
     is_int <- grepl("(Intercept)", colnames(dm), fixed = TRUE)
     colnames(dm)[is_int] <- param_name
     colnames(dm)[!is_int] <- paste0(param_name, "_", colnames(dm)[!is_int])
+    # Make the subject order of every design matrix explicit and checkable.
+    rownames(dm) <- subj_levels
     # Store in the list
     design_matrices[[param_name]] <- dm
     # # Check if overall design matrix mean is zero
