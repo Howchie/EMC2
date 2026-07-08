@@ -532,22 +532,13 @@ bridge_group_and_prior_and_jac_standard <- function(
       }
     }
 
-    # 3) Compute group likelihood = sum_{s=1..n_subj} dmvnorm(alpha_s, mu_s, var_curr)
-    group_ll <- 0
-    for (s in seq_len(n_subj)) {
-      alpha_s <- proposals_list[[s]][i,]  # length p
-      mu_s <- numeric(p)            # will hold subject s's mean for each row k=1..p
-      par_idx <- 0
-      for (k in seq_len(p)) {
-        # The row-k design vector for subject s is group_designs[[k]][s, ] => e.g. (1 x m_k).
-        x_sk <- group_designs[[k]][s, , drop = FALSE]
-        # Then the mean for row k is the dot product of x_sk with the relevant slice of 'theta_mu'.
-        mu_s[k] <- x_sk %*% theta_mu[i, par_idx + 1:ncol(group_designs[[k]])]
-        par_idx <- par_idx + ncol(group_designs[[k]])
-      }
-      # Now alpha_s ~ N(mu_s, var_curr)
-      group_ll <- group_ll + dmvnorm(alpha_s, mu_s, var_curr, log = TRUE)
-    }
+    # 3) Group likelihood = sum_{s=1..n_subj} dmvnorm(alpha_s, mu_s, var_curr).
+    #    Project the stacked beta vector to per-subject means with the shared C++
+    #    routine (same as the sampler start/gibbs steps), then center each
+    #    subject's alpha and evaluate the zero-mean MVN density in one call.
+    subj_mu <- calculate_subject_means(group_designs, theta_mu[i, ])  # p x n_subj
+    alpha_i <- vapply(proposals_list, function(pr) pr[i, ], numeric(p))  # p x n_subj
+    group_ll <- sum(dmvnorm(t(alpha_i - subj_mu), sigma = var_curr, log = TRUE))
 
     # 4) Prior on var1, var2, and a => same partial-block logic
     # "var1" => Inverse-Gamma with shape=v/2, rate=v/exp(theta_a[i, !has_cov])
