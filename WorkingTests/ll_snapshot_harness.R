@@ -1,6 +1,7 @@
 # ll snapshot harness for Phase-2 refactor verification (plan.md commits 9-12).
 # Usage:
 #   Rscript ll_harness.R capture <out.rds>     # build datasets, compute lls, save
+#   Rscript ll_harness.R capture_pw <out.rds>  # same, but pointwise calc_ll_pw (SS/MRI skipped)
 #   Rscript ll_harness.R compare <ref.rds> <new.rds> [tol]
 # 'capture' regenerates datasets from fixed seeds, so a later capture on the
 # same seeds + compare against the stored reference detects any ll change.
@@ -50,6 +51,8 @@ make_p_mat <- function(p_vector, seed) {
   p_mat
 }
 
+MODE <- "ll"  # "ll" = aggregate per-particle lls; "pw" = pointwise (calc_ll_pw)
+
 run_case <- function(name, design_obj, p_vector, seed, n_trials = N_TRIALS, TC = NULL,
                      make_data_args = list()) {
   set.seed(seed)
@@ -60,6 +63,17 @@ run_case <- function(name, design_obj, p_vector, seed, n_trials = N_TRIALS, TC =
   dadm <- emc[[1]]$data[[1]]
   model <- emc[[1]]$model()
   p_mat <- make_p_mat(p_vector, seed + 1)
+  if (MODE == "pw") {
+    if (model$c_name %in% c("MRI", "MRI_AR1", "SSEXG", "SSRDEX", "SOFTMAX")) {
+      cat(sprintf("%-22s skipped (pw unsupported for %s)\n", name, model$c_name))
+      return(list(lls = numeric(0), elapsed = NA_real_))
+    }
+    t0 <- proc.time()[["elapsed"]]
+    lls <- as.numeric(EMC2:::calc_ll_pw(p_mat, dadm, emc[[1]]$model))
+    el <- proc.time()[["elapsed"]] - t0
+    cat(sprintf("%-22s n_pw=%d finite=%d time=%.2fs\n", name, length(lls), sum(is.finite(lls)), el))
+    return(list(lls = lls, elapsed = el))
+  }
   t0 <- proc.time()[["elapsed"]]
   lls <- as.numeric(cpp_ll_mat(p_mat, dadm, model))
   el <- proc.time()[["elapsed"]] - t0
@@ -279,7 +293,8 @@ compare_all <- function(ref, new, tol = 1e-10) {
 
 args <- commandArgs(trailingOnly = TRUE)
 if (length(args) >= 1) {
-  if (args[1] == "capture") {
+  if (args[1] %in% c("capture", "capture_pw")) {
+    if (args[1] == "capture_pw") MODE <- "pw"
     res <- capture_all()
     saveRDS(res, args[2])
     cat("saved", args[2], "\n")

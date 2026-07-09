@@ -2331,6 +2331,255 @@ double c_log_likelihood_huvsd(Rcpp::NumericMatrix pars, Rcpp::DataFrame data,
 }
 
 
+
+// ---------------------------------------------------------------------------
+// Per-call ParamTable machinery shared by calc_ll_oo and calc_ll_oo_pw:
+// pretransformed particle matrix, template table, transform specs, optional
+// trend runtime, invariant-parameter bookkeeping, and bound specs.
+// prepare(i) is the per-particle prologue (refill from particle row i,
+// design mapping + transforms, then bounds). i == 0 runs on the template as
+// built (must fully compute every parameter, including transforms of
+// constants); i > 0 may skip invariant designs/transforms.
+struct PtMapper {
+  NumericMatrix particle_matrix_pt;
+  ParamTable table;
+  std::vector<TransformSpec> transform_specs;
+  std::unique_ptr<TrendPlan> trend_plan;
+  std::unique_ptr<TrendRuntime> trend_runtime;
+  Rcpp::CharacterVector keep_names;
+  std::vector<int> pm_col_to_base_idx;
+  Rcpp::LogicalVector invariant_design_mask;
+  std::unordered_set<std::string> invariant_param_names;
+  bool use_invariants = false;
+  std::vector<int> invariant_base_idx_vec;
+  std::vector<BoundSpec> bound_specs;
+  Rcpp::List designs;
+  Rcpp::List bounds;
+  Rcpp::NumericMatrix minmax;
+  Rcpp::CharacterVector mm_names;
+
+  Rcpp::LogicalVector prepare(int i) {
+    if (i > 0) {
+      table.fill_from_particle_row(particle_matrix_pt, i,
+                                   pm_col_to_base_idx,
+                                   invariant_base_idx_vec);
+    }
+    const bool skip_inv = (i > 0) && use_invariants;
+    update_pt_only(table, designs, trend_runtime ? trend_runtime.get() : nullptr,
+                   transform_specs,
+                   skip_inv ? &invariant_design_mask : nullptr,
+                   skip_inv ? &invariant_param_names : nullptr);
+    if (i == 0) {
+      bound_specs = make_bound_specs_pt(minmax, mm_names, table, bounds);
+    }
+    return c_do_bound_pt(table, bound_specs);
+  }
+};
+
+static PtMapper make_pt_mapper(NumericMatrix particle_matrix, DataFrame data,
+                               NumericVector constants, List designs, List bounds,
+                               List transforms, List pretransforms,
+                               Rcpp::Nullable<Rcpp::List> trend,
+                               CharacterVector p_types,
+                               int n_trials, int n_particles) {
+  PtMapper m;
+  m.designs = designs;
+  m.bounds = bounds;
+  m.minmax = Rcpp::as<Rcpp::NumericMatrix>(bounds["minmax"]);
+  m.mm_names = colnames(m.minmax);
+  m.keep_names = p_types;
+
+  std::vector<TransformSpec> pre_specs = make_transform_specs(particle_matrix, pretransforms);
+  m.particle_matrix_pt = c_do_transform(particle_matrix, pre_specs);
+
+  const bool has_constants = !(constants.size() == 1 &&
+                               Rcpp::NumericVector::is_na(constants[0]));
+  if (has_constants) {
+    m.particle_matrix_pt = add_constants_columns(m.particle_matrix_pt, constants);
+  }
+
+  NumericVector p_vector = m.particle_matrix_pt(0, Rcpp::_);
+  p_vector.attr("names") = colnames(m.particle_matrix_pt);
+  m.table = ParamTable::from_p_vector_and_designs(p_vector, designs, n_trials, transforms);
+  m.transform_specs = make_transform_specs_for_paramtable(m.table, transforms);
+
+  Rcpp::CharacterVector pm_names = colnames(m.particle_matrix_pt);
+  m.pm_col_to_base_idx.assign(pm_names.size(), -1);
+  for (int j = 0; j < pm_names.size(); ++j) {
+    std::string nm = Rcpp::as<std::string>(pm_names[j]);
+    auto it = m.table.name_to_base_idx.find(nm);
+    if (it != m.table.name_to_base_idx.end()) {
+      m.pm_col_to_base_idx[j] = it->second;
+    }
+  }
+
+  if (!trend.isNull()) {
+    m.trend_plan.reset(new TrendPlan(trend, data));
+    m.trend_runtime.reset(new TrendRuntime(*m.trend_plan));
+    m.trend_runtime->bind_all_ops_to_paramtable(m.table);
+    m.trend_runtime->init_cached_specs(m.table, m.transform_specs);
+  }
+
+  // Invariant-parameter optimization: designs whose coefficients are not
+  // sampled map to the same natural-scale column for every particle, so
+  // particles after the first can skip re-mapping/re-transforming them.
+  if (n_particles > 1 && !m.trend_runtime) {
+    Rcpp::CharacterVector p_names = colnames(particle_matrix);
+    std::unordered_set<std::string> sampled_coef_names;
+    sampled_coef_names.reserve(p_names.size());
+    for (int j = 0; j < p_names.size(); ++j) {
+      sampled_coef_names.insert(Rcpp::as<std::string>(p_names[j]));
+    }
+
+    m.invariant_design_mask = Rcpp::LogicalVector(designs.size(), false);
+    Rcpp::CharacterVector design_names = designs.names();
+    for (int i = 0; i < designs.size(); ++i) {
+      Rcpp::NumericMatrix d = designs[i];
+      Rcpp::CharacterVector dcols = colnames(d);
+      bool invariant = true;
+      for (int c = 0; c < dcols.size(); ++c) {
+        if (sampled_coef_names.find(Rcpp::as<std::string>(dcols[c])) != sampled_coef_names.end()) {
+          invariant = false;
+          break;
+        }
+      }
+      m.invariant_design_mask[i] = invariant;
+      if (invariant) {
+        std::string pnm;
+        if (design_names.size() == designs.size()) pnm = Rcpp::as<std::string>(design_names[i]);
+        else if (i < m.keep_names.size()) pnm = Rcpp::as<std::string>(m.keep_names[i]);
+        if (!pnm.empty()) m.invariant_param_names.insert(pnm);
+      }
+    }
+    m.use_invariants = !m.invariant_param_names.empty();
+  }
+
+  // Precompute base column indices for invariant parameters so fill_from_particle_row
+  // can preserve their natural-scale values across reset_base_to_zero.
+  if (m.use_invariants) {
+    for (const auto& nm : m.invariant_param_names) {
+      auto it = m.table.name_to_base_idx.find(nm);
+      if (it != m.table.name_to_base_idx.end())
+        m.invariant_base_idx_vec.push_back(it->second);
+    }
+  }
+  return m;
+}
+
+// DDM per-data shared state + p_types -> base-column mapping for the raw
+// c_log_likelihood_DDM_pt kernel. Returns false (raw path unusable) when any
+// canonical DDM parameter is missing from the table.
+static bool init_ddm_shared_state(DataFrame data, int n_trials,
+                                  const ParamTable& table,
+                                  ModelSharedState& shared,
+                                  std::vector<int>& p_idx) {
+  shared.LT_vec = get_col_with_default(data, "LT", 0.0);
+  shared.UT_vec = get_col_with_default(data, "UT", R_PosInf);
+  shared.LC_vec = get_col_with_default(data, "LC", 0.0);
+  shared.UC_vec = get_col_with_default(data, "UC", R_PosInf);
+  shared.finite_mask_int.resize(n_trials);
+  shared.res_buf.resize(n_trials);
+  shared.ok_int_buf.resize(n_trials);
+  // Pre-allocate DDM scratch buffers (avoids per-particle R heap in trunc/cens paths)
+  shared.lF_LC_1_buf.resize(n_trials);
+  shared.lF_LC_2_buf.resize(n_trials);
+  shared.lF_UC_1_buf.resize(n_trials);
+  shared.lF_UC_2_buf.resize(n_trials);
+  shared.R1_int_buf.assign(n_trials, 1);
+  shared.R2_int_buf.assign(n_trials, 2);
+  shared.all_ones_int_buf.assign(n_trials, 1);
+  Rcpp::IntegerVector R_col = data["R"];
+  shared.shared_R_levels = R_col.attr("levels");
+  shared.valid = true;
+
+  bool raw_ready = true;
+  const std::vector<std::string> ddm_names = {"v", "a", "sv", "t0", "st0", "s", "Z", "SZ"};
+  for (const auto& nm : ddm_names) {
+    auto it = table.name_to_base_idx.find(nm);
+    int idx = (it != table.name_to_base_idx.end()) ? it->second : -1;
+    p_idx.push_back(idx);
+    if (idx < 0) raw_ready = false;
+  }
+  return raw_ready;
+}
+
+// Data-fixed shared state for the mixed (non-raw-fast) race path: partition
+// attrs, censoring/truncation bounds, winner/loser masks, scratch buffers.
+// Leaves shared.valid=false when the partition attributes are absent.
+static RaceSharedState build_race_shared_state(DataFrame data, int n_trials, int n_lR,
+                                               const LogicalVector& winner,
+                                               const Rcpp::IntegerVector& lR_code_vec,
+                                               int time_code, int nogo_code,
+                                               bool has_RACE_col,
+                                               const Rcpp::IntegerVector& RACE_nacc,
+                                               const Rcpp::LogicalVector& RACE_mask) {
+  RaceSharedState race_shared;
+  const int n_unique = n_trials / n_lR;
+  const bool has_part =
+    data.hasAttribute("finite_rt_mask") &&
+    data.hasAttribute("finite_rt_unique_trial_indices") &&
+    data.hasAttribute("other_unique_trial_indices") &&
+    data.hasAttribute("active_nogo_trial_mask");
+  if (!has_part) return race_shared;
+
+  race_shared.finite_mask = data.attr("finite_rt_mask");
+  Rcpp::IntegerVector fa = data.attr("finite_rt_unique_trial_indices");
+  Rcpp::IntegerVector oa = data.attr("other_unique_trial_indices");
+  Rcpp::LogicalVector ng = data.attr("active_nogo_trial_mask");
+  race_shared.finite_unique_idx.assign(fa.begin(), fa.end());
+  race_shared.other_unique_idx.assign(oa.begin(), oa.end());
+  race_shared.active_nogo_trial_mask.assign(ng.begin(), ng.end());
+
+  // Pre-read censoring/truncation bounds once
+  race_shared.LT_vec = get_col_with_default(data, "LT", 0.0);
+  race_shared.UT_vec = get_col_with_default(data, "UT", R_PosInf);
+  race_shared.LC_vec = get_col_with_default(data, "LC", 0.0);
+  race_shared.UC_vec = get_col_with_default(data, "UC", R_PosInf);
+
+  // Pre-allocate mutable scratch buffers
+  race_shared.res_buf.resize(static_cast<size_t>(n_trials)); // no init needed
+  race_shared.idx_win.assign(static_cast<size_t>(n_trials), 0);
+  race_shared.idx_loss.assign(static_cast<size_t>(n_trials), 0);
+  race_shared.ok_int_buf.resize(static_cast<size_t>(n_trials));
+
+  // Fill data-fixed winner/loser masks (finite trials only)
+  const Rcpp::LogicalVector& fmask = race_shared.finite_mask;
+  race_shared.time_code = time_code;
+  race_shared.nogo_code = nogo_code;
+  if (time_code != -1) {
+    race_shared.idx_time_only.assign(static_cast<size_t>(n_trials), 0);
+    race_shared.alt_res_buf.resize(static_cast<size_t>(n_trials));
+  }
+  const bool needs_n_resp_shared = (time_code != -1);
+  if (needs_n_resp_shared) {
+    race_shared.n_resp.assign(static_cast<size_t>(n_unique), 0);
+  }
+  for (int j = 0; j < n_trials; ++j) {
+    if (!fmask[j]) continue;
+    if (has_RACE_col && !RACE_mask[j]) continue;
+    if (winner[j]) {
+      race_shared.idx_win[static_cast<size_t>(j)] = 1;
+      race_shared.any_win = true;
+    } else if (n_lR > 1) {
+      race_shared.idx_loss[static_cast<size_t>(j)] = 1;
+      race_shared.any_loss = true;
+    }
+    if (time_code != -1 && lR_code_vec[j] == time_code) {
+      race_shared.idx_time_only[static_cast<size_t>(j)] = 1;
+    }
+  }
+  if (needs_n_resp_shared) {
+    for (int j = 0; j < n_unique; ++j) {
+      const int start = j * n_lR;
+      const int n_lR_curr = has_RACE_col ? RACE_nacc[start] : n_lR;
+      race_shared.n_resp[static_cast<size_t>(j)] = count_resp_accumulators(
+          lR_code_vec.begin(), start, n_lR_curr, time_code, nogo_code);
+    }
+  }
+  race_shared.valid = true;
+  return race_shared;
+}
+
 // [[Rcpp::export]]
 NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericVector constants,
                          List designs, String type, List bounds, List transforms, List pretransforms,
@@ -2363,151 +2612,22 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
                                       pretransforms, trend, false, false, kernel_output_codes);
   };
 
-  NumericMatrix particle_matrix_pt;
-  ParamTable param_table_template;
-  std::vector<TransformSpec> transform_specs_pt;
-  std::unique_ptr<TrendPlan> trend_plan;
-  std::unique_ptr<TrendRuntime> trend_runtime;
-  Rcpp::CharacterVector keep_names;
-  std::vector<int> pm_col_to_base_idx;
-
+  PtMapper pt;
   if (use_pt_mapping) {
-    std::vector<TransformSpec> pre_specs = make_transform_specs(particle_matrix, pretransforms);
-    particle_matrix_pt = c_do_transform(particle_matrix, pre_specs);
-
-    const bool has_constants = !(constants.size() == 1 &&
-                                 Rcpp::NumericVector::is_na(constants[0]));
-    if (has_constants) {
-      particle_matrix_pt = add_constants_columns(particle_matrix_pt, constants);
-    }
-
-    NumericVector p_vector = particle_matrix_pt(0, _);
-    p_vector.attr("names") = colnames(particle_matrix_pt);
-    param_table_template = ParamTable::from_p_vector_and_designs(p_vector, designs, n_trials, transforms);
-    transform_specs_pt = make_transform_specs_for_paramtable(param_table_template, transforms);
-
-    Rcpp::CharacterVector pm_names = colnames(particle_matrix_pt);
-    pm_col_to_base_idx.assign(pm_names.size(), -1);
-    for (int j = 0; j < pm_names.size(); ++j) {
-      std::string nm = Rcpp::as<std::string>(pm_names[j]);
-      auto it = param_table_template.name_to_base_idx.find(nm);
-      if (it != param_table_template.name_to_base_idx.end()) {
-        pm_col_to_base_idx[j] = it->second;
-      }
-    }
-
-    if (!trend.isNull()) {
-      trend_plan.reset(new TrendPlan(trend, data));
-      trend_runtime.reset(new TrendRuntime(*trend_plan));
-      trend_runtime->bind_all_ops_to_paramtable(param_table_template);
-      trend_runtime->init_cached_specs(param_table_template, transform_specs_pt);
-    }
-    keep_names = p_types;
+    pt = make_pt_mapper(particle_matrix, data, constants, designs, bounds,
+                        transforms, pretransforms, trend, p_types,
+                        n_trials, n_particles);
   }
-
-  TrendRuntime* trend_runtime_ptr = trend_runtime ? trend_runtime.get() : nullptr;
-  Rcpp::LogicalVector invariant_design_mask;
-  std::unordered_set<std::string> invariant_param_names;
-  const Rcpp::LogicalVector* invariant_design_mask_ptr = nullptr;
-  const std::unordered_set<std::string>* invariant_param_names_ptr = nullptr;
-
-  if (use_pt_mapping && n_particles > 1 && trend_runtime_ptr == nullptr) {
-    std::unordered_set<std::string> sampled_coef_names;
-    sampled_coef_names.reserve(p_names.size());
-    for (int j = 0; j < p_names.size(); ++j) {
-      sampled_coef_names.insert(Rcpp::as<std::string>(p_names[j]));
-    }
-
-    invariant_design_mask = Rcpp::LogicalVector(designs.size(), false);
-    Rcpp::CharacterVector design_names = designs.names();
-    for (int i = 0; i < designs.size(); ++i) {
-      Rcpp::NumericMatrix d = designs[i];
-      Rcpp::CharacterVector dcols = colnames(d);
-      bool invariant = true;
-      for (int c = 0; c < dcols.size(); ++c) {
-        if (sampled_coef_names.find(Rcpp::as<std::string>(dcols[c])) != sampled_coef_names.end()) {
-          invariant = false;
-          break;
-        }
-      }
-      invariant_design_mask[i] = invariant;
-      if (invariant) {
-        std::string pnm;
-        if (design_names.size() == designs.size()) pnm = Rcpp::as<std::string>(design_names[i]);
-        else if (i < keep_names.size()) pnm = Rcpp::as<std::string>(keep_names[i]);
-        if (!pnm.empty()) invariant_param_names.insert(pnm);
-      }
-    }
-    if (!invariant_param_names.empty()) {
-      invariant_design_mask_ptr = &invariant_design_mask;
-      invariant_param_names_ptr = &invariant_param_names;
-    }
-  }
-
-  // Precompute base column indices for invariant parameters so fill_from_particle_row
-  // can preserve their natural-scale values across reset_base_to_zero.
-  std::vector<int> invariant_base_idx_vec;
-  if (invariant_param_names_ptr) {
-    for (const auto& nm : *invariant_param_names_ptr) {
-      auto it = param_table_template.name_to_base_idx.find(nm);
-      if (it != param_table_template.name_to_base_idx.end())
-        invariant_base_idx_vec.push_back(it->second);
-    }
-  }
-
-  // Per-particle prologue shared by every ParamTable model branch (DDM, hUVSD,
-  // SS, logical rules, race): refill the table from particle row i (i == 0
-  // runs on the template exactly as built above), re-run design mapping +
-  // transforms, then evaluate parameter bounds. Returns the per-row bound
-  // mask; the table itself is left holding particle i's natural-scale values.
-  // The invariant-parameter optimization is only valid for i > 0: the template
-  // pass must fully compute every parameter (including transforms of
-  // constants) before later particles can inherit those columns.
-  auto prepare_particle = [&](int i) -> Rcpp::LogicalVector {
-    if (i > 0) {
-      param_table_template.fill_from_particle_row(particle_matrix_pt, i,
-                                                  pm_col_to_base_idx,
-                                                  invariant_base_idx_vec);
-    }
-    update_pt_only(param_table_template, designs, trend_runtime_ptr, transform_specs_pt,
-                   i > 0 ? invariant_design_mask_ptr : nullptr,
-                   i > 0 ? invariant_param_names_ptr : nullptr);
-    if (i == 0) {
-      bound_specs = make_bound_specs_pt(minmax, mm_names, param_table_template, bounds);
-    }
-    return c_do_bound_pt(param_table_template, bound_specs);
-  };
+  ParamTable& param_table_template = pt.table;
+  Rcpp::CharacterVector& keep_names = pt.keep_names;
+  auto prepare_particle = [&](int i) -> Rcpp::LogicalVector { return pt.prepare(i); };
 
   ModelSharedState ddm_shared;
   std::vector<int> ddm_p_idx;
   bool ddm_raw_ready = true;
   if (is_ddm_type) {
-      ddm_shared.LT_vec = get_col_with_default(data, "LT", 0.0);
-      ddm_shared.UT_vec = get_col_with_default(data, "UT", R_PosInf);
-      ddm_shared.LC_vec = get_col_with_default(data, "LC", 0.0);
-      ddm_shared.UC_vec = get_col_with_default(data, "UC", R_PosInf);
-      ddm_shared.finite_mask_int.resize(n_trials);
-      ddm_shared.res_buf.resize(n_trials);
-      ddm_shared.ok_int_buf.resize(n_trials);
-      // Pre-allocate DDM scratch buffers (avoids per-particle R heap in trunc/cens paths)
-      ddm_shared.lF_LC_1_buf.resize(n_trials);
-      ddm_shared.lF_LC_2_buf.resize(n_trials);
-      ddm_shared.lF_UC_1_buf.resize(n_trials);
-      ddm_shared.lF_UC_2_buf.resize(n_trials);
-      ddm_shared.R1_int_buf.assign(n_trials, 1);
-      ddm_shared.R2_int_buf.assign(n_trials, 2);
-      ddm_shared.all_ones_int_buf.assign(n_trials, 1);
-      Rcpp::IntegerVector R_col = data["R"];
-      ddm_shared.shared_R_levels = R_col.attr("levels");
-      ddm_shared.valid = true;
-      
-      const std::vector<std::string> ddm_names = {"v", "a", "sv", "t0", "st0", "s", "Z", "SZ"};
-      for(const auto& nm : ddm_names) {
-        auto it = param_table_template.name_to_base_idx.find(nm);
-        int idx = (it != param_table_template.name_to_base_idx.end()) ? it->second : -1;
-        ddm_p_idx.push_back(idx);
-        if (idx < 0) ddm_raw_ready = false;
-      }
+    ddm_raw_ready = init_ddm_shared_state(data, n_trials, param_table_template,
+                                          ddm_shared, ddm_p_idx);
   }
 
   if (is_ddm_type) {
@@ -2749,68 +2869,9 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
     // per-particle R-heap allocations, column reads, and attribute lookups.
     RaceSharedState race_shared;
     if (!use_raw_fast_path && adapter.model_dfun_raw != nullptr && !all_finite_trials) {
-      const bool has_part =
-        data.hasAttribute("finite_rt_mask") &&
-        data.hasAttribute("finite_rt_unique_trial_indices") &&
-        data.hasAttribute("other_unique_trial_indices") &&
-        data.hasAttribute("active_nogo_trial_mask");
-      if (has_part) {
-        race_shared.finite_mask = data.attr("finite_rt_mask");
-        Rcpp::IntegerVector fa = data.attr("finite_rt_unique_trial_indices");
-        Rcpp::IntegerVector oa = data.attr("other_unique_trial_indices");
-        Rcpp::LogicalVector ng = data.attr("active_nogo_trial_mask");
-        race_shared.finite_unique_idx.assign(fa.begin(), fa.end());
-        race_shared.other_unique_idx.assign(oa.begin(), oa.end());
-        race_shared.active_nogo_trial_mask.assign(ng.begin(), ng.end());
-
-        // Pre-read censoring/truncation bounds once
-        race_shared.LT_vec = get_col_with_default(data, "LT", 0.0);
-        race_shared.UT_vec = get_col_with_default(data, "UT", R_PosInf);
-        race_shared.LC_vec = get_col_with_default(data, "LC", 0.0);
-        race_shared.UC_vec = get_col_with_default(data, "UC", R_PosInf);
-
-        // Pre-allocate mutable scratch buffers
-        race_shared.res_buf.resize(static_cast<size_t>(n_trials)); // no init needed
-        race_shared.idx_win.assign(static_cast<size_t>(n_trials), 0);
-        race_shared.idx_loss.assign(static_cast<size_t>(n_trials), 0);
-        race_shared.ok_int_buf.resize(static_cast<size_t>(n_trials));
-
-        // Fill data-fixed winner/loser masks (finite trials only)
-        const Rcpp::LogicalVector& fmask = race_shared.finite_mask;
-        race_shared.time_code = time_code;
-        race_shared.nogo_code = nogo_code;
-        if (time_code != -1) {
-          race_shared.idx_time_only.assign(static_cast<size_t>(n_trials), 0);
-          race_shared.alt_res_buf.resize(static_cast<size_t>(n_trials));
-        }
-        const bool needs_n_resp_shared = (time_code != -1);
-        if (needs_n_resp_shared) {
-          race_shared.n_resp.assign(static_cast<size_t>(n_unique_fp), 0);
-        }
-        for (int j = 0; j < n_trials; ++j) {
-          if (!fmask[j]) continue;
-          if (has_RACE_col_fp && !RACE_mask_fp[j]) continue;
-          if (winner[j]) {
-            race_shared.idx_win[static_cast<size_t>(j)] = 1;
-            race_shared.any_win = true;
-          } else if (n_lR > 1) {
-            race_shared.idx_loss[static_cast<size_t>(j)] = 1;
-            race_shared.any_loss = true;
-          }
-          if (time_code != -1 && lR_code_vec[j] == time_code) {
-            race_shared.idx_time_only[static_cast<size_t>(j)] = 1;
-          }
-        }
-        if (needs_n_resp_shared) {
-          for (int j = 0; j < n_unique_fp; ++j) {
-            const int start = j * n_lR;
-            const int n_lR_curr = has_RACE_col_fp ? RACE_fp[start] : n_lR;
-            race_shared.n_resp[static_cast<size_t>(j)] = count_resp_accumulators(
-                lR_code_vec.begin(), start, n_lR_curr, time_code, nogo_code);
-          }
-        }
-        race_shared.valid = true;
-      }
+      race_shared = build_race_shared_state(data, n_trials, n_lR, winner, lR_code_vec,
+                                            time_code, nogo_code,
+                                            has_RACE_col_fp, RACE_fp, RACE_mask_fp);
     }
 
     for (int i = 0; i < n_particles; ++i) {
@@ -2976,73 +3037,49 @@ NumericMatrix calc_ll_oo_pw(NumericMatrix particle_matrix, DataFrame data, Numer
   const int n_trials = data.nrow();
   LogicalVector is_ok(n_trials);
   NumericMatrix pars;
-
-  NumericMatrix minmax = bounds["minmax"];
-  CharacterVector mm_names = colnames(minmax);
-  std::vector<BoundSpec> bound_specs;
-  CharacterVector p_names = colnames(particle_matrix);
   std::string type_std = Rcpp::as<std::string>(Rcpp::wrap(type));
 
-  NumericMatrix one_particle(1, particle_matrix.ncol());
-  colnames(one_particle) = p_names;
-  IntegerVector kernel_output_codes = IntegerVector::create(1);
-  auto reorder_to_p_types = [&](NumericMatrix mat) -> NumericMatrix {
-    if (p_types.size() == 0) return mat;
-    CharacterVector src_names = colnames(mat);
-    if (src_names.size() == 0) return mat;
-    if (src_names.size() == p_types.size()) {
-      bool already_ordered = true;
-      for (int j = 0; j < p_types.size(); ++j) {
-        if (Rcpp::as<std::string>(src_names[j]) != Rcpp::as<std::string>(p_types[j])) {
-          already_ordered = false;
-          break;
-        }
-      }
-      if (already_ordered) return mat;
-    }
-    std::vector<int> src_idx(p_types.size(), -1);
-    for (int j = 0; j < p_types.size(); ++j) {
-      std::string tgt = Rcpp::as<std::string>(p_types[j]);
-      for (int k = 0; k < src_names.size(); ++k) {
-        if (Rcpp::as<std::string>(src_names[k]) == tgt) {
-          src_idx[j] = k;
-          break;
-        }
-      }
-      if (src_idx[j] < 0) {
-        Rcpp::stop("calc_ll_oo_pw: mapped parameter '%s' not found in particle parameter matrix.", tgt.c_str());
-      }
-    }
-    NumericMatrix out(mat.nrow(), p_types.size());
-    colnames(out) = p_types;
-    for (int j = 0; j < p_types.size(); ++j) {
-      const int k = src_idx[j];
-      for (int i = 0; i < mat.nrow(); ++i) out(i, j) = mat(i, k);
-    }
-    return out;
-  };
-  auto pars_for_particle = [&](int i) -> NumericMatrix {
-    for (int j = 0; j < particle_matrix.ncol(); ++j) {
-      one_particle(0, j) = particle_matrix(i, j);
-    }
-    NumericMatrix mapped = get_pars_c_wrapper_oo_core(one_particle, data, constants, designs, bounds, transforms,
-                                                     pretransforms, trend, false, false, kernel_output_codes);
-    return reorder_to_p_types(mapped);
-  };
+  if (type == "MRI" || type == "MRI_AR1" ||
+      is_stop_signal_type(type_std) ||
+      type_std.find("SOFTMAX") != std::string::npos) {
+    Rcpp::stop("calc_ll_oo_pw: not implemented for model type '%s'", type_std.c_str());
+  }
+
+  // Same per-call ParamTable machinery as calc_ll_oo: one template build, then
+  // a cheap refill + remap per particle (instead of the full mapping wrapper).
+  PtMapper pt = make_pt_mapper(particle_matrix, data, constants, designs, bounds,
+                               transforms, pretransforms, trend, p_types,
+                               n_trials, n_particles);
+  ParamTable& param_table_template = pt.table;
+  Rcpp::CharacterVector& keep_names = pt.keep_names;
 
   if (type_std.find("DDM") != std::string::npos) {
     bool gng = (type_std.find("GNG") != std::string::npos);
     IntegerVector expand = data.attr("expand");
     const int n_out = (expand.length() > 0) ? expand.length() : n_trials;
     const bool all_finite_untruncated = ddm_data_all_finite_untruncated(data, n_trials);
+    ModelSharedState ddm_shared;
+    std::vector<int> ddm_p_idx;
+    const bool ddm_raw_ready = init_ddm_shared_state(data, n_trials, param_table_template,
+                                                     ddm_shared, ddm_p_idx);
+    NumericVector rts = data["rt"];
+    IntegerVector R = data["R"];
+    const int* expand_ptr = (expand.length() > 0) ? expand.begin() : nullptr;
     NumericMatrix result(n_particles, n_out);
     for (int i = 0; i < n_particles; ++i) {
-      pars = pars_for_particle(i);
-      if (i == 0) bound_specs = make_bound_specs(minmax, mm_names, pars, bounds);
-      is_ok = c_do_bound(pars, bound_specs);
+      is_ok = pt.prepare(i);
       NumericVector row_vec(n_out);
-      c_log_likelihood_DDM(pars, data, n_trials, expand, min_ll, is_ok,
-                           gng, all_finite_untruncated, &row_vec);
+      if (ddm_raw_ready) {
+        for (int j = 0; j < n_trials; ++j) ddm_shared.ok_int_buf[j] = is_ok[j] ? 1 : 0;
+        c_log_likelihood_DDM_pt(param_table_template.base.begin(), rts.begin(), R.begin(),
+                                n_trials, expand_ptr, n_out, min_ll,
+                                ddm_shared.ok_int_buf.data(), gng, all_finite_untruncated,
+                                ddm_p_idx, &ddm_shared, &row_vec);
+      } else {
+        pars = param_table_template.materialize_by_param_names(keep_names);
+        c_log_likelihood_DDM(pars, data, n_trials, expand, min_ll, is_ok,
+                             gng, all_finite_untruncated, &row_vec);
+      }
       result(i, _) = row_vec;
     }
     return result;
@@ -3051,18 +3088,13 @@ NumericMatrix calc_ll_oo_pw(NumericMatrix particle_matrix, DataFrame data, Numer
     const int n_out = (expand.length() > 0) ? expand.length() : n_trials;
     NumericMatrix result(n_particles, n_out);
     for (int i = 0; i < n_particles; ++i) {
-      pars = pars_for_particle(i);
-      if (i == 0) bound_specs = make_bound_specs(minmax, mm_names, pars, bounds);
-      is_ok = c_do_bound(pars, bound_specs);
+      is_ok = pt.prepare(i);
+      pars = param_table_template.materialize_by_param_names(keep_names);
       NumericVector row_vec(n_out);
       c_log_likelihood_huvsd(pars, data, n_trials, expand, min_ll, is_ok, &row_vec);
       result(i, _) = row_vec;
     }
     return result;
-  } else if (type == "MRI" || type == "MRI_AR1" ||
-             is_stop_signal_type(type_std) ||
-             type_std.find("SOFTMAX") != std::string::npos) {
-    Rcpp::stop("calc_ll_oo_pw: not implemented for model type '%s'", type_std.c_str());
   } else {
     IntegerVector expand = data.attr("expand");
     LogicalVector winner = data["winner"];
@@ -3073,44 +3105,78 @@ NumericMatrix calc_ll_oo_pw(NumericMatrix particle_matrix, DataFrame data, Numer
 
     NumericVector lR = data["lR"];
     int n_lR = unique(lR).length();
-    const bool all_finite_trials = read_all_finite_trials_attr(data, n_trials, n_lR);
+    const Rcpp::IntegerVector lR_code_vec(static_cast<SEXP>(lR));
+    const Rcpp::CharacterVector lR_levels = lR_code_vec.attr("levels");
+    int time_code = -1;
+    int nogo_code = -1;
+    for (int j = 0; j < lR_levels.size(); ++j) {
+      std::string lev = Rcpp::as<std::string>(lR_levels[j]);
+      if (lev == "time") time_code = j + 1;
+      else if (lev == "nogo") nogo_code = j + 1;
+    }
+    adapter.ctx.time_code = time_code;
+    adapter.ctx.nogo_code = nogo_code;
 
+    const bool all_finite_trials = read_all_finite_trials_attr(data, n_trials, n_lR);
     const int n_out_race = (expand.length() > 0) ? expand.length() : (n_trials / n_lR);
     NumericMatrix result(n_particles, n_out_race);
-    LogicalRulesSharedState logicalrules_shared;
+
     if (is_logicalrules) {
-      logicalrules_shared = build_logicalrules_shared_state(data, n_trials, n_lR);
-    }
-    for (int i = 0; i < n_particles; ++i) {
-      pars = pars_for_particle(i);
-      if (i == 0) bound_specs = make_bound_specs(minmax, mm_names, pars, bounds);
-      is_ok = c_do_bound(pars, bound_specs);
-      is_ok = lr_all(is_ok, n_lR);
-      NumericVector row_vec(n_out_race);
-      if (is_logicalrules) {
+      LogicalRulesSharedState logicalrules_shared =
+        build_logicalrules_shared_state(data, n_trials, n_lR);
+      for (int i = 0; i < n_particles; ++i) {
+        is_ok = pt.prepare(i);
+        is_ok = lr_all(is_ok, n_lR);
+        pars = param_table_template.materialize_by_param_names(keep_names);
+        NumericVector row_vec(n_out_race);
         c_log_likelihood_logicalrules(pars, expand, min_ll, is_ok, n_lR,
                                       &adapter.ctx, adapter.pdf1_ptr, adapter.cdf1_ptr,
                                       adapter.model_dfun_raw, adapter.model_pfun_raw,
                                       logicalrules_shared, &row_vec);
-      } else {
-        c_log_likelihood_race(pars, data,
-                              adapter.pdf1_ptr, adapter.cdf1_ptr,
-                              n_trials,
-                              winner, expand, min_ll, is_ok, n_lR,
-                              &adapter.ctx,
-                              all_finite_trials,
-                              adapter.model_dfun_raw,
-                              adapter.model_pfun_raw,
-                              adapter.logS_at_t_ptr,
-                              nullptr,
-                              &row_vec);
+        result(i, _) = row_vec;
       }
+      return result;
+    }
+
+    bool has_RACE_col = data.containsElementNamed("RACE");
+    Rcpp::IntegerVector RACE_nacc;
+    Rcpp::LogicalVector RACE_mask;
+    bool has_RACE_attrs = false;
+    if (has_RACE_col &&
+        data.hasAttribute("RACE_nacc_by_row") &&
+        data.hasAttribute("RACE_mask")) {
+      RACE_nacc = data.attr("RACE_nacc_by_row");
+      RACE_mask = data.attr("RACE_mask");
+      has_RACE_attrs = (RACE_nacc.size() == n_trials && RACE_mask.size() == n_trials);
+    }
+
+    RaceSharedState race_shared;
+    if (adapter.model_dfun_raw != nullptr && !all_finite_trials && (!has_RACE_col || has_RACE_attrs)) {
+      race_shared = build_race_shared_state(data, n_trials, n_lR, winner, lR_code_vec,
+                                            time_code, nogo_code,
+                                            has_RACE_col, RACE_nacc, RACE_mask);
+    }
+
+    for (int i = 0; i < n_particles; ++i) {
+      is_ok = pt.prepare(i);
+      is_ok = lr_all(is_ok, n_lR);
+      pars = param_table_template.materialize_by_param_names(keep_names);
+      NumericVector row_vec(n_out_race);
+      c_log_likelihood_race(pars, data,
+                            adapter.pdf1_ptr, adapter.cdf1_ptr,
+                            n_trials,
+                            winner, expand, min_ll, is_ok, n_lR,
+                            &adapter.ctx,
+                            all_finite_trials,
+                            adapter.model_dfun_raw,
+                            adapter.model_pfun_raw,
+                            adapter.logS_at_t_ptr,
+                            race_shared.valid ? &race_shared : nullptr,
+                            &row_vec);
       result(i, _) = row_vec;
     }
     return result;
   }
-
-  return NumericMatrix(0, 0);
 }
 
 
