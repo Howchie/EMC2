@@ -229,6 +229,22 @@ ss_rdex_stop_success_value <- function(SSD, pars, method = "integrate", upper = 
     .Call(`_EMC2_ss_rdex_stop_success_value`, SSD, pars, method, upper, n_nodes, k_sigma, k_tau, max_subdiv, abs_tol, rel_tol)
 }
 
+rlba_cpp <- function(pars, lR_levels, ok, posdrift) {
+    .Call(`_EMC2_rlba_cpp`, pars, lR_levels, ok, posdrift)
+}
+
+rrdm_cpp <- function(pars, lR_levels, ok) {
+    .Call(`_EMC2_rrdm_cpp`, pars, lR_levels, ok)
+}
+
+rbawl_cpp <- function(pars, lR_levels, ok, posdrift, erlang, guess, global) {
+    .Call(`_EMC2_rbawl_cpp`, pars, lR_levels, ok, posdrift, erlang, guess, global)
+}
+
+rrdmswtn_cpp <- function(pars, lR_levels, ok, erlang_shape, erlang_type, posdrift) {
+    .Call(`_EMC2_rrdmswtn_cpp`, pars, lR_levels, ok, erlang_shape, erlang_type, posdrift)
+}
+
 fft_convolve_equiv_cpp <- function(x, y, conj_flag = TRUE) {
     .Call(`_EMC2_fft_convolve_equiv_cpp`, x, y, conj_flag)
 }

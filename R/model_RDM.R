@@ -219,7 +219,7 @@ RDM <- function() {
       pars
     },
     # Random function for racing accumulators
-    rfun = function(data = NULL, pars) rRDM(data$lR, pars, ok = attr(pars, "ok")),
+    rfun = function(data = NULL, pars) .rfun_RDM(data$lR, pars, ok = attr(pars, "ok")),
     # Density function (PDF) for single accumulator
     dfun = function(rt, pars) dRDM(rt, pars),
     # Probability function (CDF) for single accumulator
@@ -777,7 +777,7 @@ RDMSWTN <- function(erlang_shape = 1L, erlang_type = "none", posdrift = TRUE) {
     rfun = function(data = NULL, pars) {
       ok <- attr(pars, "ok")
       if (is.null(ok)) ok <- rep(TRUE, nrow(pars))
-      rRDMSWTN(data$lR, pars, ok = ok, erlang_shape = erlang_shape_cpp,
+      .rfun_RDMSWTN(data$lR, pars, ok = ok, erlang_shape = erlang_shape_cpp,
                erlang_type = erlang_type, posdrift = posdrift)
     },
     dfun = function(rt, pars) dRDMSWTN(rt, pars, erlang = erlang_shape_cpp, posdrift = posdrift),

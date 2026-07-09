@@ -250,8 +250,8 @@ LBA <- function(posdrift=TRUE){
       pars
     },
     # Random function for racing accumulator
-    rfun=ifelse(posdrift,function(data,pars) rLBA(data$lR,pars,ok = attr(pars, "ok"),posdrift=TRUE),
-                function(data,pars) rLBA(data$lR,pars,ok = attr(pars, "ok"),posdrift=FALSE)),
+    rfun=ifelse(posdrift,function(data,pars) .rfun_LBA(data$lR,pars,ok = attr(pars, "ok"),posdrift=TRUE),
+                function(data,pars) .rfun_LBA(data$lR,pars,ok = attr(pars, "ok"),posdrift=FALSE)),
     # Density function (PDF) for single accumulator
     dfun=ifelse(posdrift,function(rt,pars) dLBA(rt,pars,posdrift=TRUE),
                 function(rt,pars) dLBA(rt,pars,posdrift=FALSE)),
@@ -286,7 +286,7 @@ LogicalRulesLBA <- function(posdrift = TRUE, fast_path=TRUE){
       pars
     },
     # Random function for racing accumulator
-    rfun=function(data,pars) rLBA(data$lR,pars,ok = attr(pars, "ok"),posdrift=ifelse(posdrift,TRUE,FALSE)),
+    rfun=function(data,pars) .rfun_LBA(data$lR,pars,ok = attr(pars, "ok"),posdrift=ifelse(posdrift,TRUE,FALSE)),
     # Density function (PDF) for single accumulator
     dfun=function(rt,pars) dLBA(rt,pars,posdrift=ifelse(posdrift,TRUE,FALSE)),
     # Probability function (CDF) for single accumulator
@@ -578,7 +578,7 @@ BAwL <- function(posdrift = TRUE, erlang_shape = 1L,
       }
       cbind(pars, b = pars[, "B"] + pars[, "A"])
     },
-    rfun = function(data, pars) rBAwL(data$lR, pars, ok = attr(pars, "ok"), posdrift = posdrift,
+    rfun = function(data, pars) .rfun_BAwL(data$lR, pars, ok = attr(pars, "ok"), posdrift = posdrift,
                                         erlang = erlang_shape_cpp, guess = has_guess,
                                         global = erlang_type == "global_kill"),
     dfun = function(rt, pars) dBAwL(rt, pars, posdrift = posdrift,  erlang = erlang_shape_cpp,
