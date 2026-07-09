@@ -184,6 +184,34 @@ fill_samples_standard <- function(samples, group_level, proposals, j = 1, n_pars
   return(samples)
 }
 
+# Data-based precision and mean for the joint group-level update.
+# The per-subject map M_i (p x M) is block-sparse: row k occupies the k-th
+# design's columns, so Sum_i M_i' tvinv M_i and Sum_i M_i' tvinv alpha_i
+# assemble blockwise from crossproducts over subjects:
+#   prec[rows_k, cols_l] = tvinv[k, l] * X_k' X_l
+#   mean[rows_k]         = X_k' (tvinv alpha)[k, ]
+# This replaces an O(n * p * M^2) subject loop with p^2 small crossproducts.
+group_design_moments <- function(group_designs, tvinv, alpha, M) {
+  p <- length(group_designs)
+  prec_data <- matrix(0, M, M)
+  mean_data <- numeric(M)
+  n_cols  <- vapply(group_designs, ncol, integer(1))
+  col_off <- cumsum(c(0L, n_cols))
+  ta <- tvinv %*% alpha  # p x n
+  for (k in seq_len(p)) {
+    Xk   <- group_designs[[k]]
+    rows <- col_off[k] + seq_len(n_cols[k])
+    mean_data[rows] <- crossprod(Xk, ta[k, ])
+    for (l in seq_len(p)) {
+      tv_kl <- tvinv[k, l]
+      if (tv_kl == 0) next
+      cols <- col_off[l] + seq_len(n_cols[l])
+      prec_data[rows, cols] <- tv_kl * crossprod(Xk, group_designs[[l]])
+    }
+  }
+  list(prec_data = prec_data, mean_data = mean_data)
+}
+
 gibbs_step_standard <- function(sampler, alpha) {
   #
   # alpha:  (p x n) subject-level parameter matrix
@@ -236,23 +264,9 @@ gibbs_step_standard <- function(sampler, alpha) {
   ##--------------------------------------------------
   ## 1) Build data-based precision & mean
   ##--------------------------------------------------
-  prec_data <- matrix(0, M, M)
-  mean_data <- numeric(M)
-
-  # For each subject i, we build an (p x M) matrix that maps tmu -> predicted alpha_i
-  for (i in seq_len(n)) {
-    par_idx <- 0
-    M_i <- matrix(0, nrow=p, ncol=M)
-    for (k in seq_len(p)) {
-      x_ik   <- group_designs[[k]][i, , drop=FALSE]
-      # place them in row k:
-      M_i[k, par_idx + 1:ncol(group_designs[[k]])] <- x_ik
-      par_idx <- par_idx + ncol(group_designs[[k]])
-    }
-    # Accumulate
-    prec_data <- prec_data + crossprod(M_i, tvinv %*% M_i)
-    mean_data <- mean_data + crossprod(M_i, tvinv %*% alpha[, i, drop=FALSE])
-  }
+  moments   <- group_design_moments(group_designs, tvinv, alpha, M)
+  prec_data <- moments$prec_data
+  mean_data <- moments$mean_data
 
   prec_post <- prior$theta_mu_invar + prec_data
   cov_post  <- solve(prec_post)
