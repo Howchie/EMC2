@@ -63,20 +63,25 @@ test_that("RDM cpp kernel matches R rRDM distributionally", {
 test_that("RDM no-finish trials are coded as omissions with rt = Inf", {
   skip_on_cran()
 
-  lR <- factor(rep(c("left", "right"), 4), levels = c("left", "right"))
+  n_edge <- 1000
+  lR <- factor(rep(c("left", "right"), n_edge), levels = c("left", "right"))
   ok <- rep(TRUE, length(lR))
   pars <- cbind(
-    v = c(0, 0, 0, 0, 1, 0.3, 1, 0.3),
+    v = c(rep(0, n_edge), rep(c(1, 0.3), length.out = n_edge)),
     B = 1, A = 0.3, t0 = 0.2, s = 1
   )
 
+  set.seed(101)
   r <- EMC2:::rRDM(lR, pars, ok = ok)
+  set.seed(102)
   cpp <- EMC2:::rrdm_cpp(pars, levels(lR), ok)
 
-  expect_true(any(is.infinite(r$rt)))
+  expect_true(any(is.na(r$R)))
+  expect_true(any(is.na(cpp$R)))
+  expect_true(all(is.infinite(r$rt[is.na(r$R)])))
   expect_true(all(is.na(r$R[is.infinite(r$rt)])))
-  expect_true(all(is.infinite(cpp$rt[is.infinite(r$rt)])))
-  expect_true(all(is.na(cpp$R[is.infinite(r$rt)])))
+  expect_true(all(is.infinite(cpp$rt[is.na(cpp$R)])))
+  expect_true(all(is.na(cpp$R[is.infinite(cpp$rt)])))
 })
 
 test_that("BAwL cpp kernel matches R rBAwL: local guess+kill, shape 1", {
@@ -110,16 +115,20 @@ test_that("BAwL cpp kernel matches R rBAwL: global kill, shape 2 (E2)", {
 test_that("cpp race kernels code omissions as rt = Inf, matching R rfuns", {
   skip_on_cran()
 
-  lR <- factor(rep(c("left", "right"), 4), levels = c("left", "right"))
+  n_edge <- 1000
+  lR <- factor(rep(c("left", "right"), n_edge), levels = c("left", "right"))
   ok <- rep(TRUE, length(lR))
 
   pars_lba <- cbind(
-    v = c(-1, -1, -1, -1, 1, 0.5, 1, 0.5),
+    v = c(rep(-1, n_edge), rep(c(1, 0.5), length.out = n_edge)),
     sv = 1e-8, b = 1.5, A = 0.3, t0 = 0.2
   )
+  set.seed(201)
   r_lba <- EMC2:::rLBA(lR, pars_lba, ok = ok, posdrift = FALSE)
+  set.seed(202)
   cpp_lba <- EMC2:::rlba_cpp(pars_lba, levels(lR), ok, FALSE)
   expect_true(any(is.na(r_lba$R)))
+  expect_true(any(is.na(cpp_lba$R)))
   expect_true(all(is.infinite(r_lba$rt[is.na(r_lba$R)])))
   expect_true(all(is.infinite(cpp_lba$rt[is.na(cpp_lba$R)])))
 
@@ -127,10 +136,13 @@ test_that("cpp race kernels code omissions as rt = Inf, matching R rfuns", {
     v = rep(1, length(lR)), sv = 1e-8, b = 1.5, A = 0.3, t0 = 0.2,
     k = 0.5, lambda_g = 0, lambda_k = 100
   )
+  set.seed(203)
   r_bawl <- EMC2:::rBAwL(lR, pars_bawl, ok = ok, posdrift = TRUE,
                          erlang = 1L, guess = FALSE, global = FALSE)
+  set.seed(204)
   cpp_bawl <- EMC2:::rbawl_cpp(pars_bawl, levels(lR), ok, TRUE, 1L, FALSE, FALSE)
   expect_true(any(is.na(r_bawl$R)))
+  expect_true(any(is.na(cpp_bawl$R)))
   expect_true(all(is.infinite(r_bawl$rt[is.na(r_bawl$R)])))
   expect_true(all(is.infinite(cpp_bawl$rt[is.na(cpp_bawl$R)])))
 
@@ -138,10 +150,13 @@ test_that("cpp race kernels code omissions as rt = Inf, matching R rfuns", {
     v = rep(1, length(lR)), b = 1.5, A = 0.3, t0 = 0.2, sv = 1e-8,
     lambda_g = 0, lambda_k = 100, s = 1
   )
+  set.seed(205)
   r_rdmswtn <- EMC2:::rRDMSWTN(lR, pars_rdmswtn, ok = ok, erlang_shape = 1L,
                                erlang_type = "local_kill", posdrift = TRUE)
+  set.seed(206)
   cpp_rdmswtn <- EMC2:::rrdmswtn_cpp(pars_rdmswtn, levels(lR), ok, 1L, "local_kill", TRUE)
   expect_true(any(is.na(r_rdmswtn$R)))
+  expect_true(any(is.na(cpp_rdmswtn$R)))
   expect_true(all(is.infinite(r_rdmswtn$rt[is.na(r_rdmswtn$R)])))
   expect_true(all(is.infinite(cpp_rdmswtn$rt[is.na(cpp_rdmswtn$R)])))
 })
@@ -197,6 +212,7 @@ test_that("cpp kernels resample the time-level winner like .apply_timed_guess_wi
   pars <- cbind(v = rep(c(1, 0.5, 3), n), sv = 1, b = 1.5, A = 0.3, t0 = 0.2)
   ok <- rep(TRUE, nrow(pars))
 
+  set.seed(301)
   cpp <- EMC2:::rlba_cpp(pars, levels(lR), ok, TRUE)
   expect_false(any(cpp$R == 3, na.rm = TRUE))  # "time" level never a final response
   expect_true(any(cpp$isTime))
@@ -218,12 +234,12 @@ test_that("emc2.cpp_rfun option gates the fast path via make_data()", {
 
   options(emc2.cpp_rfun = TRUE)
   set.seed(1)
-  dat_cpp <- make_data(p_vector, design = design_lba, model = LBA, n_trials = 20)
+  dat_cpp <- make_data(p_vector, design = design_lba, model = LBA, n_trials = 1000)
 
   options(emc2.cpp_rfun = FALSE)
   set.seed(1)
-  dat_r <- make_data(p_vector, design = design_lba, model = LBA, n_trials = 20)
+  dat_r <- make_data(p_vector, design = design_lba, model = LBA, n_trials = 1000)
 
   expect_equal(nrow(dat_cpp), nrow(dat_r))
-  expect_equal(mean(dat_cpp$R == "left"), mean(dat_r$R == "left"), tolerance = 0.15)
+  expect_equal(mean(dat_cpp$R == "left"), mean(dat_r$R == "left"), tolerance = 0.05)
 })
