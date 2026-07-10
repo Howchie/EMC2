@@ -122,10 +122,14 @@ rRDM <- function(lR, pars, p_types=c("v", "B", "A", "t0"), ok=rep(TRUE, dim(pars
   t0 <- pars[, "t0"]
   pars <- pars[ok, ]
   dt[ok] <- rWald(sum(ok), B = pars[, "B"], v = pars[, "v"], A = pars[, "A"])
+  bad_col <- apply(dt, 2, function(x) all(is.infinite(x)))
   R <- max.col(-t(dt), ties.method = "first")
   pick <- cbind(R, 1:dim(dt)[2]) # Matrix to pick winner
   # Any t0 difference with lR due to response production time (no effect on race)
   rt <- matrix(t0, nrow = nr)[pick] + dt[pick]
+  R <- factor(levels(lR)[R], levels = levels(lR))
+  R[bad_col] <- NA
+  rt[bad_col] <- Inf
   out$R <- levels(lR)[R]
   out$R <- factor(out$R, levels = levels(lR))
   out$rt <- rt

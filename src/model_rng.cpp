@@ -29,6 +29,7 @@ struct RaceOut {
   std::vector<int> R;        // 1-based winner accumulator, 0 = NA
   std::vector<double> rt;    // meaningful only where R != 0
   std::vector<int> best_i;   // 0-based winner accumulator index, -1 = NA (pre time-resample)
+  std::vector<int> omitted;  // 1 = omission (NA/Inf), 0 = skipped/invalid (NA/NA) or valid winner
 };
 
 // Argmin-per-trial race resolution shared by all four families.
@@ -44,6 +45,7 @@ RaceOut resolve_race(const std::vector<double>& dt, int n_acc, int n_trials,
   out.R.assign(n_trials, 0);
   out.rt.assign(n_trials, NA_REAL);
   out.best_i.assign(n_trials, -1);
+  out.omitted.assign(n_trials, 0);
   for (int tr = 0; tr < n_trials; tr++) {
     const int base = tr * n_acc;
     if (ok_row && !(*ok_row)[base]) continue;
@@ -53,7 +55,10 @@ RaceOut resolve_race(const std::vector<double>& dt, int n_acc, int n_trials,
       const double v = dt[base + a];
       if (v < best) { best = v; best_a = a; }
     }
-    if (best_a < 0) continue;  // all-Inf column -> NA
+    if (best_a < 0) {
+      out.omitted[tr] = 1;  // all-Inf column -> omission coded as NA/Inf
+      continue;
+    }
     out.R[tr] = best_a + 1;
     out.best_i[tr] = best_a;
     out.rt[tr] = t0col ? ((*t0col)[base + best_a] + best) : best;
@@ -100,6 +105,7 @@ bool resolve_time_level(std::vector<int>& R, std::vector<int>& isTime_out,
 }
 
 Rcpp::List pack_result(const std::vector<int>& R, const std::vector<double>& rt,
+                       const std::vector<int>& omitted,
                        bool has_isTime, const std::vector<int>& isTime) {
   const int n = (int)R.size();
   Rcpp::IntegerVector Rv(n);
@@ -107,7 +113,7 @@ Rcpp::List pack_result(const std::vector<int>& R, const std::vector<double>& rt,
   for (int i = 0; i < n; i++) {
     if (R[i] == 0) {
       Rv[i] = NA_INTEGER;
-      rtv[i] = NA_REAL;
+      rtv[i] = omitted[i] ? R_PosInf : NA_REAL;
     } else {
       Rv[i] = R[i];
       rtv[i] = rt[i];
@@ -154,7 +160,7 @@ Rcpp::List rlba_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
   RaceOut res = resolve_race(dt, n_acc, n_trials, &t0col, &ok_row);
   std::vector<int> isTime;
   const bool has_isTime = resolve_time_level(res.R, isTime, lR_levels);
-  return pack_result(res.R, res.rt, has_isTime, isTime);
+  return pack_result(res.R, res.rt, res.omitted, has_isTime, isTime);
 }
 
 // pars columns: v, B, A, t0 (+ optional s). RDM is always posdrift = TRUE
@@ -187,7 +193,7 @@ Rcpp::List rrdm_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
   RaceOut res = resolve_race(dt, n_acc, n_trials, &t0col, nullptr);
   std::vector<int> isTime;
   const bool has_isTime = resolve_time_level(res.R, isTime, lR_levels);
-  return pack_result(res.R, res.rt, has_isTime, isTime);
+  return pack_result(res.R, res.rt, res.omitted, has_isTime, isTime);
 }
 
 // pars columns: v, sv, b, A, t0, k, lambda_g, lambda_k (+ optional omega).
@@ -297,7 +303,7 @@ Rcpp::List rbawl_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
   RaceOut res = resolve_race(dt, n_acc, n_trials, nullptr, &ok_row);
   std::vector<int> isTime;
   const bool has_isTime = resolve_time_level(res.R, isTime, lR_levels);
-  return pack_result(res.R, res.rt, has_isTime, isTime);
+  return pack_result(res.R, res.rt, res.omitted, has_isTime, isTime);
 }
 
 // pars columns: v, b, A, t0, sv, lambda_g, lambda_k (+ optional s, omega).
@@ -428,5 +434,5 @@ Rcpp::List rrdmswtn_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_level
     has_isTime = true;
   }
 
-  return pack_result(res.R, res.rt, has_isTime, isTime);
+  return pack_result(res.R, res.rt, res.omitted, has_isTime, isTime);
 }

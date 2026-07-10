@@ -60,6 +60,25 @@ test_that("RDM cpp kernel matches R rRDM distributionally", {
   expect_true(ks_ok(r$rt[r$R == "left"], cpp$rt[cpp$R == 1]))
 })
 
+test_that("RDM no-finish trials are coded as omissions with rt = Inf", {
+  skip_on_cran()
+
+  lR <- factor(rep(c("left", "right"), 4), levels = c("left", "right"))
+  ok <- rep(TRUE, length(lR))
+  pars <- cbind(
+    v = c(0, 0, 0, 0, 1, 0.3, 1, 0.3),
+    B = 1, A = 0.3, t0 = 0.2, s = 1
+  )
+
+  r <- EMC2:::rRDM(lR, pars, ok = ok)
+  cpp <- EMC2:::rrdm_cpp(pars, levels(lR), ok)
+
+  expect_true(any(is.infinite(r$rt)))
+  expect_true(all(is.na(r$R[is.infinite(r$rt)])))
+  expect_true(all(is.infinite(cpp$rt[is.infinite(r$rt)])))
+  expect_true(all(is.na(cpp$R[is.infinite(r$rt)])))
+})
+
 test_that("BAwL cpp kernel matches R rBAwL: local guess+kill, shape 1", {
   skip_on_cran()
   lR <- factor(rep(c("left", "right"), n), levels = c("left", "right"))
@@ -86,6 +105,45 @@ test_that("BAwL cpp kernel matches R rBAwL: global kill, shape 2 (E2)", {
 
   prop_close(mean(is.na(r$R)), mean(is.na(cpp$R)))
   expect_true(ks_ok(r$rt[r$R == "left"], cpp$rt[cpp$R == 1]))
+})
+
+test_that("cpp race kernels code omissions as rt = Inf, matching R rfuns", {
+  skip_on_cran()
+
+  lR <- factor(rep(c("left", "right"), 4), levels = c("left", "right"))
+  ok <- rep(TRUE, length(lR))
+
+  pars_lba <- cbind(
+    v = c(-1, -1, -1, -1, 1, 0.5, 1, 0.5),
+    sv = 1e-8, b = 1.5, A = 0.3, t0 = 0.2
+  )
+  r_lba <- EMC2:::rLBA(lR, pars_lba, ok = ok, posdrift = FALSE)
+  cpp_lba <- EMC2:::rlba_cpp(pars_lba, levels(lR), ok, FALSE)
+  expect_true(any(is.na(r_lba$R)))
+  expect_true(all(is.infinite(r_lba$rt[is.na(r_lba$R)])))
+  expect_true(all(is.infinite(cpp_lba$rt[is.na(cpp_lba$R)])))
+
+  pars_bawl <- cbind(
+    v = rep(1, length(lR)), sv = 1e-8, b = 1.5, A = 0.3, t0 = 0.2,
+    k = 0.5, lambda_g = 0, lambda_k = 100
+  )
+  r_bawl <- EMC2:::rBAwL(lR, pars_bawl, ok = ok, posdrift = TRUE,
+                         erlang = 1L, guess = FALSE, global = FALSE)
+  cpp_bawl <- EMC2:::rbawl_cpp(pars_bawl, levels(lR), ok, TRUE, 1L, FALSE, FALSE)
+  expect_true(any(is.na(r_bawl$R)))
+  expect_true(all(is.infinite(r_bawl$rt[is.na(r_bawl$R)])))
+  expect_true(all(is.infinite(cpp_bawl$rt[is.na(cpp_bawl$R)])))
+
+  pars_rdmswtn <- cbind(
+    v = rep(1, length(lR)), b = 1.5, A = 0.3, t0 = 0.2, sv = 1e-8,
+    lambda_g = 0, lambda_k = 100, s = 1
+  )
+  r_rdmswtn <- EMC2:::rRDMSWTN(lR, pars_rdmswtn, ok = ok, erlang_shape = 1L,
+                               erlang_type = "local_kill", posdrift = TRUE)
+  cpp_rdmswtn <- EMC2:::rrdmswtn_cpp(pars_rdmswtn, levels(lR), ok, 1L, "local_kill", TRUE)
+  expect_true(any(is.na(r_rdmswtn$R)))
+  expect_true(all(is.infinite(r_rdmswtn$rt[is.na(r_rdmswtn$R)])))
+  expect_true(all(is.infinite(cpp_rdmswtn$rt[is.na(cpp_rdmswtn$R)])))
 })
 
 test_that("BAwL cpp kernel matches R rBAwL: k -> 0 reduces to LBA formula", {
