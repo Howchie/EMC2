@@ -21,6 +21,15 @@ b_win <- muS + halfw                     # 1.24   (window upper edge)
 test_that("ss_exg_stop_success honors a finite upper deadline", {
   p <- make_texg_pars(muG, sigG, tauG, lbG = 0, muS, sigS, tauS, lbS = 0)
 
+  # The R wrapper must retain the C++ window defaults.  This caught a
+  # compileAttributes regression where named C++ constants became required R
+  # arguments.
+  expect_equal(EMC2:::ss_exg_stop_success_value(SSD, p),
+               EMC2:::ss_exg_stop_success_value(SSD, p,
+                                                  k_sigma = k_sigma,
+                                                  k_tau = k_tau),
+               tolerance = 1e-12)
+
   # Auto (upper <= 0 -> Inf): integrate the full heuristic window [a, b_win].
   v_full <- EMC2:::ss_exg_stop_success_value(SSD, p, upper = -1,
                                              k_sigma = k_sigma, k_tau = k_tau)

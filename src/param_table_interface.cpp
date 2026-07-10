@@ -220,6 +220,109 @@ NumericMatrix get_pars_c_wrapper_oo_core(NumericMatrix particle_matrix,
                                  return_kernel_matrix, return_all_pars, kernel_codes);
 }
 
+// Batched mapper used by mapped posterior summaries.  For ordinary models the
+// design plan and transform specifications are invariant across particles, so
+// construct them once and only refresh the particle-dependent base columns.
+// Trend models retain the scalar core as a conservative fallback because their
+// runtime state can be model-specific and mutable.
+NumericVector get_pars_c_batch_wrapper_oo_core(NumericMatrix particle_matrix,
+                                               DataFrame data,
+                                               NumericVector constants,
+                                               List designs,
+                                               List bounds,
+                                               List transforms,
+                                               List pretransforms,
+                                               Rcpp::Nullable<Rcpp::List> trend,
+                                               bool return_kernel_matrix,
+                                               bool return_all_pars,
+                                               IntegerVector kernel_output_codes) {
+  (void)bounds;
+  const int n_particles = particle_matrix.nrow();
+  if (n_particles == 0) stop("particle_matrix must have at least one row");
+
+  // Preserve the exact scalar implementation for trend/kernel requests.
+  if (!trend.isNull() || return_kernel_matrix) {
+    NumericMatrix one_particle(1, particle_matrix.ncol());
+    colnames(one_particle) = colnames(particle_matrix);
+    for (int j = 0; j < particle_matrix.ncol(); ++j)
+      one_particle(0, j) = particle_matrix(0, j);
+    NumericMatrix first = get_pars_c_wrapper_oo_core(
+      one_particle, data, constants, designs, bounds, transforms, pretransforms,
+      trend, return_kernel_matrix, return_all_pars, kernel_output_codes);
+    NumericVector out(static_cast<R_xlen_t>(first.nrow()) * first.ncol() * n_particles);
+    std::copy(first.begin(), first.end(), out.begin());
+    for (int i = 1; i < n_particles; ++i) {
+      for (int j = 0; j < particle_matrix.ncol(); ++j)
+        one_particle(0, j) = particle_matrix(i, j);
+      NumericMatrix mapped = get_pars_c_wrapper_oo_core(
+        one_particle, data, constants, designs, bounds, transforms, pretransforms,
+        trend, return_kernel_matrix, return_all_pars, kernel_output_codes);
+      std::copy(mapped.begin(), mapped.end(),
+                out.begin() + static_cast<R_xlen_t>(i) * first.nrow() * first.ncol());
+    }
+    out.attr("dim") = IntegerVector::create(first.nrow(), first.ncol(), n_particles);
+    out.attr("dimnames") = List::create(R_NilValue, colnames(first), R_NilValue);
+    return out;
+  }
+
+  const int n_trials = data.nrow();
+  NumericVector first_particle = particle_matrix(0, _);
+  first_particle.attr("names") = colnames(particle_matrix);
+  first_particle = apply_pretransforms_cpp(first_particle, pretransforms);
+  first_particle = add_constants_cpp(first_particle, constants);
+
+  ParamTable prototype = ParamTable::from_p_vector_and_designs(
+    first_particle, designs, n_trials, transforms);
+  prototype.init_design_plan(designs);
+  const std::vector<TransformSpec> full_specs =
+    make_transform_specs_for_paramtable(prototype, transforms);
+  const CharacterVector keep_names = designs.names();
+
+  NumericMatrix first;
+  NumericVector out;
+  for (int i = 0; i < n_particles; ++i) {
+    NumericVector p_vector = particle_matrix(i, _);
+    p_vector.attr("names") = colnames(particle_matrix);
+    p_vector = apply_pretransforms_cpp(p_vector, pretransforms);
+    p_vector = add_constants_cpp(p_vector, constants);
+
+    ParamTable table = prototype;
+    table.base = Rcpp::clone(prototype.base);
+    CharacterVector p_names = p_vector.names();
+    for (int j = 0; j < p_vector.size(); ++j) {
+      const int col_idx = table.base_index_for(as<std::string>(p_names[j]));
+      double* col = &table.base(0, col_idx);
+      std::fill(col, col + n_trials, p_vector[j]);
+    }
+
+    LogicalVector include_all(designs.size(), true);
+    table.map_from_designs(designs, include_all);
+    const auto split_set = table.split_transform_params();
+    if (split_set.empty()) {
+      c_do_transform_pt(table, full_specs);
+    } else {
+      const auto postmap_specs = complement_specs_for_phases(
+        table, full_specs, { &split_set });
+      c_do_transform_pt(table, postmap_specs);
+    }
+
+    NumericMatrix mapped = return_all_pars
+      ? table.materialize()
+      : table.materialize_by_param_names(keep_names);
+    if (i == 0) {
+      first = mapped;
+      out = NumericVector(static_cast<R_xlen_t>(mapped.nrow()) * mapped.ncol() * n_particles);
+      std::copy(mapped.begin(), mapped.end(), out.begin());
+    } else {
+      std::copy(mapped.begin(), mapped.end(),
+                out.begin() + static_cast<R_xlen_t>(i) * first.nrow() * first.ncol());
+    }
+  }
+  out.attr("dim") = IntegerVector::create(first.nrow(), first.ncol(), n_particles);
+  out.attr("dimnames") = List::create(R_NilValue, colnames(first), R_NilValue);
+  return out;
+}
+
 // Factory: create a ParamTable from p_types and n_trials
 // [[Rcpp::export]]
 SEXP ParamTable_create_from_p_types(int n_trials,

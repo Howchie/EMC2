@@ -52,6 +52,18 @@ NumericMatrix get_pars_c_wrapper_oo_core(NumericMatrix particle_matrix,
                                          bool return_all_pars,
                                          IntegerVector kernel_output_codes);
 
+NumericVector get_pars_c_batch_wrapper_oo_core(NumericMatrix particle_matrix,
+                                               DataFrame data,
+                                               NumericVector constants,
+                                               List designs,
+                                               List bounds,
+                                               List transforms,
+                                               List pretransforms,
+                                               Rcpp::Nullable<Rcpp::List> trend,
+                                               bool return_kernel_matrix,
+                                               bool return_all_pars,
+                                               IntegerVector kernel_output_codes);
+
 NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericVector constants,
                          List designs, String type, List bounds, List transforms, List pretransforms,
                          CharacterVector p_types, double min_ll, Rcpp::Nullable<Rcpp::List> trend);
@@ -3196,6 +3208,28 @@ NumericMatrix get_pars_c_wrapper_oo(NumericMatrix particle_matrix,
   return get_pars_c_wrapper_oo_core(particle_matrix, data, constants, designs, bounds, transforms,
                                     pretransforms, trend, return_kernel_matrix,
                                     return_all_pars, kernel_output_codes);
+}
+
+// Map a batch of particles while keeping the design and transform objects on
+// the C++ side.  The scalar wrapper above is intentionally retained for the
+// public low-level API; mapped posterior summaries use this batch form to
+// avoid one R <-> C++ transition per draw.
+//
+// [[Rcpp::export]]
+NumericVector get_pars_c_batch_wrapper_oo(NumericMatrix particle_matrix,
+                                          DataFrame data,
+                                          NumericVector constants,
+                                          List designs,
+                                          List bounds,
+                                          List transforms,
+                                          List pretransforms,
+                                          Rcpp::Nullable<Rcpp::List> trend = R_NilValue,
+                                          bool return_kernel_matrix = false,
+                                          bool return_all_pars = false,
+                                          IntegerVector kernel_output_codes = 1) {
+  return get_pars_c_batch_wrapper_oo_core(
+    particle_matrix, data, constants, designs, bounds, transforms, pretransforms,
+    trend, return_kernel_matrix, return_all_pars, kernel_output_codes);
 }
 
 // gsl adapter for integrals - uses scalar, Rcpp-independent functions for speed

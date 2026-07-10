@@ -117,7 +117,7 @@ pGBMspv <- function(t, v, b, A, t0 = 0.0, s = 1.0, lambda_g = 0.0, lambda_k = 0.
     .Call(`_EMC2_pGBMspv`, t, v, b, A, t0, s, lambda_g, lambda_k, log_out, kill_shape, erlang_omega)
 }
 
-ss_exg_stop_success_value <- function(SSD, pars, upper = -1.0, max_subdiv = 100L, abs_tol = 1e-8, rel_tol = 1e-6, k_sigma, k_tau) {
+ss_exg_stop_success_value <- function(SSD, pars, upper = -1.0, max_subdiv = 100L, abs_tol = 1e-8, rel_tol = 1e-6, k_sigma = 8.0, k_tau = 16.0) {
     .Call(`_EMC2_ss_exg_stop_success_value`, SSD, pars, upper, max_subdiv, abs_tol, rel_tol, k_sigma, k_tau)
 }
 
@@ -351,6 +351,10 @@ calc_ll_oo_pw <- function(particle_matrix, data, constants, designs, type, bound
 
 get_pars_c_wrapper_oo <- function(particle_matrix, data, constants, designs, bounds, transforms, pretransforms, trend = NULL, return_kernel_matrix = FALSE, return_all_pars = FALSE, kernel_output_codes = 1L) {
     .Call(`_EMC2_get_pars_c_wrapper_oo`, particle_matrix, data, constants, designs, bounds, transforms, pretransforms, trend, return_kernel_matrix, return_all_pars, kernel_output_codes)
+}
+
+get_pars_c_batch_wrapper_oo <- function(particle_matrix, data, constants, designs, bounds, transforms, pretransforms, trend = NULL, return_kernel_matrix = FALSE, return_all_pars = FALSE, kernel_output_codes = 1L) {
+    .Call(`_EMC2_get_pars_c_batch_wrapper_oo`, particle_matrix, data, constants, designs, bounds, transforms, pretransforms, trend, return_kernel_matrix, return_all_pars, kernel_output_codes)
 }
 
 gl_rule_nodes_weights <- function(n) {

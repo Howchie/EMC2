@@ -403,7 +403,7 @@ double ss_exg_stop_success_value(
     double SSD, NumericMatrix pars,
     double upper = -1.0, int max_subdiv = 100,
     double abs_tol = 1e-8, double rel_tol = 1e-6,
-    double k_sigma = SS_WINDOW_K_SIGMA, double k_tau = SS_WINDOW_K_TAU
+    double k_sigma = 8.0, double k_tau = 16.0
 ) {
   const double min_ll = -1e10;
   if (upper <= 0.0) upper = R_PosInf;   // sentinel: <=0 means auto/Inf

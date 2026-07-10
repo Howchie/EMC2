@@ -357,27 +357,76 @@ par_data_map <- function(par_mcmc, design, n_trials = NULL, data = NULL,
     design,model,add_acc=FALSE,compress=FALSE,verbose=FALSE,
     rt_check=FALSE)
 
-  n_mcmc <- dim(par_mcmc)[3]
-  n_pars <- length(model()$p_types)
-  n_subs <- ncol(par_mcmc)
-  for(i in 1:n_mcmc){
-    parameters <- t(as.matrix(par_mcmc[,,i], nrow = n_pars, ncol = n_subs))
-    if(nrow(parameters) == length(unique(data$subjects))){
-      design$Ffactors$subjects <- unique(data$subjects)
+  # The old path mapped one draw at a time, and for multi-subject models made
+  # a separate R/C++ call for every subject as well.  Keep the same
+  # draw-by-draw post-processing semantics (Ttransform and bounds can be
+  # arbitrary R code), but send a chunk of draws for each subject through the
+  # C++ mapper at once.
+  n_mcmc       <- dim(par_mcmc)[3]
+  n_sampled    <- dim(par_mcmc)[1]
+  sampled_nms  <- dimnames(par_mcmc)[[1]]
+  subject_nms  <- dimnames(par_mcmc)[[2]]
+  if (is.null(subject_nms)) subject_nms <- as.character(seq_len(dim(par_mcmc)[2]))
+  if (is.null(sampled_nms)) sampled_nms <- attr(data, "sampled_p_names")
+  if (is.null(sampled_nms))
+    stop("Mapped draws must have sampled-parameter names.")
+
+  data_subjects <- unique(as.character(data$subjects))
+  if (!all(data_subjects %in% subject_nms)) {
+    stop("Mapped draws are missing subject(s): ",
+         paste(setdiff(data_subjects, subject_nms), collapse = ", "), ".")
+  }
+  if (length(subject_nms) == length(data_subjects))
+    design$Ffactors$subjects <- unique(data$subjects)
+
+  batch_size <- getOption("EMC2.map_batch_size", 128L)
+  batch_size <- suppressWarnings(as.integer(batch_size)[1L])
+  if (is.na(batch_size) || batch_size < 1L) batch_size <- 128L
+  chunks <- split(seq_len(n_mcmc), ceiling(seq_len(n_mcmc) / batch_size))
+  model_list <- model()
+  out <- NULL
+
+  for (iter_idx in chunks) {
+    n_batch <- length(iter_idx)
+    mapped_chunk <- NULL
+
+    for (sub in data_subjects) {
+      data_idx <- which(as.character(data$subjects) == sub)
+      sub_idx  <- match(sub, subject_nms)
+      particles <- t(matrix(par_mcmc[, sub_idx, iter_idx, drop = FALSE],
+                            nrow = n_sampled, ncol = n_batch))
+      colnames(particles) <- sampled_nms
+
+      mapped <- get_pars_batch_oo(particles, data, model_list,
+                                  row_idx = data_idx)
+      # C++ returns rows x parameters x draws; this representation is shared
+      # by get_pars(), parameters(), priors, credint(), and their plots.
+      if (is.null(mapped_chunk)) {
+        mapped_chunk <- array(NA_real_,
+                              dim = c(nrow(data), n_batch, dim(mapped)[2L]),
+                              dimnames = list(NULL, NULL, dimnames(mapped)[[2L]]))
+      }
+      mapped_chunk[data_idx, , ] <- aperm(mapped, c(1L, 3L, 2L))
     }
 
-    rownames(parameters) <- design$Ffactors$subjects
-    pars <- get_pars_matrix_oo(parameters, data, model())
-    if(!add_recalculated){
-      base_names <- intersect(names(model()$p_types), colnames(pars))
-      pars <- pars[, base_names, drop = FALSE]
-      attr(pars, "ok") <- NULL
+    for (j in seq_along(iter_idx)) {
+      pars <- mapped_chunk[, j, , drop = FALSE]
+      dim(pars) <- dim(pars)[c(1L, 3L)]
+      colnames(pars) <- dimnames(mapped_chunk)[[3L]]
+      pars <- model_list$Ttransform(pars, data)
+      pars <- add_bound(pars, model_list$bound, data$lR)
+      pars <- .oo_reorder_public_pars(pars, model_list)
+      if (!add_recalculated) {
+        base_names <- intersect(names(model_list$p_types), colnames(pars))
+        pars <- pars[, base_names, drop = FALSE]
+        attr(pars, "ok") <- NULL
+      }
+      if (is.null(out)) {
+        out <- array(NA_real_, dim = c(nrow(pars), n_mcmc, ncol(pars)),
+                     dimnames = list(NULL, NULL, colnames(pars)))
+      }
+      out[, iter_idx[j], ] <- pars
     }
-    if(i == 1){
-      out <- array(NA, dim = c(nrow(pars), n_mcmc, ncol(pars)),
-                   dimnames = list(NULL, NULL, colnames(pars)))
-    }
-    out[,i,] <- pars
   }
   return(list(data = data, pars = out))
 }

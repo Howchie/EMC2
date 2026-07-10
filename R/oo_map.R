@@ -172,6 +172,43 @@ get_pars_oo <- function(p, dadm, model,
   out
 }
 
+# Batched counterpart to get_pars_oo().  It deliberately maps one subject's
+# draws at a time: the model mapping is subject-specific, while the expensive
+# design/transform work for all draws stays within one C++ call.
+get_pars_batch_oo <- function(p, dadm, model, row_idx = NULL,
+                              pretransformed = FALSE,
+                              constants_included = FALSE,
+                              return_kernel_matrix = FALSE,
+                              return_all_pars = FALSE,
+                              kernel_output_codes = 1L) {
+  model_list <- .oo_model_list(model)
+  if (is.null(row_idx)) row_idx <- seq_len(nrow(dadm))
+  cur_dadm <- dadm[row_idx, , drop = FALSE]
+  particle_matrix <- .oo_particle_matrix(p, dadm,
+                                         keep_all_columns = constants_included)
+  constants <- attr(dadm, "constants")
+  if (constants_included || is.null(constants)) constants <- NA
+  pretransforms <- if (pretransformed) {
+    .oo_identity_transform(colnames(particle_matrix))
+  } else {
+    model_list$pre_transform
+  }
+
+  get_pars_c_batch_wrapper_oo(
+    particle_matrix = particle_matrix,
+    data = cur_dadm,
+    constants = constants,
+    designs = .oo_expanded_designs(dadm, row_idx),
+    bounds = model_list$bound,
+    transforms = model_list$transform,
+    pretransforms = pretransforms,
+    trend = model_list$trend,
+    return_kernel_matrix = return_kernel_matrix,
+    return_all_pars = return_all_pars,
+    kernel_output_codes = kernel_output_codes
+  )
+}
+
 get_pars_matrix_oo <- function(p_vector, dadm, model) {
   model_list <- .oo_model_list(model)
   pars <- get_pars_oo(p_vector, dadm, model_list)
