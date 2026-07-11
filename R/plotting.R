@@ -1684,6 +1684,27 @@ plot_credint_map <- function(ci, factors = NULL, type = NULL, quants = 1:3,
   invisible(pdata)
 }
 
+.credint_label_mar <- function(labels, angles, par_settings = list(),
+                               right = 4.1) {
+  # `text(..., xpd = TRUE)` permits labels outside the plot region, but not
+  # outside the figure.  Reserve enough bottom margin for their projected
+  # height so that rotated parameter names are not clipped.
+  cex       <- if (!is.null(par_settings$cex)) par_settings$cex else par("cex")
+  cex_axis  <- if (!is.null(par_settings$cex.axis)) par_settings$cex.axis else par("cex.axis")
+  mgp       <- if (!is.null(par_settings$mgp)) par_settings$mgp else par("mgp")
+  line_in   <- par("cin")[2L] * cex
+  label_cex <- cex * cex_axis
+
+  theta <- abs(angles %% 180) * pi / 180
+  label_height <- mapply(function(label, angle) {
+    strwidth(label, units = "inches", cex = label_cex) * sin(angle) +
+      strheight(label, units = "inches", cex = label_cex) * cos(angle)
+  }, labels, theta)
+
+  bottom <- mgp[2L] * cex_axis + max(label_height, 0) / line_in + 0.75
+  c(bottom, 4.1, 2.1, right)
+}
+
 plot_credint <- function(ci, type = NULL, quants = 1:3,
                          intercept = 1L, effects = NULL,
                          yleft = NULL, yright = NULL,
@@ -1749,7 +1770,9 @@ plot_credint <- function(ci, type = NULL, quants = 1:3,
     par_arg_names <- c("mar","oma","mgp","tcl","las","cex",
                        "cex.axis","cex.lab","cex.main")
     par_settings  <- dots[intersect(names(dots), par_arg_names)]
-    if (is.null(par_settings$mar)) par_settings$mar <- c(4.1, 4.1, 2.1, 1.1)
+    if (is.null(par_settings$mar))
+      par_settings$mar <- .credint_label_mar(x_labels, angles, par_settings,
+                                              right = 1.1)
 
     main <- if (!is.null(dots$main)) dots$main else ""
     xlab <- if (!is.null(dots$xlab)) dots$xlab else ""
@@ -1852,12 +1875,6 @@ plot_credint <- function(ci, type = NULL, quants = 1:3,
   dots <- list(...)
   par_arg_names <- c("mar","oma","mgp","tcl","las","cex","cex.axis","cex.lab","cex.main")
   par_settings  <- dots[intersect(names(dots), par_arg_names)]
-  if (is.null(par_settings$mar)) {
-    mar <- c(4.1, 4.1, 2.1, 4.1)
-    if (n_int == 0L) mar[2L] <- 1.1
-    if (n_eff == 0L) mar[4L] <- 1.1
-    par_settings$mar <- mar
-  }
 
   main       <- if (!is.null(dots$main))       dots$main else
                   if (n_int > 0L) paste0(names(ci)[1L], ": ", intercept_names[1L])
@@ -1905,6 +1922,13 @@ plot_credint <- function(ci, type = NULL, quants = 1:3,
          " (one per label), got ", length(label_angle), ".")
   }
   adjs <- cbind(sin(angles * pi / 180) * 0.5 + 0.5, 1)
+
+  if (is.null(par_settings$mar)) {
+    mar <- .credint_label_mar(all_labels, angles, par_settings, right = 4.1)
+    if (n_int == 0L) mar[2L] <- 1.1
+    if (n_eff == 0L) mar[4L] <- 1.1
+    par_settings$mar <- mar
+  }
 
   pars_to_save <- names(par_settings)
   if (!is.null(layout)) pars_to_save <- c("mfrow", pars_to_save)

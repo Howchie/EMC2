@@ -35,3 +35,11 @@ test_that("batched mapped draws preserve mapped summaries", {
 
   expect_identical(batched, one_draw)
 })
+
+test_that("credible-interval margins accommodate rotated labels", {
+  short <- .credint_label_mar("m_short", 90)
+  long <- .credint_label_mar("m_a_much_longer_mapped_parameter_label", 90)
+
+  expect_gte(short[1L], 4.1)
+  expect_gt(long[1L], short[1L])
+})
