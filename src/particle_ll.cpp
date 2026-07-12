@@ -3697,6 +3697,103 @@ static inline double safe_surv_at_race_scalar(
   return std::max(min_surv, 1.0 - F);
 }
 
+// ---------------------------------------------------------------------------
+// Logical-rules channel-resolution probabilities at a fixed time t.
+//
+// A "channel" is the 2-accumulator sub-race between a target ("yes") detector
+// and a nontarget ("no") detector. At time t the channel is in exactly one of
+// three states, with G_yes + G_no + S_dec = 1:
+//   G_yes(t) = P(target won the sub-race at some u <= t)     channel said yes
+//   G_no(t)  = P(nontarget won at some u <= t)               channel said no
+//   S_dec(t) = P(neither finished by t) = S_tgt(t)*S_ntgt(t) undecided
+// ---------------------------------------------------------------------------
+struct LrChannelState {
+  double G_yes;
+  double G_no;
+  double S_dec;
+};
+
+static bool lr_channel_state_at(double t,
+                                const double* par_tgt,
+                                const double* par_ntgt,
+                                int n_par,
+                                double min_surv,
+                                ContextForRaceModels* model_ctx,
+                                RacePdf1Fun pdf1,
+                                RaceCdf1Fun cdf1,
+                                const GslIntegrationControls& gsl_ctl,
+                                gsl_integration_workspace* w,
+                                double* pars_2buf,
+                                int* isok_2buf,
+                                LrChannelState& out) {
+  if (!(t > 0.0)) { out = {0.0, 0.0, 1.0}; return true; }
+  if (!R_FINITE(t)) return false;  // t = +Inf not supported (local_race_helper)
+  const double S_t  = safe_surv_at_race_scalar(par_tgt,  t, min_surv, cdf1, model_ctx);
+  const double S_nt = safe_surv_at_race_scalar(par_ntgt, t, min_surv, cdf1, model_ctx);
+  const double S_dec = S_t * S_nt;
+  const double G_no = local_race_helper(t, par_ntgt, par_tgt, n_par, model_ctx,
+                                        pdf1, cdf1, gsl_ctl, w, pars_2buf, isok_2buf);
+  if (!R_FINITE(G_no)) return false;
+  out.S_dec = S_dec;
+  out.G_no  = std::min(1.0, std::max(0.0, G_no));
+  out.G_yes = std::min(1.0, std::max(0.0, 1.0 - S_dec - out.G_no));
+  return true;
+}
+
+// P(no overt response by t) for the OR/AND/XOR/ID rules. An overt response is
+// NOT the first accumulator event: OR responds at the first channel-yes or the
+// second channel-no; AND at the second yes or the first no; XOR/ID only once
+// BOTH channels have resolved. Derived from channel independence, and
+// consistent with the finite-rt densities used in the main trial loop
+// (e.g. d/dt[1 - Q_A*Q_B] = gA_yes*Q_B + gB_yes*Q_A with Q = G_no + S_dec).
+static inline double lr_no_response_prob(int rule_code,
+                                         const LrChannelState& A,
+                                         const LrChannelState& B) {
+  if (rule_code == 3 || rule_code == 4) {  // XOR/ID: waiting iff either channel undecided
+    return 1.0 - (1.0 - A.S_dec) * (1.0 - B.S_dec);
+  }
+  if (rule_code == 1) {                    // OR: no yes yet, minus both-no (responded "no")
+    const double Q_A = A.G_no + A.S_dec;
+    const double Q_B = B.G_no + B.S_dec;
+    return Q_A * Q_B - A.G_no * B.G_no;
+  }
+  // AND: no no yet, minus both-yes (responded "yes")
+  const double Q_A = A.G_yes + A.S_dec;
+  const double Q_B = B.G_yes + B.S_dec;
+  return Q_A * Q_B - A.G_yes * B.G_yes;
+}
+
+// CDF of (response identity, RT <= t) for OR/AND/XOR/ID. resp_code follows
+// LogicalRulesSharedState (0=unknown, 1=yes, 2=no, 3=NN, 4=AN, 5=NB, 6=AB);
+// resp_code 0 marginalizes over identities. Returns NA_REAL for a response
+// code that is impossible under the rule.
+static inline double lr_response_cdf(int rule_code, int resp_code,
+                                     const LrChannelState& A,
+                                     const LrChannelState& B) {
+  if (resp_code == 0) return 1.0 - lr_no_response_prob(rule_code, A, B);
+  switch (rule_code) {
+  case 1:  // OR: yes at first channel-yes; no once both channels said no
+    if (resp_code == 1) return 1.0 - (A.G_no + A.S_dec) * (B.G_no + B.S_dec);
+    if (resp_code == 2) return A.G_no * B.G_no;
+    break;
+  case 2:  // AND: yes once both channels said yes; no at first channel-no
+    if (resp_code == 1) return A.G_yes * B.G_yes;
+    if (resp_code == 2) return 1.0 - (A.G_yes + A.S_dec) * (B.G_yes + B.S_dec);
+    break;
+  case 3:  // XOR: yes = exactly one channel yes; both channels resolved
+    if (resp_code == 1) return A.G_yes * B.G_no + A.G_no * B.G_yes;
+    if (resp_code == 2) return A.G_yes * B.G_yes + A.G_no * B.G_no;
+    break;
+  case 4:  // ID: identity = the resolved (yes/no) pair
+    if (resp_code == 6) return A.G_yes * B.G_yes;
+    if (resp_code == 4) return A.G_yes * B.G_no;
+    if (resp_code == 5) return A.G_no  * B.G_yes;
+    if (resp_code == 3) return A.G_no  * B.G_no;
+    break;
+  }
+  return NA_REAL;
+}
+
 static double logicalrules_detection_trial_ll(
     int rule_code,
     int cond,
@@ -3752,7 +3849,13 @@ static double logicalrules_detection_trial_ll(
       else p_j = (fA * S_B + fB * S_A) * S_N;
     }
   } else {
-    if (resp != 0 && resp != 2) return min_ll;
+    // Upper censor (+Inf) is an omission: recorded resp may be missing (0) or
+    // an explicit "no" (2). Lower censor (-Inf) is an overt detection response
+    // that beat LC: resp may be missing (0) or "yes" (1) — the mass is the
+    // same either way, as these rules have a single overt response type.
+    const bool upper_censored = (t > 0.0);
+    if (upper_censored ? (resp != 0 && resp != 2)
+                       : (resp != 0 && resp != 1)) return min_ll;
     if (rule_code == 5) {
       // Upper censor (rt = +Inf): neither detector fired by UC.
       // Lower censor (rt = -Inf): at least one detector fired before LC.
@@ -3825,27 +3928,41 @@ static double logicalrules_detection_trial_ll(
         const double p_nogo_win = R_FINITE(log_nogo_win) ? std::exp(log_nogo_win) : 0.0;
         p_j = p_nogo_win + p_none;
       } else {
-        // Lower censor: some accumulator (go or nogo) fired before LC.
+        // Lower censor: an overt (go) response occurred in [LT, LC]. Only the
+        // go detectors active under this stimulus can produce it, and the
+        // detector must win the race against the nogo accumulator (and any
+        // other go detector) inside the window — a nogo finish is a withheld
+        // response, never an observable one (mirrors the standard-race
+        // go/no-go convention for rt == -Inf). Previously this used the joint
+        // first-event mass, which wrongly counted nogo wins as responses
+        // (e.g. cond == 0, where no overt response is possible at all).
         const double lo = std::max(0.0, LTj);
         const double hi = std::max(lo, LCj);
-        const double S_N_lo = safe_surv_at_race_scalar(parN, lo, min_surv, cdf1, model_ctx);
-        const double S_N_hi = safe_surv_at_race_scalar(parN, hi, min_surv, cdf1, model_ctx);
-        if (cond == 0) {
-          p_j = std::max(0.0, S_N_lo - S_N_hi);
-        } else if (cond == 1) {
-          const double S_A_lo = safe_surv_at_race_scalar(parA, lo, min_surv, cdf1, model_ctx);
-          const double S_A_hi = safe_surv_at_race_scalar(parA, hi, min_surv, cdf1, model_ctx);
-          p_j = std::max(0.0, S_A_lo * S_N_lo - S_A_hi * S_N_hi);
-        } else if (cond == 2) {
-          const double S_B_lo = safe_surv_at_race_scalar(parB, lo, min_surv, cdf1, model_ctx);
-          const double S_B_hi = safe_surv_at_race_scalar(parB, hi, min_surv, cdf1, model_ctx);
-          p_j = std::max(0.0, S_B_lo * S_N_lo - S_B_hi * S_N_hi);
+        if (cond == 0 || !(hi > lo)) {
+          p_j = 0.0;
         } else {
-          const double S_A_lo = safe_surv_at_race_scalar(parA, lo, min_surv, cdf1, model_ctx);
-          const double S_B_lo = safe_surv_at_race_scalar(parB, lo, min_surv, cdf1, model_ctx);
-          const double S_A_hi = safe_surv_at_race_scalar(parA, hi, min_surv, cdf1, model_ctx);
-          const double S_B_hi = safe_surv_at_race_scalar(parB, hi, min_surv, cdf1, model_ctx);
-          p_j = std::max(0.0, S_A_lo * S_B_lo * S_N_lo - S_A_hi * S_B_hi * S_N_hi);
+          pars_rowmajor_buf.resize(static_cast<size_t>(3 * n_par));
+          int isok_buf[3] = {1, 1, 1};
+          std::memcpy(pars_rowmajor_buf.data(), parN, static_cast<size_t>(n_par) * sizeof(double));
+          int n_active = 1;
+          if (cond == 1 || cond == 3) {
+            std::memcpy(pars_rowmajor_buf.data() + n_active * n_par, parA,
+                        static_cast<size_t>(n_par) * sizeof(double));
+            ++n_active;
+          }
+          if (cond == 2 || cond == 3) {
+            std::memcpy(pars_rowmajor_buf.data() + n_active * n_par, parB,
+                        static_cast<size_t>(n_par) * sizeof(double));
+            ++n_active;
+          }
+          double p_go_win = 0.0;
+          for (int kw = 2; kw <= n_active; ++kw) {  // 1 = nogo, never a winner here
+            const double lg = integrate_for_kth_winner_rowmajor_cpp(
+              kw, pars_rowmajor_buf.data(), isok_buf, lo, hi,
+              pdf1, cdf1, n_active, n_par, gsl_ctl, model_ctx, w);
+            if (R_FINITE(lg)) p_go_win += std::exp(lg);
+          }
+          p_j = p_go_win;
         }
       }
     }
@@ -4098,12 +4215,18 @@ static double c_log_likelihood_logicalrules(
     const int idxnA = shared.idxnA[static_cast<size_t>(j)];
     const int idxnB = shared.idxnB[static_cast<size_t>(j)];
 
-    if (idxA < 0 || idxB < 0 || idxnA < 0 || idxnB < 0 ||
-        !ok_params[idxA] || !ok_params[idxB] || !ok_params[idxnA] || !ok_params[idxnB]) {
-      if (shared.rule_code[static_cast<size_t>(j)] <= 4) {
-        ll_unique[static_cast<size_t>(j)] = min_ll;
-        continue;
-      }
+    const int rule_code = shared.rule_code[static_cast<size_t>(j)];
+    // Parameter-validity gate. OR/AND/XOR/ID need all four accumulators;
+    // detection rules (5/6) need valid A and B (the nogo row for rule 6 is
+    // checked below). Without this, censored detection branches would
+    // evaluate survivors/densities with out-of-bounds parameters.
+    const bool pars_valid = (rule_code <= 4)
+      ? (idxA >= 0 && idxB >= 0 && idxnA >= 0 && idxnB >= 0 &&
+         ok_params[idxA] && ok_params[idxB] && ok_params[idxnA] && ok_params[idxnB])
+      : (idxA >= 0 && idxB >= 0 && ok_params[idxA] && ok_params[idxB]);
+    if (!pars_valid) {
+      ll_unique[static_cast<size_t>(j)] = min_ll;
+      continue;
     }
 
     const double t = shared.rt_unique[static_cast<size_t>(j)];
@@ -4111,7 +4234,6 @@ static double c_log_likelihood_logicalrules(
     copy_par_row_colmajor(pars_cm_ptr, n_trials, n_par, idxB, parB.data());
     if (idxnA >= 0) copy_par_row_colmajor(pars_cm_ptr, n_trials, n_par, idxnA, parnA.data());
     if (idxnB >= 0) copy_par_row_colmajor(pars_cm_ptr, n_trials, n_par, idxnB, parnB.data());
-    const int rule_code = shared.rule_code[static_cast<size_t>(j)];
     if (rule_code == 6) {
       const int idxN = shared.idxNogo[static_cast<size_t>(j)];
       if (idxN < 0 || !ok_params[idxN]) {
@@ -4196,19 +4318,50 @@ static double c_log_likelihood_logicalrules(
           p_j = std::max(0.0, Q_A * Q_B - G_A_uc * G_B_uc);
         }
       } else if (!R_FINITE(t) && t < 0.0) {
-        // Lower censor (-Inf): winner unknown, some accumulator fired in [LT, LC].
-        // Rule-independent: P = S_joint(LT) − S_joint(LC).
+        // Lower censor (-Inf): an overt rule response occurred in [LT, LC],
+        // with identity resp_code when recorded (0 = unknown). The response is
+        // NOT the first accumulator event — each rule triggers on its own
+        // channel-outcome pattern — so the mass is a difference of rule
+        // response CDFs built from the channel states at the window ends
+        // (previously this used S_joint(LT) - S_joint(LC), the first-event
+        // mass, which overcounts whenever one channel resolves without an
+        // overt response having occurred yet).
         const double lo = std::max(0.0, shared.LT_unique[static_cast<size_t>(j)]);
         const double hi = std::max(lo,  shared.LC_unique[static_cast<size_t>(j)]);
-        const double Slo = safe_surv_at_race_scalar(parA.data(),  lo, kMinSurv, cdf1, model_ctx)
-                         * safe_surv_at_race_scalar(parnA.data(), lo, kMinSurv, cdf1, model_ctx)
-                         * safe_surv_at_race_scalar(parB.data(),  lo, kMinSurv, cdf1, model_ctx)
-                         * safe_surv_at_race_scalar(parnB.data(), lo, kMinSurv, cdf1, model_ctx);
-        const double Shi = safe_surv_at_race_scalar(parA.data(),  hi, kMinSurv, cdf1, model_ctx)
-                         * safe_surv_at_race_scalar(parnA.data(), hi, kMinSurv, cdf1, model_ctx)
-                         * safe_surv_at_race_scalar(parB.data(),  hi, kMinSurv, cdf1, model_ctx)
-                         * safe_surv_at_race_scalar(parnB.data(), hi, kMinSurv, cdf1, model_ctx);
-        p_j = std::max(0.0, Slo - Shi);
+        const int resp_lc = shared.resp_code[static_cast<size_t>(j)];
+        const bool ch_eq_lc =
+          row_equal_colmajor(pars_cm_ptr, n_trials, n_par, idxA, idxB) &&
+          row_equal_colmajor(pars_cm_ptr, n_trials, n_par, idxnA, idxnB);
+        LrChannelState A_lo, A_hi, B_lo, B_hi;
+        bool states_ok =
+          lr_channel_state_at(lo, parA.data(), parnA.data(), n_par, kMinSurv,
+                              model_ctx, pdf1, cdf1, gsl_ctl, w,
+                              pars_2buf.data(), isok_2buf, A_lo) &&
+          lr_channel_state_at(hi, parA.data(), parnA.data(), n_par, kMinSurv,
+                              model_ctx, pdf1, cdf1, gsl_ctl, w,
+                              pars_2buf.data(), isok_2buf, A_hi);
+        if (states_ok) {
+          if (ch_eq_lc) {
+            B_lo = A_lo;
+            B_hi = A_hi;
+          } else {
+            states_ok =
+              lr_channel_state_at(lo, parB.data(), parnB.data(), n_par, kMinSurv,
+                                  model_ctx, pdf1, cdf1, gsl_ctl, w,
+                                  pars_2buf.data(), isok_2buf, B_lo) &&
+              lr_channel_state_at(hi, parB.data(), parnB.data(), n_par, kMinSurv,
+                                  model_ctx, pdf1, cdf1, gsl_ctl, w,
+                                  pars_2buf.data(), isok_2buf, B_hi);
+          }
+        }
+        if (!states_ok) { ll_unique[static_cast<size_t>(j)] = min_ll; continue; }
+        const double cdf_hi = lr_response_cdf(rule_code_nc, resp_lc, A_hi, B_hi);
+        const double cdf_lo = lr_response_cdf(rule_code_nc, resp_lc, A_lo, B_lo);
+        if (ISNAN(cdf_hi) || ISNAN(cdf_lo)) {
+          ll_unique[static_cast<size_t>(j)] = min_ll;
+          continue;
+        }
+        p_j = std::max(0.0, cdf_hi - cdf_lo);
       }
       if (!(p_j > 0.0) || !R_FINITE(p_j)) {
         ll_unique[static_cast<size_t>(j)] = min_ll;
@@ -4513,6 +4666,12 @@ double c_log_likelihood_race(
     Rcpp::stop("c_log_likelihood_race: isok size does not match pars matrix rows.");
   }
   const int n_par = pars.ncol();
+  // Several branches below stage one accumulator row (or one pointer per
+  // accumulator) in fixed stack arrays of 64 entries; guard the sizes here so
+  // a future wide model fails loudly instead of overflowing the stack.
+  if (n_par > 64 || n_lR > 64) {
+    Rcpp::stop("c_log_likelihood_race: at most 64 parameter columns and 64 accumulators are supported.");
+  }
   std::vector<double> pars_rowmajor_buffer(static_cast<size_t>(n_lR) * n_par);
   std::vector<int> isok_int_buffer(static_cast<size_t>(n_lR), 0);
   std::vector<double> logS_k_buffer(static_cast<size_t>(n_lR), R_NegInf);
@@ -4795,7 +4954,7 @@ double c_log_likelihood_race(
           return ans;
         }
         double log_p = 0.0;
-        double par_buf_inf[16];
+        double par_buf_inf[64];
         for (int k = 0; k < n_lR_j; ++k) {
           const int row = start_row_idx + k;
           if (!isok[row]) return R_NegInf;
