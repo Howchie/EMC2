@@ -709,7 +709,8 @@ double c_log_likelihood_race(
     NumericVector* trial_ll_out = nullptr);
 
 static double c_log_likelihood_logicalrules(
-    const Rcpp::NumericMatrix& pars,
+    const double* const* pars_cols,
+    int n_par,
     const Rcpp::IntegerVector& expand,
     double min_ll,
     const Rcpp::LogicalVector& ok_params,
@@ -2817,11 +2818,19 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
       LogicalRulesSharedState logicalrules_shared =
         build_logicalrules_shared_state(data, n_trials, n_lR);
 
+      // Column pointers into ParamTable base in p_types order; base column
+      // addresses are particle-invariant, so this replaces the per-particle
+      // materialization copy. Padded with nullptr slots for optional columns.
+      const int n_par_lr = keep_names.size();
+      std::vector<const double*> lr_cols(std::max(n_par_lr, 16), nullptr);
+      for (int j = 0; j < n_par_lr; ++j) {
+        lr_cols[j] = &param_table_template.base(
+            0, param_table_template.base_index_for(Rcpp::as<std::string>(keep_names[j])));
+      }
       for (int i = 0; i < n_particles; ++i) {
         is_ok = prepare_particle(i);
         is_ok = lr_all(is_ok, n_lR);
-        pars = pt.materialize_reusable();
-        lls[i] = c_log_likelihood_logicalrules(pars, expand, min_ll, is_ok, n_lR,
+        lls[i] = c_log_likelihood_logicalrules(lr_cols.data(), n_par_lr, expand, min_ll, is_ok, n_lR,
                                                &adapter.ctx, adapter.pdf1_ptr, adapter.cdf1_ptr,
                                                adapter.model_dfun_raw, adapter.model_pfun_raw,
                                                logicalrules_shared, nullptr);
@@ -2867,12 +2876,12 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
     const int* expand_ptr = expand.begin();
     const int n_exp = expand.length();
 
-    // Pre-allocated staging buffer: copies base columns into p_types order so
-    // raw model functions (dlba_raw etc.) see the column layout they expect.
-    // Populated once per particle from param_table_template.base.
-    std::vector<int>    race_base_col_order;  // base_idx for each keep_names entry
-    std::vector<double> race_staging_buf;     // n_trials * keep_names.size()
-    int fast_pc_staging_col = -1;             // keep_names position of pContaminant
+    // Column pointers into ParamTable base, in p_types order (the layout the
+    // raw kernels expect per src/col_registry.h). Base column addresses are
+    // particle-invariant — prepare_particle refills values in place — so the
+    // pointer array is built once, replacing the old per-particle staging copy.
+    std::vector<const double*> race_cols;     // keep_names.size() pointers
+    int fast_pc_col = -1;                     // keep_names position of pContaminant
 
     std::vector<int> time_win_int_buf;
     std::vector<double> alt_res_buf_fp;
@@ -2915,18 +2924,23 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
       rts_fp_hold = data["rt"];
       rt_ptr = rts_fp_hold.begin();
 
-      // Build column-order mapping: keep_names[j] -> base column index
+      // Resolve keep_names[j] -> base column pointer once; kernels index the
+      // leading columns positionally, so a missing required column is fatal.
+      // Pad with nullptr slots: kernels may fetch (not dereference) pointers
+      // for optional trailing columns that this model variant lacks.
       const int n_kn = keep_names.size();
-      race_base_col_order.resize(n_kn, -1);
+      race_cols.assign(std::max(n_kn, 16), nullptr);
       for (int j = 0; j < n_kn; ++j) {
         std::string nm = Rcpp::as<std::string>(keep_names[j]);
         auto it = param_table_template.name_to_base_idx.find(nm);
         if (it != param_table_template.name_to_base_idx.end()) {
-          race_base_col_order[j] = it->second;
+          race_cols[j] = &param_table_template.base(0, it->second);
+        } else if (j < adapter.col_spec.n_required) {
+          Rcpp::stop("calc_ll_oo: required parameter column '%s' missing from ParamTable.",
+                     nm.c_str());
         }
-        if (nm == "pContaminant") fast_pc_staging_col = j;
+        if (nm == "pContaminant") fast_pc_col = j;
       }
-      race_staging_buf.resize(static_cast<size_t>(n_trials) * n_kn);
     }
 
     // --- Build shared state for the mixed (non-raw-fast) path ---
@@ -2946,25 +2960,13 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
         // Fill per-particle isok buffer
         for (int j = 0; j < n_trials; ++j) isok_int_fp[j] = is_ok[j] ? 1 : 0;
 
-        // Copy base columns into staging buffer in p_types order so raw model
-        // functions (dlba_raw, drdm_raw, etc.) see the expected column layout.
-        const int n_kn = (int)race_base_col_order.size();
-        for (int col = 0; col < n_kn; ++col) {
-          const int bidx = race_base_col_order[col];
-          if (bidx < 0) continue;
-          std::memcpy(race_staging_buf.data() + col * n_trials,
-                      &param_table_template.base(0, bidx),
-                      static_cast<size_t>(n_trials) * sizeof(double));
-        }
-        const double* pars_cm = race_staging_buf.data();
+        const double* const* pars_cols = race_cols.data();
         adapter.ctx.mode_hint = 0;
         adapter.ctx.kill_active = true;
         // Set once-per-particle mode hints so raw kernels can skip per-row
         // variability checks in common zero-variability cases.
         if (type_std.find("RDMSWTN") != std::string::npos) {
-          const double* sv_col = pars_cm + emc2col::rdmswtn::sv * n_trials;
-          const double* lambda_g_col = pars_cm + emc2col::rdmswtn::mG * n_trials;
-          const double* lambda_k_col = pars_cm + emc2col::rdmswtn::mK * n_trials;
+          const double* sv_col = pars_cols[emc2col::rdmswtn::sv];
           bool sv_zero = true;
           bool lambda_active = false;
           for (int j = 0; j < n_trials; ++j) {
@@ -2977,6 +2979,8 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
           const bool any_erlang = adapter.ctx.is_global_kill || adapter.ctx.is_local_kill ||
                                   adapter.ctx.is_local_guess || adapter.ctx.is_local_kill_guess;
           if (any_erlang) {
+            const double* lambda_g_col = pars_cols[emc2col::rdmswtn::mG];
+            const double* lambda_k_col = pars_cols[emc2col::rdmswtn::mK];
             for (int j = 0; j < n_trials; ++j) {
               if (!isok_int_fp[j]) continue;
               const double lg = erlang_lambda_from_mean(lambda_g_col[j], adapter.ctx.kill_shape);
@@ -2999,30 +3003,30 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
         if (time_code != -1) adapter.ctx.floor_raw_log_lik = false;
 
         // Log-density for winner rows
-        adapter.model_dfun_raw(rt_ptr, pars_cm, n_trials,
+        adapter.model_dfun_raw(rt_ptr, pars_cols, n_trials,
                                winner_int_buf.data(), isok_int_fp.data(),
                                res_buf.data(), min_ll, &adapter.ctx);
 
         // Log-survivor for loser rows (writes into same buffer, different slots)
         if (n_lR > 1) {
-          adapter.model_pfun_raw(rt_ptr, pars_cm, n_trials,
+          adapter.model_pfun_raw(rt_ptr, pars_cols, n_trials,
                                  loser_int_buf.data(), isok_int_fp.data(),
                                  res_buf.data(), min_ll, &adapter.ctx);
         }
 
         if (time_code != -1) {
           // Get f_T
-          adapter.model_dfun_raw(rt_ptr, pars_cm, n_trials,
+          adapter.model_dfun_raw(rt_ptr, pars_cols, n_trials,
                                  time_win_int_buf.data(), isok_int_fp.data(),
                                  alt_res_buf_fp.data(), min_ll, &adapter.ctx);
           // Get S_W
-          adapter.model_pfun_raw(rt_ptr, pars_cm, n_trials,
+          adapter.model_pfun_raw(rt_ptr, pars_cols, n_trials,
                                  winner_int_buf.data(), isok_int_fp.data(),
                                  alt_res_buf_fp.data(), min_ll, &adapter.ctx);
           adapter.ctx.floor_raw_log_lik = floor_raw_log_lik_prev;
         } else if (adapter.ctx.is_global_kill && adapter.ctx.kill_active) {
           // Pre-fill log S_K at the winner row for each trial.
-          const double* mean_k_ptr = pars_cm + adapter.ctx.mean_k_index * n_trials;
+          const double* mean_k_ptr = pars_cols[adapter.ctx.mean_k_index];
           for (int j = 0; j < n_trials; ++j) {
             if (!isok_int_fp[j] || !winner_int_buf[j]) continue;
             const double tt = rt_ptr[j];
@@ -3062,8 +3066,8 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
             }
           }
           s = s < min_ll ? min_ll : s;
-          if (fast_pc_staging_col >= 0) {
-            const double pC = pars_cm[fast_pc_staging_col * n_trials + base];
+          if (fast_pc_col >= 0) {
+            const double pC = pars_cols[fast_pc_col][base];
             if (pC != 0.0) s += std::log1p(-pC);
           }
           ll_uniq_buf[j] = s;
@@ -3192,12 +3196,17 @@ NumericMatrix calc_ll_oo_pw(NumericMatrix particle_matrix, DataFrame data, Numer
     if (is_logicalrules) {
       LogicalRulesSharedState logicalrules_shared =
         build_logicalrules_shared_state(data, n_trials, n_lR);
+      const int n_par_lr = keep_names.size();
+      std::vector<const double*> lr_cols(std::max(n_par_lr, 16), nullptr);
+      for (int j = 0; j < n_par_lr; ++j) {
+        lr_cols[j] = &param_table_template.base(
+            0, param_table_template.base_index_for(Rcpp::as<std::string>(keep_names[j])));
+      }
       for (int i = 0; i < n_particles; ++i) {
         is_ok = pt.prepare(i);
         is_ok = lr_all(is_ok, n_lR);
-        pars = pt.materialize_reusable();
         NumericVector row_vec(n_out_race);
-        c_log_likelihood_logicalrules(pars, expand, min_ll, is_ok, n_lR,
+        c_log_likelihood_logicalrules(lr_cols.data(), n_par_lr, expand, min_ll, is_ok, n_lR,
                                       &adapter.ctx, adapter.pdf1_ptr, adapter.cdf1_ptr,
                                       adapter.model_dfun_raw, adapter.model_pfun_raw,
                                       logicalrules_shared, &row_vec);
@@ -3576,24 +3585,21 @@ double get_trunc_normaliser_rowmajor_cpp(const double* pars_rowmajor,
   return R_NegInf;
 }
 
-static inline void copy_par_row_colmajor(const double* pars_cm_ptr,
-                                         int n_rows,
+static inline void copy_par_row_colmajor(const double* const* cols,
                                          int n_par,
                                          int row_idx,
                                          double* out_row) {
   for (int c = 0; c < n_par; ++c) {
-    out_row[c] = pars_cm_ptr[static_cast<size_t>(c) * n_rows + row_idx];
+    out_row[c] = cols[c][row_idx];
   }
 }
 
-static inline bool row_equal_colmajor(const double* pars_cm_ptr,
-                                      int n_rows,
+static inline bool row_equal_colmajor(const double* const* cols,
                                       int n_par,
                                       int row_a,
                                       int row_b) {
   for (int c = 0; c < n_par; ++c) {
-    if (pars_cm_ptr[static_cast<size_t>(c) * n_rows + row_a] !=
-        pars_cm_ptr[static_cast<size_t>(c) * n_rows + row_b]) {
+    if (cols[c][row_a] != cols[c][row_b]) {
       return false;
     }
   }
@@ -4086,7 +4092,8 @@ static double logicalrules_detection_trial_ll(
 }
 
 static double c_log_likelihood_logicalrules(
-    const Rcpp::NumericMatrix& pars,
+    const double* const* pars_cols,
+    int n_par,
     const Rcpp::IntegerVector& expand,
     double min_ll,
     const Rcpp::LogicalVector& ok_params,
@@ -4102,15 +4109,16 @@ static double c_log_likelihood_logicalrules(
     Rcpp::stop("c_log_likelihood_logicalrules: invalid logical-rules configuration.");
   }
   const int n_trials = shared.n_trials;
-  if (pars.nrow() != n_trials || ok_params.size() != n_trials) {
-    Rcpp::stop("c_log_likelihood_logicalrules: pars/ok_params sizes must match shared data.");
+  if (ok_params.size() != n_trials) {
+    Rcpp::stop("c_log_likelihood_logicalrules: ok_params size must match shared data.");
   }
   if (n_trials == 0) return 0.0;
+  if (n_par > 64) {
+    Rcpp::stop("c_log_likelihood_logicalrules: at most 64 parameter columns are supported.");
+  }
 
   static const double kMinSurv = 1e-300;
-  const int n_par = pars.ncol();
   const int n_unique_trials = shared.n_unique_trials;
-  const double* pars_cm_ptr = pars.begin();
   static thread_local LogicalRulesScratch scratch;
   resize_assign_double(scratch.ll_unique, static_cast<size_t>(n_unique_trials), min_ll);
   std::vector<double>& ll_unique = scratch.ll_unique;
@@ -4143,10 +4151,10 @@ static double c_log_likelihood_logicalrules(
     resize_assign_int(all_mask, static_cast<size_t>(n_trials), 1);
     isok_int_all.resize(static_cast<size_t>(n_trials));
     for (int i = 0; i < n_trials; ++i) isok_int_all[static_cast<size_t>(i)] = ok_params[i] ? 1 : 0;
-    model_dfun_raw(shared.rt_by_row.data(), pars_cm_ptr, n_trials,
+    model_dfun_raw(shared.rt_by_row.data(), pars_cols, n_trials,
                    all_mask.data(), isok_int_all.data(),
                    logf_all.data(), min_ll, model_ctx);
-    model_pfun_raw(shared.rt_by_row.data(), pars_cm_ptr, n_trials,
+    model_pfun_raw(shared.rt_by_row.data(), pars_cols, n_trials,
                    all_mask.data(), isok_int_all.data(),
                    logS_all.data(), min_ll, model_ctx);
   }
@@ -4187,9 +4195,9 @@ static double c_log_likelihood_logicalrules(
       const int iA  = shared.idxA[j],  inA = shared.idxnA[j];
       const int iB  = shared.idxB[j],  inB = shared.idxnB[j];
       const double t0nA = (t0_col >= 0 && t0_col < n_par && inA >= 0)
-                        ? pars_cm_ptr[static_cast<size_t>(t0_col) * n_trials + inA] : 0.0;
+                        ? pars_cols[t0_col][inA] : 0.0;
       const double t0nB = (t0_col >= 0 && t0_col < n_par && inB >= 0)
-                        ? pars_cm_ptr[static_cast<size_t>(t0_col) * n_trials + inB] : 0.0;
+                        ? pars_cols[t0_col][inB] : 0.0;
       const double RT = shared.rt_unique[j];
       const double loA = std::max(0.0, t0nA);
       const double loB = std::max(0.0, t0nB);
@@ -4198,8 +4206,8 @@ static double c_log_likelihood_logicalrules(
       gl_h_A[static_cast<size_t>(j)] = (RT > loA) ? (RT - loA) * 0.5 : 0.0;
       gl_h_B[static_cast<size_t>(j)] = (RT > loB) ? (RT - loB) * 0.5 : 0.0;
       ch_eq_vec[j] = (inA >= 0 && inB >= 0) &&
-                     row_equal_colmajor(pars_cm_ptr, n_trials, n_par, iA, iB) &&
-                     row_equal_colmajor(pars_cm_ptr, n_trials, n_par, inA, inB);
+                     row_equal_colmajor(pars_cols, n_par, iA, iB) &&
+                     row_equal_colmajor(pars_cols, n_par, inA, inB);
       if (!ch_eq_vec[j]) any_unequal = true;
       pair_ok_A[static_cast<size_t>(j)] =
         (iA >= 0 && inA >= 0 && ok_params[iA] && ok_params[inA] &&
@@ -4231,7 +4239,7 @@ static double c_log_likelihood_logicalrules(
       isok_B.resize(static_cast<size_t>(n_unique_trials));
     }
     for (int p = 0; p < n_par; ++p) {
-      const double* src = pars_cm_ptr + static_cast<size_t>(p) * n_trials;
+      const double* src = pars_cols[p];
       double* d_nA = pars_nA.data() + static_cast<size_t>(p) * n_unique_trials;
       double* d_A  = pars_A.data()  + static_cast<size_t>(p) * n_unique_trials;
       for (int j = 0; j < n_unique_trials; ++j) {
@@ -4258,6 +4266,22 @@ static double c_log_likelihood_logicalrules(
       }
     }
 
+    // Column-pointer views of the compact role matrices for the raw kernels.
+    // Slots beyond n_par stay nullptr: kernels may fetch (not dereference)
+    // optional trailing columns this model variant lacks.
+    const double* colsp_nA[64] = {nullptr};
+    const double* colsp_A[64]  = {nullptr};
+    const double* colsp_nB[64] = {nullptr};
+    const double* colsp_B[64]  = {nullptr};
+    for (int p = 0; p < n_par; ++p) {
+      colsp_nA[p] = pars_nA.data() + static_cast<size_t>(p) * n_unique_trials;
+      colsp_A[p]  = pars_A.data()  + static_cast<size_t>(p) * n_unique_trials;
+      if (any_unequal) {
+        colsp_nB[p] = pars_nB.data() + static_cast<size_t>(p) * n_unique_trials;
+        colsp_B[p]  = pars_B.data()  + static_cast<size_t>(p) * n_unique_trials;
+      }
+    }
+
     resize_assign_double(GA_no_gl, static_cast<size_t>(n_unique_trials), 0.0);
     resize_assign_double(GB_no_gl, static_cast<size_t>(n_unique_trials), 0.0);
 
@@ -4281,9 +4305,9 @@ static double c_log_likelihood_logicalrules(
         gl_rt[static_cast<size_t>(j)] = gl_lo_A[static_cast<size_t>(j)]
                                       + gl_h_A[static_cast<size_t>(j)] * (1.0 + xi);
       }
-      model_dfun_raw(gl_rt.data(), pars_nA.data(), n_unique_trials,
+      model_dfun_raw(gl_rt.data(), colsp_nA, n_unique_trials,
                      all1.data(), isok_nA.data(), lf_nA.data(), min_ll, model_ctx);
-      model_pfun_raw(gl_rt.data(), pars_A.data(),  n_unique_trials,
+      model_pfun_raw(gl_rt.data(), colsp_A,  n_unique_trials,
                      all1.data(), isok_A.data(),  lS_A.data(),  min_ll, model_ctx);
       #pragma omp simd
       for (int j = 0; j < n_unique_trials; ++j)
@@ -4294,9 +4318,9 @@ static double c_log_likelihood_logicalrules(
           gl_rt[static_cast<size_t>(j)] = gl_lo_B[static_cast<size_t>(j)]
                                         + gl_h_B[static_cast<size_t>(j)] * (1.0 + xi);
         }
-        model_dfun_raw(gl_rt.data(), pars_nB.data(), n_unique_trials,
+        model_dfun_raw(gl_rt.data(), colsp_nB, n_unique_trials,
                        all1.data(), isok_nB.data(), lf_nB.data(), min_ll, model_ctx);
-        model_pfun_raw(gl_rt.data(), pars_B.data(),  n_unique_trials,
+        model_pfun_raw(gl_rt.data(), colsp_B,  n_unique_trials,
                        all1.data(), isok_B.data(),  lS_B.data(),  min_ll, model_ctx);
         #pragma omp simd
         for (int j = 0; j < n_unique_trials; ++j)
@@ -4403,9 +4427,9 @@ static double c_log_likelihood_logicalrules(
             gl_rt[static_cast<size_t>(j)] = gl_lo_A[static_cast<size_t>(j)]
                                           + hA[j] * (1.0 + xi);
           }
-          model_dfun_raw(gl_rt.data(), pars_nA.data(), n_unique_trials,
+          model_dfun_raw(gl_rt.data(), colsp_nA, n_unique_trials,
                          msk, isok_nA_b.data(), lf_nA.data(), min_ll, model_ctx);
-          model_pfun_raw(gl_rt.data(), pars_A.data(),  n_unique_trials,
+          model_pfun_raw(gl_rt.data(), colsp_A,  n_unique_trials,
                          msk, isok_A_b.data(),  lS_A.data(),  min_ll, model_ctx);
           for (int j = 0; j < n_unique_trials; ++j) {
             if (msk[j]) GA[j] += wt * hA[j] * std::exp(lf_nA[j] + lS_A[j]);
@@ -4416,9 +4440,9 @@ static double c_log_likelihood_logicalrules(
               gl_rt[static_cast<size_t>(j)] = gl_lo_B[static_cast<size_t>(j)]
                                             + hB[j] * (1.0 + xi);
             }
-            model_dfun_raw(gl_rt.data(), pars_nB.data(), n_unique_trials,
+            model_dfun_raw(gl_rt.data(), colsp_nB, n_unique_trials,
                            msk, isok_nB_b.data(), lf_nB.data(), min_ll, model_ctx);
-            model_pfun_raw(gl_rt.data(), pars_B.data(),  n_unique_trials,
+            model_pfun_raw(gl_rt.data(), colsp_B,  n_unique_trials,
                            msk, isok_B_b.data(),  lS_B.data(),  min_ll, model_ctx);
             for (int j = 0; j < n_unique_trials; ++j) {
               if (msk[j] && !ch_eq_vec[static_cast<size_t>(j)]) {
@@ -4472,24 +4496,24 @@ static double c_log_likelihood_logicalrules(
     }
 
     const double t = shared.rt_unique[static_cast<size_t>(j)];
-    copy_par_row_colmajor(pars_cm_ptr, n_trials, n_par, idxA, parA.data());
-    copy_par_row_colmajor(pars_cm_ptr, n_trials, n_par, idxB, parB.data());
-    if (idxnA >= 0) copy_par_row_colmajor(pars_cm_ptr, n_trials, n_par, idxnA, parnA.data());
-    if (idxnB >= 0) copy_par_row_colmajor(pars_cm_ptr, n_trials, n_par, idxnB, parnB.data());
+    copy_par_row_colmajor(pars_cols, n_par, idxA, parA.data());
+    copy_par_row_colmajor(pars_cols, n_par, idxB, parB.data());
+    if (idxnA >= 0) copy_par_row_colmajor(pars_cols, n_par, idxnA, parnA.data());
+    if (idxnB >= 0) copy_par_row_colmajor(pars_cols, n_par, idxnB, parnB.data());
     if (rule_code == 6) {
       const int idxN = shared.idxNogo[static_cast<size_t>(j)];
       if (idxN < 0 || !ok_params[idxN]) {
         ll_unique[static_cast<size_t>(j)] = min_ll;
         continue;
       }
-      copy_par_row_colmajor(pars_cm_ptr, n_trials, n_par, idxN, parN.data());
+      copy_par_row_colmajor(pars_cols, n_par, idxN, parN.data());
     }
 
     // Channel-parameter equality (A vs B), shared by the truncation
     // normaliser and the censoring branches below.
     const bool ch_eq_j = (rule_code <= 4) &&
-      row_equal_colmajor(pars_cm_ptr, n_trials, n_par, idxA, idxB) &&
-      row_equal_colmajor(pars_cm_ptr, n_trials, n_par, idxnA, idxnB);
+      row_equal_colmajor(pars_cols, n_par, idxA, idxB) &&
+      row_equal_colmajor(pars_cols, n_par, idxnA, idxnB);
 
     // Sub-race win probability G_no at time tt for one channel. The GL
     // pre-pass batch-computes these at the aux slots (LT/UT/censor bounds);
@@ -4727,8 +4751,8 @@ static double c_log_likelihood_logicalrules(
     const bool is_xor_rule = (rule_code_lr == 3);
     const bool is_id_rule = (rule_code_lr == 4);
     const bool channels_equal = use_gl_pass ? ch_eq_vec[static_cast<size_t>(j)]
-        : (row_equal_colmajor(pars_cm_ptr, n_trials, n_par, idxA, idxB) &&
-           row_equal_colmajor(pars_cm_ptr, n_trials, n_par, idxnA, idxnB));
+        : (row_equal_colmajor(pars_cols, n_par, idxA, idxB) &&
+           row_equal_colmajor(pars_cols, n_par, idxnA, idxnB));
 
     double p_j = 0.0;
     if (is_or_rule || is_and_rule) {
@@ -4996,6 +5020,12 @@ double c_log_likelihood_race(
   // a future wide model fails loudly instead of overflowing the stack.
   if (n_par > 64 || n_lR > 64) {
     Rcpp::stop("c_log_likelihood_race: at most 64 parameter columns and 64 accumulators are supported.");
+  }
+  // Column-pointer view of the materialized pars matrix for the raw kernels
+  // (this path keeps the matrix: the RACE NA-fill above writes into it).
+  const double* cols_view[64] = {nullptr};
+  for (int c = 0; c < n_par; ++c) {
+    cols_view[c] = pars_cm_ptr + static_cast<size_t>(c) * n_trials;
   }
   std::vector<double> pars_rowmajor_buffer(static_cast<size_t>(n_lR) * n_par);
   std::vector<int> isok_int_buffer(static_cast<size_t>(n_lR), 0);
@@ -5424,7 +5454,7 @@ double c_log_likelihood_race(
     }
 
     const double* rt_ptr = rts_dadm.begin();
-    const double* pars_cm = pars.begin();
+    const double* const* pars_cm = cols_view;
     const bool dense_floor_raw_log_lik_prev = dense_ctx.floor_raw_log_lik;
     if (has_time) dense_ctx.floor_raw_log_lik = false;
     if (any_win) {
@@ -5562,7 +5592,7 @@ double c_log_likelihood_race(
         std::vector<double> logS_LT_vec(static_cast<size_t>(n_unique_trials), 0.0);
         if (uniform_LT != 0.0) {
           logS_at_t(uniform_LT,
-                    pars.begin(), n_trials, n_lR, n_par,
+                    cols_view, n_trials, n_lR, n_par,
                     trunc_mask.data(), n_unique_trials,
                     isok_all_ptr_trunc,
                     model_context_for_funcs,
@@ -5573,7 +5603,7 @@ double c_log_likelihood_race(
         std::vector<double> logS_UT_vec(static_cast<size_t>(n_unique_trials), R_NegInf);
         if (uniform_UT != R_PosInf) {
           logS_at_t(uniform_UT,
-                    pars.begin(), n_trials, n_lR, n_par,
+                    cols_view, n_trials, n_lR, n_par,
                     trunc_mask.data(), n_unique_trials,
                     isok_all_ptr_trunc,
                     model_context_for_funcs,

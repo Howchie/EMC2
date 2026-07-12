@@ -6,6 +6,7 @@
 #include <vector>
 #include <string>
 #include <unordered_map>
+#include "col_registry.h"
 #include "utility_functions.h"
 #include "model_RDM.h"
 #include "model_LBA.h"
@@ -29,12 +30,12 @@ typedef double (*RacePdf1Fun)(double rt, const double* par, void* model_specific
 typedef double (*RaceCdf1Fun)(double rt, const double* par, void* model_specific_context);
 
 // Fast-path batch raw kernel: writes log-density or log-survivor to pre-allocated buffer
-typedef void (*RaceRawFun)(const double* rt, const double* pars_cm, int n_rows,
+typedef void (*RaceRawFun)(const double* rt, const double* const* cols, int n_rows,
                            const int* mask, const int* isok,
                            double* out, double min_ll, void* ctx_);
 
 // Batch log-survivor at scalar t for truncation normalisation
-typedef void (*RaceLogSAtTFun)(double t, const double* pars_cm,
+typedef void (*RaceLogSAtTFun)(double t, const double* const* cols,
                                int n_rows_total, int n_lR, int n_par,
                                const int* trunc_mask, int n_unique_trials,
                                const int* isok_all, void* ctx_, double* logS_out);
@@ -289,16 +290,16 @@ inline double plnr_scalar(double t, const double* par, void* /*ctx_*/) {
   return plnorm_std(tt, m, s, true, false);
 }
 
-// RDM: column layout v=0, B=1, A=2, t0=3, s=4
-inline void drdm_raw(const double* rt, const double* pars_cm, int n_rows,
+// Column order per src/col_registry.h.
+inline void drdm_raw(const double* rt, const double* const* cols, int n_rows,
                      const int* mask, const int* isok,
                      double* out, double min_ll, void* ctx_) {
   const bool floor_raw = raw_floor_log_lik(ctx_);
-  const double* v_  = pars_cm + 0 * n_rows;
-  const double* B_  = pars_cm + 1 * n_rows;
-  const double* A_  = pars_cm + 2 * n_rows;
-  const double* t0_ = pars_cm + 3 * n_rows;
-  const double* s_  = pars_cm + 4 * n_rows;
+  const double* v_  = cols[emc2col::rdm::v];
+  const double* B_  = cols[emc2col::rdm::B];
+  const double* A_  = cols[emc2col::rdm::A];
+  const double* t0_ = cols[emc2col::rdm::t0];
+  const double* s_  = cols[emc2col::rdm::s];
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
     if (R_IsNA(v_[i]) || !isok[i]) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
@@ -311,15 +312,15 @@ inline void drdm_raw(const double* rt, const double* pars_cm, int n_rows,
   }
 }
 
-inline void prdm_raw(const double* rt, const double* pars_cm, int n_rows,
+inline void prdm_raw(const double* rt, const double* const* cols, int n_rows,
                      const int* mask, const int* isok,
                      double* out, double min_ll, void* ctx_) {
   const bool floor_raw = raw_floor_log_lik(ctx_);
-  const double* v_  = pars_cm + 0 * n_rows;
-  const double* B_  = pars_cm + 1 * n_rows;
-  const double* A_  = pars_cm + 2 * n_rows;
-  const double* t0_ = pars_cm + 3 * n_rows;
-  const double* s_  = pars_cm + 4 * n_rows;
+  const double* v_  = cols[emc2col::rdm::v];
+  const double* B_  = cols[emc2col::rdm::B];
+  const double* A_  = cols[emc2col::rdm::A];
+  const double* t0_ = cols[emc2col::rdm::t0];
+  const double* s_  = cols[emc2col::rdm::s];
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
     if (R_IsNA(v_[i]) || !isok[i]) { out[i] = 0.0; continue; }
@@ -334,15 +335,15 @@ inline void prdm_raw(const double* rt, const double* pars_cm, int n_rows,
 }
 
 // Truncation survivor helpers (log-survivor at a scalar T, used for normalization)
-inline void rdm_logS_at_t(double t, const double* pars_cm,
+inline void rdm_logS_at_t(double t, const double* const* cols,
                             int n_rows_total, int n_lR, int /*n_par*/,
                             const int* trunc_mask, int n_unique_trials,
                             const int* isok_all, void* /*ctx_*/, double* logS_out) {
-  const double* v_  = pars_cm + 0 * n_rows_total;
-  const double* B_  = pars_cm + 1 * n_rows_total;
-  const double* A_  = pars_cm + 2 * n_rows_total;
-  const double* t0_ = pars_cm + 3 * n_rows_total;
-  const double* s_  = pars_cm + 4 * n_rows_total;
+  const double* v_  = cols[emc2col::rdm::v];
+  const double* B_  = cols[emc2col::rdm::B];
+  const double* A_  = cols[emc2col::rdm::A];
+  const double* t0_ = cols[emc2col::rdm::t0];
+  const double* s_  = cols[emc2col::rdm::s];
   for (int j = 0; j < n_unique_trials; ++j) {
     if (!trunc_mask[j]) continue;
     const int start = j * n_lR;
@@ -363,21 +364,21 @@ inline void rdm_logS_at_t(double t, const double* pars_cm,
   }
 }
 
-inline void drdmgbm_raw(const double* rt, const double* pars_cm, int n_rows,
+inline void drdmgbm_raw(const double* rt, const double* const* cols, int n_rows,
                         const int* mask, const int* isok,
                         double* out, double min_ll, void* ctx_) {
   auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
   const bool floor_raw = raw_floor_log_lik(ctx_);
   const bool global_kill = ctx ? ctx->has_global_kill() : false;
   const int kill_shape   = ctx ? ctx->kill_shape : 1;
-  const double* v_        = pars_cm + 0 * n_rows;
-  const double* B_        = pars_cm + 1 * n_rows;
-  const double* A_        = pars_cm + 2 * n_rows;
-  const double* t0_       = pars_cm + 3 * n_rows;
-  const double* s_        = pars_cm + 4 * n_rows;
-  const double* lambda_g_ = pars_cm + 5 * n_rows;
-  const double* lambda_k_ = pars_cm + 6 * n_rows;
-  const double* omega_    = (kill_shape == 3) ? pars_cm + 7 * n_rows : nullptr;
+  const double* v_        = cols[emc2col::rdmgbm::v];
+  const double* B_        = cols[emc2col::rdmgbm::B];
+  const double* A_        = cols[emc2col::rdmgbm::A];
+  const double* t0_       = cols[emc2col::rdmgbm::t0];
+  const double* s_        = cols[emc2col::rdmgbm::s];
+  const double* lambda_g_ = cols[emc2col::rdmgbm::mG];
+  const double* lambda_k_ = cols[emc2col::rdmgbm::mK];
+  const double* omega_    = (kill_shape == 3) ? cols[emc2col::rdmgbm::omega] : nullptr;
 
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
@@ -410,21 +411,21 @@ inline void drdmgbm_raw(const double* rt, const double* pars_cm, int n_rows,
   }
 }
 
-inline void prdmgbm_raw(const double* rt, const double* pars_cm, int n_rows,
+inline void prdmgbm_raw(const double* rt, const double* const* cols, int n_rows,
                         const int* mask, const int* isok,
                         double* out, double min_ll, void* ctx_) {
   auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
   const bool floor_raw = raw_floor_log_lik(ctx_);
   const bool global_kill = ctx ? ctx->has_global_kill() : false;
   const int kill_shape   = ctx ? ctx->kill_shape : 1;
-  const double* v_        = pars_cm + 0 * n_rows;
-  const double* B_        = pars_cm + 1 * n_rows;
-  const double* A_        = pars_cm + 2 * n_rows;
-  const double* t0_       = pars_cm + 3 * n_rows;
-  const double* s_        = pars_cm + 4 * n_rows;
-  const double* lambda_g_ = pars_cm + 5 * n_rows;
-  const double* lambda_k_ = pars_cm + 6 * n_rows;
-  const double* omega_    = (kill_shape == 3) ? pars_cm + 7 * n_rows : nullptr;
+  const double* v_        = cols[emc2col::rdmgbm::v];
+  const double* B_        = cols[emc2col::rdmgbm::B];
+  const double* A_        = cols[emc2col::rdmgbm::A];
+  const double* t0_       = cols[emc2col::rdmgbm::t0];
+  const double* s_        = cols[emc2col::rdmgbm::s];
+  const double* lambda_g_ = cols[emc2col::rdmgbm::mG];
+  const double* lambda_k_ = cols[emc2col::rdmgbm::mK];
+  const double* omega_    = (kill_shape == 3) ? cols[emc2col::rdmgbm::omega] : nullptr;
 
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
@@ -462,21 +463,21 @@ inline void prdmgbm_raw(const double* rt, const double* pars_cm, int n_rows,
 }
 
 // GBM: column layout v=0, B=1, A=2, t0=3, s=4, mG=5 (guess-clock mean), mK=6 (kill-clock mean)
-inline void rdmgbm_logS_at_t(double t, const double* pars_cm,
+inline void rdmgbm_logS_at_t(double t, const double* const* cols,
                                int n_rows_total, int n_lR, int /*n_par*/,
                                const int* trunc_mask, int n_unique_trials,
                                const int* isok_all, void* ctx_, double* logS_out) {
   auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
   const bool global_kill = ctx ? ctx->has_global_kill() : false;
   const int ks = ctx ? ctx->kill_shape : 1;
-  const double* v_        = pars_cm + 0 * n_rows_total;
-  const double* B_        = pars_cm + 1 * n_rows_total;
-  const double* A_        = pars_cm + 2 * n_rows_total;
-  const double* t0_       = pars_cm + 3 * n_rows_total;
-  const double* s_        = pars_cm + 4 * n_rows_total;
-  const double* lambda_g_ = pars_cm + 5 * n_rows_total;
-  const double* lambda_k_ = pars_cm + 6 * n_rows_total;
-  const double* omega_    = (ks == 3) ? pars_cm + 7 * n_rows_total : nullptr;
+  const double* v_        = cols[emc2col::rdmgbm::v];
+  const double* B_        = cols[emc2col::rdmgbm::B];
+  const double* A_        = cols[emc2col::rdmgbm::A];
+  const double* t0_       = cols[emc2col::rdmgbm::t0];
+  const double* s_        = cols[emc2col::rdmgbm::s];
+  const double* lambda_g_ = cols[emc2col::rdmgbm::mG];
+  const double* lambda_k_ = cols[emc2col::rdmgbm::mK];
+  const double* omega_    = (ks == 3) ? cols[emc2col::rdmgbm::omega] : nullptr;
 
   for (int j = 0; j < n_unique_trials; ++j) {
     if (!trunc_mask[j]) continue;
@@ -528,14 +529,14 @@ inline void rdmgbm_logS_at_t(double t, const double* pars_cm,
   }
 }
 
-// LNR: column layout m=0, s=1, t0=2
-inline void dlnr_raw(const double* rt, const double* pars_cm, int n_rows,
+// Column order per src/col_registry.h.
+inline void dlnr_raw(const double* rt, const double* const* cols, int n_rows,
                      const int* mask, const int* isok,
                      double* out, double min_ll, void* ctx_) {
   const bool floor_raw = raw_floor_log_lik(ctx_);
-  const double* m_  = pars_cm + 0 * n_rows;
-  const double* s_  = pars_cm + 1 * n_rows;
-  const double* t0_ = pars_cm + 2 * n_rows;
+  const double* m_  = cols[emc2col::lnr::m];
+  const double* s_  = cols[emc2col::lnr::s];
+  const double* t0_ = cols[emc2col::lnr::t0];
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
     if (R_IsNA(m_[i]) || !isok[i]) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
@@ -546,12 +547,12 @@ inline void dlnr_raw(const double* rt, const double* pars_cm, int n_rows,
   }
 }
 
-inline void plnr_raw(const double* rt, const double* pars_cm, int n_rows,
+inline void plnr_raw(const double* rt, const double* const* cols, int n_rows,
                      const int* mask, const int* isok,
                      double* out, double min_ll, void* /*ctx_*/) {
-  const double* m_  = pars_cm + 0 * n_rows;
-  const double* s_  = pars_cm + 1 * n_rows;
-  const double* t0_ = pars_cm + 2 * n_rows;
+  const double* m_  = cols[emc2col::lnr::m];
+  const double* s_  = cols[emc2col::lnr::s];
+  const double* t0_ = cols[emc2col::lnr::t0];
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
     if (R_IsNA(m_[i]) || !isok[i]) { out[i] = 0.0; continue; }
@@ -563,13 +564,13 @@ inline void plnr_raw(const double* rt, const double* pars_cm, int n_rows,
   }
 }
 
-inline void lnr_logS_at_t(double t, const double* pars_cm,
+inline void lnr_logS_at_t(double t, const double* const* cols,
                             int n_rows_total, int n_lR, int /*n_par*/,
                             const int* trunc_mask, int n_unique_trials,
                             const int* isok_all, void* /*ctx_*/, double* logS_out) {
-  const double* m_  = pars_cm + 0 * n_rows_total;
-  const double* s_  = pars_cm + 1 * n_rows_total;
-  const double* t0_ = pars_cm + 2 * n_rows_total;
+  const double* m_  = cols[emc2col::lnr::m];
+  const double* s_  = cols[emc2col::lnr::s];
+  const double* t0_ = cols[emc2col::lnr::t0];
   for (int j = 0; j < n_unique_trials; ++j) {
     if (!trunc_mask[j]) continue;
     const int start = j * n_lR;
@@ -607,13 +608,13 @@ inline double prgamma_scalar(double t, const double* par, void* ctx_) {
   return R::pgamma(tt, par[1], 1.0 / par[0], true, false);
 }
 
-inline void drgamma_raw(const double* rt, const double* pars_cm, int n_rows,
+inline void drgamma_raw(const double* rt, const double* const* cols, int n_rows,
                         const int* mask, const int* isok,
                         double* out, double min_ll, void* ctx_) {
   const bool floor_raw = raw_floor_log_lik(ctx_);
-  const double* lambda_ = pars_cm + 0 * n_rows;
-  const double* shape_  = pars_cm + 1 * n_rows;
-  const double* shift_  = pars_cm + 2 * n_rows;
+  const double* lambda_ = cols[emc2col::rgamma::lambda];
+  const double* shape_  = cols[emc2col::rgamma::shape];
+  const double* shift_  = cols[emc2col::rgamma::shift];
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
     if (R_IsNA(lambda_[i]) || R_IsNA(shape_[i]) || R_IsNA(shift_[i]) ||
@@ -628,13 +629,13 @@ inline void drgamma_raw(const double* rt, const double* pars_cm, int n_rows,
   }
 }
 
-inline void prgamma_raw(const double* rt, const double* pars_cm, int n_rows,
+inline void prgamma_raw(const double* rt, const double* const* cols, int n_rows,
                         const int* mask, const int* isok,
                         double* out, double min_ll, void* ctx_) {
   const bool floor_raw = raw_floor_log_lik(ctx_);
-  const double* lambda_ = pars_cm + 0 * n_rows;
-  const double* shape_  = pars_cm + 1 * n_rows;
-  const double* shift_  = pars_cm + 2 * n_rows;
+  const double* lambda_ = cols[emc2col::rgamma::lambda];
+  const double* shape_  = cols[emc2col::rgamma::shape];
+  const double* shift_  = cols[emc2col::rgamma::shift];
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
     if (R_IsNA(lambda_[i]) || R_IsNA(shape_[i]) || R_IsNA(shift_[i]) ||
@@ -650,14 +651,14 @@ inline void prgamma_raw(const double* rt, const double* pars_cm, int n_rows,
   }
 }
 
-inline void rgamma_logS_at_t(double t, const double* pars_cm,
+inline void rgamma_logS_at_t(double t, const double* const* cols,
                              int n_rows_total, int n_lR, int /*n_par*/,
                              const int* trunc_mask, int n_unique_trials,
                              const int* isok_all, void* ctx_, double* logS_out) {
   (void)ctx_;
-  const double* lambda_ = pars_cm + 0 * n_rows_total;
-  const double* shape_  = pars_cm + 1 * n_rows_total;
-  const double* shift_  = pars_cm + 2 * n_rows_total;
+  const double* lambda_ = cols[emc2col::rgamma::lambda];
+  const double* shape_  = cols[emc2col::rgamma::shape];
+  const double* shift_  = cols[emc2col::rgamma::shift];
   for (int j = 0; j < n_unique_trials; ++j) {
     if (!trunc_mask[j]) continue;
     const int start = j * n_lR;
@@ -677,13 +678,13 @@ inline void rgamma_logS_at_t(double t, const double* pars_cm,
   }
 }
 
-inline void drexg_raw(const double* rt, const double* pars_cm, int n_rows,
+inline void drexg_raw(const double* rt, const double* const* cols, int n_rows,
                       const int* mask, const int* isok,
                       double* out, double min_ll, void* ctx_) {
   const bool floor_raw = raw_floor_log_lik(ctx_);
-  const double* mu_    = pars_cm + 0 * n_rows;
-  const double* sigma_ = pars_cm + 1 * n_rows;
-  const double* tau_   = pars_cm + 2 * n_rows;
+  const double* mu_    = cols[emc2col::rexg::mu];
+  const double* sigma_ = cols[emc2col::rexg::sigma];
+  const double* tau_   = cols[emc2col::rexg::tau];
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
     if (R_IsNA(mu_[i]) || R_IsNA(sigma_[i]) || R_IsNA(tau_[i]) ||
@@ -696,13 +697,13 @@ inline void drexg_raw(const double* rt, const double* pars_cm, int n_rows,
   }
 }
 
-inline void prexg_raw(const double* rt, const double* pars_cm, int n_rows,
+inline void prexg_raw(const double* rt, const double* const* cols, int n_rows,
                       const int* mask, const int* isok,
                       double* out, double min_ll, void* ctx_) {
   const bool floor_raw = raw_floor_log_lik(ctx_);
-  const double* mu_    = pars_cm + 0 * n_rows;
-  const double* sigma_ = pars_cm + 1 * n_rows;
-  const double* tau_   = pars_cm + 2 * n_rows;
+  const double* mu_    = cols[emc2col::rexg::mu];
+  const double* sigma_ = cols[emc2col::rexg::sigma];
+  const double* tau_   = cols[emc2col::rexg::tau];
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
     if (R_IsNA(mu_[i]) || R_IsNA(sigma_[i]) || R_IsNA(tau_[i]) ||
@@ -716,13 +717,13 @@ inline void prexg_raw(const double* rt, const double* pars_cm, int n_rows,
   }
 }
 
-inline void rexg_logS_at_t(double t, const double* pars_cm,
+inline void rexg_logS_at_t(double t, const double* const* cols,
                            int n_rows_total, int n_lR, int /*n_par*/,
                            const int* trunc_mask, int n_unique_trials,
                            const int* isok_all, void* /*ctx_*/, double* logS_out) {
-  const double* mu_    = pars_cm + 0 * n_rows_total;
-  const double* sigma_ = pars_cm + 1 * n_rows_total;
-  const double* tau_   = pars_cm + 2 * n_rows_total;
+  const double* mu_    = cols[emc2col::rexg::mu];
+  const double* sigma_ = cols[emc2col::rexg::sigma];
+  const double* tau_   = cols[emc2col::rexg::tau];
   for (int j = 0; j < n_unique_trials; ++j) {
     if (!trunc_mask[j]) continue;
     const int start = j * n_lR;
@@ -740,18 +741,18 @@ inline void rexg_logS_at_t(double t, const double* pars_cm,
   }
 }
 
-// LBA: column layout v=0, sv=1, B=2, A=3, t0=4 (fixed scale s=1)
-inline void dlba_raw(const double* rt, const double* pars_cm, int n_rows,
+// Column order per src/col_registry.h.
+inline void dlba_raw(const double* rt, const double* const* cols, int n_rows,
                      const int* mask, const int* isok,
                      double* out, double min_ll, void* ctx_) {
   auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
   const bool floor_raw = raw_floor_log_lik(ctx_);
   const bool pd = ctx ? ctx->use_posdrift : true;
-  const double* v_  = pars_cm + 0 * n_rows;
-  const double* sv_ = pars_cm + 1 * n_rows;
-  const double* B_  = pars_cm + 2 * n_rows;
-  const double* A_  = pars_cm + 3 * n_rows;
-  const double* t0_ = pars_cm + 4 * n_rows;
+  const double* v_  = cols[emc2col::lba::v];
+  const double* sv_ = cols[emc2col::lba::sv];
+  const double* B_  = cols[emc2col::lba::B];
+  const double* A_  = cols[emc2col::lba::A];
+  const double* t0_ = cols[emc2col::lba::t0];
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
     if (R_IsNA(v_[i]) || !isok[i]) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
@@ -762,17 +763,17 @@ inline void dlba_raw(const double* rt, const double* pars_cm, int n_rows,
   }
 }
 
-inline void plba_raw(const double* rt, const double* pars_cm, int n_rows,
+inline void plba_raw(const double* rt, const double* const* cols, int n_rows,
                      const int* mask, const int* isok,
                      double* out, double min_ll, void* ctx_) {
   auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
   const bool floor_raw = raw_floor_log_lik(ctx_);
   const bool pd = ctx ? ctx->use_posdrift : true;
-  const double* v_  = pars_cm + 0 * n_rows;
-  const double* sv_ = pars_cm + 1 * n_rows;
-  const double* B_  = pars_cm + 2 * n_rows;
-  const double* A_  = pars_cm + 3 * n_rows;
-  const double* t0_ = pars_cm + 4 * n_rows;
+  const double* v_  = cols[emc2col::lba::v];
+  const double* sv_ = cols[emc2col::lba::sv];
+  const double* B_  = cols[emc2col::lba::B];
+  const double* A_  = cols[emc2col::lba::A];
+  const double* t0_ = cols[emc2col::lba::t0];
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
     if (R_IsNA(v_[i]) || !isok[i]) { out[i] = 0.0; continue; }
@@ -784,17 +785,17 @@ inline void plba_raw(const double* rt, const double* pars_cm, int n_rows,
   }
 }
 
-inline void lba_logS_at_t(double t, const double* pars_cm,
+inline void lba_logS_at_t(double t, const double* const* cols,
                            int n_rows_total, int n_lR, int /*n_par*/,
                            const int* trunc_mask, int n_unique_trials,
                            const int* isok_all, void* ctx_, double* logS_out) {
   auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
   const bool pd = ctx ? ctx->use_posdrift : true;
-  const double* v_  = pars_cm + 0 * n_rows_total;
-  const double* sv_ = pars_cm + 1 * n_rows_total;
-  const double* B_  = pars_cm + 2 * n_rows_total;
-  const double* A_  = pars_cm + 3 * n_rows_total;
-  const double* t0_ = pars_cm + 4 * n_rows_total;
+  const double* v_  = cols[emc2col::lba::v];
+  const double* sv_ = cols[emc2col::lba::sv];
+  const double* B_  = cols[emc2col::lba::B];
+  const double* A_  = cols[emc2col::lba::A];
+  const double* t0_ = cols[emc2col::lba::t0];
   for (int j = 0; j < n_unique_trials; ++j) {
     if (!trunc_mask[j]) continue;
     const int start = j * n_lR;
@@ -857,7 +858,7 @@ inline double pbawl_scalar(double t, const double* par, void* ctx_) {
   );
 }
 
-inline void dbawl_raw(const double* rt, const double* pars_cm, int n_rows,
+inline void dbawl_raw(const double* rt, const double* const* cols, int n_rows,
                       const int* mask, const int* isok,
                       double* out, double min_ll, void* ctx_) {
   auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
@@ -865,15 +866,15 @@ inline void dbawl_raw(const double* rt, const double* pars_cm, int n_rows,
   const bool pd          = ctx->use_posdrift;
   const bool local_guess = ctx->is_local_guess || ctx->is_local_kill_guess;
   const int ks = ctx ? ctx->kill_shape : 1;
-  const double* v_  = pars_cm + 0 * n_rows;
-  const double* sv_  = pars_cm + 1 * n_rows;
-  const double* B_  = pars_cm + 2 * n_rows;
-  const double* A_  = pars_cm + 3 * n_rows;
-  const double* t0_ = pars_cm + 4 * n_rows;
-  const double* k_  = pars_cm + 5 * n_rows;
-  const double* lg_ = pars_cm + 6 * n_rows;
-  const double* lk_ = pars_cm + 7 * n_rows;
-  const double* omega_ = (ks == 3) ? pars_cm + 8 * n_rows : nullptr;
+  const double* v_  = cols[emc2col::bawl::v];
+  const double* sv_  = cols[emc2col::bawl::sv];
+  const double* B_  = cols[emc2col::bawl::B];
+  const double* A_  = cols[emc2col::bawl::A];
+  const double* t0_ = cols[emc2col::bawl::t0];
+  const double* k_  = cols[emc2col::bawl::k];
+  const double* lg_ = cols[emc2col::bawl::mG];
+  const double* lk_ = cols[emc2col::bawl::mK];
+  const double* omega_ = (ks == 3) ? cols[emc2col::bawl::omega] : nullptr;
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
     if (R_IsNA(v_[i]) || !isok[i]) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
@@ -895,7 +896,7 @@ inline void dbawl_raw(const double* rt, const double* pars_cm, int n_rows,
   }
 }
 
-inline void pbawl_raw(const double* rt, const double* pars_cm, int n_rows,
+inline void pbawl_raw(const double* rt, const double* const* cols, int n_rows,
                       const int* mask, const int* isok,
                       double* out, double min_ll, void* ctx_) {
   auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
@@ -903,15 +904,15 @@ inline void pbawl_raw(const double* rt, const double* pars_cm, int n_rows,
   const bool pd          = ctx->use_posdrift;
   const bool local_guess = ctx->is_local_guess || ctx->is_local_kill_guess;
   const int ks = ctx ? ctx->kill_shape : 1;
-  const double* v_  = pars_cm + 0 * n_rows;
-  const double* sv_  = pars_cm + 1 * n_rows;
-  const double* B_  = pars_cm + 2 * n_rows;
-  const double* A_  = pars_cm + 3 * n_rows;
-  const double* t0_ = pars_cm + 4 * n_rows;
-  const double* k_  = pars_cm + 5 * n_rows;
-  const double* lg_ = pars_cm + 6 * n_rows;
-  const double* lk_ = pars_cm + 7 * n_rows;
-  const double* omega_ = (ks == 3) ? pars_cm + 8 * n_rows : nullptr;
+  const double* v_  = cols[emc2col::bawl::v];
+  const double* sv_  = cols[emc2col::bawl::sv];
+  const double* B_  = cols[emc2col::bawl::B];
+  const double* A_  = cols[emc2col::bawl::A];
+  const double* t0_ = cols[emc2col::bawl::t0];
+  const double* k_  = cols[emc2col::bawl::k];
+  const double* lg_ = cols[emc2col::bawl::mG];
+  const double* lk_ = cols[emc2col::bawl::mK];
+  const double* omega_ = (ks == 3) ? cols[emc2col::bawl::omega] : nullptr;
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
     if (R_IsNA(v_[i]) || !isok[i]) { out[i] = 0.0; continue; }
@@ -935,22 +936,22 @@ inline void pbawl_raw(const double* rt, const double* pars_cm, int n_rows,
 }
 
 // BAwL: column layout v=0, sv=1, B=2, A=3, t0=4, k=5, mG=6 (guess-clock mean), mK=7 (kill-clock mean)
-inline void bawl_logS_at_t(double t, const double* pars_cm,
+inline void bawl_logS_at_t(double t, const double* const* cols,
                             int n_rows_total, int n_lR, int /*n_par*/,
                             const int* trunc_mask, int n_unique_trials,
                             const int* isok_all, void* ctx_, double* logS_out) {
   auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
   const bool pd          = ctx->use_posdrift;
   const int ks = ctx ? ctx->kill_shape : 1;
-  const double* v_  = pars_cm + 0 * n_rows_total;
-  const double* sv_ = pars_cm + 1 * n_rows_total;
-  const double* B_  = pars_cm + 2 * n_rows_total;
-  const double* A_  = pars_cm + 3 * n_rows_total;
-  const double* t0_ = pars_cm + 4 * n_rows_total;
-  const double* k_  = pars_cm + 5 * n_rows_total;
-  const double* lg_ = pars_cm + 6 * n_rows_total;
-  const double* lk_ = pars_cm + 7 * n_rows_total;
-  const double* omega_ = (ks == 3) ? pars_cm + 8 * n_rows_total : nullptr;
+  const double* v_  = cols[emc2col::bawl::v];
+  const double* sv_ = cols[emc2col::bawl::sv];
+  const double* B_  = cols[emc2col::bawl::B];
+  const double* A_  = cols[emc2col::bawl::A];
+  const double* t0_ = cols[emc2col::bawl::t0];
+  const double* k_  = cols[emc2col::bawl::k];
+  const double* lg_ = cols[emc2col::bawl::mG];
+  const double* lk_ = cols[emc2col::bawl::mK];
+  const double* omega_ = (ks == 3) ? cols[emc2col::bawl::omega] : nullptr;
   for (int j = 0; j < n_unique_trials; ++j) {
     if (!trunc_mask[j]) continue;
     const int start = j * n_lR;
@@ -1091,22 +1092,22 @@ inline double prdmswtn_scalar(double t, const double* par, void* ctx_) {
                   20, false, ks, dispatch.guess, pd, omega);
 }
 
-inline void drdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
+inline void drdmswtn_raw(const double* rt, const double* const* cols, int n_rows,
                          const int* mask, const int* isok,
                          double* out, double min_ll, void* ctx_) {
   auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
   const bool floor_raw = raw_floor_log_lik(ctx_);
   const int kill_shape   = ctx ? ctx->kill_shape : 1;
   const bool pd = ctx ? ctx->use_posdrift : true;
-  const double* v_       = pars_cm + 0 * n_rows;
-  const double* B_       = pars_cm + 1 * n_rows;
-  const double* A_       = pars_cm + 2 * n_rows;
-  const double* t0_      = pars_cm + 3 * n_rows;
-  const double* s_       = pars_cm + 4 * n_rows;
-  const double* sv_      = pars_cm + 5 * n_rows;
-  const double* lg_ = pars_cm + 6 * n_rows;
-  const double* lk_ = pars_cm + 7 * n_rows;
-  const double* omega_ = (kill_shape == 3) ? pars_cm + 8 * n_rows : nullptr;
+  const double* v_       = cols[emc2col::rdmswtn::v];
+  const double* B_       = cols[emc2col::rdmswtn::B];
+  const double* A_       = cols[emc2col::rdmswtn::A];
+  const double* t0_      = cols[emc2col::rdmswtn::t0];
+  const double* s_       = cols[emc2col::rdmswtn::s];
+  const double* sv_      = cols[emc2col::rdmswtn::sv];
+  const double* lg_ = cols[emc2col::rdmswtn::mG];
+  const double* lk_ = cols[emc2col::rdmswtn::mK];
+  const double* omega_ = (kill_shape == 3) ? cols[emc2col::rdmswtn::omega] : nullptr;
   const double sv_eps = 1e-10;
 
   for (int i = 0; i < n_rows; ++i) {
@@ -1151,22 +1152,22 @@ inline void drdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
   }
 }
 
-inline void prdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
+inline void prdmswtn_raw(const double* rt, const double* const* cols, int n_rows,
                          const int* mask, const int* isok,
                          double* out, double min_ll, void* ctx_) {
   auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
   const bool floor_raw = raw_floor_log_lik(ctx_);
   const int kill_shape   = ctx ? ctx->kill_shape : 1;
   const bool pd = ctx ? ctx->use_posdrift : true;
-  const double* v_       = pars_cm + 0 * n_rows;
-  const double* B_       = pars_cm + 1 * n_rows;
-  const double* A_       = pars_cm + 2 * n_rows;
-  const double* t0_      = pars_cm + 3 * n_rows;
-  const double* s_       = pars_cm + 4 * n_rows;
-  const double* sv_      = pars_cm + 5 * n_rows;
-  const double* lg_ = pars_cm + 6 * n_rows;
-  const double* lk_ = pars_cm + 7 * n_rows;
-  const double* omega_ = (kill_shape == 3) ? pars_cm + 8 * n_rows : nullptr;
+  const double* v_       = cols[emc2col::rdmswtn::v];
+  const double* B_       = cols[emc2col::rdmswtn::B];
+  const double* A_       = cols[emc2col::rdmswtn::A];
+  const double* t0_      = cols[emc2col::rdmswtn::t0];
+  const double* s_       = cols[emc2col::rdmswtn::s];
+  const double* sv_      = cols[emc2col::rdmswtn::sv];
+  const double* lg_ = cols[emc2col::rdmswtn::mG];
+  const double* lk_ = cols[emc2col::rdmswtn::mK];
+  const double* omega_ = (kill_shape == 3) ? cols[emc2col::rdmswtn::omega] : nullptr;
   const double sv_eps = 1e-10;
 
   for (int i = 0; i < n_rows; ++i) {
@@ -1216,7 +1217,7 @@ inline void prdmswtn_raw(const double* rt, const double* pars_cm, int n_rows,
 }
 
 // RDMSWTN: column layout v=0, B=1, A=2, t0=3, s=4, sv=5
-inline void rdmswtn_logS_at_t(double t, const double* pars_cm,
+inline void rdmswtn_logS_at_t(double t, const double* const* cols,
                                int n_rows_total, int n_lR, int /*n_par*/,
                                const int* trunc_mask, int n_unique_trials,
                                const int* isok_all, void* ctx_, double* logS_out) {
@@ -1224,15 +1225,15 @@ inline void rdmswtn_logS_at_t(double t, const double* pars_cm,
   const int kill_shape   = ctx ? ctx->kill_shape : 1;
   const int mode_hint = ctx ? ctx->mode_hint : 0;
   const bool pd = ctx ? ctx->use_posdrift : true;
-  const double* v_      = pars_cm + 0 * n_rows_total;
-  const double* B_      = pars_cm + 1 * n_rows_total;
-  const double* A_      = pars_cm + 2 * n_rows_total;
-  const double* t0_     = pars_cm + 3 * n_rows_total;
-  const double* s_      = pars_cm + 4 * n_rows_total;
-  const double* sv_     = pars_cm + 5 * n_rows_total;
-  const double* lg_ = pars_cm + 6 * n_rows_total;
-  const double* lk_ = pars_cm + 7 * n_rows_total;
-  const double* omega_ = (kill_shape == 3) ? pars_cm + 8 * n_rows_total : nullptr;
+  const double* v_      = cols[emc2col::rdmswtn::v];
+  const double* B_      = cols[emc2col::rdmswtn::B];
+  const double* A_      = cols[emc2col::rdmswtn::A];
+  const double* t0_     = cols[emc2col::rdmswtn::t0];
+  const double* s_      = cols[emc2col::rdmswtn::s];
+  const double* sv_     = cols[emc2col::rdmswtn::sv];
+  const double* lg_ = cols[emc2col::rdmswtn::mG];
+  const double* lk_ = cols[emc2col::rdmswtn::mK];
+  const double* omega_ = (kill_shape == 3) ? cols[emc2col::rdmswtn::omega] : nullptr;
   const double sv_eps = 1e-10;
   for (int j = 0; j < n_unique_trials; ++j) {
     if (!trunc_mask[j]) continue;
