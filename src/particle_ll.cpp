@@ -654,6 +654,7 @@ struct LogicalRulesSharedState {
   std::vector<int> resp_code;
   std::vector<double> rt_unique;
   std::vector<double> LT_unique;
+  std::vector<double> UT_unique;
   std::vector<double> LC_unique;
   std::vector<double> UC_unique;
   // Per-row RTs (length n_trials) for raw dfun/pfun kernels.
@@ -736,6 +737,7 @@ static double logicalrules_detection_trial_ll(
     int resp,
     double t,
     double LTj,
+    double UTj,
     double LCj,
     double UCj,
     int idxA,
@@ -744,6 +746,7 @@ static double logicalrules_detection_trial_ll(
     int n_par,
     double min_ll,
     double min_surv,
+    double log_Z,
     bool use_raw_local,
     const std::vector<double>& logf_all,
     const std::vector<double>& logS_all,
@@ -2049,6 +2052,7 @@ static LogicalRulesSharedState build_logicalrules_shared_state(const Rcpp::DataF
   SEXP resp_sexp = dadm["R"];
   SEXP rule_sexp = dadm["LogicalRule"];
   Rcpp::NumericVector LT = get_col_with_default(dadm, "LT", 0.0);
+  Rcpp::NumericVector UT = get_col_with_default(dadm, "UT", R_PosInf);
   Rcpp::NumericVector LC = get_col_with_default(dadm, "LC", 0.0);
   Rcpp::NumericVector UC = get_col_with_default(dadm, "UC", R_PosInf);
   const bool has_stim_col = dadm.containsElementNamed("S") ||
@@ -2167,6 +2171,7 @@ static LogicalRulesSharedState build_logicalrules_shared_state(const Rcpp::DataF
   out.resp_code.assign(out.n_unique_trials, 0);
   out.rt_unique.assign(out.n_unique_trials, NA_REAL);
   out.LT_unique.assign(out.n_unique_trials, 0.0);
+  out.UT_unique.assign(out.n_unique_trials, R_PosInf);
   out.LC_unique.assign(out.n_unique_trials, 0.0);
   out.UC_unique.assign(out.n_unique_trials, R_PosInf);
   out.rt_by_row.assign(rts.begin(), rts.end());
@@ -2175,6 +2180,7 @@ static LogicalRulesSharedState build_logicalrules_shared_state(const Rcpp::DataF
     const int start = j * n_acc;
     out.rt_unique[static_cast<size_t>(j)] = rts[start];
     out.LT_unique[static_cast<size_t>(j)] = LT[start];
+    out.UT_unique[static_cast<size_t>(j)] = UT[start];
     out.LC_unique[static_cast<size_t>(j)] = LC[start];
     out.UC_unique[static_cast<size_t>(j)] = UC[start];
 
@@ -3820,12 +3826,74 @@ static inline double lr_response_cdf(int rule_code, int resp_code,
   return NA_REAL;
 }
 
+// P(no overt response by t) for the detection rules. Rule 5
+// (OR_DETECTION_ANALYTIC): the response is the first active detector to fire,
+// so N(t) is the joint survivor of the active detectors. Rule 6
+// (OR_DETECTION_GNG): no overt response by t means the nogo accumulator won
+// the race at some u <= t (a withheld response) or nothing finished by t.
+// Used for upper-censor masses and the truncation normaliser. t must be
+// finite; t <= 0 returns 1.
+static double lr_detection_no_response_prob(
+    int rule_code,
+    int cond,
+    double t,
+    const double* parA,
+    const double* parB,
+    const double* parN,
+    int n_par,
+    double min_surv,
+    RacePdf1Fun pdf1,
+    RaceCdf1Fun cdf1,
+    ContextForRaceModels* model_ctx,
+    const GslIntegrationControls& gsl_ctl,
+    gsl_integration_workspace* w,
+    std::vector<double>& pars_rowmajor_buf,
+    bool& ok) {
+  ok = true;
+  if (!(t > 0.0)) return 1.0;
+  if (!R_FINITE(t)) { ok = false; return 1.0; }
+  if (cond == 0 && rule_code == 5) return 1.0;  // no detector: no response possible
+  const double S_A = (cond == 1 || cond == 3)
+    ? safe_surv_at_race_scalar(parA, t, min_surv, cdf1, model_ctx) : 1.0;
+  const double S_B = (cond == 2 || cond == 3)
+    ? safe_surv_at_race_scalar(parB, t, min_surv, cdf1, model_ctx) : 1.0;
+  if (rule_code == 5) return S_A * S_B;
+
+  // rule 6, cond 0: only the nogo accumulator races, so no overt response can
+  // ever occur — S_N(t) + P(nogo won by t) = 1 identically.
+  if (cond == 0) return 1.0;
+
+  // rule 6: joint survivor of the active set, plus nogo-win mass on [0, t]
+  const double S_N = safe_surv_at_race_scalar(parN, t, min_surv, cdf1, model_ctx);
+  const double p_none = S_A * S_B * S_N;
+  pars_rowmajor_buf.resize(static_cast<size_t>(3 * n_par));
+  int isok_buf[3] = {1, 1, 1};
+  std::memcpy(pars_rowmajor_buf.data(), parN, static_cast<size_t>(n_par) * sizeof(double));
+  int n_active = 1;
+  if (cond == 1 || cond == 3) {
+    std::memcpy(pars_rowmajor_buf.data() + n_active * n_par, parA,
+                static_cast<size_t>(n_par) * sizeof(double));
+    ++n_active;
+  }
+  if (cond == 2 || cond == 3) {
+    std::memcpy(pars_rowmajor_buf.data() + n_active * n_par, parB,
+                static_cast<size_t>(n_par) * sizeof(double));
+    ++n_active;
+  }
+  const double log_nogo_win = integrate_for_kth_winner_rowmajor_cpp(
+    1, pars_rowmajor_buf.data(), isok_buf, 0.0, t,
+    pdf1, cdf1, n_active, n_par, gsl_ctl, model_ctx, w);
+  const double p_nogo_win = R_FINITE(log_nogo_win) ? std::exp(log_nogo_win) : 0.0;
+  return std::min(1.0, p_none + p_nogo_win);
+}
+
 static double logicalrules_detection_trial_ll(
     int rule_code,
     int cond,
     int resp,
     double t,
     double LTj,
+    double UTj,
     double LCj,
     double UCj,
     int idxA,
@@ -3834,6 +3902,7 @@ static double logicalrules_detection_trial_ll(
     int n_par,
     double min_ll,
     double min_surv,
+    double log_Z,
     bool use_raw_local,
     const std::vector<double>& logf_all,
     const std::vector<double>& logS_all,
@@ -3883,18 +3952,27 @@ static double logicalrules_detection_trial_ll(
     if (upper_censored ? (resp != 0 && resp != 2)
                        : (resp != 0 && resp != 1)) return min_ll;
     if (rule_code == 5) {
-      // Upper censor (rt = +Inf): neither detector fired by UC.
+      // Upper censor (rt = +Inf): neither detector fired by UC. With a finite
+      // upper truncation bound (and a proper upper tail) the response is known
+      // to land in (UC, UT], so N(UT) is subtracted; the trial mass is then
+      // normalised by Z = N(LT) - N(UT) in the caller.
       // Lower censor (rt = -Inf): at least one detector fired before LC.
-      // Both mirror the standard race: S_joint(UC) and S_joint(LT) - S_joint(LC).
       if (t > 0.0) {
         if (!R_FINITE(UCj))
           Rcpp::stop("LogicalRules OR_DETECTION_ANALYTIC requires finite UC for upper-censored trials.");
-        const double S_A_uc = safe_surv_at_race_scalar(parA, UCj, min_surv, cdf1, model_ctx);
-        const double S_B_uc = safe_surv_at_race_scalar(parB, UCj, min_surv, cdf1, model_ctx);
-        if (cond == 0) p_j = 1.0;
-        else if (cond == 1) p_j = S_A_uc;
-        else if (cond == 2) p_j = S_B_uc;
-        else p_j = S_A_uc * S_B_uc;
+        bool okd = true;
+        p_j = lr_detection_no_response_prob(rule_code, cond, UCj, parA, parB, parN,
+                                            n_par, min_surv, pdf1, cdf1, model_ctx,
+                                            gsl_ctl, w, pars_rowmajor_buf, okd);
+        if (okd && R_FINITE(UTj) && !model_ctx->defective_upper_tail) {
+          bool ok_ut = true;
+          const double N_UT = lr_detection_no_response_prob(rule_code, cond, UTj, parA, parB, parN,
+                                                            n_par, min_surv, pdf1, cdf1, model_ctx,
+                                                            gsl_ctl, w, pars_rowmajor_buf, ok_ut);
+          okd = okd && ok_ut;
+          p_j = std::max(0.0, p_j - N_UT);
+        }
+        if (!okd) return min_ll;
       } else {
         const double lo = std::max(0.0, LTj);
         const double hi = std::max(lo, LCj);
@@ -3918,41 +3996,25 @@ static double logicalrules_detection_trial_ll(
       }
     } else {
       if (t > 0.0) {
-        // Upper censor: nogo wins in [LT, UC] or nobody fires by UC.
+        // Upper censor: no overt response by UC = nogo won by UC or nobody
+        // fired by UC. The nogo-win mass now accumulates from 0 (not LT):
+        // truncation conditioning is handled by the caller's normaliser Z,
+        // and N(UT) is subtracted when the window's upper bound is finite.
         if (!R_FINITE(UCj))
           Rcpp::stop("LogicalRules OR_DETECTION_GNG requires finite UC for upper-censored trials.");
-        const double S_A_uc = safe_surv_at_race_scalar(parA, UCj, min_surv, cdf1, model_ctx);
-        const double S_B_uc = safe_surv_at_race_scalar(parB, UCj, min_surv, cdf1, model_ctx);
-        const double S_N_uc = safe_surv_at_race_scalar(parN, UCj, min_surv, cdf1, model_ctx);
-        double p_none = 0.0;
-        if (cond == 0) p_none = S_N_uc;
-        else if (cond == 1) p_none = S_A_uc * S_N_uc;
-        else if (cond == 2) p_none = S_B_uc * S_N_uc;
-        else p_none = S_A_uc * S_B_uc * S_N_uc;
-
-        pars_rowmajor_buf.resize(static_cast<size_t>(3 * n_par));
-        int isok_buf[3] = {1, 1, 1};
-        std::memcpy(pars_rowmajor_buf.data(), parN, static_cast<size_t>(n_par) * sizeof(double));
-        int n_active = 1;
-        if (cond == 1) {
-          std::memcpy(pars_rowmajor_buf.data() + n_par, parA, static_cast<size_t>(n_par) * sizeof(double));
-          n_active = 2;
-        } else if (cond == 2) {
-          std::memcpy(pars_rowmajor_buf.data() + n_par, parB, static_cast<size_t>(n_par) * sizeof(double));
-          n_active = 2;
-        } else if (cond == 3) {
-          std::memcpy(pars_rowmajor_buf.data() + n_par, parA, static_cast<size_t>(n_par) * sizeof(double));
-          std::memcpy(pars_rowmajor_buf.data() + 2 * n_par, parB, static_cast<size_t>(n_par) * sizeof(double));
-          n_active = 3;
+        bool okd = true;
+        p_j = lr_detection_no_response_prob(rule_code, cond, UCj, parA, parB, parN,
+                                            n_par, min_surv, pdf1, cdf1, model_ctx,
+                                            gsl_ctl, w, pars_rowmajor_buf, okd);
+        if (okd && R_FINITE(UTj) && !model_ctx->defective_upper_tail) {
+          bool ok_ut = true;
+          const double N_UT = lr_detection_no_response_prob(rule_code, cond, UTj, parA, parB, parN,
+                                                            n_par, min_surv, pdf1, cdf1, model_ctx,
+                                                            gsl_ctl, w, pars_rowmajor_buf, ok_ut);
+          okd = okd && ok_ut;
+          p_j = std::max(0.0, p_j - N_UT);
         }
-        double log_nogo_win = R_NegInf;
-        if (UCj > std::max(0.0, LTj)) {
-          log_nogo_win = integrate_for_kth_winner_rowmajor_cpp(
-            1, pars_rowmajor_buf.data(), isok_buf, std::max(0.0, LTj), UCj,
-            pdf1, cdf1, n_active, n_par, gsl_ctl, model_ctx, w);
-        }
-        const double p_nogo_win = R_FINITE(log_nogo_win) ? std::exp(log_nogo_win) : 0.0;
-        p_j = p_nogo_win + p_none;
+        if (!okd) return min_ll;
       } else {
         // Lower censor: an overt (go) response occurred in [LT, LC]. Only the
         // go detectors active under this stimulus can produce it, and the
@@ -3995,7 +4057,7 @@ static double logicalrules_detection_trial_ll(
   }
 
   if (!(p_j > 0.0) || !R_FINITE(p_j)) return min_ll;
-  const double ll = std::log(p_j);
+  const double ll = std::log(p_j) - log_Z;
   return (R_FINITE(ll) && ll > min_ll) ? ll : min_ll;
 }
 
@@ -4273,6 +4335,85 @@ static double c_log_likelihood_logicalrules(
       copy_par_row_colmajor(pars_cm_ptr, n_trials, n_par, idxN, parN.data());
     }
 
+    // Channel-parameter equality (A vs B), shared by the truncation
+    // normaliser and the censoring branches below.
+    const bool ch_eq_j = (rule_code <= 4) &&
+      row_equal_colmajor(pars_cm_ptr, n_trials, n_par, idxA, idxB) &&
+      row_equal_colmajor(pars_cm_ptr, n_trials, n_par, idxnA, idxnB);
+
+    // N(t) = P(no overt rule response by t) for OR/AND/XOR/ID. XOR/ID need
+    // only the channel survivors; OR/AND additionally need the sub-race win
+    // probabilities G (one GSL-backed helper call per distinct channel).
+    auto lr4_N_at = [&](double tt, bool& okf) -> double {
+      okf = true;
+      if (!(tt > 0.0)) return 1.0;
+      if (rule_code == 3 || rule_code == 4) {
+        const double SdA =
+          safe_surv_at_race_scalar(parA.data(),  tt, kMinSurv, cdf1, model_ctx) *
+          safe_surv_at_race_scalar(parnA.data(), tt, kMinSurv, cdf1, model_ctx);
+        const double SdB = ch_eq_j ? SdA
+          : safe_surv_at_race_scalar(parB.data(),  tt, kMinSurv, cdf1, model_ctx) *
+            safe_surv_at_race_scalar(parnB.data(), tt, kMinSurv, cdf1, model_ctx);
+        return 1.0 - (1.0 - SdA) * (1.0 - SdB);
+      }
+      LrChannelState Ast, Bst;
+      okf = lr_channel_state_at(tt, parA.data(), parnA.data(), n_par, kMinSurv,
+                                model_ctx, pdf1, cdf1, gsl_ctl, w,
+                                pars_2buf.data(), isok_2buf, Ast);
+      if (!okf) return 1.0;
+      if (ch_eq_j) {
+        Bst = Ast;
+      } else {
+        okf = lr_channel_state_at(tt, parB.data(), parnB.data(), n_par, kMinSurv,
+                                  model_ctx, pdf1, cdf1, gsl_ctl, w,
+                                  pars_2buf.data(), isok_2buf, Bst);
+        if (!okf) return 1.0;
+      }
+      return lr_no_response_prob(rule_code, Ast, Bst);
+    };
+
+    // --- Truncation normaliser -------------------------------------------
+    // Z = P(overt response RT in [LT, UT]) under the rule's outcome logic:
+    // Z = N(LT) - N(UT), where the UT = Inf case is DEFINED as Z = N(LT) so
+    // that a defective model's never-respond mass is retained inside the
+    // window — the same convention as the standard race normaliser, which
+    // with UT = Inf only ever excludes finite response density below LT.
+    // (Finite UT excludes the never-respond mass, and combining finite UT
+    // with a defective model is as ill-posed here as it is there.)
+    const double LTj_tr = shared.LT_unique[static_cast<size_t>(j)];
+    const double UTj_tr = shared.UT_unique[static_cast<size_t>(j)];
+    const bool has_trunc = (LTj_tr != 0.0 || R_FINITE(UTj_tr));
+    double log_Z_j = 0.0;
+    if (has_trunc) {
+      bool z_ok = true;
+      double N_LT = 1.0;
+      double N_UT = 0.0;
+      if (rule_code >= 5) {
+        const int cond_j = shared.cond_code[static_cast<size_t>(j)];
+        if (LTj_tr > 0.0) {
+          N_LT = lr_detection_no_response_prob(rule_code, cond_j, LTj_tr,
+                                               parA.data(), parB.data(), parN.data(),
+                                               n_par, kMinSurv, pdf1, cdf1, model_ctx,
+                                               gsl_ctl, w, pars_3buf, z_ok);
+        }
+        if (z_ok && R_FINITE(UTj_tr)) {
+          N_UT = lr_detection_no_response_prob(rule_code, cond_j, UTj_tr,
+                                               parA.data(), parB.data(), parN.data(),
+                                               n_par, kMinSurv, pdf1, cdf1, model_ctx,
+                                               gsl_ctl, w, pars_3buf, z_ok);
+        }
+      } else {
+        if (LTj_tr > 0.0) N_LT = lr4_N_at(LTj_tr, z_ok);
+        if (z_ok && R_FINITE(UTj_tr)) N_UT = lr4_N_at(UTj_tr, z_ok);
+      }
+      const double Z = std::min(1.0, N_LT - N_UT);
+      if (!z_ok || !R_FINITE(Z) || !(Z > 1e-12)) {
+        ll_unique[static_cast<size_t>(j)] = min_ll;
+        continue;
+      }
+      log_Z_j = std::log(Z);
+    }
+
     if (rule_code >= 5) {
       ll_unique[static_cast<size_t>(j)] = logicalrules_detection_trial_ll(
         rule_code,
@@ -4280,6 +4421,7 @@ static double c_log_likelihood_logicalrules(
         shared.resp_code[static_cast<size_t>(j)],
         t,
         shared.LT_unique[static_cast<size_t>(j)],
+        shared.UT_unique[static_cast<size_t>(j)],
         shared.LC_unique[static_cast<size_t>(j)],
         shared.UC_unique[static_cast<size_t>(j)],
         idxA,
@@ -4288,6 +4430,7 @@ static double c_log_likelihood_logicalrules(
         n_par,
         min_ll,
         kMinSurv,
+        log_Z_j,
         use_raw_local,
         logf_all,
         logS_all,
@@ -4308,45 +4451,25 @@ static double c_log_likelihood_logicalrules(
       const int rule_code_nc = shared.rule_code[static_cast<size_t>(j)];
       if (!R_FINITE(t) && t > 0.0) {
         // Upper censor (+Inf): probability no overt response fires by UC.
-        // Semantics depend on rule because each rule has a different "first response" trigger.
+        // Semantics depend on rule because each rule has a different "first
+        // response" trigger (see lr_no_response_prob):
         //   XOR/ID : response fires when both channels resolve  → omit iff either channel undecided
         //   OR     : yes = first yes; no = second no           → omit = P(no yes by UC) − P(both no by UC)
         //   AND    : yes = second yes; no = first no           → omit = P(no no by UC) − P(both yes by UC)
-        // In the OR/AND case these share the same formula structure using the channel race CDF at UC.
+        // With a finite upper truncation bound (and a proper upper tail) the
+        // response is known to land in (UC, UT], so N(UT) is subtracted; the
+        // trial is then normalised by Z below.
         const double UCj = shared.UC_unique[static_cast<size_t>(j)];
         if (!R_FINITE(UCj)) { ll_unique[static_cast<size_t>(j)] = min_ll; continue; }
-
-        const double S_A_uc  = safe_surv_at_race_scalar(parA.data(),  UCj, kMinSurv, cdf1, model_ctx);
-        const double S_nA_uc = safe_surv_at_race_scalar(parnA.data(), UCj, kMinSurv, cdf1, model_ctx);
-        const double S_B_uc  = safe_surv_at_race_scalar(parB.data(),  UCj, kMinSurv, cdf1, model_ctx);
-        const double S_nB_uc = safe_surv_at_race_scalar(parnB.data(), UCj, kMinSurv, cdf1, model_ctx);
-        const double S_dec_A = S_A_uc * S_nA_uc;
-        const double S_dec_B = S_B_uc * S_nB_uc;
-
-        if (rule_code_nc == 3 || rule_code_nc == 4) {
-          // XOR/ID: omit iff at least one channel undecided at UC.
-          p_j = 1.0 - (1.0 - S_dec_A) * (1.0 - S_dec_B);
-        } else {
-          // OR : G_A = P(n_A wins A sub-race by UC)  [first arg = nontarget]
-          // AND: G_A = P(A wins A sub-race by UC)    [first arg = target]
-          const double* first_A  = (rule_code_nc == 1) ? parnA.data() : parA.data();
-          const double* second_A = (rule_code_nc == 1) ? parA.data()  : parnA.data();
-          const double* first_B  = (rule_code_nc == 1) ? parnB.data() : parB.data();
-          const double* second_B = (rule_code_nc == 1) ? parB.data()  : parnB.data();
-
-          const bool ch_eq_uc =
-            row_equal_colmajor(pars_cm_ptr, n_trials, n_par, idxA, idxB) &&
-            row_equal_colmajor(pars_cm_ptr, n_trials, n_par, idxnA, idxnB);
-          double G_A_uc = local_race_helper(UCj, first_A, second_A, n_par, model_ctx,
-                                            pdf1, cdf1, gsl_ctl, w, pars_2buf.data(), isok_2buf);
-          double G_B_uc = ch_eq_uc ? G_A_uc
-                        : local_race_helper(UCj, first_B, second_B, n_par, model_ctx,
-                                            pdf1, cdf1, gsl_ctl, w, pars_2buf.data(), isok_2buf);
-          if (!R_FINITE(G_A_uc) || !R_FINITE(G_B_uc)) { ll_unique[static_cast<size_t>(j)] = min_ll; continue; }
-          const double Q_A = G_A_uc + S_dec_A;
-          const double Q_B = G_B_uc + S_dec_B;
-          p_j = std::max(0.0, Q_A * Q_B - G_A_uc * G_B_uc);
+        bool ok_uc = true;
+        p_j = lr4_N_at(UCj, ok_uc);
+        if (ok_uc && R_FINITE(UTj_tr) && !model_ctx->defective_upper_tail) {
+          bool ok_ut = true;
+          const double N_UT_uc = lr4_N_at(UTj_tr, ok_ut);
+          ok_uc = ok_uc && ok_ut;
+          p_j = std::max(0.0, p_j - N_UT_uc);
         }
+        if (!ok_uc) { ll_unique[static_cast<size_t>(j)] = min_ll; continue; }
       } else if (!R_FINITE(t) && t < 0.0) {
         // Lower censor (-Inf): an overt rule response occurred in [LT, LC],
         // with identity resp_code when recorded (0 = unknown). The response is
@@ -4359,9 +4482,7 @@ static double c_log_likelihood_logicalrules(
         const double lo = std::max(0.0, shared.LT_unique[static_cast<size_t>(j)]);
         const double hi = std::max(lo,  shared.LC_unique[static_cast<size_t>(j)]);
         const int resp_lc = shared.resp_code[static_cast<size_t>(j)];
-        const bool ch_eq_lc =
-          row_equal_colmajor(pars_cm_ptr, n_trials, n_par, idxA, idxB) &&
-          row_equal_colmajor(pars_cm_ptr, n_trials, n_par, idxnA, idxnB);
+        const bool ch_eq_lc = ch_eq_j;
         LrChannelState A_lo, A_hi, B_lo, B_hi;
         bool states_ok =
           lr_channel_state_at(lo, parA.data(), parnA.data(), n_par, kMinSurv,
@@ -4396,7 +4517,7 @@ static double c_log_likelihood_logicalrules(
       if (!(p_j > 0.0) || !R_FINITE(p_j)) {
         ll_unique[static_cast<size_t>(j)] = min_ll;
       } else {
-        const double ll = std::log(p_j);
+        const double ll = std::log(p_j) - log_Z_j;
         ll_unique[static_cast<size_t>(j)] = (R_FINITE(ll) && ll > min_ll) ? ll : min_ll;
       }
       continue;
@@ -4512,7 +4633,7 @@ static double c_log_likelihood_logicalrules(
     if (!(p_j > 0.0) || !R_FINITE(p_j)) {
       ll_unique[static_cast<size_t>(j)] = min_ll;
     } else {
-      const double ll = std::log(p_j);
+      const double ll = std::log(p_j) - log_Z_j;
       ll_unique[static_cast<size_t>(j)] = (R_FINITE(ll) && ll > min_ll) ? ll : min_ll;
     }
   }
