@@ -10,3 +10,4 @@
 ^CLAUDE\.md$
 ^CLAUDE_TASK\.md$
 ^[^/]+\.RData$
+^column_refactor_plan\.md$
