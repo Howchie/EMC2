@@ -11,6 +11,13 @@
 #include "gl_quad.h"
 #include "ss_exg_analytic.h"
 #include "ss_raw.h"
+
+// Go-accumulator parameter columns for the SSEXG p_types layout, aliased from
+// the single-source registry (src/col_registry.h).
+constexpr int SS_EXG_COL_MU  = emc2col::ss_texg::mu;
+constexpr int SS_EXG_COL_SIG = emc2col::ss_texg::sigma;
+constexpr int SS_EXG_COL_TAU = emc2col::ss_texg::tau;
+constexpr int SS_EXG_COL_LB  = emc2col::ss_texg::exg_lb;
 #include <gsl/gsl_integration.h>
 #include <gsl/gsl_errno.h>
 
@@ -44,7 +51,7 @@ NumericVector texg_go_lpdf(
     
     // input args: x, mu, sigma, tau, exg_lb, upper = Inf, log_d = TRUE
     double log_d = dtexg(
-      rt[i], pars(i, 0), pars(i, 1), pars(i, 2), pars(i, 8), R_PosInf, true
+      rt[i], pars(i, SS_EXG_COL_MU), pars(i, SS_EXG_COL_SIG), pars(i, SS_EXG_COL_TAU), pars(i, SS_EXG_COL_LB), R_PosInf, true
     );
     out[k] = emc2_isfinite(log_d) ? log_d : R_NegInf;
     
@@ -78,7 +85,7 @@ NumericVector texg_go_lccdf(
     
     // input args: q, mu, sigma, tau, exg_lb, upper = Inf, lower_tail = FALSE, log_p = TRUE
     double log_s = ptexg(
-      rt[i], pars(i, 0), pars(i, 1), pars(i, 2), pars(i, 8), R_PosInf, false, true
+      rt[i], pars(i, SS_EXG_COL_MU), pars(i, SS_EXG_COL_SIG), pars(i, SS_EXG_COL_TAU), pars(i, SS_EXG_COL_LB), R_PosInf, false, true
     );
     out[k] = emc2_isfinite(log_s) ? log_s : R_NegInf;
     
@@ -108,11 +115,11 @@ double ss_texg_go_lpdf(
   for (int i = 0; i < n_acc; ++i) {
     if (winner[i]) {
       // muG=0, sigG=1, tauG=2, lbG=8
-      double ld = dtexg(RT, pars(i, 0), pars(i, 1), pars(i, 2), pars(i, 8), R_PosInf, true);
+      double ld = dtexg(RT, pars(i, SS_EXG_COL_MU), pars(i, SS_EXG_COL_SIG), pars(i, SS_EXG_COL_TAU), pars(i, SS_EXG_COL_LB), R_PosInf, true);
       logpdf_winner += emc2_isfinite(ld) ? ld : min_ll;
       winner_found = true;
     } else {
-      double ls = ptexg(RT, pars(i, 0), pars(i, 1), pars(i, 2), pars(i, 8), R_PosInf, false, true);
+      double ls = ptexg(RT, pars(i, SS_EXG_COL_MU), pars(i, SS_EXG_COL_SIG), pars(i, SS_EXG_COL_TAU), pars(i, SS_EXG_COL_LB), R_PosInf, false, true);
       logsurv_losers += emc2_isfinite(ls) ? ls : min_ll;
     }
   }
@@ -163,10 +170,10 @@ static inline SsStopCtx ss_texg_stop_ctx_from_matrix(const NumericMatrix& pars,
   acc_buf.resize(static_cast<size_t>(SS_ACC_STRIDE) * n);
   for (int i = 0; i < n; ++i) {
     double* a = acc_buf.data() + SS_ACC_STRIDE * i;
-    a[0] = pars(i, 0);   // muG
-    a[1] = pars(i, 1);   // sigG
-    a[2] = pars(i, 2);   // tauG
-    a[3] = pars(i, 8);   // lbG
+    a[0] = pars(i, SS_EXG_COL_MU);
+    a[1] = pars(i, SS_EXG_COL_SIG);
+    a[2] = pars(i, SS_EXG_COL_TAU);
+    a[3] = pars(i, SS_EXG_COL_LB);
   }
   SsStopCtx c;
   c.SSD = SSD;
@@ -223,7 +230,7 @@ NumericVector exg_go_lpdf(
     if (!idx[i]) continue;
     
     // input args: x, mu, sigma, tau, log_d = TRUE
-    double log_d = dexg(rt[i], pars(i, 0), pars(i, 1), pars(i, 2), true);
+    double log_d = dexg(rt[i], pars(i, SS_EXG_COL_MU), pars(i, SS_EXG_COL_SIG), pars(i, SS_EXG_COL_TAU), true);
     out[k] = emc2_isfinite(log_d) ? log_d : R_NegInf;
     
     k++;
@@ -255,7 +262,7 @@ NumericVector exg_go_lccdf(
     if (!idx[i]) continue;
     
     // input args: q, mu, sigma, tau, lower_tail = FALSE, log_p = TRUE
-    double log_s = pexg(rt[i], pars(i, 0), pars(i, 1), pars(i, 2), false, true);
+    double log_s = pexg(rt[i], pars(i, SS_EXG_COL_MU), pars(i, SS_EXG_COL_SIG), pars(i, SS_EXG_COL_TAU), false, true);
     out[k] = emc2_isfinite(log_s) ? log_s : R_NegInf;
     
     k++;
@@ -283,11 +290,11 @@ double ss_exg_go_lpdf(
   for (int i = 0; i < n_acc; ++i) {
     if (winner[i]) {
       // muG=0, sigG=1, tauG=2
-      double ld = dexg(RT, pars(i, 0), pars(i, 1), pars(i, 2), true);
+      double ld = dexg(RT, pars(i, SS_EXG_COL_MU), pars(i, SS_EXG_COL_SIG), pars(i, SS_EXG_COL_TAU), true);
       logpdf_winner += emc2_isfinite(ld) ? ld : min_ll;
       winner_found = true;
     } else {
-      double ls = pexg(RT, pars(i, 0), pars(i, 1), pars(i, 2), false, true);
+      double ls = pexg(RT, pars(i, SS_EXG_COL_MU), pars(i, SS_EXG_COL_SIG), pars(i, SS_EXG_COL_TAU), false, true);
       logsurv_losers += emc2_isfinite(ls) ? ls : min_ll;
     }
   }
@@ -357,9 +364,9 @@ static inline double ss_exg_stop_success_lpdf(
     
     double S_go_all = 1.0;
     for (int i = 0; i < n_acc; ++i) {
-      double muG = wp->pars(i, 0);
-      double sigG = wp->pars(i, 1);
-      double tauG = wp->pars(i, 2);
+      double muG = wp->pars(i, SS_EXG_COL_MU);
+      double sigG = wp->pars(i, SS_EXG_COL_SIG);
+      double tauG = wp->pars(i, SS_EXG_COL_TAU);
       double Si = pexg(x + wp->SSD, muG, sigG, tauG, false, false);
       S_go_all *= Si;
       if (S_go_all <= 0.0) return 0.0;

@@ -13,6 +13,7 @@
 #include "wald_functions.h"
 #include "gsl_utils.h"
 #include "ParamTable.h"
+#include "col_registry.h"
 #include "TrendEngine.h"
 #include "transform_utils.h"
 #include <gsl/gsl_integration.h>
@@ -199,14 +200,16 @@ using ss_go_pdf_fn = NumericVector (*)(NumericVector, NumericMatrix, LogicalVect
 using ss_stop_surv_fn = double (*)(double, NumericMatrix);
 using ss_stop_success_fn = double (*)(double, NumericMatrix, double, double, int, double, double, double, double);
 
-// Model-specific stop survivor wrappers (read fixed columns)
+// Model-specific stop survivor wrappers (columns per src/col_registry.h)
 static inline double stop_logsurv_texg_fn(double q, NumericMatrix P) {
-  // EXG stop: muS=3, sigmaS=4, tauS=5, exgS_lb=9
-  return ptexg(q, P(0, 3), P(0, 4), P(0, 5), P(0, 9), R_PosInf, false, true);
+  namespace tc = emc2col::ss_texg;
+  return ptexg(q, P(0, tc::muS), P(0, tc::sigmaS), P(0, tc::tauS),
+               P(0, tc::exgS_lb), R_PosInf, false, true);
 }
 static inline double stop_logsurv_rdex_fn(double q, NumericMatrix P) {
-  // RDEX stop: muS=5, sigmaS=6, tauS=7, exgS_lb=10
-  return ptexg(q, P(0, 5), P(0, 6), P(0, 7), P(0, 10), R_PosInf, false, true);
+  namespace rc = emc2col::ss_rdex;
+  return ptexg(q, P(0, rc::muS), P(0, rc::sigmaS), P(0, rc::tauS),
+               P(0, rc::exgS_lb), R_PosInf, false, true);
 }
 
 static inline double sum_log_terms(const NumericVector& x) {
@@ -468,6 +471,7 @@ struct RaceModelAdapter {
   RaceRawFun model_dfun_raw = nullptr;   // fast-path: write log-density to pre-allocated buffer
   RaceRawFun model_pfun_raw = nullptr;   // fast-path: write log-survivor to pre-allocated buffer
   RaceLogSAtTFun logS_at_t_ptr = nullptr; // batch: log-survivor at scalar t for truncation norms
+  emc2col::ColSpec col_spec = {nullptr, 0, ""}; // kernel column contract (col_registry.h)
   ContextForRaceModels ctx;
 };
 
@@ -502,10 +506,11 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
     out.model_dfun_raw = &drdmswtn_raw;
     out.model_pfun_raw = &prdmswtn_raw;
     out.logS_at_t_ptr  = &rdmswtn_logS_at_t;
-    out.ctx.t0_index   = 3;
-    out.ctx.mean_g_index = 6;
-    out.ctx.mean_k_index = 7;
-    out.ctx.erlang_omega_index = (out.ctx.kill_shape == 3) ? 8 : -1;
+    out.col_spec       = emc2col::rdmswtn::spec();
+    out.ctx.t0_index   = emc2col::rdmswtn::t0;
+    out.ctx.mean_g_index = emc2col::rdmswtn::mG;
+    out.ctx.mean_k_index = emc2col::rdmswtn::mK;
+    out.ctx.erlang_omega_index = (out.ctx.kill_shape == 3) ? emc2col::rdmswtn::omega : -1;
     out.ctx.defective_upper_tail = true;
     if (type_std.find("_IO") != std::string::npos) {
       out.ctx.use_posdrift = false;
@@ -517,10 +522,11 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
     out.model_dfun_raw = &drdmgbm_raw;
     out.model_pfun_raw = &prdmgbm_raw;
     out.logS_at_t_ptr  = &rdmgbm_logS_at_t;
-    out.ctx.t0_index     = 3;
-    out.ctx.mean_g_index = 5;
-    out.ctx.mean_k_index = 6;
-    out.ctx.erlang_omega_index = (out.ctx.kill_shape == 3) ? 7 : -1;
+    out.col_spec       = emc2col::rdmgbm::spec();
+    out.ctx.t0_index     = emc2col::rdmgbm::t0;
+    out.ctx.mean_g_index = emc2col::rdmgbm::mG;
+    out.ctx.mean_k_index = emc2col::rdmgbm::mK;
+    out.ctx.erlang_omega_index = (out.ctx.kill_shape == 3) ? emc2col::rdmgbm::omega : -1;
     out.ctx.defective_upper_tail = true;
   } else if (type_std.find("BAwL") != std::string::npos) {
     out.pdf1_ptr       = &dbawl_scalar;
@@ -528,10 +534,11 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
     out.model_dfun_raw = &dbawl_raw;
     out.model_pfun_raw = &pbawl_raw;
     out.logS_at_t_ptr  = &bawl_logS_at_t;
-    out.ctx.t0_index   = 4;
-    out.ctx.mean_g_index = 6;
-    out.ctx.mean_k_index = 7;
-    out.ctx.erlang_omega_index = (out.ctx.kill_shape == 3) ? 8 : -1;
+    out.col_spec       = emc2col::bawl::spec();
+    out.ctx.t0_index   = emc2col::bawl::t0;
+    out.ctx.mean_g_index = emc2col::bawl::mG;
+    out.ctx.mean_k_index = emc2col::bawl::mK;
+    out.ctx.erlang_omega_index = (out.ctx.kill_shape == 3) ? emc2col::bawl::omega : -1;
     // Leaky ballistic accumulators can have defective upper tails (never-finish
     // mass) even when posdrift=TRUE.
     out.ctx.defective_upper_tail = true;
@@ -546,7 +553,8 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
     out.model_dfun_raw = &dlba_raw;
     out.model_pfun_raw = &plba_raw;
     out.logS_at_t_ptr = &lba_logS_at_t;
-    out.ctx.t0_index = 4;
+    out.col_spec     = emc2col::lba::spec();
+    out.ctx.t0_index = emc2col::lba::t0;
     if (type_std.find("IO") != std::string::npos) {
       out.ctx.use_posdrift = false;
       out.ctx.defective_upper_tail = true;
@@ -557,13 +565,15 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
     out.model_dfun_raw = &drdm_raw;
     out.model_pfun_raw = &prdm_raw;
     out.logS_at_t_ptr = &rdm_logS_at_t;
-    out.ctx.t0_index = 3;
+    out.col_spec     = emc2col::rdm::spec();
+    out.ctx.t0_index = emc2col::rdm::t0;
   } else if (type_std.find("REXG") != std::string::npos) {
     out.pdf1_ptr = &dexg_scalar;
     out.cdf1_ptr = &pexg_scalar;
     out.model_dfun_raw = &drexg_raw;
     out.model_pfun_raw = &prexg_raw;
     out.logS_at_t_ptr = &rexg_logS_at_t;
+    out.col_spec     = emc2col::rexg::spec();
     out.ctx.t0_index = -1;
   } else if (type_std.find("LNR") != std::string::npos) {
     out.pdf1_ptr = &dlnr_scalar;
@@ -571,13 +581,15 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
     out.model_dfun_raw = &dlnr_raw;
     out.model_pfun_raw = &plnr_raw;
     out.logS_at_t_ptr = &lnr_logS_at_t;
-    out.ctx.t0_index = 2;
+    out.col_spec     = emc2col::lnr::spec();
+    out.ctx.t0_index = emc2col::lnr::t0;
   } else if (type_std.find("RGAMMA") != std::string::npos) {
     out.pdf1_ptr = &drgamma_scalar;
     out.cdf1_ptr = &prgamma_scalar;
     out.model_dfun_raw = &drgamma_raw;
     out.model_pfun_raw = &prgamma_raw;
     out.logS_at_t_ptr = &rgamma_logS_at_t;
+    out.col_spec     = emc2col::rgamma::spec();
     out.ctx.t0_index = -1;
   } else {
     Rcpp::stop("Unsupported race model type string in %s: %s", caller.c_str(), type_std.c_str());
@@ -2025,8 +2037,8 @@ static inline SSModelAdapter resolve_ss_adapter(const std::string& type_std) {
   a.go_lccdf_ptr     = is_exg ? texg_go_lccdf          : rdex_go_lccdf;
   a.stop_logsurv_ptr = is_exg ? stop_logsurv_texg_fn   : stop_logsurv_rdex_fn;
   a.stop_success_ptr = is_exg ? ss_texg_stop_success_lpdf_live : ss_rdex_stop_success_lpdf_live;
-  a.idx_tf           = is_exg ? 6 : 8;
-  a.idx_gf           = is_exg ? 7 : 9;
+  a.idx_tf           = is_exg ? emc2col::ss_texg::tf : emc2col::ss_rdex::tf;
+  a.idx_gf           = is_exg ? emc2col::ss_texg::gf : emc2col::ss_rdex::gf;
   return a;
 }
 
@@ -2535,9 +2547,9 @@ static bool init_ddm_shared_state(DataFrame data, int n_trials,
   shared.valid = true;
 
   bool raw_ready = true;
-  const std::vector<std::string> ddm_names = {"v", "a", "sv", "t0", "st0", "s", "Z", "SZ"};
-  for (const auto& nm : ddm_names) {
-    auto it = table.name_to_base_idx.find(nm);
+  const emc2col::ColSpec ddm_spec = emc2col::ddm::spec();
+  for (int j = 0; j < ddm_spec.n_required; ++j) {
+    auto it = table.name_to_base_idx.find(ddm_spec.names[j]);
     int idx = (it != table.name_to_base_idx.end()) ? it->second : -1;
     p_idx.push_back(idx);
     if (idx < 0) raw_ready = false;
@@ -2725,6 +2737,10 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
     int n_lR = unique(lR).length();
     int n_trials_ss = (n_lR > 0) ? (n_trials / n_lR) : n_trials;
     SSModelAdapter ssa = resolve_ss_adapter(type_std);
+    emc2col::validate_col_prefix(keep_names,
+                                 type_std.find("EXG") != std::string::npos
+                                     ? emc2col::ss_texg::spec()
+                                     : emc2col::ss_rdex::spec());
 
     // Raw path: data-fixed trial structure once, then read ParamTable columns
     // directly per particle. Falls back to the materialized NumericMatrix path
@@ -2748,16 +2764,20 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
       }
       ss_col_base_idx[j] = it->second;
     }
+    // Base column addresses are particle-invariant (prepare_particle refills
+    // values in place), so the pointer array is built once.
     std::vector<const double*> ss_cols(ss_col_base_idx.size(), nullptr);
+    if (ss_raw_ready) {
+      for (size_t j = 0; j < ss_col_base_idx.size(); ++j) {
+        ss_cols[j] = &param_table_template.base(0, ss_col_base_idx[j]);
+      }
+    }
     SsRawWorkspace ss_ws;
 
     for (int i = 0; i < n_particles; ++i) {
       is_ok = prepare_particle(i);
       is_ok = lr_all(is_ok, n_lR);
       if (ss_raw_ready) {
-        for (size_t j = 0; j < ss_col_base_idx.size(); ++j) {
-          ss_cols[j] = &param_table_template.base(0, ss_col_base_idx[j]);
-        }
         lls[i] = c_log_likelihood_ss_pt(ss_cols.data(), ss_shared, ss_raw_model,
                                         is_ok, expand, min_ll, ss_ws);
       } else {
@@ -2775,6 +2795,9 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
 
     RaceModelAdapter adapter = resolve_race_model_adapter(type_std, "calc_ll_oo");
     adapter.ctx.min_lik_for_pdf = std::exp(min_ll);
+    if (adapter.col_spec.names != nullptr) {
+      emc2col::validate_col_prefix(keep_names, adapter.col_spec);
+    }
 
     NumericVector lR = data["lR"];
     int n_lR = unique(lR).length();
@@ -2939,9 +2962,9 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
         // Set once-per-particle mode hints so raw kernels can skip per-row
         // variability checks in common zero-variability cases.
         if (type_std.find("RDMSWTN") != std::string::npos) {
-          const double* sv_col = pars_cm + 5 * n_trials;
-          const double* lambda_g_col = pars_cm + 6 * n_trials;
-          const double* lambda_k_col = pars_cm + 7 * n_trials;
+          const double* sv_col = pars_cm + emc2col::rdmswtn::sv * n_trials;
+          const double* lambda_g_col = pars_cm + emc2col::rdmswtn::mG * n_trials;
+          const double* lambda_k_col = pars_cm + emc2col::rdmswtn::mK * n_trials;
           bool sv_zero = true;
           bool lambda_active = false;
           for (int j = 0; j < n_trials; ++j) {
@@ -3144,6 +3167,9 @@ NumericMatrix calc_ll_oo_pw(NumericMatrix particle_matrix, DataFrame data, Numer
 
     RaceModelAdapter adapter = resolve_race_model_adapter(type_std, "calc_ll_oo_pw");
     adapter.ctx.min_lik_for_pdf = std::exp(min_ll);
+    if (adapter.col_spec.names != nullptr) {
+      emc2col::validate_col_prefix(keep_names, adapter.col_spec);
+    }
 
     NumericVector lR = data["lR"];
     int n_lR = unique(lR).length();

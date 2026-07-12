@@ -37,6 +37,7 @@
 #include "gsl_utils.h"
 #include "gl_quad.h"
 #include "ss_exg_analytic.h"
+#include "col_registry.h"
 #include <gsl/gsl_integration.h>
 #include <gsl/gsl_errno.h>
 
@@ -191,20 +192,21 @@ inline double ss_stop_success_raw_live(
 }
 
 // --- TEXG raw kernels (SSEXG live path) --------------------------------------
-// Column indices refer to the p_types order used everywhere for SSEXG:
-// mu=0, sigma=1, tau=2, muS=3, sigmaS=4, tauS=5, tf=6, gf=7, exg_lb=8, exgS_lb=9.
+// Column order per emc2col::ss_texg (src/col_registry.h).
 
 inline void ss_texg_fill_acc_raw(const double* const* cols, int row, double* a) {
-  a[0] = cols[0][row];  // mu
-  a[1] = cols[1][row];  // sigma
-  a[2] = cols[2][row];  // tau
-  a[3] = cols[8][row];  // exg_lb
+  namespace tc = emc2col::ss_texg;
+  a[0] = cols[tc::mu][row];
+  a[1] = cols[tc::sigma][row];
+  a[2] = cols[tc::tau][row];
+  a[3] = cols[tc::exg_lb][row];
 }
 inline void ss_texg_fill_stop_raw(const double* const* cols, int row, double* s) {
-  s[0] = cols[3][row];  // muS
-  s[1] = cols[4][row];  // sigmaS
-  s[2] = cols[5][row];  // tauS
-  s[3] = cols[9][row];  // exgS_lb
+  namespace tc = emc2col::ss_texg;
+  s[0] = cols[tc::muS][row];
+  s[1] = cols[tc::sigmaS][row];
+  s[2] = cols[tc::tauS][row];
+  s[3] = cols[tc::exgS_lb][row];
 }
 inline double ss_texg_acc_lpdf_raw(double t, const double* a) {
   return dtexg(t, a[0], a[1], a[2], a[3], R_PosInf, true);
@@ -221,29 +223,30 @@ inline const SsRawModel& ss_texg_raw_model() {
     &ss_texg_fill_acc_raw, &ss_texg_fill_stop_raw,
     &ss_texg_acc_lpdf_raw, &ss_texg_acc_lsurv_raw, &ss_texg_acc_surv_raw,
     /*clamp_empty_window=*/false, /*try_analytic1=*/true,
-    /*idx_tf=*/6, /*idx_gf=*/7
+    /*idx_tf=*/emc2col::ss_texg::tf, /*idx_gf=*/emc2col::ss_texg::gf
   };
   return m;
 }
 
 // --- RDEX raw kernels (SSRDEX live path) -------------------------------------
-// p_types order for SSRDEX: v=0, B=1, A=2, t0=3, s=4, muS=5, sigmaS=6, tauS=7,
-// tf=8, gf=9, exgS_lb=10. The canonical block pre-divides by s exactly as the
-// NumericMatrix code did per evaluation:
+// Column order per emc2col::ss_rdex (src/col_registry.h). The canonical block
+// pre-divides by s exactly as the NumericMatrix code did per evaluation:
 //   alpha = B/s + A/(2s), nu = v/s, gamma = A/(2s), t0.
 
 inline void ss_rdex_fill_acc_raw(const double* const* cols, int row, double* a) {
-  const double s = cols[4][row];
-  a[0] = (cols[1][row] / s) + .5 * (cols[2][row] / s);  // alpha
-  a[1] = cols[0][row] / s;                              // nu
-  a[2] = .5 * (cols[2][row] / s);                       // gamma
-  a[3] = cols[3][row];                                  // t0
+  namespace rc = emc2col::ss_rdex;
+  const double s = cols[rc::s][row];
+  a[0] = (cols[rc::B][row] / s) + .5 * (cols[rc::A][row] / s);  // alpha
+  a[1] = cols[rc::v][row] / s;                                  // nu
+  a[2] = .5 * (cols[rc::A][row] / s);                           // gamma
+  a[3] = cols[rc::t0][row];
 }
 inline void ss_rdex_fill_stop_raw(const double* const* cols, int row, double* s) {
-  s[0] = cols[5][row];   // muS
-  s[1] = cols[6][row];   // sigmaS
-  s[2] = cols[7][row];   // tauS
-  s[3] = cols[10][row];  // exgS_lb
+  namespace rc = emc2col::ss_rdex;
+  s[0] = cols[rc::muS][row];
+  s[1] = cols[rc::sigmaS][row];
+  s[2] = cols[rc::tauS][row];
+  s[3] = cols[rc::exgS_lb][row];
 }
 inline double ss_rdex_acc_lpdf_raw(double t, const double* a) {
   const double dt = t - a[3];
@@ -266,7 +269,7 @@ inline const SsRawModel& ss_rdex_raw_model() {
     &ss_rdex_fill_acc_raw, &ss_rdex_fill_stop_raw,
     &ss_rdex_acc_lpdf_raw, &ss_rdex_acc_lsurv_raw, &ss_rdex_acc_surv_raw,
     /*clamp_empty_window=*/true, /*try_analytic1=*/false,
-    /*idx_tf=*/8, /*idx_gf=*/9
+    /*idx_tf=*/emc2col::ss_rdex::tf, /*idx_gf=*/emc2col::ss_rdex::gf
   };
   return m;
 }
