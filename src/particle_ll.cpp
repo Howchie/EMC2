@@ -3597,6 +3597,18 @@ struct LogicalRulesScratch {
   std::vector<int> isok_A;
   std::vector<int> isok_nB;
   std::vector<int> isok_B;
+  // Auxiliary GL sweeps (G_no at censor/truncation time points), slot-major
+  // flat layout [slot * n_unique_trials + j]; see LrAuxSlot.
+  std::vector<double> aux_t;
+  std::vector<double> aux_hA;
+  std::vector<double> aux_hB;
+  std::vector<double> aux_GA;
+  std::vector<double> aux_GB;
+  std::vector<int> aux_mask;
+  std::vector<int> isok_nA_base;
+  std::vector<int> isok_A_base;
+  std::vector<int> isok_nB_base;
+  std::vector<int> isok_B_base;
   std::vector<int> all1;
   std::vector<double> tmpA1;
   std::vector<double> tmpA2;
@@ -3607,6 +3619,19 @@ struct LogicalRulesScratch {
   std::vector<double> parnA;
   std::vector<double> parnB;
   std::vector<double> pars_2buf;
+};
+
+// Auxiliary time-point slots for the logical-rules GL pre-pass: G_no is
+// batch-evaluated at these per-trial times so the trial loop's truncation
+// normaliser and censored branches need no per-trial GSL integration on the
+// raw-kernel path.
+enum LrAuxSlot {
+  LR_AUX_LT = 0,   // truncation lower bound (Z), OR/AND only
+  LR_AUX_UT,       // truncation upper bound (Z + upper-censor subtraction)
+  LR_AUX_CLO,      // lower-censor window start max(0, LT)
+  LR_AUX_CHI,      // lower-censor window end LC
+  LR_AUX_UC,       // upper-censor bound, OR/AND only
+  LR_AUX_N
 };
 
 static inline void resize_assign_double(std::vector<double>& x, size_t n, double value) {
@@ -3740,37 +3765,10 @@ static inline double safe_surv_at_race_scalar(
 //   S_dec(t) = P(neither finished by t) = S_tgt(t)*S_ntgt(t) undecided
 // ---------------------------------------------------------------------------
 struct LrChannelState {
-  double G_yes;
-  double G_no;
-  double S_dec;
+  double G_yes = 0.0;
+  double G_no = 0.0;
+  double S_dec = 1.0;   // t = 0 state: undecided with certainty
 };
-
-static bool lr_channel_state_at(double t,
-                                const double* par_tgt,
-                                const double* par_ntgt,
-                                int n_par,
-                                double min_surv,
-                                ContextForRaceModels* model_ctx,
-                                RacePdf1Fun pdf1,
-                                RaceCdf1Fun cdf1,
-                                const GslIntegrationControls& gsl_ctl,
-                                gsl_integration_workspace* w,
-                                double* pars_2buf,
-                                int* isok_2buf,
-                                LrChannelState& out) {
-  if (!(t > 0.0)) { out = {0.0, 0.0, 1.0}; return true; }
-  if (!R_FINITE(t)) return false;  // t = +Inf not supported (local_race_helper)
-  const double S_t  = safe_surv_at_race_scalar(par_tgt,  t, min_surv, cdf1, model_ctx);
-  const double S_nt = safe_surv_at_race_scalar(par_ntgt, t, min_surv, cdf1, model_ctx);
-  const double S_dec = S_t * S_nt;
-  const double G_no = local_race_helper(t, par_ntgt, par_tgt, n_par, model_ctx,
-                                        pdf1, cdf1, gsl_ctl, w, pars_2buf, isok_2buf);
-  if (!R_FINITE(G_no)) return false;
-  out.S_dec = S_dec;
-  out.G_no  = std::min(1.0, std::max(0.0, G_no));
-  out.G_yes = std::min(1.0, std::max(0.0, 1.0 - S_dec - out.G_no));
-  return true;
-}
 
 // P(no overt response by t) for the OR/AND/XOR/ID rules. An overt response is
 // NOT the first accumulator event: OR responds at the first channel-yes or the
@@ -4282,6 +4280,132 @@ static double c_log_likelihood_logicalrules(
     for (int j = 0; j < n_unique_trials; ++j) {
       if (ch_eq_vec[static_cast<size_t>(j)]) GB_no_gl[static_cast<size_t>(j)] = GA_no_gl[static_cast<size_t>(j)];
     }
+
+    // ---- Auxiliary GL sweeps: G_no at censoring/truncation time points ----
+    // Same machinery as the RT sweep above, evaluated at the per-trial times
+    // the trial loop needs: the truncation normaliser endpoints (LT, UT), the
+    // lower-censor window ends, and UC for upper-censored OR/AND trials.
+    // Values left NaN are recomputed by the scalar GSL helper in the trial
+    // loop, so a slot missed here costs speed, never correctness.
+    std::vector<double>& aux_t  = scratch.aux_t;
+    std::vector<double>& aux_hA = scratch.aux_hA;
+    std::vector<double>& aux_hB = scratch.aux_hB;
+    std::vector<double>& aux_GA = scratch.aux_GA;
+    std::vector<double>& aux_GB = scratch.aux_GB;
+    std::vector<int>& aux_mask  = scratch.aux_mask;
+    const size_t aux_len = static_cast<size_t>(LR_AUX_N) * n_unique_trials;
+    aux_t.assign(aux_len, NA_REAL);
+    aux_hA.assign(aux_len, 0.0);
+    aux_hB.assign(aux_len, 0.0);
+    aux_GA.assign(aux_len, NA_REAL);
+    aux_GB.assign(aux_len, NA_REAL);
+    aux_mask.assign(aux_len, 0);
+    bool slot_any[LR_AUX_N] = {false, false, false, false, false};
+
+    std::vector<int>& isok_nA_b = scratch.isok_nA_base;
+    std::vector<int>& isok_A_b  = scratch.isok_A_base;
+    std::vector<int>& isok_nB_b = scratch.isok_nB_base;
+    std::vector<int>& isok_B_b  = scratch.isok_B_base;
+    resize_assign_int(isok_nA_b, static_cast<size_t>(n_unique_trials), 0);
+    resize_assign_int(isok_A_b,  static_cast<size_t>(n_unique_trials), 0);
+    resize_assign_int(isok_nB_b, static_cast<size_t>(n_unique_trials), 0);
+    resize_assign_int(isok_B_b,  static_cast<size_t>(n_unique_trials), 0);
+
+    bool any_aux = false;
+    for (int j = 0; j < n_unique_trials; ++j) {
+      const int rc = shared.rule_code[static_cast<size_t>(j)];
+      if (rc > 4) continue;   // detection rules keep their own route
+      const int iA = shared.idxA[static_cast<size_t>(j)], inA = shared.idxnA[static_cast<size_t>(j)];
+      const int iB = shared.idxB[static_cast<size_t>(j)], inB = shared.idxnB[static_cast<size_t>(j)];
+      const bool base_ok =
+        iA >= 0 && inA >= 0 && iB >= 0 && inB >= 0 &&
+        ok_params[iA] && ok_params[inA] && ok_params[iB] && ok_params[inB];
+      if (!base_ok) continue;
+      isok_nA_b[static_cast<size_t>(j)] = 1;
+      isok_A_b[static_cast<size_t>(j)]  = 1;
+      if (!ch_eq_vec[static_cast<size_t>(j)]) {
+        isok_nB_b[static_cast<size_t>(j)] = 1;
+        isok_B_b[static_cast<size_t>(j)]  = 1;
+      }
+
+      const bool needs_G = (rc == 1 || rc == 2);   // XOR/ID N(t) is survivor-only
+      const double rtj = shared.rt_unique[static_cast<size_t>(j)];
+      const double LTj = shared.LT_unique[static_cast<size_t>(j)];
+      const double UTj = shared.UT_unique[static_cast<size_t>(j)];
+      const bool truncated = (LTj != 0.0 || R_FINITE(UTj));
+
+      double slot_t[LR_AUX_N] = {NA_REAL, NA_REAL, NA_REAL, NA_REAL, NA_REAL};
+      if (needs_G && truncated && LTj > 0.0) slot_t[LR_AUX_LT] = LTj;
+      if (needs_G && R_FINITE(UTj))          slot_t[LR_AUX_UT] = UTj;
+      if (rtj == R_NegInf) {   // lower censor: response CDFs need G for all rules <= 4
+        const double lo = std::max(0.0, LTj);
+        const double hi = std::max(lo, shared.LC_unique[static_cast<size_t>(j)]);
+        if (lo > 0.0) slot_t[LR_AUX_CLO] = lo;
+        if (hi > 0.0) slot_t[LR_AUX_CHI] = hi;
+      } else if (rtj == R_PosInf && needs_G) {
+        const double UCj = shared.UC_unique[static_cast<size_t>(j)];
+        if (R_FINITE(UCj)) slot_t[LR_AUX_UC] = UCj;
+      }
+      for (int s = 0; s < LR_AUX_N; ++s) {
+        if (ISNAN(slot_t[s])) continue;
+        const size_t o = static_cast<size_t>(s) * n_unique_trials + j;
+        aux_t[o] = slot_t[s];
+        aux_hA[o] = (slot_t[s] > gl_lo_A[static_cast<size_t>(j)])
+                  ? (slot_t[s] - gl_lo_A[static_cast<size_t>(j)]) * 0.5 : 0.0;
+        aux_hB[o] = (slot_t[s] > gl_lo_B[static_cast<size_t>(j)])
+                  ? (slot_t[s] - gl_lo_B[static_cast<size_t>(j)]) * 0.5 : 0.0;
+        aux_mask[o] = 1;
+        aux_GA[o] = 0.0;
+        aux_GB[o] = 0.0;
+        slot_any[s] = true;
+        any_aux = true;
+      }
+    }
+
+    if (any_aux) {
+      for (int s = 0; s < LR_AUX_N; ++s) {
+        if (!slot_any[s]) continue;
+        const double* hA = aux_hA.data() + static_cast<size_t>(s) * n_unique_trials;
+        const double* hB = aux_hB.data() + static_cast<size_t>(s) * n_unique_trials;
+        const int* msk   = aux_mask.data() + static_cast<size_t>(s) * n_unique_trials;
+        double* GA = aux_GA.data() + static_cast<size_t>(s) * n_unique_trials;
+        double* GB = aux_GB.data() + static_cast<size_t>(s) * n_unique_trials;
+        for (size_t k = 0; k < gl_rule31.x.size(); ++k) {
+          const double xi = gl_rule31.x[k], wt = gl_rule31.w[k];
+          #pragma omp simd
+          for (int j = 0; j < n_unique_trials; ++j) {
+            gl_rt[static_cast<size_t>(j)] = gl_lo_A[static_cast<size_t>(j)]
+                                          + hA[j] * (1.0 + xi);
+          }
+          model_dfun_raw(gl_rt.data(), pars_nA.data(), n_unique_trials,
+                         msk, isok_nA_b.data(), lf_nA.data(), min_ll, model_ctx);
+          model_pfun_raw(gl_rt.data(), pars_A.data(),  n_unique_trials,
+                         msk, isok_A_b.data(),  lS_A.data(),  min_ll, model_ctx);
+          for (int j = 0; j < n_unique_trials; ++j) {
+            if (msk[j]) GA[j] += wt * hA[j] * std::exp(lf_nA[j] + lS_A[j]);
+          }
+          if (any_unequal) {
+            #pragma omp simd
+            for (int j = 0; j < n_unique_trials; ++j) {
+              gl_rt[static_cast<size_t>(j)] = gl_lo_B[static_cast<size_t>(j)]
+                                            + hB[j] * (1.0 + xi);
+            }
+            model_dfun_raw(gl_rt.data(), pars_nB.data(), n_unique_trials,
+                           msk, isok_nB_b.data(), lf_nB.data(), min_ll, model_ctx);
+            model_pfun_raw(gl_rt.data(), pars_B.data(),  n_unique_trials,
+                           msk, isok_B_b.data(),  lS_B.data(),  min_ll, model_ctx);
+            for (int j = 0; j < n_unique_trials; ++j) {
+              if (msk[j] && !ch_eq_vec[static_cast<size_t>(j)]) {
+                GB[j] += wt * hB[j] * std::exp(lf_nB[j] + lS_B[j]);
+              }
+            }
+          }
+        }
+        for (int j = 0; j < n_unique_trials; ++j) {
+          if (msk[j] && ch_eq_vec[static_cast<size_t>(j)]) GB[j] = GA[j];
+        }
+      }
+    }
   }
 
   static thread_local GslWorkspacePtr workspace_tls(nullptr, &gsl_integration_workspace_free);
@@ -4341,10 +4465,50 @@ static double c_log_likelihood_logicalrules(
       row_equal_colmajor(pars_cm_ptr, n_trials, n_par, idxA, idxB) &&
       row_equal_colmajor(pars_cm_ptr, n_trials, n_par, idxnA, idxnB);
 
+    // Sub-race win probability G_no at time tt for one channel. The GL
+    // pre-pass batch-computes these at the aux slots (LT/UT/censor bounds);
+    // slot values are used when present and matching tt, otherwise fall back
+    // to the scalar GSL helper (non-raw path, or an uncovered combination).
+    auto lr4_G_no_at = [&](double tt, int aux_slot, bool useB, bool& okf) -> double {
+      okf = true;
+      if (use_gl_pass && aux_slot >= 0) {
+        const size_t o = static_cast<size_t>(aux_slot) * n_unique_trials + j;
+        const double g = (useB && !ch_eq_j) ? scratch.aux_GB[o] : scratch.aux_GA[o];
+        if (!emc2_isnan(g) && !emc2_isnan(scratch.aux_t[o]) &&
+            std::fabs(scratch.aux_t[o] - tt) < 1e-12) {
+          return std::min(1.0, std::max(0.0, g));
+        }
+      }
+      const double g = local_race_helper(tt,
+                                         useB ? parnB.data() : parnA.data(),
+                                         useB ? parB.data()  : parA.data(),
+                                         n_par, model_ctx, pdf1, cdf1, gsl_ctl, w,
+                                         pars_2buf.data(), isok_2buf);
+      okf = R_FINITE(g);
+      return okf ? std::min(1.0, std::max(0.0, g)) : 0.0;
+    };
+
+    // Full channel state at tt (survivors are cheap scalar calls; G_no from
+    // the batch/fallback above; G_yes by complement).
+    auto lr4_state_at = [&](double tt, int aux_slot, bool useB, bool& okf) -> LrChannelState {
+      LrChannelState s{0.0, 0.0, 1.0};
+      okf = true;
+      if (!(tt > 0.0)) return s;
+      const double* pT = useB ? parB.data()  : parA.data();
+      const double* pN = useB ? parnB.data() : parnA.data();
+      const double S_dec = safe_surv_at_race_scalar(pT, tt, kMinSurv, cdf1, model_ctx)
+                         * safe_surv_at_race_scalar(pN, tt, kMinSurv, cdf1, model_ctx);
+      const double G_no = lr4_G_no_at(tt, aux_slot, useB, okf);
+      if (!okf) return s;
+      s.S_dec = S_dec;
+      s.G_no  = G_no;
+      s.G_yes = std::min(1.0, std::max(0.0, 1.0 - S_dec - G_no));
+      return s;
+    };
+
     // N(t) = P(no overt rule response by t) for OR/AND/XOR/ID. XOR/ID need
-    // only the channel survivors; OR/AND additionally need the sub-race win
-    // probabilities G (one GSL-backed helper call per distinct channel).
-    auto lr4_N_at = [&](double tt, bool& okf) -> double {
+    // only the channel survivors; OR/AND additionally need G_no.
+    auto lr4_N_at = [&](double tt, int aux_slot, bool& okf) -> double {
       okf = true;
       if (!(tt > 0.0)) return 1.0;
       if (rule_code == 3 || rule_code == 4) {
@@ -4356,17 +4520,11 @@ static double c_log_likelihood_logicalrules(
             safe_surv_at_race_scalar(parnB.data(), tt, kMinSurv, cdf1, model_ctx);
         return 1.0 - (1.0 - SdA) * (1.0 - SdB);
       }
-      LrChannelState Ast, Bst;
-      okf = lr_channel_state_at(tt, parA.data(), parnA.data(), n_par, kMinSurv,
-                                model_ctx, pdf1, cdf1, gsl_ctl, w,
-                                pars_2buf.data(), isok_2buf, Ast);
+      LrChannelState Ast = lr4_state_at(tt, aux_slot, false, okf);
       if (!okf) return 1.0;
-      if (ch_eq_j) {
-        Bst = Ast;
-      } else {
-        okf = lr_channel_state_at(tt, parB.data(), parnB.data(), n_par, kMinSurv,
-                                  model_ctx, pdf1, cdf1, gsl_ctl, w,
-                                  pars_2buf.data(), isok_2buf, Bst);
+      LrChannelState Bst = Ast;
+      if (!ch_eq_j) {
+        Bst = lr4_state_at(tt, aux_slot, true, okf);
         if (!okf) return 1.0;
       }
       return lr_no_response_prob(rule_code, Ast, Bst);
@@ -4403,8 +4561,8 @@ static double c_log_likelihood_logicalrules(
                                                gsl_ctl, w, pars_3buf, z_ok);
         }
       } else {
-        if (LTj_tr > 0.0) N_LT = lr4_N_at(LTj_tr, z_ok);
-        if (z_ok && R_FINITE(UTj_tr)) N_UT = lr4_N_at(UTj_tr, z_ok);
+        if (LTj_tr > 0.0) N_LT = lr4_N_at(LTj_tr, LR_AUX_LT, z_ok);
+        if (z_ok && R_FINITE(UTj_tr)) N_UT = lr4_N_at(UTj_tr, LR_AUX_UT, z_ok);
       }
       const double Z = std::min(1.0, N_LT - N_UT);
       if (!z_ok || !R_FINITE(Z) || !(Z > 1e-12)) {
@@ -4462,10 +4620,10 @@ static double c_log_likelihood_logicalrules(
         const double UCj = shared.UC_unique[static_cast<size_t>(j)];
         if (!R_FINITE(UCj)) { ll_unique[static_cast<size_t>(j)] = min_ll; continue; }
         bool ok_uc = true;
-        p_j = lr4_N_at(UCj, ok_uc);
+        p_j = lr4_N_at(UCj, LR_AUX_UC, ok_uc);
         if (ok_uc && R_FINITE(UTj_tr) && !model_ctx->defective_upper_tail) {
           bool ok_ut = true;
-          const double N_UT_uc = lr4_N_at(UTj_tr, ok_ut);
+          const double N_UT_uc = lr4_N_at(UTj_tr, LR_AUX_UT, ok_ut);
           ok_uc = ok_uc && ok_ut;
           p_j = std::max(0.0, p_j - N_UT_uc);
         }
@@ -4482,27 +4640,17 @@ static double c_log_likelihood_logicalrules(
         const double lo = std::max(0.0, shared.LT_unique[static_cast<size_t>(j)]);
         const double hi = std::max(lo,  shared.LC_unique[static_cast<size_t>(j)]);
         const int resp_lc = shared.resp_code[static_cast<size_t>(j)];
-        const bool ch_eq_lc = ch_eq_j;
-        LrChannelState A_lo, A_hi, B_lo, B_hi;
-        bool states_ok =
-          lr_channel_state_at(lo, parA.data(), parnA.data(), n_par, kMinSurv,
-                              model_ctx, pdf1, cdf1, gsl_ctl, w,
-                              pars_2buf.data(), isok_2buf, A_lo) &&
-          lr_channel_state_at(hi, parA.data(), parnA.data(), n_par, kMinSurv,
-                              model_ctx, pdf1, cdf1, gsl_ctl, w,
-                              pars_2buf.data(), isok_2buf, A_hi);
+        bool states_ok = true;
+        LrChannelState A_lo = lr4_state_at(lo, LR_AUX_CLO, false, states_ok);
+        LrChannelState A_hi, B_lo, B_hi;
+        if (states_ok) A_hi = lr4_state_at(hi, LR_AUX_CHI, false, states_ok);
         if (states_ok) {
-          if (ch_eq_lc) {
+          if (ch_eq_j) {
             B_lo = A_lo;
             B_hi = A_hi;
           } else {
-            states_ok =
-              lr_channel_state_at(lo, parB.data(), parnB.data(), n_par, kMinSurv,
-                                  model_ctx, pdf1, cdf1, gsl_ctl, w,
-                                  pars_2buf.data(), isok_2buf, B_lo) &&
-              lr_channel_state_at(hi, parB.data(), parnB.data(), n_par, kMinSurv,
-                                  model_ctx, pdf1, cdf1, gsl_ctl, w,
-                                  pars_2buf.data(), isok_2buf, B_hi);
+            B_lo = lr4_state_at(lo, LR_AUX_CLO, true, states_ok);
+            if (states_ok) B_hi = lr4_state_at(hi, LR_AUX_CHI, true, states_ok);
           }
         }
         if (!states_ok) { ll_unique[static_cast<size_t>(j)] = min_ll; continue; }
