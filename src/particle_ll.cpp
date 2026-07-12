@@ -2370,6 +2370,13 @@ struct PtMapper {
   Rcpp::NumericMatrix minmax;
   Rcpp::CharacterVector mm_names;
 
+  // Reusable materialization: one NumericMatrix per likelihood call, refilled
+  // per particle (replaces a per-particle materialize_by_param_names R-heap
+  // allocation on the LogicalRules / mixed-race / pw hot paths).
+  Rcpp::NumericMatrix mat_buf;
+  std::vector<int> mat_base_idx;
+  bool mat_ready = false;
+
   Rcpp::LogicalVector prepare(int i) {
     if (i > 0) {
       table.fill_from_particle_row(particle_matrix_pt, i,
@@ -2385,6 +2392,23 @@ struct PtMapper {
       bound_specs = make_bound_specs_pt(minmax, mm_names, table, bounds);
     }
     return c_do_bound_pt(table, bound_specs);
+  }
+
+  Rcpp::NumericMatrix materialize_reusable() {
+    if (!mat_ready) {
+      const int k = keep_names.size();
+      mat_base_idx.resize(k);
+      for (int j = 0; j < k; ++j) {
+        // base_index_for throws for unknown names, exactly like
+        // materialize_by_param_names did on this path.
+        mat_base_idx[j] = table.base_index_for(Rcpp::as<std::string>(keep_names[j]));
+      }
+      mat_buf = Rcpp::NumericMatrix(table.n_trials, k);
+      Rcpp::colnames(mat_buf) = keep_names;
+      mat_ready = true;
+    }
+    table.materialize_into(mat_buf, mat_base_idx);
+    return mat_buf;
   }
 };
 
@@ -2767,7 +2791,7 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
       for (int i = 0; i < n_particles; ++i) {
         is_ok = prepare_particle(i);
         is_ok = lr_all(is_ok, n_lR);
-        pars = param_table_template.materialize_by_param_names(keep_names);
+        pars = pt.materialize_reusable();
         lls[i] = c_log_likelihood_logicalrules(pars, expand, min_ll, is_ok, n_lR,
                                                &adapter.ctx, adapter.pdf1_ptr, adapter.cdf1_ptr,
                                                adapter.model_dfun_raw, adapter.model_pfun_raw,
@@ -3024,7 +3048,7 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
         }
         lls[i] = total_ll;
       } else {
-        pars = param_table_template.materialize_by_param_names(keep_names);
+        pars = pt.materialize_reusable();
         lls[i] = c_log_likelihood_race(pars, data,
                                        adapter.pdf1_ptr, adapter.cdf1_ptr,
                                        n_trials,
@@ -3139,7 +3163,7 @@ NumericMatrix calc_ll_oo_pw(NumericMatrix particle_matrix, DataFrame data, Numer
       for (int i = 0; i < n_particles; ++i) {
         is_ok = pt.prepare(i);
         is_ok = lr_all(is_ok, n_lR);
-        pars = param_table_template.materialize_by_param_names(keep_names);
+        pars = pt.materialize_reusable();
         NumericVector row_vec(n_out_race);
         c_log_likelihood_logicalrules(pars, expand, min_ll, is_ok, n_lR,
                                       &adapter.ctx, adapter.pdf1_ptr, adapter.cdf1_ptr,
@@ -3172,7 +3196,7 @@ NumericMatrix calc_ll_oo_pw(NumericMatrix particle_matrix, DataFrame data, Numer
     for (int i = 0; i < n_particles; ++i) {
       is_ok = pt.prepare(i);
       is_ok = lr_all(is_ok, n_lR);
-      pars = param_table_template.materialize_by_param_names(keep_names);
+      pars = pt.materialize_reusable();
       NumericVector row_vec(n_out_race);
       c_log_likelihood_race(pars, data,
                             adapter.pdf1_ptr, adapter.cdf1_ptr,
@@ -3557,6 +3581,8 @@ struct LogicalRulesScratch {
   std::vector<unsigned char> pair_ok_B;
   std::vector<double> gl_h_A;
   std::vector<double> gl_h_B;
+  std::vector<double> gl_lo_A;
+  std::vector<double> gl_lo_B;
   std::vector<double> pars_nA;
   std::vector<double> pars_A;
   std::vector<double> pars_nB;
@@ -4059,10 +4085,14 @@ static double c_log_likelihood_logicalrules(
     const int t0_col = model_ctx->t0_index;
     std::vector<double>& gl_h_A = scratch.gl_h_A;
     std::vector<double>& gl_h_B = scratch.gl_h_B;
+    std::vector<double>& gl_lo_A = scratch.gl_lo_A;
+    std::vector<double>& gl_lo_B = scratch.gl_lo_B;
     std::vector<unsigned char>& pair_ok_A = scratch.pair_ok_A;
     std::vector<unsigned char>& pair_ok_B = scratch.pair_ok_B;
     gl_h_A.resize(static_cast<size_t>(n_unique_trials));
     gl_h_B.resize(static_cast<size_t>(n_unique_trials));
+    gl_lo_A.resize(static_cast<size_t>(n_unique_trials));
+    gl_lo_B.resize(static_cast<size_t>(n_unique_trials));
     ch_eq_vec.resize(static_cast<size_t>(n_unique_trials));
     pair_ok_A.resize(static_cast<size_t>(n_unique_trials));
     pair_ok_B.resize(static_cast<size_t>(n_unique_trials));
@@ -4077,6 +4107,8 @@ static double c_log_likelihood_logicalrules(
       const double RT = shared.rt_unique[j];
       const double loA = std::max(0.0, t0nA);
       const double loB = std::max(0.0, t0nB);
+      gl_lo_A[static_cast<size_t>(j)] = loA;
+      gl_lo_B[static_cast<size_t>(j)] = loB;
       gl_h_A[static_cast<size_t>(j)] = (RT > loA) ? (RT - loA) * 0.5 : 0.0;
       gl_h_B[static_cast<size_t>(j)] = (RT > loB) ? (RT - loB) * 0.5 : 0.0;
       ch_eq_vec[j] = (inA >= 0 && inB >= 0) &&
@@ -4158,11 +4190,10 @@ static double c_log_likelihood_logicalrules(
 
     for (size_t k = 0; k < gl_rule31.x.size(); ++k) {
       const double xi = gl_rule31.x[k], wt = gl_rule31.w[k];
+      #pragma omp simd
       for (int j = 0; j < n_unique_trials; ++j) {
-        const double t0nA = (t0_col >= 0 && t0_col < n_par)
-          ? pars_cm_ptr[static_cast<size_t>(t0_col) * n_trials + shared.idxnA[j]]
-          : 0.0;
-        gl_rt[static_cast<size_t>(j)] = std::max(0.0, t0nA) + gl_h_A[static_cast<size_t>(j)] * (1.0 + xi);
+        gl_rt[static_cast<size_t>(j)] = gl_lo_A[static_cast<size_t>(j)]
+                                      + gl_h_A[static_cast<size_t>(j)] * (1.0 + xi);
       }
       model_dfun_raw(gl_rt.data(), pars_nA.data(), n_unique_trials,
                      all1.data(), isok_nA.data(), lf_nA.data(), min_ll, model_ctx);
@@ -4172,11 +4203,10 @@ static double c_log_likelihood_logicalrules(
       for (int j = 0; j < n_unique_trials; ++j)
         GA_no_gl[j] += wt * gl_h_A[j] * std::exp(lf_nA[j] + lS_A[j]);
       if (any_unequal) {
+        #pragma omp simd
         for (int j = 0; j < n_unique_trials; ++j) {
-          const double t0nB = (t0_col >= 0 && t0_col < n_par)
-            ? pars_cm_ptr[static_cast<size_t>(t0_col) * n_trials + shared.idxnB[j]]
-            : 0.0;
-          gl_rt[static_cast<size_t>(j)] = std::max(0.0, t0nB) + gl_h_B[static_cast<size_t>(j)] * (1.0 + xi);
+          gl_rt[static_cast<size_t>(j)] = gl_lo_B[static_cast<size_t>(j)]
+                                        + gl_h_B[static_cast<size_t>(j)] * (1.0 + xi);
         }
         model_dfun_raw(gl_rt.data(), pars_nB.data(), n_unique_trials,
                        all1.data(), isok_nB.data(), lf_nB.data(), min_ll, model_ctx);

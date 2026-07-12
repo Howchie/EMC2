@@ -4,6 +4,7 @@
 #include <unordered_set>
 #include <unordered_map>
 #include <numeric>
+#include <cstring>
 #include "utility_types.h"
 // #include <RcppArmadillo.h>
 using Rcpp::_;
@@ -308,6 +309,21 @@ struct ParamTable {
 
     colnames(out) = out_names;
     return out;
+  }
+
+  // Refill a pre-allocated (n_trials x k) matrix with base columns in the
+  // caller-resolved order (base_idx_order[j] = base column for out column j).
+  // Per-particle twin of materialize_by_param_names: the caller allocates the
+  // matrix and resolves names ONCE per likelihood call, so refilling per
+  // particle is a plain memcpy with no R-heap allocation.
+  void materialize_into(Rcpp::NumericMatrix& out,
+                        const std::vector<int>& base_idx_order) const {
+    const int k = (int)base_idx_order.size();
+    for (int j = 0; j < k; ++j) {
+      double* out_col = &out(0, j);
+      const double* base_col = &base(0, base_idx_order[j]);
+      std::memcpy(out_col, base_col, static_cast<size_t>(n_trials) * sizeof(double));
+    }
   }
 
   // Materialize matrix (n_trials x n_active) with all columns
