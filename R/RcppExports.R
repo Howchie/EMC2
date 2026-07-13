@@ -53,6 +53,14 @@ pleakyba <- function(t, A, b, v, sv, k, posdrift = TRUE) {
     .Call(`_EMC2_pleakyba`, t, A, b, v, sv, k, posdrift)
 }
 
+dlba <- function(t, A, b, v, sv, posdrift = TRUE, log_out = FALSE) {
+    .Call(`_EMC2_dlba`, t, A, b, v, sv, posdrift, log_out)
+}
+
+plba <- function(t, A, b, v, sv, posdrift = TRUE, log_out = FALSE) {
+    .Call(`_EMC2_plba`, t, A, b, v, sv, posdrift, log_out)
+}
+
 pwald <- function(t, mu, b, A = 0.0, sigma = 1.0, t0 = 0.0, lambda_g = 0.0, lambda_k = 0.0, log_out = FALSE, kill_shape = 1L, guess = FALSE, posdrift = TRUE, erlang_omega = 1.0) {
     .Call(`_EMC2_pwald`, t, mu, b, A, sigma, t0, lambda_g, lambda_k, log_out, kill_shape, guess, posdrift, erlang_omega)
 }

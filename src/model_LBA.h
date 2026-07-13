@@ -3,9 +3,9 @@
 
 // This header may be included by exactly ONE translation unit (particle_ll.cpp,
 // directly and via utils.h) because it defines [[Rcpp::export]] functions
-// (pleakyba_norm, dleakyba_norm, …) that RcppExports links to. Non-exported
-// free helpers here are
-// marked `inline`; the exported ones must NOT be inline.
+// (dlba, plba, pleakyba_norm, dleakyba_norm, ...) that RcppExports links to.
+// Non-exported free helpers here are marked `inline`; the exported ones must
+// NOT be inline.
 #include <RcppArmadillo.h>
 #include "utility_functions.h"
 #include "wald_functions.h"  // pnorm_std() — fast normal CDF under USE_FAST_PNORM
@@ -17,28 +17,37 @@
 
 using namespace Rcpp;
 
-// Route through pnorm_std so USE_FAST_PNORM applies to LBA as well as RDM/Wald.
-// pnorm(q, mean, sd) = pnorm_std((q - mean) / sd) for sd > 0.
-inline double pnormP(double q, double mean = 0.0, double sd = 1.0,
-              bool lower = true, bool log = false){
-  return pnorm_std((q - mean) / sd, lower, log);
-}
-
 inline double dnormP(double x, double mean = 0.0, double sd = 1.0,
               bool log = false){
   return R::dnorm(x, mean, sd, log);
 }
 
 // pnorm_std's fast log-tail approximation deliberately returns -Inf beyond
-// its useful range. LBA needs those tails to remain representable, so fall
-// back to R's direct log-tail implementation rather than materialising a
-// probability and taking its log.
+// z = 37 (mirroring natural-scale underflow for the RDM/Wald consumers).
+// LBA needs those tails to remain representable, so extend them with the
+// same continued-fraction asymptotic the fast path uses below 37:
+//   log Q(z) = -z^2/2 - log(sqrt(2*pi)) - log(f(z)).
+// This stays in cheap arithmetic instead of falling back to R::pnorm, which
+// profiling showed dominating truncated-LBA likelihoods.
 inline double pnorm_log_direct(double x, bool lower = true) {
   double out = pnorm_std(x, lower, true);
   if (out == R_NegInf && emc2_isfinite(x)) {
+    const double z = lower ? -x : x;  // tail argument: result is log Q(z)
+    if (z > 0.0) {
+      const double f = z + 1.0 / (z + 2.0 / (z + 3.0 / (z + 4.0 / (z + 13.0 / 20.0))));
+      return -0.5 * z * z - LOG_SQRT_2PI - std::log(f);
+    }
     out = R::pnorm(x, 0.0, 1.0, lower, true);
   }
   return out;
+}
+
+// log Q(z) = log Phi(-z), always evaluated on the small-tail side.
+// fast_norm_phi computes the tail probability there directly with full
+// relative accuracy, whereas the upper-tail call materialises 1 - Phi and
+// loses ~7 digits to the subtraction from 1 before the CF takes over.
+inline double log_normal_upper_tail(double z) {
+  return pnorm_log_direct(-z, true);
 }
 
 // Return log(Phi(hi) - Phi(lo)) without materialising either probability.
@@ -47,8 +56,8 @@ inline double pnorm_log_direct(double x, bool lower = true) {
 inline double log_normal_interval(double lo, double hi) {
   if (!(hi > lo)) return R_NegInf;
   if (lo >= 0.0) {
-    return log_diff_exp(pnorm_log_direct(lo, false),
-                        pnorm_log_direct(hi, false));
+    return log_diff_exp(log_normal_upper_tail(lo),
+                        log_normal_upper_tail(hi));
   }
   return log_diff_exp(pnorm_log_direct(hi, true),
                       pnorm_log_direct(lo, true));
@@ -62,11 +71,16 @@ inline double log_normal_interval(double lo, double hi) {
 // cancellation in the usual "1 + correction" expression at early times.
 inline double log_normal_q_antiderivative_abs(double z) {
   const double log_phi = dnormP(z, 0.0, 1.0, true);
-  const double log_q = pnorm_log_direct(z, false);
+  const double log_q = log_normal_upper_tail(z);
 
   if (z > 0.0) {
     // M(z) = phi(z) * [1 - z Q(z) / phi(z)].
     const double log_ratio = std::log(z) + log_q - log_phi;
+    if (log_ratio >= 0.0) {
+      // Asymptotic M(z) ~ phi(z) / z^2.  This branch is reached only when
+      // the two log terms are indistinguishable at machine precision.
+      return log_phi - 2.0 * std::log(z);
+    }
     return log_phi + log1m_exp(log_ratio);
   }
   if (z < 0.0) {
@@ -148,11 +162,29 @@ inline signed_log signed_log_product(double coefficient, double log_factor) {
 }
 
 constexpr double BAWL_K_EPS = 1e-10;
+constexpr double BAWL_A_EPS = 1e-10;
 constexpr double BAWL_NATURAL_Z_MAX = 7.5;
 constexpr double BAWL_NATURAL_MIN_SPAN = 1e-6;
+constexpr double BAWL_LOG_MIN_SPAN = 1e-8;
 constexpr double BAWL_NATURAL_REL_TOL = 1e-10;
+// Trust the signed-log PDF numerator only while it retains at least this
+// (log-scale) fraction of its largest term; past that, cancellation has
+// consumed the tail-log accuracy and the structural fallback is safer.
+constexpr double BAWL_LOG_BRACKET_MIN = -13.815510557964274;  // log(1e-6)
+// Normalizer floors match each model's legacy pmax(pnorm(v/sv), floor).
 constexpr double LBA_DENOM_FLOOR = 1e-10;
 constexpr double BAWL_DENOM_FLOOR = 1e-300;
+
+// Acceptance modes for the guarded natural-space evaluators.
+//   STRICT: value must stand on its own (feeds std::log directly).
+//   RAW:    underflow to 0 is fine (caller floors at min_ll), but near-1
+//           CDFs are rejected so log1p(-cdf) survivors keep their tail.
+//   CLAMP:  as RAW, and near-1/saturated CDFs are clamped to 1 -- for
+//           consumers that clamp to [0, 1] anyway (truncation normalisers,
+//           GSL integrands), where the survivor tail is immaterial.
+constexpr int BA_ACCEPT_STRICT = 0;
+constexpr int BA_ACCEPT_RAW = 1;
+constexpr int BA_ACCEPT_CLAMP = 2;
 
 inline double log_positive_normalizer(double v, double sv, bool posdrift,
                                      double denom_floor = LBA_DENOM_FLOOR) {
@@ -191,10 +223,6 @@ inline bool natural_normal_interval_safe(double lo, double hi) {
     std::fabs(hi) <= BAWL_NATURAL_Z_MAX;
 }
 
-inline bool natural_probability(double p) {
-  return p > 0.0 && p < 1.0;
-}
-
 // The CDF is often consumed as log(1 - F), so values too close to either
 // endpoint must stay on the stable log path even when the probability itself
 // is representable.  In particular, 1 - mean{Phi(z)} loses the low tail.
@@ -203,253 +231,23 @@ inline bool natural_cdf_safe(double p) {
   return p > cdf_margin && p < 1.0 - cdf_margin;
 }
 
-// Standard LBA is the exact k=0 limit of BAwL.  These guarded natural-space
-// helpers are used by both public model entry points; false means that the
-// caller must use the stable log-space calculation.
-inline bool lba_k0_natural_cdf(double t, double A, double b, double v,
-                               double sv, bool posdrift, double &cdf,
-                               double denom_floor = LBA_DENOM_FLOOR) {
-  if (!(sv > 0.0)) return false;
-  if (t == R_PosInf) {
-    cdf = posdrift ? 1.0 : pnorm_std(v / sv, true, false);
-    return R_FINITE(cdf);
-  }
-  if (!(t > 0.0) || !(A >= 0.0) || !(b >= A) || !(b > 0.0)) return false;
-
-  double denom;
-  if (!natural_normalizer(v, sv, posdrift, denom, denom_floor)) return false;
-  const double zs = t * sv;
-  const double cmz = b - t * v;
-  if (!(zs > 0.0)) return false;
-
-  if (A <= 1e-10) {
-    const double z = cmz / zs;
-    if (std::fabs(z) > BAWL_NATURAL_Z_MAX) return false;
-    cdf = pnorm_std(-z, true, false) / denom;
-    return natural_cdf_safe(cdf);
-  }
-
-  const double z_hi = cmz / zs;
-  const double z_lo = (cmz - A) / zs;
-  if (!natural_normal_interval_safe(z_lo, z_hi)) return false;
-  const double span = z_hi - z_lo;
-  if (!(span > 0.0)) return false;
-  if (span < BAWL_NATURAL_MIN_SPAN) {
-    cdf = pnorm_std(-(z_lo + 0.5 * span), true, false) / denom;
-    return natural_cdf_safe(cdf);
-  }
-
-  // H(z) = z Phi(z) + phi(z), so H(hi)-H(lo) is the integral of Phi.
-  const double phi_hi = dnormP(z_hi, 0.0, 1.0, false);
-  const double phi_lo = dnormP(z_lo, 0.0, 1.0, false);
-  const double H_hi = z_hi * pnorm_std(z_hi, true, false) + phi_hi;
-  const double H_lo = z_lo * pnorm_std(z_lo, true, false) + phi_lo;
-  const double integral = H_hi - H_lo;
-  const double scale = std::fabs(H_hi) + std::fabs(H_lo);
-  if (!(integral > 0.0) ||
-      integral <= BAWL_NATURAL_REL_TOL * std::max(1.0, scale)) return false;
-
-  const double avg_phi = integral / span;
-  if (!natural_cdf_safe(1.0 - avg_phi)) return false;
-  cdf = (1.0 - avg_phi) / denom;
-  return natural_cdf_safe(cdf);
-}
-
-inline bool lba_k0_natural_pdf(double t, double A, double b, double v,
-                               double sv, bool posdrift, double &pdf,
-                               double denom_floor = LBA_DENOM_FLOOR) {
-  if (!(t > 0.0) || !(A >= 0.0) || !(b >= A) || !(b > 0.0)) return false;
-
-  double denom;
-  if (!natural_normalizer(v, sv, posdrift, denom, denom_floor)) return false;
-  const double zs = t * sv;
-  const double cmz = b - t * v;
-  if (!(zs > 0.0)) return false;
-
-  if (A <= 1e-10) {
-    const double z = cmz / zs;
-    if (std::fabs(z) > BAWL_NATURAL_Z_MAX) return false;
-    const double scale = b / (t * t * sv * denom);
-    pdf = scale * dnormP(z, 0.0, 1.0, false);
-    return pdf > 0.0 && pdf < R_PosInf;
-  }
-
-  const double z_hi = cmz / zs;
-  const double z_lo = (cmz - A) / zs;
-  if (!natural_normal_interval_safe(z_lo, z_hi)) return false;
-  const double span = z_hi - z_lo;
-  if (!(span > 0.0)) return false;
-  if (span < BAWL_NATURAL_MIN_SPAN) {
-    const double z_mid = z_lo + 0.5 * span;
-    const double scale = (b - 0.5 * A) / (t * t * sv * denom);
-    pdf = scale * dnormP(z_mid, 0.0, 1.0, false);
-    return pdf > 0.0 && pdf < R_PosInf;
-  }
-
-  const double dphi = pnorm_std(z_hi, true, false) -
-    pnorm_std(z_lo, true, false);
-  const double dnorm = dnormP(z_lo, 0.0, 1.0, false) -
-    dnormP(z_hi, 0.0, 1.0, false);
-  const double term1 = v * dphi;
-  const double term2 = sv * dnorm;
-  const double bracket = term1 + term2;
-  const double scale = std::fabs(term1) + std::fabs(term2);
-  if (!(bracket > 0.0) ||
-      bracket <= BAWL_NATURAL_REL_TOL * std::max(1.0, scale)) return false;
-
-  pdf = bracket / (A * denom);
-  return pdf > 0.0 && pdf < R_PosInf;
-}
-
-inline double log_lba_k0_cdf_norm(double t, double A, double b, double v,
-                                  double sv, bool posdrift = true,
-                                  double denom_floor = LBA_DENOM_FLOOR) {
-  if (!(t > 0.0) || !(A >= 0.0) || !(b >= A) || !(b > 0.0) || !(sv > 0.0))
-    return R_NegInf;
-  if (t == R_PosInf)
-    return posdrift ? 0.0 : pnorm_log_direct(v / sv, true);
-  const double log_denom = log_positive_normalizer(v, sv, posdrift, denom_floor);
-  if (A <= 1e-10)
-    return pnorm_log_direct((v - b / t) / sv, true) - log_denom;
-
-  const double zs = t * sv;
-  if (!(zs > 0.0)) return R_NegInf;
-  const double z_hi = (b - t * v) / zs;
-  const double z_lo = (b - A - t * v) / zs;
-  return std::log(zs) - std::log(A) +
-    log_normal_q_interval(z_lo, z_hi) - log_denom;
-}
-
-inline double log_lba_k0_pdf_norm(double t, double A, double b, double v,
-                                  double sv, bool posdrift = true,
-                                  double denom_floor = LBA_DENOM_FLOOR) {
-  if (!(t > 0.0) || !(A >= 0.0) || !(b >= A) || !(b > 0.0) || !(sv > 0.0))
-    return R_NegInf;
-  const double log_denom = log_positive_normalizer(v, sv, posdrift, denom_floor);
-  const double zs = t * sv;
-  if (!(zs > 0.0)) return R_NegInf;
-
-  if (A <= 1e-10) {
-    const double z = (b - t * v) / zs;
-    return std::log(b) - 2.0 * std::log(t) - std::log(sv) +
-      dnormP(z, 0.0, 1.0, true) - log_denom;
-  }
-
-  const double z_hi = (b - t * v) / zs;
-  const double z_lo = (b - A - t * v) / zs;
-  const double log_dphi = log_normal_interval(z_lo, z_hi);
-  signed_log bracket = signed_log_product(v, log_dphi);
-  signed_log phi_diff = signed_log_sub(
-    make_signed_log(dnormP(z_lo, 0.0, 1.0, true), 1),
-    make_signed_log(dnormP(z_hi, 0.0, 1.0, true), 1));
-  // The density numerator is v * ΔPhi + sv * Δphi.
-  if (phi_diff.sign != 0) phi_diff.log_abs += std::log(sv);
-  bracket = signed_log_add(bracket, phi_diff);
-  if (bracket.sign <= 0 || bracket.log_abs == R_NegInf) return R_NegInf;
-  return bracket.log_abs - std::log(A) - log_denom;
-}
-
-inline double lba_k0_cdf_norm(double t, double A, double b, double v,
-                              double sv, bool posdrift, bool log_out,
-                              double denom_floor = LBA_DENOM_FLOOR) {
-  double cdf;
-  if (lba_k0_natural_cdf(t, A, b, v, sv, posdrift, cdf, denom_floor))
-    return log_out ? std::log(cdf) : cdf;
-  return return_from_log(log_lba_k0_cdf_norm(t, A, b, v, sv, posdrift, denom_floor), log_out);
-}
-
-inline double lba_k0_pdf_norm(double t, double A, double b, double v,
-                              double sv, bool posdrift, bool log_out,
-                              double denom_floor = LBA_DENOM_FLOOR) {
-  double pdf;
-  if (lba_k0_natural_pdf(t, A, b, v, sv, posdrift, pdf, denom_floor))
-    return log_out ? std::log(pdf) : pdf;
-  return return_from_log(log_lba_k0_pdf_norm(t, A, b, v, sv, posdrift, denom_floor), log_out);
-}
-
-// Raw likelihoods may floor finite natural underflow without reconstructing a
-// log tail that will be discarded by min_ll.  They still route genuine
-// overflow, PDF cancellation, and near-one CDFs through the stable helpers.
-inline bool lba_k0_raw_natural_cdf(double t, double A, double b, double v,
-                                   double sv, bool posdrift, double &cdf) {
-  if (!(sv > 0.0)) {
-    cdf = 0.0;
-    return true;
-  }
-  if (t == R_PosInf) {
-    if (posdrift) {
-      cdf = 1.0;
-      return true;
-    }
-    cdf = pnorm_std(v / sv, true, false);
-    return R_FINITE(cdf) && cdf < 1.0 - 1e-8;
-  }
-  if (!(t > 0.0) || !(sv > 0.0) || !(A >= 0.0) || !(b >= A) || !(b > 0.0)) {
-    cdf = 0.0;
-    return true;
-  }
-  double denom = 1.0;
-  if (posdrift) {
-    denom = pnorm_std(v / sv, true, false);
-    if (denom < 1e-10) denom = 1e-10;
-  }
-  if (A <= 1e-10) {
-    cdf = pnorm_std((v - b / t) / sv, true, false) / denom;
-  } else {
-    const double zs = t * sv;
-    const double cmz = b - t * v;
-    const double z_hi = cmz / zs;
-    const double z_lo = (cmz - A) / zs;
-    cdf = (1.0 + (zs * (dnormP(z_lo) - dnormP(z_hi)) +
-      (cmz - A) * pnorm_std(z_lo) - cmz * pnorm_std(z_hi)) / A) / denom;
-  }
-  // Near-one CDFs are used as log survivors and need the stable log path.
-  return R_FINITE(cdf) && cdf < 1.0 - 1e-8;
-}
-
-inline bool lba_k0_raw_natural_pdf(double t, double A, double b, double v,
-                                   double sv, bool posdrift, double &pdf) {
-  if (!(t > 0.0) || !(sv > 0.0) || !(A >= 0.0) || !(b >= A) || !(b > 0.0)) {
-    pdf = 0.0;
-    return true;
-  }
-  double denom = 1.0;
-  if (posdrift) {
-    denom = pnorm_std(v / sv, true, false);
-    if (denom < 1e-10) denom = 1e-10;
-  }
-  if (A <= 1e-10) {
-    pdf = dnormP(b / t, v, sv, false) * b / (t * t * denom);
-  } else {
-    const double zs = t * sv;
-    const double cmz = b - t * v;
-    const double z_hi = cmz / zs;
-    const double z_lo = (cmz - A) / zs;
-    const double dphi = pnorm_std(z_hi) - pnorm_std(z_lo);
-    const double dnorm = dnormP(z_lo) - dnormP(z_hi);
-    const double term1 = v * dphi;
-    const double term2 = sv * dnorm;
-    const double bracket = term1 + term2;
-    const double scale = std::fabs(term1) + std::fabs(term2);
-    if (bracket > 0.0 &&
-        bracket <= BAWL_NATURAL_REL_TOL * std::max(1.0, scale)) {
-      return false;
-    }
-    pdf = bracket / (A * denom);
-  }
-  // A finite zero/negative result is already the raw likelihood floor; an
-  // infinite result is the case that needs the stable log evaluator.
-  return R_FINITE(pdf);
-}
-
 // --------------------------------------------------------------------------
-// Shared log-space BAwL core
+// Shared BAwL core (standard LBA is the exact k = 0 member).
 //
 // For t > 0, define
 //   c = (v - k*b/(1-exp(-k*t))) / sv,
 //   m = k*exp(-k*t) / ((1-exp(-k*t))*sv).
-// Then the hit probability conditional on start a is Phi(c + m*a).
-// k=0 is evaluated by its exact limit, c=(v-b/t)/sv and m=1/(t*sv).
+// The hit probability conditional on start a ~ Unif(0, A) is Phi(c + m*a),
+// so with span = m*A:
+//   F(t) = integral_c^{c+span} Phi(z) dz / (span * denom),
+//   f(t) = jacobian * [(b*m + c)*(Phi(c+span)-Phi(c)) + phi(c+span)-phi(c)]
+//          / (A * sv * m^2 * denom).
+// k = 0 uses its exact limit c = (v - b/t)/sv, m = 1/(t*sv), jacobian =
+// 1/t^2, which recovers the standard LBA formulas identically.
+//
+// Each quantity pairs a guarded natural-space evaluation (fast; valid while
+// the normal endpoints are central and subtractions are well-conditioned)
+// with an authoritative log-space evaluation for tails and cancellation.
 // --------------------------------------------------------------------------
 
 inline void bawl_leak_factors(double kt, double &E, double &G) {
@@ -469,9 +267,11 @@ inline void bawl_threshold_terms(double t, double b, double sv, double k,
                                  double *log_jacobian = nullptr,
                                  double *jacobian = nullptr) {
   if (k <= BAWL_K_EPS) {
-    c = 0.0;
+    // Exact k -> 0 limit of the general expressions below.
+    c = -(b / t) / sv;
     m = (1.0 / t) / sv;
     if (log_jacobian != nullptr) *log_jacobian = -2.0 * std::log(t);
+    if (jacobian != nullptr) *jacobian = 1.0 / (t * t);
     return;
   }
 
@@ -491,198 +291,273 @@ inline void bawl_threshold_terms(double t, double b, double sv, double k,
   }
 }
 
-// Guarded natural-space BAwL core for k>0.  The exact k=0 limit is delegated
-// to the LBA helpers above so the shared evaluator does not duplicate model
-// semantics while avoiding generic BAwL work in the nested case.
-inline bool bawl_natural_cdf(double t, double A, double b, double v,
-                             double sv, double k, bool posdrift,
-                             double &cdf) {
-  if (!(k > BAWL_K_EPS))
-    return lba_k0_natural_cdf(t, A, b, v, sv, posdrift, cdf,
-                              BAWL_DENOM_FLOOR);
-  if (!(t > 0.0) || !(A >= 0.0) || !(b >= A) || !(b > 0.0)) return false;
+// Guarded natural-space CDF.  Returns true when `cdf` holds a value the
+// caller may use under the given acceptance mode (see BA_ACCEPT_*): STRICT
+// requires central normal endpoints and a value away from both 0 and 1;
+// RAW additionally admits saturated tails that round down to 0; CLAMP also
+// admits (and clamps) values at or near 1.
+inline bool ba_natural_cdf(double t, double A, double b, double v, double sv,
+                           double k, bool posdrift, double denom_floor,
+                           int accept_mode, double &cdf) {
+  const bool lenient = accept_mode != BA_ACCEPT_STRICT;
+  const auto accept = [accept_mode](double &p) {
+    if (accept_mode == BA_ACCEPT_STRICT) return natural_cdf_safe(p);
+    if (accept_mode == BA_ACCEPT_RAW) return p < 1.0 - 1e-8;
+    if (p > 1.0) p = 1.0;
+    return true;
+  };
+  if (!(t > 0.0) || !(sv > 0.0) || !(A >= 0.0) || !(b >= A) || !(b > 0.0)) {
+    cdf = 0.0;
+    return lenient;  // strict callers take the exact -Inf log path
+  }
+  if (t == R_PosInf && k <= BAWL_K_EPS) {
+    cdf = posdrift ? 1.0 : pnorm_std(v / sv, true, false);
+    if (!R_FINITE(cdf)) return false;
+    return accept(cdf);
+  }
 
   double denom;
-  if (!natural_normalizer(v, sv, posdrift, denom, BAWL_DENOM_FLOOR)) return false;
+  if (!natural_normalizer(v, sv, posdrift, denom, denom_floor)) return false;
   double c, m;
   bawl_threshold_terms(t, b, sv, k, c, m);
-  if (!(m > 0.0)) return false;
   c += v / sv;
-
-  if (A <= 1e-10) {
-    if (std::fabs(c) > BAWL_NATURAL_Z_MAX) return false;
-    cdf = pnorm_std(c, true, false) / denom;
-    return natural_cdf_safe(cdf);
-  }
-
+  if (!(m > 0.0) || !emc2_isfinite(m)) return false;  // t = Inf with k > 0
   const double span = m * A;
-  const double z_hi = c + span;
-  if (!(span > 0.0) ||
-      !natural_normal_interval_safe(c, z_hi)) return false;
-  if (span < BAWL_NATURAL_MIN_SPAN) {
-    cdf = pnorm_std(c + 0.5 * span, true, false) / denom;
-    return natural_cdf_safe(cdf);
+
+  if (A <= BAWL_A_EPS || span < BAWL_NATURAL_MIN_SPAN) {
+    // Point-mass start (a = 0 limit) or collapsed start range (midpoint).
+    const double z = (A <= BAWL_A_EPS) ? c : c + 0.5 * span;
+    if (!emc2_isfinite(z)) return false;
+    if (!lenient && std::fabs(z) > BAWL_NATURAL_Z_MAX) return false;
+    cdf = pnorm_std(z, true, false) / denom;
+  } else {
+    const double z_hi = c + span;
+    if (!emc2_isfinite(c) || !emc2_isfinite(z_hi)) return false;
+    if (!lenient && !natural_normal_interval_safe(c, z_hi)) return false;
+    // H(z) = z Phi(z) + phi(z), so H(hi) - H(lo) integrates Phi.
+    const double H_hi = z_hi * pnorm_std(z_hi, true, false) + dnormP(z_hi);
+    const double H_lo = c * pnorm_std(c, true, false) + dnormP(c);
+    const double integral = H_hi - H_lo;
+    if (!(integral > 0.0)) {
+      // Saturated or fully cancelled: mass below natural resolution.
+      if (!lenient) return false;
+      // With a plainly saturated interval the CDF is 1, not 0.
+      cdf = (integral == 0.0 && c > BAWL_NATURAL_Z_MAX) ? 1.0 : 0.0;
+      if (cdf == 1.0 && accept_mode != BA_ACCEPT_CLAMP) return false;
+      return true;
+    }
+    if (!lenient) {
+      const double scale = std::fabs(H_hi) + std::fabs(H_lo);
+      if (integral <= BAWL_NATURAL_REL_TOL * std::max(1.0, scale)) return false;
+    }
+    cdf = integral / (span * denom);
   }
 
-  const double H_hi = z_hi * pnorm_std(z_hi, true, false) +
-    dnormP(z_hi, 0.0, 1.0, false);
-  const double H_lo = c * pnorm_std(c, true, false) +
-    dnormP(c, 0.0, 1.0, false);
-  const double integral = H_hi - H_lo;
-  const double scale = std::fabs(H_hi) + std::fabs(H_lo);
-  if (!(integral > 0.0) ||
-      integral <= BAWL_NATURAL_REL_TOL * std::max(1.0, scale)) return false;
-
-  cdf = integral / (A * m * denom);
-  return natural_cdf_safe(cdf);
+  if (!R_FINITE(cdf)) return false;
+  if (cdf <= 0.0) {
+    if (!lenient) return false;
+    cdf = 0.0;
+    return true;
+  }
+  return accept(cdf);
 }
 
-inline bool bawl_natural_pdf(double t, double A, double b, double v,
-                             double sv, double k, bool posdrift,
-                             double &pdf) {
-  if (!(k > BAWL_K_EPS))
-    return lba_k0_natural_pdf(t, A, b, v, sv, posdrift, pdf,
-                              BAWL_DENOM_FLOOR);
-  if (!(t > 0.0) || !(A >= 0.0) || !(b >= A) || !(b > 0.0)) return false;
+// Guarded natural-space PDF; acceptance semantics as for ba_natural_cdf.
+// Near-1 has no meaning for a density, so RAW and CLAMP coincide; genuine
+// positive cancellation always defers to the log path.
+inline bool ba_natural_pdf(double t, double A, double b, double v, double sv,
+                           double k, bool posdrift, double denom_floor,
+                           int accept_mode, double &pdf) {
+  const bool lenient = accept_mode != BA_ACCEPT_STRICT;
+  if (!(t > 0.0) || t == R_PosInf || !(sv > 0.0) || !(A >= 0.0) ||
+      !(b >= A) || !(b > 0.0)) {
+    pdf = 0.0;
+    return lenient;
+  }
 
   double denom;
-  if (!natural_normalizer(v, sv, posdrift, denom, BAWL_DENOM_FLOOR)) return false;
+  if (!natural_normalizer(v, sv, posdrift, denom, denom_floor)) return false;
   double c, m, jacobian;
   bawl_threshold_terms(t, b, sv, k, c, m, nullptr, &jacobian);
-  if (!(m > 0.0)) return false;
   c += v / sv;
-
+  if (!(m > 0.0) || !emc2_isfinite(m)) return false;
   if (!(jacobian > 0.0) || !(jacobian < R_PosInf)) return false;
-  if (A <= 1e-10) {
-    if (std::fabs(c) > BAWL_NATURAL_Z_MAX) return false;
-    pdf = jacobian * b * dnormP(c, 0.0, 1.0, false) /
-      (sv * denom);
-    return pdf > 0.0 && pdf < R_PosInf;
-  }
-
   const double span = m * A;
-  const double z_hi = c + span;
-  if (!(span > 0.0) ||
-      !natural_normal_interval_safe(c, z_hi)) return false;
-  if (span < BAWL_NATURAL_MIN_SPAN) {
-    const double z_mid = c + 0.5 * span;
-    pdf = jacobian * (b - 0.5 * A) * dnormP(z_mid, 0.0, 1.0, false) /
-      (sv * denom);
-    return pdf > 0.0 && pdf < R_PosInf;
+
+  if (A <= BAWL_A_EPS || span < BAWL_NATURAL_MIN_SPAN) {
+    const double z = (A <= BAWL_A_EPS) ? c : c + 0.5 * span;
+    const double eff_b = (A <= BAWL_A_EPS) ? b : b - 0.5 * A;
+    if (!emc2_isfinite(z)) return false;
+    if (!lenient && std::fabs(z) > BAWL_NATURAL_Z_MAX) return false;
+    pdf = jacobian * eff_b * dnormP(z) / (sv * denom);
+  } else {
+    const double z_hi = c + span;
+    if (!emc2_isfinite(c) || !emc2_isfinite(z_hi)) return false;
+    if (!lenient && !natural_normal_interval_safe(c, z_hi)) return false;
+    const double term1 = (b * m + c) *
+      (pnorm_std(z_hi, true, false) - pnorm_std(c, true, false));
+    const double term2 = dnormP(z_hi) - dnormP(c);
+    const double bracket = term1 + term2;
+    if (!(bracket > 0.0)) {
+      if (!lenient) return false;
+      pdf = 0.0;
+      return true;
+    }
+    const double scale = std::fabs(term1) + std::fabs(term2);
+    if (bracket <= BAWL_NATURAL_REL_TOL * std::max(1.0, scale)) return false;
+    const double denom_scale = A * sv * m * m * denom;
+    if (!(denom_scale > 0.0) || !(denom_scale < R_PosInf)) return false;
+    pdf = jacobian * bracket / denom_scale;
   }
 
-  const double dphi = pnorm_std(z_hi, true, false) -
-    pnorm_std(c, true, false);
-  const double dnorm = dnormP(z_hi, 0.0, 1.0, false) -
-    dnormP(c, 0.0, 1.0, false);
-  const double term1 = (b * m + c) * dphi;
-  const double term2 = dnorm;
-  const double bracket = term1 + term2;
-  const double scale = std::fabs(term1) + std::fabs(term2);
-  if (!(bracket > 0.0) ||
-      bracket <= BAWL_NATURAL_REL_TOL * std::max(1.0, scale)) return false;
-
-  const double denom_scale = A * sv * m * m * denom;
-  if (!(denom_scale > 0.0) || !(denom_scale < R_PosInf)) return false;
-  pdf = jacobian * bracket / denom_scale;
-  return pdf > 0.0 && pdf < R_PosInf;
+  if (!R_FINITE(pdf)) return false;
+  if (pdf <= 0.0) {
+    if (!lenient) return false;
+    pdf = 0.0;
+  }
+  return true;
 }
 
-inline double log_bawl_cdf_norm(double t, double A, double b, double v,
-                                double sv, double k, bool posdrift = true) {
-  if (k <= BAWL_K_EPS)
-    return log_lba_k0_cdf_norm(t, A, b, v, sv, posdrift,
-                               BAWL_DENOM_FLOOR);
-  if (t <= 0.0 || !(sv > 0.0) || !(b >= A) || !(b > 0.0)) return R_NegInf;
+// Authoritative log-space CDF.
+inline double log_ba_cdf(double t, double A, double b, double v, double sv,
+                         double k, bool posdrift, double denom_floor) {
+  if (!(t > 0.0) || !(sv > 0.0) || !(A >= 0.0) || !(b >= A) || !(b > 0.0))
+    return R_NegInf;
+  if (t == R_PosInf && k <= BAWL_K_EPS)
+    return posdrift ? 0.0 : pnorm_log_direct(v / sv, true);
 
-  const double log_denom = log_positive_normalizer(v, sv, posdrift,
-                                                    BAWL_DENOM_FLOOR);
+  const double log_denom = log_positive_normalizer(v, sv, posdrift, denom_floor);
   double c, m;
   bawl_threshold_terms(t, b, sv, k, c, m);
+  c += v / sv;
+  if (!(c > R_NegInf)) return R_NegInf;  // catches -Inf and NaN
 
-  c = v / sv + c;
-
-  if (A <= 1e-10 || !(m > 0.0)) {
+  // Point-mass start; t = Inf with k > 0 lands here (m = 0) and keeps the
+  // defective upper tail Phi((v - k*b)/sv).
+  if (A <= BAWL_A_EPS || !(m > 0.0))
     return pnorm_log_direct(c, true) - log_denom;
-  }
 
   const double span = m * A;
-  if (!(span > 1e-8) || !emc2_isfinite(span)) {
-    // Midpoint evaluation is the continuous limit as the start range
-    // collapses, and avoids manufacturing a difference of equal antiderives.
-    const double zmid = c + 0.5 * span;
-    return pnorm_log_direct(zmid, true) - log_denom;
+  if (span > BAWL_LOG_MIN_SPAN && emc2_isfinite(span)) {
+    const double log_integral = log_normal_phi_integral(c, c + span);
+    const double out = log_integral - std::log(span) - log_denom;
+    // NaN: both endpoints so far in one tail that the antiderivative
+    // difference lost all digits; the midpoint below is the stable limit.
+    if (!ISNAN(out)) return out >= 0.0 ? 0.0 : out;
   }
-
-  const double log_integral = log_normal_phi_integral(c, c + span);
-  const double out = log_integral - std::log(A) - std::log(m) - log_denom;
+  const double out = pnorm_log_direct(c + 0.5 * span, true) - log_denom;
   return out >= 0.0 ? 0.0 : out;
 }
 
-inline double log_bawl_pdf_norm(double t, double A, double b, double v,
-                                double sv, double k, bool posdrift = true) {
-  if (k <= BAWL_K_EPS)
-    return log_lba_k0_pdf_norm(t, A, b, v, sv, posdrift,
-                               BAWL_DENOM_FLOOR);
-  if (t <= 0.0 || !(sv > 0.0) || !(b >= A) || !(b > 0.0)) return R_NegInf;
+// Authoritative log-space PDF.
+inline double log_ba_pdf(double t, double A, double b, double v, double sv,
+                         double k, bool posdrift, double denom_floor) {
+  if (!(t > 0.0) || t == R_PosInf || !(sv > 0.0) || !(A >= 0.0) ||
+      !(b >= A) || !(b > 0.0))
+    return R_NegInf;
 
-  const double log_denom = log_positive_normalizer(v, sv, posdrift,
-                                                    BAWL_DENOM_FLOOR);
+  const double log_denom = log_positive_normalizer(v, sv, posdrift, denom_floor);
   double c, m, log_jacobian;
   bawl_threshold_terms(t, b, sv, k, c, m, &log_jacobian);
-  c = v / sv + c;
+  c += v / sv;
+  if (!(c > R_NegInf) || !(log_jacobian > R_NegInf)) return R_NegInf;
 
-  if (!(log_jacobian > R_NegInf)) return R_NegInf;
-  if (A <= 1e-10 || !(m > 0.0)) {
+  if (A <= BAWL_A_EPS || !(m > 0.0))
     return log_jacobian + std::log(b) + dnormP(c, 0.0, 1.0, true) -
       std::log(sv) - log_denom;
-  }
 
   const double span = m * A;
-  if (!(span > 1e-8) || !emc2_isfinite(span)) {
-    const double zmid = c + 0.5 * span;
-    return log_jacobian + std::log(b - 0.5 * A) +
-      dnormP(zmid, 0.0, 1.0, true) - std::log(sv) - log_denom;
+  if (span > BAWL_LOG_MIN_SPAN && emc2_isfinite(span)) {
+    const double hi = c + span;
+    const double log_dphi = log_normal_interval(c, hi);
+    if (!ISNAN(log_dphi)) {
+      // Density numerator: (b*m + c) * DeltaPhi + Delta(phi), signed.
+      const signed_log lead = signed_log_product(b * m + c, log_dphi);
+      const signed_log phi_diff = signed_log_sub(
+        make_signed_log(dnormP(hi, 0.0, 1.0, true), 1),
+        make_signed_log(dnormP(c, 0.0, 1.0, true), 1));
+      const signed_log bracket = signed_log_add(lead, phi_diff);
+      const double max_term = std::max(lead.log_abs, phi_diff.log_abs);
+      if (bracket.sign > 0 && !ISNAN(bracket.log_abs) &&
+          bracket.log_abs > max_term + BAWL_LOG_BRACKET_MIN) {
+        return log_jacobian - std::log(A) - std::log(sv) - log_denom -
+          2.0 * std::log(m) + bracket.log_abs;
+      }
+      // The two terms cancelled past the accuracy of the tail logs (a sign
+      // flip is always numerical: the true numerator is positive).  It is
+      // m^2 * integral_0^A (b - a) phi(c + m a) da, with the factor (b - a)
+      // confined to [b - A, b], so the midpoint-in-a form
+      // m * (b - A/2) * DeltaPhi is exact in DeltaPhi and bounds the
+      // weighting error by roughly a factor of two in the worst case.
+      return log_jacobian - std::log(A) - std::log(sv) - log_denom -
+        std::log(m) + std::log(b - 0.5 * A) + log_dphi;
+    }
   }
-
-  const double hi = c + span;
-  const double log_dphi = log_normal_interval(c, hi);
-
-  // m^2 * integral_0^A (b-a) phi(c+m*a) da
-  //   = (b*m+c) [Phi(hi)-Phi(c)] + phi(hi)-phi(c).
-  signed_log bracket = signed_log_product(b * m + c, log_dphi);
-  const signed_log log_phi_diff = signed_log_sub(
-    make_signed_log(dnormP(hi, 0.0, 1.0, true), 1),
-    make_signed_log(dnormP(c, 0.0, 1.0, true), 1));
-  bracket = signed_log_add(bracket, log_phi_diff);
-  if (bracket.sign <= 0 || bracket.log_abs == R_NegInf) return R_NegInf;
-
-  return log_jacobian - std::log(A) - std::log(sv) - log_denom -
-    2.0 * std::log(m) + bracket.log_abs;
+  // Collapsed start range (or unusable DeltaPhi): midpoint limit in z.
+  return log_jacobian + std::log(b - 0.5 * A) +
+    dnormP(c + 0.5 * span, 0.0, 1.0, true) - std::log(sv) - log_denom;
 }
 
+// Natural-then-log wrappers.  BAwL keeps its legacy 1e-300 normalizer floor;
+// the lba_k0_* entry points evaluate the exact k = 0 member with the legacy
+// LBA floor so both models reproduce their historical normalization.
 inline double bawl_cdf_norm(double t, double A, double b, double v,
-                            double sv, double k, bool posdrift,
-                            bool log_out) {
-  if (k <= BAWL_K_EPS)
-    return lba_k0_cdf_norm(t, A, b, v, sv, posdrift, log_out,
-                           BAWL_DENOM_FLOOR);
+                            double sv, double k, bool posdrift, bool log_out,
+                            double denom_floor = BAWL_DENOM_FLOOR) {
   double cdf;
-  if (bawl_natural_cdf(t, A, b, v, sv, k, posdrift, cdf))
+  if (ba_natural_cdf(t, A, b, v, sv, k, posdrift, denom_floor,
+                     BA_ACCEPT_STRICT, cdf))
     return log_out ? std::log(cdf) : cdf;
-  return return_from_log(log_bawl_cdf_norm(t, A, b, v, sv, k, posdrift), log_out);
+  return return_from_log(log_ba_cdf(t, A, b, v, sv, k, posdrift, denom_floor),
+                         log_out);
 }
 
 inline double bawl_pdf_norm(double t, double A, double b, double v,
-                            double sv, double k, bool posdrift,
-                            bool log_out) {
-  if (k <= BAWL_K_EPS)
-    return lba_k0_pdf_norm(t, A, b, v, sv, posdrift, log_out,
-                           BAWL_DENOM_FLOOR);
+                            double sv, double k, bool posdrift, bool log_out,
+                            double denom_floor = BAWL_DENOM_FLOOR) {
   double pdf;
-  if (bawl_natural_pdf(t, A, b, v, sv, k, posdrift, pdf))
+  if (ba_natural_pdf(t, A, b, v, sv, k, posdrift, denom_floor,
+                     BA_ACCEPT_STRICT, pdf))
     return log_out ? std::log(pdf) : pdf;
-  return return_from_log(log_bawl_pdf_norm(t, A, b, v, sv, k, posdrift), log_out);
+  return return_from_log(log_ba_pdf(t, A, b, v, sv, k, posdrift, denom_floor),
+                         log_out);
+}
+
+inline double lba_k0_cdf_norm(double t, double A, double b, double v,
+                              double sv, bool posdrift, bool log_out,
+                              double denom_floor = LBA_DENOM_FLOOR) {
+  return bawl_cdf_norm(t, A, b, v, sv, 0.0, posdrift, log_out, denom_floor);
+}
+
+inline double lba_k0_pdf_norm(double t, double A, double b, double v,
+                              double sv, bool posdrift, bool log_out,
+                              double denom_floor = LBA_DENOM_FLOOR) {
+  return bawl_pdf_norm(t, A, b, v, sv, 0.0, posdrift, log_out, denom_floor);
+}
+
+// Natural-scale scalar evaluators for consumers that clamp to [0, 1] and
+// tolerate tail saturation: truncation normalisers and GSL integrands.
+// These accept near-0/near-1 natural values (the common case at truncation
+// bounds) instead of re-deriving them through the log machinery, which
+// profiling showed dominating truncated-LBA likelihoods.
+inline double bawl_cdf_scalar_natural(double t, double A, double b, double v,
+                                      double sv, double k, bool posdrift,
+                                      double denom_floor = BAWL_DENOM_FLOOR) {
+  double cdf;
+  if (ba_natural_cdf(t, A, b, v, sv, k, posdrift, denom_floor,
+                     BA_ACCEPT_CLAMP, cdf))
+    return cdf;
+  return std::exp(log_ba_cdf(t, A, b, v, sv, k, posdrift, denom_floor));
+}
+
+inline double bawl_pdf_scalar_natural(double t, double A, double b, double v,
+                                      double sv, double k, bool posdrift,
+                                      double denom_floor = BAWL_DENOM_FLOOR) {
+  double pdf;
+  if (ba_natural_pdf(t, A, b, v, sv, k, posdrift, denom_floor,
+                     BA_ACCEPT_CLAMP, pdf))
+    return pdf;
+  return std::exp(log_ba_pdf(t, A, b, v, sv, k, posdrift, denom_floor));
 }
 
 // --------------------------------------------------------------------------
@@ -699,13 +574,9 @@ inline double bawl_pdf_norm(double t, double A, double b, double v,
 double pleakyba_norm(double t, double A, double b,
                      double v, double sv, double k,
                      bool posdrift = true, bool log_out = false) {
-  // At infinite time, k=0 has the usual LBA limit.  For k>0 the accumulator
-  // approaches D/k, so only drifts above k*b can finish; retain that
-  // defective upper tail instead of returning one.
-  if (t == R_PosInf && k <= 1e-10) {
-    const double log_cdf = posdrift ? 0.0 : pnorm_log_direct(v / sv, true);
-    return return_from_log(log_cdf, log_out);
-  }
+  // At infinite time k = 0 has the usual LBA limit; for k > 0 only drifts
+  // above k*b can finish, and the m = 0 point limit inside the evaluators
+  // retains that defective upper tail instead of returning one.
   return bawl_cdf_norm(t, A, b, v, sv, k, posdrift, log_out);
 }
 
@@ -745,7 +616,12 @@ inline double dkilledleakyba_norm(double t, double v, double b, double A,
     return log_out ? log_f_guess : std::exp(log_f_guess);
   }
 
-  if (!use_guess && !use_kill) return dleakyba_norm(t_eam, A, b, v, sv, k, posdrift, log_out);
+  if (!use_guess && !use_kill) {
+    // Natural-scale scalar consumers clamp; skip the strict wrapper's
+    // near-boundary rejections (hot in truncation normalisers).
+    if (!log_out) return bawl_pdf_scalar_natural(t_eam, A, b, v, sv, k, posdrift);
+    return dleakyba_norm(t_eam, A, b, v, sv, k, posdrift, log_out);
+  }
 
   const double log_fR = dleakyba_norm(t_eam, A, b, v, sv, k, posdrift, true);
   const double log_f_hit = log_fR + log_sK + log_sG;
@@ -835,7 +711,10 @@ inline double pkilledleakyba_norm(double t, double v, double b, double A,
     return log_out ? safe_log(out) : out;
   }
 
-  if (!use_guess && !use_kill) return pleakyba_norm(t_eam, A, b, v, sv, k, posdrift, log_out);
+  if (!use_guess && !use_kill) {
+    if (!log_out) return bawl_cdf_scalar_natural(t_eam, A, b, v, sv, k, posdrift);
+    return pleakyba_norm(t_eam, A, b, v, sv, k, posdrift, log_out);
+  }
 
   if (use_guess && use_kill) {
     const double out = integrate_bawl_pdf_raw(
@@ -937,6 +816,41 @@ NumericVector pleakyba(NumericVector t,
   };
   for (int i = 0; i < n; i++)
     cdf[i] = pleakyba_norm(t[i], pick(A,i), pick(b,i), pick(v,i), pick(sv,i), pick(k,i), posdrift);
+  return cdf;
+}
+
+// Standard LBA (exact k = 0 member with the legacy LBA normalizer floor),
+// restored so the R-side dfun/pfun agree exactly with the C++ likelihood
+// kernels, which also use LBA_DENOM_FLOOR for this model.
+// [[Rcpp::export]]
+NumericVector dlba(NumericVector t,
+                   NumericVector A, NumericVector b,
+                   NumericVector v, NumericVector sv,
+                   bool posdrift = true, bool log_out = false) {
+  int n = t.size();
+  NumericVector pdf(n);
+  auto pick = [](const NumericVector& vec, int i) -> double {
+    return vec.size() == 1 ? vec[0] : vec[i];
+  };
+  for (int i = 0; i < n; i++)
+    pdf[i] = lba_k0_pdf_norm(t[i], pick(A,i), pick(b,i), pick(v,i),
+                             pick(sv,i), posdrift, log_out);
+  return pdf;
+}
+
+// [[Rcpp::export]]
+NumericVector plba(NumericVector t,
+                   NumericVector A, NumericVector b,
+                   NumericVector v, NumericVector sv,
+                   bool posdrift = true, bool log_out = false) {
+  int n = t.size();
+  NumericVector cdf(n);
+  auto pick = [](const NumericVector& vec, int i) -> double {
+    return vec.size() == 1 ? vec[0] : vec[i];
+  };
+  for (int i = 0; i < n; i++)
+    cdf[i] = lba_k0_cdf_norm(t[i], pick(A,i), pick(b,i), pick(v,i),
+                             pick(sv,i), posdrift, log_out);
   return cdf;
 }
 

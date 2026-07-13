@@ -33,7 +33,9 @@ test_that("mapped_pars can restrict mappings to observed factor combinations", {
   )
   p_vec <- sampled_pars(des, use_data = FALSE)
 
-  all_combinations <- mapped_pars(des, p_vec)
+  # The design stores its data, so the default restricts to observed cells;
+  # use_data = FALSE recovers the full factorial grid.
+  all_combinations <- mapped_pars(des, p_vec, use_data = FALSE)
   observed_combinations <- mapped_pars(des, p_vec, data = dat)
 
   expect_equal(nrow(all_combinations), 4)

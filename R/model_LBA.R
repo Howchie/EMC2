@@ -6,9 +6,11 @@
   ok <- (dt>0) & (pars[,"b"] >= pars[,"A"])
   ok[is.na(ok) | !is.finite(dt)] <- FALSE
   out <- numeric(length(dt))
-  out[ok] <- dleakyba(t = dt[ok], A = pars[ok,"A"], b = pars[ok,"b"],
-                      v = pars[ok,"v"], sv = pars[ok,"sv"], k = 0,
-                      posdrift = posdrift)
+  # dlba is the k = 0 BAwL member evaluated with the LBA normalizer floor,
+  # so this R path matches the C++ likelihood kernels exactly.
+  out[ok] <- dlba(t = dt[ok], A = pars[ok,"A"], b = pars[ok,"b"],
+                  v = pars[ok,"v"], sv = pars[ok,"sv"],
+                  posdrift = posdrift)
   out
 }
 
@@ -20,9 +22,9 @@
   ok <- (dt>0) & (pars[,"b"] >= pars[,"A"])
   ok[is.na(ok) | !is.finite(dt)] <- FALSE
   out <- numeric(length(dt))
-  out[ok] <- pleakyba(t = dt[ok], A = pars[ok,"A"], b = pars[ok,"b"],
-                      v = pars[ok,"v"], sv = pars[ok,"sv"], k = 0,
-                      posdrift = posdrift)
+  out[ok] <- plba(t = dt[ok], A = pars[ok,"A"], b = pars[ok,"b"],
+                  v = pars[ok,"v"], sv = pars[ok,"sv"],
+                  posdrift = posdrift)
   is_inf <- is.infinite(rt) & rt > 0 & (pars[,"b"] >= pars[,"A"])
   is_inf[is.na(is_inf)] <- FALSE
   if (any(is_inf)) {

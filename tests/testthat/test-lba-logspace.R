@@ -94,11 +94,78 @@ test_that("BAwL log-space kernels remain finite in the rare tail", {
   expect_true(all(log_cdf < log(.Machine$double.xmin)))
 })
 
+test_that("LBA log CDF stays defined when both z endpoints are far in the upper tail", {
+  # Large positive z = (b - t*v) / (t*sv): early times or strongly negative
+  # drifts.  The Q-antiderivative's log-ratio rounds to >= 0 here and must
+  # take the asymptotic branch instead of returning NA via log1m_exp.
+  cases <- list(
+    list(t = 1e-4, A = 0.3, b = 1.5, v = 3,    sv = 1),     # early time
+    list(t = 0.5,  A = 0.3, b = 1.5, v = -1e6, sv = 1),     # extreme drift
+    list(t = 0.5,  A = 0.3, b = 1.5, v = -1e6, sv = 1e-3),  # extreme drift, small sv
+    list(t = 0.5,  A = 0.3, b = 1.5, v = -1e8, sv = 1)
+  )
+  for (a in cases) {
+    log_cdf <- EMC2:::pleakyba_norm(a$t, a$A, a$b, a$v, a$sv, 0, TRUE, TRUE)
+    expect_false(is.na(log_cdf))
+    expect_lt(log_cdf, 0)
+    cdf <- EMC2:::pleakyba_norm(a$t, a$A, a$b, a$v, a$sv, 0, TRUE, FALSE)
+    expect_false(is.na(cdf))
+  }
+})
+
+test_that("LBA log kernels survive a collapsed start range in the far tail", {
+  # span = A / (t*sv) below ~1e-7 with far-tail z endpoints defeats the
+  # antiderivative log-difference; the midpoint guard must take over, the
+  # log CDF must stay defined and non-positive.
+  cases <- list(
+    list(t = 0.445, A = 2.32e-10, b = 0.0293, v = -26.6, sv = 0.0359),
+    list(t = 7.52,  A = 3.14e-10, b = 0.0189, v = -24.1, sv = 0.037),
+    list(t = 84.6,  A = 1.09e-6,  b = 42.9,   v = 5.8e6, sv = 0.775)
+  )
+  for (a in cases) {
+    log_cdf <- EMC2:::pleakyba_norm(a$t, a$A, a$b, a$v, a$sv, 0, TRUE, TRUE)
+    log_pdf <- EMC2:::dleakyba_norm(a$t, a$A, a$b, a$v, a$sv, 0, TRUE, TRUE)
+    expect_false(is.na(log_cdf))
+    expect_false(is.na(log_pdf))
+    expect_lte(log_cdf, 0)
+  }
+})
+
 test_that("BAwL retains its defective upper tail when k > 0", {
   p <- EMC2:::pleakyba_norm(Inf, A = 0.3, b = 1.5, v = 1, sv = 1,
                             k = 0.4, posdrift = TRUE)
   expect_gt(p, 0)
   expect_lt(p, 1)
+})
+
+test_that("scalar natural-scale kernels stay exact at truncation-bound regimes", {
+  # Truncation normalisers evaluate the scalar CDF at bounds where it is
+  # legitimately ~0 or ~1 and immediately clamp; the scalar path must return
+  # those natural values (fast) rather than reject them, and must still agree
+  # with the strict evaluators away from the boundaries.
+  p_scalar <- function(t, v) EMC2:::pkilledleakyba(t, v = v, b = 3.4, A = 1.9,
+    sv = 1, t0 = 0, k = 0, lambda_g = 0, lambda_k = 0)
+  # Upper bound, strong drift: CDF saturates to ~1 (true survivor ~1e-15).
+  expect_gte(p_scalar(20, 8), 1 - 1e-8)
+  expect_lte(p_scalar(20, 8), 1)
+  # Lower bound, strong negative drift: underflows to 0.
+  expect_equal(p_scalar(0.05, -30), 0)
+  # Mid regime agrees with the strict log evaluator.
+  for (v in c(-2, 0.5, 3)) {
+    expect_equal(p_scalar(0.8, v),
+                 exp(EMC2:::pleakyba_norm(0.8, 1.9, 3.4, v, 1, 0, TRUE, TRUE)),
+                 tolerance = 1e-10)
+  }
+})
+
+test_that("extreme drifts stay cheap and finite in log tails", {
+  # z beyond 37 used to fall back to R::pnorm; the asymptotic tail must give
+  # finite, monotone log CDFs without it.
+  lp <- vapply(c(-50, -100, -1000, -1e4), function(v) {
+    EMC2:::pleakyba_norm(0.8, 1.9, 3.4, v, 1, 0, TRUE, TRUE)
+  }, numeric(1))
+  expect_true(all(is.finite(lp)))
+  expect_true(all(diff(lp) < 0))
 })
 
 test_that("LBA exposes no BAwL leak or clock parameters", {
