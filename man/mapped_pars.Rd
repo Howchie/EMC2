@@ -14,6 +14,7 @@ mapped_pars(
   digits = 3,
   remove_subjects = TRUE,
   covariates = NULL,
+  data = NULL,
   ...
 )
 
@@ -24,6 +25,7 @@ mapped_pars(
   digits = 3,
   remove_subjects = TRUE,
   covariates = NULL,
+  data = NULL,
   ...
 )
 
@@ -34,6 +36,7 @@ mapped_pars(
   digits = 3,
   remove_subjects = TRUE,
   covariates = NULL,
+  data = NULL,
   ...
 )
 
@@ -44,6 +47,7 @@ mapped_pars(
   digits = 3,
   remove_subjects = TRUE,
   covariates = NULL,
+  data = NULL,
   ...
 )
 }
@@ -60,6 +64,9 @@ Must be in the form of \code{sampled_pars(design)}}
 \item{remove_subjects}{Boolean. Whether to include subjects as a factor in the design}
 
 \item{covariates}{Covariates specified in the design can be included here.}
+
+\item{data}{Optional data frame. If supplied, only factor combinations observed
+in the data are returned.}
 
 \item{...}{optional arguments}
 }

@@ -1171,11 +1171,11 @@ plot_design.emc <- function(x, data = NULL, factors = NULL, plot_factor = NULL, 
 #' @rdname mapped_pars
 #' @export
 mapped_pars.emc <- function(x, p_vector = NULL, model = NULL, digits=3,remove_subjects=TRUE,
-                                  covariates=NULL,...){
+                                  covariates=NULL, data = NULL, ...){
   if(is.null(p_vector)) p_vector <- credint(x, probs = .5)[[1]]
   design <- get_design(x)
-  mapped_pars(design, p_vector, digits = digits, remove_subjects=remove_subjects,
-              covariates=covariates,...)
+  mapped_pars(design, p_vector, model = model, digits = digits, remove_subjects=remove_subjects,
+              covariates=covariates, data = data, ...)
 }
 
 #' Get Design

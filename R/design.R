@@ -1159,6 +1159,8 @@ update2version <- function(emc){
 #' @param ... optional arguments
 #' @param remove_subjects Boolean. Whether to include subjects as a factor in the design
 #' @param covariates Covariates specified in the design can be included here.
+#' @param data Optional data frame. If supplied, only factor combinations observed
+#'   in the data are returned.
 #' @return Matrix with a column for each factor in the design and for   each model parameter type (``p_type``).
 #' @examples
 #' # First define a design:
@@ -1175,7 +1177,7 @@ update2version <- function(emc){
 #' @export
 mapped_pars <- function(x, p_vector = NULL, model=NULL,
                         digits=3,remove_subjects=TRUE,
-                        covariates=NULL,...)
+                        covariates=NULL, data = NULL, ...)
   # Show augmented data and corresponding mapped parameter
 {
   UseMethod("mapped_pars")
@@ -1185,7 +1187,7 @@ mapped_pars <- function(x, p_vector = NULL, model=NULL,
 #' @export
 mapped_pars.emc.design <- function(x, p_vector = NULL, model=NULL,
                                    digits=3,remove_subjects=TRUE,
-                                   covariates=NULL,...){
+                                   covariates=NULL, data = NULL, ...){
   if(is.null(x)) return(NULL)
   if(is.null(x$Ffactors)){
     x <- x[[1]]
@@ -1209,9 +1211,36 @@ mapped_pars.emc.design <- function(x, p_vector = NULL, model=NULL,
     stop("Must specify model as not in design") else model <- design$model
   if (remove_subjects) design$Ffactors$subjects <- design$Ffactors$subjects[1]
   if(is.null(names(p_vector))) names(p_vector) <- names(sampled_pars(design))
-  dadm <- design_model(minimal_design(design, covariates = Fcovariates, verbose = F, drop_R = F, add_acc = F, drop_subjects = F,
-                                      do_functions = F),
-                       design,model,rt_check=FALSE,compress=FALSE, verbose = FALSE)
+  mapping_data <- minimal_design(
+    design, covariates = Fcovariates, verbose = F, drop_R = F,
+    add_acc = F, drop_subjects = F, do_functions = F
+  )
+  if (!is.null(data)) {
+    if (!is.data.frame(data)) stop("data must be a data frame")
+
+    observed_factors <- names(design$Ffactors)
+    if (remove_subjects) observed_factors <- setdiff(observed_factors, "subjects")
+    missing_factors <- setdiff(observed_factors, names(data))
+    if (length(missing_factors) > 0) {
+      stop("data is missing design factor(s): ", paste(missing_factors, collapse = ", "))
+    }
+
+    observed_factors <- intersect(observed_factors, names(mapping_data))
+
+    if (length(observed_factors) > 0) {
+      mapping_key <- function(df) {
+        values <- lapply(df[, observed_factors, drop = FALSE], as.character)
+        values <- lapply(values, function(value) {
+          value[is.na(value)] <- "<NA>"
+          value
+        })
+        do.call(paste, c(values, sep = "\r"))
+      }
+      observed_keys <- unique(mapping_key(data))
+      mapping_data <- mapping_data[mapping_key(mapping_data) %in% observed_keys, , drop = FALSE]
+    }
+  }
+  dadm <- design_model(mapping_data, design,model,rt_check=FALSE,compress=FALSE, verbose = FALSE)
   ok <- !(names(dadm) %in% c("subjects","trials","R","rt","winner"))
   out <- cbind(dadm[,ok, drop = F],round(get_pars_matrix_oo(p_vector,dadm, design$model()),digits))
   if (model()$type=="SDT")  out <- out[dadm$lR!=levels(dadm$lR)[length(levels(dadm$lR))],]

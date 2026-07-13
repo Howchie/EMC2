@@ -638,11 +638,11 @@ plot_design.emc.prior <- function(x, data = NULL, factors = NULL, plot_factor = 
 #' @rdname mapped_pars
 #' @export
 mapped_pars.emc.prior <- function(x, p_vector = NULL, model = NULL, digits=3,remove_subjects=TRUE,
-                                   covariates=NULL,...){
+                                   covariates=NULL, data = NULL, ...){
   if(is.null(p_vector)) p_vector <- x$theta_mu_mean
   design <- get_design(x)
-  mapped_pars(design, p_vector, digits = digits, remove_subjects=remove_subjects,
-              covariates=covariates,...)
+  mapped_pars(design, p_vector, model = model, digits = digits, remove_subjects=remove_subjects,
+              covariates=covariates, data = data, ...)
 }
 
 #' @rdname sampled_pars
@@ -651,4 +651,3 @@ sampled_pars.emc.prior <- function(x,group_design=NULL,doMap=FALSE, add_da = FAL
   return(sampled_pars(get_design(x), group_design = group_design, doMap = doMap,
                           add_da = add_da, all_cells_dm = all_cells_dm, data = data))
 }
-

@@ -16,6 +16,32 @@ test_that("mapped_pars", {
   expect_snapshot(mapped_pars(get_design(samples_LNR)))
 })
 
+test_that("mapped_pars can restrict mappings to observed factor combinations", {
+  dat <- data.frame(
+    subjects = factor(rep("s1", 3)),
+    block = factor(c("b1", "b1", "b2"), levels = c("b1", "b2")),
+    E = factor(c("easy", "hard", "hard"), levels = c("easy", "hard")),
+    R = factor(c("left", "right", "left"), levels = c("left", "right")),
+    rt = c(0.5, 0.6, 0.7)
+  )
+  des <- design(
+    data = dat,
+    model = DDM,
+    formula = list(v ~ block * E, a ~ 1, t0 ~ 1, s ~ 1,
+                   Z ~ 1, sv ~ 1, SZ ~ 1),
+    report_p_vector = FALSE
+  )
+  p_vec <- sampled_pars(des)
+
+  all_combinations <- mapped_pars(des, p_vec)
+  observed_combinations <- mapped_pars(des, p_vec, data = dat)
+
+  expect_equal(nrow(all_combinations), 4)
+  expect_equal(nrow(observed_combinations), 3)
+  expect_false(any(observed_combinations$block == "b2" &
+                     observed_combinations$E == "easy"))
+})
+
 test_that("map", {
   expect_snapshot(credint(samples_LNR, selection = "mu", map = "E"))
   expect_snapshot(credint(samples_LNR, selection = "mu", map = list(~ E*S)))
