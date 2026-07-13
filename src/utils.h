@@ -103,6 +103,13 @@ struct ContextForRaceModels {
     // Set to false in global-kill models, and true in single-accumulator analytic paths.
     bool apply_lk_to_racers = true;
 
+    // LBA is represented by the shared BAwL kernels with k=0 and both timer
+    // means fixed at their natural-scale off value (zero).  In this mode the
+    // first five columns retain the LBA layout and optional BAwL columns must
+    // not be read.
+    bool bawl_k_fixed_zero = false;
+    bool bawl_clocks_fixed_off = false;
+
     // Tri-state caches for optional accumulator levels:
     // -2 = unresolved (detect from data once), -1 = absent, >0 = factor code.
     int time_code = -2;
@@ -174,24 +181,6 @@ inline TimedLambdaDispatch timed_lambda_dispatch(const ContextForRaceModels* ctx
     out.lambda_k = lambda_k;
   }
   return out;
-}
-
-// Scalar adapters (single-RT, single-parameter-row) used by GSL integration.
-inline double dlba_scalar(double t, const double* par, void* ctx_) {
-  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
-  if (R_IsNA(par[0])) return 0.0;
-  const double tt = t - par[4];
-  if (tt <= 0.0) return 0.0;
-  // par: v=0, sv=1, B=2, A=3, t0=4 (LBA uses fixed scale s=1)
-  return dlba_norm(tt, par[3], par[2] + par[3], par[0], par[1], ctx->use_posdrift);
-}
-
-inline double plba_scalar(double t, const double* par, void* ctx_) {
-  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
-  if (R_IsNA(par[0])) return 0.0;
-  const double tt = t - par[4];
-  if (tt <= 0.0) return 0.0;
-  return plba_norm(tt, par[3], par[2] + par[3], par[0], par[1], ctx->use_posdrift);
 }
 
 // Column layout: v=0, B=1, A=2, t0=3, s=4
@@ -741,79 +730,6 @@ inline void rexg_logS_at_t(double t, const double* const* cols,
   }
 }
 
-// Column order per src/col_registry.h.
-inline void dlba_raw(const double* rt, const double* const* cols, int n_rows,
-                     const int* mask, const int* isok,
-                     double* out, double min_ll, void* ctx_) {
-  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
-  const bool floor_raw = raw_floor_log_lik(ctx_);
-  const bool pd = ctx ? ctx->use_posdrift : true;
-  const double* v_  = cols[emc2col::lba::v];
-  const double* sv_ = cols[emc2col::lba::sv];
-  const double* B_  = cols[emc2col::lba::B];
-  const double* A_  = cols[emc2col::lba::A];
-  const double* t0_ = cols[emc2col::lba::t0];
-  for (int i = 0; i < n_rows; ++i) {
-    if (!mask[i]) continue;
-    if (R_IsNA(v_[i]) || !isok[i]) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
-    const double tt = rt[i] - t0_[i];
-    if (tt <= 0.0) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
-    const double log_pdf = dlba_norm(tt, A_[i], B_[i] + A_[i], v_[i], sv_[i], pd, true);
-    out[i] = raw_log_value(log_pdf, min_ll, floor_raw);
-  }
-}
-
-inline void plba_raw(const double* rt, const double* const* cols, int n_rows,
-                     const int* mask, const int* isok,
-                     double* out, double min_ll, void* ctx_) {
-  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
-  const bool floor_raw = raw_floor_log_lik(ctx_);
-  const bool pd = ctx ? ctx->use_posdrift : true;
-  const double* v_  = cols[emc2col::lba::v];
-  const double* sv_ = cols[emc2col::lba::sv];
-  const double* B_  = cols[emc2col::lba::B];
-  const double* A_  = cols[emc2col::lba::A];
-  const double* t0_ = cols[emc2col::lba::t0];
-  for (int i = 0; i < n_rows; ++i) {
-    if (!mask[i]) continue;
-    if (R_IsNA(v_[i]) || !isok[i]) { out[i] = 0.0; continue; }
-    const double tt = rt[i] - t0_[i];
-    if (tt <= 0.0) { out[i] = 0.0; continue; }
-    const double log_cdf = plba_norm(tt, A_[i], B_[i] + A_[i], v_[i], sv_[i], pd, true);
-    if (log_cdf >= 0.0) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
-    out[i] = log1m_exp(log_cdf);
-  }
-}
-
-inline void lba_logS_at_t(double t, const double* const* cols,
-                           int n_rows_total, int n_lR, int /*n_par*/,
-                           const int* trunc_mask, int n_unique_trials,
-                           const int* isok_all, void* ctx_, double* logS_out) {
-  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
-  const bool pd = ctx ? ctx->use_posdrift : true;
-  const double* v_  = cols[emc2col::lba::v];
-  const double* sv_ = cols[emc2col::lba::sv];
-  const double* B_  = cols[emc2col::lba::B];
-  const double* A_  = cols[emc2col::lba::A];
-  const double* t0_ = cols[emc2col::lba::t0];
-  for (int j = 0; j < n_unique_trials; ++j) {
-    if (!trunc_mask[j]) continue;
-    const int start = j * n_lR;
-    double logS = 0.0;
-    bool bad = false;
-    for (int k = 0; k < n_lR && !bad; ++k) {
-      const int r = start + k;
-      if (!isok_all[r] || R_IsNA(v_[r])) { bad = true; break; }
-      const double tt = t - t0_[r];
-      if (tt <= 0.0) continue;
-      const double log_cdf = plba_norm(tt, A_[r], B_[r] + A_[r], v_[r], sv_[r], pd, true);
-      if (log_cdf >= 0.0) { bad = true; break; }
-      logS += log1m_exp(log_cdf);
-    }
-    logS_out[j] = bad ? R_NegInf : logS;
-  }
-}
-
 // ============================================================
 // BAwL (Ballistic Accumulator with Leak + killing/guessing) adapters
 // Column layout: v=0, sv=1, B=2, A=3, t0=4, k=5, mG=6 (guess-clock mean), mK=7 (kill-clock mean)
@@ -824,17 +740,27 @@ inline double dbawl_scalar(double t, const double* par, void* ctx_) {
   if (R_IsNA(par[0])) return 0.0;
   const double t0_val = par[4];
   const double tt = t - t0_val;
+  if (ctx && ctx->bawl_k_fixed_zero && ctx->bawl_clocks_fixed_off) {
+    if (tt <= 0.0 || t <= 0.0) return 0.0;
+    return lba_k0_pdf_norm(
+      tt, par[3], par[2] + par[3], par[0], par[1],
+      ctx->use_posdrift, false
+    );
+  }
   const bool local_guess = ctx && (ctx->is_local_guess || ctx->is_local_kill_guess);
   const int ks = ctx ? ctx->kill_shape : 1;
-  const double lg = (ctx && ctx->kill_active) ? erlang_lambda_from_mean(par[6], ks) : 0.0;
-  const double lk = (ctx && ctx->kill_active && ctx->apply_lk_to_racers) ? erlang_lambda_from_mean(par[7], ks) : 0.0;
+  const double k_val = (ctx && ctx->bawl_k_fixed_zero) ? 0.0 : par[5];
+  const double lg = (ctx && ctx->bawl_clocks_fixed_off) ? 0.0 :
+    ((ctx && ctx->kill_active) ? erlang_lambda_from_mean(par[6], ks) : 0.0);
+  const double lk = (ctx && ctx->bawl_clocks_fixed_off) ? 0.0 :
+    ((ctx && ctx->kill_active && ctx->apply_lk_to_racers) ? erlang_lambda_from_mean(par[7], ks) : 0.0);
   const double omega = erlang_omega_for_shape(ks, par, ctx ? ctx->erlang_omega_index : -1);
   const bool erl = (lg > 1e-12 || lk > 1e-12);
   if (tt <= 0.0 && !erl) return 0.0;
   if (t <= 0.0) return 0.0;
   // Pass raw t and t0_val; core function splits EAM (t - t0) from erlang (t).
   return dkilledleakyba_norm(
-    t, par[0], par[2] + par[3], par[3], par[1], t0_val, par[5], lg, lk,
+    t, par[0], par[2] + par[3], par[3], par[1], t0_val, k_val, lg, lk,
     ctx->use_posdrift, false, ks, local_guess, omega
   );
 }
@@ -844,16 +770,28 @@ inline double pbawl_scalar(double t, const double* par, void* ctx_) {
   if (R_IsNA(par[0])) return 0.0;
   const double t0_val = par[4];
   const double tt = t - t0_val;
+  if (ctx && ctx->bawl_k_fixed_zero && ctx->bawl_clocks_fixed_off) {
+    if (tt <= 0.0 || t <= 0.0) return 0.0;
+    if (tt == R_PosInf)
+      return ctx->use_posdrift ? 1.0 : pnorm_std(par[0] / par[1], true, false);
+    return lba_k0_cdf_norm(
+      tt, par[3], par[2] + par[3], par[0], par[1],
+      ctx->use_posdrift, false
+    );
+  }
   const bool local_guess = ctx && (ctx->is_local_guess || ctx->is_local_kill_guess);
   const int ks = ctx ? ctx->kill_shape : 1;
-  const double lg = (ctx && ctx->kill_active) ? erlang_lambda_from_mean(par[6], ks) : 0.0;
-  const double lk = (ctx && ctx->kill_active && ctx->apply_lk_to_racers) ? erlang_lambda_from_mean(par[7], ks) : 0.0;
+  const double k_val = (ctx && ctx->bawl_k_fixed_zero) ? 0.0 : par[5];
+  const double lg = (ctx && ctx->bawl_clocks_fixed_off) ? 0.0 :
+    ((ctx && ctx->kill_active) ? erlang_lambda_from_mean(par[6], ks) : 0.0);
+  const double lk = (ctx && ctx->bawl_clocks_fixed_off) ? 0.0 :
+    ((ctx && ctx->kill_active && ctx->apply_lk_to_racers) ? erlang_lambda_from_mean(par[7], ks) : 0.0);
   const double omega = erlang_omega_for_shape(ks, par, ctx ? ctx->erlang_omega_index : -1);
   const bool erl = (lg > 1e-12 || lk > 1e-12);
   if (tt <= 0.0 && !erl) return 0.0;
   if (t <= 0.0) return 0.0;
   return pkilledleakyba_norm(
-    t, par[0], par[2] + par[3], par[3], par[1], t0_val, par[5], lg, lk,
+    t, par[0], par[2] + par[3], par[3], par[1], t0_val, k_val, lg, lk,
     ctx->use_posdrift, false, ks, local_guess, omega
   );
 }
@@ -864,35 +802,72 @@ inline void dbawl_raw(const double* rt, const double* const* cols, int n_rows,
   auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
   const bool floor_raw = raw_floor_log_lik(ctx_);
   const bool pd          = ctx->use_posdrift;
-  const bool local_guess = ctx->is_local_guess || ctx->is_local_kill_guess;
-  const int ks = ctx ? ctx->kill_shape : 1;
   const double* v_  = cols[emc2col::bawl::v];
   const double* sv_  = cols[emc2col::bawl::sv];
   const double* B_  = cols[emc2col::bawl::B];
   const double* A_  = cols[emc2col::bawl::A];
   const double* t0_ = cols[emc2col::bawl::t0];
-  const double* k_  = cols[emc2col::bawl::k];
-  const double* lg_ = cols[emc2col::bawl::mG];
-  const double* lk_ = cols[emc2col::bawl::mK];
+  if (ctx && ctx->bawl_k_fixed_zero && ctx->bawl_clocks_fixed_off) {
+    // Exact LBA member: retain the shared numerical kernel, but skip the
+    // killed-clock wrapper and all optional-column bookkeeping per row.
+    for (int i = 0; i < n_rows; ++i) {
+      if (!mask[i]) continue;
+      if (R_IsNA(v_[i]) || !isok[i]) {
+        out[i] = raw_log_zero(min_ll, floor_raw);
+        continue;
+      }
+      const double tt = rt[i] - t0_[i];
+      if (tt <= 0.0 || rt[i] <= 0.0) {
+        out[i] = raw_log_zero(min_ll, floor_raw);
+        continue;
+      }
+      const double b_i = B_[i] + A_[i];
+      double pdf = 0.0;
+      if (lba_k0_raw_natural_pdf(tt, A_[i], b_i, v_[i], sv_[i], pd, pdf)) {
+        if (pdf > 0.0) {
+          out[i] = raw_log_value(std::log(pdf), min_ll, floor_raw);
+        } else {
+          out[i] = raw_log_zero(min_ll, floor_raw);
+        }
+      } else {
+        const double log_pdf = lba_k0_pdf_norm(
+          tt, A_[i], b_i, v_[i], sv_[i], pd, true
+        );
+        out[i] = (log_pdf > R_NegInf && emc2_isfinite(log_pdf))
+          ? raw_log_value(log_pdf, min_ll, floor_raw)
+          : raw_log_zero(min_ll, floor_raw);
+      }
+    }
+    return;
+  }
+  const bool local_guess = ctx->is_local_guess || ctx->is_local_kill_guess;
+  const int ks = ctx ? ctx->kill_shape : 1;
+  const double* k_  = (ctx && ctx->bawl_k_fixed_zero) ? nullptr : cols[emc2col::bawl::k];
+  const double* lg_ = (ctx && ctx->bawl_clocks_fixed_off) ? nullptr : cols[emc2col::bawl::mG];
+  const double* lk_ = (ctx && ctx->bawl_clocks_fixed_off) ? nullptr : cols[emc2col::bawl::mK];
   const double* omega_ = (ks == 3) ? cols[emc2col::bawl::omega] : nullptr;
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
     if (R_IsNA(v_[i]) || !isok[i]) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
     const double t0_i = t0_[i];
     const double tt = rt[i] - t0_i;
-    const double lg = (!ctx->kill_active) ? 0.0 : erlang_lambda_from_mean(lg_[i], ks);
-    const double lk = (!ctx->kill_active || !ctx->apply_lk_to_racers) ? 0.0 : erlang_lambda_from_mean(lk_[i], ks);
+    const double kval = (ctx && ctx->bawl_k_fixed_zero) ? 0.0 : k_[i];
+    const double lg = (ctx && ctx->bawl_clocks_fixed_off) ? 0.0 :
+      ((!ctx->kill_active) ? 0.0 : erlang_lambda_from_mean(lg_[i], ks));
+    const double lk = (ctx && ctx->bawl_clocks_fixed_off) ? 0.0 :
+      ((!ctx->kill_active || !ctx->apply_lk_to_racers) ? 0.0 : erlang_lambda_from_mean(lk_[i], ks));
     const double omega = (ks == 3 && omega_ != nullptr) ? std::fmax(0.0, std::fmin(1.0, omega_[i])) :
                          erlang_omega_for_shape(ks);
     const bool erl = (lg > 1e-12 || lk > 1e-12);
     if (tt <= 0.0 && !erl) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
     if (rt[i] <= 0.0) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
     // Pass raw rt and t0; core function uses t0 to split EAM vs erlang time.
-    const double pdf = dkilledleakyba_norm(
-      rt[i], v_[i], B_[i] + A_[i], A_[i], sv_[i], t0_i, k_[i], lg, lk,
-      pd, false, ks, local_guess, omega
+    const double log_pdf = dkilledleakyba_norm(
+      rt[i], v_[i], B_[i] + A_[i], A_[i], sv_[i], t0_i, kval, lg, lk,
+      pd, true, ks, local_guess, omega
     );
-    out[i] = (pdf > 0.0 && emc2_isfinite(pdf)) ? raw_log_value(std::log(pdf), min_ll, floor_raw) : raw_log_zero(min_ll, floor_raw);
+    out[i] = (log_pdf > R_NegInf && emc2_isfinite(log_pdf))
+      ? raw_log_value(log_pdf, min_ll, floor_raw) : raw_log_zero(min_ll, floor_raw);
   }
 }
 
@@ -902,31 +877,72 @@ inline void pbawl_raw(const double* rt, const double* const* cols, int n_rows,
   auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
   const bool floor_raw = raw_floor_log_lik(ctx_);
   const bool pd          = ctx->use_posdrift;
-  const bool local_guess = ctx->is_local_guess || ctx->is_local_kill_guess;
-  const int ks = ctx ? ctx->kill_shape : 1;
   const double* v_  = cols[emc2col::bawl::v];
   const double* sv_  = cols[emc2col::bawl::sv];
   const double* B_  = cols[emc2col::bawl::B];
   const double* A_  = cols[emc2col::bawl::A];
   const double* t0_ = cols[emc2col::bawl::t0];
-  const double* k_  = cols[emc2col::bawl::k];
-  const double* lg_ = cols[emc2col::bawl::mG];
-  const double* lk_ = cols[emc2col::bawl::mK];
+  if (ctx && ctx->bawl_k_fixed_zero && ctx->bawl_clocks_fixed_off) {
+    // Exact LBA member; pfun writes the log-survivor expected by the raw
+    // likelihood path, while lba_k0_cdf_norm supplies a stable log CDF.
+    for (int i = 0; i < n_rows; ++i) {
+      if (!mask[i]) continue;
+      if (R_IsNA(v_[i]) || !isok[i]) {
+        out[i] = 0.0;
+        continue;
+      }
+      const double tt = rt[i] - t0_[i];
+      if (tt <= 0.0 || rt[i] <= 0.0) {
+        out[i] = 0.0;
+        continue;
+      }
+      if (tt == R_PosInf) {
+        const double cdf_inf = pd ? 1.0 : pnorm_std(v_[i] / sv_[i], true, false);
+        if (cdf_inf >= 1.0) out[i] = raw_log_zero(min_ll, floor_raw);
+        else out[i] = R_FINITE(cdf_inf) ? std::log1p(-cdf_inf) : 0.0;
+        continue;
+      }
+      const double b_i = B_[i] + A_[i];
+      double cdf = 0.0;
+      if (lba_k0_raw_natural_cdf(tt, A_[i], b_i, v_[i], sv_[i], pd, cdf)) {
+        if (cdf >= 1.0) out[i] = raw_log_zero(min_ll, floor_raw);
+        else out[i] = (cdf > 0.0) ? std::log1p(-cdf) : 0.0;
+      } else {
+        const double log_cdf = lba_k0_cdf_norm(
+          tt, A_[i], b_i, v_[i], sv_[i], pd, true
+        );
+        if (log_cdf >= 0.0) {
+          out[i] = raw_log_zero(min_ll, floor_raw);
+        } else {
+          out[i] = R_FINITE(log_cdf) ? log1m_exp(log_cdf) : 0.0;
+        }
+      }
+    }
+    return;
+  }
+  const bool local_guess = ctx->is_local_guess || ctx->is_local_kill_guess;
+  const int ks = ctx ? ctx->kill_shape : 1;
+  const double* k_  = (ctx && ctx->bawl_k_fixed_zero) ? nullptr : cols[emc2col::bawl::k];
+  const double* lg_ = (ctx && ctx->bawl_clocks_fixed_off) ? nullptr : cols[emc2col::bawl::mG];
+  const double* lk_ = (ctx && ctx->bawl_clocks_fixed_off) ? nullptr : cols[emc2col::bawl::mK];
   const double* omega_ = (ks == 3) ? cols[emc2col::bawl::omega] : nullptr;
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
     if (R_IsNA(v_[i]) || !isok[i]) { out[i] = 0.0; continue; }
     const double t0_i = t0_[i];
     const double tt = rt[i] - t0_i;
-    const double lg = (!ctx->kill_active) ? 0.0 : erlang_lambda_from_mean(lg_[i], ks);
-    const double lk = (!ctx->kill_active || !ctx->apply_lk_to_racers) ? 0.0 : erlang_lambda_from_mean(lk_[i], ks);
+    const double kval = (ctx && ctx->bawl_k_fixed_zero) ? 0.0 : k_[i];
+    const double lg = (ctx && ctx->bawl_clocks_fixed_off) ? 0.0 :
+      ((!ctx->kill_active) ? 0.0 : erlang_lambda_from_mean(lg_[i], ks));
+    const double lk = (ctx && ctx->bawl_clocks_fixed_off) ? 0.0 :
+      ((!ctx->kill_active || !ctx->apply_lk_to_racers) ? 0.0 : erlang_lambda_from_mean(lk_[i], ks));
     const double omega = (ks == 3 && omega_ != nullptr) ? std::fmax(0.0, std::fmin(1.0, omega_[i])) :
                          erlang_omega_for_shape(ks);
     const bool erl = (lg > 1e-12 || lk > 1e-12);
     if (tt <= 0.0 && !erl) { out[i] = 0.0; continue; }
     if (rt[i] <= 0.0) { out[i] = 0.0; continue; }
     const double log_cdf = pkilledleakyba_norm(
-      rt[i], v_[i], B_[i] + A_[i], A_[i], sv_[i], t0_i, k_[i], lg, lk,
+      rt[i], v_[i], B_[i] + A_[i], A_[i], sv_[i], t0_i, kval, lg, lk,
       pd, true, ks, local_guess, omega
     );
     if (!R_FINITE(log_cdf)) { out[i] = 0.0; continue; }
@@ -948,9 +964,9 @@ inline void bawl_logS_at_t(double t, const double* const* cols,
   const double* B_  = cols[emc2col::bawl::B];
   const double* A_  = cols[emc2col::bawl::A];
   const double* t0_ = cols[emc2col::bawl::t0];
-  const double* k_  = cols[emc2col::bawl::k];
-  const double* lg_ = cols[emc2col::bawl::mG];
-  const double* lk_ = cols[emc2col::bawl::mK];
+  const double* k_  = (ctx && ctx->bawl_k_fixed_zero) ? nullptr : cols[emc2col::bawl::k];
+  const double* lg_ = (ctx && ctx->bawl_clocks_fixed_off) ? nullptr : cols[emc2col::bawl::mG];
+  const double* lk_ = (ctx && ctx->bawl_clocks_fixed_off) ? nullptr : cols[emc2col::bawl::mK];
   const double* omega_ = (ks == 3) ? cols[emc2col::bawl::omega] : nullptr;
   for (int j = 0; j < n_unique_trials; ++j) {
     if (!trunc_mask[j]) continue;
@@ -962,8 +978,30 @@ inline void bawl_logS_at_t(double t, const double* const* cols,
       if (!isok_all[r] || R_IsNA(v_[r])) { bad = true; break; }
       const double t0_r = t0_[r];
       const double tt = t - t0_r;
-      const double lg = (!ctx->kill_active) ? 0.0 : erlang_lambda_from_mean(lg_[r], ks);
-      const double lk = (!ctx->kill_active || !ctx->apply_lk_to_racers) ? 0.0 : erlang_lambda_from_mean(lk_[r], ks);
+      if (ctx && ctx->bawl_k_fixed_zero && ctx->bawl_clocks_fixed_off) {
+        if (tt <= 0.0) continue;
+        if (tt == R_PosInf) {
+          const double cdf_inf = pd ? 1.0 : pnorm_std(v_[r] / sv_[r], true, false);
+          if (cdf_inf >= 1.0) { bad = true; break; }
+          logS += std::log1p(-cdf_inf);
+          continue;
+        }
+        double cdf = 0.0;
+        const bool natural_ok = lba_k0_raw_natural_cdf(
+          tt, A_[r], B_[r] + A_[r], v_[r], sv_[r], pd, cdf
+        ) && cdf > 0.0 && cdf < 1.0 - 1e-8;
+        const double log_cdf = natural_ok
+          ? std::log(cdf)
+          : lba_k0_cdf_norm(tt, A_[r], B_[r] + A_[r], v_[r], sv_[r], pd, true);
+        if (log_cdf >= 0.0) { bad = true; break; }
+        if (R_FINITE(log_cdf)) logS += log1m_exp(log_cdf);
+        continue;
+      }
+      const double kval = (ctx && ctx->bawl_k_fixed_zero) ? 0.0 : k_[r];
+      const double lg = (ctx && ctx->bawl_clocks_fixed_off) ? 0.0 :
+        ((!ctx->kill_active) ? 0.0 : erlang_lambda_from_mean(lg_[r], ks));
+      const double lk = (ctx && ctx->bawl_clocks_fixed_off) ? 0.0 :
+        ((!ctx->kill_active || !ctx->apply_lk_to_racers) ? 0.0 : erlang_lambda_from_mean(lk_[r], ks));
       const double omega = (ks == 3 && omega_ != nullptr) ? std::fmax(0.0, std::fmin(1.0, omega_[r])) :
                            erlang_omega_for_shape(ks);
       const bool local_guess = ctx && (ctx->is_local_guess || ctx->is_local_kill_guess);
@@ -974,7 +1012,7 @@ inline void bawl_logS_at_t(double t, const double* const* cols,
         // guess paths can.  Use the same CDF logic as the scalar path so kill
         // before t0 is not treated as an observed hit removed by lower truncation.
         const double log_cdf = pkilledleakyba_norm(
-          t, v_[r], B_[r] + A_[r], A_[r], sv_[r], t0_r, k_[r], lg, lk,
+          t, v_[r], B_[r] + A_[r], A_[r], sv_[r], t0_r, kval, lg, lk,
           pd, true, ks, local_guess, omega
         );
         if (!R_FINITE(log_cdf)) continue;
@@ -983,12 +1021,12 @@ inline void bawl_logS_at_t(double t, const double* const* cols,
         continue;
       }
       // Both EAM and erlang contribute; pass raw t and t0_r.
-      const double cdf = pkilledleakyba_norm(
-        t, v_[r], B_[r] + A_[r], A_[r], sv_[r], t0_r, k_[r], lg, lk,
-        pd, false, ks, local_guess, omega
+      const double log_cdf = pkilledleakyba_norm(
+        t, v_[r], B_[r] + A_[r], A_[r], sv_[r], t0_r, kval, lg, lk,
+        pd, true, ks, local_guess, omega
       );
-      if (cdf >= 1.0) { bad = true; break; }
-      if (cdf > 0.0) logS += std::log1p(-cdf);
+      if (log_cdf >= 0.0) { bad = true; break; }
+      if (R_FINITE(log_cdf)) logS += log1m_exp(log_cdf);
     }
     logS_out[j] = bad ? R_NegInf : logS;
   }

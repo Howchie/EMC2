@@ -211,6 +211,10 @@ design <- function(formula = NULL,factors = NULL,Rlevels = NULL,model,data=NULL,
                  TC=TC,LT=TC$LT,LC=TC$LC,UC=TC$UC,UT=TC$UT,
                  fixed_accumulator_roles = fixed_accumulator_roles)
   class(design) <- "emc.design"
+  # Preserve the data context when the design is constructed from data.  This
+  # allows sampled_pars(design) and mapped_pars(design) to use observed cells
+  # without requiring the caller to pass the same data again.
+  if (!is.null(data)) attr(design, "data") <- data
   if (!is.null(trend)) {
     # check for at = 'lR'
     if(any(sapply(trend, function(x) x$at)=='lR') & model()$type!='RACE') {

@@ -9,7 +9,7 @@ test_that("race rfuns convert a winning time accumulator into a timed guess", {
     c(v = 8.0,  sv = 1e-8, b = 1.1, A = 0.0, t0 = 0.2)
   )
   lba_pars <- lba_pars[rep(seq_len(nrow(lba_pars)), n_trials), , drop = FALSE]
-  sim_lba <- EMC2:::rLBA(lR, lba_pars)
+  sim_lba <- EMC2:::.lba_rfun(lR, lba_pars)
   expect_false(any(as.character(sim_lba$R) == "time"))
   expect_true(all(as.character(sim_lba$R) %in% c("left", "right")))
 

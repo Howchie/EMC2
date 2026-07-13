@@ -1,103 +1,4 @@
-#### Standard LBA ----
-# # Moved to C+_ in model_LBA.cpp
-#
-# pnormP <- function (x, mean = 0, sd = 1, lower.tail = TRUE)
-#       ifelse(abs(x) < 7, pnorm(x, mean = mean, sd = sd, lower.tail = lower.tail),
-#              ifelse(x < 0, 0, 1))
-#
-# dnormP <- function (x, mean = 0, sd = 1)
-#       ifelse(abs(x) < 7, dnorm(x, mean = mean, sd = sd), 0)
-#
-#
-# dlba_norm <- function (dt,A,b,v,sv,posdrift=TRUE,robust=FALSE)
-#     # like dlba_norm_core but t0 dealt with outside (removed from dt)
-# {
-#
-#
-#     if (robust) {
-#       pnorm1 <- pnormP
-#       dnorm1 <- dnormP
-#     } else {
-#       pnorm1 <- pnorm
-#       dnorm1 <- dnorm
-#     }
-#
-#     if (posdrift)
-#       denom <- pmax(pnorm1(v/sv), 1e-10) else
-#         denom <- rep(1, length(t))
-#
-#     A_small <- A < 1e-10
-#     if (any(A_small)) {
-#       out <- numeric(length(dt))
-#       out[A_small] <- pmax(0, ((b[A_small]/dt[A_small]^2) *
-#                                  dnorm1(b[A_small]/dt[A_small],v[A_small], sd = sv[A_small]))/denom[A_small])
-#       zs <- dt[!A_small] * sv[!A_small]
-#       zu <- dt[!A_small] * v[!A_small]
-#       chiminuszu <- b[!A_small] - zu
-#       chizu <- chiminuszu/zs
-#       chizumax <- (chiminuszu - A[!A_small])/zs
-#       out[!A_small] <- pmax(0, (v[!A_small] * (pnorm1(chizu) -
-#                                                  pnorm1(chizumax)) + sv[!A_small] * (dnorm1(chizumax) -
-#                                                                                        dnorm1(chizu)))/(A[!A_small] * denom[!A_small]))
-#       return(out)
-#     } else {
-#       zs <- dt * sv
-#       zu <- dt * v
-#       chiminuszu <- b - zu
-#       chizu <- chiminuszu/zs
-#       chizumax <- (chiminuszu - A)/zs
-#       return(pmax(0, (v * (pnorm1(chizu) - pnorm1(chizumax)) +
-#                         sv * (dnorm1(chizumax) - dnorm1(chizu)))/(A * denom)))
-#     }
-# }
-#
-#
-# plba_norm <- function (dt,A,b,v,sv,posdrift=TRUE,robust=FALSE)
-#     # like plba_norm_core but t0 dealt with outside (removed from dt)
-# {
-#
-#     if (robust) {
-#       pnorm1 <- pnormP
-#       dnorm1 <- dnormP
-#     } else {
-#       pnorm1 <- pnorm
-#       dnorm1 <- dnorm
-#     }
-#     if (posdrift)
-#       denom <- pmax(pnorm1(v/sv), 1e-10) else
-#         denom <- 1
-#     A_small <- A < 1e-10
-#     if (any(A_small)) {
-#       out <- numeric(length(dt))
-#       out[A_small] <- pmin(1, pmax(0, (pnorm1(b[A_small]/dt[A_small],
-#                                               mean = v[A_small], sd = sv[A_small],
-#                                               lower.tail = FALSE))/denom[A_small]))
-#       zs <- dt[!A_small] * sv[!A_small]
-#       zu <- dt[!A_small] * v[!A_small]
-#       chiminuszu <- b[!A_small] - zu
-#       xx <- chiminuszu - A[!A_small]
-#       chizu <- chiminuszu/zs
-#       chizumax <- xx/zs
-#       tmp1 <- zs * (dnorm1(chizumax) - dnorm1(chizu))
-#       tmp2 <- xx * pnorm1(chizumax) - chiminuszu * pnorm1(chizu)
-#       out[!A_small] <- pmin(pmax(0, (1 + (tmp1 + tmp2)/A[!A_small])/denom[!A_small]),1)
-#       return(out)
-#     } else {
-#       zs <- dt * sv
-#       zu <- dt * v
-#       chiminuszu <- b - zu
-#       xx <- chiminuszu - A
-#       chizu <- chiminuszu/zs
-#       chizumax <- xx/zs
-#       tmp1 <- zs * (dnorm1(chizumax) - dnorm1(chizu))
-#       tmp2 <- xx * pnorm1(chizumax) - chiminuszu * pnorm1(chizu)
-#       return(pmin(pmax(0, (1 + (tmp1 + tmp2)/A)/denom), 1))
-#     }
-# }
-#
-#
-
-dLBA <- function (rt, pars, posdrift = TRUE)
+.lba_dfun <- function (rt, pars, posdrift = TRUE)
   # posdrift = truncated positive normal rates
   # robust slower, deals with extreme rate values
 {
@@ -105,13 +6,13 @@ dLBA <- function (rt, pars, posdrift = TRUE)
   ok <- (dt>0) & (pars[,"b"] >= pars[,"A"])
   ok[is.na(ok) | !is.finite(dt)] <- FALSE
   out <- numeric(length(dt))
-  out[ok] <- dlba(t = dt[ok], A = pars[ok,"A"], b = pars[ok,"b"],
-                         v = pars[ok,"v"], sv = pars[ok,"sv"],
-                         posdrift = posdrift)
+  out[ok] <- dleakyba(t = dt[ok], A = pars[ok,"A"], b = pars[ok,"b"],
+                      v = pars[ok,"v"], sv = pars[ok,"sv"], k = 0,
+                      posdrift = posdrift)
   out
 }
 
-pLBA <- function (rt, pars, posdrift = TRUE)
+.lba_pfun <- function (rt, pars, posdrift = TRUE)
   # posdrift = truncated positive normal rates
   # robust slower, deals with extreme rate values
 {
@@ -119,9 +20,9 @@ pLBA <- function (rt, pars, posdrift = TRUE)
   ok <- (dt>0) & (pars[,"b"] >= pars[,"A"])
   ok[is.na(ok) | !is.finite(dt)] <- FALSE
   out <- numeric(length(dt))
-  out[ok] <- plba(t = dt[ok], A = pars[ok,"A"], b = pars[ok,"b"],
-                         v = pars[ok,"v"], sv = pars[ok,"sv"],
-                         posdrift = posdrift)
+  out[ok] <- pleakyba(t = dt[ok], A = pars[ok,"A"], b = pars[ok,"b"],
+                      v = pars[ok,"v"], sv = pars[ok,"sv"], k = 0,
+                      posdrift = posdrift)
   is_inf <- is.infinite(rt) & rt > 0 & (pars[,"b"] >= pars[,"A"])
   is_inf[is.na(is_inf)] <- FALSE
   if (any(is_inf)) {
@@ -132,7 +33,7 @@ pLBA <- function (rt, pars, posdrift = TRUE)
 }
 
 
-rLBA <- function(lR,pars,p_types=c("v","sv","b","A","t0"),
+.lba_rfun <- function(lR,pars,p_types=c("v","sv","b","A","t0"),
                  ok=rep(TRUE,length(lR)),posdrift = TRUE)
   # lR is an empty latent response factor lR with one level for each accumulator.
   # pars is a matrix of corresponding parameter values named as in p_types
@@ -237,6 +138,11 @@ LBA <- function(posdrift=TRUE){
   list(
     type="RACE",
     c_name = ifelse(posdrift,"LBA","LBAIO"),
+    # The C++ likelihood adapter evaluates LBA through the shared BAwL
+    # kernels with k = 0 and clock means mG = mK = 0 on the natural scale.
+    # Those optional BAwL parameters are deliberately not part of the LBA
+    # parameter vector; if represented on the transformed scale, their off
+    # value would be log(0) = -Inf.
     # p_vector transform, sets sv as a scaling parameter
     p_types=c("v" = 1,"sv" = log(1),"B" = log(1),"A" = log(0),"t0" = log(0), "pContaminant"=qnorm(0)),
     p_types_canonical = c("v", "sv", "B", "A", "t0"),
@@ -253,11 +159,11 @@ LBA <- function(posdrift=TRUE){
     rfun=ifelse(posdrift,function(data,pars) .rfun_LBA(data$lR,pars,ok = attr(pars, "ok"),posdrift=TRUE),
                 function(data,pars) .rfun_LBA(data$lR,pars,ok = attr(pars, "ok"),posdrift=FALSE)),
     # Density function (PDF) for single accumulator
-    dfun=ifelse(posdrift,function(rt,pars) dLBA(rt,pars,posdrift=TRUE),
-                function(rt,pars) dLBA(rt,pars,posdrift=FALSE)),
+    dfun=ifelse(posdrift,function(rt,pars) .lba_dfun(rt,pars,posdrift=TRUE),
+                function(rt,pars) .lba_dfun(rt,pars,posdrift=FALSE)),
     # Probability function (CDF) for single accumulator
-    pfun=ifelse(posdrift,function(rt,pars) pLBA(rt,pars,posdrift=TRUE),
-                function(rt,pars) pLBA(rt,pars,posdrift=FALSE)),
+    pfun=ifelse(posdrift,function(rt,pars) .lba_pfun(rt,pars,posdrift=TRUE),
+                function(rt,pars) .lba_pfun(rt,pars,posdrift=FALSE)),
     # Race likelihood combining pfun and dfun
     log_likelihood=function(pars,dadm,model,min_ll=log(1e-10)){
       log_likelihood_race_missing(pars=pars, dadm = dadm, model = model, min_ll = min_ll)
@@ -288,9 +194,9 @@ LogicalRulesLBA <- function(posdrift = TRUE, fast_path=TRUE){
     # Random function for racing accumulator
     rfun=function(data,pars) .rfun_LBA(data$lR,pars,ok = attr(pars, "ok"),posdrift=ifelse(posdrift,TRUE,FALSE)),
     # Density function (PDF) for single accumulator
-    dfun=function(rt,pars) dLBA(rt,pars,posdrift=ifelse(posdrift,TRUE,FALSE)),
+    dfun=function(rt,pars) .lba_dfun(rt,pars,posdrift=ifelse(posdrift,TRUE,FALSE)),
     # Probability function (CDF) for single accumulator
-    pfun=function(rt,pars) pLBA(rt,pars,posdrift=ifelse(posdrift,TRUE,FALSE)),
+    pfun=function(rt,pars) .lba_pfun(rt,pars,posdrift=ifelse(posdrift,TRUE,FALSE)),
     # Race likelihood combining pfun and dfun
     log_likelihood=function(pars,dadm,model,min_ll=log(1e-10)){
       stop("LogicalRulesLBA: R likelihood path not implemented. Use fast_path=TRUE (the default).")

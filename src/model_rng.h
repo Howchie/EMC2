@@ -11,7 +11,7 @@
 // primitives must be reached through an exported function.
 //
 // These kernels are distributionally equivalent to, but NOT stream-identical
-// with, the R reference rfuns (rLBA, rBAwL, rRDM/rWald, rRDMSWTN/rSWTN):
+// with, the R reference rfuns (.lba_rfun, rBAwL, rRDM/rWald, rRDMSWTN/rSWTN):
 // the order and shape of RNG draws differs (msm::rtnorm uses internal
 // rejection; rwaldt draws vectors per-subset rather than per-trial). See
 // rfun_port_plan.md section 3.

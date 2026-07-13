@@ -1037,10 +1037,11 @@ credint <- function(x, ...){
 #' @export
 get_data.emc <- function(emc) {
   if(is.null(emc[[1]]$data)) return(NULL) # Prior samples
+  emc_design <- .get_design_emc(emc)
   if(is.null(emc[[1]]$data[[1]]$subjects)){ # Joint model
     dat <- vector("list", length(emc[[1]]$data[[1]]))
     for(i in 1:length(dat)){
-      design <- get_design(emc)[[i]]
+      design <- emc_design[[i]]
       tmp <- do.call(rbind,lapply(emc[[1]]$data,function(x){
         cur <- x[[i]]
         if("LogicalRule"%in%names(cur)){
@@ -1059,7 +1060,7 @@ get_data.emc <- function(emc) {
     }
     names(dat) <- get_joint_names(emc)
   } else{
-    design <- get_design(emc)[[1]]
+    design <- emc_design[[1]]
     dat <- do.call(rbind,lapply(emc[[1]]$data,function(x){
       if(!is.null(x$winner) && (length(unique(x$lR)) > 1) && !"LogicalRule"%in%names(x)){
         # Only expand winner for race models
@@ -1119,6 +1120,18 @@ get_prior <- function(emc){
 #' @rdname get_design
 #' @export
 get_design.emc <- function(x){
+  emc_design <- .get_design_emc(x)
+  if (!is.null(x[[1]]$data)) {
+    design_data <- get_data(x)
+    if (is.data.frame(design_data)) design_data <- list(design_data)
+    for (i in seq_along(emc_design)) {
+      if (i <= length(design_data)) attr(emc_design[[i]], "data") <- design_data[[i]]
+    }
+  }
+  return(emc_design)
+}
+
+.get_design_emc <- function(x){
   # For backwards compatibility
   if(!is.null(attr(x, "design_list"))){
     emc_design <- attr(x, "design_list")

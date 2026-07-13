@@ -29,14 +29,6 @@ draw_alpha_from_design <- function(group_designs, mu, var) {
     .Call(`_EMC2_draw_alpha_from_design`, group_designs, mu, var)
 }
 
-dlba <- function(t, A, b, v, sv, posdrift = TRUE, log_out = FALSE) {
-    .Call(`_EMC2_dlba`, t, A, b, v, sv, posdrift, log_out)
-}
-
-plba <- function(t, A, b, v, sv, posdrift = TRUE, log_out = FALSE) {
-    .Call(`_EMC2_plba`, t, A, b, v, sv, posdrift, log_out)
-}
-
 pleakyba_norm <- function(t, A, b, v, sv, k, posdrift = TRUE, log_out = FALSE) {
     .Call(`_EMC2_pleakyba_norm`, t, A, b, v, sv, k, posdrift, log_out)
 }

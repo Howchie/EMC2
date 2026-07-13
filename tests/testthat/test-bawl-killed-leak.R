@@ -134,10 +134,10 @@ test_that("BAwL nests to LBA when leak and clocks are zero", {
   dt <- rt - pars[, "t0"]
 
   expect_equal(EMC2:::dBAwL(rt, pars),
-               EMC2:::dlba(dt, pars[, "A"], pars[, "b"], pars[, "v"], pars[, "sv"], TRUE),
+               EMC2:::dleakyba(dt, pars[, "A"], pars[, "b"], pars[, "v"], pars[, "sv"], 0, TRUE),
                tolerance = 1e-10)
   expect_equal(EMC2:::pBAwL(rt, pars),
-               EMC2:::plba(dt, pars[, "A"], pars[, "b"], pars[, "v"], pars[, "sv"], TRUE),
+               EMC2:::pleakyba(dt, pars[, "A"], pars[, "b"], pars[, "v"], pars[, "sv"], 0, TRUE),
                tolerance = 1e-10)
 })
 

@@ -287,11 +287,11 @@ test_that("logical-rule GL path handles unequal t0 within target/nontarget pairs
   }
   d1 <- function(u, p_row) {
     p_eval <- p_row[rep(1, length(u)), , drop = FALSE]
-    EMC2:::dLBA(u, p_eval)
+    EMC2:::.lba_dfun(u, p_eval)
   }
   p1 <- function(u, p_row) {
     p_eval <- p_row[rep(1, length(u)), , drop = FALSE]
-    EMC2:::pLBA(u, p_eval)
+    EMC2:::.lba_pfun(u, p_eval)
   }
   win_before <- function(t, winner, loser) {
     if (!(t > 0)) return(0)

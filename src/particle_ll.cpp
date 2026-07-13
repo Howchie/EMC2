@@ -495,6 +495,14 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
     if (type_std.find("_GLOBAL") != std::string::npos) out.ctx.is_global_kill = true;
   }
 
+  // A bare BAwL/RDM-with-timers type has timer columns in its parameter
+  // contract, but no active Erlang process.  Keep that distinction in the
+  // scalar and raw paths; treating the default mG/mK values as active clocks
+  // changes the likelihood and needlessly evaluates the clock mixture for
+  // every proposal.  The suffixed variants enable the process below.
+  out.ctx.kill_active = out.ctx.is_local_guess || out.ctx.is_global_kill ||
+                        out.ctx.is_local_kill || out.ctx.is_local_kill_guess;
+
   out.ctx.apply_lk_to_racers = !out.ctx.is_global_kill;
 
   if (out.ctx.is_global_kill) out.ctx.defective_upper_tail = true;
@@ -548,13 +556,19 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
     if (type_std.find("_E2") != std::string::npos) out.ctx.kill_shape = 2;
     if (type_std.find("_EMIX") != std::string::npos) out.ctx.kill_shape = 3;
   } else if (type_std.find("LBA") != std::string::npos) {
-    out.pdf1_ptr = &dlba_scalar;
-    out.cdf1_ptr = &plba_scalar;
-    out.model_dfun_raw = &dlba_raw;
-    out.model_pfun_raw = &plba_raw;
-    out.logS_at_t_ptr = &lba_logS_at_t;
+    // Standard LBA is the exact k=0, no-clock member of the shared BAwL
+    // family.  Keep the five-column LBA contract and force the optional BAwL
+    // parameters off in the adapter rather than adding hidden columns.
+    out.pdf1_ptr = &dbawl_scalar;
+    out.cdf1_ptr = &pbawl_scalar;
+    out.model_dfun_raw = &dbawl_raw;
+    out.model_pfun_raw = &pbawl_raw;
+    out.logS_at_t_ptr = &bawl_logS_at_t;
     out.col_spec     = emc2col::lba::spec();
     out.ctx.t0_index = emc2col::lba::t0;
+    out.ctx.bawl_k_fixed_zero = true;
+    out.ctx.bawl_clocks_fixed_off = true;
+    out.ctx.defective_upper_tail = false;
     if (type_std.find("IO") != std::string::npos) {
       out.ctx.use_posdrift = false;
       out.ctx.defective_upper_tail = true;
@@ -2988,7 +3002,10 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
 
         const double* const* pars_cols = race_cols.data();
         adapter.ctx.mode_hint = 0;
-        adapter.ctx.kill_active = true;
+        adapter.ctx.kill_active = adapter.ctx.is_local_guess ||
+                                  adapter.ctx.is_global_kill ||
+                                  adapter.ctx.is_local_kill ||
+                                  adapter.ctx.is_local_kill_guess;
         // Set once-per-particle mode hints so raw kernels can skip per-row
         // variability checks in common zero-variability cases.
         if (type_std.find("RDMSWTN") != std::string::npos) {

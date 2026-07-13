@@ -159,7 +159,7 @@ test_that("LBAIO keeps intrinsic omission mass at infinity", {
     dimnames = list(NULL, c("v", "sv", "B", "A", "t0", "b"))
   )
   expect_equal(
-    EMC2:::pLBA(Inf, pars, posdrift = FALSE),
+    EMC2:::.lba_pfun(Inf, pars, posdrift = FALSE),
     pnorm(0, mean = 0.5, sd = 1, lower.tail = FALSE),
     tolerance = 1e-12
   )
@@ -245,7 +245,7 @@ test_that("LBAIO keeps intrinsic omission mass at infinity", {
                           compress = FALSE, verbose = FALSE)
   ll_trunc <- EMC2:::calc_ll_manager(p_mat, emc_trunc[[1]]$data[[1]], emc_trunc[[1]]$model)
   ll_notrunc <- EMC2:::calc_ll_manager(p_mat, emc_notrunc[[1]]$data[[1]], emc_notrunc[[1]]$model)
-  S_LT <- 1 - EMC2:::pLBA(2.5, pars, posdrift = FALSE)
+  S_LT <- 1 - EMC2:::.lba_pfun(2.5, pars, posdrift = FALSE)
   expect_equal(as.numeric(ll_trunc - ll_notrunc), -log(S_LT), tolerance = 1e-8)
 })
 

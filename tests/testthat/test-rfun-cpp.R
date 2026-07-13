@@ -20,13 +20,13 @@ prop_close <- function(a, b, tol = 0.02) expect_lt(abs(a - b), tol)
 
 n <- 8000
 
-test_that("LBA cpp kernel matches R rLBA distributionally", {
+test_that("LBA cpp kernel matches the R LBA reference distributionally", {
   skip_on_cran()
   lR <- factor(rep(c("left", "right"), n), levels = c("left", "right"))
   pars <- cbind(v = rep(c(1, 0.3), n), sv = 1, b = 1.5, A = 0.3, t0 = 0.2)
   ok <- rep(TRUE, nrow(pars))
 
-  set.seed(1); r <- EMC2:::rLBA(lR, pars, ok = ok, posdrift = TRUE)
+  set.seed(1); r <- EMC2:::.lba_rfun(lR, pars, ok = ok, posdrift = TRUE)
   set.seed(2); cpp <- EMC2:::rlba_cpp(pars, levels(lR), ok, TRUE)
 
   prop_close(mean(r$R == "left", na.rm = TRUE), mean(cpp$R == 1, na.rm = TRUE))
@@ -34,13 +34,13 @@ test_that("LBA cpp kernel matches R rLBA distributionally", {
   expect_true(ks_ok(r$rt[r$R == "left"], cpp$rt[cpp$R == 1]))
 })
 
-test_that("LBA cpp kernel matches R rLBA for posdrift = FALSE (defective/LBAIO)", {
+test_that("LBA cpp kernel matches the R LBA reference for posdrift = FALSE (defective/LBAIO)", {
   skip_on_cran()
   lR <- factor(rep(c("left", "right"), n), levels = c("left", "right"))
   pars <- cbind(v = rep(c(-0.5, 0.3), n), sv = 1, b = 1.5, A = 0.3, t0 = 0.2)
   ok <- rep(TRUE, nrow(pars))
 
-  set.seed(1); r <- EMC2:::rLBA(lR, pars, ok = ok, posdrift = FALSE)
+  set.seed(1); r <- EMC2:::.lba_rfun(lR, pars, ok = ok, posdrift = FALSE)
   set.seed(2); cpp <- EMC2:::rlba_cpp(pars, levels(lR), ok, FALSE)
 
   prop_close(mean(is.na(r$R)), mean(is.na(cpp$R)))
@@ -124,7 +124,7 @@ test_that("cpp race kernels code omissions as rt = Inf, matching R rfuns", {
     sv = 1e-8, b = 1.5, A = 0.3, t0 = 0.2
   )
   set.seed(201)
-  r_lba <- EMC2:::rLBA(lR, pars_lba, ok = ok, posdrift = FALSE)
+    r_lba <- EMC2:::.lba_rfun(lR, pars_lba, ok = ok, posdrift = FALSE)
   set.seed(202)
   cpp_lba <- EMC2:::rlba_cpp(pars_lba, levels(lR), ok, FALSE)
   expect_true(any(is.na(r_lba$R)))

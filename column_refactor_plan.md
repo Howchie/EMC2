@@ -132,7 +132,8 @@ keep their meaning (index into the cols array) but are assigned from the registr
   * LNR: `dlnr_raw` :532, `plnr_raw` :549, `lnr_logS_at_t` :566
   * RGAMMA: `drgamma_raw` :610, `prgamma_raw` :631, `rgamma_logS_at_t` :653
   * REXG: `drexg_raw` :680, `prexg_raw` :699, `rexg_logS_at_t` :719
-  * LBA: `dlba_raw` :744, `plba_raw` :765, `lba_logS_at_t` :787
+  * LBA: uses the BAwL raw adapters (`dbawl_raw`, `pbawl_raw`, `bawl_logS_at_t`)
+    with `k=0` and clock means fixed off; no optional columns are read
   * BAwL: `dbawl_raw` :860, `pbawl_raw` :898, `bawl_logS_at_t` :938
   * RDMSWTN: `drdmswtn_raw` :1094, `prdmswtn_raw` :1154, `rdmswtn_logS_at_t` :1219
     (these also consult `ctx->mode_hint` at :1225/:1264/:1299/:1315 and read

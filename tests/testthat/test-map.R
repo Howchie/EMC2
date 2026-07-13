@@ -31,7 +31,7 @@ test_that("mapped_pars can restrict mappings to observed factor combinations", {
                    Z ~ 1, sv ~ 1, SZ ~ 1),
     report_p_vector = FALSE
   )
-  p_vec <- sampled_pars(des)
+  p_vec <- sampled_pars(des, use_data = FALSE)
 
   all_combinations <- mapped_pars(des, p_vec)
   observed_combinations <- mapped_pars(des, p_vec, data = dat)
@@ -62,6 +62,7 @@ test_that("mapped_pars can restrict mappings to observed factor combinations", {
   })
   attr(legacy_emc[[1]]$prior, "design") <- legacy_design
   expect_identical(names(sampled_pars(legacy_emc)), names(expected_sampled))
+  expect_identical(names(sampled_pars(get_design(legacy_emc))), names(expected_sampled))
 
   emc_sampled <- attr(emc[[1]]$data[[1]], "sampled_p_names")
   expect_false(any(grepl("blockb2:Eeasy", emc_sampled, fixed = TRUE)))

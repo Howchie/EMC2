@@ -2,7 +2,7 @@
 #
 # Thin R-side wrappers around the C++ simulation kernels (src/model_rng.cpp)
 # for LBA/LBAIO/LogicalRulesLBA, BAwL, RDM and RDMSWTN. Each wrapper falls
-# back to the pure-R reference rfun (rLBA/rBAwL/rRDM/rRDMSWTN) when the
+# back to the pure-R reference rfun (.lba_rfun/rBAwL/rRDM/rRDMSWTN) when the
 # `emc2.cpp_rfun` option is turned off. The kernels are distributionally,
 # not stream-, equivalent to the R rfuns -- set.seed()-reproduced simulated
 # datasets will differ trial-by-trial between the two paths.
@@ -36,7 +36,7 @@
     res <- rlba_cpp(pars, levels(lR), ok, posdrift)
     return(.rfun_cpp_pack(res, levels(lR), length(lR) / length(levels(lR))))
   }
-  rLBA(lR, pars, ok = ok, posdrift = posdrift)
+  .lba_rfun(lR, pars, ok = ok, posdrift = posdrift)
 }
 
 .rfun_RDM <- function(lR, pars, ok = rep(TRUE, dim(pars)[1])) {

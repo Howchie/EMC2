@@ -1,6 +1,6 @@
 // C++ simulation kernels for posterior prediction, one entry point per race
 // family (LBA, BAwL, RDM, RDMSWTN). See rfun_port_plan.md for the design and
-// R/model_LBA.R (rLBA, rBAwL) / R/model_RDM.R (rRDM, rWald, rSWTN, rRDMSWTN)
+// R/model_LBA.R (.lba_rfun, rBAwL) / R/model_RDM.R (rRDM, rWald, rSWTN, rRDMSWTN)
 // for the reference semantics these kernels replicate distributionally.
 //
 // This is the sole translation unit including model_rng.h's RNG primitives
@@ -37,7 +37,7 @@ struct RaceOut {
 //   t0col   : per-row t0 to add to the winner's finish time, or nullptr if
 //             dt already has t0 baked in (BAwL/RDMSWTN erlang-clock path)
 //   ok_row  : if non-null, trial forced to NA when ok_row[first row] == 0
-//             (matches rLBA/rBAwL's `ok <- matrix(ok,nrow)[1,]` reduction;
+//             (matches .lba_rfun/rBAwL's `ok <- matrix(ok,nrow)[1,]` reduction;
 //             rRDM/rRDMSWTN have no such reduction, pass nullptr)
 RaceOut resolve_race(const std::vector<double>& dt, int n_acc, int n_trials,
                      const std::vector<double>* t0col, const std::vector<int>* ok_row) {
@@ -133,7 +133,7 @@ Rcpp::List pack_result(const std::vector<int>& R, const std::vector<double>& rt,
 
 // pars columns: v, sv, b, A, t0. lR_levels/ok/pars rows are trial-major,
 // accumulator-minor (accumulators contiguous within a trial) -- matches
-// R's rLBA (model_LBA.R:135-166).
+// R's .lba_rfun (model_LBA.R:35-66).
 // [[Rcpp::export]]
 Rcpp::List rlba_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
                     Rcpp::LogicalVector ok, bool posdrift) {
