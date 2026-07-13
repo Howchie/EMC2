@@ -1609,7 +1609,7 @@ static double c_log_likelihood_ss_pt(
 
 // Raw-buffer variant for DDM to skip materialization and allocations.
 // Handles truncation and censoring with high numerical stability.
-double c_log_likelihood_DDM_pt(const double* pars_cm,
+double c_log_likelihood_DDM_pt(const double* const* cols,
                                const double* rt_ptr,
                                const int* R_ptr,
                                const int n_trials,
@@ -1619,7 +1619,6 @@ double c_log_likelihood_DDM_pt(const double* pars_cm,
                                const int* is_ok,
                                bool gng,
                                bool all_finite_untruncated,
-                               const std::vector<int>& p_idx,
                                ModelSharedState* shared,
                                Rcpp::NumericVector* trial_ll_out = nullptr) {
 
@@ -1628,8 +1627,8 @@ double c_log_likelihood_DDM_pt(const double* pars_cm,
     if (shared->all_ones_int_buf.size() != static_cast<size_t>(n_trials)) {
       shared->all_ones_int_buf.assign(n_trials, 1);
     }
-    d_DDM_Wien_raw(rt_ptr, R_ptr, pars_cm, n_trials, (int)p_idx.size(),
-                   shared->all_ones_int_buf.data(), is_ok, shared->res_buf.data(), min_ll, p_idx);
+    d_DDM_Wien_raw(rt_ptr, R_ptr, cols, n_trials,
+                   shared->all_ones_int_buf.data(), is_ok, shared->res_buf.data(), min_ll);
     
     const double* lls_ptr = shared->res_buf.data();
     double total_ll = 0.0;
@@ -1749,20 +1748,20 @@ double c_log_likelihood_DDM_pt(const double* pars_cm,
         for (int i = 0; i < n_trials; ++i) {
           if (is_ok[i] && LT[i] > 0.0) LT_mask[i] = 1;
         }
-        p_DDM_Wien_raw(shared->LT_vec.begin(), R1_ptr, pars_cm, n_trials, (int)p_idx.size(),
-                       LT_mask.data(), is_ok, shared->logF_LT_1.data(), R_NegInf, p_idx);
-        p_DDM_Wien_raw(shared->LT_vec.begin(), R2_ptr, pars_cm, n_trials, (int)p_idx.size(),
-                       LT_mask.data(), is_ok, shared->logF_LT_2.data(), R_NegInf, p_idx);
+        p_DDM_Wien_raw(shared->LT_vec.begin(), R1_ptr, cols, n_trials,
+                       LT_mask.data(), is_ok, shared->logF_LT_1.data(), R_NegInf);
+        p_DDM_Wien_raw(shared->LT_vec.begin(), R2_ptr, cols, n_trials,
+                       LT_mask.data(), is_ok, shared->logF_LT_2.data(), R_NegInf);
       }
       if (any_UT_finite) {
         std::vector<int> UT_mask(n_trials, 0);
         for (int i = 0; i < n_trials; ++i) {
           if (is_ok[i] && R_FINITE(UT[i])) UT_mask[i] = 1;
         }
-        p_DDM_Wien_raw(shared->UT_vec.begin(), R1_ptr, pars_cm, n_trials, (int)p_idx.size(),
-                       UT_mask.data(), is_ok, shared->logF_UT_1.data(), R_NegInf, p_idx);
-        p_DDM_Wien_raw(shared->UT_vec.begin(), R2_ptr, pars_cm, n_trials, (int)p_idx.size(),
-                       UT_mask.data(), is_ok, shared->logF_UT_2.data(), R_NegInf, p_idx);
+        p_DDM_Wien_raw(shared->UT_vec.begin(), R1_ptr, cols, n_trials,
+                       UT_mask.data(), is_ok, shared->logF_UT_1.data(), R_NegInf);
+        p_DDM_Wien_raw(shared->UT_vec.begin(), R2_ptr, cols, n_trials,
+                       UT_mask.data(), is_ok, shared->logF_UT_2.data(), R_NegInf);
       }
 
       for (int i = 0; i < n_trials; ++i) {
@@ -1776,8 +1775,8 @@ double c_log_likelihood_DDM_pt(const double* pars_cm,
 
   // Calculate finite RT densities
   if (shared->any_ok_finite) {
-  d_DDM_Wien_raw(rt_ptr, R_ptr, pars_cm, n_trials, (int)p_idx.size(),
-                 shared->finite_mask_int.data(), is_ok, shared->res_buf.data(), min_ll, p_idx);
+  d_DDM_Wien_raw(rt_ptr, R_ptr, cols, n_trials,
+                 shared->finite_mask_int.data(), is_ok, shared->res_buf.data(), min_ll);
   if (!gng) {
 
       for (int i = 0; i < n_trials; ++i) {
@@ -1819,10 +1818,10 @@ double c_log_likelihood_DDM_pt(const double* pars_cm,
         }
       }
       Rcpp::NumericVector logcdf_U(n_trials), logcdf_L(n_trials);
-      p_DDM_Wien_raw(shared->UC_vec.begin(), R_go_ptr, pars_cm, n_trials, (int)p_idx.size(),
-                     shared->all_ones_int_buf.data(), is_ok, logcdf_U.begin(), R_NegInf, p_idx);
-      p_DDM_Wien_raw(shared->LC_vec.begin(), R_go_ptr, pars_cm, n_trials, (int)p_idx.size(),
-                     shared->all_ones_int_buf.data(), is_ok, logcdf_L.begin(), R_NegInf, p_idx);
+      p_DDM_Wien_raw(shared->UC_vec.begin(), R_go_ptr, cols, n_trials,
+                     shared->all_ones_int_buf.data(), is_ok, logcdf_U.begin(), R_NegInf);
+      p_DDM_Wien_raw(shared->LC_vec.begin(), R_go_ptr, cols, n_trials,
+                     shared->all_ones_int_buf.data(), is_ok, logcdf_L.begin(), R_NegInf);
       for (int i = 0; i < n_trials; ++i) {
         if (!is_ok[i] || shared->finite_mask_int[i]) continue;
         if (rt_ptr[i] == R_PosInf) shared->res_buf[i] = log1m_exp(logcdf_U[i]);
@@ -1872,14 +1871,14 @@ double c_log_likelihood_DDM_pt(const double* pars_cm,
         if (!shared->finite_mask_int[i] && is_ok[i]) nonfinite_mask[i] = 1;
       }
       
-      p_DDM_Wien_raw(shared->LC_vec.begin(), R1_ptr, pars_cm, n_trials, (int)p_idx.size(),
-                     nonfinite_mask.data(), is_ok, lF_LC_1, R_NegInf, p_idx);
-      p_DDM_Wien_raw(shared->LC_vec.begin(), R2_ptr, pars_cm, n_trials, (int)p_idx.size(),
-                     nonfinite_mask.data(), is_ok, lF_LC_2, R_NegInf, p_idx);
-      p_DDM_Wien_raw(shared->UC_vec.begin(), R1_ptr, pars_cm, n_trials, (int)p_idx.size(),
-                     nonfinite_mask.data(), is_ok, lF_UC_1, R_NegInf, p_idx);
-      p_DDM_Wien_raw(shared->UC_vec.begin(), R2_ptr, pars_cm, n_trials, (int)p_idx.size(),
-                     nonfinite_mask.data(), is_ok, lF_UC_2, R_NegInf, p_idx);
+      p_DDM_Wien_raw(shared->LC_vec.begin(), R1_ptr, cols, n_trials,
+                     nonfinite_mask.data(), is_ok, lF_LC_1, R_NegInf);
+      p_DDM_Wien_raw(shared->LC_vec.begin(), R2_ptr, cols, n_trials,
+                     nonfinite_mask.data(), is_ok, lF_LC_2, R_NegInf);
+      p_DDM_Wien_raw(shared->UC_vec.begin(), R1_ptr, cols, n_trials,
+                     nonfinite_mask.data(), is_ok, lF_UC_1, R_NegInf);
+      p_DDM_Wien_raw(shared->UC_vec.begin(), R2_ptr, cols, n_trials,
+                     nonfinite_mask.data(), is_ok, lF_UC_2, R_NegInf);
 
       for (int i = 0; i < n_trials; ++i) {
         if (!is_ok[i] || shared->finite_mask_int[i]) continue;
@@ -1995,13 +1994,20 @@ double c_log_likelihood_DDM(Rcpp::NumericMatrix pars, Rcpp::DataFrame data,
   std::vector<int> ok_int(n_trials);
   for(int i=0; i<n_trials; ++i) ok_int[i] = is_ok[i] ? 1 : 0;
 
-  // Use a fixed identity mapping for the old path
-  std::vector<int> p_idx = {0, 1, 2, 3, 4, 5, 6, 7};
+  // Identity mapping: the materialized matrix is already in p_types order.
+  if (pars.ncol() < emc2col::ddm::N_REQ) {
+    Rcpp::stop("c_log_likelihood_DDM: expected %d parameter columns, got %d.",
+               (int)emc2col::ddm::N_REQ, (int)pars.ncol());
+  }
+  const double* ddm_cols[emc2col::ddm::N_REQ];
+  for (int k = 0; k < emc2col::ddm::N_REQ; ++k) {
+    ddm_cols[k] = pars.begin() + static_cast<size_t>(k) * n_trials;
+  }
 
-  return c_log_likelihood_DDM_pt(pars.begin(), rts.begin(), R.begin(),
+  return c_log_likelihood_DDM_pt(ddm_cols, rts.begin(), R.begin(),
                                  n_trials, expand_ptr, n_out_val, min_ll,
                                  ok_int.data(), gng, all_finite_untruncated,
-                                 p_idx, &shared, trial_ll_out);}
+                                 &shared, trial_ll_out);}
 
 // ---------------------------------------------------------------------------
 // Shared helpers used by calc_ll, calc_ll_oo, and calc_ll_oo_pw
@@ -2521,13 +2527,13 @@ static PtMapper make_pt_mapper(NumericMatrix particle_matrix, DataFrame data,
   return m;
 }
 
-// DDM per-data shared state + p_types -> base-column mapping for the raw
+// DDM per-data shared state + canonical base-column pointers for the raw
 // c_log_likelihood_DDM_pt kernel. Returns false (raw path unusable) when any
 // canonical DDM parameter is missing from the table.
 static bool init_ddm_shared_state(DataFrame data, int n_trials,
                                   const ParamTable& table,
                                   ModelSharedState& shared,
-                                  std::vector<int>& p_idx) {
+                                  std::vector<const double*>& cols) {
   shared.LT_vec = get_col_with_default(data, "LT", 0.0);
   shared.UT_vec = get_col_with_default(data, "UT", R_PosInf);
   shared.LC_vec = get_col_with_default(data, "LC", 0.0);
@@ -2552,8 +2558,13 @@ static bool init_ddm_shared_state(DataFrame data, int n_trials,
   for (int j = 0; j < ddm_spec.n_required; ++j) {
     auto it = table.name_to_base_idx.find(ddm_spec.names[j]);
     int idx = (it != table.name_to_base_idx.end()) ? it->second : -1;
-    p_idx.push_back(idx);
-    if (idx < 0) raw_ready = false;
+    if (idx < 0) {
+      raw_ready = false;
+    } else {
+      // ParamTable base storage is fixed for this likelihood call; only its
+      // values are refilled per particle, so these addresses are reusable.
+      cols.push_back(table.base.begin() + static_cast<size_t>(idx) * n_trials);
+    }
   }
   return raw_ready;
 }
@@ -2678,11 +2689,12 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
   auto prepare_particle = [&](int i) -> Rcpp::LogicalVector { return pt.prepare(i); };
 
   ModelSharedState ddm_shared;
-  std::vector<int> ddm_p_idx;
   bool ddm_raw_ready = true;
+  std::vector<const double*> ddm_cols;
   if (is_ddm_type) {
+    emc2col::validate_col_prefix(keep_names, emc2col::ddm::spec());
     ddm_raw_ready = init_ddm_shared_state(data, n_trials, param_table_template,
-                                          ddm_shared, ddm_p_idx);
+                                          ddm_shared, ddm_cols);
   }
 
   if (is_ddm_type) {
@@ -2699,10 +2711,10 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
       is_ok = prepare_particle(i);
       if (ddm_raw_ready) {
         for(int j = 0; j < n_trials; ++j) ddm_shared.ok_int_buf[j] = is_ok[j] ? 1 : 0;
-        lls[i] = c_log_likelihood_DDM_pt(param_table_template.base.begin(),
+        lls[i] = c_log_likelihood_DDM_pt(ddm_cols.data(),
                                         rt_ptr, R_ptr, n_trials, expand_ptr, n_out,
                                         min_ll, ddm_shared.ok_int_buf.data(), gng,
-                                        all_finite_untruncated, ddm_p_idx, &ddm_shared);
+                                        all_finite_untruncated, &ddm_shared);
       } else {
         pars = param_table_template.materialize_by_param_names(keep_names);
         lls[i] = c_log_likelihood_DDM(pars, data, n_trials, expand, min_ll, is_ok,
@@ -3128,9 +3140,10 @@ NumericMatrix calc_ll_oo_pw(NumericMatrix particle_matrix, DataFrame data, Numer
     const int n_out = (expand.length() > 0) ? expand.length() : n_trials;
     const bool all_finite_untruncated = ddm_data_all_finite_untruncated(data, n_trials);
     ModelSharedState ddm_shared;
-    std::vector<int> ddm_p_idx;
+    emc2col::validate_col_prefix(keep_names, emc2col::ddm::spec());
+    std::vector<const double*> ddm_cols;
     const bool ddm_raw_ready = init_ddm_shared_state(data, n_trials, param_table_template,
-                                                     ddm_shared, ddm_p_idx);
+                                                     ddm_shared, ddm_cols);
     NumericVector rts = data["rt"];
     IntegerVector R = data["R"];
     const int* expand_ptr = (expand.length() > 0) ? expand.begin() : nullptr;
@@ -3140,10 +3153,10 @@ NumericMatrix calc_ll_oo_pw(NumericMatrix particle_matrix, DataFrame data, Numer
       NumericVector row_vec(n_out);
       if (ddm_raw_ready) {
         for (int j = 0; j < n_trials; ++j) ddm_shared.ok_int_buf[j] = is_ok[j] ? 1 : 0;
-        c_log_likelihood_DDM_pt(param_table_template.base.begin(), rts.begin(), R.begin(),
+        c_log_likelihood_DDM_pt(ddm_cols.data(), rts.begin(), R.begin(),
                                 n_trials, expand_ptr, n_out, min_ll,
                                 ddm_shared.ok_int_buf.data(), gng, all_finite_untruncated,
-                                ddm_p_idx, &ddm_shared, &row_vec);
+                                &ddm_shared, &row_vec);
       } else {
         pars = param_table_template.materialize_by_param_names(keep_names);
         c_log_likelihood_DDM(pars, data, n_trials, expand, min_ll, is_ok,
