@@ -138,6 +138,25 @@ test_that("BAwL retains its defective upper tail when k > 0", {
   expect_lt(p, 1)
 })
 
+test_that("the shared BAwL wrapper shortcuts the proper k = 0 upper tail", {
+  expect_equal(
+    EMC2:::pleakyba_norm(Inf, A = 0.3, b = 1.5, v = 1, sv = 1,
+                         k = 0, posdrift = TRUE),
+    1
+  )
+  expect_equal(
+    EMC2:::pleakyba_norm(Inf, A = 0.3, b = 1.5, v = 1, sv = 1,
+                         k = 0, posdrift = TRUE, log_out = TRUE),
+    0
+  )
+  # The shortcut must not change the truncated-drift or defective cases.
+  expect_lt(
+    EMC2:::pleakyba_norm(Inf, A = 0.3, b = 1.5, v = 1, sv = 1,
+                         k = 0, posdrift = FALSE),
+    1
+  )
+})
+
 test_that("scalar natural-scale kernels stay exact at truncation-bound regimes", {
   # Truncation normalisers evaluate the scalar CDF at bounds where it is
   # legitimately ~0 or ~1 and immediately clamp; the scalar path must return

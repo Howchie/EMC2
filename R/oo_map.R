@@ -61,43 +61,89 @@
     p <- as.matrix(p)
   }
 
+  target_names <- if (keep_all_columns && !is.null(p_names)) {
+    p_names
+  } else {
+    sampled_p_names
+  }
+
+  # Data-aware sampled_pars() deliberately drops coefficients whose design
+  # column is identically zero.  Such a column is not a missing parameter in
+  # the likelihood: its contribution is exactly zero.  Constants are a
+  # second, distinct case; restore their recorded value rather than silently
+  # replacing (for example) a fixed log-SD with zero.
+  constants <- attr(dadm, "constants")
+  designs <- attr(dadm, "designs")
+  is_zero_design <- function(nm) {
+    if (is.null(designs)) return(FALSE)
+    any(vapply(designs, function(design_mat) {
+      if (is.null(colnames(design_mat)) || !(nm %in% colnames(design_mat))) {
+        return(FALSE)
+      }
+      values <- design_mat[, nm]
+      length(values) > 0L && all(is.finite(values) & values == 0)
+    }, logical(1)))
+  }
+
+  missing_columns <- function(p_matrix) {
+    missing <- setdiff(target_names, colnames(p_matrix))
+    if (!length(missing)) {
+      return(p_matrix[, target_names, drop = FALSE])
+    }
+
+    additions <- matrix(NA_real_, nrow = nrow(p_matrix), ncol = length(missing),
+                        dimnames = list(rownames(p_matrix), missing))
+    unresolved <- character()
+    for (i in seq_along(missing)) {
+      nm <- missing[[i]]
+      if (!is.null(constants) && !is.null(names(constants)) && nm %in% names(constants) &&
+          length(constants[[nm]]) == 1L && !is.na(constants[[nm]])) {
+        additions[, i] <- constants[[nm]]
+      } else if (is_zero_design(nm)) {
+        additions[, i] <- 0
+      } else {
+        unresolved <- c(unresolved, nm)
+      }
+    }
+
+    if (length(unresolved)) {
+      stop("p matrix columns must include: ", paste(unresolved, collapse = ", "))
+    }
+    cbind(p_matrix, additions)[, target_names, drop = FALSE]
+  }
+
   if (is.null(dim(p))) {
     if (is.null(names(p))) {
-      target_names <- if (keep_all_columns && !is.null(p_names)) p_names else sampled_p_names
-      if (length(p) != length(target_names)) {
-        stop("Unnamed p vector must have length ", length(target_names))
+      if (length(p) == length(target_names)) {
+        names(p) <- target_names
+      } else if (!is.null(p_names) && length(p) == length(sampled_p_names)) {
+        names(p) <- sampled_p_names
+      } else if (!is.null(p_names) && length(p) == length(p_names)) {
+        names(p) <- p_names
+      } else {
+        stop("Unnamed p vector must have length ", length(target_names),
+             " (or ", length(sampled_p_names), " sampled columns)")
       }
-      names(p) <- target_names
     }
 
-    target_names <- if (keep_all_columns && !is.null(p_names)) p_names else sampled_p_names
-    if (!all(target_names %in% names(p))) {
-      stop("p names must include: ", paste(target_names, collapse = ", "))
-    }
-
-    out <- matrix(p[target_names], nrow = 1)
-    colnames(out) <- target_names
-    return(out)
+    out <- matrix(p, nrow = 1)
+    colnames(out) <- names(p)
+    return(missing_columns(out))
   }
 
   if (is.null(colnames(p))) {
-    if (ncol(p) != length(sampled_p_names)) {
-      stop("p matrix must have columns for: ", paste(sampled_p_names, collapse = ", "))
+    if (ncol(p) == length(target_names)) {
+      colnames(p) <- target_names
+    } else if (ncol(p) == length(sampled_p_names)) {
+      colnames(p) <- sampled_p_names
+    } else if (!is.null(p_names) && ncol(p) == length(p_names)) {
+      colnames(p) <- p_names
+    } else {
+      stop("p matrix must have columns for: ", paste(target_names, collapse = ", "))
     }
-    colnames(p) <- sampled_p_names
   }
 
-  target_names <- if (keep_all_columns && !is.null(p_names)) p_names else sampled_p_names
-
-  if (all(target_names %in% colnames(p))) {
-    p <- p[, target_names, drop = FALSE]
-  } else if (!keep_all_columns && !is.null(p_names) && all(p_names %in% colnames(p)) && all(sampled_p_names %in% p_names)) {
-    p <- p[, sampled_p_names, drop = FALSE]
-  } else {
-    stop("p matrix columns must include: ", paste(target_names, collapse = ", "))
-  }
-
-  p
+  missing_columns(p)
 }
 
 get_pars_oo <- function(p, dadm, model,

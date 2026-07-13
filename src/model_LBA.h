@@ -173,6 +173,11 @@ constexpr double BAWL_NATURAL_REL_TOL = 1e-10;
 constexpr double BAWL_LOG_BRACKET_MIN = -13.815510557964274;  // log(1e-6)
 // Normalizer floors match each model's legacy pmax(pnorm(v/sv), floor).
 constexpr double LBA_DENOM_FLOOR = 1e-10;
+// BAwL's 1e-300 value is a historical model contract, not a requirement for
+// the log-space arithmetic: the log path can represent much smaller normal
+// probabilities.  Keep it here because removing it changes BAwL values in
+// the z < about -37 regime; the exact k = 0 LBA entry points intentionally
+// continue to use LBA_DENOM_FLOOR.
 constexpr double BAWL_DENOM_FLOOR = 1e-300;
 
 // Acceptance modes for the guarded natural-space evaluators.
@@ -504,6 +509,16 @@ inline double log_ba_pdf(double t, double A, double b, double v, double sv,
 inline double bawl_cdf_norm(double t, double A, double b, double v,
                             double sv, double k, bool posdrift, bool log_out,
                             double denom_floor = BAWL_DENOM_FLOOR) {
+  // The k = 0, positive-drift process is proper.  Its CDF at +Inf is
+  // exactly one, so do not send the upper truncation bound through the strict
+  // natural guard and then back through log space.  This is deliberately in
+  // the shared BAwL wrapper: k = 0 can arrive here through pleakyba_norm(),
+  // not only through the LBA() adapter.  Killed-clock callers use their own
+  // sub-CDF path and therefore do not take this shortcut.
+  if (t == R_PosInf && std::fabs(k) <= BAWL_K_EPS && posdrift && sv > 0.0 &&
+      A >= 0.0 && b >= A && b > 0.0)
+    return log_out ? 0.0 : 1.0;
+
   double cdf;
   if (ba_natural_cdf(t, A, b, v, sv, k, posdrift, denom_floor,
                      BA_ACCEPT_STRICT, cdf))
