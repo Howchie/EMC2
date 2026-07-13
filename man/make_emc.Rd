@@ -12,6 +12,7 @@ make_emc(
   n_chains = 3,
   compress = TRUE,
   rt_resolution = 1/60,
+  use_data = TRUE,
   prior_list = NULL,
   group_design = NULL,
   par_groups = NULL,
@@ -32,6 +33,8 @@ make_emc(
 \item{compress}{A Boolean, if \code{TRUE} (i.e., the default), the data is compressed to speed up likelihood calculations.}
 
 \item{rt_resolution}{A double. Used for compression, response times will be binned based on this resolution.}
+
+\item{use_data}{Boolean. If \code{TRUE} (the default), parameters for factor combinations that are not present in \code{data} are omitted from the model. If \code{FALSE}, the complete factorial design is retained for backwards compatibility.}
 
 \item{prior_list}{A named list containing the prior. Default prior created if \code{NULL}. For the default priors, see \verb{?get_prior_\{type\}}.}
 

@@ -758,8 +758,8 @@ inline void dlba_raw(const double* rt, const double* const* cols, int n_rows,
     if (R_IsNA(v_[i]) || !isok[i]) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
     const double tt = rt[i] - t0_[i];
     if (tt <= 0.0) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
-    const double pdf = dlba_norm(tt, A_[i], B_[i] + A_[i], v_[i], sv_[i], pd);
-    out[i] = (pdf > 0.0 && emc2_isfinite(pdf)) ? raw_log_value(std::log(pdf), min_ll, floor_raw) : raw_log_zero(min_ll, floor_raw);
+    const double log_pdf = dlba_norm(tt, A_[i], B_[i] + A_[i], v_[i], sv_[i], pd, true);
+    out[i] = raw_log_value(log_pdf, min_ll, floor_raw);
   }
 }
 
@@ -779,9 +779,9 @@ inline void plba_raw(const double* rt, const double* const* cols, int n_rows,
     if (R_IsNA(v_[i]) || !isok[i]) { out[i] = 0.0; continue; }
     const double tt = rt[i] - t0_[i];
     if (tt <= 0.0) { out[i] = 0.0; continue; }
-    const double cdf = plba_norm(tt, A_[i], B_[i] + A_[i], v_[i], sv_[i], pd);
-    if (cdf >= 1.0) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
-    out[i] = (cdf <= 0.0) ? 0.0 : std::log1p(-cdf);
+    const double log_cdf = plba_norm(tt, A_[i], B_[i] + A_[i], v_[i], sv_[i], pd, true);
+    if (log_cdf >= 0.0) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
+    out[i] = log1m_exp(log_cdf);
   }
 }
 
@@ -806,9 +806,9 @@ inline void lba_logS_at_t(double t, const double* const* cols,
       if (!isok_all[r] || R_IsNA(v_[r])) { bad = true; break; }
       const double tt = t - t0_[r];
       if (tt <= 0.0) continue;
-      const double cdf = plba_norm(tt, A_[r], B_[r] + A_[r], v_[r], sv_[r], pd);
-      if (cdf >= 1.0) { bad = true; break; }
-      if (cdf > 0.0) logS += std::log1p(-cdf);
+      const double log_cdf = plba_norm(tt, A_[r], B_[r] + A_[r], v_[r], sv_[r], pd, true);
+      if (log_cdf >= 0.0) { bad = true; break; }
+      logS += log1m_exp(log_cdf);
     }
     logS_out[j] = bad ? R_NegInf : logS;
   }

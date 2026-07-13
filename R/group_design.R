@@ -217,7 +217,8 @@ get_unique_rows <- function(df) {
 
 #' @rdname sampled_pars
 #' @export
-sampled_pars.emc.group_design <- function(x,group_design=NULL,doMap=FALSE, add_da = FALSE, all_cells_dm = FALSE, data= NULL){
+sampled_pars.emc.group_design <- function(x,group_design=NULL,doMap=FALSE, add_da = FALSE,
+                                          all_cells_dm = FALSE, data= NULL, use_data = TRUE){
   if(is.null(x)) return(logical(0))
   par_names <- unlist(lapply(x, colnames))
   par_names <- setNames(rep(0, length(par_names)), par_names)
@@ -346,4 +347,3 @@ build_design <- function(formula, data, contrasts.arg = NULL) {
   ## ---------- 4. combined dense matrix ---------------------------------
   cbind(X, Zbig)
 }
-

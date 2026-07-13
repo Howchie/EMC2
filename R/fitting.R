@@ -680,6 +680,10 @@ loadRData <- function(fileName){
 #' @param n_chains An integer. Specifies the number of mcmc chains to be run (has to be more than 1 to compute `rhat`).
 #' @param compress A Boolean, if `TRUE` (i.e., the default), the data is compressed to speed up likelihood calculations.
 #' @param rt_resolution A double. Used for compression, response times will be binned based on this resolution.
+#' @param use_data Boolean. If `TRUE` (the default), parameters for factor
+#'   combinations that are not present in `data` are omitted from the model.
+#'   If `FALSE`, the complete factorial design is retained for backwards
+#'   compatibility.
 #' @param group_design A design for group-level mappings, made using `group_design()`.
 #' @param par_groups A vector. Indicates which parameters are allowed to correlate. Could either be a list of character vectors of covariance blocks. Or
 #' a numeric vector, e.g., `c(1,1,1,2,2)` means the covariances
@@ -723,6 +727,7 @@ loadRData <- function(fileName){
 make_emc <- function(data,design,model=NULL,
                     type="standard",
                     n_chains=3,compress=TRUE,rt_resolution=1/60,
+                    use_data = TRUE,
                     prior_list = NULL, group_design = NULL,
                     par_groups=NULL, ...){
   # arguments for future compatibility
@@ -745,6 +750,8 @@ make_emc <- function(data,design,model=NULL,
   if(!is.null(group_design) && !type %in% c("standard", "diagonal", "blocked")){
     stop("group_design can only be used with standard, blocked or diagonal type")
   }
+  if (length(use_data) != 1 || !is.logical(use_data) || is.na(use_data))
+    stop("use_data must be a single TRUE/FALSE value")
   if(type != "single" && length(unique(data$subjects)) == 1){
     stop("can only use type = `single` when there's only one subject in the data")
   }
@@ -790,6 +797,13 @@ make_emc <- function(data,design,model=NULL,
   if (length(design)!=length(data)){
     design <- rep(design,length(data))
   }
+  for (i in seq_along(design)) {
+    if (isTRUE(use_data)) {
+      attr(design[[i]], "data") <- data[[i]]
+    } else {
+      attr(design[[i]], "data") <- NULL
+    }
+  }
   if (is.null(model)) model <- lapply(design,function(x){x$model})
   if (any(unlist(lapply(model,is.null))))
     stop("Must supply model if model is not in all design components")
@@ -819,20 +833,14 @@ make_emc <- function(data,design,model=NULL,
     message("Processing data set ",i)
     if(is.null(attr(design[[i]], "custom_ll"))){
       dadm_list[[i]] <- design_model(data=data[[i]],design=design[[i]],
-                                     compress=compress[[i]],model=model[[i]],rt_resolution=rt_resolution[[i]])
-      sampled_p_names <- names(attr(design[[i]],"p_vector"))
+                                     compress=compress[[i]],model=model[[i]],rt_resolution=rt_resolution[[i]],
+                                     drop_unobserved = isTRUE(use_data))
     } else{
       dadm_list[[i]] <- design_model_custom_ll(data = data[[i]],
                                                design = design[[i]],model=model[[i]])
-      sampled_p_names <- attr(design[[i]],"sampled_p_names")
     }
     # Rebuild LL cache at make_emc-time to avoid carrying over stale attributes.
     dadm_list[[i]] <- .cache_ll_data_attrs(dadm_list[[i]], force_rebuild = TRUE)
-    if(length(prior_list) == length(data)){
-      if(!is.null(prior_list[[i]])){
-        prior_list[[i]] <- check_prior(prior_list[[i]], sampled_p_names, group_design)
-      }
-    }
   }
   # Make sure class retains following changes
   class(design) <- "emc.design"

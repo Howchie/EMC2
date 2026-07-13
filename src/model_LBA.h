@@ -28,68 +28,151 @@ inline double dnormP(double x, double mean = 0.0, double sd = 1.0,
   return R::dnorm(x, mean, sd, log);
 }
 
+// pnorm_std's fast log-tail approximation deliberately returns -Inf beyond
+// its useful range. LBA needs those tails to remain representable, so fall
+// back to R's direct log-tail implementation rather than materialising a
+// probability and taking its log.
+inline double pnorm_log_direct(double x, bool lower = true) {
+  double out = pnorm_std(x, lower, true);
+  if (out == R_NegInf && emc2_isfinite(x)) {
+    out = R::pnorm(x, 0.0, 1.0, lower, true);
+  }
+  return out;
+}
+
+// Return log(Phi(hi) - Phi(lo)) without materialising either probability.
+// Using the upper tails when both arguments are positive avoids subtracting
+// two values that are both numerically equal to one.
+inline double log_normal_interval(double lo, double hi) {
+  if (!(hi > lo)) return R_NegInf;
+  if (lo >= 0.0) {
+    return log_diff_exp(pnorm_log_direct(lo, false),
+                        pnorm_log_direct(hi, false));
+  }
+  return log_diff_exp(pnorm_log_direct(hi, true),
+                      pnorm_log_direct(lo, true));
+}
+
+// Let Q(z) = 1 - Phi(z). The positive quantity
+//   M(z) = phi(z) - z Q(z)
+// is decreasing and satisfies
+//   integral_lo^hi Q(z) dz = M(lo) - M(hi).
+// This is the positive-integrand form of the LBA CDF and avoids the severe
+// cancellation in the usual "1 + correction" expression at early times.
+inline double log_normal_q_antiderivative_abs(double z) {
+  const double log_phi = dnormP(z, 0.0, 1.0, true);
+  const double log_q = pnorm_log_direct(z, false);
+
+  if (z > 0.0) {
+    // M(z) = phi(z) * [1 - z Q(z) / phi(z)].
+    const double log_ratio = std::log(z) + log_q - log_phi;
+    return log_phi + log1m_exp(log_ratio);
+  }
+  if (z < 0.0) {
+    // M(z) = phi(z) + (-z) Q(z).
+    return log_sum_exp(log_phi, std::log(-z) + log_q);
+  }
+  return log_phi;
+}
+
+inline double log_normal_q_interval(double lo, double hi) {
+  if (!(hi > lo)) return R_NegInf;
+  return log_diff_exp(log_normal_q_antiderivative_abs(lo),
+                      log_normal_q_antiderivative_abs(hi));
+}
+
+// A signed log-scale product.  The coefficient is kept on its natural scale
+// as an input, but the product itself is never formed in natural space.
+inline signed_log signed_log_product(double coefficient, double log_factor) {
+  if (coefficient == 0.0 || log_factor == R_NegInf) {
+    return {R_NegInf, 0};
+  }
+  return make_signed_log(std::log(std::fabs(coefficient)) + log_factor,
+                         coefficient > 0.0 ? 1 : -1);
+}
+
+inline double log_positive_normalizer(double v, double sv, bool posdrift) {
+  if (!posdrift) return 0.0;
+
+  // Match the old pmax(pnorm(v / sv), 1e-10) normalization, but apply the
+  // floor directly to its logarithm.
+  const double log_denom = pnorm_log_direct(v / sv, true);
+  return (log_denom < std::log(1e-10)) ? std::log(1e-10) : log_denom;
+}
+
+inline double return_from_log(double log_value, bool log_out) {
+  return log_out ? log_value : std::exp(log_value);
+}
+
 inline double plba_norm(double t, double A, double b, double v, double sv,
                  bool posdrift = true, bool log_out = false){
   if (t == R_PosInf) {
-    const double cdf = posdrift ? 1.0 : pnormP(0.0, v, sv, false, false);
-    return log_out ? std::log(cdf) : cdf;
+    const double log_cdf = posdrift ? 0.0 : pnorm_log_direct(v / sv, true);
+    return return_from_log(log_cdf, log_out);
   }
 
-  double denom = 1.;
-  if (posdrift) {
-    denom = pnormP(v / sv, 0., 1., true, false);
-    if (denom < 1e-10)
-      denom = 1e-10;
-  }
-
-  double cdf;
+  const double log_denom = log_positive_normalizer(v, sv, posdrift);
+  double log_cdf;
 
   if (A > 1e-10){
     double zs = t * sv;
     double cmz = b - t * v;
-    double xx = cmz - A;
     double cz = cmz / zs;
-    double cz_max = xx / zs;
-    cdf = (1. + (zs * (dnormP(cz_max, 0., 1., false) - dnormP(cz, 0., 1., false))
-                   + xx * pnormP(cz_max, 0., 1., true, false) - cmz * pnormP(cz, 0., 1., true, false))/A) / denom;
+    double cz_max = (cmz - A) / zs;
+
+    // F(t) = (t * sv / A) * integral_{cz_max}^{cz} Q(z) dz / denom.
+    // All factors are kept in log space, and the interval integral is
+    // evaluated from positive log-scale antiderivative values.
+    log_cdf = std::log(zs) - std::log(A) +
+      log_normal_q_interval(cz_max, cz) - log_denom;
   } else {
-    cdf = pnormP(b / t, v, sv, false, false) / denom;
+    log_cdf = pnorm_log_direct((b / t - v) / sv, false) - log_denom;
   }
 
-  if (cdf < 0.) {
-    return log_out ? R_NegInf : 0.0;
-  } else if (cdf > 1.){
+  if (log_cdf >= 0.0) {
     return log_out ? 0.0 : 1.0;
   }
-  return log_out ? std::log(cdf) : cdf;
+  return return_from_log(log_cdf, log_out);
 }
 
 inline double dlba_norm(double t, double A,double b, double v, double sv,
                  bool posdrift = true, bool log_out = false){
-  double denom = 1.;
-  if (posdrift) {
-    denom = pnormP(v / sv, 0., 1., true, false);
-    if (denom < 1e-10)
-      denom = 1e-10;
-  }
-
-  double pdf;
+  const double log_denom = log_positive_normalizer(v, sv, posdrift);
+  double log_pdf;
 
   if (A > 1e-10){
     double zs = t * sv;
-    double cmz = b - t * v;;
+    double cmz = b - t * v;
     double cz = cmz / zs;
     double cz_max = (cmz - A) / zs;
-    pdf = (v * (pnormP(cz, 0., 1., true, false) - pnormP(cz_max, 0., 1., true, false)) +
-      sv * (dnormP(cz_max, 0., 1., false) - dnormP(cz, 0., 1., false))) / (A * denom);
+
+    // Phi(cz) - Phi(cz_max) is positive because cz > cz_max.  Evaluate it
+    // directly as a log difference, using the more accurate tail side when
+    // both arguments lie in the same tail.
+    const double log_cdf_diff = log_normal_interval(cz_max, cz);
+
+    // phi(cz_max) - phi(cz) can have either sign, so retain its sign while
+    // doing the subtraction in log space.
+    const signed_log log_phi_diff = signed_log_sub(
+      make_signed_log(dnormP(cz_max, 0.0, 1.0, true), 1),
+      make_signed_log(dnormP(cz, 0.0, 1.0, true), 1));
+
+    signed_log numerator = signed_log_product(v, log_cdf_diff);
+    numerator = signed_log_add(
+      numerator,
+      signed_log_product(sv * log_phi_diff.sign, log_phi_diff.log_abs));
+
+    if (numerator.sign <= 0) {
+      return log_out ? R_NegInf : 0.0;
+    }
+    log_pdf = numerator.log_abs - std::log(A) - log_denom;
   } else {
-    pdf = dnormP(b / t, v, sv, false) * b / (t * t * denom);
+    if (!(b > 0.0)) return log_out ? R_NegInf : 0.0;
+    log_pdf = dnormP(b / t, v, sv, true) + std::log(b) -
+      2.0 * std::log(t) - log_denom;
   }
 
-  if (pdf < 0.) {
-    return log_out ? R_NegInf : 0.0;
-  }
-  return log_out ? std::log(pdf) : pdf;
+  return return_from_log(log_pdf, log_out);
 }
 
 // [[Rcpp::export]]

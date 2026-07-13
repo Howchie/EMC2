@@ -15,7 +15,8 @@ sampled_pars(
   doMap = FALSE,
   add_da = FALSE,
   all_cells_dm = FALSE,
-  data = NULL
+  data = NULL,
+  use_data = TRUE
 )
 
 \method{sampled_pars}{emc.design}(
@@ -24,7 +25,8 @@ sampled_pars(
   doMap = FALSE,
   add_da = FALSE,
   all_cells_dm = FALSE,
-  data = NULL
+  data = NULL,
+  use_data = TRUE
 )
 
 \method{sampled_pars}{emc.group_design}(
@@ -33,7 +35,8 @@ sampled_pars(
   doMap = FALSE,
   add_da = FALSE,
   all_cells_dm = FALSE,
-  data = NULL
+  data = NULL,
+  use_data = TRUE
 )
 
 \method{sampled_pars}{emc.prior}(
@@ -42,7 +45,8 @@ sampled_pars(
   doMap = FALSE,
   add_da = FALSE,
   all_cells_dm = FALSE,
-  data = NULL
+  data = NULL,
+  use_data = TRUE
 )
 
 \method{sampled_pars}{emc}(
@@ -51,7 +55,8 @@ sampled_pars(
   doMap = FALSE,
   add_da = FALSE,
   all_cells_dm = FALSE,
-  data = NULL
+  data = NULL,
+  use_data = TRUE
 )
 }
 \arguments{
@@ -68,6 +73,8 @@ with the design matrices that perform the mapping back to the design}
 even when one is dropped in the design}
 
 \item{data}{A data frame to be included for accurate covariate mapping in summary.design}
+
+\item{use_data}{Logical. Whether to restrict the parameter design to factor combinations observed in the data. Defaults to \code{TRUE}.}
 }
 \value{
 Named vector.

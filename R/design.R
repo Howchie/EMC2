@@ -655,7 +655,7 @@ rt_check_function <- function(data){
 design_model <- function(data,design,model=NULL,
                          add_acc=TRUE,rt_resolution=1/60,verbose=TRUE,
                          compress=TRUE,rt_check=TRUE, add_da = FALSE, all_cells_dm = FALSE,
-                         compress_dms = TRUE)
+                         compress_dms = TRUE, drop_unobserved = FALSE)
 {
   add_bound_column_if_needed <- function(df, col, value, default) {
     if (col %in% names(df)) return(df)
@@ -750,7 +750,8 @@ design_model <- function(data,design,model=NULL,
   for (i in pnames) if (!is.null(design$Flist[[i]])) attr(design$Flist[[i]],"Clist") <- design$Clist[[i]]
 
   out <- lapply(design$Flist, make_dm, da = da, Fcovariates = design$Fcovariates,
-                add_da = add_da, all_cells_dm = all_cells_dm, compress_dms = compress_dms)
+                add_da = add_da, all_cells_dm = all_cells_dm, compress_dms = compress_dms,
+                drop_unobserved = drop_unobserved)
   if (!is.null(rt_resolution) & !is.null(da$rt))
     da$rt <- .floor_to_rt_resolution(da$rt, rt_resolution)
   if (compress){
@@ -773,6 +774,15 @@ design_model <- function(data,design,model=NULL,
     }
   }
   p_names <-  unlist(lapply(out,function(x){dimnames(x)[[2]]}),use.names=FALSE)
+  dropped_constants <- character(0)
+  if (isTRUE(drop_unobserved)) {
+    dropped <- unique(unlist(lapply(out, attr, which = "dropped_columns"),
+                             use.names = FALSE))
+    dropped_constants <- intersect(names(design$constants), dropped)
+    if (length(dropped_constants) > 0) {
+      design$constants <- design$constants[!names(design$constants) %in% dropped_constants]
+    }
+  }
   bad_constants <- names(design$constants)[!(names(design$constants) %in% p_names)]
   if (length(bad_constants) > 0)
     stop("Constant(s) ",paste(bad_constants,collapse=" ")," not in design")
@@ -858,7 +868,7 @@ make_full_dm <- function(form, Clist, da) {
 }
 
 make_dm <- function(form,da,Clist=NULL,Fcovariates=NULL, add_da = FALSE, all_cells_dm = FALSE,
-                    compress_dms = TRUE)
+                    compress_dms = TRUE, drop_unobserved = FALSE)
   # Makes a design matrix based on formula form from augmented data frame da
 {
 
@@ -887,7 +897,18 @@ make_dm <- function(form,da,Clist=NULL,Fcovariates=NULL, add_da = FALSE, all_cel
   }
   out <- make_full_dm(form, Clist, da)
 
+  dropped_columns <- character(0)
+  if (isTRUE(drop_unobserved)) {
+    keep <- colSums(abs(out), na.rm = TRUE) > 0
+    dropped_columns <- colnames(out)[!keep]
+    if (any(!keep)) {
+      out <- out[, keep, drop = FALSE]
+      attr(out, "assign") <- attr(out, "assign")[keep]
+    }
+  }
+
   if (!compress_dms) {
+    if (isTRUE(drop_unobserved)) attr(out, "dropped_columns") <- dropped_columns
     return(out)
   }
 
@@ -897,6 +918,7 @@ make_dm <- function(form,da,Clist=NULL,Fcovariates=NULL, add_da = FALSE, all_cel
   } else{
     out <- compress_dm(out)
   }
+  if (isTRUE(drop_unobserved)) attr(out, "dropped_columns") <- dropped_columns
   return(out)
 }
 
@@ -1143,6 +1165,39 @@ update2version <- function(emc){
 
 
 # Some s3 classes for design objects ---------------------------------------------------------
+
+# Restrict a factorial mapping backbone to the factor combinations that occur
+# in the supplied data.  This is kept separate from `mapped_pars()` so that
+# data-backed parameter discovery in `sampled_pars()` and `make_emc()` uses
+# exactly the same definition of an observed cell.
+.restrict_to_observed_factors <- function(mapping_data, design, data,
+                                          remove_subjects = TRUE) {
+  if (is.null(data)) return(mapping_data)
+  if (!is.data.frame(data)) stop("data must be a data frame")
+
+  observed_factors <- names(design$Ffactors)
+  if (isTRUE(remove_subjects)) observed_factors <- setdiff(observed_factors, "subjects")
+  missing_factors <- setdiff(observed_factors, names(data))
+  if (length(missing_factors) > 0) {
+    stop("data is missing design factor(s): ", paste(missing_factors, collapse = ", "))
+  }
+
+  observed_factors <- intersect(observed_factors, names(mapping_data))
+  if (length(observed_factors) == 0) return(mapping_data)
+
+  mapping_key <- function(df) {
+    values <- lapply(df[, observed_factors, drop = FALSE], as.character)
+    values <- lapply(values, function(value) {
+      value[is.na(value)] <- "<NA>"
+      value
+    })
+    do.call(paste, c(values, sep = "\r"))
+  }
+
+  observed_keys <- unique(mapping_key(data))
+  mapping_data[mapping_key(mapping_data) %in% observed_keys, , drop = FALSE]
+}
+
 #' Parameter Mapping Back to the Design Factors
 #'
 #' Maps parameters of the cognitive model back to the experimental design. If p_vector
@@ -1161,6 +1216,8 @@ update2version <- function(emc){
 #' @param covariates Covariates specified in the design can be included here.
 #' @param data Optional data frame. If supplied, only factor combinations observed
 #'   in the data are returned.
+#' @param use_data Logical. Whether to restrict mappings to combinations observed
+#'   in `data`. Defaults to `TRUE`.
 #' @return Matrix with a column for each factor in the design and for   each model parameter type (``p_type``).
 #' @examples
 #' # First define a design:
@@ -1177,7 +1234,7 @@ update2version <- function(emc){
 #' @export
 mapped_pars <- function(x, p_vector = NULL, model=NULL,
                         digits=3,remove_subjects=TRUE,
-                        covariates=NULL, data = NULL, ...)
+                        covariates=NULL, data = NULL, use_data = TRUE, ...)
   # Show augmented data and corresponding mapped parameter
 {
   UseMethod("mapped_pars")
@@ -1187,7 +1244,7 @@ mapped_pars <- function(x, p_vector = NULL, model=NULL,
 #' @export
 mapped_pars.emc.design <- function(x, p_vector = NULL, model=NULL,
                                    digits=3,remove_subjects=TRUE,
-                                   covariates=NULL, data = NULL, ...){
+                                   covariates=NULL, data = NULL, use_data = TRUE, ...){
   if(is.null(x)) return(NULL)
   if(is.null(x$Ffactors)){
     x <- x[[1]]
@@ -1196,6 +1253,7 @@ mapped_pars.emc.design <- function(x, p_vector = NULL, model=NULL,
     stop("Mapped_pars not available for this design type")
   }
   design <- x
+  design_data <- attr(design, "data")
   if(is.null(p_vector)){
     return(verbal_dm(design))
   }
@@ -1210,37 +1268,19 @@ mapped_pars.emc.design <- function(x, p_vector = NULL, model=NULL,
   if (is.null(model)) if (is.null(design$model))
     stop("Must specify model as not in design") else model <- design$model
   if (remove_subjects) design$Ffactors$subjects <- design$Ffactors$subjects[1]
+  if (is.null(data)) data <- design_data
   if(is.null(names(p_vector))) names(p_vector) <- names(sampled_pars(design))
   mapping_data <- minimal_design(
     design, covariates = Fcovariates, verbose = F, drop_R = F,
     add_acc = F, drop_subjects = F, do_functions = F
   )
-  if (!is.null(data)) {
-    if (!is.data.frame(data)) stop("data must be a data frame")
-
-    observed_factors <- names(design$Ffactors)
-    if (remove_subjects) observed_factors <- setdiff(observed_factors, "subjects")
-    missing_factors <- setdiff(observed_factors, names(data))
-    if (length(missing_factors) > 0) {
-      stop("data is missing design factor(s): ", paste(missing_factors, collapse = ", "))
-    }
-
-    observed_factors <- intersect(observed_factors, names(mapping_data))
-
-    if (length(observed_factors) > 0) {
-      mapping_key <- function(df) {
-        values <- lapply(df[, observed_factors, drop = FALSE], as.character)
-        values <- lapply(values, function(value) {
-          value[is.na(value)] <- "<NA>"
-          value
-        })
-        do.call(paste, c(values, sep = "\r"))
-      }
-      observed_keys <- unique(mapping_key(data))
-      mapping_data <- mapping_data[mapping_key(mapping_data) %in% observed_keys, , drop = FALSE]
-    }
+  if (isTRUE(use_data)) {
+    mapping_data <- .restrict_to_observed_factors(mapping_data, design, data,
+                                                  remove_subjects = remove_subjects)
   }
-  dadm <- design_model(mapping_data, design,model,rt_check=FALSE,compress=FALSE, verbose = FALSE)
+  dadm <- design_model(mapping_data, design,model,rt_check=FALSE,compress=FALSE,
+                       verbose = FALSE,
+                       drop_unobserved = isTRUE(use_data) && !is.null(data))
   ok <- !(names(dadm) %in% c("subjects","trials","R","rt","winner"))
   out <- cbind(dadm[,ok, drop = F],round(get_pars_matrix_oo(p_vector,dadm, design$model()),digits))
   if (model()$type=="SDT")  out <- out[dadm$lR!=levels(dadm$lR)[length(levels(dadm$lR))],]
@@ -1265,7 +1305,10 @@ mapped_pars.emc.design <- function(x, p_vector = NULL, model=NULL,
 #' @param add_da Boolean. Whether to include the relevant data columns in the map attribute
 #' @param all_cells_dm Boolean. Whether to include all levels of a factor in the mapping attribute,
 #' even when one is dropped in the design
-#' @param data A data frame to be included for accurate covariate mapping in summary.design
+#' @param data Optional data frame (or list of data frames for a joint model).
+#'   When supplied, only observed factor combinations are used.
+#' @param use_data Logical. Whether to restrict the parameter design to
+#'   combinations observed in `data`. Defaults to `TRUE`.
 #'
 #'
 #' @return Named vector.
@@ -1278,14 +1321,17 @@ mapped_pars.emc.design <- function(x, p_vector = NULL, model=NULL,
 #' sampled_pars(design_DDMaE)
 #'
 #' @export
-sampled_pars <- function(x,group_design=NULL,doMap=FALSE, add_da = FALSE, all_cells_dm = FALSE, data = NULL)
+sampled_pars <- function(x,group_design=NULL,doMap=FALSE, add_da = FALSE,
+                         all_cells_dm = FALSE, data = NULL, use_data = TRUE)
 {
   UseMethod("sampled_pars")
 }
 
 #' @rdname sampled_pars
 #' @export
-sampled_pars.emc.design <- function(x,group_design=NULL,doMap=FALSE, add_da = FALSE, all_cells_dm = FALSE, data = NULL){
+sampled_pars.emc.design <- function(x,group_design=NULL,doMap=FALSE, add_da = FALSE,
+                                    all_cells_dm = FALSE, data = NULL,
+                                    use_data = TRUE){
   design <- x
   if(is.null(design)) return(NULL)
   if("Flist" %in% names(design)){
@@ -1313,6 +1359,15 @@ sampled_pars.emc.design <- function(x,group_design=NULL,doMap=FALSE, add_da = FA
     model <- cur_design$model
     if (is.null(model)) stop("Must supply model as not in design")
 
+    observed_data <- data
+    use_covariate_data <- !is.null(data)
+    if (!is.null(observed_data) && is.list(observed_data) &&
+        !is.data.frame(observed_data)) {
+      observed_data <- observed_data[[j]]
+    }
+    if (is.null(observed_data)) observed_data <- attr(cur_design, "data")
+    if (!isTRUE(use_data)) observed_data <- NULL
+
     if(grepl("MRI", model()$type)){
       pars <- model()$p_types
       if(length(design) != 1){
@@ -1324,12 +1379,19 @@ sampled_pars.emc.design <- function(x,group_design=NULL,doMap=FALSE, add_da = FA
       next
     }
     cur_design$Ffactors$subjects <- 1
-    min_design <- minimal_design(cur_design, drop_subjects = F, drop_R = F, verbose = F, emc = data,
+    min_design <- minimal_design(cur_design, drop_subjects = F, drop_R = F, verbose = F,
+                                 emc = if (use_covariate_data) observed_data else NULL,
                                  do_functions = F, add_acc = T)
+    if (isTRUE(use_data) && !is.null(observed_data)) {
+      min_design <- .restrict_to_observed_factors(min_design, cur_design,
+                                                  observed_data,
+                                                  remove_subjects = TRUE)
+    }
     dadm <- design_model(
       min_design,
       cur_design,model,add_acc=FALSE,verbose=FALSE,rt_check=FALSE,compress=FALSE, add_da = add_da,
-      all_cells_dm = all_cells_dm)
+      all_cells_dm = all_cells_dm,
+      drop_unobserved = isTRUE(use_data) && !is.null(observed_data))
     sampled_p_names <- attr(dadm,"sampled_p_names")
     if(length(design) != 1){
       map_list[[cur_name]] <- lapply(attributes(dadm)$designs,function(x){x[,,drop=FALSE]})
@@ -1465,7 +1527,9 @@ plot.emc.design <- function(x, p_vector, data = NULL, factors = NULL, plot_facto
 
 
 #' @exportS3Method
-sampled_pars.default <- function(x,group_design=NULL,doMap=FALSE, add_da = FALSE, all_cells_dm = FALSE, data = NULL){
+sampled_pars.default <- function(x,group_design=NULL,doMap=FALSE, add_da = FALSE,
+                                 all_cells_dm = FALSE, data = NULL,
+                                 use_data = TRUE){
   if(is.null(x)) return(NULL)
   if(!is.null(attr(x, "custom_ll"))){
     pars <- numeric(length(attr(x,"sampled_p_names")))
@@ -1476,6 +1540,8 @@ sampled_pars.default <- function(x,group_design=NULL,doMap=FALSE, add_da = FALSE
     x <- list(x)
     class(x) <- "emc.design"
   }
-  out <- sampled_pars.emc.design(x, group_design = group_design, doMap = doMap, add_da = add_da, all_cells_dm = all_cells_dm, data = data)
+  out <- sampled_pars.emc.design(x, group_design = group_design, doMap = doMap,
+                                 add_da = add_da, all_cells_dm = all_cells_dm,
+                                 data = data, use_data = use_data)
   return(out)
 }

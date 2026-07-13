@@ -15,6 +15,7 @@ mapped_pars(
   remove_subjects = TRUE,
   covariates = NULL,
   data = NULL,
+  use_data = TRUE,
   ...
 )
 
@@ -26,6 +27,7 @@ mapped_pars(
   remove_subjects = TRUE,
   covariates = NULL,
   data = NULL,
+  use_data = TRUE,
   ...
 )
 
@@ -37,6 +39,7 @@ mapped_pars(
   remove_subjects = TRUE,
   covariates = NULL,
   data = NULL,
+  use_data = TRUE,
   ...
 )
 
@@ -48,6 +51,7 @@ mapped_pars(
   remove_subjects = TRUE,
   covariates = NULL,
   data = NULL,
+  use_data = TRUE,
   ...
 )
 }
@@ -67,6 +71,9 @@ Must be in the form of \code{sampled_pars(design)}}
 
 \item{data}{Optional data frame. If supplied, only factor combinations observed
 in the data are returned.}
+
+\item{use_data}{Logical. Whether to restrict mappings to combinations observed
+in \code{data}. Defaults to \code{TRUE}.}
 
 \item{...}{optional arguments}
 }
