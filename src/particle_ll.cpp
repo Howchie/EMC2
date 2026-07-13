@@ -1994,14 +1994,28 @@ double c_log_likelihood_DDM(Rcpp::NumericMatrix pars, Rcpp::DataFrame data,
   std::vector<int> ok_int(n_trials);
   for(int i=0; i<n_trials; ++i) ok_int[i] = is_ok[i] ? 1 : 0;
 
-  // Identity mapping: the materialized matrix is already in p_types order.
-  if (pars.ncol() < emc2col::ddm::N_REQ) {
-    Rcpp::stop("c_log_likelihood_DDM: expected %d parameter columns, got %d.",
-               (int)emc2col::ddm::N_REQ, (int)pars.ncol());
+  // The materialized fallback may retain a non-canonical storage order. Resolve
+  // the canonical DDM pointer array from column names once, just as the raw
+  // ParamTable path does.
+  const emc2col::ColSpec ddm_spec = emc2col::ddm::spec();
+  Rcpp::CharacterVector par_names = Rcpp::colnames(pars);
+  if (static_cast<int>(par_names.size()) != pars.ncol()) {
+    Rcpp::stop("c_log_likelihood_DDM: materialized parameter matrix has no column names.");
   }
   const double* ddm_cols[emc2col::ddm::N_REQ];
-  for (int k = 0; k < emc2col::ddm::N_REQ; ++k) {
-    ddm_cols[k] = pars.begin() + static_cast<size_t>(k) * n_trials;
+  for (int k = 0; k < ddm_spec.n_required; ++k) {
+    int col = -1;
+    for (int j = 0; j < pars.ncol(); ++j) {
+      if (Rcpp::as<std::string>(par_names[j]) == ddm_spec.names[k]) {
+        col = j;
+        break;
+      }
+    }
+    if (col < 0) {
+      Rcpp::stop("c_log_likelihood_DDM: missing required parameter column '%s'.",
+                 ddm_spec.names[k]);
+    }
+    ddm_cols[k] = pars.begin() + static_cast<size_t>(col) * n_trials;
   }
 
   return c_log_likelihood_DDM_pt(ddm_cols, rts.begin(), R.begin(),
