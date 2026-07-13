@@ -75,7 +75,8 @@ even when one is dropped in the design}
 \item{data}{Optional data frame (or list of data frames for a joint model).
 When supplied, only observed factor combinations are used.}
 
-\item{use_data}{Logical. Whether to restrict the parameter design to factor combinations observed in the data. Defaults to \code{TRUE}.}
+\item{use_data}{Logical. Whether to restrict the parameter design to
+combinations observed in \code{data}. Defaults to \code{TRUE}.}
 }
 \value{
 Named vector.

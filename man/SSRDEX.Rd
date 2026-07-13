@@ -14,8 +14,10 @@ bump for tight stop densities (no closed form exists for this model);
 unchanged); \code{"gl"} forces fixed Gauss-Legendre with
 \code{stop_n_nodes} nodes.}
 
-\item{stop_n_nodes}{Number of Gauss-Legendre nodes for \code{"gl"} (and the
-base node count for the \code{"auto"} route).}
+\item{stop_n_nodes}{Number of Gauss-Legendre nodes for \code{"gl"} (exact),
+and the base/minimum node count for the \code{"auto"} route, which
+automatically raises the node count when the integration window spans many
+stop-sigma widths (sharp, small-tauS stop densities).}
 }
 \value{
 A model list with all the necessary functions to sample
