@@ -32,3 +32,20 @@ test_that("particle matrices still reject a missing active design column", {
     "missing"
   )
 })
+
+test_that("the OO mapper consumes compressed design rows", {
+  design_mat <- matrix(c(1, 2), nrow = 2, ncol = 1,
+                       dimnames = list(NULL, "p"))
+  attr(design_mat, "expand") <- c(1L, 2L, 1L, 2L)
+  dadm <- structure(data.frame(row = 1:4),
+                    sampled_p_names = "p",
+                    p_names = "p",
+                    designs = list(x = design_mat))
+  identity <- list(func = c(p = "identity"),
+                   lower = c(p = -Inf), upper = c(p = Inf))
+  model <- list(transform = identity, pre_transform = identity,
+                trend = NULL)
+
+  out <- EMC2:::get_pars_oo(c(p = 3), dadm, model)
+  expect_equal(as.numeric(out[, "x"]), c(3, 6, 3, 6))
+})

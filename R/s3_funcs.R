@@ -197,14 +197,43 @@ To override this behavior, pass `conditional_on_data=TRUE` to predict().')
         }
       }
     }
+    # The conditional prediction path has a parameter-independent expanded
+    # design.  Build it once instead of repeating design_model() for every
+    # posterior draw.  Do not cache when functions, staircases, or explicit
+    # unconditional simulation may make the design depend on simulated data.
+    precomputed_design <- NULL
+    can_reuse_design <- is.null(dots$conditional_on_data) ||
+      isTRUE(dots$conditional_on_data)
+    if (can_reuse_design && is.null(dots$functions) && is.null(dots$staircase)) {
+      prediction_data <- add_trials(data[[j]][order(data[[j]]$subjects), ])
+      model_fun <- design[[j]]$model
+      model_list <- model_fun()
+      precomputed_design <- design_model(
+        add_accumulators(
+          prediction_data,
+          design[[j]]$matchfun,
+          simulate = TRUE,
+          type = model_list$type,
+          Fcovariates = design[[j]]$Fcovariates,
+          fixed_accumulator_roles = design[[j]]$fixed_accumulator_roles
+        ),
+        design[[j]], model_fun,
+        add_acc = FALSE, compress = FALSE, verbose = FALSE,
+        rt_check = FALSE
+      )
+    }
+    make_data_dots <- dots
+    make_data_dots$precomputed_design <- precomputed_design
     simDat <- suppressWarnings(mclapply(1:n_post,function(i){
-      do.call(make_data, c(list(pars[[i]],design=design[[j]],data=data[[j]]), fix_dots(dots, make_data)))
+      do.call(make_data, c(list(pars[[i]],design=design[[j]],data=data[[j]]),
+                           fix_dots(make_data_dots, make_data)))
     },mc.cores=n_cores))
     in_bounds <- !sapply(simDat, is.logical)
     if(any(!in_bounds)){
       good_post <- sample(1:n_post, sum(!in_bounds))
       simDat[!in_bounds] <- suppressWarnings(mclapply(good_post,function(i){
-        do.call(make_data, c(list(pars[[i]],design=design[[j]],data=data[[j]], check_bounds = TRUE), fix_dots(dots, make_data)))
+        do.call(make_data, c(list(pars[[i]],design=design[[j]],data=data[[j]], check_bounds = TRUE),
+                             fix_dots(make_data_dots, make_data)))
       },mc.cores=n_cores))
       in_bounds <- !sapply(simDat, is.logical)
     }

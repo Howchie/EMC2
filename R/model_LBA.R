@@ -67,6 +67,15 @@
   out <- .apply_timed_guess_winner(out, levels(lR))
   out
 }
+
+# Backwards compatibility for emc objects saved before the C++ rfun wrapper
+# was introduced. Their serialized model closures call rLBA() directly;
+# keep this internal name so loading such a fit uses the current simulator.
+rLBA <- function(lR, pars, p_types = c("v", "sv", "b", "A", "t0"),
+                 ok = rep(TRUE, length(lR)), posdrift = TRUE) {
+  .rfun_LBA(lR, pars, ok = ok, posdrift = posdrift)
+}
+
 #### Model functions ----
 
 #' The Linear Ballistic Accumulator model

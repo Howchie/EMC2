@@ -22,6 +22,8 @@ struct DesignEntry {
   double split_lower;
   double split_upper;
   std::vector<char> coef_in_pre_sum; // length K; whether this design column contributes to pre-sum
+  // 0-based row map for a compressed design matrix; empty means identity.
+  std::vector<int> expand_idx;
 };
 
 // View-based ParamTable: one base matrix + active column indices
@@ -204,6 +206,7 @@ struct ParamTable {
       entry.split_code = IDENTITY;
       entry.split_lower = 0.0;
       entry.split_upper = 1.0;
+      entry.expand_idx.clear();
 
       if (designs[i] == R_NilValue) continue;
 
@@ -222,7 +225,20 @@ struct ParamTable {
       entry.out_idx = out_it->second;
 
       NumericMatrix design = designs[i];
-      if (design.nrow() != T) {
+      IntegerVector expand;
+      SEXP expand_attr = design.attr("expand");
+      if (expand_attr != R_NilValue) expand = as<IntegerVector>(expand_attr);
+      if (expand.size() == T) {
+        entry.expand_idx.resize(T);
+        for (int r = 0; r < T; ++r) {
+          const int idx = expand[r];
+          if (IntegerVector::is_na(idx) || idx < 1 || idx > design.nrow()) {
+            stop("ParamTable::init_design_plan: invalid expand index for '%s'",
+                 out_name.c_str());
+          }
+          entry.expand_idx[r] = idx - 1;
+        }
+      } else if (design.nrow() != T) {
         stop("ParamTable::init_design_plan: design for '%s' must have n_trials rows",
              out_name.c_str());
       }
@@ -456,8 +472,10 @@ struct ParamTable {
 
       NumericMatrix dm = designs[i];
 
-      // Must have the right number of rows
-      if (dm.nrow() != n_trials) continue;
+      Rcpp::IntegerVector expand;
+      SEXP expand_attr = dm.attr("expand");
+      if (expand_attr != R_NilValue) expand = Rcpp::as<Rcpp::IntegerVector>(expand_attr);
+      if (dm.nrow() != n_trials && expand.size() != n_trials) continue;
 
       // Exactly 1 column
       if (dm.ncol() != 1) continue;
@@ -472,9 +490,10 @@ struct ParamTable {
 
       // Column must be all ones
       bool all_ones = true;
-      const double* dcol = &dm(0, 0);
+      const bool compressed = expand.size() == n_trials;
       for (int r = 0; r < n_trials; ++r) {
-        if (dcol[r] != 1.0) {
+        const int drow = compressed ? expand[r] - 1 : r;
+        if (drow < 0 || drow >= dm.nrow() || dm(drow, 0) != 1.0) {
           all_ones = false;
           break;
         }
@@ -562,10 +581,10 @@ struct ParamTable {
             ? self_copy.data()
               : &base(0, cidx);
 
-          const double* d = &design(0, j);
           double* acc = entry.coef_in_pre_sum[j] ? pre_acc.data() : post_acc.data();
           for (int r = 0; r < T; ++r) {
-            acc[r] += coef[r] * d[r];
+            const int drow = entry.expand_idx.empty() ? r : entry.expand_idx[r];
+            acc[r] += coef[r] * design(drow, j);
           }
         }
 
@@ -584,10 +603,9 @@ struct ParamTable {
             ? self_copy.data()
               : &base(0, cidx);
 
-          const double* d = &design(0, j);
-
           for (int r = 0; r < T; ++r) {
-            double v = coef[r] * d[r];
+            const int drow = entry.expand_idx.empty() ? r : entry.expand_idx[r];
+            double v = coef[r] * design(drow, j);
             out[r] += v;
           }
         }

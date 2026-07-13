@@ -337,6 +337,7 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
   # check_bounds <- FALSE
 
   post_functions <- NULL
+  precomputed_design <- NULL
   optionals <- list(...)
   for (name in names(optionals) ) {
     assign(name, optionals[[name]])
@@ -481,19 +482,27 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
     if (return_trialwise_parameters) attr(data, "trialwise_parameters") <- trialwise_parameters
     return(data)
   } else {
-    data <- design_model(
-      add_accumulators(
-        data,
-        design$matchfun,
-        simulate = TRUE,
-        type = model()$type,
-        Fcovariates = design$Fcovariates,
-        fixed_accumulator_roles = design$fixed_accumulator_roles
-      ),
-      design, model,
-      add_acc = FALSE, compress = FALSE, verbose = FALSE,
-      rt_check = FALSE
-    )
+    if (is.null(precomputed_design)) {
+      data <- design_model(
+        add_accumulators(
+          data,
+          design$matchfun,
+          simulate = TRUE,
+          type = model()$type,
+          Fcovariates = design$Fcovariates,
+          fixed_accumulator_roles = design$fixed_accumulator_roles
+        ),
+        design, model,
+        add_acc = FALSE, compress = FALSE, verbose = FALSE,
+        rt_check = FALSE
+      )
+    } else {
+      # predict.emc() can reuse this parameter-independent scaffold across
+      # posterior draws.  It is valid only for the conditional-on-data path;
+      # trialwise/unconditional simulation still rebuilds its design because
+      # feedback covariates change after each simulated trial.
+      data <- precomputed_design
+    }
     pars <- get_pars_oo(parameters, data, model())
     if (return_trialwise_parameters)
       trialwise_parameters <- pars

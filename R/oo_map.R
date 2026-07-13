@@ -5,7 +5,7 @@
   model
 }
 
-.oo_expanded_designs <- function(dadm, row_idx = NULL) {
+.oo_expanded_designs <- function(dadm, row_idx = NULL, expand = TRUE) {
   designs <- attr(dadm, "designs")
   if (is.null(designs)) {
     stop("dadm must have a 'designs' attribute")
@@ -13,6 +13,20 @@
 
   out <- lapply(designs, function(design_mat) {
     expand_idx <- attr(design_mat, "expand")
+    if (!expand) {
+      if (!is.null(row_idx)) {
+        if (is.null(expand_idx)) {
+          return(design_mat[row_idx, , drop = FALSE])
+        }
+        # Keep the compressed matrix and restrict only its row map.  The C++
+        # mapper consumes this attribute directly, avoiding a large R matrix
+        # allocation for every posterior-predictive draw.
+        out_mat <- design_mat
+        attr(out_mat, "expand") <- expand_idx[row_idx]
+        return(out_mat)
+      }
+      return(design_mat)
+    }
     if (is.null(expand_idx)) {
       expand_idx <- seq_len(nrow(design_mat))
     }
@@ -169,7 +183,7 @@ get_pars_oo <- function(p, dadm, model,
       particle_matrix = cur_particles,
       data = cur_dadm,
       constants = constants,
-      designs = .oo_expanded_designs(dadm, row_idx),
+      designs = .oo_expanded_designs(dadm, row_idx, expand = FALSE),
       bounds = model_list$bound,
       transforms = model_list$transform,
       pretransforms = pretransforms,
@@ -244,7 +258,7 @@ get_pars_batch_oo <- function(p, dadm, model, row_idx = NULL,
     particle_matrix = particle_matrix,
     data = cur_dadm,
     constants = constants,
-    designs = .oo_expanded_designs(dadm, row_idx),
+    designs = .oo_expanded_designs(dadm, row_idx, expand = FALSE),
     bounds = model_list$bound,
     transforms = model_list$transform,
     pretransforms = pretransforms,
