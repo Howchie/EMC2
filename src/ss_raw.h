@@ -74,6 +74,9 @@ struct SsStopCtx {
   int n_go;
   double muS, sigS, tauS, lbS;   // stop block (first GO row, as before)
   ss_acc_surv_fn acc_surv;
+  // Shift for the scaled-log fallback integrand (see
+  // ss_stop_success_shifted_integrand_raw); unused by the natural routes.
+  double log_scale = 0.0;
 };
 
 // Integrand: f_stop(x) * prod_i S_go_i(x + SSD). Matches the lambda bodies of
@@ -88,6 +91,29 @@ inline double ss_stop_success_integrand_raw(double x, void* p) {
     if (S_go_all <= 0.0) return 0.0;
   }
   return fS * S_go_all;
+}
+
+// The same integrand as a log sum: the stop density enters through its log
+// form and the survivor product is accumulated in log space.  Used by the
+// scaled-log fallbacks below when the natural product underflows.
+inline double ss_stop_success_log_integrand_raw(double x, const SsStopCtx* c) {
+  const double log_fS = dtexg(x, c->muS, c->sigS, c->tauS, c->lbS, R_PosInf, true);
+  if (log_fS == R_NegInf || ISNAN(log_fS)) return R_NegInf;
+  double log_S = 0.0;
+  for (int i = 0; i < c->n_go; ++i) {
+    const double S = c->acc_surv(x + c->SSD, c->acc_go + SS_ACC_STRIDE * i);
+    if (!(S > 0.0)) return R_NegInf;
+    log_S += std::log(S);
+  }
+  return log_fS + log_S;
+}
+
+// Shifted natural integrand for GSL: exp(log integrand - log_scale).
+inline double ss_stop_success_shifted_integrand_raw(double x, void* p) {
+  const SsStopCtx* c = static_cast<const SsStopCtx*>(p);
+  const double lg = ss_stop_success_log_integrand_raw(x, c);
+  if (lg == R_NegInf || ISNAN(lg)) return 0.0;
+  return std::exp(std::fmin(lg - c->log_scale, 700.0));
 }
 
 // Adaptive GSL route (stop_method = "integrate"). Twin of
@@ -119,10 +145,42 @@ inline double ss_stop_success_raw_integrate(
   } else {
     status = gsl_integration_qags(&F, c.lbS, ub, abs_tol, rel_tol, max_subdiv, workspace, &res, &err);
   }
-  gsl_set_error_handler(old_handler);
 
+  if (status == GSL_SUCCESS && emc2_isfinite(res) && res > 0.0) {
+    gsl_set_error_handler(old_handler);
+    return std::log(res);
+  }
+
+  // Natural stop-success product underflowed pointwise.  Pilot the log
+  // integrand across the window, then integrate the shifted natural
+  // integrand so GSL still consumes O(1) values.
+  const double pilot_ub = emc2_isinf(ub) ? ub_heur : ub;
+  double max_log = R_NegInf;
+  if (pilot_ub > c.lbS && emc2_isfinite(pilot_ub) && emc2_isfinite(c.lbS)) {
+    static const double fracs[] = {0.02, 0.1, 0.25, 0.5, 0.75, 0.9, 0.98};
+    for (double f : fracs) {
+      const double lg = ss_stop_success_log_integrand_raw(
+          c.lbS + f * (pilot_ub - c.lbS), &c);
+      if (lg > max_log) max_log = lg;
+    }
+  }
+  if (!R_FINITE(max_log)) {
+    gsl_set_error_handler(old_handler);
+    return min_ll;
+  }
+
+  SsStopCtx shifted = c;
+  shifted.log_scale = max_log;
+  F.function = &ss_stop_success_shifted_integrand_raw;
+  F.params = &shifted;
+  if (emc2_isinf(ub)) {
+    status = gsl_integration_qagiu(&F, c.lbS, abs_tol, rel_tol, max_subdiv, workspace, &res, &err);
+  } else {
+    status = gsl_integration_qags(&F, c.lbS, ub, abs_tol, rel_tol, max_subdiv, workspace, &res, &err);
+  }
+  gsl_set_error_handler(old_handler);
   if (status != GSL_SUCCESS || !emc2_isfinite(res) || res <= 0.0) return min_ll;
-  return std::log(res);
+  return max_log + std::log(res);
 }
 
 // Fixed Gauss-Legendre route (stop_method = "gl"). Twin of
@@ -144,8 +202,23 @@ inline double ss_stop_success_raw_gl(
   }
   double res = gl_integrate(&ss_stop_success_integrand_raw,
                             const_cast<SsStopCtx*>(&c), lo, ub, n_nodes);
-  if (!emc2_isfinite(res) || res <= 0.0) return min_ll;
-  return std::log(res);
+  if (emc2_isfinite(res) && res > 0.0) return std::log(res);
+
+  // Every node underflowed on the natural scale: accumulate the same fixed
+  // rule in log space instead.
+  const GLRule& rule = gl_get_rule(n_nodes);
+  const double c1 = 0.5 * (ub - lo);
+  const double c2 = 0.5 * (ub + lo);
+  if (!(c1 > 0.0)) return min_ll;
+  double log_acc = R_NegInf;
+  for (size_t i = 0; i < rule.x.size(); ++i) {
+    if (!(rule.w[i] > 0.0)) continue;
+    const double lg = ss_stop_success_log_integrand_raw(c1 * rule.x[i] + c2, &c);
+    if (lg == R_NegInf || ISNAN(lg)) continue;
+    log_acc = log_sum_exp(log_acc, std::log(rule.w[i]) + lg);
+  }
+  if (!(log_acc > R_NegInf) || ISNAN(log_acc)) return min_ll;
+  return std::log(c1) + log_acc;
 }
 
 // "auto" dispatch. Twin of ss_texg_stop_success_lpdf_autodisp /

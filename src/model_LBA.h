@@ -17,149 +17,10 @@
 
 using namespace Rcpp;
 
-inline double dnormP(double x, double mean = 0.0, double sd = 1.0,
-              bool log = false){
-  return R::dnorm(x, mean, sd, log);
-}
-
-// pnorm_std's fast log-tail approximation deliberately returns -Inf beyond
-// z = 37 (mirroring natural-scale underflow for the RDM/Wald consumers).
-// LBA needs those tails to remain representable, so extend them with the
-// same continued-fraction asymptotic the fast path uses below 37:
-//   log Q(z) = -z^2/2 - log(sqrt(2*pi)) - log(f(z)).
-// This stays in cheap arithmetic instead of falling back to R::pnorm, which
-// profiling showed dominating truncated-LBA likelihoods.
-inline double pnorm_log_direct(double x, bool lower = true) {
-  double out = pnorm_std(x, lower, true);
-  if (out == R_NegInf && emc2_isfinite(x)) {
-    const double z = lower ? -x : x;  // tail argument: result is log Q(z)
-    if (z > 0.0) {
-      const double f = z + 1.0 / (z + 2.0 / (z + 3.0 / (z + 4.0 / (z + 13.0 / 20.0))));
-      return -0.5 * z * z - LOG_SQRT_2PI - std::log(f);
-    }
-    out = R::pnorm(x, 0.0, 1.0, lower, true);
-  }
-  return out;
-}
-
-// log Q(z) = log Phi(-z), always evaluated on the small-tail side.
-// fast_norm_phi computes the tail probability there directly with full
-// relative accuracy, whereas the upper-tail call materialises 1 - Phi and
-// loses ~7 digits to the subtraction from 1 before the CF takes over.
-inline double log_normal_upper_tail(double z) {
-  return pnorm_log_direct(-z, true);
-}
-
-// Return log(Phi(hi) - Phi(lo)) without materialising either probability.
-// Using the upper tails when both arguments are positive avoids subtracting
-// two values that are both numerically equal to one.
-inline double log_normal_interval(double lo, double hi) {
-  if (!(hi > lo)) return R_NegInf;
-  if (lo >= 0.0) {
-    return log_diff_exp(log_normal_upper_tail(lo),
-                        log_normal_upper_tail(hi));
-  }
-  return log_diff_exp(pnorm_log_direct(hi, true),
-                      pnorm_log_direct(lo, true));
-}
-
-// Let Q(z) = 1 - Phi(z). The positive quantity
-//   M(z) = phi(z) - z Q(z)
-// is decreasing and satisfies
-//   integral_lo^hi Q(z) dz = M(lo) - M(hi).
-// This is the positive-integrand form of the LBA CDF and avoids the severe
-// cancellation in the usual "1 + correction" expression at early times.
-inline double log_normal_q_antiderivative_abs(double z) {
-  const double log_phi = dnormP(z, 0.0, 1.0, true);
-  const double log_q = log_normal_upper_tail(z);
-
-  if (z > 0.0) {
-    // M(z) = phi(z) * [1 - z Q(z) / phi(z)].
-    const double log_ratio = std::log(z) + log_q - log_phi;
-    if (log_ratio >= 0.0) {
-      // Asymptotic M(z) ~ phi(z) / z^2.  This branch is reached only when
-      // the two log terms are indistinguishable at machine precision.
-      return log_phi - 2.0 * std::log(z);
-    }
-    return log_phi + log1m_exp(log_ratio);
-  }
-  if (z < 0.0) {
-    // M(z) = phi(z) + (-z) Q(z).
-    return log_sum_exp(log_phi, std::log(-z) + log_q);
-  }
-  return log_phi;
-}
-
-inline double log_normal_q_interval(double lo, double hi) {
-  if (!(hi > lo)) return R_NegInf;
-  return log_diff_exp(log_normal_q_antiderivative_abs(lo),
-                      log_normal_q_antiderivative_abs(hi));
-}
-
-// log h(z), where h(z) = z Phi(z) + phi(z), the antiderivative of Phi.
-// The negative tail is evaluated as a log difference; this is the same
-// cancellation-sensitive part as the LBA CDF and must not be formed on the
-// natural scale.
-inline double log_normal_phi_antiderivative(double z) {
-  if (z == R_PosInf) return R_PosInf;
-  if (z == R_NegInf) return R_NegInf;
-
-  const double log_phi = dnormP(z, 0.0, 1.0, true);
-  const double log_phi_cdf = pnorm_log_direct(z, true);
-  if (z > 0.0) {
-    return log_sum_exp(std::log(z) + log_phi_cdf, log_phi);
-  }
-  if (z < 0.0) {
-    const double log_ratio = std::log(-z) + log_phi_cdf - log_phi;
-    if (log_ratio >= 0.0) {
-      // Asymptotic h(z) ~ phi(z) / z^2.  This branch is reached only when
-      // the two log terms are indistinguishable at machine precision.
-      return log_phi - 2.0 * std::log(-z);
-    }
-    return log_phi + log1m_exp(log_ratio);
-  }
-  return log_phi;
-}
-
-// Return log( integral_lo^hi Phi(z) dz ).  The positive-CDF representation
-// uses the lower-tail antiderivative on the left and the complementary-tail
-// antiderivative on the right, avoiding subtraction of nearly equal values.
-inline double log_normal_phi_integral(double lo, double hi) {
-  if (!(hi > lo)) return R_NegInf;
-
-  if (hi <= 0.0) {
-    return log_diff_exp(log_normal_phi_antiderivative(hi),
-                        log_normal_phi_antiderivative(lo));
-  }
-
-  auto log_positive_interval = [](double xlo, double xhi) {
-    if (!(xhi > xlo)) return R_NegInf;
-    const double log_width = std::log(xhi - xlo);
-    const double log_q = log_normal_q_interval(xlo, xhi);
-    return log_diff_exp(log_width, log_q);
-  };
-
-  if (lo >= 0.0) {
-    return log_positive_interval(lo, hi);
-  }
-
-  // Split at zero so that neither endpoint calculation subtracts terms from
-  // opposite tails.
-  const double left = log_diff_exp(log_normal_phi_antiderivative(0.0),
-                                   log_normal_phi_antiderivative(lo));
-  const double right = log_positive_interval(0.0, hi);
-  return log_sum_exp(left, right);
-}
-
-// A signed log-scale product.  The coefficient is kept on its natural scale
-// as an input, but the product itself is never formed in natural space.
-inline signed_log signed_log_product(double coefficient, double log_factor) {
-  if (coefficient == 0.0 || log_factor == R_NegInf) {
-    return {R_NegInf, 0};
-  }
-  return make_signed_log(std::log(std::fabs(coefficient)) + log_factor,
-                         coefficient > 0.0 ? 1 : -1);
-}
+// dnormP, pnorm_log_direct, log_normal_upper_tail, log_normal_interval, the
+// log ∫Phi machinery (log_normal_phi_integral and its antiderivatives), and
+// the signed-log product helper are shared with the other race models and
+// live in wald_functions.h next to pnorm_std().
 
 constexpr double BAWL_K_EPS = 1e-10;
 constexpr double BAWL_A_EPS = 1e-10;
@@ -200,10 +61,6 @@ inline double log_positive_normalizer(double v, double sv, bool posdrift,
   const double log_denom = pnorm_log_direct(v / sv, true);
   const double log_floor = std::log(denom_floor);
   return (log_denom < log_floor) ? log_floor : log_denom;
-}
-
-inline double return_from_log(double log_value, bool log_out) {
-  return log_out ? log_value : std::exp(log_value);
 }
 
 // Natural formulas are much cheaper, but are only used while their normal

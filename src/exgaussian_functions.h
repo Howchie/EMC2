@@ -72,6 +72,22 @@ double dexg(
   return log_d ? log_out : std::exp(log_out);
 }
 
+// Direct upper-tail log probability of the ex-Gaussian:
+//   S(q) = Q(u) + exp(k) * Phi(u - sigma/tau),
+//   u = (q - mu)/sigma, k = (mu - q)/tau + sigma^2/(2 tau^2).
+// Both terms are non-negative, so log S is a plain log_sum_exp of two log
+// terms and never round-trips through the lower-tail CDF (no exp, no
+// rounding to one, no log1m).
+inline double pexg_log_upper(double q, double mu, double sigma, double tau) {
+  const double tau_p = std::max(tau, SIG_TAU_EPS);
+  const double sig_p = std::max(sigma, SIG_TAU_EPS);
+  const double u = (q - mu) / sig_p;
+  const double log_q_term = pnorm_log_direct(u, false);
+  const double log_exp_term = (mu - q) / tau_p + (sig_p * sig_p) / (2. * tau_p * tau_p);
+  const double log_phi2 = pnorm_log_direct(u - sig_p / tau_p, true);
+  return std::fmin(0.0, log_sum_exp(log_q_term, log_exp_term + log_phi2));
+}
+
 // cumulative distribution function of ex-Gaussian distribution
 double pexg(
     const double q,
@@ -124,8 +140,11 @@ double pexg(
       out = log_p ? 0. : 1.;
     } else {
       double cdf_lower = std::exp(log_cdf_lower);
-      if (cdf_lower >= 1. - 1e-15) {
-        out = log_p ? R_NegInf : 0.;
+      if (cdf_lower >= 1. - 1e-8) {
+        // Near saturation 1 - cdf has lost its digits; switch to the direct
+        // upper-tail expression instead of rounding the survivor to zero.
+        const double log_surv = pexg_log_upper(q, mu, sig_p, tau_p);
+        out = log_p ? log_surv : std::exp(log_surv);
       } else {
         out = log_p ? log1m(cdf_lower) : -std::expm1(log_cdf_lower);
       }
@@ -168,15 +187,21 @@ double dtexg(
     upper_lcdf = pexg(upper, mu, sigma, tau, true, true);
   }
 
-  if (lower_lcdf == upper_lcdf) return log_d ? R_NegInf : 0.;
-
   double log_normaliser;
   if (lower_lcdf == R_NegInf) {
     log_normaliser = upper_lcdf;
+  } else if (lower_lcdf > -M_LN2) {
+    // Both bounds sit in the upper half: the lower-tail log CDFs are nearly
+    // equal (both ~0) and their log difference cancels.  The same normaliser
+    // as a survivor difference S(lower) - S(upper) keeps its digits.
+    const double ls_lo = pexg_log_upper(lower, mu, sigma, tau);
+    const double ls_up = (upper == R_PosInf) ? R_NegInf
+                                             : pexg_log_upper(upper, mu, sigma, tau);
+    log_normaliser = log_diff_exp(ls_lo, ls_up);
   } else {
     log_normaliser = log_diff_exp(upper_lcdf, lower_lcdf);
   }
-  if (log_normaliser == R_NegInf) {
+  if (!(log_normaliser > R_NegInf) || ISNAN(log_normaliser)) {
     return log_d ? R_NegInf : 0.;
   }
 
@@ -224,20 +249,69 @@ double ptexg(
     upper_cdf = pexg(upper, mu, sigma, tau);
   }
 
-  double normaliser = upper_cdf - lower_cdf;
-  if (normaliser <= 0.) {
-    return NA_REAL;
+  // Natural fast path: ordinary bounds where the subtractions keep their
+  // digits.  Otherwise fall back to matched log differences below.
+  const double normaliser = upper_cdf - lower_cdf;
+  if (normaliser > 1e-10 * std::max(upper_cdf, 1e-300)) {
+    double out;
+    if (lower_tail) {
+      out = (q_cdf - lower_cdf) / normaliser;
+    } else {
+      out = (upper_cdf - q_cdf) / normaliser;
+    }
+    out = std::max(0., std::min(1., out));
+    // A zero here can only be numerator cancellation (q is strictly inside
+    // the bounds), which matters when the caller wants a log tail.
+    if (out > 0. || !log_p) {
+      return log_p ? std::log(out) : out;
+    }
   }
 
-  double out;
-  if (lower_tail) {
-    out = (q_cdf - lower_cdf) / normaliser;
+  // Log-space fallback: form numerator and normaliser as log differences on
+  // the better-conditioned side (lower-tail logs on the left, survivor logs
+  // on the right of the median).
+  auto lcdf = [&](double x) {
+    return pexg(x, mu, sigma, tau, true, true);
+  };
+  auto lsurv = [&](double x) {
+    return (x == R_PosInf) ? R_NegInf : pexg_log_upper(x, mu, sigma, tau);
+  };
+  const double lower_lcdf = (lower == R_NegInf) ? R_NegInf : lcdf(lower);
+
+  double log_norm;
+  if (lower_lcdf == R_NegInf) {
+    log_norm = (upper == R_PosInf) ? 0.0 : lcdf(upper);
+  } else if (lower_lcdf > -M_LN2) {
+    log_norm = log_diff_exp(lsurv(lower), lsurv(upper));
   } else {
-    out = (upper_cdf - q_cdf) / normaliser;
+    log_norm = log_diff_exp((upper == R_PosInf) ? 0.0 : lcdf(upper), lower_lcdf);
   }
-  out = std::max(0., std::min(1., out));
+  if (!(log_norm > R_NegInf) || ISNAN(log_norm)) return NA_REAL;
 
-  return log_p ? std::log(out) : out;
+  double log_num;
+  if (lower_tail) {
+    // F(q) - F(lower) = S(lower) - S(q)
+    if (lower_lcdf == R_NegInf) {
+      log_num = lcdf(q);
+    } else if (lower_lcdf > -M_LN2) {
+      log_num = log_diff_exp(lsurv(lower), lsurv(q));
+    } else {
+      log_num = log_diff_exp(lcdf(q), lower_lcdf);
+    }
+  } else {
+    // F(upper) - F(q) = S(q) - S(upper)
+    const double q_lcdf = lcdf(q);
+    if (q_lcdf > -M_LN2) {
+      log_num = log_diff_exp(lsurv(q), lsurv(upper));
+    } else {
+      log_num = log_diff_exp((upper == R_PosInf) ? 0.0 : lcdf(upper), q_lcdf);
+    }
+  }
+  if (ISNAN(log_num)) log_num = R_NegInf;
+  double log_out = log_num - log_norm;
+  if (ISNAN(log_out) || log_out == R_NegInf) return log_p ? R_NegInf : 0.;
+  if (log_out > 0.) log_out = 0.;
+  return log_p ? log_out : std::exp(log_out);
 }
 
 // Scalar versions for GSL integration

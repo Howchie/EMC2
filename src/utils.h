@@ -59,9 +59,16 @@ struct gsl_race_params_scalar {
   RacePdf1Fun pdf1;
   RaceCdf1Fun cdf1;
   void* ctx;
+  // Shift for the log-space fallback integrand: the integrand is evaluated
+  // as exp(log integrand - log_scale) so GSL still sees a natural-scale
+  // function while the winner-pdf x loser-survivor product is formed in log
+  // space.  Only used by gsl_f_race_scalar_logshift.
+  double log_scale = 0.0;
 };
 
 double gsl_f_race_scalar(double t, void* p);
+double gsl_f_race_scalar_logshift(double t, void* p);
+double log_race_integrand_scalar(double t, const gsl_race_params_scalar* P);
 
 // --------------------------------------------------------------------------
 // Context object for race models, holding metadata and switches.
@@ -531,8 +538,9 @@ inline void dlnr_raw(const double* rt, const double* const* cols, int n_rows,
     if (R_IsNA(m_[i]) || !isok[i]) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
     const double tt = rt[i] - t0_[i];
     if (tt <= 0.0) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
-    const double pdf = dlnorm_std(tt, m_[i], s_[i], false);
-    out[i] = (pdf > 0.0 && emc2_isfinite(pdf)) ? raw_log_value(std::log(pdf), min_ll, floor_raw) : raw_log_zero(min_ll, floor_raw);
+    // Direct log density: no natural round trip, so far-tail log values stay
+    // finite instead of collapsing to min_ll once exp() underflows.
+    out[i] = raw_log_value(dlnorm_std(tt, m_[i], s_[i], true), min_ll, floor_raw);
   }
 }
 
@@ -613,8 +621,14 @@ inline void drgamma_raw(const double* rt, const double* const* cols, int n_rows,
     }
     const double tt = rt[i] - shift_[i];
     if (tt <= 0.0) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
+    // Natural fast path; on under/overflow use the direct log density.
     const double pdf = R::dgamma(tt, shape_[i], 1.0 / lambda_[i], false);
-    out[i] = (pdf > 0.0 && emc2_isfinite(pdf)) ? raw_log_value(std::log(pdf), min_ll, floor_raw) : raw_log_zero(min_ll, floor_raw);
+    if (pdf > 0.0 && emc2_isfinite(pdf)) {
+      out[i] = raw_log_value(std::log(pdf), min_ll, floor_raw);
+    } else {
+      out[i] = raw_log_value(R::dgamma(tt, shape_[i], 1.0 / lambda_[i], true),
+                             min_ll, floor_raw);
+    }
   }
 }
 
@@ -635,7 +649,13 @@ inline void prgamma_raw(const double* rt, const double* const* cols, int n_rows,
     const double tt = rt[i] - shift_[i];
     if (tt <= 0.0) { out[i] = 0.0; continue; }
     const double cdf = R::pgamma(tt, shape_[i], 1.0 / lambda_[i], true, false);
-    if (cdf >= 1.0) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
+    if (cdf >= 1.0 - EMC2_CDF_SAT_MARGIN) {
+      // Saturated lower tail: take the upper-tail log directly instead of
+      // reconstructing it from 1 - cdf.
+      const double log_surv = R::pgamma(tt, shape_[i], 1.0 / lambda_[i], false, true);
+      out[i] = R_FINITE(log_surv) ? log_surv : raw_log_zero(min_ll, floor_raw);
+      continue;
+    }
     out[i] = (cdf <= 0.0) ? 0.0 : std::log1p(-cdf);
   }
 }
@@ -660,7 +680,12 @@ inline void rgamma_logS_at_t(double t, const double* const* cols,
       const double tt = t - shift_[r];
       if (tt <= 0.0) continue;
       const double cdf = R::pgamma(tt, shape_[r], 1.0 / lambda_[r], true, false);
-      if (cdf >= 1.0) { bad = true; break; }
+      if (cdf >= 1.0 - EMC2_CDF_SAT_MARGIN) {
+        const double log_surv = R::pgamma(tt, shape_[r], 1.0 / lambda_[r], false, true);
+        if (!R_FINITE(log_surv)) { bad = true; break; }
+        logS += log_surv;
+        continue;
+      }
       if (cdf > 0.0) logS += std::log1p(-cdf);
     }
     logS_out[j] = bad ? R_NegInf : logS;
@@ -681,8 +706,10 @@ inline void drexg_raw(const double* rt, const double* const* cols, int n_rows,
       out[i] = raw_log_zero(min_ll, floor_raw);
       continue;
     }
-    const double pdf = dexg(rt[i], mu_[i], sigma_[i], tau_[i], false);
-    out[i] = (pdf > 0.0 && emc2_isfinite(pdf)) ? raw_log_value(std::log(pdf), min_ll, floor_raw) : raw_log_zero(min_ll, floor_raw);
+    // dexg derives the density in log terms internally; take that value
+    // directly instead of exponentiating and re-logging it.
+    out[i] = raw_log_value(dexg(rt[i], mu_[i], sigma_[i], tau_[i], true),
+                           min_ll, floor_raw);
   }
 }
 
@@ -700,9 +727,14 @@ inline void prexg_raw(const double* rt, const double* const* cols, int n_rows,
       out[i] = 0.0;
       continue;
     }
-    const double cdf = pexg(rt[i], mu_[i], sigma_[i], tau_[i], true, false);
-    if (cdf >= 1.0) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
-    out[i] = (cdf <= 0.0) ? 0.0 : std::log1p(-cdf);
+    // Direct upper-tail log probability (protected inside pexg): stays
+    // finite after the natural lower-tail CDF saturates to one.
+    const double log_surv = pexg(rt[i], mu_[i], sigma_[i], tau_[i], false, true);
+    if (!R_FINITE(log_surv)) {
+      out[i] = (log_surv == R_NegInf) ? raw_log_zero(min_ll, floor_raw) : 0.0;
+      continue;
+    }
+    out[i] = std::fmin(log_surv, 0.0);
   }
 }
 
@@ -722,9 +754,12 @@ inline void rexg_logS_at_t(double t, const double* const* cols,
       const int r = start + k;
       if (!isok_all[r] || R_IsNA(mu_[r]) || R_IsNA(sigma_[r]) || R_IsNA(tau_[r]) ||
           sigma_[r] <= 0.0 || tau_[r] <= 0.0) { bad = true; break; }
-      const double cdf = pexg(t, mu_[r], sigma_[r], tau_[r], true, false);
-      if (cdf >= 1.0) { bad = true; break; }
-      if (cdf > 0.0) logS += std::log1p(-cdf);
+      const double log_surv = pexg(t, mu_[r], sigma_[r], tau_[r], false, true);
+      if (!R_FINITE(log_surv)) {
+        if (log_surv == R_NegInf) { bad = true; break; }
+        continue;  // NA parameters already screened; treat as no contribution
+      }
+      logS += std::fmin(log_surv, 0.0);
     }
     logS_out[j] = bad ? R_NegInf : logS;
   }
@@ -1038,20 +1073,23 @@ inline void bawl_logS_at_t(double t, const double* const* cols,
 // Column layout: v=0, B=1, A=2, t0=3, s=4, sv=5, mG=6 (guess-clock mean), mK=7 (kill-clock mean)
 // ============================================================
 
+// Guarded natural evaluation with a direct log fallback: the natural k = 0
+// Wald density/survivor are kept for ordinary cases, and the stable log
+// primitives in wald_functions.h take over on underflow, cancellation, or
+// CDF saturation.  No natural round trips survive in the raw race kernels.
 inline double rdmswtn_k0_logpdf(double tt, double mu, double b, double A, bool posdrift) {
   if (tt <= 0.0) return R_NegInf;
   if (posdrift && mu <= 0.0) return R_NegInf;
-  const double pdf = dwald_k0(tt, b, mu, A);
-  if (!(pdf > 0.0) || !emc2_isfinite(pdf)) return R_NegInf;
-  return std::log(pdf);
+  double pdf;
+  if (dwald_k0_natural(tt, b, mu, A, pdf))
+    return (pdf > 0.0) ? std::log(pdf) : R_NegInf;
+  return dwald_k0_log(tt, b, mu, A);
 }
 
 inline double rdmswtn_k0_logpdf(double tt, double mu, double b, double A, double s, bool posdrift) {
-  if (tt <= 0.0) return R_NegInf;
-  if (posdrift && mu <= 0.0) return R_NegInf;
-  const double pdf = dwald_k0(tt, b, mu, A, s);
-  if (!(pdf > 0.0) || !emc2_isfinite(pdf)) return R_NegInf;
-  return std::log(pdf);
+  if (!(s > 0.0)) return R_NegInf;
+  const double inv_s = 1.0 / s;
+  return rdmswtn_k0_logpdf(tt, mu * inv_s, b * inv_s, A * inv_s, posdrift);
 }
 
 inline double rdmswtn_k0_logsurv(double tt, double mu, double b, double A, bool posdrift) {
@@ -1059,19 +1097,18 @@ inline double rdmswtn_k0_logsurv(double tt, double mu, double b, double A, bool 
   if (posdrift && mu <= 0.0) return 0.0;
   const double cdf = pwald_k0(tt, b, mu, A);
   const double cl = std::max(0.0, std::min(1.0, cdf));
-  if (cl <= 0.0) return 0.0;
-  if (cl >= 1.0) return R_NegInf;
+  if (cl <= 0.0) return 0.0;  // survivor ~ 1: -F below natural resolution
+  if (cl >= 1.0 - EMC2_CDF_SAT_MARGIN) {
+    // Saturated natural CDF: evaluate the log survivor directly.
+    return wald_k0_log_surv(tt, b, mu, A);
+  }
   return std::log1p(-cl);
 }
 
 inline double rdmswtn_k0_logsurv(double tt, double mu, double b, double A, double s, bool posdrift) {
-  if (tt <= 0.0) return 0.0;
-  if (posdrift && mu <= 0.0) return 0.0;
-  const double cdf = pwald_k0(tt, b, mu, A, s);
-  const double cl = std::max(0.0, std::min(1.0, cdf));
-  if (cl <= 0.0) return 0.0;
-  if (cl >= 1.0) return R_NegInf;
-  return std::log1p(-cl);
+  if (!(s > 0.0)) return 0.0;
+  const double inv_s = 1.0 / s;
+  return rdmswtn_k0_logsurv(tt, mu * inv_s, b * inv_s, A * inv_s, posdrift);
 }
 
 inline double drdmswtn_scalar(double t, const double* par, void* ctx_) {

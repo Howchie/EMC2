@@ -312,6 +312,16 @@ inline double mix_erlang12(double log_e1, double log_e2, double omega, bool log_
   return log_out ? out : std::exp(out);
 }
 
+// log S = log(1 - F) from a log-scale CDF.  A CDF computed in log space
+// keeps far more resolution near zero than a natural CDF keeps near one, so
+// guess-path survivors are reconstructed from log CDFs rather than from
+// clamped natural probabilities.
+inline double log_surv_from_log_cdf(double log_cdf) {
+  if (log_cdf == R_NegInf) return 0.0;
+  if (log_cdf >= 0.0) return R_NegInf;
+  return log1m_exp(log_cdf);
+}
+
 // [[Rcpp::export]]
 double dwald(double t, double mu, double b, double A = 0.0, double sigma = 1.0,
              double t0 = 0.0, double lambda_g = 0.0, double lambda_k = 0.0, bool log_out = false,
@@ -405,7 +415,8 @@ double dwald(double t, double mu, double b, double A = 0.0, double sigma = 1.0,
   // 2. Guess-based density (f_K * S_R)
   // Erlang uses raw t; EAM survivor uses t_eam (k=0 → no kill in survivor)
   const double log_sk = erlang_log_pdf(t, k_eff, kill_shape);
-  const double log_sr = std::log1p(-std::max(0.0, std::min(1.0, pwald(t, mu, b, A, sigma, t0, 0.0, 0.0, false, 1, false, posdrift))));
+  const double log_sr = log_surv_from_log_cdf(
+      pwald(t, mu, b, A, sigma, t0, 0.0, 0.0, true, 1, false, posdrift));
   const double log_f_guess = log_sk + log_sr;
 
   const double log_pdf = log_sum_exp(log_f_hit, log_f_guess);
@@ -525,8 +536,11 @@ double pwald(double t, double mu, double b, double A, double sigma,
     if (emc2_isfinite(t_eam)) {
       const double cdf = pwald_k0(t_eam, b, mu, A, sigma);
       const double cl = std::max(0.0, std::min(1.0, cdf));
-      if (log_out) return (cl <= 0.0) ? R_NegInf : std::log(cl);
-      return cl;
+      if (!log_out) return cl;
+      if (cl > 0.0) return std::log(cl);
+      // Natural CDF underflowed (early times / strong negative drift): the
+      // log-output request still has a representable value in log space.
+      return wald_k0_log_cdf(t_eam, b, mu, A, sigma);
     }
     // t_eam = Inf with k=0: fall through — log_p_inf() handles it.
   }
@@ -562,9 +576,29 @@ double pwald(double t, double mu, double b, double A, double sigma,
              e_lo * (d_lo / eta1 - 1.0 / (eta1 * eta1));
       }
       const double p = (I0 + (k_eff / nu) * I1) / span;
-      if (p <= 0.0) return R_NegInf;
+      if (p > 0.0 && p < 1.0) return std::log(p);
       if (p >= 1.0) return 0.0;
-      return std::log(p);
+      // exp(eta1*d) underflowed (eta1 < 0 for k > 0): the eventual-hit mass
+      // is still representable in log space.  Rebuild the same integral with
+      // signed-log antiderivatives:
+      //   I0 = (exp(eta1 d_lo) - exp(eta1 d_hi)) / (-eta1)
+      //   I1 = [exp(eta1 d)(d/eta1 - 1/eta1^2)]_{d_lo}^{d_hi}.
+      if (std::abs(eta1) <= FPM_EPSILON) return R_NegInf;
+      const double log_I0 = log_diff_exp(eta1 * d_lo, eta1 * d_hi) -
+                            std::log(-eta1);
+      const signed_log a_hi = signed_log_product(
+          d_hi / eta1 - 1.0 / (eta1 * eta1), eta1 * d_hi);
+      const signed_log a_lo = signed_log_product(
+          d_lo / eta1 - 1.0 / (eta1 * eta1), eta1 * d_lo);
+      const signed_log sI1 = signed_log_sub(a_hi, a_lo);
+      signed_log total = make_signed_log(log_I0, 1);
+      if (sI1.sign != 0) {
+        total = signed_log_add(total, make_signed_log(
+            std::log(k_eff) - std::log(nu) + sI1.log_abs, sI1.sign));
+      }
+      if (total.sign <= 0 || total.log_abs == R_NegInf) return R_NegInf;
+      const double log_p = total.log_abs - std::log(span);
+      return log_p > 0.0 ? 0.0 : log_p;
     }
 
     if (std::abs(eta1) < FPM_EPSILON) {
@@ -742,6 +776,8 @@ double dgbm(double t, double mu, double b, double A = 0.0, double sigma = 1.0,
     }
   } else {
     // SPV: normalization for start density on [1, 1 + A] mapped to log-space.
+    // Natural fast path first; the log evaluator below is authoritative when
+    // exp(exp_factor_log) under/overflows or the two-term numerator cancels.
     const double mu_new_exp = log_b - log_mu * t_eam + var;
     const double exp_factor_log = log_b - log_mu * t_eam + 0.5 * var;
     const double pdf_hi = Gstar(var, x_hi - mu_new_exp);
@@ -751,9 +787,35 @@ double dgbm(double t, double mu, double b, double A = 0.0, double sigma = 1.0,
     const double integral_term1 = (log_mu * t_eam - var) * cdf_integral;
     const double integral_term2 = var * (pdf_hi - pdf_lo);
     const double integral_result = integral_term1 + integral_term2;
-    const double pdf_val = (std::exp(exp_factor_log) * integral_result) / (norm_const * t_eam);
-    if (pdf_val > 0.0 && emc2_isfinite(pdf_val)) {
-       log_f_hit = std::log(pdf_val) + erlang_log_surv(t, k_eff, kill_shape);
+    const bool natural_ok =
+        emc2_isfinite(exp_factor_log) && emc2_isfinite(integral_result) &&
+        integral_result > 0.0 &&
+        integral_result > EMC2_NAT_REL_CANCEL *
+            (std::fabs(integral_term1) + std::fabs(integral_term2));
+    double pdf_val = 0.0;
+    if (natural_ok) {
+      pdf_val = (std::exp(exp_factor_log) * integral_result) / (norm_const * t_eam);
+    }
+    if (natural_ok && pdf_val > 0.0 && emc2_isfinite(pdf_val)) {
+      log_f_hit = std::log(pdf_val) + erlang_log_surv(t, k_eff, kill_shape);
+    } else {
+      // Signed-log evaluation: exp(exp_factor_log) is never materialised and
+      // the numerator difference is formed with signed-log arithmetic.
+      const double log_pdf_hi = Gstar(var, x_hi - mu_new_exp, true);
+      const double log_pdf_lo = Gstar(var, x_lo - mu_new_exp, true);
+      const double log_cdf_integral = Gstar_Integral(var, mu_new_exp, x_lo, x_hi, true);
+      const signed_log term1 =
+          signed_log_product(log_mu * t_eam - var, log_cdf_integral);
+      signed_log term2 = signed_log_sub(make_signed_log(log_pdf_hi, 1),
+                                        make_signed_log(log_pdf_lo, 1));
+      if (term2.sign != 0)
+        term2 = make_signed_log(std::log(var) + term2.log_abs, term2.sign);
+      const signed_log total = signed_log_add(term1, term2);
+      if (total.sign > 0 && total.log_abs != R_NegInf && !ISNAN(total.log_abs)) {
+        log_f_hit = exp_factor_log + total.log_abs -
+                    std::log(norm_const) - std::log(t_eam) +
+                    erlang_log_surv(t, k_eff, kill_shape);
+      }
     }
   }
 
@@ -763,7 +825,8 @@ double dgbm(double t, double mu, double b, double A = 0.0, double sigma = 1.0,
 
   // 2. Guess hit density (f_K * S_R); erlang pdf uses raw t, EAM survivor uses t_eam
   const double log_fk = erlang_log_pdf(t, k_eff, kill_shape);
-  const double log_sr = std::log1p(-std::max(0.0, std::min(1.0, pgbm(t, mu, b, A, sigma, t0, 0.0, 0.0, false, 1, false, 1.0))));
+  const double log_sr = log_surv_from_log_cdf(
+      pgbm(t, mu, b, A, sigma, t0, 0.0, 0.0, true, 1, false, 1.0));
   const double log_f_guess = log_fk + log_sr;
 
   const double log_pdf = log_sum_exp(log_f_hit, log_f_guess);
@@ -865,9 +928,37 @@ double pgbm(double t, double mu, double b, double A, double sigma,
         I1 = log_b * I0 - J;
       }
       const double p = std::exp(log_prefactor) * (I0 + (k_eff / ak) * I1);
-      if (p <= 0.0) return R_NegInf;
-      if (p >= 1.0) return 0.0;
-      return std::log(p);
+      if (p > 0.0 && emc2_isfinite(p)) {
+        if (p >= 1.0) return 0.0;
+        return std::log(p);
+      }
+      // exp(log_prefactor) underflowed or exp(u) overflowed while the finite
+      // probability itself is representable: rebuild in signed-log space.
+      if (std::abs(q) <= 1e-8) return R_NegInf;
+      const double u = q * x_hi;
+      const double log_I0 = ((u > 0.0) ? log_diff_exp(u, 0.0)
+                                       : log_diff_exp(0.0, u)) -
+                            std::log(std::fabs(q));
+      // u = q * x_hi shares q's sign (x_hi > 0), so I0 = expm1(u)/q > 0.
+      const signed_log sI0 = make_signed_log(log_I0, 1);
+      // J = (exp(u)(u-1) + 1) / q^2
+      const signed_log sJ_num = signed_log_add(signed_log_product(u - 1.0, u),
+                                               make_signed_log(0.0, 1));
+      signed_log sJ = sJ_num;
+      if (sJ.sign != 0)
+        sJ = make_signed_log(sJ.log_abs - 2.0 * std::log(std::fabs(q)), sJ.sign);
+      signed_log sI1 = make_signed_log(R_NegInf, 0);
+      if (sI0.sign != 0 && log_b > 0.0)
+        sI1 = make_signed_log(std::log(log_b) + sI0.log_abs, sI0.sign);
+      sI1 = signed_log_sub(sI1, sJ);
+      signed_log total = sI0;
+      if (sI1.sign != 0) {
+        total = signed_log_add(total, make_signed_log(
+            std::log(k_eff) - std::log(ak) + sI1.log_abs, sI1.sign));
+      }
+      if (total.sign <= 0 || total.log_abs == R_NegInf) return R_NegInf;
+      const double log_p = log_prefactor + total.log_abs;
+      return log_p > 0.0 ? 0.0 : log_p;
     }
 
     // Erlang-1 SPV analytic:
@@ -1074,6 +1165,9 @@ inline double drdmswtn_joint_A_sv_density_postrunc(
 inline double local_combo_response_pdf(double t, double f_decision, double F_decision,
                                        double lambda_g, double lambda_k,
                                        int kill_shape, bool log_out);
+inline double local_combo_response_pdf_log(double t, double log_fD, double log_FD,
+                                           double lambda_g, double lambda_k,
+                                           int kill_shape, bool log_out);
 
 // [[Rcpp::export]]
 double dswtn(double t, double mu_drift, double threshold, double s = 1.0,
@@ -1142,6 +1236,39 @@ inline double norm_cdf_2d_stable(double x, double y, double rho) {
   return norm_cdf_2d_fast(x, y, rho);
 }
 
+// Log-space counterpart of integrate_positive_drift_quad below: accumulates
+// log(w_j) + log_kernel(drift_j) with log_sum_exp, so node under/overflow in
+// the natural accumulation cannot zero out a representable mixture.  Only
+// entered after the natural quadrature has been rejected; log_out remains a
+// pure output-scale choice at the call sites.
+template <typename LogKernelFn>
+inline double integrate_positive_drift_quad_log(double mu_drift, double sv,
+                                                LogKernelFn&& log_kernel_fn,
+                                                int n_gauss_nodes = 20) {
+  if (!(sv > 1e-10) || !emc2_isfinite(sv)) {
+    return log_kernel_fn(mu_drift);
+  }
+
+  const double lower_p_raw = pnorm_std(-mu_drift / sv, true, false);
+  const double upper_p = std::nextafter(1.0, 0.0);
+  const double lower_p = std::fmax(0.0, std::fmin(lower_p_raw, upper_p));
+  const double width = upper_p - lower_p;
+  if (!(width > 0.0)) return R_NegInf;
+
+  const int n_nodes = std::max(1, n_gauss_nodes);
+  const GLRule& gl = gl_get_rule(n_nodes);
+  double log_acc = R_NegInf;
+  for (int j = 0; j < n_nodes; ++j) {
+    if (!(gl.w[j] > 0.0)) continue;
+    const double p = lower_p + 0.5 * width * (gl.x[j] + 1.0);
+    const double drift = mu_drift + sv * R::qnorm(p, 0.0, 1.0, true, false);
+    const double lk = log_kernel_fn(drift);
+    if (lk == R_NegInf || ISNAN(lk)) continue;
+    log_acc = log_sum_exp(log_acc, std::log(gl.w[j]) + lk);
+  }
+  return log_acc - M_LN2;
+}
+
 inline double positive_trunc_swtn_cdf_k0(double t, double mu_drift,
                                          double threshold, double s,
                                          double t0, double sv,
@@ -1180,7 +1307,19 @@ inline double positive_trunc_swtn_cdf_k0(double t, double mu_drift,
   double log_num = R_NegInf;
   if (term1 > 0.0) log_num = log_sum_exp(log_num, std::log(term1));
   if (term2_core > 0.0) log_num = log_sum_exp(log_num, log_exp_term + std::log(term2_core));
-  if (log_num == R_NegInf) return log_out ? R_NegInf : 0.0;
+  if (log_num == R_NegInf) {
+    // The bivariate-normal rectangle probabilities cancelled below natural
+    // resolution.  Average the stable point-Wald log CDF over the truncated
+    // drift law instead (the quadrature includes the posdrift normaliser).
+    const double log_cdf_q = integrate_positive_drift_quad_log(
+        mu_drift, sv, [&](double drift) {
+          return wald_pt_log_cdf(dt, threshold / s, drift / s);
+        });
+    if (!(log_cdf_q > R_NegInf) || ISNAN(log_cdf_q))
+      return log_out ? R_NegInf : 0.0;
+    const double lc = std::fmin(log_cdf_q, 0.0);
+    return log_out ? lc : std::exp(lc);
+  }
 
   double log_cdf = log_num - log_denom;
   if (ISNAN(log_cdf)) return log_out ? R_NegInf : 0.0;
@@ -1254,12 +1393,12 @@ inline double dswtn_positive_drift_quad(double t, double mu_drift, double thresh
     return positive_trunc_swtn_density_k0(t, mu_drift, threshold, s, t0, sv, log_out);
   }
   if (guess && lambda_k <= 1e-10) {
-    const double f_decision =
-      positive_trunc_swtn_density_k0(t, mu_drift, threshold, s, t0, sv, false);
-    const double F_decision =
-      positive_trunc_swtn_cdf_k0(t, mu_drift, threshold, s, t0, sv, false);
-    return local_combo_response_pdf(t, f_decision, F_decision,
-                                    lambda_g, 0.0, kill_shape, log_out);
+    const double log_fD =
+      positive_trunc_swtn_density_k0(t, mu_drift, threshold, s, t0, sv, true);
+    const double log_FD =
+      positive_trunc_swtn_cdf_k0(t, mu_drift, threshold, s, t0, sv, true);
+    return local_combo_response_pdf_log(t, log_fD, log_FD,
+                                        lambda_g, 0.0, kill_shape, log_out);
   }
 
   const auto kernel = [&](double drift) {
@@ -1268,8 +1407,15 @@ inline double dswtn_positive_drift_quad(double t, double mu_drift, double thresh
                  false, kill_shape, guess, false);
   };
   const double out = integrate_positive_drift_quad(mu_drift, sv, kernel);
-  if (!(out > 0.0) || !emc2_isfinite(out)) return log_out ? R_NegInf : 0.0;
-  return log_out ? std::log(out) : out;
+  if (out > 0.0 && emc2_isfinite(out)) return log_out ? std::log(out) : out;
+  // Natural node accumulation under/overflowed: redo it in log space.
+  const double log_pdf = integrate_positive_drift_quad_log(
+      mu_drift, sv, [&](double drift) {
+        return dwald(t, drift, threshold, 0.0, s, t0,
+                     lambda_g, lambda_k, true, kill_shape, guess, false);
+      });
+  if (!(log_pdf > R_NegInf) || ISNAN(log_pdf)) return log_out ? R_NegInf : 0.0;
+  return return_from_log(log_pdf, log_out);
 }
 
 inline double pswtn_positive_drift_quad(double t, double mu_drift, double threshold,
@@ -1300,8 +1446,15 @@ inline double pswtn_positive_drift_quad(double t, double mu_drift, double thresh
   };
   double out = integrate_positive_drift_quad(mu_drift, sv, kernel);
   out = std::fmax(0.0, std::fmin(1.0, out));
-  if (!(out > 0.0)) return log_out ? R_NegInf : 0.0;
-  return log_out ? std::log(out) : out;
+  if (out > 0.0) return log_out ? std::log(out) : out;
+  // Natural node accumulation underflowed: redo it in log space.
+  const double log_cdf = integrate_positive_drift_quad_log(
+      mu_drift, sv, [&](double drift) {
+        return pwald(t, drift, threshold, 0.0, s, t0,
+                     lambda_g, lambda_k, true, kill_shape, guess, false);
+      });
+  if (!(log_cdf > R_NegInf) || ISNAN(log_cdf)) return log_out ? R_NegInf : 0.0;
+  return return_from_log(std::fmin(log_cdf, 0.0), log_out);
 }
 
 // TODO check this
@@ -1390,7 +1543,16 @@ inline double drdmswtn_joint_A_sv_density_postrunc(
   dens = std::fmax(0.0, dens);
 
   if (!emc2_isfinite(dens) || dens <= 0.0) {
-    return log_out ? R_NegInf : 0.0;
+    // The rectangle probabilities cancelled below natural resolution while
+    // the true density is positive: rebuild the defective fixed-drift SPV
+    // density mixture in log space (the quadrature includes the posdrift
+    // normalisation over the truncated drift law).
+    const double log_pdf = integrate_positive_drift_quad_log(
+        mu, sv, [&](double drift) {
+          return dwald_k0_log(t_adj, b, drift, A, s);
+        });
+    if (!(log_pdf > R_NegInf) || ISNAN(log_pdf)) return log_out ? R_NegInf : 0.0;
+    return return_from_log(log_pdf, log_out);
   }
   return log_out ? std::log(dens) : dens;
 }
@@ -1421,8 +1583,21 @@ inline double prdmswtn_joint_A_sv_cdf_postrunc(
   }
 
   const double cdf = std::fmax(0.0, std::fmin(1.0, 0.5 * acc));
-  if (!(cdf > 0.0)) return log_out ? R_NegInf : 0.0;
-  return log_out ? std::log(cdf) : cdf;
+  if (cdf > 0.0) return log_out ? std::log(cdf) : cdf;
+
+  // Every node underflowed on the natural scale: repeat the threshold
+  // average in log space.
+  double log_acc = R_NegInf;
+  for (int j = 0; j < n_nodes; ++j) {
+    if (!(weights[j] > 0.0)) continue;
+    const double thresh_j = center + half_width * nodes[j];
+    const double lc = positive_trunc_swtn_cdf_k0(t, mu, thresh_j, s, t0, sv, true);
+    if (lc == R_NegInf || ISNAN(lc)) continue;
+    log_acc = log_sum_exp(log_acc, std::log(weights[j]) + lc);
+  }
+  const double log_cdf = log_acc - M_LN2;
+  if (!(log_cdf > R_NegInf) || ISNAN(log_cdf)) return log_out ? R_NegInf : 0.0;
+  return return_from_log(std::fmin(log_cdf, 0.0), log_out);
 }
 
 inline double drdmswtn_positive_drift_quad(double t, double mu_drift, double b, double A,
@@ -1442,8 +1617,15 @@ inline double drdmswtn_positive_drift_quad(double t, double mu_drift, double b, 
                  false, kill_shape, guess, false);
   };
   const double out = integrate_positive_drift_quad(mu_drift, sv, kernel);
-  if (!(out > 0.0) || !emc2_isfinite(out)) return log_out ? R_NegInf : 0.0;
-  return log_out ? std::log(out) : out;
+  if (out > 0.0 && emc2_isfinite(out)) return log_out ? std::log(out) : out;
+  // Natural node accumulation under/overflowed: redo it in log space.
+  const double log_pdf = integrate_positive_drift_quad_log(
+      mu_drift, sv, [&](double drift) {
+        return dwald(t, drift, b, A, s, t0,
+                     lambda_g, lambda_k, true, kill_shape, guess, false);
+      });
+  if (!(log_pdf > R_NegInf) || ISNAN(log_pdf)) return log_out ? R_NegInf : 0.0;
+  return return_from_log(log_pdf, log_out);
 }
 
 inline double prdmswtn_positive_drift_quad(double t, double mu_drift, double b, double A,
@@ -1464,8 +1646,15 @@ inline double prdmswtn_positive_drift_quad(double t, double mu_drift, double b, 
   };
   double out = integrate_positive_drift_quad(mu_drift, sv, kernel);
   out = std::fmax(0.0, std::fmin(1.0, out));
-  if (!(out > 0.0)) return log_out ? R_NegInf : 0.0;
-  return log_out ? std::log(out) : out;
+  if (out > 0.0) return log_out ? std::log(out) : out;
+  // Natural node accumulation underflowed: redo it in log space.
+  const double log_cdf = integrate_positive_drift_quad_log(
+      mu_drift, sv, [&](double drift) {
+        return pwald(t, drift, b, A, s, t0,
+                     lambda_g, lambda_k, true, kill_shape, guess, false);
+      });
+  if (!(log_cdf > R_NegInf) || ISNAN(log_cdf)) return log_out ? R_NegInf : 0.0;
+  return return_from_log(std::fmin(log_cdf, 0.0), log_out);
 }
 
 double drdmswtn(double t, double mu_drift, double b, double A,
@@ -1629,6 +1818,33 @@ inline double local_combo_response_pdf(double t, double f_decision, double F_dec
   const double log_fG = erlang_log_pdf(t, lambda_g, kill_shape);
   const double log_guess = log_fG + log_sK + log_sD;
   const double log_pdf = log_sum_exp(log_hit, log_guess);
+  return log_out ? log_pdf : std::exp(log_pdf);
+}
+
+// Log-scale variant: consumes a log decision density and a log decision CDF
+// so far-tail components survive intact (no natural round trip before the
+// mixture).  Natural callers keep local_combo_response_pdf above.
+inline double local_combo_response_pdf_log(double t, double log_fD, double log_FD,
+                                           double lambda_g, double lambda_k,
+                                           int kill_shape, bool log_out) {
+  if (!(t > 0.0)) return log_out ? R_NegInf : 0.0;
+  const bool use_guess = lambda_g > 0.0;
+  const bool use_kill  = lambda_k > 0.0;
+  if (ISNAN(log_fD)) log_fD = R_NegInf;
+  if (!use_guess && !use_kill) {
+    return log_out ? log_fD : std::exp(log_fD);
+  }
+
+  const double log_sG = use_guess ? erlang_log_surv(t, lambda_g, kill_shape) : 0.0;
+  const double log_sK = use_kill  ? erlang_log_surv(t, lambda_k, kill_shape) : 0.0;
+  const double log_hit = log_fD + log_sG + log_sK;
+  if (!use_guess) return log_out ? log_hit : std::exp(log_hit);
+
+  const double log_sD = log_surv_from_log_cdf(log_FD);
+  const double log_fG = erlang_log_pdf(t, lambda_g, kill_shape);
+  const double log_guess = log_fG + log_sK + log_sD;
+  const double log_pdf = log_sum_exp(log_hit, log_guess);
+  if (ISNAN(log_pdf)) return log_out ? R_NegInf : 0.0;
   return log_out ? log_pdf : std::exp(log_pdf);
 }
 
@@ -2019,11 +2235,13 @@ inline double drdmswtn_local_combo(double t, double mu_drift, double b, double A
     const double e2 = drdmswtn_local_combo(t, mu_drift, b, A, s, t0, sv, 2.0 * lambda_g, 2.0 * lambda_k, n_gauss_nodes, true, 2, posdrift, 0.0);
     return mix_erlang12(e1, e2, erlang_omega, log_out);
   }
-  // EAM density/CDF computed at EAM time; core functions now take raw t and t0.
-  const double f_decision = drdmswtn(t, mu_drift, b, A, s, t0, sv, 0.0, 0.0, n_gauss_nodes, false, kill_shape, false, posdrift, 1.0);
-  const double F_decision = prdmswtn(t, mu_drift, b, A, s, t0, sv, 0.0, 0.0, n_gauss_nodes, false, kill_shape, false, posdrift, 1.0);
-  return local_combo_response_pdf(t, f_decision, F_decision,
-                                  lambda_g, lambda_k, kill_shape, log_out);
+  // EAM density/CDF computed at EAM time; core functions now take raw t and
+  // t0.  Both enter the mixture on the log scale so far-tail components are
+  // not squeezed through a natural round trip first.
+  const double log_fD = drdmswtn(t, mu_drift, b, A, s, t0, sv, 0.0, 0.0, n_gauss_nodes, true, kill_shape, false, posdrift, 1.0);
+  const double log_FD = prdmswtn(t, mu_drift, b, A, s, t0, sv, 0.0, 0.0, n_gauss_nodes, true, kill_shape, false, posdrift, 1.0);
+  return local_combo_response_pdf_log(t, log_fD, log_FD,
+                                      lambda_g, lambda_k, kill_shape, log_out);
 }
 
 inline double prdmswtn_local_combo(double t, double mu_drift, double b, double A,
@@ -2086,11 +2304,11 @@ inline double dgbm_local_combo(double t, double mu, double b, double A,
     const double e2 = dgbm_local_combo(t, mu, b, A, sigma, t0, 2.0 * lambda_g, 2.0 * lambda_k, true, 2, 0.0);
     return mix_erlang12(e1, e2, erlang_omega, log_out);
   }
-  // EAM computed with raw t and t0.
-  const double f_decision = dgbm(t, mu, b, A, sigma, t0, 0.0, 0.0, false, 1, false, 1.0);
-  const double F_decision = pgbm(t, mu, b, A, sigma, t0, 0.0, 0.0, false, 1, false, 1.0);
-  return local_combo_response_pdf(t, f_decision, F_decision,
-                                  lambda_g, lambda_k, kill_shape, log_out);
+  // EAM computed with raw t and t0; combined on the log scale.
+  const double log_fD = dgbm(t, mu, b, A, sigma, t0, 0.0, 0.0, true, 1, false, 1.0);
+  const double log_FD = pgbm(t, mu, b, A, sigma, t0, 0.0, 0.0, true, 1, false, 1.0);
+  return local_combo_response_pdf_log(t, log_fD, log_FD,
+                                      lambda_g, lambda_k, kill_shape, log_out);
 }
 
 inline double pgbm_local_combo(double t, double mu, double b, double A,
@@ -2178,7 +2396,8 @@ inline double dswtn_core(double t_adj, double mu_drift, double threshold,
 
   // Guess density: f_K(t_raw) * S_R(t_adj); EAM survivor uses EAM time
   const double log_sk = erlang_log_pdf(t_raw, lambda, kill_shape);
-  const double log_sr = std::log1p(-std::max(0.0, std::min(1.0, pswtn(t_raw, mu_drift, threshold, s, t0, sv, 0.0, 0.0, false, 1, false, posdrift, 1.0))));
+  const double log_sr = log_surv_from_log_cdf(
+      pswtn(t_raw, mu_drift, threshold, s, t0, sv, 0.0, 0.0, true, 1, false, posdrift, 1.0));
   const double log_f_guess = log_sk + log_sr;
 
   const double log_pdf = log_sum_exp(log_f_hit, log_f_guess);
@@ -2529,8 +2748,21 @@ double drdmswtn(double t, double mu_drift, double b, double A,
       );
     }
     double out_val = integral * 0.5;
+    if (out_val > 0.0 && !ISNAN(out_val)) return log_out ? std::log(out_val) : out_val;
     if (out_val < 0.0 || ISNAN(out_val)) return log_out ? R_NegInf : 0.0;
-    return log_out ? std::log(out_val) : out_val;
+    // All nodes underflowed on the natural scale: log-space accumulation.
+    double log_acc = R_NegInf;
+    for (int j = 0; j < n_nodes; ++j) {
+      if (!(gl_weights[j] > 0.0)) continue;
+      const double thresh_j = center + half_width * gl_nodes[j];
+      const double lf = dswtn_core(t_eam, mu_drift, thresh_j, s, t0, sv,
+                                   lambda, 0.0, true, kill_shape, guess, false);
+      if (lf == R_NegInf || ISNAN(lf)) continue;
+      log_acc = log_sum_exp(log_acc, std::log(gl_weights[j]) + lf);
+    }
+    const double log_pdf = log_acc - M_LN2;
+    if (!(log_pdf > R_NegInf) || ISNAN(log_pdf)) return log_out ? R_NegInf : 0.0;
+    return return_from_log(log_pdf, log_out);
   }
 }
 
@@ -2637,9 +2869,24 @@ double prdmswtn(double t, double mu_drift, double b, double A,
       );
     }
     double out_val = 0.5 * integral;
-    
+
     out_val = std::fmax(0.0, std::fmin(1.0, out_val));
-    return log_out ? std::log(out_val) : out_val;
+    if (out_val > 0.0 || !log_out) return log_out ? std::log(out_val) : out_val;
+    // Log output requested and every node underflowed: log-space accumulation.
+    double log_acc = R_NegInf;
+    for (int j = 0; j < n_nodes; ++j) {
+      if (!(gl_weights[j] > 0.0)) continue;
+      const double u = 0.5 * (gl_nodes[j] + 1.0);
+      const double p = std::fmin(std::nextafter(1.0, 0.0), std::fmax(1e-15, u));
+      const double drift_j = mu_drift + sv * R::qnorm(p, 0.0, 1.0, true, false);
+      const double lc = pwald(t, drift_j, b, A, s, t0,
+                              lambda, lambda, true, kill_shape, guess, false);
+      if (lc == R_NegInf || ISNAN(lc)) continue;
+      log_acc = log_sum_exp(log_acc, std::log(gl_weights[j]) + lc);
+    }
+    const double log_cdf = log_acc - M_LN2;
+    if (!(log_cdf > R_NegInf) || ISNAN(log_cdf)) return R_NegInf;
+    return std::fmin(log_cdf, 0.0);
   }
 }
 

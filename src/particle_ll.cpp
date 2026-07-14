@@ -3348,11 +3348,11 @@ double gsl_f_race_scalar(double t, void* p) {
   const int w = P->winner_idx0;
   if (w < 0 || w >= P->n_lR) return 0.0;
   if (!P->isok[w]) return 0.0;
-  
+
   const double* par_w = P->pars + static_cast<size_t>(w) * P->n_par;
   double out = P->pdf1(t, par_w, P->ctx);
   if (!(out > 0.0) || !emc2_isfinite(out)) return 0.0;
-  
+
   for (int j = 0; j < P->n_lR; ++j) {
     if (j == w) continue;
     if (!P->isok[j]) return 0.0;
@@ -3365,6 +3365,45 @@ double gsl_f_race_scalar(double t, void* p) {
     if (!(out > 0.0) || !emc2_isfinite(out)) return 0.0;
   }
   return out;
+}
+
+// Complete race integrand (winner pdf x loser survivors) as a log sum, for
+// the shifted-integrand fallback.  Uses the same natural scalar callbacks as
+// gsl_f_race_scalar, but the product is never formed on the natural scale.
+double log_race_integrand_scalar(double t, const gsl_race_params_scalar* P) {
+  if (t <= 0.0) return R_NegInf;
+  const int w = P->winner_idx0;
+  if (w < 0 || w >= P->n_lR) return R_NegInf;
+  if (!P->isok[w]) return R_NegInf;
+
+  const double* par_w = P->pars + static_cast<size_t>(w) * P->n_par;
+  const double pdf = P->pdf1(t, par_w, P->ctx);
+  if (!(pdf > 0.0) || !emc2_isfinite(pdf)) return R_NegInf;
+  double log_out = std::log(pdf);
+
+  for (int j = 0; j < P->n_lR; ++j) {
+    if (j == w) continue;
+    if (!P->isok[j]) return R_NegInf;
+    const double* par_j = P->pars + static_cast<size_t>(j) * P->n_par;
+    const double cdf_raw = P->cdf1(t, par_j, P->ctx);
+    if (!R_FINITE(cdf_raw)) return R_NegInf;
+    if (!(cdf_raw > 0.0)) continue;  // S_j(t)=1
+    if (cdf_raw >= 1.0) return R_NegInf;
+    log_out += std::log1p(-cdf_raw);
+  }
+  return log_out;
+}
+
+// Shifted natural integrand for GSL: exp(log integrand - log_scale).  Entered
+// only after the natural integrand has failed its guard (the natural product
+// under/overflowed while the log integrand is representable).
+double gsl_f_race_scalar_logshift(double t, void* p) {
+  auto* P = static_cast<gsl_race_params_scalar*>(p);
+  const double log_out = log_race_integrand_scalar(t, P);
+  if (log_out == R_NegInf || ISNAN(log_out)) return 0.0;
+  // The shift keeps the integrand O(1); cap the exponent defensively so a
+  // poorly-placed pilot cannot hand GSL an Inf.
+  return std::exp(std::fmin(log_out - P->log_scale, 700.0));
 }
 
 // Log survivor and cdf of the race at time t:
@@ -3563,11 +3602,50 @@ double integrate_for_kth_winner_rowmajor_cpp(
   if (status != GSL_SUCCESS) {
     status = run_integral(gsl_ctl.retry_abs_tol, gsl_ctl.retry_rel_tol, gsl_ctl.retry_limit);
   }
-  
+
+  if (status == GSL_SUCCESS && result > 0.0 && R_FINITE(result)) {
+    gsl_set_error_handler(old_handler);
+    return std::log(result);
+  }
+
+  // Natural-integrand failure: the winner-pdf x loser-survivor product
+  // under/overflowed pointwise even though the log integrand may still be
+  // representable.  Pilot the log integrand to pick a shift, then integrate
+  // the shifted natural integrand g(t) = exp(log g(t) - log_scale) so the
+  // GSL API still consumes natural values.
+  double max_log = R_NegInf;
+  {
+    const double lo = std::fmax(low, 0.0);
+    if (upp == R_PosInf) {
+      static const double offsets[] = {0.05, 0.2, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0};
+      const double base = std::fmax(lo, 0.0);
+      for (double off : offsets) {
+        const double lg = log_race_integrand_scalar(base + off, &params_struct);
+        if (lg > max_log) max_log = lg;
+      }
+    } else if (upp > lo) {
+      static const double fracs[] = {0.02, 0.1, 0.25, 0.5, 0.75, 0.9, 0.98};
+      for (double f : fracs) {
+        const double lg = log_race_integrand_scalar(lo + f * (upp - lo), &params_struct);
+        if (lg > max_log) max_log = lg;
+      }
+    }
+  }
+  if (!R_FINITE(max_log)) {
+    gsl_set_error_handler(old_handler);
+    return R_NegInf;
+  }
+
+  params_struct.log_scale = max_log;
+  F.function = &gsl_f_race_scalar_logshift;
+  status = run_integral(gsl_ctl.abs_tol, gsl_ctl.rel_tol, gsl_ctl.limit);
+  if (status != GSL_SUCCESS) {
+    status = run_integral(gsl_ctl.retry_abs_tol, gsl_ctl.retry_rel_tol, gsl_ctl.retry_limit);
+  }
   gsl_set_error_handler(old_handler);
   if (status != GSL_SUCCESS) return R_NegInf;
   if (!(result > 0.0) || !R_FINITE(result)) return R_NegInf;
-  return std::log(result);
+  return max_log + std::log(result);
 }
 
 double get_trunc_normaliser_rowmajor_cpp(const double* pars_rowmajor,
