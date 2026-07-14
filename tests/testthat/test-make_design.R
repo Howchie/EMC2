@@ -305,3 +305,15 @@ test_that("prior map=TRUE path respects pre_transform_terms in mapped values", {
   expect_equal(mean(mapped$v_Ehard_lMFALSE), 4 - 0.25, tolerance = 1e-3)
   expect_equal(mean(mapped$v_Ehard_lMTRUE), 4 + 0.25, tolerance = 1e-3)
 })
+
+test_that("predict data overrides the data stored in the fitted object", {
+  fitted_data <- get_data(samples_LNR)
+  subject <- levels(fitted_data$subjects)[1L]
+  prediction_data <- fitted_data[fitted_data$subjects == subject, , drop = FALSE]
+
+  prediction <- predict(samples_LNR, n_post = 1, n_cores = 1,
+                        data = prediction_data)
+
+  expect_true(is.data.frame(prediction))
+  expect_identical(unique(as.character(prediction$subjects)), subject)
+})

@@ -348,8 +348,16 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
     parameters <- do.call(rbind, credint(parameters, probs = 0.5, selection = "alpha", by_subject = TRUE))
   }
 
-  # Make sure parameters are in the right format, either matrix or vector
-  sampled_p_names <- names(sampled_pars(design))
+  # Make sure parameters are in the right format, either matrix or vector.
+  # predict.emc() can provide the already-mapped parameter matrix; when the
+  # parameters are named, avoid rebuilding the data-aware sampled-parameter
+  # mapping just to recover names.
+  mapped_parameters <- optionals$mapped_parameters
+  sampled_p_names <- optionals$sampled_p_names
+  if (is.null(sampled_p_names)) {
+    sampled_p_names <- if (is.null(dim(parameters))) names(parameters) else colnames(parameters)
+  }
+  if (is.null(sampled_p_names)) sampled_p_names <- names(sampled_pars(design))
   if(is.null(dim(parameters))){
     if(is.null(names(parameters))) names(parameters) <- sampled_p_names
   } else {
@@ -431,8 +439,15 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
   return_trialwise_parameters <- isTRUE(dots_local$return_trialwise_parameters)
 
   ## For both conditional and unconditional simulations...
-  pars <- t(apply(parameters, 1, do_pre_transform, model()$pre_transform))
-  pars <- add_constants(pars,design$constants)
+  if (is.null(mapped_parameters)) {
+    pars <- t(apply(parameters, 1, do_pre_transform, model()$pre_transform))
+    pars <- add_constants(pars,design$constants)
+  } else {
+    if (!is.matrix(mapped_parameters)) {
+      stop("mapped_parameters must be a matrix")
+    }
+    pars <- mapped_parameters
+  }
   if (!is.null(staircase)) {
     attr(pars, "staircase") <- staircase
   }
@@ -503,7 +518,7 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
       # feedback covariates change after each simulated trial.
       data <- precomputed_design
     }
-    pars <- get_pars_oo(parameters, data, model())
+    if (is.null(mapped_parameters)) pars <- get_pars_oo(parameters, data, model())
     if (return_trialwise_parameters)
       trialwise_parameters <- pars
 

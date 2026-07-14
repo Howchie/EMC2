@@ -269,6 +269,68 @@ get_pars_batch_oo <- function(p, dadm, model, row_idx = NULL,
   )
 }
 
+# Map all posterior draws needed by predict.emc() in one C++ call per subject.
+# The remaining transformations (Ttransform, bounds, and the rfun) stay in
+# make_data(), where they have the same draw-by-draw behavior as before.
+.map_prediction_pars_batch <- function(pars, data, dadm, design, model) {
+  sampled_p_names <- attr(dadm, "sampled_p_names")
+  supplied_p_names <- unique(unlist(lapply(pars, function(p) {
+    if (is.null(dim(p))) names(p) else colnames(p)
+  })))
+  allowed_p_names <- c(sampled_p_names, names(design$constants))
+  if (length(supplied_p_names) &&
+      any(!supplied_p_names %in% allowed_p_names)) {
+    # Preserve the existing parameter/design validation in make_data().
+    return(NULL)
+  }
+  subjects <- unique(as.character(data$subjects))
+  data_subjects <- as.character(dadm$subjects)
+
+  parameter_row <- function(p, subject) {
+    if (is.null(dim(p))) {
+      p <- matrix(p, nrow = 1L,
+                  dimnames = list(NULL, names(p)))
+    }
+    if (nrow(p) == 1L) return(p[1L, , drop = FALSE])
+    if (is.null(rownames(p))) {
+      stop("Multi-row p matrix must have rownames for every subject in dadm")
+    }
+    row <- match(subject, rownames(p))
+    if (is.na(row)) {
+      stop("p matrix must have rows named for every subject in dadm")
+    }
+    p[row, , drop = FALSE]
+  }
+
+  mapped_by_subject <- vector("list", length(subjects))
+  names(mapped_by_subject) <- subjects
+  for (subject_index in seq_along(subjects)) {
+    subject <- subjects[[subject_index]]
+    particles <- do.call(rbind, lapply(pars, function(p) {
+      parameter_row(p, subject)
+    }))
+    row_idx <- which(data_subjects == subject)
+    mapped_by_subject[[subject_index]] <- get_pars_batch_oo(
+      particles, dadm, model, row_idx = row_idx
+    )
+  }
+
+  n_draws <- length(pars)
+  n_parameters <- dim(mapped_by_subject[[1L]])[2L]
+  parameter_names <- dimnames(mapped_by_subject[[1L]])[[2L]]
+  out <- vector("list", n_draws)
+  for (draw in seq_len(n_draws)) {
+    mapped <- matrix(NA_real_, nrow = nrow(dadm), ncol = n_parameters,
+                     dimnames = list(rownames(dadm), parameter_names))
+    for (subject_index in seq_along(subjects)) {
+      row_idx <- which(data_subjects == subjects[[subject_index]])
+      mapped[row_idx, ] <- mapped_by_subject[[subject_index]][, , draw]
+    }
+    out[[draw]] <- mapped
+  }
+  out
+}
+
 get_pars_matrix_oo <- function(p_vector, dadm, model) {
   model_list <- .oo_model_list(model)
   pars <- get_pars_oo(p_vector, dadm, model_list)

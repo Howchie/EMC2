@@ -147,7 +147,9 @@ predict.emc <- function(object,hyper=FALSE,n_post=50,n_cores=1,
   # #' @param expand Integer. Default is 1, exact same design for each subject. Larger values will replicate designs, so more trials per subject.
   emc <- object
   dots <- list(...)
-  data <- get_data(emc)
+  data <- dots$data
+  dots$data <- NULL
+  if (is.null(data)) data <- get_data(emc)
   design <- get_design(emc)
   if (is.null(dots$force_direction)) dots$force_direction <- FALSE
   if (is.null(dots$force_response)) dots$force_response <- FALSE
@@ -159,10 +161,21 @@ Since the covariate depends on behavior, the data will be simulated trial-by-tri
 To override this behavior, pass `conditional_on_data=TRUE` to predict().')
   }
 
-  if(is.null(data$subjects)){
+  if (is.data.frame(data)) {
+    jointModel <- FALSE
+    data <- list(data)
+    all_samples <- NULL
+  } else if (is.list(data) && length(data) > 0L &&
+             all(vapply(data, is.data.frame, logical(1)))) {
+    jointModel <- length(design) > 1L
+    if (!jointModel && length(data) != 1L) {
+      stop("For single-design models, `data` must be a data frame or a list of length 1")
+    }
+    all_samples <- if (jointModel) emc else NULL
+  } else if (is.null(data$subjects)) {
     jointModel <- TRUE
     all_samples <- emc
-  } else{
+  } else {
     jointModel <- FALSE
     data <- list(data)
   }
@@ -224,16 +237,27 @@ To override this behavior, pass `conditional_on_data=TRUE` to predict().')
     }
     make_data_dots <- dots
     make_data_dots$precomputed_design <- precomputed_design
+    if (!is.null(precomputed_design)) {
+      mapped_pars <- .map_prediction_pars_batch(
+        pars, data[[j]], precomputed_design, design[[j]], design[[j]]$model()
+      )
+    } else {
+      mapped_pars <- NULL
+    }
     simDat <- suppressWarnings(mclapply(1:n_post,function(i){
+      cur_dots <- make_data_dots
+      if (!is.null(mapped_pars)) cur_dots$mapped_parameters <- mapped_pars[[i]]
       do.call(make_data, c(list(pars[[i]],design=design[[j]],data=data[[j]]),
-                           fix_dots(make_data_dots, make_data)))
+                           fix_dots(cur_dots, make_data)))
     },mc.cores=n_cores))
     in_bounds <- !sapply(simDat, is.logical)
     if(any(!in_bounds)){
       good_post <- sample(1:n_post, sum(!in_bounds))
       simDat[!in_bounds] <- suppressWarnings(mclapply(good_post,function(i){
+        cur_dots <- make_data_dots
+        if (!is.null(mapped_pars)) cur_dots$mapped_parameters <- mapped_pars[[i]]
         do.call(make_data, c(list(pars[[i]],design=design[[j]],data=data[[j]], check_bounds = TRUE),
-                             fix_dots(make_data_dots, make_data)))
+                             fix_dots(cur_dots, make_data)))
       },mc.cores=n_cores))
       in_bounds <- !sapply(simDat, is.logical)
     }
