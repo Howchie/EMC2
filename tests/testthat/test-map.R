@@ -87,8 +87,13 @@ test_that("mapped_pars can restrict mappings to observed factor combinations", {
     fixed = TRUE
   )))
 
-  emc_full <- make_emc(dat, des, type = "single", compress = FALSE,
-                       n_chains = 1, use_data = FALSE)
+  # use_data = FALSE keeps the unobserved b2:easy cell, whose design column is
+  # all zeros for the observed data, so the identifiability check must fire.
+  expect_warning(
+    emc_full <- make_emc(dat, des, type = "single", compress = FALSE,
+                         n_chains = 1, use_data = FALSE),
+    "rank deficient"
+  )
   emc_full_p <- attr(emc_full[[1]]$data[[1]], "p_names")
   expect_true(any(grepl("blockb2:Eeasy", emc_full_p, fixed = TRUE)))
 })

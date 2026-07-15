@@ -317,3 +317,33 @@ test_that("predict data overrides the data stored in the fitted object", {
   expect_true(is.data.frame(prediction))
   expect_identical(unique(as.character(prediction$subjects)), subject)
 })
+
+test_that("make_emc warns when sampled parameters are not identifiable", {
+  dat <- data.frame(
+    subjects = factor(rep("s1", 4)),
+    F1 = factor(c("a", "a", "b", "b")),
+    F2 = factor(c("a", "a", "b", "b")), # aliased with F1
+    S = factor(c("left", "right", "left", "right")),
+    R = factor(c("left", "right", "left", "right")),
+    rt = c(0.5, 0.6, 0.7, 0.8)
+  )
+  des_bad <- design(
+    data = dat, model = LBA, matchfun = function(d) d$S == d$lR,
+    formula = list(v ~ 0 + F1 + F2, B ~ 1, A ~ 1, t0 ~ 1, sv ~ 1),
+    constants = c(sv = log(1)), report_p_vector = FALSE
+  )
+  expect_warning(
+    make_emc(dat, des_bad, type = "single", n_chains = 1, compress = FALSE),
+    "rank deficient.*v_F1b, v_F2b"
+  )
+
+  # Fixing one parameter of the aliased pair restores identifiability
+  des_ok <- design(
+    data = dat, model = LBA, matchfun = function(d) d$S == d$lR,
+    formula = list(v ~ 0 + F1 + F2, B ~ 1, A ~ 1, t0 ~ 1, sv ~ 1),
+    constants = c(sv = log(1), v_F2b = 0), report_p_vector = FALSE
+  )
+  expect_no_warning(
+    make_emc(dat, des_ok, type = "single", n_chains = 1, compress = FALSE)
+  )
+})

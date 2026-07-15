@@ -655,6 +655,38 @@ rt_check_function <- function(data){
   }
 }
 
+check_dm_identifiability <- function(designs, constants)
+  # Warns if the design matrix for any parameter type is rank deficient over
+  # its sampled (non-constant) columns, i.e., some sampled parameters trade off
+  # exactly and only their linear combinations are identified. Rank is computed
+  # on the (possibly compressed) design matrices; unique rows preserve rank.
+{
+  for (ptype in names(designs)) {
+    dm <- designs[[ptype]]
+    cols <- setdiff(colnames(dm), names(constants))
+    if (length(cols) == 0) next
+    X <- as.matrix(as.data.frame(dm)[, cols, drop = FALSE])
+    if (!is.numeric(X) || any(!is.finite(X))) next
+    ev <- eigen(crossprod(X), symmetric = TRUE)
+    if (max(ev$values) <= 0) {
+      involved <- cols
+      n_dependent <- length(cols)
+    } else {
+      dependent <- ev$values < max(ev$values) * 1e-10
+      if (!any(dependent)) next
+      n_dependent <- sum(dependent)
+      involved <- cols[rowSums(abs(ev$vectors[, dependent, drop = FALSE]) > 1e-8) > 0]
+    }
+    warning("The design matrix for '", ptype, "' is rank deficient (rank ",
+            length(cols) - n_dependent, " < ", length(cols), " sampled parameters), ",
+            "so these parameters are not individually identified and their ",
+            "estimates can diverge even when the fit looks good. Parameters ",
+            "involved: ", paste(involved, collapse = ", "), ". Fix ",
+            n_dependent, " of them with constants (e.g., constants = c(`",
+            involved[1], "` = 0)) or reparameterize the formula.",
+            call. = FALSE)
+  }
+}
 
 design_model <- function(data,design,model=NULL,
                          add_acc=TRUE,rt_resolution=1/60,verbose=TRUE,
@@ -795,6 +827,7 @@ design_model <- function(data,design,model=NULL,
   sampled_p_names <- p_names[!(p_names %in% names(design$constants))]
   attr(dadm,"p_names") <- p_names
   attr(dadm,"sampled_p_names") <- sampled_p_names
+  if (verbose) check_dm_identifiability(out, design$constants)
  
   # `type` is a length-1 string (e.g. "DDM", "DDMGNG"); `%in%` would fail for "DDMGNG".
   if (grepl("DDM", model()$type)) nunique <- dim(dadm)[1] else
