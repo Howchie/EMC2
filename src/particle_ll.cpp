@@ -16,6 +16,7 @@
 #include "col_registry.h"
 #include "TrendEngine.h"
 #include "transform_utils.h"
+#include "gh_quad.h"
 #include <gsl/gsl_integration.h>
 #include <gsl/gsl_errno.h> // For GSL error handling
 #include <cmath>
@@ -547,6 +548,7 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
     out.ctx.mean_g_index = emc2col::bawl::mG;
     out.ctx.mean_k_index = emc2col::bawl::mK;
     out.ctx.erlang_omega_index = (out.ctx.kill_shape == 3) ? emc2col::bawl::omega : -1;
+    out.ctx.bawl_correlated = (type_std.find("_CORR") != std::string::npos);
     // Leaky ballistic accumulators can have defective upper tails (never-finish
     // mass) even when posdrift=TRUE.
     out.ctx.defective_upper_tail = true;
@@ -613,6 +615,23 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
     out.ctx.gng = true;
   }
   return out;
+}
+
+static inline void configure_bawl_corr_context(RaceModelAdapter& adapter,
+                                               const Rcpp::CharacterVector& keep_names,
+                                               const std::string& caller) {
+  if (!adapter.ctx.bawl_correlated) return;
+  adapter.ctx.bawl_rho_index = -1;
+  for (int j = 0; j < keep_names.size(); ++j) {
+    if (Rcpp::as<std::string>(keep_names[j]) == "rho") {
+      adapter.ctx.bawl_rho_index = j;
+      break;
+    }
+  }
+  if (adapter.ctx.bawl_rho_index < 0) {
+    Rcpp::stop("%s: correlated BAwL requires a parameter column named 'rho'.",
+               caller.c_str());
+  }
 }
 
 static inline bool is_stop_signal_type(const std::string& type_std) {
@@ -704,6 +723,26 @@ static double local_race_helper(double t,
                                 int* isok_2buf);
 
 double c_log_likelihood_race(
+    Rcpp::NumericMatrix pars,
+    Rcpp::DataFrame dadm,
+    RacePdf1Fun pdf1,
+    RaceCdf1Fun cdf1,
+    const int n_trials,
+    LogicalVector winner,
+    Rcpp::IntegerVector expand,
+    double min_ll,
+    const Rcpp::LogicalVector isok,
+    int n_lR,
+    void* model_context_for_funcs,
+    bool all_finite_trials,
+    RaceRawFun model_dfun_raw,
+    RaceRawFun model_pfun_raw,
+    RaceLogSAtTFun logS_at_t,
+    RaceSharedState* shared = nullptr,
+    NumericVector* trial_ll_out = nullptr,
+    bool apply_truncation_correction = true);
+
+double c_log_likelihood_bawl_correlated(
     Rcpp::NumericMatrix pars,
     Rcpp::DataFrame dadm,
     RacePdf1Fun pdf1,
@@ -2839,6 +2878,7 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
     if (adapter.col_spec.names != nullptr) {
       emc2col::validate_col_prefix(keep_names, adapter.col_spec);
     }
+    configure_bawl_corr_context(adapter, keep_names, "calc_ll_oo");
 
     NumericVector lR = data["lR"];
     int n_lR = unique(lR).length();
@@ -2901,6 +2941,7 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
     // pContaminant is handled inline: log(1-pC) shift for finite RTs (no-op when pC=0).
     const bool use_raw_fast_path =
       all_finite_trials &&  // already scanned above; avoids a redundant O(n) pass
+      !adapter.ctx.bawl_correlated &&
       (!has_RACE_col_fp || has_RACE_attrs_fp) &&
       adapter.model_pfun_raw != nullptr &&
       adapter.model_dfun_raw != nullptr;
@@ -3125,16 +3166,25 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
         lls[i] = total_ll;
       } else {
         pars = pt.materialize_reusable();
-        lls[i] = c_log_likelihood_race(pars, data,
-                                       adapter.pdf1_ptr, adapter.cdf1_ptr,
-                                       n_trials,
-                                       winner, expand, min_ll, is_ok, n_lR,
-                                       &adapter.ctx,
-                                       all_finite_trials,
-                                       adapter.model_dfun_raw,
-                                       adapter.model_pfun_raw,
-                                       adapter.logS_at_t_ptr,
-                                       race_shared.valid ? &race_shared : nullptr);
+        if (adapter.ctx.bawl_correlated) {
+          lls[i] = c_log_likelihood_bawl_correlated(
+              pars, data, adapter.pdf1_ptr, adapter.cdf1_ptr, n_trials,
+              winner, expand, min_ll, is_ok, n_lR, &adapter.ctx,
+              all_finite_trials, adapter.model_dfun_raw, adapter.model_pfun_raw,
+              adapter.logS_at_t_ptr,
+              race_shared.valid ? &race_shared : nullptr, nullptr);
+        } else {
+          lls[i] = c_log_likelihood_race(pars, data,
+                                         adapter.pdf1_ptr, adapter.cdf1_ptr,
+                                         n_trials,
+                                         winner, expand, min_ll, is_ok, n_lR,
+                                         &adapter.ctx,
+                                         all_finite_trials,
+                                         adapter.model_dfun_raw,
+                                         adapter.model_pfun_raw,
+                                         adapter.logS_at_t_ptr,
+                                         race_shared.valid ? &race_shared : nullptr);
+        }
       }
     }
   }
@@ -3218,6 +3268,7 @@ NumericMatrix calc_ll_oo_pw(NumericMatrix particle_matrix, DataFrame data, Numer
     if (adapter.col_spec.names != nullptr) {
       emc2col::validate_col_prefix(keep_names, adapter.col_spec);
     }
+    configure_bawl_corr_context(adapter, keep_names, "calc_ll_oo_pw");
 
     NumericVector lR = data["lR"];
     int n_lR = unique(lR).length();
@@ -3283,17 +3334,26 @@ NumericMatrix calc_ll_oo_pw(NumericMatrix particle_matrix, DataFrame data, Numer
       is_ok = lr_all(is_ok, n_lR);
       pars = pt.materialize_reusable();
       NumericVector row_vec(n_out_race);
-      c_log_likelihood_race(pars, data,
-                            adapter.pdf1_ptr, adapter.cdf1_ptr,
-                            n_trials,
-                            winner, expand, min_ll, is_ok, n_lR,
-                            &adapter.ctx,
-                            all_finite_trials,
-                            adapter.model_dfun_raw,
-                            adapter.model_pfun_raw,
-                            adapter.logS_at_t_ptr,
-                            race_shared.valid ? &race_shared : nullptr,
-                            &row_vec);
+      if (adapter.ctx.bawl_correlated) {
+        c_log_likelihood_bawl_correlated(
+            pars, data, adapter.pdf1_ptr, adapter.cdf1_ptr, n_trials,
+            winner, expand, min_ll, is_ok, n_lR, &adapter.ctx,
+            all_finite_trials, adapter.model_dfun_raw, adapter.model_pfun_raw,
+            adapter.logS_at_t_ptr,
+            race_shared.valid ? &race_shared : nullptr, &row_vec);
+      } else {
+        c_log_likelihood_race(pars, data,
+                              adapter.pdf1_ptr, adapter.cdf1_ptr,
+                              n_trials,
+                              winner, expand, min_ll, is_ok, n_lR,
+                              &adapter.ctx,
+                              all_finite_trials,
+                              adapter.model_dfun_raw,
+                              adapter.model_pfun_raw,
+                              adapter.logS_at_t_ptr,
+                              race_shared.valid ? &race_shared : nullptr,
+                              &row_vec);
+      }
       result(i, _) = row_vec;
     }
     return result;
@@ -5006,7 +5066,8 @@ double c_log_likelihood_race(
     RaceRawFun model_pfun_raw,
     RaceLogSAtTFun logS_at_t,            // batch log-survivor at scalar t (for truncation norms)
     RaceSharedState* shared,             // optional pre-computed per-data state (nullptr = compute per-call)
-    NumericVector* trial_ll_out
+    NumericVector* trial_ll_out,
+    bool apply_truncation_correction
 ) {
 
   // Reuse one workspace per thread across particles/model fits.
@@ -5656,7 +5717,7 @@ double c_log_likelihood_race(
         ? n_unique_trials
         : static_cast<int>(finite_rt_unique_trial_indices.size());
 
-    if (may_need_ct && logS_at_t != nullptr) {
+    if (apply_truncation_correction && may_need_ct && logS_at_t != nullptr) {
       // Pass 1: scan for truncated trials; check uniformity of LT and UT separately.
       // We can batch the normaliser whenever all truncated finite-RT trials share the
       // same LT value AND the same UT value (each may be 0/Inf trivially).
@@ -5769,7 +5830,7 @@ double c_log_likelihood_race(
       const double rt_j = rts_dadm[start_row_idx];
       log_Z_this = 0.0;
 
-      if (may_need_ct) {
+      if (apply_truncation_correction && may_need_ct) {
         const double LTj = LT[start_row_idx];
         const double UTj = UT[start_row_idx];
         if (LTj != 0.0 || UTj != R_PosInf) { // truncation active
@@ -5869,7 +5930,8 @@ double c_log_likelihood_race(
     const double UTj = UT[start_row_idx];
     const double LCj = LC[start_row_idx];
     const double UCj = UC[start_row_idx];
-    const bool has_trunc = (LTj != 0.0 || UTj != R_PosInf);
+    const bool has_trunc = apply_truncation_correction &&
+      (LTj != 0.0 || UTj != R_PosInf);
     const bool trial_has_active_nogo =
       (static_cast<size_t>(unique_trial_idx) < active_nogo_trial_mask.size()) &&
       (active_nogo_trial_mask[static_cast<size_t>(unique_trial_idx)] != 0);
@@ -6177,6 +6239,203 @@ apply_trial_trunc:
     }
   }
   
+  return total_ll;
+}
+
+// Correlated BAwL likelihood using a single shared Gaussian factor.  The
+// ordinary race likelihood remains the conditional evaluator: for each GH
+// node we alter only v and sv, turn off its truncation correction, and let the
+// existing code handle winners, omissions, clocks, censoring, contaminants,
+// RACE masks, and expansion.  Truncation is then normalised as
+//   log int p(data | z) phi(z) dz - log int Z(z) phi(z) dz,
+// rather than by averaging already-normalised node likelihoods.
+double c_log_likelihood_bawl_correlated(
+    Rcpp::NumericMatrix pars,
+    Rcpp::DataFrame dadm,
+    RacePdf1Fun pdf1,
+    RaceCdf1Fun cdf1,
+    const int n_trials,
+    LogicalVector winner,
+    Rcpp::IntegerVector expand,
+    double min_ll,
+    const Rcpp::LogicalVector isok,
+    int n_lR,
+    void* model_context_for_funcs,
+    bool all_finite_trials,
+    RaceRawFun model_dfun_raw,
+    RaceRawFun model_pfun_raw,
+    RaceLogSAtTFun logS_at_t,
+    RaceSharedState* shared,
+    NumericVector* trial_ll_out) {
+  ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(model_context_for_funcs);
+  if (ctx == nullptr || !ctx->bawl_correlated || ctx->bawl_rho_index < 0) {
+    Rcpp::stop("c_log_likelihood_bawl_correlated: invalid correlated BAwL context.");
+  }
+  if (ctx->bawl_rho_index >= pars.ncol()) {
+    Rcpp::stop("c_log_likelihood_bawl_correlated: rho column is outside pars.");
+  }
+  if (n_lR <= 0 || n_trials < 0 || n_trials % n_lR != 0) {
+    Rcpp::stop("c_log_likelihood_bawl_correlated: invalid race dimensions.");
+  }
+
+  const int n_unique = n_trials / n_lR;
+  const int n_out = (expand.length() > 0) ? expand.length() : n_unique;
+  if (trial_ll_out != nullptr && trial_ll_out->size() != n_out) {
+    Rcpp::stop("c_log_likelihood_bawl_correlated: trial_ll_out size mismatch.");
+  }
+
+  // If all active loadings are zero, use the exact existing path.  Apart from
+  // being cheaper, this keeps rho=0 bit-for-bit equivalent to independent BAwL.
+  bool any_loading = false;
+  for (int r = 0; r < pars.nrow(); ++r) {
+    if (!isok[r]) continue;
+    const double rho = pars(r, ctx->bawl_rho_index);
+    if (R_FINITE(rho) && std::fabs(rho) > 1e-14) {
+      any_loading = true;
+      break;
+    }
+  }
+  if (!any_loading) {
+    return c_log_likelihood_race(pars, dadm, pdf1, cdf1, n_trials,
+                                  winner, expand, min_ll, isok, n_lR,
+                                  model_context_for_funcs, all_finite_trials,
+                                  model_dfun_raw, model_pfun_raw, logS_at_t,
+                                  shared, trial_ll_out, true);
+  }
+
+  if (pars.nrow() != n_trials) {
+    Rcpp::stop("c_log_likelihood_bawl_correlated: pars rows do not match data.");
+  }
+
+  bool has_RACE_col = dadm.containsElementNamed("RACE");
+  Rcpp::IntegerVector RACE;
+  Rcpp::LogicalVector RACE_mask;
+  if (has_RACE_col && dadm.hasAttribute("RACE_nacc_by_row") &&
+      dadm.hasAttribute("RACE_mask")) {
+    RACE = dadm.attr("RACE_nacc_by_row");
+    RACE_mask = dadm.attr("RACE_mask");
+    if (RACE.size() != n_trials || RACE_mask.size() != n_trials) has_RACE_col = false;
+  } else {
+    has_RACE_col = false;
+  }
+
+  Rcpp::NumericVector LT, UT;
+  bool has_truncation = false;
+  if (!all_finite_trials) {
+    LT = get_col_with_default(dadm, "LT", 0.0);
+    UT = get_col_with_default(dadm, "UT", R_PosInf);
+    for (int j = 0; j < n_unique; ++j) {
+      const double lt = LT[j * n_lR];
+      const double ut = UT[j * n_lR];
+      if (lt != 0.0 || ut != R_PosInf) {
+        has_truncation = true;
+        break;
+      }
+    }
+  }
+
+  std::vector<double> log_num(static_cast<size_t>(n_out), R_NegInf);
+  std::vector<double> log_den(static_cast<size_t>(n_unique), 0.0);
+  const GHRule10& gh = gh_rule10();
+  const double sqrt2 = std::sqrt(2.0);
+  const double sqrt_pi = std::sqrt(std::acos(-1.0));
+  const int rho_col = ctx->bawl_rho_index;
+  const int n_par = pars.ncol();
+  if (n_par > 64 || n_lR > 64) {
+    Rcpp::stop("c_log_likelihood_bawl_correlated: at most 64 parameter columns and 64 accumulators are supported.");
+  }
+
+  for (int q = 0; q < 10; ++q) {
+    const double z = sqrt2 * gh.x[static_cast<size_t>(q)];
+    const double log_w = std::log(gh.w[static_cast<size_t>(q)] / sqrt_pi);
+    Rcpp::NumericMatrix pars_q = Rcpp::clone(pars);
+    Rcpp::LogicalVector isok_q = Rcpp::clone(isok);
+
+    // Conditional factor model preserving each marginal sv:
+    // v_q = v + sign(rho) sv sqrt(|rho|) z,
+    // sv_q = sv sqrt(1-|rho|).
+    for (int r = 0; r < n_trials; ++r) {
+      const double rho = pars_q(r, rho_col);
+      if (!isok_q[r]) continue;
+      if (!R_FINITE(rho) || std::fabs(rho) > 1.0) {
+        isok_q[r] = false;
+        continue;
+      }
+      const double sv = pars_q(r, emc2col::bawl::sv);
+      const double magnitude = std::fabs(rho);
+      const double loading = std::sqrt(magnitude);
+      const double residual = std::sqrt(std::fmax(0.0, 1.0 - magnitude));
+      const double sign = (rho < 0.0) ? -1.0 : 1.0;
+      pars_q(r, emc2col::bawl::v) += sign * sv * loading * z;
+      // Keep the conditional SD strictly positive at the exact boundary. The
+      // public bound stays just inside +/-1, but this avoids undefined scalar
+      // kernels for hand-built parameter matrices at rho == +/-1.
+      pars_q(r, emc2col::bawl::sv) = sv * std::fmax(residual, 1e-12);
+    }
+
+    ContextForRaceModels node_ctx = *ctx;
+    Rcpp::NumericVector node_ll(n_out);
+    c_log_likelihood_race(pars_q, dadm, pdf1, cdf1, n_trials,
+                          winner, expand, R_NegInf, isok_q, n_lR,
+                          &node_ctx, all_finite_trials,
+                          model_dfun_raw, model_pfun_raw, logS_at_t,
+                          shared, &node_ll, false);
+
+    for (int i = 0; i < n_out; ++i) {
+      log_num[static_cast<size_t>(i)] =
+        log_sum_exp(log_num[static_cast<size_t>(i)],
+                    log_w + node_ll[i]);
+    }
+
+    if (has_truncation) {
+      GslIntegrationControls gsl_ctl = default_gsl_controls();
+      gsl_ctl.try_qng_first_finite = true;
+      gsl_ctl.qag_key = GSL_INTEG_GAUSS21;
+      gsl_ctl.rel_tol = 1e-4;
+      static thread_local GslWorkspacePtr workspace_tls(nullptr, &gsl_integration_workspace_free);
+      GslWorkspacePtr& workspace = workspace_tls;
+      std::vector<double> rowmajor(static_cast<size_t>(n_lR) * n_par);
+      std::vector<int> ok_int(static_cast<size_t>(n_lR));
+      for (int j = 0; j < n_unique; ++j) {
+        const int start = j * n_lR;
+        const int n_lR_j = has_RACE_col ? RACE[start] : n_lR;
+        const double lt = LT[start];
+        const double ut = UT[start];
+        if (lt == 0.0 && ut == R_PosInf) continue;
+        for (int k = 0; k < n_lR_j; ++k) {
+          const int row = start + k;
+          ok_int[static_cast<size_t>(k)] =
+            (isok_q[row] && (!has_RACE_col || RACE_mask[row])) ? 1 : 0;
+          for (int c = 0; c < n_par; ++c) {
+            rowmajor[static_cast<size_t>(k) * n_par + c] = pars_q(row, c);
+          }
+        }
+        const double log_z = get_trunc_normaliser_rowmajor_cpp(
+            rowmajor.data(), ok_int.data(), pdf1, cdf1, lt, ut,
+            n_lR_j, n_par, gsl_ctl, &node_ctx, workspace);
+        log_den[static_cast<size_t>(j)] =
+          log_sum_exp(log_den[static_cast<size_t>(j)], log_w + log_z);
+      }
+    }
+  }
+
+  double total_ll = 0.0;
+  if (expand.length() > 0) {
+    for (int i = 0; i < n_out; ++i) {
+      const int j = expand[i] - 1;
+      double value = log_num[static_cast<size_t>(i)] - log_den[static_cast<size_t>(j)];
+      if (!R_FINITE(value) || value < min_ll) value = min_ll;
+      if (trial_ll_out != nullptr) (*trial_ll_out)[i] = value;
+      total_ll += value;
+    }
+  } else {
+    for (int j = 0; j < n_unique; ++j) {
+      double value = log_num[static_cast<size_t>(j)] - log_den[static_cast<size_t>(j)];
+      if (!R_FINITE(value) || value < min_ll) value = min_ll;
+      if (trial_ll_out != nullptr) (*trial_ll_out)[j] = value;
+      total_ll += value;
+    }
+  }
   return total_ll;
 }
 

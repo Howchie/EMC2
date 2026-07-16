@@ -263,7 +263,8 @@ pBAwL <- function(rt, pars, posdrift = TRUE, erlang = 1L, guess = FALSE) {
 
 rBAwL <- function(lR, pars, ok = rep(TRUE, length(lR)),
                   p_types = c("v", "sv", "b", "A", "t0", "k", "lambda_g", "lambda_k"),
-                  posdrift = TRUE, eps = 1e-10, erlang = 1L, guess = FALSE, global = FALSE) {
+                  posdrift = TRUE, eps = 1e-10, erlang = 1L, guess = FALSE, global = FALSE,
+                  .drifts = NULL) {
   if (!all(c("lambda_g", "lambda_k") %in% colnames(pars))) {
     stop("BAwL requires parameter columns 'lambda_g' and 'lambda_k'.")
   }
@@ -304,7 +305,13 @@ rBAwL <- function(lR, pars, ok = rep(TRUE, length(lR)),
   if (!all(p_types %in% dimnames(pars)[[2]]))
     stop("pars must have columns ", paste(p_types, collapse = " "))
   lower  <- if (posdrift) 0 else -Inf
-  drifts <- msm::rtnorm(nrow(pars), mean = pars[, "v"], sd = pars[, "sv"], lower = lower)
+  if (is.null(.drifts)) {
+    drifts <- msm::rtnorm(nrow(pars), mean = pars[, "v"], sd = pars[, "sv"], lower = lower)
+  } else {
+    if (length(.drifts) != nrow(pars_all))
+      stop(".drifts must have one value per row of the original parameter matrix.")
+    drifts <- .drifts[ok]
+  }
 
   small_k <- pars[, "k"] < eps
   if (any(small_k))
@@ -395,6 +402,36 @@ rBAwL <- function(lR, pars, ok = rep(TRUE, length(lR)),
   out
 }
 
+# One-factor correlated BAwL reference simulator.  rho is a signed loading,
+# not a forced target/non-target sign: changing a row's sign changes its
+# direction on the shared factor, while rho == 0 makes that racer independent
+# of the factor.  rBAwL retains the common leak/clock/race implementation.
+rBAwL_corr <- function(lR, pars, ok = rep(TRUE, nrow(pars)),
+                       posdrift = TRUE, eps = 1e-10, erlang = 1L,
+                       guess = FALSE, global = FALSE) {
+  if (!"rho" %in% colnames(pars))
+    stop("Correlated BAwL requires parameter column 'rho'.")
+  if (any(!is.finite(pars[, "rho"]) | abs(pars[, "rho"]) > 1))
+    stop("Correlated BAwL rho values must be finite and lie in [-1, 1].")
+  nr <- length(levels(lR))
+  n_trials <- nrow(pars) / nr
+  if (nr <= 0 || nrow(pars) %% nr != 0)
+    stop("Correlated BAwL requires rows grouped by accumulator within trial.")
+  rho <- pars[, "rho"]
+  magnitude <- abs(rho)
+  loading <- sqrt(magnitude)
+  residual <- sqrt(pmax(0, 1 - magnitude))
+  residual <- pmax(residual, 1e-12)
+  z <- rep(rnorm(n_trials), each = nr)
+  mu <- pars[, "v"] + sign(rho) * pars[, "sv"] * loading * z
+  sd <- pars[, "sv"] * residual
+  lower <- if (posdrift) 0 else -Inf
+  drifts <- if (posdrift) msm::rtnorm(length(mu), mean = mu, sd = sd, lower = lower) else
+    rnorm(length(mu), mean = mu, sd = sd)
+  rBAwL(lR, pars, ok = ok, posdrift = posdrift, eps = eps,
+        erlang = erlang, guess = guess, global = global, .drifts = drifts)
+}
+
 #' The Ballistic Accumulator with Leak (BAwL)
 #'
 #' Race model where each accumulator follows a leaky-integration trajectory and
@@ -410,10 +447,13 @@ rBAwL <- function(lR, pars, ok = rep(TRUE, length(lR)),
 #' @param posdrift logical, if TRUE drifts are truncated to be positive.
 #' @param erlang integer shape of the killing process (1=exponential, 2=Erlang-2)
 #' @param erlang_type string, one of "none", "local_kill", "global_kill", "local_guess", "local_kill_guess"
+#' @param correlated logical; if TRUE add a signed one-factor `rho` loading
+#'   for correlated BAwL drift draws.
 #'
 #' @export
 BAwL <- function(posdrift = TRUE, erlang_shape = 1L,
-                 erlang_type = c("none", "local_kill", "global_kill", "local_guess", "local_kill_guess")) {
+                 erlang_type = c("none", "local_kill", "global_kill", "local_guess", "local_kill_guess"),
+                 correlated = FALSE) {
   erlang_type <- match.arg(erlang_type)
   erlang_mixed <- identical(erlang_shape, "mixed")
   erlang_shape_cpp <- if (erlang_mixed) 3L else as.integer(erlang_shape)
@@ -460,12 +500,29 @@ BAwL <- function(posdrift = TRUE, erlang_shape = 1L,
   minmax <- cbind(minmax, pContaminant = c(0.001, 0.999))
   exception <- c(exception, pContaminant = 0)
 
+  if (correlated) {
+    # rho is a signed one-factor loading.  It is sampled on the unconstrained
+    # real line and mapped to (-1, 1) by the existing pnorm transform.  The
+    # endpoints are not reachable, which avoids zero conditional drift SDs in
+    # the scalar BAwL kernels.
+    p_types <- c(p_types, rho = qnorm(0.5))
+    transform <- c(transform, rho = "pnorm")
+    minmax <- cbind(minmax, rho = c(-1, 1))
+    exception <- c(exception, rho = 0)
+  }
+
+  transform_spec <- list(func = transform)
+  if (correlated) {
+    transform_spec$lower <- c(rho = -1)
+    transform_spec$upper <- c(rho = 1)
+  }
+
   list(
     type   = "RACE",
-    c_name = paste0(base_name, type_suffix),
+    c_name = paste0(base_name, type_suffix, if (correlated) "_CORR" else ""),
     p_types = p_types,
     p_types_canonical = c("v", "sv", "B", "A", "t0", "k"),
-    transform = list(func = transform),
+    transform = transform_spec,
     bound = list(
       minmax = minmax,
       exception = exception),
@@ -495,15 +552,45 @@ BAwL <- function(posdrift = TRUE, erlang_shape = 1L,
       }
       cbind(pars, b = pars[, "B"] + pars[, "A"])
     },
-    rfun = function(data, pars) .rfun_BAwL(data$lR, pars, ok = attr(pars, "ok"), posdrift = posdrift,
-                                        erlang = erlang_shape_cpp, guess = has_guess,
-                                        global = erlang_type == "global_kill"),
+    rfun = function(data, pars) {
+      if (correlated) {
+        .rfun_BAwL_corr(data$lR, pars, ok = attr(pars, "ok"), posdrift = posdrift,
+                        erlang = erlang_shape_cpp, guess = has_guess,
+                        global = erlang_type == "global_kill")
+      } else {
+        .rfun_BAwL(data$lR, pars, ok = attr(pars, "ok"), posdrift = posdrift,
+                   erlang = erlang_shape_cpp, guess = has_guess,
+                   global = erlang_type == "global_kill")
+      }
+    },
     dfun = function(rt, pars) dBAwL(rt, pars, posdrift = posdrift,  erlang = erlang_shape_cpp,
                                       guess = has_guess),
     pfun = function(rt, pars) pBAwL(rt, pars, posdrift = posdrift,  erlang = erlang_shape_cpp,
                                       guess = has_guess),
-    log_likelihood = function(pars, dadm, model, min_ll = log(1e-10)) {
-      log_likelihood_race_missing(pars = pars, dadm = dadm, model = model, min_ll = min_ll)
+    log_likelihood = if (correlated) {
+      function(pars, dadm, model, min_ll = log(1e-10)) {
+        stop("BAwLcorr likelihood is implemented in the C++ race path; use fast_path=TRUE.")
+      }
+    } else {
+      function(pars, dadm, model, min_ll = log(1e-10)) {
+        log_likelihood_race_missing(pars = pars, dadm = dadm, model = model, min_ll = min_ll)
+      }
     }
   )
+}
+
+#' Correlated Ballistic Accumulator with Leak
+#'
+#' Adds a signed one-factor loading `rho` to BAwL.  Accumulators with rho=0
+#' are independent of the shared factor, which is useful for PM/false-alarm
+#' racers.  The C++ likelihood supports arbitrary numbers of accumulators.
+#'
+#' @param posdrift logical, if TRUE drifts are truncated to be positive.
+#' @param erlang_shape integer shape of the killing process.
+#' @param erlang_type clock configuration, as in [BAwL()].
+#' @export
+BAwLcorr <- function(posdrift = TRUE, erlang_shape = 1L,
+                     erlang_type = c("none", "local_kill", "global_kill", "local_guess", "local_kill_guess")) {
+  BAwL(posdrift = posdrift, erlang_shape = erlang_shape,
+       erlang_type = erlang_type, correlated = TRUE)
 }

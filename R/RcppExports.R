@@ -241,6 +241,10 @@ rbawl_cpp <- function(pars, lR_levels, ok, posdrift, erlang, guess, global) {
     .Call(`_EMC2_rbawl_cpp`, pars, lR_levels, ok, posdrift, erlang, guess, global)
 }
 
+rbawl_corr_cpp <- function(pars, lR_levels, ok, posdrift, erlang, guess, global) {
+    .Call(`_EMC2_rbawl_corr_cpp`, pars, lR_levels, ok, posdrift, erlang, guess, global)
+}
+
 rrdmswtn_cpp <- function(pars, lR_levels, ok, erlang_shape, erlang_type, posdrift) {
     .Call(`_EMC2_rrdmswtn_cpp`, pars, lR_levels, ok, erlang_shape, erlang_type, posdrift)
 }

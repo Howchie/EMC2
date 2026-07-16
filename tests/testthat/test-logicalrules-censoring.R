@@ -59,8 +59,12 @@ lr_pvec <- function(design) {
 }
 
 make_rule_design <- function(template, Rlevels) {
+  # R contains overt rule responses in the simulation data, but the design
+  # scaffold must expose the latent accumulator roles used by the formulas.
+  design_template <- template
+  design_template$R <- factor(NA_character_, levels = c("A", "B", "n_A", "n_B"))
   design(
-    data = template,
+    data = design_template,
     Rlevels = Rlevels,
     fixed_accumulator_roles = factor(c("A", "B", "n_A", "n_B"),
                                      levels = c("A", "B", "n_A", "n_B")),
@@ -169,8 +173,10 @@ test_that("OR_DETECTION_GNG censor masses exclude nogo wins and match simulation
     LogicalRule = factor(rep("OR_DETECTION_GNG", 4), levels = "OR_DETECTION_GNG"),
     R = factor(rep(NA_character_, 4), levels = c("yes", "no"))
   )
+  design_template <- template
+  design_template$R <- factor(NA_character_, levels = c("A", "B", "nogo"))
   des <- design(
-    data = template,
+    data = design_template,
     Rlevels = c("yes", "no"),
     fixed_accumulator_roles = factor(c("A", "B", "nogo"), levels = c("A", "B", "nogo")),
     matchfun = function(d) d$lR %in% c("A", "B", "nogo"),

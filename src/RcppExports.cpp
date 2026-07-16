@@ -1067,6 +1067,23 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// rbawl_corr_cpp
+Rcpp::List rbawl_corr_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels, Rcpp::LogicalVector ok, bool posdrift, int erlang, bool guess, bool global);
+RcppExport SEXP _EMC2_rbawl_corr_cpp(SEXP parsSEXP, SEXP lR_levelsSEXP, SEXP okSEXP, SEXP posdriftSEXP, SEXP erlangSEXP, SEXP guessSEXP, SEXP globalSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< Rcpp::NumericMatrix >::type pars(parsSEXP);
+    Rcpp::traits::input_parameter< Rcpp::CharacterVector >::type lR_levels(lR_levelsSEXP);
+    Rcpp::traits::input_parameter< Rcpp::LogicalVector >::type ok(okSEXP);
+    Rcpp::traits::input_parameter< bool >::type posdrift(posdriftSEXP);
+    Rcpp::traits::input_parameter< int >::type erlang(erlangSEXP);
+    Rcpp::traits::input_parameter< bool >::type guess(guessSEXP);
+    Rcpp::traits::input_parameter< bool >::type global(globalSEXP);
+    rcpp_result_gen = Rcpp::wrap(rbawl_corr_cpp(pars, lR_levels, ok, posdrift, erlang, guess, global));
+    return rcpp_result_gen;
+END_RCPP
+}
 // rrdmswtn_cpp
 Rcpp::List rrdmswtn_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels, Rcpp::LogicalVector ok, int erlang_shape, std::string erlang_type, bool posdrift);
 RcppExport SEXP _EMC2_rrdmswtn_cpp(SEXP parsSEXP, SEXP lR_levelsSEXP, SEXP okSEXP, SEXP erlang_shapeSEXP, SEXP erlang_typeSEXP, SEXP posdriftSEXP) {
@@ -1610,6 +1627,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_rlba_cpp", (DL_FUNC) &_EMC2_rlba_cpp, 4},
     {"_EMC2_rrdm_cpp", (DL_FUNC) &_EMC2_rrdm_cpp, 3},
     {"_EMC2_rbawl_cpp", (DL_FUNC) &_EMC2_rbawl_cpp, 7},
+    {"_EMC2_rbawl_corr_cpp", (DL_FUNC) &_EMC2_rbawl_corr_cpp, 7},
     {"_EMC2_rrdmswtn_cpp", (DL_FUNC) &_EMC2_rrdmswtn_cpp, 6},
     {"_EMC2_fft_convolve_equiv_cpp", (DL_FUNC) &_EMC2_fft_convolve_equiv_cpp, 3},
     {"_EMC2_compute_gamma_diff_hrf", (DL_FUNC) &_EMC2_compute_gamma_diff_hrf, 9},

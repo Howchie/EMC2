@@ -56,6 +56,16 @@
   rBAwL(lR, pars, ok = ok, posdrift = posdrift, erlang = erlang, guess = guess, global = global)
 }
 
+.rfun_BAwL_corr <- function(lR, pars, ok = rep(TRUE, length(lR)), posdrift = TRUE,
+                            erlang = 1L, guess = FALSE, global = FALSE) {
+  if (.use_cpp_rfun()) {
+    res <- rbawl_corr_cpp(pars, levels(lR), ok, posdrift, as.integer(erlang), guess, global)
+    return(.rfun_cpp_pack(res, levels(lR), length(lR) / length(levels(lR))))
+  }
+  rBAwL_corr(lR, pars, ok = ok, posdrift = posdrift, erlang = erlang,
+             guess = guess, global = global)
+}
+
 .rfun_RDMSWTN <- function(lR, pars, ok = rep(TRUE, dim(pars)[1]), erlang_shape = 1L,
                           erlang_type = "none", posdrift = TRUE) {
   if (.use_cpp_rfun()) {

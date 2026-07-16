@@ -196,11 +196,12 @@ Rcpp::List rrdm_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
   return pack_result(res.R, res.rt, res.omitted, has_isTime, isTime);
 }
 
-// pars columns: v, sv, b, A, t0, k, lambda_g, lambda_k (+ optional omega).
-// Matches R's rBAwL (model_LBA.R:347-479).
-// [[Rcpp::export]]
-Rcpp::List rbawl_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
-                     Rcpp::LogicalVector ok, bool posdrift, int erlang, bool guess, bool global) {
+// Shared BAwL simulator.  The optional drift_override is supplied by the
+// correlated-factor entry point; all clock, leak, and race handling is shared.
+static Rcpp::List rbawl_cpp_impl(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
+                                 Rcpp::LogicalVector ok, bool posdrift, int erlang,
+                                 bool guess, bool global,
+                                 const std::vector<double>* drift_override) {
   const int n_acc = lR_levels.size();
   const int n_rows = pars.nrow();
   const int n_trials = n_rows / n_acc;
@@ -238,7 +239,13 @@ Rcpp::List rbawl_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
   for (int r = 0; r < n_rows; r++) {
     if (!ok[r]) continue;
     const double lo = posdrift ? 0.0 : R_NegInf;
-    const double drift = rtnorm_lower_r(pars(r, iv), pars(r, isv), lo);
+    const double drift = drift_override
+      ? (*drift_override)[static_cast<size_t>(r)]
+      : rtnorm_lower_r(pars(r, iv), pars(r, isv), lo);
+    if (posdrift && !(drift > 0.0)) {
+      dt[r] = R_PosInf;
+      continue;
+    }
     const double k = pars(r, ik);
     double d;
     if (k < eps) {
@@ -304,6 +311,56 @@ Rcpp::List rbawl_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
   std::vector<int> isTime;
   const bool has_isTime = resolve_time_level(res.R, isTime, lR_levels);
   return pack_result(res.R, res.rt, res.omitted, has_isTime, isTime);
+}
+
+// pars columns: v, sv, b, A, t0, k, lambda_g, lambda_k (+ optional omega).
+// Matches R's rBAwL (model_LBA.R:347-479).
+// [[Rcpp::export]]
+Rcpp::List rbawl_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
+                     Rcpp::LogicalVector ok, bool posdrift, int erlang, bool guess, bool global) {
+  return rbawl_cpp_impl(pars, lR_levels, ok, posdrift, erlang, guess, global, nullptr);
+}
+
+// Correlated BAwL simulator.  rho is a signed loading on one shared standard
+// normal factor; rho == 0 gives an accumulator-specific draw only.  Thus an
+// arbitrary number of racers can participate, and independent PM/false-alarm
+// racers are represented by rho = 0.
+// [[Rcpp::export]]
+Rcpp::List rbawl_corr_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
+                          Rcpp::LogicalVector ok, bool posdrift, int erlang,
+                          bool guess, bool global) {
+  const int n_acc = lR_levels.size();
+  const int n_rows = pars.nrow();
+  const int n_trials = n_rows / n_acc;
+  const auto ci = col_index_map(pars);
+  const int iv = ci.at("v"), isv = ci.at("sv"), irho = ci.at("rho");
+  if (n_acc <= 0 || n_rows % n_acc != 0) {
+    Rcpp::stop("rbawl_corr_cpp: invalid accumulator/parameter dimensions.");
+  }
+  if (ok.size() != n_rows) Rcpp::stop("rbawl_corr_cpp: ok has the wrong length.");
+
+  std::vector<double> z(static_cast<size_t>(n_trials));
+  for (int tr = 0; tr < n_trials; ++tr) z[static_cast<size_t>(tr)] = R::norm_rand();
+
+  std::vector<double> drifts(static_cast<size_t>(n_rows), R_PosInf);
+  for (int r = 0; r < n_rows; ++r) {
+    if (!ok[r]) continue;
+    const double rho = pars(r, irho);
+    if (!R_FINITE(rho) || std::fabs(rho) > 1.0) {
+      Rcpp::stop("rbawl_corr_cpp: rho must be finite and lie in [-1, 1].");
+    }
+    const double magnitude = std::fabs(rho);
+    const double sign = (rho < 0.0) ? -1.0 : 1.0;
+    const double mu = pars(r, iv) +
+      sign * pars(r, isv) * std::sqrt(magnitude) * z[static_cast<size_t>(r / n_acc)];
+    const double sd = pars(r, isv) *
+      std::fmax(std::sqrt(std::fmax(0.0, 1.0 - magnitude)), 1e-12);
+    drifts[static_cast<size_t>(r)] = rtnorm_lower_r(
+      mu, sd, posdrift ? 0.0 : R_NegInf);
+  }
+
+  return rbawl_cpp_impl(pars, lR_levels, ok, posdrift, erlang,
+                        guess, global, &drifts);
 }
 
 // pars columns: v, b, A, t0, sv, lambda_g, lambda_k (+ optional s, omega).

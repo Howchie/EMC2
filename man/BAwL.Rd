@@ -7,13 +7,17 @@
 BAwL(
   posdrift = TRUE,
   erlang_shape = 1L,
-  erlang_type = c("none", "local_kill", "global_kill", "local_guess", "local_kill_guess")
+  erlang_type = c("none", "local_kill", "global_kill", "local_guess", "local_kill_guess"),
+  correlated = FALSE
 )
 }
 \arguments{
 \item{posdrift}{logical, if TRUE drifts are truncated to be positive.}
 
 \item{erlang_type}{string, one of "none", "local_kill", "global_kill", "local_guess", "local_kill_guess"}
+
+\item{correlated}{logical; if TRUE add a signed one-factor \code{rho} loading
+for correlated BAwL drift draws.}
 
 \item{erlang}{integer shape of the killing process (1=exponential, 2=Erlang-2)}
 }
