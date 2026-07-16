@@ -5,14 +5,6 @@ log_sum_exp_test <- function(x) {
   m + log(sum(exp(x - m)))
 }
 
-with_bawl_corr_gh <- function(n, fun) {
-  old <- Sys.getenv("EMC2_BAWLCORR_GH_N", unset = NA_character_)
-  on.exit(if (is.na(old)) Sys.unsetenv("EMC2_BAWLCORR_GH_N") else
-            Sys.setenv(EMC2_BAWLCORR_GH_N = old), add = TRUE)
-  Sys.setenv(EMC2_BAWLCORR_GH_N = as.character(n))
-  fun()
-}
-
 bawl_formula <- function(model, rho_formula = NULL) {
   out <- list(v ~ 1, sv ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1,
               mG ~ 1, mK ~ 1)
@@ -118,11 +110,14 @@ reference_corr_ll <- function(pars, rho, rt, winner = 1L, posdrift = TRUE,
     if (LT == 0 && is.infinite(UT)) {
       log_z[i] <- 0
     } else {
-      s_lt <- prod(1 - EMC2:::pBAwL(LT, node, posdrift = posdrift,
-                             erlang = 1L, guess = FALSE))
-      s_ut <- if (is.infinite(UT)) 0 else
-        prod(1 - EMC2:::pBAwL(UT, node, posdrift = posdrift,
-                       erlang = 1L, guess = FALSE))
+      # pBAwL's vectorised wrapper recycles parameter rows over a vector of
+      # RTs, so a multi-row matrix with one scalar RT must be evaluated
+      # row-wise for the survivor product to include every racer.
+      cdf_at <- function(t) vapply(seq_len(nrow(node)), function(r)
+        EMC2:::pBAwL(t, node[r, , drop = FALSE], posdrift = posdrift,
+                     erlang = 1L, guess = FALSE), numeric(1))
+      s_lt <- prod(1 - cdf_at(LT))
+      s_ut <- if (is.infinite(UT)) 0 else prod(1 - cdf_at(UT))
       log_z[i] <- log(max(s_lt - s_ut, .Machine$double.xmin))
     }
   }
@@ -248,25 +243,25 @@ test_that("zero rho nests BAwL exactly across race data paths", {
   }
 })
 
-test_that("correlated likelihood agrees with an 80-node GH reference", {
+test_that("correlated likelihood agrees with a dense GH reference", {
   skip_on_cran()
   dat <- data.frame(subjects = factor(1),
                     S = factor("correct", levels = c("correct", "error")),
                     R = factor("correct", levels = c("correct", "error")),
                     rt = .7)
-  ctx <- make_bawl_context(dat, BAwLcorr(), rho_formula = rho ~ 1)
   for (pos in c(FALSE, TRUE)) {
     ctx_pos <- make_bawl_context(dat, BAwLcorr(posdrift = pos), rho_formula = rho ~ 1)
     for (rho in c(-.7, -.3, .3, .7)) {
       p <- set_bawl_values(sampled_pars(ctx_pos$design, doMap = FALSE), rho = rho)
       mapped <- mapped_pars_for(ctx_pos, p)
-      got <- with_bawl_corr_gh(80L, function()
-        as.numeric(do.call(EMC2:::calc_ll_oo,
-                          context_args(ctx_pos, p))))
+      got <- as.numeric(do.call(EMC2:::calc_ll_oo, context_args(ctx_pos, p)))
+      got_pw <- do.call(EMC2:::calc_ll_oo_pw, context_args(ctx_pos, p))
       ref <- reference_corr_ll(mapped, rho = rho, rt = .7,
-                               winner = 1L, posdrift = pos, n = 80L)
-      expect_equal(got, ref, tolerance = 3e-5,
+                               winner = 1L, posdrift = pos, n = 400L)
+      expect_equal(got, ref, tolerance = 1e-5,
                    info = paste("rho", rho, "posdrift", pos))
+      expect_equal(sum(got_pw), got, tolerance = 1e-10,
+                   info = paste("pw rho", rho, "posdrift", pos))
     }
   }
 })
@@ -281,7 +276,7 @@ test_that("truncated correlated likelihood uses an independent denominator", {
   p <- set_bawl_values(sampled_pars(ctx$design, doMap = FALSE), rho = -.6)
   mapped <- mapped_pars_for(ctx, p)
 
-  vals <- with_bawl_corr_gh(80L, function() {
+  vals <- local({
     unconditional <- dat
     unconditional$LT <- 0
     unconditional$UT <- Inf
@@ -291,9 +286,9 @@ test_that("truncated correlated likelihood uses an independent denominator", {
     ll_t <- as.numeric(do.call(EMC2:::calc_ll_oo, context_args(ctx, p)))
     # The reference computes P(LT < T < UT) under the already positive-
     # conditioned model, independently of either C++ denominator.
-    rule <- statmod::gauss.quad(80L, kind = "hermite")
-    log_pos <- log_z <- numeric(80L)
-    for (i in seq_len(80L)) {
+    rule <- statmod::gauss.quad(200L, kind = "hermite")
+    log_pos <- log_z <- numeric(200L)
+    for (i in seq_len(200L)) {
       z <- sqrt(2) * rule$nodes[i]
       node <- mapped
       for (r in seq_len(nrow(node))) {
@@ -360,24 +355,7 @@ test_that("the direct correlation sign changes the likelihood and role sign", {
   expect_equal(ll_flip, ll_at(-.6), tolerance = 1e-12)
 })
 
-test_that("GH node count is controllable", {
-  skip_on_cran()
-  dat <- data.frame(subjects = factor(1),
-                    S = factor("correct", levels = c("correct", "error")),
-                    R = factor("correct", levels = c("correct", "error")),
-                    rt = .7)
-  ctx <- make_bawl_context(dat, BAwLcorr(), rho_formula = rho ~ 1)
-  p <- set_bawl_values(sampled_pars(ctx$design, doMap = FALSE), rho = .8)
-  lls <- vapply(c(10L, 20L, 40L, 80L), function(n) {
-    with_bawl_corr_gh(n, function()
-      as.numeric(do.call(EMC2:::calc_ll_oo, context_args(ctx, p))))
-  }, numeric(1))
-  expect_true(all(is.finite(lls)))
-  names(lls) <- c("10", "20", "40", "80")
-  expect_lt(abs(lls[["40"]] - lls[["80"]]), 1e-3)
-})
-
-test_that("GH convergence covers the reviewer grid", {
+test_that("correlated likelihood quadrature covers the reviewer grid", {
   skip_on_cran()
   kinds <- c("regular", "truncated", "omission", "near_zero_large_sv")
   rhos <- c(.2, .5, .8, .95)
@@ -403,42 +381,25 @@ test_that("GH convergence covers the reviewer grid", {
     p <- set_bawl_values(sampled_pars(ctx$design, doMap = FALSE),
                           rho = rho, v = if (near_zero) .05 else .2,
                           sv = if (near_zero) 2 else .35)
-    args <- context_args(ctx, p)
-    vals <- vapply(c(10L, 20L, 40L, 80L), function(n)
-      with_bawl_corr_gh(n, function()
-        as.numeric(do.call(EMC2:::calc_ll_oo, args))), numeric(1))
-    c(kind = kind, rho = rho, q10 = vals[1], q20 = vals[2],
-      q40 = vals[3], q80 = vals[4],
-      d10 = abs(vals[1] - vals[4]), d20 = abs(vals[2] - vals[4]),
-      d40 = abs(vals[3] - vals[4]))
+    got <- as.numeric(do.call(EMC2:::calc_ll_oo, context_args(ctx, p)))
+    # The single-trial GH reference covers the response kinds; omissions
+    # exercise the generic evaluator and are asserted finite below.
+    ref <- if (kind == "omission") NA_real_ else
+      reference_corr_ll(mapped_pars_for(ctx, p), rho = rho, rt = .7,
+                        winner = 1L, posdrift = TRUE, n = 400L,
+                        LT = if (kind == "truncated") .2 else 0,
+                        UT = if (kind == "truncated") 1.5 else Inf)
+    c(rho = rho, got = got, ref = ref)
   }
   grid <- as.data.frame(do.call(rbind, lapply(kinds, function(kind)
-    do.call(rbind, lapply(rhos, function(rho) values_for(kind, rho))))),
+    do.call(rbind, lapply(rhos, function(rho)
+      c(kind = kind, values_for(kind, rho)))))),
                         stringsAsFactors = FALSE)
-  numeric_cols <- c("rho", "q10", "q20", "q40", "q80", "d10", "d20", "d40")
+  numeric_cols <- c("rho", "got", "ref")
   grid[numeric_cols] <- lapply(grid[numeric_cols], as.numeric)
-  expect_true(all(is.finite(as.matrix(grid[numeric_cols]))))
-  expect_lt(max(grid$d40[grid$rho <= .8]), 1e-4)
-  # The Q40-vs-Q80 gap is deliberately reported for the sharp boundary;
-  # production calls use the adaptive high-|rho| rule below.
-  expect_lt(max(grid$d40), 1e-2)
-
-  hard_ctx <- make_bawl_context(make_grid_data("near_zero_large_sv"),
-                                BAwLcorr(), rho_formula = rho ~ 1)
-  hard_p <- set_bawl_values(sampled_pars(hard_ctx$design, doMap = FALSE),
-                             rho = .95, v = .05, sv = 2)
-  hard_args <- context_args(hard_ctx, hard_p)
-  q200 <- with_bawl_corr_gh(200L, function()
-    as.numeric(do.call(EMC2:::calc_ll_oo, hard_args)))
-  q256 <- with_bawl_corr_gh(256L, function()
-    as.numeric(do.call(EMC2:::calc_ll_oo, hard_args)))
-  expect_lt(abs(q200 - q256), 1e-4)
-  old_gh <- Sys.getenv("EMC2_BAWLCORR_GH_N", unset = NA_character_)
-  on.exit(if (is.na(old_gh)) Sys.unsetenv("EMC2_BAWLCORR_GH_N") else
-            Sys.setenv(EMC2_BAWLCORR_GH_N = old_gh), add = TRUE)
-  Sys.unsetenv("EMC2_BAWLCORR_GH_N")
-  q_default <- as.numeric(do.call(EMC2:::calc_ll_oo, hard_args))
-  expect_equal(q_default, q200, tolerance = 1e-12)
+  expect_true(all(is.finite(grid$got)))
+  with_ref <- !is.na(grid$ref)
+  expect_lt(max(abs(grid$got[with_ref] - grid$ref[with_ref])), 1e-4)
 
   sweep <- seq(.1, .95, by = .05)
   sweep_ll <- vapply(sweep, function(rho) {
@@ -446,8 +407,7 @@ test_that("GH convergence covers the reviewer grid", {
                              BAwLcorr(), rho_formula = rho ~ 1)
     p <- set_bawl_values(sampled_pars(ctx$design, doMap = FALSE),
                           rho = rho, v = .05, sv = 2)
-    with_bawl_corr_gh(200L, function()
-      as.numeric(do.call(EMC2:::calc_ll_oo, context_args(ctx, p))))
+    as.numeric(do.call(EMC2:::calc_ll_oo, context_args(ctx, p)))
   }, numeric(1))
   expect_true(all(is.finite(sweep_ll)))
   expect_lt(max(abs(diff(sweep_ll, differences = 2))), .5)

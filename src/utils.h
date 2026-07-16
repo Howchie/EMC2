@@ -904,6 +904,27 @@ inline void dbawl_raw(const double* rt, const double* const* cols, int n_rows,
     const bool erl = (lg > 1e-12 || lk > 1e-12);
     if (tt <= 0.0 && !erl) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
     if (rt[i] <= 0.0) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
+    if (!erl) {
+      // The no-clock BAwL member is evaluated directly in natural space in
+      // the scalar adapter.  Keep that fast path in the raw callback too;
+      // routing every conditional GH node through dkilledleakyba_norm(...,
+      // log_out=true) needlessly enters the strict log wrapper and is costly
+      // in the correlated model.  The log evaluator remains the tail fallback.
+      double pdf = 0.0;
+      if (ba_natural_pdf(tt, A_[i], B_[i] + A_[i], v_[i], sv_[i], kval,
+                         pd, BAWL_DENOM_FLOOR, BA_ACCEPT_RAW, pdf)) {
+        out[i] = (pdf > 0.0)
+          ? raw_log_value(std::log(pdf), min_ll, floor_raw)
+          : raw_log_zero(min_ll, floor_raw);
+      } else {
+        const double log_pdf = log_ba_pdf(tt, A_[i], B_[i] + A_[i], v_[i],
+                                          sv_[i], kval, pd, BAWL_DENOM_FLOOR);
+        out[i] = (log_pdf > R_NegInf && emc2_isfinite(log_pdf))
+          ? raw_log_value(log_pdf, min_ll, floor_raw)
+          : raw_log_zero(min_ll, floor_raw);
+      }
+      continue;
+    }
     // Pass raw rt and t0; core function uses t0 to split EAM vs erlang time.
     const double log_pdf = dkilledleakyba_norm(
       rt[i], v_[i], B_[i] + A_[i], A_[i], sv_[i], t0_i, kval, lg, lk,
@@ -984,6 +1005,19 @@ inline void pbawl_raw(const double* rt, const double* const* cols, int n_rows,
     const bool erl = (lg > 1e-12 || lk > 1e-12);
     if (tt <= 0.0 && !erl) { out[i] = 0.0; continue; }
     if (rt[i] <= 0.0) { out[i] = 0.0; continue; }
+    if (!erl) {
+      double cdf = 0.0;
+      if (ba_natural_cdf(tt, A_[i], B_[i] + A_[i], v_[i], sv_[i], kval,
+                         pd, BAWL_DENOM_FLOOR, BA_ACCEPT_RAW, cdf)) {
+        out[i] = (cdf > 0.0) ? std::log1p(-cdf) : 0.0;
+      } else {
+        const double log_cdf = log_ba_cdf(tt, A_[i], B_[i] + A_[i], v_[i],
+                                          sv_[i], kval, pd, BAWL_DENOM_FLOOR);
+        if (log_cdf >= 0.0) out[i] = raw_log_zero(min_ll, floor_raw);
+        else out[i] = R_FINITE(log_cdf) ? log1m_exp(log_cdf) : 0.0;
+      }
+      continue;
+    }
     const double log_cdf = pkilledleakyba_norm(
       rt[i], v_[i], B_[i] + A_[i], A_[i], sv_[i], t0_i, kval, lg, lk,
       pd, true, ks, local_guess, omega

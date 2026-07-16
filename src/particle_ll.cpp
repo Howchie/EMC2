@@ -6242,12 +6242,21 @@ apply_trial_trunc:
   return total_ll;
 }
 
-// Correlated BAwL likelihood using a single shared Gaussian factor.  GH node
-// count is runtime-configurable through gh_quad.h.  The
-// ordinary race likelihood remains the conditional evaluator: for each GH
-// node we alter only v and sv, turn off its truncation correction, and let the
-// existing code handle winners, omissions, clocks, censoring, contaminants,
-// RACE masks, and expansion.  Truncation is then normalised as
+// Correlated BAwL likelihood using a single shared Gaussian factor.  The
+// factor is integrated out with two batched Gauss-Hermite passes: a fixed
+// wide scan locates each trial's integrand mass, then a small rule is
+// re-centered per trial on those moments (see gh_quad.h).  Broad central
+// trials reuse the scan integral; narrow or tail-peaked trials get the
+// recentered pass.  This replaces the old fixed 40/80/200-node schedule with
+// a default 12-node scan plus a selective 12-node refinement.
+// Conditional on a factor value the accumulators are independent, so two
+// evaluators supply the node integrands: a raw batched evaluator for the
+// common all-finite untruncated design (no allocation, kernels called
+// column-wise, z-invariants hoisted), and the ordinary race likelihood for
+// everything else: we alter only v and sv, turn off its truncation
+// correction, and let the existing code handle winners, omissions, clocks,
+// censoring, contaminants, RACE masks, and expansion.  Truncation is
+// normalised as
 //   log int p(data | z) phi(z) dz - log int Z(z) phi(z) dz,
 // rather than by averaging already-normalised node likelihoods.
 double c_log_likelihood_bawl_correlated(
@@ -6340,13 +6349,12 @@ double c_log_likelihood_bawl_correlated(
   // If all active loadings are zero, use the exact existing path.  Apart from
   // being cheaper, this keeps rho=0 bit-for-bit equivalent to independent BAwL.
   bool any_loading = false;
-  double max_abs_rho = 0.0;
   for (int r = 0; r < pars.nrow(); ++r) {
     if (!isok[r]) continue;
     const double rho = effective_rho[static_cast<size_t>(r)];
-    if (R_FINITE(rho)) max_abs_rho = std::max(max_abs_rho, std::fabs(rho));
     if (!R_FINITE(rho) || std::fabs(rho) > 1.0 || std::fabs(rho) > 1e-14) {
       any_loading = true;
+      break;
     }
   }
   if (!any_loading) {
@@ -6385,7 +6393,9 @@ double c_log_likelihood_bawl_correlated(
   }
 
   const bool joint_posdrift = ctx->use_posdrift;
-  std::vector<double> log_num(static_cast<size_t>(n_out), R_NegInf);
+  // Numerator/denominator integrals per unique trial; expanded rows share
+  // their unique trial's value and are written out at the end.
+  std::vector<double> log_num(static_cast<size_t>(n_unique), R_NegInf);
   std::vector<unsigned char> has_trunc_trial(static_cast<size_t>(n_unique), 0);
   // Joint positive-drift conditioning needs a denominator for every trial:
   // integral phi(z) prod_k q_k(z) Z+(z) dz.  Without joint conditioning the
@@ -6401,11 +6411,82 @@ double c_log_likelihood_bawl_correlated(
       }
     }
   }
-  const GHRule& gh = gh_rule(gh_node_count(max_abs_rho));
-  const double sqrt2 = std::sqrt(2.0);
   const int n_par = pars.ncol();
   if (n_par > 64 || n_lR > 64) {
     Rcpp::stop("c_log_likelihood_bawl_correlated: at most 64 parameter columns and 64 accumulators are supported.");
+  }
+
+  // Positive-drift denominators without truncation have a closed form: the
+  // Phi argument of racer k is a_k + b_k z, so
+  //   int phi(z) prod_k Phi(a_k + b_k z) dz
+  //     = Phi_K(a_k / sqrt(1 + b_k^2); rho_kl = b_k b_l / sqrt((1+b_k^2)(1+b_l^2))),
+  // the one-factor orthant probability.  K <= 2 covers the dominant designs
+  // exactly (norm_cdf_2d); larger K and truncated trials keep the quadrature
+  // denominator below.  At high |rho| this integrand is phi against a steep
+  // sigmoid, which fixed and moment-matched Hermite rules resolve worst, so
+  // the closed form is an accuracy fix, not just a shortcut.
+  std::vector<unsigned char> den_by_quadrature(static_cast<size_t>(n_unique), 0);
+  {
+    const double* v0c =
+      pars.begin() + static_cast<size_t>(emc2col::bawl::v) * n_trials;
+    const double* sv0c =
+      pars.begin() + static_cast<size_t>(emc2col::bawl::sv) * n_trials;
+    for (int j = 0; j < n_unique; ++j) {
+      if (has_trunc_trial[static_cast<size_t>(j)]) {
+        den_by_quadrature[static_cast<size_t>(j)] = 1;
+        continue;
+      }
+      if (!joint_posdrift) continue;  // denominator is exactly one
+      const int start = j * n_lR;
+      const int n_lR_j = has_RACE_col ? RACE[start] : n_lR;
+      double h[2] = {0.0, 0.0};
+      double b[2] = {0.0, 0.0};
+      int n_active = 0;
+      bool bad = false;
+      bool too_many = false;
+      for (int k = 0; k < n_lR_j; ++k) {
+        const int row = start + k;
+        if (has_RACE_col && !RACE_mask[row]) continue;
+        const double rho = effective_rho[static_cast<size_t>(row)];
+        if (!isok[row] || !R_FINITE(rho) || std::fabs(rho) > 1.0) {
+          bad = true;
+          break;
+        }
+        const double sv = sv0c[row];
+        const double svq =
+          sv * std::fmax(std::sqrt(std::fmax(0.0, 1.0 - std::fabs(rho))), 1e-12);
+        const double mu = v0c[row];
+        if (!(svq > 0.0) || !R_FINITE(mu)) { bad = true; break; }
+        const double slope =
+          ((rho < 0.0) ? -1.0 : 1.0) * sv * std::sqrt(std::fabs(rho));
+        const double bk = slope / svq;
+        const double hk = (mu / svq) / std::sqrt(1.0 + bk * bk);
+        if (!R_FINITE(bk) || !R_FINITE(hk)) { bad = true; break; }
+        if (n_active >= 2) { too_many = true; break; }
+        h[n_active] = hk;
+        b[n_active] = bk;
+        ++n_active;
+      }
+      if (bad) {
+        log_den[static_cast<size_t>(j)] = R_NegInf;
+        continue;
+      }
+      if (too_many) {
+        den_by_quadrature[static_cast<size_t>(j)] = 1;
+        continue;
+      }
+      if (n_active == 0) {
+        log_den[static_cast<size_t>(j)] = 0.0;
+      } else if (n_active == 1) {
+        log_den[static_cast<size_t>(j)] = R::pnorm(h[0], 0.0, 1.0, 1, 1);
+      } else {
+        const double rho12 =
+          b[0] * b[1] / std::sqrt((1.0 + b[0] * b[0]) * (1.0 + b[1] * b[1]));
+        const double p = norm_cdf_2d(h[0], h[1], rho12);
+        log_den[static_cast<size_t>(j)] =
+          (R_FINITE(p) && p > 0.0) ? std::log(std::fmin(p, 1.0)) : R_NegInf;
+      }
+    }
   }
 
   // Positivity reweighting is evaluated on the node-shifted Gaussian means
@@ -6430,9 +6511,152 @@ double c_log_likelihood_bawl_correlated(
     return out;
   };
 
-  for (int q = 0; q < static_cast<int>(gh.x.size()); ++q) {
-    const double z = sqrt2 * gh.x[static_cast<size_t>(q)];
-    const double log_w = std::log(gh_standard_normal_weight(gh, q));
+  // Both node evaluators report per-unique-trial integrands; expanded output
+  // rows share their unique trial's integral, so expansion happens once at
+  // the end rather than per node.  j_to_i lets the generic evaluator read one
+  // representative expanded row per unique trial.
+  std::vector<int> j_to_i(static_cast<size_t>(n_unique), -1);
+  if (expand.length() > 0) {
+    for (int i = n_out - 1; i >= 0; --i) j_to_i[static_cast<size_t>(expand[i] - 1)] = i;
+  } else {
+    for (int j = 0; j < n_unique; ++j) j_to_i[static_cast<size_t>(j)] = j;
+  }
+
+  // Raw batched conditional evaluator for the common design: all-finite RTs,
+  // no truncation, no global-kill/timer/nogo machinery outside the kernels.
+  // Only v depends on the factor value (one fused multiply-add per row); the
+  // residual sv, factor loadings, masks, and column pointers are hoisted out
+  // of the node loop, and the BAwL kernels write straight into flat buffers.
+  // Everything else falls back to the generic race evaluator below.
+  const bool use_fast_node_eval =
+      all_finite_trials && !has_truncation &&
+      model_dfun_raw != nullptr && model_pfun_raw != nullptr &&
+      !ctx->has_global_kill() && !ctx->gng &&
+      ctx->time_code == -1 && ctx->nogo_code == -1 &&
+      (!dadm.containsElementNamed("RACE") || has_RACE_col);
+
+  Rcpp::NumericVector rts_fast;
+  const double* fast_rt = nullptr;
+  const double* fast_v0 = nullptr;
+  std::vector<double> fast_vq, fast_svq, fast_slope, fast_res, fast_log1m_pc;
+  std::vector<int> fast_winner, fast_loser, fast_ok;
+  std::vector<const double*> fast_cols;
+  std::vector<int> fine_winner, fine_loser;
+  bool use_fine_masks = false;
+  if (use_fast_node_eval) {
+    rts_fast = dadm["rt"];
+    fast_rt = rts_fast.begin();
+    const double* pars_base = pars.begin();
+    fast_v0 = pars_base + static_cast<size_t>(emc2col::bawl::v) * n_trials;
+    const double* sv0 = pars_base + static_cast<size_t>(emc2col::bawl::sv) * n_trials;
+    fast_vq.resize(static_cast<size_t>(n_trials));
+    fast_svq.resize(static_cast<size_t>(n_trials));
+    fast_slope.resize(static_cast<size_t>(n_trials));
+    fast_res.assign(static_cast<size_t>(n_trials), R_NegInf);
+    fast_winner.resize(static_cast<size_t>(n_trials));
+    fast_loser.resize(static_cast<size_t>(n_trials));
+    fast_ok.resize(static_cast<size_t>(n_trials));
+    for (int r = 0; r < n_trials; ++r) {
+      const double rho = effective_rho[static_cast<size_t>(r)];
+      const bool ok_r = isok[r] && R_FINITE(rho) && std::fabs(rho) <= 1.0;
+      fast_ok[static_cast<size_t>(r)] = ok_r ? 1 : 0;
+      const double magnitude = std::fabs(rho);
+      const double loading = std::sqrt(magnitude);
+      const double residual = std::sqrt(std::fmax(0.0, 1.0 - magnitude));
+      const double sign = (rho < 0.0) ? -1.0 : 1.0;
+      // Mirrors the generic transform exactly: v_q = v + sign sv sqrt(|rho|) z,
+      // sv_q = sv max(sqrt(1-|rho|), 1e-12).
+      fast_slope[static_cast<size_t>(r)] = ok_r ? sign * sv0[r] * loading : 0.0;
+      fast_svq[static_cast<size_t>(r)] = sv0[r] * std::fmax(residual, 1e-12);
+      const bool active = !has_RACE_col || RACE_mask[r];
+      fast_winner[static_cast<size_t>(r)] = (active && winner[r]) ? 1 : 0;
+      fast_loser[static_cast<size_t>(r)] = (active && n_lR > 1 && !winner[r]) ? 1 : 0;
+    }
+    fast_cols.assign(static_cast<size_t>(std::max(n_par, 16)), nullptr);
+    for (int c = 0; c < n_par; ++c) {
+      fast_cols[static_cast<size_t>(c)] = pars_base + static_cast<size_t>(c) * n_trials;
+    }
+    fast_cols[static_cast<size_t>(emc2col::bawl::v)] = fast_vq.data();
+    fast_cols[static_cast<size_t>(emc2col::bawl::sv)] = fast_svq.data();
+
+    // The generic evaluator inherits the contaminant shift from the race
+    // path; with all-finite RTs that is a per-trial log(1 - pC) added to the
+    // numerator integrand.
+    fast_log1m_pc.assign(static_cast<size_t>(n_unique), 0.0);
+    Rcpp::List par_dimnames = pars.attr("dimnames");
+    Rcpp::CharacterVector par_names =
+      Rcpp::as<Rcpp::CharacterVector>(par_dimnames[1]);
+    int pc_col = -1;
+    for (int c = 0; c < par_names.size(); ++c) {
+      if (Rcpp::as<std::string>(par_names[c]) == "pContaminant") { pc_col = c; break; }
+    }
+    if (pc_col >= 0) {
+      const double* pc_ptr = pars_base + static_cast<size_t>(pc_col) * n_trials;
+      for (int j = 0; j < n_unique; ++j) {
+        const double pC = pc_ptr[j * n_lR];
+        if (pC != 0.0) fast_log1m_pc[static_cast<size_t>(j)] = std::log1p(-pC);
+      }
+    }
+  }
+
+  // Evaluators take one latent value per unique trial so the refined pass
+  // can center each trial's rule on its own integrand; a shared node is just
+  // a constant z_by_trial.
+  auto evaluate_node_fast = [&](const double* z_by_trial, bool need_num,
+                                std::vector<double>& node_num,
+                                std::vector<double>& node_den) {
+    node_num.assign(static_cast<size_t>(n_unique), R_NegInf);
+    node_den.assign(static_cast<size_t>(n_unique),
+                    joint_posdrift ? R_NegInf : 0.0);
+    for (int r = 0; r < n_trials; ++r) {
+      fast_vq[static_cast<size_t>(r)] =
+        fast_v0[r] + fast_slope[static_cast<size_t>(r)] * z_by_trial[r / n_lR];
+    }
+    const std::vector<int>& winner_mask = use_fine_masks ? fine_winner : fast_winner;
+    const std::vector<int>& loser_mask = use_fine_masks ? fine_loser : fast_loser;
+    if (need_num) {
+      model_dfun_raw(fast_rt, fast_cols.data(), n_trials, winner_mask.data(),
+                     fast_ok.data(), fast_res.data(), R_NegInf, ctx);
+      if (n_lR > 1) {
+        model_pfun_raw(fast_rt, fast_cols.data(), n_trials, loser_mask.data(),
+                       fast_ok.data(), fast_res.data(), R_NegInf, ctx);
+      }
+    }
+    for (int j = 0; j < n_unique; ++j) {
+      const int start = j * n_lR;
+      const int n_lR_j = has_RACE_col ? RACE[start] : n_lR;
+      double s = 0.0;
+      double lp = 0.0;
+      for (int k = 0; k < n_lR_j; ++k) {
+        const int row = start + k;
+        if (has_RACE_col && !RACE_mask[row]) continue;
+        if (need_num) s += fast_res[static_cast<size_t>(row)];
+        if (!joint_posdrift || lp == R_NegInf) continue;
+        if (!fast_ok[static_cast<size_t>(row)]) { lp = R_NegInf; continue; }
+        const double sd = fast_svq[static_cast<size_t>(row)];
+        const double mu = fast_vq[static_cast<size_t>(row)];
+        if (!(sd > 0.0) || !R_FINITE(mu)) { lp = R_NegInf; continue; }
+        const double log_q = R::pnorm(mu / sd, 0.0, 1.0, 1, 1);
+        if (!R_FINITE(log_q)) { lp = R_NegInf; continue; }
+        lp += log_q;
+      }
+      if (need_num)
+        node_num[static_cast<size_t>(j)] =
+          lp + s + fast_log1m_pc[static_cast<size_t>(j)];
+      if (joint_posdrift) node_den[static_cast<size_t>(j)] = lp;
+    }
+  };
+
+  // Generic conditional evaluator: one shared-race pass per node vector.
+  // need_num/need_den let the refinement passes skip the parts they do not
+  // consume (the denominator pass needs no race likelihood, only the
+  // positivity product and truncation normalisers).
+  auto evaluate_node = [&](const double* z_by_trial, bool need_num,
+                           bool need_den, std::vector<double>& node_num,
+                           std::vector<double>& node_den) {
+    node_num.assign(static_cast<size_t>(n_unique), R_NegInf);
+    node_den.assign(static_cast<size_t>(n_unique),
+                    joint_posdrift ? R_NegInf : 0.0);
     Rcpp::NumericMatrix pars_q = Rcpp::clone(pars);
     Rcpp::LogicalVector isok_q = Rcpp::clone(isok);
 
@@ -6451,7 +6675,7 @@ double c_log_likelihood_bawl_correlated(
       const double loading = std::sqrt(magnitude);
       const double residual = std::sqrt(std::fmax(0.0, 1.0 - magnitude));
       const double sign = (rho < 0.0) ? -1.0 : 1.0;
-      pars_q(r, emc2col::bawl::v) += sign * sv * loading * z;
+      pars_q(r, emc2col::bawl::v) += sign * sv * loading * z_by_trial[r / n_lR];
       // Keep the conditional SD strictly positive at the exact boundary. The
       // public bound stays just inside +/-1, but this avoids undefined scalar
       // kernels for hand-built parameter matrices at rho == +/-1.
@@ -6465,20 +6689,24 @@ double c_log_likelihood_bawl_correlated(
     }
 
     ContextForRaceModels node_ctx = *ctx;
-    Rcpp::NumericVector node_ll(n_out);
-    c_log_likelihood_race(pars_q, dadm, pdf1, cdf1, n_trials,
-                          winner, expand, R_NegInf, isok_q, n_lR,
-                          &node_ctx, all_finite_trials,
-                          model_dfun_raw, model_pfun_raw, logS_at_t,
-                          shared, &node_ll, false);
+    if (need_num) {
+      Rcpp::NumericVector node_ll(n_out);
+      c_log_likelihood_race(pars_q, dadm, pdf1, cdf1, n_trials,
+                            winner, expand, R_NegInf, isok_q, n_lR,
+                            &node_ctx, all_finite_trials,
+                            model_dfun_raw, model_pfun_raw, logS_at_t,
+                            shared, &node_ll, false);
 
-    for (int i = 0; i < n_out; ++i) {
-      const int j = expand.length() > 0 ? expand[i] - 1 : i;
-      log_num[static_cast<size_t>(i)] =
-        log_sum_exp(log_num[static_cast<size_t>(i)],
-                    log_w + log_pos[static_cast<size_t>(j)] + node_ll[i]);
+      // Expanded rows of one unique trial share the integrand; report once.
+      for (int j = 0; j < n_unique; ++j) {
+        const int i = j_to_i[static_cast<size_t>(j)];
+        if (i < 0) continue;
+        node_num[static_cast<size_t>(j)] =
+          log_pos[static_cast<size_t>(j)] + node_ll[i];
+      }
     }
 
+    if (!need_den) return;
     if (has_truncation) {
       // The factor must remain inside the truncation normaliser:
       //   Z = int [S_race(LT | z) - S_race(UT | z)] phi(z) dz.
@@ -6635,9 +6863,8 @@ double c_log_likelihood_bawl_correlated(
           }
 
           if (has_trunc_trial[static_cast<size_t>(j)]) {
-            log_den[static_cast<size_t>(j)] =
-              log_sum_exp(log_den[static_cast<size_t>(j)],
-                          log_w + log_pos[static_cast<size_t>(j)] + log_z);
+            node_den[static_cast<size_t>(j)] =
+              log_pos[static_cast<size_t>(j)] + log_z;
           }
         }
       }
@@ -6649,9 +6876,171 @@ double c_log_likelihood_bawl_correlated(
       // unit-mass term for it.
       for (int j = 0; j < n_unique; ++j) {
         if (has_trunc_trial[static_cast<size_t>(j)]) continue;
-        log_den[static_cast<size_t>(j)] =
-          log_sum_exp(log_den[static_cast<size_t>(j)],
-                      log_w + log_pos[static_cast<size_t>(j)]);
+        node_den[static_cast<size_t>(j)] = log_pos[static_cast<size_t>(j)];
+      }
+    }
+  };
+
+  auto eval_selected = [&](const double* z_by_trial, bool need_num,
+                           bool need_den, std::vector<double>& num,
+                           std::vector<double>& den) {
+    if (use_fast_node_eval) evaluate_node_fast(z_by_trial, need_num, num, den);
+    else evaluate_node(z_by_trial, need_num, need_den, num, den);
+  };
+
+  // Two batched passes of Gauss-Hermite nodes.
+  //
+  // Scan pass: a fixed shared rule whose node masses give each trial's
+  // integrand mean and SD.  The scan is also used directly for broad,
+  // central trials; only difficult trials pay for the recentered pass.
+  //
+  // Refined pass: a smaller rule re-centered per trial on those moments.
+  // A weak-drift trial whose winner-implied peak sits in a tail or is narrow
+  // gets its nodes placed inside that peak.  Numerator and denominator
+  // integrands peak in different places (the denominator mass sits near the
+  // prior mode), so each gets its own centering; the denominator refinement
+  // needs no race pass.
+  const GHRule& scan_rule = gh_rule(
+      bawl_corr_quad_nodes("EMC2_BAWLCORR_SCAN_N", 12));
+  const GHRule& fine_rule = gh_rule(
+      bawl_corr_quad_nodes("EMC2_BAWLCORR_FINE_N", 12));
+  const int n_scan = static_cast<int>(scan_rule.x.size());
+  const int n_fine = static_cast<int>(fine_rule.x.size());
+  const double sqrt2 = std::sqrt(2.0);
+  bool any_quad_den = false;
+  for (int j = 0; j < n_unique; ++j) {
+    if (den_by_quadrature[static_cast<size_t>(j)]) { any_quad_den = true; break; }
+  }
+
+  std::vector<double> node_num;
+  std::vector<double> node_den;
+  std::vector<double> z_by_trial(static_cast<size_t>(n_unique));
+  std::vector<double> z_scan(static_cast<size_t>(n_scan));
+  std::vector<unsigned char> refine_num(static_cast<size_t>(n_unique), 1);
+  // Column-major (node fastest) log node masses from the scan pass.
+  std::vector<double> scan_num(static_cast<size_t>(n_scan) * n_unique, R_NegInf);
+  std::vector<double> scan_den(any_quad_den
+      ? static_cast<size_t>(n_scan) * n_unique : 0, R_NegInf);
+  for (int q = 0; q < n_scan; ++q) {
+    const double z = sqrt2 * scan_rule.x[static_cast<size_t>(q)];
+    z_scan[static_cast<size_t>(q)] = z;
+    std::fill(z_by_trial.begin(), z_by_trial.end(), z);
+    eval_selected(z_by_trial.data(), true, any_quad_den, node_num, node_den);
+    const double log_w = std::log(gh_standard_normal_weight(scan_rule, q));
+    for (int j = 0; j < n_unique; ++j) {
+      scan_num[static_cast<size_t>(j) * n_scan + q] =
+        log_w + node_num[static_cast<size_t>(j)];
+      if (any_quad_den)
+        scan_den[static_cast<size_t>(j) * n_scan + q] =
+          log_w + node_den[static_cast<size_t>(j)];
+    }
+  }
+
+  std::vector<AGHCenter> center_num(static_cast<size_t>(n_unique));
+  std::vector<AGHCenter> center_den(
+      any_quad_den ? static_cast<size_t>(n_unique) : 0);
+  for (int j = 0; j < n_unique; ++j) {
+    center_num[static_cast<size_t>(j)] = agh_center_from_scan(
+        &scan_num[static_cast<size_t>(j) * n_scan], z_scan.data(), n_scan);
+    if (any_quad_den)
+      center_den[static_cast<size_t>(j)] = agh_center_from_scan(
+          &scan_den[static_cast<size_t>(j) * n_scan], z_scan.data(), n_scan);
+  }
+
+  auto fine_log_gauss_weights = [](const GHRule& rule) {
+    std::vector<double> lgw(rule.x.size());
+    for (size_t q = 0; q < rule.x.size(); ++q) {
+      lgw[q] = std::log(rule.w[q]) + rule.x[q] * rule.x[q];
+    }
+    return lgw;
+  };
+  const std::vector<double> fine_lgw = fine_log_gauss_weights(fine_rule);
+
+  std::vector<double> lw_by_trial(static_cast<size_t>(n_unique));
+  // The raw scan is already a valid quadrature estimate when its mass is
+  // broad and well inside the scan rule.  Keep the refinement masks separate
+  // so easy trials do not re-run the BAwL kernels in the second pass; narrow
+  // or tail-peaked trials retain the recentered pass for accuracy.
+  if (use_fast_node_eval && !any_quad_den) {
+    for (int j = 0; j < n_unique; ++j) {
+      const AGHCenter& c = center_num[static_cast<size_t>(j)];
+      const double* g = &scan_num[static_cast<size_t>(j) * n_scan];
+      double peak = R_NegInf;
+      int peak_i = -1;
+      for (int q = 0; q < n_scan; ++q) {
+        if (g[q] > peak) { peak = g[q]; peak_i = q; }
+      }
+      const bool at_scan_edge = peak_i == 0 || peak_i == n_scan - 1;
+      // These thresholds are deliberately conservative: the normal scan is
+      // reused only when it has a comfortably wide, central mass.  The fine
+      // pass remains the fallback for the high-rho/narrow cases that motivated
+      // the adaptive rule in the first place.
+      const bool well_resolved = R_FINITE(peak) && !at_scan_edge &&
+        std::fabs(c.mu) < 0.75 && c.sigma > 0.45;
+      refine_num[static_cast<size_t>(j)] = well_resolved ? 0 : 1;
+      if (!well_resolved) continue;
+      double scan_ll = R_NegInf;
+      for (int q = 0; q < n_scan; ++q)
+        scan_ll = log_sum_exp(scan_ll, g[q]);
+      log_num[static_cast<size_t>(j)] = scan_ll;
+    }
+    fine_winner = fast_winner;
+    fine_loser = fast_loser;
+    for (int j = 0; j < n_unique; ++j) {
+      if (refine_num[static_cast<size_t>(j)]) continue;
+      const int start = j * n_lR;
+      const int n_lR_j = has_RACE_col ? RACE[start] : n_lR;
+      for (int k = 0; k < n_lR_j; ++k) {
+        fine_winner[static_cast<size_t>(start + k)] = 0;
+        fine_loser[static_cast<size_t>(start + k)] = 0;
+      }
+    }
+    use_fine_masks = true;
+  }
+
+  // The per-node raw evaluator consults these masks only during the optional
+  // refinement pass; the scan still evaluates every active racer.
+  for (int q = 0; q < n_fine; ++q) {
+    const double x = sqrt2 * fine_rule.x[static_cast<size_t>(q)];
+    for (int j = 0; j < n_unique; ++j) {
+      const AGHCenter& c = center_num[static_cast<size_t>(j)];
+      const double z = c.mu + c.sigma * x;
+      z_by_trial[static_cast<size_t>(j)] = z;
+      lw_by_trial[static_cast<size_t>(j)] =
+        agh_log_weight(fine_lgw[static_cast<size_t>(q)], c.sigma, z);
+    }
+    eval_selected(z_by_trial.data(), true, false, node_num, node_den);
+    for (int j = 0; j < n_unique; ++j) {
+      if (!refine_num[static_cast<size_t>(j)]) continue;
+      log_num[static_cast<size_t>(j)] = log_sum_exp(
+          log_num[static_cast<size_t>(j)],
+          lw_by_trial[static_cast<size_t>(j)] + node_num[static_cast<size_t>(j)]);
+    }
+  }
+
+  if (any_quad_den) {
+    // Quadrature denominators (truncated trials, or more than two racers)
+    // carry the steep positivity sigmoid and the truncation window, so they
+    // get a denser re-centered rule.  These evaluations skip the race pass
+    // entirely and are cheap relative to the numerator sweeps.
+    const GHRule& den_rule = gh_rule(64);
+    const int n_den = static_cast<int>(den_rule.x.size());
+    const std::vector<double> den_lgw = fine_log_gauss_weights(den_rule);
+    for (int q = 0; q < n_den; ++q) {
+      const double x = sqrt2 * den_rule.x[static_cast<size_t>(q)];
+      for (int j = 0; j < n_unique; ++j) {
+        const AGHCenter& c = center_den[static_cast<size_t>(j)];
+        const double z = c.mu + c.sigma * x;
+        z_by_trial[static_cast<size_t>(j)] = z;
+        lw_by_trial[static_cast<size_t>(j)] =
+          agh_log_weight(den_lgw[static_cast<size_t>(q)], c.sigma, z);
+      }
+      eval_selected(z_by_trial.data(), false, true, node_num, node_den);
+      for (int j = 0; j < n_unique; ++j) {
+        if (!den_by_quadrature[static_cast<size_t>(j)]) continue;
+        log_den[static_cast<size_t>(j)] = log_sum_exp(
+            log_den[static_cast<size_t>(j)],
+            lw_by_trial[static_cast<size_t>(j)] + node_den[static_cast<size_t>(j)]);
       }
     }
   }
@@ -6660,7 +7049,7 @@ double c_log_likelihood_bawl_correlated(
   if (expand.length() > 0) {
     for (int i = 0; i < n_out; ++i) {
       const int j = expand[i] - 1;
-      double value = log_num[static_cast<size_t>(i)] - log_den[static_cast<size_t>(j)];
+      double value = log_num[static_cast<size_t>(j)] - log_den[static_cast<size_t>(j)];
       if (!R_FINITE(value) || value < min_ll) value = min_ll;
       if (trial_ll_out != nullptr) (*trial_ll_out)[i] = value;
       total_ll += value;
