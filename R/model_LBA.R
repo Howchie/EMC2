@@ -402,10 +402,10 @@ rBAwL <- function(lR, pars, ok = rep(TRUE, length(lR)),
   out
 }
 
-# One-factor correlated BAwL reference simulator.  rho is a signed loading,
-# not a forced target/non-target sign: changing a row's sign changes its
-# direction on the shared factor, while rho == 0 makes that racer independent
-# of the factor.  rBAwL retains the common leak/clock/race implementation.
+# One-factor correlated BAwL reference simulator.  The low-level `pars` input
+# carries the signed row-level factor-variance share consumed by the scalar
+# kernels.  BAwLcorr's Ttransform maps a cell-level rho onto these row values
+# when the expanded data contain the lM role indicator.
 rBAwL_corr <- function(lR, pars, ok = rep(TRUE, nrow(pars)),
                        posdrift = TRUE, eps = 1e-10, erlang = 1L,
                        guess = FALSE, global = FALSE) {
@@ -414,20 +414,40 @@ rBAwL_corr <- function(lR, pars, ok = rep(TRUE, nrow(pars)),
   if (any(!is.finite(pars[, "rho"]) | abs(pars[, "rho"]) > 1))
     stop("Correlated BAwL rho values must be finite and lie in [-1, 1].")
   nr <- length(levels(lR))
-  n_trials <- nrow(pars) / nr
   if (nr <= 0 || nrow(pars) %% nr != 0)
     stop("Correlated BAwL requires rows grouped by accumulator within trial.")
+  n_trials <- nrow(pars) / nr
   rho <- pars[, "rho"]
-  magnitude <- abs(rho)
-  loading <- sqrt(magnitude)
-  residual <- sqrt(pmax(0, 1 - magnitude))
-  residual <- pmax(residual, 1e-12)
-  z <- rep(rnorm(n_trials), each = nr)
-  mu <- pars[, "v"] + sign(rho) * pars[, "sv"] * loading * z
-  sd <- pars[, "sv"] * residual
-  lower <- if (posdrift) 0 else -Inf
-  drifts <- if (posdrift) msm::rtnorm(length(mu), mean = mu, sd = sd, lower = lower) else
-    rnorm(length(mu), mean = mu, sd = sd)
+  drifts <- rep(Inf, nrow(pars))
+
+  # For posdrift=TRUE the model is a jointly truncated Gaussian drift vector:
+  # draw the shared factor and all active untruncated drifts together, then
+  # reject the complete trial if any active drift is non-positive.  This keeps
+  # the factor distribution correctly reweighted by the probability that all
+  # active drifts are positive.
+  max_iter <- 100000L
+  for (j in seq_len(n_trials)) {
+    rows <- ((j - 1L) * nr + 1L):(j * nr)
+    active <- rows[ok[rows]]
+    if (!length(active)) next
+    accepted <- FALSE
+    for (iter in seq_len(max_iter)) {
+      z <- rnorm(1)
+      magnitude <- abs(rho[active])
+      loading <- sqrt(magnitude)
+      residual <- pmax(sqrt(pmax(0, 1 - magnitude)), 1e-12)
+      mu <- pars[active, "v"] + sign(rho[active]) * pars[active, "sv"] * loading * z
+      draw <- rnorm(length(active), mean = mu, sd = pars[active, "sv"] * residual)
+      if (!posdrift || all(draw > 0)) {
+        drifts[active] <- draw
+        accepted <- TRUE
+        break
+      }
+    }
+    if (!accepted)
+      stop("Correlated BAwL jointly positive drift rejection exceeded ",
+           max_iter, " attempts; check that the drift means are not far below zero.")
+  }
   rBAwL(lR, pars, ok = ok, posdrift = posdrift, eps = eps,
         erlang = erlang, guess = guess, global = global, .drifts = drifts)
 }
@@ -447,8 +467,12 @@ rBAwL_corr <- function(lR, pars, ok = rep(TRUE, nrow(pars)),
 #' @param posdrift logical, if TRUE drifts are truncated to be positive.
 #' @param erlang integer shape of the killing process (1=exponential, 2=Erlang-2)
 #' @param erlang_type string, one of "none", "local_kill", "global_kill", "local_guess", "local_kill_guess"
-#' @param correlated logical; if TRUE add a signed one-factor `rho` loading
-#'   for correlated BAwL drift draws.
+#' @param correlated logical; if TRUE add a direct cell-level `rho` correlation
+#'   for correlated BAwL drift draws.  Correlated designs require `matchfun`:
+#'   the resulting `lM` role indicator maps the direct correlation to signed
+#'   row loadings.  The `rho` design must be shared within each trial; use a
+#'   row-level participation factor (for example `coupled`) only to make
+#'   structurally independent racers such as PM rows zero.
 #'
 #' @export
 BAwL <- function(posdrift = TRUE, erlang_shape = 1L,
@@ -501,10 +525,10 @@ BAwL <- function(posdrift = TRUE, erlang_shape = 1L,
   exception <- c(exception, pContaminant = 0)
 
   if (correlated) {
-    # rho is a signed one-factor loading.  It is sampled on the unconstrained
-    # real line and mapped to (-1, 1) by the existing pnorm transform.  The
-    # endpoints are not reachable, which avoids zero conditional drift SDs in
-    # the scalar BAwL kernels.
+    # rho is a direct cell-level race correlation.  BAwLcorr's Ttransform
+    # derives the signed row-level variance shares from it when lM is present.
+    # The endpoints are not reachable, which avoids zero conditional drift SDs
+    # in the scalar BAwL kernels.
     p_types <- c(p_types, rho = qnorm(0.5))
     transform <- c(transform, rho = "pnorm")
     minmax <- cbind(minmax, rho = c(-1, 1))
@@ -520,6 +544,7 @@ BAwL <- function(posdrift = TRUE, erlang_shape = 1L,
   list(
     type   = "RACE",
     c_name = paste0(base_name, type_suffix, if (correlated) "_CORR" else ""),
+    correlated = correlated,
     p_types = p_types,
     p_types_canonical = c("v", "sv", "B", "A", "t0", "k"),
     transform = transform_spec,
@@ -527,6 +552,23 @@ BAwL <- function(posdrift = TRUE, erlang_shape = 1L,
       minmax = minmax,
       exception = exception),
     Ttransform = function(pars, dadm) {
+      if (correlated) {
+        if (is.null(dadm) || !"lM" %in% names(dadm) ||
+            nrow(pars) != nrow(dadm)) {
+          stop("BAwLcorr requires a matchfun-generated lM role indicator in the expanded data.")
+        }
+        # The sampled coefficient is one direct correlation for the cell.
+        # Correct is the positive reference racer; incorrect receives the cell
+        # sign.  Independent rows (for example PM) must be made structurally
+        # zero by the rho design and its constants.
+        rho_cell <- pars[, "rho"]
+        correct <- as.character(dadm$lM) == "TRUE"
+        if (anyNA(correct))
+          stop("BAwLcorr matchfun produced missing lM values.")
+        pars[, "rho"] <- ifelse(
+          correct, abs(rho_cell), sign(rho_cell) * abs(rho_cell)
+        )
+      }
       lambda_factor <- if (erlang_shape_cpp == 2L) 2 else 1
       n <- nrow(pars)
       mG_val <- pars[, "mG"]
@@ -581,9 +623,20 @@ BAwL <- function(posdrift = TRUE, erlang_shape = 1L,
 
 #' Correlated Ballistic Accumulator with Leak
 #'
-#' Adds a signed one-factor loading `rho` to BAwL.  Accumulators with rho=0
-#' are independent of the shared factor, which is useful for PM/false-alarm
-#' racers.  The C++ likelihood supports arbitrary numbers of accumulators.
+#' Adds a one-factor correlation `rho` to BAwL.  In an expanded race design
+#' with `lM`, `rho` is the pairwise correlation between the correct and
+#' incorrect racers' underlying Gaussian drifts for each trial type.  The
+#' correct racer is the positive reference, and the incorrect racer receives
+#' the cell sign.  The coefficient must be shared within a trial; use a
+#' derived participation factor and a constant to set PM/false-alarm rows to
+#' zero, for example:
+#' `coupled = function(d) factor(d$lR != "pm", c(FALSE, TRUE), c("no", "yes"))`,
+#' `rho ~ 0 + coupled`, `constants = c(rho_coupledno = 0)`.
+#'
+#' With `posdrift = TRUE`, BAwLcorr conditions the joint correlated Gaussian
+#' drift vector on all active drifts being positive.  Thus `rho` is the
+#' correlation of the underlying untruncated Gaussian, while the marginals
+#' retain standard positive-drift BAwL semantics.
 #'
 #' @param posdrift logical, if TRUE drifts are truncated to be positive.
 #' @param erlang_shape integer shape of the killing process.

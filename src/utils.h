@@ -117,9 +117,11 @@ struct ContextForRaceModels {
     bool bawl_k_fixed_zero = false;
     bool bawl_clocks_fixed_off = false;
 
-    // Correlated BAwL uses one shared standard-normal factor.  Each
-    // accumulator's signed rho loading determines its loading on that factor;
-    // rho == 0 leaves that racer independent of the shared draw.
+    // Correlated BAwL uses one shared standard-normal factor.  The low-level
+    // row rho determines the accumulator's signed factor variance share;
+    // BAwLcorr's R Ttransform maps a cell-level correlation into these row
+    // values before the kernel is called.  rho == 0 leaves that racer
+    // independent of the shared draw.
     bool bawl_correlated = false;
     int bawl_rho_index = -1;
 

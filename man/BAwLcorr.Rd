@@ -18,7 +18,18 @@ BAwLcorr(
 \item{erlang_type}{clock configuration, as in \code{\link[=BAwL]{BAwL()}}.}
 }
 \description{
-Adds a signed one-factor loading \code{rho} to BAwL.  Accumulators with rho=0
-are independent of the shared factor, which is useful for PM/false-alarm
-racers.  The C++ likelihood supports arbitrary numbers of accumulators.
+Adds a one-factor correlation \code{rho} to BAwL.  In an expanded race design
+with \code{lM}, \code{rho} is the pairwise correlation between the correct and
+incorrect racers' underlying Gaussian drifts for each trial type.  The correct
+racer is the positive reference and the incorrect racer receives the cell
+sign.  The coefficient must be shared within a trial.  To exclude a PM or
+false-alarm racer, use a derived participation factor and fix its coefficient
+to zero, for example \code{coupled = function(d) factor(d$lR != "pm", c(FALSE,
+TRUE), c("no", "yes"))}, \code{rho ~ 0 + coupled}, and
+\code{constants = c(rho_coupledno = 0)}.
+
+With \code{posdrift = TRUE}, the model conditions the joint correlated
+Gaussian drift vector on all active drifts being positive.  Thus \code{rho}
+is the correlation of the underlying untruncated Gaussian, while the marginals
+retain standard positive-drift BAwL semantics.
 }

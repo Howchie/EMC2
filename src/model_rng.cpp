@@ -321,10 +321,11 @@ Rcpp::List rbawl_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
   return rbawl_cpp_impl(pars, lR_levels, ok, posdrift, erlang, guess, global, nullptr);
 }
 
-// Correlated BAwL simulator.  rho is a signed loading on one shared standard
-// normal factor; rho == 0 gives an accumulator-specific draw only.  Thus an
-// arbitrary number of racers can participate, and independent PM/false-alarm
-// racers are represented by rho = 0.
+// Correlated BAwL simulator.  The low-level entry point receives signed
+// row-level factor-variance shares; BAwLcorr's R Ttransform derives those from
+// one cell-level rho when accumulator roles are available.  rho == 0 gives an
+// accumulator-specific draw only, so arbitrary races and independent PM/false-
+// alarm racers remain supported.
 // [[Rcpp::export]]
 Rcpp::List rbawl_corr_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
                           Rcpp::LogicalVector ok, bool posdrift, int erlang,
@@ -339,24 +340,43 @@ Rcpp::List rbawl_corr_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_lev
   }
   if (ok.size() != n_rows) Rcpp::stop("rbawl_corr_cpp: ok has the wrong length.");
 
-  std::vector<double> z(static_cast<size_t>(n_trials));
-  for (int tr = 0; tr < n_trials; ++tr) z[static_cast<size_t>(tr)] = R::norm_rand();
-
   std::vector<double> drifts(static_cast<size_t>(n_rows), R_PosInf);
-  for (int r = 0; r < n_rows; ++r) {
-    if (!ok[r]) continue;
-    const double rho = pars(r, irho);
-    if (!R_FINITE(rho) || std::fabs(rho) > 1.0) {
-      Rcpp::stop("rbawl_corr_cpp: rho must be finite and lie in [-1, 1].");
+  const int max_iter = 100000;
+  for (int tr = 0; tr < n_trials; ++tr) {
+    const int start = tr * n_acc;
+    bool has_active = false;
+    for (int a = 0; a < n_acc; ++a) has_active = has_active || static_cast<bool>(ok[start + a]);
+    if (!has_active) continue;
+
+    bool accepted = false;
+    for (int iter = 0; iter < max_iter; ++iter) {
+      const double z = R::norm_rand();
+      bool positive = true;
+      for (int a = 0; a < n_acc; ++a) {
+        const int r = start + a;
+        if (!ok[r]) continue;
+        const double rho = pars(r, irho);
+        if (!R_FINITE(rho) || std::fabs(rho) > 1.0) {
+          Rcpp::stop("rbawl_corr_cpp: rho must be finite and lie in [-1, 1].");
+        }
+        const double magnitude = std::fabs(rho);
+        const double direction = (rho < 0.0) ? -1.0 : 1.0;
+        const double mu = pars(r, iv) +
+          direction * pars(r, isv) * std::sqrt(magnitude) * z;
+        const double sd = pars(r, isv) *
+          std::fmax(std::sqrt(std::fmax(0.0, 1.0 - magnitude)), 1e-12);
+        const double draw = R::rnorm(mu, sd);
+        drifts[static_cast<size_t>(r)] = draw;
+        if (posdrift && !(draw > 0.0)) positive = false;
+      }
+      if (!posdrift || positive) {
+        accepted = true;
+        break;
+      }
     }
-    const double magnitude = std::fabs(rho);
-    const double sign = (rho < 0.0) ? -1.0 : 1.0;
-    const double mu = pars(r, iv) +
-      sign * pars(r, isv) * std::sqrt(magnitude) * z[static_cast<size_t>(r / n_acc)];
-    const double sd = pars(r, isv) *
-      std::fmax(std::sqrt(std::fmax(0.0, 1.0 - magnitude)), 1e-12);
-    drifts[static_cast<size_t>(r)] = rtnorm_lower_r(
-      mu, sd, posdrift ? 0.0 : R_NegInf);
+    if (!accepted) {
+      Rcpp::stop("rbawl_corr_cpp: jointly positive drift rejection exceeded %d attempts; check that the drift means are not far below zero.", max_iter);
+    }
   }
 
   return rbawl_cpp_impl(pars, lR_levels, ok, posdrift, erlang,

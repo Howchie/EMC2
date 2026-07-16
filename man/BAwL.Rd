@@ -16,8 +16,12 @@ BAwL(
 
 \item{erlang_type}{string, one of "none", "local_kill", "global_kill", "local_guess", "local_kill_guess"}
 
-\item{correlated}{logical; if TRUE add a signed one-factor \code{rho} loading
-for correlated BAwL drift draws.}
+\item{correlated}{logical; if TRUE add a direct cell-level \code{rho}
+correlation for correlated BAwL drift draws.  Correlated designs require
+\code{matchfun}: its \code{lM} role indicator maps the direct correlation to
+signed row loadings.  The \code{rho} design must be shared within each trial;
+use a row-level participation factor only to set structurally independent
+racers such as PM rows to zero.}
 
 \item{erlang}{integer shape of the killing process (1=exponential, 2=Erlang-2)}
 }

@@ -101,6 +101,10 @@ design <- function(formula = NULL,factors = NULL,Rlevels = NULL,model,data=NULL,
   if (!is.function(model)) {
     stop("model must be a function or a model list (e.g., LBA())")
   }
+  model_spec <- tryCatch(model(), error = function(e) NULL)
+  if (is.list(model_spec) && isTRUE(model_spec$correlated) && is.null(matchfun)) {
+    stop("BAwLcorr requires matchfun so it can construct the lM role indicator.")
+  }
   if(!is.null(optionals$pre_transform)){
     pre_transform <- optionals$pre_transform
   } else {
@@ -788,6 +792,47 @@ design_model <- function(data,design,model=NULL,
   out <- lapply(design$Flist, make_dm, da = da, Fcovariates = design$Fcovariates,
                 add_da = add_da, all_cells_dm = all_cells_dm, compress_dms = compress_dms,
                 drop_unobserved = drop_unobserved)
+
+  # sampled_pars()/mapped_pars() deliberately build a compact parameter map
+  # with add_acc = FALSE; the invariant is checked on the actual expanded
+  # likelihood data in make_emc/design_model(add_acc = TRUE).
+  model_spec <- tryCatch(model(), error = function(e) NULL)
+  if (is.list(model_spec) && isTRUE(model_spec$correlated) && isTRUE(add_acc)) {
+    rho_dm <- out[["rho"]]
+    if (is.null(rho_dm) || is.null(da$lM)) {
+      stop("BAwLcorr requires a matchfun-generated lM role indicator in the expanded data.")
+    }
+    rho_expand <- attr(rho_dm, "expand")
+    rho_full <- if (!is.null(rho_expand) && length(rho_expand) == nrow(da)) {
+      rho_dm[rho_expand, , drop = FALSE]
+    } else {
+      rho_dm
+    }
+    n_lR <- length(levels(da$lR))
+    if (n_lR < 1L || nrow(rho_full) != nrow(da) || nrow(da) %% n_lR != 0L) {
+      stop("BAwLcorr could not verify the within-trial rho design.")
+    }
+    # Constants do not create a free row-specific effect.  Removing their
+    # columns makes the check accept rho ~ coupled with the PM/reference
+    # intercept fixed to zero, while still rejecting rho ~ 0 + lR.
+    free_cols <- !(colnames(rho_full) %in% names(design$constants))
+    rho_free <- rho_full[, free_cols, drop = FALSE]
+    if (ncol(rho_free) > 0L) {
+      for (j in seq_len(nrow(da) / n_lR)) {
+        rows <- ((j - 1L) * n_lR + 1L):(j * n_lR)
+        block <- rho_free[rows, , drop = FALSE]
+        active <- rowSums(abs(block) > 1e-12) > 0
+        if (sum(active) > 1L) {
+          ref <- block[which(active)[1L], , drop = FALSE]
+          same <- apply(block[active, , drop = FALSE], 1L, function(x)
+            isTRUE(all.equal(as.numeric(x), as.numeric(ref), tolerance = 1e-12)))
+          if (!all(same)) {
+            stop("BAwLcorr rho must be shared within each trial; use a trial-level formula (for example rho ~ 1 or rho ~ TrialType). Row-level formulas such as rho ~ 0 + lR are not allowed.")
+          }
+        }
+      }
+    }
+  }
   if (!is.null(rt_resolution) & !is.null(da$rt))
     da$rt <- .floor_to_rt_resolution(da$rt, rt_resolution)
   if (compress){

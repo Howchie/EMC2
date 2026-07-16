@@ -6242,7 +6242,8 @@ apply_trial_trunc:
   return total_ll;
 }
 
-// Correlated BAwL likelihood using a single shared Gaussian factor.  The
+// Correlated BAwL likelihood using a single shared Gaussian factor.  GH node
+// count is runtime-configurable through gh_quad.h.  The
 // ordinary race likelihood remains the conditional evaluator: for each GH
 // node we alter only v and sv, turn off its truncation correction, and let the
 // existing code handle winners, omissions, clocks, censoring, contaminants,
@@ -6284,15 +6285,68 @@ double c_log_likelihood_bawl_correlated(
     Rcpp::stop("c_log_likelihood_bawl_correlated: trial_ll_out size mismatch.");
   }
 
+  if (pars.nrow() != n_trials) {
+    Rcpp::stop("c_log_likelihood_bawl_correlated: pars rows do not match data.");
+  }
+
+  // The fast OO mapper intentionally stops at the design-matrix/natural-scale
+  // mapping and does not invoke the model's R Ttransform.  Mirror BAwLcorr's
+  // role conversion here for the likelihood path.  R Ttransform remains the
+  // corresponding conversion for mapped parameter displays and simulation.
+  bool lM_is_logical = false;
+  Rcpp::LogicalVector lM_logical;
+  Rcpp::IntegerVector lM_factor;
+  int lM_true_code = -1;
+  if (!dadm.containsElementNamed("lM")) {
+    Rcpp::stop("c_log_likelihood_bawl_correlated: BAwLcorr requires lM from matchfun.");
+  }
+  SEXP lM_sexp = dadm["lM"];
+  if (TYPEOF(lM_sexp) == LGLSXP && Rf_length(lM_sexp) == n_trials) {
+    lM_logical = Rcpp::LogicalVector(lM_sexp);
+    lM_is_logical = true;
+  } else if (TYPEOF(lM_sexp) == INTSXP && Rf_length(lM_sexp) == n_trials) {
+    lM_factor = Rcpp::IntegerVector(lM_sexp);
+    Rcpp::CharacterVector levels = lM_factor.attr("levels");
+    for (int i = 0; i < levels.size(); ++i) {
+      if (Rcpp::as<std::string>(levels[i]) == "TRUE") {
+        lM_true_code = i + 1;
+        break;
+      }
+    }
+    if (lM_true_code < 0 && levels.size() == 0) lM_true_code = 1;
+  }
+  if (!lM_is_logical && lM_true_code < 0) {
+    Rcpp::stop("c_log_likelihood_bawl_correlated: lM must be a logical or TRUE/FALSE factor.");
+  }
+  for (int r = 0; r < n_trials; ++r) {
+    const bool missing = lM_is_logical
+      ? (lM_logical[r] == NA_LOGICAL)
+      : (lM_factor[r] == NA_INTEGER);
+    if (missing) {
+      Rcpp::stop("c_log_likelihood_bawl_correlated: lM contains missing role values.");
+    }
+  }
+  auto effective_rho_at = [&](int r, double rho_cell) -> double {
+    const bool correct = lM_is_logical
+      ? static_cast<bool>(lM_logical[r])
+      : (lM_factor[r] == lM_true_code);
+    return correct ? std::fabs(rho_cell) : rho_cell;
+  };
+  std::vector<double> effective_rho(static_cast<size_t>(n_trials), R_NegInf);
+  for (int r = 0; r < n_trials; ++r)
+    effective_rho[static_cast<size_t>(r)] =
+      effective_rho_at(r, pars(r, ctx->bawl_rho_index));
+
   // If all active loadings are zero, use the exact existing path.  Apart from
   // being cheaper, this keeps rho=0 bit-for-bit equivalent to independent BAwL.
   bool any_loading = false;
+  double max_abs_rho = 0.0;
   for (int r = 0; r < pars.nrow(); ++r) {
     if (!isok[r]) continue;
-    const double rho = pars(r, ctx->bawl_rho_index);
-    if (R_FINITE(rho) && std::fabs(rho) > 1e-14) {
+    const double rho = effective_rho[static_cast<size_t>(r)];
+    if (R_FINITE(rho)) max_abs_rho = std::max(max_abs_rho, std::fabs(rho));
+    if (!R_FINITE(rho) || std::fabs(rho) > 1.0 || std::fabs(rho) > 1e-14) {
       any_loading = true;
-      break;
     }
   }
   if (!any_loading) {
@@ -6301,10 +6355,6 @@ double c_log_likelihood_bawl_correlated(
                                   model_context_for_funcs, all_finite_trials,
                                   model_dfun_raw, model_pfun_raw, logS_at_t,
                                   shared, trial_ll_out, true);
-  }
-
-  if (pars.nrow() != n_trials) {
-    Rcpp::stop("c_log_likelihood_bawl_correlated: pars rows do not match data.");
   }
 
   bool has_RACE_col = dadm.containsElementNamed("RACE");
@@ -6334,20 +6384,55 @@ double c_log_likelihood_bawl_correlated(
     }
   }
 
+  const bool joint_posdrift = ctx->use_posdrift;
   std::vector<double> log_num(static_cast<size_t>(n_out), R_NegInf);
-  std::vector<double> log_den(static_cast<size_t>(n_unique), 0.0);
-  const GHRule10& gh = gh_rule10();
+  std::vector<unsigned char> has_trunc_trial(static_cast<size_t>(n_unique), 0);
+  // Joint positive-drift conditioning needs a denominator for every trial:
+  // integral phi(z) prod_k q_k(z) Z+(z) dz.  Without joint conditioning the
+  // untruncated denominator is exactly one and only truncated trials need it.
+  std::vector<double> log_den(static_cast<size_t>(n_unique),
+                              joint_posdrift ? R_NegInf : 0.0);
+  if (has_truncation) {
+    for (int j = 0; j < n_unique; ++j) {
+      const int start = j * n_lR;
+      if (LT[start] != 0.0 || UT[start] != R_PosInf) {
+        has_trunc_trial[static_cast<size_t>(j)] = 1;
+        if (!joint_posdrift) log_den[static_cast<size_t>(j)] = R_NegInf;
+      }
+    }
+  }
+  const GHRule& gh = gh_rule(gh_node_count(max_abs_rho));
   const double sqrt2 = std::sqrt(2.0);
-  const double sqrt_pi = std::sqrt(std::acos(-1.0));
-  const int rho_col = ctx->bawl_rho_index;
   const int n_par = pars.ncol();
   if (n_par > 64 || n_lR > 64) {
     Rcpp::stop("c_log_likelihood_bawl_correlated: at most 64 parameter columns and 64 accumulators are supported.");
   }
 
-  for (int q = 0; q < 10; ++q) {
+  // Positivity reweighting is evaluated on the node-shifted Gaussian means
+  // and residual SDs.  RACE-inactive rows do not participate in the product.
+  auto log_positive_trial = [&](const Rcpp::NumericMatrix& pars_q,
+                                const Rcpp::LogicalVector& isok_q,
+                                int j) -> double {
+    const int start = j * n_lR;
+    const int n_lR_j = has_RACE_col ? RACE[start] : n_lR;
+    double out = 0.0;
+    for (int k = 0; k < n_lR_j; ++k) {
+      const int row = start + k;
+      if (has_RACE_col && !RACE_mask[row]) continue;
+      if (!isok_q[row]) return R_NegInf;
+      const double sd = pars_q(row, emc2col::bawl::sv);
+      const double mu = pars_q(row, emc2col::bawl::v);
+      if (!(sd > 0.0) || !R_FINITE(mu)) return R_NegInf;
+      const double log_q = R::pnorm(mu / sd, 0.0, 1.0, 1, 1);
+      if (!R_FINITE(log_q)) return R_NegInf;
+      out += log_q;
+    }
+    return out;
+  };
+
+  for (int q = 0; q < static_cast<int>(gh.x.size()); ++q) {
     const double z = sqrt2 * gh.x[static_cast<size_t>(q)];
-    const double log_w = std::log(gh.w[static_cast<size_t>(q)] / sqrt_pi);
+    const double log_w = std::log(gh_standard_normal_weight(gh, q));
     Rcpp::NumericMatrix pars_q = Rcpp::clone(pars);
     Rcpp::LogicalVector isok_q = Rcpp::clone(isok);
 
@@ -6355,7 +6440,7 @@ double c_log_likelihood_bawl_correlated(
     // v_q = v + sign(rho) sv sqrt(|rho|) z,
     // sv_q = sv sqrt(1-|rho|).
     for (int r = 0; r < n_trials; ++r) {
-      const double rho = pars_q(r, rho_col);
+      const double rho = effective_rho[static_cast<size_t>(r)];
       if (!isok_q[r]) continue;
       if (!R_FINITE(rho) || std::fabs(rho) > 1.0) {
         isok_q[r] = false;
@@ -6373,6 +6458,12 @@ double c_log_likelihood_bawl_correlated(
       pars_q(r, emc2col::bawl::sv) = sv * std::fmax(residual, 1e-12);
     }
 
+    std::vector<double> log_pos(static_cast<size_t>(n_unique), 0.0);
+    if (joint_posdrift) {
+      for (int j = 0; j < n_unique; ++j)
+        log_pos[static_cast<size_t>(j)] = log_positive_trial(pars_q, isok_q, j);
+    }
+
     ContextForRaceModels node_ctx = *ctx;
     Rcpp::NumericVector node_ll(n_out);
     c_log_likelihood_race(pars_q, dadm, pdf1, cdf1, n_trials,
@@ -6382,39 +6473,185 @@ double c_log_likelihood_bawl_correlated(
                           shared, &node_ll, false);
 
     for (int i = 0; i < n_out; ++i) {
+      const int j = expand.length() > 0 ? expand[i] - 1 : i;
       log_num[static_cast<size_t>(i)] =
         log_sum_exp(log_num[static_cast<size_t>(i)],
-                    log_w + node_ll[i]);
+                    log_w + log_pos[static_cast<size_t>(j)] + node_ll[i]);
     }
 
     if (has_truncation) {
+      // The factor must remain inside the truncation normaliser:
+      //   Z = int [S_race(LT | z) - S_race(UT | z)] phi(z) dz.
+      // Do not replace this with an unconditional race normaliser.  However,
+      // conditional on a GH node the accumulators are independent, so the
+      // conditional race survivors can be evaluated in a batch.  The old
+      // implementation repacked every trial into row-major storage and called
+      // get_trunc_normaliser_rowmajor_cpp once per trial and node.
       GslIntegrationControls gsl_ctl = default_gsl_controls();
       gsl_ctl.try_qng_first_finite = true;
       gsl_ctl.qag_key = GSL_INTEG_GAUSS21;
       gsl_ctl.rel_tol = 1e-4;
       static thread_local GslWorkspacePtr workspace_tls(nullptr, &gsl_integration_workspace_free);
       GslWorkspacePtr& workspace = workspace_tls;
-      std::vector<double> rowmajor(static_cast<size_t>(n_lR) * n_par);
-      std::vector<int> ok_int(static_cast<size_t>(n_lR));
+
+      std::vector<int> trunc_mask(static_cast<size_t>(n_unique), 0);
+      std::vector<int> isok_q_int(static_cast<size_t>(n_trials), 0);
+      double uniform_lt = 0.0;
+      double uniform_ut = R_PosInf;
+      bool have_trunc = false;
+      bool uniform_lt_ok = true;
+      bool uniform_ut_ok = true;
       for (int j = 0; j < n_unique; ++j) {
         const int start = j * n_lR;
-        const int n_lR_j = has_RACE_col ? RACE[start] : n_lR;
         const double lt = LT[start];
         const double ut = UT[start];
-        if (lt == 0.0 && ut == R_PosInf) continue;
-        for (int k = 0; k < n_lR_j; ++k) {
-          const int row = start + k;
-          ok_int[static_cast<size_t>(k)] =
-            (isok_q[row] && (!has_RACE_col || RACE_mask[row])) ? 1 : 0;
-          for (int c = 0; c < n_par; ++c) {
-            rowmajor[static_cast<size_t>(k) * n_par + c] = pars_q(row, c);
+        if (!has_trunc_trial[static_cast<size_t>(j)]) continue;
+        trunc_mask[static_cast<size_t>(j)] = 1;
+        if (!have_trunc) {
+          uniform_lt = lt;
+          uniform_ut = ut;
+          have_trunc = true;
+        } else {
+          if (lt != uniform_lt) uniform_lt_ok = false;
+          if (ut != uniform_ut) uniform_ut_ok = false;
+        }
+      }
+
+      if (have_trunc) {
+        for (int r = 0; r < n_trials; ++r) {
+          isok_q_int[static_cast<size_t>(r)] = isok_q[r] ? 1 : 0;
+        }
+
+        std::vector<double> log_s_lt(static_cast<size_t>(n_unique), R_NegInf);
+        std::vector<double> log_s_ut(static_cast<size_t>(n_unique), R_NegInf);
+        std::array<const double*, 64> node_cols{};
+        const double* pars_q_ptr = pars_q.begin();
+        for (int c = 0; c < n_par; ++c) {
+          node_cols[static_cast<size_t>(c)] =
+            pars_q_ptr + static_cast<size_t>(c) * n_trials;
+        }
+
+        // Evaluate one conditional race survivor without constructing a
+        // row-major trial buffer.  This is the fallback for variable-accumulator
+        // RACE layouts, which the existing column-major batch callback cannot
+        // represent because each trial can have a different active prefix.
+        auto log_surv_trial = [&](double t, int j) -> double {
+          const int start = j * n_lR;
+          const int n_lR_j = has_RACE_col ? RACE[start] : n_lR;
+          double log_s = 0.0;
+          std::array<double, 64> par_row{};
+          for (int k = 0; k < n_lR_j; ++k) {
+            const int row = start + k;
+            if (!isok_q[row] || (has_RACE_col && !RACE_mask[row])) return R_NegInf;
+            for (int c = 0; c < n_par; ++c) par_row[static_cast<size_t>(c)] = pars_q(row, c);
+            double cdf = cdf1(t, par_row.data(), &node_ctx);
+            cdf = clamp_cdf01_race(cdf);
+            const double log_s_k = safe_log1m_race(cdf);
+            if (!emc2_isfinite(log_s_k)) return R_NegInf;
+            log_s += log_s_k;
+          }
+          return log_s;
+        };
+
+        // Batch the common fixed-race case through the model-specific callback.
+        // This is still conditional on the current GH node, so the shared
+        // factor is fully represented in the final log-sum-exp below.
+        auto log_surv_batch = [&](double t, std::vector<double>& out) {
+          if (!has_RACE_col && logS_at_t != nullptr) {
+            logS_at_t(t, node_cols.data(), n_trials, n_lR, n_par,
+                      trunc_mask.data(), n_unique, isok_q_int.data(),
+                      &node_ctx, out.data());
+            return;
+          }
+          for (int j = 0; j < n_unique; ++j) {
+            if (trunc_mask[static_cast<size_t>(j)]) {
+              out[static_cast<size_t>(j)] = log_surv_trial(t, j);
+            }
+          }
+        };
+
+        if (uniform_lt_ok) {
+          if (uniform_lt == 0.0) {
+            for (int j = 0; j < n_unique; ++j) {
+              if (trunc_mask[static_cast<size_t>(j)]) log_s_lt[static_cast<size_t>(j)] = 0.0;
+            }
+          } else {
+            log_surv_batch(uniform_lt, log_s_lt);
+          }
+        } else {
+          for (int j = 0; j < n_unique; ++j) {
+            if (trunc_mask[static_cast<size_t>(j)]) {
+              log_s_lt[static_cast<size_t>(j)] = log_surv_trial(LT[j * n_lR], j);
+            }
           }
         }
-        const double log_z = get_trunc_normaliser_rowmajor_cpp(
-            rowmajor.data(), ok_int.data(), pdf1, cdf1, lt, ut,
-            n_lR_j, n_par, gsl_ctl, &node_ctx, workspace);
+        if (uniform_ut_ok && uniform_ut != R_PosInf) {
+          log_surv_batch(uniform_ut, log_s_ut);
+        } else if (!uniform_ut_ok) {
+          for (int j = 0; j < n_unique; ++j) {
+            if (trunc_mask[static_cast<size_t>(j)] && UT[j * n_lR] != R_PosInf) {
+              log_s_ut[static_cast<size_t>(j)] = log_surv_trial(UT[j * n_lR], j);
+            }
+          }
+        }
+
+        std::vector<double> rowmajor(static_cast<size_t>(n_lR) * n_par);
+        std::vector<int> ok_int(static_cast<size_t>(n_lR));
+        const double log_prob_eps = std::log(std::numeric_limits<double>::epsilon());
+        for (int j = 0; j < n_unique; ++j) {
+          if (!trunc_mask[static_cast<size_t>(j)]) continue;
+          const int start = j * n_lR;
+          const int n_lR_j = has_RACE_col ? RACE[start] : n_lR;
+          const double lt = LT[start];
+          const double ut = UT[start];
+          double log_z = R_NegInf;
+          bool need_scalar_fallback = false;
+
+          if (R_FINITE(log_s_lt[static_cast<size_t>(j)])) {
+            if (ut == R_PosInf) {
+              // For BAwL's defective tail, +Inf is part of the retained
+              // [LT, Inf) window and must not be subtracted.
+              log_z = log_s_lt[static_cast<size_t>(j)];
+            } else {
+              log_z = log_diff_exp(log_s_lt[static_cast<size_t>(j)],
+                                   log_s_ut[static_cast<size_t>(j)]);
+              need_scalar_fallback =
+                !(R_FINITE(log_z) && log_z > log_prob_eps);
+            }
+          }
+
+          if (need_scalar_fallback) {
+            for (int k = 0; k < n_lR_j; ++k) {
+              const int row = start + k;
+              ok_int[static_cast<size_t>(k)] =
+                (isok_q[row] && (!has_RACE_col || RACE_mask[row])) ? 1 : 0;
+              for (int c = 0; c < n_par; ++c) {
+                rowmajor[static_cast<size_t>(k) * n_par + c] = pars_q(row, c);
+              }
+            }
+            log_z = get_trunc_normaliser_rowmajor_cpp(
+                rowmajor.data(), ok_int.data(), pdf1, cdf1, lt, ut,
+                n_lR_j, n_par, gsl_ctl, &node_ctx, workspace);
+          }
+
+          if (has_trunc_trial[static_cast<size_t>(j)]) {
+            log_den[static_cast<size_t>(j)] =
+              log_sum_exp(log_den[static_cast<size_t>(j)],
+                          log_w + log_pos[static_cast<size_t>(j)] + log_z);
+          }
+        }
+      }
+    }
+
+    if (joint_posdrift) {
+      // Untruncated trials still require the positivity normaliser.  For a
+      // truncated trial the block above supplied log_z; do not add a second
+      // unit-mass term for it.
+      for (int j = 0; j < n_unique; ++j) {
+        if (has_trunc_trial[static_cast<size_t>(j)]) continue;
         log_den[static_cast<size_t>(j)] =
-          log_sum_exp(log_den[static_cast<size_t>(j)], log_w + log_z);
+          log_sum_exp(log_den[static_cast<size_t>(j)],
+                      log_w + log_pos[static_cast<size_t>(j)]);
       }
     }
   }
