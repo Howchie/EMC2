@@ -1527,6 +1527,41 @@ BEGIN_RCPP
     return R_NilValue;
 END_RCPP
 }
+// bawl_time_geometry_probe
+Rcpp::List bawl_time_geometry_probe(double t, double t0, double A, double B, double k);
+RcppExport SEXP _EMC2_bawl_time_geometry_probe(SEXP tSEXP, SEXP t0SEXP, SEXP ASEXP, SEXP BSEXP, SEXP kSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< double >::type t(tSEXP);
+    Rcpp::traits::input_parameter< double >::type t0(t0SEXP);
+    Rcpp::traits::input_parameter< double >::type A(ASEXP);
+    Rcpp::traits::input_parameter< double >::type B(BSEXP);
+    Rcpp::traits::input_parameter< double >::type k(kSEXP);
+    rcpp_result_gen = Rcpp::wrap(bawl_time_geometry_probe(t, t0, A, B, k));
+    return rcpp_result_gen;
+END_RCPP
+}
+// bawl_prepared_endpoints_probe
+Rcpp::NumericVector bawl_prepared_endpoints_probe(double t, double t0, double A, double B, double k, double v, double sv, double rho, double z, bool joint_positive);
+RcppExport SEXP _EMC2_bawl_prepared_endpoints_probe(SEXP tSEXP, SEXP t0SEXP, SEXP ASEXP, SEXP BSEXP, SEXP kSEXP, SEXP vSEXP, SEXP svSEXP, SEXP rhoSEXP, SEXP zSEXP, SEXP joint_positiveSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< double >::type t(tSEXP);
+    Rcpp::traits::input_parameter< double >::type t0(t0SEXP);
+    Rcpp::traits::input_parameter< double >::type A(ASEXP);
+    Rcpp::traits::input_parameter< double >::type B(BSEXP);
+    Rcpp::traits::input_parameter< double >::type k(kSEXP);
+    Rcpp::traits::input_parameter< double >::type v(vSEXP);
+    Rcpp::traits::input_parameter< double >::type sv(svSEXP);
+    Rcpp::traits::input_parameter< double >::type rho(rhoSEXP);
+    Rcpp::traits::input_parameter< double >::type z(zSEXP);
+    Rcpp::traits::input_parameter< bool >::type joint_positive(joint_positiveSEXP);
+    rcpp_result_gen = Rcpp::wrap(bawl_prepared_endpoints_probe(t, t0, A, B, k, v, sv, rho, z, joint_positive));
+    return rcpp_result_gen;
+END_RCPP
+}
 // gl_rule_nodes_weights
 Rcpp::List gl_rule_nodes_weights(int n);
 RcppExport SEXP _EMC2_gl_rule_nodes_weights(SEXP nSEXP) {
@@ -1678,6 +1713,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_get_pars_c_batch_wrapper_oo", (DL_FUNC) &_EMC2_get_pars_c_batch_wrapper_oo, 11},
     {"_EMC2_bawl_corr_counter_values", (DL_FUNC) &_EMC2_bawl_corr_counter_values, 0},
     {"_EMC2_bawl_corr_counters_reset", (DL_FUNC) &_EMC2_bawl_corr_counters_reset, 0},
+    {"_EMC2_bawl_time_geometry_probe", (DL_FUNC) &_EMC2_bawl_time_geometry_probe, 5},
+    {"_EMC2_bawl_prepared_endpoints_probe", (DL_FUNC) &_EMC2_bawl_prepared_endpoints_probe, 10},
     {"_EMC2_gl_rule_nodes_weights", (DL_FUNC) &_EMC2_gl_rule_nodes_weights, 1},
     {"_EMC2_run_trend_rcpp", (DL_FUNC) &_EMC2_run_trend_rcpp, 6},
     {"_EMC2_pigt", (DL_FUNC) &_EMC2_pigt, 5},

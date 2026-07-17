@@ -126,6 +126,148 @@ reference_corr_ll <- function(pars, rho, rt, winner = 1L, posdrift = TRUE,
     log_sum_exp_test(log(rule$weights / sqrt(pi)) + log_z)
 }
 
+test_that("shared time geometry matches the scalar kernel factorisation", {
+  skip_on_cran()
+  # T1: BAwLTimeGeometry must reproduce the scalar kernels' internal
+  # quantities (bawl_threshold_terms) through the L/U/alpha/beta mapping:
+  # c = (v - C1)/sv, m = C2/sv, and the k -> 0 limits.
+  for (k in c(0, 1e-6, .05, .4)) {
+    for (tt in c(.015, .4, 2.5)) {
+      A <- .35; B <- .9; t0 <- .12
+      g <- EMC2:::bawl_time_geometry_probe(t0 + tt, t0, A, B, k)
+      b <- B + A
+      if (k <= 1e-10) {
+        expect_equal(g$C1, b / tt, tolerance = 1e-12)
+        expect_equal(g$C2, 1 / tt, tolerance = 1e-12)
+        expect_equal(g$gamma0, 0)
+      } else {
+        # Match the kernel's expm1-based small-k*tau branch; a plain
+        # 1 - exp(-k*tt) reference loses ~8 digits at k*tt ~ 1e-8.
+        G <- -expm1(-k * tt); E <- 1 - G
+        expect_equal(g$C1, k * b / G, tolerance = 1e-10)
+        expect_equal(g$C2, k * E / G, tolerance = 1e-10)
+        expect_equal(g$gamma0, -exp(k * tt) * k * b / A, tolerance = 1e-10)
+      }
+      expect_equal(g$U, g$C1, tolerance = 1e-12)
+      expect_equal(g$L, g$C1 - g$C2 * A, tolerance = 1e-12)
+      expect_equal(g$alpha, g$C1 / (g$C2 * A), tolerance = 1e-12)
+      expect_equal(g$beta, -1 / (g$C2 * A), tolerance = 1e-12)
+      expect_equal(g$gamma1, exp(k * tt) / A, tolerance = 1e-10)
+      # Survivor and cause identities at a probe drift inside (L, U):
+      # s = alpha + beta V must equal the uniform-start no-hit probability.
+      V <- g$L + .37 * (g$U - g$L)
+      s_direct <- if (k <= 1e-10) (b - V * tt) / A else
+        (b - V * (-expm1(-k * tt)) / k) / (exp(-k * tt) * A)
+      expect_equal(g$alpha + g$beta * V, s_direct, tolerance = 1e-9)
+    }
+  }
+  # Degenerate statuses: not started, point start, infinite time.
+  expect_equal(EMC2:::bawl_time_geometry_probe(.1, .2, .3, .9, 0)$status, 2)
+  gp <- EMC2:::bawl_time_geometry_probe(.6, .2, 0, .9, .3)
+  expect_equal(gp$status, 1)
+  expect_equal(gp$L, gp$U)
+  expect_equal(gp$dv_dt, gp$C1 * gp$C2, tolerance = 1e-12)
+  gi <- EMC2:::bawl_time_geometry_probe(Inf, .2, .3, .9, .3)
+  expect_equal(gi$status, 3)
+  expect_equal(gi$L, .3 * 1.2, tolerance = 1e-12)
+  gi0 <- EMC2:::bawl_time_geometry_probe(Inf, .2, .3, .9, 0)
+  expect_equal(gi0$L, 0)
+})
+
+test_that("prepared conditional endpoints match scalar LBA/BAwL kernels", {
+  skip_on_cran()
+  # T1: the prepared evaluators must agree with the strict scalar wrappers
+  # (dleakyba/pleakyba, unrestricted drift) over central and tail endpoints,
+  # point and interval starts, and natural/forced-log branches.  Comparison
+  # is on the natural scale (the prepared evaluators share the raw kernels'
+  # RAW acceptance, which reports underflowed tails as zero mass).
+  grid <- expand.grid(
+    k = c(0, 1e-6, .3),
+    tt = c(.02, .5, 3),
+    A = c(0, .3),
+    v = c(-.5, .05, 1.2),
+    sv = c(.5, 1.5),
+    rho = c(0, .5, -.8),
+    z = c(-2, 0, 1.5),
+    KEEP.OUT.ATTRS = FALSE
+  )
+  t0 <- .1
+  B <- .9
+  for (i in seq_len(nrow(grid))) {
+    g <- grid[i, ]
+    probe <- EMC2:::bawl_prepared_endpoints_probe(
+      t0 + g$tt, t0, g$A, B, g$k, g$v, g$sv, g$rho, g$z, TRUE)
+    vq <- probe[["vq"]]
+    svq <- probe[["sv_res"]]
+    info <- paste(names(g), unlist(g), collapse = " ")
+    ref_pdf <- EMC2:::dleakyba(g$tt, g$A, B + g$A, vq, svq, g$k,
+                               posdrift = FALSE)
+    ref_cdf <- EMC2:::pleakyba(g$tt, g$A, B + g$A, vq, svq, g$k,
+                               posdrift = FALSE)
+    expect_equal(exp(probe[["log_pdf"]]), ref_pdf,
+                 tolerance = 1e-8, info = info)
+    expect_equal(exp(probe[["log_cdf"]]), ref_cdf,
+                 tolerance = 1e-8, info = info)
+    q_ref <- pnorm(vq / svq)
+    expect_equal(exp(probe[["log_q"]]), q_ref, tolerance = 1e-9, info = info)
+    # Weighted survivor q - F0 (unnormalised joint-positive loser factor).
+    expect_equal(exp(probe[["log_surv"]]), max(q_ref - ref_cdf, 0),
+                 tolerance = 1e-7, info = info)
+    # Unrestricted survivor 1 - F0.
+    probe_u <- EMC2:::bawl_prepared_endpoints_probe(
+      t0 + g$tt, t0, g$A, B, g$k, g$v, g$sv, g$rho, g$z, FALSE)
+    expect_equal(exp(probe_u[["log_surv"]]), 1 - ref_cdf,
+                 tolerance = 1e-8, info = info)
+  }
+})
+
+test_that("layout classifier reports canonical loaded dimensions", {
+  skip_on_cran()
+  # T3: correct/error + independent PM must classify as loaded dimension
+  # two; giving PM a nonzero loading restores dimension three; zero rho
+  # everywhere routes through the ordinary independent path.
+  dat <- data.frame(
+    subjects = factor(1),
+    S = factor(rep("correct", 4), levels = c("correct", "error", "pm")),
+    R = factor(c("correct", "error", "correct", "pm"),
+               levels = c("correct", "error", "pm")),
+    rt = c(.6, .7, .8, .9)
+  )
+  coupled <- function(d) factor(d$lR != "pm", levels = c(FALSE, TRUE),
+                                labels = c("no", "yes"))
+  ctx <- make_bawl_context(
+    dat, BAwLcorr(), rho_formula = rho ~ 0 + coupled,
+    functions = list(coupled = coupled), constants = c(rho_coupledno = 0)
+  )
+  counters_for <- function(ctx_use, p) {
+    old <- Sys.getenv("EMC2_BAWLCORR_COUNTERS", unset = NA)
+    Sys.setenv(EMC2_BAWLCORR_COUNTERS = "1")
+    on.exit({
+      if (is.na(old)) Sys.unsetenv("EMC2_BAWLCORR_COUNTERS")
+      else Sys.setenv(EMC2_BAWLCORR_COUNTERS = old)
+    })
+    EMC2:::bawl_corr_counters_reset()
+    invisible(do.call(EMC2:::calc_ll_oo, context_args(ctx_use, p)))
+    unlist(EMC2:::bawl_corr_counter_values())
+  }
+
+  p_pm0 <- set_bawl_values(sampled_pars(ctx$design, doMap = FALSE), rho = .6)
+  c_pm0 <- counters_for(ctx, p_pm0)
+  expect_equal(unname(c_pm0[["loaded_dimension_2"]]), 4)
+  expect_equal(unname(c_pm0[["loaded_dimension_3plus"]]), 0)
+
+  ctx_all <- make_bawl_context(dat, BAwLcorr(), rho_formula = rho ~ 1)
+  p_all <- set_bawl_values(sampled_pars(ctx_all$design, doMap = FALSE),
+                           rho = .6)
+  c_all <- counters_for(ctx_all, p_all)
+  expect_equal(unname(c_all[["loaded_dimension_3plus"]]), 4)
+
+  p_zero <- set_bawl_values(sampled_pars(ctx$design, doMap = FALSE), rho = 0)
+  c_zero <- counters_for(ctx, p_zero)
+  expect_equal(unname(c_zero[["ordinary_zero_rho_trials"]]), 4)
+  expect_equal(unname(c_zero[["loaded_dimension_2"]]), 0)
+})
+
 test_that("BAwLcorr simulators use a jointly positive drift vector", {
   skip_on_cran()
   n <- 1500

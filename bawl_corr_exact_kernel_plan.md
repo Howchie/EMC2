@@ -1132,6 +1132,30 @@ Route/node counters confirm the baseline issues named above:
   highest.
 - Generic clock fallback is ~14x the no-clock GH route at the same rho.
 
+### Step 2 — shared geometry, state, pointers, layout (DONE, 2026-07-17)
+
+- `src/bawl_geometry.h`: `BAwLTimeGeometry` (statuses valid / point_start /
+  not_started / infinite / invalid) built on `bawl_leak_factors()` and the
+  exact `k -> 0` limit; `BAwLPreparedRow` conditional view; prepared
+  unnormalised endpoint evaluators (`f0`, `F0`, `q`, `1-F0`, `q-F0`) with the
+  raw kernels' RAW-acceptance natural branch and authoritative log fallback.
+  Parity-tested against `dleakyba`/`pleakyba` over the T1 grid (k x tau x
+  A x v x sv x rho x z, 648 cases) plus survivor/cause coefficient
+  identities and degenerate statuses.
+- `BAwLCorrSharedState` built once per likelihood call: lM role mapping,
+  RACE masks, truncation windows, winner rows, expansion map, and direct
+  ParamTable column pointers (keep_names order).  The correlated entry point
+  no longer receives a materialised matrix; the generic-clock fallback and
+  the rho=0 ordinary route materialise lazily via a callback, and the fast
+  node path reads `ParamTable` columns directly.
+- `bawl_corr_classify_particle()`: canonical per-particle
+  `BAwLCorrTrialLayout` (active/loaded rows, pair candidates, winner
+  loading, route enum).  Routing behaviour unchanged in this step; layout
+  feeds the loaded-dimension counters (T3 test asserts dimension 2 for
+  correct/error + independent PM, 3+ when PM is loaded, ordinary at rho=0).
+- Verified: benchmark lls bit-identical pre/post refactor; full
+  `test-bawl-correlated.R` green from a fresh temp-library install.
+
 ## Implementation sequence
 
 This order deliberately creates final shared infrastructure before either the

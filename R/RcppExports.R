@@ -369,6 +369,14 @@ bawl_corr_counters_reset <- function() {
     invisible(.Call(`_EMC2_bawl_corr_counters_reset`))
 }
 
+bawl_time_geometry_probe <- function(t, t0, A, B, k) {
+    .Call(`_EMC2_bawl_time_geometry_probe`, t, t0, A, B, k)
+}
+
+bawl_prepared_endpoints_probe <- function(t, t0, A, B, k, v, sv, rho, z, joint_positive) {
+    .Call(`_EMC2_bawl_prepared_endpoints_probe`, t, t0, A, B, k, v, sv, rho, z, joint_positive)
+}
+
 gl_rule_nodes_weights <- function(n) {
     .Call(`_EMC2_gl_rule_nodes_weights`, n)
 }

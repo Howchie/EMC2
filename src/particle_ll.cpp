@@ -20,6 +20,7 @@
 #include "bawl_corr_counters.h"
 #include <gsl/gsl_integration.h>
 #include <gsl/gsl_errno.h> // For GSL error handling
+#include "bawl_geometry.h"
 #include <cmath>
 #include <string>
 #include <memory>
@@ -27,6 +28,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <mutex>
+#include <functional>
 
 using namespace Rcpp;
 
@@ -743,8 +745,72 @@ double c_log_likelihood_race(
     NumericVector* trial_ll_out = nullptr,
     bool apply_truncation_correction = true);
 
+// --------------------------------------------------------------------------
+// Correlated BAwL shared state and canonical trial layout
+// (bawl_corr_exact_kernel_plan.md, design rule C).  Built once per likelihood
+// call outside the particle loop; the per-particle classifier below is the
+// sole authority for loaded-row discovery and positivity dimension.
+// --------------------------------------------------------------------------
+
+enum class BAwLCorrRoute : uint8_t {
+  ordinary = 0,       // 0/1 nonzero loadings: independent race machinery
+  exact_pair,         // two loaded rows, no clocks, exact rectangle kernel
+  numeric_pair,       // exact route reported unstable: direct 1-D integration
+  gh_no_clock,        // shared-factor GH with the fused no-clock evaluator
+  gh_generic_clock,   // shared-factor GH through the generic race evaluator
+  invalid             // malformed rows: trial value floors to min_ll
+};
+
+struct BAwLCorrTrialLayout {
+  BAwLCorrRoute route = BAwLCorrRoute::gh_no_clock;
+  int n_active = 0;             // isok && RACE-active rows
+  int n_loaded = 0;             // active rows with |effective rho| > threshold
+  int loaded_row[2] = {-1, -1}; // row indices, meaningful while n_loaded <= 2
+  int winner_row = -1;
+  bool winner_loaded = false;
+  bool any_bad_row = false;     // active row failed isok/rho validity
+};
+
+struct BAwLCorrSharedState {
+  bool valid = false;
+  int n_trials = 0;
+  int n_lR = 0;
+  int n_unique = 0;
+  int n_out = 0;
+  int n_par = 0;
+
+  // R holders keeping backing memory alive
+  Rcpp::NumericVector rt, LT, UT;
+  Rcpp::IntegerVector race_nacc;
+  Rcpp::LogicalVector race_mask;
+  bool has_RACE = false;
+  bool has_truncation = false;
+
+  // Data-fixed arrays
+  std::vector<unsigned char> role_correct;    // per row, lM role
+  std::vector<int> winner_row;                // per unique trial (-1 if none)
+  std::vector<unsigned char> has_trunc_trial; // per unique trial
+  std::vector<int> j_to_i;                    // unique trial -> output row
+
+  // Direct ParamTable column pointers in keep_names (p_types) order; the
+  // base storage is refilled in place per particle, so these stay valid.
+  std::vector<const double*> cols;
+  int pc_col = -1;    // pContaminant column, -1 when absent
+  int rho_col = -1;
+
+  // Reused per-particle scratch
+  std::vector<double> effective_rho;
+  std::vector<BAwLCorrTrialLayout> layout;
+};
+
+static BAwLCorrSharedState build_bawl_corr_shared_state(
+    const Rcpp::DataFrame& dadm, int n_trials, int n_lR,
+    const Rcpp::LogicalVector& winner, const Rcpp::IntegerVector& expand,
+    const ContextForRaceModels& ctx, ParamTable& table,
+    const Rcpp::CharacterVector& keep_names);
+
 double c_log_likelihood_bawl_correlated(
-    Rcpp::NumericMatrix pars,
+    BAwLCorrSharedState& cshared,
     Rcpp::DataFrame dadm,
     RacePdf1Fun pdf1,
     RaceCdf1Fun cdf1,
@@ -759,8 +825,9 @@ double c_log_likelihood_bawl_correlated(
     RaceRawFun model_dfun_raw,
     RaceRawFun model_pfun_raw,
     RaceLogSAtTFun logS_at_t,
-    RaceSharedState* shared = nullptr,
-    NumericVector* trial_ll_out = nullptr);
+    RaceSharedState* shared,
+    NumericVector* trial_ll_out,
+    const std::function<Rcpp::NumericMatrix()>& materialize);
 
 static double c_log_likelihood_logicalrules(
     const double* const* pars_cols,
@@ -3035,6 +3102,18 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
                                             has_RACE_col_fp, RACE_fp, RACE_mask_fp);
     }
 
+    // Correlated BAwL: data-fixed layout, role mapping, and direct
+    // ParamTable column pointers resolved once outside the particle loop.
+    // The generic-clock fallback materialises lazily via this callback.
+    BAwLCorrSharedState bawl_corr_shared;
+    if (adapter.ctx.bawl_correlated) {
+      bawl_corr_shared = build_bawl_corr_shared_state(
+          data, n_trials, n_lR, winner, expand, adapter.ctx,
+          param_table_template, keep_names);
+    }
+    const std::function<Rcpp::NumericMatrix()> corr_materialize =
+        [&pt]() { return pt.materialize_reusable(); };
+
     for (int i = 0; i < n_particles; ++i) {
       is_ok = prepare_particle(i);
       is_ok = lr_all(is_ok, n_lR);
@@ -3165,27 +3244,26 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
           total_ll += ll_uniq_buf[expand_ptr[ei] - 1];
         }
         lls[i] = total_ll;
+      } else if (adapter.ctx.bawl_correlated) {
+        lls[i] = c_log_likelihood_bawl_correlated(
+            bawl_corr_shared, data, adapter.pdf1_ptr, adapter.cdf1_ptr,
+            n_trials, winner, expand, min_ll, is_ok, n_lR, &adapter.ctx,
+            all_finite_trials, adapter.model_dfun_raw, adapter.model_pfun_raw,
+            adapter.logS_at_t_ptr,
+            race_shared.valid ? &race_shared : nullptr, nullptr,
+            corr_materialize);
       } else {
         pars = pt.materialize_reusable();
-        if (adapter.ctx.bawl_correlated) {
-          lls[i] = c_log_likelihood_bawl_correlated(
-              pars, data, adapter.pdf1_ptr, adapter.cdf1_ptr, n_trials,
-              winner, expand, min_ll, is_ok, n_lR, &adapter.ctx,
-              all_finite_trials, adapter.model_dfun_raw, adapter.model_pfun_raw,
-              adapter.logS_at_t_ptr,
-              race_shared.valid ? &race_shared : nullptr, nullptr);
-        } else {
-          lls[i] = c_log_likelihood_race(pars, data,
-                                         adapter.pdf1_ptr, adapter.cdf1_ptr,
-                                         n_trials,
-                                         winner, expand, min_ll, is_ok, n_lR,
-                                         &adapter.ctx,
-                                         all_finite_trials,
-                                         adapter.model_dfun_raw,
-                                         adapter.model_pfun_raw,
-                                         adapter.logS_at_t_ptr,
-                                         race_shared.valid ? &race_shared : nullptr);
-        }
+        lls[i] = c_log_likelihood_race(pars, data,
+                                       adapter.pdf1_ptr, adapter.cdf1_ptr,
+                                       n_trials,
+                                       winner, expand, min_ll, is_ok, n_lR,
+                                       &adapter.ctx,
+                                       all_finite_trials,
+                                       adapter.model_dfun_raw,
+                                       adapter.model_pfun_raw,
+                                       adapter.logS_at_t_ptr,
+                                       race_shared.valid ? &race_shared : nullptr);
       }
     }
   }
@@ -3330,19 +3408,29 @@ NumericMatrix calc_ll_oo_pw(NumericMatrix particle_matrix, DataFrame data, Numer
                                             has_RACE_col, RACE_nacc, RACE_mask);
     }
 
+    BAwLCorrSharedState bawl_corr_shared;
+    if (adapter.ctx.bawl_correlated) {
+      bawl_corr_shared = build_bawl_corr_shared_state(
+          data, n_trials, n_lR, winner, expand, adapter.ctx,
+          param_table_template, keep_names);
+    }
+    const std::function<Rcpp::NumericMatrix()> corr_materialize =
+        [&pt]() { return pt.materialize_reusable(); };
+
     for (int i = 0; i < n_particles; ++i) {
       is_ok = pt.prepare(i);
       is_ok = lr_all(is_ok, n_lR);
-      pars = pt.materialize_reusable();
       NumericVector row_vec(n_out_race);
       if (adapter.ctx.bawl_correlated) {
         c_log_likelihood_bawl_correlated(
-            pars, data, adapter.pdf1_ptr, adapter.cdf1_ptr, n_trials,
-            winner, expand, min_ll, is_ok, n_lR, &adapter.ctx,
+            bawl_corr_shared, data, adapter.pdf1_ptr, adapter.cdf1_ptr,
+            n_trials, winner, expand, min_ll, is_ok, n_lR, &adapter.ctx,
             all_finite_trials, adapter.model_dfun_raw, adapter.model_pfun_raw,
             adapter.logS_at_t_ptr,
-            race_shared.valid ? &race_shared : nullptr, &row_vec);
+            race_shared.valid ? &race_shared : nullptr, &row_vec,
+            corr_materialize);
       } else {
+        pars = pt.materialize_reusable();
         c_log_likelihood_race(pars, data,
                               adapter.pdf1_ptr, adapter.cdf1_ptr,
                               n_trials,
@@ -6243,66 +6331,34 @@ apply_trial_trunc:
   return total_ll;
 }
 
-// Correlated BAwL likelihood using a single shared Gaussian factor.  The
-// factor is integrated out with two batched Gauss-Hermite passes: a fixed
-// wide scan locates each trial's integrand mass, then a small rule is
-// re-centered per trial on those moments (see gh_quad.h).  Broad central
-// trials reuse the scan integral; narrow or tail-peaked trials get the
-// recentered pass.  This replaces the old fixed 40/80/200-node schedule with
-// a default 12-node scan plus a selective 12-node refinement.
-// Conditional on a factor value the accumulators are independent, so two
-// evaluators supply the node integrands: a raw batched evaluator for the
-// common all-finite untruncated design (no allocation, kernels called
-// column-wise, z-invariants hoisted), and the ordinary race likelihood for
-// everything else: we alter only v and sv, turn off its truncation
-// correction, and let the existing code handle winners, omissions, clocks,
-// censoring, contaminants, RACE masks, and expansion.  Truncation is
-// normalised as
-//   log int p(data | z) phi(z) dz - log int Z(z) phi(z) dz,
-// rather than by averaging already-normalised node likelihoods.
-double c_log_likelihood_bawl_correlated(
-    Rcpp::NumericMatrix pars,
-    Rcpp::DataFrame dadm,
-    RacePdf1Fun pdf1,
-    RaceCdf1Fun cdf1,
-    const int n_trials,
-    LogicalVector winner,
-    Rcpp::IntegerVector expand,
-    double min_ll,
-    const Rcpp::LogicalVector isok,
-    int n_lR,
-    void* model_context_for_funcs,
-    bool all_finite_trials,
-    RaceRawFun model_dfun_raw,
-    RaceRawFun model_pfun_raw,
-    RaceLogSAtTFun logS_at_t,
-    RaceSharedState* shared,
-    NumericVector* trial_ll_out) {
-  ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(model_context_for_funcs);
-  if (ctx == nullptr || !ctx->bawl_correlated || ctx->bawl_rho_index < 0) {
-    Rcpp::stop("c_log_likelihood_bawl_correlated: invalid correlated BAwL context.");
-  }
-  if (ctx->bawl_rho_index >= pars.ncol()) {
-    Rcpp::stop("c_log_likelihood_bawl_correlated: rho column is outside pars.");
-  }
+// Build the data-fixed correlated BAwL state once per likelihood call: lM
+// role mapping, RACE masks, truncation windows, winner rows, unique-trial
+// expansion, and direct ParamTable column pointers in keep_names order.
+// The fast OO mapper intentionally stops at the design-matrix/natural-scale
+// mapping and does not invoke the model's R Ttransform.  The role mapping
+// resolved here mirrors BAwLcorr's role conversion for the likelihood path;
+// R Ttransform remains the corresponding conversion for mapped parameter
+// displays and simulation.
+static BAwLCorrSharedState build_bawl_corr_shared_state(
+    const Rcpp::DataFrame& dadm, int n_trials, int n_lR,
+    const Rcpp::LogicalVector& winner, const Rcpp::IntegerVector& expand,
+    const ContextForRaceModels& ctx, ParamTable& table,
+    const Rcpp::CharacterVector& keep_names) {
+  BAwLCorrSharedState s;
   if (n_lR <= 0 || n_trials < 0 || n_trials % n_lR != 0) {
     Rcpp::stop("c_log_likelihood_bawl_correlated: invalid race dimensions.");
   }
-
-  const int n_unique = n_trials / n_lR;
-  const int n_out = (expand.length() > 0) ? expand.length() : n_unique;
-  if (trial_ll_out != nullptr && trial_ll_out->size() != n_out) {
-    Rcpp::stop("c_log_likelihood_bawl_correlated: trial_ll_out size mismatch.");
+  s.n_trials = n_trials;
+  s.n_lR = n_lR;
+  s.n_unique = n_trials / n_lR;
+  s.n_out = (expand.length() > 0) ? expand.length() : s.n_unique;
+  s.n_par = keep_names.size();
+  s.rho_col = ctx.bawl_rho_index;
+  if (s.rho_col < 0 || s.rho_col >= s.n_par) {
+    Rcpp::stop("c_log_likelihood_bawl_correlated: rho column is outside pars.");
   }
 
-  if (pars.nrow() != n_trials) {
-    Rcpp::stop("c_log_likelihood_bawl_correlated: pars rows do not match data.");
-  }
-
-  // The fast OO mapper intentionally stops at the design-matrix/natural-scale
-  // mapping and does not invoke the model's R Ttransform.  Mirror BAwLcorr's
-  // role conversion here for the likelihood path.  R Ttransform remains the
-  // corresponding conversion for mapped parameter displays and simulation.
+  // lM role mapping.
   bool lM_is_logical = false;
   Rcpp::LogicalVector lM_logical;
   Rcpp::IntegerVector lM_factor;
@@ -6328,6 +6384,7 @@ double c_log_likelihood_bawl_correlated(
   if (!lM_is_logical && lM_true_code < 0) {
     Rcpp::stop("c_log_likelihood_bawl_correlated: lM must be a logical or TRUE/FALSE factor.");
   }
+  s.role_correct.assign(static_cast<size_t>(n_trials), 0);
   for (int r = 0; r < n_trials; ++r) {
     const bool missing = lM_is_logical
       ? (lM_logical[r] == NA_LOGICAL)
@@ -6335,25 +6392,179 @@ double c_log_likelihood_bawl_correlated(
     if (missing) {
       Rcpp::stop("c_log_likelihood_bawl_correlated: lM contains missing role values.");
     }
-  }
-  auto effective_rho_at = [&](int r, double rho_cell) -> double {
     const bool correct = lM_is_logical
       ? static_cast<bool>(lM_logical[r])
       : (lM_factor[r] == lM_true_code);
-    return correct ? std::fabs(rho_cell) : rho_cell;
-  };
-  std::vector<double> effective_rho(static_cast<size_t>(n_trials), R_NegInf);
-  for (int r = 0; r < n_trials; ++r)
+    s.role_correct[static_cast<size_t>(r)] = correct ? 1 : 0;
+  }
+
+  // RACE masks (attribute-cached variable-accumulator designs only).
+  s.has_RACE = dadm.containsElementNamed("RACE");
+  if (s.has_RACE && dadm.hasAttribute("RACE_nacc_by_row") &&
+      dadm.hasAttribute("RACE_mask")) {
+    s.race_nacc = dadm.attr("RACE_nacc_by_row");
+    s.race_mask = dadm.attr("RACE_mask");
+    if (s.race_nacc.size() != n_trials || s.race_mask.size() != n_trials)
+      s.has_RACE = false;
+  } else {
+    s.has_RACE = false;
+  }
+
+  // Truncation windows.  emc2_all_finite_trials guarantees LT = 0/UT = Inf,
+  // so these are all zero whenever the caller reports all-finite data.
+  s.rt = dadm["rt"];
+  s.LT = get_col_with_default(dadm, "LT", 0.0);
+  s.UT = get_col_with_default(dadm, "UT", R_PosInf);
+  s.has_trunc_trial.assign(static_cast<size_t>(s.n_unique), 0);
+  for (int j = 0; j < s.n_unique; ++j) {
+    const int start = j * n_lR;
+    if (s.LT[start] != 0.0 || s.UT[start] != R_PosInf) {
+      s.has_trunc_trial[static_cast<size_t>(j)] = 1;
+      s.has_truncation = true;
+    }
+  }
+
+  // Winner rows and unique-trial expansion map.
+  s.winner_row.assign(static_cast<size_t>(s.n_unique), -1);
+  for (int r = 0; r < n_trials; ++r) {
+    if (winner[r]) s.winner_row[static_cast<size_t>(r / n_lR)] = r;
+  }
+  s.j_to_i.assign(static_cast<size_t>(s.n_unique), -1);
+  if (expand.length() > 0) {
+    for (int i = s.n_out - 1; i >= 0; --i)
+      s.j_to_i[static_cast<size_t>(expand[i] - 1)] = i;
+  } else {
+    for (int j = 0; j < s.n_unique; ++j) s.j_to_i[static_cast<size_t>(j)] = j;
+  }
+
+  // Direct column pointers; base storage is refilled in place per particle.
+  // base_index_for throws for unknown names exactly like materialisation.
+  s.cols.assign(static_cast<size_t>(std::max(s.n_par, 16)), nullptr);
+  for (int j = 0; j < s.n_par; ++j) {
+    const std::string nm = Rcpp::as<std::string>(keep_names[j]);
+    s.cols[static_cast<size_t>(j)] = &table.base(0, table.base_index_for(nm));
+    if (nm == "pContaminant") s.pc_col = j;
+  }
+
+  s.effective_rho.assign(static_cast<size_t>(n_trials), R_NegInf);
+  s.layout.assign(static_cast<size_t>(s.n_unique), BAwLCorrTrialLayout());
+  s.valid = true;
+  return s;
+}
+
+// Canonical per-particle trial classification (plan design rule C).  Counts
+// only isok && RACE-active rows; an exact-zero loading is an independent
+// singleton, not a loaded dimension.  This classifier is the sole authority
+// for loaded-row discovery and the positivity dimension.
+static void bawl_corr_classify_particle(BAwLCorrSharedState& s,
+                                        const Rcpp::LogicalVector& isok,
+                                        bool no_clock_eligible) {
+  constexpr double kLoadingEps = 1e-14;
+  const int n_lR = s.n_lR;
+  for (int j = 0; j < s.n_unique; ++j) {
+    BAwLCorrTrialLayout& L = s.layout[static_cast<size_t>(j)];
+    L = BAwLCorrTrialLayout();
+    const int start = j * n_lR;
+    const int n_lR_j = s.has_RACE ? s.race_nacc[start] : n_lR;
+    L.winner_row = s.winner_row[static_cast<size_t>(j)];
+    for (int k = 0; k < n_lR_j; ++k) {
+      const int row = start + k;
+      if (s.has_RACE && !s.race_mask[row]) continue;
+      ++L.n_active;
+      const double rho = s.effective_rho[static_cast<size_t>(row)];
+      if (!isok[row] || !R_FINITE(rho) || std::fabs(rho) > 1.0) {
+        L.any_bad_row = true;
+        continue;
+      }
+      if (std::fabs(rho) > kLoadingEps) {
+        if (L.n_loaded < 2) L.loaded_row[L.n_loaded] = row;
+        ++L.n_loaded;
+        if (row == L.winner_row) L.winner_loaded = true;
+      }
+    }
+    if (L.any_bad_row) {
+      L.route = BAwLCorrRoute::invalid;
+    } else if (L.n_loaded <= 1) {
+      L.route = BAwLCorrRoute::ordinary;
+    } else {
+      L.route = no_clock_eligible ? BAwLCorrRoute::gh_no_clock
+                                  : BAwLCorrRoute::gh_generic_clock;
+    }
+  }
+}
+
+// Correlated BAwL likelihood using a single shared Gaussian factor.  The
+// factor is integrated out with two batched Gauss-Hermite passes: a fixed
+// wide scan locates each trial's integrand mass, then a small rule is
+// re-centered per trial on those moments (see gh_quad.h).  Broad central
+// trials reuse the scan integral; narrow or tail-peaked trials get the
+// recentered pass.  This replaces the old fixed 40/80/200-node schedule with
+// a default 12-node scan plus a selective 12-node refinement.
+// Conditional on a factor value the accumulators are independent, so two
+// evaluators supply the node integrands: a raw batched evaluator for the
+// common all-finite untruncated design (no allocation, kernels called
+// column-wise, z-invariants hoisted), and the ordinary race likelihood for
+// everything else: we alter only v and sv, turn off its truncation
+// correction, and let the existing code handle winners, omissions, clocks,
+// censoring, contaminants, RACE masks, and expansion.  Truncation is
+// normalised as
+//   log int p(data | z) phi(z) dz - log int Z(z) phi(z) dz,
+// rather than by averaging already-normalised node likelihoods.
+double c_log_likelihood_bawl_correlated(
+    BAwLCorrSharedState& cshared,
+    Rcpp::DataFrame dadm,
+    RacePdf1Fun pdf1,
+    RaceCdf1Fun cdf1,
+    const int n_trials,
+    LogicalVector winner,
+    Rcpp::IntegerVector expand,
+    double min_ll,
+    const Rcpp::LogicalVector isok,
+    int n_lR,
+    void* model_context_for_funcs,
+    bool all_finite_trials,
+    RaceRawFun model_dfun_raw,
+    RaceRawFun model_pfun_raw,
+    RaceLogSAtTFun logS_at_t,
+    RaceSharedState* shared,
+    NumericVector* trial_ll_out,
+    const std::function<Rcpp::NumericMatrix()>& materialize) {
+  ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(model_context_for_funcs);
+  if (ctx == nullptr || !ctx->bawl_correlated || ctx->bawl_rho_index < 0 ||
+      !cshared.valid || cshared.n_trials != n_trials || cshared.n_lR != n_lR) {
+    Rcpp::stop("c_log_likelihood_bawl_correlated: invalid correlated BAwL context.");
+  }
+
+  const int n_unique = cshared.n_unique;
+  const int n_out = cshared.n_out;
+  if (trial_ll_out != nullptr && trial_ll_out->size() != n_out) {
+    Rcpp::stop("c_log_likelihood_bawl_correlated: trial_ll_out size mismatch.");
+  }
+  const int n_par = cshared.n_par;
+  if (n_par > 64 || n_lR > 64) {
+    Rcpp::stop("c_log_likelihood_bawl_correlated: at most 64 parameter columns and 64 accumulators are supported.");
+  }
+
+  // Role-mapped effective loadings; roles were resolved once in the shared
+  // state, so per particle this is one pass over the raw rho column.
+  const double* rho_col_ptr = cshared.cols[static_cast<size_t>(cshared.rho_col)];
+  std::vector<double>& effective_rho = cshared.effective_rho;
+  for (int r = 0; r < n_trials; ++r) {
+    const double rho_cell = rho_col_ptr[r];
     effective_rho[static_cast<size_t>(r)] =
-      effective_rho_at(r, pars(r, ctx->bawl_rho_index));
+      cshared.role_correct[static_cast<size_t>(r)] ? std::fabs(rho_cell)
+                                                   : rho_cell;
+  }
 
   const bool count_routes = bawl_corr_counters_enabled();
   BAwLCorrCounters& route_counters = bawl_corr_counters();
 
   // If all active loadings are zero, use the exact existing path.  Apart from
-  // being cheaper, this keeps rho=0 bit-for-bit equivalent to independent BAwL.
+  // being cheaper, this keeps rho=0 bit-for-bit equivalent to independent
+  // BAwL.  This is the only route below that consumes a materialised matrix
+  // besides the generic-clock node evaluator.
   bool any_loading = false;
-  for (int r = 0; r < pars.nrow(); ++r) {
+  for (int r = 0; r < n_trials; ++r) {
     if (!isok[r]) continue;
     const double rho = effective_rho[static_cast<size_t>(r)];
     if (!R_FINITE(rho) || std::fabs(rho) > 1.0 || std::fabs(rho) > 1e-14) {
@@ -6363,63 +6574,36 @@ double c_log_likelihood_bawl_correlated(
   }
   if (!any_loading) {
     if (count_routes)
-      route_counters.ordinary_zero_rho_trials += n_trials / n_lR;
-    return c_log_likelihood_race(pars, dadm, pdf1, cdf1, n_trials,
+      route_counters.ordinary_zero_rho_trials += n_unique;
+    return c_log_likelihood_race(materialize(), dadm, pdf1, cdf1, n_trials,
                                   winner, expand, min_ll, isok, n_lR,
                                   model_context_for_funcs, all_finite_trials,
                                   model_dfun_raw, model_pfun_raw, logS_at_t,
                                   shared, trial_ll_out, true);
   }
 
-  bool has_RACE_col = dadm.containsElementNamed("RACE");
-  Rcpp::IntegerVector RACE;
-  Rcpp::LogicalVector RACE_mask;
-  if (has_RACE_col && dadm.hasAttribute("RACE_nacc_by_row") &&
-      dadm.hasAttribute("RACE_mask")) {
-    RACE = dadm.attr("RACE_nacc_by_row");
-    RACE_mask = dadm.attr("RACE_mask");
-    if (RACE.size() != n_trials || RACE_mask.size() != n_trials) has_RACE_col = false;
-  } else {
-    has_RACE_col = false;
-  }
-
-  Rcpp::NumericVector LT, UT;
-  bool has_truncation = false;
-  if (!all_finite_trials) {
-    LT = get_col_with_default(dadm, "LT", 0.0);
-    UT = get_col_with_default(dadm, "UT", R_PosInf);
-    for (int j = 0; j < n_unique; ++j) {
-      const double lt = LT[j * n_lR];
-      const double ut = UT[j * n_lR];
-      if (lt != 0.0 || ut != R_PosInf) {
-        has_truncation = true;
-        break;
-      }
-    }
-  }
+  const bool has_RACE_col = cshared.has_RACE;
+  const Rcpp::IntegerVector& RACE = cshared.race_nacc;
+  const Rcpp::LogicalVector& RACE_mask = cshared.race_mask;
+  const Rcpp::NumericVector& LT = cshared.LT;
+  const Rcpp::NumericVector& UT = cshared.UT;
+  const bool has_truncation = !all_finite_trials && cshared.has_truncation;
+  const std::vector<unsigned char>& has_trunc_trial = cshared.has_trunc_trial;
 
   const bool joint_posdrift = ctx->use_posdrift;
   // Numerator/denominator integrals per unique trial; expanded rows share
   // their unique trial's value and are written out at the end.
   std::vector<double> log_num(static_cast<size_t>(n_unique), R_NegInf);
-  std::vector<unsigned char> has_trunc_trial(static_cast<size_t>(n_unique), 0);
   // Joint positive-drift conditioning needs a denominator for every trial:
   // integral phi(z) prod_k q_k(z) Z+(z) dz.  Without joint conditioning the
   // untruncated denominator is exactly one and only truncated trials need it.
   std::vector<double> log_den(static_cast<size_t>(n_unique),
                               joint_posdrift ? R_NegInf : 0.0);
-  if (has_truncation) {
+  if (has_truncation && !joint_posdrift) {
     for (int j = 0; j < n_unique; ++j) {
-      const int start = j * n_lR;
-      if (LT[start] != 0.0 || UT[start] != R_PosInf) {
-        has_trunc_trial[static_cast<size_t>(j)] = 1;
-        if (!joint_posdrift) log_den[static_cast<size_t>(j)] = R_NegInf;
-      }
+      if (has_trunc_trial[static_cast<size_t>(j)])
+        log_den[static_cast<size_t>(j)] = R_NegInf;
     }
-  }
-  const int n_par = pars.ncol();
-  if (n_par > 64 || n_lR > 64) {
-    Rcpp::stop("c_log_likelihood_bawl_correlated: at most 64 parameter columns and 64 accumulators are supported.");
   }
 
   // Positive-drift denominators without truncation have a closed form: the
@@ -6433,10 +6617,8 @@ double c_log_likelihood_bawl_correlated(
   // the closed form is an accuracy fix, not just a shortcut.
   std::vector<unsigned char> den_by_quadrature(static_cast<size_t>(n_unique), 0);
   {
-    const double* v0c =
-      pars.begin() + static_cast<size_t>(emc2col::bawl::v) * n_trials;
-    const double* sv0c =
-      pars.begin() + static_cast<size_t>(emc2col::bawl::sv) * n_trials;
+    const double* v0c = cshared.cols[static_cast<size_t>(emc2col::bawl::v)];
+    const double* sv0c = cshared.cols[static_cast<size_t>(emc2col::bawl::sv)];
     for (int j = 0; j < n_unique; ++j) {
       if (has_trunc_trial[static_cast<size_t>(j)]) {
         den_by_quadrature[static_cast<size_t>(j)] = 1;
@@ -6521,12 +6703,7 @@ double c_log_likelihood_bawl_correlated(
   // rows share their unique trial's integral, so expansion happens once at
   // the end rather than per node.  j_to_i lets the generic evaluator read one
   // representative expanded row per unique trial.
-  std::vector<int> j_to_i(static_cast<size_t>(n_unique), -1);
-  if (expand.length() > 0) {
-    for (int i = n_out - 1; i >= 0; --i) j_to_i[static_cast<size_t>(expand[i] - 1)] = i;
-  } else {
-    for (int j = 0; j < n_unique; ++j) j_to_i[static_cast<size_t>(j)] = j;
-  }
+  const std::vector<int>& j_to_i = cshared.j_to_i;
 
   // Raw batched conditional evaluator for the common design: all-finite RTs,
   // no truncation, no global-kill/timer/nogo machinery outside the kernels.
@@ -6540,6 +6717,30 @@ double c_log_likelihood_bawl_correlated(
       !ctx->has_global_kill() && !ctx->gng &&
       ctx->time_code == -1 && ctx->nogo_code == -1 &&
       (!dadm.containsElementNamed("RACE") || has_RACE_col);
+
+  // Canonical per-particle trial classification.  Routing still follows the
+  // legacy scan/refine machinery below; the layout is the single authority
+  // for loaded-row counts (positivity dimension) and future route dispatch.
+  bawl_corr_classify_particle(cshared, isok, use_fast_node_eval);
+  if (count_routes) {
+    for (int j = 0; j < n_unique; ++j) {
+      const BAwLCorrTrialLayout& L = cshared.layout[static_cast<size_t>(j)];
+      if (L.n_loaded == 0) ++route_counters.loaded_dimension_0;
+      else if (L.n_loaded == 1) ++route_counters.loaded_dimension_1;
+      else if (L.n_loaded == 2) ++route_counters.loaded_dimension_2;
+      else ++route_counters.loaded_dimension_3plus;
+      if (L.route == BAwLCorrRoute::ordinary) {
+        if (L.n_loaded == 0) ++route_counters.ordinary_zero_rho_trials;
+        else ++route_counters.ordinary_single_loaded_trials;
+      }
+    }
+  }
+
+  // The generic-clock node evaluator is the only remaining consumer of a
+  // materialised parameter matrix; produce it once per particle and only
+  // when that route is actually selected.
+  Rcpp::NumericMatrix pars_generic;
+  if (!use_fast_node_eval) pars_generic = materialize();
 
   Rcpp::NumericVector rts_fast;
   const double* fast_rt = nullptr;
@@ -6557,11 +6758,10 @@ double c_log_likelihood_bawl_correlated(
   bool use_fine_masks = false;
   bool has_fast_const = false;
   if (use_fast_node_eval) {
-    rts_fast = dadm["rt"];
+    rts_fast = cshared.rt;
     fast_rt = rts_fast.begin();
-    const double* pars_base = pars.begin();
-    fast_v0 = pars_base + static_cast<size_t>(emc2col::bawl::v) * n_trials;
-    const double* sv0 = pars_base + static_cast<size_t>(emc2col::bawl::sv) * n_trials;
+    fast_v0 = cshared.cols[static_cast<size_t>(emc2col::bawl::v)];
+    const double* sv0 = cshared.cols[static_cast<size_t>(emc2col::bawl::sv)];
     fast_vq.resize(static_cast<size_t>(n_trials));
     fast_svq.resize(static_cast<size_t>(n_trials));
     fast_slope.resize(static_cast<size_t>(n_trials));
@@ -6600,7 +6800,7 @@ double c_log_likelihood_bawl_correlated(
     }
     fast_cols.assign(static_cast<size_t>(std::max(n_par, 16)), nullptr);
     for (int c = 0; c < n_par; ++c) {
-      fast_cols[static_cast<size_t>(c)] = pars_base + static_cast<size_t>(c) * n_trials;
+      fast_cols[static_cast<size_t>(c)] = cshared.cols[static_cast<size_t>(c)];
     }
     fast_cols[static_cast<size_t>(emc2col::bawl::v)] = fast_vq.data();
     fast_cols[static_cast<size_t>(emc2col::bawl::sv)] = fast_svq.data();
@@ -6708,7 +6908,6 @@ double c_log_likelihood_bawl_correlated(
       fast_var_ok.resize(static_cast<size_t>(n_var));
       fast_var_col_storage.resize(static_cast<size_t>(n_par) * n_var);
       fast_var_cols.assign(static_cast<size_t>(std::max(n_par, 16)), nullptr);
-      const double* pars_base = pars.begin();
       if (n_var > 0) {
         for (int c = 0; c < n_par; ++c) {
           fast_var_cols[static_cast<size_t>(c)] =
@@ -6722,7 +6921,7 @@ double c_log_likelihood_bawl_correlated(
           fast_var_ok[static_cast<size_t>(vi)] = fast_ok[static_cast<size_t>(r)];
           for (int c = 0; c < n_par; ++c) {
             fast_var_col_storage[static_cast<size_t>(c) * n_var + vi] =
-              pars_base[static_cast<size_t>(c) * n_trials + r];
+              cshared.cols[static_cast<size_t>(c)][r];
           }
         }
         fast_var_cols[static_cast<size_t>(emc2col::bawl::v)] = fast_var_vq.data();
@@ -6736,15 +6935,8 @@ double c_log_likelihood_bawl_correlated(
     // path; with all-finite RTs that is a per-trial log(1 - pC) added to the
     // numerator integrand.
     fast_log1m_pc.assign(static_cast<size_t>(n_unique), 0.0);
-    Rcpp::List par_dimnames = pars.attr("dimnames");
-    Rcpp::CharacterVector par_names =
-      Rcpp::as<Rcpp::CharacterVector>(par_dimnames[1]);
-    int pc_col = -1;
-    for (int c = 0; c < par_names.size(); ++c) {
-      if (Rcpp::as<std::string>(par_names[c]) == "pContaminant") { pc_col = c; break; }
-    }
-    if (pc_col >= 0) {
-      const double* pc_ptr = pars_base + static_cast<size_t>(pc_col) * n_trials;
+    if (cshared.pc_col >= 0) {
+      const double* pc_ptr = cshared.cols[static_cast<size_t>(cshared.pc_col)];
       for (int j = 0; j < n_unique; ++j) {
         const double pC = pc_ptr[j * n_lR];
         if (pC != 0.0) fast_log1m_pc[static_cast<size_t>(j)] = std::log1p(-pC);
@@ -6842,7 +7034,7 @@ double c_log_likelihood_bawl_correlated(
     node_num.assign(static_cast<size_t>(n_unique), R_NegInf);
     node_den.assign(static_cast<size_t>(n_unique),
                     joint_posdrift ? R_NegInf : 0.0);
-    Rcpp::NumericMatrix pars_q = Rcpp::clone(pars);
+    Rcpp::NumericMatrix pars_q = Rcpp::clone(pars_generic);
     Rcpp::LogicalVector isok_q = Rcpp::clone(isok);
 
     // Conditional factor model preserving each marginal sv:
@@ -7327,6 +7519,55 @@ Rcpp::List bawl_corr_counter_values() {
 // [[Rcpp::export]]
 void bawl_corr_counters_reset() {
   bawl_corr_counters().reset();
+}
+
+// Test probes for the shared correlated-BAwL geometry (T1).  `B` is the
+// relative threshold; the geometry consumes b = B + A like the raw kernels.
+// [[Rcpp::export]]
+Rcpp::List bawl_time_geometry_probe(double t, double t0, double A, double B,
+                                    double k) {
+  const BAwLTimeGeometry g = bawl_time_geometry(t, t0, A, B + A, k);
+  return Rcpp::List::create(
+      Rcpp::Named("status") = static_cast<int>(g.status),
+      Rcpp::Named("tau") = g.tau,
+      Rcpp::Named("b") = g.b,
+      Rcpp::Named("E") = g.E,
+      Rcpp::Named("G") = g.G,
+      Rcpp::Named("C1") = g.C1,
+      Rcpp::Named("C2") = g.C2,
+      Rcpp::Named("L") = g.L,
+      Rcpp::Named("U") = g.U,
+      Rcpp::Named("alpha") = g.alpha,
+      Rcpp::Named("beta") = g.beta,
+      Rcpp::Named("gamma0") = g.gamma0,
+      Rcpp::Named("gamma1") = g.gamma1,
+      Rcpp::Named("dv_dt") = g.dv_dt);
+}
+
+// Prepared conditional endpoints at latent node z under the factor model
+// v_q = v + sign(rho) sv sqrt(|rho|) z, sv_q = sv max(sqrt(1-|rho|), 1e-12).
+// Returns unnormalised unrestricted values plus the positivity constant so
+// R tests can reassemble both drift modes.
+// [[Rcpp::export]]
+Rcpp::NumericVector bawl_prepared_endpoints_probe(
+    double t, double t0, double A, double B, double k, double v, double sv,
+    double rho, double z, bool joint_positive) {
+  const double magnitude = std::fabs(rho);
+  const double slope =
+    ((rho < 0.0) ? -1.0 : 1.0) * sv * std::sqrt(magnitude);
+  const double sv_res =
+    sv * std::fmax(std::sqrt(std::fmax(0.0, 1.0 - magnitude)), 1e-12);
+  const BAwLTimeGeometry g = bawl_time_geometry(t, t0, A, B + A, k);
+  const BAwLPreparedRow r = bawl_prepare_row(g, v, slope, sv_res);
+  const double vq = r.v0 + r.slope * z;
+  return Rcpp::NumericVector::create(
+      Rcpp::Named("vq") = vq,
+      Rcpp::Named("sv_res") = sv_res,
+      Rcpp::Named("log_pdf") = bawl_prepared_log_pdf(r, vq),
+      Rcpp::Named("log_cdf") = bawl_prepared_log_cdf(r, vq),
+      Rcpp::Named("log_q") = bawl_prepared_log_q(r, vq),
+      Rcpp::Named("log_surv") =
+        bawl_prepared_log_survivor(r, vq, joint_positive));
 }
 
 // Test-only accessor for the shared Gauss-Legendre cache (gl_quad.h). Lets R
