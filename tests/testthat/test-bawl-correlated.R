@@ -243,6 +243,37 @@ test_that("zero rho nests BAwL exactly across race data paths", {
   }
 })
 
+test_that("an independent racer factors out of the correlated quadrature", {
+  skip_on_cran()
+  dat <- data.frame(
+    subjects = factor(1),
+    S = factor("correct", levels = c("correct", "error", "pm")),
+    R = factor("correct", levels = c("correct", "error", "pm")),
+    rt = .7
+  )
+  coupled <- function(d) factor(d$lR != "pm",
+                                levels = c(FALSE, TRUE),
+                                labels = c("no", "yes"))
+  for (pos in c(FALSE, TRUE)) {
+    ctx <- make_bawl_context(
+      dat, BAwLcorr(posdrift = pos),
+      rho_formula = rho ~ 0 + coupled,
+      functions = list(coupled = coupled),
+      constants = c(rho_coupledno = 0)
+    )
+    p <- set_bawl_values(sampled_pars(ctx$design, doMap = FALSE), rho = .6)
+    fast <- as.numeric(do.call(EMC2:::calc_ll_oo, context_args(ctx, p)))
+
+    generic_data <- ctx$emc$data[[1]]
+    attr(generic_data, "emc2_all_finite_trials") <- FALSE
+    generic_args <- context_args(ctx, p)
+    generic_args$data <- generic_data
+    generic <- as.numeric(do.call(EMC2:::calc_ll_oo, generic_args))
+    expect_equal(fast, generic, tolerance = 1e-12,
+                 info = paste("posdrift", pos))
+  }
+})
+
 test_that("correlated likelihood agrees with a dense GH reference", {
   skip_on_cran()
   dat <- data.frame(subjects = factor(1),

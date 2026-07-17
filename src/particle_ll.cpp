@@ -6539,10 +6539,17 @@ double c_log_likelihood_bawl_correlated(
   const double* fast_rt = nullptr;
   const double* fast_v0 = nullptr;
   std::vector<double> fast_vq, fast_svq, fast_slope, fast_res, fast_log1m_pc;
-  std::vector<int> fast_winner, fast_loser, fast_ok;
+  std::vector<double> fast_const_ll, fast_const_pos;
+  std::vector<double> fast_var_rt, fast_var_vq, fast_var_svq,
+    fast_var_col_storage, fast_var_res;
+  std::vector<int> fast_winner, fast_loser, fast_const_winner, fast_const_loser, fast_ok;
+  std::vector<int> fast_var_orig, fast_var_index, fast_var_winner, fast_var_loser,
+    fast_var_ok;
   std::vector<const double*> fast_cols;
+  std::vector<const double*> fast_var_cols;
   std::vector<int> fine_winner, fine_loser;
   bool use_fine_masks = false;
+  bool has_fast_const = false;
   if (use_fast_node_eval) {
     rts_fast = dadm["rt"];
     fast_rt = rts_fast.begin();
@@ -6555,6 +6562,8 @@ double c_log_likelihood_bawl_correlated(
     fast_res.assign(static_cast<size_t>(n_trials), R_NegInf);
     fast_winner.resize(static_cast<size_t>(n_trials));
     fast_loser.resize(static_cast<size_t>(n_trials));
+    fast_const_winner.assign(static_cast<size_t>(n_trials), 0);
+    fast_const_loser.assign(static_cast<size_t>(n_trials), 0);
     fast_ok.resize(static_cast<size_t>(n_trials));
     for (int r = 0; r < n_trials; ++r) {
       const double rho = effective_rho[static_cast<size_t>(r)];
@@ -6569,8 +6578,19 @@ double c_log_likelihood_bawl_correlated(
       fast_slope[static_cast<size_t>(r)] = ok_r ? sign * sv0[r] * loading : 0.0;
       fast_svq[static_cast<size_t>(r)] = sv0[r] * std::fmax(residual, 1e-12);
       const bool active = !has_RACE_col || RACE_mask[r];
-      fast_winner[static_cast<size_t>(r)] = (active && winner[r]) ? 1 : 0;
-      fast_loser[static_cast<size_t>(r)] = (active && n_lR > 1 && !winner[r]) ? 1 : 0;
+      // A valid exact-zero loading is independent of the shared factor. Its
+      // race contribution is evaluated once below and added to every node;
+      // only nonzero-loading rows remain in the node masks.
+      const bool independent = ok_r && magnitude <= 1e-14;
+      if (active && independent) has_fast_const = true;
+      fast_winner[static_cast<size_t>(r)] =
+        (active && winner[r] && !independent) ? 1 : 0;
+      fast_loser[static_cast<size_t>(r)] =
+        (active && n_lR > 1 && !winner[r] && !independent) ? 1 : 0;
+      fast_const_winner[static_cast<size_t>(r)] =
+        (active && winner[r] && independent) ? 1 : 0;
+      fast_const_loser[static_cast<size_t>(r)] =
+        (active && n_lR > 1 && !winner[r] && independent) ? 1 : 0;
     }
     fast_cols.assign(static_cast<size_t>(std::max(n_par, 16)), nullptr);
     for (int c = 0; c < n_par; ++c) {
@@ -6578,6 +6598,133 @@ double c_log_likelihood_bawl_correlated(
     }
     fast_cols[static_cast<size_t>(emc2col::bawl::v)] = fast_vq.data();
     fast_cols[static_cast<size_t>(emc2col::bawl::sv)] = fast_svq.data();
+
+    fast_const_ll.assign(static_cast<size_t>(n_unique), 0.0);
+    fast_const_pos.assign(static_cast<size_t>(n_unique), 0.0);
+    if (has_fast_const) {
+    // Evaluate exact-zero-loading race terms once.  The factor-conditioned
+    // BAwL likelihood is a product of one winner density and loser
+    // survivors, so these rows can be removed from all subsequent node
+    // kernels without approximation.  Initialise the conditional columns to
+    // their marginal values for this one invariant pass.
+    for (int r = 0; r < n_trials; ++r) {
+      fast_vq[static_cast<size_t>(r)] = fast_v0[r];
+      fast_svq[static_cast<size_t>(r)] = sv0[r];
+    }
+    model_dfun_raw(fast_rt, fast_cols.data(), n_trials,
+                   fast_const_winner.data(), fast_ok.data(), fast_res.data(),
+                   R_NegInf, ctx);
+    for (int j = 0; j < n_unique; ++j) {
+      const int start = j * n_lR;
+      const int n_lR_j = has_RACE_col ? RACE[start] : n_lR;
+      double value = 0.0;
+      for (int k = 0; k < n_lR_j; ++k) {
+        const int row = start + k;
+        if (has_RACE_col && !RACE_mask[row]) continue;
+        if (fast_const_winner[static_cast<size_t>(row)])
+          value += fast_res[static_cast<size_t>(row)];
+      }
+      fast_const_ll[static_cast<size_t>(j)] = value;
+    }
+    if (n_lR > 1) {
+      model_pfun_raw(fast_rt, fast_cols.data(), n_trials,
+                     fast_const_loser.data(), fast_ok.data(), fast_res.data(),
+                     R_NegInf, ctx);
+      for (int j = 0; j < n_unique; ++j) {
+        const int start = j * n_lR;
+        const int n_lR_j = has_RACE_col ? RACE[start] : n_lR;
+        for (int k = 0; k < n_lR_j; ++k) {
+          const int row = start + k;
+          if (has_RACE_col && !RACE_mask[row]) continue;
+          if (fast_const_loser[static_cast<size_t>(row)])
+            fast_const_ll[static_cast<size_t>(j)] += fast_res[static_cast<size_t>(row)];
+        }
+      }
+    }
+    if (joint_posdrift) {
+      for (int j = 0; j < n_unique; ++j) {
+        const int start = j * n_lR;
+        const int n_lR_j = has_RACE_col ? RACE[start] : n_lR;
+        for (int k = 0; k < n_lR_j; ++k) {
+          const int row = start + k;
+          if (has_RACE_col && !RACE_mask[row]) continue;
+          if (!fast_const_winner[static_cast<size_t>(row)] &&
+              !fast_const_loser[static_cast<size_t>(row)]) continue;
+          const double sd = fast_svq[static_cast<size_t>(row)];
+          const double mu = fast_vq[static_cast<size_t>(row)];
+          if (!(sd > 0.0) || !R_FINITE(mu)) {
+            fast_const_pos[static_cast<size_t>(j)] = R_NegInf;
+            break;
+          }
+          const double log_q = R::pnorm(mu / sd, 0.0, 1.0, 1, 1);
+          if (!R_FINITE(log_q)) {
+            fast_const_pos[static_cast<size_t>(j)] = R_NegInf;
+            break;
+          }
+          fast_const_pos[static_cast<size_t>(j)] += log_q;
+        }
+      }
+    }
+
+    // The invariant pass above temporarily uses each row's marginal sv.  The
+    // node evaluator must see the conditional residual sv again for every
+    // nonzero-loading row.
+    for (int r = 0; r < n_trials; ++r) {
+      const double rho = effective_rho[static_cast<size_t>(r)];
+      const double magnitude = std::fabs(rho);
+      fast_svq[static_cast<size_t>(r)] =
+        sv0[r] * std::fmax(std::sqrt(std::fmax(0.0, 1.0 - magnitude)), 1e-12);
+    }
+
+    // The raw callbacks are row-major loops over their declared length.  For
+    // a fixed exact-zero loading, compact the remaining rows so those loops
+    // do not pay for an inactive PM (or other independent accumulator) at
+    // every latent node.
+    if (has_fast_const) {
+      fast_var_index.assign(static_cast<size_t>(n_trials), -1);
+      for (int r = 0; r < n_trials; ++r) {
+        if (!has_RACE_col || RACE_mask[r]) {
+          if (!fast_const_winner[static_cast<size_t>(r)] &&
+              !fast_const_loser[static_cast<size_t>(r)]) {
+            fast_var_index[static_cast<size_t>(r)] =
+              static_cast<int>(fast_var_orig.size());
+            fast_var_orig.push_back(r);
+          }
+        }
+      }
+      const int n_var = static_cast<int>(fast_var_orig.size());
+      fast_var_rt.resize(static_cast<size_t>(n_var));
+      fast_var_vq.resize(static_cast<size_t>(n_var));
+      fast_var_svq.resize(static_cast<size_t>(n_var));
+      fast_var_res.assign(static_cast<size_t>(n_var), R_NegInf);
+      fast_var_winner.resize(static_cast<size_t>(n_var));
+      fast_var_loser.resize(static_cast<size_t>(n_var));
+      fast_var_ok.resize(static_cast<size_t>(n_var));
+      fast_var_col_storage.resize(static_cast<size_t>(n_par) * n_var);
+      fast_var_cols.assign(static_cast<size_t>(std::max(n_par, 16)), nullptr);
+      const double* pars_base = pars.begin();
+      if (n_var > 0) {
+        for (int c = 0; c < n_par; ++c) {
+          fast_var_cols[static_cast<size_t>(c)] =
+            fast_var_col_storage.data() + static_cast<size_t>(c) * n_var;
+        }
+        for (int vi = 0; vi < n_var; ++vi) {
+          const int r = fast_var_orig[static_cast<size_t>(vi)];
+          fast_var_rt[static_cast<size_t>(vi)] = fast_rt[r];
+          fast_var_winner[static_cast<size_t>(vi)] = fast_winner[static_cast<size_t>(r)];
+          fast_var_loser[static_cast<size_t>(vi)] = fast_loser[static_cast<size_t>(r)];
+          fast_var_ok[static_cast<size_t>(vi)] = fast_ok[static_cast<size_t>(r)];
+          for (int c = 0; c < n_par; ++c) {
+            fast_var_col_storage[static_cast<size_t>(c) * n_var + vi] =
+              pars_base[static_cast<size_t>(c) * n_trials + r];
+          }
+        }
+        fast_var_cols[static_cast<size_t>(emc2col::bawl::v)] = fast_var_vq.data();
+        fast_var_cols[static_cast<size_t>(emc2col::bawl::sv)] = fast_var_svq.data();
+      }
+    }
+
+    }
 
     // The generic evaluator inherits the contaminant shift from the race
     // path; with all-finite RTs that is a per-trial log(1 - pC) added to the
@@ -6614,23 +6761,55 @@ double c_log_likelihood_bawl_correlated(
     }
     const std::vector<int>& winner_mask = use_fine_masks ? fine_winner : fast_winner;
     const std::vector<int>& loser_mask = use_fine_masks ? fine_loser : fast_loser;
+    if (has_fast_const) {
+      for (size_t vi = 0; vi < fast_var_orig.size(); ++vi) {
+        const int r = fast_var_orig[vi];
+        fast_var_vq[vi] = fast_vq[static_cast<size_t>(r)];
+        fast_var_svq[vi] = fast_svq[static_cast<size_t>(r)];
+        fast_var_winner[vi] = winner_mask[static_cast<size_t>(r)];
+        fast_var_loser[vi] = loser_mask[static_cast<size_t>(r)];
+      }
+    }
     if (need_num) {
-      model_dfun_raw(fast_rt, fast_cols.data(), n_trials, winner_mask.data(),
-                     fast_ok.data(), fast_res.data(), R_NegInf, ctx);
-      if (n_lR > 1) {
-        model_pfun_raw(fast_rt, fast_cols.data(), n_trials, loser_mask.data(),
+      if (has_fast_const) {
+        model_dfun_raw(fast_var_rt.data(), fast_var_cols.data(),
+                       static_cast<int>(fast_var_orig.size()),
+                       fast_var_winner.data(), fast_var_ok.data(),
+                       fast_var_res.data(), R_NegInf, ctx);
+        if (n_lR > 1) {
+          model_pfun_raw(fast_var_rt.data(), fast_var_cols.data(),
+                         static_cast<int>(fast_var_orig.size()),
+                         fast_var_loser.data(), fast_var_ok.data(),
+                         fast_var_res.data(), R_NegInf, ctx);
+        }
+      } else {
+        model_dfun_raw(fast_rt, fast_cols.data(), n_trials, winner_mask.data(),
                        fast_ok.data(), fast_res.data(), R_NegInf, ctx);
+        if (n_lR > 1) {
+          model_pfun_raw(fast_rt, fast_cols.data(), n_trials, loser_mask.data(),
+                         fast_ok.data(), fast_res.data(), R_NegInf, ctx);
+        }
       }
     }
     for (int j = 0; j < n_unique; ++j) {
       const int start = j * n_lR;
       const int n_lR_j = has_RACE_col ? RACE[start] : n_lR;
-      double s = 0.0;
-      double lp = 0.0;
+      double s = has_fast_const ? fast_const_ll[static_cast<size_t>(j)] : 0.0;
+      double lp = (joint_posdrift && has_fast_const)
+        ? fast_const_pos[static_cast<size_t>(j)] : 0.0;
       for (int k = 0; k < n_lR_j; ++k) {
         const int row = start + k;
         if (has_RACE_col && !RACE_mask[row]) continue;
-        if (need_num) s += fast_res[static_cast<size_t>(row)];
+        if (fast_const_winner[static_cast<size_t>(row)] ||
+            fast_const_loser[static_cast<size_t>(row)]) continue;
+        if (need_num) {
+          if (has_fast_const) {
+            const int vi = fast_var_index[static_cast<size_t>(row)];
+            s += fast_var_res[static_cast<size_t>(vi)];
+          } else {
+            s += fast_res[static_cast<size_t>(row)];
+          }
+        }
         if (!joint_posdrift || lp == R_NegInf) continue;
         if (!fast_ok[static_cast<size_t>(row)]) { lp = R_NegInf; continue; }
         const double sd = fast_svq[static_cast<size_t>(row)];
@@ -6900,10 +7079,24 @@ double c_log_likelihood_bawl_correlated(
   // integrands peak in different places (the denominator mass sits near the
   // prior mode), so each gets its own centering; the denominator refinement
   // needs no race pass.
+  double max_abs_rho = 0.0;
+  for (int r = 0; r < n_trials; ++r) {
+    if (!isok[r]) continue;
+    const double rho = effective_rho[static_cast<size_t>(r)];
+    if (R_FINITE(rho) && std::fabs(rho) <= 1.0)
+      max_abs_rho = std::fmax(max_abs_rho, std::fabs(rho));
+  }
+  // The difficult part of the integral is the narrow factor-conditioned
+  // likelihood near |rho| -> 1. Moderate correlations are smooth enough for
+  // a 10-node scan/refinement pair; retain the original 12-node tier for the
+  // sharp cases. Environment overrides remain available for convergence
+  // tests and explicit user tuning.
+  const int scan_default = (max_abs_rho <= 0.6) ? 10 : 12;
+  const int fine_default = (max_abs_rho <= 0.6) ? 10 : 12;
   const GHRule& scan_rule = gh_rule(
-      bawl_corr_quad_nodes("EMC2_BAWLCORR_SCAN_N", 12));
+      bawl_corr_quad_nodes("EMC2_BAWLCORR_SCAN_N", scan_default));
   const GHRule& fine_rule = gh_rule(
-      bawl_corr_quad_nodes("EMC2_BAWLCORR_FINE_N", 12));
+      bawl_corr_quad_nodes("EMC2_BAWLCORR_FINE_N", fine_default));
   const int n_scan = static_cast<int>(scan_rule.x.size());
   const int n_fine = static_cast<int>(fine_rule.x.size());
   const double sqrt2 = std::sqrt(2.0);
