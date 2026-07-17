@@ -6590,6 +6590,36 @@ double c_log_likelihood_bawl_correlated(
   const bool has_truncation = !all_finite_trials && cshared.has_truncation;
   const std::vector<unsigned char>& has_trunc_trial = cshared.has_trunc_trial;
 
+  // Raw batched conditional evaluator eligibility for the common design:
+  // all-finite RTs, no truncation, no global-kill/timer/nogo machinery
+  // outside the kernels.  Everything else falls back to the generic race
+  // evaluator below.
+  const bool use_fast_node_eval =
+      all_finite_trials && !has_truncation &&
+      model_dfun_raw != nullptr && model_pfun_raw != nullptr &&
+      !ctx->has_global_kill() && !ctx->gng &&
+      ctx->time_code == -1 && ctx->nogo_code == -1 &&
+      (!dadm.containsElementNamed("RACE") || has_RACE_col);
+
+  // Canonical per-particle trial classification.  Numerator routing still
+  // follows the legacy scan/refine machinery below; the layout is the single
+  // authority for loaded-row counts (positivity dimension) and future route
+  // dispatch.
+  bawl_corr_classify_particle(cshared, isok, use_fast_node_eval);
+  if (count_routes) {
+    for (int j = 0; j < n_unique; ++j) {
+      const BAwLCorrTrialLayout& L = cshared.layout[static_cast<size_t>(j)];
+      if (L.n_loaded == 0) ++route_counters.loaded_dimension_0;
+      else if (L.n_loaded == 1) ++route_counters.loaded_dimension_1;
+      else if (L.n_loaded == 2) ++route_counters.loaded_dimension_2;
+      else ++route_counters.loaded_dimension_3plus;
+      if (L.route == BAwLCorrRoute::ordinary) {
+        if (L.n_loaded == 0) ++route_counters.ordinary_zero_rho_trials;
+        else ++route_counters.ordinary_single_loaded_trials;
+      }
+    }
+  }
+
   const bool joint_posdrift = ctx->use_posdrift;
   // Numerator/denominator integrals per unique trial; expanded rows share
   // their unique trial's value and are written out at the end.
@@ -6615,6 +6645,11 @@ double c_log_likelihood_bawl_correlated(
   // denominator below.  At high |rho| this integrand is phi against a steep
   // sigmoid, which fixed and moment-matched Hermite rules resolve worst, so
   // the closed form is an accuracy fix, not just a shortcut.
+  // The positivity dimension is the layout's loaded-row count: exact-zero
+  // loadings contribute the same constant q to numerator and denominator and
+  // are cancelled algebraically on both sides, so an independent PM racer
+  // neither raises the closed-form dimension nor forces the quadrature
+  // denominator sweep.
   std::vector<unsigned char> den_by_quadrature(static_cast<size_t>(n_unique), 0);
   {
     const double* v0c = cshared.cols[static_cast<size_t>(emc2col::bawl::v)];
@@ -6625,21 +6660,21 @@ double c_log_likelihood_bawl_correlated(
         continue;
       }
       if (!joint_posdrift) continue;  // denominator is exactly one
-      const int start = j * n_lR;
-      const int n_lR_j = has_RACE_col ? RACE[start] : n_lR;
+      const BAwLCorrTrialLayout& Lj = cshared.layout[static_cast<size_t>(j)];
+      if (Lj.any_bad_row) {
+        log_den[static_cast<size_t>(j)] = R_NegInf;
+        continue;
+      }
+      if (Lj.n_loaded > 2) {
+        den_by_quadrature[static_cast<size_t>(j)] = 1;
+        continue;
+      }
       double h[2] = {0.0, 0.0};
       double b[2] = {0.0, 0.0};
-      int n_active = 0;
       bool bad = false;
-      bool too_many = false;
-      for (int k = 0; k < n_lR_j; ++k) {
-        const int row = start + k;
-        if (has_RACE_col && !RACE_mask[row]) continue;
+      for (int m = 0; m < Lj.n_loaded; ++m) {
+        const int row = Lj.loaded_row[m];
         const double rho = effective_rho[static_cast<size_t>(row)];
-        if (!isok[row] || !R_FINITE(rho) || std::fabs(rho) > 1.0) {
-          bad = true;
-          break;
-        }
         const double sv = sv0c[row];
         const double svq =
           sv * std::fmax(std::sqrt(std::fmax(0.0, 1.0 - std::fabs(rho))), 1e-12);
@@ -6650,23 +6685,17 @@ double c_log_likelihood_bawl_correlated(
         const double bk = slope / svq;
         const double hk = (mu / svq) / std::sqrt(1.0 + bk * bk);
         if (!R_FINITE(bk) || !R_FINITE(hk)) { bad = true; break; }
-        if (n_active >= 2) { too_many = true; break; }
-        h[n_active] = hk;
-        b[n_active] = bk;
-        ++n_active;
+        h[m] = hk;
+        b[m] = bk;
       }
       if (bad) {
         log_den[static_cast<size_t>(j)] = R_NegInf;
         continue;
       }
-      if (too_many) {
-        den_by_quadrature[static_cast<size_t>(j)] = 1;
-        continue;
-      }
-      if (n_active == 0) {
+      if (Lj.n_loaded == 0) {
         log_den[static_cast<size_t>(j)] = 0.0;
-      } else if (n_active == 1) {
-        log_den[static_cast<size_t>(j)] = R::pnorm(h[0], 0.0, 1.0, 1, 1);
+      } else if (Lj.n_loaded == 1) {
+        log_den[static_cast<size_t>(j)] = pnorm_log_direct(h[0], true);
       } else {
         const double rho12 =
           b[0] * b[1] / std::sqrt((1.0 + b[0] * b[0]) * (1.0 + b[1] * b[1]));
@@ -6678,7 +6707,9 @@ double c_log_likelihood_bawl_correlated(
   }
 
   // Positivity reweighting is evaluated on the node-shifted Gaussian means
-  // and residual SDs.  RACE-inactive rows do not participate in the product.
+  // and residual SDs.  RACE-inactive rows do not participate in the product,
+  // and zero-loading rows are cancelled: their constant q appears in both
+  // the numerator and denominator integrands, so it is omitted from both.
   auto log_positive_trial = [&](const Rcpp::NumericMatrix& pars_q,
                                 const Rcpp::LogicalVector& isok_q,
                                 int j) -> double {
@@ -6692,7 +6723,9 @@ double c_log_likelihood_bawl_correlated(
       const double sd = pars_q(row, emc2col::bawl::sv);
       const double mu = pars_q(row, emc2col::bawl::v);
       if (!(sd > 0.0) || !R_FINITE(mu)) return R_NegInf;
-      const double log_q = R::pnorm(mu / sd, 0.0, 1.0, 1, 1);
+      const double rho = effective_rho[static_cast<size_t>(row)];
+      if (std::fabs(rho) <= 1e-14) continue;  // cancelled constant
+      const double log_q = pnorm_log_direct(mu / sd, true);
       if (!R_FINITE(log_q)) return R_NegInf;
       out += log_q;
     }
@@ -6705,37 +6738,6 @@ double c_log_likelihood_bawl_correlated(
   // representative expanded row per unique trial.
   const std::vector<int>& j_to_i = cshared.j_to_i;
 
-  // Raw batched conditional evaluator for the common design: all-finite RTs,
-  // no truncation, no global-kill/timer/nogo machinery outside the kernels.
-  // Only v depends on the factor value (one fused multiply-add per row); the
-  // residual sv, factor loadings, masks, and column pointers are hoisted out
-  // of the node loop, and the BAwL kernels write straight into flat buffers.
-  // Everything else falls back to the generic race evaluator below.
-  const bool use_fast_node_eval =
-      all_finite_trials && !has_truncation &&
-      model_dfun_raw != nullptr && model_pfun_raw != nullptr &&
-      !ctx->has_global_kill() && !ctx->gng &&
-      ctx->time_code == -1 && ctx->nogo_code == -1 &&
-      (!dadm.containsElementNamed("RACE") || has_RACE_col);
-
-  // Canonical per-particle trial classification.  Routing still follows the
-  // legacy scan/refine machinery below; the layout is the single authority
-  // for loaded-row counts (positivity dimension) and future route dispatch.
-  bawl_corr_classify_particle(cshared, isok, use_fast_node_eval);
-  if (count_routes) {
-    for (int j = 0; j < n_unique; ++j) {
-      const BAwLCorrTrialLayout& L = cshared.layout[static_cast<size_t>(j)];
-      if (L.n_loaded == 0) ++route_counters.loaded_dimension_0;
-      else if (L.n_loaded == 1) ++route_counters.loaded_dimension_1;
-      else if (L.n_loaded == 2) ++route_counters.loaded_dimension_2;
-      else ++route_counters.loaded_dimension_3plus;
-      if (L.route == BAwLCorrRoute::ordinary) {
-        if (L.n_loaded == 0) ++route_counters.ordinary_zero_rho_trials;
-        else ++route_counters.ordinary_single_loaded_trials;
-      }
-    }
-  }
-
   // The generic-clock node evaluator is the only remaining consumer of a
   // materialised parameter matrix; produce it once per particle and only
   // when that route is actually selected.
@@ -6746,7 +6748,7 @@ double c_log_likelihood_bawl_correlated(
   const double* fast_rt = nullptr;
   const double* fast_v0 = nullptr;
   std::vector<double> fast_vq, fast_svq, fast_slope, fast_res, fast_log1m_pc;
-  std::vector<double> fast_const_ll, fast_const_pos;
+  std::vector<double> fast_const_ll;
   std::vector<double> fast_var_rt, fast_var_vq, fast_var_svq,
     fast_var_col_storage, fast_var_res;
   std::vector<int> fast_winner, fast_loser, fast_const_winner, fast_const_loser, fast_ok;
@@ -6806,7 +6808,6 @@ double c_log_likelihood_bawl_correlated(
     fast_cols[static_cast<size_t>(emc2col::bawl::sv)] = fast_svq.data();
 
     fast_const_ll.assign(static_cast<size_t>(n_unique), 0.0);
-    fast_const_pos.assign(static_cast<size_t>(n_unique), 0.0);
     if (has_fast_const) {
     // Evaluate exact-zero-loading race terms once.  The factor-conditioned
     // BAwL likelihood is a product of one winner density and loser
@@ -6847,30 +6848,9 @@ double c_log_likelihood_bawl_correlated(
         }
       }
     }
-    if (joint_posdrift) {
-      for (int j = 0; j < n_unique; ++j) {
-        const int start = j * n_lR;
-        const int n_lR_j = has_RACE_col ? RACE[start] : n_lR;
-        for (int k = 0; k < n_lR_j; ++k) {
-          const int row = start + k;
-          if (has_RACE_col && !RACE_mask[row]) continue;
-          if (!fast_const_winner[static_cast<size_t>(row)] &&
-              !fast_const_loser[static_cast<size_t>(row)]) continue;
-          const double sd = fast_svq[static_cast<size_t>(row)];
-          const double mu = fast_vq[static_cast<size_t>(row)];
-          if (!(sd > 0.0) || !R_FINITE(mu)) {
-            fast_const_pos[static_cast<size_t>(j)] = R_NegInf;
-            break;
-          }
-          const double log_q = R::pnorm(mu / sd, 0.0, 1.0, 1, 1);
-          if (!R_FINITE(log_q)) {
-            fast_const_pos[static_cast<size_t>(j)] = R_NegInf;
-            break;
-          }
-          fast_const_pos[static_cast<size_t>(j)] += log_q;
-        }
-      }
-    }
+    // Zero-loading rows' positivity constants q are NOT accumulated here:
+    // they appear identically in the numerator and denominator integrands
+    // and are cancelled algebraically on both sides.
 
     // The invariant pass above temporarily uses each row's marginal sv.  The
     // node evaluator must see the conditional residual sv again for every
@@ -6993,8 +6973,7 @@ double c_log_likelihood_bawl_correlated(
       const int start = j * n_lR;
       const int n_lR_j = has_RACE_col ? RACE[start] : n_lR;
       double s = has_fast_const ? fast_const_ll[static_cast<size_t>(j)] : 0.0;
-      double lp = (joint_posdrift && has_fast_const)
-        ? fast_const_pos[static_cast<size_t>(j)] : 0.0;
+      double lp = 0.0;
       for (int k = 0; k < n_lR_j; ++k) {
         const int row = start + k;
         if (has_RACE_col && !RACE_mask[row]) continue;
@@ -7013,7 +6992,7 @@ double c_log_likelihood_bawl_correlated(
         const double sd = fast_svq[static_cast<size_t>(row)];
         const double mu = fast_vq[static_cast<size_t>(row)];
         if (!(sd > 0.0) || !R_FINITE(mu)) { lp = R_NegInf; continue; }
-        const double log_q = R::pnorm(mu / sd, 0.0, 1.0, 1, 1);
+        const double log_q = pnorm_log_direct(mu / sd, true);
         if (!R_FINITE(log_q)) { lp = R_NegInf; continue; }
         lp += log_q;
       }

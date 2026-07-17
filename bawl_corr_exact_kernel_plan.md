@@ -1156,6 +1156,26 @@ Route/node counters confirm the baseline issues named above:
 - Verified: benchmark lls bit-identical pre/post refactor; full
   `test-bawl-correlated.R` green from a fresh temp-library install.
 
+### Step 3 — denominator and normal-CDF fixes (DONE, 2026-07-17)
+
+- Positivity dimension now comes from the layout's loaded-row count; the
+  closed-form denominator builds its 1-D/BVN arguments from loaded rows
+  only.  Zero-loading rows' constant q factors are cancelled algebraically
+  from both the numerator node integrands (fast and generic evaluators) and
+  the denominator.
+- Correct/error + independent PM: `den_quadrature_trials` is now 0 (was
+  every RACE=3 trial); PM with nonzero rho still routes to the quadrature
+  denominator (asserted in the T3 test).
+- All correlated positivity sites use `pnorm_log_direct()` instead of
+  `R::pnorm(..., log=TRUE)` (closed-form 1-D denominator, generic
+  `log_positive_trial`, fast node q loop).
+- Benchmark (N=2000): PM scenarios 0.039/0.040 s -> 0.018/0.020 s (~2.1x);
+  all correlated scenarios gained ~15-25% from the pnorm switch;
+  `forced_gh_3loaded` 0.050 -> 0.035 s.  Verified against a dense 800-node
+  GH reference on a PM trial: |diff| = 1.5e-6 (the removed 64-node sweep
+  carried ~1.5e-3 of quadrature error per trial).  Full correlated test
+  file green from a fresh temp-library install.
+
 ## Implementation sequence
 
 This order deliberately creates final shared infrastructure before either the

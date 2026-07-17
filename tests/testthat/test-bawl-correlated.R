@@ -255,12 +255,17 @@ test_that("layout classifier reports canonical loaded dimensions", {
   c_pm0 <- counters_for(ctx, p_pm0)
   expect_equal(unname(c_pm0[["loaded_dimension_2"]]), 4)
   expect_equal(unname(c_pm0[["loaded_dimension_3plus"]]), 0)
+  # Correct/error + independent PM must keep the closed-form denominator:
+  # no trial may activate the quadrature denominator sweep.
+  expect_equal(unname(c_pm0[["den_quadrature_trials"]]), 0)
 
   ctx_all <- make_bawl_context(dat, BAwLcorr(), rho_formula = rho ~ 1)
   p_all <- set_bawl_values(sampled_pars(ctx_all$design, doMap = FALSE),
                            rho = .6)
   c_all <- counters_for(ctx_all, p_all)
   expect_equal(unname(c_all[["loaded_dimension_3plus"]]), 4)
+  # A genuinely loaded PM restores the three-dimensional quadrature route.
+  expect_equal(unname(c_all[["den_quadrature_trials"]]), 4)
 
   p_zero <- set_bawl_values(sampled_pars(ctx$design, doMap = FALSE), rho = 0)
   c_zero <- counters_for(ctx, p_zero)
