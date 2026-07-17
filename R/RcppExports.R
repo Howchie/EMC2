@@ -361,6 +361,14 @@ get_pars_c_batch_wrapper_oo <- function(particle_matrix, data, constants, design
     .Call(`_EMC2_get_pars_c_batch_wrapper_oo`, particle_matrix, data, constants, designs, bounds, transforms, pretransforms, trend, return_kernel_matrix, return_all_pars, kernel_output_codes)
 }
 
+bawl_corr_counter_values <- function() {
+    .Call(`_EMC2_bawl_corr_counter_values`)
+}
+
+bawl_corr_counters_reset <- function() {
+    invisible(.Call(`_EMC2_bawl_corr_counters_reset`))
+}
+
 gl_rule_nodes_weights <- function(n) {
     .Call(`_EMC2_gl_rule_nodes_weights`, n)
 }

@@ -17,6 +17,7 @@
 #include "TrendEngine.h"
 #include "transform_utils.h"
 #include "gh_quad.h"
+#include "bawl_corr_counters.h"
 #include <gsl/gsl_integration.h>
 #include <gsl/gsl_errno.h> // For GSL error handling
 #include <cmath>
@@ -6346,6 +6347,9 @@ double c_log_likelihood_bawl_correlated(
     effective_rho[static_cast<size_t>(r)] =
       effective_rho_at(r, pars(r, ctx->bawl_rho_index));
 
+  const bool count_routes = bawl_corr_counters_enabled();
+  BAwLCorrCounters& route_counters = bawl_corr_counters();
+
   // If all active loadings are zero, use the exact existing path.  Apart from
   // being cheaper, this keeps rho=0 bit-for-bit equivalent to independent BAwL.
   bool any_loading = false;
@@ -6358,6 +6362,8 @@ double c_log_likelihood_bawl_correlated(
     }
   }
   if (!any_loading) {
+    if (count_routes)
+      route_counters.ordinary_zero_rho_trials += n_trials / n_lR;
     return c_log_likelihood_race(pars, dadm, pdf1, cdf1, n_trials,
                                   winner, expand, min_ll, isok, n_lR,
                                   model_context_for_funcs, all_finite_trials,
@@ -7105,6 +7111,17 @@ double c_log_likelihood_bawl_correlated(
     if (den_by_quadrature[static_cast<size_t>(j)]) { any_quad_den = true; break; }
   }
 
+  if (count_routes) {
+    long long n_quad_den = 0;
+    for (int j = 0; j < n_unique; ++j)
+      if (den_by_quadrature[static_cast<size_t>(j)]) ++n_quad_den;
+    route_counters.den_quadrature_trials += n_quad_den;
+    if (use_fast_node_eval) route_counters.gh_no_clock_trials += n_unique;
+    else route_counters.gh_generic_clock_trials += n_unique;
+    route_counters.scan_node_evaluations +=
+      static_cast<long long>(n_scan) * n_unique;
+  }
+
   std::vector<double> node_num;
   std::vector<double> node_den;
   std::vector<double> z_by_trial(static_cast<size_t>(n_unique));
@@ -7191,6 +7208,15 @@ double c_log_likelihood_bawl_correlated(
     use_fine_masks = true;
   }
 
+  if (count_routes) {
+    long long n_refined = 0;
+    for (int j = 0; j < n_unique; ++j)
+      if (refine_num[static_cast<size_t>(j)]) ++n_refined;
+    route_counters.scan_refinement_trials += n_refined;
+    route_counters.fine_node_evaluations +=
+      static_cast<long long>(n_fine) * n_refined;
+  }
+
   // The per-node raw evaluator consults these masks only during the optional
   // refinement pass; the scan still evaluates every active racer.
   for (int q = 0; q < n_fine; ++q) {
@@ -7219,6 +7245,13 @@ double c_log_likelihood_bawl_correlated(
     const GHRule& den_rule = gh_rule(64);
     const int n_den = static_cast<int>(den_rule.x.size());
     const std::vector<double> den_lgw = fine_log_gauss_weights(den_rule);
+    if (count_routes) {
+      long long n_quad_den = 0;
+      for (int j = 0; j < n_unique; ++j)
+        if (den_by_quadrature[static_cast<size_t>(j)]) ++n_quad_den;
+      route_counters.den_quadrature_node_evaluations +=
+        static_cast<long long>(n_den) * n_quad_den;
+    }
     for (int q = 0; q < n_den; ++q) {
       const double x = sqrt2 * den_rule.x[static_cast<size_t>(q)];
       for (int j = 0; j < n_unique; ++j) {
@@ -7256,6 +7289,44 @@ double c_log_likelihood_bawl_correlated(
     }
   }
   return total_ll;
+}
+
+// Test/benchmark observability accessors for the correlated BAwL route
+// counters (see src/bawl_corr_counters.h).  Counting is active only while
+// EMC2_BAWLCORR_COUNTERS is set; the accessors themselves always work.
+// [[Rcpp::export]]
+Rcpp::List bawl_corr_counter_values() {
+  const BAwLCorrCounters& c = bawl_corr_counters();
+  return Rcpp::List::create(
+      Rcpp::Named("ordinary_zero_rho_trials") = (double)c.ordinary_zero_rho_trials,
+      Rcpp::Named("ordinary_single_loaded_trials") = (double)c.ordinary_single_loaded_trials,
+      Rcpp::Named("exact_pair_trials") = (double)c.exact_pair_trials,
+      Rcpp::Named("exact_pair_pair_winner_trials") = (double)c.exact_pair_pair_winner_trials,
+      Rcpp::Named("exact_pair_independent_winner_trials") = (double)c.exact_pair_independent_winner_trials,
+      Rcpp::Named("exact_pair_point_start_trials") = (double)c.exact_pair_point_start_trials,
+      Rcpp::Named("numeric_pair_trials") = (double)c.numeric_pair_trials,
+      Rcpp::Named("gh_no_clock_trials") = (double)c.gh_no_clock_trials,
+      Rcpp::Named("gh_generic_clock_trials") = (double)c.gh_generic_clock_trials,
+      Rcpp::Named("loaded_dimension_0") = (double)c.loaded_dimension_0,
+      Rcpp::Named("loaded_dimension_1") = (double)c.loaded_dimension_1,
+      Rcpp::Named("loaded_dimension_2") = (double)c.loaded_dimension_2,
+      Rcpp::Named("loaded_dimension_3plus") = (double)c.loaded_dimension_3plus,
+      Rcpp::Named("prepared_rows") = (double)c.prepared_rows,
+      Rcpp::Named("fused_node_evaluations") = (double)c.fused_node_evaluations,
+      Rcpp::Named("bvn_corner_evaluations") = (double)c.bvn_corner_evaluations,
+      Rcpp::Named("analytic_center_eligible_trials") = (double)c.analytic_center_eligible_trials,
+      Rcpp::Named("analytic_center_success_trials") = (double)c.analytic_center_success_trials,
+      Rcpp::Named("survivor_scan_trials") = (double)c.survivor_scan_trials,
+      Rcpp::Named("scan_refinement_trials") = (double)c.scan_refinement_trials,
+      Rcpp::Named("scan_node_evaluations") = (double)c.scan_node_evaluations,
+      Rcpp::Named("fine_node_evaluations") = (double)c.fine_node_evaluations,
+      Rcpp::Named("den_quadrature_trials") = (double)c.den_quadrature_trials,
+      Rcpp::Named("den_quadrature_node_evaluations") = (double)c.den_quadrature_node_evaluations);
+}
+
+// [[Rcpp::export]]
+void bawl_corr_counters_reset() {
+  bawl_corr_counters().reset();
 }
 
 // Test-only accessor for the shared Gauss-Legendre cache (gl_quad.h). Lets R

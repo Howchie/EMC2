@@ -1508,6 +1508,25 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// bawl_corr_counter_values
+Rcpp::List bawl_corr_counter_values();
+RcppExport SEXP _EMC2_bawl_corr_counter_values() {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    rcpp_result_gen = Rcpp::wrap(bawl_corr_counter_values());
+    return rcpp_result_gen;
+END_RCPP
+}
+// bawl_corr_counters_reset
+void bawl_corr_counters_reset();
+RcppExport SEXP _EMC2_bawl_corr_counters_reset() {
+BEGIN_RCPP
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    bawl_corr_counters_reset();
+    return R_NilValue;
+END_RCPP
+}
 // gl_rule_nodes_weights
 Rcpp::List gl_rule_nodes_weights(int n);
 RcppExport SEXP _EMC2_gl_rule_nodes_weights(SEXP nSEXP) {
@@ -1657,6 +1676,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_calc_ll_oo_pw", (DL_FUNC) &_EMC2_calc_ll_oo_pw, 11},
     {"_EMC2_get_pars_c_wrapper_oo", (DL_FUNC) &_EMC2_get_pars_c_wrapper_oo, 11},
     {"_EMC2_get_pars_c_batch_wrapper_oo", (DL_FUNC) &_EMC2_get_pars_c_batch_wrapper_oo, 11},
+    {"_EMC2_bawl_corr_counter_values", (DL_FUNC) &_EMC2_bawl_corr_counter_values, 0},
+    {"_EMC2_bawl_corr_counters_reset", (DL_FUNC) &_EMC2_bawl_corr_counters_reset, 0},
     {"_EMC2_gl_rule_nodes_weights", (DL_FUNC) &_EMC2_gl_rule_nodes_weights, 1},
     {"_EMC2_run_trend_rcpp", (DL_FUNC) &_EMC2_run_trend_rcpp, 6},
     {"_EMC2_pigt", (DL_FUNC) &_EMC2_pigt, 5},
