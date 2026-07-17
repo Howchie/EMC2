@@ -21,6 +21,7 @@
 #include <gsl/gsl_integration.h>
 #include <gsl/gsl_errno.h> // For GSL error handling
 #include "bawl_geometry.h"
+#include "bawl_corr_exact.h"
 #include <cmath>
 #include <string>
 #include <memory>
@@ -780,7 +781,7 @@ struct BAwLCorrSharedState {
   int n_par = 0;
 
   // R holders keeping backing memory alive
-  Rcpp::NumericVector rt, LT, UT;
+  Rcpp::NumericVector rt, LT, UT, LC, UC;
   Rcpp::IntegerVector race_nacc;
   Rcpp::LogicalVector race_mask;
   bool has_RACE = false;
@@ -6415,6 +6416,8 @@ static BAwLCorrSharedState build_bawl_corr_shared_state(
   s.rt = dadm["rt"];
   s.LT = get_col_with_default(dadm, "LT", 0.0);
   s.UT = get_col_with_default(dadm, "UT", R_PosInf);
+  s.LC = get_col_with_default(dadm, "LC", R_PosInf);
+  s.UC = get_col_with_default(dadm, "UC", 0.0);
   s.has_trunc_trial.assign(static_cast<size_t>(s.n_unique), 0);
   for (int j = 0; j < s.n_unique; ++j) {
     const int start = j * n_lR;
@@ -6487,10 +6490,374 @@ static void bawl_corr_classify_particle(BAwLCorrSharedState& s,
     } else if (L.n_loaded <= 1) {
       L.route = BAwLCorrRoute::ordinary;
     } else {
-      L.route = no_clock_eligible ? BAwLCorrRoute::gh_no_clock
-                                  : BAwLCorrRoute::gh_generic_clock;
+      // A two-loaded no-clock trial is the exact component route.  Trials
+      // with a larger factor dimension retain the fused GH fallback; active
+      // clocks retain the generic race semantics even when only two rows are
+      // loaded.
+      L.route = no_clock_eligible
+        ? ((L.n_loaded == 2) ? BAwLCorrRoute::exact_pair
+                             : BAwLCorrRoute::gh_no_clock)
+        : BAwLCorrRoute::gh_generic_clock;
     }
   }
+}
+
+struct BAwLCorrPairData {
+  int row1 = -1;
+  int row2 = -1;
+  double mu1 = 0.0;
+  double mu2 = 0.0;
+  double sd1 = 1.0;
+  double sd2 = 1.0;
+  double rho = 0.0;
+  double normalizer = 1.0;
+  bool positive = false;
+};
+
+static inline double bawl_corr_row_k(const double* const* cols, int row,
+                                     const ContextForRaceModels* ctx) {
+  return ctx->bawl_k_fixed_zero ? 0.0 : cols[emc2col::bawl::k][row];
+}
+
+static inline BAwLTimeGeometry bawl_corr_row_geometry(
+    double t, const double* const* cols, int row,
+    const ContextForRaceModels* ctx) {
+  const double A = cols[emc2col::bawl::A][row];
+  const double B = cols[emc2col::bawl::B][row];
+  return bawl_time_geometry(t, cols[emc2col::bawl::t0][row], A, B + A,
+                            bawl_corr_row_k(cols, row, ctx));
+}
+
+static inline bool bawl_corr_make_pair_data(
+    const BAwLCorrTrialLayout& layout, const std::vector<double>& effective_rho,
+    const double* const* cols, const ContextForRaceModels* ctx,
+    BAwLCorrPairData& out) {
+  if (layout.n_loaded != 2 || layout.loaded_row[0] < 0 ||
+      layout.loaded_row[1] < 0) return false;
+  out.row1 = layout.loaded_row[0];
+  out.row2 = layout.loaded_row[1];
+  out.mu1 = cols[emc2col::bawl::v][out.row1];
+  out.mu2 = cols[emc2col::bawl::v][out.row2];
+  out.sd1 = cols[emc2col::bawl::sv][out.row1];
+  out.sd2 = cols[emc2col::bawl::sv][out.row2];
+  const double r1 = effective_rho[static_cast<size_t>(out.row1)];
+  const double r2 = effective_rho[static_cast<size_t>(out.row2)];
+  if (!(out.sd1 > 0.0) || !(out.sd2 > 0.0) || !R_FINITE(out.mu1) ||
+      !R_FINITE(out.mu2) || !R_FINITE(r1) || !R_FINITE(r2) ||
+      std::fabs(r1) > 1.0 || std::fabs(r2) > 1.0) return false;
+  out.rho = (r1 * r2 < 0.0 ? -1.0 : 1.0) *
+    std::sqrt(std::fabs(r1 * r2));
+  out.positive = ctx->use_posdrift;
+  out.normalizer = bawl_corr_pair_positive_normalizer(
+      out.mu1, out.sd1, out.mu2, out.sd2, out.rho, out.positive);
+  return R_FINITE(out.normalizer) && out.normalizer > 0.0;
+}
+
+static inline double bawl_corr_single_log_survival(
+    double t, int row, const double* const* cols,
+    const ContextForRaceModels* ctx) {
+  const double t0 = cols[emc2col::bawl::t0][row];
+  const double tau = t - t0;
+  if (ISNAN(t) || ISNAN(t0) || !(t > 0.0) || !(tau > 0.0)) return 0.0;
+  const double A = cols[emc2col::bawl::A][row];
+  const double B = cols[emc2col::bawl::B][row];
+  const double v = cols[emc2col::bawl::v][row];
+  const double sv = cols[emc2col::bawl::sv][row];
+  const double k = bawl_corr_row_k(cols, row, ctx);
+  const double log_cdf = log_ba_cdf(
+      tau, A, B + A, v, sv, k, ctx->use_posdrift,
+      ctx->bawl_k_fixed_zero ? LBA_DENOM_FLOOR : BAWL_DENOM_FLOOR);
+  if (log_cdf == R_NegInf) return 0.0;
+  if (log_cdf >= 0.0) return R_NegInf;
+  return log1m_exp(log_cdf);
+}
+
+static inline double bawl_corr_single_log_density(
+    double t, int row, const double* const* cols,
+    const ContextForRaceModels* ctx) {
+  if (!(t > 0.0) || !R_FINITE(t)) return R_NegInf;
+  const double t0 = cols[emc2col::bawl::t0][row];
+  const double tau = t - t0;
+  if (!(tau > 0.0) || !R_FINITE(tau)) return R_NegInf;
+  const double A = cols[emc2col::bawl::A][row];
+  const double B = cols[emc2col::bawl::B][row];
+  const double v = cols[emc2col::bawl::v][row];
+  const double sv = cols[emc2col::bawl::sv][row];
+  const double k = bawl_corr_row_k(cols, row, ctx);
+  return log_ba_pdf(tau, A, B + A, v, sv, k, ctx->use_posdrift,
+                    ctx->bawl_k_fixed_zero ? LBA_DENOM_FLOOR : BAWL_DENOM_FLOOR);
+}
+
+static inline double bawl_corr_log_pair_survival(
+    const BAwLCorrPairData& pair, double t, const double* const* cols,
+    const ContextForRaceModels* ctx, bool numeric,
+    BAwLCorrMomentStatus* status_out = nullptr) {
+  const BAwLTimeGeometry g1 = bawl_corr_row_geometry(t, cols, pair.row1, ctx);
+  const BAwLTimeGeometry g2 = bawl_corr_row_geometry(t, cols, pair.row2, ctx);
+  const bool use_numeric = numeric || std::fabs(pair.rho) >= 1.0 - 1e-10;
+  const BAwLCorrPairResult result = use_numeric
+    ? bawl_corr_pair_survival_numeric(g1, g2, pair.mu1, pair.sd1, pair.mu2,
+                                      pair.sd2, pair.rho, pair.positive,
+                                      pair.normalizer)
+    : bawl_corr_pair_survival_exact(g1, g2, pair.mu1, pair.sd1, pair.mu2,
+                                    pair.sd2, pair.rho, pair.positive,
+                                    pair.normalizer);
+  if (status_out != nullptr) *status_out = result.status;
+  if (!(result.value > 0.0) || !R_FINITE(result.value)) return R_NegInf;
+  return std::log(result.value);
+}
+
+static inline double bawl_corr_log_pair_cause(
+    const BAwLCorrPairData& pair, int winner_row, double t,
+    const double* const* cols, const ContextForRaceModels* ctx, bool numeric,
+    BAwLCorrMomentStatus* status_out = nullptr) {
+  const bool first = winner_row == pair.row1;
+  const int rw = first ? pair.row1 : pair.row2;
+  const int rl = first ? pair.row2 : pair.row1;
+  const BAwLTimeGeometry gw = bawl_corr_row_geometry(t, cols, rw, ctx);
+  const BAwLTimeGeometry gl = bawl_corr_row_geometry(t, cols, rl, ctx);
+  const bool use_numeric = numeric || std::fabs(pair.rho) >= 1.0 - 1e-10;
+  const BAwLCorrPairResult result = use_numeric
+    ? bawl_corr_pair_cause_numeric(
+        gw, gl, cols[emc2col::bawl::v][rw], cols[emc2col::bawl::sv][rw],
+        cols[emc2col::bawl::v][rl], cols[emc2col::bawl::sv][rl], pair.rho,
+        pair.positive, pair.normalizer)
+    : bawl_corr_pair_cause_exact(
+        gw, gl, cols[emc2col::bawl::v][rw], cols[emc2col::bawl::sv][rw],
+        cols[emc2col::bawl::v][rl], cols[emc2col::bawl::sv][rl], pair.rho,
+        pair.positive, pair.normalizer);
+  if (status_out != nullptr) *status_out = result.status;
+  if (!(result.value > 0.0) || !R_FINITE(result.value)) return R_NegInf;
+  return std::log(result.value);
+}
+
+static inline bool bawl_corr_row_active(const BAwLCorrSharedState& s, int row) {
+  return !s.has_RACE || s.race_mask[row];
+}
+
+static inline double bawl_corr_log_component_survival(
+    const BAwLCorrSharedState& s, const BAwLCorrPairData& pair, int j,
+    double t, const double* const* cols, const ContextForRaceModels* ctx,
+    bool numeric, BAwLCorrMomentStatus* status_out = nullptr) {
+  BAwLCorrMomentStatus pair_status = BAwLCorrMomentStatus::ok;
+  double out = bawl_corr_log_pair_survival(pair, t, cols, ctx, numeric,
+                                           &pair_status);
+  if (status_out != nullptr) *status_out = pair_status;
+  if (pair_status == BAwLCorrMomentStatus::unstable ||
+      pair_status == BAwLCorrMomentStatus::invalid) return R_NaN;
+  const int start = j * s.n_lR;
+  const int n_lR_j = s.has_RACE ? s.race_nacc[start] : s.n_lR;
+  for (int k = 0; k < n_lR_j; ++k) {
+    const int row = start + k;
+    if (!bawl_corr_row_active(s, row) || row == pair.row1 || row == pair.row2) continue;
+    const double ls = bawl_corr_single_log_survival(t, row, cols, ctx);
+    if (!R_FINITE(ls)) return R_NegInf;
+    out += ls;
+  }
+  return out;
+}
+
+static inline double bawl_corr_log_component_cause(
+    const BAwLCorrSharedState& s, const BAwLCorrPairData& pair, int j,
+    int winner_row, double t, const double* const* cols,
+    const ContextForRaceModels* ctx, bool numeric,
+    BAwLCorrMomentStatus* status_out = nullptr) {
+  const int start = j * s.n_lR;
+  const int n_lR_j = s.has_RACE ? s.race_nacc[start] : s.n_lR;
+  if (winner_row == pair.row1 || winner_row == pair.row2) {
+    BAwLCorrMomentStatus ps = BAwLCorrMomentStatus::ok;
+    double out = bawl_corr_log_pair_cause(pair, winner_row, t, cols, ctx,
+                                          numeric, &ps);
+    if (status_out != nullptr) *status_out = ps;
+    if (ps == BAwLCorrMomentStatus::unstable ||
+        ps == BAwLCorrMomentStatus::invalid) return R_NaN;
+    for (int k = 0; k < n_lR_j; ++k) {
+      const int row = start + k;
+      if (!bawl_corr_row_active(s, row) || row == pair.row1 || row == pair.row2) continue;
+      const double ls = bawl_corr_single_log_survival(t, row, cols, ctx);
+      if (!R_FINITE(ls)) return R_NegInf;
+      out += ls;
+    }
+    return out;
+  }
+  if (!bawl_corr_row_active(s, winner_row)) return R_NegInf;
+  double out = bawl_corr_single_log_density(t, winner_row, cols, ctx);
+  if (!R_FINITE(out)) return out;
+  BAwLCorrMomentStatus ps = BAwLCorrMomentStatus::ok;
+  const double lp = bawl_corr_log_pair_survival(pair, t, cols, ctx, numeric, &ps);
+  if (status_out != nullptr) *status_out = ps;
+  if (ps == BAwLCorrMomentStatus::unstable || ps == BAwLCorrMomentStatus::invalid)
+    return R_NaN;
+  if (!R_FINITE(lp)) return R_NegInf;
+  out += lp;
+  for (int k = 0; k < n_lR_j; ++k) {
+    const int row = start + k;
+    if (!bawl_corr_row_active(s, row) || row == winner_row ||
+        row == pair.row1 || row == pair.row2) continue;
+    const double ls = bawl_corr_single_log_survival(t, row, cols, ctx);
+    if (!R_FINITE(ls)) return R_NegInf;
+    out += ls;
+  }
+  return out;
+}
+
+template <typename LogIntegrand>
+static double bawl_corr_integrate_log_interval(double lo, double hi,
+                                               LogIntegrand log_integrand) {
+  if (!(hi > lo) && !(lo == 0.0 && hi == R_PosInf)) return R_NegInf;
+  const GLRule& rule = gl_get_rule(64);
+  double max_log = R_NegInf;
+  std::array<double, 64> values{};
+  for (int i = 0; i < 64; ++i) {
+    const double x = rule.x[i];
+    double t = 0.0;
+    double log_jac = 0.0;
+    if (hi == R_PosInf) {
+      const double u = 0.5 * (x + 1.0);
+      const double one = 1.0 - u;
+      t = lo + u / one;
+      log_jac = -std::log(2.0) - 2.0 * std::log(one);
+    } else {
+      t = 0.5 * (hi - lo) * x + 0.5 * (hi + lo);
+      log_jac = std::log(0.5 * (hi - lo));
+    }
+    values[static_cast<size_t>(i)] = log_jac + std::log(rule.w[i]) +
+      log_integrand(t);
+    max_log = std::max(max_log, values[static_cast<size_t>(i)]);
+  }
+  if (!R_FINITE(max_log)) return R_NegInf;
+  double sum = 0.0;
+  for (int i = 0; i < 64; ++i)
+    sum += std::exp(values[static_cast<size_t>(i)] - max_log);
+  return max_log + std::log(sum);
+}
+
+struct BAwLCorrExactTrialResult {
+  double log_likelihood = R_NegInf;
+  BAwLCorrMomentStatus status = BAwLCorrMomentStatus::invalid;
+  bool used_numeric = false;
+  bool point_start = false;
+};
+
+static BAwLCorrExactTrialResult bawl_corr_exact_trial_loglik(
+    const BAwLCorrSharedState& s, const BAwLCorrTrialLayout& layout, int j,
+    const double* const* cols, const ContextForRaceModels* ctx,
+    const Rcpp::IntegerVector& response, const Rcpp::LogicalVector& winner,
+    double min_ll, bool force_numeric = false) {
+  BAwLCorrExactTrialResult out;
+  BAwLCorrPairData pair;
+  if (!bawl_corr_make_pair_data(layout, s.effective_rho, cols, ctx, pair)) return out;
+  const int start = j * s.n_lR;
+  const int response_code = response[start];
+  const bool known = response_code != NA_INTEGER;
+  const int known_row = s.winner_row[static_cast<size_t>(j)];
+  const double rt = s.rt[start];
+  const double LT = s.LT[start];
+  const double UT = s.UT[start];
+  const double LC = s.LC[start];
+  const double UC = s.UC[start];
+  bool numeric = force_numeric;
+  BAwLCorrMomentStatus st = BAwLCorrMomentStatus::ok;
+  auto absorb_status = [&](BAwLCorrMomentStatus value) {
+    if (value == BAwLCorrMomentStatus::invalid) st = value;
+    else if (value == BAwLCorrMomentStatus::unstable &&
+             st != BAwLCorrMomentStatus::invalid) st = value;
+  };
+  auto component_survival = [&](double t, BAwLCorrMomentStatus*) {
+    BAwLCorrMomentStatus local = BAwLCorrMomentStatus::ok;
+    const double value = bawl_corr_log_component_survival(
+        s, pair, j, t, cols, ctx, numeric, &local);
+    absorb_status(local);
+    return value;
+  };
+  auto component_cause = [&](int row, double t, BAwLCorrMomentStatus*) {
+    BAwLCorrMomentStatus local = BAwLCorrMomentStatus::ok;
+    const double value = bawl_corr_log_component_cause(
+        s, pair, j, row, t, cols, ctx, numeric, &local);
+    absorb_status(local);
+    return value;
+  };
+
+  auto finite_cause = [&](double t, int row, BAwLCorrMomentStatus* st) {
+    if (row >= 0) return component_cause(row, t, st);
+    double total = R_NegInf;
+    const int n_lR_j = s.has_RACE ? s.race_nacc[start] : s.n_lR;
+    for (int k = 0; k < n_lR_j; ++k) {
+      const int r = start + k;
+      if (!bawl_corr_row_active(s, r)) continue;
+      total = log_sum_exp(total, component_cause(r, t, st));
+    }
+    return total;
+  };
+  auto interval_cause = [&](double lo, double hi, int row,
+                            BAwLCorrMomentStatus* st) {
+    return bawl_corr_integrate_log_interval(lo, hi, [&](double t) {
+      return finite_cause(t, row, st);
+    });
+  };
+  auto survival_difference = [&](double lo, double hi,
+                                 BAwLCorrMomentStatus* st) {
+    const double a = (lo == 0.0) ? 0.0 : component_survival(lo, st);
+    if (hi == R_PosInf) return a;
+    const double b = component_survival(hi, st);
+    if (a == R_NegInf) return R_NegInf;
+    const double z = log_diff_exp(a, b);
+    return z;
+  };
+
+  double log_value = R_NegInf;
+  if (R_FINITE(rt) && rt > 0.0) {
+    log_value = finite_cause(rt, known ? known_row : -1, &st);
+  } else if (rt == R_NegInf) {
+    if (known) log_value = interval_cause(LT, LC, known_row, &st);
+    else log_value = survival_difference(LT, LC, &st);
+  } else if (rt == R_PosInf) {
+    if (known) log_value = interval_cause(UC, UT, known_row, &st);
+    else log_value = survival_difference(UC, UT, &st);
+  } else if (Rcpp::NumericVector::is_na(rt)) {
+    if (known) {
+      log_value = log_sum_exp(interval_cause(LT, LC, known_row, &st),
+                              interval_cause(UC, UT, known_row, &st));
+    } else {
+      log_value = log_sum_exp(survival_difference(LT, LC, &st),
+                              survival_difference(UC, UT, &st));
+    }
+  }
+  if (st == BAwLCorrMomentStatus::unstable || st == BAwLCorrMomentStatus::invalid) {
+    out.status = st;
+    return out;
+  }
+
+  if (s.has_trunc_trial[static_cast<size_t>(j)]) {
+    BAwLCorrMomentStatus zst = BAwLCorrMomentStatus::ok;
+    const double log_z = survival_difference(LT, UT, &zst);
+    if (zst == BAwLCorrMomentStatus::unstable || zst == BAwLCorrMomentStatus::invalid ||
+        !R_FINITE(log_z)) {
+      out.status = zst == BAwLCorrMomentStatus::ok
+        ? BAwLCorrMomentStatus::unstable : zst;
+      return out;
+    }
+    log_value -= log_z;
+  }
+  if (s.pc_col >= 0) {
+    const double pC = cols[static_cast<size_t>(s.pc_col)][start];
+    const double log1m = std::log1p(-pC);
+    log_value = (rt == R_PosInf)
+      ? log_sum_exp(std::log(pC), log1m + log_value)
+      : log1m + log_value;
+  }
+  out.log_likelihood = (!R_FINITE(log_value) || log_value < min_ll)
+    ? min_ll : log_value;
+  out.status = BAwLCorrMomentStatus::ok;
+  out.used_numeric = numeric;
+  const int n_lR_j = s.has_RACE ? s.race_nacc[start] : s.n_lR;
+  for (int k = 0; k < n_lR_j; ++k) {
+    const int r = start + k;
+    if (bawl_corr_row_active(s, r) &&
+        cols[emc2col::bawl::A][r] <= BAWL_A_EPS) out.point_start = true;
+  }
+  (void)winner;
+  return out;
 }
 
 // Correlated BAwL likelihood using a single shared Gaussian factor.  The
@@ -6564,12 +6931,18 @@ double c_log_likelihood_bawl_correlated(
   // BAwL.  This is the only route below that consumes a materialised matrix
   // besides the generic-clock node evaluator.
   bool any_loading = false;
-  for (int r = 0; r < n_trials; ++r) {
-    if (!isok[r]) continue;
-    const double rho = effective_rho[static_cast<size_t>(r)];
-    if (!R_FINITE(rho) || std::fabs(rho) > 1.0 || std::fabs(rho) > 1e-14) {
-      any_loading = true;
-      break;
+  for (int j = 0; j < cshared.n_unique && !any_loading; ++j) {
+    const int start = j * n_lR;
+    const int n_lR_j = cshared.has_RACE ? cshared.race_nacc[start] : n_lR;
+    for (int k = 0; k < n_lR_j; ++k) {
+      const int r = start + k;
+      if (cshared.has_RACE && !cshared.race_mask[r]) continue;
+      if (!isok[r]) continue;
+      const double rho = effective_rho[static_cast<size_t>(r)];
+      if (!R_FINITE(rho) || std::fabs(rho) > 1e-14) {
+        any_loading = true;
+        break;
+      }
     }
   }
   if (!any_loading) {
@@ -6597,7 +6970,7 @@ double c_log_likelihood_bawl_correlated(
   const bool use_fast_node_eval =
       all_finite_trials && !has_truncation &&
       model_dfun_raw != nullptr && model_pfun_raw != nullptr &&
-      !ctx->has_global_kill() && !ctx->gng &&
+      !ctx->has_global_kill() && !ctx->kill_active && !ctx->gng &&
       ctx->time_code == -1 && ctx->nogo_code == -1 &&
       (!dadm.containsElementNamed("RACE") || has_RACE_col);
 
@@ -6605,7 +6978,13 @@ double c_log_likelihood_bawl_correlated(
   // follows the legacy scan/refine machinery below; the layout is the single
   // authority for loaded-row counts (positivity dimension) and future route
   // dispatch.
-  bawl_corr_classify_particle(cshared, isok, use_fast_node_eval);
+  const bool no_clock_model = !ctx->gng && !ctx->kill_active &&
+    !ctx->has_global_kill() && ctx->time_code == -1 && ctx->nogo_code == -1;
+  // The exact pair component is data-fixed and pointer-based, so it remains
+  // eligible even when the caller disables the all-finite GH hint (that hint
+  // controls only the fused node evaluator).  This also lets nonfinite and
+  // truncated no-clock trials use the same component path.
+  bawl_corr_classify_particle(cshared, isok, no_clock_model);
   if (count_routes) {
     for (int j = 0; j < n_unique; ++j) {
       const BAwLCorrTrialLayout& L = cshared.layout[static_cast<size_t>(j)];
@@ -6618,6 +6997,71 @@ double c_log_likelihood_bawl_correlated(
         else ++route_counters.ordinary_single_loaded_trials;
       }
     }
+  }
+
+  // Exact pair trials are evaluated before the shared-factor fallback.  The
+  // arrays are also masks for the node evaluator, so mixed particles retain
+  // per-trial routing rather than promoting an exact pair because another
+  // trial needs GH.  `R` is data-fixed and is only used to distinguish a
+  // known response from an unknown winner/censoring observation.
+  std::vector<unsigned char> exact_done(static_cast<size_t>(n_unique), 0);
+  std::vector<double> exact_ll(static_cast<size_t>(n_unique), min_ll);
+  const Rcpp::IntegerVector response = dadm["R"];
+  for (int j = 0; j < n_unique; ++j) {
+    BAwLCorrTrialLayout& L = cshared.layout[static_cast<size_t>(j)];
+    if (L.route != BAwLCorrRoute::exact_pair) continue;
+    BAwLCorrExactTrialResult exact = bawl_corr_exact_trial_loglik(
+        cshared, L, j, cshared.cols.data(), ctx, response, winner, min_ll, false);
+    if (exact.status == BAwLCorrMomentStatus::unstable) {
+      L.route = BAwLCorrRoute::numeric_pair;
+      exact = bawl_corr_exact_trial_loglik(
+          cshared, L, j, cshared.cols.data(), ctx, response, winner, min_ll, true);
+    }
+    if (exact.status == BAwLCorrMomentStatus::ok) {
+      exact_done[static_cast<size_t>(j)] = 1;
+      exact_ll[static_cast<size_t>(j)] = exact.log_likelihood;
+      if (count_routes) {
+        if (L.route == BAwLCorrRoute::numeric_pair)
+          ++route_counters.numeric_pair_trials;
+        else {
+          ++route_counters.exact_pair_trials;
+          if (L.winner_loaded) ++route_counters.exact_pair_pair_winner_trials;
+          else ++route_counters.exact_pair_independent_winner_trials;
+          if (exact.point_start) ++route_counters.exact_pair_point_start_trials;
+        }
+      }
+    } else {
+      // Numeric-pair failure is rare and falls through to the fused no-clock
+      // evaluator.  A materially unstable exact rectangle is never silently
+      // clamped into a likelihood value.
+      L.route = no_clock_model ? BAwLCorrRoute::gh_no_clock
+                               : BAwLCorrRoute::gh_generic_clock;
+    }
+  }
+
+  int n_fallback_trials = 0;
+  for (int j = 0; j < n_unique; ++j)
+    if (!exact_done[static_cast<size_t>(j)]) ++n_fallback_trials;
+  if (n_fallback_trials == 0) {
+    // The exact component has already applied truncation, contamination, and
+    // the final floor.  Do not enter the GH machinery when every unique trial
+    // is a pair: this is the common canonical path and should pay no fallback
+    // node or prepared-geometry work.
+    double total_ll = 0.0;
+    if (expand.length() > 0) {
+      for (int i = 0; i < n_out; ++i) {
+        const double value = exact_ll[static_cast<size_t>(expand[i] - 1)];
+        if (trial_ll_out != nullptr) (*trial_ll_out)[i] = value;
+        total_ll += value;
+      }
+    } else {
+      for (int j = 0; j < n_unique; ++j) {
+        const double value = exact_ll[static_cast<size_t>(j)];
+        if (trial_ll_out != nullptr) (*trial_ll_out)[j] = value;
+        total_ll += value;
+      }
+    }
+    return total_ll;
   }
 
   const bool joint_posdrift = ctx->use_posdrift;
@@ -6656,11 +7100,13 @@ double c_log_likelihood_bawl_correlated(
     const double* sv0c = cshared.cols[static_cast<size_t>(emc2col::bawl::sv)];
     for (int j = 0; j < n_unique; ++j) {
       if (has_trunc_trial[static_cast<size_t>(j)]) {
+        if (exact_done[static_cast<size_t>(j)]) continue;
         den_by_quadrature[static_cast<size_t>(j)] = 1;
         continue;
       }
       if (!joint_posdrift) continue;  // denominator is exactly one
       const BAwLCorrTrialLayout& Lj = cshared.layout[static_cast<size_t>(j)];
+      if (exact_done[static_cast<size_t>(j)]) continue;
       if (Lj.any_bad_row) {
         log_den[static_cast<size_t>(j)] = R_NegInf;
         continue;
@@ -6744,36 +7190,48 @@ double c_log_likelihood_bawl_correlated(
   Rcpp::NumericMatrix pars_generic;
   if (!use_fast_node_eval) pars_generic = materialize();
 
-  Rcpp::NumericVector rts_fast;
+  // Step 4: the no-clock route consumes prepared BAwL geometry directly;
+  // prepared conditional survivors retain scalar natural-branch semantics,
+  // including the saturated-CDF boundary and separate q accounting.
   const double* fast_rt = nullptr;
   const double* fast_v0 = nullptr;
-  std::vector<double> fast_vq, fast_svq, fast_slope, fast_res, fast_log1m_pc;
+  const double* fast_sv0 = nullptr;
+  const double* fast_B0 = nullptr;
+  const double* fast_A0 = nullptr;
+  const double* fast_t00 = nullptr;
+  const double* fast_k0 = nullptr;
+  std::vector<double> fast_res, fast_log1m_pc;
   std::vector<double> fast_const_ll;
-  std::vector<double> fast_var_rt, fast_var_vq, fast_var_svq,
-    fast_var_col_storage, fast_var_res;
+  std::vector<BAwLPreparedRow> fast_prepared;
   std::vector<int> fast_winner, fast_loser, fast_const_winner, fast_const_loser, fast_ok;
-  std::vector<int> fast_var_orig, fast_var_index, fast_var_winner, fast_var_loser,
-    fast_var_ok;
-  std::vector<const double*> fast_cols;
-  std::vector<const double*> fast_var_cols;
   std::vector<int> fine_winner, fine_loser;
   bool use_fine_masks = false;
   bool has_fast_const = false;
   if (use_fast_node_eval) {
-    rts_fast = cshared.rt;
-    fast_rt = rts_fast.begin();
+    fast_rt = cshared.rt.begin();
     fast_v0 = cshared.cols[static_cast<size_t>(emc2col::bawl::v)];
-    const double* sv0 = cshared.cols[static_cast<size_t>(emc2col::bawl::sv)];
-    fast_vq.resize(static_cast<size_t>(n_trials));
-    fast_svq.resize(static_cast<size_t>(n_trials));
-    fast_slope.resize(static_cast<size_t>(n_trials));
+    fast_sv0 = cshared.cols[static_cast<size_t>(emc2col::bawl::sv)];
+    fast_B0 = cshared.cols[static_cast<size_t>(emc2col::bawl::B)];
+    fast_A0 = cshared.cols[static_cast<size_t>(emc2col::bawl::A)];
+    fast_t00 = cshared.cols[static_cast<size_t>(emc2col::bawl::t0)];
+    fast_k0 = ctx->bawl_k_fixed_zero
+      ? nullptr : cshared.cols[static_cast<size_t>(emc2col::bawl::k)];
     fast_res.assign(static_cast<size_t>(n_trials), R_NegInf);
+    fast_prepared.assign(static_cast<size_t>(n_trials), BAwLPreparedRow());
     fast_winner.resize(static_cast<size_t>(n_trials));
     fast_loser.resize(static_cast<size_t>(n_trials));
     fast_const_winner.assign(static_cast<size_t>(n_trials), 0);
     fast_const_loser.assign(static_cast<size_t>(n_trials), 0);
     fast_ok.resize(static_cast<size_t>(n_trials));
     for (int r = 0; r < n_trials; ++r) {
+      if (exact_done[static_cast<size_t>(r / n_lR)]) {
+        fast_ok[static_cast<size_t>(r)] = 0;
+        fast_winner[static_cast<size_t>(r)] = 0;
+        fast_loser[static_cast<size_t>(r)] = 0;
+        fast_const_winner[static_cast<size_t>(r)] = 0;
+        fast_const_loser[static_cast<size_t>(r)] = 0;
+        continue;
+      }
       const double rho = effective_rho[static_cast<size_t>(r)];
       const bool ok_r = isok[r] && R_FINITE(rho) && std::fabs(rho) <= 1.0;
       fast_ok[static_cast<size_t>(r)] = ok_r ? 1 : 0;
@@ -6781,10 +7239,6 @@ double c_log_likelihood_bawl_correlated(
       const double loading = std::sqrt(magnitude);
       const double residual = std::sqrt(std::fmax(0.0, 1.0 - magnitude));
       const double sign = (rho < 0.0) ? -1.0 : 1.0;
-      // Mirrors the generic transform exactly: v_q = v + sign sv sqrt(|rho|) z,
-      // sv_q = sv max(sqrt(1-|rho|), 1e-12).
-      fast_slope[static_cast<size_t>(r)] = ok_r ? sign * sv0[r] * loading : 0.0;
-      fast_svq[static_cast<size_t>(r)] = sv0[r] * std::fmax(residual, 1e-12);
       const bool active = !has_RACE_col || RACE_mask[r];
       // A valid exact-zero loading is independent of the shared factor. Its
       // race contribution is evaluated once below and added to every node;
@@ -6799,116 +7253,58 @@ double c_log_likelihood_bawl_correlated(
         (active && winner[r] && independent) ? 1 : 0;
       fast_const_loser[static_cast<size_t>(r)] =
         (active && n_lR > 1 && !winner[r] && independent) ? 1 : 0;
+
+      if (active && ok_r && !independent) {
+        // All fixed-time LBA/leak work is prepared once per particle.  The
+        // node loop below only updates v_q and evaluates the normal endpoints
+        // through BAwLPreparedRow; it never rebuilds tau, leak factors, or
+        // Jacobians and never stages a conditional parameter table.
+        const double kval = ctx->bawl_k_fixed_zero ? 0.0 : fast_k0[r];
+        const BAwLTimeGeometry g = bawl_time_geometry(
+            fast_rt[r], fast_t00[r], fast_A0[r], fast_B0[r] + fast_A0[r], kval);
+        fast_prepared[static_cast<size_t>(r)] = bawl_prepare_row(
+            g, fast_v0[r], sign * fast_sv0[r] * loading,
+            fast_sv0[r] * std::fmax(residual, 1e-12));
+        if (count_routes) ++route_counters.prepared_rows;
+      }
     }
-    fast_cols.assign(static_cast<size_t>(std::max(n_par, 16)), nullptr);
-    for (int c = 0; c < n_par; ++c) {
-      fast_cols[static_cast<size_t>(c)] = cshared.cols[static_cast<size_t>(c)];
-    }
-    fast_cols[static_cast<size_t>(emc2col::bawl::v)] = fast_vq.data();
-    fast_cols[static_cast<size_t>(emc2col::bawl::sv)] = fast_svq.data();
 
     fast_const_ll.assign(static_cast<size_t>(n_unique), 0.0);
     if (has_fast_const) {
-    // Evaluate exact-zero-loading race terms once.  The factor-conditioned
-    // BAwL likelihood is a product of one winner density and loser
-    // survivors, so these rows can be removed from all subsequent node
-    // kernels without approximation.  Initialise the conditional columns to
-    // their marginal values for this one invariant pass.
-    for (int r = 0; r < n_trials; ++r) {
-      fast_vq[static_cast<size_t>(r)] = fast_v0[r];
-      fast_svq[static_cast<size_t>(r)] = sv0[r];
-    }
-    model_dfun_raw(fast_rt, fast_cols.data(), n_trials,
+      // Evaluate exact-zero-loading race terms once.  These are ordinary
+      // singleton likelihood factors, so their own positive-drift
+      // normalisers remain in the singleton kernel and are not part of the
+      // shared-factor denominator.
+      model_dfun_raw(fast_rt, cshared.cols.data(), n_trials,
                    fast_const_winner.data(), fast_ok.data(), fast_res.data(),
                    R_NegInf, ctx);
-    for (int j = 0; j < n_unique; ++j) {
-      const int start = j * n_lR;
-      const int n_lR_j = has_RACE_col ? RACE[start] : n_lR;
-      double value = 0.0;
-      for (int k = 0; k < n_lR_j; ++k) {
-        const int row = start + k;
-        if (has_RACE_col && !RACE_mask[row]) continue;
-        if (fast_const_winner[static_cast<size_t>(row)])
-          value += fast_res[static_cast<size_t>(row)];
-      }
-      fast_const_ll[static_cast<size_t>(j)] = value;
-    }
-    if (n_lR > 1) {
-      model_pfun_raw(fast_rt, fast_cols.data(), n_trials,
-                     fast_const_loser.data(), fast_ok.data(), fast_res.data(),
-                     R_NegInf, ctx);
       for (int j = 0; j < n_unique; ++j) {
         const int start = j * n_lR;
         const int n_lR_j = has_RACE_col ? RACE[start] : n_lR;
+        double value = 0.0;
         for (int k = 0; k < n_lR_j; ++k) {
           const int row = start + k;
           if (has_RACE_col && !RACE_mask[row]) continue;
-          if (fast_const_loser[static_cast<size_t>(row)])
-            fast_const_ll[static_cast<size_t>(j)] += fast_res[static_cast<size_t>(row)];
+          if (fast_const_winner[static_cast<size_t>(row)])
+            value += fast_res[static_cast<size_t>(row)];
         }
+        fast_const_ll[static_cast<size_t>(j)] = value;
       }
-    }
-    // Zero-loading rows' positivity constants q are NOT accumulated here:
-    // they appear identically in the numerator and denominator integrands
-    // and are cancelled algebraically on both sides.
-
-    // The invariant pass above temporarily uses each row's marginal sv.  The
-    // node evaluator must see the conditional residual sv again for every
-    // nonzero-loading row.
-    for (int r = 0; r < n_trials; ++r) {
-      const double rho = effective_rho[static_cast<size_t>(r)];
-      const double magnitude = std::fabs(rho);
-      fast_svq[static_cast<size_t>(r)] =
-        sv0[r] * std::fmax(std::sqrt(std::fmax(0.0, 1.0 - magnitude)), 1e-12);
-    }
-
-    // The raw callbacks are row-major loops over their declared length.  For
-    // a fixed exact-zero loading, compact the remaining rows so those loops
-    // do not pay for an inactive PM (or other independent accumulator) at
-    // every latent node.
-    if (has_fast_const) {
-      fast_var_index.assign(static_cast<size_t>(n_trials), -1);
-      for (int r = 0; r < n_trials; ++r) {
-        if (!has_RACE_col || RACE_mask[r]) {
-          if (!fast_const_winner[static_cast<size_t>(r)] &&
-              !fast_const_loser[static_cast<size_t>(r)]) {
-            fast_var_index[static_cast<size_t>(r)] =
-              static_cast<int>(fast_var_orig.size());
-            fast_var_orig.push_back(r);
+      if (n_lR > 1) {
+        model_pfun_raw(fast_rt, cshared.cols.data(), n_trials,
+                     fast_const_loser.data(), fast_ok.data(), fast_res.data(),
+                     R_NegInf, ctx);
+        for (int j = 0; j < n_unique; ++j) {
+          const int start = j * n_lR;
+          const int n_lR_j = has_RACE_col ? RACE[start] : n_lR;
+          for (int k = 0; k < n_lR_j; ++k) {
+            const int row = start + k;
+            if (has_RACE_col && !RACE_mask[row]) continue;
+            if (fast_const_loser[static_cast<size_t>(row)])
+              fast_const_ll[static_cast<size_t>(j)] += fast_res[static_cast<size_t>(row)];
           }
         }
       }
-      const int n_var = static_cast<int>(fast_var_orig.size());
-      fast_var_rt.resize(static_cast<size_t>(n_var));
-      fast_var_vq.resize(static_cast<size_t>(n_var));
-      fast_var_svq.resize(static_cast<size_t>(n_var));
-      fast_var_res.assign(static_cast<size_t>(n_var), R_NegInf);
-      fast_var_winner.resize(static_cast<size_t>(n_var));
-      fast_var_loser.resize(static_cast<size_t>(n_var));
-      fast_var_ok.resize(static_cast<size_t>(n_var));
-      fast_var_col_storage.resize(static_cast<size_t>(n_par) * n_var);
-      fast_var_cols.assign(static_cast<size_t>(std::max(n_par, 16)), nullptr);
-      if (n_var > 0) {
-        for (int c = 0; c < n_par; ++c) {
-          fast_var_cols[static_cast<size_t>(c)] =
-            fast_var_col_storage.data() + static_cast<size_t>(c) * n_var;
-        }
-        for (int vi = 0; vi < n_var; ++vi) {
-          const int r = fast_var_orig[static_cast<size_t>(vi)];
-          fast_var_rt[static_cast<size_t>(vi)] = fast_rt[r];
-          fast_var_winner[static_cast<size_t>(vi)] = fast_winner[static_cast<size_t>(r)];
-          fast_var_loser[static_cast<size_t>(vi)] = fast_loser[static_cast<size_t>(r)];
-          fast_var_ok[static_cast<size_t>(vi)] = fast_ok[static_cast<size_t>(r)];
-          for (int c = 0; c < n_par; ++c) {
-            fast_var_col_storage[static_cast<size_t>(c) * n_var + vi] =
-              cshared.cols[static_cast<size_t>(c)][r];
-          }
-        }
-        fast_var_cols[static_cast<size_t>(emc2col::bawl::v)] = fast_var_vq.data();
-        fast_var_cols[static_cast<size_t>(emc2col::bawl::sv)] = fast_var_svq.data();
-      }
-    }
-
     }
 
     // The generic evaluator inherits the contaminant shift from the race
@@ -6933,43 +7329,10 @@ double c_log_likelihood_bawl_correlated(
     node_num.assign(static_cast<size_t>(n_unique), R_NegInf);
     node_den.assign(static_cast<size_t>(n_unique),
                     joint_posdrift ? R_NegInf : 0.0);
-    for (int r = 0; r < n_trials; ++r) {
-      fast_vq[static_cast<size_t>(r)] =
-        fast_v0[r] + fast_slope[static_cast<size_t>(r)] * z_by_trial[r / n_lR];
-    }
     const std::vector<int>& winner_mask = use_fine_masks ? fine_winner : fast_winner;
     const std::vector<int>& loser_mask = use_fine_masks ? fine_loser : fast_loser;
-    if (has_fast_const) {
-      for (size_t vi = 0; vi < fast_var_orig.size(); ++vi) {
-        const int r = fast_var_orig[vi];
-        fast_var_vq[vi] = fast_vq[static_cast<size_t>(r)];
-        fast_var_svq[vi] = fast_svq[static_cast<size_t>(r)];
-        fast_var_winner[vi] = winner_mask[static_cast<size_t>(r)];
-        fast_var_loser[vi] = loser_mask[static_cast<size_t>(r)];
-      }
-    }
-    if (need_num) {
-      if (has_fast_const) {
-        model_dfun_raw(fast_var_rt.data(), fast_var_cols.data(),
-                       static_cast<int>(fast_var_orig.size()),
-                       fast_var_winner.data(), fast_var_ok.data(),
-                       fast_var_res.data(), R_NegInf, ctx);
-        if (n_lR > 1) {
-          model_pfun_raw(fast_var_rt.data(), fast_var_cols.data(),
-                         static_cast<int>(fast_var_orig.size()),
-                         fast_var_loser.data(), fast_var_ok.data(),
-                         fast_var_res.data(), R_NegInf, ctx);
-        }
-      } else {
-        model_dfun_raw(fast_rt, fast_cols.data(), n_trials, winner_mask.data(),
-                       fast_ok.data(), fast_res.data(), R_NegInf, ctx);
-        if (n_lR > 1) {
-          model_pfun_raw(fast_rt, fast_cols.data(), n_trials, loser_mask.data(),
-                         fast_ok.data(), fast_res.data(), R_NegInf, ctx);
-        }
-      }
-    }
     for (int j = 0; j < n_unique; ++j) {
+      if (exact_done[static_cast<size_t>(j)]) continue;
       const int start = j * n_lR;
       const int n_lR_j = has_RACE_col ? RACE[start] : n_lR;
       double s = has_fast_const ? fast_const_ll[static_cast<size_t>(j)] : 0.0;
@@ -6979,26 +7342,41 @@ double c_log_likelihood_bawl_correlated(
         if (has_RACE_col && !RACE_mask[row]) continue;
         if (fast_const_winner[static_cast<size_t>(row)] ||
             fast_const_loser[static_cast<size_t>(row)]) continue;
-        if (need_num) {
-          if (has_fast_const) {
-            const int vi = fast_var_index[static_cast<size_t>(row)];
-            s += fast_var_res[static_cast<size_t>(vi)];
-          } else {
-            s += fast_res[static_cast<size_t>(row)];
-          }
+        const double rho = effective_rho[static_cast<size_t>(row)];
+        const bool loaded = fast_ok[static_cast<size_t>(row)] &&
+          std::fabs(rho) > 1e-14;
+        if (!loaded) {
+          if (need_num && (winner_mask[static_cast<size_t>(row)] ||
+                           loser_mask[static_cast<size_t>(row)]))
+            s = R_NegInf;
+          if (joint_posdrift) lp = R_NegInf;
+          continue;
         }
-        if (!joint_posdrift || lp == R_NegInf) continue;
-        if (!fast_ok[static_cast<size_t>(row)]) { lp = R_NegInf; continue; }
-        const double sd = fast_svq[static_cast<size_t>(row)];
-        const double mu = fast_vq[static_cast<size_t>(row)];
-        if (!(sd > 0.0) || !R_FINITE(mu)) { lp = R_NegInf; continue; }
-        const double log_q = pnorm_log_direct(mu / sd, true);
-        if (!R_FINITE(log_q)) { lp = R_NegInf; continue; }
-        lp += log_q;
+        const BAwLPreparedRow& prepared = fast_prepared[static_cast<size_t>(row)];
+        const double vq = prepared.v0 + prepared.slope * z_by_trial[j];
+        if (joint_posdrift) {
+          const double log_q = bawl_prepared_log_q(prepared, vq);
+          if (!R_FINITE(log_q)) lp = R_NegInf;
+          else if (lp != R_NegInf) lp += log_q;
+        }
+        if (need_num) {
+          double log_component = R_NegInf;
+          if (winner_mask[static_cast<size_t>(row)]) {
+            log_component = bawl_prepared_log_pdf(prepared, vq);
+          } else if (loser_mask[static_cast<size_t>(row)]) {
+            log_component = bawl_prepared_log_survivor(
+                prepared, vq, joint_posdrift);
+          }
+          s += log_component;
+        }
       }
       if (need_num)
         node_num[static_cast<size_t>(j)] =
-          lp + s + fast_log1m_pc[static_cast<size_t>(j)];
+          // Loaded prepared components are already unnormalised: a winner
+          // contributes f0 and a loser contributes q-F0.  The q product is
+          // reserved for the positivity denominator, so adding lp here
+          // would double-count every loaded loser.
+          s + fast_log1m_pc[static_cast<size_t>(j)];
       if (joint_posdrift) node_den[static_cast<size_t>(j)] = lp;
     }
   };
@@ -7015,6 +7393,10 @@ double c_log_likelihood_bawl_correlated(
                     joint_posdrift ? R_NegInf : 0.0);
     Rcpp::NumericMatrix pars_q = Rcpp::clone(pars_generic);
     Rcpp::LogicalVector isok_q = Rcpp::clone(isok);
+
+    for (int r = 0; r < n_trials; ++r) {
+      if (exact_done[static_cast<size_t>(r / n_lR)]) isok_q[r] = false;
+    }
 
     // Conditional factor model preserving each marginal sv:
     // v_q = v + sign(rho) sv sqrt(|rho|) z,
@@ -7040,8 +7422,10 @@ double c_log_likelihood_bawl_correlated(
 
     std::vector<double> log_pos(static_cast<size_t>(n_unique), 0.0);
     if (joint_posdrift) {
-      for (int j = 0; j < n_unique; ++j)
-        log_pos[static_cast<size_t>(j)] = log_positive_trial(pars_q, isok_q, j);
+      for (int j = 0; j < n_unique; ++j) {
+        if (!exact_done[static_cast<size_t>(j)])
+          log_pos[static_cast<size_t>(j)] = log_positive_trial(pars_q, isok_q, j);
+      }
     }
 
     ContextForRaceModels node_ctx = *ctx;
@@ -7055,6 +7439,7 @@ double c_log_likelihood_bawl_correlated(
 
       // Expanded rows of one unique trial share the integrand; report once.
       for (int j = 0; j < n_unique; ++j) {
+        if (exact_done[static_cast<size_t>(j)]) continue;
         const int i = j_to_i[static_cast<size_t>(j)];
         if (i < 0) continue;
         node_num[static_cast<size_t>(j)] =
@@ -7240,8 +7625,13 @@ double c_log_likelihood_bawl_correlated(
   auto eval_selected = [&](const double* z_by_trial, bool need_num,
                            bool need_den, std::vector<double>& num,
                            std::vector<double>& den) {
-    if (use_fast_node_eval) evaluate_node_fast(z_by_trial, need_num, num, den);
-    else evaluate_node(z_by_trial, need_num, need_den, num, den);
+    if (use_fast_node_eval) {
+      evaluate_node_fast(z_by_trial, need_num, num, den);
+      if (count_routes)
+        route_counters.fused_node_evaluations += n_fallback_trials;
+    } else {
+      evaluate_node(z_by_trial, need_num, need_den, num, den);
+    }
   };
 
   // Two batched passes of Gauss-Hermite nodes.
@@ -7287,17 +7677,19 @@ double c_log_likelihood_bawl_correlated(
     for (int j = 0; j < n_unique; ++j)
       if (den_by_quadrature[static_cast<size_t>(j)]) ++n_quad_den;
     route_counters.den_quadrature_trials += n_quad_den;
-    if (use_fast_node_eval) route_counters.gh_no_clock_trials += n_unique;
-    else route_counters.gh_generic_clock_trials += n_unique;
+    if (use_fast_node_eval) route_counters.gh_no_clock_trials += n_fallback_trials;
+    else route_counters.gh_generic_clock_trials += n_fallback_trials;
     route_counters.scan_node_evaluations +=
-      static_cast<long long>(n_scan) * n_unique;
+      static_cast<long long>(n_scan) * n_fallback_trials;
   }
 
   std::vector<double> node_num;
   std::vector<double> node_den;
   std::vector<double> z_by_trial(static_cast<size_t>(n_unique));
   std::vector<double> z_scan(static_cast<size_t>(n_scan));
-  std::vector<unsigned char> refine_num(static_cast<size_t>(n_unique), 1);
+  std::vector<unsigned char> refine_num(static_cast<size_t>(n_unique), 0);
+  for (int j = 0; j < n_unique; ++j)
+    refine_num[static_cast<size_t>(j)] = exact_done[static_cast<size_t>(j)] ? 0 : 1;
   // Column-major (node fastest) log node masses from the scan pass.
   std::vector<double> scan_num(static_cast<size_t>(n_scan) * n_unique, R_NegInf);
   std::vector<double> scan_den(any_quad_den
@@ -7328,6 +7720,55 @@ double c_log_likelihood_bawl_correlated(
           &scan_den[static_cast<size_t>(j) * n_scan], z_scan.data(), n_scan);
   }
 
+  // A loaded known winner supplies an analytic proposal for the latent
+  // factor.  Its marginal winner drift has density
+  // (gamma0 + gamma1 V) N(V | mu, sv), restricted to the cause interval.  The
+  // shared incomplete-normal moments turn that into the mean/variance of z;
+  // survivor-only and unknown-winner integrands deliberately retain the scan
+  // proposal because they have no winner tilt.
+  std::vector<unsigned char> analytic_center_trial(static_cast<size_t>(n_unique), 0);
+  if (use_fast_node_eval) {
+    for (int j = 0; j < n_unique; ++j) {
+      if (exact_done[static_cast<size_t>(j)]) continue;
+      const BAwLCorrTrialLayout& L = cshared.layout[static_cast<size_t>(j)];
+      if (!L.winner_loaded || L.winner_row < 0) continue;
+      const int row = L.winner_row;
+      const BAwLTimeGeometry g = bawl_corr_row_geometry(
+          cshared.rt[row], cshared.cols.data(), row, ctx);
+      BAwLCorrRegion cause_region;
+      if (!bawl_corr_cause_interval(g, joint_posdrift, cause_region)) continue;
+      double p = 0.0, m1 = 0.0, m2 = 0.0, m3 = 0.0;
+      bawl_corr_univ_interval_moments3(
+          cshared.cols[emc2col::bawl::v][row],
+          cshared.cols[emc2col::bawl::sv][row], cause_region.lo,
+          cause_region.hi, p, m1, m2, m3);
+      const double den = g.gamma0 * p + g.gamma1 * m1;
+      const double first = g.gamma0 * m1 + g.gamma1 * m2;
+      const double second = g.gamma0 * m2 + g.gamma1 * m3;
+      if (!(den > 0.0) || !R_FINITE(den) || !R_FINITE(first) ||
+          !R_FINITE(second)) continue;
+      const double mu = cshared.cols[emc2col::bawl::v][row];
+      const double sd = cshared.cols[emc2col::bawl::sv][row];
+      const double rho = effective_rho[static_cast<size_t>(row)];
+      const double ev = first / den;
+      const double vv = std::fmax(second / den - ev * ev, 0.0);
+      const double loading = std::sqrt(std::fabs(rho));
+      const double ez = (rho < 0.0 ? -1.0 : 1.0) * loading * (ev - mu) / sd;
+      const double vz = 1.0 - std::fabs(rho) +
+        std::fabs(rho) * vv / (sd * sd);
+      if (R_FINITE(ez) && R_FINITE(vz) && vz > 0.0) {
+        center_num[static_cast<size_t>(j)].mu = ez;
+        center_num[static_cast<size_t>(j)].sigma =
+          std::fmin(std::fmax(1.3 * std::sqrt(vz), 0.3), 1.25);
+        analytic_center_trial[static_cast<size_t>(j)] = 1;
+        if (count_routes) {
+          ++route_counters.analytic_center_eligible_trials;
+          ++route_counters.analytic_center_success_trials;
+        }
+      }
+    }
+  }
+
   auto fine_log_gauss_weights = [](const GHRule& rule) {
     std::vector<double> lgw(rule.x.size());
     for (size_t q = 0; q < rule.x.size(); ++q) {
@@ -7344,6 +7785,11 @@ double c_log_likelihood_bawl_correlated(
   // or tail-peaked trials retain the recentered pass for accuracy.
   if (use_fast_node_eval && !any_quad_den) {
     for (int j = 0; j < n_unique; ++j) {
+      if (exact_done[static_cast<size_t>(j)]) continue;
+      if (analytic_center_trial[static_cast<size_t>(j)]) {
+        refine_num[static_cast<size_t>(j)] = 1;
+        continue;
+      }
       const AGHCenter& c = center_num[static_cast<size_t>(j)];
       const double* g = &scan_num[static_cast<size_t>(j) * n_scan];
       double peak = R_NegInf;
@@ -7446,14 +7892,18 @@ double c_log_likelihood_bawl_correlated(
   if (expand.length() > 0) {
     for (int i = 0; i < n_out; ++i) {
       const int j = expand[i] - 1;
-      double value = log_num[static_cast<size_t>(j)] - log_den[static_cast<size_t>(j)];
+      double value = exact_done[static_cast<size_t>(j)]
+        ? exact_ll[static_cast<size_t>(j)]
+        : log_num[static_cast<size_t>(j)] - log_den[static_cast<size_t>(j)];
       if (!R_FINITE(value) || value < min_ll) value = min_ll;
       if (trial_ll_out != nullptr) (*trial_ll_out)[i] = value;
       total_ll += value;
     }
   } else {
     for (int j = 0; j < n_unique; ++j) {
-      double value = log_num[static_cast<size_t>(j)] - log_den[static_cast<size_t>(j)];
+      double value = exact_done[static_cast<size_t>(j)]
+        ? exact_ll[static_cast<size_t>(j)]
+        : log_num[static_cast<size_t>(j)] - log_den[static_cast<size_t>(j)];
       if (!R_FINITE(value) || value < min_ll) value = min_ll;
       if (trial_ll_out != nullptr) (*trial_ll_out)[j] = value;
       total_ll += value;
@@ -7498,6 +7948,56 @@ Rcpp::List bawl_corr_counter_values() {
 // [[Rcpp::export]]
 void bawl_corr_counters_reset() {
   bawl_corr_counters().reset();
+}
+
+// Numerical probes for the exact probability layer.  They are intentionally
+// small and allocation-free on the C++ side; testthat uses them to compare the
+// rectangle derivatives and pair component against an independent oracle.
+// [[Rcpp::export]]
+Rcpp::List bawl_corr_bvn_rect_probe(double mu1, double sd1, double mu2,
+                                    double sd2, double rho, double lo1,
+                                    double hi1, double lo2, double hi2) {
+  const BvnRectMoments m = bawl_corr_bvn_rect_moments(
+      mu1, sd1, mu2, sd2, rho, lo1, hi1, lo2, hi2);
+  return Rcpp::List::create(
+      Rcpp::Named("p") = m.p, Rcpp::Named("m1") = m.m1,
+      Rcpp::Named("m2") = m.m2, Rcpp::Named("m12") = m.m12,
+      Rcpp::Named("status") = static_cast<int>(m.status));
+}
+
+// [[Rcpp::export]]
+Rcpp::List bawl_corr_pair_probe(double t, double t01, double A1, double B1,
+                                double k1, double v1, double sv1,
+                                double t02, double A2, double B2, double k2,
+                                double v2, double sv2, double rho,
+                                bool posdrift = false, bool numeric = false) {
+  const BAwLTimeGeometry g1 = bawl_time_geometry(t, t01, A1, B1 + A1, k1);
+  const BAwLTimeGeometry g2 = bawl_time_geometry(t, t02, A2, B2 + A2, k2);
+  const double D = bawl_corr_pair_positive_normalizer(v1, sv1, v2, sv2,
+                                                       rho, posdrift);
+  const BAwLCorrPairResult s = numeric
+    ? bawl_corr_pair_survival_numeric(g1, g2, v1, sv1, v2, sv2, rho,
+                                      posdrift, D)
+    : bawl_corr_pair_survival_exact(g1, g2, v1, sv1, v2, sv2, rho,
+                                    posdrift, D);
+  const BAwLCorrPairResult c1 = numeric
+    ? bawl_corr_pair_cause_numeric(g1, g2, v1, sv1, v2, sv2, rho,
+                                   posdrift, D)
+    : bawl_corr_pair_cause_exact(g1, g2, v1, sv1, v2, sv2, rho,
+                                 posdrift, D);
+  const BAwLCorrPairResult c2 = numeric
+    ? bawl_corr_pair_cause_numeric(g2, g1, v2, sv2, v1, sv1, rho,
+                                   posdrift, D)
+    : bawl_corr_pair_cause_exact(g2, g1, v2, sv2, v1, sv1, rho,
+                                 posdrift, D);
+  return Rcpp::List::create(
+      Rcpp::Named("normalizer") = D,
+      Rcpp::Named("survival") = s.value,
+      Rcpp::Named("cause1") = c1.value,
+      Rcpp::Named("cause2") = c2.value,
+      Rcpp::Named("survival_status") = static_cast<int>(s.status),
+      Rcpp::Named("cause1_status") = static_cast<int>(c1.status),
+      Rcpp::Named("cause2_status") = static_cast<int>(c2.status));
 }
 
 // Test probes for the shared correlated-BAwL geometry (T1).  `B` is the

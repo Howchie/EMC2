@@ -369,6 +369,14 @@ bawl_corr_counters_reset <- function() {
     invisible(.Call(`_EMC2_bawl_corr_counters_reset`))
 }
 
+bawl_corr_bvn_rect_probe <- function(mu1, sd1, mu2, sd2, rho, lo1, hi1, lo2, hi2) {
+    .Call(`_EMC2_bawl_corr_bvn_rect_probe`, mu1, sd1, mu2, sd2, rho, lo1, hi1, lo2, hi2)
+}
+
+bawl_corr_pair_probe <- function(t, t01, A1, B1, k1, v1, sv1, t02, A2, B2, k2, v2, sv2, rho, posdrift = FALSE, numeric = FALSE) {
+    .Call(`_EMC2_bawl_corr_pair_probe`, t, t01, A1, B1, k1, v1, sv1, t02, A2, B2, k2, v2, sv2, rho, posdrift, numeric)
+}
+
 bawl_time_geometry_probe <- function(t, t0, A, B, k) {
     .Call(`_EMC2_bawl_time_geometry_probe`, t, t0, A, B, k)
 }

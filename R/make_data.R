@@ -400,6 +400,11 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
     data <- minimal_design(design_in, covariates = list(...)$covariates,
                               drop_subjects = F, n_trials = n_trials,
                             add_acc = FALSE, do_functions = FALSE,drop_R = FALSE)
+    # Keep the stochastic function input in the same subject order that
+    # design_model() uses after accumulator expansion.  In particular, grouped
+    # staircase metadata is row-aligned and must not be captured before a
+    # later subject sort changes that order.
+    data <- data[order(data$subjects), , drop = FALSE]
   } else {
 		data <- add_trials(data[order(data$subjects),])
   }
@@ -714,6 +719,12 @@ LogicalRules_rfun <- function(data, pars, model) {
       stop("LogicalRules detection rules require stimulus column `S` (or `stimulus`/`condition`).")
     }
     cond <- as.character(data[data$lR == races[1], stim_col])
+    # The compiled LogicalRules likelihood uses condition code 0 for a
+    # missing stimulus, which is the no-stimulus (NN) condition.  Keep the R
+    # simulator consistent so posterior prediction also works for fits whose
+    # data contain an absent/NA stimulus value.
+    cond[is.na(cond)] <- "NN"
+    cond[cond == "none"] <- "NN"
     cond[cond %in% c("BA", "A+B", "B+A")] <- "AB"
     cond[cond == "A"] <- "AN"
     cond[cond == "B"] <- "NB"

@@ -1527,6 +1527,51 @@ BEGIN_RCPP
     return R_NilValue;
 END_RCPP
 }
+// bawl_corr_bvn_rect_probe
+Rcpp::List bawl_corr_bvn_rect_probe(double mu1, double sd1, double mu2, double sd2, double rho, double lo1, double hi1, double lo2, double hi2);
+RcppExport SEXP _EMC2_bawl_corr_bvn_rect_probe(SEXP mu1SEXP, SEXP sd1SEXP, SEXP mu2SEXP, SEXP sd2SEXP, SEXP rhoSEXP, SEXP lo1SEXP, SEXP hi1SEXP, SEXP lo2SEXP, SEXP hi2SEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< double >::type mu1(mu1SEXP);
+    Rcpp::traits::input_parameter< double >::type sd1(sd1SEXP);
+    Rcpp::traits::input_parameter< double >::type mu2(mu2SEXP);
+    Rcpp::traits::input_parameter< double >::type sd2(sd2SEXP);
+    Rcpp::traits::input_parameter< double >::type rho(rhoSEXP);
+    Rcpp::traits::input_parameter< double >::type lo1(lo1SEXP);
+    Rcpp::traits::input_parameter< double >::type hi1(hi1SEXP);
+    Rcpp::traits::input_parameter< double >::type lo2(lo2SEXP);
+    Rcpp::traits::input_parameter< double >::type hi2(hi2SEXP);
+    rcpp_result_gen = Rcpp::wrap(bawl_corr_bvn_rect_probe(mu1, sd1, mu2, sd2, rho, lo1, hi1, lo2, hi2));
+    return rcpp_result_gen;
+END_RCPP
+}
+// bawl_corr_pair_probe
+Rcpp::List bawl_corr_pair_probe(double t, double t01, double A1, double B1, double k1, double v1, double sv1, double t02, double A2, double B2, double k2, double v2, double sv2, double rho, bool posdrift, bool numeric);
+RcppExport SEXP _EMC2_bawl_corr_pair_probe(SEXP tSEXP, SEXP t01SEXP, SEXP A1SEXP, SEXP B1SEXP, SEXP k1SEXP, SEXP v1SEXP, SEXP sv1SEXP, SEXP t02SEXP, SEXP A2SEXP, SEXP B2SEXP, SEXP k2SEXP, SEXP v2SEXP, SEXP sv2SEXP, SEXP rhoSEXP, SEXP posdriftSEXP, SEXP numericSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< double >::type t(tSEXP);
+    Rcpp::traits::input_parameter< double >::type t01(t01SEXP);
+    Rcpp::traits::input_parameter< double >::type A1(A1SEXP);
+    Rcpp::traits::input_parameter< double >::type B1(B1SEXP);
+    Rcpp::traits::input_parameter< double >::type k1(k1SEXP);
+    Rcpp::traits::input_parameter< double >::type v1(v1SEXP);
+    Rcpp::traits::input_parameter< double >::type sv1(sv1SEXP);
+    Rcpp::traits::input_parameter< double >::type t02(t02SEXP);
+    Rcpp::traits::input_parameter< double >::type A2(A2SEXP);
+    Rcpp::traits::input_parameter< double >::type B2(B2SEXP);
+    Rcpp::traits::input_parameter< double >::type k2(k2SEXP);
+    Rcpp::traits::input_parameter< double >::type v2(v2SEXP);
+    Rcpp::traits::input_parameter< double >::type sv2(sv2SEXP);
+    Rcpp::traits::input_parameter< double >::type rho(rhoSEXP);
+    Rcpp::traits::input_parameter< bool >::type posdrift(posdriftSEXP);
+    Rcpp::traits::input_parameter< bool >::type numeric(numericSEXP);
+    rcpp_result_gen = Rcpp::wrap(bawl_corr_pair_probe(t, t01, A1, B1, k1, v1, sv1, t02, A2, B2, k2, v2, sv2, rho, posdrift, numeric));
+    return rcpp_result_gen;
+END_RCPP
+}
 // bawl_time_geometry_probe
 Rcpp::List bawl_time_geometry_probe(double t, double t0, double A, double B, double k);
 RcppExport SEXP _EMC2_bawl_time_geometry_probe(SEXP tSEXP, SEXP t0SEXP, SEXP ASEXP, SEXP BSEXP, SEXP kSEXP) {
@@ -1713,6 +1758,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_get_pars_c_batch_wrapper_oo", (DL_FUNC) &_EMC2_get_pars_c_batch_wrapper_oo, 11},
     {"_EMC2_bawl_corr_counter_values", (DL_FUNC) &_EMC2_bawl_corr_counter_values, 0},
     {"_EMC2_bawl_corr_counters_reset", (DL_FUNC) &_EMC2_bawl_corr_counters_reset, 0},
+    {"_EMC2_bawl_corr_bvn_rect_probe", (DL_FUNC) &_EMC2_bawl_corr_bvn_rect_probe, 9},
+    {"_EMC2_bawl_corr_pair_probe", (DL_FUNC) &_EMC2_bawl_corr_pair_probe, 16},
     {"_EMC2_bawl_time_geometry_probe", (DL_FUNC) &_EMC2_bawl_time_geometry_probe, 5},
     {"_EMC2_bawl_prepared_endpoints_probe", (DL_FUNC) &_EMC2_bawl_prepared_endpoints_probe, 10},
     {"_EMC2_gl_rule_nodes_weights", (DL_FUNC) &_EMC2_gl_rule_nodes_weights, 1},

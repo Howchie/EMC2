@@ -58,7 +58,7 @@ waic_warnings <- function() {
   }
   has_any <- any(sapply(emc, function(x) is.list(x) && !is.null(x$samples$pw_ll)))
   if (has_any)
-    message("pw_ll cache incomplete (not all chains have it) — recomputing. ",
+    message("pw_ll cache incomplete (not all chains have it) - recomputing. ",
             "Check that add_pw_ll() or save_pw_ll=TRUE completed without errors.")
   alpha <- get_pars(emc, selection = "alpha", stage = stage, filter = filter,
                     by_subject = TRUE, merge_chains = TRUE)

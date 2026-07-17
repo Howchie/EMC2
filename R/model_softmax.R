@@ -15,6 +15,35 @@ pSOFTMAX <- function(trials, pars)
 }
 
 
+log_likelihood_softmax <- function(pars, dadm, model, min_ll = log(1e-10)) {
+  if (nrow(pars) != nrow(dadm)) {
+    stop("`pars` and `dadm` must have the same number of rows.")
+  }
+  if (!all(c("x", "beta") %in% colnames(pars))) {
+    stop("Softmax parameters must include `x` and `beta`.")
+  }
+  if (!"lR" %in% names(dadm) || !is.factor(dadm$lR)) {
+    stop("Softmax data must contain a factor `lR` column.")
+  }
+
+  n_acc <- nlevels(dadm$lR)
+  if (n_acc < 1L || nrow(pars) %% n_acc != 0L) {
+    stop("Softmax data must contain complete accumulator blocks per trial.")
+  }
+  trial_id <- rep(seq_len(nrow(pars) / n_acc), each = n_acc)
+  prob <- pSOFTMAX(trial_id, pars)
+  winner <- if ("winner" %in% names(dadm)) dadm$winner else {
+    if (!"R" %in% names(dadm)) stop("Softmax data must contain `R` or `winner`.")
+    !is.na(dadm$R) & as.character(dadm$lR) == as.character(dadm$R)
+  }
+  winner <- !is.na(winner) & winner
+  if (!any(winner)) return(min_ll)
+
+  out <- sum(log(prob[winner]))
+  if (!is.finite(out)) min_ll else max(out, min_ll)
+}
+
+
 rSOFTMAX <- function(lR,pars,p_types=c("x","beta"))
   # lR is an empty latent response factor lR with one level for response.
   # pars is a matrix of corresponding parameter values named as in p_types

@@ -168,14 +168,32 @@ design <- function(formula = NULL,factors = NULL,Rlevels = NULL,model,data=NULL,
       ))
     } else NULL
 
+    # Map functions receive the full accumulator data frame and may use
+    # columns that are not themselves trend covariates (for example,
+    # `cov_left` and `cov_right` in the documented accumulator-map example).
+    # Keep any data columns referenced by a map when rebuilding the minimal
+    # design for sampled_pars()/mapped_pars().
+    map_vars <- if (!is.null(trend)) {
+      unique(unlist(lapply(trend, function(x) {
+        if (is.null(x$map)) return(character())
+        unique(unlist(lapply(x$map, function(fun) {
+          intersect(all.names(body(fun), functions = TRUE), names(data))
+        })))
+      })))
+    } else NULL
+
     # Required factors: used in formula, matchfun, functions, or trend, plus 'subjects'
-    needed_factors <- unique(c(all_preds, match_vars, function_vars, trend_vars, "subjects"))
+    needed_factors <- unique(c(all_preds, match_vars, function_vars, trend_vars,
+                               map_vars, "subjects"))
     factors <- factors[names(factors) %in% needed_factors]
 
     if (length(nfacs)>0){
       covariates <- names(nfacs)
-      # Covariates must be in the set of all predictors or specifically used in trends
-      covariates <- covariates[covariates %in% c(all_preds, trend_vars)]
+      # Covariates must be in the set of all predictors, specifically used in
+      # trends, or required by an accumulator map. Map inputs can be character
+      # columns (for example, `cov_left` and `cov_right`), so they are not
+      # represented in `factors` above.
+      covariates <- covariates[covariates %in% c(all_preds, trend_vars, map_vars)]
       if(length(covariates) == 0) covariates <- NULL
     }
   } else {if(is.null(Rlevels)) stop("make sure Rlevels is specified")} # this check wasn't present - would break accumulator logic

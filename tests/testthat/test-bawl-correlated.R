@@ -273,6 +273,49 @@ test_that("layout classifier reports canonical loaded dimensions", {
   expect_equal(unname(c_zero[["loaded_dimension_2"]]), 0)
 })
 
+test_that("exact pairs bypass GH and generic clocks remain separate", {
+  skip_on_cran()
+  dat <- data.frame(
+    subjects = factor(1),
+    S = factor("correct", levels = c("correct", "error")),
+    R = factor("correct", levels = c("correct", "error")),
+    rt = .7
+  )
+  ctx <- make_bawl_context(dat, BAwLcorr(), rho_formula = rho ~ 1)
+  p <- set_bawl_values(sampled_pars(ctx$design, doMap = FALSE), rho = .6)
+  old <- Sys.getenv("EMC2_BAWLCORR_COUNTERS", unset = NA)
+  Sys.setenv(EMC2_BAWLCORR_COUNTERS = "1")
+  on.exit({
+    if (is.na(old)) Sys.unsetenv("EMC2_BAWLCORR_COUNTERS")
+    else Sys.setenv(EMC2_BAWLCORR_COUNTERS = old)
+  }, add = TRUE)
+
+  EMC2:::bawl_corr_counters_reset()
+  fast <- as.numeric(do.call(EMC2:::calc_ll_oo, context_args(ctx, p)))
+  c_fast <- unlist(EMC2:::bawl_corr_counter_values())
+  expect_true(is.finite(fast))
+  expect_equal(unname(c_fast[["exact_pair_trials"]]), 1)
+  expect_equal(unname(c_fast[["gh_no_clock_trials"]]), 0)
+  expect_equal(unname(c_fast[["gh_generic_clock_trials"]]), 0)
+  expect_equal(unname(c_fast[["prepared_rows"]]), 0)
+  expect_equal(unname(c_fast[["fused_node_evaluations"]]), 0)
+
+  generic_args <- context_args(ctx, p)
+  generic_data <- generic_args$data
+  attr(generic_data, "emc2_all_finite_trials") <- FALSE
+  generic_args$data <- generic_data
+  EMC2:::bawl_corr_counters_reset()
+  generic <- as.numeric(do.call(EMC2:::calc_ll_oo, generic_args))
+  c_generic <- unlist(EMC2:::bawl_corr_counter_values())
+  expect_equal(generic, fast, tolerance = 1e-10)
+  expect_true(is.finite(generic))
+  expect_equal(unname(c_generic[["exact_pair_trials"]]), 1)
+  expect_equal(unname(c_generic[["gh_no_clock_trials"]]), 0)
+  expect_equal(unname(c_generic[["gh_generic_clock_trials"]]), 0)
+  expect_equal(unname(c_generic[["prepared_rows"]]), 0)
+  expect_equal(unname(c_generic[["fused_node_evaluations"]]), 0)
+})
+
 test_that("BAwLcorr simulators use a jointly positive drift vector", {
   skip_on_cran()
   n <- 1500

@@ -53,8 +53,7 @@ test_that("staircase resets per subject", {
     skip("No stop trials generated for at least one subject")
   }
   first_ssd <- tapply(dat_multi$SSD[finite_ssd], dat_multi$subjects[finite_ssd], `[`, 1)
-  # In the current implementation, if factors=NULL in make_ssd, they share state
-  # but here we generate them in one go, so subjects are processed.
-  # If we want per-subject staircases, make_ssd should have factors="subjects"
-  expect_equal(as.numeric(first_ssd), c(0.25, 0.45, 0.45))
+  # With the default grouped-by-subject staircase, the first stop trial for
+  # every subject starts at SSD0.
+  expect_equal(as.numeric(first_ssd), rep(0.25, length(first_ssd)))
 })

@@ -213,6 +213,10 @@ inline double bawl_prepared_log_pdf(const BAwLPreparedRow& r, double vq) {
     if (!emc2_isfinite(z)) return R_NegInf;
     const double pdf = r.jacobian * eff_b * dnormP(z) * r.inv_sv;
     if (R_FINITE(pdf) && pdf > 0.0) return std::log(pdf);
+    // BA_ACCEPT_RAW treats a finite natural underflow as genuine zero mass;
+    // only an invalid/non-finite natural attempt is allowed to fall through
+    // to the authoritative log expression.
+    if (R_FINITE(pdf)) return R_NegInf;
     // Tail underflow: the log form stays representable.
     return r.log_jacobian + std::log(eff_b) + dnormP(z, 0.0, 1.0, true) -
       std::log(r.sv);
@@ -230,7 +234,12 @@ inline double bawl_prepared_log_pdf(const BAwLPreparedRow& r, double vq) {
         const double denom_scale = r.A * r.sv * r.m * r.m;
         const double pdf = r.jacobian * bracket / denom_scale;
         if (R_FINITE(pdf) && pdf > 0.0) return std::log(pdf);
+        if (R_FINITE(pdf)) return R_NegInf;
       }
+    } else {
+      // The lenient raw evaluator returns a natural zero for a finite
+      // cancellation/underflow rather than inventing a tail value.
+      return R_NegInf;
     }
   }
 
@@ -275,6 +284,11 @@ inline double bawl_prepared_log_cdf(const BAwLPreparedRow& r, double vq) {
   }
 
   if (r.span < BAWL_NATURAL_MIN_SPAN) {
+    const double p = pnorm_std(c + 0.5 * r.span, true, false);
+    if (R_FINITE(p)) {
+      if (p <= 0.0) return R_NegInf;
+      if (p < 1.0 - 1e-8) return std::log(p);
+    }
     const double out = pnorm_log_direct(c + 0.5 * r.span, true);
     return out >= 0.0 ? 0.0 : out;
   }
@@ -290,11 +304,18 @@ inline double bawl_prepared_log_cdf(const BAwLPreparedRow& r, double vq) {
       const double scale = std::fabs(H_hi) + std::fabs(H_lo);
       if (integral > BAWL_NATURAL_REL_TOL * std::max(1.0, scale)) {
         const double cdf = integral / r.span;
-        if (R_FINITE(cdf) && cdf > 0.0)
-          return cdf >= 1.0 ? 0.0 : std::log(cdf);
+        if (R_FINITE(cdf)) {
+          if (cdf <= 0.0) return R_NegInf;
+          if (cdf < 1.0 - 1e-8) return std::log(cdf);
+        }
       }
     } else if (integral == 0.0 && c > BAWL_NATURAL_Z_MAX) {
-      return 0.0;  // saturated interval: CDF is 1
+      // BA_ACCEPT_RAW rejects a saturated near-one CDF and uses the log
+      // branch; do not return the rounded natural value here.
+    } else if (R_FINITE(integral)) {
+      // A finite natural zero/negative result is retained as zero by the raw
+      // callback, which is represented as -Inf for the unnormalised CDF.
+      return R_NegInf;
     }
   }
 
@@ -325,8 +346,53 @@ inline double bawl_prepared_log_survivor(const BAwLPreparedRow& r, double vq,
   }
   const double log_q = bawl_prepared_log_q(r, vq);
   if (log_cdf == R_NegInf) return log_q;
+
+  // The scalar BAwL CDF path uses its natural CLAMP branch whenever the
+  // conditional positive-drift normaliser is representable.  Reproduce that
+  // branch with prepared endpoints: dividing the natural CDF by the natural
+  // q before forming the survivor preserves the established rounding at a
+  // saturated CDF (and therefore keeps the fused and generic routes
+  // identical), while the log expression below remains the tail fallback.
+  const double q = pnorm_std(vq * r.inv_sv, true, false);
+  if (R_FINITE(q) && q > BAWL_DENOM_FLOOR) {
+    const double c = r.c0 + vq * r.inv_sv;
+    double cdf = R_NaN;
+    if (r.status == BAwLTimeStatus::point_start ||
+        r.status == BAwLTimeStatus::infinite || !(r.m > 0.0)) {
+      cdf = pnorm_std(c, true, false) / q;
+    } else if (r.span < BAWL_NATURAL_MIN_SPAN) {
+      cdf = pnorm_std(c + 0.5 * r.span, true, false) / q;
+    } else {
+      const double hi = c + r.span;
+      if (emc2_isfinite(hi)) {
+        const double H_hi = hi * pnorm_std(hi, true, false) + dnormP(hi);
+        const double H_lo = c * pnorm_std(c, true, false) + dnormP(c);
+        const double integral = H_hi - H_lo;
+        if (integral > 0.0) cdf = integral / (r.span * q);
+        else if (integral == 0.0 && c > BAWL_NATURAL_Z_MAX) cdf = 1.0;
+        else cdf = 0.0;
+      }
+    }
+    if (R_FINITE(cdf)) {
+      cdf = std::fmax(0.0, std::fmin(1.0, cdf));
+      if (cdf <= 0.0) return log_q;
+      // The scalar endpoint calculation can round the same nearly saturated
+      // ratio to one because its denominator is formed before the final
+      // division.  Treat the last few ulps as saturated as well; this is the
+      // natural-branch boundary, not a likelihood floor.
+      if (cdf >= 1.0 - 1e-14) return R_NegInf;
+      return log_q + std::log1p(-cdf);
+    }
+  }
+
   if (log_cdf >= log_q) return R_NegInf;
-  return log_diff_exp(log_q, log_cdf);
+  // Form the same conditional survivor that the scalar/raw acceptance path
+  // uses, then restore its unnormalised q factor.  Besides avoiding a
+  // subtraction of two nearly equal unconditional probabilities, this keeps
+  // rounded conditional CDFs at one represented as zero survivor mass.
+  const double log_cdf_cond = log_cdf - log_q;
+  if (log_cdf_cond >= 0.0) return R_NegInf;
+  return log_q + log1m_exp(log_cdf_cond);
 }
 
 #endif

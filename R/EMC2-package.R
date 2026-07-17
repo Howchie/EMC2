@@ -19,6 +19,8 @@
 #' @importFrom graphics abline
 #' @importFrom graphics arrows
 #' @importFrom graphics axis
+#' @importFrom graphics strheight
+#' @importFrom graphics strwidth
 #' @importFrom graphics hist pairs rect text
 #' @importFrom graphics legend
 #' @importFrom graphics lines

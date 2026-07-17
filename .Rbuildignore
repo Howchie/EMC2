@@ -12,3 +12,6 @@
 ^[^/]+\.RData$
 ^column_refactor_plan\.md$
 \.ipynb_checkpoints
+^\.Rtmp$
+^\.git
+^\.pytest_cache

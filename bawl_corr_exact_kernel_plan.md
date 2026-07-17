@@ -1176,6 +1176,112 @@ Route/node counters confirm the baseline issues named above:
   carried ~1.5e-3 of quadrature error per trial).  Full correlated test
   file green from a fresh temp-library install.
 
+### Step 4 — final fused, unnormalised no-clock fallback (DONE, 2026-07-17)
+
+- The no-clock GH route now prepares one `BAwLPreparedRow` per active
+  nonzero-loading row from direct `ParamTable` columns.  GH nodes update only
+  the conditional mean; fixed-time/leak geometry, endpoint spans, and scale
+  terms are not rebuilt inside the node loop, and the old full conditional
+  parameter-table staging has been removed.
+- Prepared endpoint modes now provide the unnormalised winner density `f0`
+  and loser survivor `q-F0`; the product of loaded-row `q` terms is retained
+  only for the positive-drift denominator.  Exact-zero-loading rows are
+  evaluated once as independent singleton factors and remain out of the
+  shared-factor denominator dimension.
+- Prepared natural-CDF and survivor paths preserve the scalar kernel's
+  central, underflow, near-one, and saturated-tail acceptance behaviour.
+  Active local/global clock variants remain on the generic GH fallback.
+- Route observability reports prepared rows and fused node evaluations.  At
+  N=2000 and one timing repetition, prepared no-clock scenarios measured
+  0.014--0.040 s per call; the forced generic-clock scenario measured 0.870 s.
+  The three-loaded scenario reported 6,000 prepared rows and 176,000 fused
+  node evaluations per call.
+- Full `tests/testthat/test-bawl-correlated.R`: 5,033 passing, 2 expected
+  skips, 0 failures.  The new T4 test checks prepared-vs-generic parity and
+  confirms that the generic-clock route does not consume prepared geometry.
+
+### Step 5 — shared probability and moment primitives (DONE, 2026-07-17)
+
+- Added `src/bawl_corr_exact.h` with guarded univariate normal interval
+  moments through order three and deterministic BVN boundary grids.
+- Rectangle probability, first moments, and cross moment use signed Kahan
+  corner combinations and the mean-derivative identities.  The mixed
+  derivative uses the matching marginal/conditional density pair, including
+  asymmetric rectangles.
+- Tiny/cancelled rectangles return `unstable` rather than being clamped; true
+  zero-mass rectangles retain a separate status.  The pair-positive
+  normalizer has an explicit nearly singular Gaussian limit.
+- Added `tests/testthat/test-bvn-rect-moments.R`; conditional-normal reference
+  integration passes central, tail, narrow, and semi-infinite rectangle cases
+  at rho `-.8`, `0`, and `.8`.
+
+### Step 6 — exact pair scalar component (DONE, 2026-07-17)
+
+- Implemented exact pair survivor and member-cause formulas from the shared
+  `BAwLTimeGeometry`, including LBA, leak-only BAwL, unrestricted and jointly
+  positive drifts, unequal loadings, and independent numeric-pair fallback.
+- Point starts use the dedicated boundary-density/Jacobian branch; point
+  starts for either racer and both racers are covered by regression tests.
+- Exact rectangle values agree with the independent 64-node one-dimensional
+  pair integration throughout the stable test grid.  At narrow or strongly
+  negative tail rectangles the status route selects `numeric_pair`.
+
+### Step 7 — exact finite component wiring (DONE, 2026-07-17)
+
+- Two loaded no-clock trials now dispatch through one exact per-trial
+  component evaluator.  Pair winners, independent/PM winners, arbitrary
+  singleton survivors, RACE masks, and expansion use the same assembly for
+  total and pointwise APIs.
+- The exact-only path returns before GH work; mixed particles retain masked
+  per-trial fallback routing.  Exact paths use direct ParamTable column
+  pointers and do not materialize a parameter matrix.
+
+### Step 8 — nonfinite, truncation, and censoring wiring (DONE, 2026-07-17)
+
+- Added component-survivor assembly for truncation normalization, unknown
+  winner censoring, missing-RT interval unions, and known-winner outer-time
+  integration.  `+Inf` uses the explicit leaky-tail limit.
+- Contamination, truncation correction, flooring, and expansion occur once at
+  final per-trial assembly.  Focused tests cover finite, `+Inf`, `-Inf`,
+  missing-RT, known/unknown, and pointwise cases.
+
+### Step 9 — analytic GH centre (DONE, 2026-07-17)
+
+- Added the shared order-three moment centre for loaded-winner GH fallback
+  integrands, with sign-aware latent-factor mean and variance and a selective
+  fine pass.  Survivor-only and unknown-winner integrands retain scan-based
+  centres.
+- The centre is applied only on the fused fallback; exact and singleton
+  evaluators are unchanged.  Benchmark counters report successful centres on
+  the three-loaded fallback route.
+
+### Step 10 — numerical routing and fallback cleanup (DONE, 2026-07-17)
+
+- Exact rectangle instability routes first to `numeric_pair`; numeric failure
+  falls through to the fused or generic GH route.  Near `|rho|=1` uses the
+  continuous positive-normalizer limit and numeric pair integration.
+- Exact-only early return removes fallback-node work for the canonical pair
+  path, while route counters now count only actual fallback trials.
+- N=2,000 one-particle benchmark (one repetition, this machine): plain LBA
+  0.001 s; exact correlated pair 0.008--0.009 s; correlated pair plus PM
+  0.009--0.010 s; three-loaded GH 0.041 s; generic-clock GH 0.874 s.  The
+  exact path used 1,998--2,000 exact trials in the pair scenarios, with only
+  2 numeric-pair trials at rho `.5` and 250 in the near-`t0` stress case.
+
+### Step 11 — regression, documentation, and cleanup (DONE, 2026-07-17)
+
+- Focused correlated regression: 5,032 passing, 2 expected skips.  The new
+  BVN/pair/data-path file also passes.
+- The workspace-wide sequential test run reaches the correlated and new exact
+  tests successfully.  Remaining failures are outside this correlated change:
+  an existing map helper lookup, stochastic trend snapshots, and missing Wald
+  helper symbols in the current test environment.
+- `R CMD INSTALL --no-multiarch --no-test-load` succeeds in a fresh temporary
+  library, `Rcpp::compileAttributes()` is up to date, and `git diff --check`
+  is clean.  A full `R CMD check` is environment-blocked by the unavailable
+  suggested package `DiagrammeR`; the source objects generated during the
+  verification build were removed afterward.
+
 ## Implementation sequence
 
 This order deliberately creates final shared infrastructure before either the
