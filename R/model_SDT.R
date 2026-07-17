@@ -30,21 +30,31 @@ rPROBIT <- function(lR,pars,p_types=c("mean","sd","threshold"),lt=-Inf)
 
 #' Gaussian Signal Detection Theory Model for Binary Responses
 #'
-#' Discrete binary choice based on continuous Gaussian latent, with no rt (rt
-#' must be set to NA in data).
+#' Discrete binary choice based on a continuous Gaussian latent variable. No
+#' response time is modeled; `rt` must be `NA` in the data. For a binary
+#' response, the model draws `X ~ Normal(mean, sd^2)` and compares it with the
+#' criterion `threshold`: the first response level is selected below the
+#' criterion and the second response level above it.
 #'
-#' Model parameters are:
-#'    mean (unbounded)
-#'    sd (log scale) and
-#'    threshold (unbounded).
+#' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Interpretation** |
+#' |---|---|---|---|---|
+#' | *mean* | identity | \[-Inf, Inf\] | 0 | Mean of the Gaussian latent variable. |
+#' | *sd* | log | \[0, Inf\] | log(1) | Gaussian SD. |
+#' | *threshold* | identity | \[-Inf, Inf\] | 0 | Response criterion; for binary responses, the cutoff between the two response levels. |
 #'
-#' For identifiability in one condition two parameters must be fixed
-#' (conventionally mean=0 and sd = 1). When used with data that records only
-#' accuracy (so reponse bias cannot be evaluated) a single threshold must be
-#' assumed and fixed (e.g., threshold = 0).
+#' The model is invariant to a common location and scale transformation, so in
+#' one condition two parameters must be fixed for identification, conventionally
+#' `mean = 0` and `sd = 1`. When only accuracy is observed and response bias
+#' cannot be estimated, the criterion must also be fixed (for example,
+#' `threshold = 0`). The likelihood is the Gaussian probability between the
+#' lower and upper response thresholds; the model's `qfun` is `qnorm` for ROC
+#' construction.
 #'
 #' At present this model is not fully implemented in C, but as its likelihood
 #' requires only pnorm evaluation it is quite fast.
+#' The factor order matters: the first level of `R` is the lower response and
+#' the second is the upper response, while `lR` supplies the latent response
+#' thresholds used during simulation.
 #'
 #' @return A model list with all the necessary functions to sample
 #' @examples
@@ -82,18 +92,38 @@ SDT <- function(){
   })
   }
 
-  #' Hierarchical Unequal-Variance Signal Detection (hUVSD) Model for Binary Responses
-  #'
-  #' Binary choice SDT model parameterized with sensitivity (d) and bias (c),
-  #' following Lages (2024).
-  #'
-  #' Model parameters are:
-  #'    d (sensitivity, distance between signal and noise means)
-  #'    c (bias, deviation from the midpoint between means)
-  #'    sd (standard deviation of the signal distribution, noise SD fixed at 1)
-  #'
-  #' @return A model list with all the necessary functions to sample
-  #' @export
+#' Hierarchical Unequal-Variance Signal Detection (hUVSD) Model for Binary Responses
+#'
+#' Binary-choice signal-detection model parameterized by sensitivity `d`,
+#' criterion bias `c`, and the signal-distribution SD `sd`. No response time is
+#' modeled; `rt` is always `NA`. The noise SD is fixed to 1 for scale
+#' identification. With the current factor-level convention, the first level
+#' of `S` is noise and the second is signal, while the first level of `R` is
+#' "no" and the second is "yes".
+#'
+#' The latent distributions are
+#'
+#' * noise: `X | noise ~ Normal(-d / 2, 1^2)`;
+#' * signal: `X | signal ~ Normal(d / 2, sd^2)`.
+#'
+#' A yes response is generated when `X > c`, so
+#' `P(yes | noise) = Phi(-d / 2 - c)` and
+#' `P(yes | signal) = Phi((d / 2 - c) / sd)`. Here `d` and `c` are estimated
+#' on the identity scale and `sd` is estimated on the log scale.
+#'
+#' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Interpretation** |
+#' |---|---|---|---|---|
+#' | *d* | identity | \[-Inf, Inf\] | 0 | Distance between signal and noise means. |
+#' | *c* | identity | \[-Inf, Inf\] | 0 | Criterion relative to the midpoint of the two means. |
+#' | *sd* | log | \[0, Inf\] | log(1) | Signal-distribution SD; noise SD is fixed at 1. |
+#'
+#' The model is hierarchical in the sense that the same subject-level
+#' parameter vector can be used across signal/noise conditions; it does not
+#' add a response-time hierarchy by itself. The R likelihood path is used
+#' because the probabilities require only `pnorm` evaluations.
+#'
+#' @return A model list with all the necessary functions for sampling.
+#' @export
   hUVSD <- function(){
   list(
   type="SDT",
@@ -133,4 +163,3 @@ SDT <- function(){
   sum(log(pmax(exp(min_ll), p_uniq[attr(dadm,"expand")])))
   })
   }
-

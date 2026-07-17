@@ -113,11 +113,13 @@ pDDM <- function(rt,R,pars,precision=5e-3)
 #' | *sv*      | log       | \[0, Inf\]        | log(0)    |                            | Between-trial standard deviation of drift rate           |
 #' | *st0*     | log       | \[0, Inf\]        | log(0)    |                            | Between-trial variation (range) in non-decision time    |
 #'
-#' `a`, `t0`, `sv`, `st0`, `s` are sampled on the log scale because these parameters are strictly positive,
-#' `Z`, `SZ` and `DP` are sampled on the probit scale because they should be strictly between 0 and 1.
+#' `a`, `t0`, `sv`, `st0`, and `s` are sampled on the log scale because these
+#' parameters are strictly positive. `Z` and `SZ` are sampled on the probit
+#' scale because they represent proportions between 0 and 1; the
+#' `Ttransform` converts them to the absolute start-point parameters `z` and
+#' `sz` used by the diffusion kernel.
 #'
 #' `Z` is estimated as the ratio of bias to one boundary where 0.5 means no bias.
-#' `DP` comprises the difference in non-decision time for each response option.
 #'
 #' Conventionally, `s` is fixed to 1 to satisfy scaling constraints.
 #'
@@ -169,13 +171,35 @@ DDM <- function(){
 #' The GNG (go/nogo) Diffusion Decision Model
 #'
 #' In the GNG paradigm one of the two possible choices results in a response
-#' being withheld (a non-response), which is indicated in the data by an NA for
-#' the rt, with the corresponding level of the R (response) factor still being
-#' specified. For example, suppose the go response is coded as "yes" and nogo is
-#' coded as "no", then for a non-response (R,rt) = ("no",NA) and for a response
-#' e.g., (R,rt) = ("yes",1.36). The GNG paradigm must also have a response
-#' # window (i.e., a length of time, TIMEOUT period, after which withholding is
-#' assumed).
+#' being withheld (a non-response). A response is represented by a finite
+#' response time and the go response level of `R`; a withheld response is
+#' represented by `rt = NA` (or, internally during simulation, by an infinite
+#' finishing time) and the nogo level of `R`. The paradigm must also specify a
+#' response window, `TIMEOUT`, after which withholding is assumed.
+#'
+#' The DDM parameterization is the same as [DDM()], with one addition in the
+#' trial-dependent parameter matrix: `TIMEOUT` and the numeric code of `Rnogo`
+#' are copied from the augmented data. The likelihood uses the probability of
+#' not reaching the go boundary before `TIMEOUT`,
+#' `1 - P(RT <= TIMEOUT | Rgo)`, for trials recorded as nogo.
+#'
+#' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Interpretation** |
+#' |---|---|---|---|---|
+#' | *v* | identity | \[-Inf, Inf\] | 1 | Mean drift rate. |
+#' | *a* | log | \[0, Inf\] | log(1) | Boundary separation. |
+#' | *t0* | log | \[0, Inf\] | log(0) | Non-decision time. |
+#' | *s* | log | \[0, Inf\] | log(1) | Within-trial diffusion scale; conventionally fixed to 1. |
+#' | *Z* | probit | \[0, 1\] | qnorm(.5) | Relative starting point; .5 is unbiased. |
+#' | *SZ* | probit | \[0, 1\] | qnorm(0) | Relative between-trial starting-point range. |
+#' | *sv* | log | \[0, Inf\] | log(0) | Between-trial SD of drift rate. |
+#' | *st0* | log | \[0, Inf\] | log(0) | Between-trial range of non-decision time. |
+#'
+#' The internal DDM parameters are `z = Z * a` and
+#' `sz = 2 * SZ * min(Z, 1 - Z) * a`. The `Rnogo` function must return the
+#' response-factor level that denotes withholding, and `Rgo` must return the
+#' corresponding go level. Both functions, together with `TIMEOUT`, are
+#' supplied through the `functions` argument of [design()]. Their outputs must
+#' have the same response-factor levels as the data.
 #'
 #' The model used is described in the following paper, with the addition of
 #' modeling the TIMEOUT (which is considered but not used in this paper).
@@ -184,13 +208,10 @@ DDM <- function(){
 #' Journal of Experimental Psychology: General, 136(3), 389-413.
 #' https://doi.org/10.1037/0096-3445.136.3.389
 #'
-#' The likelihood of non-responses requires and evaluation of the DDM cdf,
-#' specifically 1 - p(hitting the yes boundary before TIMEOUT).
-#'
-#' To use these models three functions must be supplied in the design's function
-#' argument with the names TIMEOUT, Rnogo and Rgo. For example, assuming a
-#' 2.5 second timeout, and R factor with levels c("no","yes") and "no" mapping
-#' to a non-response.
+#' To use this model, three functions must be supplied in the design's
+#' `functions` argument with the names `TIMEOUT`, `Rnogo`, and `Rgo`. For
+#' example, assuming a 2.5 second timeout, and an `R` factor with levels
+#' `c("no", "yes")` where `"no"` denotes withholding:
 #'
 #' TIMEOUT=function(d)rep(2.5,nrow(d))
 #' Rnogo=function(d)factor(rep("no",nrow(d)),levels=c("no","yes"))

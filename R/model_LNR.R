@@ -50,19 +50,34 @@ rLNR <- function(lR,pars,p_types=c("m","s","t0"),ok=rep(TRUE,dim(pars)[1])){
 #'
 #' | **Parameter** | **Transform** | **Natural scale** | **Default**   | **Mapping**                    | **Interpretation**            |
 #'  |-----------|-----------|---------------|-----------|----------------------------|---------------------------|
-#'  | *m*       | -         | \[-Inf, Inf\]   | 1         |                            | Scale parameter           |
-#'  | *s*       | log       | \[0, Inf\]      | log(1)    |                            | Shape parameter           |
-#'  | *t0*      | log       | \[0, Inf\]      | log(0)    |                            | Non-decision time         |
+#'  | *m*       | identity  | \[-Inf, Inf\]   | 1         |                            | Meanlog of the lognormal decision-time distribution |
+#'  | *s*       | log       | \[0, Inf\]      | log(1)    |                            | SDlog of the lognormal decision-time distribution |
+#'  | *t0*      | log       | \[0, Inf\]      | log(0)    |                            | Additive non-decision-time shift |
+#'  | *pContaminant* | probit | \[0, 1\] | qnorm(0) | | Optional contamination probability handled by the data pipeline |
 #'
-#' Because the LNR is a race model, it has one accumulator per response option.
-#' EMC2 automatically constructs a factor representing the accumulators `lR` (i.e., the
-#' latent response) with level names taken from the `R` column in the data.
+#' Conditional on an accumulator's parameters, its decision time is
+#' `T = t0 + Y`, where `log(Y) ~ Normal(m, s^2)`. Thus `m` and `s` are the
+#' location and scale on the log-time axis, not the mean and SD on the raw
+#' response-time axis. The raw decision-time mean is
+#' `t0 + exp(m + s^2 / 2)`, before race selection. The distribution has support
+#' above `t0`; the model's default lower bound for `t0` is 0.05 when parameters
+#' are checked for simulation.
 #'
+#' Because the LNR is a race model, it has one independent lognormal
+#' accumulator per response option. EMC2 automatically constructs a factor
+#' representing the accumulators `lR` (i.e., the latent response) with level
+#' names taken from the `R` column in the data. The observed density is the
+#' winning accumulator density multiplied by the survivor probabilities of the
+#' other accumulators.
 #' In `design()`, `matchfun` can be used to automatically create a latent match
 #' (`lM`) factor with levels `FALSE` (i.e., the stimulus does not match the accumulator)
 #' and `TRUE` (i.e., the stimulus does match the accumulator). This is added internally
 #' and can also be used in the model formula, typically for parameters related to
 #' the rate of accumulation (see the example below).
+#'
+#' All model parameters are trial-dependent after the design formulas are
+#' evaluated. `pContaminant` is a generic nuisance parameter and is not part of
+#' the lognormal race distribution itself.
 #'
 #' Rouder, J. N., Province, J. M., Morey, R. D., Gomez, P., & Heathcote, A. (2015).
 #' The lognormal race: A cognitive-process model of choice and latency with
@@ -112,11 +127,30 @@ LNR <- function() {
 
 #' The Shifted-Gamma Race Model
 #'
-#' Model file for a race model where each accumulator follows a Gamma
-#' distribution with free rate, shape, and shift parameters.
+#' Race model in which each accumulator has a shifted Gamma finish-time
+#' distribution. For accumulator `i`,
+#' `T_i = shift_i + G_i`, with
+#' `G_i ~ Gamma(shape_i, rate = lambda_i)`. The observed response is the
+#' accumulator with the smallest finish time; the race likelihood combines
+#' the winning density with the survivor probabilities of all losing
+#' accumulators.
 #'
-#' Setting `shape` to `1` or `2` via model constants nests Erlang-1 / Erlang-2.
-#' Setting `shift` to `0` via model constants gives the non-shifted special case.
+#' The model parameters are:
+#'
+#' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Interpretation** |
+#' |---|---|---|---|---|
+#' | *lambda* | log | \[0, Inf\] | log(1) | Gamma rate; the reciprocal is the scale parameter conditional on `shape`. |
+#' | *shape* | log | \[0, Inf\] | log(1) | Gamma shape. `shape = 1` is exponential and `shape = 2` is Erlang-2. |
+#' | *shift* | log | \[0, Inf\] | log(0) | Nonnegative additive shift of the finish-time distribution. |
+#' | *pContaminant* | probit | \[0, 1\] | qnorm(0) | Optional contamination probability handled by the data pipeline. |
+#'
+#' All parameters are estimated on their indicated transformed scales. The
+#' zero shift is an explicit exception to the positive log-scale bounds, so
+#' `shift = 0` can be fixed in a design. Similarly, `shape` can be fixed to 1
+#' or 2 through model constants to obtain exponential/Erlang special cases.
+#' The finish-time distribution has support above `shift`, and its conditional
+#' mean is `shift + shape / lambda`. EMC2 creates one accumulator per response
+#' level in `R` and a latent accumulator factor `lR` for the race.
 #'
 #' @return A model list compatible with `design()`.
 #' @export
@@ -184,8 +218,30 @@ RGAMMA <- function() {
 
 #' The Ex-Gaussian Race Model
 #'
-#' Model file for a race model where each accumulator follows an ex-Gaussian
-#' distribution with free mean, Gaussian scale, and exponential tail.
+#' Race model in which each accumulator has an ex-Gaussian finish-time
+#' distribution. For accumulator `i`,
+#' `T_i = mu_i + G_i + E_i`, with
+#' `G_i ~ Normal(0, sigma_i^2)` and
+#' `E_i ~ Exponential(rate = 1 / tau_i)`. Equivalently, `mu` is the Gaussian
+#' location, `sigma` is the Gaussian SD, and `tau` is the mean of the
+#' exponential tail. The observed response is the accumulator with the
+#' smallest finish time.
+#'
+#' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Interpretation** |
+#' |---|---|---|---|---|
+#' | *mu* | log | \[0, Inf\] | log(.4) | Location of the Gaussian component. The current bounds restrict this location to be nonnegative. |
+#' | *sigma* | log | \[0, Inf\] | log(.05) | SD of the Gaussian component. |
+#' | *tau* | log | \[0, Inf\] | log(.1) | Mean of the exponential component; its rate is `1 / tau`. |
+#' | *pContaminant* | probit | \[0, 1\] | qnorm(0) | Optional contamination probability handled by the data pipeline. |
+#'
+#' The ex-Gaussian distribution has support on the real line. Its mean is
+#' `mu + tau` and its variance is `sigma^2 + tau^2`; these are descriptive
+#' distributional summaries rather than separate model parameters. Unlike the
+#' stop-signal ex-Gaussian models [SSEXG()] and [SSRDEX()], `REXG()` does not
+#' apply a lower truncation bound. The `pContaminant` parameter is generic
+#' nuisance infrastructure and is not part of the ex-Gaussian distribution.
+#' EMC2 creates one accumulator per response level in `R` and evaluates the
+#' race likelihood from the accumulator density and survivor functions.
 #'
 #' @return A model list compatible with `design()`.
 #' @export

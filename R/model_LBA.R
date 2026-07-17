@@ -96,9 +96,13 @@ rLBA <- function(lR, pars, p_types = c("v", "sv", "b", "A", "t0"),
 #' | *B*       | log       | \[0, Inf\]    | log(1)    | *b* = *B*+*A*              | Distance from *A* to *b* (response threshold)                                       |
 #' | *t0*      | log       | \[0, Inf\]    | log(0)    |                            | Non-decision time                                         |
 #' | *sv*      | log       | \[0, Inf\]    | log(1)    |                            | Between-trial variation in evidence-accumulation rate                      |
+#' | *pContaminant* | probit | \[0, 1\] | qnorm(0) | | Optional contamination probability handled by the data pipeline |
 #'
 #'
-#' All parameters are estimated on the log scale, except for the drift rate which is estimated on the real line.
+#' All core LBA parameters are estimated on the log scale, except for the drift
+#' rate which is estimated on the real line. `pContaminant` is estimated on the
+#' probit scale and is generic nuisance infrastructure rather than an LBA
+#' accumulator parameter.
 #'
 #' Conventionally, `sv` is fixed to 1 to satisfy scaling constraints.
 #'
@@ -183,19 +187,109 @@ LBA <- function(posdrift=TRUE){
 }
 
 #' LBA Logical Rules Model
+#'
+#' This is an LBA-based model for tasks in which the observable response is
+#' assembled from two latent target-detection subraces. It is not an ordinary
+#' race over the levels of `R`: the compiled likelihood combines the finish
+#' times of the accumulator roles according to the `LogicalRule` column in the
+#' data.
+#'
+#' The ordinary logical-rules model uses the accumulator roles `A`, `B`,
+#' `n_A`, and `n_B`. `A` and `B` are target accumulators, while `n_A` and
+#' `n_B` are their corresponding nontarget accumulators. The supported choice
+#' rules are:
+#'
+#' * `OR`: respond `yes` when either target subrace is positive, otherwise
+#'   respond `no`.
+#' * `AND`: respond `yes` only when both target subraces are positive.
+#' * `XOR`: respond `yes` when exactly one target subrace is positive.
+#' * `ID`: report which targets are positive using `NN`, `AN`, `NB`, or `AB`.
+#'
+#' Two detection rules are also supported. `OR_DETECTION_ANALYTIC` uses only
+#' the active target accumulators `A` and `B`, and reports the first active
+#' detector to finish. `OR_DETECTION_GNG` adds a `nogo` accumulator; a go
+#' response must beat the other active detector and `nogo`, while a nogo
+#' outcome is a withheld response. For detection rules, the stimulus column
+#' (`S`, `stimulus`, or `condition`) must identify `NN`, `AN`, `NB`, or `AB`
+#' on every trial. Missing stimulus values are treated as `NN`.
+#'
+#' The LBA parameters are:
+#'
+#' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Mapping** | **Interpretation** |
+#' |---|---|---|---|---|---|
+#' | *v* | identity | \[-Inf, Inf\] | 1 | | Mean drift rate for each accumulator. |
+#' | *sv* | log | \[0, Inf\] | log(1) | | Between-trial SD of drift rate; conventionally fixed to 1 for scale identification. |
+#' | *B* | log | \[0, Inf\] | log(1) | *b* = *B* + *A* | Distance from the upper end of the start-point range to the threshold. |
+#' | *A* | log | \[0, Inf\] | log(0) | | Width of the uniform start-point range. |
+#' | *t0* | log | \[0, Inf\] | log(0) | | Non-decision time. |
+#'
+#' Thus each accumulator starts at `A * U`, with `U ~ Uniform(0, 1)`, and
+#' reaches the threshold `b = B + A`. With `posdrift = TRUE`, the drift draw
+#' is a positive normal draw; with `posdrift = FALSE`, the untruncated normal
+#' is used and negative-drift accumulators can produce intrinsic omissions.
+#' All of the parameters above are trial-dependent after the design formulas
+#' have been evaluated. The capacity extension adds the following parameters:
+#'
+#' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Interpretation** |
+#' |---|---|---|---|---|
+#' | *kappa* | log | \[0, Inf\] | log(1) | Multiplicative mean capacity effect on both active targets in an `AB` trial. |
+#' | *tau* | log | \[0, Inf\] | log(0) | Between-trial SD of the shared capacity multiplier in an `AB` trial. |
+#'
+#' With `capacity = TRUE`, an `AB` trial receives one latent `Z ~ N(0, 1)` and
+#' the target drift draws are
+#' `V_i = (kappa + tau * Z) * v_i + epsilon_i`, for `i = A, B`, with
+#' independent `epsilon_i ~ N(0, sv_i^2)`. The logical-rule calculation is
+#' performed conditional on this same `Z` and then integrated over `Z`; the
+#' factor is not integrated separately for the two subraces. Nontarget and
+#' `nogo` accumulators do not load on the factor. Capacity has no effect on
+#' `AN`, `NB`, or `NN` trials, and `kappa = 1, tau = 0` recovers the ordinary
+#' logical-rules likelihood exactly. `kappa` and `tau` must be shared by the
+#' `A` and `B` rows within a trial. In positive-drift mode, the active target
+#' draws are conditioned jointly to be positive.
+#'
+#' The likelihood is implemented in the compiled logical-rules fast path. The
+#' R `dfun` and `pfun` entries retain the single-accumulator LBA functions for
+#' model integration and diagnostics, but the model-level R likelihood is not
+#' available as a fallback.
+#'
+#' @param posdrift Logical. If `TRUE` (default), use positive-truncated LBA
+#'   drift rates; if `FALSE`, use untruncated normal drift rates and append
+#'   `IO` to the compiled model name.
+#' @param fast_path Logical argument retained for compatibility. The current
+#'   logical-rules likelihood is always dispatched through the compiled path.
+#' @param capacity Logical. If `TRUE`, include the `kappa` and `tau` parameters
+#'   and use the shared-capacity likelihood on redundant-target `AB` trials.
+#' @return A model list defining the logical-rules race model.
 #' @export
 #'
-LogicalRulesLBA <- function(posdrift = TRUE, fast_path=TRUE){
+LogicalRulesLBA <- function(posdrift = TRUE, fast_path=TRUE, capacity = FALSE){
+  p_types <- c("v" = 1,"sv" = log(1),"B" = log(1),"A" = log(0),"t0" = log(0), "pContaminant"=qnorm(0))
+  transform <- c(v = "identity",sv = "exp", B = "exp", A = "exp",t0 = "exp", pContaminant="pnorm")
+  minmax <- cbind(v=c(-Inf,Inf),sv = c(0, Inf), A=c(1e-4,Inf),B=c(0,Inf),t0=c(0.05,Inf), pContaminant=c(0.001,0.999))
+  exception <- c(A=0, pContaminant=0)
+  if (capacity) {
+    # kappa/tau are appended after the emc2col::lba kernel prefix so the raw
+    # batch kernels keep their positional contract.  tau = 0 (from the
+    # default log(0)) and kappa = 1 (exp(0)) are exactly representable, so
+    # the ordinary route is recovered bit-for-bit when capacity is off.
+    p_types <- c(p_types, kappa = log(1), tau = log(0))
+    transform <- c(transform, kappa = "exp", tau = "exp")
+    minmax <- cbind(minmax, kappa = c(1e-4, Inf), tau = c(1e-4, Inf))
+    exception <- c(exception, kappa = 1, tau = 0)
+  }
   list(
     type="RACE",
     # Note: `calc_ll_oo()` infers LBA `posdrift` from whether `c_name` contains "IO".
     # Keep this in sync so likelihood and simulation use the same setting.
+    # The compiled likelihood detects the capacity variant from the presence
+    # of the kappa/tau parameter columns, so the c_name is shared.
     c_name = paste0("LBA_LogicalRules",ifelse(posdrift,"","IO")),
+    capacity = capacity,
     # p_vector transform, sets sv as a scaling parameter
-    p_types=c("v" = 1,"sv" = log(1),"B" = log(1),"A" = log(0),"t0" = log(0)),
-    transform=list(func=c(v = "identity",sv = "exp", B = "exp", A = "exp",t0 = "exp")),
-    bound=list(minmax=cbind(v=c(-Inf,Inf),sv = c(0, Inf), A=c(1e-4,Inf),B=c(0,Inf),t0=c(0.05,Inf)),
-               exception=c(A=0)),
+    p_types=p_types,
+    transform=list(func=transform),
+    bound=list(minmax=minmax,
+               exception=exception),
     # Transform to natural scale
     # Trial dependent parameter transform
     Ttransform = function(pars,dadm) {
@@ -454,25 +548,76 @@ rBAwL_corr <- function(lR, pars, ok = rep(TRUE, nrow(pars)),
 
 #' The Ballistic Accumulator with Leak (BAwL)
 #'
-#' Race model where each accumulator follows a leaky-integration trajectory and
-#' races against independent guess and kill clocks.
-#' Setting k=0 recovers the standard LBA decision dynamics; setting
-#' lambda_g=lambda_k=0 removes clock effects.
+#' A race model in which each accumulator follows a leaky evidence trajectory
+#' and can race against optional guess and kill clocks. For accumulator `i`,
+#' the start point is `A * U_i`, where `U_i ~ Uniform(0, 1)`, the threshold is
+#' `b = B + A`, and the drift is a normal draw with mean `v_i` and SD `sv_i`.
+#' With leak rate `k`, the evidence trajectory is
+#' `x_i(t) = x_i(0) * exp(-k * t) + v_i / k * (1 - exp(-k * t))` for `k > 0`;
+#' its `k = 0` limit is the ordinary ballistic trajectory. If the leaky
+#' asymptote cannot reach the threshold, that accumulator has no finite hit.
 #'
-#' Parameters as in LBA plus:
-#' * k: leak rate (log scale, [0, Inf); default log(0) = effectively 0).
-#' * lambda_g: guessing rate (log scale, [0, Inf); default log(0) = 0).
-#' * lambda_k: killing/expiry rate (log scale, [0, Inf); default log(0) = 0).
+#' The model uses the following parameterization. The `B` parameter is the
+#' distance from the upper end of the start-point range to the threshold, so
+#' `b = B + A` is always at least `A`. Parameters are mapped to the natural
+#' scale before trial-dependent transforms are applied.
 #'
-#' @param posdrift logical, if TRUE drifts are truncated to be positive.
-#' @param erlang integer shape of the killing process (1=exponential, 2=Erlang-2)
-#' @param erlang_type string, one of "none", "local_kill", "global_kill", "local_guess", "local_kill_guess"
-#' @param correlated logical; if TRUE add a direct cell-level `rho` correlation
-#'   for correlated BAwL drift draws.  Correlated designs require `matchfun`:
-#'   the resulting `lM` role indicator maps the direct correlation to signed
-#'   row loadings.  The `rho` design must be shared within each trial; use a
-#'   row-level participation factor (for example `coupled`) only to make
-#'   structurally independent racers such as PM rows zero.
+#' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Mapping** | **Interpretation** |
+#' |---|---|---|---|---|---|
+#' | *v* | identity | \[-Inf, Inf\] | 1 | | Mean evidence-accumulation rate. |
+#' | *sv* | log | \[0, Inf\] | log(1) | | Between-trial SD of the drift rate; conventionally fixed to 1 for scale identification. |
+#' | *B* | log | \[0, Inf\] | log(1) | *b* = *B* + *A* | Distance from the upper start-point range to the threshold. |
+#' | *A* | log | \[0, Inf\] | log(0) | | Start-point range. |
+#' | *t0* | log | \[0, Inf\] | log(0) | | Non-decision time. |
+#' | *k* | log | \[0, Inf\] | log(0) | | Leak rate; `k = 0` is the LBA limit. |
+#' | *mG* | log | \[0, Inf\] | log(1) | *lambda_g* = *q* / *mG* | Mean of the optional guess clock. |
+#' | *mK* | log | \[0, Inf\] | log(1) | *lambda_k* = *q* / *mK* | Mean of the optional kill clock. |
+#' | *omega* | probit | \[0, 1\] | qnorm(.5) | | Probability of the Erlang-1 component in mixed mode. |
+#' | *pContaminant* | probit | \[0, 1\] | qnorm(0) | | Optional contamination probability handled by the data pipeline. |
+#' | *rho* | scaled probit | \[-1, 1\] | qnorm(.5) | | Direct cell-level correlation of the underlying Gaussian drifts; only when `correlated = TRUE`. |
+#'
+#' Here `q = 1` for Erlang-1 clocks and `q = 2` for Erlang-2 clocks. In
+#' `erlang_shape = "mixed"`, the clock is Erlang-1 with probability `omega` and
+#' Erlang-2 otherwise, with both components having the same mean `mG` or `mK`.
+#' The internal rates `lambda_g` and `lambda_k` are generated by the
+#' `Ttransform`; they are not user-facing model parameters and should not be
+#' put in a `design()` formula.
+#'
+#' `erlang_type` selects which clocks are active. `"none"` has no clocks;
+#' `"local_kill"` adds an independent kill clock to each accumulator;
+#' `"global_kill"` adds one kill clock shared by all accumulators in a trial;
+#' `"local_guess"` adds local guess clocks; and `"local_kill_guess"` adds both
+#' local guess and local kill clocks. A kill clock that wins produces an
+#' omission. A guess clock that wins is represented using the package's timed
+#' guess convention; if a `time` accumulator is present, its win is converted
+#' to a sampled response and marked with `isTime`. Global kill requires the
+#' `mK`/`lambda_k` value to be constant across accumulators within a trial.
+#'
+#' With `posdrift = TRUE` (the default), the drift draws are truncated to be
+#' positive. With `posdrift = FALSE`, the normal draws are untruncated and the
+#' model can have intrinsic omissions; the compiled model name is suffixed with
+#' `IO`. The BAwL likelihood is a race likelihood over the accumulator levels
+#' in `lR`, which EMC2 constructs from the response levels or fixed accumulator
+#' roles.
+#'
+#' If `correlated = TRUE`, `rho` is a trial/cell-level parameter and a
+#' `matchfun`-generated `lM` factor is required. The correct racer is the
+#' positive reference and the incorrect racer receives the sign of `rho`; this
+#' produces the requested pairwise correlation while allowing structurally
+#' independent racers to be assigned `rho = 0`. The positive-drift correlated
+#' simulator jointly conditions the active drift vector on all active drifts
+#' being positive, so `rho` refers to the underlying untruncated Gaussian
+#' draws, not to their marginally truncated correlation.
+#'
+#' @param posdrift Logical. If `TRUE` (default), drift rates are truncated at
+#'   zero; if `FALSE`, they are sampled from the untruncated normal.
+#' @param erlang_shape Integer `1` for exponential clocks, `2` for Erlang-2,
+#'   or `"mixed"` for an Erlang-1/Erlang-2 mixture controlled by `omega`.
+#' @param erlang_type Clock configuration: one of `"none"`, `"local_kill"`,
+#'   `"global_kill"`, `"local_guess"`, or `"local_kill_guess"`.
+#' @param correlated Logical. If `TRUE`, add the correlated-drift parameter
+#'   `rho` and use the correlated BAwL race simulator and likelihood path.
+#' @return A model list defining the BAwL race model.
 #'
 #' @export
 BAwL <- function(posdrift = TRUE, erlang_shape = 1L,
@@ -623,24 +768,44 @@ BAwL <- function(posdrift = TRUE, erlang_shape = 1L,
 
 #' Correlated Ballistic Accumulator with Leak
 #'
-#' Adds a one-factor correlation `rho` to BAwL.  In an expanded race design
-#' with `lM`, `rho` is the pairwise correlation between the correct and
-#' incorrect racers' underlying Gaussian drifts for each trial type.  The
-#' correct racer is the positive reference, and the incorrect racer receives
-#' the cell sign.  The coefficient must be shared within a trial; use a
-#' derived participation factor and a constant to set PM/false-alarm rows to
-#' zero, for example:
-#' `coupled = function(d) factor(d$lR != "pm", c(FALSE, TRUE), c("no", "yes"))`,
-#' `rho ~ 0 + coupled`, `constants = c(rho_coupledno = 0)`.
+#' This is the `correlated = TRUE` form of [BAwL()]. It adds a one-factor
+#' correlation to the Gaussian drift draws while retaining the BAwL leak,
+#' start-point, non-decision-time, clock, and positive-drift parameterization.
+#' In an expanded race design with `lM`, `rho` is the pairwise correlation
+#' between the correct and incorrect racers' *underlying untruncated* Gaussian
+#' drifts for each trial type. The correct racer is the positive reference and
+#' the incorrect racer receives the cell sign.
+#'
+#' `rho` is a direct natural-scale correlation in `[-1, 1]`, represented by a
+#' scaled probit transform. It must be shared by all rows of a trial. A
+#' `matchfun` is therefore required so that the generated `lM` factor can
+#' identify the correct racer. Structurally independent racers, such as a
+#' PM/false-alarm row, should be assigned `rho = 0` using a participation
+#' factor. For example:
+#'
+#' ```r
+#' coupled <- function(d)
+#'   factor(d$lR != "pm", c(FALSE, TRUE), c("no", "yes"))
+#' # In the design: rho ~ 0 + coupled,
+#' # constants = c(rho_coupledno = 0)
+#' ```
 #'
 #' With `posdrift = TRUE`, BAwLcorr conditions the joint correlated Gaussian
-#' drift vector on all active drifts being positive.  Thus `rho` is the
-#' correlation of the underlying untruncated Gaussian, while the marginals
-#' retain standard positive-drift BAwL semantics.
+#' drift vector on all active drifts being positive. Thus `rho` is the
+#' correlation of the underlying untruncated Gaussian, while the marginal
+#' drift draws retain standard positive-drift BAwL semantics. The marginal
+#' truncated correlation is therefore not equal to `rho` in general.
 #'
-#' @param posdrift logical, if TRUE drifts are truncated to be positive.
-#' @param erlang_shape integer shape of the killing process.
-#' @param erlang_type clock configuration, as in [BAwL()].
+#' All BAwL parameters are described in [BAwL()], including `v`, `sv`, `B`,
+#' `A`, `t0`, `k`, `mG`, `mK`, `omega`, and `pContaminant`. This constructor
+#' always sets `correlated = TRUE` internally.
+#'
+#' @param posdrift Logical. If `TRUE` (default), drift rates are jointly
+#'   conditioned to be positive; if `FALSE`, use untruncated normal drifts.
+#' @param erlang_shape Integer `1` for exponential clocks, `2` for Erlang-2,
+#'   or `"mixed"` for an Erlang-1/Erlang-2 mixture.
+#' @param erlang_type Clock configuration, as in [BAwL()].
+#' @return A model list defining the correlated BAwL race model.
 #' @export
 BAwLcorr <- function(posdrift = TRUE, erlang_shape = 1L,
                      erlang_type = c("none", "local_kill", "global_kill", "local_guess", "local_kill_guess")) {

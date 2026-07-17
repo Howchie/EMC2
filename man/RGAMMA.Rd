@@ -10,10 +10,29 @@ RGAMMA()
 A model list compatible with \code{design()}.
 }
 \description{
-Model file for a race model where each accumulator follows a Gamma
-distribution with free rate, shape, and shift parameters.
+Race model in which each accumulator has a shifted Gamma finish-time
+distribution. For accumulator \code{i},
+\code{T_i = shift_i + G_i}, with
+\code{G_i ~ Gamma(shape_i, rate = lambda_i)}. The observed response is the
+accumulator with the smallest finish time; the race likelihood combines
+the winning density with the survivor probabilities of all losing
+accumulators.
 }
 \details{
-Setting \code{shape} to \code{1} or \code{2} via model constants nests Erlang-1 / Erlang-2.
-Setting \code{shift} to \code{0} via model constants gives the non-shifted special case.
+The model parameters are:\tabular{lllll}{
+   \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Interpretation} \cr
+   \emph{lambda} \tab log \tab [0, Inf] \tab log(1) \tab Gamma rate; the reciprocal is the scale parameter conditional on \code{shape}. \cr
+   \emph{shape} \tab log \tab [0, Inf] \tab log(1) \tab Gamma shape. \code{shape = 1} is exponential and \code{shape = 2} is Erlang-2. \cr
+   \emph{shift} \tab log \tab [0, Inf] \tab log(0) \tab Nonnegative additive shift of the finish-time distribution. \cr
+   \emph{pContaminant} \tab probit \tab [0, 1] \tab qnorm(0) \tab Optional contamination probability handled by the data pipeline. \cr
+}
+
+
+All parameters are estimated on their indicated transformed scales. The
+zero shift is an explicit exception to the positive log-scale bounds, so
+\code{shift = 0} can be fixed in a design. Similarly, \code{shape} can be fixed to 1
+or 2 through model constants to obtain exponential/Erlang special cases.
+The finish-time distribution has support above \code{shift}, and its conditional
+mean is \code{shift + shape / lambda}. EMC2 creates one accumulator per response
+level in \code{R} and a latent accumulator factor \code{lR} for the race.
 }

@@ -10,22 +10,34 @@ SDT()
 A model list with all the necessary functions to sample
 }
 \description{
-Discrete binary choice based on continuous Gaussian latent, with no rt (rt
-must be set to NA in data).
+Discrete binary choice based on a continuous Gaussian latent variable. No
+response time is modeled; \code{rt} must be \code{NA} in the data. For a binary
+response, the model draws \code{X ~ Normal(mean, sd^2)} and compares it with the
+criterion \code{threshold}: the first response level is selected below the
+criterion and the second response level above it.
 }
 \details{
-Model parameters are:
-mean (unbounded)
-sd (log scale) and
-threshold (unbounded).
+\tabular{lllll}{
+   \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Interpretation} \cr
+   \emph{mean} \tab identity \tab [-Inf, Inf] \tab 0 \tab Mean of the Gaussian latent variable. \cr
+   \emph{sd} \tab log \tab [0, Inf] \tab log(1) \tab Gaussian SD. \cr
+   \emph{threshold} \tab identity \tab [-Inf, Inf] \tab 0 \tab Response criterion; for binary responses, the cutoff between the two response levels. \cr
+}
 
-For identifiability in one condition two parameters must be fixed
-(conventionally mean=0 and sd = 1). When used with data that records only
-accuracy (so reponse bias cannot be evaluated) a single threshold must be
-assumed and fixed (e.g., threshold = 0).
+
+The model is invariant to a common location and scale transformation, so in
+one condition two parameters must be fixed for identification, conventionally
+\code{mean = 0} and \code{sd = 1}. When only accuracy is observed and response bias
+cannot be estimated, the criterion must also be fixed (for example,
+\code{threshold = 0}). The likelihood is the Gaussian probability between the
+lower and upper response thresholds; the model's \code{qfun} is \code{qnorm} for ROC
+construction.
 
 At present this model is not fully implemented in C, but as its likelihood
 requires only pnorm evaluation it is quite fast.
+The factor order matters: the first level of \code{R} is the lower response and
+the second is the upper response, while \code{lR} supplies the latent response
+thresholds used during simulation.
 }
 \examples{
 dprobit <- design(Rlevels = c("left","right"),

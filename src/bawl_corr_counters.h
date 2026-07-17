@@ -61,4 +61,12 @@ inline bool bawl_corr_counters_enabled() {
   return raw != nullptr && *raw != '\0' && std::strcmp(raw, "0") != 0;
 }
 
+// Cached copy of the enabled flag, set once per likelihood invocation, so
+// header-level work counters (e.g. BVN corner evaluations) do not re-read
+// the environment on hot paths.
+inline bool& bawl_corr_counters_active() {
+  static bool active = false;
+  return active;
+}
+
 #endif

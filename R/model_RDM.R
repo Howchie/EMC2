@@ -155,9 +155,12 @@ rRDM <- function(lR, pars, p_types=c("v", "B", "A", "t0"), ok=rep(TRUE, dim(pars
 #' | *B*       | log       | \[0, Inf\]      | log(1)    | *b* = *B* + *A*      | Distance from *A* to *b* (response threshold)                  |
 #' | *t0*      | log       | \[0, Inf\]      | log(0)    |                  | Non-decision time                                             |
 #' | *s*       | log       | \[0, Inf\]      | log(1)    |                  | Within-trial standard deviation of drift rate                 |
+#' | *pContaminant* | probit | \[0, 1\] | qnorm(0) | | Optional contamination probability handled by the data pipeline |
 #'
 #'
-#' All parameters are estimated on the log scale.
+#' The core RDM parameters are estimated on the log scale. `pContaminant` is
+#' estimated on the probit scale and is generic nuisance infrastructure rather
+#' than an accumulator parameter.
 #'
 #' The parameterization *b* = *B* + *A* ensures that the response threshold is
 #' always higher than the between trial variation in start point.
@@ -537,11 +540,54 @@ rSWTN <- function(n, b, v, A, sv, s = 1, k = 0, erlang = 1L, erlang_omega = 1, p
 
 #' RDMGBM Model
 #'
-#' Racing geometric Brownian first-passage model with start-point variability.
-#' Supports exponential killing (omission / guessing) via the `lambda_g` and `lambda_k` parameters.
+#' Racing geometric Brownian motion (GBM) first-passage model with
+#' start-point variability. Each accumulator starts at
+#' `X(0) = 1 + U`, where `U ~ Uniform(0, A)`, and races to the boundary
+#' `b = 1 + B + A`. On the log scale, the GBM has drift
+#' `v - s^2 / 2` and diffusion SD `s`; `v` is the drift parameter on the
+#' original GBM scale. The first-passage time is shifted by `t0`, and the
+#' accumulator with the earliest finish wins the race.
 #'
-#' @param erlang_shape integer shape of the killing process (1 = exponential, 2 = Erlang-2)
-#' @param erlang_type string, one of "none", "local_kill", "global_kill", "local_guess", "local_kill_guess"
+#' The model's user-facing parameters are:
+#'
+#' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Mapping** | **Interpretation** |
+#' |---|---|---|---|---|---|
+#' | *v* | log | \[0, Inf\] | log(1) | | GBM drift parameter. |
+#' | *B* | log | \[0, Inf\] | log(1) | *b* = 1 + *B* + *A* | Distance from the upper start-point range to the boundary, with the GBM baseline at 1. |
+#' | *A* | log | \[0, Inf\] | log(0) | | Start-point range above 1. |
+#' | *t0* | log | \[0, Inf\] | log(0) | | Non-decision time. |
+#' | *s* | log | \[0, Inf\] | log(1) | | GBM diffusion SD. |
+#' | *mG* | log | \[0, Inf\] | log(1) | *lambda_g* = *q* / *mG* | Mean of the optional guess clock. |
+#' | *mK* | log | \[0, Inf\] | log(1) | *lambda_k* = *q* / *mK* | Mean of the optional kill clock. |
+#' | *omega* | probit | \[0, 1\] | qnorm(.5) | | Erlang-1 mixture weight in mixed mode. |
+#' | *pContaminant* | probit | \[0, 1\] | qnorm(0) | | Optional contamination probability handled by the data pipeline. |
+#'
+#' The internal `lambda_g` and `lambda_k` columns are created by the
+#' `Ttransform`; they are rates, not parameters to include in a design
+#' formula. Here `q = 1` for Erlang-1 and `q = 2` for Erlang-2. In mixed mode,
+#' each clock is Erlang-1 with probability `omega` and Erlang-2 otherwise,
+#' with the same mean `mG` or `mK` in either component.
+#'
+#' `erlang_type = "none"` gives the ordinary GBM race. `"local_kill"` adds an
+#' independent kill clock to each accumulator, `"global_kill"` adds one kill
+#' clock shared within a trial, `"local_guess"` adds local guess clocks, and
+#' `"local_kill_guess"` adds both local clock types. A kill winner is an
+#' omission; a guess winner follows the package's timed-guess convention. A
+#' global kill requires the kill parameter to be constant across accumulators
+#' within a trial. Mixed Erlang clocks are currently supported only for local
+#' clock configurations, not `"global_kill"`.
+#'
+#' For finite-time simulation the model checks the GBM log-drift condition
+#' `v > s^2 / 2` together with `s > 0`. The `v = 0` exception is retained for
+#' parameter mapping, but it does not produce ordinary finite GBM first
+#' passages. The model is a race model, so EMC2 constructs the accumulator
+#' factor `lR` from the response levels in `R`.
+#'
+#' @param erlang_shape Integer `1` for exponential clocks, `2` for Erlang-2,
+#'   or `"mixed"` for the Erlang-1/Erlang-2 mixture.
+#' @param erlang_type Clock configuration: one of `"none"`, `"local_kill"`,
+#'   `"global_kill"`, `"local_guess"`, or `"local_kill_guess"`.
+#' @return A model list compatible with [design()].
 #'
 #' @export
 #'
@@ -661,29 +707,65 @@ RDMGBM <- function(erlang_shape = 1L, erlang_type = "none") {
 
 #' RDMSWTN Model
 #'
-#' @details
+#' Racing Diffusion Model with Shifted Wald Truncated Normal (SWTN)
+#' accumulators. Conditional on a trial-specific drift draw `V`, each
+#' accumulator has a Wald first-passage time with diffusion SD `s`, a
+#' non-decision shift `t0`, and a uniformly varying first-passage distance.
+#' The start-point/threshold parameterization is `b = B + A`, with the
+#' corresponding Wald distance written as `B + U * A`, where
+#' `U ~ Uniform(0, 1)`. The between-trial drift is
+#' `V ~ Normal(v, sv^2)`; when `posdrift = TRUE`, this normal distribution is
+#' truncated below at zero.
 #'
-#' Racing Diffusion Model with Shifted Wald Truncated Normal (SWTN) accumulators.
-#' Supports between-trial drift variability (sv) and start-point variability (A).
-#' When sv=0 and A=0 the model reduces to a point Wald; when sv=0 it reduces
-#' to the standard RDM.
+#' The model parameters are:
 #'
-#' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Interpretation**                        |
-#' |-----------|-----------|---------------|---------|---------------------------------------|
-#' | *v*       | log       | \[0, Inf\]      | log(1)  | Mean drift rate                        |
-#' | *B*       | log       | \[0, Inf\]      | log(1)  | Response threshold (before A offset)   |
-#' | *A*       | log       | \[0, Inf\]      | log(0)  | Start-point variability range          |
-#' | *t0*      | log       | \[0, Inf\]      | log(0)  | Non-decision time                      |
-#' | *s*       | log       | \[0, Inf\]      | log(1)  | Within-trial SD of drift rate          |
-#' | *sv*      | log       | \[0, Inf\]      | log(0)  | Between-trial SD of drift rate         |
-#' | *mG*      | log       | \[0, Inf\]      | log(1)  | Local guessing timer mean              |
-#' | *mK*      | log       | \[0, Inf\]      | log(1)  | Local killing timer mean               |
-#' | *omega*   | pnorm     | \[0, 1\]        | qnorm(.5)| Erlang-1 mixture weight (mixed only)    |
+#' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Mapping** | **Interpretation** |
+#' |---|---|---|---|---|---|
+#' | *v* | log | \[0, Inf\] | log(1) | | Mean between-trial drift rate. |
+#' | *B* | log | \[0, Inf\] | log(1) | *b* = *B* + *A* | Baseline distance to the threshold. |
+#' | *A* | log | \[0, Inf\] | log(0) | | Range of between-trial start-point/distance variability. |
+#' | *t0* | log | \[0, Inf\] | log(0) | | Non-decision time. |
+#' | *s* | log | \[0, Inf\] | log(1) | | Within-trial diffusion SD; conventionally fixed to 1 for scale identification. |
+#' | *sv* | log | \[0, Inf\] | log(0) | | Between-trial SD of the drift rate. |
+#' | *mG* | log | \[0, Inf\] | log(1) | *lambda_g* = *q* / *mG* | Mean of the optional guess clock. |
+#' | *mK* | log | \[0, Inf\] | log(1) | *lambda_k* = *q* / *mK* | Mean of the optional kill clock. |
+#' | *omega* | probit | \[0, 1\] | qnorm(.5) | | Erlang-1 mixture weight in mixed mode. |
+#' | *pContaminant* | probit | \[0, 1\] | qnorm(0) | | Optional contamination probability handled by the data pipeline. |
 #'
-#' @param erlang_shape integer shape of the killing process (1=exponential, 2=Erlang-2) or "mixed"
-#' @param erlang_type string, one of "none", "local_kill", "global_kill", "local_guess", "local_kill_guess"
+#' `erlang_shape = 1` uses exponential clocks and `erlang_shape = 2` uses
+#' Erlang-2 clocks. In `erlang_shape = "mixed"`, each clock is Erlang-1 with
+#' probability `omega` and Erlang-2 otherwise, with both components retaining
+#' the same mean `mG` or `mK`. The internal `lambda_g` and `lambda_k` columns
+#' are generated from these means by the `Ttransform`; they are not parameters
+#' for `design()` formulas. `erlang_type` selects no clocks, local kill, global
+#' kill, local guess, or local kill plus local guess, using the same values
+#' `"none"`, `"local_kill"`, `"global_kill"`, `"local_guess"`, and
+#' `"local_kill_guess"`. A global kill clock is shared across accumulators and
+#' therefore requires the kill parameter to be constant within a trial. Mixed
+#' Erlang mode is currently restricted to local clock configurations.
 #'
-#' @return a list of parameters
+#' Setting `sv = 0` reduces the model to the standard RDM parameterization;
+#' setting both `sv = 0` and `A = 0` gives a point Wald accumulator (apart from
+#' any optional clock). With `posdrift = FALSE`, negative drifts are allowed and
+#' the finish-time distribution can be defective: an accumulator can have an
+#' intrinsic infinite finish time. The compiled model name is suffixed with
+#' `IO` in that case. With `posdrift = TRUE`, the drift distribution is
+#' truncated at zero and the ordinary RDM is recovered when `sv = 0`.
+#'
+#' As a race model, RDMSWTN has one accumulator per response option. EMC2
+#' constructs the latent accumulator factor `lR` from `R`, and the race
+#' likelihood combines one winning density with the survivor probabilities of
+#' all other accumulators. The optional `pContaminant` parameter is generic
+#' nuisance infrastructure and is not part of the SWTN distribution.
+#'
+#' @param erlang_shape Integer `1` for exponential clocks, `2` for Erlang-2,
+#'   or `"mixed"` for the Erlang-1/Erlang-2 mixture.
+#' @param erlang_type Clock configuration: one of `"none"`, `"local_kill"`,
+#'   `"global_kill"`, `"local_guess"`, or `"local_kill_guess"`.
+#' @param posdrift Logical. If `TRUE` (default), truncate the between-trial
+#'   normal drift distribution below at zero; if `FALSE`, use untruncated
+#'   drifts and allow intrinsic omissions.
+#' @return A model list compatible with [design()].
 #'
 #' @export
 #'

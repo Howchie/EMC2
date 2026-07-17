@@ -70,13 +70,15 @@ inline double gh_standard_normal_weight(const GHRule& rule, int i) {
   return rule.w[static_cast<size_t>(i)] / std::sqrt(std::acos(-1.0));
 }
 
-inline int bawl_corr_quad_nodes(const char* env_name, int default_n) {
+// Shared environment override for Gauss-Hermite node counts (used by the
+// correlated BAwL routes and the LogicalRules capacity routes).
+inline int emc2_quad_nodes(const char* env_name, int default_n) {
   const char* raw = std::getenv(env_name);
   if (raw == nullptr || *raw == '\0') return default_n;
   char* end = nullptr;
   const long parsed = std::strtol(raw, &end, 10);
   if (end == raw || *end != '\0' || parsed < 2 || parsed > 256)
-    throw std::runtime_error("BAwLcorr quadrature node count must be between 2 and 256.");
+    throw std::runtime_error("EMC2 quadrature node count must be between 2 and 256.");
   return static_cast<int>(parsed);
 }
 

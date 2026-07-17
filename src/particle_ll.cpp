@@ -18,6 +18,7 @@
 #include "transform_utils.h"
 #include "gh_quad.h"
 #include "bawl_corr_counters.h"
+#include "lr_capacity_counters.h"
 #include <gsl/gsl_integration.h>
 #include <gsl/gsl_errno.h> // For GSL error handling
 #include "bawl_geometry.h"
@@ -712,7 +713,8 @@ struct LogicalRulesSharedState {
 
 static LogicalRulesSharedState build_logicalrules_shared_state(const Rcpp::DataFrame& dadm,
                                                                int n_trials,
-                                                               int n_acc);
+                                                               int n_acc,
+                                                               bool capacity = false);
 
 static double local_race_helper(double t,
                                 const double* par_target,
@@ -843,7 +845,10 @@ static double c_log_likelihood_logicalrules(
     RaceRawFun model_dfun_raw,
     RaceRawFun model_pfun_raw,
     const LogicalRulesSharedState& shared,
-    Rcpp::NumericVector* trial_ll_out = nullptr);
+    Rcpp::NumericVector* trial_ll_out = nullptr,
+    int kappa_col = -1,
+    int tau_col = -1,
+    int pc_col = -1);
 
 static inline bool eval_pdf_cdf_race_scalar(
     bool use_raw_local,
@@ -2187,7 +2192,8 @@ static inline SSModelAdapter resolve_ss_adapter(const std::string& type_std) {
 
 static LogicalRulesSharedState build_logicalrules_shared_state(const Rcpp::DataFrame& dadm,
                                                                int n_trials,
-                                                               int n_acc) {
+                                                               int n_acc,
+                                                               bool capacity) {
   LogicalRulesSharedState out;
   out.n_trials = n_trials;
   out.n_acc = n_acc;
@@ -2389,27 +2395,43 @@ static LogicalRulesSharedState build_logicalrules_shared_state(const Rcpp::DataF
     }
     out.resp_code[static_cast<size_t>(j)] = resp;
 
-    int cond = 0;
-    if (rcode >= 5) {
+    // Stimulus condition codes are mandatory for the detection rules and for
+    // the capacity model (which needs to identify the redundant-target AB
+    // condition for every rule).  Ordinary choice designs may carry an
+    // unrelated S factor; their unmapped levels are recorded as -1 and never
+    // consulted.
+    int cond = (rcode >= 5 || capacity) ? -1 : 0;
+    if (rcode >= 5 || capacity) {
       if (!has_stim_col) {
-        Rcpp::stop("LogicalRules detection rules require stimulus column `S` (or `stimulus`/`condition`).");
+        Rcpp::stop(capacity
+          ? "LogicalRules capacity requires stimulus column `S` (or `stimulus`/`condition`)."
+          : "LogicalRules detection rules require stimulus column `S` (or `stimulus`/`condition`).");
       }
+    }
+    if (has_stim_col) {
       if (stim_is_factor) {
         const int sc = stim_code[start];
-        if (sc == stimNN) cond = 0;
+        if (sc == NA_INTEGER || sc == stimNN) cond = 0;
         else if (sc == stimA) cond = 1;
         else if (sc == stimB) cond = 2;
         else if (sc == stimAB) cond = 3;
+        else cond = -1;
       } else {
-        const std::string sv = Rcpp::as<std::string>(stim_chr[start]);
-        if (sv == "NN" || sv == "none") cond = 0;
-        else if (sv == "AN" || sv == "A") cond = 1;
-        else if (sv == "NB" || sv == "B") cond = 2;
-        else if (sv == "AB" || sv == "BA" || sv == "A+B" || sv == "B+A") cond = 3;
+        if (stim_chr[start] == NA_STRING) cond = 0;
+        else {
+          const std::string sv = Rcpp::as<std::string>(stim_chr[start]);
+          if (sv == "NN" || sv == "none") cond = 0;
+          else if (sv == "AN" || sv == "A") cond = 1;
+          else if (sv == "NB" || sv == "B") cond = 2;
+          else if (sv == "AB" || sv == "BA" || sv == "A+B" || sv == "B+A") cond = 3;
+          else cond = -1;
+        }
       }
-      if (cond < 0 || cond > 3) {
-        Rcpp::stop("LogicalRules detection rules require stimulus NN/AN/NB/AB (or A/B/AB).");
-      }
+    }
+    if ((rcode >= 5 || capacity) && (cond < 0 || cond > 3)) {
+      Rcpp::stop(capacity
+        ? "LogicalRules capacity requires stimulus NN/AN/NB/AB (or A/B/AB) on every trial."
+        : "LogicalRules detection rules require stimulus NN/AN/NB/AB (or A/B/AB).");
     }
     out.cond_code[static_cast<size_t>(j)] = cond;
 
@@ -2964,8 +2986,20 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
     adapter.ctx.nogo_code = nogo_code;
 
     if (is_logicalrules) {
+      int kappa_col = -1;
+      int tau_col = -1;
+      int pc_col = -1;
+      for (int j = 0; j < keep_names.size(); ++j) {
+        const std::string nm = Rcpp::as<std::string>(keep_names[j]);
+        if (nm == "kappa") kappa_col = j;
+        else if (nm == "tau") tau_col = j;
+        else if (nm == "pContaminant") pc_col = j;
+      }
+      const bool capacity = kappa_col >= 0 || tau_col >= 0;
       LogicalRulesSharedState logicalrules_shared =
-        build_logicalrules_shared_state(data, n_trials, n_lR);
+        build_logicalrules_shared_state(data, n_trials, n_lR, capacity);
+      if (capacity && lr_capacity_counters_enabled())
+        lr_capacity_counters().reset();
 
       // Column pointers into ParamTable base in p_types order; base column
       // addresses are particle-invariant, so this replaces the per-particle
@@ -2982,7 +3016,8 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
         lls[i] = c_log_likelihood_logicalrules(lr_cols.data(), n_par_lr, expand, min_ll, is_ok, n_lR,
                                                &adapter.ctx, adapter.pdf1_ptr, adapter.cdf1_ptr,
                                                adapter.model_dfun_raw, adapter.model_pfun_raw,
-                                               logicalrules_shared, nullptr);
+                                               logicalrules_shared, nullptr,
+                                               kappa_col, tau_col, pc_col);
       }
       return lls;
     }
@@ -3369,8 +3404,20 @@ NumericMatrix calc_ll_oo_pw(NumericMatrix particle_matrix, DataFrame data, Numer
     NumericMatrix result(n_particles, n_out_race);
 
     if (is_logicalrules) {
+      int kappa_col = -1;
+      int tau_col = -1;
+      int pc_col = -1;
+      for (int j = 0; j < keep_names.size(); ++j) {
+        const std::string nm = Rcpp::as<std::string>(keep_names[j]);
+        if (nm == "kappa") kappa_col = j;
+        else if (nm == "tau") tau_col = j;
+        else if (nm == "pContaminant") pc_col = j;
+      }
+      const bool capacity = kappa_col >= 0 || tau_col >= 0;
       LogicalRulesSharedState logicalrules_shared =
-        build_logicalrules_shared_state(data, n_trials, n_lR);
+        build_logicalrules_shared_state(data, n_trials, n_lR, capacity);
+      if (capacity && lr_capacity_counters_enabled())
+        lr_capacity_counters().reset();
       const int n_par_lr = keep_names.size();
       std::vector<const double*> lr_cols(std::max(n_par_lr, 16), nullptr);
       for (int j = 0; j < n_par_lr; ++j) {
@@ -3384,7 +3431,8 @@ NumericMatrix calc_ll_oo_pw(NumericMatrix particle_matrix, DataFrame data, Numer
         c_log_likelihood_logicalrules(lr_cols.data(), n_par_lr, expand, min_ll, is_ok, n_lR,
                                       &adapter.ctx, adapter.pdf1_ptr, adapter.cdf1_ptr,
                                       adapter.model_dfun_raw, adapter.model_pfun_raw,
-                                      logicalrules_shared, &row_vec);
+                                      logicalrules_shared, &row_vec,
+                                      kappa_col, tau_col, pc_col);
         result(i, _) = row_vec;
       }
       return result;
@@ -4363,6 +4411,699 @@ static double logicalrules_detection_trial_ll(
   return (R_FINITE(ll) && ll > min_ll) ? ll : min_ll;
 }
 
+// ===========================================================================
+// LogicalRules correlated-target capacity routes
+// (logicalrules_correlated_capacity_plan.md).
+//
+// On a redundant-target (AB) trial one latent standard-normal factor z scales
+// both target drift means: V_i | z ~ N((kappa + tau*z) * v_i, sv_i^2) for the
+// A and B target rows; nontarget/nogo racers never load on the factor.  The
+// logical rule is assembled conditional on z from normalized conditional
+// channel quantities and the complete trial mass is integrated over z with a
+// scan/recentred Gauss-Hermite pair (gh_quad.h).  Positive-drift models
+// weight each node by q_A(z)*q_B(z) and divide once by the closed-form
+// bivariate orthant probability q_AB (bawl_corr_pair_positive_normalizer);
+// independent racers keep their ordinary posdrift-normalized kernels, whose
+// constant q factors cancel between numerator and denominator.
+// LogicalRulesLBA is plain LBA, i.e. the exact k = 0 member of the BAwL
+// geometry, so all conditional target endpoints come from BAwLPreparedRow.
+// ===========================================================================
+
+// GL order for the conditional channel integrals; matches the batched GL
+// pre-pass order used by the ordinary route.
+static constexpr int LRCAP_N_GL = 31;
+
+// Node-invariant conditional drift view of one loaded target row:
+// V | z ~ N(v0 + slope*z, sv^2) with v0 = kappa*v and slope = tau*v.
+struct LrCapTargetView {
+  double v0 = 0.0, slope = 0.0, sv = 1.0;
+  double t0 = 0.0, A = 0.0, b = 0.0;
+  bool valid = false;
+};
+
+static inline LrCapTargetView lrcap_target_view(const double* const* cols,
+                                                int row, double kappa,
+                                                double tau) {
+  LrCapTargetView tv;
+  const double v = cols[emc2col::lba::v][row];
+  const double sv = cols[emc2col::lba::sv][row];
+  const double B = cols[emc2col::lba::B][row];
+  const double A = cols[emc2col::lba::A][row];
+  tv.t0 = cols[emc2col::lba::t0][row];
+  tv.A = A;
+  tv.b = B + A;
+  tv.v0 = kappa * v;
+  tv.slope = tau * v;
+  tv.sv = sv;
+  tv.valid = R_FINITE(v) && sv > 0.0 && A >= 0.0 && tv.b > 0.0 && tv.b >= A &&
+    R_FINITE(tv.t0) && tv.t0 >= 0.0;
+  return tv;
+}
+
+static inline BAwLPreparedRow lrcap_prepare_at(const LrCapTargetView& tv,
+                                               double t) {
+  return bawl_prepare_row(bawl_time_geometry(t, tv.t0, tv.A, tv.b, 0.0),
+                          tv.v0, tv.slope, tv.sv);
+}
+
+// log q(z) = log Phi(v_q / sv): the target's positivity constant, shared by
+// every evaluation time of the row (it depends only on the drift model).
+static inline double lrcap_log_q(const LrCapTargetView& tv, double z,
+                                 bool posdrift) {
+  if (!posdrift) return 0.0;
+  return pnorm_log_direct((tv.v0 + tv.slope * z) / tv.sv, true);
+}
+
+// Normalized conditional survivor of a prepared target row at latent z.  The
+// caller supplies log_q once per (row, z); a numerically hopeless node (or an
+// invalid prepared row) reports ok = false and the node contributes zero
+// integrand mass rather than failing the trial.
+static inline double lrcap_cond_survivor(const BAwLPreparedRow& prep, double z,
+                                         double log_q, bool posdrift,
+                                         bool& ok) {
+  if (prep.status == BAwLTimeStatus::invalid) { ok = false; return 0.0; }
+  const double vq = prep.v0 + prep.slope * z;
+  const double ls = bawl_prepared_log_survivor(prep, vq, posdrift);
+  if (ISNAN(ls)) { ok = false; return 0.0; }
+  if (ls == R_NegInf) return 0.0;
+  double S = std::exp(ls - log_q);
+  if (!R_FINITE(S)) { ok = false; return 0.0; }
+  if (S < 0.0) S = 0.0;
+  if (S > 1.0) S = 1.0;
+  return S;
+}
+
+// Normalized conditional density of a prepared target row at latent z.
+static inline double lrcap_cond_pdf(const BAwLPreparedRow& prep, double z,
+                                    double log_q, bool& ok) {
+  if (prep.status == BAwLTimeStatus::invalid) { ok = false; return 0.0; }
+  const double vq = prep.v0 + prep.slope * z;
+  const double lf = bawl_prepared_log_pdf(prep, vq);
+  if (ISNAN(lf)) { ok = false; return 0.0; }
+  if (lf == R_NegInf) return 0.0;
+  const double f = std::exp(lf - log_q);
+  if (!R_FINITE(f) || f < 0.0) { ok = false; return 0.0; }
+  return f;
+}
+
+// One channel (loaded target vs independent nontarget) prepared at one
+// evaluation time.  Everything except the conditional target mean is
+// node-invariant: the independent racer's density/survivor, the prepared
+// target geometry at the endpoint, and — when the channel-no CDF is needed —
+// the GL abscissa weights wt_i*h*f_ind(s_i) with per-abscissa prepared target
+// geometry (plan phase 4's two mandatory caches).
+struct LrCapChannelPoint {
+  bool built = false;
+  bool at_zero = false;              // tt <= 0: channel still undecided
+  BAwLPreparedRow prep_t;
+  double f_ind_t = 0.0;              // independent density at tt
+  double S_ind_t = 1.0;              // independent survivor at tt
+  int n_gl = 0;
+  std::array<double, LRCAP_N_GL> gl_w{};
+  std::array<BAwLPreparedRow, LRCAP_N_GL> gl_prep{};
+};
+
+static void lrcap_build_channel_point(LrCapChannelPoint& cp,
+                                      const LrCapTargetView& tv,
+                                      const double* par_ind, double tt,
+                                      bool need_G, bool need_f_ind,
+                                      RacePdf1Fun pdf1, RaceCdf1Fun cdf1,
+                                      ContextForRaceModels* ctx,
+                                      double min_surv) {
+  cp = LrCapChannelPoint();
+  cp.built = true;
+  if (!(tt > 0.0)) { cp.at_zero = true; return; }
+  cp.prep_t = lrcap_prepare_at(tv, tt);
+  cp.S_ind_t = safe_surv_at_race_scalar(par_ind, tt, min_surv, cdf1, ctx);
+  if (need_f_ind) {
+    const double f = pdf1(tt, par_ind, ctx);
+    cp.f_ind_t = (R_FINITE(f) && f > 0.0) ? f : 0.0;
+  }
+  if (need_G) {
+    const int t0_idx = ctx->t0_index;
+    const double t0n = (t0_idx >= 0) ? par_ind[t0_idx] : 0.0;
+    const double lo = std::max(0.0, t0n);
+    const double h = (tt > lo) ? 0.5 * (tt - lo) : 0.0;
+    if (h > 0.0) {
+      const GLRule& gl = gl_get_rule(LRCAP_N_GL);
+      cp.n_gl = LRCAP_N_GL;
+      for (int i = 0; i < LRCAP_N_GL; ++i) {
+        const double s = lo + h * (1.0 + gl.x[static_cast<size_t>(i)]);
+        const double f = pdf1(s, par_ind, ctx);
+        cp.gl_w[static_cast<size_t>(i)] =
+          (R_FINITE(f) && f > 0.0) ? gl.w[static_cast<size_t>(i)] * h * f : 0.0;
+        cp.gl_prep[static_cast<size_t>(i)] = lrcap_prepare_at(tv, s);
+      }
+    }
+  }
+}
+
+// Complete conditional channel quantities at the point's time given latent z.
+struct LrCapChanVals {
+  double f_t = 0.0;   // conditional target density
+  double S_t = 0.0;   // conditional target survivor
+  double f_n = 0.0;   // independent density
+  double S_n = 1.0;   // independent survivor
+  double G_no = 0.0;  // P(nontarget won the channel by tt | z)
+  bool ok = true;
+};
+
+static LrCapChanVals lrcap_chan_vals(const LrCapChannelPoint& cp, double z,
+                                     double log_q, bool posdrift,
+                                     bool need_pdf, bool count) {
+  LrCapChanVals out;
+  if (cp.at_zero) { out.S_t = 1.0; return out; }
+  out.S_t = lrcap_cond_survivor(cp.prep_t, z, log_q, posdrift, out.ok);
+  if (!out.ok) return out;
+  out.f_n = cp.f_ind_t;
+  out.S_n = cp.S_ind_t;
+  if (need_pdf) {
+    out.f_t = lrcap_cond_pdf(cp.prep_t, z, log_q, out.ok);
+    if (!out.ok) return out;
+  }
+  double G_no = 0.0;
+  for (int i = 0; i < cp.n_gl; ++i) {
+    const double w = cp.gl_w[static_cast<size_t>(i)];
+    if (w == 0.0) continue;
+    G_no += w * lrcap_cond_survivor(cp.gl_prep[static_cast<size_t>(i)], z,
+                                    log_q, posdrift, out.ok);
+    if (!out.ok) return out;
+  }
+  if (count && cp.n_gl > 0)
+    lr_capacity_counters().channel_gl_evaluations += cp.n_gl;
+  out.G_no = std::min(1.0, std::max(0.0, G_no));
+  return out;
+}
+
+static inline LrChannelState lrcap_state_from_vals(const LrCapChanVals& v) {
+  LrChannelState st;
+  st.S_dec = v.S_t * v.S_n;
+  st.G_no = v.G_no;
+  st.G_yes = std::min(1.0, std::max(0.0, 1.0 - st.S_dec - st.G_no));
+  return st;
+}
+
+// One detection evaluation point: prepared A/B target rows plus (for GNG) the
+// nogo survivor and the z-dependent GL integral caches.  `gl_w` carries
+// wt_i*h*f_N(s_i) for the nogo-win mass, or wt_i*h*S_N(s_i) for the go-win
+// window mass, depending on which evaluator consumes the point.
+struct LrCapDetPoint {
+  bool built = false;
+  bool at_zero = false;
+  BAwLPreparedRow prepA, prepB;
+  double S_N = 1.0;
+  int n_gl = 0;
+  std::array<double, LRCAP_N_GL> gl_w{};
+  std::array<BAwLPreparedRow, LRCAP_N_GL> gl_prepA{};
+  std::array<BAwLPreparedRow, LRCAP_N_GL> gl_prepB{};
+};
+
+// N(tt) point for OR_DETECTION_ANALYTIC / OR_DETECTION_GNG: survivors at tt,
+// and for GNG the nogo-win mass cache over [max(0, t0_N), tt].
+static void lrcap_build_det_N_point(LrCapDetPoint& dp,
+                                    const LrCapTargetView& tvA,
+                                    const LrCapTargetView& tvB,
+                                    const double* parN, bool has_nogo,
+                                    double tt, bool need_nogo_win,
+                                    RacePdf1Fun pdf1, RaceCdf1Fun cdf1,
+                                    ContextForRaceModels* ctx,
+                                    double min_surv) {
+  dp = LrCapDetPoint();
+  dp.built = true;
+  if (!(tt > 0.0)) { dp.at_zero = true; return; }
+  dp.prepA = lrcap_prepare_at(tvA, tt);
+  dp.prepB = lrcap_prepare_at(tvB, tt);
+  if (has_nogo) {
+    dp.S_N = safe_surv_at_race_scalar(parN, tt, min_surv, cdf1, ctx);
+    if (need_nogo_win) {
+      const int t0_idx = ctx->t0_index;
+      const double t0n = (t0_idx >= 0) ? parN[t0_idx] : 0.0;
+      const double lo = std::max(0.0, t0n);
+      const double h = (tt > lo) ? 0.5 * (tt - lo) : 0.0;
+      if (h > 0.0) {
+        const GLRule& gl = gl_get_rule(LRCAP_N_GL);
+        dp.n_gl = LRCAP_N_GL;
+        for (int i = 0; i < LRCAP_N_GL; ++i) {
+          const double s = lo + h * (1.0 + gl.x[static_cast<size_t>(i)]);
+          const double f = pdf1(s, parN, ctx);
+          dp.gl_w[static_cast<size_t>(i)] =
+            (R_FINITE(f) && f > 0.0) ? gl.w[static_cast<size_t>(i)] * h * f : 0.0;
+          dp.gl_prepA[static_cast<size_t>(i)] = lrcap_prepare_at(tvA, s);
+          dp.gl_prepB[static_cast<size_t>(i)] = lrcap_prepare_at(tvB, s);
+        }
+      }
+    }
+  }
+}
+
+// Go-win window point for the GNG lower-censor mass over [lo, hi]:
+// integral of [f_A(s|z) S_B(s|z) + f_B(s|z) S_A(s|z)] * S_N(s) ds.
+static void lrcap_build_det_gowin_point(LrCapDetPoint& dp,
+                                        const LrCapTargetView& tvA,
+                                        const LrCapTargetView& tvB,
+                                        const double* parN, bool has_nogo,
+                                        double lo, double hi,
+                                        RaceCdf1Fun cdf1,
+                                        ContextForRaceModels* ctx,
+                                        double min_surv) {
+  dp = LrCapDetPoint();
+  dp.built = true;
+  const double h = (hi > lo) ? 0.5 * (hi - lo) : 0.0;
+  if (!(h > 0.0)) { dp.at_zero = true; return; }
+  const GLRule& gl = gl_get_rule(LRCAP_N_GL);
+  dp.n_gl = LRCAP_N_GL;
+  for (int i = 0; i < LRCAP_N_GL; ++i) {
+    const double s = lo + h * (1.0 + gl.x[static_cast<size_t>(i)]);
+    const double SN = has_nogo
+      ? safe_surv_at_race_scalar(parN, s, min_surv, cdf1, ctx) : 1.0;
+    dp.gl_w[static_cast<size_t>(i)] = gl.w[static_cast<size_t>(i)] * h * SN;
+    dp.gl_prepA[static_cast<size_t>(i)] = lrcap_prepare_at(tvA, s);
+    dp.gl_prepB[static_cast<size_t>(i)] = lrcap_prepare_at(tvB, s);
+  }
+}
+
+// Conditional detection no-response probability at a prepared N point.
+static double lrcap_det_N_at(const LrCapDetPoint& dp, int rule_code, double z,
+                             double lqA, double lqB, bool posdrift, bool& ok,
+                             bool count) {
+  if (dp.at_zero) return 1.0;
+  const double SA = lrcap_cond_survivor(dp.prepA, z, lqA, posdrift, ok);
+  if (!ok) return 1.0;
+  const double SB = lrcap_cond_survivor(dp.prepB, z, lqB, posdrift, ok);
+  if (!ok) return 1.0;
+  if (rule_code == 5) return SA * SB;
+  double p = SA * SB * dp.S_N;
+  double nogo_win = 0.0;
+  for (int i = 0; i < dp.n_gl; ++i) {
+    const double w = dp.gl_w[static_cast<size_t>(i)];
+    if (w == 0.0) continue;
+    const double SAi = lrcap_cond_survivor(dp.gl_prepA[static_cast<size_t>(i)],
+                                           z, lqA, posdrift, ok);
+    if (!ok) return 1.0;
+    const double SBi = lrcap_cond_survivor(dp.gl_prepB[static_cast<size_t>(i)],
+                                           z, lqB, posdrift, ok);
+    if (!ok) return 1.0;
+    nogo_win += w * SAi * SBi;
+  }
+  if (count && dp.n_gl > 0)
+    lr_capacity_counters().channel_gl_evaluations += 2LL * dp.n_gl;
+  return std::min(1.0, p + nogo_win);
+}
+
+// Conditional go-win window mass at a prepared go-win point.
+static double lrcap_det_gowin_at(const LrCapDetPoint& dp, double z,
+                                 double lqA, double lqB, bool posdrift,
+                                 bool& ok, bool count) {
+  if (dp.at_zero) return 0.0;
+  double mass = 0.0;
+  for (int i = 0; i < dp.n_gl; ++i) {
+    const double w = dp.gl_w[static_cast<size_t>(i)];
+    if (w == 0.0) continue;
+    const double fAi = lrcap_cond_pdf(dp.gl_prepA[static_cast<size_t>(i)], z,
+                                      lqA, ok);
+    if (!ok) return 0.0;
+    const double SAi = lrcap_cond_survivor(dp.gl_prepA[static_cast<size_t>(i)],
+                                           z, lqA, posdrift, ok);
+    if (!ok) return 0.0;
+    const double fBi = lrcap_cond_pdf(dp.gl_prepB[static_cast<size_t>(i)], z,
+                                      lqB, ok);
+    if (!ok) return 0.0;
+    const double SBi = lrcap_cond_survivor(dp.gl_prepB[static_cast<size_t>(i)],
+                                           z, lqB, posdrift, ok);
+    if (!ok) return 0.0;
+    mass += w * (fAi * SBi + fBi * SAi);
+  }
+  if (count && dp.n_gl > 0)
+    lr_capacity_counters().channel_gl_evaluations += 2LL * dp.n_gl;
+  return mass;
+}
+
+// Shared-factor integration: a fixed scan pass locates each integrand's mass
+// (and is the fallback value), then a recentred pass refines it
+// (gh_quad.h; scan-based centring per the capacity plan, phase 5).
+template <typename LogMass>
+static double lrcap_integrate_factor(LogMass&& log_mass, int n_scan,
+                                     int n_fine, bool count) {
+  const double sqrt2 = std::sqrt(2.0);
+  const GHRule& scan_rule = gh_rule(n_scan);
+  std::array<double, 256> g{};
+  std::array<double, 256> zv{};
+  double scan_lse = R_NegInf;
+  for (int q = 0; q < n_scan; ++q) {
+    const double z = sqrt2 * scan_rule.x[static_cast<size_t>(q)];
+    zv[static_cast<size_t>(q)] = z;
+    const double v =
+      std::log(gh_standard_normal_weight(scan_rule, q)) + log_mass(z);
+    g[static_cast<size_t>(q)] = v;
+    scan_lse = log_sum_exp(scan_lse, v);
+  }
+  if (count) lr_capacity_counters().factor_node_evaluations += n_scan;
+  if (!R_FINITE(scan_lse)) return R_NegInf;
+  const AGHCenter c = agh_center_from_scan(g.data(), zv.data(), n_scan);
+  const GHRule& fine_rule = gh_rule(n_fine);
+  double fine_lse = R_NegInf;
+  for (int q = 0; q < n_fine; ++q) {
+    const double lgw = std::log(fine_rule.w[static_cast<size_t>(q)]) +
+      fine_rule.x[static_cast<size_t>(q)] * fine_rule.x[static_cast<size_t>(q)];
+    const double z = c.mu + c.sigma * sqrt2 * fine_rule.x[static_cast<size_t>(q)];
+    fine_lse = log_sum_exp(fine_lse,
+                           agh_log_weight(lgw, c.sigma, z) + log_mass(z));
+  }
+  if (count) lr_capacity_counters().factor_node_evaluations += n_fine;
+  return R_FINITE(fine_lse) ? fine_lse : scan_lse;
+}
+
+// Complete per-trial likelihood for one capacity (AB, kappa/tau active)
+// trial.  Mirrors the ordinary logical-rules branches conditional on the
+// factor: the rule is assembled inside the integral, censoring masses and the
+// truncation normaliser are z-integrated, and the final contract is
+// log num - log den with den the closed-form q_AB (untruncated posdrift) or
+// the z-integrated truncation window.
+static double lrcap_trial_ll(
+    int rule_code, int cond, int resp,
+    double t, double LTj, double UTj, double LCj, double UCj,
+    double kappa, double tau,
+    const double* const* pars_cols,
+    int idxA, int idxB,
+    const double* parnA, const double* parnB, const double* parN,
+    bool has_channels, bool has_nogo,
+    double min_ll, double min_surv,
+    RacePdf1Fun pdf1, RaceCdf1Fun cdf1, ContextForRaceModels* ctx,
+    int n_scan, int n_fine, bool count) {
+  if (cond != 3) return min_ll;  // capacity trials are AB by construction
+  const bool posdrift = ctx->use_posdrift;
+  const LrCapTargetView tvA = lrcap_target_view(pars_cols, idxA, kappa, tau);
+  const LrCapTargetView tvB = lrcap_target_view(pars_cols, idxB, kappa, tau);
+  if (!tvA.valid || !tvB.valid) return min_ll;
+  const bool finite_rt = R_FINITE(t) && t > 0.0;
+  const bool upper_censored = !finite_rt && t == R_PosInf;
+  const bool lower_censored = !finite_rt && t == R_NegInf;
+  if (!finite_rt && !upper_censored && !lower_censored) return min_ll;
+
+  // Closed-form joint positivity normalizer for the pair (untruncated
+  // denominator); the quadrature identity int qA(z) qB(z) phi(z) dz is kept
+  // only as a test cross-check.
+  double log_qAB = 0.0;
+  if (posdrift) {
+    if (tau == 0.0) {
+      log_qAB = pnorm_log_direct(tvA.v0 / tvA.sv, true) +
+        pnorm_log_direct(tvB.v0 / tvB.sv, true);
+    } else {
+      const double sdA = std::sqrt(tvA.sv * tvA.sv + tvA.slope * tvA.slope);
+      const double sdB = std::sqrt(tvB.sv * tvB.sv + tvB.slope * tvB.slope);
+      const double rho = (tvA.slope * tvB.slope) / (sdA * sdB);
+      const double qAB = bawl_corr_pair_positive_normalizer(
+          tvA.v0, sdA, tvB.v0, sdB, rho, true);
+      if (!R_FINITE(qAB) || !(qAB > 0.0)) return min_ll;
+      log_qAB = std::log(std::fmin(qAB, 1.0));
+    }
+    if (!R_FINITE(log_qAB)) return min_ll;
+  }
+
+  const bool is_detection = rule_code >= 5;
+  const bool need_G_for_N = (rule_code == 1 || rule_code == 2);
+  const bool has_trunc = (LTj != 0.0 || R_FINITE(UTj));
+  const bool subtract_UT = R_FINITE(UTj) && !ctx->defective_upper_tail;
+
+  // Response gates mirror the ordinary branches; an incompatible recorded
+  // response is zero mass for every factor value.
+  if (is_detection) {
+    if (finite_rt && resp != 1) return min_ll;
+    if (upper_censored && resp != 0 && resp != 2) return min_ll;
+    if (lower_censored && resp != 0 && resp != 1) return min_ll;
+    if (upper_censored && !R_FINITE(UCj)) {
+      Rcpp::stop(rule_code == 5
+        ? "LogicalRules OR_DETECTION_ANALYTIC requires finite UC for upper-censored trials."
+        : "LogicalRules OR_DETECTION_GNG requires finite UC for upper-censored trials.");
+    }
+  } else {
+    if (!has_channels) return min_ll;
+    if (upper_censored && !R_FINITE(UCj)) return min_ll;
+  }
+
+  // ---- Node-invariant evaluation-point caches -----------------------------
+  // Detection points.
+  LrCapDetPoint det_t, det_uc, det_ut, det_lt, det_clo, det_chi, det_gowin;
+  // Choice channel points.
+  LrCapChannelPoint A_t, B_t, A_uc, B_uc, A_ut, B_ut, A_lt, B_lt,
+    A_clo, B_clo, A_chi, B_chi;
+
+  const double clo = std::max(0.0, LTj);
+  const double chi = std::max(clo, LCj);
+
+  if (is_detection) {
+    if (finite_rt) {
+      lrcap_build_det_N_point(det_t, tvA, tvB, parN, has_nogo, t, false,
+                              pdf1, cdf1, ctx, min_surv);
+    } else if (upper_censored) {
+      lrcap_build_det_N_point(det_uc, tvA, tvB, parN, has_nogo, UCj,
+                              rule_code == 6, pdf1, cdf1, ctx, min_surv);
+    } else {
+      if (rule_code == 5) {
+        lrcap_build_det_N_point(det_clo, tvA, tvB, parN, false, clo, false,
+                                pdf1, cdf1, ctx, min_surv);
+        lrcap_build_det_N_point(det_chi, tvA, tvB, parN, false, chi, false,
+                                pdf1, cdf1, ctx, min_surv);
+      } else {
+        lrcap_build_det_gowin_point(det_gowin, tvA, tvB, parN, has_nogo,
+                                    clo, chi, cdf1, ctx, min_surv);
+      }
+    }
+    if (has_trunc) {
+      if (LTj > 0.0) {
+        lrcap_build_det_N_point(det_lt, tvA, tvB, parN, has_nogo, LTj,
+                                rule_code == 6, pdf1, cdf1, ctx, min_surv);
+      }
+      if (R_FINITE(UTj)) {
+        lrcap_build_det_N_point(det_ut, tvA, tvB, parN, has_nogo, UTj,
+                                rule_code == 6, pdf1, cdf1, ctx, min_surv);
+      }
+    }
+  } else {
+    if (finite_rt) {
+      lrcap_build_channel_point(A_t, tvA, parnA, t, true, true,
+                                pdf1, cdf1, ctx, min_surv);
+      lrcap_build_channel_point(B_t, tvB, parnB, t, true, true,
+                                pdf1, cdf1, ctx, min_surv);
+    } else if (upper_censored) {
+      lrcap_build_channel_point(A_uc, tvA, parnA, UCj, need_G_for_N, false,
+                                pdf1, cdf1, ctx, min_surv);
+      lrcap_build_channel_point(B_uc, tvB, parnB, UCj, need_G_for_N, false,
+                                pdf1, cdf1, ctx, min_surv);
+    } else {
+      lrcap_build_channel_point(A_clo, tvA, parnA, clo, true, false,
+                                pdf1, cdf1, ctx, min_surv);
+      lrcap_build_channel_point(B_clo, tvB, parnB, clo, true, false,
+                                pdf1, cdf1, ctx, min_surv);
+      lrcap_build_channel_point(A_chi, tvA, parnA, chi, true, false,
+                                pdf1, cdf1, ctx, min_surv);
+      lrcap_build_channel_point(B_chi, tvB, parnB, chi, true, false,
+                                pdf1, cdf1, ctx, min_surv);
+    }
+    if (has_trunc) {
+      if (LTj > 0.0) {
+        lrcap_build_channel_point(A_lt, tvA, parnA, LTj, need_G_for_N, false,
+                                  pdf1, cdf1, ctx, min_surv);
+        lrcap_build_channel_point(B_lt, tvB, parnB, LTj, need_G_for_N, false,
+                                  pdf1, cdf1, ctx, min_surv);
+      }
+      if (R_FINITE(UTj)) {
+        lrcap_build_channel_point(A_ut, tvA, parnA, UTj, need_G_for_N, false,
+                                  pdf1, cdf1, ctx, min_surv);
+        lrcap_build_channel_point(B_ut, tvB, parnB, UTj, need_G_for_N, false,
+                                  pdf1, cdf1, ctx, min_surv);
+      }
+    }
+  }
+
+  // Conditional no-response probability for the choice rules at a prepared
+  // channel-point pair (XOR/ID need only the channel survivors).
+  auto choice_N_at = [&](const LrCapChannelPoint& cpA,
+                         const LrCapChannelPoint& cpB, double z,
+                         double lqA, double lqB, bool& ok) -> double {
+    if (cpA.at_zero && cpB.at_zero) return 1.0;
+    const LrCapChanVals va = lrcap_chan_vals(cpA, z, lqA, posdrift, false, count);
+    if (!va.ok) { ok = false; return 1.0; }
+    const LrCapChanVals vb = lrcap_chan_vals(cpB, z, lqB, posdrift, false, count);
+    if (!vb.ok) { ok = false; return 1.0; }
+    if (rule_code == 3 || rule_code == 4) {
+      const double SdA = va.S_t * va.S_n;
+      const double SdB = vb.S_t * vb.S_n;
+      return 1.0 - (1.0 - SdA) * (1.0 - SdB);
+    }
+    return lr_no_response_prob(rule_code, lrcap_state_from_vals(va),
+                               lrcap_state_from_vals(vb));
+  };
+
+  // ---- Conditional event mass (numerator integrand, includes the node
+  // positivity weight qA(z)*qB(z)) ------------------------------------------
+  auto log_event_mass = [&](double z) -> double {
+    const double lqA = lrcap_log_q(tvA, z, posdrift);
+    const double lqB = lrcap_log_q(tvB, z, posdrift);
+    if (!R_FINITE(lqA) || !R_FINITE(lqB)) return R_NegInf;
+    bool ok = true;
+    double p = 0.0;
+    if (is_detection) {
+      if (finite_rt) {
+        const double fA = lrcap_cond_pdf(det_t.prepA, z, lqA, ok);
+        if (!ok) return R_NegInf;
+        const double SA = lrcap_cond_survivor(det_t.prepA, z, lqA, posdrift, ok);
+        if (!ok) return R_NegInf;
+        const double fB = lrcap_cond_pdf(det_t.prepB, z, lqB, ok);
+        if (!ok) return R_NegInf;
+        const double SB = lrcap_cond_survivor(det_t.prepB, z, lqB, posdrift, ok);
+        if (!ok) return R_NegInf;
+        p = fA * std::max(min_surv, SB) + fB * std::max(min_surv, SA);
+        if (rule_code == 6) p *= det_t.S_N;
+      } else if (upper_censored) {
+        p = lrcap_det_N_at(det_uc, rule_code, z, lqA, lqB, posdrift, ok, count);
+        if (ok && subtract_UT) {
+          const double N_UT = lrcap_det_N_at(det_ut, rule_code, z, lqA, lqB,
+                                             posdrift, ok, count);
+          p = std::max(0.0, p - N_UT);
+        }
+        if (!ok) return R_NegInf;
+      } else {
+        if (rule_code == 5) {
+          const double N_lo = lrcap_det_N_at(det_clo, 5, z, lqA, lqB,
+                                             posdrift, ok, count);
+          if (!ok) return R_NegInf;
+          const double N_hi = lrcap_det_N_at(det_chi, 5, z, lqA, lqB,
+                                             posdrift, ok, count);
+          if (!ok) return R_NegInf;
+          p = std::max(0.0, N_lo - N_hi);
+        } else {
+          p = lrcap_det_gowin_at(det_gowin, z, lqA, lqB, posdrift, ok, count);
+          if (!ok) return R_NegInf;
+        }
+      }
+    } else {
+      if (finite_rt) {
+        const LrCapChanVals va = lrcap_chan_vals(A_t, z, lqA, posdrift, true, count);
+        if (!va.ok) return R_NegInf;
+        const LrCapChanVals vb = lrcap_chan_vals(B_t, z, lqB, posdrift, true, count);
+        if (!vb.ok) return R_NegInf;
+        const double one_m_FA = std::max(min_surv, va.S_t);
+        const double one_m_FB = std::max(min_surv, vb.S_t);
+        const double one_m_FnA = std::max(min_surv, va.S_n);
+        const double one_m_FnB = std::max(min_surv, vb.S_n);
+        const double gA_yes = va.f_t * one_m_FnA;
+        const double gB_yes = vb.f_t * one_m_FnB;
+        const double gA_no = va.f_n * one_m_FA;
+        const double gB_no = vb.f_n * one_m_FB;
+        const double S_dec_A = one_m_FA * one_m_FnA;
+        const double S_dec_B = one_m_FB * one_m_FnB;
+        const double GA_no = va.G_no;
+        const double GB_no = vb.G_no;
+        if (rule_code == 1) {
+          const double s_GA_yes = std::min(1.0, std::max(min_surv, GA_no + S_dec_A));
+          const double s_GB_yes = std::min(1.0, std::max(min_surv, GB_no + S_dec_B));
+          if (resp == 1) p = gA_yes * s_GB_yes + gB_yes * s_GA_yes;
+          else if (resp == 2) p = gA_no * GB_no + gB_no * GA_no;
+        } else if (rule_code == 2) {
+          const double GA_yes = std::min(1.0, std::max(0.0, 1.0 - S_dec_A - GA_no));
+          const double GB_yes = std::min(1.0, std::max(0.0, 1.0 - S_dec_B - GB_no));
+          const double s_GA_no = std::min(1.0, std::max(min_surv, GA_yes + S_dec_A));
+          const double s_GB_no = std::min(1.0, std::max(min_surv, GB_yes + S_dec_B));
+          if (resp == 1) p = gA_yes * GB_yes + gB_yes * GA_yes;
+          else if (resp == 2) p = gA_no * s_GB_no + gB_no * s_GA_no;
+        } else {
+          const double GA_yes = std::min(1.0, std::max(0.0, 1.0 - S_dec_A - GA_no));
+          const double GB_yes = std::min(1.0, std::max(0.0, 1.0 - S_dec_B - GB_no));
+          const double dAB = gA_yes * GB_yes + gB_yes * GA_yes;
+          const double dAN = gA_yes * GB_no + gB_no * GA_yes;
+          const double dNB = gA_no * GB_yes + gB_yes * GA_no;
+          const double dNN = gA_no * GB_no + gB_no * GA_no;
+          if (rule_code == 4) {
+            if (resp == 6) p = dAB;
+            else if (resp == 4) p = dAN;
+            else if (resp == 5) p = dNB;
+            else if (resp == 3) p = dNN;
+          } else {
+            if (resp == 1) p = dAN + dNB;
+            else if (resp == 2) p = dAB + dNN;
+          }
+        }
+      } else if (upper_censored) {
+        p = choice_N_at(A_uc, B_uc, z, lqA, lqB, ok);
+        if (ok && subtract_UT) {
+          const double N_UT = choice_N_at(A_ut, B_ut, z, lqA, lqB, ok);
+          p = std::max(0.0, p - N_UT);
+        }
+        if (!ok) return R_NegInf;
+      } else {
+        const LrCapChanVals va_lo = lrcap_chan_vals(A_clo, z, lqA, posdrift, false, count);
+        const LrCapChanVals vb_lo = lrcap_chan_vals(B_clo, z, lqB, posdrift, false, count);
+        const LrCapChanVals va_hi = lrcap_chan_vals(A_chi, z, lqA, posdrift, false, count);
+        const LrCapChanVals vb_hi = lrcap_chan_vals(B_chi, z, lqB, posdrift, false, count);
+        if (!va_lo.ok || !vb_lo.ok || !va_hi.ok || !vb_hi.ok) return R_NegInf;
+        const double cdf_hi = lr_response_cdf(rule_code, resp,
+                                              lrcap_state_from_vals(va_hi),
+                                              lrcap_state_from_vals(vb_hi));
+        const double cdf_lo = lr_response_cdf(rule_code, resp,
+                                              lrcap_state_from_vals(va_lo),
+                                              lrcap_state_from_vals(vb_lo));
+        if (ISNAN(cdf_hi) || ISNAN(cdf_lo)) return R_NegInf;
+        p = std::max(0.0, cdf_hi - cdf_lo);
+      }
+    }
+    if (!(p > 0.0) || !R_FINITE(p)) return R_NegInf;
+    return std::log(p) + lqA + lqB;
+  };
+
+  // ---- Conditional truncation-window mass (denominator integrand) ---------
+  auto log_trunc_mass = [&](double z) -> double {
+    const double lqA = lrcap_log_q(tvA, z, posdrift);
+    const double lqB = lrcap_log_q(tvB, z, posdrift);
+    if (!R_FINITE(lqA) || !R_FINITE(lqB)) return R_NegInf;
+    bool ok = true;
+    double N_LT = 1.0;
+    double N_UT = 0.0;
+    if (is_detection) {
+      if (LTj > 0.0) {
+        N_LT = lrcap_det_N_at(det_lt, rule_code, z, lqA, lqB, posdrift, ok, count);
+        if (!ok) return R_NegInf;
+      }
+      if (R_FINITE(UTj)) {
+        N_UT = lrcap_det_N_at(det_ut, rule_code, z, lqA, lqB, posdrift, ok, count);
+        if (!ok) return R_NegInf;
+      }
+    } else {
+      if (LTj > 0.0) {
+        N_LT = choice_N_at(A_lt, B_lt, z, lqA, lqB, ok);
+        if (!ok) return R_NegInf;
+      }
+      if (R_FINITE(UTj)) {
+        N_UT = choice_N_at(A_ut, B_ut, z, lqA, lqB, ok);
+        if (!ok) return R_NegInf;
+      }
+    }
+    const double Z = std::min(1.0, N_LT - N_UT);
+    if (!(Z > 0.0) || !R_FINITE(Z)) return R_NegInf;
+    return std::log(Z) + lqA + lqB;
+  };
+
+  double log_num = R_NegInf;
+  double log_den = 0.0;
+  if (tau == 0.0) {
+    // The factor is degenerate: one node at z = 0 is the exact integral, and
+    // the positivity weight cancels exactly against the rho = 0 orthant.
+    if (count) ++lr_capacity_counters().tau_zero_trials;
+    log_num = log_event_mass(0.0);
+    const double log_w0 = lrcap_log_q(tvA, 0.0, posdrift) +
+      lrcap_log_q(tvB, 0.0, posdrift);
+    log_den = has_trunc ? log_trunc_mass(0.0) : log_w0;
+  } else {
+    log_num = lrcap_integrate_factor(log_event_mass, n_scan, n_fine, count);
+    log_den = has_trunc
+      ? lrcap_integrate_factor(log_trunc_mass, n_scan, n_fine, count)
+      : log_qAB;
+  }
+  if (!R_FINITE(log_den)) return min_ll;
+  const double ll = log_num - log_den;
+  return (R_FINITE(ll) && ll > min_ll) ? ll : min_ll;
+}
+
 static double c_log_likelihood_logicalrules(
     const double* const* pars_cols,
     int n_par,
@@ -4376,7 +5117,10 @@ static double c_log_likelihood_logicalrules(
     RaceRawFun model_dfun_raw,
     RaceRawFun model_pfun_raw,
     const LogicalRulesSharedState& shared,
-    Rcpp::NumericVector* trial_ll_out) {
+    Rcpp::NumericVector* trial_ll_out,
+    int kappa_col,
+    int tau_col,
+    int pc_col) {
   if (!shared.valid || n_acc <= 0 || pdf1 == nullptr || cdf1 == nullptr || model_ctx == nullptr) {
     Rcpp::stop("c_log_likelihood_logicalrules: invalid logical-rules configuration.");
   }
@@ -4388,6 +5132,16 @@ static double c_log_likelihood_logicalrules(
   if (n_par > 64) {
     Rcpp::stop("c_log_likelihood_logicalrules: at most 64 parameter columns are supported.");
   }
+  const bool capacity = kappa_col >= 0 || tau_col >= 0;
+  if (capacity && (kappa_col < 0 || tau_col < 0 ||
+                   kappa_col >= n_par || tau_col >= n_par)) {
+    Rcpp::stop("c_log_likelihood_logicalrules: invalid LogicalRules capacity columns.");
+  }
+  const bool count_capacity = capacity && lr_capacity_counters_enabled();
+  const int lrcap_scan_n = capacity
+    ? emc2_quad_nodes("EMC2_LRCAP_SCAN_N", 12) : 0;
+  const int lrcap_fine_n = capacity
+    ? emc2_quad_nodes("EMC2_LRCAP_FINE_N", 12) : 0;
 
   static const double kMinSurv = 1e-300;
   const int n_unique_trials = shared.n_unique_trials;
@@ -4764,6 +5518,7 @@ static double c_log_likelihood_logicalrules(
       : (idxA >= 0 && idxB >= 0 && ok_params[idxA] && ok_params[idxB]);
     if (!pars_valid) {
       ll_unique[static_cast<size_t>(j)] = min_ll;
+      if (count_capacity) ++lr_capacity_counters().invalid_trials;
       continue;
     }
 
@@ -4779,6 +5534,52 @@ static double c_log_likelihood_logicalrules(
         continue;
       }
       copy_par_row_colmajor(pars_cols, n_par, idxN, parN.data());
+    }
+
+    // Capacity is a trial-level extension.  It is active only for redundant
+    // target (AB) conditions and only when the particle's capacity factor is
+    // non-degenerate.  Every other trial deliberately continues through the
+    // legacy evaluator below, preserving its batched fast path and exact
+    // baseline behaviour.
+    if (capacity) {
+      const double kappa = pars_cols[kappa_col][idxA];
+      const double tau = pars_cols[tau_col][idxA];
+      const bool shared_capacity =
+        R_FINITE(kappa) && kappa > 0.0 && R_FINITE(tau) && tau >= 0.0 &&
+        pars_cols[kappa_col][idxB] == kappa &&
+        pars_cols[tau_col][idxB] == tau;
+      if (!shared_capacity) {
+        ll_unique[static_cast<size_t>(j)] = min_ll;
+        if (count_capacity) ++lr_capacity_counters().invalid_trials;
+        continue;
+      }
+      const bool pair_active = shared.cond_code[static_cast<size_t>(j)] == 3 &&
+        (kappa != 1.0 || tau != 0.0);
+      if (pair_active) {
+        if (count_capacity) {
+          if (rule_code >= 5) ++lr_capacity_counters().capacity_detection_trials;
+          else ++lr_capacity_counters().capacity_choice_trials;
+        }
+        ll_unique[static_cast<size_t>(j)] = lrcap_trial_ll(
+          rule_code,
+          shared.cond_code[static_cast<size_t>(j)],
+          shared.resp_code[static_cast<size_t>(j)],
+          t,
+          shared.LT_unique[static_cast<size_t>(j)],
+          shared.UT_unique[static_cast<size_t>(j)],
+          shared.LC_unique[static_cast<size_t>(j)],
+          shared.UC_unique[static_cast<size_t>(j)],
+          kappa, tau,
+          pars_cols, idxA, idxB,
+          parnA.data(), parnB.data(), parN.data(),
+          rule_code <= 4, rule_code == 6,
+          min_ll, kMinSurv,
+          pdf1, cdf1, model_ctx,
+          lrcap_scan_n, lrcap_fine_n,
+          count_capacity);
+        continue;
+      }
+      if (count_capacity) ++lr_capacity_counters().ordinary_trials;
     }
 
     // Channel-parameter equality (A vs B), shared by the truncation
@@ -5105,6 +5906,31 @@ static double c_log_likelihood_logicalrules(
     } else {
       const double ll = std::log(p_j) - log_Z_j;
       ll_unique[static_cast<size_t>(j)] = (R_FINITE(ll) && ll > min_ll) ? ll : min_ll;
+    }
+  }
+
+  // pC adjustment for intrinsic omissions (+Inf RT)
+  bool use_pC = (pc_col >= 0);
+  std::vector<double> pC_values;
+  if (use_pC) {
+    pC_values.assign(static_cast<size_t>(n_unique_trials), 0.0);
+    bool all_zero = true;
+    for (int j = 0; j < n_unique_trials; ++j) {
+      double pC = pars_cols[pc_col][j * n_acc]; // Check the first row of each trial for pC
+      pC_values[static_cast<size_t>(j)] = pC;
+      if (pC != 0.0) all_zero = false;
+    }
+    if (all_zero) use_pC = false;
+  }
+  
+  if (use_pC) {
+    for (int j = 0; j < n_unique_trials; ++j) {
+      const double pC = pC_values[static_cast<size_t>(j)];
+      const double log1m_pC = log1m(pC);
+      const double rt_j = shared.rt_unique[static_cast<size_t>(j)];
+      ll_unique[static_cast<size_t>(j)] = (rt_j == R_PosInf)
+        ? log_sum_exp(std::log(pC), log1m_pC + ll_unique[static_cast<size_t>(j)])
+        : log1m_pC + ll_unique[static_cast<size_t>(j)];
     }
   }
 
@@ -6924,6 +7750,7 @@ double c_log_likelihood_bawl_correlated(
   }
 
   const bool count_routes = bawl_corr_counters_enabled();
+  bawl_corr_counters_active() = count_routes;
   BAwLCorrCounters& route_counters = bawl_corr_counters();
 
   // If all active loadings are zero, use the exact existing path.  Apart from
@@ -7661,9 +8488,9 @@ double c_log_likelihood_bawl_correlated(
   const int scan_default = (max_abs_rho <= 0.6) ? 10 : 12;
   const int fine_default = (max_abs_rho <= 0.6) ? 10 : 12;
   const GHRule& scan_rule = gh_rule(
-      bawl_corr_quad_nodes("EMC2_BAWLCORR_SCAN_N", scan_default));
+      emc2_quad_nodes("EMC2_BAWLCORR_SCAN_N", scan_default));
   const GHRule& fine_rule = gh_rule(
-      bawl_corr_quad_nodes("EMC2_BAWLCORR_FINE_N", fine_default));
+      emc2_quad_nodes("EMC2_BAWLCORR_FINE_N", fine_default));
   const int n_scan = static_cast<int>(scan_rule.x.size());
   const int n_fine = static_cast<int>(fine_rule.x.size());
   const double sqrt2 = std::sqrt(2.0);
@@ -7948,6 +8775,27 @@ Rcpp::List bawl_corr_counter_values() {
 // [[Rcpp::export]]
 void bawl_corr_counters_reset() {
   bawl_corr_counters().reset();
+}
+
+// Test/benchmark observability accessors for the LogicalRules correlated
+// capacity route.  Counting is active only while EMC2_LRCAP_COUNTERS is set;
+// the accessors themselves always return the current counters.
+// [[Rcpp::export]]
+Rcpp::List lr_capacity_counter_values() {
+  const LrCapacityCounters& c = lr_capacity_counters();
+  return Rcpp::List::create(
+      Rcpp::Named("ordinary_trials") = (double)c.ordinary_trials,
+      Rcpp::Named("capacity_detection_trials") = (double)c.capacity_detection_trials,
+      Rcpp::Named("capacity_choice_trials") = (double)c.capacity_choice_trials,
+      Rcpp::Named("invalid_trials") = (double)c.invalid_trials,
+      Rcpp::Named("tau_zero_trials") = (double)c.tau_zero_trials,
+      Rcpp::Named("factor_node_evaluations") = (double)c.factor_node_evaluations,
+      Rcpp::Named("channel_gl_evaluations") = (double)c.channel_gl_evaluations);
+}
+
+// [[Rcpp::export]]
+void lr_capacity_counters_reset() {
+  lr_capacity_counters().reset();
 }
 
 // Numerical probes for the exact probability layer.  They are intentionally

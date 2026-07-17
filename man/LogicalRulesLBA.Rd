@@ -4,8 +4,86 @@
 \alias{LogicalRulesLBA}
 \title{LBA Logical Rules Model}
 \usage{
-LogicalRulesLBA(posdrift = TRUE, fast_path = TRUE)
+LogicalRulesLBA(posdrift = TRUE, fast_path = TRUE, capacity = FALSE)
+}
+\arguments{
+\item{posdrift}{Logical. If \code{TRUE} (default), use positive-truncated LBA
+drift rates; if \code{FALSE}, use untruncated normal drift rates and append
+\code{IO} to the compiled model name.}
+
+\item{fast_path}{Logical argument retained for compatibility. The current
+logical-rules likelihood is always dispatched through the compiled path.}
+
+\item{capacity}{Logical. If \code{TRUE}, include the \code{kappa} and \code{tau} parameters
+and use the shared-capacity likelihood on redundant-target \code{AB} trials.}
+}
+\value{
+A model list defining the logical-rules race model.
 }
 \description{
-LBA Logical Rules Model
+This is an LBA-based model for tasks in which the observable response is
+assembled from two latent target-detection subraces. It is not an ordinary
+race over the levels of \code{R}: the compiled likelihood combines the finish
+times of the accumulator roles according to the \code{LogicalRule} column in the
+data.
+}
+\details{
+The ordinary logical-rules model uses the accumulator roles \code{A}, \code{B},
+\code{n_A}, and \code{n_B}. \code{A} and \code{B} are target accumulators, while \code{n_A} and
+\code{n_B} are their corresponding nontarget accumulators. The supported choice
+rules are:
+\itemize{
+\item \code{OR}: respond \code{yes} when either target subrace is positive, otherwise
+respond \code{no}.
+\item \code{AND}: respond \code{yes} only when both target subraces are positive.
+\item \code{XOR}: respond \code{yes} when exactly one target subrace is positive.
+\item \code{ID}: report which targets are positive using \code{NN}, \code{AN}, \code{NB}, or \code{AB}.
+}
+
+Two detection rules are also supported. \code{OR_DETECTION_ANALYTIC} uses only
+the active target accumulators \code{A} and \code{B}, and reports the first active
+detector to finish. \code{OR_DETECTION_GNG} adds a \code{nogo} accumulator; a go
+response must beat the other active detector and \code{nogo}, while a nogo
+outcome is a withheld response. For detection rules, the stimulus column
+(\code{S}, \code{stimulus}, or \code{condition}) must identify \code{NN}, \code{AN}, \code{NB}, or \code{AB}
+on every trial. Missing stimulus values are treated as \code{NN}.
+
+The LBA parameters are:\tabular{llllll}{
+   \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Mapping} \tab \strong{Interpretation} \cr
+   \emph{v} \tab identity \tab [-Inf, Inf] \tab 1 \tab  \tab Mean drift rate for each accumulator. \cr
+   \emph{sv} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Between-trial SD of drift rate; conventionally fixed to 1 for scale identification. \cr
+   \emph{B} \tab log \tab [0, Inf] \tab log(1) \tab \emph{b} = \emph{B} + \emph{A} \tab Distance from the upper end of the start-point range to the threshold. \cr
+   \emph{A} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Width of the uniform start-point range. \cr
+   \emph{t0} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Non-decision time. \cr
+}
+
+
+Thus each accumulator starts at \code{A * U}, with \code{U ~ Uniform(0, 1)}, and
+reaches the threshold \code{b = B + A}. With \code{posdrift = TRUE}, the drift draw
+is a positive normal draw; with \code{posdrift = FALSE}, the untruncated normal
+is used and negative-drift accumulators can produce intrinsic omissions.
+All of the parameters above are trial-dependent after the design formulas
+have been evaluated. The capacity extension adds the following parameters:\tabular{lllll}{
+   \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Interpretation} \cr
+   \emph{kappa} \tab log \tab [0, Inf] \tab log(1) \tab Multiplicative mean capacity effect on both active targets in an \code{AB} trial. \cr
+   \emph{tau} \tab log \tab [0, Inf] \tab log(0) \tab Between-trial SD of the shared capacity multiplier in an \code{AB} trial. \cr
+}
+
+
+With \code{capacity = TRUE}, an \code{AB} trial receives one latent \code{Z ~ N(0, 1)} and
+the target drift draws are
+\code{V_i = (kappa + tau * Z) * v_i + epsilon_i}, for \verb{i = A, B}, with
+independent \code{epsilon_i ~ N(0, sv_i^2)}. The logical-rule calculation is
+performed conditional on this same \code{Z} and then integrated over \code{Z}; the
+factor is not integrated separately for the two subraces. Nontarget and
+\code{nogo} accumulators do not load on the factor. Capacity has no effect on
+\code{AN}, \code{NB}, or \code{NN} trials, and \verb{kappa = 1, tau = 0} recovers the ordinary
+logical-rules likelihood exactly. \code{kappa} and \code{tau} must be shared by the
+\code{A} and \code{B} rows within a trial. In positive-drift mode, the active target
+draws are conditioned jointly to be positive.
+
+The likelihood is implemented in the compiled logical-rules fast path. The
+R \code{dfun} and \code{pfun} entries retain the single-accumulator LBA functions for
+model integration and diagnostics, but the model-level R likelihood is not
+available as a fallback.
 }

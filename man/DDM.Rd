@@ -29,11 +29,13 @@ argument of \code{design()}.They can also be accessed with \code{DDM()$p_types}.
 }
 
 
-\code{a}, \code{t0}, \code{sv}, \code{st0}, \code{s} are sampled on the log scale because these parameters are strictly positive,
-\code{Z}, \code{SZ} and \code{DP} are sampled on the probit scale because they should be strictly between 0 and 1.
+\code{a}, \code{t0}, \code{sv}, \code{st0}, and \code{s} are sampled on the log scale because these
+parameters are strictly positive. \code{Z} and \code{SZ} are sampled on the probit
+scale because they represent proportions between 0 and 1; the
+\code{Ttransform} converts them to the absolute start-point parameters \code{z} and
+\code{sz} used by the diffusion kernel.
 
 \code{Z} is estimated as the ratio of bias to one boundary where 0.5 means no bias.
-\code{DP} comprises the difference in non-decision time for each response option.
 
 Conventionally, \code{s} is fixed to 1 to satisfy scaling constraints.
 

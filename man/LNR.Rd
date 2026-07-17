@@ -18,21 +18,36 @@ Model files are almost exclusively used in \code{design()}.
 Default values are used for all parameters that are not explicitly listed in the \code{formula}
 argument of \code{design()}.They can also be accessed with \code{LNR()$p_types}.\tabular{llllll}{
    \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Mapping} \tab \strong{Interpretation} \cr
-   \emph{m} \tab - \tab [-Inf, Inf] \tab 1 \tab  \tab Scale parameter \cr
-   \emph{s} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Shape parameter \cr
-   \emph{t0} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Non-decision time \cr
+   \emph{m} \tab identity \tab [-Inf, Inf] \tab 1 \tab  \tab Meanlog of the lognormal decision-time distribution \cr
+   \emph{s} \tab log \tab [0, Inf] \tab log(1) \tab  \tab SDlog of the lognormal decision-time distribution \cr
+   \emph{t0} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Additive non-decision-time shift \cr
+   \emph{pContaminant} \tab probit \tab [0, 1] \tab qnorm(0) \tab  \tab Optional contamination probability handled by the data pipeline \cr
 }
 
 
-Because the LNR is a race model, it has one accumulator per response option.
-EMC2 automatically constructs a factor representing the accumulators \code{lR} (i.e., the
-latent response) with level names taken from the \code{R} column in the data.
+Conditional on an accumulator's parameters, its decision time is
+\code{T = t0 + Y}, where \code{log(Y) ~ Normal(m, s^2)}. Thus \code{m} and \code{s} are the
+location and scale on the log-time axis, not the mean and SD on the raw
+response-time axis. The raw decision-time mean is
+\code{t0 + exp(m + s^2 / 2)}, before race selection. The distribution has support
+above \code{t0}; the model's default lower bound for \code{t0} is 0.05 when parameters
+are checked for simulation.
 
+Because the LNR is a race model, it has one independent lognormal
+accumulator per response option. EMC2 automatically constructs a factor
+representing the accumulators \code{lR} (i.e., the latent response) with level
+names taken from the \code{R} column in the data. The observed density is the
+winning accumulator density multiplied by the survivor probabilities of the
+other accumulators.
 In \code{design()}, \code{matchfun} can be used to automatically create a latent match
 (\code{lM}) factor with levels \code{FALSE} (i.e., the stimulus does not match the accumulator)
 and \code{TRUE} (i.e., the stimulus does match the accumulator). This is added internally
 and can also be used in the model formula, typically for parameters related to
 the rate of accumulation (see the example below).
+
+All model parameters are trial-dependent after the design formulas are
+evaluated. \code{pContaminant} is a generic nuisance parameter and is not part of
+the lognormal race distribution itself.
 
 Rouder, J. N., Province, J. M., Morey, R. D., Gomez, P., & Heathcote, A. (2015).
 The lognormal race: A cognitive-process model of choice and latency with

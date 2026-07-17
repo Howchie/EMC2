@@ -369,6 +369,14 @@ bawl_corr_counters_reset <- function() {
     invisible(.Call(`_EMC2_bawl_corr_counters_reset`))
 }
 
+lr_capacity_counter_values <- function() {
+    .Call(`_EMC2_lr_capacity_counter_values`)
+}
+
+lr_capacity_counters_reset <- function() {
+    invisible(.Call(`_EMC2_lr_capacity_counters_reset`))
+}
+
 bawl_corr_bvn_rect_probe <- function(mu1, sd1, mu2, sd2, rho, lo1, hi1, lo2, hi2) {
     .Call(`_EMC2_bawl_corr_bvn_rect_probe`, mu1, sd1, mu2, sd2, rho, lo1, hi1, lo2, hi2)
 }

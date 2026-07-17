@@ -7,30 +7,69 @@
 RDMSWTN(erlang_shape = 1L, erlang_type = "none", posdrift = TRUE)
 }
 \arguments{
-\item{erlang_shape}{integer shape of the killing process (1=exponential, 2=Erlang-2) or "mixed"}
+\item{erlang_shape}{Integer \code{1} for exponential clocks, \code{2} for Erlang-2,
+or \code{"mixed"} for the Erlang-1/Erlang-2 mixture.}
 
-\item{erlang_type}{string, one of "none", "local_kill", "global_kill", "local_guess", "local_kill_guess"}
+\item{erlang_type}{Clock configuration: one of \code{"none"}, \code{"local_kill"},
+\code{"global_kill"}, \code{"local_guess"}, or \code{"local_kill_guess"}.}
+
+\item{posdrift}{Logical. If \code{TRUE} (default), truncate the between-trial
+normal drift distribution below at zero; if \code{FALSE}, use untruncated
+drifts and allow intrinsic omissions.}
 }
 \value{
-a list of parameters
+A model list compatible with \code{\link[=design]{design()}}.
 }
 \description{
-RDMSWTN Model
+Racing Diffusion Model with Shifted Wald Truncated Normal (SWTN)
+accumulators. Conditional on a trial-specific drift draw \code{V}, each
+accumulator has a Wald first-passage time with diffusion SD \code{s}, a
+non-decision shift \code{t0}, and a uniformly varying first-passage distance.
+The start-point/threshold parameterization is \code{b = B + A}, with the
+corresponding Wald distance written as \code{B + U * A}, where
+\code{U ~ Uniform(0, 1)}. The between-trial drift is
+\code{V ~ Normal(v, sv^2)}; when \code{posdrift = TRUE}, this normal distribution is
+truncated below at zero.
 }
 \details{
-Racing Diffusion Model with Shifted Wald Truncated Normal (SWTN) accumulators.
-Supports between-trial drift variability (sv) and start-point variability (A).
-When sv=0 and A=0 the model reduces to a point Wald; when sv=0 it reduces
-to the standard RDM.\tabular{lllll}{
-   \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Interpretation} \cr
-   \emph{v} \tab log \tab [0, Inf] \tab log(1) \tab Mean drift rate \cr
-   \emph{B} \tab log \tab [0, Inf] \tab log(1) \tab Response threshold (before A offset) \cr
-   \emph{A} \tab log \tab [0, Inf] \tab log(0) \tab Start-point variability range \cr
-   \emph{t0} \tab log \tab [0, Inf] \tab log(0) \tab Non-decision time \cr
-   \emph{s} \tab log \tab [0, Inf] \tab log(1) \tab Within-trial SD of drift rate \cr
-   \emph{sv} \tab log \tab [0, Inf] \tab log(0) \tab Between-trial SD of drift rate \cr
-   \emph{mG} \tab log \tab [0, Inf] \tab log(1) \tab Local guessing timer mean \cr
-   \emph{mK} \tab log \tab [0, Inf] \tab log(1) \tab Local killing timer mean \cr
-   \emph{omega} \tab pnorm \tab [0, 1] \tab qnorm(.5) \tab Erlang-1 mixture weight (mixed only) \cr
+The model parameters are:\tabular{llllll}{
+   \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Mapping} \tab \strong{Interpretation} \cr
+   \emph{v} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Mean between-trial drift rate. \cr
+   \emph{B} \tab log \tab [0, Inf] \tab log(1) \tab \emph{b} = \emph{B} + \emph{A} \tab Baseline distance to the threshold. \cr
+   \emph{A} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Range of between-trial start-point/distance variability. \cr
+   \emph{t0} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Non-decision time. \cr
+   \emph{s} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Within-trial diffusion SD; conventionally fixed to 1 for scale identification. \cr
+   \emph{sv} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Between-trial SD of the drift rate. \cr
+   \emph{mG} \tab log \tab [0, Inf] \tab log(1) \tab \emph{lambda_g} = \emph{q} / \emph{mG} \tab Mean of the optional guess clock. \cr
+   \emph{mK} \tab log \tab [0, Inf] \tab log(1) \tab \emph{lambda_k} = \emph{q} / \emph{mK} \tab Mean of the optional kill clock. \cr
+   \emph{omega} \tab probit \tab [0, 1] \tab qnorm(.5) \tab  \tab Erlang-1 mixture weight in mixed mode. \cr
+   \emph{pContaminant} \tab probit \tab [0, 1] \tab qnorm(0) \tab  \tab Optional contamination probability handled by the data pipeline. \cr
 }
+
+
+\code{erlang_shape = 1} uses exponential clocks and \code{erlang_shape = 2} uses
+Erlang-2 clocks. In \code{erlang_shape = "mixed"}, each clock is Erlang-1 with
+probability \code{omega} and Erlang-2 otherwise, with both components retaining
+the same mean \code{mG} or \code{mK}. The internal \code{lambda_g} and \code{lambda_k} columns
+are generated from these means by the \code{Ttransform}; they are not parameters
+for \code{design()} formulas. \code{erlang_type} selects no clocks, local kill, global
+kill, local guess, or local kill plus local guess, using the same values
+\code{"none"}, \code{"local_kill"}, \code{"global_kill"}, \code{"local_guess"}, and
+\code{"local_kill_guess"}. A global kill clock is shared across accumulators and
+therefore requires the kill parameter to be constant within a trial. Mixed
+Erlang mode is currently restricted to local clock configurations.
+
+Setting \code{sv = 0} reduces the model to the standard RDM parameterization;
+setting both \code{sv = 0} and \code{A = 0} gives a point Wald accumulator (apart from
+any optional clock). With \code{posdrift = FALSE}, negative drifts are allowed and
+the finish-time distribution can be defective: an accumulator can have an
+intrinsic infinite finish time. The compiled model name is suffixed with
+\code{IO} in that case. With \code{posdrift = TRUE}, the drift distribution is
+truncated at zero and the ordinary RDM is recovered when \code{sv = 0}.
+
+As a race model, RDMSWTN has one accumulator per response option. EMC2
+constructs the latent accumulator factor \code{lR} from \code{R}, and the race
+likelihood combines one winning density with the survivor probabilities of
+all other accumulators. The optional \code{pContaminant} parameter is generic
+nuisance infrastructure and is not part of the SWTN distribution.
 }

@@ -7,15 +7,36 @@
 hUVSD()
 }
 \value{
-A model list with all the necessary functions to sample
+A model list with all the necessary functions for sampling.
 }
 \description{
-Binary choice SDT model parameterized with sensitivity (d) and bias (c),
-following Lages (2024).
+Binary-choice signal-detection model parameterized by sensitivity \code{d},
+criterion bias \code{c}, and the signal-distribution SD \code{sd}. No response time is
+modeled; \code{rt} is always \code{NA}. The noise SD is fixed to 1 for scale
+identification. With the current factor-level convention, the first level
+of \code{S} is noise and the second is signal, while the first level of \code{R} is
+"no" and the second is "yes".
 }
 \details{
-Model parameters are:
-d (sensitivity, distance between signal and noise means)
-c (bias, deviation from the midpoint between means)
-sd (standard deviation of the signal distribution, noise SD fixed at 1)
+The latent distributions are
+\itemize{
+\item noise: \code{X | noise ~ Normal(-d / 2, 1^2)};
+\item signal: \code{X | signal ~ Normal(d / 2, sd^2)}.
+}
+
+A yes response is generated when \code{X > c}, so
+\code{P(yes | noise) = Phi(-d / 2 - c)} and
+\code{P(yes | signal) = Phi((d / 2 - c) / sd)}. Here \code{d} and \code{c} are estimated
+on the identity scale and \code{sd} is estimated on the log scale.\tabular{lllll}{
+   \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Interpretation} \cr
+   \emph{d} \tab identity \tab [-Inf, Inf] \tab 0 \tab Distance between signal and noise means. \cr
+   \emph{c} \tab identity \tab [-Inf, Inf] \tab 0 \tab Criterion relative to the midpoint of the two means. \cr
+   \emph{sd} \tab log \tab [0, Inf] \tab log(1) \tab Signal-distribution SD; noise SD is fixed at 1. \cr
+}
+
+
+The model is hierarchical in the sense that the same subject-level
+parameter vector can be used across signal/noise conditions; it does not
+add a response-time hierarchy by itself. The R likelihood path is used
+because the probabilities require only \code{pnorm} evaluations.
 }

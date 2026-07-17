@@ -7,11 +7,57 @@
 RDMGBM(erlang_shape = 1L, erlang_type = "none")
 }
 \arguments{
-\item{erlang_shape}{integer shape of the killing process (1 = exponential, 2 = Erlang-2)}
+\item{erlang_shape}{Integer \code{1} for exponential clocks, \code{2} for Erlang-2,
+or \code{"mixed"} for the Erlang-1/Erlang-2 mixture.}
 
-\item{erlang_type}{string, one of "none", "local_kill", "global_kill", "local_guess", "local_kill_guess"}
+\item{erlang_type}{Clock configuration: one of \code{"none"}, \code{"local_kill"},
+\code{"global_kill"}, \code{"local_guess"}, or \code{"local_kill_guess"}.}
+}
+\value{
+A model list compatible with \code{\link[=design]{design()}}.
 }
 \description{
-Racing geometric Brownian first-passage model with start-point variability.
-Supports exponential killing (omission / guessing) via the \code{lambda_g} and \code{lambda_k} parameters.
+Racing geometric Brownian motion (GBM) first-passage model with
+start-point variability. Each accumulator starts at
+\code{X(0) = 1 + U}, where \code{U ~ Uniform(0, A)}, and races to the boundary
+\code{b = 1 + B + A}. On the log scale, the GBM has drift
+\code{v - s^2 / 2} and diffusion SD \code{s}; \code{v} is the drift parameter on the
+original GBM scale. The first-passage time is shifted by \code{t0}, and the
+accumulator with the earliest finish wins the race.
+}
+\details{
+The model's user-facing parameters are:\tabular{llllll}{
+   \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Mapping} \tab \strong{Interpretation} \cr
+   \emph{v} \tab log \tab [0, Inf] \tab log(1) \tab  \tab GBM drift parameter. \cr
+   \emph{B} \tab log \tab [0, Inf] \tab log(1) \tab \emph{b} = 1 + \emph{B} + \emph{A} \tab Distance from the upper start-point range to the boundary, with the GBM baseline at 1. \cr
+   \emph{A} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Start-point range above 1. \cr
+   \emph{t0} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Non-decision time. \cr
+   \emph{s} \tab log \tab [0, Inf] \tab log(1) \tab  \tab GBM diffusion SD. \cr
+   \emph{mG} \tab log \tab [0, Inf] \tab log(1) \tab \emph{lambda_g} = \emph{q} / \emph{mG} \tab Mean of the optional guess clock. \cr
+   \emph{mK} \tab log \tab [0, Inf] \tab log(1) \tab \emph{lambda_k} = \emph{q} / \emph{mK} \tab Mean of the optional kill clock. \cr
+   \emph{omega} \tab probit \tab [0, 1] \tab qnorm(.5) \tab  \tab Erlang-1 mixture weight in mixed mode. \cr
+   \emph{pContaminant} \tab probit \tab [0, 1] \tab qnorm(0) \tab  \tab Optional contamination probability handled by the data pipeline. \cr
+}
+
+
+The internal \code{lambda_g} and \code{lambda_k} columns are created by the
+\code{Ttransform}; they are rates, not parameters to include in a design
+formula. Here \code{q = 1} for Erlang-1 and \code{q = 2} for Erlang-2. In mixed mode,
+each clock is Erlang-1 with probability \code{omega} and Erlang-2 otherwise,
+with the same mean \code{mG} or \code{mK} in either component.
+
+\code{erlang_type = "none"} gives the ordinary GBM race. \code{"local_kill"} adds an
+independent kill clock to each accumulator, \code{"global_kill"} adds one kill
+clock shared within a trial, \code{"local_guess"} adds local guess clocks, and
+\code{"local_kill_guess"} adds both local clock types. A kill winner is an
+omission; a guess winner follows the package's timed-guess convention. A
+global kill requires the kill parameter to be constant across accumulators
+within a trial. Mixed Erlang clocks are currently supported only for local
+clock configurations, not \code{"global_kill"}.
+
+For finite-time simulation the model checks the GBM log-drift condition
+\code{v > s^2 / 2} together with \code{s > 0}. The \code{v = 0} exception is retained for
+parameter mapping, but it does not produce ordinary finite GBM first
+passages. The model is a race model, so EMC2 constructs the accumulator
+factor \code{lR} from the response levels in \code{R}.
 }

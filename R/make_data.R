@@ -684,6 +684,110 @@ apply_logical_rules <- function(LogicalRule, A_t, nA_t, B_t, nB_t) {
   data.frame(R = R, rt = RT)
 }
 
+# Normalized stimulus condition codes (NN/AN/NB/AB) for LogicalRules trials,
+# or NULL when the data carry no stimulus column.  The compiled likelihood
+# uses condition code 0 for a missing stimulus, which is the no-stimulus (NN)
+# condition; keep the R simulator consistent so posterior prediction also
+# works for fits whose data contain an absent/NA stimulus value.
+.lr_stimulus_cond <- function(data, races) {
+  stim_col <- if ("S" %in% names(data)) {
+    "S"
+  } else if ("stimulus" %in% names(data)) {
+    "stimulus"
+  } else if ("condition" %in% names(data)) {
+    "condition"
+  } else {
+    return(NULL)
+  }
+  cond <- as.character(data[data$lR == races[1], stim_col])
+  cond[is.na(cond)] <- "NN"
+  cond[cond == "none"] <- "NN"
+  cond[cond %in% c("BA", "A+B", "B+A")] <- "AB"
+  cond[cond == "A"] <- "AN"
+  cond[cond == "B"] <- "NB"
+  cond
+}
+
+# Shared-capacity LogicalRules finishing-time sampler
+# (logicalrules_correlated_capacity_plan.md).  One latent standard-normal
+# factor per AB trial scales both target drift means:
+# V_i = (kappa + tau*z) * v_i + eps_i for i in {A, B}; nontarget, nogo, and
+# time racers never load on the factor.  With posdrift the correlated pair is
+# jointly conditioned on both target drifts being positive (rejection on
+# (z, V_A, V_B)); independent racers keep their ordinary univariate
+# truncation, which factorises out of the joint law.  Trials that are not AB
+# (or whose capacity parameters sit at kappa = 1, tau = 0) reproduce the
+# ordinary independent LBA drift draws exactly.
+.lr_capacity_finish_times <- function(data, pars, races, posdrift) {
+  n_trials <- nrow(data) / length(races)
+  cond <- .lr_stimulus_cond(data, races)
+  if (is.null(cond)) {
+    stop("LogicalRules capacity simulation requires stimulus column `S` (or `stimulus`/`condition`).")
+  }
+  rowsA <- which(data$lR == "A")
+  rowsB <- which(data$lR == "B")
+  kappa <- pars[rowsA, "kappa"]
+  tau <- pars[rowsA, "tau"]
+  if (any(pars[rowsB, "kappa"] != kappa) || any(pars[rowsB, "tau"] != tau)) {
+    stop("LogicalRules capacity requires kappa and tau shared by the A and B rows within each trial.")
+  }
+  if (any(!is.finite(kappa) | kappa <= 0) || any(!is.finite(tau) | tau < 0)) {
+    stop("LogicalRules capacity requires finite kappa > 0 and tau >= 0.")
+  }
+  pair_active <- cond == "AB" & (kappa != 1 | tau != 0)
+
+  trial_idx <- integer(nrow(data))
+  for (r in races) trial_idx[data$lR == r] <- seq_len(n_trials)
+  row_pair <- (data$lR %in% c("A", "B")) & pair_active[trial_idx]
+
+  lower <- if (posdrift) 0 else -Inf
+  drifts <- rep(NA_real_, nrow(pars))
+  if (any(!row_pair)) {
+    drifts[!row_pair] <- msm::rtnorm(sum(!row_pair),
+                                     mean = pars[!row_pair, "v"],
+                                     sd = pars[!row_pair, "sv"], lower = lower)
+  }
+
+  act <- which(pair_active)
+  if (length(act)) {
+    rA <- rowsA[act]
+    rB <- rowsB[act]
+    vA <- pars[rA, "v"]; svA <- pars[rA, "sv"]
+    vB <- pars[rB, "v"]; svB <- pars[rB, "sv"]
+    kap <- kappa[act]; tu <- tau[act]
+    VA <- rep(NA_real_, length(act))
+    VB <- rep(NA_real_, length(act))
+    todo <- seq_along(act)
+    for (iter in seq_len(10000L)) {
+      z <- rnorm(length(todo))
+      G <- kap[todo] + tu[todo] * z
+      dA <- rnorm(length(todo), mean = G * vA[todo], sd = svA[todo])
+      dB <- rnorm(length(todo), mean = G * vB[todo], sd = svB[todo])
+      okd <- !posdrift | (dA > 0 & dB > 0)
+      VA[todo[okd]] <- dA[okd]
+      VB[todo[okd]] <- dB[okd]
+      todo <- todo[!okd]
+      if (!length(todo)) break
+    }
+    if (length(todo)) {
+      stop("LogicalRules capacity jointly positive drift rejection exceeded ",
+           10000L, " sweeps; check that the target drift means are not far below zero.")
+    }
+    drifts[rA] <- VA
+    drifts[rB] <- VB
+  }
+
+  # LBA finishing time per row (k = 0): t = t0 + (b - A*U)/V for V > 0,
+  # otherwise the racer never finishes.
+  dt <- (pars[, "b"] - pars[, "A"] * runif(nrow(pars))) / drifts
+  dt[!is.finite(dt) | dt < 0] <- Inf
+  ft <- pars[, "t0"] + dt
+  out <- matrix(NA_real_, nrow = n_trials, ncol = length(races),
+                dimnames = list(NULL, races))
+  for (r in races) out[, r] <- ft[data$lR == r]
+  out
+}
+
 LogicalRules_rfun <- function(data, pars, model) {
   n_trials <- dim(data)[1] / length(levels(data$lR))
   races <- levels(data$lR)
@@ -695,39 +799,33 @@ LogicalRules_rfun <- function(data, pars, model) {
     stop("LogicalRule must be one of: OR, AND, XOR, ID, OR_DETECTION_ANALYTIC, OR_DETECTION_GNG")
   }
 
-  # Simulate finishing times for each accumulator role.
-  Rrti <- matrix(NA_real_, nrow = n_trials, ncol = length(races), dimnames = list(NULL, races))
-  for (i in races) {
-    pick <- data$lR == i
-    data_in <- data[pick, , drop = FALSE]
-    data_in$lR <- factor(data$lR[pick])
-    p <- pars[pick, , drop = FALSE]
-    attr(p, "ok") <- rep(TRUE, nrow(p))
-    if (!is.null(attr(pars, "staircase"))) attr(p, "staircase") <- attr(pars, "staircase")
-    Rrti[, i] <- model()$rfun(data_in, p)$rt
+  # Simulate finishing times for each accumulator role.  The capacity variant
+  # draws the target drifts jointly (shared factor on AB trials) and computes
+  # the LBA finishing times directly; ordinary models delegate to the model's
+  # per-role rfun.
+  has_capacity <- all(c("kappa", "tau") %in% colnames(pars))
+  if (has_capacity) {
+    posdrift <- !grepl("IO", model()$c_name)
+    Rrti <- .lr_capacity_finish_times(data, pars, races, posdrift)
+  } else {
+    Rrti <- matrix(NA_real_, nrow = n_trials, ncol = length(races), dimnames = list(NULL, races))
+    for (i in races) {
+      pick <- data$lR == i
+      data_in <- data[pick, , drop = FALSE]
+      data_in$lR <- factor(data$lR[pick])
+      p <- pars[pick, , drop = FALSE]
+      attr(p, "ok") <- rep(TRUE, nrow(p))
+      if (!is.null(attr(pars, "staircase"))) attr(p, "staircase") <- attr(pars, "staircase")
+      Rrti[, i] <- model()$rfun(data_in, p)$rt
+    }
   }
 
   is_detection <- logical_rule %in% c("OR_DETECTION_ANALYTIC", "OR_DETECTION_GNG")
   if (any(is_detection)) {
-    stim_col <- if ("S" %in% names(data)) {
-      "S"
-    } else if ("stimulus" %in% names(data)) {
-      "stimulus"
-    } else if ("condition" %in% names(data)) {
-      "condition"
-    } else {
+    cond <- .lr_stimulus_cond(data, races)
+    if (is.null(cond)) {
       stop("LogicalRules detection rules require stimulus column `S` (or `stimulus`/`condition`).")
     }
-    cond <- as.character(data[data$lR == races[1], stim_col])
-    # The compiled LogicalRules likelihood uses condition code 0 for a
-    # missing stimulus, which is the no-stimulus (NN) condition.  Keep the R
-    # simulator consistent so posterior prediction also works for fits whose
-    # data contain an absent/NA stimulus value.
-    cond[is.na(cond)] <- "NN"
-    cond[cond == "none"] <- "NN"
-    cond[cond %in% c("BA", "A+B", "B+A")] <- "AB"
-    cond[cond == "A"] <- "AN"
-    cond[cond == "B"] <- "NB"
     if (!all(cond %in% c("NN", "AN", "NB", "AB"))) {
       stop("LogicalRules detection rules require stimulus NN/AN/NB/AB (or A/B/AB).")
     }

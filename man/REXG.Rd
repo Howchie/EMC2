@@ -10,6 +10,31 @@ REXG()
 A model list compatible with \code{design()}.
 }
 \description{
-Model file for a race model where each accumulator follows an ex-Gaussian
-distribution with free mean, Gaussian scale, and exponential tail.
+Race model in which each accumulator has an ex-Gaussian finish-time
+distribution. For accumulator \code{i},
+\code{T_i = mu_i + G_i + E_i}, with
+\code{G_i ~ Normal(0, sigma_i^2)} and
+\code{E_i ~ Exponential(rate = 1 / tau_i)}. Equivalently, \code{mu} is the Gaussian
+location, \code{sigma} is the Gaussian SD, and \code{tau} is the mean of the
+exponential tail. The observed response is the accumulator with the
+smallest finish time.
+}
+\details{
+\tabular{lllll}{
+   \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Interpretation} \cr
+   \emph{mu} \tab log \tab [0, Inf] \tab log(.4) \tab Location of the Gaussian component. The current bounds restrict this location to be nonnegative. \cr
+   \emph{sigma} \tab log \tab [0, Inf] \tab log(.05) \tab SD of the Gaussian component. \cr
+   \emph{tau} \tab log \tab [0, Inf] \tab log(.1) \tab Mean of the exponential component; its rate is \code{1 / tau}. \cr
+   \emph{pContaminant} \tab probit \tab [0, 1] \tab qnorm(0) \tab Optional contamination probability handled by the data pipeline. \cr
+}
+
+
+The ex-Gaussian distribution has support on the real line. Its mean is
+\code{mu + tau} and its variance is \code{sigma^2 + tau^2}; these are descriptive
+distributional summaries rather than separate model parameters. Unlike the
+stop-signal ex-Gaussian models \code{\link[=SSEXG]{SSEXG()}} and \code{\link[=SSRDEX]{SSRDEX()}}, \code{REXG()} does not
+apply a lower truncation bound. The \code{pContaminant} parameter is generic
+nuisance infrastructure and is not part of the ex-Gaussian distribution.
+EMC2 creates one accumulator per response level in \code{R} and evaluates the
+race likelihood from the accumulator density and survivor functions.
 }

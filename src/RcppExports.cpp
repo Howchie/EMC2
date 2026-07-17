@@ -1527,6 +1527,25 @@ BEGIN_RCPP
     return R_NilValue;
 END_RCPP
 }
+// lr_capacity_counter_values
+Rcpp::List lr_capacity_counter_values();
+RcppExport SEXP _EMC2_lr_capacity_counter_values() {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    rcpp_result_gen = Rcpp::wrap(lr_capacity_counter_values());
+    return rcpp_result_gen;
+END_RCPP
+}
+// lr_capacity_counters_reset
+void lr_capacity_counters_reset();
+RcppExport SEXP _EMC2_lr_capacity_counters_reset() {
+BEGIN_RCPP
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    lr_capacity_counters_reset();
+    return R_NilValue;
+END_RCPP
+}
 // bawl_corr_bvn_rect_probe
 Rcpp::List bawl_corr_bvn_rect_probe(double mu1, double sd1, double mu2, double sd2, double rho, double lo1, double hi1, double lo2, double hi2);
 RcppExport SEXP _EMC2_bawl_corr_bvn_rect_probe(SEXP mu1SEXP, SEXP sd1SEXP, SEXP mu2SEXP, SEXP sd2SEXP, SEXP rhoSEXP, SEXP lo1SEXP, SEXP hi1SEXP, SEXP lo2SEXP, SEXP hi2SEXP) {
@@ -1758,6 +1777,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_get_pars_c_batch_wrapper_oo", (DL_FUNC) &_EMC2_get_pars_c_batch_wrapper_oo, 11},
     {"_EMC2_bawl_corr_counter_values", (DL_FUNC) &_EMC2_bawl_corr_counter_values, 0},
     {"_EMC2_bawl_corr_counters_reset", (DL_FUNC) &_EMC2_bawl_corr_counters_reset, 0},
+    {"_EMC2_lr_capacity_counter_values", (DL_FUNC) &_EMC2_lr_capacity_counter_values, 0},
+    {"_EMC2_lr_capacity_counters_reset", (DL_FUNC) &_EMC2_lr_capacity_counters_reset, 0},
     {"_EMC2_bawl_corr_bvn_rect_probe", (DL_FUNC) &_EMC2_bawl_corr_bvn_rect_probe, 9},
     {"_EMC2_bawl_corr_pair_probe", (DL_FUNC) &_EMC2_bawl_corr_pair_probe, 16},
     {"_EMC2_bawl_time_geometry_probe", (DL_FUNC) &_EMC2_bawl_time_geometry_probe, 5},

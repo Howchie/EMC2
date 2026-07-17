@@ -26,10 +26,14 @@ argument of \code{design()}.They can also be accessed with \code{LBA()$p_types}.
    \emph{B} \tab log \tab [0, Inf] \tab log(1) \tab \emph{b} = \emph{B}+\emph{A} \tab Distance from \emph{A} to \emph{b} (response threshold) \cr
    \emph{t0} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Non-decision time \cr
    \emph{sv} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Between-trial variation in evidence-accumulation rate \cr
+   \emph{pContaminant} \tab probit \tab [0, 1] \tab qnorm(0) \tab  \tab Optional contamination probability handled by the data pipeline \cr
 }
 
 
-All parameters are estimated on the log scale, except for the drift rate which is estimated on the real line.
+All core LBA parameters are estimated on the log scale, except for the drift
+rate which is estimated on the real line. \code{pContaminant} is estimated on the
+probit scale and is generic nuisance infrastructure rather than an LBA
+accumulator parameter.
 
 Conventionally, \code{sv} is fixed to 1 to satisfy scaling constraints.
 

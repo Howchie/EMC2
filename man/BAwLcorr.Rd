@@ -11,25 +11,47 @@ BAwLcorr(
 )
 }
 \arguments{
-\item{posdrift}{logical, if TRUE drifts are truncated to be positive.}
+\item{posdrift}{Logical. If \code{TRUE} (default), drift rates are jointly
+conditioned to be positive; if \code{FALSE}, use untruncated normal drifts.}
 
-\item{erlang_shape}{integer shape of the killing process.}
+\item{erlang_shape}{Integer \code{1} for exponential clocks, \code{2} for Erlang-2,
+or \code{"mixed"} for an Erlang-1/Erlang-2 mixture.}
 
-\item{erlang_type}{clock configuration, as in \code{\link[=BAwL]{BAwL()}}.}
+\item{erlang_type}{Clock configuration, as in \code{\link[=BAwL]{BAwL()}}.}
+}
+\value{
+A model list defining the correlated BAwL race model.
 }
 \description{
-Adds a one-factor correlation \code{rho} to BAwL.  In an expanded race design
-with \code{lM}, \code{rho} is the pairwise correlation between the correct and
-incorrect racers' underlying Gaussian drifts for each trial type.  The correct
-racer is the positive reference and the incorrect racer receives the cell
-sign.  The coefficient must be shared within a trial.  To exclude a PM or
-false-alarm racer, use a derived participation factor and fix its coefficient
-to zero, for example \code{coupled = function(d) factor(d$lR != "pm", c(FALSE,
-TRUE), c("no", "yes"))}, \code{rho ~ 0 + coupled}, and
-\code{constants = c(rho_coupledno = 0)}.
+This is the \code{correlated = TRUE} form of \code{\link[=BAwL]{BAwL()}}. It adds a one-factor
+correlation to the Gaussian drift draws while retaining the BAwL leak,
+start-point, non-decision-time, clock, and positive-drift parameterization.
+In an expanded race design with \code{lM}, \code{rho} is the pairwise correlation
+between the correct and incorrect racers' \emph{underlying untruncated} Gaussian
+drifts for each trial type. The correct racer is the positive reference and
+the incorrect racer receives the cell sign.
+}
+\details{
+\code{rho} is a direct natural-scale correlation in \verb{[-1, 1]}, represented by a
+scaled probit transform. It must be shared by all rows of a trial. A
+\code{matchfun} is therefore required so that the generated \code{lM} factor can
+identify the correct racer. Structurally independent racers, such as a
+PM/false-alarm row, should be assigned \code{rho = 0} using a participation
+factor. For example:
 
-With \code{posdrift = TRUE}, the model conditions the joint correlated
-Gaussian drift vector on all active drifts being positive.  Thus \code{rho}
-is the correlation of the underlying untruncated Gaussian, while the marginals
-retain standard positive-drift BAwL semantics.
+\if{html}{\out{<div class="sourceCode r">}}\preformatted{coupled <- function(d)
+  factor(d$lR != "pm", c(FALSE, TRUE), c("no", "yes"))
+# In the design: rho ~ 0 + coupled,
+# constants = c(rho_coupledno = 0)
+}\if{html}{\out{</div>}}
+
+With \code{posdrift = TRUE}, BAwLcorr conditions the joint correlated Gaussian
+drift vector on all active drifts being positive. Thus \code{rho} is the
+correlation of the underlying untruncated Gaussian, while the marginal
+drift draws retain standard positive-drift BAwL semantics. The marginal
+truncated correlation is therefore not equal to \code{rho} in general.
+
+All BAwL parameters are described in \code{\link[=BAwL]{BAwL()}}, including \code{v}, \code{sv}, \code{B},
+\code{A}, \code{t0}, \code{k}, \code{mG}, \code{mK}, \code{omega}, and \code{pContaminant}. This constructor
+always sets \code{correlated = TRUE} internally.
 }

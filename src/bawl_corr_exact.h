@@ -9,6 +9,7 @@
 // by the pair component.  This header deliberately has no Rcpp objects: the
 // likelihood route can keep the ParamTable column pointers in its hot path.
 
+#include "bawl_corr_counters.h"
 #include "bawl_geometry.h"
 #include "gl_quad.h"
 #include <algorithm>
@@ -179,6 +180,10 @@ inline BvnBoundaryGrid bawl_corr_make_boundary_grid(
       g.dyy[i][j] = corner.dyy;
       g.dxy[i][j] = corner.dxy;
     }
+  }
+  if (bawl_corr_counters_active()) {
+    bawl_corr_counters().bvn_corner_evaluations +=
+      static_cast<long long>(g.nx) * static_cast<long long>(g.ny);
   }
   return g;
 }

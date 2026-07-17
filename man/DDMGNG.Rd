@@ -11,13 +11,37 @@ A model list with all the necessary functions to sample
 }
 \description{
 In the GNG paradigm one of the two possible choices results in a response
-being withheld (a non-response), which is indicated in the data by an NA for
-the rt, with the corresponding level of the R (response) factor still being
-specified. For example, suppose the go response is coded as "yes" and nogo is
-coded as "no", then for a non-response (R,rt) = ("no",NA) and for a response
-e.g., (R,rt) = ("yes",1.36). The GNG paradigm must also have a response
+being withheld (a non-response). A response is represented by a finite
+response time and the go response level of \code{R}; a withheld response is
+represented by \code{rt = NA} (or, internally during simulation, by an infinite
+finishing time) and the nogo level of \code{R}. The paradigm must also specify a
+response window, \code{TIMEOUT}, after which withholding is assumed.
 }
 \details{
+The DDM parameterization is the same as \code{\link[=DDM]{DDM()}}, with one addition in the
+trial-dependent parameter matrix: \code{TIMEOUT} and the numeric code of \code{Rnogo}
+are copied from the augmented data. The likelihood uses the probability of
+not reaching the go boundary before \code{TIMEOUT},
+\code{1 - P(RT <= TIMEOUT | Rgo)}, for trials recorded as nogo.\tabular{lllll}{
+   \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Interpretation} \cr
+   \emph{v} \tab identity \tab [-Inf, Inf] \tab 1 \tab Mean drift rate. \cr
+   \emph{a} \tab log \tab [0, Inf] \tab log(1) \tab Boundary separation. \cr
+   \emph{t0} \tab log \tab [0, Inf] \tab log(0) \tab Non-decision time. \cr
+   \emph{s} \tab log \tab [0, Inf] \tab log(1) \tab Within-trial diffusion scale; conventionally fixed to 1. \cr
+   \emph{Z} \tab probit \tab [0, 1] \tab qnorm(.5) \tab Relative starting point; .5 is unbiased. \cr
+   \emph{SZ} \tab probit \tab [0, 1] \tab qnorm(0) \tab Relative between-trial starting-point range. \cr
+   \emph{sv} \tab log \tab [0, Inf] \tab log(0) \tab Between-trial SD of drift rate. \cr
+   \emph{st0} \tab log \tab [0, Inf] \tab log(0) \tab Between-trial range of non-decision time. \cr
+}
+
+
+The internal DDM parameters are \code{z = Z * a} and
+\code{sz = 2 * SZ * min(Z, 1 - Z) * a}. The \code{Rnogo} function must return the
+response-factor level that denotes withholding, and \code{Rgo} must return the
+corresponding go level. Both functions, together with \code{TIMEOUT}, are
+supplied through the \code{functions} argument of \code{\link[=design]{design()}}. Their outputs must
+have the same response-factor levels as the data.
+
 The model used is described in the following paper, with the addition of
 modeling the TIMEOUT (which is considered but not used in this paper).
 
@@ -25,13 +49,10 @@ Gomez, P., Ratcliff, R., & Perea, M. (2007). A Model of the Go/No-Go Task.
 Journal of Experimental Psychology: General, 136(3), 389-413.
 https://doi.org/10.1037/0096-3445.136.3.389
 
-The likelihood of non-responses requires and evaluation of the DDM cdf,
-specifically 1 - p(hitting the yes boundary before TIMEOUT).
-
-To use these models three functions must be supplied in the design's function
-argument with the names TIMEOUT, Rnogo and Rgo. For example, assuming a
-2.5 second timeout, and R factor with levels c("no","yes") and "no" mapping
-to a non-response.
+To use this model, three functions must be supplied in the design's
+\code{functions} argument with the names \code{TIMEOUT}, \code{Rnogo}, and \code{Rgo}. For
+example, assuming a 2.5 second timeout, and an \code{R} factor with levels
+\code{c("no", "yes")} where \code{"no"} denotes withholding:
 
 TIMEOUT=function(d)rep(2.5,nrow(d))
 Rnogo=function(d)factor(rep("no",nrow(d)),levels=c("no","yes"))
@@ -40,10 +61,6 @@ Rgo=function(d)factor(rep("yes",nrow(d)),levels=c("no","yes")))
 See the help for DDM for further details. At present this model is not fully
 implemented in C, so is a little slower to use than the DDM, but not greatly.
 }
-\section{window (i.e., a length of time, TIMEOUT period, after which withholding is}{
-assumed).
-}
-
 \examples{
 dGNG <- design(Rlevels = c("left","right"),
                factors=list(subjects=1,S=c("left","right")),
