@@ -87,6 +87,26 @@ test_that("exact pair values agree with the independent numeric-pair route", {
   }
 })
 
+test_that("positive pair normalizer is the BVN orthant probability", {
+  skip_on_cran()
+  cases <- list(
+    c(1.0, .8, .4, 1.1, -.8),
+    c(.2, .9, -.3, 1.2, 0),
+    c(1.5, .7, .1, .6, .8)
+  )
+  for (z in cases) {
+    got <- EMC2:::bawl_corr_pair_probe(
+      .7, .1, .2, 1.4, 0, z[1], z[2],
+      .13, .35, 1.1, 0, z[3], z[4],
+      z[5], TRUE, FALSE
+    )$normalizer
+    ref <- rect_moment_reference(
+      z[1], z[2], z[3], z[4], z[5], 0, Inf, 0, Inf
+    )["p"]
+    expect_equal(got, unname(ref), tolerance = 2e-8)
+  }
+})
+
 test_that("point-start pair branches remain continuous and finite", {
   skip_on_cran()
   for (starts in list(c(0, .2), c(.2, 0), c(0, 0))) {

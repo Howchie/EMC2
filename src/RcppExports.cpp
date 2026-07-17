@@ -1023,6 +1023,20 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// logicalrules_capacity_finish_cpp
+Rcpp::NumericMatrix logicalrules_capacity_finish_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels, Rcpp::CharacterVector stimulus, bool posdrift);
+RcppExport SEXP _EMC2_logicalrules_capacity_finish_cpp(SEXP parsSEXP, SEXP lR_levelsSEXP, SEXP stimulusSEXP, SEXP posdriftSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< Rcpp::NumericMatrix >::type pars(parsSEXP);
+    Rcpp::traits::input_parameter< Rcpp::CharacterVector >::type lR_levels(lR_levelsSEXP);
+    Rcpp::traits::input_parameter< Rcpp::CharacterVector >::type stimulus(stimulusSEXP);
+    Rcpp::traits::input_parameter< bool >::type posdrift(posdriftSEXP);
+    rcpp_result_gen = Rcpp::wrap(logicalrules_capacity_finish_cpp(pars, lR_levels, stimulus, posdrift));
+    return rcpp_result_gen;
+END_RCPP
+}
 // rlba_cpp
 Rcpp::List rlba_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels, Rcpp::LogicalVector ok, bool posdrift);
 RcppExport SEXP _EMC2_rlba_cpp(SEXP parsSEXP, SEXP lR_levelsSEXP, SEXP okSEXP, SEXP posdriftSEXP) {
@@ -1742,6 +1756,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_stopfn_rdex_old", (DL_FUNC) &_EMC2_stopfn_rdex_old, 10},
     {"_EMC2_stopfn_rdex", (DL_FUNC) &_EMC2_stopfn_rdex, 12},
     {"_EMC2_ss_rdex_stop_success_value", (DL_FUNC) &_EMC2_ss_rdex_stop_success_value, 10},
+    {"_EMC2_logicalrules_capacity_finish_cpp", (DL_FUNC) &_EMC2_logicalrules_capacity_finish_cpp, 4},
     {"_EMC2_rlba_cpp", (DL_FUNC) &_EMC2_rlba_cpp, 4},
     {"_EMC2_rrdm_cpp", (DL_FUNC) &_EMC2_rrdm_cpp, 3},
     {"_EMC2_rbawl_cpp", (DL_FUNC) &_EMC2_rbawl_cpp, 7},

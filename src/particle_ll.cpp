@@ -804,6 +804,19 @@ struct BAwLCorrSharedState {
   // Reused per-particle scratch
   std::vector<double> effective_rho;
   std::vector<BAwLCorrTrialLayout> layout;
+
+  // Per-particle memoization of parameter-cell quantities.  Unique trials
+  // multiply design cells by distinct RTs, so the positive-drift orthant
+  // normalizer q_AB and the truncation normalizer log Z — which depend only
+  // on the cell parameters (and the data-constant LT/UT window) — are
+  // otherwise recomputed once per unique trial instead of once per cell.
+  // Exact double keys, linear scan, capped size; cleared for each particle
+  // because the ParamTable base storage is refilled in place.  Mutable so the
+  // const-view trial evaluators can memoize.
+  struct QabCacheEntry { double key[5]; double value; };
+  struct ZCacheEntry { double key[15]; double log_z; };
+  mutable std::vector<QabCacheEntry> qab_cache;
+  mutable std::vector<ZCacheEntry> z_cache;
 };
 
 static BAwLCorrSharedState build_bawl_corr_shared_state(
@@ -7355,7 +7368,7 @@ static inline BAwLTimeGeometry bawl_corr_row_geometry(
 }
 
 static inline bool bawl_corr_make_pair_data(
-    const BAwLCorrTrialLayout& layout, const std::vector<double>& effective_rho,
+    const BAwLCorrTrialLayout& layout, const BAwLCorrSharedState& s,
     const double* const* cols, const ContextForRaceModels* ctx,
     BAwLCorrPairData& out) {
   if (layout.n_loaded != 2 || layout.loaded_row[0] < 0 ||
@@ -7366,16 +7379,28 @@ static inline bool bawl_corr_make_pair_data(
   out.mu2 = cols[emc2col::bawl::v][out.row2];
   out.sd1 = cols[emc2col::bawl::sv][out.row1];
   out.sd2 = cols[emc2col::bawl::sv][out.row2];
-  const double r1 = effective_rho[static_cast<size_t>(out.row1)];
-  const double r2 = effective_rho[static_cast<size_t>(out.row2)];
+  const double r1 = s.effective_rho[static_cast<size_t>(out.row1)];
+  const double r2 = s.effective_rho[static_cast<size_t>(out.row2)];
   if (!(out.sd1 > 0.0) || !(out.sd2 > 0.0) || !R_FINITE(out.mu1) ||
       !R_FINITE(out.mu2) || !R_FINITE(r1) || !R_FINITE(r2) ||
       std::fabs(r1) > 1.0 || std::fabs(r2) > 1.0) return false;
   out.rho = (r1 * r2 < 0.0 ? -1.0 : 1.0) *
     std::sqrt(std::fabs(r1 * r2));
   out.positive = ctx->use_posdrift;
+  const double key[5] = {out.mu1, out.sd1, out.mu2, out.sd2, out.rho};
+  for (const auto& e : s.qab_cache) {
+    if (e.key[0] == key[0] && e.key[1] == key[1] && e.key[2] == key[2] &&
+        e.key[3] == key[3] && e.key[4] == key[4]) {
+      out.normalizer = e.value;
+      return R_FINITE(out.normalizer) && out.normalizer > 0.0;
+    }
+  }
   out.normalizer = bawl_corr_pair_positive_normalizer(
       out.mu1, out.sd1, out.mu2, out.sd2, out.rho, out.positive);
+  if (s.qab_cache.size() < 64) {
+    s.qab_cache.push_back({{key[0], key[1], key[2], key[3], key[4]},
+                           out.normalizer});
+  }
   return R_FINITE(out.normalizer) && out.normalizer > 0.0;
 }
 
@@ -7572,7 +7597,7 @@ static BAwLCorrExactTrialResult bawl_corr_exact_trial_loglik(
     double min_ll, bool force_numeric = false) {
   BAwLCorrExactTrialResult out;
   BAwLCorrPairData pair;
-  if (!bawl_corr_make_pair_data(layout, s.effective_rho, cols, ctx, pair)) return out;
+  if (!bawl_corr_make_pair_data(layout, s, cols, ctx, pair)) return out;
   const int start = j * s.n_lR;
   const int response_code = response[start];
   const bool known = response_code != NA_INTEGER;
@@ -7655,15 +7680,50 @@ static BAwLCorrExactTrialResult bawl_corr_exact_trial_loglik(
   }
 
   if (s.has_trunc_trial[static_cast<size_t>(j)]) {
-    BAwLCorrMomentStatus zst = BAwLCorrMomentStatus::ok;
-    const double log_z = survival_difference(LT, UT, &zst);
-    if (zst == BAwLCorrMomentStatus::unstable || zst == BAwLCorrMomentStatus::invalid ||
-        !R_FINITE(log_z)) {
-      out.status = zst == BAwLCorrMomentStatus::ok
-        ? BAwLCorrMomentStatus::unstable : zst;
-      return out;
+    // Z depends only on the parameter cell and the data-constant truncation
+    // window, never on rt, so unique trials sharing a cell share Z.  Only
+    // pure pair trials are cacheable: a singleton survivor's parameters
+    // would otherwise need to join the key.
+    const bool z_cacheable = !numeric && layout.n_active == 2;
+    double zkey[15] = {0.0};
+    const double* z_hit = nullptr;
+    if (z_cacheable) {
+      const double* t0c = cols[emc2col::bawl::t0];
+      const double* Ac = cols[emc2col::bawl::A];
+      const double* Bc = cols[emc2col::bawl::B];
+      zkey[0] = t0c[pair.row1]; zkey[1] = Ac[pair.row1]; zkey[2] = Bc[pair.row1];
+      zkey[3] = bawl_corr_row_k(cols, pair.row1, ctx);
+      zkey[4] = pair.mu1; zkey[5] = pair.sd1;
+      zkey[6] = t0c[pair.row2]; zkey[7] = Ac[pair.row2]; zkey[8] = Bc[pair.row2];
+      zkey[9] = bawl_corr_row_k(cols, pair.row2, ctx);
+      zkey[10] = pair.mu2; zkey[11] = pair.sd2;
+      zkey[12] = pair.rho; zkey[13] = LT; zkey[14] = UT;
+      for (const auto& e : s.z_cache) {
+        if (std::memcmp(e.key, zkey, sizeof(zkey)) == 0) {
+          z_hit = &e.log_z;
+          break;
+        }
+      }
     }
-    log_value -= log_z;
+    if (z_hit != nullptr) {
+      log_value -= *z_hit;
+    } else {
+      BAwLCorrMomentStatus zst = BAwLCorrMomentStatus::ok;
+      const double log_z = survival_difference(LT, UT, &zst);
+      if (zst == BAwLCorrMomentStatus::unstable || zst == BAwLCorrMomentStatus::invalid ||
+          !R_FINITE(log_z)) {
+        out.status = zst == BAwLCorrMomentStatus::ok
+          ? BAwLCorrMomentStatus::unstable : zst;
+        return out;
+      }
+      if (z_cacheable && s.z_cache.size() < 64) {
+        BAwLCorrSharedState::ZCacheEntry e;
+        std::memcpy(e.key, zkey, sizeof(zkey));
+        e.log_z = log_z;
+        s.z_cache.push_back(e);
+      }
+      log_value -= log_z;
+    }
   }
   if (s.pc_col >= 0) {
     const double pC = cols[static_cast<size_t>(s.pc_col)][start];
@@ -7748,6 +7808,10 @@ double c_log_likelihood_bawl_correlated(
       cshared.role_correct[static_cast<size_t>(r)] ? std::fabs(rho_cell)
                                                    : rho_cell;
   }
+  // Cell-keyed memoization is only valid within one particle: the ParamTable
+  // base storage the column pointers view is refilled in place per particle.
+  cshared.qab_cache.clear();
+  cshared.z_cache.clear();
 
   const bool count_routes = bawl_corr_counters_enabled();
   bawl_corr_counters_active() = count_routes;

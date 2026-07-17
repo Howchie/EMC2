@@ -232,11 +232,16 @@ inline BvnRectMoments bawl_corr_rect_from_grid(const BvnBoundaryGrid& g,
   if (p <= 0.0) {
     // A zero corner subtraction with nonzero boundary derivatives is the
     // characteristic tiny-rectangle cancellation that the numeric-pair
-    // route is meant to catch.  Reserve zero_mass for a rectangle whose
-    // entire boundary also carries no mass.
+    // route is meant to catch.  The rectangle's mass is bounded by its
+    // boundary line densities times the finite standardized span over which
+    // the corner CDFs still resolve, so when every boundary derivative is
+    // this small the bound sits far below both double resolution of the
+    // surrounding sums and the global 1e-10 likelihood floor: that is a
+    // genuine tail rectangle, not a cancellation, and must not push the
+    // whole trial onto the numeric route.
     const double boundary_scale = std::fabs(px) + std::fabs(py) +
       std::fabs(pxx) + std::fabs(pyy) + std::fabs(pxy);
-    out.status = (p > -1e-12 && boundary_scale <= 1e-300)
+    out.status = (p > -1e-12 && boundary_scale <= 1e-14)
       ? BAwLCorrMomentStatus::zero_mass : BAwLCorrMomentStatus::unstable;
     return out;
   }
@@ -662,9 +667,11 @@ inline double bawl_corr_pair_positive_normalizer(double mu1, double sd1,
     const double lp = log_normal_interval(a, upper);
     return R_FINITE(lp) ? std::exp(lp) : 0.0;
   }
-  const BvnRectMoments m = bawl_corr_bvn_rect_moments(
-      mu1, sd1, mu2, sd2, rho, 0.0, R_PosInf, 0.0, R_PosInf);
-  return (m.status == BAwLCorrMomentStatus::ok && m.p > 0.0) ? m.p : R_NaN;
+  // The pair normalizer is just the positive orthant probability.  Do not
+  // build the full rectangle-moment grid here: its first moment derivatives
+  // are needed by the exact survivor/cause integrals, but not by Z.
+  const double p = norm_cdf_2d(mu1 / sd1, mu2 / sd2, rho);
+  return (R_FINITE(p) && p > 0.0) ? p : R_NaN;
 }
 
 #endif

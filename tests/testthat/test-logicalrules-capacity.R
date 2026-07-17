@@ -135,10 +135,30 @@ test_that("capacity simulator accepts one shared factor per AB trial", {
   data <- lr_capacity_data()
   capacity <- lr_capacity_design(data, TRUE)
   p <- lr_capacity_parameters(capacity, tau = 0.4)
+  withr::local_options(emc2.cpp_rfun = TRUE)
   set.seed(1)
   simulated <- make_data(p, capacity, data = data, expand = 100)
   expect_equal(nrow(simulated), 400)
   expect_true(all(is.finite(simulated$rt)))
+})
+
+test_that("capacity simulator loads only A and B on AB trials", {
+  finish_cpp <- getFromNamespace("logicalrules_capacity_finish_cpp", "EMC2")
+  pars <- matrix(
+    rep(c(1, 0, 1, 0, 0, 2, 0), 8),
+    ncol = 7, byrow = TRUE,
+    dimnames = list(NULL, c("v", "sv", "b", "A", "t0", "kappa", "tau"))
+  )
+  finish <- finish_cpp(
+    pars,
+    c("A", "B", "n_A", "n_B"),
+    c("AB", "AN"),
+    posdrift = FALSE
+  )
+
+  expect_equal(unname(finish[1, c("A", "B")]), c(0.5, 0.5), tolerance = 1e-12)
+  expect_equal(unname(finish[1, c("n_A", "n_B")]), c(1, 1), tolerance = 1e-12)
+  expect_equal(unname(finish[2, ]), rep(1, 4), tolerance = 1e-12)
 })
 
 test_that("capacity detection routes evaluate analytic and GNG AB trials", {

@@ -229,6 +229,10 @@ ss_rdex_stop_success_value <- function(SSD, pars, method = "integrate", upper = 
     .Call(`_EMC2_ss_rdex_stop_success_value`, SSD, pars, method, upper, n_nodes, k_sigma, k_tau, max_subdiv, abs_tol, rel_tol)
 }
 
+logicalrules_capacity_finish_cpp <- function(pars, lR_levels, stimulus, posdrift) {
+    .Call(`_EMC2_logicalrules_capacity_finish_cpp`, pars, lR_levels, stimulus, posdrift)
+}
+
 rlba_cpp <- function(pars, lR_levels, ok, posdrift) {
     .Call(`_EMC2_rlba_cpp`, pars, lR_levels, ok, posdrift)
 }

@@ -25,6 +25,128 @@ std::unordered_map<std::string, int> col_index_map(const Rcpp::NumericMatrix& pa
   return m;
 }
 
+}  // namespace
+
+// Shared-capacity LogicalRules simulator.  This is the C++ counterpart of
+// .lr_capacity_finish_times() in R/make_data.R.  The capacity factor loads
+// only on the A/B target pair in an AB stimulus condition; every other
+// accumulator keeps its ordinary independent LBA drift draw.
+//
+// The return value is a matrix of accumulator finishing times, with one row
+// per trial and one column per lR level.  Logical-rule assembly is deliberately
+// left to the R caller so the ordinary and detection rule paths retain the
+// same response/tie/time-racer semantics.
+// [[Rcpp::export]]
+Rcpp::NumericMatrix logicalrules_capacity_finish_cpp(
+    Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
+    Rcpp::CharacterVector stimulus, bool posdrift) {
+  const int n_acc = lR_levels.size();
+  const int n_rows = pars.nrow();
+  if (n_acc <= 0 || n_rows <= 0 || n_rows % n_acc != 0) {
+    Rcpp::stop("logicalrules_capacity_finish_cpp: invalid accumulator/parameter dimensions.");
+  }
+  const int n_trials = n_rows / n_acc;
+  if (stimulus.size() != n_trials) {
+    Rcpp::stop("logicalrules_capacity_finish_cpp: stimulus must have one value per trial.");
+  }
+
+  const auto ci = col_index_map(pars);
+  const int iv = ci.at("v");
+  const int isv = ci.at("sv");
+  const int ib = ci.at("b");
+  const int iA = ci.at("A");
+  const int it0 = ci.at("t0");
+  const int ikappa = ci.at("kappa");
+  const int itau = ci.at("tau");
+
+  int a_role = -1, b_role = -1;
+  for (int a = 0; a < n_acc; ++a) {
+    const std::string role = Rcpp::as<std::string>(lR_levels[a]);
+    if (role == "A") a_role = a;
+    if (role == "B") b_role = a;
+  }
+  if (a_role < 0 || b_role < 0) {
+    Rcpp::stop("logicalrules_capacity_finish_cpp: lR_levels must contain A and B.");
+  }
+
+  Rcpp::NumericMatrix out(n_trials, n_acc);
+  Rcpp::colnames(out) = lR_levels;
+  const int max_iter = 10000;
+
+  auto normalized_condition = [](std::string condition) {
+    if (condition == "none") condition = "NN";
+    else if (condition == "A") condition = "AN";
+    else if (condition == "B") condition = "NB";
+    else if (condition == "BA" || condition == "A+B" || condition == "B+A") condition = "AB";
+    return condition;
+  };
+
+  auto draw_finish_time = [&](int row, double drift) {
+    const double dt = (pars(row, ib) - pars(row, iA) * R::unif_rand()) / drift;
+    if (!R_FINITE(dt) || dt < 0.0) return R_PosInf;
+    return pars(row, it0) + dt;
+  };
+
+  for (int tr = 0; tr < n_trials; ++tr) {
+    const int base = tr * n_acc;
+    const double kappa = pars(base + a_role, ikappa);
+    const double tau = pars(base + a_role, itau);
+    const int b_row = base + b_role;
+    if (pars(b_row, ikappa) != kappa || pars(b_row, itau) != tau) {
+      Rcpp::stop("LogicalRules capacity requires kappa and tau shared by the A and B rows within each trial.");
+    }
+    if (!R_FINITE(kappa) || !(kappa > 0.0) || !R_FINITE(tau) || tau < 0.0) {
+      Rcpp::stop("LogicalRules capacity requires finite kappa > 0 and tau >= 0.");
+    }
+
+    const std::string condition = normalized_condition(
+      Rcpp::as<std::string>(stimulus[tr]));
+    const bool pair_active = condition == "AB" && (kappa != 1.0 || tau != 0.0);
+
+    std::vector<double> drifts(static_cast<size_t>(n_acc), NA_REAL);
+    if (pair_active) {
+      for (int a = 0; a < n_acc; ++a) {
+        if (a == a_role || a == b_role) continue;
+        const int row = base + a;
+        drifts[static_cast<size_t>(a)] = rtnorm_lower_r(
+          pars(row, iv), pars(row, isv), posdrift ? 0.0 : R_NegInf);
+      }
+
+      bool accepted = false;
+      for (int iter = 0; iter < max_iter; ++iter) {
+        const double z = R::norm_rand();
+        const double multiplier = kappa + tau * z;
+        const int row_a = base + a_role;
+        const int row_b = base + b_role;
+        const double drift_a = R::rnorm(multiplier * pars(row_a, iv), pars(row_a, isv));
+        const double drift_b = R::rnorm(multiplier * pars(row_b, iv), pars(row_b, isv));
+        drifts[static_cast<size_t>(a_role)] = drift_a;
+        drifts[static_cast<size_t>(b_role)] = drift_b;
+        if (!posdrift || (drift_a > 0.0 && drift_b > 0.0)) {
+          accepted = true;
+          break;
+        }
+      }
+      if (!accepted) {
+        Rcpp::stop("LogicalRules capacity jointly positive drift rejection exceeded %d sweeps; check that the target drift means are not far below zero.", max_iter);
+      }
+    } else {
+      for (int a = 0; a < n_acc; ++a) {
+        const int row = base + a;
+        drifts[static_cast<size_t>(a)] = rtnorm_lower_r(
+          pars(row, iv), pars(row, isv), posdrift ? 0.0 : R_NegInf);
+      }
+    }
+
+    for (int a = 0; a < n_acc; ++a) {
+      out(tr, a) = draw_finish_time(base + a, drifts[static_cast<size_t>(a)]);
+    }
+  }
+  return out;
+}
+
+namespace {
+
 struct RaceOut {
   std::vector<int> R;        // 1-based winner accumulator, 0 = NA
   std::vector<double> rt;    // meaningful only where R != 0

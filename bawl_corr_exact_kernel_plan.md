@@ -1282,6 +1282,32 @@ Route/node counters confirm the baseline issues named above:
   suggested package `DiagrammeR`; the source objects generated during the
   verification build were removed afterward.
 
+### Step 12 — production hardening from the Annika preburn profile (DONE, 2026-07-17)
+
+Profiling a real hierarchical preburn (Annika control data, 114 subjects,
+LT=.1/UC=2.75 truncation-censoring, 11,718 unique trials) showed the fitted
+run paying ~14x over independent BAwL rather than the benchmarked ~8x, with
+15.7% of pair trials bouncing to the 64-node numeric route at sampled
+parameters and the truncation normalizer recomputed per unique trial.
+
+- `bawl_corr_rect_from_grid`: the p<=0 zero-mass test now accepts rectangles
+  whose boundary-derivative scale is below 1e-14 (was 1e-300).  The mass of
+  such a rectangle is bounded far below the 1e-10 likelihood floor, so these
+  are genuine tail rectangles at small tau, not cancellations; previously
+  each one forced its whole trial numeric.
+- Per-particle cell memoization in `BAwLCorrSharedState`: the positive-drift
+  orthant q_AB (keyed on mu/sd pair + rho) and the truncation normalizer
+  log Z (keyed on pair row parameters + LT/UT; pure pair trials only) are
+  now computed once per design cell instead of once per unique trial.
+  Caches are cleared per particle because the ParamTable base is refilled in
+  place.
+- Verified from a fresh temp-library install: benchmark lls identical across
+  all scenarios; near-t0 stress 13x -> 8x with 0 numeric-pair trials (was
+  250/2,000); focused correlated tests 5,035 + 251 passing, 0 failures.
+  Real-data parity vs the pre-fix build: max |dll| 6.4e-5 (old numeric-route
+  quadrature error), numeric share 9-15% -> 0%.  End-to-end 3-iteration
+  preburn benchmark: 527 s -> 201 s (independent BAwL: 37 s).
+
 ## Implementation sequence
 
 This order deliberately creates final shared infrastructure before either the

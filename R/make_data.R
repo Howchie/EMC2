@@ -734,6 +734,11 @@ apply_logical_rules <- function(LogicalRule, A_t, nA_t, B_t, nB_t) {
   if (any(!is.finite(kappa) | kappa <= 0) || any(!is.finite(tau) | tau < 0)) {
     stop("LogicalRules capacity requires finite kappa > 0 and tau >= 0.")
   }
+
+  if (.use_cpp_rfun()) {
+    return(logicalrules_capacity_finish_cpp(pars, races, cond, posdrift))
+  }
+
   pair_active <- cond == "AB" & (kappa != 1 | tau != 0)
 
   trial_idx <- integer(nrow(data))
