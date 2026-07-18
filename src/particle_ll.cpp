@@ -685,6 +685,19 @@ struct ModelSharedState {
 struct RaceSharedState : ModelSharedState {};
 using DDMSharedState = ModelSharedState;
 
+struct LogicalRulesZCacheEntry {
+  bool capacity = false;
+  bool has_channels = false;
+  bool has_nogo = false;
+  int rule_code = 0;
+  int cond = 0;
+  double LT = 0.0;
+  double UT = R_PosInf;
+  std::vector<double> key;
+  bool valid = false;
+  double log_z = R_NegInf;
+};
+
 struct LogicalRulesSharedState {
   bool valid = false;
   int n_trials = 0;
@@ -709,7 +722,68 @@ struct LogicalRulesSharedState {
   std::vector<double> UC_unique;
   // Per-row RTs (length n_trials) for raw dfun/pfun kernels.
   std::vector<double> rt_by_row;
+
+  // Per-particle cache for truncation normalisers.  The normaliser is a
+  // function of the parameter cell and truncation window, not of the
+  // observed RT, so distinct RTs can share this value safely.  The cache is
+  // cleared when the parameter-table backing storage is refilled for the
+  // next particle.
+  mutable std::vector<LogicalRulesZCacheEntry> z_cache;
 };
+
+static const LogicalRulesZCacheEntry* logicalrules_z_cache_find(
+    const std::vector<LogicalRulesZCacheEntry>& cache,
+    bool capacity, bool has_channels, bool has_nogo,
+    int rule_code, int cond, double LT, double UT,
+    const std::vector<double>& key) {
+  for (const auto& entry : cache) {
+    if (entry.capacity != capacity || entry.has_channels != has_channels ||
+        entry.has_nogo != has_nogo || entry.rule_code != rule_code ||
+        entry.cond != cond || entry.LT != LT || entry.UT != UT ||
+        entry.key.size() != key.size()) {
+      continue;
+    }
+    if (key.empty() ||
+        std::memcmp(entry.key.data(), key.data(), key.size() * sizeof(double)) == 0) {
+      return &entry;
+    }
+  }
+  return nullptr;
+}
+
+static void logicalrules_z_cache_store(
+    std::vector<LogicalRulesZCacheEntry>& cache,
+    bool capacity, bool has_channels, bool has_nogo,
+    int rule_code, int cond, double LT, double UT,
+    const std::vector<double>& key, bool valid, double log_z) {
+  // Keep the linear-scan cache bounded; repeated parameter cells are the
+  // common case and the fallback remains exact when there are many cells.
+  if (cache.size() >= 256) return;
+  LogicalRulesZCacheEntry entry;
+  entry.capacity = capacity;
+  entry.has_channels = has_channels;
+  entry.has_nogo = has_nogo;
+  entry.rule_code = rule_code;
+  entry.cond = cond;
+  entry.LT = LT;
+  entry.UT = UT;
+  entry.key = key;
+  entry.valid = valid;
+  entry.log_z = log_z;
+  cache.push_back(std::move(entry));
+}
+
+static inline void logicalrules_z_key_append_row(
+    std::vector<double>& key, const double* const* pars_cols,
+    int n_par, int row) {
+  for (int p = 0; p < n_par; ++p)
+    key.push_back(pars_cols[p][row]);
+}
+
+static inline void logicalrules_z_key_append_row(
+    std::vector<double>& key, const double* row, int n_par) {
+  key.insert(key.end(), row, row + n_par);
+}
 
 static LogicalRulesSharedState build_logicalrules_shared_state(const Rcpp::DataFrame& dadm,
                                                                int n_trials,
@@ -4796,13 +4870,14 @@ static double lrcap_trial_ll(
     int rule_code, int cond, int resp,
     double t, double LTj, double UTj, double LCj, double UCj,
     double kappa, double tau,
-    const double* const* pars_cols,
+    const double* const* pars_cols, int n_par,
     int idxA, int idxB,
     const double* parnA, const double* parnB, const double* parN,
     bool has_channels, bool has_nogo,
     double min_ll, double min_surv,
     RacePdf1Fun pdf1, RaceCdf1Fun cdf1, ContextForRaceModels* ctx,
-    int n_scan, int n_fine, bool count) {
+    int n_scan, int n_fine, bool count,
+    std::vector<LogicalRulesZCacheEntry>* z_cache) {
   if (cond != 3) return min_ll;  // capacity trials are AB by construction
   const bool posdrift = ctx->use_posdrift;
   const LrCapTargetView tvA = lrcap_target_view(pars_cols, idxA, kappa, tau);
@@ -4837,6 +4912,35 @@ static double lrcap_trial_ll(
   const bool need_G_for_N = (rule_code == 1 || rule_code == 2);
   const bool has_trunc = (LTj != 0.0 || R_FINITE(UTj));
   const bool subtract_UT = R_FINITE(UTj) && !ctx->defective_upper_tail;
+
+  // The capacity denominator is independent of the observed RT.  Cache it
+  // by the complete parameter cell and window, while leaving the RT-specific
+  // event numerator on the per-trial path.  A/B salience cells therefore
+  // cannot share a denominator unless their actual parameter values match.
+  std::vector<double> z_key;
+  const LogicalRulesZCacheEntry* z_hit = nullptr;
+  double cached_log_den = R_NegInf;
+  bool z_cache_hit = false;
+  if (has_trunc && z_cache != nullptr) {
+    z_key.reserve(static_cast<size_t>(n_par) *
+                  static_cast<size_t>(2 + (has_channels ? 2 : 0) +
+                                      (has_nogo ? 1 : 0)));
+    logicalrules_z_key_append_row(z_key, pars_cols, n_par, idxA);
+    logicalrules_z_key_append_row(z_key, pars_cols, n_par, idxB);
+    if (has_channels) {
+      logicalrules_z_key_append_row(z_key, parnA, n_par);
+      logicalrules_z_key_append_row(z_key, parnB, n_par);
+    }
+    if (has_nogo) logicalrules_z_key_append_row(z_key, parN, n_par);
+    z_hit = logicalrules_z_cache_find(
+        *z_cache, true, has_channels, has_nogo, rule_code, cond,
+        LTj, UTj, z_key);
+    if (z_hit != nullptr) {
+      z_cache_hit = true;
+      if (!z_hit->valid) return min_ll;
+      cached_log_den = z_hit->log_z;
+    }
+  }
 
   // Response gates mirror the ordinary branches; an incompatible recorded
   // response is zero mass for every factor value.
@@ -4882,12 +4986,13 @@ static double lrcap_trial_ll(
                                     clo, chi, cdf1, ctx, min_surv);
       }
     }
-    if (has_trunc) {
-      if (LTj > 0.0) {
+    const bool need_ut_for_event = upper_censored && subtract_UT;
+    if (has_trunc && (!z_cache_hit || need_ut_for_event)) {
+      if (!z_cache_hit && LTj > 0.0) {
         lrcap_build_det_N_point(det_lt, tvA, tvB, parN, has_nogo, LTj,
                                 rule_code == 6, pdf1, cdf1, ctx, min_surv);
       }
-      if (R_FINITE(UTj)) {
+      if (R_FINITE(UTj) && (!z_cache_hit || need_ut_for_event)) {
         lrcap_build_det_N_point(det_ut, tvA, tvB, parN, has_nogo, UTj,
                                 rule_code == 6, pdf1, cdf1, ctx, min_surv);
       }
@@ -4913,14 +5018,15 @@ static double lrcap_trial_ll(
       lrcap_build_channel_point(B_chi, tvB, parnB, chi, true, false,
                                 pdf1, cdf1, ctx, min_surv);
     }
-    if (has_trunc) {
-      if (LTj > 0.0) {
+    const bool need_ut_for_event = upper_censored && subtract_UT;
+    if (has_trunc && (!z_cache_hit || need_ut_for_event)) {
+      if (!z_cache_hit && LTj > 0.0) {
         lrcap_build_channel_point(A_lt, tvA, parnA, LTj, need_G_for_N, false,
                                   pdf1, cdf1, ctx, min_surv);
         lrcap_build_channel_point(B_lt, tvB, parnB, LTj, need_G_for_N, false,
                                   pdf1, cdf1, ctx, min_surv);
       }
-      if (R_FINITE(UTj)) {
+      if (R_FINITE(UTj) && (!z_cache_hit || need_ut_for_event)) {
         lrcap_build_channel_point(A_ut, tvA, parnA, UTj, need_G_for_N, false,
                                   pdf1, cdf1, ctx, min_surv);
         lrcap_build_channel_point(B_ut, tvB, parnB, UTj, need_G_for_N, false,
@@ -5105,12 +5211,22 @@ static double lrcap_trial_ll(
     log_num = log_event_mass(0.0);
     const double log_w0 = lrcap_log_q(tvA, 0.0, posdrift) +
       lrcap_log_q(tvB, 0.0, posdrift);
-    log_den = has_trunc ? log_trunc_mass(0.0) : log_w0;
+    log_den = has_trunc
+      ? (z_cache_hit ? cached_log_den : log_trunc_mass(0.0))
+      : log_w0;
   } else {
     log_num = lrcap_integrate_factor(log_event_mass, n_scan, n_fine, count);
     log_den = has_trunc
-      ? lrcap_integrate_factor(log_trunc_mass, n_scan, n_fine, count)
+      ? (z_cache_hit
+          ? cached_log_den
+          : lrcap_integrate_factor(log_trunc_mass, n_scan, n_fine, count))
       : log_qAB;
+  }
+  if (has_trunc && !z_cache_hit && z_cache != nullptr) {
+    const bool valid_z = R_FINITE(log_den);
+    logicalrules_z_cache_store(*z_cache, true, has_channels, has_nogo,
+                               rule_code, cond, LTj, UTj, z_key,
+                               valid_z, log_den);
   }
   if (!R_FINITE(log_den)) return min_ll;
   const double ll = log_num - log_den;
@@ -5142,6 +5258,9 @@ static double c_log_likelihood_logicalrules(
     Rcpp::stop("c_log_likelihood_logicalrules: ok_params size must match shared data.");
   }
   if (n_trials == 0) return 0.0;
+  // ParamTable columns are refilled in place for each particle, so no cache
+  // entry may survive this likelihood call.
+  shared.z_cache.clear();
   if (n_par > 64) {
     Rcpp::stop("c_log_likelihood_logicalrules: at most 64 parameter columns are supported.");
   }
@@ -5583,13 +5702,13 @@ static double c_log_likelihood_logicalrules(
           shared.LC_unique[static_cast<size_t>(j)],
           shared.UC_unique[static_cast<size_t>(j)],
           kappa, tau,
-          pars_cols, idxA, idxB,
+          pars_cols, n_par, idxA, idxB,
           parnA.data(), parnB.data(), parN.data(),
           rule_code <= 4, rule_code == 6,
           min_ll, kMinSurv,
           pdf1, cdf1, model_ctx,
           lrcap_scan_n, lrcap_fine_n,
-          count_capacity);
+          count_capacity, &shared.z_cache);
         continue;
       }
       if (count_capacity) ++lr_capacity_counters().ordinary_trials;
@@ -5679,33 +5798,63 @@ static double c_log_likelihood_logicalrules(
     const bool has_trunc = (LTj_tr != 0.0 || R_FINITE(UTj_tr));
     double log_Z_j = 0.0;
     if (has_trunc) {
-      bool z_ok = true;
-      double N_LT = 1.0;
-      double N_UT = 0.0;
-      if (rule_code >= 5) {
-        const int cond_j = shared.cond_code[static_cast<size_t>(j)];
-        if (LTj_tr > 0.0) {
-          N_LT = lr_detection_no_response_prob(rule_code, cond_j, LTj_tr,
-                                               parA.data(), parB.data(), parN.data(),
-                                               n_par, kMinSurv, pdf1, cdf1, model_ctx,
-                                               gsl_ctl, w, pars_3buf, z_ok);
+      const bool has_channels_j = rule_code <= 4;
+      const bool has_nogo_j = rule_code == 6;
+      const int cond_j = shared.cond_code[static_cast<size_t>(j)];
+      std::vector<double> z_key;
+      z_key.reserve(static_cast<size_t>(n_par) *
+                    static_cast<size_t>(2 + (has_channels_j ? 2 : 0) +
+                                        (has_nogo_j ? 1 : 0)));
+      logicalrules_z_key_append_row(z_key, parA.data(), n_par);
+      logicalrules_z_key_append_row(z_key, parB.data(), n_par);
+      if (has_channels_j) {
+        logicalrules_z_key_append_row(z_key, parnA.data(), n_par);
+        logicalrules_z_key_append_row(z_key, parnB.data(), n_par);
+      }
+      if (has_nogo_j) logicalrules_z_key_append_row(z_key, parN.data(), n_par);
+
+      const LogicalRulesZCacheEntry* z_hit = logicalrules_z_cache_find(
+          shared.z_cache, false, has_channels_j, has_nogo_j, rule_code, cond_j,
+          LTj_tr, UTj_tr, z_key);
+      if (z_hit != nullptr) {
+        if (!z_hit->valid) {
+          ll_unique[static_cast<size_t>(j)] = min_ll;
+          continue;
         }
-        if (z_ok && R_FINITE(UTj_tr)) {
-          N_UT = lr_detection_no_response_prob(rule_code, cond_j, UTj_tr,
-                                               parA.data(), parB.data(), parN.data(),
-                                               n_par, kMinSurv, pdf1, cdf1, model_ctx,
-                                               gsl_ctl, w, pars_3buf, z_ok);
-        }
+        log_Z_j = z_hit->log_z;
       } else {
-        if (LTj_tr > 0.0) N_LT = lr4_N_at(LTj_tr, LR_AUX_LT, z_ok);
-        if (z_ok && R_FINITE(UTj_tr)) N_UT = lr4_N_at(UTj_tr, LR_AUX_UT, z_ok);
+        bool z_ok = true;
+        double N_LT = 1.0;
+        double N_UT = 0.0;
+        if (rule_code >= 5) {
+          if (LTj_tr > 0.0) {
+            N_LT = lr_detection_no_response_prob(rule_code, cond_j, LTj_tr,
+                                                 parA.data(), parB.data(), parN.data(),
+                                                 n_par, kMinSurv, pdf1, cdf1, model_ctx,
+                                                 gsl_ctl, w, pars_3buf, z_ok);
+          }
+          if (z_ok && R_FINITE(UTj_tr)) {
+            N_UT = lr_detection_no_response_prob(rule_code, cond_j, UTj_tr,
+                                                 parA.data(), parB.data(), parN.data(),
+                                                 n_par, kMinSurv, pdf1, cdf1, model_ctx,
+                                                 gsl_ctl, w, pars_3buf, z_ok);
+          }
+        } else {
+          if (LTj_tr > 0.0) N_LT = lr4_N_at(LTj_tr, LR_AUX_LT, z_ok);
+          if (z_ok && R_FINITE(UTj_tr)) N_UT = lr4_N_at(UTj_tr, LR_AUX_UT, z_ok);
+        }
+        const double Z = std::min(1.0, N_LT - N_UT);
+        const bool valid_z = z_ok && R_FINITE(Z) && (Z > 1e-12);
+        logicalrules_z_cache_store(shared.z_cache, false, has_channels_j,
+                                   has_nogo_j, rule_code, cond_j,
+                                   LTj_tr, UTj_tr, z_key, valid_z,
+                                   valid_z ? std::log(Z) : R_NegInf);
+        if (!valid_z) {
+          ll_unique[static_cast<size_t>(j)] = min_ll;
+          continue;
+        }
+        log_Z_j = std::log(Z);
       }
-      const double Z = std::min(1.0, N_LT - N_UT);
-      if (!z_ok || !R_FINITE(Z) || !(Z > 1e-12)) {
-        ll_unique[static_cast<size_t>(j)] = min_ll;
-        continue;
-      }
-      log_Z_j = std::log(Z);
     }
 
     if (rule_code >= 5) {
@@ -7397,6 +7546,7 @@ static inline bool bawl_corr_make_pair_data(
   }
   out.normalizer = bawl_corr_pair_positive_normalizer(
       out.mu1, out.sd1, out.mu2, out.sd2, out.rho, out.positive);
+  if (!R_FINITE(out.normalizer) || !(out.normalizer > 0.0)) return false;
   if (s.qab_cache.size() < 64) {
     s.qab_cache.push_back({{key[0], key[1], key[2], key[3], key[4]},
                            out.normalizer});
@@ -7614,17 +7764,23 @@ static BAwLCorrExactTrialResult bawl_corr_exact_trial_loglik(
     else if (value == BAwLCorrMomentStatus::unstable &&
              st != BAwLCorrMomentStatus::invalid) st = value;
   };
-  auto component_survival = [&](double t, BAwLCorrMomentStatus*) {
+  auto component_survival_mode = [&](double t, bool numeric_survival,
+                                     BAwLCorrMomentStatus* status) {
     BAwLCorrMomentStatus local = BAwLCorrMomentStatus::ok;
     const double value = bawl_corr_log_component_survival(
-        s, pair, j, t, cols, ctx, numeric, &local);
+        s, pair, j, t, cols, ctx, numeric_survival, &local);
+    if (status != nullptr) *status = local;
     absorb_status(local);
     return value;
   };
-  auto component_cause = [&](int row, double t, BAwLCorrMomentStatus*) {
+  auto component_survival = [&](double t, BAwLCorrMomentStatus* status) {
+    return component_survival_mode(t, numeric, status);
+  };
+  auto component_cause = [&](int row, double t, BAwLCorrMomentStatus* status) {
     BAwLCorrMomentStatus local = BAwLCorrMomentStatus::ok;
     const double value = bawl_corr_log_component_cause(
         s, pair, j, row, t, cols, ctx, numeric, &local);
+    if (status != nullptr) *status = local;
     absorb_status(local);
     return value;
   };
@@ -7654,6 +7810,27 @@ static BAwLCorrExactTrialResult bawl_corr_exact_trial_loglik(
     if (a == R_NegInf) return R_NegInf;
     const double z = log_diff_exp(a, b);
     return z;
+  };
+  auto stable_survival_difference = [&](double lo, double hi,
+                                        BAwLCorrMomentStatus* st) {
+    // The exact rectangle formula obtains a survivor by subtracting four BVN
+    // CDF corners.  In a rare positive orthant those corners can agree to all
+    // available digits while leaving a small, positive residual that looks
+    // valid.  Dividing by that residual as an LT/UT normaliser then rewards
+    // the parameter point with an arbitrarily large finite likelihood.
+    //
+    // The deterministic pair route integrates one marginal drift against the
+    // conditional survivor of the other.  It is independent of the corner
+    // derivative algebra and is evaluated only for the data-window
+    // normaliser, which is cached by parameter cell below.  Event densities
+    // retain the closed-form route.  Because both quantities use the same
+    // positive-orthant normaliser, q cancels exactly in their log ratio.
+    const double a = (lo == 0.0)
+      ? 0.0 : component_survival_mode(lo, true, st);
+    if (hi == R_PosInf) return a;
+    const double b = component_survival_mode(hi, true, st);
+    if (a == R_NegInf) return R_NegInf;
+    return log_diff_exp(a, b);
   };
 
   double log_value = R_NegInf;
@@ -7709,7 +7886,7 @@ static BAwLCorrExactTrialResult bawl_corr_exact_trial_loglik(
       log_value -= *z_hit;
     } else {
       BAwLCorrMomentStatus zst = BAwLCorrMomentStatus::ok;
-      const double log_z = survival_difference(LT, UT, &zst);
+      const double log_z = stable_survival_difference(LT, UT, &zst);
       if (zst == BAwLCorrMomentStatus::unstable || zst == BAwLCorrMomentStatus::invalid ||
           !R_FINITE(log_z)) {
         out.status = zst == BAwLCorrMomentStatus::ok
@@ -7922,11 +8099,17 @@ double c_log_likelihood_bawl_correlated(
         }
       }
     } else {
-      // Numeric-pair failure is rare and falls through to the fused no-clock
-      // evaluator.  A materially unstable exact rectangle is never silently
-      // clamped into a likelihood value.
-      L.route = no_clock_model ? BAwLCorrRoute::gh_no_clock
-                               : BAwLCorrRoute::gh_generic_clock;
+      // Both the exact rectangle and its numeric fallback found this trial's
+      // geometry too degenerate to trust (e.g. a near-zero residual SD driven
+      // by a runaway sv/rho combination).  That verdict is a property of the
+      // parameter point, not of the kernel: routing it into the generic GH
+      // quadrature would silently hand a numerically pathological integrand
+      // to code with no equivalent stability check, which can return a large
+      // finite value instead of failing.  Floor it directly instead of
+      // giving the sampler a route to exploit that hole.
+      exact_done[static_cast<size_t>(j)] = 1;
+      exact_ll[static_cast<size_t>(j)] = min_ll;
+      if (count_routes) ++route_counters.unstable_pair_floored_trials;
     }
   }
 
@@ -8819,6 +9002,7 @@ Rcpp::List bawl_corr_counter_values() {
       Rcpp::Named("numeric_pair_trials") = (double)c.numeric_pair_trials,
       Rcpp::Named("gh_no_clock_trials") = (double)c.gh_no_clock_trials,
       Rcpp::Named("gh_generic_clock_trials") = (double)c.gh_generic_clock_trials,
+      Rcpp::Named("unstable_pair_floored_trials") = (double)c.unstable_pair_floored_trials,
       Rcpp::Named("loaded_dimension_0") = (double)c.loaded_dimension_0,
       Rcpp::Named("loaded_dimension_1") = (double)c.loaded_dimension_1,
       Rcpp::Named("loaded_dimension_2") = (double)c.loaded_dimension_2,

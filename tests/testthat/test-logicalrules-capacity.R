@@ -191,3 +191,28 @@ test_that("capacity route counters distinguish ordinary and AB trials", {
   expect_equal(counters$capacity_choice_trials, 1)
   expect_gt(counters$factor_node_evaluations, 0)
 })
+
+test_that("truncation normalisers are reused across RTs", {
+  skip_if_not(is.loaded("_EMC2_lr_capacity_counter_values", PACKAGE = "EMC2"))
+  data <- lr_capacity_data()
+  data <- rbind(data[1:3, , drop = FALSE], data[3, , drop = FALSE],
+                data[4, , drop = FALSE])
+  data$rt <- c(0.5, 0.6, 0.7, 0.8, 0.9)
+  data$LT <- rep(0.1, nrow(data))
+  data$UT <- rep(1.2, nrow(data))
+  capacity <- lr_capacity_design(data, TRUE)
+  p <- lr_capacity_parameters(capacity, tau = 0.4)
+
+  withr::local_envvar(c(
+    EMC2_LRCAP_COUNTERS = "1",
+    EMC2_LRCAP_SCAN_N = "12",
+    EMC2_LRCAP_FINE_N = "12"
+  ))
+  invisible(lr_capacity_ll_pw(data, capacity, p))
+  counters <- .Call("_EMC2_lr_capacity_counter_values", PACKAGE = "EMC2")
+
+  # Two AB trials have different RTs but the same parameter cell and window:
+  # two numerator passes plus one shared denominator pass.
+  expect_equal(counters$capacity_choice_trials, 2)
+  expect_equal(counters$factor_node_evaluations, 3 * (12 + 12))
+})

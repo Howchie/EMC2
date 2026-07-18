@@ -2,7 +2,7 @@
 ^\.Rproj\.user$
 ^\.positai$
 ^\.claude$
-^WorkingTests$
+^WorkingTests(/|$)
 ^benchmark_rdm\.R$
 ^docs$
 ^pkgdown$
@@ -12,6 +12,6 @@
 ^[^/]+\.RData$
 ^column_refactor_plan\.md$
 \.ipynb_checkpoints
-^\.Rtmp$
+^\.Rtmp(/|$)
 ^\.git
 ^\.pytest_cache

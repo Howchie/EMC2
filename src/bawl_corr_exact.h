@@ -605,8 +605,12 @@ inline BAwLCorrPairResult bawl_corr_pair_survival_numeric(
   if (!(normalizer > 0.0) || !R_FINITE(total)) {
     out.status = BAwLCorrMomentStatus::unstable; return out;
   }
-  out.value = total / normalizer;
-  out.status = (out.value > 0.0 && R_FINITE(out.value))
+  const double value = total / normalizer;
+  if (!R_FINITE(value) || value < 0.0 || value > 1.0 + 1e-8) {
+    out.status = BAwLCorrMomentStatus::unstable; return out;
+  }
+  out.value = std::fmin(1.0, std::fmax(0.0, value));
+  out.status = (out.value > 0.0)
     ? BAwLCorrMomentStatus::ok : BAwLCorrMomentStatus::zero_mass;
   return out;
 }

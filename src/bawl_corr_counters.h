@@ -22,6 +22,7 @@ struct BAwLCorrCounters {
   long long numeric_pair_trials = 0;
   long long gh_no_clock_trials = 0;
   long long gh_generic_clock_trials = 0;
+  long long unstable_pair_floored_trials = 0;
 
   // Loaded (nonzero-loading) dimension of the positivity denominator.
   long long loaded_dimension_0 = 0;

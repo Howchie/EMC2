@@ -536,6 +536,50 @@ test_that("truncated correlated likelihood uses an independent denominator", {
                tolerance = 3e-5)
 })
 
+test_that("rare positive orthants cannot corrupt the LT normalizer", {
+  skip_on_cran()
+  dat <- data.frame(
+    subjects = factor(1),
+    S = factor("non_target", levels = c("non_target", "target")),
+    R = factor("non_target", levels = c("non_target", "target")),
+    rt = .6166667, LT = .1, UT = Inf
+  )
+  formula <- list(v ~ 0 + lR, sv ~ 0 + lR, B ~ 0 + lR, A ~ 1,
+                  t0 ~ 1, k ~ 1, mG ~ 1, mK ~ 1, rho ~ 1)
+  ctx <- make_bawl_context(dat, BAwLcorr(posdrift = TRUE),
+                           rho_formula = rho ~ 1, formula = formula)
+  p <- set_bawl_values(sampled_pars(ctx$design, doMap = FALSE),
+                       rho = -.57686, v = 0, sv = 1, B = 1,
+                       A = 1.5085, t0 = .06913, k = 0)
+  p[grep("^v_", names(p))] <- c(8.0812, -2.08265)
+  p[grep("^sv_", names(p))] <- log(c(.21478, .24301))
+  p[grep("^B_", names(p))] <- log(c(.00053867, .019516))
+  mapped <- mapped_pars_for(ctx, p)
+  expect_equal(as.numeric(mapped[, "v"]), c(8.0812, -2.08265),
+               tolerance = 1e-12)
+
+  pair_rho <- sign(prod(mapped[, "rho"])) *
+    sqrt(abs(prod(mapped[, "rho"])))
+  probe <- function(t, numeric) EMC2:::bawl_corr_pair_probe(
+    t,
+    mapped[1, "t0"], mapped[1, "A"], mapped[1, "B"], mapped[1, "k"],
+    mapped[1, "v"], mapped[1, "sv"],
+    mapped[2, "t0"], mapped[2, "A"], mapped[2, "B"], mapped[2, "k"],
+    mapped[2, "v"], mapped[2, "sv"], pair_rho,
+    posdrift = TRUE, numeric = numeric
+  )
+  event <- probe(dat$rt, numeric = FALSE)
+  window <- probe(dat$LT, numeric = TRUE)
+  expect_gt(window$survival, .5)
+  stable_ll <- log(event$cause1) - log(window$survival)
+  expect_lt(stable_ll, log(1e-10))
+
+  got <- as.numeric(do.call(EMC2:::calc_ll_oo, context_args(ctx, p)))
+  got_pw <- as.numeric(do.call(EMC2:::calc_ll_oo_pw, context_args(ctx, p)))
+  expect_equal(got, log(1e-10), tolerance = 1e-12)
+  expect_equal(got_pw, log(1e-10), tolerance = 1e-12)
+})
+
 test_that("the direct correlation sign changes the likelihood and role sign", {
   skip_on_cran()
   dat <- data.frame(subjects = factor(1),

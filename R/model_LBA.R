@@ -162,7 +162,7 @@ LBA <- function(posdrift=TRUE){
     p_types=c("v" = 1,"sv" = log(1),"B" = log(1),"A" = log(0),"t0" = log(0), "pContaminant"=qnorm(0)),
     p_types_canonical = c("v", "sv", "B", "A", "t0"),
     transform=list(func=c(v = "identity",sv = "exp", B = "exp", A = "exp",t0 = "exp",pContaminant="pnorm")),
-    bound=list(minmax=cbind(v=c(-Inf,Inf),sv = c(0, Inf), A=c(1e-4,Inf),B=c(1e-4,Inf),t0=c(0.05,Inf),pContaminant=c(0.001,0.999)),
+    bound=list(minmax=cbind(v=c(-Inf,Inf),sv = c(1e-4, Inf), A=c(1e-4,Inf),B=c(1e-4,Inf),t0=c(0.05,Inf),pContaminant=c(0.001,0.999)),
                exception=c(A=0,pContaminant=0)),
     # Transform to natural scale
     # Trial dependent parameter transform
@@ -265,7 +265,7 @@ LBA <- function(posdrift=TRUE){
 LogicalRulesLBA <- function(posdrift = TRUE, fast_path=TRUE, capacity = FALSE){
   p_types <- c("v" = 1,"sv" = log(1),"B" = log(1),"A" = log(0),"t0" = log(0), "pContaminant"=qnorm(0))
   transform <- c(v = "identity",sv = "exp", B = "exp", A = "exp",t0 = "exp", pContaminant="pnorm")
-  minmax <- cbind(v=c(-Inf,Inf),sv = c(0, Inf), A=c(1e-4,Inf),B=c(0,Inf),t0=c(0.05,Inf), pContaminant=c(0.001,0.999))
+  minmax <- cbind(v=c(-Inf,Inf),sv = c(1e-4, Inf), A=c(1e-4,Inf),B=c(0,Inf),t0=c(0.05,Inf), pContaminant=c(0.001,0.999))
   exception <- c(A=0, pContaminant=0)
   if (capacity) {
     # kappa/tau are appended after the emc2col::lba kernel prefix so the raw
@@ -642,7 +642,7 @@ BAwL <- function(posdrift = TRUE, erlang_shape = 1L,
                 "t0" = log(0), "k" = log(0))
   transform <- c(v = "identity", sv = "exp", B = "exp",
                               A = "exp", t0 = "exp", k = "exp")
-  minmax <- cbind(v  = c(-Inf, Inf), sv = c(0, Inf),
+  minmax <- cbind(v  = c(-Inf, Inf), sv = c(1e-4, Inf),
                      A  = c(1e-4, Inf), B  = c(1e-4, Inf),
                      t0 = c(0.05, Inf), k  = c(1e-4, Inf))
   exception <- c(A = 0, k = 0)
@@ -676,7 +676,7 @@ BAwL <- function(posdrift = TRUE, erlang_shape = 1L,
     # in the scalar BAwL kernels.
     p_types <- c(p_types, rho = qnorm(0.5))
     transform <- c(transform, rho = "pnorm")
-    minmax <- cbind(minmax, rho = c(-1, 1))
+    minmax <- cbind(minmax, rho = c(-.99, .99))
     exception <- c(exception, rho = 0)
   }
 
