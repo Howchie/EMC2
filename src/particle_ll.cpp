@@ -8074,6 +8074,52 @@ double c_log_likelihood_bawl_correlated(
   // known response from an unknown winner/censoring observation.
   std::vector<unsigned char> exact_done(static_cast<size_t>(n_unique), 0);
   std::vector<double> exact_ll(static_cast<size_t>(n_unique), min_ll);
+
+  // A trial with at most one loaded racer has no cross-racer dependence left:
+  // the shared factor can be integrated out analytically and the trial is
+  // exactly the ordinary independent BAwL race.  Evaluate those trials once
+  // through the existing race likelihood, then keep them out of every GH
+  // node.  This is deliberately done at the unique-trial level so the
+  // ordinary path retains its complete handling of omissions, censoring,
+  // truncation, Erlang clocks, contaminants, RACE masks, and expansion.
+  //
+  // The ordinary call receives a mask containing only ordinary trials.  Rows
+  // belonging to correlated trials are invalid for that call and their
+  // returned values are ignored; this avoids constructing a second DataFrame
+  // or changing the data-fixed expansion/index bookkeeping.
+  bool any_ordinary_trial = false;
+  Rcpp::LogicalVector ordinary_isok(n_trials, false);
+  for (int j = 0; j < n_unique; ++j) {
+    const BAwLCorrTrialLayout& L = cshared.layout[static_cast<size_t>(j)];
+    if (L.route != BAwLCorrRoute::ordinary) continue;
+    any_ordinary_trial = true;
+    const int start = j * n_lR;
+    const int n_lR_j = has_RACE_col ? RACE[start] : n_lR;
+    for (int k = 0; k < n_lR_j; ++k) {
+      const int row = start + k;
+      if (!has_RACE_col || RACE_mask[row]) ordinary_isok[row] = isok[row];
+    }
+  }
+  if (any_ordinary_trial) {
+    Rcpp::NumericMatrix pars_ordinary = materialize();
+    Rcpp::NumericVector ordinary_ll(n_unique, min_ll);
+    Rcpp::IntegerVector ordinary_expand(0);
+    // c_log_likelihood_race updates a few context flags while inspecting the
+    // active rows.  Isolate those updates from the correlated remainder,
+    // whose GH evaluator must retain the original particle context.
+    ContextForRaceModels ordinary_ctx = *ctx;
+    c_log_likelihood_race(
+        pars_ordinary, dadm, pdf1, cdf1, n_trials, winner, ordinary_expand,
+        min_ll, ordinary_isok, n_lR, &ordinary_ctx, all_finite_trials,
+        model_dfun_raw, model_pfun_raw, logS_at_t, shared, &ordinary_ll, true);
+    for (int j = 0; j < n_unique; ++j) {
+      const BAwLCorrTrialLayout& L = cshared.layout[static_cast<size_t>(j)];
+      if (L.route != BAwLCorrRoute::ordinary) continue;
+      exact_done[static_cast<size_t>(j)] = 1;
+      exact_ll[static_cast<size_t>(j)] = ordinary_ll[j];
+    }
+  }
+
   const Rcpp::IntegerVector response = dadm["R"];
   for (int j = 0; j < n_unique; ++j) {
     BAwLCorrTrialLayout& L = cshared.layout[static_cast<size_t>(j)];

@@ -273,6 +273,62 @@ test_that("layout classifier reports canonical loaded dimensions", {
   expect_equal(unname(c_zero[["loaded_dimension_2"]]), 0)
 })
 
+test_that("mixed zero-rho trials use ordinary BAwL without GH", {
+  skip_on_cran()
+  dat <- data.frame(
+    subjects = factor(c(1, 1)),
+    trial = factor(c("independent", "correlated"),
+                   levels = c("independent", "correlated")),
+    S = factor(c("correct", "correct"),
+               levels = c("correct", "error", "pm")),
+    R = factor(c("correct", "correct"),
+               levels = c("correct", "error", "pm")),
+    rt = c(.7, .8)
+  )
+  coupled <- function(d) factor(d$trial,
+                                levels = c("independent", "correlated"))
+  ctx <- make_bawl_context(
+    dat, BAwLcorr(), rho_formula = rho ~ 0 + coupled,
+    functions = list(coupled = coupled),
+    constants = c(rho_coupledindependent = 0)
+  )
+  p <- set_bawl_values(sampled_pars(ctx$design, doMap = FALSE), rho = .6)
+
+  old <- Sys.getenv("EMC2_BAWLCORR_COUNTERS", unset = NA)
+  Sys.setenv(EMC2_BAWLCORR_COUNTERS = "1")
+  on.exit({
+    if (is.na(old)) Sys.unsetenv("EMC2_BAWLCORR_COUNTERS")
+    else Sys.setenv(EMC2_BAWLCORR_COUNTERS = old)
+  }, add = TRUE)
+
+  generic_args <- context_args(ctx, p)
+  generic_data <- generic_args$data
+  attr(generic_data, "emc2_all_finite_trials") <- FALSE
+  generic_args$data <- generic_data
+  EMC2:::bawl_corr_counters_reset()
+  mixed_pw <- as.numeric(do.call(EMC2:::calc_ll_oo_pw, generic_args))
+  counters <- unlist(EMC2:::bawl_corr_counter_values())
+
+  ordinary_ctx <- make_bawl_context(dat[1, , drop = FALSE], BAwL())
+  p_ordinary <- set_bawl_values(
+    sampled_pars(ordinary_ctx$design, doMap = FALSE)
+  )
+  ordinary_pw <- as.numeric(do.call(
+    EMC2:::calc_ll_oo_pw, context_args(ordinary_ctx, p_ordinary)
+  ))
+
+  expect_length(mixed_pw, 2)
+  expect_equal(mixed_pw[1], ordinary_pw[1], tolerance = 1e-12)
+  expect_equal(unname(counters[["ordinary_zero_rho_trials"]]), 1)
+  expect_equal(unname(counters[["loaded_dimension_3plus"]]), 1)
+  expect_equal(unname(counters[["gh_generic_clock_trials"]]), 1)
+  expect_gt(unname(counters[["scan_node_evaluations"]]), 0)
+  expect_equal(
+    unname(counters[["scan_node_evaluations"]]) %%
+      unname(counters[["gh_generic_clock_trials"]]), 0
+  )
+})
+
 test_that("exact pairs bypass GH and generic clocks remain separate", {
   skip_on_cran()
   dat <- data.frame(
