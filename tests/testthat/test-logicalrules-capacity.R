@@ -178,6 +178,57 @@ test_that("capacity detection routes evaluate analytic and GNG AB trials", {
                                          lr_capacity_parameters(gng, 0.4))))
 })
 
+test_that("detection ignores an invalid inactive detector row", {
+  data <- data.frame(
+    subjects = factor(c("s1", "s1")),
+    S = factor(c("A", "B"), levels = c("A", "B", "AB")),
+    LogicalRule = factor(rep("OR_DETECTION_ANALYTIC", 2),
+                         levels = "OR_DETECTION_ANALYTIC"),
+    R = factor(rep("yes", 2), levels = c("yes", "no")),
+    rt = c(0.6, 0.6)
+  )
+  analytic <- lr_capacity_detection_design(
+    "OR_DETECTION_ANALYTIC", data, c("A", "B"))
+  p <- lr_capacity_parameters(analytic, tau = 0)
+  p["v_GoB"] <- NA_real_
+
+  ll <- lr_capacity_ll_pw(data, analytic, p)
+  expect_true(is.finite(ll[1]))
+  expect_equal(ll[2], log(1e-10))
+})
+
+test_that("capacity censoring rejects impossible positive quadrature masses", {
+  data <- lr_capacity_data()[3, , drop = FALSE]
+  data$LogicalRule <- factor("OR_DETECTION_ANALYTIC",
+                             levels = "OR_DETECTION_ANALYTIC")
+  data$rt <- Inf
+  data$R <- factor(NA_character_, levels = c("yes", "no"))
+  data$LT <- 0.1
+  data$UC <- 2.5
+  data$UT <- Inf
+  analytic <- lr_capacity_detection_design(
+    "OR_DETECTION_ANALYTIC", data, c("A", "B"))
+  p <- lr_capacity_parameters(analytic, tau = 0.4)
+
+  # These are deliberately extreme sampler-scale values representative of
+  # the runaway alpha draws.  The censored event and truncation masses remain
+  # probabilities, so their conditional log likelihood cannot be positive.
+  p[c("v_GoA", "v_GoB")] <- c(426.73, 101.42)
+  p[c("B_GoA", "B_GoB")] <- 327.61
+  p["A"] <- 342.65
+  p["t0"] <- -2.74
+  p["kappa"] <- 292.43
+  p["tau"] <- 347.41
+
+  withr::local_envvar(c(
+    EMC2_LRCAP_SCAN_N = "12",
+    EMC2_LRCAP_FINE_N = "12"
+  ))
+  ll <- lr_capacity_ll_pw(data, analytic, p)
+  expect_true(all(is.finite(ll)))
+  expect_true(all(ll <= 1e-8))
+})
+
 test_that("capacity route counters distinguish ordinary and AB trials", {
   skip_if_not(is.loaded("_EMC2_lr_capacity_counter_values", PACKAGE = "EMC2"))
   data <- lr_capacity_data()

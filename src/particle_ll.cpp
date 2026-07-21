@@ -3099,7 +3099,10 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
       }
       for (int i = 0; i < n_particles; ++i) {
         is_ok = prepare_particle(i);
-        is_ok = lr_all(is_ok, n_lR);
+        // LogicalRules evaluates validity at the stimulus/rule level.  Do
+        // not collapse the row-wise flags across the fixed-role scaffold:
+        // an inactive detector row is deliberately allowed to be irrelevant
+        // for an A-only or B-only detection trial.
         lls[i] = c_log_likelihood_logicalrules(lr_cols.data(), n_par_lr, expand, min_ll, is_ok, n_lR,
                                                &adapter.ctx, adapter.pdf1_ptr, adapter.cdf1_ptr,
                                                adapter.model_dfun_raw, adapter.model_pfun_raw,
@@ -3513,7 +3516,8 @@ NumericMatrix calc_ll_oo_pw(NumericMatrix particle_matrix, DataFrame data, Numer
       }
       for (int i = 0; i < n_particles; ++i) {
         is_ok = pt.prepare(i);
-        is_ok = lr_all(is_ok, n_lR);
+        // Keep parameter validity row-wise; the LogicalRules evaluator
+        // selects only the active roles for each stimulus condition.
         NumericVector row_vec(n_out_race);
         c_log_likelihood_logicalrules(lr_cols.data(), n_par_lr, expand, min_ll, is_ok, n_lR,
                                       &adapter.ctx, adapter.pdf1_ptr, adapter.cdf1_ptr,
@@ -4357,26 +4361,34 @@ static double logicalrules_detection_trial_ll(
 
   if (finite_rt) {
     if (resp != 1) return min_ll;
+    // A detection stimulus activates only the detector(s) named by `cond`.
+    // The fixed-role design still carries both A and B rows so that every
+    // trial has the same layout, but an inactive row must not be evaluated:
+    // besides being unnecessary, an invalid inactive parameter could
+    // otherwise floor an otherwise valid A-only or B-only trial.
+    const bool activeA = (cond == 1 || cond == 3);
+    const bool activeB = (cond == 2 || cond == 3);
+    if (!activeA && !activeB) return min_ll;
     double fA = 0.0, FA = 0.0, fB = 0.0, FB = 0.0;
-    if (!eval_pdf_cdf_race_scalar(use_raw_local, idxA, t, parA, min_ll, pdf1, cdf1, model_ctx, logf_all, logS_all, fA, FA) ||
-        !eval_pdf_cdf_race_scalar(use_raw_local, idxB, t, parB, min_ll, pdf1, cdf1, model_ctx, logf_all, logS_all, fB, FB)) {
-      return min_ll;
-    }
-    const double S_A = std::max(min_surv, 1.0 - FA);
-    const double S_B = std::max(min_surv, 1.0 - FB);
+    if (activeA && !eval_pdf_cdf_race_scalar(
+          use_raw_local, idxA, t, parA, min_ll, pdf1, cdf1, model_ctx,
+          logf_all, logS_all, fA, FA)) return min_ll;
+    if (activeB && !eval_pdf_cdf_race_scalar(
+          use_raw_local, idxB, t, parB, min_ll, pdf1, cdf1, model_ctx,
+          logf_all, logS_all, fB, FB)) return min_ll;
+    const double S_A = activeA ? std::max(min_surv, 1.0 - FA) : 1.0;
+    const double S_B = activeB ? std::max(min_surv, 1.0 - FB) : 1.0;
     if (rule_code == 5) {
-      if (cond == 0) p_j = 0.0;
-      else if (cond == 1) p_j = fA;
+      if (cond == 1) p_j = fA;
       else if (cond == 2) p_j = fB;
       else p_j = fA * S_B + fB * S_A;
     } else {
       double fN = 0.0, FN = 0.0;
-      if (!eval_pdf_cdf_race_scalar(use_raw_local, idxN, t, parN, min_ll, pdf1, cdf1, model_ctx, logf_all, logS_all, fN, FN)) {
-        return min_ll;
-      }
+      if (!eval_pdf_cdf_race_scalar(
+            use_raw_local, idxN, t, parN, min_ll, pdf1, cdf1, model_ctx,
+            logf_all, logS_all, fN, FN)) return min_ll;
       const double S_N = std::max(min_surv, 1.0 - FN);
-      if (cond == 0) p_j = 0.0;
-      else if (cond == 1) p_j = fA * S_N;
+      if (cond == 1) p_j = fA * S_N;
       else if (cond == 2) p_j = fB * S_N;
       else p_j = (fA * S_B + fB * S_A) * S_N;
     }
@@ -4543,6 +4555,7 @@ static inline LrCapTargetView lrcap_target_view(const double* const* cols,
   tv.slope = tau * v;
   tv.sv = sv;
   tv.valid = R_FINITE(v) && sv > 0.0 && A >= 0.0 && tv.b > 0.0 && tv.b >= A &&
+    R_FINITE(tv.v0) && R_FINITE(tv.slope) &&
     R_FINITE(tv.t0) && tv.t0 >= 0.0;
   return tv;
 }
@@ -4830,7 +4843,14 @@ static double lrcap_det_gowin_at(const LrCapDetPoint& dp, double z,
 // (gh_quad.h; scan-based centring per the capacity plan, phase 5).
 template <typename LogMass>
 static double lrcap_integrate_factor(LogMass&& log_mass, int n_scan,
-                                     int n_fine, bool count) {
+                                     int n_fine, bool count,
+                                     bool bounded_mass = false) {
+  // Censoring masses and truncation-window masses are probabilities.  A
+  // quadrature approximation with a positive log mass is therefore a
+  // numerical failure, not a plausible large likelihood.  This is important
+  // for the recentered pass: a narrow positive-drift integrand can be missed
+  // by the scan and then badly over-weighted by the refined rule.
+  static constexpr double kLogProbabilityTol = 1e-8;
   const double sqrt2 = std::sqrt(2.0);
   const GHRule& scan_rule = gh_rule(n_scan);
   std::array<double, 256> g{};
@@ -4839,8 +4859,9 @@ static double lrcap_integrate_factor(LogMass&& log_mass, int n_scan,
   for (int q = 0; q < n_scan; ++q) {
     const double z = sqrt2 * scan_rule.x[static_cast<size_t>(q)];
     zv[static_cast<size_t>(q)] = z;
-    const double v =
-      std::log(gh_standard_normal_weight(scan_rule, q)) + log_mass(z);
+    const double w = gh_standard_normal_weight(scan_rule, q);
+    const double v = (R_FINITE(w) && w > 0.0)
+      ? std::log(w) + log_mass(z) : R_NegInf;
     g[static_cast<size_t>(q)] = v;
     scan_lse = log_sum_exp(scan_lse, v);
   }
@@ -4850,13 +4871,27 @@ static double lrcap_integrate_factor(LogMass&& log_mass, int n_scan,
   const GHRule& fine_rule = gh_rule(n_fine);
   double fine_lse = R_NegInf;
   for (int q = 0; q < n_fine; ++q) {
-    const double lgw = std::log(fine_rule.w[static_cast<size_t>(q)]) +
+    const double w = fine_rule.w[static_cast<size_t>(q)];
+    if (!(R_FINITE(w) && w > 0.0)) continue;
+    const double lgw = std::log(w) +
       fine_rule.x[static_cast<size_t>(q)] * fine_rule.x[static_cast<size_t>(q)];
     const double z = c.mu + c.sigma * sqrt2 * fine_rule.x[static_cast<size_t>(q)];
     fine_lse = log_sum_exp(fine_lse,
                            agh_log_weight(lgw, c.sigma, z) + log_mass(z));
   }
   if (count) lr_capacity_counters().factor_node_evaluations += n_fine;
+  if (bounded_mass) {
+    const bool scan_ok = R_FINITE(scan_lse) &&
+      scan_lse <= kLogProbabilityTol;
+    const bool fine_ok = R_FINITE(fine_lse) &&
+      fine_lse <= kLogProbabilityTol;
+    if (fine_ok) return fine_lse;
+    // The fixed scan is a deliberately conservative fallback when the
+    // recentered rule violates the probability bound.  If both rules fail,
+    // report an invalid mass so the caller floors this particle/trial rather
+    // than exposing an artificial positive likelihood to the sampler.
+    return scan_ok ? scan_lse : R_NegInf;
+  }
   return R_FINITE(fine_lse) ? fine_lse : scan_lse;
 }
 
@@ -5215,11 +5250,15 @@ static double lrcap_trial_ll(
       ? (z_cache_hit ? cached_log_den : log_trunc_mass(0.0))
       : log_w0;
   } else {
-    log_num = lrcap_integrate_factor(log_event_mass, n_scan, n_fine, count);
+    // All censored event masses are probabilities; finite-RT event densities
+    // are not bounded by one and must retain the ordinary adaptive result.
+    log_num = lrcap_integrate_factor(log_event_mass, n_scan, n_fine, count,
+                                     !finite_rt);
     log_den = has_trunc
       ? (z_cache_hit
           ? cached_log_den
-          : lrcap_integrate_factor(log_trunc_mass, n_scan, n_fine, count))
+          : lrcap_integrate_factor(log_trunc_mass, n_scan, n_fine, count,
+                                   true))
       : log_qAB;
   }
   if (has_trunc && !z_cache_hit && z_cache != nullptr) {
@@ -5230,6 +5269,8 @@ static double lrcap_trial_ll(
   }
   if (!R_FINITE(log_den)) return min_ll;
   const double ll = log_num - log_den;
+  if (!finite_rt && (!R_FINITE(log_num) || log_num > 1e-8 ||
+                     log_den > 1e-8 || ll > 1e-8)) return min_ll;
   return (R_FINITE(ll) && ll > min_ll) ? ll : min_ll;
 }
 
@@ -5835,9 +5876,9 @@ static double c_log_likelihood_logicalrules(
           }
           if (z_ok && R_FINITE(UTj_tr)) {
             N_UT = lr_detection_no_response_prob(rule_code, cond_j, UTj_tr,
-                                                 parA.data(), parB.data(), parN.data(),
-                                                 n_par, kMinSurv, pdf1, cdf1, model_ctx,
-                                                 gsl_ctl, w, pars_3buf, z_ok);
+                                                  parA.data(), parB.data(), parN.data(),
+                                                  n_par, kMinSurv, pdf1, cdf1, model_ctx,
+                                                  gsl_ctl, w, pars_3buf, z_ok);
           }
         } else {
           if (LTj_tr > 0.0) N_LT = lr4_N_at(LTj_tr, LR_AUX_LT, z_ok);
