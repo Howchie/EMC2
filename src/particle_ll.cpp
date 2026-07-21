@@ -2487,8 +2487,12 @@ static LogicalRulesSharedState build_logicalrules_shared_state(const Rcpp::DataF
     // condition for every rule).  Ordinary choice designs may carry an
     // unrelated S factor; their unmapped levels are recorded as -1 and never
     // consulted.
-    int cond = (rcode >= 5 || capacity) ? -1 : 0;
-    if (rcode >= 5 || capacity) {
+    // OR_DETECTION_GNG (rcode 6) is the full four-horse OR task with a withheld
+    // (rt = +Inf) outcome in place of the overt "no"; it does not consult the
+    // stimulus condition (the design drives the drifts, exactly as for OR), so
+    // only the analytic detector (rcode 5) and the capacity model require it.
+    int cond = (rcode == 5 || capacity) ? -1 : 0;
+    if (rcode == 5 || capacity) {
       if (!has_stim_col) {
         Rcpp::stop(capacity
           ? "LogicalRules capacity requires stimulus column `S` (or `stimulus`/`condition`)."
@@ -2515,7 +2519,7 @@ static LogicalRulesSharedState build_logicalrules_shared_state(const Rcpp::DataF
         }
       }
     }
-    if ((rcode >= 5 || capacity) && (cond < 0 || cond > 3)) {
+    if ((rcode == 5 || capacity) && (cond < 0 || cond > 3)) {
       Rcpp::stop(capacity
         ? "LogicalRules capacity requires stimulus NN/AN/NB/AB (or A/B/AB) on every trial."
         : "LogicalRules detection rules require stimulus NN/AN/NB/AB (or A/B/AB).");
@@ -2542,22 +2546,21 @@ static LogicalRulesSharedState build_logicalrules_shared_state(const Rcpp::DataF
     }
     if (out.idxNogo[static_cast<size_t>(j)] >= 0) out.has_nogo = true;
 
-    if (rcode <= 4) {
+    if (rcode <= 4 || rcode == 6) {
+      // OR/AND/XOR/ID and OR_DETECTION_GNG all use the four-horse subrace layout
+      // (two target/nontarget channels).  GNG differs only in that the "no"
+      // outcome is a withheld response (rt = +Inf) rather than an overt "no".
       if (out.idxA[static_cast<size_t>(j)] < 0 ||
           out.idxB[static_cast<size_t>(j)] < 0 ||
           out.idxnA[static_cast<size_t>(j)] < 0 ||
           out.idxnB[static_cast<size_t>(j)] < 0) {
-        Rcpp::stop("LogicalRules likelihood: OR/AND/XOR/ID trials require A, B, n_A, n_B accumulators.");
+        Rcpp::stop(rcode == 6
+          ? "LogicalRules likelihood: OR_DETECTION_GNG trials require A, n_A, B, n_B accumulators."
+          : "LogicalRules likelihood: OR/AND/XOR/ID trials require A, B, n_A, n_B accumulators.");
       }
     } else if (rcode == 5) {
       if (out.idxA[static_cast<size_t>(j)] < 0 || out.idxB[static_cast<size_t>(j)] < 0) {
         Rcpp::stop("LogicalRules likelihood: OR_DETECTION_ANALYTIC trials require A and B accumulators.");
-      }
-    } else if (rcode == 6) {
-      if (out.idxA[static_cast<size_t>(j)] < 0 ||
-          out.idxB[static_cast<size_t>(j)] < 0 ||
-          out.idxNogo[static_cast<size_t>(j)] < 0) {
-        Rcpp::stop("LogicalRules likelihood: OR_DETECTION_GNG trials require A, B, and nogo accumulators.");
       }
     }
   }
@@ -4148,6 +4151,66 @@ static double local_race_helper(double t,
   return g;
 }
 
+// P(target strictly wins its two-accumulator channel by time t), i.e.
+// int_0^t f_target(u) S_nontarget(u) du.  Unlike local_race_helper this
+// accepts t = +Inf, integrating the tail with QAGIU so the GNG withheld /
+// upper-censor masses can use the eventual (t -> infinity) win probability.
+// Returns a probability in [0, 1], or NA_REAL on integration failure.
+static double lr_channel_yes_prob(double t,
+                                  const double* par_target,
+                                  const double* par_nontarget,
+                                  int n_par,
+                                  ContextForRaceModels* ctx,
+                                  RacePdf1Fun pdf1,
+                                  RaceCdf1Fun cdf1,
+                                  const GslIntegrationControls& gsl_ctl,
+                                  gsl_integration_workspace* w,
+                                  double* pars_2buf,
+                                  int* isok_2buf) {
+  if (!(t > 0.0)) return 0.0;
+  if (R_FINITE(t))
+    return local_race_helper(t, par_target, par_nontarget, n_par, ctx,
+                             pdf1, cdf1, gsl_ctl, w, pars_2buf, isok_2buf);
+  if (ctx == nullptr || pdf1 == nullptr || cdf1 == nullptr || w == nullptr)
+    return NA_REAL;
+
+  const int t0_idx = ctx->t0_index;
+  double t0_tgt = (t0_idx >= 0 && t0_idx < n_par) ? par_target[t0_idx] : 0.0;
+  double t0_nt  = (t0_idx >= 0 && t0_idx < n_par) ? par_nontarget[t0_idx] : 0.0;
+  if (t0_tgt < 0.0) t0_tgt = 0.0;
+  if (t0_nt < 0.0) t0_nt = 0.0;
+
+  // Early window [t0_tgt, t0_nt] where only the target can finish (nontarget
+  // survivor is exactly one): a plain CDF gap of the target.
+  double term1 = 0.0;
+  if (t0_nt > t0_tgt) {
+    double c_hi = clamp_cdf01_race(cdf1(t0_nt, par_target, ctx));
+    double c_lo = clamp_cdf01_race(cdf1(t0_tgt, par_target, ctx));
+    if (emc2_isnan(c_hi) || emc2_isnan(c_lo)) return NA_REAL;
+    term1 = c_hi - c_lo;
+    if (term1 < 0.0) term1 = 0.0;
+    if (term1 > 1.0) term1 = 1.0;
+  }
+
+  const double low_limit = std::max(t0_tgt, t0_nt);
+  std::memcpy(pars_2buf, par_target, static_cast<size_t>(n_par) * sizeof(double));
+  std::memcpy(pars_2buf + n_par, par_nontarget, static_cast<size_t>(n_par) * sizeof(double));
+  isok_2buf[0] = 1;
+  isok_2buf[1] = 1;
+  const double log_g = integrate_for_kth_winner_rowmajor_cpp(
+    1, pars_2buf, isok_2buf, low_limit, R_PosInf, pdf1, cdf1, 2, n_par,
+    gsl_ctl, ctx, w);
+  // A zero tail is reported as -Inf and is legitimate here (the target may
+  // never finish after low_limit); only NaN is a genuine failure.
+  const double tail = (R_FINITE(log_g)) ? std::exp(log_g)
+                                        : (log_g == R_NegInf ? 0.0 : NA_REAL);
+  if (ISNAN(tail)) return NA_REAL;
+  double g = term1 + tail;
+  if (g < 0.0) g = 0.0;
+  if (g > 1.0) g = 1.0;
+  return g;
+}
+
 static inline bool eval_pdf_cdf_race_scalar(
     bool use_raw_local,
     int idx,
@@ -4912,9 +4975,17 @@ static double lrcap_trial_ll(
     double min_ll, double min_surv,
     RacePdf1Fun pdf1, RaceCdf1Fun cdf1, ContextForRaceModels* ctx,
     int n_scan, int n_fine, bool count,
-    std::vector<LogicalRulesZCacheEntry>* z_cache) {
+    std::vector<LogicalRulesZCacheEntry>* z_cache,
+    const GslIntegrationControls& gsl_ctl,
+    gsl_integration_workspace* w,
+    std::vector<double>& gng_scratch) {
   if (cond != 3) return min_ll;  // capacity trials are AB by construction
   const bool posdrift = ctx->use_posdrift;
+  // GNG (rule 6) is the full four-horse OR task whose "no" outcome is a
+  // withheld response (rt = +Inf); it shares OR's finite-RT go density but
+  // routes its censor/withheld/truncation masses through the conditional
+  // "no overt go by t" probability N_GNG(t | z) = Q_A(t|z) Q_B(t|z).
+  const bool is_gng = (rule_code == 6);
   const LrCapTargetView tvA = lrcap_target_view(pars_cols, idxA, kappa, tau);
   const LrCapTargetView tvB = lrcap_target_view(pars_cols, idxB, kappa, tau);
   if (!tvA.valid || !tvB.valid) return min_ll;
@@ -4943,7 +5014,7 @@ static double lrcap_trial_ll(
     if (!R_FINITE(log_qAB)) return min_ll;
   }
 
-  const bool is_detection = rule_code >= 5;
+  const bool is_detection = (rule_code == 5);
   const bool need_G_for_N = (rule_code == 1 || rule_code == 2);
   const bool has_trunc = (LTj != 0.0 || R_FINITE(UTj));
   const bool subtract_UT = R_FINITE(UTj) && !ctx->defective_upper_tail;
@@ -4984,10 +5055,15 @@ static double lrcap_trial_ll(
     if (upper_censored && resp != 0 && resp != 2) return min_ll;
     if (lower_censored && resp != 0 && resp != 1) return min_ll;
     if (upper_censored && !R_FINITE(UCj)) {
-      Rcpp::stop(rule_code == 5
-        ? "LogicalRules OR_DETECTION_ANALYTIC requires finite UC for upper-censored trials."
-        : "LogicalRules OR_DETECTION_GNG requires finite UC for upper-censored trials.");
+      Rcpp::stop("LogicalRules OR_DETECTION_ANALYTIC requires finite UC for upper-censored trials.");
     }
+  } else if (is_gng) {
+    // Overt (go) responses are "yes"; a withheld response is rt = +Inf with a
+    // missing or "no" identity. UC may be +Inf (the withheld mass extends to
+    // infinity when there is no upper deadline).
+    if (finite_rt && resp != 1) return min_ll;
+    if (upper_censored && resp != 0 && resp != 2) return min_ll;
+    if (lower_censored && resp != 0 && resp != 1) return min_ll;
   } else {
     if (!has_channels) return min_ll;
     if (upper_censored && !R_FINITE(UCj)) return min_ll;
@@ -5033,17 +5109,20 @@ static double lrcap_trial_ll(
       }
     }
   } else {
+    // GNG builds only the finite-RT go-density channel points; its censor,
+    // withheld and truncation masses are conditional "no overt go by t"
+    // probabilities evaluated on the fly by gng_N_at (which handles UC = +Inf).
     if (finite_rt) {
       lrcap_build_channel_point(A_t, tvA, parnA, t, true, true,
                                 pdf1, cdf1, ctx, min_surv);
       lrcap_build_channel_point(B_t, tvB, parnB, t, true, true,
                                 pdf1, cdf1, ctx, min_surv);
-    } else if (upper_censored) {
+    } else if (!is_gng && upper_censored) {
       lrcap_build_channel_point(A_uc, tvA, parnA, UCj, need_G_for_N, false,
                                 pdf1, cdf1, ctx, min_surv);
       lrcap_build_channel_point(B_uc, tvB, parnB, UCj, need_G_for_N, false,
                                 pdf1, cdf1, ctx, min_surv);
-    } else {
+    } else if (!is_gng) {
       lrcap_build_channel_point(A_clo, tvA, parnA, clo, true, false,
                                 pdf1, cdf1, ctx, min_surv);
       lrcap_build_channel_point(B_clo, tvB, parnB, clo, true, false,
@@ -5054,7 +5133,7 @@ static double lrcap_trial_ll(
                                 pdf1, cdf1, ctx, min_surv);
     }
     const bool need_ut_for_event = upper_censored && subtract_UT;
-    if (has_trunc && (!z_cache_hit || need_ut_for_event)) {
+    if (!is_gng && has_trunc && (!z_cache_hit || need_ut_for_event)) {
       if (!z_cache_hit && LTj > 0.0) {
         lrcap_build_channel_point(A_lt, tvA, parnA, LTj, need_G_for_N, false,
                                   pdf1, cdf1, ctx, min_surv);
@@ -5069,6 +5148,41 @@ static double lrcap_trial_ll(
       }
     }
   }
+
+  // Conditional "no overt go response by tt" probability for GNG at latent z,
+  // N_GNG(tt | z) = Q_A(tt|z) Q_B(tt|z), Q_X = 1 - GX_yes(tt|z).  The
+  // conditional target drift mean is materialized per node (v -> v0 + slope*z)
+  // and the channel win probability is integrated with the shared scalar GSL
+  // helper, which also handles tt = +Inf (the withheld-to-infinity case).
+  double bufA_row[64];
+  double bufB_row[64];
+  int gng_isok2[2] = {1, 1};
+  // gng_N_at is used both for the censor/withheld event masses (!finite_rt) and
+  // for the truncation-window denominator (any finite-RT GNG trial with LT/UT),
+  // so initialize its per-node buffers whenever the trial is GNG.
+  if (is_gng) {
+    for (int p = 0; p < n_par; ++p) {
+      bufA_row[p] = pars_cols[p][idxA];
+      bufB_row[p] = pars_cols[p][idxB];
+    }
+    gng_scratch.resize(static_cast<size_t>(2 * n_par));
+  }
+  auto gng_N_at = [&](double tt, double z, bool& ok) -> double {
+    ok = true;
+    if (!(tt > 0.0)) return 1.0;
+    bufA_row[emc2col::lba::v] = tvA.v0 + tvA.slope * z;
+    bufB_row[emc2col::lba::v] = tvB.v0 + tvB.slope * z;
+    const double gA = lr_channel_yes_prob(tt, bufA_row, parnA, n_par, ctx,
+                                          pdf1, cdf1, gsl_ctl, w,
+                                          gng_scratch.data(), gng_isok2);
+    const double gB = lr_channel_yes_prob(tt, bufB_row, parnB, n_par, ctx,
+                                          pdf1, cdf1, gsl_ctl, w,
+                                          gng_scratch.data(), gng_isok2);
+    if (!R_FINITE(gA) || !R_FINITE(gB)) { ok = false; return 1.0; }
+    const double QA = std::min(1.0, std::max(0.0, 1.0 - gA));
+    const double QB = std::min(1.0, std::max(0.0, 1.0 - gB));
+    return QA * QB;
+  };
 
   // Conditional no-response probability for the choice rules at a prepared
   // channel-point pair (XOR/ID need only the channel survivors).
@@ -5149,11 +5263,14 @@ static double lrcap_trial_ll(
         const double S_dec_B = one_m_FB * one_m_FnB;
         const double GA_no = va.G_no;
         const double GB_no = vb.G_no;
-        if (rule_code == 1) {
+        if (rule_code == 1 || is_gng) {
+          // GNG shares OR's go-response density (first channel-yes); its "no"
+          // outcome is withheld (rt = +Inf), never a finite-RT event, so only
+          // resp == 1 (gated above) contributes here.
           const double s_GA_yes = std::min(1.0, std::max(min_surv, GA_no + S_dec_A));
           const double s_GB_yes = std::min(1.0, std::max(min_surv, GB_no + S_dec_B));
           if (resp == 1) p = gA_yes * s_GB_yes + gB_yes * s_GA_yes;
-          else if (resp == 2) p = gA_no * GB_no + gB_no * GA_no;
+          else if (resp == 2 && !is_gng) p = gA_no * GB_no + gB_no * GA_no;
         } else if (rule_code == 2) {
           const double GA_yes = std::min(1.0, std::max(0.0, 1.0 - S_dec_A - GA_no));
           const double GB_yes = std::min(1.0, std::max(0.0, 1.0 - S_dec_B - GB_no));
@@ -5177,6 +5294,24 @@ static double lrcap_trial_ll(
             if (resp == 1) p = dAN + dNB;
             else if (resp == 2) p = dAB + dNN;
           }
+        }
+      } else if (is_gng) {
+        // Withheld (rt = +Inf): no overt go by UC, N_GNG(UC|z) minus N_GNG(UT|z)
+        // when the window has a finite upper bound; lower censor: go mass in
+        // [clo, chi] = N_GNG(clo|z) - N_GNG(chi|z).
+        if (upper_censored) {
+          p = gng_N_at(UCj, z, ok);
+          if (ok && subtract_UT) {
+            const double N_UT = gng_N_at(UTj, z, ok);
+            p = std::max(0.0, p - N_UT);
+          }
+          if (!ok) return R_NegInf;
+        } else {
+          const double N_lo = gng_N_at(clo, z, ok);
+          if (!ok) return R_NegInf;
+          const double N_hi = gng_N_at(chi, z, ok);
+          if (!ok) return R_NegInf;
+          p = std::max(0.0, N_lo - N_hi);
         }
       } else if (upper_censored) {
         p = choice_N_at(A_uc, B_uc, z, lqA, lqB, ok);
@@ -5220,6 +5355,15 @@ static double lrcap_trial_ll(
       }
       if (R_FINITE(UTj)) {
         N_UT = lrcap_det_N_at(det_ut, rule_code, z, lqA, lqB, posdrift, ok, count);
+        if (!ok) return R_NegInf;
+      }
+    } else if (is_gng) {
+      if (LTj > 0.0) {
+        N_LT = gng_N_at(LTj, z, ok);
+        if (!ok) return R_NegInf;
+      }
+      if (R_FINITE(UTj)) {
+        N_UT = gng_N_at(UTj, z, ok);
         if (!ok) return R_NegInf;
       }
     } else {
@@ -5563,7 +5707,7 @@ static double c_log_likelihood_logicalrules(
     bool any_aux = false;
     for (int j = 0; j < n_unique_trials; ++j) {
       const int rc = shared.rule_code[static_cast<size_t>(j)];
-      if (rc > 4) continue;   // detection rules keep their own route
+      if (rc == 5) continue;   // analytic detection keeps its own route; GNG (6) uses four horses
       const int iA = shared.idxA[static_cast<size_t>(j)], inA = shared.idxnA[static_cast<size_t>(j)];
       const int iB = shared.idxB[static_cast<size_t>(j)], inB = shared.idxnB[static_cast<size_t>(j)];
       const bool base_ok =
@@ -5577,7 +5721,7 @@ static double c_log_likelihood_logicalrules(
         isok_B_b[static_cast<size_t>(j)]  = 1;
       }
 
-      const bool needs_G = (rc == 1 || rc == 2);   // XOR/ID N(t) is survivor-only
+      const bool needs_G = (rc == 1 || rc == 2 || rc == 6);   // XOR/ID N(t) is survivor-only
       const double rtj = shared.rt_unique[static_cast<size_t>(j)];
       const double LTj = shared.LT_unique[static_cast<size_t>(j)];
       const double UTj = shared.UT_unique[static_cast<size_t>(j)];
@@ -5681,11 +5825,14 @@ static double c_log_likelihood_logicalrules(
     const int idxnB = shared.idxnB[static_cast<size_t>(j)];
 
     const int rule_code = shared.rule_code[static_cast<size_t>(j)];
-    // Parameter-validity gate. OR/AND/XOR/ID need all four accumulators;
-    // detection rules (5/6) need valid A and B (the nogo row for rule 6 is
-    // checked below). Without this, censored detection branches would
-    // evaluate survivors/densities with out-of-bounds parameters.
-    const bool pars_valid = (rule_code <= 4)
+    // GNG (rule 6) is the full four-horse OR task whose "no" outcome is a
+    // withheld response (rt = +Inf); it shares OR's subrace machinery here.
+    const bool is_gng = (rule_code == 6);
+    // Parameter-validity gate. OR/AND/XOR/ID and GNG need all four accumulators;
+    // the analytic detector (rule 5) needs only valid A and B. Without this,
+    // censored branches would evaluate survivors/densities with out-of-bounds
+    // parameters.
+    const bool pars_valid = (rule_code <= 4 || is_gng)
       ? (idxA >= 0 && idxB >= 0 && idxnA >= 0 && idxnB >= 0 &&
          ok_params[idxA] && ok_params[idxB] && ok_params[idxnA] && ok_params[idxnB])
       : (idxA >= 0 && idxB >= 0 && ok_params[idxA] && ok_params[idxB]);
@@ -5700,14 +5847,6 @@ static double c_log_likelihood_logicalrules(
     copy_par_row_colmajor(pars_cols, n_par, idxB, parB.data());
     if (idxnA >= 0) copy_par_row_colmajor(pars_cols, n_par, idxnA, parnA.data());
     if (idxnB >= 0) copy_par_row_colmajor(pars_cols, n_par, idxnB, parnB.data());
-    if (rule_code == 6) {
-      const int idxN = shared.idxNogo[static_cast<size_t>(j)];
-      if (idxN < 0 || !ok_params[idxN]) {
-        ll_unique[static_cast<size_t>(j)] = min_ll;
-        continue;
-      }
-      copy_par_row_colmajor(pars_cols, n_par, idxN, parN.data());
-    }
 
     // Capacity is a trial-level extension.  It is active only for redundant
     // target (AB) conditions and only when the particle's capacity factor is
@@ -5730,7 +5869,7 @@ static double c_log_likelihood_logicalrules(
         (kappa != 1.0 || tau != 0.0);
       if (pair_active) {
         if (count_capacity) {
-          if (rule_code >= 5) ++lr_capacity_counters().capacity_detection_trials;
+          if (rule_code == 5) ++lr_capacity_counters().capacity_detection_trials;
           else ++lr_capacity_counters().capacity_choice_trials;
         }
         ll_unique[static_cast<size_t>(j)] = lrcap_trial_ll(
@@ -5745,11 +5884,12 @@ static double c_log_likelihood_logicalrules(
           kappa, tau,
           pars_cols, n_par, idxA, idxB,
           parnA.data(), parnB.data(), parN.data(),
-          rule_code <= 4, rule_code == 6,
+          rule_code <= 4 || is_gng, false,
           min_ll, kMinSurv,
           pdf1, cdf1, model_ctx,
           lrcap_scan_n, lrcap_fine_n,
-          count_capacity, &shared.z_cache);
+          count_capacity, &shared.z_cache,
+          gsl_ctl, w, pars_3buf);
         continue;
       }
       if (count_capacity) ++lr_capacity_counters().ordinary_trials;
@@ -5757,7 +5897,7 @@ static double c_log_likelihood_logicalrules(
 
     // Channel-parameter equality (A vs B), shared by the truncation
     // normaliser and the censoring branches below.
-    const bool ch_eq_j = (rule_code <= 4) &&
+    const bool ch_eq_j = (rule_code <= 4 || is_gng) &&
       row_equal_colmajor(pars_cols, n_par, idxA, idxB) &&
       row_equal_colmajor(pars_cols, n_par, idxnA, idxnB);
 
@@ -5767,7 +5907,7 @@ static double c_log_likelihood_logicalrules(
     // to the scalar GSL helper (non-raw path, or an uncovered combination).
     auto lr4_G_no_at = [&](double tt, int aux_slot, bool useB, bool& okf) -> double {
       okf = true;
-      if (use_gl_pass && aux_slot >= 0) {
+      if (R_FINITE(tt) && use_gl_pass && aux_slot >= 0) {
         const size_t o = static_cast<size_t>(aux_slot) * n_unique_trials + j;
         const double g = (useB && !ch_eq_j) ? scratch.aux_GB[o] : scratch.aux_GA[o];
         if (!emc2_isnan(g) && !emc2_isnan(scratch.aux_t[o]) &&
@@ -5775,11 +5915,20 @@ static double c_log_likelihood_logicalrules(
           return std::min(1.0, std::max(0.0, g));
         }
       }
-      const double g = local_race_helper(tt,
-                                         useB ? parnB.data() : parnA.data(),
-                                         useB ? parB.data()  : parA.data(),
-                                         n_par, model_ctx, pdf1, cdf1, gsl_ctl, w,
-                                         pars_2buf.data(), isok_2buf);
+      // tt = +Inf (GNG withheld / eventual N): P(nontarget eventually wins the
+      // channel) via the QAGIU-capable helper; local_race_helper reports 0 for
+      // an infinite horizon, so route infinite tt through lr_channel_yes_prob.
+      const double g = R_FINITE(tt)
+        ? local_race_helper(tt,
+                            useB ? parnB.data() : parnA.data(),
+                            useB ? parB.data()  : parA.data(),
+                            n_par, model_ctx, pdf1, cdf1, gsl_ctl, w,
+                            pars_2buf.data(), isok_2buf)
+        : lr_channel_yes_prob(tt,
+                            useB ? parnB.data() : parnA.data(),
+                            useB ? parB.data()  : parA.data(),
+                            n_par, model_ctx, pdf1, cdf1, gsl_ctl, w,
+                            pars_2buf.data(), isok_2buf);
       okf = R_FINITE(g);
       return okf ? std::min(1.0, std::max(0.0, g)) : 0.0;
     };
@@ -5823,6 +5972,15 @@ static double c_log_likelihood_logicalrules(
         Bst = lr4_state_at(tt, aux_slot, true, okf);
         if (!okf) return 1.0;
       }
+      if (is_gng) {
+        // GNG: "no overt go response by t" = neither channel has said yes yet.
+        // A completed channel-no is a withheld outcome here, not an overt
+        // response, so (unlike OR) it stays inside N. tt may be +Inf (the
+        // eventual withheld mass), which lr4_state_at handles via lr4_G_no_at.
+        const double QA = std::min(1.0, std::max(0.0, Ast.G_no + Ast.S_dec));
+        const double QB = std::min(1.0, std::max(0.0, Bst.G_no + Bst.S_dec));
+        return QA * QB;
+      }
       return lr_no_response_prob(rule_code, Ast, Bst);
     };
 
@@ -5839,8 +5997,8 @@ static double c_log_likelihood_logicalrules(
     const bool has_trunc = (LTj_tr != 0.0 || R_FINITE(UTj_tr));
     double log_Z_j = 0.0;
     if (has_trunc) {
-      const bool has_channels_j = rule_code <= 4;
-      const bool has_nogo_j = rule_code == 6;
+      const bool has_channels_j = rule_code <= 4 || is_gng;
+      const bool has_nogo_j = false;  // GNG uses the four-horse channels, no nogo racer
       const int cond_j = shared.cond_code[static_cast<size_t>(j)];
       std::vector<double> z_key;
       z_key.reserve(static_cast<size_t>(n_par) *
@@ -5867,7 +6025,7 @@ static double c_log_likelihood_logicalrules(
         bool z_ok = true;
         double N_LT = 1.0;
         double N_UT = 0.0;
-        if (rule_code >= 5) {
+        if (rule_code == 5) {
           if (LTj_tr > 0.0) {
             N_LT = lr_detection_no_response_prob(rule_code, cond_j, LTj_tr,
                                                  parA.data(), parB.data(), parN.data(),
@@ -5898,7 +6056,7 @@ static double c_log_likelihood_logicalrules(
       }
     }
 
-    if (rule_code >= 5) {
+    if (rule_code == 5) {
       ll_unique[static_cast<size_t>(j)] = logicalrules_detection_trial_ll(
         rule_code,
         shared.cond_code[static_cast<size_t>(j)],
@@ -5943,10 +6101,19 @@ static double c_log_likelihood_logicalrules(
         // With a finite upper truncation bound (and a proper upper tail) the
         // response is known to land in (UC, UT], so N(UT) is subtracted; the
         // trial is then normalised by Z below.
+        // GNG: rt = +Inf is the withheld response — no overt go by UC, where
+        // N_GNG(t) = Q_A(t) Q_B(t) (a completed channel-no is withheld, not an
+        // overt response). UC may be +Inf (the withheld-to-infinity mass), so
+        // GNG does not require a finite UC (unlike OR/AND/XOR/ID, whose rt=+Inf
+        // omission is only defined against a finite censoring bound).
         const double UCj = shared.UC_unique[static_cast<size_t>(j)];
-        if (!R_FINITE(UCj)) { ll_unique[static_cast<size_t>(j)] = min_ll; continue; }
         bool ok_uc = true;
-        p_j = lr4_N_at(UCj, LR_AUX_UC, ok_uc);
+        if (is_gng) {
+          p_j = lr4_N_at(UCj, R_FINITE(UCj) ? LR_AUX_UC : -1, ok_uc);
+        } else {
+          if (!R_FINITE(UCj)) { ll_unique[static_cast<size_t>(j)] = min_ll; continue; }
+          p_j = lr4_N_at(UCj, LR_AUX_UC, ok_uc);
+        }
         if (ok_uc && R_FINITE(UTj_tr) && !model_ctx->defective_upper_tail) {
           bool ok_ut = true;
           const double N_UT_uc = lr4_N_at(UTj_tr, LR_AUX_UT, ok_ut);
@@ -5966,6 +6133,22 @@ static double c_log_likelihood_logicalrules(
         const double lo = std::max(0.0, shared.LT_unique[static_cast<size_t>(j)]);
         const double hi = std::max(lo,  shared.LC_unique[static_cast<size_t>(j)]);
         const int resp_lc = shared.resp_code[static_cast<size_t>(j)];
+        if (is_gng) {
+          // Lower censor: an overt go response fired in [lo, hi]. The go-CDF is
+          // 1 - N_GNG, so the window mass is N_GNG(lo) - N_GNG(hi).
+          bool ok_lc = true;
+          const double N_lo = lr4_N_at(lo, LR_AUX_CLO, ok_lc);
+          const double N_hi = ok_lc ? lr4_N_at(hi, LR_AUX_CHI, ok_lc) : 1.0;
+          if (!ok_lc) { ll_unique[static_cast<size_t>(j)] = min_ll; continue; }
+          p_j = std::max(0.0, N_lo - N_hi);
+          if (!(p_j > 0.0) || !R_FINITE(p_j)) {
+            ll_unique[static_cast<size_t>(j)] = min_ll;
+          } else {
+            const double ll = std::log(p_j) - log_Z_j;
+            ll_unique[static_cast<size_t>(j)] = (R_FINITE(ll) && ll > min_ll) ? ll : min_ll;
+          }
+          continue;
+        }
         bool states_ok = true;
         LrChannelState A_lo = lr4_state_at(lo, LR_AUX_CLO, false, states_ok);
         LrChannelState A_hi, B_lo, B_hi;
@@ -6022,7 +6205,9 @@ static double c_log_likelihood_logicalrules(
 
     const int rule_code_lr = shared.rule_code[static_cast<size_t>(j)];
     const int resp_code = shared.resp_code[static_cast<size_t>(j)];
-    const bool is_or_rule = (rule_code_lr == 1);
+    // GNG shares OR's finite-RT go-response density; only its "no" outcome
+    // differs (withheld, handled above), so a finite RT is always a "yes".
+    const bool is_or_rule = (rule_code_lr == 1 || rule_code_lr == 6);
     const bool is_and_rule = (rule_code_lr == 2);
     const bool is_xor_rule = (rule_code_lr == 3);
     const bool is_id_rule = (rule_code_lr == 4);
@@ -6053,7 +6238,7 @@ static double c_log_likelihood_logicalrules(
       const double s_GB_yes = std::min(1.0, std::max(kMinSurv, GB_no + S_dec_B));
       if (is_or_rule) {
         if (resp_code == 1) p_j = gA_yes * s_GB_yes + gB_yes * s_GA_yes; // yes
-        else if (resp_code == 2) p_j = gA_no * GB_no + gB_no * GA_no;    // no
+        else if (resp_code == 2 && rule_code_lr != 6) p_j = gA_no * GB_no + gB_no * GA_no; // no
       } else { // AND
         const double GA_yes = std::min(1.0, std::max(0.0, 1.0 - S_dec_A - GA_no));
         const double GB_yes = std::min(1.0, std::max(0.0, 1.0 - S_dec_B - GB_no));

@@ -210,8 +210,13 @@ test_that("OR_DETECTION_GNG truncated outcome space integrates to one", {
   UC <- 0.9
   UT <- 1.4
   stim_levels <- c("NN", "AN", "NB", "AB")
-  n_grid <- 400
+  n_grid <- 600
 
+  # Four-horse GNG (A, n_A, B, n_B) with stimulus-driven drifts: a go response
+  # is the first target subrace to win (rt < Inf), and the withheld outcome
+  # (both subraces resolve "no") is rt = Inf.  All four accumulators race on
+  # every stimulus, so the outcome space {go in [LT,UT]} u {withheld} spans a
+  # proper distribution on NN as well as on the go conditions.
   template <- data.frame(
     subjects = factor(rep("s1", 4)),
     S = factor(stim_levels, levels = stim_levels),
@@ -219,20 +224,33 @@ test_that("OR_DETECTION_GNG truncated outcome space integrates to one", {
     R = factor(rep(NA_character_, 4), levels = c("yes", "no"))
   )
   design_template <- template
-  design_template$R <- factor(NA_character_, levels = c("A", "B", "nogo"))
+  design_template$R <- factor(NA_character_, levels = c("A", "B", "n_A", "n_B"))
   des <- design(
     data = design_template,
     Rlevels = c("yes", "no"),
-    fixed_accumulator_roles = factor(c("A", "B", "nogo"), levels = c("A", "B", "nogo")),
-    matchfun = function(d) d$lR %in% c("A", "B", "nogo"),
+    fixed_accumulator_roles = factor(c("A", "B", "n_A", "n_B"),
+                                     levels = c("A", "B", "n_A", "n_B")),
+    matchfun = function(d) d$lR %in% c("A", "B", "n_A", "n_B"),
     model = LogicalRulesLBA,
-    formula = list(v ~ 0 + GoA + GoB + NoGo,
-                   B ~ 0 + GoA + GoB + NoGo,
+    formula = list(v ~ 0 + GoA:S + GoB:S + NegA:S + NegB:S,
+                   B ~ 0 + GoA + GoB + NegA + NegB,
                    t0 ~ 1, A ~ 1),
     constants = c(sv = log(1)),
     functions = lr_funcs
   )
-  p <- lr_pvec(des)
+  p <- sampled_pars(des, doMap = FALSE)
+  p[] <- 0
+  setv <- function(nm, val) if (nm %in% names(p)) p[[nm]] <<- val
+  for (S in stim_levels) {
+    Apres <- S %in% c("AN", "AB"); Bpres <- S %in% c("NB", "AB")
+    setv(paste0("v_GoA:S", S),  if (Apres) 1.8 else 0.5)
+    setv(paste0("v_GoB:S", S),  if (Bpres) 1.5 else 0.4)
+    setv(paste0("v_NegA:S", S), if (Apres) 0.5 else 1.6)
+    setv(paste0("v_NegB:S", S), if (Bpres) 0.6 else 1.5)
+  }
+  setv("B_GoA", log(0.75)); setv("B_GoB", log(0.95))
+  setv("B_NegA", log(0.85)); setv("B_NegB", log(0.70))
+  setv("t0", log(0.2)); setv("A", log(0.3))
 
   gng_rows <- function(S, R, rt, ...) {
     extras <- list(...)
@@ -248,10 +266,10 @@ test_that("OR_DETECTION_GNG truncated outcome space integrates to one", {
     d
   }
 
-  for (S in c("AN", "AB")) {
+  for (S in c("NN", "AN", "AB")) {
     grid <- seq(LC + 1e-4, UC - 1e-4, length.out = n_grid)
     finite_mass <- integrate_pw(build_ll_ctx(
-      gng_rows(S, rep("yes", n_grid), grid, LT = LT, UT = UT), des), p, n_acc = 3)
+      gng_rows(S, rep("yes", n_grid), grid, LT = LT, UT = UT), des), p)
     low_mass <- exp(calc_ctx_ll(build_ll_ctx(
       gng_rows(S, "yes", -Inf, LT = LT, UT = UT, LC = LC), des), p))
     up_mass <- exp(calc_ctx_ll(build_ll_ctx(

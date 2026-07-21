@@ -40,13 +40,18 @@ respond \code{no}.
 \item \code{ID}: report which targets are positive using \code{NN}, \code{AN}, \code{NB}, or \code{AB}.
 }
 
-Two detection rules are also supported. \code{OR_DETECTION_ANALYTIC} uses only
-the active target accumulators \code{A} and \code{B}, and reports the first active
-detector to finish. \code{OR_DETECTION_GNG} adds a \code{nogo} accumulator; a go
-response must beat the other active detector and \code{nogo}, while a nogo
-outcome is a withheld response. For detection rules, the stimulus column
-(\code{S}, \code{stimulus}, or \code{condition}) must identify \code{NN}, \code{AN}, \code{NB}, or \code{AB}
-on every trial. Missing stimulus values are treated as \code{NN}.
+Two further rules target detection paradigms. \code{OR_DETECTION_ANALYTIC} uses
+only the active target accumulators \code{A} and \code{B}, and reports the first
+active detector to finish; its stimulus column (\code{S}, \code{stimulus}, or
+\code{condition}) must identify \code{NN}, \code{AN}, \code{NB}, or \code{AB} on every trial (missing
+values are treated as \code{NN}). \code{OR_DETECTION_GNG} is the go/no-go version of
+the ordinary \code{OR} task: it uses the same four \code{A}, \code{n_A}, \code{B}, \code{n_B}
+subraces, an overt "go" response is the first target subrace to win (coded
+\code{yes}), and the "no" outcome — both subraces resolving to their nontarget —
+is instead a withheld response coded as \code{rt = Inf} (with a missing \code{R}).
+Because it is a four-horse race like \code{OR}, the drifts are driven by the
+design (not by gating detectors on the stimulus), so false alarms remain
+possible on \code{NN} trials.
 
 The LBA parameters are:\tabular{llllll}{
    \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Mapping} \tab \strong{Interpretation} \cr
@@ -75,8 +80,8 @@ the target drift draws are
 \code{V_i = (kappa + tau * Z) * v_i + epsilon_i}, for \verb{i = A, B}, with
 independent \code{epsilon_i ~ N(0, sv_i^2)}. The logical-rule calculation is
 performed conditional on this same \code{Z} and then integrated over \code{Z}; the
-factor is not integrated separately for the two subraces. Nontarget and
-\code{nogo} accumulators do not load on the factor. Capacity has no effect on
+factor is not integrated separately for the two subraces. Nontarget
+accumulators do not load on the factor. Capacity has no effect on
 \code{AN}, \code{NB}, or \code{NN} trials, and \verb{kappa = 1, tau = 0} recovers the ordinary
 logical-rules likelihood exactly. \code{kappa} and \code{tau} must be shared by the
 \code{A} and \code{B} rows within a trial. In positive-drift mode, the active target

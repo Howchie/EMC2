@@ -160,42 +160,73 @@ test_that("ID lower-censor masses match simulation for every response identity",
   }
 })
 
-test_that("OR_DETECTION_GNG censor masses exclude nogo wins and match simulation", {
-  skip_on_cran()
-  n_sim <- 5e4
-  LC <- 0.5
-  UC <- 1.2
-  stim_levels <- c("NN", "AN", "NB", "AB")
+# OR_DETECTION_GNG is the four-horse OR task (A, n_A, B, n_B) whose "no"
+# outcome is a withheld response (rt = Inf). Drifts are driven by the stimulus
+# S (present targets fast, absent targets slow), so — unlike the old
+# detector-gating model — a false alarm ("yes") remains possible on NN trials.
+gng_stim_levels <- c("NN", "AN", "NB", "AB")
 
+gng_design <- function() {
   template <- data.frame(
     subjects = factor(rep("s1", 4)),
-    S = factor(stim_levels, levels = stim_levels),
+    S = factor(gng_stim_levels, levels = gng_stim_levels),
     LogicalRule = factor(rep("OR_DETECTION_GNG", 4), levels = "OR_DETECTION_GNG"),
-    R = factor(rep(NA_character_, 4), levels = c("yes", "no"))
+    R = factor(rep(NA_character_, 4), levels = c("A", "B", "n_A", "n_B"))
   )
-  design_template <- template
-  design_template$R <- factor(NA_character_, levels = c("A", "B", "nogo"))
-  des <- design(
-    data = design_template,
+  design(
+    data = template,
     Rlevels = c("yes", "no"),
-    fixed_accumulator_roles = factor(c("A", "B", "nogo"), levels = c("A", "B", "nogo")),
-    matchfun = function(d) d$lR %in% c("A", "B", "nogo"),
+    fixed_accumulator_roles = factor(c("A", "B", "n_A", "n_B"),
+                                     levels = c("A", "B", "n_A", "n_B")),
+    matchfun = function(d) d$lR %in% c("A", "B", "n_A", "n_B"),
     model = LogicalRulesLBA,
-    formula = list(v ~ 0 + GoA + GoB + NoGo,
-                   B ~ 0 + GoA + GoB + NoGo,
+    formula = list(v ~ 0 + GoA:S + GoB:S + NegA:S + NegB:S,
+                   B ~ 0 + GoA + GoB + NegA + NegB,
                    t0 ~ 1, A ~ 1),
     constants = c(sv = log(1)),
     functions = lr_funcs
   )
-  p <- lr_pvec(des)
+}
 
+gng_pvec <- function(des) {
+  p <- sampled_pars(des, doMap = FALSE)
+  p[] <- 0
+  setv <- function(nm, val) if (nm %in% names(p)) p[[nm]] <<- val
+  for (S in gng_stim_levels) {
+    Apres <- S %in% c("AN", "AB"); Bpres <- S %in% c("NB", "AB")
+    setv(paste0("v_GoA:S", S),  if (Apres) 1.8 else 0.5)
+    setv(paste0("v_GoB:S", S),  if (Bpres) 1.5 else 0.4)
+    setv(paste0("v_NegA:S", S), if (Apres) 0.5 else 1.6)
+    setv(paste0("v_NegB:S", S), if (Bpres) 0.6 else 1.5)
+  }
+  setv("B_GoA", log(0.75)); setv("B_GoB", log(0.95))
+  setv("B_NegA", log(0.85)); setv("B_NegB", log(0.70))
+  setv("t0", log(0.2)); setv("A", log(0.3))
+  p
+}
+
+test_that("OR_DETECTION_GNG censor masses match four-horse simulation", {
+  skip_on_cran()
+  n_sim <- 5e4
+  LC <- 0.5
+  UC <- 1.2
+
+  des <- gng_design()
+  p <- gng_pvec(des)
+
+  template <- data.frame(
+    subjects = factor(rep("s1", 4)),
+    S = factor(gng_stim_levels, levels = gng_stim_levels),
+    LogicalRule = factor(rep("OR_DETECTION_GNG", 4), levels = "OR_DETECTION_GNG"),
+    R = factor(rep(NA_character_, 4), levels = c("yes", "no"))
+  )
   set.seed(103)
   sim <- make_data(p, des, data = template, expand = n_sim)
 
   gng_case <- function(S, R, rt, LC = NA, UC = NA) {
     d <- data.frame(
       subjects = factor("s1"),
-      S = factor(S, levels = stim_levels),
+      S = factor(S, levels = gng_stim_levels),
       LogicalRule = factor("OR_DETECTION_GNG", levels = "OR_DETECTION_GNG"),
       R = factor(R, levels = c("yes", "no")),
       rt = rt
@@ -205,9 +236,10 @@ test_that("OR_DETECTION_GNG censor masses exclude nogo wins and match simulation
     d
   }
 
-  # Lower censor on go-stimulus conditions: mass = P(go detector beats nogo
-  # AND rt < LC), with R recorded ("yes") or missing (same single overt type).
-  for (S in c("AN", "NB", "AB")) {
+  # Lower censor: an overt go response ("yes") fired in [0, LC]. This is now a
+  # four-horse subrace outcome, possible even on NN (a false alarm). The mass is
+  # response-type agnostic (single overt type), so R recorded or missing match.
+  for (S in gng_stim_levels) {
     p_mc <- mean(sim$S == S & !is.na(sim$R) & sim$rt < LC, na.rm = TRUE) /
       mean(sim$S == S)
     for (r in c("yes", NA_character_)) {
@@ -218,14 +250,14 @@ test_that("OR_DETECTION_GNG censor masses exclude nogo wins and match simulation
     }
   }
 
-  # NN condition: no go detector races, so an overt response before LC is
-  # impossible — a nogo finish is a withheld response, not an observation.
-  ctx_nn <- build_ll_ctx(gng_case("NN", NA_character_, -Inf, LC = LC), des)
-  expect_equal(calc_ctx_ll(ctx_nn, p), log(1e-10))
+  # NN false alarms are now possible: the lower-censor go mass is strictly
+  # positive (the old detector-gating model floored this to min_ll).
+  ll_nn_low <- calc_ctx_ll(build_ll_ctx(gng_case("NN", "yes", -Inf, LC = LC), des), p)
+  expect_gt(ll_nn_low, log(1e-6))
 
-  # Upper censor (regression check on the already-correct branch): no overt
-  # response by UC = nogo won, or nothing finished by UC.
-  for (S in c("NN", "AN", "AB")) {
+  # Upper censor (rt = +Inf): no overt go response by UC = both subraces
+  # resolved "no" by UC, or neither channel had said "yes" yet.
+  for (S in gng_stim_levels) {
     denom <- mean(sim$S == S)
     p_mc <- mean(sim$S == S & (is.na(sim$R) | sim$rt > UC), na.rm = TRUE) / denom
     ctx <- build_ll_ctx(gng_case(S, NA_character_, Inf, UC = UC), des)

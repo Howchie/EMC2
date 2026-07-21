@@ -167,14 +167,22 @@ test_that("capacity detection routes evaluate analytic and GNG AB trials", {
                              levels = "OR_DETECTION_ANALYTIC")
   analytic <- lr_capacity_detection_design(
     "OR_DETECTION_ANALYTIC", data, c("A", "B"))
+
+  # GNG is the full four-horse OR task (a withheld response in place of the
+  # overt "no"), so it uses the ordinary A/n_A/B/n_B capacity design.
   gng_data <- data
   gng_data$LogicalRule <- factor("OR_DETECTION_GNG", levels = "OR_DETECTION_GNG")
-  gng <- lr_capacity_detection_design(
-    "OR_DETECTION_GNG", gng_data, c("A", "B", "nogo"))
+  gng <- lr_capacity_design(gng_data, TRUE)
 
   expect_true(is.finite(lr_capacity_ll_pw(data, analytic,
                                          lr_capacity_parameters(analytic, 0.4))))
+  # A finite-RT "yes" (go) and a withheld (rt = Inf) AB trial both evaluate.
   expect_true(is.finite(lr_capacity_ll_pw(gng_data, gng,
+                                         lr_capacity_parameters(gng, 0.4))))
+  gng_withheld <- gng_data
+  gng_withheld$R <- factor(NA_character_, levels = c("yes", "no"))
+  gng_withheld$rt <- Inf
+  expect_true(is.finite(lr_capacity_ll_pw(gng_withheld, gng,
                                          lr_capacity_parameters(gng, 0.4))))
 })
 

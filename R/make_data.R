@@ -652,12 +652,22 @@ apply_logical_rules <- function(LogicalRule, A_t, nA_t, B_t, nB_t) {
   is_and <- LogicalRule == "AND"
   is_xor <- LogicalRule == "XOR"
   is_id <- LogicalRule == "ID"
+  # OR_DETECTION_GNG is the full four-horse OR task whose "no" outcome is a
+  # withheld response (rt = Inf, R = NA) rather than an overt "no".
+  is_gng <- LogicalRule == "OR_DETECTION_GNG"
 
   if (any(is_or)) {
     R[is_or] <- ifelse(A_yes[is_or] | B_yes[is_or], "yes", "no")
     RT_yes_or <- pmin(ifelse(A_yes, A_t, Inf), ifelse(B_yes, B_t, Inf))
     RT_no_or <- pmax(nA_t, nB_t)
     RT[is_or] <- ifelse(R[is_or] == "yes", RT_yes_or[is_or], RT_no_or[is_or])
+  }
+
+  if (any(is_gng)) {
+    go <- A_yes | B_yes
+    RT_yes_gng <- pmin(ifelse(A_yes, A_t, Inf), ifelse(B_yes, B_t, Inf))
+    R[is_gng] <- ifelse(go[is_gng], "yes", NA_character_)
+    RT[is_gng] <- ifelse(go[is_gng], RT_yes_gng[is_gng], Inf)
   }
 
   if (any(is_and)) {
@@ -825,13 +835,16 @@ LogicalRules_rfun <- function(data, pars, model) {
     }
   }
 
-  is_detection <- logical_rule %in% c("OR_DETECTION_ANALYTIC", "OR_DETECTION_GNG")
+  # Only the analytic detector activates detectors by stimulus condition.
+  # OR_DETECTION_GNG is the full four-horse OR task (a withheld response in
+  # place of the overt "no") and is simulated through the legacy subrace path.
+  is_detection <- logical_rule == "OR_DETECTION_ANALYTIC"
   if (any(is_detection)) {
     cond <- .lr_stimulus_cond(data, races)
     if (is.null(cond)) {
       stop("LogicalRules detection rules require stimulus column `S` (or `stimulus`/`condition`).")
     }
-    if (!all(cond %in% c("NN", "AN", "NB", "AB"))) {
+    if (!all(cond[is_detection] %in% c("NN", "AN", "NB", "AB"))) {
       stop("LogicalRules detection rules require stimulus NN/AN/NB/AB (or A/B/AB).")
     }
   }
@@ -855,11 +868,16 @@ LogicalRules_rfun <- function(data, pars, model) {
       if (any(emit_T)) {
         rule_T <- logical_rule[legacy][emit_T]
         is_id_T <- rule_T == "ID"
+        is_gng_T <- rule_T == "OR_DETECTION_GNG"
         guess_R <- character(sum(emit_T))
         if (any(is_id_T))
           guess_R[is_id_T] <- sample(c("NN", "AN", "NB", "AB"), sum(is_id_T), replace = TRUE)
-        if (any(!is_id_T))
-          guess_R[!is_id_T] <- sample(c("yes", "no"), sum(!is_id_T), replace = TRUE)
+        # A GNG guess is always an overt (go) "yes"; the withheld outcome cannot
+        # be produced by the guess racer.
+        if (any(is_gng_T)) guess_R[is_gng_T] <- "yes"
+        other_T <- !is_id_T & !is_gng_T
+        if (any(other_T))
+          guess_R[other_T] <- sample(c("yes", "no"), sum(other_T), replace = TRUE)
         out_legacy$rt[emit_T] <- tT[emit_T]
         out_legacy$R[emit_T] <- guess_R
       }
@@ -871,8 +889,6 @@ LogicalRules_rfun <- function(data, pars, model) {
     tA <- Rrti[is_detection, "A"]
     tB <- Rrti[is_detection, "B"]
     cond_d <- cond[is_detection]
-    is_gng <- logical_rule[is_detection] == "OR_DETECTION_GNG"
-    tN <- if ("nogo" %in% races) Rrti[is_detection, "nogo"] else rep(Inf, sum(is_detection))
     tT <- if ("time" %in% races) Rrti[is_detection, "time"] else rep(Inf, sum(is_detection))
 
     go_t <- rep(Inf, sum(is_detection))
@@ -880,26 +896,20 @@ LogicalRules_rfun <- function(data, pars, model) {
     go_t[cond_d == "NB"] <- tB[cond_d == "NB"]
     go_t[cond_d == "AB"] <- pmin(tA[cond_d == "AB"], tB[cond_d == "AB"])
 
-    emit <- is.finite(go_t) & (!is_gng | (go_t < tN)) & (go_t < tT)
+    emit <- is.finite(go_t) & (go_t < tT)
     det_idx <- which(is_detection)
     out$rt[det_idx[emit]] <- go_t[emit]
     out$R[det_idx[emit]] <- "yes"
 
     if ("time" %in% races) {
-      emit_T <- is.finite(tT) & (tT < go_t) & (!is_gng | (tT < tN))
+      emit_T <- is.finite(tT) & (tT < go_t)
       out$rt[det_idx[emit_T]] <- tT[emit_T]
       out$R[det_idx[emit_T]] <- "yes"
     }
 
-
-    if (any(is_gng & !emit)) {
-      out$rt[det_idx[is_gng & !emit]] <- Inf
-      out$R[det_idx[is_gng & !emit]] <- NA_character_
-    }
-
-    if (any(!is_gng & !emit)) {
-      out$rt[det_idx[!is_gng & !emit]] <- Inf
-      out$R[det_idx[!is_gng & !emit]] <- NA_character_
+    if (any(!emit)) {
+      out$rt[det_idx[!emit]] <- Inf
+      out$R[det_idx[!emit]] <- NA_character_
     }
   }
 

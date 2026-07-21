@@ -205,13 +205,18 @@ LBA <- function(posdrift=TRUE){
 #' * `XOR`: respond `yes` when exactly one target subrace is positive.
 #' * `ID`: report which targets are positive using `NN`, `AN`, `NB`, or `AB`.
 #'
-#' Two detection rules are also supported. `OR_DETECTION_ANALYTIC` uses only
-#' the active target accumulators `A` and `B`, and reports the first active
-#' detector to finish. `OR_DETECTION_GNG` adds a `nogo` accumulator; a go
-#' response must beat the other active detector and `nogo`, while a nogo
-#' outcome is a withheld response. For detection rules, the stimulus column
-#' (`S`, `stimulus`, or `condition`) must identify `NN`, `AN`, `NB`, or `AB`
-#' on every trial. Missing stimulus values are treated as `NN`.
+#' Two further rules target detection paradigms. `OR_DETECTION_ANALYTIC` uses
+#' only the active target accumulators `A` and `B`, and reports the first
+#' active detector to finish; its stimulus column (`S`, `stimulus`, or
+#' `condition`) must identify `NN`, `AN`, `NB`, or `AB` on every trial (missing
+#' values are treated as `NN`). `OR_DETECTION_GNG` is the go/no-go version of
+#' the ordinary `OR` task: it uses the same four `A`, `n_A`, `B`, `n_B`
+#' subraces, an overt "go" response is the first target subrace to win (coded
+#' `yes`), and the "no" outcome — both subraces resolving to their nontarget —
+#' is instead a withheld response coded as `rt = Inf` (with a missing `R`).
+#' Because it is a four-horse race like `OR`, the drifts are driven by the
+#' design (not by gating detectors on the stimulus), so false alarms remain
+#' possible on `NN` trials.
 #'
 #' The LBA parameters are:
 #'
@@ -240,8 +245,8 @@ LBA <- function(posdrift=TRUE){
 #' `V_i = (kappa + tau * Z) * v_i + epsilon_i`, for `i = A, B`, with
 #' independent `epsilon_i ~ N(0, sv_i^2)`. The logical-rule calculation is
 #' performed conditional on this same `Z` and then integrated over `Z`; the
-#' factor is not integrated separately for the two subraces. Nontarget and
-#' `nogo` accumulators do not load on the factor. Capacity has no effect on
+#' factor is not integrated separately for the two subraces. Nontarget
+#' accumulators do not load on the factor. Capacity has no effect on
 #' `AN`, `NB`, or `NN` trials, and `kappa = 1, tau = 0` recovers the ordinary
 #' logical-rules likelihood exactly. `kappa` and `tau` must be shared by the
 #' `A` and `B` rows within a trial. In positive-drift mode, the active target
