@@ -2897,7 +2897,7 @@ static RaceSharedState build_race_shared_state(DataFrame data, int n_trials, int
 
 // Per-node grid of a t0 marginalization: the quadrature node values (sampled
 // log-t0 scale) and the unnormalized per-particle log-terms
-//   ell_ik = log w_k + log|half| + log p(x_k|eta) + log L_i(x_k)
+//   ell_ik = log quadrature_weight_k + log p(x_k|eta) + log L_i(x_k)
 // that BOTH the marginal-ll reducer and the storage-time weight accessor share,
 // so the node grid and the reconstruction weights are guaranteed identical.
 struct MarginalGrid {
@@ -2905,15 +2905,95 @@ struct MarginalGrid {
   Rcpp::NumericMatrix log_terms;  // np x K: ell_ik (softmax over k => p(t0=x_k|y,theta,eta))
 };
 
+// A composite GL rule lets the t0 marginal retain support over its complete
+// feasible interval while concentrating most nodes around the response-informed
+// posterior bump.  Unlike simply truncating to a centred window, the two tail
+// panels retain the integral's mass and therefore keep the approximation
+// coherent even for a broad or weakly identified t0 posterior.
+struct MarginalRule {
+  std::vector<double> x;
+  std::vector<double> w;
+};
+
+static void marginal_append_gl_panel(MarginalRule& out, double lo, double hi,
+                                     int n) {
+  if (n <= 0 || !(hi > lo)) return;
+  const GLRule& rule = gl_get_rule(n);
+  const double half = 0.5 * (hi - lo);
+  const double mid = 0.5 * (hi + lo);
+  for (int k = 0; k < n; ++k) {
+    out.x.push_back(mid + half * rule.x[static_cast<size_t>(k)]);
+    out.w.push_back(half * rule.w[static_cast<size_t>(k)]);
+  }
+}
+
+// Turn the scan's equally-particle-weighted posterior masses into a central
+// panel.  The width floor is tied to the pilot spacing: if a narrow bump lands
+// between pilot points, the refined panel still covers the unresolved cell.
+static std::pair<double, double> marginal_adaptive_window(
+    const std::vector<double>& log_mass, const std::vector<double>& x,
+    double lo, double hi, int n_scan) {
+  double m = R_NegInf;
+  for (double v : log_mass) if (R_FINITE(v) && v > m) m = v;
+  if (!R_FINITE(m)) return std::make_pair(lo, hi);
+  double s0 = 0.0, s1 = 0.0, s2 = 0.0;
+  for (size_t k = 0; k < log_mass.size(); ++k) {
+    if (!R_FINITE(log_mass[k])) continue;
+    const double p = std::exp(log_mass[k] - m);
+    s0 += p;
+    s1 += p * x[k];
+    s2 += p * x[k] * x[k];
+  }
+  if (!(s0 > 0.0)) return std::make_pair(lo, hi);
+  const double centre = std::min(hi, std::max(lo, s1 / s0));
+  const double variance = std::max(0.0, s2 / s0 - centre * centre);
+  const double width = hi - lo;
+  const double pilot_half_cell = width / (2.0 * std::max(n_scan, 2));
+  // Three inflated SDs cover the normal-like posterior core; the pilot-cell
+  // floor protects peaks that the coarse scan can only locate approximately.
+  const double half = std::min(0.5 * width,
+    std::max(3.0 * 1.3 * std::sqrt(variance), pilot_half_cell));
+  return std::make_pair(std::max(lo, centre - half),
+                        std::min(hi, centre + half));
+}
+
+static MarginalRule marginal_adaptive_rule(
+    const std::vector<double>& scan_log_mass, const std::vector<double>& scan_x,
+    double lo, double hi, int n_nodes, int n_scan) {
+  MarginalRule out;
+  // Very small caller-specified rules are useful diagnostics.  Leave those as
+  // ordinary GL rather than silently changing their requested resolution.
+  if (n_nodes < 6) {
+    marginal_append_gl_panel(out, lo, hi, n_nodes);
+    return out;
+  }
+  const std::pair<double, double> centre = marginal_adaptive_window(
+    scan_log_mass, scan_x, lo, hi, n_scan);
+  // One tail node on each side is enough for the compact 6--12-node rules;
+  // reserving two there left too few core nodes to resolve the response kink.
+  // Larger explicit rules can afford a second tail node without sacrificing
+  // the central resolution.
+  const int tail_each = n_nodes >= 14 ? 2 : 1;
+  const int n_left = centre.first > lo ? tail_each : 0;
+  const int n_right = centre.second < hi ? tail_each : 0;
+  const int n_core = n_nodes - n_left - n_right;
+  marginal_append_gl_panel(out, lo, centre.first, n_left);
+  marginal_append_gl_panel(out, centre.first, centre.second, n_core);
+  marginal_append_gl_panel(out, centre.second, hi, n_right);
+  return out;
+}
+
 // Coherent marginalization core (option 3): integrate ONE shared t0 out of the
-// COMPLETE subject likelihood by fixed-order Gauss-Legendre quadrature on the
-// log-t0 (sampled) axis. Reuses the registered kernel verbatim -- each node
-// overwrites the sampled t0 column and re-calls calc_ll_oo with marginalise off
-// -- so it is model-agnostic (every race model, no per-model code). The
-// interval is clipped to where the likelihood is live: below t0's natural-scale
-// lower bound c_do_bound floors the whole subject to n_trials*min_ll; above
-// min(rt) the fastest response is infeasible. Correctness reference is
-// WorkingTests/marginal_t0_lib.R::marginal_ll_t0.
+// COMPLETE subject likelihood by scan-and-recentred composite Gauss-Legendre
+// quadrature on the log-t0 (sampled) axis.  A short pilot rule locates the
+// response-informed mass, then a compact core panel is flanked by two tail
+// panels so the whole feasible interval remains integrated. Reuses the
+// registered kernel verbatim -- each node overwrites the sampled t0 column and
+// re-calls calc_ll_oo with marginalise off -- so it is model-agnostic (every
+// race model, no per-model code). The interval is clipped to where the
+// likelihood is live: below t0's natural-scale lower bound c_do_bound floors
+// the whole subject to n_trials*min_ll; above min(rt) the fastest response is
+// infeasible. Correctness reference is WorkingTests/marginal_t0_lib.R::marginal_ll_t0.
 static MarginalGrid calc_ll_oo_marginal_core(
     NumericMatrix particle_matrix, DataFrame data, NumericVector constants,
     List designs, String type, List bounds, List transforms, List pretransforms,
@@ -2926,12 +3006,17 @@ static MarginalGrid calc_ll_oo_marginal_core(
   const double mu    = Rcpp::as<double>(marginalise["mu"]);
   const double sigma = Rcpp::as<double>(marginalise["sigma"]);
   int    n_nodes = marginalise.containsElementNamed("n_nodes")
-                     ? Rcpp::as<int>(marginalise["n_nodes"]) : 25;
+                     ? Rcpp::as<int>(marginalise["n_nodes"]) : 40;
+  int    n_scan = marginalise.containsElementNamed("n_scan")
+                     ? Rcpp::as<int>(marginalise["n_scan"]) : 7;
+  const bool adaptive = marginalise.containsElementNamed("adaptive")
+                     ? Rcpp::as<bool>(marginalise["adaptive"]) : true;
   const double span = marginalise.containsElementNamed("span")
                      ? Rcpp::as<double>(marginalise["span"]) : 6.0;
   const double eps  = marginalise.containsElementNamed("eps")
                      ? Rcpp::as<double>(marginalise["eps"]) : 1e-3;
   if (n_nodes < 2) n_nodes = 2;
+  if (n_scan < 2) n_scan = 2;
 
   // --- locate the sampled t0 coordinate in the proposal matrix ---
   CharacterVector p_names = colnames(particle_matrix);
@@ -2971,9 +3056,9 @@ static MarginalGrid calc_ll_oo_marginal_core(
   const double hi = std::min(mu + span * sigma, log_ms);
 
   MarginalGrid g;
-  g.nodes = NumericVector(n_nodes);
-  g.log_terms = NumericMatrix(np, n_nodes);
   if (!(hi > lo)) {                                  // collapsed interval => no mass
+    g.nodes = NumericVector(n_nodes);
+    g.log_terms = NumericMatrix(np, n_nodes);
     std::fill(g.nodes.begin(), g.nodes.end(), NA_REAL);
     std::fill(g.log_terms.begin(), g.log_terms.end(), R_NegInf);
     return g;
@@ -2981,17 +3066,61 @@ static MarginalGrid calc_ll_oo_marginal_core(
 
   const double half = (hi - lo) / 2.0;
   const double mid  = (hi + lo) / 2.0;
-  const GLRule& rule = gl_get_rule(n_nodes);   // nodes/weights on [-1,1], sum(w)=2
-
   NumericMatrix pm = Rcpp::clone(particle_matrix);   // scratch: t0 overwritten per node
-  for (int k = 0; k < n_nodes; ++k) {
-    const double xk = mid + half * rule.x[k];        // log-t0 node (shared interval)
+  MarginalRule rule;
+  if (adaptive && n_nodes >= 6) {
+    const GLRule& scan_rule = gl_get_rule(n_scan);
+    std::vector<double> scan_x(static_cast<size_t>(n_scan));
+    std::vector<double> scan_terms(static_cast<size_t>(np) * n_scan, R_NegInf);
+    for (int k = 0; k < n_scan; ++k) {
+      const double xk = mid + half * scan_rule.x[static_cast<size_t>(k)];
+      scan_x[static_cast<size_t>(k)] = xk;
+      for (int i = 0; i < np; ++i) pm(i, t0col) = xk;
+      NumericVector llk = calc_ll_oo(pm, data, constants, designs, type, bounds,
+                                     transforms, pretransforms, p_types, min_ll,
+                                     trend, R_NilValue);
+      const double logw = std::log(scan_rule.w[static_cast<size_t>(k)]) +
+        std::log(half) + R::dnorm(xk, mu, sigma, 1);
+      for (int i = 0; i < np; ++i)
+        scan_terms[static_cast<size_t>(i) * n_scan + k] = logw + llk[i];
+    }
+    // Give each proposal equal influence on the shared grid.  Weighting by
+    // raw likelihood would centre exclusively on the already-best particle and
+    // unnecessarily degrade the importance proposal's other particles.
+    std::vector<double> scan_log_mass(static_cast<size_t>(n_scan), R_NegInf);
+    int n_valid = 0;
+    for (int i = 0; i < np; ++i) {
+      double norm = R_NegInf;
+      for (int k = 0; k < n_scan; ++k)
+        norm = log_sum_exp(norm, scan_terms[static_cast<size_t>(i) * n_scan + k]);
+      if (!R_FINITE(norm)) continue;
+      ++n_valid;
+      for (int k = 0; k < n_scan; ++k)
+        scan_log_mass[static_cast<size_t>(k)] = log_sum_exp(
+          scan_log_mass[static_cast<size_t>(k)],
+          scan_terms[static_cast<size_t>(i) * n_scan + k] - norm);
+    }
+    if (n_valid > 0) {
+      const double log_n_valid = std::log(static_cast<double>(n_valid));
+      for (double& v : scan_log_mass) if (R_FINITE(v)) v -= log_n_valid;
+    }
+    rule = marginal_adaptive_rule(scan_log_mass, scan_x, lo, hi, n_nodes, n_scan);
+  } else {
+    marginal_append_gl_panel(rule, lo, hi, n_nodes);
+  }
+
+  const int n_rule_nodes = static_cast<int>(rule.x.size());
+  g.nodes = NumericVector(n_rule_nodes);
+  g.log_terms = NumericMatrix(np, n_rule_nodes);
+  for (int k = 0; k < n_rule_nodes; ++k) {
+    const double xk = rule.x[static_cast<size_t>(k)]; // log-t0 node (shared interval)
     g.nodes[k] = xk;
     for (int i = 0; i < np; ++i) pm(i, t0col) = xk;
     NumericVector llk = calc_ll_oo(pm, data, constants, designs, type, bounds,
                                    transforms, pretransforms, p_types, min_ll,
                                    trend, R_NilValue);
-    const double logw = std::log(rule.w[k]) + std::log(half) + R::dnorm(xk, mu, sigma, 1);
+    const double logw = std::log(rule.w[static_cast<size_t>(k)]) +
+      R::dnorm(xk, mu, sigma, 1);
     for (int i = 0; i < np; ++i) g.log_terms(i, k) = logw + llk[i];
   }
   return g;

@@ -8,14 +8,19 @@ Status at this checkpoint (2026-07-23, branch `bawl-correlated-race`):
   integrates one shared t0 out of the COMPLETE subject likelihood by Gauss-Legendre
   quadrature on the log-t0 axis, reusing the registered kernel per node (model-agnostic).
   Matches the R reference `WorkingTests/marginal_t0_lib.R::marginal_ll_t0` to 3.4e-13.
-- **Increment 1b DONE** — PtMapper fusion measured not worth it (setup = 3.2% of a call);
-  adaptive nodes deferred pending end-to-end timing. Exported
+- **Increment 1b DONE** — PtMapper fusion measured not worth it (setup = 3.2% of a call).
+  The adaptive route now uses a 7-node pilot scan followed by a recentered composite
+  Gauss-Legendre rule with explicit tail panels. The production default is 40 final
+  nodes (47 kernel calls including the pilot); 40 is below the old fixed GL(80) cost
+  while meeting the convergence check for LBA, RDM, and RDMSWTN with positive `sv`.
+  Exported
   `calc_ll_oo_marginal_nodes(...) -> list(nodes[K] sampled-scale, log_terms[np×K])` for
   reconstruct-at-storage; `softmax_k(log_terms)` reproduces the ll exactly and
   `E[t0|y]=Σ w_k exp(nodes_k)` recovers near truth.
 
-The **C++ likelihood + reconstruction layer is complete**. Increment 2 is the R sampler
-surgery. Nothing below has been started yet.
+The **C++ likelihood + reconstruction layer and the Increment 2 sampler wiring are
+implemented**. The Stage 0 scratch check now covers both GNG/no-go and standard-race
+configurations, including RDMSWTN with `sv > 0`.
 
 ## Decisions locked (do not re-litigate)
 

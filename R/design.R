@@ -51,6 +51,9 @@
 #' if the conventional bound aren't desired.
 #' see `DDM()` for an example of such bounds. Bounds are used to set limits to
 #' the likelihood landscape that cannot reasonable be achieved with `transform`
+#' @param marginalise Optional character vector naming one shared race-model
+#' parameter to marginalize in the sampler (currently, e.g. `"t0"`). The
+#' parameter must use an intercept-only design (`~ 1`).
 #' @param ... Additional, optional arguments
 #'
 #' @return A design list.
@@ -78,6 +81,64 @@
 #' @export
 #'
 #'
+normalize_marginalise <- function(marginalise) {
+  if (is.null(marginalise)) return(NULL)
+  if (is.character(marginalise)) {
+    out <- marginalise
+  } else if (is.list(marginalise)) {
+    # Accept the explicit form as a convenience, while the public Stage 1
+    # API remains marginalise = "t0".
+    out <- marginalise$param
+    if (is.null(out)) out <- names(marginalise)
+  } else {
+    stop("marginalise must be a character parameter name or a list containing 'param'")
+  }
+  out <- unique(as.character(out))
+  if (length(out) == 0L || anyNA(out) || any(!nzchar(out))) {
+    stop("marginalise must name at least one parameter")
+  }
+  out
+}
+
+validate_marginalise_design <- function(marginalise, design, model) {
+  params <- normalize_marginalise(marginalise)
+  if (length(params) != 1L) {
+    stop("marginalise currently supports exactly one shared parameter")
+  }
+  spec <- model()
+  if (is.null(spec$type) || !grepl("RACE", spec$type, fixed = TRUE) ||
+      grepl("DDM", spec$type, fixed = TRUE)) {
+    stop("marginalise is currently supported for race models only (not DDM)")
+  }
+  p <- params[[1L]]
+  if (is.null(spec$p_types) || !p %in% names(spec$p_types)) {
+    stop("marginalise parameter '", p, "' is not a model p_type")
+  }
+  f <- design$Flist[[p]]
+  if (is.null(f)) {
+    matches <- vapply(design$Flist, function(z) {
+      as.character(stats::terms(z))[[2L]] == p
+    }, logical(1L))
+    if (any(matches)) f <- design$Flist[[which(matches)[1L]]]
+  }
+  if (is.null(f)) {
+    stop("marginalise parameter '", p, "' must be specified in the design")
+  }
+  rhs <- tryCatch(as.character(stats::terms(f))[[3L]], error = function(e) NULL)
+  if (!identical(rhs, "1")) {
+    stop("marginalise parameter '", p, "' must use an intercept-only design (~ 1)")
+  }
+  mm <- spec$bound$minmax
+  if (is.null(mm) || is.null(colnames(mm)) || !p %in% colnames(mm) ||
+      !is.finite(mm[1L, p])) {
+    stop("marginalise parameter '", p, "' must have a finite lower bound")
+  }
+  if (!is.null(design$constants) && p %in% names(design$constants)) {
+    stop("marginalise parameter '", p, "' cannot be fixed as a constant")
+  }
+  p
+}
+
 design <- function(formula = NULL,factors = NULL,Rlevels = NULL,model,data=NULL,
                    contrasts=NULL,matchfun=NULL,constants=NULL,covariates=NULL,
                    functions=NULL,report_p_vector=TRUE, custom_p_vector = NULL,
@@ -85,7 +146,7 @@ design <- function(formula = NULL,factors = NULL,Rlevels = NULL,model,data=NULL,
                    pre_transform_terms = NULL,
                    transform = NULL, bound = NULL, TC = NULL,
                    LT=NULL,LC=NULL,UC=NULL,UT=NULL,
-                   fixed_accumulator_roles = NULL,...){
+                   fixed_accumulator_roles = NULL, marginalise = NULL,...){
 
   TC <- check_missing(TC, data = data)
   if (!is.null(LT)) TC$LT <- LT
@@ -126,6 +187,10 @@ design <- function(formula = NULL,factors = NULL,Rlevels = NULL,model,data=NULL,
   }
 
   if(!is.null(custom_p_vector)){
+
+    if (!is.null(marginalise)) {
+      stop("marginalise is not supported with custom_p_vector designs")
+    }
 
     model_list <- function(){list(log_likelihood = model)}
     if(!is.null(list(...)$rfun)){
@@ -269,6 +334,16 @@ design <- function(formula = NULL,factors = NULL,Rlevels = NULL,model,data=NULL,
   model <- function(){return(model_list)}
   design$model <- model
   attr(design,"p_vector") <- p_vector
+  if (!is.null(marginalise)) {
+    marginalise_input <- marginalise
+    marginalise <- validate_marginalise_design(marginalise_input, design, model)
+    if (is.list(marginalise_input) && !is.null(marginalise_input$n_nodes)) {
+      attr(design, "marginalise") <- list(param = marginalise,
+                                           n_nodes = marginalise_input$n_nodes)
+    } else {
+      attr(design, "marginalise") <- marginalise
+    }
+  }
   if (report_p_vector) {
     summary(design, data = data)
   }
@@ -739,6 +814,7 @@ design_model <- function(data,design,model=NULL,
     attr(dadm,"p_names") <- p_names
     sampled_p_names <- p_names[!(p_names %in% names(design$constants))]
     attr(dadm,"sampled_p_names") <- sampled_p_names
+    attr(dadm, "marginalise") <- attr(design, "marginalise")
     return(dadm)
   }
   if (any(names(model()$p_types) %in% names(data)))
@@ -908,6 +984,7 @@ design_model <- function(data,design,model=NULL,
   }
   attr(dadm,"model") <- model
   attr(dadm,"constants") <- design$constants
+  attr(dadm, "marginalise") <- attr(design, "marginalise")
   attr(dadm,"ok_trials") <- is.finite(data$rt)
   attr(dadm,"s_data") <- data$subjects
   dadm
@@ -1061,6 +1138,7 @@ dm_list <- function(dadm)
   model <- attr(dadm,"model")
   p_names <- attr(dadm,"p_names")
   sampled_p_names <- attr(dadm,"sampled_p_names")
+  marginalise <- attr(dadm, "marginalise")
   designs <- attr(dadm,"designs")
   expand <- attr(dadm,"expand")
   s_expand <- attr(dadm,"s_expand")
@@ -1101,6 +1179,7 @@ dm_list <- function(dadm)
       attr(dl[[i]], "model") <- NULL
       attr(dl[[i]], "p_names") <- p_names
       attr(dl[[i]], "sampled_p_names") <- sampled_p_names
+      attr(dl[[i]], "marginalise") <- marginalise
       attr(dl[[i]], "designs") <- sub_design(designs, isin)
       # if(!is.null(expand)) attr(dl[[i]],"expand_all") <- expand[isin1]-min(expand[isin1]) + 1
       attr(dl[[i]], "contract") <- NULL

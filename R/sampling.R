@@ -1,15 +1,115 @@
+resolve_marginalise_prior <- function(marginalise, prior) {
+  if (is.null(marginalise)) return(NULL)
+  param <- if (is.list(marginalise)) marginalise$param else marginalise
+  param <- as.character(param)
+  if (length(param) != 1L || is.na(param) || !nzchar(param)) {
+    stop("marginalise must identify exactly one parameter")
+  }
+  mu <- prior$theta_mu_mean[[param]]
+  if (is.null(mu) || !is.finite(mu)) {
+    stop("Could not find a finite prior mean for marginalized parameter '", param, "'")
+  }
+  vv <- prior$theta_mu_var
+  if (is.matrix(vv)) {
+    vi <- if (!is.null(dimnames(vv)) && !is.null(rownames(vv))) {
+      match(param, rownames(vv))
+    } else match(param, names(prior$theta_mu_mean))
+    if (is.na(vi)) stop("Could not find prior variance for marginalized parameter '", param, "'")
+    variance <- vv[vi, vi]
+  } else {
+    variance <- if (!is.null(names(vv))) vv[[param]] else vv[[match(param, names(prior$theta_mu_mean))]]
+  }
+  sigma <- sqrt(variance)
+  if (!is.finite(sigma) || sigma <= 0) {
+    stop("Marginalized parameter '", param, "' needs a finite, positive prior SD")
+  }
+  n_nodes <- if (is.list(marginalise) && !is.null(marginalise$n_nodes)) {
+    as.integer(marginalise$n_nodes)
+  } else 40L
+  if (length(n_nodes) != 1L || is.na(n_nodes) || n_nodes < 2L) {
+    stop("marginalise$n_nodes must be an integer >= 2")
+  }
+  list(param = param, mu = unname(mu), sigma = unname(sigma), n_nodes = n_nodes)
+}
+
+reconstruct_marginalised_particle <- function(particle, data, model, marginalise) {
+  if (is.null(marginalise)) return(as.numeric(particle))
+  p_names <- names(particle)
+  if (is.null(p_names)) stop("A marginalized particle must have parameter names")
+  particle <- as.numeric(particle)
+  names(particle) <- p_names
+  p_idx <- match(marginalise$param, p_names)
+  if (is.na(p_idx)) stop("Marginalized parameter is missing from the particle")
+  # A subject with no observations has no posterior node weights. Draw from the
+  # fixed prior so the stored alpha still has the same shape as ordinary fits.
+  if (is.null(data) || nrow(data) == 0L) {
+    particle[p_idx] <- stats::rnorm(1L, marginalise$mu, marginalise$sigma)
+    names(particle) <- p_names
+    return(particle)
+  }
+  model_spec <- if (is.function(model)) model() else model
+  data <- .cache_ll_data_attrs(data)
+  constants <- attr(data, "constants")
+  if (is.null(constants)) constants <- NA
+  nodes <- calc_ll_oo_marginal_nodes(
+    matrix(particle, nrow = 1L, dimnames = list(NULL, p_names)), data,
+    constants = constants, designs = .oo_expanded_designs(data),
+    type = model_spec$c_name, bounds = model_spec$bound,
+    transforms = model_spec$transform, pretransforms = model_spec$pre_transform,
+    p_types = names(model_spec$p_types), min_ll = log(1e-10),
+    marginalise = marginalise, trend = model_spec$trend
+  )
+  log_terms <- as.numeric(nodes$log_terms[1L, ])
+  if (length(nodes$nodes) == 0L || all(!is.finite(log_terms))) {
+    particle[p_idx] <- stats::rnorm(1L, marginalise$mu, marginalise$sigma)
+  } else {
+    weights <- exp(log_terms - max(log_terms[is.finite(log_terms)]))
+    weights[!is.finite(weights)] <- 0
+    if (!any(weights > 0)) {
+      particle[p_idx] <- stats::rnorm(1L, marginalise$mu, marginalise$sigma)
+    } else {
+      k <- sample.int(length(nodes$nodes), size = 1L, prob = weights)
+      particle[p_idx] <- nodes$nodes[[k]]
+    }
+  }
+  names(particle) <- p_names
+  particle
+}
+
 pmwgs <- function(dadm, type, pars = NULL, prior = NULL,
                   nuisance = NULL, nuisance_non_hyper = NULL, ...) {
   if(is.data.frame(dadm)) dadm <- list(dadm)
   if(is.null(pars)) pars <- names(sampled_pars(attr(dadm[[1]], "prior")))
   if(is.null(prior)) prior <- attr(dadm[[1]], "prior")
+  marginalise <- resolve_marginalise_prior(attr(dadm[[1]], "marginalise"), prior)
   dadm <- extractDadms(dadm)
 
   dadm_list <-dadm$dadm_list
+  if (!is.null(marginalise)) {
+    components <- attr(dadm_list, "components")
+    shared_ll_idx <- attr(dadm_list, "shared_ll_idx")
+    set_marginalise_attr <- function(x) {
+      if (is.data.frame(x)) {
+        attr(x, "marginalise") <- marginalise
+      } else if (is.list(x)) {
+        x <- lapply(x, set_marginalise_attr)
+      }
+      x
+    }
+    dadm_list <- lapply(dadm_list, set_marginalise_attr)
+    attr(dadm_list, "components") <- components
+    attr(dadm_list, "shared_ll_idx") <- shared_ll_idx
+  }
   # Storage for the samples.
   subjects <- sort(as.numeric(unique(dadm$subjects)))
   if(!is.null(nuisance) & !is.numeric(nuisance)) nuisance <- which(pars %in% nuisance)
   if(!is.null(nuisance_non_hyper) & !is.numeric(nuisance_non_hyper)) nuisance_non_hyper <- which(pars %in% nuisance_non_hyper)
+
+  if (!is.null(marginalise) && any(pars %in% marginalise$param &
+                                   is.element(seq_along(pars),
+                                              unique(c(nuisance, nuisance_non_hyper))))) {
+    stop("A marginalized parameter cannot be assigned to a nuisance sampler")
+  }
 
   if(!is.null(nuisance_non_hyper)){
     is_nuisance <- is.element(seq_len(length(pars)), nuisance_non_hyper)
@@ -46,6 +146,8 @@ pmwgs <- function(dadm, type, pars = NULL, prior = NULL,
     samples = samples,
     sampler_nuis = sampler_nuis,
     type = type,
+    marginalise = marginalise,
+    marginalised_idx = names(sampled_pars(attr(dadm[[1]], "prior"))) %in% marginalise$param,
     init = FALSE
   )
   class(sampler) <- "pmwgs"
@@ -143,7 +245,14 @@ start_proposals <- function(s, parameters, n_particles, pmwgs, type, r_cores = 1
                         model = pmwgs$model, r_cores = r_cores)
   weight <- exp(lw - max(lw))
   idx <- sample(x = n_particles, size = 1, prob = weight)
-  return(list(proposal = proposals[idx,], ll = lw[idx]))
+  proposal <- proposals[idx,]
+  marginalise <- attr(pmwgs$data[[which(pmwgs$subjects == s)]], "marginalise")
+  if (!is.null(marginalise)) {
+    names(proposal) <- colnames(proposals)
+    proposal <- reconstruct_marginalised_particle(
+      proposal, pmwgs$data[[which(pmwgs$subjects == s)]], pmwgs$model, marginalise)
+  }
+  return(list(proposal = proposal, ll = lw[idx]))
 }
 
 
@@ -343,6 +452,20 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
   group_mu <- group_pars$mu
   group_var <- group_pars$var
   subj_mu <- parameters$alpha[,s]
+  marginalise <- attr(data, "marginalise")
+  marginal_idx <- rep(FALSE, length(subj_mu))
+  if (!is.null(marginalise)) {
+    if (is.null(names(subj_mu))) {
+      names(subj_mu) <- rownames(parameters$alpha)[seq_along(subj_mu)]
+    }
+    marginal_idx <- names(subj_mu) %in% marginalise$param
+    # Keep a placeholder column for design mapping, but hold the marginalized
+    # coordinate out of every proposal draw and proposal-density evaluation.
+    group_mu[marginal_idx] <- marginalise$mu
+    group_var[marginal_idx, ] <- 0
+    group_var[, marginal_idx] <- 0
+    group_var[marginal_idx, marginal_idx] <- marginalise$sigma^2
+  }
   out_lls <- numeric(length(unq_components))
   particle_multiplier <- 1
   # Set the proposals
@@ -365,14 +488,21 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
   for(i in unq_components){
     # Add 1 to epsilons such that prior/group-level proposals aren't scaled
     epsilons <- c(1, pm_settings[[i]]$epsilon)
-    idx <- tune$components == i
+    idx_full <- tune$components == i
+    idx <- idx_full & !marginal_idx
     # Draw new proposals for each component
     particle_numbers <- numbers_from_proportion(pm_settings[[i]]$mix, pm_settings[[i]]$n_particles*particle_multiplier)
     proposals <- vector("list", n_proposals +1)
-    proposals[[1]] <- subj_mu[idx]
+    proposals[[1]] <- matrix(subj_mu[idx], nrow = 1L)
     for(j in 1:n_proposals){
       # Fill up the proposals
-      proposals[[j + 1]] <- particle_draws(particle_numbers[j], Mus[[j]][idx], Sigmas[[j]][idx,idx] * (epsilons[j]^2))
+      if (any(idx)) {
+        proposals[[j + 1]] <- particle_draws(
+          particle_numbers[j], Mus[[j]][idx],
+          Sigmas[[j]][idx,idx,drop=FALSE] * (epsilons[j]^2))
+      } else {
+        proposals[[j + 1]] <- matrix(numeric(0), nrow = particle_numbers[j], ncol = 0L)
+      }
     }
     proposals <- do.call(rbind, proposals)
 
@@ -383,29 +513,37 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
       colnames(proposals_other) <- names(subj_mu)[!idx]
       colnames(proposals) <- names(subj_mu)[idx]
       proposals <- cbind(proposals, proposals_other)
-      proposals <- proposals[,names(subj_mu)]
+      proposals <- proposals[,names(subj_mu),drop=FALSE]
     } else{
       colnames(proposals) <- names(subj_mu)
     }
 
     # Normally we assume that a component contains all the parameters to estimate the individual likelihood of a joint model
     # Sometimes we may also want to block within a model if it has very high dimensionality
-    shared_idx <- tune$shared_ll_idx[idx][1]
+    shared_idx <- tune$shared_ll_idx[idx_full][1]
     is_shared <- shared_idx == tune$shared_ll_idx
 
     # Calculate likelihoods
     if(tune$components[length(tune$components)] > 1){
       lw <- calc_ll_manager(proposals[,is_shared], dadm = data, model,
-                            component = shared_idx, r_cores = r_cores)
+                            component = shared_idx, r_cores = r_cores,
+                            marginalise = marginalise)
     } else{
       lw <- calc_ll_manager(proposals[,is_shared], dadm = data, model,
-                            r_cores = r_cores)
+                            r_cores = r_cores, marginalise = marginalise)
     }
     lw_total <- lw + prev_ll - lw[1] # make sure lls from other components are included
     # Prior density
-    lp <- mvtnorm::dmvnorm(x = proposals[,idx], mean = group_mu[idx], sigma = group_var[idx,idx], log = TRUE)
+    lp <- if (any(idx)) {
+      mvtnorm::dmvnorm(x = proposals[,idx,drop=FALSE], mean = group_mu[idx],
+                       sigma = group_var[idx,idx,drop=FALSE], log = TRUE)
+    } else rep(0, nrow(proposals))
     if(length(unq_components) > 1){
-      prior_density <- mvtnorm::dmvnorm(x = proposals, mean = group_mu, sigma = group_var, log = TRUE)
+      prior_density <- if (any(!marginal_idx)) {
+        mvtnorm::dmvnorm(x = proposals[,!marginal_idx,drop=FALSE],
+                         mean = group_mu[!marginal_idx],
+                         sigma = group_var[!marginal_idx,!marginal_idx,drop=FALSE], log = TRUE)
+      } else rep(0, nrow(proposals))
     } else{
       prior_density <- lp
     }
@@ -413,7 +551,13 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
     lm <- pm_settings[[i]]$mix[1]*exp(lp)
     for(k in 2:length(Sigmas)){
       # Prior density is updated separately so start at 2
-      lm <- lm + pm_settings[[i]]$mix[k]*mvtnorm::dmvnorm(x = proposals[,idx], mean = Mus[[k]][idx], sigma = Sigmas[[k]][idx,idx]*(epsilons[k]^2))
+      if (any(idx)) {
+        lm <- lm + pm_settings[[i]]$mix[k] * mvtnorm::dmvnorm(
+          x = proposals[,idx,drop=FALSE], mean = Mus[[k]][idx],
+          sigma = Sigmas[[k]][idx,idx,drop=FALSE] * (epsilons[k]^2))
+      } else {
+        lm <- lm + pm_settings[[i]]$mix[k]
+      }
     }
     # Avoid infinite values
     lm <- log(lm)
@@ -428,6 +572,10 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
     out_lls[i] <- lw[idx_ll]
     proposal_out[idx] <- proposals[idx_ll,idx]
     pm_settings[[i]] <- update_pm_settings(pm_settings[[i]], idx_ll, weights, particle_numbers, tune, sum(idx))
+  }
+  names(proposal_out) <- names(subj_mu)
+  if (!is.null(marginalise)) {
+    proposal_out <- reconstruct_marginalised_particle(proposal_out, data, model, marginalise)
   }
   return(list(proposal = proposal_out, ll = sum(out_lls), pm_settings = pm_settings))
 }
@@ -729,13 +877,18 @@ check_prop_performance <- function(prop_performance, stage){
   return(round(prop_performance))
 }
 
-calc_ll_manager <- function(proposals, dadm, model, component = NULL, r_cores = 1){
+calc_ll_manager <- function(proposals, dadm, model, component = NULL, r_cores = 1,
+                            marginalise = NULL){
   if(!is.data.frame(dadm)){
-    lls <- log_likelihood_joint(proposals, dadm, model, component)
+    lls <- log_likelihood_joint(proposals, dadm, model, component, marginalise = marginalise)
   } else{
     model <- model()
     dadm <- .cache_ll_data_attrs(dadm)
+    if (is.null(marginalise)) marginalise <- attr(dadm, "marginalise")
     if(is.null(model$c_name)){ # use the R implementation
+      if (!is.null(marginalise)) {
+        stop("marginalise requires a registered race-model likelihood")
+      }
       lls <- unlist(
         auto_mclapply(1:nrow(proposals),
           function(i) calc_ll_R(proposals[i,], model=model, dadm = dadm),
@@ -750,15 +903,19 @@ calc_ll_manager <- function(proposals, dadm, model, component = NULL, r_cores = 
       constants <- attr(dadm, "constants")
       if(is.null(constants)) constants <- NA
       if (nrow(proposals) <= r_cores) {
-        lls <- calc_ll_oo(proposals, dadm, constants = constants, designs = designs, type = model$c_name,
-                          model$bound, model$transform, model$pre_transform, p_types = p_types, min_ll = log(1e-10),
-                          model$trend)
+        lls <- calc_ll_oo(proposals, dadm, constants = constants, designs = designs,
+                          type = model$c_name, bounds = model$bound,
+                          transforms = model$transform, pretransforms = model$pre_transform,
+                          p_types = p_types, min_ll = log(1e-10), trend = model$trend,
+                          marginalise = marginalise)
       } else {
         idx <- rep(1:r_cores,each=1+(nrow(proposals) %/% r_cores))[1:nrow(proposals)]
         lls <- unlist(auto_mclapply(1:r_cores,function(i) {
           calc_ll_oo(proposals[idx==i,,drop=FALSE], dadm, constants = constants,
-                     designs = designs, type = model$c_name, model$bound, model$transform,
-                     model$pre_transform, p_types = p_types, min_ll = log(1e-10),model$trend)
+                     designs = designs, type = model$c_name, bounds = model$bound,
+                     transforms = model$transform, pretransforms = model$pre_transform,
+                     p_types = p_types, min_ll = log(1e-10),
+                     trend = model$trend, marginalise = marginalise)
         },mc.cores=r_cores))
       }
     }

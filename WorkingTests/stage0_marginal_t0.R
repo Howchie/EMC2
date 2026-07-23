@@ -14,8 +14,9 @@
 #       t0 dimension differs. We report ESS on the shared parameters;
 #   (D) recover parameters (and a post-hoc t0 from the quadrature weights).
 #
-# Model is LBA standard-race GNG here; the machinery is model-agnostic (swap
-# `model = LBA` for RDM etc.), which we spot-check at the end.
+# The primary benchmark below is an LBA GNG/no-go model (deadline-censored
+# data).  The machinery is model-agnostic; the spot checks at the end include
+# both a GNG/no-go RDM and a standard two-choice RDMSWTN with sv > 0.
 # ===========================================================================
 
 suppressMessages(pkgload::load_all(".", quiet = TRUE))
@@ -42,13 +43,17 @@ ess1 <- function(z) {
 ## --------------------------------------------------------------------------
 ## Build a GNG data set + fast likelihood closure.
 ## --------------------------------------------------------------------------
-build <- function(model = LBA, n_trials = 250L, UC = 0.7, seed = 1, noise = "sv") {
+build <- function(model = LBA, n_trials = 250L, UC = 0.7, seed = 1,
+                  noise = "sv", sample_sv = FALSE) {
   set.seed(seed)
   mf <- function(d) as.numeric(d$S) == as.numeric(d$lR)
   # LBA's between-trial drift sd is "sv"; RDM's diffusion sd is "s".
   fml <- c(list(B ~ 0 + lR, v ~ 0 + mismatch + S:match, A ~ 1, t0 ~ 1),
            list(stats::as.formula(paste(noise, "~ 1"))))
   consts <- stats::setNames(c(log(1), log(0.4)), c(noise, "A"))
+  if (isTRUE(sample_sv) && identical(noise, "sv")) {
+    consts <- consts[names(consts) != "sv"]
+  }
   des <- design(
     factors = list(subjects = 1, S = c("go","nogo","nogo","nogo")), Rlevels = c("go","nogo"),
     matchfun = mf,
@@ -58,9 +63,39 @@ build <- function(model = LBA, n_trials = 250L, UC = 0.7, seed = 1, noise = "sv"
   p <- sampled_pars(des, doMap = FALSE)
   p[["B_lRgo"]] <- log(.75); p[["B_lRnogo"]] <- log(.6); p[["t0"]] <- log(.2)
   p[["v_mismatch"]] <- .5; p[["v_Sgo:match"]] <- 2.1; p[["v_Snogo:match"]] <- 2.5
+  # RDMSWTN exposes sv as a sampled parameter; keep this strictly positive in
+  # that check.  For LBA, sv is fixed by `constants` and is not in `p`.
+  if ("sv" %in% names(p)) p[["sv"]] <- log(.35)
   dat <- make_data(p, des, n_trials = n_trials, TC = list(UC = UC))
   emc <- suppressMessages(make_emc(dat, des, type = "single", compress = TRUE, n_chains = 1))
+  list(p = p, dat = dat, dadm = emc[[1]]$data[[1]], model = emc[[1]]$model,
+       ll_fun = make_ll_fun(emc[[1]]$data[[1]], emc[[1]]$model),
+       prop = matrix(p, nrow = 1, dimnames = list(NULL, names(p))))
+}
+
+# A standard two-choice race (no `nogo` level and no deadline) used to ensure
+# the node-count check is not accidentally relying on GNG censoring semantics.
+build_standard_rdmswtn <- function(n_trials = 600L, seed = 17) {
+  set.seed(seed)
+  matchfun <- function(d) as.numeric(d$S) == as.numeric(d$lR)
+  des <- design(
+    factors = list(subjects = 1, S = c("left", "right")),
+    Rlevels = c("left", "right"), matchfun = matchfun,
+    functions = list(match = function(d) ifelse(d$lM == TRUE, 1, 0),
+                     mismatch = function(d) ifelse(d$lM == TRUE, 0, 1)),
+    model = RDMSWTN,
+    formula = list(B ~ 0 + lR, v ~ 0 + lM, A ~ 1, t0 ~ 1,
+                   s ~ 1, sv ~ 1),
+    constants = c(A = log(.2), s = log(1)))
+  p <- sampled_pars(des, doMap = FALSE)
+  p[["B_lRleft"]] <- log(.8); p[["B_lRright"]] <- log(1.0)
+  p[["v_lMFALSE"]] <- log(1.2); p[["v_lMTRUE"]] <- log(2.0)
+  p[["t0"]] <- log(.2); p[["sv"]] <- log(.35)
+  dat <- make_data(p, des, n_trials = n_trials)
+  emc <- suppressMessages(make_emc(dat, des, type = "single",
+                                   compress = TRUE, n_chains = 1))
   list(p = p, dat = dat, dadm = emc[[1]]$data[[1]],
+       model = emc[[1]]$model,
        ll_fun = make_ll_fun(emc[[1]]$data[[1]], emc[[1]]$model),
        prop = matrix(p, nrow = 1, dimnames = list(NULL, names(p))))
 }
@@ -76,10 +111,116 @@ cat(sprintf("data: %d rows compressed; omission rate %.2f; min rt %.3f\n",
             nrow(B$dadm), mean(!is.finite(B$dat$rt) | is.na(B$dat$rt)),
             min(B$dat$rt[is.finite(B$dat$rt)])))
 
-## (A) validation ------------------------------------------------------------
-gl64 <- marginal_ll_t0(prop, ll_fun, eta_mu, eta_sd, n_nodes = 64L)
-ref  <- grid_marginal_ll_t0(prop, ll_fun, eta_mu, eta_sd, n_grid = 2000L)
-cat(sprintf("\n(A) quadrature check: GL(64)=%.5f  grid=%.5f  |diff|=%.2e\n", gl64, ref, abs(gl64 - ref)))
+## (A) validation and node-count benchmark ----------------------------------
+# Use the registered C++ marginal likelihood for the node-count comparison.
+# Its adaptive route first uses a 7-node pilot to locate the common
+# response-informed t0 mass, then spends n_nodes in a composite GL rule with
+# a dense central panel plus explicit tail panels.  The older R grid remains as
+# an independent check, but is explicitly clipped at the model's t0 lower bound
+# so it cannot spend nodes in the min_ll dead zone.
+make_cpp_marginal <- function(B) {
+  model <- B$model()
+  dadm <- EMC2:::.cache_ll_data_attrs(B$dadm)
+  constants <- attr(dadm, "constants"); if (is.null(constants)) constants <- NA
+  designs <- EMC2:::.oo_expanded_designs(dadm)
+  marginal <- function(proposals, n_nodes = NULL, mu = eta_mu, sigma = eta_sd,
+                       adaptive = TRUE, n_scan = 7L) {
+    if (is.null(dim(proposals))) {
+      proposals <- matrix(proposals, nrow = 1L,
+                          dimnames = list(NULL, names(proposals)))
+    }
+    marginalise <- list(param = "t0", mu = mu, sigma = sigma,
+                         adaptive = adaptive, n_scan = as.integer(n_scan))
+    if (!is.null(n_nodes)) marginalise$n_nodes <- as.integer(n_nodes)
+    EMC2:::calc_ll_oo(
+      proposals, dadm, constants = constants, designs = designs,
+      type = model$c_name, bounds = model$bound, transforms = model$transform,
+      pretransforms = model$pre_transform, p_types = names(model$p_types),
+      min_ll = log(1e-10), trend = model$trend,
+      marginalise = marginalise
+    )
+  }
+  nodes <- function(proposals, n_nodes = 40L, mu = eta_mu, sigma = eta_sd,
+                    adaptive = TRUE, n_scan = 7L) {
+    if (is.null(dim(proposals))) {
+      proposals <- matrix(proposals, nrow = 1L,
+                          dimnames = list(NULL, names(proposals)))
+    }
+    EMC2:::calc_ll_oo_marginal_nodes(
+      proposals, dadm, constants = constants, designs = designs,
+      type = model$c_name, bounds = model$bound, transforms = model$transform,
+      pretransforms = model$pre_transform, p_types = names(model$p_types),
+      min_ll = log(1e-10), trend = model$trend,
+      marginalise = list(param = "t0", mu = mu, sigma = sigma,
+                         n_nodes = as.integer(n_nodes), adaptive = adaptive,
+                         n_scan = as.integer(n_scan))
+    )
+  }
+  list(model = model, marginal = marginal, nodes = nodes)
+}
+cpp <- make_cpp_marginal(B)
+t0_lower <- cpp$model$bound$minmax[1, "t0"]
+production_nodes <- 40L
+node_sizes <- c(6L, 8L, 10L, 12L, 16L, 20L, 24L, 28L, 32L, 40L)
+reference_nodes <- 256L
+ll_reference <- as.numeric(cpp$marginal(prop, reference_nodes, adaptive = FALSE))
+ll_by_nodes <- vapply(node_sizes, function(k) as.numeric(cpp$marginal(prop, k)), numeric(1L))
+ll_default <- as.numeric(cpp$marginal(prop))
+
+# Reproduce the old interval only to quantify the bug this benchmark guards:
+# with t0 ~ N(log(.2), .3^2), 7/25 (28%) of its nodes are below the .05 bound.
+legacy_lo <- eta_mu - 6 * eta_sd
+log_ms <- log_ms_from_dadm(B$dadm)
+legacy_nodes <- gl_rule(25L)
+legacy_nodes <- (min(eta_mu + 6 * eta_sd, log_ms) + legacy_lo) / 2 +
+  (min(eta_mu + 6 * eta_sd, log_ms) - legacy_lo) / 2 * legacy_nodes$x
+cat(sprintf("\n(A) legacy interval: %d/%d nodes (%.1f%%) below t0 lower bound %.3f\n",
+            sum(exp(legacy_nodes) < t0_lower), length(legacy_nodes),
+            100 * mean(exp(legacy_nodes) < t0_lower), t0_lower))
+stopifnot(sum(exp(legacy_nodes) < t0_lower) == 7L)
+
+cpp_nodes <- cpp$nodes(prop, production_nodes)
+stopifnot(all(exp(cpp_nodes$nodes) >= t0_lower))
+node_table <- data.frame(
+  final_nodes = node_sizes,
+  kernel_calls = node_sizes + 7L,
+  log_likelihood = ll_by_nodes,
+  abs_error_vs_256 = abs(ll_by_nodes - ll_reference)
+)
+print(node_table, row.names = FALSE, digits = 8)
+ref_stability <- abs(as.numeric(cpp$marginal(prop, 128L, adaptive = FALSE)) - ll_reference)
+cat(sprintf("Fixed C++ GL(128) vs GL(256) stability: %.2e log units\n", ref_stability))
+cat(sprintf("C++ omitted-n_nodes default agrees with adaptive GL(%d): %.2e log units\n",
+            production_nodes, abs(ll_default - ll_by_nodes[node_sizes == production_nodes])))
+stopifnot(ref_stability < 1e-6,
+          abs(ll_default - ll_by_nodes[node_sizes == production_nodes]) < 1e-12,
+          node_table$abs_error_vs_256[node_table$final_nodes == production_nodes] < 1e-3)
+
+# Timing is measured on a modest particle batch to expose the linear node cost
+# without making this scratch test depend on wall-clock precision for one call.
+bench_particles <- prop[rep(1L, 32L), , drop = FALSE]
+bench_cpp <- function(n_nodes, adaptive = TRUE, reps = 20L) {
+  elapsed <- system.time(for (i in seq_len(reps)) {
+    cpp$marginal(bench_particles, n_nodes, adaptive = adaptive)
+  })[["elapsed"]]
+  1000 * elapsed / reps
+}
+timing_ms <- vapply(node_sizes, bench_cpp, numeric(1L))
+node_table$milliseconds_per_32_particles <- timing_ms
+fixed80_ms <- bench_cpp(80L, adaptive = FALSE)
+cat("\nC++ timing (milliseconds per 32-particle marginal call):\n")
+print(node_table[, c("final_nodes", "kernel_calls", "abs_error_vs_256",
+                     "milliseconds_per_32_particles")],
+      row.names = FALSE, digits = 6)
+cat(sprintf("Fixed GL(80) baseline: %.2f ms per 32-particle call\n", fixed80_ms))
+
+gl40 <- as.numeric(cpp$marginal(prop, production_nodes))
+ref_grid <- grid_marginal_ll_t0(
+  prop, ll_fun, eta_mu, eta_sd, n_grid = 2000L,
+  log_lo = log(t0_lower), log_ms = log_ms
+)
+cat(sprintf("\nC++ adaptive GL(%d)=%.5f  clipped R grid=%.5f  |diff|=%.2e\n",
+            production_nodes, gl40, ref_grid, abs(gl40 - ref_grid)))
 
 ## (B) ridge geometry --------------------------------------------------------
 t0g <- log(seq(0.12, 0.32, length.out = 41))
@@ -108,7 +249,7 @@ lp_pair <- function(x) {                                 # x = c(t0, B_lRgo)
 }
 lp_bg_marg <- function(x) {                              # x = B_lRgo (t0 integrated)
   q <- prop; q[, "B_lRgo"] <- x
-  as.numeric(marginal_ll_t0(q, ll_fun, eta_mu, eta_sd, n_nodes = 32L)) + dnorm(x, 0, 3, log = TRUE)
+  as.numeric(cpp$marginal(q, n_nodes = production_nodes)) + dnorm(x, 0, 3, log = TRUE)
 }
 
 # (C1) deterministic argument: condition number of the naive (t0,B_go) posterior.
@@ -165,7 +306,7 @@ par(mfrow = c(1, 1))
 ## (D) recovery via direct optimization of the marginal objective + post-hoc t0
 neg_marg <- function(x) {
   v <- setNames(x, free_shared); q <- prop; q[, free_shared] <- v
-  -(as.numeric(marginal_ll_t0(q, ll_fun, eta_mu, eta_sd, n_nodes = 32L)) + lp_prior_shared(v))
+  -(as.numeric(cpp$marginal(q, n_nodes = production_nodes)) + lp_prior_shared(v))
 }
 set.seed(11)
 opt <- optim(unlist(p[free_shared]) + rnorm(length(free_shared), 0, 0.3), neg_marg,
@@ -176,19 +317,79 @@ rec <- data.frame(param = free_shared, true = round(unlist(p[free_shared]), 3),
 print(rec, row.names = FALSE)
 # post-hoc t0 (writeup's step): quadrature-weighted E[t0|data] at the recovered mode
 xm <- prop; xm[, free_shared] <- opt$par
-gl <- gl_rule(64L); lo <- eta_mu - 6 * eta_sd; hi <- min(eta_mu + 6 * eta_sd, attr(ll_fun, "log_ms"))
-xs <- (hi + lo)/2 + (hi - lo)/2 * gl$x
-lw <- log(gl$w) + dnorm(xs, eta_mu, eta_sd, log = TRUE) +
-      sapply(xs, function(z) { q <- xm; q[, "t0"] <- z; ll_fun(q) })
+nd <- cpp$nodes(xm, production_nodes)
+lw <- nd$log_terms[1L, ]
 wq <- exp(lw - max(lw)); wq <- wq / sum(wq)
-cat(sprintf("post-hoc E[t0 | data] = %.3f s  (true %.3f)\n", sum(exp(xs) * wq), exp(p[["t0"]])))
+cat(sprintf("post-hoc E[t0 | data] = %.3f s  (true %.3f)\n",
+            sum(exp(nd$nodes) * wq), exp(p[["t0"]])))
 
-## model-agnostic spot check (RDM) ------------------------------------------
-cat("\n(model-agnostic check) same wrapper on an RDM GNG data set:\n")
+## model-agnostic spot checks -------------------------------------------------
+cat("\n(model-agnostic check) RDM GNG/no-go data set:\n")
 Br <- build(model = RDM, seed = 7, noise = "s")
-glr <- marginal_ll_t0(Br$prop, Br$ll_fun, eta_mu, eta_sd, n_nodes = 64L)
-refr <- grid_marginal_ll_t0(Br$prop, Br$ll_fun, eta_mu, eta_sd, n_grid = 2000L)
-cat(sprintf("  RDM: GL(64)=%.5f  grid=%.5f  |diff|=%.2e\n", glr, refr, abs(glr - refr)))
+cppr <- make_cpp_marginal(Br)
+rdm_nodes <- c(8L, 12L, 16L, 20L, 24L, 28L, 32L, 40L)
+rdm_reference <- as.numeric(cppr$marginal(Br$prop, n_nodes = 256L, adaptive = FALSE))
+rdm_ll <- vapply(rdm_nodes, function(k) as.numeric(cppr$marginal(Br$prop, n_nodes = k)), numeric(1L))
+cat("  RDM node convergence (C++ log-likelihood error vs GL(256)):\n")
+print(data.frame(nodes = rdm_nodes, abs_error_vs_256 = abs(rdm_ll - rdm_reference)),
+      row.names = FALSE, digits = 8)
+stopifnot(abs(rdm_ll[rdm_nodes == production_nodes] - rdm_reference) < 1e-3)
+glr <- as.numeric(cppr$marginal(Br$prop, n_nodes = production_nodes))
+refr <- grid_marginal_ll_t0(
+  Br$prop, Br$ll_fun, eta_mu, eta_sd, n_grid = 2000L,
+  log_lo = log(cppr$model$bound$minmax[1, "t0"]),
+  log_ms = log_ms_from_dadm(Br$dadm)
+)
+cat(sprintf("  RDM: C++ adaptive GL(%d)=%.5f  clipped grid=%.5f  |diff|=%.2e\n",
+            production_nodes,
+            glr, refr, abs(glr - refr)))
+
+cat("\n(model-agnostic check) RDMSWTN GNG/no-go with sv > 0:\n")
+Bswtn_gng <- build(model = RDMSWTN, seed = 9, noise = "sv", sample_sv = TRUE)
+stopifnot(exp(Bswtn_gng$p[["sv"]]) > 0,
+          any(as.character(Bswtn_gng$dat$S) == "nogo"))
+cppswtn_gng <- make_cpp_marginal(Bswtn_gng)
+swtn_gng_nodes <- c(16L, 20L, 24L, 28L, 32L, 40L)
+swtn_gng_reference <- as.numeric(cppswtn_gng$marginal(
+  Bswtn_gng$prop, n_nodes = 256L, adaptive = FALSE))
+swtn_gng_ll <- vapply(
+  swtn_gng_nodes,
+  function(k) as.numeric(cppswtn_gng$marginal(Bswtn_gng$prop, n_nodes = k)),
+  numeric(1L))
+cat(sprintf("  RDMSWTN GNG sv=%.2f node convergence (error vs fixed GL(256)):\n",
+            exp(Bswtn_gng$p[["sv"]])))
+print(data.frame(nodes = swtn_gng_nodes,
+                 abs_error_vs_256 = abs(swtn_gng_ll - swtn_gng_reference)),
+      row.names = FALSE, digits = 8)
+stopifnot(abs(swtn_gng_ll[swtn_gng_nodes == production_nodes] - swtn_gng_reference) < 1e-3)
+
+cat("\n(model-agnostic check) standard race: RDMSWTN with sv > 0:\n")
+Bswtn <- build_standard_rdmswtn()
+stopifnot(exp(Bswtn$p[["sv"]]) > 0,
+          !any(as.character(Bswtn$dat$S) == "nogo"))
+cppswtn <- make_cpp_marginal(Bswtn)
+swtn_nodes <- c(12L, 16L, 20L, 24L, 28L, 32L, 40L)
+swtn_reference <- as.numeric(cppswtn$marginal(Bswtn$prop, n_nodes = 256L,
+                                               adaptive = FALSE))
+swtn_ll <- vapply(swtn_nodes,
+                  function(k) as.numeric(cppswtn$marginal(Bswtn$prop,
+                                                          n_nodes = k)),
+                  numeric(1L))
+cat(sprintf("  RDMSWTN sv=%.2f node convergence (C++ log-likelihood error vs fixed GL(256)):\n",
+            exp(Bswtn$p[["sv"]])))
+print(data.frame(nodes = swtn_nodes,
+                 abs_error_vs_256 = abs(swtn_ll - swtn_reference)),
+      row.names = FALSE, digits = 8)
+stopifnot(abs(swtn_ll[swtn_nodes == production_nodes] - swtn_reference) < 1e-3)
+glswtn <- as.numeric(cppswtn$marginal(Bswtn$prop, n_nodes = production_nodes))
+refswtn <- grid_marginal_ll_t0(
+  Bswtn$prop, Bswtn$ll_fun, eta_mu, eta_sd, n_grid = 2000L,
+  log_lo = log(cppswtn$model$bound$minmax[1, "t0"]),
+  log_ms = log_ms_from_dadm(Bswtn$dadm)
+)
+cat(sprintf("  RDMSWTN: C++ adaptive GL(%d)=%.5f  clipped grid=%.5f  |diff|=%.2e\n",
+            production_nodes,
+            glswtn, refswtn, abs(glswtn - refswtn)))
 
 cat("\nWrote figure: ", file.path(OUT, "stage0_marginal_t0.pdf"), "\n")
 cat("STAGE0 DONE\n")
