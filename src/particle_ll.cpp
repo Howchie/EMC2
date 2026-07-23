@@ -73,7 +73,8 @@ NumericVector get_pars_c_batch_wrapper_oo_core(NumericMatrix particle_matrix,
 
 NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericVector constants,
                          List designs, String type, List bounds, List transforms, List pretransforms,
-                         CharacterVector p_types, double min_ll, Rcpp::Nullable<Rcpp::List> trend);
+                         CharacterVector p_types, double min_ll, Rcpp::Nullable<Rcpp::List> trend,
+                         Rcpp::Nullable<Rcpp::List> marginalise);
 
 
 static void update_pt_only(ParamTable& param_table,
@@ -2894,10 +2895,172 @@ static RaceSharedState build_race_shared_state(DataFrame data, int n_trials, int
   return race_shared;
 }
 
+// Per-node grid of a t0 marginalization: the quadrature node values (sampled
+// log-t0 scale) and the unnormalized per-particle log-terms
+//   ell_ik = log w_k + log|half| + log p(x_k|eta) + log L_i(x_k)
+// that BOTH the marginal-ll reducer and the storage-time weight accessor share,
+// so the node grid and the reconstruction weights are guaranteed identical.
+struct MarginalGrid {
+  Rcpp::NumericVector nodes;      // length K: shared log-t0 node values
+  Rcpp::NumericMatrix log_terms;  // np x K: ell_ik (softmax over k => p(t0=x_k|y,theta,eta))
+};
+
+// Coherent marginalization core (option 3): integrate ONE shared t0 out of the
+// COMPLETE subject likelihood by fixed-order Gauss-Legendre quadrature on the
+// log-t0 (sampled) axis. Reuses the registered kernel verbatim -- each node
+// overwrites the sampled t0 column and re-calls calc_ll_oo with marginalise off
+// -- so it is model-agnostic (every race model, no per-model code). The
+// interval is clipped to where the likelihood is live: below t0's natural-scale
+// lower bound c_do_bound floors the whole subject to n_trials*min_ll; above
+// min(rt) the fastest response is infeasible. Correctness reference is
+// WorkingTests/marginal_t0_lib.R::marginal_ll_t0.
+static MarginalGrid calc_ll_oo_marginal_core(
+    NumericMatrix particle_matrix, DataFrame data, NumericVector constants,
+    List designs, String type, List bounds, List transforms, List pretransforms,
+    CharacterVector p_types, double min_ll, Rcpp::Nullable<Rcpp::List> trend,
+    Rcpp::List marginalise) {
+  const int np = particle_matrix.nrow();
+
+  // --- marginalization spec: p(t0|eta) = lognormal, log t0 ~ N(mu, sigma) ---
+  const std::string mparam = Rcpp::as<std::string>(marginalise["param"]);
+  const double mu    = Rcpp::as<double>(marginalise["mu"]);
+  const double sigma = Rcpp::as<double>(marginalise["sigma"]);
+  int    n_nodes = marginalise.containsElementNamed("n_nodes")
+                     ? Rcpp::as<int>(marginalise["n_nodes"]) : 25;
+  const double span = marginalise.containsElementNamed("span")
+                     ? Rcpp::as<double>(marginalise["span"]) : 6.0;
+  const double eps  = marginalise.containsElementNamed("eps")
+                     ? Rcpp::as<double>(marginalise["eps"]) : 1e-3;
+  if (n_nodes < 2) n_nodes = 2;
+
+  // --- locate the sampled t0 coordinate in the proposal matrix ---
+  CharacterVector p_names = colnames(particle_matrix);
+  int t0col = -1;
+  for (int j = 0; j < p_names.size(); ++j)
+    if (Rcpp::as<std::string>(p_names[j]) == mparam) { t0col = j; break; }
+  if (t0col < 0)
+    Rcpp::stop("calc_ll_oo marginalise: '%s' is not a sampled column.", mparam);
+
+  // --- lower clip: t0's natural-scale bound (minmax), on the log axis. ---
+  double log_lo = R_NegInf;
+  {
+    NumericMatrix minmax = bounds["minmax"];
+    CharacterVector mm_names = colnames(minmax);
+    for (int j = 0; j < mm_names.size(); ++j)
+      if (Rcpp::as<std::string>(mm_names[j]) == mparam) {
+        const double lo = minmax(0, j);
+        if (R_FINITE(lo) && lo > 0.0) log_lo = std::log(lo);
+        break;
+      }
+  }
+  // --- upper clip: feasibility ceiling log(min finite rt - eps). ---
+  double log_ms = R_PosInf;
+  {
+    NumericVector rt = data["rt"];
+    double mn = R_PosInf;
+    for (int k = 0; k < rt.size(); ++k)
+      if (R_FINITE(rt[k]) && rt[k] < mn) mn = rt[k];
+    if (R_FINITE(mn)) {
+      double top = mn - eps;
+      if (top < std::numeric_limits<double>::min()) top = std::numeric_limits<double>::min();
+      log_ms = std::log(top);
+    }
+  }
+
+  const double lo = std::max(mu - span * sigma, log_lo);
+  const double hi = std::min(mu + span * sigma, log_ms);
+
+  MarginalGrid g;
+  g.nodes = NumericVector(n_nodes);
+  g.log_terms = NumericMatrix(np, n_nodes);
+  if (!(hi > lo)) {                                  // collapsed interval => no mass
+    std::fill(g.nodes.begin(), g.nodes.end(), NA_REAL);
+    std::fill(g.log_terms.begin(), g.log_terms.end(), R_NegInf);
+    return g;
+  }
+
+  const double half = (hi - lo) / 2.0;
+  const double mid  = (hi + lo) / 2.0;
+  const GLRule& rule = gl_get_rule(n_nodes);   // nodes/weights on [-1,1], sum(w)=2
+
+  NumericMatrix pm = Rcpp::clone(particle_matrix);   // scratch: t0 overwritten per node
+  for (int k = 0; k < n_nodes; ++k) {
+    const double xk = mid + half * rule.x[k];        // log-t0 node (shared interval)
+    g.nodes[k] = xk;
+    for (int i = 0; i < np; ++i) pm(i, t0col) = xk;
+    NumericVector llk = calc_ll_oo(pm, data, constants, designs, type, bounds,
+                                   transforms, pretransforms, p_types, min_ll,
+                                   trend, R_NilValue);
+    const double logw = std::log(rule.w[k]) + std::log(half) + R::dnorm(xk, mu, sigma, 1);
+    for (int i = 0; i < np; ++i) g.log_terms(i, k) = logw + llk[i];
+  }
+  return g;
+}
+
+// Marginal log-likelihood: log-sum-exp of the shared core's per-node terms.
+// (Not Rcpp-exported: internal helper, reached only via calc_ll_oo.)
+static NumericVector calc_ll_oo_marginal(
+    NumericMatrix particle_matrix, DataFrame data, NumericVector constants,
+    List designs, String type, List bounds, List transforms, List pretransforms,
+    CharacterVector p_types, double min_ll, Rcpp::Nullable<Rcpp::List> trend,
+    Rcpp::List marginalise) {
+  MarginalGrid g = calc_ll_oo_marginal_core(particle_matrix, data, constants, designs, type,
+      bounds, transforms, pretransforms, p_types, min_ll, trend, marginalise);
+  const int np = g.log_terms.nrow(), nn = g.log_terms.ncol();
+  NumericVector out(np);
+  for (int i = 0; i < np; ++i) {
+    double m = R_NegInf;
+    for (int k = 0; k < nn; ++k) if (g.log_terms(i, k) > m) m = g.log_terms(i, k);
+    if (!R_FINITE(m)) { out[i] = R_NegInf; continue; }
+    double s = 0.0;
+    for (int k = 0; k < nn; ++k) s += std::exp(g.log_terms(i, k) - m);
+    out[i] = m + std::log(s);
+  }
+  return out;
+}
+
+// Storage-time accessor for the t0 reconstruction (reconstruct-at-storage design,
+// plan "use the posterior as sampled"). Returns the quadrature node grid and the
+// unnormalized per-particle log-terms; the sampler forms w = softmax_k(log_terms)
+// and draws one node per subject to write into the stored alpha[t0], so the
+// posterior carries a valid t0 draw and predict()/make_data() stay unchanged.
+// Nodes are on the sampled (log-t0) scale, matching alpha.
+// [[Rcpp::export]]
+List calc_ll_oo_marginal_nodes(
+    NumericMatrix particle_matrix, DataFrame data, NumericVector constants,
+    List designs, String type, List bounds, List transforms, List pretransforms,
+    CharacterVector p_types, double min_ll, Rcpp::List marginalise,
+    Rcpp::Nullable<Rcpp::List> trend = R_NilValue) {
+  MarginalGrid g = calc_ll_oo_marginal_core(particle_matrix, data, constants, designs, type,
+      bounds, transforms, pretransforms, p_types, min_ll, trend, marginalise);
+  return List::create(Rcpp::Named("nodes") = g.nodes,
+                      Rcpp::Named("log_terms") = g.log_terms);
+}
+
 // [[Rcpp::export]]
 NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericVector constants,
                          List designs, String type, List bounds, List transforms, List pretransforms,
-                         CharacterVector p_types, double min_ll, Rcpp::Nullable<Rcpp::List> trend = R_NilValue) {
+                         CharacterVector p_types, double min_ll, Rcpp::Nullable<Rcpp::List> trend = R_NilValue,
+                         Rcpp::Nullable<Rcpp::List> marginalise = R_NilValue) {
+  // -------------------------------------------------------------------------
+  // Optional coherent marginalization of a shared subject-level parameter
+  // (Stage 1: the non-decision time t0 in race/GNG models). When `marginalise`
+  // is supplied we integrate ONE shared t0 out of the COMPLETE subject
+  // likelihood via Gauss-Legendre quadrature on the log-t0 (sampled) axis:
+  //     Lbar(theta) = int p(t0|eta) L(t0, theta) dt0,   log t0 ~ N(mu, sigma)
+  // The SAME t0 is inserted into every trial at each node (coherent, not the
+  // trialwise prod-of-integrals). Each node overwrites the sampled t0 column
+  // and re-calls THIS function with marginalise off, so the existing kernel is
+  // reused verbatim for every race model (no per-model code). The integration
+  // interval is clipped to where the likelihood is live: below the t0 lower
+  // bound c_do_bound floors the whole subject to min_ll; above min(rt) a
+  // response is infeasible. When `marginalise` is null this is a single branch
+  // test and the byte-identical existing path runs (zero cost to other models).
+  if (marginalise.isNotNull()) {
+    return calc_ll_oo_marginal(particle_matrix, data, constants, designs, type, bounds,
+                               transforms, pretransforms, p_types, min_ll, trend,
+                               Rcpp::List(marginalise));
+  }
   const int n_particles = particle_matrix.nrow();
   const int n_trials = data.nrow();
   NumericVector lls(n_particles);
@@ -4330,13 +4493,10 @@ static inline double lr_response_cdf(int rule_code, int resp_code,
   return NA_REAL;
 }
 
-// P(no overt response by t) for the detection rules. Rule 5
-// (OR_DETECTION_ANALYTIC): the response is the first active detector to fire,
-// so N(t) is the joint survivor of the active detectors. Rule 6
-// (OR_DETECTION_GNG): no overt response by t means the nogo accumulator won
-// the race at some u <= t (a withheld response) or nothing finished by t.
-// Used for upper-censor masses and the truncation normaliser. t must be
-// finite; t <= 0 returns 1.
+// P(no overt response by t) for the legacy analytic-detection helper. The
+// four-horse GNG route is handled by lr4_N_at below; it has no separate nogo
+// accumulator. Used for upper-censor masses and the truncation normaliser.
+// t must be finite; t <= 0 returns 1.
 static double lr_detection_no_response_prob(
     int rule_code,
     int cond,
@@ -4574,8 +4734,7 @@ static double logicalrules_detection_trial_ll(
 }
 
 // ===========================================================================
-// LogicalRules correlated-target capacity routes
-// (logicalrules_correlated_capacity_plan.md).
+// LogicalRules correlated-target capacity routes.
 //
 // On a redundant-target (AB) trial one latent standard-normal factor z scales
 // both target drift means: V_i | z ~ N((kappa + tau*z) * v_i, sv_i^2) for the

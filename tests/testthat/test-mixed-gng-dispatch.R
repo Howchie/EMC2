@@ -36,18 +36,11 @@ set_detection_params <- function(p_vec, values) {
   p_vec
 }
 
-detection_funcs <- list(
+logical_rule_funcs <- list(
   GoA = function(d) ifelse(d$lR == "A", 1, 0),
   GoB = function(d) ifelse(d$lR == "B", 1, 0),
-  NoGo = function(d) ifelse(d$lR == "nogo", 1, 0)
-)
-
-logical_rule_funcs <- c(
-  detection_funcs,
-  list(
-    NegA = function(d) ifelse(d$lR == "n_A", 1, 0),
-    NegB = function(d) ifelse(d$lR == "n_B", 1, 0)
-  )
+  NegA = function(d) ifelse(d$lR == "n_A", 1, 0),
+  NegB = function(d) ifelse(d$lR == "n_B", 1, 0)
 )
 
 test_that("mixed 2AFC and GNG pooled race data dispatches by active nogo accumulator", {
@@ -165,78 +158,6 @@ test_that("make_data supports pooled mixed 2AFC and GNG race templates", {
   expect_true(all(is.infinite(dat$UT[dat$Condition == "gng"])))
   expect_true(all(dat$LT[dat$Condition == "2afc"] == 0.2))
   expect_true(all(dat$UT[dat$Condition == "2afc"] == 0.9))
-})
-
-test_that("full four-accumulator OR rules are unchanged by adding a dormant nogo role", {
-  or_template <- data.frame(
-    subjects = factor(rep("s1", 4)),
-    S = factor(c("NN", "AN", "NB", "AB"), levels = c("NN", "AN", "NB", "AB")),
-    LogicalRule = factor(rep("OR", 4), levels = c("OR")),
-    R = factor(rep(NA_character_, 4), levels = c("yes", "no"))
-  )
-
-  or_matchfun <- function(d) dplyr::case_when(
-    d$S == "NN" & d$lR == "n_A" ~ TRUE,
-    d$S == "NN" & d$lR == "n_B" ~ TRUE,
-    d$S == "AN" & d$lR == "A" ~ TRUE,
-    d$S == "AN" & d$lR == "n_B" ~ TRUE,
-    d$S == "NB" & d$lR == "n_A" ~ TRUE,
-    d$S == "NB" & d$lR == "B" ~ TRUE,
-    d$S == "AB" & d$lR == "A" ~ TRUE,
-    d$S == "AB" & d$lR == "B" ~ TRUE,
-    TRUE ~ FALSE
-  )
-
-  base_design <- design(
-    data = or_template,
-    Rlevels = c("yes", "no"),
-    fixed_accumulator_roles = factor(c("A", "B", "n_A", "n_B"), levels = c("A", "B", "n_A", "n_B")),
-    matchfun = or_matchfun,
-    model = LogicalRulesLBA,
-    formula = list(v ~ 0 + GoA + GoB + NegA + NegB,
-                   B ~ 0 + GoA + GoB + NegA + NegB,
-                   t0 ~ 1, A ~ 1),
-    constants = c(sv = log(1)),
-    functions = logical_rule_funcs
-  )
-  p_base <- sampled_pars(base_design, doMap = FALSE)
-  p_base <- set_detection_params(
-    p_base,
-    c(v_GoA = 1.45, v_GoB = 1.15, v_NegA = 0.75, v_NegB = 0.7,
-      B_GoA = log(0.8), B_GoB = log(0.78), B_NegA = log(0.85), B_NegB = log(0.88),
-      t0 = log(0.2), A = log(0.3))
-  )
-
-  set.seed(21)
-  or_dat <- make_data(p_base, base_design, data = or_template, expand = 200)
-  base_ctx <- build_ll_ctx(or_dat, base_design)
-
-  pooled_design <- design(
-    data = transform(or_dat, R = factor(R, levels = c("yes", "no", "nogo"))),
-    Rlevels = c("yes", "no", "nogo"),
-    fixed_accumulator_roles = factor(c("A", "B", "n_A", "n_B", "nogo"),
-                                     levels = c("A", "B", "n_A", "n_B", "nogo")),
-    matchfun = or_matchfun,
-    model = LogicalRulesLBA,
-    formula = list(v ~ 0 + GoA + GoB + NegA + NegB + NoGo,
-                   B ~ 0 + GoA + GoB + NegA + NegB + NoGo,
-                   t0 ~ 1, A ~ 1),
-    constants = c(sv = log(1)),
-    functions = logical_rule_funcs
-  )
-  p_pool <- sampled_pars(pooled_design, doMap = FALSE)
-  p_pool <- set_detection_params(
-    p_pool,
-    c(v_GoA = 1.45, v_GoB = 1.15, v_NegA = 0.75, v_NegB = 0.7, v_NoGo = 2.1,
-      B_GoA = log(0.8), B_GoB = log(0.78), B_NegA = log(0.85), B_NegB = log(0.88), B_NoGo = log(0.58),
-      t0 = log(0.2), A = log(0.3))
-  )
-  pooled_ctx <- build_ll_ctx(transform(or_dat, R = factor(R, levels = c("yes", "no", "nogo"))), pooled_design)
-
-  ll_base <- calc_ctx_ll(base_ctx, matrix(p_base, nrow = 1, dimnames = list(NULL, names(p_base))))
-  ll_pool <- calc_ctx_ll(pooled_ctx, matrix(p_pool, nrow = 1, dimnames = list(NULL, names(p_pool))))
-
-  expect_equal(ll_pool, ll_base, tolerance = 1e-8)
 })
 
 test_that("logical-rule GL path handles unequal t0 within target/nontarget pairs", {

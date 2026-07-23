@@ -44,8 +44,7 @@ lr_funcs <- list(
   GoA = function(d) ifelse(d$lR == "A", 1, 0),
   GoB = function(d) ifelse(d$lR == "B", 1, 0),
   NegA = function(d) ifelse(d$lR == "n_A", 1, 0),
-  NegB = function(d) ifelse(d$lR == "n_B", 1, 0),
-  NoGo = function(d) ifelse(d$lR == "nogo", 1, 0)
+  NegB = function(d) ifelse(d$lR == "n_B", 1, 0)
 )
 
 lr_pvec <- function(design) {
@@ -53,7 +52,6 @@ lr_pvec <- function(design) {
   p[] <- 0
   vals <- c(v_GoA = 1.60, v_GoB = 1.10, v_NegA = 0.95, v_NegB = 1.25,
             B_GoA = log(0.75), B_GoB = log(0.95), B_NegA = log(0.85), B_NegB = log(0.70),
-            v_NoGo = 1.30, B_NoGo = log(0.80),
             t0 = log(0.2), A = log(0.3))
   for (nm in names(vals)) if (nm %in% names(p)) p[[nm]] <- vals[[nm]]
   p

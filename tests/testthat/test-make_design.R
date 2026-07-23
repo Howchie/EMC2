@@ -42,6 +42,102 @@ test_that("auto covariate detection ignores unused numeric columns", {
   expect_false("UNUSED_NUM" %in% des$Fcovariates)
 })
 
+test_that("auto covariate detection keeps numeric inputs used by functions", {
+  dat <- data.frame(
+    subjects = factor(rep(1, 4)),
+    S = factor(c("left", "left", "right", "right")),
+    R = factor(c("left", "left", "right", "right"),
+               levels = c("left", "right")),
+    rt = c(0.5, 0.6, 0.55, 0.65),
+    shift = c(0.1, 0.2, 0.3, 0.4)
+  )
+
+  des <- design(
+    data = dat,
+    model = LBA,
+    matchfun = function(d) d$S == d$lR,
+    functions = list(
+      delay = function(d) ifelse(d$lR == "right", d$shift, 0)
+    ),
+    formula = list(v ~ 1, B ~ 1, A ~ 1, sv ~ 1, t0 ~ delay),
+    constants = c(sv = log(1), t0_delay = 1),
+    pre_transform_terms = list(t0 = "t0"),
+    report_p_vector = FALSE
+  )
+
+  expect_true("shift" %in% des$Fcovariates)
+
+  dadm <- EMC2:::design_model(dat, des, compress = FALSE, verbose = FALSE)
+  expect_true(all(c("shift", "delay") %in% names(dadm)))
+  expect_equal(dadm$delay[dadm$lR == "left"],
+               rep(0, sum(dadm$lR == "left")))
+  expect_equal(dadm$delay[dadm$lR == "right"], dadm$shift[dadm$lR == "right"])
+})
+
+test_that("split transforms apply to dropped self-intercept designs", {
+  dat <- data.frame(
+    subjects = factor(rep(1, 4)),
+    S = factor(c("left", "left", "right", "right")),
+    R = factor(c("left", "left", "right", "right"),
+               levels = c("left", "right")),
+    rt = c(0.5, 0.6, 0.55, 0.65),
+    shift = rep(0, 4)
+  )
+  delay <- function(d) ifelse(d$lR == "right", d$shift, 0)
+
+  des <- design(
+    data = dat,
+    model = LBA,
+    matchfun = function(d) d$S == d$lR,
+    functions = list(delay = delay),
+    formula = list(v ~ 1, B ~ 1, A ~ 1, sv ~ 1, t0 ~ delay),
+    constants = c(sv = log(1), t0_delay = 1),
+    pre_transform_terms = list(t0 = "t0"),
+    report_p_vector = FALSE
+  )
+
+  dadm <- EMC2:::design_model(
+    dat, des, compress = FALSE, verbose = FALSE,
+    drop_unobserved = TRUE
+  )
+  expect_identical(colnames(attr(dadm, "designs")$t0), "t0")
+
+  p <- EMC2:::sampled_pars(des)
+  p[] <- 0
+  p["t0"] <- log(0.2)
+  mapped <- EMC2:::get_pars_matrix_oo(p, dadm, des$model())
+  expect_equal(unique(mapped[, "t0"]), 0.2, tolerance = 1e-12)
+})
+
+test_that("ordinary self-intercept designs retain their existing mapping", {
+  dat <- data.frame(
+    subjects = factor(rep(1, 4)),
+    S = factor(c("left", "left", "right", "right")),
+    R = factor(c("left", "left", "right", "right"),
+               levels = c("left", "right")),
+    rt = c(0.5, 0.6, 0.55, 0.65)
+  )
+
+  des <- design(
+    data = dat,
+    model = LBA,
+    matchfun = function(d) d$S == d$lR,
+    formula = list(v ~ 1, B ~ 1, A ~ 1, sv ~ 1, t0 ~ 1),
+    constants = c(sv = log(1)),
+    report_p_vector = FALSE
+  )
+
+  dadm <- EMC2:::design_model(
+    dat, des, compress = FALSE, verbose = FALSE,
+    drop_unobserved = TRUE
+  )
+  p <- EMC2:::sampled_pars(des)
+  p[] <- 0
+  p["t0"] <- log(0.2)
+  mapped <- EMC2:::get_pars_matrix_oo(p, dadm, des$model())
+  expect_equal(unique(mapped[, "t0"]), 0.2, tolerance = 1e-12)
+})
+
 test_that("auto factor detection keeps factor inputs used by functions", {
   dat <- data.frame(
     subjects = factor(c(1, 1, 1, 1)),

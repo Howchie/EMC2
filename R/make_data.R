@@ -637,8 +637,11 @@ apply_logical_rules <- function(LogicalRule, A_t, nA_t, B_t, nB_t) {
   A_yes <- A_t < nA_t
   B_yes <- B_t < nB_t
 
-  tieA <- A_t == nA_t
-  tieB <- B_t == nB_t
+  # Equal finite finishing times are genuine ties.  Two Inf values mean that
+  # neither accumulator finished, not that they tied at a finite time; in
+  # particular, GNG must keep those trials as withheld responses.
+  tieA <- is.finite(A_t) & is.finite(nA_t) & (A_t == nA_t)
+  tieB <- is.finite(B_t) & is.finite(nB_t) & (B_t == nB_t)
   if (any(tieA)) A_yes[tieA] <- runif(sum(tieA)) < 0.5
   if (any(tieB)) B_yes[tieB] <- runif(sum(tieB)) < 0.5
 
@@ -718,10 +721,9 @@ apply_logical_rules <- function(LogicalRule, A_t, nA_t, B_t, nB_t) {
   cond
 }
 
-# Shared-capacity LogicalRules finishing-time sampler
-# (logicalrules_correlated_capacity_plan.md).  One latent standard-normal
+# Shared-capacity LogicalRules finishing-time sampler. One latent standard-normal
 # factor per AB trial scales both target drift means:
-# V_i = (kappa + tau*z) * v_i + eps_i for i in {A, B}; nontarget, nogo, and
+# V_i = (kappa + tau*z) * v_i + eps_i for i in {A, B}; nontarget and
 # time racers never load on the factor.  With posdrift the correlated pair is
 # jointly conditioned on both target drifts being positive (rejection on
 # (z, V_A, V_B)); independent racers keep their ordinary univariate

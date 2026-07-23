@@ -2,7 +2,7 @@
 #define EMC2_LR_CAPACITY_COUNTERS_H
 
 // Test/benchmark observability for the LogicalRules correlated-capacity
-// likelihood routes (logicalrules_correlated_capacity_plan.md).  Counters are
+// likelihood routes. Counters are
 // enabled only when the environment variable EMC2_LRCAP_COUNTERS is set to a
 // non-empty value other than "0"; the flag is read once per likelihood
 // invocation, and the counters are deliberately plain (non-atomic) since the

@@ -874,6 +874,39 @@ RDMSWTN <- function(erlang_shape = 1L, erlang_type = "none", posdrift = TRUE) {
   )
 }
 
+#' RDMSWTN Logical Rules Model
+#'
+#' Use the current RDMSWTN accumulator distribution for the logical-rules
+#' likelihood. The logical-rules evaluator is shared with the other race
+#' models; adding the `LogicalRules` model-name marker routes the compiled
+#' likelihood through the RDMSWTN adapter while retaining the ordinary
+#' RDMSWTN parameter and clock contract.
+#'
+#' Logical rules use accumulator roles `A`, `B`, `n_A`, and `n_B` and the
+#' `LogicalRule` data column. Supported rules are `OR`, `AND`, `XOR`, `ID`,
+#' `OR_DETECTION_ANALYTIC`, and `OR_DETECTION_GNG`.
+#'
+#' @param erlang_shape Integer `1` for exponential clocks, `2` for Erlang-2,
+#'   or `"mixed"` for the Erlang-1/Erlang-2 mixture.
+#' @param erlang_type Clock configuration passed to [RDMSWTN()].
+#' @param posdrift Logical. If `TRUE` (default), truncate the between-trial
+#'   normal drift distribution below at zero; if `FALSE`, use untruncated
+#'   drifts and allow intrinsic omissions.
+#' @return A model list compatible with [design()].
+#' @export
+#'
+LogicalRulesRDMSWTN <- function(erlang_shape = 1L, erlang_type = "none",
+                                posdrift = TRUE) {
+  out <- RDMSWTN(erlang_shape = erlang_shape,
+                 erlang_type = erlang_type,
+                 posdrift = posdrift)
+  out$c_name <- paste0(out$c_name, "_LogicalRules")
+  out$log_likelihood <- function(pars, dadm, model, min_ll = log(1e-10)) {
+    stop("LogicalRulesRDMSWTN: R likelihood path not implemented. Use the compiled path.")
+  }
+  out
+}
+
 .rdmswtn_erlang_omega <- function(pars, erlang) {
   n <- nrow(pars)
   if (is.null(n)) n <- length(pars) > 0

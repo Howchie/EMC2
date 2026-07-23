@@ -193,7 +193,8 @@ design <- function(formula = NULL,factors = NULL,Rlevels = NULL,model,data=NULL,
       # trends, or required by an accumulator map. Map inputs can be character
       # columns (for example, `cov_left` and `cov_right`), so they are not
       # represented in `factors` above.
-      covariates <- covariates[covariates %in% c(all_preds, trend_vars, map_vars)]
+      covariates <- covariates[covariates %in%
+                               c(all_preds, function_vars, trend_vars, map_vars)]
       if(length(covariates) == 0) covariates <- NULL
     }
   } else {if(is.null(Rlevels)) stop("make sure Rlevels is specified")} # this check wasn't present - would break accumulator logic

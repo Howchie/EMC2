@@ -29,3 +29,18 @@ test_that("LogicalRules detection treats missing stimulus as NN", {
   expect_true(is.na(simulated$R[2]))
   expect_true(is.infinite(simulated$rt[2]))
 })
+
+test_that("GNG does not treat defective Inf/Inf channels as ties", {
+  # Valid positive-drift LBA draws normally finish.  This defensive case
+  # covers an accumulator that is defective/invalid and therefore reaches the
+  # logical-rule helper with an Inf finish time.
+  n <- 100L
+  out <- EMC2:::apply_logical_rules(
+    LogicalRule = rep("OR_DETECTION_GNG", n),
+    A_t = rep(Inf, n), nA_t = rep(Inf, n),
+    B_t = rep(Inf, n), nB_t = rep(Inf, n)
+  )
+
+  expect_true(all(is.na(out$R)))
+  expect_true(all(is.infinite(out$rt) & out$rt > 0))
+})

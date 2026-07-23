@@ -1,7 +1,7 @@
 #### C++ rfun dispatch (rfun_port_plan.md) ----
 #
 # Thin R-side wrappers around the C++ simulation kernels (src/model_rng.cpp)
-# for LBA/LBAIO/LogicalRulesLBA, BAwL, RDM and RDMSWTN. Each wrapper falls
+# for LBA/LBAIO/logical-rules race models, BAwL, RDM and RDMSWTN. Each wrapper falls
 # back to the pure-R reference rfun (.lba_rfun/rBAwL/rRDM/rRDMSWTN) when the
 # `emc2.cpp_rfun` option is turned off. The kernels are distributionally,
 # not stream-, equivalent to the R rfuns -- set.seed()-reproduced simulated

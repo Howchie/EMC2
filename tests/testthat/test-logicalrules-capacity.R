@@ -3,7 +3,6 @@
 lr_capacity_functions <- list(
   GoA = function(d) ifelse(d$lR == "A", 1, 0),
   GoB = function(d) ifelse(d$lR == "B", 1, 0),
-  NoGo = function(d) ifelse(d$lR == "nogo", 1, 0),
   NegA = function(d) ifelse(d$lR == "n_A", 1, 0),
   NegB = function(d) ifelse(d$lR == "n_B", 1, 0)
 )
@@ -60,9 +59,6 @@ lr_capacity_parameters <- function(design, tau = 0) {
   for (nm in names(values)) {
     if (nm %in% names(p)) p[nm] <- values[[nm]]
   }
-  for (nm in c("v_NoGo", "B_NoGo")) {
-    if (nm %in% names(p)) p[nm] <- if (nm == "v_NoGo") 1.3 else log(0.8)
-  }
   if (all(c("kappa", "tau") %in% names(p))) {
     p["kappa"] <- 0                 # log(1)
     p["tau"] <- if (tau == 0) log(0) else log(tau)
@@ -73,15 +69,13 @@ lr_capacity_parameters <- function(design, tau = 0) {
 lr_capacity_detection_design <- function(rule, data, roles) {
   design_data <- data
   design_data$R <- factor(NA_character_, levels = roles)
-  target_formula <- if (length(roles) == 2) v ~ 0 + GoA + GoB else v ~ 0 + GoA + GoB + NoGo
-  threshold_formula <- if (length(roles) == 2) B ~ 0 + GoA + GoB else B ~ 0 + GoA + GoB + NoGo
   design(
     data = design_data,
     Rlevels = c("yes", "no"),
     fixed_accumulator_roles = factor(roles, levels = roles),
     matchfun = function(d) TRUE,
     model = function() LogicalRulesLBA(capacity = TRUE),
-    formula = list(target_formula, threshold_formula,
+    formula = list(v ~ 0 + GoA + GoB, B ~ 0 + GoA + GoB,
                    t0 ~ 1, A ~ 1, kappa ~ 1, tau ~ 1),
     constants = c(sv = log(1)),
     functions = lr_capacity_functions

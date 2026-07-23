@@ -545,8 +545,11 @@ struct ParamTable {
       DesignEntry& entry = design_plan[i];
       if (!entry.valid) continue;
 
-      // skip self-intercept-only designs
-      if (entry.skip_self_intercept) {
+      // A self-intercept-only design is normally already represented by the
+      // parameter value in `base`, so remapping it is redundant.  It is not
+      // redundant for split transforms: the intercept is the pre-transform
+      // sum and must still pass through the requested transform.
+      if (entry.skip_self_intercept && !entry.split_transform) {
         continue;
       }
 
