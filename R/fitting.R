@@ -849,6 +849,13 @@ make_emc <- function(data,design,model=NULL,
   prior_in <- prior(design, type, update = prior_in, group_design = group_design, ...)
   attr(dadm_list[[1]], "prior") <- prior_in
 
+  # Opt-in t0 (etc.) marginalisation travels as an explicit argument to the
+  # sampler, never as a dadm attribute (predict/make_data/IC must not integrate).
+  marginalise_flag <- attr(design[[1]], "marginalise")
+  if (!is.null(marginalise_flag) && !type %in% c("standard", "blocked", "diagonal")) {
+    stop("marginalise is currently only supported for the standard, blocked and diagonal group-level types")
+  }
+
   # if(!is.null(subject_covariates)) attr(dadm_list, "subject_covariates") <- subject_covariates
   if (type %in% c("single", "infnt_factor", "diagonal-gamma")) {
     out <- pmwgs(dadm_list, type, nuisance = nuisance,
@@ -886,7 +893,8 @@ make_emc <- function(data,design,model=NULL,
     out <- pmwgs(dadm_list, type, par_groups=par_groups,
                  group_design = group_design,
                  nuisance = nuisance,
-                 nuisance_non_hyper = nuisance_non_hyper)
+                 nuisance_non_hyper = nuisance_non_hyper,
+                 marginalise = marginalise_flag)
   } else if (type == "factor") {
     out <- pmwgs(dadm_list, type, n_factors = n_factors,
                  nuisance = nuisance,

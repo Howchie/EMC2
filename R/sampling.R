@@ -32,6 +32,50 @@ resolve_marginalise_prior <- function(marginalise, prior) {
   list(param = param, mu = unname(mu), sigma = unname(sigma), n_nodes = n_nodes)
 }
 
+# Build the t0 quadrature grid for one or more proposals: the node values
+# (sampled t0 scale) and the np x K unnormalized log-terms. Shared by the
+# particle step (which reduces it to the marginal ll AND reuses the accepted
+# row for reconstruction) and the init/start path, so the grid is only ever
+# computed once per likelihood evaluation.
+compute_marginal_grid <- function(proposals, data, model, marginalise) {
+  model_spec <- if (is.function(model)) model() else model
+  set_stop_method_from_model(model_spec)  # SS models: stop_method -> C++ config
+  data <- .cache_ll_data_attrs(data)
+  constants <- attr(data, "constants")
+  if (is.null(constants)) constants <- NA
+  calc_ll_oo_marginal_nodes(
+    proposals, data, constants = constants, designs = .oo_expanded_designs(data),
+    type = model_spec$c_name, bounds = model_spec$bound,
+    transforms = model_spec$transform, pretransforms = model_spec$pre_transform,
+    p_types = names(model_spec$p_types), min_ll = log(1e-10),
+    marginalise = marginalise, trend = model_spec$trend
+  )
+}
+
+# Reduce a grid of log-terms (np x K) to the marginal log-likelihood per
+# proposal by a numerically stable row-wise log-sum-exp.
+marginal_ll_from_grid <- function(log_terms) {
+  apply(log_terms, 1L, function(r) {
+    fin <- is.finite(r)
+    if (!any(fin)) return(-Inf)
+    m <- max(r[fin])
+    m + log(sum(exp(r - m)))
+  })
+}
+
+# Draw one t0 node ~ Categorical(softmax(log_terms_row)) for the stored alpha.
+# Falls back to the fixed prior when the row carries no finite mass.
+draw_marginal_node <- function(nodes, log_terms_row, marginalise) {
+  if (length(nodes) == 0L || all(!is.finite(log_terms_row))) {
+    return(stats::rnorm(1L, marginalise$mu, marginalise$sigma))
+  }
+  w <- exp(log_terms_row - max(log_terms_row[is.finite(log_terms_row)]))
+  w[!is.finite(w)] <- 0
+  if (!any(w > 0)) return(stats::rnorm(1L, marginalise$mu, marginalise$sigma))
+  nodes[[sample.int(length(nodes), size = 1L, prob = w)]]
+}
+
+# Standalone reconstruction (init/no-reuse path): computes its own grid.
 reconstruct_marginalised_particle <- function(particle, data, model, marginalise) {
   if (is.null(marginalise)) return(as.numeric(particle))
   p_names <- names(particle)
@@ -44,62 +88,26 @@ reconstruct_marginalised_particle <- function(particle, data, model, marginalise
   # fixed prior so the stored alpha still has the same shape as ordinary fits.
   if (is.null(data) || nrow(data) == 0L) {
     particle[p_idx] <- stats::rnorm(1L, marginalise$mu, marginalise$sigma)
-    names(particle) <- p_names
     return(particle)
   }
-  model_spec <- if (is.function(model)) model() else model
-  data <- .cache_ll_data_attrs(data)
-  constants <- attr(data, "constants")
-  if (is.null(constants)) constants <- NA
-  nodes <- calc_ll_oo_marginal_nodes(
-    matrix(particle, nrow = 1L, dimnames = list(NULL, p_names)), data,
-    constants = constants, designs = .oo_expanded_designs(data),
-    type = model_spec$c_name, bounds = model_spec$bound,
-    transforms = model_spec$transform, pretransforms = model_spec$pre_transform,
-    p_types = names(model_spec$p_types), min_ll = log(1e-10),
-    marginalise = marginalise, trend = model_spec$trend
-  )
-  log_terms <- as.numeric(nodes$log_terms[1L, ])
-  if (length(nodes$nodes) == 0L || all(!is.finite(log_terms))) {
-    particle[p_idx] <- stats::rnorm(1L, marginalise$mu, marginalise$sigma)
-  } else {
-    weights <- exp(log_terms - max(log_terms[is.finite(log_terms)]))
-    weights[!is.finite(weights)] <- 0
-    if (!any(weights > 0)) {
-      particle[p_idx] <- stats::rnorm(1L, marginalise$mu, marginalise$sigma)
-    } else {
-      k <- sample.int(length(nodes$nodes), size = 1L, prob = weights)
-      particle[p_idx] <- nodes$nodes[[k]]
-    }
-  }
-  names(particle) <- p_names
+  grid <- compute_marginal_grid(
+    matrix(particle, nrow = 1L, dimnames = list(NULL, p_names)), data, model, marginalise)
+  particle[p_idx] <- draw_marginal_node(grid$nodes, as.numeric(grid$log_terms[1L, ]), marginalise)
   particle
 }
 
 pmwgs <- function(dadm, type, pars = NULL, prior = NULL,
-                  nuisance = NULL, nuisance_non_hyper = NULL, ...) {
+                  nuisance = NULL, nuisance_non_hyper = NULL, marginalise = NULL, ...) {
   if(is.data.frame(dadm)) dadm <- list(dadm)
   if(is.null(pars)) pars <- names(sampled_pars(attr(dadm[[1]], "prior")))
   if(is.null(prior)) prior <- attr(dadm[[1]], "prior")
-  marginalise <- resolve_marginalise_prior(attr(dadm[[1]], "marginalise"), prior)
+  # The opt-in flag arrives as an explicit argument (from design(marginalise=)),
+  # NOT tagged onto the dadm: downstream consumers (predict / make_data / IC)
+  # read the reconstructed t0 like any other parameter and must never integrate.
+  marginalise <- resolve_marginalise_prior(marginalise, prior)
   dadm <- extractDadms(dadm)
 
   dadm_list <-dadm$dadm_list
-  if (!is.null(marginalise)) {
-    components <- attr(dadm_list, "components")
-    shared_ll_idx <- attr(dadm_list, "shared_ll_idx")
-    set_marginalise_attr <- function(x) {
-      if (is.data.frame(x)) {
-        attr(x, "marginalise") <- marginalise
-      } else if (is.list(x)) {
-        x <- lapply(x, set_marginalise_attr)
-      }
-      x
-    }
-    dadm_list <- lapply(dadm_list, set_marginalise_attr)
-    attr(dadm_list, "components") <- components
-    attr(dadm_list, "shared_ll_idx") <- shared_ll_idx
-  }
   # Storage for the samples.
   subjects <- sort(as.numeric(unique(dadm$subjects)))
   if(!is.null(nuisance) & !is.numeric(nuisance)) nuisance <- which(pars %in% nuisance)
@@ -147,7 +155,7 @@ pmwgs <- function(dadm, type, pars = NULL, prior = NULL,
     sampler_nuis = sampler_nuis,
     type = type,
     marginalise = marginalise,
-    marginalised_idx = names(sampled_pars(attr(dadm[[1]], "prior"))) %in% marginalise$param,
+    marginalised_idx = pars %in% marginalise$param,
     init = FALSE
   )
   class(sampler) <- "pmwgs"
@@ -241,18 +249,26 @@ start_proposals <- function(s, parameters, n_particles, pmwgs, type, r_cores = 1
   group_pars <- get_group_level(parameters, s, type)
   proposals <- particle_draws(n_particles, group_pars$mu, group_pars$var)
   colnames(proposals) <- rownames(pmwgs$samples$alpha) # preserve par names
-  lw <- calc_ll_manager(proposals, dadm = pmwgs$data[[which(pmwgs$subjects == s)]],
-                        model = pmwgs$model, r_cores = r_cores)
+  data_s <- pmwgs$data[[which(pmwgs$subjects == s)]]
+  marginalise <- pmwgs$marginalise
+  if (!is.null(marginalise)) {
+    # One grid: reduce to the marginal ll for start-point selection and reuse
+    # the chosen particle's node weights to reconstruct its t0.
+    grid <- compute_marginal_grid(proposals, data_s, pmwgs$model, marginalise)
+    lw <- marginal_ll_from_grid(grid$log_terms)
+    weight <- exp(lw - max(lw))
+    idx <- sample(x = n_particles, size = 1, prob = weight)
+    proposal <- proposals[idx,]
+    names(proposal) <- colnames(proposals)
+    p_idx <- match(marginalise$param, names(proposal))
+    proposal[p_idx] <- draw_marginal_node(grid$nodes,
+                                          as.numeric(grid$log_terms[idx, ]), marginalise)
+    return(list(proposal = proposal, ll = lw[idx]))
+  }
+  lw <- calc_ll_manager(proposals, dadm = data_s, model = pmwgs$model, r_cores = r_cores)
   weight <- exp(lw - max(lw))
   idx <- sample(x = n_particles, size = 1, prob = weight)
-  proposal <- proposals[idx,]
-  marginalise <- attr(pmwgs$data[[which(pmwgs$subjects == s)]], "marginalise")
-  if (!is.null(marginalise)) {
-    names(proposal) <- colnames(proposals)
-    proposal <- reconstruct_marginalised_particle(
-      proposal, pmwgs$data[[which(pmwgs$subjects == s)]], pmwgs$model, marginalise)
-  }
-  return(list(proposal = proposal, ll = lw[idx]))
+  return(list(proposal = proposals[idx,], ll = lw[idx]))
 }
 
 
@@ -386,7 +402,7 @@ run_stage <- function(pmwgs,
                                     chains_mu, chains_var, pmwgs$samples$subj_ll[,j-1],
                                     MoreArgs = list(pars_comb, pmwgs$model, stage,
                                                     pmwgs$type,
-                                                    tune),
+                                                    tune, pmwgs$marginalise),
                                     mc.cores =n_cores, r_cores = r_cores)
     pm_settings <- proposals[3,]
     proposals <- array(unlist(proposals[1:2,]), dim = c(pmwgs$n_pars + 1, pmwgs$n_subjects))
@@ -423,10 +439,10 @@ safe_new_particle <- function (s, data, pm_settings, eff_mu = NULL,
                                eff_var = NULL, chains_mu = NULL,
                                chains_var = NULL, prev_ll,
                                parameters, model = NULL, stage,
-                               type, tune, r_cores = 1) {
+                               type, tune, marginalise = NULL, r_cores = 1) {
   attempt <- tryCatch(
     new_particle(s, data, pm_settings, eff_mu, eff_var, chains_mu, chains_var,
-                 prev_ll, parameters, model, stage, type, tune, r_cores),
+                 prev_ll, parameters, model, stage, type, tune, marginalise, r_cores),
     error = identity
   )
   if (inherits(attempt, c("error", "try-error"))) {
@@ -444,7 +460,7 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
                           eff_var = NULL, chains_mu = NULL,
                           chains_var = NULL, prev_ll,
                           parameters, model = NULL, stage,
-                          type, tune, r_cores = 1)
+                          type, tune, marginalise = NULL, r_cores = 1)
 {
   group_pars <- get_group_level(parameters, s, type)
   unq_components <- unique(tune$components)
@@ -452,7 +468,10 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
   group_mu <- group_pars$mu
   group_var <- group_pars$var
   subj_mu <- parameters$alpha[,s]
-  marginalise <- attr(data, "marginalise")
+  # Node grid of the accepted particle, captured during the likelihood step and
+  # reused for reconstruction (avoids a second full marginal pass at storage).
+  marg_nodes <- NULL
+  marg_terms_row <- NULL
   marginal_idx <- rep(FALSE, length(subj_mu))
   if (!is.null(marginalise)) {
     if (is.null(names(subj_mu))) {
@@ -524,13 +543,19 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
     is_shared <- shared_idx == tune$shared_ll_idx
 
     # Calculate likelihoods
-    if(tune$components[length(tune$components)] > 1){
+    if (!is.null(marginalise)) {
+      # Compute the t0 quadrature grid ONCE: reduce it to the marginal ll for
+      # the MH weights, and stash the grid so the accepted particle's node
+      # weights reconstruct t0 without a second full marginal pass.
+      marg_grid <- compute_marginal_grid(proposals[, is_shared, drop = FALSE],
+                                         data, model, marginalise)
+      lw <- marginal_ll_from_grid(marg_grid$log_terms)
+    } else if(tune$components[length(tune$components)] > 1){
       lw <- calc_ll_manager(proposals[,is_shared], dadm = data, model,
-                            component = shared_idx, r_cores = r_cores,
-                            marginalise = marginalise)
+                            component = shared_idx, r_cores = r_cores)
     } else{
       lw <- calc_ll_manager(proposals[,is_shared], dadm = data, model,
-                            r_cores = r_cores, marginalise = marginalise)
+                            r_cores = r_cores)
     }
     lw_total <- lw + prev_ll - lw[1] # make sure lls from other components are included
     # Prior density
@@ -571,11 +596,22 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
 
     out_lls[i] <- lw[idx_ll]
     proposal_out[idx] <- proposals[idx_ll,idx]
+    if (!is.null(marginalise)) {
+      marg_nodes <- marg_grid$nodes
+      marg_terms_row <- as.numeric(marg_grid$log_terms[idx_ll, ])
+    }
     pm_settings[[i]] <- update_pm_settings(pm_settings[[i]], idx_ll, weights, particle_numbers, tune, sum(idx))
   }
   names(proposal_out) <- names(subj_mu)
   if (!is.null(marginalise)) {
-    proposal_out <- reconstruct_marginalised_particle(proposal_out, data, model, marginalise)
+    p_idx <- match(marginalise$param, names(proposal_out))
+    if (!is.na(p_idx)) {
+      proposal_out[p_idx] <- if (!is.null(marg_terms_row)) {
+        draw_marginal_node(marg_nodes, marg_terms_row, marginalise)
+      } else {
+        stats::rnorm(1L, marginalise$mu, marginalise$sigma)
+      }
+    }
   }
   return(list(proposal = proposal_out, ll = sum(out_lls), pm_settings = pm_settings))
 }
@@ -884,7 +920,8 @@ calc_ll_manager <- function(proposals, dadm, model, component = NULL, r_cores = 
   } else{
     model <- model()
     dadm <- .cache_ll_data_attrs(dadm)
-    if (is.null(marginalise)) marginalise <- attr(dadm, "marginalise")
+    # marginalise is threaded explicitly by the sampler; it is never inferred
+    # from a dadm attribute, so predict/make_data/IC calls never integrate.
     if(is.null(model$c_name)){ # use the R implementation
       if (!is.null(marginalise)) {
         stop("marginalise requires a registered race-model likelihood")

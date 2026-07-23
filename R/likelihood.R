@@ -490,10 +490,8 @@ log_likelihood_joint <- function(proposals, dadms, model_list, component = NULL,
         columns_to_use <- startsWith(colnames(proposals), paste0(parPrefix, "|"))
         currentPars <- proposals[,columns_to_use, drop = F]
         colnames(currentPars) <- gsub(".*[|]", "", colnames(currentPars))
-        current_marginalise <- marginalise
-        if (is.null(current_marginalise)) current_marginalise <- attr(dadm, "marginalise")
         total_ll <- total_ll + calc_ll_manager(currentPars, dadm, model_list[[i]],
-                                               marginalise = current_marginalise)
+                                               marginalise = marginalise)
       }
     }
   }

@@ -814,7 +814,6 @@ design_model <- function(data,design,model=NULL,
     attr(dadm,"p_names") <- p_names
     sampled_p_names <- p_names[!(p_names %in% names(design$constants))]
     attr(dadm,"sampled_p_names") <- sampled_p_names
-    attr(dadm, "marginalise") <- attr(design, "marginalise")
     return(dadm)
   }
   if (any(names(model()$p_types) %in% names(data)))
@@ -984,7 +983,6 @@ design_model <- function(data,design,model=NULL,
   }
   attr(dadm,"model") <- model
   attr(dadm,"constants") <- design$constants
-  attr(dadm, "marginalise") <- attr(design, "marginalise")
   attr(dadm,"ok_trials") <- is.finite(data$rt)
   attr(dadm,"s_data") <- data$subjects
   dadm
@@ -1138,7 +1136,6 @@ dm_list <- function(dadm)
   model <- attr(dadm,"model")
   p_names <- attr(dadm,"p_names")
   sampled_p_names <- attr(dadm,"sampled_p_names")
-  marginalise <- attr(dadm, "marginalise")
   designs <- attr(dadm,"designs")
   expand <- attr(dadm,"expand")
   s_expand <- attr(dadm,"s_expand")
@@ -1179,7 +1176,6 @@ dm_list <- function(dadm)
       attr(dl[[i]], "model") <- NULL
       attr(dl[[i]], "p_names") <- p_names
       attr(dl[[i]], "sampled_p_names") <- sampled_p_names
-      attr(dl[[i]], "marginalise") <- marginalise
       attr(dl[[i]], "designs") <- sub_design(designs, isin)
       # if(!is.null(expand)) attr(dl[[i]],"expand_all") <- expand[isin1]-min(expand[isin1]) + 1
       attr(dl[[i]], "contract") <- NULL
