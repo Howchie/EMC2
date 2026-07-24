@@ -3071,39 +3071,61 @@ static MarginalGrid calc_ll_oo_marginal_core(
   if (adaptive && n_nodes >= 6) {
     const GLRule& scan_rule = gl_get_rule(n_scan);
     std::vector<double> scan_x(static_cast<size_t>(n_scan));
-    std::vector<double> scan_terms(static_cast<size_t>(np) * n_scan, R_NegInf);
+    std::vector<double> scan_logw(static_cast<size_t>(n_scan));
+    
+    NumericMatrix pilot_pm(np * n_scan, particle_matrix.ncol());
+    colnames(pilot_pm) = p_names;
     for (int k = 0; k < n_scan; ++k) {
       const double xk = mid + half * scan_rule.x[static_cast<size_t>(k)];
       scan_x[static_cast<size_t>(k)] = xk;
-      for (int i = 0; i < np; ++i) pm(i, t0col) = xk;
-      NumericVector llk = calc_ll_oo(pm, data, constants, designs, type, bounds,
-                                     transforms, pretransforms, p_types, min_ll,
-                                     trend, R_NilValue);
-      const double logw = std::log(scan_rule.w[static_cast<size_t>(k)]) +
-        std::log(half) + R::dnorm(xk, mu, sigma, 1);
-      for (int i = 0; i < np; ++i)
-        scan_terms[static_cast<size_t>(i) * n_scan + k] = logw + llk[i];
+      scan_logw[static_cast<size_t>(k)] = std::log(scan_rule.w[static_cast<size_t>(k)]) +
+                                          std::log(half) + R::dnorm(xk, mu, sigma, 1);
+      for (int i = 0; i < np; ++i) {
+        const int r = k * np + i;
+        for (int j = 0; j < particle_matrix.ncol(); ++j) {
+          pilot_pm(r, j) = particle_matrix(i, j);
+        }
+        pilot_pm(r, t0col) = xk;
+      }
     }
-    // Give each proposal equal influence on the shared grid.  Weighting by
-    // raw likelihood would centre exclusively on the already-best particle and
-    // unnecessarily degrade the importance proposal's other particles.
-    std::vector<double> scan_log_mass(static_cast<size_t>(n_scan), R_NegInf);
+    
+    NumericVector scan_llk = calc_ll_oo(pilot_pm, data, constants, designs, type, bounds,
+                                        transforms, pretransforms, p_types, min_ll,
+                                        trend, R_NilValue);
+                                        
+    std::vector<double> scan_mass(static_cast<size_t>(n_scan), 0.0);
     int n_valid = 0;
     for (int i = 0; i < np; ++i) {
-      double norm = R_NegInf;
-      for (int k = 0; k < n_scan; ++k)
-        norm = log_sum_exp(norm, scan_terms[static_cast<size_t>(i) * n_scan + k]);
-      if (!R_FINITE(norm)) continue;
+      double m = R_NegInf;
+      for (int k = 0; k < n_scan; ++k) {
+        double term = scan_logw[static_cast<size_t>(k)] + scan_llk[k * np + i];
+        if (term > m) m = term;
+      }
+      if (!R_FINITE(m)) continue;
+      double s = 0.0;
+      for (int k = 0; k < n_scan; ++k) {
+        double term = scan_logw[static_cast<size_t>(k)] + scan_llk[k * np + i];
+        s += std::exp(term - m);
+      }
+      if (!(s > 0.0)) continue;
       ++n_valid;
-      for (int k = 0; k < n_scan; ++k)
-        scan_log_mass[static_cast<size_t>(k)] = log_sum_exp(
-          scan_log_mass[static_cast<size_t>(k)],
-          scan_terms[static_cast<size_t>(i) * n_scan + k] - norm);
+      const double log_s = m + std::log(s);
+      for (int k = 0; k < n_scan; ++k) {
+        double term = scan_logw[static_cast<size_t>(k)] + scan_llk[k * np + i];
+        scan_mass[static_cast<size_t>(k)] += std::exp(term - log_s);
+      }
     }
+    
+    std::vector<double> scan_log_mass(static_cast<size_t>(n_scan), R_NegInf);
     if (n_valid > 0) {
       const double log_n_valid = std::log(static_cast<double>(n_valid));
-      for (double& v : scan_log_mass) if (R_FINITE(v)) v -= log_n_valid;
+      for (int k = 0; k < n_scan; ++k) {
+        if (scan_mass[static_cast<size_t>(k)] > 0.0) {
+          scan_log_mass[static_cast<size_t>(k)] = std::log(scan_mass[static_cast<size_t>(k)]) - log_n_valid;
+        }
+      }
     }
+    
     rule = marginal_adaptive_rule(scan_log_mass, scan_x, lo, hi, n_nodes, n_scan);
   } else {
     marginal_append_gl_panel(rule, lo, hi, n_nodes);

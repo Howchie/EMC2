@@ -55,12 +55,14 @@ compute_marginal_grid <- function(proposals, data, model, marginalise) {
 # Reduce a grid of log-terms (np x K) to the marginal log-likelihood per
 # proposal by a numerically stable row-wise log-sum-exp.
 marginal_ll_from_grid <- function(log_terms) {
-  apply(log_terms, 1L, function(r) {
-    fin <- is.finite(r)
-    if (!any(fin)) return(-Inf)
-    m <- max(r[fin])
-    m + log(sum(exp(r - m)))
-  })
+  m <- apply(log_terms, 1L, max, na.rm = TRUE)
+  m[!is.finite(m)] <- -Inf
+  fin <- is.finite(m)
+  res <- rep(-Inf, nrow(log_terms))
+  if (any(fin)) {
+    res[fin] <- m[fin] + log(rowSums(exp(log_terms[fin, , drop = FALSE] - m[fin]), na.rm = TRUE))
+  }
+  res
 }
 
 # Draw one t0 node ~ Categorical(softmax(log_terms_row)) for the stored alpha.
