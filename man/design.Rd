@@ -27,6 +27,7 @@ design(
   UC = NULL,
   UT = NULL,
   fixed_accumulator_roles = NULL,
+  marginalise = NULL,
   ...
 )
 }
@@ -94,6 +95,18 @@ if the conventional bound aren't desired.
 see \code{DDM()} for an example of such bounds. Bounds are used to set limits to
 the likelihood landscape that cannot reasonable be achieved with \code{transform}}
 
+\item{marginalise}{Optional. Names one shared race-model parameter (e.g.
+\code{"t0"}) to be \emph{marginalised} out of the sampler by numerical quadrature
+rather than sampled as a subject-level random effect. Either a character
+scalar (\code{marginalise = "t0"}), or a list giving the parameter plus quadrature
+controls (\code{marginalise = list(param = "t0", n_nodes = 40)}). \code{n_nodes} is the
+number of Gauss-Legendre quadrature nodes and defaults to \code{40}. The named
+parameter must (i) belong to a race model (not \code{DDM()}), (ii) be a sampled
+model parameter (not a \code{constant}, and not a \code{custom_p_vector} design),
+(iii) use an intercept-only design (\code{~ 1}), and (iv) have a finite lower
+bound. See Details. This is a sampling/efficiency feature and does not change
+the model's likelihood.}
+
 \item{...}{Additional, optional arguments}
 }
 \value{
@@ -103,6 +116,34 @@ A design list.
 This function combines information regarding the data, type of model, and
 the model specification.
 }
+\section{Marginalising a shared parameter (\code{marginalise})}{
+Some race-model parameters that are shared across a subject's accumulators —
+most notably the non-decision time \code{t0} — trade off strongly against the
+race-speed parameters (thresholds/rates). In go/no-go race designs this
+trade-off produces a ridge in the posterior that makes the MCMC chains mix
+poorly (a highly correlated, ill-conditioned proposal geometry). \code{marginalise}
+addresses this by integrating the shared parameter out of the per-subject
+likelihood instead of sampling it directly.
+
+When \code{marginalise} is set, that parameter is held out of the MCMC proposal
+vector. Its per-subject likelihood contribution is computed by Gauss-Legendre
+quadrature over the parameter (on its sampled/log scale) using \code{n_nodes}
+nodes, weighted by a fixed Gaussian \code{eta} taken from the parameter's existing
+prior mean and variance (its group-level distribution is pinned to that prior,
+not estimated). A representative value is drawn back (reconstructed) from the
+quadrature grid and stored in each posterior sample, so downstream summaries
+still report the parameter. The integration interval is clipped to the
+parameter's finite lower bound and to just below the subject's fastest
+response time, which is why a finite lower bound and the \code{~ 1} design are
+required.
+
+Marginalising does not alter the likelihood: turning it off yields an
+identical model, only sampled with the parameter left in. It typically
+improves mixing/ESS per iteration at the cost of extra quadrature work per
+likelihood evaluation. Currently exactly one parameter may be marginalised,
+and only for race models.
+}
+
 \examples{
 
 # load example dataset

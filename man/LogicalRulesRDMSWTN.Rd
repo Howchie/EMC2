@@ -10,26 +10,24 @@ LogicalRulesRDMSWTN(erlang_shape = 1L, erlang_type = "none", posdrift = TRUE)
 \item{erlang_shape}{Integer \code{1} for exponential clocks, \code{2} for Erlang-2,
 or \code{"mixed"} for the Erlang-1/Erlang-2 mixture.}
 
-\item{erlang_type}{Clock configuration passed to \code{RDMSWTN()}.}
+\item{erlang_type}{Clock configuration passed to \code{\link[=RDMSWTN]{RDMSWTN()}}.}
 
 \item{posdrift}{Logical. If \code{TRUE} (default), truncate the between-trial
 normal drift distribution below at zero; if \code{FALSE}, use untruncated
 drifts and allow intrinsic omissions.}
 }
 \value{
-A model list compatible with \code{design()}.
+A model list compatible with \code{\link[=design]{design()}}.
 }
 \description{
 Use the current RDMSWTN accumulator distribution for the logical-rules
-likelihood. The compiled logical-rules evaluator is shared with the other
-race models and dispatches the single-accumulator calculations through the
-RDMSWTN adapter.
+likelihood. The logical-rules evaluator is shared with the other race
+models; adding the \code{LogicalRules} model-name marker routes the compiled
+likelihood through the RDMSWTN adapter while retaining the ordinary
+RDMSWTN parameter and clock contract.
 }
 \details{
-Logical rules use accumulator roles \code{A}, \code{B}, \code{n_A}, and
-\code{n_B} and the \code{LogicalRule} data column. Supported rules are
-\code{OR}, \code{AND}, \code{XOR}, \code{ID},
-\code{OR_DETECTION_ANALYTIC}, and \code{OR_DETECTION_GNG}. The parameter,
-transform, bound, and optional Erlang-clock contracts are inherited from
-\code{RDMSWTN()}.
+Logical rules use accumulator roles \code{A}, \code{B}, \code{n_A}, and \code{n_B} and the
+\code{LogicalRule} data column. Supported rules are \code{OR}, \code{AND}, \code{XOR}, \code{ID},
+\code{OR_DETECTION_ANALYTIC}, and \code{OR_DETECTION_GNG}.
 }

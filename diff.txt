@@ -1,0 +1,1278 @@
+diff --git a/R/design.R b/R/design.R
+index a2a0b030..367a762e 100644
+--- a/R/design.R
++++ b/R/design.R
+@@ -51,6 +51,9 @@
+ #' if the conventional bound aren't desired.
+ #' see `DDM()` for an example of such bounds. Bounds are used to set limits to
+ #' the likelihood landscape that cannot reasonable be achieved with `transform`
++#' @param marginalise Optional character vector naming one shared race-model
++#' parameter to marginalize in the sampler (currently, e.g. `"t0"`). The
++#' parameter must use an intercept-only design (`~ 1`).
+ #' @param ... Additional, optional arguments
+ #'
+ #' @return A design list.
+@@ -78,6 +81,64 @@
+ #' @export
+ #'
+ #'
++normalize_marginalise <- function(marginalise) {
++  if (is.null(marginalise)) return(NULL)
++  if (is.character(marginalise)) {
++    out <- marginalise
++  } else if (is.list(marginalise)) {
++    # Accept the explicit form as a convenience, while the public Stage 1
++    # API remains marginalise = "t0".
++    out <- marginalise$param
++    if (is.null(out)) out <- names(marginalise)
++  } else {
++    stop("marginalise must be a character parameter name or a list containing 'param'")
++  }
++  out <- unique(as.character(out))
++  if (length(out) == 0L || anyNA(out) || any(!nzchar(out))) {
++    stop("marginalise must name at least one parameter")
++  }
++  out
++}
++
++validate_marginalise_design <- function(marginalise, design, model) {
++  params <- normalize_marginalise(marginalise)
++  if (length(params) != 1L) {
++    stop("marginalise currently supports exactly one shared parameter")
++  }
++  spec <- model()
++  if (is.null(spec$type) || !grepl("RACE", spec$type, fixed = TRUE) ||
++      grepl("DDM", spec$type, fixed = TRUE)) {
++    stop("marginalise is currently supported for race models only (not DDM)")
++  }
++  p <- params[[1L]]
++  if (is.null(spec$p_types) || !p %in% names(spec$p_types)) {
++    stop("marginalise parameter '", p, "' is not a model p_type")
++  }
++  f <- design$Flist[[p]]
++  if (is.null(f)) {
++    matches <- vapply(design$Flist, function(z) {
++      as.character(stats::terms(z))[[2L]] == p
++    }, logical(1L))
++    if (any(matches)) f <- design$Flist[[which(matches)[1L]]]
++  }
++  if (is.null(f)) {
++    stop("marginalise parameter '", p, "' must be specified in the design")
++  }
++  rhs <- tryCatch(as.character(stats::terms(f))[[3L]], error = function(e) NULL)
++  if (!identical(rhs, "1")) {
++    stop("marginalise parameter '", p, "' must use an intercept-only design (~ 1)")
++  }
++  mm <- spec$bound$minmax
++  if (is.null(mm) || is.null(colnames(mm)) || !p %in% colnames(mm) ||
++      !is.finite(mm[1L, p])) {
++    stop("marginalise parameter '", p, "' must have a finite lower bound")
++  }
++  if (!is.null(design$constants) && p %in% names(design$constants)) {
++    stop("marginalise parameter '", p, "' cannot be fixed as a constant")
++  }
++  p
++}
++
+ design <- function(formula = NULL,factors = NULL,Rlevels = NULL,model,data=NULL,
+                    contrasts=NULL,matchfun=NULL,constants=NULL,covariates=NULL,
+                    functions=NULL,report_p_vector=TRUE, custom_p_vector = NULL,
+@@ -85,7 +146,7 @@ design <- function(formula = NULL,factors = NULL,Rlevels = NULL,model,data=NULL,
+                    pre_transform_terms = NULL,
+                    transform = NULL, bound = NULL, TC = NULL,
+                    LT=NULL,LC=NULL,UC=NULL,UT=NULL,
+-                   fixed_accumulator_roles = NULL,...){
++                   fixed_accumulator_roles = NULL, marginalise = NULL,...){
+ 
+   TC <- check_missing(TC, data = data)
+   if (!is.null(LT)) TC$LT <- LT
+@@ -127,6 +188,10 @@ design <- function(formula = NULL,factors = NULL,Rlevels = NULL,model,data=NULL,
+ 
+   if(!is.null(custom_p_vector)){
+ 
++    if (!is.null(marginalise)) {
++      stop("marginalise is not supported with custom_p_vector designs")
++    }
++
+     model_list <- function(){list(log_likelihood = model)}
+     if(!is.null(list(...)$rfun)){
+       model_list$rfun <- list(...)$rfun
+@@ -269,6 +334,16 @@ design <- function(formula = NULL,factors = NULL,Rlevels = NULL,model,data=NULL,
+   model <- function(){return(model_list)}
+   design$model <- model
+   attr(design,"p_vector") <- p_vector
++  if (!is.null(marginalise)) {
++    marginalise_input <- marginalise
++    marginalise <- validate_marginalise_design(marginalise_input, design, model)
++    if (is.list(marginalise_input) && !is.null(marginalise_input$n_nodes)) {
++      attr(design, "marginalise") <- list(param = marginalise,
++                                           n_nodes = marginalise_input$n_nodes)
++    } else {
++      attr(design, "marginalise") <- marginalise
++    }
++  }
+   if (report_p_vector) {
+     summary(design, data = data)
+   }
+diff --git a/R/fitting.R b/R/fitting.R
+index f0c7138c..bf06e9b5 100644
+--- a/R/fitting.R
++++ b/R/fitting.R
+@@ -849,6 +849,13 @@ make_emc <- function(data,design,model=NULL,
+   prior_in <- prior(design, type, update = prior_in, group_design = group_design, ...)
+   attr(dadm_list[[1]], "prior") <- prior_in
+ 
++  # Opt-in t0 (etc.) marginalisation travels as an explicit argument to the
++  # sampler, never as a dadm attribute (predict/make_data/IC must not integrate).
++  marginalise_flag <- attr(design[[1]], "marginalise")
++  if (!is.null(marginalise_flag) && !type %in% c("standard", "blocked", "diagonal")) {
++    stop("marginalise is currently only supported for the standard, blocked and diagonal group-level types")
++  }
++
+   # if(!is.null(subject_covariates)) attr(dadm_list, "subject_covariates") <- subject_covariates
+   if (type %in% c("single", "infnt_factor", "diagonal-gamma")) {
+     out <- pmwgs(dadm_list, type, nuisance = nuisance,
+@@ -886,7 +893,8 @@ make_emc <- function(data,design,model=NULL,
+     out <- pmwgs(dadm_list, type, par_groups=par_groups,
+                  group_design = group_design,
+                  nuisance = nuisance,
+-                 nuisance_non_hyper = nuisance_non_hyper)
++                 nuisance_non_hyper = nuisance_non_hyper,
++                 marginalise = marginalise_flag)
+   } else if (type == "factor") {
+     out <- pmwgs(dadm_list, type, n_factors = n_factors,
+                  nuisance = nuisance,
+diff --git a/R/likelihood.R b/R/likelihood.R
+index dffe5d1f..880e7416 100644
+--- a/R/likelihood.R
++++ b/R/likelihood.R
+@@ -468,7 +468,8 @@ log_likelihood_sdt <- function(pars,dadm, model,lb=-Inf, min_ll=log(1e-10))
+ # Two options:
+ # 1) component = NULL in which case we do all likelihoods in one block
+ # 2) component = integer, in which case we are blocking the ll and only want that one
+-log_likelihood_joint <- function(proposals, dadms, model_list, component = NULL){
++log_likelihood_joint <- function(proposals, dadms, model_list, component = NULL,
++                                marginalise = NULL){
+   parPreFixs <- unique(gsub("[|].*", "", colnames(proposals)))
+   i <- 0
+   k <- 0
+@@ -489,7 +490,8 @@ log_likelihood_joint <- function(proposals, dadms, model_list, component = NULL)
+         columns_to_use <- startsWith(colnames(proposals), paste0(parPrefix, "|"))
+         currentPars <- proposals[,columns_to_use, drop = F]
+         colnames(currentPars) <- gsub(".*[|]", "", colnames(currentPars))
+-        total_ll <- total_ll +  calc_ll_manager(currentPars, dadm, model_list[[i]])
++        total_ll <- total_ll + calc_ll_manager(currentPars, dadm, model_list[[i]],
++                                               marginalise = marginalise)
+       }
+     }
+   }
+diff --git a/R/sampling.R b/R/sampling.R
+index 3226468e..58a63883 100644
+--- a/R/sampling.R
++++ b/R/sampling.R
+@@ -1,8 +1,110 @@
++resolve_marginalise_prior <- function(marginalise, prior) {
++  if (is.null(marginalise)) return(NULL)
++  param <- if (is.list(marginalise)) marginalise$param else marginalise
++  param <- as.character(param)
++  if (length(param) != 1L || is.na(param) || !nzchar(param)) {
++    stop("marginalise must identify exactly one parameter")
++  }
++  mu <- prior$theta_mu_mean[[param]]
++  if (is.null(mu) || !is.finite(mu)) {
++    stop("Could not find a finite prior mean for marginalized parameter '", param, "'")
++  }
++  vv <- prior$theta_mu_var
++  if (is.matrix(vv)) {
++    vi <- if (!is.null(dimnames(vv)) && !is.null(rownames(vv))) {
++      match(param, rownames(vv))
++    } else match(param, names(prior$theta_mu_mean))
++    if (is.na(vi)) stop("Could not find prior variance for marginalized parameter '", param, "'")
++    variance <- vv[vi, vi]
++  } else {
++    variance <- if (!is.null(names(vv))) vv[[param]] else vv[[match(param, names(prior$theta_mu_mean))]]
++  }
++  sigma <- sqrt(variance)
++  if (!is.finite(sigma) || sigma <= 0) {
++    stop("Marginalized parameter '", param, "' needs a finite, positive prior SD")
++  }
++  n_nodes <- if (is.list(marginalise) && !is.null(marginalise$n_nodes)) {
++    as.integer(marginalise$n_nodes)
++  } else 40L
++  if (length(n_nodes) != 1L || is.na(n_nodes) || n_nodes < 2L) {
++    stop("marginalise$n_nodes must be an integer >= 2")
++  }
++  list(param = param, mu = unname(mu), sigma = unname(sigma), n_nodes = n_nodes)
++}
++
++# Build the t0 quadrature grid for one or more proposals: the node values
++# (sampled t0 scale) and the np x K unnormalized log-terms. Shared by the
++# particle step (which reduces it to the marginal ll AND reuses the accepted
++# row for reconstruction) and the init/start path, so the grid is only ever
++# computed once per likelihood evaluation.
++compute_marginal_grid <- function(proposals, data, model, marginalise) {
++  model_spec <- if (is.function(model)) model() else model
++  set_stop_method_from_model(model_spec)  # SS models: stop_method -> C++ config
++  data <- .cache_ll_data_attrs(data)
++  constants <- attr(data, "constants")
++  if (is.null(constants)) constants <- NA
++  calc_ll_oo_marginal_nodes(
++    proposals, data, constants = constants, designs = .oo_expanded_designs(data),
++    type = model_spec$c_name, bounds = model_spec$bound,
++    transforms = model_spec$transform, pretransforms = model_spec$pre_transform,
++    p_types = names(model_spec$p_types), min_ll = log(1e-10),
++    marginalise = marginalise, trend = model_spec$trend
++  )
++}
++
++# Reduce a grid of log-terms (np x K) to the marginal log-likelihood per
++# proposal by a numerically stable row-wise log-sum-exp.
++marginal_ll_from_grid <- function(log_terms) {
++  apply(log_terms, 1L, function(r) {
++    fin <- is.finite(r)
++    if (!any(fin)) return(-Inf)
++    m <- max(r[fin])
++    m + log(sum(exp(r - m)))
++  })
++}
++
++# Draw one t0 node ~ Categorical(softmax(log_terms_row)) for the stored alpha.
++# Falls back to the fixed prior when the row carries no finite mass.
++draw_marginal_node <- function(nodes, log_terms_row, marginalise) {
++  if (length(nodes) == 0L || all(!is.finite(log_terms_row))) {
++    return(stats::rnorm(1L, marginalise$mu, marginalise$sigma))
++  }
++  w <- exp(log_terms_row - max(log_terms_row[is.finite(log_terms_row)]))
++  w[!is.finite(w)] <- 0
++  if (!any(w > 0)) return(stats::rnorm(1L, marginalise$mu, marginalise$sigma))
++  nodes[[sample.int(length(nodes), size = 1L, prob = w)]]
++}
++
++# Standalone reconstruction (init/no-reuse path): computes its own grid.
++reconstruct_marginalised_particle <- function(particle, data, model, marginalise) {
++  if (is.null(marginalise)) return(as.numeric(particle))
++  p_names <- names(particle)
++  if (is.null(p_names)) stop("A marginalized particle must have parameter names")
++  particle <- as.numeric(particle)
++  names(particle) <- p_names
++  p_idx <- match(marginalise$param, p_names)
++  if (is.na(p_idx)) stop("Marginalized parameter is missing from the particle")
++  # A subject with no observations has no posterior node weights. Draw from the
++  # fixed prior so the stored alpha still has the same shape as ordinary fits.
++  if (is.null(data) || nrow(data) == 0L) {
++    particle[p_idx] <- stats::rnorm(1L, marginalise$mu, marginalise$sigma)
++    return(particle)
++  }
++  grid <- compute_marginal_grid(
++    matrix(particle, nrow = 1L, dimnames = list(NULL, p_names)), data, model, marginalise)
++  particle[p_idx] <- draw_marginal_node(grid$nodes, as.numeric(grid$log_terms[1L, ]), marginalise)
++  particle
++}
++
+ pmwgs <- function(dadm, type, pars = NULL, prior = NULL,
+-                  nuisance = NULL, nuisance_non_hyper = NULL, ...) {
++                  nuisance = NULL, nuisance_non_hyper = NULL, marginalise = NULL, ...) {
+   if(is.data.frame(dadm)) dadm <- list(dadm)
+   if(is.null(pars)) pars <- names(sampled_pars(attr(dadm[[1]], "prior")))
+   if(is.null(prior)) prior <- attr(dadm[[1]], "prior")
++  # The opt-in flag arrives as an explicit argument (from design(marginalise=)),
++  # NOT tagged onto the dadm: downstream consumers (predict / make_data / IC)
++  # read the reconstructed t0 like any other parameter and must never integrate.
++  marginalise <- resolve_marginalise_prior(marginalise, prior)
+   dadm <- extractDadms(dadm)
+ 
+   dadm_list <-dadm$dadm_list
+@@ -11,6 +113,12 @@ pmwgs <- function(dadm, type, pars = NULL, prior = NULL,
+   if(!is.null(nuisance) & !is.numeric(nuisance)) nuisance <- which(pars %in% nuisance)
+   if(!is.null(nuisance_non_hyper) & !is.numeric(nuisance_non_hyper)) nuisance_non_hyper <- which(pars %in% nuisance_non_hyper)
+ 
++  if (!is.null(marginalise) && any(pars %in% marginalise$param &
++                                   is.element(seq_along(pars),
++                                              unique(c(nuisance, nuisance_non_hyper))))) {
++    stop("A marginalized parameter cannot be assigned to a nuisance sampler")
++  }
++
+   if(!is.null(nuisance_non_hyper)){
+     is_nuisance <- is.element(seq_len(length(pars)), nuisance_non_hyper)
+     nuis_type <- "single"
+@@ -46,6 +154,8 @@ pmwgs <- function(dadm, type, pars = NULL, prior = NULL,
+     samples = samples,
+     sampler_nuis = sampler_nuis,
+     type = type,
++    marginalise = marginalise,
++    marginalised_idx = pars %in% marginalise$param,
+     init = FALSE
+   )
+   class(sampler) <- "pmwgs"
+@@ -139,8 +249,23 @@ start_proposals <- function(s, parameters, n_particles, pmwgs, type, r_cores = 1
+   group_pars <- get_group_level(parameters, s, type)
+   proposals <- particle_draws(n_particles, group_pars$mu, group_pars$var)
+   colnames(proposals) <- rownames(pmwgs$samples$alpha) # preserve par names
+-  lw <- calc_ll_manager(proposals, dadm = pmwgs$data[[which(pmwgs$subjects == s)]],
+-                        model = pmwgs$model, r_cores = r_cores)
++  data_s <- pmwgs$data[[which(pmwgs$subjects == s)]]
++  marginalise <- pmwgs$marginalise
++  if (!is.null(marginalise)) {
++    # One grid: reduce to the marginal ll for start-point selection and reuse
++    # the chosen particle's node weights to reconstruct its t0.
++    grid <- compute_marginal_grid(proposals, data_s, pmwgs$model, marginalise)
++    lw <- marginal_ll_from_grid(grid$log_terms)
++    weight <- exp(lw - max(lw))
++    idx <- sample(x = n_particles, size = 1, prob = weight)
++    proposal <- proposals[idx,]
++    names(proposal) <- colnames(proposals)
++    p_idx <- match(marginalise$param, names(proposal))
++    proposal[p_idx] <- draw_marginal_node(grid$nodes,
++                                          as.numeric(grid$log_terms[idx, ]), marginalise)
++    return(list(proposal = proposal, ll = lw[idx]))
++  }
++  lw <- calc_ll_manager(proposals, dadm = data_s, model = pmwgs$model, r_cores = r_cores)
+   weight <- exp(lw - max(lw))
+   idx <- sample(x = n_particles, size = 1, prob = weight)
+   return(list(proposal = proposals[idx,], ll = lw[idx]))
+@@ -277,7 +402,7 @@ run_stage <- function(pmwgs,
+                                     chains_mu, chains_var, pmwgs$samples$subj_ll[,j-1],
+                                     MoreArgs = list(pars_comb, pmwgs$model, stage,
+                                                     pmwgs$type,
+-                                                    tune),
++                                                    tune, pmwgs$marginalise),
+                                     mc.cores =n_cores, r_cores = r_cores)
+     pm_settings <- proposals[3,]
+     proposals <- array(unlist(proposals[1:2,]), dim = c(pmwgs$n_pars + 1, pmwgs$n_subjects))
+@@ -314,10 +439,10 @@ safe_new_particle <- function (s, data, pm_settings, eff_mu = NULL,
+                                eff_var = NULL, chains_mu = NULL,
+                                chains_var = NULL, prev_ll,
+                                parameters, model = NULL, stage,
+-                               type, tune, r_cores = 1) {
++                               type, tune, marginalise = NULL, r_cores = 1) {
+   attempt <- tryCatch(
+     new_particle(s, data, pm_settings, eff_mu, eff_var, chains_mu, chains_var,
+-                 prev_ll, parameters, model, stage, type, tune, r_cores),
++                 prev_ll, parameters, model, stage, type, tune, marginalise, r_cores),
+     error = identity
+   )
+   if (inherits(attempt, c("error", "try-error"))) {
+@@ -335,7 +460,7 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
+                           eff_var = NULL, chains_mu = NULL,
+                           chains_var = NULL, prev_ll,
+                           parameters, model = NULL, stage,
+-                          type, tune, r_cores = 1)
++                          type, tune, marginalise = NULL, r_cores = 1)
+ {
+   group_pars <- get_group_level(parameters, s, type)
+   unq_components <- unique(tune$components)
+@@ -343,6 +468,23 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
+   group_mu <- group_pars$mu
+   group_var <- group_pars$var
+   subj_mu <- parameters$alpha[,s]
++  # Node grid of the accepted particle, captured during the likelihood step and
++  # reused for reconstruction (avoids a second full marginal pass at storage).
++  marg_nodes <- NULL
++  marg_terms_row <- NULL
++  marginal_idx <- rep(FALSE, length(subj_mu))
++  if (!is.null(marginalise)) {
++    if (is.null(names(subj_mu))) {
++      names(subj_mu) <- rownames(parameters$alpha)[seq_along(subj_mu)]
++    }
++    marginal_idx <- names(subj_mu) %in% marginalise$param
++    # Keep a placeholder column for design mapping, but hold the marginalized
++    # coordinate out of every proposal draw and proposal-density evaluation.
++    group_mu[marginal_idx] <- marginalise$mu
++    group_var[marginal_idx, ] <- 0
++    group_var[, marginal_idx] <- 0
++    group_var[marginal_idx, marginal_idx] <- marginalise$sigma^2
++  }
+   out_lls <- numeric(length(unq_components))
+   particle_multiplier <- 1
+   # Set the proposals
+@@ -365,14 +507,21 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
+   for(i in unq_components){
+     # Add 1 to epsilons such that prior/group-level proposals aren't scaled
+     epsilons <- c(1, pm_settings[[i]]$epsilon)
+-    idx <- tune$components == i
++    idx_full <- tune$components == i
++    idx <- idx_full & !marginal_idx
+     # Draw new proposals for each component
+     particle_numbers <- numbers_from_proportion(pm_settings[[i]]$mix, pm_settings[[i]]$n_particles*particle_multiplier)
+     proposals <- vector("list", n_proposals +1)
+-    proposals[[1]] <- subj_mu[idx]
++    proposals[[1]] <- matrix(subj_mu[idx], nrow = 1L)
+     for(j in 1:n_proposals){
+       # Fill up the proposals
+-      proposals[[j + 1]] <- particle_draws(particle_numbers[j], Mus[[j]][idx], Sigmas[[j]][idx,idx] * (epsilons[j]^2))
++      if (any(idx)) {
++        proposals[[j + 1]] <- particle_draws(
++          particle_numbers[j], Mus[[j]][idx],
++          Sigmas[[j]][idx,idx,drop=FALSE] * (epsilons[j]^2))
++      } else {
++        proposals[[j + 1]] <- matrix(numeric(0), nrow = particle_numbers[j], ncol = 0L)
++      }
+     }
+     proposals <- do.call(rbind, proposals)
+ 
+@@ -383,18 +532,25 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
+       colnames(proposals_other) <- names(subj_mu)[!idx]
+       colnames(proposals) <- names(subj_mu)[idx]
+       proposals <- cbind(proposals, proposals_other)
+-      proposals <- proposals[,names(subj_mu)]
++      proposals <- proposals[,names(subj_mu),drop=FALSE]
+     } else{
+       colnames(proposals) <- names(subj_mu)
+     }
+ 
+     # Normally we assume that a component contains all the parameters to estimate the individual likelihood of a joint model
+     # Sometimes we may also want to block within a model if it has very high dimensionality
+-    shared_idx <- tune$shared_ll_idx[idx][1]
++    shared_idx <- tune$shared_ll_idx[idx_full][1]
+     is_shared <- shared_idx == tune$shared_ll_idx
+ 
+     # Calculate likelihoods
+-    if(tune$components[length(tune$components)] > 1){
++    if (!is.null(marginalise)) {
++      # Compute the t0 quadrature grid ONCE: reduce it to the marginal ll for
++      # the MH weights, and stash the grid so the accepted particle's node
++      # weights reconstruct t0 without a second full marginal pass.
++      marg_grid <- compute_marginal_grid(proposals[, is_shared, drop = FALSE],
++                                         data, model, marginalise)
++      lw <- marginal_ll_from_grid(marg_grid$log_terms)
++    } else if(tune$components[length(tune$components)] > 1){
+       lw <- calc_ll_manager(proposals[,is_shared], dadm = data, model,
+                             component = shared_idx, r_cores = r_cores)
+     } else{
+@@ -403,9 +559,16 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
+     }
+     lw_total <- lw + prev_ll - lw[1] # make sure lls from other components are included
+     # Prior density
+-    lp <- mvtnorm::dmvnorm(x = proposals[,idx], mean = group_mu[idx], sigma = group_var[idx,idx], log = TRUE)
++    lp <- if (any(idx)) {
++      mvtnorm::dmvnorm(x = proposals[,idx,drop=FALSE], mean = group_mu[idx],
++                       sigma = group_var[idx,idx,drop=FALSE], log = TRUE)
++    } else rep(0, nrow(proposals))
+     if(length(unq_components) > 1){
+-      prior_density <- mvtnorm::dmvnorm(x = proposals, mean = group_mu, sigma = group_var, log = TRUE)
++      prior_density <- if (any(!marginal_idx)) {
++        mvtnorm::dmvnorm(x = proposals[,!marginal_idx,drop=FALSE],
++                         mean = group_mu[!marginal_idx],
++                         sigma = group_var[!marginal_idx,!marginal_idx,drop=FALSE], log = TRUE)
++      } else rep(0, nrow(proposals))
+     } else{
+       prior_density <- lp
+     }
+@@ -413,7 +576,13 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
+     lm <- pm_settings[[i]]$mix[1]*exp(lp)
+     for(k in 2:length(Sigmas)){
+       # Prior density is updated separately so start at 2
+-      lm <- lm + pm_settings[[i]]$mix[k]*mvtnorm::dmvnorm(x = proposals[,idx], mean = Mus[[k]][idx], sigma = Sigmas[[k]][idx,idx]*(epsilons[k]^2))
++      if (any(idx)) {
++        lm <- lm + pm_settings[[i]]$mix[k] * mvtnorm::dmvnorm(
++          x = proposals[,idx,drop=FALSE], mean = Mus[[k]][idx],
++          sigma = Sigmas[[k]][idx,idx,drop=FALSE] * (epsilons[k]^2))
++      } else {
++        lm <- lm + pm_settings[[i]]$mix[k]
++      }
+     }
+     # Avoid infinite values
+     lm <- log(lm)
+@@ -427,8 +596,23 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
+ 
+     out_lls[i] <- lw[idx_ll]
+     proposal_out[idx] <- proposals[idx_ll,idx]
++    if (!is.null(marginalise)) {
++      marg_nodes <- marg_grid$nodes
++      marg_terms_row <- as.numeric(marg_grid$log_terms[idx_ll, ])
++    }
+     pm_settings[[i]] <- update_pm_settings(pm_settings[[i]], idx_ll, weights, particle_numbers, tune, sum(idx))
+   }
++  names(proposal_out) <- names(subj_mu)
++  if (!is.null(marginalise)) {
++    p_idx <- match(marginalise$param, names(proposal_out))
++    if (!is.na(p_idx)) {
++      proposal_out[p_idx] <- if (!is.null(marg_terms_row)) {
++        draw_marginal_node(marg_nodes, marg_terms_row, marginalise)
++      } else {
++        stats::rnorm(1L, marginalise$mu, marginalise$sigma)
++      }
++    }
++  }
+   return(list(proposal = proposal_out, ll = sum(out_lls), pm_settings = pm_settings))
+ }
+ 
+@@ -729,13 +913,19 @@ check_prop_performance <- function(prop_performance, stage){
+   return(round(prop_performance))
+ }
+ 
+-calc_ll_manager <- function(proposals, dadm, model, component = NULL, r_cores = 1){
++calc_ll_manager <- function(proposals, dadm, model, component = NULL, r_cores = 1,
++                            marginalise = NULL){
+   if(!is.data.frame(dadm)){
+-    lls <- log_likelihood_joint(proposals, dadm, model, component)
++    lls <- log_likelihood_joint(proposals, dadm, model, component, marginalise = marginalise)
+   } else{
+     model <- model()
+     dadm <- .cache_ll_data_attrs(dadm)
++    # marginalise is threaded explicitly by the sampler; it is never inferred
++    # from a dadm attribute, so predict/make_data/IC calls never integrate.
+     if(is.null(model$c_name)){ # use the R implementation
++      if (!is.null(marginalise)) {
++        stop("marginalise requires a registered race-model likelihood")
++      }
+       lls <- unlist(
+         auto_mclapply(1:nrow(proposals),
+           function(i) calc_ll_R(proposals[i,], model=model, dadm = dadm),
+@@ -750,15 +940,19 @@ calc_ll_manager <- function(proposals, dadm, model, component = NULL, r_cores =
+       constants <- attr(dadm, "constants")
+       if(is.null(constants)) constants <- NA
+       if (nrow(proposals) <= r_cores) {
+-        lls <- calc_ll_oo(proposals, dadm, constants = constants, designs = designs, type = model$c_name,
+-                          model$bound, model$transform, model$pre_transform, p_types = p_types, min_ll = log(1e-10),
+-                          model$trend)
++        lls <- calc_ll_oo(proposals, dadm, constants = constants, designs = designs,
++                          type = model$c_name, bounds = model$bound,
++                          transforms = model$transform, pretransforms = model$pre_transform,
++                          p_types = p_types, min_ll = log(1e-10), trend = model$trend,
++                          marginalise = marginalise)
+       } else {
+         idx <- rep(1:r_cores,each=1+(nrow(proposals) %/% r_cores))[1:nrow(proposals)]
+         lls <- unlist(auto_mclapply(1:r_cores,function(i) {
+           calc_ll_oo(proposals[idx==i,,drop=FALSE], dadm, constants = constants,
+-                     designs = designs, type = model$c_name, model$bound, model$transform,
+-                     model$pre_transform, p_types = p_types, min_ll = log(1e-10),model$trend)
++                     designs = designs, type = model$c_name, bounds = model$bound,
++                     transforms = model$transform, pretransforms = model$pre_transform,
++                     p_types = p_types, min_ll = log(1e-10),
++                     trend = model$trend, marginalise = marginalise)
+         },mc.cores=r_cores))
+       }
+     }
+diff --git a/R/variant_standard.R b/R/variant_standard.R
+index 5b580f88..faf7ef10 100644
+--- a/R/variant_standard.R
++++ b/R/variant_standard.R
+@@ -248,6 +248,15 @@ gibbs_step_standard <- function(sampler, alpha) {
+   p <- nrow(alpha)           # number of subject-level parameters
+   n <- ncol(alpha)           # number of subjects
+ 
++  marginal_idx <- sampler$marginalised_idx
++  if (is.null(marginal_idx)) marginal_idx <- rep(FALSE, p)
++  if (length(marginal_idx) != p && !is.null(sampler$nuisance)) {
++    marginal_idx <- marginal_idx[!sampler$nuisance]
++  }
++  if (length(marginal_idx) != p) marginal_idx <- rep(FALSE, p)
++  marginal_spec <- sampler$marginalise
++  marginal_idx <- as.logical(marginal_idx)
++
+   # Some backwards compatibility
+   if(is.null(is_blocked) || length(is_blocked) == 0){
+     is_blocked <- rep(T, p)
+@@ -255,9 +264,23 @@ gibbs_step_standard <- function(sampler, alpha) {
+   if(is.null(par_group)){
+     par_group <- rep(1, p)
+   }
++  if (any(marginal_idx) && !is.null(marginal_spec)) {
++    # Never let a marginalized coordinate define or enlarge an IW block.
++    is_blocked[marginal_idx] <- FALSE
++  }
+ 
+   group_designs <- add_group_design(sampler$par_names[!sampler$nuisance], group_designs, n)
+ 
++  # Stage 1 marginalization uses a fixed prior eta for the integrated
++  # coordinate. Remove its precision cross-terms from the group update and
++  # replace its residual by zero so the reconstructed draws cannot alter the
++  # covariance of the ordinary parameters.
++  if (any(marginal_idx) && !is.null(marginal_spec)) {
++    tvinv[marginal_idx, ] <- 0
++    tvinv[, marginal_idx] <- 0
++    tvinv[cbind(which(marginal_idx), which(marginal_idx))] <- 1 / marginal_spec$sigma^2
++  }
++
+   # Calculate total parameters (including regressors)
+   M <- length(tmu)  # Total parameters (former mu + beta)
+ 
+@@ -289,6 +312,9 @@ gibbs_step_standard <- function(sampler, alpha) {
+   for (i in seq_len(n)) {
+     resid[, i] <- alpha[, i] - subj_mu[, i]
+   }
++  if (any(marginal_idx) && !is.null(marginal_spec)) {
++    resid[marginal_idx, ] <- 0
++  }
+ 
+   ##--------------------------------------------------
+   ## 3) Partial-block update of tvar_new
+@@ -331,6 +357,24 @@ gibbs_step_standard <- function(sampler, alpha) {
+ 
+   # Invert
+   tvinv_new <- solve(tvar_new)
++
++  if (any(marginal_idx) && !is.null(marginal_spec)) {
++    # Locate the stacked group-design coefficients for each marginalized
++    # subject parameter. An intercept-only t0 design has one coefficient; if a
++    # caller supplied a richer group design, keep eta in the intercept and
++    # hold the additional coefficients at zero.
++    col_off <- cumsum(c(0L, vapply(group_designs, ncol, integer(1L))))
++    for (k in which(marginal_idx)) {
++      cols <- (col_off[k] + 1L):col_off[k + 1L]
++      tmu_new[cols] <- c(marginal_spec$mu, rep(0, length(cols) - 1L))
++      tvar_new[k, ] <- 0
++      tvar_new[, k] <- 0
++      tvar_new[k, k] <- marginal_spec$sigma^2
++    }
++    tvinv_new <- solve(tvar_new)
++    subj_mu <- calculate_subject_means(group_designs, tmu_new)
++    subj_mu[marginal_idx, ] <- marginal_spec$mu
++  }
+   ##--------------------------------------------------
+   ## 4) Update a_half
+   ##--------------------------------------------------
+@@ -348,6 +392,9 @@ gibbs_step_standard <- function(sampler, alpha) {
+   shape_vec <- (prior$v + block_dim) / 2
+   rate_vec  <- prior$v * diag(tvinv_new) + 1/(prior$A^2)
+   a_half_new <- 1 / rgamma(p, shape=shape_vec, rate=rate_vec)
++  if (any(marginal_idx) && !is.null(marginal_spec)) {
++    a_half_new[marginal_idx] <- a_half[marginal_idx]
++  }
+ 
+   ##--------------------------------------------------
+   ## 5) Return updated values
+diff --git a/WorkingTests/INCREMENT2_marginal_t0.md b/WorkingTests/INCREMENT2_marginal_t0.md
+index 76a032cd..4925f2c7 100644
+--- a/WorkingTests/INCREMENT2_marginal_t0.md
++++ b/WorkingTests/INCREMENT2_marginal_t0.md
+@@ -8,14 +8,19 @@ Status at this checkpoint (2026-07-23, branch `bawl-correlated-race`):
+   integrates one shared t0 out of the COMPLETE subject likelihood by Gauss-Legendre
+   quadrature on the log-t0 axis, reusing the registered kernel per node (model-agnostic).
+   Matches the R reference `WorkingTests/marginal_t0_lib.R::marginal_ll_t0` to 3.4e-13.
+-- **Increment 1b DONE** — PtMapper fusion measured not worth it (setup = 3.2% of a call);
+-  adaptive nodes deferred pending end-to-end timing. Exported
++- **Increment 1b DONE** — PtMapper fusion measured not worth it (setup = 3.2% of a call).
++  The adaptive route now uses a 7-node pilot scan followed by a recentered composite
++  Gauss-Legendre rule with explicit tail panels. The production default is 40 final
++  nodes (47 kernel calls including the pilot); 40 is below the old fixed GL(80) cost
++  while meeting the convergence check for LBA, RDM, and RDMSWTN with positive `sv`.
++  Exported
+   `calc_ll_oo_marginal_nodes(...) -> list(nodes[K] sampled-scale, log_terms[np×K])` for
+   reconstruct-at-storage; `softmax_k(log_terms)` reproduces the ll exactly and
+   `E[t0|y]=Σ w_k exp(nodes_k)` recovers near truth.
+ 
+-The **C++ likelihood + reconstruction layer is complete**. Increment 2 is the R sampler
+-surgery. Nothing below has been started yet.
++The **C++ likelihood + reconstruction layer and the Increment 2 sampler wiring are
++implemented**. The Stage 0 scratch check now covers both GNG/no-go and standard-race
++configurations, including RDMSWTN with `sv > 0`.
+ 
+ ## Decisions locked (do not re-litigate)
+ 
+diff --git a/WorkingTests/stage0_marginal_t0.R b/WorkingTests/stage0_marginal_t0.R
+index 2d435b0f..17246f88 100644
+--- a/WorkingTests/stage0_marginal_t0.R
++++ b/WorkingTests/stage0_marginal_t0.R
+@@ -14,8 +14,9 @@
+ #       t0 dimension differs. We report ESS on the shared parameters;
+ #   (D) recover parameters (and a post-hoc t0 from the quadrature weights).
+ #
+-# Model is LBA standard-race GNG here; the machinery is model-agnostic (swap
+-# `model = LBA` for RDM etc.), which we spot-check at the end.
++# The primary benchmark below is an LBA GNG/no-go model (deadline-censored
++# data).  The machinery is model-agnostic; the spot checks at the end include
++# both a GNG/no-go RDM and a standard two-choice RDMSWTN with sv > 0.
+ # ===========================================================================
+ 
+ suppressMessages(pkgload::load_all(".", quiet = TRUE))
+@@ -42,13 +43,17 @@ ess1 <- function(z) {
+ ## --------------------------------------------------------------------------
+ ## Build a GNG data set + fast likelihood closure.
+ ## --------------------------------------------------------------------------
+-build <- function(model = LBA, n_trials = 250L, UC = 0.7, seed = 1, noise = "sv") {
++build <- function(model = LBA, n_trials = 250L, UC = 0.7, seed = 1,
++                  noise = "sv", sample_sv = FALSE) {
+   set.seed(seed)
+   mf <- function(d) as.numeric(d$S) == as.numeric(d$lR)
+   # LBA's between-trial drift sd is "sv"; RDM's diffusion sd is "s".
+   fml <- c(list(B ~ 0 + lR, v ~ 0 + mismatch + S:match, A ~ 1, t0 ~ 1),
+            list(stats::as.formula(paste(noise, "~ 1"))))
+   consts <- stats::setNames(c(log(1), log(0.4)), c(noise, "A"))
++  if (isTRUE(sample_sv) && identical(noise, "sv")) {
++    consts <- consts[names(consts) != "sv"]
++  }
+   des <- design(
+     factors = list(subjects = 1, S = c("go","nogo","nogo","nogo")), Rlevels = c("go","nogo"),
+     matchfun = mf,
+@@ -58,9 +63,39 @@ build <- function(model = LBA, n_trials = 250L, UC = 0.7, seed = 1, noise = "sv"
+   p <- sampled_pars(des, doMap = FALSE)
+   p[["B_lRgo"]] <- log(.75); p[["B_lRnogo"]] <- log(.6); p[["t0"]] <- log(.2)
+   p[["v_mismatch"]] <- .5; p[["v_Sgo:match"]] <- 2.1; p[["v_Snogo:match"]] <- 2.5
++  # RDMSWTN exposes sv as a sampled parameter; keep this strictly positive in
++  # that check.  For LBA, sv is fixed by `constants` and is not in `p`.
++  if ("sv" %in% names(p)) p[["sv"]] <- log(.35)
+   dat <- make_data(p, des, n_trials = n_trials, TC = list(UC = UC))
+   emc <- suppressMessages(make_emc(dat, des, type = "single", compress = TRUE, n_chains = 1))
++  list(p = p, dat = dat, dadm = emc[[1]]$data[[1]], model = emc[[1]]$model,
++       ll_fun = make_ll_fun(emc[[1]]$data[[1]], emc[[1]]$model),
++       prop = matrix(p, nrow = 1, dimnames = list(NULL, names(p))))
++}
++
++# A standard two-choice race (no `nogo` level and no deadline) used to ensure
++# the node-count check is not accidentally relying on GNG censoring semantics.
++build_standard_rdmswtn <- function(n_trials = 600L, seed = 17) {
++  set.seed(seed)
++  matchfun <- function(d) as.numeric(d$S) == as.numeric(d$lR)
++  des <- design(
++    factors = list(subjects = 1, S = c("left", "right")),
++    Rlevels = c("left", "right"), matchfun = matchfun,
++    functions = list(match = function(d) ifelse(d$lM == TRUE, 1, 0),
++                     mismatch = function(d) ifelse(d$lM == TRUE, 0, 1)),
++    model = RDMSWTN,
++    formula = list(B ~ 0 + lR, v ~ 0 + lM, A ~ 1, t0 ~ 1,
++                   s ~ 1, sv ~ 1),
++    constants = c(A = log(.2), s = log(1)))
++  p <- sampled_pars(des, doMap = FALSE)
++  p[["B_lRleft"]] <- log(.8); p[["B_lRright"]] <- log(1.0)
++  p[["v_lMFALSE"]] <- log(1.2); p[["v_lMTRUE"]] <- log(2.0)
++  p[["t0"]] <- log(.2); p[["sv"]] <- log(.35)
++  dat <- make_data(p, des, n_trials = n_trials)
++  emc <- suppressMessages(make_emc(dat, des, type = "single",
++                                   compress = TRUE, n_chains = 1))
+   list(p = p, dat = dat, dadm = emc[[1]]$data[[1]],
++       model = emc[[1]]$model,
+        ll_fun = make_ll_fun(emc[[1]]$data[[1]], emc[[1]]$model),
+        prop = matrix(p, nrow = 1, dimnames = list(NULL, names(p))))
+ }
+@@ -76,10 +111,116 @@ cat(sprintf("data: %d rows compressed; omission rate %.2f; min rt %.3f\n",
+             nrow(B$dadm), mean(!is.finite(B$dat$rt) | is.na(B$dat$rt)),
+             min(B$dat$rt[is.finite(B$dat$rt)])))
+ 
+-## (A) validation ------------------------------------------------------------
+-gl64 <- marginal_ll_t0(prop, ll_fun, eta_mu, eta_sd, n_nodes = 64L)
+-ref  <- grid_marginal_ll_t0(prop, ll_fun, eta_mu, eta_sd, n_grid = 2000L)
+-cat(sprintf("\n(A) quadrature check: GL(64)=%.5f  grid=%.5f  |diff|=%.2e\n", gl64, ref, abs(gl64 - ref)))
++## (A) validation and node-count benchmark ----------------------------------
++# Use the registered C++ marginal likelihood for the node-count comparison.
++# Its adaptive route first uses a 7-node pilot to locate the common
++# response-informed t0 mass, then spends n_nodes in a composite GL rule with
++# a dense central panel plus explicit tail panels.  The older R grid remains as
++# an independent check, but is explicitly clipped at the model's t0 lower bound
++# so it cannot spend nodes in the min_ll dead zone.
++make_cpp_marginal <- function(B) {
++  model <- B$model()
++  dadm <- EMC2:::.cache_ll_data_attrs(B$dadm)
++  constants <- attr(dadm, "constants"); if (is.null(constants)) constants <- NA
++  designs <- EMC2:::.oo_expanded_designs(dadm)
++  marginal <- function(proposals, n_nodes = NULL, mu = eta_mu, sigma = eta_sd,
++                       adaptive = TRUE, n_scan = 7L) {
++    if (is.null(dim(proposals))) {
++      proposals <- matrix(proposals, nrow = 1L,
++                          dimnames = list(NULL, names(proposals)))
++    }
++    marginalise <- list(param = "t0", mu = mu, sigma = sigma,
++                         adaptive = adaptive, n_scan = as.integer(n_scan))
++    if (!is.null(n_nodes)) marginalise$n_nodes <- as.integer(n_nodes)
++    EMC2:::calc_ll_oo(
++      proposals, dadm, constants = constants, designs = designs,
++      type = model$c_name, bounds = model$bound, transforms = model$transform,
++      pretransforms = model$pre_transform, p_types = names(model$p_types),
++      min_ll = log(1e-10), trend = model$trend,
++      marginalise = marginalise
++    )
++  }
++  nodes <- function(proposals, n_nodes = 40L, mu = eta_mu, sigma = eta_sd,
++                    adaptive = TRUE, n_scan = 7L) {
++    if (is.null(dim(proposals))) {
++      proposals <- matrix(proposals, nrow = 1L,
++                          dimnames = list(NULL, names(proposals)))
++    }
++    EMC2:::calc_ll_oo_marginal_nodes(
++      proposals, dadm, constants = constants, designs = designs,
++      type = model$c_name, bounds = model$bound, transforms = model$transform,
++      pretransforms = model$pre_transform, p_types = names(model$p_types),
++      min_ll = log(1e-10), trend = model$trend,
++      marginalise = list(param = "t0", mu = mu, sigma = sigma,
++                         n_nodes = as.integer(n_nodes), adaptive = adaptive,
++                         n_scan = as.integer(n_scan))
++    )
++  }
++  list(model = model, marginal = marginal, nodes = nodes)
++}
++cpp <- make_cpp_marginal(B)
++t0_lower <- cpp$model$bound$minmax[1, "t0"]
++production_nodes <- 40L
++node_sizes <- c(6L, 8L, 10L, 12L, 16L, 20L, 24L, 28L, 32L, 40L)
++reference_nodes <- 256L
++ll_reference <- as.numeric(cpp$marginal(prop, reference_nodes, adaptive = FALSE))
++ll_by_nodes <- vapply(node_sizes, function(k) as.numeric(cpp$marginal(prop, k)), numeric(1L))
++ll_default <- as.numeric(cpp$marginal(prop))
++
++# Reproduce the old interval only to quantify the bug this benchmark guards:
++# with t0 ~ N(log(.2), .3^2), 7/25 (28%) of its nodes are below the .05 bound.
++legacy_lo <- eta_mu - 6 * eta_sd
++log_ms <- log_ms_from_dadm(B$dadm)
++legacy_nodes <- gl_rule(25L)
++legacy_nodes <- (min(eta_mu + 6 * eta_sd, log_ms) + legacy_lo) / 2 +
++  (min(eta_mu + 6 * eta_sd, log_ms) - legacy_lo) / 2 * legacy_nodes$x
++cat(sprintf("\n(A) legacy interval: %d/%d nodes (%.1f%%) below t0 lower bound %.3f\n",
++            sum(exp(legacy_nodes) < t0_lower), length(legacy_nodes),
++            100 * mean(exp(legacy_nodes) < t0_lower), t0_lower))
++stopifnot(sum(exp(legacy_nodes) < t0_lower) == 7L)
++
++cpp_nodes <- cpp$nodes(prop, production_nodes)
++stopifnot(all(exp(cpp_nodes$nodes) >= t0_lower))
++node_table <- data.frame(
++  final_nodes = node_sizes,
++  kernel_calls = node_sizes + 7L,
++  log_likelihood = ll_by_nodes,
++  abs_error_vs_256 = abs(ll_by_nodes - ll_reference)
++)
++print(node_table, row.names = FALSE, digits = 8)
++ref_stability <- abs(as.numeric(cpp$marginal(prop, 128L, adaptive = FALSE)) - ll_reference)
++cat(sprintf("Fixed C++ GL(128) vs GL(256) stability: %.2e log units\n", ref_stability))
++cat(sprintf("C++ omitted-n_nodes default agrees with adaptive GL(%d): %.2e log units\n",
++            production_nodes, abs(ll_default - ll_by_nodes[node_sizes == production_nodes])))
++stopifnot(ref_stability < 1e-6,
++          abs(ll_default - ll_by_nodes[node_sizes == production_nodes]) < 1e-12,
++          node_table$abs_error_vs_256[node_table$final_nodes == production_nodes] < 1e-3)
++
++# Timing is measured on a modest particle batch to expose the linear node cost
++# without making this scratch test depend on wall-clock precision for one call.
++bench_particles <- prop[rep(1L, 32L), , drop = FALSE]
++bench_cpp <- function(n_nodes, adaptive = TRUE, reps = 20L) {
++  elapsed <- system.time(for (i in seq_len(reps)) {
++    cpp$marginal(bench_particles, n_nodes, adaptive = adaptive)
++  })[["elapsed"]]
++  1000 * elapsed / reps
++}
++timing_ms <- vapply(node_sizes, bench_cpp, numeric(1L))
++node_table$milliseconds_per_32_particles <- timing_ms
++fixed80_ms <- bench_cpp(80L, adaptive = FALSE)
++cat("\nC++ timing (milliseconds per 32-particle marginal call):\n")
++print(node_table[, c("final_nodes", "kernel_calls", "abs_error_vs_256",
++                     "milliseconds_per_32_particles")],
++      row.names = FALSE, digits = 6)
++cat(sprintf("Fixed GL(80) baseline: %.2f ms per 32-particle call\n", fixed80_ms))
++
++gl40 <- as.numeric(cpp$marginal(prop, production_nodes))
++ref_grid <- grid_marginal_ll_t0(
++  prop, ll_fun, eta_mu, eta_sd, n_grid = 2000L,
++  log_lo = log(t0_lower), log_ms = log_ms
++)
++cat(sprintf("\nC++ adaptive GL(%d)=%.5f  clipped R grid=%.5f  |diff|=%.2e\n",
++            production_nodes, gl40, ref_grid, abs(gl40 - ref_grid)))
+ 
+ ## (B) ridge geometry --------------------------------------------------------
+ t0g <- log(seq(0.12, 0.32, length.out = 41))
+@@ -108,7 +249,7 @@ lp_pair <- function(x) {                                 # x = c(t0, B_lRgo)
+ }
+ lp_bg_marg <- function(x) {                              # x = B_lRgo (t0 integrated)
+   q <- prop; q[, "B_lRgo"] <- x
+-  as.numeric(marginal_ll_t0(q, ll_fun, eta_mu, eta_sd, n_nodes = 32L)) + dnorm(x, 0, 3, log = TRUE)
++  as.numeric(cpp$marginal(q, n_nodes = production_nodes)) + dnorm(x, 0, 3, log = TRUE)
+ }
+ 
+ # (C1) deterministic argument: condition number of the naive (t0,B_go) posterior.
+@@ -165,7 +306,7 @@ par(mfrow = c(1, 1))
+ ## (D) recovery via direct optimization of the marginal objective + post-hoc t0
+ neg_marg <- function(x) {
+   v <- setNames(x, free_shared); q <- prop; q[, free_shared] <- v
+-  -(as.numeric(marginal_ll_t0(q, ll_fun, eta_mu, eta_sd, n_nodes = 32L)) + lp_prior_shared(v))
++  -(as.numeric(cpp$marginal(q, n_nodes = production_nodes)) + lp_prior_shared(v))
+ }
+ set.seed(11)
+ opt <- optim(unlist(p[free_shared]) + rnorm(length(free_shared), 0, 0.3), neg_marg,
+@@ -176,19 +317,79 @@ rec <- data.frame(param = free_shared, true = round(unlist(p[free_shared]), 3),
+ print(rec, row.names = FALSE)
+ # post-hoc t0 (writeup's step): quadrature-weighted E[t0|data] at the recovered mode
+ xm <- prop; xm[, free_shared] <- opt$par
+-gl <- gl_rule(64L); lo <- eta_mu - 6 * eta_sd; hi <- min(eta_mu + 6 * eta_sd, attr(ll_fun, "log_ms"))
+-xs <- (hi + lo)/2 + (hi - lo)/2 * gl$x
+-lw <- log(gl$w) + dnorm(xs, eta_mu, eta_sd, log = TRUE) +
+-      sapply(xs, function(z) { q <- xm; q[, "t0"] <- z; ll_fun(q) })
++nd <- cpp$nodes(xm, production_nodes)
++lw <- nd$log_terms[1L, ]
+ wq <- exp(lw - max(lw)); wq <- wq / sum(wq)
+-cat(sprintf("post-hoc E[t0 | data] = %.3f s  (true %.3f)\n", sum(exp(xs) * wq), exp(p[["t0"]])))
++cat(sprintf("post-hoc E[t0 | data] = %.3f s  (true %.3f)\n",
++            sum(exp(nd$nodes) * wq), exp(p[["t0"]])))
+ 
+-## model-agnostic spot check (RDM) ------------------------------------------
+-cat("\n(model-agnostic check) same wrapper on an RDM GNG data set:\n")
++## model-agnostic spot checks -------------------------------------------------
++cat("\n(model-agnostic check) RDM GNG/no-go data set:\n")
+ Br <- build(model = RDM, seed = 7, noise = "s")
+-glr <- marginal_ll_t0(Br$prop, Br$ll_fun, eta_mu, eta_sd, n_nodes = 64L)
+-refr <- grid_marginal_ll_t0(Br$prop, Br$ll_fun, eta_mu, eta_sd, n_grid = 2000L)
+-cat(sprintf("  RDM: GL(64)=%.5f  grid=%.5f  |diff|=%.2e\n", glr, refr, abs(glr - refr)))
++cppr <- make_cpp_marginal(Br)
++rdm_nodes <- c(8L, 12L, 16L, 20L, 24L, 28L, 32L, 40L)
++rdm_reference <- as.numeric(cppr$marginal(Br$prop, n_nodes = 256L, adaptive = FALSE))
++rdm_ll <- vapply(rdm_nodes, function(k) as.numeric(cppr$marginal(Br$prop, n_nodes = k)), numeric(1L))
++cat("  RDM node convergence (C++ log-likelihood error vs GL(256)):\n")
++print(data.frame(nodes = rdm_nodes, abs_error_vs_256 = abs(rdm_ll - rdm_reference)),
++      row.names = FALSE, digits = 8)
++stopifnot(abs(rdm_ll[rdm_nodes == production_nodes] - rdm_reference) < 1e-3)
++glr <- as.numeric(cppr$marginal(Br$prop, n_nodes = production_nodes))
++refr <- grid_marginal_ll_t0(
++  Br$prop, Br$ll_fun, eta_mu, eta_sd, n_grid = 2000L,
++  log_lo = log(cppr$model$bound$minmax[1, "t0"]),
++  log_ms = log_ms_from_dadm(Br$dadm)
++)
++cat(sprintf("  RDM: C++ adaptive GL(%d)=%.5f  clipped grid=%.5f  |diff|=%.2e\n",
++            production_nodes,
++            glr, refr, abs(glr - refr)))
++
++cat("\n(model-agnostic check) RDMSWTN GNG/no-go with sv > 0:\n")
++Bswtn_gng <- build(model = RDMSWTN, seed = 9, noise = "sv", sample_sv = TRUE)
++stopifnot(exp(Bswtn_gng$p[["sv"]]) > 0,
++          any(as.character(Bswtn_gng$dat$S) == "nogo"))
++cppswtn_gng <- make_cpp_marginal(Bswtn_gng)
++swtn_gng_nodes <- c(16L, 20L, 24L, 28L, 32L, 40L)
++swtn_gng_reference <- as.numeric(cppswtn_gng$marginal(
++  Bswtn_gng$prop, n_nodes = 256L, adaptive = FALSE))
++swtn_gng_ll <- vapply(
++  swtn_gng_nodes,
++  function(k) as.numeric(cppswtn_gng$marginal(Bswtn_gng$prop, n_nodes = k)),
++  numeric(1L))
++cat(sprintf("  RDMSWTN GNG sv=%.2f node convergence (error vs fixed GL(256)):\n",
++            exp(Bswtn_gng$p[["sv"]])))
++print(data.frame(nodes = swtn_gng_nodes,
++                 abs_error_vs_256 = abs(swtn_gng_ll - swtn_gng_reference)),
++      row.names = FALSE, digits = 8)
++stopifnot(abs(swtn_gng_ll[swtn_gng_nodes == production_nodes] - swtn_gng_reference) < 1e-3)
++
++cat("\n(model-agnostic check) standard race: RDMSWTN with sv > 0:\n")
++Bswtn <- build_standard_rdmswtn()
++stopifnot(exp(Bswtn$p[["sv"]]) > 0,
++          !any(as.character(Bswtn$dat$S) == "nogo"))
++cppswtn <- make_cpp_marginal(Bswtn)
++swtn_nodes <- c(12L, 16L, 20L, 24L, 28L, 32L, 40L)
++swtn_reference <- as.numeric(cppswtn$marginal(Bswtn$prop, n_nodes = 256L,
++                                               adaptive = FALSE))
++swtn_ll <- vapply(swtn_nodes,
++                  function(k) as.numeric(cppswtn$marginal(Bswtn$prop,
++                                                          n_nodes = k)),
++                  numeric(1L))
++cat(sprintf("  RDMSWTN sv=%.2f node convergence (C++ log-likelihood error vs fixed GL(256)):\n",
++            exp(Bswtn$p[["sv"]])))
++print(data.frame(nodes = swtn_nodes,
++                 abs_error_vs_256 = abs(swtn_ll - swtn_reference)),
++      row.names = FALSE, digits = 8)
++stopifnot(abs(swtn_ll[swtn_nodes == production_nodes] - swtn_reference) < 1e-3)
++glswtn <- as.numeric(cppswtn$marginal(Bswtn$prop, n_nodes = production_nodes))
++refswtn <- grid_marginal_ll_t0(
++  Bswtn$prop, Bswtn$ll_fun, eta_mu, eta_sd, n_grid = 2000L,
++  log_lo = log(cppswtn$model$bound$minmax[1, "t0"]),
++  log_ms = log_ms_from_dadm(Bswtn$dadm)
++)
++cat(sprintf("  RDMSWTN: C++ adaptive GL(%d)=%.5f  clipped grid=%.5f  |diff|=%.2e\n",
++            production_nodes,
++            glswtn, refswtn, abs(glswtn - refswtn)))
+ 
+ cat("\nWrote figure: ", file.path(OUT, "stage0_marginal_t0.pdf"), "\n")
+ cat("STAGE0 DONE\n")
+diff --git a/src/particle_ll.cpp b/src/particle_ll.cpp
+index 9f7b6e4d..980e4248 100644
+--- a/src/particle_ll.cpp
++++ b/src/particle_ll.cpp
+@@ -2897,7 +2897,7 @@ static RaceSharedState build_race_shared_state(DataFrame data, int n_trials, int
+ 
+ // Per-node grid of a t0 marginalization: the quadrature node values (sampled
+ // log-t0 scale) and the unnormalized per-particle log-terms
+-//   ell_ik = log w_k + log|half| + log p(x_k|eta) + log L_i(x_k)
++//   ell_ik = log quadrature_weight_k + log p(x_k|eta) + log L_i(x_k)
+ // that BOTH the marginal-ll reducer and the storage-time weight accessor share,
+ // so the node grid and the reconstruction weights are guaranteed identical.
+ struct MarginalGrid {
+@@ -2905,15 +2905,95 @@ struct MarginalGrid {
+   Rcpp::NumericMatrix log_terms;  // np x K: ell_ik (softmax over k => p(t0=x_k|y,theta,eta))
+ };
+ 
++// A composite GL rule lets the t0 marginal retain support over its complete
++// feasible interval while concentrating most nodes around the response-informed
++// posterior bump.  Unlike simply truncating to a centred window, the two tail
++// panels retain the integral's mass and therefore keep the approximation
++// coherent even for a broad or weakly identified t0 posterior.
++struct MarginalRule {
++  std::vector<double> x;
++  std::vector<double> w;
++};
++
++static void marginal_append_gl_panel(MarginalRule& out, double lo, double hi,
++                                     int n) {
++  if (n <= 0 || !(hi > lo)) return;
++  const GLRule& rule = gl_get_rule(n);
++  const double half = 0.5 * (hi - lo);
++  const double mid = 0.5 * (hi + lo);
++  for (int k = 0; k < n; ++k) {
++    out.x.push_back(mid + half * rule.x[static_cast<size_t>(k)]);
++    out.w.push_back(half * rule.w[static_cast<size_t>(k)]);
++  }
++}
++
++// Turn the scan's equally-particle-weighted posterior masses into a central
++// panel.  The width floor is tied to the pilot spacing: if a narrow bump lands
++// between pilot points, the refined panel still covers the unresolved cell.
++static std::pair<double, double> marginal_adaptive_window(
++    const std::vector<double>& log_mass, const std::vector<double>& x,
++    double lo, double hi, int n_scan) {
++  double m = R_NegInf;
++  for (double v : log_mass) if (R_FINITE(v) && v > m) m = v;
++  if (!R_FINITE(m)) return std::make_pair(lo, hi);
++  double s0 = 0.0, s1 = 0.0, s2 = 0.0;
++  for (size_t k = 0; k < log_mass.size(); ++k) {
++    if (!R_FINITE(log_mass[k])) continue;
++    const double p = std::exp(log_mass[k] - m);
++    s0 += p;
++    s1 += p * x[k];
++    s2 += p * x[k] * x[k];
++  }
++  if (!(s0 > 0.0)) return std::make_pair(lo, hi);
++  const double centre = std::min(hi, std::max(lo, s1 / s0));
++  const double variance = std::max(0.0, s2 / s0 - centre * centre);
++  const double width = hi - lo;
++  const double pilot_half_cell = width / (2.0 * std::max(n_scan, 2));
++  // Three inflated SDs cover the normal-like posterior core; the pilot-cell
++  // floor protects peaks that the coarse scan can only locate approximately.
++  const double half = std::min(0.5 * width,
++    std::max(3.0 * 1.3 * std::sqrt(variance), pilot_half_cell));
++  return std::make_pair(std::max(lo, centre - half),
++                        std::min(hi, centre + half));
++}
++
++static MarginalRule marginal_adaptive_rule(
++    const std::vector<double>& scan_log_mass, const std::vector<double>& scan_x,
++    double lo, double hi, int n_nodes, int n_scan) {
++  MarginalRule out;
++  // Very small caller-specified rules are useful diagnostics.  Leave those as
++  // ordinary GL rather than silently changing their requested resolution.
++  if (n_nodes < 6) {
++    marginal_append_gl_panel(out, lo, hi, n_nodes);
++    return out;
++  }
++  const std::pair<double, double> centre = marginal_adaptive_window(
++    scan_log_mass, scan_x, lo, hi, n_scan);
++  // One tail node on each side is enough for the compact 6--12-node rules;
++  // reserving two there left too few core nodes to resolve the response kink.
++  // Larger explicit rules can afford a second tail node without sacrificing
++  // the central resolution.
++  const int tail_each = n_nodes >= 14 ? 2 : 1;
++  const int n_left = centre.first > lo ? tail_each : 0;
++  const int n_right = centre.second < hi ? tail_each : 0;
++  const int n_core = n_nodes - n_left - n_right;
++  marginal_append_gl_panel(out, lo, centre.first, n_left);
++  marginal_append_gl_panel(out, centre.first, centre.second, n_core);
++  marginal_append_gl_panel(out, centre.second, hi, n_right);
++  return out;
++}
++
+ // Coherent marginalization core (option 3): integrate ONE shared t0 out of the
+-// COMPLETE subject likelihood by fixed-order Gauss-Legendre quadrature on the
+-// log-t0 (sampled) axis. Reuses the registered kernel verbatim -- each node
+-// overwrites the sampled t0 column and re-calls calc_ll_oo with marginalise off
+-// -- so it is model-agnostic (every race model, no per-model code). The
+-// interval is clipped to where the likelihood is live: below t0's natural-scale
+-// lower bound c_do_bound floors the whole subject to n_trials*min_ll; above
+-// min(rt) the fastest response is infeasible. Correctness reference is
+-// WorkingTests/marginal_t0_lib.R::marginal_ll_t0.
++// COMPLETE subject likelihood by scan-and-recentred composite Gauss-Legendre
++// quadrature on the log-t0 (sampled) axis.  A short pilot rule locates the
++// response-informed mass, then a compact core panel is flanked by two tail
++// panels so the whole feasible interval remains integrated. Reuses the
++// registered kernel verbatim -- each node overwrites the sampled t0 column and
++// re-calls calc_ll_oo with marginalise off -- so it is model-agnostic (every
++// race model, no per-model code). The interval is clipped to where the
++// likelihood is live: below t0's natural-scale lower bound c_do_bound floors
++// the whole subject to n_trials*min_ll; above min(rt) the fastest response is
++// infeasible. Correctness reference is WorkingTests/marginal_t0_lib.R::marginal_ll_t0.
+ static MarginalGrid calc_ll_oo_marginal_core(
+     NumericMatrix particle_matrix, DataFrame data, NumericVector constants,
+     List designs, String type, List bounds, List transforms, List pretransforms,
+@@ -2926,12 +3006,17 @@ static MarginalGrid calc_ll_oo_marginal_core(
+   const double mu    = Rcpp::as<double>(marginalise["mu"]);
+   const double sigma = Rcpp::as<double>(marginalise["sigma"]);
+   int    n_nodes = marginalise.containsElementNamed("n_nodes")
+-                     ? Rcpp::as<int>(marginalise["n_nodes"]) : 25;
++                     ? Rcpp::as<int>(marginalise["n_nodes"]) : 40;
++  int    n_scan = marginalise.containsElementNamed("n_scan")
++                     ? Rcpp::as<int>(marginalise["n_scan"]) : 7;
++  const bool adaptive = marginalise.containsElementNamed("adaptive")
++                     ? Rcpp::as<bool>(marginalise["adaptive"]) : true;
+   const double span = marginalise.containsElementNamed("span")
+                      ? Rcpp::as<double>(marginalise["span"]) : 6.0;
+   const double eps  = marginalise.containsElementNamed("eps")
+                      ? Rcpp::as<double>(marginalise["eps"]) : 1e-3;
+   if (n_nodes < 2) n_nodes = 2;
++  if (n_scan < 2) n_scan = 2;
+ 
+   // --- locate the sampled t0 coordinate in the proposal matrix ---
+   CharacterVector p_names = colnames(particle_matrix);
+@@ -2971,9 +3056,9 @@ static MarginalGrid calc_ll_oo_marginal_core(
+   const double hi = std::min(mu + span * sigma, log_ms);
+ 
+   MarginalGrid g;
+-  g.nodes = NumericVector(n_nodes);
+-  g.log_terms = NumericMatrix(np, n_nodes);
+   if (!(hi > lo)) {                                  // collapsed interval => no mass
++    g.nodes = NumericVector(n_nodes);
++    g.log_terms = NumericMatrix(np, n_nodes);
+     std::fill(g.nodes.begin(), g.nodes.end(), NA_REAL);
+     std::fill(g.log_terms.begin(), g.log_terms.end(), R_NegInf);
+     return g;
+@@ -2981,17 +3066,61 @@ static MarginalGrid calc_ll_oo_marginal_core(
+ 
+   const double half = (hi - lo) / 2.0;
+   const double mid  = (hi + lo) / 2.0;
+-  const GLRule& rule = gl_get_rule(n_nodes);   // nodes/weights on [-1,1], sum(w)=2
+-
+   NumericMatrix pm = Rcpp::clone(particle_matrix);   // scratch: t0 overwritten per node
+-  for (int k = 0; k < n_nodes; ++k) {
+-    const double xk = mid + half * rule.x[k];        // log-t0 node (shared interval)
++  MarginalRule rule;
++  if (adaptive && n_nodes >= 6) {
++    const GLRule& scan_rule = gl_get_rule(n_scan);
++    std::vector<double> scan_x(static_cast<size_t>(n_scan));
++    std::vector<double> scan_terms(static_cast<size_t>(np) * n_scan, R_NegInf);
++    for (int k = 0; k < n_scan; ++k) {
++      const double xk = mid + half * scan_rule.x[static_cast<size_t>(k)];
++      scan_x[static_cast<size_t>(k)] = xk;
++      for (int i = 0; i < np; ++i) pm(i, t0col) = xk;
++      NumericVector llk = calc_ll_oo(pm, data, constants, designs, type, bounds,
++                                     transforms, pretransforms, p_types, min_ll,
++                                     trend, R_NilValue);
++      const double logw = std::log(scan_rule.w[static_cast<size_t>(k)]) +
++        std::log(half) + R::dnorm(xk, mu, sigma, 1);
++      for (int i = 0; i < np; ++i)
++        scan_terms[static_cast<size_t>(i) * n_scan + k] = logw + llk[i];
++    }
++    // Give each proposal equal influence on the shared grid.  Weighting by
++    // raw likelihood would centre exclusively on the already-best particle and
++    // unnecessarily degrade the importance proposal's other particles.
++    std::vector<double> scan_log_mass(static_cast<size_t>(n_scan), R_NegInf);
++    int n_valid = 0;
++    for (int i = 0; i < np; ++i) {
++      double norm = R_NegInf;
++      for (int k = 0; k < n_scan; ++k)
++        norm = log_sum_exp(norm, scan_terms[static_cast<size_t>(i) * n_scan + k]);
++      if (!R_FINITE(norm)) continue;
++      ++n_valid;
++      for (int k = 0; k < n_scan; ++k)
++        scan_log_mass[static_cast<size_t>(k)] = log_sum_exp(
++          scan_log_mass[static_cast<size_t>(k)],
++          scan_terms[static_cast<size_t>(i) * n_scan + k] - norm);
++    }
++    if (n_valid > 0) {
++      const double log_n_valid = std::log(static_cast<double>(n_valid));
++      for (double& v : scan_log_mass) if (R_FINITE(v)) v -= log_n_valid;
++    }
++    rule = marginal_adaptive_rule(scan_log_mass, scan_x, lo, hi, n_nodes, n_scan);
++  } else {
++    marginal_append_gl_panel(rule, lo, hi, n_nodes);
++  }
++
++  const int n_rule_nodes = static_cast<int>(rule.x.size());
++  g.nodes = NumericVector(n_rule_nodes);
++  g.log_terms = NumericMatrix(np, n_rule_nodes);
++  for (int k = 0; k < n_rule_nodes; ++k) {
++    const double xk = rule.x[static_cast<size_t>(k)]; // log-t0 node (shared interval)
+     g.nodes[k] = xk;
+     for (int i = 0; i < np; ++i) pm(i, t0col) = xk;
+     NumericVector llk = calc_ll_oo(pm, data, constants, designs, type, bounds,
+                                    transforms, pretransforms, p_types, min_ll,
+                                    trend, R_NilValue);
+-    const double logw = std::log(rule.w[k]) + std::log(half) + R::dnorm(xk, mu, sigma, 1);
++    const double logw = std::log(rule.w[static_cast<size_t>(k)]) +
++      R::dnorm(xk, mu, sigma, 1);
+     for (int i = 0; i < np; ++i) g.log_terms(i, k) = logw + llk[i];
+   }
+   return g;
+diff --git a/tests/testthat/test-marginalise-t0.R b/tests/testthat/test-marginalise-t0.R
+new file mode 100644
+index 00000000..86100479
+--- /dev/null
++++ b/tests/testthat/test-marginalise-t0.R
+@@ -0,0 +1,90 @@
++# Regression tests for design(marginalise = "t0"): the shared subject-level t0
++# is integrated out of the MH proposal (fixed-eta Stage 1) and reconstructed
++# into the stored alpha. These guard the two defects found in review:
++#   (1) a broken marginalised index that froze the whole chain, and
++#   (2) accidental integration leaking into downstream (predict/make_data/IC).
++
++matchfun <- function(d) d$S == d$lR
++
++# Two subjects keeps the sampler exercise cheap.
++dat <- forstmann[forstmann$subjects %in% unique(forstmann$subjects)[1:2], ]
++dat$subjects <- droplevels(dat$subjects)
++
++pmean <- c(v = 1, B = log(.5), B_Eneutral = log(1.5), B_Eaccuracy = log(2),
++           B_lRright = 0, A = log(0.25), t0 = log(.2))
++psd <- c(v = 1, B = 0.3, B_Eneutral = 0.3, B_Eaccuracy = 0.3,
++         B_lRright = 0.3, A = 0.4, t0 = .5)
++
++make_marginal_emc <- function() {
++  des <- design(data = dat, model = LBA,
++                formula = list(v ~ 1, sv ~ 1, B ~ E + lR, A ~ 1, t0 ~ 1),
++                constants = c(sv = log(1)), marginalise = "t0",
++                report_p_vector = FALSE)
++  pr <- prior(des, type = "standard", pmean = pmean, psd = psd)
++  list(des = des,
++       emc = make_emc(dat, des, type = "standard", prior = pr,
++                      compress = TRUE, n_chains = 1))
++}
++
++test_that("marginalise is carried on the design but never tagged on the dadm", {
++  mm <- make_marginal_emc()
++  expect_identical(attr(mm$des, "marginalise"), "t0")
++  # The sampler resolves the fixed eta from the existing t0 prior.
++  expect_identical(mm$emc[[1]]$marginalise$param, "t0")
++  expect_true(is.finite(mm$emc[[1]]$marginalise$mu))
++  expect_true(mm$emc[[1]]$marginalise$sigma > 0)
++  # Exactly t0 is flagged as marginalised in the sampled vector.
++  idx <- mm$emc[[1]]$marginalised_idx
++  expect_identical(mm$emc[[1]]$par_names[idx], "t0")
++  # Downstream consumers must see an ordinary (untagged) dadm.
++  expect_null(attr(mm$emc[[1]]$data[[1]], "marginalise"))
++})
++
++test_that("a plain likelihood on the dadm does NOT integrate t0", {
++  mm <- make_marginal_emc()
++  s1 <- mm$emc[[1]]
++  d1 <- s1$data[[1]]
++  P <- matrix(pmean[s1$par_names], nrow = 1L,
++              dimnames = list(NULL, s1$par_names))
++  ll_plain <- EMC2:::calc_ll_manager(P, dadm = d1, s1$model)
++  grid <- EMC2:::compute_marginal_grid(P, d1, s1$model, s1$marginalise)
++  ll_marg <- EMC2:::marginal_ll_from_grid(grid$log_terms)
++  # The two must differ substantially: if they matched, the plain path would be
++  # silently integrating (the fallback bug this feature had).
++  expect_gt(abs(ll_plain - ll_marg), 1)
++})
++
++test_that("the marginalise chain mixes (no freeze) and pins t0's group level", {
++  skip_on_cran()
++  skip_on_os("windows")
++  RNGkind("L'Ecuyer-CMRG")
++  set.seed(123)
++  mm <- make_marginal_emc()
++  # Preburn-only keeps this fast and deterministic (no gd auto-extension).
++  emc <- EMC2:::run_emc(mm$emc, stage = "preburn",
++                        stop_criteria = list(iter = 12),
++                        cores_for_chains = 1, particle_factor = 15,
++                        verbose = FALSE)
++  samples <- emc[[1]]$samples
++  alpha <- samples$alpha
++  idx <- samples$idx
++
++  # (1) The freeze bug produced EXACTLY zero movement in every parameter for
++  # every subject. Every non-marginalised coordinate must actually move.
++  non_t0 <- rownames(alpha) != "t0"
++  movement <- apply(alpha[non_t0, , , drop = FALSE], 1L,
++                    function(x) diff(range(x)))
++  expect_true(all(movement > 0))
++
++  # (2) t0 is reconstructed into alpha (kept for predict/make_data) and, being a
++  # posterior draw per iteration, varies and stays finite.
++  expect_true(all(is.finite(alpha["t0", , ])))
++  expect_gt(diff(range(alpha["t0", , ])), 0)
++
++  # (3) Stage-1 holds t0's group level at the fixed prior eta: gibbs pins the
++  # group mean/variance deterministically each iteration.
++  expect_equal(unname(samples$theta_mu["t0", idx]),
++               emc[[1]]$marginalise$mu, tolerance = 1e-8)
++  expect_equal(unname(samples$theta_var["t0", "t0", idx]),
++               emc[[1]]$marginalise$sigma^2, tolerance = 1e-8)
++})

@@ -1,86 +1,3 @@
-#' Specify a Design and Model
-#'
-#' This function combines information regarding the data, type of model, and
-#' the model specification.
-#'
-#' @param formula A list. Contains the design formulae in the
-#' format `list(y ~ x, a ~ z)`.
-#' @param factors A named list containing all the factor variables that span
-#' the design cells and that should be taken into account by the model.
-#' The name `subjects` must be used to indicate the participant factor variable,
-#' also in the data.
-#'
-#' Example: `list(subjects=levels(dat$subjects), condition=levels(dat$condition))`
-#'
-#' @param Rlevels A character vector. Contains the response factor levels.
-#' Example: `c("right", "left")`
-#' @param model A function, specifies the model type.
-#' Choose from the drift diffusion model (`DDM()`, `DDMt0natural()`),
-#' the log-normal race model (`LNR()`), the linear ballistic model (`LBA()`),
-#' the racing diffusion model (`RDM()`, `RDMt0natural()`), or define your own
-#' model functions.
-#' @param data A data frame. `data` can be used to automatically detect
-#'  `factors`, `Rlevels` and `covariates` in a dataset. The variable `R` needs
-#'  to be a factor variable indicating the response variable. Any numeric column
-#'  except `trials` and `rt` are treated as covariates, and all remaining factor
-#'  variables are internally used in `factors`.
-#' @param contrasts Optional. A named list specifying a design matrix.
-#' Example for supplying a customized design matrix:
-#' `list(lM = matrix(c(-1/2,1/2),ncol=1,dimnames=list(NULL,"diff"))))`
-#' @param matchfun A function. Only needed for race models. Specifies whether a
-#' response was correct or not. Example: `function(d)d$S==d$lR` where lR refers
-#' to the latent response factor.
-#' @param constants A named vector that sets constants. Any parameter in
-#' `sampled_pars` can be set constant.
-#' @param covariates Names of numeric covariates.
-#' @param functions List of functions to create new factors based on those in
-#' the factors argument. These new factors can then be used in `formula`.
-#' @param report_p_vector Boolean. If TRUE (default), it returns the vector of
-#' parameters to be estimated.
-#' @param custom_p_vector A character vector. If specified, a custom likelihood
-#' function can be supplied.
-#' @param trend A trend list, as made by \code{\link{make_trend}}
-#' @param pre_transform_terms Optional named list keyed by model parameter. Each
-#' element is a character vector naming design-matrix coefficients that should be
-#' summed on the transformed scale before the model transform is applied, with
-#' the remaining coefficients added linearly on the natural scale.
-#' @param transform A list with custom transformations to be applied to the parameters of the model,
-#' if the conventional transformations aren't desired.
-#' See `DDM()` for an example of such transformations
-#' @param bound A list with custom bounds to be applied to the parameters of the model,
-#' if the conventional bound aren't desired.
-#' see `DDM()` for an example of such bounds. Bounds are used to set limits to
-#' the likelihood landscape that cannot reasonable be achieved with `transform`
-#' @param marginalise Optional character vector naming one shared race-model
-#' parameter to marginalize in the sampler (currently, e.g. `"t0"`). The
-#' parameter must use an intercept-only design (`~ 1`).
-#' @param ... Additional, optional arguments
-#'
-#' @return A design list.
-#' @examples
-#'
-#' # load example dataset
-#' dat <- forstmann
-#'
-#' # create a function that takes the latent response (lR) factor (d) and returns a logical
-#' # defining the correct response for each stimulus. Here the match is simply
-#' # such that the S factor equals the latent response factor
-#' matchfun <- function(d)d$S==d$lR
-#'
-#' # When working with lM and lR, it can be useful to design  an
-#' # "average and difference" contrast matrix. For binary responses, it has a
-#' # simple canonical form
-#' ADmat <- matrix(c(-1/2,1/2),ncol=1,dimnames=list(NULL,"diff"))
-#'
-#' # Create a design for a linear ballistic accumulator model (LBA) that allows
-#' # thresholds to be a function of E and lR. The final result is a 9 parameter model.
-#' design_LBABE <- design(data = dat,model=LBA,matchfun=matchfun,
-#'                             formula=list(v~lM,sv~lM,B~E+lR,A~1,t0~1),
-#'                             contrasts=list(v=list(lM=ADmat)),
-#'                             constants=c(sv=log(1)))
-#' @export
-#'
-#'
 normalize_marginalise <- function(marginalise) {
   if (is.null(marginalise)) return(NULL)
   if (is.character(marginalise)) {
@@ -139,6 +56,126 @@ validate_marginalise_design <- function(marginalise, design, model) {
   p
 }
 
+#' Specify a Design and Model
+#'
+#' This function combines information regarding the data, type of model, and
+#' the model specification.
+#'
+#' @param formula A list. Contains the design formulae in the
+#' format `list(y ~ x, a ~ z)`.
+#' @param factors A named list containing all the factor variables that span
+#' the design cells and that should be taken into account by the model.
+#' The name `subjects` must be used to indicate the participant factor variable,
+#' also in the data.
+#'
+#' Example: `list(subjects=levels(dat$subjects), condition=levels(dat$condition))`
+#'
+#' @param Rlevels A character vector. Contains the response factor levels.
+#' Example: `c("right", "left")`
+#' @param model A function, specifies the model type.
+#' Choose from the drift diffusion model (`DDM()`, `DDMt0natural()`),
+#' the log-normal race model (`LNR()`), the linear ballistic model (`LBA()`),
+#' the racing diffusion model (`RDM()`, `RDMt0natural()`), or define your own
+#' model functions.
+#' @param data A data frame. `data` can be used to automatically detect
+#'  `factors`, `Rlevels` and `covariates` in a dataset. The variable `R` needs
+#'  to be a factor variable indicating the response variable. Any numeric column
+#'  except `trials` and `rt` are treated as covariates, and all remaining factor
+#'  variables are internally used in `factors`.
+#' @param contrasts Optional. A named list specifying a design matrix.
+#' Example for supplying a customized design matrix:
+#' `list(lM = matrix(c(-1/2,1/2),ncol=1,dimnames=list(NULL,"diff"))))`
+#' @param matchfun A function. Only needed for race models. Specifies whether a
+#' response was correct or not. Example: `function(d)d$S==d$lR` where lR refers
+#' to the latent response factor.
+#' @param constants A named vector that sets constants. Any parameter in
+#' `sampled_pars` can be set constant.
+#' @param covariates Names of numeric covariates.
+#' @param functions List of functions to create new factors based on those in
+#' the factors argument. These new factors can then be used in `formula`.
+#' @param report_p_vector Boolean. If TRUE (default), it returns the vector of
+#' parameters to be estimated.
+#' @param custom_p_vector A character vector. If specified, a custom likelihood
+#' function can be supplied.
+#' @param trend A trend list, as made by \code{\link{make_trend}}
+#' @param pre_transform_terms Optional named list keyed by model parameter. Each
+#' element is a character vector naming design-matrix coefficients that should be
+#' summed on the transformed scale before the model transform is applied, with
+#' the remaining coefficients added linearly on the natural scale.
+#' @param transform A list with custom transformations to be applied to the parameters of the model,
+#' if the conventional transformations aren't desired.
+#' See `DDM()` for an example of such transformations
+#' @param bound A list with custom bounds to be applied to the parameters of the model,
+#' if the conventional bound aren't desired.
+#' see `DDM()` for an example of such bounds. Bounds are used to set limits to
+#' the likelihood landscape that cannot reasonable be achieved with `transform`
+#' @param marginalise Optional. Names one shared race-model parameter (e.g.
+#' `"t0"`) to be *marginalised* out of the sampler by numerical quadrature
+#' rather than sampled as a subject-level random effect. Either a character
+#' scalar (`marginalise = "t0"`), or a list giving the parameter plus quadrature
+#' controls (`marginalise = list(param = "t0", n_nodes = 40)`). `n_nodes` is the
+#' number of Gauss-Legendre quadrature nodes and defaults to `40`. The named
+#' parameter must (i) belong to a race model (not `DDM()`), (ii) be a sampled
+#' model parameter (not a `constant`, and not a `custom_p_vector` design),
+#' (iii) use an intercept-only design (`~ 1`), and (iv) have a finite lower
+#' bound. See Details. This is a sampling/efficiency feature and does not change
+#' the model's likelihood.
+#' @param ... Additional, optional arguments
+#'
+#' @details
+#' # Marginalising a shared parameter (`marginalise`)
+#'
+#' Some race-model parameters that are shared across a subject's accumulators —
+#' most notably the non-decision time `t0` — trade off strongly against the
+#' race-speed parameters (thresholds/rates). In go/no-go race designs this
+#' trade-off produces a ridge in the posterior that makes the MCMC chains mix
+#' poorly (a highly correlated, ill-conditioned proposal geometry). `marginalise`
+#' addresses this by integrating the shared parameter out of the per-subject
+#' likelihood instead of sampling it directly.
+#'
+#' When `marginalise` is set, that parameter is held out of the MCMC proposal
+#' vector. Its per-subject likelihood contribution is computed by Gauss-Legendre
+#' quadrature over the parameter (on its sampled/log scale) using `n_nodes`
+#' nodes, weighted by a fixed Gaussian `eta` taken from the parameter's existing
+#' prior mean and variance (its group-level distribution is pinned to that prior,
+#' not estimated). A representative value is drawn back (reconstructed) from the
+#' quadrature grid and stored in each posterior sample, so downstream summaries
+#' still report the parameter. The integration interval is clipped to the
+#' parameter's finite lower bound and to just below the subject's fastest
+#' response time, which is why a finite lower bound and the `~ 1` design are
+#' required.
+#'
+#' Marginalising does not alter the likelihood: turning it off yields an
+#' identical model, only sampled with the parameter left in. It typically
+#' improves mixing/ESS per iteration at the cost of extra quadrature work per
+#' likelihood evaluation. Currently exactly one parameter may be marginalised,
+#' and only for race models.
+#'
+#' @return A design list.
+#' @examples
+#'
+#' # load example dataset
+#' dat <- forstmann
+#'
+#' # create a function that takes the latent response (lR) factor (d) and returns a logical
+#' # defining the correct response for each stimulus. Here the match is simply
+#' # such that the S factor equals the latent response factor
+#' matchfun <- function(d)d$S==d$lR
+#'
+#' # When working with lM and lR, it can be useful to design  an
+#' # "average and difference" contrast matrix. For binary responses, it has a
+#' # simple canonical form
+#' ADmat <- matrix(c(-1/2,1/2),ncol=1,dimnames=list(NULL,"diff"))
+#'
+#' # Create a design for a linear ballistic accumulator model (LBA) that allows
+#' # thresholds to be a function of E and lR. The final result is a 9 parameter model.
+#' design_LBABE <- design(data = dat,model=LBA,matchfun=matchfun,
+#'                             formula=list(v~lM,sv~lM,B~E+lR,A~1,t0~1),
+#'                             contrasts=list(v=list(lM=ADmat)),
+#'                             constants=c(sv=log(1)))
+#' @export
+#'
+#'
 design <- function(formula = NULL,factors = NULL,Rlevels = NULL,model,data=NULL,
                    contrasts=NULL,matchfun=NULL,constants=NULL,covariates=NULL,
                    functions=NULL,report_p_vector=TRUE, custom_p_vector = NULL,

@@ -699,6 +699,18 @@ struct LogicalRulesZCacheEntry {
   double log_z = R_NegInf;
 };
 
+struct LogicalRulesCellKey {
+  int idxA, idxB, idxnA, idxnB, idxNogo;
+  int rule_code, cond_code;
+  double LT, UT, LC, UC;
+
+  bool operator==(const LogicalRulesCellKey& o) const {
+    return idxA == o.idxA && idxB == o.idxB && idxnA == o.idxnA && idxnB == o.idxnB &&
+           idxNogo == o.idxNogo && rule_code == o.rule_code && cond_code == o.cond_code &&
+           LT == o.LT && UT == o.UT && LC == o.LC && UC == o.UC;
+  }
+};
+
 struct LogicalRulesSharedState {
   bool valid = false;
   int n_trials = 0;
@@ -724,12 +736,22 @@ struct LogicalRulesSharedState {
   // Per-row RTs (length n_trials) for raw dfun/pfun kernels.
   std::vector<double> rt_by_row;
 
-  // Per-particle cache for truncation normalisers.  The normaliser is a
-  // function of the parameter cell and truncation window, not of the
-  // observed RT, so distinct RTs can share this value safely.  The cache is
-  // cleared when the parameter-table backing storage is refilled for the
-  // next particle.
+  // Pre-computed design cells and trial-to-cell mapping
+  int n_cells = 0;
+  std::vector<int> cell_id;                     // length n_unique_trials
+  std::vector<LogicalRulesCellKey> cells;       // length n_cells
+  std::vector<unsigned char> ch_eq_cell;        // per unique trial, channel equality
+
+  // Per-particle cache for truncation normalisers and capacity denominators.
+  mutable std::vector<double> cell_log_z;       // length n_cells
+  mutable std::vector<double> cell_log_den_cap; // length n_cells
   mutable std::vector<LogicalRulesZCacheEntry> z_cache;
+
+  void clear_particle_cache() const {
+    cell_log_z.assign(static_cast<size_t>(n_cells), NA_REAL);
+    cell_log_den_cap.assign(static_cast<size_t>(n_cells), NA_REAL);
+    z_cache.clear();
+  }
 };
 
 static const LogicalRulesZCacheEntry* logicalrules_z_cache_find(
@@ -2565,6 +2587,31 @@ static LogicalRulesSharedState build_logicalrules_shared_state(const Rcpp::DataF
       }
     }
   }
+
+  const int n_unique_trials = out.n_unique_trials;
+  out.cell_id.resize(n_unique_trials);
+  for (int j = 0; j < n_unique_trials; ++j) {
+    LogicalRulesCellKey k{
+      out.idxA[j], out.idxB[j], out.idxnA[j], out.idxnB[j], out.idxNogo[j],
+      out.rule_code[j], out.cond_code[j],
+      out.LT_unique[j], out.UT_unique[j], out.LC_unique[j], out.UC_unique[j]
+    };
+    int found = -1;
+    for (size_t c = 0; c < out.cells.size(); ++c) {
+      if (out.cells[c] == k) {
+        found = static_cast<int>(c);
+        break;
+      }
+    }
+    if (found < 0) {
+      found = static_cast<int>(out.cells.size());
+      out.cells.push_back(k);
+    }
+    out.cell_id[j] = found;
+  }
+  out.n_cells = static_cast<int>(out.cells.size());
+  out.cell_log_z.assign(static_cast<size_t>(out.n_cells), NA_REAL);
+  out.cell_log_den_cap.assign(static_cast<size_t>(out.n_cells), NA_REAL);
 
   out.valid = true;
   return out;
@@ -4414,7 +4461,7 @@ static double local_race_helper(double t,
                                 double* pars_2buf,
                                 int* isok_2buf) {
   if (!(t > 0.0) || !R_FINITE(t)) return 0.0;
-  if (ctx == nullptr || pdf1 == nullptr || cdf1 == nullptr || w == nullptr) return NA_REAL;
+  if (ctx == nullptr || pdf1 == nullptr || cdf1 == nullptr) return NA_REAL;
 
   const int t0_idx = ctx->t0_index;
   double t0_tgt = (t0_idx >= 0 && t0_idx < n_par) ? par_target[t0_idx] : 0.0;
@@ -4440,26 +4487,20 @@ static double local_race_helper(double t,
   const double low_limit = std::max(t0_tgt, t0_nt);
   if (t <= low_limit) return term1;
 
-  std::memcpy(pars_2buf, par_target, static_cast<size_t>(n_par) * sizeof(double));
-  std::memcpy(pars_2buf + n_par, par_nontarget, static_cast<size_t>(n_par) * sizeof(double));
-  isok_2buf[0] = 1;
-  isok_2buf[1] = 1;
+  const GLRule& gl = gl_get_rule(31);
+  const double h = 0.5 * (t - low_limit);
+  double sum_g = 0.0;
+  for (size_t i = 0; i < gl.x.size(); ++i) {
+    const double s = low_limit + h * (1.0 + gl.x[i]);
+    const double f = pdf1(s, par_target, ctx);
+    if (!R_FINITE(f) || f <= 0.0) continue;
+    double F = clamp_cdf01_race(cdf1(s, par_nontarget, ctx));
+    if (emc2_isnan(F)) return NA_REAL;
+    const double S = std::max(0.0, 1.0 - F);
+    sum_g += gl.w[i] * h * f * S;
+  }
 
-  const double log_g = integrate_for_kth_winner_rowmajor_cpp(
-    1,
-    pars_2buf,
-    isok_2buf,
-    low_limit,
-    t,
-    pdf1,
-    cdf1,
-    2,
-    n_par,
-    gsl_ctl,
-    ctx,
-    w);
-  if (!R_FINITE(log_g)) return NA_REAL;
-  double g = term1 + std::exp(log_g);
+  double g = term1 + sum_g;
   if (g < 0.0) g = 0.0;
   if (g > 1.0) g = 1.0;
   return g;
@@ -4467,8 +4508,7 @@ static double local_race_helper(double t,
 
 // P(target strictly wins its two-accumulator channel by time t), i.e.
 // int_0^t f_target(u) S_nontarget(u) du.  Unlike local_race_helper this
-// accepts t = +Inf, integrating the tail with QAGIU so the GNG withheld /
-// upper-censor masses can use the eventual (t -> infinity) win probability.
+// accepts t = +Inf, integrating the tail with Gauss-Legendre quadrature.
 // Returns a probability in [0, 1], or NA_REAL on integration failure.
 static double lr_channel_yes_prob(double t,
                                   const double* par_target,
@@ -4485,7 +4525,7 @@ static double lr_channel_yes_prob(double t,
   if (R_FINITE(t))
     return local_race_helper(t, par_target, par_nontarget, n_par, ctx,
                              pdf1, cdf1, gsl_ctl, w, pars_2buf, isok_2buf);
-  if (ctx == nullptr || pdf1 == nullptr || cdf1 == nullptr || w == nullptr)
+  if (ctx == nullptr || pdf1 == nullptr || cdf1 == nullptr)
     return NA_REAL;
 
   const int t0_idx = ctx->t0_index;
@@ -4507,18 +4547,22 @@ static double lr_channel_yes_prob(double t,
   }
 
   const double low_limit = std::max(t0_tgt, t0_nt);
-  std::memcpy(pars_2buf, par_target, static_cast<size_t>(n_par) * sizeof(double));
-  std::memcpy(pars_2buf + n_par, par_nontarget, static_cast<size_t>(n_par) * sizeof(double));
-  isok_2buf[0] = 1;
-  isok_2buf[1] = 1;
-  const double log_g = integrate_for_kth_winner_rowmajor_cpp(
-    1, pars_2buf, isok_2buf, low_limit, R_PosInf, pdf1, cdf1, 2, n_par,
-    gsl_ctl, ctx, w);
-  // A zero tail is reported as -Inf and is legitimate here (the target may
-  // never finish after low_limit); only NaN is a genuine failure.
-  const double tail = (R_FINITE(log_g)) ? std::exp(log_g)
-                                        : (log_g == R_NegInf ? 0.0 : NA_REAL);
-  if (ISNAN(tail)) return NA_REAL;
+  const GLRule& gl = gl_get_rule(31);
+  double tail = 0.0;
+  for (size_t i = 0; i < gl.x.size(); ++i) {
+    const double u = 0.5 * (1.0 + gl.x[i]);
+    const double om_u = 1.0 - u;
+    if (om_u <= 1e-12) continue;
+    const double s = low_limit + u / om_u;
+    const double jacobian = 0.5 * gl.w[i] / (om_u * om_u);
+    const double f = pdf1(s, par_target, ctx);
+    if (!R_FINITE(f) || f <= 0.0) continue;
+    double F = clamp_cdf01_race(cdf1(s, par_nontarget, ctx));
+    if (emc2_isnan(F)) return NA_REAL;
+    const double S = std::max(0.0, 1.0 - F);
+    tail += jacobian * f * S;
+  }
+
   double g = term1 + tail;
   if (g < 0.0) g = 0.0;
   if (g > 1.0) g = 1.0;
@@ -4681,24 +4725,25 @@ static double lr_detection_no_response_prob(
   // rule 6: joint survivor of the active set, plus nogo-win mass on [0, t]
   const double S_N = safe_surv_at_race_scalar(parN, t, min_surv, cdf1, model_ctx);
   const double p_none = S_A * S_B * S_N;
-  pars_rowmajor_buf.resize(static_cast<size_t>(3 * n_par));
-  int isok_buf[3] = {1, 1, 1};
-  std::memcpy(pars_rowmajor_buf.data(), parN, static_cast<size_t>(n_par) * sizeof(double));
-  int n_active = 1;
-  if (cond == 1 || cond == 3) {
-    std::memcpy(pars_rowmajor_buf.data() + n_active * n_par, parA,
-                static_cast<size_t>(n_par) * sizeof(double));
-    ++n_active;
+
+  const int t0_idx = model_ctx->t0_index;
+  const double t0_N = (t0_idx >= 0 && t0_idx < n_par) ? parN[t0_idx] : 0.0;
+  const double lo = std::max(0.0, t0_N);
+  const double h = (t > lo) ? 0.5 * (t - lo) : 0.0;
+  double p_nogo_win = 0.0;
+  if (h > 0.0) {
+    const GLRule& gl = gl_get_rule(31);
+    for (size_t i = 0; i < gl.x.size(); ++i) {
+      const double s = lo + h * (1.0 + gl.x[i]);
+      const double fN = pdf1(s, parN, model_ctx);
+      if (!R_FINITE(fN) || fN <= 0.0) continue;
+      double SA = 1.0, SB = 1.0;
+      if (cond == 1 || cond == 3) SA = safe_surv_at_race_scalar(parA, s, min_surv, cdf1, model_ctx);
+      if (cond == 2 || cond == 3) SB = safe_surv_at_race_scalar(parB, s, min_surv, cdf1, model_ctx);
+      p_nogo_win += gl.w[i] * h * fN * SA * SB;
+    }
   }
-  if (cond == 2 || cond == 3) {
-    std::memcpy(pars_rowmajor_buf.data() + n_active * n_par, parB,
-                static_cast<size_t>(n_par) * sizeof(double));
-    ++n_active;
-  }
-  const double log_nogo_win = integrate_for_kth_winner_rowmajor_cpp(
-    1, pars_rowmajor_buf.data(), isok_buf, 0.0, t,
-    pdf1, cdf1, n_active, n_par, gsl_ctl, model_ctx, w);
-  const double p_nogo_win = R_FINITE(log_nogo_win) ? std::exp(log_nogo_win) : 0.0;
+
   return std::min(1.0, p_none + p_nogo_win);
 }
 
@@ -4852,26 +4897,26 @@ static double logicalrules_detection_trial_ll(
         if (cond == 0 || !(hi > lo)) {
           p_j = 0.0;
         } else {
-          pars_rowmajor_buf.resize(static_cast<size_t>(3 * n_par));
-          int isok_buf[3] = {1, 1, 1};
-          std::memcpy(pars_rowmajor_buf.data(), parN, static_cast<size_t>(n_par) * sizeof(double));
-          int n_active = 1;
-          if (cond == 1 || cond == 3) {
-            std::memcpy(pars_rowmajor_buf.data() + n_active * n_par, parA,
-                        static_cast<size_t>(n_par) * sizeof(double));
-            ++n_active;
-          }
-          if (cond == 2 || cond == 3) {
-            std::memcpy(pars_rowmajor_buf.data() + n_active * n_par, parB,
-                        static_cast<size_t>(n_par) * sizeof(double));
-            ++n_active;
-          }
+          const GLRule& gl = gl_get_rule(31);
+          const double h = 0.5 * (hi - lo);
           double p_go_win = 0.0;
-          for (int kw = 2; kw <= n_active; ++kw) {  // 1 = nogo, never a winner here
-            const double lg = integrate_for_kth_winner_rowmajor_cpp(
-              kw, pars_rowmajor_buf.data(), isok_buf, lo, hi,
-              pdf1, cdf1, n_active, n_par, gsl_ctl, model_ctx, w);
-            if (R_FINITE(lg)) p_go_win += std::exp(lg);
+          for (size_t i = 0; i < gl.x.size(); ++i) {
+            const double s = lo + h * (1.0 + gl.x[i]);
+            const double SN = safe_surv_at_race_scalar(parN, s, min_surv, cdf1, model_ctx);
+            if (cond == 1 || cond == 3) {
+              const double fA = pdf1(s, parA, model_ctx);
+              if (R_FINITE(fA) && fA > 0.0) {
+                const double SB = (cond == 3) ? safe_surv_at_race_scalar(parB, s, min_surv, cdf1, model_ctx) : 1.0;
+                p_go_win += gl.w[i] * h * fA * SB * SN;
+              }
+            }
+            if (cond == 2 || cond == 3) {
+              const double fB = pdf1(s, parB, model_ctx);
+              if (R_FINITE(fB) && fB > 0.0) {
+                const double SA = (cond == 3) ? safe_surv_at_race_scalar(parA, s, min_surv, cdf1, model_ctx) : 1.0;
+                p_go_win += gl.w[i] * h * fB * SA * SN;
+              }
+            }
           }
           p_j = p_go_win;
         }
@@ -5285,7 +5330,7 @@ static double lrcap_trial_ll(
     double min_ll, double min_surv,
     RacePdf1Fun pdf1, RaceCdf1Fun cdf1, ContextForRaceModels* ctx,
     int n_scan, int n_fine, bool count,
-    std::vector<LogicalRulesZCacheEntry>* z_cache,
+    int cell_idx, std::vector<double>* cell_log_den_cap,
     const GslIntegrationControls& gsl_ctl,
     gsl_integration_workspace* w,
     std::vector<double>& gng_scratch) {
@@ -5329,32 +5374,16 @@ static double lrcap_trial_ll(
   const bool has_trunc = (LTj != 0.0 || R_FINITE(UTj));
   const bool subtract_UT = R_FINITE(UTj) && !ctx->defective_upper_tail;
 
-  // The capacity denominator is independent of the observed RT.  Cache it
-  // by the complete parameter cell and window, while leaving the RT-specific
-  // event numerator on the per-trial path.  A/B salience cells therefore
-  // cannot share a denominator unless their actual parameter values match.
-  std::vector<double> z_key;
-  const LogicalRulesZCacheEntry* z_hit = nullptr;
+  // The capacity denominator is independent of the observed RT. Cache it
+  // by cell_idx, leaving the RT-specific event numerator on the per-trial path.
   double cached_log_den = R_NegInf;
   bool z_cache_hit = false;
-  if (has_trunc && z_cache != nullptr) {
-    z_key.reserve(static_cast<size_t>(n_par) *
-                  static_cast<size_t>(2 + (has_channels ? 2 : 0) +
-                                      (has_nogo ? 1 : 0)));
-    logicalrules_z_key_append_row(z_key, pars_cols, n_par, idxA);
-    logicalrules_z_key_append_row(z_key, pars_cols, n_par, idxB);
-    if (has_channels) {
-      logicalrules_z_key_append_row(z_key, parnA, n_par);
-      logicalrules_z_key_append_row(z_key, parnB, n_par);
-    }
-    if (has_nogo) logicalrules_z_key_append_row(z_key, parN, n_par);
-    z_hit = logicalrules_z_cache_find(
-        *z_cache, true, has_channels, has_nogo, rule_code, cond,
-        LTj, UTj, z_key);
-    if (z_hit != nullptr) {
+  if (has_trunc && cell_log_den_cap != nullptr && cell_idx >= 0 &&
+      cell_idx < static_cast<int>(cell_log_den_cap->size())) {
+    if (R_FINITE((*cell_log_den_cap)[cell_idx])) {
       z_cache_hit = true;
-      if (!z_hit->valid) return min_ll;
-      cached_log_den = z_hit->log_z;
+      cached_log_den = (*cell_log_den_cap)[cell_idx];
+      if (cached_log_den == R_NegInf) return min_ll;
     }
   }
 
@@ -5715,11 +5744,10 @@ static double lrcap_trial_ll(
                                    true))
       : log_qAB;
   }
-  if (has_trunc && !z_cache_hit && z_cache != nullptr) {
+  if (has_trunc && !z_cache_hit && cell_log_den_cap != nullptr && cell_idx >= 0 &&
+      cell_idx < static_cast<int>(cell_log_den_cap->size())) {
     const bool valid_z = R_FINITE(log_den);
-    logicalrules_z_cache_store(*z_cache, true, has_channels, has_nogo,
-                               rule_code, cond, LTj, UTj, z_key,
-                               valid_z, log_den);
+    (*cell_log_den_cap)[cell_idx] = valid_z ? log_den : R_NegInf;
   }
   if (!R_FINITE(log_den)) return min_ll;
   const double ll = log_num - log_den;
@@ -5755,7 +5783,7 @@ static double c_log_likelihood_logicalrules(
   if (n_trials == 0) return 0.0;
   // ParamTable columns are refilled in place for each particle, so no cache
   // entry may survive this likelihood call.
-  shared.z_cache.clear();
+  shared.clear_particle_cache();
   if (n_par > 64) {
     Rcpp::stop("c_log_likelihood_logicalrules: at most 64 parameter columns are supported.");
   }
@@ -6158,6 +6186,8 @@ static double c_log_likelihood_logicalrules(
     if (idxnA >= 0) copy_par_row_colmajor(pars_cols, n_par, idxnA, parnA.data());
     if (idxnB >= 0) copy_par_row_colmajor(pars_cols, n_par, idxnB, parnB.data());
 
+    const int cell_idx = shared.cell_id[static_cast<size_t>(j)];
+
     // Capacity is a trial-level extension.  It is active only for redundant
     // target (AB) conditions and only when the particle's capacity factor is
     // non-degenerate.  Every other trial deliberately continues through the
@@ -6198,7 +6228,7 @@ static double c_log_likelihood_logicalrules(
           min_ll, kMinSurv,
           pdf1, cdf1, model_ctx,
           lrcap_scan_n, lrcap_fine_n,
-          count_capacity, &shared.z_cache,
+          count_capacity, cell_idx, &shared.cell_log_den_cap,
           gsl_ctl, w, pars_3buf);
         continue;
       }
@@ -6207,9 +6237,10 @@ static double c_log_likelihood_logicalrules(
 
     // Channel-parameter equality (A vs B), shared by the truncation
     // normaliser and the censoring branches below.
-    const bool ch_eq_j = (rule_code <= 4 || is_gng) &&
-      row_equal_colmajor(pars_cols, n_par, idxA, idxB) &&
-      row_equal_colmajor(pars_cols, n_par, idxnA, idxnB);
+    const bool ch_eq_j = use_gl_pass ? ch_eq_vec[static_cast<size_t>(j)]
+      : ((rule_code <= 4 || is_gng) &&
+         row_equal_colmajor(pars_cols, n_par, idxA, idxB) &&
+         row_equal_colmajor(pars_cols, n_par, idxnA, idxnB));
 
     // Sub-race win probability G_no at time tt for one channel. The GL
     // pre-pass batch-computes these at the aux slots (LT/UT/censor bounds);
@@ -6296,42 +6327,20 @@ static double c_log_likelihood_logicalrules(
 
     // --- Truncation normaliser -------------------------------------------
     // Z = P(overt response RT in [LT, UT]) under the rule's outcome logic:
-    // Z = N(LT) - N(UT), where the UT = Inf case is DEFINED as Z = N(LT) so
-    // that a defective model's never-respond mass is retained inside the
-    // window — the same convention as the standard race normaliser, which
-    // with UT = Inf only ever excludes finite response density below LT.
-    // (Finite UT excludes the never-respond mass, and combining finite UT
-    // with a defective model is as ill-posed here as it is there.)
+    // Z = N(LT) - N(UT), where the UT = Inf case is DEFINED as Z = N(LT)
     const double LTj_tr = shared.LT_unique[static_cast<size_t>(j)];
     const double UTj_tr = shared.UT_unique[static_cast<size_t>(j)];
     const bool has_trunc = (LTj_tr != 0.0 || R_FINITE(UTj_tr));
     double log_Z_j = 0.0;
     if (has_trunc) {
-      const bool has_channels_j = rule_code <= 4 || is_gng;
-      const bool has_nogo_j = false;  // GNG uses the four-horse channels, no nogo racer
-      const int cond_j = shared.cond_code[static_cast<size_t>(j)];
-      std::vector<double> z_key;
-      z_key.reserve(static_cast<size_t>(n_par) *
-                    static_cast<size_t>(2 + (has_channels_j ? 2 : 0) +
-                                        (has_nogo_j ? 1 : 0)));
-      logicalrules_z_key_append_row(z_key, parA.data(), n_par);
-      logicalrules_z_key_append_row(z_key, parB.data(), n_par);
-      if (has_channels_j) {
-        logicalrules_z_key_append_row(z_key, parnA.data(), n_par);
-        logicalrules_z_key_append_row(z_key, parnB.data(), n_par);
-      }
-      if (has_nogo_j) logicalrules_z_key_append_row(z_key, parN.data(), n_par);
-
-      const LogicalRulesZCacheEntry* z_hit = logicalrules_z_cache_find(
-          shared.z_cache, false, has_channels_j, has_nogo_j, rule_code, cond_j,
-          LTj_tr, UTj_tr, z_key);
-      if (z_hit != nullptr) {
-        if (!z_hit->valid) {
+      if (R_FINITE(shared.cell_log_z[cell_idx])) {
+        log_Z_j = shared.cell_log_z[cell_idx];
+        if (log_Z_j == R_NegInf) {
           ll_unique[static_cast<size_t>(j)] = min_ll;
           continue;
         }
-        log_Z_j = z_hit->log_z;
       } else {
+        const int cond_j = shared.cond_code[static_cast<size_t>(j)];
         bool z_ok = true;
         double N_LT = 1.0;
         double N_UT = 0.0;
@@ -6354,15 +6363,12 @@ static double c_log_likelihood_logicalrules(
         }
         const double Z = std::min(1.0, N_LT - N_UT);
         const bool valid_z = z_ok && R_FINITE(Z) && (Z > 1e-12);
-        logicalrules_z_cache_store(shared.z_cache, false, has_channels_j,
-                                   has_nogo_j, rule_code, cond_j,
-                                   LTj_tr, UTj_tr, z_key, valid_z,
-                                   valid_z ? std::log(Z) : R_NegInf);
+        log_Z_j = valid_z ? std::log(Z) : R_NegInf;
+        shared.cell_log_z[cell_idx] = log_Z_j;
         if (!valid_z) {
           ll_unique[static_cast<size_t>(j)] = min_ll;
           continue;
         }
-        log_Z_j = std::log(Z);
       }
     }
 
