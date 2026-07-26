@@ -686,28 +686,15 @@ struct ModelSharedState {
 struct RaceSharedState : ModelSharedState {};
 using DDMSharedState = ModelSharedState;
 
-struct LogicalRulesZCacheEntry {
-  bool capacity = false;
-  bool has_channels = false;
-  bool has_nogo = false;
-  int rule_code = 0;
-  int cond = 0;
-  double LT = 0.0;
-  double UT = R_PosInf;
-  std::vector<double> key;
-  bool valid = false;
-  double log_z = R_NegInf;
-};
-
 struct LogicalRulesCellKey {
   int idxA, idxB, idxnA, idxnB, idxNogo;
   int rule_code, cond_code;
-  double LT, UT, LC, UC;
+  double LT, UT;
 
   bool operator==(const LogicalRulesCellKey& o) const {
     return idxA == o.idxA && idxB == o.idxB && idxnA == o.idxnA && idxnB == o.idxnB &&
            idxNogo == o.idxNogo && rule_code == o.rule_code && cond_code == o.cond_code &&
-           LT == o.LT && UT == o.UT && LC == o.LC && UC == o.UC;
+           LT == o.LT && UT == o.UT;
   }
 };
 
@@ -745,68 +732,12 @@ struct LogicalRulesSharedState {
   // Per-particle cache for truncation normalisers and capacity denominators.
   mutable std::vector<double> cell_log_z;       // length n_cells
   mutable std::vector<double> cell_log_den_cap; // length n_cells
-  mutable std::vector<LogicalRulesZCacheEntry> z_cache;
 
   void clear_particle_cache() const {
     cell_log_z.assign(static_cast<size_t>(n_cells), NA_REAL);
     cell_log_den_cap.assign(static_cast<size_t>(n_cells), NA_REAL);
-    z_cache.clear();
   }
 };
-
-static const LogicalRulesZCacheEntry* logicalrules_z_cache_find(
-    const std::vector<LogicalRulesZCacheEntry>& cache,
-    bool capacity, bool has_channels, bool has_nogo,
-    int rule_code, int cond, double LT, double UT,
-    const std::vector<double>& key) {
-  for (const auto& entry : cache) {
-    if (entry.capacity != capacity || entry.has_channels != has_channels ||
-        entry.has_nogo != has_nogo || entry.rule_code != rule_code ||
-        entry.cond != cond || entry.LT != LT || entry.UT != UT ||
-        entry.key.size() != key.size()) {
-      continue;
-    }
-    if (key.empty() ||
-        std::memcmp(entry.key.data(), key.data(), key.size() * sizeof(double)) == 0) {
-      return &entry;
-    }
-  }
-  return nullptr;
-}
-
-static void logicalrules_z_cache_store(
-    std::vector<LogicalRulesZCacheEntry>& cache,
-    bool capacity, bool has_channels, bool has_nogo,
-    int rule_code, int cond, double LT, double UT,
-    const std::vector<double>& key, bool valid, double log_z) {
-  // Keep the linear-scan cache bounded; repeated parameter cells are the
-  // common case and the fallback remains exact when there are many cells.
-  if (cache.size() >= 256) return;
-  LogicalRulesZCacheEntry entry;
-  entry.capacity = capacity;
-  entry.has_channels = has_channels;
-  entry.has_nogo = has_nogo;
-  entry.rule_code = rule_code;
-  entry.cond = cond;
-  entry.LT = LT;
-  entry.UT = UT;
-  entry.key = key;
-  entry.valid = valid;
-  entry.log_z = log_z;
-  cache.push_back(std::move(entry));
-}
-
-static inline void logicalrules_z_key_append_row(
-    std::vector<double>& key, const double* const* pars_cols,
-    int n_par, int row) {
-  for (int p = 0; p < n_par; ++p)
-    key.push_back(pars_cols[p][row]);
-}
-
-static inline void logicalrules_z_key_append_row(
-    std::vector<double>& key, const double* row, int n_par) {
-  key.insert(key.end(), row, row + n_par);
-}
 
 static LogicalRulesSharedState build_logicalrules_shared_state(const Rcpp::DataFrame& dadm,
                                                                int n_trials,
@@ -2590,11 +2521,54 @@ static LogicalRulesSharedState build_logicalrules_shared_state(const Rcpp::DataF
 
   const int n_unique_trials = out.n_unique_trials;
   out.cell_id.resize(n_unique_trials);
+  std::vector<Rcpp::IntegerVector> dm_expands;
+  if (dadm.hasAttribute("designs")) {
+    Rcpp::List designs = dadm.attr("designs");
+    for (int d = 0; d < designs.size(); ++d) {
+      if (TYPEOF(designs[d]) == EXTPTRSXP) continue;
+      Rcpp::RObject obj = designs[d];
+      if (obj.hasAttribute("expand")) {
+        dm_expands.push_back(obj.attr("expand"));
+      }
+    }
+  }
+  std::vector<int> acc_des_id(static_cast<size_t>(n_trials * n_acc), 0);
+  std::vector<std::vector<int>> unique_profiles;
+  for (int r = 0; r < n_trials * n_acc; ++r) {
+    std::vector<int> profile;
+    if (!dm_expands.empty()) {
+      for (const auto& exp : dm_expands) {
+        profile.push_back((r >= 0 && r < exp.size()) ? exp[r] : r);
+      }
+    } else {
+      profile.push_back(r);
+    }
+    int found_p = -1;
+    for (size_t u = 0; u < unique_profiles.size(); ++u) {
+      if (unique_profiles[u] == profile) {
+        found_p = static_cast<int>(u);
+        break;
+      }
+    }
+    if (found_p < 0) {
+      found_p = static_cast<int>(unique_profiles.size());
+      unique_profiles.push_back(profile);
+    }
+    acc_des_id[static_cast<size_t>(r)] = found_p;
+  }
+  auto get_des_idx = [&acc_des_id](int idx) -> int {
+    if (idx >= 0 && idx < static_cast<int>(acc_des_id.size())) {
+      return acc_des_id[static_cast<size_t>(idx)];
+    }
+    return idx;
+  };
   for (int j = 0; j < n_unique_trials; ++j) {
     LogicalRulesCellKey k{
-      out.idxA[j], out.idxB[j], out.idxnA[j], out.idxnB[j], out.idxNogo[j],
+      get_des_idx(out.idxA[j]), get_des_idx(out.idxB[j]),
+      get_des_idx(out.idxnA[j]), get_des_idx(out.idxnB[j]),
+      get_des_idx(out.idxNogo[j]),
       out.rule_code[j], out.cond_code[j],
-      out.LT_unique[j], out.UT_unique[j], out.LC_unique[j], out.UC_unique[j]
+      out.LT_unique[j], out.UT_unique[j]
     };
     int found = -1;
     for (size_t c = 0; c < out.cells.size(); ++c) {
