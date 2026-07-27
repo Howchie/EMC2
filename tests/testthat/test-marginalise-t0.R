@@ -54,6 +54,82 @@ test_that("a plain likelihood on the dadm does NOT integrate t0", {
   expect_gt(abs(ll_plain - ll_marg), 1)
 })
 
+test_that("each proposal's quadrature is independent of the rest of the batch", {
+  # The rule used to be centred on mass pooled over the whole particle batch, so
+  # a scattered batch (preburn/burn) gave per-particle quadrature errors of many
+  # nats that did NOT cancel in the MH weights.  Rules are now per particle: a
+  # particle's marginal ll must not depend on its companions.
+  mm <- make_marginal_emc()
+  s1 <- mm$emc[[1]]
+  d1 <- s1$data[[1]]
+  set.seed(11)
+  np <- 8L
+  P <- matrix(rep(pmean[s1$par_names], each = np), nrow = np,
+              dimnames = list(NULL, s1$par_names))
+  P[-1, ] <- P[-1, ] + matrix(rnorm((np - 1L) * ncol(P), 0, 0.15), np - 1L)
+  batch <- EMC2:::marginal_ll_from_grid(
+    EMC2:::compute_marginal_grid(P, d1, s1$model, s1$marginalise)$log_terms)
+  solo <- vapply(seq_len(np), function(i) {
+    EMC2:::marginal_ll_from_grid(
+      EMC2:::compute_marginal_grid(P[i, , drop = FALSE], d1, s1$model,
+                                   s1$marginalise)$log_terms)[1]
+  }, numeric(1))
+  expect_true(all(is.finite(batch)))
+  expect_equal(batch, solo, tolerance = 1e-6)
+  # Every particle gets its own node row, and the rule is centred where that
+  # particle's own conditional posterior actually sits.
+  grid <- EMC2:::compute_marginal_grid(P, d1, s1$model, s1$marginalise)
+  expect_identical(dim(grid$nodes), dim(grid$log_terms))
+  expect_identical(nrow(grid$nodes), np)
+  modes <- grid$nodes[cbind(seq_len(np), max.col(grid$log_terms))]
+  expect_gt(diff(range(modes)), 0)
+})
+
+test_that("a warm start reproduces the cold rule, and a stale one is discarded", {
+  # The accepted particle's Laplace fit is carried to the next iteration to
+  # replace the pilot scan. It may only ever save work: the answer must not
+  # depend on whether a hint was supplied, and a hint that no longer brackets
+  # the batch must be thrown away rather than quietly narrowing the rule.
+  mm <- make_marginal_emc()
+  s1 <- mm$emc[[1]]
+  d1 <- s1$data[[1]]
+  set.seed(13)
+  np <- 6L
+  P <- matrix(rep(pmean[s1$par_names], each = np), nrow = np,
+              dimnames = list(NULL, s1$par_names))
+  P[-1, ] <- P[-1, ] + matrix(rnorm((np - 1L) * ncol(P), 0, 1e-3), np - 1L)
+  cold_grid <- EMC2:::compute_marginal_grid(P, d1, s1$model, s1$marginalise)
+  cold <- EMC2:::marginal_ll_from_grid(cold_grid$log_terms)
+  warm <- EMC2:::marginal_warm_state(cold_grid, 1L)
+  expect_true(all(is.finite(warm)))
+
+  warm_grid <- EMC2:::compute_marginal_grid(P, d1, s1$model, s1$marginalise,
+                                            warm = warm)
+  expect_identical(warm_grid$warm_used, 1L)
+  expect_equal(EMC2:::marginal_ll_from_grid(warm_grid$log_terms), cold,
+               tolerance = 1e-4)
+
+  # A hint pointing somewhere else entirely: the probe must detect that and fall
+  # back to the pilot, giving exactly the cold answer.
+  stale <- c(mode = warm[["mode"]] + 1.5, sd = warm[["sd"]] * 50)
+  stale_grid <- EMC2:::compute_marginal_grid(P, d1, s1$model, s1$marginalise,
+                                             warm = stale)
+  expect_identical(stale_grid$warm_used, 0L)
+  expect_identical(EMC2:::marginal_ll_from_grid(stale_grid$log_terms), cold)
+
+  # Backoff: a rejected hint is retried with geometrically growing delay, so a
+  # batch whose spread the hint can never cover pays at most one probe in 16.
+  st <- NULL
+  waits <- integer(0)
+  for (k in 1:6) {
+    attempted <- is.null(st) || st$backoff <= 0L
+    st <- EMC2:::marginal_warm_backoff(st, attempted = attempted, used = FALSE)
+    if (attempted) waits <- c(waits, st$backoff)
+  }
+  expect_true(all(diff(waits) > 0))
+  expect_equal(EMC2:::marginal_warm_backoff(st, attempted = TRUE, used = TRUE)$backoff, 0L)
+})
+
 test_that("the marginalise chain mixes (no freeze) and pins t0's group level", {
   skip_on_cran()
   skip_on_os("windows")
@@ -87,4 +163,57 @@ test_that("the marginalise chain mixes (no freeze) and pins t0's group level", {
                emc[[1]]$marginalise$mu, tolerance = 1e-8)
   expect_equal(unname(samples$theta_var["t0", "t0", idx]),
                emc[[1]]$marginalise$sigma^2, tolerance = 1e-8)
+})
+
+test_that("marginalise supports single-subject alpha-only samplers", {
+  skip_on_cran()
+  skip_on_os("windows")
+
+  dat_single <- data.frame(
+    subjects = factor(rep("s1", 8)),
+    S = factor(c("left", "right", "left", "right", "left", "right", "left", "right")),
+    R = factor(c("left", "right", "nogo", "left", "right", "nogo", "left", "nogo"),
+               levels = c("left", "right", "nogo")),
+    rt = c(.45, .50, Inf, .40, .48, Inf, .42, Inf)
+  )
+  matchfun_single <- function(d) as.character(d$S) == as.character(d$lR)
+  des_single <- design(
+    data = dat_single, model = LBA, matchfun = matchfun_single,
+    formula = list(v ~ 1, B ~ 1, A ~ 1, t0 ~ 1),
+    constants = c(sv = log(1)), marginalise = "t0",
+    report_p_vector = FALSE
+  )
+
+  set.seed(123)
+  emc <- make_emc(dat_single, des_single, type = "single",
+                  compress = FALSE, n_chains = 1)
+  sampler <- emc[[1]]
+  expect_identical(sampler$type, "single")
+  expect_null(sampler$samples$theta_mu)
+  expect_identical(sampler$marginalise$param, "t0")
+
+  emc <- EMC2:::run_emc(
+    emc, stage = "preburn", stop_criteria = list(iter = 3),
+    cores_for_chains = 1, particle_factor = 5, verbose = FALSE
+  )
+  sampler <- emc[[1]]
+  samples <- sampler$samples
+  idx <- samples$idx
+  expect_true(all(is.finite(samples$alpha["t0", 1, seq_len(idx)])))
+  expect_gt(diff(range(samples$alpha["t0", 1, seq_len(idx)])), 0)
+
+  # The quadrature path is active for this alpha-only sampler.  The integrated
+  # and ordinary likelihoods should differ; the stored subject likelihood is
+  # computed at the accepted particle's proposal grid, whose adaptive nodes
+  # can differ from a fresh one-row grid here.
+  proposal <- matrix(samples$alpha[, 1, idx], nrow = 1L,
+                     dimnames = list(NULL, sampler$par_names))
+  grid <- EMC2:::compute_marginal_grid(
+    proposal, sampler$data[[1]], sampler$model, sampler$marginalise
+  )
+  ll_marg <- EMC2:::marginal_ll_from_grid(grid$log_terms)[1]
+  ll_plain <- EMC2:::calc_ll_manager(proposal, sampler$data[[1]], sampler$model)
+  expect_true(is.finite(samples$subj_ll[1, idx]))
+  expect_true(is.finite(ll_marg))
+  expect_gt(abs(ll_plain - ll_marg), 0.1)
 })

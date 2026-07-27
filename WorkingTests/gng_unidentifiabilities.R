@@ -3,29 +3,32 @@ rm(list=ls())
 library(EMC2)
 set.seed(123)
 
-## Test 1 - Single error drift, match x S, threshold by S. -- CONVERGES
-# First use separate drifts (not base + diff)
+## Test 1 - Shared base drift, match x S, threshold by S, single t0. Easy converge.
 
-designLBA <- design(
+designRDM <- design(
   factors=list(subjects=1,S=c("go","nogo")),Rlevels=c("go","nogo"),
   matchfun=function(d) as.numeric(d$S)==as.numeric(d$lR),
-  functions = list(
-    match = function(d) ifelse(d$lM==TRUE, 1, 0),
-    mismatch = function(d) ifelse(d$lM==TRUE, 0, 1)
-  ),
-  model=LBA,UC=3,
-  formula=list(v~0+mismatch + match:S,A~1,B~0+lR,t0~1,sv~1),
-  constants = c(sv=log(1))
+  functions=list(match=function(d) ifelse(d$lM==TRUE,.5,-.5)),
+  model=RDM,UC=3,
+  formula=list(v~match:S,A~1,B~lR,t0~1,s~lM),
+  constants = c(s=log(1),A=log(0)),
+  marginalise = "t0"
 )
 
-p_vector <- sampled_pars(designLBA,doMap = FALSE)
-p_vector[] <- c(.5, 2.2, 2.5, log(0.4), log(.75), log(0.6), log(0.2))
-dat <- make_data(p_vector,designLBA,n_trials=10000)
+p_vector <- sampled_pars(designRDM,doMap = FALSE)
+p_vector[] <- c(log(2), log(2.5), log(3), log(1.5), log(0.85), log(0.2), log(0.8))
+prior_pvec = sampled_pars(designRDM);
+prior_pvec[]=c(log(2),log(2),log(2),log(1),log(0.8),log(.3),log(1))
+prior_svec = sampled_pars(designRDM)+1;
+prior_svec["t0"]=.5
+dat <- make_data(p_vector,designRDM, n_trials=10000)
 
 tapply(is.na(dat$R),dat$S,mean)
 tapply(dat$rt,dat$S,function(x){mean(x[is.finite(x)],na.rm=TRUE)})
 #print(profile_plot(dat,designLBA,p_vector,n_cores=1,layout=c(2,2)))
-emc <- make_emc(dat,designLBA,type="single")
+emc <- make_emc(dat,designRDM,type="single",
+                prior = prior(designRDM,theta_mu_mean=prior_pvec,
+                               theta_mu_sd = prior_svec,type="single"))
 system.time({emc1 <- fit(emc,stop_criteria = list(
   sample = list(
     iter = 1000,
@@ -38,7 +41,10 @@ system.time({emc1 <- fit(emc,stop_criteria = list(
   ),cores_per_chain=3, cores_for_chains = 3), max_tries=30,
   )})
 print(recovery(emc1,p_vector,selection="alpha"))
-
+# time to fit with marginalize = NULL
+# Time difference of 21.76211 secs
+# user  system elapsed 
+# 53.613   7.801  21.763 
 ## Test 2, identical to above but different mismatch accumulators -- DOESN'T RELIABLY CONVERGE
 designLBA <- design(
   factors=list(subjects=1,S=c("go","nogo")),Rlevels=c("go","nogo"),

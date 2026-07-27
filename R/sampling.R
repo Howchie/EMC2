@@ -23,9 +23,11 @@ resolve_marginalise_prior <- function(marginalise, prior) {
   if (!is.finite(sigma) || sigma <= 0) {
     stop("Marginalized parameter '", param, "' needs a finite, positive prior SD")
   }
+  # 12 nodes on a per-particle Laplace-centred rule integrate far more accurately
+  # than the 40 nodes the old batch-shared window needed (see calc_ll_oo_marginal_core).
   n_nodes <- if (is.list(marginalise) && !is.null(marginalise$n_nodes)) {
     as.integer(marginalise$n_nodes)
-  } else 40L
+  } else 12L
   if (length(n_nodes) != 1L || is.na(n_nodes) || n_nodes < 2L) {
     stop("marginalise$n_nodes must be an integer >= 2")
   }
@@ -37,19 +39,70 @@ resolve_marginalise_prior <- function(marginalise, prior) {
 # particle step (which reduces it to the marginal ll AND reuses the accepted
 # row for reconstruction) and the init/start path, so the grid is only ever
 # computed once per likelihood evaluation.
-compute_marginal_grid <- function(proposals, data, model, marginalise) {
+compute_marginal_grid <- function(proposals, data, model, marginalise,
+                                  r_cores = 1, warm = NULL) {
   model_spec <- if (is.function(model)) model() else model
   set_stop_method_from_model(model_spec)  # SS models: stop_method -> C++ config
   data <- .cache_ll_data_attrs(data)
   constants <- attr(data, "constants")
   if (is.null(constants)) constants <- NA
-  calc_ll_oo_marginal_nodes(
-    proposals, data, constants = constants, designs = .oo_expanded_designs(data),
-    type = model_spec$c_name, bounds = model_spec$bound,
-    transforms = model_spec$transform, pretransforms = model_spec$pre_transform,
-    p_types = names(model_spec$p_types), min_ll = log(1e-10),
-    marginalise = marginalise, trend = model_spec$trend
-  )
+  designs <- .oo_expanded_designs(data)
+  # Warm start: last iteration's accepted mode/scale for this subject. It only
+  # seeds the probe, and the C++ side falls back to the full pilot scan if any
+  # particle comes out unresolved, so a stale hint costs time, never accuracy.
+  if (!is.null(warm) && all(is.finite(warm)) && warm[["sd"]] > 0) {
+    marginalise$warm_mode <- unname(warm[["mode"]])
+    marginalise$warm_sd <- unname(warm[["sd"]])
+  }
+  one <- function(props) {
+    calc_ll_oo_marginal_nodes(
+      props, data, constants = constants, designs = designs,
+      type = model_spec$c_name, bounds = model_spec$bound,
+      transforms = model_spec$transform, pretransforms = model_spec$pre_transform,
+      p_types = names(model_spec$p_types), min_ll = log(1e-10),
+      marginalise = marginalise, trend = model_spec$trend
+    )
+  }
+  # Each particle now carries its own quadrature rule, so particles split across
+  # cores exactly like the ordinary likelihood path in calc_ll_manager.
+  if (r_cores <= 1 || nrow(proposals) <= r_cores) return(one(proposals))
+  idx <- rep(1:r_cores, each = 1 + (nrow(proposals) %/% r_cores))[1:nrow(proposals)]
+  parts <- auto_mclapply(1:r_cores, function(i) {
+    one(proposals[idx == i, , drop = FALSE])
+  }, mc.cores = r_cores)
+  list(nodes = do.call(rbind, lapply(parts, `[[`, "nodes")),
+       log_terms = do.call(rbind, lapply(parts, `[[`, "log_terms")),
+       mode = unlist(lapply(parts, `[[`, "mode")),
+       sd = unlist(lapply(parts, `[[`, "sd")),
+       # fraction of splits that kept the hint (the backoff gates on a majority)
+       warm_used = mean(unlist(lapply(parts, `[[`, "warm_used"))),
+       pred_used = mean(unlist(lapply(parts, `[[`, "pred_used"))),
+       repaired = sum(unlist(lapply(parts, `[[`, "repaired"))))
+}
+
+# Warm-start state carried on pm_settings between iterations: the Laplace fit
+# of the accepted particle, or NULL when that particle had no usable fit.
+marginal_warm_state <- function(grid, idx) {
+  if (is.null(grid$mode) || is.null(grid$sd)) return(NULL)
+  m <- grid$mode[idx]; s <- grid$sd[idx]
+  if (!is.finite(m) || !is.finite(s) || s <= 0) return(NULL)
+  c(mode = m, sd = s)
+}
+
+# A single hint can only serve the whole particle batch while the batch is
+# tight: the conditional t0 mode moves with the other parameters, so a wide
+# proposal cloud (preburn/burn) spreads the per-particle modes over hundreds of
+# posterior SDs and the hint is rejected.  A rejected hint costs one wasted
+# probe round, so back off geometrically after a failure and retry later -- the
+# cloud contracts as the chain converges, and the hint then holds.
+marginal_warm_backoff <- function(state, attempted, used) {
+  pen <- if (is.null(state$penalty)) 0L else state$penalty
+  wait <- if (is.null(state$backoff)) 0L else state$backoff
+  if (attempted) {
+    if (isTRUE(used)) { pen <- 0L; wait <- 0L }
+    else { pen <- min(16L, max(1L, pen * 2L)); wait <- pen }
+  } else wait <- max(0L, wait - 1L)
+  list(penalty = pen, backoff = wait)
 }
 
 # Reduce a grid of log-terms (np x K) to the marginal log-likelihood per
@@ -66,8 +119,10 @@ marginal_ll_from_grid <- function(log_terms) {
 }
 
 # Draw one t0 node ~ Categorical(softmax(log_terms_row)) for the stored alpha.
+# `nodes` is that particle's OWN node row (rules are per particle).
 # Falls back to the fixed prior when the row carries no finite mass.
 draw_marginal_node <- function(nodes, log_terms_row, marginalise) {
+  nodes <- as.numeric(nodes)
   if (length(nodes) == 0L || all(!is.finite(log_terms_row))) {
     return(stats::rnorm(1L, marginalise$mu, marginalise$sigma))
   }
@@ -94,7 +149,8 @@ reconstruct_marginalised_particle <- function(particle, data, model, marginalise
   }
   grid <- compute_marginal_grid(
     matrix(particle, nrow = 1L, dimnames = list(NULL, p_names)), data, model, marginalise)
-  particle[p_idx] <- draw_marginal_node(grid$nodes, as.numeric(grid$log_terms[1L, ]), marginalise)
+  particle[p_idx] <- draw_marginal_node(grid$nodes[1L, ],
+                                        as.numeric(grid$log_terms[1L, ]), marginalise)
   particle
 }
 
@@ -256,14 +312,15 @@ start_proposals <- function(s, parameters, n_particles, pmwgs, type, r_cores = 1
   if (!is.null(marginalise)) {
     # One grid: reduce to the marginal ll for start-point selection and reuse
     # the chosen particle's node weights to reconstruct its t0.
-    grid <- compute_marginal_grid(proposals, data_s, pmwgs$model, marginalise)
+    grid <- compute_marginal_grid(proposals, data_s, pmwgs$model, marginalise,
+                                  r_cores = r_cores)
     lw <- marginal_ll_from_grid(grid$log_terms)
     weight <- exp(lw - max(lw))
     idx <- sample(x = n_particles, size = 1, prob = weight)
     proposal <- proposals[idx,]
     names(proposal) <- colnames(proposals)
     p_idx <- match(marginalise$param, names(proposal))
-    proposal[p_idx] <- draw_marginal_node(grid$nodes,
+    proposal[p_idx] <- draw_marginal_node(grid$nodes[idx, ],
                                           as.numeric(grid$log_terms[idx, ]), marginalise)
     return(list(proposal = proposal, ll = lw[idx]))
   }
@@ -549,8 +606,22 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
       # Compute the t0 quadrature grid ONCE: reduce it to the marginal ll for
       # the MH weights, and stash the grid so the accepted particle's node
       # weights reconstruct t0 without a second full marginal pass.
+      warm_state <- pm_settings[[i]]$marg_warm
+      warm_arg <- if (!is.null(warm_state) && warm_state$backoff <= 0L) {
+        c(mode = warm_state$mode, sd = warm_state$sd)
+      } else NULL
+      # The within-iteration hint (pilot a subset, regress its modes on the other
+      # parameters) is rejected outright when the proposal cloud is too wide for
+      # the regression to bracket, and then its subset pilot is wasted work. Back
+      # it off exactly like the warm hint: the cloud narrows as the chain
+      # converges, and it starts paying off from then on.
+      pred_state <- pm_settings[[i]]$marg_pred
+      use_pred <- is.null(pred_state) || pred_state$backoff <= 0L
+      marg_spec <- marginalise
+      if (!use_pred) marg_spec$predict_mode <- FALSE
       marg_grid <- compute_marginal_grid(proposals[, is_shared, drop = FALSE],
-                                         data, model, marginalise)
+                                         data, model, marg_spec,
+                                         r_cores = r_cores, warm = warm_arg)
       lw <- marginal_ll_from_grid(marg_grid$log_terms)
     } else if(tune$components[length(tune$components)] > 1){
       lw <- calc_ll_manager(proposals[,is_shared], dadm = data, model,
@@ -599,10 +670,25 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
     out_lls[i] <- lw[idx_ll]
     proposal_out[idx] <- proposals[idx_ll,idx]
     if (!is.null(marginalise)) {
-      marg_nodes <- marg_grid$nodes
+      marg_nodes <- as.numeric(marg_grid$nodes[idx_ll, ])
       marg_terms_row <- as.numeric(marg_grid$log_terms[idx_ll, ])
+      warm_next <- marginal_warm_state(marg_grid, idx_ll)
+      warm_next_state <- marginal_warm_backoff(
+        warm_state, attempted = !is.null(warm_arg),
+        used = isTRUE(marg_grid$warm_used >= 0.5))
+      # The predictor only runs when the warm hint did not already carry the step.
+      pred_next_state <- marginal_warm_backoff(
+        pred_state, attempted = use_pred && !isTRUE(marg_grid$warm_used == 1),
+        used = isTRUE(marg_grid$pred_used == 1))
     }
     pm_settings[[i]] <- update_pm_settings(pm_settings[[i]], idx_ll, weights, particle_numbers, tune, sum(idx))
+    # Seed next iteration's quadrature from the particle that was accepted here.
+    if (!is.null(marginalise)) {
+      pm_settings[[i]]$marg_warm <- if (is.null(warm_next)) NULL else {
+        c(as.list(warm_next), warm_next_state)
+      }
+      pm_settings[[i]]$marg_pred <- pred_next_state
+    }
   }
   names(proposal_out) <- names(subj_mu)
   if (!is.null(marginalise)) {

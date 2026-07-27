@@ -111,10 +111,13 @@ validate_marginalise_design <- function(marginalise, design, model) {
 #' the likelihood landscape that cannot reasonable be achieved with `transform`
 #' @param marginalise Optional. Names one shared race-model parameter (e.g.
 #' `"t0"`) to be *marginalised* out of the sampler by numerical quadrature
-#' rather than sampled as a subject-level random effect. Either a character
-#' scalar (`marginalise = "t0"`), or a list giving the parameter plus quadrature
-#' controls (`marginalise = list(param = "t0", n_nodes = 40)`). `n_nodes` is the
-#' number of Gauss-Legendre quadrature nodes and defaults to `40`. The named
+#' rather than sampled directly. This is available for group-level samplers and
+#' for `type = "single"` alpha-only samplers. Either a character scalar
+#' (`marginalise = "t0"`), or a list giving the parameter plus quadrature
+#' controls (`marginalise = list(param = "t0", n_nodes = 12)`). `n_nodes` is the
+#' number of Gauss-Legendre quadrature nodes per proposal and defaults to `12`
+#' (the rule is centred on each proposal's own conditional mode, so few nodes
+#' are needed). The named
 #' parameter must (i) belong to a race model (not `DDM()`), (ii) be a sampled
 #' model parameter (not a `constant`, and not a `custom_p_vector` design),
 #' (iii) use an intercept-only design (`~ 1`), and (iv) have a finite lower
@@ -138,12 +141,13 @@ validate_marginalise_design <- function(marginalise, design, model) {
 #' quadrature over the parameter (on its sampled/log scale) using `n_nodes`
 #' nodes, weighted by a fixed Gaussian `eta` taken from the parameter's existing
 #' prior mean and variance (its group-level distribution is pinned to that prior,
-#' not estimated). A representative value is drawn back (reconstructed) from the
-#' quadrature grid and stored in each posterior sample, so downstream summaries
-#' still report the parameter. The integration interval is clipped to the
-#' parameter's finite lower bound and to just below the subject's fastest
-#' response time, which is why a finite lower bound and the `~ 1` design are
-#' required.
+#' not estimated). For `type = "single"`, the same fixed prior is used directly;
+#' no `theta_mu` or `theta_var` samples are created. A representative value is
+#' drawn back (reconstructed) from the quadrature grid and stored in each
+#' posterior sample, so downstream summaries still report the parameter. The
+#' integration interval is clipped to the parameter's finite lower bound and to
+#' just below the subject's fastest response time, which is why a finite lower
+#' bound and the `~ 1` design are required.
 #'
 #' Marginalising does not alter the likelihood: turning it off yields an
 #' identical model, only sampled with the parameter left in. It typically
