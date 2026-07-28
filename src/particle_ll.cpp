@@ -2929,7 +2929,7 @@ struct MarginalGrid {
   Rcpp::NumericMatrix log_terms;  // np x K: ell_ik (softmax over k => p(t0=x_ik|y,theta,eta))
   Rcpp::NumericVector mode;       // np: fitted conditional mode (warm-start carrier)
   Rcpp::NumericVector sd;         // np: fitted Laplace scale  (warm-start carrier)
-  int warm_used = 0;              // 1 when the warm hint replaced the pilot scan
+  double warm_used = 0.0;         // fraction of rows retaining the warm hint
   int pred_used = 0;              // 1 when the subset-regression hint replaced it
   int repaired = 0;               // particles whose rule missed and was refitted
 };
@@ -3240,6 +3240,7 @@ static MarginalGrid calc_ll_oo_marginal_core(
       const double g1 = gr(i, 0) + R::dnorm(Xr(i, 0), mu, sigma, 1);
       const double g2 = gr(i, 1) + R::dnorm(Xr(i, 1), mu, sigma, 1);
       const double g3 = gr(i, 2) + R::dnorm(Xr(i, 2), mu, sigma, 1);
+      ft[static_cast<size_t>(i)] = 0;
       if (marginal_parabola(Xr(i, 0), g1, Xr(i, 1), g2, Xr(i, 2), g3, &m_i, &s_i)) {
         // Let the window contract freely but grow only gradually, so one bad
         // fit cannot throw the rule back out to the pilot scale.
@@ -3253,7 +3254,7 @@ static MarginalGrid calc_ll_oo_marginal_core(
                               (Xr(i, 0) <= lo && dev < 0.0) ||
                               (Xr(i, 2) >= hi && dev > 0.0);
         if (!ok_local) ++bad;
-        ft[static_cast<size_t>(i)] = 1;
+        else ft[static_cast<size_t>(i)] = 1;
         md[static_cast<size_t>(i)] = mc;
         sv[static_cast<size_t>(i)] = std::min(cap, s_i);
       } else {
@@ -3459,10 +3460,8 @@ static MarginalGrid calc_ll_oo_marginal_core(
       }
       int bad = 0;
       if (pred_ok) {
-        for (int r = 0; r < n_refine_pred; ++r) {
+        for (int r = 0; r < n_refine_pred; ++r)
           bad = refine_on(particle_matrix, mode, sdev, fitted);
-          if (bad == 0) break;
-        }
         // The prediction is only a bracket; if it failed to bracket a
         // meaningful share of the batch, fall back to the full pilot.
         if (bad * 4 > np) {
@@ -3477,10 +3476,7 @@ static MarginalGrid calc_ll_oo_marginal_core(
       if (!pred_ok) {
         std::fill(hinted.begin(), hinted.end(), 0);
         pilot_on(particle_matrix, mode, sdev, fitted);
-        for (int r = 0; r < n_refine; ++r) {
-          int bad_r = refine_round();
-          if (bad_r == 0) break;
-        }
+        for (int r = 0; r < n_refine; ++r) refine_round();
       }
     }
   }

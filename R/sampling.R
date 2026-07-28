@@ -6,7 +6,7 @@ resolve_marginalise_prior <- function(marginalise, prior) {
   } else if (is.character(marginalise) || is.atomic(marginalise)) {
     nm <- names(marginalise)
     if (!is.null(nm)) {
-      idx_param <- which(!nm %in% c("n_nodes", "nodes", "pt_mapper", "ptmapper", "pt_map", "ptmap"))
+      idx_param <- which(!nm %in% c("n_nodes", "nodes"))
       if (length(idx_param) > 0) param <- marginalise[idx_param[1]] else param <- marginalise[1]
     } else {
       param <- marginalise[1]
@@ -45,13 +45,7 @@ resolve_marginalise_prior <- function(marginalise, prior) {
   if (length(n_nodes) != 1L || is.na(n_nodes) || n_nodes < 2L) {
     stop("marginalise$n_nodes must be an integer >= 2")
   }
-  pt_mapper <- if (is.list(marginalise) && !is.null(marginalise$pt_mapper)) {
-    as.logical(marginalise$pt_mapper)
-  } else if (!is.null(names(marginalise)) && "pt_mapper" %in% names(marginalise)) {
-    as.logical(marginalise[["pt_mapper"]])
-  } else TRUE
-
-  list(param = param, mu = unname(mu), sigma = unname(sigma), n_nodes = n_nodes, pt_mapper = pt_mapper)
+  list(param = param, mu = unname(mu), sigma = unname(sigma), n_nodes = n_nodes)
 }
 
 # Build the t0 quadrature grid for one or more proposals: the node values

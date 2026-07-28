@@ -2,21 +2,18 @@ normalize_marginalise <- function(marginalise) {
   if (is.null(marginalise)) return(NULL)
   param <- NULL
   n_nodes <- NULL
-  pt_mapper <- NULL
 
   if (is.list(marginalise)) {
     param <- marginalise$param
     if (is.null(param) && length(marginalise) > 0) param <- marginalise[[1]]
     n_nodes <- marginalise$n_nodes
     if (is.null(n_nodes) && !is.null(marginalise$nodes)) n_nodes <- marginalise$nodes
-    pt_mapper <- marginalise$pt_mapper
-    if (is.null(pt_mapper)) pt_mapper <- marginalise$ptmapper
   } else if (is.character(marginalise) || is.atomic(marginalise)) {
     nm <- names(marginalise)
     if (!is.null(nm) && "param" %in% nm) {
       param <- marginalise[["param"]]
     } else if (!is.null(nm)) {
-      idx_param <- which(!nm %in% c("n_nodes", "nodes", "pt_mapper", "ptmapper", "pt_map", "ptmap"))
+      idx_param <- which(!nm %in% c("n_nodes", "nodes"))
       if (length(idx_param) > 0) param <- marginalise[idx_param[1]] else param <- marginalise[1]
     } else {
       param <- marginalise[1]
@@ -30,11 +27,6 @@ normalize_marginalise <- function(marginalise) {
         n_nodes <- as.integer(marginalise[2])
       }
     }
-    if (!is.null(nm) && "pt_mapper" %in% nm) {
-      pt_mapper <- as.logical(marginalise[["pt_mapper"]])
-    } else if (!is.null(nm) && "ptmapper" %in% nm) {
-      pt_mapper <- as.logical(marginalise[["ptmapper"]])
-    }
   } else {
     stop("marginalise must be a character vector or a list identifying a parameter name")
   }
@@ -46,7 +38,6 @@ normalize_marginalise <- function(marginalise) {
 
   res <- list(param = param)
   if (!is.null(n_nodes) && !is.na(n_nodes)) res$n_nodes <- as.integer(n_nodes)
-  if (!is.null(pt_mapper) && !is.na(pt_mapper)) res$pt_mapper <- as.logical(pt_mapper)
   res
 }
 
@@ -92,7 +83,7 @@ validate_marginalise_design <- function(marginalise, design, model) {
       stop("marginalise n_nodes must be an integer >= 2")
     }
   }
-  if (is.null(norm$n_nodes) && is.null(norm$pt_mapper)) {
+  if (is.null(norm$n_nodes)) {
     return(p)
   }
   norm

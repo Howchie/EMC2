@@ -105,7 +105,7 @@ test_that("a warm start reproduces the cold rule, and a stale one is discarded",
 
   warm_grid <- EMC2:::compute_marginal_grid(P, d1, s1$model, s1$marginalise,
                                             warm = warm)
-  expect_identical(warm_grid$warm_used, 1L)
+  expect_equal(warm_grid$warm_used, 1)
   expect_equal(EMC2:::marginal_ll_from_grid(warm_grid$log_terms), cold,
                tolerance = 1e-4)
 
@@ -114,7 +114,7 @@ test_that("a warm start reproduces the cold rule, and a stale one is discarded",
   stale <- c(mode = warm[["mode"]] + 1.5, sd = warm[["sd"]] * 50)
   stale_grid <- EMC2:::compute_marginal_grid(P, d1, s1$model, s1$marginalise,
                                              warm = stale)
-  expect_identical(stale_grid$warm_used, 0L)
+  expect_equal(stale_grid$warm_used, 0)
   expect_identical(EMC2:::marginal_ll_from_grid(stale_grid$log_terms), cold)
 
   # Backoff: a rejected hint is retried with geometrically growing delay, so a
@@ -218,7 +218,7 @@ test_that("marginalise supports single-subject alpha-only samplers", {
   expect_gt(abs(ll_plain - ll_marg), 0.1)
 })
 
-test_that("flexible marginalise options (n_nodes and pt_mapper) are parsed and propagated correctly", {
+test_that("flexible marginalise n_nodes options are parsed and propagated correctly", {
   # 1. Vector form: c("t0", n_nodes = 10)
   des1 <- design(data = dat, model = LBA,
                  formula = list(v ~ 1, sv ~ 1, B ~ E + lR, A ~ 1, t0 ~ 1),
@@ -233,15 +233,14 @@ test_that("flexible marginalise options (n_nodes and pt_mapper) are parsed and p
   expect_equal(emc1[[1]]$marginalise$n_nodes, 10L)
   expect_equal(emc1[[1]]$marginalise$param, "t0")
 
-  # 2. Named vector form: c(param = "t0", n_nodes = 8, pt_mapper = TRUE)
+  # 2. Named vector form: c(param = "t0", n_nodes = 8)
   des2 <- design(data = dat, model = LBA,
                  formula = list(v ~ 1, sv ~ 1, B ~ E + lR, A ~ 1, t0 ~ 1),
-                 constants = c(sv = log(1)), marginalise = c(param = "t0", n_nodes = 8, pt_mapper = TRUE),
+                 constants = c(sv = log(1)), marginalise = c(param = "t0", n_nodes = 8),
                  report_p_vector = FALSE)
   m_attr2 <- attr(des2, "marginalise")
   expect_equal(m_attr2$param, "t0")
   expect_equal(m_attr2$n_nodes, 8L)
-  expect_true(m_attr2$pt_mapper)
 
   # 3. List form: list("t0", n_nodes = 10)
   des3 <- design(data = dat, model = LBA,
@@ -261,4 +260,3 @@ test_that("flexible marginalise options (n_nodes and pt_mapper) are parsed and p
   emc4 <- make_emc(dat, des4, type = "standard", prior = pr4, compress = TRUE, n_chains = 1)
   expect_equal(emc4[[1]]$marginalise$n_nodes, 12L)
 })
-
