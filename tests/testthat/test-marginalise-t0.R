@@ -217,3 +217,48 @@ test_that("marginalise supports single-subject alpha-only samplers", {
   expect_true(is.finite(ll_marg))
   expect_gt(abs(ll_plain - ll_marg), 0.1)
 })
+
+test_that("flexible marginalise options (n_nodes and pt_mapper) are parsed and propagated correctly", {
+  # 1. Vector form: c("t0", n_nodes = 10)
+  des1 <- design(data = dat, model = LBA,
+                 formula = list(v ~ 1, sv ~ 1, B ~ E + lR, A ~ 1, t0 ~ 1),
+                 constants = c(sv = log(1)), marginalise = c("t0", n_nodes = 10),
+                 report_p_vector = FALSE)
+  m_attr1 <- attr(des1, "marginalise")
+  expect_equal(m_attr1$param, "t0")
+  expect_equal(m_attr1$n_nodes, 10L)
+
+  pr1 <- prior(des1, type = "standard", pmean = pmean, psd = psd)
+  emc1 <- make_emc(dat, des1, type = "standard", prior = pr1, compress = TRUE, n_chains = 1)
+  expect_equal(emc1[[1]]$marginalise$n_nodes, 10L)
+  expect_equal(emc1[[1]]$marginalise$param, "t0")
+
+  # 2. Named vector form: c(param = "t0", n_nodes = 8, pt_mapper = TRUE)
+  des2 <- design(data = dat, model = LBA,
+                 formula = list(v ~ 1, sv ~ 1, B ~ E + lR, A ~ 1, t0 ~ 1),
+                 constants = c(sv = log(1)), marginalise = c(param = "t0", n_nodes = 8, pt_mapper = TRUE),
+                 report_p_vector = FALSE)
+  m_attr2 <- attr(des2, "marginalise")
+  expect_equal(m_attr2$param, "t0")
+  expect_equal(m_attr2$n_nodes, 8L)
+  expect_true(m_attr2$pt_mapper)
+
+  # 3. List form: list("t0", n_nodes = 10)
+  des3 <- design(data = dat, model = LBA,
+                 formula = list(v ~ 1, sv ~ 1, B ~ E + lR, A ~ 1, t0 ~ 1),
+                 constants = c(sv = log(1)), marginalise = list("t0", n_nodes = 10),
+                 report_p_vector = FALSE)
+  m_attr3 <- attr(des3, "marginalise")
+  expect_equal(m_attr3$param, "t0")
+  expect_equal(m_attr3$n_nodes, 10L)
+
+  # 4. Standard string default: marginalise = "t0" defaults n_nodes to 12
+  des4 <- design(data = dat, model = LBA,
+                 formula = list(v ~ 1, sv ~ 1, B ~ E + lR, A ~ 1, t0 ~ 1),
+                 constants = c(sv = log(1)), marginalise = "t0",
+                 report_p_vector = FALSE)
+  pr4 <- prior(des4, type = "standard", pmean = pmean, psd = psd)
+  emc4 <- make_emc(dat, des4, type = "standard", prior = pr4, compress = TRUE, n_chains = 1)
+  expect_equal(emc4[[1]]$marginalise$n_nodes, 12L)
+})
+

@@ -1,7 +1,18 @@
 resolve_marginalise_prior <- function(marginalise, prior) {
   if (is.null(marginalise)) return(NULL)
   param <- if (is.list(marginalise)) marginalise$param else marginalise
-  param <- as.character(param)
+  if (!is.null(names(marginalise)) && "param" %in% names(marginalise)) {
+    param <- marginalise[["param"]]
+  } else if (is.character(marginalise) || is.atomic(marginalise)) {
+    nm <- names(marginalise)
+    if (!is.null(nm)) {
+      idx_param <- which(!nm %in% c("n_nodes", "nodes", "pt_mapper", "ptmapper", "pt_map", "ptmap"))
+      if (length(idx_param) > 0) param <- marginalise[idx_param[1]] else param <- marginalise[1]
+    } else {
+      param <- marginalise[1]
+    }
+  }
+  param <- as.character(param[1L])
   if (length(param) != 1L || is.na(param) || !nzchar(param)) {
     stop("marginalise must identify exactly one parameter")
   }
@@ -23,15 +34,24 @@ resolve_marginalise_prior <- function(marginalise, prior) {
   if (!is.finite(sigma) || sigma <= 0) {
     stop("Marginalized parameter '", param, "' needs a finite, positive prior SD")
   }
-  # 12 nodes on a per-particle Laplace-centred rule integrate far more accurately
-  # than the 40 nodes the old batch-shared window needed (see calc_ll_oo_marginal_core).
   n_nodes <- if (is.list(marginalise) && !is.null(marginalise$n_nodes)) {
     as.integer(marginalise$n_nodes)
+  } else if (!is.null(names(marginalise)) && "n_nodes" %in% names(marginalise)) {
+    as.integer(marginalise[["n_nodes"]])
+  } else if (length(marginalise) > 1 && is.null(names(marginalise))) {
+    if (suppressWarnings(!is.na(as.integer(marginalise[2])))) as.integer(marginalise[2]) else 12L
   } else 12L
+
   if (length(n_nodes) != 1L || is.na(n_nodes) || n_nodes < 2L) {
     stop("marginalise$n_nodes must be an integer >= 2")
   }
-  list(param = param, mu = unname(mu), sigma = unname(sigma), n_nodes = n_nodes)
+  pt_mapper <- if (is.list(marginalise) && !is.null(marginalise$pt_mapper)) {
+    as.logical(marginalise$pt_mapper)
+  } else if (!is.null(names(marginalise)) && "pt_mapper" %in% names(marginalise)) {
+    as.logical(marginalise[["pt_mapper"]])
+  } else TRUE
+
+  list(param = param, mu = unname(mu), sigma = unname(sigma), n_nodes = n_nodes, pt_mapper = pt_mapper)
 }
 
 # Build the t0 quadrature grid for one or more proposals: the node values
@@ -72,6 +92,7 @@ compute_marginal_grid <- function(proposals, data, model, marginalise,
   }, mc.cores = r_cores)
   list(nodes = do.call(rbind, lapply(parts, `[[`, "nodes")),
        log_terms = do.call(rbind, lapply(parts, `[[`, "log_terms")),
+       ll = unlist(lapply(parts, `[[`, "ll")),
        mode = unlist(lapply(parts, `[[`, "mode")),
        sd = unlist(lapply(parts, `[[`, "sd")),
        # fraction of splits that kept the hint (the backoff gates on a majority)
@@ -108,6 +129,7 @@ marginal_warm_backoff <- function(state, attempted, used) {
 # Reduce a grid of log-terms (np x K) to the marginal log-likelihood per
 # proposal by a numerically stable row-wise log-sum-exp.
 marginal_ll_from_grid <- function(log_terms) {
+  if (is.list(log_terms) && !is.null(log_terms$ll)) return(log_terms$ll)
   m <- apply(log_terms, 1L, max, na.rm = TRUE)
   m[!is.finite(m)] <- -Inf
   fin <- is.finite(m)
@@ -314,7 +336,7 @@ start_proposals <- function(s, parameters, n_particles, pmwgs, type, r_cores = 1
     # the chosen particle's node weights to reconstruct its t0.
     grid <- compute_marginal_grid(proposals, data_s, pmwgs$model, marginalise,
                                   r_cores = r_cores)
-    lw <- marginal_ll_from_grid(grid$log_terms)
+    lw <- marginal_ll_from_grid(grid)
     weight <- exp(lw - max(lw))
     idx <- sample(x = n_particles, size = 1, prob = weight)
     proposal <- proposals[idx,]
@@ -622,7 +644,7 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
       marg_grid <- compute_marginal_grid(proposals[, is_shared, drop = FALSE],
                                          data, model, marg_spec,
                                          r_cores = r_cores, warm = warm_arg)
-      lw <- marginal_ll_from_grid(marg_grid$log_terms)
+      lw <- marginal_ll_from_grid(marg_grid)
     } else if(tune$components[length(tune$components)] > 1){
       lw <- calc_ll_manager(proposals[,is_shared], dadm = data, model,
                             component = shared_idx, r_cores = r_cores)

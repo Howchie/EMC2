@@ -1,25 +1,60 @@
 normalize_marginalise <- function(marginalise) {
   if (is.null(marginalise)) return(NULL)
-  if (is.character(marginalise)) {
-    out <- marginalise
-  } else if (is.list(marginalise)) {
-    # Accept the explicit form as a convenience, while the public Stage 1
-    # API remains marginalise = "t0".
-    out <- marginalise$param
-    if (is.null(out)) out <- names(marginalise)
+  param <- NULL
+  n_nodes <- NULL
+  pt_mapper <- NULL
+
+  if (is.list(marginalise)) {
+    param <- marginalise$param
+    if (is.null(param) && length(marginalise) > 0) param <- marginalise[[1]]
+    n_nodes <- marginalise$n_nodes
+    if (is.null(n_nodes) && !is.null(marginalise$nodes)) n_nodes <- marginalise$nodes
+    pt_mapper <- marginalise$pt_mapper
+    if (is.null(pt_mapper)) pt_mapper <- marginalise$ptmapper
+  } else if (is.character(marginalise) || is.atomic(marginalise)) {
+    nm <- names(marginalise)
+    if (!is.null(nm) && "param" %in% nm) {
+      param <- marginalise[["param"]]
+    } else if (!is.null(nm)) {
+      idx_param <- which(!nm %in% c("n_nodes", "nodes", "pt_mapper", "ptmapper", "pt_map", "ptmap"))
+      if (length(idx_param) > 0) param <- marginalise[idx_param[1]] else param <- marginalise[1]
+    } else {
+      param <- marginalise[1]
+    }
+    if (!is.null(nm) && "n_nodes" %in% nm) {
+      n_nodes <- as.integer(marginalise[["n_nodes"]])
+    } else if (!is.null(nm) && "nodes" %in% nm) {
+      n_nodes <- as.integer(marginalise[["nodes"]])
+    } else if (length(marginalise) > 1 && is.null(nm)) {
+      if (suppressWarnings(!is.na(as.integer(marginalise[2])))) {
+        n_nodes <- as.integer(marginalise[2])
+      }
+    }
+    if (!is.null(nm) && "pt_mapper" %in% nm) {
+      pt_mapper <- as.logical(marginalise[["pt_mapper"]])
+    } else if (!is.null(nm) && "ptmapper" %in% nm) {
+      pt_mapper <- as.logical(marginalise[["ptmapper"]])
+    }
   } else {
-    stop("marginalise must be a character parameter name or a list containing 'param'")
+    stop("marginalise must be a character vector or a list identifying a parameter name")
   }
-  out <- unique(as.character(out))
-  if (length(out) == 0L || anyNA(out) || any(!nzchar(out))) {
+
+  param <- unname(as.character(unlist(param)))[1L]
+  if (is.na(param) || !nzchar(param)) {
     stop("marginalise must name at least one parameter")
   }
-  out
+
+  res <- list(param = param)
+  if (!is.null(n_nodes) && !is.na(n_nodes)) res$n_nodes <- as.integer(n_nodes)
+  if (!is.null(pt_mapper) && !is.na(pt_mapper)) res$pt_mapper <- as.logical(pt_mapper)
+  res
 }
 
 validate_marginalise_design <- function(marginalise, design, model) {
-  params <- normalize_marginalise(marginalise)
-  if (length(params) != 1L) {
+  norm <- normalize_marginalise(marginalise)
+  if (is.null(norm)) return(NULL)
+  p <- norm$param
+  if (length(p) != 1L) {
     stop("marginalise currently supports exactly one shared parameter")
   }
   spec <- model()
@@ -27,7 +62,6 @@ validate_marginalise_design <- function(marginalise, design, model) {
       grepl("DDM", spec$type, fixed = TRUE)) {
     stop("marginalise is currently supported for race models only (not DDM)")
   }
-  p <- params[[1L]]
   if (is.null(spec$p_types) || !p %in% names(spec$p_types)) {
     stop("marginalise parameter '", p, "' is not a model p_type")
   }
@@ -53,7 +87,15 @@ validate_marginalise_design <- function(marginalise, design, model) {
   if (!is.null(design$constants) && p %in% names(design$constants)) {
     stop("marginalise parameter '", p, "' cannot be fixed as a constant")
   }
-  p
+  if (!is.null(norm$n_nodes)) {
+    if (length(norm$n_nodes) != 1L || is.na(norm$n_nodes) || norm$n_nodes < 2L) {
+      stop("marginalise n_nodes must be an integer >= 2")
+    }
+  }
+  if (is.null(norm$n_nodes) && is.null(norm$pt_mapper)) {
+    return(p)
+  }
+  norm
 }
 
 #' Specify a Design and Model
@@ -376,14 +418,7 @@ design <- function(formula = NULL,factors = NULL,Rlevels = NULL,model,data=NULL,
   design$model <- model
   attr(design,"p_vector") <- p_vector
   if (!is.null(marginalise)) {
-    marginalise_input <- marginalise
-    marginalise <- validate_marginalise_design(marginalise_input, design, model)
-    if (is.list(marginalise_input) && !is.null(marginalise_input$n_nodes)) {
-      attr(design, "marginalise") <- list(param = marginalise,
-                                           n_nodes = marginalise_input$n_nodes)
-    } else {
-      attr(design, "marginalise") <- marginalise
-    }
+    attr(design, "marginalise") <- validate_marginalise_design(marginalise, design, model)
   }
   if (report_p_vector) {
     summary(design, data = data)

@@ -2977,10 +2977,14 @@ static NumericMatrix marginal_eval_nodes(
   const int max_rows = 4096;
   int cols_per_call = m;
   if (np * m > max_rows) cols_per_call = std::max(1, max_rows / np);
+  NumericMatrix pm(np * std::min(cols_per_call, m), n_par);
+  colnames(pm) = p_names;
   for (int k0 = 0; k0 < m; k0 += cols_per_call) {
     const int mk = std::min(cols_per_call, m - k0);
-    NumericMatrix pm(np * mk, n_par);
-    colnames(pm) = p_names;
+    if (pm.nrow() != np * mk) {
+      pm = NumericMatrix(np * mk, n_par);
+      colnames(pm) = p_names;
+    }
     for (int k = 0; k < mk; ++k) {
       for (int i = 0; i < np; ++i) {
         const int r = k * np + i;
@@ -3319,11 +3323,32 @@ static MarginalGrid calc_ll_oo_marginal_core(
       if (bad > 0 && bad * 4 <= np) {
         for (int r = 1; r < n_refine_warm && bad > 0; ++r) bad = refine_round();
       }
-      // A stale hint must never quietly degrade the rule: if ANY particle is
-      // still unresolved, throw the warm state away and pay the cold path.
-      g.warm_used = warm_ok ? 1 : 0;
-      if (bad == 0) std::fill(hinted.begin(), hinted.end(), 1);
-      if (bad > 0) {
+      g.warm_used = static_cast<double>(np - bad) / static_cast<double>(np);
+      if (bad == 0) {
+        std::fill(hinted.begin(), hinted.end(), 1);
+      } else if (bad * 4 <= np) {
+        std::vector<int> bad_rows;
+        for (int i = 0; i < np; ++i) {
+          if (fitted[static_cast<size_t>(i)]) hinted[static_cast<size_t>(i)] = 1;
+          else bad_rows.push_back(i);
+        }
+        const int nb = static_cast<int>(bad_rows.size());
+        NumericMatrix Pb(nb, n_par);
+        colnames(Pb) = p_names;
+        for (int j = 0; j < nb; ++j)
+          for (int c = 0; c < n_par; ++c) Pb(j, c) = particle_matrix(bad_rows[static_cast<size_t>(j)], c);
+        std::vector<double> mb(static_cast<size_t>(nb), def_mode);
+        std::vector<double> sb(static_cast<size_t>(nb), def_sd);
+        std::vector<char> fb(static_cast<size_t>(nb), 0);
+        pilot_on(Pb, mb, sb, fb);
+        refine_on(Pb, mb, sb, fb);
+        for (int j = 0; j < nb; ++j) {
+          const int i = bad_rows[static_cast<size_t>(j)];
+          mode[static_cast<size_t>(i)] = mb[static_cast<size_t>(j)];
+          sdev[static_cast<size_t>(i)] = sb[static_cast<size_t>(j)];
+          fitted[static_cast<size_t>(i)] = fb[static_cast<size_t>(j)];
+        }
+      } else {
         warm_ok = false;
         g.warm_used = 0;
         std::fill(mode.begin(), mode.end(), def_mode);
@@ -3434,7 +3459,10 @@ static MarginalGrid calc_ll_oo_marginal_core(
       }
       int bad = 0;
       if (pred_ok) {
-        for (int r = 0; r < n_refine_pred; ++r) bad = refine_on(particle_matrix, mode, sdev, fitted);
+        for (int r = 0; r < n_refine_pred; ++r) {
+          bad = refine_on(particle_matrix, mode, sdev, fitted);
+          if (bad == 0) break;
+        }
         // The prediction is only a bracket; if it failed to bracket a
         // meaningful share of the batch, fall back to the full pilot.
         if (bad * 4 > np) {
@@ -3449,7 +3477,10 @@ static MarginalGrid calc_ll_oo_marginal_core(
       if (!pred_ok) {
         std::fill(hinted.begin(), hinted.end(), 0);
         pilot_on(particle_matrix, mode, sdev, fitted);
-        for (int r = 0; r < n_refine; ++r) refine_round();
+        for (int r = 0; r < n_refine; ++r) {
+          int bad_r = refine_round();
+          if (bad_r == 0) break;
+        }
       }
     }
   }
@@ -3624,8 +3655,19 @@ List calc_ll_oo_marginal_nodes(
     Rcpp::Nullable<Rcpp::List> trend = R_NilValue) {
   MarginalGrid g = calc_ll_oo_marginal_core(particle_matrix, data, constants, designs, type,
       bounds, transforms, pretransforms, p_types, min_ll, trend, marginalise);
+  const int np = g.log_terms.nrow(), nn = g.log_terms.ncol();
+  NumericVector ll(np);
+  for (int i = 0; i < np; ++i) {
+    double m = R_NegInf;
+    for (int k = 0; k < nn; ++k) if (g.log_terms(i, k) > m) m = g.log_terms(i, k);
+    if (!R_FINITE(m)) { ll[i] = R_NegInf; continue; }
+    double s = 0.0;
+    for (int k = 0; k < nn; ++k) s += std::exp(g.log_terms(i, k) - m);
+    ll[i] = m + std::log(s);
+  }
   return List::create(Rcpp::Named("nodes") = g.nodes,
                       Rcpp::Named("log_terms") = g.log_terms,
+                      Rcpp::Named("ll") = ll,
                       Rcpp::Named("mode") = g.mode,
                       Rcpp::Named("sd") = g.sd,
                       Rcpp::Named("warm_used") = g.warm_used,
