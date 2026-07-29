@@ -97,6 +97,20 @@ namespace rdmswtn {
   }
 }
 
+// R/model_ROU.R — ROU, the racing Ornstein-Uhlenbeck (leaky accumulator).
+// Identical to RDM apart from the leak k, so an RDM design converts by adding
+// k~1; k = 0 is the Wiener race, reached through the PDE rather than by
+// dispatching to the Wald kernels.  Binf/tau/pw exist only for
+// boundary_collapse != "fixed" and must be gated on SolveCache::bnd_kind before
+// they are dereferenced; pw only for the Weibull form.
+namespace rou {
+  enum : int { v = 0, k, B, A, t0, s, N_REQ, Binf = N_REQ, tau, pw };
+  inline ColSpec spec() {
+    static const char* n[] = {"v", "k", "B", "A", "t0", "s"};
+    return {n, N_REQ, "ROU"};
+  }
+}
+
 // R/model_DDM.R — DDM
 namespace ddm {
   enum : int { v = 0, a, sv, t0, st0, s, Z, SZ, N_REQ };

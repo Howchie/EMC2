@@ -9,20 +9,20 @@ sp_new <- function(iter, lambda_varimax, q, p, dim_all_c, all_c, lambda_hat, st,
     .Call(`_EMC2_sp_new`, iter, lambda_varimax, q, p, dim_all_c, all_c, lambda_hat, st, cost_matrix, perm)
 }
 
-fpe_bm_fht_pdf_cdf_vec <- function(t, mu, sigma, z0, b0, binf, tau = 1.0, pow = 1.0, nx = 256L, nt = 512L, grade = 8.0) {
-    .Call(`_EMC2_fpe_bm_fht_pdf_cdf_vec`, t, mu, sigma, z0, b0, binf, tau, pow, nx, nt, grade)
+fpe_bm_fht_pdf_cdf_vec <- function(t, mu, sigma, z0, b0, binf, tau = 1.0, pow = 1.0, nx = 256L, nt = 512L, grade = 8.0, tgrade = 1.0) {
+    .Call(`_EMC2_fpe_bm_fht_pdf_cdf_vec`, t, mu, sigma, z0, b0, binf, tau, pow, nx, nt, grade, tgrade)
 }
 
-fpe_ou_fht_pdf_cdf_vec <- function(t, lambda, theta, sigma, z0, b0, binf, tau = 1.0, pow = 1.0, nx = 256L, nt = 512L, grade = 8.0) {
-    .Call(`_EMC2_fpe_ou_fht_pdf_cdf_vec`, t, lambda, theta, sigma, z0, b0, binf, tau, pow, nx, nt, grade)
+fpe_ou_fht_pdf_cdf_vec <- function(t, lambda, theta, sigma, z0, b0, binf, tau = 1.0, pow = 1.0, nx = 256L, nt = 512L, grade = 8.0, tgrade = 1.0) {
+    .Call(`_EMC2_fpe_ou_fht_pdf_cdf_vec`, t, lambda, theta, sigma, z0, b0, binf, tau, pow, nx, nt, grade, tgrade)
 }
 
-fpe_gbm_fht_pdf_cdf_vec <- function(t, mu, sigma, z0, b0, binf, tau = 1.0, pow = 1.0, nx = 256L, nt = 512L, start_floor = 1.0, grade = 8.0) {
-    .Call(`_EMC2_fpe_gbm_fht_pdf_cdf_vec`, t, mu, sigma, z0, b0, binf, tau, pow, nx, nt, start_floor, grade)
+fpe_gbm_fht_pdf_cdf_vec <- function(t, mu, sigma, z0, b0, binf, tau = 1.0, pow = 1.0, nx = 256L, nt = 512L, start_floor = 1.0, grade = 8.0, tgrade = 1.0) {
+    .Call(`_EMC2_fpe_gbm_fht_pdf_cdf_vec`, t, mu, sigma, z0, b0, binf, tau, pow, nx, nt, start_floor, grade, tgrade)
 }
 
-fpe_gompertz_fht_pdf_cdf_vec <- function(t, alpha, beta, z0, k0, kinf, tau = 1.0, pow = 1.0, nx = 256L, nt = 512L, start_floor = 1e-3, grade = 8.0) {
-    .Call(`_EMC2_fpe_gompertz_fht_pdf_cdf_vec`, t, alpha, beta, z0, k0, kinf, tau, pow, nx, nt, start_floor, grade)
+fpe_gompertz_fht_pdf_cdf_vec <- function(t, alpha, beta, z0, k0, kinf, tau = 1.0, pow = 1.0, nx = 256L, nt = 512L, start_floor = 1e-3, grade = 8.0, tgrade = 1.0) {
+    .Call(`_EMC2_fpe_gompertz_fht_pdf_cdf_vec`, t, alpha, beta, z0, k0, kinf, tau, pow, nx, nt, start_floor, grade, tgrade)
 }
 
 pbvn_tsay <- function(h, k, rho) {
@@ -519,6 +519,22 @@ rlf_fht_pdf_cdf_vec <- function(t, v, sigma, alpha, b0, z0 = 0.0, nx = 200L, nt 
 
 simulate_rlf_hit_times_cpp <- function(n_sims, v, sigma, alpha, b0, z0 = 0.0, t_max = 5.0, dt = 0.001, seed = 42L) {
     .Call(`_EMC2_simulate_rlf_hit_times_cpp`, n_sims, v, sigma, alpha, b0, z0, t_max, dt, seed)
+}
+
+rou_pdf_cdf_vec <- function(rt, v, k, B, A, t0, s, nx = 384L, dt_target = 2e-3, grade = 8.0, tgrade = 32.0, bkind = 0L, Binf = as.numeric( c()), tau = as.numeric( c()), pw = as.numeric( c())) {
+    .Call(`_EMC2_rou_pdf_cdf_vec`, rt, v, k, B, A, t0, s, nx, dt_target, grade, tgrade, bkind, Binf, tau, pw)
+}
+
+rou_hit_times_vec <- function(v, k, B, A, s, dt = 1e-3, t_max = 30.0, bkind = 0L, Binf = as.numeric( c()), tau = as.numeric( c()), pw = as.numeric( c())) {
+    .Call(`_EMC2_rou_hit_times_vec`, v, k, B, A, s, dt, t_max, bkind, Binf, tau, pw)
+}
+
+drou_cpp <- function(rt, v, k, B, A, t0, s, nx = 384L, dt_target = 2e-3, grade = 8.0, tgrade = 32.0, bkind = 0L, Binf = as.numeric( c()), tau = as.numeric( c()), pw = as.numeric( c())) {
+    .Call(`_EMC2_drou_cpp`, rt, v, k, B, A, t0, s, nx, dt_target, grade, tgrade, bkind, Binf, tau, pw)
+}
+
+rrou_hit_times_cpp <- function(v, k, B, A, s, dt = 1e-3, t_max = 30.0, bkind = 0L, Binf = as.numeric( c()), tau = as.numeric( c()), pw = as.numeric( c())) {
+    .Call(`_EMC2_rrou_hit_times_cpp`, v, k, B, A, s, dt, t_max, bkind, Binf, tau, pw)
 }
 
 run_trend_rcpp <- function(data, trend, param, trend_pars, pars_full, return_kernel = FALSE) {

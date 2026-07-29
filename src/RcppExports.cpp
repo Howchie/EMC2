@@ -45,8 +45,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // fpe_bm_fht_pdf_cdf_vec
-Rcpp::List fpe_bm_fht_pdf_cdf_vec(NumericVector t, double mu, double sigma, double z0, double b0, double binf, double tau, double pow, int nx, int nt, double grade);
-RcppExport SEXP _EMC2_fpe_bm_fht_pdf_cdf_vec(SEXP tSEXP, SEXP muSEXP, SEXP sigmaSEXP, SEXP z0SEXP, SEXP b0SEXP, SEXP binfSEXP, SEXP tauSEXP, SEXP powSEXP, SEXP nxSEXP, SEXP ntSEXP, SEXP gradeSEXP) {
+Rcpp::List fpe_bm_fht_pdf_cdf_vec(NumericVector t, double mu, double sigma, double z0, double b0, double binf, double tau, double pow, int nx, int nt, double grade, double tgrade);
+RcppExport SEXP _EMC2_fpe_bm_fht_pdf_cdf_vec(SEXP tSEXP, SEXP muSEXP, SEXP sigmaSEXP, SEXP z0SEXP, SEXP b0SEXP, SEXP binfSEXP, SEXP tauSEXP, SEXP powSEXP, SEXP nxSEXP, SEXP ntSEXP, SEXP gradeSEXP, SEXP tgradeSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -61,13 +61,14 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< int >::type nx(nxSEXP);
     Rcpp::traits::input_parameter< int >::type nt(ntSEXP);
     Rcpp::traits::input_parameter< double >::type grade(gradeSEXP);
-    rcpp_result_gen = Rcpp::wrap(fpe_bm_fht_pdf_cdf_vec(t, mu, sigma, z0, b0, binf, tau, pow, nx, nt, grade));
+    Rcpp::traits::input_parameter< double >::type tgrade(tgradeSEXP);
+    rcpp_result_gen = Rcpp::wrap(fpe_bm_fht_pdf_cdf_vec(t, mu, sigma, z0, b0, binf, tau, pow, nx, nt, grade, tgrade));
     return rcpp_result_gen;
 END_RCPP
 }
 // fpe_ou_fht_pdf_cdf_vec
-Rcpp::List fpe_ou_fht_pdf_cdf_vec(NumericVector t, double lambda, double theta, double sigma, double z0, double b0, double binf, double tau, double pow, int nx, int nt, double grade);
-RcppExport SEXP _EMC2_fpe_ou_fht_pdf_cdf_vec(SEXP tSEXP, SEXP lambdaSEXP, SEXP thetaSEXP, SEXP sigmaSEXP, SEXP z0SEXP, SEXP b0SEXP, SEXP binfSEXP, SEXP tauSEXP, SEXP powSEXP, SEXP nxSEXP, SEXP ntSEXP, SEXP gradeSEXP) {
+Rcpp::List fpe_ou_fht_pdf_cdf_vec(NumericVector t, double lambda, double theta, double sigma, double z0, double b0, double binf, double tau, double pow, int nx, int nt, double grade, double tgrade);
+RcppExport SEXP _EMC2_fpe_ou_fht_pdf_cdf_vec(SEXP tSEXP, SEXP lambdaSEXP, SEXP thetaSEXP, SEXP sigmaSEXP, SEXP z0SEXP, SEXP b0SEXP, SEXP binfSEXP, SEXP tauSEXP, SEXP powSEXP, SEXP nxSEXP, SEXP ntSEXP, SEXP gradeSEXP, SEXP tgradeSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -83,13 +84,14 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< int >::type nx(nxSEXP);
     Rcpp::traits::input_parameter< int >::type nt(ntSEXP);
     Rcpp::traits::input_parameter< double >::type grade(gradeSEXP);
-    rcpp_result_gen = Rcpp::wrap(fpe_ou_fht_pdf_cdf_vec(t, lambda, theta, sigma, z0, b0, binf, tau, pow, nx, nt, grade));
+    Rcpp::traits::input_parameter< double >::type tgrade(tgradeSEXP);
+    rcpp_result_gen = Rcpp::wrap(fpe_ou_fht_pdf_cdf_vec(t, lambda, theta, sigma, z0, b0, binf, tau, pow, nx, nt, grade, tgrade));
     return rcpp_result_gen;
 END_RCPP
 }
 // fpe_gbm_fht_pdf_cdf_vec
-Rcpp::List fpe_gbm_fht_pdf_cdf_vec(NumericVector t, double mu, double sigma, double z0, double b0, double binf, double tau, double pow, int nx, int nt, double start_floor, double grade);
-RcppExport SEXP _EMC2_fpe_gbm_fht_pdf_cdf_vec(SEXP tSEXP, SEXP muSEXP, SEXP sigmaSEXP, SEXP z0SEXP, SEXP b0SEXP, SEXP binfSEXP, SEXP tauSEXP, SEXP powSEXP, SEXP nxSEXP, SEXP ntSEXP, SEXP start_floorSEXP, SEXP gradeSEXP) {
+Rcpp::List fpe_gbm_fht_pdf_cdf_vec(NumericVector t, double mu, double sigma, double z0, double b0, double binf, double tau, double pow, int nx, int nt, double start_floor, double grade, double tgrade);
+RcppExport SEXP _EMC2_fpe_gbm_fht_pdf_cdf_vec(SEXP tSEXP, SEXP muSEXP, SEXP sigmaSEXP, SEXP z0SEXP, SEXP b0SEXP, SEXP binfSEXP, SEXP tauSEXP, SEXP powSEXP, SEXP nxSEXP, SEXP ntSEXP, SEXP start_floorSEXP, SEXP gradeSEXP, SEXP tgradeSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -105,13 +107,14 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< int >::type nt(ntSEXP);
     Rcpp::traits::input_parameter< double >::type start_floor(start_floorSEXP);
     Rcpp::traits::input_parameter< double >::type grade(gradeSEXP);
-    rcpp_result_gen = Rcpp::wrap(fpe_gbm_fht_pdf_cdf_vec(t, mu, sigma, z0, b0, binf, tau, pow, nx, nt, start_floor, grade));
+    Rcpp::traits::input_parameter< double >::type tgrade(tgradeSEXP);
+    rcpp_result_gen = Rcpp::wrap(fpe_gbm_fht_pdf_cdf_vec(t, mu, sigma, z0, b0, binf, tau, pow, nx, nt, start_floor, grade, tgrade));
     return rcpp_result_gen;
 END_RCPP
 }
 // fpe_gompertz_fht_pdf_cdf_vec
-Rcpp::List fpe_gompertz_fht_pdf_cdf_vec(NumericVector t, double alpha, double beta, double z0, double k0, double kinf, double tau, double pow, int nx, int nt, double start_floor, double grade);
-RcppExport SEXP _EMC2_fpe_gompertz_fht_pdf_cdf_vec(SEXP tSEXP, SEXP alphaSEXP, SEXP betaSEXP, SEXP z0SEXP, SEXP k0SEXP, SEXP kinfSEXP, SEXP tauSEXP, SEXP powSEXP, SEXP nxSEXP, SEXP ntSEXP, SEXP start_floorSEXP, SEXP gradeSEXP) {
+Rcpp::List fpe_gompertz_fht_pdf_cdf_vec(NumericVector t, double alpha, double beta, double z0, double k0, double kinf, double tau, double pow, int nx, int nt, double start_floor, double grade, double tgrade);
+RcppExport SEXP _EMC2_fpe_gompertz_fht_pdf_cdf_vec(SEXP tSEXP, SEXP alphaSEXP, SEXP betaSEXP, SEXP z0SEXP, SEXP k0SEXP, SEXP kinfSEXP, SEXP tauSEXP, SEXP powSEXP, SEXP nxSEXP, SEXP ntSEXP, SEXP start_floorSEXP, SEXP gradeSEXP, SEXP tgradeSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -127,7 +130,8 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< int >::type nt(ntSEXP);
     Rcpp::traits::input_parameter< double >::type start_floor(start_floorSEXP);
     Rcpp::traits::input_parameter< double >::type grade(gradeSEXP);
-    rcpp_result_gen = Rcpp::wrap(fpe_gompertz_fht_pdf_cdf_vec(t, alpha, beta, z0, k0, kinf, tau, pow, nx, nt, start_floor, grade));
+    Rcpp::traits::input_parameter< double >::type tgrade(tgradeSEXP);
+    rcpp_result_gen = Rcpp::wrap(fpe_gompertz_fht_pdf_cdf_vec(t, alpha, beta, z0, k0, kinf, tau, pow, nx, nt, start_floor, grade, tgrade));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -2313,6 +2317,98 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// rou_pdf_cdf_vec
+Rcpp::List rou_pdf_cdf_vec(NumericVector rt, NumericVector v, NumericVector k, NumericVector B, NumericVector A, NumericVector t0, NumericVector s, int nx, double dt_target, double grade, double tgrade, int bkind, NumericVector Binf, NumericVector tau, NumericVector pw);
+RcppExport SEXP _EMC2_rou_pdf_cdf_vec(SEXP rtSEXP, SEXP vSEXP, SEXP kSEXP, SEXP BSEXP, SEXP ASEXP, SEXP t0SEXP, SEXP sSEXP, SEXP nxSEXP, SEXP dt_targetSEXP, SEXP gradeSEXP, SEXP tgradeSEXP, SEXP bkindSEXP, SEXP BinfSEXP, SEXP tauSEXP, SEXP pwSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type rt(rtSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type v(vSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type k(kSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type B(BSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type A(ASEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type t0(t0SEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type s(sSEXP);
+    Rcpp::traits::input_parameter< int >::type nx(nxSEXP);
+    Rcpp::traits::input_parameter< double >::type dt_target(dt_targetSEXP);
+    Rcpp::traits::input_parameter< double >::type grade(gradeSEXP);
+    Rcpp::traits::input_parameter< double >::type tgrade(tgradeSEXP);
+    Rcpp::traits::input_parameter< int >::type bkind(bkindSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type Binf(BinfSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type tau(tauSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type pw(pwSEXP);
+    rcpp_result_gen = Rcpp::wrap(rou_pdf_cdf_vec(rt, v, k, B, A, t0, s, nx, dt_target, grade, tgrade, bkind, Binf, tau, pw));
+    return rcpp_result_gen;
+END_RCPP
+}
+// rou_hit_times_vec
+NumericVector rou_hit_times_vec(NumericVector v, NumericVector k, NumericVector B, NumericVector A, NumericVector s, double dt, double t_max, int bkind, NumericVector Binf, NumericVector tau, NumericVector pw);
+RcppExport SEXP _EMC2_rou_hit_times_vec(SEXP vSEXP, SEXP kSEXP, SEXP BSEXP, SEXP ASEXP, SEXP sSEXP, SEXP dtSEXP, SEXP t_maxSEXP, SEXP bkindSEXP, SEXP BinfSEXP, SEXP tauSEXP, SEXP pwSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type v(vSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type k(kSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type B(BSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type A(ASEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type s(sSEXP);
+    Rcpp::traits::input_parameter< double >::type dt(dtSEXP);
+    Rcpp::traits::input_parameter< double >::type t_max(t_maxSEXP);
+    Rcpp::traits::input_parameter< int >::type bkind(bkindSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type Binf(BinfSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type tau(tauSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type pw(pwSEXP);
+    rcpp_result_gen = Rcpp::wrap(rou_hit_times_vec(v, k, B, A, s, dt, t_max, bkind, Binf, tau, pw));
+    return rcpp_result_gen;
+END_RCPP
+}
+// drou_cpp
+Rcpp::List drou_cpp(NumericVector rt, NumericVector v, NumericVector k, NumericVector B, NumericVector A, NumericVector t0, NumericVector s, int nx, double dt_target, double grade, double tgrade, int bkind, NumericVector Binf, NumericVector tau, NumericVector pw);
+RcppExport SEXP _EMC2_drou_cpp(SEXP rtSEXP, SEXP vSEXP, SEXP kSEXP, SEXP BSEXP, SEXP ASEXP, SEXP t0SEXP, SEXP sSEXP, SEXP nxSEXP, SEXP dt_targetSEXP, SEXP gradeSEXP, SEXP tgradeSEXP, SEXP bkindSEXP, SEXP BinfSEXP, SEXP tauSEXP, SEXP pwSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type rt(rtSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type v(vSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type k(kSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type B(BSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type A(ASEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type t0(t0SEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type s(sSEXP);
+    Rcpp::traits::input_parameter< int >::type nx(nxSEXP);
+    Rcpp::traits::input_parameter< double >::type dt_target(dt_targetSEXP);
+    Rcpp::traits::input_parameter< double >::type grade(gradeSEXP);
+    Rcpp::traits::input_parameter< double >::type tgrade(tgradeSEXP);
+    Rcpp::traits::input_parameter< int >::type bkind(bkindSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type Binf(BinfSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type tau(tauSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type pw(pwSEXP);
+    rcpp_result_gen = Rcpp::wrap(drou_cpp(rt, v, k, B, A, t0, s, nx, dt_target, grade, tgrade, bkind, Binf, tau, pw));
+    return rcpp_result_gen;
+END_RCPP
+}
+// rrou_hit_times_cpp
+NumericVector rrou_hit_times_cpp(NumericVector v, NumericVector k, NumericVector B, NumericVector A, NumericVector s, double dt, double t_max, int bkind, NumericVector Binf, NumericVector tau, NumericVector pw);
+RcppExport SEXP _EMC2_rrou_hit_times_cpp(SEXP vSEXP, SEXP kSEXP, SEXP BSEXP, SEXP ASEXP, SEXP sSEXP, SEXP dtSEXP, SEXP t_maxSEXP, SEXP bkindSEXP, SEXP BinfSEXP, SEXP tauSEXP, SEXP pwSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type v(vSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type k(kSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type B(BSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type A(ASEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type s(sSEXP);
+    Rcpp::traits::input_parameter< double >::type dt(dtSEXP);
+    Rcpp::traits::input_parameter< double >::type t_max(t_maxSEXP);
+    Rcpp::traits::input_parameter< int >::type bkind(bkindSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type Binf(BinfSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type tau(tauSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type pw(pwSEXP);
+    rcpp_result_gen = Rcpp::wrap(rrou_hit_times_cpp(v, k, B, A, s, dt, t_max, bkind, Binf, tau, pw));
+    return rcpp_result_gen;
+END_RCPP
+}
 // run_trend_rcpp
 NumericVector run_trend_rcpp(DataFrame data, List trend, NumericVector param, NumericMatrix trend_pars, NumericMatrix pars_full, bool return_kernel);
 RcppExport SEXP _EMC2_run_trend_rcpp(SEXP dataSEXP, SEXP trendSEXP, SEXP paramSEXP, SEXP trend_parsSEXP, SEXP pars_fullSEXP, SEXP return_kernelSEXP) {
@@ -2387,10 +2483,10 @@ END_RCPP
 static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_EMC2_call_custom_trend", (DL_FUNC) &_EMC2_EMC2_call_custom_trend, 3},
     {"_EMC2_sp_new", (DL_FUNC) &_EMC2_sp_new, 10},
-    {"_EMC2_fpe_bm_fht_pdf_cdf_vec", (DL_FUNC) &_EMC2_fpe_bm_fht_pdf_cdf_vec, 11},
-    {"_EMC2_fpe_ou_fht_pdf_cdf_vec", (DL_FUNC) &_EMC2_fpe_ou_fht_pdf_cdf_vec, 12},
-    {"_EMC2_fpe_gbm_fht_pdf_cdf_vec", (DL_FUNC) &_EMC2_fpe_gbm_fht_pdf_cdf_vec, 12},
-    {"_EMC2_fpe_gompertz_fht_pdf_cdf_vec", (DL_FUNC) &_EMC2_fpe_gompertz_fht_pdf_cdf_vec, 12},
+    {"_EMC2_fpe_bm_fht_pdf_cdf_vec", (DL_FUNC) &_EMC2_fpe_bm_fht_pdf_cdf_vec, 12},
+    {"_EMC2_fpe_ou_fht_pdf_cdf_vec", (DL_FUNC) &_EMC2_fpe_ou_fht_pdf_cdf_vec, 13},
+    {"_EMC2_fpe_gbm_fht_pdf_cdf_vec", (DL_FUNC) &_EMC2_fpe_gbm_fht_pdf_cdf_vec, 13},
+    {"_EMC2_fpe_gompertz_fht_pdf_cdf_vec", (DL_FUNC) &_EMC2_fpe_gompertz_fht_pdf_cdf_vec, 13},
     {"_EMC2_pbvn_tsay", (DL_FUNC) &_EMC2_pbvn_tsay, 3},
     {"_EMC2_pbvn_tvpack", (DL_FUNC) &_EMC2_pbvn_tvpack, 3},
     {"_EMC2_pbvn_drezner", (DL_FUNC) &_EMC2_pbvn_drezner, 3},
@@ -2515,6 +2611,10 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_gl_rule_nodes_weights", (DL_FUNC) &_EMC2_gl_rule_nodes_weights, 1},
     {"_EMC2_rlf_fht_pdf_cdf_vec", (DL_FUNC) &_EMC2_rlf_fht_pdf_cdf_vec, 8},
     {"_EMC2_simulate_rlf_hit_times_cpp", (DL_FUNC) &_EMC2_simulate_rlf_hit_times_cpp, 9},
+    {"_EMC2_rou_pdf_cdf_vec", (DL_FUNC) &_EMC2_rou_pdf_cdf_vec, 15},
+    {"_EMC2_rou_hit_times_vec", (DL_FUNC) &_EMC2_rou_hit_times_vec, 11},
+    {"_EMC2_drou_cpp", (DL_FUNC) &_EMC2_drou_cpp, 15},
+    {"_EMC2_rrou_hit_times_cpp", (DL_FUNC) &_EMC2_rrou_hit_times_cpp, 11},
     {"_EMC2_run_trend_rcpp", (DL_FUNC) &_EMC2_run_trend_rcpp, 6},
     {"_EMC2_ou_debug_set", (DL_FUNC) &_EMC2_ou_debug_set, 2},
     {"_EMC2_calculate_num_steps", (DL_FUNC) &_EMC2_calculate_num_steps, 3},

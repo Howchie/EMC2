@@ -135,3 +135,66 @@ test_that("grading does not disturb the order of accuracy", {
   expect_gt(err[1] / err[2], 3.0)
   expect_gt(err[2] / err[3], 3.0)
 })
+
+# ---------------------------------------------------------------------------
+# Fixes for the four defects found while evaluating the solver as a likelihood
+# backend (see race_ou_integration_plan.md §2.3).
+# ---------------------------------------------------------------------------
+
+test_that("graded time stepping resolves the rising flank at realistic t_max", {
+  # A uniform dt = t_max/nt spends its steps in proportion to elapsed time, but
+  # the density climbs from ~0 to its mode inside the first ~100 ms.  With t_max
+  # set by the largest RT in a data set the flank is then badly under-resolved,
+  # and the error there is a function of dt alone -- it is identical at
+  # t_max = 0.25 and t_max = 2.5.  `tgrade` doubles dt between blocks, so the
+  # early steps are small, at no extra cost (same total step budget).
+  ou <- function(t, tgrade, nx = 256L, nt = 512L)
+    EMC2:::fpe_ou_fht_pdf_cdf_vec(t, 4, 2, 1, 0, 1, 1, 1, 1, nx, nt, 8, tgrade)
+
+  tq  <- c(0.05, 0.08, 0.12, 0.5, 1.0)
+  ref <- ou(tq, 1, 2048L, 16384L)$pdf
+  rel <- function(tgrade) {
+    r <- ou(c(tq, 2.5), tgrade)$pdf[seq_along(tq)]
+    abs(r - ref) / ref
+  }
+
+  # the flank at t = 0.05 is where it bites: ~26% uniform, ~1% graded
+  expect_gt(rel(1)[1], 0.15)
+  expect_lt(rel(32)[1], 0.03)
+  # and the mode / body must not be traded away to get it
+  expect_lt(max(rel(32)[2:4]), 5e-3)
+
+  # tgrade <= 1 must reproduce the uniform grid exactly, so that every test
+  # above this line keeps testing what it says it tests.
+  expect_identical(ou(tq, 1)$pdf, ou(tq, 0.5)$pdf)
+})
+
+test_that("the reported pdf and cdf are safe to take logs of", {
+  # The absorbing-face flux is a one-sided difference of two nearly equal cell
+  # values, so once the sub-density has decayed it goes slightly negative
+  # (-3e-16 measured where the true density is 1.5e-17).  log() of that is NaN,
+  # which would silently poison a likelihood rather than fail loudly.  Likewise
+  # 1 - sum(dx*q) is not reliably inside [0,1] nor monotone out there.
+  t <- c(seq(1e-4, 0.01, length.out = 20), seq(0.05, 3, length.out = 200))
+  r <- EMC2:::fpe_ou_fht_pdf_cdf_vec(t, 4, 2, 1, 0, 1, 1, 1, 1, 256L, 512L, 8, 32)
+
+  expect_true(all(r$pdf >= 0))
+  expect_true(all(r$pdf_grid >= 0))
+  expect_true(all(r$cdf >= 0 & r$cdf <= 1))
+  expect_true(all(diff(r$cdf) >= 0))
+  expect_false(anyNA(log(pmax(r$pdf, 1e-300))))
+})
+
+test_that("the pdf is zero before the seed time, not clamped to it", {
+  # A point start seeds the march at t_seed > 0, so the grid does not reach back
+  # to 0.  Clamping the lookup to the first grid value hands back the flux AT
+  # t_seed for every earlier time -- a positive constant where the density is
+  # ~0.  The cdf keeps the clamp: cdf[1] is mass genuinely absorbed by t_seed.
+  # t_seed is capped at 0.25 * t_max, so the query has to carry a realistic
+  # t_max for the seed to sit where it would in a fit.
+  r <- EMC2:::fpe_ou_fht_pdf_cdf_vec(c(1e-6, 1e-4, 2.5), 4, 2, 1, 0, 1, 1, 1, 1,
+                                     256L, 512L, 8, 1)
+  expect_gt(r$t_grid[1], 1e-4)          # first two query times precede the seed
+  expect_identical(r$pdf[1:2], c(0, 0))
+  expect_gt(r$pdf[3], 0)
+})

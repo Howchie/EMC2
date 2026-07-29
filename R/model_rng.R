@@ -47,6 +47,14 @@
   rRDM(lR, pars, ok = ok)
 }
 
+.rfun_ROU <- function(lR, pars, ok = rep(TRUE, nrow(pars)), kind = NULL) {
+  if (.use_cpp_rfun()) {
+    return(rROU(lR, pars, ok = ok, kind = kind))
+  }
+  .rfun_ROU_R(lR, pars, ok = ok, kind = kind)
+}
+
+
 .rfun_BAwL <- function(lR, pars, ok = rep(TRUE, length(lR)), posdrift = TRUE,
                        erlang = 1L, guess = FALSE, global = FALSE) {
   if (.use_cpp_rfun()) {

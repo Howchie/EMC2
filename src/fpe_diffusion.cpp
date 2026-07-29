@@ -22,16 +22,19 @@ namespace {
 // Interpolate a solve onto the requested RTs and package for R.
 Rcpp::List fpe_package(const fpe::FPE_Result& r, const NumericVector& t) {
   const int n = t.size();
-  NumericVector pdf(n), cdf(n);
+  NumericVector pdf(n), cdf(n), surv(n);
   for (int i = 0; i < n; ++i) {
     const double ti = t[i];
-    if (!R_finite(ti) || ti <= 0.0) { pdf[i] = 0.0; cdf[i] = 0.0; continue; }
-    pdf[i] = fpe::grid_lookup(r.t, r.pdf, ti);
+    if (!R_finite(ti) || ti <= 0.0) { pdf[i] = 0.0; cdf[i] = 0.0; surv[i] = 1.0; continue; }
+    // PDF is zero before the seed time; CDF is not (see fpe::grid_lookup).
+    pdf[i] = fpe::grid_lookup(r.t, r.pdf, ti, true);
     cdf[i] = fpe::grid_lookup(r.t, r.cdf, ti);
+    surv[i] = fpe::grid_lookup(r.t, r.surv, ti);
   }
   return Rcpp::List::create(
     _["pdf"] = pdf,
     _["cdf"] = cdf,
+    _["surv"] = surv,
     _["mismatch"] = r.flux_mass_mismatch,
     _["t_grid"] = Rcpp::wrap(r.t),
     _["pdf_grid"] = Rcpp::wrap(r.pdf));
@@ -54,7 +57,8 @@ Rcpp::List fpe_bm_fht_pdf_cdf_vec(NumericVector t, double mu, double sigma,
                                   double z0, double b0, double binf,
                                   double tau = 1.0, double pow = 1.0,
                                   int nx = 256, int nt = 512,
-                                  double grade = 8.0) {   // fpe::FPE_GRADE
+                                  double grade = 8.0,     // fpe::FPE_GRADE
+                                  double tgrade = 1.0) {
   if (sigma <= 0.0) stop("fpe_bm_fht_pdf_cdf_vec: sigma must be positive.");
   const double t_max = fpe_t_max(t);
 
@@ -66,7 +70,7 @@ Rcpp::List fpe_bm_fht_pdf_cdf_vec(NumericVector t, double mu, double sigma,
   m.xlo = fpe::fpe_x_lo_bm(std::min(0.0, z_lo), mu, sigma, t_max);
 
   if (m.bnd.a(t_max) <= m.xlo) stop("fpe_bm_fht_pdf_cdf_vec: boundary collapses below the domain.");
-  return fpe_package(fpe::fpe_run(m, z_lo, z_hi, t_max, nx, nt, grade), t);
+  return fpe_package(fpe::fpe_run(m, z_lo, z_hi, t_max, nx, nt, grade, tgrade), t);
 }
 
 // ---------------------------------------------------------------------------
@@ -79,21 +83,21 @@ Rcpp::List fpe_ou_fht_pdf_cdf_vec(NumericVector t, double lambda, double theta,
                                   double sigma, double z0, double b0, double binf,
                                   double tau = 1.0, double pow = 1.0,
                                   int nx = 256, int nt = 512,
-                                  double grade = 8.0) {   // fpe::FPE_GRADE
+                                  double grade = 8.0,     // fpe::FPE_GRADE
+                                  double tgrade = 1.0) {
   if (sigma <= 0.0) stop("fpe_ou_fht_pdf_cdf_vec: sigma must be positive.");
   if (lambda < 0.0) stop("fpe_ou_fht_pdf_cdf_vec: lambda must be non-negative.");
   const double t_max = fpe_t_max(t);
 
   fpe::FPE_ModelOU m;
-  m.lambda = lambda;
-  m.theta = theta;
+  m.set_lambda_theta(lambda, theta);
   m.sigma = sigma;
   m.bnd.set(b0, binf, tau, pow, false);
   const double z_lo = 0.0, z_hi = std::max(0.0, z0);
-  m.xlo = fpe::fpe_x_lo_ou(std::min(0.0, z_lo), lambda, theta, sigma, t_max);
+  m.xlo = fpe::fpe_x_lo_ou(std::min(0.0, z_lo), m.v, lambda, sigma, t_max);
 
   if (m.bnd.a(t_max) <= m.xlo) stop("fpe_ou_fht_pdf_cdf_vec: boundary collapses below the domain.");
-  return fpe_package(fpe::fpe_run(m, z_lo, z_hi, t_max, nx, nt, grade), t);
+  return fpe_package(fpe::fpe_run(m, z_lo, z_hi, t_max, nx, nt, grade, tgrade), t);
 }
 
 // ---------------------------------------------------------------------------
@@ -108,7 +112,7 @@ Rcpp::List fpe_gbm_fht_pdf_cdf_vec(NumericVector t, double mu, double sigma,
                                    double tau = 1.0, double pow = 1.0,
                                    int nx = 256, int nt = 512,
                                    double start_floor = 1.0,
-                                   double grade = 8.0) {
+                                   double grade = 8.0, double tgrade = 1.0) {
   if (sigma <= 0.0) stop("fpe_gbm_fht_pdf_cdf_vec: sigma must be positive.");
   if (start_floor <= 0.0) stop("fpe_gbm_fht_pdf_cdf_vec: start_floor must be positive.");
   if (b0 <= 0.0 || binf <= 0.0) stop("fpe_gbm_fht_pdf_cdf_vec: boundaries must stay positive.");
@@ -124,7 +128,7 @@ Rcpp::List fpe_gbm_fht_pdf_cdf_vec(NumericVector t, double mu, double sigma,
   m.xlo = fpe::fpe_x_lo_bm(z_lo, m.A, sigma, t_max);
 
   if (m.bnd.a(t_max) <= m.xlo) stop("fpe_gbm_fht_pdf_cdf_vec: boundary collapses below the domain.");
-  return fpe_package(fpe::fpe_run(m, z_lo, z_hi, t_max, nx, nt, grade), t);
+  return fpe_package(fpe::fpe_run(m, z_lo, z_hi, t_max, nx, nt, grade, tgrade), t);
 }
 
 // ---------------------------------------------------------------------------
@@ -140,7 +144,7 @@ Rcpp::List fpe_gompertz_fht_pdf_cdf_vec(NumericVector t, double alpha, double be
                                         double tau = 1.0, double pow = 1.0,
                                         int nx = 256, int nt = 512,
                                         double start_floor = 1e-3,
-                                        double grade = 8.0) {
+                                        double grade = 8.0, double tgrade = 1.0) {
   if (beta <= 0.0) stop("fpe_gompertz_fht_pdf_cdf_vec: beta must be positive.");
   if (alpha <= 0.0) stop("fpe_gompertz_fht_pdf_cdf_vec: alpha must be positive.");
   if (k0 <= 0.0 || kinf <= 0.0) stop("fpe_gompertz_fht_pdf_cdf_vec: capacities must stay positive.");
@@ -148,15 +152,14 @@ Rcpp::List fpe_gompertz_fht_pdf_cdf_vec(NumericVector t, double alpha, double be
   const double t_max = fpe_t_max(t);
 
   fpe::FPE_ModelOU m;
-  m.lambda = alpha;
   m.sigma = beta;
-  m.theta = std::log(kinf) - (beta * beta) / (2.0 * alpha);
+  m.set_lambda_theta(alpha, std::log(kinf) - (beta * beta) / (2.0 * alpha));
   m.bnd.set(k0, kinf, tau, pow, true);
 
   const double z_lo = std::log(start_floor);
   const double z_hi = std::log(std::max(z0, start_floor));
-  m.xlo = fpe::fpe_x_lo_ou(z_lo, alpha, m.theta, beta, t_max);
+  m.xlo = fpe::fpe_x_lo_ou(z_lo, m.v, alpha, beta, t_max);
 
   if (m.bnd.a(t_max) <= m.xlo) stop("fpe_gompertz_fht_pdf_cdf_vec: boundary collapses below the domain.");
-  return fpe_package(fpe::fpe_run(m, z_lo, z_hi, t_max, nx, nt, grade), t);
+  return fpe_package(fpe::fpe_run(m, z_lo, z_hi, t_max, nx, nt, grade, tgrade), t);
 }

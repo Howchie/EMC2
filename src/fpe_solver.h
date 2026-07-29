@@ -336,8 +336,69 @@ inline void apply_shifted(const FPE_Op& op, double c,
 
 struct FPE_Result {
   std::vector<double> t, pdf, cdf;
-  double flux_mass_mismatch = 0.0;   // per-solve error estimate, see below
+  // Survivor, reported SEPARATELY from cdf rather than left to the caller as
+  // 1 - cdf.  S = sum(dx*q) is a sum of positive quantities, so it keeps full
+  // RELATIVE accuracy far into the tail (measured |dlog S| <= 1.4e-2 down to
+  // S = 7.5e-14), whereas 1 - cdf loses every significant digit once cdf -> 1.
+  // A race likelihood multiplies loser survivors and lives or dies on that.
+  std::vector<double> surv;
+  double flux_mass_mismatch = 0.0;   // instability detector, NOT an error bound
 };
+
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+// Time-step schedule.
+//
+// A uniform dt = T/nt spends its steps in proportion to elapsed time, but the
+// solution's time variation is concentrated at the START: the first-passage
+// density climbs from ~0 to its mode within the first few tens of ms and then
+// decays smoothly over the remaining second or more.  With T set by the largest
+// RT in a data set, a uniform grid leaves the rising flank badly under-resolved,
+// and the error there is a pure function of dt (measured, OU lambda=4 theta=2
+// b0=1, M=256; relative pdf error at t = 0.05 s):
+//
+//   dt      9.8ms   4.9ms   2.4ms   1.2ms   0.61ms
+//   err      83%     26%      8%     2.6%    1.3%
+//
+// -- identically at T = 0.25 and T = 2.5, i.e. it tracks dt alone and not the
+// number of steps.  That is the same argument that grades the SPATIAL mesh
+// toward the barrier (see FPE_Mesh), applied to the time axis.
+//
+// Rather than a smoothly stretched grid, dt is held constant within blocks and
+// DOUBLES between them.  Crank-Nicolson is second order for any step sequence,
+// but a fixed boundary makes the left-hand side depend on dt alone (see
+// static_op / set_lhs below), so a piecewise-constant dt keeps the one-time
+// O(M) factorisation -- it is redone once per block, i.e. log2(tgrade) times for
+// the whole march, instead of once per step.
+//
+// `tgrade` is the ratio of the last block's step to the first's; tgrade <= 1
+// recovers the uniform grid exactly.  `nt` remains the total step budget.
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+struct FPE_TimeSchedule {
+  std::vector<double> dt;      // step size, per block
+  std::vector<int> steps;      // step count, per block
+};
+
+inline FPE_TimeSchedule fpe_time_schedule(double T, int nt, double tgrade) {
+  FPE_TimeSchedule s;
+  const int n_steps = std::max(nt, 1);
+  if (!(tgrade > 1.0 + 1e-9) || n_steps < 4) {
+    s.dt.push_back(T / n_steps);
+    s.steps.push_back(n_steps);
+    return s;
+  }
+  int n_blk = 1 + static_cast<int>(std::floor(std::log(tgrade) / std::log(2.0) + 1e-9));
+  n_blk = std::max(1, std::min(n_blk, n_steps / 2));
+  const int per = std::max(2, n_steps / n_blk);
+  // sum_b per * dt0 * 2^b = per * dt0 * (2^n_blk - 1) = T
+  const double dt0 = T / (per * (std::ldexp(1.0, n_blk) - 1.0));
+  s.dt.reserve(n_blk);
+  s.steps.reserve(n_blk);
+  for (int b = 0; b < n_blk; ++b) {
+    s.dt.push_back(std::ldexp(dt0, b));
+    s.steps.push_back(per);
+  }
+  return s;
+}
 
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 // March q from t0 to t_max.
@@ -345,25 +406,35 @@ struct FPE_Result {
 //   q0        cell-averaged sub-density at t0 on the normalised grid, already
 //             carrying whatever mass was absorbed before t0 (see the seeding in
 //             fpe_models.h) -- i.e. sum(dx*q0) = 1 - CDF(t0).
-//   nt        number of Crank-Nicolson steps of size dt = (t_max-t0)/nt.  The
-//             first two are replaced by four backward-Euler half-steps
-//             (Rannacher), which is what keeps CN from ringing on a point start.
+//   nt        total step budget.  The first two steps are replaced by four
+//             backward-Euler half-steps (Rannacher), which is what keeps CN from
+//             ringing on a point start.
+//   tgrade    ratio of the last time step to the first (see FPE_TimeSchedule);
+//             tgrade <= 1 gives the uniform grid dt = (t_max-t0)/nt.
 //
 // Two independent routes to the cdf are computed:
 //   mass flavour:  CDF = 1 - sum(dx*q)         (exact, given F_0 = 0)
 //   flux flavour:  CDF = CDF(t0) + trapz(g)
-// Their maximum absolute difference is returned as flux_mass_mismatch.  It is a
-// genuine convergence diagnostic: the mass identity ALONE is a tautology of the
-// discretisation and checks nothing, but the two agree only when the scheme has
-// resolved the solution.
+// Their maximum absolute difference is returned as flux_mass_mismatch.
+//
+// READ THIS BEFORE TRUSTING flux_mass_mismatch.  It is an INSTABILITY detector,
+// not a convergence diagnostic, and it must never be used as a runtime
+// accept/reject gate on accuracy.  Both routes are functionals of the same q, so
+// any discretisation error common to the two cancels out of their difference.
+// Measured (OU lambda=4 theta=2 sigma=1 b0=1, M=256, nt=512, uniform grid):
+// mismatch reports 4.3e-8 while the true max CDF error against a converged
+// reference is 1.4e-3 -- five orders of magnitude apart.  What the mismatch does
+// catch is a march that has gone unstable or lost mass through a mis-built
+// operator, which is worth having; it says nothing about resolution.
+// Convergence must be established by refining (M, nt) and comparing solves.
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 template <class Model>
 inline FPE_Result fpe_solve(const Model& m, const std::vector<double>& q0,
-                            double t0, double t_max, const FPE_Mesh& g, int nt) {
+                            double t0, double t_max, const FPE_Mesh& g, int nt,
+                            double tgrade = 1.0) {
   FPE_Result res;
   const int M = g.M;
-  const int n_steps = std::max(nt, 1);
-  const double dt = (t_max - t0) / n_steps;
+  const FPE_TimeSchedule sched = fpe_time_schedule(t_max - t0, nt, tgrade);
 
   std::vector<double> q = q0, rhs;
   FPE_Tri tri;
@@ -375,8 +446,9 @@ inline FPE_Result fpe_solve(const Model& m, const std::vector<double>& q0,
   // With a fixed boundary L(t), L'(t), D and the affine drift coefficients are
   // all constant, so the spatial operator never changes -- and since a Rannacher
   // half-step (c = step = dt/2) and a Crank-Nicolson full step (c = step/2 =
-  // dt/2) use the SAME c, the left-hand side matrix is constant for the entire
-  // march.  Build and factorise it once.
+  // dt/2) use the SAME c, the left-hand side matrix is constant for as long as
+  // dt is.  Factorise it once per BLOCK of the time schedule (once for the whole
+  // march on a uniform grid; log2(tgrade) times on a graded one).
   const bool stat = m.static_op();
 
   auto set_lhs = [&](double c, const FPE_Op& o) {
@@ -388,26 +460,42 @@ inline FPE_Result fpe_solve(const Model& m, const std::vector<double>& q0,
     tri.factor();
   };
 
+  int n_steps = 0;
+  for (size_t b = 0; b < sched.steps.size(); ++b) n_steps += sched.steps[b];
   const int n_rann = std::min(2, n_steps);   // full steps replaced by BE halves
   const int n_lev  = 1 + 2 * n_rann + (n_steps - n_rann);
   res.t.reserve(n_lev);
   res.pdf.reserve(n_lev);
   res.cdf.reserve(n_lev);
+  res.surv.reserve(n_lev);
 
   double t = t0;
   build_op(m, t, g, *op_old);
-  if (stat) set_lhs(0.5 * dt, *op_old);
 
   double mass = 0.0;
   for (int i = 0; i < M; ++i) mass += g.dx[i] * q[i];
 
-  const double cdf0 = 1.0 - mass;
+  // Clamp the reported cdf to [0,1] and keep it non-decreasing.  Once the
+  // sub-density has decayed to the far tail, sum(dx*q) is a sum of quantities at
+  // the 1e-17 level and 1 - mass is not reliably inside [0,1] nor monotone; a
+  // consumer forming log(1 - cdf) or diff(cdf) must not have to defend against
+  // that.  The RAW value is retained for the mismatch diagnostic so that
+  // clamping cannot hide an unstable march.
+  const double cdf0 = std::min(1.0, std::max(0.0, 1.0 - mass));
+  double cdf_prev = cdf0;
   double cdf_flux = cdf0;
+  double surv_prev = std::min(1.0, std::max(0.0, mass));
+  // The absorbing-face flux is a one-sided difference of two nearly equal cell
+  // values, so in the far tail it goes slightly NEGATIVE (measured -3e-16 where
+  // the true density is 1.5e-17).  log() of that is NaN, which would silently
+  // poison a likelihood; floor it at the source.
   double g_prev = flux_out(*op_old, q, g);
+  if (!(g_prev > 0.0)) g_prev = 0.0;
 
   res.t.push_back(t);
   res.pdf.push_back(g_prev);
   res.cdf.push_back(cdf0);
+  res.surv.push_back(surv_prev);
   res.flux_mass_mismatch = 0.0;
 
   // step_kind: true = backward Euler, false = Crank-Nicolson
@@ -430,25 +518,46 @@ inline FPE_Result fpe_solve(const Model& m, const std::vector<double>& q0,
 
     double s = 0.0;
     for (int i = 0; i < M; ++i) s += g.dx[i] * q[i];
-    const double cdf_mass = 1.0 - s;
+    const double cdf_raw = 1.0 - s;
+    double cdf_mass = std::min(1.0, std::max(0.0, cdf_raw));
+    if (cdf_mass < cdf_prev) cdf_mass = cdf_prev;
+    cdf_prev = cdf_mass;
 
-    const double gt = flux_out(*op_old, q, g);
+    // Survivor from the mass route directly, clamped and forced non-increasing.
+    // NOT 1 - cdf_mass: that would throw away exactly the relative accuracy this
+    // vector exists to preserve.
+    double s_keep = std::min(1.0, std::max(0.0, s));
+    if (s_keep > surv_prev) s_keep = surv_prev;
+    surv_prev = s_keep;
+
+    double gt = flux_out(*op_old, q, g);
+    if (!(gt > 0.0)) gt = 0.0;
     cdf_flux += 0.5 * step * (g_prev + gt);
     g_prev = gt;
 
     res.t.push_back(t);
     res.pdf.push_back(gt);
     res.cdf.push_back(cdf_mass);
+    res.surv.push_back(s_keep);
     res.flux_mass_mismatch =
-      std::max(res.flux_mass_mismatch, std::abs(cdf_mass - cdf_flux));
+      std::max(res.flux_mass_mismatch, std::abs(cdf_raw - cdf_flux));
   };
 
-  for (int k = 0; k < n_rann; ++k) {         // Rannacher start
-    do_step(0.5 * dt, true);
-    do_step(0.5 * dt, true);
-  }
-  for (int k = n_rann; k < n_steps; ++k) {   // Crank-Nicolson
-    do_step(dt, false);
+  int done = 0;
+  for (size_t b = 0; b < sched.dt.size(); ++b) {
+    const double dtb = sched.dt[b];
+    // One factorisation per block: a Rannacher half-step (c = step = dt/2) and a
+    // CN full step (c = step/2 = dt/2) share the same c, so the whole block runs
+    // off a single elimination.
+    if (stat) set_lhs(0.5 * dtb, *op_old);
+    for (int k = 0; k < sched.steps[b]; ++k, ++done) {
+      if (done < n_rann) {
+        do_step(0.5 * dtb, true);
+        do_step(0.5 * dtb, true);
+      } else {
+        do_step(dtb, false);
+      }
+    }
   }
 
   return res;
@@ -457,11 +566,21 @@ inline FPE_Result fpe_solve(const Model& m, const std::vector<double>& q0,
 // Linear interpolation of a solution grid onto requested times.  Mirrors the
 // role of rd_lookup_grid_value() in utils_reducible_diffusion.h:2146, restated
 // here so this TU does not have to include the Volterra headers.
+// `zero_below_grid` matters for the PDF.  A point start seeds the march at a
+// short t_seed > 0 (fpe_seed), so the grid does not reach back to t = 0, and the
+// default clamp would hand back the flux AT t_seed for every earlier time --
+// i.e. a positive constant where the true density is ~0.  The CDF wants the
+// clamp (cdf.front() is the mass genuinely absorbed before t_seed); the PDF does
+// not.  t_seed is ~1 ms at M = 256, so this is a small correction, but it is
+// the difference between a density that rises from zero and one that does not.
 inline double grid_lookup(const std::vector<double>& tg,
-                          const std::vector<double>& vg, double t) {
+                          const std::vector<double>& vg, double t,
+                          bool zero_below_grid = false) {
   const int n = static_cast<int>(tg.size());
   if (n == 0) return 0.0;
-  if (t <= tg.front()) return vg.front();
+  if (t <= tg.front()) {
+    return (zero_below_grid && t < tg.front()) ? 0.0 : vg.front();
+  }
   if (t >= tg.back())  return vg.back();
   const int j = static_cast<int>(
     std::lower_bound(tg.begin(), tg.end(), t) - tg.begin());

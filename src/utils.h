@@ -5,8 +5,10 @@
 #include "exgaussian_functions.h"
 #include <vector>
 #include <string>
+#include <memory>
 #include <unordered_map>
 #include "col_registry.h"
+#include "fpe_race.h"
 #include "utility_functions.h"
 #include "model_RDM.h"
 #include "model_LBA.h"
@@ -130,6 +132,14 @@ struct ContextForRaceModels {
     int time_code = -2;
     int nogo_code = -2;
 
+    // PDE-backed race models (ROU) amortise one Fokker-Planck march over every
+    // row that shares a parameter tuple, and over the scalar CDF calls the
+    // censoring path makes at the truncation/censoring bounds.  Held by shared
+    // pointer because the adapter is copied around, and allocated only by the
+    // models that need it -- every analytic model leaves this null and pays
+    // nothing.  Cleared once per particle; see fperace::SolveCache.
+    std::shared_ptr<fperace::SolveCache> fpe_cache;
+
     bool has_global_kill() const {
       return is_global_kill && kill_active;
     }
@@ -169,6 +179,11 @@ inline double raw_log_value(double log_x, double min_ll, bool floor_raw) {
   if (!R_FINITE(log_x)) return raw_log_zero(min_ll, floor_raw);
   return floor_raw ? ((log_x > min_ll) ? log_x : min_ll) : log_x;
 }
+
+// Included here, not at the top: the ROU kernels need ContextForRaceModels and
+// the raw_log_* helpers above.  (The cache TYPE they store in the context comes
+// from fpe_race.h, which has no such dependency and is included at the top.)
+#include "model_ROU.h"
 
 struct TimedLambdaDispatch {
   double lambda_g;

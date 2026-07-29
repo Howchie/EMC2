@@ -514,7 +514,33 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
 
   if (out.ctx.is_global_kill) out.ctx.defective_upper_tail = true;
 
-  if (type_std.find("RDMSWTN") != std::string::npos) {
+  if (type_std.find("ROU") != std::string::npos) {
+    // Ordered FIRST deliberately.  Dispatch here is by substring, so a key that
+    // is a substring of a later one must be tested first; "ROU" collides with
+    // nothing today, and testing it first is what keeps a future addition from
+    // silently capturing it.
+    out.pdf1_ptr       = &drou_scalar;
+    out.cdf1_ptr       = &prou_scalar;
+    out.model_dfun_raw = &drou_raw;
+    out.model_pfun_raw = &prou_raw;
+    out.logS_at_t_ptr  = &rou_logS_at_t;
+    out.col_spec       = emc2col::rou::spec();
+    out.ctx.t0_index   = emc2col::rou::t0;
+    // A leaky accumulator with v/k below threshold has a genuine never-finish
+    // probability, so the upper tail is defective even with posdrift.
+    out.ctx.defective_upper_tail = true;
+    out.ctx.fpe_cache = std::make_shared<fperace::SolveCache>();
+    rou_configure_grid(out.ctx.fpe_cache->grid);
+    // Collapsing-bound variants, selected by ROU(boundary_collapse=).  The
+    // suffix carries the FORM only; the shape parameters are ordinary optional
+    // columns (Binf/tau/pw) that the design system estimates like any other.
+    if (type_std.find("ROU_BWEIB") != std::string::npos)
+      out.ctx.fpe_cache->bnd_kind = fpe::FPE_BND_WEIBULL;
+    else if (type_std.find("ROU_BEXP") != std::string::npos)
+      out.ctx.fpe_cache->bnd_kind = fpe::FPE_BND_EXPONENTIAL;
+    else if (type_std.find("ROU_BLIN") != std::string::npos)
+      out.ctx.fpe_cache->bnd_kind = fpe::FPE_BND_LINEAR;
+  } else if (type_std.find("RDMSWTN") != std::string::npos) {
     // Must be checked before "RDM" since "RDMSWTN" contains "RDM"
     out.pdf1_ptr       = &drdmswtn_scalar;
     out.cdf1_ptr       = &prdmswtn_scalar;
@@ -4043,6 +4069,10 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
     for (int i = 0; i < n_particles; ++i) {
       is_ok = prepare_particle(i);
       is_ok = lr_all(is_ok, n_lR);
+      // PDE-backed models cache one solve per distinct parameter tuple; the
+      // tuples change with the particle, so drop them here.  Keys are exact, so
+      // this is about bounding memory, not about correctness.
+      if (adapter.ctx.fpe_cache) adapter.ctx.fpe_cache->new_particle();
       if (use_raw_fast_path) {
         // Fill per-particle isok buffer
         for (int j = 0; j < n_trials; ++j) isok_int_fp[j] = is_ok[j] ? 1 : 0;
@@ -4360,6 +4390,7 @@ NumericMatrix calc_ll_oo_pw(NumericMatrix particle_matrix, DataFrame data, Numer
     for (int i = 0; i < n_particles; ++i) {
       is_ok = pt.prepare(i);
       is_ok = lr_all(is_ok, n_lR);
+      if (adapter.ctx.fpe_cache) adapter.ctx.fpe_cache->new_particle();
       NumericVector row_vec(n_out_race);
       if (adapter.ctx.bawl_correlated) {
         c_log_likelihood_bawl_correlated(

@@ -45,41 +45,124 @@ namespace fpe {
 #endif
 
 // ---------------------------------------------------------------------------
-// Collapsing boundary.  Same Weibull-style decay as exp_decay_scalar()
-// (utils_reducible_diffusion.h:56), with the derivative in closed form.
+// Collapsing boundary -- a self-contained module.
+//
+// This is deliberately the ONLY place that knows the functional form of b(t).
+// It answers three questions and nothing else: what is the boundary at time t,
+// what is its derivative, and is it constant (which enables the one-time
+// factorisation in fpe_solve).  It knows no parameter NAMES: the model
+// definition owns the mapping from named parameters to (kind, b0, binf, p1, p2)
+// and does that mapping in its Ttransform.  Keeping it ignorant is what lets
+// the same module serve the solver and the simulator, and what lets a new
+// collapse form be added without touching either.
+//
+// FPE_BND_WEIBULL is the form the package already uses, matching
+// exp_decay_scalar() (utils_reducible_diffusion.h:56) bit for bit:
+//   b(t) = binf + (|b0| - |binf|) * exp(-(t/p1)^p2)
+// The other kinds are declared but not yet implemented; adding one is a case in
+// the two switches below and a p_types entry in the model definition.
 // ---------------------------------------------------------------------------
+enum FPE_BoundaryKind {
+  FPE_BND_FIXED = 0,
+  FPE_BND_WEIBULL = 1,       // b = binf + (b0-binf)*exp(-(t/p1)^p2)
+  FPE_BND_EXPONENTIAL = 2,   // b = binf + (b0-binf)*exp(-t/p1)
+  FPE_BND_LINEAR = 3         // b = binf + (b0-binf)*max(0, 1 - t/p1)
+};
+
 struct FPE_Boundary {
+  int kind = FPE_BND_FIXED;
   double b0 = 1.0, binf = 1.0, tau = 0.0, pw = 0.0;
   bool fixed = true;
   bool log_state = false;      // solve in Y = log X, so the barrier is log a(t)
 
-  void set(double b0_, double binf_, double tau_, double pow_, bool log_state_) {
+  // Generic entry point: (kind, b0, binf, p1, p2).  A form that degenerates to a
+  // constant reports fixed = true, so callers never have to special-case it.
+  void set_kind(int kind_, double b0_, double binf_, double p1, double p2,
+                bool log_state_) {
+    kind = kind_;
     b0 = std::abs(b0_);
     binf = std::abs(binf_);
-    tau = tau_;
-    pw = pow_;
-    fixed = (std::abs(binf - b0) <= FPE_EPS) || tau <= 0.0 || pw <= 0.0;
+    tau = p1;
+    pw = p2;
     log_state = log_state_;
+    switch (kind) {
+      case FPE_BND_WEIBULL:
+        fixed = (std::abs(binf - b0) <= FPE_EPS) || tau <= 0.0 || pw <= 0.0;
+        break;
+      case FPE_BND_EXPONENTIAL:
+      case FPE_BND_LINEAR:
+        // Same degeneracy test minus the shape exponent, which these forms do
+        // not have.  Reporting fixed = true here is not a shortcut: it restores
+        // the one-time factorisation for a collapse that does not collapse, so
+        // a sampler that wanders to binf == b0 does not silently pay 3x.
+        fixed = (std::abs(binf - b0) <= FPE_EPS) || tau <= 0.0;
+        break;
+      case FPE_BND_FIXED:
+      default:
+        fixed = true;
+        binf = b0;
+        break;
+    }
   }
 
-  // physical boundary b(t) (before any log transform)
+  // Back-compatible Weibull entry point used by the validation exports.
+  void set(double b0_, double binf_, double tau_, double pow_, bool log_state_) {
+    set_kind(FPE_BND_WEIBULL, b0_, binf_, tau_, pow_, log_state_);
+  }
+
+  // physical boundary b(t) (before any log transform).  Called once per TIME
+  // STEP, not per cell, so the switch costs nothing.
   double b(double t) const {
     if (fixed) return b0;
-    const double amp = b0 - binf;
-    if (!(t > 0.0)) return b0;
-    const double s = std::exp(pw * (std::log(t) - std::log(tau)));
-    return binf + amp * std::exp(-s);
+    switch (kind) {
+      case FPE_BND_WEIBULL: {
+        const double amp = b0 - binf;
+        if (!(t > 0.0)) return b0;
+        const double s = std::exp(pw * (std::log(t) - std::log(tau)));
+        return binf + amp * std::exp(-s);
+      }
+      case FPE_BND_EXPONENTIAL: {
+        if (!(t > 0.0)) return b0;
+        return binf + (b0 - binf) * std::exp(-t / tau);
+      }
+      case FPE_BND_LINEAR: {
+        if (!(t > 0.0)) return b0;
+        // Held at binf past t = tau rather than continuing down through it.  A
+        // boundary that keeps falling would cross the start-point range and
+        // then the lower domain face, which is not a model, it is a bug.
+        const double f = 1.0 - t / tau;
+        return binf + (b0 - binf) * ((f > 0.0) ? f : 0.0);
+      }
+      default:
+        return b0;
+    }
   }
 
-  // db/dt = -amp * (p/t) * s * exp(-s),  s = (t/tau)^p
+  // db/dt.  Weibull: -amp * (p/t) * s * exp(-s),  s = (t/tau)^p
   double b_prime(double t) const {
     if (fixed) return 0.0;
-    const double amp = b0 - binf;
-    const double tt = std::max(t, 1e-9);
-    const double s = std::exp(pw * (std::log(tt) - std::log(tau)));
-    if (!std::isfinite(s)) return 0.0;
-    const double d = -amp * (pw / tt) * s * std::exp(-s);
-    return std::isfinite(d) ? d : 0.0;
+    switch (kind) {
+      case FPE_BND_WEIBULL: {
+        const double amp = b0 - binf;
+        const double tt = std::max(t, 1e-9);
+        const double s = std::exp(pw * (std::log(tt) - std::log(tau)));
+        if (!std::isfinite(s)) return 0.0;
+        const double d = -amp * (pw / tt) * s * std::exp(-s);
+        return std::isfinite(d) ? d : 0.0;
+      }
+      case FPE_BND_EXPONENTIAL: {
+        if (!(t > 0.0)) return -(b0 - binf) / tau;
+        const double d = -(b0 - binf) / tau * std::exp(-t / tau);
+        return std::isfinite(d) ? d : 0.0;
+      }
+      case FPE_BND_LINEAR:
+        // Kinked at t = tau.  CN is second order on each smooth piece and the
+        // kink costs at most one step's worth of order there, which is well
+        // inside the discretisation error the graded schedule already carries.
+        return (t < tau) ? -(b0 - binf) / tau : 0.0;
+      default:
+        return 0.0;
+    }
   }
 
   double a(double t) const {
@@ -119,21 +202,38 @@ struct FPE_ModelBM {
 // ---------------------------------------------------------------------------
 // Mean-reverting model: OU directly, Gompertz after Y = log X.
 // ---------------------------------------------------------------------------
+// Parameterised as dX = (v - lambda X) dt + sigma dW, i.e. INPUT and LEAK, not
+// (lambda, theta).  These are the same process wherever both are defined --
+// v = lambda*theta -- but v is regular at lambda = 0 and theta is not.  At
+// lambda = 0 the drift is simply the constant v and the coefficients below
+// become FPE_ModelBM's exactly, so the Brownian race is a genuine member of this
+// model rather than a dispatch branch to some other kernel.  That is what keeps
+// the k = 0 comparison against the analytic Wald an honest cross-validation.
 struct FPE_ModelOU {
-  double lambda = 1.0, theta = 0.0, sigma = 1.0;
+  double v = 0.0;              // input rate; theta = v / lambda where defined
+  double lambda = 1.0;         // leak
+  double sigma = 1.0;
   double xlo = -1.0;
   FPE_Boundary bnd;
 
+  // Convenience for callers that think in (lambda, theta) -- the validation
+  // entry points and the Gompertz reduction.
+  void set_lambda_theta(double lambda_, double theta_) {
+    lambda = lambda_;
+    v = lambda_ * theta_;
+  }
+  double theta() const { return (lambda > FPE_EPS) ? v / lambda : 0.0; }
+
   double x_lo() const { return xlo; }
   double B() const { return sigma; }
-  double drift(double x, double /*t*/) const { return -lambda * (x - theta); }
+  double drift(double x, double /*t*/) const { return v - lambda * x; }
   double length(double t) const { return bnd.a(t) - xlo; }
   double length_prime(double t) const { return bnd.a_prime(t); }
   bool static_op() const { return bnd.fixed; }
 
-  // Atil(xi,t) = ( -lambda*(x_lo + xi*L - theta) - xi*L'(t) ) / L(t)
+  // Atil(xi,t) = ( v - lambda*(x_lo + xi*L) - xi*L'(t) ) / L(t)
   void atil_affine(double /*t*/, double L, double Lp, double& a0, double& a1) const {
-    a0 = -lambda * (xlo - theta) / L;
+    a0 = (v - lambda * xlo) / L;
     a1 = (-lambda * L - Lp) / L;
   }
 };
@@ -159,14 +259,19 @@ inline double fpe_x_lo_bm(double z_min, double A, double sigma, double t_max) {
   return z_min + std::min(0.0, A * t_max) - FPE_NSD * sigma * std::sqrt(t_max);
 }
 
-inline double fpe_x_lo_ou(double z_min, double lambda, double theta,
+// (v, lambda) form, so that lambda = 0 is a regular point: the OU mean travels
+// monotonically from z_min toward theta = v/lambda, so the lowest mean ever
+// attained is min(z_min, theta) -- and as lambda -> 0 that limit is the BM
+// expression min(z_min, z_min + v*t_max), which is what the second branch is.
+inline double fpe_x_lo_ou(double z_min, double v, double lambda,
                           double sigma, double t_max) {
   const double var = (lambda > FPE_EPS)
     ? (1.0 - std::exp(-2.0 * lambda * t_max)) / (2.0 * lambda)
     : t_max;
-  // the OU mean travels monotonically from z_min toward theta, so the lowest
-  // mean ever attained is min(z_min, theta)
-  return std::min(z_min, theta) - FPE_NSD * sigma * std::sqrt(var);
+  const double lo_mean = (lambda > FPE_EPS)
+    ? std::min(z_min, v / lambda)
+    : z_min + std::min(0.0, v * t_max);
+  return lo_mean - FPE_NSD * sigma * std::sqrt(var);
 }
 
 // Number of mesh cells the seeding Gaussian's sd should span.  Smaller => the
@@ -289,15 +394,22 @@ inline double fpe_seed(const Model& m, double z_lo, double z_hi,
 // sweep in the implementation log; 1.0 recovers the uniform mesh.
 constexpr double FPE_GRADE = 8.0;
 
+// Default time grading.  1.0 (uniform) is kept for the validation entry points
+// in fpe_diffusion.cpp, whose value lies in being directly comparable to the
+// Volterra solver and the closed forms; a likelihood caller, which sets t_max
+// from the largest RT in a data set and therefore has a large dt to spend,
+// should pass FPE_TGRADE.  See FPE_TimeSchedule for the measurements.
+constexpr double FPE_TGRADE = 32.0;
+
 template <class Model>
 inline FPE_Result fpe_run(const Model& m, double z_lo, double z_hi,
                           double t_max, int M, int nt,
-                          double grade = FPE_GRADE) {
+                          double grade = FPE_GRADE, double tgrade = 1.0) {
   FPE_Mesh g;
   g.build(M, grade);
   std::vector<double> q0;
   const double t0 = fpe_seed(m, z_lo, z_hi, g, t_max, q0);
-  return fpe_solve(m, q0, t0, t_max, g, std::max(1, nt));
+  return fpe_solve(m, q0, t0, t_max, g, std::max(1, nt), tgrade);
 }
 
 } // namespace fpe
