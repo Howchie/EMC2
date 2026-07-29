@@ -381,3 +381,83 @@ empirical cdf and manufactures a spurious 4% bias against the solvers. Divide by
   model, so the Peclet numbers form an arithmetic sequence).
 * Steps 4 (items 4/5/6: collapsing bounds, start-point variability, GBM/Gompertz),
   5 (bake-off) and 6 (testthat) still to do.
+
+## 2026-07-29 (cont.) — ladder items 4/5/6 complete; solver optimised 1.75x
+
+**Perf.** `build_op` called `expm1` twice per face inside the innermost loop and
+that was the dominant cost of the entire solve. Removed by two observations:
+
+1. `Bern(-z) = Bern(z) + z`, so the upwind and downwind face weights cost one
+   transcendental between them, not two.
+2. `Atil` is **affine in xi for every supported model**, so the face Peclet
+   numbers `P_j` are an arithmetic sequence and `exp(P_j)` follows by one
+   multiply per face. Models now expose `atil_affine(t, L, Lp, a0, a1)`; `drift()`
+   survives only for seeding. Guarded by `|dP|*M < 20`, falling back to `expm1`.
+
+Plus: swap the operator pointers instead of copying, and stop re-zeroing
+`FPE_Op` every step (every entry is overwritten anyway). Results are unchanged to
+the last printed digit. OU, 200 RTs, `max_t = 2`:
+
+| | before | after |
+|---|---|---|
+| `nx=256, nt=512`  | 3.30 ms | **1.90 ms** |
+| `nx=512, nt=1024` | 13.30 ms | **7.55 ms** |
+
+**The uniform-start bug (items 4/5/6).** Ladder 6 failed at 1.6e-2 (GBM) and
+2.3e-1 (Gompertz) while 4 and 5 passed. The size ordering was the clue: the start
+point is Uniform in the **physical** state, so in the log-state solver coordinate
+its density is `e^y/(Zhi - Zlo)`, not uniform. GBM's start range is 1 -> 1.5 (a
+1.5x density tilt, nearly invisible); Gompertz's is 1e-3 -> 0.5 (a 500x tilt,
+catastrophic). `fpe_seed` now takes the cell mass in the physical variable, which
+is exact for both. Also switched the point-start seed from midpoint sampling to
+exact cell masses (`fpe_norm_mass`, erfc branched on sign).
+
+**Ladder results** (`.Rtmp/fpe_validate.R`, N = 4e5, MC se ~7.9e-4):
+
+| item | max abs cdf error |
+|---|---|
+| 4. BM collapsing 1 -> 0.5 | 4.8e-4 |
+| 4. OU collapsing 1 -> 0.5 | 9.4e-4 |
+| 5. BM start-point var z0=0.5 | 1.6e-3 |
+| 5. OU start-point var z0=0.5 | 1.3e-3 |
+| 6. GBM | 1.5e-3 |
+| 6. Gompertz | 1.1e-3 |
+
+All within ~2 MC se. Ladder items 1-9 are now **all passing**.
+
+**Item 3, arbitrated.** FPE and Volterra disagree by 0.33% at the OU pdf peak
+(`lambda=2, theta=2, b0=1`): FPE is self-converged to 1e-4 across `nx` 256 -> 1024,
+Volterra is not. MC confirms the *cdf* for both to 8e-4 but cannot resolve a
+localised 0.3% pdf error. This is Volterra's known mid-RT artefact; **FPE is the
+better of the two here**, so the planned BNR/Smith third oracle is not needed.
+
+MC gotcha (cost an hour): `simulate_*_hit_times_bb` returns `NA` for paths that
+never hit within `t_max`. Dividing by the count of *finite* hits renormalises the
+empirical cdf and manufactures a spurious 4% bias against the solvers. Divide by `n`.
+
+**Two dead ends, recorded so they are not retried.**
+
+* *Higher-order absorbing face.* Replacing the 2nd-order one-sided flux with the
+  3rd-order 4-point stencil `D*(3.75 q[M-1] - (5/6) q[M-2] + 0.15 q[M-3])/h` made
+  the pdf **worse** at every resolution (4.8e-3 -> 6.5e-3 at `nx=256`). `q` itself
+  is only 2nd-order, so differentiating it harder amplifies solution error. The
+  face stencil is not the bottleneck.
+* *Seed width.* Sweeping `FPE_SEED_CELLS` over 1.0/1.5/2.0/3.0/4.0 moved the pdf
+  error only 4.0e-3 -> 4.8e-3. The seed is not the bottleneck either. Left at 4.0.
+
+So the residual error is simply the scheme's global `O(h^2 + dt^2)`, spread
+uniformly over `t`. It shows up as a large *relative* error only in the early tail
+(`t = 0.05`, where the density is ~1e-3 of peak). **The one remaining lever with
+real headroom is a graded mesh** clustered near the absorbing barrier: the uniform
+mesh currently spends ~8/9 of its cells in the far field. That is the next thing
+to try if the accuracy ceiling below is not good enough.
+
+**Accuracy/cost summary** (BM `mu=1, sigma=1, b0=1`, mid-RT relative error):
+
+| setting | mid-RT rel | wall (200 RTs) |
+|---|---|---|
+| `nx=256, nt=512`  | 2.7e-4 | 1.9 ms |
+| `nx=512, nt=1024` | 7.0e-5 | 7.6 ms |
+
+**Next:** Step 5 bake-off vs the Volterra chunked path, then Step 6
+`tests/testthat/test-fpe-fht.R`.

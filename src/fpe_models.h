@@ -106,6 +106,12 @@ struct FPE_ModelBM {
   double drift(double /*x*/, double /*t*/) const { return A; }
   double length(double t) const { return bnd.a(t) - xlo; }
   double length_prime(double t) const { return bnd.a_prime(t); }
+
+  // Atil(xi,t) = ( A - xi*L'(t) ) / L(t)
+  void atil_affine(double /*t*/, double L, double Lp, double& a0, double& a1) const {
+    a0 = A / L;
+    a1 = -Lp / L;
+  }
 };
 
 // ---------------------------------------------------------------------------
@@ -121,6 +127,12 @@ struct FPE_ModelOU {
   double drift(double x, double /*t*/) const { return -lambda * (x - theta); }
   double length(double t) const { return bnd.a(t) - xlo; }
   double length_prime(double t) const { return bnd.a_prime(t); }
+
+  // Atil(xi,t) = ( -lambda*(x_lo + xi*L - theta) - xi*L'(t) ) / L(t)
+  void atil_affine(double /*t*/, double L, double Lp, double& a0, double& a1) const {
+    a0 = -lambda * (xlo - theta) / L;
+    a1 = (-lambda * L - Lp) / L;
+  }
 };
 
 // ---------------------------------------------------------------------------
@@ -154,6 +166,20 @@ inline double fpe_x_lo_ou(double z_min, double lambda, double theta,
   return std::min(z_min, theta) - FPE_NSD * sigma * std::sqrt(var);
 }
 
+// Number of mesh cells the seeding Gaussian's sd should span.  Smaller => the
+// solver takes over sooner => less reliance on the frozen-coefficient formula.
+constexpr double FPE_SEED_CELLS = 4.0;
+
+// Normal probability of [a, b], branched on sign so the two erfc values are
+// never subtracted when both are near 1.
+inline double fpe_norm_mass(double a, double b, double mean, double sd) {
+  const double za = (a - mean) / (sd * M_SQRT2);
+  const double zb = (b - mean) / (sd * M_SQRT2);
+  if (za >= 0.0)      return 0.5 * (std::erfc(za) - std::erfc(zb));   // both above
+  else if (zb <= 0.0) return 0.5 * (std::erfc(-zb) - std::erfc(-za)); // both below
+  return 1.0 - 0.5 * std::erfc(zb) - 0.5 * std::erfc(-za);            // straddling
+}
+
 // ---------------------------------------------------------------------------
 // Initial condition, uniform start on [z_lo, z_hi] (z_lo == z_hi => point).
 //
@@ -180,13 +206,24 @@ inline double fpe_seed(const Model& m, double z_lo, double z_hi, int M,
 
   if (z_hi - z_lo > FPE_EPS) {
     // ---- uniform start ----
+    // The start point is Uniform in the PHYSICAL state, so for the geometric
+    // models (which solve in Y = log X) it is NOT uniform in the solver
+    // coordinate -- its density there is e^y/(Zhi - Zlo).  Getting this wrong is
+    // invisible over a narrow range and catastrophic over a wide one: it cost
+    // 1.6e-2 on GBM (start 1 -> 1.5) and 2.3e-1 on Gompertz (start 1e-3 -> 0.5).
+    // Taking the cell mass in the physical variable handles both exactly.
     const double L = m.length(0.0);
-    const double dens = 1.0 / (z_hi - z_lo);           // per unit x
+    const bool ls = m.bnd.log_state;
+    const double Zlo = ls ? std::exp(z_lo) : z_lo;
+    const double Zhi = ls ? std::exp(z_hi) : z_hi;
+    const double span = Zhi - Zlo;
     for (int i = 0; i < M; ++i) {
       const double xa = m.x_lo() + (i * h) * L;
       const double xb = m.x_lo() + ((i + 1) * h) * L;
-      const double ov = std::min(xb, z_hi) - std::max(xa, z_lo);
-      if (ov > 0.0) q[i] = dens * (ov / (xb - xa)) * L;  // cell-average, times L
+      const double Xa = ls ? std::exp(xa) : xa;
+      const double Xb = ls ? std::exp(xb) : xb;
+      const double ov = std::min(Xb, Zhi) - std::max(Xa, Zlo);
+      if (ov > 0.0) q[i] = (ov / span) / h;   // cell mass / h, since q = L*p
     }
     return 0.0;
   }
@@ -197,8 +234,14 @@ inline double fpe_seed(const Model& m, double z_lo, double z_hi, int M,
   const double Bc = m.B();
   const double Ac = m.drift(z, 0.0);
 
-  // resolve the Gaussian by ~4 cells, and keep it clear of the barrier
-  double s_target = 4.0 * h * L0;
+  // Resolve the Gaussian by FPE_SEED_CELLS cells, and keep it clear of the
+  // barrier.  t_seed wants to be as SMALL as possible -- everything before it is
+  // answered by the frozen-coefficient approximation rather than by the solver,
+  // and that is where the error lives (rel. error at t = 0.05 was 17% when
+  // t_seed = 0.022).  Exact cell-average seeding below is what buys the licence
+  // to shrink it: with midpoint sampling a 2-cell-wide Gaussian is badly
+  // mis-integrated, with cell masses it is not.
+  double s_target = FPE_SEED_CELLS * h * L0;
   const double gap = m.bnd.a(0.0) - z;
   if (gap > 0.0) s_target = std::min(s_target, 0.25 * gap);
   double t_seed = (s_target / Bc) * (s_target / Bc);
@@ -207,20 +250,20 @@ inline double fpe_seed(const Model& m, double z_lo, double z_hi, int M,
 
   const double L = m.length(t_seed);
   const double a = m.bnd.a(t_seed);
-  const double var = Bc * Bc * t_seed;
+  const double sd = Bc * std::sqrt(t_seed);
   const double mean = z + Ac * t_seed;
   const double img_mean = 2.0 * a - z + Ac * t_seed;
   double img_w = std::exp(2.0 * Ac * (a - z) / (Bc * Bc));
   if (!std::isfinite(img_w)) img_w = 0.0;
 
-  const double inv = 1.0 / std::sqrt(2.0 * M_PI * var);
+  // q_i = (cell mass) / h, since q = L*p and the cell width is h*L.
   for (int i = 0; i < M; ++i) {
-    const double x = m.x_lo() + (i + 0.5) * h * L;
-    const double d1 = x - mean, d2 = x - img_mean;
-    double p = inv * (std::exp(-0.5 * d1 * d1 / var)
-                      - img_w * std::exp(-0.5 * d2 * d2 / var));
-    if (!(p > 0.0)) p = 0.0;
-    q[i] = p * L;
+    const double xa = m.x_lo() + (i * h) * L;
+    const double xb = m.x_lo() + ((i + 1) * h) * L;
+    double mass = fpe_norm_mass(xa, xb, mean, sd)
+                  - img_w * fpe_norm_mass(xa, xb, img_mean, sd);
+    if (!(mass > 0.0)) mass = 0.0;
+    q[i] = mass / h;
   }
   return t_seed;
 }
