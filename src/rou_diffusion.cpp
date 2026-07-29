@@ -78,10 +78,16 @@ Rcpp::List rou_pdf_cdf_vec(NumericVector rt, NumericVector v, NumericVector k,
   NumericVector pdf(n, 0.0), cdf(n, 0.0);
   fperace::SolveCache C;
   C.grid = rou_grid(nx, dt_target, grade, tgrade);
+  SEXP sparse = Rf_GetOption1(Rf_install("emc2.rou_sparse_output"));
+  if (sparse != R_NilValue && Rf_length(sparse) > 0) {
+    const int enabled = Rf_asLogical(sparse);
+    if (enabled != NA_LOGICAL) C.sparse_raw_output = enabled;
+  }
 
   // Pass 1: group and find each group's horizon.
   std::vector<fperace::Key> keys;
   std::vector<double> horizon;
+  std::vector<std::vector<double>> query_times;
   std::vector<int> grp(n, -1);
   for (int i = 0; i < n; ++i) {
     const double tt = rt[i] - t0[i];
@@ -96,18 +102,27 @@ Rcpp::List rou_pdf_cdf_vec(NumericVector rt, NumericVector v, NumericVector k,
     if (g < 0) {
       keys.push_back(p);
       horizon.push_back(tt);
+      query_times.push_back(std::vector<double>(1, tt));
       g = static_cast<int>(keys.size()) - 1;
-    } else if (tt > horizon[g]) {
-      horizon[g] = tt;
+    } else {
+      if (tt > horizon[g]) horizon[g] = tt;
+      query_times[g].push_back(tt);
     }
     grp[i] = g;
   }
 
-  // Pass 2: solve.
-  std::vector<int> idx(keys.size(), -1);
-  for (size_t j = 0; j < keys.size(); ++j) {
-    idx[j] = fperace::cache_get(C, keys[j], horizon[j]);
+  for (auto& times : query_times) {
+    std::sort(times.begin(), times.end());
+    times.erase(std::unique(times.begin(), times.end()), times.end());
   }
+
+  // Pass 2: solve.  This public vector path can contain several distinct
+  // parameter tuples just like the likelihood path, so use the same SIMD
+  // cache fill rather than solving each tuple serially.
+  std::vector<int> idx;
+  fperace::cache_get_batch(
+      C, keys, horizon, idx,
+      C.sparse_raw_output ? &query_times : nullptr);
 
   // Pass 3: interpolate.
   for (int i = 0; i < n; ++i) {
@@ -209,6 +224,16 @@ Rcpp::List rrou_cpp(NumericMatrix pars, CharacterVector lR_levels, LogicalVector
                     SEXP kind_sexp = R_NilValue, double dt = 1e-3, double t_max = 30.0) {
   const int n_acc = lR_levels.size();
   const int n_rows = pars.nrow();
+  if (n_acc <= 0 || n_rows % n_acc != 0) {
+    stop("rrou_cpp: parameter rows must form complete accumulator blocks.");
+  }
+  if (ok.size() != n_rows) {
+    stop("rrou_cpp: length(ok) must equal nrow(pars).");
+  }
+  if (!(dt > 0.0) || !R_finite(dt) ||
+      !(t_max > 0.0) || !R_finite(t_max)) {
+    stop("rrou_cpp: dt and t_max must be finite and positive.");
+  }
   const int n_trials = n_rows / n_acc;
 
   // Map parameter column indices
@@ -245,14 +270,18 @@ Rcpp::List rrou_cpp(NumericMatrix pars, CharacterVector lR_levels, LogicalVector
 
   Rcpp::RNGScope scope;
 
+  // Trial scratch has a fixed accumulator width.  Reuse it rather than paying
+  // for ten small heap allocations on every simulated trial.
+  std::vector<double> X(n_acc), b(n_acc), v_acc(n_acc), k_acc(n_acc);
+  std::vector<double> t0_acc(n_acc), phi(n_acc), drift_gain(n_acc), sd(n_acc);
+  std::vector<double> inv_2var_bb(n_acc);
+  std::vector<fpe::FPE_Boundary> bnd(n_acc);
+  std::vector<unsigned char> active(n_acc, 0);
+
   for (int j = 0; j < n_trials; ++j) {
     double win_rt = R_PosInf;
     int winner = -1;
-
-    std::vector<double> X(n_acc), b(n_acc), v_acc(n_acc), k_acc(n_acc), s_acc(n_acc);
-    std::vector<double> t0_acc(n_acc), phi(n_acc), drift_gain(n_acc), sd(n_acc), inv_2var_bb(n_acc);
-    std::vector<fpe::FPE_Boundary> bnd(n_acc);
-    std::vector<bool> active(n_acc, false);
+    std::fill(active.begin(), active.end(), 0);
 
     double min_t0 = R_PosInf;
 
@@ -266,7 +295,11 @@ Rcpp::List rrou_cpp(NumericMatrix pars, CharacterVector lR_levels, LogicalVector
 
       double kk = (ik >= 0 && R_finite(pars(r, ik)) && pars(r, ik) > 0.0) ? pars(r, ik) : 0.0;
       double AA = (iA >= 0 && R_finite(pars(r, iA)) && pars(r, iA) > 0.0) ? pars(r, iA) : 0.0;
-      double ss = (is_ >= 0 && R_finite(pars(r, is_)) && pars(r, is_) > 0.0) ? pars(r, is_) : 1.0;
+      double ss = 1.0;
+      if (is_ >= 0) {
+        ss = pars(r, is_);
+        if (!R_finite(ss) || !(ss > 0.0)) continue;
+      }
       double tt0 = R_finite(pars(r, it0)) ? pars(r, it0) : 0.0;
 
       double Binf_val = (iBinf >= 0) ? pars(r, iBinf) : 0.5;
@@ -284,7 +317,6 @@ Rcpp::List rrou_cpp(NumericMatrix pars, CharacterVector lR_levels, LogicalVector
       t0_acc[a] = tt0;
       v_acc[a] = vv;
       k_acc[a] = kk;
-      s_acc[a] = ss;
 
       if (tt0 < min_t0) min_t0 = tt0;
 
@@ -296,7 +328,7 @@ Rcpp::List rrou_cpp(NumericMatrix pars, CharacterVector lR_levels, LogicalVector
         continue;
       }
 
-      active[a] = true;
+      active[a] = 1;
       phi[a] = std::exp(-kk * dt);
       double m1 = -std::expm1(-kk * dt);
       double m2 = -std::expm1(-2.0 * kk * dt);
@@ -314,7 +346,7 @@ Rcpp::List rrou_cpp(NumericMatrix pars, CharacterVector lR_levels, LogicalVector
       for (int a = 0; a < n_acc; ++a) {
         if (!active[a]) continue;
         if (t + t0_acc[a] >= win_rt) {
-          active[a] = false;
+          active[a] = 0;
           continue;
         }
         any_active = true;
@@ -329,7 +361,7 @@ Rcpp::List rrou_cpp(NumericMatrix pars, CharacterVector lR_levels, LogicalVector
             win_rt = hit_t;
             winner = a + 1;
           }
-          active[a] = false;
+          active[a] = 0;
           continue;
         }
         double pc = std::exp(-(b[a] - X[a]) * (b1 - X1) * inv_2var_bb[a]);
@@ -339,7 +371,7 @@ Rcpp::List rrou_cpp(NumericMatrix pars, CharacterVector lR_levels, LogicalVector
             win_rt = hit_t;
             winner = a + 1;
           }
-          active[a] = false;
+          active[a] = 0;
           continue;
         }
         X[a] = X1;
@@ -357,5 +389,3 @@ Rcpp::List rrou_cpp(NumericMatrix pars, CharacterVector lR_levels, LogicalVector
 
   return Rcpp::List::create(Rcpp::Named("R") = R_out, Rcpp::Named("rt") = rt_out);
 }
-
-

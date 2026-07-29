@@ -58,6 +58,19 @@ namespace rgamma {
   }
 }
 
+// R/model_LNR.R — PCOUNTER (Poisson counter race).  Ratcliff & Smith (2004,
+// Appendix, Eq. A10a/A10b): counter i accrues unit counts as a Poisson process
+// with rate alpha until it reaches criterion K, so its first-passage time is
+// Erlang(K, alpha) shifted by t0.  Same kernel positions as rgamma
+// (rate, shape, shift) under counter-model names.
+namespace pcounter {
+  enum : int { alpha = 0, K, t0, N_REQ };
+  inline ColSpec spec() {
+    static const char* n[] = {"alpha", "K", "t0"};
+    return {n, N_REQ, "PCOUNTER"};
+  }
+}
+
 // R/model_LNR.R — REXG
 namespace rexg {
   enum : int { mu = 0, sigma, tau, N_REQ };

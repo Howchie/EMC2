@@ -119,6 +119,12 @@ struct ContextForRaceModels {
     bool bawl_k_fixed_zero = false;
     bool bawl_clocks_fixed_off = false;
 
+    // Poisson counter: the response criterion K is a count, so the Erlang
+    // shape is only meaningful at integers.  When true the kernels snap the
+    // sampled K up to the next integer (floored at 1); when false K is left
+    // continuous, giving the fractional-counter generalisation.
+    bool pcounter_integer_K = false;
+
     // Correlated BAwL uses one shared standard-normal factor.  The low-level
     // row rho determines the accumulator's signed factor variance share;
     // BAwLcorr's R Ttransform maps a cell-level correlation into these row
@@ -711,6 +717,130 @@ inline void rgamma_logS_at_t(double t, const double* const* cols,
       const double cdf = R::pgamma(tt, shape_[r], 1.0 / lambda_[r], true, false);
       if (cdf >= 1.0 - EMC2_CDF_SAT_MARGIN) {
         const double log_surv = R::pgamma(tt, shape_[r], 1.0 / lambda_[r], false, true);
+        if (!R_FINITE(log_surv)) { bad = true; break; }
+        logS += log_surv;
+        continue;
+      }
+      if (cdf > 0.0) logS += std::log1p(-cdf);
+    }
+    logS_out[j] = bad ? R_NegInf : logS;
+  }
+}
+
+// PCOUNTER: column layout alpha=0, K=1, t0=2.  The finish-time density of a
+// counter that needs K Poisson counts arriving at rate alpha is Erlang(K,
+// alpha), so these kernels are the rgamma kernels under counter names, plus
+// the optional integer snap on K.  Keeping them separate from rgamma keeps the
+// snap off the RGAMMA hot path and lets validate_col_prefix name the counter
+// columns in error messages.
+// Nearest integer, not ceiling: the snap makes the likelihood flat across the
+// whole interval of K that maps to one count, so rounding centres each
+// interval on the criterion it represents and leaves the raw K unbiased.
+// floor(K + 0.5) rather than std::round so this matches R's .pcounter_K()
+// exactly on half-way values.
+inline double pcounter_shape(double K, void* ctx_) {
+  const auto* ctx = static_cast<const ContextForRaceModels*>(ctx_);
+  if (ctx == nullptr || !ctx->pcounter_integer_K) return K;
+  const double k = std::floor(K + 0.5);
+  return k < 1.0 ? 1.0 : k;
+}
+
+inline double dpcounter_scalar(double t, const double* par, void* ctx_) {
+  if (R_IsNA(par[0]) || R_IsNA(par[1]) || R_IsNA(par[2])) return 0.0;
+  if (par[0] <= 0.0 || par[1] <= 0.0) return 0.0;
+  const double tt = t - par[2];
+  if (tt <= 0.0) return 0.0;
+  return R::dgamma(tt, pcounter_shape(par[1], ctx_), 1.0 / par[0], false);
+}
+
+inline double ppcounter_scalar(double t, const double* par, void* ctx_) {
+  if (R_IsNA(par[0]) || R_IsNA(par[1]) || R_IsNA(par[2])) return 0.0;
+  if (par[0] <= 0.0 || par[1] <= 0.0) return 0.0;
+  const double tt = t - par[2];
+  if (tt <= 0.0) return 0.0;
+  return R::pgamma(tt, pcounter_shape(par[1], ctx_), 1.0 / par[0], true, false);
+}
+
+inline void dpcounter_raw(const double* rt, const double* const* cols, int n_rows,
+                          const int* mask, const int* isok,
+                          double* out, double min_ll, void* ctx_) {
+  const bool floor_raw = raw_floor_log_lik(ctx_);
+  const double* alpha_ = cols[emc2col::pcounter::alpha];
+  const double* K_     = cols[emc2col::pcounter::K];
+  const double* t0_    = cols[emc2col::pcounter::t0];
+  for (int i = 0; i < n_rows; ++i) {
+    if (!mask[i]) continue;
+    if (R_IsNA(alpha_[i]) || R_IsNA(K_[i]) || R_IsNA(t0_[i]) ||
+        !isok[i] || alpha_[i] <= 0.0 || K_[i] <= 0.0) {
+      out[i] = raw_log_zero(min_ll, floor_raw);
+      continue;
+    }
+    const double tt = rt[i] - t0_[i];
+    if (tt <= 0.0) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
+    const double shape = pcounter_shape(K_[i], ctx_);
+    // Natural fast path; on under/overflow use the direct log density.
+    const double pdf = R::dgamma(tt, shape, 1.0 / alpha_[i], false);
+    if (pdf > 0.0 && emc2_isfinite(pdf)) {
+      out[i] = raw_log_value(std::log(pdf), min_ll, floor_raw);
+    } else {
+      out[i] = raw_log_value(R::dgamma(tt, shape, 1.0 / alpha_[i], true),
+                             min_ll, floor_raw);
+    }
+  }
+}
+
+inline void ppcounter_raw(const double* rt, const double* const* cols, int n_rows,
+                          const int* mask, const int* isok,
+                          double* out, double min_ll, void* ctx_) {
+  const bool floor_raw = raw_floor_log_lik(ctx_);
+  const double* alpha_ = cols[emc2col::pcounter::alpha];
+  const double* K_     = cols[emc2col::pcounter::K];
+  const double* t0_    = cols[emc2col::pcounter::t0];
+  for (int i = 0; i < n_rows; ++i) {
+    if (!mask[i]) continue;
+    if (R_IsNA(alpha_[i]) || R_IsNA(K_[i]) || R_IsNA(t0_[i]) ||
+        !isok[i] || alpha_[i] <= 0.0 || K_[i] <= 0.0) {
+      out[i] = 0.0;
+      continue;
+    }
+    const double tt = rt[i] - t0_[i];
+    if (tt <= 0.0) { out[i] = 0.0; continue; }
+    const double shape = pcounter_shape(K_[i], ctx_);
+    const double cdf = R::pgamma(tt, shape, 1.0 / alpha_[i], true, false);
+    if (cdf >= 1.0 - EMC2_CDF_SAT_MARGIN) {
+      // Saturated lower tail: take the upper-tail log directly instead of
+      // reconstructing it from 1 - cdf.
+      const double log_surv = R::pgamma(tt, shape, 1.0 / alpha_[i], false, true);
+      out[i] = R_FINITE(log_surv) ? log_surv : raw_log_zero(min_ll, floor_raw);
+      continue;
+    }
+    out[i] = (cdf <= 0.0) ? 0.0 : std::log1p(-cdf);
+  }
+}
+
+inline void pcounter_logS_at_t(double t, const double* const* cols,
+                               int n_rows_total, int n_lR, int /*n_par*/,
+                               const int* trunc_mask, int n_unique_trials,
+                               const int* isok_all, void* ctx_, double* logS_out) {
+  (void)n_rows_total;
+  const double* alpha_ = cols[emc2col::pcounter::alpha];
+  const double* K_     = cols[emc2col::pcounter::K];
+  const double* t0_    = cols[emc2col::pcounter::t0];
+  for (int j = 0; j < n_unique_trials; ++j) {
+    if (!trunc_mask[j]) continue;
+    const int start = j * n_lR;
+    double logS = 0.0;
+    bool bad = false;
+    for (int k = 0; k < n_lR && !bad; ++k) {
+      const int r = start + k;
+      if (!isok_all[r] || R_IsNA(alpha_[r]) || R_IsNA(K_[r]) || R_IsNA(t0_[r]) ||
+          alpha_[r] <= 0.0 || K_[r] <= 0.0) { bad = true; break; }
+      const double tt = t - t0_[r];
+      if (tt <= 0.0) continue;
+      const double shape = pcounter_shape(K_[r], ctx_);
+      const double cdf = R::pgamma(tt, shape, 1.0 / alpha_[r], true, false);
+      if (cdf >= 1.0 - EMC2_CDF_SAT_MARGIN) {
+        const double log_surv = R::pgamma(tt, shape, 1.0 / alpha_[r], false, true);
         if (!R_FINITE(log_surv)) { bad = true; break; }
         logS += log_surv;
         continue;

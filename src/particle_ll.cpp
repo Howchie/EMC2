@@ -530,7 +530,7 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
     // probability, so the upper tail is defective even with posdrift.
     out.ctx.defective_upper_tail = true;
     out.ctx.fpe_cache = std::make_shared<fperace::SolveCache>();
-    rou_configure_grid(out.ctx.fpe_cache->grid);
+    rou_configure_cache(*out.ctx.fpe_cache);
     // Collapsing-bound variants, selected by ROU(boundary_collapse=).  The
     // suffix carries the FORM only; the shape parameters are ordinary optional
     // columns (Binf/tau/pw) that the design system estimates like any other.
@@ -633,6 +633,18 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
     out.logS_at_t_ptr = &lnr_logS_at_t;
     out.col_spec     = emc2col::lnr::spec();
     out.ctx.t0_index = emc2col::lnr::t0;
+  } else if (type_std.find("PCOUNTER") != std::string::npos) {
+    out.pdf1_ptr = &dpcounter_scalar;
+    out.cdf1_ptr = &ppcounter_scalar;
+    out.model_dfun_raw = &dpcounter_raw;
+    out.model_pfun_raw = &ppcounter_raw;
+    out.logS_at_t_ptr = &pcounter_logS_at_t;
+    out.col_spec     = emc2col::pcounter::spec();
+    out.ctx.t0_index = -1;
+    // PCOUNTER_INTK snaps the response criterion to an integer count; plain
+    // PCOUNTER leaves it continuous (fractional-counter generalisation).
+    out.ctx.pcounter_integer_K =
+      (type_std.find("INTK") != std::string::npos);
   } else if (type_std.find("RGAMMA") != std::string::npos) {
     out.pdf1_ptr = &drgamma_scalar;
     out.cdf1_ptr = &prgamma_scalar;
@@ -6378,6 +6390,7 @@ static double c_log_likelihood_logicalrules(
   // ParamTable columns are refilled in place for each particle, so no cache
   // entry may survive this likelihood call.
   shared.clear_particle_cache();
+  if (model_ctx->fpe_cache) model_ctx->fpe_cache->new_particle();
   if (n_par > 64) {
     Rcpp::stop("c_log_likelihood_logicalrules: at most 64 parameter columns are supported.");
   }

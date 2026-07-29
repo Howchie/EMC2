@@ -851,7 +851,13 @@ RDMSWTN <- function(erlang_shape = 1L, erlang_type = "none", posdrift = TRUE,
   if (correlated) {
     p_types <- c(p_types, rho = qnorm(0.5))
     transform <- c(transform, rho = "pnorm")
-    minmax <- cbind(minmax, rho = c(-.99, .99))
+    # Bounds are checked strictly by the compiled mapper.  The scaled-probit
+    # round trip used for the advertised +/- .99 safety limits can land
+    # exactly on an endpoint, which would otherwise reject those valid draws
+    # and create an artificial discontinuity at the edge of the rho domain.
+    rho_bound_eps <- 2 * .Machine$double.eps
+    minmax <- cbind(minmax,
+                    rho = c(-.99 - rho_bound_eps, .99 + rho_bound_eps))
     exception <- c(exception, rho = 0)
   }
   transform_spec <- list(func = transform)

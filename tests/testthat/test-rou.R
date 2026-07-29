@@ -89,6 +89,51 @@ test_that("one solve serves every row sharing a parameter tuple", {
   expect_identical(r2$n_solves, 3L)
 })
 
+test_that("batched fixed-boundary solves reproduce scalar solves", {
+  # Eight distinct tuples exercise one full AVX-512 batch when available and
+  # two four-lane batches otherwise. Mixed horizons and starts verify lane-local
+  # schedules rather than merely checking the equal-clock case.
+  rt <- c(0.05, 0.2, 0.4, 0.65, 0.9, 1.2, 1.55, 2)
+  v <- seq(1, 2.4, length.out = 8)
+  k <- seq(0.5, 1.9, length.out = 8)
+  A <- rep(c(0, 0.5), 4)
+  pars <- cbind(v = v, k = k, B = 1, A = A, t0 = 0, s = 1)
+
+  batched_pdf <- EMC2:::dROU(rt, pars)
+  batched_cdf <- EMC2:::pROU(rt, pars)
+  scalar_pdf <- vapply(seq_along(rt), function(i) {
+    EMC2:::dROU(rt[i], pars[i, , drop = FALSE])
+  }, numeric(1))
+  scalar_cdf <- vapply(seq_along(rt), function(i) {
+    EMC2:::pROU(rt[i], pars[i, , drop = FALSE])
+  }, numeric(1))
+
+  expect_equal(batched_pdf, scalar_pdf, tolerance = 1e-13)
+  expect_equal(batched_cdf, scalar_cdf, tolerance = 1e-13)
+})
+
+test_that("sparse finite-time output reproduces the full solver grid", {
+  rt <- c(0.07, 0.18, 0.31, 0.52, 0.78, 1.05, 1.42, 1.9)
+  pars <- cbind(
+    v = seq(1.0, 2.4, length.out = 8),
+    k = seq(0.4, 1.8, length.out = 8),
+    B = rep(c(0.9, 1.1), 4),
+    A = rep(c(0, 0.35), 4),
+    t0 = rep(c(0, 0.04), 4),
+    s = 1
+  )
+
+  withr::local_options(emc2.rou_sparse_output = FALSE)
+  full_pdf <- EMC2:::dROU(rt, pars)
+  full_cdf <- EMC2:::pROU(rt, pars)
+  options(emc2.rou_sparse_output = TRUE)
+  sparse_pdf <- EMC2:::dROU(rt, pars)
+  sparse_cdf <- EMC2:::pROU(rt, pars)
+
+  expect_equal(sparse_pdf, full_pdf, tolerance = 1e-13)
+  expect_equal(sparse_cdf, full_cdf, tolerance = 1e-13)
+})
+
 test_that(".rfun_ROU respects emc2.cpp_rfun option and falls back to R simulator", {
   lR <- factor(c("left", "right"))
   pars <- matrix(c(v = 1.5, k = 1, B = 1, A = 0.5, t0 = 0.2, s = 1,
@@ -108,6 +153,39 @@ test_that(".rfun_ROU respects emc2.cpp_rfun option and falls back to R simulator
   res_r <- EMC2:::.rfun_ROU(lR, pars, ok = rep(TRUE, 2))
   expect_s3_class(res_r, "data.frame")
   expect_named(res_r, c("R", "rt"))
+})
+
+test_that(".rfun_ROU applies timed winners on the C++ path", {
+  withr::local_options(emc2.cpp_rfun = TRUE)
+  lR <- factor(c("left", "time"), levels = c("left", "time"))
+  pars <- matrix(
+    c(0, 0, 100, 0, 0, 1,
+      0, 0,   0, 0, 0, 1),
+    nrow = 2, byrow = TRUE,
+    dimnames = list(NULL, c("v", "k", "B", "A", "t0", "s"))
+  )
+
+  out <- EMC2:::.rfun_ROU(lR, pars)
+  expect_identical(as.character(out$R), "left")
+  expect_identical(out$isTime, TRUE)
+  expect_identical(out$rt, 0)
+})
+
+test_that(".rfun_ROU forwards simulator resolution and horizon options", {
+  withr::local_options(list(
+    emc2.cpp_rfun = TRUE,
+    emc2.rou_sim_dt = 1e-5,
+    emc2.rou_sim_tmax = 1e-4
+  ))
+  lR <- factor("left")
+  pars <- matrix(
+    c(v = 1, k = 0, B = 0.01, A = 0, t0 = 0, s = 1e-12),
+    nrow = 1, dimnames = list(NULL, c("v", "k", "B", "A", "t0", "s"))
+  )
+
+  out <- EMC2:::.rfun_ROU(lR, pars)
+  expect_true(is.na(out$R))
+  expect_identical(out$rt, Inf)
 })
 
 
@@ -218,7 +296,11 @@ test_that("ROU handles censored and truncated designs", {
   dat$subjects <- droplevels(dat$subjects)
   # Censor the slowest responses: rt above the cut is known only to be above it.
   cut <- as.numeric(quantile(dat$rt, 0.9))
+  upper <- max(dat$rt) + 0.5
   dat$rt[dat$rt > cut] <- Inf
+  dat$LT <- 0.1
+  dat$UC <- cut
+  dat$UT <- upper
   ADmat <- matrix(c(-1 / 2, 1 / 2), ncol = 1, dimnames = list(NULL, "d"))
 
   mk <- function(model, form, consts) {
@@ -239,6 +321,12 @@ test_that("ROU handles censored and truncated designs", {
   l_rou <- rou_ll(fo, pv[names(sampled_pars(fo$des))])
   expect_true(is.finite(l_rdm) && is.finite(l_rou))
   expect_lt(abs(l_rou - l_rdm) / nrow(dat), 0.01)
+
+  withr::local_options(emc2.rou_sparse_output = FALSE)
+  full_grid <- rou_ll(fo, pv[names(sampled_pars(fo$des))])
+  options(emc2.rou_sparse_output = TRUE)
+  sparse <- rou_ll(fo, pv[names(sampled_pars(fo$des))])
+  expect_equal(sparse, full_grid, tolerance = 1e-12)
 })
 
 test_that("rROU simulates data the model can then fit back", {

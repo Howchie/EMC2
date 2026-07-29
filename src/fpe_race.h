@@ -34,12 +34,64 @@
 #include <cmath>
 #include <algorithm>
 #include <limits>
+#include <stdexcept>
 #if defined(__x86_64__) || defined(_M_X64) || defined(__AVX2__)
 #include <immintrin.h>
 #endif
 #include "fpe_models.h"
 
 namespace fperace {
+
+#if defined(__AVX512F__) && defined(__FMA__)
+constexpr size_t OU_BATCH_LANES = 8;
+template <size_t LANES> struct OUSimd;
+template <> struct OUSimd<8> {
+  using Vec = __m512d;
+  static inline Vec load(const double* p) { return _mm512_loadu_pd(p); }
+  static inline void store(double* p, Vec x) { _mm512_storeu_pd(p, x); }
+  static inline Vec set1(double x) { return _mm512_set1_pd(x); }
+  static inline Vec mul(Vec a, Vec b) { return _mm512_mul_pd(a, b); }
+  static inline Vec fmadd(Vec a, Vec b, Vec c) {
+    return _mm512_fmadd_pd(a, b, c);
+  }
+  static inline Vec fnmadd(Vec a, Vec b, Vec c) {
+    return _mm512_fnmadd_pd(a, b, c);
+  }
+};
+template <> struct OUSimd<4> {
+  using Vec = __m256d;
+  static inline Vec load(const double* p) { return _mm256_loadu_pd(p); }
+  static inline void store(double* p, Vec x) { _mm256_storeu_pd(p, x); }
+  static inline Vec set1(double x) { return _mm256_set1_pd(x); }
+  static inline Vec mul(Vec a, Vec b) { return _mm256_mul_pd(a, b); }
+  static inline Vec fmadd(Vec a, Vec b, Vec c) {
+    return _mm256_fmadd_pd(a, b, c);
+  }
+  static inline Vec fnmadd(Vec a, Vec b, Vec c) {
+    return _mm256_fnmadd_pd(a, b, c);
+  }
+};
+#elif defined(__AVX2__) && defined(__FMA__)
+constexpr size_t OU_BATCH_LANES = 4;
+template <size_t LANES> struct OUSimd;
+template <> struct OUSimd<4> {
+  using Vec = __m256d;
+  static inline Vec load(const double* p) { return _mm256_loadu_pd(p); }
+  static inline void store(double* p, Vec x) { _mm256_storeu_pd(p, x); }
+  static inline Vec set1(double x) { return _mm256_set1_pd(x); }
+  static inline Vec mul(Vec a, Vec b) { return _mm256_mul_pd(a, b); }
+  static inline Vec fmadd(Vec a, Vec b, Vec c) {
+    return _mm256_fmadd_pd(a, b, c);
+  }
+  static inline Vec fnmadd(Vec a, Vec b, Vec c) {
+    return _mm256_fnmadd_pd(a, b, c);
+  }
+};
+#else
+// Keep cache chunking bounded on non-x86 and baseline x86 builds. The solver
+// below uses scalar loops in this configuration.
+constexpr size_t OU_BATCH_LANES = 4;
+#endif
 
 // Log of the smallest density/survivor worth representing.  Grids are stored in
 // LOG space and interpolated there, because both quantities are close to
@@ -226,6 +278,10 @@ struct Entry {
   double t_max = 0.0;
   std::vector<double> t, log_pdf, log_S;
   GridIndex grid_idx;
+  // Full entries contain every solver time point and may interpolate arbitrary
+  // scalar queries. Sparse entries contain exact answers only for the finite
+  // RTs requested by a raw batch.
+  bool complete_grid = true;
 };
 
 struct SolveCache {
@@ -235,9 +291,9 @@ struct SolveCache {
   // of the solve, and because every path that can reach a solve already holds
   // the cache.
   int bnd_kind = fpe::FPE_BND_FIXED;
+  bool sparse_raw_output = true;
   std::vector<Entry> e;
   std::vector<int> row_group;   // scratch: row -> index into e, or -1
-  int prepared_n_rows = -1;
 
   // Cleared once per particle.  Keys are exact, so a stale entry could never be
   // returned for the wrong parameters; the clear exists to bound memory, since
@@ -245,7 +301,6 @@ struct SolveCache {
   void new_particle() {
     e.clear();
     row_group.clear();
-    prepared_n_rows = -1;
   }
 };
 
@@ -275,6 +330,7 @@ inline void rou_solve(const Key& p, double t_max, const FPE_Grid& gr, Entry& out
   const size_t n = r.t.size();
   out.key = p;
   out.t_max = t_max;
+  out.complete_grid = true;
   out.t = r.t;
   out.log_pdf.resize(n);
   out.log_S.resize(n);
@@ -291,10 +347,14 @@ inline int cache_get(SolveCache& C, const Key& p, double t_need) {
   if (!(t_need > 0.0)) t_need = 1e-3;
   for (size_t i = 0; i < C.e.size(); ++i) {
     if (!(C.e[i].key == p)) continue;
-    if (C.e[i].t_max >= t_need) return static_cast<int>(i);
+    if (C.e[i].complete_grid && C.e[i].t_max >= t_need)
+      return static_cast<int>(i);
     // Extend in place.  dt is pinned by FPE_Grid, so the values on the shared
-    // part of the horizon move only at the discretisation-error level.
-    rou_solve(p, t_need, C.grid, C.e[i]);
+    // part of the horizon move only at the discretisation-error level. Sparse
+    // raw-batch entries also come through here: arbitrary scalar censoring or
+    // truncation queries require the normal full interpolation grid.
+    const double solve_to = std::max(t_need, C.e[i].t_max);
+    rou_solve(p, solve_to, C.grid, C.e[i]);
     return static_cast<int>(i);
   }
   C.e.push_back(Entry());
@@ -309,7 +369,8 @@ inline int cache_get(SolveCache& C, const Key& p, double t_need) {
 // executes 4 independent SIMD lanes concurrently, filling the 12-cycle latency
 // shadow of CPU execution ports.
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-inline std::vector<fpe::FPE_Result> fpe_solve_batch_ou(
+[[deprecated("common-clock batching does not preserve scalar OU schedules")]]
+inline std::vector<fpe::FPE_Result> fpe_solve_batch_ou_common_clock(
     const std::vector<fpe::FPE_ModelOU>& models,
     const std::vector<std::vector<double>>& q0_vec,
     const std::vector<double>& t0_vec,
@@ -403,7 +464,7 @@ inline std::vector<fpe::FPE_Result> fpe_solve_batch_ou(
         if (backward_euler) {
           for (int l = 0; l < 4; ++l) RHS[i * 4 + l] = Q[i * 4 + l];
         } else {
-#if defined(__AVX2__)
+#if defined(__AVX2__) && defined(__FMA__)
           __m256d q_c = _mm256_loadu_pd(&Q[i * 4]);
           __m256d op_d = _mm256_loadu_pd(&OP_DIAG[i * 4]);
           __m256d vc = _mm256_fmadd_pd(_mm256_set1_pd(c), _mm256_mul_pd(op_d, q_c), q_c);
@@ -434,7 +495,7 @@ inline std::vector<fpe::FPE_Result> fpe_solve_batch_ou(
         Q[0 * 4 + l] = RHS[0 * 4 + l] * DINV[0 * 4 + l];
       }
       for (int i = 1; i < M; ++i) {
-#if defined(__AVX2__)
+#if defined(__AVX2__) && defined(__FMA__)
         __m256d r = _mm256_loadu_pd(&RHS[i * 4]);
         __m256d s = _mm256_loadu_pd(&SUB[i * 4]);
         __m256d q_prev = _mm256_loadu_pd(&Q[(i - 1) * 4]);
@@ -450,7 +511,7 @@ inline std::vector<fpe::FPE_Result> fpe_solve_batch_ou(
 
       // 3. Back substitution
       for (int i = M - 2; i >= 0; --i) {
-#if defined(__AVX2__)
+#if defined(__AVX2__) && defined(__FMA__)
         __m256d q_next = _mm256_loadu_pd(&Q[(i + 1) * 4]);
         __m256d cp = _mm256_loadu_pd(&CPRIME[i * 4]);
         __m256d q_curr = _mm256_loadu_pd(&Q[i * 4]);
@@ -495,10 +556,432 @@ inline std::vector<fpe::FPE_Result> fpe_solve_batch_ou(
   return results;
 }
 
-// Batched cache lookup: solves missing keys in 4-lane SIMD batches
+struct OUQueryResult {
+  std::vector<double> t, log_pdf, log_S;
+};
+
+inline double interp_log_pair(double w, double value_lo, double value_hi) {
+  const double lo = safe_log(value_lo);
+  const double hi = safe_log(value_hi);
+  if (lo <= LOG_FLOOR) return hi;
+  if (hi <= LOG_FLOOR) return lo;
+  return lo + w * (hi - lo);
+}
+
+// Each lane follows the same schedule fpe_solve() would have built for that
+// key, including a point-start seed time and its exact terminal horizon.
+// Independent Thomas recurrences remain interleaved, but their time-step
+// coefficients are allowed to differ. AVX-512 builds process eight lanes;
+// AVX2 builds process four, and other builds use the same four-lane layout with
+// scalar inner loops. When query_times is supplied, the march is unchanged but
+// only old-path log-interpolated answers at those times are retained.
+template <size_t LANES, bool SPARSE = false>
+inline std::vector<fpe::FPE_Result> fpe_solve_batch_ou_lanes(
+    const std::vector<fpe::FPE_ModelOU>& models,
+    const std::vector<std::vector<double>>& q0_vec,
+    const std::vector<double>& t0_vec,
+    const std::vector<double>& t_max_vec,
+    const std::vector<int>& nt_vec,
+    const fpe::FPE_Mesh& g, double tgrade = 1.0,
+    const std::vector<std::vector<double>>* query_times = nullptr,
+    std::vector<OUQueryResult>* query_results = nullptr) {
+  const size_t num_models = models.size();
+  std::vector<fpe::FPE_Result> results(num_models);
+  if constexpr (SPARSE)
+    query_results->assign(num_models, OUQueryResult());
+  if (num_models == 0) return results;
+
+  struct Action {
+    double step;
+    double lhs_c;
+    double rhs_c;
+  };
+  struct QueryBracket {
+    double pdf_lo = 0.0, pdf_hi = 0.0;
+    double survivor_lo = 1.0, survivor_hi = 1.0;
+    double w = 0.0;
+    // 0 = below seed, 1 = interpolate, 2 = terminal endpoint.
+    int mode = 0;
+  };
+
+  const int M = g.M;
+  std::vector<std::vector<Action>> actions(LANES);
+  size_t max_actions = 0;
+
+  const size_t storage_size = static_cast<size_t>(M) * LANES;
+  std::vector<double> Q(storage_size, 0.0);
+  std::vector<double> RHS(storage_size, 0.0);
+  std::vector<double> SUB(storage_size, 0.0);
+  std::vector<double> DINV(storage_size, 1.0);
+  std::vector<double> CPRIME(storage_size, 0.0);
+  std::vector<double> OP_DIAG(storage_size, 0.0);
+  std::vector<double> OP_SUB(storage_size, 0.0);
+  std::vector<double> OP_SUP(storage_size, 0.0);
+  alignas(64) double op_D[LANES] = {};
+  alignas(64) double survivor_prev[LANES] = {};
+  alignas(64) double lane_pdf[LANES] = {};
+  alignas(64) double lane_time[LANES] = {};
+  size_t query_pos[LANES] = {};
+  std::vector<std::vector<QueryBracket>> query_brackets;
+  if constexpr (SPARSE) query_brackets.resize(num_models);
+
+  for (size_t l = 0; l < LANES; ++l) {
+    const size_t src = (l < num_models) ? l : (num_models - 1);
+    fpe::FPE_Op op;
+    fpe::build_op(models[src], 0.0, g, op);
+    op_D[l] = op.D;
+    for (int i = 0; i < M; ++i) {
+      const size_t o = static_cast<size_t>(i) * LANES + l;
+      Q[o] = q0_vec[src][i];
+      OP_DIAG[o] = op.diag[i];
+      OP_SUB[o] = op.sub[i];
+      OP_SUP[o] = op.sup[i];
+    }
+
+    double mass = 0.0;
+    for (int i = 0; i < M; ++i) mass += g.dx[i] * q0_vec[src][i];
+    survivor_prev[l] = std::min(1.0, std::max(0.0, mass));
+    lane_time[l] = (l < num_models) ? t0_vec[l] : 0.0;
+
+    if (l >= num_models) continue;
+    double g0 = fpe::flux_out(op, q0_vec[src], g);
+    if (!(g0 > 0.0)) g0 = 0.0;
+    lane_pdf[l] = g0;
+    if constexpr (SPARSE) {
+      const std::vector<double>& qt = (*query_times)[l];
+      query_brackets[l].resize(qt.size());
+      while (query_pos[l] < qt.size() && qt[query_pos[l]] <= t0_vec[l]) {
+        QueryBracket& bracket = query_brackets[l][query_pos[l]];
+        bracket.survivor_lo = survivor_prev[l];
+        bracket.survivor_hi = survivor_prev[l];
+        bracket.mode = 0;
+        ++query_pos[l];
+      }
+    } else {
+      results[l].t.push_back(t0_vec[l]);
+      results[l].pdf.push_back(g0);
+      results[l].surv.push_back(survivor_prev[l]);
+    }
+
+    const double span = std::max(t_max_vec[l] - t0_vec[l], 1e-12);
+    const int nt = (l < nt_vec.size()) ? nt_vec[l] : 1;
+    const fpe::FPE_TimeSchedule schedule =
+        fpe::fpe_time_schedule(span, nt, tgrade);
+    int n_steps = 0;
+    for (size_t b = 0; b < schedule.steps.size(); ++b)
+      n_steps += schedule.steps[b];
+    const int n_rann = std::min(2, n_steps);
+    actions[l].reserve(static_cast<size_t>(n_steps + n_rann));
+    int done = 0;
+    for (size_t b = 0; b < schedule.dt.size(); ++b) {
+      const double dtb = schedule.dt[b];
+      for (int k = 0; k < schedule.steps[b]; ++k, ++done) {
+        if (done < n_rann) {
+          actions[l].push_back({0.5 * dtb, 0.5 * dtb, 0.0});
+          actions[l].push_back({0.5 * dtb, 0.5 * dtb, 0.0});
+        } else {
+          actions[l].push_back({dtb, 0.5 * dtb, 0.5 * dtb});
+        }
+      }
+    }
+    if constexpr (!SPARSE) {
+      results[l].t.reserve(actions[l].size() + 1);
+      results[l].pdf.reserve(actions[l].size() + 1);
+      results[l].surv.reserve(actions[l].size() + 1);
+    }
+    max_actions = std::max(max_actions, actions[l].size());
+  }
+
+  auto set_identity_factor = [&](int lane) {
+    for (int i = 0; i < M; ++i) {
+      const size_t o = static_cast<size_t>(i) * LANES + lane;
+      SUB[o] = 0.0;
+      DINV[o] = 1.0;
+      CPRIME[o] = 0.0;
+    }
+  };
+  auto set_lane_factor = [&](int lane, double lhs_c) {
+    double cprime_prev = 0.0;
+    for (int i = 0; i < M; ++i) {
+      const size_t o = static_cast<size_t>(i) * LANES + lane;
+      const double sub = -lhs_c * OP_SUB[o];
+      const double dia = 1.0 - lhs_c * OP_DIAG[o];
+      const double sup = -lhs_c * OP_SUP[o];
+      double denom = dia - ((i > 0) ? sub * cprime_prev : 0.0);
+      if (denom == 0.0) denom = std::numeric_limits<double>::min();
+      const double dinv = 1.0 / denom;
+      SUB[o] = sub;
+      DINV[o] = dinv;
+      CPRIME[o] = (i + 1 < M) ? sup * dinv : 0.0;
+      cprime_prev = CPRIME[o];
+    }
+  };
+
+  alignas(64) double last_lhs[LANES] = {};
+  bool factor_live[LANES] = {};
+  for (size_t l = 0; l < LANES; ++l)
+    set_identity_factor(static_cast<int>(l));
+
+  for (size_t aidx = 0; aidx < max_actions; ++aidx) {
+    alignas(64) double rhs_c[LANES] = {};
+    bool active[LANES] = {};
+    for (size_t l = 0; l < LANES; ++l) {
+      active[l] = l < num_models &&
+                  aidx < actions[l].size();
+      if (active[l]) {
+        const Action& a = actions[l][aidx];
+        rhs_c[l] = a.rhs_c;
+        if (!factor_live[l] || last_lhs[l] != a.lhs_c) {
+          set_lane_factor(static_cast<int>(l), a.lhs_c);
+          last_lhs[l] = a.lhs_c;
+          factor_live[l] = true;
+        }
+      } else if (factor_live[l]) {
+        set_identity_factor(static_cast<int>(l));
+        factor_live[l] = false;
+      }
+    }
+
+    for (int i = 0; i < M; ++i) {
+#if (defined(__AVX512F__) || defined(__AVX2__)) && defined(__FMA__)
+      using Simd = OUSimd<LANES>;
+      using Vec = typename Simd::Vec;
+      const size_t o = static_cast<size_t>(i) * LANES;
+      const Vec c = Simd::load(rhs_c);
+      const Vec qc = Simd::load(&Q[o]);
+      const Vec od = Simd::load(&OP_DIAG[o]);
+      Vec value = Simd::fmadd(c, Simd::mul(od, qc), qc);
+      if (i > 0) {
+        const Vec qm = Simd::load(&Q[static_cast<size_t>(i - 1) * LANES]);
+        const Vec os = Simd::load(&OP_SUB[o]);
+        value = Simd::fmadd(c, Simd::mul(os, qm), value);
+      }
+      if (i + 1 < M) {
+        const Vec qp = Simd::load(&Q[static_cast<size_t>(i + 1) * LANES]);
+        const Vec os = Simd::load(&OP_SUP[o]);
+        value = Simd::fmadd(c, Simd::mul(os, qp), value);
+      }
+      Simd::store(&RHS[o], value);
+#else
+      for (size_t l = 0; l < LANES; ++l) {
+        const size_t o = static_cast<size_t>(i) * LANES + l;
+        double value = Q[o] + rhs_c[l] * OP_DIAG[o] * Q[o];
+        if (i > 0)
+          value += rhs_c[l] * OP_SUB[o] *
+                   Q[static_cast<size_t>(i - 1) * LANES + l];
+        if (i + 1 < M)
+          value += rhs_c[l] * OP_SUP[o] *
+                   Q[static_cast<size_t>(i + 1) * LANES + l];
+        RHS[o] = value;
+      }
+#endif
+    }
+
+    for (size_t l = 0; l < LANES; ++l)
+      Q[l] = RHS[l] * DINV[l];
+    for (int i = 1; i < M; ++i) {
+#if (defined(__AVX512F__) || defined(__AVX2__)) && defined(__FMA__)
+      using Simd = OUSimd<LANES>;
+      using Vec = typename Simd::Vec;
+      const size_t o = static_cast<size_t>(i) * LANES;
+      const Vec r = Simd::load(&RHS[o]);
+      const Vec s = Simd::load(&SUB[o]);
+      const Vec qp = Simd::load(&Q[static_cast<size_t>(i - 1) * LANES]);
+      const Vec d = Simd::load(&DINV[o]);
+      const Vec qc = Simd::mul(Simd::fnmadd(s, qp, r), d);
+      Simd::store(&Q[o], qc);
+#else
+      for (size_t l = 0; l < LANES; ++l) {
+        const size_t o = static_cast<size_t>(i) * LANES + l;
+        Q[o] = (RHS[o] - SUB[o] *
+                Q[static_cast<size_t>(i - 1) * LANES + l]) * DINV[o];
+      }
+#endif
+    }
+
+    alignas(64) double mass[LANES];
+#if (defined(__AVX512F__) || defined(__AVX2__)) && defined(__FMA__)
+    using Simd = OUSimd<LANES>;
+    using Vec = typename Simd::Vec;
+    Vec massv = Simd::mul(
+        Simd::set1(g.dx[M - 1]),
+        Simd::load(&Q[static_cast<size_t>(M - 1) * LANES]));
+    for (int i = M - 2; i >= 0; --i) {
+      const size_t o = static_cast<size_t>(i) * LANES;
+      const Vec qn = Simd::load(&Q[static_cast<size_t>(i + 1) * LANES]);
+      const Vec cp = Simd::load(&CPRIME[o]);
+      Vec qc = Simd::load(&Q[o]);
+      qc = Simd::fnmadd(cp, qn, qc);
+      Simd::store(&Q[o], qc);
+      massv = Simd::fmadd(Simd::set1(g.dx[i]), qc, massv);
+    }
+    Simd::store(mass, massv);
+#else
+    for (size_t l = 0; l < LANES; ++l)
+      mass[l] = g.dx[M - 1] *
+          Q[static_cast<size_t>(M - 1) * LANES + l];
+    for (int i = M - 2; i >= 0; --i) {
+      for (size_t l = 0; l < LANES; ++l) {
+        const size_t o = static_cast<size_t>(i) * LANES + l;
+        Q[o] -= CPRIME[o] *
+            Q[static_cast<size_t>(i + 1) * LANES + l];
+        mass[l] += g.dx[i] * Q[o];
+      }
+    }
+#endif
+
+    for (size_t l = 0; l < num_models; ++l) {
+      if (!active[l]) continue;
+      const double prev_time = lane_time[l];
+      const double prev_pdf = lane_pdf[l];
+      const double prev_survivor = survivor_prev[l];
+      const double current_time = prev_time + actions[l][aidx].step;
+      double s_keep = std::min(1.0, std::max(0.0, mass[l]));
+      if (s_keep > prev_survivor) s_keep = prev_survivor;
+      double gt = op_D[l] *
+          (g.cA * Q[static_cast<size_t>(M - 1) * LANES + l] -
+           g.cB * Q[static_cast<size_t>(M - 2) * LANES + l]);
+      if (!(gt > 0.0)) gt = 0.0;
+
+      if constexpr (SPARSE) {
+        const std::vector<double>& qt = (*query_times)[l];
+        const bool final_action = aidx + 1 == actions[l].size();
+        while (query_pos[l] < qt.size() &&
+               qt[query_pos[l]] <= current_time) {
+          const double tq = qt[query_pos[l]];
+          QueryBracket& bracket = query_brackets[l][query_pos[l]];
+          if (final_action && tq >= current_time) {
+            // interp_log() treats the final grid point as an endpoint rather
+            // than as the upper half of an interpolation interval.
+            bracket.pdf_hi = gt;
+            bracket.survivor_hi = s_keep;
+            bracket.mode = 2;
+          } else {
+            bracket.pdf_lo = prev_pdf;
+            bracket.pdf_hi = gt;
+            bracket.survivor_lo = prev_survivor;
+            bracket.survivor_hi = s_keep;
+            bracket.w = (tq - prev_time) / (current_time - prev_time);
+            bracket.mode = 1;
+          }
+          ++query_pos[l];
+        }
+        if (final_action) {
+          // Floating summation can leave the terminal grid point a few ulps
+          // below its requested horizon. The old lookup returns the endpoint
+          // for every such query, so do the same here.
+          while (query_pos[l] < qt.size()) {
+            QueryBracket& bracket = query_brackets[l][query_pos[l]];
+            bracket.pdf_hi = gt;
+            bracket.survivor_hi = s_keep;
+            bracket.mode = 2;
+            ++query_pos[l];
+          }
+        }
+      } else {
+        results[l].t.push_back(current_time);
+        results[l].pdf.push_back(gt);
+        results[l].surv.push_back(s_keep);
+      }
+      lane_time[l] = current_time;
+      lane_pdf[l] = gt;
+      survivor_prev[l] = s_keep;
+    }
+  }
+
+  if constexpr (SPARSE) {
+    for (size_t l = 0; l < num_models; ++l) {
+      const std::vector<double>& qt = (*query_times)[l];
+      OUQueryResult& qr = (*query_results)[l];
+      qr.t = qt;
+      qr.log_pdf.resize(qt.size());
+      qr.log_S.resize(qt.size());
+      for (size_t j = 0; j < qt.size(); ++j) {
+        const QueryBracket& bracket = query_brackets[l][j];
+        if (bracket.mode == 0) {
+          qr.log_pdf[j] = LOG_FLOOR;
+          qr.log_S[j] = safe_log(bracket.survivor_hi);
+        } else if (bracket.mode == 2) {
+          qr.log_pdf[j] = safe_log(bracket.pdf_hi);
+          qr.log_S[j] = safe_log(bracket.survivor_hi);
+        } else {
+          qr.log_pdf[j] = interp_log_pair(
+              bracket.w, bracket.pdf_lo, bracket.pdf_hi);
+          qr.log_S[j] = interp_log_pair(
+              bracket.w, bracket.survivor_lo, bracket.survivor_hi);
+        }
+      }
+    }
+  }
+
+  return results;
+}
+
+inline std::vector<fpe::FPE_Result> fpe_solve_batch_ou(
+    const std::vector<fpe::FPE_ModelOU>& models,
+    const std::vector<std::vector<double>>& q0_vec,
+    const std::vector<double>& t0_vec,
+    const std::vector<double>& t_max_vec,
+    const std::vector<int>& nt_vec,
+    const fpe::FPE_Mesh& g, double tgrade = 1.0) {
+#if defined(__AVX512F__) && defined(__FMA__)
+  if (models.size() <= 4) {
+    return fpe_solve_batch_ou_lanes<4, false>(
+        models, q0_vec, t0_vec, t_max_vec, nt_vec, g, tgrade);
+  }
+  return fpe_solve_batch_ou_lanes<8, false>(
+      models, q0_vec, t0_vec, t_max_vec, nt_vec, g, tgrade);
+#else
+  return fpe_solve_batch_ou_lanes<4, false>(
+      models, q0_vec, t0_vec, t_max_vec, nt_vec, g, tgrade);
+#endif
+}
+
+inline std::vector<OUQueryResult> fpe_solve_batch_ou_queries(
+    const std::vector<fpe::FPE_ModelOU>& models,
+    const std::vector<std::vector<double>>& q0_vec,
+    const std::vector<double>& t0_vec,
+    const std::vector<double>& t_max_vec,
+    const std::vector<int>& nt_vec,
+    const std::vector<std::vector<double>>& query_times,
+    const fpe::FPE_Mesh& g, double tgrade = 1.0) {
+  std::vector<OUQueryResult> result;
+#if defined(__AVX512F__) && defined(__FMA__)
+  if (models.size() <= 4) {
+    fpe_solve_batch_ou_lanes<4, true>(
+        models, q0_vec, t0_vec, t_max_vec, nt_vec, g, tgrade,
+        &query_times, &result);
+  } else {
+    fpe_solve_batch_ou_lanes<8, true>(
+        models, q0_vec, t0_vec, t_max_vec, nt_vec, g, tgrade,
+        &query_times, &result);
+  }
+#else
+  fpe_solve_batch_ou_lanes<4, true>(
+      models, q0_vec, t0_vec, t_max_vec, nt_vec, g, tgrade,
+      &query_times, &result);
+#endif
+  return result;
+}
+
+inline bool entry_has_queries(const Entry& entry,
+                              const std::vector<double>& query_times) {
+  if (entry.complete_grid) return true;
+  size_t j = 0;
+  for (double t : query_times) {
+    while (j < entry.t.size() && entry.t[j] < t) ++j;
+    if (j >= entry.t.size() || entry.t[j] != t) return false;
+  }
+  return true;
+}
+
+// Batched cache lookup: solves missing keys at the widest SIMD width available
+// to this build (eight lanes with AVX-512, four otherwise).
 inline void cache_get_batch(SolveCache& C, const std::vector<Key>& keys,
                             const std::vector<double>& horizons,
-                            std::vector<int>& out_cache_indices) {
+                            std::vector<int>& out_cache_indices,
+                            const std::vector<std::vector<double>>*
+                                query_times = nullptr) {
   const size_t num_keys = keys.size();
   out_cache_indices.assign(num_keys, -1);
   if (num_keys == 0) return;
@@ -511,7 +994,10 @@ inline void cache_get_batch(SolveCache& C, const std::vector<Key>& keys,
 
     int found = -1;
     for (size_t j = 0; j < C.e.size(); ++j) {
-      if (C.e[j].key == p && C.e[j].t_max >= t_need) {
+      if (C.e[j].key == p && C.e[j].t_max >= t_need &&
+          (C.e[j].complete_grid ||
+           (query_times != nullptr &&
+            entry_has_queries(C.e[j], (*query_times)[i])))) {
         found = static_cast<int>(j);
         break;
       }
@@ -525,16 +1011,30 @@ inline void cache_get_batch(SolveCache& C, const std::vector<Key>& keys,
 
   if (missing_keys.empty()) return;
 
-  // Process missing keys in 4-lane batches
-  for (size_t b = 0; b < missing_keys.size(); b += 4) {
-    size_t chunk_size = std::min(static_cast<size_t>(4), missing_keys.size() - b);
+  // Similar horizons finish after a similar number of lane-local actions, which
+  // minimises padded work after the shorter lanes have completed.
+  std::stable_sort(missing_keys.begin(), missing_keys.end(),
+                   [&](size_t a, size_t b) {
+                     return horizons[a] < horizons[b];
+                   });
+
+  // The normalised spatial mesh depends only on the configured grid, not on a
+  // key.  Build it once for the whole cache-fill rather than once per SIMD chunk.
+  fpe::FPE_Mesh mesh;
+  mesh.build(C.grid.nx, C.grid.grade);
+
+  for (size_t b = 0; b < missing_keys.size(); b += OU_BATCH_LANES) {
+    const size_t chunk_size =
+        std::min(OU_BATCH_LANES, missing_keys.size() - b);
     std::vector<fpe::FPE_ModelOU> models(chunk_size);
     std::vector<std::vector<double>> q0_vec(chunk_size);
     std::vector<double> t0_vec(chunk_size);
     std::vector<double> t_max_vec(chunk_size);
-
-    fpe::FPE_Mesh mesh;
-    mesh.build(C.grid.nx, C.grid.grade);
+    std::vector<int> nt_vec(chunk_size);
+    std::vector<std::vector<double>> chunk_queries;
+    if (query_times != nullptr) chunk_queries.resize(chunk_size);
+    size_t num_chunk_queries = 0;
+    size_t num_chunk_steps = 0;
 
     bool all_fixed = true;
     for (size_t l = 0; l < chunk_size; ++l) {
@@ -553,34 +1053,58 @@ inline void cache_get_batch(SolveCache& C, const std::vector<Key>& keys,
       double t0 = fpe::fpe_seed(models[l], 0.0, p.A, mesh, horizons[k_idx], q0_vec[l]);
       t0_vec[l] = t0;
       t_max_vec[l] = horizons[k_idx];
+      nt_vec[l] = C.grid.nt_for(horizons[k_idx]);
+      num_chunk_steps += static_cast<size_t>(nt_vec[l]);
+      if (query_times != nullptr) {
+        chunk_queries[l] = (*query_times)[k_idx];
+        num_chunk_queries += chunk_queries[l].size();
+      }
     }
 
     if (all_fixed && chunk_size > 1) {
-      double max_horiz = 0.0;
-      for (size_t l = 0; l < chunk_size; ++l) {
-        if (t_max_vec[l] > max_horiz) max_horiz = t_max_vec[l];
+      std::vector<fpe::FPE_Result> batch_res;
+      std::vector<OUQueryResult> query_res;
+      // Sparse bookkeeping is cheaper only while requested times are a small
+      // fraction of the march. Above this crossover, contiguous full-grid
+      // writes win despite retaining more output.
+      const bool use_sparse =
+          query_times != nullptr &&
+          num_chunk_queries * 8 <= num_chunk_steps;
+      if (use_sparse) {
+        query_res = fperace::fpe_solve_batch_ou_queries(
+            models, q0_vec, t0_vec, t_max_vec, nt_vec, chunk_queries,
+            mesh, C.grid.tgrade);
+      } else {
+        batch_res = fperace::fpe_solve_batch_ou(
+            models, q0_vec, t0_vec, t_max_vec, nt_vec, mesh,
+            C.grid.tgrade);
       }
-      int nt = C.grid.nt_for(max_horiz);
-      std::vector<fpe::FPE_Result> batch_res =
-          fperace::fpe_solve_batch_ou(models, q0_vec, t0_vec, t_max_vec, mesh, nt, C.grid.tgrade);
 
       for (size_t l = 0; l < chunk_size; ++l) {
         const size_t k_idx = missing_keys[b + l];
         const Key& p = keys[k_idx];
-        const fpe::FPE_Result& r = batch_res[l];
-        const size_t n = r.t.size();
 
         Entry entry;
         entry.key = p;
         entry.t_max = horizons[k_idx];
-        entry.t = r.t;
-        entry.log_pdf.resize(n);
-        entry.log_S.resize(n);
-        for (size_t j = 0; j < n; ++j) {
-          entry.log_pdf[j] = safe_log(r.pdf[j]);
-          entry.log_S[j] = safe_log(r.surv[j]);
+        if (use_sparse) {
+          entry.complete_grid = false;
+          entry.t = std::move(query_res[l].t);
+          entry.log_pdf = std::move(query_res[l].log_pdf);
+          entry.log_S = std::move(query_res[l].log_S);
+        } else {
+          const fpe::FPE_Result& r = batch_res[l];
+          const size_t n = r.t.size();
+          entry.complete_grid = true;
+          entry.t = r.t;
+          entry.log_pdf.resize(n);
+          entry.log_S.resize(n);
+          for (size_t j = 0; j < n; ++j) {
+            entry.log_pdf[j] = safe_log(r.pdf[j]);
+            entry.log_S[j] = safe_log(r.surv[j]);
+          }
+          entry.grid_idx.build(entry.t);
         }
-        entry.grid_idx.build(entry.t);
 
         int existing = -1;
         for (size_t j = 0; j < C.e.size(); ++j) {
@@ -629,11 +1153,21 @@ inline double interp_log(const Entry& en, double t, bool floor_below) {
   return lo + w * (hi - lo);
 }
 
+inline double sparse_entry_log(const Entry& en, double tt, bool density) {
+  const auto it = std::lower_bound(en.t.begin(), en.t.end(), tt);
+  if (it == en.t.end() || *it != tt)
+    throw std::runtime_error("ROU sparse cache queried at an unprepared time");
+  const size_t i = static_cast<size_t>(it - en.t.begin());
+  return density ? en.log_pdf[i] : en.log_S[i];
+}
+
 inline double entry_log_pdf(const Entry& en, double tt) {
-  return interp_log(en, tt, true);
+  return en.complete_grid ? interp_log(en, tt, true)
+                          : sparse_entry_log(en, tt, true);
 }
 inline double entry_log_S(const Entry& en, double tt) {
-  return interp_log(en, tt, false);
+  return en.complete_grid ? interp_log(en, tt, false)
+                          : sparse_entry_log(en, tt, false);
 }
 
 // ---------------------------------------------------------------------------

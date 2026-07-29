@@ -415,6 +415,23 @@ get_pars <- function(emc,selection= "mu", stage=get_last_stage(emc),thin=1,filte
   samples <- get_objects(type = type, sampler = emc, stage = stage,
                          selection = selection)
 
+  # True parameters arrive on the sampled scale, so when mapping is requested
+  # they must be injected BEFORE do_map(): that way they are mapped -- and any
+  # recalculated parameters derived -- exactly like the posterior draws.  The
+  # post-map injection below cannot work whenever mapping changes the number of
+  # parameters, which add_recalculated = TRUE always does.  Only iteration 1
+  # survives (see the final subset), so mapping the rest is harmless.
+  true_pars_premapped <- FALSE
+  if(!isFALSE(map) && !is.null(true_pars) && length(dim(samples[[1]])) > 2){
+    n_sampled <- nrow(samples[[1]])
+    is_vec <- is.vector(true_pars)
+    if((is_vec && length(true_pars) == n_sampled) ||
+       (!is_vec && !is.null(ncol(true_pars)) && ncol(true_pars) == n_sampled)){
+      samples <- samples[1]
+      samples[[1]][,,1] <- if(is_vec) true_pars else t(true_pars)
+      true_pars_premapped <- TRUE
+    }
+  }
   if(!isFALSE(map)){
     # First map them to subject level parameters
     samples <- lapply(samples, do_map, map =  map, by_subject = TRUE,
@@ -432,7 +449,7 @@ get_pars <- function(emc,selection= "mu", stage=get_last_stage(emc),thin=1,filte
     selection <- true_selection
   }
   if(flatten) remove_dup <- TRUE
-  if(!is.null(true_pars)){ # Kluge to make sure the right object dimensions/filtering is performed on simulated parameters
+  if(!is.null(true_pars) && !true_pars_premapped){ # Kluge to make sure the right object dimensions/filtering is performed on simulated parameters
     samples <- samples[1]
     if(length(dim(samples[[1]])) > 2){
       if(is.vector(true_pars)){

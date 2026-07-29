@@ -53,6 +53,15 @@ inline void rou_configure_grid(fperace::FPE_Grid& g) {
   g.nt_max = std::max(g.nt_max, static_cast<int>(std::ceil(10.0 / dt)));
 }
 
+inline void rou_configure_cache(fperace::SolveCache& cache) {
+  rou_configure_grid(cache.grid);
+  SEXP sparse = Rf_GetOption1(Rf_install("emc2.rou_sparse_output"));
+  if (sparse != R_NilValue && Rf_length(sparse) > 0) {
+    const int enabled = Rf_asLogical(sparse);
+    if (enabled != NA_LOGICAL) cache.sparse_raw_output = enabled;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Named parameters -> boundary form.  This is the ONLY place that knows the
 // mapping; fpe::FPE_Boundary knows no parameter names and fperace::BndSpec
@@ -85,7 +94,7 @@ inline fperace::SolveCache* rou_cache(void* ctx_) {
   if (ctx == nullptr) return nullptr;
   if (!ctx->fpe_cache) {
     ctx->fpe_cache = std::make_shared<fperace::SolveCache>();
-    rou_configure_grid(ctx->fpe_cache->grid);
+    rou_configure_cache(*ctx->fpe_cache);
   }
   return ctx->fpe_cache.get();
 }
@@ -102,8 +111,6 @@ inline fperace::SolveCache* rou_cache(void* ctx_) {
 inline void rou_prepare_rows(fperace::SolveCache& C, const double* rt,
                              const double* const* cols, int n_rows,
                              const int* isok) {
-  if (C.prepared_n_rows == n_rows) return;
-
   const double* v_  = cols[emc2col::rou::v];
   const double* k_  = cols[emc2col::rou::k];
   const double* B_  = cols[emc2col::rou::B];
@@ -116,6 +123,7 @@ inline void rou_prepare_rows(fperace::SolveCache& C, const double* rt,
   // Pass 1: collect distinct keys and the max horizon across ALL valid rows.
   std::vector<fperace::Key> keys;
   std::vector<double> horizon;
+  std::vector<std::vector<double>> query_times;
   std::vector<int> row_key_idx(n_rows, -1);
 
   for (int i = 0; i < n_rows; ++i) {
@@ -133,20 +141,30 @@ inline void rou_prepare_rows(fperace::SolveCache& C, const double* rt,
     if (g < 0) {
       keys.push_back(p);
       horizon.push_back(tt);
+      query_times.push_back(std::vector<double>(1, tt));
       g = static_cast<int>(keys.size()) - 1;
-    } else if (tt > horizon[g]) {
-      horizon[g] = tt;
+    } else {
+      if (tt > horizon[g]) horizon[g] = tt;
+      query_times[g].push_back(tt);
     }
     row_key_idx[i] = g;
   }
 
-  // Pass 2: solve keys in 4-lane SIMD batches to max required horizon.
+  for (auto& times : query_times) {
+    std::sort(times.begin(), times.end());
+    times.erase(std::unique(times.begin(), times.end()), times.end());
+  }
+
+  // Pass 2: solve keys in adaptive-width SIMD batches to max required horizon,
+  // retaining only the finite-time values used by the raw likelihood. Scalar
+  // censoring/truncation calls upgrade a sparse entry to a full grid on demand.
   std::vector<int> to_cache(keys.size(), -1);
-  fperace::cache_get_batch(C, keys, horizon, to_cache);
+  fperace::cache_get_batch(
+      C, keys, horizon, to_cache,
+      C.sparse_raw_output ? &query_times : nullptr);
   for (int i = 0; i < n_rows; ++i) {
     if (row_key_idx[i] >= 0) C.row_group[i] = to_cache[row_key_idx[i]];
   }
-  C.prepared_n_rows = n_rows;
 }
 
 // ---------------------------------------------------------------------------
