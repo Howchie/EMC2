@@ -421,7 +421,7 @@ inline const LegendreHalfRule& get_legendre_half_rule(int order) {
  parameter cut-off as in West (2004).
  Expected accuracy ~ 1e-6.
  */
-double norm_ucdf_2d_fast(double x1, double x2, double rho)
+inline double norm_ucdf_2d_fast(double x1, double x2, double rho)
 {
   const int drezner_order = 5;
   const LegendreHalfRule& drezner_rule = get_legendre_half_rule(drezner_order);
@@ -508,7 +508,7 @@ double norm_ucdf_2d_fast(double x1, double x2, double rho)
   }
 }
 
-double norm_cdf_2d_fast(double x1, double x2, double rho)
+inline double norm_cdf_2d_fast(double x1, double x2, double rho)
 {
   return norm_ucdf_2d_fast(-x1, -x2, rho);
 }
@@ -518,7 +518,7 @@ double norm_cdf_2d_fast(double x1, double x2, double rho)
  Communications in Statistics-Simulation and Computation (2021): 1-14. */
 constexpr const static double c1 = -1.0950081470333;
 constexpr const static double c2 = -0.75651138383854;
-double norm_cdf_2d_vfast(double x1, double x2, double rho)
+inline double norm_cdf_2d_vfast(double x1, double x2, double rho)
 {
   if (std::fabs(rho) <= std::numeric_limits<double>::epsilon()) {
     return gaussian_cdf(x1) * gaussian_cdf(x2);
@@ -614,7 +614,7 @@ double norm_cdf_2d_vfast(double x1, double x2, double rho)
 } 
 
 [[gnu::flatten]]
-double norm_ucdf_2d(double x1, double x2, double rho)
+inline double norm_ucdf_2d(double x1, double x2, double rho)
 {
   const int low_rho_order = 6;
   const int mid_rho_order = 12;
@@ -716,25 +716,16 @@ double norm_ucdf_2d(double x1, double x2, double rho)
   return out;
 }
 
-double norm_cdf_2d(double x1, double x2, double rho)
+inline double norm_cdf_2d(double x1, double x2, double rho)
 {
   return norm_ucdf_2d(-x1, -x2, rho);
 }
 
-// [[Rcpp::export]]
-double pbvn_tsay(double h, double k, double rho) {
-  return norm_cdf_2d_vfast(h, k, rho);
-}
-
-// [[Rcpp::export]]
-double pbvn_tvpack(double h, double k, double rho) {
-  return norm_cdf_2d(h, k, rho);
-}
-
-// [[Rcpp::export]]
-double pbvn_drezner(double h, double k, double rho) {
-  return norm_cdf_2d_fast(h, k, rho);
-}
-
+// The R-facing pbvn_* wrappers need external linkage so RcppExports.cpp can link
+// against them, so they are defined out-of-line in gaussian.cpp (same pattern as
+// wald_functions.cpp / cdf_fncs.cpp) rather than inline here.
+double pbvn_tsay(double h, double k, double rho);
+double pbvn_tvpack(double h, double k, double rho);
+double pbvn_drezner(double h, double k, double rho);
 
 #endif
