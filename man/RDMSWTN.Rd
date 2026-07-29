@@ -4,7 +4,12 @@
 \alias{RDMSWTN}
 \title{RDMSWTN Model}
 \usage{
-RDMSWTN(erlang_shape = 1L, erlang_type = "none", posdrift = TRUE)
+RDMSWTN(
+  erlang_shape = 1L,
+  erlang_type = "none",
+  posdrift = TRUE,
+  correlated = FALSE
+)
 }
 \arguments{
 \item{erlang_shape}{Integer \code{1} for exponential clocks, \code{2} for Erlang-2,
@@ -16,6 +21,9 @@ or \code{"mixed"} for the Erlang-1/Erlang-2 mixture.}
 \item{posdrift}{Logical. If \code{TRUE} (default), truncate the between-trial
 normal drift distribution below at zero; if \code{FALSE}, use untruncated
 drifts and allow intrinsic omissions.}
+
+\item{correlated}{Logical. If \code{TRUE}, add the Gaussian-copula parameter
+\code{rho} and use the correlated pair race likelihood and simulator.}
 }
 \value{
 A model list compatible with \code{\link[=design]{design()}}.
@@ -44,6 +52,7 @@ The model parameters are:\tabular{llllll}{
    \emph{mK} \tab log \tab [0, Inf] \tab log(1) \tab \emph{lambda_k} = \emph{q} / \emph{mK} \tab Mean of the optional kill clock. \cr
    \emph{omega} \tab probit \tab [0, 1] \tab qnorm(.5) \tab  \tab Erlang-1 mixture weight in mixed mode. \cr
    \emph{pContaminant} \tab probit \tab [0, 1] \tab qnorm(0) \tab  \tab Optional contamination probability handled by the data pipeline. \cr
+   \emph{rho} \tab scaled probit \tab [-1, 1] \tab qnorm(.5) \tab  \tab Gaussian-copula correlation between the two participating finishing times; only when \code{correlated = TRUE}. \cr
 }
 
 
@@ -72,4 +81,22 @@ constructs the latent accumulator factor \code{lR} from \code{R}, and the race
 likelihood combines one winning density with the survivor probabilities of
 all other accumulators. The optional \code{pContaminant} parameter is generic
 nuisance infrastructure and is not part of the SWTN distribution.
+
+With \code{correlated = TRUE}, exactly two active accumulator rows in a trial may
+have the same signed, nonzero natural-scale \code{rho}; every other row must have
+\code{rho = 0}. A binary race can therefore use \code{rho ~ 1}. In a race with two
+coupled accumulators and additional independent accumulators, use a
+participation factor, for example \code{rho ~ 0 + coupled}, and fix the
+opted-out coefficient to zero. Zero or one nonzero row is an ordinary
+independent RDMSWTN race.
+
+Correlation is applied to finishing-time ranks through a Gaussian copula,
+including when \code{sv > 0}; it is not a correlation of drift draws or the
+Pearson correlation of observed response times. For the participating pair,
+Kendall's tau is \code{2 * asin(rho) / pi} and Spearman's rho is
+\code{6 * asin(rho / 2) / pi}. Correlated RDMSWTN currently supports only
+\code{erlang_type = "none"} and \code{posdrift = TRUE}. The unrestricted-drift
+(\code{posdrift = FALSE}) model remains available at \code{rho = 0}, but any active
+nonzero correlation is rejected. \code{\link[=LogicalRulesRDMSWTN]{LogicalRulesRDMSWTN()}} remains an
+independent model; correlated logical-rule races are not supported.
 }

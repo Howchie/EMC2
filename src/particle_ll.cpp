@@ -553,6 +553,8 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
     out.ctx.mean_k_index = emc2col::rdmswtn::mK;
     out.ctx.erlang_omega_index = (out.ctx.kill_shape == 3) ? emc2col::rdmswtn::omega : -1;
     out.ctx.defective_upper_tail = true;
+    out.ctx.rdmswtn_correlated =
+      (type_std.find("_CORR") != std::string::npos);
     if (type_std.find("_IO") != std::string::npos) {
       out.ctx.use_posdrift = false;
     }
@@ -662,6 +664,27 @@ static inline void configure_bawl_corr_context(RaceModelAdapter& adapter,
   }
   if (adapter.ctx.bawl_rho_index < 0) {
     Rcpp::stop("%s: correlated BAwL requires a parameter column named 'rho'.",
+               caller.c_str());
+  }
+}
+
+static inline void configure_rdmswtn_corr_context(
+    RaceModelAdapter& adapter, const Rcpp::CharacterVector& keep_names,
+    const std::string& caller) {
+  if (!adapter.ctx.rdmswtn_correlated) return;
+  adapter.ctx.rdmswtn_rho_index = -1;
+  for (int j = 0; j < keep_names.size(); ++j) {
+    if (Rcpp::as<std::string>(keep_names[j]) == "rho") {
+      adapter.ctx.rdmswtn_rho_index = j;
+      break;
+    }
+  }
+  if (adapter.ctx.rdmswtn_rho_index < 0) {
+    Rcpp::stop("%s: correlated RDMSWTN requires a parameter column named 'rho'.",
+               caller.c_str());
+  }
+  if (adapter.ctx.kill_active) {
+    Rcpp::stop("%s: correlated RDMSWTN does not support guess or kill clocks.",
                caller.c_str());
   }
 }
@@ -896,6 +919,50 @@ double c_log_likelihood_bawl_correlated(
     RaceRawFun model_pfun_raw,
     RaceLogSAtTFun logS_at_t,
     RaceSharedState* shared,
+    NumericVector* trial_ll_out,
+    const std::function<Rcpp::NumericMatrix()>& materialize);
+
+struct RDMSWTNCorrTrialLayout {
+  int pair_row[2] = {-1, -1};
+  int n_nonzero = 0;
+  int winner_row = -1;
+  bool ordinary = true;
+  bool params_ok = true;
+};
+
+struct RDMSWTNCorrSharedState {
+  bool valid = false;
+  int n_trials = 0;
+  int n_lR = 0;
+  int n_unique = 0;
+  int n_out = 0;
+  int n_par = 0;
+  int rho_col = -1;
+  int pc_col = -1;
+  bool has_RACE = false;
+  Rcpp::NumericVector rt, LT, UT, LC, UC;
+  Rcpp::IntegerVector lR_codes;
+  Rcpp::IntegerVector race_nacc;
+  Rcpp::LogicalVector race_mask;
+  std::vector<int> winner_row;
+  std::vector<const double*> cols;
+  std::vector<RDMSWTNCorrTrialLayout> layout;
+};
+
+static RDMSWTNCorrSharedState build_rdmswtn_corr_shared_state(
+    const Rcpp::DataFrame& dadm, int n_trials, int n_lR,
+    const Rcpp::LogicalVector& winner, const Rcpp::IntegerVector& expand,
+    const ContextForRaceModels& ctx, ParamTable& table,
+    const Rcpp::CharacterVector& keep_names);
+
+double c_log_likelihood_rdmswtn_correlated(
+    RDMSWTNCorrSharedState& cshared, Rcpp::DataFrame dadm,
+    RacePdf1Fun pdf1, RaceCdf1Fun cdf1, const int n_trials,
+    LogicalVector winner, Rcpp::IntegerVector expand, double min_ll,
+    const Rcpp::LogicalVector isok, int n_lR,
+    void* model_context_for_funcs, bool all_finite_trials,
+    RaceRawFun model_dfun_raw, RaceRawFun model_pfun_raw,
+    RaceLogSAtTFun logS_at_t, RaceSharedState* shared,
     NumericVector* trial_ll_out,
     const std::function<Rcpp::NumericMatrix()>& materialize);
 
@@ -3883,6 +3950,10 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
       emc2col::validate_col_prefix(keep_names, adapter.col_spec);
     }
     configure_bawl_corr_context(adapter, keep_names, "calc_ll_oo");
+    configure_rdmswtn_corr_context(adapter, keep_names, "calc_ll_oo");
+    if (is_logicalrules && adapter.ctx.rdmswtn_correlated) {
+      Rcpp::stop("calc_ll_oo: correlated RDMSWTN logical-rule races are not supported.");
+    }
 
     NumericVector lR = data["lR"];
     int n_lR = unique(lR).length();
@@ -3961,7 +4032,7 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
     // pContaminant is handled inline: log(1-pC) shift for finite RTs (no-op when pC=0).
     const bool use_raw_fast_path =
       all_finite_trials &&  // already scanned above; avoids a redundant O(n) pass
-      !adapter.ctx.bawl_correlated &&
+      !adapter.ctx.bawl_correlated && !adapter.ctx.rdmswtn_correlated &&
       (!has_RACE_col_fp || has_RACE_attrs_fp) &&
       adapter.model_pfun_raw != nullptr &&
       adapter.model_dfun_raw != nullptr;
@@ -4060,6 +4131,12 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
     BAwLCorrSharedState bawl_corr_shared;
     if (adapter.ctx.bawl_correlated) {
       bawl_corr_shared = build_bawl_corr_shared_state(
+          data, n_trials, n_lR, winner, expand, adapter.ctx,
+          param_table_template, keep_names);
+    }
+    RDMSWTNCorrSharedState rdmswtn_corr_shared;
+    if (adapter.ctx.rdmswtn_correlated) {
+      rdmswtn_corr_shared = build_rdmswtn_corr_shared_state(
           data, n_trials, n_lR, winner, expand, adapter.ctx,
           param_table_template, keep_names);
     }
@@ -4208,6 +4285,14 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
             adapter.logS_at_t_ptr,
             race_shared.valid ? &race_shared : nullptr, nullptr,
             corr_materialize);
+      } else if (adapter.ctx.rdmswtn_correlated) {
+        lls[i] = c_log_likelihood_rdmswtn_correlated(
+            rdmswtn_corr_shared, data, adapter.pdf1_ptr, adapter.cdf1_ptr,
+            n_trials, winner, expand, min_ll, is_ok, n_lR, &adapter.ctx,
+            all_finite_trials, adapter.model_dfun_raw, adapter.model_pfun_raw,
+            adapter.logS_at_t_ptr,
+            race_shared.valid ? &race_shared : nullptr, nullptr,
+            corr_materialize);
       } else {
         pars = pt.materialize_reusable();
         lls[i] = c_log_likelihood_race(pars, data,
@@ -4304,6 +4389,10 @@ NumericMatrix calc_ll_oo_pw(NumericMatrix particle_matrix, DataFrame data, Numer
       emc2col::validate_col_prefix(keep_names, adapter.col_spec);
     }
     configure_bawl_corr_context(adapter, keep_names, "calc_ll_oo_pw");
+    configure_rdmswtn_corr_context(adapter, keep_names, "calc_ll_oo_pw");
+    if (is_logicalrules && adapter.ctx.rdmswtn_correlated) {
+      Rcpp::stop("calc_ll_oo_pw: correlated RDMSWTN logical-rule races are not supported.");
+    }
 
     NumericVector lR = data["lR"];
     int n_lR = unique(lR).length();
@@ -4384,6 +4473,12 @@ NumericMatrix calc_ll_oo_pw(NumericMatrix particle_matrix, DataFrame data, Numer
           data, n_trials, n_lR, winner, expand, adapter.ctx,
           param_table_template, keep_names);
     }
+    RDMSWTNCorrSharedState rdmswtn_corr_shared;
+    if (adapter.ctx.rdmswtn_correlated) {
+      rdmswtn_corr_shared = build_rdmswtn_corr_shared_state(
+          data, n_trials, n_lR, winner, expand, adapter.ctx,
+          param_table_template, keep_names);
+    }
     const std::function<Rcpp::NumericMatrix()> corr_materialize =
         [&pt]() { return pt.materialize_reusable(); };
 
@@ -4395,6 +4490,14 @@ NumericMatrix calc_ll_oo_pw(NumericMatrix particle_matrix, DataFrame data, Numer
       if (adapter.ctx.bawl_correlated) {
         c_log_likelihood_bawl_correlated(
             bawl_corr_shared, data, adapter.pdf1_ptr, adapter.cdf1_ptr,
+            n_trials, winner, expand, min_ll, is_ok, n_lR, &adapter.ctx,
+            all_finite_trials, adapter.model_dfun_raw, adapter.model_pfun_raw,
+            adapter.logS_at_t_ptr,
+            race_shared.valid ? &race_shared : nullptr, &row_vec,
+            corr_materialize);
+      } else if (adapter.ctx.rdmswtn_correlated) {
+        c_log_likelihood_rdmswtn_correlated(
+            rdmswtn_corr_shared, data, adapter.pdf1_ptr, adapter.cdf1_ptr,
             n_trials, winner, expand, min_ll, is_ok, n_lR, &adapter.ctx,
             all_finite_trials, adapter.model_dfun_raw, adapter.model_pfun_raw,
             adapter.logS_at_t_ptr,
@@ -10067,6 +10170,451 @@ double c_log_likelihood_bawl_correlated(
     }
   }
   return total_ll;
+}
+
+static RDMSWTNCorrSharedState build_rdmswtn_corr_shared_state(
+    const Rcpp::DataFrame& dadm, int n_trials, int n_lR,
+    const Rcpp::LogicalVector& winner, const Rcpp::IntegerVector& expand,
+    const ContextForRaceModels& ctx, ParamTable& table,
+    const Rcpp::CharacterVector& keep_names) {
+  RDMSWTNCorrSharedState s;
+  if (n_lR <= 0 || n_trials <= 0 || n_trials % n_lR != 0) {
+    Rcpp::stop("RDMSWTNcorr: invalid race dimensions.");
+  }
+  s.n_trials = n_trials;
+  s.n_lR = n_lR;
+  s.n_unique = n_trials / n_lR;
+  s.n_out = expand.length() > 0 ? expand.length() : s.n_unique;
+  s.n_par = keep_names.size();
+  s.rho_col = ctx.rdmswtn_rho_index;
+  if (s.rho_col < 0 || s.rho_col >= s.n_par) {
+    Rcpp::stop("RDMSWTNcorr: rho column is outside the parameter table.");
+  }
+  s.rt = dadm["rt"];
+  s.LT = get_col_with_default(dadm, "LT", 0.0);
+  s.UT = get_col_with_default(dadm, "UT", R_PosInf);
+  s.LC = get_col_with_default(dadm, "LC", R_PosInf);
+  s.UC = get_col_with_default(dadm, "UC", 0.0);
+  s.lR_codes = Rcpp::IntegerVector(dadm["lR"]);
+
+  s.has_RACE = dadm.containsElementNamed("RACE");
+  if (s.has_RACE && dadm.hasAttribute("RACE_nacc_by_row") &&
+      dadm.hasAttribute("RACE_mask")) {
+    s.race_nacc = dadm.attr("RACE_nacc_by_row");
+    s.race_mask = dadm.attr("RACE_mask");
+    if (s.race_nacc.size() != n_trials || s.race_mask.size() != n_trials)
+      s.has_RACE = false;
+  } else {
+    s.has_RACE = false;
+  }
+
+  s.winner_row.assign(static_cast<size_t>(s.n_unique), -1);
+  for (int r = 0; r < n_trials; ++r) {
+    if (winner[r]) s.winner_row[static_cast<size_t>(r / n_lR)] = r;
+  }
+  s.cols.assign(static_cast<size_t>(std::max(s.n_par, 16)), nullptr);
+  for (int c = 0; c < s.n_par; ++c) {
+    const std::string nm = Rcpp::as<std::string>(keep_names[c]);
+    s.cols[static_cast<size_t>(c)] =
+      &table.base(0, table.base_index_for(nm));
+    if (nm == "pContaminant") s.pc_col = c;
+  }
+  s.layout.assign(static_cast<size_t>(s.n_unique),
+                  RDMSWTNCorrTrialLayout());
+  s.valid = true;
+  return s;
+}
+
+static inline bool rdmswtn_corr_row_active(
+    const RDMSWTNCorrSharedState& s, int row) {
+  return !s.has_RACE || s.race_mask[row];
+}
+
+static inline double rdmswtn_corr_logcdf(
+    double t, int row, const double* const* cols) {
+  if (!(t > 0.0)) return R_NegInf;
+  const double value = prdmswtn(
+      t, cols[emc2col::rdmswtn::v][row],
+      cols[emc2col::rdmswtn::B][row] + cols[emc2col::rdmswtn::A][row],
+      cols[emc2col::rdmswtn::A][row],
+      cols[emc2col::rdmswtn::s][row],
+      cols[emc2col::rdmswtn::t0][row],
+      cols[emc2col::rdmswtn::sv][row],
+      0.0, 0.0, 20, true, 1, false, true, 1.0);
+  if (ISNAN(value)) return R_NaN;
+  return std::fmin(0.0, value);
+}
+
+static inline double rdmswtn_corr_logdensity(
+    double t, int row, const double* const* cols) {
+  if (!(t > 0.0) || !R_FINITE(t)) return R_NegInf;
+  return drdmswtn(
+      t, cols[emc2col::rdmswtn::v][row],
+      cols[emc2col::rdmswtn::B][row] + cols[emc2col::rdmswtn::A][row],
+      cols[emc2col::rdmswtn::A][row],
+      cols[emc2col::rdmswtn::s][row],
+      cols[emc2col::rdmswtn::t0][row],
+      cols[emc2col::rdmswtn::sv][row],
+      0.0, 0.0, 20, true, 1, false, true, 1.0);
+}
+
+static inline double rdmswtn_corr_z_from_logcdf(double log_f) {
+  if (log_f == R_NegInf) return R_NegInf;
+  if (log_f >= 0.0) return R_PosInf;
+  return R::qnorm(log_f, 0.0, 1.0, 1, 1);
+}
+
+template <typename LogIntegrand>
+static double rdmswtn_corr_integrate_log(double lo, double hi,
+                                         LogIntegrand log_integrand) {
+  if (!(hi > lo) || lo == R_PosInf) return R_NegInf;
+  const GLRule& rule = gl_get_rule(64);
+  std::array<double, 64> values{};
+  double max_log = R_NegInf;
+  for (int i = 0; i < 64; ++i) {
+    const double x = rule.x[static_cast<size_t>(i)];
+    double point, log_jac;
+    if (hi == R_PosInf) {
+      const double u = 0.5 * (x + 1.0);
+      const double one = 1.0 - u;
+      point = lo + u / one;
+      log_jac = -M_LN2 - 2.0 * std::log(one);
+    } else {
+      point = 0.5 * (hi - lo) * x + 0.5 * (hi + lo);
+      log_jac = std::log(0.5 * (hi - lo));
+    }
+    const double value = log_jac +
+      std::log(rule.w[static_cast<size_t>(i)]) + log_integrand(point);
+    values[static_cast<size_t>(i)] = value;
+    max_log = std::max(max_log, value);
+  }
+  if (!R_FINITE(max_log)) return R_NegInf;
+  double sum = 0.0;
+  for (double value : values) sum += std::exp(value - max_log);
+  return max_log + std::log(sum);
+}
+
+static double rdmswtn_corr_log_bvn_upper(double z1, double z2, double rho) {
+  if (z1 == R_NegInf)
+    return z2 == R_NegInf ? 0.0 : log_normal_upper_tail(z2);
+  if (z2 == R_NegInf) return log_normal_upper_tail(z1);
+  if (z1 == R_PosInf || z2 == R_PosInf) return R_NegInf;
+  const double p = norm_cdf_2d(-z1, -z2, rho);
+  if (R_FINITE(p) && p > 1e-280) return std::log(std::fmin(1.0, p));
+
+  // Direct conditional-normal integration is a tail fallback for probabilities
+  // smaller than the natural-scale BVN routine can represent.
+  if (z2 > z1) std::swap(z1, z2);
+  const double sd = std::sqrt(std::fmax(1e-16, 1.0 - rho * rho));
+  return rdmswtn_corr_integrate_log(z1, R_PosInf, [&](double x) {
+    return -0.5 * x * x - 0.91893853320467274178 +
+      log_normal_upper_tail((z2 - rho * x) / sd);
+  });
+}
+
+static inline double rdmswtn_corr_log_pair_survival(
+    double t, int row1, int row2, double rho, const double* const* cols) {
+  const double lf1 = rdmswtn_corr_logcdf(t, row1, cols);
+  const double lf2 = rdmswtn_corr_logcdf(t, row2, cols);
+  if (ISNAN(lf1) || ISNAN(lf2)) return R_NaN;
+  return rdmswtn_corr_log_bvn_upper(
+      rdmswtn_corr_z_from_logcdf(lf1),
+      rdmswtn_corr_z_from_logcdf(lf2), rho);
+}
+
+static inline double rdmswtn_corr_log_single_survival(
+    double t, int row, const double* const* cols) {
+  const double lf = rdmswtn_corr_logcdf(t, row, cols);
+  if (ISNAN(lf)) return R_NaN;
+  if (lf == R_NegInf) return 0.0;
+  if (lf >= 0.0) return R_NegInf;
+  return log1m_exp(lf);
+}
+
+static double rdmswtn_corr_log_component_survival(
+    const RDMSWTNCorrSharedState& s, int j,
+    const RDMSWTNCorrTrialLayout& layout, double t, double rho,
+    const double* const* cols) {
+  double out = rdmswtn_corr_log_pair_survival(
+      t, layout.pair_row[0], layout.pair_row[1], rho, cols);
+  if (ISNAN(out)) return out;
+  const int start = j * s.n_lR;
+  const int n_lR_j = s.has_RACE ? s.race_nacc[start] : s.n_lR;
+  for (int k = 0; k < n_lR_j; ++k) {
+    const int row = start + k;
+    if (!rdmswtn_corr_row_active(s, row) ||
+        row == layout.pair_row[0] || row == layout.pair_row[1]) continue;
+    const double ls = rdmswtn_corr_log_single_survival(t, row, cols);
+    if (ISNAN(ls)) return ls;
+    out += ls;
+  }
+  return out;
+}
+
+static double rdmswtn_corr_log_component_cause(
+    const RDMSWTNCorrSharedState& s, int j,
+    const RDMSWTNCorrTrialLayout& layout, int winner_row, double t,
+    double rho, const double* const* cols) {
+  const int pair1 = layout.pair_row[0], pair2 = layout.pair_row[1];
+  const int start = j * s.n_lR;
+  const int n_lR_j = s.has_RACE ? s.race_nacc[start] : s.n_lR;
+  if (!rdmswtn_corr_row_active(s, winner_row)) return R_NegInf;
+  double out = rdmswtn_corr_logdensity(t, winner_row, cols);
+  if (!R_FINITE(out)) return out;
+
+  if (winner_row == pair1 || winner_row == pair2) {
+    const int loser = winner_row == pair1 ? pair2 : pair1;
+    const double lfw = rdmswtn_corr_logcdf(t, winner_row, cols);
+    const double lfl = rdmswtn_corr_logcdf(t, loser, cols);
+    if (ISNAN(lfw) || ISNAN(lfl)) return R_NaN;
+    const double zw = rdmswtn_corr_z_from_logcdf(lfw);
+    const double zl = rdmswtn_corr_z_from_logcdf(lfl);
+    const double sd = std::sqrt(std::fmax(1e-16, 1.0 - rho * rho));
+    out += log_normal_upper_tail((zl - rho * zw) / sd);
+  } else {
+    out += rdmswtn_corr_log_pair_survival(t, pair1, pair2, rho, cols);
+  }
+
+  for (int k = 0; k < n_lR_j; ++k) {
+    const int row = start + k;
+    if (!rdmswtn_corr_row_active(s, row) || row == winner_row ||
+        row == pair1 || row == pair2) continue;
+    out += rdmswtn_corr_log_single_survival(t, row, cols);
+  }
+  return out;
+}
+
+static double rdmswtn_corr_trial_loglik(
+    const RDMSWTNCorrSharedState& s, int j,
+    const RDMSWTNCorrTrialLayout& layout,
+    const ContextForRaceModels* ctx, const Rcpp::IntegerVector& response,
+    double min_ll) {
+  if (!layout.params_ok) return min_ll;
+  const int start = j * s.n_lR;
+  const int n_lR_j = s.has_RACE ? s.race_nacc[start] : s.n_lR;
+  const double rho =
+    s.cols[static_cast<size_t>(s.rho_col)][layout.pair_row[0]];
+  const bool known = response[start] != NA_INTEGER;
+  const int known_row = layout.winner_row;
+  const double rt = s.rt[start];
+  const double LT = s.LT[start], UT = s.UT[start];
+  const double LC = s.LC[start], UC = s.UC[start];
+  if (known && known_row < 0) return min_ll;
+
+  int time_row = -1, nogo_row = -1, n_resp = 0;
+  for (int k = 0; k < n_lR_j; ++k) {
+    const int row = start + k;
+    if (!rdmswtn_corr_row_active(s, row)) continue;
+    const int code = s.lR_codes[row];
+    if (code == ctx->time_code) time_row = row;
+    else if (code == ctx->nogo_code) nogo_row = row;
+    else ++n_resp;
+  }
+
+  auto single_cause = [&](int row, double t) {
+    return rdmswtn_corr_log_component_cause(
+        s, j, layout, row, t, rho, s.cols.data());
+  };
+  auto finite_cause = [&](int row, double t) {
+    if (row < 0) {
+      double total = R_NegInf;
+      for (int k = 0; k < n_lR_j; ++k) {
+        const int active_row = start + k;
+        if (!rdmswtn_corr_row_active(s, active_row)) continue;
+        const int code = s.lR_codes[active_row];
+        if (code == ctx->time_code || code == ctx->nogo_code) continue;
+        double cause = single_cause(active_row, t);
+        if (time_row >= 0 && n_resp > 0) {
+          cause = log_sum_exp(
+              cause, single_cause(time_row, t) - std::log(n_resp));
+        }
+        total = log_sum_exp(total, cause);
+      }
+      return total;
+    }
+    double value = single_cause(row, t);
+    if (time_row >= 0 && time_row != row && n_resp > 0 &&
+        s.lR_codes[row] != ctx->nogo_code) {
+      value = log_sum_exp(value,
+                          single_cause(time_row, t) - std::log(n_resp));
+    }
+    return value;
+  };
+  auto interval_cause = [&](double lo, double hi, int row) {
+    return rdmswtn_corr_integrate_log(lo, hi, [&](double t) {
+      return finite_cause(row, t);
+    });
+  };
+  auto survivor = [&](double t) {
+    if (t == 0.0) return 0.0;
+    return rdmswtn_corr_log_component_survival(
+        s, j, layout, t, rho, s.cols.data());
+  };
+  auto survivor_difference = [&](double lo, double hi) {
+    const double a = lo == 0.0 ? 0.0 : survivor(lo);
+    if (hi == R_PosInf) return a;
+    return log_diff_exp(a, survivor(hi));
+  };
+
+  double value = R_NegInf;
+  if (R_FINITE(rt) && rt > 0.0) {
+    value = finite_cause(known ? known_row : -1, rt);
+  } else if (rt == R_NegInf) {
+    if (!known && nogo_row >= 0) {
+      for (int k = 0; k < n_lR_j; ++k) {
+        const int row = start + k;
+        if (!rdmswtn_corr_row_active(s, row) || row == nogo_row) continue;
+        value = log_sum_exp(value, interval_cause(LT, LC, row));
+      }
+    } else {
+      value = known ? interval_cause(LT, LC, known_row)
+                    : survivor_difference(LT, LC);
+    }
+  } else if (rt == R_PosInf) {
+    if (nogo_row >= 0) {
+      value = log_sum_exp(interval_cause(LT, UC, nogo_row), survivor(UC));
+    } else {
+      value = known ? interval_cause(UC, UT, known_row)
+                    : survivor_difference(UC, UT);
+    }
+  } else if (Rcpp::NumericVector::is_na(rt)) {
+    if (known) {
+      value = log_sum_exp(interval_cause(LT, LC, known_row),
+                          interval_cause(UC, UT, known_row));
+    } else {
+      value = log_sum_exp(survivor_difference(LT, LC),
+                          survivor_difference(UC, UT));
+    }
+  }
+
+  if (LT != 0.0 || UT != R_PosInf) {
+    const double log_z = survivor_difference(LT, UT);
+    if (!R_FINITE(log_z)) return min_ll;
+    value -= log_z;
+  }
+  if (s.pc_col >= 0) {
+    const double p_c = s.cols[static_cast<size_t>(s.pc_col)][start];
+    if (!R_FINITE(p_c) || p_c < 0.0 || p_c >= 1.0) return min_ll;
+    value = rt == R_PosInf
+      ? log_sum_exp(std::log(p_c), std::log1p(-p_c) + value)
+      : std::log1p(-p_c) + value;
+  }
+  return (!R_FINITE(value) || value < min_ll) ? min_ll : value;
+}
+
+double c_log_likelihood_rdmswtn_correlated(
+    RDMSWTNCorrSharedState& s, Rcpp::DataFrame dadm,
+    RacePdf1Fun pdf1, RaceCdf1Fun cdf1, const int n_trials,
+    LogicalVector winner, Rcpp::IntegerVector expand, double min_ll,
+    const Rcpp::LogicalVector isok, int n_lR,
+    void* model_context_for_funcs, bool all_finite_trials,
+    RaceRawFun model_dfun_raw, RaceRawFun model_pfun_raw,
+    RaceLogSAtTFun logS_at_t, RaceSharedState* shared,
+    NumericVector* trial_ll_out,
+    const std::function<Rcpp::NumericMatrix()>& materialize) {
+  auto* ctx = static_cast<ContextForRaceModels*>(model_context_for_funcs);
+  if (ctx == nullptr || !ctx->rdmswtn_correlated ||
+      ctx->rdmswtn_rho_index < 0 || !s.valid ||
+      s.n_trials != n_trials || s.n_lR != n_lR) {
+    Rcpp::stop("RDMSWTNcorr: invalid correlated likelihood context.");
+  }
+  const double* rho_col = s.cols[static_cast<size_t>(s.rho_col)];
+  bool any_correlated = false;
+  bool any_ordinary = false;
+  Rcpp::LogicalVector ordinary_isok(n_trials, false);
+
+  for (int j = 0; j < s.n_unique; ++j) {
+    RDMSWTNCorrTrialLayout& layout = s.layout[static_cast<size_t>(j)];
+    layout = RDMSWTNCorrTrialLayout();
+    layout.winner_row = s.winner_row[static_cast<size_t>(j)];
+    const int start = j * n_lR;
+    const int n_lR_j = s.has_RACE ? s.race_nacc[start] : n_lR;
+    double first_rho = 0.0;
+    for (int k = 0; k < n_lR_j; ++k) {
+      const int row = start + k;
+      if (!rdmswtn_corr_row_active(s, row)) continue;
+      const double rho = rho_col[row];
+      if (!R_FINITE(rho) || std::fabs(rho) > 1.0) {
+        Rcpp::stop("RDMSWTNcorr requires finite natural-scale rho values in [-1, 1].");
+      }
+      if (!ctx->use_posdrift && std::fabs(rho) > 1e-12) {
+        Rcpp::stop("RDMSWTNcorr with posdrift = FALSE is supported only when every active rho is zero.");
+      }
+      if (!isok[row]) layout.params_ok = false;
+      if (std::fabs(rho) <= 1e-12) continue;
+      if (layout.n_nonzero < 2)
+        layout.pair_row[layout.n_nonzero] = row;
+      ++layout.n_nonzero;
+      if (layout.n_nonzero == 1) first_rho = rho;
+      else if (std::fabs(rho - first_rho) > 1e-12) {
+        Rcpp::stop("RDMSWTNcorr requires the two participating rows to have the same signed nonzero rho; all opted-out rows must have rho = 0.");
+      }
+    }
+    if (layout.n_nonzero > 2) {
+      Rcpp::stop("RDMSWTNcorr supports one pair per trial: at most two active rows may have nonzero rho, and all other rows must have rho = 0.");
+    }
+    layout.ordinary = layout.n_nonzero <= 1;
+    if (layout.ordinary) {
+      any_ordinary = true;
+      for (int k = 0; k < n_lR_j; ++k) {
+        const int row = start + k;
+        if (rdmswtn_corr_row_active(s, row)) ordinary_isok[row] = isok[row];
+      }
+    } else {
+      any_correlated = true;
+    }
+  }
+
+  // Exact nesting and the cheapest route for an all-zero (or otherwise
+  // unpaired) particle.
+  if (!any_correlated) {
+    return c_log_likelihood_race(
+        materialize(), dadm, pdf1, cdf1, n_trials, winner, expand, min_ll,
+        isok, n_lR, model_context_for_funcs, all_finite_trials,
+        model_dfun_raw, model_pfun_raw, logS_at_t, shared, trial_ll_out, true);
+  }
+
+  std::vector<double> unique_ll(static_cast<size_t>(s.n_unique), min_ll);
+  if (any_ordinary) {
+    Rcpp::NumericVector ordinary_ll(s.n_unique, min_ll);
+    Rcpp::IntegerVector no_expand(0);
+    ContextForRaceModels ordinary_ctx = *ctx;
+    ordinary_ctx.rdmswtn_correlated = false;
+    c_log_likelihood_race(
+        materialize(), dadm, pdf1, cdf1, n_trials, winner, no_expand, min_ll,
+        ordinary_isok, n_lR, &ordinary_ctx, all_finite_trials,
+        model_dfun_raw, model_pfun_raw, logS_at_t, shared, &ordinary_ll, true);
+    for (int j = 0; j < s.n_unique; ++j) {
+      if (s.layout[static_cast<size_t>(j)].ordinary)
+        unique_ll[static_cast<size_t>(j)] = ordinary_ll[j];
+    }
+  }
+
+  const Rcpp::IntegerVector response = dadm["R"];
+  for (int j = 0; j < s.n_unique; ++j) {
+    const RDMSWTNCorrTrialLayout& layout =
+      s.layout[static_cast<size_t>(j)];
+    if (!layout.ordinary) {
+      unique_ll[static_cast<size_t>(j)] = rdmswtn_corr_trial_loglik(
+          s, j, layout, ctx, response, min_ll);
+    }
+  }
+
+  double total = 0.0;
+  if (expand.length() > 0) {
+    for (int i = 0; i < s.n_out; ++i) {
+      const double value = unique_ll[static_cast<size_t>(expand[i] - 1)];
+      if (trial_ll_out != nullptr) (*trial_ll_out)[i] = value;
+      total += value;
+    }
+  } else {
+    for (int j = 0; j < s.n_unique; ++j) {
+      const double value = unique_ll[static_cast<size_t>(j)];
+      if (trial_ll_out != nullptr) (*trial_ll_out)[j] = value;
+      total += value;
+    }
+  }
+  return total;
 }
 
 // Test/benchmark observability accessors for the correlated BAwL route

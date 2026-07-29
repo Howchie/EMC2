@@ -361,6 +361,10 @@ rrdmswtn_cpp <- function(pars, lR_levels, ok, erlang_shape, erlang_type, posdrif
     .Call(`_EMC2_rrdmswtn_cpp`, pars, lR_levels, ok, erlang_shape, erlang_type, posdrift)
 }
 
+rrdmswtn_corr_cpp <- function(pars, lR_levels, ok, posdrift) {
+    .Call(`_EMC2_rrdmswtn_corr_cpp`, pars, lR_levels, ok, posdrift)
+}
+
 fft_convolve_equiv_cpp <- function(x, y, conj_flag = TRUE) {
     .Call(`_EMC2_fft_convolve_equiv_cpp`, x, y, conj_flag)
 }
@@ -535,6 +539,10 @@ drou_cpp <- function(rt, v, k, B, A, t0, s, nx = 384L, dt_target = 2e-3, grade =
 
 rrou_hit_times_cpp <- function(v, k, B, A, s, dt = 1e-3, t_max = 30.0, bkind = 0L, Binf = as.numeric( c()), tau = as.numeric( c()), pw = as.numeric( c())) {
     .Call(`_EMC2_rrou_hit_times_cpp`, v, k, B, A, s, dt, t_max, bkind, Binf, tau, pw)
+}
+
+rrou_cpp <- function(pars, lR_levels, ok, kind_sexp = NULL, dt = 1e-3, t_max = 30.0) {
+    .Call(`_EMC2_rrou_cpp`, pars, lR_levels, ok, kind_sexp, dt, t_max)
 }
 
 run_trend_rcpp <- function(data, trend, param, trend_pars, pars_full, return_kernel = FALSE) {

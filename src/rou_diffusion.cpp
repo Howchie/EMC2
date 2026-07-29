@@ -201,3 +201,161 @@ NumericVector rrou_hit_times_cpp(NumericVector v, NumericVector k, NumericVector
   return rou_hit_times_vec(v, k, B, A, s, dt, t_max, bkind, Binf, tau, pw);
 }
 
+// ---------------------------------------------------------------------------
+// Optimized Batched Race Simulator with Early Exit Across Accumulators
+// ---------------------------------------------------------------------------
+// [[Rcpp::export]]
+Rcpp::List rrou_cpp(NumericMatrix pars, CharacterVector lR_levels, LogicalVector ok,
+                    SEXP kind_sexp = R_NilValue, double dt = 1e-3, double t_max = 30.0) {
+  const int n_acc = lR_levels.size();
+  const int n_rows = pars.nrow();
+  const int n_trials = n_rows / n_acc;
+
+  // Map parameter column indices
+  CharacterVector col_names = colnames(pars);
+  int iv = -1, ik = -1, iB = -1, iA = -1, it0 = -1, is_ = -1;
+  int iBinf = -1, itau = -1, ipw = -1;
+  for (int j = 0; j < col_names.size(); ++j) {
+    std::string nm = Rcpp::as<std::string>(col_names[j]);
+    if (nm == "v") iv = j;
+    else if (nm == "k") ik = j;
+    else if (nm == "B") iB = j;
+    else if (nm == "A") iA = j;
+    else if (nm == "t0") it0 = j;
+    else if (nm == "s") is_ = j;
+    else if (nm == "Binf") iBinf = j;
+    else if (nm == "tau") itau = j;
+    else if (nm == "pw") ipw = j;
+  }
+  if (iv < 0 || iB < 0 || it0 < 0) {
+    stop("rrou_cpp: pars matrix must contain at least 'v', 'B', and 't0' columns.");
+  }
+
+  // Resolve boundary collapse kind
+  int bkind = fpe::FPE_BND_FIXED;
+  if (!Rf_isNull(kind_sexp)) {
+    std::string kstr = Rcpp::as<std::string>(kind_sexp);
+    if (kstr == "weibull") bkind = fpe::FPE_BND_WEIBULL;
+    else if (kstr == "exponential") bkind = fpe::FPE_BND_EXPONENTIAL;
+    else if (kstr == "linear") bkind = fpe::FPE_BND_LINEAR;
+  }
+
+  IntegerVector R_out(n_trials, NA_INTEGER);
+  NumericVector rt_out(n_trials, R_PosInf);
+
+  Rcpp::RNGScope scope;
+
+  for (int j = 0; j < n_trials; ++j) {
+    double win_rt = R_PosInf;
+    int winner = -1;
+
+    std::vector<double> X(n_acc), b(n_acc), v_acc(n_acc), k_acc(n_acc), s_acc(n_acc);
+    std::vector<double> t0_acc(n_acc), phi(n_acc), drift_gain(n_acc), sd(n_acc), inv_2var_bb(n_acc);
+    std::vector<fpe::FPE_Boundary> bnd(n_acc);
+    std::vector<bool> active(n_acc, false);
+
+    double min_t0 = R_PosInf;
+
+    for (int a = 0; a < n_acc; ++a) {
+      int r = j * n_acc + a;
+      if (!ok[r]) continue;
+
+      double vv = pars(r, iv);
+      double BB = pars(r, iB);
+      if (!R_finite(vv) || !R_finite(BB)) continue;
+
+      double kk = (ik >= 0 && R_finite(pars(r, ik)) && pars(r, ik) > 0.0) ? pars(r, ik) : 0.0;
+      double AA = (iA >= 0 && R_finite(pars(r, iA)) && pars(r, iA) > 0.0) ? pars(r, iA) : 0.0;
+      double ss = (is_ >= 0 && R_finite(pars(r, is_)) && pars(r, is_) > 0.0) ? pars(r, is_) : 1.0;
+      double tt0 = R_finite(pars(r, it0)) ? pars(r, it0) : 0.0;
+
+      double Binf_val = (iBinf >= 0) ? pars(r, iBinf) : 0.5;
+      double tau_val  = (itau >= 0)  ? pars(r, itau) : 1.0;
+      double pw_val   = (ipw >= 0)   ? pars(r, ipw)  : 1.0;
+
+      X[a] = (AA > 0.0) ? AA * ::unif_rand() : 0.0;
+      if (bkind == fpe::FPE_BND_FIXED) {
+        bnd[a].set_kind(fpe::FPE_BND_FIXED, BB + AA, BB + AA, 0.0, 0.0, false);
+      } else {
+        bnd[a].set_kind(bkind, BB + AA, Binf_val, tau_val,
+                        (bkind == fpe::FPE_BND_WEIBULL) ? pw_val : 0.0, false);
+      }
+      b[a] = bnd[a].b(0.0);
+      t0_acc[a] = tt0;
+      v_acc[a] = vv;
+      k_acc[a] = kk;
+      s_acc[a] = ss;
+
+      if (tt0 < min_t0) min_t0 = tt0;
+
+      if (X[a] >= b[a]) {
+        if (tt0 < win_rt) {
+          win_rt = tt0;
+          winner = a + 1;
+        }
+        continue;
+      }
+
+      active[a] = true;
+      phi[a] = std::exp(-kk * dt);
+      double m1 = -std::expm1(-kk * dt);
+      double m2 = -std::expm1(-2.0 * kk * dt);
+      drift_gain[a] = (kk > 1e-10) ? (m1 / kk) : dt;
+      double var_val = (kk > 1e-10) ? (ss * ss * m2 / (2.0 * kk)) : (ss * ss * dt);
+      sd[a] = std::sqrt(std::max(var_val, 0.0));
+      inv_2var_bb[a] = 2.0 / (ss * ss * dt);
+    }
+
+    double t = 0.0;
+    while (t < t_max) {
+      if (t + min_t0 >= win_rt) break;
+
+      bool any_active = false;
+      for (int a = 0; a < n_acc; ++a) {
+        if (!active[a]) continue;
+        if (t + t0_acc[a] >= win_rt) {
+          active[a] = false;
+          continue;
+        }
+        any_active = true;
+
+        double X1 = X[a] * phi[a] + v_acc[a] * drift_gain[a] + sd[a] * ::norm_rand();
+        double b1 = bnd[a].fixed ? b[a] : bnd[a].b(t + dt);
+        if (X1 >= b1) {
+          double d0 = b[a] - X[a], d1 = b1 - X1;
+          double frac = d0 / std::max(d0 - d1, 1e-300);
+          double hit_t = t + std::min(std::max(frac, 0.0), 1.0) * dt + t0_acc[a];
+          if (hit_t < win_rt) {
+            win_rt = hit_t;
+            winner = a + 1;
+          }
+          active[a] = false;
+          continue;
+        }
+        double pc = std::exp(-(b[a] - X[a]) * (b1 - X1) * inv_2var_bb[a]);
+        if (::unif_rand() < pc) {
+          double hit_t = t + ::unif_rand() * dt + t0_acc[a];
+          if (hit_t < win_rt) {
+            win_rt = hit_t;
+            winner = a + 1;
+          }
+          active[a] = false;
+          continue;
+        }
+        X[a] = X1;
+        b[a] = b1;
+      }
+      if (!any_active) break;
+      t += dt;
+    }
+
+    if (winner > 0) {
+      R_out[j] = winner;
+      rt_out[j] = win_rt;
+    }
+  }
+
+  return Rcpp::List::create(Rcpp::Named("R") = R_out, Rcpp::Named("rt") = rt_out);
+}
+
+

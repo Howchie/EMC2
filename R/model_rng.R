@@ -49,10 +49,12 @@
 
 .rfun_ROU <- function(lR, pars, ok = rep(TRUE, nrow(pars)), kind = NULL) {
   if (.use_cpp_rfun()) {
-    return(rROU(lR, pars, ok = ok, kind = kind))
+    res <- rrou_cpp(pars, levels(lR), ok, kind)
+    return(.rfun_cpp_pack(res, levels(lR), length(lR) / length(levels(lR))))
   }
   .rfun_ROU_R(lR, pars, ok = ok, kind = kind)
 }
+
 
 
 .rfun_BAwL <- function(lR, pars, ok = rep(TRUE, length(lR)), posdrift = TRUE,
@@ -75,10 +77,21 @@
 }
 
 .rfun_RDMSWTN <- function(lR, pars, ok = rep(TRUE, dim(pars)[1]), erlang_shape = 1L,
-                          erlang_type = "none", posdrift = TRUE) {
+                          erlang_type = "none", posdrift = TRUE,
+                          correlated = FALSE) {
   if (.use_cpp_rfun()) {
-    res <- rrdmswtn_cpp(pars, levels(lR), ok, as.integer(erlang_shape), erlang_type, posdrift)
+    res <- if (correlated) {
+      rrdmswtn_corr_cpp(pars, levels(lR), ok, posdrift)
+    } else {
+      rrdmswtn_cpp(pars, levels(lR), ok, as.integer(erlang_shape),
+                   erlang_type, posdrift)
+    }
     return(.rfun_cpp_pack(res, levels(lR), length(lR) / length(levels(lR))))
   }
-  rRDMSWTN(lR, pars, ok = ok, erlang_shape = erlang_shape, erlang_type = erlang_type, posdrift = posdrift)
+  if (correlated) {
+    rRDMSWTN_corr(lR, pars, ok = ok, posdrift = posdrift)
+  } else {
+    rRDMSWTN(lR, pars, ok = ok, erlang_shape = erlang_shape,
+             erlang_type = erlang_type, posdrift = posdrift)
+  }
 }

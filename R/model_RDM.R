@@ -731,6 +731,7 @@ RDMGBM <- function(erlang_shape = 1L, erlang_type = "none") {
 #' | *mK* | log | \[0, Inf\] | log(1) | *lambda_k* = *q* / *mK* | Mean of the optional kill clock. |
 #' | *omega* | probit | \[0, 1\] | qnorm(.5) | | Erlang-1 mixture weight in mixed mode. |
 #' | *pContaminant* | probit | \[0, 1\] | qnorm(0) | | Optional contamination probability handled by the data pipeline. |
+#' | *rho* | scaled probit | \[-1, 1\] | qnorm(.5) | | Gaussian-copula correlation between the two participating finishing times; only when `correlated = TRUE`. |
 #'
 #' `erlang_shape = 1` uses exponential clocks and `erlang_shape = 2` uses
 #' Erlang-2 clocks. In `erlang_shape = "mixed"`, each clock is Erlang-1 with
@@ -758,6 +759,24 @@ RDMGBM <- function(erlang_shape = 1L, erlang_type = "none") {
 #' all other accumulators. The optional `pContaminant` parameter is generic
 #' nuisance infrastructure and is not part of the SWTN distribution.
 #'
+#' With `correlated = TRUE`, exactly two active accumulator rows in a trial may
+#' have the same signed, nonzero natural-scale `rho`; every other row must have
+#' `rho = 0`. A binary race can therefore use `rho ~ 1`. In a race with two
+#' coupled accumulators and additional independent accumulators, use a
+#' participation factor, for example `rho ~ 0 + coupled`, and fix the
+#' opted-out coefficient to zero. Zero or one nonzero row is an ordinary
+#' independent RDMSWTN race.
+#'
+#' Correlation is applied to finishing-time ranks through a Gaussian copula,
+#' including when `sv > 0`; it is not a correlation of drift draws or the
+#' Pearson correlation of observed response times. For the participating pair,
+#' Kendall's tau is `2 * asin(rho) / pi` and Spearman's rho is
+#' `6 * asin(rho / 2) / pi`. Correlated RDMSWTN currently supports only
+#' `erlang_type = "none"` and `posdrift = TRUE`. The unrestricted-drift
+#' (`posdrift = FALSE`) model remains available at `rho = 0`, but any active
+#' nonzero correlation is rejected. [LogicalRulesRDMSWTN()] remains an
+#' independent model; correlated logical-rule races are not supported.
+#'
 #' @param erlang_shape Integer `1` for exponential clocks, `2` for Erlang-2,
 #'   or `"mixed"` for the Erlang-1/Erlang-2 mixture.
 #' @param erlang_type Clock configuration: one of `"none"`, `"local_kill"`,
@@ -765,12 +784,18 @@ RDMGBM <- function(erlang_shape = 1L, erlang_type = "none") {
 #' @param posdrift Logical. If `TRUE` (default), truncate the between-trial
 #'   normal drift distribution below at zero; if `FALSE`, use untruncated
 #'   drifts and allow intrinsic omissions.
+#' @param correlated Logical. If `TRUE`, add the Gaussian-copula parameter
+#'   `rho` and use the correlated pair race likelihood and simulator.
 #' @return A model list compatible with [design()].
 #'
 #' @export
 #'
-RDMSWTN <- function(erlang_shape = 1L, erlang_type = "none", posdrift = TRUE) {
+RDMSWTN <- function(erlang_shape = 1L, erlang_type = "none", posdrift = TRUE,
+                    correlated = FALSE) {
   erlang_type <- match.arg(erlang_type, c("none", "local_kill", "global_kill", "local_guess", "local_kill_guess"))
+  if (correlated && erlang_type != "none") {
+    stop("Correlated RDMSWTN does not support guess or kill clocks; use erlang_type = \"none\".")
+  }
   erlang_mixed <- identical(erlang_shape, "mixed")
   if (erlang_mixed && erlang_type == "global_kill") {
     stop("RDMSWTN erlang_shape = 'mixed' is currently implemented for local Erlang processes only.")
@@ -823,17 +848,35 @@ RDMSWTN <- function(erlang_shape = 1L, erlang_type = "none", posdrift = TRUE) {
   transform <- c(transform, pContaminant = "pnorm")
   minmax   <- cbind(minmax, pContaminant = c(0.001, 0.999))
   exception <- c(exception, pContaminant = 0)
+  if (correlated) {
+    p_types <- c(p_types, rho = qnorm(0.5))
+    transform <- c(transform, rho = "pnorm")
+    minmax <- cbind(minmax, rho = c(-.99, .99))
+    exception <- c(exception, rho = 0)
+  }
+  transform_spec <- list(func = transform)
+  if (correlated) {
+    transform_spec$lower <- c(rho = -1)
+    transform_spec$upper <- c(rho = 1)
+  }
   list(
     type = "RACE",
-    c_name = if (posdrift) base_name else paste0(base_name, "_IO"),
+    c_name = paste0(if (posdrift) base_name else paste0(base_name, "_IO"),
+                    if (correlated) "_CORR" else ""),
+    correlated = correlated,
+    correlation_type = if (correlated) "rdmswtn_gaussian_copula" else NULL,
     p_types = p_types,
     p_types_canonical = c("v", "B", "A", "t0", "s", "sv"),
-    transform = list(func = transform),
+    transform = transform_spec,
     bound = list(
       minmax = minmax,
       exception = exception
     ),
     Ttransform = function(pars, dadm) {
+      if (correlated) {
+        .validate_rdmswtn_corr_rows(pars[, "rho"], dadm = dadm,
+                                    posdrift = posdrift)
+      }
       lambda_factor <- if (erlang_shape_cpp == 2L) 2 else 1
       n <- nrow(pars)
       mG_val <- pars[, "mG"]
@@ -864,14 +907,85 @@ RDMSWTN <- function(erlang_shape = 1L, erlang_type = "none", posdrift = TRUE) {
       ok <- attr(pars, "ok")
       if (is.null(ok)) ok <- rep(TRUE, nrow(pars))
       .rfun_RDMSWTN(data$lR, pars, ok = ok, erlang_shape = erlang_shape_cpp,
-               erlang_type = erlang_type, posdrift = posdrift)
+               erlang_type = erlang_type, posdrift = posdrift,
+               correlated = correlated)
     },
     dfun = function(rt, pars) dRDMSWTN(rt, pars, erlang = erlang_shape_cpp, posdrift = posdrift),
     pfun = function(rt, pars) pRDMSWTN(rt, pars, erlang = erlang_shape_cpp, posdrift = posdrift),
-    log_likelihood = function(pars, dadm, model, min_ll = log(1e-10)) {
-      log_likelihood_race_missing(pars = pars, dadm = dadm, model = model, min_ll = min_ll)
+    log_likelihood = if (correlated) {
+      function(pars, dadm, model, min_ll = log(1e-10)) {
+        stop("RDMSWTNcorr likelihood is implemented in the C++ race path; use fast_path=TRUE.")
+      }
+    } else {
+      function(pars, dadm, model, min_ll = log(1e-10)) {
+        log_likelihood_race_missing(pars = pars, dadm = dadm, model = model, min_ll = min_ll)
+      }
     }
   )
+}
+
+.validate_rdmswtn_corr_rows <- function(rho, dadm = NULL, posdrift = TRUE,
+                                        tol = 1e-12) {
+  if (any(!is.finite(rho)) || any(abs(rho) > 1)) {
+    stop("RDMSWTNcorr requires finite natural-scale rho values in [-1, 1].")
+  }
+  if (is.null(dadm) || is.null(dadm$lR)) {
+    if (!posdrift && any(abs(rho) > tol)) {
+      stop("RDMSWTNcorr with posdrift = FALSE is supported only when every active rho is zero.")
+    }
+    return(invisible(TRUE))
+  }
+  n_lR <- length(levels(dadm$lR))
+  if (n_lR < 1L || length(rho) %% n_lR != 0L) {
+    stop("RDMSWTNcorr could not determine accumulator rows within trials.")
+  }
+  active <- rep(TRUE, length(rho))
+  if ("RACE" %in% names(dadm) && !is.null(attr(dadm, "RACE_mask"))) {
+    race_mask <- attr(dadm, "RACE_mask")
+    if (length(race_mask) == length(rho)) active <- race_mask
+  } else if ("RACE" %in% names(dadm)) {
+    for (j in seq_len(length(rho) / n_lR)) {
+      rows <- ((j - 1L) * n_lR + 1L):(j * n_lR)
+      n_acc <- suppressWarnings(
+        as.integer(as.character(dadm$RACE[rows[1L]])))
+      if (is.finite(n_acc)) active[rows] <- seq_len(n_lR) <= n_acc
+    }
+  }
+  if (!posdrift && any(active & abs(rho) > tol)) {
+    stop("RDMSWTNcorr with posdrift = FALSE is supported only when every active rho is zero.")
+  }
+  for (j in seq_len(length(rho) / n_lR)) {
+    rows <- ((j - 1L) * n_lR + 1L):(j * n_lR)
+    values <- rho[rows][active[rows] & abs(rho[rows]) > tol]
+    if (length(values) > 2L ||
+        (length(values) == 2L && abs(values[1L] - values[2L]) > tol)) {
+      stop(
+        "RDMSWTNcorr requires exactly one directly specified pair: at most two ",
+        "active rows may have the same signed nonzero rho, and all other rows ",
+        "must have rho = 0."
+      )
+    }
+  }
+  invisible(TRUE)
+}
+
+#' Correlated RDMSWTN Gaussian-Copula Race
+#'
+#' Convenience constructor for `RDMSWTN(..., correlated = TRUE)`. The two
+#' participating accumulator finishing times retain their ordinary RDMSWTN
+#' marginals and are coupled by a Gaussian copula. See [RDMSWTN()] for the
+#' participation design and interpretation of `rho`.
+#'
+#' @param erlang_shape Retained for constructor compatibility. Only the
+#'   no-clock model is currently supported.
+#' @param erlang_type Must be `"none"`.
+#' @param posdrift Logical. Nonzero `rho` currently requires `TRUE`.
+#' @return A model list compatible with [design()].
+#' @export
+RDMSWTNcorr <- function(erlang_shape = 1L, erlang_type = "none",
+                        posdrift = TRUE) {
+  RDMSWTN(erlang_shape = erlang_shape, erlang_type = erlang_type,
+          posdrift = posdrift, correlated = TRUE)
 }
 
 #' RDMSWTN Logical Rules Model
@@ -1130,4 +1244,89 @@ rRDMSWTN <- function(lR, pars, p_types = c("v", "b", "A", "t0", "sv", "lambda_g"
     out$isTime[!bad_col] <- guess_win[pick][!bad_col]
   }
   out
+}
+
+.qRDMSWTN_row <- function(u, pars, posdrift = TRUE) {
+  if (!(is.finite(u) && u > 0 && u < 1)) {
+    stop("RDMSWTNcorr inverse CDF requires a probability strictly between zero and one.")
+  }
+  cdf <- function(t) {
+    if (t <= pars[1L, "t0"]) return(-u)
+    pRDMSWTN(t, pars, erlang = 1L, posdrift = posdrift) - u
+  }
+  lower <- 0
+  upper <- max(1, pars[1L, "t0"] + 1)
+  value <- cdf(upper)
+  for (iter in seq_len(80L)) {
+    if (is.finite(value) && value >= 0) break
+    upper <- upper * 2
+    if (!is.finite(upper) || upper > 1e12) {
+      stop("RDMSWTNcorr could not bracket a finishing-time quantile; check the marginal parameters.")
+    }
+    value <- cdf(upper)
+  }
+  if (!is.finite(value) || value < 0) {
+    stop("RDMSWTNcorr could not bracket a finishing-time quantile; check the marginal parameters.")
+  }
+  uniroot(cdf, c(lower, upper), tol = 1e-10)$root
+}
+
+rRDMSWTN_corr <- function(lR, pars, ok = rep(TRUE, nrow(pars)),
+                          posdrift = TRUE) {
+  if (!is.null(attr(pars, "ok"))) ok <- attr(pars, "ok")
+  if (!"rho" %in% colnames(pars)) {
+    stop("RDMSWTNcorr requires parameter column 'rho'.")
+  }
+  if (!all(c("lambda_g", "lambda_k") %in% colnames(pars)) ||
+      any(pars[, "lambda_g"] != 0 | pars[, "lambda_k"] != 0)) {
+    stop("RDMSWTNcorr does not support guess or kill clocks.")
+  }
+  nr <- length(levels(lR))
+  if (nr < 1L || nrow(pars) %% nr != 0L) {
+    stop("RDMSWTNcorr requires rows grouped by accumulator within trial.")
+  }
+  rho <- pars[, "rho"]
+  .validate_rdmswtn_corr_rows(rho, posdrift = TRUE)
+  if (!posdrift && any(ok & abs(rho) > 1e-12)) {
+    stop("RDMSWTNcorr with posdrift = FALSE is supported only when every active rho is zero.")
+  }
+  if (!any(ok & abs(rho) > 1e-12)) {
+    return(rRDMSWTN(lR, pars, ok = ok, erlang_shape = 1L,
+                    erlang_type = "none", posdrift = posdrift))
+  }
+
+  n_trials <- nrow(pars) / nr
+  u <- runif(nrow(pars))
+  for (tr in seq_len(n_trials)) {
+    rows <- ((tr - 1L) * nr + 1L):(tr * nr)
+    pair <- rows[ok[rows] & abs(rho[rows]) > 1e-12]
+    if (length(pair) > 2L ||
+        (length(pair) == 2L && abs(rho[pair[1L]] - rho[pair[2L]]) > 1e-12)) {
+      stop("RDMSWTNcorr requires at most two active rows with the same signed nonzero rho in each trial.")
+    }
+    if (length(pair) == 2L) {
+      z1 <- rnorm(1)
+      z2 <- rho[pair[1L]] * z1 +
+        sqrt(max(0, 1 - rho[pair[1L]]^2)) * rnorm(1)
+      u[pair] <- pnorm(c(z1, z2))
+    }
+  }
+
+  finish <- rep(Inf, nrow(pars))
+  active <- which(ok)
+  for (r in active) {
+    finish[r] <- .qRDMSWTN_row(u[r], pars[r, , drop = FALSE],
+                               posdrift = posdrift)
+  }
+  dt <- matrix(finish, nrow = nr)
+  bad <- apply(dt, 2L, function(x) all(is.infinite(x)))
+  response <- apply(dt, 2L, which.min)
+  pick <- cbind(response, seq_len(n_trials))
+  out <- data.frame(
+    R = factor(levels(lR)[response], levels = levels(lR)),
+    rt = dt[pick]
+  )
+  out$R[bad] <- NA
+  out$rt[bad] <- Inf
+  .apply_timed_guess_winner(out, levels(lR))
 }

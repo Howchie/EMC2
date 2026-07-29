@@ -127,6 +127,12 @@ struct ContextForRaceModels {
     bool bawl_correlated = false;
     int bawl_rho_index = -1;
 
+    // Correlated RDMSWTN couples one directly specified pair of complete
+    // finishing-time marginals with a Gaussian copula. This metadata is
+    // intentionally distinct from BAwL's shared drift-factor path.
+    bool rdmswtn_correlated = false;
+    int rdmswtn_rho_index = -1;
+
     // Tri-state caches for optional accumulator levels:
     // -2 = unresolved (detect from data once), -1 = absent, >0 = factor code.
     int time_code = -2;

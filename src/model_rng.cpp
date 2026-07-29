@@ -16,6 +16,16 @@
 
 using namespace Rcpp;
 
+// Implemented in model_RDM.h's owning translation unit (particle_ll.cpp).
+// The correlated simulator uses the exact same full RDMSWTN marginal CDF as
+// the likelihood and inverts it numerically.
+double prdmswtn(double t, double mu_drift, double b, double A,
+                double s, double t0, double sv,
+                double lambda_g, double lambda_k,
+                int n_gauss_nodes, bool log_out,
+                int kill_shape, bool guess, bool posdrift,
+                double erlang_omega);
+
 namespace {
 
 std::unordered_map<std::string, int> col_index_map(const Rcpp::NumericMatrix& pars) {
@@ -633,5 +643,133 @@ Rcpp::List rrdmswtn_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_level
     has_isTime = true;
   }
 
+  return pack_result(res.R, res.rt, res.omitted, has_isTime, isTime);
+}
+
+namespace {
+
+double rdmswtn_quantile_cpp(double u, double v, double b, double A, double s,
+                            double t0, double sv) {
+  u = std::fmin(std::nextafter(1.0, 0.0),
+                std::fmax(std::numeric_limits<double>::min(), u));
+  auto cdf = [&](double t) {
+    return prdmswtn(t, v, b, A, s, t0, sv, 0.0, 0.0, 20, false,
+                    1, false, true, 1.0);
+  };
+  double lo = 0.0;
+  double hi = std::fmax(1.0, t0 + 1.0);
+  double fhi = cdf(hi);
+  for (int iter = 0; iter < 80 && (!R_FINITE(fhi) || fhi < u); ++iter) {
+    hi *= 2.0;
+    if (!R_FINITE(hi) || hi > 1e12) {
+      Rcpp::stop("rrdmswtn_corr_cpp: could not bracket a finishing-time quantile; check the marginal parameters.");
+    }
+    fhi = cdf(hi);
+  }
+  if (!R_FINITE(fhi) || fhi < u) {
+    Rcpp::stop("rrdmswtn_corr_cpp: could not bracket a finishing-time quantile; check the marginal parameters.");
+  }
+  for (int iter = 0; iter < 100; ++iter) {
+    const double mid = lo + 0.5 * (hi - lo);
+    const double fm = cdf(mid);
+    if (!R_FINITE(fm)) {
+      Rcpp::stop("rrdmswtn_corr_cpp: non-finite marginal CDF while inverting a finishing-time quantile.");
+    }
+    if (fm < u) lo = mid;
+    else hi = mid;
+    if (hi - lo <= 1e-10 * std::fmax(1.0, hi)) break;
+  }
+  return lo + 0.5 * (hi - lo);
+}
+
+}  // namespace
+
+// Gaussian-copula RDMSWTN simulator. rho is a direct natural-scale pair
+// correlation: exactly two active rows may share one signed nonzero value;
+// every other active row is independent.
+// [[Rcpp::export]]
+Rcpp::List rrdmswtn_corr_cpp(Rcpp::NumericMatrix pars,
+                             Rcpp::CharacterVector lR_levels,
+                             Rcpp::LogicalVector ok,
+                             bool posdrift) {
+  const int n_acc = lR_levels.size();
+  const int n_rows = pars.nrow();
+  if (n_acc <= 0 || n_rows <= 0 || n_rows % n_acc != 0) {
+    Rcpp::stop("rrdmswtn_corr_cpp: invalid accumulator/parameter dimensions.");
+  }
+  if (ok.size() != n_rows) {
+    Rcpp::stop("rrdmswtn_corr_cpp: ok has the wrong length.");
+  }
+  const int n_trials = n_rows / n_acc;
+  const auto ci = col_index_map(pars);
+  const int iv = ci.at("v"), ib = ci.at("b"), iA = ci.at("A");
+  const int it0 = ci.at("t0"), isv = ci.at("sv"), irho = ci.at("rho");
+  const int is_ = ci.count("s") ? ci.at("s") : -1;
+  const int ilg = ci.at("lambda_g"), ilk = ci.at("lambda_k");
+
+  bool any_nonzero = false;
+  for (int r = 0; r < n_rows; ++r) {
+    if (!ok[r]) continue;
+    const double rho = pars(r, irho);
+    if (!R_FINITE(rho) || std::fabs(rho) > 1.0) {
+      Rcpp::stop("rrdmswtn_corr_cpp: rho must be finite and lie in [-1, 1].");
+    }
+    if (pars(r, ilg) != 0.0 || pars(r, ilk) != 0.0) {
+      Rcpp::stop("rrdmswtn_corr_cpp: guess and kill clocks are not supported.");
+    }
+    if (std::fabs(rho) > 1e-12) any_nonzero = true;
+  }
+  if (!posdrift && any_nonzero) {
+    Rcpp::stop("rrdmswtn_corr_cpp: posdrift = FALSE is supported only when every active rho is zero.");
+  }
+  if (!any_nonzero) {
+    return rrdmswtn_cpp(pars, lR_levels, ok, 1, "none", posdrift);
+  }
+
+  std::vector<double> u(static_cast<size_t>(n_rows), 0.5);
+  for (int r = 0; r < n_rows; ++r) {
+    if (ok[r]) u[static_cast<size_t>(r)] = R::unif_rand();
+  }
+  for (int tr = 0; tr < n_trials; ++tr) {
+    const int start = tr * n_acc;
+    int pair[2] = {-1, -1};
+    int n_pair = 0;
+    double pair_rho = 0.0;
+    for (int a = 0; a < n_acc; ++a) {
+      const int r = start + a;
+      if (!ok[r]) continue;
+      const double rho = pars(r, irho);
+      if (std::fabs(rho) <= 1e-12) continue;
+      if (n_pair < 2) pair[n_pair] = r;
+      ++n_pair;
+      if (n_pair == 1) pair_rho = rho;
+      else if (std::fabs(rho - pair_rho) > 1e-12) {
+        Rcpp::stop("rrdmswtn_corr_cpp: the two participating rows must have the same signed nonzero rho.");
+      }
+    }
+    if (n_pair > 2) {
+      Rcpp::stop("rrdmswtn_corr_cpp: at most two active rows may have nonzero rho in a trial.");
+    }
+    if (n_pair == 2) {
+      const double z1 = R::norm_rand();
+      const double z2 = pair_rho * z1 +
+        std::sqrt(std::fmax(0.0, 1.0 - pair_rho * pair_rho)) * R::norm_rand();
+      u[static_cast<size_t>(pair[0])] = R::pnorm(z1, 0.0, 1.0, 1, 0);
+      u[static_cast<size_t>(pair[1])] = R::pnorm(z2, 0.0, 1.0, 1, 0);
+    }
+  }
+
+  std::vector<double> dt(static_cast<size_t>(n_rows), R_PosInf);
+  for (int r = 0; r < n_rows; ++r) {
+    if (!ok[r]) continue;
+    const double s = (is_ >= 0) ? pars(r, is_) : 1.0;
+    dt[static_cast<size_t>(r)] = rdmswtn_quantile_cpp(
+      u[static_cast<size_t>(r)], pars(r, iv), pars(r, ib), pars(r, iA),
+      s, pars(r, it0), pars(r, isv)
+    );
+  }
+  RaceOut res = resolve_race(dt, n_acc, n_trials, nullptr, nullptr);
+  std::vector<int> isTime;
+  const bool has_isTime = resolve_time_level(res.R, isTime, lR_levels);
   return pack_result(res.R, res.rt, res.omitted, has_isTime, isTime);
 }

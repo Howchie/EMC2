@@ -101,7 +101,9 @@ inline fperace::SolveCache* rou_cache(void* ctx_) {
 // ---------------------------------------------------------------------------
 inline void rou_prepare_rows(fperace::SolveCache& C, const double* rt,
                              const double* const* cols, int n_rows,
-                             const int* mask, const int* isok) {
+                             const int* isok) {
+  if (C.prepared_n_rows == n_rows) return;
+
   const double* v_  = cols[emc2col::rou::v];
   const double* k_  = cols[emc2col::rou::k];
   const double* B_  = cols[emc2col::rou::B];
@@ -111,11 +113,13 @@ inline void rou_prepare_rows(fperace::SolveCache& C, const double* rt,
 
   C.row_group.assign(n_rows, -1);
 
-  // Pass 1: collect distinct keys and the horizon each one needs.
+  // Pass 1: collect distinct keys and the max horizon across ALL valid rows.
   std::vector<fperace::Key> keys;
   std::vector<double> horizon;
+  std::vector<int> row_key_idx(n_rows, -1);
+
   for (int i = 0; i < n_rows; ++i) {
-    if (!mask[i] || !isok[i] || R_IsNA(v_[i])) continue;
+    if (!isok[i] || R_IsNA(v_[i])) continue;
     const double tt = rt[i] - t0_[i];
     if (!(tt > 0.0) || !emc2_isfinite(tt)) continue;
     fperace::Key p;
@@ -133,17 +137,16 @@ inline void rou_prepare_rows(fperace::SolveCache& C, const double* rt,
     } else if (tt > horizon[g]) {
       horizon[g] = tt;
     }
-    C.row_group[i] = g;
+    row_key_idx[i] = g;
   }
 
-  // Pass 2: solve, then rewrite the local group indices as cache indices.
+  // Pass 2: solve keys in 4-lane SIMD batches to max required horizon.
   std::vector<int> to_cache(keys.size(), -1);
-  for (size_t j = 0; j < keys.size(); ++j) {
-    to_cache[j] = fperace::cache_get(C, keys[j], horizon[j]);
-  }
+  fperace::cache_get_batch(C, keys, horizon, to_cache);
   for (int i = 0; i < n_rows; ++i) {
-    if (C.row_group[i] >= 0) C.row_group[i] = to_cache[C.row_group[i]];
+    if (row_key_idx[i] >= 0) C.row_group[i] = to_cache[row_key_idx[i]];
   }
+  C.prepared_n_rows = n_rows;
 }
 
 // ---------------------------------------------------------------------------
@@ -160,7 +163,7 @@ inline void drou_raw(const double* rt, const double* const* cols, int n_rows,
     }
     return;
   }
-  rou_prepare_rows(*C, rt, cols, n_rows, mask, isok);
+  rou_prepare_rows(*C, rt, cols, n_rows, isok);
 
   // The solve is in the rescaled state Y = X/s, whose first-passage time is the
   // SAME random variable, so the density in t needs no Jacobian -- exactly as
@@ -189,7 +192,7 @@ inline void prou_raw(const double* rt, const double* const* cols, int n_rows,
     for (int i = 0; i < n_rows; ++i) if (mask[i]) out[i] = 0.0;
     return;
   }
-  rou_prepare_rows(*C, rt, cols, n_rows, mask, isok);
+  rou_prepare_rows(*C, rt, cols, n_rows, isok);
 
   const double* t0_ = cols[emc2col::rou::t0];
   for (int i = 0; i < n_rows; ++i) {
@@ -201,11 +204,8 @@ inline void prou_raw(const double* rt, const double* const* cols, int n_rows,
       out[i] = 0.0;
       continue;
     }
-    const double lS = fperace::entry_log_S(C->e[g], rt[i] - t0_[i]);
-    out[i] = (lS >= 0.0) ? 0.0
-                         : ((lS <= fperace::LOG_FLOOR)
-                                ? raw_log_zero(min_ll, floor_raw)
-                                : lS);
+    const double ls = fperace::entry_log_S(C->e[g], rt[i] - t0_[i]);
+    out[i] = raw_log_value(ls, min_ll, floor_raw);
   }
 }
 

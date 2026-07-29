@@ -403,3 +403,30 @@ test_that("a collapsing-bound design fits through the sampled likelihood", {
   expect_true(all(is.finite(sim$rt)))
   expect_false(anyNA(sim$R))
 })
+
+test_that("the collapse asymptote is measured from zero, and can reach it", {
+  # The anchor: with a wide start range and a fast collapse to Binf = 0.1, the
+  # bound sweeps DOWN THROUGH [0, A] and nearly everything finishes early.  Were
+  # the asymptote Binf + A = 0.9 instead, the bound would still sit above most
+  # start points and almost nothing would.
+  rt <- c(0.05, 0.1, 0.2, 0.4, 1.0); n <- length(rt)
+  cdf_at <- function(A, Binf, tau = 0.05, bk = 2L, pw = numeric(0))
+    EMC2:::rou_pdf_cdf_vec(rt, rep(0.05, n), rep(3, n), rep(1, n), rep(A, n),
+                           rep(0, n), rep(1, n), 384L, 2e-3, 8, 32, bk,
+                           rep(Binf, n), rep(tau, n), pw)$cdf
+  expect_gt(cdf_at(0.8, 0.1)[2], 0.4)
+  expect_lt(cdf_at(0.8, 0.9)[2], 0.1)
+
+  # Binf = 0 is an ordinary interior value: the domain is [x_lo, b(t)] with
+  # x_lo < 0, so a bound reaching the start point does not degenerate it.
+  for (bk in c(1L, 2L, 3L)) {
+    pw <- if (bk == 1L) rep(1.5, n) else numeric(0)
+    c0 <- cdf_at(0.4, 0, tau = 0.4, bk = bk, pw = pw)
+    expect_true(all(is.finite(c0)))
+    expect_true(all(diff(c0) >= -1e-12))
+    # and it is the continuous limit of Binf -> 0, not a special case
+    expect_lt(max(abs(cdf_at(0.4, 1e-6, tau = 0.4, bk = bk, pw = pw) - c0)), 1e-6)
+  }
+  expect_identical(unname(ROU(boundary_collapse = "exponential")$bound$minmax[, "Binf"]),
+                   c(0, Inf))
+})

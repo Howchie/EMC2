@@ -20,8 +20,8 @@
 # buys nothing measurable.
 .rou_grid <- function() {
   list(
-    nx = getOption("emc2.fpe_nx", 384L),
-    dt_target = getOption("emc2.fpe_dt", 2e-3),
+    nx = getOption("emc2.fpe_nx", 512L),
+    dt_target = getOption("emc2.fpe_dt", 4e-3),
     grade = getOption("emc2.fpe_grade", 8),
     tgrade = getOption("emc2.fpe_tgrade", 32)
   )
@@ -287,8 +287,10 @@ rROU <- function(lR, pars, ok = rep(TRUE, nrow(pars)), kind = NULL,
 #'     \item `"weibull"`: \eqn{b(t) = b_\infty + (b_0 - b_\infty) e^{-(t/\tau)^{pw}}}
 #'   }
 #'   Because `Binf` is measured from zero, the boundary is free to fall into the
-#'   start-point range \eqn{[0, A]} and, in the limit, to meet the start point --
-#'   a forced response. A moving boundary forfeits the one-time factorisation of
+#'   start-point range \eqn{[0, A]} and, at `Binf = 0`, to collapse all the way
+#'   to the start point -- a forced response. `Binf = 0` is an ordinary interior
+#'   value, not a limit: the solver's domain is \eqn{[x_{lo}, b(t)]} with
+#'   \eqn{x_{lo} < 0}, so it stays well conditioned there. A moving boundary forfeits the one-time factorisation of
 #'   the solver's linear operator, so it is slower per solve; setting `Binf`
 #'   equal to \eqn{B + A} makes the boundary constant again and recovers the
 #'   fixed-bound cost exactly.
@@ -335,7 +337,12 @@ ROU <- function(boundary_collapse = c("fixed", "exponential", "linear",
   if (kind != "fixed") {
     p_types <- c(p_types, Binf = log(0.5), tau = log(1))
     transform <- c(transform, Binf = "exp", tau = "exp")
-    minmax <- cbind(minmax, Binf = c(1e-3, Inf), tau = c(1e-3, Inf))
+    # Binf = 0 is a legal interior value, not a limit to be approached: the
+    # solver's domain is [x_lo, b(t)] with x_lo < 0, so b(t) -> 0 leaves it
+    # perfectly well conditioned.  Verified smooth and monotone through
+    # 1e-3 -> 1e-6 -> 0 for all three forms.  A bound that reaches zero has
+    # met the start point, i.e. a forced response.
+    minmax <- cbind(minmax, Binf = c(0, Inf), tau = c(1e-3, Inf))
     exception <- c(exception, Binf = 0)
     if (kind == "weibull") {
       p_types <- c(p_types, pw = log(1))

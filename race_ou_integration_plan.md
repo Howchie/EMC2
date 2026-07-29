@@ -776,6 +776,59 @@ Two caveats worth stating in the docs rather than burying:
 | 512 / 1e-3 | 26.33 | 117 | 4.4e-4 |
 | 768 / 2.5e-4 | 153.07 | 680 | reference |
 
+### 8.2 Step 11 — parameter recovery
+
+**The decisive evidence is a real `fit()` run**, not the MLE study. 1200 trials
+simulated from `v~lM, k~1, B~E, A~1, t0~1` with
+`(v, v_lMd, k, B, B_Eaccuracy, A, t0) = (2.2, 1.1, 1.5, 1.0, 0.45, 0.5, 0.18)`,
+3 chains x 300 iterations, `nx = 384`. **9.8 minutes.** All seven true values
+fall inside their 95% credible interval, Rhat <= 1.006, ESS 750-900:
+
+| par | truth | 2.5% | 50% | 97.5% |
+|---|---|---|---|---|
+| v | 0.789 | 0.051 | 0.575 | 1.020 |
+| v_lMd | 1.100 | 0.918 | 1.377 | 2.081 |
+| k | 0.406 | −0.259 | 0.266 | 0.639 |
+| B | 0.000 | −0.251 | −0.006 | 0.222 |
+| B_Eaccuracy | 0.450 | 0.389 | 0.491 | 0.619 |
+| A | −0.693 | −1.848 | −0.849 | −0.267 |
+| t0 | −1.715 | −1.972 | −1.740 | −1.587 |
+
+An MLE study over 20 replicate data sets was also run, at `nx = 256` and
+`nx = 384`, on identical data. Averaged over all 20 fits both are unbiased
+(largest bias 0.11 on the sampling scale, against sds of 0.10-0.56):
+
+| par | truth | bias @256 | bias @384 |
+|---|---|---|---|
+| v | 0.7885 | +0.010 | −0.013 |
+| v_lMd | 1.1000 | +0.017 | +0.053 |
+| k | 0.4055 | −0.020 | −0.052 |
+| B | 0.0000 | −0.078 | −0.107 |
+| t0 | −1.7148 | −0.0005 | +0.019 |
+
+**A methodological trap worth recording.** Restricting to the fits whose
+optimiser reported convergence (11/20 and 10/20) made the two resolutions look
+*very* different — `k` bias −1.6% at nx=256 against −12.4% at nx=384, on
+identical data, which invites the conclusion that the finer grid is worse.
+The entire effect is selection: conditioning on Nelder-Mead's convergence flag
+selects a different subset at each resolution, because the flag depends on the
+surface. Over all 20 the two agree. Nelder-Mead on 7-9 correlated parameters is
+simply not a reliable estimator here, which is also why §8.1 does not use
+per-setting MLEs to measure resolution error.
+
+**The `k`/`B` trade-off is real and is the expected one.** Estimator
+correlations across replicates: `k`-`B` −0.72, `B`-`t0` −0.79, `k`-`t0` +0.61,
+plus the usual race-model `v`-`v_lMd` −0.97 and `v`-`A` +0.87. §6 anticipated
+this: a leaky accumulator's threshold and its asymptote `v/k` are related. It is
+not severe enough to prevent recovery at 1200 trials — `k`'s sd is 0.33 on a
+truth of 1.5, a 22% CV — but it is what makes the posterior for `v`, `A` and `k`
+wide, and it is the reason a prior on `k` is the right remedy if a real fit
+struggles, rather than a reparameterisation.
+
+`t0` recovers well (−1.3% at nx=256), which was the open question: it is
+identified off the rising flank, the part of the density the solver resolves
+least well.
+
 ### 8.3 Step 12 — collapsing boundaries
 
 All three forms are implemented in the §4.5 module and reachable from
@@ -785,10 +838,19 @@ precedent, and suffixes `c_name` with `_BEXP` / `_BLIN` / `_BWEIB`.
 
 **The asymptote is measured from zero, not from `A`.** The first cut anchored it
 at `Binf + A` so that the bound could never enter the start-point range; on the
-user's instruction it is now `Binf` outright. The bound is therefore free to
-descend into `[0, A]` and, in the limit, to meet the start point — a forced
-response, which is a state the model should be able to express. `Binf` is
-bounded away from zero (1e-3) only so the solver's domain cannot collapse.
+user's instruction it is now `Binf` outright, at all four mapping sites (the
+solve key, the two R-facing simulators, and the batched C++ race simulator).
+The bound is therefore free to descend into `[0, A]` and, at `Binf = 0`, to
+collapse onto the start point — a forced response, which is a state the model
+should be able to express.
+
+`Binf = 0` is an **ordinary interior value with a lower bound of 0**, not a
+limit approached from above. The solver's domain is `[x_lo, b(t)]` with
+`x_lo < 0`, so `b(t) -> 0` leaves it well conditioned; measured CDFs are finite,
+monotone and identical to 1e-6 across `Binf = 1e-3 -> 1e-6 -> 0` for all three
+forms. Anchoring is verified directly rather than by inspection: with `A = 0.8`
+and a fast collapse, `Binf = 0.1` reaches CDF 0.57 by t = 0.1 (the bound sweeps
+down through the start range) where `Binf = 0.9 = Binf + A` reaches 0.02.
 
 `b(0) = B + A` in every form, so `Binf = B + A` is the degenerate case;
 `set_kind` detects it and reports `fixed = true`, which restores the one-time

@@ -237,7 +237,9 @@ design <- function(formula = NULL,factors = NULL,Rlevels = NULL,model,data=NULL,
     stop("model must be a function or a model list (e.g., LBA())")
   }
   model_spec <- tryCatch(model(), error = function(e) NULL)
-  if (is.list(model_spec) && isTRUE(model_spec$correlated) && is.null(matchfun)) {
+  if (is.list(model_spec) && isTRUE(model_spec$correlated) &&
+      !identical(model_spec$correlation_type, "rdmswtn_gaussian_copula") &&
+      is.null(matchfun)) {
     stop("BAwLcorr requires matchfun so it can construct the lM role indicator.")
   }
   if(!is.null(optionals$pre_transform)){
@@ -958,7 +960,8 @@ design_model <- function(data,design,model=NULL,
   # with add_acc = FALSE; the invariant is checked on the actual expanded
   # likelihood data in make_emc/design_model(add_acc = TRUE).
   model_spec <- tryCatch(model(), error = function(e) NULL)
-  if (is.list(model_spec) && isTRUE(model_spec$correlated) && isTRUE(add_acc)) {
+  if (is.list(model_spec) && isTRUE(model_spec$correlated) && isTRUE(add_acc) &&
+      !identical(model_spec$correlation_type, "rdmswtn_gaussian_copula")) {
     rho_dm <- out[["rho"]]
     if (is.null(rho_dm) || is.null(da$lM)) {
       stop("BAwLcorr requires a matchfun-generated lM role indicator in the expanded data.")
@@ -991,6 +994,48 @@ design_model <- function(data,design,model=NULL,
             stop("BAwLcorr rho must be shared within each trial; use a trial-level formula (for example rho ~ 1 or rho ~ TrialType). Row-level formulas such as rho ~ 0 + lR are not allowed.")
           }
         }
+      }
+    }
+  }
+  if (is.list(model_spec) &&
+      identical(model_spec$correlation_type, "rdmswtn_gaussian_copula") &&
+      isTRUE(add_acc)) {
+    rho_dm <- out[["rho"]]
+    if (is.null(rho_dm)) {
+      stop("RDMSWTNcorr requires a rho design.")
+    }
+    rho_expand <- attr(rho_dm, "expand")
+    rho_full <- if (!is.null(rho_expand) && length(rho_expand) == nrow(da)) {
+      rho_dm[rho_expand, , drop = FALSE]
+    } else {
+      rho_dm
+    }
+    n_lR <- length(levels(da$lR))
+    if (n_lR < 1L || nrow(rho_full) != nrow(da) ||
+        nrow(da) %% n_lR != 0L) {
+      stop("RDMSWTNcorr could not verify the direct-pair rho design.")
+    }
+    free_cols <- !(colnames(rho_full) %in% names(design$constants))
+    rho_free <- rho_full[, free_cols, drop = FALSE]
+    for (j in seq_len(nrow(da) / n_lR)) {
+      rows <- ((j - 1L) * n_lR + 1L):(j * n_lR)
+      block <- rho_free[rows, , drop = FALSE]
+      active <- if (ncol(block)) rowSums(abs(block) > 1e-12) > 0 else
+        rep(FALSE, n_lR)
+      if ("RACE" %in% names(da)) {
+        n_acc <- suppressWarnings(as.integer(as.character(da$RACE[rows[1L]])))
+        if (is.finite(n_acc)) {
+          active <- active & (seq_len(n_lR) <= n_acc)
+        }
+      }
+      if (sum(active) > 2L) {
+        stop("RDMSWTNcorr rho design may select at most two accumulator rows per trial; use a participation factor and fix opted-out coefficients to zero.")
+      }
+      if (sum(active) == 2L &&
+          !isTRUE(all.equal(as.numeric(block[active, , drop = FALSE][1L, ]),
+                            as.numeric(block[active, , drop = FALSE][2L, ]),
+                            tolerance = 1e-12))) {
+        stop("RDMSWTNcorr's two participating rows must share the same rho design.")
       }
     }
   }
