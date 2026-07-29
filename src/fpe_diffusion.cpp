@@ -53,7 +53,8 @@ double fpe_t_max(const NumericVector& t) {
 Rcpp::List fpe_bm_fht_pdf_cdf_vec(NumericVector t, double mu, double sigma,
                                   double z0, double b0, double binf,
                                   double tau = 1.0, double pow = 1.0,
-                                  int nx = 256, int nt = 512) {
+                                  int nx = 256, int nt = 512,
+                                  double grade = 8.0) {   // fpe::FPE_GRADE
   if (sigma <= 0.0) stop("fpe_bm_fht_pdf_cdf_vec: sigma must be positive.");
   const double t_max = fpe_t_max(t);
 
@@ -65,7 +66,7 @@ Rcpp::List fpe_bm_fht_pdf_cdf_vec(NumericVector t, double mu, double sigma,
   m.xlo = fpe::fpe_x_lo_bm(std::min(0.0, z_lo), mu, sigma, t_max);
 
   if (m.bnd.a(t_max) <= m.xlo) stop("fpe_bm_fht_pdf_cdf_vec: boundary collapses below the domain.");
-  return fpe_package(fpe::fpe_run(m, z_lo, z_hi, t_max, nx, nt), t);
+  return fpe_package(fpe::fpe_run(m, z_lo, z_hi, t_max, nx, nt, grade), t);
 }
 
 // ---------------------------------------------------------------------------
@@ -77,7 +78,8 @@ Rcpp::List fpe_bm_fht_pdf_cdf_vec(NumericVector t, double mu, double sigma,
 Rcpp::List fpe_ou_fht_pdf_cdf_vec(NumericVector t, double lambda, double theta,
                                   double sigma, double z0, double b0, double binf,
                                   double tau = 1.0, double pow = 1.0,
-                                  int nx = 256, int nt = 512) {
+                                  int nx = 256, int nt = 512,
+                                  double grade = 8.0) {   // fpe::FPE_GRADE
   if (sigma <= 0.0) stop("fpe_ou_fht_pdf_cdf_vec: sigma must be positive.");
   if (lambda < 0.0) stop("fpe_ou_fht_pdf_cdf_vec: lambda must be non-negative.");
   const double t_max = fpe_t_max(t);
@@ -91,7 +93,7 @@ Rcpp::List fpe_ou_fht_pdf_cdf_vec(NumericVector t, double lambda, double theta,
   m.xlo = fpe::fpe_x_lo_ou(std::min(0.0, z_lo), lambda, theta, sigma, t_max);
 
   if (m.bnd.a(t_max) <= m.xlo) stop("fpe_ou_fht_pdf_cdf_vec: boundary collapses below the domain.");
-  return fpe_package(fpe::fpe_run(m, z_lo, z_hi, t_max, nx, nt), t);
+  return fpe_package(fpe::fpe_run(m, z_lo, z_hi, t_max, nx, nt, grade), t);
 }
 
 // ---------------------------------------------------------------------------
@@ -105,7 +107,8 @@ Rcpp::List fpe_gbm_fht_pdf_cdf_vec(NumericVector t, double mu, double sigma,
                                    double z0, double b0, double binf,
                                    double tau = 1.0, double pow = 1.0,
                                    int nx = 256, int nt = 512,
-                                   double start_floor = 1.0) {
+                                   double start_floor = 1.0,
+                                   double grade = 8.0) {
   if (sigma <= 0.0) stop("fpe_gbm_fht_pdf_cdf_vec: sigma must be positive.");
   if (start_floor <= 0.0) stop("fpe_gbm_fht_pdf_cdf_vec: start_floor must be positive.");
   if (b0 <= 0.0 || binf <= 0.0) stop("fpe_gbm_fht_pdf_cdf_vec: boundaries must stay positive.");
@@ -121,7 +124,7 @@ Rcpp::List fpe_gbm_fht_pdf_cdf_vec(NumericVector t, double mu, double sigma,
   m.xlo = fpe::fpe_x_lo_bm(z_lo, m.A, sigma, t_max);
 
   if (m.bnd.a(t_max) <= m.xlo) stop("fpe_gbm_fht_pdf_cdf_vec: boundary collapses below the domain.");
-  return fpe_package(fpe::fpe_run(m, z_lo, z_hi, t_max, nx, nt), t);
+  return fpe_package(fpe::fpe_run(m, z_lo, z_hi, t_max, nx, nt, grade), t);
 }
 
 // ---------------------------------------------------------------------------
@@ -136,7 +139,8 @@ Rcpp::List fpe_gompertz_fht_pdf_cdf_vec(NumericVector t, double alpha, double be
                                         double z0, double k0, double kinf,
                                         double tau = 1.0, double pow = 1.0,
                                         int nx = 256, int nt = 512,
-                                        double start_floor = 1e-3) {
+                                        double start_floor = 1e-3,
+                                        double grade = 8.0) {
   if (beta <= 0.0) stop("fpe_gompertz_fht_pdf_cdf_vec: beta must be positive.");
   if (alpha <= 0.0) stop("fpe_gompertz_fht_pdf_cdf_vec: alpha must be positive.");
   if (k0 <= 0.0 || kinf <= 0.0) stop("fpe_gompertz_fht_pdf_cdf_vec: capacities must stay positive.");
@@ -154,5 +158,5 @@ Rcpp::List fpe_gompertz_fht_pdf_cdf_vec(NumericVector t, double alpha, double be
   m.xlo = fpe::fpe_x_lo_ou(z_lo, alpha, m.theta, beta, t_max);
 
   if (m.bnd.a(t_max) <= m.xlo) stop("fpe_gompertz_fht_pdf_cdf_vec: boundary collapses below the domain.");
-  return fpe_package(fpe::fpe_run(m, z_lo, z_hi, t_max, nx, nt), t);
+  return fpe_package(fpe::fpe_run(m, z_lo, z_hi, t_max, nx, nt, grade), t);
 }

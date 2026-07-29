@@ -10,6 +10,7 @@
 //   drift(x, t)        A(x,t)
 //   length(t)          L(t) = a(t) - x_lo
 //   length_prime(t)    L'(t) = a'(t)
+//   static_op()        true when the operator is time-invariant (fixed bound)
 //
 // Only TWO drift laws are needed, because the geometric models reduce by a state
 // log-transform Y = log X (Ito):
@@ -106,6 +107,7 @@ struct FPE_ModelBM {
   double drift(double /*x*/, double /*t*/) const { return A; }
   double length(double t) const { return bnd.a(t) - xlo; }
   double length_prime(double t) const { return bnd.a_prime(t); }
+  bool static_op() const { return bnd.fixed; }
 
   // Atil(xi,t) = ( A - xi*L'(t) ) / L(t)
   void atil_affine(double /*t*/, double L, double Lp, double& a0, double& a1) const {
@@ -127,6 +129,7 @@ struct FPE_ModelOU {
   double drift(double x, double /*t*/) const { return -lambda * (x - theta); }
   double length(double t) const { return bnd.a(t) - xlo; }
   double length_prime(double t) const { return bnd.a_prime(t); }
+  bool static_op() const { return bnd.fixed; }
 
   // Atil(xi,t) = ( -lambda*(x_lo + xi*L - theta) - xi*L'(t) ) / L(t)
   void atil_affine(double /*t*/, double L, double Lp, double& a0, double& a1) const {
@@ -199,9 +202,9 @@ inline double fpe_norm_mass(double a, double b, double mean, double sd) {
 // Returns t0; fills q (length M) with the normalised sub-density q = L * p.
 // ---------------------------------------------------------------------------
 template <class Model>
-inline double fpe_seed(const Model& m, double z_lo, double z_hi, int M,
-                       double t_max, std::vector<double>& q) {
-  const double h = 1.0 / M;
+inline double fpe_seed(const Model& m, double z_lo, double z_hi,
+                       const FPE_Mesh& g, double t_max, std::vector<double>& q) {
+  const int M = g.M;
   q.assign(M, 0.0);
 
   if (z_hi - z_lo > FPE_EPS) {
@@ -218,12 +221,12 @@ inline double fpe_seed(const Model& m, double z_lo, double z_hi, int M,
     const double Zhi = ls ? std::exp(z_hi) : z_hi;
     const double span = Zhi - Zlo;
     for (int i = 0; i < M; ++i) {
-      const double xa = m.x_lo() + (i * h) * L;
-      const double xb = m.x_lo() + ((i + 1) * h) * L;
+      const double xa = m.x_lo() + g.xf[i] * L;
+      const double xb = m.x_lo() + g.xf[i + 1] * L;
       const double Xa = ls ? std::exp(xa) : xa;
       const double Xb = ls ? std::exp(xb) : xb;
       const double ov = std::min(Xb, Zhi) - std::max(Xa, Zlo);
-      if (ov > 0.0) q[i] = (ov / span) / h;   // cell mass / h, since q = L*p
+      if (ov > 0.0) q[i] = (ov / span) * g.rdx[i];  // cell mass / dx, q = L*p
     }
     return 0.0;
   }
@@ -241,7 +244,18 @@ inline double fpe_seed(const Model& m, double z_lo, double z_hi, int M,
   // t_seed = 0.022).  Exact cell-average seeding below is what buys the licence
   // to shrink it: with midpoint sampling a 2-cell-wide Gaussian is badly
   // mis-integrated, with cell masses it is not.
-  double s_target = FPE_SEED_CELLS * h * L0;
+  // The mesh is graded, so "FPE_SEED_CELLS cells wide" has to be measured with
+  // the cell width where the start point actually sits, not with a nominal 1/M.
+  //
+  // It is capped at the width the UNIFORM mesh would have had, because grading
+  // must never enlarge t_seed: everything before t_seed is answered by the
+  // frozen-coefficient formula rather than by the solver, and a start point that
+  // lands in the coarse far field (Gompertz, whose start range is 500x wide in
+  // the physical state) would otherwise pay for the grading instead of gaining
+  // from it.  Under-resolving the Gaussian is the cheaper error of the two --
+  // the seed integrates exact cell masses, not midpoint samples.
+  const double xi_z = (L0 > 0.0) ? (z - m.x_lo()) / L0 : 0.0;
+  double s_target = FPE_SEED_CELLS * std::min(g.local_dx(xi_z), g.h) * L0;
   const double gap = m.bnd.a(0.0) - z;
   if (gap > 0.0) s_target = std::min(s_target, 0.25 * gap);
   double t_seed = (s_target / Bc) * (s_target / Bc);
@@ -256,14 +270,14 @@ inline double fpe_seed(const Model& m, double z_lo, double z_hi, int M,
   double img_w = std::exp(2.0 * Ac * (a - z) / (Bc * Bc));
   if (!std::isfinite(img_w)) img_w = 0.0;
 
-  // q_i = (cell mass) / h, since q = L*p and the cell width is h*L.
+  // q_i = (cell mass) / dx_i, since q = L*p and the physical cell width is dx*L.
   for (int i = 0; i < M; ++i) {
-    const double xa = m.x_lo() + (i * h) * L;
-    const double xb = m.x_lo() + ((i + 1) * h) * L;
+    const double xa = m.x_lo() + g.xf[i] * L;
+    const double xb = m.x_lo() + g.xf[i + 1] * L;
     double mass = fpe_norm_mass(xa, xb, mean, sd)
                   - img_w * fpe_norm_mass(xa, xb, img_mean, sd);
     if (!(mass > 0.0)) mass = 0.0;
-    q[i] = mass / h;
+    q[i] = mass * g.rdx[i];
   }
   return t_seed;
 }
@@ -271,12 +285,19 @@ inline double fpe_seed(const Model& m, double z_lo, double z_hi, int M,
 // ---------------------------------------------------------------------------
 // Convenience: seed, march, and report.
 // ---------------------------------------------------------------------------
+// Default mesh grading: ratio of far-field to barrier cell width.  See the
+// sweep in the implementation log; 1.0 recovers the uniform mesh.
+constexpr double FPE_GRADE = 8.0;
+
 template <class Model>
 inline FPE_Result fpe_run(const Model& m, double z_lo, double z_hi,
-                          double t_max, int M, int nt) {
+                          double t_max, int M, int nt,
+                          double grade = FPE_GRADE) {
+  FPE_Mesh g;
+  g.build(M, grade);
   std::vector<double> q0;
-  const double t0 = fpe_seed(m, z_lo, z_hi, M, t_max, q0);
-  return fpe_solve(m, q0, t0, t_max, M, std::max(1, nt));
+  const double t0 = fpe_seed(m, z_lo, z_hi, g, t_max, q0);
+  return fpe_solve(m, q0, t0, t_max, g, std::max(1, nt));
 }
 
 } // namespace fpe

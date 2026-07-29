@@ -9,20 +9,20 @@ sp_new <- function(iter, lambda_varimax, q, p, dim_all_c, all_c, lambda_hat, st,
     .Call(`_EMC2_sp_new`, iter, lambda_varimax, q, p, dim_all_c, all_c, lambda_hat, st, cost_matrix, perm)
 }
 
-fpe_bm_fht_pdf_cdf_vec <- function(t, mu, sigma, z0, b0, binf, tau = 1.0, pow = 1.0, nx = 256L, nt = 512L) {
-    .Call(`_EMC2_fpe_bm_fht_pdf_cdf_vec`, t, mu, sigma, z0, b0, binf, tau, pow, nx, nt)
+fpe_bm_fht_pdf_cdf_vec <- function(t, mu, sigma, z0, b0, binf, tau = 1.0, pow = 1.0, nx = 256L, nt = 512L, grade = 8.0) {
+    .Call(`_EMC2_fpe_bm_fht_pdf_cdf_vec`, t, mu, sigma, z0, b0, binf, tau, pow, nx, nt, grade)
 }
 
-fpe_ou_fht_pdf_cdf_vec <- function(t, lambda, theta, sigma, z0, b0, binf, tau = 1.0, pow = 1.0, nx = 256L, nt = 512L) {
-    .Call(`_EMC2_fpe_ou_fht_pdf_cdf_vec`, t, lambda, theta, sigma, z0, b0, binf, tau, pow, nx, nt)
+fpe_ou_fht_pdf_cdf_vec <- function(t, lambda, theta, sigma, z0, b0, binf, tau = 1.0, pow = 1.0, nx = 256L, nt = 512L, grade = 8.0) {
+    .Call(`_EMC2_fpe_ou_fht_pdf_cdf_vec`, t, lambda, theta, sigma, z0, b0, binf, tau, pow, nx, nt, grade)
 }
 
-fpe_gbm_fht_pdf_cdf_vec <- function(t, mu, sigma, z0, b0, binf, tau = 1.0, pow = 1.0, nx = 256L, nt = 512L, start_floor = 1.0) {
-    .Call(`_EMC2_fpe_gbm_fht_pdf_cdf_vec`, t, mu, sigma, z0, b0, binf, tau, pow, nx, nt, start_floor)
+fpe_gbm_fht_pdf_cdf_vec <- function(t, mu, sigma, z0, b0, binf, tau = 1.0, pow = 1.0, nx = 256L, nt = 512L, start_floor = 1.0, grade = 8.0) {
+    .Call(`_EMC2_fpe_gbm_fht_pdf_cdf_vec`, t, mu, sigma, z0, b0, binf, tau, pow, nx, nt, start_floor, grade)
 }
 
-fpe_gompertz_fht_pdf_cdf_vec <- function(t, alpha, beta, z0, k0, kinf, tau = 1.0, pow = 1.0, nx = 256L, nt = 512L, start_floor = 1e-3) {
-    .Call(`_EMC2_fpe_gompertz_fht_pdf_cdf_vec`, t, alpha, beta, z0, k0, kinf, tau, pow, nx, nt, start_floor)
+fpe_gompertz_fht_pdf_cdf_vec <- function(t, alpha, beta, z0, k0, kinf, tau = 1.0, pow = 1.0, nx = 256L, nt = 512L, start_floor = 1e-3, grade = 8.0) {
+    .Call(`_EMC2_fpe_gompertz_fht_pdf_cdf_vec`, t, alpha, beta, z0, k0, kinf, tau, pow, nx, nt, start_floor, grade)
 }
 
 pbvn_tsay <- function(h, k, rho) {

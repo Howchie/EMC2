@@ -17,8 +17,8 @@ test_that("BM first passage matches the Wald closed form", {
     mu <- cs[1]; sigma <- cs[2]; b0 <- cs[3]
     r <- EMC2:::fpe_bm_fht_pdf_cdf_vec(tg, mu, sigma, 0, b0, b0, 1, 1, 512L, 1024L)
 
-    expect_lt(max(abs(r$pdf - wald_pdf(tg, mu / sigma, b0 / sigma))), 3e-3)
-    expect_lt(max(abs(r$cdf - wald_cdf(tg, mu / sigma, b0 / sigma))), 3e-4)
+    expect_lt(max(abs(r$pdf - wald_pdf(tg, mu / sigma, b0 / sigma))), 2e-3)
+    expect_lt(max(abs(r$cdf - wald_cdf(tg, mu / sigma, b0 / sigma))), 1e-4)
   }
 })
 
@@ -29,9 +29,9 @@ test_that("OU first passage matches the closed form when b0 == theta", {
     r <- EMC2:::fpe_ou_fht_pdf_cdf_vec(tg, lambda, 1, 1, 0, 1, 1, 1, 1, 512L, 1024L)
 
     expect_lt(max(abs(r$pdf - EMC2:::ou_fht_pdf_vec_closed_form(
-      tg, lambda, 1, 1, 0, 1, 1, 1, 1))), 3e-3)
+      tg, lambda, 1, 1, 0, 1, 1, 1, 1))), 3e-3)   # lambda = 5 dominates
     expect_lt(max(abs(r$cdf - EMC2:::ou_fht_cdf_vec_closed_form(
-      tg, lambda, 1, 1, 0, 1, 1, 1, 1))), 2e-4)
+      tg, lambda, 1, 1, 0, 1, 1, 1, 1))), 1.5e-4)
   }
 })
 
@@ -88,7 +88,10 @@ test_that("uniform start-point variability is uniform in the physical state", {
 
   uniform <- EMC2:::fpe_gompertz_fht_pdf_cdf_vec(tg, 2, 0.5, 0.5, 2, 2, 1, 1,
                                                  256L, 512L, 1e-3)$cdf
-  expect_lt(max(abs(uniform - mixture)), 5e-3)
+  # The residual here is the point-start SEED error carried by the 39 members of
+  # the oracle, not quadrature error -- it does not shrink as the mixture is
+  # refined.  It fell 4x when the mesh was graded and t_seed capped.
+  expect_lt(max(abs(uniform - mixture)), 1.5e-3)
 })
 
 test_that("GBM reduces to the Wald form in log space for a point start", {
@@ -99,6 +102,36 @@ test_that("GBM reduces to the Wald form in log space for a point start", {
 
   drift <- (mu - 0.5 * sigma^2) / sigma
   dist  <- (log(b0) - log(z)) / sigma
-  expect_lt(max(abs(r$pdf - wald_pdf(tg, drift, dist))), 3e-3)
-  expect_lt(max(abs(r$cdf - wald_cdf(tg, drift, dist))), 3e-4)
+  expect_lt(max(abs(r$pdf - wald_pdf(tg, drift, dist))), 3e-4)
+  expect_lt(max(abs(r$cdf - wald_cdf(tg, drift, dist))), 1e-4)
+})
+
+test_that("the graded mesh is a strict improvement and grade = 1 is uniform", {
+  # Cells are uniform in a stretched coordinate and clustered at the absorbing
+  # barrier, where the solution actually varies; the far field holds almost no
+  # mass.  `grade` is the ratio of far-field to barrier cell width.
+  ref <- wald_cdf(tg, 1, 1)
+  err <- vapply(c(1, 2, 4, 8), function(gr) {
+    # nt is deliberately generous: at nt = 512 the time error masks the gain.
+    r <- EMC2:::fpe_bm_fht_pdf_cdf_vec(tg, 1, 1, 0, 1, 1, 1, 1, 256L, 2048L, gr)
+    max(abs(r$cdf - ref))
+  }, numeric(1))
+
+  expect_true(all(diff(err) < 0))          # monotone in the grading
+  expect_gt(err[1] / err[4], 4.0)          # ~5x at the default grade of 8
+
+  # grade = 1 must reproduce the uniform mesh bit for bit, since the whole
+  # geometry collapses back to a constant h.
+  expect_equal(err[1], 2.352e-04, tolerance = 1e-3)
+})
+
+test_that("grading does not disturb the order of accuracy", {
+  ref <- wald_cdf(tg, 1, 1)
+  err <- vapply(c(1, 2, 4), function(k) {
+    r <- EMC2:::fpe_bm_fht_pdf_cdf_vec(tg, 1, 1, 0, 1, 1, 1, 1,
+                                       as.integer(256 * k), as.integer(2048 * k), 8)
+    max(abs(r$cdf - ref))
+  }, numeric(1))
+  expect_gt(err[1] / err[2], 3.0)
+  expect_gt(err[2] / err[3], 3.0)
 })
