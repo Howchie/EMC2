@@ -5391,8 +5391,9 @@ static double logicalrules_detection_trial_ll(
 // ===========================================================================
 // LogicalRules correlated-target capacity routes.
 //
-// On a redundant-target (AB) trial one latent standard-normal factor z scales
-// both target drift means: V_i | z ~ N((kappa + tau*z) * v_i, sv_i^2) for the
+// On a redundant-target (AB) trial one latent standard-normal factor z adds
+// a shared shift to both target drift means: V_i | z ~
+// N(v_i + kappa + tau*z, sv_i^2) for the
 // A and B target rows; nontarget/nogo racers never load on the factor.  The
 // logical rule is assembled conditional on z from normalized conditional
 // channel quantities and the complete trial mass is integrated over z with a
@@ -5410,7 +5411,7 @@ static double logicalrules_detection_trial_ll(
 static constexpr int LRCAP_N_GL = 31;
 
 // Node-invariant conditional drift view of one loaded target row:
-// V | z ~ N(v0 + slope*z, sv^2) with v0 = kappa*v and slope = tau*v.
+// V | z ~ N(v0 + slope*z, sv^2) with v0 = v + kappa and slope = tau.
 struct LrCapTargetView {
   double v0 = 0.0, slope = 0.0, sv = 1.0;
   double t0 = 0.0, A = 0.0, b = 0.0;
@@ -5428,8 +5429,8 @@ static inline LrCapTargetView lrcap_target_view(const double* const* cols,
   tv.t0 = cols[emc2col::lba::t0][row];
   tv.A = A;
   tv.b = B + A;
-  tv.v0 = kappa * v;
-  tv.slope = tau * v;
+  tv.v0 = v + kappa;
+  tv.slope = tau;
   tv.sv = sv;
   tv.valid = R_FINITE(v) && sv > 0.0 && A >= 0.0 && tv.b > 0.0 && tv.b >= A &&
     R_FINITE(tv.v0) && R_FINITE(tv.slope) &&
@@ -6648,7 +6649,7 @@ static double c_log_likelihood_logicalrules(
     const int cell_idx = shared.cell_id[static_cast<size_t>(j)];
 
     // Capacity is a trial-level extension.  It is active only for redundant
-    // target (AB) conditions and only when the particle's capacity factor is
+    // target (AB) conditions and only when the particle's capacity effect is
     // non-degenerate.  Every other trial deliberately continues through the
     // legacy evaluator below, preserving its batched fast path and exact
     // baseline behaviour.
@@ -6656,7 +6657,7 @@ static double c_log_likelihood_logicalrules(
       const double kappa = pars_cols[kappa_col][idxA];
       const double tau = pars_cols[tau_col][idxA];
       const bool shared_capacity =
-        R_FINITE(kappa) && kappa > 0.0 && R_FINITE(tau) && tau >= 0.0 &&
+        R_FINITE(kappa) && R_FINITE(tau) && tau >= 0.0 &&
         pars_cols[kappa_col][idxB] == kappa &&
         pars_cols[tau_col][idxB] == tau;
       if (!shared_capacity) {
@@ -6665,7 +6666,7 @@ static double c_log_likelihood_logicalrules(
         continue;
       }
       const bool pair_active = shared.cond_code[static_cast<size_t>(j)] == 3 &&
-        (kappa != 1.0 || tau != 0.0);
+        (kappa != 0.0 || tau != 0.0);
       if (pair_active) {
         if (count_capacity) {
           if (rule_code == 5) ++lr_capacity_counters().capacity_detection_trials;

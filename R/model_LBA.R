@@ -237,17 +237,17 @@ LBA <- function(posdrift=TRUE){
 #'
 #' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Interpretation** |
 #' |---|---|---|---|---|
-#' | *kappa* | log | \[0, Inf\] | log(1) | Multiplicative mean capacity effect on both active targets in an `AB` trial. |
-#' | *tau* | log | \[0, Inf\] | log(0) | Between-trial SD of the shared capacity multiplier in an `AB` trial. |
+#' | *kappa* | identity | \[-Inf, Inf\] | 0 | Additive mean capacity shift shared by both active targets in an `AB` trial. |
+#' | *tau* | log | \[0, Inf\] | log(0) | Between-trial SD of the shared additive drift shift in an `AB` trial. |
 #'
 #' With `capacity = TRUE`, an `AB` trial receives one latent `Z ~ N(0, 1)` and
 #' the target drift draws are
-#' `V_i = (kappa + tau * Z) * v_i + epsilon_i`, for `i = A, B`, with
+#' `V_i = v_i + kappa + tau * Z + epsilon_i`, for `i = A, B`, with
 #' independent `epsilon_i ~ N(0, sv_i^2)`. The logical-rule calculation is
 #' performed conditional on this same `Z` and then integrated over `Z`; the
 #' factor is not integrated separately for the two subraces. Nontarget
 #' accumulators do not load on the factor. Capacity has no effect on
-#' `AN`, `NB`, or `NN` trials, and `kappa = 1, tau = 0` recovers the ordinary
+#' `AN`, `NB`, or `NN` trials, and `kappa = 0, tau = 0` recovers the ordinary
 #' logical-rules likelihood exactly. `kappa` and `tau` must be shared by the
 #' `A` and `B` rows within a trial. In positive-drift mode, the active target
 #' draws are conditioned jointly to be positive.
@@ -275,12 +275,12 @@ LogicalRulesLBA <- function(posdrift = TRUE, fast_path=TRUE, capacity = FALSE){
   if (capacity) {
     # kappa/tau are appended after the emc2col::lba kernel prefix so the raw
     # batch kernels keep their positional contract.  tau = 0 (from the
-    # default log(0)) and kappa = 1 (exp(0)) are exactly representable, so
+    # default log(0)) and kappa = 0 (identity scale) are exactly representable, so
     # the ordinary route is recovered bit-for-bit when capacity is off.
-    p_types <- c(p_types, kappa = log(1), tau = log(0))
-    transform <- c(transform, kappa = "exp", tau = "exp")
-    minmax <- cbind(minmax, kappa = c(1e-4, Inf), tau = c(1e-4, Inf))
-    exception <- c(exception, kappa = 1, tau = 0)
+    p_types <- c(p_types, kappa = 0, tau = log(0))
+    transform <- c(transform, kappa = "identity", tau = "exp")
+    minmax <- cbind(minmax, kappa = c(-Inf, Inf), tau = c(1e-4, Inf))
+    exception <- c(exception, tau = 0)
   }
   list(
     type="RACE",

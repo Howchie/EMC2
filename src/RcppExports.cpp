@@ -2276,6 +2276,43 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// rlf_fht_pdf_cdf_vec
+Rcpp::List rlf_fht_pdf_cdf_vec(NumericVector t, double v, double sigma, double alpha, double b0, double z0, int nx, int nt);
+RcppExport SEXP _EMC2_rlf_fht_pdf_cdf_vec(SEXP tSEXP, SEXP vSEXP, SEXP sigmaSEXP, SEXP alphaSEXP, SEXP b0SEXP, SEXP z0SEXP, SEXP nxSEXP, SEXP ntSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type t(tSEXP);
+    Rcpp::traits::input_parameter< double >::type v(vSEXP);
+    Rcpp::traits::input_parameter< double >::type sigma(sigmaSEXP);
+    Rcpp::traits::input_parameter< double >::type alpha(alphaSEXP);
+    Rcpp::traits::input_parameter< double >::type b0(b0SEXP);
+    Rcpp::traits::input_parameter< double >::type z0(z0SEXP);
+    Rcpp::traits::input_parameter< int >::type nx(nxSEXP);
+    Rcpp::traits::input_parameter< int >::type nt(ntSEXP);
+    rcpp_result_gen = Rcpp::wrap(rlf_fht_pdf_cdf_vec(t, v, sigma, alpha, b0, z0, nx, nt));
+    return rcpp_result_gen;
+END_RCPP
+}
+// simulate_rlf_hit_times_cpp
+NumericVector simulate_rlf_hit_times_cpp(int n_sims, double v, double sigma, double alpha, double b0, double z0, double t_max, double dt, unsigned int seed);
+RcppExport SEXP _EMC2_simulate_rlf_hit_times_cpp(SEXP n_simsSEXP, SEXP vSEXP, SEXP sigmaSEXP, SEXP alphaSEXP, SEXP b0SEXP, SEXP z0SEXP, SEXP t_maxSEXP, SEXP dtSEXP, SEXP seedSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< int >::type n_sims(n_simsSEXP);
+    Rcpp::traits::input_parameter< double >::type v(vSEXP);
+    Rcpp::traits::input_parameter< double >::type sigma(sigmaSEXP);
+    Rcpp::traits::input_parameter< double >::type alpha(alphaSEXP);
+    Rcpp::traits::input_parameter< double >::type b0(b0SEXP);
+    Rcpp::traits::input_parameter< double >::type z0(z0SEXP);
+    Rcpp::traits::input_parameter< double >::type t_max(t_maxSEXP);
+    Rcpp::traits::input_parameter< double >::type dt(dtSEXP);
+    Rcpp::traits::input_parameter< unsigned int >::type seed(seedSEXP);
+    rcpp_result_gen = Rcpp::wrap(simulate_rlf_hit_times_cpp(n_sims, v, sigma, alpha, b0, z0, t_max, dt, seed));
+    return rcpp_result_gen;
+END_RCPP
+}
 // run_trend_rcpp
 NumericVector run_trend_rcpp(DataFrame data, List trend, NumericVector param, NumericMatrix trend_pars, NumericMatrix pars_full, bool return_kernel);
 RcppExport SEXP _EMC2_run_trend_rcpp(SEXP dataSEXP, SEXP trendSEXP, SEXP paramSEXP, SEXP trend_parsSEXP, SEXP pars_fullSEXP, SEXP return_kernelSEXP) {
@@ -2476,6 +2513,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_bawl_time_geometry_probe", (DL_FUNC) &_EMC2_bawl_time_geometry_probe, 5},
     {"_EMC2_bawl_prepared_endpoints_probe", (DL_FUNC) &_EMC2_bawl_prepared_endpoints_probe, 10},
     {"_EMC2_gl_rule_nodes_weights", (DL_FUNC) &_EMC2_gl_rule_nodes_weights, 1},
+    {"_EMC2_rlf_fht_pdf_cdf_vec", (DL_FUNC) &_EMC2_rlf_fht_pdf_cdf_vec, 8},
+    {"_EMC2_simulate_rlf_hit_times_cpp", (DL_FUNC) &_EMC2_simulate_rlf_hit_times_cpp, 9},
     {"_EMC2_run_trend_rcpp", (DL_FUNC) &_EMC2_run_trend_rcpp, 6},
     {"_EMC2_ou_debug_set", (DL_FUNC) &_EMC2_ou_debug_set, 2},
     {"_EMC2_calculate_num_steps", (DL_FUNC) &_EMC2_calculate_num_steps, 3},

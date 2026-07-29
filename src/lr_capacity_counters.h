@@ -14,14 +14,14 @@
 struct LrCapacityCounters {
   // Per-trial route selection (unique trials, per particle evaluation).
   // Ordinary trials are single-target trials, trials without capacity
-  // parameters, and AB trials sitting exactly at kappa = 1, tau = 0.
+  // parameters, and AB trials sitting exactly at kappa = 0, tau = 0.
   long long ordinary_trials = 0;
   long long capacity_detection_trials = 0;
   long long capacity_choice_trials = 0;
   long long invalid_trials = 0;
 
   // Capacity trials evaluated with the exact single-node tau = 0 shortcut
-  // (kappa != 1 mean effect only; the integrand is factor-invariant).
+  // (kappa != 0 mean shift only; the integrand is factor-invariant).
   long long tau_zero_trials = 0;
 
   // Work volume.

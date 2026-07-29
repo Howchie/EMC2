@@ -28,9 +28,9 @@ std::unordered_map<std::string, int> col_index_map(const Rcpp::NumericMatrix& pa
 }  // namespace
 
 // Shared-capacity LogicalRules simulator.  This is the C++ counterpart of
-// .lr_capacity_finish_times() in R/make_data.R.  The capacity factor loads
-// only on the A/B target pair in an AB stimulus condition; every other
-// accumulator keeps its ordinary independent LBA drift draw.
+// .lr_capacity_finish_times() in R/make_data.R.  The shared additive drift
+// shift loads only on the A/B target pair in an AB stimulus condition; every
+// other accumulator keeps its ordinary independent LBA drift draw.
 //
 // The return value is a matrix of accumulator finishing times, with one row
 // per trial and one column per lR level.  Logical-rule assembly is deliberately
@@ -95,13 +95,13 @@ Rcpp::NumericMatrix logicalrules_capacity_finish_cpp(
     if (pars(b_row, ikappa) != kappa || pars(b_row, itau) != tau) {
       Rcpp::stop("LogicalRules capacity requires kappa and tau shared by the A and B rows within each trial.");
     }
-    if (!R_FINITE(kappa) || !(kappa > 0.0) || !R_FINITE(tau) || tau < 0.0) {
-      Rcpp::stop("LogicalRules capacity requires finite kappa > 0 and tau >= 0.");
+    if (!R_FINITE(kappa) || !R_FINITE(tau) || tau < 0.0) {
+      Rcpp::stop("LogicalRules capacity requires finite kappa and tau >= 0.");
     }
 
     const std::string condition = normalized_condition(
       Rcpp::as<std::string>(stimulus[tr]));
-    const bool pair_active = condition == "AB" && (kappa != 1.0 || tau != 0.0);
+    const bool pair_active = condition == "AB" && (kappa != 0.0 || tau != 0.0);
 
     std::vector<double> drifts(static_cast<size_t>(n_acc), NA_REAL);
     if (pair_active) {
@@ -115,11 +115,11 @@ Rcpp::NumericMatrix logicalrules_capacity_finish_cpp(
       bool accepted = false;
       for (int iter = 0; iter < max_iter; ++iter) {
         const double z = R::norm_rand();
-        const double multiplier = kappa + tau * z;
+        const double shift = kappa + tau * z;
         const int row_a = base + a_role;
         const int row_b = base + b_role;
-        const double drift_a = R::rnorm(multiplier * pars(row_a, iv), pars(row_a, isv));
-        const double drift_b = R::rnorm(multiplier * pars(row_b, iv), pars(row_b, isv));
+        const double drift_a = R::rnorm(pars(row_a, iv) + shift, pars(row_a, isv));
+        const double drift_b = R::rnorm(pars(row_b, iv) + shift, pars(row_b, isv));
         drifts[static_cast<size_t>(a_role)] = drift_a;
         drifts[static_cast<size_t>(b_role)] = drift_b;
         if (!posdrift || (drift_a > 0.0 && drift_b > 0.0)) {

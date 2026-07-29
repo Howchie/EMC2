@@ -722,13 +722,13 @@ apply_logical_rules <- function(LogicalRule, A_t, nA_t, B_t, nB_t) {
 }
 
 # Shared-capacity LogicalRules finishing-time sampler. One latent standard-normal
-# factor per AB trial scales both target drift means:
-# V_i = (kappa + tau*z) * v_i + eps_i for i in {A, B}; nontarget and
+# factor per AB trial adds a shared shift to both target drift means:
+# V_i = v_i + kappa + tau*z + eps_i for i in {A, B}; nontarget and
 # time racers never load on the factor.  With posdrift the correlated pair is
 # jointly conditioned on both target drifts being positive (rejection on
 # (z, V_A, V_B)); independent racers keep their ordinary univariate
 # truncation, which factorises out of the joint law.  Trials that are not AB
-# (or whose capacity parameters sit at kappa = 1, tau = 0) reproduce the
+# (or whose capacity parameters sit at kappa = 0, tau = 0) reproduce the
 # ordinary independent LBA drift draws exactly.
 .lr_capacity_finish_times <- function(data, pars, races, posdrift) {
   n_trials <- nrow(data) / length(races)
@@ -743,15 +743,15 @@ apply_logical_rules <- function(LogicalRule, A_t, nA_t, B_t, nB_t) {
   if (any(pars[rowsB, "kappa"] != kappa) || any(pars[rowsB, "tau"] != tau)) {
     stop("LogicalRules capacity requires kappa and tau shared by the A and B rows within each trial.")
   }
-  if (any(!is.finite(kappa) | kappa <= 0) || any(!is.finite(tau) | tau < 0)) {
-    stop("LogicalRules capacity requires finite kappa > 0 and tau >= 0.")
+  if (any(!is.finite(kappa)) || any(!is.finite(tau) | tau < 0)) {
+    stop("LogicalRules capacity requires finite kappa and tau >= 0.")
   }
 
   if (.use_cpp_rfun()) {
     return(logicalrules_capacity_finish_cpp(pars, races, cond, posdrift))
   }
 
-  pair_active <- cond == "AB" & (kappa != 1 | tau != 0)
+  pair_active <- cond == "AB" & (kappa != 0 | tau != 0)
 
   trial_idx <- integer(nrow(data))
   for (r in races) trial_idx[data$lR == r] <- seq_len(n_trials)
@@ -777,9 +777,9 @@ apply_logical_rules <- function(LogicalRule, A_t, nA_t, B_t, nB_t) {
     todo <- seq_along(act)
     for (iter in seq_len(10000L)) {
       z <- rnorm(length(todo))
-      G <- kap[todo] + tu[todo] * z
-      dA <- rnorm(length(todo), mean = G * vA[todo], sd = svA[todo])
-      dB <- rnorm(length(todo), mean = G * vB[todo], sd = svB[todo])
+      shift <- kap[todo] + tu[todo] * z
+      dA <- rnorm(length(todo), mean = vA[todo] + shift, sd = svA[todo])
+      dB <- rnorm(length(todo), mean = vB[todo] + shift, sd = svB[todo])
       okd <- !posdrift | (dA > 0 & dB > 0)
       VA[todo[okd]] <- dA[okd]
       VB[todo[okd]] <- dB[okd]

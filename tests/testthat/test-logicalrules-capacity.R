@@ -60,11 +60,19 @@ lr_capacity_parameters <- function(design, tau = 0) {
     if (nm %in% names(p)) p[nm] <- values[[nm]]
   }
   if (all(c("kappa", "tau") %in% names(p))) {
-    p["kappa"] <- 0                 # log(1)
+    p["kappa"] <- 0                 # additive baseline shift
     p["tau"] <- if (tau == 0) log(0) else log(tau)
   }
   p
 }
+
+test_that("LogicalRulesLBA capacity uses additive kappa with an unbounded identity scale", {
+  model <- LogicalRulesLBA(capacity = TRUE)
+  expect_equal(unname(model$p_types[c("kappa", "tau")]), c(0, log(0)))
+  expect_equal(unname(model$transform$func[c("kappa", "tau")]), c("identity", "exp"))
+  expect_equal(unname(model$bound$minmax[, "kappa"]), c(-Inf, Inf))
+  expect_equal(unname(model$bound$exception["tau"]), 0)
+})
 
 lr_capacity_detection_design <- function(rule, data, roles) {
   design_data <- data
@@ -125,6 +133,19 @@ test_that("only the AB trial enters the shared-capacity route", {
   expect_gt(abs(ll1[3] - ll0[3]), 1e-7)
 })
 
+test_that("capacity likelihood treats kappa as an additive target-drift shift", {
+  data <- lr_capacity_data()
+  capacity <- lr_capacity_design(data, TRUE)
+  p0 <- lr_capacity_parameters(capacity, tau = 0)
+  p1 <- p0
+  p1["kappa"] <- 0.5
+
+  ll0 <- lr_capacity_ll_pw(data, capacity, p0)
+  ll1 <- lr_capacity_ll_pw(data, capacity, p1)
+  expect_equal(ll1[c(1, 2, 4)], ll0[c(1, 2, 4)], tolerance = 1e-12)
+  expect_gt(abs(ll1[3] - ll0[3]), 1e-7)
+})
+
 test_that("capacity simulator accepts one shared factor per AB trial", {
   data <- lr_capacity_data()
   capacity <- lr_capacity_design(data, TRUE)
@@ -150,9 +171,45 @@ test_that("capacity simulator loads only A and B on AB trials", {
     posdrift = FALSE
   )
 
-  expect_equal(unname(finish[1, c("A", "B")]), c(0.5, 0.5), tolerance = 1e-12)
+  expect_equal(unname(finish[1, c("A", "B")]), c(1 / 3, 1 / 3), tolerance = 1e-12)
   expect_equal(unname(finish[1, c("n_A", "n_B")]), c(1, 1), tolerance = 1e-12)
   expect_equal(unname(finish[2, ]), rep(1, 4), tolerance = 1e-12)
+})
+
+test_that("capacity simulator accepts negative additive kappa", {
+  finish_cpp <- getFromNamespace("logicalrules_capacity_finish_cpp", "EMC2")
+  pars <- matrix(
+    rep(c(1, 0, 1, 0, 0, -0.25, 0), 4),
+    ncol = 7, byrow = TRUE,
+    dimnames = list(NULL, c("v", "sv", "b", "A", "t0", "kappa", "tau"))
+  )
+  finish <- finish_cpp(
+    pars,
+    c("A", "B", "n_A", "n_B"),
+    "AB",
+    posdrift = FALSE
+  )
+
+  expect_equal(unname(finish[1, c("A", "B")]), c(4 / 3, 4 / 3), tolerance = 1e-12)
+})
+
+test_that("R capacity simulator fallback uses the additive drift shift", {
+  data <- data.frame(
+    lR = factor(c("A", "B", "n_A", "n_B"),
+                levels = c("A", "B", "n_A", "n_B")),
+    S = factor("AB", levels = c("NN", "AN", "NB", "AB"))
+  )
+  pars <- matrix(
+    rep(c(1, 0, 1, 0, 0, -0.25, 0), 4),
+    ncol = 7, byrow = TRUE,
+    dimnames = list(NULL, c("v", "sv", "b", "A", "t0", "kappa", "tau"))
+  )
+  withr::local_options(emc2.cpp_rfun = FALSE)
+  finish <- EMC2:::.lr_capacity_finish_times(
+    data, pars, c("A", "B", "n_A", "n_B"), posdrift = FALSE
+  )
+
+  expect_equal(unname(finish[1, c("A", "B")]), c(4 / 3, 4 / 3), tolerance = 1e-12)
 })
 
 test_that("capacity detection routes evaluate analytic and GNG AB trials", {

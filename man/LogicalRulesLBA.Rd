@@ -70,19 +70,19 @@ is used and negative-drift accumulators can produce intrinsic omissions.
 All of the parameters above are trial-dependent after the design formulas
 have been evaluated. The capacity extension adds the following parameters:\tabular{lllll}{
    \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Interpretation} \cr
-   \emph{kappa} \tab log \tab [0, Inf] \tab log(1) \tab Multiplicative mean capacity effect on both active targets in an \code{AB} trial. \cr
-   \emph{tau} \tab log \tab [0, Inf] \tab log(0) \tab Between-trial SD of the shared capacity multiplier in an \code{AB} trial. \cr
+   \emph{kappa} \tab identity \tab [-Inf, Inf] \tab 0 \tab Additive mean capacity shift shared by both active targets in an \code{AB} trial. \cr
+   \emph{tau} \tab log \tab [0, Inf] \tab log(0) \tab Between-trial SD of the shared additive drift shift in an \code{AB} trial. \cr
 }
 
 
 With \code{capacity = TRUE}, an \code{AB} trial receives one latent \code{Z ~ N(0, 1)} and
 the target drift draws are
-\code{V_i = (kappa + tau * Z) * v_i + epsilon_i}, for \verb{i = A, B}, with
+\code{V_i = v_i + kappa + tau * Z + epsilon_i}, for \verb{i = A, B}, with
 independent \code{epsilon_i ~ N(0, sv_i^2)}. The logical-rule calculation is
 performed conditional on this same \code{Z} and then integrated over \code{Z}; the
 factor is not integrated separately for the two subraces. Nontarget
 accumulators do not load on the factor. Capacity has no effect on
-\code{AN}, \code{NB}, or \code{NN} trials, and \verb{kappa = 1, tau = 0} recovers the ordinary
+\code{AN}, \code{NB}, or \code{NN} trials, and \verb{kappa = 0, tau = 0} recovers the ordinary
 logical-rules likelihood exactly. \code{kappa} and \code{tau} must be shared by the
 \code{A} and \code{B} rows within a trial. In positive-drift mode, the active target
 draws are conditioned jointly to be positive.

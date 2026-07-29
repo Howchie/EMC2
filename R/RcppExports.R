@@ -513,6 +513,14 @@ gl_rule_nodes_weights <- function(n) {
     .Call(`_EMC2_gl_rule_nodes_weights`, n)
 }
 
+rlf_fht_pdf_cdf_vec <- function(t, v, sigma, alpha, b0, z0 = 0.0, nx = 200L, nt = 400L) {
+    .Call(`_EMC2_rlf_fht_pdf_cdf_vec`, t, v, sigma, alpha, b0, z0, nx, nt)
+}
+
+simulate_rlf_hit_times_cpp <- function(n_sims, v, sigma, alpha, b0, z0 = 0.0, t_max = 5.0, dt = 0.001, seed = 42L) {
+    .Call(`_EMC2_simulate_rlf_hit_times_cpp`, n_sims, v, sigma, alpha, b0, z0, t_max, dt, seed)
+}
+
 run_trend_rcpp <- function(data, trend, param, trend_pars, pars_full, return_kernel = FALSE) {
     .Call(`_EMC2_run_trend_rcpp`, data, trend, param, trend_pars, pars_full, return_kernel)
 }
