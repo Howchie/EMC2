@@ -320,3 +320,64 @@ Rscript .Rtmp/fpe_validate.R      # ladder, must be clean through item 9
 Rscript .Rtmp/fpe_bakeoff.R       # decision gate
 Rscript -e '.libPaths(c(".Rtmp/Rlib_fpe",.libPaths())); testthat::test_dir("tests/testthat", env=new.env(parent=asNamespace("EMC2")))'
 ```
+
+---
+
+# Implementation log
+
+## 2026-07-29 — Steps 1-3 complete, ladder items 1/2/3/8/9 passing
+
+**Files added** (all new; nothing existing was modified except the generated
+`RcppExports`):
+
+* `src/fpe_solver.h` — model-agnostic core. `bern()`, `thomas_solve()`,
+  `FPE_Op`, `build_op()` (Scharfetter-Gummel interior faces, `F_0 = 0`,
+  2nd-order one-sided absorbing face), `flux_out()`, `apply_shifted()`,
+  `fpe_solve()` (Rannacher: 4 backward-Euler half-steps, then CN),
+  `grid_lookup()`. The model is a **template parameter**, never `std::function`.
+* `src/fpe_models.h` — `FPE_Boundary` (Weibull decay + closed-form `b_prime`),
+  `FPE_ModelBM`, `FPE_ModelOU`, `fpe_x_lo_bm/ou`, `fpe_seed()`, `fpe_run()`.
+* `src/fpe_diffusion.cpp` — the only TU; 4 exports
+  `fpe_{bm,ou,gbm,gompertz}_fht_pdf_cdf_vec`, each returning
+  `list(pdf, cdf, mismatch, t_grid, pdf_grid)`.
+
+**Two corrections to the plan as written**, both load-bearing:
+
+1. *Image mean.* The plan's seeding formula had the image Gaussian at `2a - m`
+   with `m = z + A*t_seed`. The correct method-of-images mean is
+   **`2a - z + A*t_seed`** — reflect the START point about the barrier, then let
+   it drift. Implemented as written here.
+2. *Domain lower edge.* The plan's 8-sd rule
+   (`z_min - 8*(|A|*t_max + sigma*sqrt(t_max))`) is far too generous: for
+   BM(mu=1, sigma=1, t_max=2) it gives `L = 28.3`, so a uniform mesh spends
+   almost all its cells where nothing happens and the cdf error at `M = 256` was
+   **2.6e-3**. Replaced with `z_min + min(0, A*t_max) - 6*sigma*sqrt(t_max)`
+   (drift may only *lower* the floor) — same case now `L = 9.5`, cdf error
+   **2.6e-4**, an 8x gain for free. `FPE_NSD = 6` truncates ~1e-9 of mass.
+
+**Validation status** (`.Rtmp/fpe_validate.R`, `.Rtmp/fpe_mc.R`; temp lib
+`.Rtmp/Rlib_fpe`, banner-verified):
+
+| ladder item | result |
+|---|---|
+| 1. BM fixed bound vs Wald | cdf 1.0e-4 … 5.7e-4 abs at `nx=256` |
+| 2. OU `b0 == theta` vs closed form | pdf 3.6e-4 … 1.4e-3 at `nx=512`, all lambda |
+| 3. OU `b0 != theta` vs Volterra **and** MC | cdf agrees with both to <= 8e-4 (= MC noise) |
+| 7. `flux_mass_mismatch` | 1e-13 … 1e-14 once resolved; a real diagnostic |
+| 8. high `lambda*t` (the Volterra failure) | **converges monotonically** 0.9078 -> 0.9096 (Volterra oscillated 0.13/0.48/1.0) |
+| 9. convergence order | ratio 3.89 / 3.96 / 4.00 — clean 2nd order in (h, dt) jointly |
+
+MC gotcha worth recording: `simulate_ou_hit_times_bb` returns `NA` for paths that
+never hit within `t_max`. Dividing by the number of *finite* hits renormalises the
+empirical cdf and manufactures a spurious 4% bias against the solvers. Divide by `n`.
+
+**Open / next:**
+
+* Error is concentrated at small `t` (worst rel error at `t = 0.05-0.10`), i.e. in
+  the point-start seed, not the bulk — sharpen `fpe_seed`.
+* Speed: 3.3 ms at `nx=256, nt=512`; 13.3 ms at `nx=512, nt=1024` (200 RTs,
+  OU, `max_t = 2`). Decision gate wants <= 1e-4 rel in <= 5 ms, so `build_op`'s
+  per-face `expm1` needs to go (`Atil` is affine in `xi` for every supported
+  model, so the Peclet numbers form an arithmetic sequence).
+* Steps 4 (items 4/5/6: collapsing bounds, start-point variability, GBM/Gompertz),
+  5 (bake-off) and 6 (testthat) still to do.

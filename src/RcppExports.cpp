@@ -44,6 +44,89 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// fpe_bm_fht_pdf_cdf_vec
+Rcpp::List fpe_bm_fht_pdf_cdf_vec(NumericVector t, double mu, double sigma, double z0, double b0, double binf, double tau, double pow, int nx, int nt);
+RcppExport SEXP _EMC2_fpe_bm_fht_pdf_cdf_vec(SEXP tSEXP, SEXP muSEXP, SEXP sigmaSEXP, SEXP z0SEXP, SEXP b0SEXP, SEXP binfSEXP, SEXP tauSEXP, SEXP powSEXP, SEXP nxSEXP, SEXP ntSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type t(tSEXP);
+    Rcpp::traits::input_parameter< double >::type mu(muSEXP);
+    Rcpp::traits::input_parameter< double >::type sigma(sigmaSEXP);
+    Rcpp::traits::input_parameter< double >::type z0(z0SEXP);
+    Rcpp::traits::input_parameter< double >::type b0(b0SEXP);
+    Rcpp::traits::input_parameter< double >::type binf(binfSEXP);
+    Rcpp::traits::input_parameter< double >::type tau(tauSEXP);
+    Rcpp::traits::input_parameter< double >::type pow(powSEXP);
+    Rcpp::traits::input_parameter< int >::type nx(nxSEXP);
+    Rcpp::traits::input_parameter< int >::type nt(ntSEXP);
+    rcpp_result_gen = Rcpp::wrap(fpe_bm_fht_pdf_cdf_vec(t, mu, sigma, z0, b0, binf, tau, pow, nx, nt));
+    return rcpp_result_gen;
+END_RCPP
+}
+// fpe_ou_fht_pdf_cdf_vec
+Rcpp::List fpe_ou_fht_pdf_cdf_vec(NumericVector t, double lambda, double theta, double sigma, double z0, double b0, double binf, double tau, double pow, int nx, int nt);
+RcppExport SEXP _EMC2_fpe_ou_fht_pdf_cdf_vec(SEXP tSEXP, SEXP lambdaSEXP, SEXP thetaSEXP, SEXP sigmaSEXP, SEXP z0SEXP, SEXP b0SEXP, SEXP binfSEXP, SEXP tauSEXP, SEXP powSEXP, SEXP nxSEXP, SEXP ntSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type t(tSEXP);
+    Rcpp::traits::input_parameter< double >::type lambda(lambdaSEXP);
+    Rcpp::traits::input_parameter< double >::type theta(thetaSEXP);
+    Rcpp::traits::input_parameter< double >::type sigma(sigmaSEXP);
+    Rcpp::traits::input_parameter< double >::type z0(z0SEXP);
+    Rcpp::traits::input_parameter< double >::type b0(b0SEXP);
+    Rcpp::traits::input_parameter< double >::type binf(binfSEXP);
+    Rcpp::traits::input_parameter< double >::type tau(tauSEXP);
+    Rcpp::traits::input_parameter< double >::type pow(powSEXP);
+    Rcpp::traits::input_parameter< int >::type nx(nxSEXP);
+    Rcpp::traits::input_parameter< int >::type nt(ntSEXP);
+    rcpp_result_gen = Rcpp::wrap(fpe_ou_fht_pdf_cdf_vec(t, lambda, theta, sigma, z0, b0, binf, tau, pow, nx, nt));
+    return rcpp_result_gen;
+END_RCPP
+}
+// fpe_gbm_fht_pdf_cdf_vec
+Rcpp::List fpe_gbm_fht_pdf_cdf_vec(NumericVector t, double mu, double sigma, double z0, double b0, double binf, double tau, double pow, int nx, int nt, double start_floor);
+RcppExport SEXP _EMC2_fpe_gbm_fht_pdf_cdf_vec(SEXP tSEXP, SEXP muSEXP, SEXP sigmaSEXP, SEXP z0SEXP, SEXP b0SEXP, SEXP binfSEXP, SEXP tauSEXP, SEXP powSEXP, SEXP nxSEXP, SEXP ntSEXP, SEXP start_floorSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type t(tSEXP);
+    Rcpp::traits::input_parameter< double >::type mu(muSEXP);
+    Rcpp::traits::input_parameter< double >::type sigma(sigmaSEXP);
+    Rcpp::traits::input_parameter< double >::type z0(z0SEXP);
+    Rcpp::traits::input_parameter< double >::type b0(b0SEXP);
+    Rcpp::traits::input_parameter< double >::type binf(binfSEXP);
+    Rcpp::traits::input_parameter< double >::type tau(tauSEXP);
+    Rcpp::traits::input_parameter< double >::type pow(powSEXP);
+    Rcpp::traits::input_parameter< int >::type nx(nxSEXP);
+    Rcpp::traits::input_parameter< int >::type nt(ntSEXP);
+    Rcpp::traits::input_parameter< double >::type start_floor(start_floorSEXP);
+    rcpp_result_gen = Rcpp::wrap(fpe_gbm_fht_pdf_cdf_vec(t, mu, sigma, z0, b0, binf, tau, pow, nx, nt, start_floor));
+    return rcpp_result_gen;
+END_RCPP
+}
+// fpe_gompertz_fht_pdf_cdf_vec
+Rcpp::List fpe_gompertz_fht_pdf_cdf_vec(NumericVector t, double alpha, double beta, double z0, double k0, double kinf, double tau, double pow, int nx, int nt, double start_floor);
+RcppExport SEXP _EMC2_fpe_gompertz_fht_pdf_cdf_vec(SEXP tSEXP, SEXP alphaSEXP, SEXP betaSEXP, SEXP z0SEXP, SEXP k0SEXP, SEXP kinfSEXP, SEXP tauSEXP, SEXP powSEXP, SEXP nxSEXP, SEXP ntSEXP, SEXP start_floorSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type t(tSEXP);
+    Rcpp::traits::input_parameter< double >::type alpha(alphaSEXP);
+    Rcpp::traits::input_parameter< double >::type beta(betaSEXP);
+    Rcpp::traits::input_parameter< double >::type z0(z0SEXP);
+    Rcpp::traits::input_parameter< double >::type k0(k0SEXP);
+    Rcpp::traits::input_parameter< double >::type kinf(kinfSEXP);
+    Rcpp::traits::input_parameter< double >::type tau(tauSEXP);
+    Rcpp::traits::input_parameter< double >::type pow(powSEXP);
+    Rcpp::traits::input_parameter< int >::type nx(nxSEXP);
+    Rcpp::traits::input_parameter< int >::type nt(ntSEXP);
+    Rcpp::traits::input_parameter< double >::type start_floor(start_floorSEXP);
+    rcpp_result_gen = Rcpp::wrap(fpe_gompertz_fht_pdf_cdf_vec(t, alpha, beta, z0, k0, kinf, tau, pow, nx, nt, start_floor));
+    return rcpp_result_gen;
+END_RCPP
+}
 // pbvn_tsay
 double pbvn_tsay(double h, double k, double rho);
 RcppExport SEXP _EMC2_pbvn_tsay(SEXP hSEXP, SEXP kSEXP, SEXP rhoSEXP) {
@@ -2263,6 +2346,10 @@ END_RCPP
 static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_EMC2_call_custom_trend", (DL_FUNC) &_EMC2_EMC2_call_custom_trend, 3},
     {"_EMC2_sp_new", (DL_FUNC) &_EMC2_sp_new, 10},
+    {"_EMC2_fpe_bm_fht_pdf_cdf_vec", (DL_FUNC) &_EMC2_fpe_bm_fht_pdf_cdf_vec, 10},
+    {"_EMC2_fpe_ou_fht_pdf_cdf_vec", (DL_FUNC) &_EMC2_fpe_ou_fht_pdf_cdf_vec, 11},
+    {"_EMC2_fpe_gbm_fht_pdf_cdf_vec", (DL_FUNC) &_EMC2_fpe_gbm_fht_pdf_cdf_vec, 11},
+    {"_EMC2_fpe_gompertz_fht_pdf_cdf_vec", (DL_FUNC) &_EMC2_fpe_gompertz_fht_pdf_cdf_vec, 11},
     {"_EMC2_pbvn_tsay", (DL_FUNC) &_EMC2_pbvn_tsay, 3},
     {"_EMC2_pbvn_tvpack", (DL_FUNC) &_EMC2_pbvn_tvpack, 3},
     {"_EMC2_pbvn_drezner", (DL_FUNC) &_EMC2_pbvn_drezner, 3},
