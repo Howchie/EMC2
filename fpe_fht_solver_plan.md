@@ -461,3 +461,82 @@ to try if the accuracy ceiling below is not good enough.
 
 **Next:** Step 5 bake-off vs the Volterra chunked path, then Step 6
 `tests/testthat/test-fpe-fht.R`.
+
+## 2026-07-29 (cont.) — Steps 5 and 6 complete; plan fully implemented
+
+### Step 5 bake-off (`.Rtmp/fpe_bakeoff.R`)
+
+Harness gotcha that briefly gave a 5x-optimistic answer: in R, `force(expr)` on a
+promise **memoises**, so `for (i in 1:n) force(expr)` times ONE call and divides by
+`n`. Time with `eval(substitute(expr), parent.frame())` instead.
+
+**A. Cost vs `max_t`** (OU, 200 RTs, `lambda=2, theta=2, b0=1`):
+
+| `max_t` | FPE (`nx=256, nt=512`) | Volterra chunked | speedup |
+|---|---|---|---|
+| 1 | 2.0 ms | 408 ms | 204x |
+| 2 | 2.0 ms | 1103 ms | 551x |
+| 4 | 1.8 ms | 3429 ms | 1905x |
+
+The speedup *grows* with `max_t`, which is the structural point: Volterra's history
+sum is O(N_t^2), the FPE march is O(M*N_t).
+
+**B. Moving boundary**: FPE 1.00x (a collapsing bound is just a time-varying
+coefficient), Volterra 2.58x. The moving-bound penalty is gone entirely.
+
+**C. Accuracy at matched wall clock** (BM vs Wald, `max_t = 2`, mid-RT band
+`t in [0.15, 1.5]`):
+
+| solver | setting | wall | mid-RT rel |
+|---|---|---|---|
+| FPE | `nx=128, nt=256` | 0.6 ms | 7.2e-3 |
+| FPE | `nx=256, nt=512` | 1.8 ms | 2.5e-3 |
+| FPE | `nx=384, nt=768` | 4.2 ms | 1.2e-3 |
+| FPE | `nx=512, nt=1024` | 7.4 ms | 6.9e-4 |
+| Volterra | `base_panels=150` | 1319 ms | **2.9e-7** |
+
+### Decision gate: ADOPT, with the accuracy ceiling recorded
+
+The plan's gate was "<= 1e-4 rel on the mid-RT band in <= 5 ms => adopt;
+1e-4..1e-3 in <= 5 ms => adopt and record the ceiling; can't beat ~50 ms => stop".
+The measured result is **1.2e-3 at 4.2 ms** — just outside the second band, and
+three orders of magnitude inside the third. Adopt.
+
+But the honest summary is a **trade, not a clean win**: per solve, Volterra is
+~4 orders more accurate and ~3 orders slower. Volterra's 3.5-order block method is
+genuinely excellent numerics; it is simply unusable as a likelihood. The FPE
+solver is the only one of the two that can ever be called inside a sampler, and it
+is the only one that survives high `lambda*t`, moving bounds, and large `max_rt`.
+Keep the Volterra path as the accuracy oracle — it earns its place.
+
+**The accuracy ceiling is set by the uniform mesh**, and that is where the
+remaining headroom is. Evidence: (a) the error is uniform O(h^2+dt^2) over `t`,
+not localised in the seed or the absorbing face (both were tested and excluded);
+(b) at `max_t = 8` the error stays at 1.6e-2 even with `nt` scaled linearly,
+because the domain grows like `sqrt(t_max)` so `h` grows with it. For
+BM(`mu=1, sigma=1, t_max=2`) the domain is `L = 9.5` and ~8/9 of the cells sit in
+the far field doing nothing. A graded mesh clustered at the absorbing barrier
+giving ~4x local refinement would cut the error ~16x, i.e. **~7e-5 at ~4 ms**,
+which clears the gate's top band. This is the recommended next increment;
+finite volume handles non-uniform cells naturally, but `build_op` and the face
+stencils all need reworking for variable `h_i`, so it deserves its own pass.
+
+### Step 6 — `tests/testthat/test-fpe-fht.R`
+
+22 assertions, all deterministic (no MC in the suite). Covers ladder items 1, 2,
+3, 7, 9 plus two extra regressions worth having:
+
+* **Uniform start is uniform in the PHYSICAL state.** Checks the Gompertz
+  uniform-start cdf against the mixture of point-start solves over the physical
+  start distribution (a point start at `z` is `z0 = start_floor = z`). This is the
+  bug that cost 2.3e-1 above, and the mixture oracle catches it deterministically.
+* **GBM reduces to Wald in log space** for a point start, which exercises the
+  whole log-state path against a closed form.
+
+Full suite after: **825 pass, 0 fail, 0 error**, 103 `On CRAN` skips, 2
+pre-existing warnings.
+
+### Status
+
+Plan steps 1-6 are **complete**. The solver is reachable from R only and is not
+wired into model dispatch or `design()`, exactly as scoped.
