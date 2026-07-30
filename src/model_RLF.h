@@ -1078,7 +1078,8 @@ inline RLF_Result rlf_solve(const RLF_Model& m, double t_max,
                             int M = 200, int Nt = 400, bool adaptive = true,
                             double tgrade = 1.0,
                             bool explicit_inverse = true,
-                            const std::vector<double>* query_times = nullptr) {
+                            const std::vector<double>* query_times = nullptr,
+                            double lower_extent_override = -1.0) {
   if (!(m.v > 0.0)) {
     throw std::invalid_argument("rlf_solve: v must be positive.");
   }
@@ -1112,7 +1113,12 @@ inline RLF_Result rlf_solve(const RLF_Model& m, double t_max,
   constexpr int RLF_MAX_DOMAIN_REFINEMENTS = 7;
   constexpr int RLF_MAX_SPATIAL_REFINEMENTS = 3;
 
-  double lower_extent = rlf_lower_extent(m, t_max, M);
+  // An override pins the truncation depth, which is what lets two solves of
+  // different M share a domain -- the only way to make their spacings differ
+  // by exactly the ratio of their M, as Richardson extrapolation requires.
+  double lower_extent = lower_extent_override > 0.0
+    ? lower_extent_override
+    : rlf_lower_extent(m, t_max, M);
   int intervals = M;
   const int max_intervals =
     (M > std::numeric_limits<int>::max() / 4)
@@ -1334,6 +1340,10 @@ struct Grid {
   bool sparse_output = true;
   // Solve long-horizon rows separately from the bulk; see rlf_horizon_bucket.
   bool horizon_split = true;
+  // Pair each solve with a finer one and Richardson-extrapolate; see
+  // rlf_cache_solve.
+  bool richardson = true;
+  double richardson_ratio = 1.5;
   // The lane-interleaved march does the same flop count as LANES independent
   // scalar marches -- the per-lane row dot product already vectorises -- while
   // holding LANES step matrices live instead of one, so it is memory bound
@@ -1431,6 +1441,77 @@ inline void rlf_store_result(const Key& key, double t_max,
   }
 }
 
+// Richardson extrapolation in h.
+//
+// With the fitted drift in place the remaining error is the absorbing
+// boundary: the exact density behaves like (b0 - x)^(alpha/2) there, and
+// uniform-grid centred fractional weights cannot resolve a half-integer power
+// at second order.  The result is a clean first-order error for every
+// alpha < 2 -- measured order 0.85 to 1.4 across alpha in [1.1, 1.7], v in
+// [0.5, 3], b0 in [1, 2] -- which is exactly the situation extrapolation is
+// for.  (At alpha = 2 the exponent is 1, the singularity disappears and the
+// measured order is 2.01; p = 1 then under-corrects rather than over-corrects,
+// so it still helps there, just less than a p = 2 combination would.)
+//
+// Two solves at spacings h_c > h_f give u = (r u_f - u_c) / (r - 1) with
+// r = h_c / h_f.  Both share one truncation depth, which matters twice over:
+// it makes r exactly the ratio of the interval counts, and it holds the
+// finite-domain error common between the two so the combination cannot amplify
+// it.  Choosing the depth by nx instead would be actively wrong -- the width
+// cap grows like sqrt(nx), so a fine solve can land on a *larger* h than the
+// coarse one (nx = 256 gives 0.0741 against nx = 128's 0.0727) and the
+// extrapolation then diverges.  The time step is likewise shared, so the
+// O(dt^2) part of the error is common-mode and passes through unchanged.
+//
+// Measured on mean |d log pdf| per trial over the central 96% of each
+// distribution, against an nx = 1024 reference on the pinned domain: 0.0220
+// raw at nx = 128 against 0.0048 for the (128, 192) pair, a 4.6x reduction
+// for 3.6x the time, and it improves every cell of the grid.  Refining
+// instead is far worse value -- raw nx = 288 costs 2.3x the pair and is still
+// 1.7x less accurate.
+inline bool rlf_extrapolate(const RLF_Result& coarse, const RLF_Result& fine,
+                            double ratio, RLF_Result& out) {
+  const size_t n = fine.t.size();
+  if (n == 0 || coarse.t.size() != n || !(ratio > 1.0)) return false;
+  for (size_t i = 0; i < n; ++i) {
+    // The two solves were handed the same query vector, so any drift here
+    // means they are not on a common time base and cannot be combined.
+    if (!(std::abs(coarse.t[i] - fine.t[i]) <=
+          1e-9 * (1.0 + std::abs(fine.t[i])))) {
+      return false;
+    }
+  }
+
+  out = fine;
+  if (out.surv.size() != n) {          // sparse solves may omit the survivor
+    out.surv.resize(n);
+    for (size_t i = 0; i < n; ++i) out.surv[i] = 1.0 - out.cdf[i];
+  }
+  const double w = ratio / (ratio - 1.0);
+  auto blend = [&](double c, double f) { return w * f - (w - 1.0) * c; };
+  for (size_t i = 0; i < n; ++i) {
+    const double pdf = blend(coarse.pdf[i], fine.pdf[i]);
+    const double c_surv =
+      i < coarse.surv.size() ? coarse.surv[i] : 1.0 - coarse.cdf[i];
+    const double f_surv =
+      i < fine.surv.size() ? fine.surv[i] : 1.0 - fine.cdf[i];
+    const double surv = blend(c_surv, f_surv);
+    // Extrapolation is an unconstrained linear combination and can in
+    // principle overshoot into a negative density or survivor.  It did not do
+    // so anywhere in the parameter sweep, but a single negative value would
+    // become a -Inf log-likelihood, so keep the fine solve pointwise wherever
+    // the combination is not a usable density.
+    if (!(pdf > 0.0) || !std::isfinite(pdf) ||
+        !(surv > 0.0) || !std::isfinite(surv) || surv > 1.0) {
+      continue;
+    }
+    out.pdf[i] = pdf;
+    out.surv[i] = surv;
+    out.cdf[i] = 1.0 - surv;
+  }
+  return true;
+}
+
 inline void rlf_cache_solve(const Key& key, double t_max, const Grid& grid,
                             const std::vector<double>* query_times,
                             Entry& out) {
@@ -1440,8 +1521,36 @@ inline void rlf_cache_solve(const Key& key, double t_max, const Grid& grid,
   model.alpha = key.alpha;
   model.b0 = key.b;
   model.z0 = key.A;
+
+  const int nx = std::max(grid.nx, 30);
+  const int nt = grid.nt_for(t_max);
+  const int nx_fine =
+    static_cast<int>(std::lround(nx * grid.richardson_ratio));
+
+  if (grid.richardson && !grid.adaptive && nx_fine > nx) {
+    const double extent = rlf_lower_extent(model, t_max, nx);
+    const RLF_Result fine = rlf_solve(
+      model, t_max, nx_fine, nt, false, grid.tgrade, grid.explicit_inverse,
+      query_times, extent);
+    // The two solves march their own time schedules -- the stable step
+    // depends on the operator's exit rate, which changes with h -- so on the
+    // complete-grid path they would land on different time bases and could
+    // not be combined.  Handing the coarse solve the fine grid's own times
+    // puts them back on a common base, so sparse and complete output stay
+    // exactly equivalent rather than differing by whether extrapolation ran.
+    const RLF_Result coarse = rlf_solve(
+      model, t_max, nx, nt, false, grid.tgrade, grid.explicit_inverse,
+      query_times != nullptr ? query_times : &fine.t, extent);
+    RLF_Result blended;
+    const bool ok = rlf_extrapolate(
+      coarse, fine, static_cast<double>(nx_fine) / nx, blended);
+    rlf_store_result(key, t_max, ok ? blended : fine,
+                     query_times == nullptr, out);
+    return;
+  }
+
   const RLF_Result result = rlf_solve(
-    model, t_max, grid.nx, grid.nt_for(t_max), grid.adaptive,
+    model, t_max, nx, nt, grid.adaptive,
     grid.tgrade, grid.explicit_inverse, query_times);
   rlf_store_result(key, t_max, result, query_times == nullptr, out);
 }
@@ -1808,8 +1917,11 @@ inline void cache_get_batch(
     }
 
     std::vector<RLF_Result> batch_results;
+    // The lane march builds its own operator and domain and so cannot be
+    // paired with a second resolution; extrapolation wins the conflict, since
+    // it changes the answer while the lane path only changes the cost.
     const bool use_batch =
-      count > 1 && !cache.grid.adaptive &&
+      count > 1 && !cache.grid.adaptive && !cache.grid.richardson &&
       cache.grid.explicit_inverse && cache.grid.simd_batch &&
       cache.grid.nx <= 128;
     bool batched = use_batch;

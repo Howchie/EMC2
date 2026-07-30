@@ -573,12 +573,12 @@ gl_rule_nodes_weights <- function(n) {
     .Call(`_EMC2_gl_rule_nodes_weights`, n)
 }
 
-rlf_fht_pdf_cdf_vec <- function(t, v, sigma, alpha, b0, z0 = 0.0, nx = 200L, nt = 400L) {
-    .Call(`_EMC2_rlf_fht_pdf_cdf_vec`, t, v, sigma, alpha, b0, z0, nx, nt)
+rlf_fht_pdf_cdf_vec <- function(t, v, sigma, alpha, b0, z0 = 0.0, nx = 200L, nt = 400L, adaptive = TRUE, lower_extent = NA_real_) {
+    .Call(`_EMC2_rlf_fht_pdf_cdf_vec`, t, v, sigma, alpha, b0, z0, nx, nt, adaptive, lower_extent)
 }
 
-rlf_pdf_cdf_vec <- function(rt, v, B, A, t0, s, alpha, nx = 200L, dt_target = 5e-3, tgrade = 1.0, adaptive = FALSE, explicit_inverse = TRUE, sparse_output = TRUE, simd_batch = TRUE) {
-    .Call(`_EMC2_rlf_pdf_cdf_vec`, rt, v, B, A, t0, s, alpha, nx, dt_target, tgrade, adaptive, explicit_inverse, sparse_output, simd_batch)
+rlf_pdf_cdf_vec <- function(rt, v, B, A, t0, s, alpha, nx = 200L, dt_target = 5e-3, tgrade = 1.0, adaptive = FALSE, explicit_inverse = TRUE, sparse_output = TRUE, simd_batch = TRUE, horizon_split = TRUE, richardson = TRUE, richardson_ratio = 1.5) {
+    .Call(`_EMC2_rlf_pdf_cdf_vec`, rt, v, B, A, t0, s, alpha, nx, dt_target, tgrade, adaptive, explicit_inverse, sparse_output, simd_batch, horizon_split, richardson, richardson_ratio)
 }
 
 simulate_rlf_hit_times_cpp <- function(n_sims, v, sigma, alpha, b0, z0 = 0.0, t_max = 5.0, dt = 0.001, seed = 42L) {

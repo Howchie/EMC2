@@ -43,6 +43,9 @@ inline void rlf_configure_grid(rlf::Grid& grid) {
   option_logical("emc2.rlf_sparse_output", grid.sparse_output);
   option_logical("emc2.rlf_simd_batch", grid.simd_batch);
   option_logical("emc2.rlf_horizon_split", grid.horizon_split);
+  option_logical("emc2.rlf_richardson", grid.richardson);
+  option_number("emc2.rlf_richardson_ratio", nullptr,
+                grid.richardson_ratio, 1.125);
   // Global rather than a Grid field: build_rlf_operator sees only RLF_Model.
   // Written once here on the main thread, read-only from the worker marches.
   option_logical("emc2.rlf_force_centred", rlf::rlf_force_centred_drift);

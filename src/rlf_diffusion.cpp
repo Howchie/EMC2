@@ -79,7 +79,9 @@ void rlf_sync_force_centred() {
 // [[Rcpp::export]]
 Rcpp::List rlf_fht_pdf_cdf_vec(NumericVector t, double v, double sigma,
                                double alpha, double b0, double z0 = 0.0,
-                               int nx = 200, int nt = 400) {
+                               int nx = 200, int nt = 400,
+                               bool adaptive = true,
+                               double lower_extent = NA_REAL) {
   if (!R_FINITE(v) || v <= 0.0)
     stop("rlf_fht_pdf_cdf_vec: v must be finite and positive.");
   if (!R_FINITE(sigma) || sigma <= 0.0)
@@ -103,7 +105,10 @@ Rcpp::List rlf_fht_pdf_cdf_vec(NumericVector t, double v, double sigma,
   m.b0 = b0;
   m.z0 = z0;
 
-  return rlf_package(rlf::rlf_solve(m, t_max, nx, nt), t);
+  const double extent =
+    (R_finite(lower_extent) && lower_extent > 0.0) ? lower_extent : -1.0;
+  return rlf_package(
+    rlf::rlf_solve(m, t_max, nx, nt, adaptive, 1.0, true, nullptr, extent), t);
 }
 
 // ---------------------------------------------------------------------------
@@ -116,7 +121,8 @@ Rcpp::List rlf_pdf_cdf_vec(
     NumericVector t0, NumericVector s, NumericVector alpha, int nx = 200,
     double dt_target = 5e-3, double tgrade = 1.0, bool adaptive = false,
     bool explicit_inverse = true, bool sparse_output = true,
-    bool simd_batch = true) {
+    bool simd_batch = true, bool horizon_split = true,
+    bool richardson = true, double richardson_ratio = 1.5) {
   const int n = rt.size();
   if (v.size() != n || B.size() != n || A.size() != n ||
       t0.size() != n || s.size() != n || alpha.size() != n) {
@@ -137,6 +143,9 @@ Rcpp::List rlf_pdf_cdf_vec(
   cache.grid.explicit_inverse = explicit_inverse;
   cache.grid.sparse_output = sparse_output;
   cache.grid.simd_batch = simd_batch;
+  cache.grid.horizon_split = horizon_split;
+  cache.grid.richardson = richardson;
+  cache.grid.richardson_ratio = richardson_ratio;
 
   std::vector<rlf::Key> keys;
   std::vector<double> horizons;
@@ -148,6 +157,9 @@ Rcpp::List rlf_pdf_cdf_vec(
     if (!R_finite(tt) || !(tt > 0.0)) continue;
     rlf::Key key;
     if (!rlf::rlf_key(v[i], s[i], alpha[i], B[i], A[i], key)) continue;
+    // Bucket exactly as rlf_prepare_rows does, so dRLF/pRLF and the sampler
+    // group rows the same way and therefore solve on the same domain.
+    if (cache.grid.horizon_split) key.bucket = rlf::rlf_horizon_bucket(key, tt);
     const auto found = groups.find(key);
     int group = -1;
     if (found == groups.end()) {

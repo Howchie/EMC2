@@ -12,7 +12,11 @@
     sparse_output = isTRUE(getOption("emc2.rlf_sparse_output", TRUE)),
     # Off by default: see the note on Grid::simd_batch in src/model_RLF.h.
     simd_batch = isTRUE(getOption("emc2.rlf_simd_batch", FALSE)),
-    horizon_split = isTRUE(getOption("emc2.rlf_horizon_split", TRUE))
+    horizon_split = isTRUE(getOption("emc2.rlf_horizon_split", TRUE)),
+    # Pair each solve with one at 1.5x the resolution and extrapolate; see
+    # rlf_cache_solve in src/model_RLF.h.
+    richardson = isTRUE(getOption("emc2.rlf_richardson", TRUE)),
+    richardson_ratio = getOption("emc2.rlf_richardson_ratio", 1.5)
   )
 }
 
@@ -45,7 +49,8 @@
     rt, p$v, p$B, p$A, p$t0, p$s, p$alpha,
     as.integer(grid$nx), grid$dt_target, grid$tgrade,
     grid$adaptive, grid$explicit_inverse, grid$sparse_output,
-    grid$simd_batch
+    grid$simd_batch, grid$horizon_split, grid$richardson,
+    grid$richardson_ratio
   )
 }
 
