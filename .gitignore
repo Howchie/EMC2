@@ -25,3 +25,4 @@ Rplots.pdf
 tmp_cache/
 tests/testthat/testthat-problems.rds
 run_benchmark.R
+tests/testthat/_snaps/*.new.md

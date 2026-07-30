@@ -200,3 +200,32 @@ test_that("heavy-tailed CMS simulation agrees with the nonlocal PDE", {
   expect_equal(empirical, pde$cdf[1], tolerance = 0.015)
   expect_lt(pde$lower_boundary_pressure, 0.01)
 })
+
+test_that("the matrix-free path agrees with the dense one", {
+  skip_on_cran()
+  # Past RLF_MATRIX_FREE_MIN_N the TR-BDF2 stages are solved by preconditioned
+  # BiCGSTAB against an FFT circulant embedding rather than by forming the
+  # explicit inverse.  The threshold is a compile-time constant, so this cannot
+  # run both paths on one grid; it checks instead that the matrix-free side is
+  # a sane member of the same convergent sequence.  The exact same-grid
+  # equivalence (~1e-13 against a dense LAPACK solve) is checked by
+  # WorkingTests/check_rlf_matrix_free.cpp, which can force either path.
+  probe <- c(0.3, 0.5, 0.8, 1.2, 2.0)
+  dense <- EMC2:::rlf_pdf_cdf_vec(
+    probe, rep(1, 5), rep(1, 5), rep(0.3, 5), rep(0, 5), rep(1, 5),
+    rep(1.5, 5), nx = 2000L, dt_target = 8e-3, tgrade = 1, adaptive = FALSE,
+    explicit_inverse = TRUE, sparse_output = TRUE, simd_batch = FALSE)
+  free <- EMC2:::rlf_pdf_cdf_vec(
+    probe, rep(1, 5), rep(1, 5), rep(0.3, 5), rep(0, 5), rep(1, 5),
+    rep(1.5, 5), nx = 2600L, dt_target = 8e-3, tgrade = 1, adaptive = FALSE,
+    explicit_inverse = TRUE, sparse_output = TRUE, simd_batch = FALSE)
+
+  expect_true(all(is.finite(free$pdf)))
+  expect_true(all(free$pdf >= 0))
+  expect_true(all(free$cdf >= 0 & free$cdf <= 1))
+  # Successive refinements move the CDF by ~1e-3 here, so the two grids must
+  # agree to a few times that and no better.
+  expect_equal(free$cdf, dense$cdf, tolerance = 5e-3)
+  expect_equal(free$pdf, dense$pdf, tolerance = 5e-3)
+  expect_true(all(diff(free$cdf[order(probe)]) >= -1e-10))
+})

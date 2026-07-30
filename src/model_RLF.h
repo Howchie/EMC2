@@ -61,6 +61,8 @@
 #include <utility>
 #include <vector>
 #include <R_ext/RS.h>
+
+#include "rlf_toeplitz.h"
 #if defined(__x86_64__) || defined(_M_X64) || defined(__AVX2__)
 #include <immintrin.h>
 #endif
@@ -681,6 +683,23 @@ inline double rlf_lower_extent(const RLF_Model& m, double t_max, int nx) {
   return std::max(m.b0, std::min(hi, widest));
 }
 
+// Grid size past which the stages are solved matrix-free rather than by
+// forming the explicit inverse.
+//
+// Set by measurement, not by flop count: the dense path is O(n^3) against
+// O(iters * n log n), but it spends those flops inside OpenBLAS at tens of
+// GFLOPS while the transforms here are hand-rolled and memory bound, which
+// pushes the crossover far above where the asymptotics alone would put it.
+// Measured against the dense path on identical grids (alpha = 1.5, 200
+// queries): 0.12x at nx = 512, 0.28x at 1024, 0.81x at 2048, 1.32x at 3072
+// and 1.74x at 4096, with the two paths agreeing to ~1e-11.  So this only
+// pays for the refined grids that heavy tails need, and would be a large
+// pessimisation at the shipped defaults.
+constexpr int RLF_MATRIX_FREE_MIN_N = 2560;
+// Tight enough that the Krylov residual is far below the discretisation error
+// it is embedded in, so the march is not polluted by solver tolerance.
+constexpr double RLF_MATRIX_FREE_TOL = 1e-12;
+
 // One fixed-domain/fixed-grid solve.  `M` is the number of intervals and the
 // M-1 interior nodes are x_lo+h, ..., b0-h.  The public solver below owns all
 // validation and convergence refinement.
@@ -705,6 +724,16 @@ inline RLF_Result rlf_solve_fixed_grid(
   RLF_DenseLU lu;
   RLF_DenseInverse inverse;
   std::vector<double> step_matrix;
+
+  // Forming the explicit inverse and the TR-BDF2 step matrix costs O(n^3) and
+  // dominates everything else once the grid is refined, which is exactly what
+  // heavy tails ask for.  Past the crossover the stages are solved
+  // matrix-free instead: O(n log n) per BiCGSTAB iteration, and the Strang
+  // circulant preconditioner holds the iteration count at four to six
+  // independently of n and alpha, so the cubic term disappears.
+  const bool matrix_free = n >= RLF_MATRIX_FREE_MIN_N;
+  rlf::RLF_ToeplitzSystem mf;
+  if (matrix_free) explicit_inverse = false;
 
   std::vector<double> p;
   rlf_initial_density(m, x_lo, h, n, p);
@@ -774,6 +803,27 @@ inline RLF_Result rlf_solve_fixed_grid(
 #endif
         for (int j = 0; j < n; ++j) sum += row[j] * p[j];
         next[i] = sum;
+      }
+    } else if (matrix_free) {
+      // Warm-starting from the current density costs nothing and saves an
+      // iteration or two, since consecutive steps differ by O(dt).
+      auto solve = [&](const double* b, std::vector<double>& out) {
+        out = p;
+        if (rlf::rlf_toeplitz_solve(mf, b, out.data(),
+                                    RLF_MATRIX_FREE_TOL) < 0) {
+          throw std::runtime_error(
+            "rlf_solve: matrix-free stage solve did not converge.");
+        }
+      };
+      if (backward_euler) {
+        solve(p.data(), next);
+      } else {
+        apply_shifted(op, RLF_TRBDF2_IMPLICIT * step, p, rhs);
+        solve(rhs.data(), stage);
+        for (int i = 0; i < n; ++i) {
+          rhs[i] = RLF_TRBDF2_A * stage[i] - RLF_TRBDF2_B * p[i];
+        }
+        solve(rhs.data(), next);
       }
     } else if (backward_euler) {
       lu.solve(p.data(), next.data(), work.data());
@@ -849,6 +899,11 @@ inline RLF_Result rlf_solve_fixed_grid(
   // use I - (gamma/2) dt L, and with the explicit inverse available the two
   // stages collapse into one dense matvec per step.
   auto update_lhs_and_factor = [&](double step) {
+    if (matrix_free) {
+      mf = rlf::rlf_build_toeplitz_system(op.L, n,
+                                          RLF_TRBDF2_IMPLICIT * step);
+      return;
+    }
     std::vector<double> lhs = rlf_trbdf2_lhs(op, step);
     if (explicit_inverse) {
       if (!inverse.build(n, lhs)) {
