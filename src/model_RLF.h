@@ -375,6 +375,21 @@ struct RLF_Operator {
 // advective boundary flux v*p_n/2 rather than the upwind v*p_n.  The upwind
 // form used previously injected numerical diffusion v*h/2 into sigma^2/2 and
 // biased the exit flux by v*p_n/2, and was the dominant error of the solver.
+//
+// The Peclet fallback below is not a rare safety net.  The condition reduces to
+// sigma^alpha |c_1(alpha)| h^(1-alpha) >= v, whose h exponent vanishes as
+// alpha -> 1, leaving the grid-independent limit 0.424 sigma / v.  Below about
+// alpha = 1.25 (about 1.5 when v = 2 sigma) it therefore fails at every nx, and
+// refinement cannot restore second order.  Setting this flag keeps the centred
+// faces regardless; positivity is then left to TR-BDF2's L-stability and the
+// backward-Euler startup, and is watched by the min_density guards.
+inline bool rlf_force_centred_drift = false;
+
+// Diagnostic multiplier on the domain-width cap in rlf_lower_extent; 1.0 is the
+// calibrated setting.  Lets the mesh and the truncation depth be varied
+// independently, which nx alone cannot do because the cap grows with it.
+inline double rlf_width_scale = 1.0;
+
 inline RLF_Operator build_rlf_operator(const RLF_Model& m, int n, double h) {
   RLF_Operator op;
   op.n = n;
@@ -419,34 +434,70 @@ inline RLF_Operator build_rlf_operator(const RLF_Model& m, int n, double h) {
     op.L[static_cast<size_t>(j) * n + j] += lower;
   }
 
-  // Positive-drift transport.  Centred faces need the cell Peclet condition
-  // q[1] >= v/(2h) to keep L an M-matrix; otherwise fall back to donor-cell
-  // upwinding, which is first order but unconditionally positive.
+  // Positive-drift transport, by exponential fitting of the nearest-neighbour
+  // pair (Il'in / Scharfetter-Gummel).  Only |i-j| = 1 changes, so the operator
+  // stays Toeplitz-plus-diagonal and the drift is uniform in j.
+  //
+  // A nearest-neighbour rate q[1] on spacing h is the diffusion D = q[1] h^2,
+  // giving the cell Peclet number Pe = v h / D = v / (h q[1]).  Fitting the
+  // constant-coefficient flux F = v p - D p' exactly on the grid gives
+  //
+  //   a+ = (v/h) / (1 - exp(-Pe)),   a- = (v/h) / (exp(Pe) - 1),
+  //
+  // with a+ - a- = v/h exactly, so the drift is transported without loss.  Both
+  // rates are non-negative at every Pe, so L stays an M-matrix unconditionally.
+  // The scheme interpolates the two branches this replaces: as Pe -> 0 it is the
+  // centred pair q[1] +- v/(2h), and as Pe -> infinity it is donor-cell upwind.
+  //
+  // The gate it replaces (centred while q[1] >= v/(2h), i.e. Pe <= 2, else
+  // upwind) was not a rare fallback.  Written out, the condition is
+  // sigma^alpha |c_1(alpha)| h^(1-alpha) >= v, whose h exponent vanishes as
+  // alpha -> 1, leaving the grid-independent limit 0.424 sigma / v.  Below about
+  // alpha = 1.25 (about 1.5 when v = 2 sigma) it failed at every nx, so the
+  // solver was silently first order there with no way to refine out of it: the
+  // numerical diffusion v h / 2 made the process too diffusive, the CDF ran ~5%
+  // above Monte Carlo at alpha = 1.1, and the resulting too-light tail biased
+  // alpha-hat downwards.  Forcing the centred pair instead is not an option --
+  // it produces material negative density at alpha = 1.1 for any nt -- whereas
+  // fitting adds only the artificial diffusion positivity actually requires,
+  // D (Pe/2 coth(Pe/2) - 1) against upwind's D Pe/2.
   const double adv = m.v / h;
   const double half_adv = 0.5 * adv;
-  op.upwind_drift = !(n > 1 && q[1] >= half_adv);
-  if (op.upwind_drift) {
-    for (int j = 0; j < n; ++j) {
-      op.L[static_cast<size_t>(j) * n + j] -= adv;
-      if (j + 1 < n) {
-        op.L[static_cast<size_t>(j + 1) * n + j] += adv;
-      } else {
-        op.upper_kill[j] += adv;
-      }
+  double delta_up = half_adv;    // a+ - q[1]
+  double delta_down = -half_adv; // a- - q[1]
+  op.upwind_drift = false;
+  if (!(n > 1) || !(q[1] > 0.0)) {
+    // No usable nearest-neighbour diffusion to fit against.
+    op.upwind_drift = true;
+    delta_up = adv;
+    delta_down = 0.0;
+  } else if (!rlf_force_centred_drift) {
+    const double pe = adv / q[1];
+    if (pe > 700.0) {              // exp(Pe) overflows; a- is zero to machine
+      op.upwind_drift = true;
+      delta_up = adv - q[1];
+      delta_down = -q[1];
+    } else if (pe > 1e-8) {        // below this the centred pair is exact
+      delta_up = adv / -std::expm1(-pe) - q[1];
+      delta_down = adv / std::expm1(pe) - q[1];
     }
-  } else {
-    for (int i = 0; i < n; ++i) {
-      if (i + 1 < n) {
-        op.L[static_cast<size_t>(i) * n + i + 1] -= half_adv;
-      }
-      if (i > 0) {
-        op.L[static_cast<size_t>(i) * n + i - 1] += half_adv;
-      }
+  }
+
+  for (int j = 0; j < n; ++j) {
+    double outflow = delta_up;
+    if (j + 1 < n) {
+      op.L[static_cast<size_t>(j + 1) * n + j] += delta_up;
+    } else {
+      // The cell above the last one is past the barrier: killed, not moved.
+      op.upper_kill[j] += delta_up;
     }
-    // F_{-1/2} = 0 seals the truncated lower edge; the last interior cell
-    // loses F_{n-1/2} = v*p_{n-1}/2 through the absorbing boundary.
-    op.L[0] -= half_adv;
-    op.upper_kill[n - 1] += half_adv;
+    if (j > 0) {
+      op.L[static_cast<size_t>(j - 1) * n + j] += delta_down;
+      outflow += delta_down;
+    }
+    // At j = 0 the downward face is the truncated lower edge, whose rate is
+    // censored back out anyway, so only the upward change leaves the diagonal.
+    op.L[static_cast<size_t>(j) * n + j] -= outflow;
   }
 
   for (int j = 0; j < n; ++j) {
@@ -677,7 +728,8 @@ inline double rlf_lower_extent(const RLF_Model& m, double t_max, int nx) {
   // alpha = 2, where the visit-probability criterion is the tighter of the two.
   const double budget_widths =
     6.0 * std::sqrt(std::max(30.0, static_cast<double>(nx)) / 128.0);
-  const double max_widths = std::min(24.0, std::max(4.0, budget_widths));
+  const double max_widths =
+    rlf_width_scale * std::min(24.0, std::max(4.0, budget_widths));
   const double spread = m.sigma * std::pow(0.5 * t_max, 1.0 / m.alpha);
   const double widest = max_widths * std::max(m.b0, spread);
   return std::max(m.b0, std::min(hi, widest));
@@ -1193,12 +1245,45 @@ struct Key {
   double alpha = 0.0;
   double b = 0.0;
   double A = 0.0;
+  // Horizon bucket; see rlf_horizon_bucket.  Rows that need a long march are
+  // solved separately from the bulk so they cannot coarsen it.
+  int bucket = 0;
 
   bool operator==(const Key& other) const {
     return v == other.v && alpha == other.alpha &&
-           b == other.b && A == other.A;
+           b == other.b && A == other.A && bucket == other.bucket;
   }
 };
+
+// A key's rows all share one march, sized to the longest first-passage time
+// among them, and rlf_lower_extent sizes the lower domain from that horizon as
+// L = widths * max(b, (0.5 t_max)^(1/alpha)).  While the stable spread stays
+// under b the domain is pinned at its floor and, at fixed nx, the absorbing
+// boundary keeps a fixed share of the grid.  Past
+//
+//   t_crit = 2 * b^alpha
+//
+// the spread takes over, the domain grows like t^(1/alpha) -- nearly linearly
+// for alpha near 1 -- and the boundary layer loses resolution in proportion.
+// One slow trial in a heavy-tailed data set is therefore enough to unresolve
+// the likelihood of every other trial sharing its parameters: at alpha = 1.1,
+// b = 2, a single 16.9 s observation drops the cells between the start point
+// and the boundary from 18 to 6, and the resulting profile likelihood peaks at
+// alpha ~ 1.4 and does not converge under grid refinement.
+//
+// Splitting the rows by horizon costs one extra march per occupied bucket and
+// keeps the bulk of the data at the floor domain.  Buckets double, so bucket k
+// widens the domain by 2^(k/alpha) rather than letting a single outlier set it
+// for everyone.
+constexpr int RLF_MAX_HORIZON_BUCKET = 6;
+
+inline int rlf_horizon_bucket(const Key& key, double t_max) {
+  const double t_crit = 2.0 * std::pow(key.b, key.alpha);
+  if (!(t_crit > 0.0) || !(t_max > t_crit)) return 0;
+  const int bucket =
+    1 + static_cast<int>(std::log2(t_max / t_crit));
+  return std::min(std::max(bucket, 1), RLF_MAX_HORIZON_BUCKET);
+}
 
 struct KeyHash {
   size_t operator()(const Key& key) const noexcept {
@@ -1210,6 +1295,7 @@ struct KeyHash {
     mix(key.alpha);
     mix(key.b);
     mix(key.A);
+    mix(static_cast<double>(key.bucket));
     return h;
   }
 };
@@ -1232,16 +1318,30 @@ inline bool rlf_key(double v, double sigma, double alpha, double B, double A,
          std::isfinite(out.A) && out.b > out.A;
 }
 
+// These must stay in step with the defaults in R/model_RLF.R: the sampling
+// path reaches this struct through rlf_configure_grid, which only overrides a
+// field when the corresponding emc2.rlf_* option is actually set.  An R-side
+// getOption() default is therefore invisible here, and a mismatch silently
+// samples on a different (and much more expensive) grid than dRLF/pRLF use.
 struct Grid {
-  int nx = 200;
-  double dt_target = 5e-3;
+  int nx = 128;
+  double dt_target = 8e-3;
   int nt_min = 50;
   int nt_max = 20000;
   double tgrade = 1.0;
   bool adaptive = false;
   bool explicit_inverse = true;
   bool sparse_output = true;
-  bool simd_batch = true;
+  // Solve long-horizon rows separately from the bulk; see rlf_horizon_bucket.
+  bool horizon_split = true;
+  // The lane-interleaved march does the same flop count as LANES independent
+  // scalar marches -- the per-lane row dot product already vectorises -- while
+  // holding LANES step matrices live instead of one, so it is memory bound
+  // where the scalar path is not.  Measured slower at every occupancy: 2.6x
+  // with the two keys a standard two-accumulator race produces, and still 1.4x
+  // with all four lanes filled (nx = 128, 4000 rows).  Off by default; the
+  // emc2.rlf_simd_batch option keeps the path available for re-measurement.
+  bool simd_batch = false;
 
   int nt_for(double t_max) const {
     const double wanted =

@@ -42,6 +42,10 @@ inline void rlf_configure_grid(rlf::Grid& grid) {
   option_logical("emc2.rlf_explicit_inverse", grid.explicit_inverse);
   option_logical("emc2.rlf_sparse_output", grid.sparse_output);
   option_logical("emc2.rlf_simd_batch", grid.simd_batch);
+  option_logical("emc2.rlf_horizon_split", grid.horizon_split);
+  // Global rather than a Grid field: build_rlf_operator sees only RLF_Model.
+  // Written once here on the main thread, read-only from the worker marches.
+  option_logical("emc2.rlf_force_centred", rlf::rlf_force_centred_drift);
 }
 
 inline rlf::SolveCache* rlf_cache(void* context) {
@@ -77,6 +81,11 @@ inline void rlf_prepare_rows(rlf::SolveCache& cache, const double* rt,
     if (!(tt > 0.0) || !emc2_isfinite(tt)) continue;
     rlf::Key key;
     if (!rlf::rlf_key(v[i], s[i], alpha[i], B[i], A[i], key)) continue;
+    // Bucket on this row's own horizon, so the group a row lands in is the one
+    // whose domain was sized for it.
+    if (cache.grid.horizon_split) {
+      key.bucket = rlf::rlf_horizon_bucket(key, tt);
+    }
     const auto found = groups.find(key);
     int group = -1;
     if (found == groups.end()) {
@@ -161,11 +170,19 @@ inline double rlf_scalar_horizon(double tt) {
   return tt > 1.0 ? 2.0 * tt : tt + 1.0;
 }
 
-inline bool rlf_key_from_par(const double* par, rlf::Key& key) {
-  return rlf::rlf_key(
-    par[emc2col::rlf::v], par[emc2col::rlf::s],
-    par[emc2col::rlf::alpha], par[emc2col::rlf::B],
-    par[emc2col::rlf::A], key);
+// The scalar entry points share the raw path's cache, so they must bucket on
+// the same rule; otherwise a single long-horizon censoring query would grow a
+// bulk entry's march and undo the split for every row using it.
+inline bool rlf_key_from_par(const double* par, double horizon,
+                             const rlf::Grid& grid, rlf::Key& key) {
+  if (!rlf::rlf_key(
+        par[emc2col::rlf::v], par[emc2col::rlf::s],
+        par[emc2col::rlf::alpha], par[emc2col::rlf::B],
+        par[emc2col::rlf::A], key)) {
+    return false;
+  }
+  if (grid.horizon_split) key.bucket = rlf::rlf_horizon_bucket(key, horizon);
+  return true;
 }
 
 inline double drlf_scalar(double time, const double* par, void* context) {
@@ -174,10 +191,10 @@ inline double drlf_scalar(double time, const double* par, void* context) {
   if (!(tt > 0.0)) return 0.0;
   rlf::SolveCache* cache = rlf_cache(context);
   if (cache == nullptr) return 0.0;
+  const double horizon = rlf_scalar_horizon(tt);
   rlf::Key key;
-  if (!rlf_key_from_par(par, key)) return 0.0;
-  const int group =
-    rlf::cache_get(*cache, key, rlf_scalar_horizon(tt));
+  if (!rlf_key_from_par(par, horizon, cache->grid, key)) return 0.0;
+  const int group = rlf::cache_get(*cache, key, horizon);
   const double log_pdf =
     rlf::entry_log_pdf(cache->entries[group], tt);
   return log_pdf <= rlf::RLF_LOG_FLOOR ? 0.0 : std::exp(log_pdf);
@@ -189,10 +206,10 @@ inline double prlf_scalar(double time, const double* par, void* context) {
   if (!(tt > 0.0)) return 0.0;
   rlf::SolveCache* cache = rlf_cache(context);
   if (cache == nullptr) return 0.0;
+  const double horizon = rlf_scalar_horizon(tt);
   rlf::Key key;
-  if (!rlf_key_from_par(par, key)) return 0.0;
-  const int group =
-    rlf::cache_get(*cache, key, rlf_scalar_horizon(tt));
+  if (!rlf_key_from_par(par, horizon, cache->grid, key)) return 0.0;
+  const int group = rlf::cache_get(*cache, key, horizon);
   const double log_survivor =
     rlf::entry_log_S(cache->entries[group], tt);
   if (log_survivor >= 0.0) return 0.0;
@@ -231,6 +248,9 @@ inline void rlf_logS_at_t(double time, const double* const* cols,
       if (!rlf::rlf_key(v[row], s[row], alpha[row], B[row], A[row], key)) {
         bad = true;
         break;
+      }
+      if (cache->grid.horizon_split) {
+        key.bucket = rlf::rlf_horizon_bucket(key, tt);
       }
       const int group = rlf::cache_get(*cache, key, tt);
       const double log_survivor =

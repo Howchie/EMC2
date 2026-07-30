@@ -10,7 +10,9 @@
       getOption("emc2.rlf_explicit_inverse", TRUE)
     ),
     sparse_output = isTRUE(getOption("emc2.rlf_sparse_output", TRUE)),
-    simd_batch = isTRUE(getOption("emc2.rlf_simd_batch", TRUE))
+    # Off by default: see the note on Grid::simd_batch in src/model_RLF.h.
+    simd_batch = isTRUE(getOption("emc2.rlf_simd_batch", FALSE)),
+    horizon_split = isTRUE(getOption("emc2.rlf_horizon_split", TRUE))
   )
 }
 

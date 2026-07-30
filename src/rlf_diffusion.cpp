@@ -52,6 +52,25 @@ double rlf_t_max(const NumericVector& t) {
   return (m > 0.0) ? m : 1.0;
 }
 
+// The kernel path picks this up in rlf_configure_grid; the standalone entry
+// points have no Grid, so they read the option directly.
+void rlf_sync_force_centred() {
+  SEXP value = Rf_GetOption1(Rf_install("emc2.rlf_force_centred"));
+  bool on = false;
+  if (value != R_NilValue && Rf_length(value) >= 1) {
+    const int x = Rf_asLogical(value);
+    if (x != NA_LOGICAL) on = x;
+  }
+  rlf::rlf_force_centred_drift = on;
+
+  SEXP w = Rf_GetOption1(Rf_install("emc2.rlf_width_scale"));
+  rlf::rlf_width_scale = 1.0;
+  if (w != R_NilValue && Rf_length(w) >= 1) {
+    const double x = Rf_asReal(w);
+    if (R_finite(x) && x > 0.0) rlf::rlf_width_scale = x;
+  }
+}
+
 } // anonymous namespace
 
 // ---------------------------------------------------------------------------
@@ -75,6 +94,7 @@ Rcpp::List rlf_fht_pdf_cdf_vec(NumericVector t, double v, double sigma,
   if (nt < 50) stop("rlf_fht_pdf_cdf_vec: nt must be at least 50.");
 
   const double t_max = rlf_t_max(t);
+  rlf_sync_force_centred();
 
   rlf::RLF_Model m;
   m.v = v;
@@ -105,6 +125,8 @@ Rcpp::List rlf_pdf_cdf_vec(
   if (nx < 30 || !(dt_target > 0.0) || !(tgrade >= 1.0)) {
     stop("rlf_pdf_cdf_vec: invalid grid configuration.");
   }
+
+  rlf_sync_force_centred();
 
   NumericVector pdf(n, 0.0), cdf(n, 0.0);
   rlf::SolveCache cache;
