@@ -542,6 +542,21 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
       out.ctx.fpe_cache->bnd_kind = fpe::FPE_BND_LINEAR_MULTIPLICATIVE;
     else if (type_std.find("ROU_BLIN_ADD") != std::string::npos)
       out.ctx.fpe_cache->bnd_kind = fpe::FPE_BND_LINEAR_ADDITIVE;
+  } else if (type_std.find("RDMSWTN_TT") != std::string::npos) {
+    // The time-changed model must precede generic RDMSWTN substring dispatch.
+    out.pdf1_ptr       = &drdmswtn_tt_scalar;
+    out.cdf1_ptr       = &prdmswtn_tt_scalar;
+    out.model_dfun_raw = &drdmswtn_tt_raw;
+    out.model_pfun_raw = &prdmswtn_tt_raw;
+    out.logS_at_t_ptr  = &rdmswtn_tt_logS_at_t;
+    out.col_spec       = emc2col::rdmswtn_tt::spec();
+    out.ctx.t0_index   = emc2col::rdmswtn_tt::t0;
+    out.ctx.defective_upper_tail = true;
+    out.ctx.rdmswtn_correlated =
+      (type_std.find("_CORR") != std::string::npos);
+    if (type_std.find("_IO") != std::string::npos) {
+      out.ctx.use_posdrift = false;
+    }
   } else if (type_std.find("RDMSWTN") != std::string::npos) {
     // Must be checked before "RDM" since "RDMSWTN" contains "RDM"
     out.pdf1_ptr       = &drdmswtn_scalar;
@@ -10268,32 +10283,35 @@ static inline bool rdmswtn_corr_row_active(
   return !s.has_RACE || s.race_mask[row];
 }
 
+static inline double rdmswtn_corr_eval_selected(
+    double t, int row, const double* const* cols, int n_par,
+    RacePdf1Fun fn, ContextForRaceModels* ctx) {
+  if (n_par > 32) return R_NaN;
+  std::array<double, 32> par{};
+  for (int c = 0; c < n_par; ++c) par[static_cast<size_t>(c)] = cols[c][row];
+  return fn(t, par.data(), ctx);
+}
+
 static inline double rdmswtn_corr_logcdf(
-    double t, int row, const double* const* cols) {
+    double t, int row, const double* const* cols, int n_par,
+    RaceCdf1Fun cdf1, ContextForRaceModels* ctx) {
   if (!(t > 0.0)) return R_NegInf;
-  const double value = prdmswtn(
-      t, cols[emc2col::rdmswtn::v][row],
-      cols[emc2col::rdmswtn::B][row] + cols[emc2col::rdmswtn::A][row],
-      cols[emc2col::rdmswtn::A][row],
-      cols[emc2col::rdmswtn::s][row],
-      cols[emc2col::rdmswtn::t0][row],
-      cols[emc2col::rdmswtn::sv][row],
-      0.0, 0.0, 20, true, 1, false, true, 1.0);
+  const double value = rdmswtn_corr_eval_selected(
+      t, row, cols, n_par, cdf1, ctx);
   if (ISNAN(value)) return R_NaN;
-  return std::fmin(0.0, value);
+  if (!(value > 0.0)) return R_NegInf;
+  if (value >= 1.0) return 0.0;
+  return std::log(value);
 }
 
 static inline double rdmswtn_corr_logdensity(
-    double t, int row, const double* const* cols) {
+    double t, int row, const double* const* cols, int n_par,
+    RacePdf1Fun pdf1, ContextForRaceModels* ctx) {
   if (!(t > 0.0) || !R_FINITE(t)) return R_NegInf;
-  return drdmswtn(
-      t, cols[emc2col::rdmswtn::v][row],
-      cols[emc2col::rdmswtn::B][row] + cols[emc2col::rdmswtn::A][row],
-      cols[emc2col::rdmswtn::A][row],
-      cols[emc2col::rdmswtn::s][row],
-      cols[emc2col::rdmswtn::t0][row],
-      cols[emc2col::rdmswtn::sv][row],
-      0.0, 0.0, 20, true, 1, false, true, 1.0);
+  const double value = rdmswtn_corr_eval_selected(
+      t, row, cols, n_par, pdf1, ctx);
+  if (ISNAN(value)) return R_NaN;
+  return value > 0.0 ? std::log(value) : R_NegInf;
 }
 
 static inline double rdmswtn_corr_z_from_logcdf(double log_f) {
@@ -10351,9 +10369,10 @@ static double rdmswtn_corr_log_bvn_upper(double z1, double z2, double rho) {
 }
 
 static inline double rdmswtn_corr_log_pair_survival(
-    double t, int row1, int row2, double rho, const double* const* cols) {
-  const double lf1 = rdmswtn_corr_logcdf(t, row1, cols);
-  const double lf2 = rdmswtn_corr_logcdf(t, row2, cols);
+    double t, int row1, int row2, double rho, const double* const* cols,
+    int n_par, RaceCdf1Fun cdf1, ContextForRaceModels* ctx) {
+  const double lf1 = rdmswtn_corr_logcdf(t, row1, cols, n_par, cdf1, ctx);
+  const double lf2 = rdmswtn_corr_logcdf(t, row2, cols, n_par, cdf1, ctx);
   if (ISNAN(lf1) || ISNAN(lf2)) return R_NaN;
   return rdmswtn_corr_log_bvn_upper(
       rdmswtn_corr_z_from_logcdf(lf1),
@@ -10361,8 +10380,9 @@ static inline double rdmswtn_corr_log_pair_survival(
 }
 
 static inline double rdmswtn_corr_log_single_survival(
-    double t, int row, const double* const* cols) {
-  const double lf = rdmswtn_corr_logcdf(t, row, cols);
+    double t, int row, const double* const* cols, int n_par,
+    RaceCdf1Fun cdf1, ContextForRaceModels* ctx) {
+  const double lf = rdmswtn_corr_logcdf(t, row, cols, n_par, cdf1, ctx);
   if (ISNAN(lf)) return R_NaN;
   if (lf == R_NegInf) return 0.0;
   if (lf >= 0.0) return R_NegInf;
@@ -10372,9 +10392,11 @@ static inline double rdmswtn_corr_log_single_survival(
 static double rdmswtn_corr_log_component_survival(
     const RDMSWTNCorrSharedState& s, int j,
     const RDMSWTNCorrTrialLayout& layout, double t, double rho,
-    const double* const* cols) {
+    const double* const* cols, RaceCdf1Fun cdf1,
+    ContextForRaceModels* ctx) {
   double out = rdmswtn_corr_log_pair_survival(
-      t, layout.pair_row[0], layout.pair_row[1], rho, cols);
+      t, layout.pair_row[0], layout.pair_row[1], rho, cols,
+      s.n_par, cdf1, ctx);
   if (ISNAN(out)) return out;
   const int start = j * s.n_lR;
   const int n_lR_j = s.has_RACE ? s.race_nacc[start] : s.n_lR;
@@ -10382,7 +10404,8 @@ static double rdmswtn_corr_log_component_survival(
     const int row = start + k;
     if (!rdmswtn_corr_row_active(s, row) ||
         row == layout.pair_row[0] || row == layout.pair_row[1]) continue;
-    const double ls = rdmswtn_corr_log_single_survival(t, row, cols);
+    const double ls = rdmswtn_corr_log_single_survival(
+        t, row, cols, s.n_par, cdf1, ctx);
     if (ISNAN(ls)) return ls;
     out += ls;
   }
@@ -10392,32 +10415,38 @@ static double rdmswtn_corr_log_component_survival(
 static double rdmswtn_corr_log_component_cause(
     const RDMSWTNCorrSharedState& s, int j,
     const RDMSWTNCorrTrialLayout& layout, int winner_row, double t,
-    double rho, const double* const* cols) {
+    double rho, const double* const* cols, RacePdf1Fun pdf1,
+    RaceCdf1Fun cdf1, ContextForRaceModels* ctx) {
   const int pair1 = layout.pair_row[0], pair2 = layout.pair_row[1];
   const int start = j * s.n_lR;
   const int n_lR_j = s.has_RACE ? s.race_nacc[start] : s.n_lR;
   if (!rdmswtn_corr_row_active(s, winner_row)) return R_NegInf;
-  double out = rdmswtn_corr_logdensity(t, winner_row, cols);
+  double out = rdmswtn_corr_logdensity(
+      t, winner_row, cols, s.n_par, pdf1, ctx);
   if (!R_FINITE(out)) return out;
 
   if (winner_row == pair1 || winner_row == pair2) {
     const int loser = winner_row == pair1 ? pair2 : pair1;
-    const double lfw = rdmswtn_corr_logcdf(t, winner_row, cols);
-    const double lfl = rdmswtn_corr_logcdf(t, loser, cols);
+    const double lfw = rdmswtn_corr_logcdf(
+        t, winner_row, cols, s.n_par, cdf1, ctx);
+    const double lfl = rdmswtn_corr_logcdf(
+        t, loser, cols, s.n_par, cdf1, ctx);
     if (ISNAN(lfw) || ISNAN(lfl)) return R_NaN;
     const double zw = rdmswtn_corr_z_from_logcdf(lfw);
     const double zl = rdmswtn_corr_z_from_logcdf(lfl);
     const double sd = std::sqrt(std::fmax(1e-16, 1.0 - rho * rho));
     out += log_normal_upper_tail((zl - rho * zw) / sd);
   } else {
-    out += rdmswtn_corr_log_pair_survival(t, pair1, pair2, rho, cols);
+    out += rdmswtn_corr_log_pair_survival(
+        t, pair1, pair2, rho, cols, s.n_par, cdf1, ctx);
   }
 
   for (int k = 0; k < n_lR_j; ++k) {
     const int row = start + k;
     if (!rdmswtn_corr_row_active(s, row) || row == winner_row ||
         row == pair1 || row == pair2) continue;
-    out += rdmswtn_corr_log_single_survival(t, row, cols);
+    out += rdmswtn_corr_log_single_survival(
+        t, row, cols, s.n_par, cdf1, ctx);
   }
   return out;
 }
@@ -10425,8 +10454,8 @@ static double rdmswtn_corr_log_component_cause(
 static double rdmswtn_corr_trial_loglik(
     const RDMSWTNCorrSharedState& s, int j,
     const RDMSWTNCorrTrialLayout& layout,
-    const ContextForRaceModels* ctx, const Rcpp::IntegerVector& response,
-    double min_ll) {
+    ContextForRaceModels* ctx, const Rcpp::IntegerVector& response,
+    RacePdf1Fun pdf1, RaceCdf1Fun cdf1, double min_ll) {
   if (!layout.params_ok) return min_ll;
   const int start = j * s.n_lR;
   const int n_lR_j = s.has_RACE ? s.race_nacc[start] : s.n_lR;
@@ -10451,7 +10480,7 @@ static double rdmswtn_corr_trial_loglik(
 
   auto single_cause = [&](int row, double t) {
     return rdmswtn_corr_log_component_cause(
-        s, j, layout, row, t, rho, s.cols.data());
+        s, j, layout, row, t, rho, s.cols.data(), pdf1, cdf1, ctx);
   };
   auto finite_cause = [&](int row, double t) {
     if (row < 0) {
@@ -10486,7 +10515,7 @@ static double rdmswtn_corr_trial_loglik(
   auto survivor = [&](double t) {
     if (t == 0.0) return 0.0;
     return rdmswtn_corr_log_component_survival(
-        s, j, layout, t, rho, s.cols.data());
+        s, j, layout, t, rho, s.cols.data(), cdf1, ctx);
   };
   auto survivor_difference = [&](double lo, double hi) {
     const double a = lo == 0.0 ? 0.0 : survivor(lo);
@@ -10634,7 +10663,7 @@ double c_log_likelihood_rdmswtn_correlated(
       s.layout[static_cast<size_t>(j)];
     if (!layout.ordinary) {
       unique_ll[static_cast<size_t>(j)] = rdmswtn_corr_trial_loglik(
-          s, j, layout, ctx, response, min_ll);
+          s, j, layout, ctx, response, pdf1, cdf1, min_ll);
     }
   }
 

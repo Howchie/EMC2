@@ -25,6 +25,7 @@ double prdmswtn(double t, double mu_drift, double b, double A,
                 int n_gauss_nodes, bool log_out,
                 int kill_shape, bool guess, bool posdrift,
                 double erlang_omega);
+double rdmswtn_tt_qinv(double u, double tau);
 
 namespace {
 
@@ -816,6 +817,181 @@ Rcpp::List rrdmswtn_corr_cpp(Rcpp::NumericMatrix pars,
       s, pars(r, it0), pars(r, isv)
     );
   }
+  RaceOut res = resolve_race(dt, n_acc, n_trials, nullptr, nullptr);
+  std::vector<int> isTime;
+  const bool has_isTime = resolve_time_level(res.R, isTime, lR_levels);
+  return pack_result(res.R, res.rt, res.omitted, has_isTime, isTime);
+}
+
+// RDMSWTN under the linear exhaustion clock. Draw the ordinary operational
+// finishing time, omit when it exceeds Q=tau/2, and otherwise invert q.
+// [[Rcpp::export]]
+Rcpp::List rrdmswtn_tt_cpp(Rcpp::NumericMatrix pars,
+                           Rcpp::CharacterVector lR_levels,
+                           Rcpp::LogicalVector ok,
+                           bool posdrift) {
+  const int n_acc = lR_levels.size();
+  const int n_rows = pars.nrow();
+  if (n_acc <= 0 || n_rows <= 0 || n_rows % n_acc != 0) {
+    Rcpp::stop("rrdmswtn_tt_cpp: invalid accumulator/parameter dimensions.");
+  }
+  if (ok.size() != n_rows) {
+    Rcpp::stop("rrdmswtn_tt_cpp: ok has the wrong length.");
+  }
+  const int n_trials = n_rows / n_acc;
+  const auto ci = col_index_map(pars);
+  const int iv = ci.at("v"), ib = ci.at("b"), iA = ci.at("A");
+  const int it0 = ci.at("t0"), isv = ci.at("sv"), itau = ci.at("tau");
+  const int is_ = ci.count("s") ? ci.at("s") : -1;
+
+  std::vector<double> dt(static_cast<size_t>(n_rows), R_PosInf);
+  for (int r = 0; r < n_rows; ++r) {
+    if (!ok[r]) continue;
+    const double tau = pars(r, itau);
+    if (!R_FINITE(tau) || !(tau > 0.0)) {
+      Rcpp::stop("rrdmswtn_tt_cpp: tau must be finite and positive.");
+    }
+    const double s = (is_ >= 0) ? pars(r, is_) : 1.0;
+    const double v = pars(r, iv), sv = pars(r, isv);
+    double v_draw = v;
+    if (R_FINITE(sv) && sv > 1e-12) {
+      v_draw = rtnorm_lower_r(v, sv, posdrift ? 0.0 : R_NegInf);
+    }
+    double b = std::fmax(0.0, pars(r, ib));
+    double A = std::fmax(0.0, pars(r, iA));
+    const double operational = rwald_acc_r(b - A, v_draw, A, s, posdrift);
+    if (R_FINITE(operational) && operational <= 0.5 * tau) {
+      dt[static_cast<size_t>(r)] =
+        pars(r, it0) + rdmswtn_tt_qinv(operational, tau);
+    }
+  }
+
+  RaceOut res = resolve_race(dt, n_acc, n_trials, nullptr, nullptr);
+  std::vector<int> isTime;
+  const bool has_isTime = resolve_time_level(res.R, isTime, lR_levels);
+  return pack_result(res.R, res.rt, res.omitted, has_isTime, isTime);
+}
+
+namespace {
+
+double rdmswtn_operational_quantile_bounded(
+    double u, double FQ, double Q, double v, double b, double A,
+    double s, double sv) {
+  if (u >= FQ) return Q;
+  double lo = 0.0, hi = Q;
+  for (int iter = 0; iter < 100; ++iter) {
+    const double mid = lo + 0.5 * (hi - lo);
+    const double fm = prdmswtn(
+        mid, v, b, A, s, 0.0, sv, 0.0, 0.0, 20, false,
+        1, false, true, 1.0);
+    if (!R_FINITE(fm)) {
+      Rcpp::stop("rrdmswtn_tt_corr_cpp: non-finite marginal CDF while inverting.");
+    }
+    if (fm < u) lo = mid;
+    else hi = mid;
+    if (hi - lo <= 1e-10 * std::fmax(1.0, hi)) break;
+  }
+  return lo + 0.5 * (hi - lo);
+}
+
+}  // namespace
+
+// Gaussian-copula simulator for the exhausted marginals. Copula uniforms above
+// the finite marginal plateau represent the atom at infinity.
+// [[Rcpp::export]]
+Rcpp::List rrdmswtn_tt_corr_cpp(Rcpp::NumericMatrix pars,
+                                Rcpp::CharacterVector lR_levels,
+                                Rcpp::LogicalVector ok,
+                                bool posdrift) {
+  const int n_acc = lR_levels.size();
+  const int n_rows = pars.nrow();
+  if (n_acc <= 0 || n_rows <= 0 || n_rows % n_acc != 0) {
+    Rcpp::stop("rrdmswtn_tt_corr_cpp: invalid accumulator/parameter dimensions.");
+  }
+  if (ok.size() != n_rows) {
+    Rcpp::stop("rrdmswtn_tt_corr_cpp: ok has the wrong length.");
+  }
+  const int n_trials = n_rows / n_acc;
+  const auto ci = col_index_map(pars);
+  const int iv = ci.at("v"), ib = ci.at("b"), iA = ci.at("A");
+  const int it0 = ci.at("t0"), isv = ci.at("sv"), itau = ci.at("tau");
+  const int irho = ci.at("rho");
+  const int is_ = ci.count("s") ? ci.at("s") : -1;
+
+  bool any_nonzero = false;
+  for (int r = 0; r < n_rows; ++r) {
+    if (!ok[r]) continue;
+    const double rho = pars(r, irho);
+    if (!R_FINITE(rho) || std::fabs(rho) > 1.0) {
+      Rcpp::stop("rrdmswtn_tt_corr_cpp: rho must be finite and lie in [-1, 1].");
+    }
+    const double tau = pars(r, itau);
+    if (!R_FINITE(tau) || !(tau > 0.0)) {
+      Rcpp::stop("rrdmswtn_tt_corr_cpp: tau must be finite and positive.");
+    }
+    if (std::fabs(rho) > 1e-12) any_nonzero = true;
+  }
+  if (!posdrift && any_nonzero) {
+    Rcpp::stop("rrdmswtn_tt_corr_cpp: posdrift = FALSE requires every active rho to be zero.");
+  }
+  if (!any_nonzero) {
+    return rrdmswtn_tt_cpp(pars, lR_levels, ok, posdrift);
+  }
+
+  std::vector<double> u(static_cast<size_t>(n_rows), 0.5);
+  for (int r = 0; r < n_rows; ++r) {
+    if (ok[r]) u[static_cast<size_t>(r)] = R::unif_rand();
+  }
+  for (int tr = 0; tr < n_trials; ++tr) {
+    const int start = tr * n_acc;
+    int pair[2] = {-1, -1};
+    int n_pair = 0;
+    double pair_rho = 0.0;
+    for (int a = 0; a < n_acc; ++a) {
+      const int r = start + a;
+      if (!ok[r]) continue;
+      const double rho = pars(r, irho);
+      if (std::fabs(rho) <= 1e-12) continue;
+      if (n_pair < 2) pair[n_pair] = r;
+      ++n_pair;
+      if (n_pair == 1) pair_rho = rho;
+      else if (std::fabs(rho - pair_rho) > 1e-12) {
+        Rcpp::stop("rrdmswtn_tt_corr_cpp: participating rows must share one signed nonzero rho.");
+      }
+    }
+    if (n_pair > 2) {
+      Rcpp::stop("rrdmswtn_tt_corr_cpp: at most two active rows may have nonzero rho.");
+    }
+    if (n_pair == 2) {
+      const double z1 = R::norm_rand();
+      const double z2 = pair_rho * z1 +
+        std::sqrt(std::fmax(0.0, 1.0 - pair_rho * pair_rho)) * R::norm_rand();
+      u[static_cast<size_t>(pair[0])] = pnorm_std(z1, true, false);
+      u[static_cast<size_t>(pair[1])] = pnorm_std(z2, true, false);
+    }
+  }
+
+  std::vector<double> dt(static_cast<size_t>(n_rows), R_PosInf);
+  for (int r = 0; r < n_rows; ++r) {
+    if (!ok[r]) continue;
+    const double tau = pars(r, itau);
+    const double Q = 0.5 * tau;
+    const double s = (is_ >= 0) ? pars(r, is_) : 1.0;
+    const double FQ = prdmswtn(
+        Q, pars(r, iv), pars(r, ib), pars(r, iA), s, 0.0, pars(r, isv),
+        0.0, 0.0, 20, false, 1, false, true, 1.0);
+    if (!R_FINITE(FQ)) {
+      Rcpp::stop("rrdmswtn_tt_corr_cpp: non-finite marginal response probability.");
+    }
+    const double ur = u[static_cast<size_t>(r)];
+    if (ur > FQ) continue;
+    const double operational = rdmswtn_operational_quantile_bounded(
+        ur, FQ, Q, pars(r, iv), pars(r, ib), pars(r, iA),
+        s, pars(r, isv));
+    dt[static_cast<size_t>(r)] =
+      pars(r, it0) + rdmswtn_tt_qinv(operational, tau);
+  }
+
   RaceOut res = resolve_race(dt, n_acc, n_trials, nullptr, nullptr);
   std::vector<int> isTime;
   const bool has_isTime = resolve_time_level(res.R, isTime, lR_levels);

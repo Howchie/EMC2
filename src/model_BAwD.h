@@ -572,6 +572,308 @@ inline double log_bawd_pdf_logn(double u, const BawdGeom& g, double mu,
 }
 
 // --------------------------------------------------------------------------
+// Guarded natural-space CDF & PDF evaluators for BAwD
+// --------------------------------------------------------------------------
+
+inline bool bawd_natural_cdf_normal(double u, const BawdGeom& g, double v,
+                                    double sv, bool posdrift,
+                                    double denom_floor, int accept_mode,
+                                    double &cdf) {
+  const bool lenient = accept_mode != BA_ACCEPT_STRICT;
+  const auto accept = [accept_mode](double &p) {
+    if (accept_mode == BA_ACCEPT_STRICT) return natural_cdf_safe(p);
+    if (accept_mode == BA_ACCEPT_RAW) return p < 1.0 - 1e-8;
+    if (p > 1.0) p = 1.0;
+    return true;
+  };
+
+  if (!g.ok || !(sv > 0.0) || !(u > 0.0)) {
+    cdf = 0.0;
+    return lenient;
+  }
+  const BawdAtU s = bawd_at_u(g, u);
+  if (!s.ok || !emc2_isfinite(s.w_hi) || !emc2_isfinite(s.w_lo) || !(s.q > 0.0)) {
+    cdf = 0.0;
+    return lenient;
+  }
+
+  double denom;
+  if (!natural_normalizer(v, sv, posdrift, denom, denom_floor)) return false;
+
+  if (g.A <= BAWD_A_EPS) {
+    const double z_norm = (v - s.w_hi) / sv;
+    if (!emc2_isfinite(z_norm)) return false;
+    if (!lenient && std::fabs(z_norm) > BAWL_NATURAL_Z_MAX) return false;
+    cdf = pnorm_std(z_norm, true, false) / denom;
+  } else {
+    double live_part = 0.0;
+    if (s.Z > 0.0) {
+      const double cl = (v - s.w_hi) / sv;
+      const double ch = (v - s.w_lo) / sv;
+      const double span = ch - cl;
+      if (span > BAWD_MIN_SPAN && emc2_isfinite(span)) {
+        if (!lenient && !natural_normal_interval_safe(cl, ch)) return false;
+        double scale = 0.0;
+        const double integral = normal_phi_integral_nat(cl, ch, scale);
+        if (!(integral > 0.0)) {
+          if (!lenient) return false;
+          live_part = 0.0;
+        } else {
+          if (!lenient && integral <= BAWL_NATURAL_REL_TOL * std::fmax(1.0, scale)) return false;
+          live_part = integral * sv * s.q;
+        }
+      } else {
+        const double mid_z = 0.5 * (cl + ch);
+        if (!lenient && std::fabs(mid_z) > BAWL_NATURAL_Z_MAX) return false;
+        live_part = s.Z * pnorm_std(mid_z, true, false);
+      }
+    }
+
+    double frozen_part = 0.0;
+    if (s.partial) {
+      const double log_frozen = bawd_log_frozen_normal(g, s.s_lo, s.s_hi, v, sv);
+      if (log_frozen > R_NegInf) {
+        frozen_part = std::exp(log_frozen);
+      }
+    }
+    cdf = (live_part + frozen_part) / (g.A * denom);
+  }
+
+  if (!R_FINITE(cdf)) return false;
+  if (cdf <= 0.0) {
+    if (!lenient) return false;
+    cdf = 0.0;
+    return true;
+  }
+  return accept(cdf);
+}
+
+inline bool bawd_natural_cdf_logn(double u, const BawdGeom& g, double mu,
+                                  double sigma, int accept_mode, double &cdf) {
+  const bool lenient = accept_mode != BA_ACCEPT_STRICT;
+  const auto accept = [accept_mode](double &p) {
+    if (accept_mode == BA_ACCEPT_STRICT) return natural_cdf_safe(p);
+    if (accept_mode == BA_ACCEPT_RAW) return p < 1.0 - 1e-8;
+    if (p > 1.0) p = 1.0;
+    return true;
+  };
+
+  if (!g.ok || !(sigma > 0.0) || !(u > 0.0)) {
+    cdf = 0.0;
+    return lenient;
+  }
+  const BawdAtU s = bawd_at_u(g, u);
+  if (!s.ok || !emc2_isfinite(s.w_hi) || !emc2_isfinite(s.w_lo) || !(s.w_hi > 0.0) || !(s.w_lo > 0.0)) {
+    cdf = 0.0;
+    return lenient;
+  }
+
+  if (g.A <= BAWD_A_EPS) {
+    const double z_norm = (mu - std::log(s.w_hi)) / sigma;
+    if (!emc2_isfinite(z_norm)) return false;
+    if (!lenient && std::fabs(z_norm) > BAWL_NATURAL_Z_MAX) return false;
+    cdf = pnorm_std(z_norm, true, false);
+  } else {
+    double live_part = 0.0;
+    if (s.Z > 0.0) {
+      double scale = 0.0;
+      const double diff = lognormal_stoploss_interval_nat(s.w_lo, s.w_hi, mu, sigma, scale);
+      if (diff > 0.0 && scale > 0.0 && diff / scale > BAWD_MIN_LOG_GAP) {
+        if (!lenient && diff <= BAWL_NATURAL_REL_TOL * std::fmax(1.0, scale)) return false;
+        live_part = s.q * diff;
+      } else {
+        const double w_mid = 0.5 * (s.w_lo + s.w_hi);
+        if (!(w_mid > 0.0)) return false;
+        const double z_mid = (mu - std::log(w_mid)) / sigma;
+        if (!lenient && std::fabs(z_mid) > BAWL_NATURAL_Z_MAX) return false;
+        live_part = s.Z * pnorm_std(z_mid, true, false);
+      }
+    }
+
+    double frozen_part = 0.0;
+    if (s.partial) {
+      const double log_frozen = bawd_log_frozen_logn(g, s.s_lo, s.s_hi, mu, sigma);
+      if (log_frozen > R_NegInf) {
+        frozen_part = std::exp(log_frozen);
+      }
+    }
+    cdf = (live_part + frozen_part) / g.A;
+  }
+
+  if (!R_FINITE(cdf)) return false;
+  if (cdf <= 0.0) {
+    if (!lenient) return false;
+    cdf = 0.0;
+    return true;
+  }
+  return accept(cdf);
+}
+
+inline bool bawd_natural_pdf_normal(double u, const BawdGeom& g, double v,
+                                    double sv, bool posdrift,
+                                    double denom_floor, int accept_mode,
+                                    double &pdf) {
+  const bool lenient = accept_mode != BA_ACCEPT_STRICT;
+  if (!g.ok || !(sv > 0.0) || !(u > 0.0) || u == R_PosInf) {
+    pdf = 0.0;
+    return lenient;
+  }
+  const BawdAtU s = bawd_at_u(g, u);
+  if (!s.ok || !emc2_isfinite(s.w_hi) || !emc2_isfinite(s.w_lo) || !(s.q > 0.0)) {
+    pdf = 0.0;
+    return lenient;
+  }
+  if (s.saturated) {
+    pdf = 0.0;
+    return true;
+  }
+
+  double denom;
+  if (!natural_normalizer(v, sv, posdrift, denom, denom_floor)) return false;
+
+  if (g.A <= BAWD_A_EPS) {
+    const double wgt = g.ell_zero ? (s.w_hi * s.E) : (s.w_hi * s.E - g.ell);
+    if (!(wgt > 0.0)) {
+      pdf = 0.0;
+      return true;
+    }
+    const double z_norm = (v - s.w_hi) / sv;
+    if (!emc2_isfinite(z_norm)) return false;
+    if (!lenient && std::fabs(z_norm) > BAWL_NATURAL_Z_MAX) return false;
+    pdf = wgt * dnormP(z_norm) / (sv * s.q * denom);
+  } else {
+    const double cl = (v - s.w_hi) / sv;
+    const double ch = (v - s.w_lo) / sv;
+    const double span = ch - cl;
+    if (span > BAWD_MIN_SPAN && emc2_isfinite(span)) {
+      if (!lenient && !natural_normal_interval_safe(cl, ch)) return false;
+      double scale = 0.0;
+      const double dphi = normal_interval_nat(cl, ch, scale);
+      if (dphi > 0.0 && scale > 0.0 && dphi / scale > 1e-6) {
+        const double dnorm_diff = dnormP(ch) - dnormP(cl);
+        const double term1 = (v * s.E - g.ell) * dphi;
+        const double term2 = sv * s.E * dnorm_diff;
+        const double bracket = term1 + term2;
+        const double max_scale = std::fmax(std::fabs(term1), std::fabs(term2));
+        if (bracket > 0.0 && bracket > 1e-6 * max_scale) {
+          pdf = bracket / (g.A * denom);
+        } else {
+          const double w_mid = 0.5 * (s.w_hi + s.w_lo);
+          const double wgt = w_mid * s.E - g.ell;
+          if (!(wgt > 0.0)) { pdf = 0.0; return true; }
+          pdf = wgt * dphi / (g.A * denom);
+        }
+      } else {
+        const double w_mid = 0.5 * (s.w_hi + s.w_lo);
+        const double wgt = w_mid * s.E - g.ell;
+        if (!(wgt > 0.0)) { pdf = 0.0; return true; }
+        const double mid_z = 0.5 * (cl + ch);
+        if (!lenient && std::fabs(mid_z) > BAWL_NATURAL_Z_MAX) return false;
+        pdf = s.Z * wgt * dnormP(mid_z) / (g.A * sv * s.q * denom);
+      }
+    } else {
+      const double w_mid = 0.5 * (s.w_hi + s.w_lo);
+      const double wgt = w_mid * s.E - g.ell;
+      if (!(wgt > 0.0)) { pdf = 0.0; return true; }
+      const double mid_z = 0.5 * (cl + ch);
+      if (!lenient && std::fabs(mid_z) > BAWL_NATURAL_Z_MAX) return false;
+      pdf = s.Z * wgt * dnormP(mid_z) / (g.A * sv * s.q * denom);
+    }
+  }
+
+  if (!R_FINITE(pdf)) return false;
+  if (pdf <= 0.0) {
+    if (!lenient) return false;
+    pdf = 0.0;
+  }
+  return true;
+}
+
+inline bool bawd_natural_pdf_logn(double u, const BawdGeom& g, double mu,
+                                 double sigma, int accept_mode, double &pdf) {
+  const bool lenient = accept_mode != BA_ACCEPT_STRICT;
+  if (!g.ok || !(sigma > 0.0) || !(u > 0.0) || u == R_PosInf) {
+    pdf = 0.0;
+    return lenient;
+  }
+  const BawdAtU s = bawd_at_u(g, u);
+  if (!s.ok || !emc2_isfinite(s.w_hi) || !emc2_isfinite(s.w_lo) || !(s.w_hi > 0.0) || !(s.w_lo > 0.0)) {
+    pdf = 0.0;
+    return lenient;
+  }
+  if (s.saturated) {
+    pdf = 0.0;
+    return true;
+  }
+
+  if (g.A <= BAWD_A_EPS) {
+    const double wgt = g.ell_zero ? (s.w_hi * s.E) : (s.w_hi * s.E - g.ell);
+    if (!(wgt > 0.0)) {
+      pdf = 0.0;
+      return true;
+    }
+    pdf = dlnorm_std(s.w_hi, mu, sigma, false) * wgt / s.q;
+  } else {
+    const double d1_lo = (mu + sigma * sigma - std::log(s.w_lo)) / sigma;
+    const double d1_hi = (mu + sigma * sigma - std::log(s.w_hi)) / sigma;
+    const double d2_lo = (mu - std::log(s.w_lo)) / sigma;
+    const double d2_hi = (mu - std::log(s.w_hi)) / sigma;
+
+    double scale_prob = 0.0;
+    const double prob = normal_interval_nat(d2_hi, d2_lo, scale_prob);
+    double scale_pexp = 0.0;
+    const double pexp = normal_interval_nat(d1_hi, d1_lo, scale_pexp);
+
+    const double M = std::exp(mu + 0.5 * sigma * sigma);
+    const double t1 = s.E * M * pexp;
+    const double t2 = g.ell * prob;
+    const double bracket = t1 - t2;
+
+    if (bracket > 0.0 && prob > 0.0 && pexp > 0.0 &&
+        (prob / scale_prob > 1e-6) && (pexp / scale_pexp > 1e-6)) {
+      const double max_scale = std::fmax(std::fabs(t1), std::fabs(t2));
+      if (!lenient && bracket <= BAWL_NATURAL_REL_TOL * std::fmax(1.0, max_scale))
+        return false;
+      pdf = bracket / g.A;
+    } else {
+      const double w_mid = 0.5 * (s.w_hi + s.w_lo);
+      const double wgt = w_mid * s.E - g.ell;
+      if (!(wgt > 0.0)) { pdf = 0.0; return true; }
+      if (prob > 0.0 && scale_prob > 0.0 && prob / scale_prob > 1e-6) {
+        pdf = wgt * prob / g.A;
+      } else {
+        pdf = s.Z * wgt * dlnorm_std(w_mid, mu, sigma, false) / (g.A * s.q);
+      }
+    }
+  }
+
+  if (!R_FINITE(pdf)) return false;
+  if (pdf <= 0.0) {
+    if (!lenient) return false;
+    pdf = 0.0;
+  }
+  return true;
+}
+
+inline bool ba_natural_cdf_bawd(double u, double A, double b, double p1, double p2,
+                                double k, double ell, int launch, bool posdrift,
+                                double denom_floor, int accept_mode, double &cdf) {
+  const BawdGeom g = bawd_geometry(A, b, k, ell);
+  if (launch == BAWD_LAUNCH_LOGNORMAL)
+    return bawd_natural_cdf_logn(u, g, p1, p2, accept_mode, cdf);
+  return bawd_natural_cdf_normal(u, g, p1, p2, posdrift, denom_floor, accept_mode, cdf);
+}
+
+inline bool ba_natural_pdf_bawd(double u, double A, double b, double p1, double p2,
+                                double k, double ell, int launch, bool posdrift,
+                                double denom_floor, int accept_mode, double &pdf) {
+  const BawdGeom g = bawd_geometry(A, b, k, ell);
+  if (launch == BAWD_LAUNCH_LOGNORMAL)
+    return bawd_natural_pdf_logn(u, g, p1, p2, accept_mode, pdf);
+  return bawd_natural_pdf_normal(u, g, p1, p2, posdrift, denom_floor, accept_mode, pdf);
+}
+
+// --------------------------------------------------------------------------
 // Dispatch and output wrappers.  `p1`/`p2` are (v, sv) for the normal launch
 // and (mu, sigma) for the lognormal one; they occupy the same kernel columns.
 // --------------------------------------------------------------------------
@@ -598,6 +900,10 @@ inline double bawd_cdf_norm(double t, double A, double b, double p1, double p2,
                             double k, double ell, int launch, bool posdrift,
                             bool log_out,
                             double denom_floor = BAWD_DENOM_FLOOR) {
+  double cdf;
+  if (ba_natural_cdf_bawd(t, A, b, p1, p2, k, ell, launch, posdrift,
+                           denom_floor, BA_ACCEPT_STRICT, cdf))
+    return log_out ? std::log(cdf) : cdf;
   return return_from_log(
     bawd_log_cdf(t, A, b, p1, p2, k, ell, launch, posdrift, denom_floor),
     log_out);
@@ -607,6 +913,10 @@ inline double bawd_pdf_norm(double t, double A, double b, double p1, double p2,
                             double k, double ell, int launch, bool posdrift,
                             bool log_out,
                             double denom_floor = BAWD_DENOM_FLOOR) {
+  double pdf;
+  if (ba_natural_pdf_bawd(t, A, b, p1, p2, k, ell, launch, posdrift,
+                           denom_floor, BA_ACCEPT_STRICT, pdf))
+    return log_out ? std::log(pdf) : pdf;
   return return_from_log(
     bawd_log_pdf(t, A, b, p1, p2, k, ell, launch, posdrift, denom_floor),
     log_out);
@@ -617,6 +927,10 @@ inline double bawd_pdf_norm(double t, double A, double b, double p1, double p2,
 inline double bawd_cdf_scalar_natural(double t, double A, double b, double p1,
                                       double p2, double k, double ell,
                                       int launch, bool posdrift) {
+  double cdf;
+  if (ba_natural_cdf_bawd(t, A, b, p1, p2, k, ell, launch, posdrift,
+                           BAWD_DENOM_FLOOR, BA_ACCEPT_CLAMP, cdf))
+    return cdf;
   const double lp = bawd_log_cdf(t, A, b, p1, p2, k, ell, launch, posdrift);
   if (!(lp > R_NegInf)) return 0.0;
   const double out = std::exp(lp);
@@ -626,9 +940,14 @@ inline double bawd_cdf_scalar_natural(double t, double A, double b, double p1,
 inline double bawd_pdf_scalar_natural(double t, double A, double b, double p1,
                                       double p2, double k, double ell,
                                       int launch, bool posdrift) {
+  double pdf;
+  if (ba_natural_pdf_bawd(t, A, b, p1, p2, k, ell, launch, posdrift,
+                           BAWD_DENOM_FLOOR, BA_ACCEPT_CLAMP, pdf))
+    return pdf;
   const double lp = bawd_log_pdf(t, A, b, p1, p2, k, ell, launch, posdrift);
   return (lp > R_NegInf) ? std::exp(lp) : 0.0;
 }
+
 
 // --------------------------------------------------------------------------
 // R-callable entry points.  These bypass ContextForRaceModels entirely, so the

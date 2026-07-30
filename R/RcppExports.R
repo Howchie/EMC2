@@ -233,6 +233,26 @@ prdmswtn <- function(t, mu_drift, b, A, s = 1.0, t0 = 0.0, sv = 0.0, lambda_g = 
     .Call(`_EMC2_prdmswtn`, t, mu_drift, b, A, s, t0, sv, lambda_g, lambda_k, n_gauss_nodes, log_out, kill_shape, guess, posdrift, erlang_omega)
 }
 
+rdmswtn_tt_qinv <- function(u, tau) {
+    .Call(`_EMC2_rdmswtn_tt_qinv`, u, tau)
+}
+
+drdmswtn_tt <- function(t, mu_drift, b, A, s = 1.0, t0 = 0.0, sv = 0.0, tau = 1.0, log_out = FALSE, posdrift = TRUE) {
+    .Call(`_EMC2_drdmswtn_tt`, t, mu_drift, b, A, s, t0, sv, tau, log_out, posdrift)
+}
+
+prdmswtn_tt <- function(t, mu_drift, b, A, s = 1.0, t0 = 0.0, sv = 0.0, tau = 1.0, log_out = FALSE, posdrift = TRUE) {
+    .Call(`_EMC2_prdmswtn_tt`, t, mu_drift, b, A, s, t0, sv, tau, log_out, posdrift)
+}
+
+dRDMSWTN_TT_cpp <- function(t, v, b, A, s, t0, sv, tau, log_out = FALSE, posdrift = TRUE) {
+    .Call(`_EMC2_dRDMSWTN_TT_cpp`, t, v, b, A, s, t0, sv, tau, log_out, posdrift)
+}
+
+pRDMSWTN_TT_cpp <- function(t, v, b, A, s, t0, sv, tau, log_out = FALSE, posdrift = TRUE) {
+    .Call(`_EMC2_pRDMSWTN_TT_cpp`, t, v, b, A, s, t0, sv, tau, log_out, posdrift)
+}
+
 dSWTNspv <- function(t, v, b, A, s = 1.0, t0 = 0.0, sv = 0.0, lambda_g = 0.0, lambda_k = 0.0, n_gauss_nodes = 20L, log_out = FALSE, kill_shape = 1L, posdrift = TRUE, erlang_omega = 1.0) {
     .Call(`_EMC2_dSWTNspv`, t, v, b, A, s, t0, sv, lambda_g, lambda_k, n_gauss_nodes, log_out, kill_shape, posdrift, erlang_omega)
 }
@@ -391,6 +411,14 @@ rrdmswtn_cpp <- function(pars, lR_levels, ok, erlang_shape, erlang_type, posdrif
 
 rrdmswtn_corr_cpp <- function(pars, lR_levels, ok, posdrift) {
     .Call(`_EMC2_rrdmswtn_corr_cpp`, pars, lR_levels, ok, posdrift)
+}
+
+rrdmswtn_tt_cpp <- function(pars, lR_levels, ok, posdrift) {
+    .Call(`_EMC2_rrdmswtn_tt_cpp`, pars, lR_levels, ok, posdrift)
+}
+
+rrdmswtn_tt_corr_cpp <- function(pars, lR_levels, ok, posdrift) {
+    .Call(`_EMC2_rrdmswtn_tt_corr_cpp`, pars, lR_levels, ok, posdrift)
 }
 
 fft_convolve_equiv_cpp <- function(x, y, conj_flag = TRUE) {

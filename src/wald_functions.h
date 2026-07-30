@@ -135,6 +135,125 @@ inline double dnormP(double x, double mean = 0.0, double sd = 1.0,
   return R::dnorm(x, mean, sd, log);
 }
 
+// Natural-space twin of log_normal_interval(): Phi(hi) - Phi(lo), taken in
+// whichever tail avoids subtracting two values that both round to one.  The
+// larger of the two probabilities is returned in `scale` so the caller can
+// check how much of it the difference retained -- a natural difference is only
+// as good as that retained fraction, and there is no way to recover it after
+// the subtraction has happened.
+inline double normal_interval_nat(double lo, double hi, double &scale) {
+  scale = 0.0;
+  if (!(hi > lo) || ISNAN(lo) || ISNAN(hi)) return 0.0;
+  double a, b;
+  if (lo >= 0.0) {
+    a = pnorm_std(lo, false, false);   // Q(lo) >= Q(hi)
+    b = pnorm_std(hi, false, false);
+  } else {
+    a = pnorm_std(hi, true, false);    // Phi(hi) >= Phi(lo)
+    b = pnorm_std(lo, true, false);
+  }
+  scale = a;
+  return a - b;
+}
+
+// Natural-space twin of log_normal_q_antiderivative_abs(): M(z) = phi(z) - z Q(z).
+inline double normal_q_antiderivative_abs_nat(double z) {
+  if (z == R_PosInf || ISNAN(z)) return 0.0;
+  if (z == R_NegInf) return R_PosInf;
+  const double phi = dnormP(z, 0.0, 1.0, false);
+  if (z > 0.0) {
+    const double q = pnorm_std(z, false, false);
+    return phi - z * q;
+  } else if (z < 0.0) {
+    const double q = pnorm_std(z, false, false);
+    return phi + (-z) * q;
+  }
+  return phi;
+}
+
+// Natural-space twin of log_normal_q_interval(): integral_lo^hi Q(z) dz = M(lo) - M(hi).
+inline double normal_q_interval_nat(double lo, double hi, double &scale) {
+  scale = 0.0;
+  if (!(hi > lo) || ISNAN(lo) || ISNAN(hi)) return 0.0;
+  const double m_lo = normal_q_antiderivative_abs_nat(lo);
+  const double m_hi = normal_q_antiderivative_abs_nat(hi);
+  scale = m_lo;
+  return m_lo - m_hi;
+}
+
+// Natural-space twin of log_normal_phi_antiderivative(): h(z) = z Phi(z) + phi(z).
+inline double normal_phi_antiderivative_nat(double z) {
+  if (z == R_PosInf) return R_PosInf;
+  if (z == R_NegInf || ISNAN(z)) return 0.0;
+  const double phi = dnormP(z, 0.0, 1.0, false);
+  const double phi_cdf = pnorm_std(z, true, false);
+  return z * phi_cdf + phi;
+}
+
+// Natural-space twin of log_normal_phi_integral(): integral_lo^hi Phi(z) dz = h(hi) - h(lo).
+inline double normal_phi_integral_nat(double lo, double hi, double &scale) {
+  scale = 0.0;
+  if (!(hi > lo) || ISNAN(lo) || ISNAN(hi)) return 0.0;
+
+  if (hi <= 0.0) {
+    const double h_hi = normal_phi_antiderivative_nat(hi);
+    const double h_lo = normal_phi_antiderivative_nat(lo);
+    scale = h_hi;
+    return h_hi - h_lo;
+  }
+
+  if (lo >= 0.0) {
+    const double width = hi - lo;
+    double q_scale = 0.0;
+    const double q_int = normal_q_interval_nat(lo, hi, q_scale);
+    scale = width;
+    return width - q_int;
+  }
+
+  const double h_0 = normal_phi_antiderivative_nat(0.0);
+  const double h_lo = normal_phi_antiderivative_nat(lo);
+  const double left = h_0 - h_lo;
+
+  const double right_width = hi;
+  double right_q_scale = 0.0;
+  const double right_q_int = normal_q_interval_nat(0.0, hi, right_q_scale);
+  const double right = right_width - right_q_int;
+
+  scale = h_0 + right_width;
+  return left + right;
+}
+
+// Natural-space twin of log_lognormal_stoploss(): C(v) = E[(V - v)_+].
+inline double lognormal_stoploss_nat(double v, double mu, double sigma, double &scale) {
+  scale = 0.0;
+  if (!(sigma > 0.0) || ISNAN(v)) return 0.0;
+  if (v == R_PosInf || !emc2_isfinite(v)) return 0.0;
+  const double M = std::exp(mu + 0.5 * sigma * sigma);
+  if (!(v > 0.0)) {
+    scale = M;
+    return M - v;
+  }
+  const double x = (std::log(v) - mu) / sigma;
+  const double Q1 = pnorm_std(x - sigma, false, false);
+  const double Q2 = pnorm_std(x, false, false);
+  const double term1 = M * Q1;
+  const double term2 = v * Q2;
+  scale = term1;
+  return term1 - term2;
+}
+
+// Natural-space twin for stoploss differences: C(lo) - C(hi).
+inline double lognormal_stoploss_interval_nat(double lo, double hi, double mu, double sigma, double &scale) {
+  scale = 0.0;
+  if (!(hi > lo) || ISNAN(lo) || ISNAN(hi)) return 0.0;
+  double scale_lo = 0.0, scale_hi = 0.0;
+  const double c_lo = lognormal_stoploss_nat(lo, mu, sigma, scale_lo);
+  const double c_hi = lognormal_stoploss_nat(hi, mu, sigma, scale_hi);
+  scale = c_lo;
+  return c_lo - c_hi;
+}
+
+
 // Let Q(z) = 1 - Phi(z). The positive quantity
 //   M(z) = phi(z) - z Q(z)
 // is decreasing and satisfies

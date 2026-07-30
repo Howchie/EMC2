@@ -115,3 +115,22 @@
              erlang_type = erlang_type, posdrift = posdrift)
   }
 }
+
+.rfun_RDMSWTN_TT <- function(lR, pars, ok = rep(TRUE, nrow(pars)),
+                             posdrift = TRUE, correlated = FALSE) {
+  if (.use_cpp_rfun()) {
+    res <- if (correlated) {
+      rrdmswtn_tt_corr_cpp(pars, levels(lR), ok, posdrift)
+    } else {
+      rrdmswtn_tt_cpp(pars, levels(lR), ok, posdrift)
+    }
+    return(.rfun_cpp_pack(
+      res, levels(lR), length(lR) / length(levels(lR))
+    ))
+  }
+  if (correlated) {
+    rRDMSWTN_TT_corr(lR, pars, ok = ok, posdrift = posdrift)
+  } else {
+    rRDMSWTN_TT(lR, pars, ok = ok, posdrift = posdrift)
+  }
+}

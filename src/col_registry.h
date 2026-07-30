@@ -131,6 +131,15 @@ namespace rdmswtn {
   }
 }
 
+// R/model_RDM.R — RDMSWTN_TT (RDMSWTN under a finite linear exhaustion clock).
+namespace rdmswtn_tt {
+  enum : int { v = 0, B, A, t0, s, sv, tau, N_REQ };
+  inline ColSpec spec() {
+    static const char* n[] = {"v", "B", "A", "t0", "s", "sv", "tau"};
+    return {n, N_REQ, "RDMSWTN_TT"};
+  }
+}
+
 // R/model_ROU.R — ROU, the racing Ornstein-Uhlenbeck (leaky accumulator).
 // Identical to RDM apart from the leak k, so an RDM design converts by adding
 // k~1; k = 0 is the Wiener race, reached through the PDE rather than by

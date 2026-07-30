@@ -2891,6 +2891,103 @@ double prdmswtn(double t, double mu_drift, double b, double A,
 }
 
 // --------------------------------------------------------------------------
+// RDMSWTN under the finite linear exhaustion clock
+//
+// x = t - t0, q(x) = x - x^2/(2*tau), q'(x) = 1 - x/tau,
+// 0 < x < tau.  Once x reaches tau the operational-time budget is Q=tau/2,
+// so the CDF freezes and the density is identically zero.
+// --------------------------------------------------------------------------
+
+inline double rdmswtn_tt_q(double x, double tau) {
+  if (!R_FINITE(tau)) return x;
+  return x * (1.0 - 0.5 * x / tau);
+}
+
+// [[Rcpp::export]]
+double rdmswtn_tt_qinv(double u, double tau) {
+  if (!(tau > 0.0) || ISNAN(u) || u < 0.0) return NA_REAL;
+  if (!R_FINITE(tau)) return u;
+  const double Q = 0.5 * tau;
+  if (u > Q) return R_PosInf;
+  if (u == 0.0) return 0.0;
+  const double radicand = std::fmax(0.0, 1.0 - 2.0 * u / tau);
+  return 2.0 * u / (1.0 + std::sqrt(radicand));
+}
+
+// [[Rcpp::export]]
+double drdmswtn_tt(double t, double mu_drift, double b, double A,
+                   double s = 1.0, double t0 = 0.0, double sv = 0.0,
+                   double tau = 1.0, bool log_out = false,
+                   bool posdrift = true) {
+  if (!(tau > 0.0) || ISNAN(t) || ISNAN(t0))
+    return log_out ? R_NegInf : 0.0;
+  const double x = t - t0;
+  if (!(x > 0.0) || (R_FINITE(tau) && x >= tau) || !R_FINITE(t))
+    return log_out ? R_NegInf : 0.0;
+  const double q = rdmswtn_tt_q(x, tau);
+  const double log_f = drdmswtn(
+      q, mu_drift, b, A, s, 0.0, sv, 0.0, 0.0, 20,
+      true, 1, false, posdrift, 1.0);
+  if (!R_FINITE(log_f)) return log_out ? R_NegInf : 0.0;
+  const double log_jac = R_FINITE(tau) ? std::log1p(-x / tau) : 0.0;
+  const double out = log_f + log_jac;
+  return log_out ? out : std::exp(out);
+}
+
+// [[Rcpp::export]]
+double prdmswtn_tt(double t, double mu_drift, double b, double A,
+                   double s = 1.0, double t0 = 0.0, double sv = 0.0,
+                   double tau = 1.0, bool log_out = false,
+                   bool posdrift = true) {
+  if (!(tau > 0.0) || ISNAN(t) || ISNAN(t0))
+    return log_out ? R_NegInf : 0.0;
+  const double x = t - t0;
+  if (!(x > 0.0)) return log_out ? R_NegInf : 0.0;
+  const double q = (R_FINITE(tau) && x >= tau)
+    ? 0.5 * tau
+    : rdmswtn_tt_q(x, tau);
+  return prdmswtn(
+      q, mu_drift, b, A, s, 0.0, sv, 0.0, 0.0, 20,
+      log_out, 1, false, posdrift, 1.0);
+}
+
+// [[Rcpp::export]]
+NumericVector dRDMSWTN_TT_cpp(
+    NumericVector t, NumericVector v, NumericVector b, NumericVector A,
+    NumericVector s, NumericVector t0, NumericVector sv, NumericVector tau,
+    bool log_out = false, bool posdrift = true) {
+  const int n = t.size();
+  NumericVector out(n);
+  auto pick = [](const NumericVector& vec, int i) -> double {
+    return vec.size() == 1 ? vec[0] : vec[i];
+  };
+  for (int i = 0; i < n; ++i) {
+    out[i] = drdmswtn_tt(
+      t[i], pick(v, i), pick(b, i), pick(A, i), pick(s, i),
+      pick(t0, i), pick(sv, i), pick(tau, i), log_out, posdrift);
+  }
+  return out;
+}
+
+// [[Rcpp::export]]
+NumericVector pRDMSWTN_TT_cpp(
+    NumericVector t, NumericVector v, NumericVector b, NumericVector A,
+    NumericVector s, NumericVector t0, NumericVector sv, NumericVector tau,
+    bool log_out = false, bool posdrift = true) {
+  const int n = t.size();
+  NumericVector out(n);
+  auto pick = [](const NumericVector& vec, int i) -> double {
+    return vec.size() == 1 ? vec[0] : vec[i];
+  };
+  for (int i = 0; i < n; ++i) {
+    out[i] = prdmswtn_tt(
+      t[i], pick(v, i), pick(b, i), pick(A, i), pick(s, i),
+      pick(t0, i), pick(sv, i), pick(tau, i), log_out, posdrift);
+  }
+  return out;
+}
+
+// --------------------------------------------------------------------------
 // Vectorised R-callable exports (match zachdev naming so R code is portable).
 // --------------------------------------------------------------------------
 
