@@ -114,63 +114,6 @@ pcounter_cpp_ll <- function(p, design, dat) {
   )
 }
 
-test_that("PCOUNTER C++ likelihood equals the equivalent RGAMMA likelihood", {
-  matchfun <- function(d) d$S == d$lR
-  design_pc <- design(
-    factors = list(subjects = 1, S = 1:2), Rlevels = 1:2, matchfun = matchfun,
-    formula = list(alpha ~ lM, K ~ 1, t0 ~ 1), model = PCOUNTER
-  )
-  design_rg <- design(
-    factors = list(subjects = 1, S = 1:2), Rlevels = 1:2, matchfun = matchfun,
-    formula = list(lambda ~ lM, shape ~ 1, shift ~ 1), model = RGAMMA
-  )
-
-  p_pc <- c("alpha" = log(8), "alpha_lMTRUE" = 0.7, "K" = log(4), "t0" = log(0.15))
-  p_rg <- c("lambda" = log(8), "lambda_lMTRUE" = 0.7, "shape" = log(4), "shift" = log(0.15))
-  expect_equal(names(sampled_pars(design_pc)),
-               sub("^shift", "t0", sub("^shape", "K", sub("^lambda", "alpha", names(sampled_pars(design_rg))))))
-
-  set.seed(11)
-  dat <- make_data(p_pc, design_pc, n_trials = 60)
-  expect_true(all(is.finite(dat$rt)))
-  expect_gt(min(dat$rt), 0.15)
-
-  ll_pc <- pcounter_cpp_ll(p_pc, design_pc, dat)
-  ll_rg <- pcounter_cpp_ll(p_rg, design_rg, dat)
-  expect_true(is.finite(ll_pc))
-  expect_equal(ll_pc, ll_rg, tolerance = 1e-10)
-})
-
-test_that("PCOUNTER_INTK C++ likelihood equals RGAMMA at the snapped criterion", {
-  design_pc <- design(
-    factors = list(subjects = 1, S = 1), Rlevels = 1:2,
-    formula = list(alpha ~ 1, K ~ 1, t0 ~ 1), model = PCOUNTER(integer_K = TRUE)
-  )
-  design_rg <- design(
-    factors = list(subjects = 1, S = 1), Rlevels = 1:2,
-    formula = list(lambda ~ 1, shape ~ 1, shift ~ 1), model = RGAMMA
-  )
-
-  K_raw <- 3.4
-  p_pc <- c("alpha" = log(9), "K" = log(K_raw), "t0" = log(0.12))
-  p_rg <- c("lambda" = log(9), "shape" = log(floor(K_raw + 0.5)), "shift" = log(0.12))
-
-  set.seed(12)
-  dat <- make_data(p_pc, design_pc, n_trials = 60)
-
-  expect_equal(pcounter_cpp_ll(p_pc, design_pc, dat),
-               pcounter_cpp_ll(p_rg, design_rg, dat), tolerance = 1e-10)
-
-  # The snap is a step: any K in [2.5, 3.5) gives the same likelihood, and a K
-  # in the next interval up does not.
-  p_same <- p_pc; p_same["K"] <- log(2.6)
-  p_next <- p_pc; p_next["K"] <- log(3.6)
-  expect_equal(pcounter_cpp_ll(p_same, design_pc, dat),
-               pcounter_cpp_ll(p_pc, design_pc, dat), tolerance = 1e-10)
-  expect_false(isTRUE(all.equal(pcounter_cpp_ll(p_next, design_pc, dat),
-                                pcounter_cpp_ll(p_pc, design_pc, dat))))
-})
-
 test_that("integer_K exposes the snapped criterion as a derived parameter", {
   d <- design(
     factors = list(subjects = 1, S = 1), Rlevels = 1:2,

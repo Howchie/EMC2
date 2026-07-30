@@ -9,6 +9,7 @@
 #include <unordered_map>
 #include "col_registry.h"
 #include "fpe_race.h"
+#include "model_RLF.h"
 #include "utility_functions.h"
 #include "model_RDM.h"
 #include "model_LBA.h"
@@ -152,13 +153,14 @@ struct ContextForRaceModels {
     int time_code = -2;
     int nogo_code = -2;
 
-    // PDE-backed race models (ROU) amortise one Fokker-Planck march over every
+    // PDE-backed race models amortise one Fokker-Planck march over every
     // row that shares a parameter tuple, and over the scalar CDF calls the
     // censoring path makes at the truncation/censoring bounds.  Held by shared
     // pointer because the adapter is copied around, and allocated only by the
     // models that need it -- every analytic model leaves this null and pays
     // nothing.  Cleared once per particle; see fperace::SolveCache.
     std::shared_ptr<fperace::SolveCache> fpe_cache;
+    std::shared_ptr<rlf::SolveCache> rlf_cache;
 
     bool has_global_kill() const {
       return is_global_kill && kill_active;
@@ -204,6 +206,7 @@ inline double raw_log_value(double log_x, double min_ll, bool floor_raw) {
 // the raw_log_* helpers above.  (The cache TYPE they store in the context comes
 // from fpe_race.h, which has no such dependency and is included at the top.)
 #include "model_ROU.h"
+#include "model_RLF_kernels.h"
 
 struct TimedLambdaDispatch {
   double lambda_g;
@@ -629,118 +632,11 @@ inline void lnr_logS_at_t(double t, const double* const* cols,
   }
 }
 
-// RGAMMA: column layout lambda=0, shape=1, shift=2
-inline double drgamma_scalar(double t, const double* par, void* ctx_) {
-  (void)ctx_;
-  if (R_IsNA(par[0]) || R_IsNA(par[1]) || R_IsNA(par[2])) return 0.0;
-  if (par[0] <= 0.0 || par[1] <= 0.0) return 0.0;
-  const double tt = t - par[2];
-  if (tt <= 0.0) return 0.0;
-  return R::dgamma(tt, par[1], 1.0 / par[0], false);
-}
-
-inline double prgamma_scalar(double t, const double* par, void* ctx_) {
-  (void)ctx_;
-  if (R_IsNA(par[0]) || R_IsNA(par[1]) || R_IsNA(par[2])) return 0.0;
-  if (par[0] <= 0.0 || par[1] <= 0.0) return 0.0;
-  const double tt = t - par[2];
-  if (tt <= 0.0) return 0.0;
-  return R::pgamma(tt, par[1], 1.0 / par[0], true, false);
-}
-
-inline void drgamma_raw(const double* rt, const double* const* cols, int n_rows,
-                        const int* mask, const int* isok,
-                        double* out, double min_ll, void* ctx_) {
-  const bool floor_raw = raw_floor_log_lik(ctx_);
-  const double* lambda_ = cols[emc2col::rgamma::lambda];
-  const double* shape_  = cols[emc2col::rgamma::shape];
-  const double* shift_  = cols[emc2col::rgamma::shift];
-  for (int i = 0; i < n_rows; ++i) {
-    if (!mask[i]) continue;
-    if (R_IsNA(lambda_[i]) || R_IsNA(shape_[i]) || R_IsNA(shift_[i]) ||
-        !isok[i] || lambda_[i] <= 0.0 || shape_[i] <= 0.0) {
-      out[i] = raw_log_zero(min_ll, floor_raw);
-      continue;
-    }
-    const double tt = rt[i] - shift_[i];
-    if (tt <= 0.0) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
-    // Natural fast path; on under/overflow use the direct log density.
-    const double pdf = R::dgamma(tt, shape_[i], 1.0 / lambda_[i], false);
-    if (pdf > 0.0 && emc2_isfinite(pdf)) {
-      out[i] = raw_log_value(std::log(pdf), min_ll, floor_raw);
-    } else {
-      out[i] = raw_log_value(R::dgamma(tt, shape_[i], 1.0 / lambda_[i], true),
-                             min_ll, floor_raw);
-    }
-  }
-}
-
-inline void prgamma_raw(const double* rt, const double* const* cols, int n_rows,
-                        const int* mask, const int* isok,
-                        double* out, double min_ll, void* ctx_) {
-  const bool floor_raw = raw_floor_log_lik(ctx_);
-  const double* lambda_ = cols[emc2col::rgamma::lambda];
-  const double* shape_  = cols[emc2col::rgamma::shape];
-  const double* shift_  = cols[emc2col::rgamma::shift];
-  for (int i = 0; i < n_rows; ++i) {
-    if (!mask[i]) continue;
-    if (R_IsNA(lambda_[i]) || R_IsNA(shape_[i]) || R_IsNA(shift_[i]) ||
-        !isok[i] || lambda_[i] <= 0.0 || shape_[i] <= 0.0) {
-      out[i] = 0.0;
-      continue;
-    }
-    const double tt = rt[i] - shift_[i];
-    if (tt <= 0.0) { out[i] = 0.0; continue; }
-    const double cdf = R::pgamma(tt, shape_[i], 1.0 / lambda_[i], true, false);
-    if (cdf >= 1.0 - EMC2_CDF_SAT_MARGIN) {
-      // Saturated lower tail: take the upper-tail log directly instead of
-      // reconstructing it from 1 - cdf.
-      const double log_surv = R::pgamma(tt, shape_[i], 1.0 / lambda_[i], false, true);
-      out[i] = R_FINITE(log_surv) ? log_surv : raw_log_zero(min_ll, floor_raw);
-      continue;
-    }
-    out[i] = (cdf <= 0.0) ? 0.0 : std::log1p(-cdf);
-  }
-}
-
-inline void rgamma_logS_at_t(double t, const double* const* cols,
-                             int n_rows_total, int n_lR, int /*n_par*/,
-                             const int* trunc_mask, int n_unique_trials,
-                             const int* isok_all, void* ctx_, double* logS_out) {
-  (void)ctx_;
-  const double* lambda_ = cols[emc2col::rgamma::lambda];
-  const double* shape_  = cols[emc2col::rgamma::shape];
-  const double* shift_  = cols[emc2col::rgamma::shift];
-  for (int j = 0; j < n_unique_trials; ++j) {
-    if (!trunc_mask[j]) continue;
-    const int start = j * n_lR;
-    double logS = 0.0;
-    bool bad = false;
-    for (int k = 0; k < n_lR && !bad; ++k) {
-      const int r = start + k;
-      if (!isok_all[r] || R_IsNA(lambda_[r]) || R_IsNA(shape_[r]) || R_IsNA(shift_[r]) ||
-          lambda_[r] <= 0.0 || shape_[r] <= 0.0) { bad = true; break; }
-      const double tt = t - shift_[r];
-      if (tt <= 0.0) continue;
-      const double cdf = R::pgamma(tt, shape_[r], 1.0 / lambda_[r], true, false);
-      if (cdf >= 1.0 - EMC2_CDF_SAT_MARGIN) {
-        const double log_surv = R::pgamma(tt, shape_[r], 1.0 / lambda_[r], false, true);
-        if (!R_FINITE(log_surv)) { bad = true; break; }
-        logS += log_surv;
-        continue;
-      }
-      if (cdf > 0.0) logS += std::log1p(-cdf);
-    }
-    logS_out[j] = bad ? R_NegInf : logS;
-  }
-}
-
 // PCOUNTER: column layout alpha=0, K=1, t0=2.  The finish-time density of a
 // counter that needs K Poisson counts arriving at rate alpha is Erlang(K,
-// alpha), so these kernels are the rgamma kernels under counter names, plus
-// the optional integer snap on K.  Keeping them separate from rgamma keeps the
-// snap off the RGAMMA hot path and lets validate_col_prefix name the counter
-// columns in error messages.
+// alpha), so these kernels evaluate shifted Gamma finish times, with the
+// optional integer snap on K.  Keeping the snap in this model lets
+// validate_col_prefix name the counter columns in error messages.
 // Nearest integer, not ceiling: the snap makes the likelihood flat across the
 // whole interval of K that maps to one count, so rounding centres each
 // interval on the criterion it represents and leaves the raw K unbiased.

@@ -577,8 +577,16 @@ rlf_fht_pdf_cdf_vec <- function(t, v, sigma, alpha, b0, z0 = 0.0, nx = 200L, nt 
     .Call(`_EMC2_rlf_fht_pdf_cdf_vec`, t, v, sigma, alpha, b0, z0, nx, nt)
 }
 
+rlf_pdf_cdf_vec <- function(rt, v, B, A, t0, s, alpha, nx = 200L, dt_target = 5e-3, tgrade = 1.0, adaptive = FALSE, explicit_inverse = TRUE, sparse_output = TRUE, simd_batch = TRUE) {
+    .Call(`_EMC2_rlf_pdf_cdf_vec`, rt, v, B, A, t0, s, alpha, nx, dt_target, tgrade, adaptive, explicit_inverse, sparse_output, simd_batch)
+}
+
 simulate_rlf_hit_times_cpp <- function(n_sims, v, sigma, alpha, b0, z0 = 0.0, t_max = 5.0, dt = 0.001, seed = 42L) {
     .Call(`_EMC2_simulate_rlf_hit_times_cpp`, n_sims, v, sigma, alpha, b0, z0, t_max, dt, seed)
+}
+
+rlf_hit_times_vec <- function(v, B, A, s, alpha, dt = 1e-3, t_max = 30.0) {
+    .Call(`_EMC2_rlf_hit_times_vec`, v, B, A, s, alpha, dt, t_max)
 }
 
 rou_pdf_cdf_vec <- function(rt, v, k, B, A, t0, s, nx = 384L, dt_target = 2e-3, grade = 8.0, tgrade = 32.0, bkind = 0L, Binf = as.numeric( c()), tau = as.numeric( c()), pw = as.numeric( c())) {

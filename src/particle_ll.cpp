@@ -514,7 +514,17 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
 
   if (out.ctx.is_global_kill) out.ctx.defective_upper_tail = true;
 
-  if (type_std.find("ROU") != std::string::npos) {
+  if (type_std.find("RLF") != std::string::npos) {
+    out.pdf1_ptr       = &drlf_scalar;
+    out.cdf1_ptr       = &prlf_scalar;
+    out.model_dfun_raw = &drlf_raw;
+    out.model_pfun_raw = &prlf_raw;
+    out.logS_at_t_ptr  = &rlf_logS_at_t;
+    out.col_spec       = emc2col::rlf::spec();
+    out.ctx.t0_index   = emc2col::rlf::t0;
+    out.ctx.rlf_cache = std::make_shared<rlf::SolveCache>();
+    rlf_configure_grid(out.ctx.rlf_cache->grid);
+  } else if (type_std.find("ROU") != std::string::npos) {
     // Ordered FIRST deliberately.  Dispatch here is by substring, so a key that
     // is a substring of a later one must be tested first; "ROU" collides with
     // nothing today, and testing it first is what keeps a future addition from
@@ -685,14 +695,6 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
     // PCOUNTER leaves it continuous (fractional-counter generalisation).
     out.ctx.pcounter_integer_K =
       (type_std.find("INTK") != std::string::npos);
-  } else if (type_std.find("RGAMMA") != std::string::npos) {
-    out.pdf1_ptr = &drgamma_scalar;
-    out.cdf1_ptr = &prgamma_scalar;
-    out.model_dfun_raw = &drgamma_raw;
-    out.model_pfun_raw = &prgamma_raw;
-    out.logS_at_t_ptr = &rgamma_logS_at_t;
-    out.col_spec     = emc2col::rgamma::spec();
-    out.ctx.t0_index = -1;
   } else {
     Rcpp::stop("Unsupported race model type string in %s: %s", caller.c_str(), type_std.c_str());
   }
@@ -4202,6 +4204,7 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
       // tuples change with the particle, so drop them here.  Keys are exact, so
       // this is about bounding memory, not about correctness.
       if (adapter.ctx.fpe_cache) adapter.ctx.fpe_cache->new_particle();
+      if (adapter.ctx.rlf_cache) adapter.ctx.rlf_cache->new_particle();
       if (use_raw_fast_path) {
         // Fill per-particle isok buffer
         for (int j = 0; j < n_trials; ++j) isok_int_fp[j] = is_ok[j] ? 1 : 0;
@@ -4538,6 +4541,7 @@ NumericMatrix calc_ll_oo_pw(NumericMatrix particle_matrix, DataFrame data, Numer
       is_ok = pt.prepare(i);
       is_ok = lr_all(is_ok, n_lR);
       if (adapter.ctx.fpe_cache) adapter.ctx.fpe_cache->new_particle();
+      if (adapter.ctx.rlf_cache) adapter.ctx.rlf_cache->new_particle();
       NumericVector row_vec(n_out_race);
       if (adapter.ctx.bawl_correlated) {
         c_log_likelihood_bawl_correlated(
@@ -6431,6 +6435,7 @@ static double c_log_likelihood_logicalrules(
   // entry may survive this likelihood call.
   shared.clear_particle_cache();
   if (model_ctx->fpe_cache) model_ctx->fpe_cache->new_particle();
+  if (model_ctx->rlf_cache) model_ctx->rlf_cache->new_particle();
   if (n_par > 64) {
     Rcpp::stop("c_log_likelihood_logicalrules: at most 64 parameter columns are supported.");
   }

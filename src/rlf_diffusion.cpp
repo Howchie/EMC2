@@ -87,6 +87,88 @@ Rcpp::List rlf_fht_pdf_cdf_vec(NumericVector t, double v, double sigma,
 }
 
 // ---------------------------------------------------------------------------
+// Grouped single-accumulator PDF/CDF queries used by dRLF/pRLF.  Parameter rows
+// sharing a sigma-scaled key pay for one solve, and t0 is only a time shift.
+// ---------------------------------------------------------------------------
+// [[Rcpp::export]]
+Rcpp::List rlf_pdf_cdf_vec(
+    NumericVector rt, NumericVector v, NumericVector B, NumericVector A,
+    NumericVector t0, NumericVector s, NumericVector alpha, int nx = 200,
+    double dt_target = 5e-3, double tgrade = 1.0, bool adaptive = false,
+    bool explicit_inverse = true, bool sparse_output = true,
+    bool simd_batch = true) {
+  const int n = rt.size();
+  if (v.size() != n || B.size() != n || A.size() != n ||
+      t0.size() != n || s.size() != n || alpha.size() != n) {
+    stop("rlf_pdf_cdf_vec: all parameter vectors must match length(rt).");
+  }
+  if (nx < 30 || !(dt_target > 0.0) || !(tgrade >= 1.0)) {
+    stop("rlf_pdf_cdf_vec: invalid grid configuration.");
+  }
+
+  NumericVector pdf(n, 0.0), cdf(n, 0.0);
+  rlf::SolveCache cache;
+  cache.grid.nx = nx;
+  cache.grid.dt_target = dt_target;
+  cache.grid.tgrade = tgrade;
+  cache.grid.adaptive = adaptive;
+  cache.grid.explicit_inverse = explicit_inverse;
+  cache.grid.sparse_output = sparse_output;
+  cache.grid.simd_batch = simd_batch;
+
+  std::vector<rlf::Key> keys;
+  std::vector<double> horizons;
+  std::vector<std::vector<double>> query_times;
+  std::vector<int> row_group(n, -1);
+  std::unordered_map<rlf::Key, int, rlf::KeyHash> groups;
+  for (int i = 0; i < n; ++i) {
+    const double tt = rt[i] - t0[i];
+    if (!R_finite(tt) || !(tt > 0.0)) continue;
+    rlf::Key key;
+    if (!rlf::rlf_key(v[i], s[i], alpha[i], B[i], A[i], key)) continue;
+    const auto found = groups.find(key);
+    int group = -1;
+    if (found == groups.end()) {
+      group = static_cast<int>(keys.size());
+      groups.emplace(key, group);
+      keys.push_back(key);
+      horizons.push_back(tt);
+      query_times.push_back(std::vector<double>(1, tt));
+    } else {
+      group = found->second;
+      horizons[group] = std::max(horizons[group], tt);
+      query_times[group].push_back(tt);
+    }
+    row_group[i] = group;
+  }
+  for (auto& times : query_times) {
+    std::sort(times.begin(), times.end());
+    times.erase(std::unique(times.begin(), times.end()), times.end());
+  }
+
+  std::vector<int> cache_index;
+  rlf::cache_get_batch(
+    cache, keys, horizons, cache_index,
+    sparse_output ? &query_times : nullptr);
+  for (int i = 0; i < n; ++i) {
+    if (row_group[i] < 0) continue;
+    const rlf::Entry& entry = cache.entries[cache_index[row_group[i]]];
+    const double tt = rt[i] - t0[i];
+    const double log_pdf = rlf::entry_log_pdf(entry, tt);
+    pdf[i] = log_pdf <= rlf::RLF_LOG_FLOOR ? 0.0 : std::exp(log_pdf);
+    const double log_survivor = rlf::entry_log_S(entry, tt);
+    cdf[i] = log_survivor >= 0.0 ? 0.0 :
+      (log_survivor <= rlf::RLF_LOG_FLOOR
+        ? 1.0 : -std::expm1(log_survivor));
+  }
+
+  return Rcpp::List::create(
+    _["pdf"] = pdf, _["cdf"] = cdf,
+    _["n_solves"] = static_cast<int>(cache.solve_count),
+    _["n_keys"] = static_cast<int>(keys.size()));
+}
+
+// ---------------------------------------------------------------------------
 // RLF Stochastic Path Simulator
 // ---------------------------------------------------------------------------
 // [[Rcpp::export]]
@@ -112,4 +194,67 @@ NumericVector simulate_rlf_hit_times_cpp(int n_sims, double v, double sigma,
 
   const auto res = rlf::simulate_rlf_hit_times(n_sims, v, sigma, alpha, b0, z0, t_max, dt, seed);
   return Rcpp::wrap(res);
+}
+
+// [[Rcpp::export]]
+NumericVector rlf_hit_times_vec(
+    NumericVector v, NumericVector B, NumericVector A, NumericVector s,
+    NumericVector alpha, double dt = 1e-3, double t_max = 30.0) {
+  const int n = v.size();
+  if (B.size() != n || A.size() != n || s.size() != n ||
+      alpha.size() != n) {
+    stop("rlf_hit_times_vec: all parameter vectors must have equal length.");
+  }
+  if (!R_FINITE(dt) || !R_FINITE(t_max) ||
+      !(dt > 0.0) || !(t_max > 0.0)) {
+    stop("rlf_hit_times_vec: dt and t_max must be finite and positive.");
+  }
+  const double required_steps = std::ceil(t_max / dt);
+  if (!(required_steps <=
+        static_cast<double>(std::numeric_limits<int>::max()))) {
+    stop("rlf_hit_times_vec: t_max/dt requires too many steps.");
+  }
+
+  NumericVector out(n, R_PosInf);
+  Rcpp::RNGScope scope;
+  const int n_steps = static_cast<int>(required_steps);
+  for (int row = 0; row < n; ++row) {
+    rlf::Key key;
+    if (!rlf::rlf_key(v[row], s[row], alpha[row], B[row], A[row], key)) {
+      continue;
+    }
+    double x = A[row] > 0.0 ? A[row] * ::unif_rand() : 0.0;
+    double time = 0.0;
+    for (int step = 0; step < n_steps; ++step) {
+      const double step_dt =
+        step + 1 == n_steps ? t_max - step * dt : dt;
+      const double scale =
+        s[row] * std::pow(0.5 * step_dt, 1.0 / alpha[row]);
+      double stable = 0.0;
+      if (alpha[row] == 2.0) {
+        stable = std::sqrt(2.0) * ::norm_rand();
+      } else {
+        const double u01 =
+          std::min(1.0 - 1e-15, std::max(1e-15, ::unif_rand()));
+        const double U = (u01 - 0.5) * M_PI;
+        const double w01 =
+          std::min(1.0 - 1e-15, std::max(1e-15, ::unif_rand()));
+        const double W = -std::log(w01);
+        const double aU = alpha[row] * U;
+        const double num = std::sin(aU);
+        const double den = std::pow(std::cos(U), 1.0 / alpha[row]);
+        const double tail = std::pow(
+          std::cos((1.0 - alpha[row]) * U) / W,
+          (1.0 - alpha[row]) / alpha[row]);
+        stable = (num / den) * tail;
+      }
+      x += v[row] * step_dt + scale * stable;
+      time += step_dt;
+      if (x >= B[row] + A[row]) {
+        out[row] = time;
+        break;
+      }
+    }
+  }
+  return out;
 }

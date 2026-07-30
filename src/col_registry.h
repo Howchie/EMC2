@@ -40,6 +40,17 @@ namespace rdm {
   }
 }
 
+// R/model_RLF.R — RLF, the racing symmetric alpha-stable Lévy flight.
+// The state parameters use the RDM convention b = B + A and X(0) ~ U(0, A);
+// alpha controls the stable-noise tail and s is scaled out of the PDE key.
+namespace rlf {
+  enum : int { v = 0, B, A, t0, s, alpha, N_REQ };
+  inline ColSpec spec() {
+    static const char* n[] = {"v", "B", "A", "t0", "s", "alpha"};
+    return {n, N_REQ, "RLF"};
+  }
+}
+
 // R/model_LNR.R — LNR
 namespace lnr {
   enum : int { m = 0, s, t0, N_REQ };
@@ -49,20 +60,10 @@ namespace lnr {
   }
 }
 
-// R/model_LNR.R — RGAMMA
-namespace rgamma {
-  enum : int { lambda = 0, shape, shift, N_REQ };
-  inline ColSpec spec() {
-    static const char* n[] = {"lambda", "shape", "shift"};
-    return {n, N_REQ, "RGAMMA"};
-  }
-}
-
 // R/model_LNR.R — PCOUNTER (Poisson counter race).  Ratcliff & Smith (2004,
 // Appendix, Eq. A10a/A10b): counter i accrues unit counts as a Poisson process
 // with rate alpha until it reaches criterion K, so its first-passage time is
-// Erlang(K, alpha) shifted by t0.  Same kernel positions as rgamma
-// (rate, shape, shift) under counter-model names.
+// Erlang(K, alpha) shifted by t0.
 namespace pcounter {
   enum : int { alpha = 0, K, t0, N_REQ };
   inline ColSpec spec() {

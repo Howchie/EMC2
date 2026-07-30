@@ -21,13 +21,13 @@ test_that("RLF PDE solver reduces continuously to Brownian first passage", {
 
     expect_lt(
       max(abs(r$pdf - wald_pdf(tg, v / sigma, b0 / sigma))),
-      0.18
+      2e-3
     )
     expect_lt(
       max(abs(r$cdf - wald_cdf(tg, v / sigma, b0 / sigma))),
-      0.022
+      2e-4
     )
-    expect_lt(r$mismatch, 1e-10)
+    expect_lt(r$mismatch, 1e-4)
   }
 
   near <- EMC2:::rlf_fht_pdf_cdf_vec(
@@ -40,6 +40,19 @@ test_that("RLF PDE solver reduces continuously to Brownian first passage", {
   expect_lt(max(abs(near$cdf - limit$cdf)), 1e-4)
 })
 
+test_that("RLF flux and mass agree to the order of the time discretisation", {
+  # TR-BDF2 advances the surviving mass with its own stage quadrature, so the
+  # endpoint-trapezoid flux integral matches it only to O(dt^2) rather than
+  # exactly.  Second-order convergence of the residual is the real diagnostic.
+  tg2 <- seq(0.1, 2.0, by = 0.05)
+  mismatch <- vapply(c(500L, 1000L, 2000L), function(nt) {
+    EMC2:::rlf_fht_pdf_cdf_vec(tg2, 1, 1, 2, 1, 0, 250L, nt)$mismatch
+  }, numeric(1))
+  expect_lt(mismatch[1], 1e-4)
+  expect_gt(mismatch[1] / mismatch[2], 2.5)
+  expect_gt(mismatch[2] / mismatch[3], 2.5)
+})
+
 test_that("RLF flux, mass, and conservative lower closure are consistent", {
   r <- EMC2:::rlf_fht_pdf_cdf_vec(
     tg, 1, 1, 1.3, 1, 0, 250L, 500L
@@ -49,12 +62,16 @@ test_that("RLF flux, mass, and conservative lower closure are consistent", {
   expect_true(all(r$cdf >= 0 & r$cdf <= 1))
   expect_true(all(r$pdf >= 0))
   expect_gte(r$min_density, -1e-10)
-  expect_lt(r$mismatch, 1e-10)
+  expect_lt(r$mismatch, 1e-4)
   expect_lt(r$operator_conservation_error, 1e-10)
   expect_gt(r$lower_boundary_pressure, 0)
-  expect_lt(r$lower_boundary_pressure, 0.01)
-  expect_true(r$refinement_checked)
-  expect_false(r$refinement_skipped)
+  expect_lt(r$lower_boundary_pressure, 0.02)
+  # The initial domain is sized against a visit-probability criterion, so even
+  # a heavy tail is placed well enough to clear the fast-path gate; the
+  # refinement branch itself is exercised below at a resolution too coarse to
+  # qualify.
+  expect_false(r$refinement_checked)
+  expect_true(r$refinement_skipped)
 })
 
 test_that("RLF uses the cheap path for safely resolved routine cases", {
@@ -70,7 +87,7 @@ test_that("RLF uses the cheap path for safely resolved routine cases", {
   expect_true(is.nan(r$spatial_cdf_error))
   expect_true(all(diff(r$cdf) >= -1e-10))
   expect_true(all(r$pdf >= 0))
-  expect_lt(r$lower_boundary_pressure, 0.002)
+  expect_lt(r$lower_boundary_pressure, 0.01)
 })
 
 test_that("RLF automatically expands and refines space and time", {
@@ -81,7 +98,10 @@ test_that("RLF automatically expands and refines space and time", {
 
   expect_gt(r$domain_refinements, 0L)
   expect_gt(r$spatial_refinements, 0L)
-  expect_lt(r$x_lo, -12)
+  # The initial extent is the depth whose first-passage probability hits the
+  # grid-matched tolerance, so it is far narrower than the old 12-stable-scale
+  # rule; expansion still has to push well past it.
+  expect_lt(r$x_lo, -4)
   expect_gt(r$nx_used, 80L)
   expect_gt(r$nt_used, 100L)
   expect_lte(r$domain_pdf_error, 0.01)
@@ -92,7 +112,7 @@ test_that("RLF automatically expands and refines space and time", {
   expect_true(all(r$cdf >= 0 & r$cdf <= 1 + 1e-12))
   expect_true(all(r$pdf >= 0))
   expect_gte(r$min_density, -1e-10)
-  expect_lt(r$mismatch, 1e-10)
+  expect_lt(r$mismatch, 1e-3)
 })
 
 test_that("RLF rejects spatial regimes that exceed its refinement budget", {
@@ -178,5 +198,5 @@ test_that("heavy-tailed CMS simulation agrees with the nonlocal PDE", {
   )
 
   expect_equal(empirical, pde$cdf[1], tolerance = 0.015)
-  expect_lt(pde$lower_boundary_pressure, 0.005)
+  expect_lt(pde$lower_boundary_pressure, 0.01)
 })

@@ -4,11 +4,7 @@
 \alias{RDMSWTNcorr}
 \title{Correlated RDMSWTN Gaussian-Copula Race}
 \usage{
-RDMSWTNcorr(
-  erlang_shape = 1L,
-  erlang_type = "none",
-  posdrift = TRUE
-)
+RDMSWTNcorr(erlang_shape = 1L, erlang_type = "none", posdrift = TRUE)
 }
 \arguments{
 \item{erlang_shape}{Retained for constructor compatibility. Only the

@@ -134,8 +134,8 @@ quadrature over the parameter (on its sampled/log scale) using \code{n_nodes}
 nodes, weighted by a fixed Gaussian \code{eta} taken from the parameter's existing
 prior mean and variance (its group-level distribution is pinned to that prior,
 not estimated). For \code{type = "single"}, the same fixed prior is used directly;
-no \code{theta_mu} or \code{theta_var} samples are created. A representative
-value is drawn back (reconstructed) from the quadrature grid and stored in each
+no \code{theta_mu} or \code{theta_var} samples are created. A representative value is
+drawn back (reconstructed) from the quadrature grid and stored in each
 posterior sample, so downstream summaries still report the parameter. The
 integration interval is clipped to the parameter's finite lower bound and to
 just below the subject's fastest response time, which is why a finite lower

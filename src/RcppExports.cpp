@@ -2554,6 +2554,30 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// rlf_pdf_cdf_vec
+Rcpp::List rlf_pdf_cdf_vec(NumericVector rt, NumericVector v, NumericVector B, NumericVector A, NumericVector t0, NumericVector s, NumericVector alpha, int nx, double dt_target, double tgrade, bool adaptive, bool explicit_inverse, bool sparse_output, bool simd_batch);
+RcppExport SEXP _EMC2_rlf_pdf_cdf_vec(SEXP rtSEXP, SEXP vSEXP, SEXP BSEXP, SEXP ASEXP, SEXP t0SEXP, SEXP sSEXP, SEXP alphaSEXP, SEXP nxSEXP, SEXP dt_targetSEXP, SEXP tgradeSEXP, SEXP adaptiveSEXP, SEXP explicit_inverseSEXP, SEXP sparse_outputSEXP, SEXP simd_batchSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type rt(rtSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type v(vSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type B(BSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type A(ASEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type t0(t0SEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type s(sSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type alpha(alphaSEXP);
+    Rcpp::traits::input_parameter< int >::type nx(nxSEXP);
+    Rcpp::traits::input_parameter< double >::type dt_target(dt_targetSEXP);
+    Rcpp::traits::input_parameter< double >::type tgrade(tgradeSEXP);
+    Rcpp::traits::input_parameter< bool >::type adaptive(adaptiveSEXP);
+    Rcpp::traits::input_parameter< bool >::type explicit_inverse(explicit_inverseSEXP);
+    Rcpp::traits::input_parameter< bool >::type sparse_output(sparse_outputSEXP);
+    Rcpp::traits::input_parameter< bool >::type simd_batch(simd_batchSEXP);
+    rcpp_result_gen = Rcpp::wrap(rlf_pdf_cdf_vec(rt, v, B, A, t0, s, alpha, nx, dt_target, tgrade, adaptive, explicit_inverse, sparse_output, simd_batch));
+    return rcpp_result_gen;
+END_RCPP
+}
 // simulate_rlf_hit_times_cpp
 NumericVector simulate_rlf_hit_times_cpp(int n_sims, double v, double sigma, double alpha, double b0, double z0, double t_max, double dt, unsigned int seed);
 RcppExport SEXP _EMC2_simulate_rlf_hit_times_cpp(SEXP n_simsSEXP, SEXP vSEXP, SEXP sigmaSEXP, SEXP alphaSEXP, SEXP b0SEXP, SEXP z0SEXP, SEXP t_maxSEXP, SEXP dtSEXP, SEXP seedSEXP) {
@@ -2570,6 +2594,23 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< double >::type dt(dtSEXP);
     Rcpp::traits::input_parameter< unsigned int >::type seed(seedSEXP);
     rcpp_result_gen = Rcpp::wrap(simulate_rlf_hit_times_cpp(n_sims, v, sigma, alpha, b0, z0, t_max, dt, seed));
+    return rcpp_result_gen;
+END_RCPP
+}
+// rlf_hit_times_vec
+NumericVector rlf_hit_times_vec(NumericVector v, NumericVector B, NumericVector A, NumericVector s, NumericVector alpha, double dt, double t_max);
+RcppExport SEXP _EMC2_rlf_hit_times_vec(SEXP vSEXP, SEXP BSEXP, SEXP ASEXP, SEXP sSEXP, SEXP alphaSEXP, SEXP dtSEXP, SEXP t_maxSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type v(vSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type B(BSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type A(ASEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type s(sSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type alpha(alphaSEXP);
+    Rcpp::traits::input_parameter< double >::type dt(dtSEXP);
+    Rcpp::traits::input_parameter< double >::type t_max(t_maxSEXP);
+    rcpp_result_gen = Rcpp::wrap(rlf_hit_times_vec(v, B, A, s, alpha, dt, t_max));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -2897,7 +2938,9 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_bawl_prepared_endpoints_probe", (DL_FUNC) &_EMC2_bawl_prepared_endpoints_probe, 10},
     {"_EMC2_gl_rule_nodes_weights", (DL_FUNC) &_EMC2_gl_rule_nodes_weights, 1},
     {"_EMC2_rlf_fht_pdf_cdf_vec", (DL_FUNC) &_EMC2_rlf_fht_pdf_cdf_vec, 8},
+    {"_EMC2_rlf_pdf_cdf_vec", (DL_FUNC) &_EMC2_rlf_pdf_cdf_vec, 14},
     {"_EMC2_simulate_rlf_hit_times_cpp", (DL_FUNC) &_EMC2_simulate_rlf_hit_times_cpp, 9},
+    {"_EMC2_rlf_hit_times_vec", (DL_FUNC) &_EMC2_rlf_hit_times_vec, 7},
     {"_EMC2_rou_pdf_cdf_vec", (DL_FUNC) &_EMC2_rou_pdf_cdf_vec, 15},
     {"_EMC2_rou_hit_times_vec", (DL_FUNC) &_EMC2_rou_hit_times_vec, 11},
     {"_EMC2_drou_cpp", (DL_FUNC) &_EMC2_drou_cpp, 15},
