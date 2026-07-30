@@ -90,6 +90,27 @@ namespace bawl {
   }
 }
 
+// R/model_BAwD.R — BAwD (ballistic accumulator with drive decay).  The two
+// launch distributions differ only in the names of the first two columns, so
+// the POSITIONS are deliberately identical and every kernel indexes them
+// through the same enum; the spec selected in resolve_race_model_adapter() only
+// changes what validate_col_prefix() insists the R p_types are called.
+namespace bawd {
+  enum : int { v = 0, sv, B, A, t0, k, ell, N_REQ };
+  inline ColSpec spec() {
+    static const char* n[] = {"v", "sv", "B", "A", "t0", "k", "ell"};
+    return {n, N_REQ, "BAwD"};
+  }
+}
+namespace bawd_logn {
+  // Same positions as bawd: mu occupies v's slot and sigma occupies sv's.
+  enum : int { mu = 0, sigma, B, A, t0, k, ell, N_REQ };
+  inline ColSpec spec() {
+    static const char* n[] = {"mu", "sigma", "B", "A", "t0", "k", "ell"};
+    return {n, N_REQ, "BAwD_LOGN"};
+  }
+}
+
 // R/model_RDM.R — RDMGBM (geometric Brownian motion race with timers).
 // mG/mK gated on ctx->kill_active, omega on kill_shape == 3.
 namespace rdmgbm {

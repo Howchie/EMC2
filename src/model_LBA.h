@@ -726,4 +726,10 @@ NumericVector plba(NumericVector t,
   return cdf;
 }
 
+// BAwD (ballistic accumulator with drive decay) reuses the guard constants and
+// normalizer helpers above and lives in its own header for readability.
+// Included last so every constant it references is already defined; like this
+// file it may be included by exactly one translation unit.
+#include "model_BAwD.h"
+
 #endif

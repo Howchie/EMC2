@@ -73,6 +73,19 @@
   rBAwL(lR, pars, ok = ok, posdrift = posdrift, erlang = erlang, guess = guess, global = global)
 }
 
+# `launch` must come from the same .bawd_launch_code() call that produced the
+# model's c_name suffix, or the simulator and the likelihood describe different
+# models (see R/model_BAwD.R).
+.rfun_BAwD <- function(lR, pars, ok = rep(TRUE, length(lR)), launch = 1L,
+                       posdrift = TRUE) {
+  if (.use_cpp_rfun()) {
+    res <- rbawd_cpp(pars, levels(lR), ok, as.integer(launch), posdrift)
+    out <- .rfun_cpp_pack(res, levels(lR), length(lR) / length(levels(lR)))
+    return(.apply_timed_guess_winner(out, levels(lR)))
+  }
+  rBAwD(lR, pars, ok = ok, launch = launch, posdrift = posdrift)
+}
+
 .rfun_BAwL_corr <- function(lR, pars, ok = rep(TRUE, length(lR)), posdrift = TRUE,
                             erlang = 1L, guess = FALSE, global = FALSE) {
   if (.use_cpp_rfun()) {

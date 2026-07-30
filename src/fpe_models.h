@@ -64,9 +64,10 @@ namespace fpe {
 // ---------------------------------------------------------------------------
 enum FPE_BoundaryKind {
   FPE_BND_FIXED = 0,
-  FPE_BND_WEIBULL = 1,       // b = binf + (b0-binf)*exp(-(t/p1)^p2)
-  FPE_BND_EXPONENTIAL = 2,   // b = binf + (b0-binf)*exp(-t/p1)
-  FPE_BND_LINEAR = 3         // b = binf + (b0-binf)*max(0, 1 - t/p1)
+  FPE_BND_WEIBULL = 1,                 // b = binf + (b0-binf)*exp(-(t/p1)^p2)
+  FPE_BND_EXPONENTIAL = 2,             // b = binf + (b0-binf)*exp(-t/p1)
+  FPE_BND_LINEAR_ADDITIVE = 3,         // b = binf + (b0-binf)*max(0, 1 - t/p1)
+  FPE_BND_LINEAR_MULTIPLICATIVE = 4    // b = binf + (b0-binf)/(1 + t/p1)
 };
 
 struct FPE_Boundary {
@@ -90,7 +91,8 @@ struct FPE_Boundary {
         fixed = (std::abs(binf - b0) <= FPE_EPS) || tau <= 0.0 || pw <= 0.0;
         break;
       case FPE_BND_EXPONENTIAL:
-      case FPE_BND_LINEAR:
+      case FPE_BND_LINEAR_ADDITIVE:
+      case FPE_BND_LINEAR_MULTIPLICATIVE:
         // Same degeneracy test minus the shape exponent, which these forms do
         // not have.  Reporting fixed = true here is not a shortcut: it restores
         // the one-time factorisation for a collapse that does not collapse, so
@@ -125,13 +127,17 @@ struct FPE_Boundary {
         if (!(t > 0.0)) return b0;
         return binf + (b0 - binf) * std::exp(-t / tau);
       }
-      case FPE_BND_LINEAR: {
+      case FPE_BND_LINEAR_ADDITIVE: {
         if (!(t > 0.0)) return b0;
         // Held at binf past t = tau rather than continuing down through it.  A
         // boundary that keeps falling would cross the start-point range and
         // then the lower domain face, which is not a model, it is a bug.
         const double f = 1.0 - t / tau;
         return binf + (b0 - binf) * ((f > 0.0) ? f : 0.0);
+      }
+      case FPE_BND_LINEAR_MULTIPLICATIVE: {
+        if (!(t > 0.0)) return b0;
+        return binf + (b0 - binf) / (1.0 + t / tau);
       }
       default:
         return b0;
@@ -155,11 +161,17 @@ struct FPE_Boundary {
         const double d = -(b0 - binf) / tau * std::exp(-t / tau);
         return std::isfinite(d) ? d : 0.0;
       }
-      case FPE_BND_LINEAR:
+      case FPE_BND_LINEAR_ADDITIVE:
         // Kinked at t = tau.  CN is second order on each smooth piece and the
         // kink costs at most one step's worth of order there, which is well
         // inside the discretisation error the graded schedule already carries.
         return (t < tau) ? -(b0 - binf) / tau : 0.0;
+      case FPE_BND_LINEAR_MULTIPLICATIVE: {
+        if (!(t > 0.0)) return -(b0 - binf) / tau;
+        const double denom = 1.0 + t / tau;
+        const double d = -(b0 - binf) / (tau * denom * denom);
+        return std::isfinite(d) ? d : 0.0;
+      }
       default:
         return 0.0;
     }

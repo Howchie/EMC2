@@ -374,7 +374,7 @@ test_that("a collapse to Binf == b0 is exactly the fixed-bound model", {
   n <- length(rt)
   fixed <- cbind(v = rep(1.5, n), k = rep(0.5, n), B = rep(1, n),
                  A = rep(0.4, n), t0 = rep(0, n), s = rep(1, n))
-  for (kind in c("exponential", "linear", "weibull")) {
+  for (kind in c("exponential", "linear_additive", "linear_multiplicative", "weibull")) {
     pw <- if (kind == "weibull") 1.5 else NULL
     coll <- rou_bnd_pars(n, Binf = 1.4, pw = pw)   # Binf == b0 = B + A
     expect_identical(EMC2:::dROU(rt, coll, kind = kind), EMC2:::dROU(rt, fixed))
@@ -387,7 +387,7 @@ test_that("a collapsing bound finishes strictly sooner, at every t", {
   n <- length(rt)
   fixed <- cbind(v = rep(1.5, n), k = rep(0.5, n), B = rep(1, n),
                  A = rep(0.4, n), t0 = rep(0, n), s = rep(1, n))
-  for (kind in c("exponential", "linear", "weibull")) {
+  for (kind in c("exponential", "linear_additive", "linear_multiplicative", "weibull")) {
     pw <- if (kind == "weibull") 1.5 else NULL
     coll <- rou_bnd_pars(n, pw = pw)
     cf <- EMC2:::pROU(rt, fixed); cc <- EMC2:::pROU(rt, coll, kind = kind)
@@ -415,10 +415,10 @@ test_that("the collapsing solver agrees with the reference simulator", {
   skip_on_cran()
   set.seed(20260730)
   N <- 1e5
-  for (kind in c("exponential", "linear", "weibull")) {
+  for (kind in c("exponential", "linear_additive", "linear_multiplicative", "weibull")) {
     pw <- if (kind == "weibull") 1.5 else NULL
     ps <- rou_bnd_pars(N, pw = pw)
-    bk <- c(exponential = 2L, linear = 3L, weibull = 1L)[[kind]]
+    bk <- c(exponential = 2L, linear_additive = 3L, linear_multiplicative = 4L, weibull = 1L)[[kind]]
     ht <- EMC2:::rou_hit_times_vec(ps[, "v"], ps[, "k"], ps[, "B"], ps[, "A"],
                             ps[, "s"], 2e-4, 30, bk, ps[, "Binf"],
                             ps[, "tau"], if (is.null(pw)) numeric(0) else ps[, "pw"])
@@ -507,7 +507,7 @@ test_that("the collapse asymptote is measured from zero, and can reach it", {
 
   # Binf = 0 is an ordinary interior value: the domain is [x_lo, b(t)] with
   # x_lo < 0, so a bound reaching the start point does not degenerate it.
-  for (bk in c(1L, 2L, 3L)) {
+  for (bk in c(1L, 2L, 3L, 4L)) {
     pw <- if (bk == 1L) rep(1.5, n) else numeric(0)
     c0 <- cdf_at(0.4, 0, tau = 0.4, bk = bk, pw = pw)
     expect_true(all(is.finite(c0)))

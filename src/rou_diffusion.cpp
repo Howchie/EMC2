@@ -262,7 +262,8 @@ Rcpp::List rrou_cpp(NumericMatrix pars, CharacterVector lR_levels, LogicalVector
     std::string kstr = Rcpp::as<std::string>(kind_sexp);
     if (kstr == "weibull") bkind = fpe::FPE_BND_WEIBULL;
     else if (kstr == "exponential") bkind = fpe::FPE_BND_EXPONENTIAL;
-    else if (kstr == "linear") bkind = fpe::FPE_BND_LINEAR;
+    else if (kstr == "linear_additive") bkind = fpe::FPE_BND_LINEAR_ADDITIVE;
+    else if (kstr == "linear_multiplicative") bkind = fpe::FPE_BND_LINEAR_MULTIPLICATIVE;
   }
 
   IntegerVector R_out(n_trials, NA_INTEGER);

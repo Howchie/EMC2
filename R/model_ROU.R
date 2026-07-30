@@ -28,12 +28,13 @@
 }
 
 # Boundary form codes, matching FPE_BoundaryKind in src/fpe_models.h.
-.ROU_BND <- c(fixed = 0L, weibull = 1L, exponential = 2L, linear = 3L)
+.ROU_BND <- c(fixed = 0L, weibull = 1L, exponential = 2L, linear_additive = 3L,
+              linear_multiplicative = 4L)
 
 # The suffix on c_name selects the form in resolve_race_model_adapter(); the
 # shape parameters themselves travel as ordinary optional columns.
 .ROU_SUFFIX <- c(fixed = "", weibull = "_BWEIB", exponential = "_BEXP",
-                 linear = "_BLIN")
+                 linear_additive = "_BLIN_ADD", linear_multiplicative = "_BLIN_MULT")
 
 .rou_cols <- function(pars) {
   n <- nrow(pars)
@@ -58,9 +59,10 @@
   )
 }
 
-# .rou_cols() cannot distinguish "exponential" from "linear" -- they take the
-# same columns -- so a linear-collapse model has to say so explicitly.  Set by
-# the model's dfun/pfun/rfun closures, which do know.
+# .rou_cols() cannot distinguish "exponential" from "linear_additive" /
+# "linear_multiplicative" -- they take the same columns -- so a linear-collapse
+# model has to say so explicitly. Set by the model's dfun/pfun/rfun closures,
+# which do know.
 .rou_with_kind <- function(p, kind) {
   if (!is.null(kind) && p$bkind != 0L) p$bkind <- .ROU_BND[[kind]]
   p
@@ -156,6 +158,7 @@ rROU <- function(lR, pars, ok = rep(TRUE, nrow(pars)), kind = NULL,
       if (bkind == 1L) binf + (b0 - binf) * exp(-(t / tau)^pw)
       else if (bkind == 2L) binf + (b0 - binf) * exp(-t / tau)
       else if (bkind == 3L) binf + (b0 - binf) * pmax(0, 1 - t / tau)
+      else if (bkind == 4L) binf + (b0 - binf) / (1 + t / tau)
       else b0
     }
     b <- b_t(0)
@@ -282,8 +285,10 @@ rROU <- function(lR, pars, ok = rep(TRUE, nrow(pars)), kind = NULL,
 #'   time scale of the collapse), plus `pw` (a shape exponent) for `"weibull"`:
 #'   \itemize{
 #'     \item `"exponential"`: \eqn{b(t) = b_\infty + (b_0 - b_\infty) e^{-t/\tau}}
-#'     \item `"linear"`: \eqn{b(t)} falls linearly from \eqn{b_0} to
-#'       \eqn{b_\infty} over \eqn{[0, \tau]}, then holds
+#'     \item `"linear_additive"`: \eqn{b(t)} falls linearly from \eqn{b_0} to
+#'       \eqn{b_\infty} over \eqn{[0, \tau]}, then holds (additive urgency)
+#'     \item `"linear_multiplicative"`: \eqn{b(t) = b_\infty + (b_0 - b_\infty) / (1 + t/\tau)}
+#'       (multiplicative urgency)
 #'     \item `"weibull"`: \eqn{b(t) = b_\infty + (b_0 - b_\infty) e^{-(t/\tau)^{pw}}}
 #'   }
 #'   Because `Binf` is measured from zero, the boundary is free to fall into the
@@ -312,8 +317,8 @@ rROU <- function(lR, pars, ok = rep(TRUE, nrow(pars)), kind = NULL,
 #'                       contrasts=list(v=list(lM=ADmat)),constants=c(s=log(1)))
 #' @export
 
-ROU <- function(boundary_collapse = c("fixed", "exponential", "linear",
-                                      "weibull")) {
+ROU <- function(boundary_collapse = c("fixed", "exponential", "linear_additive",
+                                      "linear_multiplicative", "weibull")) {
   boundary_collapse <- match.arg(boundary_collapse)
   kind <- boundary_collapse
 

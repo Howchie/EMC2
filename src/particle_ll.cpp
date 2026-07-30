@@ -538,8 +538,10 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
       out.ctx.fpe_cache->bnd_kind = fpe::FPE_BND_WEIBULL;
     else if (type_std.find("ROU_BEXP") != std::string::npos)
       out.ctx.fpe_cache->bnd_kind = fpe::FPE_BND_EXPONENTIAL;
-    else if (type_std.find("ROU_BLIN") != std::string::npos)
-      out.ctx.fpe_cache->bnd_kind = fpe::FPE_BND_LINEAR;
+    else if (type_std.find("ROU_BLIN_MULT") != std::string::npos)
+      out.ctx.fpe_cache->bnd_kind = fpe::FPE_BND_LINEAR_MULTIPLICATIVE;
+    else if (type_std.find("ROU_BLIN_ADD") != std::string::npos)
+      out.ctx.fpe_cache->bnd_kind = fpe::FPE_BND_LINEAR_ADDITIVE;
   } else if (type_std.find("RDMSWTN") != std::string::npos) {
     // Must be checked before "RDM" since "RDMSWTN" contains "RDM"
     out.pdf1_ptr       = &drdmswtn_scalar;
@@ -571,6 +573,29 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
     out.ctx.mean_k_index = emc2col::rdmgbm::mK;
     out.ctx.erlang_omega_index = (out.ctx.kill_shape == 3) ? emc2col::rdmgbm::omega : -1;
     out.ctx.defective_upper_tail = true;
+  } else if (type_std.find("BAwD") != std::string::npos) {
+    // Dispatch is by substring, and "BAwD" is a substring of nothing here and
+    // contains neither "BAwL" nor "LBA", so placement relative to those is
+    // safe either way; it sits next to BAwL for readability.
+    out.pdf1_ptr       = &dbawd_scalar;
+    out.cdf1_ptr       = &pbawd_scalar;
+    out.model_dfun_raw = &dbawd_raw;
+    out.model_pfun_raw = &pbawd_raw;
+    out.logS_at_t_ptr  = &bawd_logS_at_t;
+    // The two launch distributions share column POSITIONS and differ only in
+    // the names validate_col_prefix() enforces, so t0_index is common.
+    const bool bawd_logn = (type_std.find("_LOGN") != std::string::npos);
+    out.col_spec = bawd_logn ? emc2col::bawd_logn::spec() : emc2col::bawd::spec();
+    out.ctx.t0_index = emc2col::bawd::t0;
+    out.ctx.bawd_launch = bawd_logn ? BAWD_LAUNCH_LOGNORMAL : BAWD_LAUNCH_NORMAL;
+    // Always defective: a decaying drive with a constant clearance has a hard
+    // right endpoint and intrinsic never-finish mass regardless of posdrift.
+    out.ctx.defective_upper_tail = true;
+    // posdrift is meaningless for the lognormal launch (V > 0 by construction);
+    // BAwD() refuses posdrift = FALSE there rather than silently ignoring it.
+    if (!bawd_logn && type_std.find("IO") != std::string::npos) {
+      out.ctx.use_posdrift = false;
+    }
   } else if (type_std.find("BAwL") != std::string::npos) {
     out.pdf1_ptr       = &dbawl_scalar;
     out.cdf1_ptr       = &pbawl_scalar;

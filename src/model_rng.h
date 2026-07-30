@@ -113,4 +113,50 @@ inline double rerlang_clock_r(double lambda, int shape, double omega) {
   return R::rgamma((double)use_shape, 1.0 / rate);
 }
 
+// BAwD first passage: solve  V q(u) - ell u = d,  q(u) = (1 - e^{-k u})/k,
+// for the FIRST (rising-limb) crossing of distance d = b - z.
+//
+// The trajectory peaks at u_p = log(V/ell)/k with height V q(u_p) - ell u_p; a
+// launch strength that cannot reach d by then never will, which is the model's
+// intrinsic omission mechanism (returns +Inf).  On (0, u_p] the trajectory is
+// concave and increasing, so Newton started at the LBA-limit time
+// d/(V - ell) -- which lies below the root because q(u) <= u -- steps up
+// monotonically and cannot overshoot.  The Lambert-W closed form of the same
+// root is equivalent but needs an explicit W_{-1}/W_0 branch choice at every
+// call site.
+inline double bawd_qf_r(double u, double k) {
+  if (k <= 1e-10) return u;
+  return -std::expm1(-k * u) / k;
+}
+
+inline double bawd_hit_time_r(double V, double d, double k, double ell) {
+  if (!(d > 0.0)) return 0.0;                 // start already at threshold
+  if (ISNAN(V) || !(V > 0.0)) return R_PosInf;
+  if (k <= 1e-10) {                           // exact LBA limit, drift V - ell
+    return (V > ell) ? d / (V - ell) : R_PosInf;
+  }
+  if (ell <= 1e-12) {                         // exact BAwL/leak-free inversion
+    const double x = 1.0 - k * d / V;
+    return (x > 0.0) ? -std::log(x) / k : R_PosInf;
+  }
+  if (!(V > ell)) return R_PosInf;            // never rises at all
+  const double u_p = std::log(V / ell) / k;
+  if (V * bawd_qf_r(u_p, k) - ell * u_p < d) return R_PosInf;
+
+  double u = d / (V - ell);
+  if (!(u > 0.0) || !R_FINITE(u)) u = 1e-12;
+  for (int it = 0; it < 100; ++it) {
+    const double f = V * bawd_qf_r(u, k) - ell * u - d;
+    const double fp = V * std::exp(-k * u) - ell;
+    if (!(fp > 0.0)) break;                   // at the peak: root is u_p
+    double un = u - f / fp;
+    if (!(un > 0.0)) un = 0.5 * u;
+    if (un > u_p) un = u_p;
+    const bool done = std::fabs(un - u) <= 1e-13 * std::fmax(1.0, un);
+    u = un;
+    if (done) break;
+  }
+  return u;
+}
+
 #endif

@@ -515,6 +515,54 @@ Rcpp::List rbawl_corr_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_lev
                         guess, global, &drifts);
 }
 
+// BAwD simulator.  pars columns: b, A, t0, k, ell plus the launch pair, named
+// (v, sv) for launch = 0 (truncated normal) and (mu, sigma) for launch = 1
+// (lognormal).  `launch` must be the value BAwD() derived from its
+// drift_distribution argument -- the same one that reaches the likelihood as
+// ctx->bawd_launch -- or simulation and estimation describe different models.
+// Matches R's rBAwD (R/model_BAwD.R).
+// [[Rcpp::export]]
+Rcpp::List rbawd_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
+                     Rcpp::LogicalVector ok, int launch, bool posdrift) {
+  const int n_acc = lR_levels.size();
+  const int n_rows = pars.nrow();
+  if (n_acc <= 0 || n_rows <= 0 || n_rows % n_acc != 0)
+    Rcpp::stop("rbawd_cpp: invalid accumulator/parameter dimensions.");
+  if (ok.size() != n_rows) Rcpp::stop("rbawd_cpp: ok has the wrong length.");
+  const int n_trials = n_rows / n_acc;
+  const auto ci = col_index_map(pars);
+  const bool logn = (launch == 1);
+  if (logn && !(ci.count("mu") && ci.count("sigma")))
+    Rcpp::stop("rbawd_cpp: the lognormal launch requires columns 'mu' and 'sigma'.");
+  if (!logn && !(ci.count("v") && ci.count("sv")))
+    Rcpp::stop("rbawd_cpp: the normal launch requires columns 'v' and 'sv'.");
+  const int ip1 = logn ? ci.at("mu") : ci.at("v");
+  const int ip2 = logn ? ci.at("sigma") : ci.at("sv");
+  const int ib = ci.at("b"), iA = ci.at("A"), it0 = ci.at("t0"),
+            ik = ci.at("k"), iell = ci.at("ell");
+
+  std::vector<double> dt(n_rows, R_PosInf);
+  std::vector<double> t0col(n_rows);
+  std::vector<int> ok_row(n_rows);
+  for (int r = 0; r < n_rows; ++r) {
+    t0col[r] = pars(r, it0);
+    ok_row[r] = ok[r] ? 1 : 0;
+    if (!ok[r]) continue;
+    const double V = logn
+      ? std::exp(pars(r, ip1) + pars(r, ip2) * R::norm_rand())
+      : rtnorm_lower_r(pars(r, ip1), pars(r, ip2), posdrift ? 0.0 : R_NegInf);
+    const double z = pars(r, iA) * R::unif_rand();
+    const double u = bawd_hit_time_r(V, pars(r, ib) - z, pars(r, ik),
+                                     pars(r, iell));
+    dt[r] = (R_FINITE(u) && u >= 0.0) ? u : R_PosInf;
+  }
+
+  RaceOut res = resolve_race(dt, n_acc, n_trials, &t0col, &ok_row);
+  std::vector<int> isTime;
+  const bool has_isTime = resolve_time_level(res.R, isTime, lR_levels);
+  return pack_result(res.R, res.rt, res.omitted, has_isTime, isTime);
+}
+
 // pars columns: v, b, A, t0, sv, lambda_g, lambda_k (+ optional s, omega).
 // erlang_type: "none" | "local_kill" | "global_kill" | "local_guess" | "local_kill_guess".
 // Matches R's rRDMSWTN (model_RDM.R:872-1014) and rSWTN (model_RDM.R:489-532).

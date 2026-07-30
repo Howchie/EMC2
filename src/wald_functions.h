@@ -256,6 +256,54 @@ inline double mills_ratio_std(double z) {
   return fast_norm_phi(-z) * std::exp(0.5 * z * z + LOG_SQRT_2PI);
 }
 
+// log C(v), where C(v) = E[(V - v)_+] for log V ~ N(mu, sigma^2): the
+// undiscounted Black call / stop-loss price.  With M = e^{mu + sigma^2/2} and
+// x = (log v - mu)/sigma,
+//   C(v) = M Q(x - sigma) - v Q(x).
+// The two terms agree to a relative sigma/x in the upper tail, so the raw
+// difference is unusable there.  M phi(x - sigma) = v phi(x) regroups it as
+//   C(v) = v phi(x) [R(x - sigma) - R(x)],     R = Mills ratio,
+// where the subtraction is between two order-1/x quantities computed to full
+// relative accuracy.  Past a retained fraction of 1e-12 the Mills difference is
+// itself replaced by its factored asymptotic expansion (in which the
+// subtraction has been performed symbolically), so this function keeps its
+// digits and stays finite arbitrarily deep into the tail.  Both the phi and Q
+// terms are analytic, never routed through a natural dnorm/pnorm, so nothing
+// here underflows to NaN.
+//
+// C is the antiderivative of the lognormal survivor: C'(v) = -P(V >= v), which
+// is why BAwD's start-point and frozen-mass integrals both reduce to it.
+inline double log_lognormal_stoploss(double v, double mu, double sigma) {
+  if (!(sigma > 0.0)) return R_NegInf;
+  const double log_M = mu + 0.5 * sigma * sigma;
+  if (!(v > 0.0)) return log_M;  // C(0) = E[V] = M
+  const double x = (std::log(v) - mu) / sigma;
+  if (x <= 0.0) {
+    // Lower half: Q(x - sigma) and Q(x) are both order one and not close, so
+    // the plain log difference retains its digits.
+    return log_diff_exp(log_M + pnorm_log_direct(x - sigma, false),
+                        std::log(v) + pnorm_log_direct(x, false));
+  }
+  const double y = x - sigma;
+  const double r_y = mills_ratio_std(y);   // valid for y of either sign
+  const double r_x = mills_ratio_std(x);
+  const double d = r_y - r_x;              // > 0: R is strictly decreasing
+  if (d > 1e-12 * r_y) {
+    return std::log(v) + log_phi_std(x) + std::log(d);
+  }
+  // Retained fraction below 1e-12 means sigma/x < 1e-12, i.e. x is enormous.
+  // R(z) = 1/z - 1/z^3 + 3/z^5 - ... differenced symbolically:
+  //   R(y) - R(x) = sigma/(x y) - sigma (x^2 + x y + y^2)/(x^3 y^3) + ...
+  // whose relative error is O(1/x^2) and therefore negligible wherever this
+  // branch can be reached.
+  const double t1 = sigma / (x * y);
+  const double t2 = sigma * (x * x + x * y + y * y) /
+                    (x * x * x * y * y * y);
+  const double series = t1 - t2;
+  if (!(series > 0.0)) return R_NegInf;
+  return std::log(v) + log_phi_std(x) + std::log(series);
+}
+
 // Shared acceptance constants for the guarded natural race kernels.
 // A natural probability difference is rejected once it retains less than
 // EMC2_NAT_REL_CANCEL of its largest term; a natural CDF consumed as
