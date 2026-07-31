@@ -170,10 +170,9 @@ test_that("the quadrature costs exactly n_sv * n_sz solves", {
 })
 
 test_that("the simulator agrees with the solver", {
-  skip_on_cran()
   set.seed(4)
   for (beta in c(0, 5)) {
-    N <- 40000
+    N <- 20000
     sim <- EMC2:::rbou_cpp(N, 1.2, 1.0, 0.5, 0, 0, 0.1, 0, 1, beta,
                            dt = 1e-4, t_max = 30)
     sim <- sim[is.finite(sim$rt) & !is.na(sim$R), ]
@@ -188,4 +187,46 @@ test_that("the simulator agrees with the solver", {
     qsol <- suppressWarnings(approx(Fg / max(Fg), tg, xout = c(.1, .5, .9))$y)
     expect_lt(max(abs(qsim - qsol)), 0.02)
   }
+})
+
+test_that("BOU reaches the C++ DDM likelihood path and beta = 0 gives the DDM", {
+  # End-to-end through design() -> make_emc() -> calc_ll_manager, i.e. the same
+  # route the sampler takes.  This is what checks the wiring rather than the
+  # kernels: column order against emc2col::bou::spec(), the DDMAdapter swap in
+  # c_log_likelihood_DDM_pt, and the per-particle cache reset.
+  dat <- droplevels(forstmann[forstmann$subjects == levels(forstmann$subjects)[1], ])
+  f <- list(v ~ 0 + S, a ~ E, t0 ~ 1, s ~ 1, Z ~ 1, sv ~ 1, SZ ~ 1, st0 ~ 1)
+
+  d_ddm <- design(data = dat, model = DDM, formula = f, constants = c(s = log(1)))
+  d_bou <- design(data = dat, model = BOU, formula = c(f, list(beta ~ 1)),
+                  constants = c(s = log(1), beta = log(0)))
+  e_ddm <- make_emc(dat, d_ddm, compress = FALSE, rt_resolution = NULL, type = "single")
+  e_bou <- make_emc(dat, d_bou, compress = FALSE, rt_resolution = NULL, type = "single")
+
+  pn <- names(sampled_pars(d_ddm))
+  set.seed(99)
+  P <- matrix(rnorm(4 * length(pn), 0, 0.25), ncol = length(pn),
+              dimnames = list(NULL, pn))
+  P[, "t0"] <- log(0.15); P[, "a"] <- log(1.2); P[, "sv"] <- log(0.6)
+  P[, "SZ"] <- qnorm(0.2); P[, "st0"] <- log(0.05)
+
+  l_ddm <- EMC2:::calc_ll_manager(P, e_ddm[[1]]$data[[1]], e_ddm[[1]]$model)
+  l_bou <- EMC2:::calc_ll_manager(P, e_bou[[1]]$data[[1]], e_bou[[1]]$model)
+  expect_true(all(is.finite(l_bou)))
+  # ~1e-5 per trial over ~800 trials; the solver's error, not a wiring fault.
+  expect_lt(max(abs(l_ddm - l_bou)), 0.05)
+
+  # And the leak must be live end to end, not silently dropped by the column
+  # mapping -- which is exactly the failure a positional column order invites.
+  d_b <- design(data = dat, model = BOU, formula = c(f, list(beta ~ 1)),
+                constants = c(s = log(1)))
+  e_b <- make_emc(dat, d_b, compress = FALSE, rt_resolution = NULL, type = "single")
+  pn2 <- names(sampled_pars(d_b))
+  P2 <- matrix(0, nrow = 2, ncol = length(pn2), dimnames = list(NULL, pn2))
+  for (j in pn) P2[, j] <- P[1:2, j]
+  P2[, "beta"] <- log(1e-12)
+  l0 <- EMC2:::calc_ll_manager(P2, e_b[[1]]$data[[1]], e_b[[1]]$model)
+  P2[, "beta"] <- log(4)
+  l4 <- EMC2:::calc_ll_manager(P2, e_b[[1]]$data[[1]], e_b[[1]]$model)
+  expect_gt(min(abs(l0 - l4)), 1)
 })

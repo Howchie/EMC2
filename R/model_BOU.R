@@ -26,7 +26,7 @@
   # lower is the first level of R and upper the second, exactly as for the DDM.
   Ri <- as.integer(R)
   bou_pdf_cdf_vec(rt, Ri, p$v, p$a, p$Z, p$sv, p$SZ, p$t0, p$st0, p$s, p$beta,
-                  nx = getOption("emc2.bou_nx", 512L),
+                  nx = getOption("emc2.bou_nx", 384L),
                   dt_target = getOption("emc2.bou_dt", 5e-4),
                   grade = getOption("emc2.bou_grade", 1),
                   tgrade = getOption("emc2.bou_tgrade", 32),
@@ -151,12 +151,16 @@ BOU <- function() {
   list(
     c_name = "BOU",
     type = "DDM",
-    p_types = c("v" = 1, "a" = log(1), "beta" = log(0), "sv" = log(0),
-                "t0" = log(0), "st0" = log(0), "s" = log(1),
-                "Z" = qnorm(0.5), "SZ" = qnorm(0)),
-    transform = list(func = c(v = "identity", a = "exp", beta = "exp",
-                              sv = "exp", t0 = "exp", st0 = "exp", s = "exp",
-                              Z = "pnorm", SZ = "pnorm")),
+    # ORDER IS THE KERNEL'S COLUMN ORDER, not a stylistic choice: the C++ side
+    # reads columns positionally and validate_col_prefix checks this against
+    # emc2col::bou::spec() in src/col_registry.h.  It is DDM's order with beta
+    # appended, which is what lets a DDM design convert by adding beta~1.
+    p_types = c("v" = 1, "a" = log(1), "sv" = log(0), "t0" = log(0),
+                "st0" = log(0), "s" = log(1), "Z" = qnorm(0.5),
+                "SZ" = qnorm(0), "beta" = log(0)),
+    transform = list(func = c(v = "identity", a = "exp", sv = "exp",
+                              t0 = "exp", st0 = "exp", s = "exp",
+                              Z = "pnorm", SZ = "pnorm", beta = "exp")),
     bound = list(minmax = cbind(v = c(-20, 20), a = c(0, 10), beta = c(0, 50),
                                 Z = c(.01, .99), t0 = c(0.05, Inf),
                                 sv = c(.01, 10), s = c(0, Inf),

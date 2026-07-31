@@ -234,7 +234,7 @@ rROU <- function(lR, pars, ok = rep(TRUE, nrow(pars)), kind = NULL,
 #' | **Parameter** | **Transform** | **Natural scale** | **Default**   | **Mapping**          | **Interpretation**                                                |
 #' |-----------|-----------|---------------|-----------|------------------|---------------------------------------------------------------|
 #' | *v*       | log       | \[0, Inf\]      | log(1)    |                  | Accumulation rate (stimulus input)                             |
-#' | *k*       | log       | \[0, Inf\]      | log(0)    |                  | Leak (1/s); *k* = 0 is the Wiener race (RDM)                   |
+#' | *k*       | log       | \[0, Inf\]      | log(0)    |                  | Leak, a rate in units of 1/time (**not** divided by *s*); *k* = 0 is the Wiener race (RDM) |
 #' | *A*       | log       | \[0, Inf\]      | log(0)    |                  | Between-trial variation (range) in start point                 |
 #' | *B*       | log       | \[0, Inf\]      | log(1)    | *b* = *B* + *A*      | Distance from *A* to *b* (response threshold)                  |
 #' | *t0*      | log       | \[0, Inf\]      | log(0)    |                  | Non-decision time                                             |
@@ -243,7 +243,12 @@ rROU <- function(lR, pars, ok = rep(TRUE, nrow(pars)), kind = NULL,
 #'
 #' The leak *k* has units of 1/time, so it is *not* absorbed by the scaling
 #' convention that fixes *s* = 1; with *s* fixed, (*v*, *k*, *B*, *A*) are
-#' identified. The parameterization is deliberately (*v*, *k*) rather than the
+#' identified. Concretely, the solver rescales the state by \eqn{Y = X/s}, which
+#' turns \eqn{dX = (v - kX)dt + s\,dW} into \eqn{dY = (v/s - kY)dt + dW}: the
+#' state-valued parameters *v*, *B* and *A* are divided by *s*, and *k* is
+#' carried through unchanged because a rate is invariant under a rescaling of
+#' the state. The first-passage time is the same random variable either way, so
+#' no Jacobian is applied to the density. The parameterization is deliberately (*v*, *k*) rather than the
 #' solver's (\eqn{\lambda}, \eqn{\theta}): the asymptote \eqn{\theta = v/k}
 #' diverges as the leak vanishes, whereas the drift \eqn{v - kX} is perfectly
 #' regular there. As a result *k* = 0 is an ordinary interior value at which the

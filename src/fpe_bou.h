@@ -55,9 +55,25 @@ namespace fpebou {
 // horizon does not silently change the accuracy of rows already evaluated -- the
 // same argument fperace::FPE_Grid makes, and the one place the two agree.
 // ---------------------------------------------------------------------------
+// Grid and quadrature are balanced against each other rather than each set as
+// fine as it can afford.  Measured against the DDM oracle at beta = 0 with
+// sv = 1, SZ = 0.3, st0 = 0.1 (worst |dpdf| over the RT range):
+//
+//   nodes   3x3      5x5      7x7      9x9        <- quadrature alone
+//   err   4.1e-3   2.1e-4   3.4e-5   3.4e-5
+//
+//   at 7x7:  nx=512/dt=2.5e-4  3.4e-5  0.336 s
+//            nx=384/dt=5e-4    6.1e-5  0.129 s     <- default
+//            nx=256/dt=1e-3    1.4e-4  0.049 s
+//
+// The quadrature floor at 7x7 is 3.4e-5, so a grid much finer than nx=384 buys
+// nothing: at 5x5 the grid is irrelevant entirely (every setting from nx=512 to
+// nx=256 returns 2.05e-4, i.e. the error is ALL quadrature).  n_sv and n_sz are
+// therefore the accuracy dial AND the cost dial -- cost is n_sv * n_sz solves --
+// and the grid is set just fine enough not to be the binding term.
 struct Grid {
-  int nx = 512;
-  double dt_target = 5e-4;      // the binding constraint for this model
+  int nx = 384;
+  double dt_target = 5e-4;
   int nt_min = 512;
   int nt_max = 16384;
   double grade = fpe::FPE_GRADE_BOUNDED;   // 1.0: uniform, measured best

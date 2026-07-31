@@ -48,7 +48,7 @@ Default values are used for all parameters that are not explicitly listed in the
 argument of \code{design()}. They can also be accessed with \code{ROU()$p_types}.\tabular{llllll}{
    \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Mapping} \tab \strong{Interpretation} \cr
    \emph{v} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Accumulation rate (stimulus input) \cr
-   \emph{k} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Leak (1/s); \emph{k} = 0 is the Wiener race (RDM) \cr
+   \emph{k} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Leak, a rate in units of 1/time (\strong{not} divided by \emph{s}); \emph{k} = 0 is the Wiener race (RDM) \cr
    \emph{A} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Between-trial variation (range) in start point \cr
    \emph{B} \tab log \tab [0, Inf] \tab log(1) \tab \emph{b} = \emph{B} + \emph{A} \tab Distance from \emph{A} to \emph{b} (response threshold) \cr
    \emph{t0} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Non-decision time \cr
@@ -59,7 +59,12 @@ argument of \code{design()}. They can also be accessed with \code{ROU()$p_types}
 
 The leak \emph{k} has units of 1/time, so it is \emph{not} absorbed by the scaling
 convention that fixes \emph{s} = 1; with \emph{s} fixed, (\emph{v}, \emph{k}, \emph{B}, \emph{A}) are
-identified. The parameterization is deliberately (\emph{v}, \emph{k}) rather than the
+identified. Concretely, the solver rescales the state by \eqn{Y = X/s}, which
+turns \eqn{dX = (v - kX)dt + s\,dW} into \eqn{dY = (v/s - kY)dt + dW}: the
+state-valued parameters \emph{v}, \emph{B} and \emph{A} are divided by \emph{s}, and \emph{k} is
+carried through unchanged because a rate is invariant under a rescaling of
+the state. The first-passage time is the same random variable either way, so
+no Jacobian is applied to the density. The parameterization is deliberately (\emph{v}, \emph{k}) rather than the
 solver's (\eqn{\lambda}, \eqn{\theta}): the asymptote \eqn{\theta = v/k}
 diverges as the leak vanishes, whereas the drift \eqn{v - kX} is perfectly
 regular there. As a result \emph{k} = 0 is an ordinary interior value at which the

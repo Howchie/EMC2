@@ -9,6 +9,7 @@
 #include <unordered_map>
 #include "col_registry.h"
 #include "fpe_race.h"
+#include "fpe_bou.h"
 #include "model_RLF.h"
 #include "utility_functions.h"
 #include "model_RDM.h"
@@ -186,8 +187,8 @@ struct ContextForRaceModels {
 struct ContextForDDMModels {
   // PDE-backed two-boundary models amortise one Fokker-Planck march over every
   // trial sharing a parameter tuple.  Null for the analytic Wiener DDM, which
-  // allocates nothing.  Cleared once per particle; see fperace::SolveCache.
-  std::shared_ptr<fperace::SolveCache> fpe_cache;
+  // allocates nothing.  Cleared once per particle; see fpebou::SolveCache.
+  std::shared_ptr<fpebou::SolveCache> bou_cache;
   int bnd_kind = 0;                 // FPE_BoundaryKind for a collapsing bound
   bool floor_raw_log_lik = false;
 };
@@ -248,6 +249,8 @@ inline double raw_log_value(double log_x, double min_ll, bool floor_raw) {
 // from fpe_race.h, which has no such dependency and is included at the top.)
 #include "model_ROU.h"
 #include "model_RLF_kernels.h"
+// Likewise: the BOU primitives need ContextForDDMModels defined above.
+#include "model_BOU.h"
 
 struct TimedLambdaDispatch {
   double lambda_g;

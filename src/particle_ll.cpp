@@ -3906,7 +3906,12 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
   CharacterVector p_names = colnames(particle_matrix);
   std::string type_std = Rcpp::as<std::string>(Rcpp::wrap(type));
 
-  const bool is_ddm_type = type_std.find("DDM") != std::string::npos;
+  // BOU is the DDM with leak: a different kernel behind the SAME two-boundary
+  // likelihood, so it takes the DDM path and swaps only the two primitives (see
+  // DDMAdapter).  `type` here is the model's c_name, so it arrives as "BOU".
+  const bool is_bou_type = type_std.find("BOU") != std::string::npos;
+  const bool is_ddm_type = is_bou_type ||
+                           type_std.find("DDM") != std::string::npos;
   const bool is_mri_type = (type == "MRI" || type == "MRI_AR1");
   const bool is_ss_type = is_stop_signal_type(type_std);
   const bool use_pt_mapping = !is_mri_type;
@@ -3935,10 +3940,22 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
   ModelSharedState ddm_shared;
   bool ddm_raw_ready = true;
   std::vector<const double*> ddm_cols;
+  // The adapter carries the model's two primitives, its column spec and its
+  // solve cache.  Built once per likelihood call; the Wiener default leaves the
+  // DDM on exactly the code it had before.
+  DDMAdapter ddm_adapter = ddm_wien_adapter();
+  if (is_bou_type) {
+    ddm_adapter.d_raw = &bou::d_BOU_raw;
+    ddm_adapter.p_raw = &bou::p_BOU_raw;
+    ddm_adapter.col_spec = emc2col::bou::spec();
+    ddm_adapter.ctx.bou_cache = std::make_shared<fpebou::SolveCache>();
+    bou::bou_configure(*ddm_adapter.ctx.bou_cache);
+  }
   if (is_ddm_type) {
-    emc2col::validate_col_prefix(keep_names, emc2col::ddm::spec());
+    emc2col::validate_col_prefix(keep_names, ddm_adapter.col_spec);
     ddm_raw_ready = init_ddm_shared_state(data, n_trials, param_table_template,
-                                          ddm_shared, ddm_cols);
+                                          ddm_shared, ddm_cols,
+                                          &ddm_adapter.col_spec);
   }
 
   if (is_ddm_type) {
@@ -3953,12 +3970,21 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
     const bool all_finite_untruncated = ddm_data_all_finite_untruncated(data, n_trials);
     for (int i = 0; i < n_particles; ++i) {
       is_ok = prepare_particle(i);
+      // Every particle has different parameters, so solves from the previous one
+      // are dead weight -- and the horizon must be re-derived rather than
+      // inherited.  Keys are exact, so this is about cost and staleness of the
+      // horizon, not about ever returning a wrong entry.
+      if (ddm_adapter.ctx.bou_cache) {
+        ddm_adapter.ctx.bou_cache->new_particle();
+        ddm_adapter.ctx.bou_cache->t_horizon = 0.0;
+      }
       if (ddm_raw_ready) {
         for(int j = 0; j < n_trials; ++j) ddm_shared.ok_int_buf[j] = is_ok[j] ? 1 : 0;
         lls[i] = c_log_likelihood_DDM_pt(ddm_cols.data(),
                                         rt_ptr, R_ptr, n_trials, expand_ptr, n_out,
                                         min_ll, ddm_shared.ok_int_buf.data(), gng,
-                                        all_finite_untruncated, &ddm_shared);
+                                        all_finite_untruncated, &ddm_shared,
+                                        nullptr, &ddm_adapter);
       } else {
         pars = param_table_template.materialize_by_param_names(keep_names);
         lls[i] = c_log_likelihood_DDM(pars, data, n_trials, expand, min_ll, is_ok,
@@ -4442,8 +4468,18 @@ NumericMatrix calc_ll_oo_pw(NumericMatrix particle_matrix, DataFrame data, Numer
   ParamTable& param_table_template = pt.table;
   Rcpp::CharacterVector& keep_names = pt.keep_names;
 
-  if (type_std.find("DDM") != std::string::npos) {
+  const bool is_bou_pw = type_std.find("BOU") != std::string::npos;
+  if (is_bou_pw || type_std.find("DDM") != std::string::npos) {
     bool gng = (type_std.find("GNG") != std::string::npos);
+    // Same adapter arrangement as calc_ll_oo; see there.
+    DDMAdapter ddm_adapter = ddm_wien_adapter();
+    if (is_bou_pw) {
+      ddm_adapter.d_raw = &bou::d_BOU_raw;
+      ddm_adapter.p_raw = &bou::p_BOU_raw;
+      ddm_adapter.col_spec = emc2col::bou::spec();
+      ddm_adapter.ctx.bou_cache = std::make_shared<fpebou::SolveCache>();
+      bou::bou_configure(*ddm_adapter.ctx.bou_cache);
+    }
     IntegerVector expand = data.attr("expand");
     const int n_out = (expand.length() > 0) ? expand.length() : n_trials;
     const bool all_finite_untruncated = ddm_data_all_finite_untruncated(data, n_trials);
@@ -4451,20 +4487,25 @@ NumericMatrix calc_ll_oo_pw(NumericMatrix particle_matrix, DataFrame data, Numer
     emc2col::validate_col_prefix(keep_names, emc2col::ddm::spec());
     std::vector<const double*> ddm_cols;
     const bool ddm_raw_ready = init_ddm_shared_state(data, n_trials, param_table_template,
-                                                     ddm_shared, ddm_cols);
+                                                     ddm_shared, ddm_cols,
+                                                     &ddm_adapter.col_spec);
     NumericVector rts = data["rt"];
     IntegerVector R = data["R"];
     const int* expand_ptr = (expand.length() > 0) ? expand.begin() : nullptr;
     NumericMatrix result(n_particles, n_out);
     for (int i = 0; i < n_particles; ++i) {
       is_ok = pt.prepare(i);
+      if (ddm_adapter.ctx.bou_cache) {
+        ddm_adapter.ctx.bou_cache->new_particle();
+        ddm_adapter.ctx.bou_cache->t_horizon = 0.0;
+      }
       NumericVector row_vec(n_out);
       if (ddm_raw_ready) {
         for (int j = 0; j < n_trials; ++j) ddm_shared.ok_int_buf[j] = is_ok[j] ? 1 : 0;
         c_log_likelihood_DDM_pt(ddm_cols.data(), rts.begin(), R.begin(),
                                 n_trials, expand_ptr, n_out, min_ll,
                                 ddm_shared.ok_int_buf.data(), gng, all_finite_untruncated,
-                                &ddm_shared, &row_vec);
+                                &ddm_shared, &row_vec, &ddm_adapter);
       } else {
         pars = param_table_template.materialize_by_param_names(keep_names);
         c_log_likelihood_DDM(pars, data, n_trials, expand, min_ll, is_ok,
