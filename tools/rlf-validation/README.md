@@ -25,6 +25,7 @@ directory.
 | `matched.R` | does the offset survive matching generator and estimator resolution |
 | `matched_res.R` | isolates `rt_resolution` as the cause of the offset |
 | `cdfcmp.R` | simulator empirical cdf against the solver's, no estimator involved |
+| `simladder.R` | ladders the simulator step down at heavy tails |
 
 ## Findings (2026-07-30/31)
 
@@ -111,6 +112,17 @@ That last result is what localises it. Once generator and estimator are the same
 code at the same resolution, a surviving offset that does not shrink with n
 cannot be in the model or the discretisation at all — it has to be something the
 fitting pipeline does to the data. That is `rt_resolution`.
+
+**The simulator and the solver do describe the same process.** `cdfcmp.R`
+compares the CMS simulator's empirical first-passage cdf against the solver's at
+the solver's own quantiles, with no estimator in between. Across alpha in
+{1.1, 1.5, 1.9} and v in {1, 2} the two agree to within 0.006 in cdf at the
+default `emc2.rlf_sim_dt = 1e-3`, and to ~0.002 once the step is refined —
+comparable to the Monte Carlo standard error itself. `simladder.R` takes the
+step down to 4e-5 at alpha 1.1 and 1.3 and the agreement does not improve
+further, so the residual is noise rather than discrete-monitoring bias. The
+largest systematic residual seen is about -0.007 in the upper quantiles at
+alpha = 1.1, v = 1, dt = 1e-3, which refining the step removes.
 
 ## Two traps these scripts exist to avoid
 
