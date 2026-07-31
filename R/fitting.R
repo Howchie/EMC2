@@ -69,7 +69,9 @@ get_stop_criteria <- function(stage, stop_criteria, type){
 #' @param fileName A string. If specified will autosave emc at this location on every iteration.
 #' @param particle_factor An integer. `particle_factor` multiplied by the square root of the number of sampled parameters determines the number of particles used.
 #' @param cores_per_chain An integer. How many cores to use per chain.
-#' Parallelizes across participant calculations. Only available on Linux or Mac OS.
+#' Parallelizes across participant calculations; for a single-participant fit,
+#' the same budget is used across proposal likelihoods. Only available on
+#' Linux or Mac OS.
 #' For Windows, only parallelization across chains (``cores_for_chains``) is available.
 #' @param cores_for_chains An integer. How many cores to use across chains.
 #' Defaults to the number of chains. the total number of cores used is equal to ``cores_per_chain`` * ``cores_for_chains``.
@@ -80,7 +82,10 @@ get_stop_criteria <- function(stage, stop_criteria, type){
 #' @param thin A boolean. If `TRUE` will automatically thin the MCMC samples, closely matched to the ESS.
 #' Can also be set to a double, in which case 1/thin of the chain will be removed (does not have to be an integer).
 #' @param trim A boolean. If `TRUE` will automatically remove redundant samples (i.e. from preburn, burn, adapt).
-#' @param r_cores An integer for number of cores to use in R-based likelihood calculations, default 1.
+#' @param r_cores An integer giving an explicit lower bound on the cores used
+#' within one participant's proposal-likelihood calculation. This applies to
+#' both R and registered C++ likelihoods. It defaults to 1; single-participant
+#' fits automatically inherit a larger `cores_per_chain` budget.
 #' @export
 #' @return An emc object
 #' @examples \donttest{

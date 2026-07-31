@@ -577,7 +577,7 @@ rlf_fht_pdf_cdf_vec <- function(t, v, sigma, alpha, b0, z0 = 0.0, nx = 200L, nt 
     .Call(`_EMC2_rlf_fht_pdf_cdf_vec`, t, v, sigma, alpha, b0, z0, nx, nt, adaptive, lower_extent)
 }
 
-rlf_pdf_cdf_vec <- function(rt, v, B, A, t0, s, alpha, nx = 200L, dt_target = 5e-3, tgrade = 1.0, adaptive = FALSE, explicit_inverse = TRUE, sparse_output = TRUE, simd_batch = TRUE, horizon_split = TRUE, richardson = TRUE, richardson_ratio = 1.5) {
+rlf_pdf_cdf_vec <- function(rt, v, B, A, t0, s, alpha, nx = 160L, dt_target = 1.6e-2, tgrade = 1.0, adaptive = FALSE, explicit_inverse = TRUE, sparse_output = TRUE, simd_batch = FALSE, horizon_split = TRUE, richardson = TRUE, richardson_ratio = 1.25) {
     .Call(`_EMC2_rlf_pdf_cdf_vec`, rt, v, B, A, t0, s, alpha, nx, dt_target, tgrade, adaptive, explicit_inverse, sparse_output, simd_batch, horizon_split, richardson, richardson_ratio)
 }
 
@@ -628,4 +628,3 @@ pigt <- function(t, k = 1, l = 1, a = .1, threshold = 1e-10) {
 digt <- function(t, k = 1., l = 1., a = .1, threshold = 1e-10) {
     .Call(`_EMC2_digt`, t, k, l, a, threshold)
 }
-

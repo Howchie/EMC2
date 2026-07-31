@@ -237,6 +237,16 @@ pmwgs <- function(dadm, type, pars = NULL, prior = NULL,
   return(sampler)
 }
 
+.particle_core_budget <- function(n_subjects, n_cores = 1L, r_cores = 1L) {
+  n_subjects <- as.integer(n_subjects)
+  n_cores <- max(1L, as.integer(n_cores))
+  r_cores <- max(1L, as.integer(r_cores))
+  if (n_subjects == 1L && n_cores > 1L) {
+    return(list(subject = 1L, likelihood = max(r_cores, n_cores)))
+  }
+  list(subject = n_cores, likelihood = r_cores)
+}
+
 init <- function(pmwgs, start_mu = NULL, start_var = NULL,
                  verbose = FALSE, particles = 1000,
                  n_cores = 1, r_cores = 1) {
@@ -257,10 +267,19 @@ init <- function(pmwgs, start_mu = NULL, start_var = NULL,
                                                                       n_pars = pmwgs$n_pars, type = type_nuis)
     pmwgs$sampler_nuis$samples$idx <- 1
   }
+  # With one subject there is nothing to parallelise in the outer mclapply.
+  # Spend the same per-chain core budget across that subject's proposal
+  # likelihoods instead.  This matters especially for PDE-backed models, for
+  # which a particle is an independent numerical solve.  The total process
+  # count still respects n_cores; r_cores remains an explicit lower bound.
+  core_budget <- .particle_core_budget(
+    pmwgs$n_subjects, n_cores = n_cores, r_cores = r_cores
+  )
   proposals <- parallel::mclapply(X=1:pmwgs$n_subjects,FUN=start_proposals,
                                   parameters = startpoints_comb, n_particles = particles,
                                   pmwgs = pmwgs, type = type,
-                                  mc.cores = n_cores, r_cores = r_cores)
+                                  mc.cores = core_budget$subject,
+                                  r_cores = core_budget$likelihood)
   proposals <- array(unlist(proposals), dim = c(pmwgs$n_pars + 1, pmwgs$n_subjects))
 
   # Sample the mixture variables' initial values.
@@ -280,7 +299,9 @@ init <- function(pmwgs, start_mu = NULL, start_var = NULL,
 #' @param start_mu A vector. Mean of multivariate normal used in proposal distribution
 #' @param start_var A matrix. Variance covariance matrix of multivariate normal used in proposal distribution.
 #' Smaller values will lead to less deviation around the mean.
-#' @param cores_per_chain An integer. How many cores to use per chain. Parallelizes across participant calculations.
+#' @param cores_per_chain An integer. How many cores to use per chain.
+#' Parallelizes across participant calculations; with one participant,
+#' parallelizes its proposal likelihoods instead.
 #' @param cores_for_chains An integer. How many cores to use to parallelize across chains. Default is the number of chains.
 #' @param particles An integer. Number of starting values
 #' @param ... optional additional arguments
@@ -473,12 +494,18 @@ run_stage <- function(pmwgs,
       pmwgs$sampler_nuis$samples$idx <- j
     }
     # Particle step
+    # A single-subject chain otherwise leaves cores_per_chain - 1 workers idle.
+    # Route that existing budget into the independent proposal likelihoods.
+    core_budget <- .particle_core_budget(
+      pmwgs$n_subjects, n_cores = n_cores, r_cores = r_cores
+    )
     proposals <- parallel::mcmapply(safe_new_particle, 1:pmwgs$n_subjects, data, pm_settings, eff_mu, eff_var,
                                     chains_mu, chains_var, pmwgs$samples$subj_ll[,j-1],
                                     MoreArgs = list(pars_comb, pmwgs$model, stage,
                                                     pmwgs$type,
                                                     tune, pmwgs$marginalise),
-                                    mc.cores =n_cores, r_cores = r_cores)
+                                    mc.cores = core_budget$subject,
+                                    r_cores = core_budget$likelihood)
     pm_settings <- proposals[3,]
     proposals <- array(unlist(proposals[1:2,]), dim = c(pmwgs$n_pars + 1, pmwgs$n_subjects))
 

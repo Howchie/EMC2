@@ -52,9 +52,11 @@ by \code{stop_criteria} are checked and proposal distributions are updated. Defa
 \item{particle_factor}{An integer. \code{particle_factor} multiplied by the square
 root of the number of sampled parameters determines the number of particles used.}
 
-\item{cores_per_chain}{An integer. How many cores to use per chain. Parallelizes across
-participant calculations. Only available on Linux or Mac OS. For Windows, only
-parallelization across chains (\code{cores_for_chains}) is available.}
+\item{cores_per_chain}{An integer. How many cores to use per chain.
+Parallelizes across participant calculations; for a single-participant fit,
+the same budget is used across proposal likelihoods. Only available on Linux
+or Mac OS. For Windows, only parallelization across chains
+(\code{cores_for_chains}) is available.}
 
 \item{cores_for_chains}{An integer. How many cores to use across chains.
 Defaults to the number of chains. The total number of cores used is equal to \code{cores_per_chain} * \code{cores_for_chains}.}

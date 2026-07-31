@@ -34,6 +34,56 @@ test_that("RLF cache keys exclude t0 and scale out s", {
   expect_identical(two$n_solves, 2L)
 })
 
+test_that("RLF production grid defaults stay synchronized", {
+  withr::local_options(list(
+    emc2.rlf_nx = NULL,
+    emc2.rlf_dt = NULL,
+    emc2.rlf_richardson = NULL,
+    emc2.rlf_richardson_ratio = NULL
+  ))
+  grid <- EMC2:::.rlf_grid()
+  expect_identical(grid$nx, 160L)
+  expect_identical(grid$dt_target, 1.6e-2)
+  expect_true(grid$richardson)
+  expect_identical(grid$richardson_ratio, 1.25)
+
+  direct <- formals(EMC2:::rlf_pdf_cdf_vec)
+  expect_identical(direct$nx, 160L)
+  expect_identical(direct$dt_target, 1.6e-2)
+  expect_false(eval(direct$simd_batch))
+  expect_identical(direct$richardson_ratio, 1.25)
+})
+
+test_that("RLF production grid controls low-alpha discretisation error", {
+  rt <- seq(0.05, 4, length.out = 160)
+  n <- length(rt)
+  solve <- function(nx, dt, ratio) {
+    EMC2:::rlf_pdf_cdf_vec(
+      rt, rep(1.5, n), rep(1.2, n), rep(0.2, n), rep(0, n),
+      rep(1, n), rep(1.1, n),
+      nx, dt, 1, FALSE, TRUE, TRUE, FALSE,
+      horizon_split = TRUE, richardson = TRUE,
+      richardson_ratio = ratio
+    )
+  }
+  production <- solve(160L, 0.016, 1.25)
+  former <- solve(128L, 0.008, 1.5)
+  reference <- solve(320L, 0.004, 1.5)
+  central <- reference$cdf >= 0.02 & reference$cdf <= 0.98 &
+    reference$pdf > 1e-10
+  log_pdf_error <- function(x) {
+    mean(abs(log(x$pdf[central]) - log(reference$pdf[central])))
+  }
+
+  expect_lt(log_pdf_error(production), 0.01)
+  expect_lt(max(abs(production$cdf - reference$cdf)), 0.006)
+  expect_lt(log_pdf_error(production), log_pdf_error(former))
+  expect_lt(
+    max(abs(production$cdf - reference$cdf)),
+    max(abs(former$cdf - reference$cdf))
+  )
+})
+
 test_that("RLF sparse, inverse, and SIMD paths reproduce their references", {
   rt <- c(0.08, 0.17, 0.29, 0.44, 0.63, 0.86, 1.13, 1.5)
   v <- seq(1, 2.4, length.out = 8)
@@ -45,7 +95,8 @@ test_that("RLF sparse, inverse, and SIMD paths reproduce their references", {
   call <- function(inverse = TRUE, sparse = TRUE, simd = TRUE) {
     EMC2:::rlf_pdf_cdf_vec(
       rt, v, B, A, t0, s, alpha,
-      60L, 0.02, 1, FALSE, inverse, sparse, simd
+      60L, 0.02, 1, FALSE, inverse, sparse, simd,
+      horizon_split = TRUE, richardson = FALSE
     )
   }
 
@@ -59,14 +110,32 @@ test_that("RLF sparse, inverse, and SIMD paths reproduce their references", {
 
   inverse <- EMC2:::rlf_pdf_cdf_vec(
     rt[4], v[4], B[4], A[4], t0[4], s[4], alpha[4],
-    60L, 0.02, 1, FALSE, TRUE, TRUE, FALSE
+    60L, 0.02, 1, FALSE, TRUE, TRUE, FALSE,
+    horizon_split = TRUE, richardson = FALSE
   )
   triangular <- EMC2:::rlf_pdf_cdf_vec(
     rt[4], v[4], B[4], A[4], t0[4], s[4], alpha[4],
-    60L, 0.02, 1, FALSE, FALSE, TRUE, FALSE
+    60L, 0.02, 1, FALSE, FALSE, TRUE, FALSE,
+    horizon_split = TRUE, richardson = FALSE
   )
   expect_equal(inverse$pdf, triangular$pdf, tolerance = 1e-12)
   expect_equal(inverse$cdf, triangular$cdf, tolerance = 1e-12)
+
+  # At high nx and a short horizon the inverse backend applies M^-1 twice
+  # instead of paying to form the collapsed propagator.  It is the same
+  # TR--BDF2 update and must retain reference-path agreement.
+  short_inverse <- EMC2:::rlf_pdf_cdf_vec(
+    0.3, 1.4, 1.1, 0.2, 0, 1, 1.3,
+    200L, 0.02, 1, FALSE, TRUE, TRUE, FALSE,
+    horizon_split = TRUE, richardson = FALSE
+  )
+  short_triangular <- EMC2:::rlf_pdf_cdf_vec(
+    0.3, 1.4, 1.1, 0.2, 0, 1, 1.3,
+    200L, 0.02, 1, FALSE, FALSE, TRUE, FALSE,
+    horizon_split = TRUE, richardson = FALSE
+  )
+  expect_equal(short_inverse$pdf, short_triangular$pdf, tolerance = 1e-12)
+  expect_equal(short_inverse$cdf, short_triangular$cdf, tolerance = 1e-12)
 })
 
 test_that("RLF graded time schedules agree with the uniform schedule", {

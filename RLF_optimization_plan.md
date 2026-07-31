@@ -128,20 +128,19 @@ The production implementation follows all three roadmap phases:
   sparse log-density/log-survivor answers at requested response times. Scalar
   censoring/truncation queries upgrade a sparse entry to a full grid only when
   required.
-- The stationary Crank--Nicolson system uses a LAPACK inverse formed once per
-  time-step block. The identity
-  `(I-cL)^-1(I+cL) = 2(I-cL)^-1-I` reduces each CN step to one dense,
-  vectorizable matrix-vector product. The original LU path remains available
-  as a numerical reference.
+- The stationary TR--BDF2 system uses one LAPACK inverse per time-step block.
+  Its two implicit stages are collapsed into one rational propagator, so each
+  full step is one dense BLAS matrix-vector product. The original LU path
+  remains available as a numerical reference.
 - Piecewise-constant time grading, configurable through
   `emc2.rlf_tgrade`, is implemented with a positivity-aware schedule. Likelihood
   calls default to a calibrated single pass (`emc2.rlf_adaptive = FALSE`);
   adaptive domain and spatial refinement remains available for standalone
   validation.
-- Independent solves are interleaved in structure-of-arrays form and evaluated
-  in four AVX2 lanes or eight AVX-512 lanes when available. For `nx > 128`, the
-  independently auto-vectorized inverse path is faster than interleaving, so
-  the dispatcher selects it automatically.
+- An optional structure-of-arrays SIMD path can interleave four AVX2 or eight
+  AVX-512 solves. Re-measurement with the extrapolated production path found it
+  slower at normal occupancy, so it remains available for diagnostics but is
+  off by default.
 
 The optional fast-method ideas were evaluated but not enabled:
 
@@ -160,15 +159,55 @@ The optional fast-method ideas were evaluated but not enabled:
   Benchmarks showed that `tgrade = 1` is the fastest calibrated default for this
   dense-inverse backend, while retaining grading as an opt-in resolution knob.
 
-At `nx = 100` on the development CPU, `run_benchmark.R` measured:
+The original `nx = 100` development benchmark measured:
 
 | Optimization | Result |
 |---|---:|
 | 48 row solves reduced to 8 unique keys | 8.73x |
-| SIMD batch versus serial batch | 2.46x |
+| SIMD batch versus serial batch (historical, before re-measurement) | 2.46x |
 | Explicit inverse versus per-step triangular solve | 2.31x |
 | Inverse/reference maximum PDF error | 2.91e-14 |
 | Inverse/reference maximum CDF error | 1.99e-14 |
 
 The benchmark source is `WorkingTests/benchmark_rlf.cpp`. Regression coverage is
 in `tests/testthat/test-rlf-fht.R` and `tests/testthat/test-rlf-model.R`.
+
+## Production follow-up (2026-07-31)
+
+Profiling the actual single-subject recovery likelihood, rather than isolated
+solver calls, exposed two further bottlenecks:
+
+- The time march still used a compiler-generated row dot product. Passing each
+  complete propagator multiply to BLAS `dgemv` made the kernel 6-8x faster in
+  isolation over 96-192 nodes and reduced a default 123-particle likelihood
+  batch from 3.106 to 2.576 seconds without changing the solver result.
+- `cores_per_chain` was only spent across subjects. A one-subject fit therefore
+  left all but one of those cores idle even though its proposal likelihoods are
+  independent. Single-subject initialization and sampling now route that same
+  core budget through the existing proposal split; the measured 123-particle
+  batch scales from 2.576 seconds on one core to 0.708 seconds on four.
+
+A joint space/time sweep found a better production grid than simply shrinking
+the old one. The default is now a 160+200 Richardson pair (`nx = 160`, ratio
+1.25) at `dt = 0.016`. It takes 2.116 seconds for the same batch (32% below the
+pre-follow-up default, 0.590 seconds on four cores), while improving the
+low-alpha profile against a 256+384 reference. At generating alpha 1.1, 1.3,
+and 1.7, peak displacements changed from -0.025, -0.020, and +0.016 for the
+former 128+192/0.008 grid to -0.005, -0.0004, and +0.006. A separate time-only
+profile sweep over alpha 1.1-1.9 bounded the `dt = 0.016` peak displacement
+against `dt = 0.004` at 0.0023.
+
+For short time blocks, the solver now skips construction of the collapsed
+TR--BDF2 propagator and applies the already-computed inverse twice instead. The
+two expressions agree to machine precision; the crossover is selected from the
+block length and matrix dimension. Long blocks retain the one-GEMV collapsed
+path. A LAPACK triangular-solve alternative was also measured and rejected:
+at the production block lengths it was 1.4-2.8x slower.
+
+The same recovery design was exercised through the actual fitting entry points,
+not only `calc_ll_manager`. With 123 particles and 2000 expanded race rows,
+single-chain initialization measured 2.08 seconds on one core and 0.58 seconds
+on four (3.60x). Three preburn updates measured 10.00 and 3.01 seconds (3.32x).
+The public manuals intentionally contain only option behavior and usage
+guidance; calibration tables and benchmark evidence remain in this maintainer
+note and the `WorkingTests` benchmarks.

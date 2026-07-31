@@ -25,7 +25,10 @@ library(EMC2)
 particle_counts <- c(1L, 16L, 256L, 1024L)
 
 # These match the shipped model defaults used for the cost comparison.
-rlf_grid <- list(nx = 128L, dt = 0.004, tgrade = 1)
+rlf_grid <- list(
+  nx = 160L, dt = 0.016, tgrade = 1,
+  richardson = TRUE, richardson_ratio = 1.25
+)
 rou_grid <- list(nx = 512L, dt = 0.004, grade = 8, tgrade = 32)
 
 make_inputs <- function(n, distinct = FALSE) {
@@ -48,7 +51,9 @@ call_rlf <- function(x, grid = rlf_grid) {
     x$rt, x$v, x$B, x$A, x$t0, x$s, x$alpha,
     nx = grid$nx, dt_target = grid$dt, tgrade = grid$tgrade,
     adaptive = FALSE, explicit_inverse = TRUE,
-    sparse_output = TRUE, simd_batch = TRUE
+    sparse_output = TRUE, simd_batch = FALSE,
+    richardson = grid$richardson,
+    richardson_ratio = grid$richardson_ratio
   )
 }
 
@@ -158,7 +163,10 @@ resolution_benchmark <- function() {
     list(model = "ROU", nx = 1024L, dt = 0.002)
   )) {
     if (grid$model == "RLF") {
-      fun <- function() call_rlf(x, list(nx = grid$nx, dt = grid$dt, tgrade = 1))
+      fun <- function() call_rlf(x, list(
+        nx = grid$nx, dt = grid$dt, tgrade = 1,
+        richardson = FALSE, richardson_ratio = 1.25
+      ))
     } else {
       fun <- function() call_rou(x, list(
         nx = grid$nx, dt = grid$dt, grade = 8, tgrade = 32

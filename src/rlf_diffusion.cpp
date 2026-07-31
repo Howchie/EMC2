@@ -118,11 +118,11 @@ Rcpp::List rlf_fht_pdf_cdf_vec(NumericVector t, double v, double sigma,
 // [[Rcpp::export]]
 Rcpp::List rlf_pdf_cdf_vec(
     NumericVector rt, NumericVector v, NumericVector B, NumericVector A,
-    NumericVector t0, NumericVector s, NumericVector alpha, int nx = 200,
-    double dt_target = 5e-3, double tgrade = 1.0, bool adaptive = false,
+    NumericVector t0, NumericVector s, NumericVector alpha, int nx = 160,
+    double dt_target = 1.6e-2, double tgrade = 1.0, bool adaptive = false,
     bool explicit_inverse = true, bool sparse_output = true,
-    bool simd_batch = true, bool horizon_split = true,
-    bool richardson = true, double richardson_ratio = 1.5) {
+    bool simd_batch = false, bool horizon_split = true,
+    bool richardson = true, double richardson_ratio = 1.25) {
   const int n = rt.size();
   if (v.size() != n || B.size() != n || A.size() != n ||
       t0.size() != n || s.size() != n || alpha.size() != n) {

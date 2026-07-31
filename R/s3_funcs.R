@@ -556,9 +556,11 @@ fit.emc <- function(emc, stage = NULL, iter = 1000, stop_criteria = NULL,
 #' @param fileName A string. If specified, will auto-save emc object at this location on every iteration.
 #' @param particle_factor An integer. ``particle_factor`` multiplied by the square
 #' root of the number of sampled parameters determines the number of particles used.
-#' @param cores_per_chain An integer. How many cores to use per chain. Parallelizes across
-#' participant calculations. Only available on Linux or Mac OS. For Windows, only
-#' parallelization across chains (``cores_for_chains``) is available.
+#' @param cores_per_chain An integer. How many cores to use per chain.
+#' Parallelizes across participant calculations; for a single-participant fit,
+#' the same budget is used across proposal likelihoods. Only available on Linux
+#' or Mac OS. For Windows, only parallelization across chains
+#' (``cores_for_chains``) is available.
 #' @param cores_for_chains An integer. How many cores to use across chains.
 #' Defaults to the number of chains. The total number of cores used is equal to ``cores_per_chain`` * ``cores_for_chains``.
 #' @param max_tries An integer. How many times should it try to meet the finish

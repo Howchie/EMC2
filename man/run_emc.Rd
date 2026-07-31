@@ -47,7 +47,9 @@ specified by \code{stop_criteria} are checked and proposal distributions are upd
 \item{particle_factor}{An integer. \code{particle_factor} multiplied by the square root of the number of sampled parameters determines the number of particles used.}
 
 \item{cores_per_chain}{An integer. How many cores to use per chain.
-Parallelizes across participant calculations. Only available on Linux or Mac OS.
+Parallelizes across participant calculations; for a single-participant fit,
+the same budget is used across proposal likelihoods. Only available on
+Linux or Mac OS.
 For Windows, only parallelization across chains (\code{cores_for_chains}) is available.}
 
 \item{cores_for_chains}{An integer. How many cores to use across chains.
@@ -63,7 +65,10 @@ Can also be set to a double, in which case 1/thin of the chain will be removed (
 
 \item{trim}{A boolean. If \code{TRUE} will automatically remove redundant samples (i.e. from preburn, burn, adapt).}
 
-\item{r_cores}{An integer for number of cores to use in R-based likelihood calculations, default 1.}
+\item{r_cores}{An integer giving an explicit lower bound on the cores used
+within one participant's proposal-likelihood calculation. This applies to
+both R and registered C++ likelihoods. It defaults to 1; single-participant
+fits automatically inherit a larger \code{cores_per_chain} budget.}
 }
 \value{
 An emc object

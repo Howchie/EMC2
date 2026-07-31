@@ -74,6 +74,9 @@ extern "C" {
 void F77_NAME(dgetrf)(const int*, const int*, double*, const int*, int*, int*);
 void F77_NAME(dgetri)(const int*, double*, const int*, const int*, double*,
                       const int*, int*);
+void F77_NAME(dgemv)(const char*, const int*, const int*, const double*,
+                     const double*, const int*, const double*, const int*,
+                     const double*, double*, const int*, size_t);
 void F77_NAME(dgemm)(const char*, const char*, const int*, const int*,
                      const int*, const double*, const double*, const int*,
                      const double*, const int*, const double*, double*,
@@ -88,6 +91,24 @@ namespace rlf {
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
+
+// Dense propagators are stored row-major.  BLAS sees the same bytes as the
+// column-major transpose, so DGEMV with trans='T' computes the desired
+// matrix-vector product without copying.  Keeping this in one helper also
+// gives vendor BLAS implementations the whole operation instead of relying on
+// the compiler to rediscover a tuned GEMV inside every time step.
+inline void rlf_dense_matvec(const std::vector<double>& matrix,
+                             const std::vector<double>& x,
+                             std::vector<double>& out, int n) {
+  out.resize(n);
+  const char transpose = 'T';
+  const int increment = 1;
+  const double one = 1.0;
+  const double zero = 0.0;
+  F77_CALL(dgemv)(
+    &transpose, &n, &n, &one, matrix.data(), &n, x.data(), &increment,
+    &zero, out.data(), &increment, 1);
+}
 
 // ---------------------------------------------------------------------------
 // Dense LU factorisation with partial pivoting.
@@ -205,17 +226,7 @@ struct RLF_DenseInverse {
 
   void multiply(const std::vector<double>& x,
                 std::vector<double>& out) const {
-    out.resize(n);
-    for (int i = 0; i < n; ++i) {
-      const double* __restrict row =
-        &value[static_cast<size_t>(i) * n];
-      double sum = 0.0;
-#if defined(__GNUC__) || defined(__clang__)
-#pragma GCC ivdep
-#endif
-      for (int j = 0; j < n; ++j) sum += row[j] * x[j];
-      out[i] = sum;
-    }
+    rlf_dense_matvec(value, x, out, n);
   }
 };
 
@@ -776,6 +787,7 @@ inline RLF_Result rlf_solve_fixed_grid(
   RLF_DenseLU lu;
   RLF_DenseInverse inverse;
   std::vector<double> step_matrix;
+  bool use_collapsed_step = true;
 
   // Forming the explicit inverse and the TR-BDF2 step matrix costs O(n^3) and
   // dominates everything else once the grid is refined, which is exactly what
@@ -844,17 +856,22 @@ inline RLF_Result rlf_solve_fixed_grid(
     const double old_flux = flux_prev;
     const double old_survivor = survivor_prev;
     if (explicit_inverse) {
-      const std::vector<double>& matrix =
-        backward_euler ? inverse.value : step_matrix;
-      for (int i = 0; i < n; ++i) {
-        const double* __restrict row =
-          &matrix[static_cast<size_t>(i) * n];
-        double sum = 0.0;
-#if defined(__GNUC__) || defined(__clang__)
-#pragma GCC ivdep
-#endif
-        for (int j = 0; j < n; ++j) sum += row[j] * p[j];
-        next[i] = sum;
+      if (backward_euler) {
+        rlf_dense_matvec(inverse.value, p, next, n);
+      } else if (use_collapsed_step) {
+        rlf_dense_matvec(step_matrix, p, next, n);
+      } else {
+        // The collapsed TR--BDF2 propagator is
+        //   2a M^-2 - (a+b) M^-1.
+        // For a short block, two GEMVs are cheaper than forming M^-2 with a
+        // GEMM.  This is algebraically identical to the precomputed path.
+        rlf_dense_matvec(inverse.value, p, stage, n);
+        rlf_dense_matvec(inverse.value, stage, next, n);
+        for (int i = 0; i < n; ++i) {
+          next[i] =
+            2.0 * RLF_TRBDF2_A * next[i] -
+            (RLF_TRBDF2_A + RLF_TRBDF2_B) * stage[i];
+        }
       }
     } else if (matrix_free) {
       // Warm-starting from the current density costs nothing and saves an
@@ -950,7 +967,7 @@ inline RLF_Result rlf_solve_fixed_grid(
   // Build the left-hand side once per graded-time block.  Both TR-BDF2 stages
   // use I - (gamma/2) dt L, and with the explicit inverse available the two
   // stages collapse into one dense matvec per step.
-  auto update_lhs_and_factor = [&](double step) {
+  auto update_lhs_and_factor = [&](double step, int block_steps) {
     if (matrix_free) {
       mf = rlf::rlf_build_toeplitz_system(op.L, n,
                                           RLF_TRBDF2_IMPLICIT * step);
@@ -962,7 +979,14 @@ inline RLF_Result rlf_solve_fixed_grid(
         throw std::runtime_error(
           "rlf_solve: inversion of the nonlocal operator failed.");
       }
-      step_matrix = rlf_trbdf2_step_matrix(inverse.value, n);
+      // One GEMM plus one GEMV per step crosses two GEMVs per step at roughly
+      // half the matrix dimension on the supported BLAS backends.
+      use_collapsed_step = 2 * block_steps >= n;
+      if (use_collapsed_step) {
+        step_matrix = rlf_trbdf2_step_matrix(inverse.value, n);
+      } else {
+        step_matrix.clear();
+      }
     } else if (!lu.factor(n, lhs)) {
       throw std::runtime_error(
         "rlf_solve: factorization of the nonlocal operator failed.");
@@ -971,7 +995,7 @@ inline RLF_Result rlf_solve_fixed_grid(
 
   for (size_t b = 0; b < schedule.dt.size(); ++b) {
     const double dt_b = schedule.dt[b];
-    update_lhs_and_factor(dt_b);
+    update_lhs_and_factor(dt_b, schedule.steps[b]);
     if (b == 0) {
       for (int k = 0; k < RLF_STARTUP_STEPS; ++k) {
         record_step(startup_step, true);
@@ -1380,8 +1404,8 @@ inline bool rlf_key(double v, double sigma, double alpha, double B, double A,
 // floor 96 it costs 1.35x flat nx = 96 for slightly worse mean recovery.  So
 // resolution is a per-fit choice, documented on RLF(), not a per-key one.
 struct Grid {
-  int nx = 128;
-  double dt_target = 8e-3;
+  int nx = 160;
+  double dt_target = 1.6e-2;
   int nt_min = 50;
   int nt_max = 20000;
   double tgrade = 1.0;
@@ -1393,7 +1417,7 @@ struct Grid {
   // Pair each solve with a finer one and Richardson-extrapolate; see
   // rlf_cache_solve.
   bool richardson = true;
-  double richardson_ratio = 1.5;
+  double richardson_ratio = 1.25;
   // The lane-interleaved march does the same flop count as LANES independent
   // scalar marches -- the per-lane row dot product already vectorises -- while
   // holding LANES step matrices live instead of one, so it is memory bound
