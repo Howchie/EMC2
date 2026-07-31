@@ -167,6 +167,47 @@ struct ContextForRaceModels {
     }
 };
 
+// ---------------------------------------------------------------------------
+// Two-boundary (DDM-shaped) models.
+//
+// c_log_likelihood_DDM_pt owns all of the truncation, censoring and go/no-go
+// bookkeeping, and needs exactly two things from the model: the log DEFECTIVE
+// density and the log DEFECTIVE cdf of a response, vectorised over trials.
+// Everything else it does -- the interval masses, the log-sum-exp combinations,
+// the all-finite fast path -- is model independent.  Routing those two through
+// function pointers is what lets a second two-boundary model (the bounded OU of
+// Smith & Ratcliff 2004, which is the DDM with leak) reuse the whole kernel
+// rather than restate it, and it leaves the Wiener DDM on exactly the code it
+// had before: its entries are thin shims that the compiler inlines away.
+//
+// This mirrors ContextForRaceModels above, which plays the same role for the
+// race evaluator.
+// ---------------------------------------------------------------------------
+struct ContextForDDMModels {
+  // PDE-backed two-boundary models amortise one Fokker-Planck march over every
+  // trial sharing a parameter tuple.  Null for the analytic Wiener DDM, which
+  // allocates nothing.  Cleared once per particle; see fperace::SolveCache.
+  std::shared_ptr<fperace::SolveCache> fpe_cache;
+  int bnd_kind = 0;                 // FPE_BoundaryKind for a collapsing bound
+  bool floor_raw_log_lik = false;
+};
+
+// (rts, Rs, cols, n_rows, mask, is_ok, out, floor, ctx)
+//   Rs    1 = lower, 2 = upper -- the DDM's response coding
+//   mask  rows with 0 are skipped and `out` is left untouched there
+//   out   LOG defective density (d_raw) or LOG defective cdf (p_raw); the two
+//         responses' values sum to 1 in the natural scale, not each alone
+using DDMRawFun = void (*)(const double*, const int*, const double* const*, int,
+                           const int*, const int*, double*, double,
+                           ContextForDDMModels*);
+
+struct DDMAdapter {
+  DDMRawFun d_raw = nullptr;
+  DDMRawFun p_raw = nullptr;
+  emc2col::ColSpec col_spec{};
+  ContextForDDMModels ctx;
+};
+
 inline bool raw_floor_log_lik(void* ctx_) {
   auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
   return ctx == nullptr || ctx->floor_raw_log_lik;

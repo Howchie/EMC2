@@ -1922,8 +1922,42 @@ static double c_log_likelihood_ss_pt(
   return sum_ll;
 }
 
+// The Wiener DDM's entries in a DDMAdapter.  Thin shims that drop the model
+// context the analytic model has no use for; they inline away, so the default
+// adapter runs exactly the code this kernel used to call directly.
+inline void ddm_wien_d_raw(const double* rts, const int* Rs,
+                           const double* const* cols, int n_rows,
+                           const int* mask, const int* is_ok,
+                           double* out, double floor_,
+                           ContextForDDMModels* /*ctx*/) {
+  d_DDM_Wien_raw(rts, Rs, cols, n_rows, mask, is_ok, out, floor_);
+}
+inline void ddm_wien_p_raw(const double* rts, const int* Rs,
+                           const double* const* cols, int n_rows,
+                           const int* mask, const int* is_ok,
+                           double* out, double floor_,
+                           ContextForDDMModels* /*ctx*/) {
+  p_DDM_Wien_raw(rts, Rs, cols, n_rows, mask, is_ok, out, floor_);
+}
+
+// The adapter every existing DDM caller gets when it passes none.
+inline const DDMAdapter& ddm_wien_adapter() {
+  static const DDMAdapter a = [] {
+    DDMAdapter x;
+    x.d_raw = &ddm_wien_d_raw;
+    x.p_raw = &ddm_wien_p_raw;
+    x.col_spec = emc2col::ddm::spec();
+    return x;
+  }();
+  return a;
+}
+
 // Raw-buffer variant for DDM to skip materialization and allocations.
 // Handles truncation and censoring with high numerical stability.
+//
+// `ker` supplies the only two model-specific operations (see DDMAdapter in
+// utils.h); it defaults to the Wiener pair, so every existing call site is
+// unchanged in behaviour.
 double c_log_likelihood_DDM_pt(const double* const* cols,
                                const double* rt_ptr,
                                const int* R_ptr,
@@ -1935,15 +1969,29 @@ double c_log_likelihood_DDM_pt(const double* const* cols,
                                bool gng,
                                bool all_finite_untruncated,
                                ModelSharedState* shared,
-                               Rcpp::NumericVector* trial_ll_out = nullptr) {
+                               Rcpp::NumericVector* trial_ll_out = nullptr,
+                               const DDMAdapter* ker_in = nullptr) {
+
+  // `cols` and n_trials are the same for every call below, so bind them once and
+  // let the call sites read as they did before.
+  const DDMAdapter& ker = (ker_in != nullptr) ? *ker_in : ddm_wien_adapter();
+  ContextForDDMModels* kctx = const_cast<ContextForDDMModels*>(&ker.ctx);
+  auto d_raw = [&](const double* rts, const int* Rs, const int* mask,
+                   const int* ok_, double* out, double floor_) {
+    ker.d_raw(rts, Rs, cols, n_trials, mask, ok_, out, floor_, kctx);
+  };
+  auto p_raw = [&](const double* rts, const int* Rs, const int* mask,
+                   const int* ok_, double* out, double floor_) {
+    ker.p_raw(rts, Rs, cols, n_trials, mask, ok_, out, floor_, kctx);
+  };
 
   // 1. Fast Path: All RTs finite, no truncation, no censoring
   if (all_finite_untruncated) {
     if (shared->all_ones_int_buf.size() != static_cast<size_t>(n_trials)) {
       shared->all_ones_int_buf.assign(n_trials, 1);
     }
-    d_DDM_Wien_raw(rt_ptr, R_ptr, cols, n_trials,
-                   shared->all_ones_int_buf.data(), is_ok, shared->res_buf.data(), min_ll);
+    d_raw(rt_ptr, R_ptr,
+          shared->all_ones_int_buf.data(), is_ok, shared->res_buf.data(), min_ll);
     
     const double* lls_ptr = shared->res_buf.data();
     double total_ll = 0.0;
@@ -2063,20 +2111,20 @@ double c_log_likelihood_DDM_pt(const double* const* cols,
         for (int i = 0; i < n_trials; ++i) {
           if (is_ok[i] && LT[i] > 0.0) LT_mask[i] = 1;
         }
-        p_DDM_Wien_raw(shared->LT_vec.begin(), R1_ptr, cols, n_trials,
-                       LT_mask.data(), is_ok, shared->logF_LT_1.data(), R_NegInf);
-        p_DDM_Wien_raw(shared->LT_vec.begin(), R2_ptr, cols, n_trials,
-                       LT_mask.data(), is_ok, shared->logF_LT_2.data(), R_NegInf);
+        p_raw(shared->LT_vec.begin(), R1_ptr,
+              LT_mask.data(), is_ok, shared->logF_LT_1.data(), R_NegInf);
+        p_raw(shared->LT_vec.begin(), R2_ptr,
+              LT_mask.data(), is_ok, shared->logF_LT_2.data(), R_NegInf);
       }
       if (any_UT_finite) {
         std::vector<int> UT_mask(n_trials, 0);
         for (int i = 0; i < n_trials; ++i) {
           if (is_ok[i] && R_FINITE(UT[i])) UT_mask[i] = 1;
         }
-        p_DDM_Wien_raw(shared->UT_vec.begin(), R1_ptr, cols, n_trials,
-                       UT_mask.data(), is_ok, shared->logF_UT_1.data(), R_NegInf);
-        p_DDM_Wien_raw(shared->UT_vec.begin(), R2_ptr, cols, n_trials,
-                       UT_mask.data(), is_ok, shared->logF_UT_2.data(), R_NegInf);
+        p_raw(shared->UT_vec.begin(), R1_ptr,
+              UT_mask.data(), is_ok, shared->logF_UT_1.data(), R_NegInf);
+        p_raw(shared->UT_vec.begin(), R2_ptr,
+              UT_mask.data(), is_ok, shared->logF_UT_2.data(), R_NegInf);
       }
 
       for (int i = 0; i < n_trials; ++i) {
@@ -2090,8 +2138,8 @@ double c_log_likelihood_DDM_pt(const double* const* cols,
 
   // Calculate finite RT densities
   if (shared->any_ok_finite) {
-  d_DDM_Wien_raw(rt_ptr, R_ptr, cols, n_trials,
-                 shared->finite_mask_int.data(), is_ok, shared->res_buf.data(), min_ll);
+  d_raw(rt_ptr, R_ptr,
+        shared->finite_mask_int.data(), is_ok, shared->res_buf.data(), min_ll);
   if (!gng) {
 
       for (int i = 0; i < n_trials; ++i) {
@@ -2133,10 +2181,10 @@ double c_log_likelihood_DDM_pt(const double* const* cols,
         }
       }
       Rcpp::NumericVector logcdf_U(n_trials), logcdf_L(n_trials);
-      p_DDM_Wien_raw(shared->UC_vec.begin(), R_go_ptr, cols, n_trials,
-                     shared->all_ones_int_buf.data(), is_ok, logcdf_U.begin(), R_NegInf);
-      p_DDM_Wien_raw(shared->LC_vec.begin(), R_go_ptr, cols, n_trials,
-                     shared->all_ones_int_buf.data(), is_ok, logcdf_L.begin(), R_NegInf);
+      p_raw(shared->UC_vec.begin(), R_go_ptr,
+            shared->all_ones_int_buf.data(), is_ok, logcdf_U.begin(), R_NegInf);
+      p_raw(shared->LC_vec.begin(), R_go_ptr,
+            shared->all_ones_int_buf.data(), is_ok, logcdf_L.begin(), R_NegInf);
       for (int i = 0; i < n_trials; ++i) {
         if (!is_ok[i] || shared->finite_mask_int[i]) continue;
         if (rt_ptr[i] == R_PosInf) shared->res_buf[i] = log1m_exp(logcdf_U[i]);
@@ -2186,14 +2234,14 @@ double c_log_likelihood_DDM_pt(const double* const* cols,
         if (!shared->finite_mask_int[i] && is_ok[i]) nonfinite_mask[i] = 1;
       }
       
-      p_DDM_Wien_raw(shared->LC_vec.begin(), R1_ptr, cols, n_trials,
-                     nonfinite_mask.data(), is_ok, lF_LC_1, R_NegInf);
-      p_DDM_Wien_raw(shared->LC_vec.begin(), R2_ptr, cols, n_trials,
-                     nonfinite_mask.data(), is_ok, lF_LC_2, R_NegInf);
-      p_DDM_Wien_raw(shared->UC_vec.begin(), R1_ptr, cols, n_trials,
-                     nonfinite_mask.data(), is_ok, lF_UC_1, R_NegInf);
-      p_DDM_Wien_raw(shared->UC_vec.begin(), R2_ptr, cols, n_trials,
-                     nonfinite_mask.data(), is_ok, lF_UC_2, R_NegInf);
+      p_raw(shared->LC_vec.begin(), R1_ptr,
+            nonfinite_mask.data(), is_ok, lF_LC_1, R_NegInf);
+      p_raw(shared->LC_vec.begin(), R2_ptr,
+            nonfinite_mask.data(), is_ok, lF_LC_2, R_NegInf);
+      p_raw(shared->UC_vec.begin(), R1_ptr,
+            nonfinite_mask.data(), is_ok, lF_UC_1, R_NegInf);
+      p_raw(shared->UC_vec.begin(), R2_ptr,
+            nonfinite_mask.data(), is_ok, lF_UC_2, R_NegInf);
 
       for (int i = 0; i < n_trials; ++i) {
         if (!is_ok[i] || shared->finite_mask_int[i]) continue;
@@ -2950,7 +2998,8 @@ static PtMapper make_pt_mapper(NumericMatrix particle_matrix, DataFrame data,
 static bool init_ddm_shared_state(DataFrame data, int n_trials,
                                   const ParamTable& table,
                                   ModelSharedState& shared,
-                                  std::vector<const double*>& cols) {
+                                  std::vector<const double*>& cols,
+                                  const emc2col::ColSpec* spec_in = nullptr) {
   shared.LT_vec = get_col_with_default(data, "LT", 0.0);
   shared.UT_vec = get_col_with_default(data, "UT", R_PosInf);
   shared.LC_vec = get_col_with_default(data, "LC", 0.0);
@@ -2971,7 +3020,10 @@ static bool init_ddm_shared_state(DataFrame data, int n_trials,
   shared.valid = true;
 
   bool raw_ready = true;
-  const emc2col::ColSpec ddm_spec = emc2col::ddm::spec();
+  // The column set is the model's, not the family's: a two-boundary model with
+  // extra parameters (bounded OU's leak) declares its own spec.
+  const emc2col::ColSpec ddm_spec =
+    (spec_in != nullptr) ? *spec_in : emc2col::ddm::spec();
   for (int j = 0; j < ddm_spec.n_required; ++j) {
     auto it = table.name_to_base_idx.find(ddm_spec.names[j]);
     int idx = (it != table.name_to_base_idx.end()) ? it->second : -1;

@@ -164,6 +164,19 @@ namespace ddm {
   }
 }
 
+// R/model_BOU.R — BOU, the bounded Ornstein-Uhlenbeck (Smith & Ratcliff 2004).
+// The DDM's columns plus the leak beta, in the same order, so a DDM design
+// converts by adding beta~1 and beta = 0 recovers the DDM exactly -- reached
+// through the Fokker-Planck solver rather than the Wiener series.
+namespace bou {
+  enum : int { v = 0, a, sv, t0, st0, s, Z, SZ, beta, N_REQ };
+  inline ColSpec spec() {
+    static const char* n[] = {"v", "a", "sv", "t0", "st0", "s", "Z", "SZ",
+                              "beta"};
+    return {n, N_REQ, "BOU"};
+  }
+}
+
 // R/model_SS.R — stop-signal truncated ex-Gaussian (SSEXG)
 namespace ss_texg {
   enum : int { mu = 0, sigma, tau, muS, sigmaS, tauS, tf, gf, exg_lb, exgS_lb, N_REQ };

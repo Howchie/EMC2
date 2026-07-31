@@ -11,6 +11,61 @@ Rcpp::Rostream<true>&  Rcpp::Rcout = Rcpp::Rcpp_cout_get();
 Rcpp::Rostream<false>& Rcpp::Rcerr = Rcpp::Rcpp_cerr_get();
 #endif
 
+// bou_pdf_cdf_vec
+Rcpp::List bou_pdf_cdf_vec(NumericVector rt, IntegerVector R, NumericVector v, NumericVector a, NumericVector Z, NumericVector sv, NumericVector SZ, NumericVector t0, NumericVector st0, NumericVector s, NumericVector beta, int nx, double dt_target, double grade, double tgrade, int n_sv, int n_sz, int n_st0, bool anchor_at_z, double anchor_fix, bool want_cdf);
+RcppExport SEXP _EMC2_bou_pdf_cdf_vec(SEXP rtSEXP, SEXP RSEXP, SEXP vSEXP, SEXP aSEXP, SEXP ZSEXP, SEXP svSEXP, SEXP SZSEXP, SEXP t0SEXP, SEXP st0SEXP, SEXP sSEXP, SEXP betaSEXP, SEXP nxSEXP, SEXP dt_targetSEXP, SEXP gradeSEXP, SEXP tgradeSEXP, SEXP n_svSEXP, SEXP n_szSEXP, SEXP n_st0SEXP, SEXP anchor_at_zSEXP, SEXP anchor_fixSEXP, SEXP want_cdfSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type rt(rtSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type R(RSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type v(vSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type a(aSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type Z(ZSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type sv(svSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type SZ(SZSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type t0(t0SEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type st0(st0SEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type s(sSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type beta(betaSEXP);
+    Rcpp::traits::input_parameter< int >::type nx(nxSEXP);
+    Rcpp::traits::input_parameter< double >::type dt_target(dt_targetSEXP);
+    Rcpp::traits::input_parameter< double >::type grade(gradeSEXP);
+    Rcpp::traits::input_parameter< double >::type tgrade(tgradeSEXP);
+    Rcpp::traits::input_parameter< int >::type n_sv(n_svSEXP);
+    Rcpp::traits::input_parameter< int >::type n_sz(n_szSEXP);
+    Rcpp::traits::input_parameter< int >::type n_st0(n_st0SEXP);
+    Rcpp::traits::input_parameter< bool >::type anchor_at_z(anchor_at_zSEXP);
+    Rcpp::traits::input_parameter< double >::type anchor_fix(anchor_fixSEXP);
+    Rcpp::traits::input_parameter< bool >::type want_cdf(want_cdfSEXP);
+    rcpp_result_gen = Rcpp::wrap(bou_pdf_cdf_vec(rt, R, v, a, Z, sv, SZ, t0, st0, s, beta, nx, dt_target, grade, tgrade, n_sv, n_sz, n_st0, anchor_at_z, anchor_fix, want_cdf));
+    return rcpp_result_gen;
+END_RCPP
+}
+// rbou_cpp
+Rcpp::DataFrame rbou_cpp(int n, NumericVector v, NumericVector a, NumericVector Z, NumericVector sv, NumericVector SZ, NumericVector t0, NumericVector st0, NumericVector s, NumericVector beta, double dt, double t_max, bool anchor_at_z, double anchor_fix);
+RcppExport SEXP _EMC2_rbou_cpp(SEXP nSEXP, SEXP vSEXP, SEXP aSEXP, SEXP ZSEXP, SEXP svSEXP, SEXP SZSEXP, SEXP t0SEXP, SEXP st0SEXP, SEXP sSEXP, SEXP betaSEXP, SEXP dtSEXP, SEXP t_maxSEXP, SEXP anchor_at_zSEXP, SEXP anchor_fixSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< int >::type n(nSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type v(vSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type a(aSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type Z(ZSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type sv(svSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type SZ(SZSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type t0(t0SEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type st0(st0SEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type s(sSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type beta(betaSEXP);
+    Rcpp::traits::input_parameter< double >::type dt(dtSEXP);
+    Rcpp::traits::input_parameter< double >::type t_max(t_maxSEXP);
+    Rcpp::traits::input_parameter< bool >::type anchor_at_z(anchor_at_zSEXP);
+    Rcpp::traits::input_parameter< double >::type anchor_fix(anchor_fixSEXP);
+    rcpp_result_gen = Rcpp::wrap(rbou_cpp(n, v, a, Z, sv, SZ, t0, st0, s, beta, dt, t_max, anchor_at_z, anchor_fix));
+    return rcpp_result_gen;
+END_RCPP
+}
 // EMC2_call_custom_trend
 Rcpp::NumericVector EMC2_call_custom_trend(Rcpp::NumericMatrix trend_pars, Rcpp::NumericMatrix input, SEXP funptrSEXP);
 RcppExport SEXP _EMC2_EMC2_call_custom_trend(SEXP trend_parsSEXP, SEXP inputSEXP, SEXP funptrSEXPSEXP) {
@@ -2821,6 +2876,8 @@ END_RCPP
 }
 
 static const R_CallMethodDef CallEntries[] = {
+    {"_EMC2_bou_pdf_cdf_vec", (DL_FUNC) &_EMC2_bou_pdf_cdf_vec, 21},
+    {"_EMC2_rbou_cpp", (DL_FUNC) &_EMC2_rbou_cpp, 14},
     {"_EMC2_EMC2_call_custom_trend", (DL_FUNC) &_EMC2_EMC2_call_custom_trend, 3},
     {"_EMC2_sp_new", (DL_FUNC) &_EMC2_sp_new, 10},
     {"_EMC2_fpe_bm_fht_pdf_cdf_vec", (DL_FUNC) &_EMC2_fpe_bm_fht_pdf_cdf_vec, 12},

@@ -95,3 +95,97 @@ test_that("leak changes the model", {
   expect_lt(tail(r8$cdf_upper, 1), tail(r0$cdf_upper, 1) - 0.05)
   expect_gt(max(abs(r0$pdf_upper - r8$pdf_upper)), 0.1)
 })
+
+# ---------------------------------------------------------------------------
+# Across-trial variability, and the simulator.
+#
+# These exercise fpe_bou.h (quadrature + solve cache) and bou_diffusion.cpp
+# rather than the solver core above.
+# ---------------------------------------------------------------------------
+
+test_that("across-trial variability matches the DDM oracle at beta = 0", {
+  tt <- seq(0.25, 2.0, by = 0.05)
+  Z <- 0.45; a <- 1.2; v <- 1.5; t0 <- 0.15
+
+  # NB the SZ contract differs between the two sides and it is easy to get
+  # wrong: bou_pdf_cdf_vec takes SZ RAW and widens it internally (as
+  # d_DDM_Wien_raw does, model_DDM.h:122), whereas the R-level dDDM()/pDDM()
+  # expect the ALREADY-widened value because Ttransform normally ran first.
+  widen <- function(SZ) 2 * SZ * min(Z, 1 - Z)
+
+  cases <- list(c(sv = 0, SZ = 0, st0 = 0), c(sv = 1.0, SZ = 0, st0 = 0),
+                c(sv = 0, SZ = 0.3, st0 = 0), c(sv = 0, SZ = 0, st0 = 0.1),
+                c(sv = 1.0, SZ = 0.3, st0 = 0.1))
+  for (cs in cases) {
+    for (side in c("lower", "upper")) {
+      Rf <- factor(rep(side, length(tt)), levels = c("lower", "upper"))
+      Ri <- rep(if (side == "upper") 2L else 1L, length(tt))
+      pm <- cbind(a = rep(a, length(tt)), v = v, t0 = t0, s = 1, Z = Z,
+                  SZ = widen(cs[["SZ"]]), sv = cs[["sv"]], st0 = cs[["st0"]])
+      b <- EMC2:::bou_pdf_cdf_vec(tt, Ri, v, a, Z, cs[["sv"]], cs[["SZ"]],
+                                  t0, cs[["st0"]], 1, 0,
+                                  nx = 512, dt_target = 2.5e-4, n_st0 = 15)
+      lab <- sprintf("sv=%g SZ=%g st0=%g %s", cs[["sv"]], cs[["SZ"]],
+                     cs[["st0"]], side)
+      expect_lt(max(abs(b$pdf - EMC2:::dDDM(tt, Rf, pm, precision = 1e-10))),
+                1e-3, label = paste("pdf", lab))
+      expect_lt(max(abs(b$cdf - EMC2:::pDDM(tt, Rf, pm, precision = 1e-10))),
+                1e-3, label = paste("cdf", lab))
+    }
+  }
+})
+
+test_that("st0 uses the DDM's lower-edge convention", {
+  # t0 ~ U(t0, t0+st0), NOT U(t0-st0/2, t0+st0/2).  Reconstruct an st0 > 0
+  # density from point-t0 densities under each convention: the wrong one is off
+  # by ~0.34 where the right one agrees to ~2e-3, so this cannot pass by luck.
+  tt <- seq(0.3, 1.5, by = 0.05)
+  Rf <- factor(rep("upper", length(tt)), levels = c("lower", "upper"))
+  d <- function(t0, st0) EMC2:::dDDM(tt, Rf,
+    cbind(a = rep(1.2, length(tt)), v = 1.5, t0 = t0, s = 1, Z = .45,
+          SZ = 0, sv = 0, st0 = st0), precision = 1e-10)
+  ref <- d(0.15, 0.1)
+  u <- seq(0, 1, length.out = 201)
+  lower <- rowMeans(sapply(u, function(x) d(0.15 + 0.1 * x, 0)))
+  centred <- rowMeans(sapply(u - 0.5, function(x) d(0.15 + 0.1 * x, 0)))
+  expect_lt(max(abs(ref - lower)), 1e-2)
+  expect_gt(max(abs(ref - centred)), 1e-1)
+})
+
+test_that("the quadrature costs exactly n_sv * n_sz solves", {
+  # Guards the solve cache against two regressions that are invisible in the
+  # density: a horizon that grows per row (which would re-solve every node as a
+  # sorted rt vector is walked), and an st0 loop that triggers solves instead of
+  # reusing them.
+  tt <- seq(0.2, 2.0, by = 0.02)
+  Ri <- rep(2L, length(tt))
+  none <- EMC2:::bou_pdf_cdf_vec(tt, Ri, 1.5, 1.2, .45, 0, 0, 0.1, 0, 1, 0)
+  expect_equal(none$n_solves, 1)
+  # st0 alone shifts the query time only: no extra solves.
+  st0only <- EMC2:::bou_pdf_cdf_vec(tt, Ri, 1.5, 1.2, .45, 0, 0, 0.1, 0.1, 1, 0)
+  expect_equal(st0only$n_solves, 1)
+  both <- EMC2:::bou_pdf_cdf_vec(tt, Ri, 1.5, 1.2, .45, 1, 0.3, 0.1, 0.1, 1, 0,
+                                 n_sv = 5, n_sz = 3)
+  expect_equal(both$n_solves, 15)
+})
+
+test_that("the simulator agrees with the solver", {
+  skip_on_cran()
+  set.seed(4)
+  for (beta in c(0, 5)) {
+    N <- 40000
+    sim <- EMC2:::rbou_cpp(N, 1.2, 1.0, 0.5, 0, 0, 0.1, 0, 1, beta,
+                           dt = 1e-4, t_max = 30)
+    sim <- sim[is.finite(sim$rt) & !is.na(sim$R), ]
+    p_sim <- mean(sim$R == 2)
+    se <- sqrt(p_sim * (1 - p_sim) / nrow(sim))
+    tg <- seq(0.1005, 6, by = 0.005)
+    Fg <- EMC2:::bou_pdf_cdf_vec(tg, rep(2L, length(tg)), 1.2, 1.0, 0.5,
+                                 0, 0, 0.1, 0, 1, beta,
+                                 nx = 384, dt_target = 1e-3)$cdf
+    expect_lt(abs(p_sim - max(Fg)), 4 * se)
+    qsim <- unname(quantile(sim$rt[sim$R == 2], c(.1, .5, .9)))
+    qsol <- suppressWarnings(approx(Fg / max(Fg), tg, xout = c(.1, .5, .9))$y)
+    expect_lt(max(abs(qsim - qsol)), 0.02)
+  }
+})
