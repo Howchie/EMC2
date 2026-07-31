@@ -25,6 +25,10 @@ fpe_gompertz_fht_pdf_cdf_vec <- function(t, alpha, beta, z0, k0, kinf, tau = 1.0
     .Call(`_EMC2_fpe_gompertz_fht_pdf_cdf_vec`, t, alpha, beta, z0, k0, kinf, tau, pow, nx, nt, start_floor, grade, tgrade)
 }
 
+fpe_bou_fht_pdf_cdf_vec <- function(t, v, beta, a, Z, sigma, SZ = 0.0, anchor = NA_real_, nx = 256L, nt = 512L, grade = 8.0, tgrade = 1.0) {
+    .Call(`_EMC2_fpe_bou_fht_pdf_cdf_vec`, t, v, beta, a, Z, sigma, SZ, anchor, nx, nt, grade, tgrade)
+}
+
 pbvn_tsay <- function(h, k, rho) {
     .Call(`_EMC2_pbvn_tsay`, h, k, rho)
 }
@@ -628,3 +632,4 @@ pigt <- function(t, k = 1, l = 1, a = .1, threshold = 1e-10) {
 digt <- function(t, k = 1., l = 1., a = .1, threshold = 1e-10) {
     .Call(`_EMC2_digt`, t, k, l, a, threshold)
 }
+

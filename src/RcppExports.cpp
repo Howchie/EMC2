@@ -135,6 +135,28 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// fpe_bou_fht_pdf_cdf_vec
+Rcpp::List fpe_bou_fht_pdf_cdf_vec(NumericVector t, double v, double beta, double a, double Z, double sigma, double SZ, double anchor, int nx, int nt, double grade, double tgrade);
+RcppExport SEXP _EMC2_fpe_bou_fht_pdf_cdf_vec(SEXP tSEXP, SEXP vSEXP, SEXP betaSEXP, SEXP aSEXP, SEXP ZSEXP, SEXP sigmaSEXP, SEXP SZSEXP, SEXP anchorSEXP, SEXP nxSEXP, SEXP ntSEXP, SEXP gradeSEXP, SEXP tgradeSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type t(tSEXP);
+    Rcpp::traits::input_parameter< double >::type v(vSEXP);
+    Rcpp::traits::input_parameter< double >::type beta(betaSEXP);
+    Rcpp::traits::input_parameter< double >::type a(aSEXP);
+    Rcpp::traits::input_parameter< double >::type Z(ZSEXP);
+    Rcpp::traits::input_parameter< double >::type sigma(sigmaSEXP);
+    Rcpp::traits::input_parameter< double >::type SZ(SZSEXP);
+    Rcpp::traits::input_parameter< double >::type anchor(anchorSEXP);
+    Rcpp::traits::input_parameter< int >::type nx(nxSEXP);
+    Rcpp::traits::input_parameter< int >::type nt(ntSEXP);
+    Rcpp::traits::input_parameter< double >::type grade(gradeSEXP);
+    Rcpp::traits::input_parameter< double >::type tgrade(tgradeSEXP);
+    rcpp_result_gen = Rcpp::wrap(fpe_bou_fht_pdf_cdf_vec(t, v, beta, a, Z, sigma, SZ, anchor, nx, nt, grade, tgrade));
+    return rcpp_result_gen;
+END_RCPP
+}
 // pbvn_tsay
 double pbvn_tsay(double h, double k, double rho);
 RcppExport SEXP _EMC2_pbvn_tsay(SEXP hSEXP, SEXP kSEXP, SEXP rhoSEXP) {
@@ -2805,6 +2827,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_fpe_ou_fht_pdf_cdf_vec", (DL_FUNC) &_EMC2_fpe_ou_fht_pdf_cdf_vec, 13},
     {"_EMC2_fpe_gbm_fht_pdf_cdf_vec", (DL_FUNC) &_EMC2_fpe_gbm_fht_pdf_cdf_vec, 13},
     {"_EMC2_fpe_gompertz_fht_pdf_cdf_vec", (DL_FUNC) &_EMC2_fpe_gompertz_fht_pdf_cdf_vec, 13},
+    {"_EMC2_fpe_bou_fht_pdf_cdf_vec", (DL_FUNC) &_EMC2_fpe_bou_fht_pdf_cdf_vec, 12},
     {"_EMC2_pbvn_tsay", (DL_FUNC) &_EMC2_pbvn_tsay, 3},
     {"_EMC2_pbvn_tvpack", (DL_FUNC) &_EMC2_pbvn_tvpack, 3},
     {"_EMC2_pbvn_drezner", (DL_FUNC) &_EMC2_pbvn_drezner, 3},

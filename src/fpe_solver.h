@@ -125,6 +125,24 @@ struct FPE_Tri {
 // spends its cells in proportion to length rather than to where the solution
 // actually varies.
 //
+// A model with TWO absorbing boundaries (see Model::lower_absorbing) needs the
+// mirror image of that argument at BOTH ends, so it asks for the symmetric map
+//
+//   xi(eta) = 1/2 * ( 1 + tanh(c (2 eta - 1)) / tanh(c) )
+//
+// which clusters equally at xi = 0 and xi = 1.  Here `grade` is the ratio of the
+// widest (central) cell to a boundary cell, so c = acosh(sqrt(grade)): the map's
+// stretch factor is c/tanh(c) at the centre and c/(sinh(c) cosh(c)) at either
+// end, whose ratio is cosh^2(c).  That keeps one `grade` argument meaning the
+// same thing -- widest cell over boundary cell -- for both maps.
+//
+// Grading the wrong way round is not a cosmetic loss.  With the one-sided map
+// the cells at xi = 0 are `grade` times the widest in the domain, so cL_A/cL_B
+// below would fit their quadratic through the two COARSEST cells and the lower
+// boundary's density would be markedly less accurate than the upper's.  In a
+// two-choice model that is the error response, which is where most of the
+// model's discriminating power lives.
+//
 // Finite volume takes a non-uniform mesh natively -- the balance
 // dq_i/dt = -(F_{i+1} - F_i)/dx_i is exact for any cell widths -- but every
 // stencil coefficient becomes cell-dependent, so all the geometry that used to
@@ -142,9 +160,12 @@ struct FPE_Mesh {
   std::vector<double> pu;    // xc[j] - xc[j-1]        )  P_j = (a0*pu + a1*pv)/D
   std::vector<double> pv;    // xf[j] * (that spacing) )
   double cA = 0.0, cB = 0.0; // absorbing face: F_M = D*(cA*q[M-1] - cB*q[M-2])
+  // Lower absorbing face, used only when Model::lower_absorbing:
+  //   J_0 = D*(cL_A*q[0] - cL_B*q[1])   (magnitude of the OUTWARD flux)
+  double cL_A = 0.0, cL_B = 0.0;
   double h = 0.0;            // uniform mesh only
 
-  void build(int M_, double grade) {
+  void build(int M_, double grade, bool symmetric = false) {
     M = std::max(M_, 2);
     h = 1.0 / M;
     uniform = !(grade > 1.0 + 1e-9);
@@ -154,6 +175,14 @@ struct FPE_Mesh {
 
     if (uniform) {
       for (int j = 0; j <= M; ++j) xf[j] = j * h;
+    } else if (symmetric) {
+      // cosh^2(c) = grade, so the central cell is `grade` times a boundary cell
+      // -- the same meaning `grade` carries for the one-sided map below.
+      const double c  = std::acosh(std::sqrt(grade));
+      const double th = std::tanh(c);
+      for (int j = 0; j <= M; ++j) {
+        xf[j] = 0.5 * (1.0 + std::tanh(c * (2.0 * j * h - 1.0)) / th);
+      }
     } else {
       const double c  = std::acosh(grade);
       const double sh = std::sinh(c);
@@ -184,6 +213,17 @@ struct FPE_Mesh {
     const double s2 = 1.0 - xc[M - 2];
     cA = s2 / (s1 * (s2 - s1));
     cB = s1 / (s2 * (s2 - s1));
+
+    // Absorbing face at xi = 0, when the model has one.  Identical derivation
+    // with s = xi measured from the lower barrier instead of 1 - xi from the
+    // upper, so on a symmetric mesh cL_A == cA and cL_B == cB exactly and the
+    // two response densities are resolved alike.  Always computed: it costs two
+    // divisions once per solve, and leaving it conditional would make the mesh
+    // depend on the model.
+    const double r1 = xc[0];
+    const double r2 = xc[1];
+    cL_A = r2 / (r1 * (r2 - r1));
+    cL_B = r1 / (r2 * (r2 - r1));
   }
 
   // Width of the cell containing xi -- used to size the analytic seed.
@@ -276,9 +316,19 @@ inline void build_op(const Model& m, double t, const FPE_Mesh& g, FPE_Op& op) {
     if (i > 0) {                      // inflow face F_i is an interior face
       a_sub += gf_prev * wm_prev * rdx;
       a_dia -= gf_prev * wp_prev * rdx;
+    } else if constexpr (Model::lower_absorbing) {
+      // Absorbing face at xi = 0, the mirror of the xi = 1 row below.  q(0) = 0,
+      // so advection carries nothing here either and the flux is purely
+      // diffusive.  Signs: the OUTWARD (leftward) flux is
+      // J_0 = D*(cL_A*q[0] - cL_B*q[1]) > 0, so the signed rightward face flux
+      // is F_0 = -J_0, and dq_0/dt = -(F_1 - F_0)/dx_0 contributes +F_0/dx_0.
+      a_dia -= D * g.cL_A * rdx;
+      a_sup += D * g.cL_B * rdx;
     }
-    // else: F_0 = 0, the no-flux far-field face.  This is what makes
-    //       CDF = 1 - sum(dx*q) exact.
+    // else: F_0 = 0, the no-flux far-field face.  For a one-boundary model that
+    //       is what makes CDF = 1 - sum(dx*q) exact; with two absorbing faces
+    //       1 - sum(dx*q) is the TOTAL absorbed across both, and fpe_solve
+    //       splits it (see there).
 
     if (i < M - 1) {                  // outflow face F_{i+1} is an interior face
       const int j = i + 1;
@@ -321,6 +371,14 @@ inline double flux_out(const FPE_Op& op, const std::vector<double>& q,
   return op.D * (g.cA * q[M - 1] - g.cB * q[M - 2]);
 }
 
+// The same at the lower absorbing face, as a POSITIVE outward flux, so callers
+// treat the two densities alike.
+inline double flux_out_lower(const FPE_Op& op, const std::vector<double>& q,
+                             const FPE_Mesh& g) {
+  if (g.M < 2) return 0.0;
+  return op.D * (g.cL_A * q[0] - g.cL_B * q[1]);
+}
+
 // y = (I + c*L) q
 inline void apply_shifted(const FPE_Op& op, double c,
                           const std::vector<double>& q, std::vector<double>& y) {
@@ -342,6 +400,17 @@ struct FPE_Result {
   // S = 7.5e-14), whereas 1 - cdf loses every significant digit once cdf -> 1.
   // A race likelihood multiplies loser survivors and lives or dies on that.
   std::vector<double> surv;
+
+  // Two-boundary models only (Model::lower_absorbing); left empty otherwise, so
+  // a race model pays two empty vectors and nothing else.
+  //
+  // Convention matches the package's DDM (dDDM/pDDM, R/model_DDM.R:70,83): both
+  // are DEFECTIVE -- pdf_lower/pdf and cdf_lower/cdf are the per-response
+  // density and cdf, and cdf_lower + cdf sum to the total absorbed probability,
+  // reaching 1 between them rather than each on its own.  `pdf`/`cdf` are the
+  // UPPER boundary, which is R's second factor level, as for DDM.
+  std::vector<double> pdf_lower, cdf_lower;
+
   double flux_mass_mismatch = 0.0;   // instability detector, NOT an error bound
 };
 
@@ -431,7 +500,7 @@ inline FPE_TimeSchedule fpe_time_schedule(double T, int nt, double tgrade) {
 template <class Model>
 inline FPE_Result fpe_solve(const Model& m, const std::vector<double>& q0,
                             double t0, double t_max, const FPE_Mesh& g, int nt,
-                            double tgrade = 1.0) {
+                            double tgrade = 1.0, double cdf0_lower = 0.0) {
   FPE_Result res;
   const int M = g.M;
   const FPE_TimeSchedule sched = fpe_time_schedule(t_max - t0, nt, tgrade);
@@ -468,6 +537,10 @@ inline FPE_Result fpe_solve(const Model& m, const std::vector<double>& q0,
   res.pdf.reserve(n_lev);
   res.cdf.reserve(n_lev);
   res.surv.reserve(n_lev);
+  if constexpr (Model::lower_absorbing) {
+    res.pdf_lower.reserve(n_lev);
+    res.cdf_lower.reserve(n_lev);
+  }
 
   double t = t0;
   build_op(m, t, g, *op_old);
@@ -492,10 +565,27 @@ inline FPE_Result fpe_solve(const Model& m, const std::vector<double>& q0,
   double g_prev = flux_out(*op_old, q, g);
   if (!(g_prev > 0.0)) g_prev = 0.0;
 
+  // Two-boundary bookkeeping.  cdf0 above is now the TOTAL absorbed before t0,
+  // which the seed splits between the two barriers (fpe_seed's image formula
+  // knows both); cdf0_lower is that split.  The upper share is the remainder, so
+  // the two defective cdfs sum to the exact mass identity by construction and
+  // only the SPLIT carries quadrature error.
+  double cdf_lo_prev = std::min(cdf0, std::max(0.0, cdf0_lower));
+  double cdf_lo_flux = cdf_lo_prev;
+  double gl_prev = 0.0;
+  if constexpr (Model::lower_absorbing) {
+    gl_prev = flux_out_lower(*op_old, q, g);
+    if (!(gl_prev > 0.0)) gl_prev = 0.0;
+  }
+
   res.t.push_back(t);
   res.pdf.push_back(g_prev);
-  res.cdf.push_back(cdf0);
+  res.cdf.push_back(Model::lower_absorbing ? (cdf0 - cdf_lo_prev) : cdf0);
   res.surv.push_back(surv_prev);
+  if constexpr (Model::lower_absorbing) {
+    res.pdf_lower.push_back(gl_prev);
+    res.cdf_lower.push_back(cdf_lo_prev);
+  }
   res.flux_mass_mismatch = 0.0;
 
   // step_kind: true = backward Euler, false = Crank-Nicolson
@@ -535,12 +625,42 @@ inline FPE_Result fpe_solve(const Model& m, const std::vector<double>& q0,
     cdf_flux += 0.5 * step * (g_prev + gt);
     g_prev = gt;
 
+    double cdf_up = cdf_mass;
+    if constexpr (Model::lower_absorbing) {
+      double gl = flux_out_lower(*op_old, q, g);
+      if (!(gl > 0.0)) gl = 0.0;
+      cdf_lo_flux += 0.5 * step * (gl_prev + gl);
+      gl_prev = gl;
+
+      // Split the exact absorbed mass.  cdf_mass is already clamped and
+      // non-decreasing; take the lower share from the flux trapezoid, hold it
+      // monotone and inside [cdf_lo_prev, cdf_mass], and give the upper boundary
+      // the remainder.  Because cdf_mass never decreases and previously equalled
+      // cdf_lo_prev + cdf_up_prev, the remainder is automatically >= cdf_up_prev,
+      // so BOTH defective cdfs are monotone and they sum to cdf_mass exactly --
+      // no third clamp that could break the identity.
+      double cdf_lo = cdf_lo_flux;
+      if (cdf_lo < cdf_lo_prev) cdf_lo = cdf_lo_prev;
+      if (cdf_lo > cdf_mass)    cdf_lo = cdf_mass;
+      cdf_up = cdf_mass - cdf_lo;
+      cdf_lo_prev = cdf_lo;
+
+      res.pdf_lower.push_back(gl);
+      res.cdf_lower.push_back(cdf_lo);
+    }
+
     res.t.push_back(t);
     res.pdf.push_back(gt);
-    res.cdf.push_back(cdf_mass);
+    res.cdf.push_back(cdf_up);
     res.surv.push_back(s_keep);
+    // The detector compares the exact mass route against the flux route.  With
+    // two barriers the absorbed mass is the SUM of the two flux integrals; using
+    // the upper alone would report a mismatch the size of the lower response's
+    // probability on every single solve.
+    const double cdf_flux_tot =
+      Model::lower_absorbing ? (cdf_flux + cdf_lo_flux) : cdf_flux;
     res.flux_mass_mismatch =
-      std::max(res.flux_mass_mismatch, std::abs(cdf_raw - cdf_flux));
+      std::max(res.flux_mass_mismatch, std::abs(cdf_raw - cdf_flux_tot));
   };
 
   int done = 0;

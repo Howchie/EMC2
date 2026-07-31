@@ -1,0 +1,97 @@
+# Bounded OU (Smith & Ratcliff 2004): the DDM with leak, solved by the
+# Fokker-Planck solver with an absorbing boundary at BOTH ends of the domain.
+#
+# The load-bearing test is the first one: at beta = 0 the model IS the Wiener
+# diffusion, so the package's own Navarro-Fuss DDM is an exact oracle -- and the
+# bounded model reaches it down a completely different code path (PDE march vs
+# series expansion), so agreement is real evidence rather than a tautology.
+
+fpe_bou <- EMC2:::fpe_bou_fht_pdf_cdf_vec
+
+ddm_oracle <- function(rt, resp, v, a, Z, s = 1) {
+  R <- factor(rep(resp, length(rt)), levels = c("lower", "upper"))
+  pars <- cbind(a = rep(a, length(rt)), v = v, t0 = 0, s = s,
+                Z = Z, SZ = 0, sv = 0, st0 = 0)
+  list(d = EMC2:::dDDM(rt, R, pars, precision = 1e-12),
+       p = EMC2:::pDDM(rt, R, pars, precision = 1e-12))
+}
+
+test_that("beta = 0 reproduces the Wiener DDM on both boundaries", {
+  tt <- seq(0.05, 2.5, by = 0.02)
+  grid <- expand.grid(v = c(-1.5, 0, 1, 2.5), Z = c(0.3, 0.5, 0.7), a = c(0.8, 1.5))
+
+  for (i in seq_len(nrow(grid))) {
+    g <- grid[i, ]
+    r <- fpe_bou(tt, v = g$v, beta = 0, a = g$a, Z = g$Z, sigma = 1,
+                 nx = 512, nt = 6000, grade = 1, tgrade = 32)
+    up <- ddm_oracle(tt, "upper", g$v, g$a, g$Z)
+    lo <- ddm_oracle(tt, "lower", g$v, g$a, g$Z)
+
+    lab <- sprintf("v=%g Z=%g a=%g", g$v, g$Z, g$a)
+    # Defective cdfs are the tighter check: they are integrals, so they do not
+    # inherit the density's sensitivity on the rising flank.
+    expect_lt(max(abs(r$cdf_upper - up$p)), 2e-3, label = paste("cdf upper", lab))
+    expect_lt(max(abs(r$cdf_lower - lo$p)), 2e-3, label = paste("cdf lower", lab))
+
+    # Densities, judged where a likelihood actually lives (central 99.5% of each
+    # response's mass).  Outside that window the density is < 1e-7 of its peak
+    # and its relative error says nothing about the fit.
+    for (side in c("upper", "lower")) {
+      ref <- if (side == "upper") up$d else lo$d
+      got <- if (side == "upper") r$pdf_upper else r$pdf_lower
+      cm <- cumsum(ref); if (max(cm) <= 0) next
+      cm <- cm / max(cm)
+      sel <- cm > 0.0025 & cm < 0.9975 & ref > 1e-6
+      if (sum(sel) < 5) next
+      expect_lt(max(abs(log(got[sel]) - log(ref[sel]))), 2e-2,
+                label = paste("log pdf", side, lab))
+    }
+  }
+})
+
+test_that("the two boundaries are resolved alike (symmetry)", {
+  # v = 0 and Z = 0.5 makes the problem exactly symmetric, so any difference
+  # between the two response densities is pure discretisation asymmetry.  This
+  # is what catches a mesh graded toward one end only.
+  tt <- seq(0.05, 2.5, by = 0.02)
+  for (b in c(0, 2, 4, 8)) {
+    for (gr in c(1, 8)) {
+      r <- fpe_bou(tt, v = 0, beta = b, a = 1, Z = 0.5, sigma = 1,
+                   nx = 384, nt = 3000, grade = gr, tgrade = 32)
+      expect_lt(max(abs(r$pdf_upper - r$pdf_lower)), 1e-10,
+                label = sprintf("pdf symmetry beta=%g grade=%g", b, gr))
+      expect_lt(max(abs(r$cdf_upper - r$cdf_lower)), 1e-10,
+                label = sprintf("cdf symmetry beta=%g grade=%g", b, gr))
+    }
+  }
+})
+
+test_that("the two defective cdfs and the survivor account for all the mass", {
+  # cdf_upper is formed as (1 - mass) - cdf_lower precisely so this identity is
+  # exact rather than approximate: only the SPLIT between the two responses
+  # carries quadrature error, never the total.
+  tt <- seq(0.05, 3.0, by = 0.02)
+  for (b in c(0, 4, 8)) {
+    r <- fpe_bou(tt, v = 1.2, beta = b, a = 1.2, Z = 0.4, sigma = 1,
+                 nx = 384, nt = 3000, grade = 1, tgrade = 32)
+    expect_lt(max(abs(r$cdf_upper + r$cdf_lower + r$surv - 1)), 1e-12)
+    expect_lt(r$mismatch, 1e-6)
+    expect_false(any(diff(r$cdf_upper) < 0))
+    expect_false(any(diff(r$cdf_lower) < 0))
+    expect_true(all(r$pdf_upper >= 0) && all(r$pdf_lower >= 0))
+  }
+})
+
+test_that("leak changes the model", {
+  # Guards against a silent no-op: if beta were dropped somewhere in the affine
+  # drift the tests above would all still pass.
+  tt <- seq(0.05, 3.0, by = 0.02)
+  r0 <- fpe_bou(tt, v = 1.2, beta = 0, a = 1.2, Z = 0.4, sigma = 1,
+                nx = 384, nt = 3000, grade = 1, tgrade = 32)
+  r8 <- fpe_bou(tt, v = 1.2, beta = 8, a = 1.2, Z = 0.4, sigma = 1,
+                nx = 384, nt = 3000, grade = 1, tgrade = 32)
+  # Decay toward a start point below the midpoint pulls mass away from the
+  # upper barrier, so the upper response gets less likely.
+  expect_lt(tail(r8$cdf_upper, 1), tail(r0$cdf_upper, 1) - 0.05)
+  expect_gt(max(abs(r0$pdf_upper - r8$pdf_upper)), 0.1)
+})

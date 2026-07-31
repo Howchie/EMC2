@@ -163,3 +163,71 @@ Rcpp::List fpe_gompertz_fht_pdf_cdf_vec(NumericVector t, double alpha, double be
   if (m.bnd.a(t_max) <= m.xlo) stop("fpe_gompertz_fht_pdf_cdf_vec: boundary collapses below the domain.");
   return fpe_package(fpe::fpe_run(m, z_lo, z_hi, t_max, nx, nt, grade, tgrade), t);
 }
+
+// ---------------------------------------------------------------------------
+// Bounded OU (Smith & Ratcliff 2004): absorbing at BOTH 0 and a, start at
+// z = Z*a, decay `beta` toward `anchor` (default the start point).  beta = 0
+// reduces to the Wiener diffusion, which is the oracle this is validated
+// against.
+//
+// Returns the DEFECTIVE per-response density and cdf under the same convention
+// as dDDM/pDDM (R/model_DDM.R): `upper`/`lower` each integrate to that
+// response's probability, and the two sum to 1.
+// ---------------------------------------------------------------------------
+// [[Rcpp::export]]
+Rcpp::List fpe_bou_fht_pdf_cdf_vec(NumericVector t, double v, double beta,
+                                   double a, double Z, double sigma,
+                                   double SZ = 0.0,
+                                   double anchor = NA_REAL,
+                                   int nx = 256, int nt = 512,
+                                   double grade = 8.0,
+                                   double tgrade = 1.0) {
+  if (sigma <= 0.0) stop("fpe_bou_fht_pdf_cdf_vec: sigma must be positive.");
+  if (a <= 0.0) stop("fpe_bou_fht_pdf_cdf_vec: a must be positive.");
+  if (Z <= 0.0 || Z >= 1.0) stop("fpe_bou_fht_pdf_cdf_vec: Z must be in (0,1).");
+  const double t_max = fpe_t_max(t);
+
+  const double z = Z * a;
+  // Same mapping as the DDM's Ttransform (R/model_DDM.R:155): SZ is a
+  // proportion, widened to the largest symmetric range that stays inside [0,a].
+  const double sz = 2.0 * SZ * std::min(z, a - z);
+
+  fpe::FPE_ModelBoundedOU m;
+  m.v = v;
+  m.beta = beta;
+  m.anchor = R_finite(anchor) ? anchor : z;
+  m.sigma = sigma;
+  m.xlo = 0.0;
+  m.bnd.set_kind(fpe::FPE_BND_FIXED, a, a, 0.0, 0.0, false);
+
+  const double z_lo = z - 0.5 * sz;
+  const double z_hi = z + 0.5 * sz;
+
+  fpe::FPE_Mesh g;
+  g.build(nx, grade, fpe::FPE_ModelBoundedOU::symmetric_mesh);
+  std::vector<double> q0;
+  double absorbed_lower = 0.0;
+  const double t0 = fpe::fpe_seed(m, z_lo, z_hi, g, t_max, q0, &absorbed_lower);
+  const fpe::FPE_Result r =
+    fpe::fpe_solve(m, q0, t0, t_max, g, std::max(1, nt), tgrade, absorbed_lower);
+
+  const int n = t.size();
+  NumericVector pdf_up(n), cdf_up(n), pdf_lo(n), cdf_lo(n), surv(n);
+  for (int i = 0; i < n; ++i) {
+    const double ti = t[i];
+    if (!R_finite(ti) || ti <= 0.0) { surv[i] = 1.0; continue; }
+    pdf_up[i] = fpe::grid_lookup(r.t, r.pdf, ti, true);
+    cdf_up[i] = fpe::grid_lookup(r.t, r.cdf, ti);
+    pdf_lo[i] = fpe::grid_lookup(r.t, r.pdf_lower, ti, true);
+    cdf_lo[i] = fpe::grid_lookup(r.t, r.cdf_lower, ti);
+    surv[i]   = fpe::grid_lookup(r.t, r.surv, ti);
+  }
+  return Rcpp::List::create(
+    _["pdf_upper"] = pdf_up, _["cdf_upper"] = cdf_up,
+    _["pdf_lower"] = pdf_lo, _["cdf_lower"] = cdf_lo,
+    _["surv"] = surv,
+    _["mismatch"] = r.flux_mass_mismatch,
+    _["t_grid"] = Rcpp::wrap(r.t),
+    _["pdf_upper_grid"] = Rcpp::wrap(r.pdf),
+    _["pdf_lower_grid"] = Rcpp::wrap(r.pdf_lower));
+}

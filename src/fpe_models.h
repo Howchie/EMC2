@@ -192,6 +192,10 @@ struct FPE_Boundary {
 // Constant-drift model: BM directly, GBM after Y = log X.
 // ---------------------------------------------------------------------------
 struct FPE_ModelBM {
+  // One absorbing boundary (xi = 1); xi = 0 is the no-flux far field.
+  static constexpr bool lower_absorbing = false;
+  static constexpr bool symmetric_mesh  = false;
+
   double A = 0.0;          // mu, or mu - sigma^2/2 in log state
   double sigma = 1.0;
   double xlo = -1.0;
@@ -222,6 +226,9 @@ struct FPE_ModelBM {
 // model rather than a dispatch branch to some other kernel.  That is what keeps
 // the k = 0 comparison against the analytic Wald an honest cross-validation.
 struct FPE_ModelOU {
+  static constexpr bool lower_absorbing = false;
+  static constexpr bool symmetric_mesh  = false;
+
   double v = 0.0;              // input rate; theta = v / lambda where defined
   double lambda = 1.0;         // leak
   double sigma = 1.0;
@@ -247,6 +254,54 @@ struct FPE_ModelOU {
   void atil_affine(double /*t*/, double L, double Lp, double& a0, double& a1) const {
     a0 = (v - lambda * xlo) / L;
     a1 = (-lambda * L - Lp) / L;
+  }
+};
+
+// ---------------------------------------------------------------------------
+// Bounded OU -- the Smith & Ratcliff (2004) two-choice OU diffusion.
+//
+//   dX = ( v + beta*(anchor - X) ) dt + sigma dW,   X(0) = z,
+//   absorbing at BOTH 0 and a; the barrier hit determines the response.
+//
+// This is the DDM with leak.  `beta` is the decay rate; at beta = 0 the drift
+// is the constant v and the coefficients below become FPE_ModelBM's exactly, so
+// the model reduces to the Wiener diffusion and can be checked against the
+// package's own Navarro-Fuss DDM as an oracle -- while still travelling this
+// solver's code path rather than that one's.
+//
+// `anchor` is the point the decay pulls toward.  Smith & Ratcliff take it to be
+// the STARTING POINT z (their Appendix p. 42, and footnote 2 argues for it over
+// the alternative), which is the default here.  Note that zero is NOT an
+// available alternative in this parameterisation -- it is one of the response
+// boundaries -- so the only other sensible anchor is the midpoint a/2.  Keeping
+// it a separate field rather than hard-coding z costs one addition in
+// atil_affine and leaves that choice open; it also matters for cost, because an
+// anchor that does not depend on z leaves the operator independent of the start
+// point and collapses across-trial start-point variability into a single solve.
+// ---------------------------------------------------------------------------
+struct FPE_ModelBoundedOU {
+  static constexpr bool lower_absorbing = true;
+  static constexpr bool symmetric_mesh  = true;
+
+  double v = 0.0;              // drift rate (xi in Smith & Ratcliff)
+  double beta = 0.0;           // decay / leak; 0 => Wiener diffusion
+  double anchor = 0.0;         // point the decay pulls toward (default: z)
+  double sigma = 1.0;          // within-trial sd (s)
+  double xlo = 0.0;            // lower absorbing barrier, conventionally 0
+  FPE_Boundary bnd;            // upper absorbing barrier a
+
+  double x_lo() const { return xlo; }
+  double B() const { return sigma; }
+  double drift(double x, double /*t*/) const { return v + beta * (anchor - x); }
+  double length(double t) const { return bnd.a(t) - xlo; }
+  double length_prime(double t) const { return bnd.a_prime(t); }
+  bool static_op() const { return bnd.fixed; }
+
+  // A(x) = (v + beta*anchor) - beta*x, so with x = xlo + xi*L,
+  //   Atil(xi,t) = ( v + beta*(anchor - xlo) - xi*(beta*L + L') ) / L
+  void atil_affine(double /*t*/, double L, double Lp, double& a0, double& a1) const {
+    a0 = (v + beta * (anchor - xlo)) / L;
+    a1 = (-beta * L - Lp) / L;
   }
 };
 
@@ -320,9 +375,11 @@ inline double fpe_norm_mass(double a, double b, double mean, double sd) {
 // ---------------------------------------------------------------------------
 template <class Model>
 inline double fpe_seed(const Model& m, double z_lo, double z_hi,
-                       const FPE_Mesh& g, double t_max, std::vector<double>& q) {
+                       const FPE_Mesh& g, double t_max, std::vector<double>& q,
+                       double* absorbed_lower = nullptr) {
   const int M = g.M;
   q.assign(M, 0.0);
+  if (absorbed_lower != nullptr) *absorbed_lower = 0.0;
 
   if (z_hi - z_lo > FPE_EPS) {
     // ---- uniform start ----
@@ -375,6 +432,13 @@ inline double fpe_seed(const Model& m, double z_lo, double z_hi,
   double s_target = FPE_SEED_CELLS * std::min(g.local_dx(xi_z), g.h) * L0;
   const double gap = m.bnd.a(0.0) - z;
   if (gap > 0.0) s_target = std::min(s_target, 0.25 * gap);
+  // With a second absorbing barrier the seed has to stay clear of BOTH, or the
+  // frozen-coefficient Gaussian leaks mass through the lower one and the image
+  // series below is truncated where it is not yet small.
+  if constexpr (Model::lower_absorbing) {
+    const double gap_lo = z - m.x_lo();
+    if (gap_lo > 0.0) s_target = std::min(s_target, 0.25 * gap_lo);
+  }
   double t_seed = (s_target / Bc) * (s_target / Bc);
   t_seed = std::min(t_seed, 0.25 * t_max);
   if (!(t_seed > 0.0)) t_seed = 1e-6;
@@ -387,14 +451,54 @@ inline double fpe_seed(const Model& m, double z_lo, double z_hi,
   double img_w = std::exp(2.0 * Ac * (a - z) / (Bc * Bc));
   if (!std::isfinite(img_w)) img_w = 0.0;
 
+  // Second image, reflected about the LOWER barrier.  Same construction as the
+  // upper one -- reflect the start point about the barrier, then drift -- with
+  // the sign of the distance reversed in the weight.  The exact two-barrier
+  // solution is an infinite image series; both barriers are at least
+  // 4*sd away by the t_seed cap above, so every image past this pair sits
+  // >= 8 sd from the domain and contributes < 1e-14.
+  double lo_mean = 0.0, lo_w = 0.0;
+  if constexpr (Model::lower_absorbing) {
+    const double xlo = m.x_lo();
+    lo_mean = 2.0 * xlo - z + Ac * t_seed;
+    lo_w = std::exp(2.0 * Ac * (xlo - z) / (Bc * Bc));
+    if (!std::isfinite(lo_w)) lo_w = 0.0;
+  }
+
   // q_i = (cell mass) / dx_i, since q = L*p and the physical cell width is dx*L.
   for (int i = 0; i < M; ++i) {
     const double xa = m.x_lo() + g.xf[i] * L;
     const double xb = m.x_lo() + g.xf[i + 1] * L;
     double mass = fpe_norm_mass(xa, xb, mean, sd)
                   - img_w * fpe_norm_mass(xa, xb, img_mean, sd);
+    if constexpr (Model::lower_absorbing) {
+      mass -= lo_w * fpe_norm_mass(xa, xb, lo_mean, sd);
+    }
     if (!(mass > 0.0)) mass = 0.0;
     q[i] = mass * g.rdx[i];
+  }
+
+  // The mass absorbed at the LOWER barrier before t_seed.  fpe_solve knows the
+  // total absorbed exactly (1 - sum dx*q) but not how it splits, so hand it the
+  // lower share and let the upper take the remainder -- the same division of
+  // labour the time march uses.  This is not negligible: the t_seed cap leaves
+  // the barrier 4 sd away, so the single-barrier hitting probability is ~3e-5,
+  // which would otherwise be silently attributed to the wrong response.
+  if constexpr (Model::lower_absorbing) {
+    if (absorbed_lower != nullptr) {
+      const double d = z - m.x_lo();
+      if (d > 0.0 && sd > 0.0) {
+        const double u = (-Ac * t_seed - d) / (sd * M_SQRT2);
+        const double w = (-d + Ac * t_seed) / (sd * M_SQRT2);
+        double wt = std::exp(-2.0 * Ac * d / (Bc * Bc));
+        if (!std::isfinite(wt)) wt = 0.0;
+        double p = 0.5 * std::erfc(-u) + wt * 0.5 * std::erfc(-w);
+        if (!(p > 0.0)) p = 0.0;
+        *absorbed_lower = std::min(1.0, p);
+      } else {
+        *absorbed_lower = 0.0;
+      }
+    }
   }
   return t_seed;
 }
@@ -405,6 +509,23 @@ inline double fpe_seed(const Model& m, double z_lo, double z_hi,
 // Default mesh grading: ratio of far-field to barrier cell width.  See the
 // sweep in the implementation log; 1.0 recovers the uniform mesh.
 constexpr double FPE_GRADE = 8.0;
+
+// ...but NOT for the two-boundary model, which wants a uniform mesh.  Grading
+// pays off when most of the domain is empty far field; the bounded model has no
+// far field at all -- the domain is exactly [0,a] and the density is O(1) across
+// it -- so cells moved toward the barriers are taken from where the solution
+// actually varies.  Measured (beta = 0 against the Navarro-Fuss DDM, nx = 384,
+// nt = 3000, worst |dlog f| over the central mass of the response):
+//
+//   grade        1        4        8
+//   sigma=1.00  1.22e-4  1.24e-4  1.91e-4
+//   sigma=0.50  5.52e-3  8.18e-3  1.08e-2
+//   sigma=0.25  1.69e-1  2.36e-1  3.08e-1
+//
+// Uniform wins at every setting and the gap widens as the domain gets wide in
+// units of sigma.  The symmetric map is still worth having for a caller that
+// asks for grading, but it is not the default here.
+constexpr double FPE_GRADE_BOUNDED = 1.0;
 
 // Default time grading.  1.0 (uniform) is kept for the validation entry points
 // in fpe_diffusion.cpp, whose value lies in being directly comparable to the
@@ -418,10 +539,11 @@ inline FPE_Result fpe_run(const Model& m, double z_lo, double z_hi,
                           double t_max, int M, int nt,
                           double grade = FPE_GRADE, double tgrade = 1.0) {
   FPE_Mesh g;
-  g.build(M, grade);
+  g.build(M, grade, Model::symmetric_mesh);
   std::vector<double> q0;
-  const double t0 = fpe_seed(m, z_lo, z_hi, g, t_max, q0);
-  return fpe_solve(m, q0, t0, t_max, g, std::max(1, nt), tgrade);
+  double absorbed_lower = 0.0;
+  const double t0 = fpe_seed(m, z_lo, z_hi, g, t_max, q0, &absorbed_lower);
+  return fpe_solve(m, q0, t0, t_max, g, std::max(1, nt), tgrade, absorbed_lower);
 }
 
 } // namespace fpe
