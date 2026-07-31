@@ -572,6 +572,7 @@ inline FPE_Result fpe_solve(const Model& m, const std::vector<double>& q0,
   // only the SPLIT carries quadrature error.
   double cdf_lo_prev = std::min(cdf0, std::max(0.0, cdf0_lower));
   double cdf_lo_flux = cdf_lo_prev;
+  double cdf_up_prev = cdf0 - cdf_lo_prev;
   double gl_prev = 0.0;
   if constexpr (Model::lower_absorbing) {
     gl_prev = flux_out_lower(*op_old, q, g);
@@ -634,16 +635,26 @@ inline FPE_Result fpe_solve(const Model& m, const std::vector<double>& q0,
 
       // Split the exact absorbed mass.  cdf_mass is already clamped and
       // non-decreasing; take the lower share from the flux trapezoid, hold it
-      // monotone and inside [cdf_lo_prev, cdf_mass], and give the upper boundary
-      // the remainder.  Because cdf_mass never decreases and previously equalled
-      // cdf_lo_prev + cdf_up_prev, the remainder is automatically >= cdf_up_prev,
-      // so BOTH defective cdfs are monotone and they sum to cdf_mass exactly --
-      // no third clamp that could break the identity.
+      // inside [cdf_lo_prev, cdf_mass - cdf_up_prev], and give the upper
+      // boundary the remainder.  Both defective cdfs are then monotone and they
+      // still sum to cdf_mass exactly -- no third clamp that could break the
+      // identity.
+      //
+      // The UPPER end of that window is what makes the upper cdf monotone, and
+      // it is not redundant: the lower flux trapezoid can outrun the mass route
+      // over a step, which pushes the remainder BELOW cdf_up_prev.  Capping at
+      // cdf_mass alone (which is all the pair needed while the boundary was
+      // fixed) does not prevent that.  It shows up on the kinked
+      // linear_additive collapse, where b'(t) jumps at t = tau.  The window is
+      // never empty: cdf_mass >= cdf_lo_prev + cdf_up_prev because cdf_mass does
+      // not decrease.
+      const double cdf_lo_hi = cdf_mass - cdf_up_prev;
       double cdf_lo = cdf_lo_flux;
+      if (cdf_lo > cdf_lo_hi)   cdf_lo = cdf_lo_hi;
       if (cdf_lo < cdf_lo_prev) cdf_lo = cdf_lo_prev;
-      if (cdf_lo > cdf_mass)    cdf_lo = cdf_mass;
       cdf_up = cdf_mass - cdf_lo;
       cdf_lo_prev = cdf_lo;
+      cdf_up_prev = cdf_up;
 
       res.pdf_lower.push_back(gl);
       res.cdf_lower.push_back(cdf_lo);

@@ -168,8 +168,14 @@ namespace ddm {
 // The DDM's columns plus the leak beta, in the same order, so a DDM design
 // converts by adding beta~1 and beta = 0 recovers the DDM exactly -- reached
 // through the Fokker-Planck solver rather than the Wiener series.
+// aInf/tau/pw exist only for boundary_collapse != "fixed" and must be gated on
+// ContextForDDMModels::bnd_kind before they are dereferenced, exactly as rou's
+// Binf/tau/pw are; pw only for the Weibull form.  aInf is the ASYMPTOTIC
+// SEPARATION, in the same units as a, and the two barriers close on the midpoint
+// symmetrically.
 namespace bou {
-  enum : int { v = 0, a, sv, t0, st0, s, Z, SZ, beta, N_REQ };
+  enum : int { v = 0, a, sv, t0, st0, s, Z, SZ, beta, N_REQ,
+               aInf = N_REQ, tau, pw };
   inline ColSpec spec() {
     static const char* n[] = {"v", "a", "sv", "t0", "st0", "s", "Z", "SZ",
                               "beta"};

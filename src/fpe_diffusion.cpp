@@ -179,6 +179,8 @@ Rcpp::List fpe_bou_fht_pdf_cdf_vec(NumericVector t, double v, double beta,
                                    double a, double Z, double sigma,
                                    double SZ = 0.0,
                                    double anchor = NA_REAL,
+                                   int bkind = 0, double aInf = 0.0,
+                                   double tau = 0.0, double pw = 0.0,
                                    int nx = 256, int nt = 512,
                                    double grade = 8.0,
                                    double tgrade = 1.0) {
@@ -197,8 +199,7 @@ Rcpp::List fpe_bou_fht_pdf_cdf_vec(NumericVector t, double v, double beta,
   m.beta = beta;
   m.anchor = R_finite(anchor) ? anchor : z;
   m.sigma = sigma;
-  m.xlo = 0.0;
-  m.bnd.set_kind(fpe::FPE_BND_FIXED, a, a, 0.0, 0.0, false);
+  m.set_separation(a, bkind, aInf, tau, pw);
 
   const double z_lo = z - 0.5 * sz;
   const double z_hi = z + 0.5 * sz;

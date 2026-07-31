@@ -230,3 +230,183 @@ test_that("BOU reaches the C++ DDM likelihood path and beta = 0 gives the DDM", 
   l4 <- EMC2:::calc_ll_manager(P2, e_b[[1]]$data[[1]], e_b[[1]]$model)
   expect_gt(min(abs(l0 - l4)), 1)
 })
+
+# ---------------------------------------------------------------------------
+# Collapsing bounds.
+#
+# Both barriers close on the midpoint a/2, so the separation runs from a down to
+# aInf.  There is no closed form for a diffusion between two converging
+# boundaries, so the evidence here is of three independent kinds: a degenerate
+# case that must reduce EXACTLY to the fixed-bound model (which is itself
+# validated against Navarro-Fuss), agreement between two independent
+# implementations of the time-varying march, and agreement with a simulator that
+# shares none of the solver's numerics.
+# ---------------------------------------------------------------------------
+
+test_that("a collapse to the starting separation is the fixed-bound model", {
+  # Every collapse form degenerates when aInf == a, and FPE_Boundary::set_kind
+  # reports fixed = true for it, which restores the one-time factorisation.  If
+  # the moving-frame term were being added unconditionally, or the midpoint
+  # geometry disagreed with the old (0, a) one by a rounding step, this would
+  # not be bit-exact -- and it is the test that anchors the collapse code to the
+  # already-validated fixed-bound model.
+  tt <- seq(0.05, 3.0, by = 0.02)
+  r_fix <- fpe_bou(tt, v = 1.0, beta = 2, a = 1.2, Z = 0.45, sigma = 1,
+                   nx = 384, nt = 3000, grade = 1, tgrade = 32)
+  for (bk in 1:4) {
+    r_deg <- fpe_bou(tt, v = 1.0, beta = 2, a = 1.2, Z = 0.45, sigma = 1,
+                     bkind = bk, aInf = 1.2, tau = 0.5, pw = 1.5,
+                     nx = 384, nt = 3000, grade = 1, tgrade = 32)
+    expect_identical(r_deg$pdf_upper, r_fix$pdf_upper)
+    expect_identical(r_deg$pdf_lower, r_fix$pdf_lower)
+  }
+})
+
+test_that("collapsing bounds keep the mass identity and monotone cdfs", {
+  tt <- seq(0.05, 3.0, by = 0.02)
+  for (bk in 1:4) {
+    r <- fpe_bou(tt, v = 1.0, beta = 2, a = 1.2, Z = 0.45, sigma = 1,
+                 bkind = bk, aInf = 0.3, tau = 0.6, pw = 1.5,
+                 nx = 384, nt = 3000, grade = 1, tgrade = 32)
+    expect_lt(max(abs(r$cdf_upper + r$cdf_lower + r$surv - 1)), 1e-12)
+    expect_lt(r$mismatch, 1e-6)
+    expect_false(any(diff(r$cdf_upper) < 0))
+    expect_false(any(diff(r$cdf_lower) < 0))
+    expect_true(all(r$pdf_upper >= 0) && all(r$pdf_lower >= 0))
+  }
+})
+
+test_that("a symmetric collapse stays symmetric", {
+  # v = 0, Z = 0.5 and barriers that close on the midpoint: the problem is
+  # symmetric at every t, so the two densities must agree.  This is what catches
+  # a collapse applied to one barrier only, which is the easiest way to get the
+  # midpoint geometry wrong.
+  tt <- seq(0.05, 3.0, by = 0.02)
+  for (bk in 1:4) {
+    r <- fpe_bou(tt, v = 0, beta = 3, a = 1, Z = 0.5, sigma = 1,
+                 bkind = bk, aInf = 0.2, tau = 0.5, pw = 2,
+                 nx = 384, nt = 3000, grade = 1, tgrade = 32)
+    expect_lt(max(abs(r$pdf_upper - r$pdf_lower)), 1e-10,
+              label = sprintf("collapsing symmetry bkind=%d", bk))
+  }
+})
+
+test_that("the lane batch and the scalar march agree under collapse", {
+  # The two paths implement the moving operator INDEPENDENTLY: fpe_solve rebuilds
+  # an FPE_Op and refactorises a FPE_Tri, while the batch runs the interleaved
+  # bou_build_op_lanes and its own Thomas elimination.  With fixed bounds both
+  # build the operator once, so this comparison only becomes load-bearing once
+  # it is rebuilt every step -- which is exactly the code the collapse adds.
+  # They use different horizons, hence different time schedules, so this is
+  # agreement to solver tolerance rather than bit equality.
+  #
+  # linear_additive gets its own, much looser tolerance, and it is not a fudge:
+  # its b'(t) jumps at t = tau, Crank-Nicolson loses an order at the kink, and
+  # the two schedules straddle it differently. The measured gap is the point --
+  # 5e-5 for the three smooth forms against 6e-3 for the kinked one. Holding all
+  # four to the loose bound would stop the smooth cases testing anything.
+  tol <- c(5e-4, 5e-4, 2e-2, 5e-4)   # weibull, exponential, lin_add, lin_mult
+  tt <- seq(0.1, 2.5, by = 0.02)
+  for (bk in 1:4) {
+    rs <- fpe_bou(tt, v = 1.0, beta = 2, a = 1.2, Z = 0.45, sigma = 1,
+                  bkind = bk, aInf = 0.3, tau = 0.6, pw = 1.5,
+                  nx = 384, nt = 6000, grade = 1, tgrade = 32)
+    up <- EMC2:::bou_pdf_cdf_vec(tt, rep(2L, length(tt)), 1.0, 1.2, 0.45,
+                                 0, 0, 0, 0, 1, 2,
+                                 bkind = bk, aInf = 0.3, tau = 0.6, pw = 1.5,
+                                 nx = 384, dt_target = 1 / 2000, tgrade = 32)
+    lo <- EMC2:::bou_pdf_cdf_vec(tt, rep(1L, length(tt)), 1.0, 1.2, 0.45,
+                                 0, 0, 0, 0, 1, 2,
+                                 bkind = bk, aInf = 0.3, tau = 0.6, pw = 1.5,
+                                 nx = 384, dt_target = 1 / 2000, tgrade = 32)
+    ok <- rs$pdf_upper > 1e-4
+    expect_lt(max(abs(up$pdf[ok] / rs$pdf_upper[ok] - 1)), tol[bk],
+              label = sprintf("lane vs scalar, upper, bkind=%d", bk))
+    expect_lt(max(abs(lo$pdf[ok] / rs$pdf_lower[ok] - 1)), tol[bk],
+              label = sprintf("lane vs scalar, lower, bkind=%d", bk))
+  }
+})
+
+test_that("collapsing bounds finish the race", {
+  tt <- seq(0.05, 3.0, by = 0.02)
+  r0 <- fpe_bou(tt, v = 0.8, beta = 1, a = 1.2, Z = 0.5, sigma = 1,
+                nx = 384, nt = 3000, grade = 1, tgrade = 32)
+  rc <- fpe_bou(tt, v = 0.8, beta = 1, a = 1.2, Z = 0.5, sigma = 1,
+                bkind = 2L, aInf = 0.1, tau = 0.4,
+                nx = 384, nt = 3000, grade = 1, tgrade = 32)
+  # Bringing the barriers in can only absorb mass sooner, at every t.
+  expect_true(all(rc$surv <= r0$surv + 1e-12))
+  # And with the separation driven down to the floor, essentially nothing is
+  # still running -- the collapse is a deadline, which is the point of it.
+  expect_lt(tail(rc$surv, 1), 1e-6)
+  expect_gt(tail(r0$surv, 1), tail(rc$surv, 1))
+})
+
+test_that("the simulator agrees with the solver under collapse", {
+  # The simulator steps the exact OU transition against linearly interpolated
+  # barriers and shares none of the PDE's numerics, so it is the only
+  # independent check available for a moving boundary.  It is used as a check,
+  # never as a calibration target.
+  set.seed(11)
+  N <- 40000
+  for (bk in c(2L, 3L)) {
+    sim <- EMC2:::rbou_cpp(N, 1.0, 1.2, 0.45, 0, 0, 0.1, 0, 1, 2,
+                           bkind = bk, aInf = 0.3, tau = 0.6,
+                           dt = 5e-5, t_max = 30)
+    sim <- sim[is.finite(sim$rt) & !is.na(sim$R), ]
+    p_sim <- mean(sim$R == 2)
+    se <- sqrt(p_sim * (1 - p_sim) / nrow(sim))
+    tg <- seq(0.1005, 5, by = 0.005)
+    Fg <- EMC2:::bou_pdf_cdf_vec(tg, rep(2L, length(tg)), 1.0, 1.2, 0.45,
+                                 0, 0, 0.1, 0, 1, 2,
+                                 bkind = bk, aInf = 0.3, tau = 0.6,
+                                 nx = 384, dt_target = 5e-4, tgrade = 32)$cdf
+    expect_lt(abs(p_sim - max(Fg)), 4 * se)
+    qsim <- unname(quantile(sim$rt[sim$R == 2], c(.1, .5, .9)))
+    qsol <- suppressWarnings(approx(Fg / max(Fg), tg, xout = c(.1, .5, .9))$y)
+    expect_lt(max(abs(qsim - qsol)), 0.02)
+  }
+})
+
+test_that("BOU(boundary_collapse=) reaches the C++ likelihood with the collapse live", {
+  # The wiring the collapse adds on top of the fixed-bound path: the c_name
+  # suffix that carries the FORM, the optional aInf/tau/pw columns declared
+  # after the nine required ones, and bou_row's gate on ContextForDDMModels'
+  # bnd_kind.  Getting any of those wrong shows up as an error, a floored
+  # likelihood, or -- worst and quietest -- a collapse that does nothing.
+  dat <- droplevels(forstmann[forstmann$subjects == levels(forstmann$subjects)[1], ])
+  f <- list(v ~ 0 + S, a ~ E, t0 ~ 1, s ~ 1, Z ~ 1, beta ~ 1,
+            aInf ~ 1, tau ~ 1)
+  des <- design(data = dat,
+                model = function() BOU(boundary_collapse = "exponential"),
+                formula = f, constants = c(s = log(1)))
+  emc <- make_emc(dat, des, compress = FALSE, rt_resolution = NULL,
+                  type = "single")
+  pn <- names(sampled_pars(des))
+  P <- matrix(0, nrow = 2, ncol = length(pn), dimnames = list(NULL, pn))
+  P[, "t0"] <- log(0.15); P[, "a"] <- log(1.5); P[, "beta"] <- log(1)
+  P[, "tau"] <- log(0.5)
+  P[, grep("^v", pn)] <- 1
+
+  P[, "aInf"] <- log(1.5)                     # degenerate: no collapse
+  l_none <- EMC2:::calc_ll_manager(P, emc[[1]]$data[[1]], emc[[1]]$model)
+  P[, "aInf"] <- log(0.4)                     # a real collapse
+  l_coll <- EMC2:::calc_ll_manager(P, emc[[1]]$data[[1]], emc[[1]]$model)
+  expect_true(all(is.finite(l_none)) && all(is.finite(l_coll)))
+  expect_gt(min(abs(l_none - l_coll)), 1)
+
+  # tau must be live too -- it is the one collapse parameter a wrong column
+  # offset would silently swap with aInf.
+  P[, "tau"] <- log(0.05)
+  l_fast <- EMC2:::calc_ll_manager(P, emc[[1]]$data[[1]], emc[[1]]$model)
+  expect_gt(min(abs(l_fast - l_coll)), 1)
+
+  # The fixed-bound generator must be untouched by any of this.
+  des0 <- design(data = dat, model = BOU,
+                 formula = list(v ~ 0 + S, a ~ E, t0 ~ 1, s ~ 1, Z ~ 1,
+                                beta ~ 1),
+                 constants = c(s = log(1)))
+  expect_false("aInf" %in% names(sampled_pars(des0)))
+  expect_identical(BOU()$c_name, "BOU")
+  expect_identical(BOU(boundary_collapse = "weibull")$c_name, "BOU_BWEIB")
+})

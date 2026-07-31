@@ -29,10 +29,11 @@ namespace bou {
 // Pull one row's parameters out of the column base pointers.
 struct Row {
   double v, a, sv, t0, st0, s, Z, SZ, beta, z, sz;
+  double aInf, tau, pw;          // collapse; untouched when bnd_kind == FIXED
   bool ok;
 };
 
-inline Row bou_row(const double* const* cols, int i) {
+inline Row bou_row(const double* const* cols, int i, int bnd_kind) {
   Row r;
   r.v    = cols[emc2col::bou::v][i];
   r.a    = cols[emc2col::bou::a][i];
@@ -49,6 +50,18 @@ inline Row bou_row(const double* const* cols, int i) {
   r.ok = (r.a > 0.0) && (r.s > 0.0) && (r.z > 0.0) && (r.z < r.a) &&
          R_FINITE(r.v) && R_FINITE(r.beta) && (r.beta >= 0.0) &&
          R_FINITE(r.t0);
+
+  r.aInf = 0.0; r.tau = 0.0; r.pw = 0.0;
+  if (bnd_kind != fpe::FPE_BND_FIXED) {
+    // Only present in the ParamTable when BOU(boundary_collapse=) asked for
+    // them; reading them under a fixed bound would be out of bounds.
+    r.aInf = cols[emc2col::bou::aInf][i];
+    r.tau  = cols[emc2col::bou::tau][i];
+    r.pw   = (bnd_kind == fpe::FPE_BND_WEIBULL) ? cols[emc2col::bou::pw][i] : 0.0;
+    if (!R_FINITE(r.aInf) || !R_FINITE(r.tau) || !(r.tau > 0.0)) r.ok = false;
+    if (bnd_kind == fpe::FPE_BND_WEIBULL && (!R_FINITE(r.pw) || !(r.pw > 0.0)))
+      r.ok = false;
+  }
   return r;
 }
 
@@ -94,13 +107,13 @@ inline void bou_eval(const double* rts, const int* Rs,
       out[i] = floor_;
       continue;
     }
-    const Row r = bou_row(cols, i);
+    const Row r = bou_row(cols, i, ctx->bnd_kind);
     if (!r.ok) { out[i] = floor_; continue; }
 
     const fpebou::BouMix m = fpebou::bou_mix_t0(
       C, t, r.v, r.sv, r.a, r.z, r.sz, r.s, r.beta,
       /*anchor_at_z=*/true, 0.5 * r.a, r.t0, r.st0,
-      ctx->bnd_kind, 0.0, 0.0, 0.0, want_cdf);
+      ctx->bnd_kind, r.aInf, r.tau, r.pw, want_cdf);
 
     const bool up = (Rs[i] == 2);
     const double val = want_cdf ? (up ? m.F_up : m.F_lo)

@@ -5,12 +5,20 @@
 // The four leaky-accumulation models, expressed for the Fokker-Planck solver in
 // fpe_solver.h.  Each model supplies five things:
 //
-//   x_lo()             fixed lower edge of the computational domain
+//   x_lo(t)            lower edge of the computational domain
+//   x_hi(t)            upper edge (the absorbing barrier)
 //   B()                diffusion coefficient (constant in x -- see below)
 //   drift(x, t)        A(x,t)
-//   length(t)          L(t) = a(t) - x_lo
-//   length_prime(t)    L'(t) = a'(t)
-//   static_op()        true when the operator is time-invariant (fixed bound)
+//   length(t)          L(t) = x_hi(t) - x_lo(t)
+//   length_prime(t)    L'(t)
+//   static_op()        true when the operator is time-invariant (fixed bounds)
+//
+// x_lo is a function of t rather than a constant because the bounded model can
+// collapse BOTH barriers (see FPE_ModelBoundedOU).  A moving lower edge adds a
+// frame term -x_lo'(t)/L to the transformed drift; each model folds that into
+// its own atil_affine, so there is no separate x_lo_prime accessor to keep in
+// step with it.  For the one-boundary models x_lo is constant and there is no
+// such term at all.
 //
 // Only TWO drift laws are needed, because the geometric models reduce by a state
 // log-transform Y = log X (Ito):
@@ -201,7 +209,8 @@ struct FPE_ModelBM {
   double xlo = -1.0;
   FPE_Boundary bnd;
 
-  double x_lo() const { return xlo; }
+  double x_lo(double /*t*/) const { return xlo; }
+  double x_hi(double t) const { return bnd.a(t); }
   double B() const { return sigma; }
   double drift(double /*x*/, double /*t*/) const { return A; }
   double length(double t) const { return bnd.a(t) - xlo; }
@@ -243,7 +252,8 @@ struct FPE_ModelOU {
   }
   double theta() const { return (lambda > FPE_EPS) ? v / lambda : 0.0; }
 
-  double x_lo() const { return xlo; }
+  double x_lo(double /*t*/) const { return xlo; }
+  double x_hi(double t) const { return bnd.a(t); }
   double B() const { return sigma; }
   double drift(double x, double /*t*/) const { return v - lambda * x; }
   double length(double t) const { return bnd.a(t) - xlo; }
@@ -278,7 +288,33 @@ struct FPE_ModelOU {
 // atil_affine and leaves that choice open; it also matters for cost, because an
 // anchor that does not depend on z leaves the operator independent of the start
 // point and collapses across-trial start-point variability into a single solve.
+//
+// COLLAPSING BOUNDS.  Both barriers move, symmetrically, toward the MIDPOINT:
+//
+//   upper(t) = mid + h(t),   lower(t) = mid - h(t),   mid = a/2,
+//
+// with the half-separation h(t) supplied by the same FPE_Boundary module the
+// race models use, so every collapse form (Weibull, exponential, the two linear
+// ones) is available here for free and behaves identically.  h(0) = a/2, so the
+// separation runs from a down to the asymptote.
+//
+// Collapsing toward the midpoint rather than toward a fixed level is the only
+// choice that leaves the model well defined: an asymmetric collapse would have
+// to specify which barrier moves, and a collapse toward one of the barriers is
+// not a collapse at all.  It also keeps the geometry symmetric under the
+// response relabelling (v, Z) -> (-v, 1-Z), which is the property the
+// zero-drift/unbiased test in test-fpe-bounded-ou.R checks.
+//
+// The half-separation is floored at FPE_BOU_MIN_SEP * a rather than being
+// allowed to reach zero.  Nothing in the SPACE discretisation cares -- the mesh
+// lives on the normalised xi in [0,1] and follows the barriers down -- but
+// D(t) = (B/L)^2/2 grows like 1/L^2, so the time step stops resolving the flux
+// long before the width does.  By the time the barriers are 2% of a apart the
+// remaining survivor crosses in (0.02a/s)^2 of a second, so the floor changes
+// where that last sliver of mass is absorbed by well under a millisecond.
 // ---------------------------------------------------------------------------
+constexpr double FPE_BOU_MIN_SEP = 0.02;
+
 struct FPE_ModelBoundedOU {
   static constexpr bool lower_absorbing = true;
   static constexpr bool symmetric_mesh  = true;
@@ -287,20 +323,43 @@ struct FPE_ModelBoundedOU {
   double beta = 0.0;           // decay / leak; 0 => Wiener diffusion
   double anchor = 0.0;         // point the decay pulls toward (default: z)
   double sigma = 1.0;          // within-trial sd (s)
-  double xlo = 0.0;            // lower absorbing barrier, conventionally 0
-  FPE_Boundary bnd;            // upper absorbing barrier a
+  double mid = 0.5;            // (fixed) midpoint the barriers collapse toward
+  FPE_Boundary bnd;            // HALF-separation h(t); barriers are mid +/- h
 
-  double x_lo() const { return xlo; }
+  // The one place the (a, a_inf) user parameterisation meets the (mid, h)
+  // internal one.  a is the separation at t = 0 and a_inf its asymptote, both in
+  // the same units, so a design reads as "a collapses from a to a_inf".
+  void set_separation(double a, int kind, double a_inf, double tau, double pw) {
+    mid = 0.5 * a;
+    if (kind == FPE_BND_FIXED) {
+      // 0.5*a is exact in binary and 2*(0.5*a) == a, so a fixed bound reproduces
+      // the pre-collapse geometry (x_lo = 0, x_hi = a, L = a) bit for bit.
+      bnd.set_kind(FPE_BND_FIXED, mid, mid, 0.0, 0.0, false);
+    } else {
+      const double lo = FPE_BOU_MIN_SEP * a;
+      bnd.set_kind(kind, mid, 0.5 * std::max(std::abs(a_inf), lo), tau, pw,
+                   false);
+    }
+  }
+
+  double half(double t) const { return bnd.a(t); }
+  double x_lo(double t) const { return mid - bnd.a(t); }
+  double x_hi(double t) const { return mid + bnd.a(t); }
   double B() const { return sigma; }
   double drift(double x, double /*t*/) const { return v + beta * (anchor - x); }
-  double length(double t) const { return bnd.a(t) - xlo; }
-  double length_prime(double t) const { return bnd.a_prime(t); }
+  double length(double t) const { return 2.0 * bnd.a(t); }
+  double length_prime(double t) const { return 2.0 * bnd.a_prime(t); }
   bool static_op() const { return bnd.fixed; }
 
-  // A(x) = (v + beta*anchor) - beta*x, so with x = xlo + xi*L,
-  //   Atil(xi,t) = ( v + beta*(anchor - xlo) - xi*(beta*L + L') ) / L
+  // A(x) = (v + beta*anchor) - beta*x, so with x = x_lo(t) + xi*L(t),
+  //   Atil(xi,t) = ( v + beta*(anchor - x_lo) - x_lo' - xi*(beta*L + L') ) / L
+  // The -x_lo' term is the frame velocity of the lower edge and is what a fixed
+  // lower bound does not have.  Here x_lo' = -h' = -L'/2 exactly, so it enters as
+  // +L'/2: as the barriers close in, the moving frame adds an outward drift on
+  // the lower side, which is the correct sign -- mass that is standing still in
+  // the lab frame is moving toward xi = 0 relative to a rising floor.
   void atil_affine(double /*t*/, double L, double Lp, double& a0, double& a1) const {
-    a0 = (v + beta * (anchor - xlo)) / L;
+    a0 = (v + beta * (anchor - (mid - 0.5 * L)) + 0.5 * Lp) / L;
     a1 = (-beta * L - Lp) / L;
   }
 };
@@ -401,9 +460,10 @@ inline double fpe_seed(const Model& m, double z_lo, double z_hi,
     const double Zlo = ls ? std::exp(z_lo) : z_lo;
     const double Zhi = ls ? std::exp(z_hi) : z_hi;
     const double span = Zhi - Zlo;
+    const double xl0 = m.x_lo(0.0);
     for (int i = 0; i < M; ++i) {
-      const double xa = m.x_lo() + g.xf[i] * L;
-      const double xb = m.x_lo() + g.xf[i + 1] * L;
+      const double xa = xl0 + g.xf[i] * L;
+      const double xb = xl0 + g.xf[i + 1] * L;
       const double Xa = ls ? std::exp(xa) : xa;
       const double Xb = ls ? std::exp(xb) : xb;
       const double ov = std::min(Xb, Zhi) - std::max(Xa, Zlo);
@@ -435,24 +495,31 @@ inline double fpe_seed(const Model& m, double z_lo, double z_hi,
   // the physical state) would otherwise pay for the grading instead of gaining
   // from it.  Under-resolving the Gaussian is the cheaper error of the two --
   // the seed integrates exact cell masses, not midpoint samples.
-  const double xi_z = (L0 > 0.0) ? (z - m.x_lo()) / L0 : 0.0;
+  const double xi_z = (L0 > 0.0) ? (z - m.x_lo(0.0)) / L0 : 0.0;
   double s_target = FPE_SEED_CELLS * std::min(g.local_dx(xi_z), g.h) * L0;
-  const double gap = m.bnd.a(0.0) - z;
+  const double gap = m.x_hi(0.0) - z;
   if (gap > 0.0) s_target = std::min(s_target, 0.25 * gap);
   // With a second absorbing barrier the seed has to stay clear of BOTH, or the
   // frozen-coefficient Gaussian leaks mass through the lower one and the image
   // series below is truncated where it is not yet small.
   if constexpr (Model::lower_absorbing) {
-    const double gap_lo = z - m.x_lo();
+    const double gap_lo = z - m.x_lo(0.0);
     if (gap_lo > 0.0) s_target = std::min(s_target, 0.25 * gap_lo);
   }
   double t_seed = (s_target / Bc) * (s_target / Bc);
   t_seed = std::min(t_seed, 0.25 * t_max);
+  // The gaps above are measured at t = 0, but the seed is evaluated at t_seed,
+  // so a boundary that collapses fast could invalidate them before the warm-up
+  // is over.  Keeping t_seed well inside the collapse time scale makes the two
+  // measurements the same to first order; t_seed is ~1 ms and tau is tens of ms
+  // at the very least, so in practice this never binds.
+  if (!m.bnd.fixed && m.bnd.tau > 0.0)
+    t_seed = std::min(t_seed, 0.1 * m.bnd.tau);
   if (!(t_seed > 0.0)) t_seed = 1e-6;
   if (t_seed_force > 0.0) t_seed = t_seed_force;
 
   const double L = m.length(t_seed);
-  const double a = m.bnd.a(t_seed);
+  const double a = m.x_hi(t_seed);
   const double sd = Bc * std::sqrt(t_seed);
   const double mean = z + Ac * t_seed;
   const double img_mean = 2.0 * a - z + Ac * t_seed;
@@ -465,18 +532,18 @@ inline double fpe_seed(const Model& m, double z_lo, double z_hi,
   // solution is an infinite image series; both barriers are at least
   // 4*sd away by the t_seed cap above, so every image past this pair sits
   // >= 8 sd from the domain and contributes < 1e-14.
+  const double xlo_s = m.x_lo(t_seed);
   double lo_mean = 0.0, lo_w = 0.0;
   if constexpr (Model::lower_absorbing) {
-    const double xlo = m.x_lo();
-    lo_mean = 2.0 * xlo - z + Ac * t_seed;
-    lo_w = std::exp(2.0 * Ac * (xlo - z) / (Bc * Bc));
+    lo_mean = 2.0 * xlo_s - z + Ac * t_seed;
+    lo_w = std::exp(2.0 * Ac * (xlo_s - z) / (Bc * Bc));
     if (!std::isfinite(lo_w)) lo_w = 0.0;
   }
 
   // q_i = (cell mass) / dx_i, since q = L*p and the physical cell width is dx*L.
   for (int i = 0; i < M; ++i) {
-    const double xa = m.x_lo() + g.xf[i] * L;
-    const double xb = m.x_lo() + g.xf[i + 1] * L;
+    const double xa = xlo_s + g.xf[i] * L;
+    const double xb = xlo_s + g.xf[i + 1] * L;
     double mass = fpe_norm_mass(xa, xb, mean, sd)
                   - img_w * fpe_norm_mass(xa, xb, img_mean, sd);
     if constexpr (Model::lower_absorbing) {
@@ -494,7 +561,7 @@ inline double fpe_seed(const Model& m, double z_lo, double z_hi,
   // which would otherwise be silently attributed to the wrong response.
   if constexpr (Model::lower_absorbing) {
     if (absorbed_lower != nullptr) {
-      const double d = z - m.x_lo();
+      const double d = z - xlo_s;
       if (d > 0.0 && sd > 0.0) {
         const double u = (-Ac * t_seed - d) / (sd * M_SQRT2);
         const double w = (-d + Ac * t_seed) / (sd * M_SQRT2);

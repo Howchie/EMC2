@@ -1952,6 +1952,23 @@ inline const DDMAdapter& ddm_wien_adapter() {
   return a;
 }
 
+// Collapsing-bound variants of the bounded OU, selected by
+// BOU(boundary_collapse=).  As for ROU, the c_name suffix carries the FORM only;
+// the shape parameters (aInf/tau/pw) are ordinary optional columns the design
+// system estimates like any other.  The "B" prefix on each suffix is what keeps
+// these from colliding with the ROU_B* names, which are matched the same way.
+inline int bou_bnd_kind_from_type(const std::string& type_std) {
+  if (type_std.find("BOU_BWEIB") != std::string::npos)
+    return fpe::FPE_BND_WEIBULL;
+  if (type_std.find("BOU_BEXP") != std::string::npos)
+    return fpe::FPE_BND_EXPONENTIAL;
+  if (type_std.find("BOU_BLIN_MULT") != std::string::npos)
+    return fpe::FPE_BND_LINEAR_MULTIPLICATIVE;
+  if (type_std.find("BOU_BLIN_ADD") != std::string::npos)
+    return fpe::FPE_BND_LINEAR_ADDITIVE;
+  return fpe::FPE_BND_FIXED;
+}
+
 // Raw-buffer variant for DDM to skip materialization and allocations.
 // Handles truncation and censoring with high numerical stability.
 //
@@ -2999,7 +3016,8 @@ static bool init_ddm_shared_state(DataFrame data, int n_trials,
                                   const ParamTable& table,
                                   ModelSharedState& shared,
                                   std::vector<const double*>& cols,
-                                  const emc2col::ColSpec* spec_in = nullptr) {
+                                  const emc2col::ColSpec* spec_in = nullptr,
+                                  const Rcpp::CharacterVector* keep_names_in = nullptr) {
   shared.LT_vec = get_col_with_default(data, "LT", 0.0);
   shared.UT_vec = get_col_with_default(data, "UT", R_PosInf);
   shared.LC_vec = get_col_with_default(data, "LC", 0.0);
@@ -3024,6 +3042,32 @@ static bool init_ddm_shared_state(DataFrame data, int n_trials,
   // extra parameters (bounded OU's leak) declares its own spec.
   const emc2col::ColSpec ddm_spec =
     (spec_in != nullptr) ? *spec_in : emc2col::ddm::spec();
+
+  // Resolve the OPTIONAL trailing columns too, not just the required prefix.
+  // A model variant may declare columns past N_REQ -- the bounded OU's
+  // aInf/tau/pw for a collapsing bound -- and its kernel indexes them
+  // positionally, so a `cols` sized to n_required alone is an out-of-bounds
+  // read, not a missing feature.  This mirrors what the race path already does
+  // (see the keep_names walk in calc_ll_oo); the required prefix has already
+  // been checked by validate_col_prefix, so walking keep_names positionally
+  // agrees with the spec on the first n_required entries by construction.
+  if (keep_names_in != nullptr) {
+    const int n_kn = keep_names_in->size();
+    cols.assign(std::max(n_kn, ddm_spec.n_required), nullptr);
+    for (int j = 0; j < n_kn; ++j) {
+      std::string nm = Rcpp::as<std::string>((*keep_names_in)[j]);
+      auto it = table.name_to_base_idx.find(nm);
+      if (it != table.name_to_base_idx.end()) {
+        cols[j] = table.base.begin() + static_cast<size_t>(it->second) * n_trials;
+      } else if (j < ddm_spec.n_required) {
+        raw_ready = false;
+      }
+    }
+    for (int j = 0; j < ddm_spec.n_required; ++j)
+      if (cols[j] == nullptr) raw_ready = false;
+    return raw_ready;
+  }
+
   for (int j = 0; j < ddm_spec.n_required; ++j) {
     auto it = table.name_to_base_idx.find(ddm_spec.names[j]);
     int idx = (it != table.name_to_base_idx.end()) ? it->second : -1;
@@ -3950,12 +3994,13 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
     ddm_adapter.col_spec = emc2col::bou::spec();
     ddm_adapter.ctx.bou_cache = std::make_shared<fpebou::SolveCache>();
     bou::bou_configure(*ddm_adapter.ctx.bou_cache);
+    ddm_adapter.ctx.bnd_kind = bou_bnd_kind_from_type(type_std);
   }
   if (is_ddm_type) {
     emc2col::validate_col_prefix(keep_names, ddm_adapter.col_spec);
     ddm_raw_ready = init_ddm_shared_state(data, n_trials, param_table_template,
                                           ddm_shared, ddm_cols,
-                                          &ddm_adapter.col_spec);
+                                          &ddm_adapter.col_spec, &keep_names);
   }
 
   if (is_ddm_type) {
@@ -4479,16 +4524,17 @@ NumericMatrix calc_ll_oo_pw(NumericMatrix particle_matrix, DataFrame data, Numer
       ddm_adapter.col_spec = emc2col::bou::spec();
       ddm_adapter.ctx.bou_cache = std::make_shared<fpebou::SolveCache>();
       bou::bou_configure(*ddm_adapter.ctx.bou_cache);
+      ddm_adapter.ctx.bnd_kind = bou_bnd_kind_from_type(type_std);
     }
     IntegerVector expand = data.attr("expand");
     const int n_out = (expand.length() > 0) ? expand.length() : n_trials;
     const bool all_finite_untruncated = ddm_data_all_finite_untruncated(data, n_trials);
     ModelSharedState ddm_shared;
-    emc2col::validate_col_prefix(keep_names, emc2col::ddm::spec());
+    emc2col::validate_col_prefix(keep_names, ddm_adapter.col_spec);
     std::vector<const double*> ddm_cols;
     const bool ddm_raw_ready = init_ddm_shared_state(data, n_trials, param_table_template,
                                                      ddm_shared, ddm_cols,
-                                                     &ddm_adapter.col_spec);
+                                                     &ddm_adapter.col_spec, &keep_names);
     NumericVector rts = data["rt"];
     IntegerVector R = data["R"];
     const int* expand_ptr = (expand.length() > 0) ? expand.begin() : nullptr;

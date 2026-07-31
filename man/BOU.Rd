@@ -4,7 +4,32 @@
 \alias{BOU}
 \title{The Bounded Ornstein-Uhlenbeck Model}
 \usage{
-BOU()
+BOU(
+  boundary_collapse = c("fixed", "exponential", "linear_additive",
+    "linear_multiplicative", "weibull")
+)
+}
+\arguments{
+\item{boundary_collapse}{Character; the form of the decision boundary. Both
+boundaries collapse SYMMETRICALLY toward the midpoint \code{a/2}, so the
+separation runs from \code{a} at \code{t = 0} down to \code{aInf}, with the halves meeting
+in the middle. \code{"fixed"} (the default) leaves the boundaries where they
+are; the other forms take \code{aInf} and \code{tau}, plus \code{pw} for \code{"weibull"}, and
+are the same four functional forms \code{\link[=ROU]{ROU()}} offers, written in terms of the
+separation \eqn{a(t)}:
+\itemize{
+\item \code{"exponential"}: \eqn{a(t) = a_\infty + (a_0 - a_\infty) e^{-t/\tau}}
+\item \code{"linear_additive"}: falls linearly from \eqn{a_0} to
+\eqn{a_\infty} over \eqn{[0, \tau]}, then holds
+\item \code{"linear_multiplicative"}: \eqn{a(t) = a_\infty + (a_0 - a_\infty) / (1 + t/\tau)}
+\item \code{"weibull"}: \eqn{a(t) = a_\infty + (a_0 - a_\infty) e^{-(t/\tau)^{pw}}}
+}
+Collapsing toward the midpoint is the only symmetric choice available:
+there is no fixed level to collapse toward, because zero and \code{a} are the
+two response boundaries. The separation is floored at 2\% of \code{a}, so
+\code{aInf = 0} means "collapse essentially all the way" rather than exactly so;
+below that width the remaining survivor is absorbed within a millisecond
+and the time step, not the mesh, is what stops resolving it.}
 }
 \value{
 A model list with all the necessary functions for EMC2 to sample
@@ -36,6 +61,15 @@ the \code{formula} argument of \code{design()}. They can also be accessed with
 }
 
 
+When \code{boundary_collapse} is not \code{"fixed"} two further parameters appear,
+\code{aInf} and \code{tau} (plus \code{pw} for \code{"weibull"}):\tabular{lllll}{
+   \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Interpretation} \cr
+   \emph{aInf} \tab log \tab [0, Inf] \tab log(0.5) \tab Asymptotic separation, in the same units as \emph{a} \cr
+   \emph{tau} \tab log \tab [0, Inf] \tab log(1) \tab Time scale of the collapse \cr
+   \emph{pw} \tab log \tab [0, Inf] \tab log(1) \tab Shape exponent (Weibull only) \cr
+}
+
+
 The parameterisation is \code{\link[=DDM]{DDM()}}'s with \code{beta} added, so a DDM design converts
 to this model by adding \code{beta ~ 1}, and \code{beta} fixed to 0 recovers the DDM.
 
@@ -61,4 +95,11 @@ design_BOU <- design(data = forstmann, model = BOU,
                      formula = list(v ~ 0 + S, a ~ E, beta ~ 1, t0 ~ 1,
                                     s ~ 1, Z ~ 1, sv ~ 1, SZ ~ 1),
                      constants = c(s = log(1)))
+
+# Leak and a symmetrically collapsing boundary together
+design_BOUc <- design(data = forstmann,
+                      model = function() BOU(boundary_collapse = "exponential"),
+                      formula = list(v ~ 0 + S, a ~ E, beta ~ 1, t0 ~ 1,
+                                     s ~ 1, Z ~ 1, aInf ~ 1, tau ~ 1),
+                      constants = c(s = log(1)))
 }

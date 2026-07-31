@@ -196,18 +196,21 @@ struct SolveCache {
 // ---------------------------------------------------------------------------
 // One march for one key.
 // ---------------------------------------------------------------------------
-inline void bou_solve(const Key& p, double t_max, const Grid& gr, Entry& out) {
+// Build the solver model from a key.  `binf` is the ASYMPTOTIC SEPARATION, in
+// the same units as `a`; set_separation turns the (a, a_inf) pair into the
+// (midpoint, half-width) form the solver marches in.
+inline fpe::FPE_ModelBoundedOU bou_model(const Key& p) {
   fpe::FPE_ModelBoundedOU m;
   m.v = p.v;
   m.beta = p.beta;
   m.anchor = p.anchor;
   m.sigma = 1.0;                 // s scaled out in bou_key
-  m.xlo = 0.0;
-  if (p.bkind == fpe::FPE_BND_FIXED) {
-    m.bnd.set_kind(fpe::FPE_BND_FIXED, p.a, p.a, 0.0, 0.0, false);
-  } else {
-    m.bnd.set_kind(p.bkind, p.a, p.binf, p.tau, p.pw, false);
-  }
+  m.set_separation(p.a, p.bkind, p.binf, p.tau, p.pw);
+  return m;
+}
+
+inline void bou_solve(const Key& p, double t_max, const Grid& gr, Entry& out) {
+  const fpe::FPE_ModelBoundedOU m = bou_model(p);
 
   fpe::FPE_Mesh g;
   g.build(gr.nx, gr.grade, fpe::FPE_ModelBoundedOU::symmetric_mesh);
@@ -262,6 +265,107 @@ constexpr size_t BOU_LANES = 8;
 constexpr size_t BOU_LANES = 4;
 #endif
 
+// ---------------------------------------------------------------------------
+// Build the tridiagonal operator for every lane at time t, straight into the
+// interleaved layout.
+//
+// This mirrors fpe::build_op exactly -- same stencil, same Scharfetter-Gummel
+// face weights, same uniform-mesh Peclet recurrence -- with the lane loop
+// innermost, so each row is a contiguous vector operation and no per-lane
+// fpe::FPE_Op is materialised and then scattered.
+//
+// It exists for the COLLAPSING case.  With fixed bounds the operator is built
+// once for the whole march and this is called exactly once; with bounds that
+// move, it is called once per time step, alongside a fresh factorisation, and
+// the two together are what a collapse costs over and above a fixed bound.
+// ---------------------------------------------------------------------------
+inline void bou_build_op_lanes(const fpe::FPE_ModelBoundedOU* models,
+                               double t, const fpe::FPE_Mesh& g,
+                               double* DIAG, double* SUB, double* SUP,
+                               double* opD) {
+  const int M = g.M;
+  double a0[BOU_LANES], a1[BOU_LANES], invD[BOU_LANES], Dl[BOU_LANES];
+  double Pu[BOU_LANES], eP[BOU_LANES], er[BOU_LANES], dP[BOU_LANES];
+
+  // The uniform-mesh fast path is taken only if EVERY lane qualifies, so the
+  // inner loops stay branch-free.  Lanes in a batch are quadrature nodes of one
+  // trial, so they differ only in drift and start point and in practice either
+  // all qualify or none do.
+  bool uni = g.uniform;
+  for (size_t l = 0; l < BOU_LANES; ++l) {
+    const double Lb = models[l].length(t);
+    const double Lp = models[l].length_prime(t);
+    const double Bt = models[l].B() / Lb;
+    const double D = 0.5 * Bt * Bt;
+    Dl[l] = D; opD[l] = D; invD[l] = 1.0 / D;
+    models[l].atil_affine(t, Lb, Lp, a0[l], a1[l]);
+    Pu[l] = (a0[l] + a1[l] * g.h) * g.h * invD[l];
+    dP[l] = a1[l] * g.h * g.h * invD[l];
+    if (!(std::isfinite(Pu[l]) && std::isfinite(dP[l]) &&
+          std::abs(dP[l]) * M < 20.0))
+      uni = false;
+    eP[l] = std::exp(Pu[l]);
+    er[l] = std::exp(dP[l]);
+  }
+
+  double wm_p[BOU_LANES], wp_p[BOU_LANES], gf_p[BOU_LANES];
+  for (size_t l = 0; l < BOU_LANES; ++l) wm_p[l] = wp_p[l] = gf_p[l] = 0.0;
+
+  for (int i = 0; i < M; ++i) {
+    const double rdx = g.rdx[i];
+    const size_t o = static_cast<size_t>(i) * BOU_LANES;
+
+    // Inflow face: interior for i > 0, the lower ABSORBING face at i == 0.
+    if (i > 0) {
+      for (size_t l = 0; l < BOU_LANES; ++l) {
+        SUB[o + l]  = gf_p[l] * wm_p[l] * rdx;
+        DIAG[o + l] = -gf_p[l] * wp_p[l] * rdx;
+        SUP[o + l]  = 0.0;
+      }
+    } else {
+      for (size_t l = 0; l < BOU_LANES; ++l) {
+        SUB[l]  = 0.0;
+        DIAG[l] = -Dl[l] * g.cL_A * rdx;
+        SUP[l]  = Dl[l] * g.cL_B * rdx;
+      }
+    }
+
+    // Outflow face: interior for i < M-1, the upper absorbing face at i == M-1.
+    if (i < M - 1) {
+      const int j = i + 1;
+      const double rdc = g.rdc[j], pu = g.pu[j], pv = g.pv[j];
+      if (uni) {
+        for (size_t l = 0; l < BOU_LANES; ++l) {
+          const double P = Pu[l];
+          const double wp = fpe::bern_from_exp(P, eP[l]);
+          Pu[l] += dP[l];
+          eP[l] *= er[l];
+          const double wm = fpe::bern_neg(wp, P);
+          const double gf = Dl[l] * rdc;
+          DIAG[o + l] -= gf * wm * rdx;
+          SUP[o + l]  += gf * wp * rdx;
+          wm_p[l] = wm; wp_p[l] = wp; gf_p[l] = gf;
+        }
+      } else {
+        for (size_t l = 0; l < BOU_LANES; ++l) {
+          const double P = (a0[l] * pu + a1[l] * pv) * invD[l];
+          const double wp = fpe::bern(P);
+          const double wm = fpe::bern_neg(wp, P);
+          const double gf = Dl[l] * rdc;
+          DIAG[o + l] -= gf * wm * rdx;
+          SUP[o + l]  += gf * wp * rdx;
+          wm_p[l] = wm; wp_p[l] = wp; gf_p[l] = gf;
+        }
+      }
+    } else {
+      for (size_t l = 0; l < BOU_LANES; ++l) {
+        DIAG[o + l] -= Dl[l] * g.cA * rdx;
+        SUB[o + l]  += Dl[l] * g.cB * rdx;
+      }
+    }
+  }
+}
+
 inline void bou_solve_batch(const std::vector<Key>& keys, double t_max,
                             const Grid& gr, std::vector<Entry*>& out) {
   const size_t nk = keys.size();
@@ -270,16 +374,6 @@ inline void bou_solve_batch(const std::vector<Key>& keys, double t_max,
   fpe::FPE_Mesh g;
   g.build(gr.nx, gr.grade, fpe::FPE_ModelBoundedOU::symmetric_mesh);
   const int M = g.M;
-
-  auto make_model = [&](const Key& p) {
-    fpe::FPE_ModelBoundedOU m;
-    m.v = p.v; m.beta = p.beta; m.anchor = p.anchor; m.sigma = 1.0; m.xlo = 0.0;
-    if (p.bkind == fpe::FPE_BND_FIXED)
-      m.bnd.set_kind(fpe::FPE_BND_FIXED, p.a, p.a, 0.0, 0.0, false);
-    else
-      m.bnd.set_kind(p.bkind, p.a, p.binf, p.tau, p.pw, false);
-    return m;
-  };
 
   for (size_t base = 0; base < nk; base += BOU_LANES) {
     const size_t n_lane = std::min(BOU_LANES, nk - base);
@@ -291,7 +385,7 @@ inline void bou_solve_batch(const std::vector<Key>& keys, double t_max,
     double t_seed = std::numeric_limits<double>::infinity();
     for (size_t l = 0; l < BOU_LANES; ++l) {
       const size_t src = base + std::min(l, n_lane - 1);
-      models[l] = make_model(keys[src]);
+      models[l] = bou_model(keys[src]);
       const double ts = fpe::fpe_seed(models[l], keys[src].z, keys[src].z, g,
                                       t_max, q0[l], &absorbed[l]);
       if (ts < t_seed) t_seed = ts;
@@ -302,6 +396,15 @@ inline void bou_solve_batch(const std::vector<Key>& keys, double t_max,
                     &absorbed[l], t_seed);
     }
 
+    // A collapse in ANY lane forces the whole batch onto the time-varying path;
+    // the batch marches on one clock and one factorisation buffer, so it cannot
+    // be static for some lanes and not others.  In practice the boundary
+    // parameters are shared across a trial's quadrature nodes, so this is
+    // all-or-nothing anyway.
+    bool stat = true;
+    for (size_t l = 0; l < BOU_LANES; ++l)
+      if (!models[l].static_op()) stat = false;
+
     const fpe::FPE_TimeSchedule sched =
       fpe::fpe_time_schedule(t_max - t_seed, gr.nt_for(t_max), gr.tgrade);
 
@@ -309,22 +412,29 @@ inline void bou_solve_batch(const std::vector<Key>& keys, double t_max,
     std::vector<double> Q(SZ), RHS(SZ), DIAG(SZ), SUB(SZ), SUP(SZ),
                         DINV(SZ), CPRIME(SZ);
     std::vector<double> opD(BOU_LANES, 0.0);
-
-    for (size_t l = 0; l < BOU_LANES; ++l) {
-      fpe::FPE_Op op;
-      fpe::build_op(models[l], t_seed, g, op);
-      opD[l] = op.D;
-      for (int i = 0; i < M; ++i) {
-        const size_t o = static_cast<size_t>(i) * BOU_LANES + l;
-        Q[o] = q0[l][i]; DIAG[o] = op.diag[i];
-        SUB[o] = op.sub[i]; SUP[o] = op.sup[i];
-      }
+    // Second operator buffer, allocated only when the bounds actually move: the
+    // Crank-Nicolson right-hand side needs the operator at the OLD time while
+    // the left-hand side needs it at the new one.
+    std::vector<double> DIAG2, SUB2, SUP2, opD2;
+    double *Dg = DIAG.data(), *Sb = SUB.data(), *Sp = SUP.data(),
+           *oD = opD.data();
+    double *Dg2 = nullptr, *Sb2 = nullptr, *Sp2 = nullptr, *oD2 = nullptr;
+    if (!stat) {
+      DIAG2.resize(SZ); SUB2.resize(SZ); SUP2.resize(SZ);
+      opD2.assign(BOU_LANES, 0.0);
+      Dg2 = DIAG2.data(); Sb2 = SUB2.data(); Sp2 = SUP2.data();
+      oD2 = opD2.data();
     }
+
+    bou_build_op_lanes(models.data(), t_seed, g, Dg, Sb, Sp, oD);
+    for (size_t l = 0; l < BOU_LANES; ++l)
+      for (int i = 0; i < M; ++i)
+        Q[static_cast<size_t>(i) * BOU_LANES + l] = q0[l][i];
 
     // Per-lane running state, mirroring fpe_solve exactly.
     std::vector<double> cdf_prev(BOU_LANES, 0.0), surv_prev(BOU_LANES, 1.0),
                         cdf_lo_prev(BOU_LANES, 0.0), cdf_lo_flux(BOU_LANES, 0.0),
-                        gl_prev(BOU_LANES, 0.0);
+                        cdf_up_prev(BOU_LANES, 0.0), gl_prev(BOU_LANES, 0.0);
     std::vector<Entry*> ent(BOU_LANES, nullptr);
     for (size_t l = 0; l < n_lane; ++l) ent[l] = out[base + l];
 
@@ -335,12 +445,13 @@ inline void bou_solve_batch(const std::vector<Key>& keys, double t_max,
       const double cdf0 = std::min(1.0, std::max(0.0, 1.0 - mass));
       cdf_lo_prev[l] = std::min(cdf0, std::max(0.0, absorbed[l]));
       cdf_lo_flux[l] = cdf_lo_prev[l];
+      cdf_up_prev[l] = cdf0 - cdf_lo_prev[l];
       cdf_prev[l] = cdf0;
       surv_prev[l] = std::min(1.0, std::max(0.0, mass));
 
-      double gu = opD[l] * (g.cA * Q[static_cast<size_t>(M - 1) * BOU_LANES + l] -
-                            g.cB * Q[static_cast<size_t>(M - 2) * BOU_LANES + l]);
-      double glo = opD[l] * (g.cL_A * Q[l] - g.cL_B * Q[BOU_LANES + l]);
+      double gu = oD[l] * (g.cA * Q[static_cast<size_t>(M - 1) * BOU_LANES + l] -
+                           g.cB * Q[static_cast<size_t>(M - 2) * BOU_LANES + l]);
+      double glo = oD[l] * (g.cL_A * Q[l] - g.cL_B * Q[BOU_LANES + l]);
       if (!(gu > 0.0)) gu = 0.0;
       if (!(glo > 0.0)) glo = 0.0;
       gl_prev[l] = glo;
@@ -356,16 +467,20 @@ inline void bou_solve_batch(const std::vector<Key>& keys, double t_max,
       e.cdf_up.push_back(cdf0 - cdf_lo_prev[l]);
     }
 
-    // Factorise (I - c*L) for the current c, interleaved across lanes.
-    auto factor = [&](double c) {
-      for (size_t l = 0; l < BOU_LANES; ++l) DINV[l] = 1.0 / (1.0 - c * DIAG[l]);
+    // Factorise (I - c*L) for the current c, interleaved across lanes.  With
+    // fixed bounds this runs once per schedule block; with collapsing bounds the
+    // operator changes every step, so it runs once per step and there is nothing
+    // left to amortise.
+    auto factor = [&](double c, const double* dg, const double* sb,
+                      const double* sp) {
+      for (size_t l = 0; l < BOU_LANES; ++l) DINV[l] = 1.0 / (1.0 - c * dg[l]);
       for (int i = 1; i < M; ++i) {
         const size_t o = static_cast<size_t>(i) * BOU_LANES;
         const size_t p = static_cast<size_t>(i - 1) * BOU_LANES;
         for (size_t l = 0; l < BOU_LANES; ++l) {
-          CPRIME[p + l] = -c * SUP[p + l] * DINV[p + l];
-          const double d = (1.0 - c * DIAG[o + l]) -
-                           (-c * SUB[o + l]) * CPRIME[p + l];
+          CPRIME[p + l] = -c * sp[p + l] * DINV[p + l];
+          const double d = (1.0 - c * dg[o + l]) -
+                           (-c * sb[o + l]) * CPRIME[p + l];
           DINV[o + l] = 1.0 / ((d != 0.0) ? d : DBL_MIN);
         }
       }
@@ -383,24 +498,41 @@ inline void bou_solve_batch(const std::vector<Key>& keys, double t_max,
       const double dtb = sched.dt[b];
       // Rannacher half-step (c = dt/2) and CN full step (c = dt/2) share c, so
       // one factorisation serves the whole block -- the same identity fpe_solve
-      // relies on.
-      factor(0.5 * dtb);
+      // relies on.  Only while the operator itself is constant, though.
+      if (stat) factor(0.5 * dtb, Dg, Sb, Sp);
       for (int k = 0; k < sched.steps[b]; ++k, ++done) {
         const int n_sub = (done < n_rann) ? 2 : 1;
         for (int sub = 0; sub < n_sub; ++sub) {
           const bool be = (done < n_rann);
           const double step = be ? 0.5 * dtb : dtb;
+          // The left-hand-side coefficient: c = step for a backward-Euler half
+          // step, c = step/2 for Crank-Nicolson.  Both equal dtb/2, which is why
+          // the fixed-bound path can share one factorisation.
+          const double c = be ? step : 0.5 * step;
+
+          // Advance the operator to the new time BEFORE the solve, then swap so
+          // Dg/Sb/Sp are the new (left-hand-side) operator and Dg2/Sb2/Sp2 the
+          // old one the Crank-Nicolson right-hand side still needs.
+          if (!stat) {
+            bou_build_op_lanes(models.data(), t + step, g, Dg2, Sb2, Sp2, oD2);
+            std::swap(Dg, Dg2); std::swap(Sb, Sb2); std::swap(Sp, Sp2);
+            std::swap(oD, oD2);
+            factor(c, Dg, Sb, Sp);
+          }
+          const double* odg = stat ? Dg : Dg2;   // operator at the OLD time
+          const double* osb = stat ? Sb : Sb2;
+          const double* osp = stat ? Sp : Sp2;
 
           if (be) {
             RHS = Q;
           } else {
-            const double c = 0.5 * step;
+            const double ch = 0.5 * step;
             for (int i = 0; i < M; ++i) {
               const size_t o = static_cast<size_t>(i) * BOU_LANES;
               for (size_t l = 0; l < BOU_LANES; ++l) {
-                double vv = Q[o + l] + c * DIAG[o + l] * Q[o + l];
-                if (i > 0) vv += c * SUB[o + l] * Q[o - BOU_LANES + l];
-                if (i < M - 1) vv += c * SUP[o + l] * Q[o + BOU_LANES + l];
+                double vv = Q[o + l] + ch * odg[o + l] * Q[o + l];
+                if (i > 0) vv += ch * osb[o + l] * Q[o - BOU_LANES + l];
+                if (i < M - 1) vv += ch * osp[o + l] * Q[o + BOU_LANES + l];
                 RHS[o + l] = vv;
               }
             }
@@ -408,13 +540,12 @@ inline void bou_solve_batch(const std::vector<Key>& keys, double t_max,
 
           // Thomas: forward substitution then back substitution, with the mass
           // accumulated on the way back so the sweep is single-pass.
-          const double c = be ? step : 0.5 * step;
           for (size_t l = 0; l < BOU_LANES; ++l) Q[l] = RHS[l] * DINV[l];
           for (int i = 1; i < M; ++i) {
             const size_t o = static_cast<size_t>(i) * BOU_LANES;
             const size_t p = o - BOU_LANES;
             for (size_t l = 0; l < BOU_LANES; ++l)
-              Q[o + l] = (RHS[o + l] + c * SUB[o + l] * Q[p + l]) * DINV[o + l];
+              Q[o + l] = (RHS[o + l] + c * Sb[o + l] * Q[p + l]) * DINV[o + l];
           }
           for (size_t l = 0; l < BOU_LANES; ++l)
             mass[l] = g.dx[M - 1] * Q[static_cast<size_t>(M - 1) * BOU_LANES + l];
@@ -435,19 +566,24 @@ inline void bou_solve_batch(const std::vector<Key>& keys, double t_max,
             if (s_keep > surv_prev[l]) s_keep = surv_prev[l];
             surv_prev[l] = s_keep;
 
-            double gu = opD[l] *
+            double gu = oD[l] *
               (g.cA * Q[static_cast<size_t>(M - 1) * BOU_LANES + l] -
                g.cB * Q[static_cast<size_t>(M - 2) * BOU_LANES + l]);
-            double glo = opD[l] * (g.cL_A * Q[l] - g.cL_B * Q[BOU_LANES + l]);
+            double glo = oD[l] * (g.cL_A * Q[l] - g.cL_B * Q[BOU_LANES + l]);
             if (!(gu > 0.0)) gu = 0.0;
             if (!(glo > 0.0)) glo = 0.0;
 
             cdf_lo_flux[l] += 0.5 * step * (gl_prev[l] + glo);
             gl_prev[l] = glo;
+            // Same two-sided window fpe_solve uses; see the comment there for
+            // why capping at cdf_mass alone leaves the UPPER cdf non-monotone
+            // on a kinked collapse.
+            const double clo_hi = cdf_mass - cdf_up_prev[l];
             double clo = cdf_lo_flux[l];
+            if (clo > clo_hi) clo = clo_hi;
             if (clo < cdf_lo_prev[l]) clo = cdf_lo_prev[l];
-            if (clo > cdf_mass) clo = cdf_mass;
             cdf_lo_prev[l] = clo;
+            cdf_up_prev[l] = cdf_mass - clo;
 
             Entry& e = *ent[l];
             e.t.push_back(t);
