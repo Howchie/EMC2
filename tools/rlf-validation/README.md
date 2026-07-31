@@ -23,6 +23,7 @@ directory.
 | `selfgen15.R` | recovery when data are drawn from the solver's own cdf |
 | `nscale.R` | does a recovery offset fall like 1/n |
 | `matched.R` | does the offset survive matching generator and estimator resolution |
+| `matched_res.R` | isolates `rt_resolution` as the cause of the offset |
 | `cdfcmp.R` | simulator empirical cdf against the solver's, no estimator involved |
 
 ## Findings (2026-07-30/31)
@@ -64,10 +65,32 @@ self-limiting: it only engages once t_max passes t_crit, so at alpha = 1.7 with
 `2 (c b)^alpha` (c = 1.3, 1.6, 2.0) saves 5-20% and is erratic in both
 directions; rejected.
 
-**Open: a fixed +0.03 recovery offset at alpha >= 1.5.** Recovering alpha from
-2000-trial data with a converged solver gives -0.003 +- 0.006 at alpha = 1.1 but
-+0.035 +- 0.009 at 1.5 and +0.025 +- 0.013 at 1.7 — the opposite alpha
-dependence from the discretisation error, so a second effect. Excluded so far:
+**A fixed +0.01 to +0.02 recovery offset in alpha is `rt_resolution`, not the
+solver.** `make_emc` floors `rt` to `rt_resolution = 1/60` by default, and the
+likelihood then evaluates the *density at the floored time* rather than
+integrating it across the bin the observation actually fell in. Alpha absorbs
+the mismatch. Matched generator and estimator, n = 8000, 12 seeds, se ~0.005:
+
+    alpha                1.1     1.5     1.7     1.9
+    rt_resolution NULL  -0.005  +0.003  +0.002  +0.002
+    rt_resolution 1/60  +0.012  +0.023  +0.019  +0.012
+
+With the binning off, recovery is unbiased everywhere; with it on, alpha-hat is
+biased high at every alpha, worst around 1.5. `rt_resolution = 1e-3` is already
+indistinguishable from NULL, so this is specifically the 16.7 ms bin, not
+rounding in general. Note this is not purely an artefact of simulation studies:
+real RTs are genuinely binned by display refresh, so the density-at-bin-edge
+approximation applies to real fits too — it is the likelihood that is
+approximate, not the data. For recovery work, pass `rt_resolution = NULL` to
+`make_emc` (and to `make_data`, which defaults the same way).
+
+At alpha >= 1.5 this offset is 1-3x the per-fit discretisation error, so it, not
+the grid, was setting the floor on alpha recovery there.
+
+How it was found, which is the reason the other scripts exist: recovering alpha
+from 2000-trial data with a converged solver gave -0.003 +- 0.006 at alpha = 1.1
+but +0.035 +- 0.009 at 1.5 and +0.025 +- 0.013 at 1.7 — the opposite alpha
+dependence from the discretisation error, so a second effect. Excluded in turn:
 
 * *the data being one unlucky seed* — it is a mean over 8 seeds;
 * *the simulator's step* — refining `emc2.rlf_sim_dt` 5x moves alpha-hat by
@@ -78,21 +101,16 @@ dependence from the discretisation error, so a second effect. Excluded so far:
   cdf, no simulator anywhere, reproduce it (+0.033 +- 0.016 at alpha = 1.5);
 * *a finite-sample estimator bias* — it does not fall with n: +0.021 at
   n = 2000, +0.026 at 8000, +0.028 at 32000, while the sd falls as 1/sqrt(n)
-  (0.038, 0.016, 0.010) exactly as it should.
+  (0.038, 0.016, 0.010) exactly as it should;
+* *a generator/estimator resolution mismatch*, including a wrong extrapolation
+  order — `matched.R` generates and fits at the same resolution, and the offset
+  is identical whether the pair is matched (+0.029), mismatched (+0.031), or
+  extrapolation is off entirely (+0.030).
 
-A fixed offset between a generator and an estimator that are both meant to be
-the same model means they are not the same distribution. The remaining suspect
-is a residual difference between the resolution the data were generated at and
-the one they are fitted at — including the extrapolation *order*: p = 1 is
-assumed, and where the true order is higher the pair family converges somewhere
-slightly different from the raw family. On the alpha = 1.5 seed the raw ladder
-(128, 192, 256, 384 -> 1.508, 1.525, 1.534, 1.545) extrapolates to about 1.565
-while the pair family sits at 1.579-1.581. `matched.R` is the discriminator:
-generate and fit at the same resolution, with and without extrapolation.
-
-Practical consequence either way: at alpha >= 1.5 this offset is 1-3x the
-per-fit discretisation error, so it, not the grid, sets the floor on alpha
-recovery there.
+That last result is what localises it. Once generator and estimator are the same
+code at the same resolution, a surviving offset that does not shrink with n
+cannot be in the model or the discretisation at all — it has to be something the
+fitting pipeline does to the data. That is `rt_resolution`.
 
 ## Two traps these scripts exist to avoid
 

@@ -53,6 +53,17 @@ Set \code{emc2.rlf_nx} once per fit rather than trying to vary it with
 \eqn{\alpha}: the discretisation error is a bias, and a bias that moves with
 \eqn{\alpha} biases \eqn{\hat{\alpha}} itself.
 
+For \eqn{\alpha} recovery specifically, the grid is usually not the limiting
+factor: \code{make_emc}'s default \code{rt_resolution = 1/60} floors response times to
+a 16.7 ms bin while the likelihood evaluates the density \emph{at} the floored
+time, and \eqn{\hat{\alpha}} absorbs the mismatch. With generator and
+estimator otherwise matched at n = 8000, that biases \eqn{\hat{\alpha}} by
++0.012 at \eqn{\alpha = 1.1}, +0.023 at 1.5, +0.019 at 1.7 and +0.012 at
+1.9, against +0.002 or better at \code{rt_resolution = NULL}. That is one to
+three times the discretisation error at \eqn{\alpha \ge 1.5}. Pass
+\code{rt_resolution = NULL} (or anything at 1 ms or finer) when \eqn{\alpha} is
+of inferential interest.
+
 At a fixed \code{emc2.rlf_nx} the error is smooth in \eqn{\alpha} and acts as a
 small bias rather than as noise. On a recovery check at \eqn{\alpha = 1.6}
 with 2000 observations it displaces \eqn{\hat{\alpha}} by -0.020 at
