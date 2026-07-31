@@ -40,6 +40,8 @@
 #include <cmath>
 #include <algorithm>
 #include <cstddef>
+#include <limits>
+#include <cfloat>
 #include "fpe_models.h"
 #include "gh_quad.h"
 #include "gl_quad.h"
@@ -168,6 +170,11 @@ struct SolveCache {
     if (n_entries >= e.size()) e.resize(n_entries + 1);
     return e[n_entries++];
   }
+  // Grow the store so the next `n` push() calls cannot reallocate, which would
+  // invalidate pointers a batch is still holding.
+  void reserve_for(size_t n) {
+    if (n_entries + n > e.size()) e.resize(n_entries + n);
+  }
 };
 
 // ---------------------------------------------------------------------------
@@ -210,6 +217,234 @@ inline void bou_solve(const Key& p, double t_max, const Grid& gr, Entry& out) {
     out.log_pdf_up[i] = (r.pdf[i] > 0.0) ? std::log(r.pdf[i]) : R_NegInf;
   }
   out.grid_idx.build(out.t);
+}
+
+// ---------------------------------------------------------------------------
+// Lane-batched march.
+//
+// The quadrature is the whole cost of this model, and its nodes are an unusually
+// good fit for batching: they share nx, horizon and time schedule exactly, so
+// they march on ONE clock.  That is what makes this simpler than the race
+// version (fpe_race.h:597), whose accumulators each need their own schedule and
+// retire at different times -- the reason its common-clock variant is
+// deprecated.  Here a common clock is not an approximation, it is the truth.
+//
+// The layout is lane-interleaved (cell i, lane l at [i*LANES + l]) so the inner
+// loops are contiguous over lanes and the compiler auto-vectorises them under
+// -O3 -march=native.  That is deliberately not hand-written intrinsics: it gets
+// most of the win for a fraction of the code, and every lane here runs the
+// identical instruction sequence, which is the case auto-vectorisation handles
+// well.  All bounds are fixed for now, so the operator is constant and the
+// factorisation is done once per schedule block.
+// ---------------------------------------------------------------------------
+// Width follows the widest available register, as fpe_race.h:44-88 does.
+// Measured on this batch (118 rows, sv+SZ+st0, 49 nodes, nx=512):
+//   scalar 0.855 s   4 lanes 0.458 s   8 lanes 0.365 s
+#if defined(__AVX512F__)
+constexpr size_t BOU_LANES = 8;
+#else
+constexpr size_t BOU_LANES = 4;
+#endif
+
+inline void bou_solve_batch(const std::vector<Key>& keys, double t_max,
+                            const Grid& gr, std::vector<Entry*>& out) {
+  const size_t nk = keys.size();
+  if (nk == 0) return;
+
+  fpe::FPE_Mesh g;
+  g.build(gr.nx, gr.grade, fpe::FPE_ModelBoundedOU::symmetric_mesh);
+  const int M = g.M;
+
+  auto make_model = [&](const Key& p) {
+    fpe::FPE_ModelBoundedOU m;
+    m.v = p.v; m.beta = p.beta; m.anchor = p.anchor; m.sigma = 1.0; m.xlo = 0.0;
+    if (p.bkind == fpe::FPE_BND_FIXED)
+      m.bnd.set_kind(fpe::FPE_BND_FIXED, p.a, p.a, 0.0, 0.0, false);
+    else
+      m.bnd.set_kind(p.bkind, p.a, p.binf, p.tau, p.pw, false);
+    return m;
+  };
+
+  for (size_t base = 0; base < nk; base += BOU_LANES) {
+    const size_t n_lane = std::min(BOU_LANES, nk - base);
+
+    // Pass 1: learn each lane's preferred seed time, then adopt the smallest.
+    std::vector<fpe::FPE_ModelBoundedOU> models(BOU_LANES);
+    std::vector<std::vector<double>> q0(BOU_LANES);
+    std::vector<double> absorbed(BOU_LANES, 0.0);
+    double t_seed = std::numeric_limits<double>::infinity();
+    for (size_t l = 0; l < BOU_LANES; ++l) {
+      const size_t src = base + std::min(l, n_lane - 1);
+      models[l] = make_model(keys[src]);
+      const double ts = fpe::fpe_seed(models[l], keys[src].z, keys[src].z, g,
+                                      t_max, q0[l], &absorbed[l]);
+      if (ts < t_seed) t_seed = ts;
+    }
+    for (size_t l = 0; l < BOU_LANES; ++l) {
+      const size_t src = base + std::min(l, n_lane - 1);
+      fpe::fpe_seed(models[l], keys[src].z, keys[src].z, g, t_max, q0[l],
+                    &absorbed[l], t_seed);
+    }
+
+    const fpe::FPE_TimeSchedule sched =
+      fpe::fpe_time_schedule(t_max - t_seed, gr.nt_for(t_max), gr.tgrade);
+
+    const size_t SZ = static_cast<size_t>(M) * BOU_LANES;
+    std::vector<double> Q(SZ), RHS(SZ), DIAG(SZ), SUB(SZ), SUP(SZ),
+                        DINV(SZ), CPRIME(SZ);
+    std::vector<double> opD(BOU_LANES, 0.0);
+
+    for (size_t l = 0; l < BOU_LANES; ++l) {
+      fpe::FPE_Op op;
+      fpe::build_op(models[l], t_seed, g, op);
+      opD[l] = op.D;
+      for (int i = 0; i < M; ++i) {
+        const size_t o = static_cast<size_t>(i) * BOU_LANES + l;
+        Q[o] = q0[l][i]; DIAG[o] = op.diag[i];
+        SUB[o] = op.sub[i]; SUP[o] = op.sup[i];
+      }
+    }
+
+    // Per-lane running state, mirroring fpe_solve exactly.
+    std::vector<double> cdf_prev(BOU_LANES, 0.0), surv_prev(BOU_LANES, 1.0),
+                        cdf_lo_prev(BOU_LANES, 0.0), cdf_lo_flux(BOU_LANES, 0.0),
+                        gl_prev(BOU_LANES, 0.0);
+    std::vector<Entry*> ent(BOU_LANES, nullptr);
+    for (size_t l = 0; l < n_lane; ++l) ent[l] = out[base + l];
+
+    for (size_t l = 0; l < n_lane; ++l) {
+      double mass = 0.0;
+      for (int i = 0; i < M; ++i)
+        mass += g.dx[i] * Q[static_cast<size_t>(i) * BOU_LANES + l];
+      const double cdf0 = std::min(1.0, std::max(0.0, 1.0 - mass));
+      cdf_lo_prev[l] = std::min(cdf0, std::max(0.0, absorbed[l]));
+      cdf_lo_flux[l] = cdf_lo_prev[l];
+      cdf_prev[l] = cdf0;
+      surv_prev[l] = std::min(1.0, std::max(0.0, mass));
+
+      double gu = opD[l] * (g.cA * Q[static_cast<size_t>(M - 1) * BOU_LANES + l] -
+                            g.cB * Q[static_cast<size_t>(M - 2) * BOU_LANES + l]);
+      double glo = opD[l] * (g.cL_A * Q[l] - g.cL_B * Q[BOU_LANES + l]);
+      if (!(gu > 0.0)) gu = 0.0;
+      if (!(glo > 0.0)) glo = 0.0;
+      gl_prev[l] = glo;
+
+      Entry& e = *ent[l];
+      e.key = keys[base + l]; e.t_max = t_max;
+      e.t.clear(); e.log_pdf_lo.clear(); e.log_pdf_up.clear();
+      e.cdf_lo.clear(); e.cdf_up.clear();
+      e.t.push_back(t_seed);
+      e.log_pdf_up.push_back(gu > 0.0 ? std::log(gu) : R_NegInf);
+      e.log_pdf_lo.push_back(glo > 0.0 ? std::log(glo) : R_NegInf);
+      e.cdf_lo.push_back(cdf_lo_prev[l]);
+      e.cdf_up.push_back(cdf0 - cdf_lo_prev[l]);
+    }
+
+    // Factorise (I - c*L) for the current c, interleaved across lanes.
+    auto factor = [&](double c) {
+      for (size_t l = 0; l < BOU_LANES; ++l) DINV[l] = 1.0 / (1.0 - c * DIAG[l]);
+      for (int i = 1; i < M; ++i) {
+        const size_t o = static_cast<size_t>(i) * BOU_LANES;
+        const size_t p = static_cast<size_t>(i - 1) * BOU_LANES;
+        for (size_t l = 0; l < BOU_LANES; ++l) {
+          CPRIME[p + l] = -c * SUP[p + l] * DINV[p + l];
+          const double d = (1.0 - c * DIAG[o + l]) -
+                           (-c * SUB[o + l]) * CPRIME[p + l];
+          DINV[o + l] = 1.0 / ((d != 0.0) ? d : DBL_MIN);
+        }
+      }
+    };
+
+    int n_steps = 0;
+    for (size_t b = 0; b < sched.steps.size(); ++b) n_steps += sched.steps[b];
+    const int n_rann = std::min(2, n_steps);
+
+    double t = t_seed;
+    int done = 0;
+    std::vector<double> mass(BOU_LANES, 0.0);
+
+    for (size_t b = 0; b < sched.dt.size(); ++b) {
+      const double dtb = sched.dt[b];
+      // Rannacher half-step (c = dt/2) and CN full step (c = dt/2) share c, so
+      // one factorisation serves the whole block -- the same identity fpe_solve
+      // relies on.
+      factor(0.5 * dtb);
+      for (int k = 0; k < sched.steps[b]; ++k, ++done) {
+        const int n_sub = (done < n_rann) ? 2 : 1;
+        for (int sub = 0; sub < n_sub; ++sub) {
+          const bool be = (done < n_rann);
+          const double step = be ? 0.5 * dtb : dtb;
+
+          if (be) {
+            RHS = Q;
+          } else {
+            const double c = 0.5 * step;
+            for (int i = 0; i < M; ++i) {
+              const size_t o = static_cast<size_t>(i) * BOU_LANES;
+              for (size_t l = 0; l < BOU_LANES; ++l) {
+                double vv = Q[o + l] + c * DIAG[o + l] * Q[o + l];
+                if (i > 0) vv += c * SUB[o + l] * Q[o - BOU_LANES + l];
+                if (i < M - 1) vv += c * SUP[o + l] * Q[o + BOU_LANES + l];
+                RHS[o + l] = vv;
+              }
+            }
+          }
+
+          // Thomas: forward substitution then back substitution, with the mass
+          // accumulated on the way back so the sweep is single-pass.
+          const double c = be ? step : 0.5 * step;
+          for (size_t l = 0; l < BOU_LANES; ++l) Q[l] = RHS[l] * DINV[l];
+          for (int i = 1; i < M; ++i) {
+            const size_t o = static_cast<size_t>(i) * BOU_LANES;
+            const size_t p = o - BOU_LANES;
+            for (size_t l = 0; l < BOU_LANES; ++l)
+              Q[o + l] = (RHS[o + l] + c * SUB[o + l] * Q[p + l]) * DINV[o + l];
+          }
+          for (size_t l = 0; l < BOU_LANES; ++l)
+            mass[l] = g.dx[M - 1] * Q[static_cast<size_t>(M - 1) * BOU_LANES + l];
+          for (int i = M - 2; i >= 0; --i) {
+            const size_t o = static_cast<size_t>(i) * BOU_LANES;
+            for (size_t l = 0; l < BOU_LANES; ++l) {
+              Q[o + l] -= CPRIME[o + l] * Q[o + BOU_LANES + l];
+              mass[l] += g.dx[i] * Q[o + l];
+            }
+          }
+
+          t += step;
+          for (size_t l = 0; l < n_lane; ++l) {
+            double cdf_mass = std::min(1.0, std::max(0.0, 1.0 - mass[l]));
+            if (cdf_mass < cdf_prev[l]) cdf_mass = cdf_prev[l];
+            cdf_prev[l] = cdf_mass;
+            double s_keep = std::min(1.0, std::max(0.0, mass[l]));
+            if (s_keep > surv_prev[l]) s_keep = surv_prev[l];
+            surv_prev[l] = s_keep;
+
+            double gu = opD[l] *
+              (g.cA * Q[static_cast<size_t>(M - 1) * BOU_LANES + l] -
+               g.cB * Q[static_cast<size_t>(M - 2) * BOU_LANES + l]);
+            double glo = opD[l] * (g.cL_A * Q[l] - g.cL_B * Q[BOU_LANES + l]);
+            if (!(gu > 0.0)) gu = 0.0;
+            if (!(glo > 0.0)) glo = 0.0;
+
+            cdf_lo_flux[l] += 0.5 * step * (gl_prev[l] + glo);
+            gl_prev[l] = glo;
+            double clo = cdf_lo_flux[l];
+            if (clo < cdf_lo_prev[l]) clo = cdf_lo_prev[l];
+            if (clo > cdf_mass) clo = cdf_mass;
+            cdf_lo_prev[l] = clo;
+
+            Entry& e = *ent[l];
+            e.t.push_back(t);
+            e.log_pdf_up.push_back(gu > 0.0 ? std::log(gu) : R_NegInf);
+            e.log_pdf_lo.push_back(glo > 0.0 ? std::log(glo) : R_NegInf);
+            e.cdf_lo.push_back(clo);
+            e.cdf_up.push_back(cdf_mass - clo);
+          }
+        }
+      }
+    }
+    for (size_t l = 0; l < n_lane; ++l) ent[l]->grid_idx.build(ent[l]->t);
+  }
 }
 
 inline Entry& bou_cache_get(SolveCache& C, const Key& p, double t_need) {
@@ -290,6 +525,12 @@ inline BouMix bou_mix(SolveCache& C, double t_dec,
   BouMix acc{0.0, 0.0, 0.0, 0.0};
   const Grid& gr = C.grid;
 
+  // Collect the quadrature's cache misses and solve them as one lane batch.
+  // Solving them one at a time would leave the lanes empty, which is the whole
+  // point of batching here -- the nodes share a mesh, horizon and clock.
+  std::vector<Key> miss;
+  std::vector<Entry*> miss_e;
+
   const bool do_sv = (sv > 0.0) && R_FINITE(sv);
   const bool do_sz = (sz > 0.0) && R_FINITE(sz);
   const int nv = do_sv ? std::max(1, gr.n_sv) : 1;
@@ -321,7 +562,43 @@ inline BouMix bou_mix(SolveCache& C, double t_dec,
       const double anc = anchor_at_z ? zi : anchor_fix;
       if (!bou_key(vi, beta, a, zi, anc, s, bkind, binf, tau, pw, k)) continue;
 
-      Entry& en = bou_cache_get(C, k, std::max(t_dec, 1e-3));
+      // Two passes over the same node list: gather misses, solve them batched,
+      // then read every node out of the cache.
+      if (C.find(k) == nullptr) {
+        bool queued = false;
+        for (const Key& q : miss) if (q == k) { queued = true; break; }
+        if (!queued) { miss.push_back(k); miss_e.push_back(nullptr); }
+      }
+    }
+  }
+
+  if (!miss.empty()) {
+    const double t_max = std::max(C.t_horizon, std::max(t_dec, 1e-3));
+    // Grow the entry store ONCE before taking any pointer into it: pushing one
+    // at a time would reallocate mid-loop and leave every earlier pointer
+    // dangling.
+    C.reserve_for(miss.size());
+    for (size_t i = 0; i < miss.size(); ++i) miss_e[i] = &C.push();
+    bou_solve_batch(miss, t_max, gr, miss_e);
+  }
+
+  for (int iv = 0; iv < nv; ++iv) {
+    const double wv = do_sv ? gh_standard_normal_weight(ghr, iv) : 1.0;
+    const double vi = do_sv ? (v + sv * M_SQRT2 * ghr.x[iv]) : v;
+    if (!(wv > 0.0)) continue;
+    for (int iz = 0; iz < nz; ++iz) {
+      const double wz = do_sz ? 0.5 * glr.w[iz] : 1.0;
+      const double zi = do_sz ? (z + 0.5 * sz * glr.x[iz]) : z;
+      if (!(wz > 0.0)) continue;
+      if (!(zi > 0.0) || !(zi < a)) continue;
+
+      Key k;
+      const double anc = anchor_at_z ? zi : anchor_fix;
+      if (!bou_key(vi, beta, a, zi, anc, s, bkind, binf, tau, pw, k)) continue;
+
+      Entry* enp = C.find(k);
+      if (enp == nullptr) continue;
+      const Entry& en = *enp;
       const Interp it = bou_interp(en, t_dec);
       const double w = wv * wz;
       if (R_FINITE(it.log_pdf_lo)) acc.d_lo += w * std::exp(it.log_pdf_lo);

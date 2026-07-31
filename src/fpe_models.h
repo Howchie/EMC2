@@ -373,10 +373,17 @@ inline double fpe_norm_mass(double a, double b, double mean, double sd) {
 //
 // Returns t0; fills q (length M) with the normalised sub-density q = L * p.
 // ---------------------------------------------------------------------------
+// `t_seed_force` > 0 overrides the seed time chosen below.  Lane-batched callers
+// need it: a batch marches on ONE clock, so every lane has to start from the
+// same t, and the analytic seed is equally valid at any sufficiently small time.
+// The batch picks the smallest t_seed any of its lanes would have chosen, so no
+// lane is seeded later -- and therefore less accurately -- than it would have
+// been on its own.
 template <class Model>
 inline double fpe_seed(const Model& m, double z_lo, double z_hi,
                        const FPE_Mesh& g, double t_max, std::vector<double>& q,
-                       double* absorbed_lower = nullptr) {
+                       double* absorbed_lower = nullptr,
+                       double t_seed_force = -1.0) {
   const int M = g.M;
   q.assign(M, 0.0);
   if (absorbed_lower != nullptr) *absorbed_lower = 0.0;
@@ -442,6 +449,7 @@ inline double fpe_seed(const Model& m, double z_lo, double z_hi,
   double t_seed = (s_target / Bc) * (s_target / Bc);
   t_seed = std::min(t_seed, 0.25 * t_max);
   if (!(t_seed > 0.0)) t_seed = 1e-6;
+  if (t_seed_force > 0.0) t_seed = t_seed_force;
 
   const double L = m.length(t_seed);
   const double a = m.bnd.a(t_seed);

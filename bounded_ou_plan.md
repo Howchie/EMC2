@@ -145,26 +145,72 @@ loudly under the original one-sided grading.
 
 ---
 
-## Stage 2 -- production path (`src/fpe_race.h`)
+## Stage 2 -- production path (DONE)
 
-The likelihood does not run through `fpe_solve`. It runs through the
-hand-vectorised `fpe_solve_batch_ou_lanes` (`fpe_race.h:597`, 8 lanes on AVX-512,
-4 otherwise) behind the parameter-keyed `SolveCache` (`:287`) and
-`cache_get_batch` (`:1018`). Those call `fpe::build_op` (`:650, :761`), so the
-operator change propagates for free -- but they **inline** the flux extraction
-(`:880-881`) and the per-lane mass/survivor bookkeeping, and the kernel is
-hard-typed to `std::vector<fpe::FPE_ModelOU>`.
+`src/fpe_bou.h` + `src/bou_diffusion.cpp`.
 
-- Template the lane kernel on the model type; add a second per-lane flux
-  accumulator and the same split as Stage 1.
-- `Entry` (`:276`) gains a second `log_pdf` vector; `Key` (`:141`) gains `beta`,
-  `z`, `anchor`, keeping the bit-exact comparison and the `FPE_BND_FIXED`
-  canonicalisation.
-- `GridIndex`, `interp_log`, the sparse-query machinery: reused unchanged.
-- Pick defaults from the Stage 1 measurements, not from `FPE_Grid` -- budget to
-  `nt`/`tgrade`, `grade = FPE_GRADE_BOUNDED`.
+Rather than template the race lane kernel (`fpe_race.h:597`), which carries
+machinery this model has no use for -- loser survivors, sparse queries, per-lane
+schedules and lane retirement -- the bounded model got its own cache and
+lane-batched march. Its parallelism is across QUADRATURE NODES, which share a
+mesh, a horizon and a clock exactly, so a common-clock batch is not an
+approximation here (it is precisely the objection that makes
+`fpe_solve_batch_ou_common_clock` deprecated for racing accumulators).
 
-## Stage 3 -- collapsing bounds
+- `Key` is bit-exact and quadrature nodes are folded in **before** the key is
+  built, so a node is just another key and the cache dedupes across nodes free.
+- `SolveCache::t_horizon` is set ONCE per batch from the largest decision time.
+  Growing it per row re-solved every node as a sorted RT vector was walked; that
+  is what made the first version unusably slow, and it is now pinned by a test
+  asserting the solve count is exactly `n_sv * n_sz`.
+- `fpe_seed` gained `t_seed_force` so every lane starts from one clock: the
+  batch adopts the smallest `t_seed` any lane would have chosen, so no lane is
+  seeded later, and therefore less accurately, than it would have been alone.
+- The layout is lane-interleaved and left to auto-vectorisation rather than
+  hand-written intrinsics -- every lane runs an identical instruction sequence,
+  which is the case the compiler handles well, for a fraction of the code.
+  Measured (118 rows, sv+SZ+st0, 49 nodes, nx=512):
+  scalar 0.855 s, 4 lanes 0.458 s, 8 lanes 0.365 s.
+- Defaults are NOT `fperace::FPE_Grid`'s: `dt_target = 5e-4` with
+  `grade = FPE_GRADE_BOUNDED` (uniform), because this model is time-dominated.
+
+## Stage 3 -- across-trial variability (DONE)
+
+Gauss-Hermite over `sv`, Gauss-Legendre over `SZ`, both folded into the cache
+key; `st0` is an outer Gauss-Legendre loop over the query time, so it triggers
+no solves at all. Cost is `n_sv * n_sz` marches per parameter set.
+
+Two conventions had to be established by measurement, not assumed, and both are
+now pinned by tests:
+
+- **`st0` is `U(t0, t0+st0)`** -- the lower-edge form. Reconstructing an
+  `st0 > 0` density from point-`t0` densities, the lower-edge average matches to
+  2e-3 where the centred form is off by 3.4e-1.
+- **`SZ` arrives RAW** at the C++ entry points and is widened internally by
+  `2*SZ*min(Z,1-Z)`, exactly as `d_DDM_Wien_raw` does (`model_DDM.h:122`).
+  Ttransform is an R-side step and does NOT run on this path. The R-level
+  `dDDM`/`pDDM` are the opposite contract -- they take the already-widened value,
+  because by the time they are called Ttransform has run. Comparing the two
+  without accounting for this shows a spurious 0.6% disagreement at Z = 0.45.
+
+Validated against the DDM oracle at `beta = 0`: density and cdf agree to ~3e-5
+on both responses for every combination of `sv`, `SZ` and `st0`.
+
+## Stage 4 -- R wrappers and simulator (DONE)
+
+`R/model_BOU.R` -- wrappers only, no R-side likelihood (everything is C++).
+DDM's `p_types`, `transform`, `bound` and `Ttransform` reused verbatim plus
+`beta`, so a DDM design converts by adding `beta~1`. `log_likelihood` is the
+shared `log_likelihood_ddm`.
+
+The simulator (`rbou_cpp`) steps the exact OU transition -- `beta = 0` regular
+through `expm1`, not a special case -- and applies a Brownian-bridge correction
+at BOTH barriers for paths that cross and return within a step. Without it RTs
+are biased up and error rates down, which would make it useless as the
+independent check it exists to be. It agrees with the solver on P(upper) within
+Monte Carlo error and on quantiles to 1-4 ms.
+
+## Stage 5 -- collapsing bounds (DEFERRED)
 
 More invasive than it looks. `x_lo()` takes no `t` (`fpe_models.h:199, 240`) and
 is read by `fpe_seed` and every physical-coordinate map. Promote it to `x_lo(t)`
