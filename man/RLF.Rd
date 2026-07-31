@@ -30,15 +30,37 @@ is bought with \code{emc2.rlf_nx} (which converges at \eqn{O(h^2)}) rather than
 with a smaller step. Strongly heavy-tailed fits (\eqn{\alpha} below about
 1.4) resolve the absorbing boundary least well and benefit most.
 
-The discretisation error is smooth in \eqn{\alpha} (residual roughness of
-the profile log-likelihood is ~0.004 nats, far below anything a sampler
-responds to), so it acts as a small bias rather than as noise. On a
-recovery check at \eqn{\alpha = 1.6} with 2000 observations it displaces
-\eqn{\hat{\alpha}} by -0.020 at \code{emc2.rlf_nx = 128}, against a posterior SD
-of about 0.035; raising \code{emc2.rlf_nx} to 192 reduces the displacement to
--0.003. Because the bias is fixed while the posterior SD shrinks as
-\eqn{1/\sqrt{n}}, raise \code{emc2.rlf_nx} when \eqn{\alpha} is of direct
-inferential interest and \eqn{n} per participant is large.
+\code{emc2.rlf_nx} sets the \emph{coarse} member of the extrapolated pair, so the
+default of 128 solves at 128 and 192 and combines them; the figures below
+are all for the pair, not for a single solve at that resolution.
+
+How much resolution a fit needs depends strongly on \eqn{\alpha}. Scored as
+mean \eqn{|\Delta \log f|} per trial over the central 96\% of each
+distribution against a converged reference, the \code{emc2.rlf_nx} at which the
+pair holds 0.01 is about 146 at \eqn{\alpha = 1.1}, 99 at 1.3, 70 at 1.5 and
+48 from 1.7 up, so the default is generous above \eqn{\alpha \approx 1.5}
+and marginal below 1.2. Lowering \code{emc2.rlf_nx} to 96 for data expected to be
+near-Brownian roughly halves the cost, at a mean displacement of
+\eqn{\hat{\alpha}} of 0.014 against 0.008 for the default (2000 trials,
+\eqn{\alpha} from 1.1 to 1.9) -- still several times more accurate than a
+single unextrapolated solve at 128, which displaces \eqn{\hat{\alpha}} by
+0.091. Do not go below 96: the profile log-likelihood becomes visibly jagged
+in \eqn{\alpha} (RMS roughness about a local quadratic at
+\eqn{\alpha = 1.7} is 0.13 nats at \code{emc2.rlf_nx} 128 and 96, 0.60 at 64 and
+1.54 at 48), which a sampler sees as noise.
+
+Set \code{emc2.rlf_nx} once per fit rather than trying to vary it with
+\eqn{\alpha}: the discretisation error is a bias, and a bias that moves with
+\eqn{\alpha} biases \eqn{\hat{\alpha}} itself.
+
+At a fixed \code{emc2.rlf_nx} the error is smooth in \eqn{\alpha} and acts as a
+small bias rather than as noise. On a recovery check at \eqn{\alpha = 1.6}
+with 2000 observations it displaces \eqn{\hat{\alpha}} by -0.020 at
+\code{emc2.rlf_nx = 128}, against a posterior SD of about 0.035; raising
+\code{emc2.rlf_nx} to 192 reduces the displacement to -0.003. Because the bias is
+fixed while the posterior SD shrinks as \eqn{1/\sqrt{n}}, raise
+\code{emc2.rlf_nx} when \eqn{\alpha} is of direct inferential interest and
+\eqn{n} per participant is large.
 
 Set \code{emc2.rlf_adaptive = TRUE} for the slower refinement checks used by the
 standalone validation solver.

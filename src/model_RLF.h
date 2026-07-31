@@ -1281,6 +1281,27 @@ struct Key {
 // keeps the bulk of the data at the floor domain.  Buckets double, so bucket k
 // widens the domain by 2^(k/alpha) rather than letting a single outlier set it
 // for everyone.
+//
+// Re-measured after Richardson extrapolation landed, in case correcting the
+// leading h error made the split redundant.  It does not: extrapolation assumes
+// an asymptotic error expansion, and a ballooned domain leaves too few cells in
+// the boundary layer for one to hold.  Turning the split off on 2000-trial data
+// (profile peak, converged solver in brackets):
+//
+//   alpha 1.10 [1.111]   raw 128  1.010 -> 1.330   pair 128+192  1.092 -> 1.245
+//   alpha 1.50 [1.581]   raw 128  1.508 -> 1.517   pair  64+96   1.619 -> 1.568
+//
+// and the profile log-likelihood at alpha = 1.3 goes from 0.054 to 0.478 nats
+// of roughness about a local quadratic.  The cost is self-limiting: the split
+// only engages once t_max passes t_crit, so at alpha = 1.7 with 5 s of data no
+// bucket is occupied and it is a no-op, and the 1.6-1.7x it costs at alpha 1.1
+// to 1.5 is only paid where it is also worth 0.15 to 0.32 of alpha.
+//
+// Loosening the threshold to t_crit = 2 (c b)^alpha, so the bulk group absorbs
+// a factor c of widening before anything splits off, was measured at c = 1.3,
+// 1.6 and 2.0.  It saves 5-20% and is erratic in both directions (alpha = 1.3
+// peak error -0.011 -> -0.002 at c = 1.3 but -0.121 at c = 1.6), so the
+// threshold stays where the domain first starts to grow.
 constexpr int RLF_MAX_HORIZON_BUCKET = 6;
 
 inline int rlf_horizon_bucket(const Key& key, double t_max) {
@@ -1329,6 +1350,35 @@ inline bool rlf_key(double v, double sigma, double alpha, double B, double A,
 // field when the corresponding emc2.rlf_* option is actually set.  An R-side
 // getOption() default is therefore invisible here, and a mismatch silently
 // samples on a different (and much more expensive) grid than dRLF/pRLF use.
+// nx is deliberately NOT a function of alpha, although the resolution actually
+// needed falls steeply with it.  Measured as mean |d log pdf| over the central
+// 96% against an nx = 1024 reference, averaged over v in {0.5, 1, 3} and b0 in
+// {1, 2}, the nx at which an extrapolated pair holds 0.01 per trial is
+//
+//   alpha  1.05 1.10 1.20 1.30 1.40 1.50 1.60 1.70 1.80+
+//   nx      172  146  115   99   84   70   57   48    48
+//
+// -- log-linear in alpha at a rate of about 1.84 until it bottoms out -- so a
+// fixed nx over-resolves the Brownian end by an order of magnitude in cost.
+// Scheduling nx on the key's own alpha was implemented and rejected twice over:
+//
+//   * It tilts the likelihood in the one direction that matters.  A schedule
+//     makes the discretisation bias a function of alpha, which adds a spurious
+//     term to the score for alpha; at fixed nx the bias is nearly constant
+//     across a profile and largely cancels out of the peak.  At alpha = 1.3 a
+//     schedule reaching nx = 96 at the peak recovers -0.050 where a flat
+//     nx = 96 recovers -0.013 -- same grid at the peak, four times the error.
+//   * It roughens the surface.  Quantised nx steps the log-likelihood by ~1 nat
+//     per cell crossed: RMS residual about a local quadratic at alpha = 1.3 is
+//     0.054 nats at flat nx = 128 and 1.25 nats under a schedule spanning
+//     nx 81-97.  Grids below about 96 are jagged in alpha on their own account
+//     (alpha = 1.7: 0.13 nats at nx = 128, 0.14 at 96, 0.60 at 64, 1.54 at 48,
+//     and extrapolation amplifies it because it differences two solves), which
+//     is what the cheap end of the schedule is made of.
+//
+// The best schedule found is dominated by simply setting a lower flat nx: at
+// floor 96 it costs 1.35x flat nx = 96 for slightly worse mean recovery.  So
+// resolution is a per-fit choice, documented on RLF(), not a per-key one.
 struct Grid {
   int nx = 128;
   double dt_target = 8e-3;
