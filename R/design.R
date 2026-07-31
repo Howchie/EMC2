@@ -874,6 +874,10 @@ design_model <- function(data,design,model=NULL,
     model <- design$model
   }
   if (model()$type=="SDT") rt_check <- FALSE
+  # design_model() defaults rt_resolution to 1/60 and most internal callers take
+  # that default rather than passing one, so make_emc()'s override would not
+  # reach them.  Enforce the model's own answer here, where every path funnels.
+  if (!is.null(rt_resolution) && !model_compress_ok(model)) rt_resolution <- NULL
   fixed_accumulator_roles <- design$fixed_accumulator_roles
   if(grepl("MRI", model()$type)){
     dadm <- data

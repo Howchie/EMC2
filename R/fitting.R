@@ -823,11 +823,28 @@ make_emc <- function(data,design,model=NULL,
   }
   ## SM END
 
+  # Models whose likelihood is a cached grid solve gain nothing from binning rt
+  # but do lose accuracy by it (see model_compress_ok).  Override both knobs for
+  # them rather than leaving a silent bias in the default workflow.
+  no_bin <- !sapply(model, model_compress_ok)
+  compress[no_bin] <- FALSE
+
   dadm_list <- vector(mode="list",length=length(data))
   if (is.null(rt_resolution)) {
     rt_resolution <- rep(list(NULL), length(data))
   } else {
     rt_resolution <- as.list(rep(rt_resolution, length.out = length(data)))
+  }
+  if (any(no_bin)) {
+    was_binned <- no_bin & !vapply(rt_resolution, is.null, logical(1))
+    rt_resolution[no_bin] <- list(NULL)
+    if (compress_passed || any(was_binned)) {
+      what <- if (length(model) == 1) "The model's likelihood is" else
+        paste0("The likelihood of model(s) ", paste(which(no_bin), collapse=", "), " is")
+      message(what, " a cached grid solve, so binning response times saves no ",
+              "computation while biasing the fit: using compress = FALSE and ",
+              "rt_resolution = NULL.")
+    }
   }
   for (i in 1:length(dadm_list)) {
     message("Processing data set ",i)

@@ -111,6 +111,10 @@ inline fperace::SolveCache* rou_cache(void* ctx_) {
 inline void rou_prepare_rows(fperace::SolveCache& C, const double* rt,
                              const double* const* cols, int n_rows,
                              const int* isok) {
+  if (C.prepared && C.row_group.size() == static_cast<size_t>(n_rows)) {
+    return;
+  }
+
   const double* v_  = cols[emc2col::rou::v];
   const double* k_  = cols[emc2col::rou::k];
   const double* B_  = cols[emc2col::rou::B];
@@ -165,6 +169,7 @@ inline void rou_prepare_rows(fperace::SolveCache& C, const double* rt,
   for (int i = 0; i < n_rows; ++i) {
     if (row_key_idx[i] >= 0) C.row_group[i] = to_cache[row_key_idx[i]];
   }
+  C.prepared = true;
 }
 
 // ---------------------------------------------------------------------------

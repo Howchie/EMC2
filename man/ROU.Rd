@@ -88,6 +88,13 @@ much slower — permitted, but priced. Accuracy can be traded against speed
 with \code{options(emc2.fpe_nx = )}, \code{options(emc2.fpe_dt = )},
 \code{options(emc2.fpe_grade = )} and \code{options(emc2.fpe_tgrade = )}.
 
+Because the Fokker-Planck solver solves over a continuous time grid from 0 to
+max(t), binning response times saves zero computation time while introducing
+artificial flooring bias into parameter estimates (especially t0, v, and k).
+\code{ROU()} therefore declares \code{compress_ok = FALSE}, and \code{make_emc} forces
+\code{compress = FALSE} and \code{rt_resolution = NULL} for it; no argument needs to be
+passed, and an explicit \code{rt_resolution} is overridden with a message.
+
 Smith, P. L., & Ratcliff, R. (2004). Psychology and neurobiology of simple
 decisions. \emph{Trends in Neurosciences, 27}(3), 161-168.
 

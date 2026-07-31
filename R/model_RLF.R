@@ -133,16 +133,45 @@ rRLF <- function(lR, pars, ok = rep(TRUE, nrow(pars)),
 #' \eqn{\alpha}: the discretisation error is a bias, and a bias that moves with
 #' \eqn{\alpha} biases \eqn{\hat{\alpha}} itself.
 #'
-#' For \eqn{\alpha} recovery specifically, the grid is usually not the limiting
-#' factor: `make_emc`'s default `rt_resolution = 1/60` floors response times to
-#' a 16.7 ms bin while the likelihood evaluates the density *at* the floored
-#' time, and \eqn{\hat{\alpha}} absorbs the mismatch. With generator and
-#' estimator otherwise matched at n = 8000, that biases \eqn{\hat{\alpha}} by
-#' +0.012 at \eqn{\alpha = 1.1}, +0.023 at 1.5, +0.019 at 1.7 and +0.012 at
-#' 1.9, against +0.002 or better at `rt_resolution = NULL`. That is one to
-#' three times the discretisation error at \eqn{\alpha \ge 1.5}. Pass
-#' `rt_resolution = NULL` (or anything at 1 ms or finer) when \eqn{\alpha} is
-#' of inferential interest.
+#' Response times are never binned for this model. Because the likelihood is a
+#' grid solve cached per parameter tuple, the cost is the time march out to
+#' `max(rt)` and the individual response times only select readout points along
+#' a march already paid for, so `rt_resolution` saves no computation while the
+#' likelihood evaluates the density *at* the floored time and
+#' \eqn{\hat{\alpha}} absorbs the mismatch. `RLF()` therefore declares
+#' `compress_ok = FALSE` and `make_emc` forces `compress = FALSE` and
+#' `rt_resolution = NULL`; nothing needs to be passed for this.
+#'
+#' A low \eqn{\alpha} does not announce itself with implausible response times.
+#' In a race the loser truncates the winner's tail, so with human-plausible
+#' parameters (`t0` 0.1, `A` 0, `s` 1, a second accumulator at 0.6 of the
+#' drift) the probability of a response beyond 3 s stays below 0.3% across the
+#' whole of \eqn{\alpha \in [1.1, 1.9]}, and the 99th percentile of the pooled
+#' response times moves by less than 0.12 s.
+#'
+#' \eqn{\alpha} is nonetheless well identified, because it acts on choice and
+#' on the correct/error contrast rather than on the pooled tail. At
+#' \eqn{v = 2, B = 1} accuracy rises from 0.657 at \eqn{\alpha = 1.9} to 0.735
+#' at \eqn{\alpha = 1.1}, and the two response distributions pull apart as
+#' \eqn{\alpha} falls: at 1.9 they are near-identical, as a Wald race with
+#' equal thresholds requires (correct 0.267/0.434/0.778 against error
+#' 0.265/0.435/0.779 at the 10th, 50th and 90th percentiles), while at 1.1 the
+#' errors gain a long tail and the correct responses lose one (correct
+#' 0.337/0.544/0.767 against error 0.240/0.535/0.907). Pooling over responses
+#' hides almost all of this, so judge \eqn{\alpha} from accuracy and from the
+#' error distribution, not from the marginal response times.
+#'
+#' The corresponding discriminability against the nearest Wald race -- the best
+#' \eqn{\alpha = 2} fit in Kullback-Leibler divergence, optimising over drifts,
+#' threshold and `t0` -- is 0.145 nats per trial at \eqn{\alpha = 1.1}, 0.083 at
+#' 1.3 and 0.042 at 1.5, so 3 nats of evidence accumulate in roughly 20, 35 and
+#' 70 trials. Detection designs with a single accumulator and an upper censor at
+#' 3 s are weaker but still workable: at \eqn{v = 0.8, B = 1} the censoring rate
+#' moves from 9.6% to 12.1% and the conditional median from 0.83 s to 1.08 s
+#' over the same range, for 0.053 nats per trial at \eqn{\alpha = 1.1} (about 57
+#' trials). Do not lower `emc2.rlf_nx` on the assumption that the heavy-tailed
+#' end is unobservable; it is observable, and the discretisation error is not
+#' small relative to the effect being measured.
 #'
 #' At a fixed `emc2.rlf_nx` the error is smooth in \eqn{\alpha} and acts as a
 #' small bias rather than as noise. On a recovery check at \eqn{\alpha = 1.6}
@@ -162,6 +191,10 @@ RLF <- function() {
   list(
     type = "RACE",
     c_name = "RLF",
+    # The likelihood is a cached grid solve, so binning rt buys no speed (see
+    # model_compress_ok) while costing accuracy in alpha.  make_emc() turns both
+    # compression and rt_resolution off for this model.
+    compress_ok = FALSE,
     p_types = c(
       v = log(1), B = log(1), A = log(0), t0 = log(0), s = log(1),
       alpha = qnorm(0.7), pContaminant = qnorm(0)

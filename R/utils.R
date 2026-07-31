@@ -50,6 +50,22 @@ na_locf <- function(x, na.rm = FALSE) {
   x
 }
 
+# Whether a model tolerates having its response times binned.
+#
+# Binning rt (rt_resolution) is a lossy compression: the likelihood then
+# evaluates the density AT the bin edge instead of integrating over the bin.
+# For closed-form models that is worth it, because collapsing duplicate rows is
+# what makes the likelihood cheap.  For models whose likelihood is a grid solve
+# cached per parameter tuple (RLF, ROU) it is pure loss: the cost is the time
+# march out to max(rt), and the rt values only select readout points along a
+# solve that has already been paid for, so binning saves nothing and biases the
+# parameter that absorbs the bin-edge error.  Such a model declares
+# compress_ok = FALSE; anything that says nothing is compressible.
+model_compress_ok <- function(model) {
+  ok <- model()$compress_ok
+  is.null(ok) || isTRUE(ok)
+}
+
 .apply_timed_guess_winner <- function(out, lR_levels) {
   if (is.null(out$R) || !("time" %in% lR_levels)) return(out)
   

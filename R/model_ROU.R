@@ -272,6 +272,13 @@ rROU <- function(lR, pars, ok = rep(TRUE, nrow(pars)), kind = NULL,
 #' with `options(emc2.fpe_nx = )`, `options(emc2.fpe_dt = )`,
 #' `options(emc2.fpe_grade = )` and `options(emc2.fpe_tgrade = )`.
 #'
+#' Because the Fokker-Planck solver solves over a continuous time grid from 0 to
+#' max(t), binning response times saves zero computation time while introducing
+#' artificial flooring bias into parameter estimates (especially t0, v, and k).
+#' `ROU()` therefore declares `compress_ok = FALSE`, and `make_emc` forces
+#' `compress = FALSE` and `rt_resolution = NULL` for it; no argument needs to be
+#' passed, and an explicit `rt_resolution` is overridden with a message.
+#'
 #' Smith, P. L., & Ratcliff, R. (2004). Psychology and neurobiology of simple
 #' decisions. *Trends in Neurosciences, 27*(3), 161-168.
 #'
@@ -364,6 +371,10 @@ ROU <- function(boundary_collapse = c("fixed", "exponential", "linear_additive",
   list(
     type = "RACE",
     c_name = paste0("ROU", .ROU_SUFFIX[[kind]]),
+    # Fokker-Planck solve cached per parameter tuple: rt only picks readout
+    # points off a march that has already been paid for, so binning it saves
+    # nothing.  make_emc() turns compression and rt_resolution off.
+    compress_ok = FALSE,
     p_types = p_types,
     p_types_canonical = names(p_types)[names(p_types) != "pContaminant"],
     transform = list(func = transform),

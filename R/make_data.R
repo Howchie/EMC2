@@ -582,6 +582,12 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
 
 
 
+  # Same reasoning as in design_model(): a model that cannot be binned must not
+  # be binned by a TC carried on the design or handed in by the caller either,
+  # or predict() would return data on a lattice the fit never used.
+  if (!is.null(TC$rt_resolution) && !is.null(model) && !model_compress_ok(model))
+    TC$rt_resolution <- NULL
+
   data <- make_missing(data,LT=TC$LT,LC=TC$LC,UC=TC$UC,UT=TC$UT,
     LCresponse = TC$LCresponse, UCresponse = TC$UCresponse,
     LCdirection = TC$LCdirection, UCdirection = TC$UCdirection,

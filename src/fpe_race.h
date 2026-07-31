@@ -292,14 +292,26 @@ struct SolveCache {
   // the cache.
   int bnd_kind = fpe::FPE_BND_FIXED;
   bool sparse_raw_output = true;
+  bool prepared = false;
+  size_t n_entries = 0;
   std::vector<Entry> e;
   std::vector<int> row_group;   // scratch: row -> index into e, or -1
 
   // Cleared once per particle.  Keys are exact, so a stale entry could never be
   // returned for the wrong parameters; the clear exists to bound memory, since
-  // a run visits thousands of particles.
+  // a run visits thousands of particles.  Memory allocations of internal
+  // vectors in e are preserved across particles to avoid heap churn.
   void new_particle() {
-    e.clear();
+    prepared = false;
+    for (size_t i = 0; i < n_entries; ++i) {
+      e[i].t.clear();
+      e[i].log_pdf.clear();
+      e[i].log_S.clear();
+      e[i].grid_idx.blocks.clear();
+      e[i].complete_grid = true;
+      e[i].t_max = 0.0;
+    }
+    n_entries = 0;
     row_group.clear();
   }
 };
@@ -345,7 +357,7 @@ inline void rou_solve(const Key& p, double t_max, const FPE_Grid& gr, Entry& out
 // required.  Returns an INDEX, not a pointer: solving can reallocate `e`.
 inline int cache_get(SolveCache& C, const Key& p, double t_need) {
   if (!(t_need > 0.0)) t_need = 1e-3;
-  for (size_t i = 0; i < C.e.size(); ++i) {
+  for (size_t i = 0; i < C.n_entries; ++i) {
     if (!(C.e[i].key == p)) continue;
     if (C.e[i].complete_grid && C.e[i].t_max >= t_need)
       return static_cast<int>(i);
@@ -357,9 +369,16 @@ inline int cache_get(SolveCache& C, const Key& p, double t_need) {
     rou_solve(p, solve_to, C.grid, C.e[i]);
     return static_cast<int>(i);
   }
-  C.e.push_back(Entry());
-  rou_solve(p, t_need, C.grid, C.e.back());
-  return static_cast<int>(C.e.size()) - 1;
+  if (C.n_entries < C.e.size()) {
+    const size_t idx = C.n_entries++;
+    rou_solve(p, t_need, C.grid, C.e[idx]);
+    return static_cast<int>(idx);
+  } else {
+    C.e.push_back(Entry());
+    rou_solve(p, t_need, C.grid, C.e.back());
+    C.n_entries = C.e.size();
+    return static_cast<int>(C.e.size() - 1);
+  }
 }
 
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -722,6 +741,11 @@ inline std::vector<fpe::FPE_Result> fpe_solve_batch_ou_lanes(
   for (size_t l = 0; l < LANES; ++l)
     set_identity_factor(static_cast<int>(l));
 
+  bool is_moving[LANES] = {};
+  for (size_t l = 0; l < num_models; ++l) {
+    is_moving[l] = !models[l].static_op();
+  }
+
   for (size_t aidx = 0; aidx < max_actions; ++aidx) {
     alignas(64) double rhs_c[LANES] = {};
     bool active[LANES] = {};
@@ -731,7 +755,21 @@ inline std::vector<fpe::FPE_Result> fpe_solve_batch_ou_lanes(
       if (active[l]) {
         const Action& a = actions[l][aidx];
         rhs_c[l] = a.rhs_c;
-        if (!factor_live[l] || last_lhs[l] != a.lhs_c) {
+        if (is_moving[l]) {
+          const double t_new = lane_time[l] + a.step;
+          fpe::FPE_Op op;
+          fpe::build_op(models[l], t_new, g, op);
+          op_D[l] = op.D;
+          for (int i = 0; i < M; ++i) {
+            const size_t o = static_cast<size_t>(i) * LANES + l;
+            OP_DIAG[o] = op.diag[i];
+            OP_SUB[o]  = op.sub[i];
+            OP_SUP[o]  = op.sup[i];
+          }
+          set_lane_factor(static_cast<int>(l), a.lhs_c);
+          last_lhs[l] = a.lhs_c;
+          factor_live[l] = true;
+        } else if (!factor_live[l] || last_lhs[l] != a.lhs_c) {
           set_lane_factor(static_cast<int>(l), a.lhs_c);
           last_lhs[l] = a.lhs_c;
           factor_live[l] = true;
@@ -993,7 +1031,7 @@ inline void cache_get_batch(SolveCache& C, const std::vector<Key>& keys,
     if (!(t_need > 0.0)) t_need = 1e-3;
 
     int found = -1;
-    for (size_t j = 0; j < C.e.size(); ++j) {
+    for (size_t j = 0; j < C.n_entries; ++j) {
       if (C.e[j].key == p && C.e[j].t_max >= t_need &&
           (C.e[j].complete_grid ||
            (query_times != nullptr &&
@@ -1036,11 +1074,9 @@ inline void cache_get_batch(SolveCache& C, const std::vector<Key>& keys,
     size_t num_chunk_queries = 0;
     size_t num_chunk_steps = 0;
 
-    bool all_fixed = true;
     for (size_t l = 0; l < chunk_size; ++l) {
       const size_t k_idx = missing_keys[b + l];
       const Key& p = keys[k_idx];
-      if (p.bkind != fpe::FPE_BND_FIXED) all_fixed = false;
 
       models[l].v = p.v;
       models[l].lambda = p.k;
@@ -1061,7 +1097,7 @@ inline void cache_get_batch(SolveCache& C, const std::vector<Key>& keys,
       }
     }
 
-    if (all_fixed && chunk_size > 1) {
+    if (chunk_size > 1) {
       std::vector<fpe::FPE_Result> batch_res;
       std::vector<OUQueryResult> query_res;
       // Sparse bookkeeping is cheaper only while requested times are a small
@@ -1107,15 +1143,20 @@ inline void cache_get_batch(SolveCache& C, const std::vector<Key>& keys,
         }
 
         int existing = -1;
-        for (size_t j = 0; j < C.e.size(); ++j) {
+        for (size_t j = 0; j < C.n_entries; ++j) {
           if (C.e[j].key == p) { existing = static_cast<int>(j); break; }
         }
         if (existing >= 0) {
           C.e[existing] = std::move(entry);
           out_cache_indices[k_idx] = existing;
+        } else if (C.n_entries < C.e.size()) {
+          const size_t idx = C.n_entries++;
+          C.e[idx] = std::move(entry);
+          out_cache_indices[k_idx] = static_cast<int>(idx);
         } else {
           C.e.push_back(std::move(entry));
-          out_cache_indices[k_idx] = static_cast<int>(C.e.size()) - 1;
+          out_cache_indices[k_idx] = static_cast<int>(C.e.size() - 1);
+          C.n_entries = C.e.size();
         }
       }
     } else {
