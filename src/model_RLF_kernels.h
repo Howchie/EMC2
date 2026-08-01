@@ -49,6 +49,11 @@ inline void rlf_configure_grid(rlf::Grid& grid) {
   // Global rather than a Grid field: build_rlf_operator sees only RLF_Model.
   // Written once here on the main thread, read-only from the worker marches.
   option_logical("emc2.rlf_force_centred", rlf::rlf_force_centred_drift);
+  // Same reason: rlf_stable_time_schedule is reached from rlf_solve_fixed_grid,
+  // which is handed resolutions rather than the Grid.
+  double nt_cap = rlf::rlf_max_time_steps;
+  option_number("emc2.rlf_nt_cap", nullptr, nt_cap, 1000.0);
+  rlf::rlf_max_time_steps = static_cast<int>(nt_cap);
 }
 
 inline rlf::SolveCache* rlf_cache(void* context) {

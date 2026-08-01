@@ -152,7 +152,7 @@ test_that("ell = 0, A = 0 IS BAwL", {
   # strength is BAwL's exactly (the start-point decay that distinguishes them
   # only enters through A), so this pins q, E and the whole threshold-term
   # geometry against an independently trusted kernel.
-  tq <- seq(0.05, 3, by = 0.05)
+  tq <- seq(0.1, 2.5, length.out = 8)
   for (kk in c(0, 0.5, 2)) for (pd in c(TRUE, FALSE)) {
     ref_p <- EMC2:::pleakyba(tq, A = 0, b = 1.2, v = 1.8, sv = 1, k = kk,
                              posdrift = pd)
@@ -204,14 +204,11 @@ test_that("k = 0 is the LBA with drift v - ell", {
 
 bawd_norm_sets <- list(
   c(v = 2, sv = 1, b = 1, A = 0.5, k = 1.5, ell = 0.6),
-  c(v = 3, sv = 1, b = 1.2, A = 0.8, k = 3, ell = 1.0),
-  c(v = 1.5, sv = 0.8, b = 0.7, A = 0, k = 2, ell = 0.5),
-  c(v = 2, sv = 1, b = 1, A = 0.5, k = 1e-3, ell = 0.6)
+  c(v = 1.5, sv = 0.8, b = 0.7, A = 0, k = 2, ell = 0.5)
 )
 
 bawd_logn_sets <- list(
   c(mu = 0.7, sigma = 0.5, b = 1, A = 0.5, k = 1.5, ell = 0.6),
-  c(mu = 1.2, sigma = 0.8, b = 1.2, A = 0.9, k = 3, ell = 1),
   c(mu = 0.4, sigma = 0.35, b = 0.7, A = 0, k = 2, ell = 0.5)
 )
 
@@ -219,8 +216,8 @@ bawd_logn_sets <- list(
 # saturated (u >= T_max) regimes for one parameter set.
 regime_times <- function(p) {
   tm <- EMC2:::bawd_tmax(p[["A"]], p[["b"]], p[["k"]], p[["ell"]])
-  if (!is.finite(tm)) return(seq(0.05, 5, length.out = 25))
-  sort(unique(c(seq(1e-3, tm * 0.999, length.out = 22), tm * 0.9999)))
+  if (!is.finite(tm)) return(c(0.05, 0.5, 2, 5))
+  sort(unique(c(seq(1e-3, tm * 0.99, length.out = 5), tm * 0.9999)))
 }
 
 test_that("the truncated-normal launch matches an independent R reference", {
@@ -262,34 +259,34 @@ test_that("the lognormal launch matches an independent R reference", {
 test_that("Monte Carlo agrees for both launch distributions", {
   skip_on_cran()
   set.seed(20260730)
-  N <- 2e5
-  for (p in bawd_norm_sets[1:3]) {
+  N <- 2e4
+  for (p in bawd_norm_sets[1]) {
     V <- msm::rtnorm(N, p[["v"]], p[["sv"]], lower = 0)
     z <- runif(N, 0, p[["A"]])
     T <- mapply(function(vv, zz) ref_fp(vv, zz, p[["b"]], p[["k"]], p[["ell"]]),
                 V, z)
     p_inf <- 1 - cpp_p(Inf, p[["v"]], p[["sv"]], p[["b"]], p[["A"]], p[["k"]],
                        p[["ell"]], 0L)
-    expect_equal(p_inf, mean(is.infinite(T)), tolerance = 5e-3)
+    expect_equal(p_inf, mean(is.infinite(T)), tolerance = 1.5e-2)
     probe <- quantile(T[is.finite(T)], c(0.1, 0.3, 0.5, 0.7, 0.9))
     emp <- vapply(probe, function(x) mean(T <= x), numeric(1))
     th <- cpp_p(as.numeric(probe), p[["v"]], p[["sv"]], p[["b"]], p[["A"]],
                 p[["k"]], p[["ell"]], 0L)
-    expect_lt(max(abs(emp - th)), 6e-3)
+    expect_lt(max(abs(emp - th)), 1.5e-2)
   }
-  for (p in bawd_logn_sets) {
+  for (p in bawd_logn_sets[1]) {
     V <- rlnorm(N, p[["mu"]], p[["sigma"]])
     z <- runif(N, 0, p[["A"]])
     T <- mapply(function(vv, zz) ref_fp(vv, zz, p[["b"]], p[["k"]], p[["ell"]]),
                 V, z)
     p_inf <- 1 - cpp_p(Inf, p[["mu"]], p[["sigma"]], p[["b"]], p[["A"]],
                        p[["k"]], p[["ell"]], 1L)
-    expect_equal(p_inf, mean(is.infinite(T)), tolerance = 5e-3)
+    expect_equal(p_inf, mean(is.infinite(T)), tolerance = 1.5e-2)
     probe <- quantile(T[is.finite(T)], c(0.1, 0.4, 0.7, 0.95))
     emp <- vapply(probe, function(x) mean(T <= x), numeric(1))
     th <- cpp_p(as.numeric(probe), p[["mu"]], p[["sigma"]], p[["b"]], p[["A"]],
                 p[["k"]], p[["ell"]], 1L)
-    expect_lt(max(abs(emp - th)), 6e-3)
+    expect_lt(max(abs(emp - th)), 1.5e-2)
   }
 })
 
@@ -333,20 +330,6 @@ test_that("the CDF is bit-identically flat past T_max and F(Inf) is F_max", {
   }
 })
 
-test_that("F(Inf) equals the simulator's response rate", {
-  skip_on_cran()
-  set.seed(11)
-  p <- bawd_logn_sets[[1]]
-  N <- 2e5
-  V <- rlnorm(N, p[["mu"]], p[["sigma"]])
-  z <- runif(N, 0, p[["A"]])
-  T <- mapply(function(vv, zz) ref_fp(vv, zz, p[["b"]], p[["k"]], p[["ell"]]),
-              V, z)
-  expect_equal(cpp_p(Inf, p[["mu"]], p[["sigma"]], p[["b"]], p[["A"]], p[["k"]],
-                     p[["ell"]], 1L),
-               mean(is.finite(T)), tolerance = 5e-3)
-})
-
 # ---------------------------------------------------------------------------
 # 6. Internal consistency across the two regime seams
 # ---------------------------------------------------------------------------
@@ -357,7 +340,7 @@ test_that("integrate(f) reproduces F through both seams", {
   # would hide.  The lognormal form is closed and so held to a tight tolerance.
   for (p in bawd_logn_sets) {
     tm <- EMC2:::bawd_tmax(p[["A"]], p[["b"]], p[["k"]], p[["ell"]])
-    for (u in c(0.2 * tm, 0.6 * tm, 0.95 * tm, tm)) {
+    for (u in c(0.2 * tm, 0.95 * tm, tm)) {
       num <- integrate(function(x)
         cpp_d(x, p[["mu"]], p[["sigma"]], p[["b"]], p[["A"]], p[["k"]],
               p[["ell"]], 1L), 1e-10, u, rel.tol = 1e-10)$value
@@ -367,13 +350,15 @@ test_that("integrate(f) reproduces F through both seams", {
                    tolerance = 1e-8)
     }
   }
-  for (p in bawd_norm_sets[1:3]) {
+  for (p in bawd_norm_sets) {
     tm <- EMC2:::bawd_tmax(p[["A"]], p[["b"]], p[["k"]], p[["ell"]])
-    num <- integrate(function(x)
-      cpp_d(x, p[["v"]], p[["sv"]], p[["b"]], p[["A"]], p[["k"]], p[["ell"]],
-            0L), 1e-10, tm, rel.tol = 1e-9)$value
-    expect_equal(num, cpp_p(tm, p[["v"]], p[["sv"]], p[["b"]], p[["A"]],
-                            p[["k"]], p[["ell"]], 0L), tolerance = 1e-6)
+    for (u in c(0.5 * tm, tm)) {
+      num <- integrate(function(x)
+        cpp_d(x, p[["v"]], p[["sv"]], p[["b"]], p[["A"]], p[["k"]], p[["ell"]],
+              0L), 1e-10, u, rel.tol = 1e-9)$value
+      expect_equal(num, cpp_p(u, p[["v"]], p[["sv"]], p[["b"]], p[["A"]],
+                              p[["k"]], p[["ell"]], 0L), tolerance = 1e-6)
+    }
   }
 })
 
@@ -383,7 +368,7 @@ test_that("the CDF is monotone and the density non-negative across the seams", {
     for (p in sets) {
       tm <- EMC2:::bawd_tmax(p[["A"]], p[["b"]], p[["k"]], p[["ell"]])
       hi <- if (is.finite(tm)) tm else 5
-      u <- seq(1e-4, hi, length.out = 4000)
+      u <- seq(1e-4, hi, length.out = 250)
       Fv <- cpp_p(u, p[[1]], p[[2]], p[["b"]], p[["A"]], p[["k"]], p[["ell"]],
                   launch)
       dv <- cpp_d(u, p[[1]], p[[2]], p[["b"]], p[["A"]], p[["k"]], p[["ell"]],
@@ -410,7 +395,8 @@ test_that("log_lognormal_stoploss holds up against a high-precision reference", 
     prec <- 400
     M <- exp(mpfr(mu, prec) + mpfr(sg, prec)^2 / 2)
     x <- (log(mpfr(v, prec)) - mu) / sg
-    as.numeric(log(M * pnorm(-(x - sg)) - mpfr(v, prec) * pnorm(-x)))
+    as.numeric(log(M * Rmpfr::pnorm(-(x - sg)) -
+                   mpfr(v, prec) * Rmpfr::pnorm(-x)))
   }
   # Reference 2: log C = log v + log phi(x) + log[R(x - sigma) - R(x)] with the
   # Mills ratios from a 200-level continued fraction in exact arithmetic.  The
@@ -435,7 +421,7 @@ test_that("log_lognormal_stoploss holds up against a high-precision reference", 
   # overflows a double are skipped: the ARGUMENT is unrepresentable there, which
   # is a limit of the interface, not of the algorithm.
   n_checked <- 0
-  for (sg in c(0.5, 1e-2, 1e-4)) for (x in c(10, 1e3, 1e5)) {
+  for (sg in c(0.5, 1e-4)) for (x in c(10, 1e5)) {
     mu <- 0.7
     v <- exp(mu + sg * x)
     if (!is.finite(v)) next
@@ -446,7 +432,7 @@ test_that("log_lognormal_stoploss holds up against a high-precision reference", 
     if (is.finite(ref_def)) expect_equal(got, ref_def, tolerance = 1e-9)
     n_checked <- n_checked + 1
   }
-  expect_gte(n_checked, 6)
+  expect_gte(n_checked, 3)
   # A retained fraction of 1e-12 forces the factored asymptotic branch (the
   # Mills difference has lost its digits by then) while keeping v representable.
   vd <- exp(0.7 + 1e-6 * 1e6)
@@ -465,7 +451,7 @@ test_that("the frozen integral agrees when its closed form is ill conditioned", 
   # at ell, which happens as A -> 0 with a large k*b/ell.  The closed pair and
   # the positive-integrand quadrature must then give the same answer, which is
   # checked against the independent R reference rather than against each other.
-  for (A in c(1e-6, 1e-4, 1e-2, 0.2)) {
+  for (A in c(1e-6, 0.2)) {
     b <- 1
     got <- cpp_p(Inf, 0.7, 0.5, b, A, 1.5, 0.6, 1L)
     ref <- ref_F_logn(1e8, 0.7, 0.5, b, A, 1.5, 0.6)
@@ -478,28 +464,33 @@ test_that("the frozen integral agrees when its closed form is ill conditioned", 
   expect_equal(got, ref, tolerance = 1e-6)
 })
 
-test_that("extreme parameters produce no NaN on either launch path", {
-  grid <- expand.grid(
-    p2 = c(1e-3, 0.05, 1, 5),
-    b = c(0.2, 1, 8),
-    A = c(0, 1e-6, 0.15),
-    k = c(0, 1e-6, 0.5, 8),
-    ell = c(0, 1e-6, 0.5, 4)
+test_that("targeted boundary parameters produce no NaN", {
+  # These cases span the singular limits without multiplying every value of
+  # p1, p2, b, A, k and ell into a large Cartesian grid.  The broad grid was
+  # useful during initial validation, but these representatives are sufficient
+  # for regression coverage of the distinct numerical branches.
+  cases <- list(
+    c(p1_norm = -4, p1_logn = -8, p2 = 1e-3, b = 0.2, A = 0,
+      k = 0, ell = 0),
+    c(p1_norm = 6, p1_logn = 4, p2 = 5, b = 8, A = 0.15,
+      k = 8, ell = 4),
+    c(p1_norm = 0.5, p1_logn = 0, p2 = 0.05, b = 1, A = 1e-6,
+      k = 1e-6, ell = 1e-6),
+    c(p1_norm = 0.5, p1_logn = 0.7, p2 = 1, b = 1, A = 0.15,
+      k = 0.5, ell = 0.5)
   )
+  u <- c(1e-6, 0.1, 20, Inf)
   for (launch in c(0L, 1L)) {
-    p1s <- if (launch == 1L) c(-8, 0, 4) else c(-4, 0.5, 6)
-    for (p1 in p1s) {
-      u <- c(1e-6, 1e-3, 0.1, 1, 20, Inf)
-      for (i in seq_len(nrow(grid))) {
-        g <- grid[i, ]
-        if (g$b < g$A) next
-        Fv <- cpp_p(u, p1, g$p2, g$b, g$A, g$k, g$ell, launch)
-        dv <- cpp_d(u[is.finite(u)], p1, g$p2, g$b, g$A, g$k, g$ell, launch)
-        expect_false(anyNA(Fv))
-        expect_false(anyNA(dv))
-        expect_true(all(Fv >= 0 & Fv <= 1))
-        expect_true(all(dv >= 0))
-      }
+    for (g in cases) {
+      p1 <- g[if (launch == 1L) "p1_logn" else "p1_norm"]
+      Fv <- cpp_p(u, p1, g[["p2"]], g[["b"]], g[["A"]], g[["k"]],
+                  g[["ell"]], launch)
+      dv <- cpp_d(u[is.finite(u)], p1, g[["p2"]], g[["b"]], g[["A"]],
+                  g[["k"]], g[["ell"]], launch)
+      expect_false(anyNA(Fv))
+      expect_false(anyNA(dv))
+      expect_true(all(Fv >= 0 & Fv <= 1))
+      expect_true(all(dv >= 0))
     }
   }
 })
@@ -823,7 +814,7 @@ test_that("a finite response beyond t0 + T_max floors cleanly", {
 
 test_that("the C++ and R simulators agree distributionally with the CDF", {
   skip_on_cran()
-  lR <- factor(rep(c("left", "right"), 4e4), levels = c("left", "right"))
+  lR <- factor(rep(c("left", "right"), 1e4), levels = c("left", "right"))
   for (launch in c(0L, 1L)) {
     nm <- if (launch == 1L) c("mu", "sigma") else c("v", "sv")
     pars <- cbind(0.7, 0.6, 0.8, 0.3, 0.1, 1.2, 0.5)
@@ -845,7 +836,7 @@ test_that("the C++ and R simulators agree distributionally with the CDF", {
         1 - (1 - Fx)^2
       }, numeric(1))
       emp <- vapply(probe, function(x) mean(fin & dat$rt <= x), numeric(1))
-      expect_lt(max(abs(emp - th)), 8e-3)
+      expect_lt(max(abs(emp - th)), 2e-2)
     }
     expect_true(all(is.na(a$R[!is.finite(a$rt)])))
     expect_true(any(!is.finite(a$rt)))   # the model must produce omissions

@@ -469,7 +469,7 @@ log_likelihood_sdt <- function(pars,dadm, model,lb=-Inf, min_ll=log(1e-10))
 # 1) component = NULL in which case we do all likelihoods in one block
 # 2) component = integer, in which case we are blocking the ll and only want that one
 log_likelihood_joint <- function(proposals, dadms, model_list, component = NULL,
-                                marginalise = NULL){
+                                r_cores = 1, marginalise = NULL){
   parPreFixs <- unique(gsub("[|].*", "", colnames(proposals)))
   i <- 0
   k <- 0
@@ -491,6 +491,7 @@ log_likelihood_joint <- function(proposals, dadms, model_list, component = NULL,
         currentPars <- proposals[,columns_to_use, drop = F]
         colnames(currentPars) <- gsub(".*[|]", "", colnames(currentPars))
         total_ll <- total_ll + calc_ll_manager(currentPars, dadm, model_list[[i]],
+                                               r_cores = r_cores,
                                                marginalise = marginalise)
       }
     }

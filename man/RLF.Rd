@@ -19,9 +19,9 @@ the racing diffusion model.
 }
 \details{
 The first-passage density is evaluated by a cached nonlocal
-Fokker--Planck solver. Rows that share
-\verb{(v/s, (B+A)/s, A/s, alpha)} share one numerical march; \code{t0} only
-shifts response times and is not part of the cache key.
+Fokker--Planck solver. Rows that share \verb{(v/s, (B+A)/s, A/s, alpha)} share one
+numerical march; \code{t0} only shifts response times and is not part of the
+cache key.
 
 Numerical resolution is controlled with R options. \code{emc2.rlf_nx} is the
 number of spatial intervals in the coarse grid (default 160).

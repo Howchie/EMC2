@@ -501,11 +501,14 @@ run_stage <- function(pmwgs,
     )
     proposals <- parallel::mcmapply(safe_new_particle, 1:pmwgs$n_subjects, data, pm_settings, eff_mu, eff_var,
                                     chains_mu, chains_var, pmwgs$samples$subj_ll[,j-1],
-                                    MoreArgs = list(pars_comb, pmwgs$model, stage,
-                                                    pmwgs$type,
-                                                    tune, pmwgs$marginalise),
-                                    mc.cores = core_budget$subject,
-                                    r_cores = core_budget$likelihood)
+                                    MoreArgs = list(parameters = pars_comb,
+                                                    model = pmwgs$model,
+                                                    stage = stage,
+                                                    type = pmwgs$type,
+                                                    tune = tune,
+                                                    marginalise = pmwgs$marginalise,
+                                                    r_cores = core_budget$likelihood),
+                                    mc.cores = core_budget$subject)
     pm_settings <- proposals[3,]
     proposals <- array(unlist(proposals[1:2,]), dim = c(pmwgs$n_pars + 1, pmwgs$n_subjects))
 
@@ -1047,7 +1050,7 @@ check_prop_performance <- function(prop_performance, stage){
 calc_ll_manager <- function(proposals, dadm, model, component = NULL, r_cores = 1,
                             marginalise = NULL){
   if(!is.data.frame(dadm)){
-    lls <- log_likelihood_joint(proposals, dadm, model, component, marginalise = marginalise)
+    lls <- log_likelihood_joint(proposals, dadm, model, component, r_cores = r_cores, marginalise = marginalise)
   } else{
     model <- model()
     dadm <- .cache_ll_data_attrs(dadm)

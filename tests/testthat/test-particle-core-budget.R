@@ -15,3 +15,10 @@ test_that("multi-subject chains retain outer parallelism", {
     list(subject = 4L, likelihood = 1L)
   )
 })
+
+test_that("log_likelihood_joint forwards r_cores to calc_ll_manager", {
+  formals_joint <- formals(EMC2:::log_likelihood_joint)
+  expect_true("r_cores" %in% names(formals_joint))
+  expect_identical(formals_joint$r_cores, 1)
+})
+

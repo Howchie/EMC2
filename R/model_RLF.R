@@ -153,13 +153,21 @@ RLF <- function() {
       lower = c(alpha = 1),
       upper = c(alpha = 2)
     ),
+    # Unlike the analytic race models, the parameters here set the solver's
+    # discretisation as well as the process: the mesh is h = (b + extent)/nx, so
+    # B near zero and alpha near its endpoints are not merely extreme, they are
+    # numerically degenerate.  alpha is held off 2 because the heavy-tail term
+    # that keeps the domain open scales as sin(pi*alpha/2) and vanishes there,
+    # collapsing the domain onto b; B is floored for the same reason.  alpha = 2
+    # is deliberately not an exception value: the pnorm transform returns
+    # exactly 1 for sampled values past ~8.3, so the endpoint is reachable.
     bound = list(
       minmax = cbind(
-        v = c(1e-3, Inf), B = c(0, Inf), A = c(1e-4, Inf),
-        t0 = c(0.05, Inf), s = c(0, Inf), alpha = c(1, 2),
+        v = c(1e-3, Inf), B = c(1e-4, Inf), A = c(1e-4, Inf),
+        t0 = c(0.05, Inf), s = c(0, Inf), alpha = c(1.01, 1.99),
         pContaminant = c(0.001, 0.999)
       ),
-      exception = c(A = 0, alpha = 2, pContaminant = 0)
+      exception = c(A = 0, pContaminant = 0)
     ),
     Ttransform = function(pars, dadm) {
       cbind(pars, b = pars[, "B"] + pars[, "A"])

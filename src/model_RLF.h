@@ -268,13 +268,28 @@ inline RLF_TimeSchedule rlf_time_schedule(double T, int nt, double tgrade) {
   return s;
 }
 
+// Ceiling on the stability-driven step budget.  The budget below is set by the
+// operator's exit rate, which scales as h^-alpha, and h is parameter dependent
+// (rlf_lower_extent sizes the domain per parameter set) even though nx is not.
+// A drift large enough to make the lower tail unreachable collapses the domain
+// onto b0, and with it h, so the budget diverges: at alpha within 1e-8 of 2 and
+// v/b ~ 6e6 a single solve wants ~1e9 steps.  INT_MAX is no protection -- that
+// is hours of marching inside one likelihood evaluation, which presents as a
+// silently wedged sampler rather than as an error.  Converged solves at the
+// shipped defaults use 95 to ~2000 steps, so this leaves two orders of
+// magnitude of headroom and still bails in well under a second.  Throwing hands
+// the decision to the caller: from a likelihood, safe_new_particle rejects the
+// particle, which is the right answer for a region this degenerate anyway.
+inline int rlf_max_time_steps = 100000;
+
 inline RLF_TimeSchedule rlf_stable_time_schedule(
     double t_max, int Nt, double max_exit_rate, double safe_cn,
     double tgrade) {
+  const double step_ceiling =
+    static_cast<double>(std::max(1, rlf_max_time_steps));
   const double nt_required =
     std::ceil(t_max * max_exit_rate / safe_cn);
-  if (!(nt_required <=
-        static_cast<double>(std::numeric_limits<int>::max()))) {
+  if (!(nt_required <= step_ceiling)) {
     throw std::invalid_argument(
       "rlf_solve: parameters require too many stable time steps.");
   }
@@ -288,7 +303,7 @@ inline RLF_TimeSchedule rlf_stable_time_schedule(
     const double ratio = max_dt * max_exit_rate / safe_cn;
     if (!(ratio > 1.0 + 1e-12)) break;
     const double grown = std::ceil(step_budget * ratio * 1.01);
-    if (!(grown <= static_cast<double>(std::numeric_limits<int>::max()))) {
+    if (!(grown <= step_ceiling)) {
       throw std::invalid_argument(
         "rlf_solve: graded schedule requires too many stable time steps.");
     }
@@ -1160,8 +1175,11 @@ inline RLF_Result rlf_solve(const RLF_Model& m, double t_max,
         return rlf_solve_fixed_grid(m, t_max, M_use, steps, extent_use,
                                     tgrade, explicit_inverse, queries);
       } catch (const std::runtime_error&) {
-        if (attempt == 3) throw;
-        steps *= 4;
+        // Refining past the stability ceiling would spend the budget the
+        // ceiling exists to bound, so stop retrying once it is reached.
+        const int ceiling = std::max(1, rlf_max_time_steps);
+        if (attempt == 3 || steps >= ceiling) throw;
+        steps = std::min(steps * 4, ceiling);
       }
     }
     throw std::runtime_error("rlf_solve: unreachable retry state.");

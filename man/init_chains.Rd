@@ -24,9 +24,9 @@ Smaller values will lead to less deviation around the mean.}
 
 \item{particles}{An integer. Number of starting values}
 
-\item{cores_per_chain}{An integer. How many cores to use per chain. Parallelizes
-across participant calculations; with one participant, parallelizes its
-proposal likelihoods instead.}
+\item{cores_per_chain}{An integer. How many cores to use per chain.
+Parallelizes across participant calculations; with one participant,
+parallelizes its proposal likelihoods instead.}
 
 \item{cores_for_chains}{An integer. How many cores to use to parallelize across chains. Default is the number of chains.}
 
