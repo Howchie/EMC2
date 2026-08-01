@@ -47,19 +47,21 @@
   rRDM(lR, pars, ok = ok)
 }
 
-.rfun_ROU <- function(lR, pars, ok = rep(TRUE, nrow(pars)), kind = NULL) {
+.rfun_ROU <- function(lR, pars, ok = rep(TRUE, nrow(pars)), kind = NULL,
+                      par = "rate") {
   if (.use_cpp_rfun()) {
     res <- rrou_cpp(
       pars, levels(lR), ok, kind,
       dt = getOption("emc2.rou_sim_dt", 1e-3),
-      t_max = getOption("emc2.rou_sim_tmax", 30)
+      t_max = getOption("emc2.rou_sim_tmax", 30),
+      par_kind = .ROU_PAR[[par]]
     )
     out <- .rfun_cpp_pack(
       res, levels(lR), length(lR) / length(levels(lR))
     )
     return(.apply_timed_guess_winner(out, levels(lR)))
   }
-  .rfun_ROU_R(lR, pars, ok = ok, kind = kind)
+  .rfun_ROU_R(lR, pars, ok = ok, kind = kind, par = par)
 }
 
 

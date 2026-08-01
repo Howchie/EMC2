@@ -6,7 +6,8 @@
 \usage{
 ROU(
   boundary_collapse = c("fixed", "exponential", "linear_additive",
-    "linear_multiplicative", "weibull")
+    "linear_multiplicative", "weibull"),
+  parameterization = c("rate", "curvature", "equilibrium")
 )
 }
 \arguments{
@@ -23,14 +24,19 @@ time scale of the collapse), plus \code{pw} (a shape exponent) for \code{"weibul
 (multiplicative urgency)
 \item \code{"weibull"}: \eqn{b(t) = b_\infty + (b_0 - b_\infty) e^{-(t/\tau)^{pw}}}
 }
-Because \code{Binf} is measured from zero, the boundary is free to fall into the
-start-point range \eqn{[0, A]} and, at \code{Binf = 0}, to collapse all the way
-to the start point -- a forced response. \code{Binf = 0} is an ordinary interior
-value, not a limit: the solver's domain is \eqn{[x_{lo}, b(t)]} with
-\eqn{x_{lo} < 0}, so it stays well conditioned there. A moving boundary forfeits the one-time factorisation of
-the solver's linear operator, so it is slower per solve; setting \code{Binf}
-equal to \eqn{B + A} makes the boundary constant again and recovers the
-fixed-bound cost exactly.}
+\code{Binf} is measured from zero, so the boundary may collapse into the
+start-point range. Setting \code{Binf = B + A} gives the fixed-boundary model.}
+
+\item{parameterization}{Character; which three parameters stand in for
+\eqn{(v, k, s)}. \code{"rate"} (the default) estimates them directly.
+\code{"curvature"} estimates \eqn{(t_\star, c, \nu)} — crossing time,
+dimensionless leak and terminal noise — which holds the deterministic
+crossing time and the spread at the bound fixed as the leak varies.
+\code{"equilibrium"} estimates \eqn{(t_k, q, \chi)} — relaxation time,
+equilibrium position relative to the bound, and noise per relaxation — in
+which \eqn{q < 1} is a subthreshold process that responds by noise-driven
+escape. All three are the same model; see Details. The alternatives fix the
+state scale with \code{B} rather than with \code{s}.}
 }
 \value{
 A list defining the cognitive model
@@ -55,50 +61,107 @@ argument of \code{design()}. They can also be accessed with \code{ROU()$p_types}
    \emph{s} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Within-trial standard deviation of the diffusion \cr
    \emph{pContaminant} \tab probit \tab [0, 1] \tab qnorm(0) \tab  \tab Optional contamination probability handled by the data pipeline \cr
 }
+}
+\section{Parameterizations}{
+\code{parameterization} changes which three parameters stand in for
+\eqn{(v, k, s)}. All three describe the \emph{same} process and reach the same
+solver, so they differ only in the shape of the likelihood surface the
+sampler sees and in what a prior on each parameter means. \code{B}, \code{A}, \code{t0} and
+the collapsing-bound parameters are common to all three.
+
+\code{"rate"} (the default) is \eqn{(v, k, s)} as above.
+
+\code{"curvature"} replaces them with \eqn{(t_\star, c, \nu)}, all defined against
+the deterministic distance \eqn{b = B + A} covered from the nominal start
+\eqn{x = 0}:\tabular{lllll}{
+   \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Interpretation} \cr
+   \emph{tstar} \tab log \tab [0.05, Inf] \tab log(1) \tab Time at which the deterministic mean path reaches \emph{b} \cr
+   \emph{c} \tab log \tab [0, 5] \tab log(0) \tab Dimensionless leak \eqn{c = k\,t_\star} over one decision; \emph{c} = 0 is the Wiener race \cr
+   \emph{nu} \tab log \tab [0.001, 10] \tab log(1) \tab Terminal noise, \eqn{SD[X(t_\star)]/b} \cr
+}
 
 
-The leak \emph{k} has units of 1/time, so it is \emph{not} absorbed by the scaling
-convention that fixes \emph{s} = 1; with \emph{s} fixed, (\emph{v}, \emph{k}, \emph{B}, \emph{A}) are
-identified. Concretely, the solver rescales the state by \eqn{Y = X/s}, which
-turns \eqn{dX = (v - kX)dt + s\,dW} into \eqn{dY = (v/s - kY)dt + dW}: the
-state-valued parameters \emph{v}, \emph{B} and \emph{A} are divided by \emph{s}, and \emph{k} is
-carried through unchanged because a rate is invariant under a rescaling of
-the state. The first-passage time is the same random variable either way, so
-no Jacobian is applied to the density. The parameterization is deliberately (\emph{v}, \emph{k}) rather than the
-solver's (\eqn{\lambda}, \eqn{\theta}): the asymptote \eqn{\theta = v/k}
-diverges as the leak vanishes, whereas the drift \eqn{v - kX} is perfectly
-regular there. As a result \emph{k} = 0 is an ordinary interior value at which the
-model \strong{is} the racing diffusion model (RDM), reached through the same
-partial differential equation rather than by dispatching to the Wald
-formulae. That makes \code{ROU} with \code{constants = c(k = log(0))} an independent
-check on \code{RDM}, which it would not be if the code branched.
+The map is \eqn{k = c/t_\star}, \eqn{v = bc/\{t_\star(1-e^{-c})\}} and
+\eqn{s = (b\nu/\sqrt{t_\star})\sqrt{2c/(1-e^{-2c})}}, chosen so that
+\eqn{E[X(t_\star)] = b} and \eqn{SD[X(t_\star)] = b\nu} for \emph{every} value of
+\emph{c}. Curvature therefore bends the mean path without also making the
+accumulator slower or more variable at the bound, which is the ridge that
+\eqn{(v, k)} suffers from: in the rate parameterization a change in \emph{k} can
+be almost entirely undone by a change in \emph{v}, and freely estimated leak
+drifts along that ridge. A useful reading of \emph{c} is the leak half-life
+relative to the decision, \eqn{t_{1/2}/t_\star = \log 2 / c}: \emph{c} = 0.1 is a
+half-life of about 7 decisions and should be nearly invisible in ordinary RT
+data.
+
+\code{"equilibrium"} replaces them with \eqn{(t_k, q, \chi)}:\tabular{lllll}{
+   \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Interpretation} \cr
+   \emph{tk} \tab log \tab [0.01, Inf] \tab log(1) \tab Leak time constant \eqn{t_k = 1/k} (the boundary-collapse time constant keeps the name \emph{tau}) \cr
+   \emph{q} \tab log \tab [0.001, 20] \tab log(1) \tab OU equilibrium \eqn{v/k} relative to the bound, \eqn{q = v/(kb)} \cr
+   \emph{chi} \tab log \tab [0.001, 10] \tab log(1) \tab Noise over one relaxation, \eqn{\chi = s\sqrt{t_k}/b} \cr
+}
+
+
+In dimensionless time \eqn{u = t/t_k} and state \eqn{Y = X/b} this is
+\eqn{dY = (q - Y)du + \chi\,dW_u} with the bound at \eqn{Y = 1}, so \emph{q} is a
+regime parameter: \eqn{q > 1} crosses deterministically, \eqn{q = 1}
+approaches the bound asymptotically, and \eqn{q < 1} relaxes to a
+subthreshold level from which responses arise as noise-driven escapes. The
+\eqn{q \lesssim 1} regime is the one worth having: it produces substantial
+survivor mass at a deadline together with a late hazard that flattens to a
+constant, without requiring the observed RT distribution to march up to that
+deadline. It is intended for censored designs — give the data a \code{UC} column
+(and \code{UT}) and code responses past the deadline as \code{rt = Inf}, \code{R = NA}.
+A single deadline still trades \emph{q} off against \emph{chi}; several deadlines or
+response windows trace the survivor function directly and are far more
+diagnostic.
+}
+
+\section{Scale identification}{
+Scaling the state by \emph{b} shows the dynamics depend only on
+\eqn{(v/s, k, B/s, A/s)} — four quantities from five parameters. The rate
+parameterization resolves the redundancy by fixing \code{s} (usually
+\code{constants = c(s = log(1))}). The alternatives express the same redundancy at
+the other end: they depend only on \eqn{(t_\star, c, \nu, A/b)} or
+\eqn{(t_k, q, \chi, A/b)}, so \strong{fix \code{B} rather than \code{s}}, with
+\code{constants = c(B = log(1))}. A speed-accuracy manipulation that would have
+been carried by \code{B ~ E} in the rate parameterization is carried by
+\code{tstar ~ E} (curvature) or by \code{q ~ E} and \code{tk ~ E} (equilibrium).
+
+Leak is an architectural timescale rather than a per-condition fit knob. A
+sensible baseline lets stimulus condition move \code{tstar} (or \code{q}) and speed
+emphasis move the bound-related parameter, while \code{c} (or \code{tk}) is a single
+subject-level quantity: \code{c ~ 1}, not \code{c ~ E * lM}. A separate leak per racer
+and per condition returns the model to the mimicry regime it is trying to
+escape.
+
+The leak \emph{k} is a rate in units of 1/time and is not divided by \emph{s}. As in
+the RDM, \emph{s} is normally fixed to 1 for scale identification. Setting
+\emph{k} = 0 gives the racing diffusion model (RDM) through the same solver.
 
 The parameterization \emph{b} = \emph{B} + \emph{A} ensures that the response threshold is
 always higher than the between trial variation in start point. \code{A} is
 non-negative, so the start point is always in [0, \emph{A}].
 
-\strong{This is not the leaky competing accumulator.} It is the leaky accumulator
-of Smith and Ratcliff (2004, appendix): the accumulators race independently,
-with no lateral inhibition, and activation is \emph{not} rectified at zero — the
-process may go negative and only upward threshold crossings count. Usher and
-McClelland's (2001) LCA adds both of those features.
+This is the independent leaky accumulator, not the leaky competing
+accumulator (LCA): accumulators do not inhibit one another, and the process
+is not rectified at zero. See \code{\link[=BOU]{BOU()}} for the two-boundary OU diffusion,
+whose leak is defined relative to the starting point rather than zero.
 
-Because there is no closed-form first-passage density, each distinct
-parameter tuple costs one Fokker-Planck solve (about 1.7 ms at the default
-resolution, roughly 45 times an analytic race kernel). The number of
-solves is set by the number of distinct parameter rows in the design, not by
-the number of trials, so cost is bounded by the design rather than the data.
-A trend or covariate model makes every trial distinct and is correspondingly
-much slower — permitted, but priced. Accuracy can be traded against speed
-with \code{options(emc2.fpe_nx = )}, \code{options(emc2.fpe_dt = )},
-\code{options(emc2.fpe_grade = )} and \code{options(emc2.fpe_tgrade = )}.
+There is no closed-form first-passage density, so the likelihood uses a
+Fokker–Planck solve for each distinct parameter tuple. The solve is cached
+across response-time queries, but designs with trial-varying parameters are
+correspondingly more expensive. Resolution can be adjusted with
+\code{emc2.fpe_nx}, \code{emc2.fpe_dt}, \code{emc2.fpe_grade}, and \code{emc2.fpe_tgrade}.
 
-Because the Fokker-Planck solver solves over a continuous time grid from 0 to
-max(t), binning response times saves zero computation time while introducing
-artificial flooring bias into parameter estimates (especially t0, v, and k).
-\code{ROU()} therefore declares \code{compress_ok = FALSE}, and \code{make_emc} forces
-\code{compress = FALSE} and \code{rt_resolution = NULL} for it; no argument needs to be
-passed, and an explicit \code{rt_resolution} is overridden with a message.
+Response-time compression is disabled for this model because the solver
+evaluates the continuous-time density directly; binning would add flooring
+bias without reducing the solve cost.
+
+Ratcliff, R., & Smith, P. L. (2004). A comparison of sequential sampling
+models for two-choice reaction time. \emph{Psychological Review, 111}(2), 333-367.
+
+Smith, P. L. (2000). Stochastic dynamic models of response time and accuracy:
+A foundational primer. \emph{Journal of Mathematical Psychology, 44}(3), 408-463.
 
 Smith, P. L., & Ratcliff, R. (2004). Psychology and neurobiology of simple
 decisions. \emph{Trends in Neurosciences, 27}(3), 161-168.
@@ -106,6 +169,7 @@ decisions. \emph{Trends in Neurosciences, 27}(3), 161-168.
 Usher, M., & McClelland, J. L. (2001). The time course of perceptual choice:
 the leaky, competing accumulator model. \emph{Psychological Review, 108}(3), 550-592.
 }
+
 \examples{
 # A leaky accumulator design with the same structure as the RDM example.
 ADmat <- matrix(c(-1/2,1/2),ncol=1,dimnames=list(NULL,"d"))
@@ -120,4 +184,23 @@ design_ROUc <- design(data = forstmann,
                       matchfun=matchfun,
                       formula=list(v~lM,k~1,B~E+lR,A~1,t0~1,Binf~1,tau~1),
                       contrasts=list(v=list(lM=ADmat)),constants=c(s=log(1)))
+
+# The curvature parameterization: stimulus and speed emphasis move the
+# crossing time, leak is one architectural quantity per subject, and B fixes
+# the state scale in place of s.
+design_ROUcurv <- design(data = forstmann,
+                         model=function() ROU(parameterization="curvature"),
+                         matchfun=matchfun,
+                         formula=list(tstar~lM+E,c~1,nu~1,A~1,t0~1),
+                         contrasts=list(tstar=list(lM=ADmat)),
+                         constants=c(B=log(1)))
+
+# The equilibrium parameterization, for a deadline design in which q is free
+# to sit below the bound. Give the data a UC column to censor at it.
+design_ROUeq <- design(data = forstmann,
+                       model=function() ROU(parameterization="equilibrium"),
+                       matchfun=matchfun,
+                       formula=list(tk~1,q~lM,chi~1,A~1,t0~1),
+                       contrasts=list(q=list(lM=ADmat)),
+                       constants=c(B=log(1)))
 }

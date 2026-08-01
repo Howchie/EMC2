@@ -54,6 +54,34 @@ void check_bnd_lengths(int bkind, const NumericVector& Binf,
 } // anonymous namespace
 
 // ---------------------------------------------------------------------------
+// Alternative parameterisations -> (v, k, s).
+//
+// The R-side dROU/pROU/rROU keep taking (v, k, s), so this is the one call that
+// R makes to reach the alternatives, and the map itself stays in fpe_race.h
+// where the likelihood kernels read it.  Re-implementing the algebra in R would
+// be the obvious shortcut and exactly the drift this file exists to prevent.
+//
+// par_kind: 0 = rate (a pass-through), 1 = curvature (tstar, c, nu),
+// 2 = equilibrium (tk, q, chi).
+// ---------------------------------------------------------------------------
+// [[Rcpp::export]]
+Rcpp::List rou_to_rate_vec(int par_kind, NumericVector p1, NumericVector p2,
+                           NumericVector p3, NumericVector B, NumericVector A) {
+  const int n = p1.size();
+  if (p2.size() != n || p3.size() != n || B.size() != n || A.size() != n) {
+    stop("rou_to_rate_vec: all parameter vectors must be the same length.");
+  }
+  NumericVector v(n), k(n), s(n);
+  for (int i = 0; i < n; ++i) {
+    double vv = 0.0, kk = 0.0, ss = 0.0;
+    fperace::rou_map_to_rate(par_kind, p1[i], p2[i], p3[i], B[i], A[i],
+                             vv, kk, ss);
+    v[i] = vv; k[i] = kk; s[i] = ss;
+  }
+  return Rcpp::List::create(_["v"] = v, _["k"] = k, _["s"] = s);
+}
+
+// ---------------------------------------------------------------------------
 // Density and CDF for a single accumulator, one parameter set per RT.
 //
 // Grouped exactly as the batch kernels group: distinct parameter tuples become
@@ -221,7 +249,8 @@ NumericVector rrou_hit_times_cpp(NumericVector v, NumericVector k, NumericVector
 // ---------------------------------------------------------------------------
 // [[Rcpp::export]]
 Rcpp::List rrou_cpp(NumericMatrix pars, CharacterVector lR_levels, LogicalVector ok,
-                    SEXP kind_sexp = R_NilValue, double dt = 1e-3, double t_max = 30.0) {
+                    SEXP kind_sexp = R_NilValue, double dt = 1e-3, double t_max = 30.0,
+                    int par_kind = 0) {
   const int n_acc = lR_levels.size();
   const int n_rows = pars.nrow();
   if (n_acc <= 0 || n_rows % n_acc != 0) {
@@ -236,24 +265,40 @@ Rcpp::List rrou_cpp(NumericMatrix pars, CharacterVector lR_levels, LogicalVector
   }
   const int n_trials = n_rows / n_acc;
 
-  // Map parameter column indices
+  // Map parameter column indices.  The parameterisation renames only the three
+  // columns that stand in for (v, k, s); B, A, t0 and the collapse columns are
+  // the same under all of them.
+  const char* n1 = "v";
+  const char* n2 = "k";
+  const char* n3 = "s";
+  if (par_kind == fperace::ROU_PAR_CURVATURE) {
+    n1 = "tstar"; n2 = "c"; n3 = "nu";
+  } else if (par_kind == fperace::ROU_PAR_EQUILIBRIUM) {
+    n1 = "tk"; n2 = "q"; n3 = "chi";
+  }
   CharacterVector col_names = colnames(pars);
-  int iv = -1, ik = -1, iB = -1, iA = -1, it0 = -1, is_ = -1;
+  int ip1 = -1, ip2 = -1, ip3 = -1, iB = -1, iA = -1, it0 = -1;
   int iBinf = -1, itau = -1, ipw = -1;
   for (int j = 0; j < col_names.size(); ++j) {
     std::string nm = Rcpp::as<std::string>(col_names[j]);
-    if (nm == "v") iv = j;
-    else if (nm == "k") ik = j;
+    if (nm == n1) ip1 = j;
+    else if (nm == n2) ip2 = j;
+    else if (nm == n3) ip3 = j;
     else if (nm == "B") iB = j;
     else if (nm == "A") iA = j;
     else if (nm == "t0") it0 = j;
-    else if (nm == "s") is_ = j;
     else if (nm == "Binf") iBinf = j;
     else if (nm == "tau") itau = j;
     else if (nm == "pw") ipw = j;
   }
-  if (iv < 0 || iB < 0 || it0 < 0) {
-    stop("rrou_cpp: pars matrix must contain at least 'v', 'B', and 't0' columns.");
+  if (ip1 < 0 || iB < 0 || it0 < 0) {
+    stop("rrou_cpp: pars matrix must contain at least '%s', 'B', and 't0' columns.",
+         n1);
+  }
+  // Under rate, k and s have defaults; the alternatives have no meaningful
+  // default for their second and third columns, so require them.
+  if (par_kind != fperace::ROU_PAR_RATE && (ip2 < 0 || ip3 < 0)) {
+    stop("rrou_cpp: pars matrix must contain '%s' and '%s' columns.", n2, n3);
   }
 
   // Resolve boundary collapse kind
@@ -290,16 +335,25 @@ Rcpp::List rrou_cpp(NumericMatrix pars, CharacterVector lR_levels, LogicalVector
       int r = j * n_acc + a;
       if (!ok[r]) continue;
 
-      double vv = pars(r, iv);
       double BB = pars(r, iB);
-      if (!R_finite(vv) || !R_finite(BB)) continue;
-
-      double kk = (ik >= 0 && R_finite(pars(r, ik)) && pars(r, ik) > 0.0) ? pars(r, ik) : 0.0;
+      if (!R_finite(BB)) continue;
       double AA = (iA >= 0 && R_finite(pars(r, iA)) && pars(r, iA) > 0.0) ? pars(r, iA) : 0.0;
-      double ss = 1.0;
-      if (is_ >= 0) {
-        ss = pars(r, is_);
-        if (!R_finite(ss) || !(ss > 0.0)) continue;
+
+      double vv, kk, ss;
+      if (par_kind == fperace::ROU_PAR_RATE) {
+        vv = pars(r, ip1);
+        if (!R_finite(vv)) continue;
+        kk = (ip2 >= 0 && R_finite(pars(r, ip2)) && pars(r, ip2) > 0.0) ? pars(r, ip2) : 0.0;
+        ss = 1.0;
+        if (ip3 >= 0) {
+          ss = pars(r, ip3);
+          if (!R_finite(ss) || !(ss > 0.0)) continue;
+        }
+      } else {
+        fperace::rou_map_to_rate(par_kind, pars(r, ip1), pars(r, ip2),
+                                 pars(r, ip3), BB, AA, vv, kk, ss);
+        if (!R_finite(vv) || !R_finite(kk) || !R_finite(ss) || !(ss > 0.0)) continue;
+        if (kk < 0.0) kk = 0.0;
       }
       double tt0 = R_finite(pars(r, it0)) ? pars(r, it0) : 0.0;
 

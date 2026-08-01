@@ -6,18 +6,12 @@
 # likelihood is a Fokker-Planck solve (src/fpe_solver.h) cached per distinct
 # parameter tuple (src/fpe_race.h).
 #
-# The R-side dROU/pROU below call the SAME C++ cache as the sampled likelihood,
-# so make_data()/predict() and the fit cannot disagree.
+# The R-side dROU/pROU wrappers call the same C++ solver as the sampled
+# likelihood, so simulation and prediction use the fitted model directly.
 # ============================================================================
 
-# Resolution knobs, exposed as options so accuracy can be swept against a real
-# fit without a recompile.  Defaults come from the step-10 sweep
-# (race_ou_integration_plan.md section 8) and MUST match FPE_Grid in
-# src/fpe_race.h, which is what the sampled likelihood uses.
-#
-# nx is the binding constraint: once the time grid is graded (tgrade = 32),
-# halving dt buys 7-16% while raising nx buys a factor of two.  tgrade beyond 32
-# buys nothing measurable.
+# Resolution knobs are exposed as options so accuracy can be adjusted without
+# recompiling the package. They must match the grid used by the C++ likelihood.
 .rou_grid <- function() {
   list(
     nx = getOption("emc2.fpe_nx", 512L),
@@ -27,16 +21,27 @@
   )
 }
 
-# Boundary form codes, matching FPE_BoundaryKind in src/fpe_models.h.
+# Boundary-form codes, matching the C++ solver.
 .ROU_BND <- c(fixed = 0L, weibull = 1L, exponential = 2L, linear_additive = 3L,
               linear_multiplicative = 4L)
 
-# The suffix on c_name selects the form in resolve_race_model_adapter(); the
-# shape parameters themselves travel as ordinary optional columns.
+# The suffix on c_name selects the boundary form in the C++ adapter.
 .ROU_SUFFIX <- c(fixed = "", weibull = "_BWEIB", exponential = "_BEXP",
                  linear_additive = "_BLIN_ADD", linear_multiplicative = "_BLIN_MULT")
 
-.rou_cols <- function(pars) {
+# Parameterisation codes, matching fperace::ROU_PAR_* in src/fpe_race.h, and the
+# c_name infix that tells the C++ adapter which one is in play. The infix comes
+# before the boundary suffix, so ROUCURV_BEXP is a curvature-parameterised model
+# with an exponentially collapsing bound.
+.ROU_PAR <- c(rate = 0L, curvature = 1L, equilibrium = 2L)
+.ROU_PAR_INFIX <- c(rate = "", curvature = "CURV", equilibrium = "EQ")
+
+# The three columns each parameterisation puts in place of (v, k, s).
+.ROU_PAR_COLS <- list(rate = c("v", "k", "s"),
+                      curvature = c("tstar", "c", "nu"),
+                      equilibrium = c("tk", "q", "chi"))
+
+.rou_cols <- function(pars, par = "rate") {
   n <- nrow(pars)
   cn <- dimnames(pars)[[2]]
   # The boundary form is inferred from which shape columns are present, so the
@@ -45,13 +50,27 @@
   bkind <- if (!("Binf" %in% cn) || !("tau" %in% cn)) .ROU_BND[["fixed"]]
            else if ("pw" %in% cn) .ROU_BND[["weibull"]]
            else .ROU_BND[["exponential"]]
+  B <- pars[, "B"]
+  A <- if ("A" %in% cn) pars[, "A"] else rep(0, n)
+  if (par == "rate") {
+    v <- pars[, "v"]
+    k <- if ("k" %in% cn) pars[, "k"] else rep(0, n)
+    s <- if ("s" %in% cn) pars[, "s"] else rep(1, n)
+  } else {
+    # The map lives in C++ (src/fpe_race.h) and is shared with the likelihood
+    # kernels, so the R density cannot drift from the sampled one.
+    nm <- .ROU_PAR_COLS[[par]]
+    m <- rou_to_rate_vec(.ROU_PAR[[par]], pars[, nm[1]], pars[, nm[2]],
+                         pars[, nm[3]], B, A)
+    v <- m$v; k <- m$k; s <- m$s
+  }
   list(
-    v = pars[, "v"],
-    k = if ("k" %in% cn) pars[, "k"] else rep(0, n),
-    B = pars[, "B"],
-    A = if ("A" %in% cn) pars[, "A"] else rep(0, n),
+    v = v,
+    k = k,
+    B = B,
+    A = A,
     t0 = pars[, "t0"],
-    s = if ("s" %in% cn) pars[, "s"] else rep(1, n),
+    s = s,
     bkind = bkind,
     Binf = if (bkind == 0L) numeric(0) else pars[, "Binf"],
     tau = if (bkind == 0L) numeric(0) else pars[, "tau"],
@@ -68,8 +87,8 @@
   p
 }
 
-.rou_pdf_cdf <- function(rt, pars, kind = NULL) {
-  p <- .rou_with_kind(.rou_cols(pars), kind)
+.rou_pdf_cdf <- function(rt, pars, kind = NULL, par = "rate") {
+  p <- .rou_with_kind(.rou_cols(pars, par), kind)
   g <- .rou_grid()
   # NA rates mark accumulators that are not in the race on this trial; the
   # solver has nothing to say about them, so keep them out and zero them after.
@@ -96,16 +115,19 @@
   out
 }
 
-dROU <- function(rt, pars, kind = NULL) .rou_pdf_cdf(rt, pars, kind)$pdf
+dROU <- function(rt, pars, kind = NULL, par = "rate")
+  .rou_pdf_cdf(rt, pars, kind, par)$pdf
 
-pROU <- function(rt, pars, kind = NULL) .rou_pdf_cdf(rt, pars, kind)$cdf
+pROU <- function(rt, pars, kind = NULL, par = "rate")
+  .rou_pdf_cdf(rt, pars, kind, par)$cdf
 
 #### random
 
 rROU <- function(lR, pars, ok = rep(TRUE, nrow(pars)), kind = NULL,
+                 par = "rate",
                  dt = getOption("emc2.rou_sim_dt", 1e-3),
                  t_max = getOption("emc2.rou_sim_tmax", 30)) {
-  p <- .rou_with_kind(.rou_cols(pars), kind)
+  p <- .rou_with_kind(.rou_cols(pars, par), kind)
   nr <- length(levels(lR))
   bad <- rep(NA, length(lR) / nr)
   out <- data.frame(R = bad, rt = bad)
@@ -134,9 +156,10 @@ rROU <- function(lR, pars, ok = rep(TRUE, nrow(pars)), kind = NULL,
 
 # Pure R reference simulator fallback for .rfun_ROU when emc2.cpp_rfun is FALSE
 .rfun_ROU_R <- function(lR, pars, ok = rep(TRUE, nrow(pars)), kind = NULL,
+                        par = "rate",
                         dt = getOption("emc2.rou_sim_dt", 1e-3),
                         t_max = getOption("emc2.rou_sim_tmax", 30)) {
-  p <- .rou_with_kind(.rou_cols(pars), kind)
+  p <- .rou_with_kind(.rou_cols(pars, par), kind)
   nr <- length(levels(lR))
   bad <- rep(NA, length(lR) / nr)
   out <- data.frame(R = bad, rt = bad)
@@ -241,48 +264,107 @@ rROU <- function(lR, pars, ok = rep(TRUE, nrow(pars)), kind = NULL,
 #' | *s*       | log       | \[0, Inf\]      | log(1)    |                  | Within-trial standard deviation of the diffusion              |
 #' | *pContaminant* | probit | \[0, 1\] | qnorm(0) | | Optional contamination probability handled by the data pipeline |
 #'
-#' The leak *k* has units of 1/time, so it is *not* absorbed by the scaling
-#' convention that fixes *s* = 1; with *s* fixed, (*v*, *k*, *B*, *A*) are
-#' identified. Concretely, the solver rescales the state by \eqn{Y = X/s}, which
-#' turns \eqn{dX = (v - kX)dt + s\,dW} into \eqn{dY = (v/s - kY)dt + dW}: the
-#' state-valued parameters *v*, *B* and *A* are divided by *s*, and *k* is
-#' carried through unchanged because a rate is invariant under a rescaling of
-#' the state. The first-passage time is the same random variable either way, so
-#' no Jacobian is applied to the density. The parameterization is deliberately (*v*, *k*) rather than the
-#' solver's (\eqn{\lambda}, \eqn{\theta}): the asymptote \eqn{\theta = v/k}
-#' diverges as the leak vanishes, whereas the drift \eqn{v - kX} is perfectly
-#' regular there. As a result *k* = 0 is an ordinary interior value at which the
-#' model **is** the racing diffusion model (RDM), reached through the same
-#' partial differential equation rather than by dispatching to the Wald
-#' formulae. That makes `ROU` with `constants = c(k = log(0))` an independent
-#' check on `RDM`, which it would not be if the code branched.
+#' # Parameterizations
+#'
+#' `parameterization` changes which three parameters stand in for
+#' \eqn{(v, k, s)}. All three describe the *same* process and reach the same
+#' solver, so they differ only in the shape of the likelihood surface the
+#' sampler sees and in what a prior on each parameter means. `B`, `A`, `t0` and
+#' the collapsing-bound parameters are common to all three.
+#'
+#' `"rate"` (the default) is \eqn{(v, k, s)} as above.
+#'
+#' `"curvature"` replaces them with \eqn{(t_\star, c, \nu)}, all defined against
+#' the deterministic distance \eqn{b = B + A} covered from the nominal start
+#' \eqn{x = 0}:
+#'
+#' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Interpretation** |
+#' |-----------|-----------|---------------|-----------|------------------------------------|
+#' | *tstar*   | log       | \[0.05, Inf\]   | log(1)    | Time at which the deterministic mean path reaches *b* |
+#' | *c*       | log       | \[0, 5\]        | log(0)    | Dimensionless leak \eqn{c = k\,t_\star} over one decision; *c* = 0 is the Wiener race |
+#' | *nu*      | log       | \[0.001, 10\]   | log(1)    | Terminal noise, \eqn{SD[X(t_\star)]/b} |
+#'
+#' The map is \eqn{k = c/t_\star}, \eqn{v = bc/\{t_\star(1-e^{-c})\}} and
+#' \eqn{s = (b\nu/\sqrt{t_\star})\sqrt{2c/(1-e^{-2c})}}, chosen so that
+#' \eqn{E[X(t_\star)] = b} and \eqn{SD[X(t_\star)] = b\nu} for *every* value of
+#' *c*. Curvature therefore bends the mean path without also making the
+#' accumulator slower or more variable at the bound, which is the ridge that
+#' \eqn{(v, k)} suffers from: in the rate parameterization a change in *k* can
+#' be almost entirely undone by a change in *v*, and freely estimated leak
+#' drifts along that ridge. A useful reading of *c* is the leak half-life
+#' relative to the decision, \eqn{t_{1/2}/t_\star = \log 2 / c}: *c* = 0.1 is a
+#' half-life of about 7 decisions and should be nearly invisible in ordinary RT
+#' data.
+#'
+#' `"equilibrium"` replaces them with \eqn{(t_k, q, \chi)}:
+#'
+#' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Interpretation** |
+#' |-----------|-----------|---------------|-----------|------------------------------------|
+#' | *tk*      | log       | \[0.01, Inf\]   | log(1)    | Leak time constant \eqn{t_k = 1/k} (the boundary-collapse time constant keeps the name *tau*) |
+#' | *q*       | log       | \[0.001, 20\]   | log(1)    | OU equilibrium \eqn{v/k} relative to the bound, \eqn{q = v/(kb)} |
+#' | *chi*     | log       | \[0.001, 10\]   | log(1)    | Noise over one relaxation, \eqn{\chi = s\sqrt{t_k}/b} |
+#'
+#' In dimensionless time \eqn{u = t/t_k} and state \eqn{Y = X/b} this is
+#' \eqn{dY = (q - Y)du + \chi\,dW_u} with the bound at \eqn{Y = 1}, so *q* is a
+#' regime parameter: \eqn{q > 1} crosses deterministically, \eqn{q = 1}
+#' approaches the bound asymptotically, and \eqn{q < 1} relaxes to a
+#' subthreshold level from which responses arise as noise-driven escapes. The
+#' \eqn{q \lesssim 1} regime is the one worth having: it produces substantial
+#' survivor mass at a deadline together with a late hazard that flattens to a
+#' constant, without requiring the observed RT distribution to march up to that
+#' deadline. It is intended for censored designs — give the data a `UC` column
+#' (and `UT`) and code responses past the deadline as `rt = Inf`, `R = NA`.
+#' A single deadline still trades *q* off against *chi*; several deadlines or
+#' response windows trace the survivor function directly and are far more
+#' diagnostic.
+#'
+#' # Scale identification
+#'
+#' Scaling the state by *b* shows the dynamics depend only on
+#' \eqn{(v/s, k, B/s, A/s)} — four quantities from five parameters. The rate
+#' parameterization resolves the redundancy by fixing `s` (usually
+#' `constants = c(s = log(1))`). The alternatives express the same redundancy at
+#' the other end: they depend only on \eqn{(t_\star, c, \nu, A/b)} or
+#' \eqn{(t_k, q, \chi, A/b)}, so **fix `B` rather than `s`**, with
+#' `constants = c(B = log(1))`. A speed-accuracy manipulation that would have
+#' been carried by `B ~ E` in the rate parameterization is carried by
+#' `tstar ~ E` (curvature) or by `q ~ E` and `tk ~ E` (equilibrium).
+#'
+#' Leak is an architectural timescale rather than a per-condition fit knob. A
+#' sensible baseline lets stimulus condition move `tstar` (or `q`) and speed
+#' emphasis move the bound-related parameter, while `c` (or `tk`) is a single
+#' subject-level quantity: `c ~ 1`, not `c ~ E * lM`. A separate leak per racer
+#' and per condition returns the model to the mimicry regime it is trying to
+#' escape.
+#'
+#' The leak *k* is a rate in units of 1/time and is not divided by *s*. As in
+#' the RDM, *s* is normally fixed to 1 for scale identification. Setting
+#' *k* = 0 gives the racing diffusion model (RDM) through the same solver.
 #'
 #' The parameterization *b* = *B* + *A* ensures that the response threshold is
 #' always higher than the between trial variation in start point. `A` is
 #' non-negative, so the start point is always in \[0, *A*\].
 #'
-#' **This is not the leaky competing accumulator.** It is the leaky accumulator
-#' of Smith and Ratcliff (2004, appendix): the accumulators race independently,
-#' with no lateral inhibition, and activation is *not* rectified at zero — the
-#' process may go negative and only upward threshold crossings count. Usher and
-#' McClelland's (2001) LCA adds both of those features.
+#' This is the independent leaky accumulator, not the leaky competing
+#' accumulator (LCA): accumulators do not inhibit one another, and the process
+#' is not rectified at zero. See [BOU()] for the two-boundary OU diffusion,
+#' whose leak is defined relative to the starting point rather than zero.
 #'
-#' Because there is no closed-form first-passage density, each distinct
-#' parameter tuple costs one Fokker-Planck solve (about 1.7 ms at the default
-#' resolution, roughly 45 times an analytic race kernel). The number of
-#' solves is set by the number of distinct parameter rows in the design, not by
-#' the number of trials, so cost is bounded by the design rather than the data.
-#' A trend or covariate model makes every trial distinct and is correspondingly
-#' much slower — permitted, but priced. Accuracy can be traded against speed
-#' with `options(emc2.fpe_nx = )`, `options(emc2.fpe_dt = )`,
-#' `options(emc2.fpe_grade = )` and `options(emc2.fpe_tgrade = )`.
+#' There is no closed-form first-passage density, so the likelihood uses a
+#' Fokker–Planck solve for each distinct parameter tuple. The solve is cached
+#' across response-time queries, but designs with trial-varying parameters are
+#' correspondingly more expensive. Resolution can be adjusted with
+#' `emc2.fpe_nx`, `emc2.fpe_dt`, `emc2.fpe_grade`, and `emc2.fpe_tgrade`.
 #'
-#' Because the Fokker-Planck solver solves over a continuous time grid from 0 to
-#' max(t), binning response times saves zero computation time while introducing
-#' artificial flooring bias into parameter estimates (especially t0, v, and k).
-#' `ROU()` therefore declares `compress_ok = FALSE`, and `make_emc` forces
-#' `compress = FALSE` and `rt_resolution = NULL` for it; no argument needs to be
-#' passed, and an explicit `rt_resolution` is overridden with a message.
+#' Response-time compression is disabled for this model because the solver
+#' evaluates the continuous-time density directly; binning would add flooring
+#' bias without reducing the solve cost.
+#'
+#' Ratcliff, R., & Smith, P. L. (2004). A comparison of sequential sampling
+#' models for two-choice reaction time. *Psychological Review, 111*(2), 333-367.
+#'
+#' Smith, P. L. (2000). Stochastic dynamic models of response time and accuracy:
+#' A foundational primer. *Journal of Mathematical Psychology, 44*(3), 408-463.
 #'
 #' Smith, P. L., & Ratcliff, R. (2004). Psychology and neurobiology of simple
 #' decisions. *Trends in Neurosciences, 27*(3), 161-168.
@@ -303,14 +385,19 @@ rROU <- function(lR, pars, ok = rep(TRUE, nrow(pars)), kind = NULL,
 #'       (multiplicative urgency)
 #'     \item `"weibull"`: \eqn{b(t) = b_\infty + (b_0 - b_\infty) e^{-(t/\tau)^{pw}}}
 #'   }
-#'   Because `Binf` is measured from zero, the boundary is free to fall into the
-#'   start-point range \eqn{[0, A]} and, at `Binf = 0`, to collapse all the way
-#'   to the start point -- a forced response. `Binf = 0` is an ordinary interior
-#'   value, not a limit: the solver's domain is \eqn{[x_{lo}, b(t)]} with
-#'   \eqn{x_{lo} < 0}, so it stays well conditioned there. A moving boundary forfeits the one-time factorisation of
-#'   the solver's linear operator, so it is slower per solve; setting `Binf`
-#'   equal to \eqn{B + A} makes the boundary constant again and recovers the
-#'   fixed-bound cost exactly.
+#'   `Binf` is measured from zero, so the boundary may collapse into the
+#'   start-point range. Setting `Binf = B + A` gives the fixed-boundary model.
+#'
+#' @param parameterization Character; which three parameters stand in for
+#'   \eqn{(v, k, s)}. `"rate"` (the default) estimates them directly.
+#'   `"curvature"` estimates \eqn{(t_\star, c, \nu)} — crossing time,
+#'   dimensionless leak and terminal noise — which holds the deterministic
+#'   crossing time and the spread at the bound fixed as the leak varies.
+#'   `"equilibrium"` estimates \eqn{(t_k, q, \chi)} — relaxation time,
+#'   equilibrium position relative to the bound, and noise per relaxation — in
+#'   which \eqn{q < 1} is a subthreshold process that responds by noise-driven
+#'   escape. All three are the same model; see Details. The alternatives fix the
+#'   state scale with `B` rather than with `s`.
 #'
 #' @return A list defining the cognitive model
 #' @examples
@@ -327,38 +414,72 @@ rROU <- function(lR, pars, ok = rep(TRUE, nrow(pars)), kind = NULL,
 #'                       matchfun=matchfun,
 #'                       formula=list(v~lM,k~1,B~E+lR,A~1,t0~1,Binf~1,tau~1),
 #'                       contrasts=list(v=list(lM=ADmat)),constants=c(s=log(1)))
+#'
+#' # The curvature parameterization: stimulus and speed emphasis move the
+#' # crossing time, leak is one architectural quantity per subject, and B fixes
+#' # the state scale in place of s.
+#' design_ROUcurv <- design(data = forstmann,
+#'                          model=function() ROU(parameterization="curvature"),
+#'                          matchfun=matchfun,
+#'                          formula=list(tstar~lM+E,c~1,nu~1,A~1,t0~1),
+#'                          contrasts=list(tstar=list(lM=ADmat)),
+#'                          constants=c(B=log(1)))
+#'
+#' # The equilibrium parameterization, for a deadline design in which q is free
+#' # to sit below the bound. Give the data a UC column to censor at it.
+#' design_ROUeq <- design(data = forstmann,
+#'                        model=function() ROU(parameterization="equilibrium"),
+#'                        matchfun=matchfun,
+#'                        formula=list(tk~1,q~lM,chi~1,A~1,t0~1),
+#'                        contrasts=list(q=list(lM=ADmat)),
+#'                        constants=c(B=log(1)))
 #' @export
 
 ROU <- function(boundary_collapse = c("fixed", "exponential", "linear_additive",
-                                      "linear_multiplicative", "weibull")) {
+                                      "linear_multiplicative", "weibull"),
+                parameterization = c("rate", "curvature", "equilibrium")) {
   boundary_collapse <- match.arg(boundary_collapse)
+  parameterization <- match.arg(parameterization)
   kind <- boundary_collapse
+  par <- parameterization
 
-  p_types <- c("v" = log(1), "k" = log(0), "B" = log(1), "A" = log(0),
-               "t0" = log(0), "s" = log(1))
-  transform <- c(v = "exp", k = "exp", B = "exp", A = "exp", t0 = "exp",
-                 s = "exp")
-  minmax <- cbind(v = c(1e-3, Inf), k = c(0, Inf), B = c(0, Inf),
-                  A = c(1e-4, Inf), t0 = c(0.05, Inf), s = c(0, Inf))
-  exception <- c(A = 0, v = 0, k = 0)
+  if (par == "rate") {
+    p_types <- c("v" = log(1), "k" = log(0), "B" = log(1), "A" = log(0),
+                 "t0" = log(0), "s" = log(1))
+    transform <- c(v = "exp", k = "exp", B = "exp", A = "exp", t0 = "exp",
+                   s = "exp")
+    minmax <- cbind(v = c(1e-3, Inf), k = c(0, Inf), B = c(0, Inf),
+                    A = c(1e-4, Inf), t0 = c(0.05, Inf), s = c(0, Inf))
+    exception <- c(A = 0, v = 0, k = 0)
+  } else if (par == "curvature") {
+    # Defaults chosen so that the default model is the SAME process as the rate
+    # default: c = 0, tstar = 1, nu = 1, B = 1, A = 0 maps to v = 1, k = 0,
+    # s = 1.  The upper bound on c is a solver guard as much as a psychological
+    # one -- k = c/tstar, and c/tstar large is a stiff march.
+    p_types <- c("tstar" = log(1), "c" = log(0), "nu" = log(1), "B" = log(1),
+                 "A" = log(0), "t0" = log(0))
+    transform <- c(tstar = "exp", c = "exp", nu = "exp", B = "exp", A = "exp",
+                   t0 = "exp")
+    minmax <- cbind(tstar = c(0.05, Inf), c = c(0, 5), nu = c(1e-3, 10),
+                    B = c(0, Inf), A = c(1e-4, Inf), t0 = c(0.05, Inf))
+    exception <- c(A = 0, c = 0)
+  } else {
+    p_types <- c("tk" = log(1), "q" = log(1), "chi" = log(1), "B" = log(1),
+                 "A" = log(0), "t0" = log(0))
+    transform <- c(tk = "exp", q = "exp", chi = "exp", B = "exp", A = "exp",
+                   t0 = "exp")
+    minmax <- cbind(tk = c(0.01, Inf), q = c(1e-3, 20), chi = c(1e-3, 10),
+                    B = c(0, Inf), A = c(1e-4, Inf), t0 = c(0.05, Inf))
+    exception <- c(A = 0)
+  }
 
-  # Optional columns for the collapsing forms, in the order declared after
-  # N_REQ in emc2col::rou (src/col_registry.h) and BEFORE pContaminant, exactly
-  # as BAwL orders mG/mK/omega.  Only the columns the selected form actually
-  # uses are added, so a fixed-bound ROU is unchanged by collapse existing.
-  #
-  # Binf is the asymptotic boundary measured from ZERO, not from the top of the
-  # start-point range the way B is.  The bound may therefore descend into
-  # [0, A]: a bound that meets the start point is a forced response, which the
-  # model should be able to express.
+  # Collapsing forms append only the columns they use. Binf is measured from
+  # zero, while B is the distance from the top of the start-point range.
   if (kind != "fixed") {
     p_types <- c(p_types, Binf = log(0.5), tau = log(1))
     transform <- c(transform, Binf = "exp", tau = "exp")
-    # Binf = 0 is a legal interior value, not a limit to be approached: the
-    # solver's domain is [x_lo, b(t)] with x_lo < 0, so b(t) -> 0 leaves it
-    # perfectly well conditioned.  Verified smooth and monotone through
-    # 1e-3 -> 1e-6 -> 0 for all three forms.  A bound that reaches zero has
-    # met the start point, i.e. a forced response.
+    # Binf = 0 is allowed; the solver handles a boundary that reaches the
+    # start-point range.
     minmax <- cbind(minmax, Binf = c(0, Inf), tau = c(1e-3, Inf))
     exception <- c(exception, Binf = 0)
     if (kind == "weibull") {
@@ -375,27 +496,26 @@ ROU <- function(boundary_collapse = c("fixed", "exponential", "linear_additive",
 
   list(
     type = "RACE",
-    c_name = paste0("ROU", .ROU_SUFFIX[[kind]]),
-    # Fokker-Planck solve cached per parameter tuple: rt only picks readout
-    # points off a march that has already been paid for, so binning it saves
-    # nothing.  make_emc() turns compression and rt_resolution off.
+    c_name = paste0("ROU", .ROU_PAR_INFIX[[par]], .ROU_SUFFIX[[kind]]),
+    # The density is evaluated by a cached Fokker--Planck solve.
     compress_ok = FALSE,
     p_types = p_types,
     p_types_canonical = names(p_types)[names(p_types) != "pContaminant"],
     transform = list(func = transform),
     bound = list(minmax = minmax, exception = exception),
     # Trial dependent parameter transform
+    # b = B + A is the threshold absorbed by the kernel.
     Ttransform = function(pars, dadm) {
       pars <- cbind(pars, b = pars[, "B"] + pars[, "A"])
       pars
     },
     # Random function for racing accumulators
     rfun = function(data = NULL, pars) .rfun_ROU(data$lR, pars, ok = attr(pars, "ok"),
-                                                 kind = kind),
+                                                 kind = kind, par = par),
     # Density function (PDF) for single accumulator
-    dfun = function(rt, pars) dROU(rt, pars, kind = kind),
+    dfun = function(rt, pars) dROU(rt, pars, kind = kind, par = par),
     # Probability function (CDF) for single accumulator
-    pfun = function(rt, pars) pROU(rt, pars, kind = kind),
+    pfun = function(rt, pars) pROU(rt, pars, kind = kind, par = par),
     # Race likelihood combining pfun and dfun
     log_likelihood = function(pars, dadm, model, min_ll = log(1e-10)) {
       log_likelihood_race_missing(pars = pars, dadm = dadm, model = model, min_ll = min_ll)

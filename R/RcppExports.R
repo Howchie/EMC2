@@ -601,6 +601,10 @@ rlf_hit_times_vec <- function(v, B, A, s, alpha, dt = 1e-3, t_max = 30.0) {
     .Call(`_EMC2_rlf_hit_times_vec`, v, B, A, s, alpha, dt, t_max)
 }
 
+rou_to_rate_vec <- function(par_kind, p1, p2, p3, B, A) {
+    .Call(`_EMC2_rou_to_rate_vec`, par_kind, p1, p2, p3, B, A)
+}
+
 rou_pdf_cdf_vec <- function(rt, v, k, B, A, t0, s, nx = 384L, dt_target = 2e-3, grade = 8.0, tgrade = 32.0, bkind = 0L, Binf = as.numeric( c()), tau = as.numeric( c()), pw = as.numeric( c())) {
     .Call(`_EMC2_rou_pdf_cdf_vec`, rt, v, k, B, A, t0, s, nx, dt_target, grade, tgrade, bkind, Binf, tau, pw)
 }
@@ -617,8 +621,8 @@ rrou_hit_times_cpp <- function(v, k, B, A, s, dt = 1e-3, t_max = 30.0, bkind = 0
     .Call(`_EMC2_rrou_hit_times_cpp`, v, k, B, A, s, dt, t_max, bkind, Binf, tau, pw)
 }
 
-rrou_cpp <- function(pars, lR_levels, ok, kind_sexp = NULL, dt = 1e-3, t_max = 30.0) {
-    .Call(`_EMC2_rrou_cpp`, pars, lR_levels, ok, kind_sexp, dt, t_max)
+rrou_cpp <- function(pars, lR_levels, ok, kind_sexp = NULL, dt = 1e-3, t_max = 30.0, par_kind = 0L) {
+    .Call(`_EMC2_rrou_cpp`, pars, lR_levels, ok, kind_sexp, dt, t_max, par_kind)
 }
 
 run_trend_rcpp <- function(data, trend, param, trend_pars, pars_full, return_kernel = FALSE) {

@@ -167,6 +167,97 @@ struct BndSpec {
   double Binf = 0.0, tau = 0.0, pw = 0.0;
 };
 
+// ---------------------------------------------------------------------------
+// Parameterisations.
+//
+// All three describe the SAME process; they differ only in which three numbers
+// the user estimates in place of (v, k, s).  The map below is the only place
+// the alternatives exist: everything downstream -- the key, the cache, the
+// march, the simulator -- sees (v, k, s) and cannot tell which parameterisation
+// produced them.  That is deliberate, and it is why RATE is bit-for-bit what it
+// always was: its branch is three assignments.
+//
+// The two alternatives both measure their parameters against the deterministic
+// distance b = B + A, i.e. the path from the nominal start x = 0 to the bound,
+// keeping the package's b = B + A, X(0) ~ U(0, A) convention untouched.  With
+// A > 0 the mean start is A/2 rather than 0, so tstar is a reference crossing
+// time rather than the mean one; the alternative (defining everything at the
+// mean start) would make d depend on A and buys nothing, since A is a nuisance
+// range parameter and is usually 0.
+//
+//   CURVATURE    (tstar, c, nu).  tstar is the time at which the deterministic
+//     mean path reaches b, c = k*tstar the dimensionless leak operating over
+//     one decision, nu = SD[X(tstar)]/b the terminal noise relative to the same
+//     distance.  Crossing time and terminal spread are held FIXED as c varies,
+//     so c bends the mean path without also making the accumulator slower --
+//     which is the whole ridge that (v, k) suffers from.  c = 0 is exactly the
+//     Wiener race.
+//
+//   EQUILIBRIUM  (tk, q, chi).  tk = 1/k is the leak time constant, q = v/(k*b)
+//     places the OU equilibrium v/k relative to the bound, and chi =
+//     s*sqrt(tk)/b is the noise scale over one relaxation.  q > 1 crosses
+//     deterministically, q < 1 relaxes to a subthreshold level and responds by
+//     noise-driven escape.  Note there is no separate resting level: for
+//     dX = -k(X - r)dt + v dt the pair (v, r) enters only as v + k*r, so r is
+//     not identified given k and the kernel's r = 0 loses no generality.
+//
+// Both leave B unidentified when their noise parameter is free -- scaling the
+// state by b shows the dynamics depend only on (tstar, c, nu, A/b) or
+// (tk, q, chi, A/b).  That is the same one redundancy the rate parameterisation
+// has between s and B, moved to the other end: fix B rather than s.  See the
+// note in R/model_ROU.R.
+// ---------------------------------------------------------------------------
+enum : int {
+  ROU_PAR_RATE = 0,
+  ROU_PAR_CURVATURE = 1,
+  ROU_PAR_EQUILIBRIUM = 2
+};
+
+// (p1, p2, p3) are the parameterisation's own three columns, in p_types order.
+// Unrepresentable input becomes NaN rather than a silently substituted value,
+// so rou_key()'s finiteness test rejects the row exactly as it does for a bad
+// rate row.
+inline void rou_map_to_rate(int par_kind, double p1, double p2, double p3,
+                            double B, double A, double& v, double& k,
+                            double& s) {
+  if (par_kind == ROU_PAR_RATE) { v = p1; k = p2; s = p3; return; }
+
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  const double AA = (A > 0.0 && std::isfinite(A)) ? A : 0.0;
+  const double b = B + AA;
+  if (!(b > 0.0) || !std::isfinite(b)) { v = k = s = nan; return; }
+
+  if (par_kind == ROU_PAR_CURVATURE) {
+    const double tstar = p1, cc = p2, nu = p3;
+    if (!(tstar > 0.0) || !std::isfinite(tstar) ||
+        !(cc >= 0.0) || !std::isfinite(cc) || !std::isfinite(nu)) {
+      v = k = s = nan;
+      return;
+    }
+    k = cc / tstar;
+    // Both gains are 0/0 at c = 0 and tend to 1 there.  expm1 keeps the small-c
+    // ratio accurate; taking the limit explicitly keeps c = 0 exact, which is
+    // what makes constants = c(c = log(0)) reproduce the Wiener race rather
+    // than merely approach it.
+    const double g1 = (cc > 0.0) ? (cc / -std::expm1(-cc)) : 1.0;
+    const double g2 = (cc > 0.0) ? (2.0 * cc / -std::expm1(-2.0 * cc)) : 1.0;
+    v = b * g1 / tstar;                    // E[X(tstar)] = b for every c
+    s = b * nu * std::sqrt(g2 / tstar);    // SD[X(tstar)] = b*nu for every c
+    return;
+  }
+
+  // ROU_PAR_EQUILIBRIUM
+  const double tk = p1, q = p2, chi = p3;
+  if (!(tk > 0.0) || !std::isfinite(tk) || !std::isfinite(q) ||
+      !std::isfinite(chi)) {
+    v = k = s = nan;
+    return;
+  }
+  k = 1.0 / tk;
+  v = q * b / tk;                          // equilibrium v/k = q*b
+  s = chi * b / std::sqrt(tk);
+}
+
 // Build the key for one accumulator's parameters.  s is scaled out exactly as
 // the RDM does (v/s, B/s, A/s, with k unchanged -- k has units of 1/time and is
 // invariant under the state rescaling Y = X/s), which is what makes the k = 0
@@ -213,6 +304,16 @@ inline bool rou_key(double v, double k, double B, double A, double s,
 inline bool rou_key(double v, double k, double B, double A, double s, Key& out) {
   static const BndSpec fixed;
   return rou_key(v, k, B, A, s, fixed, out);
+}
+
+// Map first, then key.  Every call site that has raw parameter columns should
+// use this rather than mapping itself, so that a new parameterisation is one
+// edit to rou_map_to_rate() and nothing else.
+inline bool rou_key_par(int par_kind, double p1, double p2, double p3,
+                        double B, double A, const BndSpec& bs, Key& out) {
+  double v, k, s;
+  rou_map_to_rate(par_kind, p1, p2, p3, B, A, v, k, s);
+  return rou_key(v, k, B, A, s, bs, out);
 }
 
 struct GridBlock {
@@ -291,6 +392,9 @@ struct SolveCache {
   // of the solve, and because every path that can reach a solve already holds
   // the cache.
   int bnd_kind = fpe::FPE_BND_FIXED;
+  // Parameterisation, likewise set once.  It selects which columns the kernels
+  // read and how they map onto (v, k, s); the solve itself is unaffected.
+  int par_kind = ROU_PAR_RATE;
   bool sparse_raw_output = true;
   bool prepared = false;
   size_t n_entries = 0;

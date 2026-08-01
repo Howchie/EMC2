@@ -155,6 +155,28 @@ namespace rou {
   }
 }
 
+// ROU(parameterization = "curvature"): (tstar, c, nu) replace (v, k, s), with
+// B, A, t0 and the optional collapse columns unchanged.  The optional columns
+// land at the same indices as the rate layout because N_REQ is also 6.
+namespace rou_curv {
+  enum : int { tstar = 0, c, nu, B, A, t0, N_REQ, Binf = N_REQ, tau, pw };
+  inline ColSpec spec() {
+    static const char* n[] = {"tstar", "c", "nu", "B", "A", "t0"};
+    return {n, N_REQ, "ROUCURV"};
+  }
+}
+
+// ROU(parameterization = "equilibrium"): (tk, q, chi) replace (v, k, s).  tk is
+// the LEAK time constant 1/k; the boundary-collapse time constant keeps the
+// name tau, which is why the leak one is not called tau here.
+namespace rou_eq {
+  enum : int { tk = 0, q, chi, B, A, t0, N_REQ, Binf = N_REQ, tau, pw };
+  inline ColSpec spec() {
+    static const char* n[] = {"tk", "q", "chi", "B", "A", "t0"};
+    return {n, N_REQ, "ROUEQ"};
+  }
+}
+
 // R/model_DDM.R — DDM
 namespace ddm {
   enum : int { v = 0, a, sv, t0, st0, s, Z, SZ, N_REQ };

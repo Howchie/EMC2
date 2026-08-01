@@ -2708,6 +2708,22 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// rou_to_rate_vec
+Rcpp::List rou_to_rate_vec(int par_kind, NumericVector p1, NumericVector p2, NumericVector p3, NumericVector B, NumericVector A);
+RcppExport SEXP _EMC2_rou_to_rate_vec(SEXP par_kindSEXP, SEXP p1SEXP, SEXP p2SEXP, SEXP p3SEXP, SEXP BSEXP, SEXP ASEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< int >::type par_kind(par_kindSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type p1(p1SEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type p2(p2SEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type p3(p3SEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type B(BSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type A(ASEXP);
+    rcpp_result_gen = Rcpp::wrap(rou_to_rate_vec(par_kind, p1, p2, p3, B, A));
+    return rcpp_result_gen;
+END_RCPP
+}
 // rou_pdf_cdf_vec
 Rcpp::List rou_pdf_cdf_vec(NumericVector rt, NumericVector v, NumericVector k, NumericVector B, NumericVector A, NumericVector t0, NumericVector s, int nx, double dt_target, double grade, double tgrade, int bkind, NumericVector Binf, NumericVector tau, NumericVector pw);
 RcppExport SEXP _EMC2_rou_pdf_cdf_vec(SEXP rtSEXP, SEXP vSEXP, SEXP kSEXP, SEXP BSEXP, SEXP ASEXP, SEXP t0SEXP, SEXP sSEXP, SEXP nxSEXP, SEXP dt_targetSEXP, SEXP gradeSEXP, SEXP tgradeSEXP, SEXP bkindSEXP, SEXP BinfSEXP, SEXP tauSEXP, SEXP pwSEXP) {
@@ -2801,8 +2817,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // rrou_cpp
-Rcpp::List rrou_cpp(NumericMatrix pars, CharacterVector lR_levels, LogicalVector ok, SEXP kind_sexp, double dt, double t_max);
-RcppExport SEXP _EMC2_rrou_cpp(SEXP parsSEXP, SEXP lR_levelsSEXP, SEXP okSEXP, SEXP kind_sexpSEXP, SEXP dtSEXP, SEXP t_maxSEXP) {
+Rcpp::List rrou_cpp(NumericMatrix pars, CharacterVector lR_levels, LogicalVector ok, SEXP kind_sexp, double dt, double t_max, int par_kind);
+RcppExport SEXP _EMC2_rrou_cpp(SEXP parsSEXP, SEXP lR_levelsSEXP, SEXP okSEXP, SEXP kind_sexpSEXP, SEXP dtSEXP, SEXP t_maxSEXP, SEXP par_kindSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -2812,7 +2828,8 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< SEXP >::type kind_sexp(kind_sexpSEXP);
     Rcpp::traits::input_parameter< double >::type dt(dtSEXP);
     Rcpp::traits::input_parameter< double >::type t_max(t_maxSEXP);
-    rcpp_result_gen = Rcpp::wrap(rrou_cpp(pars, lR_levels, ok, kind_sexp, dt, t_max));
+    Rcpp::traits::input_parameter< int >::type par_kind(par_kindSEXP);
+    rcpp_result_gen = Rcpp::wrap(rrou_cpp(pars, lR_levels, ok, kind_sexp, dt, t_max, par_kind));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -3038,11 +3055,12 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_rlf_pdf_cdf_vec", (DL_FUNC) &_EMC2_rlf_pdf_cdf_vec, 17},
     {"_EMC2_simulate_rlf_hit_times_cpp", (DL_FUNC) &_EMC2_simulate_rlf_hit_times_cpp, 9},
     {"_EMC2_rlf_hit_times_vec", (DL_FUNC) &_EMC2_rlf_hit_times_vec, 7},
+    {"_EMC2_rou_to_rate_vec", (DL_FUNC) &_EMC2_rou_to_rate_vec, 6},
     {"_EMC2_rou_pdf_cdf_vec", (DL_FUNC) &_EMC2_rou_pdf_cdf_vec, 15},
     {"_EMC2_rou_hit_times_vec", (DL_FUNC) &_EMC2_rou_hit_times_vec, 11},
     {"_EMC2_drou_cpp", (DL_FUNC) &_EMC2_drou_cpp, 15},
     {"_EMC2_rrou_hit_times_cpp", (DL_FUNC) &_EMC2_rrou_hit_times_cpp, 11},
-    {"_EMC2_rrou_cpp", (DL_FUNC) &_EMC2_rrou_cpp, 6},
+    {"_EMC2_rrou_cpp", (DL_FUNC) &_EMC2_rrou_cpp, 7},
     {"_EMC2_run_trend_rcpp", (DL_FUNC) &_EMC2_run_trend_rcpp, 6},
     {"_EMC2_ou_debug_set", (DL_FUNC) &_EMC2_ou_debug_set, 2},
     {"_EMC2_calculate_num_steps", (DL_FUNC) &_EMC2_calculate_num_steps, 3},

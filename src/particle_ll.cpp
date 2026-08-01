@@ -534,23 +534,41 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
     out.model_dfun_raw = &drou_raw;
     out.model_pfun_raw = &prou_raw;
     out.logS_at_t_ptr  = &rou_logS_at_t;
-    out.col_spec       = emc2col::rou::spec();
-    out.ctx.t0_index   = emc2col::rou::t0;
     // A leaky accumulator with v/k below threshold has a genuine never-finish
     // probability, so the upper tail is defective even with posdrift.
     out.ctx.defective_upper_tail = true;
     out.ctx.fpe_cache = std::make_shared<fperace::SolveCache>();
     rou_configure_cache(*out.ctx.fpe_cache);
+    // Parameterisation, selected by ROU(parameterization=).  It changes only
+    // which columns the kernels read and how they map onto (v, k, s); the
+    // solve, the cache and the boundary handling are untouched.  Tested before
+    // the boundary suffix because the two compose: ROUCURV_BEXP is both.
+    if (type_std.find("ROUCURV") != std::string::npos) {
+      out.ctx.fpe_cache->par_kind = fperace::ROU_PAR_CURVATURE;
+      out.col_spec     = emc2col::rou_curv::spec();
+      out.ctx.t0_index = emc2col::rou_curv::t0;
+    } else if (type_std.find("ROUEQ") != std::string::npos) {
+      out.ctx.fpe_cache->par_kind = fperace::ROU_PAR_EQUILIBRIUM;
+      out.col_spec     = emc2col::rou_eq::spec();
+      out.ctx.t0_index = emc2col::rou_eq::t0;
+    } else {
+      out.ctx.fpe_cache->par_kind = fperace::ROU_PAR_RATE;
+      out.col_spec     = emc2col::rou::spec();
+      out.ctx.t0_index = emc2col::rou::t0;
+    }
     // Collapsing-bound variants, selected by ROU(boundary_collapse=).  The
     // suffix carries the FORM only; the shape parameters are ordinary optional
     // columns (Binf/tau/pw) that the design system estimates like any other.
-    if (type_std.find("ROU_BWEIB") != std::string::npos)
+    // Matched on the bare suffix rather than on "ROU_B*" so that the collapse
+    // forms are available under every parameterisation; we are already inside
+    // the ROU branch, so there is nothing else these can capture.
+    if (type_std.find("_BWEIB") != std::string::npos)
       out.ctx.fpe_cache->bnd_kind = fpe::FPE_BND_WEIBULL;
-    else if (type_std.find("ROU_BEXP") != std::string::npos)
+    else if (type_std.find("_BEXP") != std::string::npos)
       out.ctx.fpe_cache->bnd_kind = fpe::FPE_BND_EXPONENTIAL;
-    else if (type_std.find("ROU_BLIN_MULT") != std::string::npos)
+    else if (type_std.find("_BLIN_MULT") != std::string::npos)
       out.ctx.fpe_cache->bnd_kind = fpe::FPE_BND_LINEAR_MULTIPLICATIVE;
-    else if (type_std.find("ROU_BLIN_ADD") != std::string::npos)
+    else if (type_std.find("_BLIN_ADD") != std::string::npos)
       out.ctx.fpe_cache->bnd_kind = fpe::FPE_BND_LINEAR_ADDITIVE;
   } else if (type_std.find("RDMSWTN_TT") != std::string::npos) {
     // The time-changed model must precede generic RDMSWTN substring dispatch.
