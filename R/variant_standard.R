@@ -36,6 +36,16 @@ add_info_standard <- function(sampler, prior = NULL, ...){
   sampler$prior <- get_prior_standard(prior, n_pars, sample = F,
                                       group_design = group_design)
   sampler$group_designs <- group_design
+  
+  if (!is.null(group_design)) {
+    gd <- add_group_design(sampler$par_names[!sampler$nuisance], group_design, sampler$n_subjects)
+    X_all <- do.call(cbind, gd)
+    sampler$XtX <- crossprod(X_all)
+    n_cols <- vapply(gd, ncol, integer(1))
+    sampler$design_row_idx <- rep(seq_along(n_cols), times = n_cols)
+    sampler$design_n_cols <- n_cols
+  }
+  
   return(sampler)
 }
 
@@ -287,9 +297,22 @@ gibbs_step_standard <- function(sampler, alpha) {
   ##--------------------------------------------------
   ## 1) Build data-based precision & mean
   ##--------------------------------------------------
-  moments   <- group_design_moments(group_designs, tvinv, alpha, M)
-  prec_data <- moments$prec_data
-  mean_data <- moments$mean_data
+  if (!is.null(sampler$XtX)) {
+    Tvinv_expanded <- tvinv[sampler$design_row_idx, sampler$design_row_idx]
+    prec_data <- Tvinv_expanded * sampler$XtX
+    
+    mean_data <- numeric(M)
+    ta <- tvinv %*% alpha
+    col_off <- cumsum(c(0L, sampler$design_n_cols))
+    for (k in seq_along(sampler$design_n_cols)) {
+      rows <- col_off[k] + seq_len(sampler$design_n_cols[k])
+      mean_data[rows] <- crossprod(group_designs[[k]], ta[k, ])
+    }
+  } else {
+    moments   <- group_design_moments(group_designs, tvinv, alpha, M)
+    prec_data <- moments$prec_data
+    mean_data <- moments$mean_data
+  }
 
   prec_post <- prior$theta_mu_invar + prec_data
   cov_post  <- solve(prec_post)
@@ -331,7 +354,7 @@ gibbs_step_standard <- function(sampler, alpha) {
       group_idx <- blocked_idx[ par_group[blocked_idx] == g ]
       d <- length(group_idx)
       resid_block <- resid[group_idx, , drop=FALSE]
-      cov_block   <- resid_block %*% t(resid_block)
+      cov_block   <- tcrossprod(resid_block)
 
       B_half_block <- 2 * prior$v * diag(1 / a_half[group_idx], d) + cov_block
       df_block     <- prior$v + d - 1 + n
@@ -599,7 +622,12 @@ bridge_group_and_prior_and_jac_standard <- function(
     #    subject's alpha and evaluate the zero-mean MVN density in one call.
     subj_mu <- calculate_subject_means(group_designs, theta_mu[i, ])  # p x n_subj
     alpha_i <- vapply(proposals_list, function(pr) pr[i, ], numeric(p))  # p x n_subj
-    group_ll <- sum(dmvnorm(t(alpha_i - subj_mu), sigma = var_curr, log = TRUE))
+    
+    U <- chol(var_curr)
+    rooti <- backsolve(U, diag(p))
+    log_const <- sum(log(diag(rooti))) - 0.5 * p * log(2*pi)
+    z <- t(alpha_i - subj_mu) %*% rooti
+    group_ll <- -0.5 * sum(z^2) + n_subj * log_const
 
     # 4) Prior on var1, var2, and a => same partial-block logic
     # "var1" => Inverse-Gamma with shape=v/2, rate=v/exp(theta_a[i, !has_cov])

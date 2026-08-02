@@ -3,11 +3,7 @@
 \alias{PCOUNTER}
 \title{The gamma-mixed self-exciting Poisson Counter race model}
 \usage{
-PCOUNTER(integer_K = NULL)
-}
-\arguments{
-\item{integer_K}{Deprecated compatibility argument; ignored. The criterion
-\code{k} is integer-valued in the refactored model.}
+PCOUNTER()
 }
 \value{A model list compatible with \code{design()}.}
 \description{
@@ -23,8 +19,8 @@ distribution and the infinite geometric threshold distribution. Setting
 fixed-rate, ordinary Poisson, or fixed-threshold branch. The criterion is
 rounded to the nearest positive integer when evaluating the process.
 
-For estimated parameters, code{sv}, code{gamma}, and code{omega} have lower
-bound code{1e-4}; exact zero is available when they are fixed explicitly.
+For estimated parameters, \code{sv}, \code{gamma}, and \code{omega} have lower
+bound \code{1e-4}; exact zero is available when they are fixed explicitly.
 
 The model parameters are:
 

@@ -17,6 +17,10 @@ sp_new <- function(iter, lambda_varimax, q, p, dim_all_c, all_c, lambda_hat, st,
     .Call(`_EMC2_sp_new`, iter, lambda_varimax, q, p, dim_all_c, all_c, lambda_hat, st, cost_matrix, perm)
 }
 
+fast_dmvnorm <- function(x, mean, sigma) {
+    .Call(`_EMC2_fast_dmvnorm`, x, mean, sigma)
+}
+
 fpe_bm_fht_pdf_cdf_vec <- function(t, mu, sigma, z0, b0, binf, tau = 1.0, pow = 1.0, nx = 256L, nt = 512L, grade = 8.0, tgrade = 1.0) {
     .Call(`_EMC2_fpe_bm_fht_pdf_cdf_vec`, t, mu, sigma, z0, b0, binf, tau, pow, nx, nt, grade, tgrade)
 }

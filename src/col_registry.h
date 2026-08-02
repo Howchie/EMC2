@@ -63,10 +63,7 @@ namespace lnr {
 // R/model_LNR.R — PCOUNTER (gamma-mixed, self-exciting Poisson counter race).
 // The leading columns are the natural-scale parameters from Math/new.md.
 namespace pcounter {
-  enum : int { nu = 0, sv, gamma, k, omega, t0, N_REQ,
-               // Retained only so the superseded inline helpers in utils.h
-               // continue to compile; the adapter never dispatches them.
-               alpha = nu, K = k };
+  enum : int { nu = 0, sv, gamma, k, omega, t0, N_REQ };
   inline ColSpec spec() {
     static const char* n[] = {"nu", "sv", "gamma", "k", "omega", "t0"};
     return {n, N_REQ, "PCOUNTER"};

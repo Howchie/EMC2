@@ -679,14 +679,14 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
     lw_total <- lw + prev_ll - lw[1] # make sure lls from other components are included
     # Prior density
     lp <- if (any(idx)) {
-      mvtnorm::dmvnorm(x = proposals[,idx,drop=FALSE], mean = group_mu[idx],
-                       sigma = group_var[idx,idx,drop=FALSE], log = TRUE)
+      fast_dmvnorm(x = proposals[,idx,drop=FALSE], mean = group_mu[idx],
+                   sigma = group_var[idx,idx,drop=FALSE])
     } else rep(0, nrow(proposals))
     if(length(unq_components) > 1){
       prior_density <- if (any(!marginal_idx)) {
-        mvtnorm::dmvnorm(x = proposals[,!marginal_idx,drop=FALSE],
-                         mean = group_mu[!marginal_idx],
-                         sigma = group_var[!marginal_idx,!marginal_idx,drop=FALSE], log = TRUE)
+        fast_dmvnorm(x = proposals[,!marginal_idx,drop=FALSE],
+                     mean = group_mu[!marginal_idx],
+                     sigma = group_var[!marginal_idx,!marginal_idx,drop=FALSE])
       } else rep(0, nrow(proposals))
     } else{
       prior_density <- lp
@@ -696,9 +696,9 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
     for(k in 2:length(Sigmas)){
       # Prior density is updated separately so start at 2
       if (any(idx)) {
-        lm <- lm + pm_settings[[i]]$mix[k] * mvtnorm::dmvnorm(
+        lm <- lm + pm_settings[[i]]$mix[k] * exp(fast_dmvnorm(
           x = proposals[,idx,drop=FALSE], mean = Mus[[k]][idx],
-          sigma = Sigmas[[k]][idx,idx,drop=FALSE] * (epsilons[k]^2))
+          sigma = Sigmas[[k]][idx,idx,drop=FALSE] * (epsilons[k]^2)))
       } else {
         lm <- lm + pm_settings[[i]]$mix[k]
       }
