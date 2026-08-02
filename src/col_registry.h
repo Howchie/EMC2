@@ -60,14 +60,15 @@ namespace lnr {
   }
 }
 
-// R/model_LNR.R — PCOUNTER (Poisson counter race).  Ratcliff & Smith (2004,
-// Appendix, Eq. A10a/A10b): counter i accrues unit counts as a Poisson process
-// with rate alpha until it reaches criterion K, so its first-passage time is
-// Erlang(K, alpha) shifted by t0.
+// R/model_LNR.R — PCOUNTER (gamma-mixed, self-exciting Poisson counter race).
+// The leading columns are the natural-scale parameters from Math/new.md.
 namespace pcounter {
-  enum : int { alpha = 0, K, t0, N_REQ };
+  enum : int { nu = 0, sv, gamma, k, omega, t0, N_REQ,
+               // Retained only so the superseded inline helpers in utils.h
+               // continue to compile; the adapter never dispatches them.
+               alpha = nu, K = k };
   inline ColSpec spec() {
-    static const char* n[] = {"alpha", "K", "t0"};
+    static const char* n[] = {"nu", "sv", "gamma", "k", "omega", "t0"};
     return {n, N_REQ, "PCOUNTER"};
   }
 }

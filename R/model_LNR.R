@@ -285,6 +285,261 @@ PCOUNTER <- function(integer_K = FALSE) {
   )
 }
 
+# -----------------------------------------------------------------------------
+# Refactored PCOUNTER implementation (see Math/new.md).
+# The old implementation above is retained only as source-level compatibility
+# history; this definition is the one returned when the package is loaded.
+.pcounter_k_new <- function(k) {
+  out <- floor(k + 0.5)
+  out[is.finite(out) & out < 1] <- 1
+  out
+}
+
+.pcounter_logsumexp_new <- function(x) {
+  if (!length(x) || all(x == -Inf)) return(-Inf)
+  m <- max(x)
+  m + log(sum(exp(x - m)))
+}
+
+.pcounter_logdiffexp_new <- function(a, b) {
+  if (!is.finite(a)) return(-Inf)
+  if (!is.finite(b)) return(a)
+  if (b >= a) return(-Inf)
+  a + log1p(-exp(b - a))
+}
+
+.pcounter_stirling_logs_new <- function(nmax) {
+  out <- matrix(-Inf, nrow = nmax + 1L, ncol = nmax + 1L)
+  out[1L, 1L] <- 0
+  if (nmax < 1L) return(out)
+  for (n in seq_len(nmax)) {
+    for (j in seq_len(n)) {
+      a <- out[n, j]
+      b <- if (j < n) log(n - 1) + out[n, j + 1L] else -Inf
+      out[n + 1L, j + 1L] <- .pcounter_logsumexp_new(c(a, b))
+    }
+  }
+  out
+}
+
+.pcounter_log_rising_new <- function(a, n) {
+  if (n == 0L) return(0)
+  sum(log(a + seq_len(n) - 1))
+}
+
+.pcounter_log_lm_new <- function(a, nu, sv) {
+  if (sv <= 0) {
+    logL <- -nu * a
+    return(c(logL = logL, logM = log(nu) + logL))
+  }
+  shape <- nu^2 / sv^2
+  rate <- nu / sv^2
+  logL <- -shape * log1p(a / rate)
+  c(logL = logL, logM = log(shape) - log(rate + a) + logL)
+}
+
+.pcounter_log_h_new <- function(n, t, nu, sv, gamma, stirling) {
+  lm <- .pcounter_log_lm_new(t, nu, sv)
+  if (sv <= 0) return(lm[["logL"]] + .pcounter_log_rising_new(nu / gamma, n))
+  shape <- nu^2 / sv^2
+  rate <- nu / sv^2
+  terms <- vapply(0:n, function(j) {
+    coeff <- stirling[n + 1L, j + 1L]
+    if (!is.finite(coeff)) return(-Inf)
+    coeff + .pcounter_log_rising_new(shape, j) - j * log(gamma) - j * log(rate + t)
+  }, numeric(1))
+  lm[["logL"]] + .pcounter_logsumexp_new(terms)
+}
+
+.pcounter_log_pi_phi_new <- function(n, t, nu, sv, gamma, stirling, gamma_zero) {
+  if (gamma_zero) {
+    if (sv <= 0) {
+      logpi <- -nu * t + if (n == 0L) 0 else n * log(nu * t) - lgamma(n + 1)
+      return(c(logpi = logpi, logphi = log(nu) + logpi))
+    }
+    shape <- nu^2 / sv^2
+    rate <- nu / sv^2
+    lm <- .pcounter_log_lm_new(t, nu, sv)
+    logt <- if (t > 0) log(t) else -Inf
+    logpi <- lm[["logL"]] + .pcounter_log_rising_new(shape, n) - lgamma(n + 1) +
+      n * logt - n * log(rate + t)
+    return(c(logpi = logpi, logphi = logpi + log(shape + n) - log(rate + t)))
+  }
+  q <- -expm1(-gamma * t)
+  logq <- if (q > 0) log(q) else -Inf
+  c(logpi = n * logq - lgamma(n + 1) + .pcounter_log_h_new(n, t, nu, sv, gamma, stirling),
+    logphi = log(gamma) + n * logq - lgamma(n + 1) +
+      .pcounter_log_h_new(n + 1L, t, nu, sv, gamma, stirling))
+}
+
+.pcounter_log_tail_new <- function(start, t, nu, sv, gamma, logr, stirling, gamma_zero, phi = FALSE) {
+  ns <- start:(start + 64L)
+  vals <- vapply(ns, function(n) {
+    z <- .pcounter_log_pi_phi_new(n, t, nu, sv, gamma, stirling, gamma_zero)
+    if (phi) z[["logphi"]] else z[["logpi"]]
+  }, numeric(1))
+  .pcounter_logsumexp_new(vals + ns * logr)
+}
+
+.pcounter_log_fixed_cdf_new <- function(start, t, nu, sv, gamma, stirling, gamma_zero) {
+  ns <- start:(start + 64L)
+  vals <- vapply(ns, function(n)
+    .pcounter_log_pi_phi_new(n, t, nu, sv, gamma, stirling, gamma_zero)[["logpi"]], numeric(1))
+  .pcounter_logsumexp_new(vals)
+}
+
+.pcounter_log_geom_cdf_new <- function(start, t, nu, sv, gamma, omega, stirling, gamma_zero) {
+  lr <- log(omega) - log1p(omega)
+  ns <- start:(start + 64L)
+  vals <- vapply(ns, function(n) {
+    lp <- .pcounter_log_pi_phi_new(n, t, nu, sv, gamma, stirling, gamma_zero)[["logpi"]]
+    exponent <- n - start
+    if (exponent == 0L) -Inf else lp + log(-expm1(exponent * lr))
+  }, numeric(1))
+  .pcounter_logsumexp_new(vals)
+}
+
+.pcounter_eval_one_new <- function(t, nu, sv, gamma, k, omega, stirling, eps = 1e-8) {
+  t <- unname(t); nu <- unname(nu); sv <- unname(sv); gamma <- unname(gamma)
+  k <- unname(k); omega <- unname(omega)
+  if (is.nan(t) || !is.finite(nu) || !is.finite(sv) || !is.finite(gamma) ||
+      !is.finite(k) || !is.finite(omega) || nu <= 0 || sv < 0 || gamma < 0 ||
+      k <= 0 || omega < 0) return(c(logf = -Inf, logS = 0, logF = -Inf))
+  if (is.infinite(t) && t > 0) return(c(logf = -Inf, logS = -Inf, logF = 0))
+  if (!is.finite(t) || t <= 0) return(c(logf = -Inf, logS = 0, logF = -Inf))
+  kk <- .pcounter_k_new(k)
+  gamma_zero <- gamma < eps
+  sv_zero <- sv < eps
+  omega_zero <- omega < eps
+  if (omega_zero) {
+    logs <- vapply(0:(kk - 1L), function(n)
+      .pcounter_log_pi_phi_new(n, t, nu, if (sv_zero) 0 else sv,
+                               if (gamma_zero) 0 else gamma, stirling, gamma_zero)[["logpi"]], numeric(1))
+    logS <- min(0, .pcounter_logsumexp_new(logs))
+    z <- .pcounter_log_pi_phi_new(kk - 1L, t, nu, if (sv_zero) 0 else sv,
+                                  if (gamma_zero) 0 else gamma, stirling, gamma_zero)
+    logF <- if (logS > -1e-7) .pcounter_log_fixed_cdf_new(kk, t, nu,
+      if (sv_zero) 0 else sv, if (gamma_zero) 0 else gamma, stirling, gamma_zero)
+      else if (logS < 0) log(-expm1(logS)) else -Inf
+    return(c(logf = z[["logphi"]], logS = logS, logF = logF))
+  }
+  lp <- -log1p(omega)
+  lr <- log(omega) + lp
+  p <- exp(lp)
+  if (gamma_zero) {
+    ar <- p * t
+    logd <- 0
+  } else {
+    q <- -expm1(-gamma * t)
+    logd <- log1p(-exp(lr) * q)
+    ar <- t + logd / gamma
+  }
+  lm_ar <- .pcounter_log_lm_new(ar, nu, if (sv_zero) 0 else sv)
+  low <- if (kk >= 2L) 0:(kk - 2L) else integer()
+  vals <- if (length(low)) vapply(low, function(n)
+    .pcounter_log_pi_phi_new(n, t, nu, if (sv_zero) 0 else sv,
+                             if (gamma_zero) 0 else gamma, stirling, gamma_zero), numeric(2)) else
+    matrix(numeric(), nrow = 2L, ncol = 0L)
+  loglow <- if (length(low)) .pcounter_logsumexp_new(vals[1L, ]) else -Inf
+  loglowr <- if (length(low)) .pcounter_logsumexp_new(vals[1L, ] + low * lr) else -Inf
+  logtail <- .pcounter_logdiffexp_new(lm_ar[["logL"]], loglowr)
+  if (length(low) && (loglowr > lm_ar[["logL"]] - 1e-7 || !is.finite(logtail)))
+    logtail <- .pcounter_log_tail_new(kk - 1L, t, nu, if (sv_zero) 0 else sv,
+                                       if (gamma_zero) 0 else gamma, lr, stirling,
+                                       gamma_zero, phi = FALSE)
+  logS <- min(0, .pcounter_logsumexp_new(c(loglow, (1 - kk) * lr + logtail)))
+  logA <- lm_ar[["logM"]] - if (gamma_zero) 0 else logd
+  loglowf <- if (length(low)) .pcounter_logsumexp_new(vals[2L, ] + low * lr) else -Inf
+  logf <- lp + (1 - kk) * lr + .pcounter_logdiffexp_new(logA, loglowf)
+  if (length(low) && (loglowf > logA - 1e-7 || !is.finite(logf))) {
+    tailf <- .pcounter_log_tail_new(kk - 1L, t, nu, if (sv_zero) 0 else sv,
+                                    if (gamma_zero) 0 else gamma, lr, stirling,
+                                    gamma_zero, phi = TRUE)
+    logf <- lp + (1 - kk) * lr + tailf
+  }
+  logF <- if (kk == 1L) log(-expm1(lm_ar[["logL"]])) else if (logS > -1e-7)
+    .pcounter_log_geom_cdf_new(kk - 1L, t, nu, if (sv_zero) 0 else sv,
+                               if (gamma_zero) 0 else gamma, omega, stirling, gamma_zero)
+    else if (logS < 0) log(-expm1(logS)) else -Inf
+  c(logf = logf, logS = logS, logF = logF)
+}
+
+#' The gamma-mixed, self-exciting Poisson Counter race model.
+#'
+#' `integer_K` is accepted for source compatibility with the former model and
+#' ignored.  The new criterion `k` is integer-valued by definition.
+#' @param integer_K Deprecated compatibility argument; ignored.
+#' @return A model list compatible with `design()`.
+#' @export
+PCOUNTER <- function(integer_K = NULL) {
+  req <- c("nu", "sv", "gamma", "k", "omega", "t0")
+  prepare <- function(pars) {
+    if (!all(req %in% colnames(pars))) stop("pars must have columns ", paste(req, collapse = " "))
+    ks <- .pcounter_k_new(pars[, "k"])
+    ks <- ks[is.finite(ks)]
+    mk <- if (length(ks)) max(ks) else 1
+    .pcounter_stirling_logs_new(max(65L, as.integer(mk) + 65L))
+  }
+  dPCOUNTER <- function(rt, pars) {
+    st <- prepare(pars); out <- numeric(length(rt))
+    for (i in seq_along(rt)) out[i] <- exp(.pcounter_eval_one_new(
+      rt[i] - pars[i, "t0"], pars[i, "nu"], pars[i, "sv"], pars[i, "gamma"],
+      pars[i, "k"], pars[i, "omega"], st)[["logf"]])
+    out
+  }
+  pPCOUNTER <- function(rt, pars) {
+    st <- prepare(pars); out <- numeric(length(rt))
+    for (i in seq_along(rt)) {
+      z <- .pcounter_eval_one_new(rt[i] - pars[i, "t0"], pars[i, "nu"], pars[i, "sv"],
+                                  pars[i, "gamma"], pars[i, "k"], pars[i, "omega"], st)
+      out[i] <- if (z[["logF"]] == 0) 1 else if (is.finite(z[["logF"]])) exp(z[["logF"]]) else 0
+    }
+    out
+  }
+  rPCOUNTER <- function(lR, pars, p_types = req, ok = rep(TRUE, nrow(pars))) {
+    if (!all(p_types %in% colnames(pars))) stop("pars must have columns ", paste(p_types, collapse = " "))
+    if (is.null(ok)) ok <- rep(TRUE, nrow(pars))
+    nr <- length(levels(lR)); nd <- nrow(pars) / nr
+    if (nr < 1L || nrow(pars) %% nr != 0L) stop("pars rows must be a multiple of accumulators")
+    dt <- matrix(Inf, nrow = nr, ncol = nd)
+    for (ii in which(ok)) {
+      nu <- pars[ii, "nu"]; sv <- pars[ii, "sv"]; ga <- pars[ii, "gamma"]
+      kk <- .pcounter_k_new(pars[ii, "k"]); om <- pars[ii, "omega"]
+      if (!is.finite(nu) || !is.finite(sv) || !is.finite(ga) || !is.finite(kk) ||
+          !is.finite(om) || !is.finite(pars[ii, "t0"]) || nu <= 0 || sv < 0 ||
+          ga < 0 || kk < 1 || om < 0 || pars[ii, "t0"] < 0) next
+      vv <- if (sv < 1e-8) nu else stats::rgamma(1L, nu^2 / sv^2, rate = nu / sv^2)
+      if (!is.finite(vv) || vv <= 0) next
+      excess <- if (om < 1e-8) 0L else stats::rgeom(1L, 1 / (1 + om))
+      m <- kk + excess
+      dt[ii] <- sum(stats::rexp(m, rate = vv + ga * seq.int(0, m - 1L))) + pars[ii, "t0"]
+    }
+    R <- max.col(-t(dt), ties.method = "first"); pick <- cbind(R, seq_len(nd))
+    out <- cbind.data.frame(R = factor(levels(lR)[R], levels = levels(lR)), rt = dt[pick])
+    .apply_timed_guess_winner(out, levels(lR))
+  }
+  list(
+    type = "RACE", c_name = "PCOUNTER",
+    p_types = c(nu = log(10), sv = log(0), gamma = log(0), k = log(5), omega = log(0),
+                t0 = log(0), pContaminant = qnorm(0)),
+    p_types_canonical = c("nu", "sv", "gamma", "k", "omega", "t0"),
+    transform = list(func = c(nu = "exp", sv = "exp", gamma = "exp", k = "exp",
+                              omega = "exp", t0 = "exp", pContaminant = "pnorm")),
+    # Keep estimated variability/self-excitation parameters above the numerical
+    # branch threshold. Exact zero remains available only as an explicit fixed
+    # constant through the exceptions below.
+    bound = list(minmax = cbind(nu = c(1e-6, Inf), sv = c(1e-4, Inf), gamma = c(1e-4, Inf),
+                                k = c(1, Inf), omega = c(1e-4, Inf), t0 = c(0, Inf),
+                                pContaminant = c(0.001, 0.999)),
+                 exception = c(sv = 0, gamma = 0, omega = 0, t0 = 0, pContaminant = 0)),
+    Ttransform = function(pars, dadm) pars,
+    rfun = function(data = NULL, pars) rPCOUNTER(data$lR, pars, ok = attr(pars, "ok")),
+    dfun = dPCOUNTER, pfun = pPCOUNTER,
+    log_likelihood = function(pars, dadm, model, min_ll = log(1e-10))
+      log_likelihood_race_missing(pars = pars, dadm = dadm, model = model, min_ll = min_ll)
+  )
+}
+
 #' The Ex-Gaussian Race Model
 #'
 #' Race model in which each accumulator has an ex-Gaussian finish-time

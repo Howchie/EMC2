@@ -7,6 +7,7 @@
 #include <string>
 #include <memory>
 #include <unordered_map>
+#include <limits>
 #include "col_registry.h"
 #include "fpe_race.h"
 #include "fpe_bou.h"
@@ -797,6 +798,356 @@ inline void pcounter_logS_at_t(double t, const double* const* cols,
       if (cdf > 0.0) logS += std::log1p(-cdf);
     }
     logS_out[j] = bad ? R_NegInf : logS;
+  }
+}
+
+// Refactored PCOUNTER kernels.  These implement the closed forms in
+// Math/new.md: gamma-distributed trialwise input, pure-birth self-excitation,
+// and a geometric threshold excess.  The legacy helpers immediately above are
+// intentionally left in place for ABI/source compatibility but are no longer
+// selected by resolve_race_model_adapter().
+static constexpr double PC_EPS = 1e-8;
+
+inline double pcounter_logsumexp(const std::vector<double>& x) {
+  if (x.empty()) return R_NegInf;
+  double m = R_NegInf;
+  for (double z : x) if (z > m) m = z;
+  if (!R_FINITE(m)) return R_NegInf;
+  double s = 0.0;
+  for (double z : x) if (R_FINITE(z)) s += std::exp(z - m);
+  return m + std::log(s);
+}
+
+inline double pcounter_logdiffexp(double a, double b) {
+  if (!R_FINITE(a)) return R_NegInf;
+  if (!R_FINITE(b)) return a;
+  if (b >= a) return R_NegInf;
+  return a + std::log1p(-std::exp(b - a));
+}
+
+inline int pcounter_k_int_new(double k) {
+  if (!R_FINITE(k)) return 0;
+  const double z = std::floor(k + 0.5);
+  if (z < 1.0) return 1;
+  if (z > static_cast<double>(std::numeric_limits<int>::max() - 2))
+    return std::numeric_limits<int>::max() - 2;
+  return static_cast<int>(z);
+}
+
+inline std::vector<std::vector<double>> pcounter_stirling_logs_new(int nmax) {
+  std::vector<std::vector<double>> st(static_cast<size_t>(nmax + 1),
+                                      std::vector<double>(static_cast<size_t>(nmax + 1), R_NegInf));
+  st[0][0] = 0.0;
+  for (int n = 1; n <= nmax; ++n) {
+    for (int j = 1; j <= n; ++j) {
+      const double a = st[n - 1][j - 1];
+      const double b = (j < n && n > 1) ? std::log(static_cast<double>(n - 1)) + st[n - 1][j]
+                                         : R_NegInf;
+      st[n][j] = (a == R_NegInf) ? b :
+                 (b == R_NegInf) ? a :
+                 (a > b ? a + std::log1p(std::exp(b - a))
+                          : b + std::log1p(std::exp(a - b)));
+    }
+  }
+  return st;
+}
+
+inline double pcounter_log_rising_new(double a, int n) {
+  double out = 0.0;
+  for (int j = 0; j < n; ++j) out += std::log(a + static_cast<double>(j));
+  return out;
+}
+
+inline void pcounter_log_lm_new(double a, double nu, double sv,
+                                double& logL, double& logM) {
+  if (sv <= PC_EPS) {
+    logL = -nu * a;
+    logM = std::log(nu) + logL;
+    return;
+  }
+  const double shape = nu * nu / (sv * sv);
+  const double rate = nu / (sv * sv);
+  logL = -shape * std::log1p(a / rate);
+  logM = std::log(shape) - std::log(rate + a) + logL;
+}
+
+inline double pcounter_log_h_new(int n, double t, double nu, double sv, double gamma,
+                                 const std::vector<std::vector<double>>& st) {
+  double logL, logM;
+  pcounter_log_lm_new(t, nu, sv, logL, logM);
+  if (sv <= PC_EPS)
+    return logL + pcounter_log_rising_new(nu / gamma, n);
+  const double shape = nu * nu / (sv * sv);
+  const double rate = nu / (sv * sv);
+  std::vector<double> terms;
+  terms.reserve(static_cast<size_t>(n + 1));
+  for (int j = 0; j <= n; ++j) {
+    const double c = st[n][j];
+    if (!R_FINITE(c)) { terms.push_back(R_NegInf); continue; }
+    terms.push_back(c + pcounter_log_rising_new(shape, j) - j * std::log(gamma) -
+                       j * std::log(rate + t));
+  }
+  return logL + pcounter_logsumexp(terms);
+}
+
+inline void pcounter_log_pi_phi_new(int n, double t, double nu, double sv, double gamma,
+                                    bool gamma_zero,
+                                    const std::vector<std::vector<double>>& st,
+                                    double& logpi, double& logphi) {
+  if (gamma_zero) {
+    if (sv <= PC_EPS) {
+      logpi = -nu * t;
+      if (n > 0) logpi += n * std::log(nu * t) - R::lgammafn(n + 1.0);
+      logphi = std::log(nu) + logpi;
+      return;
+    }
+    const double shape = nu * nu / (sv * sv);
+    const double rate = nu / (sv * sv);
+    double logL, logM;
+    pcounter_log_lm_new(t, nu, sv, logL, logM);
+    logpi = logL + pcounter_log_rising_new(shape, n) - R::lgammafn(n + 1.0);
+    if (n > 0) logpi += n * std::log(t);
+    logpi -= n * std::log(rate + t);
+    logphi = logpi + std::log(shape + n) - std::log(rate + t);
+    return;
+  }
+  const double q = -std::expm1(-gamma * t);
+  const double logq = q > 0.0 ? std::log(q) : R_NegInf;
+  logpi = n * logq - R::lgammafn(n + 1.0) + pcounter_log_h_new(n, t, nu, sv, gamma, st);
+  logphi = std::log(gamma) + n * logq - R::lgammafn(n + 1.0) +
+           pcounter_log_h_new(n + 1, t, nu, sv, gamma, st);
+}
+
+inline double pcounter_log_tail_new(int start, double t, double nu, double sv, double gamma,
+                                    double logr, bool gamma_zero,
+                                    const std::vector<std::vector<double>>& st, bool phi) {
+  std::vector<double> terms;
+  terms.reserve(65);
+  for (int n = start; n <= start + 64; ++n) {
+    double lp, lf;
+    pcounter_log_pi_phi_new(n, t, nu, sv, gamma, gamma_zero, st, lp, lf);
+    terms.push_back((phi ? lf : lp) + n * logr);
+  }
+  return pcounter_logsumexp(terms);
+}
+
+inline double pcounter_log_fixed_cdf_new(int start, double t, double nu, double sv,
+                                         double gamma, bool gamma_zero,
+                                         const std::vector<std::vector<double>>& st) {
+  std::vector<double> terms;
+  terms.reserve(65);
+  for (int n = start; n <= start + 64; ++n) {
+    double lp, lf;
+    pcounter_log_pi_phi_new(n, t, nu, sv, gamma, gamma_zero, st, lp, lf);
+    terms.push_back(lp);
+  }
+  return pcounter_logsumexp(terms);
+}
+
+inline double pcounter_log_geom_cdf_new(int start, double t, double nu, double sv,
+                                        double gamma, double omega, bool gamma_zero,
+                                        const std::vector<std::vector<double>>& st) {
+  const double logr = std::log(omega) - std::log1p(omega);
+  std::vector<double> terms;
+  terms.reserve(65);
+  for (int n = start; n <= start + 64; ++n) {
+    if (n == start) { terms.push_back(R_NegInf); continue; }
+    double lp, lf;
+    pcounter_log_pi_phi_new(n, t, nu, sv, gamma, gamma_zero, st, lp, lf);
+    terms.push_back(lp + std::log(-std::expm1((n - start) * logr)));
+  }
+  return pcounter_logsumexp(terms);
+}
+
+inline void pcounter_log_eval_new(double t, double nu, double sv, double gamma,
+                                  double k, double omega,
+                                  const std::vector<std::vector<double>>& st,
+                                  double& logf, double& logS, double& logF) {
+  logf = R_NegInf; logS = 0.0; logF = R_NegInf;
+  if (ISNAN(t) || !R_FINITE(nu) || !R_FINITE(sv) || !R_FINITE(gamma) ||
+      !R_FINITE(k) || !R_FINITE(omega) || nu <= 0.0 || sv < 0.0 || gamma < 0.0 ||
+      k <= 0.0 || omega < 0.0) return;
+  if (R_PosInf == t) { logS = R_NegInf; logF = 0.0; return; }
+  if (!R_FINITE(t) || t <= 0.0) return;
+
+  const int kk = pcounter_k_int_new(k);
+  const bool gamma_zero = gamma < PC_EPS;
+  const bool sv_zero = sv < PC_EPS;
+  const bool omega_zero = omega < PC_EPS;
+  if (omega_zero) {
+    std::vector<double> probs;
+    probs.reserve(static_cast<size_t>(kk));
+    for (int n = 0; n < kk; ++n) {
+      double lp, lf;
+      pcounter_log_pi_phi_new(n, t, nu, sv_zero ? 0.0 : sv,
+                              gamma_zero ? 0.0 : gamma, gamma_zero, st, lp, lf);
+      probs.push_back(lp);
+    }
+    logS = std::min(0.0, pcounter_logsumexp(probs));
+    double lp, lf;
+    pcounter_log_pi_phi_new(kk - 1, t, nu, sv_zero ? 0.0 : sv,
+                            gamma_zero ? 0.0 : gamma, gamma_zero, st, lp, lf);
+    logf = lf;
+    logF = logS > -1e-7 ? pcounter_log_fixed_cdf_new(kk, t, nu,
+      sv_zero ? 0.0 : sv, gamma_zero ? 0.0 : gamma, gamma_zero, st)
+      : (logS < 0.0 ? std::log(-std::expm1(logS)) : R_NegInf);
+    return;
+  }
+
+  const double logp = -std::log1p(omega);
+  const double logr = std::log(omega) + logp;
+  const double p = std::exp(logp);
+  double ar, logd;
+  if (gamma_zero) {
+    ar = p * t; logd = 0.0;
+  } else {
+    const double q = -std::expm1(-gamma * t);
+    logd = std::log1p(-std::exp(logr) * q);
+    ar = t + logd / gamma;
+  }
+  double logLar, logMar;
+  pcounter_log_lm_new(ar, nu, sv_zero ? 0.0 : sv, logLar, logMar);
+  const int nlow = kk - 2;
+  std::vector<double> low_pi, low_pi_r, low_phi_r;
+  if (nlow >= 0) {
+    low_pi.reserve(static_cast<size_t>(nlow + 1));
+    low_pi_r.reserve(static_cast<size_t>(nlow + 1));
+    low_phi_r.reserve(static_cast<size_t>(nlow + 1));
+    for (int n = 0; n <= nlow; ++n) {
+      double lp, lf;
+      pcounter_log_pi_phi_new(n, t, nu, sv_zero ? 0.0 : sv,
+                              gamma_zero ? 0.0 : gamma, gamma_zero, st, lp, lf);
+      low_pi.push_back(lp);
+      low_pi_r.push_back(lp + n * logr);
+      low_phi_r.push_back(lf + n * logr);
+    }
+  }
+  const double loglow = pcounter_logsumexp(low_pi);
+  const double loglowr = pcounter_logsumexp(low_pi_r);
+  double logtail = pcounter_logdiffexp(logLar, loglowr);
+  if (nlow >= 0 && (loglowr > logLar - 1e-7 || !R_FINITE(logtail)))
+    logtail = pcounter_log_tail_new(kk - 1, t, nu, sv_zero ? 0.0 : sv,
+                                    gamma_zero ? 0.0 : gamma, logr, gamma_zero, st, false);
+  logS = std::min(0.0, pcounter_logsumexp(
+      std::vector<double>{loglow, (1.0 - kk) * logr + logtail}));
+  const double logA = logMar - (gamma_zero ? 0.0 : logd);
+  const double loglowf = pcounter_logsumexp(low_phi_r);
+  double logtail_flux = pcounter_logdiffexp(logA, loglowf);
+  logf = logp + (1.0 - kk) * logr + logtail_flux;
+  if (nlow >= 0 && (loglowf > logA - 1e-7 || !R_FINITE(logf))) {
+    logtail_flux = pcounter_log_tail_new(kk - 1, t, nu, sv_zero ? 0.0 : sv,
+                                         gamma_zero ? 0.0 : gamma, logr, gamma_zero, st, true);
+    logf = logp + (1.0 - kk) * logr + logtail_flux;
+  }
+  if (kk == 1) logF = std::log(-std::expm1(logLar));
+  else if (logS > -1e-7)
+    logF = pcounter_log_geom_cdf_new(kk - 1, t, nu, sv_zero ? 0.0 : sv,
+                                     gamma_zero ? 0.0 : gamma, omega, gamma_zero, st);
+  else logF = logS < 0.0 ? std::log(-std::expm1(logS)) : R_NegInf;
+}
+
+inline double dpcounter_new_scalar(double t, const double* par, void* /*ctx_*/) {
+  for (int j = 0; j < emc2col::pcounter::N_REQ; ++j) if (R_IsNA(par[j])) return 0.0;
+  if (par[emc2col::pcounter::nu] <= 0.0 || par[emc2col::pcounter::sv] < 0.0 ||
+      par[emc2col::pcounter::gamma] < 0.0 || par[emc2col::pcounter::k] <= 0.0 ||
+      par[emc2col::pcounter::omega] < 0.0) return 0.0;
+  const int kk = pcounter_k_int_new(par[emc2col::pcounter::k]);
+  const auto st = pcounter_stirling_logs_new(std::max(65, kk + 65));
+  double lf, ls, lF;
+  pcounter_log_eval_new(t - par[emc2col::pcounter::t0], par[0], par[1], par[2], par[3], par[4], st, lf, ls, lF);
+  return R_FINITE(lf) ? std::exp(lf) : 0.0;
+}
+
+inline double ppcounter_new_scalar(double t, const double* par, void* /*ctx_*/) {
+  for (int j = 0; j < emc2col::pcounter::N_REQ; ++j) if (R_IsNA(par[j])) return 0.0;
+  if (par[0] <= 0.0 || par[1] < 0.0 || par[2] < 0.0 || par[3] <= 0.0 || par[4] < 0.0) return 0.0;
+  const auto st = pcounter_stirling_logs_new(std::max(65, pcounter_k_int_new(par[3]) + 65));
+  double lf, ls, lF;
+  pcounter_log_eval_new(t - par[5], par[0], par[1], par[2], par[3], par[4], st, lf, ls, lF);
+  return lF == 0.0 ? 1.0 : (R_FINITE(lF) ? std::exp(lF) : 0.0);
+}
+
+inline void dpcounter_new_raw(const double* rt, const double* const* cols, int n_rows,
+                              const int* mask, const int* isok, double* out,
+                              double min_ll, void* ctx_) {
+  const bool floor_raw = raw_floor_log_lik(ctx_);
+  const double* nu = cols[emc2col::pcounter::nu];
+  const double* sv = cols[emc2col::pcounter::sv];
+  const double* ga = cols[emc2col::pcounter::gamma];
+  const double* kk = cols[emc2col::pcounter::k];
+  const double* om = cols[emc2col::pcounter::omega];
+  const double* t0 = cols[emc2col::pcounter::t0];
+  int maxk = 1;
+  for (int i = 0; i < n_rows; ++i) if (mask[i] && isok[i] && R_FINITE(kk[i])) maxk = std::max(maxk, pcounter_k_int_new(kk[i]));
+  const auto st = pcounter_stirling_logs_new(std::max(65, maxk + 65));
+  for (int i = 0; i < n_rows; ++i) {
+    if (!mask[i]) continue;
+    if (!isok[i] || R_IsNA(nu[i]) || R_IsNA(sv[i]) || R_IsNA(ga[i]) ||
+        R_IsNA(kk[i]) || R_IsNA(om[i]) || R_IsNA(t0[i]) || nu[i] <= 0.0 ||
+        sv[i] < 0.0 || ga[i] < 0.0 || kk[i] <= 0.0 || om[i] < 0.0) {
+      out[i] = raw_log_zero(min_ll, floor_raw); continue;
+    }
+    double lf, ls, lF;
+    pcounter_log_eval_new(rt[i] - t0[i], nu[i], sv[i], ga[i], kk[i], om[i], st, lf, ls, lF);
+    out[i] = raw_log_value(lf, min_ll, floor_raw);
+  }
+}
+
+inline void ppcounter_new_raw(const double* rt, const double* const* cols, int n_rows,
+                              const int* mask, const int* isok, double* out,
+                              double min_ll, void* ctx_) {
+  const bool floor_raw = raw_floor_log_lik(ctx_);
+  const double* nu = cols[emc2col::pcounter::nu];
+  const double* sv = cols[emc2col::pcounter::sv];
+  const double* ga = cols[emc2col::pcounter::gamma];
+  const double* kk = cols[emc2col::pcounter::k];
+  const double* om = cols[emc2col::pcounter::omega];
+  const double* t0 = cols[emc2col::pcounter::t0];
+  int maxk = 1;
+  for (int i = 0; i < n_rows; ++i) if (mask[i] && isok[i] && R_FINITE(kk[i])) maxk = std::max(maxk, pcounter_k_int_new(kk[i]));
+  const auto st = pcounter_stirling_logs_new(std::max(65, maxk + 65));
+  for (int i = 0; i < n_rows; ++i) {
+    if (!mask[i]) continue;
+    if (!isok[i] || R_IsNA(nu[i]) || R_IsNA(sv[i]) || R_IsNA(ga[i]) ||
+        R_IsNA(kk[i]) || R_IsNA(om[i]) || R_IsNA(t0[i]) || nu[i] <= 0.0 ||
+        sv[i] < 0.0 || ga[i] < 0.0 || kk[i] <= 0.0 || om[i] < 0.0) {
+      out[i] = raw_log_zero(min_ll, floor_raw); continue;
+    }
+    double lf, ls, lF;
+    pcounter_log_eval_new(rt[i] - t0[i], nu[i], sv[i], ga[i], kk[i], om[i], st, lf, ls, lF);
+    out[i] = raw_log_value(ls, min_ll, floor_raw);
+  }
+}
+
+inline void pcounter_new_logS_at_t(double t, const double* const* cols,
+                                   int /*n_rows_total*/, int n_lR, int /*n_par*/,
+                                   const int* trunc_mask, int n_unique_trials,
+                                   const int* isok_all, void* ctx_, double* logS_out) {
+  (void)ctx_;
+  const double* kk = cols[emc2col::pcounter::k];
+  int maxk = 1;
+  for (int i = 0; i < n_unique_trials * n_lR; ++i) if (isok_all[i] && R_FINITE(kk[i])) maxk = std::max(maxk, pcounter_k_int_new(kk[i]));
+  const auto st = pcounter_stirling_logs_new(std::max(65, maxk + 65));
+  const double* nu = cols[emc2col::pcounter::nu];
+  const double* sv = cols[emc2col::pcounter::sv];
+  const double* ga = cols[emc2col::pcounter::gamma];
+  const double* om = cols[emc2col::pcounter::omega];
+  const double* t0 = cols[emc2col::pcounter::t0];
+  for (int j = 0; j < n_unique_trials; ++j) {
+    if (!trunc_mask[j]) continue;
+    double sum = 0.0;
+    for (int k = 0; k < n_lR; ++k) {
+      const int r = j * n_lR + k;
+      if (!isok_all[r] || R_IsNA(nu[r]) || R_IsNA(sv[r]) || R_IsNA(ga[r]) ||
+          R_IsNA(kk[r]) || R_IsNA(om[r]) || R_IsNA(t0[r]) || nu[r] <= 0.0 ||
+          sv[r] < 0.0 || ga[r] < 0.0 || kk[r] <= 0.0 || om[r] < 0.0) {
+        sum = R_NegInf; break;
+      }
+      double lf, ls, lF;
+      pcounter_log_eval_new(t - t0[r], nu[r], sv[r], ga[r], kk[r], om[r], st, lf, ls, lF);
+      sum += ls;
+    }
+    logS_out[j] = sum;
   }
 }
 

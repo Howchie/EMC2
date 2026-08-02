@@ -729,17 +729,13 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
     out.col_spec     = emc2col::lnr::spec();
     out.ctx.t0_index = emc2col::lnr::t0;
   } else if (type_std.find("PCOUNTER") != std::string::npos) {
-    out.pdf1_ptr = &dpcounter_scalar;
-    out.cdf1_ptr = &ppcounter_scalar;
-    out.model_dfun_raw = &dpcounter_raw;
-    out.model_pfun_raw = &ppcounter_raw;
-    out.logS_at_t_ptr = &pcounter_logS_at_t;
+    out.pdf1_ptr = &dpcounter_new_scalar;
+    out.cdf1_ptr = &ppcounter_new_scalar;
+    out.model_dfun_raw = &dpcounter_new_raw;
+    out.model_pfun_raw = &ppcounter_new_raw;
+    out.logS_at_t_ptr = &pcounter_new_logS_at_t;
     out.col_spec     = emc2col::pcounter::spec();
     out.ctx.t0_index = -1;
-    // PCOUNTER_INTK snaps the response criterion to an integer count; plain
-    // PCOUNTER leaves it continuous (fractional-counter generalisation).
-    out.ctx.pcounter_integer_K =
-      (type_std.find("INTK") != std::string::npos);
   } else {
     Rcpp::stop("Unsupported race model type string in %s: %s", caller.c_str(), type_std.c_str());
   }
