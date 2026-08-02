@@ -263,6 +263,31 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// gomp_pdf_cdf_vec
+Rcpp::List gomp_pdf_cdf_vec(NumericVector rt, NumericVector alpha, NumericVector beta, NumericVector K, NumericVector B, NumericVector A, NumericVector t0, int bkind, NumericVector Binf, NumericVector tau, NumericVector pw, int nx, double dt_target, double grade, double tgrade);
+RcppExport SEXP _EMC2_gomp_pdf_cdf_vec(SEXP rtSEXP, SEXP alphaSEXP, SEXP betaSEXP, SEXP KSEXP, SEXP BSEXP, SEXP ASEXP, SEXP t0SEXP, SEXP bkindSEXP, SEXP BinfSEXP, SEXP tauSEXP, SEXP pwSEXP, SEXP nxSEXP, SEXP dt_targetSEXP, SEXP gradeSEXP, SEXP tgradeSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type rt(rtSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type alpha(alphaSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type beta(betaSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type K(KSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type B(BSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type A(ASEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type t0(t0SEXP);
+    Rcpp::traits::input_parameter< int >::type bkind(bkindSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type Binf(BinfSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type tau(tauSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type pw(pwSEXP);
+    Rcpp::traits::input_parameter< int >::type nx(nxSEXP);
+    Rcpp::traits::input_parameter< double >::type dt_target(dt_targetSEXP);
+    Rcpp::traits::input_parameter< double >::type grade(gradeSEXP);
+    Rcpp::traits::input_parameter< double >::type tgrade(tgradeSEXP);
+    rcpp_result_gen = Rcpp::wrap(gomp_pdf_cdf_vec(rt, alpha, beta, K, B, A, t0, bkind, Binf, tau, pw, nx, dt_target, grade, tgrade));
+    return rcpp_result_gen;
+END_RCPP
+}
 // calculate_subject_means
 arma::mat calculate_subject_means(const Rcpp::List& group_designs, const arma::colvec& params);
 RcppExport SEXP _EMC2_calculate_subject_means(SEXP group_designsSEXP, SEXP paramsSEXP) {
@@ -2917,6 +2942,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_pbvn_tsay", (DL_FUNC) &_EMC2_pbvn_tsay, 3},
     {"_EMC2_pbvn_tvpack", (DL_FUNC) &_EMC2_pbvn_tvpack, 3},
     {"_EMC2_pbvn_drezner", (DL_FUNC) &_EMC2_pbvn_drezner, 3},
+    {"_EMC2_gomp_pdf_cdf_vec", (DL_FUNC) &_EMC2_gomp_pdf_cdf_vec, 15},
     {"_EMC2_calculate_subject_means", (DL_FUNC) &_EMC2_calculate_subject_means, 2},
     {"_EMC2_draw_alpha_from_design", (DL_FUNC) &_EMC2_draw_alpha_from_design, 3},
     {"_EMC2_dbawd", (DL_FUNC) &_EMC2_dbawd, 10},

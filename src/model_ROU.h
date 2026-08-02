@@ -77,11 +77,11 @@ struct RouColIdx { int p1, p2, p3, B, A, t0; };
 inline RouColIdx rou_col_idx(int par_kind) {
   switch (par_kind) {
     case fperace::ROU_PAR_CURVATURE:
-      return {emc2col::rou_curv::tstar, emc2col::rou_curv::c,
-              emc2col::rou_curv::nu,    emc2col::rou_curv::B,
+      return {emc2col::rou_curv::tstar, emc2col::rou_curv::k,
+              emc2col::rou_curv::s,      emc2col::rou_curv::B,
               emc2col::rou_curv::A,     emc2col::rou_curv::t0};
     case fperace::ROU_PAR_EQUILIBRIUM:
-      return {emc2col::rou_eq::tk, emc2col::rou_eq::q, emc2col::rou_eq::chi,
+      return {emc2col::rou_eq::tk, emc2col::rou_eq::theta, emc2col::rou_eq::chi,
               emc2col::rou_eq::B,  emc2col::rou_eq::A, emc2col::rou_eq::t0};
     default:
       // Rate: (p1, p2, p3) = (v, k, s), which rou_map_to_rate copies through.

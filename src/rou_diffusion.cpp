@@ -61,8 +61,8 @@ void check_bnd_lengths(int bkind, const NumericVector& Binf,
 // where the likelihood kernels read it.  Re-implementing the algebra in R would
 // be the obvious shortcut and exactly the drift this file exists to prevent.
 //
-// par_kind: 0 = rate (a pass-through), 1 = curvature (tstar, c, nu),
-// 2 = equilibrium (tk, q, chi).
+// par_kind: 0 = rate (a pass-through), 1 = curvature (tstar, k, s),
+// 2 = equilibrium (tk, theta, chi).
 // ---------------------------------------------------------------------------
 // [[Rcpp::export]]
 Rcpp::List rou_to_rate_vec(int par_kind, NumericVector p1, NumericVector p2,
@@ -170,9 +170,9 @@ Rcpp::List rou_pdf_cdf_vec(NumericVector rt, NumericVector v, NumericVector k,
 
 // ---------------------------------------------------------------------------
 // Reference simulator, one draw per element.  Returns Inf for an accumulator
-// that had not finished by t_max, which is the correct answer for a leaky
-// accumulator whose asymptote v/k sits below threshold -- the race machinery
-// treats Inf as "lost".
+// that had not finished by the finite simulation horizon t_max; this is useful
+// for treating deadline omissions as lost draws without asserting an intrinsic
+// point mass at infinity.
 // ---------------------------------------------------------------------------
 // [[Rcpp::export]]
 NumericVector rou_hit_times_vec(NumericVector v, NumericVector k, NumericVector B,
@@ -272,9 +272,9 @@ Rcpp::List rrou_cpp(NumericMatrix pars, CharacterVector lR_levels, LogicalVector
   const char* n2 = "k";
   const char* n3 = "s";
   if (par_kind == fperace::ROU_PAR_CURVATURE) {
-    n1 = "tstar"; n2 = "c"; n3 = "nu";
+    n1 = "tstar"; n2 = "k"; n3 = "s";
   } else if (par_kind == fperace::ROU_PAR_EQUILIBRIUM) {
-    n1 = "tk"; n2 = "q"; n3 = "chi";
+    n1 = "tk"; n2 = "theta"; n3 = "chi";
   }
   CharacterVector col_names = colnames(pars);
   int ip1 = -1, ip2 = -1, ip3 = -1, iB = -1, iA = -1, it0 = -1;

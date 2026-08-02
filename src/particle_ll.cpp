@@ -524,6 +524,30 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
     out.ctx.t0_index   = emc2col::rlf::t0;
     out.ctx.rlf_cache = std::make_shared<rlf::SolveCache>();
     rlf_configure_grid(out.ctx.rlf_cache->grid);
+  } else if (type_std.find("GOM") != std::string::npos ||
+             type_std.find("GOMP") != std::string::npos) {
+    // Gompertz growth is an OU after Y = log(X).  The adapter keeps the
+    // physical alpha/beta/K columns and gomp_key() performs the reduction; its
+    // log_state flag makes the FPE seed integrate A uniformly on X rather than
+    // incorrectly treating the transformed start range as uniform in Y.
+    out.pdf1_ptr       = &dgomp_scalar;
+    out.cdf1_ptr       = &pgomp_scalar;
+    out.model_dfun_raw = &dgomp_raw;
+    out.model_pfun_raw = &pgomp_raw;
+    out.logS_at_t_ptr  = &gomp_logS_at_t;
+    out.col_spec       = emc2col::gompertz::spec();
+    out.ctx.t0_index   = emc2col::gompertz::t0;
+    out.ctx.defective_upper_tail = false;
+    out.ctx.fpe_cache = std::make_shared<fperace::SolveCache>();
+    rou_configure_cache(*out.ctx.fpe_cache);
+    if (type_std.find("_BWEIB") != std::string::npos)
+      out.ctx.fpe_cache->bnd_kind = fpe::FPE_BND_WEIBULL;
+    else if (type_std.find("_BEXP") != std::string::npos)
+      out.ctx.fpe_cache->bnd_kind = fpe::FPE_BND_EXPONENTIAL;
+    else if (type_std.find("_BLIN_MULT") != std::string::npos)
+      out.ctx.fpe_cache->bnd_kind = fpe::FPE_BND_LINEAR_MULTIPLICATIVE;
+    else if (type_std.find("_BLIN_ADD") != std::string::npos)
+      out.ctx.fpe_cache->bnd_kind = fpe::FPE_BND_LINEAR_ADDITIVE;
   } else if (type_std.find("ROU") != std::string::npos) {
     // Ordered FIRST deliberately.  Dispatch here is by substring, so a key that
     // is a substring of a later one must be tested first; "ROU" collides with
@@ -534,9 +558,12 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
     out.model_dfun_raw = &drou_raw;
     out.model_pfun_raw = &prou_raw;
     out.logS_at_t_ptr  = &rou_logS_at_t;
-    // A leaky accumulator with v/k below threshold has a genuine never-finish
-    // probability, so the upper tail is defective even with posdrift.
-    out.ctx.defective_upper_tail = true;
+    // With non-zero diffusion and a finite upper boundary, the OU hits the
+    // boundary almost surely.  A subthreshold equilibrium creates long finite
+    // survival and an approximately constant late hazard, not a point mass at
+    // infinity.  Preserve a genuine global-kill defect if a suffixed variant
+    // requests that clock.
+    out.ctx.defective_upper_tail = out.ctx.is_global_kill;
     out.ctx.fpe_cache = std::make_shared<fperace::SolveCache>();
     rou_configure_cache(*out.ctx.fpe_cache);
     // Parameterisation, selected by ROU(parameterization=).  It changes only

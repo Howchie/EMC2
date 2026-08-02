@@ -29,14 +29,14 @@ start-point range. Setting \code{Binf = B + A} gives the fixed-boundary model.}
 
 \item{parameterization}{Character; which three parameters stand in for
 \eqn{(v, k, s)}. \code{"rate"} (the default) estimates them directly.
-\code{"curvature"} estimates \eqn{(t_\star, c, \nu)} — crossing time,
-dimensionless leak and terminal noise — which holds the deterministic
-crossing time and the spread at the bound fixed as the leak varies.
-\code{"equilibrium"} estimates \eqn{(t_k, q, \chi)} — relaxation time,
-equilibrium position relative to the bound, and noise per relaxation — in
-which \eqn{q < 1} is a subthreshold process that responds by noise-driven
-escape. All three are the same model; see Details. The alternatives fix the
-state scale with \code{B} rather than with \code{s}.}
+\code{"curvature"} estimates \eqn{(t_\star, k, s)} — a reference crossing
+time, physical leak and diffusion — with \eqn{v = bk/(1-e^{-k t_\star})}
+and the smooth \eqn{k=0} limit.
+\code{"equilibrium"} estimates \eqn{(t_k, \theta, \chi)} — relaxation time,
+equilibrium position relative to the mean-start distance, and noise per
+relaxation — in which \eqn{\theta < 1} produces effective omissions in a finite
+response window. The alternatives fix the state scale with \code{B} rather
+than with \code{s}; see Details.}
 }
 \value{
 A list defining the cognitive model
@@ -64,79 +64,60 @@ argument of \code{design()}. They can also be accessed with \code{ROU()$p_types}
 }
 \section{Parameterizations}{
 \code{parameterization} changes which three parameters stand in for
-\eqn{(v, k, s)}. All three describe the \emph{same} process and reach the same
-solver, so they differ only in the shape of the likelihood surface the
-sampler sees and in what a prior on each parameter means. \code{B}, \code{A}, \code{t0} and
-the collapsing-bound parameters are common to all three.
+\eqn{(v, k, s)}. The charts share one solver but cover restricted regions of
+the SDE family; \code{B}, \code{A}, \code{t0} and the collapsing-bound
+parameters are common to all three.
 
 \code{"rate"} (the default) is \eqn{(v, k, s)} as above.
 
-\code{"curvature"} replaces them with \eqn{(t_\star, c, \nu)}, all defined against
-the deterministic distance \eqn{b = B + A} covered from the nominal start
-\eqn{x = 0}:\tabular{lllll}{
+\code{"curvature"} replaces them with \eqn{(t_\star, k, s)}. \code{tstar} is the
+reference crossing time of the deterministic path from \eqn{x = 0} to
+\eqn{b = B + A}; \code{k} and \code{s} retain their physical units:\tabular{lllll}{
    \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Interpretation} \cr
    \emph{tstar} \tab log \tab [0.05, Inf] \tab log(1) \tab Time at which the deterministic mean path reaches \emph{b} \cr
-   \emph{c} \tab log \tab [0, 5] \tab log(0) \tab Dimensionless leak \eqn{c = k\,t_\star} over one decision; \emph{c} = 0 is the Wiener race \cr
-   \emph{nu} \tab log \tab [0.001, 10] \tab log(1) \tab Terminal noise, \eqn{SD[X(t_\star)]/b} \cr
+   \emph{k} \tab log \tab [0, Inf] \tab log(0) \tab Physical leak rate; \emph{k} = 0 is the Wiener race \cr
+   \emph{s} \tab log \tab [0, Inf] \tab log(1) \tab Diffusion standard deviation \cr
 }
 
+The map is \eqn{v = bk/(1-e^{-k t_\star})}, with the smooth limit
+\eqn{v = b/t_\star} at \emph{k} = 0. This is a deterministic-crossing chart,
+so \code{tstar ~ condition}, \code{k ~ 1}, and \code{s ~ 1} have their
+literal meanings.
 
-The map is \eqn{k = c/t_\star}, \eqn{v = bc/\{t_\star(1-e^{-c})\}} and
-\eqn{s = (b\nu/\sqrt{t_\star})\sqrt{2c/(1-e^{-2c})}}, chosen so that
-\eqn{E[X(t_\star)] = b} and \eqn{SD[X(t_\star)] = b\nu} for \emph{every} value of
-\emph{c}. Curvature therefore bends the mean path without also making the
-accumulator slower or more variable at the bound, which is the ridge that
-\eqn{(v, k)} suffers from: in the rate parameterization a change in \emph{k} can
-be almost entirely undone by a change in \emph{v}, and freely estimated leak
-drifts along that ridge. A useful reading of \emph{c} is the leak half-life
-relative to the decision, \eqn{t_{1/2}/t_\star = \log 2 / c}: \emph{c} = 0.1 is a
-half-life of about 7 decisions and should be nearly invisible in ordinary RT
-data.
-
-\code{"equilibrium"} replaces them with \eqn{(t_k, q, \chi)}:\tabular{lllll}{
+\code{"equilibrium"} replaces them with \eqn{(t_k, \theta, \chi)}:\tabular{lllll}{
    \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Interpretation} \cr
    \emph{tk} \tab log \tab [0.01, Inf] \tab log(1) \tab Leak time constant \eqn{t_k = 1/k} (the boundary-collapse time constant keeps the name \emph{tau}) \cr
-   \emph{q} \tab log \tab [0.001, 20] \tab log(1) \tab OU equilibrium \eqn{v/k} relative to the bound, \eqn{q = v/(kb)} \cr
-   \emph{chi} \tab log \tab [0.001, 10] \tab log(1) \tab Noise over one relaxation, \eqn{\chi = s\sqrt{t_k}/b} \cr
+   \emph{theta} \tab log \tab [0.001, 20] \tab log(1) \tab OU equilibrium relative to the mean-start distance \cr
+   \emph{chi} \tab log \tab [0.001, 10] \tab log(1) \tab Noise over one relaxation \cr
 }
 
-
-In dimensionless time \eqn{u = t/t_k} and state \eqn{Y = X/b} this is
-\eqn{dY = (q - Y)du + \chi\,dW_u} with the bound at \eqn{Y = 1}, so \emph{q} is a
-regime parameter: \eqn{q > 1} crosses deterministically, \eqn{q = 1}
-approaches the bound asymptotically, and \eqn{q < 1} relaxes to a
-subthreshold level from which responses arise as noise-driven escapes. The
-\eqn{q \lesssim 1} regime is the one worth having: it produces substantial
-survivor mass at a deadline together with a late hazard that flattens to a
-constant, without requiring the observed RT distribution to march up to that
-deadline. It is intended for censored designs — give the data a \code{UC} column
-(and \code{UT}) and code responses past the deadline as \code{rt = Inf}, \code{R = NA}.
-A single deadline still trades \emph{q} off against \emph{chi}; several deadlines or
-response windows trace the survivor function directly and are far more
-diagnostic.
+With \eqn{d = B + A/2}, \eqn{\theta = (v/k-A/2)/d},
+\eqn{\chi = s\sqrt{t_k}/d}, \eqn{Y = (X-A/2)/d} and \eqn{u=t/t_k}, this is
+\eqn{dY = (\theta-Y)du + \chi\,dW_u}. Thus \emph{theta} < 1 gives noise-driven escapes
+and effective omissions in a finite response window, not an intrinsic
+never-response probability. The centered start is
+\eqn{U(-A/(2d), A/(2d))}, so the chart retains \code{A} while using finite
+positive leak.
 }
 
 \section{Scale identification}{
 Scaling the state by \emph{b} shows the dynamics depend only on
 \eqn{(v/s, k, B/s, A/s)} — four quantities from five parameters. The rate
 parameterization resolves the redundancy by fixing \code{s} (usually
-\code{constants = c(s = log(1))}). The alternatives express the same redundancy at
-the other end: they depend only on \eqn{(t_\star, c, \nu, A/b)} or
-\eqn{(t_k, q, \chi, A/b)}, so \strong{fix \code{B} rather than \code{s}}, with
-\code{constants = c(B = log(1))}. A speed-accuracy manipulation that would have
-been carried by \code{B ~ E} in the rate parameterization is carried by
-\code{tstar ~ E} (curvature) or by \code{q ~ E} and \code{tk ~ E} (equilibrium).
+\code{constants = c(s = log(1))}). The alternatives leave the same state-scale
+redundancy, so \strong{fix \code{B} rather than \code{s}}, with
+\code{constants = c(B = log(1))}. A bound manipulation is represented directly
+by \code{tstar ~ E} in the curvature chart; \code{theta} and \code{tk} in the
+equilibrium chart change equilibrium and relaxation, respectively.
 
-Leak is an architectural timescale rather than a per-condition fit knob. A
-sensible baseline lets stimulus condition move \code{tstar} (or \code{q}) and speed
-emphasis move the bound-related parameter, while \code{c} (or \code{tk}) is a single
-subject-level quantity: \code{c ~ 1}, not \code{c ~ E * lM}. A separate leak per racer
-and per condition returns the model to the mimicry regime it is trying to
-escape.
+Leak is an architectural quantity rather than a per-condition fit knob: use
+\code{k ~ 1} in the curvature chart or \code{tk ~ 1} in the equilibrium chart
+unless a condition-specific leak is scientifically intended.
 
-The leak \emph{k} is a rate in units of 1/time and is not divided by \emph{s}. As in
-the RDM, \emph{s} is normally fixed to 1 for scale identification. Setting
-\emph{k} = 0 gives the racing diffusion model (RDM) through the same solver.
+The leak \emph{k} is a rate in units of 1/time and is not divided by \emph{s}. In
+the rate chart, \emph{s} is normally fixed to 1; the alternatives normally fix
+\code{B} as above. Setting \emph{k} = 0 gives the racing diffusion model (RDM)
+through the same solver.
 
 The parameterization \emph{b} = \emph{B} + \emph{A} ensures that the response threshold is
 always higher than the between trial variation in start point. \code{A} is
@@ -186,21 +167,20 @@ design_ROUc <- design(data = forstmann,
                       contrasts=list(v=list(lM=ADmat)),constants=c(s=log(1)))
 
 # The curvature parameterization: stimulus and speed emphasis move the
-# crossing time, leak is one architectural quantity per subject, and B fixes
-# the state scale in place of s.
+# reference crossing time, while physical leak and diffusion can be shared.
 design_ROUcurv <- design(data = forstmann,
                          model=function() ROU(parameterization="curvature"),
                          matchfun=matchfun,
-                         formula=list(tstar~lM+E,c~1,nu~1,A~1,t0~1),
+                         formula=list(tstar~lM+E,k~1,s~1,A~1,t0~1),
                          contrasts=list(tstar=list(lM=ADmat)),
                          constants=c(B=log(1)))
 
-# The equilibrium parameterization, for a deadline design in which q is free
+# The equilibrium parameterization, for a deadline design in which theta is free
 # to sit below the bound. Give the data a UC column to censor at it.
 design_ROUeq <- design(data = forstmann,
                        model=function() ROU(parameterization="equilibrium"),
                        matchfun=matchfun,
-                       formula=list(tk~1,q~lM,chi~1,A~1,t0~1),
-                       contrasts=list(q=list(lM=ADmat)),
+                       formula=list(tk~1,theta~lM,chi~1,A~1,t0~1),
+                       contrasts=list(theta=list(lM=ADmat)),
                        constants=c(B=log(1)))
 }

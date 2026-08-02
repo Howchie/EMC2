@@ -34,8 +34,14 @@ the start point is \code{A * U_i}, where \code{U_i ~ Uniform(0, 1)}, the thresho
 \code{b = B + A}, and the drift is a normal draw with mean \code{v_i} and SD \code{sv_i}.
 With leak rate \code{k}, the evidence trajectory is
 \code{x_i(t) = x_i(0) * exp(-k * t) + v_i / k * (1 - exp(-k * t))} for \code{k > 0};
-its \code{k = 0} limit is the ordinary ballistic trajectory. If the leaky
-asymptote cannot reach the threshold, that accumulator has no finite hit.
+its \code{k = 0} limit is exactly the ordinary LBA trajectory with the same
+launch distribution: positive-truncated normal when \code{posdrift = TRUE}, or
+unrestricted normal when \code{posdrift = FALSE}. If the leaky asymptote cannot
+reach the threshold, that accumulator has no finite hit. For \code{k > 0},
+finite hits have no common hard right endpoint: launch values approaching the
+threshold condition from above can produce arbitrarily late responses. This is
+distinct from BAwD, whose decaying drive plus positive clearance can impose a
+finite endpoint.
 }
 \details{
 The model uses the following parameterization. The \code{B} parameter is the

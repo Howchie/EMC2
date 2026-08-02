@@ -38,8 +38,8 @@
 
 # The three columns each parameterisation puts in place of (v, k, s).
 .ROU_PAR_COLS <- list(rate = c("v", "k", "s"),
-                      curvature = c("tstar", "c", "nu"),
-                      equilibrium = c("tk", "q", "chi"))
+                      curvature = c("tstar", "k", "s"),
+                      equilibrium = c("tk", "theta", "chi"))
 
 .rou_cols <- function(pars, par = "rate") {
   n <- nrow(pars)
@@ -92,7 +92,13 @@
   g <- .rou_grid()
   # NA rates mark accumulators that are not in the race on this trial; the
   # solver has nothing to say about them, so keep them out and zero them after.
-  bad <- is.na(p$v) | is.na(rt) | !is.finite(rt)
+  # Non-finite mapped rates or shifts cannot produce a valid key.  Keep them
+  # separate from a positive-infinite query so only a valid pROU(Inf) row gets
+  # the proper OU limit below.
+  bad_par <- !is.finite(p$v) | !is.finite(p$t0)
+  bad_rt <- is.na(rt) | !is.finite(rt)
+  bad <- bad_par | bad_rt
+  rt_pos_inf <- is.infinite(rt) & rt > 0
   if (any(bad)) {
     # Substitute a valid dummy tuple so the grouping pass never sees NA; these
     # rows share one key, so they cost at most one extra solve, and their
@@ -110,7 +116,11 @@
                          p$bkind, p$Binf, p$tau, p$pw)
   if (any(bad)) {
     out$pdf[bad] <- 0
-    out$cdf[bad] <- 0
+    # With s > 0 and a finite upper boundary, the OU hits eventually with
+    # probability one.  Preserve that limit for a direct pROU(Inf) query;
+    # invalid rows and -Inf/NA remain at zero.
+    out$cdf[bad] <- ifelse(!bad_par[bad] & rt_pos_inf[bad],
+                           1, 0)
   }
   out
 }
@@ -267,79 +277,61 @@ rROU <- function(lR, pars, ok = rep(TRUE, nrow(pars)), kind = NULL,
 #' # Parameterizations
 #'
 #' `parameterization` changes which three parameters stand in for
-#' \eqn{(v, k, s)}. All three describe the *same* process and reach the same
-#' solver, so they differ only in the shape of the likelihood surface the
-#' sampler sees and in what a prior on each parameter means. `B`, `A`, `t0` and
-#' the collapsing-bound parameters are common to all three.
+#' \eqn{(v, k, s)}. The charts share one solver but cover restricted regions of
+#' the SDE family; `B`, `A`, `t0` and the collapsing-bound parameters are common
+#' to all three.
 #'
 #' `"rate"` (the default) is \eqn{(v, k, s)} as above.
 #'
-#' `"curvature"` replaces them with \eqn{(t_\star, c, \nu)}, all defined against
-#' the deterministic distance \eqn{b = B + A} covered from the nominal start
-#' \eqn{x = 0}:
+#' `"curvature"` replaces them with \eqn{(t_\star, k, s)}. `tstar` is the
+#' reference crossing time of the deterministic path from \eqn{x = 0} to
+#' \eqn{b = B + A}; `k` and `s` retain their physical units:
 #'
 #' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Interpretation** |
 #' |-----------|-----------|---------------|-----------|------------------------------------|
 #' | *tstar*   | log       | \[0.05, Inf\]   | log(1)    | Time at which the deterministic mean path reaches *b* |
-#' | *c*       | log       | \[0, 5\]        | log(0)    | Dimensionless leak \eqn{c = k\,t_\star} over one decision; *c* = 0 is the Wiener race |
-#' | *nu*      | log       | \[0.001, 10\]   | log(1)    | Terminal noise, \eqn{SD[X(t_\star)]/b} |
+#' | *k*       | log       | \[0, Inf\]      | log(0)    | Physical leak rate; *k* = 0 is the Wiener race |
+#' | *s*       | log       | \[0, Inf\]      | log(1)    | Diffusion standard deviation |
 #'
-#' The map is \eqn{k = c/t_\star}, \eqn{v = bc/\{t_\star(1-e^{-c})\}} and
-#' \eqn{s = (b\nu/\sqrt{t_\star})\sqrt{2c/(1-e^{-2c})}}, chosen so that
-#' \eqn{E[X(t_\star)] = b} and \eqn{SD[X(t_\star)] = b\nu} for *every* value of
-#' *c*. Curvature therefore bends the mean path without also making the
-#' accumulator slower or more variable at the bound, which is the ridge that
-#' \eqn{(v, k)} suffers from: in the rate parameterization a change in *k* can
-#' be almost entirely undone by a change in *v*, and freely estimated leak
-#' drifts along that ridge. A useful reading of *c* is the leak half-life
-#' relative to the decision, \eqn{t_{1/2}/t_\star = \log 2 / c}: *c* = 0.1 is a
-#' half-life of about 7 decisions and should be nearly invisible in ordinary RT
-#' data.
+#' The map is \eqn{v = bk/(1-e^{-k t_\star})}, with the smooth limit
+#' \eqn{v = b/t_\star} at *k* = 0. This is a deterministic-crossing chart, so
+#' `tstar ~ condition`, `k ~ 1`, and `s ~ 1` have their literal meanings.
 #'
-#' `"equilibrium"` replaces them with \eqn{(t_k, q, \chi)}:
+#' `"equilibrium"` replaces them with \eqn{(t_k, \theta, \chi)}:
 #'
 #' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Interpretation** |
 #' |-----------|-----------|---------------|-----------|------------------------------------|
 #' | *tk*      | log       | \[0.01, Inf\]   | log(1)    | Leak time constant \eqn{t_k = 1/k} (the boundary-collapse time constant keeps the name *tau*) |
-#' | *q*       | log       | \[0.001, 20\]   | log(1)    | OU equilibrium \eqn{v/k} relative to the bound, \eqn{q = v/(kb)} |
-#' | *chi*     | log       | \[0.001, 10\]   | log(1)    | Noise over one relaxation, \eqn{\chi = s\sqrt{t_k}/b} |
+#' | *theta*   | log       | \[0.001, 20\]   | log(1)    | OU equilibrium relative to the mean-start distance |
+#' | *chi*     | log       | \[0.001, 10\]   | log(1)    | Noise over one relaxation |
 #'
-#' In dimensionless time \eqn{u = t/t_k} and state \eqn{Y = X/b} this is
-#' \eqn{dY = (q - Y)du + \chi\,dW_u} with the bound at \eqn{Y = 1}, so *q* is a
-#' regime parameter: \eqn{q > 1} crosses deterministically, \eqn{q = 1}
-#' approaches the bound asymptotically, and \eqn{q < 1} relaxes to a
-#' subthreshold level from which responses arise as noise-driven escapes. The
-#' \eqn{q \lesssim 1} regime is the one worth having: it produces substantial
-#' survivor mass at a deadline together with a late hazard that flattens to a
-#' constant, without requiring the observed RT distribution to march up to that
-#' deadline. It is intended for censored designs — give the data a `UC` column
-#' (and `UT`) and code responses past the deadline as `rt = Inf`, `R = NA`.
-#' A single deadline still trades *q* off against *chi*; several deadlines or
-#' response windows trace the survivor function directly and are far more
-#' diagnostic.
+#' With \eqn{d = B + A/2}, \eqn{\theta = (v/k-A/2)/d},
+#' \eqn{\chi = s\sqrt{t_k}/d}, \eqn{Y = (X-A/2)/d} and \eqn{u=t/t_k}, this is
+#' \eqn{dY = (\theta-Y)du + \chi\,dW_u}. Thus *theta* < 1 gives noise-driven escapes
+#' and effective omissions in a finite response window, not an intrinsic
+#' never-response probability. The centered start is
+#' \eqn{U(-A/(2d), A/(2d))}, so the chart retains `A` while using finite
+#' positive leak.
 #'
 #' # Scale identification
 #'
 #' Scaling the state by *b* shows the dynamics depend only on
 #' \eqn{(v/s, k, B/s, A/s)} — four quantities from five parameters. The rate
 #' parameterization resolves the redundancy by fixing `s` (usually
-#' `constants = c(s = log(1))`). The alternatives express the same redundancy at
-#' the other end: they depend only on \eqn{(t_\star, c, \nu, A/b)} or
-#' \eqn{(t_k, q, \chi, A/b)}, so **fix `B` rather than `s`**, with
-#' `constants = c(B = log(1))`. A speed-accuracy manipulation that would have
-#' been carried by `B ~ E` in the rate parameterization is carried by
-#' `tstar ~ E` (curvature) or by `q ~ E` and `tk ~ E` (equilibrium).
+#' `constants = c(s = log(1))`). The alternatives leave the same state-scale
+#' redundancy, so **fix `B` rather than `s`**, with `constants = c(B = log(1))`.
+#' A bound manipulation is represented directly by `tstar ~ E` in the curvature
+#' chart; `theta` and `tk` in the equilibrium chart change equilibrium and
+#' relaxation, respectively.
 #'
-#' Leak is an architectural timescale rather than a per-condition fit knob. A
-#' sensible baseline lets stimulus condition move `tstar` (or `q`) and speed
-#' emphasis move the bound-related parameter, while `c` (or `tk`) is a single
-#' subject-level quantity: `c ~ 1`, not `c ~ E * lM`. A separate leak per racer
-#' and per condition returns the model to the mimicry regime it is trying to
-#' escape.
+#' Leak is an architectural quantity rather than a per-condition fit knob: use
+#' `k ~ 1` in the curvature chart or `tk ~ 1` in the equilibrium chart unless a
+#' condition-specific leak is scientifically intended.
 #'
-#' The leak *k* is a rate in units of 1/time and is not divided by *s*. As in
-#' the RDM, *s* is normally fixed to 1 for scale identification. Setting
-#' *k* = 0 gives the racing diffusion model (RDM) through the same solver.
+#' The leak *k* is a rate in units of 1/time and is not divided by *s*. In the
+#' rate chart, *s* is normally fixed to 1; the alternatives normally fix `B` as
+#' above. Setting *k* = 0 gives the racing diffusion model (RDM) through the
+#' same solver.
 #'
 #' The parameterization *b* = *B* + *A* ensures that the response threshold is
 #' always higher than the between trial variation in start point. `A` is
@@ -390,14 +382,14 @@ rROU <- function(lR, pars, ok = rep(TRUE, nrow(pars)), kind = NULL,
 #'
 #' @param parameterization Character; which three parameters stand in for
 #'   \eqn{(v, k, s)}. `"rate"` (the default) estimates them directly.
-#'   `"curvature"` estimates \eqn{(t_\star, c, \nu)} — crossing time,
-#'   dimensionless leak and terminal noise — which holds the deterministic
-#'   crossing time and the spread at the bound fixed as the leak varies.
-#'   `"equilibrium"` estimates \eqn{(t_k, q, \chi)} — relaxation time,
-#'   equilibrium position relative to the bound, and noise per relaxation — in
-#'   which \eqn{q < 1} is a subthreshold process that responds by noise-driven
-#'   escape. All three are the same model; see Details. The alternatives fix the
-#'   state scale with `B` rather than with `s`.
+#'   `"curvature"` estimates \eqn{(t_\star, k, s)} — a reference crossing
+#'   time, physical leak and diffusion — with \eqn{v = bk/(1-e^{-k t_\star})}
+#'   and the smooth \eqn{k=0} limit.
+#'   `"equilibrium"` estimates \eqn{(t_k, \theta, \chi)} — relaxation time,
+#'   equilibrium position relative to the mean-start distance, and noise per
+#'   relaxation — in which \eqn{\theta < 1} produces effective omissions in a finite
+#'   response window. The alternatives fix the state scale with `B` rather than
+#'   with `s`; see Details.
 #'
 #' @return A list defining the cognitive model
 #' @examples
@@ -416,22 +408,21 @@ rROU <- function(lR, pars, ok = rep(TRUE, nrow(pars)), kind = NULL,
 #'                       contrasts=list(v=list(lM=ADmat)),constants=c(s=log(1)))
 #'
 #' # The curvature parameterization: stimulus and speed emphasis move the
-#' # crossing time, leak is one architectural quantity per subject, and B fixes
-#' # the state scale in place of s.
+#' # reference crossing time, while physical leak and diffusion can be shared.
 #' design_ROUcurv <- design(data = forstmann,
 #'                          model=function() ROU(parameterization="curvature"),
 #'                          matchfun=matchfun,
-#'                          formula=list(tstar~lM+E,c~1,nu~1,A~1,t0~1),
+#'                          formula=list(tstar~lM+E,k~1,s~1,A~1,t0~1),
 #'                          contrasts=list(tstar=list(lM=ADmat)),
 #'                          constants=c(B=log(1)))
 #'
-#' # The equilibrium parameterization, for a deadline design in which q is free
+#' # The equilibrium parameterization, for a deadline design in which theta is free
 #' # to sit below the bound. Give the data a UC column to censor at it.
 #' design_ROUeq <- design(data = forstmann,
 #'                        model=function() ROU(parameterization="equilibrium"),
 #'                        matchfun=matchfun,
-#'                        formula=list(tk~1,q~lM,chi~1,A~1,t0~1),
-#'                        contrasts=list(q=list(lM=ADmat)),
+#'                        formula=list(tk~1,theta~lM,chi~1,A~1,t0~1),
+#'                        contrasts=list(theta=list(lM=ADmat)),
 #'                        constants=c(B=log(1)))
 #' @export
 
@@ -452,23 +443,20 @@ ROU <- function(boundary_collapse = c("fixed", "exponential", "linear_additive",
                     A = c(1e-4, Inf), t0 = c(0.05, Inf), s = c(0, Inf))
     exception <- c(A = 0, v = 0, k = 0)
   } else if (par == "curvature") {
-    # Defaults chosen so that the default model is the SAME process as the rate
-    # default: c = 0, tstar = 1, nu = 1, B = 1, A = 0 maps to v = 1, k = 0,
-    # s = 1.  The upper bound on c is a solver guard as much as a psychological
-    # one -- k = c/tstar, and c/tstar large is a stiff march.
-    p_types <- c("tstar" = log(1), "c" = log(0), "nu" = log(1), "B" = log(1),
+    # Defaults map to the rate default: tstar = 1, k = 0, s = 1, B = 1, A = 0.
+    p_types <- c("tstar" = log(1), "k" = log(0), "s" = log(1), "B" = log(1),
                  "A" = log(0), "t0" = log(0))
-    transform <- c(tstar = "exp", c = "exp", nu = "exp", B = "exp", A = "exp",
+    transform <- c(tstar = "exp", k = "exp", s = "exp", B = "exp", A = "exp",
                    t0 = "exp")
-    minmax <- cbind(tstar = c(0.05, Inf), c = c(0, 5), nu = c(1e-3, 10),
+    minmax <- cbind(tstar = c(0.05, Inf), k = c(0, Inf), s = c(0, Inf),
                     B = c(0, Inf), A = c(1e-4, Inf), t0 = c(0.05, Inf))
-    exception <- c(A = 0, c = 0)
+    exception <- c(A = 0, k = 0)
   } else {
-    p_types <- c("tk" = log(1), "q" = log(1), "chi" = log(1), "B" = log(1),
+    p_types <- c("tk" = log(1), "theta" = log(1), "chi" = log(1), "B" = log(1),
                  "A" = log(0), "t0" = log(0))
-    transform <- c(tk = "exp", q = "exp", chi = "exp", B = "exp", A = "exp",
+    transform <- c(tk = "exp", theta = "exp", chi = "exp", B = "exp", A = "exp",
                    t0 = "exp")
-    minmax <- cbind(tk = c(0.01, Inf), q = c(1e-3, 20), chi = c(1e-3, 10),
+    minmax <- cbind(tk = c(0.01, Inf), theta = c(1e-3, 20), chi = c(1e-3, 10),
                     B = c(0, Inf), A = c(1e-4, Inf), t0 = c(0.05, Inf))
     exception <- c(A = 0)
   }

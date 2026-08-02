@@ -36,15 +36,26 @@ the \emph{state} (including the start point) decays and weak drive produces an
 arbitrarily slow response. BAwD decays the \emph{drive} while a constant \code{ell}
 removes evidence, so the start point is static and weak drive produces an
 \emph{omission} instead. The two coincide only at \code{ell = 0} \strong{and} \code{A = 0}; with
-\code{ell = 0} and \code{A > 0} they are materially different models. At \code{k = 0}, BAwD
-is the LBA with drift \code{V - ell}.
+\code{ell = 0} and \code{A > 0} they are materially different models.
 
-The behavioural signature is the support of the response times. BAwD has a
-hard right endpoint \code{T_max} (the peak time of the \code{z = 0} accumulator at its
-critical launch strength), the density falls linearly to zero there, and the
-remaining probability is a genuine never-finish mass. It therefore suits data
-with a visible response window, substantial omissions and a rapid terminal
-drop in hit density; it cannot produce a heavy or indefinitely extended tail.
+At \code{k = 0}, the trajectory is the ordinary ballistic trajectory with
+effective drift \code{D = V - ell}. For the normal launch with
+\code{posdrift = FALSE}, this is exactly the unrestricted-normal LBA with mean
+drift \code{v - ell} and SD \code{sv}. With \code{posdrift = TRUE}, the launch is
+truncated at \code{V > 0}, so \code{D > -ell} rather than \code{D > 0}; the
+lognormal launch gives a shifted-lognormal effective drift and is not the
+standard LBA drift family.
+
+When \code{k > 0} and \code{ell > 0}, the behavioural signature is a hard right
+endpoint \code{T_max} (the peak time of the \code{z = 0} accumulator at its
+critical launch strength), with a genuine never-finish mass. For a point start
+(\code{A = 0}) the density approaches that endpoint linearly; with a nonzero
+start-point range (\code{A > 0}) the collapsing live-start interval adds another
+factor and the density approaches it quadratically. If \code{ell = 0}, the model
+has no finite endpoint (although it can remain defective when the decayed drive
+asymptote is below threshold); if \code{k = 0}, it has the ordinary LBA-like
+infinite support. Thus the finite-window interpretation applies only to
+\code{k > 0} and \code{ell > 0}.
 
 Default values are used for all parameters that are not explicitly listed in
 the \code{formula} argument of \code{design()}. They can also be accessed with
@@ -66,9 +77,11 @@ With \code{drift_distribution = "lognormal"} (the default) \verb{log V ~ N(mu, s
 With \code{drift_distribution = "normal"}, \code{mu} and \code{sigma} are replaced by \code{v}
 (identity, default 1) and \code{sv} (log, default \code{log(1)}), and
 \code{V ~ N(v, sv^2)} truncated to be positive when \code{posdrift = TRUE}. This is the
-variant that nests BAwL and the LBA, so it is the one to use when those
-comparisons matter; the lognormal variant is the default because its
-likelihood needs no quadrature.
+variant that contains the exact BAwL corner at \code{ell = 0} and \code{A = 0}
+and the exact unrestricted-normal LBA limit at \code{k = 0} only when
+\code{posdrift = FALSE}. With \code{posdrift = TRUE}, the \code{k = 0} limit
+instead has the shifted truncation \code{V - ell > -ell}. The lognormal variant
+is the default because its likelihood needs no quadrature.
 
 \strong{Fixing the evidence scale.} The evidence axis is defined only up to a
 scale: \verb{(V, ell, b, A) -> (cV, c*ell, cb, cA)} leaves every crossing time
@@ -86,11 +99,12 @@ trajectory and the width of the response window. Prefer \code{ell ~ 1}, or a
 coarse condition factor, and do not cross \code{ell} with the same factors as the
 launch-strength mean.
 
-\strong{Bounded support.} Because the supported window is finite, an observed
-response time above \code{t0 + T_max} has density exactly zero and floors that
-trial's likelihood. This is a constraint on where the posterior can live, to
-be handled by initialisation and priors; \code{pContaminant} is a Bernoulli
-\emph{omission} rate and does not address late responses.
+\strong{Bounded support.} When \code{k > 0} and \code{ell > 0}, an observed response
+time above \code{t0 + T_max} has density exactly zero and floors that trial's
+likelihood. This is a constraint on where the posterior can live, to be handled
+by initialisation and priors; \code{pContaminant} is a Bernoulli \emph{omission}
+rate and does not address late responses. The \code{ell = 0} and \code{k = 0}
+limits do not have this finite support.
 }
 \examples{
 ADmat <- matrix(c(-1/2, 1/2), ncol = 1, dimnames = list(NULL, "d"))

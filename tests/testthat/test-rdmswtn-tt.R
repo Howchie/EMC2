@@ -184,6 +184,47 @@ test_that("clock inversion is stable and the large-tau limit is ordinary RDMSWTN
   )
 })
 
+test_that("tau = Inf is the identity-clock limit in analytic and compiled paths", {
+  pars <- RDMSWTN_TT()$Ttransform(cbind(
+    v = 1.25, B = 1, A = .2, t0 = .1, s = 1, sv = .3, tau = Inf
+  ), NULL)
+  ordinary <- cbind(pars, lambda_g = 0, lambda_k = 0)
+  t <- c(.25, .5, 1.2, Inf)
+
+  expect_equal(
+    EMC2:::dRDMSWTN_TT(t, pars),
+    EMC2:::dRDMSWTN(t, ordinary),
+    tolerance = 2e-12
+  )
+  expect_equal(
+    EMC2:::pRDMSWTN_TT(t, pars),
+    EMC2:::pRDMSWTN(t, ordinary),
+    tolerance = 2e-12
+  )
+
+  row <- c(pars[1, ], pContaminant = 0)
+  sim_pars <- matrix(
+    rep(row, 2L * 300L), nrow = 2L * 300L, byrow = TRUE,
+    dimnames = list(NULL, names(row))
+  )
+  set.seed(611)
+  sim <- EMC2:::rrdmswtn_tt_cpp(
+    sim_pars, c("a", "b"), rep(TRUE, nrow(sim_pars)), TRUE
+  )
+  expect_true(all(is.finite(sim$rt)))
+
+  corr_row <- c(row, rho = .45)
+  corr_pars <- matrix(
+    rep(corr_row, 2L * 300L), nrow = 2L * 300L, byrow = TRUE,
+    dimnames = list(NULL, names(corr_row))
+  )
+  set.seed(612)
+  corr <- EMC2:::rrdmswtn_tt_corr_cpp(
+    corr_pars, c("a", "b"), rep(TRUE, nrow(corr_pars)), TRUE
+  )
+  expect_true(all(is.finite(corr$rt)))
+})
+
 test_that("compiled and reference simulators reproduce omissions and support", {
   n <- 3000L
   row <- c(

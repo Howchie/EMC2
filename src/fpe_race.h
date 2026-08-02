@@ -141,6 +141,16 @@ struct FPE_Grid {
 struct Key {
   double v = 0.0, k = 0.0, b = 0.0, A = 0.0;
 
+  // ROU uses a state-rescaled OU (sigma == 1, linear state).  Gompertz uses
+  // the same OU march after Y = log(X), but must keep the physical diffusion
+  // and the physical-start interval because A is defined on the X scale.
+  // Keeping these fields on the cache key lets both models share the cache
+  // machinery without pretending that a log-space uniform start is uniform.
+  double sigma = 1.0;
+  double zlo = 0.0, zhi = 0.0;
+  int model_kind = 0;              // 0 = ROU, 1 = Gompertz
+  bool log_state = false;
+
   // Boundary.  For FPE_BND_FIXED the shape fields are forced to zero by
   // rou_key(), so every fixed-bound row compares equal on them and a model that
   // never collapses behaves exactly as it did before collapse existed.
@@ -149,11 +159,14 @@ struct Key {
 
   bool operator==(const Key& o) const {
     return v == o.v && k == o.k && b == o.b && A == o.A &&
+           sigma == o.sigma && zlo == o.zlo && zhi == o.zhi &&
+           model_kind == o.model_kind && log_state == o.log_state &&
            bkind == o.bkind && binf == o.binf && tau == o.tau && pw == o.pw;
   }
   bool finite() const {
     return std::isfinite(v) && std::isfinite(k) && std::isfinite(b) &&
-           std::isfinite(A) && std::isfinite(binf) && std::isfinite(tau) &&
+           std::isfinite(A) && std::isfinite(sigma) && std::isfinite(zlo) &&
+           std::isfinite(zhi) && std::isfinite(binf) && std::isfinite(tau) &&
            std::isfinite(pw);
   }
 };
@@ -170,42 +183,25 @@ struct BndSpec {
 // ---------------------------------------------------------------------------
 // Parameterisations.
 //
-// All three describe the SAME process; they differ only in which three numbers
-// the user estimates in place of (v, k, s).  The map below is the only place
-// the alternatives exist: everything downstream -- the key, the cache, the
-// march, the simulator -- sees (v, k, s) and cannot tell which parameterisation
-// produced them.  That is deliberate, and it is why RATE is bit-for-bit what it
-// always was: its branch is three assignments.
+// The alternatives are restricted charts on the same SDE family.  The map below
+// is the only place they exist: everything downstream -- the key, the cache, the
+// march, the simulator -- sees (v, k, s) and cannot tell which chart produced
+// them.  RATE remains a three-assignment pass-through.
 //
-// The two alternatives both measure their parameters against the deterministic
-// distance b = B + A, i.e. the path from the nominal start x = 0 to the bound,
-// keeping the package's b = B + A, X(0) ~ U(0, A) convention untouched.  With
-// A > 0 the mean start is A/2 rather than 0, so tstar is a reference crossing
-// time rather than the mean one; the alternative (defining everything at the
-// mean start) would make d depend on A and buys nothing, since A is a nuisance
-// range parameter and is usually 0.
+// CURVATURE (tstar, k, s) uses the deterministic path from x = 0 to
+// b = B + A.  tstar is its reference crossing time; k and s retain their
+// physical units and can therefore be shared across conditions.  This chart
+// covers the deterministic-crossing regime and the k = 0 Wiener limit.
 //
-//   CURVATURE    (tstar, c, nu).  tstar is the time at which the deterministic
-//     mean path reaches b, c = k*tstar the dimensionless leak operating over
-//     one decision, nu = SD[X(tstar)]/b the terminal noise relative to the same
-//     distance.  Crossing time and terminal spread are held FIXED as c varies,
-//     so c bends the mean path without also making the accumulator slower --
-//     which is the whole ridge that (v, k) suffers from.  c = 0 is exactly the
-//     Wiener race.
+// EQUILIBRIUM (tk, theta, chi) is centered on the mean start.  With d = B + A/2,
+// theta = (v/k - A/2)/d places the equilibrium relative to the distance from the
+// mean start to the bound, and chi = s*sqrt(tk)/d is noise over one relaxation.
+// In Y = (X - A/2)/d and u = t/tk, the process is dY = (theta - Y)du + chi dW_u.
+// Thus theta < 1 is a subthreshold, noise-escape regime; unlike the curvature chart
+// this chart retains A explicitly.  It covers finite positive leak (tk > 0).
 //
-//   EQUILIBRIUM  (tk, q, chi).  tk = 1/k is the leak time constant, q = v/(k*b)
-//     places the OU equilibrium v/k relative to the bound, and chi =
-//     s*sqrt(tk)/b is the noise scale over one relaxation.  q > 1 crosses
-//     deterministically, q < 1 relaxes to a subthreshold level and responds by
-//     noise-driven escape.  Note there is no separate resting level: for
-//     dX = -k(X - r)dt + v dt the pair (v, r) enters only as v + k*r, so r is
-//     not identified given k and the kernel's r = 0 loses no generality.
-//
-// Both leave B unidentified when their noise parameter is free -- scaling the
-// state by b shows the dynamics depend only on (tstar, c, nu, A/b) or
-// (tk, q, chi, A/b).  That is the same one redundancy the rate parameterisation
-// has between s and B, moved to the other end: fix B rather than s.  See the
-// note in R/model_ROU.R.
+// Both alternatives leave one state-scale redundancy when their noise parameter
+// is free, so designs should normally fix B rather than s.  See R/model_ROU.R.
 // ---------------------------------------------------------------------------
 enum : int {
   ROU_PAR_RATE = 0,
@@ -228,34 +224,33 @@ inline void rou_map_to_rate(int par_kind, double p1, double p2, double p3,
   if (!(b > 0.0) || !std::isfinite(b)) { v = k = s = nan; return; }
 
   if (par_kind == ROU_PAR_CURVATURE) {
-    const double tstar = p1, cc = p2, nu = p3;
+    const double tstar = p1, kk = p2, ss = p3;
     if (!(tstar > 0.0) || !std::isfinite(tstar) ||
-        !(cc >= 0.0) || !std::isfinite(cc) || !std::isfinite(nu)) {
+        !(kk >= 0.0) || !std::isfinite(kk) ||
+        !(ss >= 0.0) || !std::isfinite(ss)) {
       v = k = s = nan;
       return;
     }
-    k = cc / tstar;
-    // Both gains are 0/0 at c = 0 and tend to 1 there.  expm1 keeps the small-c
-    // ratio accurate; taking the limit explicitly keeps c = 0 exact, which is
-    // what makes constants = c(c = log(0)) reproduce the Wiener race rather
-    // than merely approach it.
-    const double g1 = (cc > 0.0) ? (cc / -std::expm1(-cc)) : 1.0;
-    const double g2 = (cc > 0.0) ? (2.0 * cc / -std::expm1(-2.0 * cc)) : 1.0;
-    v = b * g1 / tstar;                    // E[X(tstar)] = b for every c
-    s = b * nu * std::sqrt(g2 / tstar);    // SD[X(tstar)] = b*nu for every c
+    k = kk;
+    // The denominator is well behaved for small k*tstar; the explicit k = 0
+    // branch keeps the Wiener race exact rather than merely approximate.
+    v = (kk > 0.0) ? b * kk / -std::expm1(-kk * tstar) : b / tstar;
+    s = ss;
     return;
   }
 
   // ROU_PAR_EQUILIBRIUM
-  const double tk = p1, q = p2, chi = p3;
-  if (!(tk > 0.0) || !std::isfinite(tk) || !std::isfinite(q) ||
-      !std::isfinite(chi)) {
+  const double tk = p1, theta = p2, chi = p3;
+  if (!(tk > 0.0) || !std::isfinite(tk) || !std::isfinite(theta) ||
+      !(chi >= 0.0) || !std::isfinite(chi)) {
     v = k = s = nan;
     return;
   }
+  const double d = B + 0.5 * AA;
+  if (!(d > 0.0) || !std::isfinite(d)) { v = k = s = nan; return; }
   k = 1.0 / tk;
-  v = q * b / tk;                          // equilibrium v/k = q*b
-  s = chi * b / std::sqrt(tk);
+  v = (theta * d + 0.5 * AA) / tk;          // v/k - A/2 = theta*d
+  s = chi * d / std::sqrt(tk);
 }
 
 // Build the key for one accumulator's parameters.  s is scaled out exactly as
@@ -273,6 +268,10 @@ inline bool rou_key(double v, double k, double B, double A, double s,
   const double inv_s = 1.0 / s;
   out.v = v * inv_s;
   out.k = (k > 0.0 && std::isfinite(k)) ? k : 0.0;
+  out.sigma = 1.0;
+  out.zlo = 0.0;
+  out.model_kind = 0;
+  out.log_state = false;
   const double AA = (A > 0.0 && std::isfinite(A)) ? A * inv_s : 0.0;
   out.A = AA;
   out.b = B * inv_s + AA;                  // b = B + A, both already scaled
@@ -433,14 +432,16 @@ inline void rou_solve(const Key& p, double t_max, const FPE_Grid& gr, Entry& out
   fpe::FPE_ModelOU m;
   m.v = p.v;
   m.lambda = p.k;
-  m.sigma = 1.0;                                  // s already divided out
+  m.sigma = p.sigma;
   m.bnd.set_kind(p.bkind, p.b,
                  (p.bkind == fpe::FPE_BND_FIXED) ? p.b : p.binf,
-                 p.tau, p.pw, false);
-  m.xlo = fpe::fpe_x_lo_ou(0.0, p.v, p.k, 1.0, t_max);
+                 p.tau, p.pw, p.log_state);
+  const double zlo = p.log_state ? p.zlo : 0.0;
+  const double zhi = p.log_state ? p.zhi : p.A;
+  m.xlo = fpe::fpe_x_lo_ou(zlo, p.v, p.k, p.sigma, t_max);
 
   const fpe::FPE_Result r =
-      fpe::fpe_run(m, 0.0, p.A, t_max, gr.nx, gr.nt_for(t_max), gr.grade,
+      fpe::fpe_run(m, zlo, zhi, t_max, gr.nx, gr.nt_for(t_max), gr.grade,
                    gr.tgrade);
 
   const size_t n = r.t.size();
@@ -1184,13 +1185,17 @@ inline void cache_get_batch(SolveCache& C, const std::vector<Key>& keys,
 
       models[l].v = p.v;
       models[l].lambda = p.k;
-      models[l].sigma = 1.0;
+      models[l].sigma = p.sigma;
       models[l].bnd.set_kind(p.bkind, p.b,
                              (p.bkind == fpe::FPE_BND_FIXED) ? p.b : p.binf,
-                             p.tau, p.pw, false);
-      models[l].xlo = fpe::fpe_x_lo_ou(0.0, p.v, p.k, 1.0, horizons[k_idx]);
+                             p.tau, p.pw, p.log_state);
+      const double zlo = p.log_state ? p.zlo : 0.0;
+      const double zhi = p.log_state ? p.zhi : p.A;
+      models[l].xlo = fpe::fpe_x_lo_ou(zlo, p.v, p.k, p.sigma,
+                                       horizons[k_idx]);
 
-      double t0 = fpe::fpe_seed(models[l], 0.0, p.A, mesh, horizons[k_idx], q0_vec[l]);
+      double t0 = fpe::fpe_seed(models[l], zlo, zhi, mesh, horizons[k_idx],
+                                q0_vec[l]);
       t0_vec[l] = t0;
       t_max_vec[l] = horizons[k_idx];
       nt_vec[l] = C.grid.nt_for(horizons[k_idx]);

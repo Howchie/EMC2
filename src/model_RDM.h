@@ -2899,6 +2899,7 @@ double prdmswtn(double t, double mu_drift, double b, double A,
 // --------------------------------------------------------------------------
 
 inline double rdmswtn_tt_q(double x, double tau) {
+  // tau = +Inf is the exact identity-clock limit.
   if (!R_FINITE(tau)) return x;
   return x * (1.0 - 0.5 * x / tau);
 }
@@ -2906,6 +2907,7 @@ inline double rdmswtn_tt_q(double x, double tau) {
 // [[Rcpp::export]]
 double rdmswtn_tt_qinv(double u, double tau) {
   if (!(tau > 0.0) || ISNAN(u) || u < 0.0) return NA_REAL;
+  // Keep the inverse consistent with rdmswtn_tt_q() at tau = +Inf.
   if (!R_FINITE(tau)) return u;
   const double Q = 0.5 * tau;
   if (u > Q) return R_PosInf;

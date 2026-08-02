@@ -1001,7 +1001,9 @@ RDMSWTNcorr <- function(erlang_shape = 1L, erlang_type = "none",
 #' `q(x) = x - x^2 / (2 * tau)` on `0 < x < tau`. The clock has budget
 #' `Q = tau / 2`; the density is zero at and beyond `t0 + tau`, while the CDF
 #' remains fixed at the ordinary RDMSWTN CDF evaluated at `Q`. The remaining
-#' probability is genuine omission mass.
+#' probability is genuine omission mass. The analytic functions and both
+#' simulators also accept `tau = Inf`, which is the exact identity-clock limit
+#' and recovers the ordinary RDMSWTN process without an exhaustion plateau.
 #'
 #' The parameters are `v`, `B`, `A`, `t0`, `s`, `sv`, and `tau`, with
 #' `b = B + A`. `tau` is the width of the decision-time support after `t0`.

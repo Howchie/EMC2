@@ -848,8 +848,12 @@ Rcpp::List rrdmswtn_tt_cpp(Rcpp::NumericMatrix pars,
   for (int r = 0; r < n_rows; ++r) {
     if (!ok[r]) continue;
     const double tau = pars(r, itau);
-    if (!R_FINITE(tau) || !(tau > 0.0)) {
-      Rcpp::stop("rrdmswtn_tt_cpp: tau must be finite and positive.");
+    // tau = +Inf is the exact identity-clock limit: the ordinary
+    // operational finish is returned on the physical-time axis.  Reject
+    // NaN and negative/non-positive values, but keep the analytic limit
+    // available to direct simulator callers.
+    if (ISNAN(tau) || !(tau > 0.0)) {
+      Rcpp::stop("rrdmswtn_tt_cpp: tau must be positive (or +Inf).");
     }
     const double s = (is_ >= 0) ? pars(r, is_) : 1.0;
     const double v = pars(r, iv), sv = pars(r, isv);
@@ -860,7 +864,8 @@ Rcpp::List rrdmswtn_tt_cpp(Rcpp::NumericMatrix pars,
     double b = std::fmax(0.0, pars(r, ib));
     double A = std::fmax(0.0, pars(r, iA));
     const double operational = rwald_acc_r(b - A, v_draw, A, s, posdrift);
-    if (R_FINITE(operational) && operational <= 0.5 * tau) {
+    if (R_FINITE(operational) &&
+        (!R_FINITE(tau) || operational <= 0.5 * tau)) {
       dt[static_cast<size_t>(r)] =
         pars(r, it0) + rdmswtn_tt_qinv(operational, tau);
     }
@@ -926,8 +931,8 @@ Rcpp::List rrdmswtn_tt_corr_cpp(Rcpp::NumericMatrix pars,
       Rcpp::stop("rrdmswtn_tt_corr_cpp: rho must be finite and lie in [-1, 1].");
     }
     const double tau = pars(r, itau);
-    if (!R_FINITE(tau) || !(tau > 0.0)) {
-      Rcpp::stop("rrdmswtn_tt_corr_cpp: tau must be finite and positive.");
+    if (ISNAN(tau) || !(tau > 0.0)) {
+      Rcpp::stop("rrdmswtn_tt_corr_cpp: tau must be positive (or +Inf).");
     }
     if (std::fabs(rho) > 1e-12) any_nonzero = true;
   }
@@ -975,7 +980,18 @@ Rcpp::List rrdmswtn_tt_corr_cpp(Rcpp::NumericMatrix pars,
   for (int r = 0; r < n_rows; ++r) {
     if (!ok[r]) continue;
     const double tau = pars(r, itau);
-    const double Q = 0.5 * tau;
+    const double ur = u[static_cast<size_t>(r)];
+    if (!R_FINITE(tau)) {
+      // The exhaustion clock becomes the identity at tau = +Inf.  In the
+      // correlated path there is no finite plateau to invert against, so use
+      // the ordinary RDMSWTN marginal quantile directly.
+      const double s = (is_ >= 0) ? pars(r, is_) : 1.0;
+      dt[static_cast<size_t>(r)] = rdmswtn_quantile_cpp(
+        ur, pars(r, iv), pars(r, ib), pars(r, iA), s,
+        pars(r, it0), pars(r, isv));
+      continue;
+    }
+    const double Q = 0.5 * tau;  // tau is finite on this branch
     const double s = (is_ >= 0) ? pars(r, is_) : 1.0;
     const double FQ = prdmswtn(
         Q, pars(r, iv), pars(r, ib), pars(r, iA), s, 0.0, pars(r, isv),
@@ -983,7 +999,6 @@ Rcpp::List rrdmswtn_tt_corr_cpp(Rcpp::NumericMatrix pars,
     if (!R_FINITE(FQ)) {
       Rcpp::stop("rrdmswtn_tt_corr_cpp: non-finite marginal response probability.");
     }
-    const double ur = u[static_cast<size_t>(r)];
     if (ur > FQ) continue;
     const double operational = rdmswtn_operational_quantile_bounded(
         ur, FQ, Q, pars(r, iv), pars(r, ib), pars(r, iA),

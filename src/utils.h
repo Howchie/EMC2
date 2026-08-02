@@ -248,6 +248,7 @@ inline double raw_log_value(double log_x, double min_ll, bool floor_raw) {
 // the raw_log_* helpers above.  (The cache TYPE they store in the context comes
 // from fpe_race.h, which has no such dependency and is included at the top.)
 #include "model_ROU.h"
+#include "model_GOM.h"
 #include "model_RLF_kernels.h"
 // Likewise: the BOU primitives need ContextForDDMModels defined above.
 #include "model_BOU.h"

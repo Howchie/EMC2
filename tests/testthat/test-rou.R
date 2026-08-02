@@ -42,7 +42,7 @@ test_that("s is scaled out exactly, as in the RDM", {
   expect_identical(a, b)
 })
 
-test_that("the leak slows the race and makes the upper tail defective", {
+test_that("the leak slows the race and creates a long finite tail", {
   # theta = v/k is the asymptote.  With v = 1.5 and b = 1, k = 3 puts the
   # asymptote at 0.5, BELOW threshold, so finishing depends on noise alone.
   cdf2 <- vapply(c(0, 1, 3), function(kk) {
@@ -51,6 +51,7 @@ test_that("the leak slows the race and makes the upper tail defective", {
   expect_true(all(diff(cdf2) < 0))     # more leak, less mass by 2 s
   expect_gt(cdf2[1], 0.95)
   expect_lt(cdf2[3], 0.85)
+  expect_identical(EMC2:::pROU(Inf, rou_pars(Inf, v = 1.5, k = 3, B = 1, A = 0)), 1)
 
   # and the density must stay a density
   d <- EMC2:::dROU(tq, rou_pars(tq, v = 1.5, k = 3, B = 1, A = 0.5))
@@ -403,8 +404,7 @@ test_that("a collapsing bound finishes strictly sooner, at every t", {
     cf <- EMC2:::pROU(rt, fixed); cc <- EMC2:::pROU(rt, coll, kind = kind)
     expect_true(all(cc >= cf - 1e-9), info = kind)
     expect_gt(max(cc - cf), 0.05)
-    # A leaky accumulator that could never finish against a fixed bound can
-    # finish against a collapsing one, so the defect must shrink too.
+    # A slow accumulator gains finite-time response mass when the bound moves.
     expect_gt(max(cc), max(cf))
   }
 })
@@ -550,11 +550,10 @@ test_that("the likelihood is invariant to the scale of (v, s, b, A)", {
 # ---------------------------------------------------------------------------
 # Alternative parameterisations -- ROU(parameterization = ).
 #
-# These are changes of coordinates on (v, k, s), nothing more: the same SDE, the
-# same solver, the same cache.  So the organising test is not "does it look
-# right" but "is it the SAME likelihood as the rate model at the mapped point",
-# and the maps' defining invariants are checked directly rather than inferred
-# from a fit.  See src/fpe_race.h, rou_map_to_rate().
+# These are restricted charts on (v, k, s), all reaching the same solver and
+# cache.  The organising test is therefore "is it the rate likelihood at the
+# mapped point?"; each chart's defining map is checked directly. See
+# src/fpe_race.h, rou_map_to_rate().
 # ---------------------------------------------------------------------------
 
 rou_map <- function(par_kind, p1, p2, p3, B, A = 0) {
@@ -564,35 +563,26 @@ rou_map <- function(par_kind, p1, p2, p3, B, A = 0) {
                          rep_n(B), rep_n(A))
 }
 
-test_that("the curvature map fixes crossing time and terminal SD for every c", {
-  b <- 1.4; tstar <- 0.6; nu <- 0.35
-  cs <- c(0, 1e-8, 0.05, 0.5, 1, 3, 5)
-  m <- rou_map(1L, tstar, cs, nu, b)
+test_that("the curvature map fixes the reference crossing time", {
+  b <- 1.4; tstar <- 0.6; ss <- 0.35
+  ks <- c(0, 1e-8, 0.05, 0.5, 1, 3, 5)
+  m <- rou_map(1L, tstar, ks, ss, b)
 
-  # E[X(tstar)] = b and SD[X(tstar)] = b*nu, whatever the curvature.  That is
-  # the entire point of the parameterisation: c may not buy fit by moving the
-  # accumulator's speed or its spread at the bound.
   EX <- ifelse(m$k > 0, (m$v / m$k) * -expm1(-m$k * tstar), m$v * tstar)
-  VX <- ifelse(m$k > 0, m$s^2 * -expm1(-2 * m$k * tstar) / (2 * m$k),
-               m$s^2 * tstar)
-  expect_equal(EX, rep(b, length(cs)), tolerance = 1e-12)
-  expect_equal(sqrt(VX), rep(b * nu, length(cs)), tolerance = 1e-12)
-
-  # c = k*tstar by definition, and c = 0 is EXACTLY the Wiener race rather than
-  # a limit approached from above.
-  expect_equal(m$k, cs / tstar, tolerance = 1e-14)
+  expect_equal(EX, rep(b, length(ks)), tolerance = 1e-12)
+  expect_equal(m$k, ks, tolerance = 1e-14)
+  expect_equal(m$s, rep(ss, length(ks)), tolerance = 1e-14)
   expect_identical(m$k[1], 0)
   expect_equal(m$v[1], b / tstar, tolerance = 1e-14)
-  expect_equal(m$s[1], b * nu / sqrt(tstar), tolerance = 1e-14)
 })
 
-test_that("the equilibrium map places the OU asymptote at q * b", {
-  b <- 1.4; tk <- 0.5; chi <- 0.3
+test_that("the equilibrium map is centered on the mean start", {
+  b <- 1.4; A <- 0.6; d <- b + A / 2; tk <- 0.5; chi <- 0.3
   qs <- c(0.3, 0.8, 1, 1.6)
-  m <- rou_map(2L, tk, qs, chi, b)
-  expect_equal(m$v / m$k / b, qs, tolerance = 1e-14)   # theta = v/k = q*b
+  m <- rou_map(2L, tk, qs, chi, B = b, A = A)
+  expect_equal((m$v / m$k - A / 2) / d, qs, tolerance = 1e-14)
   expect_equal(m$k, rep(1 / tk, length(qs)), tolerance = 1e-14)
-  expect_equal(m$s * sqrt(tk) / b, rep(chi, length(qs)), tolerance = 1e-14)
+  expect_equal(m$s * sqrt(tk) / d, rep(chi, length(qs)), tolerance = 1e-14)
 })
 
 test_that("the rate parameterisation is an exact pass-through", {
@@ -604,23 +594,27 @@ test_that("the rate parameterisation is an exact pass-through", {
   expect_identical(ROU()$c_name, "ROU")
   expect_identical(names(ROU()$p_types),
                    c("v", "k", "B", "A", "t0", "s", "pContaminant"))
-  expect_identical(ROU(), ROU(parameterization = "rate"))
+  a <- ROU()
+  b <- ROU(parameterization = "rate")
+  expect_identical(a$c_name, b$c_name)
+  expect_identical(a$p_types, b$p_types)
+  expect_identical(a$transform, b$transform)
+  expect_identical(a$bound, b$bound)
 })
 
-test_that("both maps use b = B + A, so A enters the same way as in rate", {
-  # The alternatives measure their parameters against the deterministic
-  # distance b = B + A.  Nothing about the package's b = B + A, X(0) ~ U(0, A)
-  # convention changes; only the names of the three columns do.
+test_that("the curvature map uses b = B + A and equilibrium uses B + A/2", {
   m1 <- rou_map(1L, 0.6, 0.8, 0.35, B = 1.0, A = 0.4)
   m2 <- rou_map(1L, 0.6, 0.8, 0.35, B = 1.4, A = 0.0)
   expect_equal(unlist(m1), unlist(m2), tolerance = 1e-14)
+  me <- rou_map(2L, 0.5, 0.8, 0.35, B = 1.0, A = 0.4)
+  expect_equal((me$v / me$k - 0.2) / 1.2, 0.8, tolerance = 1e-14)
 })
 
 test_that("unusable rows fall out of the map rather than being substituted", {
   bad <- rou_map(1L, c(0, -1, NA, 0.6), 0.8, 0.35, 1.4)
   expect_true(all(is.na(bad$v[1:3])))       # tstar <= 0, tstar < 0, NA
   expect_true(is.finite(bad$v[4]))
-  expect_true(is.na(rou_map(1L, 0.6, -0.1, 0.35, 1.4)$v))   # c < 0
+  expect_true(is.na(rou_map(1L, 0.6, -0.1, 0.35, 1.4)$v))   # k < 0
   expect_true(is.na(rou_map(2L, 0, 0.8, 0.3, 1.4)$v))       # tk <= 0
 })
 
@@ -632,29 +626,29 @@ test_that("the alternative densities are the rate density at the mapped point", 
     cbind(v = m$v, k = m$k, B = B, A = A, t0 = t0, s = m$s)
   }
 
-  pc <- rep_rows(cbind(tstar = 0.6, c = 0.8, nu = 0.35, B = 1.2, A = 0.3,
+  pc <- rep_rows(cbind(tstar = 0.6, k = 0.8, s = 0.35, B = 1.2, A = 0.3,
                        t0 = 0.2))
-  mc <- rou_map(1L, pc[, "tstar"], pc[, "c"], pc[, "nu"], pc[, "B"], pc[, "A"])
+  mc <- rou_map(1L, pc[, "tstar"], pc[, "k"], pc[, "s"], pc[, "B"], pc[, "A"])
   pr <- as_rate(mc, pc[, "B"], pc[, "A"], pc[, "t0"])
   expect_identical(EMC2:::dROU(rt, pc, par = "curvature"), EMC2:::dROU(rt, pr))
   expect_identical(EMC2:::pROU(rt, pc, par = "curvature"), EMC2:::pROU(rt, pr))
 
-  pe <- rep_rows(cbind(tk = 0.5, q = 0.8, chi = 0.5, B = 1.2, A = 0.3,
+  pe <- rep_rows(cbind(tk = 0.5, theta = 0.8, chi = 0.5, B = 1.2, A = 0.3,
                        t0 = 0.2))
-  me <- rou_map(2L, pe[, "tk"], pe[, "q"], pe[, "chi"], pe[, "B"], pe[, "A"])
+  me <- rou_map(2L, pe[, "tk"], pe[, "theta"], pe[, "chi"], pe[, "B"], pe[, "A"])
   pr2 <- as_rate(me, pe[, "B"], pe[, "A"], pe[, "t0"])
   expect_identical(EMC2:::dROU(rt, pe, par = "equilibrium"), EMC2:::dROU(rt, pr2))
   expect_identical(EMC2:::pROU(rt, pe, par = "equilibrium"), EMC2:::pROU(rt, pr2))
 })
 
-test_that("q < 1 leaves the accumulator subthreshold and escaping by noise", {
+test_that("theta < 1 leaves the accumulator subthreshold and escaping by noise", {
   # The regime the equilibrium parameterisation exists to reach: the mean
   # relaxes BELOW the bound, so responses are noise-driven escapes and a large
   # survivor mass is still there at a plausible deadline.
   rt <- rep(1.5, 3)
   qs <- c(0.6, 1.0, 1.6)
   cdf <- vapply(qs, function(qq) {
-    p <- cbind(tk = 0.4, q = qq, chi = 0.35, B = 1, A = 0, t0 = 0.2)
+    p <- cbind(tk = 0.4, theta = qq, chi = 0.35, B = 1, A = 0, t0 = 0.2)
     EMC2:::pROU(1.5, p, par = "equilibrium")
   }, numeric(1))
   expect_true(all(diff(cdf) > 0))          # higher equilibrium, more finishers
@@ -662,9 +656,9 @@ test_that("q < 1 leaves the accumulator subthreshold and escaping by noise", {
   expect_gt(cdf[3], 0.9)
 
   # The late hazard flattens to a constant -- the escape signature, and the
-  # thing that identifies q within a single deadline.
+  # thing that identifies theta within a single deadline.
   tt <- seq(2, 6, by = 0.5)
-  p <- cbind(tk = 0.4, q = 0.6, chi = 0.35, B = 1, A = 0,
+  p <- cbind(tk = 0.4, theta = 0.6, chi = 0.35, B = 1, A = 0,
              t0 = 0)[rep(1, length(tt)), ]
   h <- EMC2:::dROU(tt, p, par = "equilibrium") /
        (1 - EMC2:::pROU(tt, p, par = "equilibrium"))
@@ -674,9 +668,9 @@ test_that("q < 1 leaves the accumulator subthreshold and escaping by noise", {
 
 test_that("the alternative simulators are the rate simulator at the same point", {
   lR <- factor(rep(c("left", "right"), 40), levels = c("left", "right"))
-  pc <- cbind(tstar = 0.6, c = 0.8, nu = 0.35, B = 1.2, A = 0.3,
+  pc <- cbind(tstar = 0.6, k = 0.8, s = 0.35, B = 1.2, A = 0.3,
               t0 = 0.2)[rep(1, length(lR)), ]
-  mc <- rou_map(1L, pc[, "tstar"], pc[, "c"], pc[, "nu"], pc[, "B"], pc[, "A"])
+  mc <- rou_map(1L, pc[, "tstar"], pc[, "k"], pc[, "s"], pc[, "B"], pc[, "A"])
   pr <- cbind(v = mc$v, k = mc$k, B = pc[, "B"], A = pc[, "A"],
               t0 = pc[, "t0"], s = mc$s)
 
@@ -709,17 +703,17 @@ rou_par_fixture <- function(model, formula, constants) {
 
 test_that("the curvature likelihood equals the rate likelihood at the map", {
   skip_on_cran()
-  b <- 1.2; tstar <- 0.6; cc <- 0.8; nu <- 0.35
-  m <- rou_map(1L, tstar, cc, nu, b, 0)
+  b <- 1.2; tstar <- 0.6; kk <- 0.8; ss <- 0.35
+  m <- rou_map(1L, tstar, kk, ss, b, 0)
 
   fc <- suppressMessages(rou_par_fixture(
     function() ROU(parameterization = "curvature"),
-    list(tstar ~ 1, c ~ 1, nu ~ 1, B ~ 1, t0 ~ 1), c(A = log(0))))
+    list(tstar ~ 1, k ~ 1, s ~ 1, B ~ 1, t0 ~ 1), c(A = log(0))))
   fr <- suppressMessages(rou_par_fixture(
     ROU, list(v ~ 1, k ~ 1, B ~ 1, t0 ~ 1),
     c(A = log(0), s = log(m$s))))
 
-  l_c <- rou_ll(fc, c(tstar = log(tstar), c = log(cc), nu = log(nu),
+  l_c <- rou_ll(fc, c(tstar = log(tstar), k = log(kk), s = log(ss),
                       B = log(b), t0 = log(0.2)))
   l_r <- rou_ll(fr, c(v = log(m$v), k = log(m$k), B = log(b), t0 = log(0.2)))
   expect_true(is.finite(l_c))
@@ -733,29 +727,30 @@ test_that("the equilibrium likelihood equals the rate likelihood at the map", {
 
   fe <- suppressMessages(rou_par_fixture(
     function() ROU(parameterization = "equilibrium"),
-    list(tk ~ 1, q ~ 1, chi ~ 1, B ~ 1, t0 ~ 1), c(A = log(0))))
+    list(tk ~ 1, theta ~ 1, chi ~ 1, B ~ 1, t0 ~ 1), c(A = log(0))))
   fr <- suppressMessages(rou_par_fixture(
     ROU, list(v ~ 1, k ~ 1, B ~ 1, t0 ~ 1),
     c(A = log(0), s = log(m$s))))
 
-  l_e <- rou_ll(fe, c(tk = log(tk), q = log(qq), chi = log(chi),
+  l_e <- rou_ll(fe, c(tk = log(tk), theta = log(qq), chi = log(chi),
                       B = log(b), t0 = log(0.2)))
   l_r <- rou_ll(fr, c(v = log(m$v), k = log(m$k), B = log(b), t0 = log(0.2)))
   expect_true(is.finite(l_e))
   expect_equal(l_e, l_r, tolerance = 1e-10)
 })
 
-test_that("c = 0 through the sampled likelihood is the Wiener race", {
+test_that("k = 0 through the sampled likelihood is the Wiener race", {
   skip_on_cran()
-  b <- 1.2; tstar <- 0.6; nu <- 1
+  b <- 1.2; tstar <- 0.6; ss <- b / sqrt(tstar)
   fc <- suppressMessages(rou_par_fixture(
     function() ROU(parameterization = "curvature"),
-    list(tstar ~ 1, nu ~ 1, B ~ 1, t0 ~ 1), c(A = log(0), c = log(0))))
+    list(tstar ~ 1, s ~ 1, B ~ 1, t0 ~ 1),
+    c(A = log(0), k = log(0))))
   fr <- suppressMessages(rou_par_fixture(
     ROU, list(v ~ 1, B ~ 1, t0 ~ 1),
-    c(A = log(0), k = log(0), s = log(b * nu / sqrt(tstar)))))
+    c(A = log(0), k = log(0), s = log(ss))))
 
-  l_c <- rou_ll(fc, c(tstar = log(tstar), nu = log(nu), B = log(b),
+  l_c <- rou_ll(fc, c(tstar = log(tstar), s = log(ss), B = log(b),
                       t0 = log(0.2)))
   l_r <- rou_ll(fr, c(v = log(b / tstar), B = log(b), t0 = log(0.2)))
   expect_equal(l_c, l_r, tolerance = 1e-10)
@@ -763,7 +758,7 @@ test_that("c = 0 through the sampled likelihood is the Wiener race", {
 
 test_that("a subthreshold equilibrium design fits a censored data set", {
   # The case Option B is for: an UC deadline, omissions coded rt = Inf with
-  # R = NA, and a q that the sampler is free to move across 1.
+  # R = NA, and a theta that the sampler is free to move across 1.
   skip_on_cran()
   set.seed(20260801)
   matchfun <- function(d) d$S == d$lR
@@ -772,12 +767,12 @@ test_that("a subthreshold equilibrium design fits a censored data set", {
   deadline <- 1.0
   des <- design(data = dat, model = function() ROU(parameterization = "equilibrium"),
                 matchfun = matchfun,
-                formula = list(tk ~ 1, q ~ lM, chi ~ 1, B ~ 1, t0 ~ 1),
-                contrasts = list(q = list(lM = matrix(c(-1/2, 1/2), ncol = 1,
+                formula = list(tk ~ 1, theta ~ lM, chi ~ 1, B ~ 1, t0 ~ 1),
+                contrasts = list(theta = list(lM = matrix(c(-1/2, 1/2), ncol = 1,
                                                       dimnames = list(NULL, "d")))),
                 constants = c(A = log(0)))
   sim <- suppressMessages(make_data(
-    c(tk = log(0.4), q = log(0.9), q_lMd = 0.5, chi = log(0.4), B = log(1),
+    c(tk = log(0.4), theta = log(0.9), theta_lMd = 0.5, chi = log(0.4), B = log(1),
       t0 = log(0.2)), design = des, n_trials = 40))
 
   # Impose the deadline: past UC we know only that no response had happened.
@@ -791,13 +786,13 @@ test_that("a subthreshold equilibrium design fits a censored data set", {
   emc <- suppressMessages(make_emc(sim, des, type = "single", n_chains = 1,
                                    compress = TRUE, rt_resolution = NULL))
   fx <- list(emc = emc)
-  ll <- rou_ll(fx, c(tk = log(0.4), q = log(0.9), q_lMd = 0.5, chi = log(0.4),
+  ll <- rou_ll(fx, c(tk = log(0.4), theta = log(0.9), theta_lMd = 0.5, chi = log(0.4),
                      B = log(1), t0 = log(0.2)))
   expect_true(is.finite(ll))
 
-  # A q far from the generating one must be worse -- the deadline plus the
+  # A theta far from the generating one must be worse -- the deadline plus the
   # omission rate has to carry information about where the process settles.
-  worse <- rou_ll(fx, c(tk = log(0.4), q = log(0.4), q_lMd = 0.5,
+  worse <- rou_ll(fx, c(tk = log(0.4), theta = log(0.4), theta_lMd = 0.5,
                         chi = log(0.4), B = log(1), t0 = log(0.2)))
   expect_lt(worse, ll)
 })

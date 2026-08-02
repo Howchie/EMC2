@@ -23,7 +23,9 @@ RDMSWTN accumulator. For decision time \code{x = t - t0}, operational time is
 \code{q(x) = x - x^2 / (2 * tau)} on \verb{0 < x < tau}. The clock has budget
 \code{Q = tau / 2}; the density is zero at and beyond \code{t0 + tau}, while the CDF
 remains fixed at the ordinary RDMSWTN CDF evaluated at \code{Q}. The remaining
-probability is genuine omission mass.
+probability is genuine omission mass. The analytic functions and both simulators
+also accept \code{tau = Inf}, which is the exact identity-clock limit and
+recovers the ordinary RDMSWTN process without an exhaustion plateau.
 }
 \details{
 The parameters are \code{v}, \code{B}, \code{A}, \code{t0}, \code{s}, \code{sv}, and \code{tau}, with

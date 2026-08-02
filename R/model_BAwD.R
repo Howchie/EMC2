@@ -7,7 +7,8 @@
 # The state does not leak (that is BAwL); the drive decays while a constant
 # clearance ell opposes it, so each accumulator rises to a peak and then falls.
 # A launch strength that has not crossed b = B + A by its peak never will, which
-# gives the model a hard right endpoint T_max and genuine omissions.
+# gives the model a hard right endpoint T_max and genuine omissions when both
+# the drive decays and the clearance is positive (k > 0, ell > 0).
 #
 # All of the numerics live in src/model_BAwD.h.  The dfun/pfun below call the
 # SAME compiled kernels as the sampled likelihood, so make_data()/predict() and
@@ -163,15 +164,25 @@ rBAwD <- function(lR, pars, ok = rep(TRUE, length(lR)), launch = 1L,
 #' arbitrarily slow response. BAwD decays the *drive* while a constant `ell`
 #' removes evidence, so the start point is static and weak drive produces an
 #' *omission* instead. The two coincide only at `ell = 0` **and** `A = 0`; with
-#' `ell = 0` and `A > 0` they are materially different models. At `k = 0`, BAwD
-#' is the LBA with drift `V - ell`.
+#' `ell = 0` and `A > 0` they are materially different models.
 #'
-#' The behavioural signature is the support of the response times. BAwD has a
-#' hard right endpoint `T_max` (the peak time of the `z = 0` accumulator at its
-#' critical launch strength), the density falls linearly to zero there, and the
-#' remaining probability is a genuine never-finish mass. It therefore suits data
-#' with a visible response window, substantial omissions and a rapid terminal
-#' drop in hit density; it cannot produce a heavy or indefinitely extended tail.
+#' At `k = 0`, the trajectory is the ordinary ballistic trajectory with
+#' effective drift `D = V - ell`. For the normal launch with `posdrift = FALSE`,
+#' this is exactly the unrestricted-normal LBA with mean drift `v - ell` and
+#' SD `sv`. With `posdrift = TRUE`, the launch is truncated at `V > 0`, so
+#' `D > -ell` rather than `D > 0`; the lognormal launch gives a shifted-
+#' lognormal effective drift and is not the standard LBA drift family.
+#'
+#' When `k > 0` and `ell > 0`, the behavioural signature is a hard right
+#' endpoint `T_max` (the peak time of the `z = 0` accumulator at its critical
+#' launch strength), with a genuine never-finish mass. For a point start
+#' (`A = 0`) the density approaches that endpoint linearly; with a nonzero
+#' start-point range (`A > 0`) the collapsing live-start interval adds another
+#' factor and the density approaches it quadratically. If `ell = 0`, the model
+#' has no finite endpoint (although it can remain defective when the decayed
+#' drive asymptote is below threshold); if `k = 0`, it has the ordinary LBA-like
+#' infinite support. Thus the finite-window interpretation applies only to
+#' `k > 0` and `ell > 0`.
 #'
 #' Default values are used for all parameters that are not explicitly listed in
 #' the `formula` argument of `design()`. They can also be accessed with
@@ -193,8 +204,10 @@ rBAwD <- function(lR, pars, ok = rep(TRUE, length(lR)), launch = 1L,
 #' With `drift_distribution = "normal"`, `mu` and `sigma` are replaced by `v`
 #' (identity, default 1) and `sv` (log, default `log(1)`), and
 #' `V ~ N(v, sv^2)` truncated to be positive when `posdrift = TRUE`. This is the
-#' variant that nests BAwL and the LBA, so it is the one to use when those
-#' comparisons matter; the lognormal variant is the default because its
+#' variant that contains the exact BAwL corner at `ell = 0` and `A = 0` and
+#' the exact unrestricted-normal LBA limit at `k = 0` only when `posdrift = FALSE`.
+#' With `posdrift = TRUE`, the `k = 0` limit instead has the shifted truncation
+#' `V - ell > -ell`. The lognormal variant is the default because its
 #' likelihood needs no quadrature.
 #'
 #' **Fixing the evidence scale.** The evidence axis is defined only up to a
@@ -213,11 +226,12 @@ rBAwD <- function(lR, pars, ok = rep(TRUE, length(lR)), launch = 1L,
 #' coarse condition factor, and do not cross `ell` with the same factors as the
 #' launch-strength mean.
 #'
-#' **Bounded support.** Because the supported window is finite, an observed
-#' response time above `t0 + T_max` has density exactly zero and floors that
-#' trial's likelihood. This is a constraint on where the posterior can live, to
-#' be handled by initialisation and priors; `pContaminant` is a Bernoulli
-#' *omission* rate and does not address late responses.
+#' **Bounded support.** When `k > 0` and `ell > 0`, an observed response time
+#' above `t0 + T_max` has density exactly zero and floors that trial's likelihood.
+#' This is a constraint on where the posterior can live, to be handled by
+#' initialisation and priors; `pContaminant` is a Bernoulli *omission* rate and
+#' does not address late responses. The `ell = 0` and `k = 0` limits do not have
+#' this finite support.
 #'
 #' @param drift_distribution Distribution of the trialwise launch strength:
 #'   `"lognormal"` (the default) for `log V ~ N(mu, sigma^2)`, or `"normal"` for

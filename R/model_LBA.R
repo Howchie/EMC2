@@ -559,8 +559,14 @@ rBAwL_corr <- function(lR, pars, ok = rep(TRUE, nrow(pars)),
 #' `b = B + A`, and the drift is a normal draw with mean `v_i` and SD `sv_i`.
 #' With leak rate `k`, the evidence trajectory is
 #' `x_i(t) = x_i(0) * exp(-k * t) + v_i / k * (1 - exp(-k * t))` for `k > 0`;
-#' its `k = 0` limit is the ordinary ballistic trajectory. If the leaky
-#' asymptote cannot reach the threshold, that accumulator has no finite hit.
+#' its `k = 0` limit is exactly the ordinary LBA trajectory with the same
+#' launch distribution: positive-truncated normal when `posdrift = TRUE`, or
+#' unrestricted normal when `posdrift = FALSE`. If the leaky asymptote cannot
+#' reach the threshold, that accumulator has no finite hit. For `k > 0`,
+#' finite hits have no common hard right endpoint: launch values approaching
+#' the threshold condition from above can produce arbitrarily late responses.
+#' This is distinct from BAwD, whose decaying drive plus positive clearance can
+#' impose a finite endpoint.
 #'
 #' The model uses the following parameterization. The `B` parameter is the
 #' distance from the upper end of the start-point range to the threshold, so

@@ -155,25 +155,37 @@ namespace rou {
   }
 }
 
-// ROU(parameterization = "curvature"): (tstar, c, nu) replace (v, k, s), with
+// ROU(parameterization = "curvature"): (tstar, k, s) replace (v, k, s), with
 // B, A, t0 and the optional collapse columns unchanged.  The optional columns
 // land at the same indices as the rate layout because N_REQ is also 6.
 namespace rou_curv {
-  enum : int { tstar = 0, c, nu, B, A, t0, N_REQ, Binf = N_REQ, tau, pw };
+  enum : int { tstar = 0, k, s, B, A, t0, N_REQ, Binf = N_REQ, tau, pw };
   inline ColSpec spec() {
-    static const char* n[] = {"tstar", "c", "nu", "B", "A", "t0"};
+    static const char* n[] = {"tstar", "k", "s", "B", "A", "t0"};
     return {n, N_REQ, "ROUCURV"};
   }
 }
 
-// ROU(parameterization = "equilibrium"): (tk, q, chi) replace (v, k, s).  tk is
+// ROU(parameterization = "equilibrium"): (tk, theta, chi) replace (v, k, s).  tk is
 // the LEAK time constant 1/k; the boundary-collapse time constant keeps the
 // name tau, which is why the leak one is not called tau here.
 namespace rou_eq {
-  enum : int { tk = 0, q, chi, B, A, t0, N_REQ, Binf = N_REQ, tau, pw };
+  enum : int { tk = 0, theta, chi, B, A, t0, N_REQ, Binf = N_REQ, tau, pw };
   inline ColSpec spec() {
-    static const char* n[] = {"tk", "q", "chi", "B", "A", "t0"};
+    static const char* n[] = {"tk", "theta", "chi", "B", "A", "t0"};
     return {n, N_REQ, "ROUEQ"};
+  }
+}
+
+// R/model_GOM.R — Gompertz growth-process race.  The process is solved after
+// Y = log(X), but alpha, beta and K remain on the physical Gompertz scale and
+// A is the physical start-point range [1, 1 + A].
+namespace gompertz {
+  enum : int { alpha = 0, beta, K, B, A, t0, N_REQ,
+               Binf = N_REQ, tau, pw };
+  inline ColSpec spec() {
+    static const char* n[] = {"alpha", "beta", "K", "B", "A", "t0"};
+    return {n, N_REQ, "GOM"};
   }
 }
 
