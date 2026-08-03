@@ -621,7 +621,7 @@ bridge_group_and_prior_and_jac_standard <- function(
     #    routine (same as the sampler start/gibbs steps), then center each
     #    subject's alpha and evaluate the zero-mean MVN density in one call.
     subj_mu <- calculate_subject_means(group_designs, theta_mu[i, ])  # p x n_subj
-    alpha_i <- vapply(proposals_list, function(pr) pr[i, ], numeric(p))  # p x n_subj
+    alpha_i <- matrix(vapply(proposals_list, function(pr) pr[i, ], numeric(p)), nrow = p)  # p x n_subj
     
     U <- chol(var_curr)
     rooti <- backsolve(U, diag(p))

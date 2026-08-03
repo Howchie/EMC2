@@ -8,7 +8,12 @@ arma::vec fast_dmvnorm(const arma::mat& x, const arma::rowvec& mean, const arma:
   int p = x.n_cols;
   arma::vec out(n);
   
-  arma::mat rooti = arma::inv(arma::trimatu(arma::chol(sigma)));
+  arma::mat R;
+  if (!arma::chol(R, sigma)) {
+    out.fill(R_NegInf);
+    return out;
+  }
+  arma::mat rooti = arma::inv(arma::trimatu(R));
   double log_const = arma::sum(arma::log(rooti.diag())) - 0.5 * p * std::log(2.0 * M_PI);
   
   for (int i = 0; i < n; i++) {
