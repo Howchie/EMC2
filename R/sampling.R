@@ -614,16 +614,41 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
     epsilons <- c(1, pm_settings[[i]]$epsilon)
     idx_full <- tune$components == i
     idx <- idx_full & !marginal_idx
+    p_idx <- sum(idx)
+
+    Rs <- vector("list", n_proposals)
+    rootis <- vector("list", n_proposals)
+    log_consts <- numeric(n_proposals)
+    for (k in seq_len(n_proposals)) {
+      if (p_idx > 0) {
+        base_R <- tryCatch(chol(Sigmas[[k]][idx,idx,drop=FALSE]), error = function(e) NULL)
+        if (is.null(base_R)) {
+          base_R <- tryCatch(chol(Sigmas[[k]][idx,idx,drop=FALSE] + diag(1e-6, p_idx)), error = function(e) NULL)
+        }
+        if (is.null(base_R)) {
+          base_R <- tryCatch(chol(Sigmas[[k]][idx,idx,drop=FALSE] + diag(1e-4, p_idx)), error = function(e) NULL)
+        }
+        if (is.null(base_R)) {
+          cov_diag <- diag(Sigmas[[k]][idx,idx,drop=FALSE])
+          cov_diag[is.na(cov_diag) | cov_diag <= 0] <- 1e-4
+          base_R <- diag(sqrt(cov_diag), p_idx)
+        }
+        Rs[[k]] <- base_R * epsilons[k]
+        rootis[[k]] <- backsolve(Rs[[k]], diag(p_idx))
+        log_consts[[k]] <- sum(log(diag(rootis[[k]]))) - 0.5 * p_idx * log(2 * pi)
+      }
+    }
+
     # Draw new proposals for each component
     particle_numbers <- numbers_from_proportion(pm_settings[[i]]$mix, pm_settings[[i]]$n_particles*particle_multiplier)
     proposals <- vector("list", n_proposals +1)
     proposals[[1]] <- matrix(subj_mu[idx], nrow = 1L)
     for(j in 1:n_proposals){
       # Fill up the proposals
-      if (any(idx)) {
+      if (p_idx > 0) {
         proposals[[j + 1]] <- particle_draws(
           particle_numbers[j], Mus[[j]][idx],
-          Sigmas[[j]][idx,idx,drop=FALSE] * (epsilons[j]^2))
+          Sigmas[[j]][idx,idx,drop=FALSE] * (epsilons[j]^2), R = Rs[[j]])
       } else {
         proposals[[j + 1]] <- matrix(numeric(0), nrow = particle_numbers[j], ncol = 0L)
       }
@@ -678,9 +703,9 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
     }
     lw_total <- lw + prev_ll - lw[1] # make sure lls from other components are included
     # Prior density
-    lp <- if (any(idx)) {
-      fast_dmvnorm(x = proposals[,idx,drop=FALSE], mean = group_mu[idx],
-                   sigma = group_var[idx,idx,drop=FALSE])
+    lp <- if (p_idx > 0) {
+      fast_dmvnorm_rooti(x = proposals[,idx,drop=FALSE], mean = group_mu[idx],
+                         rooti = rootis[[1]], log_const = log_consts[[1]])
     } else rep(0, nrow(proposals))
     if(length(unq_components) > 1){
       prior_density <- if (any(!marginal_idx)) {
@@ -691,22 +716,25 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
     } else{
       prior_density <- lp
     }
-    # We can start from 2, since first proposal is prior density
-    lm <- pm_settings[[i]]$mix[1]*exp(lp)
-    for(k in 2:length(Sigmas)){
-      # Prior density is updated separately so start at 2
-      if (any(idx)) {
-        lm <- lm + pm_settings[[i]]$mix[k] * exp(fast_dmvnorm(
-          x = proposals[,idx,drop=FALSE], mean = Mus[[k]][idx],
-          sigma = Sigmas[[k]][idx,idx,drop=FALSE] * (epsilons[k]^2)))
+    # Calculate mixture log-density using log-sum-exp for numerical stability
+    log_mix_comps <- matrix(0, nrow = nrow(proposals), ncol = n_proposals)
+    log_mix_comps[, 1] <- log(pm_settings[[i]]$mix[1]) + lp
+    for (k in 2:n_proposals) {
+      if (p_idx > 0) {
+        log_mix_comps[, k] <- log(pm_settings[[i]]$mix[k]) + fast_dmvnorm_rooti(
+          x = proposals[, idx, drop = FALSE], mean = Mus[[k]][idx],
+          rooti = rootis[[k]], log_const = log_consts[[k]])
       } else {
-        lm <- lm + pm_settings[[i]]$mix[k]
+        log_mix_comps[, k] <- log(pm_settings[[i]]$mix[k])
       }
     }
-    # Avoid infinite values
-    lm <- log(lm)
-    infnt_idx <- is.infinite(lm)
-    lm[infnt_idx] <- min(lm[!infnt_idx])
+    max_log <- do.call(pmax, as.data.frame(log_mix_comps))
+    lm <- max_log + log(rowSums(exp(log_mix_comps - max_log)))
+    infnt_idx <- is.infinite(lm) | is.na(lm)
+    if (any(infnt_idx)) {
+      fin_vals <- lm[!infnt_idx]
+      lm[infnt_idx] <- if (length(fin_vals) > 0) min(fin_vals) else -1e10
+    }
     # Calculate weights and center
     l <- lw_total + prior_density - lm
     weights <- exp(l - max(l))
@@ -898,12 +926,19 @@ numbers_from_proportion <- function(mix_proportion, n_particles = 1000) {
 }
 
 
-particle_draws <- function(n, mu, covar, alpha = NULL, tau= NULL) {
+particle_draws <- function(n, mu, covar, alpha = NULL, tau= NULL, R = NULL) {
   if (n <= 0) {
-    return(NULL)
+    return(matrix(numeric(0), nrow = 0, ncol = length(mu)))
   }
   if(is.null(alpha)){
-    return(mvtnorm::rmvnorm(n, mu, covar))
+    if (!is.null(R)) {
+      p <- length(mu)
+      Z <- matrix(rnorm(n * p), nrow = n, ncol = p)
+      X <- Z %*% R
+      return(sweep(X, 2, mu, "+"))
+    } else {
+      return(mvtnorm::rmvnorm(n, mu, covar))
+    }
   }
 }
 

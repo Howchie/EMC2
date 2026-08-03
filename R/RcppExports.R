@@ -21,6 +21,10 @@ fast_dmvnorm <- function(x, mean, sigma) {
     .Call(`_EMC2_fast_dmvnorm`, x, mean, sigma)
 }
 
+fast_dmvnorm_rooti <- function(x, mean, rooti, log_const) {
+    .Call(`_EMC2_fast_dmvnorm_rooti`, x, mean, rooti, log_const)
+}
+
 fpe_bm_fht_pdf_cdf_vec <- function(t, mu, sigma, z0, b0, binf, tau = 1.0, pow = 1.0, nx = 256L, nt = 512L, grade = 8.0, tgrade = 1.0) {
     .Call(`_EMC2_fpe_bm_fht_pdf_cdf_vec`, t, mu, sigma, z0, b0, binf, tau, pow, nx, nt, grade, tgrade)
 }

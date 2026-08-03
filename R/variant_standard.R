@@ -44,6 +44,9 @@ add_info_standard <- function(sampler, prior = NULL, ...){
     n_cols <- vapply(gd, ncol, integer(1))
     sampler$design_row_idx <- rep(seq_along(n_cols), times = n_cols)
     sampler$design_n_cols <- n_cols
+    sampler$gd <- gd
+  } else {
+    sampler$gd <- NULL
   }
   
   return(sampler)
@@ -279,7 +282,16 @@ gibbs_step_standard <- function(sampler, alpha) {
     is_blocked[marginal_idx] <- FALSE
   }
 
-  group_designs <- add_group_design(sampler$par_names[!sampler$nuisance], group_designs, n)
+  has_group_designs <- !is.null(sampler$gd) || (!is.null(group_designs) && length(group_designs) > 0)
+  if (has_group_designs) {
+    if (!is.null(sampler$gd)) {
+      group_designs <- sampler$gd
+    } else {
+      group_designs <- add_group_design(sampler$par_names[!sampler$nuisance], group_designs, n)
+    }
+  } else {
+    group_designs <- NULL
+  }
 
   # Stage 1 marginalization uses a fixed prior eta for the integrated
   # coordinate. Remove its precision cross-terms from the group update and
@@ -297,31 +309,35 @@ gibbs_step_standard <- function(sampler, alpha) {
   ##--------------------------------------------------
   ## 1) Build data-based precision & mean
   ##--------------------------------------------------
-  if (!is.null(sampler$XtX)) {
-    Tvinv_expanded <- tvinv[sampler$design_row_idx, sampler$design_row_idx]
-    prec_data <- Tvinv_expanded * sampler$XtX
-    
-    mean_data <- numeric(M)
-    ta <- tvinv %*% alpha
-    col_off <- cumsum(c(0L, sampler$design_n_cols))
-    for (k in seq_along(sampler$design_n_cols)) {
-      rows <- col_off[k] + seq_len(sampler$design_n_cols[k])
-      mean_data[rows] <- crossprod(group_designs[[k]], ta[k, ])
+  if (has_group_designs) {
+    if (!is.null(sampler$XtX)) {
+      Tvinv_expanded <- tvinv[sampler$design_row_idx, sampler$design_row_idx]
+      prec_data <- Tvinv_expanded * sampler$XtX
+      
+      mean_data <- numeric(M)
+      ta <- tvinv %*% alpha
+      col_off <- cumsum(c(0L, sampler$design_n_cols))
+      for (k in seq_along(sampler$design_n_cols)) {
+        rows <- col_off[k] + seq_len(sampler$design_n_cols[k])
+        mean_data[rows] <- crossprod(group_designs[[k]], ta[k, ])
+      }
+    } else {
+      moments   <- group_design_moments(group_designs, tvinv, alpha, M)
+      prec_data <- moments$prec_data
+      mean_data <- moments$mean_data
     }
   } else {
-    moments   <- group_design_moments(group_designs, tvinv, alpha, M)
-    prec_data <- moments$prec_data
-    mean_data <- moments$mean_data
+    prec_data <- n * tvinv
+    mean_data <- as.vector(tvinv %*% rowSums(alpha))
   }
 
   prec_post <- prior$theta_mu_invar + prec_data
-  cov_post  <- solve(prec_post)
-  mean_post <- cov_post %*% (prior$theta_mu_invar %*% prior$theta_mu_mean + mean_data)
+  b_post <- as.vector(prior$theta_mu_invar %*% prior$theta_mu_mean + mean_data)
 
   # Draw new parameter vector
-  L        <- t(chol(cov_post))
-  z        <- rnorm(M)
-  tmu_new  <- as.vector(mean_post + L %*% z)
+  R_post   <- chol(prec_post)
+  w        <- forwardsolve(t(R_post), b_post)
+  tmu_new  <- backsolve(R_post, w + rnorm(M))
 
   ##--------------------------------------------------
   ## 2) Compute residuals = alpha - (X * tmu)
@@ -329,7 +345,11 @@ gibbs_step_standard <- function(sampler, alpha) {
   resid <- matrix(0, nrow=p, ncol=n)
 
   # Calculate subject-level means using the new parameters
-  subj_mu <- calculate_subject_means(group_designs, tmu_new)
+  if (has_group_designs) {
+    subj_mu <- calculate_subject_means(group_designs, tmu_new)
+  } else {
+    subj_mu <- matrix(tmu_new, nrow = p, ncol = n)
+  }
 
   # Compute residuals
   for (i in seq_len(n)) {
@@ -340,9 +360,10 @@ gibbs_step_standard <- function(sampler, alpha) {
   }
 
   ##--------------------------------------------------
-  ## 3) Partial-block update of tvar_new
+  ## 3) Partial-block update of tvar_new and tvinv_new
   ##--------------------------------------------------
   tvar_new <- matrix(0, p, p)
+  tvinv_new <- matrix(0, p, p)
 
   blocked_idx   <- which(is_blocked)
   unblocked_idx <- which(!is_blocked)
@@ -361,6 +382,7 @@ gibbs_step_standard <- function(sampler, alpha) {
 
       Sigma_block  <- riwish(df_block, B_half_block)
       tvar_new[group_idx, group_idx] <- Sigma_block
+      tvinv_new[group_idx, group_idx] <- chol2inv(chol(Sigma_block))
     }
   }
 
@@ -376,26 +398,35 @@ gibbs_step_standard <- function(sampler, alpha) {
     tvar_diag  <- 1 / tvinv_diag
 
     tvar_new[cbind(unblocked_idx, unblocked_idx)] <- tvar_diag
+    tvinv_new[cbind(unblocked_idx, unblocked_idx)] <- tvinv_diag
   }
-
-  # Invert
-  tvinv_new <- solve(tvar_new)
 
   if (any(marginal_idx) && !is.null(marginal_spec)) {
     # Locate the stacked group-design coefficients for each marginalized
     # subject parameter. An intercept-only t0 design has one coefficient; if a
     # caller supplied a richer group design, keep eta in the intercept and
     # hold the additional coefficients at zero.
-    col_off <- cumsum(c(0L, vapply(group_designs, ncol, integer(1L))))
+    if (has_group_designs) {
+      col_off <- cumsum(c(0L, vapply(group_designs, ncol, integer(1L))))
+    } else {
+      col_off <- 0:p
+    }
     for (k in which(marginal_idx)) {
       cols <- (col_off[k] + 1L):col_off[k + 1L]
       tmu_new[cols] <- c(marginal_spec$mu, rep(0, length(cols) - 1L))
       tvar_new[k, ] <- 0
       tvar_new[, k] <- 0
       tvar_new[k, k] <- marginal_spec$sigma^2
+      
+      tvinv_new[k, ] <- 0
+      tvinv_new[, k] <- 0
+      tvinv_new[k, k] <- 1 / marginal_spec$sigma^2
     }
-    tvinv_new <- solve(tvar_new)
-    subj_mu <- calculate_subject_means(group_designs, tmu_new)
+    if (has_group_designs) {
+      subj_mu <- calculate_subject_means(group_designs, tmu_new)
+    } else {
+      subj_mu <- matrix(tmu_new, nrow = p, ncol = n)
+    }
     subj_mu[marginal_idx, ] <- marginal_spec$mu
   }
   ##--------------------------------------------------
@@ -623,11 +654,18 @@ bridge_group_and_prior_and_jac_standard <- function(
     subj_mu <- calculate_subject_means(group_designs, theta_mu[i, ])  # p x n_subj
     alpha_i <- matrix(vapply(proposals_list, function(pr) pr[i, ], numeric(p)), nrow = p)  # p x n_subj
     
-    U <- chol(var_curr)
-    rooti <- backsolve(U, diag(p))
-    log_const <- sum(log(diag(rooti))) - 0.5 * p * log(2*pi)
-    z <- t(alpha_i - subj_mu) %*% rooti
-    group_ll <- -0.5 * sum(z^2) + n_subj * log_const
+    U <- tryCatch(chol(var_curr), error = function(e) NULL)
+    if (is.null(U)) {
+      U <- tryCatch(chol(var_curr + diag(1e-6, p)), error = function(e) NULL)
+    }
+    if (is.null(U)) {
+      group_ll <- -Inf
+    } else {
+      rooti <- backsolve(U, diag(p))
+      log_const <- sum(log(diag(rooti))) - 0.5 * p * log(2*pi)
+      z <- t(alpha_i - subj_mu) %*% rooti
+      group_ll <- -0.5 * sum(z^2) + n_subj * log_const
+    }
 
     # 4) Prior on var1, var2, and a => same partial-block logic
     # "var1" => Inverse-Gamma with shape=v/2, rate=v/exp(theta_a[i, !has_cov])

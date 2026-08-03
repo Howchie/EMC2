@@ -5,9 +5,6 @@
 # b = B + A.  There is no closed form for the first-passage density, so the
 # likelihood is a Fokker-Planck solve (src/fpe_solver.h) cached per distinct
 # parameter tuple (src/fpe_race.h).
-#
-# The R-side dROU/pROU wrappers call the same C++ solver as the sampled
-# likelihood, so simulation and prediction use the fitted model directly.
 # ============================================================================
 
 # Resolution knobs are exposed as options so accuracy can be adjusted without
@@ -130,8 +127,6 @@ dROU <- function(rt, pars, kind = NULL, par = "rate")
 
 pROU <- function(rt, pars, kind = NULL, par = "rate")
   .rou_pdf_cdf(rt, pars, kind, par)$cdf
-
-#### random
 
 rROU <- function(lR, pars, ok = rep(TRUE, nrow(pars)), kind = NULL,
                  par = "rate",
@@ -257,7 +252,6 @@ rROU <- function(lR, pars, ok = rep(TRUE, nrow(pars)), kind = NULL,
 #' \deqn{dX = (v - k X) dt + s dW,\quad X(0) \sim U(0, A),}
 #' absorbed at \eqn{b = B + A}.
 #'
-#' Model files are almost exclusively used in `design()`.
 #'
 #' @details
 #'
@@ -289,9 +283,9 @@ rROU <- function(lR, pars, ok = rep(TRUE, nrow(pars)), kind = NULL,
 #'
 #' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Interpretation** |
 #' |-----------|-----------|---------------|-----------|------------------------------------|
-#' | *tstar*   | log       | \[0.05, Inf\]   | log(1)    | Time at which the deterministic mean path reaches *b* |
-#' | *k*       | log       | \[0, Inf\]      | log(0)    | Physical leak rate; *k* = 0 is the Wiener race |
-#' | *s*       | log       | \[0, Inf\]      | log(1)    | Diffusion standard deviation |
+#' | *tstar*   | log       | \[0, Inf\]    | log(1)    | Time at which the deterministic mean path reaches *b* |
+#' | *k*       | log       | \[0, Inf\]    | log(0)    | Physical leak rate; *k* = 0 is the Wiener race |
+#' | *s*       | log       | \[0, Inf\]    | log(1)    | Diffusion standard deviation |
 #'
 #' The map is \eqn{v = bk/(1-e^{-k t_\star})}, with the smooth limit
 #' \eqn{v = b/t_\star} at *k* = 0. This is a deterministic-crossing chart, so
@@ -301,7 +295,7 @@ rROU <- function(lR, pars, ok = rep(TRUE, nrow(pars)), kind = NULL,
 #'
 #' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Interpretation** |
 #' |-----------|-----------|---------------|-----------|------------------------------------|
-#' | *tk*      | log       | \[0.01, Inf\]   | log(1)    | Leak time constant \eqn{t_k = 1/k} (the boundary-collapse time constant keeps the name *tau*) |
+#' | *tk*      | log       | \[0.001, Inf\]  | log(1)    | Leak time constant \eqn{t_k = 1/k} (the boundary-collapse time constant keeps the name *tau*) |
 #' | *theta*   | log       | \[0.001, 20\]   | log(1)    | OU equilibrium relative to the mean-start distance |
 #' | *chi*     | log       | \[0.001, 10\]   | log(1)    | Noise over one relaxation |
 #'
@@ -324,29 +318,11 @@ rROU <- function(lR, pars, ok = rep(TRUE, nrow(pars)), kind = NULL,
 #' chart; `theta` and `tk` in the equilibrium chart change equilibrium and
 #' relaxation, respectively.
 #'
-#' Leak is an architectural quantity rather than a per-condition fit knob: use
-#' `k ~ 1` in the curvature chart or `tk ~ 1` in the equilibrium chart unless a
-#' condition-specific leak is scientifically intended.
-#'
-#' The leak *k* is a rate in units of 1/time and is not divided by *s*. In the
-#' rate chart, *s* is normally fixed to 1; the alternatives normally fix `B` as
-#' above. Setting *k* = 0 gives the racing diffusion model (RDM) through the
-#' same solver.
-#'
-#' The parameterization *b* = *B* + *A* ensures that the response threshold is
-#' always higher than the between trial variation in start point. `A` is
-#' non-negative, so the start point is always in \[0, *A*\].
-#'
 #' This is the independent leaky accumulator, not the leaky competing
 #' accumulator (LCA): accumulators do not inhibit one another, and the process
 #' is not rectified at zero. See [BOU()] for the two-boundary OU diffusion,
 #' whose leak is defined relative to the starting point rather than zero.
 #'
-#' There is no closed-form first-passage density, so the likelihood uses a
-#' Fokker–Planck solve for each distinct parameter tuple. The solve is cached
-#' across response-time queries, but designs with trial-varying parameters are
-#' correspondingly more expensive. Resolution can be adjusted with
-#' `emc2.fpe_nx`, `emc2.fpe_dt`, `emc2.fpe_grade`, and `emc2.fpe_tgrade`.
 #'
 #' Response-time compression is disabled for this model because the solver
 #' evaluates the continuous-time density directly; binning would add flooring
