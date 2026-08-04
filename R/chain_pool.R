@@ -84,26 +84,49 @@
     return(NULL)
   }
 
-  pool <- tryCatch({
-    jobs <- vector("list", n_workers)
-    for (w in seq_len(n_workers)) {
-      jobs[[w]] <- local({
-        i <- w
-        parallel::mcparallel(.emc_wpool_serve(req[i], ans[i], ctx),
-                             detached = FALSE)
-      })
+  jobs <- vector("list", n_workers)
+  wcs <- vector("list", n_workers)
+  rcs <- vector("list", n_workers)
+  success <- FALSE
+  on.exit({
+    if (!success) {
+      for (cn in c(wcs, rcs)) { if (!is.null(cn)) try(close(cn), silent=TRUE) }
+      try(parallel::mccollect(jobs[!sapply(jobs, is.null)], wait = FALSE), silent = TRUE)
+      for (job in jobs[!sapply(jobs, is.null)]) try(tools::pskill(job$pid), silent = TRUE)
+      unlink(dir, recursive = TRUE)
     }
-    # Open request ends first, in the same order the children open theirs: a
-    # blocking fifo open completes only once the other end is open too, so the
-    # two loops rendezvous worker by worker.
-    wcs <- lapply(req, function(p) fifo(p, "wb", blocking = TRUE))
-    rcs <- lapply(ans, function(p) fifo(p, "rb", blocking = TRUE))
-    list(n = n_workers, dir = dir, jobs = jobs, wcs = wcs, rcs = rcs,
-         alive = TRUE)
-  }, error = function(e) NULL)
+  })
 
-  if (is.null(pool)) unlink(dir, recursive = TRUE)
-  pool
+  for (w in seq_len(n_workers)) {
+    jobs[[w]] <- local({
+      i <- w
+      parallel::mcparallel(.emc_wpool_serve(req[i], ans[i], ctx), detached = FALSE)
+    })
+  }
+
+  tryCatch({
+    for (w in seq_len(n_workers)) {
+      f <- NULL
+      for (poll in 1:2000) { # 20 seconds max
+        res <- parallel::mccollect(jobs[[w]], wait = FALSE, timeout = 0)
+        if (!is.null(res)) stop("Worker process died before pool initialization")
+        f <- tryCatch(suppressWarnings(fifo(req[w], "wb", blocking = FALSE)),
+                      error = function(e) NULL)
+        if (!is.null(f)) break
+        Sys.sleep(0.01)
+      }
+      if (is.null(f)) stop("Timeout waiting for worker process to initialize")
+      wcs[[w]] <- f
+    }
+    for (w in seq_len(n_workers)) {
+      rcs[[w]] <- fifo(ans[w], "rb", blocking = TRUE)
+    }
+    success <- TRUE
+  }, error = function(e) NULL, interrupt = function(e) NULL)
+
+  if (!success) return(NULL)
+
+  list(n = n_workers, dir = dir, jobs = jobs, wcs = wcs, rcs = rcs, alive = TRUE)
 }
 
 # Take over cores released by a chain that has finished its block.  Chains do
@@ -127,17 +150,49 @@
     warning = function(e) 1L, error = function(e) 1L)
   if (!identical(as.integer(made), 0L)) return(pool)
 
-  grown <- tryCatch({
-    jobs <- lapply(seq_len(n_new), function(w) local({
+  jobs <- vector("list", n_new)
+  wcs <- vector("list", n_new)
+  rcs <- vector("list", n_new)
+  success <- FALSE
+  on.exit({
+    if (!success) {
+      for (cn in c(wcs, rcs)) { if (!is.null(cn)) try(close(cn), silent=TRUE) }
+      try(parallel::mccollect(jobs[!sapply(jobs, is.null)], wait = FALSE), silent = TRUE)
+      for (job in jobs[!sapply(jobs, is.null)]) try(tools::pskill(job$pid), silent = TRUE)
+    }
+  })
+
+  for (w in seq_len(n_new)) {
+    jobs[[w]] <- local({
       i <- w
       parallel::mcparallel(.emc_wpool_serve(req[i], ans[i], ctx), detached = FALSE)
-    }))
-    wcs <- lapply(req, function(p) fifo(p, "wb", blocking = TRUE))
-    rcs <- lapply(ans, function(p) fifo(p, "rb", blocking = TRUE))
-    list(n = n_total, dir = pool$dir, jobs = c(pool$jobs, jobs),
-         wcs = c(pool$wcs, wcs), rcs = c(pool$rcs, rcs), alive = TRUE)
-  }, error = function(e) NULL)
-  if (is.null(grown)) pool else grown
+    })
+  }
+
+  tryCatch({
+    for (w in seq_len(n_new)) {
+      f <- NULL
+      for (poll in 1:2000) { # 20 seconds max
+        res <- parallel::mccollect(jobs[[w]], wait = FALSE, timeout = 0)
+        if (!is.null(res)) stop("Worker process died before pool initialization")
+        f <- tryCatch(suppressWarnings(fifo(req[w], "wb", blocking = FALSE)),
+                      error = function(e) NULL)
+        if (!is.null(f)) break
+        Sys.sleep(0.01)
+      }
+      if (is.null(f)) stop("Timeout waiting for worker process to initialize")
+      wcs[[w]] <- f
+    }
+    for (w in seq_len(n_new)) {
+      rcs[[w]] <- fifo(ans[w], "rb", blocking = TRUE)
+    }
+    success <- TRUE
+  }, error = function(e) NULL, interrupt = function(e) NULL)
+
+  if (!success) return(pool)
+
+  list(n = n_total, dir = pool$dir, jobs = c(pool$jobs, jobs),
+       wcs = c(pool$wcs, wcs), rcs = c(pool$rcs, rcs), alive = TRUE)
 }
 
 .emc_wpool_stop <- function(pool) {
