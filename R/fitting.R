@@ -139,33 +139,18 @@ run_emc <- function(emc, stage, stop_criteria,
     t0 <- Sys.time()
     # Actual sampling
     stage_iter <- progress$step_size*max(1,cur_thin)
-    if (.emc_use_flat_parallel()) {
-      # One shared, load-balanced pool over all (chain, subject) pairs.  No
-      # sampler object crosses a process boundary, so the custom-kernel
-      # external pointers held by the master stay valid and do not need
-      # re-seating afterwards.
-      sub_emc <- run_stages_flat(sub_emc, stage = stage, iter = stage_iter,
-                                 verbose = verbose, verboseProgress = verboseProgress,
-                                 particle_factor = particle_factor,
-                                 search_width = search_width,
-                                 n_workers = cores_per_chain*cores_for_chains,
-                                 r_cores = r_cores)
-      if(getOption("emc2.print_iteration_duration", FALSE)) { print(Sys.time()-t0) }
-      class(sub_emc) <- "emc"
-    } else {
-      # One reallocation arena per block: markers must not survive into the next
-      # block, or every chain would start it believing its siblings had finished.
-      core_ctl <- .emc_core_ctl(length(sub_emc), cores_per_chain)
-      sub_emc <- auto_mclapply(sub_emc,run_stages, stage = stage, iter= stage_iter,
-                               verbose=verbose,  verboseProgress = verboseProgress,
-                               particle_factor=particle_factor,search_width=search_width,
-                               n_cores=cores_per_chain, mc.cores = cores_for_chains,
-                               r_cores = r_cores, core_ctl = core_ctl)
-      if (!is.null(core_ctl)) unlink(core_ctl$dir, recursive = TRUE)
-      if(getOption("emc2.print_iteration_duration", FALSE)) { print(Sys.time()-t0) }
-      class(sub_emc) <- "emc"
-      if(cores_for_chains > 1) sub_emc <- pointer_reset_wrapper(sub_emc, emc)
-    }
+    # One reallocation arena per block: markers must not survive into the next
+    # block, or every chain would start it believing its siblings had finished.
+    core_ctl <- .emc_core_ctl(length(sub_emc), cores_per_chain)
+    sub_emc <- auto_mclapply(sub_emc,run_stages, stage = stage, iter= stage_iter,
+                             verbose=verbose,  verboseProgress = verboseProgress,
+                             particle_factor=particle_factor,search_width=search_width,
+                             n_cores=cores_per_chain, mc.cores = cores_for_chains,
+                             r_cores = r_cores, core_ctl = core_ctl)
+    if (!is.null(core_ctl)) unlink(core_ctl$dir, recursive = TRUE)
+    if(getOption("emc2.print_iteration_duration", FALSE)) { print(Sys.time()-t0) }
+    class(sub_emc) <- "emc"
+    if(cores_for_chains > 1) sub_emc <- pointer_reset_wrapper(sub_emc, emc)
     if(stage != 'preburn'){
       if(is.numeric(thin)){
         sub_emc <- subset(sub_emc, stage = c("preburn", "burn", "adapt", "sample"), thin = thin)
@@ -1034,30 +1019,23 @@ extractDadms <- function(dadms, names = NULL){
 #
 # Chains run a whole block independently and do not finish it together: on real
 # fits the slowest chain takes ~30% longer than the fastest, so the finished
-# chains' cores sit idle until the block ends.  Rather than flattening the whole
-# schedule (which pays a barrier every iteration), each chain publishes a marker
-# when it exits and every remaining chain re-reads, once per iteration, how many
-# chains are still running -- taking over the freed cores for its own subjects.
+# chains' cores would sit idle until the block ends.  Rather than flattening the
+# whole schedule (which pays a barrier every iteration), each chain publishes a
+# marker when it exits and every remaining chain re-reads, once per iteration,
+# how many chains are still running -- growing its worker pool onto the freed
+# cores.  See R/chain_pool.R: this is only safe because each subject carries its
+# own RNG stream there, so a timing-dependent worker count cannot change a draw.
 #
 # The read is a directory listing of at most n_chains entries, tens of
 # microseconds against an iteration of ~100 ms.  Two chains finishing at the
 # same moment can both claim the freed budget; that transient oversubscription
 # is harmless and corrects itself on the next iteration.
-#
-# Off by default, and not because it fails to work: it halves the straggle, but
-# `mclapply` derives its children's L'Ecuyer streams from `mc.cores`, so making
-# the core count depend on wall-clock timing makes a fit irreproducible from a
-# fixed seed -- run to run, not merely across core counts.  Measured gain on a
-# real 112-subject RDMSWTN fit was ~1% (35.3s -> 35.0s over 40-iteration
-# blocks), which does not buy off that loss.  Enable with
-# `options(emc2.dynamic_cores = TRUE)` when throughput matters more than
-# reproducibility.
-.emc_core_ctl <- function(n_chains, cores_per_chain,
-                          enabled = getOption("emc2.dynamic_cores", FALSE)) {
-  if (!isTRUE(enabled) || n_chains <= 1 || cores_per_chain < 1) return(NULL)
+.emc_core_ctl <- function(n_chains, cores_per_chain) {
+  if (n_chains <= 1 || cores_per_chain < 1) return(NULL)
   if (Sys.info()[1] == "Windows") return(NULL)
-  dir <- file.path(tempdir(), paste0("emc_cores_", Sys.getpid(), "_",
-                                     as.integer(stats::runif(1, 0, 1e6))))
+  # tempfile(), not a runif() suffix: this runs on the master before every
+  # block, and drawing here would shift every subsequent draw in the fit.
+  dir <- tempfile(paste0("emc_cores_", Sys.getpid(), "_"))
   if (!dir.create(dir, showWarnings = FALSE, recursive = TRUE)) return(NULL)
   list(dir = dir, n_chains = as.integer(n_chains),
        total = as.integer(n_chains) * as.integer(cores_per_chain))

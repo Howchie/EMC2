@@ -20,7 +20,9 @@
 #
 # Here the workers are forked once per block and kept alive across the whole
 # block, so the fork is paid once instead of `iter` times, and the subject
-# partition is rebalanced every iteration from measured times.
+# partition is rebalanced every iteration from measured times.  On a real
+# 112-subject, 17-parameter RDMSWTN fit (3 chains x 8 cores, 40-iteration
+# blocks) this takes a block from 37.3 s to 32.4 s.
 #
 # Transport.  A socket cluster is the obvious way to keep workers alive and it
 # does not work: `makeForkCluster` costs 44 ms per dispatch round on the same
@@ -46,16 +48,17 @@
 # RNG.  Every subject carries its own L'Ecuyer stream, held in the master and
 # advanced by whichever worker handled it.  Draws are therefore independent of
 # the number of workers and of how subjects happen to be partitioned.  The
-# default `mcmapply` path does not have that property -- it derives its
+# `mcmapply` fallback below does not have that property -- it derives its
 # children's streams from `mc.cores` -- so a pooled fit is reproducible in a
-# way the default one is not, but it does not reproduce the *same* draws as
-# the default path.  Statistically the two are equivalent.
+# way that one is not.
 #
-# Turn it on with options(emc2.worker_pool = TRUE).
+# The pool is the normal path.  `.emc_wpool_start()` returns NULL where it
+# cannot work (Windows, no mkfifo, a single worker), and `run_stage()` then
+# falls back to the original `mcmapply` call.
 
-.emc_use_worker_pool <- function() {
-  isTRUE(getOption("emc2.worker_pool", FALSE))
-}
+# Where a failed worker's message is kept, so a pool that has quietly fallen
+# back to serial recomputation can be diagnosed after the fact.
+.emc_pool_state <- new.env(parent = emptyenv())
 
 # --- pool lifecycle ---------------------------------------------------------
 
@@ -103,12 +106,13 @@
   pool
 }
 
-# Take over cores released by a chain that has finished its block.  This is the
-# reallocation `emc2.dynamic_cores` does for the mcmapply path, except that it
-# is free of that path's drawback: there, the core count feeds `mc.cores`, which
-# seeds the children, so a timing-dependent budget makes a fit irreproducible.
-# Here every subject owns its stream, so who computes it -- and how many
-# workers there are -- cannot change a single draw.
+# Take over cores released by a chain that has finished its block.  Chains do
+# not finish a block together -- the slowest takes ~30% longer than the fastest
+# on real fits -- so without this the finished chains' cores idle until the
+# block ends.  Growing the pool is safe precisely because every subject owns
+# its stream: who computes it, and how many workers there are, cannot change a
+# single draw.  (Feeding a timing-dependent core count to `mc.cores` would not
+# be safe, since that seeds the children.)
 .emc_wpool_grow <- function(pool, n_total, ctx) {
   n_total <- as.integer(n_total)
   if (is.null(pool) || !isTRUE(pool$alive) || is.na(n_total)) return(pool)
@@ -159,10 +163,7 @@
   repeat {
     msg <- tryCatch(unserialize(rc), error = function(e) NULL)
     if (is.null(msg)) break                     # shutdown, or master went away
-    # The transport is agnostic about the work: the flattened scheduler in
-    # R/parallel_pool.R reuses these same workers with its own compute step.
-    fn <- if (is.function(ctx$work_fun)) ctx$work_fun else .emc_wpool_compute
-    out <- tryCatch(fn(msg, ctx),
+    out <- tryCatch(.emc_wpool_compute(msg, ctx),
                     error = function(e) list(failed = conditionMessage(e)))
     if (!tryCatch({ serialize(out, wc); flush(wc); TRUE },
                   error = function(e) FALSE)) break
@@ -222,7 +223,9 @@
       if (!length(part[[w]])) next
       sent[w] <- tryCatch({
         serialize(msgs[[w]], pool$wcs[[w]]); flush(pool$wcs[[w]]); TRUE
-      }, error = function(e) FALSE)
+      }, error = function(e) {
+        .emc_pool_state$last_error <- conditionMessage(e); FALSE
+      })
       if (!sent[w]) pool$alive <- FALSE
     }
   }
@@ -233,8 +236,14 @@
       tryCatch(unserialize(pool$rcs[[w]]), error = function(e) NULL)
     } else NULL
     # A dead or erroring worker must not lose an iteration: recompute its share
-    # here.  Same function, same streams, so the result is identical.
+    # here.  Same function, same streams, so the result is identical.  Falling
+    # back silently would turn a broken pool into a mysteriously serial run, so
+    # keep the worker's own message where it can be found afterwards.
     if (is.null(res) || !is.null(res$failed)) {
+      if (sent[w]) {
+        .emc_pool_state$last_error <-
+          if (is.null(res)) "worker gave no reply" else res$failed
+      }
       pool$alive <- FALSE
       res <- .emc_wpool_compute(msgs[[w]], ctx)
     }
@@ -245,38 +254,6 @@
   }
   list(props = props, pm_settings = pm_settings, seeds = seeds, times = times,
        alive = pool$alive)
-}
-
-# Generic one-round exchange: hand each worker its message, collect every
-# reply, and compute locally for any worker that could not answer.  `msgs` is
-# indexed by worker; NULL entries are skipped.
-.emc_wpool_exchange <- function(pool, msgs, ctx) {
-  n <- min(length(msgs), pool$n)
-  out <- vector("list", n)
-  sent <- rep(FALSE, n)
-  for (w in seq_len(n)) {
-    if (is.null(msgs[[w]]) || !isTRUE(pool$alive)) next
-    sent[w] <- tryCatch({
-      serialize(msgs[[w]], pool$wcs[[w]]); flush(pool$wcs[[w]]); TRUE
-    }, error = function(e) { .emc_runtime$last_pool_error <- conditionMessage(e); FALSE })
-    if (!sent[w]) pool$alive <- FALSE
-  }
-  for (w in seq_len(n)) {
-    if (is.null(msgs[[w]])) next
-    res <- if (sent[w]) tryCatch(unserialize(pool$rcs[[w]]),
-                                 error = function(e) NULL) else NULL
-    if (is.null(res) || !is.null(res$failed)) {
-      # Falling back silently would turn a broken pool into a mysteriously
-      # serial run, so keep the worker's own message where it can be found.
-      .emc_runtime$last_pool_error <-
-        if (is.null(res)) "worker gave no reply" else res$failed
-      pool$alive <- FALSE
-      fn <- if (is.function(ctx$work_fun)) ctx$work_fun else .emc_wpool_compute
-      res <- fn(msgs[[w]], ctx)
-    }
-    out[[w]] <- res
-  }
-  list(results = out, alive = pool$alive)
 }
 
 # --- partitioning -----------------------------------------------------------

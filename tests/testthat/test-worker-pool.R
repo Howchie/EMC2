@@ -70,7 +70,6 @@ test_that("workers survive a block, compute, and shut down", {
 test_that("a pooled fit runs, and repeats itself exactly", {
   skip_on_os("windows")
   skip_on_cran()
-  withr::local_options(list(emc2.worker_pool = TRUE))
   dat <- forstmann[forstmann$subjects %in% levels(forstmann$subjects)[1:3], ]
   dat$subjects <- droplevels(dat$subjects)
   des <- design(data = dat, model = LNR, formula = list(m ~ 1, s ~ 1, t0 ~ 1))
@@ -87,31 +86,6 @@ test_that("a pooled fit runs, and repeats itself exactly", {
   # Per-subject RNG streams make the pooled path independent of scheduling,
   # which the default mc.cores-derived path is not.
   expect_identical(a[[1]]$samples$alpha, fit_once()[[1]]$samples$alpha)
-})
-
-test_that("the flat dispatcher runs the task function it was handed", {
-  skip_on_os("windows")
-  skip_if(!nzchar(Sys.which("mkfifo")))
-  # Regression: the flattened path serves both .emc_particle_task and
-  # .emc_start_task on the same workers.  Hard-coding either one runs the wrong
-  # work for the other, which showed up as start-point draws being computed as
-  # particle updates.
-  pool <- EMC2:::.emc_wpool_start(2, list(work_fun = EMC2:::.emc_flat_compute))
-  skip_if(is.null(pool), "could not fork a pool here")
-  on.exit(EMC2:::.emc_wpool_stop(pool), add = TRUE)
-
-  msgs <- lapply(1:2, function(w) list(tasks = as.list(1:2), iter = NULL,
-                                       fun = function(x) x * 10L))
-  ex <- EMC2:::.emc_wpool_exchange(pool, msgs,
-                                   list(work_fun = EMC2:::.emc_flat_compute))
-  expect_true(ex$alive)
-  expect_equal(unlist(ex$results), rep(c(10L, 20L), 2))
-
-  msgs2 <- lapply(1:2, function(w) list(tasks = as.list(1:2), iter = NULL,
-                                        fun = function(x) x + 100L))
-  ex2 <- EMC2:::.emc_wpool_exchange(pool, msgs2,
-                                    list(work_fun = EMC2:::.emc_flat_compute))
-  expect_equal(unlist(ex2$results), rep(c(101L, 102L), 2))
 })
 
 test_that("a pool marked dead still returns every subject's result", {
@@ -137,4 +111,67 @@ test_that("a pool marked dead still returns every subject's result", {
   expect_equal(dim(res$props), c(3L, 3L))
   expect_equal(res$props[1, ], c(1, 2, 3))
   expect_false(res$alive)
+})
+
+# --- growing the pool onto cores freed by finished chains --------------------
+
+test_that("the arena is only built when it can help", {
+  expect_null(EMC2:::.emc_core_ctl(1, 8))                     # nothing to donate
+  expect_null(EMC2:::.emc_core_ctl(3, 0))
+})
+
+test_that("a chain claims the cores released by finished siblings", {
+  skip_on_os("windows")
+  ctl <- EMC2:::.emc_core_ctl(3, 8)
+  on.exit(unlink(ctl$dir, recursive = TRUE), add = TRUE)
+  expect_equal(ctl$total, 24)
+
+  # Nobody has finished: stay on the static share.
+  expect_equal(EMC2:::.emc_cores_now(ctl, 8), 8)
+
+  file.create(file.path(ctl$dir, "done_1"))
+  expect_equal(EMC2:::.emc_cores_now(ctl, 8), 12)   # 24 / 2 remaining
+
+  file.create(file.path(ctl$dir, "done_2"))
+  expect_equal(EMC2:::.emc_cores_now(ctl, 8), 24)   # last chain takes the lot
+
+  # Never drops below the chain's own share, whatever the bookkeeping says.
+  file.create(file.path(ctl$dir, "done_3"))
+  expect_gte(EMC2:::.emc_cores_now(ctl, 8), 8)
+})
+
+test_that("a chain releases its cores even when it fails", {
+  skip_on_os("windows")
+  ctl <- EMC2:::.emc_core_ctl(3, 4)
+  on.exit(unlink(ctl$dir, recursive = TRUE), add = TRUE)
+  boom <- function() {
+    on.exit(EMC2:::.emc_core_release(ctl), add = TRUE)
+    stop("chain failed")
+  }
+  expect_error(boom(), "chain failed")
+  expect_length(list.files(ctl$dir), 1)
+})
+
+test_that("absent control leaves the static budget untouched", {
+  expect_equal(EMC2:::.emc_cores_now(NULL, 8), 8)
+  expect_silent(EMC2:::.emc_core_release(NULL))
+})
+
+test_that("growing the pool keeps the workers that were already running", {
+  skip_on_os("windows")
+  skip_if(!nzchar(Sys.which("mkfifo")))
+  pool <- EMC2:::.emc_wpool_start(2, list(tag = "ctx"))
+  skip_if(is.null(pool), "could not fork a pool here")
+  on.exit(EMC2:::.emc_wpool_stop(pool), add = TRUE)
+
+  grown <- EMC2:::.emc_wpool_grow(pool, 4, list(tag = "ctx"))
+  expect_equal(grown$n, 4)
+  expect_identical(grown$wcs[[1]], pool$wcs[[1]])
+  pool <- grown
+  # Shrinking is not a thing: workers are only ever added within a block.
+  expect_equal(EMC2:::.emc_wpool_grow(pool, 1, list(tag = "ctx"))$n, 4)
+
+  for (w in 1:4) { serialize(list(subs = w), pool$wcs[[w]]); flush(pool$wcs[[w]]) }
+  got <- lapply(1:4, function(w) unserialize(pool$rcs[[w]]))
+  expect_true(all(vapply(got, function(g) !is.null(g$failed), logical(1))))
 })
