@@ -6,9 +6,9 @@
 
 -   Likelihood calls now hand the C++ mapper compressed design matrices instead of materialising a full-length copy of every design on every call. Log-likelihoods are bit-identical.
 
--   Experimental: `options(emc2.flat_parallel = TRUE)` replaces the nested "fork over chains, then fork over subjects each iteration" scheme with a single persistent, load-balanced worker pool covering all (chain, subject) pairs. This removes the per-iteration forking and lets a chain that finishes early release its cores to the chains still running, rather than leaving them idle. Off by default pending benchmarking on multi-core hardware.
+-   Experimental and **off by default**: `options(emc2.flat_parallel = TRUE)` schedules all (chain, subject) particle updates of an iteration as one flat, longest-first, load-balanced task list instead of nesting a fork over subjects inside a fork over chains. It was written to stop early-finishing chains from leaving cores idle, but on a standard 24-subject, 3-chain RDM fit it is 1.3-2.1x *slower* than the existing path at every core count tested, so it is not recommended. The reason is structural and is documented in `R/parallel_pool.R`: the Gibbs step forces a barrier every iteration, and an iteration is too little work to amortise per-iteration dispatch. The same measurements show the existing path does not benefit from more cores than there are chains either.
 
-    A side effect is that the flattened path gives the *same* draws regardless of how many cores are used, because each (chain, subject) carries its own L'Ecuyer RNG stream. The default nested path does not have that property.
+    It is kept because it may still pay off where a single subject's likelihood is expensive enough to dwarf the barrier (the PDE-backed models) or where subject costs are very uneven. It also gives the *same* draws regardless of core count, because each (chain, subject) carries its own L'Ecuyer RNG stream; the default path does not have that property.
 
 ## Bug fixes
 

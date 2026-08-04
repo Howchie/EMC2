@@ -33,9 +33,36 @@
 #     used.  The nested-fork scheme did not have that property: the same fit on
 #     1 and on 2 cores gave different draws.
 #
-# This path is OFF by default pending a benchmark on real multi-core hardware;
-# turn it on with
-#   options(emc2.flat_parallel = TRUE)
+# MEASURED RESULT: this loses to the nested path, and is OFF by default.
+#
+# On a 24-subject (150-450 trials each), 3-chain, 5-parameter RDM fit, 40 burn
+# iterations, nested vs flat elapsed seconds:
+#
+#     cores    3      6     12        3      6     12
+#     pf       30     30    30        100    100   100
+#     nested   2.3    3.3   3.2       4.7    4.8   4.1
+#     flat     4.9    4.6   4.5       7.9    6.0   5.3
+#
+# The reason is structural, and it is worth recording so this is not
+# re-attempted blind.  With cores_for_chains = n_chains the nested path forks
+# once per *block* and each chain then runs its whole 40-iteration block with
+# no further communication at all.  Any flattened scheme must instead
+# synchronise every iteration, because the Gibbs step needs all of a chain's
+# subjects.  An iteration is only ~45-160 ms of per-chain work, which does not
+# amortise a per-iteration fork or dispatch.
+#
+# Note the nested path does not scale past cores = n_chains either (3.3 s on 6
+# cores, 3.2 s on 12, against 2.3 s on 3).  That is the same barrier seen from
+# the other side: extra cores within a chain have nothing profitable to do at
+# this granularity.  Idle cores here are not a scheduling failure that better
+# dispatch can fix.
+#
+# Where this could still pay off, and why it is kept: models whose per-subject
+# likelihood is expensive enough to dwarf the per-iteration barrier (the
+# PDE-backed models, or very large trial counts), and any case where subject
+# costs are wildly uneven.  Both were out of reach to test here.
+#
+# Turn it on with options(emc2.flat_parallel = TRUE).
 # It requires RNGkind("L'Ecuyer-CMRG"), which it sets once if needed.
 
 # Package-level home for worker state.  Fork workers inherit it for free, so the
@@ -50,51 +77,65 @@
 # --- pool lifecycle --------------------------------------------------------
 
 # `static` is everything that is constant for a whole block.  It is installed
-# into .emc_runtime *before* forking so children inherit it rather than
-# receiving it down a socket.
+# into .emc_runtime before any worker starts, so forked workers inherit it
+# rather than receiving it down a socket.
+#
+# Transport choice matters more than it looks.  A persistent socket cluster
+# was the obvious design -- workers stay alive, nothing is re-forked -- but it
+# loses badly here, because the barrier is per MCMC *iteration*: an iteration
+# of this size is only ~130 ms of work, while every socket round trip costs
+# ~30-40 ms (the delayed-ACK stall, measured both on clusterCall and on
+# clusterApplyLB).  Three round trips per iteration is already more latency
+# than there is work.  Measured on a 24-subject, 3-chain RDM fit at 3 cores:
+# 14.5 s with a fork cluster and 3 chunks/worker, 5.5 s at 1 chunk/worker,
+# against 2.4 s for the nested mclapply path.
+#
+# So on Unix the flattening is done over mclapply instead: no sockets, no
+# persistent pool, and the per-iteration fork is a cost the nested path already
+# pays (in fact it pays more of them -- one set of forks per chain).  What is
+# kept is the part that actually matters: one flat, longest-first task list
+# over all (chain, subject) pairs, so a chain with cheap subjects this
+# iteration cannot strand cores.  Windows has no fork and falls back to the
+# socket cluster.
 .emc_pool_start <- function(n_workers, static) {
   .emc_runtime$static <- static
   .emc_runtime$iter <- NULL
   if (n_workers <= 1) return(NULL)
 
-  pool <- tryCatch({
-    if (Sys.info()[["sysname"]] == "Windows") {
-      cl <- parallel::makePSOCKcluster(n_workers)
-      parallel::clusterEvalQ(cl, suppressMessages(requireNamespace("EMC2")))
-      parallel::clusterCall(cl, function(s) {
-        assign("static", s, envir = get(".emc_runtime", envir = asNamespace("EMC2")))
-        NULL
-      }, static)
-      cl
-    } else {
-      parallel::makeForkCluster(n_workers)
-    }
+  if (Sys.info()[["sysname"]] != "Windows") {
+    return(structure(list(n = as.integer(n_workers)), class = "emc_fork_pool"))
+  }
+  tryCatch({
+    cl <- parallel::makePSOCKcluster(n_workers)
+    parallel::clusterEvalQ(cl, suppressMessages(requireNamespace("EMC2")))
+    parallel::clusterCall(cl, function(s) {
+      assign("static", s, envir = get(".emc_runtime", envir = asNamespace("EMC2")))
+      NULL
+    }, static)
+    cl
   }, error = function(e) NULL)
-  pool
 }
 
 .emc_pool_stop <- function(pool) {
-  if (!is.null(pool)) try(parallel::stopCluster(pool), silent = TRUE)
+  if (!is.null(pool) && !inherits(pool, "emc_fork_pool")) {
+    try(parallel::stopCluster(pool), silent = TRUE)
+  }
   .emc_runtime$static <- NULL
   .emc_runtime$iter <- NULL
   invisible(NULL)
 }
 
-# Broadcast the state that changes every iteration (the group-level parameters
-# each chain's subjects are conditioned on).  One send per worker, not one per
-# task.
+# State that changes every iteration (the group-level parameters each chain's
+# subjects are conditioned on).  Under mclapply the forks simply inherit it, so
+# this costs nothing; under the Windows socket cluster it rides along with the
+# work chunks instead of being broadcast, because a clusterCall to every worker
+# measured ~43 ms for a 7 kB payload.
 .emc_pool_set_iter <- function(pool, iter_state) {
   .emc_runtime$iter <- iter_state
-  if (!is.null(pool)) {
-    parallel::clusterCall(pool, function(s) {
-      assign("iter", s, envir = get(".emc_runtime", envir = asNamespace("EMC2")))
-      NULL
-    }, iter_state)
-  }
   invisible(NULL)
 }
 
-.emc_pool_apply <- function(pool, tasks, FUN, n_workers = 1L) {
+.emc_pool_apply <- function(pool, tasks, FUN, n_workers = 1L, iter_state = NULL) {
   if (is.null(pool) || length(tasks) == 0) {
     # Running in the master: each task installs its own RNG stream into
     # .Random.seed, which would otherwise leave the master's own stream (used
@@ -108,12 +149,22 @@
     }, add = TRUE)
     return(lapply(tasks, FUN))
   }
-  chunks <- .emc_chunk_tasks(tasks, n_workers)
+  if (inherits(pool, "emc_fork_pool")) {
+    # Tasks arrive longest-first; mclapply's prescheduled split then deals them
+    # round-robin, which on an LPT-ordered list is already well balanced.  The
+    # per-task RNG stream is explicit, so mc.set.seed plays no part.
+    return(parallel::mclapply(tasks, FUN, mc.cores = pool$n))
+  }
+  chunks <- lapply(.emc_chunk_tasks(tasks, n_workers),
+                   function(ch) list(tasks = ch, iter = iter_state))
   unlist(parallel::clusterApplyLB(pool, chunks, .emc_run_chunk, FUN),
          recursive = FALSE)
 }
 
-.emc_run_chunk <- function(chunk, FUN) lapply(chunk, FUN)
+.emc_run_chunk <- function(chunk, FUN) {
+  .emc_runtime$iter <- chunk$iter
+  lapply(chunk$tasks, FUN)
+}
 
 # Dispatching one (chain, subject) at a time costs a socket round trip per task,
 # which is only worth paying when a task is much more expensive than the trip.
@@ -122,7 +173,8 @@
 # dealing it round-robin leaves every chunk with a comparable mix of big and
 # small subjects, and there are still several chunks per worker for the
 # load-balancer to even out.
-.emc_chunk_tasks <- function(tasks, n_workers, chunks_per_worker = 3L) {
+.emc_chunk_tasks <- function(tasks, n_workers,
+                             chunks_per_worker = getOption("emc2.chunks_per_worker", 3L)) {
   n <- length(tasks)
   if (n_workers <= 1L || n <= 1L) return(list(tasks))
   n_chunks <- min(n, as.integer(n_workers) * chunks_per_worker)
@@ -282,7 +334,8 @@ init_flat <- function(emc_list, chain_idx, particles, n_workers, r_cores) {
   for (s in ord) for (cc in chain_idx) {
     tasks[[length(tasks) + 1L]] <- list(chain = cc, subj = s, seed = streams[[cc]][[s]])
   }
-  results <- .emc_pool_apply(pool, tasks, .emc_start_task, n_workers)
+  results <- .emc_pool_apply(pool, tasks, .emc_start_task, n_workers,
+                             list(startpoints = startpoints_comb))
 
   n_pars <- emc_list[[1]]$n_pars
   props <- lapply(seq_along(emc_list), function(i) matrix(0, n_pars + 1L, n_subjects))
@@ -425,7 +478,8 @@ run_stage_flat <- function(samplers, stage, iter, particles, tune,
       group_chols[[cc]] <- build_group_chol_cache(group_var_it, idx_list_blk)
     }
 
-    .emc_pool_set_iter(pool, list(pars = pars_comb_list, group_chol = group_chols))
+    iter_state <- list(pars = pars_comb_list, group_chol = group_chols)
+    .emc_pool_set_iter(pool, iter_state)
 
     # One flat queue over every (chain, subject) still in play, longest first.
     tasks <- vector("list", sum(active) * n_subjects)
@@ -439,7 +493,7 @@ run_stage_flat <- function(samplers, stage, iter, particles, tune,
                          seed = streams[[cc]][[ss]])
     }
     length(tasks) <- k
-    results <- .emc_pool_apply(pool, tasks, .emc_particle_task, n_workers)
+    results <- .emc_pool_apply(pool, tasks, .emc_particle_task, n_workers, iter_state)
 
     props <- lapply(seq_len(n_chains), function(x) matrix(0, n_pars + 1L, n_subjects))
     for (r in results) {
