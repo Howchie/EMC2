@@ -1,5 +1,17 @@
 # EMC2 3.4.0
 
+## Performance
+
+-   The particle step no longer re-factorises its proposal covariances on every iteration. `chains_var`/`eff_var` are constant for a whole block and the group covariance is shared by all subjects within an iteration, so each is now decomposed once instead of `n_subjects * n_proposals` times per iteration. The saving scales with the cube of the number of parameters: negligible for small models, roughly 5 ms per iteration at 50 parameters with 30 subjects, and ~21 ms at 100 parameters.
+
+-   Likelihood calls now hand the C++ mapper compressed design matrices instead of materialising a full-length copy of every design on every call. Log-likelihoods are bit-identical.
+
+-   Each chain now forks its workers once per *block* and keeps them alive across its iterations, instead of forking a fresh set on every iteration. Subjects are partitioned longest-first from their measured times and rebalanced each iteration, rather than being split into the contiguous equal-*count* chunks `mc.preschedule` uses, and a chain that finishes its block early releases its cores to the chains still running, which grow their pools onto them. On a real 112-subject, 17-parameter RDMSWTN fit (3 chains x 8 cores, 40-iteration blocks, 3 interleaved repetitions) this cuts the median block from 37.3 s to 32.4 s, a 13% saving, and puts worker utilisation at 94%; the remainder is master-side dispatch (3.9% of an iteration) and residual subject imbalance (2.0%). Where a pool cannot be started -- Windows, no `mkfifo`, or a single worker -- the previous `mcmapply` path runs unchanged.
+
+    Workers talk to their chain over named pipes. A persistent *socket* cluster is the obvious alternative and is slower than the fork it replaces: on the same probe, `mclapply` fork/join costs 33.5 ms per round, `makeForkCluster` 44.1 ms, and named pipes 1.0 ms. Forked workers inherit the block-constant state, so only the group-level draw and the per-subject bookkeeping (about 5 kB) cross the pipe each iteration.
+
+    Each *subject* carries its own L'Ecuyer stream, so a fit is now reproducible from a fixed seed regardless of how many cores it runs on, which the previous path was not -- it derived its children's streams from `mc.cores`. This is also what makes it safe for a chain to take over a finished sibling's cores mid-block. Draws from an existing fit are not reproduced exactly by this version; the two are statistically equivalent, not identical.
+
 ## Bug fixes
 
 -   Fixed some maths that was wrong about the ECDF plot for SBC

@@ -60,7 +60,12 @@ compute_marginal_grid <- function(proposals, data, model, marginalise,
   data <- .cache_ll_data_attrs(data)
   constants <- attr(data, "constants")
   if (is.null(constants)) constants <- NA
-  designs <- .oo_expanded_designs(data)
+  # Compressed designs: ParamTable::map_from_designs consumes the "expand"
+  # attribute directly (src/ParamTable.h), so materialising a full-length copy
+  # of every design matrix on every likelihood call is pure waste -- and an
+  # intercept-only design is skipped outright rather than expanded to n_trials
+  # rows.  See get_pars_oo() for the same contract on the prediction path.
+  designs <- .oo_expanded_designs(data, expand = FALSE)
   # Warm start: last iteration's accepted mode/scale for this subject. It only
   # seeds the probe, and the C++ side falls back to the full pilot scan if any
   # particle comes out unresolved, so a stale hint costs time, never accuracy.
@@ -411,7 +416,8 @@ run_stage <- function(pmwgs,
                       tune = NULL,
                       verbose = TRUE,
                       verboseProgress = TRUE,
-                      r_cores = 1) {
+                      r_cores = 1,
+                      core_ctl = NULL) {
   # Set defaults for NULL values
   # Set necessary local variables
   # Set stable (fixed) new_sample argument for this run
@@ -451,6 +457,40 @@ run_stage <- function(pmwgs,
     pmwgs$sampler_nuis$samples$idx <- pmwgs$samples$idx
   }
   block_idx <- block_variance_idx(tune$components)
+
+  # chains_var / eff_var are fixed for the whole block, so factorise them once
+  # per subject here rather than once per subject per iteration.
+  marginal_idx_blk <- .marginal_par_idx(pmwgs$par_names, marginalise = pmwgs$marginalise)
+  if (length(marginal_idx_blk) != length(tune$components)) {
+    marginal_idx_blk <- rep(FALSE, length(tune$components))
+  }
+  idx_list_blk <- .component_idx_list(tune$components, marginal_idx_blk)
+  chol_caches <- lapply(seq_len(pmwgs$n_subjects), function(s) {
+    build_subject_chol_cache(chains_var[[s]], eff_var[[s]], idx_list_blk)
+  })
+
+  # Persistent workers, forked once for the whole block instead of once per
+  # iteration.  Everything above this point is block-constant, so the workers
+  # inherit it through the fork; see R/chain_pool.R.
+  pool_budget <- .particle_core_budget(pmwgs$n_subjects, n_cores = n_cores,
+                                       r_cores = r_cores)
+  wpool_ctx <- list(
+    data = data, model = pmwgs$model, stage = stage, type = pmwgs$type,
+    tune = tune, marginalise = pmwgs$marginalise,
+    r_cores = pool_budget$likelihood, n_pars = pmwgs$n_pars,
+    eff_mu = eff_mu, eff_var = eff_var, chains_mu = chains_mu,
+    chains_var = chains_var, chol_caches = chol_caches
+  )
+  # NULL where a pool cannot work (Windows, no mkfifo, one worker); the
+  # mcmapply branch below then runs instead.
+  wpool <- .emc_wpool_start(pool_budget$subject, wpool_ctx)
+  if (!is.null(wpool)) {
+    on.exit(.emc_wpool_stop(wpool), add = TRUE)
+    wpool_streams <- .emc_subject_streams(pmwgs$n_subjects)
+    wpool_cost <- .emc_subject_cost(data)
+    wpool_part <- .emc_lpt_partition(wpool_cost, wpool$n)
+  }
+
   # Main iteration loop
   for (i in 1:iter) {
     if (verboseProgress) {
@@ -494,11 +534,39 @@ run_stage <- function(pmwgs,
       pmwgs$sampler_nuis$samples$idx <- j
     }
     # Particle step
-    # A single-subject chain otherwise leaves cores_per_chain - 1 workers idle.
-    # Route that existing budget into the independent proposal likelihoods.
-    core_budget <- .particle_core_budget(
-      pmwgs$n_subjects, n_cores = n_cores, r_cores = r_cores
+    # group_var is `tvar` for every sampler variant, hence the same matrix for
+    # every subject: factorise it once here instead of n_subjects times below.
+    group_var_it <- tryCatch(
+      .apply_marginal_group_var(get_group_level(pars_comb, 1L, pmwgs$type)$var,
+                                marginal_idx_blk, pmwgs$marginalise),
+      error = function(e) NULL
     )
+    group_chol_it <- build_group_chol_cache(group_var_it, idx_list_blk)
+    if (!is.null(wpool)) {
+      # Siblings that have finished their block free up cores; unlike the
+      # mcmapply path, taking them here cannot perturb the draws.
+      grown <- .emc_wpool_grow(wpool, .emc_cores_now(core_ctl, n_cores), wpool_ctx)
+      if (grown$n != wpool$n) {
+        wpool <- grown
+        wpool_part <- .emc_lpt_partition(wpool_cost, wpool$n)
+      }
+      it <- .emc_wpool_iter(wpool, wpool_ctx, wpool_part, pars_comb,
+                            group_chol_it, pm_settings,
+                            pmwgs$samples$subj_ll[, j - 1], wpool_streams)
+      proposals <- it$props
+      pm_settings <- it$pm_settings
+      wpool_streams <- it$seeds
+      wpool$alive <- it$alive
+      # Re-balance from what the subjects actually cost this iteration: trial
+      # counts are only a proxy, and the adaptive particle number drifts.
+      if (all(it$times > 0)) wpool_cost <- it$times
+      wpool_part <- .emc_lpt_partition(wpool_cost, wpool$n)
+    } else {
+    # Fallback where no pool could be started.  It keeps the static core share:
+    # `mcmapply` seeds its children from `mc.cores`, so a timing-dependent
+    # budget here would make the fit irreproducible from a fixed seed.
+    core_budget <- .particle_core_budget(pmwgs$n_subjects, n_cores = n_cores,
+                                         r_cores = r_cores)
     proposals <- parallel::mcmapply(safe_new_particle, 1:pmwgs$n_subjects, data, pm_settings, eff_mu, eff_var,
                                     chains_mu, chains_var, pmwgs$samples$subj_ll[,j-1],
                                     MoreArgs = list(parameters = pars_comb,
@@ -507,10 +575,13 @@ run_stage <- function(pmwgs,
                                                     type = pmwgs$type,
                                                     tune = tune,
                                                     marginalise = pmwgs$marginalise,
-                                                    r_cores = core_budget$likelihood),
+                                                    r_cores = core_budget$likelihood,
+                                                    group_chol = group_chol_it),
+                                    chol_cache = chol_caches,
                                     mc.cores = core_budget$subject)
     pm_settings <- proposals[3,]
     proposals <- array(unlist(proposals[1:2,]), dim = c(pmwgs$n_pars + 1, pmwgs$n_subjects))
+    }
 
     #Fill samples
     pmwgs$samples <- fill_samples(samples = pmwgs$samples, group_level = pars,
@@ -544,10 +615,12 @@ safe_new_particle <- function (s, data, pm_settings, eff_mu = NULL,
                                eff_var = NULL, chains_mu = NULL,
                                chains_var = NULL, prev_ll,
                                parameters, model = NULL, stage,
-                               type, tune, marginalise = NULL, r_cores = 1) {
+                               type, tune, marginalise = NULL, r_cores = 1,
+                               chol_cache = NULL, group_chol = NULL) {
   attempt <- tryCatch(
     new_particle(s, data, pm_settings, eff_mu, eff_var, chains_mu, chains_var,
-                 prev_ll, parameters, model, stage, type, tune, marginalise, r_cores),
+                 prev_ll, parameters, model, stage, type, tune, marginalise, r_cores,
+                 chol_cache, group_chol),
     error = identity
   )
   if (inherits(attempt, c("error", "try-error"))) {
@@ -561,11 +634,114 @@ reject_particle <- function(subj_mu, prev_ll, pm_settings) {
 }
 
 
+# ---------------------------------------------------------------------------
+# Proposal-covariance factorisations
+#
+# Every proposal density in new_particle() needs chol(Sigma) and its inverse.
+# Two facts make almost all of that work redundant across the iteration loop:
+#
+#   * chains_var / eff_var are set by add_proposals() *before* run_stage() and
+#     do not change for the whole block, so their factorisations are constant
+#     over all `iter` iterations.
+#   * group_var is `parameters$tvar` for every sampler variant (see
+#     get_group_level_* in define_variants.R and the variant_* files), i.e. it
+#     is the same matrix for every subject within one iteration.
+#
+#   * the epsilon scaling factors out: for R = eps * B,
+#         R^-1 = B^-1 / eps  and  sum(log(diag(R^-1))) = sum(log(diag(B^-1))) - p*log(eps)
+#     so an adapting epsilon never invalidates a cached factorisation.
+#
+# So the factorisations are computed once per block (chains/eff, per subject)
+# and once per iteration (group, shared by all subjects), instead of
+# n_subjects * n_proposals times per iteration.  Each cache entry carries the
+# matrix it was built from and is only used when identical() confirms the match,
+# so a stale or mismatched cache degrades to the original inline computation
+# rather than silently producing a wrong proposal density.
+# ---------------------------------------------------------------------------
+
+# chol() with the original escalating-ridge fallback ladder, plus the derived
+# quantities every caller needs.  Returns NULL for a degenerate (p == 0) block.
+.chol_factor <- function(Sigma, p) {
+  if (p <= 0) return(NULL)
+  base_R <- tryCatch(chol(Sigma), error = function(e) NULL)
+  if (is.null(base_R)) {
+    base_R <- tryCatch(chol(Sigma + diag(1e-6, p)), error = function(e) NULL)
+  }
+  if (is.null(base_R)) {
+    base_R <- tryCatch(chol(Sigma + diag(1e-4, p)), error = function(e) NULL)
+  }
+  if (is.null(base_R)) {
+    cov_diag <- diag(Sigma)
+    cov_diag[is.na(cov_diag) | cov_diag <= 0] <- 1e-4
+    base_R <- diag(sqrt(cov_diag), p)
+  }
+  rooti <- backsolve(base_R, diag(p))
+  list(R = base_R, rooti = rooti, sum_log_diag = sum(log(diag(rooti))), p = p)
+}
+
+# Which parameters are held out of the proposal draws entirely.  Shared by
+# new_particle() and the cache builder so both derive the same component index.
+.marginal_par_idx <- function(par_names, marginalise) {
+  if (is.null(marginalise) || is.null(par_names)) {
+    return(rep(FALSE, length(par_names)))
+  }
+  par_names %in% marginalise$param
+}
+
+# The marginalized coordinate is held out of the proposal covariance and given
+# its prior variance.  Factored out so the per-iteration cache in run_stage()
+# builds bit-for-bit the same matrix new_particle() will compare against.
+.apply_marginal_group_var <- function(group_var, marginal_idx, marginalise) {
+  if (!any(marginal_idx)) return(group_var)
+  group_var[marginal_idx, ] <- 0
+  group_var[, marginal_idx] <- 0
+  group_var[marginal_idx, marginal_idx] <- marginalise$sigma^2
+  group_var
+}
+
+# The per-component parameter blocks used for proposals, in component order.
+.component_idx_list <- function(components, marginal_idx) {
+  unq <- unique(components)
+  out <- vector("list", max(unq))
+  for (i in unq) out[[i]] <- (components == i) & !marginal_idx
+  out
+}
+
+# Block-constant factorisations for one subject: chains_var and eff_var, per
+# component.  Returns NULL when neither is available (preburn has no chains_var
+# and only ever proposes from group_var).
+build_subject_chol_cache <- function(chains_var, eff_var, idx_list) {
+  if (is.null(chains_var) && is.null(eff_var)) return(NULL)
+  facs <- function(S) {
+    if (is.null(S)) return(NULL)
+    lapply(idx_list, function(idx) {
+      if (is.null(idx)) return(NULL)
+      .chol_factor(S[idx, idx, drop = FALSE], sum(idx))
+    })
+  }
+  list(idx_list = idx_list,
+       chains_ref = chains_var, chains = facs(chains_var),
+       eff_ref = eff_var, eff = facs(eff_var))
+}
+
+# Per-iteration factorisation of the group covariance, shared across subjects.
+# `group_var` must already carry the marginalise() modification, because that is
+# what new_particle() will compare against.
+build_group_chol_cache <- function(group_var, idx_list) {
+  if (is.null(group_var)) return(NULL)
+  list(idx_list = idx_list, ref = group_var,
+       f = lapply(idx_list, function(idx) {
+         if (is.null(idx)) return(NULL)
+         .chol_factor(group_var[idx, idx, drop = FALSE], sum(idx))
+       }))
+}
+
 new_particle <- function (s, data, pm_settings, eff_mu = NULL,
                           eff_var = NULL, chains_mu = NULL,
                           chains_var = NULL, prev_ll,
                           parameters, model = NULL, stage,
-                          type, tune, marginalise = NULL, r_cores = 1)
+                          type, tune, marginalise = NULL, r_cores = 1,
+                          chol_cache = NULL, group_chol = NULL)
 {
   group_pars <- get_group_level(parameters, s, type)
   unq_components <- unique(tune$components)
@@ -582,33 +758,44 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
     if (is.null(names(subj_mu))) {
       names(subj_mu) <- rownames(parameters$alpha)[seq_along(subj_mu)]
     }
-    marginal_idx <- names(subj_mu) %in% marginalise$param
+    marginal_idx <- .marginal_par_idx(names(subj_mu), marginalise)
     # Keep a placeholder column for design mapping, but hold the marginalized
     # coordinate out of every proposal draw and proposal-density evaluation.
     group_mu[marginal_idx] <- marginalise$mu
-    group_var[marginal_idx, ] <- 0
-    group_var[, marginal_idx] <- 0
-    group_var[marginal_idx, marginal_idx] <- marginalise$sigma^2
+    group_var <- .apply_marginal_group_var(group_var, marginal_idx, marginalise)
   }
   out_lls <- numeric(length(unq_components))
   particle_multiplier <- 1
   # Set the proposals
+  # sig_tags names the *source* of each proposal covariance, so that repeated
+  # sources are factorised once and cached factorisations can be looked up.
   if(stage == "preburn"){
     Mus <- list(group_mu, subj_mu)
     Sigmas <- list(group_var, group_var)
+    sig_tags <- c("group", "group")
     # For preburn use a lot of proposals, to increase initial search a bit
     particle_multiplier <- 2
   } else if(stage == "burn"){ # Burn
     Mus <- list(group_mu, subj_mu, subj_mu)
     Sigmas <- list(group_var, group_var, chains_var)
+    sig_tags <- c("group", "group", "chains")
   } else if(stage == "adapt"){
     Mus <- list(group_mu, subj_mu, chains_mu)
     Sigmas <- list(group_var, chains_var, chains_var)
+    sig_tags <- c("group", "chains", "chains")
   } else{ # Sample
     Mus <- list(group_mu, subj_mu, chains_mu, eff_mu)
     Sigmas <- list(group_var, chains_var, chains_var, eff_var)
+    sig_tags <- c("group", "chains", "chains", "eff")
   }
   n_proposals <- length(Mus)
+  # A cache entry is only trusted when it was built from the very matrix and
+  # component split in play here; otherwise we fall back to factorising inline.
+  cache_ok <- function(cache, ref_name, ref, idx) {
+    !is.null(cache) && !is.null(cache[[ref_name]]) &&
+      identical(cache[[ref_name]], ref) &&
+      identical(cache$idx_list[[i]], idx)
+  }
   for(i in unq_components){
     # Add 1 to epsilons such that prior/group-level proposals aren't scaled
     epsilons <- c(1, pm_settings[[i]]$epsilon)
@@ -616,26 +803,31 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
     idx <- idx_full & !marginal_idx
     p_idx <- sum(idx)
 
+    # One factorisation per distinct covariance source, taken from the block /
+    # iteration caches when they match, then scaled by each proposal's epsilon.
     Rs <- vector("list", n_proposals)
     rootis <- vector("list", n_proposals)
     log_consts <- numeric(n_proposals)
-    for (k in seq_len(n_proposals)) {
-      if (p_idx > 0) {
-        base_R <- tryCatch(chol(Sigmas[[k]][idx,idx,drop=FALSE]), error = function(e) NULL)
-        if (is.null(base_R)) {
-          base_R <- tryCatch(chol(Sigmas[[k]][idx,idx,drop=FALSE] + diag(1e-6, p_idx)), error = function(e) NULL)
+    if (p_idx > 0) {
+      bases <- list()
+      for (tag in unique(sig_tags)) {
+        k_first <- which(sig_tags == tag)[1]
+        base <- switch(tag,
+          group  = if (cache_ok(group_chol, "ref", group_var, idx)) group_chol$f[[i]],
+          chains = if (cache_ok(chol_cache, "chains_ref", chains_var, idx)) chol_cache$chains[[i]],
+          eff    = if (cache_ok(chol_cache, "eff_ref", eff_var, idx)) chol_cache$eff[[i]],
+          NULL)
+        if (is.null(base)) {
+          base <- .chol_factor(Sigmas[[k_first]][idx, idx, drop = FALSE], p_idx)
         }
-        if (is.null(base_R)) {
-          base_R <- tryCatch(chol(Sigmas[[k]][idx,idx,drop=FALSE] + diag(1e-4, p_idx)), error = function(e) NULL)
-        }
-        if (is.null(base_R)) {
-          cov_diag <- diag(Sigmas[[k]][idx,idx,drop=FALSE])
-          cov_diag[is.na(cov_diag) | cov_diag <= 0] <- 1e-4
-          base_R <- diag(sqrt(cov_diag), p_idx)
-        }
-        Rs[[k]] <- base_R * epsilons[k]
-        rootis[[k]] <- backsolve(Rs[[k]], diag(p_idx))
-        log_consts[[k]] <- sum(log(diag(rootis[[k]]))) - 0.5 * p_idx * log(2 * pi)
+        bases[[tag]] <- base
+      }
+      const <- -0.5 * p_idx * log(2 * pi)
+      for (k in seq_len(n_proposals)) {
+        base <- bases[[sig_tags[k]]]
+        Rs[[k]] <- base$R * epsilons[k]
+        rootis[[k]] <- base$rooti / epsilons[k]
+        log_consts[[k]] <- base$sum_log_diag - p_idx * log(epsilons[k]) + const
       }
     }
 
@@ -646,9 +838,10 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
     for(j in 1:n_proposals){
       # Fill up the proposals
       if (p_idx > 0) {
+        # R is always supplied here, so particle_draws() never touches `covar`;
+        # building the scaled covariance would be a wasted p x p allocation.
         proposals[[j + 1]] <- particle_draws(
-          particle_numbers[j], Mus[[j]][idx],
-          Sigmas[[j]][idx,idx,drop=FALSE] * (epsilons[j]^2), R = Rs[[j]])
+          particle_numbers[j], Mus[[j]][idx], covar = NULL, R = Rs[[j]])
       } else {
         proposals[[j + 1]] <- matrix(numeric(0), nrow = particle_numbers[j], ncol = 0L)
       }
@@ -1105,7 +1298,8 @@ calc_ll_manager <- function(proposals, dadm, model, component = NULL, r_cores = 
       # inherit it; PSOCK workers run this themselves)
       set_stop_method_from_model(model)
       p_types <- names(model$p_types)
-      designs <- .oo_expanded_designs(dadm)
+      # Compressed: the C++ mapper expands via the "expand" attribute itself.
+      designs <- .oo_expanded_designs(dadm, expand = FALSE)
       constants <- attr(dadm, "constants")
       if(is.null(constants)) constants <- NA
       if (nrow(proposals) <= r_cores) {
