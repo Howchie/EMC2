@@ -28,7 +28,18 @@ build <- function() {
            repeatTrial = factor(dplyr::case_when(
              trialType == "Target" | trialType == "Lure" ~ "Repeat", TRUE ~ "Novel"),
              levels = c("Novel", "Repeat"))))
-  owd <- setwd(root); on.exit(setwd(owd))
+  # FunctionsControlRDM.R sources FunctionsControl.R, whose *LBA* designs use a
+  # `pGuess` parameter that postdates this branch.  Those designs are not part
+  # of the RDM benchmark, so patch them out of a scratch copy rather than drag
+  # unrelated model work in just to build a design we never fit.
+  patch <- file.path(tempdir(), "annika_src")
+  dir.create(patch, showWarnings = FALSE)
+  for (f in c("FunctionsControl.R", "FunctionsControlRDM.R")) {
+    txt <- readLines(file.path(root, f), warn = FALSE)
+    writeLines(grep("^\\s*pGuess\\s*~", txt, invert = TRUE, value = TRUE),
+               file.path(patch, f))
+  }
+  owd <- setwd(patch); on.exit(setwd(owd))
   sys.source("FunctionsControlRDM.R", envir = globalenv())
   data <- get("data", envir = globalenv())
   subDesign <- get("models_rdm", envir = globalenv())[["WeigardModelRDM"]]
@@ -53,11 +64,20 @@ if (identical(Sys.getenv("EMC_CHILD"), "")) {
   d <- attr(emc[[1]]$data, "data_list")
   cat(sprintf("\nRDMSWTN control: %d subjects, %d pars, %d chains\n",
               emc[[1]]$n_subjects, emc[[1]]$n_pars, length(emc)))
-  for (cpc in as.integer(strsplit(Sys.getenv("EMC_CPC", "1,2,4,8,16"), ",")[[1]]))
-    for (flat in strsplit(Sys.getenv("EMC_FLAT", "FALSE"), ",")[[1]])
-      system2("Rscript", c(self, cpc, flat),
-              env = c("EMC_CHILD=1", paste0("EMC_LIB=", lib),
-                      paste0("EMC_SETUP=", setup_file), paste0("EMC_ITER=", iter)))
+  # Configurations are "flat:dyn:pool" triples, run interleaved and repeated so
+  # that machine load drifting over the session averages out of the comparison
+  # instead of landing entirely on whichever option happens to run last.
+  cfgs <- strsplit(Sys.getenv("EMC_CFG", "FALSE:FALSE:FALSE"), ",")[[1]]
+  for (rep in seq_len(as.integer(Sys.getenv("EMC_REPS", "1"))))
+    for (cpc in as.integer(strsplit(Sys.getenv("EMC_CPC", "1,2,4,8,16"), ",")[[1]]))
+      for (cfg in cfgs) {
+        p <- strsplit(cfg, ":")[[1]]
+        system2("Rscript", c(self, cpc, p[1]),
+                env = c("EMC_CHILD=1", paste0("EMC_LIB=", lib),
+                        paste0("EMC_SETUP=", setup_file), paste0("EMC_ITER=", iter),
+                        paste0("EMC_DYN=", p[2]), paste0("EMC_POOL=", p[3]),
+                        paste0("EMC_REP=", rep), paste0("EMC_SEED=", Sys.getenv("EMC_SEED", "11"))))
+      }
   quit(save = "no")
 }
 
@@ -66,23 +86,43 @@ if (identical(Sys.getenv("EMC_CHILD"), "")) {
 a <- commandArgs(TRUE)
 cpc <- as.integer(a[1])
 flat <- if (length(a) > 1) as.logical(a[2]) else FALSE
-dyn <- as.logical(Sys.getenv("EMC_DYN", "TRUE"))
-options(emc2.flat_parallel = flat, emc2.dynamic_cores = dyn)
+dyn <- as.logical(Sys.getenv("EMC_DYN", "FALSE"))
+pool <- as.logical(Sys.getenv("EMC_POOL", "FALSE"))
+options(emc2.flat_parallel = flat, emc2.dynamic_cores = dyn,
+        emc2.worker_pool = pool)
 emc <- readRDS(setup_file)
 stamp <- file.path(tempdir(), "annika_times"); dir.create(stamp, showWarnings = FALSE)
 unlink(list.files(stamp, full.names = TRUE))
 options(emc2.chain_timer_dir = stamp)
-RNGkind("L'Ecuyer-CMRG"); set.seed(11)
+RNGkind("L'Ecuyer-CMRG"); set.seed(as.integer(Sys.getenv("EMC_SEED", "11")))
 t <- system.time(emc <- suppressMessages(run_emc(emc, stage = "burn",
   stop_criteria = list(iter = iter, max_gd = Inf, min_unique = 0, min_es = 0),
   cores_for_chains = 3, cores_per_chain = cpc, verbose = FALSE,
   step_size = iter, max_tries = 1)))
 cpu <- sum(t[c("user.self", "sys.self", "user.child", "sys.child")])
-ct <- sort(vapply(list.files(stamp, full.names = TRUE), readRDS, numeric(1)))
+# Order by pid, not by duration: mclapply forks the chains in order, so pid
+# order recovers chain identity.  Sorting by duration would report only "some
+# chain ran long" and hide whether it is the same chain every time.
+tf <- list.files(stamp, full.names = TRUE)
+tf <- tf[order(as.integer(sub(".*chain_(\\d+)\\.rds$", "\\1", tf)))]
+ct <- vapply(tf, readRDS, numeric(1))
+# Particle counts are the one per-chain cost that legitimately depends on the
+# parameters: they adapt to each subject's acceptance rate.  If a chain runs
+# long because it is mixing worse, it shows up here and not in the likelihood.
+np <- vapply(emc, function(ch) {
+  pms <- attr(ch$samples, "pm_settings")
+  if (is.null(pms)) return(NA_real_)
+  # pm_settings[[subject]] is a list over *components*, each carrying its own
+  # adaptive n_particles; summing the outer level alone finds nothing.
+  sum(unlist(lapply(pms, function(p) lapply(p, function(cmp) cmp$n_particles))))
+}, numeric(1))
 # The flat path has no per-chain processes, so it writes no timings.
 if (!length(ct)) ct <- t[["elapsed"]]
-cat(sprintf("flat=%-5s dyn=%-5s cpc=%2d total=%2d elapsed=%6.1fs cpu=%7.1fs util=%.2f chains=[%s] spread=%4.1f%% idle_core_s=%5.1f master=%4.1fs\n",
-            flat, dyn, cpc, 3 * cpc, t[["elapsed"]], cpu, cpu / (t[["elapsed"]] * 3 * cpc),
+cat(sprintf("rep%s flat=%-5s dyn=%-5s pool=%-5s cpc=%2d total=%2d elapsed=%6.1fs cpu=%7.1fs util=%.2f chains=[%s] spread=%4.1f%% idle_core_s=%5.1f master=%4.1fs\n",
+            Sys.getenv("EMC_REP", "1"), flat, dyn, pool, cpc, 3 * cpc,
+            t[["elapsed"]], cpu, cpu / (t[["elapsed"]] * 3 * cpc),
             paste(sprintf("%.1f", ct), collapse = " "),
             100 * (max(ct) - min(ct)) / max(ct), cpc * sum(max(ct) - ct),
             t[["elapsed"]] - max(ct)))
+cat(sprintf("      seed=%s particles_by_chain=[%s]\n",
+            Sys.getenv("EMC_SEED", "11"), paste(np, collapse = " ")))

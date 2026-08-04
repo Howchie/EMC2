@@ -103,6 +103,14 @@
   if (n_workers <= 1) return(NULL)
 
   if (Sys.info()[["sysname"]] != "Windows") {
+    # Persistent named-pipe workers (R/chain_pool.R) when asked for, otherwise
+    # the original fork-per-iteration behaviour.  `static` is installed above,
+    # before any fork, so the workers inherit every chain's block-constant
+    # state and only the iteration's group-level draw crosses the pipe.
+    if (.emc_use_worker_pool()) {
+      wp <- .emc_wpool_start(n_workers, list(work_fun = .emc_flat_compute))
+      if (!is.null(wp)) return(structure(wp, class = "emc_wpool"))
+    }
     return(structure(list(n = as.integer(n_workers)), class = "emc_fork_pool"))
   }
   tryCatch({
@@ -117,7 +125,9 @@
 }
 
 .emc_pool_stop <- function(pool) {
-  if (!is.null(pool) && !inherits(pool, "emc_fork_pool")) {
+  if (inherits(pool, "emc_wpool")) {
+    .emc_wpool_stop(pool)
+  } else if (!is.null(pool) && !inherits(pool, "emc_fork_pool")) {
     try(parallel::stopCluster(pool), silent = TRUE)
   }
   .emc_runtime$static <- NULL
@@ -149,6 +159,15 @@
     }, add = TRUE)
     return(lapply(tasks, FUN))
   }
+  if (inherits(pool, "emc_wpool")) {
+    # Tasks arrive longest-first; dealing them round-robin gives every worker a
+    # comparable mix of big and small subjects in one round trip, instead of
+    # one round trip per task.
+    groups <- unname(split(tasks, rep_len(seq_len(pool$n), length(tasks))))
+    msgs <- lapply(groups, function(g) list(tasks = g, iter = iter_state, fun = FUN))
+    ex <- .emc_wpool_exchange(pool, msgs, list(work_fun = .emc_flat_compute))
+    return(unlist(ex$results, recursive = FALSE))
+  }
   if (inherits(pool, "emc_fork_pool")) {
     # Tasks arrive longest-first; mclapply's prescheduled split then deals them
     # round-robin, which on an LPT-ordered list is already well balanced.  The
@@ -159,6 +178,19 @@
                    function(ch) list(tasks = ch, iter = iter_state))
   unlist(parallel::clusterApplyLB(pool, chunks, .emc_run_chunk, FUN),
          recursive = FALSE)
+}
+
+# What a persistent worker runs for the flattened scheduler.  `static` was
+# inherited through the fork; only the iteration state arrives by pipe.
+#
+# The task function travels in the message rather than being assumed: the same
+# workers serve both `.emc_particle_task` and the `.emc_start_task` used to
+# draw start points, and hard-coding either one silently runs the wrong work
+# for the other.  Both live in the namespace, so serialising one costs a
+# reference, not a copy of its body.
+.emc_flat_compute <- function(msg, ctx) {
+  .emc_runtime$iter <- msg$iter
+  lapply(msg$tasks, msg$fun)
 }
 
 .emc_run_chunk <- function(chunk, FUN) {

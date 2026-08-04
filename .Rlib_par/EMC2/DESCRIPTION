@@ -68,4 +68,4 @@ Depends: R (>= 3.5.0)
 LazyData: true
 Config/testthat/parallel: true
 Config/roxygen2/version: 8.0.0
-Built: R 4.6.0; x86_64-pc-linux-gnu; 2026-08-04 06:30:54 UTC; unix
+Built: R 4.6.0; x86_64-pc-linux-gnu; 2026-08-04 07:39:26 UTC; unix

@@ -1,0 +1,140 @@
+# Persistent per-block worker pool for the particle step (R/chain_pool.R).
+
+test_that("LPT partitioning balances by cost, not by count", {
+  part <- EMC2:::.emc_lpt_partition(c(10, 1, 1, 1, 1, 1, 1, 1, 1, 1), 2)
+  expect_length(part, 2)
+  expect_setequal(unlist(part), 1:10)
+  loads <- vapply(part, function(p) sum(c(10, rep(1, 9))[p]), numeric(1))
+  # A contiguous equal-count split would be 14 vs 5; LPT gets within one unit.
+  expect_lte(diff(range(loads)), 1)
+
+  # Every worker gets a slot even when there is less work than workers.
+  part <- EMC2:::.emc_lpt_partition(c(3, 1), 4)
+  expect_length(part, 4)
+  expect_setequal(unlist(part), 1:2)
+  expect_true(all(vapply(part, is.numeric, logical(1))))
+})
+
+test_that("one worker takes everything", {
+  expect_equal(EMC2:::.emc_lpt_partition(c(5, 2, 9), 1), list(1:3))
+})
+
+test_that("subject cost proxies the rows the likelihood loops over", {
+  d <- list(data.frame(a = 1:10), data.frame(a = 1:3))
+  expect_equal(EMC2:::.emc_subject_cost(d), c(10, 3))
+  # Joint models carry a list of dadms per subject.
+  dj <- list(list(data.frame(a = 1:4), data.frame(a = 1:6)))
+  expect_equal(EMC2:::.emc_subject_cost(dj), 10)
+})
+
+test_that("each subject gets an independent stream and the master moves past them", {
+  RNGkind("L'Ecuyer-CMRG"); set.seed(3)
+  st <- EMC2:::.emc_subject_streams(4)
+  expect_length(st, 4)
+  expect_equal(length(unique(vapply(st, function(s) paste(s, collapse = ","),
+                                    character(1)))), 4)
+  master <- get(".Random.seed", envir = globalenv())
+  expect_false(any(vapply(st, identical, logical(1), master)))
+})
+
+test_that("the pool is refused where it cannot work", {
+  expect_null(EMC2:::.emc_wpool_start(1, list()))
+  expect_null(EMC2:::.emc_wpool_start(0, list()))
+})
+
+test_that("workers survive a block, compute, and shut down", {
+  skip_on_os("windows")
+  skip_if(!nzchar(Sys.which("mkfifo")))
+  # A stand-in context: the pool machinery does not care what the work is, only
+  # that .emc_wpool_compute() can do it, so exercise the transport directly.
+  pool <- EMC2:::.emc_wpool_start(2, list(tag = "ctx"))
+  skip_if(is.null(pool), "could not fork a pool here")
+  on.exit(EMC2:::.emc_wpool_stop(pool), add = TRUE)
+  expect_equal(pool$n, 2)
+  expect_true(dir.exists(pool$dir))
+
+  # Round trip twice, to show the workers persist rather than being one-shot.
+  for (k in 1:2) {
+    for (w in 1:2) {
+      serialize(list(subs = w, echo = k), pool$wcs[[w]]); flush(pool$wcs[[w]])
+    }
+    got <- lapply(1:2, function(w) unserialize(pool$rcs[[w]]))
+    # No real ctx, so compute() errors and the worker reports it rather than dying.
+    expect_true(all(vapply(got, function(g) !is.null(g$failed), logical(1))))
+  }
+  EMC2:::.emc_wpool_stop(pool)
+  expect_false(dir.exists(pool$dir))
+  on.exit(NULL)
+})
+
+test_that("a pooled fit runs, and repeats itself exactly", {
+  skip_on_os("windows")
+  skip_on_cran()
+  withr::local_options(list(emc2.worker_pool = TRUE))
+  dat <- forstmann[forstmann$subjects %in% levels(forstmann$subjects)[1:3], ]
+  dat$subjects <- droplevels(dat$subjects)
+  des <- design(data = dat, model = LNR, formula = list(m ~ 1, s ~ 1, t0 ~ 1))
+  fit_once <- function() {
+    RNGkind("L'Ecuyer-CMRG"); set.seed(42)
+    emc <- suppressMessages(make_emc(dat, des, n_chains = 2, compress = TRUE))
+    suppressMessages(run_emc(emc, stage = "preburn", cores_for_chains = 2,
+      cores_per_chain = 2, step_size = 10, max_tries = 1, verbose = FALSE,
+      stop_criteria = list(iter = 10, max_gd = Inf, min_unique = 0, min_es = 0)))
+  }
+  a <- fit_once()
+  expect_equal(a[[1]]$samples$idx, 11)
+  expect_true(all(is.finite(a[[1]]$samples$subj_ll[, 11])))
+  # Per-subject RNG streams make the pooled path independent of scheduling,
+  # which the default mc.cores-derived path is not.
+  expect_identical(a[[1]]$samples$alpha, fit_once()[[1]]$samples$alpha)
+})
+
+test_that("the flat dispatcher runs the task function it was handed", {
+  skip_on_os("windows")
+  skip_if(!nzchar(Sys.which("mkfifo")))
+  # Regression: the flattened path serves both .emc_particle_task and
+  # .emc_start_task on the same workers.  Hard-coding either one runs the wrong
+  # work for the other, which showed up as start-point draws being computed as
+  # particle updates.
+  pool <- EMC2:::.emc_wpool_start(2, list(work_fun = EMC2:::.emc_flat_compute))
+  skip_if(is.null(pool), "could not fork a pool here")
+  on.exit(EMC2:::.emc_wpool_stop(pool), add = TRUE)
+
+  msgs <- lapply(1:2, function(w) list(tasks = as.list(1:2), iter = NULL,
+                                       fun = function(x) x * 10L))
+  ex <- EMC2:::.emc_wpool_exchange(pool, msgs,
+                                   list(work_fun = EMC2:::.emc_flat_compute))
+  expect_true(ex$alive)
+  expect_equal(unlist(ex$results), rep(c(10L, 20L), 2))
+
+  msgs2 <- lapply(1:2, function(w) list(tasks = as.list(1:2), iter = NULL,
+                                        fun = function(x) x + 100L))
+  ex2 <- EMC2:::.emc_wpool_exchange(pool, msgs2,
+                                    list(work_fun = EMC2:::.emc_flat_compute))
+  expect_equal(unlist(ex2$results), rep(c(101L, 102L), 2))
+})
+
+test_that("a pool marked dead still returns every subject's result", {
+  skip_on_os("windows")
+  # alive = FALSE means nothing is sent; the master must compute the lot itself
+  # so that a broken pool costs speed and not an iteration.
+  calls <- new.env(parent = emptyenv()); calls$n <- 0L
+  fake <- function(msg, ctx) {
+    calls$n <- calls$n + 1L
+    list(props = matrix(msg$subs, ctx$n_pars + 1L, length(msg$subs)),
+         pm = as.list(msg$subs), seeds = as.list(msg$subs),
+         times = rep(1, length(msg$subs)))
+  }
+  pool <- list(n = 2, alive = FALSE, wcs = list(), rcs = list())
+  ctx <- list(n_pars = 2)
+  part <- list(c(1L, 3L), 2L)
+  res <- testthat::with_mocked_bindings(
+    EMC2:::.emc_wpool_iter(pool, ctx, part, NULL, NULL,
+                           list(NULL, NULL, NULL), c(0, 0, 0),
+                           list(NULL, NULL, NULL)),
+    .emc_wpool_compute = fake, .package = "EMC2")
+  expect_equal(calls$n, 2L)          # one fallback per non-empty partition
+  expect_equal(dim(res$props), c(3L, 3L))
+  expect_equal(res$props[1, ], c(1, 2, 3))
+  expect_false(res$alive)
+})

@@ -469,8 +469,42 @@ run_stage <- function(pmwgs,
     build_subject_chol_cache(chains_var[[s]], eff_var[[s]], idx_list_blk)
   })
 
+  # Persistent workers, forked once for the whole block instead of once per
+  # iteration.  Everything above this point is block-constant, so the workers
+  # inherit it through the fork; see R/chain_pool.R.
+  wpool <- NULL
+  if (.emc_use_worker_pool()) {
+    pool_budget <- .particle_core_budget(pmwgs$n_subjects, n_cores = n_cores,
+                                         r_cores = r_cores)
+    wpool_ctx <- list(
+      data = data, model = pmwgs$model, stage = stage, type = pmwgs$type,
+      tune = tune, marginalise = pmwgs$marginalise,
+      r_cores = pool_budget$likelihood, n_pars = pmwgs$n_pars,
+      eff_mu = eff_mu, eff_var = eff_var, chains_mu = chains_mu,
+      chains_var = chains_var, chol_caches = chol_caches
+    )
+    wpool <- .emc_wpool_start(pool_budget$subject, wpool_ctx)
+  }
+  if (!is.null(wpool)) {
+    on.exit(.emc_wpool_stop(wpool), add = TRUE)
+    wpool_streams <- .emc_subject_streams(pmwgs$n_subjects)
+    wpool_cost <- .emc_subject_cost(data)
+    wpool_part <- .emc_lpt_partition(wpool_cost, wpool$n)
+  }
+
+  # Optional breakdown of a chain's iteration into the part that is spread over
+  # workers and the parts that are not.  The serial parts bound what any
+  # scheduling change can achieve, so it is worth being able to see them
+  # rather than inferring them from CPU totals.
+  prof <- if (isTRUE(getOption("emc2.profile_iter", FALSE))) {
+    c(gibbs = 0, particle = 0, fill = 0, total = 0, other = 0,
+      worker_cpu = 0, worker_max = 0)
+  } else NULL
+  tick <- function() proc.time()[["elapsed"]]
+
   # Main iteration loop
   for (i in 1:iter) {
+    if (!is.null(prof)) t_iter <- t_mark <- tick()
     if (verboseProgress) {
       accRate <- mean(accept_rate(pmwgs))
       update_progress_bar(pb, i, extra = accRate)
@@ -528,6 +562,34 @@ run_stage <- function(pmwgs,
       error = function(e) NULL
     )
     group_chol_it <- build_group_chol_cache(group_var_it, idx_list_blk)
+    if (!is.null(prof)) { prof["gibbs"] <- prof["gibbs"] + tick() - t_mark; t_mark <- tick() }
+    if (!is.null(wpool)) {
+      # Siblings that have finished their block free up cores; unlike the
+      # mcmapply path, taking them here cannot perturb the draws.
+      grown <- .emc_wpool_grow(wpool, .emc_cores_now(core_ctl, n_cores), wpool_ctx)
+      if (grown$n != wpool$n) {
+        wpool <- grown
+        wpool_part <- .emc_lpt_partition(wpool_cost, wpool$n)
+      }
+      it <- .emc_wpool_iter(wpool, wpool_ctx, wpool_part, pars_comb,
+                            group_chol_it, pm_settings,
+                            pmwgs$samples$subj_ll[, j - 1], wpool_streams)
+      proposals <- it$props
+      pm_settings <- it$pm_settings
+      wpool_streams <- it$seeds
+      wpool$alive <- it$alive
+      # Re-balance from what the subjects actually cost this iteration: trial
+      # counts are only a proxy, and the adaptive particle number drifts.
+      if (!is.null(prof)) {
+        # What the workers actually computed, against what the section cost:
+        # the gap is master-side dispatch, not worker work.
+        prof["worker_cpu"] <- prof["worker_cpu"] + sum(it$times)
+        prof["worker_max"] <- prof["worker_max"] +
+          max(vapply(wpool_part, function(s) sum(it$times[s]), numeric(1)))
+      }
+      if (all(it$times > 0)) wpool_cost <- it$times
+      wpool_part <- .emc_lpt_partition(wpool_cost, wpool$n)
+    } else {
     proposals <- parallel::mcmapply(safe_new_particle, 1:pmwgs$n_subjects, data, pm_settings, eff_mu, eff_var,
                                     chains_mu, chains_var, pmwgs$samples$subj_ll[,j-1],
                                     MoreArgs = list(parameters = pars_comb,
@@ -542,10 +604,23 @@ run_stage <- function(pmwgs,
                                     mc.cores = core_budget$subject)
     pm_settings <- proposals[3,]
     proposals <- array(unlist(proposals[1:2,]), dim = c(pmwgs$n_pars + 1, pmwgs$n_subjects))
+    }
 
+    if (!is.null(prof)) { prof["particle"] <- prof["particle"] + tick() - t_mark; t_mark <- tick() }
     #Fill samples
     pmwgs$samples <- fill_samples(samples = pmwgs$samples, group_level = pars,
                                                proposals = proposals, j = j, n_pars = pmwgs$n_pars, type = pmwgs$type)
+    if (!is.null(prof)) {
+      prof["fill"] <- prof["fill"] + tick() - t_mark
+      prof["total"] <- prof["total"] + tick() - t_iter
+    }
+  }
+  if (!is.null(prof)) {
+    # Whatever the loop spent outside the three timed sections: the progress
+    # bar, the rejection branches, and the loop's own bookkeeping.
+    prof["other"] <- prof["total"] - sum(prof[c("gibbs", "particle", "fill")])
+    dir <- getOption("emc2.profile_dir", tempdir())
+    saveRDS(prof, file.path(dir, paste0("prof_", Sys.getpid(), ".rds")))
   }
   attr(pmwgs$samples, "pm_settings") <- pm_settings
   if (verboseProgress) close(pb)
