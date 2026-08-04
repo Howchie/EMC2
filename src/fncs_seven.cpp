@@ -55,6 +55,8 @@ int int_ddiff(unsigned dim, const double *x, void *p, unsigned fdim, double *ret
 /* calculate density for 7-param diffusion */
 void ddiff(int choice, double t, int low_or_up, double a, double v, double t0, double w, double sw, double sv, double st, double myerr, int K, int epsFLAG, int Neval, double *derivF, double *Rerr) {
 
+  if (Rerr != nullptr) *Rerr = 0.0;
+
   //double result;
   //double error;
 
@@ -148,6 +150,8 @@ int int_pdiff(unsigned dim, const double *x, void *p, unsigned fdim, double *ret
 
 /* calculate distribution for 7-param diffusion */
 void pdiff(int choice, double t, int low_or_up, double a, double v, double t0, double w, double sw, double sv, double st, double myerr, int K, int epsFLAG, int Neval, double *derivF, double *Rerr) {
+
+  if (Rerr != nullptr) *Rerr = 0.0;
   
   //ouble result;
   //double error;

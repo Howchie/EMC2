@@ -25,7 +25,8 @@ smallest finish time.
    \emph{mu} \tab log \tab [0, Inf] \tab log(.4) \tab Location of the Gaussian component. The current bounds restrict this location to be nonnegative. \cr
    \emph{sigma} \tab log \tab [0, Inf] \tab log(.05) \tab SD of the Gaussian component. \cr
    \emph{tau} \tab log \tab [0, Inf] \tab log(.1) \tab Mean of the exponential component; its rate is \code{1 / tau}. \cr
-   \emph{pContaminant} \tab probit \tab [0, 1] \tab qnorm(0) \tab Optional contamination probability handled by the data pipeline. \cr
+   \emph{pContaminant} \tab probit \tab [0, 1] \tab qnorm(0) \tab Optional \emph{omission} contaminant probability: mass at \code{rt = Inf} only, handled by the data pipeline \cr
+   \emph{pGuess} \tab probit \tab [0, 1] \tab qnorm(0) \tab Optional uniform \emph{guess} (outlier) probability, mixed into observed RT densities over the guess window \cr
 }
 
 

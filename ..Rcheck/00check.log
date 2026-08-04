@@ -1,14 +1,555 @@
 * using log directory ‘/data/work/EMC2_dev_oo/..Rcheck’
-* using R version 4.5.2 (2025-10-31)
+* using R version 4.6.0 (2026-04-24)
 * using platform: x86_64-pc-linux-gnu
 * R was compiled by
-    gcc (Ubuntu 11.4.0-1ubuntu1~22.04.2) 11.4.0
-    GNU Fortran (Ubuntu 11.4.0-1ubuntu1~22.04.2) 11.4.0
+    cc (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0
+    GNU Fortran (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0
 * running under: Ubuntu 22.04.4 LTS
 * using session charset: UTF-8
+* current time: 2026-08-04 05:44:48 UTC
 * using options ‘--no-manual --no-vignettes --no-build-vignettes’
-* checking for file ‘./DESCRIPTION’ ... ERROR
-Required fields missing or empty:
-  ‘Author’ ‘Maintainer’
+* checking for file ‘./DESCRIPTION’ ... OK
+* this is package ‘EMC2’ version ‘3.4.0’
+* package encoding: UTF-8
+* checking package namespace information ... OK
+* checking package dependencies ... OK
+* checking if this is a source package ... WARNING
+Subdirectory ‘EMC2/src’ contains apparent object files/libraries
+  /data/work/EMC2_dev_oo/src/bou_diffusion.o
+  /data/work/EMC2_dev_oo/src/cdf_fncs.o
+  /data/work/EMC2_dev_oo/src/custom_trend_interface.o
+  /data/work/EMC2_dev_oo/src/EMC2.so /data/work/EMC2_dev_oo/src/fa.o
+  /data/work/EMC2_dev_oo/src/fast_dmvnorm.o
+  /data/work/EMC2_dev_oo/src/fncs_seven.o
+  /data/work/EMC2_dev_oo/src/fpe_diffusion.o
+  /data/work/EMC2_dev_oo/src/gaussian.o
+  /data/work/EMC2_dev_oo/src/gomp_diffusion.o
+  /data/work/EMC2_dev_oo/src/group_designs.o
+  /data/work/EMC2_dev_oo/src/gsl_bundled_qag.o
+  /data/work/EMC2_dev_oo/src/gsl_bundled_qk15.o
+  /data/work/EMC2_dev_oo/src/gsl_bundled_qk21.o
+  /data/work/EMC2_dev_oo/src/gsl_bundled_qk31.o
+  /data/work/EMC2_dev_oo/src/gsl_bundled_qk41.o
+  /data/work/EMC2_dev_oo/src/gsl_bundled_qk51.o
+  /data/work/EMC2_dev_oo/src/gsl_bundled_qk61.o
+  /data/work/EMC2_dev_oo/src/gsl_bundled_qng.o
+  /data/work/EMC2_dev_oo/src/gsl_bundled.o
+  /data/work/EMC2_dev_oo/src/hcubature.o
+  /data/work/EMC2_dev_oo/src/kernels.o
+  /data/work/EMC2_dev_oo/src/model_rng.o
+  /data/work/EMC2_dev_oo/src/mri.o
+  /data/work/EMC2_dev_oo/src/param_table_interface.o
+  /data/work/EMC2_dev_oo/src/ParamTable.o
+  /data/work/EMC2_dev_oo/src/particle_ll.o
+  /data/work/EMC2_dev_oo/src/pdf_fncs.o
+  /data/work/EMC2_dev_oo/src/RcppExports.o
+  /data/work/EMC2_dev_oo/src/rlf_diffusion.o
+  /data/work/EMC2_dev_oo/src/rou_diffusion.o
+  /data/work/EMC2_dev_oo/src/tools.o
+  /data/work/EMC2_dev_oo/src/transform_utils.o
+  /data/work/EMC2_dev_oo/src/trend.o
+  /data/work/EMC2_dev_oo/src/TrendEngine.o
+  /data/work/EMC2_dev_oo/src/volterra_diffusion.o
+  /data/work/EMC2_dev_oo/src/wald_functions.o
+  /data/work/EMC2_dev_oo/src/zzz_rcpp_deps.o
+Object files/libraries should not be included in a source package.
+* checking if there is a namespace ... OK
+* checking for executable files ... OK
+* checking for hidden files and directories ... NOTE
+Found the following hidden files and directories:
+  .git
+  .gitignore
+  .pytest_cache/.gitignore
+  .Rhistory
+  .Rtmp/base_tree/.gitignore
+  .Rtmp/base_tree/.pytest_cache/.gitignore
+  .Rtmp/base_tree/.Rbuildignore
+  .Rtmp/base_tree/.Rhistory
+  .Rtmp/base_tree/src/.DS_Store
+  .Rtmp/base_tree/src/.gitignore
+  .Rtmp/wt_ref/.git
+  .Rtmp/wt_ref/.gitignore
+  .Rtmp/wt_ref/.Rbuildignore
+  .Rtmp/wt_ref/.Rhistory
+  .Rtmp/wt_ref/src/.DS_Store
+  .Rtmp/wt_ref/src/.gitignore
+  src/.DS_Store
+  src/.gitignore
+  WorkingTests/.RData
+  ..Rcheck
+  .claude
+  .pytest_cache
+  .Rtmp
+  .Rtmp/.Rtmp
+  .Rtmp/base_tree/..Rcheck
+  .Rtmp/base_tree/.claude
+  .Rtmp/base_tree/.pytest_cache
+  .Rtmp/wt_ref/..Rcheck
+These were most likely included in error. See section ‘Package
+structure’ in the ‘Writing R Extensions’ manual.
+* checking for portable file names ... WARNING
+Found the following files with non-portable file names:
+  .Rtmp/base_tree/Math/Smith & Ratcliff (2004).pdf
+  Math/Smith & Ratcliff (2004).pdf
+  Math/Smith & Ratcliff (2022) - Urgency-Collapse.pdf
+These are not fully portable file names.
+See section ‘Package structure’ in the ‘Writing R Extensions’ manual.
+Found the following non-portable file paths:
+  EMC2/.Rtmp/base_tree/docs/articles/Simulation-based-Calibration_files/figure-html/unnamed-chunk-11-1.png
+  EMC2/.Rtmp/base_tree/docs/articles/Simulation-based-Calibration_files/figure-html/unnamed-chunk-13-1.png
+  EMC2/.Rtmp/base_tree/docs/articles/Simulation-based-Calibration_files/figure-html/unnamed-chunk-16-1.png
+  EMC2/.Rtmp/base_tree/docs/articles/Simulation-based-Calibration_files/figure-html/unnamed-chunk-16-2.png
+  EMC2/.Rtmp/base_tree/docs/articles/Simulation-based-Calibration_files/figure-html/unnamed-chunk-20-1.png
+  EMC2/.Rtmp/base_tree/docs/articles/Simulation-based-Calibration_files/figure-html/unnamed-chunk-20-2.png
+  EMC2/.Rtmp/base_tree/docs/articles/Simulation-based-Calibration_files/figure-html/unnamed-chunk-23-1.png
+  EMC2/.Rtmp/base_tree/docs/articles/Simulation-based-Calibration_files/figure-html/unnamed-chunk-23-2.png
+  EMC2/.Rtmp/base_tree/docs/articles/Simulation-based-Calibration_files/figure-html/unnamed-chunk-26-1.png
+  EMC2/.Rtmp/base_tree/docs/articles/Simulation-based-Calibration_files/figure-html/unnamed-chunk-26-2.png
+  EMC2/.Rtmp/base_tree/docs/articles/Simulation-based-Calibration_files/figure-html/unnamed-chunk-4-1.png
+  EMC2/.Rtmp/base_tree/docs/articles/Simulation-based-Calibration_files/figure-html/unnamed-chunk-7-1.png
+  EMC2/.Rtmp/base_tree/docs/articles/Simulation-based-Calibration_files/figure-html/unnamed-chunk-8-1.png
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/5f633436-2dcf-44e0-ac4e-8a13e778077f/tasks/bcjjcipcr.output
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/5f633436-2dcf-44e0-ac4e-8a13e778077f/tasks/bscb2e605.output
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/5f633436-2dcf-44e0-ac4e-8a13e778077f/tasks/bw97k77b9.output
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/5f633436-2dcf-44e0-ac4e-8a13e778077f/tasks/bwslz2ti8.output
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/bisect.log
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/bisect.R
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/blas_fork_probe.R
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/blas_t1.log
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/blas_tN.log
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/build.log
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/cfc3_probe.R
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/check_chains.R
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/check_rcores.R
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/culprit_probe.R
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/culprit.rds
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/grid.log
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/install_fix.log
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/install_ntcap2.log
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/nested_probe.R
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/nsolve.R
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/one_solve.R
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/perf.data
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/perf2.data
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/probe.log
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/probe2.log
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/ref_new.rds
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/ref_ntcap2.rds
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/rlf_fork_probe.R
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_fix/EMC2/data/Rdata.rdb
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_fix/EMC2/data/Rdata.rds
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_fix/EMC2/data/Rdata.rdx
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_fix/EMC2/DESCRIPTION
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_fix/EMC2/extdata/samples_LNR.rds
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_fix/EMC2/help/aliases.rds
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_fix/EMC2/help/AnIndex
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_fix/EMC2/help/EMC2.rdb
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_fix/EMC2/help/EMC2.rdx
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_fix/EMC2/help/paths.rds
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_fix/EMC2/html/00Index.html
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_fix/EMC2/html/R.css
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_fix/EMC2/include/EMC2/userfun.hpp
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_fix/EMC2/INDEX
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_fix/EMC2/libs/EMC2.so
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_fix/EMC2/Meta/data.rds
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_fix/EMC2/Meta/features.rds
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_fix/EMC2/Meta/hsearch.rds
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_fix/EMC2/Meta/links.rds
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_fix/EMC2/Meta/nsInfo.rds
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_fix/EMC2/Meta/package.rds
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_fix/EMC2/Meta/Rd.rds
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_fix/EMC2/NAMESPACE
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_fix/EMC2/NEWS.md
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_fix/EMC2/R/EMC2
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_fix/EMC2/R/EMC2.rdb
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_fix/EMC2/R/EMC2.rdx
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_fix/EMC2/README.md
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_ntcap/EMC2/data/Rdata.rdb
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_ntcap/EMC2/data/Rdata.rds
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_ntcap/EMC2/data/Rdata.rdx
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_ntcap/EMC2/DESCRIPTION
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_ntcap/EMC2/extdata/samples_LNR.rds
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_ntcap/EMC2/help/aliases.rds
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_ntcap/EMC2/help/AnIndex
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_ntcap/EMC2/help/EMC2.rdb
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_ntcap/EMC2/help/EMC2.rdx
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_ntcap/EMC2/help/paths.rds
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_ntcap/EMC2/html/00Index.html
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_ntcap/EMC2/html/R.css
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_ntcap/EMC2/include/EMC2/userfun.hpp
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_ntcap/EMC2/INDEX
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_ntcap/EMC2/libs/EMC2.so
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_ntcap/EMC2/Meta/data.rds
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_ntcap/EMC2/Meta/features.rds
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_ntcap/EMC2/Meta/hsearch.rds
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_ntcap/EMC2/Meta/links.rds
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_ntcap/EMC2/Meta/nsInfo.rds
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_ntcap/EMC2/Meta/package.rds
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_ntcap/EMC2/Meta/Rd.rds
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_ntcap/EMC2/NAMESPACE
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_ntcap/EMC2/NEWS.md
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_ntcap/EMC2/R/EMC2
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_ntcap/EMC2/R/EMC2.rdb
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_ntcap/EMC2/R/EMC2.rdx
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_ntcap/EMC2/README.md
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/run/demo.log
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/run/samples_ss_rlf_test.RData
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/run/slow.rds
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/run/trace.log
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/run2/calls.log
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/run2/dadm_seed.rds
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/run2/last_call.rds
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/run2/t2.log
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/run3/calls.log
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/run3/dadm_seed.rds
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/run3/last_call.rds
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/run3/t3.log
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/run4/calls.log
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/run4/dadm_seed.rds
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/run4/last_call_819112.rds
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/run4/last_call_819114.rds
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/run4/last_call_819115.rds
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/run4/last_call_820578.rds
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/run4/last_call_820579.rds
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/run4/last_call_820580.rds
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/run4/last_call_821570.rds
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/run4/last_call_821571.rds
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/run4/last_call_821572.rds
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/run4/t4.log
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/sweep.R
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/toggle.R
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/trace_slow.R
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/trace2.R
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/trace3.R
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/trace4.R
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/tree_probe.R
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/tree.log
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/verify.R
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/watch.sh
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/wide6.log
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/tasks/b5a0er0r4.output
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/tasks/b9owy4g4u.output
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/tasks/bcx7ilxka.output
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/tasks/bd024qzbt.output
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/tasks/bh8289ky5.output
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/tasks/bhcfqvnbc.output
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/tasks/bine6tckn.output
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/tasks/bptmojdou.output
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/tasks/bu7xyqvcb.output
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/tasks/bx6anndit.output
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/tasks/bx7trzm6f.output
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/a7e2731d-6a91-403d-acc1-c771fcd84ba0/tasks/b0x9j9v0e.output
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/a843ab98-d3a4-46d9-a5df-8207231f7030/scratchpad/fitpg-1.png
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/a843ab98-d3a4-46d9-a5df-8207231f7030/tasks/bbriw7tz7.output
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/a843ab98-d3a4-46d9-a5df-8207231f7030/tasks/bdvnxu251.output
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/a843ab98-d3a4-46d9-a5df-8207231f7030/tasks/beheo8x1w.output
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/a843ab98-d3a4-46d9-a5df-8207231f7030/tasks/betkafcfc.output
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/a843ab98-d3a4-46d9-a5df-8207231f7030/tasks/bezwd59lx.output
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/a843ab98-d3a4-46d9-a5df-8207231f7030/tasks/bil0ik0pv.output
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/a843ab98-d3a4-46d9-a5df-8207231f7030/tasks/biwf2xbfh.output
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/a843ab98-d3a4-46d9-a5df-8207231f7030/tasks/bjh95oxbd.output
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/a843ab98-d3a4-46d9-a5df-8207231f7030/tasks/bq3j0b40r.output
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/a843ab98-d3a4-46d9-a5df-8207231f7030/tasks/buag02a12.output
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/a843ab98-d3a4-46d9-a5df-8207231f7030/tasks/by9ax0pg0.output
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/a843ab98-d3a4-46d9-a5df-8207231f7030/tasks/bz36ftu8b.output
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/efc45970-7528-49d0-8f56-be711ffa6491/scratchpad/bou_wire.R
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/efc45970-7528-49d0-8f56-be711ffa6491/scratchpad/collapse_probe.R
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/efc45970-7528-49d0-8f56-be711ffa6491/scratchpad/conv_bou.R
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/efc45970-7528-49d0-8f56-be711ffa6491/scratchpad/conv2_bou.R
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/efc45970-7528-49d0-8f56-be711ffa6491/scratchpad/conv3_bou.R
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/efc45970-7528-49d0-8f56-be711ffa6491/scratchpad/conv4_bou.R
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/efc45970-7528-49d0-8f56-be711ffa6491/scratchpad/ddm_ident.R
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/efc45970-7528-49d0-8f56-be711ffa6491/scratchpad/err_ref.txt
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/efc45970-7528-49d0-8f56-be711ffa6491/scratchpad/ll_bou.txt
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/efc45970-7528-49d0-8f56-be711ffa6491/scratchpad/ll_ref.txt
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/efc45970-7528-49d0-8f56-be711ffa6491/scratchpad/run_tests.R
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/efc45970-7528-49d0-8f56-be711ffa6491/scratchpad/sr2004.txt
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/efc45970-7528-49d0-8f56-be711ffa6491/scratchpad/suite_bou.log
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/efc45970-7528-49d0-8f56-be711ffa6491/scratchpad/suite2.log
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/efc45970-7528-49d0-8f56-be711ffa6491/scratchpad/val_bou.R
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/efc45970-7528-49d0-8f56-be711ffa6491/scratchpad/var_bou.R
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/efc45970-7528-49d0-8f56-be711ffa6491/scratchpad/w_bou.txt
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/efc45970-7528-49d0-8f56-be711ffa6491/scratchpad/w_ref.txt
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/efc45970-7528-49d0-8f56-be711ffa6491/tasks/a2655806ddd8268da.output
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/efc45970-7528-49d0-8f56-be711ffa6491/tasks/b050ti9ls.output
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/efc45970-7528-49d0-8f56-be711ffa6491/tasks/b1q4b5497.output
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/efc45970-7528-49d0-8f56-be711ffa6491/tasks/b4b930dv8.output
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/efc45970-7528-49d0-8f56-be711ffa6491/tasks/b4pdgdj9r.output
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/efc45970-7528-49d0-8f56-be711ffa6491/tasks/b6pdyhqrt.output
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/efc45970-7528-49d0-8f56-be711ffa6491/tasks/b9t9708ql.output
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/efc45970-7528-49d0-8f56-be711ffa6491/tasks/bfsnax62v.output
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/efc45970-7528-49d0-8f56-be711ffa6491/tasks/bgs95a607.output
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/efc45970-7528-49d0-8f56-be711ffa6491/tasks/bhgf5g5wz.output
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/efc45970-7528-49d0-8f56-be711ffa6491/tasks/bi7nwljxo.output
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/efc45970-7528-49d0-8f56-be711ffa6491/tasks/bjl043i5c.output
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/efc45970-7528-49d0-8f56-be711ffa6491/tasks/blum76k1q.output
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/efc45970-7528-49d0-8f56-be711ffa6491/tasks/bn616nqfd.output
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/efc45970-7528-49d0-8f56-be711ffa6491/tasks/bocbt30t0.output
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/efc45970-7528-49d0-8f56-be711ffa6491/tasks/bszp35lkb.output
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/efc45970-7528-49d0-8f56-be711ffa6491/tasks/bz3p6mi2f.output
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fc266374-9bcb-435d-a4bb-4e3a8c7b2718/tasks/b0jlkco0j.output
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fc266374-9bcb-435d-a4bb-4e3a8c7b2718/tasks/b26l20c13.output
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fc266374-9bcb-435d-a4bb-4e3a8c7b2718/tasks/ba8hq15u4.output
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fc266374-9bcb-435d-a4bb-4e3a8c7b2718/tasks/badzrf7r6.output
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fc266374-9bcb-435d-a4bb-4e3a8c7b2718/tasks/bfq7p1rit.output
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fc266374-9bcb-435d-a4bb-4e3a8c7b2718/tasks/bgep5lkrx.output
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fc266374-9bcb-435d-a4bb-4e3a8c7b2718/tasks/bnlbo2tt8.output
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fc266374-9bcb-435d-a4bb-4e3a8c7b2718/tasks/bo6v478l9.output
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fc266374-9bcb-435d-a4bb-4e3a8c7b2718/tasks/bsuau6k01.output
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fc266374-9bcb-435d-a4bb-4e3a8c7b2718/tasks/bu90kakjw.output
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/bad_base.csv
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/bad_final.csv
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/bad_new.csv
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/base_install.log
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/base.rds
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/f_base.txt
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/f_new.txt
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/final_install.log
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/new_install.log
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/new.rds
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/recover.R
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/regress.R
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_base/EMC2/data/Rdata.rdb
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_base/EMC2/data/Rdata.rds
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_base/EMC2/data/Rdata.rdx
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_base/EMC2/DESCRIPTION
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_base/EMC2/extdata/samples_LNR.rds
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_base/EMC2/help/aliases.rds
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_base/EMC2/help/AnIndex
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_base/EMC2/help/EMC2.rdb
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_base/EMC2/help/EMC2.rdx
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_base/EMC2/help/paths.rds
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_base/EMC2/html/00Index.html
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_base/EMC2/html/R.css
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_base/EMC2/include/EMC2/userfun.hpp
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_base/EMC2/INDEX
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_base/EMC2/libs/EMC2.so
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_base/EMC2/Meta/data.rds
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_base/EMC2/Meta/features.rds
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_base/EMC2/Meta/hsearch.rds
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_base/EMC2/Meta/links.rds
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_base/EMC2/Meta/nsInfo.rds
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_base/EMC2/Meta/package.rds
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_base/EMC2/Meta/Rd.rds
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_base/EMC2/NAMESPACE
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_base/EMC2/NEWS.md
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_base/EMC2/R/EMC2
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_base/EMC2/R/EMC2.rdb
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_base/EMC2/R/EMC2.rdx
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_base/EMC2/README.md
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_new/EMC2/data/Rdata.rdb
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_new/EMC2/data/Rdata.rds
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_new/EMC2/data/Rdata.rdx
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_new/EMC2/DESCRIPTION
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_new/EMC2/extdata/samples_LNR.rds
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_new/EMC2/help/aliases.rds
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_new/EMC2/help/AnIndex
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_new/EMC2/help/EMC2.rdb
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_new/EMC2/help/EMC2.rdx
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_new/EMC2/help/paths.rds
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_new/EMC2/html/00Index.html
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_new/EMC2/html/R.css
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_new/EMC2/include/EMC2/userfun.hpp
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_new/EMC2/INDEX
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_new/EMC2/libs/EMC2.so
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_new/EMC2/Meta/data.rds
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_new/EMC2/Meta/features.rds
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_new/EMC2/Meta/hsearch.rds
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_new/EMC2/Meta/links.rds
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_new/EMC2/Meta/nsInfo.rds
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_new/EMC2/Meta/package.rds
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_new/EMC2/Meta/Rd.rds
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_new/EMC2/NAMESPACE
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_new/EMC2/NEWS.md
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_new/EMC2/R/EMC2
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_new/EMC2/R/EMC2.rdb
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_new/EMC2/R/EMC2.rdx
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_new/EMC2/README.md
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/tests_base.log
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/tests_new.log
+  EMC2/.Rtmp/wt_ref/docs/articles/Simulation-based-Calibration_files/figure-html/unnamed-chunk-11-1.png
+  EMC2/.Rtmp/wt_ref/docs/articles/Simulation-based-Calibration_files/figure-html/unnamed-chunk-13-1.png
+  EMC2/.Rtmp/wt_ref/docs/articles/Simulation-based-Calibration_files/figure-html/unnamed-chunk-16-1.png
+  EMC2/.Rtmp/wt_ref/docs/articles/Simulation-based-Calibration_files/figure-html/unnamed-chunk-16-2.png
+  EMC2/.Rtmp/wt_ref/docs/articles/Simulation-based-Calibration_files/figure-html/unnamed-chunk-20-1.png
+  EMC2/.Rtmp/wt_ref/docs/articles/Simulation-based-Calibration_files/figure-html/unnamed-chunk-20-2.png
+  EMC2/.Rtmp/wt_ref/docs/articles/Simulation-based-Calibration_files/figure-html/unnamed-chunk-23-1.png
+  EMC2/.Rtmp/wt_ref/docs/articles/Simulation-based-Calibration_files/figure-html/unnamed-chunk-23-2.png
+  EMC2/.Rtmp/wt_ref/docs/articles/Simulation-based-Calibration_files/figure-html/unnamed-chunk-26-1.png
+  EMC2/.Rtmp/wt_ref/docs/articles/Simulation-based-Calibration_files/figure-html/unnamed-chunk-26-2.png
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_fix/EMC2/data
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_fix/EMC2
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_fix/EMC2/extdata
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_fix/EMC2/help
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_fix/EMC2/html
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_fix/EMC2/include/EMC2
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_fix/EMC2/libs
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_fix/EMC2/Meta
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_fix/EMC2/R
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_ntcap/EMC2/data
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_ntcap/EMC2
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_ntcap/EMC2/extdata
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_ntcap/EMC2/help
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_ntcap/EMC2/html
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_ntcap/EMC2/include/EMC2
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_ntcap/EMC2/libs
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_ntcap/EMC2/Meta
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/7cd16d54-e363-48fc-86d0-20d943944c9b/scratchpad/Rlib_ntcap/EMC2/R
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_base/EMC2/data
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_base/EMC2
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_base/EMC2/extdata
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_base/EMC2/help
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_base/EMC2/html
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_base/EMC2/include/EMC2
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_base/EMC2/libs
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_base/EMC2/Meta
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_base/EMC2/R
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_new/EMC2/data
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_new/EMC2
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_new/EMC2/extdata
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_new/EMC2/help
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_new/EMC2/html
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_new/EMC2/include/EMC2
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_new/EMC2/libs
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_new/EMC2/Meta
+  EMC2/.Rtmp/claude-1000/-data-work-EMC2-dev-oo/fe047d03-6d97-45fa-8cf1-d1ad13cd3efc/scratchpad/Rlib_new/EMC2/R
+
+Tarballs are only required to store paths of up to 100 bytes and cannot
+store those of more than 256 bytes, with restrictions including to 100
+bytes for the final component.
+See section ‘Package structure’ in the ‘Writing R Extensions’ manual.
+* checking for sufficient/correct file permissions ... OK
+* checking whether package ‘EMC2’ can be installed ... OK
+* used C compiler: ‘cc (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0’
+* used C++ compiler: ‘g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0’
+* checking installed package size ... INFO
+  installed size is  7.9Mb
+  sub-directories of 1Mb or more:
+    libs   5.1Mb
+    R      1.7Mb
+* checking package directory ... OK
+* checking DESCRIPTION meta-information ... NOTE
+Checking should be performed on sources prepared by ‘R CMD build’.
+* checking top-level files ... OK
+* checking for left-over files ... OK
+* checking index information ... OK
+* checking package subdirectories ... WARNING
+Found the following directories with names of check directories:
+  ./..Rcheck
+  ./.Rtmp/base_tree/..Rcheck
+  ./.Rtmp/wt_ref/..Rcheck
+Most likely, these were included erroneously.
+* checking code files for non-ASCII characters ... OK
+* checking R files for syntax errors ... OK
+* checking whether the package can be loaded ... OK
+* checking whether the package can be loaded with stated dependencies ... OK
+* checking whether the package can be unloaded cleanly ... OK
+* checking whether the namespace can be loaded with stated dependencies ... OK
+* checking whether the namespace can be unloaded cleanly ... OK
+* checking loading without being on the library search path ... OK
+* checking whether startup messages can be suppressed ... OK
+* checking dependencies in R code ... OK
+* checking S3 generic/method consistency ... OK
+* checking replacement functions ... OK
+* checking foreign function calls ... OK
+* checking R code for possible problems ... NOTE
+.qRDMSWTN_row: no visible global function definition for ‘uniroot’
+rBAwD: no visible global function definition for ‘rlnorm’
+Undefined global functions or variables:
+  rlnorm uniroot
+Consider adding
+  importFrom("stats", "rlnorm", "uniroot")
+to your NAMESPACE file.
+* checking Rd files ... OK
+* checking Rd metadata ... OK
+* checking Rd cross-references ... OK
+* checking for missing documentation entries ... OK
+* checking for code/documentation mismatches ... OK
+* checking Rd \usage sections ... WARNING
+Undocumented arguments in Rd file 'check.Rd'
+  ‘version’
+
+Undocumented arguments in Rd file 'credint.Rd'
+  ‘plot’ ‘plot_args’
+
+Undocumented arguments in Rd file 'design.Rd'
+  ‘TC’ ‘LT’ ‘LC’ ‘UC’ ‘UT’ ‘fixed_accumulator_roles’
+
+Undocumented arguments in Rd file 'ess_summary.Rd'
+  ‘version’
+
+Undocumented arguments in Rd file 'fit.Rd'
+  ‘rhat_version’ ‘save_pw_ll’
+
+Undocumented arguments in Rd file 'gd_summary.Rd'
+  ‘version’
+
+Undocumented arguments in Rd file 'run_emc.Rd'
+  ‘rhat_version’
+
+Functions with \usage entries need to have the appropriate \alias
+entries, and all their arguments documented.
+The \usage entries must correspond to syntactically valid R code.
+See chapter ‘Writing R documentation files’ in the ‘Writing R
+Extensions’ manual.
+* checking Rd contents ... OK
+* checking for unstated dependencies in examples ... OK
+* checking contents of ‘data’ directory ... OK
+* checking data for non-ASCII characters ... OK
+* checking LazyData ... OK
+* checking data for ASCII and uncompressed saves ... OK
+* checking line endings in C/C++/Fortran sources/headers ... NOTE
+Found the following sources/headers not terminated with a newline:
+  src/gauss.h
+  src/model_SS_RDEX.h
+Some compilers warn on such files.
+* checking line endings in Makefiles ... OK
+* checking compilation flags in Makevars ... WARNING
+Non-portable flags in variable 'PKG_CPPFLAGS':
+  -Wfatal-errors
+Non-portable flags in variable 'PKG_CXXFLAGS':
+  -std=gnu++17 -Wfatal-errors -ftemplate-backtrace-limit=5
+Variables overriding user/site settings:
+  CXXFLAGS: -o /dev/null -O3 -march=native -ffast-math -fno-finite-math-only -fno-math-errno -DUSE_FAST_PNORM
+* checking for GNU extensions in Makefiles ... WARNING
+Found the following file(s) containing GNU extensions:
+  src/Makevars
+Portable Makefiles do not use GNU extensions such as +=, :=, $(shell),
+$(wildcard), ifeq ... endif, .NOTPARALLEL See section ‘Writing portable
+packages’ in the ‘Writing R Extensions’ manual.
+* checking for portable use of $(BLAS_LIBS) and $(LAPACK_LIBS) ... OK
+* checking use of PKG_*FLAGS in Makefiles ... OK
+* checking compiled code ... WARNING
+File ‘EMC2/libs/EMC2.so’:
+  Found ‘abort’, possibly from ‘abort’ (C)
+    Object: ‘gsl_bundled.o’
+  Found ‘stderr’, possibly from ‘stderr’ (C)
+    Object: ‘gsl_bundled.o’
+  Found ‘stdout’, possibly from ‘stdout’ (C)
+    Object: ‘gsl_bundled.o’
+
+Compiled code should not call entry points which might terminate R nor
+write to stdout/stderr instead of to the console, nor use Fortran I/O
+nor system RNGs nor [v]sprintf.
+
+See ‘Writing portable packages’ in the ‘Writing R Extensions’ manual.
+* checking files in ‘vignettes’ ... WARNING
+Files in the 'vignettes' directory but no files in 'inst/doc':
+  ‘refs.bib’ ‘SBC_data/SBC_DDM_single.RData’ ‘SBC_data/SBC_DDM.RData’
+  ‘SBC_data/SBC_LBA_single.RData’ ‘SBC_data/SBC_LBA.RData’
+  ‘SBC_data/SBC_LNR.RData’ ‘SBC_data/SBC_RDM.RData’
+  ‘Simulation-based-Calibration.Rmd’ ‘trends.Rmd’
+* checking examples ... OK
+* checking for unstated dependencies in ‘tests’ ... OK
+* checking tests ... OK
+  Running ‘testthat.R’
+* checking for unstated dependencies in vignettes ... OK
+* checking package vignettes ... WARNING
+Directory 'inst/doc' does not exist.
+Package vignettes without corresponding single PDF/HTML:
+  ‘Simulation-based-Calibration.Rmd’
+  ‘trends.Rmd’
+* checking running R code from vignettes ... SKIPPED
+* checking re-building of vignette outputs ... SKIPPED
 * DONE
-Status: 1 ERROR
+Status: 9 WARNINGs, 4 NOTEs

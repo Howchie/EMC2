@@ -199,7 +199,8 @@ rBAwD <- function(lR, pars, ok = rep(TRUE, length(lR)), launch = 1L,
 #' | *t0* | log | \[0, Inf\] | log(0) | | Non-decision time. |
 #' | *k* | log | \[0, Inf\] | log(0) | | Drive-decay rate; `k = 0` is the LBA limit. |
 #' | *ell* | log | \[0, Inf\] | log(1) | | Tonic clearance / minimum effective sampling rate. |
-#' | *pContaminant* | probit | \[0, 1\] | qnorm(0) | | Optional contamination probability handled by the data pipeline. |
+#' | *pContaminant* | probit | \[0, 1\] | qnorm(0) | | Optional *omission* contaminant probability: mass at `rt = Inf` only, handled by the data pipeline |
+#' | *pGuess* | probit | \[0, 1\] | qnorm(0) | | Optional uniform *guess* (outlier) probability, mixed into observed RT densities over the guess window |
 #'
 #' With `drift_distribution = "normal"`, `mu` and `sigma` are replaced by `v`
 #' (identity, default 1) and `sv` (log, default `log(1)`), and
@@ -230,8 +231,10 @@ rBAwD <- function(lR, pars, ok = rep(TRUE, length(lR)), launch = 1L,
 #' above `t0 + T_max` has density exactly zero and floors that trial's likelihood.
 #' This is a constraint on where the posterior can live, to be handled by
 #' initialisation and priors; `pContaminant` is a Bernoulli *omission* rate and
-#' does not address late responses. The `ell = 0` and `k = 0` limits do not have
-#' this finite support.
+#' does not address late responses. `pGuess` does: it mixes a uniform density
+#' over the guess window into observed RTs, so a response past `t0 + T_max` gets
+#' a likelihood floor instead of a zero. The `ell = 0` and `k = 0` limits do not
+#' have this finite support.
 #'
 #' @param drift_distribution Distribution of the trialwise launch strength:
 #'   `"lognormal"` (the default) for `log V ~ N(mu, sigma^2)`, or `"normal"` for
@@ -283,10 +286,10 @@ BAwD <- function(drift_distribution = c("lognormal", "normal"),
   # exactly reachable, so both are bound exceptions rather than clamped.
   exception <- c(A = 0, k = 0, ell = 0)
 
-  p_types <- c(p_types, pContaminant = qnorm(0))
-  transform <- c(transform, pContaminant = "pnorm")
-  minmax <- cbind(minmax, pContaminant = c(0.001, 0.999))
-  exception <- c(exception, pContaminant = 0)
+  # pContaminant (omission) and pGuess (uniform outlier); see add_nuisance_pars().
+  .nuis <- add_nuisance_pars(p_types, transform, minmax, exception)
+  p_types <- .nuis$p_types; transform <- .nuis$transform
+  minmax <- .nuis$minmax; exception <- .nuis$exception
 
   # "_LOGN" (not "_LN": resolve_race_model_adapter dispatches by substring and
   # "LNR" is an existing key).  The IO suffix is only reachable for the normal
@@ -299,7 +302,7 @@ BAwD <- function(drift_distribution = c("lognormal", "normal"),
     c_name = c_name,
     drift_distribution = drift_distribution,
     p_types = p_types,
-    p_types_canonical = names(p_types)[names(p_types) != "pContaminant"],
+    p_types_canonical = setdiff(names(p_types), .nuisance_par_names),
     transform = list(func = transform),
     bound = list(minmax = minmax, exception = exception),
     Ttransform = function(pars, dadm) {

@@ -1,9 +1,7 @@
-## RLF Race Model Simulation Recovery Test
-## Testing low alpha (1.1) and high alpha (1.8) single-subject single-condition recovery
 
 rm(list = ls())
 library(EMC2)
-
+library(dplyr)
 leak = 1.5
 n_trials = 10000
 label = "rou_test"
@@ -16,45 +14,49 @@ cat(sprintf("========================================================\n\n"))
 matchfun <- function(d) as.numeric(d$S) == as.numeric(d$lR)
 
 designROU <- design(
-  factors = list(subjects = 1, S = c("left", "right")),
+  factors = list(subjects = 1, S = c("left", "right"), L = c("Low", "High")),
   Rlevels = c("left", "right"),
   matchfun = matchfun,
   model = ROU(parameterization="equilibrium"),
-  formula = list(theta ~ lM, B ~ 1, A ~ 1, t0 ~ 1, chi ~ 1, tk ~ 1),
-  constants = c(B = log(1),A=log(0))
+  formula = list(theta ~ lM*L, B ~ lR, A ~ 1, t0 ~ 1, chi ~ lM, tk ~ 1),
+  constants = c(B = log(1),A=log(0),`theta_LHigh`=0)
 )
 
 designRDM <- design(
-  factors = list(subjects = 1, S = c("left", "right")),
+  factors = list(subjects = 1, S = c("left", "right"), L = c("Low", "High")),
   Rlevels = c("left", "right"),
   matchfun = matchfun,
-  model = RDMSWTN(),
-  formula = list(v ~ lM, B ~ 1, A ~ 1, t0 ~ 1, s ~ 1),
-  constants = c(s = log(1),A=log(0))
+  model = RDM,
+  formula = list(v ~ lM*L, B ~ lR, A ~ 1, t0 ~ 1, s ~ lM),
+  constants = c(s = log(1),A=log(0),`v_LHigh`=0)
 )
 
 p_vector <- sampled_pars(designROU, doMap = FALSE)
 p_vector["t0"] <- log(0.15)
-p_vector["chi"] <- log(1)
-p_vector["theta"] <- log(.5)
-p_vector["theta_lMTRUE"] <- log(2.5)
-p_vector["tk"] <- log(.5)
+p_vector["B_lRright"] = log(1.2)
+p_vector["chi"] <- log(.7)
+p_vector["chi_lMTRUE"] <- log(.7)
+p_vector["theta"] <- log(1)
+p_vector["theta_lMTRUE"] <- log(2)
+p_vector["theta_lMTRUE:LHigh"] <- log(.6)
+p_vector["tk"] <- log(leak)
 
 RNGkind("L'Ecuyer-CMRG")
 set.seed(42)
 
 cat("Generating simulated dataset...\n")
 t_sim <- system.time({
-  dat <- make_data(p_vector, designROU, n_trials = n_trials)
+  dat <- make_data(p_vector, designROU, n_trials = n_trials) %>%
+    mutate(Correct=as.numeric(S==R))
 })
 cat(sprintf("Data generation time: %.3f sec\n", t_sim["elapsed"]))
 
-cat("Data summary:\n")
 cat("Counts by response:\n")
 print(table(dat$R, dat$S,useNA = "ifany"))
 cat("Mean RT by stimulus:\n")
-print(tapply(dat$rt, dat$S, function(x) mean(x[is.finite(x)], na.rm = TRUE)))
-plot(density(dat$rt))
+print(tapply(dat$rt, dat$Correct, function(x) mean(x[is.finite(x)], na.rm = TRUE)))
+plot(density(dat$rt[dat$Correct==1]),col='blue')
+lines(density(dat$rt[dat$Correct==0]),col='red')
 emc <- make_emc(dat, designROU, type = "single")
 emc2 <- make_emc(dat, designRDM, type = "single", rt_resolution = 1/60)
 cat("\nFitting ROU model (MCMC)...\n")
@@ -89,7 +91,7 @@ t_fit <- system.time({
       sample = list(
         iter = 1000,
         max_gd = 1.10,
-        max_flat_loc = 0.5,
+        max_flat_loc = 2,
         flat_selection = c("alpha", "subj_ll"),
         flat_p1 = 1/3,
         flat_p2 = 1/3,

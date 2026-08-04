@@ -70,7 +70,16 @@ get_missing <- function(supplied, data, bound_name, default,type) {
 #' @param UCresponse Logical. Default FALSE, set responses to NA on upper-censored trials.
 #' @param LCdirection Logical. Default TRUE, lower-censored RTs are coded as -Inf; if FALSE, as NA.
 #' @param UCdirection Logical. Default TRUE, upper-censored RTs are coded as Inf; if FALSE, as NA.
-#' @param pContaminant Probability of contamination, default 0.
+#' @param pContaminant Probability of an *omission* contaminant (`rt = Inf`,
+#' `R = NA`), default 0.
+#' @param pGuess Probability of a uniform *guess* contaminant, drawn among the
+#' trials the omission did not take, so `P(guess) = (1 - pContaminant) * pGuess`.
+#' A guess replaces `rt` with a draw from `guess_window` and `R` with a uniform
+#' draw over the overt response levels.  Default 0.
+#' @param guess_window Length-2 numeric `c(lower, upper)` for the guess RT.
+#' Defaults to the effective truncation/censoring window, widened to
+#' `max(5, floor(max(rt)) + 1)` when it has no finite upper edge -- the same rule
+#' the likelihood uses (see `resolve_guess_window`).
 #' @param no_truncate Logical, default FALSE, for TRUE don't apply truncation to row (except if GO/NOGO).
 #' @param no_censor Logical, default FALSE, for TRUE don't apply censor to row (except if GO/NOGO).
 #' @param verbose Logical. Default FALSE, if TRUE report effects of filtering.
@@ -99,7 +108,8 @@ get_missing <- function(supplied, data, bound_name, default,type) {
 make_missing <- function(data, LT = NULL, UT = NULL, LC = NULL, UC = NULL,
   LCresponse = NULL, UCresponse = NULL,LCdirection = NULL, UCdirection = NULL,
   no_truncate=FALSE,no_censor=FALSE,
-  pContaminant=NULL,verbose=FALSE,rt_resolution=1/60,digits = 2)
+  pContaminant=NULL,pGuess=NULL,guess_window=NULL,
+  verbose=FALSE,rt_resolution=1/60,digits = 2)
 {
 
   no_truncate <- get_missing(no_truncate, data, "no_truncate",FALSE,"logical")
@@ -193,6 +203,7 @@ make_missing <- function(data, LT = NULL, UT = NULL, LC = NULL, UC = NULL,
   no_censor <- no_censor[!cutL & !cutU]
 
   pContaminant <- get_missing(pContaminant, data, "pContaminant",0,"numeric")
+  contam <- rep(FALSE, nrow(data))
   if (!all(pContaminant==0)) {
     contam <- rbinom(nrow(data), 1, pContaminant) == 1
     data[contam, "rt"] <- Inf
@@ -201,6 +212,34 @@ make_missing <- function(data, LT = NULL, UT = NULL, LC = NULL, UC = NULL,
       if (!attr(pContaminant,"subjectwise")) stat <- mean(contam) else
       stat <- tapply(contam,data$subjects,mean)
       message("% contaminated")
+      print(round(100*stat,digits))
+    }
+  }
+
+  # Uniform guess contaminant (pGuess).  Nested with the omission, so the two can
+  # never sum above 1:  P(guess) = (1 - pC) * pG, drawn only on trials the
+  # omission did not already take.  Placed here -- after the truncation cut and
+  # before censoring -- for the same reason the omission is: pGuess is then the
+  # guess proportion among RETAINED trials, which is exactly what the likelihood
+  # estimates (see resolve_guess_window() and src/contaminant_mixture.h).
+  pGuess <- get_missing(pGuess, data, "pGuess",0,"numeric")
+  if (!all(pGuess==0)) {
+    gw <- .resolve_sim_guess_window(data, guess_window)
+    # A guess is an overt response: never withheld, never a timeout.
+    resp_levels <- levels(data$R)
+    guess_levels <- resp_levels[!(resp_levels %in% c("nogo","time"))]
+    if (length(guess_levels) == 0L)
+      stop("pGuess needs at least one overt response level (excluding nogo/time)")
+    guess <- !contam & rbinom(nrow(data), 1, pGuess) == 1
+    if (any(guess)) {
+      data$rt[guess] <- runif(sum(guess), gw[1], gw[2])
+      data$R[guess] <- factor(sample(guess_levels, sum(guess), replace = TRUE),
+                              levels = resp_levels)
+    }
+    if (verbose) {
+      if (!attr(pGuess,"subjectwise")) stat <- mean(guess) else
+        stat <- tapply(guess,data$subjects,mean)
+      message("% guesses (window [",signif(gw[1],4),", ",signif(gw[2],4),"])")
       print(round(100*stat,digits))
     }
   }
@@ -239,6 +278,35 @@ make_missing <- function(data, LT = NULL, UT = NULL, LC = NULL, UC = NULL,
 }
 
 
+# Guess window used when SIMULATING.  Deliberately the same rule as
+# resolve_guess_window() in R/design.R, which is what the likelihood uses: the
+# window is the effective truncation/censoring window, so a simulated guess can
+# never be censored or truncated away, and an unbounded upper edge falls back to
+# max(5, floor(max rt) + 1) rather than a hard 5 s.
+.resolve_sim_guess_window <- function(data, guess_window = NULL) {
+  if (!is.null(guess_window)) {
+    gw <- as.numeric(guess_window)
+    if (length(gw) != 2 || !all(is.finite(gw)) || !(gw[2] > gw[1]))
+      stop("guess_window must be a length-2 numeric c(lower, upper) with upper > lower")
+    return(gw)
+  }
+  get1 <- function(nm, default) {
+    v <- data[[nm]]
+    if (is.null(v) || length(v) == 0) default else v
+  }
+  LG <- min(pmax(get1("LT", 0), get1("LC", 0)))
+  UG <- max(pmin(get1("UT", Inf), get1("UC", Inf)))
+  if (!is.finite(UG)) {
+    rt <- data$rt
+    max_rt <- suppressWarnings(max(rt[is.finite(rt)]))
+    UG <- if (is.finite(max_rt)) max(5, floor(max_rt) + 1) else 5
+  }
+  if (!is.finite(LG) || !(UG > LG))
+    stop("Cannot resolve a proper guess window; supply guess_window explicitly.")
+  c(LG, UG)
+}
+
+
 check_missing <- function(TC,data=NULL,design=NULL) {
   # This handles censoring and truncation where TC is not specified.
   # First check data, then design
@@ -247,7 +315,7 @@ check_missing <- function(TC,data=NULL,design=NULL) {
     TC <- add_defaults(TC,LT=0,LC=0,UT=Inf,UC=Inf,
       no_truncate=FALSE,no_censor=FALSE,verbose=FALSE,digits=2,
       LCresponse=FALSE,UCresponse=FALSE,LCdirection=TRUE,UCdirection=TRUE,
-      pContaminant=NULL,rt_resolution=NULL
+      pContaminant=NULL,pGuess=NULL,guess_window=NULL,rt_resolution=NULL
     )
     if (!is.null(data)) {
       for (i in c("LT","LC","UC","UT")) {
@@ -261,7 +329,7 @@ check_missing <- function(TC,data=NULL,design=NULL) {
     TC <- add_defaults(TC,LT=0,LC=0,UT=Inf,UC=Inf,
       no_truncate=FALSE,no_censor=FALSE,verbose=FALSE,digits=2,
       LCresponse=FALSE,UCresponse=FALSE,LCdirection=TRUE,UCdirection=TRUE,
-      pContaminant=NULL,rt_resolution=NULL
+      pContaminant=NULL,pGuess=NULL,guess_window=NULL,rt_resolution=NULL
     )
   }
   TC
@@ -541,7 +609,11 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
   if (expand>1) {
       data <- cbind(rep=rep(1:expand,each=dim(data)[1]),
                     data.frame(lapply(data,rep,times=expand)))
+      # apply() drops attributes, and some rfuns (e.g. the correlated BAwL C++
+      # simulator) require the "ok" bound flag, so carry it across the replication.
+      pars_ok_attr <- attr(pars, "ok")
       pars <- apply(pars,2,rep,times=expand)
+      if (!is.null(pars_ok_attr)) attr(pars, "ok") <- rep(pars_ok_attr, times = expand)
   }
   lR_levels <- if (is.null(data$lR)) character(0) else levels(data$lR)
   if (!is.null(ssd_meta)) {
@@ -564,8 +636,15 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
     Rrt <- LogicalRules_rfun(data, pars, model)
   } else Rrt <- model()$rfun(data,pars)
 
+  # One value per trial: for a race the parameter matrix has one row per
+  # accumulator, so take the first accumulator's row; DDM-family models have no
+  # lR column and are already one row per trial.
+  first_acc <- if (is.null(data$lR)) rep(TRUE, nrow(pars)) else
+    data$lR == levels(data$lR)[1]
   if (is.null(TC$pContaminant) & any(dimnames(pars)[[2]]=="pContaminant"))
-    TC$pContaminant <- pars[,"pContaminant"][data$lR==levels(data$lR)[1]]
+    TC$pContaminant <- pars[,"pContaminant"][first_acc]
+  if (is.null(TC$pGuess) & any(dimnames(pars)[[2]]=="pGuess"))
+    TC$pGuess <- pars[,"pGuess"][first_acc]
 
   dropNames <- c("lR","lM","winner")
   if (!return_functions && !is.null(design$Ffunctions))
@@ -591,7 +670,7 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
   data <- make_missing(data,LT=TC$LT,LC=TC$LC,UC=TC$UC,UT=TC$UT,
     LCresponse = TC$LCresponse, UCresponse = TC$UCresponse,
     LCdirection = TC$LCdirection, UCdirection = TC$UCdirection,
-    pContaminant=TC$pContaminant,
+    pContaminant=TC$pContaminant,pGuess=TC$pGuess,guess_window=TC$guess_window,
     no_truncate=TC$no_truncate,no_censor=TC$no_censor,
     verbose=TC$verbose,rt_resolution=TC$rt_resolution,digits=TC$digits)
 

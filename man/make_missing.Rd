@@ -17,6 +17,8 @@ make_missing(
   no_truncate = FALSE,
   no_censor = FALSE,
   pContaminant = NULL,
+  pGuess = NULL,
+  guess_window = NULL,
   verbose = FALSE,
   rt_resolution = 1/60,
   digits = 2
@@ -45,7 +47,18 @@ make_missing(
 
 \item{no_censor}{Logical, default FALSE, for TRUE don't apply censor to row (except if GO/NOGO).}
 
-\item{pContaminant}{Probability of contamination, default 0.}
+\item{pContaminant}{Probability of an \emph{omission} contaminant (\code{rt = Inf},
+\code{R = NA}), default 0.}
+
+\item{pGuess}{Probability of a uniform \emph{guess} contaminant, drawn among the
+trials the omission did not take, so \code{P(guess) = (1 - pContaminant) * pGuess}.
+A guess replaces \code{rt} with a draw from \code{guess_window} and \code{R} with a uniform
+draw over the overt response levels.  Default 0.}
+
+\item{guess_window}{Length-2 numeric \code{c(lower, upper)} for the guess RT.
+Defaults to the effective truncation/censoring window, widened to
+\code{max(5, floor(max(rt)) + 1)} when it has no finite upper edge -- the same rule
+the likelihood uses (see \code{resolve_guess_window}).}
 
 \item{verbose}{Logical. Default FALSE, if TRUE report effects of filtering.}
 

@@ -66,6 +66,39 @@ model_compress_ok <- function(model) {
   is.null(ok) || isTRUE(ok)
 }
 
+# Names of the contaminant nuisance parameters, in the order they are appended.
+# Both are *trailing* p_types: design() turns any p_type absent from the formula
+# into a constant at its default, and emc2col::validate_col_prefix (src/col_registry.h)
+# only checks the canonical prefix of the column order, so appending here is free.
+.nuisance_par_names <- c("pContaminant", "pGuess")
+
+# Append the contaminant nuisance parameters to a model's parameter machinery.
+#
+#   pContaminant  Bernoulli *omission* rate -- mass at rt == +Inf only.
+#   pGuess        uniform-outlier ("guess") rate -- a flat density over the
+#                 guess window, contributing to observed RT densities.
+#
+# See src/contaminant_mixture.h for how the two combine (nested weights).  Both
+# default to qnorm(0) == -Inf, i.e. probability 0, so a model that gains them
+# is unchanged until the user puts them in a formula.
+#
+# `p_types`/`transform`/`exception` are named vectors and `minmax` a 2-row
+# matrix, matching the shape each model constructor already builds.  Returns the
+# four updated objects in a list.
+add_nuisance_pars <- function(p_types, transform, minmax, exception = NULL,
+                              which = .nuisance_par_names) {
+  for (nm in which) {
+    if (nm %in% names(p_types)) next
+    p_types[[nm]] <- stats::qnorm(0)
+    transform[[nm]] <- "pnorm"
+    minmax <- cbind(minmax, c(0.001, 0.999))
+    colnames(minmax)[ncol(minmax)] <- nm
+    exception[[nm]] <- 0
+  }
+  list(p_types = p_types, transform = transform, minmax = minmax,
+       exception = exception)
+}
+
 .apply_timed_guess_winner <- function(out, lR_levels) {
   if (is.null(out$R) || !("time" %in% lR_levels)) return(out)
   

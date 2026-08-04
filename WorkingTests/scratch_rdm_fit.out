@@ -1,0 +1,136 @@
+
+ Sampled Parameters: 
+[1] "theta"        "theta_lMTRUE" "t0"           "chi"          "tk"          
+
+ Design Matrices: 
+$theta
+    lM theta theta_lMTRUE
+  TRUE     1            1
+ FALSE     1            0
+
+$B
+ B
+ 1
+
+$A
+ A
+ 1
+
+$t0
+ t0
+  1
+
+$chi
+ chi
+   1
+
+$tk
+ tk
+  1
+
+$pContaminant
+ pContaminant
+            1
+
+Parameter(s) sv not specified in formula and assumed constant.
+
+ Sampled Parameters: 
+[1] "v"        "v_lMTRUE" "B"        "t0"      
+
+ Design Matrices: 
+$v
+    lM v v_lMTRUE
+  TRUE 1        1
+ FALSE 1        0
+
+$B
+ B
+ 1
+
+$A
+ A
+ 1
+
+$t0
+ t0
+  1
+
+$s
+ s
+ 1
+
+$mG
+ mG
+  1
+
+$mK
+ mK
+  1
+
+$pContaminant
+ pContaminant
+            1
+
+$sv
+ sv
+  1
+
+Processing data set 1
+Likelihood speedup factor: 49.1, 407 unique trials
+Running preburn stage
+1: Iterations preburn = 50
+Running burn stage
+1: Iterations burn = 100
+Mean Rhat = 1.068
+Running adapt stage
+1: Iterations adapt = 100
+Enough unique values detected: 150
+Testing proposal distribution creation
+Successfully adapted - stopping adaptation
+Running sample stage
+Max flat drift = Inf
+1: Iterations sample = 100
+Max Rhat = 1.011
+Max flat drift = 0.533
+2: Iterations sample = 200
+Max Rhat = 1.004
+Max flat drift = 0.288
+3: Iterations sample = 300
+Max Rhat = 1.005
+Max flat drift = 0.276
+4: Iterations sample = 400
+Max Rhat = 1.004
+Max flat drift = 0.199
+5: Iterations sample = 500
+Max Rhat = 1.004
+Max flat drift = 0.227
+6: Iterations sample = 600
+Max Rhat = 1.003
+Max flat drift = 0.213
+7: Iterations sample = 700
+Max Rhat = 1.002
+Max flat drift = 0.18
+8: Iterations sample = 800
+Max Rhat = 1.002
+Max flat drift = 0.141
+9: Iterations sample = 900
+Max Rhat = 1.002
+Max flat drift = 0.146
+10: Iterations sample = 1000
+Max Rhat = 1.002
+Max flat drift = 0.2
+Time difference of 46.6365 secs
+
+ alpha 1 
+           2.5%    50%  97.5%  Rhat  ESS
+v        -0.499 -0.427 -0.362 1.002 2783
+v_lMTRUE  0.891  0.945  1.008 1.002 2868
+B        -0.220 -0.201 -0.183 1.001 2837
+t0       -2.083 -2.059 -2.036 1.001 2903
+$`1`
+           2.5%    50%  97.5%  Rhat  ESS
+v        -0.499 -0.427 -0.362 1.002 2783
+v_lMTRUE  0.891  0.945  1.008 1.002 2868
+B        -0.220 -0.201 -0.183 1.001 2837
+t0       -2.083 -2.059 -2.036 1.001 2903
+

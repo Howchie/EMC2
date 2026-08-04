@@ -3,7 +3,7 @@
 
 rm(list=ls())
 library(EMC2)
-source("WorkingTests/test_likelihood_plotfuns_ah.R")
+source("test_likelihood_plotfuns_ah.R")
 
 
 # Whether to run the (slow) MCMC recovery fits
@@ -512,7 +512,7 @@ run_RDM_demo <- function(p_contaminant = 0, estimate_contaminant = FALSE,
     factors = list(subjects = 1, S = c("left", "right")),
     Rlevels = c("left", "right"),
     matchfun = matchfun,
-    model = RDM, # NB this is just for demonstration; normally use RDM with built-in censoring/truncation handling
+    model = RDMSWTN, # NB this is just for demonstration; normally use RDM with built-in censoring/truncation handling
     formula = c(
       list(B ~ 1, v ~ lM, A ~ 1, t0 ~ 1, s ~ lM),
       if (estimate_contaminant) list(pContaminant ~ 1) else list()

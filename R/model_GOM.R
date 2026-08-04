@@ -167,17 +167,17 @@ GOM <- function(boundary_collapse = c("fixed", "exponential", "linear_additive",
       minmax <- cbind(minmax, pw = c(1e-3, Inf))
     }
   }
-  p_types <- c(p_types, pContaminant = qnorm(0))
-  transform <- c(transform, pContaminant = "pnorm")
-  minmax <- cbind(minmax, pContaminant = c(0.001, 0.999))
-  exception <- c(exception, pContaminant = 0)
+  # pContaminant (omission) and pGuess (uniform outlier); see add_nuisance_pars().
+  .nuis <- add_nuisance_pars(p_types, transform, minmax, exception)
+  p_types <- .nuis$p_types; transform <- .nuis$transform
+  minmax <- .nuis$minmax; exception <- .nuis$exception
 
   list(
     type = "RACE",
     c_name = paste0("GOM", .GOM_SUFFIX[[kind]]),
     compress_ok = FALSE,
     p_types = p_types,
-    p_types_canonical = names(p_types)[names(p_types) != "pContaminant"],
+    p_types_canonical = setdiff(names(p_types), .nuisance_par_names),
     transform = list(func = transform),
     bound = list(minmax = minmax, exception = exception),
     Ttransform = function(pars, dadm) cbind(pars, b = 1 + pars[, "B"] + pars[, "A"]),

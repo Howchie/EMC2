@@ -51,7 +51,8 @@ The model parameters are:\tabular{llllll}{
    \emph{mG} \tab log \tab [0, Inf] \tab log(1) \tab \emph{lambda_g} = \emph{q} / \emph{mG} \tab Mean of the optional guess clock. \cr
    \emph{mK} \tab log \tab [0, Inf] \tab log(1) \tab \emph{lambda_k} = \emph{q} / \emph{mK} \tab Mean of the optional kill clock. \cr
    \emph{omega} \tab probit \tab [0, 1] \tab qnorm(.5) \tab  \tab Erlang-1 mixture weight in mixed mode. \cr
-   \emph{pContaminant} \tab probit \tab [0, 1] \tab qnorm(0) \tab  \tab Optional contamination probability handled by the data pipeline. \cr
+   \emph{pContaminant} \tab probit \tab [0, 1] \tab qnorm(0) \tab  \tab Optional \emph{omission} contaminant probability: mass at \code{rt = Inf} only, handled by the data pipeline \cr
+   \emph{pGuess} \tab probit \tab [0, 1] \tab qnorm(0) \tab  \tab Optional uniform \emph{guess} (outlier) probability, mixed into observed RT densities over the guess window \cr
    \emph{rho} \tab scaled probit \tab [-1, 1] \tab qnorm(.5) \tab  \tab Gaussian-copula correlation between the two participating finishing times; only when \code{correlated = TRUE}. \cr
 }
 
@@ -79,8 +80,12 @@ truncated at zero and the ordinary RDM is recovered when \code{sv = 0}.
 As a race model, RDMSWTN has one accumulator per response option. EMC2
 constructs the latent accumulator factor \code{lR} from \code{R}, and the race
 likelihood combines one winning density with the survivor probabilities of
-all other accumulators. The optional \code{pContaminant} parameter is generic
-nuisance infrastructure and is not part of the SWTN distribution.
+all other accumulators. The optional \code{pContaminant} and \code{pGuess} parameters
+are generic nuisance infrastructure and are not part of the SWTN
+distribution: \code{pContaminant} is an \emph{omission} rate contributing mass only at
+\code{rt = Inf}, \code{pGuess} a uniform \emph{outlier} density mixed into observed RTs.
+Both are proportions among \emph{retained} trials, being applied after truncation
+renormalisation.
 
 With \code{correlated = TRUE}, exactly two active accumulator rows in a trial may
 have the same signed, nonzero natural-scale \code{rho}; every other row must have

@@ -37,7 +37,7 @@ NumericVector d_DDM_Wien(NumericVector rts, IntegerVector Rs, NumericMatrix pars
         }
       } else{ // otherwise use ddiff function with integration
         double Rval;
-        double Rerr;
+        double Rerr = 0.0;
         double sz = (pars(i,6) < (1 - pars(i,6))) ? 2*pars(i,7)*pars(i,6) : 2*pars(i,7)*(1-pars(i,6));
         ddiff(choice, rts[i], pm, pars(i, 1)/pars(i,5), pars(i, 0)/pars(i,5), pars(i, 3), pars(i, 6), sz, pars(i, 2)/pars(i,5), pars(i,4), eps, K, Epsflag, Neval, &Rval, &Rerr);
         out[i] = (Rval > 0.0 && R_FINITE(Rval)) ? log(Rval) : R_NegInf;
@@ -118,7 +118,7 @@ inline void d_DDM_Wien_raw(const double* rts, const int* Rs,
         }
       } else {
         double Rval;
-        double Rerr;
+        double Rerr = 0.0;
         const double sz = (Z_[i] < (1.0 - Z_[i])) ? 2.0 * SZ_[i] * Z_[i]
                                                   : 2.0 * SZ_[i] * (1.0 - Z_[i]);
         ddiff(choice, rts[i], pm, a_[i] / s_[i], v_[i] / s_[i], t0_[i],
@@ -169,7 +169,7 @@ inline void p_DDM_Wien_raw(const double* rts, const int* Rs,
       out[i] = pwiener_inline(new_rt, a_[i] / s_[i], v, w, eps, K, Epsflag);
     } else {
       double Rval;
-      double Rerr;
+      double Rerr = 0.0;
       const double pm = (Rs[i] == 1) ? -1.0 : 1.0;
       const double sz = (Z_[i] < (1.0 - Z_[i])) ? 2.0 * SZ_[i] * Z_[i]
                                                 : 2.0 * SZ_[i] * (1.0 - Z_[i]);
@@ -230,7 +230,7 @@ NumericVector p_DDM_Wien(NumericVector rts, IntegerVector Rs, NumericMatrix pars
         }
       } else{ // otherwise use pdiff function with integration
         double Rval;
-        double Rerr;
+        double Rerr = 0.0;
         double pm = (Rs[i]==1) ? -1 : 1;
         double sz = (pars(i,6) < (1 - pars(i,6))) ? 2*pars(i,7)*pars(i,6) : 2*pars(i,7)*(1-pars(i,6));
         pdiff(choice, rts[i], pm, pars(i, 1)/pars(i,5), pars(i, 0)/pars(i,5), pars(i, 3), pars(i, 6), sz, pars(i, 2)/pars(i,5), pars(i,4), eps, K, Epsflag, Neval, &Rval, &Rerr);

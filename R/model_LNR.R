@@ -53,7 +53,8 @@ rLNR <- function(lR,pars,p_types=c("m","s","t0"),ok=rep(TRUE,dim(pars)[1])){
 #'  | *m*       | identity  | \[-Inf, Inf\]   | 1         |                            | Meanlog of the lognormal decision-time distribution |
 #'  | *s*       | log       | \[0, Inf\]      | log(1)    |                            | SDlog of the lognormal decision-time distribution |
 #'  | *t0*      | log       | \[0, Inf\]      | log(0)    |                            | Additive non-decision-time shift |
-#'  | *pContaminant* | probit | \[0, 1\] | qnorm(0) | | Optional contamination probability handled by the data pipeline |
+#'  | *pContaminant* | probit | \[0, 1\] | qnorm(0) | | Optional *omission* contaminant probability: mass at `rt = Inf` only, handled by the data pipeline |
+#'  | *pGuess* | probit | \[0, 1\] | qnorm(0) | | Optional uniform *guess* (outlier) probability, mixed into observed RT densities over the guess window |
 #'
 #' Conditional on an accumulator's parameters, its decision time is
 #' `T = t0 + Y`, where `log(Y) ~ Normal(m, s^2)`. Thus `m` and `s` are the
@@ -76,8 +77,11 @@ rLNR <- function(lR,pars,p_types=c("m","s","t0"),ok=rep(TRUE,dim(pars)[1])){
 #' the rate of accumulation (see the example below).
 #'
 #' All model parameters are trial-dependent after the design formulas are
-#' evaluated. `pContaminant` is a generic nuisance parameter and is not part of
-#' the lognormal race distribution itself.
+#' evaluated. `pContaminant` and `pGuess` are generic nuisance parameters and
+#' are not part of the lognormal race distribution itself: `pContaminant` is a
+#' Bernoulli *omission* rate that puts mass only at `rt = Inf`, while `pGuess`
+#' mixes a uniform outlier density into observed RTs. Both are proportions among
+#' *retained* trials -- they are applied after truncation renormalisation.
 #'
 #' Rouder, J. N., Province, J. M., Morey, R. D., Gomez, P., & Heathcote, A. (2015).
 #' The lognormal race: A cognitive-process model of choice and latency with
@@ -105,10 +109,17 @@ LNR <- function() {
   list(
     type="RACE",
     c_name = "LNR",
-    p_types=c("m" = 1,"s" = log(1),"t0" = log(0), "pContaminant"=qnorm(0)),
+    p_types=c("m" = 1,"s" = log(1),"t0" = log(0), "pContaminant"=qnorm(0), "pGuess"=qnorm(0)),
     p_types_canonical = c("m", "s", "t0"),
-    transform=list(func=c(m = "identity",s = "exp", t0 = "exp", pContaminant="pnorm")),
-    bound=list(minmax=cbind(m=c(-Inf,Inf),s = c(0, Inf), t0=c(0.05,Inf)),pContaminant=c(0.001,0.999)),
+    transform=list(func=c(m = "identity",s = "exp", t0 = "exp", pContaminant="pnorm", pGuess="pnorm")),
+    # NOTE: pContaminant's bound sits outside cbind() (a long-standing slip, so
+    # it is not actually a minmax column).  Left as-is deliberately: moving it
+    # would change pContaminant's established behaviour.
+    # pGuess needs the exception at 0: without it the [0.001, 0.999] minmax
+    # clamps the default (pnorm(-Inf) = 0) up to 0.001, making the nuisance
+    # parameter silently active.
+    bound=list(minmax=cbind(m=c(-Inf,Inf),s = c(0, Inf), t0=c(0.05,Inf),pGuess=c(0.001,0.999)),
+               exception=c(pGuess=0),pContaminant=c(0.001,0.999)),
     # Trial dependent parameter transform
     Ttransform = function(pars,dadm) pars,
     # Random function for racing accumulators
@@ -354,17 +365,20 @@ PCOUNTER <- function() {
   list(
     type = "RACE", c_name = "PCOUNTER",
     p_types = c(nu = log(10), sv = log(0), gamma = log(0), k = log(5), omega = log(0),
-                t0 = log(0), pContaminant = qnorm(0)),
+                t0 = log(0), pContaminant = qnorm(0), pGuess = qnorm(0)),
     p_types_canonical = c("nu", "sv", "gamma", "k", "omega", "t0"),
     transform = list(func = c(nu = "exp", sv = "exp", gamma = "exp", k = "exp",
-                              omega = "exp", t0 = "exp", pContaminant = "pnorm")),
+                              omega = "exp", t0 = "exp", pContaminant = "pnorm",
+                              pGuess = "pnorm")),
     # Keep estimated variability/self-excitation parameters above the numerical
     # branch threshold. Exact zero remains available only as an explicit fixed
     # constant through the exceptions below.
     bound = list(minmax = cbind(nu = c(1e-6, Inf), sv = c(1e-4, Inf), gamma = c(1e-4, Inf),
                                 k = c(1, Inf), omega = c(1e-4, Inf), t0 = c(0, Inf),
-                                pContaminant = c(0.001, 0.999)),
-                 exception = c(sv = 0, gamma = 0, omega = 0, t0 = 0, pContaminant = 0)),
+                                pContaminant = c(0.001, 0.999),
+                                pGuess = c(0.001, 0.999)),
+                 exception = c(sv = 0, gamma = 0, omega = 0, t0 = 0, pContaminant = 0,
+                               pGuess = 0)),
     Ttransform = function(pars, dadm) pars,
     rfun = function(data = NULL, pars) rPCOUNTER(data$lR, pars, ok = attr(pars, "ok")),
     dfun = dPCOUNTER, pfun = pPCOUNTER,
@@ -389,7 +403,8 @@ PCOUNTER <- function() {
 #' | *mu* | log | \[0, Inf\] | log(.4) | Location of the Gaussian component. The current bounds restrict this location to be nonnegative. |
 #' | *sigma* | log | \[0, Inf\] | log(.05) | SD of the Gaussian component. |
 #' | *tau* | log | \[0, Inf\] | log(.1) | Mean of the exponential component; its rate is `1 / tau`. |
-#' | *pContaminant* | probit | \[0, 1\] | qnorm(0) | Optional contamination probability handled by the data pipeline. |
+#' | *pContaminant* | probit | \[0, 1\] | qnorm(0) | Optional *omission* contaminant probability: mass at `rt = Inf` only, handled by the data pipeline |
+#' | *pGuess* | probit | \[0, 1\] | qnorm(0) | Optional uniform *guess* (outlier) probability, mixed into observed RT densities over the guess window |
 #'
 #' The ex-Gaussian distribution has support on the real line. Its mean is
 #' `mu + tau` and its variance is `sigma^2 + tau^2`; these are descriptive
@@ -449,14 +464,16 @@ REXG <- function() {
   list(
     type = "RACE",
     c_name = "REXG",
-    p_types = c(mu = log(.4), sigma = log(.05), tau = log(.1), pContaminant = qnorm(0)),
+    p_types = c(mu = log(.4), sigma = log(.05), tau = log(.1), pContaminant = qnorm(0),
+                pGuess = qnorm(0)),
     p_types_canonical = c("mu", "sigma", "tau"),
     transform = list(func = c(mu = "exp", sigma = "exp", tau = "exp",
-                              pContaminant = "pnorm")),
+                              pContaminant = "pnorm", pGuess = "pnorm")),
     bound = list(
       minmax = cbind(mu = c(0, Inf), sigma = c(1e-6, Inf),
-                     tau = c(1e-6, Inf), pContaminant = c(0.001, 0.999)),
-      exception = c(pContaminant = 0)
+                     tau = c(1e-6, Inf), pContaminant = c(0.001, 0.999),
+                     pGuess = c(0.001, 0.999)),
+      exception = c(pContaminant = 0, pGuess = 0)
     ),
     Ttransform = function(pars, dadm) pars,
     rfun = function(data = NULL, pars) rREXG(data$lR, pars, ok = attr(pars, "ok")),

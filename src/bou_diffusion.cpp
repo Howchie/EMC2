@@ -189,6 +189,7 @@ Rcpp::DataFrame rbou_cpp(int n, NumericVector v, NumericVector a,
     const double m1 = -std::expm1(-bi * dt);
     const double m2 = -std::expm1(-2.0 * bi * dt);
     const double drift_gain = (bi > phi_eps) ? (m1 / bi) : dt;
+    const double drift_step = v_eff * drift_gain;
     const double var = (bi > phi_eps) ? (si * si * m2 / (2.0 * bi))
                                       : (si * si * dt);
     const double sd = std::sqrt(std::max(var, 0.0));
@@ -206,7 +207,7 @@ Rcpp::DataFrame rbou_cpp(int n, NumericVector v, NumericVector a,
     double hi0 = geo.x_hi(0.0), lo0 = geo.x_lo(0.0);
 
     while (t < t_max) {
-      const double X1 = X * phi + v_eff * drift_gain + sd * R::norm_rand();
+      const double X1 = X * phi + drift_step + sd * R::norm_rand();
       const double hi1 = geo.x_hi(t + dt), lo1 = geo.x_lo(t + dt);
       t += dt;
 
