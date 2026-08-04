@@ -138,14 +138,30 @@ run_emc <- function(emc, stage, stop_criteria,
     }
     t0 <- Sys.time()
     # Actual sampling
-    sub_emc <- auto_mclapply(sub_emc,run_stages, stage = stage, iter= progress$step_size*max(1,cur_thin),
-                             verbose=verbose,  verboseProgress = verboseProgress,
-                             particle_factor=particle_factor,search_width=search_width,
-                             n_cores=cores_per_chain, mc.cores = cores_for_chains,
-                             r_cores = r_cores)
-    if(getOption("emc2.print_iteration_duration", FALSE)) { print(Sys.time()-t0) }
-    class(sub_emc) <- "emc"
-    if(cores_for_chains > 1) sub_emc <- pointer_reset_wrapper(sub_emc, emc)
+    stage_iter <- progress$step_size*max(1,cur_thin)
+    if (.emc_use_flat_parallel()) {
+      # One shared, load-balanced pool over all (chain, subject) pairs.  No
+      # sampler object crosses a process boundary, so the custom-kernel
+      # external pointers held by the master stay valid and do not need
+      # re-seating afterwards.
+      sub_emc <- run_stages_flat(sub_emc, stage = stage, iter = stage_iter,
+                                 verbose = verbose, verboseProgress = verboseProgress,
+                                 particle_factor = particle_factor,
+                                 search_width = search_width,
+                                 n_workers = cores_per_chain*cores_for_chains,
+                                 r_cores = r_cores)
+      if(getOption("emc2.print_iteration_duration", FALSE)) { print(Sys.time()-t0) }
+      class(sub_emc) <- "emc"
+    } else {
+      sub_emc <- auto_mclapply(sub_emc,run_stages, stage = stage, iter= stage_iter,
+                               verbose=verbose,  verboseProgress = verboseProgress,
+                               particle_factor=particle_factor,search_width=search_width,
+                               n_cores=cores_per_chain, mc.cores = cores_for_chains,
+                               r_cores = r_cores)
+      if(getOption("emc2.print_iteration_duration", FALSE)) { print(Sys.time()-t0) }
+      class(sub_emc) <- "emc"
+      if(cores_for_chains > 1) sub_emc <- pointer_reset_wrapper(sub_emc, emc)
+    }
     if(stage != 'preburn'){
       if(is.numeric(thin)){
         sub_emc <- subset(sub_emc, stage = c("preburn", "burn", "adapt", "sample"), thin = thin)

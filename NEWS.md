@@ -1,5 +1,15 @@
 # EMC2 3.4.0
 
+## Performance
+
+-   The particle step no longer re-factorises its proposal covariances on every iteration. `chains_var`/`eff_var` are constant for a whole block and the group covariance is shared by all subjects within an iteration, so each is now decomposed once instead of `n_subjects * n_proposals` times per iteration. The saving scales with the cube of the number of parameters: negligible for small models, roughly 5 ms per iteration at 50 parameters with 30 subjects, and ~21 ms at 100 parameters.
+
+-   Likelihood calls now hand the C++ mapper compressed design matrices instead of materialising a full-length copy of every design on every call. Log-likelihoods are bit-identical.
+
+-   Experimental: `options(emc2.flat_parallel = TRUE)` replaces the nested "fork over chains, then fork over subjects each iteration" scheme with a single persistent, load-balanced worker pool covering all (chain, subject) pairs. This removes the per-iteration forking and lets a chain that finishes early release its cores to the chains still running, rather than leaving them idle. Off by default pending benchmarking on multi-core hardware.
+
+    A side effect is that the flattened path gives the *same* draws regardless of how many cores are used, because each (chain, subject) carries its own L'Ecuyer RNG stream. The default nested path does not have that property.
+
 ## Bug fixes
 
 -   Fixed some maths that was wrong about the ECDF plot for SBC
