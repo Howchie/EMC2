@@ -416,7 +416,8 @@ run_stage <- function(pmwgs,
                       tune = NULL,
                       verbose = TRUE,
                       verboseProgress = TRUE,
-                      r_cores = 1) {
+                      r_cores = 1,
+                      core_ctl = NULL) {
   # Set defaults for NULL values
   # Set necessary local variables
   # Set stable (fixed) new_sample argument for this run
@@ -513,8 +514,11 @@ run_stage <- function(pmwgs,
     # Particle step
     # A single-subject chain otherwise leaves cores_per_chain - 1 workers idle.
     # Route that existing budget into the independent proposal likelihoods.
+    # Chains that have already finished this block release their cores; pick up
+    # whatever is free right now rather than staying on the static share.
     core_budget <- .particle_core_budget(
-      pmwgs$n_subjects, n_cores = n_cores, r_cores = r_cores
+      pmwgs$n_subjects, n_cores = .emc_cores_now(core_ctl, n_cores),
+      r_cores = r_cores
     )
     # group_var is `tvar` for every sampler variant, hence the same matrix for
     # every subject: factorise it once here instead of n_subjects times below.

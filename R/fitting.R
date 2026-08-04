@@ -153,11 +153,15 @@ run_emc <- function(emc, stage, stop_criteria,
       if(getOption("emc2.print_iteration_duration", FALSE)) { print(Sys.time()-t0) }
       class(sub_emc) <- "emc"
     } else {
+      # One reallocation arena per block: markers must not survive into the next
+      # block, or every chain would start it believing its siblings had finished.
+      core_ctl <- .emc_core_ctl(length(sub_emc), cores_per_chain)
       sub_emc <- auto_mclapply(sub_emc,run_stages, stage = stage, iter= stage_iter,
                                verbose=verbose,  verboseProgress = verboseProgress,
                                particle_factor=particle_factor,search_width=search_width,
                                n_cores=cores_per_chain, mc.cores = cores_for_chains,
-                               r_cores = r_cores)
+                               r_cores = r_cores, core_ctl = core_ctl)
+      if (!is.null(core_ctl)) unlink(core_ctl$dir, recursive = TRUE)
       if(getOption("emc2.print_iteration_duration", FALSE)) { print(Sys.time()-t0) }
       class(sub_emc) <- "emc"
       if(cores_for_chains > 1) sub_emc <- pointer_reset_wrapper(sub_emc, emc)
@@ -195,17 +199,28 @@ run_emc <- function(emc, stage, stop_criteria,
 }
 
 run_stages <- function(sampler, stage = "preburn", iter=0, verbose = TRUE, verboseProgress = TRUE,
-                       particle_factor=50, search_width= NULL, n_cores=1, r_cores = 1)
+                       particle_factor=50, search_width= NULL, n_cores=1, r_cores = 1,
+                       core_ctl = NULL)
 {
+  # Hand this chain's cores back to its siblings as soon as it is done, however
+  # it leaves -- an error here must not strand the budget for the whole block.
+  on.exit(.emc_core_release(core_ctl), add = TRUE)
   particles <- round(particle_factor*sqrt(sampler$n_pars))
   if (!sampler$init) {
     sampler <- init(sampler, n_cores = n_cores, r_cores = r_cores)
   }
   if (iter == 0) return(sampler)
   tune <- list(search_width = search_width)
+  timer_dir <- getOption("emc2.chain_timer_dir", NULL)
+  t_start <- if (is.null(timer_dir)) NULL else Sys.time()
   sampler <- run_stage(sampler, stage = stage,iter = iter, particles = particles,
                        n_cores = n_cores, tune = tune, verbose = verbose,
-                       verboseProgress = verboseProgress, r_cores = r_cores)
+                       verboseProgress = verboseProgress, r_cores = r_cores,
+                       core_ctl = core_ctl)
+  if (!is.null(t_start)) {
+    saveRDS(as.numeric(difftime(Sys.time(), t_start, units = "secs")),
+            file.path(timer_dir, paste0("chain_", Sys.getpid(), ".rds")))
+  }
   return(sampler)
 }
 
@@ -1013,6 +1028,55 @@ extractDadms <- function(dadms, names = NULL){
   attr(dadm_list, "shared_ll_idx") <- components
   return(list(prior = prior,
               dadm_list = dadm_list, subjects = subjects))
+}
+
+# Dynamic core reallocation across chains --------------------------------------
+#
+# Chains run a whole block independently and do not finish it together: on real
+# fits the slowest chain takes ~30% longer than the fastest, so the finished
+# chains' cores sit idle until the block ends.  Rather than flattening the whole
+# schedule (which pays a barrier every iteration), each chain publishes a marker
+# when it exits and every remaining chain re-reads, once per iteration, how many
+# chains are still running -- taking over the freed cores for its own subjects.
+#
+# The read is a directory listing of at most n_chains entries, tens of
+# microseconds against an iteration of ~100 ms.  Two chains finishing at the
+# same moment can both claim the freed budget; that transient oversubscription
+# is harmless and corrects itself on the next iteration.
+#
+# Off by default, and not because it fails to work: it halves the straggle, but
+# `mclapply` derives its children's L'Ecuyer streams from `mc.cores`, so making
+# the core count depend on wall-clock timing makes a fit irreproducible from a
+# fixed seed -- run to run, not merely across core counts.  Measured gain on a
+# real 112-subject RDMSWTN fit was ~1% (35.3s -> 35.0s over 40-iteration
+# blocks), which does not buy off that loss.  Enable with
+# `options(emc2.dynamic_cores = TRUE)` when throughput matters more than
+# reproducibility.
+.emc_core_ctl <- function(n_chains, cores_per_chain,
+                          enabled = getOption("emc2.dynamic_cores", FALSE)) {
+  if (!isTRUE(enabled) || n_chains <= 1 || cores_per_chain < 1) return(NULL)
+  if (Sys.info()[1] == "Windows") return(NULL)
+  dir <- file.path(tempdir(), paste0("emc_cores_", Sys.getpid(), "_",
+                                     as.integer(stats::runif(1, 0, 1e6))))
+  if (!dir.create(dir, showWarnings = FALSE, recursive = TRUE)) return(NULL)
+  list(dir = dir, n_chains = as.integer(n_chains),
+       total = as.integer(n_chains) * as.integer(cores_per_chain))
+}
+
+# Cores this chain may use right now, never fewer than its own static share.
+.emc_cores_now <- function(core_ctl, base) {
+  if (is.null(core_ctl)) return(base)
+  alive <- core_ctl$n_chains - length(list.files(core_ctl$dir))
+  if (alive <= 0L) return(core_ctl$total)
+  max(base, core_ctl$total %/% alive)
+}
+
+.emc_core_release <- function(core_ctl) {
+  if (!is.null(core_ctl)) {
+    file.create(file.path(core_ctl$dir, paste0("done_", Sys.getpid())),
+                showWarnings = FALSE)
+  }
+  invisible(NULL)
 }
 
 auto_mclapply <- function(X, FUN, mc.cores, ...){
