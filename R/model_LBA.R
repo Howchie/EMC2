@@ -96,7 +96,8 @@ rLBA <- function(lR, pars, p_types = c("v", "sv", "b", "A", "t0"),
 #' | *B*       | log       | \[0, Inf\]    | log(1)    | *b* = *B*+*A*              | Distance from *A* to *b* (response threshold)                                       |
 #' | *t0*      | log       | \[0, Inf\]    | log(0)    |                            | Non-decision time                                         |
 #' | *sv*      | log       | \[0, Inf\]    | log(1)    |                            | Between-trial variation in evidence-accumulation rate                      |
-#' | *pContaminant* | probit | \[0, 1\] | qnorm(0) | | Optional contamination probability handled by the data pipeline |
+#' | *pContaminant* | probit | \[0, 1\] | qnorm(0) | | Optional *omission* contaminant probability: mass at `rt = Inf` only, handled by the data pipeline |
+#' | *pGuess* | probit | \[0, 1\] | qnorm(0) | | Optional uniform *guess* (outlier) probability, mixed into observed RT densities over the guess window |
 #'
 #'
 #' All core LBA parameters are estimated on the log scale, except for the drift
@@ -159,11 +160,11 @@ LBA <- function(posdrift=TRUE){
     # parameter vector; if represented on the transformed scale, their off
     # value would be log(0) = -Inf.
     # p_vector transform, sets sv as a scaling parameter
-    p_types=c("v" = 1,"sv" = log(1),"B" = log(1),"A" = log(0),"t0" = log(0), "pContaminant"=qnorm(0)),
+    p_types=c("v" = 1,"sv" = log(1),"B" = log(1),"A" = log(0),"t0" = log(0), "pContaminant"=qnorm(0), "pGuess"=qnorm(0)),
     p_types_canonical = c("v", "sv", "B", "A", "t0"),
-    transform=list(func=c(v = "identity",sv = "exp", B = "exp", A = "exp",t0 = "exp",pContaminant="pnorm")),
-    bound=list(minmax=cbind(v=c(-Inf,Inf),sv = c(1e-4, Inf), A=c(1e-4,Inf),B=c(1e-4,Inf),t0=c(0.05,Inf),pContaminant=c(0.001,0.999)),
-               exception=c(A=0,pContaminant=0)),
+    transform=list(func=c(v = "identity",sv = "exp", B = "exp", A = "exp",t0 = "exp",pContaminant="pnorm",pGuess="pnorm")),
+    bound=list(minmax=cbind(v=c(-Inf,Inf),sv = c(1e-4, Inf), A=c(1e-4,Inf),B=c(1e-4,Inf),t0=c(0.05,Inf),pContaminant=c(0.001,0.999),pGuess=c(0.001,0.999)),
+               exception=c(A=0,pContaminant=0,pGuess=0)),
     # Transform to natural scale
     # Trial dependent parameter transform
     Ttransform = function(pars,dadm) {
@@ -584,7 +585,8 @@ rBAwL_corr <- function(lR, pars, ok = rep(TRUE, nrow(pars)),
 #' | *mG* | log | \[0, Inf\] | log(1) | *lambda_g* = *q* / *mG* | Mean of the optional guess clock. |
 #' | *mK* | log | \[0, Inf\] | log(1) | *lambda_k* = *q* / *mK* | Mean of the optional kill clock. |
 #' | *omega* | probit | \[0, 1\] | qnorm(.5) | | Probability of the Erlang-1 component in mixed mode. |
-#' | *pContaminant* | probit | \[0, 1\] | qnorm(0) | | Optional contamination probability handled by the data pipeline. |
+#' | *pContaminant* | probit | \[0, 1\] | qnorm(0) | | Optional *omission* contaminant probability: mass at `rt = Inf` only, handled by the data pipeline |
+#' | *pGuess* | probit | \[0, 1\] | qnorm(0) | | Optional uniform *guess* (outlier) probability, mixed into observed RT densities over the guess window |
 #' | *rho* | scaled probit | \[-1, 1\] | qnorm(.5) | | Direct cell-level correlation of the underlying Gaussian drifts; only when `correlated = TRUE`. |
 #'
 #' Here `q = 1` for Erlang-1 clocks and `q = 2` for Erlang-2 clocks. In
@@ -675,10 +677,10 @@ BAwL <- function(posdrift = TRUE, erlang_shape = 1L,
     exception <- c(exception, omega = 0)
   }
 
-  p_types <- c(p_types, pContaminant = qnorm(0))
-  transform <- c(transform, pContaminant = "pnorm")
-  minmax <- cbind(minmax, pContaminant = c(0.001, 0.999))
-  exception <- c(exception, pContaminant = 0)
+  # pContaminant (omission) and pGuess (uniform outlier); see add_nuisance_pars().
+  .nuis <- add_nuisance_pars(p_types, transform, minmax, exception)
+  p_types <- .nuis$p_types; transform <- .nuis$transform
+  minmax <- .nuis$minmax; exception <- .nuis$exception
 
   if (correlated) {
     # rho is a direct cell-level race correlation.  BAwLcorr's Ttransform

@@ -23,9 +23,9 @@ RDMSWTN accumulator. For decision time \code{x = t - t0}, operational time is
 \code{q(x) = x - x^2 / (2 * tau)} on \verb{0 < x < tau}. The clock has budget
 \code{Q = tau / 2}; the density is zero at and beyond \code{t0 + tau}, while the CDF
 remains fixed at the ordinary RDMSWTN CDF evaluated at \code{Q}. The remaining
-probability is genuine omission mass. The analytic functions and both simulators
-also accept \code{tau = Inf}, which is the exact identity-clock limit and
-recovers the ordinary RDMSWTN process without an exhaustion plateau.
+probability is genuine omission mass. The analytic functions and both
+simulators also accept \code{tau = Inf}, which is the exact identity-clock limit
+and recovers the ordinary RDMSWTN process without an exhaustion plateau.
 }
 \details{
 The parameters are \code{v}, \code{B}, \code{A}, \code{t0}, \code{s}, \code{sv}, and \code{tau}, with
@@ -34,8 +34,8 @@ These seven parameters use exponential transforms. Their defaults are
 \code{log(1)} for \code{v}, \code{B}, \code{s}, and \code{tau}, and the boundary value \code{log(0)} for
 \code{A}, \code{t0}, and \code{sv}. The drift, start-point variability, diffusion scale,
 and \code{b = B + A} convention are otherwise identical to \code{\link[=RDMSWTN]{RDMSWTN()}}.
-The optional \code{pContaminant} parameter is handled by the generic data
-pipeline. With \code{correlated = TRUE}, \code{rho} couples exactly two active
+The optional \code{pContaminant} (omission) and \code{pGuess} (uniform outlier)
+parameters are handled by the generic data pipeline. With \code{correlated = TRUE}, \code{rho} couples exactly two active
 finishing-time marginals through the same Gaussian-copula contract as
 \code{\link[=RDMSWTN]{RDMSWTN()}}. Active nonzero correlation requires \code{posdrift = TRUE}.
 }

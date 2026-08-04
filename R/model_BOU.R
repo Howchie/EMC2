@@ -250,6 +250,13 @@ BOU <- function(boundary_collapse = c("fixed", "exponential", "linear_additive",
     }
   }
 
+  # pContaminant (omission) and pGuess (uniform outlier).  Appended LAST, after
+  # the optional collapse columns, because the kernel indexes aInf/tau/pw
+  # positionally from N_REQ; see add_nuisance_pars() and contaminant_mixture.h.
+  .nuis <- add_nuisance_pars(p_types, transform, minmax, exception)
+  p_types <- .nuis$p_types; transform <- .nuis$transform
+  minmax <- .nuis$minmax; exception <- .nuis$exception
+
   list(
     c_name = paste0("BOU", .BOU_SUFFIX[[kind]]),
     type = "DDM",
@@ -263,6 +270,7 @@ BOU <- function(boundary_collapse = c("fixed", "exponential", "linear_additive",
     # emc2col::bou::spec() in src/col_registry.h.  It is DDM's order with beta
     # appended, which is what lets a DDM design convert by adding beta~1.
     p_types = p_types,
+    p_types_canonical = setdiff(names(p_types), .nuisance_par_names),
     transform = list(func = transform),
     bound = list(minmax = minmax, exception = exception),
     # Same trial-dependent transform as the DDM, verbatim, so the two models are

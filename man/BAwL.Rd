@@ -38,10 +38,10 @@ its \code{k = 0} limit is exactly the ordinary LBA trajectory with the same
 launch distribution: positive-truncated normal when \code{posdrift = TRUE}, or
 unrestricted normal when \code{posdrift = FALSE}. If the leaky asymptote cannot
 reach the threshold, that accumulator has no finite hit. For \code{k > 0},
-finite hits have no common hard right endpoint: launch values approaching the
-threshold condition from above can produce arbitrarily late responses. This is
-distinct from BAwD, whose decaying drive plus positive clearance can impose a
-finite endpoint.
+finite hits have no common hard right endpoint: launch values approaching
+the threshold condition from above can produce arbitrarily late responses.
+This is distinct from BAwD, whose decaying drive plus positive clearance can
+impose a finite endpoint.
 }
 \details{
 The model uses the following parameterization. The \code{B} parameter is the
@@ -58,7 +58,8 @@ scale before trial-dependent transforms are applied.\tabular{llllll}{
    \emph{mG} \tab log \tab [0, Inf] \tab log(1) \tab \emph{lambda_g} = \emph{q} / \emph{mG} \tab Mean of the optional guess clock. \cr
    \emph{mK} \tab log \tab [0, Inf] \tab log(1) \tab \emph{lambda_k} = \emph{q} / \emph{mK} \tab Mean of the optional kill clock. \cr
    \emph{omega} \tab probit \tab [0, 1] \tab qnorm(.5) \tab  \tab Probability of the Erlang-1 component in mixed mode. \cr
-   \emph{pContaminant} \tab probit \tab [0, 1] \tab qnorm(0) \tab  \tab Optional contamination probability handled by the data pipeline. \cr
+   \emph{pContaminant} \tab probit \tab [0, 1] \tab qnorm(0) \tab  \tab Optional \emph{omission} contaminant probability: mass at \code{rt = Inf} only, handled by the data pipeline \cr
+   \emph{pGuess} \tab probit \tab [0, 1] \tab qnorm(0) \tab  \tab Optional uniform \emph{guess} (outlier) probability, mixed into observed RT densities over the guess window \cr
    \emph{rho} \tab scaled probit \tab [-1, 1] \tab qnorm(.5) \tab  \tab Direct cell-level correlation of the underlying Gaussian drifts; only when \code{correlated = TRUE}. \cr
 }
 

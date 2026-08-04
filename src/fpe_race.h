@@ -35,6 +35,7 @@
 #include <algorithm>
 #include <limits>
 #include <stdexcept>
+#include <unordered_map>
 #if defined(__x86_64__) || defined(_M_X64) || defined(__AVX2__)
 #include <immintrin.h>
 #endif
@@ -171,6 +172,29 @@ struct Key {
   }
 };
 
+struct KeyHash {
+  size_t operator()(const Key& key) const noexcept {
+    size_t h = std::hash<double>{}(key.v);
+    auto mix = [&](double x) {
+      const size_t hx = std::hash<double>{}(x);
+      h ^= hx + static_cast<size_t>(0x9e3779b9U) + (h << 6) + (h >> 2);
+    };
+    mix(key.k);
+    mix(key.b);
+    mix(key.A);
+    mix(key.sigma);
+    mix(key.zlo);
+    mix(key.zhi);
+    mix(static_cast<double>(key.model_kind));
+    mix(static_cast<double>(key.log_state));
+    mix(static_cast<double>(key.bkind));
+    mix(key.binf);
+    mix(key.tau);
+    mix(key.pw);
+    return h;
+  }
+};
+
 // Collapse spec on the MODEL's scale, before s-scaling.  Binf is the asymptotic
 // boundary measured from zero (unlike B, which is measured from the top of the
 // start-point range).  The solver's FPE_Boundary knows no parameter names; this
@@ -193,12 +217,12 @@ struct BndSpec {
 // physical units and can therefore be shared across conditions.  This chart
 // covers the deterministic-crossing regime and the k = 0 Wiener limit.
 //
-// EQUILIBRIUM (tk, theta, chi) is centered on the mean start.  With d = B + A/2,
-// theta = (v/k - A/2)/d places the equilibrium relative to the distance from the
-// mean start to the bound, and chi = s*sqrt(tk)/d is noise over one relaxation.
-// In Y = (X - A/2)/d and u = t/tk, the process is dY = (theta - Y)du + chi dW_u.
-// Thus theta < 1 is a subthreshold, noise-escape regime; unlike the curvature chart
-// this chart retains A explicitly.  It covers finite positive leak (tk > 0).
+// EQUILIBRIUM (tk, theta, chi) uses physical state units.  theta is the actual OU
+// equilibrium v/k and chi = s*sqrt(tk) is the diffusion scale accumulated over one
+// relaxation.  In Y = X/(scale) and u = t/tk the process has the usual OU form;
+// unlike the old threshold-normalised chart, changing B while theta/chi are held
+// fixed therefore changes the distance to the bound rather than rescaling the
+// entire accumulator.  It covers finite positive leak (tk > 0).
 //
 // Both alternatives leave one state-scale redundancy when their noise parameter
 // is free, so designs should normally fix B rather than s.  See R/model_ROU.R.
@@ -246,11 +270,9 @@ inline void rou_map_to_rate(int par_kind, double p1, double p2, double p3,
     v = k = s = nan;
     return;
   }
-  const double d = B + 0.5 * AA;
-  if (!(d > 0.0) || !std::isfinite(d)) { v = k = s = nan; return; }
   k = 1.0 / tk;
-  v = (theta * d + 0.5 * AA) / tk;          // v/k - A/2 = theta*d
-  s = chi * d / std::sqrt(tk);
+  v = theta / tk;                           // theta = v/k (physical equilibrium)
+  s = chi / std::sqrt(tk);                  // chi = s*sqrt(tk)
 }
 
 // Build the key for one accumulator's parameters.  s is scaled out exactly as
@@ -399,6 +421,7 @@ struct SolveCache {
   size_t n_entries = 0;
   std::vector<Entry> e;
   std::vector<int> row_group;   // scratch: row -> index into e, or -1
+  std::unordered_map<Key, int, KeyHash> index;
 
   // Cleared once per particle.  Keys are exact, so a stale entry could never be
   // returned for the wrong parameters; the clear exists to bound memory, since
@@ -416,6 +439,7 @@ struct SolveCache {
     }
     n_entries = 0;
     row_group.clear();
+    index.clear();
   }
 };
 
@@ -462,27 +486,30 @@ inline void rou_solve(const Key& p, double t_max, const FPE_Grid& gr, Entry& out
 // required.  Returns an INDEX, not a pointer: solving can reallocate `e`.
 inline int cache_get(SolveCache& C, const Key& p, double t_need) {
   if (!(t_need > 0.0)) t_need = 1e-3;
-  for (size_t i = 0; i < C.n_entries; ++i) {
-    if (!(C.e[i].key == p)) continue;
+  auto it = C.index.find(p);
+  if (it != C.index.end()) {
+    const size_t i = static_cast<size_t>(it->second);
     if (C.e[i].complete_grid && C.e[i].t_max >= t_need)
-      return static_cast<int>(i);
+      return it->second;
     // Extend in place.  dt is pinned by FPE_Grid, so the values on the shared
     // part of the horizon move only at the discretisation-error level. Sparse
     // raw-batch entries also come through here: arbitrary scalar censoring or
     // truncation queries require the normal full interpolation grid.
     const double solve_to = std::max(t_need, C.e[i].t_max);
     rou_solve(p, solve_to, C.grid, C.e[i]);
-    return static_cast<int>(i);
+    return it->second;
   }
   if (C.n_entries < C.e.size()) {
     const size_t idx = C.n_entries++;
     rou_solve(p, t_need, C.grid, C.e[idx]);
+    C.index[p] = static_cast<int>(idx);
     return static_cast<int>(idx);
   } else {
     C.e.push_back(Entry());
-    rou_solve(p, t_need, C.grid, C.e.back());
-    C.n_entries = C.e.size();
-    return static_cast<int>(C.e.size() - 1);
+    const size_t idx = C.n_entries++;
+    rou_solve(p, t_need, C.grid, C.e[idx]);
+    C.index[p] = static_cast<int>(idx);
+    return static_cast<int>(idx);
   }
 }
 
@@ -1252,18 +1279,20 @@ inline void cache_get_batch(SolveCache& C, const std::vector<Key>& keys,
         }
 
         int existing = -1;
-        for (size_t j = 0; j < C.n_entries; ++j) {
-          if (C.e[j].key == p) { existing = static_cast<int>(j); break; }
-        }
+        auto it = C.index.find(p);
+        if (it != C.index.end()) { existing = it->second; }
+        
         if (existing >= 0) {
           C.e[existing] = std::move(entry);
           out_cache_indices[k_idx] = existing;
         } else if (C.n_entries < C.e.size()) {
           const size_t idx = C.n_entries++;
           C.e[idx] = std::move(entry);
+          C.index[p] = static_cast<int>(idx);
           out_cache_indices[k_idx] = static_cast<int>(idx);
         } else {
           C.e.push_back(std::move(entry));
+          C.index[p] = static_cast<int>(C.e.size() - 1);
           out_cache_indices[k_idx] = static_cast<int>(C.e.size() - 1);
           C.n_entries = C.e.size();
         }
@@ -1356,13 +1385,14 @@ inline double rou_hit_time_bnd(double v, double k, double s, double A,
   const double m1 = -std::expm1(-k * dt);            // 1 - phi
   const double m2 = -std::expm1(-2.0 * k * dt);      // 1 - phi^2
   const double drift_gain = (k > 1e-10) ? (m1 / k) : dt;
+  const double drift_step = v * drift_gain;
   const double var = (k > 1e-10) ? (s * s * m2 / (2.0 * k)) : (s * s * dt);
   const double sd = std::sqrt(std::max(var, 0.0));
   const double inv_2var_bb = 2.0 / (s * s * dt);     // local BB uses s^2 dt
 
   double t = 0.0;
   while (t < t_max) {
-    const double X1 = X * phi + v * drift_gain + sd * rnorm();
+    const double X1 = X * phi + drift_step + sd * rnorm();
     const double b1 = bnd.fixed ? b : bnd.b(t + dt);
     t += dt;
     if (X1 >= b1) {

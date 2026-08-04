@@ -36,7 +36,8 @@ The model's user-facing parameters are:\tabular{llllll}{
    \emph{mG} \tab log \tab [0, Inf] \tab log(1) \tab \emph{lambda_g} = \emph{q} / \emph{mG} \tab Mean of the optional guess clock. \cr
    \emph{mK} \tab log \tab [0, Inf] \tab log(1) \tab \emph{lambda_k} = \emph{q} / \emph{mK} \tab Mean of the optional kill clock. \cr
    \emph{omega} \tab probit \tab [0, 1] \tab qnorm(.5) \tab  \tab Erlang-1 mixture weight in mixed mode. \cr
-   \emph{pContaminant} \tab probit \tab [0, 1] \tab qnorm(0) \tab  \tab Optional contamination probability handled by the data pipeline. \cr
+   \emph{pContaminant} \tab probit \tab [0, 1] \tab qnorm(0) \tab  \tab Optional \emph{omission} contaminant probability: mass at \code{rt = Inf} only, handled by the data pipeline \cr
+   \emph{pGuess} \tab probit \tab [0, 1] \tab qnorm(0) \tab  \tab Optional uniform \emph{guess} (outlier) probability, mixed into observed RT densities over the guess window \cr
 }
 
 

@@ -23,6 +23,7 @@
 #include <gsl/gsl_errno.h> // For GSL error handling
 #include "bawl_geometry.h"
 #include "bawl_corr_exact.h"
+#include "contaminant_mixture.h"
 #include <cmath>
 #include <string>
 #include <memory>
@@ -31,6 +32,8 @@
 #include <cstdlib>
 #include <mutex>
 #include <functional>
+#include <unordered_map>
+#include <cstdint>
 
 using namespace Rcpp;
 
@@ -788,6 +791,178 @@ static inline bool is_stop_signal_type(const std::string& type_std) {
   return type_std == "SSEXG" || type_std == "SSRDEX";
 }
 
+struct DDMEndpointCacheKey {
+  double rt = 0.0;
+  double v = 0.0;
+  double a = 0.0;
+  double sv = 0.0;
+  double t0 = 0.0;
+  double st0 = 0.0;
+  double s = 0.0;
+  double Z = 0.0;
+  double sz = 0.0;
+  int response = 0;
+
+  bool operator==(const DDMEndpointCacheKey& other) const {
+    return rt == other.rt && v == other.v && a == other.a &&
+           sv == other.sv && t0 == other.t0 && st0 == other.st0 &&
+           s == other.s && Z == other.Z && sz == other.sz &&
+           response == other.response;
+  }
+};
+
+struct DDMEndpointCacheKeyHash {
+  static inline void mix(std::size_t& h, std::size_t x) {
+    h ^= x + static_cast<std::size_t>(0x9e3779b97f4a7c15ULL) +
+         (h << 6) + (h >> 2);
+  }
+
+  std::size_t operator()(const DDMEndpointCacheKey& key) const noexcept {
+    std::size_t h = 0;
+    const std::hash<double> hd;
+    mix(h, hd(key.rt));
+    mix(h, hd(key.v));
+    mix(h, hd(key.a));
+    mix(h, hd(key.sv));
+    mix(h, hd(key.t0));
+    mix(h, hd(key.st0));
+    mix(h, hd(key.s));
+    mix(h, hd(key.Z));
+    mix(h, hd(key.sz));
+    mix(h, std::hash<int>{}(key.response));
+    return h;
+  }
+};
+
+struct DDMEndpointCache {
+  std::unordered_map<DDMEndpointCacheKey, double, DDMEndpointCacheKeyHash> values;
+
+  // ParamTable columns are refilled in place for every particle.  Drop the
+  // entries, but retain the map's bucket allocation for the next particle.
+  void new_particle() { values.clear(); }
+};
+
+// A generic race endpoint cache.  It groups complete trial parameter blocks so
+// the model-specific logS_at_t callback only evaluates one representative per
+// exact parameter key.  The grouping is built once per particle and reused for
+// both truncation endpoints.
+struct RaceEndpointGroupCache {
+  std::vector<int> group_id;
+  std::vector<int> representative;
+  std::unordered_map<std::size_t, std::vector<int>> hash_groups;
+  std::vector<double> compact_cols;
+  std::vector<int> compact_isok;
+  std::vector<int> compact_mask;
+  std::vector<const double*> compact_col_ptrs;
+  int n_included = 0;
+  bool prepared = false;
+
+  void new_particle() {
+    group_id.clear();
+    representative.clear();
+    hash_groups.clear();
+    compact_cols.clear();
+    compact_isok.clear();
+    compact_mask.clear();
+    compact_col_ptrs.clear();
+    n_included = 0;
+    prepared = false;
+  }
+};
+
+static inline void race_endpoint_hash_mix(std::size_t& h, std::size_t x) {
+  h ^= x + static_cast<std::size_t>(0x9e3779b97f4a7c15ULL) +
+       (h << 6) + (h >> 2);
+}
+
+static inline std::size_t race_endpoint_double_hash(double x) {
+  std::uint64_t bits = 0;
+  if (x != 0.0) std::memcpy(&bits, &x, sizeof(bits));
+  return std::hash<std::uint64_t>{}(bits);
+}
+
+static inline bool race_endpoint_block_equal(
+    const double* const* cols, int n_lR, int n_par,
+    const int* isok, int row_a, int row_b, int skip_a, int skip_b) {
+  for (int k = 0; k < n_lR; ++k) {
+    const int a = row_a + k;
+    const int b = row_b + k;
+    if ((isok[a] != 0) != (isok[b] != 0)) return false;
+    if (!isok[a]) continue;
+    for (int c = 0; c < n_par; ++c) {
+      if (c == skip_a || c == skip_b) continue;
+      if (cols[c][a] != cols[c][b]) return false;
+    }
+  }
+  return true;
+}
+
+static inline void race_endpoint_prepare_groups(
+    RaceEndpointGroupCache& cache, const double* const* cols,
+    int n_unique_trials, int n_lR, int n_par,
+    const int* include_mask, const int* isok, int skip_a, int skip_b) {
+  if (cache.prepared) return;
+  cache.group_id.assign(static_cast<size_t>(n_unique_trials), -1);
+
+  for (int j = 0; j < n_unique_trials; ++j) {
+    if (!include_mask[j]) continue;
+    ++cache.n_included;
+    const int start = j * n_lR;
+    std::size_t h = 0;
+    for (int k = 0; k < n_lR; ++k) {
+      const int row = start + k;
+      race_endpoint_hash_mix(h, std::hash<int>{}(isok[row] ? 1 : 0));
+      if (!isok[row]) continue;
+      for (int c = 0; c < n_par; ++c) {
+        if (c == skip_a || c == skip_b) continue;
+        race_endpoint_hash_mix(h, race_endpoint_double_hash(cols[c][row]));
+      }
+    }
+
+    int group = -1;
+    auto& candidates = cache.hash_groups[h];
+    for (int candidate : candidates) {
+      if (race_endpoint_block_equal(cols, n_lR, n_par, isok, start,
+                                    cache.representative[static_cast<size_t>(candidate)] * n_lR,
+                                    skip_a, skip_b)) {
+        group = candidate;
+        break;
+      }
+    }
+    if (group < 0) {
+      group = static_cast<int>(cache.representative.size());
+      cache.representative.push_back(j);
+      candidates.push_back(group);
+    }
+    cache.group_id[static_cast<size_t>(j)] = group;
+  }
+
+  const int n_groups = static_cast<int>(cache.representative.size());
+  if (n_groups == cache.n_included) {
+    cache.prepared = true;
+    return;
+  }
+  cache.compact_cols.assign(static_cast<size_t>(n_groups) * n_lR * n_par, 0.0);
+  cache.compact_isok.assign(static_cast<size_t>(n_groups) * n_lR, 0);
+  for (int g = 0; g < n_groups; ++g) {
+    const int source = cache.representative[static_cast<size_t>(g)] * n_lR;
+    const int target = g * n_lR;
+    for (int k = 0; k < n_lR; ++k) {
+      cache.compact_isok[static_cast<size_t>(target + k)] = isok[source + k];
+      for (int c = 0; c < n_par; ++c) {
+        cache.compact_cols[static_cast<size_t>(c) * n_groups * n_lR + target + k] =
+          cols[c][source + k];
+      }
+    }
+  }
+  cache.compact_col_ptrs.resize(static_cast<size_t>(n_par));
+  for (int c = 0; c < n_par; ++c)
+    cache.compact_col_ptrs[static_cast<size_t>(c)] =
+      cache.compact_cols.data() + static_cast<size_t>(c) * n_groups * n_lR;
+  cache.compact_mask.assign(static_cast<size_t>(n_groups), 1);
+  cache.prepared = true;
+}
+
 // Pre-computed per-data state for likelihood functions (Race, DDM, etc.).
 // Built once outside the particle loop; reused across particles to eliminate
 // per-particle R-heap allocations and repeated attribute/column reads.
@@ -810,6 +985,14 @@ struct ModelSharedState {
   bool any_loss = false;
   // pContaminant column: -2=not yet searched, -1=absent, >=0=column index
   int  pc_col   = -2;
+  // pGuess column and the uniform guess kernel (window resolved once in R by
+  // resolve_guess_window(); see src/contaminant_mixture.h).
+  int  pg_col   = -2;
+  GuessKernel guess;
+  // Direct column pointers for the DDM path, which does not carry a keep_names
+  // index for the trailing nuisance columns.  nullptr when the model omits them.
+  const double* pc_ptr = nullptr;
+  const double* pg_ptr = nullptr;
   int time_code = -1;
   int nogo_code = -1;
   std::vector<int> idx_time_only;   // time-accumulator mask (finite rows only)
@@ -818,6 +1001,8 @@ struct ModelSharedState {
 
   // DDM-specific data
   std::vector<double> logF_LT_1, logF_LT_2, logF_UT_1, logF_UT_2;
+  DDMEndpointCache ddm_endpoint_cache;
+  RaceEndpointGroupCache race_endpoint_cache;
   // Pre-allocated scratch buffers for nonfinite/trunc path; avoids per-particle R heap.
   std::vector<double> lF_LC_1_buf, lF_LC_2_buf, lF_UC_1_buf, lF_UC_2_buf;
   std::vector<int>    R1_int_buf, R2_int_buf;  // constant all-1 / all-2 response vectors
@@ -971,6 +1156,8 @@ struct BAwLCorrSharedState {
   // base storage is refilled in place per particle, so these stay valid.
   std::vector<const double*> cols;
   int pc_col = -1;    // pContaminant column, -1 when absent
+  int pg_col = -1;    // pGuess column, -1 when absent
+  GuessKernel guess;  // uniform guess kernel; inactive when pGuess is unused
   int rho_col = -1;
 
   // Reused per-particle scratch
@@ -1034,6 +1221,8 @@ struct RDMSWTNCorrSharedState {
   int n_par = 0;
   int rho_col = -1;
   int pc_col = -1;
+  int pg_col = -1;    // pGuess column, -1 when absent
+  GuessKernel guess;  // uniform guess kernel; inactive when pGuess is unused
   bool has_RACE = false;
   Rcpp::NumericVector rt, LT, UT, LC, UC;
   Rcpp::IntegerVector lR_codes;
@@ -1077,7 +1266,9 @@ static double c_log_likelihood_logicalrules(
     Rcpp::NumericVector* trial_ll_out = nullptr,
     int kappa_col = -1,
     int tau_col = -1,
-    int pc_col = -1);
+    int pc_col = -1,
+    int pg_col = -1,
+    const GuessKernel* guess = nullptr);
 
 static inline bool eval_pdf_cdf_race_scalar(
     bool use_raw_local,
@@ -1988,9 +2179,105 @@ inline const DDMAdapter& ddm_wien_adapter() {
     x.d_raw = &ddm_wien_d_raw;
     x.p_raw = &ddm_wien_p_raw;
     x.col_spec = emc2col::ddm::spec();
+    x.endpoint_cdf_cache = true;
     return x;
   }();
   return a;
+}
+
+static inline bool ddm_wiener_endpoint_key(const double* rts,
+                                           const int* Rs,
+                                           const double* const* cols,
+                                           int i,
+                                           DDMEndpointCacheKey& key) {
+  const double v = cols[emc2col::ddm::v][i];
+  const double a = cols[emc2col::ddm::a][i];
+  const double sv = cols[emc2col::ddm::sv][i];
+  const double t0 = cols[emc2col::ddm::t0][i];
+  const double st0 = cols[emc2col::ddm::st0][i];
+  const double s = cols[emc2col::ddm::s][i];
+  const double Z = cols[emc2col::ddm::Z][i];
+  const double SZ = cols[emc2col::ddm::SZ][i];
+  if (!R_FINITE(rts[i]) || !R_FINITE(v) || !R_FINITE(a) ||
+      !R_FINITE(sv) || !R_FINITE(t0) || !R_FINITE(st0) ||
+      !R_FINITE(s) || !R_FINITE(Z) || !R_FINITE(SZ) || s == 0.0) {
+    return false;
+  }
+  const double sz = (Z < (1.0 - Z)) ? 2.0 * SZ * Z
+                                    : 2.0 * SZ * (1.0 - Z);
+  if (!R_FINITE(sz)) return false;
+  key.rt = rts[i];
+  key.v = v / s;
+  key.a = a / s;
+  key.sv = sv / s;
+  key.t0 = t0;       // DDM integration depends on the effective time.
+  key.st0 = st0;
+  key.s = s;         // Retain the raw scale in the exact key as requested.
+  key.Z = Z;
+  key.sz = sz;
+  key.response = Rs[i];
+  return R_FINITE(key.v) && R_FINITE(key.a) && R_FINITE(key.sv);
+}
+
+static inline void ddm_wien_p_raw_cached(
+    const double* rts, const int* Rs, const double* const* cols, int n_rows,
+    const int* mask, const int* is_ok, double* out, double min_ll,
+    const DDMAdapter& ker, ContextForDDMModels* kctx,
+    DDMEndpointCache& cache) {
+  const double* sv = cols[emc2col::ddm::sv];
+  const double* st0 = cols[emc2col::ddm::st0];
+  const double* SZ = cols[emc2col::ddm::SZ];
+  bool any_numeric = false;
+  for (int i = 0; i < n_rows; ++i) {
+    if (mask[i] && is_ok[i] &&
+        (sv[i] != 0.0 || SZ[i] != 0.0 || st0[i] != 0.0)) {
+      any_numeric = true;
+      break;
+    }
+  }
+  if (!any_numeric) {
+    ker.p_raw(rts, Rs, cols, n_rows, mask, is_ok, out, min_ll, kctx);
+    return;
+  }
+  std::vector<int> direct_mask(static_cast<size_t>(n_rows), 0);
+  bool have_direct = false;
+
+  for (int i = 0; i < n_rows; ++i) {
+    if (!mask[i]) continue;
+    if (!is_ok[i] || (sv[i] == 0.0 && SZ[i] == 0.0 && st0[i] == 0.0)) {
+      direct_mask[static_cast<size_t>(i)] = 1;
+      have_direct = true;
+      continue;
+    }
+
+    DDMEndpointCacheKey key;
+    if (!ddm_wiener_endpoint_key(rts, Rs, cols, i, key)) {
+      direct_mask[static_cast<size_t>(i)] = 1;
+      have_direct = true;
+      continue;
+    }
+
+    const auto found = cache.values.find(key);
+    if (found != cache.values.end()) {
+      out[i] = found->second;
+      continue;
+    }
+
+    std::array<const double*, emc2col::ddm::N_REQ> row_cols{};
+    for (int c = 0; c < emc2col::ddm::N_REQ; ++c)
+      row_cols[static_cast<size_t>(c)] = cols[c] + i;
+    const int row_mask = 1;
+    double value = min_ll;
+    ker.p_raw(rts + i, Rs + i, row_cols.data(), 1, &row_mask,
+              is_ok + i, &value, min_ll, kctx);
+    cache.values.emplace(key, value);
+    out[i] = value;
+  }
+
+  if (have_direct) {
+    ker.p_raw(rts, Rs, cols, n_rows, direct_mask.data(), is_ok, out,
+              min_ll, kctx);
+  }
 }
 
 // Collapsing-bound variants of the bounded OU, selected by
@@ -2034,13 +2321,33 @@ double c_log_likelihood_DDM_pt(const double* const* cols,
   // let the call sites read as they did before.
   const DDMAdapter& ker = (ker_in != nullptr) ? *ker_in : ddm_wien_adapter();
   ContextForDDMModels* kctx = const_cast<ContextForDDMModels*>(&ker.ctx);
+  if (shared != nullptr) shared->ddm_endpoint_cache.new_particle();
   auto d_raw = [&](const double* rts, const int* Rs, const int* mask,
                    const int* ok_, double* out, double floor_) {
     ker.d_raw(rts, Rs, cols, n_trials, mask, ok_, out, floor_, kctx);
   };
   auto p_raw = [&](const double* rts, const int* Rs, const int* mask,
                    const int* ok_, double* out, double floor_) {
-    ker.p_raw(rts, Rs, cols, n_trials, mask, ok_, out, floor_, kctx);
+    if (ker.endpoint_cdf_cache && shared != nullptr) {
+      ddm_wien_p_raw_cached(rts, Rs, cols, n_trials, mask, ok_, out,
+                            floor_, ker, kctx, shared->ddm_endpoint_cache);
+    } else {
+      ker.p_raw(rts, Rs, cols, n_trials, mask, ok_, out, floor_, kctx);
+    }
+  };
+
+  // Contaminant mixture (pContaminant omission + pGuess uniform outlier).
+  // Both are no-ops at 0, which is their default, so a DDM design that does not
+  // name them is bit-for-bit unchanged.  See src/contaminant_mixture.h.
+  const double* pc_ptr = shared->pc_ptr;
+  const double* pg_ptr = shared->pg_ptr;
+  const GuessKernel& gk = shared->guess;
+  const bool use_mix = (pc_ptr != nullptr) || (pg_ptr != nullptr && gk.active());
+  auto apply_mix = [&](double ll, int i) -> double {
+    const double pC = (pc_ptr != nullptr) ? pc_ptr[i] : 0.0;
+    const double pG = (pg_ptr != nullptr) ? pg_ptr[i] : 0.0;
+    if (pC == 0.0 && pG == 0.0) return ll;
+    return mix_contaminants_rt(ll, pC, pG, gk, rt_ptr[i], R_ptr[i] != NA_INTEGER);
   };
 
   // 1. Fast Path: All RTs finite, no truncation, no censoring
@@ -2050,7 +2357,11 @@ double c_log_likelihood_DDM_pt(const double* const* cols,
     }
     d_raw(rt_ptr, R_ptr,
           shared->all_ones_int_buf.data(), is_ok, shared->res_buf.data(), min_ll);
-    
+    if (use_mix) {
+      for (int i = 0; i < n_trials; ++i)
+        if (is_ok[i]) shared->res_buf[i] = apply_mix(shared->res_buf[i], i);
+    }
+
     const double* lls_ptr = shared->res_buf.data();
     double total_ll = 0.0;
     if (expand_ptr == nullptr) {
@@ -2354,6 +2665,16 @@ double c_log_likelihood_DDM_pt(const double* const* cols,
     }
   }
 
+  // Contaminant mixture, applied after truncation renormalisation and after the
+  // censored-interval branches -- exactly where the race kernels apply it, so
+  // pGuess is the guess proportion among *retained* trials.  A guess can never
+  // be censored or truncated away (the window is [max(LT,LC), min(UC,UT)]), so
+  // the censored branches need no guess term of their own.
+  if (use_mix) {
+    for (int i = 0; i < n_trials; ++i)
+      if (is_ok[i]) shared->res_buf[i] = apply_mix(shared->res_buf[i], i);
+  }
+
   // 3. Accumulate results
   const double* res_ptr = shared->res_buf.data();
   double total_ll = 0.0;
@@ -2438,6 +2759,14 @@ double c_log_likelihood_DDM(Rcpp::NumericMatrix pars, Rcpp::DataFrame data,
     }
     ddm_cols[k] = pars.begin() + static_cast<size_t>(col) * n_trials;
   }
+  // Trailing nuisance columns, resolved by name from the same matrix.
+  for (int j = 0; j < pars.ncol(); ++j) {
+    const std::string nm = Rcpp::as<std::string>(par_names[j]);
+    if (nm == "pContaminant") shared.pc_ptr = pars.begin() + static_cast<size_t>(j) * n_trials;
+    else if (nm == "pGuess")  shared.pg_ptr = pars.begin() + static_cast<size_t>(j) * n_trials;
+  }
+  shared.guess = resolve_guess_kernel(data);
+  shared.guess.pg_col = (shared.pg_ptr != nullptr) ? 0 : -1;
 
   return c_log_likelihood_DDM_pt(ddm_cols, rts.begin(), R.begin(),
                                  n_trials, expand_ptr, n_out_val, min_ll,
@@ -3077,6 +3406,23 @@ static bool init_ddm_shared_state(DataFrame data, int n_trials,
   Rcpp::IntegerVector R_col = data["R"];
   shared.shared_R_levels = R_col.attr("levels");
   shared.valid = true;
+
+  // Contaminant nuisance columns.  Both are trailing p_types, so they sit past
+  // the spec's canonical prefix and are resolved by name, never positionally.
+  // The ParamTable base storage is fixed for this likelihood call (only its
+  // values are refilled per particle), so these addresses stay valid.
+  shared.pc_ptr = nullptr;
+  shared.pg_ptr = nullptr;
+  {
+    auto itc = table.name_to_base_idx.find("pContaminant");
+    if (itc != table.name_to_base_idx.end())
+      shared.pc_ptr = table.base.begin() + static_cast<size_t>(itc->second) * n_trials;
+    auto itg = table.name_to_base_idx.find("pGuess");
+    if (itg != table.name_to_base_idx.end())
+      shared.pg_ptr = table.base.begin() + static_cast<size_t>(itg->second) * n_trials;
+  }
+  shared.guess = resolve_guess_kernel(data);
+  shared.guess.pg_col = (shared.pg_ptr != nullptr) ? 0 : -1;
 
   bool raw_ready = true;
   // The column set is the model's, not the family's: a two-boundary model with
@@ -4033,6 +4379,7 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
     ddm_adapter.d_raw = &bou::d_BOU_raw;
     ddm_adapter.p_raw = &bou::p_BOU_raw;
     ddm_adapter.col_spec = emc2col::bou::spec();
+    ddm_adapter.endpoint_cdf_cache = false;
     ddm_adapter.ctx.bou_cache = std::make_shared<fpebou::SolveCache>();
     bou::bou_configure(*ddm_adapter.ctx.bou_cache);
     ddm_adapter.ctx.bnd_kind = bou_bnd_kind_from_type(type_std);
@@ -4191,12 +4538,15 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
       int kappa_col = -1;
       int tau_col = -1;
       int pc_col = -1;
+      int pg_col = -1;
       for (int j = 0; j < keep_names.size(); ++j) {
         const std::string nm = Rcpp::as<std::string>(keep_names[j]);
         if (nm == "kappa") kappa_col = j;
         else if (nm == "tau") tau_col = j;
         else if (nm == "pContaminant") pc_col = j;
+        else if (nm == "pGuess") pg_col = j;
       }
+      const GuessKernel lr_guess = resolve_guess_kernel(data);
       const bool capacity = kappa_col >= 0 || tau_col >= 0;
       LogicalRulesSharedState logicalrules_shared =
         build_logicalrules_shared_state(data, n_trials, n_lR, capacity);
@@ -4222,7 +4572,8 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
                                                &adapter.ctx, adapter.pdf1_ptr, adapter.cdf1_ptr,
                                                adapter.model_dfun_raw, adapter.model_pfun_raw,
                                                logicalrules_shared, nullptr,
-                                               kappa_col, tau_col, pc_col);
+                                               kappa_col, tau_col, pc_col,
+                                               pg_col, &lr_guess);
       }
       return lls;
     }
@@ -4272,6 +4623,8 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
     // pointer array is built once, replacing the old per-particle staging copy.
     std::vector<const double*> race_cols;     // keep_names.size() pointers
     int fast_pc_col = -1;                     // keep_names position of pContaminant
+    int fast_pg_col = -1;                     // keep_names position of pGuess
+    GuessKernel fast_guess;                   // uniform guess kernel (data-fixed)
 
     std::vector<int> time_win_int_buf;
     std::vector<double> alt_res_buf_fp;
@@ -4330,7 +4683,10 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
                      nm.c_str());
         }
         if (nm == "pContaminant") fast_pc_col = j;
+        else if (nm == "pGuess") fast_pg_col = j;
       }
+      fast_guess = resolve_guess_kernel(data);
+      fast_guess.pg_col = fast_pg_col;
     }
 
     // --- Build shared state for the mixed (non-raw-fast) path ---
@@ -4482,9 +4838,18 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
             }
           }
           s = s < min_ll ? min_ll : s;
-          if (fast_pc_col >= 0) {
-            const double pC = pars_cols[fast_pc_col][base];
-            if (pC != 0.0) s += std::log1p(-pC);
+          // Contaminant mixture.  This path is reached only when every trial has
+          // a finite rt and a known R (see .cache_ll_data_attrs), so no trial is
+          // an omission and every trial is guess-eligible; mix_contaminants()
+          // still owns the arithmetic so the sites cannot drift apart.
+          if (fast_pc_col >= 0 || (fast_pg_col >= 0 && fast_guess.active())) {
+            const double pC = (fast_pc_col >= 0) ? pars_cols[fast_pc_col][base] : 0.0;
+            // A guess must not lift an invalid-parameter trial off min_ll; the
+            // pC branch stays unconditional, exactly as it was before pGuess.
+            const double pG = (fast_pg_col >= 0 && fast_guess.active() && isok_int_fp[base])
+                                ? pars_cols[fast_pg_col][base] : 0.0;
+            if (pC != 0.0 || pG != 0.0)
+              s = mix_contaminants(s, pC, pG, fast_guess.log_g, false);
           }
           ll_uniq_buf[j] = s;
         }
@@ -4563,6 +4928,7 @@ NumericMatrix calc_ll_oo_pw(NumericMatrix particle_matrix, DataFrame data, Numer
       ddm_adapter.d_raw = &bou::d_BOU_raw;
       ddm_adapter.p_raw = &bou::p_BOU_raw;
       ddm_adapter.col_spec = emc2col::bou::spec();
+      ddm_adapter.endpoint_cdf_cache = false;
       ddm_adapter.ctx.bou_cache = std::make_shared<fpebou::SolveCache>();
       bou::bou_configure(*ddm_adapter.ctx.bou_cache);
       ddm_adapter.ctx.bnd_kind = bou_bnd_kind_from_type(type_std);
@@ -4651,12 +5017,15 @@ NumericMatrix calc_ll_oo_pw(NumericMatrix particle_matrix, DataFrame data, Numer
       int kappa_col = -1;
       int tau_col = -1;
       int pc_col = -1;
+      int pg_col = -1;
       for (int j = 0; j < keep_names.size(); ++j) {
         const std::string nm = Rcpp::as<std::string>(keep_names[j]);
         if (nm == "kappa") kappa_col = j;
         else if (nm == "tau") tau_col = j;
         else if (nm == "pContaminant") pc_col = j;
+        else if (nm == "pGuess") pg_col = j;
       }
+      const GuessKernel lr_guess = resolve_guess_kernel(data);
       const bool capacity = kappa_col >= 0 || tau_col >= 0;
       LogicalRulesSharedState logicalrules_shared =
         build_logicalrules_shared_state(data, n_trials, n_lR, capacity);
@@ -4677,7 +5046,8 @@ NumericMatrix calc_ll_oo_pw(NumericMatrix particle_matrix, DataFrame data, Numer
                                       &adapter.ctx, adapter.pdf1_ptr, adapter.cdf1_ptr,
                                       adapter.model_dfun_raw, adapter.model_pfun_raw,
                                       logicalrules_shared, &row_vec,
-                                      kappa_col, tau_col, pc_col);
+                                      kappa_col, tau_col, pc_col,
+                                      pg_col, &lr_guess);
         result(i, _) = row_vec;
       }
       return result;
@@ -6602,7 +6972,9 @@ static double c_log_likelihood_logicalrules(
     Rcpp::NumericVector* trial_ll_out,
     int kappa_col,
     int tau_col,
-    int pc_col) {
+    int pc_col,
+    int pg_col,
+    const GuessKernel* guess) {
   if (!shared.valid || n_acc <= 0 || pdf1 == nullptr || cdf1 == nullptr || model_ctx == nullptr) {
     Rcpp::stop("c_log_likelihood_logicalrules: invalid logical-rules configuration.");
   }
@@ -7445,7 +7817,10 @@ static double c_log_likelihood_logicalrules(
     }
   }
 
-  // pC adjustment for intrinsic omissions (+Inf RT)
+  // Contaminant mixture: pC for intrinsic omissions (+Inf RT), pGuess for the
+  // uniform outlier on observed RTs.  Both read the first row of each trial.
+  // See src/contaminant_mixture.h -- the arithmetic lives there so this and the
+  // seven other application sites cannot drift apart.
   bool use_pC = (pc_col >= 0);
   std::vector<double> pC_values;
   if (use_pC) {
@@ -7458,15 +7833,30 @@ static double c_log_likelihood_logicalrules(
     }
     if (all_zero) use_pC = false;
   }
-  
-  if (use_pC) {
+
+  const GuessKernel gk = (guess != nullptr) ? *guess : GuessKernel();
+  bool use_pG = (pg_col >= 0) && gk.active();
+  std::vector<double> pG_values;
+  if (use_pG) {
+    pG_values.assign(static_cast<size_t>(n_unique_trials), 0.0);
+    bool all_zero = true;
     for (int j = 0; j < n_unique_trials; ++j) {
-      const double pC = pC_values[static_cast<size_t>(j)];
-      const double log1m_pC = log1m(pC);
-      const double rt_j = shared.rt_unique[static_cast<size_t>(j)];
-      ll_unique[static_cast<size_t>(j)] = (rt_j == R_PosInf)
-        ? log_sum_exp(std::log(pC), log1m_pC + ll_unique[static_cast<size_t>(j)])
-        : log1m_pC + ll_unique[static_cast<size_t>(j)];
+      double pG = pars_cols[pg_col][j * n_acc];
+      pG_values[static_cast<size_t>(j)] = pG;
+      if (pG != 0.0) all_zero = false;
+    }
+    if (all_zero) use_pG = false;
+  }
+
+  if (use_pC || use_pG) {
+    for (int j = 0; j < n_unique_trials; ++j) {
+      const size_t sj = static_cast<size_t>(j);
+      const double pC = use_pC ? pC_values[sj] : 0.0;
+      const double pG = use_pG ? pG_values[sj] : 0.0;
+      // resp_code 0 is a missing response; every other code names a response.
+      ll_unique[sj] = mix_contaminants_rt(ll_unique[sj], pC, pG, gk,
+                                          shared.rt_unique[sj],
+                                          shared.resp_code[sj] != 0);
     }
   }
 
@@ -7628,11 +8018,40 @@ double c_log_likelihood_race(
       use_pC = false;
     }
   }
-  
+
+  // pGuess: the same column-cache and all-zeroes shortcut, run in parallel with
+  // pContaminant so the two can never disagree about which trials they touch.
+  // The uniform guess kernel itself is data-fixed (resolve_guess_window() in R).
+  GuessKernel guess;
+  bool use_pG = false;
+  int pg_col = -1;
+  if (use_shared && shared->pg_col != -2) {
+    pg_col = shared->pg_col;
+    guess = shared->guess;
+  } else {
+    Rcpp::List dimnames = pars.attr("dimnames");
+    Rcpp::CharacterVector colnames = as<Rcpp::CharacterVector>(dimnames[1]);
+    for (int j = 0; j < colnames.size(); ++j) {
+      if (as<std::string>(colnames[j]) == "pGuess") { pg_col = j; break; }
+    }
+    guess = resolve_guess_kernel(dadm);
+    guess.pg_col = pg_col;
+    if (use_shared) { shared->pg_col = pg_col; shared->guess = guess; }
+  }
+  use_pG = guess.active();
+  if (use_pG) {
+    bool all_zero = true;
+    for (int i = 0; i < pars.nrow(); ++i) {
+      if (pars(i, pg_col) != 0.0) { all_zero = false; break; }
+    }
+    if (all_zero) use_pG = false;
+  }
+
   int n_unique_trials = n_trials / n_lR;
   // Use std::vector to avoid per-particle R-heap allocation overhead.
   std::vector<double> ll_unique(static_cast<size_t>(n_unique_trials), min_ll);
   std::vector<double> pC_values(static_cast<size_t>(n_unique_trials), 0.0);
+  std::vector<double> pG_values(static_cast<size_t>(n_unique_trials), 0.0);
   // Raw pointer into pars matrix: col-major layout, element (row,col) = pars_cm_ptr[col*n_trials+row]
   const double* pars_cm_ptr = pars.begin();
   if (use_pC) {
@@ -7640,7 +8059,12 @@ double c_log_likelihood_race(
       pC_values[static_cast<size_t>(j)] = pars_cm_ptr[static_cast<size_t>(pc_col) * n_trials + j * n_lR];
     }
   }
-  
+  if (use_pG) {
+    for (int j = 0; j < n_unique_trials; ++j) {
+      pG_values[static_cast<size_t>(j)] = pars_cm_ptr[static_cast<size_t>(pg_col) * n_trials + j * n_lR];
+    }
+  }
+
   // Parameter matrix and validity vector checks
   if (pars.nrow() != n_trials) {
     Rcpp::Rcout << "pars.nrow(): " << pars.nrow() << ", n_trials: " << n_trials << std::endl;
@@ -8173,7 +8597,44 @@ double c_log_likelihood_race(
         ? n_unique_trials
         : static_cast<int>(finite_rt_unique_trial_indices.size());
 
-    if (apply_truncation_correction && may_need_ct && logS_at_t != nullptr) {
+    RaceEndpointGroupCache local_endpoint_cache;
+    RaceEndpointGroupCache* endpoint_cache =
+      use_shared ? &shared->race_endpoint_cache : &local_endpoint_cache;
+    endpoint_cache->new_particle();
+    auto batch_logS_at_t = [&](double t, const std::vector<int>& include_mask,
+                               std::vector<double>& out) {
+      // RACE-column trials have varying active accumulator counts and remain on
+      // the existing scalar-safe path below.  Fixed-width race trials can be
+      // compacted by complete parameter-block key before calling the model
+      // callback, so repeated design cells pay one endpoint calculation.
+      if (has_RACE_col || logS_at_t == nullptr) return;
+      const int skip_pc = use_shared ? shared->pc_col : -1;
+      const int skip_pg = use_shared ? shared->pg_col : -1;
+      race_endpoint_prepare_groups(
+          *endpoint_cache, cols_view, n_unique_trials, n_lR, n_par,
+          include_mask.data(), isok_ptr, skip_pc, skip_pg);
+      const int n_groups = static_cast<int>(endpoint_cache->representative.size());
+      out.assign(static_cast<size_t>(n_unique_trials), R_NegInf);
+      if (n_groups == 0) return;
+      if (n_groups == endpoint_cache->n_included) {
+        logS_at_t(t, cols_view, n_trials, n_lR, n_par,
+                  include_mask.data(), n_unique_trials, isok_ptr,
+                  model_context_for_funcs, out.data());
+        return;
+      }
+      std::vector<double> compact_out(static_cast<size_t>(n_groups), R_NegInf);
+      logS_at_t(t, endpoint_cache->compact_col_ptrs.data(),
+                n_groups * n_lR, n_lR, n_par,
+                endpoint_cache->compact_mask.data(), n_groups,
+                endpoint_cache->compact_isok.data(),
+                model_context_for_funcs, compact_out.data());
+      for (int j = 0; j < n_unique_trials; ++j) {
+        const int group = endpoint_cache->group_id[static_cast<size_t>(j)];
+        if (group >= 0) out[static_cast<size_t>(j)] = compact_out[static_cast<size_t>(group)];
+      }
+    };
+
+    if (apply_truncation_correction && may_need_ct && logS_at_t != nullptr && !has_RACE_col) {
       // Pass 1: scan for truncated trials; check uniformity of LT and UT separately.
       // We can batch the normaliser whenever all truncated finite-RT trials share the
       // same LT value AND the same UT value (each may be 0/Inf trivially).
@@ -8215,38 +8676,16 @@ double c_log_likelihood_race(
         //   UT == Inf → logS(UT) = -Inf (S(∞)=0 for any proper distribution)
         // For non-trivial endpoints we call logS_at_t in batch.
         //
-        // Reuse shared isok buffer when available (already filled above); else build locally.
-        std::vector<int> isok_all_int_local;
-        const int* isok_all_ptr_trunc;
-        if (isok_ptr != nullptr) {
-          isok_all_ptr_trunc = isok_ptr;  // already filled per-particle above
-        } else {
-          isok_all_int_local.resize(static_cast<size_t>(n_trials));
-          for (int r = 0; r < n_trials; ++r)
-            isok_all_int_local[static_cast<size_t>(r)] = isok[r] ? 1 : 0;
-          isok_all_ptr_trunc = isok_all_int_local.data();
-        }
-
         // logS_LT: 0 when LT==0 (trivial), otherwise computed in batch.
         std::vector<double> logS_LT_vec(static_cast<size_t>(n_unique_trials), 0.0);
         if (uniform_LT != 0.0) {
-          logS_at_t(uniform_LT,
-                    cols_view, n_trials, n_lR, n_par,
-                    trunc_mask.data(), n_unique_trials,
-                    isok_all_ptr_trunc,
-                    model_context_for_funcs,
-                    logS_LT_vec.data());
+          batch_logS_at_t(uniform_LT, trunc_mask, logS_LT_vec);
         }
 
         // logS_UT: -Inf when UT==Inf (trivial for proper distributions), else computed.
         std::vector<double> logS_UT_vec(static_cast<size_t>(n_unique_trials), R_NegInf);
         if (uniform_UT != R_PosInf) {
-          logS_at_t(uniform_UT,
-                    cols_view, n_trials, n_lR, n_par,
-                    trunc_mask.data(), n_unique_trials,
-                    isok_all_ptr_trunc,
-                    model_context_for_funcs,
-                    logS_UT_vec.data());
+          batch_logS_at_t(uniform_UT, trunc_mask, logS_UT_vec);
         }
 
         // logZ = log(S(LT) - S(UT)) = log_diff_exp(logS_LT, logS_UT)
@@ -8645,17 +9084,21 @@ apply_trial_trunc:
   // when rt is +Inf — a left-censored (-Inf) or missing (NA) rt does NOT. One
   // lambda applied in both the expand and compressed branches so they cannot
   // drift apart again.
+  //
+  // pGuess rides in the same lambda: a uniform density over the guess window,
+  // for finite-rt trials only.  The one branch that reaches a finite rt with an
+  // UNKNOWN R (log_min_density_rowmajor, above) takes the window density
+  // without the n_resp division, which mix_contaminants_rt() handles.
   auto apply_pC = [&](int j) {
-    const double pC = pC_values[j];
-    const double log1m_pC = log1m(pC);
     const double rt_j = rts_dadm[j * n_lR];
-    ll_unique[j] = (rt_j == R_PosInf)
-      ? log_sum_exp(std::log(pC), log1m_pC + ll_unique[j])
-      : log1m_pC + ll_unique[j];
+    ll_unique[j] = mix_contaminants_rt(ll_unique[j], pC_values[j], pG_values[j],
+                                       guess, rt_j,
+                                       R_idxs_dadm[j * n_lR] != NA_INTEGER);
   };
+  const bool use_mix = use_pC || use_pG;
   double total_ll = 0;
   if (expand.length() > 0) { // non-compressed dadm: sum via expand index vector
-    if (use_pC) {
+    if (use_mix) {
       for (int j = 0; j < n_unique_trials; ++j) apply_pC(j);
     }
     const double* ll_ptr = ll_unique.data();
@@ -8676,7 +9119,7 @@ apply_trial_trunc:
       }
     }
   } else { // compressed dadm: each unique trial counted once
-    if (use_pC) {
+    if (use_mix) {
       for (int j = 0; j < n_unique_trials; ++j) apply_pC(j);
     }
     const double* ll_ptr = ll_unique.data();
@@ -8813,7 +9256,10 @@ static BAwLCorrSharedState build_bawl_corr_shared_state(
     const std::string nm = Rcpp::as<std::string>(keep_names[j]);
     s.cols[static_cast<size_t>(j)] = &table.base(0, table.base_index_for(nm));
     if (nm == "pContaminant") s.pc_col = j;
+    else if (nm == "pGuess") s.pg_col = j;
   }
+  s.guess = resolve_guess_kernel(dadm);
+  s.guess.pg_col = s.pg_col;
 
   s.effective_rho.assign(static_cast<size_t>(n_trials), R_NegInf);
   s.layout.assign(static_cast<size_t>(s.n_unique), BAwLCorrTrialLayout());
@@ -9280,12 +9726,12 @@ static BAwLCorrExactTrialResult bawl_corr_exact_trial_loglik(
       log_value -= log_z;
     }
   }
-  if (s.pc_col >= 0) {
-    const double pC = cols[static_cast<size_t>(s.pc_col)][start];
-    const double log1m = std::log1p(-pC);
-    log_value = (rt == R_PosInf)
-      ? log_sum_exp(std::log(pC), log1m + log_value)
-      : log1m + log_value;
+  // Contaminant mixture; see src/contaminant_mixture.h.
+  if (s.pc_col >= 0 || (s.pg_col >= 0 && s.guess.active())) {
+    const double pC = (s.pc_col >= 0) ? cols[static_cast<size_t>(s.pc_col)][start] : 0.0;
+    const double pG = (s.pg_col >= 0 && s.guess.active())
+                        ? cols[static_cast<size_t>(s.pg_col)][start] : 0.0;
+    log_value = mix_contaminants_rt(log_value, pC, pG, s.guess, rt, known);
   }
   out.log_likelihood = (!R_FINITE(log_value) || log_value < min_ll)
     ? min_ll : log_value;
@@ -9687,6 +10133,17 @@ double c_log_likelihood_bawl_correlated(
   // when that route is actually selected.
   Rcpp::NumericMatrix pars_generic;
   if (!use_fast_node_eval) pars_generic = materialize();
+  // Per-trial log(1 - pG) for the generic node evaluator, and the matching
+  // suppression of pGuess inside the nested race call -- same split as the fast
+  // path above: the constant factor is integrated, the guess mass is not.
+  std::vector<double> generic_log1m_pg(static_cast<size_t>(n_unique), 0.0);
+  if (!use_fast_node_eval && cshared.pg_col >= 0 && cshared.guess.active()) {
+    for (int j = 0; j < n_unique; ++j) {
+      const double pG = pars_generic(j * n_lR, cshared.pg_col);
+      if (pG != 0.0) generic_log1m_pg[static_cast<size_t>(j)] = log1m(pG);
+    }
+    for (int r = 0; r < n_trials; ++r) pars_generic(r, cshared.pg_col) = 0.0;
+  }
 
   // Step 4: the no-clock route consumes prepared BAwL geometry directly;
   // prepared conditional survivors retain scalar natural-branch semantics,
@@ -9808,12 +10265,26 @@ double c_log_likelihood_bawl_correlated(
     // The generic evaluator inherits the contaminant shift from the race
     // path; with all-finite RTs that is a per-trial log(1 - pC) added to the
     // numerator integrand.
+    //
+    // pGuess is split in two here, because unlike pC's log(1 - pC) the guess is
+    // NOT a constant factor and must not be integrated over z.  Only its
+    // (1 - pG) down-weight -- which IS a constant factor, and therefore rides
+    // through both the quadrature and the joint-positivity division unchanged --
+    // goes into the integrand; the flat guess MASS is added once to the finished
+    // trial likelihood in the accumulation loop below.  The split is exact.
     fast_log1m_pc.assign(static_cast<size_t>(n_unique), 0.0);
     if (cshared.pc_col >= 0) {
       const double* pc_ptr = cshared.cols[static_cast<size_t>(cshared.pc_col)];
       for (int j = 0; j < n_unique; ++j) {
         const double pC = pc_ptr[j * n_lR];
         if (pC != 0.0) fast_log1m_pc[static_cast<size_t>(j)] = std::log1p(-pC);
+      }
+    }
+    if (cshared.pg_col >= 0 && cshared.guess.active()) {
+      const double* pg_ptr = cshared.cols[static_cast<size_t>(cshared.pg_col)];
+      for (int j = 0; j < n_unique; ++j) {
+        const double pG = pg_ptr[j * n_lR];
+        if (pG != 0.0) fast_log1m_pc[static_cast<size_t>(j)] += log1m(pG);
       }
     }
   }
@@ -9941,7 +10412,8 @@ double c_log_likelihood_bawl_correlated(
         const int i = j_to_i[static_cast<size_t>(j)];
         if (i < 0) continue;
         node_num[static_cast<size_t>(j)] =
-          log_pos[static_cast<size_t>(j)] + node_ll[i];
+          log_pos[static_cast<size_t>(j)] + node_ll[i] +
+          generic_log1m_pg[static_cast<size_t>(j)];
       }
     }
 
@@ -10386,13 +10858,37 @@ double c_log_likelihood_bawl_correlated(
     }
   }
 
+  // The flat guess mass for quadrature trials.  Exact trials already carry the
+  // full mixture (bawl_corr_exact_trial_loglik); quadrature trials carry only
+  // its (1 - pG) factor, so the mass is added here, where `value` is a finished
+  // trial likelihood rather than an integrand.  The guess term picks up
+  // log(1 - pC) because the integrand it is being summed with already has it:
+  //   (1-pC)[(1-pG) L + pG g]  ==  [(1-pC)(1-pG) L] + pG (1-pC) g.
+  // A non-finite RT gets log_g = -Inf, leaving just the (1 - pG) factor already
+  // in the integrand -- which is the correct treatment for an omission.
+  const bool guess_quad =
+    cshared.pg_col >= 0 && cshared.guess.active();
+  auto add_guess_mass = [&](double value, int j) -> double {
+    if (!guess_quad || exact_done[static_cast<size_t>(j)]) return value;
+    const int start = j * n_lR;
+    const double pG = cshared.cols[static_cast<size_t>(cshared.pg_col)][start];
+    if (pG <= 0.0) return value;
+    const double rt_j = cshared.rt[start];
+    if (!R_FINITE(rt_j) || rt_j <= 0.0) return value;
+    const double pC = (cshared.pc_col >= 0)
+      ? cshared.cols[static_cast<size_t>(cshared.pc_col)][start] : 0.0;
+    return log_sum_exp(value,
+                       std::log(pG) + log1m(pC) + cshared.guess.log_g);
+  };
+
   double total_ll = 0.0;
   if (expand.length() > 0) {
     for (int i = 0; i < n_out; ++i) {
       const int j = expand[i] - 1;
       double value = exact_done[static_cast<size_t>(j)]
         ? exact_ll[static_cast<size_t>(j)]
-        : log_num[static_cast<size_t>(j)] - log_den[static_cast<size_t>(j)];
+        : add_guess_mass(log_num[static_cast<size_t>(j)] -
+                         log_den[static_cast<size_t>(j)], j);
       if (!R_FINITE(value) || value < min_ll) value = min_ll;
       if (trial_ll_out != nullptr) (*trial_ll_out)[i] = value;
       total_ll += value;
@@ -10401,7 +10897,8 @@ double c_log_likelihood_bawl_correlated(
     for (int j = 0; j < n_unique; ++j) {
       double value = exact_done[static_cast<size_t>(j)]
         ? exact_ll[static_cast<size_t>(j)]
-        : log_num[static_cast<size_t>(j)] - log_den[static_cast<size_t>(j)];
+        : add_guess_mass(log_num[static_cast<size_t>(j)] -
+                         log_den[static_cast<size_t>(j)], j);
       if (!R_FINITE(value) || value < min_ll) value = min_ll;
       if (trial_ll_out != nullptr) (*trial_ll_out)[j] = value;
       total_ll += value;
@@ -10456,7 +10953,10 @@ static RDMSWTNCorrSharedState build_rdmswtn_corr_shared_state(
     s.cols[static_cast<size_t>(c)] =
       &table.base(0, table.base_index_for(nm));
     if (nm == "pContaminant") s.pc_col = c;
+    else if (nm == "pGuess") s.pg_col = c;
   }
+  s.guess = resolve_guess_kernel(dadm);
+  s.guess.pg_col = s.pg_col;
   s.layout.assign(static_cast<size_t>(s.n_unique),
                   RDMSWTNCorrTrialLayout());
   s.valid = true;
@@ -10744,12 +11244,16 @@ static double rdmswtn_corr_trial_loglik(
     if (!R_FINITE(log_z)) return min_ll;
     value -= log_z;
   }
+  // Contaminant mixture; see src/contaminant_mixture.h.
   if (s.pc_col >= 0) {
     const double p_c = s.cols[static_cast<size_t>(s.pc_col)][start];
     if (!R_FINITE(p_c) || p_c < 0.0 || p_c >= 1.0) return min_ll;
-    value = rt == R_PosInf
-      ? log_sum_exp(std::log(p_c), std::log1p(-p_c) + value)
-      : std::log1p(-p_c) + value;
+  }
+  if (s.pc_col >= 0 || (s.pg_col >= 0 && s.guess.active())) {
+    const double pC = (s.pc_col >= 0) ? s.cols[static_cast<size_t>(s.pc_col)][start] : 0.0;
+    const double pG = (s.pg_col >= 0 && s.guess.active())
+                        ? s.cols[static_cast<size_t>(s.pg_col)][start] : 0.0;
+    value = mix_contaminants_rt(value, pC, pG, s.guess, rt, known);
   }
   return (!R_FINITE(value) || value < min_ll) ? min_ll : value;
 }

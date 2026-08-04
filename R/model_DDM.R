@@ -142,13 +142,20 @@ DDM <- function(){
   list(
     c_name = "DDM",
     type="DDM",
-    p_types=c("v" = 1,"a" = log(1),"sv" = log(0),"t0" = log(0),"st0" = log(0),"s" = log(1),"Z" = qnorm(0.5),"SZ" = qnorm(0)),
+    p_types=c("v" = 1,"a" = log(1),"sv" = log(0),"t0" = log(0),"st0" = log(0),"s" = log(1),"Z" = qnorm(0.5),"SZ" = qnorm(0),
+              "pContaminant" = qnorm(0),"pGuess" = qnorm(0)),
+    # The nuisance pair is trailing, so it does not disturb emc2col::ddm::spec()'s
+    # canonical prefix; p_types_canonical keeps design()'s "assumed constant"
+    # message quiet for them.
+    p_types_canonical = c("v","a","sv","t0","st0","s","Z","SZ"),
     # Trial dependent parameter transform
     transform=list(func=c(v = "identity",a = "exp",sv = "exp",t0 = "exp",
-                          st0 = "exp",s = "exp",Z = "pnorm",SZ = "pnorm")),
+                          st0 = "exp",s = "exp",Z = "pnorm",SZ = "pnorm",
+                          pContaminant = "pnorm",pGuess = "pnorm")),
     bound=list(minmax=cbind(v=c(-20,20),a=c(0,10),Z=c(.01,.99),t0=c(0.05,Inf),
-                            sv=c(.01,10),s=c(0,Inf),SZ=c(.01,.99),st0=c(0,.5)),
-               exception=c(sv=0,SZ=0,st0=0)),
+                            sv=c(.01,10),s=c(0,Inf),SZ=c(.01,.99),st0=c(0,.5),
+                            pContaminant=c(0.001,0.999),pGuess=c(0.001,0.999)),
+               exception=c(sv=0,SZ=0,st0=0,pContaminant=0,pGuess=0)),
     Ttransform = function(pars,dadm) {
       pars[,"SZ"] <- 2*pars[,"SZ"]*pmin(pars[,"Z"], 1 - pars[,"Z"])
       pars <- cbind(pars,z=pars[,"Z"]*pars[,"a"], sz = pars[,"SZ"]*pars[,"a"])
@@ -239,13 +246,17 @@ DDMGNG <- function(){
   list(
     type="DDM",
     p_types=c("v" = 1,"a" = log(1),"sv" = log(0),"t0" = log(0),"st0" = log(0),
-              "s" = log(1),"Z" = qnorm(0.5),"SZ" = qnorm(0)),
+              "s" = log(1),"Z" = qnorm(0.5),"SZ" = qnorm(0),
+              "pContaminant" = qnorm(0),"pGuess" = qnorm(0)),
+    p_types_canonical = c("v","a","sv","t0","st0","s","Z","SZ"),
     # Trial dependent parameter transform
     transform=list(func=c(v = "identity",a = "exp",sv = "exp",t0 = "exp",
-                          st0 = "exp",s = "exp",Z = "pnorm",SZ = "pnorm")),
+                          st0 = "exp",s = "exp",Z = "pnorm",SZ = "pnorm",
+                          pContaminant = "pnorm",pGuess = "pnorm")),
     bound=list(minmax=cbind(v=c(-20,20),a=c(0,10),Z=c(.001,.999),t0=c(0.05,Inf),
-                            sv=c(.01,10),s=c(0,Inf),SZ=c(.001,.999),st0=c(0,.5)),
-               exception=c(sv=0,SZ=0,st0=0)),
+                            sv=c(.01,10),s=c(0,Inf),SZ=c(.001,.999),st0=c(0,.5),
+                            pContaminant=c(0.001,0.999),pGuess=c(0.001,0.999)),
+               exception=c(sv=0,SZ=0,st0=0,pContaminant=0,pGuess=0)),
     Ttransform = function(pars,dadm) {
       pars[,"SZ"] <- 2*pars[,"SZ"]*pmin(pars[,"Z"], 1-pars[,"Z"])
       pars <- cbind(pars,z=pars[,"Z"]*pars[,"a"], sz = pars[,"SZ"]*pars[,"a"],

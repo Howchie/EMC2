@@ -142,13 +142,13 @@ RLF <- function() {
     compress_ok = FALSE,
     p_types = c(
       v = log(1), B = log(1), A = log(0), t0 = log(0), s = log(1),
-      alpha = qnorm(0.7), pContaminant = qnorm(0)
+      alpha = qnorm(0.7), pContaminant = qnorm(0), pGuess = qnorm(0)
     ),
     p_types_canonical = c("v", "B", "A", "t0", "s", "alpha"),
     transform = list(
       func = c(
         v = "exp", B = "exp", A = "exp", t0 = "exp", s = "exp",
-        alpha = "pnorm", pContaminant = "pnorm"
+        alpha = "pnorm", pContaminant = "pnorm", pGuess = "pnorm"
       ),
       lower = c(alpha = 1),
       upper = c(alpha = 2)
@@ -165,9 +165,9 @@ RLF <- function() {
       minmax = cbind(
         v = c(1e-3, Inf), B = c(1e-4, Inf), A = c(1e-4, Inf),
         t0 = c(0.05, Inf), s = c(0, Inf), alpha = c(1.01, 1.99),
-        pContaminant = c(0.001, 0.999)
+        pContaminant = c(0.001, 0.999), pGuess = c(0.001, 0.999)
       ),
-      exception = c(A = 0, pContaminant = 0)
+      exception = c(A = 0, pContaminant = 0, pGuess = 0)
     ),
     Ttransform = function(pars, dadm) {
       cbind(pars, b = pars[, "B"] + pars[, "A"])

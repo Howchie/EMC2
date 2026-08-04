@@ -77,7 +77,7 @@ test_that("RDMSWTN_TT constructors expose the dedicated clock contract", {
   )
   expect_identical(
     names(model$p_types),
-    c("v", "B", "A", "t0", "s", "sv", "tau", "pContaminant")
+    c("v", "B", "A", "t0", "s", "sv", "tau", "pContaminant", "pGuess")
   )
   expect_false(any(c(
     "mG", "mK", "lambda_g", "lambda_k", "omega"
@@ -418,7 +418,7 @@ test_that("malformed correlated designs and unrestricted active rho are rejected
   )
   model <- RDMSWTN_TTcorr(posdrift = FALSE)
   pars <- matrix(
-    c(1, 1, .2, .1, 1, .3, 1, 0, .5), nrow = 1,
+    c(1, 1, .2, .1, 1, .3, 1, 0, 0, .5), nrow = 1,
     dimnames = list(NULL, names(model$p_types))
   )
   expect_error(model$Ttransform(pars, NULL), "posdrift = FALSE")

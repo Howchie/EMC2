@@ -310,6 +310,7 @@ Rcpp::List rrou_cpp(NumericMatrix pars, CharacterVector lR_levels, LogicalVector
     else if (kstr == "linear_additive") bkind = fpe::FPE_BND_LINEAR_ADDITIVE;
     else if (kstr == "linear_multiplicative") bkind = fpe::FPE_BND_LINEAR_MULTIPLICATIVE;
   }
+  const bool is_fixed = (bkind == fpe::FPE_BND_FIXED);
 
   IntegerVector R_out(n_trials, NA_INTEGER);
   NumericVector rt_out(n_trials, R_PosInf);
@@ -319,7 +320,7 @@ Rcpp::List rrou_cpp(NumericMatrix pars, CharacterVector lR_levels, LogicalVector
   // Trial scratch has a fixed accumulator width.  Reuse it rather than paying
   // for ten small heap allocations on every simulated trial.
   std::vector<double> X(n_acc), b(n_acc), v_acc(n_acc), k_acc(n_acc);
-  std::vector<double> t0_acc(n_acc), phi(n_acc), drift_gain(n_acc), sd(n_acc);
+  std::vector<double> t0_acc(n_acc), phi(n_acc), drift_step(n_acc), sd(n_acc);
   std::vector<double> inv_2var_bb(n_acc);
   std::vector<fpe::FPE_Boundary> bnd(n_acc);
   std::vector<unsigned char> active(n_acc, 0);
@@ -387,7 +388,8 @@ Rcpp::List rrou_cpp(NumericMatrix pars, CharacterVector lR_levels, LogicalVector
       phi[a] = std::exp(-kk * dt);
       double m1 = -std::expm1(-kk * dt);
       double m2 = -std::expm1(-2.0 * kk * dt);
-      drift_gain[a] = (kk > 1e-10) ? (m1 / kk) : dt;
+      double drift_gain = (kk > 1e-10) ? (m1 / kk) : dt;
+      drift_step[a] = vv * drift_gain;
       double var_val = (kk > 1e-10) ? (ss * ss * m2 / (2.0 * kk)) : (ss * ss * dt);
       sd[a] = std::sqrt(std::max(var_val, 0.0));
       inv_2var_bb[a] = 2.0 / (ss * ss * dt);
@@ -406,8 +408,8 @@ Rcpp::List rrou_cpp(NumericMatrix pars, CharacterVector lR_levels, LogicalVector
         }
         any_active = true;
 
-        double X1 = X[a] * phi[a] + v_acc[a] * drift_gain[a] + sd[a] * ::norm_rand();
-        double b1 = bnd[a].fixed ? b[a] : bnd[a].b(t + dt);
+        double X1 = X[a] * phi[a] + drift_step[a] + sd[a] * ::norm_rand();
+        double b1 = is_fixed ? b[a] : bnd[a].b(t + dt);
         if (X1 >= b1) {
           double d0 = b[a] - X[a], d1 = b1 - X1;
           double frac = d0 / std::max(d0 - d1, 1e-300);

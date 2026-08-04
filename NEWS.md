@@ -16,7 +16,44 @@
 
 -   Fixed some maths that was wrong about the ECDF plot for SBC
 
+-   The ROU equilibrium parameterization now expresses `theta = v / k` and
+    `chi = s * sqrt(tk)` in physical units. Threshold effects in `B` therefore
+    remain identifiable when `theta` and `chi` are shared across conditions.
+
 ## New features
+
+-   New `pGuess` parameter: a uniform "guess" (outlier) contaminant, in the
+    spirit of Ratcliff & Tuerlinckx (2002) and HDDM's `w_outlier`. Unlike
+    `pContaminant`, which is a Bernoulli **omission** mixture contributing mass
+    only at `rt = Inf`, `pGuess` mixes a flat density directly into observed RT
+    densities, giving fast and slow outliers a likelihood floor. It is available
+    on the race families and, for the first time, on the DDM family (`DDM`,
+    `DDMGNG`, `BOU`), which also gain `pContaminant`.
+
+    The two contaminants are nested rather than competing, so neither can push
+    the other out of `[0, 1]`:
+
+        P(omission) = pContaminant
+        P(guess)    = (1 - pContaminant) * pGuess
+        P(process)  = (1 - pContaminant) * (1 - pGuess)
+
+    At `pGuess = 0` every likelihood is bit-for-bit identical to before, so
+    `pContaminant`'s behaviour is unchanged.
+
+    Two things worth knowing. First, both contaminants are proportions among
+    **retained** trials, not generated ones: they are applied after truncation
+    renormalisation, matching how `make_missing()` contaminates after the
+    truncation cut. Second, the guess window defaults to the effective
+    truncation/censoring window `[max(LT, LC), min(UC, UT)]`, widening to
+    `max(5, floor(max(rt)) + 1)` when that has no finite upper edge -- so, unlike
+    HDDM's fixed 5 s, a 7 s outlier still gets mixture protection. Override it
+    with `TC$guess_window` (or `TC$w_outlier` for the HDDM spelling), and see
+    `?resolve_guess_window`. `make_data()`/`make_missing()` simulate guesses via
+    the `pGuess` and `guess_window` arguments.
+
+    `pGuess` is applied only in the compiled likelihoods; `design()` raises an
+    error rather than silently ignoring a free `pGuess` on a model with no
+    compiled likelihood.
 
 -   Finished general trends implementation (stay tuned; tutorial still on the way)
 

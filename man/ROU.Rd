@@ -33,10 +33,9 @@ start-point range. Setting \code{Binf = B + A} gives the fixed-boundary model.}
 time, physical leak and diffusion — with \eqn{v = bk/(1-e^{-k t_\star})}
 and the smooth \eqn{k=0} limit.
 \code{"equilibrium"} estimates \eqn{(t_k, \theta, \chi)} — relaxation time,
-equilibrium position relative to the mean-start distance, and noise per
-relaxation — in which \eqn{\theta < 1} produces effective omissions in a finite
-response window. The alternatives fix the state scale with \code{B} rather
-than with \code{s}; see Details.}
+physical equilibrium \eqn{v/k}, and noise per relaxation \eqn{s\sqrt{t_k}}.
+The alternatives fix the state scale with \code{B} rather than with \code{s}; see
+Details.}
 }
 \value{
 A list defining the cognitive model
@@ -48,8 +47,6 @@ Ornstein-Uhlenbeck process
 absorbed at \eqn{b = B + A}.
 }
 \details{
-Model files are almost exclusively used in \code{design()}.
-
 Default values are used for all parameters that are not explicitly listed in the \code{formula}
 argument of \code{design()}. They can also be accessed with \code{ROU()$p_types}.\tabular{llllll}{
    \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Mapping} \tab \strong{Interpretation} \cr
@@ -59,14 +56,15 @@ argument of \code{design()}. They can also be accessed with \code{ROU()$p_types}
    \emph{B} \tab log \tab [0, Inf] \tab log(1) \tab \emph{b} = \emph{B} + \emph{A} \tab Distance from \emph{A} to \emph{b} (response threshold) \cr
    \emph{t0} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Non-decision time \cr
    \emph{s} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Within-trial standard deviation of the diffusion \cr
-   \emph{pContaminant} \tab probit \tab [0, 1] \tab qnorm(0) \tab  \tab Optional contamination probability handled by the data pipeline \cr
+   \emph{pContaminant} \tab probit \tab [0, 1] \tab qnorm(0) \tab  \tab Optional \emph{omission} contaminant probability: mass at \code{rt = Inf} only, handled by the data pipeline \cr
+   \emph{pGuess} \tab probit \tab [0, 1] \tab qnorm(0) \tab  \tab Optional uniform \emph{guess} (outlier) probability, mixed into observed RT densities over the guess window \cr
 }
 }
 \section{Parameterizations}{
 \code{parameterization} changes which three parameters stand in for
 \eqn{(v, k, s)}. The charts share one solver but cover restricted regions of
-the SDE family; \code{B}, \code{A}, \code{t0} and the collapsing-bound
-parameters are common to all three.
+the SDE family; \code{B}, \code{A}, \code{t0} and the collapsing-bound parameters are common
+to all three.
 
 \code{"rate"} (the default) is \eqn{(v, k, s)} as above.
 
@@ -74,65 +72,48 @@ parameters are common to all three.
 reference crossing time of the deterministic path from \eqn{x = 0} to
 \eqn{b = B + A}; \code{k} and \code{s} retain their physical units:\tabular{lllll}{
    \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Interpretation} \cr
-   \emph{tstar} \tab log \tab [0.05, Inf] \tab log(1) \tab Time at which the deterministic mean path reaches \emph{b} \cr
+   \emph{tstar} \tab log \tab [0, Inf] \tab log(1) \tab Time at which the deterministic mean path reaches \emph{b} \cr
    \emph{k} \tab log \tab [0, Inf] \tab log(0) \tab Physical leak rate; \emph{k} = 0 is the Wiener race \cr
    \emph{s} \tab log \tab [0, Inf] \tab log(1) \tab Diffusion standard deviation \cr
 }
 
+
 The map is \eqn{v = bk/(1-e^{-k t_\star})}, with the smooth limit
-\eqn{v = b/t_\star} at \emph{k} = 0. This is a deterministic-crossing chart,
-so \code{tstar ~ condition}, \code{k ~ 1}, and \code{s ~ 1} have their
-literal meanings.
+\eqn{v = b/t_\star} at \emph{k} = 0. This is a deterministic-crossing chart, so
+\code{tstar ~ condition}, \code{k ~ 1}, and \code{s ~ 1} have their literal meanings.
 
 \code{"equilibrium"} replaces them with \eqn{(t_k, \theta, \chi)}:\tabular{lllll}{
    \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Interpretation} \cr
-   \emph{tk} \tab log \tab [0.01, Inf] \tab log(1) \tab Leak time constant \eqn{t_k = 1/k} (the boundary-collapse time constant keeps the name \emph{tau}) \cr
-   \emph{theta} \tab log \tab [0.001, 20] \tab log(1) \tab OU equilibrium relative to the mean-start distance \cr
-   \emph{chi} \tab log \tab [0.001, 10] \tab log(1) \tab Noise over one relaxation \cr
+   \emph{tk} \tab log \tab [0.001, Inf] \tab log(1) \tab Leak time constant \eqn{t_k = 1/k} (the boundary-collapse time constant keeps the name \emph{tau}) \cr
+   \emph{theta} \tab log \tab [0.001, 20] \tab log(1) \tab Physical OU equilibrium, \eqn{v/k} \cr
+   \emph{chi} \tab log \tab [0.001, 10] \tab log(1) \tab Physical noise over one relaxation, \eqn{s\sqrt{t_k}} \cr
 }
 
-With \eqn{d = B + A/2}, \eqn{\theta = (v/k-A/2)/d},
-\eqn{\chi = s\sqrt{t_k}/d}, \eqn{Y = (X-A/2)/d} and \eqn{u=t/t_k}, this is
-\eqn{dY = (\theta-Y)du + \chi\,dW_u}. Thus \emph{theta} < 1 gives noise-driven escapes
+
+The map is \eqn{k = 1/t_k}, \eqn{v = \theta/t_k}, and
+\eqn{s = \chi/\sqrt{t_k}}. Thus the equilibrium is below the upper boundary
+when \eqn{\theta < B + A}; responses in that regime are noise-driven escapes
 and effective omissions in a finite response window, not an intrinsic
-never-response probability. The centered start is
-\eqn{U(-A/(2d), A/(2d))}, so the chart retains \code{A} while using finite
-positive leak.
+never-response probability. The start point remains \eqn{U(0,A)}.
 }
 
 \section{Scale identification}{
-Scaling the state by \emph{b} shows the dynamics depend only on
+Scaling the state shows the dynamics depend only on
 \eqn{(v/s, k, B/s, A/s)} — four quantities from five parameters. The rate
 parameterization resolves the redundancy by fixing \code{s} (usually
 \code{constants = c(s = log(1))}). The alternatives leave the same state-scale
-redundancy, so \strong{fix \code{B} rather than \code{s}}, with
-\code{constants = c(B = log(1))}. A bound manipulation is represented directly
-by \code{tstar ~ E} in the curvature chart; \code{theta} and \code{tk} in the
-equilibrium chart change equilibrium and relaxation, respectively.
-
-Leak is an architectural quantity rather than a per-condition fit knob: use
-\code{k ~ 1} in the curvature chart or \code{tk ~ 1} in the equilibrium chart
-unless a condition-specific leak is scientifically intended.
-
-The leak \emph{k} is a rate in units of 1/time and is not divided by \emph{s}. In
-the rate chart, \emph{s} is normally fixed to 1; the alternatives normally fix
-\code{B} as above. Setting \emph{k} = 0 gives the racing diffusion model (RDM)
-through the same solver.
-
-The parameterization \emph{b} = \emph{B} + \emph{A} ensures that the response threshold is
-always higher than the between trial variation in start point. \code{A} is
-non-negative, so the start point is always in [0, \emph{A}].
+redundancy, so \strong{fix \code{B} rather than \code{s}}, with a reference/intercept
+\code{constants = c(B = log(1))}. In the equilibrium chart \code{theta} and \code{chi} are
+physical-unit parameters; fixing the threshold reference keeps their scale
+common when condition-specific threshold effects are added.
+A bound manipulation is represented directly by \code{tstar ~ E} in the curvature
+chart; \code{theta} and \code{tk} in the equilibrium chart change equilibrium and
+relaxation, respectively.
 
 This is the independent leaky accumulator, not the leaky competing
 accumulator (LCA): accumulators do not inhibit one another, and the process
 is not rectified at zero. See \code{\link[=BOU]{BOU()}} for the two-boundary OU diffusion,
 whose leak is defined relative to the starting point rather than zero.
-
-There is no closed-form first-passage density, so the likelihood uses a
-Fokker–Planck solve for each distinct parameter tuple. The solve is cached
-across response-time queries, but designs with trial-varying parameters are
-correspondingly more expensive. Resolution can be adjusted with
-\code{emc2.fpe_nx}, \code{emc2.fpe_dt}, \code{emc2.fpe_grade}, and \code{emc2.fpe_tgrade}.
 
 Response-time compression is disabled for this model because the solver
 evaluates the continuous-time density directly; binning would add flooring

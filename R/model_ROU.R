@@ -266,7 +266,8 @@ rROU <- function(lR, pars, ok = rep(TRUE, nrow(pars)), kind = NULL,
 #' | *B*       | log       | \[0, Inf\]      | log(1)    | *b* = *B* + *A*      | Distance from *A* to *b* (response threshold)                  |
 #' | *t0*      | log       | \[0, Inf\]      | log(0)    |                  | Non-decision time                                             |
 #' | *s*       | log       | \[0, Inf\]      | log(1)    |                  | Within-trial standard deviation of the diffusion              |
-#' | *pContaminant* | probit | \[0, 1\] | qnorm(0) | | Optional contamination probability handled by the data pipeline |
+#' | *pContaminant* | probit | \[0, 1\] | qnorm(0) | | Optional *omission* contaminant probability: mass at `rt = Inf` only, handled by the data pipeline |
+#' | *pGuess* | probit | \[0, 1\] | qnorm(0) | | Optional uniform *guess* (outlier) probability, mixed into observed RT densities over the guess window |
 #'
 #' # Parameterizations
 #'
@@ -296,24 +297,25 @@ rROU <- function(lR, pars, ok = rep(TRUE, nrow(pars)), kind = NULL,
 #' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Interpretation** |
 #' |-----------|-----------|---------------|-----------|------------------------------------|
 #' | *tk*      | log       | \[0.001, Inf\]  | log(1)    | Leak time constant \eqn{t_k = 1/k} (the boundary-collapse time constant keeps the name *tau*) |
-#' | *theta*   | log       | \[0.001, 20\]   | log(1)    | OU equilibrium relative to the mean-start distance |
-#' | *chi*     | log       | \[0.001, 10\]   | log(1)    | Noise over one relaxation |
+#' | *theta*   | log       | \[0.001, 20\]   | log(1)    | Physical OU equilibrium, \eqn{v/k} |
+#' | *chi*     | log       | \[0.001, 10\]   | log(1)    | Physical noise over one relaxation, \eqn{s\sqrt{t_k}} |
 #'
-#' With \eqn{d = B + A/2}, \eqn{\theta = (v/k-A/2)/d},
-#' \eqn{\chi = s\sqrt{t_k}/d}, \eqn{Y = (X-A/2)/d} and \eqn{u=t/t_k}, this is
-#' \eqn{dY = (\theta-Y)du + \chi\,dW_u}. Thus *theta* < 1 gives noise-driven escapes
+#' The map is \eqn{k = 1/t_k}, \eqn{v = \theta/t_k}, and
+#' \eqn{s = \chi/\sqrt{t_k}}. Thus the equilibrium is below the upper boundary
+#' when \eqn{\theta < B + A}; responses in that regime are noise-driven escapes
 #' and effective omissions in a finite response window, not an intrinsic
-#' never-response probability. The centered start is
-#' \eqn{U(-A/(2d), A/(2d))}, so the chart retains `A` while using finite
-#' positive leak.
+#' never-response probability. The start point remains \eqn{U(0,A)}.
 #'
 #' # Scale identification
 #'
-#' Scaling the state by *b* shows the dynamics depend only on
+#' Scaling the state shows the dynamics depend only on
 #' \eqn{(v/s, k, B/s, A/s)} — four quantities from five parameters. The rate
 #' parameterization resolves the redundancy by fixing `s` (usually
 #' `constants = c(s = log(1))`). The alternatives leave the same state-scale
-#' redundancy, so **fix `B` rather than `s`**, with `constants = c(B = log(1))`.
+#' redundancy, so **fix `B` rather than `s`**, with a reference/intercept
+#' `constants = c(B = log(1))`. In the equilibrium chart `theta` and `chi` are
+#' physical-unit parameters; fixing the threshold reference keeps their scale
+#' common when condition-specific threshold effects are added.
 #' A bound manipulation is represented directly by `tstar ~ E` in the curvature
 #' chart; `theta` and `tk` in the equilibrium chart change equilibrium and
 #' relaxation, respectively.
@@ -362,10 +364,9 @@ rROU <- function(lR, pars, ok = rep(TRUE, nrow(pars)), kind = NULL,
 #'   time, physical leak and diffusion — with \eqn{v = bk/(1-e^{-k t_\star})}
 #'   and the smooth \eqn{k=0} limit.
 #'   `"equilibrium"` estimates \eqn{(t_k, \theta, \chi)} — relaxation time,
-#'   equilibrium position relative to the mean-start distance, and noise per
-#'   relaxation — in which \eqn{\theta < 1} produces effective omissions in a finite
-#'   response window. The alternatives fix the state scale with `B` rather than
-#'   with `s`; see Details.
+#'   physical equilibrium \eqn{v/k}, and noise per relaxation \eqn{s\sqrt{t_k}}.
+#'   The alternatives fix the state scale with `B` rather than with `s`; see
+#'   Details.
 #'
 #' @return A list defining the cognitive model
 #' @examples
@@ -453,10 +454,10 @@ ROU <- function(boundary_collapse = c("fixed", "exponential", "linear_additive",
     }
   }
 
-  p_types <- c(p_types, pContaminant = qnorm(0))
-  transform <- c(transform, pContaminant = "pnorm")
-  minmax <- cbind(minmax, pContaminant = c(0.001, 0.999))
-  exception <- c(exception, pContaminant = 0)
+  # pContaminant (omission) and pGuess (uniform outlier); see add_nuisance_pars().
+  .nuis <- add_nuisance_pars(p_types, transform, minmax, exception)
+  p_types <- .nuis$p_types; transform <- .nuis$transform
+  minmax <- .nuis$minmax; exception <- .nuis$exception
 
   list(
     type = "RACE",
@@ -464,7 +465,7 @@ ROU <- function(boundary_collapse = c("fixed", "exponential", "linear_additive",
     # The density is evaluated by a cached Fokker--Planck solve.
     compress_ok = FALSE,
     p_types = p_types,
-    p_types_canonical = names(p_types)[names(p_types) != "pContaminant"],
+    p_types_canonical = setdiff(names(p_types), .nuisance_par_names),
     transform = list(func = transform),
     bound = list(minmax = minmax, exception = exception),
     # Trial dependent parameter transform

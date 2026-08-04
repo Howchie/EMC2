@@ -155,7 +155,8 @@ rRDM <- function(lR, pars, p_types=c("v", "B", "A", "t0"), ok=rep(TRUE, dim(pars
 #' | *B*       | log       | \[0, Inf\]      | log(1)    | *b* = *B* + *A*      | Distance from *A* to *b* (response threshold)                  |
 #' | *t0*      | log       | \[0, Inf\]      | log(0)    |                  | Non-decision time                                             |
 #' | *s*       | log       | \[0, Inf\]      | log(1)    |                  | Within-trial standard deviation of drift rate                 |
-#' | *pContaminant* | probit | \[0, 1\] | qnorm(0) | | Optional contamination probability handled by the data pipeline |
+#' | *pContaminant* | probit | \[0, 1\] | qnorm(0) | | Optional *omission* contaminant probability: mass at `rt = Inf` only, handled by the data pipeline |
+#' | *pGuess* | probit | \[0, 1\] | qnorm(0) | | Optional uniform *guess* (outlier) probability, mixed into observed RT densities over the guess window |
 #'
 #'
 #' The core RDM parameters are estimated on the log scale. `pContaminant` is
@@ -213,12 +214,12 @@ RDM <- function() {
   list(
     type = "RACE",
     c_name = "RDM",
-    p_types = c("v" = log(1), "B" = log(1), "A" = log(0), "t0" = log(0), "s" = log(1), "pContaminant" = qnorm(0)),
+    p_types = c("v" = log(1), "B" = log(1), "A" = log(0), "t0" = log(0), "s" = log(1), "pContaminant" = qnorm(0), "pGuess" = qnorm(0)),
     p_types_canonical = c("v", "B", "A", "t0", "s"),
-    transform = list(func = c(v = "exp", B = "exp", A = "exp", t0 = "exp", s = "exp", pContaminant = "pnorm")),
+    transform = list(func = c(v = "exp", B = "exp", A = "exp", t0 = "exp", s = "exp", pContaminant = "pnorm", pGuess = "pnorm")),
     bound = list(
-      minmax = cbind(v = c(1e-3, Inf), B = c(0, Inf), A = c(1e-4, Inf), t0 = c(0.05, Inf), s = c(0, Inf), pContaminant = c(0.001, 0.999)),
-      exception = c(A = 0, v = 0, pContaminant = 0)
+      minmax = cbind(v = c(1e-3, Inf), B = c(0, Inf), A = c(1e-4, Inf), t0 = c(0.05, Inf), s = c(0, Inf), pContaminant = c(0.001, 0.999), pGuess = c(0.001, 0.999)),
+      exception = c(A = 0, v = 0, pContaminant = 0, pGuess = 0)
     ),
     # Trial dependent parameter transform
     Ttransform = function(pars, dadm) {
@@ -560,7 +561,8 @@ rSWTN <- function(n, b, v, A, sv, s = 1, k = 0, erlang = 1L, erlang_omega = 1, p
 #' | *mG* | log | \[0, Inf\] | log(1) | *lambda_g* = *q* / *mG* | Mean of the optional guess clock. |
 #' | *mK* | log | \[0, Inf\] | log(1) | *lambda_k* = *q* / *mK* | Mean of the optional kill clock. |
 #' | *omega* | probit | \[0, 1\] | qnorm(.5) | | Erlang-1 mixture weight in mixed mode. |
-#' | *pContaminant* | probit | \[0, 1\] | qnorm(0) | | Optional contamination probability handled by the data pipeline. |
+#' | *pContaminant* | probit | \[0, 1\] | qnorm(0) | | Optional *omission* contaminant probability: mass at `rt = Inf` only, handled by the data pipeline |
+#' | *pGuess* | probit | \[0, 1\] | qnorm(0) | | Optional uniform *guess* (outlier) probability, mixed into observed RT densities over the guess window |
 #'
 #' The internal `lambda_g` and `lambda_k` columns are created by the
 #' `Ttransform`; they are rates, not parameters to include in a design
@@ -639,10 +641,10 @@ RDMGBM <- function(erlang_shape = 1L, erlang_type = "none") {
     exception <- c(exception, omega = 0)
   }
 
-  p_types  <- c(p_types,  pContaminant = qnorm(0))
-  transform <- c(transform, pContaminant = "pnorm")
-  minmax   <- cbind(minmax, pContaminant = c(0.001, 0.999))
-  exception <- c(exception, pContaminant = 0)
+  # pContaminant (omission) and pGuess (uniform outlier); see add_nuisance_pars().
+  .nuis <- add_nuisance_pars(p_types, transform, minmax, exception)
+  p_types <- .nuis$p_types; transform <- .nuis$transform
+  minmax <- .nuis$minmax; exception <- .nuis$exception
 
   list(
     type = "RACE",
@@ -730,7 +732,8 @@ RDMGBM <- function(erlang_shape = 1L, erlang_type = "none") {
 #' | *mG* | log | \[0, Inf\] | log(1) | *lambda_g* = *q* / *mG* | Mean of the optional guess clock. |
 #' | *mK* | log | \[0, Inf\] | log(1) | *lambda_k* = *q* / *mK* | Mean of the optional kill clock. |
 #' | *omega* | probit | \[0, 1\] | qnorm(.5) | | Erlang-1 mixture weight in mixed mode. |
-#' | *pContaminant* | probit | \[0, 1\] | qnorm(0) | | Optional contamination probability handled by the data pipeline. |
+#' | *pContaminant* | probit | \[0, 1\] | qnorm(0) | | Optional *omission* contaminant probability: mass at `rt = Inf` only, handled by the data pipeline |
+#' | *pGuess* | probit | \[0, 1\] | qnorm(0) | | Optional uniform *guess* (outlier) probability, mixed into observed RT densities over the guess window |
 #' | *rho* | scaled probit | \[-1, 1\] | qnorm(.5) | | Gaussian-copula correlation between the two participating finishing times; only when `correlated = TRUE`. |
 #'
 #' `erlang_shape = 1` uses exponential clocks and `erlang_shape = 2` uses
@@ -756,8 +759,12 @@ RDMGBM <- function(erlang_shape = 1L, erlang_type = "none") {
 #' As a race model, RDMSWTN has one accumulator per response option. EMC2
 #' constructs the latent accumulator factor `lR` from `R`, and the race
 #' likelihood combines one winning density with the survivor probabilities of
-#' all other accumulators. The optional `pContaminant` parameter is generic
-#' nuisance infrastructure and is not part of the SWTN distribution.
+#' all other accumulators. The optional `pContaminant` and `pGuess` parameters
+#' are generic nuisance infrastructure and are not part of the SWTN
+#' distribution: `pContaminant` is an *omission* rate contributing mass only at
+#' `rt = Inf`, `pGuess` a uniform *outlier* density mixed into observed RTs.
+#' Both are proportions among *retained* trials, being applied after truncation
+#' renormalisation.
 #'
 #' With `correlated = TRUE`, exactly two active accumulator rows in a trial may
 #' have the same signed, nonzero natural-scale `rho`; every other row must have
@@ -844,10 +851,10 @@ RDMSWTN <- function(erlang_shape = 1L, erlang_type = "none", posdrift = TRUE,
     exception <- c(exception, omega = 0)
   }
 
-  p_types  <- c(p_types,  pContaminant = qnorm(0))
-  transform <- c(transform, pContaminant = "pnorm")
-  minmax   <- cbind(minmax, pContaminant = c(0.001, 0.999))
-  exception <- c(exception, pContaminant = 0)
+  # pContaminant (omission) and pGuess (uniform outlier); see add_nuisance_pars().
+  .nuis <- add_nuisance_pars(p_types, transform, minmax, exception)
+  p_types <- .nuis$p_types; transform <- .nuis$transform
+  minmax <- .nuis$minmax; exception <- .nuis$exception
   if (correlated) {
     p_types <- c(p_types, rho = qnorm(0.5))
     transform <- c(transform, rho = "pnorm")
@@ -1011,8 +1018,8 @@ RDMSWTNcorr <- function(erlang_shape = 1L, erlang_type = "none",
 #' `log(1)` for `v`, `B`, `s`, and `tau`, and the boundary value `log(0)` for
 #' `A`, `t0`, and `sv`. The drift, start-point variability, diffusion scale,
 #' and `b = B + A` convention are otherwise identical to [RDMSWTN()].
-#' The optional `pContaminant` parameter is handled by the generic data
-#' pipeline. With `correlated = TRUE`, `rho` couples exactly two active
+#' The optional `pContaminant` (omission) and `pGuess` (uniform outlier)
+#' parameters are handled by the generic data pipeline. With `correlated = TRUE`, `rho` couples exactly two active
 #' finishing-time marginals through the same Gaussian-copula contract as
 #' [RDMSWTN()]. Active nonzero correlation requires `posdrift = TRUE`.
 #'
@@ -1027,19 +1034,20 @@ RDMSWTN_TT <- function(posdrift = TRUE, correlated = FALSE) {
   p_types <- c(
     v = log(1), B = log(1), A = log(0), t0 = log(0),
     s = log(1), sv = log(0), tau = log(1),
-    pContaminant = qnorm(0)
+    pContaminant = qnorm(0), pGuess = qnorm(0)
   )
   transform <- c(
     v = "exp", B = "exp", A = "exp", t0 = "exp",
     s = "exp", sv = "exp", tau = "exp",
-    pContaminant = "pnorm"
+    pContaminant = "pnorm", pGuess = "pnorm"
   )
   minmax <- cbind(
     v = c(1e-3, Inf), B = c(0, Inf), A = c(0, Inf),
     t0 = c(0.05, Inf), s = c(0, Inf), sv = c(0, Inf),
-    tau = c(1e-4, Inf), pContaminant = c(0.001, 0.999)
+    tau = c(1e-4, Inf), pContaminant = c(0.001, 0.999),
+    pGuess = c(0.001, 0.999)
   )
-  exception <- c(A = 0, v = 0, sv = 0, pContaminant = 0)
+  exception <- c(A = 0, v = 0, sv = 0, pContaminant = 0, pGuess = 0)
   if (correlated) {
     p_types <- c(p_types, rho = qnorm(0.5))
     transform <- c(transform, rho = "pnorm")

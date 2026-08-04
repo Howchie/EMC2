@@ -201,6 +201,10 @@ struct DDMAdapter {
   DDMRawFun d_raw = nullptr;
   DDMRawFun p_raw = nullptr;
   emc2col::ColSpec col_spec{};
+  // The analytic Wiener DDM can memoize numerical endpoint CDFs by exact
+  // parameter key.  PDE-backed two-boundary adapters have their own solve
+  // caches and a different parameter contract, so they leave this disabled.
+  bool endpoint_cdf_cache = false;
   ContextForDDMModels ctx;
 };
 

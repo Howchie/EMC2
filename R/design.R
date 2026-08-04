@@ -369,6 +369,18 @@ design <- function(formula = NULL,factors = NULL,Rlevels = NULL,model,data=NULL,
   }
 
 
+  # pGuess is applied only in the compiled likelihoods (decision 8 of the
+  # guess-contaminant design): the R reference paths deliberately still
+  # implement pContaminant alone.  A model with no c_name dispatches to the R
+  # path, where a free pGuess would be sampled and silently ignored -- a wrong
+  # answer with no symptom.  Turn that into a loud one.
+  if ("pGuess" %in% names(model()$p_types) && is.null(model()$c_name)) {
+    pg_const <- if ("pGuess" %in% names(constants)) constants[["pGuess"]] else NULL
+    pg_free <- ("pGuess" %in% nams) && is.null(pg_const)
+    if (pg_free || (!is.null(pg_const) && is.finite(pg_const)))
+      stop("pGuess requires a compiled likelihood, but this model has no c_name.")
+  }
+
   design <- list(Flist=formula,Ffactors=factors,Rlevels=Rlevels,
                  Clist=contrasts,matchfun=matchfun,constants=constants,
                  Fcovariates=covariates,Ffunctions=functions,model=model,
@@ -689,6 +701,100 @@ design_model_custom_ll <- function(data, design, model){
   attr(dadm, "custom_ll") <- TRUE
   return(dadm)
 
+}
+
+
+#' Resolve the uniform-guess window for `pGuess`
+#'
+#' `pGuess` mixes a uniform "guess" density into observed RTs (Ratcliff &
+#' Tuerlinckx, 2002; HDDM's `w_outlier`).  That density needs a window, and
+#' EMC2 resolves ONE scalar window per dadm rather than a per-row column -- the
+#' guess kernel is a single double the C++ side reads once per likelihood call.
+#'
+#' Resolution order:
+#' \enumerate{
+#'   \item `TC$guess_window`, if the user supplied it -- wins outright.  This is
+#'     the exposed knob and normally would not be touched.  `TC$w_outlier` is
+#'     accepted as the HDDM spelling and converted to `c(0, 1/(n_resp * w))`.
+#'   \item Otherwise `LG = max(LT, LC)`, `UG = min(UC, UT)` from the existing
+#'     bound columns.
+#'   \item If `UG` is still infinite, `UG = max(5, floor(max finite rt) + 1)`.
+#' }
+#'
+#' The fallback in (3) is deliberate.  HDDM's fixed 5 s window is improper by
+#' its authors' own admission ("in practice, the outlier model is applied to all
+#' RTs, even those larger than 5").  Keeping the density exactly 0 above `UG`
+#' while defaulting `UG` to 5 would leave a 7 s outlier with no mixture
+#' protection at all -- precisely the trial the model exists to catch.  Scaling
+#' up to the next whole second above `max(rt)` stays proper and covers every
+#' observed RT; for data that fit inside 5 s the behaviour is identical to HDDM.
+#'
+#' Because the window is `[max(LT, LC), min(UC, UT)]` by construction, a guess
+#' can never be censored or truncated away, which is what removes all
+#' interval-mass machinery from the likelihood.
+#'
+#' @param dadm A design-augmented data model (or any data frame carrying the
+#'   `LT`/`LC`/`UT`/`UC` bounds as columns or attributes).
+#' @param TC Optional truncation/censoring list; `TC$guess_window` or
+#'   `TC$w_outlier` override the derived window.
+#' @param verbose Whether to report the resolved window and the implied HDDM
+#'   `w_outlier`.
+#' @return A list with `window` (length-2 numeric) and `n_resp`, or `NULL` when
+#'   no proper window exists.
+#' @keywords internal
+resolve_guess_window <- function(dadm, TC = NULL, verbose = FALSE) {
+  bound <- function(nm, default) {
+    v <- if (nm %in% colnames(dadm)) dadm[[nm]] else attr(dadm, nm)
+    if (is.null(v) || length(v) == 0) default else v
+  }
+
+  # A guess is an OVERT response, so it can be neither a withheld (nogo) trial
+  # nor a timeout; those pseudo-levels do not count towards the response set.
+  resp_levels <- levels(dadm$R)
+  if (is.null(resp_levels)) resp_levels <- levels(dadm$lR)
+  n_resp <- sum(!(resp_levels %in% c("nogo", "time")))
+  if (n_resp < 1) return(NULL)
+
+  win <- TC$guess_window
+  if (is.null(win) && !is.null(TC$w_outlier)) {
+    # HDDM spelling.  w_outlier = 0.1 only means "5 s" because HDDM has exactly
+    # two responses; on a four-accumulator race the same number silently implies
+    # a 2.5 s window.  Convert it here and store the window, which is what the
+    # likelihood actually uses.
+    w <- as.numeric(TC$w_outlier)[1]
+    if (!is.finite(w) || w <= 0) stop("TC$w_outlier must be a positive number")
+    win <- c(0, 1 / (n_resp * w))
+  }
+
+  if (!is.null(win)) {
+    win <- as.numeric(win)
+    if (length(win) != 2 || !all(is.finite(win)) || !(win[2] > win[1]))
+      stop("TC$guess_window must be a length-2 numeric c(lower, upper) with upper > lower")
+    LG <- win[1]; UG <- win[2]
+  } else {
+    LT <- bound("LT", 0); LC <- bound("LC", 0)
+    UT <- bound("UT", Inf); UC <- bound("UC", Inf)
+    lows <- pmax(LT, LC)
+    highs <- pmin(UT, UC)
+    # Subject-wise bounds (from make_missing) can vary by row; take the union so
+    # the window still covers every retained trial.
+    if (length(unique(lows)) > 1 || length(unique(highs)) > 1)
+      message("Guess window: bound columns are not constant across rows; using their union.")
+    LG <- min(lows)
+    UG <- max(highs)
+    if (!is.finite(UG)) {
+      rt <- dadm$rt
+      max_rt <- suppressWarnings(max(rt[is.finite(rt)]))
+      UG <- if (is.finite(max_rt)) max(5, floor(max_rt) + 1) else 5
+    }
+  }
+
+  if (!is.finite(LG) || !is.finite(UG) || !(UG > LG)) return(NULL)
+  if (verbose)
+    message("Guess window: [", signif(LG, 4), ", ", signif(UG, 4), "] over ",
+            n_resp, " responses (implied HDDM w_outlier = ",
+            signif(1 / (n_resp * (UG - LG)), 4), ")")
+  list(window = c(LG, UG), n_resp = n_resp)
 }
 
 
@@ -1101,6 +1207,18 @@ design_model <- function(data,design,model=NULL,
   attr(dadm,"constants") <- design$constants
   attr(dadm,"ok_trials") <- is.finite(data$rt)
   attr(dadm,"s_data") <- data$subjects
+  # One scalar guess window per dadm, attached AFTER compression so it needs no
+  # place in the compression key and cannot be lost by contraction.  Only
+  # resolved when the model actually declares pGuess; see resolve_guess_window().
+  if ("pGuess" %in% names(model()$p_types)) {
+    pg_const <- if ("pGuess" %in% names(design$constants)) design$constants[["pGuess"]] else NULL
+    pg_disabled <- !is.null(pg_const) && !is.finite(pg_const)
+    gw <- resolve_guess_window(dadm, design$TC, verbose = verbose && !pg_disabled)
+    if (!is.null(gw)) {
+      attr(dadm,"guess_window") <- gw$window
+      attr(dadm,"guess_n_resp") <- gw$n_resp
+    }
+  }
   dadm
 }
 

@@ -21,7 +21,8 @@ argument of \code{design()}.They can also be accessed with \code{LNR()$p_types}.
    \emph{m} \tab identity \tab [-Inf, Inf] \tab 1 \tab  \tab Meanlog of the lognormal decision-time distribution \cr
    \emph{s} \tab log \tab [0, Inf] \tab log(1) \tab  \tab SDlog of the lognormal decision-time distribution \cr
    \emph{t0} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Additive non-decision-time shift \cr
-   \emph{pContaminant} \tab probit \tab [0, 1] \tab qnorm(0) \tab  \tab Optional contamination probability handled by the data pipeline \cr
+   \emph{pContaminant} \tab probit \tab [0, 1] \tab qnorm(0) \tab  \tab Optional \emph{omission} contaminant probability: mass at \code{rt = Inf} only, handled by the data pipeline \cr
+   \emph{pGuess} \tab probit \tab [0, 1] \tab qnorm(0) \tab  \tab Optional uniform \emph{guess} (outlier) probability, mixed into observed RT densities over the guess window \cr
 }
 
 
@@ -46,8 +47,11 @@ and can also be used in the model formula, typically for parameters related to
 the rate of accumulation (see the example below).
 
 All model parameters are trial-dependent after the design formulas are
-evaluated. \code{pContaminant} is a generic nuisance parameter and is not part of
-the lognormal race distribution itself.
+evaluated. \code{pContaminant} and \code{pGuess} are generic nuisance parameters and
+are not part of the lognormal race distribution itself: \code{pContaminant} is a
+Bernoulli \emph{omission} rate that puts mass only at \code{rt = Inf}, while \code{pGuess}
+mixes a uniform outlier density into observed RTs. Both are proportions among
+\emph{retained} trials -- they are applied after truncation renormalisation.
 
 Rouder, J. N., Province, J. M., Morey, R. D., Gomez, P., & Heathcote, A. (2015).
 The lognormal race: A cognitive-process model of choice and latency with

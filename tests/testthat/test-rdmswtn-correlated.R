@@ -174,7 +174,7 @@ test_that("direct-pair validation rejects malformed participation", {
 
   model <- RDMSWTNcorr(posdrift = FALSE)
   pars <- matrix(
-    c(1, 1, .2, .1, 1, .4, 1, 1, 0, .5),
+    c(1, 1, .2, .1, 1, .4, 1, 1, 0, 0, .5),
     nrow = 1,
     dimnames = list(NULL, names(model$p_types)))
   expect_error(model$Ttransform(pars, NULL),

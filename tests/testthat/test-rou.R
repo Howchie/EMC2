@@ -576,13 +576,13 @@ test_that("the curvature map fixes the reference crossing time", {
   expect_equal(m$v[1], b / tstar, tolerance = 1e-14)
 })
 
-test_that("the equilibrium map is centered on the mean start", {
-  b <- 1.4; A <- 0.6; d <- b + A / 2; tk <- 0.5; chi <- 0.3
+test_that("the equilibrium map uses physical equilibrium and noise", {
+  b <- 1.4; A <- 0.6; tk <- 0.5; chi <- 0.3
   qs <- c(0.3, 0.8, 1, 1.6)
   m <- rou_map(2L, tk, qs, chi, B = b, A = A)
-  expect_equal((m$v / m$k - A / 2) / d, qs, tolerance = 1e-14)
+  expect_equal(m$v / m$k, qs, tolerance = 1e-14)
   expect_equal(m$k, rep(1 / tk, length(qs)), tolerance = 1e-14)
-  expect_equal(m$s * sqrt(tk) / d, rep(chi, length(qs)), tolerance = 1e-14)
+  expect_equal(m$s * sqrt(tk), rep(chi, length(qs)), tolerance = 1e-14)
 })
 
 test_that("the rate parameterisation is an exact pass-through", {
@@ -593,7 +593,7 @@ test_that("the rate parameterisation is an exact pass-through", {
   # ... and the rate model itself is untouched by the new argument.
   expect_identical(ROU()$c_name, "ROU")
   expect_identical(names(ROU()$p_types),
-                   c("v", "k", "B", "A", "t0", "s", "pContaminant"))
+                   c("v", "k", "B", "A", "t0", "s", "pContaminant", "pGuess"))
   a <- ROU()
   b <- ROU(parameterization = "rate")
   expect_identical(a$c_name, b$c_name)
@@ -602,12 +602,23 @@ test_that("the rate parameterisation is an exact pass-through", {
   expect_identical(a$bound, b$bound)
 })
 
-test_that("the curvature map uses b = B + A and equilibrium uses B + A/2", {
+test_that("the curvature map uses b = B + A and equilibrium stays physical", {
   m1 <- rou_map(1L, 0.6, 0.8, 0.35, B = 1.0, A = 0.4)
   m2 <- rou_map(1L, 0.6, 0.8, 0.35, B = 1.4, A = 0.0)
   expect_equal(unlist(m1), unlist(m2), tolerance = 1e-14)
   me <- rou_map(2L, 0.5, 0.8, 0.35, B = 1.0, A = 0.4)
-  expect_equal((me$v / me$k - 0.2) / 1.2, 0.8, tolerance = 1e-14)
+  expect_equal(me$v / me$k, 0.8, tolerance = 1e-14)
+  expect_equal(me$s * sqrt(0.5), 0.35, tolerance = 1e-14)
+})
+
+test_that("a condition-specific threshold changes the equilibrium likelihood", {
+  p1 <- cbind(tk = 0.5, theta = 0.8, chi = 0.35, B = 1.0, A = 0,
+              t0 = 0)
+  p2 <- p1
+  p2[, "B"] <- 0.3
+  c1 <- EMC2:::pROU(1.0, p1, par = "equilibrium")
+  c2 <- EMC2:::pROU(1.0, p2, par = "equilibrium")
+  expect_gt(abs(c1 - c2), 1e-3)
 })
 
 test_that("unusable rows fall out of the map rather than being substituted", {
@@ -641,7 +652,7 @@ test_that("the alternative densities are the rate density at the mapped point", 
   expect_identical(EMC2:::pROU(rt, pe, par = "equilibrium"), EMC2:::pROU(rt, pr2))
 })
 
-test_that("theta < 1 leaves the accumulator subthreshold and escaping by noise", {
+test_that("a subthreshold equilibrium leaves escapes driven by noise", {
   # The regime the equilibrium parameterisation exists to reach: the mean
   # relaxes BELOW the bound, so responses are noise-driven escapes and a large
   # survivor mass is still there at a plausible deadline.
