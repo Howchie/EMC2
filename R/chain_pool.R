@@ -31,7 +31,11 @@
 # round, and forked workers inherit the block-constant state (the per-subject
 # data, the design, the Cholesky caches) rather than receiving a copy of it,
 # so the only thing crossing the pipe each iteration is the group-level draw
-# and the per-subject bookkeeping -- about 5 kB.
+# and the per-subject bookkeeping -- about 5 kB on a small model.  That grows
+# with the square of the parameter count, though, since the group covariance
+# travels with it: ~35 kB at 24 parameters, ~90 kB at 42.  See
+# `.emc_wpool_spawn()` for why the writer has to block rather than fail once
+# that passes the 64 kB pipe buffer.
 #
 #     mclapply(8) fork+join   33.5 ms
 #     makeForkCluster round   44.1 ms
@@ -60,7 +64,100 @@
 # back to serial recomputation can be diagnosed after the fact.
 .emc_pool_state <- new.env(parent = emptyenv())
 
+# Losing the pool costs the block its parallelism and nothing else -- the
+# results are identical, just computed one subject at a time in the master.
+# That is exactly why it has to be said out loud: a silent 8x slowdown looks
+# like a slow model, not like a bug.  `warning()` alone would not do it, since
+# a chain normally runs inside an `mclapply` fork whose deferred warnings are
+# discarded when it exits; `immediate. = TRUE` writes to the inherited stderr
+# there and then.
+.emc_wpool_degraded <- function(msg) {
+  .emc_pool_state$last_error <- msg
+  if (!isTRUE(.emc_pool_state$warned)) {
+    .emc_pool_state$warned <- TRUE
+    warning("EMC2 worker pool lost (", msg, "); the rest of this block runs ",
+            "serially in the chain process. Results are unaffected, but it ",
+            "will be slow.", call. = FALSE, immediate. = TRUE)
+  }
+  invisible(NULL)
+}
+
 # --- pool lifecycle ---------------------------------------------------------
+
+# Fork one batch of workers on `idx` and connect to them.  Shared by the
+# initial start and by a later grow, which differ only in which indices they
+# claim.  Returns NULL if any worker fails to come up, having cleaned up after
+# itself.
+#
+# The request connection is opened twice on purpose.  Opening the write end of
+# a FIFO blocks until a reader appears, so the handshake has to be
+# non-blocking -- but a *non-blocking* write fails outright once the payload
+# exceeds the 64 kB pipe buffer, which a group covariance does at about 35
+# parameters.  A second, blocking writer on the same FIFO does not signal EOF
+# to the reader, so it can take over from the handshake handle and then wait
+# for the worker to drain rather than failing.  The protocol reads every reply
+# before the next send, so no worker is ever mid-compute when the master
+# writes and a blocking write cannot deadlock.
+.emc_wpool_spawn <- function(dir, idx, ctx) {
+  req <- file.path(dir, sprintf("req%d", idx))
+  ans <- file.path(dir, sprintf("ans%d", idx))
+  made <- tryCatch(
+    system2("mkfifo", shQuote(c(req, ans)), stdout = FALSE, stderr = FALSE),
+    warning = function(e) 1L, error = function(e) 1L
+  )
+  if (!identical(as.integer(made), 0L)) return(NULL)
+
+  n <- length(idx)
+  jobs <- vector("list", n)
+  wcs <- vector("list", n)
+  rcs <- vector("list", n)
+  success <- FALSE
+  on.exit({
+    if (!success) {
+      for (cn in c(wcs, rcs)) if (!is.null(cn)) try(close(cn), silent = TRUE)
+      live <- jobs[!vapply(jobs, is.null, logical(1))]
+      for (job in live) try(tools::pskill(job$pid), silent = TRUE)
+      try(parallel::mccollect(live, wait = TRUE), silent = TRUE)
+      # Leave no half-built FIFO behind, or a later grow onto the same indices
+      # would fail on mkfifo and the pool could never take those cores.
+      unlink(c(req, ans))
+    }
+  }, add = TRUE)
+
+  for (w in seq_len(n)) {
+    jobs[[w]] <- local({
+      i <- w
+      parallel::mcparallel(.emc_wpool_serve(req[i], ans[i], ctx), detached = FALSE)
+    })
+  }
+
+  tryCatch({
+    for (w in seq_len(n)) {
+      f <- NULL
+      for (poll in 1:2000) { # 20 seconds max
+        res <- parallel::mccollect(jobs[[w]], wait = FALSE, timeout = 0)
+        if (!is.null(res)) stop("Worker process died before pool initialization")
+        f <- tryCatch(suppressWarnings(fifo(req[w], "wb", blocking = FALSE)),
+                      error = function(e) NULL)
+        if (!is.null(f)) break
+        Sys.sleep(0.01)
+      }
+      if (is.null(f)) stop("Timeout waiting for worker process to initialize")
+      # The reader is attached now, so this returns at once; then drop the
+      # handshake handle and keep the blocking one for all traffic.
+      blocking <- fifo(req[w], "wb", blocking = TRUE)
+      close(f)
+      wcs[[w]] <- blocking
+    }
+    for (w in seq_len(n)) {
+      rcs[[w]] <- fifo(ans[w], "rb", blocking = TRUE)
+    }
+    success <- TRUE
+  }, error = function(e) NULL, interrupt = function(e) NULL)
+
+  if (!success) return(NULL)
+  list(jobs = jobs, wcs = wcs, rcs = rcs)
+}
 
 # `ctx` is everything constant for the whole block.  It is captured by the
 # child expression, so on Unix the workers inherit it through the fork; it is
@@ -73,60 +170,17 @@
 
   dir <- tempfile("emc_wpool_")
   if (!dir.create(dir, showWarnings = FALSE, recursive = TRUE)) return(NULL)
-  req <- file.path(dir, sprintf("req%d", seq_len(n_workers)))
-  ans <- file.path(dir, sprintf("ans%d", seq_len(n_workers)))
-  made <- tryCatch(
-    system2("mkfifo", shQuote(c(req, ans)), stdout = FALSE, stderr = FALSE),
-    warning = function(e) 1L, error = function(e) 1L
-  )
-  if (!identical(as.integer(made), 0L)) {
+
+  # Per pool, not per session: a later block that degrades must say so too.
+  .emc_pool_state$warned <- FALSE
+  spawned <- .emc_wpool_spawn(dir, seq_len(n_workers), ctx)
+  if (is.null(spawned)) {
     unlink(dir, recursive = TRUE)
     return(NULL)
   }
 
-  jobs <- vector("list", n_workers)
-  wcs <- vector("list", n_workers)
-  rcs <- vector("list", n_workers)
-  success <- FALSE
-  on.exit({
-    if (!success) {
-      for (cn in c(wcs, rcs)) { if (!is.null(cn)) try(close(cn), silent=TRUE) }
-      try(parallel::mccollect(jobs[!sapply(jobs, is.null)], wait = FALSE), silent = TRUE)
-      for (job in jobs[!sapply(jobs, is.null)]) try(tools::pskill(job$pid), silent = TRUE)
-      unlink(dir, recursive = TRUE)
-    }
-  })
-
-  for (w in seq_len(n_workers)) {
-    jobs[[w]] <- local({
-      i <- w
-      parallel::mcparallel(.emc_wpool_serve(req[i], ans[i], ctx), detached = FALSE)
-    })
-  }
-
-  tryCatch({
-    for (w in seq_len(n_workers)) {
-      f <- NULL
-      for (poll in 1:2000) { # 20 seconds max
-        res <- parallel::mccollect(jobs[[w]], wait = FALSE, timeout = 0)
-        if (!is.null(res)) stop("Worker process died before pool initialization")
-        f <- tryCatch(suppressWarnings(fifo(req[w], "wb", blocking = FALSE)),
-                      error = function(e) NULL)
-        if (!is.null(f)) break
-        Sys.sleep(0.01)
-      }
-      if (is.null(f)) stop("Timeout waiting for worker process to initialize")
-      wcs[[w]] <- f
-    }
-    for (w in seq_len(n_workers)) {
-      rcs[[w]] <- fifo(ans[w], "rb", blocking = TRUE)
-    }
-    success <- TRUE
-  }, error = function(e) NULL, interrupt = function(e) NULL)
-
-  if (!success) return(NULL)
-
-  list(n = n_workers, dir = dir, jobs = jobs, wcs = wcs, rcs = rcs, alive = TRUE)
+  list(n = n_workers, dir = dir, jobs = spawned$jobs, wcs = spawned$wcs,
+       rcs = spawned$rcs, alive = TRUE)
 }
 
 # Take over cores released by a chain that has finished its block.  Chains do
@@ -142,57 +196,12 @@
   n_new <- n_total - pool$n
   if (n_new <= 0L) return(pool)
 
-  idx <- pool$n + seq_len(n_new)
-  req <- file.path(pool$dir, sprintf("req%d", idx))
-  ans <- file.path(pool$dir, sprintf("ans%d", idx))
-  made <- tryCatch(
-    system2("mkfifo", shQuote(c(req, ans)), stdout = FALSE, stderr = FALSE),
-    warning = function(e) 1L, error = function(e) 1L)
-  if (!identical(as.integer(made), 0L)) return(pool)
+  spawned <- .emc_wpool_spawn(pool$dir, pool$n + seq_len(n_new), ctx)
+  if (is.null(spawned)) return(pool)
 
-  jobs <- vector("list", n_new)
-  wcs <- vector("list", n_new)
-  rcs <- vector("list", n_new)
-  success <- FALSE
-  on.exit({
-    if (!success) {
-      for (cn in c(wcs, rcs)) { if (!is.null(cn)) try(close(cn), silent=TRUE) }
-      try(parallel::mccollect(jobs[!sapply(jobs, is.null)], wait = FALSE), silent = TRUE)
-      for (job in jobs[!sapply(jobs, is.null)]) try(tools::pskill(job$pid), silent = TRUE)
-    }
-  })
-
-  for (w in seq_len(n_new)) {
-    jobs[[w]] <- local({
-      i <- w
-      parallel::mcparallel(.emc_wpool_serve(req[i], ans[i], ctx), detached = FALSE)
-    })
-  }
-
-  tryCatch({
-    for (w in seq_len(n_new)) {
-      f <- NULL
-      for (poll in 1:2000) { # 20 seconds max
-        res <- parallel::mccollect(jobs[[w]], wait = FALSE, timeout = 0)
-        if (!is.null(res)) stop("Worker process died before pool initialization")
-        f <- tryCatch(suppressWarnings(fifo(req[w], "wb", blocking = FALSE)),
-                      error = function(e) NULL)
-        if (!is.null(f)) break
-        Sys.sleep(0.01)
-      }
-      if (is.null(f)) stop("Timeout waiting for worker process to initialize")
-      wcs[[w]] <- f
-    }
-    for (w in seq_len(n_new)) {
-      rcs[[w]] <- fifo(ans[w], "rb", blocking = TRUE)
-    }
-    success <- TRUE
-  }, error = function(e) NULL, interrupt = function(e) NULL)
-
-  if (!success) return(pool)
-
-  list(n = n_total, dir = pool$dir, jobs = c(pool$jobs, jobs),
-       wcs = c(pool$wcs, wcs), rcs = c(pool$rcs, rcs), alive = TRUE)
+  list(n = n_total, dir = pool$dir, jobs = c(pool$jobs, spawned$jobs),
+       wcs = c(pool$wcs, spawned$wcs), rcs = c(pool$rcs, spawned$rcs),
+       alive = TRUE)
 }
 
 .emc_wpool_stop <- function(pool) {
@@ -226,9 +235,28 @@
   invisible(NULL)
 }
 
+# Run `expr` with the caller's generator handed back exactly as it was found.
+#
+# Per-subject streams are installed on the *global* seed, which is private and
+# disposable inside a forked worker but not in the master.  Both of the places
+# that install them can end up running in the master -- the pool's fallback
+# path, and `mclapply` at one core, which does not fork at all -- and either
+# would otherwise leave the master sitting on some subject's stream, colliding
+# with that subject on every later draw.  That is also what makes a one-core
+# fit differ from a many-core one.
+.emc_with_preserved_rng <- function(expr) {
+  if (exists(".Random.seed", envir = globalenv())) {
+    seed <- get(".Random.seed", envir = globalenv())
+    on.exit(assign(".Random.seed", seed, envir = globalenv()), add = TRUE)
+  } else {
+    on.exit(suppressWarnings(rm(".Random.seed", envir = globalenv())), add = TRUE)
+  }
+  expr
+}
+
 # The unit of work, shared by the workers and by the master's fallback path so
 # that a broken pool computes exactly what a working one would have.
-.emc_wpool_compute <- function(msg, ctx) {
+.emc_wpool_compute <- function(msg, ctx) .emc_with_preserved_rng({
   subs <- msg$subs
   props <- matrix(0, ctx$n_pars + 1L, length(subs))
   pm <- vector("list", length(subs))
@@ -256,7 +284,7 @@
     seeds[[k]] <- get(".Random.seed", envir = globalenv())
   }
   list(props = props, pm = pm, seeds = seeds, times = times)
-}
+})
 
 # --- one iteration ----------------------------------------------------------
 
@@ -272,14 +300,15 @@
     list(subs = subs, pars = pars, group_chol = group_chol,
          pm = pm_settings[subs], prev_ll = prev_ll[subs], seeds = seeds[subs])
   })
+  was_alive <- isTRUE(pool$alive)
   sent <- rep(FALSE, pool$n)
-  if (isTRUE(pool$alive)) {
+  if (was_alive) {
     for (w in seq_len(pool$n)) {
       if (!length(part[[w]])) next
       sent[w] <- tryCatch({
         serialize(msgs[[w]], pool$wcs[[w]]); flush(pool$wcs[[w]]); TRUE
       }, error = function(e) {
-        .emc_pool_state$last_error <- conditionMessage(e); FALSE
+        .emc_wpool_degraded(conditionMessage(e)); FALSE
       })
       if (!sent[w]) pool$alive <- FALSE
     }
@@ -291,15 +320,18 @@
       tryCatch(unserialize(pool$rcs[[w]]), error = function(e) NULL)
     } else NULL
     # A dead or erroring worker must not lose an iteration: recompute its share
-    # here.  Same function, same streams, so the result is identical.  Falling
-    # back silently would turn a broken pool into a mysteriously serial run, so
-    # keep the worker's own message where it can be found afterwards.
+    # here.  Same function, same streams, so the result is identical.
     if (is.null(res) || !is.null(res$failed)) {
-      if (sent[w]) {
-        .emc_pool_state$last_error <-
-          if (is.null(res)) "worker gave no reply" else res$failed
+      if (sent[w] && is.null(res)) {
+        # No reply means the transport or the worker itself is gone, so there
+        # is nothing left to send to and the rest of the block is serial.
+        .emc_wpool_degraded("worker gave no reply")
+        pool$alive <- FALSE
       }
-      pool$alive <- FALSE
+      # A reported `failed` is different: the worker caught an error in the
+      # work and is still listening.  Recompute this share, but do not condemn
+      # the whole block over one subject's bad iteration -- if it is
+      # deterministic the master's own call raises it properly.
       res <- .emc_wpool_compute(msgs[[w]], ctx)
     }
     props[, subs] <- res$props
@@ -340,8 +372,26 @@
 
 # One independent stream per subject, so the draws do not depend on how the
 # subjects were partitioned or on how many workers there are.
+#
+# Streams have to come from L'Ecuyer-CMRG, but fitting must not leave a user's
+# session switched over to it -- that would quietly change what every later
+# `set.seed()` of theirs produces.  Where the caller is already on L'Ecuyer
+# (the normal path: `make_emc()` puts it there) the generator is used and
+# advanced directly.  Where it is not, a temporary one is seeded from a single
+# draw off the caller's own generator, so the streams still follow from the
+# caller's seed, and the caller's generator is handed back exactly as found
+# apart from that one draw.
 .emc_subject_streams <- function(n_subjects) {
-  if (!identical(RNGkind()[1], "L'Ecuyer-CMRG")) RNGkind("L'Ecuyer-CMRG")
+  old_kind <- RNGkind()
+  if (!identical(old_kind[1], "L'Ecuyer-CMRG")) {
+    s <- sample.int(.Machine$integer.max, 1L)
+    old_seed <- get(".Random.seed", envir = globalenv())
+    on.exit({
+      RNGkind(old_kind[1], old_kind[2], old_kind[3])
+      assign(".Random.seed", old_seed, envir = globalenv())
+    }, add = TRUE)
+    set.seed(s, kind = "L'Ecuyer-CMRG")
+  }
   if (!exists(".Random.seed", envir = globalenv())) stats::runif(1)
   seed <- get(".Random.seed", envir = globalenv())
   streams <- vector("list", n_subjects)

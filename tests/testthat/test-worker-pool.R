@@ -88,6 +88,64 @@ test_that("a pooled fit runs, and repeats itself exactly", {
   expect_identical(a[[1]]$samples$alpha, fit_once()[[1]]$samples$alpha)
 })
 
+test_that("a fit does not move when the core count does", {
+  skip_on_os("windows")
+  skip_on_cran()
+  # The invariant the whole design rests on, and what makes it safe for a chain
+  # to grow its pool onto a finished sibling's cores mid-block.  Covers the
+  # start points too: those used to be seeded from `mc.cores`.
+  dat <- forstmann[forstmann$subjects %in% levels(forstmann$subjects)[1:3], ]
+  dat$subjects <- droplevels(dat$subjects)
+  des <- design(data = dat, model = LNR, formula = list(m ~ 1, s ~ 1, t0 ~ 1))
+  fit_on <- function(cores_per_chain) {
+    RNGkind("L'Ecuyer-CMRG"); set.seed(11)
+    emc <- suppressMessages(make_emc(dat, des, n_chains = 2, compress = TRUE))
+    suppressMessages(run_emc(emc, stage = "preburn", cores_for_chains = 2,
+      cores_per_chain = cores_per_chain, step_size = 8, max_tries = 1,
+      verbose = FALSE,
+      stop_criteria = list(iter = 8, max_gd = Inf, min_unique = 0, min_es = 0)))
+  }
+  one <- fit_on(1); three <- fit_on(3)
+  expect_identical(one[[1]]$samples$alpha, three[[1]]$samples$alpha)
+  expect_identical(one[[2]]$samples$alpha, three[[2]]$samples$alpha)
+})
+
+test_that("messages larger than the pipe buffer still round-trip", {
+  skip_on_os("windows")
+  skip_if(!nzchar(Sys.which("mkfifo")))
+  # A group covariance is n_pars x n_pars, so the per-iteration message passes
+  # the 64 kB pipe buffer at about 35 parameters.  A non-blocking writer fails
+  # outright there and costs the block its parallelism.
+  pool <- EMC2:::.emc_wpool_start(2, list(tag = "ctx"))
+  skip_if(is.null(pool), "could not fork a pool here")
+  on.exit(EMC2:::.emc_wpool_stop(pool), add = TRUE)
+
+  big <- list(subs = 1L, group_chol = matrix(0, 400, 400))
+  expect_gt(length(serialize(big, NULL)), 65536L)
+  expect_silent({ serialize(big, pool$wcs[[1]]); flush(pool$wcs[[1]]) })
+  # No real ctx, so the worker reports an error -- but it received the whole
+  # message, which is the point.
+  expect_false(is.null(unserialize(pool$rcs[[1]])$failed))
+})
+
+test_that("fitting leaves the caller's generator as it found it", {
+  old <- RNGkind()
+  on.exit(RNGkind(old[1], old[2], old[3]), add = TRUE)
+  # What the caller's generator looks like after exactly one draw off it.
+  RNGkind("Mersenne-Twister"); set.seed(5)
+  invisible(sample.int(.Machine$integer.max, 1L))
+  expected <- get(".Random.seed", envir = globalenv())
+
+  RNGkind("Mersenne-Twister"); set.seed(5)
+  st <- EMC2:::.emc_subject_streams(3)
+
+  expect_length(st, 3)
+  expect_identical(RNGkind()[1], "Mersenne-Twister")   # not left on L'Ecuyer
+  expect_identical(get(".Random.seed", envir = globalenv()), expected)
+  # The streams themselves are still L'Ecuyer, and still distinct.
+  expect_length(unique(vapply(st, paste, character(1), collapse = ",")), 3L)
+})
+
 test_that("a pool marked dead still returns every subject's result", {
   skip_on_os("windows")
   # alive = FALSE means nothing is sent; the master must compute the lot itself

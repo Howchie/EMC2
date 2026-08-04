@@ -6580,7 +6580,7 @@ static double lrcap_trial_ll(
   bool z_cache_hit = false;
   if (has_trunc && cell_log_den_cap != nullptr && cell_idx >= 0 &&
       cell_idx < static_cast<int>(cell_log_den_cap->size())) {
-    if (R_FINITE((*cell_log_den_cap)[cell_idx])) {
+    if (!ISNAN((*cell_log_den_cap)[cell_idx])) {
       z_cache_hit = true;
       cached_log_den = (*cell_log_den_cap)[cell_idx];
       if (cached_log_den == R_NegInf) return min_ll;
@@ -7537,7 +7537,7 @@ static double c_log_likelihood_logicalrules(
     const bool has_trunc = (LTj_tr != 0.0 || R_FINITE(UTj_tr));
     double log_Z_j = 0.0;
     if (has_trunc) {
-      if (R_FINITE(shared.cell_log_z[cell_idx])) {
+      if (!ISNAN(shared.cell_log_z[cell_idx])) {
         log_Z_j = shared.cell_log_z[cell_idx];
         if (log_Z_j == R_NegInf) {
           ll_unique[static_cast<size_t>(j)] = min_ll;
@@ -8050,16 +8050,18 @@ double c_log_likelihood_race(
   int n_unique_trials = n_trials / n_lR;
   // Use std::vector to avoid per-particle R-heap allocation overhead.
   std::vector<double> ll_unique(static_cast<size_t>(n_unique_trials), min_ll);
-  std::vector<double> pC_values(static_cast<size_t>(n_unique_trials), 0.0);
-  std::vector<double> pG_values(static_cast<size_t>(n_unique_trials), 0.0);
+  std::vector<double> pC_values;
+  std::vector<double> pG_values;
   // Raw pointer into pars matrix: col-major layout, element (row,col) = pars_cm_ptr[col*n_trials+row]
   const double* pars_cm_ptr = pars.begin();
   if (use_pC) {
+    pC_values.assign(static_cast<size_t>(n_unique_trials), 0.0);
     for (int j = 0; j < n_unique_trials; ++j) {
       pC_values[static_cast<size_t>(j)] = pars_cm_ptr[static_cast<size_t>(pc_col) * n_trials + j * n_lR];
     }
   }
   if (use_pG) {
+    pG_values.assign(static_cast<size_t>(n_unique_trials), 0.0);
     for (int j = 0; j < n_unique_trials; ++j) {
       pG_values[static_cast<size_t>(j)] = pars_cm_ptr[static_cast<size_t>(pg_col) * n_trials + j * n_lR];
     }
@@ -9091,7 +9093,9 @@ apply_trial_trunc:
   // without the n_resp division, which mix_contaminants_rt() handles.
   auto apply_pC = [&](int j) {
     const double rt_j = rts_dadm[j * n_lR];
-    ll_unique[j] = mix_contaminants_rt(ll_unique[j], pC_values[j], pG_values[j],
+    const double pC = use_pC ? pC_values[j] : 0.0;
+    const double pG = use_pG ? pG_values[j] : 0.0;
+    ll_unique[j] = mix_contaminants_rt(ll_unique[j], pC, pG,
                                        guess, rt_j,
                                        R_idxs_dadm[j * n_lR] != NA_INTEGER);
   };

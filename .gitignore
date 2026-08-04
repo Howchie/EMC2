@@ -30,3 +30,4 @@ tests/testthat/_snaps/*.new.md
 # local install tree / benchmark fixtures
 /.Rlib_par/
 /.bench_annika.rds
+src/symbols.rds

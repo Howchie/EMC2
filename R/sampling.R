@@ -280,11 +280,22 @@ init <- function(pmwgs, start_mu = NULL, start_var = NULL,
   core_budget <- .particle_core_budget(
     pmwgs$n_subjects, n_cores = n_cores, r_cores = r_cores
   )
-  proposals <- parallel::mclapply(X=1:pmwgs$n_subjects,FUN=start_proposals,
-                                  parameters = startpoints_comb, n_particles = particles,
-                                  pmwgs = pmwgs, type = type,
-                                  mc.cores = core_budget$subject,
-                                  r_cores = core_budget$likelihood)
+  # Start points get their own per-subject streams for the same reason the
+  # particle step does: `mclapply` seeds its children from `mc.cores`, so
+  # without this the *start* of a fit would still move with the core count and
+  # nothing downstream could recover it.
+  start_streams <- .emc_subject_streams(pmwgs$n_subjects)
+  proposals <- .emc_with_preserved_rng(
+    parallel::mclapply(X=1:pmwgs$n_subjects,
+                       FUN=function(s, ...) {
+                         assign(".Random.seed", start_streams[[s]],
+                                envir = globalenv())
+                         start_proposals(s, ...)
+                       },
+                       parameters = startpoints_comb, n_particles = particles,
+                       pmwgs = pmwgs, type = type,
+                       mc.cores = core_budget$subject,
+                       r_cores = core_budget$likelihood))
   proposals <- array(unlist(proposals), dim = c(pmwgs$n_pars + 1, pmwgs$n_subjects))
 
   # Sample the mixture variables' initial values.
@@ -481,11 +492,25 @@ run_stage <- function(pmwgs,
     eff_mu = eff_mu, eff_var = eff_var, chains_mu = chains_mu,
     chains_var = chains_var, chol_caches = chol_caches
   )
-  # NULL where a pool cannot work (Windows, no mkfifo, one worker); the
-  # mcmapply branch below then runs instead.
-  wpool <- .emc_wpool_start(pool_budget$subject, wpool_ctx)
+  # Never fork more workers than there are subjects to give them: `mclapply`
+  # caps itself at `length(X)`, and without the same cap a wide core budget on
+  # a small study pays a full fork of the chain's heap for workers that would
+  # be handed nothing.
+  n_workers <- min(pool_budget$subject, pmwgs$n_subjects)
+  # NULL where a pool cannot work: Windows, no mkfifo, or a single worker.
+  wpool <- .emc_wpool_start(n_workers, wpool_ctx)
   if (!is.null(wpool)) {
     on.exit(.emc_wpool_stop(wpool), add = TRUE)
+  } else if (n_workers <= 1L) {
+    # One worker is not worth a fork, but it must still *draw* the way the pool
+    # does, or a single-core run would not reproduce a multi-core one -- and a
+    # one-core run is the obvious baseline to check a fit against.  Nothing is
+    # given up: `mcmapply` at one core is serial too.  A pool marked dead
+    # computes every subject in the master through the same unit of work.
+    wpool <- list(n = 1L, dir = NULL, jobs = list(), wcs = list(),
+                  rcs = list(), alive = FALSE)
+  }
+  if (!is.null(wpool)) {
     wpool_streams <- .emc_subject_streams(pmwgs$n_subjects)
     wpool_cost <- .emc_subject_cost(data)
     wpool_part <- .emc_lpt_partition(wpool_cost, wpool$n)
@@ -545,7 +570,9 @@ run_stage <- function(pmwgs,
     if (!is.null(wpool)) {
       # Siblings that have finished their block free up cores; unlike the
       # mcmapply path, taking them here cannot perturb the draws.
-      grown <- .emc_wpool_grow(wpool, .emc_cores_now(core_ctl, n_cores), wpool_ctx)
+      grown <- .emc_wpool_grow(wpool,
+                               min(.emc_cores_now(core_ctl, n_cores),
+                                   pmwgs$n_subjects), wpool_ctx)
       if (grown$n != wpool$n) {
         wpool <- grown
         wpool_part <- .emc_lpt_partition(wpool_cost, wpool$n)
@@ -559,7 +586,10 @@ run_stage <- function(pmwgs,
       wpool$alive <- it$alive
       # Re-balance from what the subjects actually cost this iteration: trial
       # counts are only a proxy, and the adaptive particle number drifts.
-      if (all(it$times > 0)) wpool_cost <- it$times
+      # Floor rather than discard: a subject whose CPU time lands under the
+      # clock's resolution reads as 0, and dropping the whole measurement for
+      # it would pin a fast model to row counts for the entire block.
+      if (any(it$times > 0)) wpool_cost <- pmax(it$times, min(it$times[it$times > 0]))
       wpool_part <- .emc_lpt_partition(wpool_cost, wpool$n)
     } else {
     # Fallback where no pool could be started.  It keeps the static core share:

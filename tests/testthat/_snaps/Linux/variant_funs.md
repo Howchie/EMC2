@@ -4,10 +4,10 @@
       LNR_diag[[1]]$samples$alpha[, , idx]
     Output
                   as1t       bd6t
-      m     -0.8378073 -0.9872863
-      m_lMd -0.2876366 -0.5898393
-      s     -1.0249672 -0.6047458
-      t0    -2.3783442 -1.7427491
+      m     -0.9667867 -0.8904360
+      m_lMd -0.3652931 -0.5496101
+      s     -0.7973441 -0.6263701
+      t0    -1.8995477 -1.8653071
 
 ---
 
@@ -15,26 +15,26 @@
       LNR_diag[[1]]$samples$theta_mu[, idx]
     Output
                m      m_lMd          s         t0 
-      -0.9743222 -0.6134234 -0.7679532 -2.2539005 
+      -0.8480291 -0.5006714 -0.6496058 -1.8798856 
 
 ---
 
     Code
       LNR_diag[[1]]$samples$theta_var[, , idx]
     Output
-                     m      m_lMd          s       t0
-      m     0.02531788 0.00000000 0.00000000 0.000000
-      m_lMd 0.00000000 0.09894308 0.00000000 0.000000
-      s     0.00000000 0.00000000 0.03923812 0.000000
-      t0    0.00000000 0.00000000 0.00000000 0.106451
+                     m      m_lMd          s           t0
+      m     0.03864755 0.00000000 0.00000000 0.0000000000
+      m_lMd 0.00000000 0.01579569 0.00000000 0.0000000000
+      s     0.00000000 0.00000000 0.05342463 0.0000000000
+      t0    0.00000000 0.00000000 0.00000000 0.0005324957
 
 ---
 
     Code
       compare(list(diag = LNR_diag), stage = "preburn", cores_for_props = 1)
     Output
-             MD wMD WAIC wWAIC  DIC wDIC BPIC wBPIC EffectiveN meanD Dmean minD
-      diag -529   1 9760     1 1109    1 2004     1        895   214  -609 -681
+             MD wMD  WAIC wWAIC  DIC wDIC BPIC wBPIC EffectiveN meanD Dmean minD
+      diag -477   1 12178     1 1340    1 2349     1       1008   332  -568 -677
 
 # run_blocked
 
@@ -42,10 +42,10 @@
       LNR_blocked[[1]]$samples$alpha[, , idx]
     Output
                   as1t       bd6t
-      m     -0.9668625 -1.0003825
-      m_lMd -0.2819924 -0.5445420
-      s     -0.8501189 -0.5963007
-      t0    -1.9733013 -1.7466873
+      m     -0.8411010 -0.9929560
+      m_lMd -0.3674576 -0.5308419
+      s     -0.7712796 -0.5672621
+      t0    -2.1668809 -1.7320239
 
 ---
 
@@ -53,26 +53,26 @@
       LNR_blocked[[1]]$samples$theta_mu[, idx]
     Output
                m      m_lMd          s         t0 
-      -1.0052941 -1.5321301 -0.9540201 -1.8960213 
+      -0.8828587 -0.6090358 -0.5186590 -1.2020880 
 
 ---
 
     Code
       LNR_blocked[[1]]$samples$theta_var[, , idx]
     Output
-                      m     m_lMd          s         t0
-      m     0.003426314 0.0000000 0.00000000 0.00000000
-      m_lMd 0.000000000 0.7972991 0.00000000 0.00000000
-      s     0.000000000 0.0000000 0.02009918 0.02058433
-      t0    0.000000000 0.0000000 0.02058433 0.04993745
+                     m      m_lMd           s          t0
+      m     0.09996624 0.00000000  0.00000000  0.00000000
+      m_lMd 0.00000000 0.01558194  0.00000000  0.00000000
+      s     0.00000000 0.00000000  0.03091205 -0.01111874
+      t0    0.00000000 0.00000000 -0.01111874  0.28305044
 
 ---
 
     Code
       compare(list(blocked = LNR_blocked), stage = "preburn", cores_for_props = 1)
     Output
-                MD wMD  WAIC wWAIC  DIC wDIC  BPIC wBPIC EffectiveN meanD Dmean minD
-      blocked -527   1 68779     1 6488    1 10073     1       3585  2903  -612 -681
+                MD wMD WAIC wWAIC DIC wDIC BPIC wBPIC EffectiveN meanD Dmean minD
+      blocked -460   1 2799     1 826    1 1581     1        754    72  -499 -682
 
 # run_single
 
@@ -80,10 +80,10 @@
       LNR_single[[1]]$samples$alpha[, , idx]
     Output
                   as1t       bd6t
-      m     -1.0064461 -0.7239915
-      m_lMd -0.3903504 -0.8186065
-      s     -0.5314815 -0.2610311
-      t0    -1.6904537 -1.8390487
+      m     -0.8382160 -0.7452781
+      m_lMd -0.3282055 -0.7591053
+      s     -1.0620691 -0.4747831
+      t0    -2.3725880 -1.9081209
 
 ---
 
@@ -91,5 +91,5 @@
       compare(list(single = LNR_single), stage = "preburn", cores_for_props = 1)
     Output
                MD wMD WAIC wWAIC DIC wDIC BPIC wBPIC EffectiveN meanD Dmean minD
-      single -390   1 1088     1 312    1  733     1        421  -110  -463 -531
+      single -436   1  645     1 230    1  665     1        436  -206  -582 -641
 
