@@ -8,7 +8,8 @@
 # factor (work per task) and EMC_CORES to change the core grid.
 
 lib <- Sys.getenv("EMC_LIB", .libPaths()[1])
-setup_file <- file.path(tempdir(), "bench_data.rds")
+self <- "WorkingTests/bench_flat_parallel.R"   # run from the package root
+setup_file <- Sys.getenv("EMC_SETUP", file.path(tempdir(), "emc_bench_data.rds"))
 
 if (identical(Sys.getenv("EMC_CHILD"), "")) {
   .libPaths(c(lib, .libPaths()))
@@ -40,9 +41,8 @@ if (identical(Sys.getenv("EMC_CHILD"), "")) {
   for (cores in cores_grid) {
     cfc <- min(n_chains, cores); cpc <- max(1L, cores %/% cfc)
     for (flat in c("FALSE", "TRUE")) {
-      system2("Rscript", c(commandArgs(TRUE)[0], normalizePath(sys.frame(1)$ofile %||% "WorkingTests/bench_flat_parallel.R"),
-                           flat, cfc, cpc),
-              env = c(paste0("EMC_CHILD=1"), paste0("EMC_LIB=", lib),
+      system2("Rscript", c(self, flat, cfc, cpc),
+              env = c("EMC_CHILD=1", paste0("EMC_LIB=", lib),
                       paste0("EMC_SETUP=", setup_file),
                       paste0("EMC_PF=", Sys.getenv("EMC_PF", "30"))))
     }
@@ -56,7 +56,7 @@ suppressMessages(library(EMC2))
 a <- commandArgs(TRUE)
 flat <- as.logical(a[1]); cfc <- as.integer(a[2]); cpc <- as.integer(a[3])
 pf <- as.integer(Sys.getenv("EMC_PF", "30"))
-d <- readRDS(Sys.getenv("EMC_SETUP", setup_file))
+d <- readRDS(setup_file)
 options(emc2.flat_parallel = flat)
 RNGkind("L'Ecuyer-CMRG"); set.seed(2024)
 emc <- suppressMessages(make_emc(d$sim, d$des, n_chains = 3))
