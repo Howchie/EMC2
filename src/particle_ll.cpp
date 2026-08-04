@@ -8634,7 +8634,7 @@ double c_log_likelihood_race(
       }
     };
 
-    if (apply_truncation_correction && may_need_ct && logS_at_t != nullptr) {
+    if (apply_truncation_correction && may_need_ct && logS_at_t != nullptr && !has_RACE_col) {
       // Pass 1: scan for truncated trials; check uniformity of LT and UT separately.
       // We can batch the normaliser whenever all truncated finite-RT trials share the
       // same LT value AND the same UT value (each may be 0/Inf trivially).

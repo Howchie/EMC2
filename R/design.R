@@ -1211,7 +1211,9 @@ design_model <- function(data,design,model=NULL,
   # place in the compression key and cannot be lost by contraction.  Only
   # resolved when the model actually declares pGuess; see resolve_guess_window().
   if ("pGuess" %in% names(model()$p_types)) {
-    gw <- resolve_guess_window(dadm, design$TC, verbose = verbose)
+    pg_const <- if ("pGuess" %in% names(design$constants)) design$constants[["pGuess"]] else NULL
+    pg_disabled <- !is.null(pg_const) && !is.finite(pg_const)
+    gw <- resolve_guess_window(dadm, design$TC, verbose = verbose && !pg_disabled)
     if (!is.null(gw)) {
       attr(dadm,"guess_window") <- gw$window
       attr(dadm,"guess_n_resp") <- gw$n_resp

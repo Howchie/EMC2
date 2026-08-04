@@ -20,7 +20,7 @@ Math/*
 bazinga*
 .DS_Store
 Rplots.pdf
-
+..Rcheck*
 # sourceCpp build cache
 tmp_cache/
 tests/testthat/testthat-problems.rds
