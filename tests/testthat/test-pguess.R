@@ -202,6 +202,47 @@ test_that("a two-response DDM on [0, 5] reproduces HDDM's w_outlier = 0.1", {
 })
 
 
+test_that("a guess window narrower than the data is refused, not silently widened", {
+  # HDDM's w_outlier = 0.1 means a 5 s window on two responses.  A 9 s RT sits
+  # outside it, where the uniform guess density is zero -- so that trial, the
+  # slow outlier pGuess exists to catch, would get no guess component while its
+  # neighbours did.  This used to be applied silently: every trial, in or out of
+  # the window, received density 1 / (n_resp * (UG - LG)).
+  des <- design(factors = list(subjects = 1, S = c("left", "right")),
+                Rlevels = c("left", "right"),
+                formula = list(v ~ 1, a ~ 1, t0 ~ 1, Z ~ 1, pGuess ~ 1),
+                model = DDM, constants = c(s = log(1)))
+  dat <- data.frame(subjects = factor(1),
+                    S = factor("left", levels = c("left", "right")),
+                    R = factor("left", levels = c("left", "right")),
+                    rt = c(0.4, 9.0), LT = 0, UT = Inf, LC = 0, UC = Inf)
+
+  des$TC <- list(w_outlier = 0.1)
+  expect_error(EMC2:::design_model(dat, des, compress = FALSE, rt_resolution = NULL),
+               "does not cover the observed RTs")
+  # The message names the value that would work.
+  expect_error(EMC2:::design_model(dat, des, compress = FALSE, rt_resolution = NULL),
+               "w_outlier <=")
+
+  # The explicit spelling is held to the same standard ...
+  des$TC <- list(guess_window = c(0, 5))
+  expect_error(EMC2:::design_model(dat, des, compress = FALSE, rt_resolution = NULL),
+               "does not cover the observed RTs")
+
+  # ... and a window that does cover the data is accepted unchanged.
+  des$TC <- list(guess_window = c(0, 10))
+  dadm <- EMC2:::design_model(dat, des, compress = FALSE, rt_resolution = NULL)
+  expect_equal(attr(dadm, "guess_window"), c(0, 10))
+
+  # The derived window cannot fail the check: it is built from the same bounds
+  # the RTs were already validated against, and widens past the slowest RT when
+  # there is no finite upper edge.
+  des$TC <- NULL
+  dadm <- EMC2:::design_model(dat, des, compress = FALSE, rt_resolution = NULL)
+  expect_gte(attr(dadm, "guess_window")[2], max(dat$rt))
+})
+
+
 test_that("expand and compressed branches agree with pGuess active", {
   # Mirrors test-pcontaminant-compressed.R: on all-unique trials the two
   # summation branches must produce the same total.
@@ -237,9 +278,15 @@ test_that("resolve_guess_window follows its documented resolution order", {
   # Bounds win over the fallback.
   d3 <- d; d3$LT <- 0.2; d3$LC <- 0.4; d3$UC <- 3; d3$UT <- 2.5
   expect_equal(EMC2:::resolve_guess_window(d3)$window, c(0.4, 2.5))
-  # TC wins over everything.
-  expect_equal(EMC2:::resolve_guess_window(d3, list(guess_window = c(1, 9)))$window,
-               c(1, 9))
+  # TC wins over everything.  The window still has to cover the RTs -- d3's
+  # fastest is 0.5, so a lower edge of 1 is now refused rather than silently
+  # leaving that trial without a guess component.
+  expect_equal(EMC2:::resolve_guess_window(d3, list(guess_window = c(0.3, 9)))$window,
+               c(0.3, 9))
+  expect_error(EMC2:::resolve_guess_window(d3, list(guess_window = c(1, 9))),
+               "does not cover the observed RTs")
+  expect_error(EMC2:::resolve_guess_window(d3, list(guess_window = c(0, 5))),
+               "does not cover the observed RTs")
   # nogo and time are not overt responses and do not count.
   d4 <- d; d4$R <- factor(c("a", "b", "a"), levels = c("a", "b", "nogo", "time"))
   expect_identical(EMC2:::resolve_guess_window(d4)$n_resp, 2L)

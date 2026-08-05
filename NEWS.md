@@ -12,9 +12,44 @@
 
     Each *subject* carries its own L'Ecuyer stream, in the start points as well as in the particle step, so a fit is now reproducible from a fixed seed regardless of how many cores it runs on, which the previous path was not -- it derived its children's streams from `mc.cores`. This is also what makes it safe for a chain to take over a finished sibling's cores mid-block. Fitting no longer leaves the calling session switched to L'Ecuyer-CMRG. Draws from an existing fit are not reproduced exactly by this version; the two are statistically equivalent, not identical.
 
+-   Each chain's workers are now re-forked every 10 iterations rather than
+    living for a whole block. A freshly forked worker shares all its pages with
+    its chain, but R's garbage collector writes to the header of every object it
+    marks, and each of those writes un-shares a page permanently -- so over a
+    long block a worker converges on a private copy of the chain's heap. On a
+    250 MB heap with 8 workers, total physical memory rose from 0.28 GB (the
+    previous per-iteration forks, which died before collecting anything) to
+    0.75 GB after 10 iterations and 3.8 GB after 200. Re-forking on a period
+    keeps most of the sharing: on that heap it holds the peak to 1.0 GB, a 72%
+    saving. A re-fork costs a roughly fixed ~0.19 s, so what it adds to a block
+    depends on what an iteration costs -- about 2% on a fit at ~800 ms an
+    iteration, more on a small model whose whole block is only seconds long.
+    Tune with `options(emc2.worker_recycle = )`; 0 disables it. Results are
+    unaffected -- each subject's RNG stream lives in the master, so replacing
+    the workers cannot move a draw.
+
+-   The pool's start handshake backs off from 0.2 ms instead of sleeping a flat
+    10 ms per worker, which it paid serially on every start, grow and recycle.
+
 ## Bug fixes
 
 -   Fixed some maths that was wrong about the ECDF plot for SBC
+
+-   `c_log_likelihood_race` could overflow the stack for models with more than
+    64 parameter columns. Several of its branches stage one accumulator row in a
+    64-entry buffer, and the guard that kept those in bounds had been widened to
+    1024 without widening them. All of the fixed buffers in the race and
+    logical-rules likelihoods are now `thread_local` vectors sized to the model,
+    so there is no column limit at all -- which matters because a trend model
+    extends the parameter-type count one name at a time. This also takes
+    `c_log_likelihood_race`'s stack frame from 280 kB back to 3 kB.
+
+-   A `TC$guess_window` (or `TC$w_outlier`) narrower than the observed RTs is now
+    an error rather than being applied anyway. The uniform guess density is zero
+    outside its window, so trials past the edge were receiving a guess component
+    they should not have had -- for `w_outlier = 0.1` on two responses, every RT
+    beyond 5 s. The derived default cannot hit this: it is built from the same
+    bounds the RTs were already checked against.
 
 -   The ROU equilibrium parameterization now expresses `theta = v / k` and
     `chi = s * sqrt(tk)` in physical units. Threshold effects in `B` therefore

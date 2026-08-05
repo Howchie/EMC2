@@ -771,6 +771,34 @@ resolve_guess_window <- function(dadm, TC = NULL, verbose = FALSE) {
     if (length(win) != 2 || !all(is.finite(win)) || !(win[2] > win[1]))
       stop("TC$guess_window must be a length-2 numeric c(lower, upper) with upper > lower")
     LG <- win[1]; UG <- win[2]
+    # A supplied window must cover the data.  The derived window below cannot
+    # fail this -- it is built from the truncation/censoring bounds the RTs were
+    # already checked against -- but an explicit `guess_window`, and especially
+    # the `w_outlier` spelling, can be narrower than the observed RTs without
+    # the user noticing.  The guess density is uniform on [LG, UG] and zero
+    # outside it, so a trial beyond the edge has no guess component at all: the
+    # mixture would silently stop being a mixture for exactly the slow outliers
+    # pGuess exists to catch.  Refuse rather than quietly re-deriving a wider
+    # window, so the user picks the number themselves.
+    rt_obs <- dadm$rt
+    rt_obs <- rt_obs[!is.na(rt_obs) & is.finite(rt_obs)]
+    if (length(rt_obs)) {
+      tol <- sqrt(.Machine$double.eps) * pmax(1, abs(UG), abs(LG), abs(rt_obs))
+      if (any(rt_obs > UG + tol) || any(rt_obs < LG - tol)) {
+        src <- if (!is.null(TC$guess_window)) "TC$guess_window" else "TC$w_outlier"
+        stop("Guess window [", signif(LG, 4), ", ", signif(UG, 4),
+             "] set by ", src, " does not cover the observed RTs [",
+             signif(min(rt_obs), 4), ", ", signif(max(rt_obs), 4),
+             "]. The uniform guess density is zero outside its window, so ",
+             "trials beyond the edge would get no guess component. Widen the ",
+             "window",
+             if (src == "TC$w_outlier")
+               paste0(" (w_outlier <= ", signif(1 / (n_resp * (max(rt_obs) - LG)), 4),
+                      " for these data)")
+             else "",
+             ", or drop it and let it be derived from the LT/LC/UT/UC bounds.")
+      }
+    }
   } else {
     LT <- bound("LT", 0); LC <- bound("LC", 0)
     UT <- bound("UT", Inf); UC <- bound("UC", Inf)

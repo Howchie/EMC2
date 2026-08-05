@@ -133,14 +133,26 @@
 
   tryCatch({
     for (w in seq_len(n)) {
+      # Poll until the worker has opened its end.  A worker is normally there
+      # within a millisecond, so back off from well under that rather than
+      # sleeping a flat 10 ms: this loop runs once per worker, serially, and is
+      # paid again on every grow and every recycle, so at eight workers the flat
+      # version could spend ~80 ms per spawn waiting on processes that were
+      # already up.  (It is not the whole of a spawn -- forking the processes
+      # and reaping the old ones dominate -- but it is the part that was pure
+      # sleeping.)
       f <- NULL
-      for (poll in 1:2000) { # 20 seconds max
+      deadline <- Sys.time() + 20  # same ceiling as before
+      wait <- 0.0002
+      repeat {
         res <- parallel::mccollect(jobs[[w]], wait = FALSE, timeout = 0)
         if (!is.null(res)) stop("Worker process died before pool initialization")
         f <- tryCatch(suppressWarnings(fifo(req[w], "wb", blocking = FALSE)),
                       error = function(e) NULL)
         if (!is.null(f)) break
-        Sys.sleep(0.01)
+        if (Sys.time() > deadline) break
+        Sys.sleep(wait)
+        wait <- min(wait * 2, 0.01)
       }
       if (is.null(f)) stop("Timeout waiting for worker process to initialize")
       # The reader is attached now, so this returns at once; then drop the
@@ -202,6 +214,80 @@
   list(n = n_total, dir = pool$dir, jobs = c(pool$jobs, spawned$jobs),
        wcs = c(pool$wcs, spawned$wcs), rcs = c(pool$rcs, spawned$rcs),
        alive = TRUE)
+}
+
+# Replace the workers with a fresh fork every `every` iterations.
+#
+# A forked worker starts out sharing every page with its chain and pays for
+# almost nothing.  It does not stay that way: R's garbage collector writes to
+# the header of each object it marks, and each of those writes un-shares a page
+# for good.  Over a block the worker therefore converges on a private copy of
+# the chain's heap.  Measured on a 250 MB chain heap with 8 workers, total
+# physical memory (PSS, so sharing is already accounted for) against block
+# length:
+#
+#     no pool (the old per-iteration mcmapply forks)   0.28 GB
+#      10 iterations                                   0.75 GB
+#      25 iterations                                   1.10 GB
+#      50 iterations                                   2.36 GB
+#     100 iterations                                   3.54 GB
+#     200 iterations                                   3.83 GB  (~8 x the heap)
+#
+# The old path never showed this because its workers were forked per iteration
+# and died before they had collected anything -- the cost arrived with their
+# longer life, not with the pool itself.  Left alone it saturates at roughly
+# n_workers x heap, which on several chains of a large fit is enough to reach
+# the OOM killer overnight, and the donation path makes it worst exactly when
+# one chain is left holding every core.
+#
+# Re-forking on a period trades that back against the fork cost the pool exists
+# to avoid, and the table says where: at 10 iterations most of the sharing is
+# still intact.  Measured on 100 iterations with 8 workers:
+#
+#                       peak PSS   elapsed
+#     250 MB heap, off     3.58 GB    8.5 s
+#     250 MB heap, 10      1.01 GB    9.9 s   -72% memory, +17% time
+#     small heap,   off    0.92 GB    8.2 s
+#     small heap,   10     0.74 GB   10.1 s   -19% memory, +23% time
+#
+# Re-forking costs a roughly fixed ~0.19 s -- eight processes, the fifo
+# handshake, and waiting for the old workers to exit -- near enough independent
+# of the heap.  The period converts that into a share of the block on its own:
+# an iteration here is 85 ms, so ten of them are 0.85 s and a recycle is +22%,
+# whereas on a real fit at ~800 ms an iteration those ten are 8 s and the same
+# recycle is +2%.  The overhead is therefore large as a fraction only where the
+# whole block is already seconds long, and it shrinks exactly as the fits get
+# big enough for the memory to matter.  Raise `emc2.worker_recycle` to trade
+# more memory for less of it; 0 or less turns recycling off.
+#
+# A wall-clock floor was tried here instead and is the wrong control: divergence
+# gets *faster* with a bigger heap, so a 250 MB fit was already fully diverged
+# eight seconds in, and any floor long enough to matter skipped the case that
+# needed it most.
+#
+# Safe for the same reason growing is: every subject's RNG stream lives in the
+# master and travels in the message, so which process computes a subject, and
+# how many processes there are, cannot change a draw.
+.emc_wpool_recycle <- function(pool, i, every, ctx) {
+  if (is.null(pool) || !isTRUE(pool$alive)) return(pool)
+  if (is.na(every) || every <= 0L) return(pool)
+  # Nothing has run yet on iteration 1, and pool$n <= 1 is the degenerate pool
+  # that .emc_wpool_start() refuses anyway.
+  if (i <= 1L || pool$n <= 1L) return(pool)
+  if (((i - 1L) %% every) != 0L) return(pool)
+
+  target <- pool$n
+  .emc_wpool_stop(pool)
+  fresh <- .emc_wpool_start(target, ctx)
+  if (is.null(fresh)) {
+    # The old workers are already gone, so there is nothing to keep running on.
+    # Hand back a dead pool: the master then computes every subject itself,
+    # which is slow but produces exactly the same numbers.
+    .emc_wpool_degraded("could not re-fork the pool when recycling")
+    return(list(n = target, dir = NULL, jobs = list(), wcs = list(),
+                rcs = list(), alive = FALSE))
+  }
+  fresh
 }
 
 .emc_wpool_stop <- function(pool) {

@@ -28,6 +28,8 @@
 #include <string>
 #include <memory>
 #include <array>
+#include <algorithm>   // std::max, for the scratch-buffer widths
+#include <vector>
 #include <cstring>
 #include <cstdlib>
 #include <mutex>
@@ -6689,8 +6691,15 @@ static double lrcap_trial_ll(
   // conditional target drift mean is materialized per node (v -> v0 + slope*z)
   // and the channel win probability is integrated with the shared scalar GSL
   // helper, which also handles tt = +Inf (the withheld-to-infinity case).
-  double bufA_row[64];
-  double bufB_row[64];
+  // See c_log_likelihood_logicalrules for why these are thread_local vectors
+  // rather than fixed arrays, and why they are padded past n_par.
+  const size_t lrcap_row_width = static_cast<size_t>(std::max(n_par, 64));
+  static thread_local std::vector<double> bufA_row_tls;
+  static thread_local std::vector<double> bufB_row_tls;
+  bufA_row_tls.assign(lrcap_row_width, 0.0);
+  bufB_row_tls.assign(lrcap_row_width, 0.0);
+  double* bufA_row = bufA_row_tls.data();
+  double* bufB_row = bufB_row_tls.data();
   int gng_isok2[2] = {1, 1};
   // gng_N_at is used both for the censor/withheld event masses (!finite_rt) and
   // for the truncation-window denominator (any finite-RT GNG trial with LT/UT),
@@ -6984,9 +6993,15 @@ static double c_log_likelihood_logicalrules(
   shared.clear_particle_cache();
   if (model_ctx->fpe_cache) model_ctx->fpe_cache->new_particle();
   if (model_ctx->rlf_cache) model_ctx->rlf_cache->new_particle();
-  if (n_par > 64) {
-    Rcpp::stop("c_log_likelihood_logicalrules: at most 64 parameter columns are supported.");
-  }
+  // Width of the per-accumulator parameter-row and column-pointer scratch
+  // below.  This used to be a hard stop at 64 columns, backing fixed stack
+  // arrays.  n_par counts model parameter *types*, which update_model_trend()
+  // extends one name per trend parameter, so 64 is reachable on a heavy trend
+  // model -- and a likelihood that refuses to run is a poor trade for a buffer
+  // size.  Padded to at least 64 because the raw kernels may fetch (not
+  // dereference) an optional trailing column this variant lacks; the fixed
+  // arrays gave that slack implicitly.
+  const size_t lr_row_width = static_cast<size_t>(std::max(n_par, 64));
   const bool capacity = kappa_col >= 0 || tau_col >= 0;
   if (capacity && (kappa_col < 0 || tau_col < 0 ||
                    kappa_col >= n_par || tau_col >= n_par)) {
@@ -7150,10 +7165,16 @@ static double c_log_likelihood_logicalrules(
     // Column-pointer views of the compact role matrices for the raw kernels.
     // Slots beyond n_par stay nullptr: kernels may fetch (not dereference)
     // optional trailing columns this model variant lacks.
-    const double* colsp_nA[64] = {nullptr};
-    const double* colsp_A[64]  = {nullptr};
-    const double* colsp_nB[64] = {nullptr};
-    const double* colsp_B[64]  = {nullptr};
+    static thread_local std::vector<const double*> colsp_nA_tls, colsp_A_tls,
+                                                   colsp_nB_tls, colsp_B_tls;
+    colsp_nA_tls.assign(lr_row_width, nullptr);
+    colsp_A_tls.assign(lr_row_width, nullptr);
+    colsp_nB_tls.assign(lr_row_width, nullptr);
+    colsp_B_tls.assign(lr_row_width, nullptr);
+    const double** colsp_nA = colsp_nA_tls.data();
+    const double** colsp_A  = colsp_A_tls.data();
+    const double** colsp_nB = colsp_nB_tls.data();
+    const double** colsp_B  = colsp_B_tls.data();
     for (int p = 0; p < n_par; ++p) {
       colsp_nA[p] = pars_nA.data() + static_cast<size_t>(p) * n_unique_trials;
       colsp_A[p]  = pars_A.data()  + static_cast<size_t>(p) * n_unique_trials;
@@ -8054,27 +8075,47 @@ double c_log_likelihood_race(
     Rcpp::stop("c_log_likelihood_race: isok size does not match pars matrix rows.");
   }
   const int n_par = pars.ncol();
-  // Several branches below stage one accumulator row (or one pointer per
-  // accumulator) in fixed stack arrays of 1024 entries; guard the sizes here so
-  // a future wide model fails loudly instead of overflowing the stack.
-  if (n_par > 1024 || n_lR > 1024) {
-    Rcpp::stop("c_log_likelihood_race: at most 1024 parameter columns and 1024 accumulators are supported.");
-  }
-  if (n_par * n_lR > 32768) {
-    Rcpp::stop("c_log_likelihood_race: n_par * n_lR exceeds 32768, which would overflow the safe stack size.");
-  }
+  // Scratch buffers.
+  //
+  // These were fixed stack arrays, which forced a size limit and made the
+  // frame ~280 kB.  `static thread_local` vectors -- the same idiom this
+  // function already uses for the GSL workspace -- keep their capacity for the
+  // life of the process, so the allocation is paid once rather than per call,
+  // the frame stays small, and there is no limit to hit.  That matters: n_par
+  // is the number of model parameter *types* (v, B, A, t0, ... for a race),
+  // which a trend model extends one name at a time via update_model_trend().
+  //
+  // `.assign()` rather than `.resize()`: resize leaves previously-used slots
+  // holding the last call's values, and every buffer here is written only up
+  // to the current trial's width.  Zeroing keeps a read past that width
+  // deterministic instead of quietly plausible.
+  static thread_local std::vector<const double*> cols_view_tls;
+  static thread_local std::vector<double> pars_rowmajor_tls;
+  static thread_local std::vector<int> isok_int_tls;
+  static thread_local std::vector<double> logS_k_tls;
+  cols_view_tls.assign(static_cast<size_t>(n_par), nullptr);
+  pars_rowmajor_tls.assign(static_cast<size_t>(n_lR) * n_par, 0.0);
+  isok_int_tls.assign(static_cast<size_t>(n_lR), 0);
+  logS_k_tls.assign(static_cast<size_t>(n_lR), R_NegInf);
+  const double** cols_view = cols_view_tls.data();
+  double* pars_rowmajor_buffer = pars_rowmajor_tls.data();
+  int* isok_int_buffer = isok_int_tls.data();
+  double* logS_k_buffer = logS_k_tls.data();
+
   // Column-pointer view of the materialized pars matrix for the raw kernels
   // (this path keeps the matrix: the RACE NA-fill above writes into it).
-  const double* cols_view[1024] = {nullptr};
   for (int c = 0; c < n_par; ++c) {
     cols_view[c] = pars_cm_ptr + static_cast<size_t>(c) * n_trials;
   }
-  double pars_rowmajor_buffer[32768];
-  int isok_int_buffer[1024] = {0};
-  double logS_k_buffer[1024];
-  for (int i = 0; i < n_lR; ++i) {
-    logS_k_buffer[i] = R_NegInf;
-  }
+
+  // One accumulator row of parameters, staged for the scalar cdf1/pdf1
+  // kernels.  Six branches below need one; they are in mutually exclusive
+  // paths, but two of them hand the buffer to a lambda that outlives the
+  // filling loop, so each site gets its own slot rather than sharing one.
+  // Padded to at least 64 because a kernel may *fetch* (not dereference) an
+  // optional trailing column this model variant does not carry -- the fixed
+  // arrays these replace gave that slack implicitly.
+  const size_t par_row_width = static_cast<size_t>(std::max(n_par, 64));
 
   // fill_trial_buffers: copies one trial's params into row-major scratch (for GSL/rowmajor helpers).
   // Uses raw column-major pointer to avoid Rcpp subscript overhead.
@@ -8281,7 +8322,9 @@ double c_log_likelihood_race(
         // Single-accumulator global-kill case is analytic:
         // P(omission) = 1 - P(hit by Inf) where P(hit by Inf) is model CDF at +Inf.
         if (n_lR_j == 1 && isok[start_row_idx]) {
-          double par_buf_inf[64];
+          static thread_local std::vector<double> par_buf_inf_tls1;
+          par_buf_inf_tls1.assign(par_row_width, 0.0);
+          double* par_buf_inf = par_buf_inf_tls1.data();
           for (int c = 0; c < n_par; ++c)
             par_buf_inf[c] = pars_cm_ptr[static_cast<size_t>(c) * n_trials + start_row_idx];
           ContextForRaceModels* race_ctx_local = static_cast<ContextForRaceModels*>(model_context_for_funcs);
@@ -8343,7 +8386,9 @@ double c_log_likelihood_race(
       }
       if (race_ctx && race_ctx->defective_upper_tail) {
         if (n_lR_j == 1 && isok[start_row_idx]) {
-          double par_buf_inf[64];
+          static thread_local std::vector<double> par_buf_inf_tls2;
+          par_buf_inf_tls2.assign(par_row_width, 0.0);
+          double* par_buf_inf = par_buf_inf_tls2.data();
           for (int c = 0; c < n_par; ++c)
             par_buf_inf[c] = pars_cm_ptr[static_cast<size_t>(c) * n_trials + start_row_idx];
           double F_inf = cdf1(R_PosInf, par_buf_inf, model_context_for_funcs);
@@ -8354,7 +8399,9 @@ double c_log_likelihood_race(
           return ans;
         }
         double log_p = 0.0;
-        double par_buf_inf[64];
+        static thread_local std::vector<double> par_buf_inf_tls3;
+        par_buf_inf_tls3.assign(par_row_width, 0.0);
+        double* par_buf_inf = par_buf_inf_tls3.data();
         for (int k = 0; k < n_lR_j; ++k) {
           const int row = start_row_idx + k;
           if (!isok[row]) return R_NegInf;
@@ -8377,7 +8424,9 @@ double c_log_likelihood_race(
 
     if (n_lR_j == 1) {
       if (!isok[start_row_idx]) return R_NegInf;
-      double par_buf[64];
+      static thread_local std::vector<double> par_buf_tls4;
+      par_buf_tls4.assign(par_row_width, 0.0);
+      double* par_buf = par_buf_tls4.data();
       for (int c = 0; c < n_par; ++c)
         par_buf[c] = pars_cm_ptr[static_cast<size_t>(c) * n_trials + start_row_idx];
       double Fk = cdf1(t, par_buf, model_context_for_funcs);
@@ -8398,7 +8447,9 @@ double c_log_likelihood_race(
     }
 
     double logS = 0.0;
-    double par_buf[64];
+    static thread_local std::vector<double> par_buf_tls5;
+    par_buf_tls5.assign(par_row_width, 0.0);
+    double* par_buf = par_buf_tls5.data();
     for (int k = 0; k < n_lR_j; ++k) {
       const int row = start_row_idx + k;
       if (!isok[row]) return R_NegInf;
@@ -8923,7 +8974,9 @@ double c_log_likelihood_race(
         if (R_j_idx == NA_INTEGER) {
           if (global_omission_active && n_lR_j == 1 && !trial_has_active_nogo) {
             // Single-accumulator analytic branch.
-            double par_buf[64];
+            static thread_local std::vector<double> par_buf_tls6;
+            par_buf_tls6.assign(par_row_width, 0.0);
+            double* par_buf = par_buf_tls6.data();
             for (int c = 0; c < n_par; ++c)
               par_buf[c] = pars_cm_ptr[static_cast<size_t>(c) * n_trials + start_row_idx];
             const auto logS_single = [&](double t) -> double {
@@ -8984,7 +9037,9 @@ double c_log_likelihood_race(
       } else {
         if (global_omission_active && n_lR_j == 1 && !trial_has_active_nogo) {
           // Single-accumulator analytic branch for missing RT interval union.
-          double par_buf[64];
+          static thread_local std::vector<double> par_buf_tls7;
+          par_buf_tls7.assign(par_row_width, 0.0);
+          double* par_buf = par_buf_tls7.data();
           for (int c = 0; c < n_par; ++c)
             par_buf[c] = pars_cm_ptr[static_cast<size_t>(c) * n_trials + start_row_idx];
           const auto logS_single = [&](double t) -> double {

@@ -25,9 +25,26 @@ Rplots.pdf
 tmp_cache/
 tests/testthat/testthat-problems.rds
 run_benchmark.R
+
+# Rejected snapshots. testthat writes these next to the snapshot they failed
+# against, so they appear both at the top level and under the per-OS
+# subdirectories (_snaps/Linux/, _snaps/Darwin/, ...) -- the un-globbed pattern
+# only caught the first, which is how _snaps/Linux/fit.new.md and
+# variant_funs.new.md ended up committed.
+tests/testthat/_snaps/**/*.new.md
 tests/testthat/_snaps/*.new.md
 
-# local install tree / benchmark fixtures
-/.Rlib_par/
-/.bench_annika.rds
+# R CMD check leaves its scratch tree beside the package as <pkg>.Rcheck.
+*.Rcheck/
+
+# Compiled artefacts and the symbol index R generates during a build.
+src/*.o
+src/*.so
+src/*.dll
 src/symbols.rds
+
+# Local install trees used to test a build without touching the user library,
+# and the benchmark fixtures that go with them.  Any .Rlib_* prefix, not just
+# the one that happened to exist first.
+/.Rlib_*/
+/.bench_*

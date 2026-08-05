@@ -215,6 +215,80 @@ test_that("absent control leaves the static budget untouched", {
   expect_silent(EMC2:::.emc_core_release(NULL))
 })
 
+# --- recycling the workers to bound copy-on-write divergence -----------------
+
+test_that("recycling fires on its period and leaves everything else alone", {
+  skip_on_os("windows")
+  ctx <- list(tag = "ctx")
+  live <- list(n = 4L, alive = TRUE)
+  # Iteration 1 has nothing to recycle, and only every `every`-th after it does.
+  fired <- vapply(1:21, function(i) {
+    called <- FALSE
+    testthat::with_mocked_bindings(
+      { EMC2:::.emc_wpool_recycle(live, i, 10L, ctx); called },
+      .emc_wpool_stop = function(pool) { called <<- TRUE; invisible(NULL) },
+      .emc_wpool_start = function(n, ctx) list(n = n, alive = TRUE),
+      .package = "EMC2")
+  }, logical(1))
+  expect_equal(which(fired), c(11L, 21L))
+
+  # Off switch, and the guards that must never re-fork.
+  expect_identical(EMC2:::.emc_wpool_recycle(live, 11L, 0L, ctx), live)
+  expect_identical(EMC2:::.emc_wpool_recycle(live, 11L, NA_integer_, ctx), live)
+  expect_identical(EMC2:::.emc_wpool_recycle(list(n = 1L, alive = TRUE), 11L, 10L, ctx),
+                   list(n = 1L, alive = TRUE))
+  # A pool that has already fallen back must not be resurrected mid-block.
+  dead <- list(n = 4L, alive = FALSE)
+  expect_identical(EMC2:::.emc_wpool_recycle(dead, 11L, 10L, ctx), dead)
+  expect_null(EMC2:::.emc_wpool_recycle(NULL, 11L, 10L, ctx))
+})
+
+test_that("recycling preserves the worker count, including donated cores", {
+  skip_on_os("windows")
+  asked <- NULL
+  got <- testthat::with_mocked_bindings(
+    EMC2:::.emc_wpool_recycle(list(n = 12L, alive = TRUE), 11L, 10L, list()),
+    .emc_wpool_stop = function(pool) invisible(NULL),
+    .emc_wpool_start = function(n, ctx) { asked <<- n; list(n = n, alive = TRUE) },
+    .package = "EMC2")
+  expect_equal(asked, 12L)     # not the original share -- what it had grown to
+  expect_equal(got$n, 12L)
+})
+
+test_that("a failed re-fork degrades instead of losing the block", {
+  skip_on_os("windows")
+  # The old workers are already stopped by the time the re-fork is attempted,
+  # so there is nothing to fall back onto except the master.
+  got <- suppressWarnings(testthat::with_mocked_bindings(
+    EMC2:::.emc_wpool_recycle(list(n = 4L, alive = TRUE), 11L, 10L, list()),
+    .emc_wpool_stop = function(pool) invisible(NULL),
+    .emc_wpool_start = function(n, ctx) NULL,
+    .package = "EMC2"))
+  expect_false(got$alive)
+  expect_equal(got$n, 4L)
+  # And .emc_wpool_iter() then computes every subject in the master.
+  expect_null(got$dir)
+})
+
+test_that("real workers survive being recycled and still compute", {
+  skip_on_os("windows")
+  skip_if(!nzchar(Sys.which("mkfifo")))
+  pool <- EMC2:::.emc_wpool_start(2, list(tag = "ctx"))
+  skip_if(is.null(pool), "could not fork a pool here")
+  on.exit(EMC2:::.emc_wpool_stop(pool), add = TRUE)
+  old_dir <- pool$dir
+
+  pool <- EMC2:::.emc_wpool_recycle(pool, 11L, 10L, list(tag = "ctx"))
+  expect_true(isTRUE(pool$alive))
+  expect_equal(pool$n, 2)
+  expect_false(dir.exists(old_dir))     # the old pool's fifos are cleaned up
+  expect_true(dir.exists(pool$dir))
+
+  for (w in 1:2) { serialize(list(subs = w), pool$wcs[[w]]); flush(pool$wcs[[w]]) }
+  got <- lapply(1:2, function(w) unserialize(pool$rcs[[w]]))
+  expect_true(all(vapply(got, function(g) !is.null(g$failed), logical(1))))
+})
+
 test_that("growing the pool keeps the workers that were already running", {
   skip_on_os("windows")
   skip_if(!nzchar(Sys.which("mkfifo")))

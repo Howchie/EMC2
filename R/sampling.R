@@ -515,6 +515,9 @@ run_stage <- function(pmwgs,
     wpool_cost <- .emc_subject_cost(data)
     wpool_part <- .emc_lpt_partition(wpool_cost, wpool$n)
   }
+  # How often to re-fork the workers.  See .emc_wpool_recycle().
+  recycle_every <- as.integer(getOption("emc2.worker_recycle", 10L))
+  if (length(recycle_every) != 1L || is.na(recycle_every)) recycle_every <- 10L
 
   # Main iteration loop
   for (i in 1:iter) {
@@ -568,6 +571,10 @@ run_stage <- function(pmwgs,
     )
     group_chol_it <- build_group_chol_cache(group_var_it, idx_list_blk)
     if (!is.null(wpool)) {
+      # Re-fork periodically so the workers cannot drift far from the chain's
+      # pages.  Same reasoning as growing: the streams live in the master, so
+      # replacing the workers cannot move a draw.
+      wpool <- .emc_wpool_recycle(wpool, i, recycle_every, wpool_ctx)
       # Siblings that have finished their block free up cores; unlike the
       # mcmapply path, taking them here cannot perturb the draws.
       grown <- .emc_wpool_grow(wpool,
@@ -951,7 +958,14 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
         log_mix_comps[, k] <- log(pm_settings[[i]]$mix[k])
       }
     }
-    max_log <- do.call(pmax, as.data.frame(log_mix_comps))
+    # Row maxima of an n_particles x n_proposals matrix.  `do.call(pmax,
+    # as.data.frame(m))` did the same thing but built a data frame -- and so a
+    # column list, row names and a class -- on every component of every subject
+    # of every iteration, to be thrown away one call later.
+    max_log <- log_mix_comps[, 1L]
+    for (k in seq_len(n_proposals)[-1L]) {
+      max_log <- pmax(max_log, log_mix_comps[, k])
+    }
     lm <- max_log + log(rowSums(exp(log_mix_comps - max_log)))
     infnt_idx <- is.infinite(lm) | is.na(lm)
     if (any(infnt_idx)) {
@@ -1158,7 +1172,9 @@ particle_draws <- function(n, mu, covar, alpha = NULL, tau= NULL, R = NULL) {
       p <- length(mu)
       Z <- matrix(rnorm(n * p), nrow = n, ncol = p)
       X <- Z %*% R
-      return(sweep(X, 2, mu, "+"))
+      # Column-wise `+ mu`.  sweep() reaches the same answer through aperm()
+      # and a recycled array; recycling mu directly is the whole of it.
+      return(X + rep(mu, each = n))
     } else {
       return(mvtnorm::rmvnorm(n, mu, covar))
     }
