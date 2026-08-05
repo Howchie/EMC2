@@ -5327,7 +5327,7 @@ inline double log_min_density_rowmajor(double t,
                                        RacePdf1Fun pdf1,
                                        RaceCdf1Fun cdf1,
                                        void* ctx,
-                                       std::vector<double>& logS_k) {
+                                       double* logS_k) {
   // Log density of the minimum (no known winner) at time t:
   //   f_min(t) = sum_k f_k(t) * prod_{j != k} (1 - F_j(t))
   //
@@ -5339,11 +5339,7 @@ inline double log_min_density_rowmajor(double t,
   // trial" loop.
   if (!(t > 0.0) || !emc2_isfinite(t)) return R_NegInf;
   double logS_all = 0.0;
-  if (logS_k.size() < static_cast<size_t>(n_lR)) {
-    logS_k.assign(static_cast<size_t>(n_lR), R_NegInf);
-  } else {
-    std::fill(logS_k.begin(), logS_k.begin() + n_lR, R_NegInf);
-  }
+  std::fill(logS_k, logS_k + n_lR, R_NegInf);
   for (int k = 0; k < n_lR; ++k) {
     if (!isok_int[k]) return R_NegInf;
     const double* par_k = pars_rowmajor + static_cast<size_t>(k) * n_par;
@@ -7822,28 +7818,20 @@ static double c_log_likelihood_logicalrules(
   // See src/contaminant_mixture.h -- the arithmetic lives there so this and the
   // seven other application sites cannot drift apart.
   bool use_pC = (pc_col >= 0);
-  std::vector<double> pC_values;
   if (use_pC) {
-    pC_values.assign(static_cast<size_t>(n_unique_trials), 0.0);
     bool all_zero = true;
     for (int j = 0; j < n_unique_trials; ++j) {
-      double pC = pars_cols[pc_col][j * n_acc]; // Check the first row of each trial for pC
-      pC_values[static_cast<size_t>(j)] = pC;
-      if (pC != 0.0) all_zero = false;
+      if (pars_cols[pc_col][j * n_acc] != 0.0) { all_zero = false; break; }
     }
     if (all_zero) use_pC = false;
   }
 
   const GuessKernel gk = (guess != nullptr) ? *guess : GuessKernel();
   bool use_pG = (pg_col >= 0) && gk.active();
-  std::vector<double> pG_values;
   if (use_pG) {
-    pG_values.assign(static_cast<size_t>(n_unique_trials), 0.0);
     bool all_zero = true;
     for (int j = 0; j < n_unique_trials; ++j) {
-      double pG = pars_cols[pg_col][j * n_acc];
-      pG_values[static_cast<size_t>(j)] = pG;
-      if (pG != 0.0) all_zero = false;
+      if (pars_cols[pg_col][j * n_acc] != 0.0) { all_zero = false; break; }
     }
     if (all_zero) use_pG = false;
   }
@@ -7851,8 +7839,8 @@ static double c_log_likelihood_logicalrules(
   if (use_pC || use_pG) {
     for (int j = 0; j < n_unique_trials; ++j) {
       const size_t sj = static_cast<size_t>(j);
-      const double pC = use_pC ? pC_values[sj] : 0.0;
-      const double pG = use_pG ? pG_values[sj] : 0.0;
+      const double pC = use_pC ? pars_cols[pc_col][sj * n_acc] : 0.0;
+      const double pG = use_pG ? pars_cols[pg_col][sj * n_acc] : 0.0;
       // resp_code 0 is a missing response; every other code names a response.
       ll_unique[sj] = mix_contaminants_rt(ll_unique[sj], pC, pG, gk,
                                           shared.rt_unique[sj],
@@ -8050,22 +8038,8 @@ double c_log_likelihood_race(
   int n_unique_trials = n_trials / n_lR;
   // Use std::vector to avoid per-particle R-heap allocation overhead.
   std::vector<double> ll_unique(static_cast<size_t>(n_unique_trials), min_ll);
-  std::vector<double> pC_values;
-  std::vector<double> pG_values;
   // Raw pointer into pars matrix: col-major layout, element (row,col) = pars_cm_ptr[col*n_trials+row]
   const double* pars_cm_ptr = pars.begin();
-  if (use_pC) {
-    pC_values.assign(static_cast<size_t>(n_unique_trials), 0.0);
-    for (int j = 0; j < n_unique_trials; ++j) {
-      pC_values[static_cast<size_t>(j)] = pars_cm_ptr[static_cast<size_t>(pc_col) * n_trials + j * n_lR];
-    }
-  }
-  if (use_pG) {
-    pG_values.assign(static_cast<size_t>(n_unique_trials), 0.0);
-    for (int j = 0; j < n_unique_trials; ++j) {
-      pG_values[static_cast<size_t>(j)] = pars_cm_ptr[static_cast<size_t>(pg_col) * n_trials + j * n_lR];
-    }
-  }
 
   // Parameter matrix and validity vector checks
   if (pars.nrow() != n_trials) {
@@ -8081,20 +8055,26 @@ double c_log_likelihood_race(
   }
   const int n_par = pars.ncol();
   // Several branches below stage one accumulator row (or one pointer per
-  // accumulator) in fixed stack arrays of 64 entries; guard the sizes here so
+  // accumulator) in fixed stack arrays of 1024 entries; guard the sizes here so
   // a future wide model fails loudly instead of overflowing the stack.
-  if (n_par > 64 || n_lR > 64) {
-    Rcpp::stop("c_log_likelihood_race: at most 64 parameter columns and 64 accumulators are supported.");
+  if (n_par > 1024 || n_lR > 1024) {
+    Rcpp::stop("c_log_likelihood_race: at most 1024 parameter columns and 1024 accumulators are supported.");
+  }
+  if (n_par * n_lR > 32768) {
+    Rcpp::stop("c_log_likelihood_race: n_par * n_lR exceeds 32768, which would overflow the safe stack size.");
   }
   // Column-pointer view of the materialized pars matrix for the raw kernels
   // (this path keeps the matrix: the RACE NA-fill above writes into it).
-  const double* cols_view[64] = {nullptr};
+  const double* cols_view[1024] = {nullptr};
   for (int c = 0; c < n_par; ++c) {
     cols_view[c] = pars_cm_ptr + static_cast<size_t>(c) * n_trials;
   }
-  std::vector<double> pars_rowmajor_buffer(static_cast<size_t>(n_lR) * n_par);
-  std::vector<int> isok_int_buffer(static_cast<size_t>(n_lR), 0);
-  std::vector<double> logS_k_buffer(static_cast<size_t>(n_lR), R_NegInf);
+  double pars_rowmajor_buffer[32768];
+  int isok_int_buffer[1024] = {0};
+  double logS_k_buffer[1024];
+  for (int i = 0; i < n_lR; ++i) {
+    logS_k_buffer[i] = R_NegInf;
+  }
 
   // fill_trial_buffers: copies one trial's params into row-major scratch (for GSL/rowmajor helpers).
   // Uses raw column-major pointer to avoid Rcpp subscript overhead.
@@ -8330,7 +8310,7 @@ double c_log_likelihood_race(
         for (int acc = 0; acc < n_lR_j; ++acc) {
           if (!isok_int_buffer[static_cast<size_t>(acc)]) continue;
           par_rows[static_cast<size_t>(active_count++)] =
-            pars_rowmajor_buffer.data() + static_cast<size_t>(acc) * n_par;
+            pars_rowmajor_buffer + static_cast<size_t>(acc) * n_par;
         }
         if (active_count == 0) {
           global_log_surv_inf_by_trial[static_cast<size_t>(unique_trial_idx)] = R_NegInf;
@@ -8741,8 +8721,8 @@ double c_log_likelihood_race(
           }
           if (need_scalar) {
             fill_trial_buffers(start_row_idx, n_lR_j);
-            log_Z_this = get_trunc_normaliser_rowmajor_cpp(pars_rowmajor_buffer.data(),
-                                                           isok_int_buffer.data(),
+            log_Z_this = get_trunc_normaliser_rowmajor_cpp(pars_rowmajor_buffer,
+                                                           isok_int_buffer,
                                                            pdf1, cdf1,
                                                            LTj, UTj,
                                                            n_lR_j, n_par,
@@ -8855,8 +8835,8 @@ double c_log_likelihood_race(
       ensure_buffers();
       gsl_integration_workspace* w = ensure_gsl_workspace(workspace);
       return integrate_for_kth_winner_rowmajor_cpp(k_winner_1based,
-                                                   pars_rowmajor_buffer.data(),
-                                                   isok_int_buffer.data(),
+                                                   pars_rowmajor_buffer,
+                                                   isok_int_buffer,
                                                    low, upp, pdf1, cdf1,
                                                    n_lR_j, n_par, gsl_ctl,
                                                    model_context_for_funcs, w);
@@ -9050,8 +9030,8 @@ double c_log_likelihood_race(
     } else if (R_FINITE(rt_j) && rt_j > 0.0 && R_j_idx == NA_INTEGER) {
       ensure_buffers();
       current_ll_val = log_min_density_rowmajor(rt_j,
-                                                pars_rowmajor_buffer.data(),
-                                                isok_int_buffer.data(),
+                                                pars_rowmajor_buffer,
+                                                isok_int_buffer,
                                                 n_lR_j, n_par, pdf1, cdf1,
                                                 model_context_for_funcs,
                                                 logS_k_buffer);
@@ -9060,8 +9040,8 @@ double c_log_likelihood_race(
 apply_trial_trunc:
     if (current_ll_val > min_ll && has_trunc) {
       ensure_buffers();
-      log_Z_this = get_trunc_normaliser_rowmajor_cpp(pars_rowmajor_buffer.data(),
-                                                     isok_int_buffer.data(),
+      log_Z_this = get_trunc_normaliser_rowmajor_cpp(pars_rowmajor_buffer,
+                                                     isok_int_buffer,
                                                      pdf1, cdf1,
                                                      LTj, UTj, n_lR_j, n_par,
                                                      gsl_ctl,
@@ -9093,8 +9073,8 @@ apply_trial_trunc:
   // without the n_resp division, which mix_contaminants_rt() handles.
   auto apply_pC = [&](int j) {
     const double rt_j = rts_dadm[j * n_lR];
-    const double pC = use_pC ? pC_values[j] : 0.0;
-    const double pG = use_pG ? pG_values[j] : 0.0;
+    const double pC = use_pC ? pars_cm_ptr[static_cast<size_t>(pc_col) * n_trials + j * n_lR] : 0.0;
+    const double pG = use_pG ? pars_cm_ptr[static_cast<size_t>(pg_col) * n_trials + j * n_lR] : 0.0;
     ll_unique[j] = mix_contaminants_rt(ll_unique[j], pC, pG,
                                        guess, rt_j,
                                        R_idxs_dadm[j * n_lR] != NA_INTEGER);
