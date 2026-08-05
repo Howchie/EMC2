@@ -148,18 +148,20 @@ inline bool bawl_corr_add_boundary(double* values, uint8_t& n, double value) {
 
 inline BvnBoundaryGrid bawl_corr_make_boundary_grid(
     double mu1, double sd1, double mu2, double sd2, double rho,
-    const std::vector<double>& x_bounds,
-    const std::vector<double>& y_bounds) {
+    const double* x_bounds, int n_x_bounds,
+    const double* y_bounds, int n_y_bounds) {
   BvnBoundaryGrid g;
   g.mu1 = mu1; g.mu2 = mu2; g.sd1 = sd1; g.sd2 = sd2; g.rho = rho;
   g.status = BAwLCorrMomentStatus::ok;
-  for (double value : x_bounds) {
+  for (int i = 0; i < n_x_bounds; ++i) {
+    const double value = x_bounds[i];
     if (!bawl_corr_add_boundary(g.x, g.nx, value)) {
       g.status = BAwLCorrMomentStatus::invalid;
       return g;
     }
   }
-  for (double value : y_bounds) {
+  for (int i = 0; i < n_y_bounds; ++i) {
+    const double value = y_bounds[i];
     if (!bawl_corr_add_boundary(g.y, g.ny, value)) {
       g.status = BAwLCorrMomentStatus::invalid;
       return g;
@@ -296,8 +298,10 @@ inline BvnRectMoments bawl_corr_bvn_rect_moments(
     out.status = BAwLCorrMomentStatus::unstable;
     return out;
   }
+  const double x_bounds[2] = {lo1, hi1};
+  const double y_bounds[2] = {lo2, hi2};
   BvnBoundaryGrid grid = bawl_corr_make_boundary_grid(
-      mu1, sd1, mu2, sd2, rho, {lo1, hi1}, {lo2, hi2});
+      mu1, sd1, mu2, sd2, rho, x_bounds, 2, y_bounds, 2);
   return bawl_corr_rect_from_grid(grid, lo1, hi1, lo2, hi2);
 }
 
@@ -308,14 +312,26 @@ struct BAwLCorrRegion {
   double c1 = 0.0;
 };
 
+struct BAwLCorrRegionList {
+  std::array<BAwLCorrRegion, 2> value{};
+  uint8_t n = 0;
+
+  bool empty() const { return n == 0; }
+  void push_back(const BAwLCorrRegion& region) {
+    if (n < value.size()) value[static_cast<size_t>(n++)] = region;
+  }
+  const BAwLCorrRegion* begin() const { return value.data(); }
+  const BAwLCorrRegion* end() const { return value.data() + n; }
+};
+
 inline bool bawl_corr_domain_lower(bool positive, double& d) {
   d = positive ? 0.0 : R_NegInf;
   return true;
 }
 
-inline std::vector<BAwLCorrRegion> bawl_corr_survivor_regions(
+inline BAwLCorrRegionList bawl_corr_survivor_regions(
     const BAwLTimeGeometry& g, bool positive) {
-  std::vector<BAwLCorrRegion> out;
+  BAwLCorrRegionList out;
   double d = 0.0;
   bawl_corr_domain_lower(positive, d);
   if (g.status == BAwLTimeStatus::invalid) return out;
@@ -384,11 +400,12 @@ inline BAwLCorrPairResult bawl_corr_pair_survival_exact(
     out.status = BAwLCorrMomentStatus::zero_mass;
     return out;
   }
-  std::vector<double> x, y;
-  for (const auto& r : r1) { x.push_back(r.lo); x.push_back(r.hi); }
-  for (const auto& r : r2) { y.push_back(r.lo); y.push_back(r.hi); }
+  double x[4], y[4];
+  int nx = 0, ny = 0;
+  for (const auto& r : r1) { x[nx++] = r.lo; x[nx++] = r.hi; }
+  for (const auto& r : r2) { y[ny++] = r.lo; y[ny++] = r.hi; }
   BvnBoundaryGrid grid = bawl_corr_make_boundary_grid(
-      mu1, sd1, mu2, sd2, rho, x, y);
+      mu1, sd1, mu2, sd2, rho, x, nx, y, ny);
   if (grid.status == BAwLCorrMomentStatus::invalid) {
     out.status = grid.status; return out;
   }
@@ -515,11 +532,12 @@ inline BAwLCorrPairResult bawl_corr_pair_cause_exact(
   }
   const auto lr = bawl_corr_survivor_regions(gl, positive);
   if (lr.empty()) { out.status = BAwLCorrMomentStatus::zero_mass; return out; }
-  std::vector<double> x = {wr.lo, wr.hi};
-  std::vector<double> y;
-  for (const auto& r : lr) { y.push_back(r.lo); y.push_back(r.hi); }
+  const double x[2] = {wr.lo, wr.hi};
+  double y[4];
+  int ny = 0;
+  for (const auto& r : lr) { y[ny++] = r.lo; y[ny++] = r.hi; }
   BvnBoundaryGrid grid = bawl_corr_make_boundary_grid(
-      muw, sdw, mul, sdl, rho, x, y);
+      muw, sdw, mul, sdl, rho, x, 2, y, ny);
   if (grid.status == BAwLCorrMomentStatus::invalid) {
     out.status = grid.status; return out;
   }

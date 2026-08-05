@@ -9674,6 +9674,7 @@ static BAwLCorrExactTrialResult bawl_corr_exact_trial_loglik(
     const double z = log_diff_exp(a, b);
     return z;
   };
+  bool denominator_requires_numeric = false;
   auto stable_survival_difference = [&](double lo, double hi,
                                         BAwLCorrMomentStatus* st) {
     // The exact rectangle formula obtains a survivor by subtracting four BVN
@@ -9684,16 +9685,99 @@ static BAwLCorrExactTrialResult bawl_corr_exact_trial_loglik(
     //
     // The deterministic pair route integrates one marginal drift against the
     // conditional survivor of the other.  It is independent of the corner
-    // derivative algebra and is evaluated only for the data-window
-    // normaliser, which is cached by parameter cell below.  Event densities
-    // retain the closed-form route.  Because both quantities use the same
-    // positive-orthant normaliser, q cancels exactly in their log ratio.
-    const double a = (lo == 0.0)
-      ? 0.0 : component_survival_mode(lo, true, st);
-    if (hi == R_PosInf) return a;
-    const double b = component_survival_mode(hi, true, st);
-    if (a == R_NegInf) return R_NegInf;
-    return log_diff_exp(a, b);
+    // derivative algebra and serves as an independent check on the data-window
+    // normaliser, which is cached by parameter cell below.  An exact event is
+    // retained only with an exact denominator; selecting the numeric
+    // denominator makes the dispatcher retry the whole trial numerically.
+    // Both routes use the same positive-orthant normaliser, so q cancels
+    // exactly in their log ratio.
+    // The numeric integral is an independent check, but its marginal scan is
+    // deliberately finite.  When the surviving mass sits beyond that scan
+    // (high positive rho with very asymmetric drift means), it can
+    // underestimate Z by hundreds of log units even though the exact
+    // rectangle result is well resolved.  Conversely, the exact corner
+    // subtraction can under-resolve central rare-positive-orthant cases that
+    // the numeric route handles well.  Both known failures lose positive
+    // mass, so retain the larger valid estimate rather than unconditionally
+    // replacing the exact denominator with the numeric one.
+    auto difference_for_mode = [&](bool use_numeric,
+                                   BAwLCorrMomentStatus* mode_status) {
+      BAwLCorrMomentStatus combined = BAwLCorrMomentStatus::ok;
+      auto survivor = [&](double t) {
+        BAwLCorrMomentStatus local = BAwLCorrMomentStatus::ok;
+        const double value = bawl_corr_log_component_survival(
+            s, pair, j, t, cols, ctx, use_numeric, &local);
+        if (local == BAwLCorrMomentStatus::invalid) combined = local;
+        else if (local == BAwLCorrMomentStatus::unstable &&
+                 combined != BAwLCorrMomentStatus::invalid) combined = local;
+        else if (local == BAwLCorrMomentStatus::zero_mass &&
+                 combined == BAwLCorrMomentStatus::ok) combined = local;
+        return value;
+      };
+      const double a = (lo == 0.0) ? 0.0 : survivor(lo);
+      if (hi == R_PosInf) {
+        *mode_status = combined;
+        return a;
+      }
+      const double b = survivor(hi);
+      *mode_status = combined;
+      if (a == R_NegInf) return R_NegInf;
+      return log_diff_exp(a, b);
+    };
+
+    auto valid_difference = [](double log_z, BAwLCorrMomentStatus status) {
+      return R_FINITE(log_z) && status != BAwLCorrMomentStatus::unstable &&
+        status != BAwLCorrMomentStatus::invalid;
+    };
+    if (numeric) {
+      BAwLCorrMomentStatus numeric_status = BAwLCorrMomentStatus::ok;
+      const double numeric_log_z = difference_for_mode(true, &numeric_status);
+      const bool numeric_valid = valid_difference(numeric_log_z, numeric_status);
+      if (numeric_valid) {
+        *st = numeric_status;
+        absorb_status(*st);
+        return numeric_log_z;
+      }
+      *st = numeric_status == BAwLCorrMomentStatus::invalid
+        ? BAwLCorrMomentStatus::invalid : BAwLCorrMomentStatus::unstable;
+      absorb_status(*st);
+      return R_NegInf;
+    }
+
+    BAwLCorrMomentStatus exact_status = BAwLCorrMomentStatus::ok;
+    const double exact_log_z = difference_for_mode(false, &exact_status);
+    const bool exact_valid = valid_difference(exact_log_z, exact_status);
+    // Corner cancellation is an absolute-precision problem.  A resolved
+    // normaliser above 1e-8 is far from that regime and does not need the
+    // substantially more expensive 64-node independent cross-check.
+    constexpr double kLogZCrosscheckThreshold = -18.420680743952367; // log(1e-8)
+    if (exact_valid && exact_log_z > kLogZCrosscheckThreshold) {
+      *st = exact_status;
+      absorb_status(*st);
+      return exact_log_z;
+    }
+
+    BAwLCorrMomentStatus numeric_status = BAwLCorrMomentStatus::ok;
+    const double numeric_log_z = difference_for_mode(true, &numeric_status);
+    const bool numeric_valid = valid_difference(numeric_log_z, numeric_status);
+    if (exact_valid || numeric_valid) {
+      constexpr double kLogZAgreementTol = 1e-8;
+      const bool take_exact = exact_valid &&
+        (!numeric_valid || numeric_log_z <= exact_log_z + kLogZAgreementTol);
+      *st = take_exact ? exact_status : numeric_status;
+      absorb_status(*st);
+      // Do not combine an exact event density with a numeric denominator.
+      // Ask the existing outer dispatcher to repeat the whole trial on the
+      // numeric-pair route, where an unrepresentable event is conservatively
+      // floored instead of becoming an artificial finite likelihood spike.
+      denominator_requires_numeric = !take_exact;
+      return take_exact ? exact_log_z : numeric_log_z;
+    }
+    *st = (exact_status == BAwLCorrMomentStatus::invalid ||
+           numeric_status == BAwLCorrMomentStatus::invalid)
+      ? BAwLCorrMomentStatus::invalid : BAwLCorrMomentStatus::unstable;
+    absorb_status(*st);
+    return R_NegInf;
   };
 
   double log_value = R_NegInf;
@@ -9754,6 +9838,10 @@ static BAwLCorrExactTrialResult bawl_corr_exact_trial_loglik(
           !R_FINITE(log_z)) {
         out.status = zst == BAwLCorrMomentStatus::ok
           ? BAwLCorrMomentStatus::unstable : zst;
+        return out;
+      }
+      if (denominator_requires_numeric) {
+        out.status = BAwLCorrMomentStatus::unstable;
         return out;
       }
       if (z_cacheable && s.z_cache.size() < 64) {
@@ -10135,6 +10223,55 @@ double c_log_likelihood_bawl_correlated(
     }
   }
 
+  // The truncation/positivity denominator is independent of the observed RT
+  // and response.  Compression therefore leaves many unique trials with the
+  // same denominator cell (the mapped parameter rows, active-racer layout,
+  // and LT/UT window are identical).  Pick one representative per exact cell
+  // and evaluate the GH denominator only for those representatives.  The
+  // comparison is deliberately on mapped natural-scale values: it is safe for
+  // arbitrary user design functions and also catches equal cells produced by
+  // different design-matrix rows.
+  std::vector<int> den_representative(static_cast<size_t>(n_unique), -1);
+  std::vector<unsigned char> den_eval_mask(static_cast<size_t>(n_unique), 0);
+  auto same_denominator_cell = [&](int a, int b) {
+    const int sa = a * n_lR;
+    const int sb = b * n_lR;
+    if (LT[sa] != LT[sb] || UT[sa] != UT[sb]) return false;
+    const int na = has_RACE_col ? RACE[sa] : n_lR;
+    const int nb = has_RACE_col ? RACE[sb] : n_lR;
+    if (na != nb) return false;
+    for (int k = 0; k < na; ++k) {
+      const int ra = sa + k;
+      const int rb = sb + k;
+      if (has_RACE_col && RACE_mask[ra] != RACE_mask[rb]) return false;
+      if (isok[ra] != isok[rb] ||
+          effective_rho[static_cast<size_t>(ra)] !=
+            effective_rho[static_cast<size_t>(rb)]) return false;
+      for (int c = 0; c < n_par; ++c) {
+        if (cshared.cols[static_cast<size_t>(c)][ra] !=
+            cshared.cols[static_cast<size_t>(c)][rb]) return false;
+      }
+    }
+    return true;
+  };
+  int n_den_cells = 0;
+  for (int j = 0; j < n_unique; ++j) {
+    if (!den_by_quadrature[static_cast<size_t>(j)]) continue;
+    int representative = j;
+    for (int r = 0; r < j; ++r) {
+      if (!den_eval_mask[static_cast<size_t>(r)]) continue;
+      if (same_denominator_cell(j, r)) {
+        representative = r;
+        break;
+      }
+    }
+    den_representative[static_cast<size_t>(j)] = representative;
+    if (representative == j) {
+      den_eval_mask[static_cast<size_t>(j)] = 1;
+      ++n_den_cells;
+    }
+  }
+
   // Positivity reweighting is evaluated on the node-shifted Gaussian means
   // and residual SDs.  RACE-inactive rows do not participate in the product,
   // and zero-loading rows are cancelled: their constant q appears in both
@@ -10385,7 +10522,8 @@ double c_log_likelihood_bawl_correlated(
           // reserved for the positivity denominator, so adding lp here
           // would double-count every loaded loser.
           s + fast_log1m_pc[static_cast<size_t>(j)];
-      if (joint_posdrift) node_den[static_cast<size_t>(j)] = lp;
+      if (joint_posdrift && den_eval_mask[static_cast<size_t>(j)])
+        node_den[static_cast<size_t>(j)] = lp;
     }
   };
 
@@ -10403,7 +10541,10 @@ double c_log_likelihood_bawl_correlated(
     Rcpp::LogicalVector isok_q = Rcpp::clone(isok);
 
     for (int r = 0; r < n_trials; ++r) {
-      if (exact_done[static_cast<size_t>(r / n_lR)]) isok_q[r] = false;
+      const int j = r / n_lR;
+      if (exact_done[static_cast<size_t>(j)] ||
+          (!need_num && need_den && !den_eval_mask[static_cast<size_t>(j)]))
+        isok_q[r] = false;
     }
 
     // Conditional factor model preserving each marginal sv:
@@ -10483,7 +10624,8 @@ double c_log_likelihood_bawl_correlated(
         const int start = j * n_lR;
         const double lt = LT[start];
         const double ut = UT[start];
-        if (!has_trunc_trial[static_cast<size_t>(j)]) continue;
+        if (!has_trunc_trial[static_cast<size_t>(j)] ||
+            !den_eval_mask[static_cast<size_t>(j)]) continue;
         trunc_mask[static_cast<size_t>(j)] = 1;
         if (!have_trunc) {
           uniform_lt = lt;
@@ -10625,7 +10767,8 @@ double c_log_likelihood_bawl_correlated(
       // truncated trial the block above supplied log_z; do not add a second
       // unit-mass term for it.
       for (int j = 0; j < n_unique; ++j) {
-        if (has_trunc_trial[static_cast<size_t>(j)]) continue;
+        if (has_trunc_trial[static_cast<size_t>(j)] ||
+            !den_eval_mask[static_cast<size_t>(j)]) continue;
         node_den[static_cast<size_t>(j)] = log_pos[static_cast<size_t>(j)];
       }
     }
@@ -10678,7 +10821,7 @@ double c_log_likelihood_bawl_correlated(
   const double sqrt2 = std::sqrt(2.0);
   bool any_quad_den = false;
   for (int j = 0; j < n_unique; ++j) {
-    if (den_by_quadrature[static_cast<size_t>(j)]) { any_quad_den = true; break; }
+    if (den_eval_mask[static_cast<size_t>(j)]) { any_quad_den = true; break; }
   }
 
   if (count_routes) {
@@ -10874,7 +11017,7 @@ double c_log_likelihood_bawl_correlated(
     if (count_routes) {
       long long n_quad_den = 0;
       for (int j = 0; j < n_unique; ++j)
-        if (den_by_quadrature[static_cast<size_t>(j)]) ++n_quad_den;
+        if (den_eval_mask[static_cast<size_t>(j)]) ++n_quad_den;
       route_counters.den_quadrature_node_evaluations +=
         static_cast<long long>(n_den) * n_quad_den;
     }
@@ -10889,10 +11032,19 @@ double c_log_likelihood_bawl_correlated(
       }
       eval_selected(z_by_trial.data(), false, true, node_num, node_den);
       for (int j = 0; j < n_unique; ++j) {
-        if (!den_by_quadrature[static_cast<size_t>(j)]) continue;
+        if (!den_eval_mask[static_cast<size_t>(j)]) continue;
         log_den[static_cast<size_t>(j)] = log_sum_exp(
             log_den[static_cast<size_t>(j)],
             lw_by_trial[static_cast<size_t>(j)] + node_den[static_cast<size_t>(j)]);
+      }
+    }
+    if (n_den_cells < n_unique) {
+      for (int j = 0; j < n_unique; ++j) {
+        const int representative = den_representative[static_cast<size_t>(j)];
+        if (representative >= 0 && representative != j) {
+          log_den[static_cast<size_t>(j)] =
+            log_den[static_cast<size_t>(representative)];
+        }
       }
     }
   }

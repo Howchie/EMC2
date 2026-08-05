@@ -27,6 +27,18 @@ test_that("subject cost proxies the rows the likelihood loops over", {
   expect_equal(EMC2:::.emc_subject_cost(dj), 10)
 })
 
+test_that("worker model closures retain only the realised specification", {
+  payload <- raw(1024^2)
+  model <- local({
+    unused <- payload
+    spec <- list(c_name = "demo", p_types = c(a = 1))
+    function() spec
+  })
+  slim <- EMC2:::.emc_wpool_slim_model(model)
+  expect_identical(slim(), model())
+  expect_lt(length(serialize(slim, NULL)), length(serialize(model, NULL)) / 10)
+})
+
 test_that("each subject gets an independent stream and the master moves past them", {
   RNGkind("L'Ecuyer-CMRG"); set.seed(3)
   st <- EMC2:::.emc_subject_streams(4)
@@ -65,6 +77,29 @@ test_that("workers survive a block, compute, and shut down", {
   EMC2:::.emc_wpool_stop(pool)
   expect_false(dir.exists(pool$dir))
   on.exit(NULL)
+})
+
+test_that("spawned workers descend from a history-free template", {
+  skip_on_os("windows")
+  skip_if(!nzchar(Sys.which("mkfifo")))
+  skip_if(!file.exists("/proc/self/stat"), "process ancestry needs procfs")
+  pool <- EMC2:::.emc_wpool_start(2, list(tag = "ctx"))
+  skip_if(is.null(pool), "could not start a pool here")
+  on.exit(EMC2:::.emc_wpool_stop(pool), add = TRUE)
+  skip_if(!identical(pool$backend, "spawn"),
+          "installed clean-process backend is not active")
+
+  parent_pid <- function(pid) {
+    stat <- readLines(sprintf("/proc/%d/stat", pid), n = 1L)
+    # The executable name is parenthesised and may contain spaces; fields after
+    # the final ')' begin with state and parent PID.
+    tail <- sub("^.*\\) ", "", stat)
+    as.integer(strsplit(tail, " ", fixed = TRUE)[[1L]][2L])
+  }
+  worker_pids <- vapply(pool$jobs, function(x) x$pid, integer(1))
+  expect_true(all(vapply(worker_pids, parent_pid, integer(1)) ==
+                    pool$template$job$pid))
+  expect_false(any(vapply(worker_pids, parent_pid, integer(1)) == Sys.getpid()))
 })
 
 test_that("a pooled fit runs, and repeats itself exactly", {
@@ -151,7 +186,7 @@ test_that("a pool marked dead still returns every subject's result", {
   # alive = FALSE means nothing is sent; the master must compute the lot itself
   # so that a broken pool costs speed and not an iteration.
   calls <- new.env(parent = emptyenv()); calls$n <- 0L
-  fake <- function(msg, ctx) {
+  fake <- function(msg, ctx, shared = NULL) {
     calls$n <- calls$n + 1L
     list(props = matrix(msg$subs, ctx$n_pars + 1L, length(msg$subs)),
          pm = as.list(msg$subs), seeds = as.list(msg$subs),
@@ -255,9 +290,27 @@ test_that("recycling fires on its period and leaves everything else alone", {
   expect_identical(EMC2:::.emc_wpool_recycle(live, 11L, NA_integer_, ctx), live)
   expect_identical(EMC2:::.emc_wpool_recycle(list(n = 1L, alive = TRUE), 11L, 10L, ctx),
                    list(n = 1L, alive = TRUE))
-  # A pool that has already fallen back must not be resurrected mid-block.
+  # A pool that has already fallen back *is* rebuilt at a recycle point: it is
+  # safe for the same reason growing is (every subject owns its stream), and
+  # leaving it dead costs the rest of the block its parallelism.
   dead <- list(n = 4L, alive = FALSE)
-  expect_identical(EMC2:::.emc_wpool_recycle(dead, 11L, 10L, ctx), dead)
+  revived <- testthat::with_mocked_bindings(
+    EMC2:::.emc_wpool_recycle(dead, 11L, 10L, ctx),
+    .emc_wpool_stop = function(pool) invisible(NULL),
+    .emc_wpool_start = function(n, ctx) list(n = n, alive = TRUE),
+    .package = "EMC2")
+  expect_true(revived$alive)
+  expect_equal(revived$n, 4L)
+
+  # But a rebuild that cannot fork backs off rather than retrying every period.
+  still_dead <- testthat::with_mocked_bindings(
+    EMC2:::.emc_wpool_recycle(dead, 11L, 10L, ctx),
+    .emc_wpool_stop = function(pool) invisible(NULL),
+    .emc_wpool_start = function(n, ctx) NULL,
+    .package = "EMC2")
+  expect_false(still_dead$alive)
+  expect_gt(still_dead$rebuild_skip, 0L)
+
   expect_null(EMC2:::.emc_wpool_recycle(NULL, 11L, 10L, ctx))
 })
 
@@ -295,11 +348,27 @@ test_that("real workers survive being recycled and still compute", {
   skip_if(is.null(pool), "could not fork a pool here")
   on.exit(EMC2:::.emc_wpool_stop(pool), add = TRUE)
   old_dir <- pool$dir
+  old_backend <- pool$backend
+  old_pids <- vapply(pool$jobs, function(x) x$pid, integer(1))
+  old_template_pid <- if (identical(old_backend, "spawn")) {
+    pool$template$job$pid
+  } else {
+    NA_integer_
+  }
 
   pool <- EMC2:::.emc_wpool_recycle(pool, 11L, 10L, list(tag = "ctx"))
   expect_true(isTRUE(pool$alive))
   expect_equal(pool$n, 2)
-  expect_false(dir.exists(old_dir))     # the old pool's fifos are cleaned up
+  if (identical(old_backend, "spawn")) {
+    # Clean workers are replaced by the same pristine template: context is not
+    # reloaded, and chain history is still absent from their ancestry.
+    expect_identical(pool$dir, old_dir)
+    expect_equal(pool$template$job$pid, old_template_pid)
+    expect_false(any(vapply(pool$jobs, function(x) x$pid, integer(1)) %in%
+                     old_pids))
+  } else {
+    expect_false(dir.exists(old_dir))
+  }
   expect_true(dir.exists(pool$dir))
 
   for (w in 1:2) { serialize(list(subs = w), pool$wcs[[w]]); flush(pool$wcs[[w]]) }
@@ -324,4 +393,118 @@ test_that("growing the pool keeps the workers that were already running", {
   for (w in 1:4) { serialize(list(subs = w), pool$wcs[[w]]); flush(pool$wcs[[w]]) }
   got <- lapply(1:4, function(w) unserialize(pool$rcs[[w]]))
   expect_true(all(vapply(got, function(g) !is.null(g$failed), logical(1))))
+})
+
+# --- fork failures degrade instead of killing the chain ---------------------
+
+test_that("a fork failure during spawn returns NULL rather than erroring", {
+  skip_on_os("windows")
+  old <- options(emc2.worker_backend = "fork")
+  on.exit(options(old), add = TRUE)
+  # fork() fails with EAGAIN at the process limit; every other failure in
+  # chain_pool.R returns NULL so the caller can fall back, and this must too.
+  expect_silent(
+    res <- testthat::with_mocked_bindings(
+      EMC2:::.emc_wpool_start(3L, list(n_pars = 2)),
+      mcparallel = function(...) stop("unable to fork, possible reason: ",
+                                      "Resource temporarily unavailable"),
+      .package = "parallel"
+    )
+  )
+  expect_null(res)
+})
+
+test_that("a fork failure while recycling hands back a dead pool, not an error", {
+  skip_on_os("windows")
+  old <- options(emc2.worker_backend = "fork")
+  on.exit(options(old), add = TRUE)
+  ctx <- list(n_pars = 2)
+  pool <- EMC2:::.emc_wpool_start(2L, ctx)
+  skip_if(is.null(pool), "no pool available here")
+  # Recycle stops the old workers before forking new ones, so an error escaping
+  # here would lose the block's work with nothing left to run on.
+  fresh <- testthat::with_mocked_bindings(
+    EMC2:::.emc_wpool_recycle(pool, 11L, 10L, ctx),
+    mcparallel = function(...) stop("unable to fork"),
+    .package = "parallel"
+  )
+  expect_false(fresh$alive)
+  expect_equal(fresh$n, 2L)
+})
+
+test_that("a failed grow backs off instead of retrying every iteration", {
+  skip_on_os("windows")
+  pool <- list(n = 2L, dir = tempfile(), jobs = list(), wcs = list(),
+               rcs = list(), alive = TRUE)
+  dir.create(pool$dir)
+  on.exit(unlink(pool$dir, recursive = TRUE), add = TRUE)
+  calls <- 0L
+  grow <- function(p) testthat::with_mocked_bindings(
+    EMC2:::.emc_wpool_grow(p, 4L, list(n_pars = 2)),
+    mcparallel = function(...) { calls <<- calls + 1L; stop("unable to fork") },
+    .package = "parallel"
+  )
+  p <- grow(pool)
+  expect_equal(p$n, 2L)          # unchanged, and no error
+  expect_equal(calls, 1L)
+  expect_gt(p$grow_skip, 0L)
+  # The next attempts are skipped outright rather than re-forking.
+  before <- calls
+  p <- grow(p); p <- grow(p)
+  expect_equal(calls, before)
+})
+
+test_that("a dead pool is rebuilt at a recycle point when forking works again", {
+  skip_on_os("windows")
+  ctx <- list(n_pars = 2)
+  dead <- list(n = 2L, dir = NULL, jobs = list(), wcs = list(), rcs = list(),
+               alive = FALSE)
+  fresh <- EMC2:::.emc_wpool_recycle(dead, 11L, 10L, ctx)
+  skip_if(is.null(fresh$wcs) || !length(fresh$wcs), "no pool available here")
+  on.exit(EMC2:::.emc_wpool_stop(fresh), add = TRUE)
+  # Previously `alive = FALSE` was terminal: the rest of the block ran serially
+  # in the master even though the machine could fork perfectly well.
+  expect_true(fresh$alive)
+  expect_equal(fresh$n, 2L)
+})
+
+# --- shared group draw is serialised once for all workers -------------------
+
+test_that("the group draw travels as one shared blob and decodes identically", {
+  pars <- list(tmu = c(1.5, -2.5), tvar = diag(2))
+  gchol <- list(chol = chol(diag(2)), logdet = 0)
+  shared <- list(pars = pars, group_chol = gchol)
+  raw <- serialize(shared, NULL)
+  expect_identical(unserialize(raw), shared)
+  # The per-worker message carries the bytes, not another copy of the object,
+  # so the shared part is walked once however many workers there are.
+  msg <- list(subs = 1:2, shared = raw, pm = list(NULL, NULL),
+              prev_ll = c(0, 0), seeds = list(NULL, NULL))
+  expect_type(msg$shared, "raw")
+  expect_identical(unserialize(msg$shared)$pars$tmu, pars$tmu)
+})
+
+test_that("compute() accepts a pre-decoded shared part and an encoded one", {
+  # The master's fallback path already holds the decoded object; the workers
+  # only ever have the bytes.  Both must reach the same arguments.
+  seen <- new.env(parent = emptyenv())
+  ctx <- list(n_pars = 1L, data = list(a = 1), model = NULL, stage = "sample",
+              type = "standard", tune = list(), marginalise = NULL,
+              r_cores = 1L, chol_caches = list(a = NULL))
+  shared <- list(pars = list(tmu = 7), group_chol = list(x = 1))
+  msg <- list(subs = "a", shared = serialize(shared, NULL), pm = list(NULL),
+              prev_ll = 0, seeds = list(get(".Random.seed", envir = globalenv())))
+  fake <- function(s, data, pm_settings, ..., parameters, group_chol) {
+    seen$parameters <- parameters; seen$group_chol <- group_chol
+    list(proposal = 0, ll = 0, pm_settings = NULL)
+  }
+  for (sh in list(NULL, shared)) {
+    seen$parameters <- NULL; seen$group_chol <- NULL
+    testthat::with_mocked_bindings(
+      EMC2:::.emc_wpool_compute(msg, ctx, shared = sh),
+      safe_new_particle = fake, .package = "EMC2"
+    )
+    expect_equal(seen$parameters$tmu, 7)
+    expect_equal(seen$group_chol$x, 1)
+  }
 })

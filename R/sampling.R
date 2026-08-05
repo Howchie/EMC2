@@ -279,8 +279,16 @@ pmwgs <- function(dadm, type, pars = NULL, prior = NULL,
   # within this chain's allocation; otherwise n_cores subjects each spawning
   # r_cores children silently multiplies the outer chain budget.
   likelihood <- min(r_cores, total_cores)
-  subject <- min(n_subjects, n_cores, total_cores %/% likelihood)
-  list(subject = max(1L, subject), likelihood = likelihood)
+  subject <- max(1L, min(n_subjects, n_cores, total_cores %/% likelihood))
+  # That division truncates, and the remainder was simply going unused: at
+  # n_cores = 8, r_cores = 3 it gave 2 subject workers x 3 = 6 of 8 cores.
+  # `r_cores` is documented as a *lower* bound on the inner width, so the inner
+  # fan-out is what may absorb the remainder -- 2 x 4 = 8 here.  Only when the
+  # caller actually asked for inner parallelism: at the r_cores = 1 default,
+  # widening would fork likelihood workers where the caller asked for none, and
+  # for a cheap likelihood that fork costs more than it returns.
+  if (r_cores > 1L) likelihood <- max(likelihood, total_cores %/% subject)
+  list(subject = subject, likelihood = likelihood)
 }
 
 init <- function(pmwgs, start_mu = NULL, start_var = NULL,
@@ -505,23 +513,23 @@ run_stage <- function(pmwgs,
     build_subject_chol_cache(chains_var[[s]], eff_var[[s]], idx_list_blk)
   })
 
-  # Persistent workers, forked once for the whole block instead of once per
-  # iteration.  Everything above this point is block-constant, so the workers
-  # inherit it through the fork; see R/chain_pool.R.
+  # Persistent workers, started once for the whole block instead of forked once
+  # per iteration.  A clean template loads only this block-constant context and
+  # forks the workers without the chain's sample history; see R/chain_pool.R.
   pool_budget <- .particle_core_budget(pmwgs$n_subjects, n_cores = n_cores,
                                        r_cores = r_cores,
                                        total_cores = n_cores)
   wpool_ctx <- list(
-    data = data, model = pmwgs$model, stage = stage, type = pmwgs$type,
+    data = data, model = .emc_wpool_slim_model(pmwgs$model),
+    stage = stage, type = pmwgs$type,
     tune = tune, marginalise = pmwgs$marginalise,
     r_cores = pool_budget$likelihood, n_pars = pmwgs$n_pars,
     eff_mu = eff_mu, eff_var = eff_var, chains_mu = chains_mu,
     chains_var = chains_var, chol_caches = chol_caches
   )
-  # Never fork more workers than there are subjects to give them: `mclapply`
+  # Never start more workers than there are subjects to give them: `mclapply`
   # caps itself at `length(X)`, and without the same cap a wide core budget on
-  # a small study pays a full fork of the chain's heap for workers that would
-  # be handed nothing.
+  # a small study pays for workers that would be handed nothing.
   n_workers <- min(pool_budget$subject, pmwgs$n_subjects)
   # NULL where a pool cannot work: Windows, no mkfifo, or a single worker.
   wpool <- .emc_wpool_start(n_workers, wpool_ctx)
@@ -542,17 +550,18 @@ run_stage <- function(pmwgs,
     wpool_part <- .emc_lpt_partition(wpool_cost, wpool$n)
   }
 
-  # Fork the persistent workers before extending the sample arrays.  Workers
-  # never read historical samples: keeping the old, smaller arrays in their
-  # copy-on-write view avoids giving every worker an immediate private copy of
-  # the newly allocated block.
+  # Extend only after startup.  This ordering still helps the fork fallback;
+  # clean-process workers are isolated from both the old and extended arrays.
   start_iter <- pmwgs$samples$idx
   pmwgs <- extend_sampler(pmwgs, iter, stage)
   if(any(nuisance)) pmwgs$sampler_nuis$samples$idx <- pmwgs$samples$idx
 
   # How often to re-fork the workers.  See .emc_wpool_recycle().
-  recycle_every <- as.integer(getOption("emc2.worker_recycle", 10L))
-  if (length(recycle_every) != 1L || is.na(recycle_every)) recycle_every <- 10L
+  recycle_default <- 10L
+  recycle_every <- as.integer(getOption("emc2.worker_recycle", recycle_default))
+  if (length(recycle_every) != 1L || is.na(recycle_every)) {
+    recycle_every <- recycle_default
+  }
 
   # Main iteration loop
   for (i in 1:iter) {
@@ -606,9 +615,10 @@ run_stage <- function(pmwgs,
     )
     group_chol_it <- build_group_chol_cache(group_var_it, idx_list_blk)
     if (!is.null(wpool)) {
-      # Re-fork periodically so the workers cannot drift far from the chain's
-      # pages.  Same reasoning as growing: the streams live in the master, so
-      # replacing the workers cannot move a draw.
+      # Re-fork periodically so workers cannot drift far from their initially
+      # shared pages.  On the clean backend they return to the template's small
+      # context, never the chain history.  Streams live in the master, so
+      # replacing workers cannot move a draw.
       wpool <- .emc_wpool_recycle(wpool, i, recycle_every, wpool_ctx)
       # Siblings that have finished their block free up cores; unlike the
       # mcmapply path, taking them here cannot perturb the draws.
@@ -620,9 +630,12 @@ run_stage <- function(pmwgs,
         pmwgs$n_subjects,
         max(1L, chain_cores %/% max(1L, pool_budget$likelihood))
       )
-      grown <- .emc_wpool_grow(wpool, target_workers, wpool_ctx)
-      if (grown$n != wpool$n) {
-        wpool <- grown
+      # Always take the returned pool back, not only when it grew: a grow that
+      # failed records its backoff state there, and dropping it would retry the
+      # failure on every remaining iteration.
+      n_before <- wpool$n
+      wpool <- .emc_wpool_grow(wpool, target_workers, wpool_ctx)
+      if (wpool$n != n_before) {
         wpool_part <- .emc_lpt_partition(wpool_cost, wpool$n)
       }
       it <- .emc_wpool_iter(wpool, wpool_ctx, wpool_part, pars_comb,

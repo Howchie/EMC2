@@ -18,20 +18,21 @@
 # staying flat.  They are a per-iteration cost, so unlike inter-chain straggle
 # they cannot be recovered by handing cores around at block boundaries.
 #
-# Here the workers are forked once per block and kept alive across the whole
-# block, so the fork is paid once instead of `iter` times, and the subject
-# partition is rebalanced every iteration from measured times.  On a real
-# 112-subject, 17-parameter RDMSWTN fit (3 chains x 8 cores, 40-iteration
+# Here the workers are started once per block and kept alive across the whole
+# block, so process startup is paid once instead of `iter` times, and the
+# subject partition is rebalanced every iteration from measured times.  On a
+# real 112-subject, 17-parameter RDMSWTN fit (3 chains x 8 cores, 40-iteration
 # blocks) this takes a block from 37.3 s to 32.4 s.
 #
 # Transport.  A socket cluster is the obvious way to keep workers alive and it
 # does not work: `makeForkCluster` costs 44 ms per dispatch round on the same
 # probe -- worse than the fork it was meant to replace, because R's socket
 # connections stall on delayed ACK.  Named pipes cost 1.0 ms for the same
-# round, and forked workers inherit the block-constant state (the per-subject
-# data, the design, the Cholesky caches) rather than receiving a copy of it,
-# so the only thing crossing the pipe each iteration is the group-level draw
-# and the per-subject bookkeeping -- about 5 kB on a small model.  That grows
+# round.  One clean R template reads the block-constant state (the per-subject
+# data, the design, the Cholesky caches) once at startup and forks the workers
+# from that history-free heap.  The only thing crossing the pipe each iteration
+# is the group-level draw and per-subject bookkeeping -- about 5 kB on a small
+# model.  That grows
 # with the square of the parameter count, though, since the group covariance
 # travels with it: ~35 kB at 24 parameters, ~90 kB at 42.  See
 # `.emc_wpool_spawn()` for why the writer has to block rather than fail once
@@ -55,6 +56,14 @@
 # `mcmapply` fallback below does not have that property -- it derives its
 # children's streams from `mc.cores` -- so a pooled fit is reproducible in a
 # way that one is not.
+#
+# The clean template is important.  A worker forked from the chain inherits the
+# chain's complete sample history.  R's GC subsequently writes to object
+# headers throughout that inherited heap, turning shared pages into a private
+# copy in every worker.  The template has never held those samples, so history
+# cannot enter any worker's address space; its workers still share the large
+# immutable context initially.  The old chain-fork backend remains as a
+# fallback for source-loaded packages and custom external pointers.
 #
 # The pool is the normal path.  `.emc_wpool_start()` returns NULL where it
 # cannot work (Windows, no mkfifo, a single worker), and `run_stage()` then
@@ -82,6 +91,109 @@
   invisible(NULL)
 }
 
+# A clean Rscript worker can load only an installed namespace.  `pkgload`
+# namespaces point at the source tree and have no Meta/package.rds; keep the
+# fork backend for that development case.  It is also the escape hatch for a
+# custom trend kernel: an external pointer cannot survive serialisation into a
+# fresh process, whereas it remains valid across fork().
+.emc_wpool_backend <- function(ctx) {
+  requested <- match.arg(getOption("emc2.worker_backend", "spawn"),
+                         c("spawn", "fork"))
+  if (requested == "fork") return("fork")
+  ns_path <- tryCatch(getNamespaceInfo(asNamespace("EMC2"), "path"),
+                      error = function(e) "")
+  installed <- nzchar(ns_path) &&
+    file.exists(file.path(ns_path, "Meta", "package.rds"))
+  rscript <- file.path(R.home("bin"), "Rscript")
+  if (!installed || !file.exists(rscript) || .emc_wpool_has_custom_ptr(ctx)) {
+    return("fork")
+  }
+  "spawn"
+}
+
+.emc_wpool_has_custom_ptr <- function(ctx) {
+  has_ptr <- function(x) {
+    if (typeof(x) == "externalptr") return(TRUE)
+    values <- if (is.list(x) || is.pairlist(x)) as.list(x) else list()
+    attrs <- attributes(x)
+    any(vapply(c(values, if (is.null(attrs)) list() else attrs), has_ptr,
+               logical(1)))
+  }
+  model <- ctx$model
+  spec <- if (is.function(model)) {
+    tryCatch(model(), error = function(e) NULL)
+  } else if (is.list(model) && length(model) &&
+             all(vapply(model, is.function, logical(1)))) {
+    lapply(model, function(x) tryCatch(x(), error = function(e) NULL))
+  } else {
+    model
+  }
+  has_ptr(spec)
+}
+
+# Design constructors return a tiny function whose enclosing frame can retain
+# data and intermediate objects that the likelihood never uses.  That frame is
+# harmless under fork but needlessly inflates the clean template's context
+# file (15.8 MB for Annika).  Reclose each model around only its realised model
+# specification.  The likelihood-facing contract remains the same: call the
+# function and receive the model list.
+.emc_wpool_slim_model <- function(model) {
+  if (is.function(model)) {
+    spec <- model()
+    out <- function() NULL
+    body(out) <- quote(spec)
+    environment(out) <- list2env(list(spec = spec), parent = emptyenv())
+    return(out)
+  }
+  if (is.list(model)) {
+    out <- lapply(model, .emc_wpool_slim_model)
+    attributes(out) <- attributes(model)
+    return(out)
+  }
+  model
+}
+
+.emc_wpool_pid_alive <- function(pid) {
+  length(pid) == 1L && !is.na(pid) &&
+    isTRUE(tryCatch(tools::pskill(pid, 0L), error = function(e) FALSE))
+}
+
+.emc_wpool_job_pid <- function(job) {
+  if (!is.null(job$pid) && !is.na(job$pid)) return(as.integer(job$pid))
+  if (!is.null(job$pidfile) && file.exists(job$pidfile)) {
+    pid <- suppressWarnings(as.integer(tryCatch(readLines(job$pidfile, n = 1L),
+                                                error = function(e) NA_character_)))
+    if (length(pid) == 1L && !is.na(pid)) return(pid)
+  }
+  NA_integer_
+}
+
+.emc_wpool_terminate_jobs <- function(jobs, wait = TRUE, terminate = TRUE) {
+  if (!length(jobs)) return(invisible(NULL))
+  external <- vapply(jobs, function(x) isTRUE(x$external), logical(1))
+  forked <- jobs[!external]
+  spawned <- jobs[external]
+  if (length(forked)) {
+    if (terminate) {
+      for (job in forked) try(tools::pskill(job$pid), silent = TRUE)
+    }
+    try(parallel::mccollect(forked, wait = wait), silent = TRUE)
+  }
+  if (length(spawned)) {
+    pids <- vapply(spawned, .emc_wpool_job_pid, integer(1))
+    if (wait) {
+      deadline <- Sys.time() + 2
+      while (any(vapply(pids, .emc_wpool_pid_alive, logical(1))) &&
+             Sys.time() < deadline) Sys.sleep(0.005)
+    }
+    live <- pids[vapply(pids, .emc_wpool_pid_alive, logical(1))]
+    if (terminate || wait) {
+      for (pid in live) try(tools::pskill(pid), silent = TRUE)
+    }
+  }
+  invisible(NULL)
+}
+
 # --- pool lifecycle ---------------------------------------------------------
 
 # Fork one batch of workers on `idx` and connect to them.  Shared by the
@@ -98,7 +210,7 @@
 # for the worker to drain rather than failing.  The protocol reads every reply
 # before the next send, so no worker is ever mid-compute when the master
 # writes and a blocking write cannot deadlock.
-.emc_wpool_spawn <- function(dir, idx, ctx) {
+.emc_wpool_spawn <- function(dir, idx, ctx, backend = "fork", template = NULL) {
   req <- file.path(dir, sprintf("req%d", idx))
   ans <- file.path(dir, sprintf("ans%d", idx))
   made <- tryCatch(
@@ -116,20 +228,48 @@
     if (!success) {
       for (cn in c(wcs, rcs)) if (!is.null(cn)) try(close(cn), silent = TRUE)
       live <- jobs[!vapply(jobs, is.null, logical(1))]
-      for (job in live) try(tools::pskill(job$pid), silent = TRUE)
-      try(parallel::mccollect(live, wait = TRUE), silent = TRUE)
+      .emc_wpool_terminate_jobs(live, wait = TRUE)
       # Leave no half-built FIFO behind, or a later grow onto the same indices
       # would fail on mkfifo and the pool could never take those cores.
       unlink(c(req, ans))
     }
   }, add = TRUE)
 
-  for (w in seq_len(n)) {
-    jobs[[w]] <- local({
-      i <- w
-      parallel::mcparallel(.emc_wpool_serve(req[i], ans[i], ctx), detached = FALSE)
-    })
-  }
+  # fork()/process creation fails with EAGAIN once the process limit is reached,
+  # and this design
+  # makes that reachable: donation lets one chain claim the whole budget, and a
+  # recycle forks a fresh set while the old one is still being reaped.  Every
+  # other failure in this file returns NULL and lets the caller fall back, so
+  # this one must too.  Letting the error escape would kill the chain outright
+  # -- and from .emc_wpool_recycle(), where the old workers have already been
+  # stopped, it would take the whole block's work with it.
+  started <- tryCatch({
+    if (identical(backend, "spawn")) {
+      if (is.null(template) || !isTRUE(template$alive)) {
+        stop("clean worker template is not available")
+      }
+      serialize(list(command = "spawn", idx = idx, req = req, ans = ans),
+                template$wc)
+      flush(template$wc)
+      reply <- unserialize(template$rc)
+      if (!isTRUE(reply$ok) || length(reply$pids) != n) {
+        stop(if (is.null(reply$error)) "template could not fork workers" else reply$error)
+      }
+      jobs <- lapply(as.integer(reply$pids), function(pid) {
+        list(pid = pid, external = TRUE)
+      })
+    } else {
+      for (w in seq_len(n)) {
+        jobs[[w]] <- local({
+          i <- w
+          parallel::mcparallel(.emc_wpool_serve(req[i], ans[i], ctx),
+                               detached = FALSE)
+        })
+      }
+    }
+    TRUE
+  }, error = function(e) FALSE, interrupt = function(e) FALSE)
+  if (!started) return(NULL)
 
   tryCatch({
     for (w in seq_len(n)) {
@@ -145,8 +285,14 @@
       deadline <- Sys.time() + 20  # same ceiling as before
       wait <- 0.0002
       repeat {
-        res <- parallel::mccollect(jobs[[w]], wait = FALSE, timeout = 0)
-        if (!is.null(res)) stop("Worker process died before pool initialization")
+        if (identical(backend, "spawn")) {
+          if (!.emc_wpool_pid_alive(jobs[[w]]$pid)) {
+            stop("Worker process died before pool initialization")
+          }
+        } else {
+          res <- parallel::mccollect(jobs[[w]], wait = FALSE, timeout = 0)
+          if (!is.null(res)) stop("Worker process died before pool initialization")
+        }
         f <- tryCatch(suppressWarnings(fifo(req[w], "wb", blocking = FALSE)),
                       error = function(e) NULL)
         if (!is.null(f)) break
@@ -171,9 +317,82 @@
   list(jobs = jobs, wcs = wcs, rcs = rcs)
 }
 
-# `ctx` is everything constant for the whole block.  It is captured by the
-# child expression, so on Unix the workers inherit it through the fork; it is
-# never serialised.
+# Start one pristine R process for the chain.  It loads the package and context
+# once, then fork()s all persistent workers from that small template.  The
+# workers therefore share immutable data and compiled package state, but the
+# chain's sampler history has never existed in their ancestry.  Keeping the
+# template idle also gives recycling a clean parent: replacing eight workers
+# does not reload or reserialise the context.
+.emc_wpool_template_start <- function(dir, ctx_file, lib) {
+  req <- file.path(dir, "template_req")
+  ans <- file.path(dir, "template_ans")
+  made <- tryCatch(
+    system2("mkfifo", shQuote(c(req, ans)), stdout = FALSE, stderr = FALSE),
+    warning = function(e) 1L, error = function(e) 1L
+  )
+  if (!identical(as.integer(made), 0L)) return(NULL)
+
+  boot <- file.path(dir, "template.rds")
+  pidfile <- file.path(dir, "template.pid")
+  log <- file.path(dir, "template.log")
+  saveRDS(list(req = req, ans = ans, ctx = ctx_file, lib = lib,
+               pidfile = pidfile), boot, compress = FALSE)
+  expr <- paste0(
+    "b<-readRDS(commandArgs(TRUE)[1L]);",
+    "writeLines(as.character(Sys.getpid()),b$pidfile);",
+    ".libPaths(unique(c(b$lib,.libPaths())));",
+    "ns<-loadNamespace('EMC2');",
+    "get('.emc_wpool_template',ns)(b)"
+  )
+  status <- tryCatch(system2(
+    file.path(R.home("bin"), "Rscript"),
+    c("--vanilla", "-e", shQuote(expr), shQuote(boot)),
+    stdout = log, stderr = log, wait = FALSE
+  ), error = function(e) 1L)
+  if (!identical(as.integer(status), 0L)) {
+    unlink(c(req, ans, boot, pidfile, log))
+    return(NULL)
+  }
+  job <- list(pid = NA_integer_, pidfile = pidfile, log = log, external = TRUE)
+  wc <- rc <- NULL
+  success <- FALSE
+  on.exit({
+    if (!success) {
+      for (cn in list(wc, rc)) if (!is.null(cn)) try(close(cn), silent = TRUE)
+      .emc_wpool_terminate_jobs(list(job), wait = TRUE)
+      unlink(c(req, ans, boot, pidfile, log))
+    }
+  }, add = TRUE)
+
+  f <- NULL
+  deadline <- Sys.time() + 20
+  wait <- 0.0002
+  repeat {
+    pid <- .emc_wpool_job_pid(job)
+    if (!is.na(pid)) {
+      job$pid <- pid
+      if (!.emc_wpool_pid_alive(pid)) break
+    }
+    f <- tryCatch(suppressWarnings(fifo(req, "wb", blocking = FALSE)),
+                  error = function(e) NULL)
+    if (!is.null(f) || Sys.time() > deadline) break
+    Sys.sleep(wait)
+    wait <- min(wait * 2, 0.01)
+  }
+  if (is.null(f)) return(NULL)
+  wc <- fifo(req, "wb", blocking = TRUE)
+  close(f)
+  rc <- fifo(ans, "rb", blocking = TRUE)
+  ready <- tryCatch(unserialize(rc), error = function(e) NULL)
+  if (!isTRUE(ready$ready)) return(NULL)
+  job$pid <- as.integer(ready$pid)
+  success <- TRUE
+  list(wc = wc, rc = rc, job = job, alive = TRUE)
+}
+
+# `ctx` is everything constant for the whole block.  The legacy backend
+# inherits it directly from the chain.  The clean backend serialises it once to
+# the template, whose workers then inherit the loaded pages through fork().
 .emc_wpool_start <- function(n_workers, ctx) {
   n_workers <- as.integer(n_workers)
   if (is.na(n_workers) || n_workers <= 1L) return(NULL)
@@ -183,16 +402,39 @@
   dir <- tempfile("emc_wpool_")
   if (!dir.create(dir, showWarnings = FALSE, recursive = TRUE)) return(NULL)
 
+  backend <- .emc_wpool_backend(ctx)
+  ctx_file <- NULL
+  lib <- NULL
+  if (identical(backend, "spawn")) {
+    ctx_file <- file.path(dir, "context.rds")
+    saved <- tryCatch({ saveRDS(ctx, ctx_file, compress = FALSE); TRUE },
+                      error = function(e) FALSE)
+    if (!saved) backend <- "fork"
+    if (identical(backend, "spawn")) {
+      ns_path <- getNamespaceInfo(asNamespace("EMC2"), "path")
+      lib <- dirname(ns_path)
+    }
+  }
+
+  template <- NULL
+  if (identical(backend, "spawn")) {
+    template <- .emc_wpool_template_start(dir, ctx_file, lib)
+    if (is.null(template)) backend <- "fork"
+  }
+
   # Per pool, not per session: a later block that degrades must say so too.
   .emc_pool_state$warned <- FALSE
-  spawned <- .emc_wpool_spawn(dir, seq_len(n_workers), ctx)
+  spawned <- .emc_wpool_spawn(dir, seq_len(n_workers), ctx, backend,
+                              template = template)
   if (is.null(spawned)) {
+    if (!is.null(template)) .emc_wpool_template_stop(template)
     unlink(dir, recursive = TRUE)
     return(NULL)
   }
 
   list(n = n_workers, dir = dir, jobs = spawned$jobs, wcs = spawned$wcs,
-       rcs = spawned$rcs, alive = TRUE)
+       rcs = spawned$rcs, alive = TRUE, backend = backend,
+       ctx_file = ctx_file, lib = lib, template = template)
 }
 
 # Take over cores released by a chain that has finished its block.  Chains do
@@ -208,23 +450,41 @@
   n_new <- n_total - pool$n
   if (n_new <= 0L) return(pool)
 
-  spawned <- .emc_wpool_spawn(pool$dir, pool$n + seq_len(n_new), ctx)
-  if (is.null(spawned)) return(pool)
+  # A grow that cannot spawn must not be retried on every iteration.  The cheap
+  # failure (mkfifo refuses) costs nothing to repeat, but the expensive one --
+  # the workers fork and then never complete the handshake -- costs up to 20 s
+  # *per worker*, which would dwarf the iteration the extra cores were meant to
+  # speed up.  Back off exponentially instead and let the block run at its
+  # current width; the cores were a donation, not the budget this chain needs.
+  if (isTRUE(pool$grow_skip > 0L)) {
+    pool$grow_skip <- pool$grow_skip - 1L
+    return(pool)
+  }
+
+  spawned <- .emc_wpool_spawn(pool$dir, pool$n + seq_len(n_new), ctx,
+                              backend = if (is.null(pool$backend)) "fork" else pool$backend,
+                              template = pool$template)
+  if (is.null(spawned)) {
+    fails <- if (is.null(pool$grow_fails)) 1L else pool$grow_fails + 1L
+    pool$grow_fails <- fails
+    pool$grow_skip <- bitwShiftL(1L, min(fails, 6L))  # 2, 4, 8 ... 64 iterations
+    return(pool)
+  }
 
   list(n = n_total, dir = pool$dir, jobs = c(pool$jobs, spawned$jobs),
        wcs = c(pool$wcs, spawned$wcs), rcs = c(pool$rcs, spawned$rcs),
-       alive = TRUE)
+       alive = TRUE, grow_fails = 0L, grow_skip = 0L,
+       backend = pool$backend, ctx_file = pool$ctx_file, lib = pool$lib,
+       template = pool$template)
 }
 
 # Replace the workers with a fresh fork every `every` iterations.
 #
-# A forked worker starts out sharing every page with its chain and pays for
-# almost nothing.  It does not stay that way: R's garbage collector writes to
-# the header of each object it marks, and each of those writes un-shares a page
-# for good.  Over a block the worker therefore converges on a private copy of
-# the chain's heap.  Measured on a 250 MB chain heap with 8 workers, total
-# physical memory (PSS, so sharing is already accounted for) against block
-# length:
+# R's garbage collector writes to the header of each object it marks, and each
+# write un-shares a page for good.  Under the legacy backend a worker therefore
+# converges on a private copy of the entire chain heap, including history.
+# Measured on a 250 MB chain heap with 8 workers, total physical memory (PSS,
+# so sharing is already accounted for) against block length:
 #
 #     no pool (the old per-iteration mcmapply forks)   0.28 GB
 #      10 iterations                                   0.75 GB
@@ -240,9 +500,12 @@
 # the OOM killer overnight, and the donation path makes it worst exactly when
 # one chain is left holding every core.
 #
-# Re-forking on a period trades that back against the fork cost the pool exists
-# to avoid, and the table says where: at 10 iterations most of the sharing is
-# still intact.  Measured on 100 iterations with 8 workers:
+# The clean-template backend removes history from that ceiling entirely.  Its
+# workers can still dirty their copies of the block context, so periodic
+# replacement remains useful; replacement forks from the already-loaded idle
+# template and does not repeat R startup, context serialisation, or context
+# loading.  At 10 iterations most sharing is still intact.  The original
+# chain-fork measurements over 100 iterations were:
 #
 #                       peak PSS   elapsed
 #     250 MB heap, off     3.58 GB    8.5 s
@@ -250,9 +513,10 @@
 #     small heap,   off    0.92 GB    8.2 s
 #     small heap,   10     0.74 GB   10.1 s   -19% memory, +23% time
 #
-# Re-forking costs a roughly fixed ~0.19 s -- eight processes, the fifo
+# Re-forking costs a roughly fixed ~0.19 s -- eight processes, the FIFO
 # handshake, and waiting for the old workers to exit -- near enough independent
-# of the heap.  The period converts that into a share of the block on its own:
+# of the heap (and no more for the clean template).  The period converts that
+# into a share of the block on its own:
 # an iteration here is 85 ms, so ten of them are 0.85 s and a recycle is +22%,
 # whereas on a real fit at ~800 ms an iteration those ten are 8 s and the same
 # recycle is +2%.  The overhead is therefore large as a fraction only where the
@@ -269,7 +533,7 @@
 # master and travels in the message, so which process computes a subject, and
 # how many processes there are, cannot change a draw.
 .emc_wpool_recycle <- function(pool, i, every, ctx) {
-  if (is.null(pool) || !isTRUE(pool$alive)) return(pool)
+  if (is.null(pool)) return(pool)
   if (is.na(every) || every <= 0L) return(pool)
   # Nothing has run yet on iteration 1, and pool$n <= 1 is the degenerate pool
   # that .emc_wpool_start() refuses anyway.
@@ -277,35 +541,88 @@
   if (((i - 1L) %% every) != 0L) return(pool)
 
   target <- pool$n
-  .emc_wpool_stop(pool)
-  fresh <- .emc_wpool_start(target, ctx)
+  # A pool that lost a worker mid-block used to stay lost for the rest of the
+  # block: `alive = FALSE` was permanent, so the surviving workers idled and
+  # every subject was recomputed in the master -- the silent 8x slowdown this
+  # file warns about, paid for the remaining iterations even when the loss was
+  # one transient write error.  A recycle point is where a fresh set is forked
+  # anyway, so it is also the natural place to recover.  Back off, though: a
+  # machine that genuinely cannot fork should not be asked every period.
+  dead <- !isTRUE(pool$alive)
+  if (dead && isTRUE(pool$rebuild_skip > 0L)) {
+    pool$rebuild_skip <- pool$rebuild_skip - 1L
+    return(pool)
+  }
+
+  if (identical(pool$backend, "spawn") && !is.null(pool$template)) {
+    .emc_wpool_stop_workers(pool)
+    unlink(file.path(pool$dir,
+                     c(sprintf("req%d", seq_len(target)),
+                       sprintf("ans%d", seq_len(target)))))
+    spawned <- .emc_wpool_spawn(pool$dir, seq_len(target), ctx,
+                                backend = "spawn", template = pool$template)
+    fresh <- if (is.null(spawned)) NULL else {
+      pool$jobs <- spawned$jobs
+      pool$wcs <- spawned$wcs
+      pool$rcs <- spawned$rcs
+      pool$alive <- TRUE
+      pool
+    }
+  } else {
+    .emc_wpool_stop(pool)
+    fresh <- .emc_wpool_start(target, ctx)
+  }
   if (is.null(fresh)) {
     # The old workers are already gone, so there is nothing to keep running on.
     # Hand back a dead pool: the master then computes every subject itself,
     # which is slow but produces exactly the same numbers.
-    .emc_wpool_degraded("could not re-fork the pool when recycling")
+    if (!dead) .emc_wpool_degraded("could not re-fork the pool when recycling")
+    fails <- if (is.null(pool$rebuild_fails)) 1L else pool$rebuild_fails + 1L
     return(list(n = target, dir = NULL, jobs = list(), wcs = list(),
-                rcs = list(), alive = FALSE))
+                rcs = list(), alive = FALSE,
+                rebuild_fails = fails, rebuild_skip = min(fails, 8L)))
   }
   fresh
 }
 
-.emc_wpool_stop <- function(pool) {
+.emc_wpool_stop_workers <- function(pool) {
   if (is.null(pool)) return(invisible(NULL))
-  if (isTRUE(pool$alive)) {
-    for (w in seq_len(pool$n)) {
-      try({ serialize(NULL, pool$wcs[[w]]); flush(pool$wcs[[w]]) }, silent = TRUE)
-    }
+  # Try every connection even when one worker marked the aggregate pool dead;
+  # the surviving workers are still blocked waiting for their shutdown token.
+  for (w in seq_len(length(pool$wcs))) {
+    try({ serialize(NULL, pool$wcs[[w]]); flush(pool$wcs[[w]]) }, silent = TRUE)
   }
   for (cn in c(pool$wcs, pool$rcs)) try(close(cn), silent = TRUE)
-  try(parallel::mccollect(pool$jobs, wait = TRUE), silent = TRUE)
+  if (!identical(pool$backend, "spawn")) {
+    .emc_wpool_terminate_jobs(pool$jobs, wait = TRUE, terminate = FALSE)
+  }
+  invisible(NULL)
+}
+
+.emc_wpool_template_stop <- function(template) {
+  if (is.null(template)) return(invisible(NULL))
+  if (isTRUE(template$alive)) {
+    try({ serialize(NULL, template$wc); flush(template$wc) }, silent = TRUE)
+  }
+  for (cn in list(template$wc, template$rc)) try(close(cn), silent = TRUE)
+  .emc_wpool_terminate_jobs(list(template$job), wait = TRUE, terminate = FALSE)
+  invisible(NULL)
+}
+
+.emc_wpool_stop <- function(pool) {
+  if (is.null(pool)) return(invisible(NULL))
+  .emc_wpool_stop_workers(pool)
+  if (identical(pool$backend, "spawn")) {
+    .emc_wpool_template_stop(pool$template)
+  }
   unlink(pool$dir, recursive = TRUE)
   invisible(NULL)
 }
 
 # --- worker -----------------------------------------------------------------
 
-.emc_wpool_serve <- function(req, ans, ctx) {
+.emc_wpool_serve <- function(req, ans, ctx, inherited = NULL) {
+  for (cn in inherited) try(close(cn), silent = TRUE)
   rc <- fifo(req, "rb", blocking = TRUE)
   wc <- fifo(ans, "wb", blocking = TRUE)
   on.exit({ try(close(rc), silent = TRUE); try(close(wc), silent = TRUE) },
@@ -317,6 +634,54 @@
                     error = function(e) list(failed = conditionMessage(e)))
     if (!tryCatch({ serialize(out, wc); flush(wc); TRUE },
                   error = function(e) FALSE)) break
+  }
+  invisible(NULL)
+}
+
+# Entry point for the clean, idle template process.  Only this process reads the
+# context file.  Its children inherit the resulting pages from a heap that has
+# never held sampler history; periodic replacement forks from the same pristine
+# template again.
+.emc_wpool_template <- function(boot) {
+  ctx <- readRDS(boot$ctx)
+  rc <- fifo(boot$req, "rb", blocking = TRUE)
+  wc <- fifo(boot$ans, "wb", blocking = TRUE)
+  on.exit({ try(close(rc), silent = TRUE); try(close(wc), silent = TRUE) },
+          add = TRUE)
+  serialize(list(ready = TRUE, pid = Sys.getpid()), wc)
+  flush(wc)
+  jobs <- list()
+  repeat {
+    command <- tryCatch(unserialize(rc), error = function(e) NULL)
+    if (is.null(command)) break
+    reply <- tryCatch({
+      if (!identical(command$command, "spawn")) stop("unknown template command")
+      keys <- as.character(command$idx)
+      old <- jobs[keys]
+      old <- old[!vapply(old, is.null, logical(1))]
+      if (length(old)) parallel::mccollect(old, wait = TRUE)
+      jobs[keys] <- NULL
+      made <- vector("list", length(keys))
+      for (w in seq_along(keys)) {
+        made[[w]] <- local({
+          i <- w
+          parallel::mcparallel(
+            .emc_wpool_serve(command$req[i], command$ans[i], ctx,
+                             inherited = list(rc, wc)),
+            detached = FALSE
+          )
+        })
+      }
+      names(made) <- keys
+      jobs[keys] <- made
+      list(ok = TRUE, pids = vapply(made, function(x) x$pid, integer(1)))
+    }, error = function(e) list(ok = FALSE, error = conditionMessage(e)))
+    if (!tryCatch({ serialize(reply, wc); flush(wc); TRUE },
+                  error = function(e) FALSE)) break
+  }
+  if (length(jobs)) {
+    for (job in jobs) try(tools::pskill(job$pid), silent = TRUE)
+    try(parallel::mccollect(jobs, wait = TRUE), silent = TRUE)
   }
   invisible(NULL)
 }
@@ -342,7 +707,12 @@
 
 # The unit of work, shared by the workers and by the master's fallback path so
 # that a broken pool computes exactly what a working one would have.
-.emc_wpool_compute <- function(msg, ctx) .emc_with_preserved_rng({
+.emc_wpool_compute <- function(msg, ctx, shared = NULL) .emc_with_preserved_rng({
+  # `shared` is the group-level draw, which reaches a worker as the raw bytes
+  # .emc_wpool_iter() serialised once for every worker.  The master's fallback
+  # path already holds the decoded object and passes it directly rather than
+  # paying a pointless round trip through serialize/unserialize.
+  if (is.null(shared)) shared <- unserialize(msg$shared)
   subs <- msg$subs
   props <- matrix(0, ctx$n_pars + 1L, length(subs))
   pm <- vector("list", length(subs))
@@ -359,10 +729,10 @@
       s = s, data = ctx$data[[s]], pm_settings = msg$pm[[k]],
       eff_mu = ctx$eff_mu[[s]], eff_var = ctx$eff_var[[s]],
       chains_mu = ctx$chains_mu[[s]], chains_var = ctx$chains_var[[s]],
-      prev_ll = msg$prev_ll[k], parameters = msg$pars, model = ctx$model,
+      prev_ll = msg$prev_ll[k], parameters = shared$pars, model = ctx$model,
       stage = ctx$stage, type = ctx$type, tune = ctx$tune,
       marginalise = ctx$marginalise, r_cores = ctx$r_cores,
-      chol_cache = ctx$chol_caches[[s]], group_chol = msg$group_chol
+      chol_cache = ctx$chol_caches[[s]], group_chol = shared$group_chol
     )
     times[k] <- sum(proc.time()[c("user.self", "sys.self")]) - t0
     props[, k] <- c(out$proposal, out$ll)
@@ -382,8 +752,25 @@
   props <- matrix(0, ctx$n_pars + 1L, n_subjects)
   times <- numeric(n_subjects)
 
+  # `pars` and `group_chol` are byte-identical for every worker and dominate the
+  # message: the group covariance travels with them, so they grow with the
+  # square of the parameter count while the per-worker part stays flat (at 42
+  # parameters, 129 kB shared against 6.7 kB private).  Serialising them once
+  # and handing every worker the finished bytes replaces n_workers object walks
+  # with one walk plus a memcpy: master-side dispatch drops from 0.95 ms to
+  # 0.37 ms per iteration at 42 parameters, 0.35 -> 0.30 ms at 17.
+  #
+  # It does *not* reduce pipe traffic -- the same bytes still travel down each
+  # pipe -- and against an iteration of 85 ms (benchmark) to 800 ms (real fit)
+  # the saving is well under 1%.  It is here because it is nearly free and
+  # because the cost it bounds is the one that grows quadratically; it is not
+  # what makes a block fast.  Slicing the per-subject columns out of `pars` for
+  # each worker is what would cut the traffic, and needs a subject-index
+  # remapping this split is the prerequisite for.
+  shared <- list(pars = pars, group_chol = group_chol)
+  shared_raw <- serialize(shared, NULL)
   msgs <- lapply(part, function(subs) {
-    list(subs = subs, pars = pars, group_chol = group_chol,
+    list(subs = subs, shared = shared_raw,
          pm = pm_settings[subs], prev_ll = prev_ll[subs], seeds = seeds[subs])
   })
   was_alive <- isTRUE(pool$alive)
@@ -418,7 +805,7 @@
       # work and is still listening.  Recompute this share, but do not condemn
       # the whole block over one subject's bad iteration -- if it is
       # deterministic the master's own call raises it properly.
-      res <- .emc_wpool_compute(msgs[[w]], ctx)
+      res <- .emc_wpool_compute(msgs[[w]], ctx, shared = shared)
     }
     props[, subs] <- res$props
     times[subs] <- res$times

@@ -266,6 +266,10 @@ test_that("layout classifier reports canonical loaded dimensions", {
   expect_equal(unname(c_all[["loaded_dimension_3plus"]]), 4)
   # A genuinely loaded PM restores the three-dimensional quadrature route.
   expect_equal(unname(c_all[["den_quadrature_trials"]]), 4)
+  # The positivity/truncation denominator does not depend on RT or response.
+  # These four trials share one mapped parameter cell, so its 64-node GH
+  # denominator is evaluated once and reused rather than four times.
+  expect_equal(unname(c_all[["den_quadrature_node_evaluations"]]), 64)
 
   p_zero <- set_bawl_values(sampled_pars(ctx$design, doMap = FALSE), rho = 0)
   c_zero <- counters_for(ctx, p_zero)
@@ -634,6 +638,117 @@ test_that("rare positive orthants cannot corrupt the LT normalizer", {
   got_pw <- as.numeric(do.call(EMC2:::calc_ll_oo_pw, context_args(ctx, p)))
   expect_equal(got, log(1e-10), tolerance = 1e-12)
   expect_equal(got_pw, log(1e-10), tolerance = 1e-12)
+})
+
+test_that("deep correlated tails cannot be clipped out of the LT normalizer", {
+  skip_on_cran()
+  # Regression geometry from a PMWG ridge: the numeric pair integral scans the
+  # first marginal only over +/-12 SD, but the joint survivor is concentrated
+  # around -17 SD when rho is close to one and the drift means are asymmetric.
+  # A 100-digit conditional-normal integral gives -12.285299613635544 for the
+  # correctly lower-truncated target density in the fitted UC design.
+  dat <- data.frame(
+    subjects = factor(1),
+    S = factor("target", levels = c("non_target", "target")),
+    R = factor("target", levels = c("non_target", "target")),
+    rt = 0.51666666666666661,
+    LT = .15,
+    UC = 2.75
+  )
+  formula <- list(v ~ 0 + lR, sv ~ 0 + lR, B ~ 0 + lR, A ~ 1,
+                  t0 ~ 1, k ~ 1, mG ~ 1, mK ~ 1, rho ~ 1)
+  ctx <- make_bawl_context(dat, BAwLcorr(posdrift = FALSE),
+                           rho_formula = rho ~ 1, formula = formula)
+  p <- set_bawl_values(
+    sampled_pars(ctx$design, doMap = FALSE),
+    rho = 0.98794615047395884,
+    v = 0, sv = 1, B = 1,
+    A = 0.030779275315645185,
+    t0 = 0.097614715654323642,
+    k = 0
+  )
+  p[grep("^v_", names(p))] <- c(6.4443723104907464,
+                                  13.5940250880196807)
+  p[grep("^sv_", names(p))] <- log(c(1, 0.7378597736000585))
+  p[grep("^B_", names(p))] <- log(c(0.0090435640900871743,
+                                      0.0074128563778103791))
+
+  mapped <- mapped_pars_for(ctx, p)
+  probe <- function(t, numeric) EMC2:::bawl_corr_pair_probe(
+    t,
+    mapped[1, "t0"], mapped[1, "A"], mapped[1, "B"], mapped[1, "k"],
+    mapped[1, "v"], mapped[1, "sv"],
+    mapped[2, "t0"], mapped[2, "A"], mapped[2, "B"], mapped[2, "k"],
+    mapped[2, "v"], mapped[2, "sv"], mapped[1, "rho"],
+    posdrift = FALSE, numeric = numeric
+  )
+  exact_lt <- probe(dat$LT, numeric = FALSE)$survival
+  numeric_lt <- probe(dat$LT, numeric = TRUE)$survival
+  expect_equal(log(exact_lt), log(1.5870894835666893e-69),
+               tolerance = 1e-7)
+  expect_lt(numeric_lt, exact_lt * 1e-100)
+
+  got <- as.numeric(do.call(EMC2:::calc_ll_oo, context_args(ctx, p)))
+  got_pw <- as.numeric(do.call(EMC2:::calc_ll_oo_pw, context_args(ctx, p)))
+  expect_equal(got, -12.285299613635544, tolerance = 1e-8)
+  expect_equal(got_pw, got, tolerance = 1e-12)
+})
+
+test_that("exact events are not mixed with numeric tail normalizers", {
+  skip_on_cran()
+  # Complementary ridge geometry: with strong negative correlation the exact
+  # event rectangle leaves a false positive residual, while only the numeric
+  # route resolves the LT mass.  The numeric event itself is zero at double
+  # precision, so this parameter point must be floored rather than evaluated
+  # by mixing the two routes.
+  dat <- data.frame(
+    subjects = factor(1),
+    S = factor("target", levels = c("non_target", "target")),
+    R = factor("target", levels = c("non_target", "target")),
+    rt = .35,
+    LT = .15,
+    UC = 2.75
+  )
+  formula <- list(v ~ 0 + lR, sv ~ 0 + lR, B ~ 0 + lR, A ~ 1,
+                  t0 ~ 1, k ~ 1, mG ~ 1, mK ~ 1, rho ~ 1)
+  ctx <- make_bawl_context(dat, BAwLcorr(posdrift = FALSE),
+                           rho_formula = rho ~ 1, formula = formula)
+  p <- set_bawl_values(
+    sampled_pars(ctx$design, doMap = FALSE),
+    rho = -0.913806616829,
+    v = 0, sv = 1, B = 1,
+    A = 0.0070698181395739794,
+    t0 = 0.12401134492672337,
+    k = 0
+  )
+  p[grep("^v_", names(p))] <- c(-0.04111251202744759,
+                                  3.5380510994426686)
+  p[grep("^sv_", names(p))] <- log(c(1, 0.21258668829489819))
+  p[grep("^B_", names(p))] <- log(c(0.00038913264797410112,
+                                      0.00098440384985433969))
+
+  mapped <- mapped_pars_for(ctx, p)
+  probe <- function(t, numeric) EMC2:::bawl_corr_pair_probe(
+    t,
+    mapped[1, "t0"], mapped[1, "A"], mapped[1, "B"], mapped[1, "k"],
+    mapped[1, "v"], mapped[1, "sv"],
+    mapped[2, "t0"], mapped[2, "A"], mapped[2, "B"], mapped[2, "k"],
+    mapped[2, "v"], mapped[2, "sv"], mapped[1, "rho"],
+    posdrift = FALSE, numeric = numeric
+  )
+  event_exact <- probe(dat$rt, numeric = FALSE)
+  event_numeric <- probe(dat$rt, numeric = TRUE)
+  lt_exact <- probe(dat$LT, numeric = FALSE)
+  lt_numeric <- probe(dat$LT, numeric = TRUE)
+  expect_gt(event_exact$cause2, 0)
+  expect_equal(event_numeric$cause2, 0)
+  expect_equal(lt_exact$survival, 0)
+  expect_gt(lt_numeric$survival, 0)
+
+  got <- as.numeric(do.call(EMC2:::calc_ll_oo, context_args(ctx, p)))
+  got_pw <- as.numeric(do.call(EMC2:::calc_ll_oo_pw, context_args(ctx, p)))
+  expect_equal(got, log(1e-10), tolerance = 1e-12)
+  expect_equal(got_pw, got, tolerance = 1e-12)
 })
 
 test_that("the direct correlation sign changes the likelihood and role sign", {
