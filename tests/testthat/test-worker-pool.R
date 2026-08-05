@@ -176,6 +176,7 @@ test_that("a pool marked dead still returns every subject's result", {
 test_that("the arena is only built when it can help", {
   expect_null(EMC2:::.emc_core_ctl(1, 8))                     # nothing to donate
   expect_null(EMC2:::.emc_core_ctl(3, 0))
+  expect_null(EMC2:::.emc_core_ctl(3, 8, cores_for_chains = 1))
 })
 
 test_that("a chain claims the cores released by finished siblings", {
@@ -196,6 +197,23 @@ test_that("a chain claims the cores released by finished siblings", {
   # Never drops below the chain's own share, whatever the bookkeeping says.
   file.create(file.path(ctl$dir, "done_3"))
   expect_gte(EMC2:::.emc_cores_now(ctl, 8), 8)
+})
+
+test_that("reallocation respects the outer chain concurrency budget", {
+  skip_on_os("windows")
+  # Four chains, only two active at once: queued replacements do not make the
+  # denominator smaller.  The global budget is 2 * 8, not 4 * 8.
+  ctl <- EMC2:::.emc_core_ctl(4, 8, cores_for_chains = 2)
+  on.exit(unlink(ctl$dir, recursive = TRUE), add = TRUE)
+  expect_equal(ctl$total, 16)
+  expect_equal(EMC2:::.emc_cores_now(ctl, 8), 8)
+
+  file.create(file.path(ctl$dir, "done_1"))
+  expect_equal(EMC2:::.emc_cores_now(ctl, 8), 8)
+  file.create(file.path(ctl$dir, "done_2"))
+  expect_equal(EMC2:::.emc_cores_now(ctl, 8), 8)
+  file.create(file.path(ctl$dir, "done_3"))
+  expect_equal(EMC2:::.emc_cores_now(ctl, 8), 16)
 })
 
 test_that("a chain releases its cores even when it fails", {

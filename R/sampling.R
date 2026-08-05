@@ -85,7 +85,7 @@ compute_marginal_grid <- function(proposals, data, model, marginalise,
   # Each particle now carries its own quadrature rule, so particles split across
   # cores exactly like the ordinary likelihood path in calc_ll_manager.
   if (r_cores <= 1 || nrow(proposals) <= r_cores) return(one(proposals))
-  idx <- rep(1:r_cores, each = 1 + (nrow(proposals) %/% r_cores))[1:nrow(proposals)]
+  idx <- .split_work_indices(nrow(proposals), r_cores)
   parts <- auto_mclapply(1:r_cores, function(i) {
     one(proposals[idx == i, , drop = FALSE])
   }, mc.cores = r_cores)
@@ -98,6 +98,20 @@ compute_marginal_grid <- function(proposals, data, model, marginalise,
        warm_used = mean(unlist(lapply(parts, `[[`, "warm_used"))),
        pred_used = mean(unlist(lapply(parts, `[[`, "pred_used"))),
        repaired = sum(unlist(lapply(parts, `[[`, "repaired"))))
+}
+
+# Split a contiguous range into non-empty, near-equal contiguous chunks.  The
+# old `rep(..., each = 1 + n %% r)` construction left trailing workers empty
+# whenever n was not an exact multiple of r (for example, 5 proposals over 4
+# workers produced chunks 2, 2, 1, 0).  Empty forks cost memory and can make
+# the result order-dependent in callers that concatenate worker output.
+.split_work_indices <- function(n, n_workers) {
+  n <- as.integer(n)
+  n_workers <- min(as.integer(n_workers), n)
+  if (n <= 0L || n_workers <= 0L) return(integer(0))
+  q <- n %/% n_workers
+  rem <- n %% n_workers
+  rep.int(seq_len(n_workers), q + (seq_len(n_workers) <= rem))
 }
 
 # Warm-start state carried on pm_settings between iterations: the Laplace fit
@@ -242,19 +256,36 @@ pmwgs <- function(dadm, type, pars = NULL, prior = NULL,
   return(sampler)
 }
 
-.particle_core_budget <- function(n_subjects, n_cores = 1L, r_cores = 1L) {
+.particle_core_budget <- function(n_subjects, n_cores = 1L, r_cores = 1L,
+                                 total_cores = NULL) {
   n_subjects <- as.integer(n_subjects)
   n_cores <- max(1L, as.integer(n_cores))
   r_cores <- max(1L, as.integer(r_cores))
-  if (n_subjects == 1L && n_cores > 1L) {
-    return(list(subject = 1L, likelihood = max(r_cores, n_cores)))
+  # With no arena-wide allocation supplied, retain the helper's historical
+  # contract: r_cores is an explicit lower bound.  The sampler always supplies
+  # total_cores, which is the hard per-chain share of the global budget.
+  if (is.null(total_cores)) {
+    if (n_subjects == 1L && n_cores > 1L) {
+      return(list(subject = 1L, likelihood = max(r_cores, n_cores)))
+    }
+    return(list(subject = n_cores, likelihood = r_cores))
   }
-  list(subject = n_cores, likelihood = r_cores)
+  total_cores <- max(1L, as.integer(total_cores))
+  if (n_subjects == 1L && n_cores > 1L) {
+    return(list(subject = 1L,
+                likelihood = min(total_cores, max(r_cores, n_cores))))
+  }
+  # A subject worker may fork r_cores likelihood workers.  Keep the product
+  # within this chain's allocation; otherwise n_cores subjects each spawning
+  # r_cores children silently multiplies the outer chain budget.
+  likelihood <- min(r_cores, total_cores)
+  subject <- min(n_subjects, n_cores, total_cores %/% likelihood)
+  list(subject = max(1L, subject), likelihood = likelihood)
 }
 
 init <- function(pmwgs, start_mu = NULL, start_var = NULL,
                  verbose = FALSE, particles = 1000,
-                 n_cores = 1, r_cores = 1) {
+                 n_cores = 1, r_cores = 1, total_cores = NULL) {
   # Gets starting points for the mcmc process
   # If no starting point for group mean just use zeros
   type <- pmwgs$type
@@ -278,7 +309,8 @@ init <- function(pmwgs, start_mu = NULL, start_var = NULL,
   # which a particle is an independent numerical solve.  The total process
   # count still respects n_cores; r_cores remains an explicit lower bound.
   core_budget <- .particle_core_budget(
-    pmwgs$n_subjects, n_cores = n_cores, r_cores = r_cores
+    pmwgs$n_subjects, n_cores = n_cores, r_cores = r_cores,
+    total_cores = total_cores
   )
   # Start points get their own per-subject streams for the same reason the
   # particle step does: `mclapply` seeds its children from `mc.cores`, so
@@ -350,7 +382,8 @@ init_chains <- function(emc, start_mu = NULL, start_var = NULL, particles = 1000
   dots <- add_defaults(list(...),r_cores=1)
   emc <- mclapply(emc,init,start_mu = start_mu, start_var = start_var,
            verbose = FALSE, particles = particles,r_cores=dots$r_cores,
-           n_cores = cores_per_chain, mc.cores=cores_for_chains)
+           n_cores = cores_per_chain, total_cores = cores_per_chain,
+           mc.cores=cores_for_chains)
   class(emc) <- "emc"
   return(emc)
 }
@@ -442,9 +475,6 @@ run_stage <- function(pmwgs,
   tune <- check_tune_settings(tune, n_pars, stage, particles)
   pm_settings <- lapply(pm_settings, FUN = check_sampling_settings,  stage = stage, n_pars = n_pars, particles)
 
-  # Build new sample storage
-  pmwgs <- extend_sampler(pmwgs, iter, stage)
-
   # Add proposal distributions
   eff_mu <- pmwgs$eff_mu
   eff_var <- pmwgs$eff_var
@@ -458,15 +488,10 @@ run_stage <- function(pmwgs,
   if (verboseProgress) {
     pb <- accept_progress_bar(min = 0, max = iter)
   }
-  start_iter <- pmwgs$samples$idx
 
   data <- pmwgs$data
   subjects <- pmwgs$subjects
   nuisance <- pmwgs$nuisance
-  if(any(nuisance)){
-    type <- pmwgs$sampler_nuis$type
-    pmwgs$sampler_nuis$samples$idx <- pmwgs$samples$idx
-  }
   block_idx <- block_variance_idx(tune$components)
 
   # chains_var / eff_var are fixed for the whole block, so factorise them once
@@ -484,7 +509,8 @@ run_stage <- function(pmwgs,
   # iteration.  Everything above this point is block-constant, so the workers
   # inherit it through the fork; see R/chain_pool.R.
   pool_budget <- .particle_core_budget(pmwgs$n_subjects, n_cores = n_cores,
-                                       r_cores = r_cores)
+                                       r_cores = r_cores,
+                                       total_cores = n_cores)
   wpool_ctx <- list(
     data = data, model = pmwgs$model, stage = stage, type = pmwgs$type,
     tune = tune, marginalise = pmwgs$marginalise,
@@ -515,6 +541,15 @@ run_stage <- function(pmwgs,
     wpool_cost <- .emc_subject_cost(data)
     wpool_part <- .emc_lpt_partition(wpool_cost, wpool$n)
   }
+
+  # Fork the persistent workers before extending the sample arrays.  Workers
+  # never read historical samples: keeping the old, smaller arrays in their
+  # copy-on-write view avoids giving every worker an immediate private copy of
+  # the newly allocated block.
+  start_iter <- pmwgs$samples$idx
+  pmwgs <- extend_sampler(pmwgs, iter, stage)
+  if(any(nuisance)) pmwgs$sampler_nuis$samples$idx <- pmwgs$samples$idx
+
   # How often to re-fork the workers.  See .emc_wpool_recycle().
   recycle_every <- as.integer(getOption("emc2.worker_recycle", 10L))
   if (length(recycle_every) != 1L || is.na(recycle_every)) recycle_every <- 10L
@@ -577,9 +612,15 @@ run_stage <- function(pmwgs,
       wpool <- .emc_wpool_recycle(wpool, i, recycle_every, wpool_ctx)
       # Siblings that have finished their block free up cores; unlike the
       # mcmapply path, taking them here cannot perturb the draws.
-      grown <- .emc_wpool_grow(wpool,
-                               min(.emc_cores_now(core_ctl, n_cores),
-                                   pmwgs$n_subjects), wpool_ctx)
+      chain_cores <- .emc_cores_now(core_ctl, n_cores)
+      # `ctx$r_cores` is fixed for the lifetime of this pool.  Allocate the
+      # donated budget around that inner fan-out so the product of subject and
+      # likelihood workers remains bounded by chain_cores.
+      target_workers <- min(
+        pmwgs$n_subjects,
+        max(1L, chain_cores %/% max(1L, pool_budget$likelihood))
+      )
+      grown <- .emc_wpool_grow(wpool, target_workers, wpool_ctx)
       if (grown$n != wpool$n) {
         wpool <- grown
         wpool_part <- .emc_lpt_partition(wpool_cost, wpool$n)
@@ -603,7 +644,8 @@ run_stage <- function(pmwgs,
     # `mcmapply` seeds its children from `mc.cores`, so a timing-dependent
     # budget here would make the fit irreproducible from a fixed seed.
     core_budget <- .particle_core_budget(pmwgs$n_subjects, n_cores = n_cores,
-                                         r_cores = r_cores)
+                                         r_cores = r_cores,
+                                         total_cores = n_cores)
     proposals <- parallel::mcmapply(safe_new_particle, 1:pmwgs$n_subjects, data, pm_settings, eff_mu, eff_var,
                                     chains_mu, chains_var, pmwgs$samples$subj_ll[,j-1],
                                     MoreArgs = list(parameters = pars_comb,
@@ -888,11 +930,16 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
     # Non -used proposals (for prior calculations)
     # Rejoin new proposals with current MCMC values for other components
     if(any(!idx)){
-      proposals_other <- do.call(rbind, rep(list(subj_mu[!idx]), nrow(proposals)))
-      colnames(proposals_other) <- names(subj_mu)[!idx]
-      colnames(proposals) <- names(subj_mu)[idx]
-      proposals <- cbind(proposals, proposals_other)
-      proposals <- proposals[,names(subj_mu),drop=FALSE]
+      # Build the final matrix once.  The previous rbind -> cbind -> reorder
+      # path held two additional full proposal matrices live at peak memory,
+      # which is substantial when particles and non-updated parameters are
+      # both numerous.
+      proposals_full <- matrix(rep(subj_mu, each = nrow(proposals)),
+                                nrow = nrow(proposals),
+                                ncol = length(subj_mu))
+      proposals_full[, idx] <- proposals
+      colnames(proposals_full) <- names(subj_mu)
+      proposals <- proposals_full
     } else{
       colnames(proposals) <- names(subj_mu)
     }
@@ -1355,7 +1402,7 @@ calc_ll_manager <- function(proposals, dadm, model, component = NULL, r_cores = 
                           p_types = p_types, min_ll = log(1e-10), trend = model$trend,
                           marginalise = marginalise)
       } else {
-        idx <- rep(1:r_cores,each=1+(nrow(proposals) %/% r_cores))[1:nrow(proposals)]
+        idx <- .split_work_indices(nrow(proposals), r_cores)
         lls <- unlist(auto_mclapply(1:r_cores,function(i) {
           calc_ll_oo(proposals[idx==i,,drop=FALSE], dadm, constants = constants,
                      designs = designs, type = model$c_name, bounds = model$bound,

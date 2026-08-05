@@ -85,7 +85,9 @@ get_stop_criteria <- function(stage, stop_criteria, type){
 #' @param r_cores An integer giving an explicit lower bound on the cores used
 #' within one participant's proposal-likelihood calculation. This applies to
 #' both R and registered C++ likelihoods. It defaults to 1; single-participant
-#' fits automatically inherit a larger `cores_per_chain` budget.
+#' fits automatically inherit a larger `cores_per_chain` budget. When nested
+#' likelihood work would exceed the current global core budget, the effective
+#' value is capped so the outer budget remains authoritative.
 #' @export
 #' @return An emc object
 #' @examples \donttest{
@@ -141,12 +143,14 @@ run_emc <- function(emc, stage, stop_criteria,
     stage_iter <- progress$step_size*max(1,cur_thin)
     # One reallocation arena per block: markers must not survive into the next
     # block, or every chain would start it believing its siblings had finished.
-    core_ctl <- .emc_core_ctl(length(sub_emc), cores_per_chain)
+    core_ctl <- .emc_core_ctl(length(sub_emc), cores_per_chain,
+                              cores_for_chains = cores_for_chains)
     sub_emc <- auto_mclapply(sub_emc,run_stages, stage = stage, iter= stage_iter,
                              verbose=verbose,  verboseProgress = verboseProgress,
                              particle_factor=particle_factor,search_width=search_width,
                              n_cores=cores_per_chain, mc.cores = cores_for_chains,
-                             r_cores = r_cores, core_ctl = core_ctl)
+                             r_cores = r_cores, core_ctl = core_ctl,
+                             mc.preschedule = FALSE)
     if (!is.null(core_ctl)) unlink(core_ctl$dir, recursive = TRUE)
     if(getOption("emc2.print_iteration_duration", FALSE)) { print(Sys.time()-t0) }
     class(sub_emc) <- "emc"
@@ -190,16 +194,18 @@ run_stages <- function(sampler, stage = "preburn", iter=0, verbose = TRUE, verbo
   # Hand this chain's cores back to its siblings as soon as it is done, however
   # it leaves -- an error here must not strand the budget for the whole block.
   on.exit(.emc_core_release(core_ctl), add = TRUE)
+  chain_cores <- .emc_cores_now(core_ctl, n_cores)
   particles <- round(particle_factor*sqrt(sampler$n_pars))
   if (!sampler$init) {
-    sampler <- init(sampler, n_cores = n_cores, r_cores = r_cores)
+    sampler <- init(sampler, n_cores = chain_cores, r_cores = r_cores,
+                    total_cores = chain_cores)
   }
   if (iter == 0) return(sampler)
   tune <- list(search_width = search_width)
   timer_dir <- getOption("emc2.chain_timer_dir", NULL)
   t_start <- if (is.null(timer_dir)) NULL else Sys.time()
   sampler <- run_stage(sampler, stage = stage,iter = iter, particles = particles,
-                       n_cores = n_cores, tune = tune, verbose = verbose,
+                       n_cores = chain_cores, tune = tune, verbose = verbose,
                        verboseProgress = verboseProgress, r_cores = r_cores,
                        core_ctl = core_ctl)
   if (!is.null(t_start)) {
@@ -1027,26 +1033,37 @@ extractDadms <- function(dadms, names = NULL){
 # own RNG stream there, so a timing-dependent worker count cannot change a draw.
 #
 # The read is a directory listing of at most n_chains entries, tens of
-# microseconds against an iteration of ~100 ms.  Two chains finishing at the
-# same moment can both claim the freed budget; that transient oversubscription
-# is harmless and corrects itself on the next iteration.
-.emc_core_ctl <- function(n_chains, cores_per_chain) {
-  if (n_chains <= 1 || cores_per_chain < 1) return(NULL)
+# microseconds against an iteration of ~100 ms.  The arena tracks both total
+# unfinished chains and the number of outer slots, so queued replacements do
+# not make a live chain claim more than the global budget.
+.emc_core_ctl <- function(n_chains, cores_per_chain,
+                          cores_for_chains = n_chains) {
+  n_chains <- as.integer(n_chains)
+  cores_per_chain <- as.integer(cores_per_chain)
+  cores_for_chains <- max(1L, as.integer(cores_for_chains))
+  if (n_chains <= 1 || cores_per_chain < 1 || cores_for_chains <= 1) return(NULL)
   if (Sys.info()[1] == "Windows") return(NULL)
   # tempfile(), not a runif() suffix: this runs on the master before every
   # block, and drawing here would shift every subsequent draw in the fit.
   dir <- tempfile(paste0("emc_cores_", Sys.getpid(), "_"))
   if (!dir.create(dir, showWarnings = FALSE, recursive = TRUE)) return(NULL)
-  list(dir = dir, n_chains = as.integer(n_chains),
-       total = as.integer(n_chains) * as.integer(cores_per_chain))
+  list(dir = dir, n_chains = n_chains,
+       n_slots = cores_for_chains,
+       total = cores_for_chains * cores_per_chain)
 }
 
 # Cores this chain may use right now, never fewer than its own static share.
 .emc_cores_now <- function(core_ctl, base) {
   if (is.null(core_ctl)) return(base)
-  alive <- core_ctl$n_chains - length(list.files(core_ctl$dir))
-  if (alive <= 0L) return(core_ctl$total)
-  max(base, core_ctl$total %/% alive)
+  unfinished <- core_ctl$n_chains - length(list.files(core_ctl$dir))
+  # `mclapply(mc.preschedule = FALSE)` starts a replacement chain as soon as
+  # one finishes.  That replacement is queued work, not an extra active slot:
+  # while there are still at least n_slots unfinished chains, the same n_slots
+  # chain budgets must continue to add up to the global total.  Counting all
+  # unfinished chains here would therefore over-allocate (e.g. 10 + 16 > 16).
+  active <- min(core_ctl$n_slots, unfinished)
+  if (active <= 0L) return(core_ctl$total)
+  max(base, core_ctl$total %/% active)
 }
 
 .emc_core_release <- function(core_ctl) {
@@ -1057,14 +1074,15 @@ extractDadms <- function(dadms, names = NULL){
   invisible(NULL)
 }
 
-auto_mclapply <- function(X, FUN, mc.cores, ...){
+auto_mclapply <- function(X, FUN, mc.cores, ..., mc.preschedule = TRUE){
   if(mc.cores <= 1) return(lapply(X, FUN, ...))
   if(Sys.info()[1] == "Windows"){
     cluster <- parallel::makeCluster(mc.cores)
     on.exit(parallel::stopCluster(cluster), add = TRUE)
     list_out <- parallel::parLapply(cl = cluster, X,FUN, ...)
   } else{
-    list_out <- parallel::mclapply(X, FUN, mc.cores = mc.cores, ...)
+    list_out <- parallel::mclapply(X, FUN, mc.cores = mc.cores,
+                                   mc.preschedule = mc.preschedule, ...)
   }
   return(list_out)
 }
