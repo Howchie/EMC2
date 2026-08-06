@@ -337,7 +337,15 @@
   log <- file.path(dir, "template.log")
   saveRDS(list(req = req, ans = ans, ctx = ctx_file, lib = lib,
                pidfile = pidfile), boot, compress = FALSE)
+  # The spawned template (and every chain worker forked from it) inherits this
+  # command line, so lead with a self-identifying no-op assignment: `ps` and
+  # `top` then show `EMC2-worker-pool[<dir>|master=<pid>]` instead of an
+  # anonymous `readRDS(...)`.  The tag is sanitised because it is pasted into
+  # the expression as a literal.
+  tag <- sprintf("EMC2-worker-pool[%s|master=%d]",
+                 gsub("[^A-Za-z0-9._-]", "_", basename(dir)), Sys.getpid())
   expr <- paste0(
+    "EMC2.worker<-'", tag, "';",
     "b<-readRDS(commandArgs(TRUE)[1L]);",
     "writeLines(as.character(Sys.getpid()),b$pidfile);",
     ".libPaths(unique(c(b$lib,.libPaths())));",
