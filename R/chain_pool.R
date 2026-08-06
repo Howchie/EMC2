@@ -619,6 +619,16 @@
   invisible(NULL)
 }
 
+# Workers forked from the chain can eventually privatise the complete sampler
+# heap, so the conservative historical period remains appropriate there.  The
+# clean template has never held sampler history; measured on 140-subject blocks
+# a ten-iteration period retained essentially no additional PSS but imposed a
+# material fixed process-replacement cost.  Keep an occasional reset for dirty
+# block-context pages without paying it four times in a 40-iteration block.
+.emc_wpool_recycle_default <- function(pool) {
+  if (!is.null(pool) && identical(pool$backend, "spawn")) 50L else 10L
+}
+
 # --- worker -----------------------------------------------------------------
 
 .emc_wpool_serve <- function(req, ans, ctx, inherited = NULL) {
@@ -729,10 +739,16 @@
       s = s, data = ctx$data[[s]], pm_settings = msg$pm[[k]],
       eff_mu = ctx$eff_mu[[s]], eff_var = ctx$eff_var[[s]],
       chains_mu = ctx$chains_mu[[s]], chains_var = ctx$chains_var[[s]],
-      prev_ll = msg$prev_ll[k], parameters = shared$pars, model = ctx$model,
+      prev_ll = msg$prev_ll[k], parameters = NULL, model = ctx$model,
       stage = ctx$stage, type = ctx$type, tune = ctx$tune,
       marginalise = ctx$marginalise, r_cores = ctx$r_cores,
-      chol_cache = ctx$chol_caches[[s]], group_chol = shared$group_chol
+      chol_cache = ctx$chol_caches[[s]], group_chol = shared$group_chol,
+      current_alpha = msg$alpha[, k],
+      population_mu = msg$population_mu[, k],
+      # build_group_chol_cache() retains the exact covariance in `ref` for its
+      # cache-validity check.  Reuse it here instead of sending the same P x P
+      # matrix a second time in the shared payload.
+      population_var = shared$group_chol$ref
     )
     times[k] <- sum(proc.time()[c("user.self", "sys.self")]) - t0
     props[, k] <- c(out$proposal, out$ll)
@@ -748,33 +764,38 @@
 # updated per-subject settings, streams and timings.
 .emc_wpool_iter <- function(pool, ctx, part, pars, group_chol, pm_settings,
                             prev_ll, seeds) {
+  profile <- isTRUE(getOption("emc2.sampler_profile", FALSE))
+  iter_started <- if (profile) proc.time()[["elapsed"]] else NA_real_
   n_subjects <- length(pm_settings)
   props <- matrix(0, ctx$n_pars + 1L, n_subjects)
   times <- numeric(n_subjects)
 
-  # `pars` and `group_chol` are byte-identical for every worker and dominate the
-  # message: the group covariance travels with them, so they grow with the
-  # square of the parameter count while the per-worker part stays flat (at 42
-  # parameters, 129 kB shared against 6.7 kB private).  Serialising them once
-  # and handing every worker the finished bytes replaces n_workers object walks
-  # with one walk plus a memcpy: master-side dispatch drops from 0.95 ms to
-  # 0.37 ms per iteration at 42 parameters, 0.35 -> 0.30 ms at 17.
-  #
-  # It does *not* reduce pipe traffic -- the same bytes still travel down each
-  # pipe -- and against an iteration of 85 ms (benchmark) to 800 ms (real fit)
-  # the saving is well under 1%.  It is here because it is nearly free and
-  # because the cost it bounds is the one that grows quadratically; it is not
-  # what makes a block fast.  Slicing the per-subject columns out of `pars` for
-  # each worker is what would cut the traffic, and needs a subject-index
-  # remapping this split is the prerequisite for.
-  shared <- list(pars = pars, group_chol = group_chol)
+  # Only the population covariance and its factors are common to every worker.
+  # The current random effects and subject-specific population means are sliced
+  # by assignment, so collectively they cross one pipe rather than every pipe.
+  # This retains per-iteration LPT balancing without its former O(workers * N)
+  # subject-state broadcast.  Gibbs-only fields (tvinv, a_half, factor state,
+  # etc.) never enter a particle message.
+  population_mu <- vapply(seq_len(n_subjects), function(s) {
+    as.numeric(get_group_level(pars, s, ctx$type)$mu)
+  }, numeric(ctx$n_pars))
+  rownames(population_mu) <- rownames(pars$alpha)
+  alpha <- pars$alpha
+  shared_started <- if (profile) proc.time()[["elapsed"]] else NA_real_
+  shared <- list(group_chol = group_chol)
   shared_raw <- serialize(shared, NULL)
+  shared_elapsed <- if (profile) {
+    proc.time()[["elapsed"]] - shared_started
+  } else NA_real_
   msgs <- lapply(part, function(subs) {
     list(subs = subs, shared = shared_raw,
+         alpha = alpha[, subs, drop = FALSE],
+         population_mu = population_mu[, subs, drop = FALSE],
          pm = pm_settings[subs], prev_ll = prev_ll[subs], seeds = seeds[subs])
   })
   was_alive <- isTRUE(pool$alive)
   sent <- rep(FALSE, pool$n)
+  send_started <- if (profile) proc.time()[["elapsed"]] else NA_real_
   if (was_alive) {
     for (w in seq_len(pool$n)) {
       if (!length(part[[w]])) next
@@ -786,6 +807,10 @@
       if (!sent[w]) pool$alive <- FALSE
     }
   }
+  send_elapsed <- if (profile) {
+    proc.time()[["elapsed"]] - send_started
+  } else NA_real_
+  receive_started <- if (profile) proc.time()[["elapsed"]] else NA_real_
   for (w in seq_len(pool$n)) {
     subs <- part[[w]]
     if (!length(subs)) next
@@ -812,8 +837,29 @@
     pm_settings[subs] <- res$pm
     seeds[subs] <- res$seeds
   }
+  receive_elapsed <- if (profile) {
+    proc.time()[["elapsed"]] - receive_started
+  } else NA_real_
+  private_bytes <- if (profile) {
+    sum(vapply(msgs, function(msg) {
+      msg$shared <- NULL
+      length(serialize(msg, NULL))
+    }, integer(1)))
+  } else NA_real_
+  active_workers <- sum(vapply(part, length, integer(1)) > 0L)
   list(props = props, pm_settings = pm_settings, seeds = seeds, times = times,
-       alive = pool$alive)
+       alive = pool$alive,
+       profile = if (profile) list(
+         elapsed = proc.time()[["elapsed"]] - iter_started,
+         shared_serialize = shared_elapsed,
+         send = send_elapsed,
+         receive = receive_elapsed,
+         worker_max = if (length(times)) max(times) else 0,
+         worker_sum = sum(times),
+         shared_bytes = length(shared_raw),
+         private_bytes = private_bytes,
+         wire_bytes = active_workers * length(shared_raw) + private_bytes
+       ) else NULL)
 }
 
 # --- partitioning -----------------------------------------------------------

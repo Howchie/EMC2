@@ -2,6 +2,28 @@
 
 ## Performance
 
+-   Particle workers now receive only the current random effects and
+    subject-specific population means for the subjects assigned to them.
+    Population covariance factors are still broadcast once per worker, but the
+    former full-subject-state broadcast no longer multiplies traffic by the
+    worker count. The covariance retained as the factor cache's validation
+    reference is reused rather than serialised a second time. Dynamic
+    longest-processing-time scheduling and per-subject reproducibility are
+    unchanged.
+
+-   Preallocated sample histories are now filled through native slice writers.
+    This preserves the public matrix/array representation while avoiding R's
+    copy-on-modify duplication of every accumulated iteration on each write.
+
+-   Clean-template workers now recycle every 50 iterations by default; legacy
+    workers forked from the chain retain the conservative 10-iteration default.
+    `options(emc2.worker_recycle = )` continues to override either value.
+
+-   Set `options(emc2.sampler_profile = TRUE)` to attach per-iteration sampler
+    phase timings and worker-message sizes as the `sampler_profile` attribute of
+    a chain's sample store. Profiling message sizes performs extra serialisation
+    work and is intended for architecture benchmarks, not production fits.
+
 -   The particle step no longer re-factorises its proposal covariances on every iteration. `chains_var`/`eff_var` are constant for a whole block and the group covariance is shared by all subjects within an iteration, so each is now decomposed once instead of `n_subjects * n_proposals` times per iteration. The saving scales with the cube of the number of parameters: negligible for small models, roughly 5 ms per iteration at 50 parameters with 30 subjects, and ~21 ms at 100 parameters.
 
 -   Likelihood calls now hand the C++ mapper compressed design matrices instead of materialising a full-length copy of every design on every call. Log-likelihoods are bit-identical.

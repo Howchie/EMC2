@@ -163,11 +163,11 @@ get_startpoints_infnt_factor<- function(pmwgs, start_mu, start_var){
 }
 
 fill_samples_infnt_factor <- function(samples, group_level, proposals, j = 1, n_pars){
-  samples$lambda[,,j] <- group_level$lambda
-  samples$epsilon_inv[,j] <- group_level$epsilon_inv
-  samples$psi[,,j] <- group_level$psi
-  samples$eta[,,j] <- group_level$eta
-  samples$delta[,j] <- group_level$delta
+  emc_set_last_slice(samples$lambda, j, as.numeric(group_level$lambda))
+  emc_set_last_slice(samples$epsilon_inv, j, as.numeric(group_level$epsilon_inv))
+  emc_set_last_slice(samples$psi, j, as.numeric(group_level$psi))
+  emc_set_last_slice(samples$eta, j, as.numeric(group_level$eta))
+  emc_set_last_slice(samples$delta, j, as.numeric(group_level$delta))
   samples <- fill_samples_base(samples, group_level, proposals, j = j, n_pars)
   return(samples)
 }

@@ -2885,6 +2885,54 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// emc_clone_sample_store
+Rcpp::List emc_clone_sample_store(Rcpp::List source);
+RcppExport SEXP _EMC2_emc_clone_sample_store(SEXP sourceSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< Rcpp::List >::type source(sourceSEXP);
+    rcpp_result_gen = Rcpp::wrap(emc_clone_sample_store(source));
+    return rcpp_result_gen;
+END_RCPP
+}
+// emc_set_last_slice
+void emc_set_last_slice(Rcpp::NumericVector target, int j, Rcpp::NumericVector values);
+RcppExport SEXP _EMC2_emc_set_last_slice(SEXP targetSEXP, SEXP jSEXP, SEXP valuesSEXP) {
+BEGIN_RCPP
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type target(targetSEXP);
+    Rcpp::traits::input_parameter< int >::type j(jSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type values(valuesSEXP);
+    emc_set_last_slice(target, j, values);
+    return R_NilValue;
+END_RCPP
+}
+// emc_set_particle_slice
+void emc_set_particle_slice(Rcpp::NumericVector alpha, Rcpp::NumericVector subj_ll, Rcpp::NumericMatrix proposals, int j, int n_pars);
+RcppExport SEXP _EMC2_emc_set_particle_slice(SEXP alphaSEXP, SEXP subj_llSEXP, SEXP proposalsSEXP, SEXP jSEXP, SEXP n_parsSEXP) {
+BEGIN_RCPP
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type alpha(alphaSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type subj_ll(subj_llSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericMatrix >::type proposals(proposalsSEXP);
+    Rcpp::traits::input_parameter< int >::type j(jSEXP);
+    Rcpp::traits::input_parameter< int >::type n_pars(n_parsSEXP);
+    emc_set_particle_slice(alpha, subj_ll, proposals, j, n_pars);
+    return R_NilValue;
+END_RCPP
+}
+// emc_copy_sample_prefix
+void emc_copy_sample_prefix(Rcpp::NumericVector target, Rcpp::NumericVector source);
+RcppExport SEXP _EMC2_emc_copy_sample_prefix(SEXP targetSEXP, SEXP sourceSEXP) {
+BEGIN_RCPP
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type target(targetSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type source(sourceSEXP);
+    emc_copy_sample_prefix(target, source);
+    return R_NilValue;
+END_RCPP
+}
 // run_trend_rcpp
 NumericVector run_trend_rcpp(DataFrame data, List trend, NumericVector param, NumericMatrix trend_pars, NumericMatrix pars_full, bool return_kernel);
 RcppExport SEXP _EMC2_run_trend_rcpp(SEXP dataSEXP, SEXP trendSEXP, SEXP paramSEXP, SEXP trend_parsSEXP, SEXP pars_fullSEXP, SEXP return_kernelSEXP) {
@@ -3116,6 +3164,10 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_drou_cpp", (DL_FUNC) &_EMC2_drou_cpp, 15},
     {"_EMC2_rrou_hit_times_cpp", (DL_FUNC) &_EMC2_rrou_hit_times_cpp, 11},
     {"_EMC2_rrou_cpp", (DL_FUNC) &_EMC2_rrou_cpp, 7},
+    {"_EMC2_emc_clone_sample_store", (DL_FUNC) &_EMC2_emc_clone_sample_store, 1},
+    {"_EMC2_emc_set_last_slice", (DL_FUNC) &_EMC2_emc_set_last_slice, 3},
+    {"_EMC2_emc_set_particle_slice", (DL_FUNC) &_EMC2_emc_set_particle_slice, 5},
+    {"_EMC2_emc_copy_sample_prefix", (DL_FUNC) &_EMC2_emc_copy_sample_prefix, 2},
     {"_EMC2_run_trend_rcpp", (DL_FUNC) &_EMC2_run_trend_rcpp, 6},
     {"_EMC2_ou_debug_set", (DL_FUNC) &_EMC2_ou_debug_set, 2},
     {"_EMC2_calculate_num_steps", (DL_FUNC) &_EMC2_calculate_num_steps, 3},

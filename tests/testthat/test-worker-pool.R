@@ -193,10 +193,12 @@ test_that("a pool marked dead still returns every subject's result", {
          times = rep(1, length(msg$subs)))
   }
   pool <- list(n = 2, alive = FALSE, wcs = list(), rcs = list())
-  ctx <- list(n_pars = 2)
+  ctx <- list(n_pars = 2, type = "standard")
   part <- list(c(1L, 3L), 2L)
+  pars <- list(alpha = matrix(0, 2, 3), subj_mu = matrix(0, 2, 3),
+               tvar = diag(2))
   res <- testthat::with_mocked_bindings(
-    EMC2:::.emc_wpool_iter(pool, ctx, part, NULL, NULL,
+    EMC2:::.emc_wpool_iter(pool, ctx, part, pars, NULL,
                            list(NULL, NULL, NULL), c(0, 0, 0),
                            list(NULL, NULL, NULL)),
     .emc_wpool_compute = fake, .package = "EMC2")
@@ -312,6 +314,12 @@ test_that("recycling fires on its period and leaves everything else alone", {
   expect_gt(still_dead$rebuild_skip, 0L)
 
   expect_null(EMC2:::.emc_wpool_recycle(NULL, 11L, 10L, ctx))
+})
+
+test_that("clean workers use a less aggressive recycle default", {
+  expect_identical(EMC2:::.emc_wpool_recycle_default(list(backend = "spawn")), 50L)
+  expect_identical(EMC2:::.emc_wpool_recycle_default(list(backend = "fork")), 10L)
+  expect_identical(EMC2:::.emc_wpool_recycle_default(NULL), 10L)
 })
 
 test_that("recycling preserves the worker count, including donated cores", {
@@ -470,18 +478,19 @@ test_that("a dead pool is rebuilt at a recycle point when forking works again", 
 
 # --- shared group draw is serialised once for all workers -------------------
 
-test_that("the group draw travels as one shared blob and decodes identically", {
-  pars <- list(tmu = c(1.5, -2.5), tvar = diag(2))
-  gchol <- list(chol = chol(diag(2)), logdet = 0)
-  shared <- list(pars = pars, group_chol = gchol)
+test_that("the population covariance is reused from the shared cache", {
+  population_var <- diag(2)
+  gchol <- list(ref = population_var, chol = chol(diag(2)), logdet = 0)
+  shared <- list(group_chol = gchol)
   raw <- serialize(shared, NULL)
   expect_identical(unserialize(raw), shared)
   # The per-worker message carries the bytes, not another copy of the object,
   # so the shared part is walked once however many workers there are.
-  msg <- list(subs = 1:2, shared = raw, pm = list(NULL, NULL),
+  msg <- list(subs = 1:2, shared = raw, alpha = matrix(0, 2, 2),
+              population_mu = matrix(0, 2, 2), pm = list(NULL, NULL),
               prev_ll = c(0, 0), seeds = list(NULL, NULL))
   expect_type(msg$shared, "raw")
-  expect_identical(unserialize(msg$shared)$pars$tmu, pars$tmu)
+  expect_identical(unserialize(msg$shared)$group_chol$ref, population_var)
 })
 
 test_that("compute() accepts a pre-decoded shared part and an encoded one", {
@@ -491,11 +500,17 @@ test_that("compute() accepts a pre-decoded shared part and an encoded one", {
   ctx <- list(n_pars = 1L, data = list(a = 1), model = NULL, stage = "sample",
               type = "standard", tune = list(), marginalise = NULL,
               r_cores = 1L, chol_caches = list(a = NULL))
-  shared <- list(pars = list(tmu = 7), group_chol = list(x = 1))
-  msg <- list(subs = "a", shared = serialize(shared, NULL), pm = list(NULL),
+  shared <- list(group_chol = list(ref = matrix(9), x = 1))
+  msg <- list(subs = "a", shared = serialize(shared, NULL),
+              alpha = matrix(3, 1, 1), population_mu = matrix(7, 1, 1),
+              pm = list(NULL),
               prev_ll = 0, seeds = list(get(".Random.seed", envir = globalenv())))
-  fake <- function(s, data, pm_settings, ..., parameters, group_chol) {
+  fake <- function(s, data, pm_settings, ..., parameters, group_chol,
+                   current_alpha, population_mu, population_var) {
     seen$parameters <- parameters; seen$group_chol <- group_chol
+    seen$current_alpha <- current_alpha
+    seen$population_mu <- population_mu
+    seen$population_var <- population_var
     list(proposal = 0, ll = 0, pm_settings = NULL)
   }
   for (sh in list(NULL, shared)) {
@@ -504,7 +519,10 @@ test_that("compute() accepts a pre-decoded shared part and an encoded one", {
       EMC2:::.emc_wpool_compute(msg, ctx, shared = sh),
       safe_new_particle = fake, .package = "EMC2"
     )
-    expect_equal(seen$parameters$tmu, 7)
+    expect_null(seen$parameters)
     expect_equal(seen$group_chol$x, 1)
+    expect_equal(seen$current_alpha, 3)
+    expect_equal(seen$population_mu, 7)
+    expect_equal(seen$population_var, matrix(9))
   }
 })

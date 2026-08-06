@@ -294,13 +294,13 @@ get_startpoints_SEM<- function(pmwgs, start_mu, start_var){
 }
 
 fill_samples_SEM <- function(samples, group_level, proposals, j = 1, n_pars){
-  samples$lambda[,,j] <- group_level$lambda
-  samples$B[,,j] <- group_level$B
-  samples$K[,,j] <- group_level$K
-  samples$G[,,j] <- group_level$G
-  samples$epsilon_inv[,j] <- group_level$epsilon_inv
-  samples$delta_inv[,,j] <- group_level$delta_inv
-  samples$eta[,,j] <- group_level$eta
+  emc_set_last_slice(samples$lambda, j, as.numeric(group_level$lambda))
+  emc_set_last_slice(samples$B, j, as.numeric(group_level$B))
+  emc_set_last_slice(samples$K, j, as.numeric(group_level$K))
+  emc_set_last_slice(samples$G, j, as.numeric(group_level$G))
+  emc_set_last_slice(samples$epsilon_inv, j, as.numeric(group_level$epsilon_inv))
+  emc_set_last_slice(samples$delta_inv, j, as.numeric(group_level$delta_inv))
+  emc_set_last_slice(samples$eta, j, as.numeric(group_level$eta))
   samples <- fill_samples_base(samples, group_level, proposals, j = j, n_pars)
   return(samples)
 }

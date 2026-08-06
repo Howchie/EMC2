@@ -35,3 +35,24 @@ test_that("failed particle proposal is rejected to previous subject state", {
   expect_equal(out$ll, -7)
   expect_equal(out$pm_settings, pm_settings)
 })
+
+test_that("direct worker state rejects to its local current alpha", {
+  pm_settings <- list(list(epsilon = 1))
+  out <- safe_new_particle(
+    s = 9,
+    data = NULL,
+    pm_settings = pm_settings,
+    prev_ll = -11,
+    parameters = NULL,
+    current_alpha = c(a = 4, b = 5),
+    population_mu = c(a = 0, b = 0),
+    population_var = diag(2),
+    model = NULL,
+    stage = "preburn",
+    type = "standard",
+    tune = list(components = c(1, 1), shared_ll_idx = c(1, 1)),
+    r_cores = 1
+  )
+  expect_equal(out$proposal, c(a = 4, b = 5))
+  expect_equal(out$ll, -11)
+})

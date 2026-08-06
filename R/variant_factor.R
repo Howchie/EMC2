@@ -175,11 +175,11 @@ get_startpoints_factor<- function(pmwgs, start_mu, start_var){
 }
 
 fill_samples_factor <- function(samples, group_level, proposals, j = 1, n_pars){
-  samples$lambda[,,j] <- group_level$lambda
-  samples$lambda_untransf[,,j] <- group_level$lambda_untransf
-  samples$epsilon_inv[,j] <- group_level$sig_err_inv
-  samples$psi_inv[,j] <- group_level$psi_inv
-  samples$eta[,,j] <- group_level$eta
+  emc_set_last_slice(samples$lambda, j, as.numeric(group_level$lambda))
+  emc_set_last_slice(samples$lambda_untransf, j, as.numeric(group_level$lambda_untransf))
+  emc_set_last_slice(samples$epsilon_inv, j, as.numeric(group_level$sig_err_inv))
+  emc_set_last_slice(samples$psi_inv, j, as.numeric(group_level$psi_inv))
+  emc_set_last_slice(samples$eta, j, as.numeric(group_level$eta))
   samples <- fill_samples_base(samples, group_level, proposals, j = j, n_pars)
   return(samples)
 }
@@ -394,4 +394,3 @@ bridge_group_and_prior_and_jac_factor <- function(proposals_group, proposals_lis
   jac_epsilon <- rowSums(psi_inv)
   return(sum_out + prior_mu + prior_lambda + jac_psi + jac_epsilon) # Output is of length nrow(proposals)
 }
-

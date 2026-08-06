@@ -294,6 +294,14 @@ pmwgs <- function(dadm, type, pars = NULL, prior = NULL,
 init <- function(pmwgs, start_mu = NULL, start_var = NULL,
                  verbose = FALSE, particles = 1000,
                  n_cores = 1, r_cores = 1, total_cores = NULL) {
+  # make_emc() replicates the uninitialised sampler across chains.  Its sample
+  # arrays therefore share references until R's ordinary copy-on-modify would
+  # detach them.  The native history writers deliberately bypass that copy, so
+  # take ownership once while every store contains only its initial slice.
+  pmwgs$samples <- emc_clone_sample_store(pmwgs$samples)
+  if (!is.null(pmwgs$sampler_nuis$samples)) {
+    pmwgs$sampler_nuis$samples <- emc_clone_sample_store(pmwgs$sampler_nuis$samples)
+  }
   # Gets starting points for the mcmc process
   # If no starting point for group mean just use zeros
   type <- pmwgs$type
@@ -557,14 +565,22 @@ run_stage <- function(pmwgs,
   if(any(nuisance)) pmwgs$sampler_nuis$samples$idx <- pmwgs$samples$idx
 
   # How often to re-fork the workers.  See .emc_wpool_recycle().
-  recycle_default <- 10L
+  recycle_default <- .emc_wpool_recycle_default(wpool)
   recycle_every <- as.integer(getOption("emc2.worker_recycle", recycle_default))
   if (length(recycle_every) != 1L || is.na(recycle_every)) {
     recycle_every <- recycle_default
   }
 
+  # Optional low-level timing for architecture benchmarks.  It is deliberately
+  # opt-in: measuring serialised private-message sizes requires one additional
+  # object walk per worker.  The resulting data frame is attached to `samples`
+  # so profiling works inside the chain processes without shared global state.
+  sampler_profile <- isTRUE(getOption("emc2.sampler_profile", FALSE))
+  profile_rows <- if (sampler_profile) vector("list", iter) else NULL
+
   # Main iteration loop
   for (i in 1:iter) {
+    iteration_started <- if (sampler_profile) proc.time()[["elapsed"]] else NA_real_
     if (verboseProgress) {
       accRate <- mean(accept_rate(pmwgs))
       update_progress_bar(pb, i, extra = accRate)
@@ -573,6 +589,7 @@ run_stage <- function(pmwgs,
 
     # Gibbs step. If a numerical failure occurs here, no subject update has
     # happened yet, so the safe rejection is to repeat the previous iteration.
+    gibbs_started <- if (sampler_profile) proc.time()[["elapsed"]] else NA_real_
     pars_attempt <- tryCatch(
       gibbs_step(pmwgs, pmwgs$samples$alpha[!nuisance,,j-1], pmwgs$type),
       error = identity
@@ -605,21 +622,34 @@ run_stage <- function(pmwgs,
                                                                         n_pars = n_pars, type = pmwgs$sampler_nuis$type)
       pmwgs$sampler_nuis$samples$idx <- j
     }
+    gibbs_elapsed <- if (sampler_profile) {
+      proc.time()[["elapsed"]] - gibbs_started
+    } else NA_real_
     # Particle step
     # group_var is `tvar` for every sampler variant, hence the same matrix for
     # every subject: factorise it once here instead of n_subjects times below.
+    cache_started <- if (sampler_profile) proc.time()[["elapsed"]] else NA_real_
     group_var_it <- tryCatch(
       .apply_marginal_group_var(get_group_level(pars_comb, 1L, pmwgs$type)$var,
                                 marginal_idx_blk, pmwgs$marginalise),
       error = function(e) NULL
     )
     group_chol_it <- build_group_chol_cache(group_var_it, idx_list_blk)
+    cache_elapsed <- if (sampler_profile) {
+      proc.time()[["elapsed"]] - cache_started
+    } else NA_real_
+    recycle_elapsed <- grow_elapsed <- if (sampler_profile) 0 else NA_real_
+    pool_profile <- NULL
     if (!is.null(wpool)) {
       # Re-fork periodically so workers cannot drift far from their initially
       # shared pages.  On the clean backend they return to the template's small
       # context, never the chain history.  Streams live in the master, so
       # replacing workers cannot move a draw.
+      recycle_started <- if (sampler_profile) proc.time()[["elapsed"]] else NA_real_
       wpool <- .emc_wpool_recycle(wpool, i, recycle_every, wpool_ctx)
+      if (sampler_profile) {
+        recycle_elapsed <- proc.time()[["elapsed"]] - recycle_started
+      }
       # Siblings that have finished their block free up cores; unlike the
       # mcmapply path, taking them here cannot perturb the draws.
       chain_cores <- .emc_cores_now(core_ctl, n_cores)
@@ -634,7 +664,11 @@ run_stage <- function(pmwgs,
       # failed records its backoff state there, and dropping it would retry the
       # failure on every remaining iteration.
       n_before <- wpool$n
+      grow_started <- if (sampler_profile) proc.time()[["elapsed"]] else NA_real_
       wpool <- .emc_wpool_grow(wpool, target_workers, wpool_ctx)
+      if (sampler_profile) {
+        grow_elapsed <- proc.time()[["elapsed"]] - grow_started
+      }
       if (wpool$n != n_before) {
         wpool_part <- .emc_lpt_partition(wpool_cost, wpool$n)
       }
@@ -645,6 +679,7 @@ run_stage <- function(pmwgs,
       pm_settings <- it$pm_settings
       wpool_streams <- it$seeds
       wpool$alive <- it$alive
+      pool_profile <- it$profile
       # Re-balance from what the subjects actually cost this iteration: trial
       # counts are only a proxy, and the adaptive particle number drifts.
       # Floor rather than discard: a subject whose CPU time lands under the
@@ -676,10 +711,42 @@ run_stage <- function(pmwgs,
     }
 
     #Fill samples
+    fill_started <- if (sampler_profile) proc.time()[["elapsed"]] else NA_real_
     pmwgs$samples <- fill_samples(samples = pmwgs$samples, group_level = pars,
                                                proposals = proposals, j = j, n_pars = pmwgs$n_pars, type = pmwgs$type)
+    fill_elapsed <- if (sampler_profile) {
+      proc.time()[["elapsed"]] - fill_started
+    } else NA_real_
+    if (sampler_profile) {
+      pp <- if (is.null(pool_profile)) list() else pool_profile
+      profile_rows[[i]] <- data.frame(
+        iteration = j,
+        total = proc.time()[["elapsed"]] - iteration_started,
+        gibbs = gibbs_elapsed,
+        group_cache = cache_elapsed,
+        recycle = recycle_elapsed,
+        grow = grow_elapsed,
+        particle = if (is.null(pp$elapsed)) NA_real_ else pp$elapsed,
+        fill = fill_elapsed,
+        shared_serialize = if (is.null(pp$shared_serialize)) NA_real_ else pp$shared_serialize,
+        request_send = if (is.null(pp$send)) NA_real_ else pp$send,
+        response_wait = if (is.null(pp$receive)) NA_real_ else pp$receive,
+        worker_max = if (is.null(pp$worker_max)) NA_real_ else pp$worker_max,
+        worker_sum = if (is.null(pp$worker_sum)) NA_real_ else pp$worker_sum,
+        shared_bytes = if (is.null(pp$shared_bytes)) NA_real_ else pp$shared_bytes,
+        private_bytes = if (is.null(pp$private_bytes)) NA_real_ else pp$private_bytes,
+        wire_bytes = if (is.null(pp$wire_bytes)) NA_real_ else pp$wire_bytes,
+        workers = if (is.null(wpool)) 0L else wpool$n
+      )
+    }
   }
   attr(pmwgs$samples, "pm_settings") <- pm_settings
+  if (sampler_profile) {
+    profile_rows <- profile_rows[!vapply(profile_rows, is.null, logical(1))]
+    attr(pmwgs$samples, "sampler_profile") <- if (length(profile_rows)) {
+      do.call(rbind, profile_rows)
+    } else data.frame()
+  }
   if (verboseProgress) close(pb)
   return(pmwgs)
 }
@@ -706,17 +773,27 @@ reject_sample_iteration <- function(samples, j) {
 safe_new_particle <- function (s, data, pm_settings, eff_mu = NULL,
                                eff_var = NULL, chains_mu = NULL,
                                chains_var = NULL, prev_ll,
-                               parameters, model = NULL, stage,
+                               parameters = NULL, model = NULL, stage,
                                type, tune, marginalise = NULL, r_cores = 1,
-                               chol_cache = NULL, group_chol = NULL) {
+                               chol_cache = NULL, group_chol = NULL,
+                               current_alpha = NULL, population_mu = NULL,
+                               population_var = NULL) {
   attempt <- tryCatch(
-    new_particle(s, data, pm_settings, eff_mu, eff_var, chains_mu, chains_var,
-                 prev_ll, parameters, model, stage, type, tune, marginalise, r_cores,
-                 chol_cache, group_chol),
+    new_particle(
+      s = s, data = data, pm_settings = pm_settings,
+      eff_mu = eff_mu, eff_var = eff_var,
+      chains_mu = chains_mu, chains_var = chains_var,
+      prev_ll = prev_ll, parameters = parameters, model = model,
+      stage = stage, type = type, tune = tune, marginalise = marginalise,
+      r_cores = r_cores, chol_cache = chol_cache, group_chol = group_chol,
+      current_alpha = current_alpha, population_mu = population_mu,
+      population_var = population_var
+    ),
     error = identity
   )
   if (inherits(attempt, c("error", "try-error"))) {
-    return(reject_particle(parameters$alpha[, s], prev_ll, pm_settings))
+    old <- if (is.null(current_alpha)) parameters$alpha[, s] else current_alpha
+    return(reject_particle(old, prev_ll, pm_settings))
   }
   attempt
 }
@@ -833,14 +910,22 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
                           chains_var = NULL, prev_ll,
                           parameters, model = NULL, stage,
                           type, tune, marginalise = NULL, r_cores = 1,
-                          chol_cache = NULL, group_chol = NULL)
+                          chol_cache = NULL, group_chol = NULL,
+                          current_alpha = NULL, population_mu = NULL,
+                          population_var = NULL)
 {
-  group_pars <- get_group_level(parameters, s, type)
+  direct_state <- !is.null(current_alpha) && !is.null(population_mu) &&
+    !is.null(population_var)
+  group_pars <- if (direct_state) {
+    list(mu = population_mu, var = population_var)
+  } else {
+    get_group_level(parameters, s, type)
+  }
   unq_components <- unique(tune$components)
   proposal_out <- numeric(length(group_pars$mu))
   group_mu <- group_pars$mu
   group_var <- group_pars$var
-  subj_mu <- parameters$alpha[,s]
+  subj_mu <- if (direct_state) current_alpha else parameters$alpha[,s]
   # Node grid of the accepted particle, captured during the likelihood step and
   # reused for reconstruction (avoids a second full marginal pass at storage).
   marg_nodes <- NULL
@@ -848,7 +933,8 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
   marginal_idx <- rep(FALSE, length(subj_mu))
   if (!is.null(marginalise)) {
     if (is.null(names(subj_mu))) {
-      names(subj_mu) <- rownames(parameters$alpha)[seq_along(subj_mu)]
+      alpha_names <- if (direct_state) names(current_alpha) else rownames(parameters$alpha)
+      names(subj_mu) <- alpha_names[seq_along(subj_mu)]
     }
     marginal_idx <- .marginal_par_idx(names(subj_mu), marginalise)
     # Keep a placeholder column for design mapping, but hold the marginalized
@@ -1264,7 +1350,10 @@ extend_obj <- function(obj, n_extend){
   }
   new_dim <- c(rep(0, (n_dimensions -1)), n_extend)
   extended <- array(NA_real_, dim = old_dim +  new_dim, dimnames = dimnames(obj))
-  extended[slice.index(extended,n_dimensions) <= old_dim[n_dimensions]] <- obj
+  # Extending only the final dimension means the complete old array is a
+  # contiguous prefix.  Copy it directly instead of allocating a full-size
+  # slice.index() array and going through R's copy-on-modify assignment.
+  emc_copy_sample_prefix(extended, as.numeric(obj))
   return(extended)
 }
 
@@ -1290,8 +1379,8 @@ block_variance_idx <- function(components){
 
 fill_samples_base <- function(samples, group_level, proposals, j = 1, n_pars){
   # Fill samples both group level and random effects
-  samples$theta_mu[, j] <- group_level$tmu
-  samples$theta_var[, , j] <- group_level$tvar
+  emc_set_last_slice(samples$theta_mu, j, as.numeric(group_level$tmu))
+  emc_set_last_slice(samples$theta_var, j, as.numeric(group_level$tvar))
   if(!is.null(proposals)) samples <- fill_samples_RE(samples, proposals, j, n_pars)
   return(samples)
 }
@@ -1301,8 +1390,8 @@ fill_samples_base <- function(samples, group_level, proposals, j = 1, n_pars){
 fill_samples_RE <- function(samples, proposals, j = 1, n_pars, ...){
   # Only for random effects, separated because group level sometimes differs.
   if(!is.null(proposals)){
-    samples$alpha[, , j] <- proposals[1:n_pars,]
-    samples$subj_ll[, j] <- proposals[n_pars + 1,]
+    emc_set_particle_slice(samples$alpha, samples$subj_ll,
+                           as.matrix(proposals), j, n_pars)
     samples$idx <- j
   }
   return(samples)

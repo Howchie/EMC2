@@ -637,6 +637,22 @@ rrou_cpp <- function(pars, lR_levels, ok, kind_sexp = NULL, dt = 1e-3, t_max = 3
     .Call(`_EMC2_rrou_cpp`, pars, lR_levels, ok, kind_sexp, dt, t_max, par_kind)
 }
 
+emc_clone_sample_store <- function(source) {
+    .Call(`_EMC2_emc_clone_sample_store`, source)
+}
+
+emc_set_last_slice <- function(target, j, values) {
+    invisible(.Call(`_EMC2_emc_set_last_slice`, target, j, values))
+}
+
+emc_set_particle_slice <- function(alpha, subj_ll, proposals, j, n_pars) {
+    invisible(.Call(`_EMC2_emc_set_particle_slice`, alpha, subj_ll, proposals, j, n_pars))
+}
+
+emc_copy_sample_prefix <- function(target, source) {
+    invisible(.Call(`_EMC2_emc_copy_sample_prefix`, target, source))
+}
+
 run_trend_rcpp <- function(data, trend, param, trend_pars, pars_full, return_kernel = FALSE) {
     .Call(`_EMC2_run_trend_rcpp`, data, trend, param, trend_pars, pars_full, return_kernel)
 }
