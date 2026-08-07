@@ -23,6 +23,10 @@ void c_do_transform_pt(ParamTable& pt,
 
 Rcpp::LogicalVector c_do_bound_pt(const ParamTable& pt, const std::vector<BoundSpec>& specs);
 
+Rcpp::LogicalVector c_do_bound_pt_from(const ParamTable& pt,
+                                       const std::vector<BoundSpec>& specs,
+                                       const Rcpp::LogicalVector& seed);
+
 std::vector<BoundSpec> make_bound_specs_pt(Rcpp::NumericMatrix minmax,
                                            Rcpp::CharacterVector minmax_colnames,
                                            const ParamTable& pt,

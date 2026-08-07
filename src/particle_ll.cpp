@@ -87,7 +87,21 @@ static void update_pt_only(ParamTable& param_table,
                            TrendRuntime* trend_runtime,
                            const std::vector<TransformSpec>& full_specs,
                            const Rcpp::LogicalVector* invariant_design_mask = nullptr,
-                           const std::unordered_set<std::string>* invariant_param_names = nullptr) {
+                           const std::unordered_set<std::string>* invariant_param_names = nullptr,
+                           const Rcpp::LogicalVector* planned_map_next = nullptr,
+                           const std::vector<TransformSpec>* planned_postmap = nullptr) {
+  // Planned lane: with no trend runtime the premap / pretransform /
+  // posttransform blocks below are all inert, and the design mask and postmap
+  // spec list depend only on names (designs, split set, invariant set) — never
+  // on parameter values.  The caller resolves them once per likelihood call,
+  // which removes the per-particle set-of-strings rebuild and the
+  // STRSXP -> std::string conversion filter_specs_by_param_set does per spec.
+  if (!trend_runtime && planned_map_next && planned_postmap) {
+    param_table.map_from_designs(designs, *planned_map_next);
+    c_do_transform_pt(param_table, *planned_postmap);
+    return;
+  }
+
   if (trend_runtime) trend_runtime->reset_all_kernels();
 
   const int n_designs = designs.size();
@@ -3256,19 +3270,110 @@ struct PtMapper {
   std::vector<int> mat_base_idx;
   bool mat_ready = false;
 
+  // Once-per-likelihood-call plans for the three per-particle steps whose cost
+  // otherwise scales with parameter-table *width* even when the extra columns
+  // are held constant (mapping/transform selection, base refill, bounds).
+  bool plan_ready = false;
+  Rcpp::LogicalVector plan_map_next;              // designs to remap for i > 0
+  std::vector<TransformSpec> plan_postmap;        // transforms to apply for i > 0
+  std::vector<int> plan_zero_base_idx;            // base cols to clear per particle
+  std::vector<std::pair<int,int>> plan_fill_pairs;// (particle col, base col)
+  std::vector<BoundSpec> bound_specs_variant;     // bounds that can change per particle
+  Rcpp::LogicalVector bound_seed;                 // invariant bounds' verdict
+  bool bound_plan_ready = false;
+
+  // Build the i > 0 plans.  Only valid without a trend runtime, which is also
+  // the only case in which use_invariants is ever set.
+  void build_plan() {
+    const int n_designs = designs.size();
+    plan_map_next = Rcpp::LogicalVector(n_designs, true);
+    for (int i = 0; i < n_designs; ++i) {
+      if (use_invariants && i < invariant_design_mask.size() &&
+          static_cast<bool>(invariant_design_mask[i])) {
+        plan_map_next[i] = false;
+      }
+    }
+
+    std::unordered_set<std::string> transform_next = param_names_excluding(table, {});
+    for (const auto& nm : table.split_transform_params()) transform_next.erase(nm);
+    if (use_invariants) {
+      for (const auto& nm : invariant_param_names) transform_next.erase(nm);
+    }
+    plan_postmap = filter_specs_by_param_set(table, transform_specs, transform_next);
+
+    // Refill plan: invariant base columns are neither zeroed nor refilled, so
+    // their natural-scale values survive from the template particle.
+    const int n_base = table.base.ncol();
+    std::vector<char> is_inv_base(static_cast<size_t>(n_base), 0);
+    if (use_invariants) {
+      for (int bidx : invariant_base_idx_vec) {
+        if (bidx >= 0 && bidx < n_base) is_inv_base[static_cast<size_t>(bidx)] = 1;
+      }
+    }
+    plan_zero_base_idx.clear();
+    for (int j = 0; j < n_base; ++j) {
+      if (!is_inv_base[static_cast<size_t>(j)]) plan_zero_base_idx.push_back(j);
+    }
+    plan_fill_pairs.clear();
+    for (std::size_t j = 0; j < pm_col_to_base_idx.size(); ++j) {
+      const int bidx = pm_col_to_base_idx[j];
+      if (bidx < 0 || is_inv_base[static_cast<size_t>(bidx)]) continue;
+      plan_fill_pairs.emplace_back(static_cast<int>(j), bidx);
+    }
+
+    plan_ready = true;
+  }
+
+  // Split the bound specs into the ones that can change from particle to
+  // particle and the ones that cannot, and cache the latter's verdict.
+  void build_bound_plan() {
+    bound_specs_variant.clear();
+    std::vector<BoundSpec> invariant_specs;
+    for (const auto& bs : bound_specs) {
+      bool inv = false;
+      if (use_invariants && bs.col_idx >= 0 && bs.col_idx < table.base_names.size()) {
+        inv = invariant_param_names.count(
+                Rcpp::as<std::string>(table.base_names[bs.col_idx])) > 0;
+      }
+      if (inv) invariant_specs.push_back(bs);
+      else bound_specs_variant.push_back(bs);
+    }
+    bound_seed = invariant_specs.empty()
+      ? Rcpp::LogicalVector(table.n_trials, true)
+      : c_do_bound_pt(table, invariant_specs);
+    bound_plan_ready = true;
+  }
+
   Rcpp::LogicalVector prepare(int i) {
+    const bool planned = !trend_runtime && plan_ready;
     if (i > 0) {
-      table.fill_from_particle_row(particle_matrix_pt, i,
-                                   pm_col_to_base_idx,
-                                   invariant_base_idx_vec);
+      if (planned) {
+        table.fill_from_particle_row_planned(particle_matrix_pt, i,
+                                             plan_zero_base_idx, plan_fill_pairs);
+      } else {
+        table.fill_from_particle_row(particle_matrix_pt, i,
+                                     pm_col_to_base_idx,
+                                     invariant_base_idx_vec);
+      }
     }
     const bool skip_inv = (i > 0) && use_invariants;
     update_pt_only(table, designs, trend_runtime ? trend_runtime.get() : nullptr,
                    transform_specs,
                    skip_inv ? &invariant_design_mask : nullptr,
-                   skip_inv ? &invariant_param_names : nullptr);
+                   skip_inv ? &invariant_param_names : nullptr,
+                   (planned && i > 0) ? &plan_map_next : nullptr,
+                   (planned && i > 0) ? &plan_postmap : nullptr);
     if (i == 0) {
       bound_specs = make_bound_specs_pt(minmax, mm_names, table, bounds);
+      Rcpp::LogicalVector ok = c_do_bound_pt(table, bound_specs);
+      if (!trend_runtime) {
+        if (!plan_ready) build_plan();
+        if (!bound_plan_ready) build_bound_plan();
+      }
+      return ok;
+    }
+    if (bound_plan_ready) {
+      return c_do_bound_pt_from(table, bound_specs_variant, bound_seed);
     }
     return c_do_bound_pt(table, bound_specs);
   }
@@ -10216,7 +10321,7 @@ double c_log_likelihood_bawl_correlated(
       } else {
         const double rho12 =
           b[0] * b[1] / std::sqrt((1.0 + b[0] * b[0]) * (1.0 + b[1] * b[1]));
-        const double p = norm_cdf_2d(h[0], h[1], rho12);
+        const double p = norm_cdf_2d_hybrid(h[0], h[1], rho12);
         log_den[static_cast<size_t>(j)] =
           (R_FINITE(p) && p > 0.0) ? std::log(std::fmin(p, 1.0)) : R_NegInf;
       }
@@ -11231,7 +11336,7 @@ static double rdmswtn_corr_log_bvn_upper(double z1, double z2, double rho) {
     return z2 == R_NegInf ? 0.0 : log_normal_upper_tail(z2);
   if (z2 == R_NegInf) return log_normal_upper_tail(z1);
   if (z1 == R_PosInf || z2 == R_PosInf) return R_NegInf;
-  const double p = norm_cdf_2d(-z1, -z2, rho);
+  const double p = norm_cdf_2d_hybrid(-z1, -z2, rho);
   if (R_FINITE(p) && p > 1e-280) return std::log(std::fmin(1.0, p));
 
   // Direct conditional-normal integration is a tail fallback for probabilities

@@ -290,6 +290,19 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// pbvn_hybrid
+double pbvn_hybrid(double h, double k, double rho);
+RcppExport SEXP _EMC2_pbvn_hybrid(SEXP hSEXP, SEXP kSEXP, SEXP rhoSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< double >::type h(hSEXP);
+    Rcpp::traits::input_parameter< double >::type k(kSEXP);
+    Rcpp::traits::input_parameter< double >::type rho(rhoSEXP);
+    rcpp_result_gen = Rcpp::wrap(pbvn_hybrid(h, k, rho));
+    return rcpp_result_gen;
+END_RCPP
+}
 // gomp_pdf_cdf_vec
 Rcpp::List gomp_pdf_cdf_vec(NumericVector rt, NumericVector alpha, NumericVector beta, NumericVector K, NumericVector B, NumericVector A, NumericVector t0, int bkind, NumericVector Binf, NumericVector tau, NumericVector pw, int nx, double dt_target, double grade, double tgrade);
 RcppExport SEXP _EMC2_gomp_pdf_cdf_vec(SEXP rtSEXP, SEXP alphaSEXP, SEXP betaSEXP, SEXP KSEXP, SEXP BSEXP, SEXP ASEXP, SEXP t0SEXP, SEXP bkindSEXP, SEXP BinfSEXP, SEXP tauSEXP, SEXP pwSEXP, SEXP nxSEXP, SEXP dt_targetSEXP, SEXP gradeSEXP, SEXP tgradeSEXP) {
@@ -3019,6 +3032,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_pbvn_tsay", (DL_FUNC) &_EMC2_pbvn_tsay, 3},
     {"_EMC2_pbvn_tvpack", (DL_FUNC) &_EMC2_pbvn_tvpack, 3},
     {"_EMC2_pbvn_drezner", (DL_FUNC) &_EMC2_pbvn_drezner, 3},
+    {"_EMC2_pbvn_hybrid", (DL_FUNC) &_EMC2_pbvn_hybrid, 3},
     {"_EMC2_gomp_pdf_cdf_vec", (DL_FUNC) &_EMC2_gomp_pdf_cdf_vec, 15},
     {"_EMC2_calculate_subject_means", (DL_FUNC) &_EMC2_calculate_subject_means, 2},
     {"_EMC2_draw_alpha_from_design", (DL_FUNC) &_EMC2_draw_alpha_from_design, 3},

@@ -268,7 +268,7 @@
       }
     }
     TRUE
-  }, error = function(e) FALSE, interrupt = function(e) FALSE)
+  }, error = function(e) FALSE)
   if (!started) return(NULL)
 
   tryCatch({
@@ -311,7 +311,7 @@
       rcs[[w]] <- fifo(ans[w], "rb", blocking = TRUE)
     }
     success <- TRUE
-  }, error = function(e) NULL, interrupt = function(e) NULL)
+  }, error = function(e) NULL)
 
   if (!success) return(NULL)
   list(jobs = jobs, wcs = wcs, rcs = rcs)
@@ -602,7 +602,7 @@
   }
   for (cn in c(pool$wcs, pool$rcs)) try(close(cn), silent = TRUE)
   if (!identical(pool$backend, "spawn")) {
-    .emc_wpool_terminate_jobs(pool$jobs, wait = TRUE, terminate = FALSE)
+    .emc_wpool_terminate_jobs(pool$jobs, wait = TRUE, terminate = TRUE)
   }
   invisible(NULL)
 }

@@ -716,6 +716,30 @@ struct ParamTable {
       }
     }
   }
+
+  // Planned twin of fill_from_particle_row.  The caller resolves, ONCE per
+  // likelihood call, which base columns need zeroing and which (particle
+  // column -> base column) pairs need filling; invariant columns appear in
+  // neither list, so their natural-scale values simply survive untouched.
+  // That removes the per-particle save / reset / restore round-trip and the
+  // per-particle unordered_set<int> the general path builds.
+  void fill_from_particle_row_planned(
+      const Rcpp::NumericMatrix& particles,
+      int row,
+      const std::vector<int>& zero_base_idx,
+      const std::vector<std::pair<int, int>>& fill_pm_to_base)
+  {
+    const int T = n_trials;
+    for (std::size_t k = 0; k < zero_base_idx.size(); ++k) {
+      double* col = &base(0, zero_base_idx[k]);
+      std::fill(col, col + T, 0.0);
+    }
+    for (std::size_t k = 0; k < fill_pm_to_base.size(); ++k) {
+      const double val = particles(row, fill_pm_to_base[k].first);
+      double* col = &base(0, fill_pm_to_base[k].second);
+      std::fill(col, col + T, val);
+    }
+  }
 };
 
 

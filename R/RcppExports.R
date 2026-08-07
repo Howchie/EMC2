@@ -57,6 +57,10 @@ pbvn_drezner <- function(h, k, rho) {
     .Call(`_EMC2_pbvn_drezner`, h, k, rho)
 }
 
+pbvn_hybrid <- function(h, k, rho) {
+    .Call(`_EMC2_pbvn_hybrid`, h, k, rho)
+}
+
 gomp_pdf_cdf_vec <- function(rt, alpha, beta, K, B, A, t0, bkind = 0L, Binf = as.numeric( c()), tau = as.numeric( c()), pw = as.numeric( c()), nx = 512L, dt_target = 4e-3, grade = 8.0, tgrade = 32.0) {
     .Call(`_EMC2_gomp_pdf_cdf_vec`, rt, alpha, beta, K, B, A, t0, bkind, Binf, tau, pw, nx, dt_target, grade, tgrade)
 }

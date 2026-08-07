@@ -114,7 +114,7 @@ inline BvnCornerValues bawl_corr_bvn_corner(double x, double y, double rho) {
     return out;
   }
 
-  out.cdf = norm_cdf_2d(x, y, r);
+  out.cdf = norm_cdf_2d_hybrid(x, y, r);
   const double qx = (y - r * x) / sr;
   const double qy = (x - r * y) / sr;
   const double fx = dnormP(x);
@@ -692,7 +692,7 @@ inline double bawl_corr_pair_positive_normalizer(double mu1, double sd1,
   // The pair normalizer is just the positive orthant probability.  Do not
   // build the full rectangle-moment grid here: its first moment derivatives
   // are needed by the exact survivor/cause integrals, but not by Z.
-  const double p = norm_cdf_2d(mu1 / sd1, mu2 / sd2, rho);
+  const double p = norm_cdf_2d_hybrid(mu1 / sd1, mu2 / sd2, rho);
   return (R_FINITE(p) && p > 0.0) ? p : R_NaN;
 }
 

@@ -1054,6 +1054,69 @@ double pgbm(double t, double mu, double b, double A, double sigma,
   // F_K(t) = (exp(c_eta * log_b) / A) *
   //   [ ∫_0^{x_hi} exp(q * y) Phi(a*y + c1) dy
   //   + exp(k_log*log_b) * ∫_0^{x_hi} exp((q-k_log)*y) Phi(a*y + c2) dy ]
+  //
+  // Natural-scale fast path. Both integrals close with the identity
+  //   ∫ exp(k y) Phi(a y + c) dy
+  //     = [exp(k y) Phi(a y + c) - E(k,c) Phi(a y + c - k/a)] / k,
+  //   E(k,c) = exp(k^2/(2 a^2) - k c / a),
+  // and the two shifted arguments coincide: with a = 1/st,
+  // c1 - c2 = 2*ak*t_eam/st = k_log*st, so
+  //   (a y + c2) - (q - k_log)/a = a y + c1 - q/a.
+  // That leaves 6 natural Phi evaluations instead of the 8 log-scale ones
+  // the generic helper would take, and drops the signed-log machinery.
+  // Rejected (and handed to the signed-log path below) on overflow or on
+  // cancellation past EMC2_NAT_REL_CANCEL.
+  const double k2 = q - k_log;
+  if (std::fabs(q) > 1e-8 && std::fabs(k2) > 1e-8) {
+    const double sA_hi = a * x_hi + c1;
+    const double sA_lo = a * x_lo + c1;
+    const double sB_hi = a * x_hi + c2;
+    const double sB_lo = a * x_lo + c2;
+    const double sS_hi = sA_hi - q * st;   // shared shifted argument
+    const double sS_lo = sA_lo - q * st;
+
+    const double PhiA_hi = pnorm_std(sA_hi, true, false);
+    const double PhiA_lo = pnorm_std(sA_lo, true, false);
+    const double PhiB_hi = pnorm_std(sB_hi, true, false);
+    const double PhiB_lo = pnorm_std(sB_lo, true, false);
+    const double PhiS_hi = pnorm_std(sS_hi, true, false);
+    const double PhiS_lo = pnorm_std(sS_lo, true, false);
+
+    const double E1 = std::exp(0.5 * q * q * st * st - q * c1 * st);
+    const double E2 = std::exp(0.5 * k2 * k2 * st * st - k2 * c2 * st);
+
+    const double t1a =  std::exp(q * x_hi) * PhiA_hi / q;
+    const double t1b = -std::exp(q * x_lo) * PhiA_lo / q;
+    const double t1c = -E1 * PhiS_hi / q;
+    const double t1d =  E1 * PhiS_lo / q;
+    const double I1  = (t1a + t1b) + (t1c + t1d);
+
+    const double t2a =  std::exp(k2 * x_hi) * PhiB_hi / k2;
+    const double t2b = -std::exp(k2 * x_lo) * PhiB_lo / k2;
+    const double t2c = -E2 * PhiS_hi / k2;
+    const double t2d =  E2 * PhiS_lo / k2;
+    const double I2  = (t2a + t2b) + (t2c + t2d);
+
+    const double mag1 = std::fabs(t1a) + std::fabs(t1b) +
+                        std::fabs(t1c) + std::fabs(t1d);
+    const double mag2 = std::fabs(t2a) + std::fabs(t2b) +
+                        std::fabs(t2c) + std::fabs(t2d);
+
+    const double W1 = std::exp(c_eta * log_b);
+    const double W2 = std::exp((c_eta + k_log) * log_b);
+    const double cdf_val = (W1 * I1 + W2 * I2) / norm_const;
+
+    const bool natural_ok =
+        emc2_isfinite(mag1) && emc2_isfinite(mag2) &&
+        emc2_isfinite(W1) && emc2_isfinite(W2) &&
+        I1 > EMC2_NAT_REL_CANCEL * mag1 &&
+        I2 > EMC2_NAT_REL_CANCEL * mag2 &&
+        emc2_isfinite(cdf_val) && cdf_val > 0.0;
+
+    if (natural_ok)
+      return finish(std::log(cdf_val > 1.0 ? 1.0 : cdf_val));
+  }
+
   const double log_term1 = c_eta * log_b +
     log_integrate_exp_times_normal_cdf(q, a, c1, x_lo, x_hi);
   const double log_term2 = (c_eta + k_log) * log_b +
@@ -1230,10 +1293,10 @@ double dswtn(double t, double mu_drift, double threshold, double s = 1.0,
 // SWTN CDF.
 // --------------------------------------------------------------------------
 
+// Retained as the SWTN-facing name; the dispatch itself lives in gaussian.h
+// so BAwL's correlated kernels can share it.
 inline double norm_cdf_2d_stable(double x, double y, double rho) {
-  if (std::fabs(rho) > 0.9999 || std::fabs(x) > 8.0 || std::fabs(y) > 8.0)
-    return norm_cdf_2d(x, y, rho);
-  return norm_cdf_2d_fast(x, y, rho);
+  return norm_cdf_2d_hybrid(x, y, rho);
 }
 
 // Log-space counterpart of integrate_positive_drift_quad below: accumulates

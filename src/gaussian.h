@@ -721,11 +721,60 @@ inline double norm_cdf_2d(double x1, double x2, double rho)
   return norm_ucdf_2d(-x1, -x2, rho);
 }
 
+// Accuracy/speed hybrid over the two bivariate-normal CDFs.
+//
+// Measured against mvtnorm::GenzBretz(abseps=1e-15) on 4000 random
+// (x, y, rho) with x,y ~ N(0,3), |rho| < 0.98:
+//
+//   true Phi2      drezner rel err   tvpack rel err
+//   0.1  .. 1          9.6e-07          1.2e-15
+//   1e-3 .. 0.1        4.9e-05          5.9e-14
+//   1e-6 .. 1e-3       3.3e-03          2.2e-11
+//   1e-10.. 1e-6       1.5e-01          1.0e-07
+//   < 1e-10            garbage          garbage
+//
+// Drezner's error is ~2e-7 in ABSOLUTE terms across the whole range; its
+// relative error degrades purely because the probability shrinks. So the
+// dispatch must key on the magnitude of the probability, not on |x|,|y|
+// (an |x|>8 style guard is a poor proxy: it misses small probabilities
+// produced by moderate arguments with strongly negative rho, and it sends
+// large probabilities to the slow path whenever one argument is extreme
+// and the other is not).
+//
+// Phi2(x, y, rho) <= min(Phi(x), Phi(y)), so min(x, y) < qnorm(1e-3)
+// certifies a small probability for free, with no pnorm evaluation. That
+// screen routes the deep tail straight to tvpack; anything surviving it is
+// costed at one drezner call, and is re-done with tvpack only in the
+// residual case where a strongly negative rho drove the joint probability
+// below the threshold anyway.
+//
+// Tsay (norm_cdf_2d_vfast) was measured on the same grid and is not usable
+// here: 5e-3 relative / 1.1e-3 absolute error even for probabilities in
+// 0.1..1, for no speed gain over drezner.
+//
+// Both routines can return small negative values below ~1e-10, which turn
+// into NaN downstream on log(); the result is clamped at 0.
+constexpr double EMC2_BVN_DREZNER_MIN_P = 1e-3;
+constexpr double EMC2_BVN_MIN_Z = -3.090232306167813;  // qnorm(1e-3)
+
+inline double norm_cdf_2d_hybrid(double x, double y, double rho) {
+  double out;
+  if (std::fabs(rho) > 0.9999 ||
+      (x < EMC2_BVN_MIN_Z) || (y < EMC2_BVN_MIN_Z)) {
+    out = norm_cdf_2d(x, y, rho);
+  } else {
+    out = norm_cdf_2d_fast(x, y, rho);
+    if (!(out >= EMC2_BVN_DREZNER_MIN_P)) out = norm_cdf_2d(x, y, rho);
+  }
+  return out > 0.0 ? out : 0.0;
+}
+
 // The R-facing pbvn_* wrappers need external linkage so RcppExports.cpp can link
 // against them, so they are defined out-of-line in gaussian.cpp (same pattern as
 // wald_functions.cpp / cdf_fncs.cpp) rather than inline here.
 double pbvn_tsay(double h, double k, double rho);
 double pbvn_tvpack(double h, double k, double rho);
 double pbvn_drezner(double h, double k, double rho);
+double pbvn_hybrid(double h, double k, double rho);
 
 #endif

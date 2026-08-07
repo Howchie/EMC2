@@ -120,6 +120,41 @@ Rcpp::LogicalVector c_do_bound_pt(const ParamTable& pt,
   return result;
 }
 
+Rcpp::LogicalVector c_do_bound_pt_from(const ParamTable& pt,
+                                       const std::vector<BoundSpec>& specs,
+                                       const Rcpp::LogicalVector& seed)
+{
+  // As c_do_bound_pt, but seeded with an already-computed partial result.
+  // Callers use this to fold in only the *variant* bound specs per particle,
+  // seeding with the invariant specs' verdict computed once per call.
+  const Rcpp::NumericMatrix& base = pt.base;
+  const int nrows = base.nrow();
+
+  // Must clone: Rcpp vectors are reference-semantic over the underlying SEXP,
+  // so constructing from `seed` directly would mutate the caller's cache.
+  Rcpp::LogicalVector result =
+    (seed.size() == nrows) ? Rcpp::clone(seed) : Rcpp::LogicalVector(nrows, true);
+
+  for (std::size_t j = 0; j < specs.size(); ++j) {
+    const BoundSpec& bs = specs[j];
+    const int col_idx    = bs.col_idx;
+    const double min_v   = bs.min_val;
+    const double max_v   = bs.max_val;
+    const bool has_exc   = bs.has_exception;
+    const double exc_val = bs.exception_val;
+
+    for (int i = 0; i < nrows; ++i) {
+      if (!result[i]) continue;
+      const double val = base(i, col_idx);
+      bool ok = (val > min_v && val < max_v);
+      if (!ok && has_exc) ok = (val == exc_val);
+      if (!ok) result[i] = false;
+    }
+  }
+
+  return result;
+}
+
 void c_do_transform_pt(ParamTable& pt,
                        const std::vector<TransformSpec>& specs)
 {

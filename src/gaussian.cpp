@@ -22,3 +22,9 @@ double pbvn_tvpack(double h, double k, double rho) {
 double pbvn_drezner(double h, double k, double rho) {
   return norm_cdf_2d_fast(h, k, rho);
 }
+
+// [[Rcpp::export]]
+double pbvn_hybrid(double h, double k, double rho) {
+  return norm_cdf_2d_hybrid(h, k, rho);
+}
+
