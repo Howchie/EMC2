@@ -8,7 +8,8 @@ RDMSWTN(
   erlang_shape = 1L,
   erlang_type = "none",
   posdrift = TRUE,
-  correlated = FALSE
+  correlated = FALSE,
+  correlate = c("times", "drifts")
 )
 }
 \arguments{
@@ -22,8 +23,13 @@ or \code{"mixed"} for the Erlang-1/Erlang-2 mixture.}
 normal drift distribution below at zero; if \code{FALSE}, use untruncated
 drifts and allow intrinsic omissions.}
 
-\item{correlated}{Logical. If \code{TRUE}, add the Gaussian-copula parameter
-\code{rho} and use the correlated pair race likelihood and simulator.}
+\item{correlated}{Logical. If \code{TRUE}, add the correlation parameter \code{rho}
+and use the correlated race likelihood and simulator.}
+
+\item{correlate}{What \code{rho} correlates when \code{correlated = TRUE}: \code{"times"}
+(default) for a Gaussian copula on the two participating finishing times,
+or \code{"drifts"} for correlated between-trial drift draws in the style of
+\code{\link[=BAwLcorr]{BAwLcorr()}}. \code{"drifts"} requires \code{sv > 0} on the correlated rows.}
 }
 \value{
 A model list compatible with \code{\link[=design]{design()}}.
@@ -74,8 +80,11 @@ setting both \code{sv = 0} and \code{A = 0} gives a point Wald accumulator (apar
 any optional clock). With \code{posdrift = FALSE}, negative drifts are allowed and
 the finish-time distribution can be defective: an accumulator can have an
 intrinsic infinite finish time. The compiled model name is suffixed with
-\code{IO} in that case. With \code{posdrift = TRUE}, the drift distribution is
-truncated at zero and the ordinary RDM is recovered when \code{sv = 0}.
+\code{IO} in that case, and \code{v} is sampled on the natural scale
+(\code{transform = "identity"}, bounds \verb{(-Inf, Inf)}, default \code{1}) so that
+negative mean rates are reachable. With \code{posdrift = TRUE}, the drift
+distribution is truncated at zero, \code{v} is sampled on the log scale
+(bounds \verb{(1e-3, Inf)}), and the ordinary RDM is recovered when \code{sv = 0}.
 
 As a race model, RDMSWTN has one accumulator per response option. EMC2
 constructs the latent accumulator factor \code{lR} from \code{R}, and the race
@@ -95,13 +104,41 @@ participation factor, for example \code{rho ~ 0 + coupled}, and fix the
 opted-out coefficient to zero. Zero or one nonzero row is an ordinary
 independent RDMSWTN race.
 
-Correlation is applied to finishing-time ranks through a Gaussian copula,
-including when \code{sv > 0}; it is not a correlation of drift draws or the
-Pearson correlation of observed response times. For the participating pair,
-Kendall's tau is \code{2 * asin(rho) / pi} and Spearman's rho is
-\code{6 * asin(rho / 2) / pi}. Correlated RDMSWTN currently supports only
-\code{erlang_type = "none"} and \code{posdrift = TRUE}. The unrestricted-drift
-(\code{posdrift = FALSE}) model remains available at \code{rho = 0}, but any active
-nonzero correlation is rejected. \code{\link[=LogicalRulesRDMSWTN]{LogicalRulesRDMSWTN()}} remains an
-independent model; correlated logical-rule races are not supported.
+\code{correlate} picks which of two genuinely different data generating
+processes \code{rho} describes.
+
+With \code{correlate = "times"} (the default) correlation is applied to
+finishing-time ranks through a Gaussian copula, including when \code{sv > 0}; it
+is not a correlation of drift draws or the Pearson correlation of observed
+response times. For the participating pair, Kendall's tau is
+\code{2 * asin(rho) / pi} and Spearman's rho is \code{6 * asin(rho / 2) / pi}.
+
+This copula is available under \code{posdrift = FALSE} provided \code{sv = 0} on the
+correlated rows. The marginals are then defective: a negative mean rate
+gives an accumulator with intrinsic never-finish mass, \code{F(Inf) = p < 1}.
+The copula construction is unchanged and remains exact, because copula
+uniforms at or above the marginal plateau represent the atom at infinity.
+\code{rho} therefore couples the omissions as well as the finite finishing
+times: the probability that neither of a coupled pair ever finishes is
+\verb{Phi2(qnorm(p1), qnorm(p2); rho)} rather than the product \code{(1-p1)(1-p2)}.
+
+With \code{correlate = "drifts"} \code{rho} is instead the correlation of the
+\emph{between-trial drift draws themselves}, exactly as in \code{\link[=BAwLcorr]{BAwLcorr()}}: the
+rates are drawn from an equicorrelated normal (truncated to the positive
+orthant when \code{posdrift = TRUE}) and the accumulators then race
+independently on the drawn rates. This requires \code{sv > 0} on the correlated
+rows, since at \code{sv = 0} there are no draws to correlate. Both models share
+one implementation of the construction and of the shared-factor quadrature
+that integrates it out; see \code{src/drift_factor.h}. A \code{matchfun} is required
+either way, and the correct racer is the positive reference while the
+incorrect racers carry the cell sign, so a pair's loadings multiply back to
+\code{rho}.
+
+The two settings are not nested and neither is a limit of the other, so
+\code{correlate} must be chosen deliberately; \code{"times"} is the default because
+it is what earlier versions did.
+
+Correlated RDMSWTN currently supports only \code{erlang_type = "none"}.
+\code{\link[=LogicalRulesRDMSWTN]{LogicalRulesRDMSWTN()}} remains an independent model; correlated
+logical-rule races are not supported.
 }

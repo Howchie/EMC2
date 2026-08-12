@@ -31,7 +31,9 @@ set_rdmswtn_corr_values <- function(p, rho = NULL, v = c(1.2, .8),
   p["B"] <- log(B)
   p["A"] <- if (A == 0) 0 else log(A)
   p["t0"] <- log(t0)
-  p["sv"] <- if (sv == 0) 0 else log(sv)
+  # sv is sampled on the log scale, so sv = 0 is log(0) = -Inf; a plain 0
+  # here would silently mean exp(0) = 1.
+  p["sv"] <- log(sv)
   if (!is.null(rho)) {
     p[grep("^rho", names(p))] <- qnorm((rho + 1) / 2)
   }
@@ -178,7 +180,160 @@ test_that("direct-pair validation rejects malformed participation", {
     nrow = 1,
     dimnames = list(NULL, names(model$p_types)))
   expect_error(model$Ttransform(pars, NULL),
-               "posdrift = FALSE")
+               "requires sv = 0 on the correlated rows")
+  # sv = 0 is the supported unrestricted-drift copula; it must pass.
+  pars[, "sv"] <- 0
+  expect_silent(model$Ttransform(pars, NULL))
+  # rho = 0 rows are never subject to the sv rule.
+  pars[, c("sv", "rho")] <- c(.4, 0)
+  expect_silent(model$Ttransform(pars, NULL))
+})
+
+test_that("posdrift selects the sampling scale of the RDMSWTN mean rate", {
+  for (ctor in list(RDMSWTN, RDMSWTN_TT, RDMSWTNcorr, RDMSWTN_TTcorr,
+                    LogicalRulesRDMSWTN)) {
+    pos <- ctor(posdrift = TRUE)
+    io <- ctor(posdrift = FALSE)
+    expect_identical(pos$transform$func[["v"]], "exp")
+    expect_equal(pos$p_types[["v"]], log(1))
+    expect_equal(pos$bound$minmax[, "v"], c(1e-3, Inf))
+    # Unrestricted drifts must be able to reach negative mean rates.
+    expect_identical(io$transform$func[["v"]], "identity")
+    expect_equal(io$p_types[["v"]], 1)
+    expect_equal(io$bound$minmax[, "v"], c(-Inf, Inf))
+  }
+})
+
+test_that("unrestricted-drift copula matches the defective cause formula", {
+  dat <- data.frame(
+    subjects = factor(1),
+    R = factor(c("a", "b"), levels = c("a", "b")),
+    rt = c(.7, .8)
+  )
+  for (rho in c(-.75, .55)) {
+    ctx <- make_rdmswtn_corr_context(dat, RDMSWTNcorr(posdrift = FALSE),
+                                     constants = c(sv = log(0)))
+    p <- sampled_pars(ctx$design, doMap = FALSE)
+    # v is on the natural scale here: one accumulator is defective.
+    p[grep("^v_", names(p))] <- c(-0.35, 0.9)
+    p["B"] <- log(1); p["A"] <- log(.2); p["t0"] <- log(.1)
+    p[grep("^rho", names(p))] <- qnorm((rho + 1) / 2)
+    ll <- rdmswtn_corr_ll(ctx, p)
+
+    dadm <- ctx$emc$data[[1]]
+    pars <- EMC2:::get_pars_matrix_oo(p, dadm, ctx$emc$model())
+    reference <- 0
+    for (j in 0:1) {
+      rows <- j * 2 + 1:2
+      win <- rows[which(dadm$winner[rows])]
+      lose <- setdiff(rows, win)
+      t <- dadm$rt[win]
+      fw <- EMC2:::dRDMSWTN(t, pars[win, , drop = FALSE], posdrift = FALSE)
+      Fw <- EMC2:::pRDMSWTN(t, pars[win, , drop = FALSE], posdrift = FALSE)
+      Fl <- EMC2:::pRDMSWTN(t, pars[lose, , drop = FALSE], posdrift = FALSE)
+      conditional_survivor <- pnorm(
+        (rho * qnorm(Fw) - qnorm(Fl)) / sqrt(1 - rho^2))
+      reference <- reference + log(fw) + log(conditional_survivor)
+    }
+    expect_equal(as.numeric(ll), reference, tolerance = 2e-8,
+                 info = paste("rho", rho))
+  }
+})
+
+test_that("the copula couples intrinsic omissions of defective marginals", {
+  # Both accumulators have negative mean rates, so the pair has a joint atom
+  # at +Inf.  Its probability is the bivariate normal upper orthant at the
+  # marginal plateaus, NOT the product of the marginal never-finish masses.
+  dat <- data.frame(
+    subjects = factor(1),
+    R = factor(NA, levels = c("a", "b")),
+    rt = Inf
+  )
+  for (rho in c(-.7, .7)) {
+    ctx <- make_rdmswtn_corr_context(dat, RDMSWTNcorr(posdrift = FALSE),
+                                     constants = c(sv = log(0)))
+    p <- sampled_pars(ctx$design, doMap = FALSE)
+    p[grep("^v_", names(p))] <- c(-0.3, -0.6)
+    p["B"] <- log(1); p["A"] <- log(.2); p["t0"] <- log(.1)
+    p[grep("^rho", names(p))] <- qnorm((rho + 1) / 2)
+    ll <- rdmswtn_corr_ll(ctx, p)
+
+    pars <- EMC2:::get_pars_matrix_oo(p, ctx$emc$data[[1]],
+                                      ctx$emc$model())
+    cap <- EMC2:::pRDMSWTN(rep(Inf, 2), pars, posdrift = FALSE)
+    expect_true(all(cap < 1))
+    joint_atom <- EMC2:::pbvn_tvpack(-qnorm(cap[1]), -qnorm(cap[2]), rho)
+    # The compiled route takes the Drezner branch of norm_cdf_2d_hybrid for
+    # these moderate arguments, which carries ~1e-6 relative error against
+    # tvpack; that tradeoff is shared with every other correlated route.
+    expect_equal(as.numeric(ll), log(joint_atom), tolerance = 2e-5,
+                 info = paste("rho", rho))
+    expect_false(isTRUE(all.equal(joint_atom,
+                                  prod(1 - cap), tolerance = 1e-3)))
+  }
+})
+
+test_that("unrestricted-drift copula simulator reproduces the likelihood", {
+  skip_on_cran()
+  model <- RDMSWTNcorr(posdrift = FALSE)
+  lR <- factor(rep(c("a", "b"), 2e4), levels = c("a", "b"))
+  pars <- cbind(
+    v = rep(c(-0.3, -0.6), 2e4), b = 1.2, A = .2, t0 = .1, s = 1,
+    sv = 0, lambda_g = 0, lambda_k = 0, rho = .7)
+  set.seed(11)
+  sim <- EMC2:::rRDMSWTN_corr(lR, pars, posdrift = FALSE)
+
+  cap <- EMC2:::pRDMSWTN(c(Inf, Inf), pars[1:2, , drop = FALSE],
+                         posdrift = FALSE)
+  joint_atom <- EMC2:::pbvn_tvpack(-qnorm(cap[1]), -qnorm(cap[2]), .7)
+  cause <- function(t, w) {
+    if (!is.finite(t)) return(0)  # the atom at +Inf is not part of the density
+    l <- 3L - w
+    fw <- EMC2:::dRDMSWTN(t, pars[w, , drop = FALSE], posdrift = FALSE)
+    if (!(fw > 0)) return(0)
+    Fw <- EMC2:::pRDMSWTN(t, pars[w, , drop = FALSE], posdrift = FALSE)
+    Fl <- EMC2:::pRDMSWTN(t, pars[l, , drop = FALSE], posdrift = FALSE)
+    fw * pnorm((.7 * qnorm(Fw) - qnorm(Fl)) / sqrt(1 - .7^2))
+  }
+  p_resp <- vapply(1:2, function(w) {
+    integrate(function(t) vapply(t, cause, 0, w = w), .1, Inf,
+              rel.tol = 1e-9)$value
+  }, 0)
+  # The simulator, the copula likelihood and the joint atom must agree, and
+  # together they must exhaust the probability.
+  expect_equal(sum(p_resp) + joint_atom, 1, tolerance = 1e-6)
+  expect_equal(mean(!is.finite(sim$rt)), joint_atom, tolerance = .01)
+  expect_equal(mean(sim$R == "a", na.rm = TRUE) *
+                 mean(is.finite(sim$rt)), p_resp[1], tolerance = .03)
+
+  # The compiled simulator inverts the same defective marginal: uniforms at or
+  # above the plateau must become never-finish draws rather than an error.
+  set.seed(12)
+  cpp <- EMC2:::rrdmswtn_corr_cpp(pars, levels(lR),
+                                  rep(TRUE, nrow(pars)), FALSE)
+  expect_equal(mean(!is.finite(cpp$rt)), joint_atom, tolerance = .01)
+  expect_equal(mean(cpp$R[is.finite(cpp$rt)] == 1L) *
+                 mean(is.finite(cpp$rt)), p_resp[1], tolerance = .03)
+  expect_equal(as.numeric(quantile(cpp$rt[is.finite(cpp$rt)], c(.25, .5, .75))),
+               as.numeric(quantile(sim$rt[is.finite(sim$rt)], c(.25, .5, .75))),
+               tolerance = .03)
+})
+
+test_that("compiled and R simulators reject sv > 0 under posdrift = FALSE", {
+  lR <- factor(rep(c("a", "b"), 5), levels = c("a", "b"))
+  pars <- cbind(
+    v = rep(c(-0.3, 0.6), 5), b = 1.2, A = .2, t0 = .1, s = 1,
+    sv = .3, lambda_g = 0, lambda_k = 0, rho = .5)
+  expect_error(EMC2:::rRDMSWTN_corr(lR, pars, posdrift = FALSE),
+               "requires sv = 0 on the correlated rows")
+  expect_error(
+    EMC2:::rrdmswtn_corr_cpp(pars, levels(lR), rep(TRUE, nrow(pars)), FALSE),
+    "requires sv = 0 on the correlated rows")
+  # sv > 0 stays legal once the rows are uncorrelated, and under posdrift.
+  pars[, "rho"] <- 0
+  expect_silent(EMC2:::rRDMSWTN_corr(lR, pars, posdrift = FALSE))
+  pars[, "rho"] <- .5
+  expect_silent(EMC2:::rRDMSWTN_corr(lR, pars, posdrift = TRUE))
 })
 
 test_that("compiled dispatch rejects correlated logical-rule races", {

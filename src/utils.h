@@ -130,17 +130,25 @@ struct ContextForRaceModels {
     // argument of the exported dbawd/pbawd.
     int bawd_launch = BAWD_LAUNCH_LOGNORMAL;
 
-    // Correlated BAwL uses one shared standard-normal factor.  The low-level
-    // row rho determines the accumulator's signed factor variance share;
-    // BAwLcorr's R Ttransform maps a cell-level correlation into these row
-    // values before the kernel is called.  rho == 0 leaves that racer
-    // independent of the shared draw.
-    bool bawl_correlated = false;
-    int bawl_rho_index = -1;
+    // Correlated *drift draws* through one shared standard-normal factor
+    // (drift_factor.h).  The low-level row rho determines the accumulator's
+    // signed factor variance share; the model's R Ttransform maps a
+    // cell-level correlation into these row values before the kernel is
+    // called, and rho == 0 leaves that racer independent of the shared draw.
+    // Any model whose drift is N(v, sv^2) can use this route: the column
+    // positions below tell the shared driver where v and sv live, and
+    // corr_drift_generic_only suppresses the BAwL-specific exact and fused
+    // fast routes for models that have no affine-in-drift survivor.
+    bool corr_drift_active = false;
+    int corr_drift_rho_index = -1;
+    int corr_drift_v_col = -1;
+    int corr_drift_sv_col = -1;
+    bool corr_drift_generic_only = false;
 
     // Correlated RDMSWTN couples one directly specified pair of complete
     // finishing-time marginals with a Gaussian copula. This metadata is
-    // intentionally distinct from BAwL's shared drift-factor path.
+    // intentionally distinct from the shared drift-factor path above; the two
+    // are the "times" and "drifts" settings of RDMSWTNcorr(correlate =).
     bool rdmswtn_correlated = false;
     int rdmswtn_rho_index = -1;
 

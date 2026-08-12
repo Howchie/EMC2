@@ -68,7 +68,9 @@ Can also be set to a double, in which case 1/thin of the chain will be removed (
 \item{r_cores}{An integer giving an explicit lower bound on the cores used
 within one participant's proposal-likelihood calculation. This applies to
 both R and registered C++ likelihoods. It defaults to 1; single-participant
-fits automatically inherit a larger \code{cores_per_chain} budget.}
+fits automatically inherit a larger \code{cores_per_chain} budget. When nested
+likelihood work would exceed the current global core budget, the effective
+value is capped so the outer budget remains authoritative.}
 }
 \value{
 An emc object

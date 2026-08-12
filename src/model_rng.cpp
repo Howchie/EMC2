@@ -13,6 +13,7 @@
 #include <unordered_map>
 #include <vector>
 #include "model_rng.h"
+#include "drift_factor.h"
 
 using namespace Rcpp;
 
@@ -474,43 +475,8 @@ Rcpp::List rbawl_corr_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_lev
   if (ok.size() != n_rows) Rcpp::stop("rbawl_corr_cpp: ok has the wrong length.");
 
   std::vector<double> drifts(static_cast<size_t>(n_rows), R_PosInf);
-  const int max_iter = 100000;
-  for (int tr = 0; tr < n_trials; ++tr) {
-    const int start = tr * n_acc;
-    bool has_active = false;
-    for (int a = 0; a < n_acc; ++a) has_active = has_active || static_cast<bool>(ok[start + a]);
-    if (!has_active) continue;
-
-    bool accepted = false;
-    for (int iter = 0; iter < max_iter; ++iter) {
-      const double z = R::norm_rand();
-      bool positive = true;
-      for (int a = 0; a < n_acc; ++a) {
-        const int r = start + a;
-        if (!ok[r]) continue;
-        const double rho = pars(r, irho);
-        if (!R_FINITE(rho) || std::fabs(rho) > 1.0) {
-          Rcpp::stop("rbawl_corr_cpp: rho must be finite and lie in [-1, 1].");
-        }
-        const double magnitude = std::fabs(rho);
-        const double direction = (rho < 0.0) ? -1.0 : 1.0;
-        const double mu = pars(r, iv) +
-          direction * pars(r, isv) * std::sqrt(magnitude) * z;
-        const double sd = pars(r, isv) *
-          std::fmax(std::sqrt(std::fmax(0.0, 1.0 - magnitude)), 1e-12);
-        const double draw = R::rnorm(mu, sd);
-        drifts[static_cast<size_t>(r)] = draw;
-        if (posdrift && !(draw > 0.0)) positive = false;
-      }
-      if (!posdrift || positive) {
-        accepted = true;
-        break;
-      }
-    }
-    if (!accepted) {
-      Rcpp::stop("rbawl_corr_cpp: jointly positive drift rejection exceeded %d attempts; check that the drift means are not far below zero.", max_iter);
-    }
-  }
+  drift_factor_draw_correlated(pars, iv, isv, irho, ok, n_acc, posdrift,
+                               drifts, "rbawl_corr_cpp");
 
   return rbawl_cpp_impl(pars, lR_levels, ok, posdrift, erlang,
                         guess, global, &drifts);
@@ -567,10 +533,16 @@ Rcpp::List rbawd_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
 // pars columns: v, b, A, t0, sv, lambda_g, lambda_k (+ optional s, omega).
 // erlang_type: "none" | "local_kill" | "global_kill" | "local_guess" | "local_kill_guess".
 // Matches R's rRDMSWTN (model_RDM.R:872-1014) and rSWTN (model_RDM.R:489-532).
-// [[Rcpp::export]]
-Rcpp::List rrdmswtn_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
-                        Rcpp::LogicalVector ok, int erlang_shape, std::string erlang_type,
-                        bool posdrift) {
+//
+// `drift_override` supplies a pre-drawn rate per row, which is how the
+// correlated-draw simulator injects its equicorrelated draws (drift_factor.h)
+// without duplicating the Erlang clock, start-point and race machinery below.
+// A null pointer keeps the ordinary independent per-row draw.
+static Rcpp::List rrdmswtn_cpp_impl(Rcpp::NumericMatrix pars,
+                                    Rcpp::CharacterVector lR_levels,
+                                    Rcpp::LogicalVector ok, int erlang_shape,
+                                    std::string erlang_type, bool posdrift,
+                                    const std::vector<double>* drift_override) {
   const int n_acc = lR_levels.size();
   const int n_rows = pars.nrow();
   const int n_trials = n_rows / n_acc;
@@ -616,7 +588,9 @@ Rcpp::List rrdmswtn_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_level
     const double s = (is_ >= 0) ? pars(r, is_) : 1.0;
     const double v = pars(r, iv), sv = pars(r, isv);
     double v_draw = v;
-    if (R_FINITE(sv) && sv > 1e-12) {
+    if (drift_override != nullptr) {
+      v_draw = (*drift_override)[static_cast<size_t>(r)];
+    } else if (R_FINITE(sv) && sv > 1e-12) {
       if (posdrift) {
         const double lo = R::pnorm(0.0, v, sv, 1, 0);
         double u = lo + R::unif_rand() * (1.0 - lo);
@@ -695,16 +669,59 @@ Rcpp::List rrdmswtn_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_level
   return pack_result(res.R, res.rt, res.omitted, has_isTime, isTime);
 }
 
+// [[Rcpp::export]]
+Rcpp::List rrdmswtn_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
+                        Rcpp::LogicalVector ok, int erlang_shape,
+                        std::string erlang_type, bool posdrift) {
+  return rrdmswtn_cpp_impl(pars, lR_levels, ok, erlang_shape, erlang_type,
+                           posdrift, nullptr);
+}
+
+// Correlated *drift draws*: one shared latent factor per trial couples the
+// rates, then every accumulator races independently on its own draw.  This is
+// the same construction BAwLcorr simulates (rbawl_corr_cpp); the only
+// difference is the accumulator the drawn rate is fed to.
+// [[Rcpp::export]]
+Rcpp::List rrdmswtn_drift_corr_cpp(Rcpp::NumericMatrix pars,
+                                   Rcpp::CharacterVector lR_levels,
+                                   Rcpp::LogicalVector ok, bool posdrift) {
+  const int n_acc = lR_levels.size();
+  const int n_rows = pars.nrow();
+  if (n_acc <= 0 || n_rows <= 0 || n_rows % n_acc != 0) {
+    Rcpp::stop("rrdmswtn_drift_corr_cpp: invalid accumulator/parameter dimensions.");
+  }
+  if (ok.size() != n_rows) {
+    Rcpp::stop("rrdmswtn_drift_corr_cpp: ok has the wrong length.");
+  }
+  const auto ci = col_index_map(pars);
+  std::vector<double> drifts(static_cast<size_t>(n_rows), R_PosInf);
+  drift_factor_draw_correlated(pars, ci.at("v"), ci.at("sv"), ci.at("rho"), ok,
+                               n_acc, posdrift, drifts,
+                               "rrdmswtn_drift_corr_cpp");
+  return rrdmswtn_cpp_impl(pars, lR_levels, ok, 1, "none", posdrift, &drifts);
+}
+
 namespace {
 
 double rdmswtn_quantile_cpp(double u, double v, double b, double A, double s,
-                            double t0, double sv) {
+                            double t0, double sv, bool posdrift = true) {
   u = std::fmin(std::nextafter(1.0, 0.0),
                 std::fmax(std::numeric_limits<double>::min(), u));
   auto cdf = [&](double t) {
     return prdmswtn(t, v, b, A, s, t0, sv, 0.0, 0.0, 20, false,
-                    1, false, true, 1.0);
+                    1, false, posdrift, 1.0);
   };
+  if (!posdrift) {
+    // Defective marginal: F saturates at the hit probability p = F(Inf) < 1.
+    // Copula uniforms at or above that plateau are the atom at infinity, i.e.
+    // this accumulator never finishes.  Without this the bracketing loop below
+    // would run to its ceiling and abort on a perfectly valid draw.
+    const double cap = cdf(R_PosInf);
+    if (!R_FINITE(cap)) {
+      Rcpp::stop("rrdmswtn_corr_cpp: non-finite marginal hit probability while inverting a finishing-time quantile.");
+    }
+    if (u >= cap) return R_PosInf;
+  }
   double lo = 0.0;
   double hi = std::fmax(1.0, t0 + 1.0);
   double fhi = cdf(hi);
@@ -766,10 +783,14 @@ Rcpp::List rrdmswtn_corr_cpp(Rcpp::NumericMatrix pars,
     if (pars(r, ilg) != 0.0 || pars(r, ilk) != 0.0) {
       Rcpp::stop("rrdmswtn_corr_cpp: guess and kill clocks are not supported.");
     }
-    if (std::fabs(rho) > 1e-12) any_nonzero = true;
-  }
-  if (!posdrift && any_nonzero) {
-    Rcpp::stop("rrdmswtn_corr_cpp: posdrift = FALSE is supported only when every active rho is zero.");
+    if (std::fabs(rho) <= 1e-12) continue;
+    any_nonzero = true;
+    // See .check_rdmswtn_corr_io_sv() in R/model_RDM.R: the copula couples
+    // defective finishing times, but sv > 0 under unrestricted drifts is
+    // reserved for a correlated-drift model.
+    if (!posdrift && !(pars(r, isv) <= 1e-12)) {
+      Rcpp::stop("rrdmswtn_corr_cpp: posdrift = FALSE requires sv = 0 on the correlated rows.");
+    }
   }
   if (!any_nonzero) {
     return rrdmswtn_cpp(pars, lR_levels, ok, 1, "none", posdrift);
@@ -814,7 +835,7 @@ Rcpp::List rrdmswtn_corr_cpp(Rcpp::NumericMatrix pars,
     const double s = (is_ >= 0) ? pars(r, is_) : 1.0;
     dt[static_cast<size_t>(r)] = rdmswtn_quantile_cpp(
       u[static_cast<size_t>(r)], pars(r, iv), pars(r, ib), pars(r, iA),
-      s, pars(r, it0), pars(r, isv)
+      s, pars(r, it0), pars(r, isv), posdrift
     );
   }
   RaceOut res = resolve_race(dt, n_acc, n_trials, nullptr, nullptr);
@@ -825,11 +846,11 @@ Rcpp::List rrdmswtn_corr_cpp(Rcpp::NumericMatrix pars,
 
 // RDMSWTN under the linear exhaustion clock. Draw the ordinary operational
 // finishing time, omit when it exceeds Q=tau/2, and otherwise invert q.
-// [[Rcpp::export]]
-Rcpp::List rrdmswtn_tt_cpp(Rcpp::NumericMatrix pars,
-                           Rcpp::CharacterVector lR_levels,
-                           Rcpp::LogicalVector ok,
-                           bool posdrift) {
+// See rrdmswtn_cpp_impl() for the drift_override contract.
+static Rcpp::List rrdmswtn_tt_cpp_impl(Rcpp::NumericMatrix pars,
+                                       Rcpp::CharacterVector lR_levels,
+                                       Rcpp::LogicalVector ok, bool posdrift,
+                                       const std::vector<double>* drift_override) {
   const int n_acc = lR_levels.size();
   const int n_rows = pars.nrow();
   if (n_acc <= 0 || n_rows <= 0 || n_rows % n_acc != 0) {
@@ -858,7 +879,9 @@ Rcpp::List rrdmswtn_tt_cpp(Rcpp::NumericMatrix pars,
     const double s = (is_ >= 0) ? pars(r, is_) : 1.0;
     const double v = pars(r, iv), sv = pars(r, isv);
     double v_draw = v;
-    if (R_FINITE(sv) && sv > 1e-12) {
+    if (drift_override != nullptr) {
+      v_draw = (*drift_override)[static_cast<size_t>(r)];
+    } else if (R_FINITE(sv) && sv > 1e-12) {
       v_draw = rtnorm_lower_r(v, sv, posdrift ? 0.0 : R_NegInf);
     }
     double b = std::fmax(0.0, pars(r, ib));
@@ -877,18 +900,47 @@ Rcpp::List rrdmswtn_tt_cpp(Rcpp::NumericMatrix pars,
   return pack_result(res.R, res.rt, res.omitted, has_isTime, isTime);
 }
 
+// [[Rcpp::export]]
+Rcpp::List rrdmswtn_tt_cpp(Rcpp::NumericMatrix pars,
+                           Rcpp::CharacterVector lR_levels,
+                           Rcpp::LogicalVector ok, bool posdrift) {
+  return rrdmswtn_tt_cpp_impl(pars, lR_levels, ok, posdrift, nullptr);
+}
+
+// Correlated drift draws under the exhaustion clock; see
+// rrdmswtn_drift_corr_cpp().
+// [[Rcpp::export]]
+Rcpp::List rrdmswtn_tt_drift_corr_cpp(Rcpp::NumericMatrix pars,
+                                      Rcpp::CharacterVector lR_levels,
+                                      Rcpp::LogicalVector ok, bool posdrift) {
+  const int n_acc = lR_levels.size();
+  const int n_rows = pars.nrow();
+  if (n_acc <= 0 || n_rows <= 0 || n_rows % n_acc != 0) {
+    Rcpp::stop("rrdmswtn_tt_drift_corr_cpp: invalid accumulator/parameter dimensions.");
+  }
+  if (ok.size() != n_rows) {
+    Rcpp::stop("rrdmswtn_tt_drift_corr_cpp: ok has the wrong length.");
+  }
+  const auto ci = col_index_map(pars);
+  std::vector<double> drifts(static_cast<size_t>(n_rows), R_PosInf);
+  drift_factor_draw_correlated(pars, ci.at("v"), ci.at("sv"), ci.at("rho"), ok,
+                               n_acc, posdrift, drifts,
+                               "rrdmswtn_tt_drift_corr_cpp");
+  return rrdmswtn_tt_cpp_impl(pars, lR_levels, ok, posdrift, &drifts);
+}
+
 namespace {
 
 double rdmswtn_operational_quantile_bounded(
     double u, double FQ, double Q, double v, double b, double A,
-    double s, double sv) {
+    double s, double sv, bool posdrift = true) {
   if (u >= FQ) return Q;
   double lo = 0.0, hi = Q;
   for (int iter = 0; iter < 100; ++iter) {
     const double mid = lo + 0.5 * (hi - lo);
     const double fm = prdmswtn(
         mid, v, b, A, s, 0.0, sv, 0.0, 0.0, 20, false,
-        1, false, true, 1.0);
+        1, false, posdrift, 1.0);
     if (!R_FINITE(fm)) {
       Rcpp::stop("rrdmswtn_tt_corr_cpp: non-finite marginal CDF while inverting.");
     }
@@ -934,10 +986,13 @@ Rcpp::List rrdmswtn_tt_corr_cpp(Rcpp::NumericMatrix pars,
     if (ISNAN(tau) || !(tau > 0.0)) {
       Rcpp::stop("rrdmswtn_tt_corr_cpp: tau must be positive (or +Inf).");
     }
-    if (std::fabs(rho) > 1e-12) any_nonzero = true;
-  }
-  if (!posdrift && any_nonzero) {
-    Rcpp::stop("rrdmswtn_tt_corr_cpp: posdrift = FALSE requires every active rho to be zero.");
+    if (std::fabs(rho) <= 1e-12) continue;
+    any_nonzero = true;
+    // sv > 0 with unrestricted drifts is reserved for a correlated-drift
+    // model; see .check_rdmswtn_corr_io_sv() in R/model_RDM.R.
+    if (!posdrift && !(pars(r, isv) <= 1e-12)) {
+      Rcpp::stop("rrdmswtn_tt_corr_cpp: posdrift = FALSE requires sv = 0 on the correlated rows.");
+    }
   }
   if (!any_nonzero) {
     return rrdmswtn_tt_cpp(pars, lR_levels, ok, posdrift);
@@ -988,21 +1043,21 @@ Rcpp::List rrdmswtn_tt_corr_cpp(Rcpp::NumericMatrix pars,
       const double s = (is_ >= 0) ? pars(r, is_) : 1.0;
       dt[static_cast<size_t>(r)] = rdmswtn_quantile_cpp(
         ur, pars(r, iv), pars(r, ib), pars(r, iA), s,
-        pars(r, it0), pars(r, isv));
+        pars(r, it0), pars(r, isv), posdrift);
       continue;
     }
     const double Q = 0.5 * tau;  // tau is finite on this branch
     const double s = (is_ >= 0) ? pars(r, is_) : 1.0;
     const double FQ = prdmswtn(
         Q, pars(r, iv), pars(r, ib), pars(r, iA), s, 0.0, pars(r, isv),
-        0.0, 0.0, 20, false, 1, false, true, 1.0);
+        0.0, 0.0, 20, false, 1, false, posdrift, 1.0);
     if (!R_FINITE(FQ)) {
       Rcpp::stop("rrdmswtn_tt_corr_cpp: non-finite marginal response probability.");
     }
     if (ur > FQ) continue;
     const double operational = rdmswtn_operational_quantile_bounded(
         ur, FQ, Q, pars(r, iv), pars(r, ib), pars(r, iA),
-        s, pars(r, isv));
+        s, pars(r, isv), posdrift);
     dt[static_cast<size_t>(r)] =
       pars(r, it0) + rdmswtn_tt_qinv(operational, tau);
   }

@@ -23,6 +23,7 @@
 #include <gsl/gsl_errno.h> // For GSL error handling
 #include "bawl_geometry.h"
 #include "bawl_corr_exact.h"
+#include "drift_factor.h"
 #include "contaminant_mixture.h"
 #include <cmath>
 #include <string>
@@ -626,8 +627,17 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
     out.col_spec       = emc2col::rdmswtn_tt::spec();
     out.ctx.t0_index   = emc2col::rdmswtn_tt::t0;
     out.ctx.defective_upper_tail = true;
-    out.ctx.rdmswtn_correlated =
-      (type_std.find("_CORR") != std::string::npos);
+    // "_CORRD" (correlated drift draws) contains "_CORR", so it must be
+    // tested first; "_CORR" alone is the finishing-time copula.
+    if (type_std.find("_CORRD") != std::string::npos) {
+      out.ctx.corr_drift_active = true;
+      out.ctx.corr_drift_v_col = emc2col::rdmswtn_tt::v;
+      out.ctx.corr_drift_sv_col = emc2col::rdmswtn_tt::sv;
+      out.ctx.corr_drift_generic_only = true;
+    } else {
+      out.ctx.rdmswtn_correlated =
+        (type_std.find("_CORR") != std::string::npos);
+    }
     if (type_std.find("_IO") != std::string::npos) {
       out.ctx.use_posdrift = false;
     }
@@ -644,8 +654,16 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
     out.ctx.mean_k_index = emc2col::rdmswtn::mK;
     out.ctx.erlang_omega_index = (out.ctx.kill_shape == 3) ? emc2col::rdmswtn::omega : -1;
     out.ctx.defective_upper_tail = true;
-    out.ctx.rdmswtn_correlated =
-      (type_std.find("_CORR") != std::string::npos);
+    // See the RDMSWTN_TT branch: "_CORRD" must be tested before "_CORR".
+    if (type_std.find("_CORRD") != std::string::npos) {
+      out.ctx.corr_drift_active = true;
+      out.ctx.corr_drift_v_col = emc2col::rdmswtn::v;
+      out.ctx.corr_drift_sv_col = emc2col::rdmswtn::sv;
+      out.ctx.corr_drift_generic_only = true;
+    } else {
+      out.ctx.rdmswtn_correlated =
+        (type_std.find("_CORR") != std::string::npos);
+    }
     if (type_std.find("_IO") != std::string::npos) {
       out.ctx.use_posdrift = false;
     }
@@ -696,7 +714,9 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
     out.ctx.mean_g_index = emc2col::bawl::mG;
     out.ctx.mean_k_index = emc2col::bawl::mK;
     out.ctx.erlang_omega_index = (out.ctx.kill_shape == 3) ? emc2col::bawl::omega : -1;
-    out.ctx.bawl_correlated = (type_std.find("_CORR") != std::string::npos);
+    out.ctx.corr_drift_active = (type_std.find("_CORR") != std::string::npos);
+    out.ctx.corr_drift_v_col = emc2col::bawl::v;
+    out.ctx.corr_drift_sv_col = emc2col::bawl::sv;
     // Leaky ballistic accumulators can have defective upper tails (never-finish
     // mass) even when posdrift=TRUE.
     out.ctx.defective_upper_tail = true;
@@ -765,20 +785,20 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
   return out;
 }
 
-static inline void configure_bawl_corr_context(RaceModelAdapter& adapter,
+static inline void configure_corr_drift_context(RaceModelAdapter& adapter,
                                                const Rcpp::CharacterVector& keep_names,
                                                const std::string& caller) {
-  if (!adapter.ctx.bawl_correlated) return;
-  adapter.ctx.bawl_rho_index = -1;
+  if (!adapter.ctx.corr_drift_active) return;
+  adapter.ctx.corr_drift_rho_index = -1;
   for (int j = 0; j < keep_names.size(); ++j) {
     if (Rcpp::as<std::string>(keep_names[j]) == "rho") {
-      adapter.ctx.bawl_rho_index = j;
+      adapter.ctx.corr_drift_rho_index = j;
       break;
     }
   }
-  if (adapter.ctx.bawl_rho_index < 0) {
-    Rcpp::stop("%s: correlated BAwL requires a parameter column named 'rho'.",
-               caller.c_str());
+  if (adapter.ctx.corr_drift_rho_index < 0) {
+    Rcpp::stop("%s: a correlated-drift model requires a parameter column "
+               "named 'rho'.", caller.c_str());
   }
 }
 
@@ -1147,7 +1167,7 @@ struct BAwLCorrTrialLayout {
   bool any_bad_row = false;     // active row failed isok/rho validity
 };
 
-struct BAwLCorrSharedState {
+struct CorrDriftSharedState {
   bool valid = false;
   int n_trials = 0;
   int n_lR = 0;
@@ -1176,6 +1196,13 @@ struct BAwLCorrSharedState {
   GuessKernel guess;  // uniform guess kernel; inactive when pGuess is unused
   int rho_col = -1;
 
+  // Where the model keeps the drift mean and SD, and whether it has an
+  // affine-in-drift survivor.  BAwL does, so it gets the exact rectangle and
+  // fused fast routes; a Wald-kernel model does not, and takes the generic
+  // shared-factor route for every loaded trial.  See drift_factor.h.
+  DriftFactorColumns factor_cols;
+  bool generic_only = false;
+
   // Reused per-particle scratch
   std::vector<double> effective_rho;
   std::vector<BAwLCorrTrialLayout> layout;
@@ -1194,14 +1221,14 @@ struct BAwLCorrSharedState {
   mutable std::vector<ZCacheEntry> z_cache;
 };
 
-static BAwLCorrSharedState build_bawl_corr_shared_state(
+static CorrDriftSharedState build_corr_drift_shared_state(
     const Rcpp::DataFrame& dadm, int n_trials, int n_lR,
     const Rcpp::LogicalVector& winner, const Rcpp::IntegerVector& expand,
     const ContextForRaceModels& ctx, ParamTable& table,
     const Rcpp::CharacterVector& keep_names);
 
-double c_log_likelihood_bawl_correlated(
-    BAwLCorrSharedState& cshared,
+double c_log_likelihood_corr_drift(
+    CorrDriftSharedState& cshared,
     Rcpp::DataFrame dadm,
     RacePdf1Fun pdf1,
     RaceCdf1Fun cdf1,
@@ -1236,6 +1263,7 @@ struct RDMSWTNCorrSharedState {
   int n_out = 0;
   int n_par = 0;
   int rho_col = -1;
+  int sv_col = -1;    // sv column, needed by the posdrift = FALSE gate
   int pc_col = -1;
   int pg_col = -1;    // pGuess column, -1 when absent
   GuessKernel guess;  // uniform guess kernel; inactive when pGuess is unused
@@ -4621,7 +4649,7 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
     if (adapter.col_spec.names != nullptr) {
       emc2col::validate_col_prefix(keep_names, adapter.col_spec);
     }
-    configure_bawl_corr_context(adapter, keep_names, "calc_ll_oo");
+    configure_corr_drift_context(adapter, keep_names, "calc_ll_oo");
     configure_rdmswtn_corr_context(adapter, keep_names, "calc_ll_oo");
     if (is_logicalrules && adapter.ctx.rdmswtn_correlated) {
       Rcpp::stop("calc_ll_oo: correlated RDMSWTN logical-rule races are not supported.");
@@ -4708,7 +4736,7 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
     // pContaminant is handled inline: log(1-pC) shift for finite RTs (no-op when pC=0).
     const bool use_raw_fast_path =
       all_finite_trials &&  // already scanned above; avoids a redundant O(n) pass
-      !adapter.ctx.bawl_correlated && !adapter.ctx.rdmswtn_correlated &&
+      !adapter.ctx.corr_drift_active && !adapter.ctx.rdmswtn_correlated &&
       (!has_RACE_col_fp || has_RACE_attrs_fp) &&
       adapter.model_pfun_raw != nullptr &&
       adapter.model_dfun_raw != nullptr;
@@ -4809,9 +4837,9 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
     // Correlated BAwL: data-fixed layout, role mapping, and direct
     // ParamTable column pointers resolved once outside the particle loop.
     // The generic-clock fallback materialises lazily via this callback.
-    BAwLCorrSharedState bawl_corr_shared;
-    if (adapter.ctx.bawl_correlated) {
-      bawl_corr_shared = build_bawl_corr_shared_state(
+    CorrDriftSharedState corr_drift_shared;
+    if (adapter.ctx.corr_drift_active) {
+      corr_drift_shared = build_corr_drift_shared_state(
           data, n_trials, n_lR, winner, expand, adapter.ctx,
           param_table_template, keep_names);
     }
@@ -4968,9 +4996,9 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
           total_ll += ll_uniq_buf[expand_ptr[ei] - 1];
         }
         lls[i] = total_ll;
-      } else if (adapter.ctx.bawl_correlated) {
-        lls[i] = c_log_likelihood_bawl_correlated(
-            bawl_corr_shared, data, adapter.pdf1_ptr, adapter.cdf1_ptr,
+      } else if (adapter.ctx.corr_drift_active) {
+        lls[i] = c_log_likelihood_corr_drift(
+            corr_drift_shared, data, adapter.pdf1_ptr, adapter.cdf1_ptr,
             n_trials, winner, expand, min_ll, is_ok, n_lR, &adapter.ctx,
             all_finite_trials, adapter.model_dfun_raw, adapter.model_pfun_raw,
             adapter.logS_at_t_ptr,
@@ -5096,7 +5124,7 @@ NumericMatrix calc_ll_oo_pw(NumericMatrix particle_matrix, DataFrame data, Numer
     if (adapter.col_spec.names != nullptr) {
       emc2col::validate_col_prefix(keep_names, adapter.col_spec);
     }
-    configure_bawl_corr_context(adapter, keep_names, "calc_ll_oo_pw");
+    configure_corr_drift_context(adapter, keep_names, "calc_ll_oo_pw");
     configure_rdmswtn_corr_context(adapter, keep_names, "calc_ll_oo_pw");
     if (is_logicalrules && adapter.ctx.rdmswtn_correlated) {
       Rcpp::stop("calc_ll_oo_pw: correlated RDMSWTN logical-rule races are not supported.");
@@ -5179,9 +5207,9 @@ NumericMatrix calc_ll_oo_pw(NumericMatrix particle_matrix, DataFrame data, Numer
                                             has_RACE_col, RACE_nacc, RACE_mask);
     }
 
-    BAwLCorrSharedState bawl_corr_shared;
-    if (adapter.ctx.bawl_correlated) {
-      bawl_corr_shared = build_bawl_corr_shared_state(
+    CorrDriftSharedState corr_drift_shared;
+    if (adapter.ctx.corr_drift_active) {
+      corr_drift_shared = build_corr_drift_shared_state(
           data, n_trials, n_lR, winner, expand, adapter.ctx,
           param_table_template, keep_names);
     }
@@ -5200,9 +5228,9 @@ NumericMatrix calc_ll_oo_pw(NumericMatrix particle_matrix, DataFrame data, Numer
       if (adapter.ctx.fpe_cache) adapter.ctx.fpe_cache->new_particle();
       if (adapter.ctx.rlf_cache) adapter.ctx.rlf_cache->new_particle();
       NumericVector row_vec(n_out_race);
-      if (adapter.ctx.bawl_correlated) {
-        c_log_likelihood_bawl_correlated(
-            bawl_corr_shared, data, adapter.pdf1_ptr, adapter.cdf1_ptr,
+      if (adapter.ctx.corr_drift_active) {
+        c_log_likelihood_corr_drift(
+            corr_drift_shared, data, adapter.pdf1_ptr, adapter.cdf1_ptr,
             n_trials, winner, expand, min_ll, is_ok, n_lR, &adapter.ctx,
             all_finite_trials, adapter.model_dfun_raw, adapter.model_pfun_raw,
             adapter.logS_at_t_ptr,
@@ -9293,23 +9321,32 @@ apply_trial_trunc:
 // resolved here mirrors BAwLcorr's role conversion for the likelihood path;
 // R Ttransform remains the corresponding conversion for mapped parameter
 // displays and simulation.
-static BAwLCorrSharedState build_bawl_corr_shared_state(
+static CorrDriftSharedState build_corr_drift_shared_state(
     const Rcpp::DataFrame& dadm, int n_trials, int n_lR,
     const Rcpp::LogicalVector& winner, const Rcpp::IntegerVector& expand,
     const ContextForRaceModels& ctx, ParamTable& table,
     const Rcpp::CharacterVector& keep_names) {
-  BAwLCorrSharedState s;
+  CorrDriftSharedState s;
   if (n_lR <= 0 || n_trials < 0 || n_trials % n_lR != 0) {
-    Rcpp::stop("c_log_likelihood_bawl_correlated: invalid race dimensions.");
+    Rcpp::stop("c_log_likelihood_corr_drift: invalid race dimensions.");
   }
   s.n_trials = n_trials;
   s.n_lR = n_lR;
   s.n_unique = n_trials / n_lR;
   s.n_out = (expand.length() > 0) ? expand.length() : s.n_unique;
   s.n_par = keep_names.size();
-  s.rho_col = ctx.bawl_rho_index;
+  s.rho_col = ctx.corr_drift_rho_index;
   if (s.rho_col < 0 || s.rho_col >= s.n_par) {
-    Rcpp::stop("c_log_likelihood_bawl_correlated: rho column is outside pars.");
+    Rcpp::stop("c_log_likelihood_corr_drift: rho column is outside pars.");
+  }
+  s.factor_cols.v = ctx.corr_drift_v_col;
+  s.factor_cols.sv = ctx.corr_drift_sv_col;
+  s.generic_only = ctx.corr_drift_generic_only;
+  if (!s.factor_cols.valid() || s.factor_cols.v >= s.n_par ||
+      s.factor_cols.sv >= s.n_par) {
+    Rcpp::stop("c_log_likelihood_corr_drift: the drift mean/SD columns are "
+               "outside pars; resolve_race_model_adapter() must set "
+               "corr_drift_v_col and corr_drift_sv_col.");
   }
 
   // lM role mapping.
@@ -9318,7 +9355,7 @@ static BAwLCorrSharedState build_bawl_corr_shared_state(
   Rcpp::IntegerVector lM_factor;
   int lM_true_code = -1;
   if (!dadm.containsElementNamed("lM")) {
-    Rcpp::stop("c_log_likelihood_bawl_correlated: BAwLcorr requires lM from matchfun.");
+    Rcpp::stop("c_log_likelihood_corr_drift: BAwLcorr requires lM from matchfun.");
   }
   SEXP lM_sexp = dadm["lM"];
   if (TYPEOF(lM_sexp) == LGLSXP && Rf_length(lM_sexp) == n_trials) {
@@ -9336,7 +9373,7 @@ static BAwLCorrSharedState build_bawl_corr_shared_state(
     if (lM_true_code < 0 && levels.size() == 0) lM_true_code = 1;
   }
   if (!lM_is_logical && lM_true_code < 0) {
-    Rcpp::stop("c_log_likelihood_bawl_correlated: lM must be a logical or TRUE/FALSE factor.");
+    Rcpp::stop("c_log_likelihood_corr_drift: lM must be a logical or TRUE/FALSE factor.");
   }
   s.role_correct.assign(static_cast<size_t>(n_trials), 0);
   for (int r = 0; r < n_trials; ++r) {
@@ -9344,7 +9381,7 @@ static BAwLCorrSharedState build_bawl_corr_shared_state(
       ? (lM_logical[r] == NA_LOGICAL)
       : (lM_factor[r] == NA_INTEGER);
     if (missing) {
-      Rcpp::stop("c_log_likelihood_bawl_correlated: lM contains missing role values.");
+      Rcpp::stop("c_log_likelihood_corr_drift: lM contains missing role values.");
     }
     const bool correct = lM_is_logical
       ? static_cast<bool>(lM_logical[r])
@@ -9415,7 +9452,7 @@ static BAwLCorrSharedState build_bawl_corr_shared_state(
 // only isok && RACE-active rows; an exact-zero loading is an independent
 // singleton, not a loaded dimension.  This classifier is the sole authority
 // for loaded-row discovery and the positivity dimension.
-static void bawl_corr_classify_particle(BAwLCorrSharedState& s,
+static void corr_drift_classify_particle(CorrDriftSharedState& s,
                                         const Rcpp::LogicalVector& isok,
                                         bool no_clock_eligible) {
   constexpr double kLoadingEps = 1e-14;
@@ -9449,8 +9486,9 @@ static void bawl_corr_classify_particle(BAwLCorrSharedState& s,
       // A two-loaded no-clock trial is the exact component route.  Trials
       // with a larger factor dimension retain the fused GH fallback; active
       // clocks retain the generic race semantics even when only two rows are
-      // loaded.
-      L.route = no_clock_eligible
+      // loaded.  Models without an affine-in-drift survivor have neither the
+      // exact nor the fused kernel and always take the generic route.
+      L.route = (no_clock_eligible && !s.generic_only)
         ? ((L.n_loaded == 2) ? BAwLCorrRoute::exact_pair
                              : BAwLCorrRoute::gh_no_clock)
         : BAwLCorrRoute::gh_generic_clock;
@@ -9485,7 +9523,7 @@ static inline BAwLTimeGeometry bawl_corr_row_geometry(
 }
 
 static inline bool bawl_corr_make_pair_data(
-    const BAwLCorrTrialLayout& layout, const BAwLCorrSharedState& s,
+    const BAwLCorrTrialLayout& layout, const CorrDriftSharedState& s,
     const double* const* cols, const ContextForRaceModels* ctx,
     BAwLCorrPairData& out) {
   if (layout.n_loaded != 2 || layout.loaded_row[0] < 0 ||
@@ -9600,12 +9638,12 @@ static inline double bawl_corr_log_pair_cause(
   return std::log(result.value);
 }
 
-static inline bool bawl_corr_row_active(const BAwLCorrSharedState& s, int row) {
+static inline bool bawl_corr_row_active(const CorrDriftSharedState& s, int row) {
   return !s.has_RACE || s.race_mask[row];
 }
 
 static inline double bawl_corr_log_component_survival(
-    const BAwLCorrSharedState& s, const BAwLCorrPairData& pair, int j,
+    const CorrDriftSharedState& s, const BAwLCorrPairData& pair, int j,
     double t, const double* const* cols, const ContextForRaceModels* ctx,
     bool numeric, BAwLCorrMomentStatus* status_out = nullptr) {
   BAwLCorrMomentStatus pair_status = BAwLCorrMomentStatus::ok;
@@ -9627,7 +9665,7 @@ static inline double bawl_corr_log_component_survival(
 }
 
 static inline double bawl_corr_log_component_cause(
-    const BAwLCorrSharedState& s, const BAwLCorrPairData& pair, int j,
+    const CorrDriftSharedState& s, const BAwLCorrPairData& pair, int j,
     int winner_row, double t, const double* const* cols,
     const ContextForRaceModels* ctx, bool numeric,
     BAwLCorrMomentStatus* status_out = nullptr) {
@@ -9709,7 +9747,7 @@ struct BAwLCorrExactTrialResult {
 };
 
 static BAwLCorrExactTrialResult bawl_corr_exact_trial_loglik(
-    const BAwLCorrSharedState& s, const BAwLCorrTrialLayout& layout, int j,
+    const CorrDriftSharedState& s, const BAwLCorrTrialLayout& layout, int j,
     const double* const* cols, const ContextForRaceModels* ctx,
     const Rcpp::IntegerVector& response, const Rcpp::LogicalVector& winner,
     double min_ll, bool force_numeric = false) {
@@ -9950,7 +9988,7 @@ static BAwLCorrExactTrialResult bawl_corr_exact_trial_loglik(
         return out;
       }
       if (z_cacheable && s.z_cache.size() < 64) {
-        BAwLCorrSharedState::ZCacheEntry e;
+        CorrDriftSharedState::ZCacheEntry e;
         std::memcpy(e.key, zkey, sizeof(zkey));
         e.log_z = log_z;
         s.z_cache.push_back(e);
@@ -9996,8 +10034,8 @@ static BAwLCorrExactTrialResult bawl_corr_exact_trial_loglik(
 // normalised as
 //   log int p(data | z) phi(z) dz - log int Z(z) phi(z) dz,
 // rather than by averaging already-normalised node likelihoods.
-double c_log_likelihood_bawl_correlated(
-    BAwLCorrSharedState& cshared,
+double c_log_likelihood_corr_drift(
+    CorrDriftSharedState& cshared,
     Rcpp::DataFrame dadm,
     RacePdf1Fun pdf1,
     RaceCdf1Fun cdf1,
@@ -10016,19 +10054,19 @@ double c_log_likelihood_bawl_correlated(
     NumericVector* trial_ll_out,
     const std::function<Rcpp::NumericMatrix()>& materialize) {
   ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(model_context_for_funcs);
-  if (ctx == nullptr || !ctx->bawl_correlated || ctx->bawl_rho_index < 0 ||
+  if (ctx == nullptr || !ctx->corr_drift_active || ctx->corr_drift_rho_index < 0 ||
       !cshared.valid || cshared.n_trials != n_trials || cshared.n_lR != n_lR) {
-    Rcpp::stop("c_log_likelihood_bawl_correlated: invalid correlated BAwL context.");
+    Rcpp::stop("c_log_likelihood_corr_drift: invalid correlated BAwL context.");
   }
 
   const int n_unique = cshared.n_unique;
   const int n_out = cshared.n_out;
   if (trial_ll_out != nullptr && trial_ll_out->size() != n_out) {
-    Rcpp::stop("c_log_likelihood_bawl_correlated: trial_ll_out size mismatch.");
+    Rcpp::stop("c_log_likelihood_corr_drift: trial_ll_out size mismatch.");
   }
   const int n_par = cshared.n_par;
   if (n_par > 64 || n_lR > 64) {
-    Rcpp::stop("c_log_likelihood_bawl_correlated: at most 64 parameter columns and 64 accumulators are supported.");
+    Rcpp::stop("c_log_likelihood_corr_drift: at most 64 parameter columns and 64 accumulators are supported.");
   }
 
   // Role-mapped effective loadings; roles were resolved once in the shared
@@ -10079,6 +10117,7 @@ double c_log_likelihood_bawl_correlated(
                                   shared, trial_ll_out, true);
   }
 
+  const DriftFactorColumns& factor_cols = cshared.factor_cols;
   const bool has_RACE_col = cshared.has_RACE;
   const Rcpp::IntegerVector& RACE = cshared.race_nacc;
   const Rcpp::LogicalVector& RACE_mask = cshared.race_mask;
@@ -10090,8 +10129,10 @@ double c_log_likelihood_bawl_correlated(
   // Raw batched conditional evaluator eligibility for the common design:
   // all-finite RTs, no truncation, no global-kill/timer/nogo machinery
   // outside the kernels.  Everything else falls back to the generic race
-  // evaluator below.
+  // evaluator below.  The fused evaluator is built on BAwLPreparedRow, so it
+  // is available only to models with an affine-in-drift survivor.
   const bool use_fast_node_eval =
+      !cshared.generic_only &&
       all_finite_trials && !has_truncation &&
       model_dfun_raw != nullptr && model_pfun_raw != nullptr &&
       !ctx->has_global_kill() && !ctx->kill_active && !ctx->gng &&
@@ -10108,7 +10149,7 @@ double c_log_likelihood_bawl_correlated(
   // eligible even when the caller disables the all-finite GH hint (that hint
   // controls only the fused node evaluator).  This also lets nonfinite and
   // truncated no-clock trials use the same component path.
-  bawl_corr_classify_particle(cshared, isok, no_clock_model);
+  corr_drift_classify_particle(cshared, isok, no_clock_model);
   if (count_routes) {
     for (int j = 0; j < n_unique; ++j) {
       const BAwLCorrTrialLayout& L = cshared.layout[static_cast<size_t>(j)];
@@ -10272,8 +10313,8 @@ double c_log_likelihood_bawl_correlated(
   // denominator sweep.
   std::vector<unsigned char> den_by_quadrature(static_cast<size_t>(n_unique), 0);
   {
-    const double* v0c = cshared.cols[static_cast<size_t>(emc2col::bawl::v)];
-    const double* sv0c = cshared.cols[static_cast<size_t>(emc2col::bawl::sv)];
+    const double* v0c = cshared.cols[static_cast<size_t>(factor_cols.v)];
+    const double* sv0c = cshared.cols[static_cast<size_t>(factor_cols.sv)];
     for (int j = 0; j < n_unique; ++j) {
       if (has_trunc_trial[static_cast<size_t>(j)]) {
         if (exact_done[static_cast<size_t>(j)]) continue;
@@ -10391,12 +10432,12 @@ double c_log_likelihood_bawl_correlated(
       const int row = start + k;
       if (has_RACE_col && !RACE_mask[row]) continue;
       if (!isok_q[row]) return R_NegInf;
-      const double sd = pars_q(row, emc2col::bawl::sv);
-      const double mu = pars_q(row, emc2col::bawl::v);
-      if (!(sd > 0.0) || !R_FINITE(mu)) return R_NegInf;
+      const double sd = pars_q(row, factor_cols.sv);
+      const double mu = pars_q(row, factor_cols.v);
       const double rho = effective_rho[static_cast<size_t>(row)];
-      if (std::fabs(rho) <= 1e-14) continue;  // cancelled constant
-      const double log_q = pnorm_log_direct(mu / sd, true);
+      if (!(sd > 0.0) || !R_FINITE(mu)) return R_NegInf;
+      if (std::fabs(rho) <= DRIFT_FACTOR_RHO_EPS) continue;  // cancelled constant
+      const double log_q = drift_factor_log_positive_row(mu, sd);
       if (!R_FINITE(log_q)) return R_NegInf;
       out += log_q;
     }
@@ -10472,14 +10513,11 @@ double c_log_likelihood_bawl_correlated(
       const bool ok_r = isok[r] && R_FINITE(rho) && std::fabs(rho) <= 1.0;
       fast_ok[static_cast<size_t>(r)] = ok_r ? 1 : 0;
       const double magnitude = std::fabs(rho);
-      const double loading = std::sqrt(magnitude);
-      const double residual = std::sqrt(std::fmax(0.0, 1.0 - magnitude));
-      const double sign = (rho < 0.0) ? -1.0 : 1.0;
       const bool active = !has_RACE_col || RACE_mask[r];
       // A valid exact-zero loading is independent of the shared factor. Its
       // race contribution is evaluated once below and added to every node;
       // only nonzero-loading rows remain in the node masks.
-      const bool independent = ok_r && magnitude <= 1e-14;
+      const bool independent = ok_r && magnitude <= DRIFT_FACTOR_RHO_EPS;
       if (active && independent) has_fast_const = true;
       fast_winner[static_cast<size_t>(r)] =
         (active && winner[r] && !independent) ? 1 : 0;
@@ -10498,9 +10536,9 @@ double c_log_likelihood_bawl_correlated(
         const double kval = ctx->bawl_k_fixed_zero ? 0.0 : fast_k0[r];
         const BAwLTimeGeometry g = bawl_time_geometry(
             fast_rt[r], fast_t00[r], fast_A0[r], fast_B0[r] + fast_A0[r], kval);
-        fast_prepared[static_cast<size_t>(r)] = bawl_prepare_row(
-            g, fast_v0[r], sign * fast_sv0[r] * loading,
-            fast_sv0[r] * std::fmax(residual, 1e-12));
+        const DriftFactorLoading l = drift_factor_loading(fast_sv0[r], rho);
+        fast_prepared[static_cast<size_t>(r)] =
+            bawl_prepare_row(g, fast_v0[r], l.slope, l.sv_res);
         if (count_routes) ++route_counters.prepared_rows;
       }
     }
@@ -10652,26 +10690,15 @@ double c_log_likelihood_bawl_correlated(
         isok_q[r] = false;
     }
 
-    // Conditional factor model preserving each marginal sv:
-    // v_q = v + sign(rho) sv sqrt(|rho|) z,
-    // sv_q = sv sqrt(1-|rho|).
+    // Conditional factor model preserving each marginal sv; see
+    // drift_factor.h for the construction and the SD floor.
     for (int r = 0; r < n_trials; ++r) {
-      const double rho = effective_rho[static_cast<size_t>(r)];
       if (!isok_q[r]) continue;
-      if (!R_FINITE(rho) || std::fabs(rho) > 1.0) {
+      if (!drift_factor_apply_row(pars_q, factor_cols, r,
+                                  effective_rho[static_cast<size_t>(r)],
+                                  z_by_trial[r / n_lR])) {
         isok_q[r] = false;
-        continue;
       }
-      const double sv = pars_q(r, emc2col::bawl::sv);
-      const double magnitude = std::fabs(rho);
-      const double loading = std::sqrt(magnitude);
-      const double residual = std::sqrt(std::fmax(0.0, 1.0 - magnitude));
-      const double sign = (rho < 0.0) ? -1.0 : 1.0;
-      pars_q(r, emc2col::bawl::v) += sign * sv * loading * z_by_trial[r / n_lR];
-      // Keep the conditional SD strictly positive at the exact boundary. The
-      // public bound stays just inside +/-1, but this avoids undefined scalar
-      // kernels for hand-built parameter matrices at rho == +/-1.
-      pars_q(r, emc2col::bawl::sv) = sv * std::fmax(residual, 1e-12);
     }
 
     std::vector<double> log_pos(static_cast<size_t>(n_unique), 0.0);
@@ -10915,8 +10942,17 @@ double c_log_likelihood_bawl_correlated(
   // a 10-node scan/refinement pair; retain the original 12-node tier for the
   // sharp cases. Environment overrides remain available for convergence
   // tests and explicit user tuning.
-  const int scan_default = (max_abs_rho <= 0.6) ? 10 : 12;
-  const int fine_default = (max_abs_rho <= 0.6) ? 10 : 12;
+  //
+  // A model on the generic route has no closed-form conditional: each node is
+  // its own numerically integrated kernel, whose z-integrand is measurably
+  // harder than BAwL's. Measured on a 24-trial RDMSWTN drift-factor design
+  // against an independent 160-node reference, the sharp tier costs 1.3e-2 in
+  // total log-likelihood at 12 nodes, 2.2e-3 at 16 and 6.2e-4 at 28, so the
+  // sharp tier is raised there. The smooth tier already reaches 6e-4 at 10.
+  const bool generic_kernel = cshared.generic_only;
+  const int scan_default = (max_abs_rho <= 0.6) ? (generic_kernel ? 12 : 10)
+                                                : (generic_kernel ? 28 : 12);
+  const int fine_default = scan_default;
   const GHRule& scan_rule = gh_rule(
       emc2_quad_nodes("EMC2_BAWLCORR_SCAN_N", scan_default));
   const GHRule& fine_rule = gh_rule(
@@ -11250,6 +11286,7 @@ static RDMSWTNCorrSharedState build_rdmswtn_corr_shared_state(
       &table.base(0, table.base_index_for(nm));
     if (nm == "pContaminant") s.pc_col = c;
     else if (nm == "pGuess") s.pg_col = c;
+    else if (nm == "sv") s.sv_col = c;
   }
   s.guess = resolve_guess_kernel(dadm);
   s.guess.pg_col = s.pg_col;
@@ -11415,8 +11452,14 @@ static double rdmswtn_corr_log_component_cause(
     if (ISNAN(lfw) || ISNAN(lfl)) return R_NaN;
     const double zw = rdmswtn_corr_z_from_logcdf(lfw);
     const double zl = rdmswtn_corr_z_from_logcdf(lfl);
-    const double sd = std::sqrt(std::fmax(1e-16, 1.0 - rho * rho));
-    out += log_normal_upper_tail((zl - rho * zw) / sd);
+    // Far left tail: both CDFs can underflow to exactly zero while the winner
+    // density is still positive (reachable with strongly negative drifts under
+    // posdrift = FALSE).  (zl - rho * zw) is then Inf - Inf; the limit of the
+    // conditional survivor is 1 for every |rho| < 1, so add nothing.
+    if (!(zw == R_NegInf && zl == R_NegInf)) {
+      const double sd = std::sqrt(std::fmax(1e-16, 1.0 - rho * rho));
+      out += log_normal_upper_tail((zl - rho * zw) / sd);
+    }
   } else {
     out += rdmswtn_corr_log_pair_survival(
         t, pair1, pair2, rho, cols, s.n_par, cdf1, ctx);
@@ -11589,8 +11632,18 @@ double c_log_likelihood_rdmswtn_correlated(
       if (!R_FINITE(rho) || std::fabs(rho) > 1.0) {
         Rcpp::stop("RDMSWTNcorr requires finite natural-scale rho values in [-1, 1].");
       }
+      // posdrift = FALSE gives defective marginals; the copula is still exact
+      // there (uniforms above the plateau are the atom at +Inf, so rho also
+      // couples the intrinsic omissions).  sv > 0 on a correlated row is
+      // reserved for a future correlated-drift model, so it is rejected rather
+      // than silently given copula semantics.  See
+      // .check_rdmswtn_corr_io_sv() in R/model_RDM.R.
       if (!ctx->use_posdrift && std::fabs(rho) > 1e-12) {
-        Rcpp::stop("RDMSWTNcorr with posdrift = FALSE is supported only when every active rho is zero.");
+        const double sv_row = (s.sv_col >= 0)
+          ? s.cols[static_cast<size_t>(s.sv_col)][row] : R_NaN;
+        if (!(sv_row <= 1e-12)) {
+          Rcpp::stop("RDMSWTNcorr with posdrift = FALSE requires sv = 0 on the correlated rows.");
+        }
       }
       if (!isok[row]) layout.params_ok = false;
       if (std::fabs(rho) <= 1e-12) continue;
@@ -11810,13 +11863,10 @@ Rcpp::List bawl_time_geometry_probe(double t, double t0, double A, double B,
 Rcpp::NumericVector bawl_prepared_endpoints_probe(
     double t, double t0, double A, double B, double k, double v, double sv,
     double rho, double z, bool joint_positive) {
-  const double magnitude = std::fabs(rho);
-  const double slope =
-    ((rho < 0.0) ? -1.0 : 1.0) * sv * std::sqrt(magnitude);
-  const double sv_res =
-    sv * std::fmax(std::sqrt(std::fmax(0.0, 1.0 - magnitude)), 1e-12);
+  const DriftFactorLoading l = drift_factor_loading(sv, rho);
+  const double sv_res = l.sv_res;
   const BAwLTimeGeometry g = bawl_time_geometry(t, t0, A, B + A, k);
-  const BAwLPreparedRow r = bawl_prepare_row(g, v, slope, sv_res);
+  const BAwLPreparedRow r = bawl_prepare_row(g, v, l.slope, sv_res);
   const double vq = r.v0 + r.slope * z;
   return Rcpp::NumericVector::create(
       Rcpp::Named("vq") = vq,

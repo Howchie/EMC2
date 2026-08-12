@@ -437,12 +437,20 @@ rrdmswtn_cpp <- function(pars, lR_levels, ok, erlang_shape, erlang_type, posdrif
     .Call(`_EMC2_rrdmswtn_cpp`, pars, lR_levels, ok, erlang_shape, erlang_type, posdrift)
 }
 
+rrdmswtn_drift_corr_cpp <- function(pars, lR_levels, ok, posdrift) {
+    .Call(`_EMC2_rrdmswtn_drift_corr_cpp`, pars, lR_levels, ok, posdrift)
+}
+
 rrdmswtn_corr_cpp <- function(pars, lR_levels, ok, posdrift) {
     .Call(`_EMC2_rrdmswtn_corr_cpp`, pars, lR_levels, ok, posdrift)
 }
 
 rrdmswtn_tt_cpp <- function(pars, lR_levels, ok, posdrift) {
     .Call(`_EMC2_rrdmswtn_tt_cpp`, pars, lR_levels, ok, posdrift)
+}
+
+rrdmswtn_tt_drift_corr_cpp <- function(pars, lR_levels, ok, posdrift) {
+    .Call(`_EMC2_rrdmswtn_tt_drift_corr_cpp`, pars, lR_levels, ok, posdrift)
 }
 
 rrdmswtn_tt_corr_cpp <- function(pars, lR_levels, ok, posdrift) {

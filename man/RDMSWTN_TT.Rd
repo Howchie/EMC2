@@ -4,15 +4,22 @@
 \alias{RDMSWTN_TT}
 \title{Time-Changed RDMSWTN Race}
 \usage{
-RDMSWTN_TT(posdrift = TRUE, correlated = FALSE)
+RDMSWTN_TT(
+  posdrift = TRUE,
+  correlated = FALSE,
+  correlate = c("times", "drifts")
+)
 }
 \arguments{
 \item{posdrift}{Logical. If \code{TRUE} (default), truncate the between-trial
 normal drift distribution below at zero. If \code{FALSE}, allow unrestricted
 drifts and their additional intrinsic omission mass.}
 
-\item{correlated}{Logical. If \code{TRUE}, include the Gaussian-copula parameter
+\item{correlated}{Logical. If \code{TRUE}, include the correlation parameter
 \code{rho} for one directly specified accumulator pair.}
+
+\item{correlate}{\code{"times"} (default) for the finishing-time copula, or
+\code{"drifts"} for correlated drift draws. See \code{\link[=RDMSWTN]{RDMSWTN()}}.}
 }
 \value{
 A model list compatible with \code{\link[=design]{design()}}.
@@ -35,7 +42,10 @@ These seven parameters use exponential transforms. Their defaults are
 \code{A}, \code{t0}, and \code{sv}. The drift, start-point variability, diffusion scale,
 and \code{b = B + A} convention are otherwise identical to \code{\link[=RDMSWTN]{RDMSWTN()}}.
 The optional \code{pContaminant} (omission) and \code{pGuess} (uniform outlier)
-parameters are handled by the generic data pipeline. With \code{correlated = TRUE}, \code{rho} couples exactly two active
-finishing-time marginals through the same Gaussian-copula contract as
-\code{\link[=RDMSWTN]{RDMSWTN()}}. Active nonzero correlation requires \code{posdrift = TRUE}.
+parameters are handled by the generic data pipeline. With
+\code{correlated = TRUE}, \code{rho} follows the same contract as \code{\link[=RDMSWTN]{RDMSWTN()}}:
+\code{correlate = "times"} couples exactly two active finishing-time marginals
+with a Gaussian copula (and under \code{posdrift = FALSE} additionally requires
+\code{sv = 0} on the correlated rows), while \code{correlate = "drifts"} correlates
+the between-trial drift draws and requires \code{sv > 0}.
 }

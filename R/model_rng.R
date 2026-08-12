@@ -100,9 +100,12 @@
 
 .rfun_RDMSWTN <- function(lR, pars, ok = rep(TRUE, dim(pars)[1]), erlang_shape = 1L,
                           erlang_type = "none", posdrift = TRUE,
-                          correlated = FALSE) {
+                          correlated = FALSE, correlate = "times") {
+  drift_corr <- correlated && correlate == "drifts"
   if (.use_cpp_rfun()) {
-    res <- if (correlated) {
+    res <- if (drift_corr) {
+      rrdmswtn_drift_corr_cpp(pars, levels(lR), ok, posdrift)
+    } else if (correlated) {
       rrdmswtn_corr_cpp(pars, levels(lR), ok, posdrift)
     } else {
       rrdmswtn_cpp(pars, levels(lR), ok, as.integer(erlang_shape),
@@ -110,7 +113,11 @@
     }
     return(.rfun_cpp_pack(res, levels(lR), length(lR) / length(levels(lR))))
   }
-  if (correlated) {
+  if (drift_corr) {
+    rRDMSWTN(lR, pars, ok = ok, erlang_shape = erlang_shape,
+             erlang_type = erlang_type, posdrift = posdrift,
+             drift_override = .draw_correlated_drifts(pars, lR, ok, posdrift))
+  } else if (correlated) {
     rRDMSWTN_corr(lR, pars, ok = ok, posdrift = posdrift)
   } else {
     rRDMSWTN(lR, pars, ok = ok, erlang_shape = erlang_shape,
@@ -119,9 +126,13 @@
 }
 
 .rfun_RDMSWTN_TT <- function(lR, pars, ok = rep(TRUE, nrow(pars)),
-                             posdrift = TRUE, correlated = FALSE) {
+                             posdrift = TRUE, correlated = FALSE,
+                             correlate = "times") {
+  drift_corr <- correlated && correlate == "drifts"
   if (.use_cpp_rfun()) {
-    res <- if (correlated) {
+    res <- if (drift_corr) {
+      rrdmswtn_tt_drift_corr_cpp(pars, levels(lR), ok, posdrift)
+    } else if (correlated) {
       rrdmswtn_tt_corr_cpp(pars, levels(lR), ok, posdrift)
     } else {
       rrdmswtn_tt_cpp(pars, levels(lR), ok, posdrift)
@@ -130,9 +141,54 @@
       res, levels(lR), length(lR) / length(levels(lR))
     ))
   }
-  if (correlated) {
+  if (drift_corr) {
+    rRDMSWTN_TT(lR, pars, ok = ok, posdrift = posdrift,
+                drift_override = .draw_correlated_drifts(pars, lR, ok, posdrift))
+  } else if (correlated) {
     rRDMSWTN_TT_corr(lR, pars, ok = ok, posdrift = posdrift)
   } else {
     rRDMSWTN_TT(lR, pars, ok = ok, posdrift = posdrift)
   }
+}
+
+# R counterpart of drift_factor_draw_correlated() in src/drift_factor.h: one
+# shared standard-normal factor per trial, an independent residual per row, and
+# joint rejection when posdrift restricts the draws to the positive orthant.
+.draw_correlated_drifts <- function(pars, lR, ok, posdrift, max_iter = 100000) {
+  n_acc <- length(levels(lR))
+  n_rows <- nrow(pars)
+  if (n_acc <= 0L || n_rows %% n_acc != 0L) {
+    stop("Correlated drift draws need whole trials of accumulator rows.")
+  }
+  rho <- pars[, "rho"]
+  if (any(!is.finite(rho[ok])) || any(abs(rho[ok]) > 1)) {
+    stop("Correlated drift draws require finite rho in [-1, 1].")
+  }
+  sv <- pars[, "sv"]
+  magnitude <- abs(rho)
+  slope <- ifelse(rho < 0, -1, 1) * sv * sqrt(magnitude)
+  sv_res <- sv * pmax(sqrt(pmax(0, 1 - magnitude)), 1e-12)
+  out <- rep(Inf, n_rows)
+  for (tr in seq_len(n_rows / n_acc)) {
+    rows <- ((tr - 1L) * n_acc + 1L):(tr * n_acc)
+    active <- rows[ok[rows]]
+    if (!length(active)) next
+    accepted <- FALSE
+    for (iter in seq_len(max_iter)) {
+      z <- rnorm(1)
+      draw <- rnorm(length(active), pars[active, "v"] + slope[active] * z,
+                    sv_res[active])
+      out[active] <- draw
+      if (!posdrift || all(draw > 0)) {
+        accepted <- TRUE
+        break
+      }
+    }
+    if (!accepted) {
+      stop("Correlated drift draws: jointly positive rejection exceeded ",
+           max_iter, " attempts; check that the drift means are not far ",
+           "below zero.")
+    }
+  }
+  out
 }

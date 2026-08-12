@@ -4,10 +4,15 @@
 \alias{RDMSWTN_TTcorr}
 \title{Correlated Time-Changed RDMSWTN Race}
 \usage{
-RDMSWTN_TTcorr(posdrift = TRUE)
+RDMSWTN_TTcorr(posdrift = TRUE, correlate = c("times", "drifts"))
 }
 \arguments{
-\item{posdrift}{Logical. Active nonzero \code{rho} requires \code{TRUE}.}
+\item{posdrift}{Logical. Active nonzero \code{rho} is supported for both
+settings. With \code{correlate = "times"}, \code{posdrift = FALSE} additionally
+requires \code{sv = 0} on the correlated rows.}
+
+\item{correlate}{\code{"times"} (default) for the finishing-time copula, or
+\code{"drifts"} for correlated drift draws, which requires \code{sv > 0}.}
 }
 \value{
 A model list compatible with \code{\link[=design]{design()}}.

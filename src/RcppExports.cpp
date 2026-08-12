@@ -2088,6 +2088,20 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// rrdmswtn_drift_corr_cpp
+Rcpp::List rrdmswtn_drift_corr_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels, Rcpp::LogicalVector ok, bool posdrift);
+RcppExport SEXP _EMC2_rrdmswtn_drift_corr_cpp(SEXP parsSEXP, SEXP lR_levelsSEXP, SEXP okSEXP, SEXP posdriftSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< Rcpp::NumericMatrix >::type pars(parsSEXP);
+    Rcpp::traits::input_parameter< Rcpp::CharacterVector >::type lR_levels(lR_levelsSEXP);
+    Rcpp::traits::input_parameter< Rcpp::LogicalVector >::type ok(okSEXP);
+    Rcpp::traits::input_parameter< bool >::type posdrift(posdriftSEXP);
+    rcpp_result_gen = Rcpp::wrap(rrdmswtn_drift_corr_cpp(pars, lR_levels, ok, posdrift));
+    return rcpp_result_gen;
+END_RCPP
+}
 // rrdmswtn_corr_cpp
 Rcpp::List rrdmswtn_corr_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels, Rcpp::LogicalVector ok, bool posdrift);
 RcppExport SEXP _EMC2_rrdmswtn_corr_cpp(SEXP parsSEXP, SEXP lR_levelsSEXP, SEXP okSEXP, SEXP posdriftSEXP) {
@@ -2113,6 +2127,20 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< Rcpp::LogicalVector >::type ok(okSEXP);
     Rcpp::traits::input_parameter< bool >::type posdrift(posdriftSEXP);
     rcpp_result_gen = Rcpp::wrap(rrdmswtn_tt_cpp(pars, lR_levels, ok, posdrift));
+    return rcpp_result_gen;
+END_RCPP
+}
+// rrdmswtn_tt_drift_corr_cpp
+Rcpp::List rrdmswtn_tt_drift_corr_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels, Rcpp::LogicalVector ok, bool posdrift);
+RcppExport SEXP _EMC2_rrdmswtn_tt_drift_corr_cpp(SEXP parsSEXP, SEXP lR_levelsSEXP, SEXP okSEXP, SEXP posdriftSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< Rcpp::NumericMatrix >::type pars(parsSEXP);
+    Rcpp::traits::input_parameter< Rcpp::CharacterVector >::type lR_levels(lR_levelsSEXP);
+    Rcpp::traits::input_parameter< Rcpp::LogicalVector >::type ok(okSEXP);
+    Rcpp::traits::input_parameter< bool >::type posdrift(posdriftSEXP);
+    rcpp_result_gen = Rcpp::wrap(rrdmswtn_tt_drift_corr_cpp(pars, lR_levels, ok, posdrift));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -3127,8 +3155,10 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_rbawl_corr_cpp", (DL_FUNC) &_EMC2_rbawl_corr_cpp, 7},
     {"_EMC2_rbawd_cpp", (DL_FUNC) &_EMC2_rbawd_cpp, 5},
     {"_EMC2_rrdmswtn_cpp", (DL_FUNC) &_EMC2_rrdmswtn_cpp, 6},
+    {"_EMC2_rrdmswtn_drift_corr_cpp", (DL_FUNC) &_EMC2_rrdmswtn_drift_corr_cpp, 4},
     {"_EMC2_rrdmswtn_corr_cpp", (DL_FUNC) &_EMC2_rrdmswtn_corr_cpp, 4},
     {"_EMC2_rrdmswtn_tt_cpp", (DL_FUNC) &_EMC2_rrdmswtn_tt_cpp, 4},
+    {"_EMC2_rrdmswtn_tt_drift_corr_cpp", (DL_FUNC) &_EMC2_rrdmswtn_tt_drift_corr_cpp, 4},
     {"_EMC2_rrdmswtn_tt_corr_cpp", (DL_FUNC) &_EMC2_rrdmswtn_tt_corr_cpp, 4},
     {"_EMC2_fft_convolve_equiv_cpp", (DL_FUNC) &_EMC2_fft_convolve_equiv_cpp, 3},
     {"_EMC2_compute_gamma_diff_hrf", (DL_FUNC) &_EMC2_compute_gamma_diff_hrf, 9},

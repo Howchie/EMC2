@@ -711,21 +711,10 @@ BAwL <- function(posdrift = TRUE, erlang_shape = 1L,
       exception = exception),
     Ttransform = function(pars, dadm) {
       if (correlated) {
-        if (is.null(dadm) || !"lM" %in% names(dadm) ||
-            nrow(pars) != nrow(dadm)) {
-          stop("BAwLcorr requires a matchfun-generated lM role indicator in the expanded data.")
-        }
-        # The sampled coefficient is one direct correlation for the cell.
-        # Correct is the positive reference racer; incorrect receives the cell
-        # sign.  Independent rows (for example PM) must be made structurally
-        # zero by the rho design and its constants.
-        rho_cell <- pars[, "rho"]
-        correct <- as.character(dadm$lM) == "TRUE"
-        if (anyNA(correct))
-          stop("BAwLcorr matchfun produced missing lM values.")
-        pars[, "rho"] <- ifelse(
-          correct, abs(rho_cell), sign(rho_cell) * abs(rho_cell)
-        )
+        # Shared with RDMSWTN(correlate = "drifts"); see
+        # .apply_drift_factor_rho() in R/model_RDM.R for the encoding.
+        pars <- .apply_drift_factor_rho(pars, dadm, sv = pars[, "sv"],
+                                        model = "BAwLcorr")
       }
       lambda_factor <- if (erlang_shape_cpp == 2L) 2 else 1
       n <- nrow(pars)

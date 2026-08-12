@@ -7,6 +7,29 @@
 
 RNGkind("L'Ecuyer-CMRG")
 
+test_that("bridge group indices follow separate covariance blocks", {
+  p <- 5; n_subj <- 3; n_iter <- 4
+  samples <- list(
+    n_pars = p,
+    n_subjects = n_subj,
+    par_group = c(1, 1, 2, 2, 3),
+    is_blocked = rep(TRUE, p),
+    group_designs = NULL,
+    samples = list(
+      theta_mu = matrix(0, p, n_iter),
+      a_half = matrix(1, p, n_iter),
+      theta_var = array(rep(diag(p), n_iter), c(p, p, n_iter))
+    )
+  )
+  idx <- rep(TRUE, n_iter)
+  base <- matrix(0, n_iter, p * n_subj)
+  complete <- EMC2:::bridge_add_group(base, samples, idx, "standard")
+  info <- EMC2:::bridge_add_info_standard(list(), samples)
+
+  expect_equal(max(info$group_idx), ncol(complete))
+  expect_equal(length(info$group_idx), ncol(complete) - ncol(base))
+})
+
 test_that("vectorized group likelihood equals the per-subject loop", {
   set.seed(3)
   p <- 3; n_subj <- 6

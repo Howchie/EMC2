@@ -73,8 +73,6 @@ emcRDMGBM <- fit(emc,stop_criteria = list(
     flat_p2 = 1/3,
     max_sample_iter = 5000
   ),cores_per_chain=3, cores_for_chains = 3), max_tries=30)
-print(recovery(emcRDMGBM,p_vec,selection="alpha"))
-pred = predict(emcRDMSWTN,n_post=50)
 
 emc <- make_emc(dat, designLBA, type = "single", compress = T)
 emcLBA <- fit(emc,stop_criteria = list(

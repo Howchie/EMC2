@@ -79,6 +79,63 @@
 
 ## New features
 
+-   `RDMSWTNcorr()` and `RDMSWTN_TTcorr()` gain `correlate`, which selects what
+    `rho` actually correlates. The default `"times"` is the existing Gaussian
+    copula on the two participating finishing times. The new `"drifts"` makes
+    `rho` the correlation of the *between-trial drift draws*, exactly as in
+    `BAwLcorr()`: rates come from an equicorrelated normal (truncated to the
+    positive orthant under `posdrift = TRUE`) and the accumulators then race
+    independently on the drawn rates. It requires `sv > 0` on the correlated
+    rows, since at `sv = 0` there are no draws to correlate.
+
+    The two are not nested and neither is a limit of the other, so the setting
+    has to be chosen deliberately. `"times"` remains the default, and every
+    existing correlated RDMSWTN fit is unaffected.
+
+    Both models now share one implementation. `src/drift_factor.h` owns the
+    one-factor construction
+    `v_q = v + sign(rho) sv sqrt(|rho|) z`, `sv_q = sv sqrt(1 - |rho|)`, the
+    joint positive-orthant weight, and the correlated-draw simulator; the
+    adaptive Gauss-Hermite driver that integrates the factor out (including
+    the truncation normaliser evaluated inside the factor integral, the
+    contaminant split, and the orthant denominator) is now parameterised by
+    the model's drift mean/SD column positions rather than hard-coded to
+    BAwL's. What is *not* shared is BAwL's exact two-racer rectangle kernel
+    and its fused node evaluator: both rely on the fixed-time survivor being
+    affine in the drift, which is true of a ballistic accumulator and false of
+    a Wald one, so a Wald kernel always takes the generic shared-factor route.
+    BAwLcorr log-likelihoods are bit-identical to the previous version across
+    all of its routes.
+
+    Because each shared-factor node is a numerically integrated kernel on that
+    route, its Gauss-Hermite node count is raised above BAwL's for `|rho| >
+    0.6` (28 rather than 12); measured against an independent 160-node
+    reference on a 24-trial design this takes the worst case from 1.3e-2 to
+    6.2e-4 in total log-likelihood.
+
+    One behaviour change falls out of the sharing: `BAwLcorr()` now also
+    rejects `sv = 0` on a correlated row, where it previously accepted a
+    specification in which `rho` could have no effect.
+
+-   `RDMSWTNcorr()` and `RDMSWTN_TTcorr()` now accept `posdrift = FALSE` with
+    `sv = 0`, so a Gaussian copula can couple the finishing times of
+    unrestricted-drift accumulators. A negative mean rate makes the marginal
+    defective (`F(Inf) = p < 1`); the copula construction is unchanged and
+    stays exact, because uniforms at or above the marginal plateau represent
+    the atom at infinity. `rho` therefore also couples the intrinsic
+    omissions: the probability that neither of a coupled pair ever finishes is
+    `Phi2(qnorm(p1), qnorm(p2); rho)` instead of `(1-p1)(1-p2)`. `sv > 0` on a
+    correlated row still errors under `posdrift = FALSE`; that combination is
+    reserved for a correlated-drift model.
+
+-   **Breaking:** `RDMSWTN()`, `RDMSWTN_TT()` and `LogicalRulesRDMSWTN()` with
+    `posdrift = FALSE` now sample `v` on the natural scale
+    (`transform = "identity"`, bounds `(-Inf, Inf)`, default `1`) rather than
+    the log scale, so the negative mean rates the unrestricted-drift model is
+    defined over are actually reachable. `posdrift = TRUE` is unchanged.
+    Sampled `v` values from earlier `IO` fits are on the old log scale and are
+    not comparable; refit, or map them with `exp()`.
+
 -   New `pGuess` parameter: a uniform "guess" (outlier) contaminant, in the
     spirit of Ratcliff & Tuerlinckx (2002) and HDDM's `w_outlier`. Unlike
     `pContaminant`, which is a Bernoulli **omission** mixture contributing mass

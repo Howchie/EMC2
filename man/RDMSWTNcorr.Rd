@@ -4,7 +4,12 @@
 \alias{RDMSWTNcorr}
 \title{Correlated RDMSWTN Gaussian-Copula Race}
 \usage{
-RDMSWTNcorr(erlang_shape = 1L, erlang_type = "none", posdrift = TRUE)
+RDMSWTNcorr(
+  erlang_shape = 1L,
+  erlang_type = "none",
+  posdrift = TRUE,
+  correlate = c("times", "drifts")
+)
 }
 \arguments{
 \item{erlang_shape}{Retained for constructor compatibility. Only the
@@ -12,14 +17,21 @@ no-clock model is currently supported.}
 
 \item{erlang_type}{Must be \code{"none"}.}
 
-\item{posdrift}{Logical. Nonzero \code{rho} currently requires \code{TRUE}.}
+\item{posdrift}{Logical. Nonzero \code{rho} is supported for both settings. With
+\code{correlate = "times"}, \code{posdrift = FALSE} additionally requires \code{sv = 0}
+on the correlated rows.}
+
+\item{correlate}{\code{"times"} (default) for the finishing-time copula, or
+\code{"drifts"} for correlated drift draws, which requires \code{sv > 0}.}
 }
 \value{
 A model list compatible with \code{\link[=design]{design()}}.
 }
 \description{
-Convenience constructor for \code{RDMSWTN(..., correlated = TRUE)}. The two
-participating accumulator finishing times retain their ordinary RDMSWTN
-marginals and are coupled by a Gaussian copula. See \code{\link[=RDMSWTN]{RDMSWTN()}} for the
-participation design and interpretation of \code{rho}.
+Convenience constructor for \code{RDMSWTN(..., correlated = TRUE)}. With the
+default \code{correlate = "times"} the two participating accumulator finishing
+times retain their ordinary RDMSWTN marginals and are coupled by a Gaussian
+copula; with \code{correlate = "drifts"} it is the between-trial drift draws that
+are correlated, as in \code{\link[=BAwLcorr]{BAwLcorr()}}. See \code{\link[=RDMSWTN]{RDMSWTN()}} for the participation
+design and the interpretation of \code{rho} under each.
 }

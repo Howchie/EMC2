@@ -32,7 +32,9 @@ set_rdmswtn_tt_values <- function(
   p["B"] <- if (B == 0) 0 else log(B)
   p["A"] <- if (A == 0) 0 else log(A)
   p["t0"] <- log(t0)
-  p["sv"] <- if (sv == 0) 0 else log(sv)
+  # sv is sampled on the log scale, so sv = 0 is log(0) = -Inf; a plain 0
+  # here would silently mean exp(0) = 1.
+  p["sv"] <- log(sv)
   p["tau"] <- log(tau)
   if (!is.null(rho)) {
     p[grep("^rho", names(p))] <- qnorm((rho + 1) / 2)
@@ -416,10 +418,15 @@ test_that("malformed correlated designs and unrestricted active rho are rejected
     make_rdmswtn_tt_context(dat3, RDMSWTN_TTcorr(), rho_formula = rho ~ 1),
     "at most two accumulator rows"
   )
+  # Unrestricted drifts are correlatable, but only with sv = 0; sv > 0 there is
+  # reserved for a correlated-drift model.
   model <- RDMSWTN_TTcorr(posdrift = FALSE)
   pars <- matrix(
     c(1, 1, .2, .1, 1, .3, 1, 0, 0, .5), nrow = 1,
     dimnames = list(NULL, names(model$p_types))
   )
-  expect_error(model$Ttransform(pars, NULL), "posdrift = FALSE")
+  expect_error(model$Ttransform(pars, NULL),
+               "requires sv = 0 on the correlated rows")
+  pars[, "sv"] <- 0
+  expect_silent(model$Ttransform(pars, NULL))
 })

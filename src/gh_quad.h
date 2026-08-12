@@ -8,7 +8,7 @@
 // BAwLcorr integrates its shared latent factor with two batched passes of
 // these rules: a fixed scan pass locates each trial's integrand mass, and a
 // second pass re-centers a rule per trial (agh_center_from_scan /
-// agh_log_weight below).  See c_log_likelihood_bawl_correlated.
+// agh_log_weight below).  See c_log_likelihood_corr_drift.
 //
 // The repository carries only the adaptive subset of bundled GSL, so its
 // gsl_integration_fixed Hermite implementation is not linkable here.  The

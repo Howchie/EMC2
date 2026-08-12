@@ -715,10 +715,21 @@ bridge_add_info_standard <- function(info, samples){
   # Calculate total parameters (including former beta)
   n_total_pars <- nrow(samples$samples$theta_mu)
 
-  # Calculate group index including all parameters (theta_mu now includes beta)
+  # Calculate group index including all parameters (theta_mu now includes beta).
+  #
+  # The variance block is stored by `bridge_add_group_standard()` one
+  # `par_group` at a time.  Counting a single covariance matrix over all
+  # blocked parameters here therefore overstates the number of columns when
+  # there is more than one blocked group (e.g. groups 1, 2, and 3).  The
+  # resulting indices point past the proposal matrix and bridge sampling then
+  # fails downstream with opaque subscript/Brobdingnag errors.
   info$group_idx <- (samples$n_pars*samples$n_subjects + 1):
     (samples$n_pars*samples$n_subjects + n_total_pars + samples$n_pars +
-       sum(!has_cov) + (sum(has_cov) * (sum(has_cov) +1))/2)
+       sum(!has_cov) +
+       sum(vapply(unique(info$par_group[has_cov]), function(group) {
+         n_block <- sum(info$par_group == group)
+         n_block * (n_block + 1) / 2
+       }, numeric(1))))
 
   return(info)
 }

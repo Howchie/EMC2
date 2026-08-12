@@ -494,7 +494,11 @@ rGBM_killed <- function(n, b, v, A, s = 1, k = 0, erlang = 1L, erlang_omega = 1)
   out
 }
 
-rSWTN <- function(n, b, v, A, sv, s = 1, k = 0, erlang = 1L, erlang_omega = 1, posdrift = TRUE) {
+# `drift_override` supplies a pre-drawn rate per element, which is how the
+# correlated-draw models inject their equicorrelated draws; NULL keeps the
+# ordinary independent per-element draw.
+rSWTN <- function(n, b, v, A, sv, s = 1, k = 0, erlang = 1L, erlang_omega = 1,
+                  posdrift = TRUE, drift_override = NULL) {
   if (n <= 0) return(numeric(0))
   b <- rep(b, length.out = n)
   v <- rep(v, length.out = n)
@@ -509,14 +513,18 @@ rSWTN <- function(n, b, v, A, sv, s = 1, k = 0, erlang = 1L, erlang_omega = 1, p
   # handle defective negative-drift finite hits when posdrift=FALSE.
   # For sv == 0 and v < 0 with posdrift=FALSE: Bernoulli(p_hit) sampling in rWald.
   v_draw <- v
-  sample <- is.finite(sv) & sv > 1e-12
-  if (any(sample)) {
-    if (posdrift) {
-      lo <- pnorm(0, mean = v[sample], sd = sv[sample])
-      u <- lo + runif(sum(sample)) * (1 - lo)
-      v_draw[sample] <- qnorm(u, mean = v[sample], sd = sv[sample])
-    } else {
-      v_draw[sample] <- rnorm(sum(sample), mean = v[sample], sd = sv[sample])
+  if (!is.null(drift_override)) {
+    v_draw <- rep(drift_override, length.out = n)
+  } else {
+    sample <- is.finite(sv) & sv > 1e-12
+    if (any(sample)) {
+      if (posdrift) {
+        lo <- pnorm(0, mean = v[sample], sd = sv[sample])
+        u <- lo + runif(sum(sample)) * (1 - lo)
+        v_draw[sample] <- qnorm(u, mean = v[sample], sd = sv[sample])
+      } else {
+        v_draw[sample] <- rnorm(sum(sample), mean = v[sample], sd = sv[sample])
+      }
     }
   }
   
@@ -753,8 +761,11 @@ RDMGBM <- function(erlang_shape = 1L, erlang_type = "none") {
 #' any optional clock). With `posdrift = FALSE`, negative drifts are allowed and
 #' the finish-time distribution can be defective: an accumulator can have an
 #' intrinsic infinite finish time. The compiled model name is suffixed with
-#' `IO` in that case. With `posdrift = TRUE`, the drift distribution is
-#' truncated at zero and the ordinary RDM is recovered when `sv = 0`.
+#' `IO` in that case, and `v` is sampled on the natural scale
+#' (`transform = "identity"`, bounds `(-Inf, Inf)`, default `1`) so that
+#' negative mean rates are reachable. With `posdrift = TRUE`, the drift
+#' distribution is truncated at zero, `v` is sampled on the log scale
+#' (bounds `(1e-3, Inf)`), and the ordinary RDM is recovered when `sv = 0`.
 #'
 #' As a race model, RDMSWTN has one accumulator per response option. EMC2
 #' constructs the latent accumulator factor `lR` from `R`, and the race
@@ -774,15 +785,43 @@ RDMGBM <- function(erlang_shape = 1L, erlang_type = "none") {
 #' opted-out coefficient to zero. Zero or one nonzero row is an ordinary
 #' independent RDMSWTN race.
 #'
-#' Correlation is applied to finishing-time ranks through a Gaussian copula,
-#' including when `sv > 0`; it is not a correlation of drift draws or the
-#' Pearson correlation of observed response times. For the participating pair,
-#' Kendall's tau is `2 * asin(rho) / pi` and Spearman's rho is
-#' `6 * asin(rho / 2) / pi`. Correlated RDMSWTN currently supports only
-#' `erlang_type = "none"` and `posdrift = TRUE`. The unrestricted-drift
-#' (`posdrift = FALSE`) model remains available at `rho = 0`, but any active
-#' nonzero correlation is rejected. [LogicalRulesRDMSWTN()] remains an
-#' independent model; correlated logical-rule races are not supported.
+#' `correlate` picks which of two genuinely different data generating
+#' processes `rho` describes.
+#'
+#' With `correlate = "times"` (the default) correlation is applied to
+#' finishing-time ranks through a Gaussian copula, including when `sv > 0`; it
+#' is not a correlation of drift draws or the Pearson correlation of observed
+#' response times. For the participating pair, Kendall's tau is
+#' `2 * asin(rho) / pi` and Spearman's rho is `6 * asin(rho / 2) / pi`.
+#'
+#' This copula is available under `posdrift = FALSE` provided `sv = 0` on the
+#' correlated rows. The marginals are then defective: a negative mean rate
+#' gives an accumulator with intrinsic never-finish mass, `F(Inf) = p < 1`.
+#' The copula construction is unchanged and remains exact, because copula
+#' uniforms at or above the marginal plateau represent the atom at infinity.
+#' `rho` therefore couples the omissions as well as the finite finishing
+#' times: the probability that neither of a coupled pair ever finishes is
+#' `Phi2(qnorm(p1), qnorm(p2); rho)` rather than the product `(1-p1)(1-p2)`.
+#'
+#' With `correlate = "drifts"` `rho` is instead the correlation of the
+#' *between-trial drift draws themselves*, exactly as in [BAwLcorr()]: the
+#' rates are drawn from an equicorrelated normal (truncated to the positive
+#' orthant when `posdrift = TRUE`) and the accumulators then race
+#' independently on the drawn rates. This requires `sv > 0` on the correlated
+#' rows, since at `sv = 0` there are no draws to correlate. Both models share
+#' one implementation of the construction and of the shared-factor quadrature
+#' that integrates it out; see `src/drift_factor.h`. A `matchfun` is required
+#' either way, and the correct racer is the positive reference while the
+#' incorrect racers carry the cell sign, so a pair's loadings multiply back to
+#' `rho`.
+#'
+#' The two settings are not nested and neither is a limit of the other, so
+#' `correlate` must be chosen deliberately; `"times"` is the default because
+#' it is what earlier versions did.
+#'
+#' Correlated RDMSWTN currently supports only `erlang_type = "none"`.
+#' [LogicalRulesRDMSWTN()] remains an independent model; correlated
+#' logical-rule races are not supported.
 #'
 #' @param erlang_shape Integer `1` for exponential clocks, `2` for Erlang-2,
 #'   or `"mixed"` for the Erlang-1/Erlang-2 mixture.
@@ -791,15 +830,21 @@ RDMGBM <- function(erlang_shape = 1L, erlang_type = "none") {
 #' @param posdrift Logical. If `TRUE` (default), truncate the between-trial
 #'   normal drift distribution below at zero; if `FALSE`, use untruncated
 #'   drifts and allow intrinsic omissions.
-#' @param correlated Logical. If `TRUE`, add the Gaussian-copula parameter
-#'   `rho` and use the correlated pair race likelihood and simulator.
+#' @param correlated Logical. If `TRUE`, add the correlation parameter `rho`
+#'   and use the correlated race likelihood and simulator.
+#' @param correlate What `rho` correlates when `correlated = TRUE`: `"times"`
+#'   (default) for a Gaussian copula on the two participating finishing times,
+#'   or `"drifts"` for correlated between-trial drift draws in the style of
+#'   [BAwLcorr()]. `"drifts"` requires `sv > 0` on the correlated rows.
 #' @return A model list compatible with [design()].
 #'
 #' @export
 #'
 RDMSWTN <- function(erlang_shape = 1L, erlang_type = "none", posdrift = TRUE,
-                    correlated = FALSE) {
+                    correlated = FALSE, correlate = c("times", "drifts")) {
   erlang_type <- match.arg(erlang_type, c("none", "local_kill", "global_kill", "local_guess", "local_kill_guess"))
+  correlate <- match.arg(correlate)
+  drift_corr <- correlated && correlate == "drifts"
   if (correlated && erlang_type != "none") {
     stop("Correlated RDMSWTN does not support guess or kill clocks; use erlang_type = \"none\".")
   }
@@ -821,16 +866,21 @@ RDMSWTN <- function(erlang_shape = 1L, erlang_type = "none", posdrift = TRUE,
   )
   has_guess <- erlang_type %in% c("local_guess", "local_kill_guess")
   has_kill  <- erlang_type %in% c("local_kill", "global_kill", "local_kill_guess")
+  # posdrift = FALSE is the unrestricted-drift (IO) model: negative mean rates
+  # are legal and give a defective finishing time, so v must be sampled on the
+  # natural scale.  The log/exp scale is kept for posdrift = TRUE, where v > 0
+  # is a hard constraint of the truncated drift law.
+  .v <- .rdmswtn_v_scale(posdrift)
   p_types <- c(
-    "v" = log(1), "B" = log(1), "A" = log(0), "t0" = log(0),
+    "v" = .v$p_type, "B" = log(1), "A" = log(0), "t0" = log(0),
     "s" = log(1), "sv" = log(0)
   )
   transform <- c(
-    v = "exp", B = "exp", A = "exp", t0 = "exp",
+    v = .v$transform, B = "exp", A = "exp", t0 = "exp",
     s = "exp", sv = "exp"
   )
   minmax <- cbind(
-    v = c(1e-3, Inf), B = c(0, Inf), A = c(0, Inf),
+    v = .v$minmax, B = c(0, Inf), A = c(0, Inf),
     t0 = c(0.05, Inf), s = c(0, Inf), sv = c(0, Inf)
   )
   exception <- c(A = 0, v = 0, sv = 0)
@@ -875,9 +925,10 @@ RDMSWTN <- function(erlang_shape = 1L, erlang_type = "none", posdrift = TRUE,
   list(
     type = "RACE",
     c_name = paste0(if (posdrift) base_name else paste0(base_name, "_IO"),
-                    if (correlated) "_CORR" else ""),
+                    if (!correlated) "" else if (drift_corr) "_CORRD" else "_CORR"),
     correlated = correlated,
-    correlation_type = if (correlated) "rdmswtn_gaussian_copula" else NULL,
+    correlation_type = if (!correlated) NULL else if (drift_corr)
+      "rdmswtn_drift_factor" else "rdmswtn_gaussian_copula",
     p_types = p_types,
     p_types_canonical = c("v", "B", "A", "t0", "s", "sv"),
     transform = transform_spec,
@@ -886,9 +937,12 @@ RDMSWTN <- function(erlang_shape = 1L, erlang_type = "none", posdrift = TRUE,
       exception = exception
     ),
     Ttransform = function(pars, dadm) {
-      if (correlated) {
+      if (drift_corr) {
+        pars <- .apply_drift_factor_rho(pars, dadm, sv = pars[, "sv"],
+                                        model = "RDMSWTNcorr")
+      } else if (correlated) {
         .validate_rdmswtn_corr_rows(pars[, "rho"], dadm = dadm,
-                                    posdrift = posdrift)
+                                    posdrift = posdrift, sv = pars[, "sv"])
       }
       lambda_factor <- if (erlang_shape_cpp == 2L) 2 else 1
       n <- nrow(pars)
@@ -921,7 +975,7 @@ RDMSWTN <- function(erlang_shape = 1L, erlang_type = "none", posdrift = TRUE,
       if (is.null(ok)) ok <- rep(TRUE, nrow(pars))
       .rfun_RDMSWTN(data$lR, pars, ok = ok, erlang_shape = erlang_shape_cpp,
                erlang_type = erlang_type, posdrift = posdrift,
-               correlated = correlated)
+               correlated = correlated, correlate = correlate)
     },
     dfun = function(rt, pars) dRDMSWTN(rt, pars, erlang = erlang_shape_cpp, posdrift = posdrift),
     pfun = function(rt, pars) pRDMSWTN(rt, pars, erlang = erlang_shape_cpp, posdrift = posdrift),
@@ -937,15 +991,91 @@ RDMSWTN <- function(erlang_shape = 1L, erlang_type = "none", posdrift = TRUE,
   )
 }
 
+# Sampling scale for the RDMSWTN mean drift.  With posdrift = TRUE the
+# truncated normal drift law requires v > 0, so v is sampled on the log scale.
+# With posdrift = FALSE negative mean rates are part of the model (they give a
+# defective accumulator with intrinsic never-finish mass), so v is sampled on
+# the natural scale, matching the LBA/BAwL IO convention.
+.rdmswtn_v_scale <- function(posdrift) {
+  if (posdrift) {
+    list(p_type = log(1), transform = "exp", minmax = c(1e-3, Inf))
+  } else {
+    list(p_type = 1, transform = "identity", minmax = c(-Inf, Inf))
+  }
+}
+
+# The Gaussian copula couples finishing-time ranks, which stays well defined
+# when posdrift = FALSE makes those finishing times defective: uniforms above
+# the marginal plateau are the atom at infinity, so rho also correlates the
+# intrinsic omissions.  sv > 0 is reserved on that route: a between-trial drift
+# SD combined with unrestricted drifts is intended to become a
+# correlated-*draws* model (as in BAwLcorr), which is a different data
+# generating process, so it is rejected rather than silently given copula
+# semantics.
+.check_rdmswtn_corr_io_sv <- function(correlated, posdrift, sv, tol = 1e-12) {
+  if (posdrift || !any(correlated)) return(invisible(TRUE))
+  if (is.null(sv)) {
+    stop("RDMSWTNcorr with posdrift = FALSE requires sv, which was not supplied for validation.")
+  }
+  sv <- rep_len(sv, length(correlated))
+  if (any(correlated & (!is.finite(sv) | sv > tol))) {
+    stop(
+      "RDMSWTNcorr with posdrift = FALSE requires sv = 0 on the correlated ",
+      "rows: the copula couples defective finishing times, while sv > 0 with ",
+      "unrestricted drifts is reserved for a correlated-drift model."
+    )
+  }
+  invisible(TRUE)
+}
+
+# Row-level encoding shared by every correlated-*draws* race model (BAwLcorr
+# and RDMSWTN(correlate = "drifts")).  The sampled coefficient is one direct
+# correlation per cell; the compiled kernel turns a row's signed rho into a
+# loading sign(rho) * sv * sqrt(|rho|) on a single shared standard-normal
+# factor, so the correct racer is made the positive reference and the
+# incorrect racers carry the cell sign.  The product of any correct/incorrect
+# pair of loadings is then exactly rho.  Independent rows (a PM racer, say)
+# must be made structurally zero by the rho design and its constants.
+#
+# The remap is idempotent -- the C++ side applies the same role mapping from
+# lM -- but it has to happen here as well so the R simulator, which reads the
+# row-level rho directly, describes the same process as the likelihood.
+.apply_drift_factor_rho <- function(pars, dadm, sv = NULL, model = "model") {
+  if (is.null(dadm) || !"lM" %in% names(dadm) || nrow(pars) != nrow(dadm)) {
+    stop(model, " with correlate = \"drifts\" requires a matchfun-generated ",
+         "lM role indicator in the expanded data.")
+  }
+  rho_cell <- pars[, "rho"]
+  if (any(!is.finite(rho_cell)) || any(abs(rho_cell) > 1)) {
+    stop(model, " requires finite natural-scale rho values in [-1, 1].")
+  }
+  correct <- as.character(dadm$lM) == "TRUE"
+  if (anyNA(correct)) {
+    stop(model, " matchfun produced missing lM values.")
+  }
+  # Correlating the draws is only meaningful when there are draws to
+  # correlate: at sv = 0 the drift is deterministic and rho has no effect at
+  # all, which would leave it unidentified rather than merely uninformative.
+  if (!is.null(sv)) {
+    coupled <- abs(rho_cell) > 1e-12
+    if (any(coupled & (!is.finite(sv) | sv <= 1e-12))) {
+      stop(model, " with correlate = \"drifts\" requires sv > 0 on the ",
+           "correlated rows: the correlation acts on the between-trial drift ",
+           "draws, so it is undefined at sv = 0. Use correlate = \"times\" ",
+           "for a finishing-time copula.")
+    }
+  }
+  pars[, "rho"] <- ifelse(correct, abs(rho_cell), rho_cell)
+  pars
+}
+
 .validate_rdmswtn_corr_rows <- function(rho, dadm = NULL, posdrift = TRUE,
-                                        tol = 1e-12) {
+                                        sv = NULL, tol = 1e-12) {
   if (any(!is.finite(rho)) || any(abs(rho) > 1)) {
     stop("RDMSWTNcorr requires finite natural-scale rho values in [-1, 1].")
   }
   if (is.null(dadm) || is.null(dadm$lR)) {
-    if (!posdrift && any(abs(rho) > tol)) {
-      stop("RDMSWTNcorr with posdrift = FALSE is supported only when every active rho is zero.")
-    }
+    .check_rdmswtn_corr_io_sv(abs(rho) > tol, posdrift, sv, tol)
     return(invisible(TRUE))
   }
   n_lR <- length(levels(dadm$lR))
@@ -964,9 +1094,7 @@ RDMSWTN <- function(erlang_shape = 1L, erlang_type = "none", posdrift = TRUE,
       if (is.finite(n_acc)) active[rows] <- seq_len(n_lR) <= n_acc
     }
   }
-  if (!posdrift && any(active & abs(rho) > tol)) {
-    stop("RDMSWTNcorr with posdrift = FALSE is supported only when every active rho is zero.")
-  }
+  .check_rdmswtn_corr_io_sv(active & abs(rho) > tol, posdrift, sv, tol)
   for (j in seq_len(length(rho) / n_lR)) {
     rows <- ((j - 1L) * n_lR + 1L):(j * n_lR)
     values <- rho[rows][active[rows] & abs(rho[rows]) > tol]
@@ -984,21 +1112,29 @@ RDMSWTN <- function(erlang_shape = 1L, erlang_type = "none", posdrift = TRUE,
 
 #' Correlated RDMSWTN Gaussian-Copula Race
 #'
-#' Convenience constructor for `RDMSWTN(..., correlated = TRUE)`. The two
-#' participating accumulator finishing times retain their ordinary RDMSWTN
-#' marginals and are coupled by a Gaussian copula. See [RDMSWTN()] for the
-#' participation design and interpretation of `rho`.
+#' Convenience constructor for `RDMSWTN(..., correlated = TRUE)`. With the
+#' default `correlate = "times"` the two participating accumulator finishing
+#' times retain their ordinary RDMSWTN marginals and are coupled by a Gaussian
+#' copula; with `correlate = "drifts"` it is the between-trial drift draws that
+#' are correlated, as in [BAwLcorr()]. See [RDMSWTN()] for the participation
+#' design and the interpretation of `rho` under each.
 #'
 #' @param erlang_shape Retained for constructor compatibility. Only the
 #'   no-clock model is currently supported.
 #' @param erlang_type Must be `"none"`.
-#' @param posdrift Logical. Nonzero `rho` currently requires `TRUE`.
+#' @param posdrift Logical. Nonzero `rho` is supported for both settings. With
+#'   `correlate = "times"`, `posdrift = FALSE` additionally requires `sv = 0`
+#'   on the correlated rows.
+#' @param correlate `"times"` (default) for the finishing-time copula, or
+#'   `"drifts"` for correlated drift draws, which requires `sv > 0`.
 #' @return A model list compatible with [design()].
 #' @export
 RDMSWTNcorr <- function(erlang_shape = 1L, erlang_type = "none",
-                        posdrift = TRUE) {
+                        posdrift = TRUE,
+                        correlate = c("times", "drifts")) {
   RDMSWTN(erlang_shape = erlang_shape, erlang_type = erlang_type,
-          posdrift = posdrift, correlated = TRUE)
+          posdrift = posdrift, correlated = TRUE,
+          correlate = match.arg(correlate))
 }
 
 #' Time-Changed RDMSWTN Race
@@ -1019,30 +1155,40 @@ RDMSWTNcorr <- function(erlang_shape = 1L, erlang_type = "none",
 #' `A`, `t0`, and `sv`. The drift, start-point variability, diffusion scale,
 #' and `b = B + A` convention are otherwise identical to [RDMSWTN()].
 #' The optional `pContaminant` (omission) and `pGuess` (uniform outlier)
-#' parameters are handled by the generic data pipeline. With `correlated = TRUE`, `rho` couples exactly two active
-#' finishing-time marginals through the same Gaussian-copula contract as
-#' [RDMSWTN()]. Active nonzero correlation requires `posdrift = TRUE`.
+#' parameters are handled by the generic data pipeline. With
+#' `correlated = TRUE`, `rho` follows the same contract as [RDMSWTN()]:
+#' `correlate = "times"` couples exactly two active finishing-time marginals
+#' with a Gaussian copula (and under `posdrift = FALSE` additionally requires
+#' `sv = 0` on the correlated rows), while `correlate = "drifts"` correlates
+#' the between-trial drift draws and requires `sv > 0`.
 #'
 #' @param posdrift Logical. If `TRUE` (default), truncate the between-trial
 #'   normal drift distribution below at zero. If `FALSE`, allow unrestricted
 #'   drifts and their additional intrinsic omission mass.
-#' @param correlated Logical. If `TRUE`, include the Gaussian-copula parameter
+#' @param correlated Logical. If `TRUE`, include the correlation parameter
 #'   `rho` for one directly specified accumulator pair.
+#' @param correlate `"times"` (default) for the finishing-time copula, or
+#'   `"drifts"` for correlated drift draws. See [RDMSWTN()].
 #' @return A model list compatible with [design()].
 #' @export
-RDMSWTN_TT <- function(posdrift = TRUE, correlated = FALSE) {
+RDMSWTN_TT <- function(posdrift = TRUE, correlated = FALSE,
+                       correlate = c("times", "drifts")) {
+  correlate <- match.arg(correlate)
+  drift_corr <- correlated && correlate == "drifts"
+  # See .rdmswtn_v_scale(): posdrift = FALSE samples v on the natural scale.
+  .v <- .rdmswtn_v_scale(posdrift)
   p_types <- c(
-    v = log(1), B = log(1), A = log(0), t0 = log(0),
+    v = .v$p_type, B = log(1), A = log(0), t0 = log(0),
     s = log(1), sv = log(0), tau = log(1),
     pContaminant = qnorm(0), pGuess = qnorm(0)
   )
   transform <- c(
-    v = "exp", B = "exp", A = "exp", t0 = "exp",
+    v = .v$transform, B = "exp", A = "exp", t0 = "exp",
     s = "exp", sv = "exp", tau = "exp",
     pContaminant = "pnorm", pGuess = "pnorm"
   )
   minmax <- cbind(
-    v = c(1e-3, Inf), B = c(0, Inf), A = c(0, Inf),
+    v = .v$minmax, B = c(0, Inf), A = c(0, Inf),
     t0 = c(0.05, Inf), s = c(0, Inf), sv = c(0, Inf),
     tau = c(1e-4, Inf), pContaminant = c(0.001, 0.999),
     pGuess = c(0.001, 0.999)
@@ -1066,18 +1212,22 @@ RDMSWTN_TT <- function(posdrift = TRUE, correlated = FALSE) {
     type = "RACE",
     c_name = paste0(
       if (posdrift) "RDMSWTN_TT" else "RDMSWTN_TT_IO",
-      if (correlated) "_CORR" else ""
+      if (!correlated) "" else if (drift_corr) "_CORRD" else "_CORR"
     ),
     correlated = correlated,
-    correlation_type = if (correlated) "rdmswtn_gaussian_copula" else NULL,
+    correlation_type = if (!correlated) NULL else if (drift_corr)
+      "rdmswtn_drift_factor" else "rdmswtn_gaussian_copula",
     p_types = p_types,
     p_types_canonical = c("v", "B", "A", "t0", "s", "sv", "tau"),
     transform = transform_spec,
     bound = list(minmax = minmax, exception = exception),
     Ttransform = function(pars, dadm) {
-      if (correlated) {
+      if (drift_corr) {
+        pars <- .apply_drift_factor_rho(pars, dadm, sv = pars[, "sv"],
+                                        model = "RDMSWTN_TTcorr")
+      } else if (correlated) {
         .validate_rdmswtn_corr_rows(
-          pars[, "rho"], dadm = dadm, posdrift = posdrift
+          pars[, "rho"], dadm = dadm, posdrift = posdrift, sv = pars[, "sv"]
         )
       }
       canonical <- c("v", "B", "A", "t0", "s", "sv", "tau")
@@ -1090,7 +1240,7 @@ RDMSWTN_TT <- function(posdrift = TRUE, correlated = FALSE) {
       if (is.null(ok)) ok <- rep(TRUE, nrow(pars))
       .rfun_RDMSWTN_TT(
         data$lR, pars, ok = ok, posdrift = posdrift,
-        correlated = correlated
+        correlated = correlated, correlate = correlate
       )
     },
     dfun = function(rt, pars) {
@@ -1109,11 +1259,17 @@ RDMSWTN_TT <- function(posdrift = TRUE, correlated = FALSE) {
 #'
 #' Convenience constructor for `RDMSWTN_TT(correlated = TRUE)`.
 #'
-#' @param posdrift Logical. Active nonzero `rho` requires `TRUE`.
+#' @param posdrift Logical. Active nonzero `rho` is supported for both
+#'   settings. With `correlate = "times"`, `posdrift = FALSE` additionally
+#'   requires `sv = 0` on the correlated rows.
+#' @param correlate `"times"` (default) for the finishing-time copula, or
+#'   `"drifts"` for correlated drift draws, which requires `sv > 0`.
 #' @return A model list compatible with [design()].
 #' @export
-RDMSWTN_TTcorr <- function(posdrift = TRUE) {
-  RDMSWTN_TT(posdrift = posdrift, correlated = TRUE)
+RDMSWTN_TTcorr <- function(posdrift = TRUE,
+                           correlate = c("times", "drifts")) {
+  RDMSWTN_TT(posdrift = posdrift, correlated = TRUE,
+             correlate = match.arg(correlate))
 }
 
 .rdmswtn_tt_pars <- function(rt, pars) {
@@ -1163,7 +1319,7 @@ pRDMSWTN_TT <- function(rt, pars, posdrift = TRUE, log.p = FALSE) {
 }
 
 rRDMSWTN_TT <- function(lR, pars, ok = rep(TRUE, nrow(pars)),
-                        posdrift = TRUE) {
+                        posdrift = TRUE, drift_override = NULL) {
   if (!is.null(attr(pars, "ok"))) ok <- attr(pars, "ok")
   nr <- length(levels(lR))
   if (nr < 1L || nrow(pars) %% nr != 0L) {
@@ -1180,7 +1336,8 @@ rRDMSWTN_TT <- function(lR, pars, ok = rep(TRUE, nrow(pars)),
     operational <- rSWTN(
       length(active), b = pars[active, "b"], v = pars[active, "v"],
       A = pars[active, "A"], sv = pars[active, "sv"],
-      s = pars[active, "s"], k = 0, posdrift = posdrift
+      s = pars[active, "s"], k = 0, posdrift = posdrift,
+      drift_override = if (is.null(drift_override)) NULL else drift_override[active]
     )
     Q <- pars[active, "tau"] / 2
     respond <- is.finite(operational) & operational <= Q
@@ -1204,12 +1361,12 @@ rRDMSWTN_TT <- function(lR, pars, ok = rep(TRUE, nrow(pars)),
   .apply_timed_guess_winner(out, levels(lR))
 }
 
-.qRDMSWTN_TT_operational <- function(u, Q, pars) {
+.qRDMSWTN_TT_operational <- function(u, Q, pars, posdrift = TRUE) {
   if (u <= 0) return(0)
   FQ <- prdmswtn(
     Q, pars[1L, "v"], pars[1L, "b"], pars[1L, "A"],
     pars[1L, "s"], 0, pars[1L, "sv"], 0, 0,
-    posdrift = TRUE
+    posdrift = posdrift
   )
   if (u >= FQ) return(Q)
   stats::uniroot(
@@ -1217,7 +1374,7 @@ rRDMSWTN_TT <- function(lR, pars, ok = rep(TRUE, nrow(pars)),
       prdmswtn(
         x, pars[1L, "v"], pars[1L, "b"], pars[1L, "A"],
         pars[1L, "s"], 0, pars[1L, "sv"], 0, 0,
-        posdrift = TRUE
+        posdrift = posdrift
       ) - u
     },
     c(0, Q), tol = 1e-10
@@ -1236,10 +1393,10 @@ rRDMSWTN_TT_corr <- function(lR, pars, ok = rep(TRUE, nrow(pars)),
     stop("RDMSWTN_TTcorr requires rows grouped by accumulator within trial.")
   }
   rho <- pars[, "rho"]
+  # posdrift = TRUE here runs the shape checks only; the IO/sv rule is applied
+  # below against the rows this call actually simulates.
   .validate_rdmswtn_corr_rows(rho, posdrift = TRUE)
-  if (!posdrift && any(ok & abs(rho) > 1e-12)) {
-    stop("RDMSWTN_TTcorr with posdrift = FALSE requires every active rho to be zero.")
-  }
+  .check_rdmswtn_corr_io_sv(ok & abs(rho) > 1e-12, posdrift, pars[, "sv"])
   if (!any(ok & abs(rho) > 1e-12)) {
     return(rRDMSWTN_TT(lR, pars, ok = ok, posdrift = posdrift))
   }
@@ -1262,10 +1419,10 @@ rRDMSWTN_TT_corr <- function(lR, pars, ok = rep(TRUE, nrow(pars)),
   finish <- rep(Inf, nrow(pars))
   for (r in which(ok)) {
     Q <- pars[r, "tau"] / 2
-    FQ <- pRDMSWTN_TT(Inf, pars[r, , drop = FALSE], posdrift = TRUE)
+    FQ <- pRDMSWTN_TT(Inf, pars[r, , drop = FALSE], posdrift = posdrift)
     if (u[r] <= FQ) {
       operational <- .qRDMSWTN_TT_operational(
-        u[r], Q, pars[r, , drop = FALSE]
+        u[r], Q, pars[r, , drop = FALSE], posdrift = posdrift
       )
       finish[r] <- pars[r, "t0"] +
         .rdmswtn_tt_qinv_R(operational, pars[r, "tau"])
@@ -1400,7 +1557,7 @@ pRDMSWTN <- function(rt, pars, erlang = 1L, posdrift = TRUE) {
 
 rRDMSWTN <- function(lR, pars, p_types = c("v", "b", "A", "t0", "sv", "lambda_g", "lambda_k"),
                      ok = rep(TRUE, dim(pars)[1]), erlang_shape = 1L, erlang_type = "none",
-                     posdrift = TRUE) {
+                     posdrift = TRUE, drift_override = NULL) {
   if (!is.null(attr(pars, "ok"))) ok <- attr(pars, "ok")
   if (is.null(dim(pars)) || (dim(pars)[1] == 1 & length(lR) > 1)) {
     original_names <- names(pars)
@@ -1456,7 +1613,8 @@ rRDMSWTN <- function(lR, pars, p_types = c("v", "b", "A", "t0", "sv", "lambda_g"
     b = pars[, "b"], v = pars[, "v"], A = pars[, "A"], sv = pars[, "sv"],
     s = pars[, "s"],
     k = k_vec, erlang = erlang_shape, erlang_omega = erlang_omega_all[ok],
-    posdrift = posdrift
+    posdrift = posdrift,
+    drift_override = if (is.null(drift_override)) NULL else drift_override[ok]
   )
   # Put EAM on the same raw-time axis as Erlang clocks.
   dt <- dt + matrix(t0, nrow = nr)
@@ -1550,6 +1708,15 @@ rRDMSWTN <- function(lR, pars, p_types = c("v", "b", "A", "t0", "sv", "lambda_g"
     if (t <= pars[1L, "t0"]) return(-u)
     pRDMSWTN(t, pars, erlang = 1L, posdrift = posdrift) - u
   }
+  if (!posdrift) {
+    # Defective marginal: uniforms above the plateau F(Inf) = p_hit are the
+    # atom at infinity, i.e. this accumulator never finishes.
+    cap <- pRDMSWTN(Inf, pars, erlang = 1L, posdrift = FALSE)
+    if (!is.finite(cap)) {
+      stop("RDMSWTNcorr: non-finite marginal hit probability while inverting a finishing-time quantile.")
+    }
+    if (u >= cap) return(Inf)
+  }
   lower <- 0
   upper <- max(1, pars[1L, "t0"] + 1)
   value <- cdf(upper)
@@ -1582,10 +1749,10 @@ rRDMSWTN_corr <- function(lR, pars, ok = rep(TRUE, nrow(pars)),
     stop("RDMSWTNcorr requires rows grouped by accumulator within trial.")
   }
   rho <- pars[, "rho"]
+  # posdrift = TRUE here runs the shape checks only; the IO/sv rule is applied
+  # below against the rows this call actually simulates.
   .validate_rdmswtn_corr_rows(rho, posdrift = TRUE)
-  if (!posdrift && any(ok & abs(rho) > 1e-12)) {
-    stop("RDMSWTNcorr with posdrift = FALSE is supported only when every active rho is zero.")
-  }
+  .check_rdmswtn_corr_io_sv(ok & abs(rho) > 1e-12, posdrift, pars[, "sv"])
   if (!any(ok & abs(rho) > 1e-12)) {
     return(rRDMSWTN(lR, pars, ok = ok, erlang_shape = 1L,
                     erlang_type = "none", posdrift = posdrift))
