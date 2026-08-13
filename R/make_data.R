@@ -11,7 +11,16 @@ get_missing <- function(supplied, data, bound_name, default,type) {
         stop(bound_name," must be logical")
     if (type=="numeric" & !is.numeric(supplied))
         stop(bound_name," must be numeric")
-    subjectwise <- all(hasName(supplied,levels(data$subjects)))
+    # A one-per-trial vector must never be read as a subject lookup.  Trial-level
+    # vectors carry data row names ("1","2",...), so with numerically labelled
+    # subjects every subject level is also a row name and hasName() is TRUE for
+    # a vector that is not subjectwise at all: each subject would then be given
+    # the value of the row whose name matches its label (all subject 1's trials).
+    # A genuine subject lookup is named by exactly the subject levels, which
+    # also settles the case where the two lengths happen to coincide.
+    subj_levels <- levels(data$subjects)
+    subjectwise <- all(hasName(supplied,subj_levels)) &&
+      (length(supplied) != nrow(data) || setequal(names(supplied),subj_levels))
     if (!subjectwise) bound <- supplied else
       bound <- supplied[as.character(data$subjects)]
   }
@@ -641,10 +650,12 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
   # lR column and are already one row per trial.
   first_acc <- if (is.null(data$lR)) rep(TRUE, nrow(pars)) else
     data$lR == levels(data$lR)[1]
+  # unname(): these are per-trial vectors, and their pars row names would make
+  # get_missing() mistake them for a subject lookup (see get_missing()).
   if (is.null(TC$pContaminant) & any(dimnames(pars)[[2]]=="pContaminant"))
-    TC$pContaminant <- pars[,"pContaminant"][first_acc]
+    TC$pContaminant <- unname(pars[,"pContaminant"][first_acc])
   if (is.null(TC$pGuess) & any(dimnames(pars)[[2]]=="pGuess"))
-    TC$pGuess <- pars[,"pGuess"][first_acc]
+    TC$pGuess <- unname(pars[,"pGuess"][first_acc])
 
   dropNames <- c("lR","lM","winner")
   if (!return_functions && !is.null(design$Ffunctions))
