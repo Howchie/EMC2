@@ -447,6 +447,20 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// bawd_tmax_vec
+NumericVector bawd_tmax_vec(NumericVector A, NumericVector b, NumericVector k, NumericVector ell);
+RcppExport SEXP _EMC2_bawd_tmax_vec(SEXP ASEXP, SEXP bSEXP, SEXP kSEXP, SEXP ellSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type A(ASEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type b(bSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type k(kSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type ell(ellSEXP);
+    rcpp_result_gen = Rcpp::wrap(bawd_tmax_vec(A, b, k, ell));
+    return rcpp_result_gen;
+END_RCPP
+}
 // lognormal_stoploss_log
 double lognormal_stoploss_log(double v, double mu, double sigma);
 RcppExport SEXP _EMC2_lognormal_stoploss_log(SEXP vSEXP, SEXP muSEXP, SEXP sigmaSEXP) {
@@ -3069,6 +3083,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_dbawd_norm", (DL_FUNC) &_EMC2_dbawd_norm, 10},
     {"_EMC2_pbawd_norm", (DL_FUNC) &_EMC2_pbawd_norm, 10},
     {"_EMC2_bawd_tmax", (DL_FUNC) &_EMC2_bawd_tmax, 4},
+    {"_EMC2_bawd_tmax_vec", (DL_FUNC) &_EMC2_bawd_tmax_vec, 4},
     {"_EMC2_lognormal_stoploss_log", (DL_FUNC) &_EMC2_lognormal_stoploss_log, 3},
     {"_EMC2_bm_fht_pdf_vec_grid", (DL_FUNC) &_EMC2_bm_fht_pdf_vec_grid, 10},
     {"_EMC2_bm_fht_pdf_vec_grid_chunked", (DL_FUNC) &_EMC2_bm_fht_pdf_vec_grid_chunked, 15},

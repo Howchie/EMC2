@@ -1014,6 +1014,25 @@ double bawd_tmax(double A, double b, double k, double ell) {
   return g.ok ? g.T_max : NA_REAL;
 }
 
+// Vectorised bawd_tmax, for the R Ttransform: it derives T_max per accumulator
+// row, so a per-row .Call would dominate mapped_pars() and make_data().  Length
+// follows A and the rest recycle, as in dbawd/pbawd above.
+// [[Rcpp::export]]
+NumericVector bawd_tmax_vec(NumericVector A, NumericVector b, NumericVector k,
+                            NumericVector ell) {
+  const int n = A.size();
+  NumericVector out(n);
+  auto pick = [](const NumericVector& x, int i) -> double {
+    return x.size() == 1 ? x[0] : x[i];
+  };
+  for (int i = 0; i < n; ++i) {
+    const BawdGeom g = bawd_geometry(A[i], pick(b, i), pick(k, i),
+                                     pick(ell, i));
+    out[i] = g.ok ? g.T_max : NA_REAL;
+  }
+  return out;
+}
+
 // log E[(V - v)_+] for log V ~ N(mu, sigma^2); exposed so the cancellation
 // layer can be checked against a high-precision reference from R.
 // [[Rcpp::export]]

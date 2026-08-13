@@ -93,6 +93,10 @@ bawd_tmax <- function(A, b, k, ell) {
     .Call(`_EMC2_bawd_tmax`, A, b, k, ell)
 }
 
+bawd_tmax_vec <- function(A, b, k, ell) {
+    .Call(`_EMC2_bawd_tmax_vec`, A, b, k, ell)
+}
+
 lognormal_stoploss_log <- function(v, mu, sigma) {
     .Call(`_EMC2_lognormal_stoploss_log`, v, mu, sigma)
 }

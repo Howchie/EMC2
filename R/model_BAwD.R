@@ -306,7 +306,14 @@ BAwD <- function(drift_distribution = c("lognormal", "normal"),
     transform = list(func = transform),
     bound = list(minmax = minmax, exception = exception),
     Ttransform = function(pars, dadm) {
-      cbind(pars, b = pars[, "B"] + pars[, "A"])
+      b <- pars[, "B"] + pars[, "A"]
+      # T_max is the estimable window quantity: k and ell are individually
+      # near-degenerate along a manifold that holds it fixed, so it is what
+      # should be reported and interpreted rather than either rate.  Inf
+      # whenever k = 0 or ell = 0, where nothing saturates and support is
+      # unbounded.  rt_max is the observable ceiling on this accumulator.
+      Tmax <- bawd_tmax_vec(pars[, "A"], b, pars[, "k"], pars[, "ell"])
+      cbind(pars, b = b, Tmax = Tmax, rt_max = pars[, "t0"] + Tmax)
     },
     rfun = function(data, pars) {
       .rfun_BAwD(data$lR, pars, ok = attr(pars, "ok"), launch = launch,
