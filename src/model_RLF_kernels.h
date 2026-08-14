@@ -203,6 +203,7 @@ inline double drlf_scalar(double time, const double* par, void* context) {
   rlf::Key key;
   if (!rlf_key_from_par(par, horizon, cache->grid, key)) return 0.0;
   const int group = rlf::cache_get(*cache, key, horizon);
+  if (group < 0) return 0.0;  // no usable solve; treated as zero density
   const double log_pdf =
     rlf::entry_log_pdf(cache->entries[group], tt);
   return log_pdf <= rlf::RLF_LOG_FLOOR ? 0.0 : std::exp(log_pdf);
@@ -218,6 +219,7 @@ inline double prlf_scalar(double time, const double* par, void* context) {
   rlf::Key key;
   if (!rlf_key_from_par(par, horizon, cache->grid, key)) return 0.0;
   const int group = rlf::cache_get(*cache, key, horizon);
+  if (group < 0) return 0.0;  // no usable solve; treated as zero CDF
   const double log_survivor =
     rlf::entry_log_S(cache->entries[group], tt);
   if (log_survivor >= 0.0) return 0.0;
@@ -261,6 +263,12 @@ inline void rlf_logS_at_t(double time, const double* const* cols,
         key.bucket = rlf::rlf_horizon_bucket(key, tt);
       }
       const int group = rlf::cache_get(*cache, key, tt);
+      if (group < 0) {
+        // No usable solve for this accumulator: the truncation normaliser for
+        // the trial is undefined, so flag it the same way a bad key is.
+        bad = true;
+        break;
+      }
       const double log_survivor =
         rlf::entry_log_S(cache->entries[group], tt);
       if (log_survivor <= rlf::RLF_LOG_FLOOR) {

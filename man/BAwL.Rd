@@ -8,7 +8,8 @@ BAwL(
   posdrift = TRUE,
   erlang_shape = 1L,
   erlang_type = c("none", "local_kill", "global_kill", "local_guess", "local_kill_guess"),
-  correlated = FALSE
+  correlated = FALSE,
+  drift_distribution = c("normal", "lognormal")
 )
 }
 \arguments{
@@ -22,7 +23,14 @@ or \code{"mixed"} for an Erlang-1/Erlang-2 mixture controlled by \code{omega}.}
 \code{"global_kill"}, \code{"local_guess"}, or \code{"local_kill_guess"}.}
 
 \item{correlated}{Logical. If \code{TRUE}, add the correlated-drift parameter
-\code{rho} and use the correlated BAwL race simulator and likelihood path.}
+\code{rho} and use the correlated BAwL race simulator and likelihood path.
+Only available for \code{drift_distribution = "normal"}.}
+
+\item{drift_distribution}{Distribution of the trialwise launch strength:
+\code{"normal"} (the default) for \code{V ~ N(v, sv^2)}, or \code{"lognormal"} for
+\verb{log V ~ N(mu, sigma^2)}. The lognormal variant is incompatible with
+\code{posdrift = FALSE} and with \code{correlated = TRUE}; see Details for the
+scale-identification convention it requires.}
 }
 \value{
 A model list defining the BAwL race model.
@@ -31,7 +39,9 @@ A model list defining the BAwL race model.
 A race model in which each accumulator follows a leaky evidence trajectory
 and can race against optional guess and kill clocks. For accumulator \code{i},
 the start point is \code{A * U_i}, where \code{U_i ~ Uniform(0, 1)}, the threshold is
-\code{b = B + A}, and the drift is a normal draw with mean \code{v_i} and SD \code{sv_i}.
+\code{b = B + A}, and the drift is a trialwise draw from the launch distribution
+selected by \code{drift_distribution}: a normal draw with mean \code{v_i} and SD
+\code{sv_i} (the default), or a lognormal draw with \verb{log V_i ~ N(mu_i, sigma_i^2)}.
 With leak rate \code{k}, the evidence trajectory is
 \code{x_i(t) = x_i(0) * exp(-k * t) + v_i / k * (1 - exp(-k * t))} for \code{k > 0};
 its \code{k = 0} limit is exactly the ordinary LBA trajectory with the same
@@ -63,6 +73,31 @@ scale before trial-dependent transforms are applied.\tabular{llllll}{
    \emph{rho} \tab scaled probit \tab [-1, 1] \tab qnorm(.5) \tab  \tab Direct cell-level correlation of the underlying Gaussian drifts; only when \code{correlated = TRUE}. \cr
 }
 
+
+With \code{drift_distribution = "lognormal"}, \code{v} and \code{sv} are replaced by \code{mu}
+(identity, default 0) and \code{sigma} (log, default \code{log(1)}), giving
+\verb{log V ~ N(mu, sigma^2)}; every other parameter is unchanged. The lognormal
+launch strength is positive by construction, so \code{posdrift} does not apply to
+it, and the \code{correlated} one-factor path — which decomposes the \emph{Gaussian}
+drift vector — is not available. This variant exists so that the drift
+distribution can be held constant when BAwL is compared against models
+parameterized with a lognormal launch, such as \code{\link[=BAwD]{BAwD()}}.
+
+\strong{Fixing the evidence scale.} The evidence axis is defined only up to a
+scale: \verb{(V, b, A) -> (cV, cb, cA)} leaves every crossing time unchanged, so
+exactly one parameter must be fixed. With \code{drift_distribution = "normal"}
+the usual \code{constants = c(sv = log(1))} does it. With
+\code{drift_distribution = "lognormal"} it does \strong{not}: \code{sigma} is
+dimensionless, and on the sampled scale the rescaling is the single
+direction \verb{mu -> mu + log c}, \verb{B -> B + log c}, \verb{A -> A + log c}, leaving
+\code{sigma}, \code{k}, \code{t0} and every contrast coefficient untouched. Fixing \emph{any
+one} of \code{mu}'s intercept, \code{B}'s intercept, or \code{A} therefore identifies the
+scale; \code{constants = c(mu = 0)} and \code{constants = c(B = log(1))} are both
+valid and differ only by reparameterization. Because the rescaling shifts
+only the intercept, condition effects on the fixed parameter survive: with
+\code{B ~ E}, \code{constants = c(B = log(1))} leaves \code{B_Eneutral} and \code{B_Eaccuracy}
+free and identified. Omitting the constraint produces a ridge in the
+posterior rather than an error.
 
 Here \code{q = 1} for Erlang-1 clocks and \code{q = 2} for Erlang-2 clocks. In
 \code{erlang_shape = "mixed"}, the clock is Erlang-1 with probability \code{omega} and
@@ -96,4 +131,17 @@ independent racers to be assigned \code{rho = 0}. The positive-drift correlated
 simulator jointly conditions the active drift vector on all active drifts
 being positive, so \code{rho} refers to the underlying untruncated Gaussian
 draws, not to their marginally truncated correlation.
+}
+\examples{
+# A lognormal-launch BAwL. mu's intercept is fixed to identify the evidence
+# scale, which sigma no longer does; B and the lM effect stay free.
+ADmat <- matrix(c(-1/2, 1/2), ncol = 1, dimnames = list(NULL, "d"))
+matchfun <- function(d) d$S == d$lR
+design_BAwL_logn <- design(
+  data = forstmann, model = function() BAwL(drift_distribution = "lognormal"),
+  matchfun = matchfun,
+  formula = list(mu ~ lM, sigma ~ 1, B ~ E, A ~ 1, t0 ~ 1, k ~ 1),
+  contrasts = list(mu = list(lM = ADmat)),
+  constants = c(mu = 0))
+
 }

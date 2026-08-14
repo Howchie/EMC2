@@ -67,12 +67,14 @@
 
 
 .rfun_BAwL <- function(lR, pars, ok = rep(TRUE, length(lR)), posdrift = TRUE,
-                       erlang = 1L, guess = FALSE, global = FALSE) {
+                       erlang = 1L, guess = FALSE, global = FALSE, launch = 0L) {
   if (.use_cpp_rfun()) {
-    res <- rbawl_cpp(pars, levels(lR), ok, posdrift, as.integer(erlang), guess, global)
+    res <- rbawl_cpp(pars, levels(lR), ok, posdrift, as.integer(erlang), guess, global,
+                     as.integer(launch))
     return(.rfun_cpp_pack(res, levels(lR), length(lR) / length(levels(lR))))
   }
-  rBAwL(lR, pars, ok = ok, posdrift = posdrift, erlang = erlang, guess = guess, global = global)
+  rBAwL(lR, pars, ok = ok, posdrift = posdrift, erlang = erlang, guess = guess,
+        global = global, launch = launch)
 }
 
 # `launch` must come from the same .bawd_launch_code() call that produced the

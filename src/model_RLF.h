@@ -1945,21 +1945,41 @@ inline bool entry_has_queries(const Entry& entry,
   return true;
 }
 
+// Returns -1 when this parameter point has no usable solve.  rlf_solve()
+// already refines the time grid up to the stability ceiling before giving up,
+// so an exception escaping it means the point is genuinely unresolvable (the
+// alpha -> 2 / large-drift corner).  Propagating that out of a likelihood
+// evaluation would kill the whole chain -- and at start-point selection, where
+// particles are drawn from the prior, a single such draw among a thousand was
+// enough to abort the fit.  Callers floor the affected rows instead, which
+// rejects the particle.  Solving into a temporary keeps a failed refinement
+// from leaving a half-written entry behind.
 inline int cache_get(SolveCache& cache, const Key& key, double t_need) {
   if (!(t_need > 0.0)) t_need = 1e-3;
   const auto found = cache.index.find(key);
   if (found != cache.index.end()) {
     Entry& entry = cache.entries[found->second];
     if (entry.complete_grid && entry.t_max >= t_need) return found->second;
-    rlf_cache_solve(key, std::max(t_need, entry.t_max), cache.grid, nullptr,
-                    entry);
+    Entry replacement;
+    try {
+      rlf_cache_solve(key, std::max(t_need, entry.t_max), cache.grid, nullptr,
+                      replacement);
+    } catch (const std::exception&) {
+      return -1;
+    }
+    entry = std::move(replacement);
     ++cache.solve_count;
     return found->second;
   }
 
+  Entry fresh;
+  try {
+    rlf_cache_solve(key, t_need, cache.grid, nullptr, fresh);
+  } catch (const std::exception&) {
+    return -1;
+  }
   const int idx = static_cast<int>(cache.entries.size());
-  cache.entries.emplace_back();
-  rlf_cache_solve(key, t_need, cache.grid, nullptr, cache.entries.back());
+  cache.entries.push_back(std::move(fresh));
   cache.index.emplace(key, idx);
   ++cache.solve_count;
   return idx;
@@ -2039,8 +2059,15 @@ inline void cache_get_batch(
       } else {
         const std::vector<double>* queries =
           query_times == nullptr ? nullptr : &(*query_times)[source];
-        rlf_cache_solve(
-          keys[source], horizons[source], cache.grid, queries, replacement);
+        try {
+          rlf_cache_solve(
+            keys[source], horizons[source], cache.grid, queries, replacement);
+        } catch (const std::exception&) {
+          // Unresolvable parameter point: leave it uncached and unindexed and
+          // report -1, so only this key's rows are floored.  See cache_get().
+          out_indices[source] = -1;
+          continue;
+        }
       }
       ++cache.solve_count;
 

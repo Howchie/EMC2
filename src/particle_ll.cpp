@@ -709,11 +709,19 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
     out.model_dfun_raw = &dbawl_raw;
     out.model_pfun_raw = &pbawl_raw;
     out.logS_at_t_ptr  = &bawl_logS_at_t;
-    out.col_spec       = emc2col::bawl::spec();
+    // The lognormal launch shares every column POSITION with the Gaussian one
+    // (mu/sigma occupy v/sv), so only the spec's names and this flag differ.
+    const bool bawl_logn = (type_std.find("_LOGN") != std::string::npos);
+    out.col_spec       = bawl_logn ? emc2col::bawl_logn::spec()
+                                   : emc2col::bawl::spec();
     out.ctx.t0_index   = emc2col::bawl::t0;
     out.ctx.mean_g_index = emc2col::bawl::mG;
     out.ctx.mean_k_index = emc2col::bawl::mK;
     out.ctx.erlang_omega_index = (out.ctx.kill_shape == 3) ? emc2col::bawl::omega : -1;
+    out.ctx.bawl_launch = bawl_logn ? BAWL_LAUNCH_LOGNORMAL : BAWL_LAUNCH_NORMAL;
+    // The correlated-drift path is a one-factor decomposition of the *Gaussian*
+    // drift vector, so it is not reachable with a lognormal launch; BAwL()
+    // rejects that combination rather than silently ignoring one of them.
     out.ctx.corr_drift_active = (type_std.find("_CORR") != std::string::npos);
     out.ctx.corr_drift_v_col = emc2col::bawl::v;
     out.ctx.corr_drift_sv_col = emc2col::bawl::sv;

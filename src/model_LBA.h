@@ -41,6 +41,13 @@ constexpr double LBA_DENOM_FLOOR = 1e-10;
 // continue to use LBA_DENOM_FLOOR.
 constexpr double BAWL_DENOM_FLOOR = 1e-300;
 
+// Launch-strength distribution selector (ContextForRaceModels::bawl_launch and
+// the `launch` argument of the exported d/p functions -- keep them in sync).
+// Deliberately the same values as BAWD_LAUNCH_* in model_BAwD.h, which is
+// included at the bottom of this file and so cannot supply them here.
+constexpr int BAWL_LAUNCH_NORMAL = 0;
+constexpr int BAWL_LAUNCH_LOGNORMAL = 1;
+
 // Acceptance modes for the guarded natural-space evaluators.
 //   STRICT: value must stand on its own (feeds std::log directly).
 //   RAW:    underflow to 0 is fine (caller floors at min_ll), but near-1
@@ -360,39 +367,375 @@ inline double log_ba_pdf(double t, double A, double b, double v, double sv,
     dnormP(c + 0.5 * span, 0.0, 1.0, true) - std::log(sv) - log_denom;
 }
 
+// --------------------------------------------------------------------------
+// Lognormal launch strength (log V ~ N(mu, sigma^2)).
+//
+// The crossing condition is the same one the Gaussian branch above uses, read
+// in launch-strength rather than z units: with E = exp(-k t), G = 1 - E, an
+// accumulator started at a ~ Unif(0, A) has crossed b by t iff
+//   V >= W(a) = k (b - a E) / G,
+// which is AFFINE in a.  Substituting w = W(a) therefore turns both integrals
+// over (V, a) into integrals over w alone, whatever the launch distribution:
+//   F(t) = (s / A) [C(w_lo) - C(w_hi)],      C(x) = E[(V - x)_+]
+//   f(t) = (1 / (A E)) integral_{w_lo}^{w_hi} (w - k b) g(w) dw
+// with s = G / (k E) (limit t at k = 0), w_hi = W(0), w_lo = W(A), and the
+// weight (w - k b) = k E (b - a) / G non-negative because b >= A.
+//
+// For the lognormal launch C is the stop-loss price log_lognormal_stoploss()
+// and the density integral is a partial expectation minus a probability, so
+// every piece is closed form -- the same three primitives BAwD's lognormal
+// branch uses.  The Gaussian branch keeps its own z-space formulation because
+// its (b m + c) grouping is what makes its cancellation guard tractable.
+// --------------------------------------------------------------------------
+
+struct BawlLaunchGeom {
+  double w_hi = 0.0;    // W(0) = k b / G      (b / t at k = 0)
+  double w_lo = 0.0;    // W(A)
+  double width = 0.0;   // w_hi - w_lo = A / s, formed without cancellation
+  double s = 0.0;       // G / (k E); its k = 0 limit is t
+  double log_s = R_NegInf;
+  double E = 1.0;       // exp(-k t)
+  double log_E = 0.0;   // -k t, exact once E itself has underflowed
+  bool frozen = false;  // t = Inf: the live interval has collapsed to a point
+  bool ok = false;
+};
+
+// log_jacobian of the Gaussian branch, expressed in the same quantities:
+//   2 log k - k t - 2 log G = -2 log s - log E.
+inline double bawl_geom_log_jacobian(const BawlLaunchGeom &g) {
+  return -2.0 * g.log_s - g.log_E;
+}
+
+inline BawlLaunchGeom bawl_launch_geom(double t, double A, double b, double k) {
+  BawlLaunchGeom g;
+  if (!(t > 0.0) || !(A >= 0.0) || !(b >= A) || !(b > 0.0)) return g;
+
+  if (k <= BAWL_K_EPS) {
+    if (t == R_PosInf) {
+      // Proper k = 0 limit: every positive launch strength eventually crosses.
+      g.frozen = true;
+      g.s = R_PosInf;
+      g.log_s = R_PosInf;
+      g.ok = true;
+      return g;
+    }
+    g.s = t;
+    g.log_s = std::log(t);
+    g.w_hi = b / t;
+    g.width = A / t;
+    g.w_lo = (b - A) / t;
+    g.ok = true;
+    return g;
+  }
+
+  const double kt = k * t;
+  if (!(kt < R_PosInf)) {
+    // t = Inf with leak: only launches above k b ever finish, and the start
+    // point no longer matters.  This is the defective upper tail.
+    g.frozen = true;
+    g.w_hi = k * b;
+    g.w_lo = g.w_hi;
+    g.E = 0.0;
+    g.log_E = R_NegInf;
+    g.s = R_PosInf;
+    g.log_s = R_PosInf;
+    g.ok = true;
+    return g;
+  }
+
+  double E, G;
+  bawl_leak_factors(kt, E, G);
+  const double G_safe = clamp_pos(G, 1e-300);
+  g.E = E;
+  g.log_E = -kt;
+  g.w_hi = (k * b) / G_safe;
+  // b - A E carries no cancellation (b >= A >= A E), so both endpoints and the
+  // width are formed directly rather than by differencing w_hi.
+  g.w_lo = (k * (b - A * E)) / G_safe;
+  g.width = (k * A * E) / G_safe;
+  g.log_s = std::log(G_safe) - std::log(k) + kt;
+  g.s = (E > 0.0) ? G_safe / (k * E) : R_PosInf;
+  g.ok = emc2_isfinite(g.w_hi) && emc2_isfinite(g.w_lo);
+  return g;
+}
+
+// log P(V >= w) for the lognormal launch.
+inline double bawl_logn_log_surv(double w, double mu, double sigma) {
+  if (!(w > 0.0)) return 0.0;
+  if (!emc2_isfinite(w)) return R_NegInf;
+  return pnorm_log_direct((mu - std::log(w)) / sigma, true);
+}
+
+inline double log_bawl_cdf_logn(double t, double A, double b, double mu,
+                                double sigma, double k) {
+  if (!(sigma > 0.0)) return R_NegInf;
+  const BawlLaunchGeom g = bawl_launch_geom(t, A, b, k);
+  if (!g.ok) return R_NegInf;
+  if (g.frozen)
+    return (k <= BAWL_K_EPS) ? 0.0 : std::fmin(bawl_logn_log_surv(g.w_hi, mu, sigma), 0.0);
+
+  const double w_mid = 0.5 * (g.w_lo + g.w_hi);
+  if (A <= BAWL_A_EPS || !(g.width > 0.0))
+    return std::fmin(bawl_logn_log_surv(g.w_hi, mu, sigma), 0.0);
+
+  // int_{w_lo}^{w_hi} P(V >= w) dw = C(w_lo) - C(w_hi).
+  const double lc_lo = log_lognormal_stoploss(g.w_lo, mu, sigma);
+  const double lc_hi = log_lognormal_stoploss(g.w_hi, mu, sigma);
+  if (lc_lo - lc_hi > 1e-8) {
+    const double ld = log_diff_exp(lc_lo, lc_hi);
+    if (!ISNAN(ld) && ld > R_NegInf) {
+      const double out = g.log_s - std::log(A) + ld;
+      if (!ISNAN(out)) return std::fmin(out, 0.0);
+    }
+  }
+  // Interval too narrow (or endpoint-differenced away): (s/A) times the width
+  // is exactly one, so the midpoint survivor is the stable limit and is
+  // accurate to the square of the interval width.
+  return std::fmin(bawl_logn_log_surv(w_mid, mu, sigma), 0.0);
+}
+
+inline double log_bawl_pdf_logn(double t, double A, double b, double mu,
+                                double sigma, double k) {
+  if (!(sigma > 0.0) || t == R_PosInf) return R_NegInf;
+  const BawlLaunchGeom g = bawl_launch_geom(t, A, b, k);
+  if (!g.ok || g.frozen) return R_NegInf;
+  const double log_jac = bawl_geom_log_jacobian(g);
+
+  if (A <= BAWL_A_EPS || !(g.width > 0.0)) {
+    // Point start: one required launch strength, with -dW/dt = k^2 b E / G^2.
+    const double lg = dlnorm_std(g.w_hi, mu, sigma, true);
+    if (!(lg > R_NegInf)) return R_NegInf;
+    return log_jac + std::log(b) + lg;
+  }
+
+  // Numerator = E[V 1{w_lo < V < w_hi}] - k b P(w_lo < V < w_hi): a lognormal
+  // partial expectation minus its probability, both closed form.
+  const double d1_lo = (mu + sigma * sigma - std::log(g.w_lo)) / sigma;
+  const double d1_hi = (mu + sigma * sigma - std::log(g.w_hi)) / sigma;
+  const double d2_lo = (mu - std::log(g.w_lo)) / sigma;
+  const double d2_hi = (mu - std::log(g.w_hi)) / sigma;
+  const double log_prob = log_normal_interval(d2_hi, d2_lo);
+
+  if (!ISNAN(log_prob)) {
+    const double log_pexp = log_normal_interval(d1_hi, d1_lo);
+    if (!ISNAN(log_pexp)) {
+      const signed_log t1 =
+        make_signed_log(mu + 0.5 * sigma * sigma + log_pexp, 1);
+      const signed_log t2 = signed_log_product(k * b, log_prob);
+      const signed_log bracket = signed_log_sub(t1, t2);
+      const double max_term = std::fmax(t1.log_abs, t2.log_abs);
+      if (bracket.sign > 0 && !ISNAN(bracket.log_abs) &&
+          bracket.log_abs > max_term + BAWL_LOG_BRACKET_MIN) {
+        return bracket.log_abs - std::log(A) - g.log_E;
+      }
+    }
+    // The two terms cancelled past the accuracy of the tail logs (the true
+    // numerator is positive: w >= w_lo >= k b throughout).  The weight
+    // w - k b = k E (b - a) / G is affine in a, so its midpoint value is
+    // exact in the probability and errs by at most a factor of about two in
+    // the worst weighting case -- the same fallback the Gaussian branch takes.
+    if (log_prob > R_NegInf)
+      return std::log(b - 0.5 * A) + log_prob - std::log(A) - g.log_s -
+        g.log_E;
+  }
+  // Collapsed interval (or an unusable probability): point limit in w.
+  const double lg = dlnorm_std(0.5 * (g.w_lo + g.w_hi), mu, sigma, true);
+  if (!(lg > R_NegInf)) return R_NegInf;
+  return log_jac + std::log(b - 0.5 * A) + lg;
+}
+
+// Guarded natural-space twins; acceptance semantics as for ba_natural_cdf.
+inline bool bawl_natural_cdf_logn(double t, double A, double b, double mu,
+                                  double sigma, double k, int accept_mode,
+                                  double &cdf) {
+  const bool lenient = accept_mode != BA_ACCEPT_STRICT;
+  const auto accept = [accept_mode](double &p) {
+    if (accept_mode == BA_ACCEPT_STRICT) return natural_cdf_safe(p);
+    if (accept_mode == BA_ACCEPT_RAW) return p < 1.0 - 1e-8;
+    if (p > 1.0) p = 1.0;
+    return true;
+  };
+  if (!(sigma > 0.0)) return false;
+  const BawlLaunchGeom g = bawl_launch_geom(t, A, b, k);
+  if (!g.ok) {
+    cdf = 0.0;
+    return lenient;
+  }
+  if (g.frozen) {
+    if (k <= BAWL_K_EPS) {
+      cdf = 1.0;
+      return accept_mode == BA_ACCEPT_CLAMP;
+    }
+    const double z = (mu - std::log(g.w_hi)) / sigma;
+    if (!lenient && std::fabs(z) > BAWL_NATURAL_Z_MAX) return false;
+    cdf = pnorm_std(z, true, false);
+    return accept(cdf);
+  }
+
+  if (A <= BAWL_A_EPS || g.width < BAWL_NATURAL_MIN_SPAN * g.w_hi) {
+    const double w = (A <= BAWL_A_EPS) ? g.w_hi : 0.5 * (g.w_lo + g.w_hi);
+    if (!(w > 0.0)) return false;
+    const double z = (mu - std::log(w)) / sigma;
+    if (!emc2_isfinite(z)) return false;
+    if (!lenient && std::fabs(z) > BAWL_NATURAL_Z_MAX) return false;
+    cdf = pnorm_std(z, true, false);
+  } else {
+    double scale = 0.0;
+    const double diff =
+      lognormal_stoploss_interval_nat(g.w_lo, g.w_hi, mu, sigma, scale);
+    if (!(diff > 0.0)) {
+      if (!lenient) return false;
+      cdf = 0.0;
+      return true;
+    }
+    if (!lenient && diff <= BAWL_NATURAL_REL_TOL * std::max(1.0, scale))
+      return false;
+    cdf = (g.s / A) * diff;
+  }
+
+  if (!R_FINITE(cdf)) return false;
+  if (cdf <= 0.0) {
+    if (!lenient) return false;
+    cdf = 0.0;
+    return true;
+  }
+  return accept(cdf);
+}
+
+inline bool bawl_natural_pdf_logn(double t, double A, double b, double mu,
+                                  double sigma, double k, int accept_mode,
+                                  double &pdf) {
+  const bool lenient = accept_mode != BA_ACCEPT_STRICT;
+  if (!(sigma > 0.0) || t == R_PosInf) return false;
+  const BawlLaunchGeom g = bawl_launch_geom(t, A, b, k);
+  if (!g.ok || g.frozen) {
+    pdf = 0.0;
+    return lenient;
+  }
+
+  if (A <= BAWL_A_EPS || g.width < BAWL_NATURAL_MIN_SPAN * g.w_hi) {
+    const double w = (A <= BAWL_A_EPS) ? g.w_hi : 0.5 * (g.w_lo + g.w_hi);
+    const double eff_b = (A <= BAWL_A_EPS) ? b : b - 0.5 * A;
+    if (!(w > 0.0)) return false;
+    const double z = (mu - std::log(w)) / sigma;
+    if (!lenient && std::fabs(z) > BAWL_NATURAL_Z_MAX) return false;
+    const double log_pdf = bawl_geom_log_jacobian(g) + std::log(eff_b) +
+      dlnorm_std(w, mu, sigma, true);
+    if (!emc2_isfinite(log_pdf)) return false;
+    pdf = std::exp(log_pdf);
+  } else {
+    if (!(g.E > 0.0)) return false;
+    const double M = std::exp(mu + 0.5 * sigma * sigma);
+    if (!R_FINITE(M)) return false;
+    const double d1_lo = (mu + sigma * sigma - std::log(g.w_lo)) / sigma;
+    const double d1_hi = (mu + sigma * sigma - std::log(g.w_hi)) / sigma;
+    const double d2_lo = (mu - std::log(g.w_lo)) / sigma;
+    const double d2_hi = (mu - std::log(g.w_hi)) / sigma;
+    if (!lenient && (!natural_normal_interval_safe(d1_hi, d1_lo) ||
+                     !natural_normal_interval_safe(d2_hi, d2_lo)))
+      return false;
+    const double P1 = pnorm_std(d1_lo, true, false) - pnorm_std(d1_hi, true, false);
+    const double P0 = pnorm_std(d2_lo, true, false) - pnorm_std(d2_hi, true, false);
+    const double term1 = M * P1;
+    const double term2 = k * b * P0;
+    const double num = term1 - term2;
+    if (!(num > 0.0)) {
+      if (!lenient) return false;
+      pdf = 0.0;
+      return true;
+    }
+    const double scale = std::fabs(term1) + std::fabs(term2);
+    if (num <= BAWL_NATURAL_REL_TOL * std::max(1.0, scale)) return false;
+    pdf = num / (A * g.E);
+  }
+
+  if (!R_FINITE(pdf)) return false;
+  if (pdf <= 0.0) {
+    if (!lenient) return false;
+    pdf = 0.0;
+  }
+  return true;
+}
+
+// Launch-distribution dispatch.  `p1`/`p2` are (v, sv) for the normal launch
+// and (mu, sigma) for the lognormal one; they occupy the same kernel columns,
+// exactly as in BAwD.  posdrift and the normalizer floor are meaningless for
+// the lognormal launch (V > 0 by construction, so nothing is truncated).
+inline bool ba_natural_cdf_launch(double t, double A, double b, double p1,
+                                  double p2, double k, bool posdrift,
+                                  double denom_floor, int accept_mode,
+                                  double &cdf, int launch) {
+  if (launch == BAWL_LAUNCH_LOGNORMAL)
+    return bawl_natural_cdf_logn(t, A, b, p1, p2, k, accept_mode, cdf);
+  return ba_natural_cdf(t, A, b, p1, p2, k, posdrift, denom_floor,
+                        accept_mode, cdf);
+}
+
+inline bool ba_natural_pdf_launch(double t, double A, double b, double p1,
+                                  double p2, double k, bool posdrift,
+                                  double denom_floor, int accept_mode,
+                                  double &pdf, int launch) {
+  if (launch == BAWL_LAUNCH_LOGNORMAL)
+    return bawl_natural_pdf_logn(t, A, b, p1, p2, k, accept_mode, pdf);
+  return ba_natural_pdf(t, A, b, p1, p2, k, posdrift, denom_floor,
+                        accept_mode, pdf);
+}
+
+inline double log_ba_cdf_launch(double t, double A, double b, double p1,
+                                double p2, double k, bool posdrift,
+                                double denom_floor, int launch) {
+  if (launch == BAWL_LAUNCH_LOGNORMAL)
+    return log_bawl_cdf_logn(t, A, b, p1, p2, k);
+  return log_ba_cdf(t, A, b, p1, p2, k, posdrift, denom_floor);
+}
+
+inline double log_ba_pdf_launch(double t, double A, double b, double p1,
+                                double p2, double k, bool posdrift,
+                                double denom_floor, int launch) {
+  if (launch == BAWL_LAUNCH_LOGNORMAL)
+    return log_bawl_pdf_logn(t, A, b, p1, p2, k);
+  return log_ba_pdf(t, A, b, p1, p2, k, posdrift, denom_floor);
+}
+
 // Natural-then-log wrappers.  BAwL keeps its legacy 1e-300 normalizer floor;
 // the lba_k0_* entry points evaluate the exact k = 0 member with the legacy
 // LBA floor so both models reproduce their historical normalization.
 inline double bawl_cdf_norm(double t, double A, double b, double v,
                             double sv, double k, bool posdrift, bool log_out,
-                            double denom_floor = BAWL_DENOM_FLOOR) {
-  // The k = 0, positive-drift process is proper.  Its CDF at +Inf is
+                            double denom_floor = BAWL_DENOM_FLOOR,
+                            int launch = BAWL_LAUNCH_NORMAL) {
+  // The k = 0 process is proper whenever the launch strength is positive by
+  // construction (posdrift, or a lognormal launch).  Its CDF at +Inf is
   // exactly one, so do not send the upper truncation bound through the strict
   // natural guard and then back through log space.  This is deliberately in
   // the shared BAwL wrapper: k = 0 can arrive here through pleakyba_norm(),
   // not only through the LBA() adapter.  Killed-clock callers use their own
   // sub-CDF path and therefore do not take this shortcut.
-  if (t == R_PosInf && std::fabs(k) <= BAWL_K_EPS && posdrift && sv > 0.0 &&
+  if (t == R_PosInf && std::fabs(k) <= BAWL_K_EPS &&
+      (posdrift || launch == BAWL_LAUNCH_LOGNORMAL) && sv > 0.0 &&
       A >= 0.0 && b >= A && b > 0.0)
     return log_out ? 0.0 : 1.0;
 
   double cdf;
-  if (ba_natural_cdf(t, A, b, v, sv, k, posdrift, denom_floor,
-                     BA_ACCEPT_STRICT, cdf))
+  if (ba_natural_cdf_launch(t, A, b, v, sv, k, posdrift, denom_floor,
+                            BA_ACCEPT_STRICT, cdf, launch))
     return log_out ? std::log(cdf) : cdf;
-  return return_from_log(log_ba_cdf(t, A, b, v, sv, k, posdrift, denom_floor),
-                         log_out);
+  return return_from_log(
+    log_ba_cdf_launch(t, A, b, v, sv, k, posdrift, denom_floor, launch),
+    log_out);
 }
 
 inline double bawl_pdf_norm(double t, double A, double b, double v,
                             double sv, double k, bool posdrift, bool log_out,
-                            double denom_floor = BAWL_DENOM_FLOOR) {
+                            double denom_floor = BAWL_DENOM_FLOOR,
+                            int launch = BAWL_LAUNCH_NORMAL) {
   double pdf;
-  if (ba_natural_pdf(t, A, b, v, sv, k, posdrift, denom_floor,
-                     BA_ACCEPT_STRICT, pdf))
+  if (ba_natural_pdf_launch(t, A, b, v, sv, k, posdrift, denom_floor,
+                            BA_ACCEPT_STRICT, pdf, launch))
     return log_out ? std::log(pdf) : pdf;
-  return return_from_log(log_ba_pdf(t, A, b, v, sv, k, posdrift, denom_floor),
-                         log_out);
+  return return_from_log(
+    log_ba_pdf_launch(t, A, b, v, sv, k, posdrift, denom_floor, launch),
+    log_out);
 }
 
 inline double lba_k0_cdf_norm(double t, double A, double b, double v,
@@ -414,22 +757,26 @@ inline double lba_k0_pdf_norm(double t, double A, double b, double v,
 // profiling showed dominating truncated-LBA likelihoods.
 inline double bawl_cdf_scalar_natural(double t, double A, double b, double v,
                                       double sv, double k, bool posdrift,
-                                      double denom_floor = BAWL_DENOM_FLOOR) {
+                                      double denom_floor = BAWL_DENOM_FLOOR,
+                                      int launch = BAWL_LAUNCH_NORMAL) {
   double cdf;
-  if (ba_natural_cdf(t, A, b, v, sv, k, posdrift, denom_floor,
-                     BA_ACCEPT_CLAMP, cdf))
+  if (ba_natural_cdf_launch(t, A, b, v, sv, k, posdrift, denom_floor,
+                            BA_ACCEPT_CLAMP, cdf, launch))
     return cdf;
-  return std::exp(log_ba_cdf(t, A, b, v, sv, k, posdrift, denom_floor));
+  return std::exp(
+    log_ba_cdf_launch(t, A, b, v, sv, k, posdrift, denom_floor, launch));
 }
 
 inline double bawl_pdf_scalar_natural(double t, double A, double b, double v,
                                       double sv, double k, bool posdrift,
-                                      double denom_floor = BAWL_DENOM_FLOOR) {
+                                      double denom_floor = BAWL_DENOM_FLOOR,
+                                      int launch = BAWL_LAUNCH_NORMAL) {
   double pdf;
-  if (ba_natural_pdf(t, A, b, v, sv, k, posdrift, denom_floor,
-                     BA_ACCEPT_CLAMP, pdf))
+  if (ba_natural_pdf_launch(t, A, b, v, sv, k, posdrift, denom_floor,
+                            BA_ACCEPT_CLAMP, pdf, launch))
     return pdf;
-  return std::exp(log_ba_pdf(t, A, b, v, sv, k, posdrift, denom_floor));
+  return std::exp(
+    log_ba_pdf_launch(t, A, b, v, sv, k, posdrift, denom_floor, launch));
 }
 
 // --------------------------------------------------------------------------
@@ -445,19 +792,23 @@ inline double bawl_pdf_scalar_natural(double t, double A, double b, double v,
 // [[Rcpp::export]]
 double pleakyba_norm(double t, double A, double b,
                      double v, double sv, double k,
-                     bool posdrift = true, bool log_out = false) {
+                     bool posdrift = true, bool log_out = false,
+                     int launch = 0) {
   // At infinite time k = 0 has the usual LBA limit; for k > 0 only drifts
   // above k*b can finish, and the m = 0 point limit inside the evaluators
   // retains that defective upper tail instead of returning one.
-  return bawl_cdf_norm(t, A, b, v, sv, k, posdrift, log_out);
+  return bawl_cdf_norm(t, A, b, v, sv, k, posdrift, log_out,
+                       BAWL_DENOM_FLOOR, launch);
 }
 
 // PDF of the leaky ballistic accumulator.
 // [[Rcpp::export]]
 double dleakyba_norm(double t, double A, double b,
                      double v, double sv, double k,
-                     bool posdrift = true, bool log_out = false) {
-  return bawl_pdf_norm(t, A, b, v, sv, k, posdrift, log_out);
+                     bool posdrift = true, bool log_out = false,
+                     int launch = 0) {
+  return bawl_pdf_norm(t, A, b, v, sv, k, posdrift, log_out,
+                       BAWL_DENOM_FLOOR, launch);
 }
 
 // Killed-leaky BA density (hit + guess mixture):
@@ -469,7 +820,8 @@ inline double dkilledleakyba_norm(double t, double v, double b, double A,
                                   double sv, double t0 = 0.0,
                                   double k = 0.0, double lambda_g = 0.0, double lambda_k = 0.0,
                                   bool posdrift = true, bool log_out = false,
-                                  int kill_shape = 1, bool guess = false, double erlang_omega = 1.0) {
+                                  int kill_shape = 1, bool guess = false, double erlang_omega = 1.0,
+                                  int launch = BAWL_LAUNCH_NORMAL) {
   if (t <= 0.0) return log_out ? R_NegInf : 0.0;
   const double t_eam = t - t0;
   const bool use_guess = guess && (lambda_g > 0.0);
@@ -491,15 +843,16 @@ inline double dkilledleakyba_norm(double t, double v, double b, double A,
   if (!use_guess && !use_kill) {
     // Natural-scale scalar consumers clamp; skip the strict wrapper's
     // near-boundary rejections (hot in truncation normalisers).
-    if (!log_out) return bawl_pdf_scalar_natural(t_eam, A, b, v, sv, k, posdrift);
-    return dleakyba_norm(t_eam, A, b, v, sv, k, posdrift, log_out);
+    if (!log_out) return bawl_pdf_scalar_natural(t_eam, A, b, v, sv, k, posdrift,
+                                                 BAWL_DENOM_FLOOR, launch);
+    return dleakyba_norm(t_eam, A, b, v, sv, k, posdrift, log_out, launch);
   }
 
-  const double log_fR = dleakyba_norm(t_eam, A, b, v, sv, k, posdrift, true);
+  const double log_fR = dleakyba_norm(t_eam, A, b, v, sv, k, posdrift, true, launch);
   const double log_f_hit = log_fR + log_sK + log_sG;
   if (!use_guess) return log_out ? log_f_hit : std::exp(log_f_hit);
 
-  const double log_cdf_r = pleakyba_norm(t_eam, A, b, v, sv, k, posdrift, true);
+  const double log_cdf_r = pleakyba_norm(t_eam, A, b, v, sv, k, posdrift, true, launch);
   const double log_sr = (log_cdf_r >= 0.0) ? R_NegInf : log1m_exp(log_cdf_r);
   const double log_fG = erlang_log_pdf(t, lambda_g, kill_shape, erlang_omega);
   const double log_f_guess = log_fG + log_sK + log_sr;
@@ -510,13 +863,15 @@ inline double dkilledleakyba_norm(double t, double v, double b, double A,
 inline double integrate_bawl_pdf_raw(double t, double v, double b, double A,
                                      double sv, double t0, double k,
                                      double lambda_g, double lambda_k,
-                                     bool posdrift, int kill_shape, bool guess, double erlang_omega = 1.0) {
+                                     bool posdrift, int kill_shape, bool guess, double erlang_omega = 1.0,
+                                     int launch = BAWL_LAUNCH_NORMAL) {
   const double lower = guess ? 0.0 : t0;
   if (t != R_PosInf && t <= lower) return 0.0;
 
   std::function<double(double)> fn = [&](double u) -> double {
     return dkilledleakyba_norm(u, v, b, A, sv, t0, k, lambda_g, lambda_k,
-                               posdrift, false, kill_shape, guess, erlang_omega);
+                               posdrift, false, kill_shape, guess, erlang_omega,
+                               launch);
   };
   gsl_function F;
   F.function = [](double u, void* p) -> double {
@@ -547,7 +902,8 @@ inline double pkilledleakyba_norm(double t, double v, double b, double A,
                                   double sv, double t0 = 0.0,
                                   double k = 0.0, double lambda_g = 0.0, double lambda_k = 0.0,
                                   bool posdrift = true, bool log_out = false,
-                                  int kill_shape = 1, bool guess = false, double erlang_omega = 1.0) {
+                                  int kill_shape = 1, bool guess = false, double erlang_omega = 1.0,
+                                  int launch = BAWL_LAUNCH_NORMAL) {
   if (t <= 0.0) return log_out ? R_NegInf : 0.0;
   const double t_eam = t - t0;
   const bool use_guess = guess && (lambda_g > 0.0);
@@ -584,13 +940,15 @@ inline double pkilledleakyba_norm(double t, double v, double b, double A,
   }
 
   if (!use_guess && !use_kill) {
-    if (!log_out) return bawl_cdf_scalar_natural(t_eam, A, b, v, sv, k, posdrift);
-    return pleakyba_norm(t_eam, A, b, v, sv, k, posdrift, log_out);
+    if (!log_out) return bawl_cdf_scalar_natural(t_eam, A, b, v, sv, k, posdrift,
+                                                 BAWL_DENOM_FLOOR, launch);
+    return pleakyba_norm(t_eam, A, b, v, sv, k, posdrift, log_out, launch);
   }
 
   if (use_guess && use_kill) {
     const double out = integrate_bawl_pdf_raw(
-      t, v, b, A, sv, t0, k, lambda_g, lambda_k, posdrift, kill_shape, true, erlang_omega
+      t, v, b, A, sv, t0, k, lambda_g, lambda_k, posdrift, kill_shape, true,
+      erlang_omega, launch
     );
     return log_out ? safe_log(out) : out;
   }
@@ -598,7 +956,7 @@ inline double pkilledleakyba_norm(double t, double v, double b, double A,
   const double lambda = use_guess ? lambda_g : lambda_k;
   if (use_guess) {
     // 1 - S_R(t_eam) * S_G(t); erlang uses raw t
-    const double log_cdf_r = pleakyba_norm(t_eam, A, b, v, sv, k, posdrift, true);
+    const double log_cdf_r = pleakyba_norm(t_eam, A, b, v, sv, k, posdrift, true, launch);
     const double log_sr = (log_cdf_r >= 0.0) ? R_NegInf : log1m_exp(log_cdf_r);
     const double log_sg = erlang_log_surv(t, lambda, kill_shape, erlang_omega);
     const double log_val = log1m_exp(log_sr + log_sg);
@@ -609,7 +967,8 @@ inline double pkilledleakyba_norm(double t, double v, double b, double A,
   // Pure kill path: integrate f_EAM(u - t0) * S_K(u) over raw time.
   // No closed normal-form primitive remains once leak and clock survival are combined.
   const double out = integrate_bawl_pdf_raw(
-    t, v, b, A, sv, t0, k, 0.0, lambda, posdrift, kill_shape, false, erlang_omega
+    t, v, b, A, sv, t0, k, 0.0, lambda, posdrift, kill_shape, false, erlang_omega,
+    launch
   );
   return log_out ? safe_log(out) : out;
 }
@@ -621,7 +980,8 @@ NumericVector dkilledleakyba(NumericVector t,
                              NumericVector k, NumericVector lambda_g, NumericVector lambda_k,
                              bool posdrift = true, bool log_out = false,
                              int kill_shape = 1, bool guess = false,
-                             NumericVector erlang_omega = 1.0) {
+                             NumericVector erlang_omega = 1.0,
+                             int launch = 0) {
   int n = t.size();
   NumericVector pdf(n);
   auto pick = [](const NumericVector& vec, int i) -> double {
@@ -632,7 +992,7 @@ NumericVector dkilledleakyba(NumericVector t,
                          (kill_shape == 2 ? 0.0 : pick(erlang_omega, i));
     pdf[i] = dkilledleakyba_norm(t[i], pick(v,i), pick(b,i), pick(A,i), pick(sv,i), pick(t0,i),
                                  pick(k,i), pick(lambda_g,i), pick(lambda_k,i),
-                                 posdrift, log_out, kill_shape, guess, omega);
+                                 posdrift, log_out, kill_shape, guess, omega, launch);
   }
   return pdf;
 }
@@ -644,7 +1004,8 @@ NumericVector pkilledleakyba(NumericVector t,
                              NumericVector k, NumericVector lambda_g, NumericVector lambda_k,
                              bool posdrift = true, bool log_out = false,
                              int kill_shape = 1, bool guess = false,
-                             NumericVector erlang_omega = 1.0) {
+                             NumericVector erlang_omega = 1.0,
+                             int launch = 0) {
   int n = t.size();
   NumericVector cdf(n);
   auto pick = [](const NumericVector& vec, int i) -> double {
@@ -655,7 +1016,7 @@ NumericVector pkilledleakyba(NumericVector t,
                          (kill_shape == 2 ? 0.0 : pick(erlang_omega, i));
     cdf[i] = pkilledleakyba_norm(t[i], pick(v,i), pick(b,i), pick(A,i), pick(sv,i), pick(t0,i),
                                  pick(k,i), pick(lambda_g,i), pick(lambda_k,i),
-                                 posdrift, log_out, kill_shape, guess, omega);
+                                 posdrift, log_out, kill_shape, guess, omega, launch);
   }
   return cdf;
 }
@@ -665,14 +1026,15 @@ NumericVector pkilledleakyba(NumericVector t,
 NumericVector dleakyba(NumericVector t,
                        NumericVector A, NumericVector b,
                        NumericVector v, NumericVector sv, NumericVector k,
-                       bool posdrift = true) {
+                       bool posdrift = true, int launch = 0) {
   int n = t.size();
   NumericVector pdf(n);
   auto pick = [](const NumericVector& vec, int i) -> double {
     return vec.size() == 1 ? vec[0] : vec[i];
   };
   for (int i = 0; i < n; i++)
-    pdf[i] = dleakyba_norm(t[i], pick(A,i), pick(b,i), pick(v,i), pick(sv,i), pick(k,i), posdrift);
+    pdf[i] = dleakyba_norm(t[i], pick(A,i), pick(b,i), pick(v,i), pick(sv,i), pick(k,i),
+                           posdrift, false, launch);
   return pdf;
 }
 
@@ -680,14 +1042,15 @@ NumericVector dleakyba(NumericVector t,
 NumericVector pleakyba(NumericVector t,
                        NumericVector A, NumericVector b,
                        NumericVector v, NumericVector sv, NumericVector k,
-                       bool posdrift = true) {
+                       bool posdrift = true, int launch = 0) {
   int n = t.size();
   NumericVector cdf(n);
   auto pick = [](const NumericVector& vec, int i) -> double {
     return vec.size() == 1 ? vec[0] : vec[i];
   };
   for (int i = 0; i < n; i++)
-    cdf[i] = pleakyba_norm(t[i], pick(A,i), pick(b,i), pick(v,i), pick(sv,i), pick(k,i), posdrift);
+    cdf[i] = pleakyba_norm(t[i], pick(A,i), pick(b,i), pick(v,i), pick(sv,i), pick(k,i),
+                           posdrift, false, launch);
   return cdf;
 }
 

@@ -335,12 +335,17 @@ Rcpp::List rrdm_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
 static Rcpp::List rbawl_cpp_impl(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
                                  Rcpp::LogicalVector ok, bool posdrift, int erlang,
                                  bool guess, bool global,
-                                 const std::vector<double>* drift_override) {
+                                 const std::vector<double>* drift_override,
+                                 int launch = 0) {
   const int n_acc = lR_levels.size();
   const int n_rows = pars.nrow();
   const int n_trials = n_rows / n_acc;
   const auto ci = col_index_map(pars);
-  const int iv = ci.at("v"), isv = ci.at("sv"), ib = ci.at("b"), iA = ci.at("A"), it0 = ci.at("t0"),
+  // The lognormal launch strength keeps BAwD's naming convention: (mu, sigma)
+  // occupy the (v, sv) slots and every downstream step is identical.
+  const bool logn = (launch == 1);
+  const int iv = ci.at(logn ? "mu" : "v"), isv = ci.at(logn ? "sigma" : "sv"),
+            ib = ci.at("b"), iA = ci.at("A"), it0 = ci.at("t0"),
             ik = ci.at("k"), ilg = ci.at("lambda_g"), ilk = ci.at("lambda_k");
   const int iomega = ci.count("omega") ? ci.at("omega") : -1;
   const double eps = 1e-10;
@@ -375,8 +380,10 @@ static Rcpp::List rbawl_cpp_impl(Rcpp::NumericMatrix pars, Rcpp::CharacterVector
     const double lo = posdrift ? 0.0 : R_NegInf;
     const double drift = drift_override
       ? (*drift_override)[static_cast<size_t>(r)]
-      : rtnorm_lower_r(pars(r, iv), pars(r, isv), lo);
-    if (posdrift && !(drift > 0.0)) {
+      : (logn ? R::rlnorm(pars(r, iv), pars(r, isv))
+              : rtnorm_lower_r(pars(r, iv), pars(r, isv), lo));
+    // A lognormal launch strength is positive by construction.
+    if (!logn && posdrift && !(drift > 0.0)) {
       dt[r] = R_PosInf;
       continue;
     }
@@ -447,12 +454,15 @@ static Rcpp::List rbawl_cpp_impl(Rcpp::NumericMatrix pars, Rcpp::CharacterVector
   return pack_result(res.R, res.rt, res.omitted, has_isTime, isTime);
 }
 
-// pars columns: v, sv, b, A, t0, k, lambda_g, lambda_k (+ optional omega).
+// pars columns: v, sv, b, A, t0, k, lambda_g, lambda_k (+ optional omega), or
+// mu, sigma in place of v, sv when launch = 1 (lognormal).
 // Matches R's rBAwL (model_LBA.R:347-479).
 // [[Rcpp::export]]
 Rcpp::List rbawl_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
-                     Rcpp::LogicalVector ok, bool posdrift, int erlang, bool guess, bool global) {
-  return rbawl_cpp_impl(pars, lR_levels, ok, posdrift, erlang, guess, global, nullptr);
+                     Rcpp::LogicalVector ok, bool posdrift, int erlang, bool guess,
+                     bool global, int launch = 0) {
+  return rbawl_cpp_impl(pars, lR_levels, ok, posdrift, erlang, guess, global, nullptr,
+                        launch);
 }
 
 // Correlated BAwL simulator.  The low-level entry point receives signed

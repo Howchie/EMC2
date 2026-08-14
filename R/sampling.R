@@ -1536,8 +1536,11 @@ calc_ll_pooled <- function(proposals, dadm, model, component = NULL, r_cores = 1
   # never the per-call fork, which the pool exists to replace.  Both arms are
   # timed; see .emc_ll_route_use_pool().
   use_pool <- .emc_ll_route_use_pool()
+  # Equal counts or a work queue: a second measured decision, taken only once
+  # the pool itself has won.  See .emc_ll_route_use_dynamic().
+  dynamic <- use_pool && .emc_ll_route_use_dynamic()
   started <- proc.time()[["elapsed"]]
-  out <- if (use_pool) .emc_wpool_ll(proposals, s, component) else NULL
+  out <- if (use_pool) .emc_wpool_ll(proposals, s, component, dynamic) else NULL
   pooled <- !is.null(out)
   if (!pooled) {
     out <- calc_ll_manager(proposals, dadm = dadm, model = model,
@@ -1549,8 +1552,13 @@ calc_ll_pooled <- function(proposals, dadm, model, component = NULL, r_cores = 1
   # pool never handles, and timing it as though the router had chosen serial
   # biases the comparison towards whichever arm those calls happen to fall in.
   if (pooled || !use_pool) {
+    # Record what *ran*, not what was asked for: the queue declines a call with
+    # too few rows per worker and the static split answers it instead, and
+    # crediting the queue arm with a static call's time would let a model whose
+    # calls are all small drift into the queue on evidence it never produced.
     .emc_ll_route_record(pooled, el,
-                         if (is.matrix(proposals)) nrow(proposals) else 1L)
+                         if (is.matrix(proposals)) nrow(proposals) else 1L,
+                         dynamic = pooled && isTRUE(.emc_pool_state$ll_dynamic))
   }
   # `EMC2_LL_TRACE=<file>` appends one line per likelihood call.  The chain runs
   # in a forked child, so its routing state cannot be inspected from the master
@@ -1559,10 +1567,13 @@ calc_ll_pooled <- function(proposals, dadm, model, component = NULL, r_cores = 1
   trace_file <- Sys.getenv("EMC2_LL_TRACE")
   if (nzchar(trace_file)) {
     st <- .emc_pool_state$ll_route
-    cat(sprintf("[ll] pid=%d n=%d mode=%s n_serial=%d n_pool=%d pooled=%s %.3f s\n",
+    cat(sprintf(paste("[ll] pid=%d n=%d mode=%s n_serial=%d n_pool=%d pooled=%s",
+                      "split=%s n_static=%d n_dyn=%d dyn=%s %.3f s\n"),
                 Sys.getpid(),
                 if (is.matrix(proposals)) nrow(proposals) else 1L,
-                st$mode, length(st$t_serial), length(st$t_pool), pooled, el),
+                st$mode, length(st$t_serial), length(st$t_pool), pooled,
+                st$split, length(st$t_static), length(st$t_dynamic),
+                pooled && isTRUE(.emc_pool_state$ll_dynamic), el),
         file = trace_file, append = TRUE)
   }
   out

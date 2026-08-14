@@ -1,14 +1,12 @@
 ## RLF Race Model Simulation Recovery Test
-## Testing low alpha (1.1) and high alpha (1.8) single-subject single-condition recovery
-
 rm(list = ls())
 library(EMC2)
 
 alpha_mapped = 1.5
-n_trials = 10000
+n_trials = 1000
 label = "rlf_test"
 cores_for_chains = 3
-cores_per_chain = 8
+cores_per_chain = 10
 cat(sprintf("\n========================================================\n"))
 cat(sprintf("   Starting RLF Simulation Recovery Test: %s (alpha = %.2f)\n", label, alpha_mapped))
 cat(sprintf("========================================================\n\n"))
@@ -22,14 +20,14 @@ designRLF <- design(
   model = RLF(),
   formula = list(v ~ S*lM, B ~ 1, A ~ 1, t0 ~ 1, s ~ 1, alpha ~ 1),
   constants = c(s = log(1),A=log(0),`v_Sright`=0),
-  TC = list(UC=2.5)
+  TC = list(UC=2)
 )
 
 p_vector <- sampled_pars(designRLF, doMap = FALSE)
-p_vector["B"] <- log(1)
+p_vector["B"] <- log(2)
 p_vector["t0"] <- log(0.2)
 p_vector["v"] <- log(1)
-p_vector["v_lMTRUE"] <- log(2)
+p_vector["v_lMTRUE"] <- log(1.5)
 p_vector["v_Sright:lMTRUE"] <- log(0.8)
 # For alpha: mapped_alpha = 1 + (2-1)*pnorm(alpha_sampled)
 # So alpha_sampled = qnorm(alpha_mapped - 1)
@@ -88,13 +86,4 @@ plot_cdf(dat, post_predict=predData,
          functions=list(Correct=matchfun), defective_factor = "R", factors = "S")
 dev.off()
 
-invisible(list(
-  data = dat,
-  pred = predData,
-  design = designRLF,
-  true_pars = p_vector,
-  fit = fit_res,
-  system_time = t_fit,
-  mapped_summary = mapped_summary
-))
 

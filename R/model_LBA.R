@@ -317,10 +317,34 @@ LogicalRulesLBA <- function(posdrift = TRUE, fast_path=TRUE, capacity = FALSE){
 
 #### BAwL (Ballistic Accumulator with Leak) ----
 
-dBAwL <- function(rt, pars, posdrift = TRUE, erlang = 1L, guess = FALSE) {
+# 0 = normal launch strength (v, sv); 1 = lognormal launch strength
+# (mu, sigma).  Must match BAWL_LAUNCH_* in src/model_LBA.h, the `launch`
+# argument of the compiled kernels, and the value the adapter derives from the
+# "_LOGN" c_name suffix.  Deliberately the same convention as BAwD.
+.bawl_launch_code <- function(drift_distribution) {
+  switch(drift_distribution, lognormal = 1L, normal = 0L,
+         stop("Unknown BAwL drift_distribution: ", drift_distribution))
+}
+
+# The two launch pairs occupy the same kernel columns, so only the names differ.
+.bawl_par_names <- function(launch) {
+  if (launch == 1L) c("mu", "sigma") else c("v", "sv")
+}
+
+.bawl_check_cols <- function(pars, launch) {
+  need <- .bawl_par_names(launch)
+  missing <- setdiff(need, colnames(pars))
+  if (length(missing))
+    stop("BAwL requires parameter columns ", paste(missing, collapse = ", "))
+  need
+}
+
+dBAwL <- function(rt, pars, posdrift = TRUE, erlang = 1L, guess = FALSE,
+                  launch = 0L) {
   if (!all(c("lambda_g", "lambda_k") %in% colnames(pars))) {
     stop("BAwL requires parameter columns 'lambda_g' and 'lambda_k'.")
   }
+  nm  <- .bawl_check_cols(pars, launch)
   dt  <- rt - pars[, "t0"]
   erl <- (pars[, "lambda_g"] > 0) | (pars[, "lambda_k"] > 0)
   ok  <- (rt > 0) & ((dt > 0) | erl) & (pars[, "b"] >= pars[, "A"])
@@ -328,21 +352,24 @@ dBAwL <- function(rt, pars, posdrift = TRUE, erlang = 1L, guess = FALSE) {
   out <- numeric(length(dt))
   if (any(ok)) {
     out[ok] <- dkilledleakyba(
-      t = rt[ok], v = pars[ok, "v"], b = pars[ok, "b"], A = pars[ok, "A"],
-      sv = pars[ok, "sv"], t0 = pars[ok, "t0"], k = pars[ok, "k"],
+      t = rt[ok], v = pars[ok, nm[1]], b = pars[ok, "b"], A = pars[ok, "A"],
+      sv = pars[ok, nm[2]], t0 = pars[ok, "t0"], k = pars[ok, "k"],
       lambda_g = pars[ok, "lambda_g"], lambda_k = pars[ok, "lambda_k"],
       posdrift = posdrift, log_out = FALSE,
       kill_shape = as.integer(erlang), guess = guess,
-      erlang_omega = .rdmswtn_erlang_omega(pars[ok, , drop = FALSE], erlang)
+      erlang_omega = .rdmswtn_erlang_omega(pars[ok, , drop = FALSE], erlang),
+      launch = as.integer(launch)
     )
   }
   out
 }
 
-pBAwL <- function(rt, pars, posdrift = TRUE, erlang = 1L, guess = FALSE) {
+pBAwL <- function(rt, pars, posdrift = TRUE, erlang = 1L, guess = FALSE,
+                  launch = 0L) {
   if (!all(c("lambda_g", "lambda_k") %in% colnames(pars))) {
     stop("BAwL requires parameter columns 'lambda_g' and 'lambda_k'.")
   }
+  nm  <- .bawl_check_cols(pars, launch)
   dt  <- rt - pars[, "t0"]
   erl <- (pars[, "lambda_g"] > 0) | (pars[, "lambda_k"] > 0)
   ok  <- (rt > 0) & ((dt > 0) | erl) & (pars[, "b"] >= pars[, "A"])
@@ -350,24 +377,28 @@ pBAwL <- function(rt, pars, posdrift = TRUE, erlang = 1L, guess = FALSE) {
   out <- numeric(length(dt))
   if (any(ok)) {
     out[ok] <- pkilledleakyba(
-      t = rt[ok], v = pars[ok, "v"], b = pars[ok, "b"], A = pars[ok, "A"],
-      sv = pars[ok, "sv"], t0 = pars[ok, "t0"], k = pars[ok, "k"],
+      t = rt[ok], v = pars[ok, nm[1]], b = pars[ok, "b"], A = pars[ok, "A"],
+      sv = pars[ok, nm[2]], t0 = pars[ok, "t0"], k = pars[ok, "k"],
       lambda_g = pars[ok, "lambda_g"], lambda_k = pars[ok, "lambda_k"],
       posdrift = posdrift, log_out = FALSE,
       kill_shape = as.integer(erlang), guess = guess,
-      erlang_omega = .rdmswtn_erlang_omega(pars[ok, , drop = FALSE], erlang)
+      erlang_omega = .rdmswtn_erlang_omega(pars[ok, , drop = FALSE], erlang),
+      launch = as.integer(launch)
     )
   }
   out
 }
 
 rBAwL <- function(lR, pars, ok = rep(TRUE, length(lR)),
-                  p_types = c("v", "sv", "b", "A", "t0", "k", "lambda_g", "lambda_k"),
+                  p_types = NULL,
                   posdrift = TRUE, eps = 1e-10, erlang = 1L, guess = FALSE, global = FALSE,
-                  .drifts = NULL) {
+                  .drifts = NULL, launch = 0L) {
   if (!all(c("lambda_g", "lambda_k") %in% colnames(pars))) {
     stop("BAwL requires parameter columns 'lambda_g' and 'lambda_k'.")
   }
+  nm <- .bawl_check_cols(pars, launch)
+  if (is.null(p_types))
+    p_types <- c(nm, "b", "A", "t0", "k", "lambda_g", "lambda_k")
   erlang_omega_all <- .rdmswtn_erlang_omega(pars, erlang)
   bad  <- rep(NA, length(lR) / length(levels(lR)))
   out  <- data.frame(R = bad, rt = bad)
@@ -406,7 +437,13 @@ rBAwL <- function(lR, pars, ok = rep(TRUE, length(lR)),
     stop("pars must have columns ", paste(p_types, collapse = " "))
   lower  <- if (posdrift) 0 else -Inf
   if (is.null(.drifts)) {
-    drifts <- msm::rtnorm(nrow(pars), mean = pars[, "v"], sd = pars[, "sv"], lower = lower)
+    # A lognormal launch strength is positive by construction, so posdrift
+    # never applies to it.
+    drifts <- if (launch == 1L) {
+      rlnorm(nrow(pars), pars[, nm[1]], pars[, nm[2]])
+    } else {
+      msm::rtnorm(nrow(pars), mean = pars[, nm[1]], sd = pars[, nm[2]], lower = lower)
+    }
   } else {
     if (length(.drifts) != nrow(pars_all))
       stop(".drifts must have one value per row of the original parameter matrix.")
@@ -557,7 +594,9 @@ rBAwL_corr <- function(lR, pars, ok = rep(TRUE, nrow(pars)),
 #' A race model in which each accumulator follows a leaky evidence trajectory
 #' and can race against optional guess and kill clocks. For accumulator `i`,
 #' the start point is `A * U_i`, where `U_i ~ Uniform(0, 1)`, the threshold is
-#' `b = B + A`, and the drift is a normal draw with mean `v_i` and SD `sv_i`.
+#' `b = B + A`, and the drift is a trialwise draw from the launch distribution
+#' selected by `drift_distribution`: a normal draw with mean `v_i` and SD
+#' `sv_i` (the default), or a lognormal draw with `log V_i ~ N(mu_i, sigma_i^2)`.
 #' With leak rate `k`, the evidence trajectory is
 #' `x_i(t) = x_i(0) * exp(-k * t) + v_i / k * (1 - exp(-k * t))` for `k > 0`;
 #' its `k = 0` limit is exactly the ordinary LBA trajectory with the same
@@ -588,6 +627,31 @@ rBAwL_corr <- function(lR, pars, ok = rep(TRUE, nrow(pars)),
 #' | *pContaminant* | probit | \[0, 1\] | qnorm(0) | | Optional *omission* contaminant probability: mass at `rt = Inf` only, handled by the data pipeline |
 #' | *pGuess* | probit | \[0, 1\] | qnorm(0) | | Optional uniform *guess* (outlier) probability, mixed into observed RT densities over the guess window |
 #' | *rho* | scaled probit | \[-1, 1\] | qnorm(.5) | | Direct cell-level correlation of the underlying Gaussian drifts; only when `correlated = TRUE`. |
+#'
+#' With `drift_distribution = "lognormal"`, `v` and `sv` are replaced by `mu`
+#' (identity, default 0) and `sigma` (log, default `log(1)`), giving
+#' `log V ~ N(mu, sigma^2)`; every other parameter is unchanged. The lognormal
+#' launch strength is positive by construction, so `posdrift` does not apply to
+#' it, and the `correlated` one-factor path — which decomposes the *Gaussian*
+#' drift vector — is not available. This variant exists so that the drift
+#' distribution can be held constant when BAwL is compared against models
+#' parameterized with a lognormal launch, such as [BAwD()].
+#'
+#' **Fixing the evidence scale.** The evidence axis is defined only up to a
+#' scale: `(V, b, A) -> (cV, cb, cA)` leaves every crossing time unchanged, so
+#' exactly one parameter must be fixed. With `drift_distribution = "normal"`
+#' the usual `constants = c(sv = log(1))` does it. With
+#' `drift_distribution = "lognormal"` it does **not**: `sigma` is
+#' dimensionless, and on the sampled scale the rescaling is the single
+#' direction `mu -> mu + log c`, `B -> B + log c`, `A -> A + log c`, leaving
+#' `sigma`, `k`, `t0` and every contrast coefficient untouched. Fixing *any
+#' one* of `mu`'s intercept, `B`'s intercept, or `A` therefore identifies the
+#' scale; `constants = c(mu = 0)` and `constants = c(B = log(1))` are both
+#' valid and differ only by reparameterization. Because the rescaling shifts
+#' only the intercept, condition effects on the fixed parameter survive: with
+#' `B ~ E`, `constants = c(B = log(1))` leaves `B_Eneutral` and `B_Eaccuracy`
+#' free and identified. Omitting the constraint produces a ridge in the
+#' posterior rather than an error.
 #'
 #' Here `q = 1` for Erlang-1 clocks and `q = 2` for Erlang-2 clocks. In
 #' `erlang_shape = "mixed"`, the clock is Erlang-1 with probability `omega` and
@@ -630,20 +694,55 @@ rBAwL_corr <- function(lR, pars, ok = rep(TRUE, nrow(pars)),
 #'   `"global_kill"`, `"local_guess"`, or `"local_kill_guess"`.
 #' @param correlated Logical. If `TRUE`, add the correlated-drift parameter
 #'   `rho` and use the correlated BAwL race simulator and likelihood path.
+#'   Only available for `drift_distribution = "normal"`.
+#' @param drift_distribution Distribution of the trialwise launch strength:
+#'   `"normal"` (the default) for `V ~ N(v, sv^2)`, or `"lognormal"` for
+#'   `log V ~ N(mu, sigma^2)`. The lognormal variant is incompatible with
+#'   `posdrift = FALSE` and with `correlated = TRUE`; see Details for the
+#'   scale-identification convention it requires.
 #' @return A model list defining the BAwL race model.
+#' @examples
+#' # A lognormal-launch BAwL. mu's intercept is fixed to identify the evidence
+#' # scale, which sigma no longer does; B and the lM effect stay free.
+#' ADmat <- matrix(c(-1/2, 1/2), ncol = 1, dimnames = list(NULL, "d"))
+#' matchfun <- function(d) d$S == d$lR
+#' design_BAwL_logn <- design(
+#'   data = forstmann, model = function() BAwL(drift_distribution = "lognormal"),
+#'   matchfun = matchfun,
+#'   formula = list(mu ~ lM, sigma ~ 1, B ~ E, A ~ 1, t0 ~ 1, k ~ 1),
+#'   contrasts = list(mu = list(lM = ADmat)),
+#'   constants = c(mu = 0))
 #'
 #' @export
 BAwL <- function(posdrift = TRUE, erlang_shape = 1L,
                  erlang_type = c("none", "local_kill", "global_kill", "local_guess", "local_kill_guess"),
-                 correlated = FALSE) {
+                 correlated = FALSE,
+                 drift_distribution = c("normal", "lognormal")) {
   erlang_type <- match.arg(erlang_type)
+  drift_distribution <- match.arg(drift_distribution)
+  launch <- .bawl_launch_code(drift_distribution)
+  lognormal <- (launch == 1L)
+  if (lognormal && !isTRUE(posdrift)) {
+    stop("BAwL: posdrift only applies to drift_distribution = \"normal\"; a ",
+         "lognormal launch strength is positive by construction.")
+  }
+  if (lognormal && correlated) {
+    # The correlated path is a one-factor decomposition of the Gaussian drift
+    # vector (drift_factor.h); a lognormal analogue is a different model, not
+    # a swapped marginal, so refuse rather than silently ignore one of them.
+    stop("BAwL: correlated = TRUE is only implemented for ",
+         "drift_distribution = \"normal\".")
+  }
   erlang_mixed <- identical(erlang_shape, "mixed")
   erlang_shape_cpp <- if (erlang_mixed) 3L else as.integer(erlang_shape)
-  
+
   has_guess <- erlang_type %in% c("local_guess", "local_kill_guess")
   has_kill  <- erlang_type %in% c("local_kill", "global_kill", "local_kill_guess")
-  
+
+  # "_LOGN" (not "_LN": resolve_race_model_adapter dispatches by substring and
+  # "LNR" is an existing key), and never together with the "IO" suffix.
   base_name <- paste0(ifelse(posdrift, "BAwL", "BAwLIO"),
+                    if (lognormal) "_LOGN" else "",
                     if (erlang_mixed) "_EMIX" else if (erlang_shape_cpp >= 2L) "_E2" else "")
   type_suffix <- if (erlang_type == "local_guess") "_LOCAL_GUESS"
                     else if (erlang_type == "local_kill_guess") "_LOCAL_KILL_GUESS"
@@ -651,14 +750,25 @@ BAwL <- function(posdrift = TRUE, erlang_shape = 1L,
                     else if (erlang_type == "global_kill") "_GLOBAL_KILL"
                     else ""
 
-  p_types <- c("v"  = 1, "sv" = log(1), "B" = log(1), "A" = log(0),
-                "t0" = log(0), "k" = log(0))
-  transform <- c(v = "identity", sv = "exp", B = "exp",
-                              A = "exp", t0 = "exp", k = "exp")
-  minmax <- cbind(v  = c(-Inf, Inf), sv = c(1e-4, Inf),
-                     A  = c(1e-4, Inf), B  = c(1e-4, Inf),
+  # The launch pair occupies the leading two kernel columns either way; only
+  # the names, defaults, and transforms differ (mu is a log-scale location, so
+  # it is unbounded and untransformed, exactly as in BAwD).
+  if (lognormal) {
+    p_types <- c("mu" = 0, "sigma" = log(1))
+    transform <- c(mu = "identity", sigma = "exp")
+    minmax <- cbind(mu = c(-Inf, Inf), sigma = c(1e-4, Inf))
+  } else {
+    p_types <- c("v" = 1, "sv" = log(1))
+    transform <- c(v = "identity", sv = "exp")
+    minmax <- cbind(v = c(-Inf, Inf), sv = c(1e-4, Inf))
+  }
+  p_types <- c(p_types, "B" = log(1), "A" = log(0), "t0" = log(0),
+               "k" = log(0))
+  transform <- c(transform, B = "exp", A = "exp", t0 = "exp", k = "exp")
+  minmax <- cbind(minmax, A  = c(1e-4, Inf), B  = c(1e-4, Inf),
                      t0 = c(0.05, Inf), k  = c(1e-4, Inf))
   exception <- c(A = 0, k = 0)
+  launch_pars <- .bawl_par_names(launch)
   
   p_types <- c(p_types, mG = log(1))
   transform <- c(transform, mG = "exp")
@@ -703,8 +813,9 @@ BAwL <- function(posdrift = TRUE, erlang_shape = 1L,
     type   = "RACE",
     c_name = paste0(base_name, type_suffix, if (correlated) "_CORR" else ""),
     correlated = correlated,
+    drift_distribution = drift_distribution,
     p_types = p_types,
-    p_types_canonical = c("v", "sv", "B", "A", "t0", "k"),
+    p_types_canonical = c(launch_pars, "B", "A", "t0", "k"),
     transform = transform_spec,
     bound = list(
       minmax = minmax,
@@ -723,18 +834,21 @@ BAwL <- function(posdrift = TRUE, erlang_shape = 1L,
       lg <- if (has_guess) ifelse(mG_val <= 0, 0, lambda_factor / mG_val) else rep(0, n)
       lk <- if (has_kill)  ifelse(mK_val <= 0, 0, lambda_factor / mK_val) else rep(0, n)
       timed <- cbind(lambda_g = lg, lambda_k = lk)
-      extra_drop <- c("v", "sv", "B", "A", "t0", "k", "mG", "mK", "omega")
+      # The kernel column order is the p_types prefix, so the launch pair must
+      # lead whichever names it uses.
+      lead <- c(launch_pars, "B", "A", "t0", "k")
+      extra_drop <- c(lead, "mG", "mK", "omega")
       extra <- pars[, setdiff(colnames(pars), extra_drop), drop = FALSE]
       if (erlang_mixed) {
         pars <- cbind(
-          pars[, c("v", "sv", "B", "A", "t0", "k"), drop = FALSE],
+          pars[, lead, drop = FALSE],
           timed,
           omega = pars[, "omega"],
           extra
         )
       } else {
         pars <- cbind(
-          pars[, c("v", "sv", "B", "A", "t0", "k"), drop = FALSE],
+          pars[, lead, drop = FALSE],
           timed,
           extra
         )
@@ -749,13 +863,13 @@ BAwL <- function(posdrift = TRUE, erlang_shape = 1L,
       } else {
         .rfun_BAwL(data$lR, pars, ok = attr(pars, "ok"), posdrift = posdrift,
                    erlang = erlang_shape_cpp, guess = has_guess,
-                   global = erlang_type == "global_kill")
+                   global = erlang_type == "global_kill", launch = launch)
       }
     },
     dfun = function(rt, pars) dBAwL(rt, pars, posdrift = posdrift,  erlang = erlang_shape_cpp,
-                                      guess = has_guess),
+                                      guess = has_guess, launch = launch),
     pfun = function(rt, pars) pBAwL(rt, pars, posdrift = posdrift,  erlang = erlang_shape_cpp,
-                                      guess = has_guess),
+                                      guess = has_guess, launch = launch),
     log_likelihood = if (correlated) {
       function(pars, dadm, model, min_ll = log(1e-10)) {
         stop("BAwLcorr likelihood is implemented in the C++ race path; use fast_path=TRUE.")

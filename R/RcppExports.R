@@ -141,28 +141,28 @@ simulate_gbm_hit_times_bb <- function(n, mu, sigma, z0, b0, binf, tau = 1.0, pow
     .Call(`_EMC2_simulate_gbm_hit_times_bb`, n, mu, sigma, z0, b0, binf, tau, pow, dt, t_max, start_floor, p_tol, eps_curv, adapt_factor, adaptive)
 }
 
-pleakyba_norm <- function(t, A, b, v, sv, k, posdrift = TRUE, log_out = FALSE) {
-    .Call(`_EMC2_pleakyba_norm`, t, A, b, v, sv, k, posdrift, log_out)
+pleakyba_norm <- function(t, A, b, v, sv, k, posdrift = TRUE, log_out = FALSE, launch = 0L) {
+    .Call(`_EMC2_pleakyba_norm`, t, A, b, v, sv, k, posdrift, log_out, launch)
 }
 
-dleakyba_norm <- function(t, A, b, v, sv, k, posdrift = TRUE, log_out = FALSE) {
-    .Call(`_EMC2_dleakyba_norm`, t, A, b, v, sv, k, posdrift, log_out)
+dleakyba_norm <- function(t, A, b, v, sv, k, posdrift = TRUE, log_out = FALSE, launch = 0L) {
+    .Call(`_EMC2_dleakyba_norm`, t, A, b, v, sv, k, posdrift, log_out, launch)
 }
 
-dkilledleakyba <- function(t, v, b, A, sv, t0, k, lambda_g, lambda_k, posdrift = TRUE, log_out = FALSE, kill_shape = 1L, guess = FALSE, erlang_omega = 1.0) {
-    .Call(`_EMC2_dkilledleakyba`, t, v, b, A, sv, t0, k, lambda_g, lambda_k, posdrift, log_out, kill_shape, guess, erlang_omega)
+dkilledleakyba <- function(t, v, b, A, sv, t0, k, lambda_g, lambda_k, posdrift = TRUE, log_out = FALSE, kill_shape = 1L, guess = FALSE, erlang_omega = 1.0, launch = 0L) {
+    .Call(`_EMC2_dkilledleakyba`, t, v, b, A, sv, t0, k, lambda_g, lambda_k, posdrift, log_out, kill_shape, guess, erlang_omega, launch)
 }
 
-pkilledleakyba <- function(t, v, b, A, sv, t0, k, lambda_g, lambda_k, posdrift = TRUE, log_out = FALSE, kill_shape = 1L, guess = FALSE, erlang_omega = 1.0) {
-    .Call(`_EMC2_pkilledleakyba`, t, v, b, A, sv, t0, k, lambda_g, lambda_k, posdrift, log_out, kill_shape, guess, erlang_omega)
+pkilledleakyba <- function(t, v, b, A, sv, t0, k, lambda_g, lambda_k, posdrift = TRUE, log_out = FALSE, kill_shape = 1L, guess = FALSE, erlang_omega = 1.0, launch = 0L) {
+    .Call(`_EMC2_pkilledleakyba`, t, v, b, A, sv, t0, k, lambda_g, lambda_k, posdrift, log_out, kill_shape, guess, erlang_omega, launch)
 }
 
-dleakyba <- function(t, A, b, v, sv, k, posdrift = TRUE) {
-    .Call(`_EMC2_dleakyba`, t, A, b, v, sv, k, posdrift)
+dleakyba <- function(t, A, b, v, sv, k, posdrift = TRUE, launch = 0L) {
+    .Call(`_EMC2_dleakyba`, t, A, b, v, sv, k, posdrift, launch)
 }
 
-pleakyba <- function(t, A, b, v, sv, k, posdrift = TRUE) {
-    .Call(`_EMC2_pleakyba`, t, A, b, v, sv, k, posdrift)
+pleakyba <- function(t, A, b, v, sv, k, posdrift = TRUE, launch = 0L) {
+    .Call(`_EMC2_pleakyba`, t, A, b, v, sv, k, posdrift, launch)
 }
 
 dlba <- function(t, A, b, v, sv, posdrift = TRUE, log_out = FALSE) {
@@ -425,8 +425,8 @@ rrdm_cpp <- function(pars, lR_levels, ok) {
     .Call(`_EMC2_rrdm_cpp`, pars, lR_levels, ok)
 }
 
-rbawl_cpp <- function(pars, lR_levels, ok, posdrift, erlang, guess, global) {
-    .Call(`_EMC2_rbawl_cpp`, pars, lR_levels, ok, posdrift, erlang, guess, global)
+rbawl_cpp <- function(pars, lR_levels, ok, posdrift, erlang, guess, global, launch = 0L) {
+    .Call(`_EMC2_rbawl_cpp`, pars, lR_levels, ok, posdrift, erlang, guess, global, launch)
 }
 
 rbawl_corr_cpp <- function(pars, lR_levels, ok, posdrift, erlang, guess, global) {

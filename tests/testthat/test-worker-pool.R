@@ -627,3 +627,117 @@ test_that("the likelihood pool only serves the subject it was registered for", {
   expect_null(EMC2:::.emc_pool_state$ll_subject)
   expect_null(EMC2:::.emc_wpool_ll(matrix(0, 4, 2), 1L))
 })
+
+test_that("the work queue returns exactly what the static split returns", {
+  skip_on_os("windows")
+  skip_on_cran()
+  skip_if(!nzchar(Sys.which("mkfifo")))
+  dat <- forstmann[forstmann$subjects == levels(forstmann$subjects)[1], ]
+  dat$subjects <- droplevels(dat$subjects)
+  des <- design(data = dat, model = LNR, formula = list(m ~ 1, s ~ 1, t0 ~ 1))
+  emc <- suppressMessages(make_emc(dat, des, type = "single"))
+  s1 <- emc[[1]]
+  ctx <- list(data = s1$data, model = EMC2:::.emc_wpool_slim_model(s1$model),
+              n_pars = s1$n_pars, r_cores = 1L, type = s1$type)
+  pool <- EMC2:::.emc_wpool_start(4, ctx)
+  skip_if(is.null(pool), "could not start a pool here")
+  on.exit({ EMC2:::.emc_ll_pool_clear(); EMC2:::.emc_wpool_stop(pool) }, add = TRUE)
+  skip_if(is.null(pool$done), "no completion channel here")
+  EMC2:::.emc_ll_pool_set(pool, 1L)
+
+  p <- sampled_pars(des, doMap = FALSE)
+  set.seed(11)
+  mk <- function(n) {
+    m <- matrix(rep(p, each = n), nrow = n, dimnames = list(NULL, names(p)))
+    m + matrix(rnorm(length(m), 0, 0.4), nrow = n)
+  }
+  # Alternate the two paths.  A token left unread by one round, or a reply left
+  # in a pipe, would be collected by the *next* call as though it answered that
+  # one -- so the failure this guards against shows up a call later, not here.
+  for (i in 1:8) {
+    props <- mk(c(24L, 40L, 64L)[(i %% 3L) + 1L])
+    ref <- EMC2:::calc_ll_manager(props, s1$data[[1]], s1$model, r_cores = 1)
+    expect_equal(EMC2:::.emc_wpool_ll(props, 1L, dynamic = (i %% 2L == 0L)), ref)
+  }
+  expect_true(isTRUE(EMC2:::.emc_pool_state$ll_pool$alive))
+
+  # Cutting finer must not move a number either.
+  props <- mk(50L)
+  ref <- EMC2:::calc_ll_manager(props, s1$data[[1]], s1$model, r_cores = 1)
+  for (g in c(1, 4, 32)) {
+    withr::local_options(emc2.ll_queue_grain = g)
+    expect_equal(EMC2:::.emc_wpool_ll(props, 1L, dynamic = TRUE), ref)
+  }
+
+  # Too few rows per worker for a queue to have anything to schedule: the
+  # static split answers instead, and says so.
+  small <- mk(3L * pool$n)
+  expect_equal(EMC2:::.emc_wpool_ll(small, 1L, dynamic = TRUE),
+               EMC2:::calc_ll_manager(small, s1$data[[1]], s1$model, r_cores = 1))
+  expect_false(EMC2:::.emc_pool_state$ll_dynamic)
+})
+
+test_that("the split strategy is probed only once the pool arm has won", {
+  EMC2:::.emc_ll_route_reset()
+  # While serial-versus-pool is still open, every pooled call is static: the
+  # outer comparison must not be made against an arm that is itself alternating.
+  expect_false(EMC2:::.emc_ll_route_use_dynamic())
+  EMC2:::.emc_ll_route_record(FALSE, EMC2:::.EMC_LL_OBVIOUS, 10L)
+  expect_identical(EMC2:::.emc_pool_state$ll_route$mode, "pool")
+  expect_false(EMC2:::.emc_ll_route_use_dynamic())   # static first, then alternate
+
+  # A queue that wins is kept; the arms interleave, as above, because one call's
+  # cost varies with the particles it draws.
+  for (i in 1:EMC2:::.EMC_LL_PROBE_N) {
+    EMC2:::.emc_ll_route_record(TRUE, 1.0, 10L, dynamic = FALSE)
+    EMC2:::.emc_ll_route_record(TRUE, 0.5, 10L, dynamic = TRUE)
+  }
+  expect_identical(EMC2:::.emc_pool_state$ll_route$split, "dynamic")
+  expect_true(EMC2:::.emc_ll_route_use_dynamic())
+
+  # A queue that loses is dropped -- the LNR/LBA case, where the round trips
+  # cost more than the whole likelihood.
+  EMC2:::.emc_ll_route_reset()
+  EMC2:::.emc_ll_route_record(FALSE, EMC2:::.EMC_LL_OBVIOUS, 10L)
+  for (i in 1:EMC2:::.EMC_LL_PROBE_N) {
+    EMC2:::.emc_ll_route_record(TRUE, 0.5, 10L, dynamic = FALSE)
+    EMC2:::.emc_ll_route_record(TRUE, 1.0, 10L, dynamic = TRUE)
+  }
+  expect_identical(EMC2:::.emc_pool_state$ll_route$split, "static")
+  expect_false(EMC2:::.emc_ll_route_use_dynamic())
+  EMC2:::.emc_ll_route_reset()
+})
+
+test_that("a settled split decision survives an outer re-probe", {
+  EMC2:::.emc_ll_route_reset()
+  EMC2:::.emc_ll_route_record(FALSE, EMC2:::.EMC_LL_OBVIOUS, 10L)
+  for (i in 1:EMC2:::.EMC_LL_PROBE_N) {
+    EMC2:::.emc_ll_route_record(TRUE, 1.0, 10L, dynamic = FALSE)
+    EMC2:::.emc_ll_route_record(TRUE, 0.5, 10L, dynamic = TRUE)
+  }
+  expect_identical(EMC2:::.emc_pool_state$ll_route$split, "dynamic")
+  # The split is measured only while the pool arm runs, so wiping it whenever
+  # the serial-versus-pool decision cycles would strand the probe.
+  for (i in 1:EMC2:::.EMC_LL_REPROBE) {
+    EMC2:::.emc_ll_route_record(TRUE, 0.5, 10L, dynamic = TRUE)
+  }
+  expect_identical(EMC2:::.emc_pool_state$ll_route$mode, "probe")
+  expect_identical(EMC2:::.emc_pool_state$ll_route$split, "dynamic")
+  EMC2:::.emc_ll_route_reset()
+})
+
+test_that("growing the pool keeps the completion channel", {
+  skip_on_os("windows")
+  skip_if(!nzchar(Sys.which("mkfifo")))
+  ctx <- list(tag = "ctx")
+  pool <- EMC2:::.emc_wpool_start(2, ctx)
+  skip_if(is.null(pool), "no pool available here")
+  on.exit(EMC2:::.emc_wpool_stop(pool), add = TRUE)
+  skip_if(is.null(pool$done), "no completion channel here")
+  grown <- EMC2:::.emc_wpool_grow(pool, 4, ctx)
+  # Rebuilding the pool list without this dropped the FIFO on the floor: it
+  # leaked, and the likelihood queue quietly fell back to a static split for the
+  # rest of the block -- just when donated cores made scheduling matter most.
+  expect_identical(grown$done, pool$done)
+  pool <- grown
+})

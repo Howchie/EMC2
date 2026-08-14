@@ -136,10 +136,14 @@ LNR <- function() {
 }
 
 
+# `k` is sampled as a non-negative offset.  The canonical count criterion is
+# two events plus the nearest non-negative integer offset.  Keeping this
+# conversion in one helper ensures that the R density, C++ likelihood, and
+# simulator all use the same threshold convention.
 .pcounter_k <- function(k) {
   out <- floor(k + 0.5)
-  out[is.finite(out) & out < 1] <- 1
-  out
+  out[is.finite(out) & out < 0] <- 0
+  out + 2
 }
 
 .pcounter_logsumexp <- function(x) {
@@ -251,7 +255,7 @@ LNR <- function() {
   k <- unname(k); omega <- unname(omega)
   if (is.nan(t) || !is.finite(nu) || !is.finite(sv) || !is.finite(gamma) ||
       !is.finite(k) || !is.finite(omega) || nu <= 0 || sv < 0 || gamma < 0 ||
-      k <= 0 || omega < 0) return(c(logf = -Inf, logS = 0, logF = -Inf))
+      k < 0 || omega < 0) return(c(logf = -Inf, logS = 0, logF = -Inf))
   if (is.infinite(t) && t > 0) return(c(logf = -Inf, logS = -Inf, logF = 0))
   if (!is.finite(t) || t <= 0) return(c(logf = -Inf, logS = 0, logF = -Inf))
   kk <- .pcounter_k(k)
@@ -304,7 +308,7 @@ LNR <- function() {
                                 gamma_zero, phi = TRUE)
     logf <- lp + (1 - kk) * lr + tailf
   }
-  logF <- if (kk == 1L) log(-expm1(lm_ar[["logL"]])) else if (logS > -1e-7)
+  logF <- if (logS > -1e-7)
     .pcounter_log_geom_cdf(kk - 1L, t, nu, if (sv_zero) 0 else sv,
                            if (gamma_zero) 0 else gamma, omega, stirling, gamma_zero)
     else if (logS < 0) log(-expm1(logS)) else -Inf
@@ -321,7 +325,7 @@ PCOUNTER <- function() {
     if (!all(req %in% colnames(pars))) stop("pars must have columns ", paste(req, collapse = " "))
     ks <- .pcounter_k(pars[, "k"])
     ks <- ks[is.finite(ks)]
-    mk <- if (length(ks)) max(ks) else 1
+    mk <- if (length(ks)) max(ks) else 2
     .pcounter_stirling_logs(max(65L, as.integer(mk) + 65L))
   }
   dPCOUNTER <- function(rt, pars) {
@@ -348,10 +352,12 @@ PCOUNTER <- function() {
     dt <- matrix(Inf, nrow = nr, ncol = nd)
     for (ii in which(ok)) {
       nu <- pars[ii, "nu"]; sv <- pars[ii, "sv"]; ga <- pars[ii, "gamma"]
-      kk <- .pcounter_k(pars[ii, "k"]); om <- pars[ii, "omega"]
-      if (!is.finite(nu) || !is.finite(sv) || !is.finite(ga) || !is.finite(kk) ||
-          !is.finite(om) || !is.finite(pars[ii, "t0"]) || nu <= 0 || sv < 0 ||
-          ga < 0 || kk < 1 || om < 0 || pars[ii, "t0"] < 0) next
+      k_raw <- pars[ii, "k"]
+      kk <- .pcounter_k(k_raw); om <- pars[ii, "omega"]
+      if (!is.finite(nu) || !is.finite(sv) || !is.finite(ga) || !is.finite(k_raw) ||
+          !is.finite(kk) || !is.finite(om) || !is.finite(pars[ii, "t0"]) ||
+          nu <= 0 || sv < 0 || ga < 0 || k_raw < 0 || om < 0 ||
+          pars[ii, "t0"] < 0) next
       vv <- if (sv < 1e-8) nu else stats::rgamma(1L, nu^2 / sv^2, rate = nu / sv^2)
       if (!is.finite(vv) || vv <= 0) next
       excess <- if (om < 1e-8) 0L else stats::rgeom(1L, 1 / (1 + om))
@@ -364,7 +370,7 @@ PCOUNTER <- function() {
   }
   list(
     type = "RACE", c_name = "PCOUNTER",
-    p_types = c(nu = log(10), sv = log(0), gamma = log(0), k = log(5), omega = log(0),
+    p_types = c(nu = log(10), sv = log(0), gamma = log(0), k = log(3), omega = log(0),
                 t0 = log(0), pContaminant = qnorm(0), pGuess = qnorm(0)),
     p_types_canonical = c("nu", "sv", "gamma", "k", "omega", "t0"),
     transform = list(func = c(nu = "exp", sv = "exp", gamma = "exp", k = "exp",
@@ -372,12 +378,14 @@ PCOUNTER <- function() {
                               pGuess = "pnorm")),
     # Keep estimated variability/self-excitation parameters above the numerical
     # branch threshold. Exact zero remains available only as an explicit fixed
-    # constant through the exceptions below.
+    # constant through the exceptions below.  `k` is a non-negative offset; the
+    # canonical count criterion is K = 2 + floor(k + 0.5), so every accumulator needs
+    # at least two events before responding.
     bound = list(minmax = cbind(nu = c(1e-6, Inf), sv = c(1e-4, Inf), gamma = c(1e-4, Inf),
-                                k = c(1, Inf), omega = c(1e-4, Inf), t0 = c(0, Inf),
+                                k = c(0, Inf), omega = c(1e-4, Inf), t0 = c(0, Inf),
                                 pContaminant = c(0.001, 0.999),
                                 pGuess = c(0.001, 0.999)),
-                 exception = c(sv = 0, gamma = 0, omega = 0, t0 = 0, pContaminant = 0,
+                 exception = c(k = 0, sv = 0, gamma = 0, omega = 0, t0 = 0, pContaminant = 0,
                                pGuess = 0)),
     Ttransform = function(pars, dadm) pars,
     rfun = function(data = NULL, pars) rPCOUNTER(data$lR, pars, ok = attr(pars, "ok")),

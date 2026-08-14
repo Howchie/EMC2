@@ -45,6 +45,9 @@
 #' emc <- make_emc(forstmann, subj_design, compress = FALSE, group_design = group_des)
 #' @export
 group_design <- function(formula, data, subject_design, contrasts = NULL){
+  # Downstream code (rownames<-, [ with drop, cbind on the "data" attribute)
+  # relies on base data.frame semantics, so don't carry a tibble through.
+  data <- as.data.frame(data)
   par_names <- names(sampled_pars(subject_design))
 
   # Extract dependent variables (left hand side) from formula

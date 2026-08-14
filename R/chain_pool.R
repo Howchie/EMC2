@@ -442,7 +442,49 @@
 
   list(n = n_workers, dir = dir, jobs = spawned$jobs, wcs = spawned$wcs,
        rcs = spawned$rcs, alive = TRUE, backend = backend,
-       ctx_file = ctx_file, lib = lib, template = template)
+       ctx_file = ctx_file, lib = lib, template = template,
+       done = .emc_wpool_done_open(dir))
+}
+
+# Completion channel for the dynamic likelihood queue: one FIFO shared by every
+# worker, onto which a worker writes its own index the moment it has finished a
+# chunk.  Handing out the next chunk requires knowing *which* worker is free,
+# and a blocking read on one worker's reply pipe cannot answer that -- the
+# master would sit on worker 1 while workers 2..k idled.
+#
+# A token is **one byte**, and that is load-bearing.  The obvious encoding, a
+# 4-byte integer per worker, desynchronised the channel in practice: `readBin`
+# on a non-blocking connection will hand back an item assembled from a short
+# read, so a token could be built out of the tail of one write and the head of
+# the next.  The symptom is a garbage worker index a few rounds in --
+# 226759928 where 1 was expected -- and from there every reply is attributed to
+# the wrong chunk.  A single byte cannot be split, so the stream can never lose
+# alignment however the reads land.  Pools wider than one byte can address fall
+# back to the static split.
+#
+# The reader is non-blocking so that a worker dying mid-chunk cannot hang the
+# master: it polls, and between polls it can check that the workers it is
+# waiting on still exist.  The master also holds a *writer* of its own and never
+# writes to it, which keeps the FIFO from reporting end-of-stream in the gaps
+# when no worker happens to have it open.
+#
+# NULL disables the dynamic path and leaves the static split in charge, which is
+# exactly the behaviour before this existed.
+.EMC_WPOOL_MAX_DYN_WORKERS <- 255L
+
+.emc_wpool_done_open <- function(dir) {
+  path <- file.path(dir, "done")
+  made <- tryCatch(
+    system2("mkfifo", shQuote(path), stdout = FALSE, stderr = FALSE),
+    warning = function(e) 1L, error = function(e) 1L
+  )
+  if (!identical(as.integer(made), 0L)) return(NULL)
+  rc <- tryCatch(fifo(path, "rb", blocking = FALSE), error = function(e) NULL)
+  if (is.null(rc)) return(NULL)
+  # Opening for write needs the reader to exist already, which it now does.
+  wc <- tryCatch(fifo(path, "wb", blocking = FALSE), error = function(e) NULL)
+  if (is.null(wc)) { try(close(rc), silent = TRUE); return(NULL) }
+  list(rc = rc, wc = wc)
 }
 
 # Take over cores released by a chain that has finished its block.  Chains do
@@ -479,11 +521,15 @@
     return(pool)
   }
 
+  # `done` is carried, not rebuilt: it belongs to the pool's directory and the
+  # new workers open the same path.  Dropping it here would leak the FIFO and
+  # silently demote the likelihood queue to a static split for the rest of the
+  # block -- exactly when the extra donated cores made scheduling matter most.
   list(n = n_total, dir = pool$dir, jobs = c(pool$jobs, spawned$jobs),
        wcs = c(pool$wcs, spawned$wcs), rcs = c(pool$rcs, spawned$rcs),
        alive = TRUE, grow_fails = 0L, grow_skip = 0L,
        backend = pool$backend, ctx_file = pool$ctx_file, lib = pool$lib,
-       template = pool$template)
+       template = pool$template, done = pool$done)
 }
 
 # Replace the workers with a fresh fork every `every` iterations.
@@ -584,6 +630,14 @@
     # The old workers are already gone, so there is nothing to keep running on.
     # Hand back a dead pool: the master then computes every subject itself,
     # which is slow but produces exactly the same numbers.
+    #
+    # The spawn path above stopped the workers without closing the completion
+    # channel, because a successful re-fork reuses it.  This branch discards the
+    # pool instead, so close it here or R garbage-collects an open FIFO and
+    # warns about it from inside the next spawn.
+    if (!is.null(pool$done)) {
+      for (cn in pool$done) try(close(cn), silent = TRUE)
+    }
     if (!dead) .emc_wpool_degraded("could not re-fork the pool when recycling")
     fails <- if (is.null(pool$rebuild_fails)) 1L else pool$rebuild_fails + 1L
     return(list(n = target, dir = NULL, jobs = list(), wcs = list(),
@@ -620,6 +674,11 @@
 .emc_wpool_stop <- function(pool) {
   if (is.null(pool)) return(invisible(NULL))
   .emc_wpool_stop_workers(pool)
+  # Not in .emc_wpool_stop_workers: a spawn-backend recycle stops the workers
+  # and re-forks them into the same directory, keeping this channel.
+  if (!is.null(pool$done)) {
+    for (cn in pool$done) try(close(cn), silent = TRUE)
+  }
   if (identical(pool$backend, "spawn")) {
     .emc_wpool_template_stop(pool$template)
   }
@@ -643,13 +702,31 @@
   for (cn in inherited) try(close(cn), silent = TRUE)
   rc <- fifo(req, "rb", blocking = TRUE)
   wc <- fifo(ans, "wb", blocking = TRUE)
-  on.exit({ try(close(rc), silent = TRUE); try(close(wc), silent = TRUE) },
-          add = TRUE)
+  done <- NULL
+  on.exit({ try(close(rc), silent = TRUE); try(close(wc), silent = TRUE)
+            if (!is.null(done)) try(close(done), silent = TRUE) }, add = TRUE)
   repeat {
     msg <- tryCatch(unserialize(rc), error = function(e) NULL)
     if (is.null(msg)) break                     # shutdown, or master went away
     out <- tryCatch(.emc_wpool_compute(msg, ctx),
                     error = function(e) list(failed = conditionMessage(e)))
+    # The dynamic queue needs to know *who* finished before it can read the
+    # reply itself, so say so on the shared channel first.  Announcing before
+    # writing the reply rather than after is what keeps this deadlock-free: a
+    # reply larger than the pipe buffer would otherwise block here forever,
+    # with the master blocked in turn waiting for an announcement that only
+    # this write could produce.  Opened lazily, so a pool without the channel
+    # (or a message that did not ask) behaves exactly as it always did.
+    if (isTRUE(msg$notify)) {
+      if (is.null(done)) {
+        done <- tryCatch(fifo(file.path(dirname(req), "done"), "wb",
+                              blocking = TRUE), error = function(e) NULL)
+      }
+      if (!is.null(done)) {
+        if (!tryCatch({ writeBin(as.raw(msg$w), done); flush(done); TRUE },
+                      error = function(e) FALSE)) break
+      }
+    }
     if (!tryCatch({ serialize(out, wc); flush(wc); TRUE },
                   error = function(e) FALSE)) break
   }
@@ -797,13 +874,22 @@
 #
 # Returns NULL when the pool cannot serve the call, which tells the caller to
 # compute the whole vector itself.
-.emc_wpool_ll <- function(proposals, s, component = NULL) {
+.emc_wpool_ll <- function(proposals, s, component = NULL, dynamic = FALSE) {
   pool <- .emc_pool_state$ll_pool
   if (is.null(pool) || !isTRUE(pool$alive) || pool$n <= 1L) return(NULL)
   if (!is.matrix(proposals)) return(NULL)
   n <- nrow(proposals)
   # One row per worker at best: the round trip would cost more than the work.
   if (n <= pool$n) return(NULL)
+  # Which split actually ran, for the router to time.  The queue can be asked
+  # for and still decline -- no completion channel, or too few rows to keep the
+  # workers fed -- and the arms must be told apart by what happened.
+  .emc_pool_state$ll_dynamic <- isTRUE(dynamic) && !is.null(pool$done) &&
+    pool$n <= .EMC_WPOOL_MAX_DYN_WORKERS &&
+    n >= .EMC_LL_DYN_MIN_ROWS * pool$n
+  if (.emc_pool_state$ll_dynamic) {
+    return(.emc_wpool_ll_dynamic(pool, proposals, s, component, n))
+  }
   idx <- .split_work_indices(n, pool$n)
   n_workers <- max(idx)
 
@@ -840,6 +926,138 @@
   if (!ok) {
     if (!all(sent)) .emc_pool_state$ll_pool$alive <- FALSE
     return(NULL)
+  }
+  out
+}
+
+# Dynamic (work-queue) variant of the split above.  The static split hands every
+# worker an equal *count* of particles, which is the right thing exactly when
+# particles cost the same.  For a PDE-backed model on a wide preburn cloud they
+# do not: over 245 RLF particles the median cost 0.043 s and the worst 5.450 s,
+# a factor of 127, with the top 5% of particles carrying 69% of the total.  An
+# equal-count split then leaves most workers idle behind one straggler -- 4.36x
+# of 10 measured, against 9.99x for a scheduler that keeps everyone fed.
+#
+# Chunking is guided: each hand-out takes a fixed fraction of what is left, so
+# early chunks are large enough to amortise the round trip and late ones are
+# small enough to balance the tail.  A single particle is the floor, because
+# with a tail this heavy any bundling at the end risks stacking two stragglers.
+#
+# Measured over 245 RLF particles on 10 workers, same matrix down both arms:
+#   near the truth   serial 9.18 s   static 1.02 s (9.05x)   queue 1.19 s (7.72x)
+#   preburn width    serial 57.3 s   static 13.4 s (4.29x)   queue 7.93 s (7.23x)
+# and on the cheap models the queue is a straight loss -- LNR 0.50-0.68x of
+# static, LBA 0.71-0.74x -- since their whole likelihood costs less than the
+# extra round trips.  Hence .emc_ll_route_use_dynamic(): this is chosen by
+# measurement on the live fit, never by model or by assumption.
+#
+# What no scheduler can beat is one particle: the makespan cannot fall below
+# the most expensive single row, 5.45 s of a 59.3 s call for the cloud above.
+# That caps the approach near 11x however many workers are added, and the
+# measured 7.23x is short of even that because a queue cannot do what LPT does
+# and run the longest particles first -- it never learns their cost.
+.EMC_LL_DYN_MIN_ROWS <- 4L   # rows per worker below which the queue cannot help
+# chunk = remaining / (GRAIN * n_workers).  Measured on 245 RLF particles over
+# 10 workers at preburn width, against a 4.29x static split (x of serial):
+#   grain  2  5.58x   grain  4  7.23x   grain  8  6.97x
+#   grain 16  6.84x   grain 64  6.89x
+# Coarser leaves stragglers in the first round; finer stops paying for itself
+# once the chunks are smaller than the tail they are trying to balance.
+.EMC_LL_DYN_GRAIN <- 4
+
+.emc_wpool_ll_dynamic <- function(pool, proposals, s, component, n) {
+  k <- pool$n
+  out <- numeric(n)
+  pending <- vector("list", k)          # rows each worker is currently holding
+  next_row <- 1L
+
+  # How finely to cut.  A larger grain means more, smaller chunks: better
+  # balance, more round trips.  The right value is set by how heavy the cost
+  # tail is, so it is a tunable rather than a constant.
+  grain <- max(1, as.numeric(getOption("emc2.ll_queue_grain", .EMC_LL_DYN_GRAIN)))
+  take <- function() {
+    left <- n - next_row + 1L
+    if (left <= 0L) return(NULL)
+    size <- min(left, max(1L, as.integer(ceiling(left / (grain * k)))))
+    rows <- seq.int(next_row, length.out = size)
+    next_row <<- next_row + size
+    rows
+  }
+  send <- function(w, rows) {
+    tryCatch({
+      serialize(list(kind = "ll", s = s, component = component,
+                     notify = TRUE, w = w,
+                     proposals = proposals[rows, , drop = FALSE]),
+                pool$wcs[[w]])
+      flush(pool$wcs[[w]])
+      TRUE
+    }, error = function(e) { .emc_wpool_degraded(conditionMessage(e)); FALSE })
+  }
+  # Wait for any worker to announce itself.  The channel is non-blocking so that
+  # a worker dying mid-chunk cannot hang the master here: nothing would ever be
+  # written, and the master holds the write end open itself, so a blocking read
+  # would never even see EOF.  Spin first -- chunks finish in milliseconds --
+  # then back off, and check that the workers we are waiting on still exist.
+  await <- function() {
+    idle <- 0L
+    wait <- 0
+    repeat {
+      tok <- tryCatch(readBin(pool$done$rc, "raw", 1L),
+                      error = function(e) raw(0))
+      if (length(tok)) return(as.integer(tok[1L]))
+      idle <- idle + 1L
+      if ((idle %% 64L) == 0L) {
+        for (w in which(!vapply(pending, is.null, logical(1)))) {
+          pid <- .emc_wpool_job_pid(pool$jobs[[w]])
+          if (!is.null(pid) && !.emc_wpool_pid_alive(pid)) return(NA_integer_)
+        }
+      }
+      if (idle > 16L) { Sys.sleep(wait); wait <- min(max(wait * 2, 5e-5), 2e-3) }
+    }
+  }
+
+  fail <- function() {
+    # Every worker still holding a chunk will announce and reply regardless.
+    # Leaving either in the pipe would let the *next* call collect it as its own
+    # answer, so drain exactly as many as are outstanding before giving up.
+    n_out <- sum(!vapply(pending, is.null, logical(1)))
+    for (i in seq_len(n_out)) {
+      w <- await()
+      if (is.na(w)) break
+      tryCatch(unserialize(pool$rcs[[w]]), error = function(e) NULL)
+    }
+    .emc_pool_state$ll_pool$alive <- FALSE
+    NULL
+  }
+
+  for (w in seq_len(k)) {
+    rows <- take()
+    if (is.null(rows)) break
+    if (!send(w, rows)) return(fail())
+    pending[[w]] <- rows
+  }
+
+  while (any(!vapply(pending, is.null, logical(1)))) {
+    w <- await()
+    # A token for a worker that owes us nothing means the channel has lost sync
+    # with the replies; nothing downstream of that can be trusted.
+    if (is.na(w) || w < 1L || w > k || is.null(pending[[w]])) return(fail())
+    rows <- pending[[w]]
+    res <- tryCatch(unserialize(pool$rcs[[w]]), error = function(e) NULL)
+    # `pending[w] <- list(NULL)`, never `pending[[w]] <- NULL`: the latter
+    # *deletes* the element and shrinks the list, so every later worker index
+    # shifts down by one and the next token indexes out of bounds.
+    if (is.null(res) || !is.null(res$failed) || length(res$ll) != length(rows)) {
+      pending[w] <- list(NULL)
+      return(fail())
+    }
+    out[rows] <- res$ll
+    pending[w] <- list(NULL)
+    more <- take()
+    if (!is.null(more)) {
+      if (!send(w, more)) return(fail())
+      pending[[w]] <- more
+    }
   }
   out
 }
@@ -886,7 +1104,9 @@
 
 .emc_ll_route_reset <- function() {
   .emc_pool_state$ll_route <- list(mode = "probe", t_serial = numeric(0),
-                                   t_pool = numeric(0), since = 0L)
+                                   t_pool = numeric(0), since = 0L,
+                                   split = "probe", t_static = numeric(0),
+                                   t_dynamic = numeric(0), since_split = 0L)
   invisible(NULL)
 }
 
@@ -905,11 +1125,52 @@
          FALSE)
 }
 
-.emc_ll_route_record <- function(pooled, seconds, n_particles) {
+# A second, nested decision: given that the pool is being used, hand out equal
+# counts or run a queue?  Deliberately *not* inferred from the model -- the
+# imbalance that makes a queue pay is a property of the particle cloud, so it
+# varies by stage as well as by model, and the same RLF fit wants a queue in
+# preburn (static 4.36x of 10, dynamic 9.99x) but barely notices one once the
+# chains settle (9.23x against 9.93x).  A cheap, homogeneous model must never
+# pay the queue's extra round trips and master-side polling, and the only
+# trustworthy way to know is to time it here.
+#
+# Probing is confined to `mode == "pool"` so that the serial-versus-pool
+# comparison above is not being made against a pool arm that is itself
+# alternating between two strategies.
+.emc_ll_route_use_dynamic <- function() {
+  if (!isTRUE(getOption("emc2.ll_queue", TRUE))) return(FALSE)
+  st <- .emc_pool_state$ll_route
+  if (is.null(st) || !identical(st$mode, "pool")) return(FALSE)
+  switch(st$split,
+         probe = length(st$t_dynamic) < length(st$t_static),
+         dynamic = TRUE,
+         FALSE)
+}
+
+.emc_ll_route_record <- function(pooled, seconds, n_particles, dynamic = FALSE) {
   st <- .emc_pool_state$ll_route
   if (is.null(st) || !is.finite(seconds) || n_particles <= 0L) return(invisible(NULL))
   per <- seconds / n_particles
   if (pooled) st$t_pool <- c(st$t_pool, per) else st$t_serial <- c(st$t_serial, per)
+  if (pooled && identical(st$mode, "pool")) {
+    if (dynamic) st$t_dynamic <- c(st$t_dynamic, per)
+    else st$t_static <- c(st$t_static, per)
+    if (identical(st$split, "probe")) {
+      if (length(st$t_dynamic) >= .EMC_LL_PROBE_N &&
+          length(st$t_static) >= .EMC_LL_PROBE_N) {
+        # Ties go to static, which costs no polling and no extra messages.
+        st$split <- if (stats::median(st$t_dynamic) < stats::median(st$t_static))
+          "dynamic" else "static"
+        st$since_split <- 0L
+      }
+    } else {
+      st$since_split <- st$since_split + 1L
+      if (st$since_split >= .EMC_LL_REPROBE) {
+        st$split <- "probe"; st$t_static <- numeric(0)
+        st$t_dynamic <- numeric(0); st$since_split <- 0L
+      }
+    }
+  }
   if (st$mode == "probe") {
     if (!pooled && seconds >= .EMC_LL_OBVIOUS) {
       st$mode <- "pool"; st$since <- 0L
@@ -926,9 +1187,13 @@
     st$since <- st$since + 1L
     if (st$since >= .EMC_LL_REPROBE) {
       # Re-time both arms: particle counts drift with the adaptive tuning, and
-      # a cached-grid model gets cheaper as its cache fills.
+      # a cached-grid model gets cheaper as its cache fills.  The split decision
+      # is carried over rather than rebuilt: it is measured only while the pool
+      # arm is in use, so discarding it here would strand the probe whenever the
+      # outer decision cycles.
       st <- list(mode = "probe", t_serial = numeric(0), t_pool = numeric(0),
-                 since = 0L)
+                 since = 0L, split = st$split, t_static = st$t_static,
+                 t_dynamic = st$t_dynamic, since_split = st$since_split)
     }
   }
   .emc_pool_state$ll_route <- st

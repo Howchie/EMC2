@@ -88,6 +88,16 @@ namespace bawl {
     return {n, N_REQ, "BAwL"};
   }
 }
+// Lognormal launch strength: same POSITIONS as bawl (mu occupies v's slot and
+// sigma occupies sv's), so every kernel indexes through the bawl enum and only
+// the names validate_col_prefix() insists on differ.  Mirrors bawd/bawd_logn.
+namespace bawl_logn {
+  enum : int { mu = 0, sigma, B, A, t0, k, N_REQ, mG = N_REQ, mK, omega };
+  inline ColSpec spec() {
+    static const char* n[] = {"mu", "sigma", "B", "A", "t0", "k"};
+    return {n, N_REQ, "BAwL_LOGN"};
+  }
+}
 
 // R/model_BAwD.R — BAwD (ballistic accumulator with drive decay).  The two
 // launch distributions differ only in the names of the first two columns, so

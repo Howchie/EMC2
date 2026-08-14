@@ -22,6 +22,9 @@ test_that("PCOUNTER default structure and parameter types are correct", {
   expect_equal(model$c_name, "PCOUNTER")
   expect_equal(model$p_types_canonical, c("nu", "sv", "gamma", "k", "omega", "t0"))
   expect_true(all(c("nu", "sv", "gamma", "k", "omega", "t0", "pContaminant") %in% names(model$p_types)))
+  expect_equal(unname(model$bound$minmax[, "k"]), c(0, Inf))
+  expect_equal(unname(model$bound$exception[["k"]]), 0)
+  expect_equal(unname(exp(model$p_types[["k"]])), 3)
 })
 
 test_that("PCOUNTER dfun/pfun match Erlang first-passage functions in fixed branch", {
@@ -30,8 +33,11 @@ test_that("PCOUNTER dfun/pfun match Erlang first-passage functions in fixed bran
   nu <- c(3, 8, 12, 5, 20, 30)
   t0 <- c(0.01, 0.05, 0.1, 0.2, 0.15, 0.3)
 
-  for (K in c(1, 2, 5)) {
-    pars <- cbind(nu = nu, sv = 0, gamma = 0, k = rep(K, length(rt)), omega = 0, t0 = t0)
+  # `k` is a non-negative offset; the canonical event criterion is
+  # K = 2 + floor(k + 0.5).  The fixed-rate branch is therefore Erlang(K) for
+  # K >= 2, including the exact k = 0 boundary (K = 2).
+  for (K in c(2, 3, 5)) {
+    pars <- cbind(nu = nu, sv = 0, gamma = 0, k = rep(K - 2, length(rt)), omega = 0, t0 = t0)
     tt <- rt - t0
     expect_equal(model$dfun(rt, pars),
                  ifelse(tt > 0, stats::dgamma(tt, shape = K, rate = nu), 0),
@@ -42,7 +48,7 @@ test_that("PCOUNTER dfun/pfun match Erlang first-passage functions in fixed bran
   }
 
   # No mass below t0.
-  pars <- cbind(nu = rep(10, 2), sv = rep(0, 2), gamma = rep(0, 2), k = rep(3, 2), omega = rep(0, 2), t0 = rep(0.3, 2))
+  pars <- cbind(nu = rep(10, 2), sv = rep(0, 2), gamma = rep(0, 2), k = rep(1, 2), omega = rep(0, 2), t0 = rep(0.3, 2))
   expect_equal(model$dfun(c(0, 0.15), pars), c(0, 0))
   expect_equal(model$pfun(c(0, 0.15), pars), c(0, 0))
 })
@@ -52,8 +58,8 @@ test_that("the two-accumulator race density reproduces Ratcliff & Smith Eq. A10a
   t <- c(0.05, 0.1, 0.25, 0.5, 1, 2)
   alpha <- 12; beta <- 7; Ka <- 4L; Kb <- 6L
 
-  win_pars  <- cbind(nu = rep(alpha, length(t)), sv = 0, gamma = 0, k = rep(Ka, length(t)), omega = 0, t0 = rep(0, length(t)))
-  lose_pars <- cbind(nu = rep(beta, length(t)),  sv = 0, gamma = 0, k = rep(Kb, length(t)), omega = 0, t0 = rep(0, length(t)))
+  win_pars  <- cbind(nu = rep(alpha, length(t)), sv = 0, gamma = 0, k = rep(Ka - 2, length(t)), omega = 0, t0 = rep(0, length(t)))
+  lose_pars <- cbind(nu = rep(beta, length(t)),  sv = 0, gamma = 0, k = rep(Kb - 2, length(t)), omega = 0, t0 = rep(0, length(t)))
   # EMC2 race likelihood: winner density x loser survivor.
   got <- model$dfun(t, win_pars) * (1 - model$pfun(t, lose_pars))
 
@@ -62,11 +68,11 @@ test_that("the two-accumulator race density reproduces Ratcliff & Smith Eq. A10a
 
 test_that("integrated race density reproduces the Eq. A11a response probability", {
   model <- PCOUNTER()
-  for (cs in list(c(12, 7, 4, 6), c(5, 5, 3, 3), c(20, 3, 8, 2), c(2, 9, 1, 5))) {
+  for (cs in list(c(12, 7, 4, 6), c(5, 5, 3, 3), c(20, 3, 8, 2), c(2, 9, 2, 5))) {
     alpha <- cs[1]; beta <- cs[2]; Ka <- cs[3]; Kb <- cs[4]
     dens <- function(t) {
-      w <- cbind(nu = rep(alpha, length(t)), sv = 0, gamma = 0, k = rep(Ka, length(t)), omega = 0, t0 = rep(0, length(t)))
-      l <- cbind(nu = rep(beta, length(t)),  sv = 0, gamma = 0, k = rep(Kb, length(t)), omega = 0, t0 = rep(0, length(t)))
+      w <- cbind(nu = rep(alpha, length(t)), sv = 0, gamma = 0, k = rep(Ka - 2, length(t)), omega = 0, t0 = rep(0, length(t)))
+      l <- cbind(nu = rep(beta, length(t)),  sv = 0, gamma = 0, k = rep(Kb - 2, length(t)), omega = 0, t0 = rep(0, length(t)))
       model$dfun(t, w) * (1 - model$pfun(t, l))
     }
     Pa <- stats::integrate(dens, 0, Inf, rel.tol = 1e-10)$value
@@ -77,23 +83,26 @@ test_that("integrated race density reproduces the Eq. A11a response probability"
   }
 })
 
-test_that("k criterion is snapped to nearest positive integer", {
+test_that("k offset is snapped to nearest non-negative integer before adding two", {
   model <- PCOUNTER()
   rt <- c(0.2, 0.5, 1.0)
   mk <- function(k_val) cbind(nu = rep(8, 3), sv = 0, gamma = 0, k = rep(k_val, 3), omega = 0, t0 = rep(0.1, 3))
 
-  for (cs in list(c(2.3, 2), c(2.7, 3), c(2.0, 2), c(0.4, 1), c(1.2, 1), c(5.9, 6),
+  for (cs in list(c(2.3, 2), c(2.7, 3), c(2.0, 2), c(0.4, 0), c(1.2, 1), c(5.9, 6),
                   c(3.5, 4), c(2.5, 3))) {
     expect_equal(model$dfun(rt, mk(cs[1])), model$dfun(rt, mk(cs[2])), tolerance = 1e-12)
     expect_equal(model$pfun(rt, mk(cs[1])), model$pfun(rt, mk(cs[2])), tolerance = 1e-12)
   }
+  # Both offsets below produce the irreducible two-event criterion.
+  expect_equal(model$dfun(rt, mk(0)), model$dfun(rt, mk(0.4)), tolerance = 1e-12)
 })
 
 test_that("extended branches (sv, gamma, omega) evaluate cleanly and stay finite", {
   model <- PCOUNTER()
   rt <- c(0.2, 0.5, 1.2)
+  # Use K = 4 (offset k = 2) for this extended-branch smoke test.
   pars <- cbind(nu = rep(10, 3), sv = rep(2, 3), gamma = rep(0.5, 3),
-                k = rep(4, 3), omega = rep(1, 3), t0 = rep(0.1, 3))
+                k = rep(2, 3), omega = rep(1, 3), t0 = rep(0.1, 3))
 
   d_vals <- model$dfun(rt, pars)
   p_vals <- model$pfun(rt, pars)
@@ -138,7 +147,7 @@ test_that("simulated PCOUNTER choice proportions match Eq. A11a prediction", {
   )
   nu_mis <- 6; nu_match <- 14; K <- 4
   p <- c("nu" = log(nu_mis), "nu_lMTRUE" = log(nu_match) - log(nu_mis),
-         "k" = log(K), "t0" = log(0.1))
+         "k" = log(K - 2), "t0" = log(0.1))
 
   set.seed(13)
   dat <- make_data(p, design_pc, n_trials = 4000, rt_resolution = NULL)
@@ -162,7 +171,7 @@ test_that("simulated PCOUNTER works with non-zero sv, gamma, and omega", {
     model = PCOUNTER
   )
   p <- c("nu" = log(10), "nu_lMTRUE" = log(1.5), "sv" = log(2),
-         "gamma" = log(0.5), "k" = log(3), "omega" = log(1), "t0" = log(0.15))
+         "gamma" = log(0.5), "k" = log(1), "omega" = log(1), "t0" = log(0.15))
 
   set.seed(42)
   dat <- make_data(p, design_pc, n_trials = 500, rt_resolution = NULL)

@@ -1083,6 +1083,17 @@ auto_mclapply <- function(X, FUN, mc.cores, ..., mc.preschedule = TRUE){
   } else{
     list_out <- parallel::mclapply(X, FUN, mc.cores = mc.cores,
                                    mc.preschedule = mc.preschedule, ...)
+    # `mclapply` turns a worker error into a "try-error" *element*, so callers
+    # that unlist the result (the likelihood managers do) get a character
+    # vector and fail far away with something like "non-numeric argument to
+    # binary operator".  Re-raise the first real error here so the message the
+    # user sees is the one the worker actually hit, exactly as at one core.
+    failed <- vapply(list_out, inherits, logical(1), what = "try-error")
+    if (any(failed)) {
+      first <- list_out[[which(failed)[1]]]
+      cond <- attr(first, "condition")
+      if (is.null(cond)) stop(as.character(first), call. = FALSE) else stop(cond)
+    }
   }
   return(list_out)
 }
