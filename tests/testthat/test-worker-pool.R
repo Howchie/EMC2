@@ -526,3 +526,104 @@ test_that("compute() accepts a pre-decoded shared part and an encoded one", {
     expect_equal(seen$population_var, matrix(9))
   }
 })
+
+# --- single-subject likelihood mode -----------------------------------------
+
+test_that("routing probes both arms and then keeps the cheaper one", {
+  EMC2:::.emc_ll_route_reset()
+  n <- EMC2:::.EMC_LL_PROBE_N
+  # Arms are interleaved: serial, pool, serial, pool, ... Each call is kept
+  # under .EMC_LL_OBVIOUS so the comparison, not the shortcut, decides.
+  for (i in seq_len(n)) {
+    expect_false(EMC2:::.emc_ll_route_use_pool())
+    EMC2:::.emc_ll_route_record(FALSE, 0.4, 10L)
+    expect_true(EMC2:::.emc_ll_route_use_pool())
+    EMC2:::.emc_ll_route_record(TRUE, 0.04, 10L)
+  }
+  # The pool arm was 10x cheaper per particle, so it is kept.
+  expect_true(EMC2:::.emc_ll_route_use_pool())
+  expect_identical(EMC2:::.emc_pool_state$ll_route$mode, "pool")
+
+  # And the reverse: a pool that loses is dropped, ties included.
+  EMC2:::.emc_ll_route_reset()
+  for (i in seq_len(n)) {
+    EMC2:::.emc_ll_route_record(FALSE, 0.1, 10L)
+    EMC2:::.emc_ll_route_record(TRUE, 0.1, 10L)
+  }
+  expect_false(EMC2:::.emc_ll_route_use_pool())
+  expect_identical(EMC2:::.emc_pool_state$ll_route$mode, "serial")
+  EMC2:::.emc_ll_route_reset()
+})
+
+test_that("an expensive serial call takes the pool without finishing the probe", {
+  # A call costing this much cannot lose to a round trip measured in
+  # milliseconds, and probing it would spend five more such calls on one core.
+  EMC2:::.emc_ll_route_reset()
+  EMC2:::.emc_ll_route_record(FALSE, EMC2:::.EMC_LL_OBVIOUS, 10L)
+  expect_identical(EMC2:::.emc_pool_state$ll_route$mode, "pool")
+  expect_true(EMC2:::.emc_ll_route_use_pool())
+  # A cheap call still has to earn it.
+  EMC2:::.emc_ll_route_reset()
+  EMC2:::.emc_ll_route_record(FALSE, EMC2:::.EMC_LL_OBVIOUS / 2, 10L)
+  expect_identical(EMC2:::.emc_pool_state$ll_route$mode, "probe")
+  EMC2:::.emc_ll_route_reset()
+})
+
+test_that("a settled route is re-probed rather than kept forever", {
+  EMC2:::.emc_ll_route_reset()
+  n <- EMC2:::.EMC_LL_PROBE_N
+  for (i in seq_len(n)) {
+    EMC2:::.emc_ll_route_record(FALSE, 0.4, 10L)
+    EMC2:::.emc_ll_route_record(TRUE, 0.04, 10L)
+  }
+  expect_identical(EMC2:::.emc_pool_state$ll_route$mode, "pool")
+  for (i in seq_len(EMC2:::.EMC_LL_REPROBE)) {
+    EMC2:::.emc_ll_route_record(TRUE, 0.04, 10L)
+  }
+  expect_identical(EMC2:::.emc_pool_state$ll_route$mode, "probe")
+  EMC2:::.emc_ll_route_reset()
+})
+
+test_that("splitting a subject's particles over the pool changes no number", {
+  skip_on_os("windows")
+  skip_on_cran()
+  skip_if(!nzchar(Sys.which("mkfifo")))
+  dat <- forstmann[forstmann$subjects == levels(forstmann$subjects)[1], ]
+  dat$subjects <- droplevels(dat$subjects)
+  des <- design(data = dat, model = LNR, formula = list(m ~ 1, s ~ 1, t0 ~ 1))
+  emc <- suppressMessages(make_emc(dat, des, type = "single"))
+  s1 <- emc[[1]]
+  ctx <- list(data = s1$data, model = EMC2:::.emc_wpool_slim_model(s1$model),
+              n_pars = s1$n_pars, r_cores = 1L, type = s1$type)
+  pool <- EMC2:::.emc_wpool_start(3, ctx)
+  skip_if(is.null(pool), "could not start a pool here")
+  on.exit({ EMC2:::.emc_ll_pool_clear(); EMC2:::.emc_wpool_stop(pool) }, add = TRUE)
+
+  p <- sampled_pars(des, doMap = FALSE)
+  set.seed(11)
+  props <- matrix(rep(p, each = 20), nrow = 20, dimnames = list(NULL, names(p)))
+  props <- props + matrix(rnorm(length(props), 0, 0.05), nrow = 20)
+  ref <- EMC2:::calc_ll_manager(props, s1$data[[1]], s1$model, r_cores = 1)
+
+  EMC2:::.emc_ll_pool_set(pool, 1L)
+  got <- EMC2:::.emc_wpool_ll(props, 1L)
+  expect_false(is.null(got))
+  expect_equal(got, ref)
+
+  # An uneven split must still land every row in its own place.
+  odd <- props[1:7, , drop = FALSE]
+  expect_equal(EMC2:::.emc_wpool_ll(odd, 1L),
+               EMC2:::calc_ll_manager(odd, s1$data[[1]], s1$model, r_cores = 1))
+
+  # Too few rows to be worth a round trip: the caller is told to do it itself.
+  expect_null(EMC2:::.emc_wpool_ll(props[1:2, , drop = FALSE], 1L))
+  # A subject the workers were not started for never reaches them.
+  expect_equal(EMC2:::calc_ll_pooled(props, s1$data[[1]], s1$model, s = 99L), ref)
+})
+
+test_that("the likelihood pool only serves the subject it was registered for", {
+  EMC2:::.emc_ll_pool_clear()
+  # No pool at all: the wrapper is the plain manager, including its own split.
+  expect_null(EMC2:::.emc_pool_state$ll_subject)
+  expect_null(EMC2:::.emc_wpool_ll(matrix(0, 4, 2), 1L))
+})

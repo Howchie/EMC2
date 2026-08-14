@@ -725,7 +725,20 @@
 
 # The unit of work, shared by the workers and by the master's fallback path so
 # that a broken pool computes exactly what a working one would have.
-.emc_wpool_compute <- function(msg, ctx, shared = NULL) .emc_with_preserved_rng({
+.emc_wpool_compute <- function(msg, ctx, shared = NULL) {
+  # Two message kinds share the pool.  "ll" is the single-subject mode: the
+  # message is one slice of that subject's proposal matrix, and the reply is
+  # its likelihoods.  It touches no sampler state and draws nothing, so it
+  # needs neither the RNG dance below nor the group-level payload.
+  if (identical(msg$kind, "ll")) {
+    return(list(ll = calc_ll_manager(msg$proposals, dadm = ctx$data[[msg$s]],
+                                     model = ctx$model, component = msg$component,
+                                     r_cores = 1L)))
+  }
+  .emc_wpool_compute_particle(msg, ctx, shared)
+}
+
+.emc_wpool_compute_particle <- function(msg, ctx, shared = NULL) .emc_with_preserved_rng({
   # `shared` is the group-level draw, which reaches a worker as the raw bytes
   # .emc_wpool_iter() serialised once for every worker.  The master's fallback
   # path already holds the decoded object and passes it directly rather than
@@ -765,6 +778,162 @@
   }
   list(props = props, pm = pm, seeds = seeds, times = times)
 })
+
+# --- single-subject likelihood mode ------------------------------------------
+#
+# With one subject there is nothing for the subject partition to spread, so the
+# pool is pointed at the *particles* instead: each worker computes the
+# likelihood of one slice of the proposal matrix.  This is the same work
+# `calc_ll_manager()` splits with `mclapply`, but the workers already exist, so
+# the split costs one pipe round trip (~1 ms) instead of a fresh fork+join of
+# the chain's whole heap (26 ms over 8 workers at 145 MB, and it grows with the
+# heap).  That fork was large enough to cancel the entire gain: a single-subject
+# BAwD fit measured 0.198 s/iter at one core and 0.190 s/iter at eight.
+#
+# Splitting is safe in a way the subject partition is not: a likelihood draws
+# nothing, so which worker computes which rows -- and how many workers there
+# are -- cannot move a single number.  The pool may therefore also grow
+# mid-block without making the fit irreproducible.
+#
+# Returns NULL when the pool cannot serve the call, which tells the caller to
+# compute the whole vector itself.
+.emc_wpool_ll <- function(proposals, s, component = NULL) {
+  pool <- .emc_pool_state$ll_pool
+  if (is.null(pool) || !isTRUE(pool$alive) || pool$n <= 1L) return(NULL)
+  if (!is.matrix(proposals)) return(NULL)
+  n <- nrow(proposals)
+  # One row per worker at best: the round trip would cost more than the work.
+  if (n <= pool$n) return(NULL)
+  idx <- .split_work_indices(n, pool$n)
+  n_workers <- max(idx)
+
+  sent <- logical(n_workers)
+  for (w in seq_len(n_workers)) {
+    sent[w] <- tryCatch({
+      serialize(list(kind = "ll", s = s, component = component,
+                     proposals = proposals[idx == w, , drop = FALSE]),
+                pool$wcs[[w]])
+      flush(pool$wcs[[w]])
+      TRUE
+    }, error = function(e) { .emc_wpool_degraded(conditionMessage(e)); FALSE })
+    if (!sent[w]) break
+  }
+
+  # Drain every worker that was written to, even when the round has already
+  # failed.  An unread reply stays in the pipe and would be collected by the
+  # *next* round as though it answered that call -- silently returning one
+  # particle set's likelihoods for another.
+  out <- numeric(n)
+  ok <- all(sent)
+  for (w in which(sent)) {
+    res <- tryCatch(unserialize(pool$rcs[[w]]), error = function(e) NULL)
+    if (is.null(res) || !is.null(res$failed) ||
+        length(res$ll) != sum(idx == w)) {
+      ok <- FALSE
+      # No reply at all means the worker or the transport is gone; a reported
+      # failure means it is still listening and only this call went wrong.
+      if (is.null(res)) .emc_pool_state$ll_pool$alive <- FALSE
+      next
+    }
+    out[idx == w] <- res$ll
+  }
+  if (!ok) {
+    if (!all(sent)) .emc_pool_state$ll_pool$alive <- FALSE
+    return(NULL)
+  }
+  out
+}
+
+# Register/clear the pool the single-subject likelihood path may use.  It is
+# held here rather than threaded through `new_particle()` so that every other
+# `calc_ll_manager()` caller -- predict, IC, the R likelihood path -- is
+# untouched: only a call that names the registered subject can reach the pool.
+.emc_ll_pool_set <- function(pool, s, reset = TRUE) {
+  .emc_pool_state$ll_pool <- pool
+  .emc_pool_state$ll_subject <- s
+  if (reset) .emc_ll_route_reset()
+  invisible(NULL)
+}
+
+.emc_ll_pool_clear <- function() {
+  .emc_pool_state$ll_pool <- NULL
+  .emc_pool_state$ll_subject <- NULL
+  invisible(NULL)
+}
+
+# --- routing: is splitting this likelihood worth the round trip? -------------
+#
+# Splitting particles across workers only pays when a call's own work exceeds
+# what the split costs, and whether it does is a property of the *model*, not
+# of anything the sampler can see up front:
+#
+#   BAwD, 10k trials, 283 particles   0.137 s serial   -- round trip is 12% of it
+#   RLF,  500 trials, 283 particles   1.61  s serial   -- round trip is 1% of it
+#
+# For BAwD the split loses (measured 0.179 s/iter serial against 0.243 s/iter
+# over 8 workers); for RLF it wins nearly 6x.  A fixed rule would therefore be
+# wrong for half the model library, so both arms are timed on the live fit and
+# the cheaper one is kept.  Cost is compared per particle, since the number of
+# proposals per call varies within an iteration.
+.EMC_LL_PROBE_N <- 6L      # calls per arm while probing
+.EMC_LL_REPROBE <- 200L    # calls before the decision is re-examined
+# A serial call this expensive cannot lose to the split.  The round trip is one
+# serialise plus one pipe write and read per worker -- ~1 ms each, so tens of
+# milliseconds at any sane worker count -- against half a second of arithmetic.
+# Below this the arms are close enough that only measurement separates them;
+# above it, probing serial spends whole seconds on one core to learn nothing.
+.EMC_LL_OBVIOUS <- 0.5     # seconds in a single serial call
+
+.emc_ll_route_reset <- function() {
+  .emc_pool_state$ll_route <- list(mode = "probe", t_serial = numeric(0),
+                                   t_pool = numeric(0), since = 0L)
+  invisible(NULL)
+}
+
+# TRUE to try the pool for this call.  Probing *interleaves* the arms rather
+# than timing six of one and then six of the other: a single call's cost varies
+# several-fold with the particles it happens to draw -- 12.2 s to 70.3 s across
+# six consecutive identical RLF preburn calls -- so consecutive blocks compare
+# two different particle clouds and decide largely on noise.  Alternating puts
+# the same drift of costs through both arms.
+.emc_ll_route_use_pool <- function() {
+  st <- .emc_pool_state$ll_route
+  if (is.null(st)) { .emc_ll_route_reset(); st <- .emc_pool_state$ll_route }
+  switch(st$mode,
+         probe = length(st$t_pool) < length(st$t_serial),
+         pool = TRUE,
+         FALSE)
+}
+
+.emc_ll_route_record <- function(pooled, seconds, n_particles) {
+  st <- .emc_pool_state$ll_route
+  if (is.null(st) || !is.finite(seconds) || n_particles <= 0L) return(invisible(NULL))
+  per <- seconds / n_particles
+  if (pooled) st$t_pool <- c(st$t_pool, per) else st$t_serial <- c(st$t_serial, per)
+  if (st$mode == "probe") {
+    if (!pooled && seconds >= .EMC_LL_OBVIOUS) {
+      st$mode <- "pool"; st$since <- 0L
+    } else if (length(st$t_pool) >= .EMC_LL_PROBE_N &&
+               length(st$t_serial) >= .EMC_LL_PROBE_N) {
+      # Median, not mean: one straggler call must not decide the arm.  A tie
+      # goes to serial -- the pool costs processes and memory, so it has to
+      # actually win something to be worth keeping in the path.
+      st$mode <- if (stats::median(st$t_pool) < stats::median(st$t_serial))
+        "pool" else "serial"
+      st$since <- 0L
+    }
+  } else {
+    st$since <- st$since + 1L
+    if (st$since >= .EMC_LL_REPROBE) {
+      # Re-time both arms: particle counts drift with the adaptive tuning, and
+      # a cached-grid model gets cheaper as its cache fills.
+      st <- list(mode = "probe", t_serial = numeric(0), t_pool = numeric(0),
+                 since = 0L)
+    }
+  }
+  .emc_pool_state$ll_route <- st
+  invisible(NULL)
+}
 
 # --- one iteration ----------------------------------------------------------
 

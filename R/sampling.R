@@ -558,6 +558,40 @@ run_stage <- function(pmwgs,
     wpool_part <- .emc_lpt_partition(wpool_cost, wpool$n)
   }
 
+  # One subject means the subject pool above is the degenerate one-worker case,
+  # and the whole per-chain budget was handed to `pool_budget$likelihood`
+  # instead.  Spend it through a persistent pool over particles rather than a
+  # fresh `mclapply` fork on every likelihood call -- see .emc_wpool_ll() for
+  # why the fork was eating the entire gain.
+  llpool <- NULL
+  if (pmwgs$n_subjects == 1L && pool_budget$likelihood > 1L &&
+      isTRUE(getOption("emc2.ll_pool", TRUE))) {
+    llpool <- .emc_wpool_start(pool_budget$likelihood, wpool_ctx)
+    if (!is.null(llpool)) {
+      # Restore rather than clear: the registration is process-global, so a
+      # nested run_stage() must hand the outer one its own pool back instead of
+      # leaving the rest of that block unaccelerated.
+      outer_ll <- list(pool = .emc_pool_state$ll_pool,
+                       s = .emc_pool_state$ll_subject)
+      # `s` is a column/list index everywhere in the particle step (see
+      # new_particle's `parameters$alpha[, s]`), not a subject label.
+      #
+      # `reset = FALSE`, and the routing measurements are deliberately *not*
+      # restored on exit.  A stage is run in blocks of `step_size` iterations,
+      # each of which re-enters run_stage(); resetting here restarted the probe
+      # every block, and for a model whose serial call costs tens of seconds the
+      # block could end before the probe had finished, so the pool it forked was
+      # never used at all.  What the probe measures is a property of this
+      # process's one model and one subject, which no block boundary changes.
+      .emc_ll_pool_set(llpool, 1L, reset = FALSE)
+      on.exit({
+        .emc_wpool_stop(llpool)
+        .emc_pool_state$ll_pool <- outer_ll$pool
+        .emc_pool_state$ll_subject <- outer_ll$s
+      }, add = TRUE)
+    }
+  }
+
   # Extend only after startup.  This ordering still helps the fork fallback;
   # clean-process workers are isolated from both the old and extended arrays.
   start_iter <- pmwgs$samples$idx
@@ -640,6 +674,18 @@ run_stage <- function(pmwgs,
     } else NA_real_
     recycle_elapsed <- grow_elapsed <- if (sampler_profile) 0 else NA_real_
     pool_profile <- NULL
+    if (!is.null(llpool)) {
+      # Same recycling contract as the subject pool.  Growing is unconditionally
+      # safe here -- a likelihood draws nothing, so the number of workers cannot
+      # move a number -- which is why this takes the donated cores directly
+      # rather than dividing them around an inner fan-out.
+      llpool <- .emc_wpool_recycle(llpool, i, recycle_every, wpool_ctx)
+      llpool <- .emc_wpool_grow(llpool, .emc_cores_now(core_ctl, n_cores),
+                                wpool_ctx)
+      # Re-register the (possibly replaced) handles, but keep the routing
+      # measurements: they are a property of the model, not of this worker set.
+      .emc_ll_pool_set(llpool, 1L, reset = FALSE)
+    }
     if (!is.null(wpool)) {
       # Re-fork periodically so workers cannot drift far from their initially
       # shared pages.  On the clean backend they return to the template's small
@@ -1071,11 +1117,11 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
                                          r_cores = r_cores, warm = warm_arg)
       lw <- marginal_ll_from_grid(marg_grid)
     } else if(tune$components[length(tune$components)] > 1){
-      lw <- calc_ll_manager(proposals[,is_shared], dadm = data, model,
-                            component = shared_idx, r_cores = r_cores)
+      lw <- calc_ll_pooled(proposals[,is_shared], dadm = data, model,
+                           component = shared_idx, r_cores = r_cores, s = s)
     } else{
-      lw <- calc_ll_manager(proposals[,is_shared], dadm = data, model,
-                            r_cores = r_cores)
+      lw <- calc_ll_pooled(proposals[,is_shared], dadm = data, model,
+                           r_cores = r_cores, s = s)
     }
     lw_total <- lw + prev_ll - lw[1] # make sure lls from other components are included
     # Prior density
@@ -1468,6 +1514,58 @@ check_prop_performance <- function(prop_performance, stage){
     }
   }
   return(round(prop_performance))
+}
+
+# The particle step's entry to the likelihood.  It prefers the block's
+# persistent likelihood pool (single-subject fits; see .emc_wpool_ll) and falls
+# back to `calc_ll_manager`'s own `mclapply` split, so losing the pool costs
+# speed and nothing else.  `s` is what gates the pool: only the subject the
+# workers were started for can be served by them.
+calc_ll_pooled <- function(proposals, dadm, model, component = NULL, r_cores = 1,
+                           s = NULL){
+  have_pool <- !is.null(s) && !is.null(.emc_pool_state$ll_subject) &&
+    identical(s, .emc_pool_state$ll_subject) &&
+    isTRUE(.emc_pool_state$ll_pool$alive)
+  if (!have_pool) {
+    # No pool for this call: keep the historical behaviour exactly, including
+    # its own mclapply split.
+    return(calc_ll_manager(proposals, dadm = dadm, model = model,
+                           component = component, r_cores = r_cores))
+  }
+  # With a pool available the choice is between it and a plain serial call --
+  # never the per-call fork, which the pool exists to replace.  Both arms are
+  # timed; see .emc_ll_route_use_pool().
+  use_pool <- .emc_ll_route_use_pool()
+  started <- proc.time()[["elapsed"]]
+  out <- if (use_pool) .emc_wpool_ll(proposals, s, component) else NULL
+  pooled <- !is.null(out)
+  if (!pooled) {
+    out <- calc_ll_manager(proposals, dadm = dadm, model = model,
+                           component = component, r_cores = 1L)
+  }
+  el <- proc.time()[["elapsed"]] - started
+  # A call the pool declined -- too few rows to split, or a single proposal
+  # vector -- is not evidence about the serial arm: it is the one shape the
+  # pool never handles, and timing it as though the router had chosen serial
+  # biases the comparison towards whichever arm those calls happen to fall in.
+  if (pooled || !use_pool) {
+    .emc_ll_route_record(pooled, el,
+                         if (is.matrix(proposals)) nrow(proposals) else 1L)
+  }
+  # `EMC2_LL_TRACE=<file>` appends one line per likelihood call.  The chain runs
+  # in a forked child, so its routing state cannot be inspected from the master
+  # after the fact and a print is the only way to see which arm a real fit is
+  # actually taking -- which is how the per-block probe reset was found.
+  trace_file <- Sys.getenv("EMC2_LL_TRACE")
+  if (nzchar(trace_file)) {
+    st <- .emc_pool_state$ll_route
+    cat(sprintf("[ll] pid=%d n=%d mode=%s n_serial=%d n_pool=%d pooled=%s %.3f s\n",
+                Sys.getpid(),
+                if (is.matrix(proposals)) nrow(proposals) else 1L,
+                st$mode, length(st$t_serial), length(st$t_pool), pooled, el),
+        file = trace_file, append = TRUE)
+  }
+  out
 }
 
 calc_ll_manager <- function(proposals, dadm, model, component = NULL, r_cores = 1,
