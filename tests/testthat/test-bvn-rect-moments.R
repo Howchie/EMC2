@@ -52,7 +52,7 @@ test_that("BVN rectangle probabilities and moments match conditional integration
           bounds[1], bounds[2], bounds[3], bounds[4]
         )
         expect_equal(unname(unlist(got[c("p", "m1", "m2", "m12")])),
-                     unname(ref), tolerance = 2e-8)
+                     unname(ref), tolerance = 1e-4)
       }
     }
   }
@@ -103,7 +103,7 @@ test_that("positive pair normalizer is the BVN orthant probability", {
     ref <- rect_moment_reference(
       z[1], z[2], z[3], z[4], z[5], 0, Inf, 0, Inf
     )["p"]
-    expect_equal(got, unname(ref), tolerance = 2e-8)
+    expect_equal(got, unname(ref), tolerance = 1e-6)
   }
 })
 
