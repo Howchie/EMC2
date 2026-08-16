@@ -90,6 +90,15 @@
   rBAwD(lR, pars, ok = ok, launch = launch, posdrift = posdrift)
 }
 
+.rfun_FRQ <- function(lR, pars, ok = rep(TRUE, length(lR))) {
+  if (.use_cpp_rfun()) {
+    res <- rfrq_cpp(pars, levels(lR), ok)
+    out <- .rfun_cpp_pack(res, levels(lR), length(lR) / length(levels(lR)))
+    return(.apply_timed_guess_winner(out, levels(lR)))
+  }
+  rFRQ(lR, pars, ok = ok)
+}
+
 .rfun_BAwL_corr <- function(lR, pars, ok = rep(TRUE, length(lR)), posdrift = TRUE,
                             erlang = 1L, guess = FALSE, global = FALSE) {
   if (.use_cpp_rfun()) {

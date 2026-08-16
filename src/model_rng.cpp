@@ -14,6 +14,10 @@
 #include <vector>
 #include "model_rng.h"
 #include "drift_factor.h"
+// FRQ's (h, tau) -> (p, lambda) inversion.  Included rather than duplicated so
+// the simulator and the likelihood cannot describe different models; the header
+// is export-free precisely so it can be shared across translation units.
+#include "model_FRQ.h"
 
 using namespace Rcpp;
 
@@ -532,6 +536,52 @@ Rcpp::List rbawd_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
     const double u = bawd_hit_time_r(V, pars(r, ib) - z, pars(r, ik),
                                      pars(r, iell));
     dt[r] = (R_FINITE(u) && u >= 0.0) ? u : R_PosInf;
+  }
+
+  RaceOut res = resolve_race(dt, n_acc, n_trials, &t0col, &ok_row);
+  std::vector<int> isTime;
+  const bool has_isTime = resolve_time_level(res.R, isTime, lR_levels);
+  return pack_result(res.R, res.rt, res.omitted, has_isTime, isTime);
+}
+
+// FRQ simulator.  pars columns: alpha, beta, h, tau, t0.
+//
+// Exact, not approximate: Math/FRQ.tex Sec. 6 shows the process is
+// distributionally identical to drawing the latent quorum U ~ Beta(alpha, beta)
+// and inverting the registration CDF at U/p.  U > p means the reservoir
+// saturates below the required quorum, so the accumulator NEVER terminates and
+// the trial contributes +Inf -- the package's omission convention.  For integer
+// alpha = K and beta = N - K + 1 this reproduces explicitly building N cues and
+// waiting for the K-th.  Matches R's rFRQ (R/model_FRQ.R).
+// [[Rcpp::export]]
+Rcpp::List rfrq_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
+                    Rcpp::LogicalVector ok) {
+  const int n_acc = lR_levels.size();
+  const int n_rows = pars.nrow();
+  if (n_acc <= 0 || n_rows <= 0 || n_rows % n_acc != 0)
+    Rcpp::stop("rfrq_cpp: invalid accumulator/parameter dimensions.");
+  if (ok.size() != n_rows) Rcpp::stop("rfrq_cpp: ok has the wrong length.");
+  const int n_trials = n_rows / n_acc;
+  const auto ci = col_index_map(pars);
+  for (const char* nm : {"alpha", "beta", "h", "tau", "t0"})
+    if (!ci.count(nm)) Rcpp::stop("rfrq_cpp: missing parameter column '%s'.", nm);
+  const int ia = ci.at("alpha"), ib = ci.at("beta"), ih = ci.at("h"),
+            it = ci.at("tau"), it0 = ci.at("t0");
+
+  std::vector<double> dt(n_rows, R_PosInf);
+  std::vector<double> t0col(n_rows);
+  std::vector<int> ok_row(n_rows);
+  for (int r = 0; r < n_rows; ++r) {
+    t0col[r] = pars(r, it0);
+    ok_row[r] = ok[r] ? 1 : 0;
+    if (!ok[r]) continue;
+    const FrqPars s = frq_derive(pars(r, ia), pars(r, ib), pars(r, ih),
+                                 pars(r, it));
+    if (!s.ok) continue;                       // invalid row: never finishes
+    const double u = R::rbeta(s.alpha, s.beta);
+    if (!(u <= s.p)) continue;                 // quorum unreachable: omission
+    const double d = -std::log1p(-u / s.p) / s.lambda;
+    dt[r] = (R_FINITE(d) && d >= 0.0) ? d : R_PosInf;
   }
 
   RaceOut res = resolve_race(dt, n_acc, n_trials, &t0col, &ok_row);

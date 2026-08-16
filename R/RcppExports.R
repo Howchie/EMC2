@@ -141,6 +141,22 @@ simulate_gbm_hit_times_bb <- function(n, mu, sigma, z0, b0, binf, tau = 1.0, pow
     .Call(`_EMC2_simulate_gbm_hit_times_bb`, n, mu, sigma, z0, b0, binf, tau, pow, dt, t_max, start_floor, p_tol, eps_curv, adapt_factor, adaptive)
 }
 
+dfrq <- function(t, alpha, beta, h, tau, log_out = FALSE) {
+    .Call(`_EMC2_dfrq`, t, alpha, beta, h, tau, log_out)
+}
+
+pfrq <- function(t, alpha, beta, h, tau, lower_tail = TRUE, log_out = FALSE) {
+    .Call(`_EMC2_pfrq`, t, alpha, beta, h, tau, lower_tail, log_out)
+}
+
+frq_rate <- function(alpha, beta, h, tau) {
+    .Call(`_EMC2_frq_rate`, alpha, beta, h, tau)
+}
+
+frq_quantile_level <- function() {
+    .Call(`_EMC2_frq_quantile_level`)
+}
+
 pleakyba_norm <- function(t, A, b, v, sv, k, posdrift = TRUE, log_out = FALSE, launch = 0L) {
     .Call(`_EMC2_pleakyba_norm`, t, A, b, v, sv, k, posdrift, log_out, launch)
 }
@@ -435,6 +451,10 @@ rbawl_corr_cpp <- function(pars, lR_levels, ok, posdrift, erlang, guess, global)
 
 rbawd_cpp <- function(pars, lR_levels, ok, launch, posdrift) {
     .Call(`_EMC2_rbawd_cpp`, pars, lR_levels, ok, launch, posdrift)
+}
+
+rfrq_cpp <- function(pars, lR_levels, ok) {
+    .Call(`_EMC2_rfrq_cpp`, pars, lR_levels, ok)
 }
 
 rrdmswtn_cpp <- function(pars, lR_levels, ok, erlang_shape, erlang_type, posdrift) {

@@ -83,6 +83,7 @@ Imports:
     colorspace,
     psych,
     matrixStats,
+    tools,
     utils,
     loo,
     lpSolve,

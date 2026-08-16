@@ -264,6 +264,10 @@ inline double raw_log_value(double log_x, double min_ll, bool floor_raw) {
 #include "model_RLF_kernels.h"
 // Likewise: the BOU primitives need ContextForDDMModels defined above.
 #include "model_BOU.h"
+// FRQ needs nothing from this file -- it is pure Rmath -- but it carries
+// [[Rcpp::export]] entry points, so it must be seen by exactly one translation
+// unit and this header is included by exactly one (particle_ll.cpp).
+#include "model_FRQ.h"
 
 struct TimedLambdaDispatch {
   double lambda_g;
@@ -1592,6 +1596,125 @@ inline void bawd_logS_at_t(double t, const double* const* cols,
                                           p2_[r], k_[r], ell_[r], launch, pd);
       if (log_cdf >= 0.0) { bad = true; break; }
       if (R_FINITE(log_cdf)) logS += log1m_exp(log_cdf);
+    }
+    logS_out[j] = bad ? R_NegInf : logS;
+  }
+}
+
+// ============================================================
+// FRQ (Finite Reservoir Quorum) adapters
+// Column layout: alpha=0, beta=1, h=2, tau=3, t0=4.  No optional columns and
+// no context flags -- the model has a single variant, and the conditional
+// quantile defining tau is the compile-time constant FRQ_QUANTILE.
+//
+// The upper tail is ALWAYS defective: an accumulator terminates only with
+// probability h = I_p(alpha, beta) < 1, and the leftover mass 1 - h sits at
+// t = +Inf.  pfun_raw therefore returns the log-SURVIVOR (the race kernel
+// contract), which saturates at log(1 - h) rather than falling to -Inf, and
+// that is exactly what makes an omission trial score sum_j log(1 - h_j).
+//
+// Every entry point derives (p, lambda) through frq_derive(), memoised on the
+// exact parameter bits because the two qbeta inversions dominate the cost and
+// consecutive compressed rows usually repeat.
+// ============================================================
+
+inline double dfrq_scalar(double t, const double* par, void* /*ctx_*/) {
+  if (R_IsNA(par[emc2col::frq::alpha])) return 0.0;
+  const double tt = t - par[emc2col::frq::t0];
+  if (t <= 0.0 || tt <= 0.0) return 0.0;
+  const FrqPars s = frq_derive(par[emc2col::frq::alpha], par[emc2col::frq::beta],
+                               par[emc2col::frq::h], par[emc2col::frq::tau]);
+  return frq_pdf_natural_dt(tt, s);
+}
+
+inline double pfrq_scalar(double t, const double* par, void* /*ctx_*/) {
+  if (R_IsNA(par[emc2col::frq::alpha])) return 0.0;
+  const double tt = t - par[emc2col::frq::t0];
+  if (t <= 0.0 || tt <= 0.0) return 0.0;
+  // tt == Inf deliberately reaches the kernel: the CDF there is h, not one.
+  const FrqPars s = frq_derive(par[emc2col::frq::alpha], par[emc2col::frq::beta],
+                               par[emc2col::frq::h], par[emc2col::frq::tau]);
+  return frq_cdf_natural_dt(tt, s);
+}
+
+inline void dfrq_raw(const double* rt, const double* const* cols, int n_rows,
+                     const int* mask, const int* isok,
+                     double* out, double min_ll, void* ctx_) {
+  const bool floor_raw = raw_floor_log_lik(ctx_);
+  const double* al_ = cols[emc2col::frq::alpha];
+  const double* be_ = cols[emc2col::frq::beta];
+  const double* h_  = cols[emc2col::frq::h];
+  const double* ta_ = cols[emc2col::frq::tau];
+  const double* t0_ = cols[emc2col::frq::t0];
+  FrqMemo memo;
+  for (int i = 0; i < n_rows; ++i) {
+    if (!mask[i]) continue;
+    if (R_IsNA(al_[i]) || !isok[i]) {
+      out[i] = raw_log_zero(min_ll, floor_raw);
+      continue;
+    }
+    const double tt = rt[i] - t0_[i];
+    if (tt <= 0.0 || rt[i] <= 0.0) {
+      out[i] = raw_log_zero(min_ll, floor_raw);
+      continue;
+    }
+    const FrqPars& s = memo.get(al_[i], be_[i], h_[i], ta_[i]);
+    const double log_pdf = frq_log_pdf_dt(tt, s);
+    out[i] = (log_pdf > R_NegInf && emc2_isfinite(log_pdf))
+      ? raw_log_value(log_pdf, min_ll, floor_raw)
+      : raw_log_zero(min_ll, floor_raw);
+  }
+}
+
+inline void pfrq_raw(const double* rt, const double* const* cols, int n_rows,
+                     const int* mask, const int* isok,
+                     double* out, double min_ll, void* ctx_) {
+  const bool floor_raw = raw_floor_log_lik(ctx_);
+  const double* al_ = cols[emc2col::frq::alpha];
+  const double* be_ = cols[emc2col::frq::beta];
+  const double* h_  = cols[emc2col::frq::h];
+  const double* ta_ = cols[emc2col::frq::tau];
+  const double* t0_ = cols[emc2col::frq::t0];
+  FrqMemo memo;
+  for (int i = 0; i < n_rows; ++i) {
+    if (!mask[i]) continue;
+    // A loser that cannot be evaluated contributes a survivor of one, matching
+    // every other race adapter: the trial is failed by its winner's density.
+    if (R_IsNA(al_[i]) || !isok[i]) { out[i] = 0.0; continue; }
+    const double tt = rt[i] - t0_[i];
+    if (tt <= 0.0 || rt[i] <= 0.0) { out[i] = 0.0; continue; }
+    const FrqPars& s = memo.get(al_[i], be_[i], h_[i], ta_[i]);
+    const double log_surv = frq_log_surv_dt(tt, s);
+    if (ISNAN(log_surv)) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
+    out[i] = (log_surv > R_NegInf) ? log_surv
+                                   : raw_log_zero(min_ll, floor_raw);
+  }
+}
+
+inline void frq_logS_at_t(double t, const double* const* cols,
+                          int /*n_rows_total*/, int n_lR, int /*n_par*/,
+                          const int* trunc_mask, int n_unique_trials,
+                          const int* isok_all, void* /*ctx_*/, double* logS_out) {
+  const double* al_ = cols[emc2col::frq::alpha];
+  const double* be_ = cols[emc2col::frq::beta];
+  const double* h_  = cols[emc2col::frq::h];
+  const double* ta_ = cols[emc2col::frq::tau];
+  const double* t0_ = cols[emc2col::frq::t0];
+  FrqMemo memo;
+  for (int j = 0; j < n_unique_trials; ++j) {
+    if (!trunc_mask[j]) continue;
+    const int start = j * n_lR;
+    double logS = 0.0;
+    bool bad = false;
+    for (int kk = 0; kk < n_lR && !bad; ++kk) {
+      const int r = start + kk;
+      if (!isok_all[r] || R_IsNA(al_[r])) { bad = true; break; }
+      const double tt = t - t0_[r];
+      if (tt <= 0.0) continue;  // not started: survivor one
+      const FrqPars& s = memo.get(al_[r], be_[r], h_[r], ta_[r]);
+      const double log_surv = frq_log_surv_dt(tt, s);
+      if (ISNAN(log_surv)) { bad = true; break; }
+      logS += log_surv;
     }
     logS_out[j] = bad ? R_NegInf : logS;
   }

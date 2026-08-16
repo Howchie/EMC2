@@ -695,6 +695,63 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// dfrq
+NumericVector dfrq(NumericVector t, NumericVector alpha, NumericVector beta, NumericVector h, NumericVector tau, bool log_out);
+RcppExport SEXP _EMC2_dfrq(SEXP tSEXP, SEXP alphaSEXP, SEXP betaSEXP, SEXP hSEXP, SEXP tauSEXP, SEXP log_outSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type t(tSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type alpha(alphaSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type beta(betaSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type h(hSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type tau(tauSEXP);
+    Rcpp::traits::input_parameter< bool >::type log_out(log_outSEXP);
+    rcpp_result_gen = Rcpp::wrap(dfrq(t, alpha, beta, h, tau, log_out));
+    return rcpp_result_gen;
+END_RCPP
+}
+// pfrq
+NumericVector pfrq(NumericVector t, NumericVector alpha, NumericVector beta, NumericVector h, NumericVector tau, bool lower_tail, bool log_out);
+RcppExport SEXP _EMC2_pfrq(SEXP tSEXP, SEXP alphaSEXP, SEXP betaSEXP, SEXP hSEXP, SEXP tauSEXP, SEXP lower_tailSEXP, SEXP log_outSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type t(tSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type alpha(alphaSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type beta(betaSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type h(hSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type tau(tauSEXP);
+    Rcpp::traits::input_parameter< bool >::type lower_tail(lower_tailSEXP);
+    Rcpp::traits::input_parameter< bool >::type log_out(log_outSEXP);
+    rcpp_result_gen = Rcpp::wrap(pfrq(t, alpha, beta, h, tau, lower_tail, log_out));
+    return rcpp_result_gen;
+END_RCPP
+}
+// frq_rate
+NumericMatrix frq_rate(NumericVector alpha, NumericVector beta, NumericVector h, NumericVector tau);
+RcppExport SEXP _EMC2_frq_rate(SEXP alphaSEXP, SEXP betaSEXP, SEXP hSEXP, SEXP tauSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type alpha(alphaSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type beta(betaSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type h(hSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type tau(tauSEXP);
+    rcpp_result_gen = Rcpp::wrap(frq_rate(alpha, beta, h, tau));
+    return rcpp_result_gen;
+END_RCPP
+}
+// frq_quantile_level
+double frq_quantile_level();
+RcppExport SEXP _EMC2_frq_quantile_level() {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    rcpp_result_gen = Rcpp::wrap(frq_quantile_level());
+    return rcpp_result_gen;
+END_RCPP
+}
 // pleakyba_norm
 double pleakyba_norm(double t, double A, double b, double v, double sv, double k, bool posdrift, bool log_out, int launch);
 RcppExport SEXP _EMC2_pleakyba_norm(SEXP tSEXP, SEXP ASEXP, SEXP bSEXP, SEXP vSEXP, SEXP svSEXP, SEXP kSEXP, SEXP posdriftSEXP, SEXP log_outSEXP, SEXP launchSEXP) {
@@ -2093,6 +2150,19 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// rfrq_cpp
+Rcpp::List rfrq_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels, Rcpp::LogicalVector ok);
+RcppExport SEXP _EMC2_rfrq_cpp(SEXP parsSEXP, SEXP lR_levelsSEXP, SEXP okSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< Rcpp::NumericMatrix >::type pars(parsSEXP);
+    Rcpp::traits::input_parameter< Rcpp::CharacterVector >::type lR_levels(lR_levelsSEXP);
+    Rcpp::traits::input_parameter< Rcpp::LogicalVector >::type ok(okSEXP);
+    rcpp_result_gen = Rcpp::wrap(rfrq_cpp(pars, lR_levels, ok));
+    return rcpp_result_gen;
+END_RCPP
+}
 // rrdmswtn_cpp
 Rcpp::List rrdmswtn_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels, Rcpp::LogicalVector ok, int erlang_shape, std::string erlang_type, bool posdrift);
 RcppExport SEXP _EMC2_rrdmswtn_cpp(SEXP parsSEXP, SEXP lR_levelsSEXP, SEXP okSEXP, SEXP erlang_shapeSEXP, SEXP erlang_typeSEXP, SEXP posdriftSEXP) {
@@ -3102,6 +3172,10 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_simulate_bm_hit_times", (DL_FUNC) &_EMC2_simulate_bm_hit_times, 10},
     {"_EMC2_simulate_bm_hit_times_bb", (DL_FUNC) &_EMC2_simulate_bm_hit_times_bb, 14},
     {"_EMC2_simulate_gbm_hit_times_bb", (DL_FUNC) &_EMC2_simulate_gbm_hit_times_bb, 15},
+    {"_EMC2_dfrq", (DL_FUNC) &_EMC2_dfrq, 6},
+    {"_EMC2_pfrq", (DL_FUNC) &_EMC2_pfrq, 7},
+    {"_EMC2_frq_rate", (DL_FUNC) &_EMC2_frq_rate, 4},
+    {"_EMC2_frq_quantile_level", (DL_FUNC) &_EMC2_frq_quantile_level, 0},
     {"_EMC2_pleakyba_norm", (DL_FUNC) &_EMC2_pleakyba_norm, 9},
     {"_EMC2_dleakyba_norm", (DL_FUNC) &_EMC2_dleakyba_norm, 9},
     {"_EMC2_dkilledleakyba", (DL_FUNC) &_EMC2_dkilledleakyba, 15},
@@ -3176,6 +3250,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_rbawl_cpp", (DL_FUNC) &_EMC2_rbawl_cpp, 8},
     {"_EMC2_rbawl_corr_cpp", (DL_FUNC) &_EMC2_rbawl_corr_cpp, 7},
     {"_EMC2_rbawd_cpp", (DL_FUNC) &_EMC2_rbawd_cpp, 5},
+    {"_EMC2_rfrq_cpp", (DL_FUNC) &_EMC2_rfrq_cpp, 3},
     {"_EMC2_rrdmswtn_cpp", (DL_FUNC) &_EMC2_rrdmswtn_cpp, 6},
     {"_EMC2_rrdmswtn_drift_corr_cpp", (DL_FUNC) &_EMC2_rrdmswtn_drift_corr_cpp, 4},
     {"_EMC2_rrdmswtn_corr_cpp", (DL_FUNC) &_EMC2_rrdmswtn_corr_cpp, 4},

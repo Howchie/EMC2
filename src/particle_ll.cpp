@@ -680,6 +680,21 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
     out.ctx.mean_k_index = emc2col::rdmgbm::mK;
     out.ctx.erlang_omega_index = (out.ctx.kill_shape == 3) ? emc2col::rdmgbm::omega : -1;
     out.ctx.defective_upper_tail = true;
+  } else if (type_std.find("FRQ") != std::string::npos) {
+    // Finite reservoir quorum (Math/FRQ.tex).  "FRQ" is not a substring of any
+    // other c_name and contains none, so its position among these branches is
+    // free; it sits before BAwD only for readability.
+    out.pdf1_ptr       = &dfrq_scalar;
+    out.cdf1_ptr       = &pfrq_scalar;
+    out.model_dfun_raw = &dfrq_raw;
+    out.model_pfun_raw = &pfrq_raw;
+    out.logS_at_t_ptr  = &frq_logS_at_t;
+    out.col_spec       = emc2col::frq::spec();
+    out.ctx.t0_index   = emc2col::frq::t0;
+    // Always defective: the accumulator terminates only with probability
+    // h = I_p(alpha, beta), and 1 - h of the mass sits at t = +Inf.  There is
+    // no parameter setting that removes this, so the flag is unconditional.
+    out.ctx.defective_upper_tail = true;
   } else if (type_std.find("BAwD") != std::string::npos) {
     // Dispatch is by substring, and "BAwD" is a substring of nothing here and
     // contains neither "BAwL" nor "LBA", so placement relative to those is
@@ -5651,6 +5666,45 @@ double get_trunc_normaliser_rowmajor_cpp(const double* pars_rowmajor,
                                          void* model_specific_context,
                                          GslWorkspacePtr& workspace) {
   const double log_prob_eps = std::log(std::numeric_limits<double>::epsilon());
+
+  // Global kill: the shared clock is applied as a per-trial factor at the
+  // likelihood-assembly sites, NOT inside cdf1 (apply_lk_to_racers is false),
+  // so the per-racer survivor product below would normalise by
+  //   P(no racer crossed by t)
+  // instead of the quantity the numerator is conditioned on,
+  //   P(no response by t) = 1 - integral_0^t f_race(u) S_K(u) du.
+  // Those differ by the paths where the kill fired first, which are also
+  // non-responses; multiplying in S_K(t) does NOT fix it.
+  //
+  // With one accumulator the correct survivor is the killed sub-CDF, obtained
+  // by switching the kill back on for the racer -- the same trick the
+  // single-accumulator omission branch uses.  With several accumulators a
+  // single shared clock does not factorise into per-racer survivors, so no
+  // product form exists to correct and the race integral would be required.
+  auto* race_ctx = static_cast<ContextForRaceModels*>(model_specific_context);
+  const bool global_kill_trunc =
+      race_ctx && race_ctx->has_global_kill() && ((LT != 0.0) || R_FINITE(UT));
+  if (global_kill_trunc && n_lR != 1) {
+    Rcpp::stop("erlang_type = \"global_kill\" does not support truncation "
+               "(LT/UT) with more than one accumulator: a shared kill clock "
+               "does not factorise into per-accumulator survivors, so the "
+               "truncation normaliser would be wrong. Use "
+               "erlang_type = \"local_kill\" (equivalent when the "
+               "accumulators are independent) or remove the truncation "
+               "bounds.");
+  }
+  // Restores apply_lk_to_racers even if a kernel throws.
+  struct KillOnScope {
+    ContextForRaceModels* ctx = nullptr;
+    bool saved = false;
+    ~KillOnScope() { if (ctx) ctx->apply_lk_to_racers = saved; }
+  } kill_scope;
+  if (global_kill_trunc) {
+    kill_scope.ctx = race_ctx;
+    kill_scope.saved = race_ctx->apply_lk_to_racers;
+    race_ctx->apply_lk_to_racers = true;
+  }
+
   // When LT == 0, every proper distribution has CDF(0) = 0 → S(0) = 1 → log = 0.
   // Skip the n_lR scalar cdf1 calls in this common case.
   double logS_LT;
@@ -8838,7 +8892,13 @@ double c_log_likelihood_race(
       if (uniform_LT < 0.0) uniform_LT = 0.0;
       if (uniform_UT < 0.0) uniform_UT = R_PosInf;
 
-      if (any_trunc && uniform_LT_ok && uniform_UT_ok && !has_RACE_col) {
+      // Global kill is excluded: logS_at_t zeroes the kill rate for the racers
+      // (utils.h), so the batched survivor is the unkilled one.  The per-trial
+      // scalar path routes through get_trunc_normaliser_rowmajor_cpp, which
+      // switches the kill back on for the single-accumulator case and rejects
+      // the multi-accumulator one.
+      if (any_trunc && uniform_LT_ok && uniform_UT_ok && !has_RACE_col &&
+          !global_omission_active) {
         // Pass 2: batch-compute logZ = log_diff_exp(logS(LT), logS(UT)) for all
         // truncated trials simultaneously.
         // RACE models are excluded: lba/rdm/lnr_logS_at_t always loops over the
@@ -10865,9 +10925,12 @@ double c_log_likelihood_corr_drift(
           const double lt = LT[start];
           const double ut = UT[start];
           double log_z = R_NegInf;
-          bool need_scalar_fallback = false;
+          // Under a global kill the batched survivors exclude the shared clock
+          // (see get_trunc_normaliser_rowmajor_cpp), so always take the scalar
+          // path, which corrects it or refuses.
+          bool need_scalar_fallback = node_ctx.has_global_kill();
 
-          if (R_FINITE(log_s_lt[static_cast<size_t>(j)])) {
+          if (!need_scalar_fallback && R_FINITE(log_s_lt[static_cast<size_t>(j)])) {
             if (ut == R_PosInf) {
               // For BAwL's defective tail, +Inf is part of the retained
               // [LT, Inf) window and must not be subtracted.
