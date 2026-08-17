@@ -696,8 +696,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // dfrq
-NumericVector dfrq(NumericVector t, NumericVector alpha, NumericVector beta, NumericVector h, NumericVector tau, bool log_out);
-RcppExport SEXP _EMC2_dfrq(SEXP tSEXP, SEXP alphaSEXP, SEXP betaSEXP, SEXP hSEXP, SEXP tauSEXP, SEXP log_outSEXP) {
+NumericVector dfrq(NumericVector t, NumericVector alpha, NumericVector beta, NumericVector h, NumericVector tau, NumericVector delta, bool log_out);
+RcppExport SEXP _EMC2_dfrq(SEXP tSEXP, SEXP alphaSEXP, SEXP betaSEXP, SEXP hSEXP, SEXP tauSEXP, SEXP deltaSEXP, SEXP log_outSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -706,14 +706,15 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< NumericVector >::type beta(betaSEXP);
     Rcpp::traits::input_parameter< NumericVector >::type h(hSEXP);
     Rcpp::traits::input_parameter< NumericVector >::type tau(tauSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type delta(deltaSEXP);
     Rcpp::traits::input_parameter< bool >::type log_out(log_outSEXP);
-    rcpp_result_gen = Rcpp::wrap(dfrq(t, alpha, beta, h, tau, log_out));
+    rcpp_result_gen = Rcpp::wrap(dfrq(t, alpha, beta, h, tau, delta, log_out));
     return rcpp_result_gen;
 END_RCPP
 }
 // pfrq
-NumericVector pfrq(NumericVector t, NumericVector alpha, NumericVector beta, NumericVector h, NumericVector tau, bool lower_tail, bool log_out);
-RcppExport SEXP _EMC2_pfrq(SEXP tSEXP, SEXP alphaSEXP, SEXP betaSEXP, SEXP hSEXP, SEXP tauSEXP, SEXP lower_tailSEXP, SEXP log_outSEXP) {
+NumericVector pfrq(NumericVector t, NumericVector alpha, NumericVector beta, NumericVector h, NumericVector tau, NumericVector delta, bool lower_tail, bool log_out);
+RcppExport SEXP _EMC2_pfrq(SEXP tSEXP, SEXP alphaSEXP, SEXP betaSEXP, SEXP hSEXP, SEXP tauSEXP, SEXP deltaSEXP, SEXP lower_tailSEXP, SEXP log_outSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -722,15 +723,16 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< NumericVector >::type beta(betaSEXP);
     Rcpp::traits::input_parameter< NumericVector >::type h(hSEXP);
     Rcpp::traits::input_parameter< NumericVector >::type tau(tauSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type delta(deltaSEXP);
     Rcpp::traits::input_parameter< bool >::type lower_tail(lower_tailSEXP);
     Rcpp::traits::input_parameter< bool >::type log_out(log_outSEXP);
-    rcpp_result_gen = Rcpp::wrap(pfrq(t, alpha, beta, h, tau, lower_tail, log_out));
+    rcpp_result_gen = Rcpp::wrap(pfrq(t, alpha, beta, h, tau, delta, lower_tail, log_out));
     return rcpp_result_gen;
 END_RCPP
 }
 // frq_rate
-NumericMatrix frq_rate(NumericVector alpha, NumericVector beta, NumericVector h, NumericVector tau);
-RcppExport SEXP _EMC2_frq_rate(SEXP alphaSEXP, SEXP betaSEXP, SEXP hSEXP, SEXP tauSEXP) {
+NumericMatrix frq_rate(NumericVector alpha, NumericVector beta, NumericVector h, NumericVector tau, NumericVector delta);
+RcppExport SEXP _EMC2_frq_rate(SEXP alphaSEXP, SEXP betaSEXP, SEXP hSEXP, SEXP tauSEXP, SEXP deltaSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -738,7 +740,8 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< NumericVector >::type beta(betaSEXP);
     Rcpp::traits::input_parameter< NumericVector >::type h(hSEXP);
     Rcpp::traits::input_parameter< NumericVector >::type tau(tauSEXP);
-    rcpp_result_gen = Rcpp::wrap(frq_rate(alpha, beta, h, tau));
+    Rcpp::traits::input_parameter< NumericVector >::type delta(deltaSEXP);
+    rcpp_result_gen = Rcpp::wrap(frq_rate(alpha, beta, h, tau, delta));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -749,6 +752,18 @@ BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
     rcpp_result_gen = Rcpp::wrap(frq_quantile_level());
+    return rcpp_result_gen;
+END_RCPP
+}
+// frq_h_inv_r
+NumericVector frq_h_inv_r(NumericVector y, NumericVector delta);
+RcppExport SEXP _EMC2_frq_h_inv_r(SEXP ySEXP, SEXP deltaSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type y(ySEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type delta(deltaSEXP);
+    rcpp_result_gen = Rcpp::wrap(frq_h_inv_r(y, delta));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -3172,10 +3187,11 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_simulate_bm_hit_times", (DL_FUNC) &_EMC2_simulate_bm_hit_times, 10},
     {"_EMC2_simulate_bm_hit_times_bb", (DL_FUNC) &_EMC2_simulate_bm_hit_times_bb, 14},
     {"_EMC2_simulate_gbm_hit_times_bb", (DL_FUNC) &_EMC2_simulate_gbm_hit_times_bb, 15},
-    {"_EMC2_dfrq", (DL_FUNC) &_EMC2_dfrq, 6},
-    {"_EMC2_pfrq", (DL_FUNC) &_EMC2_pfrq, 7},
-    {"_EMC2_frq_rate", (DL_FUNC) &_EMC2_frq_rate, 4},
+    {"_EMC2_dfrq", (DL_FUNC) &_EMC2_dfrq, 7},
+    {"_EMC2_pfrq", (DL_FUNC) &_EMC2_pfrq, 8},
+    {"_EMC2_frq_rate", (DL_FUNC) &_EMC2_frq_rate, 5},
     {"_EMC2_frq_quantile_level", (DL_FUNC) &_EMC2_frq_quantile_level, 0},
+    {"_EMC2_frq_h_inv_r", (DL_FUNC) &_EMC2_frq_h_inv_r, 2},
     {"_EMC2_pleakyba_norm", (DL_FUNC) &_EMC2_pleakyba_norm, 9},
     {"_EMC2_dleakyba_norm", (DL_FUNC) &_EMC2_dleakyba_norm, 9},
     {"_EMC2_dkilledleakyba", (DL_FUNC) &_EMC2_dkilledleakyba, 15},

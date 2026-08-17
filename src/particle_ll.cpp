@@ -681,7 +681,7 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
     out.ctx.erlang_omega_index = (out.ctx.kill_shape == 3) ? emc2col::rdmgbm::omega : -1;
     out.ctx.defective_upper_tail = true;
   } else if (type_std.find("FRQ") != std::string::npos) {
-    // Finite reservoir quorum (Math/FRQ.tex).  "FRQ" is not a substring of any
+    // Finite reservoir quorum.  "FRQ" is not a substring of any
     // other c_name and contains none, so its position among these branches is
     // free; it sits before BAwD only for readability.
     out.pdf1_ptr       = &dfrq_scalar;

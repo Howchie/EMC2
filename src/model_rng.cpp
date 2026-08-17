@@ -544,15 +544,26 @@ Rcpp::List rbawd_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
   return pack_result(res.R, res.rt, res.omitted, has_isTime, isTime);
 }
 
-// FRQ simulator.  pars columns: alpha, beta, h, tau, t0.
+// FRQ simulator.  pars columns: alpha, beta, h, tau, t0, delta.
 //
-// Exact, not approximate: Math/FRQ.tex Sec. 6 shows the process is
-// distributionally identical to drawing the latent quorum U ~ Beta(alpha, beta)
-// and inverting the registration CDF at U/p.  U > p means the reservoir
+// Exact, not approximate: the process is distributionally identical to drawing
+// the latent quorum U ~ Beta(alpha, beta) and inverting the registration CDF at
+// U/p.  That follows from F(x) = I_{q(x)}(alpha, beta) with q(x) = p G(x): the
+// decision time is the quantile transform of a Beta(alpha, beta) draw, so
+// U <= q(x) <=> T <= x, i.e. T = G^{-1}(U/p).  U > p means the reservoir
 // saturates below the required quorum, so the accumulator NEVER terminates and
 // the trial contributes +Inf -- the package's omission convention.  For integer
 // alpha = K and beta = N - K + 1 this reproduces explicitly building N cues and
 // waiting for the K-th.  Matches R's rFRQ (R/model_FRQ.R).
+//
+// With threshold variability (delta > 0) the latent quorum percentile is no
+// longer Beta: F(x) = H(I_{q(x)}(alpha, beta)), so the quantile transform runs
+// through H as well.  Draw V ~ U(0,1) and set U = qbeta(H^{-1}(V), alpha, beta);
+// then U <= q(x) <=> V <= F(x) exactly as before, and the omission test U > p is
+// unchanged because it is equivalent to V > h.  delta == 0 keeps the direct
+// rbeta draw rather than routing through qbeta(runif()), which is the same
+// distribution but a different RNG stream -- seeded FRQ simulations predating
+// delta must keep reproducing.
 // [[Rcpp::export]]
 Rcpp::List rfrq_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
                     Rcpp::LogicalVector ok) {
@@ -567,6 +578,10 @@ Rcpp::List rfrq_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
     if (!ci.count(nm)) Rcpp::stop("rfrq_cpp: missing parameter column '%s'.", nm);
   const int ia = ci.at("alpha"), ib = ci.at("beta"), ih = ci.at("h"),
             it = ci.at("tau"), it0 = ci.at("t0");
+  // Absent delta means the documented default of no threshold variability.
+  // Safe to default here, unlike on the likelihood path: this lookup is BY NAME,
+  // so a missing column cannot silently resolve to a different parameter.
+  const int idl = ci.count("delta") ? ci.at("delta") : -1;
 
   std::vector<double> dt(n_rows, R_PosInf);
   std::vector<double> t0col(n_rows);
@@ -576,9 +591,11 @@ Rcpp::List rfrq_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
     ok_row[r] = ok[r] ? 1 : 0;
     if (!ok[r]) continue;
     const FrqPars s = frq_derive(pars(r, ia), pars(r, ib), pars(r, ih),
-                                 pars(r, it));
+                                 pars(r, it), idl >= 0 ? pars(r, idl) : 0.0);
     if (!s.ok) continue;                       // invalid row: never finishes
-    const double u = R::rbeta(s.alpha, s.beta);
+    const double u = s.hh.active
+      ? R::qbeta(frq_h_inv(R::unif_rand(), s.hh), s.alpha, s.beta, 1, 0)
+      : R::rbeta(s.alpha, s.beta);
     if (!(u <= s.p)) continue;                 // quorum unreachable: omission
     const double d = -std::log1p(-u / s.p) / s.lambda;
     dt[r] = (R_FINITE(d) && d >= 0.0) ? d : R_PosInf;

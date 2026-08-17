@@ -1603,9 +1603,11 @@ inline void bawd_logS_at_t(double t, const double* const* cols,
 
 // ============================================================
 // FRQ (Finite Reservoir Quorum) adapters
-// Column layout: alpha=0, beta=1, h=2, tau=3, t0=4.  No optional columns and
-// no context flags -- the model has a single variant, and the conditional
-// quantile defining tau is the compile-time constant FRQ_QUANTILE.
+// Column layout: alpha=0, beta=1, h=2, tau=3, t0=4, delta=5.  No optional
+// columns and no context flags -- the model has a single variant, and the
+// conditional quantile defining tau is the compile-time constant FRQ_QUANTILE.
+// delta is the threshold-variability half-width; it is zero by default, and
+// frq_derive() then builds an inactive generator that costs nothing.
 //
 // The upper tail is ALWAYS defective: an accumulator terminates only with
 // probability h = I_p(alpha, beta) < 1, and the leftover mass 1 - h sits at
@@ -1623,7 +1625,8 @@ inline double dfrq_scalar(double t, const double* par, void* /*ctx_*/) {
   const double tt = t - par[emc2col::frq::t0];
   if (t <= 0.0 || tt <= 0.0) return 0.0;
   const FrqPars s = frq_derive(par[emc2col::frq::alpha], par[emc2col::frq::beta],
-                               par[emc2col::frq::h], par[emc2col::frq::tau]);
+                               par[emc2col::frq::h], par[emc2col::frq::tau],
+                               par[emc2col::frq::delta]);
   return frq_pdf_natural_dt(tt, s);
 }
 
@@ -1633,7 +1636,8 @@ inline double pfrq_scalar(double t, const double* par, void* /*ctx_*/) {
   if (t <= 0.0 || tt <= 0.0) return 0.0;
   // tt == Inf deliberately reaches the kernel: the CDF there is h, not one.
   const FrqPars s = frq_derive(par[emc2col::frq::alpha], par[emc2col::frq::beta],
-                               par[emc2col::frq::h], par[emc2col::frq::tau]);
+                               par[emc2col::frq::h], par[emc2col::frq::tau],
+                               par[emc2col::frq::delta]);
   return frq_cdf_natural_dt(tt, s);
 }
 
@@ -1646,6 +1650,7 @@ inline void dfrq_raw(const double* rt, const double* const* cols, int n_rows,
   const double* h_  = cols[emc2col::frq::h];
   const double* ta_ = cols[emc2col::frq::tau];
   const double* t0_ = cols[emc2col::frq::t0];
+  const double* de_ = cols[emc2col::frq::delta];
   FrqMemo memo;
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
@@ -1658,7 +1663,7 @@ inline void dfrq_raw(const double* rt, const double* const* cols, int n_rows,
       out[i] = raw_log_zero(min_ll, floor_raw);
       continue;
     }
-    const FrqPars& s = memo.get(al_[i], be_[i], h_[i], ta_[i]);
+    const FrqPars& s = memo.get(al_[i], be_[i], h_[i], ta_[i], de_[i]);
     const double log_pdf = frq_log_pdf_dt(tt, s);
     out[i] = (log_pdf > R_NegInf && emc2_isfinite(log_pdf))
       ? raw_log_value(log_pdf, min_ll, floor_raw)
@@ -1675,6 +1680,7 @@ inline void pfrq_raw(const double* rt, const double* const* cols, int n_rows,
   const double* h_  = cols[emc2col::frq::h];
   const double* ta_ = cols[emc2col::frq::tau];
   const double* t0_ = cols[emc2col::frq::t0];
+  const double* de_ = cols[emc2col::frq::delta];
   FrqMemo memo;
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
@@ -1683,7 +1689,7 @@ inline void pfrq_raw(const double* rt, const double* const* cols, int n_rows,
     if (R_IsNA(al_[i]) || !isok[i]) { out[i] = 0.0; continue; }
     const double tt = rt[i] - t0_[i];
     if (tt <= 0.0 || rt[i] <= 0.0) { out[i] = 0.0; continue; }
-    const FrqPars& s = memo.get(al_[i], be_[i], h_[i], ta_[i]);
+    const FrqPars& s = memo.get(al_[i], be_[i], h_[i], ta_[i], de_[i]);
     const double log_surv = frq_log_surv_dt(tt, s);
     if (ISNAN(log_surv)) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
     out[i] = (log_surv > R_NegInf) ? log_surv
@@ -1700,6 +1706,7 @@ inline void frq_logS_at_t(double t, const double* const* cols,
   const double* h_  = cols[emc2col::frq::h];
   const double* ta_ = cols[emc2col::frq::tau];
   const double* t0_ = cols[emc2col::frq::t0];
+  const double* de_ = cols[emc2col::frq::delta];
   FrqMemo memo;
   for (int j = 0; j < n_unique_trials; ++j) {
     if (!trunc_mask[j]) continue;
@@ -1711,7 +1718,7 @@ inline void frq_logS_at_t(double t, const double* const* cols,
       if (!isok_all[r] || R_IsNA(al_[r])) { bad = true; break; }
       const double tt = t - t0_[r];
       if (tt <= 0.0) continue;  // not started: survivor one
-      const FrqPars& s = memo.get(al_[r], be_[r], h_[r], ta_[r]);
+      const FrqPars& s = memo.get(al_[r], be_[r], h_[r], ta_[r], de_[r]);
       const double log_surv = frq_log_surv_dt(tt, s);
       if (ISNAN(log_surv)) { bad = true; break; }
       logS += log_surv;

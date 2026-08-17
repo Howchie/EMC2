@@ -251,11 +251,13 @@ rule("2d. The same thing as an EMC2 design, on the sampled (transformed) scale")
 
 matchfun <- function(d) d$S == d$lR
 ADmat <- matrix(c(-1/2, 1/2), ncol = 1, dimnames = list(NULL, "d"))
-dat <- droplevels(forstmann[forstmann$subjects == levels(forstmann$subjects)[1], ])
+dat <- forstmann
 des <- design(data = dat, model = FRQ, matchfun = matchfun,
-              formula = list(alpha ~ 1, beta ~ 1, h ~ lM, tau ~ lM, t0 ~ 1),
+              formula = list(alpha ~ E, beta ~ 1, h ~ lM, tau ~ lM, t0 ~ 1),
               contrasts = list(h = list(lM = ADmat), tau = list(lM = ADmat)),
-              report_p_vector = FALSE)
+              report_p_vector = FALSE,LT=.25,UT=1.5)
+
+
 
 # Sampled scale: alpha/beta/tau/t0 are log, h is probit.  These are the
 # "typical" row above, with the correct/error split from scenario 3.
@@ -264,6 +266,7 @@ pv <- c(alpha = log(2), beta = log(3),
         tau = log(0.35), tau_lMd = -0.45,      # tau: 0.44 error -> 0.28 correct
         t0 = log(0.20))
 pv <- pv[names(sampled_pars(des))]
+prior_FRQ <- prior(des, mu_mean = pv)
 cat("sampled_pars scale:\n"); print(round(pv, 3))
 cat("\nmapped to the natural + generative scale:\n")
 print(mapped_pars(des, pv, digits = 4))
@@ -280,3 +283,7 @@ print(round(do.call(rbind, tapply(sim$rt[ok], sim$R[ok] == sim$S[ok],
 cat("\nStart here: alpha ~ 2, beta ~ 3, t0 ~ 0.2, tau ~ 0.3 with the design on\n",
     "h and tau, and let the shapes stay at ~1 df each.  See ?FRQ on why\n",
     "crossing alpha/beta with the same factors as tau gives a ridge.\n", sep = "")
+emc = make_emc(dat,des,prior=prior_FRQ)
+emc = fit(emc,cores_per_chain = 10, cores_for_chains = 3)
+pred = predict(emc)
+plot_cdf(dat,pred,defective_factor = "R",factors = c("S","E"))

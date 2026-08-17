@@ -6,9 +6,9 @@
 #   1. A small simulation of the LITERAL generative process (N Bernoulli(p)
 #      availability indicators, Exponential(lambda) latencies, K-th order
 #      statistic).  It shares no formula with the kernel, so it is what
-#      establishes that Math/FRQ.tex's closed form is the right closed form.
-#   2. An independent R transcription of the boxed formulas.
-#   3. The doc's implementation contract (Sec. 20): F(Inf) = h, S(Inf) = 1 - h,
+#      establishes that the kernel's closed form is the right closed form.
+#   2. An independent R transcription of the closed-form density and CDF.
+#   3. The defective-distribution contract: F(Inf) = h, S(Inf) = 1 - h,
 #      integrate(f) = h.
 #   4. That the parameterisation means what it claims: tau is the conditional
 #      median, and (alpha, beta, h, tau) inverts to the generating (p, lambda).
@@ -21,7 +21,8 @@
 # Independent references
 # ---------------------------------------------------------------------------
 
-# (alpha, beta, h, tau) -> (p, lambda), transcribed from Math/FRQ.tex Sec. 7.
+# (alpha, beta, h, tau) -> (p, lambda).  h = I_p(alpha, beta) inverts to p, and
+# tau is pinned by F(tau) = h/2, i.e. q(tau) = qbeta(h/2, alpha, beta).
 ref_pl <- function(a, b, h, tau) {
   p <- qbeta(h, a, b)
   u <- qbeta(0.5 * h, a, b)
@@ -135,10 +136,10 @@ test_that("the log output equals the log of the natural output", {
 })
 
 # ---------------------------------------------------------------------------
-# 3. The doc's implementation contract (Sec. 20)
+# 3. The defective-distribution contract
 # ---------------------------------------------------------------------------
 
-test_that("the asymptotic and integral checks of Sec. 20 hold", {
+test_that("the asymptotic and integral checks of the defective tail hold", {
   for (i in seq_len(nrow(frq_grid))) {
     g <- frq_grid[i, ]
     # cdf(+Inf) = h and survival(+Inf) = 1 - h.  These break if the tail is
@@ -208,7 +209,7 @@ test_that("frq_rate is the exact inverse of h = I_p(alpha, beta)", {
 })
 
 test_that("K = N removes p from the conditional RT distribution", {
-  # Math/FRQ.tex Sec. 4's exceptional case.  With beta = 1 (K = N),
+  # The exceptional case.  With beta = 1 (K = N),
   # F(x) = [p G(x)]^N, so F(x)/h = G(x)^N no longer depends on p: availability
   # becomes a pure omission mechanism once you condition on responding.  For
   # beta > 1 it emphatically does not, and that is the claim distinguishing
@@ -225,7 +226,7 @@ test_that("K = N removes p from the conditional RT distribution", {
 })
 
 test_that("alpha controls the order of the leading edge", {
-  # Sec. 5: G(x) ~ lambda x near zero, so f(x) is proportional to x^(alpha-1)
+  # G(x) ~ lambda x near zero, so f(x) is proportional to x^(alpha-1)
   # and the log-log slope of the density at the leading edge is alpha - 1.
   xs <- c(1e-7, 2e-7)
   for (a in c(1, 1.5, 3, 5.5)) {
@@ -275,10 +276,19 @@ test_that("the constructor exposes the documented contract", {
   # p_types ORDER is the kernel column order (src/col_registry.h); a silent
   # reordering here is a silent wrong answer, so it is pinned literally.
   expect_equal(names(m$p_types),
-               c("alpha", "beta", "h", "tau", "t0", "pContaminant", "pGuess"))
-  expect_equal(m$p_types_canonical, c("alpha", "beta", "h", "tau", "t0"))
-  expect_equal(unname(m$transform$func[c("alpha", "beta", "h", "tau", "t0")]),
-               c("exp", "exp", "pnorm", "exp", "exp"))
+               c("alpha", "beta", "h", "tau", "t0", "delta",
+                 "pContaminant", "pGuess"))
+  expect_equal(m$p_types_canonical,
+               c("alpha", "beta", "h", "tau", "t0", "delta"))
+  expect_equal(unname(m$transform$func[c("alpha", "beta", "h", "tau", "t0",
+                                         "delta")]),
+               c("exp", "exp", "pnorm", "exp", "exp", "exp"))
+  # Threshold variability must default OFF: the base FRQ has to be what a user
+  # gets without asking, and delta = 0 must be exactly reachable rather than
+  # merely approached, which is why 0 is a bound exception.
+  expect_equal(exp(m$p_types[["delta"]]), 0)
+  expect_equal(unname(m$bound$minmax[, "delta"]), c(1e-4, 6))
+  expect_equal(m$bound$exception[["delta"]], 0)
   # The default must not declare an implausible omission rate for a parameter
   # the user left out of the formula.
   expect_equal(pnorm(m$p_types[["h"]]), 0.95, tolerance = 1e-12)
@@ -319,7 +329,7 @@ test_that("the (h, tau) coordinates are representable on the whole bounded box",
 })
 
 test_that("dfun/pfun apply t0 and call the same kernel", {
-  pars <- cbind(alpha = 2, beta = 3, h = 0.9, tau = 0.35, t0 = 0.15)
+  pars <- cbind(alpha = 2, beta = 3, h = 0.9, tau = 0.35, t0 = 0.15, delta = 0)
   pars <- pars[rep(1, 5), ]
   rt <- c(0.05, 0.15, 0.3, 0.8, Inf)
   # Below t0 the density and CDF are zero; at rt = Inf the CDF is h, not one.
@@ -332,13 +342,14 @@ test_that("dfun/pfun apply t0 and call the same kernel", {
 })
 
 test_that("Ttransform reports the generative parameters", {
-  pars <- cbind(alpha = 2, beta = 3, h = 0.9, tau = 0.35, t0 = 0.15)
+  pars <- cbind(alpha = 2, beta = 3, h = 0.9, tau = 0.35, t0 = 0.15, delta = 0)
   out <- FRQ()$Ttransform(pars, NULL)
   want <- ref_pl(2, 3, 0.9, 0.35)
   expect_equal(unname(out[1, "p"]), want[["p"]], tolerance = 1e-12)
   expect_equal(unname(out[1, "lambda"]), want[["lambda"]], tolerance = 1e-10)
   expect_equal(unname(out[1, "N"]), 4)          # alpha + beta - 1
   expect_equal(unname(out[1, "d"]), 0.5)        # alpha / N
+  expect_equal(unname(out[1, "sQ"]), 0)         # delta / sqrt(3)
   # Ttransform must not disturb the leading columns the kernel indexes, and
   # must not invent row names that then travel with the parameter matrix.
   expect_equal(out[, colnames(pars), drop = FALSE], pars)
@@ -367,7 +378,7 @@ frq_ll <- function(emc, p, p_types_override = NULL) {
                     min_ll = log(1e-10), trend = model$trend)
 }
 
-# The independent race likelihood of Sec. 14/20:
+# The independent race likelihood:
 #   log L_i(t) = log f_i(t) + sum_{j != i} log S_j(t),
 #   log L(omit) = sum_j log S_j(Inf) = sum_j log(1 - h_j).
 ref_race_ll <- function(dadm, pars) {
@@ -427,7 +438,7 @@ test_that("a p_types reordering is caught by the column contract", {
 })
 
 test_that("an omission scores exactly sum_j log(1 - h_j)", {
-  # Sec. 15 and Sec. 20's no_response contract.  With an infinite observation
+  # The no_response contract.  With an infinite observation
   # window an omission's likelihood is the product of the accumulators'
   # never-finish masses -- true only if the survivor saturates at 1 - h
   # instead of falling to zero.
@@ -575,7 +586,7 @@ test_that("the C++ and R simulators agree distributionally with the CDF", {
     fin <- is.finite(dat$rt)
     emp <- vapply(probe, function(x) mean(fin & dat$rt <= x), numeric(1))
     expect_lt(max(abs(emp - th)), 0.03)
-    # Race-level omission rate is prod(1 - h_i) = (1 - h)^2 (Sec. 15).
+    # Race-level omission rate is prod(1 - h_i) = (1 - h)^2.
     expect_lt(abs(mean(!fin) - 0.01), 0.006)
     expect_true(all(is.na(dat$R[!fin])))
     expect_true(all(dat$rt[fin] > 0.1))
@@ -583,7 +594,7 @@ test_that("the C++ and R simulators agree distributionally with the CDF", {
 })
 
 test_that("the simulator reproduces the literal reservoir at integer shapes", {
-  # A second route to the Sec. 6 claim, now through the package's simulator
+  # A second route to the order-statistic claim, now through the package's simulator
   # rather than its density: for integer alpha = K and beta = N - K + 1 the
   # Beta-quorum draw must be indistinguishable from building N cues.
   skip_on_cran()
@@ -657,4 +668,134 @@ test_that("the likelihood is maximised at the generating parameters", {
       expect_lt(frq_ll(e, p2), ll0)
     }
   }
+})
+
+# ---------------------------------------------------------------------------
+# 8. Threshold variability (delta)
+#
+# The extension is F(x) = H_delta(I_{q(x)}(alpha, beta)) with H_delta the
+# uniform-log-odds generator.  Everything below either (a) pins delta = 0 to the
+# untransformed kernel, or (b) checks the delta > 0 kernel against an
+# INDEPENDENT construction of H -- the definition it is derived from, namely the
+# average of logit^{-1}(logit z + eps) over eps ~ U(-delta, delta) -- rather
+# than against a transcription of the same closed form.
+# ---------------------------------------------------------------------------
+
+# H by quadrature over the latent criterion state.  Shares no algebra with the
+# kernel's closed form, so agreement is evidence the closed form is right.
+ref_H <- function(z, d) {
+  if (d == 0) return(z)
+  lz <- log(z) - log1p(-z)
+  integrate(function(e) 1 / (1 + exp(-(lz + e))), -d, d,
+            rel.tol = 1e-12)$value / (2 * d)
+}
+
+# The transformed CDF, built from the kernel's own (p, lambda) so that only the
+# H step is under test.
+ref_pH <- function(x, a, b, h, tau, d) {
+  pl <- EMC2:::frq_rate(a, b, h, tau, d)
+  q <- pl[1, "p"] * (-expm1(-pl[1, "lambda"] * x))
+  vapply(pbeta(q, a, b), ref_H, numeric(1), d = d)
+}
+
+test_that("delta defaults to zero and is exactly the untransformed model", {
+  x <- c(0.05, 0.2, 0.6, 2, Inf)
+  # Passing delta = 0 explicitly must be indistinguishable from omitting it,
+  # bit for bit: the base model is a branch, not a limit.
+  expect_identical(EMC2:::pfrq(x, 2, 3, 0.9, 0.4, 0),
+                   EMC2:::pfrq(x, 2, 3, 0.9, 0.4))
+  expect_identical(EMC2:::dfrq(x, 2, 3, 0.9, 0.4, 0),
+                   EMC2:::dfrq(x, 2, 3, 0.9, 0.4))
+  expect_identical(EMC2:::frq_rate(2, 3, 0.9, 0.4, 0),
+                   EMC2:::frq_rate(2, 3, 0.9, 0.4))
+  # and the base model is still the one the independent reference describes
+  expect_equal(EMC2:::pfrq(x[1:4], 2, 3, 0.9, 0.4, 0), ref_p(x[1:4], 2, 3, 0.9, 0.4))
+})
+
+test_that("the delta > 0 CDF matches the marginalised criterion state", {
+  x <- c(0.02, 0.1, 0.35, 0.9, 4)
+  for (d in c(0.25, 1, 3, 6)) {
+    for (i in c(1, 2, 5)) {
+      g <- frq_grid[i, ]
+      expect_equal(EMC2:::pfrq(x, g$a, g$b, g$h, g$tau, d),
+                   ref_pH(x, g$a, g$b, g$h, g$tau, d),
+                   tolerance = 1e-9,
+                   info = paste("delta", d, "row", i))
+    }
+  }
+})
+
+test_that("delta preserves the defective contract and the meaning of h and tau", {
+  for (d in c(0.25, 1, 3, 6)) for (i in seq_len(nrow(frq_grid))) {
+    g <- frq_grid[i, ]
+    lab <- paste("delta", d, "row", i)
+    # tau stays the CONDITIONAL MEDIAN and h the completion probability: the
+    # whole point of inverting through H^{-1} is that the two anchors do not
+    # move when delta does.
+    expect_equal(EMC2:::pfrq(g$tau, g$a, g$b, g$h, g$tau, d), g$h / 2,
+                 tolerance = 1e-10, info = lab)
+    expect_equal(EMC2:::pfrq(Inf, g$a, g$b, g$h, g$tau, d), g$h,
+                 tolerance = 1e-10, info = lab)
+    # The survivor still reaches 1 - h through the reflection, never a
+    # subtraction, so it is accurate even at h = 0.999.
+    expect_equal(EMC2:::pfrq(Inf, g$a, g$b, g$h, g$tau, d, lower_tail = FALSE),
+                 1 - g$h, tolerance = 1e-10, info = lab)
+    # The density is the derivative of that CDF and integrates to h, not 1.
+    expect_equal(integrate(function(t) EMC2:::dfrq(t, g$a, g$b, g$h, g$tau, d),
+                           0, Inf, rel.tol = 1e-10,
+                           subdivisions = 2000L)$value,
+                 g$h, tolerance = 1e-8, info = lab)
+  }
+})
+
+test_that("the density is the derivative of the CDF under delta", {
+  eps <- 1e-5
+  for (d in c(0.5, 2, 5)) {
+    x <- c(0.1, 0.3, 0.7, 1.5)
+    fd <- (EMC2:::pfrq(x + eps, 2.5, 1.4, 0.85, 0.4, d) -
+           EMC2:::pfrq(x - eps, 2.5, 1.4, 0.85, 0.4, d)) / (2 * eps)
+    expect_equal(EMC2:::dfrq(x, 2.5, 1.4, 0.85, 0.4, d), fd,
+                 tolerance = 1e-6, info = paste("delta", d))
+  }
+})
+
+test_that("H is invertible and the family nests the base model as delta -> 0", {
+  y <- c(1e-9, 1e-3, 0.1, 0.5, 0.9, 1 - 1e-9)
+  for (d in c(0.3, 1, 3, 6))
+    expect_equal(vapply(EMC2:::frq_h_inv_r(y, d), ref_H, numeric(1), d = d), y,
+                 tolerance = 1e-12, info = paste("delta", d))
+  # H_delta(z) - z = (delta^2/6) z(1-z)(1-2z) + O(delta^4): the departure is
+  # SECOND order, so delta is a boundary parameter with zero score at zero.
+  # Practically that means small delta is nearly unidentified -- the sampler
+  # needs the bound exception, not a limit.
+  x <- c(0.05, 0.3, 1)
+  base <- EMC2:::pfrq(x, 2, 3, 0.9, 0.4, 0)
+  prev <- Inf
+  for (d in c(1e-3, 1e-4, 1e-5)) {
+    dev <- max(abs(EMC2:::pfrq(x, 2, 3, 0.9, 0.4, d) - base))
+    expect_lt(dev, prev)
+    prev <- dev
+  }
+  expect_lt(prev, 1e-10)
+})
+
+test_that("the simulator draws from the delta > 0 likelihood", {
+  skip_on_cran()
+  set.seed(4)
+  n <- 4e4
+  d <- 2
+  pars <- cbind(alpha = 2, beta = 3, h = 0.8, tau = 0.4, t0 = 0.15,
+                delta = d)[rep(1, n), ]
+  sim <- EMC2:::rfrq_cpp(pars, "1", rep(TRUE, n))
+  fin <- is.finite(sim$rt)
+  # The omission rate is 1 - h whatever delta does to the finite RTs.
+  expect_equal(mean(fin), 0.8, tolerance = 0.01)
+  # ... and the finite RTs follow the transformed CDF, not the base one.
+  probs <- seq(0.1, 0.9, 0.1)
+  qs <- quantile(sim$rt[fin], probs)
+  expect_equal(unname(EMC2:::pfrq(qs - 0.15, 2, 3, 0.8, 0.4, d) / 0.8),
+               probs, tolerance = 0.02)
+  expect_false(isTRUE(all.equal(
+    unname(EMC2:::pfrq(qs - 0.15, 2, 3, 0.8, 0.4, 0) / 0.8), probs,
+    tolerance = 0.02)))
 })

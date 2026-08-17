@@ -120,15 +120,21 @@ namespace bawd_logn {
   }
 }
 
-// R/model_FRQ.R — FRQ (finite reservoir quorum; Math/FRQ.tex).  alpha/beta are
-// the Beta shapes of the latent quorum U ~ Beta(alpha, beta) -- the doc's A and
-// R -- with R renamed because it is a reserved data column name in EMC2
+// R/model_FRQ.R — FRQ (finite reservoir quorum).  alpha/beta are the Beta
+// shapes of the latent quorum U ~ Beta(alpha, beta), i.e. the quorum size K
+// and the residual redundancy N - K + 1.  The latter is called `beta` rather
+// than `R` because `R` is a reserved data column name in EMC2
 // (R/design.R:251).  h is the eventual completion probability and tau the
 // conditional median decision time; the kernel inverts both to (p, lambda).
+// delta is between-trial threshold variability (half-width of the uniform
+// log-odds shift of the quorum percentile) and is REQUIRED rather than
+// optional even though it defaults to zero: an optional trailing column is
+// resolved positionally, so a design lacking it would silently read whatever
+// parameter happened to land in slot 5 instead of erroring.
 namespace frq {
-  enum : int { alpha = 0, beta, h, tau, t0, N_REQ };
+  enum : int { alpha = 0, beta, h, tau, t0, delta, N_REQ };
   inline ColSpec spec() {
-    static const char* n[] = {"alpha", "beta", "h", "tau", "t0"};
+    static const char* n[] = {"alpha", "beta", "h", "tau", "t0", "delta"};
     return {n, N_REQ, "FRQ"};
   }
 }

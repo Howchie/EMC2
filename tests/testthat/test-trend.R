@@ -441,6 +441,41 @@ LNR_covmap <- make_emc(dat, design_base, compress = FALSE, n_chains = 1, type = 
 test_that("trend_covmap", {
   expect_snapshot(init_chains(LNR_covmap, particles = 3, cores_per_chain = 1)[[1]]$samples)
 })
+
+# A one-column map is a valid and common trend specification.  Keep this test
+# compressed so both the contraction and per-subject map splitting paths are
+# exercised; the map must remain an n x 1 matrix throughout.
+single_cov_map <- make_trend(
+  par_names = "m",
+  cov_names = list("covariate1"),
+  kernels = "exp_incr",
+  maps = list(map1 = function(dadm, covs) {
+    matrix(1, nrow = nrow(dadm), ncol = 1,
+           dimnames = list(NULL, covs))
+  })
+)
+single_cov_design <- design(
+  data = dat,
+  trend = single_cov_map,
+  formula = list(m ~ lM, s ~ 1, t0 ~ 1),
+  contrasts = list(lM = ADmat),
+  matchfun = matchfun,
+  model = LNR
+)
+LNR_single_cov_map <- make_emc(
+  dat, single_cov_design, compress = TRUE, n_chains = 1, type = "single"
+)
+
+test_that("single-column covariate maps retain matrix shape", {
+  map <- attr(LNR_single_cov_map[[1]]$data[[1]], "covariate_maps")[[1]]
+  expect_true(is.matrix(map))
+  expect_equal(ncol(map), 1L)
+  expect_equal(nrow(map), nrow(LNR_single_cov_map[[1]]$data[[1]]))
+  initialized <- init_chains(
+    LNR_single_cov_map, particles = 3, cores_per_chain = 1
+  )
+  expect_true(initialized[[1]]$init)
+})
 #
 #
 # ##

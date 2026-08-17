@@ -1,4 +1,4 @@
-// R-callable entry points for FRQ (Math/FRQ.tex).
+// R-callable entry points for FRQ.
 //
 // These live in their own translation unit rather than in model_FRQ.h because
 // the header is also included by model_rng.cpp for the simulator, and a header
@@ -29,16 +29,19 @@ static inline double frq_pick(const NumericVector& x, int i) {
 
 // [[Rcpp::export]]
 NumericVector dfrq(NumericVector t, NumericVector alpha, NumericVector beta,
-                   NumericVector h, NumericVector tau, bool log_out = false) {
+                   NumericVector h, NumericVector tau,
+                   NumericVector delta = NumericVector::create(0.0),
+                   bool log_out = false) {
   const int n = t.size();
   frq_check_len(alpha, n, "alpha"); frq_check_len(beta, n, "beta");
   frq_check_len(h, n, "h");         frq_check_len(tau, n, "tau");
+  frq_check_len(delta, n, "delta");
   NumericVector out(n);
   auto pick = frq_pick;
   FrqMemo memo;
   for (int i = 0; i < n; ++i) {
     const FrqPars& s = memo.get(pick(alpha, i), pick(beta, i), pick(h, i),
-                                pick(tau, i));
+                                pick(tau, i), pick(delta, i));
     const double lp = frq_log_pdf_dt(t[i], s);
     out[i] = log_out ? lp : ((lp > R_NegInf) ? std::exp(lp) : 0.0);
   }
@@ -51,17 +54,19 @@ NumericVector dfrq(NumericVector t, NumericVector alpha, NumericVector beta,
 // avoid that subtraction.
 // [[Rcpp::export]]
 NumericVector pfrq(NumericVector t, NumericVector alpha, NumericVector beta,
-                   NumericVector h, NumericVector tau, bool lower_tail = true,
-                   bool log_out = false) {
+                   NumericVector h, NumericVector tau,
+                   NumericVector delta = NumericVector::create(0.0),
+                   bool lower_tail = true, bool log_out = false) {
   const int n = t.size();
   frq_check_len(alpha, n, "alpha"); frq_check_len(beta, n, "beta");
   frq_check_len(h, n, "h");         frq_check_len(tau, n, "tau");
+  frq_check_len(delta, n, "delta");
   NumericVector out(n);
   auto pick = frq_pick;
   FrqMemo memo;
   for (int i = 0; i < n; ++i) {
     const FrqPars& s = memo.get(pick(alpha, i), pick(beta, i), pick(h, i),
-                                pick(tau, i));
+                                pick(tau, i), pick(delta, i));
     double lp;
     if (lower_tail) {
       lp = frq_log_cdf_dt(t[i], s);
@@ -81,19 +86,22 @@ NumericVector pfrq(NumericVector t, NumericVector alpha, NumericVector beta,
 // two-column matrix, NA in both columns for a rejected parameter row.
 // [[Rcpp::export]]
 NumericMatrix frq_rate(NumericVector alpha, NumericVector beta,
-                       NumericVector h, NumericVector tau) {
+                       NumericVector h, NumericVector tau,
+                       NumericVector delta = NumericVector::create(0.0)) {
   // Length is the longest argument, not alpha's: a scalar alpha against a
   // vector beta has to give one row per beta.
   const int n = static_cast<int>(std::max(std::max(alpha.size(), beta.size()),
-                                          std::max(h.size(), tau.size())));
+                                 std::max(std::max(h.size(), tau.size()),
+                                          delta.size())));
   frq_check_len(alpha, n, "alpha"); frq_check_len(beta, n, "beta");
   frq_check_len(h, n, "h");         frq_check_len(tau, n, "tau");
+  frq_check_len(delta, n, "delta");
   NumericMatrix out(n, 2);
   auto pick = frq_pick;
   FrqMemo memo;
   for (int i = 0; i < n; ++i) {
     const FrqPars& s = memo.get(pick(alpha, i), pick(beta, i), pick(h, i),
-                                pick(tau, i));
+                                pick(tau, i), pick(delta, i));
     out(i, 0) = s.ok ? s.p : NA_REAL;
     out(i, 1) = s.ok ? s.lambda : NA_REAL;
   }
@@ -105,4 +113,23 @@ NumericMatrix frq_rate(NumericVector alpha, NumericVector beta,
 // against the compiled constant rather than a copy of it.
 // [[Rcpp::export]]
 double frq_quantile_level() { return FRQ_QUANTILE; }
+
+// H^{-1} for the threshold-variability generator, exported for the same reason
+// frq_rate() is: the R simulator has to pull uniforms back through the SAME map
+// the likelihood uses, and a second implementation in R could drift from it.
+// Recycles `delta` against `y`.
+// [[Rcpp::export]]
+NumericVector frq_h_inv_r(NumericVector y, NumericVector delta) {
+  const int n = y.size();
+  frq_check_len(delta, n, "delta");
+  NumericVector out(n);
+  double last = R_NaN;
+  FrqH H;
+  for (int i = 0; i < n; ++i) {
+    const double d = frq_pick(delta, i);
+    if (d != last) { H = frq_h_make(d); last = d; }
+    out[i] = H.ok ? frq_h_inv(y[i], H) : NA_REAL;
+  }
+  return out;
+}
 

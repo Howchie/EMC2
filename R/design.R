@@ -862,6 +862,28 @@ compress_dadm <- function(da,designs,Fcov,Ffun)
 
     contract <- !duplicated(cells)
     out <- da[contract,,drop=FALSE]
+    # Covariate maps are stored as attributes on the expanded data frame.
+    # Subsetting a data frame does not subset arbitrary attributes, so without
+    # explicitly carrying the maps through the contraction they retain the
+    # expanded row count and no longer align with `out`.  Preserve matrix
+    # dimensions as well: a one-column map must remain an n x 1 matrix rather
+    # than being simplified to a vector.
+    covariate_maps <- attr(da, "covariate_maps")
+    if (!is.null(covariate_maps)) {
+      covariate_maps <- lapply(covariate_maps, function(map) {
+        if (is.null(dim(map))) {
+          if (length(map) != nrow(da)) {
+            stop("Each covariate map must have one value per expanded data row")
+          }
+          map <- matrix(map, ncol = 1L)
+        }
+        if (!is.matrix(map) || nrow(map) != nrow(da)) {
+          stop("Each covariate map must be a matrix with one row per expanded data row")
+        }
+        map[contract, , drop = FALSE]
+      })
+      attr(out, "covariate_maps") <- covariate_maps
+    }
     attr(out,"contract") <- contract
     attr(out,"expand") <- as.numeric(factor(cells,levels=unique(cells)))
     lR1 <- da$lR==levels(da$lR)[[1]]
@@ -1060,7 +1082,28 @@ design_model <- function(data,design,model=NULL,
         covariate_map_functions <- trend_list[[i]]$map
         for(map_n in 1:length(covariate_map_names)) {
           covs <- trend_list[[i]]$covariate
-          attr(da, 'covariate_maps')[[covariate_map_names[map_n]]] <- covariate_map_functions[[map_n]](dadm=da, covs)
+          map_name <- covariate_map_names[map_n]
+          map <- covariate_map_functions[[map_n]](dadm=da, covs)
+
+          # A single covariate is allowed to be returned as a vector, but the
+          # downstream trend engine requires a numeric matrix. Normalize that
+          # case here and validate all maps before attaching them to `da`.
+          if (is.null(dim(map))) {
+            if (length(covs) != 1L || length(map) != nrow(da)) {
+              stop("Covariate map '", map_name,
+                   "' must have one value per expanded data row")
+            }
+            map <- matrix(map, ncol = 1L,
+                          dimnames = list(NULL, covs))
+          }
+          if (!is.matrix(map) || nrow(map) != nrow(da) ||
+              ncol(map) != length(covs) || !is.numeric(map)) {
+            stop("Covariate map '", map_name,
+                 "' must be a numeric matrix with one row per expanded data row",
+                 " and one column per covariate")
+          }
+          if (is.null(colnames(map))) colnames(map) <- covs
+          attr(da, 'covariate_maps')[[map_name]] <- map
         }
       }
     }
@@ -1424,7 +1467,19 @@ dm_list <- function(dadm)
 
     if(!is.null(attr(dadm, 'covariate_maps'))) {
       covariate_maps <- attr(dadm, 'covariate_maps')
-      for(ii in 1:length(covariate_maps)) covariate_maps[[ii]] <- covariate_maps[[ii]][isin,]
+      for(ii in 1:length(covariate_maps)) {
+        map <- covariate_maps[[ii]]
+        if (is.null(dim(map))) {
+          if (length(map) != nrow(dadm)) {
+            stop("Each covariate map must have one value per data row")
+          }
+          map <- matrix(map, ncol = 1L)
+        }
+        if (!is.matrix(map) || nrow(map) != nrow(dadm)) {
+          stop("Each covariate map must be a matrix with one row per data row")
+        }
+        covariate_maps[[ii]] <- map[isin, , drop = FALSE]
+      }
       attr(dl[[i]], 'covariate_maps') <- covariate_maps
     }
 

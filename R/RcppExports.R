@@ -141,20 +141,24 @@ simulate_gbm_hit_times_bb <- function(n, mu, sigma, z0, b0, binf, tau = 1.0, pow
     .Call(`_EMC2_simulate_gbm_hit_times_bb`, n, mu, sigma, z0, b0, binf, tau, pow, dt, t_max, start_floor, p_tol, eps_curv, adapt_factor, adaptive)
 }
 
-dfrq <- function(t, alpha, beta, h, tau, log_out = FALSE) {
-    .Call(`_EMC2_dfrq`, t, alpha, beta, h, tau, log_out)
+dfrq <- function(t, alpha, beta, h, tau, delta = as.numeric( c(0.0)), log_out = FALSE) {
+    .Call(`_EMC2_dfrq`, t, alpha, beta, h, tau, delta, log_out)
 }
 
-pfrq <- function(t, alpha, beta, h, tau, lower_tail = TRUE, log_out = FALSE) {
-    .Call(`_EMC2_pfrq`, t, alpha, beta, h, tau, lower_tail, log_out)
+pfrq <- function(t, alpha, beta, h, tau, delta = as.numeric( c(0.0)), lower_tail = TRUE, log_out = FALSE) {
+    .Call(`_EMC2_pfrq`, t, alpha, beta, h, tau, delta, lower_tail, log_out)
 }
 
-frq_rate <- function(alpha, beta, h, tau) {
-    .Call(`_EMC2_frq_rate`, alpha, beta, h, tau)
+frq_rate <- function(alpha, beta, h, tau, delta = as.numeric( c(0.0))) {
+    .Call(`_EMC2_frq_rate`, alpha, beta, h, tau, delta)
 }
 
 frq_quantile_level <- function() {
     .Call(`_EMC2_frq_quantile_level`)
+}
+
+frq_h_inv_r <- function(y, delta) {
+    .Call(`_EMC2_frq_h_inv_r`, y, delta)
 }
 
 pleakyba_norm <- function(t, A, b, v, sv, k, posdrift = TRUE, log_out = FALSE, launch = 0L) {

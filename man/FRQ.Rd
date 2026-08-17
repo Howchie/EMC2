@@ -10,110 +10,95 @@ FRQ()
 A model list defining the FRQ race model.
 }
 \description{
-A race model in which each accumulator draws on a \emph{finite reservoir} of
-potential evidence units and responds once a quorum of them has registered.
-There are \code{N} potential units; each is independently available with
-probability \code{p}, and an available unit registers at an \code{Exponential(lambda)}
-latency. The accumulator responds when \code{K} distinct units have registered,
-so its decision time is the \code{K}-th order statistic of the effective arrival
-times --- and is infinite whenever fewer than \code{K} units happen to be
-available at all.
+Model file to estimate the Finite Reservoir Quorum (FRQ) process in EMC2.
 }
 \details{
-\strong{Closed form.} By time \code{x} a fraction \verb{q(x) = p G(x)} of the reservoir has
-registered, so the number registered is \code{Binomial(N, q(x))} and a response
-has occurred exactly when that count reaches \code{K}. Writing the shapes as
-\code{alpha = K} and \code{beta = N - K + 1},
-\deqn{F(x) = I_{q(x)}(\alpha, \beta), \qquad
-      f(x) = \frac{p\,g(x)}{B(\alpha,\beta)}
-             q(x)^{\alpha-1}[1 - q(x)]^{\beta-1},}
-with \verb{q(x) = p(1 - exp(-lambda x))} for exponential registration. There is
-no first-passage solve and no quadrature anywhere in the likelihood. The
-model is a \emph{continuous relaxation}: \code{alpha} and \code{beta} are real-valued, and
-the integer case is the literal finite-cue process. Both shapes are bounded
-below at 1, which keeps the model on the geometry of a literal finite
-reservoir (\code{alpha = K >= 1}, \code{beta = N - K + 1 >= 1}) and keeps the density
-bounded at the leading edge, since \code{f(x) ~ x^(alpha-1)}.
+Model files are almost exclusively used in \code{design()}.
 
-\strong{Parameters are \verb{(alpha, beta, h, tau, t0)}, not \verb{(N, K, p, lambda, t0)}.}
-The generative coordinates are badly conditioned to estimate, so the exposed
-ones are the two Beta shapes plus two interpretable summaries: \code{h}, the
-probability that the accumulator \emph{ever} completes, and \code{tau}, its
-\strong{conditional median decision time}, \code{P(T <= tau | T < Inf) = 0.5}. The
-inversion back to the generative pair is exact,
-\deqn{p = I^{-1}_{h}(\alpha, \beta), \qquad
-      \lambda = -\log(1 - u/p)/\tau, \qquad
-      u = I^{-1}_{h/2}(\alpha, \beta),}
-and is performed inside the compiled kernel on every evaluation. \code{Ttransform}
-reports \code{p} and \code{lambda} (and \code{N = alpha + beta - 1}) through that same
-inversion, so \code{mapped_pars()} shows the generative description without the
-sampler ever having to live in it. Note \code{tau} is a decision-time median; the
-observed-RT conditional median is \code{t0 + tau}.
+Each accumulator draws on a finite pool of \code{N} potential evidence units and
+responds once a quorum of \code{K} of them has registered. A unit is usable on a
+given trial with probability \code{p}, and a usable unit registers after an
+exponentially distributed latency with rate \code{lambda}. If fewer than \code{K} of
+the \code{N} units happen to be usable, the quorum is never reached and the
+accumulator never responds, so the model produces omissions without needing
+a contaminant parameter.
 
 Default values are used for all parameters that are not explicitly listed in
 the \code{formula} argument of \code{design()}. They can also be accessed with
 \code{FRQ()$p_types}.\tabular{llllll}{
    \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Mapping} \tab \strong{Interpretation} \cr
-   \emph{alpha} \tab log \tab [1, Inf] \tab log(1) \tab  \tab Quorum depth (\code{K}). Controls the order of the leading edge: \code{f(x) ~ x^(alpha-1)}. \cr
-   \emph{beta} \tab log \tab [1, Inf] \tab log(1) \tab  \tab Residual redundancy (\code{N - K + 1}). For \code{p = 1} the late hazard approaches \code{beta * lambda}. \cr
-   \emph{h} \tab probit \tab [0, 1] \tab qnorm(0.95) \tab  \tab Probability the accumulator \emph{ever} completes; \code{1 - h} is its never-finish mass. \cr
-   \emph{tau} \tab log \tab [0, Inf] \tab log(0.5) \tab  \tab Conditional median decision time, in seconds. \cr
-   \emph{t0} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Non-decision time. \cr
+   \emph{alpha} \tab log \tab [1, Inf] \tab log(1) \tab  \tab Quorum size (\code{K}): how many evidence units are needed to respond \cr
+   \emph{beta} \tab log \tab [1, Inf] \tab log(1) \tab  \tab Spare capacity (\code{N - K + 1}): how many units beyond the quorum the pool holds \cr
+   \emph{h} \tab probit \tab [0, 1] \tab qnorm(0.95) \tab  \tab Probability that the accumulator ever responds \cr
+   \emph{tau} \tab log \tab [0, Inf] \tab log(0.5) \tab  \tab Median decision time on the trials where it does respond \cr
+   \emph{t0} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Non-decision time \cr
    \emph{pContaminant} \tab probit \tab [0, 1] \tab qnorm(0) \tab  \tab Optional \emph{omission} contaminant probability: mass at \code{rt = Inf} only, handled by the data pipeline \cr
    \emph{pGuess} \tab probit \tab [0, 1] \tab qnorm(0) \tab  \tab Optional uniform \emph{guess} (outlier) probability, mixed into observed RT densities over the guess window \cr
 }
 
 
-\strong{Two dimensions of evidence strength.} \code{h} and \code{tau} separate mechanisms
-that most race models confound: \code{h} is whether sufficient evidence is
-ultimately \emph{attainable}, and \code{tau} is how fast the process completes \emph{when
-it succeeds}. Crossing only \code{tau} with a condition gives a timing-only
-model, only \code{h} an attainability model, and both a dual model; these are
-nested in one likelihood. The recommended default is to share \code{alpha},
-\code{beta} and \code{t0} structurally across accumulators and let \code{h} and \code{tau} carry
-the design.
+The sampled parameters are not the generative ones. \code{alpha} and \code{beta} are
+the quorum size \code{K} and the spare capacity \code{N - K + 1}, treated as
+continuous and bounded below at 1, so \code{alpha = beta = 1} is a single-unit
+pool. In place of the availability probability \code{p} and the registration
+rate \code{lambda}, which are difficult to estimate, the model is parameterised
+by two directly interpretable quantities: \code{h}, the probability that the
+accumulator ever responds, and \code{tau}, its median decision time among the
+trials on which it does. \code{tau} is a decision time, so the median observed
+RT of a lone accumulator is \code{t0 + tau}. \code{mapped_pars()} reports \code{p} and
+\code{lambda}, along with the pool size \code{N} = \code{alpha} + \code{beta} - 1 and the
+quorum fraction \code{d} = \code{alpha}/\code{N}, next to the sampled parameters.
 
-Read the \code{h}-only design precisely: because the exposed coordinates hold the
-\emph{conditional median} \code{tau} fixed, moving \code{h} at fixed \verb{(alpha, beta, tau)}
-moves both generative parameters, since
-\verb{lambda = -log(1 - I^\{-1\}_\{h/2\}(alpha,beta) / I^\{-1\}_\{h\}(alpha,beta))/tau}
-depends on \code{h}. So an \code{h} manipulation alters eventual attainability while
-holding completion time \emph{given completion} fixed --- a cleaner statistical
-coordinate than \code{p}, but not "change \code{p} and leave \code{lambda} alone". The one
-exception is \code{beta = 1} (\code{K = N}), where \verb{F(x)/h = (1 - exp(-lambda x))^alpha}
-and \code{lambda} is genuinely free of \code{h}; there \code{h} is a pure availability
-coordinate. Note also that at \code{beta = 1} with a single accumulator, \code{h} and
-\code{pContaminant} are \emph{exactly} non-identified rather than merely correlated:
-finite responses depend only on \verb{(1 - pContaminant) h}. Races over several
-accumulators, or \code{beta > 1}, break that equivalence.
+\code{h} and \code{tau} are the two dimensions of evidence strength and are where the
+design normally goes: \code{h} is whether enough evidence is ultimately
+available, \code{tau} is how quickly the decision is reached when it is. A
+design on \code{tau} alone is a pure speed effect, on \code{h} alone a pure
+availability effect, and on both is the model that contains the other two.
+Note that holding \code{tau} fixed while \code{h} varies fixes the completion time
+\emph{given} completion, which is not the same as holding \code{lambda} fixed.
 
-\strong{Defectiveness is intrinsic.} Every accumulator fails permanently with
-probability \code{1 - h}, so an FRQ race produces omissions with no contaminant
-parameter at all. This is \emph{not} an additive omission mixture: \code{p} also
-reshapes the finite-RT distribution, and only in the corner \code{alpha + beta - 1 = alpha} (that is, \code{beta = 1}, \code{K = N}) does conditioning on a response
-remove \code{p} from the RT distribution entirely. A \code{J}-accumulator race fails
-only if every accumulator does, with probability \code{prod(1 - h_i)}, so
-appreciable per-accumulator defect is compatible with essentially no
-observable omissions --- two accumulators at \code{h = 0.98} give a race-level
-omission rate of 0.0004. Under a deadline \code{D} the omission probability is
-\code{prod(S_i(D))} instead, which the package's censoring machinery handles.
+\code{alpha} and \code{beta} control the shape of the distribution: \code{alpha} how
+sharply the density rises at the leading edge, \code{beta} how heavy the late
+tail is. Both are much more weakly informed than \code{h} and \code{tau}, so the
+recommended default is \code{alpha ~ 1} and \code{beta ~ 1}, shared across
+accumulators along with \code{t0}. Crossing the shapes with the same factors as
+\code{tau} gives a poorly identified model rather than an error. Unlike the
+ballistic models, FRQ has no evidence-scale parameter that must be fixed
+for identifiability: \code{h} is a probability and \code{tau} is a time.
 
-\strong{Identifiability.} \code{alpha} and \code{beta} are shape parameters read off the
-leading edge and the late hazard respectively, and are far more weakly
-informed than \code{h} and \code{tau}. Prefer \code{alpha ~ 1} and \code{beta ~ 1} and let the
-design act on \code{h} and \code{tau}; crossing the shapes with the same factors as
-\code{tau} will produce a ridge rather than an error. There is no separate
-evidence-scale parameter to fix --- \code{h} and \code{tau} are already on
-probability and time scales --- so, unlike the ballistic models, FRQ needs
-no scaling constant.
+A race produces an omission only when every accumulator in it fails, with
+probability \code{prod(1 - h)} over accumulators, so an appreciable failure rate
+per accumulator is compatible with very few observed omissions: two
+accumulators at \code{h = 0.98} give a race-level omission rate of 0.0004.
+\code{pContaminant} is offered for consistency with the other models but is
+redundant here unless an omission mechanism \emph{outside} the decision process
+is wanted. With a single accumulator and \code{beta} fixed at 1 the two are not
+identified at all.
+
+Because the FRQ is a race model, it has one accumulator per response
+option. EMC2 automatically constructs a factor representing the
+accumulators \code{lR} (i.e., the latent response) with level names taken from
+the \code{R} column in the data. For race models, the \code{design()} argument
+\code{matchfun} can be provided, a function that takes the \code{lR} factor (defined
+in the augmented data (d) in the following function) and returns a logical
+defining the correct response. In the example below, the match is simply
+such that the \code{S} factor equals the latent response factor:
+\code{matchfun=function(d)d$S==d$lR}. Then \code{matchfun} is used to automatically
+create a latent match (\code{lM}) factor with levels \code{FALSE} (i.e., the stimulus
+does not match the accumulator) and \code{TRUE} (i.e., the stimulus does match
+the accumulator). This is added internally and can also be used in model
+formula, typically for parameters related to the rate of accumulation.
 }
 \examples{
 ADmat <- matrix(c(-1/2, 1/2), ncol = 1, dimnames = list(NULL, "d"))
 matchfun <- function(d) d$S == d$lR
-# The shapes are shared structurally; the design acts on the two evidence
-# dimensions, tau (speed given completion) and h (attainability).
+# The shapes are held constant; the design acts on the two evidence
+# dimensions, tau (speed given a response) and h (whether one occurs).
 design_FRQ <- design(data = forstmann, model = FRQ, matchfun = matchfun,
                      formula = list(alpha ~ 1, beta ~ 1, h ~ lM,
                                     tau ~ lM + E, t0 ~ 1),
-                     contrasts = list(tau = list(lM = ADmat)))
+                     contrasts = list(h = list(lM = ADmat),
+                                      tau = list(lM = ADmat)))
+# For all parameters that are not defined in the formula, default values are
+# assumed (see Table above).
 }
