@@ -26,7 +26,7 @@
 # ============================================================================
 
 .frq_check_cols <- function(pars) {
-  need <- c("alpha", "beta", "h", "tau", "t0", "delta")
+  need <- c("alpha", "beta", "h", "tau", "t0")
   missing <- setdiff(need, colnames(pars))
   if (length(missing))
     stop("FRQ requires parameter columns ", paste(missing, collapse = ", "))
@@ -40,9 +40,10 @@ dFRQ <- function(rt, pars) {
   ok[is.na(ok)] <- FALSE
   out <- numeric(length(dt))
   if (any(ok)) {
+    delta <- if ("delta" %in% colnames(pars)) pars[ok, "delta"] else 0
     out[ok] <- dfrq(t = dt[ok], alpha = pars[ok, "alpha"],
                     beta = pars[ok, "beta"], h = pars[ok, "h"],
-                    tau = pars[ok, "tau"], delta = pars[ok, "delta"])
+                    tau = pars[ok, "tau"], delta = delta)
   }
   out
 }
@@ -57,9 +58,10 @@ pFRQ <- function(rt, pars) {
   ok[is.na(ok)] <- FALSE
   out <- numeric(length(dt))
   if (any(ok)) {
+    delta <- if ("delta" %in% colnames(pars)) pars[ok, "delta"] else 0
     out[ok] <- pfrq(t = dt[ok], alpha = pars[ok, "alpha"],
                     beta = pars[ok, "beta"], h = pars[ok, "h"],
-                    tau = pars[ok, "tau"], delta = pars[ok, "delta"])
+                    tau = pars[ok, "tau"], delta = delta)
   }
   out
 }
@@ -74,9 +76,10 @@ sFRQ <- function(rt, pars) {
   ok <- (rt > 0) & (dt > 0)
   ok[is.na(ok)] <- FALSE
   if (any(ok)) {
+    delta <- if ("delta" %in% colnames(pars)) pars[ok, "delta"] else 0
     out[ok] <- pfrq(t = dt[ok], alpha = pars[ok, "alpha"],
                     beta = pars[ok, "beta"], h = pars[ok, "h"],
-                    tau = pars[ok, "tau"], delta = pars[ok, "delta"],
+                    tau = pars[ok, "tau"], delta = delta,
                     lower_tail = FALSE)
   }
   out
@@ -103,15 +106,15 @@ rFRQ <- function(lR, pars, ok = rep(TRUE, length(lR))) {
   idx <- which(ok)
   if (length(idx)) {
     p <- pars[idx, , drop = FALSE]
+    dl <- if ("delta" %in% colnames(p)) p[, "delta"] else rep(0, nrow(p))
     # Same compiled inversion the likelihood uses, so the simulator cannot
     # drift away from the density it is meant to be sampling from.
     pl <- frq_rate(p[, "alpha"], p[, "beta"], p[, "h"], p[, "tau"],
-                   p[, "delta"])
+                   dl)
     # With threshold variability the latent quorum percentile is no longer
     # Beta: draw uniformly on the CDF scale and pull it back through H before
     # inverting the incomplete beta.  delta == 0 keeps the plain rbeta draw so
     # that seeded simulations predating delta still reproduce exactly.
-    dl <- p[, "delta"]
     U <- rbeta(nrow(p), p[, "alpha"], p[, "beta"])
     vary <- is.finite(dl) & dl > 0
     if (any(vary)) {
@@ -311,7 +314,7 @@ FRQ <- function() {
     type = "RACE",
     c_name = "FRQ",
     p_types = p_types,
-    p_types_canonical = setdiff(names(p_types), .nuisance_par_names),
+    p_types_canonical = c("alpha", "beta", "h", "tau", "t0"),
     transform = list(func = transform),
     bound = list(minmax = minmax, exception = exception),
     Ttransform = function(pars, dadm) {
@@ -320,8 +323,9 @@ FRQ <- function() {
       # kernel derives p/lambda itself.  It routes through the same exported
       # inversion, so the reported generative parameters are by construction
       # the ones the likelihood used.
+      dl <- if ("delta" %in% colnames(pars)) pars[, "delta"] else rep(0, nrow(pars))
       pl <- frq_rate(pars[, "alpha"], pars[, "beta"], pars[, "h"],
-                     pars[, "tau"], pars[, "delta"])
+                     pars[, "tau"], dl)
       # N = alpha + beta - 1 is the reservoir size of the literal finite-cue
       # process, and d = alpha/N the fraction of it required to reach quorum:
       # small d is Poisson-counter-like, appreciable d is where the finite
@@ -338,7 +342,7 @@ FRQ <- function() {
                    lambda = as.numeric(pl[, "lambda"]),
                    N = as.numeric(N),
                    d = as.numeric(pars[, "alpha"] / N),
-                   sQ = as.numeric(pars[, "delta"]) / sqrt(3))
+                   sQ = as.numeric(dl) / sqrt(3))
       rownames(add) <- NULL
       cbind(pars, add)
     },

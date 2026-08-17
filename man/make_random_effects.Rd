@@ -9,7 +9,8 @@ make_random_effects(
   group_means,
   n_subj = NULL,
   variance_proportion = 0.2,
-  covariances = NULL
+  covariances = NULL,
+  max_tries = 1000L
 )
 }
 \arguments{
@@ -19,9 +20,11 @@ make_random_effects(
 
 \item{n_subj}{An integer. The number of subjects to generate parameters for. If \code{NULL} will be inferred from design}
 
-\item{variance_proportion}{A double. Optional. If \code{covariances} are not specified, the variances will be created by multiplying the means by this number. The covariances will be 0.}
+\item{variance_proportion}{A non-negative double. Optional. If \code{covariances} are not specified, this controls the default relative spread of the subject-level effects. Identity-transformed parameters use a standard deviation of \code{variance_proportion * max(abs(mean), 1)}; exponential parameters use a log-normal spread with this coefficient of variation; probit parameters use this value as the latent-scale standard deviation. The covariances are 0.}
 
 \item{covariances}{A covariance matrix. Optional. Specify the intended covariance matrix.}
+
+\item{max_tries}{An integer. Maximum number of redraw rounds used to replace subject-level parameter draws that fall outside the model bounds.}
 }
 \value{
 A matrix of subject-level parameters.

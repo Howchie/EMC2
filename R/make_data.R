@@ -418,9 +418,6 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
     staircase <- check_staircase(staircase)
   }
 
-  # This handles censoring and truncation where TC is not specified -- first check data, then design as a fallback (need to agree on the accepted order)
-  TC <- check_missing(TC,design=design,data=data)
-
   # check_bounds <- FALSE
 
   post_functions <- NULL
@@ -434,6 +431,12 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
     if(is.null(data)) data <- get_data(parameters)
     parameters <- do.call(rbind, credint(parameters, probs = 0.5, selection = "alpha", by_subject = TRUE))
   }
+
+  # This handles censoring and truncation where TC is not specified -- first check data, then design as a fallback (need to agree on the accepted order)
+  # Must run after the emc block above: an emc's data/design carry the fitted
+  # TC (UC/LT/etc), and check_missing() needs them populated to recover it
+  # rather than silently falling back to the no-censoring defaults.
+  TC <- check_missing(TC,design=design,data=data)
 
   # Make sure parameters are in the right format, either matrix or vector.
   # predict.emc() can provide the already-mapped parameter matrix; when the
@@ -1050,8 +1053,16 @@ add_Ffunctions <- function(data,design)
 #' @param design A design list. The design as specified by `design()`
 #' @param group_means A numeric vector. The group level means for each parameter, in the same order as `sampled_pars(design)`
 #' @param n_subj An integer. The number of subjects to generate parameters for. If `NULL` will be inferred from design
-#' @param variance_proportion A double. Optional. If ``covariances`` are not specified, the variances will be created by multiplying the means by this number. The covariances will be 0.
+#' @param variance_proportion A non-negative double. Optional. If ``covariances``
+#'   are not specified, this controls the default relative spread of the
+#'   subject-level effects. Identity-transformed parameters use a standard
+#'   deviation of ``variance_proportion * max(abs(mean), 1)``; exponential
+#'   parameters use a log-normal spread with this coefficient of variation;
+#'   probit parameters use this value as the latent-scale standard deviation.
+#'   The covariances are 0.
 #' @param covariances A covariance matrix. Optional. Specify the intended covariance matrix.
+#' @param max_tries An integer. Maximum number of redraw rounds used to replace
+#'   subject-level parameter draws that fall outside the model bounds.
 #'
 #' @return A matrix of subject-level parameters.
 #' @examples
@@ -1073,25 +1084,153 @@ add_Ffunctions <- function(data,design)
 #' make_data(subj_pars, design_DDMaE, n_trials = 10)
 #' @export
 
-make_random_effects <- function(design, group_means, n_subj = NULL, variance_proportion = .2, covariances = NULL){
+make_random_effects <- function(design, group_means, n_subj = NULL,
+                                variance_proportion = .2, covariances = NULL,
+                                max_tries = 1000L){
   if(is.null(n_subj)){
     n_subj <- length(design$Ffactors$subjects)
-    subnames <- design$Ffactors$subjects
+    if (n_subj < 1L)
+      stop("Could not determine number of subjects from design; specify n_subj explicitly")
+    subnames <- as.character(design$Ffactors$subjects)
   } else{
+    n_subj <- as.integer(n_subj)[1L]
+    if (is.na(n_subj) || n_subj < 1L)
+      stop("n_subj must be a positive integer")
     subnames <- as.character(1:n_subj)
   }
-  if(length(group_means) != length(sampled_pars(design))) stop("You must specify as many means as parameters in your design")
-  if(is.null(covariances)) {
-    model <- design$model()
-    p_template <- matrix(0, nrow = 1, ncol = length(group_means))
-    colnames(p_template) <- get_p_types(names(group_means))
-    # Use a baseline in sampled space for consistency
-    vars <- (abs(group_means) + 1) * variance_proportion
-    vars[vars == 0] <- variance_proportion
-    covariances <- diag(vars)
+  sampled_names <- names(sampled_pars(design))
+  if(length(group_means) != length(sampled_names))
+    stop("You must specify as many means as parameters in your design")
+  if (is.null(names(group_means))) {
+    names(group_means) <- sampled_names
+  } else {
+    if (!all(sampled_names %in% names(group_means)))
+      stop("names of group_means do not match sampled_pars(design)")
+    group_means <- group_means[sampled_names]
   }
-  random_effects <- mvtnorm::rmvnorm(n_subj,mean=group_means,sigma=covariances)
-  colnames(random_effects) <- names(sampled_pars(design))
-  rownames(random_effects) <- subnames
+  if (any(!is.finite(group_means)))
+    stop("group_means must be finite")
+  max_tries <- as.integer(max_tries)[1L]
+  if (is.na(max_tries) || max_tries < 1L)
+    stop("max_tries must be a positive integer")
+
+  if(is.null(covariances)) {
+    if (length(variance_proportion) != 1L || !is.finite(variance_proportion) ||
+        variance_proportion < 0)
+      stop("variance_proportion must be a single non-negative finite number")
+    model <- design$model()
+    base_names <- get_p_types(sampled_names)
+    if (is.null(model$transform) || is.null(model$transform$func)) {
+      transform <- rep("identity", length(sampled_names))
+    } else {
+      transform <- model$transform$func[base_names]
+      if (length(transform) != length(sampled_names) || anyNA(transform))
+        stop("Could not determine parameter transforms for the design")
+    }
+
+    # Draws are made on EMC2's sampled scale.  Use a relative natural-scale
+    # spread rather than treating a log parameter's numeric value as a scale.
+    # For exp transforms, log1p(cv^2) gives a log-normal coefficient of
+    # variation equal to variance_proportion exactly.
+    vars <- vapply(seq_along(group_means), function(i) {
+      if (transform[[i]] == "exp") {
+        log1p(variance_proportion^2)
+      } else if (transform[[i]] == "pnorm") {
+        variance_proportion^2
+      } else {
+        (variance_proportion * max(abs(group_means[[i]]), 1))^2
+      }
+    }, numeric(1))
+    covariances <- diag(vars)
+  } else {
+    covariances <- as.matrix(covariances)
+    if (!all(dim(covariances) == length(group_means)))
+      stop("covariances must be a square matrix with one row/column per parameter")
+    if (!is.null(rownames(covariances)) && all(sampled_names %in% rownames(covariances)) &&
+        !is.null(colnames(covariances)) && all(sampled_names %in% colnames(covariances))) {
+      covariances <- covariances[sampled_names, sampled_names, drop = FALSE]
+    }
+  }
+
+  # Build the same parameter map used by make_data(), so the guard checks
+  # natural, cell-level parameters rather than individual regression
+  # coefficients (which may legitimately be negative).
+  bound_checker <- NULL
+  model <- design$model()
+  if (!is.null(model$bound) && !is.null(design$Ffactors)) {
+    guard_design <- design
+    guard_design$Ffactors$subjects <- subnames
+    guard_dadm <- tryCatch({
+      guard_data <- minimal_design(
+        guard_design, drop_subjects = FALSE, n_trials = 1,
+        add_acc = FALSE, drop_R = FALSE, drop_R_levels = FALSE,
+        do_functions = FALSE, verbose = FALSE
+      )
+      if (!is.data.frame(guard_data))
+        stop("joint designs are not supported")
+      guard_data <- add_accumulators(
+        guard_data, guard_design$matchfun, simulate = TRUE,
+        type = model$type, Fcovariates = guard_design$Fcovariates,
+        fixed_accumulator_roles = guard_design$fixed_accumulator_roles
+      )
+      design_model(
+        guard_data, guard_design, guard_design$model, add_acc = FALSE,
+        compress = FALSE, verbose = FALSE, rt_check = FALSE
+      )
+    }, error = function(e) {
+      stop("Could not construct the parameter-bounds guard: ",
+           conditionMessage(e), call. = FALSE)
+    })
+
+    guard_dadm_by_subj <- lapply(subnames, function(s) {
+      row_idx <- which(guard_dadm$subjects == s)
+      dadm_s <- .oo_subset_dadm(guard_dadm, row_idx)
+      attr(dadm_s, "designs") <- .oo_expanded_designs(guard_dadm, row_idx, expand = FALSE)
+      dadm_s$subjects <- factor(dadm_s$subjects, levels = s)
+      dadm_s
+    })
+    names(guard_dadm_by_subj) <- subnames
+
+    bound_checker <- function(draws) {
+      sub_ids <- rownames(draws)
+      vapply(seq_len(nrow(draws)), function(i) {
+        s <- sub_ids[i]
+        dadm_s <- guard_dadm_by_subj[[s]]
+        if (is.null(dadm_s)) return(TRUE)
+        p_mat <- draws[i, , drop = FALSE]
+        mapped <- get_pars_oo(p_mat, dadm_s, guard_design$model)
+        mapped <- model$Ttransform(mapped, dadm_s)
+        # Use the same inclusive bound convention as make_data() itself.
+        mapped <- fix_bound(mapped, model$bound, dadm_s$lR, fix = FALSE)
+        ok <- attr(mapped, "ok")
+        if (is.null(ok)) TRUE else all(ok)
+      }, logical(1))
+    }
+  }
+
+  random_effects <- matrix(
+    NA_real_, nrow = n_subj, ncol = length(group_means),
+    dimnames = list(subnames, sampled_names)
+  )
+  remaining <- seq_len(n_subj)
+  for (attempt in seq_len(max_tries)) {
+    if (!length(remaining)) break
+    draws <- mvtnorm::rmvnorm(
+      n = length(remaining), mean = group_means, sigma = covariances
+    )
+    draws <- as.matrix(draws)
+    colnames(draws) <- sampled_names
+    rownames(draws) <- subnames[remaining]
+    valid <- if (is.null(bound_checker)) rep(TRUE, nrow(draws)) else
+      bound_checker(draws)
+    if (any(valid))
+      random_effects[remaining[valid], ] <- draws[valid, , drop = FALSE]
+    remaining <- remaining[!valid]
+  }
+  if (length(remaining)) {
+    stop("Could not draw in-bound random effects for subject(s) ",
+         paste(subnames[remaining], collapse = ", "), " after ",
+         max_tries, " attempts")
+  }
   return(random_effects)
 }

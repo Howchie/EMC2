@@ -279,7 +279,7 @@ test_that("the constructor exposes the documented contract", {
                c("alpha", "beta", "h", "tau", "t0", "delta",
                  "pContaminant", "pGuess"))
   expect_equal(m$p_types_canonical,
-               c("alpha", "beta", "h", "tau", "t0", "delta"))
+               c("alpha", "beta", "h", "tau", "t0"))
   expect_equal(unname(m$transform$func[c("alpha", "beta", "h", "tau", "t0",
                                          "delta")]),
                c("exp", "exp", "pnorm", "exp", "exp", "exp"))
