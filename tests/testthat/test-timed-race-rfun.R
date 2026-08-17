@@ -275,8 +275,11 @@ test_that("RDMSWTN IO C++ likelihood keeps defective Wald normalization with tru
   F_ut <- EMC2:::pSWTNspv(rep(dat$UT, 2), pars[, "v"], pars[, "b"], pars[, "A"],
                           pars[, "s"], pars[, "t0"], pars[, "sv"],
                           lambda_g = 0, lambda_k = 0, posdrift = FALSE)
+  F_inf <- EMC2:::pSWTNspv(rep(Inf, 2), pars[, "v"], pars[, "b"], pars[, "A"],
+                           pars[, "s"], pars[, "t0"], pars[, "sv"],
+                           lambda_g = 0, lambda_k = 0, posdrift = FALSE)
   manual_density <- f[1] * (1 - F_rt[2])
-  trunc_prob <- prod(1 - F_lt) - prod(1 - F_ut)
+  trunc_prob <- prod(1 - F_lt) - prod(1 - F_ut) + prod(1 - F_inf)
 
   expect_equal(as.numeric(ll_cpp), log(manual_density) - log(trunc_prob), tolerance = 1e-8)
   expect_equal(sum(ll_pw[1, ]), as.numeric(ll_cpp), tolerance = 1e-8)

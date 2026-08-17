@@ -23,11 +23,15 @@
 //   f(x) = p g(x) q(x)^{alpha-1} (1 - q(x))^{beta-1} / B(alpha, beta)
 //   h    = F(Inf) = I_p(alpha, beta)          eventual completion probability
 //
-// For exponential registration G(x) = 1 - e^{-lambda x} and g = lambda G'.
+// For exponential registration G(x) = 1 - e^{-lambda x}, so its density is
+// g(x) = G'(x) = lambda e^{-lambda x}.
 // Nothing here needs a first-passage solve or a quadrature: the entire
 // likelihood is four Rmath special functions.  The continuous relaxation is
 // just alpha, beta > 0 rather than positive integers; every formula above is
-// already valid there (Math/FRQ.tex Sec. 12).
+// already valid there (Math/FRQ.tex Sec. 12).  The FITTED model bounds both
+// shapes below at 1 (R/model_FRQ.R): the sub-one corner is mathematically
+// fine but the (h, tau) coordinates are not representable there in double
+// precision, so it is not offered.
 //
 // PARAMETERISATION.  Raw (p, lambda) are poor estimation coordinates, so the
 // exposed parameters are (alpha, beta, h, tau, t0) where h is the eventual
@@ -68,9 +72,9 @@ using namespace Rcpp;
 // constant rather than an argument; see Math/FRQ.tex Sec. 8.
 constexpr double FRQ_QUANTILE = 0.5;
 
-// Shapes below this are treated as degenerate.  The conservative continuous
-// relaxation keeps alpha, beta >= 1 (R/model_FRQ.R bounds); this floor only
-// exists so the unrestricted `relax = TRUE` family cannot reach exactly zero.
+// Shapes below this are treated as degenerate.  The fitted model keeps
+// alpha, beta >= 1 (R/model_FRQ.R bounds), so this floor is only a guard for
+// the exported dfrq/pfrq/frq_rate entry points, which take shapes directly.
 constexpr double FRQ_SHAPE_MIN = 1e-8;
 
 // xlogy(a, y) = a log y, with the a == 0 branch returning 0 rather than the

@@ -5719,17 +5719,30 @@ double get_trunc_normaliser_rowmajor_cpp(const double* pars_rowmajor,
     // omission mass sits at +Inf, i.e. >= LT, so it stays inside the retained
     // window [LT, Inf): the truncation normaliser only ever excludes finite
     // density in [0, LT). This matches the batch path (which leaves
-    // logS_UT == R_NegInf for UT==Inf, defective or not). Upper-truncating a
-    // defective distribution is conceptually ill-posed (an omission is a
-    // never-finish outcome, not a slow response that got cut off) and is
-    // intentionally not supported, so no S(Inf) is subtracted here.
+    // logS_UT == R_NegInf for UT==Inf, defective or not).
     return logS_LT;
   }
-  
+
   const double logS_UT = log_survivor_rowmajor(UT, pars_rowmajor, isok_int, n_lR, n_par, cdf1, model_specific_context);
-  double logP = log_diff_exp(logS_LT, logS_UT);
+  // The retained sample space under [LT, UT]. make_missing() cuts only FINITE
+  // RTs outside the window (R/make_data.R), so an intrinsic never-finish
+  // outcome survives upper truncation: it is a T = +Inf atom, not a slow
+  // response that got cut off. For a defective model the retained mass is
+  //   {LT <= T <= UT} u {T = +Inf}
+  // and the atom P(T = Inf) = S(Inf) = prod_j (1 - h_j) must be added back,
+  // otherwise the finite density is renormalised to one on its own while the
+  // omission score keeps its (undivided) atom -- the conditional distribution
+  // then integrates to more than one, badly so when F(UT) < S(Inf). Proper
+  // models have S(Inf) = 0 and log_defective_atom stays -Inf, so this is a
+  // no-op for them.
+  const double log_defective_atom =
+      (race_ctx && race_ctx->defective_upper_tail)
+        ? log_survivor_rowmajor(R_PosInf, pars_rowmajor, isok_int, n_lR, n_par,
+                                cdf1, model_specific_context)
+        : R_NegInf;
+  double logP = log_sum_exp(log_diff_exp(logS_LT, logS_UT), log_defective_atom);
   if (R_FINITE(logP) && logP > log_prob_eps) return logP;
-  
+
   // Only falls back to GSL integration if the analytic trick fails (e.g. due to catastrophic cancellation)
   gsl_integration_workspace* w = ensure_gsl_workspace(workspace);
   double log_total = R_NegInf;
@@ -5748,6 +5761,9 @@ double get_trunc_normaliser_rowmajor_cpp(const double* pars_rowmajor,
                                                                w);
     log_total = log_sum_exp(log_total, log_k);
   }
+  // The integrals cover the finite window only; add the retained +Inf atom for
+  // the same reason as the analytic branch above.
+  log_total = log_sum_exp(log_total, log_defective_atom);
   if (R_FINITE(log_total) && log_total > log_prob_eps) return log_total;
   return R_NegInf;
 }
@@ -7743,7 +7759,14 @@ static double c_log_likelihood_logicalrules(
 
     // --- Truncation normaliser -------------------------------------------
     // Z = P(overt response RT in [LT, UT]) under the rule's outcome logic:
-    // Z = N(LT) - N(UT), where the UT = Inf case is DEFINED as Z = N(LT)
+    // Z = N(LT) - N(UT), where the UT = Inf case is DEFINED as Z = N(LT).
+    //
+    // With a DEFECTIVE upper tail and a FINITE UT the eventual-no-response
+    // mass N(Inf) is retained in the data -- make_missing() cuts only finite
+    // RTs outside the window, and the rt = +Inf branch below correspondingly
+    // does NOT subtract N(UT) from its numerator.  So N(Inf) has to be added
+    // back here, or the retained withheld outcome would be scored against a
+    // normaliser that excludes it.
     const double LTj_tr = shared.LT_unique[static_cast<size_t>(j)];
     const double UTj_tr = shared.UT_unique[static_cast<size_t>(j)];
     const bool has_trunc = (LTj_tr != 0.0 || R_FINITE(UTj_tr));
@@ -7777,7 +7800,22 @@ static double c_log_likelihood_logicalrules(
           if (LTj_tr > 0.0) N_LT = lr4_N_at(LTj_tr, LR_AUX_LT, z_ok);
           if (z_ok && R_FINITE(UTj_tr)) N_UT = lr4_N_at(UTj_tr, LR_AUX_UT, z_ok);
         }
-        const double Z = std::min(1.0, N_LT - N_UT);
+        // Retained never-respond atom (zero unless the tail is defective).
+        double N_Inf = 0.0;
+        if (z_ok && R_FINITE(UTj_tr) && model_ctx->defective_upper_tail) {
+          if (rule_code == 5) {
+            // lr_detection_no_response_prob() has no infinite-horizon branch
+            // (rule 6 needs a nogo-win quadrature over [t0_N, Inf)), so the
+            // atom cannot be formed here.  Fail loudly rather than normalise
+            // by a Z that is missing retained mass.
+            Rcpp::stop("LogicalRules detection rules do not support a finite "
+                       "UT with a defective upper tail: the retained "
+                       "never-respond mass cannot be added to the truncation "
+                       "normaliser. Remove UT or use a proper race model.");
+          }
+          N_Inf = lr4_N_at(R_PosInf, -1, z_ok);
+        }
+        const double Z = std::min(1.0, N_LT - N_UT + N_Inf);
         const bool valid_z = z_ok && R_FINITE(Z) && (Z > 1e-12);
         log_Z_j = valid_z ? std::log(Z) : R_NegInf;
         shared.cell_log_z[cell_idx] = log_Z_j;
@@ -8897,8 +8935,17 @@ double c_log_likelihood_race(
       // scalar path routes through get_trunc_normaliser_rowmajor_cpp, which
       // switches the kill back on for the single-accumulator case and rejects
       // the multi-accumulator one.
+      // A defective model under FINITE upper truncation needs the retained
+      // T = +Inf atom added to the normaliser (see
+      // get_trunc_normaliser_rowmajor_cpp).  Rather than ask every model's
+      // logS_at_t adapter to be correct at t = +Inf, these trials are sent to
+      // the per-trial scalar route, whose log_survivor_rowmajor() has an
+      // explicit defective +Inf branch.  UT == Inf is unaffected and stays
+      // batched: there the atom is already inside S(LT).
+      const bool defective_finite_UT =
+          defective_upper_tail && uniform_UT != R_PosInf;
       if (any_trunc && uniform_LT_ok && uniform_UT_ok && !has_RACE_col &&
-          !global_omission_active) {
+          !global_omission_active && !defective_finite_UT) {
         // Pass 2: batch-compute logZ = log_diff_exp(logS(LT), logS(UT)) for all
         // truncated trials simultaneously.
         // RACE models are excluded: lba/rdm/lnr_logS_at_t always loops over the

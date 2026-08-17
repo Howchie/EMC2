@@ -11,7 +11,8 @@
 #
 #   F(x) = I_{q(x)}(A, R),   q(x) = p(1 - e^{-lambda x}),
 #
-# and the continuous relaxation is just A, R > 0.  Those two shapes are called
+# and the continuous relaxation is just A, R > 0 (bounded at 1 in the fitted
+# model; see FRQ()).  Those two shapes are called
 # `alpha` and `beta` here: `R` is a reserved data column name in EMC2
 # (R/design.R:251), and U ~ Beta(alpha, beta) is the exact latent
 # representation of the quorum, so the Beta shape names are the honest ones.
@@ -153,7 +154,10 @@ rFRQ <- function(lR, pars, ok = rep(TRUE, length(lR))) {
 #' with `q(x) = p(1 - exp(-lambda x))` for exponential registration. There is
 #' no first-passage solve and no quadrature anywhere in the likelihood. The
 #' model is a *continuous relaxation*: `alpha` and `beta` are real-valued, and
-#' the integer case is the literal finite-cue process.
+#' the integer case is the literal finite-cue process. Both shapes are bounded
+#' below at 1, which keeps the model on the geometry of a literal finite
+#' reservoir (`alpha = K >= 1`, `beta = N - K + 1 >= 1`) and keeps the density
+#' bounded at the leading edge, since `f(x) ~ x^(alpha-1)`.
 #'
 #' **Parameters are `(alpha, beta, h, tau, t0)`, not `(N, K, p, lambda, t0)`.**
 #' The generative coordinates are badly conditioned to estimate, so the exposed
@@ -188,10 +192,24 @@ rFRQ <- function(lR, pars, ok = rep(TRUE, length(lR))) {
 #' that most race models confound: `h` is whether sufficient evidence is
 #' ultimately *attainable*, and `tau` is how fast the process completes *when
 #' it succeeds*. Crossing only `tau` with a condition gives a timing-only
-#' model, only `h` an availability-only model, and both a dual model; these are
+#' model, only `h` an attainability model, and both a dual model; these are
 #' nested in one likelihood. The recommended default is to share `alpha`,
 #' `beta` and `t0` structurally across accumulators and let `h` and `tau` carry
 #' the design.
+#'
+#' Read the `h`-only design precisely: because the exposed coordinates hold the
+#' *conditional median* `tau` fixed, moving `h` at fixed `(alpha, beta, tau)`
+#' moves both generative parameters, since
+#' `lambda = -log(1 - I^{-1}_{h/2}(alpha,beta) / I^{-1}_{h}(alpha,beta))/tau`
+#' depends on `h`. So an `h` manipulation alters eventual attainability while
+#' holding completion time *given completion* fixed --- a cleaner statistical
+#' coordinate than `p`, but not "change `p` and leave `lambda` alone". The one
+#' exception is `beta = 1` (`K = N`), where `F(x)/h = (1 - exp(-lambda x))^alpha`
+#' and `lambda` is genuinely free of `h`; there `h` is a pure availability
+#' coordinate. Note also that at `beta = 1` with a single accumulator, `h` and
+#' `pContaminant` are *exactly* non-identified rather than merely correlated:
+#' finite responses depend only on `(1 - pContaminant) h`. Races over several
+#' accumulators, or `beta > 1`, break that equivalence.
 #'
 #' **Defectiveness is intrinsic.** Every accumulator fails permanently with
 #' probability `1 - h`, so an FRQ race produces omissions with no contaminant
@@ -214,13 +232,6 @@ rFRQ <- function(lR, pars, ok = rep(TRUE, length(lR))) {
 #' probability and time scales --- so, unlike the ballistic models, FRQ needs
 #' no scaling constant.
 #'
-#' @param relax Logical. If `FALSE` (default), the shapes are bounded below at
-#'   1, the *conservative continuous relaxation*: this keeps the model close to
-#'   the geometry of a literal finite reservoir, where `alpha = K >= 1` and
-#'   `beta = N - K + 1 >= 1`. If `TRUE`, the bound drops to a small epsilon,
-#'   giving the unrestricted transformed-Beta family. `alpha < 1` is
-#'   mathematically valid but produces a density singularity at the leading
-#'   edge, since `f(x) ~ x^(alpha-1)`.
 #' @return A model list defining the FRQ race model.
 #' @examples
 #' ADmat <- matrix(c(-1/2, 1/2), ncol = 1, dimnames = list(NULL, "d"))
@@ -232,7 +243,7 @@ rFRQ <- function(lR, pars, ok = rep(TRUE, length(lR))) {
 #'                                     tau ~ lM + E, t0 ~ 1),
 #'                      contrasts = list(tau = list(lM = ADmat)))
 #' @export
-FRQ <- function(relax = FALSE) {
+FRQ <- function() {
   # Shapes on the log scale: alpha = 1 (K = 1) and beta = 1 (K = N) are both
   # exactly reachable defaults, and together they are the one-unit reservoir.
   p_types <- c("alpha" = log(1), "beta" = log(1),
@@ -245,15 +256,19 @@ FRQ <- function(relax = FALSE) {
                "tau" = log(0.5), "t0" = log(0))
   transform <- c(alpha = "exp", beta = "exp", h = "pnorm", tau = "exp",
                  t0 = "exp")
-  # relax = FALSE keeps alpha, beta >= 1 (the conservative continuous FRQ
-  # relaxation, Math/FRQ.tex Sec. 13); relax = TRUE admits the unrestricted
-  # transformed-Beta family, whose alpha < 1 corner has a leading-edge
-  # singularity.  The kernel is identical either way -- this is only a bound.
-  shape_lo <- if (isTRUE(relax)) 1e-4 else 1
+  # alpha, beta >= 1 is the conservative continuous FRQ relaxation
+  # (Math/FRQ.tex Sec. 13).  The unrestricted transformed-Beta family
+  # (shapes down to ~0) is mathematically valid but is NOT offered: the
+  # (h, tau) coordinates are not representable there in double precision.
+  # qbeta(h, alpha, beta) underflows to 0 for both p and u at small h (the
+  # kernel then rejects the point, giving the sampler an artificial cliff)
+  # and rounds to exactly 1 at large h -- at alpha = beta = 0.05, h = 0.99
+  # already gives p = 1, i.e. a silently PROPER distribution with none of the
+  # requested defect.  The dead zone reaches alpha = 0.5 at h = 1 - 1e-9.
   # h's upper bound stops just short of one so that log(1 - h), the score of an
   # intrinsic no-response trial, stays finite.  h = 1 is the non-defective
   # limit and is approached, not attained.
-  minmax <- cbind(alpha = c(shape_lo, Inf), beta = c(shape_lo, Inf),
+  minmax <- cbind(alpha = c(1, Inf), beta = c(1, Inf),
                   h = c(1e-6, 1 - 1e-9), tau = c(1e-4, Inf),
                   t0 = c(0.05, Inf))
   exception <- c(t0 = 0)
@@ -269,10 +284,7 @@ FRQ <- function(relax = FALSE) {
 
   list(
     type = "RACE",
-    # `relax` changes only the R-side bounds, so both variants share one
-    # compiled kernel and one c_name.
     c_name = "FRQ",
-    relax = isTRUE(relax),
     p_types = p_types,
     p_types_canonical = setdiff(names(p_types), .nuisance_par_names),
     transform = list(func = transform),
@@ -289,6 +301,7 @@ FRQ <- function(relax = FALSE) {
       # process, and d = alpha/N the fraction of it required to reach quorum:
       # small d is Poisson-counter-like, appreciable d is where the finite
       # reservoir actually bites.  Both are only literal at integer shapes.
+      # The alpha, beta >= 1 bounds keep N >= 1 and d in (0, 1].
       N <- pars[, "alpha"] + pars[, "beta"] - 1
       # Built as a bare matrix first: cbind()ing named scalars onto a one-row
       # `pars` makes R invent row names from the argument names, which would

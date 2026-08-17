@@ -179,6 +179,41 @@ make_missing <- function(data, LT = NULL, UT = NULL, LC = NULL, UC = NULL,
   if (any((LT_eff - LC_eff) > tol_l & LC_eff != 0, na.rm = TRUE)) stop("LT > LC not allowed")
   if (any((UC_eff - UT_eff) > tol_u & UC_eff != Inf, na.rm = TRUE)) stop("UC > UT not allowed")
 
+  # Uniform guess contaminant (pGuess).  A guess is part of the generative
+  # process, so it is drawn BEFORE the truncation cut below and is exposed to
+  # it like any other response -- the previous placement (after the cut) made
+  # guessing an act of the experimenter rather than the participant.  In
+  # practice this changes nothing: resolve_guess_window() builds the window as
+  # [max(LT, LC), min(UC, UT)] (R/design.R), so a guess lands inside the
+  # retention window by construction and can never be truncated away.  That is
+  # also what keeps the ordering consistent with the likelihood, whose guess
+  # term carries no truncation normaliser (src/contaminant_mixture.h).
+  #
+  # Nesting with the omission -- P(guess) = (1 - pC) * pG -- is preserved by
+  # order alone: pContaminant is applied after the cut and overwrites a guessed
+  # rt with +Inf, so an omission still wins whenever both fire.
+  pGuess <- get_missing(pGuess, data, "pGuess",0,"numeric")
+  if (!all(pGuess==0)) {
+    gw <- .resolve_sim_guess_window(data, guess_window)
+    # A guess is an overt response: never withheld, never a timeout.
+    resp_levels <- levels(data$R)
+    guess_levels <- resp_levels[!(resp_levels %in% c("nogo","time"))]
+    if (length(guess_levels) == 0L)
+      stop("pGuess needs at least one overt response level (excluding nogo/time)")
+    guess <- rbinom(nrow(data), 1, pGuess) == 1
+    if (any(guess)) {
+      data$rt[guess] <- runif(sum(guess), gw[1], gw[2])
+      data$R[guess] <- factor(sample(guess_levels, sum(guess), replace = TRUE),
+                              levels = resp_levels)
+    }
+    if (verbose) {
+      if (!attr(pGuess,"subjectwise")) stat <- mean(guess) else
+        stat <- tapply(guess,data$subjects,mean)
+      message("% guesses (window [",signif(gw[1],4),", ",signif(gw[2],4),"])")
+      print(round(100*stat,digits))
+    }
+  }
+
   # Only keep trials in LT-UT (inclusive) or infinite or NA
   cutL <- is.finite(data$rt) & (data$rt < LT_eff & is.finite(data$rt))
   cutL[is.na(cutL)] <- FALSE; cutL[no_truncate] <- FALSE
@@ -212,7 +247,10 @@ make_missing <- function(data, LT = NULL, UT = NULL, LC = NULL, UC = NULL,
   no_censor <- no_censor[!cutL & !cutU]
 
   pContaminant <- get_missing(pContaminant, data, "pContaminant",0,"numeric")
-  contam <- rep(FALSE, nrow(data))
+  # Applied after the truncation cut: an omission is an rt = +Inf atom, which
+  # no finite truncation bound can remove, so pC is the omission proportion
+  # among retained trials either way.  It overwrites any guess drawn above,
+  # which is what enforces P(guess) = (1 - pC) * pG.
   if (!all(pContaminant==0)) {
     contam <- rbinom(nrow(data), 1, pContaminant) == 1
     data[contam, "rt"] <- Inf
@@ -221,34 +259,6 @@ make_missing <- function(data, LT = NULL, UT = NULL, LC = NULL, UC = NULL,
       if (!attr(pContaminant,"subjectwise")) stat <- mean(contam) else
       stat <- tapply(contam,data$subjects,mean)
       message("% contaminated")
-      print(round(100*stat,digits))
-    }
-  }
-
-  # Uniform guess contaminant (pGuess).  Nested with the omission, so the two can
-  # never sum above 1:  P(guess) = (1 - pC) * pG, drawn only on trials the
-  # omission did not already take.  Placed here -- after the truncation cut and
-  # before censoring -- for the same reason the omission is: pGuess is then the
-  # guess proportion among RETAINED trials, which is exactly what the likelihood
-  # estimates (see resolve_guess_window() and src/contaminant_mixture.h).
-  pGuess <- get_missing(pGuess, data, "pGuess",0,"numeric")
-  if (!all(pGuess==0)) {
-    gw <- .resolve_sim_guess_window(data, guess_window)
-    # A guess is an overt response: never withheld, never a timeout.
-    resp_levels <- levels(data$R)
-    guess_levels <- resp_levels[!(resp_levels %in% c("nogo","time"))]
-    if (length(guess_levels) == 0L)
-      stop("pGuess needs at least one overt response level (excluding nogo/time)")
-    guess <- !contam & rbinom(nrow(data), 1, pGuess) == 1
-    if (any(guess)) {
-      data$rt[guess] <- runif(sum(guess), gw[1], gw[2])
-      data$R[guess] <- factor(sample(guess_levels, sum(guess), replace = TRUE),
-                              levels = resp_levels)
-    }
-    if (verbose) {
-      if (!attr(pGuess,"subjectwise")) stat <- mean(guess) else
-        stat <- tapply(guess,data$subjects,mean)
-      message("% guesses (window [",signif(gw[1],4),", ",signif(gw[2],4),"])")
       print(round(100*stat,digits))
     }
   }

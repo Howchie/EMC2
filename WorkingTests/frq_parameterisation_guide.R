@@ -4,7 +4,7 @@
 #
 #   1. What the continuous relaxation actually is -- how a non-integer `alpha`
 #      relates to the literal "N cues, wait for K" process, demonstrated
-#      rather than asserted.
+#      rather than asserted, and why both shapes are bounded below at 1.
 #   2. A table of sensible starting parameterisations at human RT scale, with
 #      the RT quantiles, omission rates and race accuracies they imply, so you
 #      can pick a plausible neighbourhood before fitting anything.
@@ -133,16 +133,22 @@ for (a in c(1.5, 2.5, 4)) {
   cat(sprintf("  alpha = %.1f -> %.4f\n", a, diff(lf) / diff(log(x))))
 }
 
-rule("1d. alpha < 1 is the unrestricted family, and needs relax = TRUE")
+rule("1d. Why the shapes are bounded below at 1")
 
-cat("FRQ()             alpha bounds: [",
+cat("FRQ() alpha bounds: [",
     paste(FRQ()$bound$minmax[, "alpha"], collapse = ", "), "]\n")
-cat("FRQ(relax = TRUE) alpha bounds: [",
-    paste(FRQ(relax = TRUE)$bound$minmax[, "alpha"], collapse = ", "), "]\n")
-cat(sprintf("density at x = 1e-4 with alpha = 0.5: %.3e  (integrable\n",
-            EMC2:::dfrq(1e-4, 0.5, 3, 0.95, 0.30, FALSE)))
-cat("  singularity -- valid, but unlike any K >= 1 quorum process, so it is\n",
-    "  opt-in rather than the default.)\n", sep = "")
+cat("alpha < 1 is a mathematically valid transformed-Beta family, but the\n",
+    "(h, tau) coordinates are not representable there in double precision,\n",
+    "so it is not offered.  Two ways it fails:\n", sep = "")
+cat(sprintf("  qbeta(0.99, 0.05, 0.05) = %.17g  -> p saturates at 1, so the\n",
+            qbeta(0.99, 0.05, 0.05)))
+cat("     fitted distribution is PROPER and h = 0.99 was silently ignored.\n")
+cat(sprintf("  qbeta(0.10, 1e-4, 1e-4) = %.17g  -> p and u collapse together,\n",
+            qbeta(0.1, 1e-4, 1e-4)))
+cat("     so the kernel rejects an interior point: an artificial sampler cliff.\n")
+cat("The dead zone reaches alpha = 0.5 at h = 1 - 1e-9, well inside anything\n",
+    "a sampler would visit, which is why this is a bound and not a warning.\n",
+    sep = "")
 
 # ===========================================================================
 # PART 2.  Sensible RT-scale starting parameterisations

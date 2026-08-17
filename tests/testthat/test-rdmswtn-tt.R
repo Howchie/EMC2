@@ -309,7 +309,7 @@ test_that("independent compiled likelihood handles finite, omitted, and truncate
   race_surv <- function(t, rows) {
     prod(1 - EMC2:::pRDMSWTN_TT(t, pars[rows, , drop = FALSE]))
   }
-  log_z <- log(race_surv(.2, rows1) - race_surv(1.1, rows1))
+  log_z <- log(race_surv(.2, rows1) - race_surv(1.1, rows1) + race_surv(Inf, rows1))
   omitted <- log(race_surv(Inf, 3:4))
   expect_equal(as.numeric(ll), log_num - log_z + omitted, tolerance = 2e-8)
   expect_equal(sum(pw), as.numeric(ll), tolerance = 2e-8)

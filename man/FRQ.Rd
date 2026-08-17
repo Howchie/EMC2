@@ -4,16 +4,7 @@
 \alias{FRQ}
 \title{The Finite Reservoir Quorum Process (FRQ)}
 \usage{
-FRQ(relax = FALSE)
-}
-\arguments{
-\item{relax}{Logical. If \code{FALSE} (default), the shapes are bounded below at
-1, the \emph{conservative continuous relaxation}: this keeps the model close to
-the geometry of a literal finite reservoir, where \code{alpha = K >= 1} and
-\code{beta = N - K + 1 >= 1}. If \code{TRUE}, the bound drops to a small epsilon,
-giving the unrestricted transformed-Beta family. \code{alpha < 1} is
-mathematically valid but produces a density singularity at the leading
-edge, since \code{f(x) ~ x^(alpha-1)}.}
+FRQ()
 }
 \value{
 A model list defining the FRQ race model.
@@ -39,7 +30,10 @@ has occurred exactly when that count reaches \code{K}. Writing the shapes as
 with \verb{q(x) = p(1 - exp(-lambda x))} for exponential registration. There is
 no first-passage solve and no quadrature anywhere in the likelihood. The
 model is a \emph{continuous relaxation}: \code{alpha} and \code{beta} are real-valued, and
-the integer case is the literal finite-cue process.
+the integer case is the literal finite-cue process. Both shapes are bounded
+below at 1, which keeps the model on the geometry of a literal finite
+reservoir (\code{alpha = K >= 1}, \code{beta = N - K + 1 >= 1}) and keeps the density
+bounded at the leading edge, since \code{f(x) ~ x^(alpha-1)}.
 
 \strong{Parameters are \verb{(alpha, beta, h, tau, t0)}, not \verb{(N, K, p, lambda, t0)}.}
 The generative coordinates are badly conditioned to estimate, so the exposed
@@ -74,10 +68,24 @@ the \code{formula} argument of \code{design()}. They can also be accessed with
 that most race models confound: \code{h} is whether sufficient evidence is
 ultimately \emph{attainable}, and \code{tau} is how fast the process completes \emph{when
 it succeeds}. Crossing only \code{tau} with a condition gives a timing-only
-model, only \code{h} an availability-only model, and both a dual model; these are
+model, only \code{h} an attainability model, and both a dual model; these are
 nested in one likelihood. The recommended default is to share \code{alpha},
 \code{beta} and \code{t0} structurally across accumulators and let \code{h} and \code{tau} carry
 the design.
+
+Read the \code{h}-only design precisely: because the exposed coordinates hold the
+\emph{conditional median} \code{tau} fixed, moving \code{h} at fixed \verb{(alpha, beta, tau)}
+moves both generative parameters, since
+\verb{lambda = -log(1 - I^\{-1\}_\{h/2\}(alpha,beta) / I^\{-1\}_\{h\}(alpha,beta))/tau}
+depends on \code{h}. So an \code{h} manipulation alters eventual attainability while
+holding completion time \emph{given completion} fixed --- a cleaner statistical
+coordinate than \code{p}, but not "change \code{p} and leave \code{lambda} alone". The one
+exception is \code{beta = 1} (\code{K = N}), where \verb{F(x)/h = (1 - exp(-lambda x))^alpha}
+and \code{lambda} is genuinely free of \code{h}; there \code{h} is a pure availability
+coordinate. Note also that at \code{beta = 1} with a single accumulator, \code{h} and
+\code{pContaminant} are \emph{exactly} non-identified rather than merely correlated:
+finite responses depend only on \verb{(1 - pContaminant) h}. Races over several
+accumulators, or \code{beta > 1}, break that equivalence.
 
 \strong{Defectiveness is intrinsic.} Every accumulator fails permanently with
 probability \code{1 - h}, so an FRQ race produces omissions with no contaminant

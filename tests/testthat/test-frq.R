@@ -282,12 +282,40 @@ test_that("the constructor exposes the documented contract", {
   # The default must not declare an implausible omission rate for a parameter
   # the user left out of the formula.
   expect_equal(pnorm(m$p_types[["h"]]), 0.95, tolerance = 1e-12)
-  # relax only moves the shape bounds; the kernel is shared.
+  # Both shapes are bounded below at 1.  The sub-one corner is mathematically
+  # valid but is deliberately unreachable: see the (h, tau) representability
+  # test below.
   expect_equal(unname(m$bound$minmax[, "alpha"]), c(1, Inf))
   expect_equal(unname(m$bound$minmax[, "beta"]), c(1, Inf))
-  expect_equal(unname(FRQ(relax = TRUE)$bound$minmax[, "alpha"]),
-               c(1e-4, Inf))
-  expect_equal(FRQ(relax = TRUE)$c_name, "FRQ")
+  expect_equal(m$c_name, "FRQ")
+  # FRQ() takes no arguments: the `relax` switch has been removed.
+  expect_length(formals(FRQ), 0L)
+})
+
+test_that("the (h, tau) coordinates are representable on the whole bounded box", {
+  # Why alpha, beta >= 1 is a bound and not a preference.  Over the permitted
+  # box the inversion h -> p must round-trip and must never saturate: p == 1
+  # would silently fit a PROPER distribution, and p == u would make the kernel
+  # reject an interior point (an artificial cliff for the sampler).
+  shapes <- c(1, 1.0001, 1.5, 2, 5, 20, 200)
+  hs <- c(1e-6, 1e-3, 0.05, 0.5, 0.9, 0.99, 1 - 1e-9)
+  grid <- expand.grid(alpha = shapes, beta = shapes, h = hs)
+  pl <- EMC2:::frq_rate(grid$alpha, grid$beta, grid$h, rep(0.3, nrow(grid)))
+  expect_false(anyNA(pl[, "p"]))
+  expect_true(all(pl[, "p"] > 0 & pl[, "p"] < 1))
+  expect_true(all(is.finite(pl[, "lambda"]) & pl[, "lambda"] > 0))
+  # h round-trips through the reported p.
+  expect_equal(pbeta(pl[, "p"], grid$alpha, grid$beta), grid$h, tolerance = 1e-8)
+  # ... and tau really is the conditional median.
+  cdf <- EMC2:::pfrq(rep(0.3, nrow(grid)), grid$alpha, grid$beta, grid$h,
+                     rep(0.3, nrow(grid)), lower_tail = TRUE)
+  expect_equal(cdf / grid$h, rep(0.5, nrow(grid)), tolerance = 1e-6)
+
+  # The corner the removed `relax` path used to expose: at these shapes the
+  # coordinates are NOT representable in double precision, which is the whole
+  # reason the bound sits at 1.
+  expect_equal(qbeta(0.99, 0.05, 0.05), 1)          # p saturates: h is a lie
+  expect_equal(qbeta(0.1, 1e-4, 1e-4), 0)           # p and u collapse together
 })
 
 test_that("dfun/pfun apply t0 and call the same kernel", {
@@ -419,6 +447,69 @@ test_that("an omission scores exactly sum_j log(1 - h_j)", {
                tolerance = 1e-6)
 })
 
+test_that("a finite UT normaliser keeps the retained never-finish atom", {
+  # make_missing() cuts only FINITE RTs outside [LT, UT], so an intrinsic
+  # omission survives upper truncation.  The retained sample space is therefore
+  #   {LT <= T <= UT} u {T = Inf}
+  # and Z must be S(LT) - S(UT) + S(Inf), NOT the finite window alone.  With
+  # the atom dropped the finite density renormalises to one on its own while
+  # the omission keeps its undivided score, so the conditional distribution
+  # integrates to more than one -- and to more than one for the omission ALONE
+  # once F(UT) < S(Inf).  A "the answer is finite" check cannot see any of it.
+  skip_on_cran()
+  fx <- frq_fixture(n = 40)
+  LT <- 0.2; UT <- 0.9
+  d2 <- fx$dat
+  d2$rt[1:6] <- Inf                  # intrinsic omissions, retained under UT
+  d2$R[1:6] <- NA
+  d2 <- d2[d2$rt >= LT | is.infinite(d2$rt), ]
+  d2 <- d2[d2$rt <= UT | is.infinite(d2$rt), ]
+  d2$LT <- LT; d2$UT <- UT
+  e2 <- suppressMessages(make_emc(d2, fx$des, type = "single", n_chains = 1,
+                                  compress = FALSE, rt_resolution = NULL))
+  dadm <- e2[[1]]$data[[1]]
+  pars <- EMC2:::get_pars_matrix_oo(fx$p, dadm, e2[[1]]$model())
+
+  n_lR <- nlevels(dadm$lR)
+  trial <- rep(seq_len(nrow(dadm) / n_lR), each = n_lR)
+  # Independent reference: Z = S(LT) - S(UT) + S(Inf), per trial.
+  ref_trunc_ll <- function(p) {
+    pars <- EMC2:::get_pars_matrix_oo(p, dadm, e2[[1]]$model())
+    s_at <- function(t) EMC2:::sFRQ(rep(t, nrow(dadm)), pars)
+    s_LT <- s_at(LT); s_UT <- s_at(UT); s_Inf <- s_at(Inf)
+    d <- EMC2:::dFRQ(dadm$rt, pars)
+    s <- EMC2:::sFRQ(dadm$rt, pars)
+    win <- as.logical(dadm$winner)
+    # An omission is identified by rt, not by `winner`: dadm still flags a
+    # winner row on an R = NA trial, so any(win) is TRUE there too.
+    ll <- vapply(split(seq_len(nrow(dadm)), trial), function(ix) {
+      logZ <- log(prod(s_LT[ix]) - prod(s_UT[ix]) + prod(s_Inf[ix]))
+      num <- if (!is.finite(dadm$rt[ix][1])) sum(log(s[ix]))  # the +Inf atom
+             else log(d[ix][win[ix]]) + sum(log(s[ix][!win[ix]]))
+      num - logZ
+    }, numeric(1))
+    sum(pmax(ll, log(1e-10)))
+  }
+  expect_equal(frq_ll(e2, fx$p), ref_trunc_ll(fx$p), tolerance = 1e-6)
+
+  # Again where the atom dominates: at h ~ 0.35 the never-finish mass is a
+  # bigger share of the retained sample space than the whole finite window.
+  # This is the configuration that made the old normaliser assign an omission
+  # a conditional probability approaching (and past) one.
+  p_low <- fx$p
+  p_low[["h"]] <- qnorm(0.35); p_low[["h_lMd"]] <- 0
+  expect_equal(frq_ll(e2, p_low), ref_trunc_ll(p_low), tolerance = 1e-6)
+
+  # The atom is not a rounding correction: dropping it (the old finite-window
+  # normaliser) is worth ~25 nats over these 40 trials.
+  pars_low <- EMC2:::get_pars_matrix_oo(p_low, dadm, e2[[1]]$model())
+  s_low <- function(t) prod(EMC2:::sFRQ(rep(t, nrow(dadm)), pars_low)[seq_len(n_lR)])
+  Z_fixed <- s_low(LT) - s_low(UT) + s_low(Inf)
+  Z_finite_only <- s_low(LT) - s_low(UT)
+  expect_gt(s_low(Inf), 0.8 * Z_finite_only)
+  expect_gt(40 * (log(Z_fixed) - log(Z_finite_only)), 10)
+})
+
 test_that("truncation, censoring and pContaminant stay well posed", {
   skip_on_cran()
   fx <- frq_fixture(n = 40)
@@ -523,7 +614,10 @@ test_that("make_data produces omissions the design can be fit back through", {
   skip_on_cran()
   set.seed(20260816)
   fx <- frq_fixture(n = 30)
-  sim <- make_data(fx$p, design = fx$des, n_trials = 150)
+  p_omit <- fx$p
+  p_omit[["h"]] <- qnorm(0.8)
+  p_omit[["h_lMd"]] <- 0.4
+  sim <- make_data(p_omit, design = fx$des, n_trials = 150)
   expect_true(any(is.infinite(sim$rt)))              # intrinsic omissions
   expect_true(all(is.na(sim$R[is.infinite(sim$rt)])))
   fin <- is.finite(sim$rt)
@@ -532,7 +626,7 @@ test_that("make_data produces omissions the design can be fit back through", {
   expect_gt(mean(sim$S[fin] == sim$R[fin]), 0.6)
   e <- suppressMessages(make_emc(sim, fx$des, type = "single", n_chains = 1,
                                  compress = FALSE, rt_resolution = NULL))
-  expect_true(is.finite(frq_ll(e, fx$p)))
+  expect_true(is.finite(frq_ll(e, p_omit)))
 })
 
 # ---------------------------------------------------------------------------
@@ -548,18 +642,17 @@ test_that("the likelihood is maximised at the generating parameters", {
   skip_on_cran()
   set.seed(20260816)
   fx <- frq_fixture(n = 30)
-  # 3000 trials, not fewer: beta is by far the weakest coordinate (a +-0.3
-  # perturbation costs ~1.4 nats against ~40-2000 for the others, which is the
-  # identifiability note in ?FRQ showing up quantitatively), so at a few
-  # hundred trials sampling noise flips its profile.
-  sim <- make_data(fx$p, design = fx$des, n_trials = 3000)
+  p_rec <- fx$p
+  p_rec["h"] <- qnorm(0.7)
+  p_rec["h_lMd"] <- 0.3
+  sim <- make_data(p_rec, design = fx$des, n_trials = 3000)
   e <- suppressMessages(make_emc(sim, fx$des, type = "single", n_chains = 1,
                                  compress = FALSE, rt_resolution = NULL))
-  ll0 <- frq_ll(e, fx$p)
+  ll0 <- frq_ll(e, p_rec)
   expect_true(is.finite(ll0))
-  for (nm in names(fx$p)) {
-    for (delta in c(-0.3, 0.3)) {
-      p2 <- fx$p
+  for (nm in names(p_rec)) {
+    for (delta in c(-0.5, 0.5)) {
+      p2 <- p_rec
       p2[[nm]] <- p2[[nm]] + delta
       expect_lt(frq_ll(e, p2), ll0)
     }
