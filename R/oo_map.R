@@ -160,6 +160,27 @@
   missing_columns(p)
 }
 
+# Subsetting a data frame preserves custom attributes unchanged.  Covariate
+# maps are row-aligned with the design data, so they must be sliced alongside
+# the data whenever the mapper works on a subset (typically one subject).
+.oo_subset_dadm <- function(dadm, row_idx) {
+  if (is.null(row_idx)) return(dadm)
+
+  out <- dadm[row_idx, , drop = FALSE]
+  covariate_maps <- attr(dadm, "covariate_maps")
+  if (!is.null(covariate_maps)) {
+    covariate_maps <- lapply(covariate_maps, function(map) {
+      if (is.null(dim(map))) {
+        map[row_idx]
+      } else {
+        map[row_idx, , drop = FALSE]
+      }
+    })
+    attr(out, "covariate_maps") <- covariate_maps
+  }
+  out
+}
+
 get_pars_oo <- function(p, dadm, model,
                         pretransformed = FALSE,
                         constants_included = FALSE,
@@ -178,7 +199,8 @@ get_pars_oo <- function(p, dadm, model,
     model_list$pre_transform
   }
 
-  call_one <- function(cur_particles, cur_dadm, row_idx = NULL) {
+  call_one <- function(cur_particles, cur_dadm = dadm, row_idx = NULL) {
+    if (!is.null(row_idx)) cur_dadm <- .oo_subset_dadm(dadm, row_idx)
     get_pars_c_wrapper_oo(
       particle_matrix = cur_particles,
       data = cur_dadm,
@@ -219,7 +241,6 @@ get_pars_oo <- function(p, dadm, model,
     row_ids[[i]] <- which(row_idx)
     pieces[[i]] <- call_one(
       cur_particles = particle_matrix[i, , drop = FALSE],
-      cur_dadm = dadm[row_idx, , drop = FALSE],
       row_idx = row_idx
     )
   }
@@ -243,7 +264,7 @@ get_pars_batch_oo <- function(p, dadm, model, row_idx = NULL,
                               kernel_output_codes = 1L) {
   model_list <- .oo_model_list(model)
   if (is.null(row_idx)) row_idx <- seq_len(nrow(dadm))
-  cur_dadm <- dadm[row_idx, , drop = FALSE]
+  cur_dadm <- .oo_subset_dadm(dadm, row_idx)
   particle_matrix <- .oo_particle_matrix(p, dadm,
                                          keep_all_columns = constants_included)
   constants <- attr(dadm, "constants")

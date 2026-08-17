@@ -476,6 +476,33 @@ test_that("single-column covariate maps retain matrix shape", {
   )
   expect_true(initialized[[1]]$init)
 })
+
+test_that("prediction mapper subsets covariate maps with the data", {
+  dadm <- LNR_single_cov_map[[1]]$data[[1]]
+  p <- sampled_pars(single_cov_design, doMap = FALSE)
+  mapped <- EMC2:::get_pars_batch_oo(
+    p, dadm, single_cov_design$model, row_idx = seq_len(2)
+  )
+  expect_equal(dim(mapped)[1], 2L)
+})
+
+test_that("covariate maps prevent invalid compression", {
+  da <- data.frame(
+    subjects = factor(rep(1, 4)),
+    R = factor(rep(1, 4)),
+    lR = factor(c(1, 2, 1, 2)),
+    rt = rep(1, 4),
+    LT = 0, UT = Inf, LC = 0, UC = Inf
+  )
+  dm <- matrix(1, nrow = 4, ncol = 1, dimnames = list(NULL, "m"))
+  attr(dm, "expand") <- seq_len(nrow(da))
+  attr(da, "covariate_maps") <- list(map1 = c(1, 1, 2, 2))
+
+  compressed <- EMC2:::compress_dadm(da, list(m = dm), NULL, NULL)
+  expect_equal(nrow(compressed), nrow(da))
+  expect_equal(dim(attr(compressed, "covariate_maps")[[1]]), c(4L, 1L))
+  expect_equal(as.numeric(attr(compressed, "covariate_maps")[[1]]), c(1, 1, 2, 2))
+})
 #
 #
 # ##

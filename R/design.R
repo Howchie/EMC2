@@ -835,6 +835,26 @@ compress_dadm <- function(da,designs,Fcov,Ffun)
   if("LC"%in%colnames(da)) LC=da$LC else{LC <- attr(da,"LC")}; if (is.null(LC)) LC <- 0
   if("UC"%in%colnames(da)) UC=da$UC else{UC <- attr(da,"UC")}; if (is.null(UC)) UC <- Inf
     nacc <- length(unique(da$lR))
+    # Covariate maps are part of the trial design just like the ordinary
+    # covariate columns.  Normalise them before building the contraction key so
+    # rows with different map values cannot be merged and subsequently receive
+    # the map from whichever row happened to be retained.
+    covariate_maps <- attr(da, "covariate_maps")
+    if (!is.null(covariate_maps)) {
+      covariate_maps <- lapply(covariate_maps, function(map) {
+        if (is.null(dim(map))) {
+          if (length(map) != nrow(da)) {
+            stop("Each covariate map must have one value per expanded data row")
+          }
+          map <- matrix(map, ncol = 1L)
+        }
+        if (!is.matrix(map) || !is.numeric(map) || nrow(map) != nrow(da) ||
+            ncol(map) < 1L) {
+          stop("Each covariate map must be a numeric matrix with one row per expanded data row")
+        }
+        map
+      })
+    }
     # contract output
     design_cells_list <- lapply(designs, function(x) {
       do.call(paste, c(unname(as.data.frame(x[attr(x, "expand"), , drop = FALSE])), sep = "_"))
@@ -854,6 +874,15 @@ compress_dadm <- function(da,designs,Fcov,Ffun)
     if (!is.null(Ffun))
       cells <- paste(cells, do.call(paste, c(unname(as.data.frame(da[, Ffun, drop = FALSE])), sep = "+")), sep = "+")
 
+    covariate_map_cells <- NULL
+    if (length(covariate_maps)) {
+      map_cells <- lapply(covariate_maps, function(map) {
+        do.call(paste, c(unname(as.data.frame(map)), sep = "+"))
+      })
+      covariate_map_cells <- do.call(paste, c(unname(map_cells), sep = "+"))
+      cells <- paste(cells, covariate_map_cells, sep = "+")
+    }
+
     if (nacc>1) {
       cells_mat <- matrix(cells, nrow = nacc)
       base_cells <- do.call(paste, c(unname(as.data.frame(t(cells_mat))), sep = "_"))
@@ -868,20 +897,8 @@ compress_dadm <- function(da,designs,Fcov,Ffun)
     # expanded row count and no longer align with `out`.  Preserve matrix
     # dimensions as well: a one-column map must remain an n x 1 matrix rather
     # than being simplified to a vector.
-    covariate_maps <- attr(da, "covariate_maps")
     if (!is.null(covariate_maps)) {
-      covariate_maps <- lapply(covariate_maps, function(map) {
-        if (is.null(dim(map))) {
-          if (length(map) != nrow(da)) {
-            stop("Each covariate map must have one value per expanded data row")
-          }
-          map <- matrix(map, ncol = 1L)
-        }
-        if (!is.matrix(map) || nrow(map) != nrow(da)) {
-          stop("Each covariate map must be a matrix with one row per expanded data row")
-        }
-        map[contract, , drop = FALSE]
-      })
+      covariate_maps <- lapply(covariate_maps, function(map) map[contract, , drop = FALSE])
       attr(out, "covariate_maps") <- covariate_maps
     }
     attr(out,"contract") <- contract
@@ -895,14 +912,20 @@ compress_dadm <- function(da,designs,Fcov,Ffun)
     # indices to use to contract further ignoring rt then expand back
     cells_nort <- paste(
       design_cells, da$subjects, da$R, da$lR, LT, UT, LC, UC, sep = "+"
-    )[contract]
+    )
+    if (!is.null(covariate_map_cells))
+      cells_nort <- paste(cells_nort, covariate_map_cells, sep = "+")
+    cells_nort <- cells_nort[contract]
     attr(out,"unique_nort") <- !duplicated(cells_nort)
     attr(out,"expand_nort") <- as.numeric(factor(cells_nort,levels=unique(cells_nort)))
 
     # indices to use to contract ignoring rt and response (R), then expand back
     cells_nortR <- paste(
       design_cells, da$subjects, LT, UT, LC, UC, sep = "+"
-    )[contract] #  ,da$lR
+    )
+    if (!is.null(covariate_map_cells))
+      cells_nortR <- paste(cells_nortR, covariate_map_cells, sep = "+")
+    cells_nortR <- cells_nortR[contract] #  ,da$lR
     attr(out,"unique_nortR") <- !duplicated(cells_nortR)
     attr(out,"expand_nortR") <- as.numeric(factor(cells_nortR,levels=unique(cells_nortR)))
 

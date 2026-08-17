@@ -32,6 +32,7 @@ the \code{formula} argument of \code{design()}. They can also be accessed with
    \emph{h} \tab probit \tab [0, 1] \tab qnorm(0.95) \tab  \tab Probability that the accumulator ever responds \cr
    \emph{tau} \tab log \tab [0, Inf] \tab log(0.5) \tab  \tab Median decision time on the trials where it does respond \cr
    \emph{t0} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Non-decision time \cr
+   \emph{delta} \tab log \tab [0, 6] \tab log(0) \tab  \tab Between-trial variability in threshold; 0 (the default) turns it off \cr
    \emph{pContaminant} \tab probit \tab [0, 1] \tab qnorm(0) \tab  \tab Optional \emph{omission} contaminant probability: mass at \code{rt = Inf} only, handled by the data pipeline \cr
    \emph{pGuess} \tab probit \tab [0, 1] \tab qnorm(0) \tab  \tab Optional uniform \emph{guess} (outlier) probability, mixed into observed RT densities over the guess window \cr
 }
@@ -56,6 +57,20 @@ design on \code{tau} alone is a pure speed effect, on \code{h} alone a pure
 availability effect, and on both is the model that contains the other two.
 Note that holding \code{tau} fixed while \code{h} varies fixes the completion time
 \emph{given} completion, which is not the same as holding \code{lambda} fixed.
+
+\code{delta} adds between-trial variability in how much evidence the accumulator
+demands before responding, playing the role that start-point or threshold
+variability plays in the ballistic models. On a trial where \code{delta} is
+larger, the requirement is more often unusually lenient \emph{or} unusually
+strict, and less often typical; the average requirement is unchanged, so
+\code{h} and \code{tau} keep their meanings exactly. At the default of zero there is
+no such variability and the model reduces to the description above.
+\code{mapped_pars()} reports \code{sQ} = \code{delta}/sqrt(3), the standard deviation of
+the trial-to-trial shift on a log-odds scale. Note that \code{delta} is a
+property of a single accumulator rather than a state shared by the whole
+race, and that it is only weakly identified: values below about 2 are
+difficult to distinguish from a small change in \code{alpha} and \code{beta}, so it
+is worth fitting only with a lot of data or a strong prior.
 
 \code{alpha} and \code{beta} control the shape of the distribution: \code{alpha} how
 sharply the density rises at the leading edge, \code{beta} how heavy the late
