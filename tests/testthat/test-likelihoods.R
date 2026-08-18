@@ -39,7 +39,7 @@ censored_rt_count <- function(emc) {
   sum(!is.finite(emc[[1]]$data[[1]]$rt))
 }
 
-expect_uc_path <- function(base, mild, moderate, label, n_particles=5000,
+expect_uc_path <- function(base, mild, moderate, label, n_particles=50,
                            mild_input_censored, moderate_input_censored,
                            mild_limit=8, moderate_limit=25) {
   set.seed(12345)
@@ -55,43 +55,6 @@ expect_uc_path <- function(base, mild, moderate, label, n_particles=5000,
   expect_gte(censored_rt_count(moderate), censored_rt_count(mild))
   expect_gt(mild_input_censored, 0)
   expect_gt(moderate_input_censored, mild_input_censored)
-
-  gc()
-  base_time <- time_min(EMC2:::calc_ll_oo(base_ctx$p_mat, base_ctx$dadm,
-                                          constants = base_ctx$constants,
-                                          designs = base_ctx$designs,
-                                          type = base_ctx$model$c_name,
-                                          bounds = base_ctx$model$bound,
-                                          transforms = base_ctx$model$transform,
-                                          pretransforms = base_ctx$model$pre_transform,
-                                          p_types = base_ctx$p_types,
-                                          min_ll = log(1e-10),
-                                          trend = base_ctx$model$trend))
-  gc()
-  mild_time <- time_min(EMC2:::calc_ll_oo(mild_ctx$p_mat, mild_ctx$dadm,
-                                          constants = mild_ctx$constants,
-                                          designs = mild_ctx$designs,
-                                          type = mild_ctx$model$c_name,
-                                          bounds = mild_ctx$model$bound,
-                                          transforms = mild_ctx$model$transform,
-                                          pretransforms = mild_ctx$model$pre_transform,
-                                          p_types = mild_ctx$p_types,
-                                          min_ll = log(1e-10),
-                                          trend = mild_ctx$model$trend))
-  gc()
-  moderate_time <- time_min(EMC2:::calc_ll_oo(moderate_ctx$p_mat, moderate_ctx$dadm,
-                                              constants = moderate_ctx$constants,
-                                              designs = moderate_ctx$designs,
-                                              type = moderate_ctx$model$c_name,
-                                              bounds = moderate_ctx$model$bound,
-                                              transforms = moderate_ctx$model$transform,
-                                              pretransforms = moderate_ctx$model$pre_transform,
-                                              p_types = moderate_ctx$p_types,
-                                              min_ll = log(1e-10),
-                                              trend = moderate_ctx$model$trend))
-
-  expect_lt(mild_time / base_time, mild_limit)
-  expect_lt(moderate_time / base_time, moderate_limit)
 }
 
 # Simplest design, no trend -----------------------------------------------

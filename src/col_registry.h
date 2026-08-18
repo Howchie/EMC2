@@ -120,6 +120,38 @@ namespace bawd_logn {
   }
 }
 
+// R/model_BAwD.R — BAwD reduced/identified chart.  The sampled columns are
+// (y0, T_max, A, delta, sigma, t0); the kernel maps them to the ordinary
+// lognormal BAwD coordinates (mu, sigma, B, A, t0, k, ell) internally.  `A`
+// is the ABSOLUTE start-point range, not A/b: threshold manipulations must not
+// silently change the start-point variability.  `delta` is the standardized
+// launch-location coordinate, not the threshold-gap parameter `B`.
+namespace bawd_reduced {
+  enum : int { y0 = 0, T_max, A, delta, sigma, t0, N_REQ };
+  inline ColSpec spec() {
+    static const char* n[] = {"y0", "T_max", "A", "delta", "sigma", "t0"};
+    return {n, N_REQ, "BAwD_REDUCED"};
+  }
+}
+
+// R/model_BAwD.R — BAwDp (proportional-clearance drive clock).  As with BAwL,
+// the launch pair occupies the first two positions; only the names differ for
+// the lognormal launch.  `lambda` is the dimensionless clearance fraction.
+namespace bawdp {
+  enum : int { v = 0, sv, B, A, t0, k, lambda, N_REQ };
+  inline ColSpec spec() {
+    static const char* n[] = {"v", "sv", "B", "A", "t0", "k", "lambda"};
+    return {n, N_REQ, "BAwDp"};
+  }
+}
+namespace bawdp_logn {
+  enum : int { mu = 0, sigma, B, A, t0, k, lambda, N_REQ };
+  inline ColSpec spec() {
+    static const char* n[] = {"mu", "sigma", "B", "A", "t0", "k", "lambda"};
+    return {n, N_REQ, "BAwDp_LOGN"};
+  }
+}
+
 // R/model_FRQ.R — FRQ (finite reservoir quorum).  alpha/beta are the Beta
 // shapes of the latent quorum U ~ Beta(alpha, beta), i.e. the quorum size K
 // and the residual redundancy N - K + 1.  The latter is called `beta` rather

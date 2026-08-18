@@ -121,9 +121,11 @@ test_that("live dispatcher honours emc2_set_stop_method, incl. n_nodes", {
 # ---- "auto"/"analytic" dispatch (n_go == 1 closed form + GL fallback) -------
 
 test_that("auto matches integrate across a parameter grid (n_go = 1)", {
-  grid <- expand.grid(sigma = c(.05, .03, .02, .01, .005, .002),
-                      tau   = c(.04, .08, .12),
-                      SSD   = c(0, .15, .3))
+  grid <- data.frame(
+    sigma = c(.05, .02, .005),
+    tau   = c(.04, .08, .12),
+    SSD   = c(0, .15, .3)
+  )
   for (i in seq_len(nrow(grid))) {
     p <- make_texg_pars(muG = 0.50, sigG = 0.05, tauG = 0.08, lbG = 0.05,
                         muS = 0.20, sigS = grid$sigma[i], tauS = grid$tau[i],

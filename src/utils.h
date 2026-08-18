@@ -130,6 +130,11 @@ struct ContextForRaceModels {
     // argument of the exported dbawd/pbawd.
     int bawd_launch = BAWD_LAUNCH_LOGNORMAL;
 
+    // BAwD's identified chart: the raw columns are (y0, T_max, A, delta,
+    // sigma, t0) and the adapters map them to the ordinary lognormal BAwD
+    // coordinates before evaluating the same closed-form kernel.
+    bool bawd_reparameterized = false;
+
     // BAwL launch-strength distribution, on the same convention: 0 = normal
     // (v, sv), 1 = lognormal (mu, sigma).  Set from the "_LOGN" c_name suffix.
     // The default is the historical Gaussian BAwL; LBA is always normal.
@@ -1599,6 +1604,366 @@ inline void bawd_logS_at_t(double t, const double* const* cols,
     }
     logS_out[j] = bad ? R_NegInf : logS;
   }
+}
+
+// ============================================================
+// BAwD reduced chart and BAwDp (proportional-clearance drive clock)
+// ============================================================
+
+// The reduced BAwD chart is deliberately mapped here, rather than in R's
+// Ttransform: the compiled likelihood consumes the p_types prefix positionally.
+// A is the absolute start-point range.  The evidence scale is fixed at
+// ell = 1, while y0 and T_max determine the physical boundary and decay rate:
+//   k = y0 / T_max,
+//   b = (exp(y0) - 1 - y0) / k,
+//   mu = y0 + sigma * delta,
+//   A is the sampled start-point range, B = b - A.  `delta` is not B: it is
+//   the standardized launch-location coordinate used to recover mu.
+struct BawdReducedPars {
+  double mu = R_NaN;
+  double sigma = R_NaN;
+  double B = R_NaN;
+  double A = R_NaN;
+  double t0 = R_NaN;
+  double k = R_NaN;
+  double ell = 1.0;
+  double b = R_NaN;
+  bool ok = false;
+};
+
+inline BawdReducedPars bawd_reduced_map(const double* par) {
+  BawdReducedPars out;
+  const double y0 = par[emc2col::bawd_reduced::y0];
+  const double tmax = par[emc2col::bawd_reduced::T_max];
+  const double A = par[emc2col::bawd_reduced::A];
+  const double delta = par[emc2col::bawd_reduced::delta];
+  const double sigma = par[emc2col::bawd_reduced::sigma];
+  const double t0 = par[emc2col::bawd_reduced::t0];
+  if (!(y0 > 0.0) || !(tmax > 0.0) || !(A >= 0.0) || !(sigma > 0.0) ||
+      !emc2_isfinite(y0) || !emc2_isfinite(tmax) || !emc2_isfinite(A) ||
+      !emc2_isfinite(delta) || !emc2_isfinite(sigma) || !emc2_isfinite(t0))
+    return out;
+  const double h = bawd_em1my(y0);
+  if (!(h > 0.0) || !emc2_isfinite(h)) return out;
+  const double k = y0 / tmax;
+  const double b = h / k;
+  if (!(k > 0.0) || !emc2_isfinite(k) || !(b >= A) || !(b > 0.0) ||
+      !emc2_isfinite(b)) return out;
+  out.mu = y0 + sigma * delta;
+  out.sigma = sigma;
+  out.B = b - A;
+  out.A = A;
+  out.t0 = t0;
+  out.k = k;
+  out.b = b;
+  out.ok = emc2_isfinite(out.mu) && emc2_isfinite(out.B);
+  return out;
+}
+
+inline double dbawd_reduced_scalar(double t, const double* par, void* /*ctx_*/) {
+  const BawdReducedPars q = bawd_reduced_map(par);
+  if (!q.ok || t <= 0.0 || !(t - q.t0 > 0.0)) return 0.0;
+  const double lp = bawd_log_pdf(t - q.t0, q.A, q.b, q.mu, q.sigma,
+                                 q.k, q.ell, BAWD_LAUNCH_LOGNORMAL, true);
+  return (lp > R_NegInf && emc2_isfinite(lp)) ? std::exp(lp) : 0.0;
+}
+
+inline double pbawd_reduced_scalar(double t, const double* par, void* /*ctx_*/) {
+  const BawdReducedPars q = bawd_reduced_map(par);
+  if (!q.ok || t <= 0.0 || !(t - q.t0 > 0.0)) return 0.0;
+  const double lp = bawd_log_cdf(t - q.t0, q.A, q.b, q.mu, q.sigma,
+                                 q.k, q.ell, BAWD_LAUNCH_LOGNORMAL, true);
+  return (lp > R_NegInf) ? std::fmin(std::exp(lp), 1.0) : 0.0;
+}
+
+inline void dbawd_reduced_raw(const double* rt, const double* const* cols,
+                              int n_rows, const int* mask, const int* isok,
+                              double* out, double min_ll, void* ctx_) {
+  const bool floor_raw = raw_floor_log_lik(static_cast<ContextForRaceModels*>(ctx_));
+  for (int i = 0; i < n_rows; ++i) {
+    if (!mask[i]) continue;
+    double par[emc2col::bawd_reduced::N_REQ];
+    for (int j = 0; j < emc2col::bawd_reduced::N_REQ; ++j) par[j] = cols[j][i];
+    const BawdReducedPars q = bawd_reduced_map(par);
+    if (!isok[i] || !q.ok || rt[i] <= 0.0 || !(rt[i] - q.t0 > 0.0)) {
+      out[i] = raw_log_zero(min_ll, floor_raw);
+      continue;
+    }
+    const double lp = bawd_log_pdf(rt[i] - q.t0, q.A, q.b, q.mu, q.sigma,
+                                   q.k, q.ell, BAWD_LAUNCH_LOGNORMAL, true);
+    out[i] = (lp > R_NegInf && emc2_isfinite(lp))
+      ? raw_log_value(lp, min_ll, floor_raw) : raw_log_zero(min_ll, floor_raw);
+  }
+}
+
+inline void pbawd_reduced_raw(const double* rt, const double* const* cols,
+                              int n_rows, const int* mask, const int* isok,
+                              double* out, double min_ll, void* ctx_) {
+  const bool floor_raw = raw_floor_log_lik(static_cast<ContextForRaceModels*>(ctx_));
+  for (int i = 0; i < n_rows; ++i) {
+    if (!mask[i]) continue;
+    double par[emc2col::bawd_reduced::N_REQ];
+    for (int j = 0; j < emc2col::bawd_reduced::N_REQ; ++j) par[j] = cols[j][i];
+    const BawdReducedPars q = bawd_reduced_map(par);
+    if (!isok[i] || !q.ok || rt[i] <= 0.0 || !(rt[i] - q.t0 > 0.0)) {
+      out[i] = 0.0;
+      continue;
+    }
+    const double lp = bawd_log_cdf(rt[i] - q.t0, q.A, q.b, q.mu, q.sigma,
+                                   q.k, q.ell, BAWD_LAUNCH_LOGNORMAL, true);
+    if (!R_FINITE(lp)) { out[i] = 0.0; continue; }
+    if (lp >= 0.0) out[i] = raw_log_zero(min_ll, floor_raw);
+    else out[i] = log1m_exp(lp);
+  }
+}
+
+inline void bawd_reduced_logS_at_t(double t, const double* const* cols,
+                                   int /*n_rows_total*/, int n_lR, int /*n_par*/,
+                                   const int* trunc_mask, int n_unique_trials,
+                                   const int* isok_all, void* /*ctx_*/,
+                                   double* logS_out) {
+  for (int j = 0; j < n_unique_trials; ++j) {
+    if (!trunc_mask[j]) continue;
+    const int start = j * n_lR;
+    double logS = 0.0;
+    bool bad = false;
+    for (int k = 0; k < n_lR && !bad; ++k) {
+      const int r = start + k;
+      double par[emc2col::bawd_reduced::N_REQ];
+      for (int p = 0; p < emc2col::bawd_reduced::N_REQ; ++p) par[p] = cols[p][r];
+      const BawdReducedPars q = bawd_reduced_map(par);
+      if (!isok_all[r] || !q.ok) { bad = true; break; }
+      const double tt = t - q.t0;
+      if (!(tt > 0.0)) continue;
+      const double lp = bawd_log_cdf(tt, q.A, q.b, q.mu, q.sigma,
+                                     q.k, q.ell, BAWD_LAUNCH_LOGNORMAL, true);
+      if (lp >= 0.0) { bad = true; break; }
+      if (R_FINITE(lp)) logS += log1m_exp(lp);
+    }
+    logS_out[j] = bad ? R_NegInf : logS;
+  }
+}
+
+struct BawDpClock {
+  bool ok = false;
+  bool frozen = false;
+  double m = 0.0;
+  double dm = 0.0;
+};
+
+// Internal clock m(u) = (1-exp(-ku))/k - lambda*u.  For 0 < lambda < 1,
+// the clock freezes at u* = log(1/lambda)/k and m_max is finite.  This is an
+// elementary change of variable; the downstream LBA evaluation is always at
+// k = 0, so no numerical integration is introduced.
+inline BawDpClock bawdp_clock(double u, double k, double lambda) {
+  BawDpClock out;
+  if (!(u > 0.0) || !(k > 0.0) || !(lambda >= 0.0) || !(lambda < 1.0) ||
+      !emc2_isfinite(k) || !emc2_isfinite(lambda)) return out;
+  if (lambda == 0.0) {
+    const double m_max = 1.0 / k;
+    if (u == R_PosInf) {
+      out.ok = true; out.frozen = true; out.m = m_max; out.dm = 0.0;
+      return out;
+    }
+    const double ku = k * u;
+    out.m = -std::expm1(-ku) / k;
+    out.dm = std::exp(-ku);
+    out.ok = emc2_isfinite(out.m) && out.m > 0.0 && out.dm > 0.0;
+    return out;
+  }
+  const double log_lambda = std::log(lambda);
+  const double u_star = -log_lambda / k;
+  const double m_max = (-std::expm1(log_lambda) + lambda * log_lambda) / k;
+  if (!emc2_isfinite(m_max) || !(m_max > 0.0)) return out;
+  if (u == R_PosInf || u >= u_star) {
+    out.ok = true;
+    out.frozen = true;
+    out.m = m_max;
+    out.dm = 0.0;
+    return out;
+  }
+  const double ku = k * u;
+  const double e = std::exp(-ku);
+  out.m = -std::expm1(-ku) / k - lambda * u;
+  out.dm = e - lambda;
+  out.ok = emc2_isfinite(out.m) && out.m > 0.0 && out.dm > 0.0;
+  return out;
+}
+
+inline double dbawdp_scalar(double t, const double* par, void* ctx_) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  const int launch = ctx ? ctx->bawl_launch : BAWL_LAUNCH_LOGNORMAL;
+  const double tt = t - par[emc2col::bawdp::t0];
+  if (t <= 0.0 || !(tt > 0.0)) return 0.0;
+  const BawDpClock g = bawdp_clock(tt, par[emc2col::bawdp::k],
+                                   par[emc2col::bawdp::lambda]);
+  if (!g.ok || g.frozen) return 0.0;
+  const double lp = log_ba_pdf_launch(g.m, par[emc2col::bawdp::A],
+                                      par[emc2col::bawdp::B] + par[emc2col::bawdp::A],
+                                      par[emc2col::bawdp::v], par[emc2col::bawdp::sv],
+                                      0.0, ctx ? ctx->use_posdrift : true,
+                                      BAWL_DENOM_FLOOR, launch);
+  return (lp > R_NegInf && emc2_isfinite(lp)) ? std::exp(lp + std::log(g.dm)) : 0.0;
+}
+
+inline double pbawdp_scalar(double t, const double* par, void* ctx_) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  const int launch = ctx ? ctx->bawl_launch : BAWL_LAUNCH_LOGNORMAL;
+  const double tt = t - par[emc2col::bawdp::t0];
+  if (t <= 0.0 || !(tt > 0.0)) return 0.0;
+  const BawDpClock g = bawdp_clock(tt, par[emc2col::bawdp::k],
+                                   par[emc2col::bawdp::lambda]);
+  if (!g.ok) return 0.0;
+  const double lp = log_ba_cdf_launch(g.m, par[emc2col::bawdp::A],
+                                      par[emc2col::bawdp::B] + par[emc2col::bawdp::A],
+                                      par[emc2col::bawdp::v], par[emc2col::bawdp::sv],
+                                      0.0, ctx ? ctx->use_posdrift : true,
+                                      BAWL_DENOM_FLOOR, launch);
+  return (lp > R_NegInf) ? std::fmin(std::exp(lp), 1.0) : 0.0;
+}
+
+inline void dbawdp_raw(const double* rt, const double* const* cols, int n_rows,
+                       const int* mask, const int* isok, double* out,
+                       double min_ll, void* ctx_) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  const bool floor_raw = raw_floor_log_lik(ctx);
+  const bool pd = ctx ? ctx->use_posdrift : true;
+  const int launch = ctx ? ctx->bawl_launch : BAWL_LAUNCH_LOGNORMAL;
+  const double* p1 = cols[emc2col::bawdp::v];
+  const double* p2 = cols[emc2col::bawdp::sv];
+  const double* B = cols[emc2col::bawdp::B];
+  const double* A = cols[emc2col::bawdp::A];
+  const double* t0 = cols[emc2col::bawdp::t0];
+  const double* k = cols[emc2col::bawdp::k];
+  const double* lam = cols[emc2col::bawdp::lambda];
+  for (int i = 0; i < n_rows; ++i) {
+    if (!mask[i]) continue;
+    const double tt = rt[i] - t0[i];
+    const BawDpClock g = bawdp_clock(tt, k[i], lam[i]);
+    if (!isok[i] || rt[i] <= 0.0 || !(tt > 0.0) || !g.ok || g.frozen) {
+      out[i] = raw_log_zero(min_ll, floor_raw); continue;
+    }
+    const double lp = log_ba_pdf_launch(g.m, A[i], B[i] + A[i], p1[i], p2[i],
+                                        0.0, pd, BAWL_DENOM_FLOOR, launch);
+    const double out_lp = (lp > R_NegInf && emc2_isfinite(lp))
+      ? lp + std::log(g.dm) : R_NegInf;
+    out[i] = (out_lp > R_NegInf && emc2_isfinite(out_lp))
+      ? raw_log_value(out_lp, min_ll, floor_raw) : raw_log_zero(min_ll, floor_raw);
+  }
+}
+
+inline void pbawdp_raw(const double* rt, const double* const* cols, int n_rows,
+                       const int* mask, const int* isok, double* out,
+                       double min_ll, void* ctx_) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  const bool floor_raw = raw_floor_log_lik(ctx);
+  const bool pd = ctx ? ctx->use_posdrift : true;
+  const int launch = ctx ? ctx->bawl_launch : BAWL_LAUNCH_LOGNORMAL;
+  const double* p1 = cols[emc2col::bawdp::v];
+  const double* p2 = cols[emc2col::bawdp::sv];
+  const double* B = cols[emc2col::bawdp::B];
+  const double* A = cols[emc2col::bawdp::A];
+  const double* t0 = cols[emc2col::bawdp::t0];
+  const double* k = cols[emc2col::bawdp::k];
+  const double* lam = cols[emc2col::bawdp::lambda];
+  for (int i = 0; i < n_rows; ++i) {
+    if (!mask[i]) continue;
+    const double tt = rt[i] - t0[i];
+    if (!isok[i] || rt[i] <= 0.0 || !(tt > 0.0)) { out[i] = 0.0; continue; }
+    const BawDpClock g = bawdp_clock(tt, k[i], lam[i]);
+    if (!g.ok) { out[i] = 0.0; continue; }
+    const double lp = log_ba_cdf_launch(g.m, A[i], B[i] + A[i], p1[i], p2[i],
+                                        0.0, pd, BAWL_DENOM_FLOOR, launch);
+    if (!R_FINITE(lp)) { out[i] = 0.0; continue; }
+    out[i] = (lp >= 0.0) ? raw_log_zero(min_ll, floor_raw) : log1m_exp(lp);
+  }
+}
+
+inline void bawdp_logS_at_t(double t, const double* const* cols,
+                            int /*n_rows_total*/, int n_lR, int /*n_par*/,
+                            const int* trunc_mask, int n_unique_trials,
+                            const int* isok_all, void* ctx_, double* logS_out) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  const bool pd = ctx ? ctx->use_posdrift : true;
+  const int launch = ctx ? ctx->bawl_launch : BAWL_LAUNCH_LOGNORMAL;
+  for (int j = 0; j < n_unique_trials; ++j) {
+    if (!trunc_mask[j]) continue;
+    double logS = 0.0; bool bad = false;
+    for (int a = 0; a < n_lR && !bad; ++a) {
+      const int r = j * n_lR + a;
+      if (!isok_all[r]) { bad = true; break; }
+      const double tt = t - cols[emc2col::bawdp::t0][r];
+      if (!(tt > 0.0)) continue;
+      const BawDpClock g = bawdp_clock(tt, cols[emc2col::bawdp::k][r],
+                                       cols[emc2col::bawdp::lambda][r]);
+      if (!g.ok) { bad = true; break; }
+      const double lp = log_ba_cdf_launch(
+        g.m, cols[emc2col::bawdp::A][r],
+        cols[emc2col::bawdp::B][r] + cols[emc2col::bawdp::A][r],
+        cols[emc2col::bawdp::v][r], cols[emc2col::bawdp::sv][r], 0.0, pd,
+        BAWL_DENOM_FLOOR, launch);
+      if (lp >= 0.0) { bad = true; break; }
+      if (R_FINITE(lp)) logS += log1m_exp(lp);
+    }
+    logS_out[j] = bad ? R_NegInf : logS;
+  }
+}
+
+inline double bawdp_pdf_norm(double t, double A, double b, double p1, double p2,
+                             double k, double lambda, int launch, bool posdrift,
+                             bool log_out) {
+  const BawDpClock g = bawdp_clock(t, k, lambda);
+  if (!g.ok || g.frozen) return log_out ? R_NegInf : 0.0;
+  const double lp = log_ba_pdf_launch(g.m, A, b, p1, p2, 0.0, posdrift,
+                                      BAWL_DENOM_FLOOR, launch);
+  if (!(lp > R_NegInf) || !emc2_isfinite(lp)) return log_out ? R_NegInf : 0.0;
+  const double out = lp + std::log(g.dm);
+  return log_out ? out : std::exp(out);
+}
+
+inline double bawdp_cdf_norm(double t, double A, double b, double p1, double p2,
+                             double k, double lambda, int launch, bool posdrift,
+                             bool log_out) {
+  const BawDpClock g = bawdp_clock(t, k, lambda);
+  if (!g.ok) return log_out ? R_NegInf : 0.0;
+  const double lp = log_ba_cdf_launch(g.m, A, b, p1, p2, 0.0, posdrift,
+                                      BAWL_DENOM_FLOOR, launch);
+  if (log_out) return lp;
+  return (lp > R_NegInf) ? std::fmin(std::exp(lp), 1.0) : 0.0;
+}
+
+// [[Rcpp::export]]
+NumericVector dbawdp(NumericVector t, NumericVector A, NumericVector b,
+                     NumericVector p1, NumericVector p2, NumericVector k,
+                     NumericVector lambda, int launch = 1, bool posdrift = true,
+                     bool log_out = false) {
+  const int n = t.size();
+  NumericVector out(n);
+  auto pick = [](const NumericVector& x, int i) -> double {
+    return x.size() == 1 ? x[0] : x[i];
+  };
+  for (int i = 0; i < n; ++i)
+    out[i] = bawdp_pdf_norm(t[i], pick(A, i), pick(b, i), pick(p1, i),
+                            pick(p2, i), pick(k, i), pick(lambda, i),
+                            launch, posdrift, log_out);
+  return out;
+}
+
+// [[Rcpp::export]]
+NumericVector pbawdp(NumericVector t, NumericVector A, NumericVector b,
+                     NumericVector p1, NumericVector p2, NumericVector k,
+                     NumericVector lambda, int launch = 1, bool posdrift = true,
+                     bool log_out = false) {
+  const int n = t.size();
+  NumericVector out(n);
+  auto pick = [](const NumericVector& x, int i) -> double {
+    return x.size() == 1 ? x[0] : x[i];
+  };
+  for (int i = 0; i < n; ++i)
+    out[i] = bawdp_cdf_norm(t[i], pick(A, i), pick(b, i), pick(p1, i),
+                            pick(p2, i), pick(k, i), pick(lambda, i),
+                            launch, posdrift, log_out);
+  return out;
 }
 
 // ============================================================

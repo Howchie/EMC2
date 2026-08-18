@@ -695,6 +695,37 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
     // h = I_p(alpha, beta), and 1 - h of the mass sits at t = +Inf.  There is
     // no parameter setting that removes this, so the flag is unconditional.
     out.ctx.defective_upper_tail = true;
+  } else if (type_std.find("BAwDp") != std::string::npos) {
+    // BAwDp must precede the generic BAwD branch because its name contains the
+    // string "BAwD".  It is an LBA evaluated at the closed-form internal clock
+    // m(t), with m'(t) as the Jacobian and a finite frozen ceiling.
+    out.pdf1_ptr       = &dbawdp_scalar;
+    out.cdf1_ptr       = &pbawdp_scalar;
+    out.model_dfun_raw = &dbawdp_raw;
+    out.model_pfun_raw = &pbawdp_raw;
+    out.logS_at_t_ptr  = &bawdp_logS_at_t;
+    const bool bawdp_logn = (type_std.find("_LOGN") != std::string::npos);
+    out.col_spec = bawdp_logn ? emc2col::bawdp_logn::spec()
+                              : emc2col::bawdp::spec();
+    out.ctx.t0_index = emc2col::bawdp::t0;
+    out.ctx.bawl_launch = bawdp_logn ? BAWL_LAUNCH_LOGNORMAL
+                                     : BAWL_LAUNCH_NORMAL;
+    out.ctx.defective_upper_tail = true;
+    if (!bawdp_logn && type_std.find("IO") != std::string::npos)
+      out.ctx.use_posdrift = false;
+  } else if (type_std.find("BAwD_REDUCED") != std::string::npos) {
+    // The reduced chart is lognormal-only: delta is the standardized
+    // log-launch margin and the evidence scale is fixed at ell = 1.
+    out.pdf1_ptr       = &dbawd_reduced_scalar;
+    out.cdf1_ptr       = &pbawd_reduced_scalar;
+    out.model_dfun_raw = &dbawd_reduced_raw;
+    out.model_pfun_raw = &pbawd_reduced_raw;
+    out.logS_at_t_ptr  = &bawd_reduced_logS_at_t;
+    out.col_spec       = emc2col::bawd_reduced::spec();
+    out.ctx.t0_index   = emc2col::bawd_reduced::t0;
+    out.ctx.bawd_launch = BAWD_LAUNCH_LOGNORMAL;
+    out.ctx.bawd_reparameterized = true;
+    out.ctx.defective_upper_tail = true;
   } else if (type_std.find("BAwD") != std::string::npos) {
     // Dispatch is by substring, and "BAwD" is a substring of nothing here and
     // contains neither "BAwL" nor "LBA", so placement relative to those is

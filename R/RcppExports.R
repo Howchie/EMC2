@@ -457,6 +457,10 @@ rbawd_cpp <- function(pars, lR_levels, ok, launch, posdrift) {
     .Call(`_EMC2_rbawd_cpp`, pars, lR_levels, ok, launch, posdrift)
 }
 
+rbawdp_cpp <- function(pars, lR_levels, ok, launch, posdrift) {
+    .Call(`_EMC2_rbawdp_cpp`, pars, lR_levels, ok, launch, posdrift)
+}
+
 rfrq_cpp <- function(pars, lR_levels, ok) {
     .Call(`_EMC2_rfrq_cpp`, pars, lR_levels, ok)
 }
@@ -695,6 +699,14 @@ emc_copy_sample_prefix <- function(target, source) {
 
 run_trend_rcpp <- function(data, trend, param, trend_pars, pars_full, return_kernel = FALSE) {
     .Call(`_EMC2_run_trend_rcpp`, data, trend, param, trend_pars, pars_full, return_kernel)
+}
+
+dbawdp <- function(t, A, b, p1, p2, k, lambda, launch = 1L, posdrift = TRUE, log_out = FALSE) {
+    .Call(`_EMC2_dbawdp`, t, A, b, p1, p2, k, lambda, launch, posdrift, log_out)
+}
+
+pbawdp <- function(t, A, b, p1, p2, k, lambda, launch = 1L, posdrift = TRUE, log_out = FALSE) {
+    .Call(`_EMC2_pbawdp`, t, A, b, p1, p2, k, lambda, launch, posdrift, log_out)
 }
 
 ou_debug_set <- function(enabled = TRUE, level = 1L) {

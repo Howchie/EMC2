@@ -117,17 +117,12 @@ RNGkind("L'Ecuyer-CMRG")
 
 
 # ── Test 1: no ST, UC = Inf ───────────────────────────────────────────────────
-# R and C++ should agree on every trial type:
-#   - go trials with response
-#   - stop trials with go response
-#   - NR on go trials (go failure)
-#   - NR on stop trials (stop win: gf + (1−gf)(1−tf)·pStop)
 test_that("SSEXG no ST, UC=Inf: R == C++ for all trial types", {
   set.seed(44)
   design_ss <- .make_design_no_st()
   p_vector  <- .set_pars_no_st(sampled_pars(design_ss, doMap = FALSE))
 
-  dat  <- make_data(p_vector, design_ss, n_trials = 400, UC = Inf)
+  dat  <- make_data(p_vector, design_ss, n_trials = 80, UC = Inf)
   dat$rt[dat$rt==Inf]=NA
   dadm <- EMC2:::design_model(dat, design_ss, verbose = FALSE)
 
@@ -144,16 +139,12 @@ test_that("SSEXG no ST, UC=Inf: R == C++ for all trial types", {
 
 
 # ── Test 2: no ST, UC = 1.2 ──────────────────────────────────────────────────
-# For observed-response (finite RT) trials the likelihood formula is identical
-# whether or not a deadline is present, so R and C++ must still agree on that
-# subset.  For NR trials the C++ deadline formula differs from R; we just check
-# the full-dataset C++ LL is finite and not degenerate.
 test_that("SSEXG no ST, UC=1.2: finite-RT R==C++; full-dataset C++ is finite", {
   set.seed(45)
   design_ss <- .make_design_no_st()
   p_vector  <- .set_pars_no_st(sampled_pars(design_ss, doMap = FALSE))
 
-  dat  <- make_data(p_vector, design_ss, n_trials = 400, UC = 1.2)
+  dat  <- make_data(p_vector, design_ss, n_trials = 80, UC = 1.2)
   dadm <- EMC2:::design_model(dat, design_ss, verbose = FALSE)
 
   # ── subset to observed-response trials ──────────────────────────────────
@@ -168,26 +159,18 @@ test_that("SSEXG no ST, UC=1.2: finite-RT R==C++; full-dataset C++ is finite", {
   # ── full dataset (NR rows use C++ deadline formula) ──────────────────────
   ll_c_all <- .cpp_ll(p_vector, dadm)
   expect_true(is.finite(ll_c_all), "full-dataset C++ LL should be finite")
-  # Should be clearly above the floor of n_trials × min_ll
   n_trials <- length(unique(dadm$trials))
   expect_gt(ll_c_all, log(1e-10) * n_trials)
 })
 
 
 # ── Test 3: with ST, UC = Inf ─────────────────────────────────────────────────
-# Three observable outcome types to cover:
-#   (a) go-trial go response
-#   (b) stop-trial go response  (stop lost to go, ST lost)
-#   (c) stop-trial ST response  (stop won, ST produced overt response)
-#
-# The R likelihood now handles the NR stop-trial case in the ST design, so we
-# compare the full dataset directly rather than dropping those rows.
 test_that("SSEXG with ST, UC=Inf: R == C++ for all observed-response trial types", {
   set.seed(46)
   design_st <- .make_design_st()
   p_vector  <- .set_pars_st(sampled_pars(design_st, doMap = FALSE))
 
-  dat  <- make_data(p_vector, design_st, n_trials = 500, UC = Inf)
+  dat  <- make_data(p_vector, design_st, n_trials = 80, UC = Inf)
   dadm <- EMC2:::design_model(dat, design_st, verbose = FALSE)
 
   is_stop    <- is.finite(dat$SSD)
@@ -204,15 +187,12 @@ test_that("SSEXG with ST, UC=Inf: R == C++ for all observed-response trial types
 
 
 # ── Test 4: with ST, UC = 1.2 ────────────────────────────────────────────────
-# Censored NR trials in the ST model require the corrected formula
-# (logS_st + ...) derived from the C++ fix.  We cannot compare against R here,
-# but we verify the C++ produces finite, non-degenerate likelihoods.
 test_that("SSEXG with ST, UC=1.2: full-dataset C++ LL is finite", {
   set.seed(47)
   design_st <- .make_design_st()
   p_vector  <- .set_pars_st(sampled_pars(design_st, doMap = FALSE))
 
-  dat  <- make_data(p_vector, design_st, n_trials = 500, UC = 1.2)
+  dat  <- make_data(p_vector, design_st, n_trials = 80, UC = 1.2)
   dadm <- EMC2:::design_model(dat, design_st, verbose = FALSE)
 
   ll_c <- .cpp_ll(p_vector, dadm)

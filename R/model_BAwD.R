@@ -70,6 +70,50 @@ pBAwD <- function(rt, pars, launch = 1L, posdrift = TRUE) {
   out
 }
 
+.bawdp_check_cols <- function(pars, launch) {
+  need <- c(.bawl_par_names(launch), "b", "A", "t0", "k", "lambda")
+  missing <- setdiff(need, colnames(pars))
+  if (length(missing))
+    stop("BAwDp requires parameter columns ", paste(missing, collapse = ", "))
+  need
+}
+
+dBAwDp <- function(rt, pars, launch = 1L, posdrift = TRUE) {
+  nm <- .bawdp_check_cols(pars, launch)
+  dt <- rt - pars[, "t0"]
+  ok <- (rt > 0) & (dt > 0) & is.finite(dt) & (pars[, "b"] >= pars[, "A"])
+  ok[is.na(ok)] <- FALSE
+  out <- numeric(length(dt))
+  if (any(ok)) {
+    out[ok] <- dbawdp(t = dt[ok], A = pars[ok, "A"], b = pars[ok, "b"],
+                      p1 = pars[ok, nm[1]], p2 = pars[ok, nm[2]],
+                      k = pars[ok, "k"], lambda = pars[ok, "lambda"],
+                      launch = as.integer(launch), posdrift = posdrift)
+  }
+  out
+}
+
+pBAwDp <- function(rt, pars, launch = 1L, posdrift = TRUE) {
+  nm <- .bawdp_check_cols(pars, launch)
+  dt <- rt - pars[, "t0"]
+  ok <- (rt > 0) & (dt > 0) & (pars[, "b"] >= pars[, "A"])
+  ok[is.na(ok)] <- FALSE
+  out <- numeric(length(dt))
+  if (any(ok)) {
+    out[ok] <- pbawdp(t = dt[ok], A = pars[ok, "A"], b = pars[ok, "b"],
+                      p1 = pars[ok, nm[1]], p2 = pars[ok, nm[2]],
+                      k = pars[ok, "k"], lambda = pars[ok, "lambda"],
+                      launch = as.integer(launch), posdrift = posdrift)
+  }
+  out
+}
+
+# Single-accumulator diagnostics receive the reporting columns produced by
+# BAwD(parameterization = "reduced").  The likelihood adapter itself never
+# relies on these derived columns.
+dBAwD_reduced <- function(rt, pars) dBAwD(rt, pars, launch = 1L, posdrift = TRUE)
+pBAwD_reduced <- function(rt, pars) pBAwD(rt, pars, launch = 1L, posdrift = TRUE)
+
 # First (rising-limb) crossing of distance d, or Inf if the peak falls short.
 # Mirrors bawd_hit_time_r() in src/model_rng.h: Newton from the LBA-limit time,
 # which lies below the root because q(u) <= u and the trajectory is concave and
@@ -142,6 +186,67 @@ rBAwD <- function(lR, pars, ok = rep(TRUE, length(lR)), launch = 1L,
   out$R[ok] <- levels(lR)[R][ok]
   out$R <- factor(out$R, levels = levels(lR))
   out$rt[ok] <- rt[ok]
+  out <- .apply_timed_guess_winner(out, levels(lR))
+  out
+}
+
+# Pure-R reference simulator for BAwDp.  The C++ implementation uses the same
+# monotone clock inversion; this path is retained for the package's explicit
+# emc2.cpp_rfun = FALSE fallback.
+.bawdp_hit_time <- function(V, d, k, lambda) {
+  if (!isTRUE(d > 0) || is.na(V) || !isTRUE(V > 0) ||
+      !isTRUE(k > 0) || !isTRUE(lambda >= 0) || !isTRUE(lambda < 1)) return(Inf)
+  target <- d / V
+  if (lambda == 0) {
+    x <- 1 - k * target
+    return(if (x > 0) -log(x) / k else Inf)
+  }
+  u_star <- -log(lambda) / k
+  m_max <- (1 - lambda + lambda * log(lambda)) / k
+  if (!isTRUE(target > 0) || !isTRUE(target < m_max)) return(Inf)
+  m <- function(u) -expm1(-k * u) / k - lambda * u
+  lo <- 0; hi <- u_star
+  u <- target / (1 - lambda)
+  if (!isTRUE(u > lo) || !isTRUE(u < hi) || !is.finite(u)) u <- (lo + hi) / 2
+  for (it in seq_len(100)) {
+    f <- m(u) - target
+    if (f > 0) hi <- u else lo <- u
+    fp <- exp(-k * u) - lambda
+    un <- if (fp > 0) u - f / fp else (lo + hi) / 2
+    if (!isTRUE(un > lo) || !isTRUE(un < hi) || !is.finite(un)) un <- (lo + hi) / 2
+    if (abs(un - u) <= 1e-13 * max(1, un)) return(un)
+    u <- un
+  }
+  u
+}
+
+rBAwDp <- function(lR, pars, ok = rep(TRUE, length(lR)), launch = 1L,
+                   posdrift = TRUE) {
+  nm <- .bawdp_check_cols(pars, launch)
+  nr <- length(levels(lR))
+  bad <- rep(NA, length(lR) / nr)
+  out <- data.frame(R = bad, rt = bad)
+  n_trials <- nrow(pars) / nr
+  dt <- matrix(Inf, nrow = nr, ncol = n_trials)
+  idx <- which(ok)
+  if (length(idx)) {
+    p <- pars[idx, , drop = FALSE]
+    V <- if (launch == 1L) rlnorm(nrow(p), p[, nm[1]], p[, nm[2]]) else
+      msm::rtnorm(nrow(p), p[, nm[1]], p[, nm[2]], lower = if (posdrift) 0 else -Inf)
+    z <- p[, "A"] * runif(nrow(p))
+    hit <- mapply(.bawdp_hit_time, V, p[, "b"] - z, p[, "k"], p[, "lambda"])
+    hit[!is.finite(hit) | hit < 0] <- Inf
+    dt[idx] <- hit + p[, "t0"]
+  }
+  bad_col <- apply(dt, 2, function(x) all(is.infinite(x)))
+  R <- apply(dt, 2, which.min)
+  pick <- cbind(R, seq_len(ncol(dt)))
+  rt <- dt[pick]
+  R <- factor(levels(lR)[R], levels = levels(lR))
+  R[bad_col] <- NA; rt[bad_col] <- Inf
+  ok_trial <- matrix(ok, nrow = nr)[1, ]
+  out$R[ok_trial] <- levels(lR)[R][ok_trial]
+  out$R <- factor(out$R, levels = levels(lR)); out$rt[ok_trial] <- rt[ok_trial]
   out <- .apply_timed_guess_winner(out, levels(lR))
   out
 }
@@ -244,6 +349,10 @@ rBAwD <- function(lR, pars, ok = rep(TRUE, length(lR)), launch = 1L,
 #'   `IO` to the compiled model name. Only meaningful for
 #'   `drift_distribution = "normal"`, since a lognormal launch strength is
 #'   positive by construction.
+#' @param parameterization Character. `"rate"` (default) uses the ordinary
+#'   `(mu, sigma, B, A, t0, k, ell)` chart. `"reduced"` uses the identified
+#'   lognormal chart `(y0, T_max, A, delta, sigma, t0)`, with `A` the absolute
+#'   start-point range and `ell = 1` as the scale convention.
 #' @return A model list defining the BAwD race model.
 #' @examples
 #' ADmat <- matrix(c(-1/2, 1/2), ncol = 1, dimnames = list(NULL, "d"))
@@ -256,8 +365,67 @@ rBAwD <- function(lR, pars, ok = rep(TRUE, length(lR)), launch = 1L,
 #'                       contrasts = list(mu = list(lM = ADmat)))
 #' @export
 BAwD <- function(drift_distribution = c("lognormal", "normal"),
-                 posdrift = TRUE) {
+                 posdrift = TRUE,
+                 parameterization = c("rate", "reduced")) {
   drift_distribution <- match.arg(drift_distribution)
+  parameterization <- match.arg(parameterization)
+
+  if (parameterization == "reduced") {
+    if (drift_distribution != "lognormal")
+      stop("BAwD(parameterization = \"reduced\") currently requires the lognormal launch.")
+    if (!isTRUE(posdrift))
+      stop("BAwD(parameterization = \"reduced\") has a positive lognormal launch by construction.")
+
+    p_types <- c(y0 = log(1), T_max = log(1), A = log(0),
+                 delta = 0, sigma = log(1), t0 = log(0))
+    transform <- c(y0 = "exp", T_max = "exp", A = "exp",
+                   delta = "identity", sigma = "exp", t0 = "exp")
+    minmax <- cbind(y0 = c(1e-4, Inf), T_max = c(0.05, Inf),
+                    A = c(1e-4, Inf), delta = c(-Inf, Inf),
+                    sigma = c(1e-4, Inf), t0 = c(0.05, Inf))
+    exception <- c(A = 0)
+    .nuis <- add_nuisance_pars(p_types, transform, minmax, exception)
+    p_types <- .nuis$p_types; transform <- .nuis$transform
+    minmax <- .nuis$minmax; exception <- .nuis$exception
+
+    # This reporting transform exposes the ordinary BAwD coordinates, but the
+    # compiled likelihood maps the six-column prefix itself (see the
+    # BAwD_REDUCED adapter).  A is absolute, so threshold changes do not
+    # induce a start-point-range change.
+    Ttransform_reduced <- function(pars, dadm) {
+      y0 <- pars[, "y0"]; Tmax <- pars[, "T_max"]
+      h <- expm1(y0) - y0
+      k <- y0 / Tmax
+      b <- h / k
+      A <- pars[, "A"]
+      cbind(pars,
+            mu = y0 + pars[, "sigma"] * pars[, "delta"],
+            B = b - A, k = k, ell = 1, b = b,
+            Tmax = Tmax, rt_max = pars[, "t0"] + Tmax)
+    }
+
+    return(list(
+      type = "RACE",
+      c_name = "BAwD_REDUCED",
+      drift_distribution = drift_distribution,
+      parameterization = parameterization,
+      p_types = p_types,
+      p_types_canonical = setdiff(names(p_types), .nuisance_par_names),
+      transform = list(func = transform),
+      bound = list(minmax = minmax, exception = exception),
+      Ttransform = Ttransform_reduced,
+      rfun = function(data, pars) {
+        .rfun_BAwD_reduced(data$lR, pars, ok = attr(pars, "ok"))
+      },
+      dfun = function(rt, pars) dBAwD_reduced(rt, pars),
+      pfun = function(rt, pars) pBAwD_reduced(rt, pars),
+      log_likelihood = function(pars, dadm, model, min_ll = log(1e-10)) {
+        stop("BAwD: the likelihood is implemented in the compiled race path; ",
+             "the R likelihood route is not supported.")
+      }
+    ))
+  }
+
   launch <- .bawd_launch_code(drift_distribution)
   lognormal <- (launch == 1L)
   if (lognormal && !isTRUE(posdrift)) {
@@ -326,6 +494,93 @@ BAwD <- function(drift_distribution = c("lognormal", "normal"),
     log_likelihood = function(pars, dadm, model, min_ll = log(1e-10)) {
       stop("BAwD: the likelihood is implemented in the compiled race path; ",
            "the R likelihood route is not supported.")
+    }
+  )
+}
+
+#' The Ballistic Accumulator with a Proportional-Clearance Drive (BAwDp)
+#'
+#' BAwDp has a separable transient evidence profile
+#' \code{Xdot = V(exp(-k u) - lambda), X(0) = z},
+#' where \code{z ~ Uniform(0, A)} and \code{b = B + A}.  Its internal evidence
+#' clock is \code{m(u) = (1 - exp(-k u))/k - lambda*u}.  For
+#' \code{0 < lambda < 1} the clock reaches its maximum at the common freeze
+#' time \code{u* = log(1/lambda)/k} for every launch strength and start point.
+#' The likelihood is therefore the ordinary closed-form LBA likelihood at
+#' \code{m(u)}, multiplied by \code{mprime(u)} before the freeze time, and is
+#' exactly zero after it.  The \code{lambda = 0}
+#' boundary is the pure drive-decay model with an asymptotic (rather than finite)
+#' internal clock.
+#'
+#' This is not BAwL: BAwL decays the accumulated start point, whereas BAwDp
+#' keeps \code{z} static and scales the whole temporal drive profile by \code{V}.
+#' A favourable start point consequently changes the omission probability.
+#' All PDF/CDF evaluations use closed-form LBA primitives; no quadrature is
+#' used.
+#'
+#' @param drift_distribution Distribution of the launch strength: `"lognormal"`
+#'   (default), or `"normal"`.
+#' @param posdrift Logical; truncate the normal launch at zero when `TRUE`.
+#'   It has no effect for the lognormal launch.
+#' @return A model list defining the BAwDp race model.
+#' @export
+BAwDp <- function(drift_distribution = c("lognormal", "normal"),
+                  posdrift = TRUE) {
+  drift_distribution <- match.arg(drift_distribution)
+  launch <- .bawl_launch_code(drift_distribution)
+  lognormal <- launch == 1L
+  if (lognormal && !isTRUE(posdrift)) {
+    stop("BAwDp: posdrift only applies to drift_distribution = \"normal\"; a ",
+         "lognormal launch strength is positive by construction.")
+  }
+
+  if (lognormal) {
+    p_types <- c(mu = 0, sigma = log(1))
+    transform <- c(mu = "identity", sigma = "exp")
+    minmax <- cbind(mu = c(-Inf, Inf), sigma = c(1e-4, Inf))
+  } else {
+    p_types <- c(v = 1, sv = log(1))
+    transform <- c(v = "identity", sv = "exp")
+    minmax <- cbind(v = c(-Inf, Inf), sv = c(1e-4, Inf))
+  }
+  p_types <- c(p_types, B = log(1), A = log(0), t0 = log(0),
+               k = log(1), lambda = qnorm(0.5))
+  transform <- c(transform, B = "exp", A = "exp", t0 = "exp",
+                 k = "exp", lambda = "pnorm")
+  minmax <- cbind(minmax, B = c(1e-4, Inf), A = c(1e-4, Inf),
+                  t0 = c(0.05, Inf), k = c(1e-4, Inf),
+                  lambda = c(0, 1 - 1e-8))
+  # A = 0 and lambda = 0 are exact, useful boundaries.  k remains positive so
+  # BAwDp's finite-clock branch is the model used by the race adapter.
+  exception <- c(A = 0, lambda = 0)
+  .nuis <- add_nuisance_pars(p_types, transform, minmax, exception)
+  p_types <- .nuis$p_types; transform <- .nuis$transform
+  minmax <- .nuis$minmax; exception <- .nuis$exception
+
+  launch_pars <- .bawl_par_names(launch)
+  list(
+    type = "RACE",
+    c_name = paste0("BAwDp", if (lognormal) "_LOGN"
+                              else if (!posdrift) "IO" else ""),
+    drift_distribution = drift_distribution,
+    p_types = p_types,
+    p_types_canonical = setdiff(names(p_types), .nuisance_par_names),
+    transform = list(func = transform),
+    bound = list(minmax = minmax, exception = exception),
+    Ttransform = function(pars, dadm) {
+      cbind(pars, b = pars[, "B"] + pars[, "A"])
+    },
+    rfun = function(data, pars) {
+      .rfun_BAwDp(data$lR, pars, ok = attr(pars, "ok"), launch = launch,
+                  posdrift = posdrift)
+    },
+    dfun = function(rt, pars) dBAwDp(rt, pars, launch = launch,
+                                     posdrift = posdrift),
+    pfun = function(rt, pars) pBAwDp(rt, pars, launch = launch,
+                                     posdrift = posdrift),
+    log_likelihood = function(pars, dadm, model, min_ll = log(1e-10)) {
+      log_likelihood_race_missing(pars = pars, dadm = dadm, model = model,
+                                   min_ll = min_ll)
     }
   )
 }

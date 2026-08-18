@@ -4,7 +4,11 @@
 \alias{BAwD}
 \title{The Ballistic Accumulator with Drive Decay (BAwD)}
 \usage{
-BAwD(drift_distribution = c("lognormal", "normal"), posdrift = TRUE)
+BAwD(
+  drift_distribution = c("lognormal", "normal"),
+  posdrift = TRUE,
+  parameterization = c("rate", "reduced")
+)
 }
 \arguments{
 \item{drift_distribution}{Distribution of the trialwise launch strength:
@@ -16,6 +20,11 @@ strengths to be positive; if \code{FALSE}, use the untruncated normal and append
 \code{IO} to the compiled model name. Only meaningful for
 \code{drift_distribution = "normal"}, since a lognormal launch strength is
 positive by construction.}
+
+\item{parameterization}{Character. \code{"rate"} (default) uses the ordinary
+\verb{(mu, sigma, B, A, t0, k, ell)} chart. \code{"reduced"} uses the identified
+lognormal chart \verb{(y0, T_max, A, delta, sigma, t0)}, with \code{A} the absolute
+start-point range and \code{ell = 1} as the scale convention.}
 }
 \value{
 A model list defining the BAwD race model.

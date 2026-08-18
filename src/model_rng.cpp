@@ -544,6 +544,53 @@ Rcpp::List rbawd_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
   return pack_result(res.R, res.rt, res.omitted, has_isTime, isTime);
 }
 
+// BAwDp simulator.  The launch pair is (v, sv) for launch = 0 and
+// (mu, sigma) for launch = 1.  The internal clock is monotone until its
+// universal freeze time; the sampled LBA crossing is inverted on that clock.
+// [[Rcpp::export]]
+Rcpp::List rbawdp_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
+                      Rcpp::LogicalVector ok, int launch, bool posdrift) {
+  const int n_acc = lR_levels.size();
+  const int n_rows = pars.nrow();
+  if (n_acc <= 0 || n_rows <= 0 || n_rows % n_acc != 0)
+    Rcpp::stop("rbawdp_cpp: invalid accumulator/parameter dimensions.");
+  if (ok.size() != n_rows) Rcpp::stop("rbawdp_cpp: ok has the wrong length.");
+  const int n_trials = n_rows / n_acc;
+  const auto ci = col_index_map(pars);
+  const bool logn = (launch == 1);
+  if (logn && !(ci.count("mu") && ci.count("sigma")))
+    Rcpp::stop("rbawdp_cpp: the lognormal launch requires columns 'mu' and 'sigma'.");
+  if (!logn && !(ci.count("v") && ci.count("sv")))
+    Rcpp::stop("rbawdp_cpp: the normal launch requires columns 'v' and 'sv'.");
+  for (const char* nm : {"b", "A", "t0", "k", "lambda"})
+    if (!ci.count(nm)) Rcpp::stop("rbawdp_cpp: missing parameter column '%s'.", nm);
+  const int ip1 = logn ? ci.at("mu") : ci.at("v");
+  const int ip2 = logn ? ci.at("sigma") : ci.at("sv");
+  const int ib = ci.at("b"), iA = ci.at("A"), it0 = ci.at("t0");
+  const int ik = ci.at("k"), ilambda = ci.at("lambda");
+
+  std::vector<double> dt(n_rows, R_PosInf);
+  std::vector<double> t0col(n_rows);
+  std::vector<int> ok_row(n_rows);
+  for (int r = 0; r < n_rows; ++r) {
+    t0col[r] = pars(r, it0);
+    ok_row[r] = ok[r] ? 1 : 0;
+    if (!ok[r]) continue;
+    const double V = logn
+      ? std::exp(pars(r, ip1) + pars(r, ip2) * R::norm_rand())
+      : rtnorm_lower_r(pars(r, ip1), pars(r, ip2), posdrift ? 0.0 : R_NegInf);
+    const double z = pars(r, iA) * R::unif_rand();
+    const double u = bawdp_hit_time_r(V, pars(r, ib) - z, pars(r, ik),
+                                      pars(r, ilambda));
+    dt[r] = (R_FINITE(u) && u >= 0.0) ? u : R_PosInf;
+  }
+
+  RaceOut res = resolve_race(dt, n_acc, n_trials, &t0col, &ok_row);
+  std::vector<int> isTime;
+  const bool has_isTime = resolve_time_level(res.R, isTime, lR_levels);
+  return pack_result(res.R, res.rt, res.omitted, has_isTime, isTime);
+}
+
 // FRQ simulator.  pars columns: alpha, beta, h, tau, t0, delta.
 //
 // Exact, not approximate: the process is distributionally identical to drawing

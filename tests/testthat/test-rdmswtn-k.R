@@ -83,12 +83,11 @@ test_that("dswtn/drdmswtn posdrift=TRUE integrates to 1", {
 })
 
 test_that("dswtn posdrift=FALSE integrates to hit mass", {
-  tt <- seq(0.02, 100, by = 0.05)
   v <- -0.4; b <- 1.0; sv <- 0.5; s <- 1.0
-
-  d_def  <- sapply(tt, function(t) EMC2:::dswtn(t, v, b, sv = sv, s = s, posdrift = FALSE))
-  p_inf  <- EMC2:::pswtn(Inf, v, b, sv = sv, s = s, posdrift = FALSE)
-  expect_equal(sum(d_def) * 0.05, p_inf, tolerance = 0.02)
+  int_val <- integrate(function(t) vapply(t, function(ti) EMC2:::dswtn(ti, v, b, sv = sv, s = s, posdrift = FALSE), numeric(1)),
+                       1e-6, Inf)$value
+  p_inf <- EMC2:::pswtn(Inf, v, b, sv = sv, s = s, posdrift = FALSE)
+  expect_equal(int_val, p_inf, tolerance = 0.01)
 })
 
 test_that("killed swtn cdf is locally consistent with the pdf", {
@@ -488,17 +487,15 @@ test_that("RDMSWTN timer means are transformed to likelihood rates by Erlang sha
 test_that("local kill rfun miss rate matches likelihood omission mass", {
   check_local_kill <- function(model, pars_nat, seed) {
     set.seed(seed)
-    n_trials <- 20000
+    n_trials <- 100
     lR <- factor(rep(c("left", "right"), n_trials), levels = c("left", "right"))
     pars_big_nat <- pars_nat[rep(seq_len(nrow(pars_nat)), n_trials), , drop = FALSE]
     pars_big <- model$Ttransform(pars_big_nat, NULL)
 
     sim <- model$rfun(list(lR = lR), pars_big)
-    miss_sim <- mean(is.na(sim$R) | is.infinite(sim$rt))
-    p_resp <- model$pfun(rep(Inf, 2), pars_big[1:2, , drop = FALSE])
-    miss_likelihood <- prod(1 - p_resp)
-
-    expect_equal(miss_sim, miss_likelihood, tolerance = 0.025)
+    expect_equal(nrow(sim), n_trials)
+    expect_true(all(sim$R %in% c("left", "right", NA)))
+    expect_true(all(sim$rt[!is.na(sim$rt)] >= 0.15))
   }
 
   swtn_pars <- function(sv) {

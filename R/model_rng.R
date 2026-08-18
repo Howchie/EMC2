@@ -90,6 +90,30 @@
   rBAwD(lR, pars, ok = ok, launch = launch, posdrift = posdrift)
 }
 
+.rfun_BAwD_reduced <- function(lR, pars, ok = rep(TRUE, length(lR))) {
+  # Ttransform supplies ordinary reporting columns, but leaves the sampled
+  # reduced prefix first.  Reorder before calling rbawd_cpp, whose compiled
+  # contract is positional (mu, sigma, B, A, t0, k, ell).
+  need <- c("mu", "sigma", "B", "A", "t0", "k", "ell")
+  missing <- setdiff(need, colnames(pars))
+  if (length(missing))
+    stop("BAwD reduced simulator requires derived columns ",
+         paste(missing, collapse = ", "))
+  ordinary <- pars[, need, drop = FALSE]
+  ordinary <- cbind(ordinary, b = ordinary[, "B"] + ordinary[, "A"])
+  .rfun_BAwD(lR, ordinary, ok = ok, launch = 1L, posdrift = TRUE)
+}
+
+.rfun_BAwDp <- function(lR, pars, ok = rep(TRUE, length(lR)), launch = 1L,
+                        posdrift = TRUE) {
+  if (.use_cpp_rfun()) {
+    res <- rbawdp_cpp(pars, levels(lR), ok, as.integer(launch), posdrift)
+    out <- .rfun_cpp_pack(res, levels(lR), length(lR) / length(levels(lR)))
+    return(.apply_timed_guess_winner(out, levels(lR)))
+  }
+  rBAwDp(lR, pars, ok = ok, launch = launch, posdrift = posdrift)
+}
+
 .rfun_FRQ <- function(lR, pars, ok = rep(TRUE, length(lR))) {
   if (.use_cpp_rfun()) {
     res <- rfrq_cpp(pars, levels(lR), ok)

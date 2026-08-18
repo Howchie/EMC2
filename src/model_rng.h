@@ -159,4 +159,41 @@ inline double bawd_hit_time_r(double V, double d, double k, double ell) {
   return u;
 }
 
+// BAwDp first passage.  The evidence trajectory is monotone only up to the
+// universal freeze time u* = log(1/lambda)/k.  We invert the strictly
+// increasing elementary clock m(u) on [0, u*] with a safeguarded Newton step;
+// the likelihood itself never needs this inversion (its PDF/CDF are the
+// closed-form LBA change of variables).
+inline double bawdp_hit_time_r(double V, double d, double k, double lambda) {
+  if (!(d > 0.0) || ISNAN(V) || !(V > 0.0) || !(k > 0.0) ||
+      !(lambda >= 0.0) || !(lambda < 1.0)) return R_PosInf;
+  const double target = d / V;
+  if (!(target > 0.0)) return R_PosInf;
+  if (lambda == 0.0) {
+    const double x = 1.0 - k * target;
+    return (x > 0.0) ? -std::log(x) / k : R_PosInf;
+  }
+  const double log_lambda = std::log(lambda);
+  const double u_star = -log_lambda / k;
+  const double m_max = (-std::expm1(log_lambda) + lambda * log_lambda) / k;
+  if (!(target > 0.0) || !(target < m_max)) return R_PosInf;
+
+  auto m_at = [k, lambda](double u) {
+    return -std::expm1(-k * u) / k - lambda * u;
+  };
+  double lo = 0.0, hi = u_star;
+  double u = target / (1.0 - lambda);
+  if (!(u > lo) || !(u < hi) || !R_FINITE(u)) u = 0.5 * (lo + hi);
+  for (int it = 0; it < 100; ++it) {
+    const double f = m_at(u) - target;
+    if (f > 0.0) hi = u; else lo = u;
+    const double fp = std::exp(-k * u) - lambda;
+    double un = (fp > 0.0) ? u - f / fp : 0.5 * (lo + hi);
+    if (!(un > lo) || !(un < hi) || !R_FINITE(un)) un = 0.5 * (lo + hi);
+    if (std::fabs(un - u) <= 1e-13 * std::fmax(1.0, un)) return un;
+    u = un;
+  }
+  return u;
+}
+
 #endif
