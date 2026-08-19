@@ -70,32 +70,6 @@ filtered_samples_single <- function(sampler, filter){
     iteration = length(filter)
   )
 }
-#
-# get_all_pars_single <- function(samples, idx, info){
-#   n_subjects <- samples$n_subjects
-#   n_iter = length(samples$samples$stage[idx])
-#   # Exctract relevant objects
-#   alpha <- samples$samples$alpha[,,idx, drop = F]
-#   # Set up
-#   n_params<- samples$n_pars
-#   mu_tilde=array(dim = c(n_subjects,n_params))
-#   var_tilde=array(dim = c(n_subjects,n_params,n_params))
-#   for (j in 1:n_subjects){
-#     # calculate the mean for re, mu and sigma
-#     mu_tilde[j,] <- rowMeans(alpha[,j,])
-#     # calculate the covariance matrix for random effects, mu and sigma
-#     var_tilde[j,,] <- cov(t(alpha[,j,]))
-#   }
-#
-#   for(i in 1:n_subjects){ #RJI_change: this bit makes sure that the sigma tilde is pos def
-#     if(!corpcor::is.positive.definite(var_tilde[i,,], tol=1e-8)){
-#       var_tilde[i,,]<-corpcor::make.positive.definite(var_tilde[i,,], tol=1e-6)
-#     }
-#   }
-#   info$n_params <- n_params
-#   return(list(mu_tilde = mu_tilde, var_tilde = var_tilde, info = info))
-# }
-#
 # bridge sampling ---------------------------------------------------------
 
 bridge_add_group_single <- function(all_samples, samples, idx){

@@ -261,9 +261,8 @@ pmwgs <- function(dadm, type, pars = NULL, prior = NULL,
   n_subjects <- as.integer(n_subjects)
   n_cores <- max(1L, as.integer(n_cores))
   r_cores <- max(1L, as.integer(r_cores))
-  # With no arena-wide allocation supplied, retain the helper's historical
-  # contract: r_cores is an explicit lower bound.  The sampler always supplies
-  # total_cores, which is the hard per-chain share of the global budget.
+  # Without a global budget, retain r_cores as the inner-width lower bound.
+  # The sampler supplies total_cores for an explicit per-chain allocation.
   if (is.null(total_cores)) {
     if (n_subjects == 1L && n_cores > 1L) {
       return(list(subject = 1L, likelihood = max(r_cores, n_cores)))
@@ -275,18 +274,11 @@ pmwgs <- function(dadm, type, pars = NULL, prior = NULL,
     return(list(subject = 1L,
                 likelihood = min(total_cores, max(r_cores, n_cores))))
   }
-  # A subject worker may fork r_cores likelihood workers.  Keep the product
-  # within this chain's allocation; otherwise n_cores subjects each spawning
-  # r_cores children silently multiplies the outer chain budget.
+  # Keep subject workers times likelihood workers within the chain budget.
   likelihood <- min(r_cores, total_cores)
   subject <- max(1L, min(n_subjects, n_cores, total_cores %/% likelihood))
-  # That division truncates, and the remainder was simply going unused: at
-  # n_cores = 8, r_cores = 3 it gave 2 subject workers x 3 = 6 of 8 cores.
-  # `r_cores` is documented as a *lower* bound on the inner width, so the inner
-  # fan-out is what may absorb the remainder -- 2 x 4 = 8 here.  Only when the
-  # caller actually asked for inner parallelism: at the r_cores = 1 default,
-  # widening would fork likelihood workers where the caller asked for none, and
-  # for a cheap likelihood that fork costs more than it returns.
+  # Allocate any remainder to likelihood workers only when inner parallelism
+  # was requested.
   if (r_cores > 1L) likelihood <- max(likelihood, total_cores %/% subject)
   list(subject = subject, likelihood = likelihood)
 }
@@ -558,11 +550,7 @@ run_stage <- function(pmwgs,
     wpool_part <- .emc_lpt_partition(wpool_cost, wpool$n)
   }
 
-  # One subject means the subject pool above is the degenerate one-worker case,
-  # and the whole per-chain budget was handed to `pool_budget$likelihood`
-  # instead.  Spend it through a persistent pool over particles rather than a
-  # fresh `mclapply` fork on every likelihood call -- see .emc_wpool_ll() for
-  # why the fork was eating the entire gain.
+  # For one subject, use a persistent likelihood pool over particles.
   llpool <- NULL
   if (pmwgs$n_subjects == 1L && pool_budget$likelihood > 1L &&
       isTRUE(getOption("emc2.ll_pool", TRUE))) {
@@ -576,13 +564,8 @@ run_stage <- function(pmwgs,
       # `s` is a column/list index everywhere in the particle step (see
       # new_particle's `parameters$alpha[, s]`), not a subject label.
       #
-      # `reset = FALSE`, and the routing measurements are deliberately *not*
-      # restored on exit.  A stage is run in blocks of `step_size` iterations,
-      # each of which re-enters run_stage(); resetting here restarted the probe
-      # every block, and for a model whose serial call costs tens of seconds the
-      # block could end before the probe had finished, so the pool it forked was
-      # never used at all.  What the probe measures is a property of this
-      # process's one model and one subject, which no block boundary changes.
+      # Preserve routing measurements across stage blocks; they are specific
+      # to this model and subject.
       .emc_ll_pool_set(llpool, 1L, reset = FALSE)
       on.exit({
         .emc_wpool_stop(llpool)
@@ -1210,7 +1193,7 @@ new_particle <- function (s, data, pm_settings, eff_mu = NULL,
 
 update_pm_settings <- function(pm_settings, chosen_idx, weights, particle_numbers,
                                tune, n_pars) {
-  # 0) If we're past an initial burn-in, do the adaptation
+  # Adapt after the initial burn-in.
   pm_settings$iter <- pm_settings$iter + 1
   if (pm_settings$iter > tune$n0) {
     # A) Update proposal_counts
@@ -1224,9 +1207,7 @@ update_pm_settings <- function(pm_settings, chosen_idx, weights, particle_number
     # weights[2..(1+sum(particle_numbers))] = new draws' weights
     old_weight <- weights[1]
 
-    # We'll parse out each proposal's chunk in weights[-1]
-    # using the known counts in particle_numbers.
-    # We're also tracking acceptance of group-level proposals, which is minorly wasteful
+    # Process each proposal's weight block and update acceptance counts.
     offset <- 2  # start index in 'weights' for new proposals
     for (j in seq_along(particle_numbers)) {
       # The chunk of new weights for proposal j
@@ -1269,7 +1250,7 @@ update_pm_settings <- function(pm_settings, chosen_idx, weights, particle_number
     # If ratio_j > 1 (proposal j acceptance > target), its mix goes up;
     # if ratio_j < 1, mix goes down.
 
-    if(length(pm_settings$mix) > 2){ # We're not in preburn
+    if(length(pm_settings$mix) > 2){ # Exclude preburn.
       eps_val <- 1e-12   # Avoid divide-by-zero
 
       # 1) Compute performance ~ (acceptance / old_mix), normalized
@@ -1297,8 +1278,7 @@ update_pm_settings <- function(pm_settings, chosen_idx, weights, particle_number
 
     # F) Adapt the number of particles (ESS logic)
     # -------------------------------------------------------
-    # If length mix > 2, we're in sample stage
-    # Only reduce number of particles when we're already converged
+    # Sample stage: reduce particles only after convergence.
     if (length(pm_settings$mix) > 3 && pm_settings$gd_good) {
       ess <- sum(weights)^2 / sum(weights^2)
       desired_ess <- tune$target_ESS
@@ -1374,9 +1354,7 @@ particle_draws <- function(n, mu, covar, alpha = NULL, tau= NULL, R = NULL) {
 }
 
 extend_sampler <- function(sampler, n_samples, stage) {
-  # This function takes the sampler and extends it along the intended number of
-  # iterations, to ensure that we're not constantly increasing our sampled object
-  # by 1. Big shout out to the rapply function
+  # Extend each stored sample array along its final dimension.
   sampler$samples$stage <- c(sampler$samples$stage, rep(stage, n_samples))
   if(any(sampler$nuisance)) sampler$sampler_nuis$samples <- rapply(sampler$sampler_nuis$samples, f = function(x) extend_obj(x, n_samples), how = "replace")
   sampler$samples <- rapply(sampler$samples, f = function(x) extend_obj(x, n_samples), how = "replace")
@@ -1527,8 +1505,7 @@ calc_ll_pooled <- function(proposals, dadm, model, component = NULL, r_cores = 1
     identical(s, .emc_pool_state$ll_subject) &&
     isTRUE(.emc_pool_state$ll_pool$alive)
   if (!have_pool) {
-    # No pool for this call: keep the historical behaviour exactly, including
-    # its own mclapply split.
+    # Without a pool, use the standard likelihood manager.
     return(calc_ll_manager(proposals, dadm = dadm, model = model,
                            component = component, r_cores = r_cores))
   }
@@ -1547,23 +1524,13 @@ calc_ll_pooled <- function(proposals, dadm, model, component = NULL, r_cores = 1
                            component = component, r_cores = 1L)
   }
   el <- proc.time()[["elapsed"]] - started
-  # A call the pool declined -- too few rows to split, or a single proposal
-  # vector -- is not evidence about the serial arm: it is the one shape the
-  # pool never handles, and timing it as though the router had chosen serial
-  # biases the comparison towards whichever arm those calls happen to fall in.
   if (pooled || !use_pool) {
-    # Record what *ran*, not what was asked for: the queue declines a call with
-    # too few rows per worker and the static split answers it instead, and
-    # crediting the queue arm with a static call's time would let a model whose
-    # calls are all small drift into the queue on evidence it never produced.
+    # Record only calls that actually used the selected arm.
     .emc_ll_route_record(pooled, el,
                          if (is.matrix(proposals)) nrow(proposals) else 1L,
                          dynamic = pooled && isTRUE(.emc_pool_state$ll_dynamic))
   }
-  # `EMC2_LL_TRACE=<file>` appends one line per likelihood call.  The chain runs
-  # in a forked child, so its routing state cannot be inspected from the master
-  # after the fact and a print is the only way to see which arm a real fit is
-  # actually taking -- which is how the per-block probe reset was found.
+  # Optional trace for inspecting routing decisions from forked chains.
   trace_file <- Sys.getenv("EMC2_LL_TRACE")
   if (nzchar(trace_file)) {
     st <- .emc_pool_state$ll_route

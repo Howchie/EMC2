@@ -23,7 +23,6 @@ test_that("PCOUNTER default structure and parameter types are correct", {
   expect_equal(model$p_types_canonical, c("nu", "sv", "gamma", "k", "omega", "t0"))
   expect_true(all(c("nu", "sv", "gamma", "k", "omega", "t0", "pContaminant") %in% names(model$p_types)))
   expect_equal(unname(model$bound$minmax[, "k"]), c(0, Inf))
-  expect_equal(unname(model$bound$exception[["k"]]), 0)
   expect_equal(unname(exp(model$p_types[["k"]])), 3)
 })
 
@@ -180,4 +179,40 @@ test_that("simulated PCOUNTER works with non-zero sv, gamma, and omega", {
 
   ll_cpp <- pcounter_cpp_ll(p, design_pc, dat)
   expect_true(is.finite(ll_cpp))
+})
+
+test_that("PCOUNTER has a proper tail and supports finite thresholds beyond the old cap", {
+  model <- PCOUNTER()
+  pars <- cbind(nu = 8, sv = 1, gamma = 0.5, k = 1023, omega = 0, t0 = 0)
+  expect_equal(model$dfun(Inf, pars), 0)
+  expect_equal(model$pfun(Inf, pars), 1)
+
+  # k = 1023 gives K = 1025, exercising the rolling recurrence beyond the
+  # former quadratic-table cap while remaining small enough for a regression
+  # test.
+  d <- model$dfun(1, pars)
+  p <- model$pfun(1, pars)
+  expect_true(is.finite(d) && d >= 0)
+  expect_true(is.finite(p) && p >= 0 && p <= 1)
+  expect_equal(unname(model$bound$minmax[, "k"]), c(0, Inf))
+})
+
+test_that("the proper pure-birth PCOUNTER member is the h = 1 FRQ boundary", {
+  K <- 4
+  nu <- 6
+  gamma <- 1.5
+  beta <- nu / gamma
+  tau <- -log1p(-qbeta(0.5, K, beta)) / gamma
+  x <- c(0.01, 0.1, 0.4, 1, 3)
+  pc_pars <- cbind(nu = nu, sv = 0, gamma = gamma, k = K - 2,
+                   omega = 0, t0 = 0)
+  pc_pars <- pc_pars[rep(1, length(x)), , drop = FALSE]
+  frq <- cbind(alpha = K, beta = beta, h = 1, tau = tau, t0 = 0)
+  frq <- frq[rep(1, length(x)), , drop = FALSE]
+  pc <- PCOUNTER()
+
+  expect_equal(pc$pfun(x, pc_pars),
+               EMC2:::pFRQ(x, frq), tolerance = 1e-10)
+  expect_equal(pc$dfun(x, pc_pars),
+               EMC2:::dFRQ(x, frq), tolerance = 1e-10)
 })

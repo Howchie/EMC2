@@ -4,10 +4,9 @@
 // ---------------------------------------------------------------------------
 // Self-contained fixed-order Gauss-Legendre quadrature.
 //
-// The bundled GSL subset (see gsl_bundled.c) compiles in ONLY the adaptive
-// routines (QAGS/QAGIU); gsl_integration_glfixed is declared in the header but
-// its source (glfixed.c) is NOT compiled, so it would be a link error. To avoid
-// touching the GSL bundle / Makevars we provide our own fixed GL rule here.
+// The bundled GSL subset compiles only adaptive QAGS/QAGIU routines; the
+// declared gsl_integration_glfixed implementation is not linked. This header
+// supplies the fixed Gauss-Legendre rule locally.
 //
 // Nodes/weights on [-1,1] are computed once per node-count via Newton iteration
 // on the Legendre polynomial (the classic "gauleg" algorithm) and cached
@@ -109,8 +108,8 @@ inline double gl_integrate(double (*f)(double, void*), void* params,
 // NB: emc2_get_stop_method() (model_SS_EXG.h) indexes its method_names array
 // by these values — keep the two in sync if methods are added or reordered.
 enum StopMethod {
-  STOP_METHOD_AUTO      = 0,   // DEFAULT (Andrew, 2026-06-11)
-  STOP_METHOD_INTEGRATE = 1,   // original adaptive qags/qagiu route, untouched
+  STOP_METHOD_AUTO      = 0,   // default automatic dispatch
+  STOP_METHOD_INTEGRATE = 1,   // adaptive QAGS/QAGIU integration
   STOP_METHOD_GL        = 2,   // fixed Gauss-Legendre with n_nodes
   STOP_METHOD_ANALYTIC  = 3    // EXG n_go==1 closed form (GL fallback otherwise)
 };
@@ -125,24 +124,11 @@ inline StopMethodConfig& stop_method_config() {
   return cfg;
 }
 
-// "auto" GL node-density bump. A fixed n-node rule under-resolves a sharp
-// (near-Gaussian, small-tauS) stop density when the integration window spans
-// many stop-sigma widths. The Gaussian core width is ~sigS and does NOT shrink
-// as tauS -> 0, so we hold a minimum node DENSITY per sigS across the window
-// rather than triggering on a single width ratio. The old rule
-// ((ub-lo)/sigS > 40 -> 128) was blind to the small-tauS regime: its window is
-// dominated by muS/sigS + 8 and the only tauS-dependent term, 16*tauS/sigS,
-// SHRANK toward the trigger exactly as the peak got sharper, so it never fired
-// where it was most needed (e.g. muS/sigS ~ 6, tauS << sigS -> ratio ~ 20).
+// Automatic node selection maintains sufficient density across the Gaussian
+// core as tauS becomes small. The target count is quantized for cache reuse.
 //
-//   want  = GL_NODES_PER_SIG * (ub - lo) / sigS               [target nodes]
+//   want  = GL_NODES_PER_SIG * (ub - lo) / sigS
 //   n_eff = clamp(roundup(want, GL_NODE_STEP), n_nodes, GL_MAX_NODES)
-//
-// n_nodes is a floor (never reduced). Quantising up to a multiple of
-// GL_NODE_STEP keeps only a handful of distinct rules in the thread-local
-// gauleg cache (setup cost is per node-count). Deterministic and cheap;
-// mirrored in R by gl_auto_nodes_R(). Tune GL_NODES_PER_SIG for the
-// accuracy/speed trade-off (6 ~= 14 nodes across the Gaussian-core FWHM).
 constexpr double GL_NODES_PER_SIG = 6.0;
 constexpr int    GL_NODE_STEP     = 32;
 constexpr int    GL_MAX_NODES     = 256;

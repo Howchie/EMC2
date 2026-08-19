@@ -1,28 +1,17 @@
 # ============================================================================
-# FRQ: the Finite Reservoir Quorum process
+# FRQ: finite-reservoir quorum process
 #
-#   N potential evidence units, each independently available with probability p
-#   and, when available, registering at an Exponential(lambda) latency.  The
-#   accumulator responds once K units have registered, so its decision time is
-#   the K-th order statistic -- and is +Inf whenever fewer than K units happen
-#   to be available at all.
+# N units are independently available with probability p and, when available,
+# register after Exponential(lambda) delays.  The accumulator responds at the
+# K-th registration and otherwise has an infinite finishing time.
 #
-# With alpha = K and beta = N - K + 1 the whole thing is closed form,
+# With alpha = K, beta = N - K + 1:
+#   F(x) = I_{q(x)}(alpha, beta),  q(x) = p(1 - exp(-lambda x)).
 #
-#   F(x) = I_{q(x)}(alpha, beta),   q(x) = p(1 - e^{-lambda x}),
-#
-# and the continuous relaxation is just alpha, beta > 0 (bounded at 1 in the
-# fitted model; see FRQ()).  The shapes are named `alpha`/`beta` rather than
-# K and N - K + 1 because U ~ Beta(alpha, beta) is the exact latent
-# representation of the quorum, and because the natural name for the second one
-# (`R`) is a reserved data column in EMC2 (R/design.R:251).
-#
-# The estimated coordinates are (alpha, beta, h, tau, t0) rather than
-# (alpha, beta, p, lambda, t0): h = I_p(alpha, beta) is the eventual completion
-# probability and tau the conditional median decision time.  All of the
-# numerics, including that inversion, live in src/model_FRQ.h -- the dfun/pfun
-# below call the SAME compiled kernels as the sampled likelihood, so
-# make_data()/predict() and the fit cannot disagree.
+# The fitted coordinates are (alpha, beta, h, tau, t0), where
+# h = I_p(alpha, beta) is the eventual completion probability and tau is the
+# conditional median decision time.  The R wrappers use the kernels in
+# src/model_FRQ.h.
 # ============================================================================
 
 .frq_check_cols <- function(pars) {
@@ -36,7 +25,7 @@
 dFRQ <- function(rt, pars) {
   .frq_check_cols(pars)
   dt <- rt - pars[, "t0"]
-  ok <- (rt > 0) & (dt > 0) & is.finite(dt)
+  ok <- (rt > 0) & (dt > 0) & is.finite(dt) & is.finite(pars[, "t0"])
   ok[is.na(ok)] <- FALSE
   out <- numeric(length(dt))
   if (any(ok)) {
@@ -54,7 +43,7 @@ pFRQ <- function(rt, pars) {
   # rt = Inf is deliberately kept: the CDF there is h (the complement of the
   # never-finish mass), not one.  The compiled kernel returns the saturated
   # branch, which is what the defective-tail bookkeeping needs.
-  ok <- (rt > 0) & (dt > 0)
+  ok <- (rt > 0) & (dt > 0) & is.finite(pars[, "t0"])
   ok[is.na(ok)] <- FALSE
   out <- numeric(length(dt))
   if (any(ok)) {
@@ -73,7 +62,7 @@ sFRQ <- function(rt, pars) {
   .frq_check_cols(pars)
   dt <- rt - pars[, "t0"]
   out <- rep(1, length(dt))
-  ok <- (rt > 0) & (dt > 0)
+  ok <- (rt > 0) & (dt > 0) & is.finite(pars[, "t0"])
   ok[is.na(ok)] <- FALSE
   if (any(ok)) {
     delta <- if ("delta" %in% colnames(pars)) pars[ok, "delta"] else 0
@@ -97,24 +86,25 @@ sFRQ <- function(rt, pars) {
 rFRQ <- function(lR, pars, ok = rep(TRUE, length(lR))) {
   .frq_check_cols(pars)
   nr <- length(levels(lR))
-  bad <- rep(NA, length(lR) / nr)
-  out <- data.frame(R = bad, rt = bad)
+  if (nr < 1L || nrow(pars) %% nr != 0L)
+    stop("FRQ: pars rows must be a multiple of accumulators")
+  if (length(ok) != nrow(pars))
+    stop("FRQ: ok must have one value per parameter row")
+  ok <- as.logical(ok)
+  ok[is.na(ok)] <- FALSE
   n_trials <- nrow(pars) / nr
   dt <- matrix(Inf, nrow = nr, ncol = n_trials)
   t0 <- pars[, "t0"]
-
-  idx <- which(ok)
+  idx <- which(ok & is.finite(t0))
   if (length(idx)) {
     p <- pars[idx, , drop = FALSE]
     dl <- if ("delta" %in% colnames(p)) p[, "delta"] else rep(0, nrow(p))
     # Same compiled inversion the likelihood uses, so the simulator cannot
-    # drift away from the density it is meant to be sampling from.
-    pl <- frq_rate(p[, "alpha"], p[, "beta"], p[, "h"], p[, "tau"],
-                   dl)
+    # drift away from the density it is meant to sample from.
+    pl <- frq_rate(p[, "alpha"], p[, "beta"], p[, "h"], p[, "tau"], dl)
     # With threshold variability the latent quorum percentile is no longer
     # Beta: draw uniformly on the CDF scale and pull it back through H before
-    # inverting the incomplete beta.  delta == 0 keeps the plain rbeta draw so
-    # that seeded simulations predating delta still reproduce exactly.
+    # inverting the incomplete beta.
     U <- rbeta(nrow(p), p[, "alpha"], p[, "beta"])
     vary <- is.finite(dl) & dl > 0
     if (any(vary)) {
@@ -122,15 +112,19 @@ rFRQ <- function(lR, pars, ok = rep(TRUE, length(lR))) {
       U[vary] <- qbeta(z, p[vary, "alpha"], p[vary, "beta"])
     }
     hit <- rep(Inf, nrow(p))
-    live <- !is.na(pl[, "p"]) & (U <= pl[, "p"])
+    live <- is.finite(pl[, "p"]) & is.finite(pl[, "lambda"]) &
+      is.finite(U) & (U <= pl[, "p"])
     live[is.na(live)] <- FALSE
-    if (any(live)) {
+    if (any(live))
       hit[live] <- -log1p(-U[live] / pl[live, "p"]) / pl[live, "lambda"]
-    }
     hit[!is.finite(hit) | hit < 0] <- Inf
     dt[idx] <- hit
   }
-  dt <- dt + matrix(t0, nrow = nr)
+  # Invalid/non-finite t0 rows stay at +Inf rather than poisoning the race
+  # column with NA when the additive shift is applied.
+  t0_safe <- t0
+  t0_safe[!is.finite(t0_safe)] <- 0
+  dt <- dt + matrix(t0_safe, nrow = nr)
 
   bad_col <- apply(dt, 2, function(x) all(is.infinite(x)))
   R <- apply(dt, 2, which.min)
@@ -139,12 +133,14 @@ rFRQ <- function(lR, pars, ok = rep(TRUE, length(lR))) {
   R <- factor(levels(lR)[R], levels = levels(lR))
   R[bad_col] <- NA
   rt[bad_col] <- Inf
-  ok <- matrix(ok, nrow = nr)[1, ]
-  out$R[ok] <- levels(lR)[R][ok]
+  # A trial remains simulable when at least one accumulator is valid; using
+  # only the first row here made omission depend on response-level ordering.
+  ok_col <- colSums(matrix(ok, nrow = nr)) > 0L
+  out <- data.frame(R = rep(NA_character_, n_trials), rt = rep(NA_real_, n_trials))
+  out$R[ok_col] <- levels(lR)[R][ok_col]
   out$R <- factor(out$R, levels = levels(lR))
-  out$rt[ok] <- rt[ok]
-  out <- .apply_timed_guess_winner(out, levels(lR))
-  out
+  out$rt[ok_col] <- rt[ok_col]
+  .apply_timed_guess_winner(out, levels(lR))
 }
 
 #' The Finite Reservoir Quorum Process (FRQ)

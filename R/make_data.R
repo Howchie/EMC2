@@ -418,7 +418,6 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
     staircase <- check_staircase(staircase)
   }
 
-  # check_bounds <- FALSE
 
   post_functions <- NULL
   precomputed_design <- NULL
@@ -432,10 +431,9 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
     parameters <- do.call(rbind, credint(parameters, probs = 0.5, selection = "alpha", by_subject = TRUE))
   }
 
-  # This handles censoring and truncation where TC is not specified -- first check data, then design as a fallback (need to agree on the accepted order)
-  # Must run after the emc block above: an emc's data/design carry the fitted
-  # TC (UC/LT/etc), and check_missing() needs them populated to recover it
-  # rather than silently falling back to the no-censoring defaults.
+  # Resolve censoring and truncation settings from the data, then the design.
+  # Run this after the emc block so fitted settings are available.
+  # Otherwise check_missing() would silently fall back to no-censoring defaults.
   TC <- check_missing(TC,design=design,data=data)
 
   # Make sure parameters are in the right format, either matrix or vector.
@@ -673,7 +671,7 @@ make_data <- function(parameters,design = NULL,n_trials=NULL,data=NULL,expand=1,
   dropNames <- c("lR","lM","winner")
   if (!return_functions && !is.null(design$Ffunctions))
     dropNames <- c(dropNames,names(design$Ffunctions))
-  # ZH added to protect SSD simulation
+  # Preserve SSD columns needed by staircase simulation.
   if ("SSD"%in%dropNames) {dropNames=dropNames[!grepl("SSD",dropNames)]}
   if(!is.null(data$lR)) data <- data[data$lR == levels(data$lR)[1],]
   data <- data[,!(names(data) %in% dropNames)]

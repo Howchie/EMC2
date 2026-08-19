@@ -61,7 +61,8 @@ namespace lnr {
 }
 
 // R/model_LNR.R — PCOUNTER (gamma-mixed, self-exciting Poisson counter race).
-// The leading columns are the natural-scale parameters from Math/new.md.
+// The leading columns are the natural-scale parameters documented by
+// PCOUNTER() in R/model_LNR.R.
 namespace pcounter {
   enum : int { nu = 0, sv, gamma, k, omega, t0, N_REQ };
   inline ColSpec spec() {
@@ -117,20 +118,6 @@ namespace bawd_logn {
   inline ColSpec spec() {
     static const char* n[] = {"mu", "sigma", "B", "A", "t0", "k", "ell"};
     return {n, N_REQ, "BAwD_LOGN"};
-  }
-}
-
-// R/model_BAwD.R — BAwD reduced/identified chart.  The sampled columns are
-// (y0, T_max, A, delta, sigma, t0); the kernel maps them to the ordinary
-// lognormal BAwD coordinates (mu, sigma, B, A, t0, k, ell) internally.  `A`
-// is the ABSOLUTE start-point range, not A/b: threshold manipulations must not
-// silently change the start-point variability.  `delta` is the standardized
-// launch-location coordinate, not the threshold-gap parameter `B`.
-namespace bawd_reduced {
-  enum : int { y0 = 0, T_max, A, delta, sigma, t0, N_REQ };
-  inline ColSpec spec() {
-    static const char* n[] = {"y0", "T_max", "A", "delta", "sigma", "t0"};
-    return {n, N_REQ, "BAwD_REDUCED"};
   }
 }
 

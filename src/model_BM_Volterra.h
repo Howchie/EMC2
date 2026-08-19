@@ -19,7 +19,6 @@
 
 using namespace Rcpp;
 
-// TODO merge the pars objects from BM and OU to simplify code
 inline RD_Params prepare_bm_params(double t,
                                    double mu,
                                    double sigma,
@@ -55,8 +54,6 @@ inline RD_Params prepare_bm_params(double t,
     z_scaled_raw = z0/sigma;
     lower_scaled_raw = 0;
     pars.zL_scaled = std::log(1e-8);
-    // TODO -- check math, is this the correct transform? I think so...
-    // TODO -- we're gonna start it at z0=1
     pars.zU_scaled = std::log(std::max(1e-8,z0)); // cannot have an exact zero startpoint in log space
     
   }
@@ -102,7 +99,6 @@ inline double physical_time_from_scaled(double t_scaled, const RD_Params& pars) 
         // For GBM: \tilde t = sigma^2 * t_phys  =>  t_phys = \tilde t / sigma^2
         return t_scaled / (pars.sigma * pars.sigma);
     }
-    // TODO might as well add the OU here and re-use this function, can just use theta as we no longer use the backward form (so don't need v)
     // Default fallback: assume parameters are already in scaled time.
     return t_scaled;
 }
@@ -118,7 +114,6 @@ inline double physical_boundary(double t_scaled, const RD_Params& pars) {
 
 // Return β(t̃): the boundary in Wiener-space in *scaled* time coordinates
 // shifts (to remove drift) and scales to unit drift
-// TODO add spline
 inline double beta_from_time(double t_scaled, const RD_Params &pars,
                              const BoundaryDecayCache *cache = nullptr,
                              const util::AkimaSpline* spline = nullptr) {
@@ -127,13 +122,6 @@ inline double beta_from_time(double t_scaled, const RD_Params &pars,
   if (t_phys <= 0.0) {
         return 0.0;
   }
-  // NOTE: there used to be a `if (pars.fixed_b) return pars.b0;` short-circuit
-  // here.  That returned the *physical* boundary, skipping both the Girsanov
-  // drift shift and the 1/sigma scaling that put beta in Wiener space, so any
-  // fixed-bound BM with mu != 0 was solved as if it had zero drift.  The general
-  // branch below is already correct for a fixed bound -- physical_boundary()
-  // routes through fixed_boundary_decay() and returns b0 -- so the special case
-  // is simply dropped.
   if (cache) {
         const double cached = cache->lookup(t_scaled);
         if (std::isfinite(cached)) {
@@ -170,7 +158,6 @@ inline double beta_from_time(double t_scaled, const RD_Params &pars,
     return beta_t;
 }
 
-// TODO add spline
 inline double boundary_from_time(double t,
                                  const RD_Params& pars,
                                  const BoundaryDecayCache* cache = nullptr) {
@@ -200,12 +187,6 @@ inline double boundary_from_time(double t,
 inline double beta_prime_from_time(double t, const RD_Params &pars,
                                    const double t_max,
                                        const BoundaryDecayCache* cache = nullptr) {
-  // NOTE: there used to be a `if (pars.fixed_b) return pars.b_scaled;` shortcut
-  // here.  That is the OU convention -- in theta coordinates beta = scale *
-  // b_scaled, so b_scaled *is* the slope -- but in BM time a fixed physical
-  // bound still has slope d/dt[(b0 - mu t)/sigma] = -mu/sigma, and b_scaled was
-  // never set by prepare_bm_params anyway (so it returned 0).  The finite
-  // difference below now recovers -mu/sigma directly from beta_from_time.
 
 	// Compute derivative via finite difference
   double tL = 0.0;
@@ -262,16 +243,8 @@ inline double kernel_bm_backward(double t,      // Current time in the solver gr
     const double dt = t - s; // same as dt
     const double omega_d = pars.omega;
     if (dt <= FPM_EPSILON) {
-        // Diagonal limit.  This used to return 0, which silently dropped the
-        // implicit term the block solver reads via K(t_j, t_j) and degraded the
-        // whole solve to O(N^{-1/2}) whenever the boundary moved in Wiener space
-        // (i.e. whenever mu != 0 or the bound collapses; with mu == 0 and a fixed
-        // bound beta' == 0 and the omission was invisible).
-        //
-        // As dt -> 0, Psi = beta(T-t) - beta(T-s) -> -beta'(T-t) * dt, because the
-        // backward variable runs the boundary in reverse.  Substituting into
-        // -omega * Psi * Gstar(dt, Psi)/sqrt(dt) gives +omega * beta'(T-t)/sqrt(2*pi)
-        // -- the same magnitude as the forward kernel_bm diagonal, opposite sign.
+        // Diagonal limit of the backward kernel:
+        // omega * beta'(T - t) / sqrt(2*pi).
         const double beta_prime_bt =
             beta_prime_from_time(time_T_minus_t, pars, t_max, cache);
         return omega_d * (beta_prime_bt / std::sqrt(2.0 * M_PI));
@@ -389,7 +362,7 @@ inline double regularized_pdf_integrand_bm(
     return 2.0 * (H_smooth * nu_at_prime - nu_at_max) / denom;
 }
 
-// 2. The high-order integrator for the BM PDF, mimicking your OU version
+// High-order integrator for the BM PDF.
 double integrate_pdf_forward_bm_u(
     double t_max,
     const std::vector<double>& t_grid,
@@ -555,14 +528,8 @@ double calculate_cdf_from_nu_backward(const std::vector<double>& t_grid,
             // PDF's image term (Eq. 10). We can reuse the same function.
             const double image_term = averaged_image_term(T_minus_s, beta_T_minus_s, pars);
 
-            // weights_panel_12 below implements product integration against
-            // (T - s)^{-3/2}, so the value handed to it must be the SMOOTH part,
-            // i.e. the true integrand multiplied by (T - s)^{3/2}.  The true
-            // integrand here is just image_term * nu (averaged_image_term already
-            // carries the full u^{-3/2} first-passage shape), so the regulariser
-            // is (T - s)^{3/2}.  This used to multiply by sqrt(T - s) only, which
-            // left a spurious 1/(T - s) in the integral -- the cdf then converged
-            // in num_steps to a value several times too large and saturated at 1.
+            // Product integration expects the smooth integrand after removing
+            // the (T - s)^(-3/2) singularity.
             return (image_term * T_minus_s * std::sqrt(T_minus_s) * nu_s);
         };
 
@@ -715,8 +682,7 @@ NumericVector bm_fht_pdf_vec_grid(NumericVector t,
                                      ratio, base_panels, max_chunks);
 }
 
-// Variant of the grid-based solver using the chunked Volterra kernel
-// acceleration, mirroring OU. Keeps legacy functions available.
+// Chunked Volterra-kernel variant of the grid-based solver.
 // [[Rcpp::export]]
 NumericVector bm_fht_pdf_vec_grid_chunked(NumericVector t,
                                           double mu, double sigma, double z0,

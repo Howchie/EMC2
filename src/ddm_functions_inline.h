@@ -127,12 +127,9 @@ inline double ddm_logFs(double t, double v, double a, double w, int K) {
         fminus = logsum(logsum(neg1, neg2), fminus);
     }
 
-    return logsum(fplus, -fminus) + temp; // Original used logdiff, but that expects log(A) and log(B)
-    // Actually, looking at original logFs: return logdiff(fplus, fminus)+temp;
-    // My manual translation was a bit loose. Let's stick to the original names and logic.
+    return logsum(fplus, -fminus) + temp;
 }
 
-// Re-translating more faithfully:
 inline double ddm_logFs_faithful(double t, double v, double a, double w, int K) {
     double fplus = R_NegInf, fminus = R_NegInf;
     double sqt = std::sqrt(t), temp = -v * a * w - v * v * t / 2;

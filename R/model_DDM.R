@@ -7,35 +7,13 @@ find_duplicate_indices <- function(df) {
   return(index_map)
 }
 
-# Unfortunately there's some unwanted print statements in the code of rWDM
-# From the original package
+# Suppress diagnostic output from the reference simulator.
 suppress_output <- function(expr) {
   sink(tempfile())  # Redirect output to a temporary file
   on.exit(sink())   # Ensure sink is reset afterward
   invisible(force(expr))  # Run the expression
 }
 
-# rDDM <- function(R,pars,ok=rep(TRUE,length(R)), precision=5e-3)
-# {
-#   bad <- rep(NA,nrow(pars))
-#   out <- data.frame(response=bad,rt=bad)
-#   out_ok <- out[ok,]
-#   pars <- pars[ok,]
-#   R <- R[ok]
-#   pars <- as.matrix(pars);
-#   idx <- find_duplicate_indices(pars)
-#   for(id in unique(idx)){
-#     is_id <- which(idx == id)
-#     cur_pars <- pars[is_id[1],]
-#     tmp <- suppress_output(rWDM(N = length(is_id), a = cur_pars["a"]/cur_pars[ "s"], v = cur_pars["v"]/cur_pars[ "s"], t0 = cur_pars["t0"],
-#                                 w = cur_pars["Z"], sw = cur_pars["SZ"], sv = cur_pars["sv"]/cur_pars[ "s"],
-#                                 st0 = cur_pars["st0"], precision = precision))
-#     tmp <- data.frame(response = tmp$response, rt = tmp$q)
-#     out_ok[is_id,] <- tmp[sample(nrow(tmp)),]
-#   }
-#   out[ok,] <- out_ok
-#   cbind.data.frame(R=factor(out[,"response"], labels = levels(R), levels = c("lower", "upper")),rt=out[,"rt"])
-# }
 
 rDDM <- function(R,pars,ok=rep(TRUE,length(R)), precision=5e-3)
 {
@@ -68,12 +46,8 @@ rDDM <- function(R,pars,ok=rep(TRUE,length(R)), precision=5e-3)
 
 
 dDDM <- function(rt,R,pars,precision=5e-3)
-  # DDM density for response factor R with rt
-  # lower is mapped to first level of R and upper to second
-  # test
-  # pars=cbind.data.frame(a=c(1,1),v=c(-1,1),t0=c(.2,.2),z=c(.5,.5),d=c(0,0),
-  #                       sz=c(0,0),sv=c(0,0),st0=c(0,0),s=c(1,1))
-  # R <- factor(c("left","right")); rt=c(1,1)
+  # DDM density for response factor R; the first level is the lower boundary
+  # and the second is the upper boundary.
 {
   levels(R) <- c("lower","upper")
   res <- dWDM(rt, response=as.character(R), a = pars[,"a"]/pars[, "s"], v = pars[,"v"]/pars[, "s"], t0 = pars[,"t0"], w = pars[,"Z"],

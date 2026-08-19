@@ -196,8 +196,6 @@ inline std::vector<std::string> par_input_names_from_spec(const Rcpp::List& tr) 
   Rcpp::stop("par_input_names_from_spec: type of par_input not understood. "
                "It should be either a string or a vector of strings");
 
-  // Case 3: non‑string input (e.g., numeric vector supplied inline):
-  // return out;  // empty => we will keep the original spec as a single TrendOp
 }
 
 

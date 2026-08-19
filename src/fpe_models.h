@@ -448,13 +448,9 @@ inline double fpe_seed(const Model& m, double z_lo, double z_hi,
   if (absorbed_lower != nullptr) *absorbed_lower = 0.0;
 
   if (z_hi - z_lo > FPE_EPS) {
-    // ---- uniform start ----
-    // The start point is Uniform in the PHYSICAL state, so for the geometric
-    // models (which solve in Y = log X) it is NOT uniform in the solver
-    // coordinate -- its density there is e^y/(Zhi - Zlo).  Getting this wrong is
-    // invisible over a narrow range and catastrophic over a wide one: it cost
-    // 1.6e-2 on GBM (start 1 -> 1.5) and 2.3e-1 on Gompertz (start 1e-3 -> 0.5).
-    // Taking the cell mass in the physical variable handles both exactly.
+    // Uniform starts are specified in the physical state.  For log-state
+    // models, map grid cells back to physical coordinates before assigning
+    // their masses.
     const double L = m.length(0.0);
     const bool ls = m.bnd.log_state;
     const double Zlo = ls ? std::exp(z_lo) : z_lo;

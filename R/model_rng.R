@@ -81,27 +81,14 @@
 # model's c_name suffix, or the simulator and the likelihood describe different
 # models (see R/model_BAwD.R).
 .rfun_BAwD <- function(lR, pars, ok = rep(TRUE, length(lR)), launch = 1L,
-                       posdrift = TRUE) {
+                       posdrift = TRUE, gamma = 0) {
+  gamma <- .bawd_check_gamma(gamma)
   if (.use_cpp_rfun()) {
-    res <- rbawd_cpp(pars, levels(lR), ok, as.integer(launch), posdrift)
+    res <- rbawd_cpp(pars, levels(lR), ok, as.integer(launch), posdrift, gamma)
     out <- .rfun_cpp_pack(res, levels(lR), length(lR) / length(levels(lR)))
     return(.apply_timed_guess_winner(out, levels(lR)))
   }
-  rBAwD(lR, pars, ok = ok, launch = launch, posdrift = posdrift)
-}
-
-.rfun_BAwD_reduced <- function(lR, pars, ok = rep(TRUE, length(lR))) {
-  # Ttransform supplies ordinary reporting columns, but leaves the sampled
-  # reduced prefix first.  Reorder before calling rbawd_cpp, whose compiled
-  # contract is positional (mu, sigma, B, A, t0, k, ell).
-  need <- c("mu", "sigma", "B", "A", "t0", "k", "ell")
-  missing <- setdiff(need, colnames(pars))
-  if (length(missing))
-    stop("BAwD reduced simulator requires derived columns ",
-         paste(missing, collapse = ", "))
-  ordinary <- pars[, need, drop = FALSE]
-  ordinary <- cbind(ordinary, b = ordinary[, "B"] + ordinary[, "A"])
-  .rfun_BAwD(lR, ordinary, ok = ok, launch = 1L, posdrift = TRUE)
+  rBAwD(lR, pars, ok = ok, launch = launch, posdrift = posdrift, gamma = gamma)
 }
 
 .rfun_BAwDp <- function(lR, pars, ok = rep(TRUE, length(lR)), launch = 1L,

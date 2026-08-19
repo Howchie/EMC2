@@ -1,21 +1,3 @@
-# do_transform <- function(pars, transform)
-# {
-#   isexp    <- transform$func[colnames(pars)] == "exp"
-#   isprobit <- transform$func[colnames(pars)] == "pnorm"
-#
-#   ## exp link:  lower + exp(real)
-#   pars[, isexp] <- sweep(
-#     exp(pars[, isexp, drop = FALSE]), 2,
-#     transform$lower[colnames(pars)[isexp]], "+")
-#
-#   ## probit link: lower + (upper+lower) * pnorm(real)
-#   pars[, isprobit] <- sweep(
-#     sweep(pnorm(pars[, isprobit, drop = FALSE]), 2,
-#           transform$upper[colnames(pars)[isprobit]] -
-#             transform$lower[colnames(pars)[isprobit]], "*"),
-#     2, transform$lower[colnames(pars)[isprobit]], "+")
-#   pars
-# }
 
 
 
@@ -59,15 +41,13 @@ do_bound <- function(pars,bound, lR = NULL) {
 
 # This form used in make_data
 fix_bound <- function(pars,bound, lR = NULL,fix=FALSE) {
-  # SM: Only consider bounds of parameters that are actually in pars
-  # When we move to the oo_refactor we can apply the full bound to all parameters
+  # Restrict bounds to parameters present in pars.
   bound$minmax <- bound$minmax[,colnames(bound$minmax) %in% colnames(pars), drop=FALSE]
   tpars <- t(pars[,colnames(bound$minmax),drop=FALSE])
   oklo <- tpars >= bound$minmax[1,]
   okhi <- tpars <= bound$minmax[2,]
   if (!is.null(bound$exception)) {
-    # SM: Only consider bounds of parameters that are actually in pars
-    # When we move to the oo_refactor we can apply the full bound to all parameters
+    # Restrict exception bounds to parameters present in pars.
     bound$exception <- bound$exception[names(bound$exception) %in% colnames(pars)]
     exception <- tpars[names(bound$exception),] == bound$exception
     oklo[names(bound$exception),] <- oklo[names(bound$exception),] | exception
@@ -103,7 +83,6 @@ add_bound <- function(pars,bound, lR = NULL) {
 
 #### Functions to look at parameters ----
 
-#### Functions to look at parameters ----
 
 make_pmat <- function(p_vector,design)
   # puts vector form of p_vector into matrix form
@@ -283,13 +262,13 @@ generate_design_equations <- function(design_matrix,
                                       trend) {
   # 1. If user hasn't specified which columns are factors or numeric, guess:
   if (is.null(factor_cols)) {
-    # We'll assume anything that is a factor or character is a "factor column"
+    # Treat factor and character columns as factors.
     factor_cols <- names(design_matrix)[
       sapply(design_matrix, function(x) is.factor(x) || is.character(x))
     ]
   }
   if (is.null(numeric_cols)) {
-    # We'll assume everything that is numeric is for the design (contrast) columns
+    # Treat numeric columns as design terms.
     numeric_cols <- names(design_matrix)[
       sapply(design_matrix, is.numeric)
     ]
@@ -354,7 +333,7 @@ generate_design_equations <- function(design_matrix,
     max(nchar(fc), max(nchar(as.character(design_matrix[[fc]])), na.rm = TRUE))
   })
 
-  # We'll label the final column as "Equation"
+  # Label the final column as "Equation".
   eq_header <- ""
 
   # 5. Print the header row
@@ -367,7 +346,7 @@ generate_design_equations <- function(design_matrix,
 
   cat("  ", factor_header_str, "  ", eq_header, "\n", sep="")
 
-  ## SM: Add trend info
+  ## Add trend information.
   formatted_trends <- verbal_trend(design_matrix, trend)
   ## If premap, then the design matrix column name has been replace.
   ## else: add a component to the end of the equation string, either before or after the
@@ -417,7 +396,7 @@ generate_design_equations <- function(design_matrix,
 }
 
 add_transforms_to_trend_pnames <- function(trend, transforms, pre_transforms) {
-  ## bit hacky, but change trend par names by adding pre_transforms and transforms here
+  ## Update trend parameter names with transforms.
   for(trend_n in 1:length(trend)) {
     idx <- trend[[trend_n]]$trend_pnames %in% names(pre_transforms)
     for(i in which(idx)) {
@@ -429,7 +408,7 @@ add_transforms_to_trend_pnames <- function(trend, transforms, pre_transforms) {
         trend[[trend_n]]$trend_pnames[i] <- paste0(this_transform, '(', pname, ')')
       }
     }
-    # same trick
+    # Apply the corresponding transform.
     idx <- trend[[trend_n]]$trend_pnames %in% names(transforms)
     for(i in which(idx)) {
       this_transform <- (transforms)[trend[[trend_n]]$trend_pnames[i]]

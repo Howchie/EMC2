@@ -130,6 +130,12 @@ constexpr double FRQ_QUANTILE = 0.5;
 // the exported dfrq/pfrq/frq_rate entry points, which take shapes directly.
 constexpr double FRQ_SHAPE_MIN = 1e-8;
 
+// Beyond this point sinh(delta) and the log-odds inversion lose finite-double
+// guarantees.  The fitted model is much more conservative (delta <= 6), but
+// the exported entry points also accept direct values and must reject rather
+// than manufacture NaNs for extreme inputs.
+constexpr double FRQ_DELTA_MAX = 700.0;
+
 // xlogy(a, y) = a log y, with the a == 0 branch returning 0 rather than the
 // NaN of 0 * (-Inf).  alpha == 1 or beta == 1 hits this on every call.
 inline double frq_xlogy(double a, double y) {
@@ -155,19 +161,20 @@ inline double frq_logsinh(double u) {
 }
 
 struct FrqH {
-  bool ok = true;         // false only for a rejected delta (NaN/negative/Inf)
+  bool ok = true;         // false only for a rejected delta
   bool active = false;    // delta > 0
   double delta = 0.0;
   double two_delta = 0.0;
+
   double two_sinh = 0.0;    // 2 sinh(delta)
   double exp_mdelta = 1.0;  // e^{-delta}
   double log_sinhc = 0.0;   // log(sinh(delta)/delta) = log H'(0)
   double c2 = 0.0;          // 2(cosh(delta) - 1), formed as 4 sinh^2(delta/2)
 };
-
 inline FrqH frq_h_make(double delta) {
   FrqH H;
-  if (ISNAN(delta) || delta < 0.0 || !R_FINITE(delta)) { H.ok = false; return H; }
+  if (ISNAN(delta) || delta < 0.0 || !R_FINITE(delta) ||
+      delta > FRQ_DELTA_MAX) { H.ok = false; return H; }
   if (delta == 0.0) return H;                 // identity; `active` stays false
   H.active = true;
   H.delta = delta;
@@ -265,7 +272,11 @@ inline FrqPars frq_derive(double alpha, double beta, double h, double tau,
   // can ever reach.  h = H(I_p(alpha, beta)) inverts to it exactly, in two
   // steps: undo the threshold-variability map, then undo the incomplete beta.
   s.p = R::qbeta(frq_h_inv(h, s.hh), alpha, beta, /*lower_tail=*/1, /*log_p=*/0);
-  if (ISNAN(s.p) || !(s.p > 0.0) || !(s.p <= 1.0)) return s;
+  // If h is defective, p must remain strictly below one.  qbeta can round a
+  // representable but extreme h to one; accepting that value would silently
+  // turn the requested defective distribution into a proper one.
+  if (ISNAN(s.p) || !(s.p > 0.0) || !(s.p <= 1.0) ||
+      (h < 1.0 && !(s.p < 1.0))) return s;
 
   // The r-quantile of the CONDITIONAL distribution sits at F = r h, so on the
   // Beta scale it is the H^{-1}(r h)-quantile.  It is strictly below p whenever

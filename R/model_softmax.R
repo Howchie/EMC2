@@ -1,16 +1,13 @@
 
 pSOFTMAX <- function(trials, pars)
-  # probability between lt and ut
+  # Probability for each option in a trial.
 {
   V <- pars[,'x']*pars[,'beta']
-  # Compute max(V) within each trial (for numerical stability)
   Vmax <- ave(V, trials, FUN = max)
   expV <- exp(V - Vmax)
 
-  # Trial-wise denominator
   denom <- ave(expV, trials, FUN = sum)
 
-  # Probabilities
   expV / denom
 }
 
@@ -45,10 +42,6 @@ log_likelihood_softmax <- function(pars, dadm, model, min_ll = log(1e-10)) {
 
 
 rSOFTMAX <- function(lR,pars,p_types=c("x","beta"))
-  # lR is an empty latent response factor lR with one level for response.
-  # pars is a matrix of corresponding parameter values named as in p_types
-  # pars must be sorted so accumulators and parameter for each trial are in
-  # contiguous rows.
 
 {
   if (!all(p_types %in% dimnames(pars)[[2]]))
@@ -60,54 +53,25 @@ rSOFTMAX <- function(lR,pars,p_types=c("x","beta"))
   trial_id <- rep(seq_len(n), each=nr)
   p <- pSOFTMAX(trial_id, pars)
 
-  # --- sample a response for each trial (vectorized using cumulative sums) -----
-  # generate uniform random variable for each trial
   u <- runif(n)
   u_expanded <- u[trial_id]   # match accumulator rows
 
-  # 3. compute cumulative probability per trial
-  #    Using cumsum grouped with diff() trick (way faster than ave)
+  # Grouped cumulative sums select the first option crossing the draw.
   cp <- cumsum(p)
 
-  # reset cumulative sums at group boundaries:
-  # Find where new trials begin
   idx <- c(TRUE, diff(trial_id) != 0)
   cp[idx] <- p[idx]          # restart cumsum at trial start
 
-  # 4. Determine first accumulator where cp >= u
-  is_hit <- cp >= u_expanded   # logical matrix "hit" per accumulator row
-
-  # For each trial: we want the FIRST hit
-  # Convert trial structure to a 2D matrix: nr rows × n trials
+  is_hit <- cp >= u_expanded
   hit_mat <- matrix(is_hit, nrow = nr, ncol = n)
-
-  # First TRUE per column (trial); returns NA if none
-  # ZH replace slow apply loop with vectorized C-level primitive max.col
   chosen <- max.col(t(hit_mat), ties.method = "first")
   chosen[colSums(hit_mat) == 0] <- nr # fallback (rare)
 
-  # # cumulative probability per trial
-  # cp <- ave(p, trial_id, FUN=cumsum)
-  #
-  # # choose one per trial
-  # chosen <- tapply(cp >= u_expanded, trial_id, function(x) {
-  #   w <- which(x)
-  #   if (length(w) == 0) return(nr)  # fallback
-  #   w[1]
-  # })
-
-  # chosen <- ave(cp >= u_expanded, trial_id, FUN=function(x) {
-  #   idx <- which(x)[1]
-  #   if (is.na(idx)) idx <- nr  # safety fallback
-  #   rep(idx, length(x))
-  # })
-  #
-  # chosen <- chosen_per_trial[seq(1, n, nr)]  # pick one per trial
   # --- build response factor ---------------------------------------------------
   R_levels <- levels(lR)
   R <- factor(R_levels[chosen], levels=R_levels)
 
-  # return same structure as rPROBIT
+  # Return the sampled response and no response time.
   data.frame(R = R, rt = NA_real_)
 }
 

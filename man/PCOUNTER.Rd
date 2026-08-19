@@ -17,15 +17,24 @@ with mean \code{omega} is added to
 that threshold; \code{t0} is a nondecision-time shift.
 }
 \details{
-The model integrates analytically over both the continuous input-rate
-distribution and the infinite geometric threshold distribution. Setting
-\code{sv = 0}, \code{gamma = 0}, or \code{omega = 0} selects the corresponding
-fixed-rate, ordinary Poisson, or fixed-threshold branch. The criterion offset
-is rounded to the nearest non-negative integer (half-up) and then shifted by
-two when evaluating the process, so every accumulator must register at least two events
-before responding. Exact \code{k = 0} therefore corresponds to the canonical
-two-event threshold.
+Each accumulator is a pure-birth counter with event rate
+\code{nu + gamma * n}. The trialwise input rate has mean \code{nu} and
+standard deviation \code{sv}; the response threshold is
+\eqn{K = 2 + floor(k + 1/2)} and has a geometric excess with mean
+\code{omega}. Exact-zero \code{sv}, \code{gamma}, and \code{omega} select
+simpler nested branches.
 
+The closed form evaluates its Stirling recurrence row by row, so finite
+\code{k} values are not restricted by a substantive threshold cap. The
+implementation only checks that the integer index is representable on the
+target machine. The proper \code{sv = 0}, \code{omega = 0},
+\code{gamma > 0} member overlaps with the non-defective boundary of FRQ:
+for integer \code{alpha = K}, \code{beta = nu/gamma}, \code{h = 1}, and
+\code{lambda = gamma}, both have
+\eqn{F(t) = I_{1-exp(-gamma*t)}(K, nu/gamma)}. FRQ is not otherwise
+redundant: it supplies a finite-reservoir defect and threshold-shape
+relaxation, while PCOUNTER supplies trialwise input variation,
+self-excitation, and geometric threshold variation.
 For estimated parameters, \code{k} has lower bound zero, while \code{sv},
 \code{gamma}, and \code{omega} have lower bound \code{1e-4}; exact zero is
 available when they are fixed explicitly.

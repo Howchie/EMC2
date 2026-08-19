@@ -1,26 +1,17 @@
-# The bounded Ornstein-Uhlenbeck model -- the DDM with leak.
+# Bounded Ornstein-Uhlenbeck model -- the DDM with leak.
 #
-# Wrappers only: the density, cdf and simulator all live in C++ (see
-# src/bou_diffusion.cpp and src/fpe_bou.h), and the likelihood is the shared
-# DDM one.  Nothing here reimplements the model, so the R-side density and the
-# sampled likelihood cannot disagree.
+# Density, CDF, and simulation wrappers call the C++ kernels.  Boundary-form
+# codes and c_name suffixes match the C++ adapter in particle_ll.cpp.
 
-# Boundary-form codes, matching fpe::FPE_BoundaryKind in src/fpe_models.h.
+# Boundary-form codes, matching fpe::FPE_BoundaryKind.
 .BOU_BND <- c(fixed = 0L, weibull = 1L, exponential = 2L,
               linear_additive = 3L, linear_multiplicative = 4L)
 
-# c_name suffixes, which is how the C++ side learns the collapse FORM (see
-# bou_bnd_kind_from_type in src/particle_ll.cpp).  The "B" prefix keeps these
-# distinct from the ROU_* names, which are matched by the same substring rule.
 .BOU_SUFFIX <- c(fixed = "", weibull = "_BWEIB", exponential = "_BEXP",
                  linear_additive = "_BLIN_ADD",
                  linear_multiplicative = "_BLIN_MULT")
 
-# Pull the columns the C++ entry points want out of a parameter matrix, with the
-# defaults a design may legitimately omit.  The boundary form is inferred from
-# which shape columns are present, so the R-side dfun/pfun/rfun agree with the
-# C++ likelihood without having to be told the variant separately -- the same
-# arrangement .rou_cols uses.
+# Pull the columns required by the C++ entry points.
 .bou_cols <- function(pars) {
   get1 <- function(nm, default) {
     if (nm %in% colnames(pars)) pars[, nm] else rep(default, nrow(pars))

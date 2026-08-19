@@ -422,6 +422,41 @@ inline double log_lognormal_stoploss(double v, double mu, double sigma) {
   if (!(series > 0.0)) return R_NegInf;
   return std::log(v) + log_phi_std(x) + std::log(series);
 }
+// log Lambda_m(v) = log integral_v^infinity w^(-(m+1)) P(V >= w) dw
+// for log V ~ N(mu, sigma^2).  For m > 0, m Lambda_m(v) =
+// v^(-m) phi(x) [R(x) - R(x + m sigma)], with x = (log v - mu)/sigma.
+// The Mills-ratio difference is evaluated directly until its retained
+// fraction is too small, then differenced symbolically to avoid tail loss.
+inline double log_lognormal_power_stoploss(double v, double mu, double sigma,
+                                           double m) {
+  if (!(sigma > 0.0) || !(v > 0.0)) return R_NegInf;
+  const double x = (std::log(v) - mu) / sigma;
+  if (!(m > 0.0)) {
+    return std::log(sigma) + log_normal_q_antiderivative_abs(x);
+  }
+  const double a = m * sigma;
+  if (x <= 0.0) {
+    return log_diff_exp(
+        -m * std::log(v) + pnorm_log_direct(x, false),
+        -m * mu + 0.5 * a * a + pnorm_log_direct(x + a, false)) -
+           std::log(m);
+  }
+  const double y = x + a;
+  const double r_x = mills_ratio_std(x);
+  const double d = r_x - mills_ratio_std(y);
+  if (d > 1e-12 * r_x) {
+    return -m * std::log(v) + log_phi_std(x) + std::log(d) -
+           std::log(m);
+  }
+  const double t1 = a / (x * y);
+  const double t2 = a * (x * x + x * y + y * y) /
+                    (x * x * x * y * y * y);
+  const double series = t1 - t2;
+  if (!(series > 0.0)) return R_NegInf;
+  return -m * std::log(v) + log_phi_std(x) + std::log(series) -
+         std::log(m);
+}
+
 
 // Shared acceptance constants for the guarded natural race kernels.
 // A natural probability difference is rejected once it retains less than

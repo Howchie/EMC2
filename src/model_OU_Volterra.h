@@ -141,10 +141,7 @@ inline double beta_prime_at_v(double v, const RD_Params& pars,
 inline double kernel_backward_tv_core(double v, double vp, const RD_Params& pars, const BoundaryDecayCache* cache) {
     const double dv = v - vp;
     if (dv <= FPM_EPSILON) {
-      // Diagonal limit, matching kernel_forward_tv_core.  Letting dv -> 0 in the
-      // off-diagonal branch below (psi -> beta'(v)*dv, s -> 2*(1-v)) gives
-      // -omega * beta'(v) / sqrt(2*pi*(1-v)).  This used to return 0, which drops
-      // the implicit term the block solver reads via K(v_j, v_j).
+      // Diagonal limit: -omega * beta'(v) / sqrt(2*pi*(1-v)).
       const double alpha = std::max(FPM_EPSILON, 1.0 - v);
       const double bp = beta_prime_at_v(v, pars, cache);
       return -pars.omega * bp / std::sqrt(2.0 * M_PI * alpha);
@@ -165,13 +162,8 @@ inline double kernel_backward_tv_core(double v, double vp, const RD_Params& pars
 	// -omega * psi * G*(t_eff, psi) / t_eff  through the v -> tau change of
 	// variables (Jacobian 1 - v') and multiplying by sqrt(dv) to hand the
 	// singularity back to the weights gives the factor 2*(1 - v')/(sqrt(dv)*s).
-	//
-	// This previously read -omega * 2 * (psi/dv) * [(1-v')/(s*sqrt(s))] * G*,
-	// which is the expression above divided by an extra sqrt(dv*s).  That both
-	// re-introduced the sqrt singularity the Stieltjes weights already carry and
-	// contradicted the explicit diagonal below; the nu recursion diverged with N
-	// for any moving barrier in Wiener space (i.e. whenever b0 != theta).
-	// -omega because we move the kernel term across to the right hand side when solving (Eq 13 Lipton & Kaushansky 2020)
+    // The solver's Stieltjes weights supply the square-root singularity;
+    // this expression provides only the smooth kernel factor.
 	return -omega * psi * Gstar(t_eff, psi) * (2.0 * (1.0 - vp)) / (std::sqrt(dv) * s);
 }
 
@@ -210,13 +202,7 @@ double kernel_forward_tv_core(double theta, double theta_p, const RD_Params& par
 	// Brownian kernel -omega * psi * G*(t_eff, psi) / t_eff, changing variables
 	// tau' -> theta' (Jacobian 1 + theta') and multiplying by sqrt(dv) to hand the
 	// singularity back to the weights leaves 2*(1 + theta')/(sqrt(dv)*s).
-	//
-	// This previously read -omega * 2 * (psi/dv) * [(1+theta')/(s*sqrt(s))] * G*,
-	// i.e. the expression below divided by an extra sqrt(dv*s).  As dv -> 0 that
-	// form blows up like 1/sqrt(dv) instead of tending to the diagonal value
-	// hand-derived above -- the corrected form does tend to exactly that value,
-	// which is what identifies the diagonal branch as the surviving correct case.
-	// -omega because we move the kernel term across to the right hand side when solving (Eq 13 Lipton & Kaushansky 2020)
+	// The same smooth-kernel factor applies in the theta coordinate.
 	return -omega * psi * Gstar(t_eff, psi) * (2.0 * (1.0 + theta_p)) / (std::sqrt(dv) * s);
 }
 
@@ -225,7 +211,6 @@ double g_term_backward(double v, const RD_Params& pars) {
     return 1.0;
 }
 
-// Refactored to be entirely in terms of standard heat kernels for clarity and simplicity 
 inline double g_term_forward(double theta, const RD_Params& pars, const BoundaryDecayCache* cache = nullptr, const util::AkimaSpline* spline = nullptr) {
   const double scale = 1.0 + theta;
   const double tau = 0.5*(scale*scale-1.0); // this is tau, which is the solver units
@@ -574,7 +559,7 @@ inline double integrate_cdf_backward_trapezoid(
  * Computes the special PDF integral up to an ARBITRARY endpoint theta_k.
  * This function is self-contained and relies *only* on the spline.
  *
- * @param theta_k The arbitrary endpoint (your t_obs, transformed).
+ * @param theta_k The transformed observed endpoint.
  * @param nu_spline The pre-built Akima spline for the kernel.
  * @param M The number of panels to use for this integration.
  * This can be small (e.g., 50-100) and fixed.
@@ -1175,8 +1160,7 @@ NumericVector ou_fht_pdf_vec_grid(NumericVector t,
 }
 
 
-// Variant of the grid-based solver using the chunked Volterra kernel
-// acceleration. Keeps the legacy function untouched for comparative testing.
+// Chunked Volterra-kernel variant of the grid-based solver.
 // [[Rcpp::export]]
 NumericVector ou_fht_pdf_vec_grid_chunked(NumericVector t, double lambda,
                                           double theta, double sigma, double z0,

@@ -6,12 +6,7 @@
 // Numerically safe dot for partial rows: sum_{k<j} L(i,k)*L(j,k)
 inline double dot_partial(const arma::mat& L, arma::uword i, arma::uword j) {
   const arma::uword len = std::min(i, j);
-  // Simple summation; for small p this is fine. If you expect large p and ill conditioning,
-  // you can switch to Kahan summation.
   double s = 0.0;
-  //const double* Li = L.memptr() + i;               // row-major access is not ideal in Armadillo,
-  //const double* Lj = L.memptr() + j;               // but p is typically small here.
-  //const arma::uword n_cols = L.n_cols;
   for (arma::uword k = 0; k < len; ++k) {
     // L(i,k) and L(j,k); column-major layout => access via (k*n_rows + i), so use L() API:
     s += L(i, k) * L(j, k);
@@ -75,8 +70,7 @@ inline bool chol_lower_nolapack(const arma::mat& Ain,
       if (!emc2_isfinite(lii) || lii <= 0.0) { ok = false; break; }
       L(i, i) = lii;
 
-      // Off-diagonals below the diagonal: j = i+1..p-1 (but we fill as "row i" in lower form),
-      // equivalently iterate rows r=i+1..p-1 and set L(r,i).
+      // Off-diagonals below the diagonal use rows r=i+1..p-1 and set L(r,i).
       for (arma::uword r = i + 1; r < p; ++r) {
         double s2 = 0.0;
         for (arma::uword k = 0; k < i; ++k) s2 += L(r, k) * L(i, k);

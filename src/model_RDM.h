@@ -1520,7 +1520,6 @@ inline double pswtn_positive_drift_quad(double t, double mu_drift, double thresh
   return return_from_log(std::fmin(log_cdf, 0.0), log_out);
 }
 
-// TODO check this
 inline double drdmswtn_joint_A_sv_density_fullgauss(
     double t_adj, double mu, double b, double A,
     double s, double sv, bool posdrift,
@@ -2446,11 +2445,10 @@ inline double dswtn_core(double t_adj, double mu_drift, double threshold,
   const double mu_new    = (threshold * v + mu_drift * s2) / den_common;
   const double sigma_new = std::sqrt(s2 * v / den_common);
 
-  // EAM hit density * erlang kill survival (erlang uses raw t_raw)
-  // TODO check that removing term_log_int was correct
+  // EAM hit density multiplied by Erlang kill survival.
   const double log_f_hit = term_log_threshold + term_log_denom -
-                         log_norm + term_log_exp + 
-                         erlang_log_surv(t_raw, lambda, kill_shape); //TODO break out erlang
+                         log_norm + term_log_exp +
+                         erlang_log_surv(t_raw, lambda, kill_shape);
 
   if (!guess || lambda <= 0.0) {
     if (ISNAN(log_f_hit)) return log_out ? R_NegInf : 0.0;

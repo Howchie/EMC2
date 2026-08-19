@@ -251,7 +251,7 @@ design <- function(formula = NULL,factors = NULL,Rlevels = NULL,model,data=NULL,
   if(any(names(factors) %in% c("trial", "R", "rt", "lR", "lM","UC","LC","UT","LT","winner"))){
     stop("Please do not use any of these factor names: winner, trial, R, rt, lR, lM, UC, LC, UT, LT")
   }
-  if (!"subjects" %in% names(factors)) factors$subjects <- 1 # ZH: ensure subjects is added to factors when there's no data, for make_data to work properly
+  if (!"subjects" %in% names(factors)) factors$subjects <- 1 # Add subjects when data are not supplied.
   factors <- setNames(
     lapply(factors, function(x)
       if (!is.factor(x)) factor(x, levels = unique(x)) else x
@@ -338,13 +338,13 @@ design <- function(formula = NULL,factors = NULL,Rlevels = NULL,model,data=NULL,
                                c(all_preds, function_vars, trend_vars, map_vars)]
       if(length(covariates) == 0) covariates <- NULL
     }
-  } else {if(is.null(Rlevels)) stop("make sure Rlevels is specified")} # this check wasn't present - would break accumulator logic
+  } else {if(is.null(Rlevels)) stop("make sure Rlevels is specified")}
   if (!is.null(trend)) {
     formula <- check_trend(trend,c(names(functions), covariates), model, formula)
   }
   
   ## Handle GNG models silently
-  # ZH This matches Andrew's code in make_data by branching the model likelihood soley based on the presence of "nogo" in Rlevels
+  # Select the GNG likelihood variant when "nogo" is among the response levels.
   if ("nogo" %in% Rlevels) {
     m_list <- model()
     if(!("GNG"%in%m_list$type)){
@@ -648,7 +648,6 @@ add_accumulators <- function(data,matchfun=NULL,simulate=FALSE, type = "RACE", F
         lSmagnitude[isin] <- as.character(datar[isin,paste0("lS",i)])
       }
       factors <- factors[!(factors %in% dimnames(datar)[[2]][islS])]
-      # datar <- datar[,!islS]
       datar$lSmagnitude <- as.numeric(lSmagnitude)
     }
   }
@@ -863,7 +862,7 @@ compress_dadm <- function(da,designs,Fcov,Ffun)
 
     cells <- paste(design_cells,
                 da$subjects, da$R, da$lR, da$rt,
-                LT, UT, LC, UC,  # <--- ZH Added these columns
+                LT, UT, LC, UC,  # Include truncation and censoring bounds in the cell key.
                 sep="+"
               )
     # Make sure that if row is included for a trial so are other rows
@@ -1061,7 +1060,6 @@ design_model <- function(data,design,model=NULL,
   if(grepl("MRI", model()$type)){
     dadm <- data
     attr(dadm, "design_matrix") <- attr(design, "design_matrix")
-    # attr(design, "design_matrix") <- NULL
     p_names <- names(model()$p_types)
     attr(dadm,"p_names") <- p_names
     sampled_p_names <- p_names[!(p_names %in% names(design$constants))]
@@ -1248,7 +1246,6 @@ design_model <- function(data,design,model=NULL,
   if (compress){
     dadm <- compress_dadm(da,designs=out, Fcov=design$Fcovariates,Ffun=names(design$Ffunctions))
     # Change expansion names
-    # attr(dadm,"expand_all") <- attr(dadm,"expand")
     if(!is.null(dadm$lR)){
       attr(dadm,"expand") <- attr(dadm,"expand_winner")
       attr(dadm,"expand_winner") <- NULL
@@ -1257,7 +1254,6 @@ design_model <- function(data,design,model=NULL,
     dadm <- da
     attr(dadm,"designs") <- out
     attr(dadm,"s_expand") <- da$subjects
-    # attr(dadm,"expand_all") <- 1:nrow(dadm)
     if(is.null(dadm$lR)){
       attr(dadm,"expand") <- 1:nrow(dadm)
     } else{
@@ -1471,9 +1467,6 @@ dm_list <- function(dadm)
   expand_nort <- attr(dadm,"expand_nort")
   unique_nortR <- attr(dadm,"unique_nortR")
   expand_nortR <- attr(dadm,"expand_nortR")
-  # ok_trials <- attr(dadm,"ok_trials")
-  # expand_uc <- attr(dadm,"expand_uc")
-  # expand_lc <- attr(dadm,"expand_lc")
   dms_mri <- attr(dadm, "design_matrix")
 
   # winner on expanded dadm
@@ -1517,7 +1510,6 @@ dm_list <- function(dadm)
       attr(dl[[i]], "p_names") <- p_names
       attr(dl[[i]], "sampled_p_names") <- sampled_p_names
       attr(dl[[i]], "designs") <- sub_design(designs, isin)
-      # if(!is.null(expand)) attr(dl[[i]],"expand_all") <- expand[isin1]-min(expand[isin1]) + 1
       attr(dl[[i]], "contract") <- NULL
       attr(dl[[i]], "expand_winner") <- NULL
       attr(dl[[i]], "ok_trials") <- NULL
@@ -1530,9 +1522,7 @@ dm_list <- function(dadm)
       }
 
       attr(dl[[i]], "unique_nort") <- NULL
-      # attr(dl[[i]], "unique_nortR") <- NULL
       attr(dl[[i]], "expand_nort") <- NULL
-      # attr(dl[[i]], "expand_nortR") <- NULL
       # LL cache attrs are data-shape specific; drop any inherited cache from the
       # full dadm so per-subject caching is always rebuilt safely.
       attr(dl[[i]], "emc2_ll_cache_version") <- NULL
@@ -1631,7 +1621,7 @@ update2version <- function(emc){
   } else{
     type <- emc[[1]]$type
   }
-  # Model used to be stored in data
+  # Restore model metadata when it is absent from the emc object.
   first_data <- emc[[1]]$data[[1]]
   if(is.null(emc[[1]]$model)){
     if(is.data.frame(first_data)){
@@ -2027,7 +2017,6 @@ plot.emc.design <- function(x, p_vector, data = NULL, factors = NULL, plot_facto
   data <- design_model(data, x, compress = FALSE, rt_resolution = 1e-15)
 
   if(is.null(x$model()$c_name)) stop("Current design type not supported for plotting")
-  # if(x$model()$c_name == "LNR") stop("LNR designs not supported for plotting")
   type <- ifelse(x$model()$c_name == "DDM", "DDM", ifelse(x$model()$c_name == "LNR", "LNR", "race"))
   within_noise <- ifelse(x$model()$c_name == "LBA", FALSE, TRUE)
   # Split only relevant for DDM

@@ -291,8 +291,6 @@ ptexGaussian <- function(rt,pars) {
 
 #### Go Single ExGaussian ----
 
-# Go cdf/pdf (strips out NAs and calls d/pexGaussian)
-# Is stripping out rt NAs really necessary?
 
 dtexGaussianG <- function(rt,pars)
 {
@@ -339,29 +337,6 @@ ptexGaussianS <- function(rt,pars)
 
 #### ExG Race function ----
 
-# Following functions moved to C++ model_SS_EXG.cpp
-
-# dEXGrace <- function(dt,mu,sigma,tau)
-#   # Generates defective PDF for win by first runner, dt (decison time) is
-#   # a matrix with length(mu) rows, one row for each runner, and one column
-#   # for each decision time for which a defective density value will be
-#   # returned.
-# {
-#   dt[1,] <- dEXG(dt[1,],mu[1],sigma[1],tau[1])
-#   if (length(mu)>1) for (i in 2:length(mu))
-#     dt[1,] <- dt[1,]*pEXG(dt[i,],mu[i],sigma[i],tau[i],lower_tail=FALSE)
-#   dt[1,]
-# }
-
-#
-#
-# stopfn_exg <- function(t,mu,sigma,tau,SSD)
-#   # Used by my.integrate, t = vector of times, SSD is a scalar stop-signal delay.
-# {
-#   dt <- matrix(rep(t+SSD,each=length(mu)),nrow=length(mu))
-#   dt[1,] <- dt[1,]-SSD
-#   dEXGrace(dt,mu,sigma,tau)
-# }
 
 #### ExGaussian random ----
 
@@ -397,15 +372,13 @@ rexGaussian <- function(lR,pars,p_types=c("mu","sigma","tau"),
   # pars must be sorted so accumulators and parameter for each trial are in
   # contiguous rows.
   #
-  # test
-  # pars=cbind(mu=c(.5,.6),sigma=c(.1,.1),tau=c(.2,.2)); lR=factor(c(1))
 {
   if (!all(p_types %in% dimnames(pars)[[2]]))
     stop("pars must have columns ",paste(p_types,collapse = " "))
   dt <- matrix(rexG(dim(pars)[1],pars[,"mu"],pars[,"sigma"],pars[,"tau"]),
                nrow=length(levels(lR)))
   R <- max.col(-t(dt), ties.method='first')
-  pick <- cbind(R,1:dim(dt)[2]) # Matrix to pick winner
+  pick <- cbind(R,1:dim(dt)[2])
   rt <- dt[pick]
   R <- factor(levels(lR)[R],levels=levels(lR))
   cbind.data.frame(R=R,rt=rt)
@@ -568,7 +541,7 @@ rSSexGaussian <- function(data,pars,ok=rep(TRUE,dim(pars)[1]))
   if (any(!stopwins)) {
     rgo <- r[!stopwins]
     R[!allinf][!stopwins] <- rgo
-    pick <- cbind(rgo,c(1:sum(!stopwins))) # Matrix to pick winner
+    pick <- cbind(rgo,c(1:sum(!stopwins)))
     rt[!allinf][!stopwins] <-
       dt[-1,!allinf,drop=FALSE][,!stopwins,drop=FALSE][pick]
   }
@@ -633,12 +606,9 @@ pstopTEXG <- function(
   if (length(upper)==1) upper <- rep(upper,length.out=ntrials)
   pgo <- array(parstop[,gpars],dim=c(n_acc,ntrials,length(gpars)),
                dimnames=list(NULL,NULL,gpars))
-  # ZH: optimization: Use vectorized do.call(paste, ...) instead of slow row-wise apply(..., 1, paste)
+  # Group identical parameter cells before integrating.
   mat <- cbind(SSDs, ps, upper, matrix(as.vector(aperm(pgo, c(2, 1, 3))), nrow = ntrials))
   cells <- do.call(paste, c(unname(as.data.frame(mat)), sep = ""))
-  # cells <- character(ntrials)
-  # for (i in 1:ntrials)
-  #   cells[i] <- paste(SSDs[i],ps[i,],pgo[,i,],upper[i],collapse="")
   uniq <- !duplicated(cells)
   # method/n_nodes routed through stop_success_texg_R; its "integrate" branch
   # is the same my.integrate(stopfn_texg, ...) call as always (numerically
@@ -821,7 +791,6 @@ SSEXG <- function(stop_method = c("auto", "integrate", "gl", "analytic"),
                        method = stop_method, n_nodes = stop_n_nodes))
     },
     # Random function for SS race
-    # TODO
     rfun = function(data = NULL, pars) {
       return(rSSexGaussian(data, pars, ok = attr(pars, "ok")))
     },
@@ -844,7 +813,7 @@ rSShybrid <- function(data,pars,ok=rep(TRUE,dim(pars)[1]))
   # NB1: Go failures will only apply to accumulators where lI = TRUE
   #      and can still have a stop-triggered response on a go-failure trial.
 {
-  lR <- data$lR # For Michelle as an example
+  lR <- data$lR
   pars[,c("A","B","v")] <- pars[,c("A","B","v")]/pars[ok,"s"]
   
   nacc <- length(levels(lR))   # Does not include stop runner
@@ -980,7 +949,7 @@ rSShybrid <- function(data,pars,ok=rep(TRUE,dim(pars)[1]))
   if (any(!stopwins)) {
     rgo <- r[!stopwins]
     R[!allinf][!stopwins] <- rgo
-    pick <- cbind(rgo,c(1:sum(!stopwins))) # Matrix to pick winner
+    pick <- cbind(rgo,c(1:sum(!stopwins)))
     rt[!allinf][!stopwins] <-
       dt[-1,!allinf,drop=FALSE][,!stopwins,drop=FALSE][pick]
   }
@@ -1011,10 +980,6 @@ rSShybrid <- function(data,pars,ok=rep(TRUE,dim(pars)[1]))
 
 #### RDEX stop probability ----
 
-# # NB: these functions are in Rcpp
-# dWald_RDEX
-# pWald_RDEX
-# stopfn_rdex
 
 
 pstopHybrid <- function(
@@ -1029,7 +994,6 @@ pstopHybrid <- function(
   if (length(upper)==1) upper <- rep(upper,length.out=ntrials)
   pgo <- array(parstop[,gpars],dim=c(n_acc,ntrials,length(gpars)),
                dimnames=list(NULL,NULL,gpars))
-  # ZH optimization: Use vectorized do.call(paste, ...) instead of slow row-wise apply(..., 1, paste)
   mat <- cbind(SSDs, ps, upper, matrix(as.vector(aperm(pgo, c(2, 1, 3))), nrow = ntrials))
   cells <- do.call(paste, c(unname(as.data.frame(mat)), sep = ""))
   uniq <- !duplicated(cells)
@@ -1369,7 +1333,6 @@ log_likelihood_race_ss <- function(pars,dadm,model,min_ll=log(1e-10))
           rt=dadm$rt[ispGOwin],pars=pars[ispGOwin,,drop=FALSE]))
         if (n_accG >1) {  # Looser survivor go accumulator(s)
           ispGOloss <- !ispStop & !dadm$winner & ispGOacc # Looser go accumulator rows
-          # Optimization: Replace explicit matrix sum apply(..., 2, sum) with colSums
           like[tGO] <- like[tGO] + colSums(matrix(log(1-model$pfunG(
             rt=dadm$rt[ispGOloss],pars=pars[ispGOloss,,drop=FALSE])),nrow=n_accG-1))
         }
@@ -1396,7 +1359,6 @@ log_likelihood_race_ss <- function(pars,dadm,model,min_ll=log(1e-10))
             rt=dadm$rt[ispGOwin],pars=pars[ispGOwin,,drop=FALSE]))
           if (n_accG > 1) {  # Looser survivor gp accumulators
             ispGOloss <- ispSGO & !dadm$winner & ispGOacc
-            # Optimization: Replace explicit matrix sum apply(..., 2, sum) with colSums
             like[tGO] <- like[tGO] + colSums(matrix(log(1-model$pfunG(
               rt=dadm$rt[ispGOloss],pars=pars[ispGOloss,,drop=FALSE])),
               nrow=n_accG-1))
@@ -1407,7 +1369,6 @@ log_likelihood_race_ss <- function(pars,dadm,model,min_ll=log(1e-10))
           # ST loosers
           if (n_accST == 0) stl <- 0 else {
             ispSTloss <- ispSGO & !ispGOacc
-            # Optimization: Replace explicit matrix sum apply(..., 2, sum) with colSums
             stl <- colSums(matrix(log(1-model$pfunG(
               rt=dadm$rt[ispSTloss]-pars[ispSTloss,"SSD"], # correct for SSD
               pars=pars[ispSTloss,,drop=FALSE])),
@@ -1439,14 +1400,12 @@ log_likelihood_race_ss <- function(pars,dadm,model,min_ll=log(1e-10))
             llST <-  log(1-model$pfunG(
               rt=dadm$rt[ispSSTloss]-dadm$SSD[ispSSTloss],
               pars=pars[ispSSTloss,,drop=FALSE]))
-            if (n_accST == 2) # Could remove branch, maybe faster as no matrix sum?
+            if (n_accST == 2)
               like[tST] <- like[tST] + llST else
-                # Optimization: Replace explicit matrix sum apply(..., 2, sum) with colSums
                 like[tST] <- like[tST] + colSums(matrix(llST,nrow=n_accST-1))
           }
           # Go looser survivor
           ispSGloss <- ispSST & ispGOacc
-          # Optimization: Replace explicit matrix sum apply(..., 2, sum) with colSums
           llG <- colSums(matrix(log(1-model$pfunG(
             rt=dadm$rt[ispSGloss],pars=pars[ispSGloss,,drop=FALSE])),
             nrow=n_accG))

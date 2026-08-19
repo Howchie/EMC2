@@ -90,7 +90,6 @@ my_integrate <- function(...,upper=Inf,big=10)
   out
 }
 
-# doesn't have GNG branch?
 log_likelihood_race_missing <- function(pars,dadm,model,min_ll=log(1e-10))
   # Race model summed log likelihood for models allowing missing values
 {
@@ -214,11 +213,6 @@ log_likelihood_race_missing <- function(pars,dadm,model,min_ll=log(1e-10))
             if (inherits(pc, "try-error") || suppressWarnings(is.nan(pc$value))) {
               p <- NA; break
             } else p <- pmax(0, pmin(pc$value, 1))
-            # p_j <- pmax(0, pmin(pc$value, 1))
-            # cf <- if (p_j != 0 && !(LTs[i]==0 & UTs[i]==Inf))
-            #   pr_pt(LTs[i], UTs[i], mpars[,i,], dadm, model) else 1
-            # if (is.na(cf)) { p <- NA; break }
-            # p <- p + p_j * cf
           }
         } else {
           logP <- log_diff_exp_R(log_surv_race(LTs[i], mpars[,i,], model, is_defective),
@@ -253,16 +247,6 @@ log_likelihood_race_missing <- function(pars,dadm,model,min_ll=log(1e-10))
           if (inherits(pc, "try-error") || suppressWarnings(is.nan(pc$value))) {
             p <- NA
           } else p <- pmax(0,pmin(pc$value,1))
-          # else {
-          #   p <- pmax(0,pmin(pc$value,1))
-          #   psurv <- prod(1 - model$pfun(rt=rep(UCs[i],n_acc),pars=pi))
-          #   if (!is.na(psurv) & !is.nan(psurv)) p <- p + pmax(0,pmin(psurv,1)) else p <- NA
-          # }
-          # if (!is.na(p)) {
-          #   if (p != 0 && !(LTs[i]==0 & UTs[i]==Inf))
-          #     cf <- pr_pt(LTs[i],UTs[i],mpars[,i,],dadm,model) else cf <- 1
-          #   if (!is.na(cf)) p <- p*cf
-          # }
         } else {
           logP <- log_diff_exp_R(log_surv_race(UCs[i], mpars[,i,], model, is_defective),
                                  log_surv_race(UTs[i], mpars[,i,], model, is_defective))
@@ -292,7 +276,6 @@ log_likelihood_race_missing <- function(pars,dadm,model,min_ll=log(1e-10))
     } else tofixslow <- NA
     # no direction
     nort <- is.na(dadm$rt) & is.na(dadm$R) & ok
-    # nort <- nort & (pars[,"pContaminant"] == 0) # Otherwise not identifiable
     if ( any(nort) ) {
       LCs <- LC[nort & dadm$lR==levels(dadm$lR)[1]]; LTs <- LT[nort & dadm$lR==levels(dadm$lR)[1]]
       UCs <- UC[nort & dadm$lR==levels(dadm$lR)[1]]; UTs <- UT[nort & dadm$lR==levels(dadm$lR)[1]]
@@ -355,13 +338,11 @@ log_likelihood_race_missing <- function(pars,dadm,model,min_ll=log(1e-10))
       if (n_acc==2) {
         ll <- ll + lds[!dadm$winner]
       } else {
-        # Optimization: Replace explicit matrix sum apply(..., 2, sum) with colSums
         ll <- ll + colSums(matrix(lds[!dadm$winner],nrow=n_acc-1))
       }
     } else ll <- lds
     ll[is.na(ll) | is.nan(ll)] <- -Inf
 
-    #  llR <<- ll
 
     # Non-process (contaminant) miss.
     ispContaminant <- pars[dadm$winner & ok,"pContaminant"]>0
@@ -486,7 +467,6 @@ log_likelihood_joint <- function(proposals, dadms, model_list, component = NULL,
           attr(dadm, "designs") <- attr(dadms[[ref_idx]], "designs")
         }
         parPrefix <- parPreFixs[k]
-        # Optimization: Use startsWith to match parameter prefixes
         columns_to_use <- startsWith(colnames(proposals), paste0(parPrefix, "|"))
         currentPars <- proposals[,columns_to_use, drop = F]
         colnames(currentPars) <- gsub(".*[|]", "", colnames(currentPars))

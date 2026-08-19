@@ -22,19 +22,8 @@
 #include <iostream> // For error messages
 using namespace Rcpp;
 
-// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-// Port shims.
-//
-// These four scalar helpers lived in the old branch's monolithic
-// `utility_functions.h`, which has since been split into `gaussian.h` /
-// `composite_functions.h` / `utils.h`.  The Gaussian family (gaussian_pdf,
-// gaussian_cdf, Gstar, Gstar_CDF, Gstar_Integral, integrate_gaussian_cdf,
-// integrate_exp_times_normal_cdf) all survived the split with compatible
-// signatures and now come from `gaussian.h` above, but these did not survive
-// anywhere, so they are re-stated here verbatim to keep the solver
-// self-contained.  If/when the Volterra models are wired into the package
-// proper, these should move to the shared headers and this block should go.
-// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+// Scalar compatibility helpers retained locally because they are not provided
+// by the shared utility headers.
 inline double sqrt_pos(double x) {
   return std::sqrt(x > 0.0 ? x : 0.0);
 }
@@ -74,7 +63,6 @@ using ForcingFn = std::function<double(double,const RD_Params&)>;
 using AbelFn = std::function<double(double,const RD_Params&)>;
 using BoundaryDecayFn = std::function<double(double, const RD_Params &)>;
 // Threshold for switching to Abel approximation, based on the scaled time.
-// The paper notes solutions are "visually indistinguishable" up to t=0.02.
 const double SMALL_T_SCALED_THRESHOLD = 0.02;
 
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -177,11 +165,8 @@ public:
         if (t.size() != nu.size()) {
             throw std::runtime_error("AkimaSpline: t and nu vectors must have the same size.");
         }
-        // TODO implement safe fallbacks for <5 points instead of throwing error
         if (t.size() < 5) {
             throw std::runtime_error("AkimaSpline: requires at least 5 data points for full algorithm.");
-            // Note: Could implement fallbacks (linear, quadratic) for < 5 points,
-            // but for this solver, it's better to enforce a minimum grid.
         }
 
         n_ = t.size();
@@ -215,22 +200,18 @@ public:
         if (it == t_.begin()) {
             // t_val is before the first point
             return nu_.front(); // Clamping
-            // Or could do linear extrapolation:
-            // return nu_[0] + (t_val - t_[0]) * d_[0];
         }
         if (it == t_.end()) {
             // t_val is after the last point
             return nu_.back(); // Clamping
-            // Or could do linear extrapolation:
-            // return nu_[n_-1] + (t_val - t_[n_-1]) * d_[n_-1];
         }
 
-        // `it` points to t_[i], so we want the interval [i-1, i]
+        // The containing interval is [i-1, i].
         size_t i = std::distance(t_.begin(), it) - 1;
 
         double h = t_[i + 1] - t_[i];
         if (h == 0.0) {
-            // Should be caught by the sorted check, but good to have
+            // Defensive guard for duplicate grid points.
             return nu_[i];
         }
 
@@ -270,16 +251,14 @@ public:
 
         double h = t_[i + 1] - t_[i];
         if (h == 0.0) {
-            // This case is tricky. The derivative is technically infinite
-            // or undefined. We can return the average of the tangents
-            // or just the left tangent.
+            // Duplicate grid points have no defined local derivative.
             return d_[i];
         }
 
         // Normalize t_val to s in [0, 1]
         double s = (t_val - t_[i]) / h;
 
-        // We need the derivative of the Hermite polynomial *with respect to t_val*.
+        // Derivative of the Hermite polynomial with respect to t_val.
         double s2 = s * s;
 
         double dh00_ds = 6 * s2 - 6 * s;
@@ -316,8 +295,7 @@ private:
             m[i] = (nu_[i + 1] - nu_[i]) / (t_[i + 1] - t_[i]);
         }
 
-        // 2. We need "ghost" slopes at the ends to handle boundaries.
-        // We add two on each side: m[-2], m[-1], m[0], ..., m[n-2], m[n-1], m[n]
+        // Add two extrapolated slopes at each boundary:
         // (total n+3 slopes for n points)
         // m[-1] = 2*m[0] - m[1]
         // m[-2] = 2*m[-1] - m[0] = 3*m[0] - 2*m[1]
@@ -337,8 +315,8 @@ private:
 
         // 3. Calculate the weighted average for the tangents
         for (size_t i = 0; i < n_; ++i) {
-            // We need slopes from m_ext[i], m_ext[i+1], m_ext[i+2], m_ext[i+3]
-            // which correspond to original slopes m[i-2], m[i-1], m[i], m[i+1]
+            // Use slopes m_ext[i] through m_ext[i+3], corresponding to
+            // original slopes m[i-2] through m[i+1].
             
             // Get weights w1 = |m_{i+1} - m_i| and w2 = |m_{i-1} - m_{i-2}|
             // (using the extended m_ext indices)
@@ -361,7 +339,7 @@ private:
 } // namespace util
 
 
-// Re-worked to use maps to allow arbitrary additions to the cache
+// Cache for beta and beta' values on the solver grid.
 struct BoundaryDecayCache {
     mutable std::map<double, double> beta_map;
     mutable std::map<double, double> beta_prime_map;
@@ -459,7 +437,7 @@ inline double beta_from_theta(double theta, const RD_Params& pars, const Boundar
         }
     }
 	
-	// Try spline if provided
+    // Use the spline when it provides a finite interpolation.
     if (spline) {
         const double interp = spline->interpolate(theta);
         if (std::isfinite(interp)) {
@@ -467,9 +445,9 @@ inline double beta_from_theta(double theta, const RD_Params& pars, const Boundar
         }
 	}
 
-	// If not cached and no spline is built, compute the value
+    // Compute the uncached boundary value.
     const double t = theta_to_t(theta) / pars.lambda;
-    const double bt = -pars.omega * evaluate_boundary_decay(t, pars); // always use a positive boundary to compute decay for convenience. Omega is negative when hitting from above, and we always initialise at z=0 therefore we can be confident in the sign of the raw boundary aligning here
+    const double bt = -pars.omega * evaluate_boundary_decay(t, pars);
     const double bt_scaled = pars.c * (bt - pars.theta);
 	const double beta = scale * bt_scaled;
 	if (cache) cache->put_beta(theta, beta);
@@ -511,7 +489,7 @@ inline double beta_prime_at_theta(double theta, const RD_Params& pars, double th
             return cached;
         }
     }
-	// Compute derivative via finite difference
+    // Compute the derivative by finite difference.
     double tL = 0.0;
     double tR = 0.0;
     if (!make_central_difference_times(theta, 0.0, theta_max, tL, tR)) {
@@ -555,13 +533,8 @@ inline bool rd_model_is_time_domain(const RD_Params& pars) {
 // Populate a beta / beta' cache over the solver grid, in whatever coordinate the
 // model actually solves in.
 //
-// NOTE: this used to unconditionally use beta_from_theta/beta_prime_at_theta.
-// Those read lambda, c, theta and b_scaled, which prepare_bm_params never set,
-// so for BM/GBM every lookup silently cached beta == 0 (c == 0 zeroes the
-// scaled boundary) and beta_from_time -- which consults the cache before
-// computing -- then returned a zero boundary for every t.  The Wiener-space
-// barrier collapsed onto the start point and the Volterra recursion diverged,
-// worsening as the grid was refined.
+// BM/GBM use time-domain coordinates; OU/Gompertz use the theta coordinate.
+// Populate the cache in the coordinate used by the model-specific solver.
 inline BoundaryDecayCache make_boundary_decay_cache(const std::vector<double>& coord_vals,
                                                     const RD_Params& pars) {
     BoundaryDecayCache cache;
@@ -798,7 +771,7 @@ double eval_quad_sqrt_integral(double A, double c2, double c1, double c0) {
     return term_at(2.0, c2, c1, c0) - term_at(0.0, c2, c1, c0);
 }
 
-// Analytical weight coefficients from Linz (1985) / Paper page 13.
+// Analytical weight coefficients for quadratic product integration.
 // dt is the time difference (t_n - t_start_of_block)
 // alpha = (z/2) integral (1-s)(2-s)/sqrt (A - s) ds,  beta = z integral s(2-s)/sqrt (A - s) ds,  gamma = (z/2) integral s(s-1)/sqrt (A - s) ds
 // Stieltjes-trapezoid history sum for node n + helper functions
@@ -2240,20 +2213,19 @@ inline double averaged_image_term(double t, double beta_t, const RD_Params& pars
         return 0.0;
     }
 
-    // Elegant formulation using the heat kernel (Gstar)
+    // Heat-kernel formulation.
     const double G_at_lower_bound = Gstar(t, z_lo - beta_t);
     const double G_at_upper_bound = Gstar(t, z_hi - beta_t);
 
     return (1.0 / span) * (G_at_lower_bound - G_at_upper_bound);
 }
 
-// Computes the uniform-in-X-space averaged image weight for the Gompertz case,
-// which is equivalent to an exp(y)-weighted average in Y-space (OU/Wiener space).
-// This is the direct replacement for your 'averaged_image_term' function.
+// Uniform-in-X-space averaged image weight for the Gompertz case; equivalent
+// to an exp(y)-weighted average in Y-space.
 inline double averaged_image_term_exp(double t, double beta_t, const RD_Params& pars) {
     if (t <= FPM_EPSILON) return 0.0;
 
-    // Point-start case is identical to the original function
+    // Point-start case.
     if (!pars.sp_var) {
         const double num = pars.zU_scaled - beta_t; // zU_scaled is log(x0)
         return (num / t) * Gstar(t, num);
@@ -2275,7 +2247,7 @@ inline double averaged_image_term_exp(double t, double beta_t, const RD_Params& 
     // The new mean of the Gaussian after completing the square
     const double new_mean = beta_t + t;
 
-    // We evaluate the Gaussian PDF and CDF with this new mean
+    // Evaluate the Gaussian PDF and CDF at the shifted mean.
     const double G_hi = Gstar(t, y_hi - new_mean);
     const double G_lo = Gstar(t, y_lo - new_mean);
 

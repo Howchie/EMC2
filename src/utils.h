@@ -130,10 +130,13 @@ struct ContextForRaceModels {
     // argument of the exported dbawd/pbawd.
     int bawd_launch = BAWD_LAUNCH_LOGNORMAL;
 
+    // Fixed BAwD clearance-fade exponent parsed from the c_name suffix.
+    // Allowed values are mirrored in R/model_BAwD.R.
+    double bawd_gamma = 0.0;
+
     // BAwD's identified chart: the raw columns are (y0, T_max, A, delta,
     // sigma, t0) and the adapters map them to the ordinary lognormal BAwD
     // coordinates before evaluating the same closed-form kernel.
-    bool bawd_reparameterized = false;
 
     // BAwL launch-strength distribution, on the same convention: 0 = normal
     // (v, sv), 1 = lognormal (mu, sigma).  Set from the "_LOGN" c_name suffix.
@@ -704,6 +707,23 @@ inline void lnr_logS_at_t(double t, const double* const* cols,
 // offset; pcounter_k_int converts it to the canonical event threshold
 // K = 2 + floor(k + 0.5) shared by every C++ entry point.
 static constexpr double PC_EPS = 1e-8;
+// Stirling numbers are generated one row at a time by pcounter_log_eval.
+// There is deliberately no model-level upper bound on the finite threshold;
+// pcounter_k_supported only rejects values that cannot be represented by the
+// integer loop indices used by the exact finite-K formulas.
+
+inline bool pcounter_k_supported(double k) {
+  if (!R_FINITE(k) || k < 0.0) return false;
+  const double z = std::floor(k + 0.5);
+  // Tail formulas request rows through K+65; keep every int loop index
+  // representable without imposing a fitted-model threshold cap.
+  return z <= static_cast<double>(std::numeric_limits<int>::max() - 67);
+}
+
+inline bool pcounter_needs_stirling(double sv, double gamma) {
+  return R_FINITE(sv) && R_FINITE(gamma) &&
+         sv >= PC_EPS && gamma >= PC_EPS;
+}
 
 inline double pcounter_logsumexp(const std::vector<double>& x) {
   if (x.empty()) return R_NegInf;
@@ -723,34 +743,51 @@ inline double pcounter_logdiffexp(double a, double b) {
 }
 
 inline int pcounter_k_int(double k) {
-  if (!R_FINITE(k)) return 0;
+  if (!pcounter_k_supported(k)) return 0;
   const double z = std::floor(k + 0.5);
-  if (z < 0.0) return 2;
-  // `k` is a non-negative offset and the canonical threshold is two plus the
-  // nearest non-negative integer offset.  Leave headroom for that +2 when
-  // protecting the int conversion.
-  if (z > static_cast<double>(std::numeric_limits<int>::max() - 2))
-    return std::numeric_limits<int>::max() - 2;
   return static_cast<int>(z) + 2;
 }
 
-inline std::vector<std::vector<double>> pcounter_stirling_logs(int nmax) {
-  std::vector<std::vector<double>> st(static_cast<size_t>(nmax + 1),
-                                      std::vector<double>(static_cast<size_t>(nmax + 1), R_NegInf));
-  st[0][0] = 0.0;
-  for (int n = 1; n <= nmax; ++n) {
-    for (int j = 1; j <= n; ++j) {
-      const double a = st[n - 1][j - 1];
-      const double b = (j < n && n > 1) ? std::log(static_cast<double>(n - 1)) + st[n - 1][j]
-                                         : R_NegInf;
-      st[n][j] = (a == R_NegInf) ? b :
-                 (b == R_NegInf) ? a :
-                 (a > b ? a + std::log1p(std::exp(b - a))
-                          : b + std::log1p(std::exp(a - b)));
+// A single rolling row of log Stirling numbers of the second kind.  The
+// recurrence S(n,j) = S(n-1,j-1) + (n-1)S(n-1,j) is applied in descending j
+// order, so the storage is O(n), rather than the former O(n^2) table.
+class PcounterStirlingRows {
+ public:
+  PcounterStirlingRows() : n_(0), row_(1, 0.0) {}
+
+  double at(int n, int j) {
+    if (n < 0 || j < 0 || j > n) return R_NegInf;
+    if (n < n_) {
+      n_ = 0;
+      row_.assign(1, 0.0);
     }
+    while (n_ < n) {
+      const int next = n_ + 1;
+      row_.push_back(R_NegInf);
+      for (int col = next; col >= 1; --col) {
+        const double a = row_[static_cast<size_t>(col - 1)];
+        const double log_b = (col < next && R_FINITE(row_[static_cast<size_t>(col)]))
+          ? std::log(static_cast<double>(next - 1)) +
+                row_[static_cast<size_t>(col)]
+          : R_NegInf;
+        row_[static_cast<size_t>(col)] =
+          (a == R_NegInf) ? log_b :
+          (log_b == R_NegInf) ? a :
+          (a > log_b ? a + std::log1p(std::exp(log_b - a))
+                      : log_b + std::log1p(std::exp(a - log_b)));
+      }
+      row_[0] = R_NegInf;
+      n_ = next;
+    }
+    return row_[static_cast<size_t>(j)];
   }
-  return st;
-}
+
+ private:
+  int n_;
+  std::vector<double> row_;
+};
+
+
 
 inline double pcounter_log_rising(double a, int n) {
   double out = 0.0;
@@ -772,7 +809,7 @@ inline void pcounter_log_lm(double a, double nu, double sv,
 }
 
 inline double pcounter_log_h(int n, double t, double nu, double sv, double gamma,
-                             const std::vector<std::vector<double>>& st) {
+                             PcounterStirlingRows& rows) {
   double logL, logM;
   pcounter_log_lm(t, nu, sv, logL, logM);
   if (sv <= PC_EPS)
@@ -780,11 +817,16 @@ inline double pcounter_log_h(int n, double t, double nu, double sv, double gamma
   const double shape = nu * nu / (sv * sv);
   const double rate = nu / (sv * sv);
   std::vector<double> terms;
+  std::vector<double> rising(static_cast<size_t>(n + 1), 0.0);
+  for (int j = 1; j <= n; ++j)
+    rising[static_cast<size_t>(j)] =
+      rising[static_cast<size_t>(j - 1)] +
+      std::log(shape + static_cast<double>(j - 1));
   terms.reserve(static_cast<size_t>(n + 1));
   for (int j = 0; j <= n; ++j) {
-    const double c = st[n][j];
+    const double c = rows.at(n, j);
     if (!R_FINITE(c)) { terms.push_back(R_NegInf); continue; }
-    terms.push_back(c + pcounter_log_rising(shape, j) - j * std::log(gamma) -
+    terms.push_back(c + rising[static_cast<size_t>(j)] - j * std::log(gamma) -
                        j * std::log(rate + t));
   }
   return logL + pcounter_logsumexp(terms);
@@ -792,7 +834,7 @@ inline double pcounter_log_h(int n, double t, double nu, double sv, double gamma
 
 inline void pcounter_log_pi_phi(int n, double t, double nu, double sv, double gamma,
                                 bool gamma_zero,
-                                const std::vector<std::vector<double>>& st,
+                                PcounterStirlingRows& rows,
                                 double& logpi, double& logphi) {
   if (gamma_zero) {
     if (sv <= PC_EPS) {
@@ -813,19 +855,20 @@ inline void pcounter_log_pi_phi(int n, double t, double nu, double sv, double ga
   }
   const double q = -std::expm1(-gamma * t);
   const double logq = q > 0.0 ? std::log(q) : R_NegInf;
-  logpi = n * logq - R::lgammafn(n + 1.0) + pcounter_log_h(n, t, nu, sv, gamma, st);
+  logpi = n * logq - R::lgammafn(n + 1.0) +
+          pcounter_log_h(n, t, nu, sv, gamma, rows);
   logphi = std::log(gamma) + n * logq - R::lgammafn(n + 1.0) +
-           pcounter_log_h(n + 1, t, nu, sv, gamma, st);
+           pcounter_log_h(n + 1, t, nu, sv, gamma, rows);
 }
 
 inline double pcounter_log_tail(int start, double t, double nu, double sv, double gamma,
                                 double logr, bool gamma_zero,
-                                const std::vector<std::vector<double>>& st, bool phi) {
+                                PcounterStirlingRows& rows, bool phi) {
   std::vector<double> terms;
   terms.reserve(65);
   for (int n = start; n <= start + 64; ++n) {
     double lp, lf;
-    pcounter_log_pi_phi(n, t, nu, sv, gamma, gamma_zero, st, lp, lf);
+    pcounter_log_pi_phi(n, t, nu, sv, gamma, gamma_zero, rows, lp, lf);
     terms.push_back((phi ? lf : lp) + n * logr);
   }
   return pcounter_logsumexp(terms);
@@ -833,12 +876,12 @@ inline double pcounter_log_tail(int start, double t, double nu, double sv, doubl
 
 inline double pcounter_log_fixed_cdf(int start, double t, double nu, double sv,
                                      double gamma, bool gamma_zero,
-                                     const std::vector<std::vector<double>>& st) {
+                                     PcounterStirlingRows& rows) {
   std::vector<double> terms;
   terms.reserve(65);
   for (int n = start; n <= start + 64; ++n) {
     double lp, lf;
-    pcounter_log_pi_phi(n, t, nu, sv, gamma, gamma_zero, st, lp, lf);
+    pcounter_log_pi_phi(n, t, nu, sv, gamma, gamma_zero, rows, lp, lf);
     terms.push_back(lp);
   }
   return pcounter_logsumexp(terms);
@@ -846,14 +889,14 @@ inline double pcounter_log_fixed_cdf(int start, double t, double nu, double sv,
 
 inline double pcounter_log_geom_cdf(int start, double t, double nu, double sv,
                                     double gamma, double omega, bool gamma_zero,
-                                    const std::vector<std::vector<double>>& st) {
+                                    PcounterStirlingRows& rows) {
   const double logr = std::log(omega) - std::log1p(omega);
   std::vector<double> terms;
   terms.reserve(65);
   for (int n = start; n <= start + 64; ++n) {
     if (n == start) { terms.push_back(R_NegInf); continue; }
     double lp, lf;
-    pcounter_log_pi_phi(n, t, nu, sv, gamma, gamma_zero, st, lp, lf);
+    pcounter_log_pi_phi(n, t, nu, sv, gamma, gamma_zero, rows, lp, lf);
     terms.push_back(lp + std::log(-std::expm1((n - start) * logr)));
   }
   return pcounter_logsumexp(terms);
@@ -861,12 +904,11 @@ inline double pcounter_log_geom_cdf(int start, double t, double nu, double sv,
 
 inline void pcounter_log_eval(double t, double nu, double sv, double gamma,
                               double k, double omega,
-                              const std::vector<std::vector<double>>& st,
                               double& logf, double& logS, double& logF) {
   logf = R_NegInf; logS = 0.0; logF = R_NegInf;
   if (ISNAN(t) || !R_FINITE(nu) || !R_FINITE(sv) || !R_FINITE(gamma) ||
-      !R_FINITE(k) || !R_FINITE(omega) || nu <= 0.0 || sv < 0.0 || gamma < 0.0 ||
-      k < 0.0 || omega < 0.0) return;
+      !pcounter_k_supported(k) || !R_FINITE(omega) || nu <= 0.0 ||
+      sv < 0.0 || gamma < 0.0 || omega < 0.0) return;
   if (R_PosInf == t) { logS = R_NegInf; logF = 0.0; return; }
   if (!R_FINITE(t) || t <= 0.0) return;
 
@@ -874,22 +916,23 @@ inline void pcounter_log_eval(double t, double nu, double sv, double gamma,
   const bool gamma_zero = gamma < PC_EPS;
   const bool sv_zero = sv < PC_EPS;
   const bool omega_zero = omega < PC_EPS;
+  PcounterStirlingRows rows;
   if (omega_zero) {
     std::vector<double> probs;
     probs.reserve(static_cast<size_t>(kk));
     for (int n = 0; n < kk; ++n) {
       double lp, lf;
       pcounter_log_pi_phi(n, t, nu, sv_zero ? 0.0 : sv,
-                          gamma_zero ? 0.0 : gamma, gamma_zero, st, lp, lf);
+                          gamma_zero ? 0.0 : gamma, gamma_zero, rows, lp, lf);
       probs.push_back(lp);
     }
     logS = std::min(0.0, pcounter_logsumexp(probs));
     double lp, lf;
     pcounter_log_pi_phi(kk - 1, t, nu, sv_zero ? 0.0 : sv,
-                        gamma_zero ? 0.0 : gamma, gamma_zero, st, lp, lf);
+                        gamma_zero ? 0.0 : gamma, gamma_zero, rows, lp, lf);
     logf = lf;
     logF = logS > -1e-7 ? pcounter_log_fixed_cdf(kk, t, nu,
-      sv_zero ? 0.0 : sv, gamma_zero ? 0.0 : gamma, gamma_zero, st)
+      sv_zero ? 0.0 : sv, gamma_zero ? 0.0 : gamma, gamma_zero, rows)
       : (logS < 0.0 ? std::log(-std::expm1(logS)) : R_NegInf);
     return;
   }
@@ -916,7 +959,7 @@ inline void pcounter_log_eval(double t, double nu, double sv, double gamma,
     for (int n = 0; n <= nlow; ++n) {
       double lp, lf;
       pcounter_log_pi_phi(n, t, nu, sv_zero ? 0.0 : sv,
-                          gamma_zero ? 0.0 : gamma, gamma_zero, st, lp, lf);
+                          gamma_zero ? 0.0 : gamma, gamma_zero, rows, lp, lf);
       low_pi.push_back(lp);
       low_pi_r.push_back(lp + n * logr);
       low_phi_r.push_back(lf + n * logr);
@@ -927,7 +970,8 @@ inline void pcounter_log_eval(double t, double nu, double sv, double gamma,
   double logtail = pcounter_logdiffexp(logLar, loglowr);
   if (nlow >= 0 && (loglowr > logLar - 1e-7 || !R_FINITE(logtail)))
     logtail = pcounter_log_tail(kk - 1, t, nu, sv_zero ? 0.0 : sv,
-                                gamma_zero ? 0.0 : gamma, logr, gamma_zero, st, false);
+                                gamma_zero ? 0.0 : gamma, logr, gamma_zero,
+                                rows, false);
   logS = std::min(0.0, pcounter_logsumexp(
       std::vector<double>{loglow, (1.0 - kk) * logr + logtail}));
   const double logA = logMar - (gamma_zero ? 0.0 : logd);
@@ -936,33 +980,40 @@ inline void pcounter_log_eval(double t, double nu, double sv, double gamma,
   logf = logp + (1.0 - kk) * logr + logtail_flux;
   if (nlow >= 0 && (loglowf > logA - 1e-7 || !R_FINITE(logf))) {
     logtail_flux = pcounter_log_tail(kk - 1, t, nu, sv_zero ? 0.0 : sv,
-                                     gamma_zero ? 0.0 : gamma, logr, gamma_zero, st, true);
+                                     gamma_zero ? 0.0 : gamma, logr, gamma_zero,
+                                     rows, true);
     logf = logp + (1.0 - kk) * logr + logtail_flux;
   }
   if (logS > -1e-7)
     logF = pcounter_log_geom_cdf(kk - 1, t, nu, sv_zero ? 0.0 : sv,
-                                 gamma_zero ? 0.0 : gamma, omega, gamma_zero, st);
+                                 gamma_zero ? 0.0 : gamma, omega, gamma_zero,
+                                 rows);
   else logF = logS < 0.0 ? std::log(-std::expm1(logS)) : R_NegInf;
 }
 
 inline double dpcounter_scalar(double t, const double* par, void* /*ctx_*/) {
-  for (int j = 0; j < emc2col::pcounter::N_REQ; ++j) if (R_IsNA(par[j])) return 0.0;
-  if (par[emc2col::pcounter::nu] <= 0.0 || par[emc2col::pcounter::sv] < 0.0 ||
-      par[emc2col::pcounter::gamma] < 0.0 || par[emc2col::pcounter::k] < 0.0 ||
-      par[emc2col::pcounter::omega] < 0.0) return 0.0;
-  const int kk = pcounter_k_int(par[emc2col::pcounter::k]);
-  const auto st = pcounter_stirling_logs(std::max(65, kk + 65));
+  for (int j = 0; j < emc2col::pcounter::N_REQ; ++j)
+    if (!R_FINITE(par[j])) return 0.0;
+  if (par[emc2col::pcounter::nu] <= 0.0 ||
+      par[emc2col::pcounter::sv] < 0.0 ||
+      par[emc2col::pcounter::gamma] < 0.0 ||
+      par[emc2col::pcounter::k] < 0.0 ||
+      par[emc2col::pcounter::omega] < 0.0 ||
+      !pcounter_k_supported(par[emc2col::pcounter::k])) return 0.0;
   double lf, ls, lF;
-  pcounter_log_eval(t - par[emc2col::pcounter::t0], par[0], par[1], par[2], par[3], par[4], st, lf, ls, lF);
+  pcounter_log_eval(t - par[emc2col::pcounter::t0], par[0], par[1], par[2],
+                    par[3], par[4], lf, ls, lF);
   return R_FINITE(lf) ? std::exp(lf) : 0.0;
 }
 
 inline double ppcounter_scalar(double t, const double* par, void* /*ctx_*/) {
-  for (int j = 0; j < emc2col::pcounter::N_REQ; ++j) if (R_IsNA(par[j])) return 0.0;
-  if (par[0] <= 0.0 || par[1] < 0.0 || par[2] < 0.0 || par[3] < 0.0 || par[4] < 0.0) return 0.0;
-  const auto st = pcounter_stirling_logs(std::max(65, pcounter_k_int(par[3]) + 65));
+  for (int j = 0; j < emc2col::pcounter::N_REQ; ++j)
+    if (!R_FINITE(par[j])) return 0.0;
+  if (par[0] <= 0.0 || par[1] < 0.0 || par[2] < 0.0 || par[3] < 0.0 ||
+      par[4] < 0.0 || !pcounter_k_supported(par[3])) return 0.0;
   double lf, ls, lF;
-  pcounter_log_eval(t - par[5], par[0], par[1], par[2], par[3], par[4], st, lf, ls, lF);
+  pcounter_log_eval(t - par[5], par[0], par[1], par[2], par[3], par[4],
+                    lf, ls, lF);
   return lF == 0.0 ? 1.0 : (R_FINITE(lF) ? std::exp(lF) : 0.0);
 }
 
@@ -976,22 +1027,20 @@ inline void dpcounter_raw(const double* rt, const double* const* cols, int n_row
   const double* kk = cols[emc2col::pcounter::k];
   const double* om = cols[emc2col::pcounter::omega];
   const double* t0 = cols[emc2col::pcounter::t0];
-  int maxk = 2;
-  for (int i = 0; i < n_rows; ++i) if (mask[i] && isok[i] && R_FINITE(kk[i])) maxk = std::max(maxk, pcounter_k_int(kk[i]));
-  const auto st = pcounter_stirling_logs(std::max(65, maxk + 65));
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
-    if (!isok[i] || R_IsNA(nu[i]) || R_IsNA(sv[i]) || R_IsNA(ga[i]) ||
-        R_IsNA(kk[i]) || R_IsNA(om[i]) || R_IsNA(t0[i]) || nu[i] <= 0.0 ||
-        sv[i] < 0.0 || ga[i] < 0.0 || kk[i] < 0.0 || om[i] < 0.0) {
+    if (!isok[i] || !R_FINITE(nu[i]) || !R_FINITE(sv[i]) ||
+        !R_FINITE(ga[i]) || !R_FINITE(kk[i]) || !R_FINITE(om[i]) ||
+        !R_FINITE(t0[i]) || nu[i] <= 0.0 || sv[i] < 0.0 ||
+        ga[i] < 0.0 || om[i] < 0.0 || !pcounter_k_supported(kk[i])) {
       out[i] = raw_log_zero(min_ll, floor_raw); continue;
     }
     double lf, ls, lF;
-    pcounter_log_eval(rt[i] - t0[i], nu[i], sv[i], ga[i], kk[i], om[i], st, lf, ls, lF);
+    pcounter_log_eval(rt[i] - t0[i], nu[i], sv[i], ga[i], kk[i], om[i],
+                      lf, ls, lF);
     out[i] = raw_log_value(lf, min_ll, floor_raw);
   }
 }
-
 inline void ppcounter_raw(const double* rt, const double* const* cols, int n_rows,
                           const int* mask, const int* isok, double* out,
                           double min_ll, void* ctx_) {
@@ -1002,18 +1051,17 @@ inline void ppcounter_raw(const double* rt, const double* const* cols, int n_row
   const double* kk = cols[emc2col::pcounter::k];
   const double* om = cols[emc2col::pcounter::omega];
   const double* t0 = cols[emc2col::pcounter::t0];
-  int maxk = 2;
-  for (int i = 0; i < n_rows; ++i) if (mask[i] && isok[i] && R_FINITE(kk[i])) maxk = std::max(maxk, pcounter_k_int(kk[i]));
-  const auto st = pcounter_stirling_logs(std::max(65, maxk + 65));
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
-    if (!isok[i] || R_IsNA(nu[i]) || R_IsNA(sv[i]) || R_IsNA(ga[i]) ||
-        R_IsNA(kk[i]) || R_IsNA(om[i]) || R_IsNA(t0[i]) || nu[i] <= 0.0 ||
-        sv[i] < 0.0 || ga[i] < 0.0 || kk[i] < 0.0 || om[i] < 0.0) {
+    if (!isok[i] || !R_FINITE(nu[i]) || !R_FINITE(sv[i]) ||
+        !R_FINITE(ga[i]) || !R_FINITE(kk[i]) || !R_FINITE(om[i]) ||
+        !R_FINITE(t0[i]) || nu[i] <= 0.0 || sv[i] < 0.0 ||
+        ga[i] < 0.0 || om[i] < 0.0 || !pcounter_k_supported(kk[i])) {
       out[i] = raw_log_zero(min_ll, floor_raw); continue;
     }
     double lf, ls, lF;
-    pcounter_log_eval(rt[i] - t0[i], nu[i], sv[i], ga[i], kk[i], om[i], st, lf, ls, lF);
+    pcounter_log_eval(rt[i] - t0[i], nu[i], sv[i], ga[i], kk[i], om[i],
+                      lf, ls, lF);
     out[i] = raw_log_value(ls, min_ll, floor_raw);
   }
 }
@@ -1024,26 +1072,25 @@ inline void pcounter_logS_at_t(double t, const double* const* cols,
                                const int* isok_all, void* ctx_, double* logS_out) {
   (void)ctx_;
   const double* kk = cols[emc2col::pcounter::k];
-  int maxk = 2;
-  for (int i = 0; i < n_unique_trials * n_lR; ++i) if (isok_all[i] && R_FINITE(kk[i])) maxk = std::max(maxk, pcounter_k_int(kk[i]));
-  const auto st = pcounter_stirling_logs(std::max(65, maxk + 65));
-  const double* nu = cols[emc2col::pcounter::nu];
   const double* sv = cols[emc2col::pcounter::sv];
   const double* ga = cols[emc2col::pcounter::gamma];
   const double* om = cols[emc2col::pcounter::omega];
   const double* t0 = cols[emc2col::pcounter::t0];
+  const double* nu = cols[emc2col::pcounter::nu];
   for (int j = 0; j < n_unique_trials; ++j) {
     if (!trunc_mask[j]) continue;
     double sum = 0.0;
     for (int k = 0; k < n_lR; ++k) {
       const int r = j * n_lR + k;
-      if (!isok_all[r] || R_IsNA(nu[r]) || R_IsNA(sv[r]) || R_IsNA(ga[r]) ||
-          R_IsNA(kk[r]) || R_IsNA(om[r]) || R_IsNA(t0[r]) || nu[r] <= 0.0 ||
-          sv[r] < 0.0 || ga[r] < 0.0 || kk[r] < 0.0 || om[r] < 0.0) {
+      if (!isok_all[r] || !R_FINITE(nu[r]) || !R_FINITE(sv[r]) ||
+          !R_FINITE(ga[r]) || !R_FINITE(kk[r]) || !R_FINITE(om[r]) ||
+          !R_FINITE(t0[r]) || nu[r] <= 0.0 || sv[r] < 0.0 ||
+          ga[r] < 0.0 || om[r] < 0.0 || !pcounter_k_supported(kk[r])) {
         sum = R_NegInf; break;
       }
       double lf, ls, lF;
-      pcounter_log_eval(t - t0[r], nu[r], sv[r], ga[r], kk[r], om[r], st, lf, ls, lF);
+      pcounter_log_eval(t - t0[r], nu[r], sv[r], ga[r], kk[r], om[r],
+                        lf, ls, lF);
       sum += ls;
     }
     logS_out[j] = sum;
@@ -1485,6 +1532,9 @@ inline void bawl_logS_at_t(double t, const double* const* cols,
 inline int bawd_launch_of(const ContextForRaceModels* ctx) {
   return ctx ? ctx->bawd_launch : BAWD_LAUNCH_LOGNORMAL;
 }
+inline double bawd_gamma_of(const ContextForRaceModels* ctx) {
+  return ctx ? ctx->bawd_gamma : 0.0;
+}
 
 inline double dbawd_scalar(double t, const double* par, void* ctx_) {
   auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
@@ -1496,7 +1546,8 @@ inline double dbawd_scalar(double t, const double* par, void* ctx_) {
     par[emc2col::bawd::B] + par[emc2col::bawd::A],
     par[emc2col::bawd::v], par[emc2col::bawd::sv],
     par[emc2col::bawd::k], par[emc2col::bawd::ell],
-    bawd_launch_of(ctx), ctx ? ctx->use_posdrift : true);
+    bawd_launch_of(ctx), ctx ? ctx->use_posdrift : true,
+    bawd_gamma_of(ctx));
 }
 
 inline double pbawd_scalar(double t, const double* par, void* ctx_) {
@@ -1510,7 +1561,8 @@ inline double pbawd_scalar(double t, const double* par, void* ctx_) {
     par[emc2col::bawd::B] + par[emc2col::bawd::A],
     par[emc2col::bawd::v], par[emc2col::bawd::sv],
     par[emc2col::bawd::k], par[emc2col::bawd::ell],
-    bawd_launch_of(ctx), ctx ? ctx->use_posdrift : true);
+    bawd_launch_of(ctx), ctx ? ctx->use_posdrift : true,
+    bawd_gamma_of(ctx));
 }
 
 inline void dbawd_raw(const double* rt, const double* const* cols, int n_rows,
@@ -1520,6 +1572,7 @@ inline void dbawd_raw(const double* rt, const double* const* cols, int n_rows,
   const bool floor_raw = raw_floor_log_lik(ctx_);
   const bool pd = ctx ? ctx->use_posdrift : true;
   const int launch = bawd_launch_of(ctx);
+  const double gamma = bawd_gamma_of(ctx);
   const double* p1_ = cols[emc2col::bawd::v];
   const double* p2_ = cols[emc2col::bawd::sv];
   const double* B_  = cols[emc2col::bawd::B];
@@ -1539,7 +1592,8 @@ inline void dbawd_raw(const double* rt, const double* const* cols, int n_rows,
       continue;
     }
     const double log_pdf = bawd_log_pdf(tt, A_[i], B_[i] + A_[i], p1_[i],
-                                        p2_[i], k_[i], ell_[i], launch, pd);
+                                        p2_[i], k_[i], ell_[i], launch, pd,
+                                        gamma);
     out[i] = (log_pdf > R_NegInf && emc2_isfinite(log_pdf))
       ? raw_log_value(log_pdf, min_ll, floor_raw)
       : raw_log_zero(min_ll, floor_raw);
@@ -1553,6 +1607,7 @@ inline void pbawd_raw(const double* rt, const double* const* cols, int n_rows,
   const bool floor_raw = raw_floor_log_lik(ctx_);
   const bool pd = ctx ? ctx->use_posdrift : true;
   const int launch = bawd_launch_of(ctx);
+  const double gamma = bawd_gamma_of(ctx);
   const double* p1_ = cols[emc2col::bawd::v];
   const double* p2_ = cols[emc2col::bawd::sv];
   const double* B_  = cols[emc2col::bawd::B];
@@ -1566,7 +1621,8 @@ inline void pbawd_raw(const double* rt, const double* const* cols, int n_rows,
     const double tt = rt[i] - t0_[i];
     if (tt <= 0.0 || rt[i] <= 0.0) { out[i] = 0.0; continue; }
     const double log_cdf = bawd_log_cdf(tt, A_[i], B_[i] + A_[i], p1_[i],
-                                        p2_[i], k_[i], ell_[i], launch, pd);
+                                        p2_[i], k_[i], ell_[i], launch, pd,
+                                        gamma);
     if (!R_FINITE(log_cdf)) { out[i] = 0.0; continue; }
     if (log_cdf >= 0.0) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
     out[i] = log1m_exp(log_cdf);
@@ -1580,6 +1636,7 @@ inline void bawd_logS_at_t(double t, const double* const* cols,
   auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
   const bool pd = ctx ? ctx->use_posdrift : true;
   const int launch = bawd_launch_of(ctx);
+  const double gamma = bawd_gamma_of(ctx);
   const double* p1_ = cols[emc2col::bawd::v];
   const double* p2_ = cols[emc2col::bawd::sv];
   const double* B_  = cols[emc2col::bawd::B];
@@ -1598,7 +1655,8 @@ inline void bawd_logS_at_t(double t, const double* const* cols,
       const double tt = t - t0_[r];
       if (tt <= 0.0) continue;  // not started: survivor one
       const double log_cdf = bawd_log_cdf(tt, A_[r], B_[r] + A_[r], p1_[r],
-                                          p2_[r], k_[r], ell_[r], launch, pd);
+                                          p2_[r], k_[r], ell_[r], launch, pd,
+                                          gamma);
       if (log_cdf >= 0.0) { bad = true; break; }
       if (R_FINITE(log_cdf)) logS += log1m_exp(log_cdf);
     }
@@ -1607,142 +1665,8 @@ inline void bawd_logS_at_t(double t, const double* const* cols,
 }
 
 // ============================================================
-// BAwD reduced chart and BAwDp (proportional-clearance drive clock)
+// BAwDp (proportional-clearance drive clock)
 // ============================================================
-
-// The reduced BAwD chart is deliberately mapped here, rather than in R's
-// Ttransform: the compiled likelihood consumes the p_types prefix positionally.
-// A is the absolute start-point range.  The evidence scale is fixed at
-// ell = 1, while y0 and T_max determine the physical boundary and decay rate:
-//   k = y0 / T_max,
-//   b = (exp(y0) - 1 - y0) / k,
-//   mu = y0 + sigma * delta,
-//   A is the sampled start-point range, B = b - A.  `delta` is not B: it is
-//   the standardized launch-location coordinate used to recover mu.
-struct BawdReducedPars {
-  double mu = R_NaN;
-  double sigma = R_NaN;
-  double B = R_NaN;
-  double A = R_NaN;
-  double t0 = R_NaN;
-  double k = R_NaN;
-  double ell = 1.0;
-  double b = R_NaN;
-  bool ok = false;
-};
-
-inline BawdReducedPars bawd_reduced_map(const double* par) {
-  BawdReducedPars out;
-  const double y0 = par[emc2col::bawd_reduced::y0];
-  const double tmax = par[emc2col::bawd_reduced::T_max];
-  const double A = par[emc2col::bawd_reduced::A];
-  const double delta = par[emc2col::bawd_reduced::delta];
-  const double sigma = par[emc2col::bawd_reduced::sigma];
-  const double t0 = par[emc2col::bawd_reduced::t0];
-  if (!(y0 > 0.0) || !(tmax > 0.0) || !(A >= 0.0) || !(sigma > 0.0) ||
-      !emc2_isfinite(y0) || !emc2_isfinite(tmax) || !emc2_isfinite(A) ||
-      !emc2_isfinite(delta) || !emc2_isfinite(sigma) || !emc2_isfinite(t0))
-    return out;
-  const double h = bawd_em1my(y0);
-  if (!(h > 0.0) || !emc2_isfinite(h)) return out;
-  const double k = y0 / tmax;
-  const double b = h / k;
-  if (!(k > 0.0) || !emc2_isfinite(k) || !(b >= A) || !(b > 0.0) ||
-      !emc2_isfinite(b)) return out;
-  out.mu = y0 + sigma * delta;
-  out.sigma = sigma;
-  out.B = b - A;
-  out.A = A;
-  out.t0 = t0;
-  out.k = k;
-  out.b = b;
-  out.ok = emc2_isfinite(out.mu) && emc2_isfinite(out.B);
-  return out;
-}
-
-inline double dbawd_reduced_scalar(double t, const double* par, void* /*ctx_*/) {
-  const BawdReducedPars q = bawd_reduced_map(par);
-  if (!q.ok || t <= 0.0 || !(t - q.t0 > 0.0)) return 0.0;
-  const double lp = bawd_log_pdf(t - q.t0, q.A, q.b, q.mu, q.sigma,
-                                 q.k, q.ell, BAWD_LAUNCH_LOGNORMAL, true);
-  return (lp > R_NegInf && emc2_isfinite(lp)) ? std::exp(lp) : 0.0;
-}
-
-inline double pbawd_reduced_scalar(double t, const double* par, void* /*ctx_*/) {
-  const BawdReducedPars q = bawd_reduced_map(par);
-  if (!q.ok || t <= 0.0 || !(t - q.t0 > 0.0)) return 0.0;
-  const double lp = bawd_log_cdf(t - q.t0, q.A, q.b, q.mu, q.sigma,
-                                 q.k, q.ell, BAWD_LAUNCH_LOGNORMAL, true);
-  return (lp > R_NegInf) ? std::fmin(std::exp(lp), 1.0) : 0.0;
-}
-
-inline void dbawd_reduced_raw(const double* rt, const double* const* cols,
-                              int n_rows, const int* mask, const int* isok,
-                              double* out, double min_ll, void* ctx_) {
-  const bool floor_raw = raw_floor_log_lik(static_cast<ContextForRaceModels*>(ctx_));
-  for (int i = 0; i < n_rows; ++i) {
-    if (!mask[i]) continue;
-    double par[emc2col::bawd_reduced::N_REQ];
-    for (int j = 0; j < emc2col::bawd_reduced::N_REQ; ++j) par[j] = cols[j][i];
-    const BawdReducedPars q = bawd_reduced_map(par);
-    if (!isok[i] || !q.ok || rt[i] <= 0.0 || !(rt[i] - q.t0 > 0.0)) {
-      out[i] = raw_log_zero(min_ll, floor_raw);
-      continue;
-    }
-    const double lp = bawd_log_pdf(rt[i] - q.t0, q.A, q.b, q.mu, q.sigma,
-                                   q.k, q.ell, BAWD_LAUNCH_LOGNORMAL, true);
-    out[i] = (lp > R_NegInf && emc2_isfinite(lp))
-      ? raw_log_value(lp, min_ll, floor_raw) : raw_log_zero(min_ll, floor_raw);
-  }
-}
-
-inline void pbawd_reduced_raw(const double* rt, const double* const* cols,
-                              int n_rows, const int* mask, const int* isok,
-                              double* out, double min_ll, void* ctx_) {
-  const bool floor_raw = raw_floor_log_lik(static_cast<ContextForRaceModels*>(ctx_));
-  for (int i = 0; i < n_rows; ++i) {
-    if (!mask[i]) continue;
-    double par[emc2col::bawd_reduced::N_REQ];
-    for (int j = 0; j < emc2col::bawd_reduced::N_REQ; ++j) par[j] = cols[j][i];
-    const BawdReducedPars q = bawd_reduced_map(par);
-    if (!isok[i] || !q.ok || rt[i] <= 0.0 || !(rt[i] - q.t0 > 0.0)) {
-      out[i] = 0.0;
-      continue;
-    }
-    const double lp = bawd_log_cdf(rt[i] - q.t0, q.A, q.b, q.mu, q.sigma,
-                                   q.k, q.ell, BAWD_LAUNCH_LOGNORMAL, true);
-    if (!R_FINITE(lp)) { out[i] = 0.0; continue; }
-    if (lp >= 0.0) out[i] = raw_log_zero(min_ll, floor_raw);
-    else out[i] = log1m_exp(lp);
-  }
-}
-
-inline void bawd_reduced_logS_at_t(double t, const double* const* cols,
-                                   int /*n_rows_total*/, int n_lR, int /*n_par*/,
-                                   const int* trunc_mask, int n_unique_trials,
-                                   const int* isok_all, void* /*ctx_*/,
-                                   double* logS_out) {
-  for (int j = 0; j < n_unique_trials; ++j) {
-    if (!trunc_mask[j]) continue;
-    const int start = j * n_lR;
-    double logS = 0.0;
-    bool bad = false;
-    for (int k = 0; k < n_lR && !bad; ++k) {
-      const int r = start + k;
-      double par[emc2col::bawd_reduced::N_REQ];
-      for (int p = 0; p < emc2col::bawd_reduced::N_REQ; ++p) par[p] = cols[p][r];
-      const BawdReducedPars q = bawd_reduced_map(par);
-      if (!isok_all[r] || !q.ok) { bad = true; break; }
-      const double tt = t - q.t0;
-      if (!(tt > 0.0)) continue;
-      const double lp = bawd_log_cdf(tt, q.A, q.b, q.mu, q.sigma,
-                                     q.k, q.ell, BAWD_LAUNCH_LOGNORMAL, true);
-      if (lp >= 0.0) { bad = true; break; }
-      if (R_FINITE(lp)) logS += log1m_exp(lp);
-    }
-    logS_out[j] = bad ? R_NegInf : logS;
-  }
-}
 
 struct BawDpClock {
   bool ok = false;
@@ -1757,36 +1681,45 @@ struct BawDpClock {
 // k = 0, so no numerical integration is introduced.
 inline BawDpClock bawdp_clock(double u, double k, double lambda) {
   BawDpClock out;
-  if (!(u > 0.0) || !(k > 0.0) || !(lambda >= 0.0) || !(lambda < 1.0) ||
+  if (!(u > 0.0) || !(k >= 0.0) || !(lambda >= 0.0) || !(lambda < 1.0) ||
       !emc2_isfinite(k) || !emc2_isfinite(lambda)) return out;
-  if (lambda == 0.0) {
-    const double m_max = 1.0 / k;
-    if (u == R_PosInf) {
-      out.ok = true; out.frozen = true; out.m = m_max; out.dm = 0.0;
-      return out;
-    }
-    const double ku = k * u;
-    out.m = -std::expm1(-ku) / k;
-    out.dm = std::exp(-ku);
-    out.ok = emc2_isfinite(out.m) && out.m > 0.0 && out.dm > 0.0;
-    return out;
-  }
-  const double log_lambda = std::log(lambda);
-  const double u_star = -log_lambda / k;
-  const double m_max = (-std::expm1(log_lambda) + lambda * log_lambda) / k;
-  if (!emc2_isfinite(m_max) || !(m_max > 0.0)) return out;
-  if (u == R_PosInf || u >= u_star) {
+
+  if (k <= BAWL_K_EPS) {
     out.ok = true;
-    out.frozen = true;
-    out.m = m_max;
-    out.dm = 0.0;
+    out.frozen = false;
+    out.m = (u == R_PosInf) ? R_PosInf : (1.0 - lambda) * u;
+    out.dm = 1.0 - lambda;
     return out;
   }
+
+  // The clock ceiling: 1/k at lambda = 0, approached only as u -> Inf, and
+  // m(u*) for lambda > 0, attained at the universal freeze time.
+  const double log_lambda = (lambda > 0.0) ? std::log(lambda) : R_NegInf;
+  const double u_star = (lambda > 0.0) ? -log_lambda / k : R_PosInf;
+  const double m_max = (lambda > 0.0)
+    ? (-std::expm1(log_lambda) + lambda * log_lambda) / k
+    : 1.0 / k;
+  if (!emc2_isfinite(m_max) || !(m_max > 0.0)) return out;
+  auto freeze = [&]() {
+    out.ok = true; out.frozen = true; out.m = m_max; out.dm = 0.0;
+    return out;
+  };
+  if (u == R_PosInf || u >= u_star) return freeze();
+
   const double ku = k * u;
   const double e = std::exp(-ku);
-  out.m = -std::expm1(-ku) / k - lambda * u;
-  out.dm = e - lambda;
-  out.ok = emc2_isfinite(out.m) && out.m > 0.0 && out.dm > 0.0;
+  const double m = -std::expm1(-ku) / k - lambda * u;
+  const double dm = e - lambda;
+  // exp(-k u) underflows to zero for k u > ~745.  The clock has then reached
+  // m_max to machine precision and the density below it is under 1e-320, so
+  // freezing is the correct limit.  Reporting failure instead would return a
+  // zero CDF where the defective ceiling belongs -- a survivor of one for
+  // every loser in the race.
+  if (!(dm > 0.0)) return freeze();
+  if (!emc2_isfinite(m) || !(m > 0.0)) return out;
+  out.ok = true;
+  out.m = m;
+  out.dm = dm;
   return out;
 }
 
@@ -1986,7 +1919,8 @@ NumericVector pbawdp(NumericVector t, NumericVector A, NumericVector b,
 // ============================================================
 
 inline double dfrq_scalar(double t, const double* par, void* /*ctx_*/) {
-  if (R_IsNA(par[emc2col::frq::alpha])) return 0.0;
+  if (R_IsNA(par[emc2col::frq::alpha]) ||
+      !R_FINITE(par[emc2col::frq::t0])) return 0.0;
   const double tt = t - par[emc2col::frq::t0];
   if (t <= 0.0 || tt <= 0.0) return 0.0;
   const FrqPars s = frq_derive(par[emc2col::frq::alpha], par[emc2col::frq::beta],
@@ -1994,9 +1928,9 @@ inline double dfrq_scalar(double t, const double* par, void* /*ctx_*/) {
                                par[emc2col::frq::delta]);
   return frq_pdf_natural_dt(tt, s);
 }
-
 inline double pfrq_scalar(double t, const double* par, void* /*ctx_*/) {
-  if (R_IsNA(par[emc2col::frq::alpha])) return 0.0;
+  if (R_IsNA(par[emc2col::frq::alpha]) ||
+      !R_FINITE(par[emc2col::frq::t0])) return 0.0;
   const double tt = t - par[emc2col::frq::t0];
   if (t <= 0.0 || tt <= 0.0) return 0.0;
   // tt == Inf deliberately reaches the kernel: the CDF there is h, not one.
@@ -2019,7 +1953,7 @@ inline void dfrq_raw(const double* rt, const double* const* cols, int n_rows,
   FrqMemo memo;
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
-    if (R_IsNA(al_[i]) || !isok[i]) {
+    if (R_IsNA(al_[i]) || !isok[i] || !R_FINITE(t0_[i])) {
       out[i] = raw_log_zero(min_ll, floor_raw);
       continue;
     }
@@ -2051,7 +1985,9 @@ inline void pfrq_raw(const double* rt, const double* const* cols, int n_rows,
     if (!mask[i]) continue;
     // A loser that cannot be evaluated contributes a survivor of one, matching
     // every other race adapter: the trial is failed by its winner's density.
-    if (R_IsNA(al_[i]) || !isok[i]) { out[i] = 0.0; continue; }
+    if (R_IsNA(al_[i]) || !isok[i] || !R_FINITE(t0_[i])) {
+      out[i] = 0.0; continue;
+    }
     const double tt = rt[i] - t0_[i];
     if (tt <= 0.0 || rt[i] <= 0.0) { out[i] = 0.0; continue; }
     const FrqPars& s = memo.get(al_[i], be_[i], h_[i], ta_[i], de_[i]);
@@ -2080,7 +2016,9 @@ inline void frq_logS_at_t(double t, const double* const* cols,
     bool bad = false;
     for (int kk = 0; kk < n_lR && !bad; ++kk) {
       const int r = start + kk;
-      if (!isok_all[r] || R_IsNA(al_[r])) { bad = true; break; }
+      if (!isok_all[r] || R_IsNA(al_[r]) || !R_FINITE(t0_[r])) {
+        bad = true; break;
+      }
       const double tt = t - t0_[r];
       if (tt <= 0.0) continue;  // not started: survivor one
       const FrqPars& s = memo.get(al_[r], be_[r], h_[r], ta_[r], de_[r]);

@@ -1,21 +1,18 @@
 # ============================================================================
 # BAwD: the ballistic accumulator with drive decay
 #
-#   U(t) = V exp(-k t)                        transient drive
-#   X(t) = z + (V/k)(1 - exp(-k t)) - ell t   z ~ U(0, A) and STATIC
+#   U(t) = V exp(-k t)                              transient drive
+#   Xdot(t) = U(t) - ell exp(-gamma k t)            z ~ U(0, A), static
 #
-# The state does not leak (that is BAwL); the drive decays while a constant
-# clearance ell opposes it, so each accumulator rises to a peak and then falls.
-# A launch strength that has not crossed b = B + A by its peak never will, which
-# gives the model a hard right endpoint T_max and genuine omissions when both
-# the drive decays and the clearance is positive (k > 0, ell > 0).
+# The state does not leak (that is BAwL). Clearance is constant at gamma = 0,
+# fades more slowly than the drive at each interior clearance exponent, and
+# co-decays with the drive at gamma = 1. Weak launch strengths can therefore
+# miss the threshold permanently. For gamma < 1 this also creates a finite
+# right endpoint T_max; co-decay retains omissions but has no finite endpoint.
 #
-# All of the numerics live in src/model_BAwD.h.  The dfun/pfun below call the
-# SAME compiled kernels as the sampled likelihood, so make_data()/predict() and
-# the fit cannot disagree -- but note that those kernels take the launch
-# distribution as an explicit argument, because the exported entry points bypass
-# the race context.  .bawd_launch_code() is the single place that value is
-# derived, and it also drives the c_name suffix.
+# Numerical kernels in src/model_BAwD.h are shared by the wrappers and
+# sampled likelihood.  Launch codes must match the C++ constants and adapter
+# suffixes.
 # ============================================================================
 
 # 0 = truncated normal launch (v, sv); 1 = lognormal launch (mu, sigma).
@@ -25,6 +22,29 @@
   switch(drift_distribution, lognormal = 1L, normal = 0L,
          stop("Unknown BAwD drift_distribution: ", drift_distribution))
 }
+# Fixed clearance exponents gamma used by the kernels and constructor. Each is
+# a distinct model: the frozen-mass factor at saturation is 1-(ell/w)^r with
+# r = 1/(1-gamma), so gamma = 0,1/2,2/3,3/4,1 give r = 1,2,3,4,Inf. gamma is
+# the clearance decay exponent; r is a derived quantity, never a constructor
+# option (see BAwD() docs).
+.bawd_gamma_values <- c(0, 0.5, 2 / 3, 0.75, 1)
+.bawd_check_gamma <- function(gamma) {
+  if (length(gamma) != 1L || !is.finite(gamma))
+    stop("BAwD gamma must be one of 0, 1/2, 2/3, 3/4, 1; got ",
+         paste(gamma, collapse = ", "))
+  hit <- which(abs(gamma - .bawd_gamma_values) < 1e-12)
+  if (length(hit) != 1L)
+    stop("BAwD gamma must be one of 0, 1/2, 2/3, 3/4, 1; got ",
+         paste(gamma, collapse = ", "))
+  .bawd_gamma_values[hit]
+}
+.bawd_gamma_suffix <- function(gamma) {
+  gamma <- .bawd_check_gamma(gamma)
+  c("", "_GAM12", "_GAM23", "_GAM34", "_GAM100")[
+    which(abs(gamma - .bawd_gamma_values) < 1e-12)
+  ]
+}
+
 
 .bawd_par_names <- function(launch) {
   if (launch == 1L) c("mu", "sigma") else c("v", "sv")
@@ -38,7 +58,8 @@
   need
 }
 
-dBAwD <- function(rt, pars, launch = 1L, posdrift = TRUE) {
+dBAwD <- function(rt, pars, launch = 1L, posdrift = TRUE, gamma = 0) {
+  gamma <- .bawd_check_gamma(gamma)
   nm <- .bawd_check_cols(pars, launch)
   dt <- rt - pars[, "t0"]
   ok <- (rt > 0) & (dt > 0) & is.finite(dt) & (pars[, "b"] >= pars[, "A"])
@@ -48,12 +69,14 @@ dBAwD <- function(rt, pars, launch = 1L, posdrift = TRUE) {
     out[ok] <- dbawd(t = dt[ok], A = pars[ok, "A"], b = pars[ok, "b"],
                      p1 = pars[ok, nm[1]], p2 = pars[ok, nm[2]],
                      k = pars[ok, "k"], ell = pars[ok, "ell"],
-                     launch = as.integer(launch), posdrift = posdrift)
+                     launch = as.integer(launch), posdrift = posdrift,
+                     gamma = gamma)
   }
   out
 }
 
-pBAwD <- function(rt, pars, launch = 1L, posdrift = TRUE) {
+pBAwD <- function(rt, pars, launch = 1L, posdrift = TRUE, gamma = 0) {
+  gamma <- .bawd_check_gamma(gamma)
   nm <- .bawd_check_cols(pars, launch)
   dt <- rt - pars[, "t0"]
   # rt = Inf is deliberately kept: the CDF there is F_max (the complement of the
@@ -65,10 +88,12 @@ pBAwD <- function(rt, pars, launch = 1L, posdrift = TRUE) {
     out[ok] <- pbawd(t = dt[ok], A = pars[ok, "A"], b = pars[ok, "b"],
                      p1 = pars[ok, nm[1]], p2 = pars[ok, nm[2]],
                      k = pars[ok, "k"], ell = pars[ok, "ell"],
-                     launch = as.integer(launch), posdrift = posdrift)
+                     launch = as.integer(launch), posdrift = posdrift,
+                     gamma = gamma)
   }
   out
 }
+
 
 .bawdp_check_cols <- function(pars, launch) {
   need <- c(.bawl_par_names(launch), "b", "A", "t0", "k", "lambda")
@@ -108,33 +133,39 @@ pBAwDp <- function(rt, pars, launch = 1L, posdrift = TRUE) {
   out
 }
 
-# Single-accumulator diagnostics receive the reporting columns produced by
-# BAwD(parameterization = "reduced").  The likelihood adapter itself never
-# relies on these derived columns.
-dBAwD_reduced <- function(rt, pars) dBAwD(rt, pars, launch = 1L, posdrift = TRUE)
-pBAwD_reduced <- function(rt, pars) pBAwD(rt, pars, launch = 1L, posdrift = TRUE)
-
 # First (rising-limb) crossing of distance d, or Inf if the peak falls short.
 # Mirrors bawd_hit_time_r() in src/model_rng.h: Newton from the LBA-limit time,
 # which lies below the root because q(u) <= u and the trajectory is concave and
 # increasing up to its peak.
-.bawd_hit_time <- function(V, d, k, ell) {
+# Mirrors bawd_hit_time_r() in src/model_rng.h.
+.bawd_hit_time <- function(V, d, k, ell, gamma = 0) {
+  gamma <- .bawd_check_gamma(gamma)
   if (!isTRUE(d > 0)) return(0)
   if (is.na(V) || !isTRUE(V > 0)) return(Inf)
   qf <- function(u) if (k <= 1e-10) u else -expm1(-k * u) / k
+  cf <- function(u) {
+    if (k <= 1e-10 || gamma <= 1e-12) u
+    else if (gamma >= 1 - 1e-12) qf(u)
+    else -expm1(-gamma * k * u) / (gamma * k)
+  }
   if (k <= 1e-10) return(if (V > ell) d / (V - ell) else Inf)
   if (ell <= 1e-12) {
     x <- 1 - k * d / V
     return(if (x > 0) -log(x) / k else Inf)
   }
+  if (gamma >= 1 - 1e-12) {
+    if (!isTRUE(V > ell)) return(Inf)
+    x <- 1 - k * d / (V - ell)
+    return(if (x > 0) -log(x) / k else Inf)
+  }
   if (!isTRUE(V > ell)) return(Inf)
-  u_p <- log(V / ell) / k
-  if (V * qf(u_p) - ell * u_p < d) return(Inf)
+  u_p <- log(V / ell) / ((1 - gamma) * k)
+  if (V * qf(u_p) - ell * cf(u_p) < d) return(Inf)
   u <- d / (V - ell)
   if (!isTRUE(u > 0) || !is.finite(u)) u <- 1e-12
   for (it in seq_len(100)) {
-    f <- V * qf(u) - ell * u - d
-    fp <- V * exp(-k * u) - ell
+    f <- V * qf(u) - ell * cf(u) - d
+    fp <- V * exp(-k * u) - ell * exp(-gamma * k * u)
     if (!isTRUE(fp > 0)) break
     un <- u - f / fp
     if (!isTRUE(un > 0)) un <- 0.5 * u
@@ -150,7 +181,8 @@ pBAwD_reduced <- function(rt, pars) pBAwD(rt, pars, launch = 1L, posdrift = TRUE
 # options(emc2.cpp_rfun = FALSE).  An all-Inf trial column is the package's
 # omission convention (R = NA, rt = Inf), which make_data() already handles.
 rBAwD <- function(lR, pars, ok = rep(TRUE, length(lR)), launch = 1L,
-                  posdrift = TRUE) {
+                  posdrift = TRUE, gamma = 0) {
+  gamma <- .bawd_check_gamma(gamma)
   nm <- .bawd_check_cols(pars, launch)
   nr <- length(levels(lR))
   bad <- rep(NA, length(lR) / nr)
@@ -169,7 +201,8 @@ rBAwD <- function(lR, pars, ok = rep(TRUE, length(lR)), launch = 1L,
                   lower = if (posdrift) 0 else -Inf)
     }
     z <- p[, "A"] * runif(nrow(p))
-    hit <- mapply(.bawd_hit_time, V, p[, "b"] - z, p[, "k"], p[, "ell"])
+    hit <- mapply(.bawd_hit_time, V, p[, "b"] - z, p[, "k"], p[, "ell"],
+                  MoreArgs = list(gamma = gamma))
     hit[!is.finite(hit) | hit < 0] <- Inf
     dt[idx] <- hit
   }
@@ -195,7 +228,8 @@ rBAwD <- function(lR, pars, ok = rep(TRUE, length(lR)), launch = 1L,
 # emc2.cpp_rfun = FALSE fallback.
 .bawdp_hit_time <- function(V, d, k, lambda) {
   if (!isTRUE(d > 0) || is.na(V) || !isTRUE(V > 0) ||
-      !isTRUE(k > 0) || !isTRUE(lambda >= 0) || !isTRUE(lambda < 1)) return(Inf)
+      !isTRUE(k >= 0) || !isTRUE(lambda >= 0) || !isTRUE(lambda < 1)) return(Inf)
+  if (k <= 1e-10) return(d / (V * (1 - lambda)))
   target <- d / V
   if (lambda == 0) {
     x <- 1 - k * target
@@ -250,109 +284,70 @@ rBAwDp <- function(lR, pars, ok = rep(TRUE, length(lR)), launch = 1L,
   out <- .apply_timed_guess_winner(out, levels(lR))
   out
 }
-
 #' The Ballistic Accumulator with Drive Decay (BAwD)
 #'
-#' A race model in which each accumulator is driven by a *transient* signal that
-#' decays, and is opposed by a constant clearance. For accumulator `i` the start
-#' point is `z_i = A * U_i` with `U_i ~ Uniform(0, 1)`, the threshold is
-#' `b = B + A`, and with launch strength `V_i` the trajectory is
-#' \deqn{X_i(t) = z_i + (V_i/k)(1 - e^{-kt}) - \ell t.}
-#' The drive `V_i e^{-kt}` decays, so the trajectory rises to a peak at
-#' `log(V_i/\ell)/k` and then falls. An accumulator that has not crossed `b` by
-#' its peak never will.
+#' A race model in which each accumulator is driven by a transient signal
+#' opposed by fading clearance \verb{ell exp(-gamma k t)}. The fixed clearance
+#' decay exponent `gamma` can be `0`, `1/2`, `2/3`, `3/4`, or `1`.
 #'
 #' @details
+#' `gamma` is the clearance decay exponent, not the frozen-mass factor's
+#' exponent. For `0 <= gamma < 1`, the frozen mass is
+#' \verb{1 - (ell / w)^r} with the derived exponent
+#' \verb{r = 1 / (1 - gamma)}. Thus `gamma = 0, 1/2, 2/3, 3/4` give
+#' `r = 1, 2, 3, 4`; `gamma = 1` is the co-decay limit represented by
+#' `r = Inf`, but it has no finite saturation wall. `r` is never a
+#' constructor option; it is fully determined by `gamma`.
 #'
-#' **This is not BAwL.** [BAwL()] applies leak to the accumulated evidence, so
-#' the *state* (including the start point) decays and weak drive produces an
-#' arbitrarily slow response. BAwD decays the *drive* while a constant `ell`
-#' removes evidence, so the start point is static and weak drive produces an
-#' *omission* instead. The two coincide only at `ell = 0` **and** `A = 0`; with
-#' `ell = 0` and `A > 0` they are materially different models.
+#' For `gamma > 0`, the trajectory is
+#' \verb{X(u) = z + V(1 - exp(-k u))/k -
+#' ell(1 - exp(-gamma k u))/(gamma k)},
+#' with the `gamma = 0` limit
+#' \verb{X(u) = z + V(1 - exp(-k u))/k - ell u}.
+#' The required launch by time `u` is
+#' \verb{V^*(u,z) = [k(b-z) + ell(1-exp(-gamma k u))/gamma] /
+#' [1-exp(-k u)]}
+#' for `gamma > 0`, with the corresponding `k ell u` term at `gamma = 0`.
+#' For `gamma < 1`, saturation uses `w = ell exp((1-gamma) k u)` and
+#' \verb{|dz/dw| = k^{-1}[1 - (ell/w)^r]}, where `r = 1/(1-gamma)`.
+#' At `gamma = 1`, \verb{X(u) = z + (V-ell)(1-exp(-k u))/k}; the eventual-hit
+#' condition is `V > ell + k(b - z)`, so responses can be arbitrarily late.
 #'
-#' At `k = 0`, the trajectory is the ordinary ballistic trajectory with
-#' effective drift `D = V - ell`. For the normal launch with `posdrift = FALSE`,
-#' this is exactly the unrestricted-normal LBA with mean drift `v - ell` and
-#' SD `sv`. With `posdrift = TRUE`, the launch is truncated at `V > 0`, so
-#' `D > -ell` rather than `D > 0`; the lognormal launch gives a shifted-
-#' lognormal effective drift and is not the standard LBA drift family.
-#'
-#' When `k > 0` and `ell > 0`, the behavioural signature is a hard right
-#' endpoint `T_max` (the peak time of the `z = 0` accumulator at its critical
-#' launch strength), with a genuine never-finish mass. For a point start
-#' (`A = 0`) the density approaches that endpoint linearly; with a nonzero
-#' start-point range (`A > 0`) the collapsing live-start interval adds another
-#' factor and the density approaches it quadratically. If `ell = 0`, the model
-#' has no finite endpoint (although it can remain defective when the decayed
-#' drive asymptote is below threshold); if `k = 0`, it has the ordinary LBA-like
-#' infinite support. Thus the finite-window interpretation applies only to
-#' `k > 0` and `ell > 0`.
+#' The start point is static and weak drive can produce an omission.
+#' For `gamma < 1`, `T_max` is finite when `k > 0` and `ell > 0`; the
+#' `gamma = 1` endpoint (co-decay) retains omissions but has no finite
+#' endpoint. The five regimes are fixed constructor options, not estimated
+#' parameters, so all variants have the same number of free parameters
+#' (`gamma` never appears in `p_types`).
 #'
 #' Default values are used for all parameters that are not explicitly listed in
 #' the `formula` argument of `design()`. They can also be accessed with
 #' `BAwD()$p_types`.
 #'
-#' With `drift_distribution = "lognormal"` (the default) `log V ~ N(mu, sigma^2)`:
+#' With `drift_distribution = "lognormal"` (the default) `log V ~ N(mu, sigma^2)`.
 #'
 #' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Mapping** | **Interpretation** |
 #' |---|---|---|---|---|---|
 #' | *mu* | identity | \[-Inf, Inf\] | 0 | | Mean of the log launch strength. |
-#' | *sigma* | log | \[0, Inf\] | log(1) | | Between-trial SD of the log launch strength. |
-#' | *B* | log | \[0, Inf\] | log(1) | *b* = *B* + *A* | Distance from the upper start-point range to the threshold. |
-#' | *A* | log | \[0, Inf\] | log(0) | | Start-point range; the start point does **not** decay. |
+#' | *sigma* | log | \[0, Inf\] | log(1) | | SD of log launch strength. |
+#' | *B* | log | \[0, Inf\] | log(1) | *b* = *B* + *A* | Threshold distance. |
+#' | *A* | log | \[0, Inf\] | log(0) | | Start-point range. |
 #' | *t0* | log | \[0, Inf\] | log(0) | | Non-decision time. |
-#' | *k* | log | \[0, Inf\] | log(0) | | Drive-decay rate; `k = 0` is the LBA limit. |
-#' | *ell* | log | \[0, Inf\] | log(1) | | Tonic clearance / minimum effective sampling rate. |
-#' | *pContaminant* | probit | \[0, 1\] | qnorm(0) | | Optional *omission* contaminant probability: mass at `rt = Inf` only, handled by the data pipeline |
-#' | *pGuess* | probit | \[0, 1\] | qnorm(0) | | Optional uniform *guess* (outlier) probability, mixed into observed RT densities over the guess window |
+#' | *k* | log | \[0, Inf\] | log(0) | | Drive-decay rate. |
+#' | *ell* | log | \[0, Inf\] | log(1) | | Clearance rate. |
 #'
-#' With `drift_distribution = "normal"`, `mu` and `sigma` are replaced by `v`
-#' (identity, default 1) and `sv` (log, default `log(1)`), and
-#' `V ~ N(v, sv^2)` truncated to be positive when `posdrift = TRUE`. This is the
-#' variant that contains the exact BAwL corner at `ell = 0` and `A = 0` and
-#' the exact unrestricted-normal LBA limit at `k = 0` only when `posdrift = FALSE`.
-#' With `posdrift = TRUE`, the `k = 0` limit instead has the shifted truncation
-#' `V - ell > -ell`. The lognormal variant is the default because its
-#' likelihood needs no quadrature.
+#' With `drift_distribution = "normal"`, `mu` and `sigma` are replaced by
+#' `v` and `sv`; the launch is truncated positive when `posdrift = TRUE`.
 #'
-#' **Fixing the evidence scale.** The evidence axis is defined only up to a
-#' scale: `(V, ell, b, A) -> (cV, c*ell, cb, cA)` leaves every crossing time
-#' unchanged, so exactly one of those must be fixed. With
-#' `drift_distribution = "normal"` the usual `constants = c(sv = log(1))` does
-#' it. With `drift_distribution = "lognormal"` it does **not**: `sigma` is
-#' dimensionless. Fix `ell` instead --- which is what leaving `ell` out of the
-#' `formula` does, since its default is `log(1)` --- and the spec's
-#' dimensionless quantities become literal, `r = V` and `c = k b`. Omitting this
-#' produces a ridge in the posterior rather than an error.
-#'
-#' **Identifiability.** At `k = 0` only `v - ell` (or the lognormal analogue) is
-#' identified: `ell` is identified purely through the curvature of the
-#' trajectory and the width of the response window. Prefer `ell ~ 1`, or a
-#' coarse condition factor, and do not cross `ell` with the same factors as the
-#' launch-strength mean.
-#'
-#' **Bounded support.** When `k > 0` and `ell > 0`, an observed response time
-#' above `t0 + T_max` has density exactly zero and floors that trial's likelihood.
-#' This is a constraint on where the posterior can live, to be handled by
-#' initialisation and priors; `pContaminant` is a Bernoulli *omission* rate and
-#' does not address late responses. `pGuess` does: it mixes a uniform density
-#' over the guess window into observed RTs, so a response past `t0 + T_max` gets
-#' a likelihood floor instead of a zero. The `ell = 0` and `k = 0` limits do not
-#' have this finite support.
-#'
-#' @param drift_distribution Distribution of the trialwise launch strength:
-#'   `"lognormal"` (the default) for `log V ~ N(mu, sigma^2)`, or `"normal"` for
-#'   `V ~ N(v, sv^2)`.
+#' @param drift_distribution Distribution of trialwise launch strength:
+#'   `"lognormal"` (default) or `"normal"`.
 #' @param posdrift Logical. If `TRUE` (default), truncate normal launch
-#'   strengths to be positive; if `FALSE`, use the untruncated normal and append
-#'   `IO` to the compiled model name. Only meaningful for
-#'   `drift_distribution = "normal"`, since a lognormal launch strength is
-#'   positive by construction.
-#' @param parameterization Character. `"rate"` (default) uses the ordinary
-#'   `(mu, sigma, B, A, t0, k, ell)` chart. `"reduced"` uses the identified
-#'   lognormal chart `(y0, T_max, A, delta, sigma, t0)`, with `A` the absolute
-#'   start-point range and `ell = 1` as the scale convention.
+#'   strengths to be positive; if `FALSE`, append `IO` to the compiled model
+#'   name. Only meaningful for normal launches.
+#' @param gamma Fixed clearance decay exponent: `0` (default), `1/2`, `2/3`,
+#'   `3/4`, or `1`. A model option, never an estimated parameter; the
+#'   corresponding suffix appended to the compiled model name is `""`,
+#'   `"_GAM12"`, `"_GAM23"`, `"_GAM34"`, and `"_GAM100"` respectively.
 #' @return A model list defining the BAwD race model.
 #' @examples
 #' ADmat <- matrix(c(-1/2, 1/2), ncol = 1, dimnames = list(NULL, "d"))
@@ -365,66 +360,9 @@ rBAwDp <- function(lR, pars, ok = rep(TRUE, length(lR)), launch = 1L,
 #'                       contrasts = list(mu = list(lM = ADmat)))
 #' @export
 BAwD <- function(drift_distribution = c("lognormal", "normal"),
-                 posdrift = TRUE,
-                 parameterization = c("rate", "reduced")) {
+                 posdrift = TRUE, gamma = 0) {
   drift_distribution <- match.arg(drift_distribution)
-  parameterization <- match.arg(parameterization)
-
-  if (parameterization == "reduced") {
-    if (drift_distribution != "lognormal")
-      stop("BAwD(parameterization = \"reduced\") currently requires the lognormal launch.")
-    if (!isTRUE(posdrift))
-      stop("BAwD(parameterization = \"reduced\") has a positive lognormal launch by construction.")
-
-    p_types <- c(y0 = log(1), T_max = log(1), A = log(0),
-                 delta = 0, sigma = log(1), t0 = log(0))
-    transform <- c(y0 = "exp", T_max = "exp", A = "exp",
-                   delta = "identity", sigma = "exp", t0 = "exp")
-    minmax <- cbind(y0 = c(1e-4, Inf), T_max = c(0.05, Inf),
-                    A = c(1e-4, Inf), delta = c(-Inf, Inf),
-                    sigma = c(1e-4, Inf), t0 = c(0.05, Inf))
-    exception <- c(A = 0)
-    .nuis <- add_nuisance_pars(p_types, transform, minmax, exception)
-    p_types <- .nuis$p_types; transform <- .nuis$transform
-    minmax <- .nuis$minmax; exception <- .nuis$exception
-
-    # This reporting transform exposes the ordinary BAwD coordinates, but the
-    # compiled likelihood maps the six-column prefix itself (see the
-    # BAwD_REDUCED adapter).  A is absolute, so threshold changes do not
-    # induce a start-point-range change.
-    Ttransform_reduced <- function(pars, dadm) {
-      y0 <- pars[, "y0"]; Tmax <- pars[, "T_max"]
-      h <- expm1(y0) - y0
-      k <- y0 / Tmax
-      b <- h / k
-      A <- pars[, "A"]
-      cbind(pars,
-            mu = y0 + pars[, "sigma"] * pars[, "delta"],
-            B = b - A, k = k, ell = 1, b = b,
-            Tmax = Tmax, rt_max = pars[, "t0"] + Tmax)
-    }
-
-    return(list(
-      type = "RACE",
-      c_name = "BAwD_REDUCED",
-      drift_distribution = drift_distribution,
-      parameterization = parameterization,
-      p_types = p_types,
-      p_types_canonical = setdiff(names(p_types), .nuisance_par_names),
-      transform = list(func = transform),
-      bound = list(minmax = minmax, exception = exception),
-      Ttransform = Ttransform_reduced,
-      rfun = function(data, pars) {
-        .rfun_BAwD_reduced(data$lR, pars, ok = attr(pars, "ok"))
-      },
-      dfun = function(rt, pars) dBAwD_reduced(rt, pars),
-      pfun = function(rt, pars) pBAwD_reduced(rt, pars),
-      log_likelihood = function(pars, dadm, model, min_ll = log(1e-10)) {
-        stop("BAwD: the likelihood is implemented in the compiled race path; ",
-             "the R likelihood route is not supported.")
-      }
-    ))
-  }
+  gamma <- .bawd_check_gamma(gamma)
 
   launch <- .bawd_launch_code(drift_distribution)
   lognormal <- (launch == 1L)
@@ -463,34 +401,31 @@ BAwD <- function(drift_distribution = c("lognormal", "normal"),
   # "LNR" is an existing key).  The IO suffix is only reachable for the normal
   # launch, and "BAwD_LOGN" deliberately contains no "IO".
   c_name <- paste0("BAwD", if (lognormal) "_LOGN"
-                           else if (!posdrift) "IO" else "")
-
+                           else if (!posdrift) "IO" else "",
+                   .bawd_gamma_suffix(gamma))
   list(
     type = "RACE",
     c_name = c_name,
     drift_distribution = drift_distribution,
+    gamma = gamma,
     p_types = p_types,
     p_types_canonical = setdiff(names(p_types), .nuisance_par_names),
     transform = list(func = transform),
     bound = list(minmax = minmax, exception = exception),
     Ttransform = function(pars, dadm) {
       b <- pars[, "B"] + pars[, "A"]
-      # T_max is the estimable window quantity: k and ell are individually
-      # near-degenerate along a manifold that holds it fixed, so it is what
-      # should be reported and interpreted rather than either rate.  Inf
-      # whenever k = 0 or ell = 0, where nothing saturates and support is
-      # unbounded.  rt_max is the observable ceiling on this accumulator.
-      Tmax <- bawd_tmax_vec(pars[, "A"], b, pars[, "k"], pars[, "ell"])
+      Tmax <- bawd_tmax_vec(pars[, "A"], b, pars[, "k"], pars[, "ell"],
+                            gamma = gamma)
       cbind(pars, b = b, Tmax = Tmax, rt_max = pars[, "t0"] + Tmax)
     },
     rfun = function(data, pars) {
       .rfun_BAwD(data$lR, pars, ok = attr(pars, "ok"), launch = launch,
-                 posdrift = posdrift)
+                 posdrift = posdrift, gamma = gamma)
     },
     dfun = function(rt, pars) dBAwD(rt, pars, launch = launch,
-                                    posdrift = posdrift),
+                                    posdrift = posdrift, gamma = gamma),
     pfun = function(rt, pars) pBAwD(rt, pars, launch = launch,
-                                    posdrift = posdrift),
+                                    posdrift = posdrift, gamma = gamma),
     log_likelihood = function(pars, dadm, model, min_ll = log(1e-10)) {
       stop("BAwD: the likelihood is implemented in the compiled race path; ",
            "the R likelihood route is not supported.")
@@ -508,9 +443,9 @@ BAwD <- function(drift_distribution = c("lognormal", "normal"),
 #' time \code{u* = log(1/lambda)/k} for every launch strength and start point.
 #' The likelihood is therefore the ordinary closed-form LBA likelihood at
 #' \code{m(u)}, multiplied by \code{mprime(u)} before the freeze time, and is
-#' exactly zero after it.  The \code{lambda = 0}
-#' boundary is the pure drive-decay model with an asymptotic (rather than finite)
-#' internal clock.
+#' exactly zero after it.  The \code{lambda = 0} boundary is the pure drive-decay
+#' model with an asymptotic (rather than finite) internal clock.  The \code{k = 0}
+#' boundary is the standard LBA limit with effective drift scaled by \code{1 - lambda}.
 #'
 #' This is not BAwL: BAwL decays the accumulated start point, whereas BAwDp
 #' keeps \code{z} static and scales the whole temporal drive profile by \code{V}.
@@ -550,9 +485,10 @@ BAwDp <- function(drift_distribution = c("lognormal", "normal"),
   minmax <- cbind(minmax, B = c(1e-4, Inf), A = c(1e-4, Inf),
                   t0 = c(0.05, Inf), k = c(1e-4, Inf),
                   lambda = c(0, 1 - 1e-8))
-  # A = 0 and lambda = 0 are exact, useful boundaries.  k remains positive so
-  # BAwDp's finite-clock branch is the model used by the race adapter.
-  exception <- c(A = 0, lambda = 0)
+  # A = 0, k = 0, and lambda = 0 are exact, useful boundaries.  k = 0 gives the
+  # standard LBA limit (with effective drift scaled by 1 - lambda), while
+  # lambda = 0 gives the pure drive-decay model with unbounded support.
+  exception <- c(A = 0, k = 0, lambda = 0)
   .nuis <- add_nuisance_pars(p_types, transform, minmax, exception)
   p_types <- .nuis$p_types; transform <- .nuis$transform
   minmax <- .nuis$minmax; exception <- .nuis$exception
@@ -568,7 +504,14 @@ BAwDp <- function(drift_distribution = c("lognormal", "normal"),
     transform = list(func = transform),
     bound = list(minmax = minmax, exception = exception),
     Ttransform = function(pars, dadm) {
-      cbind(pars, b = pars[, "B"] + pars[, "A"])
+      b <- pars[, "B"] + pars[, "A"]
+      k <- pars[, "k"]
+      lambda <- pars[, "lambda"]
+      finite_mask <- (k > 0) & (lambda > 0) & (lambda < 1)
+      finite_mask[is.na(finite_mask)] <- FALSE
+      Tmax <- rep(Inf, nrow(pars))
+      Tmax[finite_mask] <- -log(lambda[finite_mask]) / k[finite_mask]
+      cbind(pars, b = b, Tmax = Tmax, rt_max = pars[, "t0"] + Tmax)
     },
     rfun = function(data, pars) {
       .rfun_BAwDp(data$lR, pars, ok = attr(pars, "ok"), launch = launch,

@@ -19,7 +19,6 @@ robust_density <- function(ps,r,bw,adjust,use_robust=FALSE)
   # here for hyper co/variance which can have long tails)
 {
   if (use_robust) {
-    # isin <- ps>r[1]*.9 & ps < r[2]*1.1
     isin <- ps> 0 & ps < r[2]*1.1
     p <- mean(isin)
     psc <- ps[isin]
@@ -47,7 +46,6 @@ plot_roc <- function(data,signalFactor="S",zROC=FALSE,qfun=NULL,main="",lim=NULL
     abline(a=0,b=1,lty=3)
   } else {
     ctab <- qfun(ctab)
-    # ZH optimization: Replace row-wise apply with vectorized rowSums for much faster execution
     ctab <- ctab[rowSums(!is.finite(ctab)) == 0, ]
     if (is.null(lim)) lim <- c(min(ctab),max(ctab))
     plot(ctab[,1],ctab[,2],main=main,
@@ -101,8 +99,8 @@ plot_fit_choice <- function(data,pp,subject=NULL,factors=NULL,functions=NULL,
                             layout=NULL,mfcol=TRUE,
                             signalFactor="S",zROC=FALSE,qfun=qnorm,lim=NULL,rocfit_cex=.5)
 {
-  oldpar <- par(no.readonly = TRUE) # code line i
-  on.exit(par(oldpar)) # code line i + 1
+  oldpar <- par(no.readonly = TRUE) # Save plotting parameters.
+  on.exit(par(oldpar)) # Restore plotting parameters.
   if (!is.null(stat) & is.null(factors)) factors <- NA
   if (!is.null(subject)) {
     snams <- levels(data$subjects)
@@ -151,13 +149,9 @@ plot_fit_choice <- function(data,pp,subject=NULL,factors=NULL,functions=NULL,
     if (!any(is.na(fnams))) {
       cells <- dat[,fnams,drop=FALSE]
       for (i in fnams) cells[,i] <- paste(i,cells[,i],sep="=")
-      # Optimization: Use vectorized do.call(paste, ...) instead of slow row-wise apply(..., 1, paste)
-      # Performance impact: Often >5x speedup for large dataframes
       cells <- do.call(paste, c(unname(as.data.frame(cells)), sep=" "))
       pp_cells <- pp[,fnams,drop=FALSE]
       for (i in fnams) pp_cells[,i] <- paste(i,pp_cells[,i],sep="=")
-      # Optimization: Use vectorized do.call(paste, ...) instead of slow row-wise apply(..., 1, paste)
-      # Performance impact: Often >5x speedup for large dataframes
       pp_cells <- do.call(paste, c(unname(as.data.frame(pp_cells)), sep=" "))
       postn <- unique(pp$postn)
       ucells <- sort(unique(cells))
@@ -200,13 +194,9 @@ plot_fit_choice <- function(data,pp,subject=NULL,factors=NULL,functions=NULL,
     if (!any(is.na(fnams))) {
       cells <- dat[,fnams,drop=FALSE]
       for (i in fnams) cells[,i] <- paste(i,cells[,i],sep="=")
-      # Optimization: Use vectorized do.call(paste, ...) instead of slow row-wise apply(..., 1, paste)
-      # Performance impact: Often >5x speedup for large dataframes
       cells <- do.call(paste, c(unname(as.data.frame(cells)), sep=" "))
       pp_cells <- pp[,fnams,drop=FALSE]
       for (i in fnams) pp_cells[,i] <- paste(i,pp_cells[,i],sep="=")
-      # Optimization: Use vectorized do.call(paste, ...) instead of slow row-wise apply(..., 1, paste)
-      # Performance impact: Often >5x speedup for large dataframes
       pp_cells <- do.call(paste, c(unname(as.data.frame(pp_cells)), sep=" "))
       ucells <- sort(unique(cells))
     } else ucells <- ""
@@ -431,62 +421,6 @@ profile_plot <- function (data, design, p_vector, range = 0.5, layout = NA, p_mi
     return(round(out, digits))
 }
 
-# profile_plot <- function(data, design, p_vector, range = .5, layout = NA,
-#                          p_min = NULL,p_max = NULL, use_par = NULL,
-#                          n_point=100,n_cores=1, round = 3,
-#                          true_args = list(),
-#                          ...)
-#
-# {
-#   oldpar <- par(no.readonly = TRUE) # code line i
-#   on.exit(par(oldpar)) # code line i + 1
-#   dots <- list(...)
-#   lfun <- function(i,x,p_vector,pname,dadm) {
-#     p_vector[pname] <- x[i]
-#     calc_ll_R(p_vector, attr(dadm, "model")(), dadm)
-#   }
-#   if(!identical(names(p_min), names(p_max))) stop("p_min and p_max should be specified for the same parameters")
-#   if(!is.null(names(p_min)) & length(p_min) == length(use_par)) names(p_min) <- use_par
-#   if(!is.null(names(p_max)) & length(p_max) == length(use_par)) names(p_max) <- use_par
-#   if(is.null(use_par)) use_par <- names(p_vector)
-#   if(any(is.na(layout))){
-#     par(mfrow = coda_setmfrow(Nchains = 1, Nparms = length(use_par),
-#                               nplots = 1))
-#   } else{par(mfrow=layout)}
-#   if(is.null(dots$dadm)){
-#     dadm <- design_model(data, design, verbose = FALSE)
-#   } else{
-#     dadm <- dots$dadm
-#   }
-#   out <- data.frame(true = rep(NA, length(use_par)), max = rep(NA, length(use_par)), miss = rep(NA, length(use_par)))
-#   rownames(out) <- use_par
-#   for(p in 1:length(p_vector)){
-#     cur_name <- names(p_vector)[p]
-#     if(cur_name %in% use_par){
-#       cur_par <- p_vector[p]
-#       pmax_cur <- cur_par + range/2
-#       pmin_cur <- cur_par - range/2
-#       if(!is.null(p_min)){
-#         if(!is.na(p_min[cur_name])){
-#           pmin_cur <- p_min[cur_name]
-#         }
-#       }
-#       if(!is.null(p_max)){
-#         if(!is.na(p_max[cur_name])){
-#           pmax_cur <- p_max[cur_name]
-#         }
-#       }
-#       x <- seq(pmin_cur,pmax_cur,length.out=n_point)
-#       x <- c(x, cur_par)
-#       x <- unique(sort(x))
-#       ll <- unlist(mclapply(1:length(x),lfun,dadm=dadm,x=x,p_vector=p_vector,pname=cur_name,mc.cores = n_cores))
-#       do.call(plot, c(list(x,ll), fix_dots_plot(add_defaults(dots, type="l",xlab=cur_name,ylab="LL"))))
-#       do.call(abline, c(list(v=cur_par), fix_dots_plot(add_defaults(true_args, lty = 2))))
-#       out[cur_name,] <- c(p_vector[cur_name], x[which.max(ll)], p_vector[cur_name] - x[which.max(ll)])
-#     }
-#   }
-#   return(round(out, 3))
-# }
 
 #' Plots Density for Parameters
 #'
@@ -524,9 +458,9 @@ plot_pars <- function(emc,layout=NA, selection="mu", show_chains = FALSE, plot_p
                       use_prior_lim = !all_subjects, lpos = "topright", true_pars = NULL, all_subjects = FALSE,
                       prior_args = list(), true_args = list(), ...)
 {
+  oldpar <- par(no.readonly = TRUE) # Save plotting parameters.
+  on.exit(par(oldpar)) # Restore plotting parameters.
   if(!is(emc, "emc")) stop("input must be an emc object")
-  oldpar <- par(no.readonly = TRUE) # code line i
-  on.exit(par(oldpar)) # code line i + 1
   dots <- list(...)
   type <- emc[[1]]$type
   if(length(dots$subject) == 1 || emc[[1]]$n_subjects == 1) dots$by_subject <- TRUE
@@ -573,7 +507,6 @@ plot_pars <- function(emc,layout=NA, selection="mu", show_chains = FALSE, plot_p
       m[, all_cols, drop = FALSE]
     })
     merged <- do.call(rbind, cur_mcmc)
-    # merged <- do.call(rbind, cur_mcmc_filled)
     if(!show_chains) {
       cur_mcmc <- list(merged)
       if(!is.null(true_MCMC_samples)) true_MCMC_samples[[i]] <- list(do.call(rbind, true_MCMC_samples[[i]]))
@@ -708,8 +641,8 @@ make_recov_summary <- function(stats){
 plot_mcmc <- function(emc, selection = "mu", fun = 'cumuplot', layout=NA, chain = 1,
                       plot_type = NULL, ...)
 {
-  oldpar <- par(no.readonly = TRUE) # code line i
-  on.exit(par(oldpar)) # code line i + 1
+  oldpar <- par(no.readonly = TRUE) # Save plotting parameters.
+  on.exit(par(oldpar)) # Restore plotting parameters.
   dots <- list(...)
   if(length(dots$subject) == 1 || emc[[1]]$n_subjects == 1) dots$by_subject <- TRUE
   MCMC_samples <- do.call(get_pars, c(list(emc, selection = selection, chain = chain),
@@ -752,8 +685,8 @@ plot_mcmc <- function(emc, selection = "mu", fun = 'cumuplot', layout=NA, chain 
 # #' @return A coda plot
 plot_mcmc_list <- function(emc, selection = "mu", fun = 'traceplot', layout=NA, ...)
 {
-  oldpar <- par(no.readonly = TRUE) # code line i
-  on.exit(par(oldpar)) # code line i + 1
+  oldpar <- par(no.readonly = TRUE) # Save plotting parameters.
+  on.exit(par(oldpar)) # Restore plotting parameters.
   dots <- list(...)
   if(length(dots$subject) == 1 || emc[[1]]$n_subjects == 1) dots$by_subject <- TRUE
   MCMC_samples <- do.call(get_pars, c(list(emc, selection = selection), fix_dots(dots, get_pars)))
@@ -1012,31 +945,6 @@ get_power_spectra <- function(data,
       fast    = spec_args$fast   # FFT acceleration
     )
   }
-
-  # --------------------------
-  # Case 1: Mean posterior predictive spectra
-  # --------------------------
-  # if (mean.pp) {
-  #   pp <- data[order(data$subjects, data$postn, data$trials), ]
-  #
-  #   power_df <- aggregate(rt ~ postn * subjects, pp, function(x) compute_spec(x, spec_args=spec_args)$spec)
-  #   freq_df  <- aggregate(rt ~ postn * subjects, pp, function(x) compute_spec(x, spec_args=spec_args)$freq)
-  #
-  #   # Unlist spectra & frequencies into matrices
-  #   if (is.list(power_df$rt)) power_df$rt <- do.call(rbind, power_df$rt)
-  #   if (is.list(freq_df$rt))  freq_df$rt  <- do.call(rbind, freq_df$rt)
-  #
-  #   power_by_subj <- lapply(unique(power_df$subjects),
-  #                           function(s) colMeans(power_df[power_df$subjects == s, "rt"]))
-  #
-  #   freq_by_subj  <- lapply(unique(freq_df$subjects),
-  #                           function(s) colMeans(freq_df[freq_df$subjects == s, "rt"]))
-  #
-  #   mean_power <- colMeans(do.call(rbind, power_by_subj))
-  #   mean_freq  <- colMeans(do.call(rbind, freq_by_subj))
-  #
-  #   return(data.frame(freq = mean_freq, power = mean_power))
-  # }
 
   # --------------------------
   # Case 2: Posterior predictive spectra by postn

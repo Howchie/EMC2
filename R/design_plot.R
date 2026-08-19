@@ -796,13 +796,10 @@ single_LNR_plot <- function(
   ##################################################################
   ### (A) Figure out anchoring & arrow positions
   ##################################################################
-  # 1) Horizontal arrow near bottom:
-  arrow_y <- 0  # We will draw an arrow at y=0
-  # 2) We want to shift densities up by 0.1.
+  # Position the baseline arrow and shift densities vertically.
+  arrow_y <- 0
   anchor_y <- 0.1
-  # 3) The user asked to anchor x at mean(t0_vals):
   mean_t0  <- mean(t0_vals, na.rm=TRUE)
-  # We will shift each density so its minimum x lands at mean_t0.
 
   ##################################################################
   ### (B) Identify unique "cells" by combining the relevant columns
@@ -875,7 +872,7 @@ single_LNR_plot <- function(
 
   ##################################################################
   ### (F) t0 lines
-  ### We'll plot them offset in x by mean_t0, and in y by anchor_y
+  ### Draw t0 lines offset by mean_t0 and anchor_y
   ##################################################################
   if (length(t0_vals) > 0) {
     t0_sorted <- sort(t0_vals)
@@ -883,16 +880,9 @@ single_LNR_plot <- function(
     i <- 0
     for (tn in names(t0_sorted)) {
       y_i  <- anchor_y + i*vertical_step
-      # We used to do segments(0, y_i, t0_i, y_i)
-      # Now let's anchor them at x= mean_t0:
+      # Draw each t0 line from zero to its value.
       t0_i <- t0_sorted[tn]
       lty_i <- if (tn %in% names(t0_ltys)) t0_ltys[tn] else 1
-
-      # If you'd rather "start" the line at mean_t0 and extend by t0_i
-      # that might be: segments(mean_t0, y_i, mean_t0 + t0_i, y_i)
-      # but that can push them far out. Another approach is to do:
-      # segments(mean_t0 - t0_i, y_i, mean_t0, y_i), etc.
-      # For simplicity, let's do from (mean_t0) to (mean_t0 + t0_i):
       segments(0, y_i, 0 + t0_i, y_i, lwd=3, lty=lty_i, col="black")
 
       i <- i + 1

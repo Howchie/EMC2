@@ -104,8 +104,6 @@ rRDM <- function(lR, pars, p_types=c("v", "B", "A", "t0"), ok=rep(TRUE, dim(pars
                  # pars must be sorted so accumulators and parameter for each trial are in
                  # contiguous rows. "s" parameter will be used but can be ommitted
                  #
-                 # test
-# pars=cbind(B=c(1,2),v=c(1,1),A=c(0,0),t0=c(.2,.2)); lR=factor(c(1,2))
 {
   if (!all(p_types %in% dimnames(pars)[[2]])) {
     stop("pars must have columns ", paste(p_types, collapse = " "))
@@ -124,8 +122,7 @@ rRDM <- function(lR, pars, p_types=c("v", "B", "A", "t0"), ok=rep(TRUE, dim(pars
   dt[ok] <- rWald(sum(ok), B = pars[, "B"], v = pars[, "v"], A = pars[, "A"])
   bad_col <- apply(dt, 2, function(x) all(is.infinite(x)))
   R <- max.col(-t(dt), ties.method = "first")
-  pick <- cbind(R, 1:dim(dt)[2]) # Matrix to pick winner
-  # Any t0 difference with lR due to response production time (no effect on race)
+  pick <- cbind(R, 1:dim(dt)[2])
   rt <- matrix(t0, nrow = nr)[pick] + dt[pick]
   R <- factor(levels(lR)[R], levels = levels(lR))
   R[bad_col] <- NA

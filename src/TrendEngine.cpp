@@ -46,7 +46,6 @@ void TrendOpSpec::make_first_level(const Rcpp::DataFrame& data) {
     stop("make_first_level: no rows with first 'at' level (== 1) found");
   }
 
-  // Optional consistency check (as in your original code)
   for (int i = 0; i < n; ++i) {
     if (expand_idx[i] == 0) {
       stop("Found rows before first 'at' level within subject. "
@@ -261,7 +260,6 @@ TrendPlan::TrendPlan(Rcpp::Nullable<Rcpp::List> trend_,
     if (!Rf_isNull(cm)) {
       data_covariate_maps = Rcpp::List(cm);
       has_data_covariate_maps = data_covariate_maps.size() > 0;
-      // Rprintf("Found a covariate map?!");
     }
   }
 
@@ -514,7 +512,6 @@ void TrendRuntime::bind_all_ops_to_paramtable(const ParamTable& pt) {
       // ---- 1) Bind base parameters ----
       const int n_tp = spec.trend_pnames.size();
       const std::string& base = spec.base_type;
-      // Rprintf("Identified base = %s\n", base.c_str());
 
       bool needs_base_par = (base == "lin" || base == "exp_lin" || base == "lin_exp" || base == "centered");
 
@@ -536,13 +533,11 @@ void TrendRuntime::bind_all_ops_to_paramtable(const ParamTable& pt) {
       op_rt.base_par_indices.clear();
       for (int b = 0; b < n_base_pars; ++b) {
         std::string base_nm = Rcpp::as<std::string>(spec.trend_pnames[b]);
-        // Rprintf("base_nm: %s\n", base_nm.c_str());
         int idx = pt.base_index_for(base_nm);
         op_rt.base_par_indices.push_back(idx);
       }
       op_rt.base_par_idx = op_rt.base_par_indices.empty() ? -1 : op_rt.base_par_indices[0];
 
-      // Rprintf("n_base_pars = %d, base_par_indices[0] = %d\n", n_base_pars, op_rt.base_par_idx);
 
 
       // ---- 2) Kernel parameter indices (shared across all kernels in this TrendOp) ----
@@ -550,7 +545,6 @@ void TrendRuntime::bind_all_ops_to_paramtable(const ParamTable& pt) {
       kernel_indices.reserve(std::max(0, n_tp - n_base_pars));
       for (int k = n_base_pars; k < n_tp; ++k) {
         std::string kn = Rcpp::as<std::string>(spec.trend_pnames[k]);
-        // Rprintf("Identified kernel parameter name: %s\n", kn.c_str());
         int idx = pt.base_index_for(kn);
         kernel_indices.push_back(idx);
       }
@@ -922,69 +916,3 @@ Rcpp::NumericMatrix TrendRuntime::all_kernel_outputs(ParamTable& pt,
 Rcpp::NumericMatrix TrendRuntime::all_kernel_outputs(ParamTable& pt) {
   return all_kernel_outputs(pt, std::vector<int>{1}); // only main trajectories
 }
-
-// Rcpp::NumericMatrix TrendRuntime::all_kernel_outputs(ParamTable& pt) {
-//   using namespace Rcpp;
-//
-//   const int n = pt.n_trials;
-//
-//   // Count total number of kernel slots
-//   int n_slots = 0;
-//   for (const auto& op : premap_ops)        n_slots += op.kernels.size();
-//   for (const auto& op : pretransform_ops)  n_slots += op.kernels.size();
-//   for (const auto& op : posttransform_ops) n_slots += op.kernels.size();
-//
-//   NumericMatrix out(n, n_slots);
-//   CharacterVector cn(n_slots);
-//
-//   int col = 0;
-//
-//   auto fill_for_ops = [&](std::vector<TrendOpRuntime>& ops) {
-//     for (auto& op : ops) {
-//       const TrendOpSpec& spec = *op.spec;
-//
-//       for (auto& k_rt : op.kernels) {
-//         const KernelSlotSpec& kspec = *k_rt.spec;
-//         const std::vector<double>& traj = k_rt.kernel_ptr->get_output();
-//
-//         if ((int)traj.size() != n) {
-//           stop("TrendRuntime::all_kernel_outputs('%s'): trajectory length (%d) != n_trials (%d)",
-//                spec.target_param.c_str(), (int)traj.size(), n);
-//         }
-//
-//         for (int r = 0; r < n; ++r) {
-//           out(r, col) = traj[r];
-//         }
-//
-//         // Build a column name: target_param + "." + input_name
-//         std::string input_name;
-//         if (kspec.input_kind == InputKind::Covariate) {
-//           // try to get column name from attributes if available
-//           if (kspec.kernel_input.hasAttribute("names")) {
-//             // optional; often covariate is directly from data[cov_name],
-//             // so we don't have the name here. You can store the cov_name in KernelSlotSpec if needed.
-//             input_name = "cov";
-//           } else {
-//             input_name = "cov";
-//           }
-//         } else if (kspec.input_kind == InputKind::ParInput) {
-//           input_name = kspec.par_input_name;
-//         } else {
-//           input_name = "noinput";
-//         }
-//
-//         std::string cname = spec.target_param + "." + input_name;
-//         cn[col] = cname;
-//
-//         ++col;
-//       }
-//     }
-//   };
-//
-//   fill_for_ops(premap_ops);
-//   fill_for_ops(pretransform_ops);
-//   fill_for_ops(posttransform_ops);
-//
-//   colnames(out) = cn;
-//   return out;
-// }

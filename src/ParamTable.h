@@ -6,10 +6,7 @@
 #include <numeric>
 #include <cstring>
 #include "utility_types.h"
-// #include <RcppArmadillo.h>
 using Rcpp::_;
-// using arma::mat;
-// using arma::vec;
 
 struct DesignEntry {
   bool valid;                    // does this design have a usable mapping?
@@ -39,8 +36,6 @@ struct ParamTable {
   Rcpp::CharacterVector base_names; // colnames for base
   int n_trials = 0;
 
-  // I was thinking of including some logic that keeps track of which columns are still 'active'
-  // but that's not actually used at this point..
   std::vector<int> active_cols;  // indices into base/base_names
   std::vector<char> is_active;  // size = base.ncol()
 
@@ -101,44 +96,17 @@ struct ParamTable {
   // Column view by parameter name
   Rcpp::NumericVector column_by_name(const std::string& nm) const {
     int base_idx = base_index_for(nm); // O(1) from map
-    // Ensure it's currently active; if you need this check:
-    // (If you know all base cols are always active, you can skip this loop.)
-    // for (int j = 0; j < (int)active_cols.size(); ++j) {
-      // if (active_cols[j] == base_idx) {
         return base(_, base_idx);  // view
-      // }
-    // }
-    // Rcpp::stop("ParamTable: parameter '%s' not active", nm.c_str());
   }
 
   // Assign into existing column (writes into base)
   void set_column_by_name(const std::string& nm,
                           const Rcpp::NumericVector& col) {
     int base_idx = base_index_for(nm);
-    // Optional: ensure active
-    // for (int j = 0; j < (int)active_cols.size(); ++j) {
-      // if (active_cols[j] == base_idx) {
         base(_, base_idx) = col;
         return;
-      // }
-    // }
-    // Rcpp::stop("ParamTable: parameter '%s' not active", nm.c_str());
   }
 
-  // Drop columns by name: only adjust active_cols
-  // void drop(const Rcpp::CharacterVector& drop_names) {
-  //   std::unordered_set<std::string> drop_set;
-  //   for (int i = 0; i < drop_names.size(); ++i)
-  //     drop_set.insert(Rcpp::as<std::string>(drop_names[i]));
-  //
-  //   std::vector<int> new_active;
-  //   new_active.reserve(active_cols.size());
-  //   for (int idx : active_cols) {
-  //     std::string nm = Rcpp::as<std::string>(base_names[idx]);
-  //     if (!drop_set.count(nm)) new_active.push_back(idx);
-  //   }
-  //   active_cols.swap(new_active);
-  // }
 
   void set_transform_metadata(const Rcpp::List& transform) {
     pre_sum_term_map_.clear();
@@ -302,17 +270,6 @@ struct ParamTable {
       std::string nm = as<std::string>(param_names[j]);
       int base_idx = base_index_for(nm);  // throws if unknown
 
-      // Ensure this column is active (if you care about active_cols)
-      // bool is_active = false;
-      // for (int a : active_cols) {
-      //   if (a == base_idx) {
-      //     is_active = true;
-      //     break;
-      //   }
-      // }
-      // if (!is_active) {
-      //   stop("ParamTable::materialize_by_param_names: parameter '%s' not active", nm.c_str());
-      // }
 
       // Copy base(:, base_idx) → out(:, j)
       double* out_col        = &out(0, j);
@@ -456,7 +413,6 @@ struct ParamTable {
     }
 
     // 5) Construct ParamTable
-    // return ParamTable(base, base_names);
 
     // 5) Construct ParamTable
     ParamTable pt(base, base_names);

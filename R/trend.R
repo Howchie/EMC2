@@ -1,4 +1,4 @@
-# Custom kernel: operate on all input columns at once; compress by at; exclude rows with any NA; expand back
+ # Custom kernels process all input columns at once; missing values are handled by the kernel.
 run_kernel_custom <- function(trend_pars = NULL, input, funptr, at_factor = NULL) {
   if (!is.matrix(input)) input <- matrix(input, ncol = 1)
   n <- nrow(input)
@@ -17,21 +17,7 @@ run_kernel_custom <- function(trend_pars = NULL, input, funptr, at_factor = NULL
     tpars_comp <- trend_pars
   }
 
-  # Exclude any rows with at least one NA across columns
-  # SM - why..? Maybe handle this in the kernel?
-  # good <- rowSums(is.na(input_comp)) == 0
-  # comp_out <- numeric(nrow(input_comp))
-  # if(isTRUE(ffill_na)) comp_out[!good,] <- NA
-  # if (any(good)) {
-  #   in_good <- input_comp[good, , drop = FALSE]
-  #   tp_good <- if (ncol(tpars_comp)) tpars_comp[good, , drop = FALSE] else matrix(nrow = sum(good), ncol = 0)
-  #   contrib <- EMC2_call_custom_trend(tp_good, in_good, funptr)
-  #   contrib[is.na(contrib)] <- 0
-  #   comp_out[good] <- contrib
-  #   if(isTRUE(ffill_na)) comp_out <- na_locf(comp_out, na.rm=FALSE)
-  # }
-
-  # SM: No NA filtering, handle in kernel
+  # Custom kernels handle missing values internally.
   comp_out <- EMC2_call_custom_trend(tpars_comp, input_comp, funptr)
 
   # Expand back to full rows, return as single-column matrix
@@ -521,7 +507,6 @@ run_kernel <- function(trend_pars = NULL, kernel, input, funptr = NULL, at_facto
   out <- rep(0.0, n)
 
   # Custom kernels: operate on full matrix at once; returns n x 1 matrix
-  # SM - why is this here, not just part of the list of kernels below?
   if (identical(kernel, "custom")) {
     if (is.null(funptr)) stop("Missing function pointer for custom kernel. Pass 'funptr'.")
     return(run_kernel_custom(trend_pars, input, funptr, at_factor))
@@ -566,7 +551,7 @@ run_kernel <- function(trend_pars = NULL, kernel, input, funptr = NULL, at_facto
         comp_out <- EMC2_call_custom_trend(tpars_comp, covariate_comp, funptr)
       }
       if(!ffill_na) {
-        # If, for whatever reason, the user wants NA-covaraites to be set to 0, we can still do this
+        # Set missing covariates to zero when forward filling is disabled.
         comp_out[is.na(covariate_comp)] <- 0
       }
     } else {
@@ -575,18 +560,6 @@ run_kernel <- function(trend_pars = NULL, kernel, input, funptr = NULL, at_facto
 
       if (any(good)) {
         # 4) Run kernel on good subset only
-        # if (kernel == "custom") {
-          # if (is.null(funptr)) stop("Missing function pointer for custom kernel. Pass 'funptr'.")
-          # Build 1-col input matrix for custom kernel
-          # in_good <- matrix(covariate_comp[good], ncol = 1)
-          # tp_good <- if (ncol(tpars_comp)) tpars_comp[good, , drop = FALSE] else matrix(nrow = sum(good), ncol = 0)
-          # contrib <- EMC2_call_custom_trend(tp_good, in_good, funptr)
-          # contrib[is.na(contrib)] <- 0
-          # comp_out[good] <- contrib
-          # comp_out <- EMC2_call_custom_trend(tp_good, in_good, funptr)
-        # } else {
-          # Built-in kernels (use only rows in 'good')
-          # Access parameters by column index as before
         if (kernel == "lin_decr") {
           comp_out[good] <- -covariate_comp[good]
         } else if (kernel == "lin_incr") {
@@ -609,9 +582,8 @@ run_kernel <- function(trend_pars = NULL, kernel, input, funptr = NULL, at_facto
           stop("Unknown kernel type")
         }
       }
-      # }
 
-      # SM: forward fill values with missing covariate
+      # Forward-fill missing covariate values when requested.
       if(isTRUE(ffill_na)) {
         comp_out[!good] <- NA
         comp_out <- na_locf(comp_out, na.rm=FALSE)
@@ -673,7 +645,7 @@ prep_trend_phase <- function(dadm, trend, pars, phase, return_trialwise_paramete
   return(pars)
 }
 
-# Probably no need to loop and idx subjects
+ # Run trends for each subject and trial.
 run_trend <- function(dadm, trend, param, trend_pars, pars_full = NULL,
                       return_trialwise_parameters = FALSE, return_kernel=FALSE){
   n_base_pars <- switch(trend$base,
@@ -749,8 +721,8 @@ run_trend <- function(dadm, trend, param, trend_pars, pars_full = NULL,
           kern_mat <- kern_mat * map_mat
         }  # no else needed - next step is rowsums, so implicitly if n_maps == 0 then map_map equals 1 everywhere
 
-        # Sum across columns
-        if (ncol(kern_mat) == 0) {  # SM: I don't understand this? No kernel?
+        # Sum across columns, including the zero-column case.
+        if (ncol(kern_mat) == 0) {
           k_sum <- rep(0, nrow(kern_mat))
         } else {
           k_sum <- rowSums(kern_mat)
@@ -761,7 +733,6 @@ run_trend <- function(dadm, trend, param, trend_pars, pars_full = NULL,
         out[s_idx] <- out[s_idx] + k_sum
       }
     }
-    # out[s_idx] <- out[s_idx] + k_sum
   }
 
   # Do the mapping
@@ -788,10 +759,6 @@ check_trend <- function(trend, covariates = NULL, model = NULL, formula = NULL) 
   }
   covnames <- unlist(lapply(trend,function(x)x$covariate))
   if (length(covnames) > 0 && is.null(covariates)) stop("must specify covariates when using trend")
-  # if (!all(covnames %in% covariates)){
-  #   stop("trend has covnames not in covariates")
-  # }
-  # Premap + par_input: allowed. Scalars will be replicated to vector length in C++ mapping
   trend_pnames <- get_trend_pnames(trend)
   if (!is.null(formula)) {
     isin <-  trend_pnames %in% unlist(lapply(formula,function(x)all.vars(x)[1]))
@@ -817,7 +784,6 @@ update_model_trend <- function(trend, model) {
 
     # Get default transforms from base and kernel
     base_transforms <- trend_help(base = cur_trend$base, do_return = TRUE, maps=cur_trend$map)$transforms
-    # if(length(cur_trend$map)>1) base_transforms$func <- rep(base_transforms$func, length(cur_trend$map))
     if (identical(cur_trend$kernel, "custom")) {
       ctf <- attr(cur_trend, "custom_transforms")
       kernel_transforms <- if (is.null(ctf)) NULL else list(func = ctf)
@@ -980,12 +946,6 @@ register_trend <- function(trend_parameters, file, transforms = NULL, base = "ad
   obj
 }
 
-# apply_lR_filter <- function(d, cov_name) {
-#   if(!lR %in% colnames(d)) {
-#     d[levels(d$lR)!=levels(d$lR)[1],cov_name] <- NA
-#   }
-#   d
-# }
 
 has_delta_rules <- function(model) {
   trend <- model()$trend
@@ -1097,17 +1057,6 @@ get_kernels <- function() {
                 transforms = list(func = list("q0" = "identity", "alphaFast" = "pnorm",
                                               "propSlow" = "pnorm", "dSwitch" = "pnorm")),
                 bases = base_2p),
-    # delta2kernel2 = list(description = paste(
-    #   "Steven fucking around with the delta2kernel. You shouldn't see this! Dual kernel delta rule: k = q[i].\n",
-    #   "         Combines fast and slow learning rates\n",
-    #   "         and switches between them based on dSwitch.\n",
-    #   "         Parameters: q0 (initial value), alphaFast (fast learning rate),\n",
-    #   "         propSlow (alphaSlow = propSlow * alphaFast), dSwitch (switch threshold)."
-    # ),
-    # default_pars = c("q0", "alphaFast", "propSlow", "dSwitch"),
-    # transforms = list(func = list("q0" = "identity", "alphaFast" = "pnorm",
-    #                               "propSlow" = "pnorm", "dSwitch" = "pnorm")),
-    # bases = base_2p),
     delta2lr = list(description = paste(
                 "Dual learning rate delta rule: k = q[i].\n",
                 "         Like the standard delta rule, but with separate\n",
@@ -1277,7 +1226,6 @@ make_data_unconditional <- function(data, pars, design, model,
 
       cur_dm <- dm[mask_current, , drop = FALSE]
       pr <- model_list$Ttransform(pm[mask_current, , drop = FALSE], cur_dm)
-      # pr <- add_bound(pr, model_list$bound, cur_dm$lR)
     if (!is.null(optionals$nobound)) {
       attr(pr,"ok") <- rep(TRUE,nrow(pr))
     } else {
@@ -1297,13 +1245,7 @@ make_data_unconditional <- function(data, pars, design, model,
       target_rows <- prefix_rows[mask_current]
       for (nm in dimnames(Rrt)[[2]]) data[target_rows, nm] <- Rrt[, nm]
 
-      # NS I don't actually think this is necessary couldn't this be specified
-      # As a standard function in the design?
-
-      # SM I don't know how to otherwise overwrite the 'rewards' column in such a way that
-      # the rewards on the previous trials aren't overwritten each trial... would be happy
-      # to leave it out if not needed!
-      # # Optional per-trend feedback → next trial for this subject
+      # Apply per-trend feedback to the next trial.
       if(!is.null(tr)) {
         for(trend_n in 1:length(tr)) {
           if(!is.null(tr[[trend_n]]$feedback_fun)) {
@@ -1399,8 +1341,7 @@ make_data_unconditional_vectorised <- function(data, pars, design, model, return
     # Identify current-trial rows inside the prefix design
 
 
-    # rfun is vectorised so fast
-    # Simulate current trial rows
+    # Simulate current trial rows.
     if (any(names(dm) == "RACE")) {
       Rrt <- RACE_rfun(dm, all_pars, model_fun)
     } else {
@@ -1410,13 +1351,7 @@ make_data_unconditional_vectorised <- function(data, pars, design, model, return
     target_rows <- prefix_rows[dm$trials == current_trial]
     for (nm in dimnames(Rrt)[[2]]) data[target_rows, nm] <- Rrt[, nm]
 
-    # NS I don't actually think this is necessary couldn't this be specified
-    # As a standard function in the design?
-
-    # SM I don't know how to otherwise overwrite the 'rewards' column in such a way that
-    # the rewards on the previous trials aren't overwritten each trial... would be happy
-    # to leave it out if not needed!
-    # # Optional per-trend feedback → next trial for this subject
+    # Apply per-trend feedback to the next trial.
     if(!is.null(tr)) {
       for(trend_n in 1:length(tr)) {
         if(!is.null(tr[[trend_n]]$feedback_fun)) {
@@ -1513,8 +1448,7 @@ set_custom_kernel_pointers <- function(emc, ptrs) {
 }
 
 pointer_reset_wrapper <- function(sub_emc, emc){
-  # TO FIX, make custom kernel pointers work with joint models
-  # for now just return no updates
+  # Joint models retain their existing custom-kernel pointers.
   if(is.list(emc[[1]]$model)){ # Joint model!!
     return(sub_emc)
   } else{

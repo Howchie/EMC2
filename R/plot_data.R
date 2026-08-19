@@ -12,10 +12,6 @@ create_group_key <- function(df, factors) {
   factor(key,levels=lev)
 }
 
-# create_group_key <- function(df, factors) {
-#   if (length(factors) == 0) return(rep("All Data", nrow(df)))
-#   apply(df[, factors, drop = FALSE], 1, function(x) paste(paste(factors, x, sep = "="), collapse = " "))
-# }
 
 
 check_data_plot <- function(data, defective_factor, subject, factors, remove_na = TRUE)
@@ -565,9 +561,8 @@ plot_density <- function(input, post_predict = NULL, prior_predict = NULL,
   quants <- sort(quants)
   quantiles <- sort(unique(c(quants, 0.5)))
 
-  # We'll keep track of the defective density results:
-  # For single dataset => a single vector of y for each level
-  # For postn => we keep them all, then compute quantiles
+  # Track defective density results for single datasets and posterior draws.
+  # Quantiles are computed across draws when available.
   dens_list <- list()        # For main
   dens_quants_list <- list() # For quantiles
   y_max <- 0
@@ -607,7 +602,6 @@ plot_density <- function(input, post_predict = NULL, prior_predict = NULL,
           # mat_y is 512 x #postn
           if (!is.null(mat_y)) {
             # dimension checks
-            # ZH optimization: Replace row-wise apply(..., 1, quantile) with transposed matrixStats::rowQuantiles
             q_y <- t(matrixStats::rowQuantiles(mat_y, probs = quantiles, na.rm = TRUE, drop = FALSE))
             out[[lev]] <- q_y
           } else {
@@ -651,7 +645,6 @@ plot_density <- function(input, post_predict = NULL, prior_predict = NULL,
     # If there's absolutely no data, just return
     return(invisible(NULL))
   }
-  # unique_group_keys <- unique(first_data$group_key)
   unique_group_keys <- names(splitted)
   if (any(is.na(layout))) {
     par(mfrow = coda_setmfrow(Nchains = 1, Nparms = length(unique_group_keys), nplots = 1))
@@ -660,11 +653,7 @@ plot_density <- function(input, post_predict = NULL, prior_predict = NULL,
   }
   ylim_global <- c(0, y_max)
 
-  # We also need an x-grid for each data source
-  # For single dataset (no postn), we can store the computed from/to in dens_list.
-  # But we haven't stored x-coordinates. We can reconstruct from the 'from','to' used in density.
-  # The simplest approach is to do the same method as the original code: create a grid from the min to max.
-  # We'll rely on the from/to used above.
+  # Construct an x-grid from the density range for each data source.
 
   # function to retrieve the from/to arguments
   get_range_args <- function(dargs) {
@@ -945,12 +934,11 @@ plot_cdf <- function(input,
   prior_args$defective_levels <- defective_levels
   line_types <- seq_along(defective_levels)
 
-  # We'll store single-CDF results or multi-postn quantile results in these:
+  # Store single-CDF results or posterior-draw quantiles.
   cdf_list        <- list() # single
   cdf_quants_list <- list() # multi
 
-  # We'll keep track of a global maximum in the vertical dimension
-  # so that we can set a consistent y-lim across all panels
+  # Track the global vertical maximum for consistent panel limits.
   y_max <- 0
 
   # -------------------------------------------------------------------
@@ -1011,18 +999,11 @@ plot_cdf <- function(input,
             next
           }
           # row-wise quantiles for x, plus median for y
-          # Just as in your older code: we do quantiles on x across draws, median on y
-          # Or you might do quantiles on both x and y.
-          # Typically, to replicate your older approach:
-          # quantile of x at each index, and median of y at each index
-          # We'll include 50% in quants to do median for x as well.
-          # Then we combine them in a matrix with 4 rows => x_lower, x_median, x_upper, y_median
+          # Compute quantiles of x and the median of y across posterior draws.
           # Ensure quantiles include 0.5 and are unique/sorted
           quants <- sort(quants)
           probs_qx <- sort(unique(c(quants, 0.5)))
-          # ZH optimization: Replace row-wise apply(..., 1, quantile) with transposed matrixStats::rowQuantiles
           qx <- t(matrixStats::rowQuantiles(x_mat, probs = probs_qx, na.rm = TRUE, drop = FALSE))
-          # ZH optimization: Replace row-wise apply(..., 1, median) with matrixStats::rowMedians
           ym <- matrixStats::rowMedians(y_mat, na.rm=TRUE)
 
           # rbind them, naming the median row 'ym'
@@ -1146,8 +1127,6 @@ plot_cdf <- function(input,
                 points_args$col <- lines_args$col[1]
                 do.call(points, c(list(x = cmat[add_percentiles, "x"][],
                   y = cmat[add_percentiles, "y"][]), points_args))
-                # points(cmat[add_percentiles,"x"][],cmat[add_percentiles,"y"],
-                #        pch=16,col=lines_args$col[1])
               }
               ilev <- ilev+1
             }
@@ -1200,8 +1179,6 @@ plot_cdf <- function(input,
                     points_args$col <- lines_args$col[1]
                      do.call(points, c(list(x_med[add_percentiles],y_median[add_percentiles]),
                                       points_args))
-                    # points(x_med[add_percentiles],y_median[add_percentiles],
-                    #        pch=1,col=lines_args$col[1])
                   }
                 }
                 ilev <- ilev+1
@@ -1320,7 +1297,7 @@ plot_delta <- function(input,
       if (rev_delta) delta(x[2:1]) else delta(x)
     )
 
-  # Now we derive cdf_quants_list from cdf_list
+  # Derive CDF quantiles from the posterior draws.
   cdf_quants_list <- list() # multi
   if (any(names(cdf_list)=="posterior")) {
     cdf_quants_list[["posterior"]] <- lapply(cdf_list[["posterior"]], function(postn_list) {
@@ -1332,9 +1309,7 @@ plot_delta <- function(input,
       # Ensure quantiles include 0.5 and are unique/sorted
       quants <- sort(quants)
       probs_qy <- sort(unique(c(quants, 0.5)))
-      # ZH optimization: Replace row-wise apply(..., 1, quantile) with transposed matrixStats::rowQuantiles
       qy <- t(matrixStats::rowQuantiles(y_mat, probs = probs_qy, na.rm = TRUE, drop = FALSE))
-      # ZH optimization: Replace row-wise apply(..., 1, median) with matrixStats::rowMedians
       xm <- matrixStats::rowMedians(x_mat, na.rm=TRUE)
       # rbind them, naming the median row 'xm'
       out[[1]] <- rbind(qy, xm = xm)
@@ -1598,12 +1573,11 @@ plot_caf <- function(input,
   }
   line_types <- seq_along(defective_levels)
 
-  # We'll store single-CDF results or multi-postn quantile results in these:
+  # Store single-CDF results or posterior-draw quantiles.
   cdf_list        <- list() # single
   cdf_quants_list <- list() # multi
 
-  # We'll keep track of a global maximum in the vertical dimension
-  # so that we can set a consistent y-lim across all panels
+  # Track the global vertical maximum for consistent panel limits.
   y_max <- 0
 
   # -------------------------------------------------------------------
@@ -1619,7 +1593,7 @@ plot_caf <- function(input,
       next
     }
 
-    # We'll group by group_key
+    # Group rows by group_key.
     splitted <- split(df, df$group_key)
 
     # If there's a "postn" column => multiple draws => compute quantiles
@@ -1632,7 +1606,7 @@ plot_caf <- function(input,
         lapply(postn_splits, get_caf, caf_factor, smooth_window, accuracy_function, dots)
       })
 
-      # Now we derive cdf_quants_list from cdf_list
+      # Derive CDF quantiles from the posterior draws.
       cdf_quants_list[[sname]] <- lapply(cdf_list[[sname]], function(postn_list) {
         # postn_list => e.g. 100 draws => each draw is a named list of factor-level => cbind(x,y)
         out <- list()
@@ -1644,7 +1618,6 @@ plot_caf <- function(input,
           # Ensure quantiles include 0.5 and are unique/sorted
           quants <- sort(quants)
           probs_qy <- sort(unique(c(quants, 0.5)))
-          # ZH optimization: Replace row-wise apply(..., 1, median) with matrixStats::rowMedians
           xm <- matrixStats::rowMedians(x_mat, na.rm=TRUE)
           qy <- apply(y_mat, 1, quantile, probs = probs_qy, na.rm = TRUE)
 

@@ -27,8 +27,7 @@ rLNR <- function(lR,pars,p_types=c("m","s","t0"),ok=rep(TRUE,dim(pars)[1])){
   pars <- pars[ok,]
   dt[ok] <- stats::rlnorm(dim(pars)[1],meanlog=pars[,"m"],sdlog=pars[,"s"])
   R <- max.col(-t(dt), ties.method='first')
-  pick <- cbind(R,1:dim(dt)[2]) # Matrix to pick winner
-  # Any t0 difference with lR due to response production time (no effect on race)
+  pick <- cbind(R,1:dim(dt)[2])
   rt <- matrix(t0,nrow=nr)[pick] + dt[pick]
   R <- factor(levels(lR)[R],levels=levels(lR))
   out <- cbind.data.frame(R=R,rt=rt)
@@ -146,209 +145,60 @@ LNR <- function() {
   out + 2
 }
 
-.pcounter_logsumexp <- function(x) {
-  if (!length(x) || all(x == -Inf)) return(-Inf)
-  m <- max(x)
-  m + log(sum(exp(x - m)))
+# The C++ implementation uses an int index for the exact finite-K recurrence.
+# This is a machine-representability check, not a substantive model bound.
+# Tail evaluation needs 67 additional row indices.
+.pcounter_k_supported <- function(k) {
+  is.finite(k) & k >= 0 &
+    floor(k + 0.5) <= (.Machine$integer.max - 67)
 }
 
-.pcounter_logdiffexp <- function(a, b) {
-  if (!is.finite(a)) return(-Inf)
-  if (!is.finite(b)) return(a)
-  if (b >= a) return(-Inf)
-  a + log1p(-exp(b - a))
-}
-
-.pcounter_stirling_logs <- function(nmax) {
-  out <- matrix(-Inf, nrow = nmax + 1L, ncol = nmax + 1L)
-  out[1L, 1L] <- 0
-  if (nmax < 1L) return(out)
-  for (n in seq_len(nmax)) {
-    for (j in seq_len(n)) {
-      a <- out[n, j]
-      b <- if (j < n) log(n - 1) + out[n, j + 1L] else -Inf
-      out[n + 1L, j + 1L] <- .pcounter_logsumexp(c(a, b))
-    }
-  }
-  out
-}
-
-.pcounter_log_rising <- function(a, n) {
-  if (n == 0L) return(0)
-  sum(log(a + seq_len(n) - 1))
-}
-
-.pcounter_log_lm <- function(a, nu, sv) {
-  if (sv <= 0) {
-    logL <- -nu * a
-    return(c(logL = logL, logM = log(nu) + logL))
-  }
-  shape <- nu^2 / sv^2
-  rate <- nu / sv^2
-  logL <- -shape * log1p(a / rate)
-  c(logL = logL, logM = log(shape) - log(rate + a) + logL)
-}
-
-.pcounter_log_h <- function(n, t, nu, sv, gamma, stirling) {
-  lm <- .pcounter_log_lm(t, nu, sv)
-  if (sv <= 0) return(lm[["logL"]] + .pcounter_log_rising(nu / gamma, n))
-  shape <- nu^2 / sv^2
-  rate <- nu / sv^2
-  terms <- vapply(0:n, function(j) {
-    coeff <- stirling[n + 1L, j + 1L]
-    if (!is.finite(coeff)) return(-Inf)
-    coeff + .pcounter_log_rising(shape, j) - j * log(gamma) - j * log(rate + t)
-  }, numeric(1))
-  lm[["logL"]] + .pcounter_logsumexp(terms)
-}
-
-.pcounter_log_pi_phi <- function(n, t, nu, sv, gamma, stirling, gamma_zero) {
-  if (gamma_zero) {
-    if (sv <= 0) {
-      logpi <- -nu * t + if (n == 0L) 0 else n * log(nu * t) - lgamma(n + 1)
-      return(c(logpi = logpi, logphi = log(nu) + logpi))
-    }
-    shape <- nu^2 / sv^2
-    rate <- nu / sv^2
-    lm <- .pcounter_log_lm(t, nu, sv)
-    logt <- if (t > 0) log(t) else -Inf
-    logpi <- lm[["logL"]] + .pcounter_log_rising(shape, n) - lgamma(n + 1) +
-      n * logt - n * log(rate + t)
-    return(c(logpi = logpi, logphi = logpi + log(shape + n) - log(rate + t)))
-  }
-  q <- -expm1(-gamma * t)
-  logq <- if (q > 0) log(q) else -Inf
-  c(logpi = n * logq - lgamma(n + 1) + .pcounter_log_h(n, t, nu, sv, gamma, stirling),
-    logphi = log(gamma) + n * logq - lgamma(n + 1) +
-      .pcounter_log_h(n + 1L, t, nu, sv, gamma, stirling))
-}
-
-.pcounter_log_tail <- function(start, t, nu, sv, gamma, logr, stirling, gamma_zero, phi = FALSE) {
-  ns <- start:(start + 64L)
-  vals <- vapply(ns, function(n) {
-    z <- .pcounter_log_pi_phi(n, t, nu, sv, gamma, stirling, gamma_zero)
-    if (phi) z[["logphi"]] else z[["logpi"]]
-  }, numeric(1))
-  .pcounter_logsumexp(vals + ns * logr)
-}
-
-.pcounter_log_fixed_cdf <- function(start, t, nu, sv, gamma, stirling, gamma_zero) {
-  ns <- start:(start + 64L)
-  vals <- vapply(ns, function(n)
-    .pcounter_log_pi_phi(n, t, nu, sv, gamma, stirling, gamma_zero)[["logpi"]], numeric(1))
-  .pcounter_logsumexp(vals)
-}
-
-.pcounter_log_geom_cdf <- function(start, t, nu, sv, gamma, omega, stirling, gamma_zero) {
-  lr <- log(omega) - log1p(omega)
-  ns <- start:(start + 64L)
-  vals <- vapply(ns, function(n) {
-    lp <- .pcounter_log_pi_phi(n, t, nu, sv, gamma, stirling, gamma_zero)[["logpi"]]
-    exponent <- n - start
-    if (exponent == 0L) -Inf else lp + log(-expm1(exponent * lr))
-  }, numeric(1))
-  .pcounter_logsumexp(vals)
-}
-
-.pcounter_eval_one <- function(t, nu, sv, gamma, k, omega, stirling, eps = 1e-8) {
-  t <- unname(t); nu <- unname(nu); sv <- unname(sv); gamma <- unname(gamma)
-  k <- unname(k); omega <- unname(omega)
-  if (is.nan(t) || !is.finite(nu) || !is.finite(sv) || !is.finite(gamma) ||
-      !is.finite(k) || !is.finite(omega) || nu <= 0 || sv < 0 || gamma < 0 ||
-      k < 0 || omega < 0) return(c(logf = -Inf, logS = 0, logF = -Inf))
-  if (is.infinite(t) && t > 0) return(c(logf = -Inf, logS = -Inf, logF = 0))
-  if (!is.finite(t) || t <= 0) return(c(logf = -Inf, logS = 0, logF = -Inf))
-  kk <- .pcounter_k(k)
-  gamma_zero <- gamma < eps
-  sv_zero <- sv < eps
-  omega_zero <- omega < eps
-  if (omega_zero) {
-    logs <- vapply(0:(kk - 1L), function(n)
-      .pcounter_log_pi_phi(n, t, nu, if (sv_zero) 0 else sv,
-                           if (gamma_zero) 0 else gamma, stirling, gamma_zero)[["logpi"]], numeric(1))
-    logS <- min(0, .pcounter_logsumexp(logs))
-    z <- .pcounter_log_pi_phi(kk - 1L, t, nu, if (sv_zero) 0 else sv,
-                              if (gamma_zero) 0 else gamma, stirling, gamma_zero)
-    logF <- if (logS > -1e-7) .pcounter_log_fixed_cdf(kk, t, nu,
-      if (sv_zero) 0 else sv, if (gamma_zero) 0 else gamma, stirling, gamma_zero)
-      else if (logS < 0) log(-expm1(logS)) else -Inf
-    return(c(logf = z[["logphi"]], logS = logS, logF = logF))
-  }
-  lp <- -log1p(omega)
-  lr <- log(omega) + lp
-  p <- exp(lp)
-  if (gamma_zero) {
-    ar <- p * t
-    logd <- 0
-  } else {
-    q <- -expm1(-gamma * t)
-    logd <- log1p(-exp(lr) * q)
-    ar <- t + logd / gamma
-  }
-  lm_ar <- .pcounter_log_lm(ar, nu, if (sv_zero) 0 else sv)
-  low <- if (kk >= 2L) 0:(kk - 2L) else integer()
-  vals <- if (length(low)) vapply(low, function(n)
-    .pcounter_log_pi_phi(n, t, nu, if (sv_zero) 0 else sv,
-                         if (gamma_zero) 0 else gamma, stirling, gamma_zero), numeric(2)) else
-    matrix(numeric(), nrow = 2L, ncol = 0L)
-  loglow <- if (length(low)) .pcounter_logsumexp(vals[1L, ]) else -Inf
-  loglowr <- if (length(low)) .pcounter_logsumexp(vals[1L, ] + low * lr) else -Inf
-  logtail <- .pcounter_logdiffexp(lm_ar[["logL"]], loglowr)
-  if (length(low) && (loglowr > lm_ar[["logL"]] - 1e-7 || !is.finite(logtail)))
-    logtail <- .pcounter_log_tail(kk - 1L, t, nu, if (sv_zero) 0 else sv,
-                                   if (gamma_zero) 0 else gamma, lr, stirling,
-                                   gamma_zero, phi = FALSE)
-  logS <- min(0, .pcounter_logsumexp(c(loglow, (1 - kk) * lr + logtail)))
-  logA <- lm_ar[["logM"]] - if (gamma_zero) 0 else logd
-  loglowf <- if (length(low)) .pcounter_logsumexp(vals[2L, ] + low * lr) else -Inf
-  logf <- lp + (1 - kk) * lr + .pcounter_logdiffexp(logA, loglowf)
-  if (length(low) && (loglowf > logA - 1e-7 || !is.finite(logf))) {
-    tailf <- .pcounter_log_tail(kk - 1L, t, nu, if (sv_zero) 0 else sv,
-                                if (gamma_zero) 0 else gamma, lr, stirling,
-                                gamma_zero, phi = TRUE)
-    logf <- lp + (1 - kk) * lr + tailf
-  }
-  logF <- if (logS > -1e-7)
-    .pcounter_log_geom_cdf(kk - 1L, t, nu, if (sv_zero) 0 else sv,
-                           if (gamma_zero) 0 else gamma, omega, stirling, gamma_zero)
-    else if (logS < 0) log(-expm1(logS)) else -Inf
-  c(logf = logf, logS = logS, logF = logF)
-}
 
 #' The gamma-mixed, self-exciting Poisson Counter race model.
+#'
+#' Each accumulator is a pure-birth counter with event rate
+#' `nu + gamma * n`. The trialwise input rate has mean `nu` and standard
+#' deviation `sv`; the response threshold is
+#' `K = 2 + floor(k + 1/2)` and has a geometric excess with mean `omega`.
+#' The exact-zero values of `sv`, `gamma`, and `omega` select simpler nested
+#' branches. The closed form evaluates its Stirling recurrence row by row,
+#' avoiding a quadratic threshold-sized allocation.
+#'
+#' The proper `sv = 0`, `omega = 0`, `gamma > 0` member overlaps with the
+#' non-defective boundary of FRQ: for integer `alpha = K`, `beta = nu/gamma`,
+#' `h = 1`, and `lambda = gamma`, both have
+#' `F(t) = I_{1-exp(-gamma*t)}(K, nu/gamma)`. FRQ is not otherwise redundant:
+#' it supplies a finite-reservoir defect (`h < 1`) and threshold-shape
+#' relaxation, while PCOUNTER supplies trialwise input variation,
+#' self-excitation, and geometric threshold variation.
 #'
 #' @return A model list compatible with `design()`.
 #' @export
 PCOUNTER <- function() {
   req <- c("nu", "sv", "gamma", "k", "omega", "t0")
-  prepare <- function(pars) {
-    if (!all(req %in% colnames(pars))) stop("pars must have columns ", paste(req, collapse = " "))
-    ks <- .pcounter_k(pars[, "k"])
-    ks <- ks[is.finite(ks)]
-    mk <- if (length(ks)) max(ks) else 2
-    .pcounter_stirling_logs(max(65L, as.integer(mk) + 65L))
+  check <- function(rt, pars) {
+    if (!all(req %in% colnames(pars)))
+      stop("pars must have columns ", paste(req, collapse = " "))
+    if (nrow(pars) != length(rt))
+      stop("PCOUNTER requires one parameter row per response time")
   }
   dPCOUNTER <- function(rt, pars) {
-    st <- prepare(pars); out <- numeric(length(rt))
-    for (i in seq_along(rt)) out[i] <- exp(.pcounter_eval_one(
-      rt[i] - pars[i, "t0"], pars[i, "nu"], pars[i, "sv"], pars[i, "gamma"],
-      pars[i, "k"], pars[i, "omega"], st)[["logf"]])
-    out
+    check(rt, pars)
+    dpcounter(rt, pars[, "nu"], pars[, "sv"], pars[, "gamma"], pars[, "k"],
+              pars[, "omega"], pars[, "t0"])
   }
   pPCOUNTER <- function(rt, pars) {
-    st <- prepare(pars); out <- numeric(length(rt))
-    for (i in seq_along(rt)) {
-      z <- .pcounter_eval_one(rt[i] - pars[i, "t0"], pars[i, "nu"], pars[i, "sv"],
-                              pars[i, "gamma"], pars[i, "k"], pars[i, "omega"], st)
-      out[i] <- if (z[["logF"]] == 0) 1 else if (is.finite(z[["logF"]])) exp(z[["logF"]]) else 0
-    }
-    out
+    check(rt, pars)
+    ppcounter(rt, pars[, "nu"], pars[, "sv"], pars[, "gamma"], pars[, "k"],
+              pars[, "omega"], pars[, "t0"])
   }
   rPCOUNTER <- function(lR, pars, p_types = req, ok = rep(TRUE, nrow(pars))) {
     if (!all(p_types %in% colnames(pars))) stop("pars must have columns ", paste(p_types, collapse = " "))
     if (is.null(ok)) ok <- rep(TRUE, nrow(pars))
-    nr <- length(levels(lR)); nd <- nrow(pars) / nr
+    if (length(ok) != nrow(pars)) stop("ok must have one value per parameter row")
+    nr <- length(levels(lR))
     if (nr < 1L || nrow(pars) %% nr != 0L) stop("pars rows must be a multiple of accumulators")
+    nd <- nrow(pars) / nr
     dt <- matrix(Inf, nrow = nr, ncol = nd)
     for (ii in which(ok)) {
       nu <- pars[ii, "nu"]; sv <- pars[ii, "sv"]; ga <- pars[ii, "gamma"]
@@ -356,8 +206,8 @@ PCOUNTER <- function() {
       kk <- .pcounter_k(k_raw); om <- pars[ii, "omega"]
       if (!is.finite(nu) || !is.finite(sv) || !is.finite(ga) || !is.finite(k_raw) ||
           !is.finite(kk) || !is.finite(om) || !is.finite(pars[ii, "t0"]) ||
-          nu <= 0 || sv < 0 || ga < 0 || k_raw < 0 || om < 0 ||
-          pars[ii, "t0"] < 0) next
+          !.pcounter_k_supported(k_raw) || nu <= 0 || sv < 0 || ga < 0 ||
+          k_raw < 0 || om < 0 || pars[ii, "t0"] < 0) next
       vv <- if (sv < 1e-8) nu else stats::rgamma(1L, nu^2 / sv^2, rate = nu / sv^2)
       if (!is.finite(vv) || vv <= 0) next
       excess <- if (om < 1e-8) 0L else stats::rgeom(1L, 1 / (1 + om))
@@ -382,6 +232,8 @@ PCOUNTER <- function() {
     # canonical count criterion is K = 2 + floor(k + 0.5), so every accumulator needs
     # at least two events before responding.
     bound = list(minmax = cbind(nu = c(1e-6, Inf), sv = c(1e-4, Inf), gamma = c(1e-4, Inf),
+                                # Finite thresholds are valid; the implementation
+                                # checks only machine representability of its index.
                                 k = c(0, Inf), omega = c(1e-4, Inf), t0 = c(0, Inf),
                                 pContaminant = c(0.001, 0.999),
                                 pGuess = c(0.001, 0.999)),

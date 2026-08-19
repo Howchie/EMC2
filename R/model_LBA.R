@@ -1,6 +1,5 @@
 .lba_dfun <- function (rt, pars, posdrift = TRUE)
   # posdrift = truncated positive normal rates
-  # robust slower, deals with extreme rate values
 {
   dt <- rt - pars[,"t0"]
   ok <- (dt>0) & (pars[,"b"] >= pars[,"A"])
@@ -16,7 +15,6 @@
 
 .lba_pfun <- function (rt, pars, posdrift = TRUE)
   # posdrift = truncated positive normal rates
-  # robust slower, deals with extreme rate values
 {
   dt <- rt - pars[,"t0"]
   ok <- (dt>0) & (pars[,"b"] >= pars[,"A"])
@@ -55,8 +53,7 @@
   dt[dt<0] <- Inf
   bad <- colSums(is.infinite(dt)) == nrow(dt)
   R <- max.col(-t(dt), ties.method='first')
-  pick <- cbind(R,1:dim(dt)[2]) # Matrix to pick winner
-  # Any t0 difference with lR due to response production time (no effect on race)
+  pick <- cbind(R,1:dim(dt)[2])
   rt <- matrix(t0,nrow=nr)[pick] + dt[pick]
   R <- factor(levels(lR)[R],levels=levels(lR))
   ok <- matrix(ok,nrow=length(levels(lR)))[1,]

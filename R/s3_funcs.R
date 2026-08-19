@@ -285,8 +285,8 @@ To override this behavior, pass `conditional_on_data=TRUE` to predict().')
 #' @export
 check.emc <- function(emc, selection = c('mu', 'sigma2', 'alpha'), digits = 3,
                       plot_worst = TRUE, version = "old", ...){
-  oldpar <- par(no.readonly = TRUE) # code line i
-  on.exit(par(oldpar)) # code line i + 1
+  oldpar <- par(no.readonly = TRUE)
+  on.exit(par(oldpar))
   dots <- list(...)
   out_list <- list()
   cat("Iterations:\n")

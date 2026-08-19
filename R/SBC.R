@@ -951,8 +951,8 @@ plot_sbc_hist <- function(ranks, bins = 10, layout = NA, add_stats = TRUE,
   # (layout = NA auto-computes a grid; a numeric vector sets it via par(mfrow).)
   manage_layout <- !is.null(layout)
   if (manage_layout) {
-    oldpar <- par(no.readonly = TRUE) # code line i
-    on.exit(par(oldpar)) # code line i + 1
+    oldpar <- par(no.readonly = TRUE)
+    on.exit(par(oldpar))
   }
 
   n_sample <- nrow(ranks[[1]])

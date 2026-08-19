@@ -398,9 +398,8 @@ struct RLF_Operator {
 // The drift is discretised in flux form with centred face values
 // F_{i+1/2} = v (p_i + p_{i+1}) / 2, which is second order and, crucially,
 // consistent at the absorbing edge: the Dirichlet ghost p(b0) = 0 makes the
-// advective boundary flux v*p_n/2 rather than the upwind v*p_n.  The upwind
-// form used previously injected numerical diffusion v*h/2 into sigma^2/2 and
-// biased the exit flux by v*p_n/2, and was the dominant error of the solver.
+// The advective boundary flux is v*p_n/2.  Using the upwind value v*p_n adds
+// numerical diffusion v*h/2 to sigma^2/2 and biases the exit flux.
 //
 // The Peclet fallback below is not a rare safety net.  The condition reduces to
 // sigma^alpha |c_1(alpha)| h^(1-alpha) >= v, whose h exponent vanishes as
@@ -1387,40 +1386,9 @@ inline bool rlf_key(double v, double sigma, double alpha, double B, double A,
          std::isfinite(out.A) && out.b > out.A;
 }
 
-// These must stay in step with the defaults in R/model_RLF.R: the sampling
-// path reaches this struct through rlf_configure_grid, which only overrides a
-// field when the corresponding emc2.rlf_* option is actually set.  An R-side
-// getOption() default is therefore invisible here, and a mismatch silently
-// samples on a different (and much more expensive) grid than dRLF/pRLF use.
-// nx is deliberately NOT a function of alpha, although the resolution actually
-// needed falls steeply with it.  Measured as mean |d log pdf| over the central
-// 96% against an nx = 1024 reference, averaged over v in {0.5, 1, 3} and b0 in
-// {1, 2}, the nx at which an extrapolated pair holds 0.01 per trial is
-//
-//   alpha  1.05 1.10 1.20 1.30 1.40 1.50 1.60 1.70 1.80+
-//   nx      172  146  115   99   84   70   57   48    48
-//
-// -- log-linear in alpha at a rate of about 1.84 until it bottoms out -- so a
-// fixed nx over-resolves the Brownian end by an order of magnitude in cost.
-// Scheduling nx on the key's own alpha was implemented and rejected twice over:
-//
-//   * It tilts the likelihood in the one direction that matters.  A schedule
-//     makes the discretisation bias a function of alpha, which adds a spurious
-//     term to the score for alpha; at fixed nx the bias is nearly constant
-//     across a profile and largely cancels out of the peak.  At alpha = 1.3 a
-//     schedule reaching nx = 96 at the peak recovers -0.050 where a flat
-//     nx = 96 recovers -0.013 -- same grid at the peak, four times the error.
-//   * It roughens the surface.  Quantised nx steps the log-likelihood by ~1 nat
-//     per cell crossed: RMS residual about a local quadratic at alpha = 1.3 is
-//     0.054 nats at flat nx = 128 and 1.25 nats under a schedule spanning
-//     nx 81-97.  Grids below about 96 are jagged in alpha on their own account
-//     (alpha = 1.7: 0.13 nats at nx = 128, 0.14 at 96, 0.60 at 64, 1.54 at 48,
-//     and extrapolation amplifies it because it differences two solves), which
-//     is what the cheap end of the schedule is made of.
-//
-// The best schedule found is dominated by simply setting a lower flat nx: at
-// floor 96 it costs 1.35x flat nx = 96 for slightly worse mean recovery.  So
-// resolution is a per-fit choice, documented on RLF(), not a per-key one.
+// Keep these defaults synchronized with R/model_RLF.R.  `nx` is a fit-level
+// option rather than a function of alpha: varying resolution with alpha adds
+// parameter-dependent discretization bias and roughness to the likelihood.
 struct Grid {
   int nx = 160;
   double dt_target = 1.6e-2;
@@ -1436,13 +1404,7 @@ struct Grid {
   // rlf_cache_solve.
   bool richardson = true;
   double richardson_ratio = 1.25;
-  // The lane-interleaved march does the same flop count as LANES independent
-  // scalar marches -- the per-lane row dot product already vectorises -- while
-  // holding LANES step matrices live instead of one, so it is memory bound
-  // where the scalar path is not.  Measured slower at every occupancy: 2.6x
-  // with the two keys a standard two-accumulator race produces, and still 1.4x
-  // with all four lanes filled (nx = 128, 4000 rows).  Off by default; the
-  // emc2.rlf_simd_batch option keeps the path available for re-measurement.
+  // SIMD batching is optional; keep it disabled unless explicitly requested.
   bool simd_batch = false;
 
   int nt_for(double t_max) const {

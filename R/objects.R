@@ -181,10 +181,10 @@ filter_emc <- function(samples, thin = 1, length.out = NULL, filter = NULL){
 # filter for constants or duplicates
 filter_const_and_dup <- function(samples, remove_dup = TRUE, remove_constants = TRUE){
   if(!remove_dup & !remove_constants) return(samples)
-  # We only need the first list entry to calculate the idx
+  # Use the first list entry to determine the row index.
   if(length(dim(samples[[1]])) == 2){
     x <- do.call(cbind, samples)
-    # Optimization: Use vectorized recycling comparison instead of slow apply(..., 1, sd) == 0
+    # Rows with no variation across samples are constant.
     is_constant <- rowSums(x != x[,1]) == 0
     is_duplicate <- duplicated(round(rowSums(x[,1:ncol(x), drop = F]), 8))
     if(remove_dup){
@@ -195,12 +195,9 @@ filter_const_and_dup <- function(samples, remove_dup = TRUE, remove_constants = 
     samples <- lapply(samples, function(x) x[!filter,,drop = F])
   } else{
     x <- do.call(abind, samples)
-    # Optimization: Use vectorized array recycling instead of slow apply(..., 1:2, sd) == 0
     is_constant <- rowSums(x != c(x[,,1]), dims = 2) == 0
-    # Add all the samples together, if any of them are the same (up till 8 digits)
-    # We should probably assume that they are a duplicated entry
-    # This is useful for correlations and such (on which samples are usually mirrored)
-    # Optimization: Use rowSums(..., dims = 2) instead of apply(..., 1:2, sum)
+    # Rows with no variation across samples are constant.
+    # Equal aggregate values identify duplicate array entries.
     all_sums <- c(rowSums(x[,,1:dim(x)[3], drop = F], dims = 2))
     is_duplicate <- duplicated(round(all_sums/mean(all_sums, na.rm = TRUE), 8))
     if(remove_dup){

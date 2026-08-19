@@ -304,7 +304,6 @@ convolve_design_matrix <- function(timeseries, events, factors = NULL, contrasts
   }
   if(scale){
     full_dm <- as.matrix(do.call(rbind, all_dms))
-    # Optimization: Use matrixStats::colMaxs for better readability and performance
     maxs <- matrixStats::colMaxs(full_dm)
     all_dms <- lapply(all_dms, function(x){
       for(i in 1:ncol(x)){
@@ -706,7 +705,6 @@ MRI_AR1 <- function(){
 
         # Compute the linear predictor (sum of beta contributions) and center it.
         y_hat <- rowSums(betas)
-        # y_hat <- y_hat - mean(y_hat)
 
         # Allocate a vector for simulated data
         y_sim <- numeric(n)
@@ -738,7 +736,6 @@ MRI_AR1 <- function(){
         sigma <- pars[, m]
 
         y_hat <- rowSums(betas)
-        # y_hat <- y_hat - mean(y_hat)
 
         # Log-likelihood for the first observation
         ll <- numeric(n)
@@ -823,7 +820,6 @@ plot_design_fmri <- function(design_matrix, TRs = 100, events = NULL, remove_nui
   design_matrix <- as.matrix(design_matrix)
   enames <- colnames(design_matrix)
   if(remove_nuisance & is.null(events)){
-    # ZH optimization: Replace inefficient col-wise sd == 0 apply loop with extremely fast, vectorized constant check
     is_constant <- colSums(design_matrix != design_matrix[rep(1, nrow(design_matrix)), ]) == 0
     is_nuisance <- grepl("drift", enames) | grepl("poly", enames) | grepl("derivative", enames) | is_constant
     design_matrix <- design_matrix[,!is_nuisance, drop = F]
@@ -1280,9 +1276,6 @@ make_data_wrapper_MRI <- function(parameters, data, design){
 }
 
 make_data_fMRI <- function(parameters, model, data, design, ...){
-  # if(is.null(attr(design, "design_matrix"))){
-  #   stop("for fMRI simulation the original design needs to be passed to the simulation function")
-  # }
   pars <- get_pars_matrix_oo(parameters, data, model())
   data[, !colnames(data) %in% c("subjects", "run", "time", "trials")] <- model()$rfun(pars)
   return(data)

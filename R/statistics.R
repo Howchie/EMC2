@@ -369,35 +369,8 @@ add_pw_ll_chain <- function(chain) {
 }
 
 
-# robust_diwish <- function (W, v, S) { #RJI_change: this function is to protect against weird proposals in the diwish function, where sometimes matrices weren't pos def
-#   if (!is.matrix(S)) S <- matrix(S)
-#   if (!is.matrix(W)) W <- matrix(W)
-#   p <- nrow(S)
-#   gammapart <- sum(lgamma((v + 1 - 1:p)/2))
-#   ldenom <- gammapart + 0.5 * v * p * log(2) + 0.25 * p * (p - 1) * log(pi)
-#   if (corpcor::is.positive.definite(W, tol=1e-8)){
-#     cholW<-base::chol(W)
-#   }else{
-#     return(1e-10)
-#   }
-#   if (corpcor::is.positive.definite(S, tol=1e-8)){
-#     cholS <- base::chol(S)
-#   }else{
-#     return(1e-10)
-#   }
-#   halflogdetS <- sum(log(diag(cholS)))
-#   halflogdetW <- sum(log(diag(cholW)))
-#   invW <- chol2inv(cholW)
-#   exptrace <- sum(S * invW)
-#   lnum <- v * halflogdetS - (v + p + 1) * halflogdetW - 0.5 * exptrace
-#   lpdf <- lnum - ldenom
-#   out <- exp(lpdf)
-#   if(!is.finite(out)) return(1e-100)
-#   if(out < 1e-10) return(1e-100)
-#   return(exp(lpdf))
-# }
 
-robust_diwish <- function (W, v, S) { #RJI_change: this function is to protect against weird proposals in the diwish function, where sometimes matrices weren't pos def
+robust_diwish <- function (W, v, S) { # Stabilize non-positive-definite proposals.
   if (!is.matrix(S)) S <- matrix(S)
   if (!is.matrix(W)) W <- matrix(W)
   p <- nrow(S)
@@ -496,7 +469,6 @@ IC <- function(emc,stage="sample",filter=0,use_best_fit=TRUE,
     ll <- get_pars(emc, stage = stage, filter = filter, selection = "LL", merge_chains = TRUE,subject=subject)
     alpha <- get_pars(emc,selection="alpha",stage=stage,filter=filter, by_subject = TRUE, merge_chains = TRUE,subject=subject)
   }
-  # ZH optimization: Replace col-wise apply loop with vectorized C-level primitive
   ll_mat <- ll[[1]][[1]]
   minDs <- -2*ll_mat[cbind(max.col(t(ll_mat), ties.method="first"), 1:ncol(ll_mat))]
   mean_lls <- colMeans(ll_mat)
@@ -616,8 +588,6 @@ compare_subject <- function(sList,stage="sample",filter=0,use_best_fit=TRUE,
     if (is.character(subject))
       if (!all(subject %in% subjects)) stop("subject name(s) not in subjects") else
       subjects <- subject
-  # is_single <- sapply(sList, function(x) return(x[[1]]$type == "single"))
-  # if(any(!is_single)) warning("subject-by-subject comparison is best done with models of type `single`")
   if (n_cores>1) {
     out <- auto_mclapply(subjects,compare_one,sList=sList,stage=stage,filter=filter,
                    use_best_fit=use_best_fit,mc.cores=n_cores)
@@ -780,7 +750,6 @@ get_summary_stat <- function(emc, selection = "mu", fun, stat = NULL,
   MCMC_samples <- do.call(get_pars, c(list(emc = emc, selection = selection), fix_dots(dots, get_pars)))
   out <- vector("list", length = length(MCMC_samples))
   for(i in 1:length(MCMC_samples)){
-    # cat("\n", names(MCMC_samples)[[i]], "\n")
     if(length(fun) > 1){
       outputs <- list()
       for(j in 1:length(fun)){

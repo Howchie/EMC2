@@ -20,11 +20,18 @@ make_random_effects(
 
 \item{n_subj}{An integer. The number of subjects to generate parameters for. If \code{NULL} will be inferred from design}
 
-\item{variance_proportion}{A non-negative double. Optional. If \code{covariances} are not specified, this controls the default relative spread of the subject-level effects. Identity-transformed parameters use a standard deviation of \code{variance_proportion * max(abs(mean), 1)}; exponential parameters use a log-normal spread with this coefficient of variation; probit parameters use this value as the latent-scale standard deviation. The covariances are 0.}
+\item{variance_proportion}{A non-negative double. Optional. If \code{covariances}
+are not specified, this controls the default relative spread of the
+subject-level effects. Identity-transformed parameters use a standard
+deviation of \code{variance_proportion * max(abs(mean), 1)}; exponential
+parameters use a log-normal spread with this coefficient of variation;
+probit parameters use this value as the latent-scale standard deviation.
+The covariances are 0.}
 
 \item{covariances}{A covariance matrix. Optional. Specify the intended covariance matrix.}
 
-\item{max_tries}{An integer. Maximum number of redraw rounds used to replace subject-level parameter draws that fall outside the model bounds.}
+\item{max_tries}{An integer. Maximum number of redraw rounds used to replace
+subject-level parameter draws that fall outside the model bounds.}
 }
 \value{
 A matrix of subject-level parameters.

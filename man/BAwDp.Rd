@@ -25,9 +25,9 @@ clock is \code{m(u) = (1 - exp(-k u))/k - lambda*u}.  For
 time \code{u* = log(1/lambda)/k} for every launch strength and start point.
 The likelihood is therefore the ordinary closed-form LBA likelihood at
 \code{m(u)}, multiplied by \code{mprime(u)} before the freeze time, and is
-exactly zero after it.  The \code{lambda = 0}
-boundary is the pure drive-decay model with an asymptotic (rather than finite)
-internal clock.
+exactly zero after it.  The \code{lambda = 0} boundary is the pure drive-decay
+model with an asymptotic (rather than finite) internal clock.  The \code{k = 0}
+boundary is the standard LBA limit with effective drift scaled by \code{1 - lambda}.
 }
 \details{
 This is not BAwL: BAwL decays the accumulated start point, whereas BAwDp

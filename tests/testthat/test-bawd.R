@@ -860,43 +860,6 @@ test_that("make_data produces omissions the design can be fit back through", {
   expect_true(is.finite(ll))
 })
 
-test_that("BAwD reduced parameterization matches the rate chart exactly", {
-  skip_on_cran()
-  matchfun <- function(d) d$S == d$lR
-  dat <- forstmann[forstmann$subjects %in% unique(forstmann$subjects)[1], ]
-  dat$subjects <- droplevels(dat$subjects)
-  dat <- dat[seq_len(60), ]
-
-  des_red <- suppressMessages(design(
-    data = dat, model = function() BAwD(parameterization = "reduced"), matchfun = matchfun,
-    formula = list(y0 ~ 1, T_max ~ 1, A ~ 1, delta ~ 1, sigma ~ 1, t0 ~ 1)))
-  des_rate <- suppressMessages(design(
-    data = dat, model = BAwD, matchfun = matchfun,
-    formula = list(mu ~ 1, sigma ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1),
-    constants = c(ell = log(1.0))))
-
-  e_red <- suppressMessages(make_emc(dat, des_red, type = "single", n_chains = 1, compress = FALSE, rt_resolution = NULL))
-  e_rate <- suppressMessages(make_emc(dat, des_rate, type = "single", n_chains = 1, compress = FALSE, rt_resolution = NULL))
-
-  y0 <- 1.2; Tmax <- 0.8; A <- 0.3; delta <- 0.5; sigma <- 0.4; t0 <- 0.15
-  h <- expm1(y0) - y0
-  k <- y0 / Tmax
-  b <- h / k
-  B <- b - A
-  mu <- y0 + sigma * delta
-
-  p_red <- c(y0 = log(y0), T_max = log(Tmax), A = log(A), delta = delta, sigma = log(sigma), t0 = log(t0))
-  p_rate <- c(mu = mu, sigma = log(sigma), B = log(B), A = log(A), t0 = log(t0), k = log(k))
-
-  ll_red <- bawd_ll(list(emc = e_red), p_red[names(sampled_pars(des_red))])
-  ll_rate <- bawd_ll(list(emc = e_rate), p_rate[names(sampled_pars(des_rate))])
-  expect_true(is.finite(ll_red))
-  expect_equal(ll_red, ll_rate, tolerance = 1e-8)
-
-  sim_red <- make_data(p_red[names(sampled_pars(des_red))], design = des_red, n_trials = 50)
-  expect_true(nrow(sim_red) > 0)
-})
-
 test_that("BAwDp evaluates closed-form densities and simulates consistently", {
   skip_on_cran()
   # Single accumulator check: zero density and flat CDF past u*
@@ -931,5 +894,96 @@ test_that("BAwDp evaluates closed-form densities and simulates consistently", {
             t0 = log(0.15), k = log(1.2), lambda = qnorm(0.4))[names(sampled_pars(des_dp))]
   ll_dp <- bawd_ll(list(emc = e_dp), p_dp)
   expect_true(is.finite(ll_dp))
+})
+
+test_that("BAwDp CDF stays at its ceiling once exp(-k t) underflows", {
+  # lambda = 0 has no finite freeze time, so the clock saturates only by
+  # underflow of exp(-k t) at k t > ~745.  Treating that as a failure returned
+  # a ZERO cdf where the defective ceiling belongs, i.e. a survivor of one for
+  # every loser in the race, with a visible jump at the underflow threshold.
+  pr <- function(t) EMC2:::pbawdp(t, A = rep(0.4, length(t)), b = rep(1.2, length(t)),
+                                  p1 = rep(log(180), length(t)), p2 = rep(0.5, length(t)),
+                                  k = rep(200, length(t)), lambda = rep(0, length(t)),
+                                  launch = 1L, posdrift = TRUE)
+  ceiling_val <- pr(Inf)
+  expect_true(ceiling_val > 0.4 && ceiling_val < 0.5)
+  # k t spans 200 to 1000, i.e. either side of the underflow threshold
+  expect_equal(pr(c(1, 2, 3, 3.7, 3.8, 5)), rep(ceiling_val, 6), tolerance = 1e-12)
+  expect_equal(EMC2:::dbawdp(c(3.7, 3.8, 5), A = rep(0.4, 3), b = rep(1.2, 3),
+                             p1 = rep(log(180), 3), p2 = rep(0.5, 3), k = rep(200, 3),
+                             lambda = rep(0, 3), launch = 1L, posdrift = TRUE),
+               rep(0, 3))
+})
+
+test_that("BAwDp k = 0 is the LBA limit and preserves constructor bounds", {
+  # 1. Constructor exposes k = 0 in bound$exception while retaining minmax 1e-4
+  m_logn <- BAwDp(drift_distribution = "lognormal")
+  m_norm <- BAwDp(drift_distribution = "normal", posdrift = FALSE)
+  expect_equal(m_logn$bound$minmax[, "k"], c(1e-4, Inf))
+  expect_equal(m_norm$bound$minmax[, "k"], c(1e-4, Inf))
+  expect_true("k" %in% names(m_logn$bound$exception))
+  expect_equal(unname(m_logn$bound$exception["k"]), 0)
+  expect_true("k" %in% names(m_norm$bound$exception))
+  expect_equal(unname(m_norm$bound$exception["k"]), 0)
+
+  # Ttransform reports finite Tmax/rt_max only for k > 0 and lambda > 0
+  p_df <- matrix(c(1.0, 0.5, 0.8, 0.3, 0.1, 0, 0.3,
+                   1.0, 0.5, 0.8, 0.3, 0.1, 1.5, 0,
+                   1.0, 0.5, 0.8, 0.3, 0.1, 1.5, 0.3),
+                 nrow = 3, byrow = TRUE,
+                 dimnames = list(NULL, c("v", "sv", "B", "A", "t0", "k", "lambda")))
+  tt <- m_norm$Ttransform(p_df, NULL)
+  expect_equal(tt[, "Tmax"], c(Inf, Inf, -log(0.3) / 1.5))
+  expect_equal(tt[, "rt_max"], c(Inf, Inf, 0.1 + -log(0.3) / 1.5))
+
+  # 2. Normal unrestricted launch agrees with LBA with scaled launch
+  lambda <- 0.3
+  scale <- 1 - lambda
+  tq <- seq(0.1, 2.5, by = 0.3)
+  v <- 2.0; sv <- 0.8; b <- 1.4; A <- 0.5
+  ref_p <- EMC2:::plba(tq, A = A, b = b, v = v * scale, sv = sv * scale, posdrift = FALSE)
+  ref_d <- EMC2:::dlba(tq, A = A, b = b, v = v * scale, sv = sv * scale, posdrift = FALSE)
+
+  got_p <- EMC2:::pbawdp(tq, A = rep(A, length(tq)), b = rep(b, length(tq)),
+                         p1 = rep(v, length(tq)), p2 = rep(sv, length(tq)),
+                         k = rep(0, length(tq)), lambda = rep(lambda, length(tq)),
+                         launch = 0L, posdrift = FALSE)
+  got_d <- EMC2:::dbawdp(tq, A = rep(A, length(tq)), b = rep(b, length(tq)),
+                         p1 = rep(v, length(tq)), p2 = rep(sv, length(tq)),
+                         k = rep(0, length(tq)), lambda = rep(lambda, length(tq)),
+                         launch = 0L, posdrift = FALSE)
+  expect_equal(got_p, ref_p, tolerance = 1e-8)
+  expect_equal(got_d, ref_d, tolerance = 1e-8)
+
+  # Check posdrift = TRUE as well
+  ref_p_pos <- EMC2:::plba(tq, A = A, b = b, v = v * scale, sv = sv * scale, posdrift = TRUE)
+  ref_d_pos <- EMC2:::dlba(tq, A = A, b = b, v = v * scale, sv = sv * scale, posdrift = TRUE)
+  got_p_pos <- EMC2:::pbawdp(tq, A = rep(A, length(tq)), b = rep(b, length(tq)),
+                             p1 = rep(v, length(tq)), p2 = rep(sv, length(tq)),
+                             k = rep(0, length(tq)), lambda = rep(lambda, length(tq)),
+                             launch = 0L, posdrift = TRUE)
+  got_d_pos <- EMC2:::dbawdp(tq, A = rep(A, length(tq)), b = rep(b, length(tq)),
+                             p1 = rep(v, length(tq)), p2 = rep(sv, length(tq)),
+                             k = rep(0, length(tq)), lambda = rep(lambda, length(tq)),
+                             launch = 0L, posdrift = TRUE)
+  expect_equal(got_p_pos, ref_p_pos, tolerance = 1e-8)
+  expect_equal(got_d_pos, ref_d_pos, tolerance = 1e-8)
+
+  # Check u = Inf returns 1 for CDF
+  expect_equal(EMC2:::pbawdp(Inf, A = A, b = b, p1 = v, p2 = sv, k = 0, lambda = lambda,
+                             launch = 0L, posdrift = TRUE), 1)
+
+  # 3. Pure-R and C++ simulation agree at k = 0
+  lR <- factor(rep(c("left", "right"), 3000), levels = c("left", "right"))
+  pars_k0 <- matrix(c(1.0, 0.5, 0.8, 0.3, 0.1, 0, 0.3, 1.1), nrow = length(lR), ncol = 8, byrow = TRUE,
+                    dimnames = list(NULL, c("mu", "sigma", "B", "A", "t0", "k", "lambda", "b")))
+  set.seed(123)
+  sim_r_k0 <- EMC2:::rBAwDp(lR, pars_k0)
+  set.seed(123)
+  sim_cpp_k0 <- withr::with_options(list(emc2.cpp_rfun = TRUE), EMC2:::.rfun_BAwDp(lR, pars_k0))
+  expect_equal(mean(is.na(sim_r_k0$R)), 0)
+  expect_equal(mean(is.na(sim_cpp_k0$R)), 0)
+  expect_equal(mean(sim_r_k0$R == "left"), mean(sim_cpp_k0$R == "left"), tolerance = 0.03)
+  expect_equal(median(sim_r_k0$rt), median(sim_cpp_k0$rt), tolerance = 0.05)
 })
 

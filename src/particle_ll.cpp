@@ -40,6 +40,70 @@
 
 using namespace Rcpp;
 
+static inline void pcounter_check_len(const NumericVector& x, int n,
+                                      const char* nm) {
+  if (x.size() != 1 && x.size() != n)
+    Rcpp::stop("PCOUNTER: `%s` must be length 1 or length %d, not %d.",
+               nm, n, static_cast<int>(x.size()));
+}
+
+static inline double pcounter_pick(const NumericVector& x, int i) {
+  return x.size() == 1 ? x[0] : x[i];
+}
+
+
+// R-facing scalar-vector wrappers use exactly the same kernel as the compiled
+// race path.  Keeping these here removes the former hand-maintained R mirror.
+// [[Rcpp::export]]
+NumericVector dpcounter(NumericVector t, NumericVector nu, NumericVector sv,
+                        NumericVector gamma, NumericVector k,
+                        NumericVector omega, NumericVector t0,
+                        bool log_out = false) {
+  const int n = t.size();
+  pcounter_check_len(nu, n, "nu"); pcounter_check_len(sv, n, "sv");
+  pcounter_check_len(gamma, n, "gamma"); pcounter_check_len(k, n, "k");
+  pcounter_check_len(omega, n, "omega"); pcounter_check_len(t0, n, "t0");
+  NumericVector out(n);
+  for (int i = 0; i < n; ++i) {
+    const double t0i = pcounter_pick(t0, i);
+    double lf = R_NegInf, ls = 0.0, lF = R_NegInf;
+    if (R_FINITE(t0i)) {
+      pcounter_log_eval(
+        t[i] - t0i, pcounter_pick(nu, i), pcounter_pick(sv, i),
+        pcounter_pick(gamma, i), pcounter_pick(k, i), pcounter_pick(omega, i),
+        lf, ls, lF);
+    }
+    out[i] = log_out ? lf : (R_FINITE(lf) ? std::exp(lf) : 0.0);
+  }
+  return out;
+}
+
+// [[Rcpp::export]]
+NumericVector ppcounter(NumericVector t, NumericVector nu, NumericVector sv,
+                        NumericVector gamma, NumericVector k,
+                        NumericVector omega, NumericVector t0,
+                        bool lower_tail = true, bool log_out = false) {
+  const int n = t.size();
+  pcounter_check_len(nu, n, "nu"); pcounter_check_len(sv, n, "sv");
+  pcounter_check_len(gamma, n, "gamma"); pcounter_check_len(k, n, "k");
+  pcounter_check_len(omega, n, "omega"); pcounter_check_len(t0, n, "t0");
+  NumericVector out(n);
+  for (int i = 0; i < n; ++i) {
+    const double t0i = pcounter_pick(t0, i);
+    double lf = R_NegInf, ls = 0.0, lF = R_NegInf;
+    if (R_FINITE(t0i)) {
+      pcounter_log_eval(
+        t[i] - t0i, pcounter_pick(nu, i), pcounter_pick(sv, i),
+        pcounter_pick(gamma, i), pcounter_pick(k, i), pcounter_pick(omega, i),
+        lf, ls, lF);
+    }
+    const double lp = lower_tail ? lF : ls;
+    out[i] = log_out ? lp : (lp == 0.0 ? 1.0 :
+                              (R_FINITE(lp) ? std::exp(lp) : 0.0));
+  }
+  return out;
+}
+
 // Count accumulators in [start, start+n) that are neither the time accumulator
 // nor the nogo accumulator.  Used to determine the number of guessable responses
 // for the timed-race and Erlang-guess likelihood paths.
@@ -713,19 +777,6 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
     out.ctx.defective_upper_tail = true;
     if (!bawdp_logn && type_std.find("IO") != std::string::npos)
       out.ctx.use_posdrift = false;
-  } else if (type_std.find("BAwD_REDUCED") != std::string::npos) {
-    // The reduced chart is lognormal-only: delta is the standardized
-    // log-launch margin and the evidence scale is fixed at ell = 1.
-    out.pdf1_ptr       = &dbawd_reduced_scalar;
-    out.cdf1_ptr       = &pbawd_reduced_scalar;
-    out.model_dfun_raw = &dbawd_reduced_raw;
-    out.model_pfun_raw = &pbawd_reduced_raw;
-    out.logS_at_t_ptr  = &bawd_reduced_logS_at_t;
-    out.col_spec       = emc2col::bawd_reduced::spec();
-    out.ctx.t0_index   = emc2col::bawd_reduced::t0;
-    out.ctx.bawd_launch = BAWD_LAUNCH_LOGNORMAL;
-    out.ctx.bawd_reparameterized = true;
-    out.ctx.defective_upper_tail = true;
   } else if (type_std.find("BAwD") != std::string::npos) {
     // Dispatch is by substring, and "BAwD" is a substring of nothing here and
     // contains neither "BAwL" nor "LBA", so placement relative to those is
@@ -741,8 +792,15 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
     out.col_spec = bawd_logn ? emc2col::bawd_logn::spec() : emc2col::bawd::spec();
     out.ctx.t0_index = emc2col::bawd::t0;
     out.ctx.bawd_launch = bawd_logn ? BAWD_LAUNCH_LOGNORMAL : BAWD_LAUNCH_NORMAL;
-    // Always defective: a decaying drive with a constant clearance has a hard
-    // right endpoint and intrinsic never-finish mass regardless of posdrift.
+    // Fixed clearance exponent for Xdot = V exp(-k u) - ell exp(-gamma k u).
+    // Constant clearance emits no suffix, preserving existing BAwD routing.
+    out.ctx.bawd_gamma =
+      (type_std.find("_GAM100") != std::string::npos) ? 1.0 :
+      ((type_std.find("_GAM34") != std::string::npos) ? 0.75 :
+       ((type_std.find("_GAM23") != std::string::npos) ? (2.0 / 3.0) :
+        ((type_std.find("_GAM12") != std::string::npos) ? 0.5 : 0.0)));
+    // Always defective: weak launch strengths can miss the threshold in every
+    // regime; co-decay removes the finite wall but not the omission mass.
     out.ctx.defective_upper_tail = true;
     // posdrift is meaningless for the lognormal launch (V > 0 by construction);
     // BAwD() refuses posdrift = FALSE there rather than silently ignoring it.
@@ -828,7 +886,9 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
     out.model_pfun_raw = &ppcounter_raw;
     out.logS_at_t_ptr = &pcounter_logS_at_t;
     out.col_spec     = emc2col::pcounter::spec();
-    out.ctx.t0_index = -1;
+    // PCOUNTER's t0 is an ordinary additive shift, so truncation/censoring
+    // integration can skip its zero-density dead zone just like FRQ/LNR.
+    out.ctx.t0_index = emc2col::pcounter::t0;
   } else {
     Rcpp::stop("Unsupported race model type string in %s: %s", caller.c_str(), type_std.c_str());
   }
@@ -2310,7 +2370,7 @@ static inline bool ddm_wiener_endpoint_key(const double* rts,
   key.sv = sv / s;
   key.t0 = t0;       // DDM integration depends on the effective time.
   key.st0 = st0;
-  key.s = s;         // Retain the raw scale in the exact key as requested.
+  key.s = s;         // Retain the raw scale in the cache key.
   key.Z = Z;
   key.sz = sz;
   key.response = Rs[i];
@@ -3775,11 +3835,7 @@ static void marginal_append_gl_panel(MarginalRule& out, double lo, double hi,
   }
 }
 
-// One batched kernel pass: every particle is evaluated at its OWN column of
-// node values through a single calc_ll_oo call (rows laid out r = k*np + i)
-// rather than one call per node.  The per-call setup inside the kernel (design
-// expansion, trial bookkeeping) is O(n_trials) and used to be re-paid for every
-// node of every particle step.
+// Evaluate all particles at their node columns in one kernel pass.
 static NumericMatrix marginal_eval_nodes(
     const NumericMatrix& particle_matrix, const NumericMatrix& X, int t0col,
     DataFrame data, NumericVector constants, List designs, String type,
@@ -6323,14 +6379,8 @@ static double logicalrules_detection_trial_ll(
         }
         if (!okd) return min_ll;
       } else {
-        // Lower censor: an overt (go) response occurred in [LT, LC]. Only the
-        // go detectors active under this stimulus can produce it, and the
-        // detector must win the race against the nogo accumulator (and any
-        // other go detector) inside the window — a nogo finish is a withheld
-        // response, never an observable one (mirrors the standard-race
-        // go/no-go convention for rt == -Inf). Previously this used the joint
-        // first-event mass, which wrongly counted nogo wins as responses
-        // (e.g. cond == 0, where no overt response is possible at all).
+        // Lower censoring records an overt response, not a nogo finish.
+        // Evaluate the response mass from the active go channels.
         const double lo = std::max(0.0, LTj);
         const double hi = std::max(lo, LCj);
         if (cond == 0 || !(hi > lo)) {
@@ -7235,14 +7285,7 @@ static double c_log_likelihood_logicalrules(
   shared.clear_particle_cache();
   if (model_ctx->fpe_cache) model_ctx->fpe_cache->new_particle();
   if (model_ctx->rlf_cache) model_ctx->rlf_cache->new_particle();
-  // Width of the per-accumulator parameter-row and column-pointer scratch
-  // below.  This used to be a hard stop at 64 columns, backing fixed stack
-  // arrays.  n_par counts model parameter *types*, which update_model_trend()
-  // extends one name per trend parameter, so 64 is reachable on a heavy trend
-  // model -- and a likelihood that refuses to run is a poor trade for a buffer
-  // size.  Padded to at least 64 because the raw kernels may fetch (not
-  // dereference) an optional trailing column this variant lacks; the fixed
-  // arrays gave that slack implicitly.
+  // Keep scratch width at least 64 for optional trailing kernel columns.
   const size_t lr_row_width = static_cast<size_t>(std::max(n_par, 64));
   const bool capacity = kappa_col >= 0 || tau_col >= 0;
   if (capacity && (kappa_col < 0 || tau_col < 0 ||
@@ -7270,7 +7313,6 @@ static double c_log_likelihood_logicalrules(
   gsl_ctl.qag_key = GSL_INTEG_GAUSS21;
   gsl_ctl.rel_tol = 1e-5;  // 1e-4 let the adaptive rule's optimistic error estimate through
 
-  // Change 3: skip the raw batch (and all integration) if every parameter row is invalid.
   bool any_ok = false;
   for (int i = 0; i < n_trials && !any_ok; ++i) any_ok = (bool)ok_params[i];
   if (!any_ok) {
@@ -7297,8 +7339,7 @@ static double c_log_likelihood_logicalrules(
                    logS_all.data(), min_ll, model_ctx);
   }
 
-  // ---- Gauss-Legendre batch integration pre-pass ----
-  // Replaces per-trial local_race_helper (serial GSL) with N_GL vectorised batch sweeps.
+  // Gauss-Legendre batch integration.
   // GA_no_gl[j] = P(nontarget-A wins channel-A sub-race before RT_j)  [linear probability]
   // GB_no_gl[j] = same for channel B, or = GA_no_gl[j] when channels are equal.
   // OR/AND rules use GA_no_gl directly; XOR/ID rules derive GA_yes = 1 - GA_no_gl - S_dec_A.
@@ -7651,11 +7692,8 @@ static double c_log_likelihood_logicalrules(
 
     const int cell_idx = shared.cell_id[static_cast<size_t>(j)];
 
-    // Capacity is a trial-level extension.  It is active only for redundant
-    // target (AB) conditions and only when the particle's capacity effect is
-    // non-degenerate.  Every other trial deliberately continues through the
-    // legacy evaluator below, preserving its batched fast path and exact
-    // baseline behaviour.
+    // Capacity applies only to non-degenerate redundant-target trials;
+    // other trials use the general evaluator.
     if (capacity) {
       const double kappa = pars_cols[kappa_col][idxA];
       const double tau = pars_cols[tau_col][idxA];
@@ -7923,14 +7961,8 @@ static double c_log_likelihood_logicalrules(
         }
         if (!ok_uc) { ll_unique[static_cast<size_t>(j)] = min_ll; continue; }
       } else if (!R_FINITE(t) && t < 0.0) {
-        // Lower censor (-Inf): an overt rule response occurred in [LT, LC],
-        // with identity resp_code when recorded (0 = unknown). The response is
-        // NOT the first accumulator event — each rule triggers on its own
-        // channel-outcome pattern — so the mass is a difference of rule
-        // response CDFs built from the channel states at the window ends
-        // (previously this used S_joint(LT) - S_joint(LC), the first-event
-        // mass, which overcounts whenever one channel resolves without an
-        // overt response having occurred yet).
+        // Lower-censoring mass is the difference of response CDFs at the
+        // window endpoints, rather than the first-event survivor difference.
         const double lo = std::max(0.0, shared.LT_unique[static_cast<size_t>(j)]);
         const double hi = std::max(lo,  shared.LC_unique[static_cast<size_t>(j)]);
         const int resp_lc = shared.resp_code[static_cast<size_t>(j)];
@@ -8210,8 +8242,7 @@ double c_log_likelihood_race(
       UC = get_col_with_default(dadm, "UC", R_PosInf);
     }
   }
-  // Fast default controls for MCMC throughput, with an automatic stricter retry.
-  // Retry settings match the old behaviour (rel_tol=1e-7, limit=1000).
+  // Default controls with a stricter retry for difficult integrals.
   GslIntegrationControls gsl_ctl = default_gsl_controls();
   gsl_ctl.try_qng_first_finite = true;   // try fixed-point QNG before adaptive QAG on finite intervals
   gsl_ctl.qag_key = GSL_INTEG_GAUSS21;  // fallback rule when QNG fails
@@ -10163,23 +10194,12 @@ static BAwLCorrExactTrialResult bawl_corr_exact_trial_loglik(
   return out;
 }
 
-// Correlated BAwL likelihood using a single shared Gaussian factor.  The
-// factor is integrated out with two batched Gauss-Hermite passes: a fixed
-// wide scan locates each trial's integrand mass, then a small rule is
-// re-centered per trial on those moments (see gh_quad.h).  Broad central
-// trials reuse the scan integral; narrow or tail-peaked trials get the
-// recentered pass.  This replaces the old fixed 40/80/200-node schedule with
-// a default 12-node scan plus a selective 12-node refinement.
-// Conditional on a factor value the accumulators are independent, so two
-// evaluators supply the node integrands: a raw batched evaluator for the
-// common all-finite untruncated design (no allocation, kernels called
-// column-wise, z-invariants hoisted), and the ordinary race likelihood for
-// everything else: we alter only v and sv, turn off its truncation
-// correction, and let the existing code handle winners, omissions, clocks,
-// censoring, contaminants, RACE masks, and expansion.  Truncation is
-// normalised as
-//   log int p(data | z) phi(z) dz - log int Z(z) phi(z) dz,
-// rather than by averaging already-normalised node likelihoods.
+// Correlated BAwL likelihood using batched Gauss-Hermite integration.
+// The scan is recentered for narrow or tail-peaked trial integrands.
+// Conditional on the shared factor, accumulators remain independent.
+// Raw and general evaluators supply node integrands for the common and
+// exceptional layouts.  Truncation is normalized as
+//   log int p(data | z) phi(z) dz - log int Z(z) phi(z) dz.
 double c_log_likelihood_corr_drift(
     CorrDriftSharedState& cshared,
     Rcpp::DataFrame dadm,
@@ -10285,10 +10305,7 @@ double c_log_likelihood_corr_drift(
       ctx->time_code == -1 && ctx->nogo_code == -1 &&
       (!dadm.containsElementNamed("RACE") || has_RACE_col);
 
-  // Canonical per-particle trial classification.  Numerator routing still
-  // follows the legacy scan/refine machinery below; the layout is the single
-  // authority for loaded-row counts (positivity dimension) and future route
-  // dispatch.
+  // Classify each particle's trial layout.
   const bool no_clock_model = !ctx->gng && !ctx->kill_active &&
     !ctx->has_global_kill() && ctx->time_code == -1 && ctx->nogo_code == -1;
   // The exact pair component is data-fixed and pointer-based, so it remains

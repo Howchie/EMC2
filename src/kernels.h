@@ -1,8 +1,8 @@
 #include <unordered_map>
 #include <memory>
 #include <array>
-#include <vector>     //
-#include <RcppArmadillo.h>    //
+#include <vector>
+#include <RcppArmadillo.h>
 #include "EMC2/userfun.hpp"
 
 // View
@@ -16,7 +16,6 @@ struct KernelParsView {
 enum class KernelType {
   SimpleDelta,
   Delta2Kernel,
-  // Delta2Kernel2,
   Delta2LR,
   LinIncr,
   LinDecr,
@@ -30,7 +29,6 @@ enum class KernelType {
   Custom
 };
 
-// Some meta-data for kernels -- mostly for the future
 struct KernelMeta {
   int  input_arity;          // how many *inputs* the kernel expects at once
   bool supports_grouping;    // whether a vector of names should be expanded into separate kernels
@@ -40,7 +38,6 @@ inline KernelMeta kernel_meta(KernelType kt) {
   switch (kt) {
   case KernelType::SimpleDelta:
   case KernelType::Delta2Kernel:
-  // case KernelType::Delta2Kernel2:
   case KernelType::Delta2LR:
   case KernelType::LinIncr:
   case KernelType::LinDecr:
@@ -55,7 +52,6 @@ inline KernelMeta kernel_meta(KernelType kt) {
   case KernelType::Custom: return{1, false};
   }
 
-  // default future behaviour: 1D, but no grouping
   return {1, false};
 }
 
@@ -224,7 +220,6 @@ public:
            }
 };
 
-// For sequential kernels: currently same as BaseKernel -- just included to allow for other types (e.g. Bayesian ideal observer, autoregressive) in the future
 struct SequentialKernel : BaseKernel {
   virtual ~SequentialKernel() {}
 };
@@ -321,14 +316,12 @@ struct LinDecrKernel : BaseKernel {
              int n_comp = comp_idx.size();
              out_.assign(n_comp, 0);
 
-             // double last = NA_REAL;
              for (int j = 0; j < n_comp; ++j) {
                int r = comp_idx[j];
                double x = covariate(r,0);
                if (!ISNAN(x)) {
                  out_[j] = -x;
                }
-               // out_[j] = last;
              }
 
              mark_run_complete();
@@ -349,7 +342,6 @@ struct ExpDecrKernel : BaseKernel {
              out_.assign(n_comp, 0);
 
              const double* lambda_col = kernel_pars.cols[0];
-             // double last = NA_REAL;
              for (int j = 0; j < n_comp; ++j) {
                int r = comp_idx[j];
                double x = covariate(r,0);
@@ -357,7 +349,6 @@ struct ExpDecrKernel : BaseKernel {
                  double lambda = lambda_col[r];
                  out_[j] = std::exp(-lambda * x);
                }
-               // out_[j] = last;
              }
 
              mark_run_complete();
@@ -378,7 +369,6 @@ struct ExpIncrKernel : BaseKernel {
              out_.assign(n_comp, 0);
 
              const double* lambda_col = kernel_pars.cols[0];
-             // double last = NA_REAL;
              for (int j = 0; j < n_comp; ++j) {
                int r = comp_idx[j];
                double x = covariate(r,0);
@@ -386,7 +376,6 @@ struct ExpIncrKernel : BaseKernel {
                  double lambda = lambda_col[r];
                  out_[j] = 1.0 - std::exp(-lambda * x);
                }
-               // out_[j] = last;
              }
 
              mark_run_complete();
@@ -407,7 +396,6 @@ struct PowDecrKernel : BaseKernel {
              out_.assign(n_comp, 0);
 
              const double* alpha_col = kernel_pars.cols[0];
-             // double last = NA_REAL;
              for (int j = 0; j < n_comp; ++j) {
                int r = comp_idx[j];
                double x = covariate(r,0);
@@ -415,7 +403,6 @@ struct PowDecrKernel : BaseKernel {
                  double alpha = alpha_col[r];
                  out_[j] = std::pow(1.0 + x, -alpha);
                }
-               // out_[j] = last;
              }
 
              mark_run_complete();
@@ -436,7 +423,6 @@ struct PowIncrKernel : BaseKernel {
              out_.assign(n_comp, 0);
 
              const double* alpha_col = kernel_pars.cols[0];
-             // double last = NA_REAL;
              for (int j = 0; j < n_comp; ++j) {
                int r = comp_idx[j];
                double x = covariate(r,0);
@@ -444,7 +430,6 @@ struct PowIncrKernel : BaseKernel {
                  double alpha = alpha_col[r];
                  out_[j] = 1.0 - std::pow(1.0 + x, -alpha);
                }
-               // out_[j] = last;
              }
 
              mark_run_complete();
@@ -466,7 +451,6 @@ struct Poly2Kernel : BaseKernel {
              const double* a1_col = kernel_pars.cols[0];
              const double* a2_col = kernel_pars.cols[1];
 
-             // double last = NA_REAL;
              for (int j = 0; j < n_comp; ++j) {
                int r = comp_idx[j];
                double x = covariate(r,0);
@@ -476,9 +460,8 @@ struct Poly2Kernel : BaseKernel {
                  double x2 = x * x;
                  out_[j] = a1 * x + a2 * x2;
                }
-               // out_[j] = last;
-             }
 
+             }
              mark_run_complete();
            }
 };
@@ -499,7 +482,6 @@ struct Poly3Kernel : BaseKernel {
              const double* a2_col = kernel_pars.cols[1];
              const double* a3_col = kernel_pars.cols[2];
 
-             // double last = NA_REAL;
              for (int j = 0; j < n_comp; ++j) {
                int r = comp_idx[j];
                double x = covariate(r,0);
@@ -511,7 +493,6 @@ struct Poly3Kernel : BaseKernel {
                  double x3 = x2 * x;
                  out_[j] = a1 * x + a2 * x2 + a3 * x3;
                }
-               // out_[j] = last;
              }
 
              mark_run_complete();
@@ -535,7 +516,6 @@ struct Poly4Kernel : BaseKernel {
              const double* a3_col = kernel_pars.cols[2];
              const double* a4_col = kernel_pars.cols[3];
 
-             // double last = NA_REAL;
              for (int j = 0; j < n_comp; ++j) {
                int r = comp_idx[j];
                double x = covariate(r,0);
@@ -550,7 +530,6 @@ struct Poly4Kernel : BaseKernel {
                  double x4 = x2 * x2;
                  out_[j] = a1 * x + a2 * x2 + a3 * x3 + a4 * x4;
                }
-               // out_[j] = last;
              }
 
              mark_run_complete();
@@ -811,82 +790,6 @@ struct Delta2Kernel : SequentialKernel {
 };
 
 
-// // 2kernel adjusted
-// struct Delta2Kernel2 : Delta2Kernel {
-//   double qFast_ = NA_REAL;
-//   double qSlow_ = NA_REAL;
-//   double q_     = NA_REAL;
-//
-//   Delta2Kernel2() {}
-//
-//   void run(const KernelParsView& kernel_pars,
-//            const Rcpp::NumericMatrix& covariate,
-//            const std::vector<int>& comp_idx) override {
-//              if (kernel_pars.cols.size() != 4) {
-//                Rcpp::stop("Delta2Kernel expects 4 parameter columns, got %d",
-//                           (int)kernel_pars.cols.size());
-//              }
-//
-//              int n_comp = comp_idx.size();
-//              out_.assign(n_comp, NA_REAL);
-//              q_fast_.assign(n_comp, NA_REAL);
-//              q_slow_.assign(n_comp, NA_REAL);
-//              pes_fast_.assign(n_comp, NA_REAL);
-//              pes_slow_.assign(n_comp, NA_REAL);
-//
-//              const double* q0_col        = kernel_pars.cols[0];
-//              const double* alphaFast_col = kernel_pars.cols[1];
-//              const double* propSlow_col  = kernel_pars.cols[2];
-//              const double* dSwitch_col   = kernel_pars.cols[3];
-//
-//              int row0 = comp_idx[0];
-//              out_[0] = qFast_ = qSlow_ = q_ = q0_col[row0];
-//              int current_kernel = 0; // 0 = fast, 1 = slow
-//
-//              for (int j = 0; j < n_comp - 1; ++j) {
-//                int r = comp_idx[j];
-//                double x = covariate(r,0);
-//                double peFast = NA_REAL;
-//                double peSlow = NA_REAL;
-//
-//                if (!ISNAN(x)) {
-//                  double alphaFast = alphaFast_col[r];
-//                  double propSlow  = propSlow_col[r];
-//                  double dSwitch   = dSwitch_col[r];
-//                  double alphaSlow = propSlow * alphaFast;
-//
-//                  peFast = x - qFast_;
-//                  peSlow = x - qSlow_;
-//
-//                  qFast_ += alphaFast * peFast;
-//                  qSlow_ += alphaSlow * peSlow;
-//
-//                  double diff = std::abs(qFast_ - qSlow_);
-//                  if(diff > dSwitch) {
-//                    current_kernel = 0; // fast kernel
-//                    q_ = qFast_;
-//                  } else {
-//                    if(current_kernel == 0) {
-//                      // was in fast mode, now moving to slow mode. Override Q-value of slow
-//                      qSlow_ = qFast_;
-//                    }
-//                    current_kernel = 1;
-//                    q_ = qSlow_;
-//                  }
-//                  // q_ = (diff > dSwitch) ? qFast_ : qSlow_;
-//                }
-//
-//                q_fast_[j+1] = qFast_;  // compressed index
-//                q_slow_[j+1] = qSlow_;
-//
-//                pes_fast_[j] = peFast;  // compressed index
-//                pes_slow_[j] = peSlow;
-//                out_[j + 1] = q_;
-//              }
-//
-//              mark_run_complete();
-//            }
-// };
 
 // ---- Type mapping + factory ----
 

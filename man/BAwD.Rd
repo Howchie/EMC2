@@ -7,115 +7,79 @@
 BAwD(
   drift_distribution = c("lognormal", "normal"),
   posdrift = TRUE,
-  parameterization = c("rate", "reduced")
+  gamma = 0
 )
 }
 \arguments{
-\item{drift_distribution}{Distribution of the trialwise launch strength:
-\code{"lognormal"} (the default) for \verb{log V ~ N(mu, sigma^2)}, or \code{"normal"} for
-\code{V ~ N(v, sv^2)}.}
+\item{drift_distribution}{Distribution of trialwise launch strength:
+\code{"lognormal"} (default) or \code{"normal"}.}
 
 \item{posdrift}{Logical. If \code{TRUE} (default), truncate normal launch
-strengths to be positive; if \code{FALSE}, use the untruncated normal and append
-\code{IO} to the compiled model name. Only meaningful for
-\code{drift_distribution = "normal"}, since a lognormal launch strength is
-positive by construction.}
+strengths to be positive; if \code{FALSE}, append \code{IO} to the compiled model
+name. Only meaningful for normal launches.}
 
-\item{parameterization}{Character. \code{"rate"} (default) uses the ordinary
-\verb{(mu, sigma, B, A, t0, k, ell)} chart. \code{"reduced"} uses the identified
-lognormal chart \verb{(y0, T_max, A, delta, sigma, t0)}, with \code{A} the absolute
-start-point range and \code{ell = 1} as the scale convention.}
+\item{gamma}{Fixed clearance decay exponent: \code{0} (default), \code{1/2}, \code{2/3},
+\code{3/4}, or \code{1}. A model option, never an estimated parameter; the
+corresponding suffix appended to the compiled model name is \code{""},
+\code{"_GAM12"}, \code{"_GAM23"}, \code{"_GAM34"}, and \code{"_GAM100"} respectively.}
 }
 \value{
 A model list defining the BAwD race model.
 }
 \description{
-A race model in which each accumulator is driven by a \emph{transient} signal that
-decays, and is opposed by a constant clearance. For accumulator \code{i} the start
-point is \code{z_i = A * U_i} with \code{U_i ~ Uniform(0, 1)}, the threshold is
-\code{b = B + A}, and with launch strength \code{V_i} the trajectory is
-\deqn{X_i(t) = z_i + (V_i/k)(1 - e^{-kt}) - \ell t.}
-The drive \verb{V_i e^\{-kt\}} decays, so the trajectory rises to a peak at
-\verb{log(V_i/\\ell)/k} and then falls. An accumulator that has not crossed \code{b} by
-its peak never will.
+A race model in which each accumulator is driven by a transient signal
+opposed by fading clearance \verb{ell exp(-gamma k t)}. The fixed clearance
+decay exponent \code{gamma} can be \code{0}, \code{1/2}, \code{2/3}, \code{3/4}, or \code{1}.
 }
 \details{
-\strong{This is not BAwL.} \code{\link[=BAwL]{BAwL()}} applies leak to the accumulated evidence, so
-the \emph{state} (including the start point) decays and weak drive produces an
-arbitrarily slow response. BAwD decays the \emph{drive} while a constant \code{ell}
-removes evidence, so the start point is static and weak drive produces an
-\emph{omission} instead. The two coincide only at \code{ell = 0} \strong{and} \code{A = 0}; with
-\code{ell = 0} and \code{A > 0} they are materially different models.
+\code{gamma} is the clearance decay exponent, not the frozen-mass factor's
+exponent. For \code{0 <= gamma < 1}, the frozen mass is
+\verb{1 - (ell / w)^r} with the derived exponent
+\verb{r = 1 / (1 - gamma)}. Thus \code{gamma = 0, 1/2, 2/3, 3/4} give
+\code{r = 1, 2, 3, 4}; \code{gamma = 1} is the co-decay limit represented by
+\code{r = Inf}, but it has no finite saturation wall. \code{r} is never a
+constructor option; it is fully determined by \code{gamma}.
 
-At \code{k = 0}, the trajectory is the ordinary ballistic trajectory with
-effective drift \code{D = V - ell}. For the normal launch with \code{posdrift = FALSE},
-this is exactly the unrestricted-normal LBA with mean drift \code{v - ell} and
-SD \code{sv}. With \code{posdrift = TRUE}, the launch is truncated at \code{V > 0}, so
-\code{D > -ell} rather than \code{D > 0}; the lognormal launch gives a shifted-
-lognormal effective drift and is not the standard LBA drift family.
+For \code{gamma > 0}, the trajectory is
+\verb{X(u) = z + V(1 - exp(-k u))/k -
+ell(1 - exp(-gamma k u))/(gamma k)}, with the \code{gamma = 0} limit
+\verb{X(u) = z + V(1 - exp(-k u))/k - ell u}.
+The required launch by time \code{u} is
+\verb{V^*(u,z) = [k(b-z) + ell(1-exp(-gamma k u))/gamma] /
+[1-exp(-k u)]}
+for \code{gamma > 0}, with the corresponding \code{k ell u} term at
+\code{gamma = 0}. For \code{gamma < 1}, saturation uses
+\code{w = ell exp((1-gamma) k u)} and
+\verb{|dz/dw| = k^{-1}[1 - (ell/w)^r]}, where
+\code{r = 1/(1-gamma)}. At \code{gamma = 1},
+\verb{X(u) = z + (V-ell)(1-exp(-k u))/k}; the eventual-hit condition is
+\code{V > ell + k(b-z)}, so responses can be arbitrarily late.
 
-When \code{k > 0} and \code{ell > 0}, the behavioural signature is a hard right
-endpoint \code{T_max} (the peak time of the \code{z = 0} accumulator at its critical
-launch strength), with a genuine never-finish mass. For a point start
-(\code{A = 0}) the density approaches that endpoint linearly; with a nonzero
-start-point range (\code{A > 0}) the collapsing live-start interval adds another
-factor and the density approaches it quadratically. If \code{ell = 0}, the model
-has no finite endpoint (although it can remain defective when the decayed
-drive asymptote is below threshold); if \code{k = 0}, it has the ordinary LBA-like
-infinite support. Thus the finite-window interpretation applies only to
-\code{k > 0} and \code{ell > 0}.
+The start point is static and weak drive can produce an omission.
+For \code{gamma < 1}, \code{T_max} is finite when \code{k > 0} and \code{ell > 0}; the
+\code{gamma = 1} endpoint (co-decay) retains omissions but has no finite
+endpoint. The five regimes are fixed constructor options, not estimated
+parameters, so all variants have the same number of free parameters
+(\code{gamma} never appears in \code{p_types}).
 
 Default values are used for all parameters that are not explicitly listed in
 the \code{formula} argument of \code{design()}. They can also be accessed with
 \code{BAwD()$p_types}.
 
-With \code{drift_distribution = "lognormal"} (the default) \verb{log V ~ N(mu, sigma^2)}:\tabular{llllll}{
+With \code{drift_distribution = "lognormal"} (the default) \verb{log V ~ N(mu, sigma^2)}.\tabular{llllll}{
    \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Mapping} \tab \strong{Interpretation} \cr
    \emph{mu} \tab identity \tab [-Inf, Inf] \tab 0 \tab  \tab Mean of the log launch strength. \cr
-   \emph{sigma} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Between-trial SD of the log launch strength. \cr
-   \emph{B} \tab log \tab [0, Inf] \tab log(1) \tab \emph{b} = \emph{B} + \emph{A} \tab Distance from the upper start-point range to the threshold. \cr
-   \emph{A} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Start-point range; the start point does \strong{not} decay. \cr
+   \emph{sigma} \tab log \tab [0, Inf] \tab log(1) \tab  \tab SD of log launch strength. \cr
+   \emph{B} \tab log \tab [0, Inf] \tab log(1) \tab \emph{b} = \emph{B} + \emph{A} \tab Threshold distance. \cr
+   \emph{A} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Start-point range. \cr
    \emph{t0} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Non-decision time. \cr
-   \emph{k} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Drive-decay rate; \code{k = 0} is the LBA limit. \cr
-   \emph{ell} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Tonic clearance / minimum effective sampling rate. \cr
-   \emph{pContaminant} \tab probit \tab [0, 1] \tab qnorm(0) \tab  \tab Optional \emph{omission} contaminant probability: mass at \code{rt = Inf} only, handled by the data pipeline \cr
-   \emph{pGuess} \tab probit \tab [0, 1] \tab qnorm(0) \tab  \tab Optional uniform \emph{guess} (outlier) probability, mixed into observed RT densities over the guess window \cr
+   \emph{k} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Drive-decay rate. \cr
+   \emph{ell} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Clearance rate. \cr
 }
 
 
-With \code{drift_distribution = "normal"}, \code{mu} and \code{sigma} are replaced by \code{v}
-(identity, default 1) and \code{sv} (log, default \code{log(1)}), and
-\code{V ~ N(v, sv^2)} truncated to be positive when \code{posdrift = TRUE}. This is the
-variant that contains the exact BAwL corner at \code{ell = 0} and \code{A = 0} and
-the exact unrestricted-normal LBA limit at \code{k = 0} only when \code{posdrift = FALSE}.
-With \code{posdrift = TRUE}, the \code{k = 0} limit instead has the shifted truncation
-\code{V - ell > -ell}. The lognormal variant is the default because its
-likelihood needs no quadrature.
-
-\strong{Fixing the evidence scale.} The evidence axis is defined only up to a
-scale: \verb{(V, ell, b, A) -> (cV, c*ell, cb, cA)} leaves every crossing time
-unchanged, so exactly one of those must be fixed. With
-\code{drift_distribution = "normal"} the usual \code{constants = c(sv = log(1))} does
-it. With \code{drift_distribution = "lognormal"} it does \strong{not}: \code{sigma} is
-dimensionless. Fix \code{ell} instead --- which is what leaving \code{ell} out of the
-\code{formula} does, since its default is \code{log(1)} --- and the spec's
-dimensionless quantities become literal, \code{r = V} and \verb{c = k b}. Omitting this
-produces a ridge in the posterior rather than an error.
-
-\strong{Identifiability.} At \code{k = 0} only \code{v - ell} (or the lognormal analogue) is
-identified: \code{ell} is identified purely through the curvature of the
-trajectory and the width of the response window. Prefer \code{ell ~ 1}, or a
-coarse condition factor, and do not cross \code{ell} with the same factors as the
-launch-strength mean.
-
-\strong{Bounded support.} When \code{k > 0} and \code{ell > 0}, an observed response time
-above \code{t0 + T_max} has density exactly zero and floors that trial's likelihood.
-This is a constraint on where the posterior can live, to be handled by
-initialisation and priors; \code{pContaminant} is a Bernoulli \emph{omission} rate and
-does not address late responses. \code{pGuess} does: it mixes a uniform density
-over the guess window into observed RTs, so a response past \code{t0 + T_max} gets
-a likelihood floor instead of a zero. The \code{ell = 0} and \code{k = 0} limits do not
-have this finite support.
+With \code{drift_distribution = "normal"}, \code{mu} and \code{sigma} are replaced by
+\code{v} and \code{sv}; the launch is truncated positive when \code{posdrift = TRUE}.
 }
 \examples{
 ADmat <- matrix(c(-1/2, 1/2), ncol = 1, dimnames = list(NULL, "d"))

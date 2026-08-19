@@ -217,9 +217,6 @@ run_stages <- function(sampler, stage = "preburn", iter=0, verbose = TRUE, verbo
 
 add_proposals <- function(emc, stage, n_cores, n_blocks){
   if(stage != "preburn"){
-    # if(!is.null(emc[[1]]$g_map_fixed)){
-    #   emc <- create_chain_proposals_lm(emc)
-    # } else{    }
     emc <- create_chain_proposals(emc, do_block = stage != "sample")
     if(!is.null(n_blocks)){
       if(n_blocks > 1){
@@ -231,9 +228,6 @@ add_proposals <- function(emc, stage, n_cores, n_blocks){
     }
   }
   if(stage == "sample"){
-    # if(!is.null(emc[[1]]$g_map_fixed)){
-    #   emc <- create_eff_proposals_lm(emc, n_cores)
-    # } else{    }
     emc <- create_eff_proposals(emc, n_cores)
   }
   return(emc)
@@ -284,9 +278,6 @@ check_progress <- function (emc, stage, iter, stop_criteria,
     samples_merged <- merge_chains(emc)
     test_samples <- extract_samples(samples_merged, stage = "adapt",
                                     samples_merged$samples$idx, n_chains = length(emc))
-    # if(!is.null(emc[[1]]$g_map_fixed)){
-    #   adapted <- test_adapted_lm(emc[[1]], test_samples, min_unique, n_cores, verbose)
-    # } else{    }
     adapted <- test_adapted(emc[[1]], test_samples,
                             min_unique, n_cores, verbose)
 
@@ -430,7 +421,6 @@ set_tune_ess <- function(emc, alpha_gd = NULL, mean_gd = NULL, max_gd = NULL){
     mean_alpha_ok <- rep(T, nrow(alpha_gd))
   }
   if(!is.null(max_gd)){
-    # ZH optimization: Replace row-wise apply loop with vectorized C-level primitive
     max_alpha_ok <- alpha_gd[cbind(1:nrow(alpha_gd), max.col(alpha_gd, ties.method="first"))] < 1+(max_gd-1)*.5
   } else{
     max_alpha_ok <- rep(T, nrow(alpha_gd))
@@ -496,17 +486,11 @@ create_eff_proposals <- function(emc, n_cores){
       }
 
     }
-    # eff_mu <- lapply(conditionals, FUN = function(x) x$eff_mu)
-    # eff_var <- lapply(conditionals, FUN = function(x) x$eff_var)
-    # eff_alpha <- lapply(conditionals, FUN = function(x) x$eff_alpha)
-    # eff_tau <- lapply(conditionals, FUN = function(x) x$eff_tau)
 
     eff_mu <- split(eff_mu, col(eff_mu))
     eff_var <- apply(eff_var, 3, identity, simplify = F)
     emc[[i]]$eff_mu <- eff_mu
     emc[[i]]$eff_var <- eff_var
-    # attr(emc[[i]], "eff_alpha") <- eff_alpha
-    # attr(emc[[i]], "eff_tau") <- eff_tau
   }
   return(emc)
 }
@@ -757,7 +741,7 @@ make_emc <- function(data,design,model=NULL,
                     use_data = TRUE,
                     prior_list = NULL, group_design = NULL,
                     par_groups=NULL, ...){
-  # arguments for future compatibility
+  # Initialize optional model settings.
   n_factors <- NULL
   nuisance <- NULL
   nuisance_non_hyper <- NULL
@@ -793,15 +777,7 @@ make_emc <- function(data,design,model=NULL,
   data <- lapply(data,function(d){
     d$subjects <- factor(d$subjects)
     d <- d[order(d$subjects),]
-    # LC <- attr(d,"LC")
-    # UC <- attr(d,"UC")
-    # LT <- attr(d,"LT")
-    # UT <- attr(d,"UT")
     d <- add_trials(d)
-    # attr(d,"LC") <- LC
-    # attr(d,"UC") <- UC
-    # attr(d,"LT") <- LT
-    # attr(d,"UT") <- UT
     d
   })
   for (i in 1:length(data)) {
@@ -839,7 +815,7 @@ make_emc <- function(data,design,model=NULL,
   if (length(model)!=length(data))
     model <- rep(model,length(data))
 
-  ## SM: check for delta rules in trend, and override/turn off compression if the user supplied compress=TRUE.
+  ## Disable compression for models with delta-rule trends.
   compress_passed <- compress
   compress <- rep(compress, length(model))
   has_delta_rule <- sapply(model, has_delta_rules)
@@ -848,7 +824,6 @@ make_emc <- function(data,design,model=NULL,
     if(length(model) == 1) message('Because the model contains a delta rule, data will not be compressed.')
     else message(paste0('Models ', which(has_delta_rule), ' contain a delta rule; the corresponding data will not be compressed.'))
   }
-  ## SM END
 
   # Models whose likelihood is a cached grid solve gain nothing from binning rt
   # but do lose accuracy by it (see model_compress_ok).  Override both knobs for
@@ -900,7 +875,6 @@ make_emc <- function(data,design,model=NULL,
     stop("marginalise is currently only supported for single, standard, blocked and diagonal types")
   }
 
-  # if(!is.null(subject_covariates)) attr(dadm_list, "subject_covariates") <- subject_covariates
   if (type %in% c("single", "infnt_factor", "diagonal-gamma")) {
     out <- pmwgs(dadm_list, type, nuisance = nuisance,
                  nuisance_non_hyper = nuisance_non_hyper,
@@ -1013,8 +987,6 @@ extractDadms <- function(dadms, names = NULL){
     }
     dadm_list <- do.call(mapply, c(list, total_dadm_list, SIMPLIFY = F))
   }
-  # subject_covariates_ok <- unlist(lapply(subject_covariates, FUN = function(x) length(x) == length(subjects)))
-  # if(!is.null(subject_covariates_ok)) if(any(!subject_covariates_ok)) stop("subject_covariates must be as long as the number of subjects")
   attr(dadm_list, "components") <- components
   attr(dadm_list, "shared_ll_idx") <- components
   return(list(prior = prior,
@@ -1145,15 +1117,7 @@ weighted_moments <- function(chain, ll = NULL) {
   }
 
   # Compute the weighted mean of the chain.
-  # ZH added more efficient syntax for same outcome
   weighted_mean <- as.vector(drop(chain %*% weights))
-  # NIEK THIS CAUSES ERRORS
-  # # Compute the weighted covariance matrix.
-  # cov_matrix <- matrix(0, nrow = d, ncol = d)
-  # for (i in 1:n) {
-  #   diff <- chain[,i] - weighted_mean
-  #   cov_matrix <- cov_matrix + weights[i] * (diff %*% t(diff))
-  # }
   cov_matrix <- cov(t(chain))
   return(list(w_cov = cov_matrix, w_mu = weighted_mean))
 }

@@ -504,7 +504,8 @@ Rcpp::List rbawl_corr_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_lev
 // Matches R's rBAwD (R/model_BAwD.R).
 // [[Rcpp::export]]
 Rcpp::List rbawd_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
-                     Rcpp::LogicalVector ok, int launch, bool posdrift) {
+                     Rcpp::LogicalVector ok, int launch, bool posdrift,
+                     double gamma = 0.0) {
   const int n_acc = lR_levels.size();
   const int n_rows = pars.nrow();
   if (n_acc <= 0 || n_rows <= 0 || n_rows % n_acc != 0)
@@ -517,6 +518,10 @@ Rcpp::List rbawd_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
     Rcpp::stop("rbawd_cpp: the lognormal launch requires columns 'mu' and 'sigma'.");
   if (!logn && !(ci.count("v") && ci.count("sv")))
     Rcpp::stop("rbawd_cpp: the normal launch requires columns 'v' and 'sv'.");
+  // Lookup is by NAME, not by position: `b` is required, and passing `B`
+  // instead used to fail as an unhandled std::map::at ("_Map_base::at").
+  for (const char* nm : {"b", "A", "t0", "k", "ell"})
+    if (!ci.count(nm)) Rcpp::stop("rbawd_cpp: missing parameter column '%s'.", nm);
   const int ip1 = logn ? ci.at("mu") : ci.at("v");
   const int ip2 = logn ? ci.at("sigma") : ci.at("sv");
   const int ib = ci.at("b"), iA = ci.at("A"), it0 = ci.at("t0"),
@@ -534,7 +539,7 @@ Rcpp::List rbawd_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
       : rtnorm_lower_r(pars(r, ip1), pars(r, ip2), posdrift ? 0.0 : R_NegInf);
     const double z = pars(r, iA) * R::unif_rand();
     const double u = bawd_hit_time_r(V, pars(r, ib) - z, pars(r, ik),
-                                     pars(r, iell));
+                                     pars(r, iell), gamma);
     dt[r] = (R_FINITE(u) && u >= 0.0) ? u : R_PosInf;
   }
 
@@ -636,7 +641,10 @@ Rcpp::List rfrq_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
   for (int r = 0; r < n_rows; ++r) {
     t0col[r] = pars(r, it0);
     ok_row[r] = ok[r] ? 1 : 0;
-    if (!ok[r]) continue;
+    if (!ok[r] || !R_FINITE(t0col[r])) {
+      dt[r] = R_PosInf;
+      continue;
+    }
     const FrqPars s = frq_derive(pars(r, ia), pars(r, ib), pars(r, ih),
                                  pars(r, it), idl >= 0 ? pars(r, idl) : 0.0);
     if (!s.ok) continue;                       // invalid row: never finishes

@@ -784,3 +784,29 @@ test_that("the simulator draws from the delta > 0 likelihood", {
     unname(EMC2:::pfrq(qs - 0.15, 2, 3, 0.8, 0.4, 0) / 0.8), probs,
     tolerance = 0.02)))
 })
+
+test_that("FRQ rejects numerically saturated defective and extreme delta inputs", {
+  # qbeta() can round p to one while h is still below one for sub-unit
+  # shapes.  That would silently remove the defective atom.
+  expect_true(is.na(EMC2:::frq_rate(0.05, 0.05, 0.99, 0.3)[1, "p"]))
+  expect_true(is.na(EMC2:::frq_rate(2, 3, 0.9, 0.3, 1000)[1, "p"]))
+  expect_equal(EMC2:::pfrq(0.4, 2, 3, 0.9, 0.3, 1000), 0)
+})
+
+test_that("the FRQ R simulator keeps malformed rows as omissions", {
+  lR <- factor(rep(c("a", "b"), 2), levels = c("a", "b"))
+  pars <- cbind(alpha = 2, beta = 3, h = 0.9, tau = 0.3,
+                t0 = c(NA, NA, 0.1, 0.1))
+  sim <- EMC2:::rFRQ(lR, pars)
+  expect_true(is.infinite(sim$rt[1]) || is.na(sim$R[1]))
+  expect_error(EMC2:::rFRQ(lR, pars, ok = TRUE), "one value per")
+})
+
+test_that("the FRQ R simulator permits a valid accumulator to win", {
+  lR <- factor(c("a", "b"), levels = c("a", "b"))
+  pars <- cbind(alpha = c(2, 2), beta = c(3, 3), h = c(1, 1),
+                tau = c(0.3, 0.3), t0 = c(NA, 0.1))
+  sim <- EMC2:::rFRQ(lR, pars)
+  expect_equal(sim$R, factor("b", levels = levels(lR)))
+  expect_true(is.finite(sim$rt))
+})

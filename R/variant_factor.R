@@ -222,7 +222,6 @@ gibbs_step_factor <- function(sampler, alpha){
   # Update eta (latent factors)
   eta_sig <- solve(psi_inv + t(lambda) %*% sig_err_inv %*% lambda)
   eta_mu <- eta_sig %*% t(lambda) %*% sig_err_inv %*% t(alphatilde)
-  # ZH vectorized rmvnorm: draw zero-mean samples and add the means
   eta[,] <- t(eta_mu) + rmvnorm(n_subjects, sigma = eta_sig)
 
   # Update sig_err (error precisions)
@@ -244,32 +243,6 @@ gibbs_step_factor <- function(sampler, alpha){
   # Update psi_inv (latent factor precisions)
   psi_inv[,] <- diag(rgamma(n_factors, shape = prior$ap + n_subjects/2,
                             rate = prior$bp + colSums(eta^2)/2), n_factors)
-  # Optionally update via inverse Wishart if desired:
-  # psi_inv <- diag(n_factors) # or use riwish update
-
-  # **** New Rescaling Step to Enforce the Marker Constraints ****
-  # For each factor, locate the marker (fixed value) and rescale the factor loadings and scores.
-  # for (j in 1:n_factors) {
-  #   marker_idx <- which(!is.infinite(Lambda_constraints[, j]) & Lambda_constraints[,j] != 0)
-  #   if(length(marker_idx) == 0){
-  #     stop(sprintf("No constraint found for factor %d", j))
-  #   }
-  #   # Choose the first marker in the column as the anchor.
-  #   marker_row <- marker_idx[1]
-  #   fixed_val <- Lambda_constraints[marker_row, j]  # e.g., should be 1 or another constant
-  #   # Compute scale factor: how far is the current loading from the fixed value?
-  #   scale_factor <- fixed_val / lambda[marker_row, j]
-  #   # Rescale the entire j-th column of lambda and adjust eta accordingly.
-  #   lambda[, j] <- lambda[, j] * scale_factor
-  #   eta[, j] <- eta[, j] / scale_factor
-  # }
-  # **** End Rescaling Step ****
-
-  # The rest of the code (e.g., signFix) can follow if desired.
-  # for(l in 1:n_factors){
-  #   mult <- ifelse(lambda[l, l] < 0, -1, 1)
-  #   lambda[,l] <- mult * lambda[, l]
-  # }
 
   var <- lambda %*% solve(psi_inv) %*% t(lambda) + diag(1/diag(sig_err_inv))
   lambda <- lambda %*% matrix(diag(sqrt(1/diag(psi_inv)), n_factors), nrow = n_factors)
@@ -374,7 +347,7 @@ bridge_group_and_prior_and_jac_factor <- function(proposals_group, proposals_lis
 
   n_iter <- nrow(theta_mu)
   sum_out <- numeric(n_iter)
-  for(i in 1:n_iter){ # these unfortunately can't be vectorized
+  for(i in 1:n_iter){ # Reconstruct constrained matrices for each draw.
     lambda_curr <- unwind_lambda(lambda[i,], info$Lambda_mat, reverse = T)
     epsilon_curr <- diag(1/exp(theta_epsilon_inv[i,]))
     psi_curr <- diag(1/exp(psi_inv[i,]), info$n_factors)
