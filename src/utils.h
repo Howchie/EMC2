@@ -133,6 +133,7 @@ struct ContextForRaceModels {
     // Fixed BAwD clearance-fade exponent parsed from the c_name suffix.
     // Allowed values are mirrored in R/model_BAwD.R.
     double bawd_gamma = 0.0;
+    double bawd_rho = R_PosInf;
 
     // BAwD's identified chart: the raw columns are (y0, T_max, A, delta,
     // sigma, t0) and the adapters map them to the ordinary lognormal BAwD
@@ -1535,6 +1536,9 @@ inline int bawd_launch_of(const ContextForRaceModels* ctx) {
 inline double bawd_gamma_of(const ContextForRaceModels* ctx) {
   return ctx ? ctx->bawd_gamma : 0.0;
 }
+inline double bawd_rho_of(const ContextForRaceModels* ctx) {
+  return ctx ? ctx->bawd_rho : R_PosInf;
+}
 
 inline double dbawd_scalar(double t, const double* par, void* ctx_) {
   auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
@@ -1547,7 +1551,7 @@ inline double dbawd_scalar(double t, const double* par, void* ctx_) {
     par[emc2col::bawd::v], par[emc2col::bawd::sv],
     par[emc2col::bawd::k], par[emc2col::bawd::ell],
     bawd_launch_of(ctx), ctx ? ctx->use_posdrift : true,
-    bawd_gamma_of(ctx));
+    bawd_gamma_of(ctx), bawd_rho_of(ctx));
 }
 
 inline double pbawd_scalar(double t, const double* par, void* ctx_) {
@@ -1562,7 +1566,7 @@ inline double pbawd_scalar(double t, const double* par, void* ctx_) {
     par[emc2col::bawd::v], par[emc2col::bawd::sv],
     par[emc2col::bawd::k], par[emc2col::bawd::ell],
     bawd_launch_of(ctx), ctx ? ctx->use_posdrift : true,
-    bawd_gamma_of(ctx));
+    bawd_gamma_of(ctx), bawd_rho_of(ctx));
 }
 
 inline void dbawd_raw(const double* rt, const double* const* cols, int n_rows,
@@ -1573,6 +1577,7 @@ inline void dbawd_raw(const double* rt, const double* const* cols, int n_rows,
   const bool pd = ctx ? ctx->use_posdrift : true;
   const int launch = bawd_launch_of(ctx);
   const double gamma = bawd_gamma_of(ctx);
+  const double rho = bawd_rho_of(ctx);
   const double* p1_ = cols[emc2col::bawd::v];
   const double* p2_ = cols[emc2col::bawd::sv];
   const double* B_  = cols[emc2col::bawd::B];
@@ -1593,7 +1598,7 @@ inline void dbawd_raw(const double* rt, const double* const* cols, int n_rows,
     }
     const double log_pdf = bawd_log_pdf(tt, A_[i], B_[i] + A_[i], p1_[i],
                                         p2_[i], k_[i], ell_[i], launch, pd,
-                                        gamma);
+                                        gamma, rho);
     out[i] = (log_pdf > R_NegInf && emc2_isfinite(log_pdf))
       ? raw_log_value(log_pdf, min_ll, floor_raw)
       : raw_log_zero(min_ll, floor_raw);
@@ -1608,6 +1613,7 @@ inline void pbawd_raw(const double* rt, const double* const* cols, int n_rows,
   const bool pd = ctx ? ctx->use_posdrift : true;
   const int launch = bawd_launch_of(ctx);
   const double gamma = bawd_gamma_of(ctx);
+  const double rho = bawd_rho_of(ctx);
   const double* p1_ = cols[emc2col::bawd::v];
   const double* p2_ = cols[emc2col::bawd::sv];
   const double* B_  = cols[emc2col::bawd::B];
@@ -1622,7 +1628,7 @@ inline void pbawd_raw(const double* rt, const double* const* cols, int n_rows,
     if (tt <= 0.0 || rt[i] <= 0.0) { out[i] = 0.0; continue; }
     const double log_cdf = bawd_log_cdf(tt, A_[i], B_[i] + A_[i], p1_[i],
                                         p2_[i], k_[i], ell_[i], launch, pd,
-                                        gamma);
+                                        gamma, rho);
     if (!R_FINITE(log_cdf)) { out[i] = 0.0; continue; }
     if (log_cdf >= 0.0) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
     out[i] = log1m_exp(log_cdf);
@@ -1637,6 +1643,7 @@ inline void bawd_logS_at_t(double t, const double* const* cols,
   const bool pd = ctx ? ctx->use_posdrift : true;
   const int launch = bawd_launch_of(ctx);
   const double gamma = bawd_gamma_of(ctx);
+  const double rho = bawd_rho_of(ctx);
   const double* p1_ = cols[emc2col::bawd::v];
   const double* p2_ = cols[emc2col::bawd::sv];
   const double* B_  = cols[emc2col::bawd::B];
@@ -1656,7 +1663,7 @@ inline void bawd_logS_at_t(double t, const double* const* cols,
       if (tt <= 0.0) continue;  // not started: survivor one
       const double log_cdf = bawd_log_cdf(tt, A_[r], B_[r] + A_[r], p1_[r],
                                           p2_[r], k_[r], ell_[r], launch, pd,
-                                          gamma);
+                                          gamma, rho);
       if (log_cdf >= 0.0) { bad = true; break; }
       if (R_FINITE(log_cdf)) logS += log1m_exp(log_cdf);
     }

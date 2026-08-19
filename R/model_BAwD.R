@@ -1,14 +1,11 @@
 # ============================================================================
-# BAwD: the ballistic accumulator with drive decay
+# BAwD: the ballistic accumulator with power-law drive and clearance decay
 #
-#   U(t) = V exp(-k t)                              transient drive
-#   Xdot(t) = U(t) - ell exp(-gamma k t)            z ~ U(0, A), static
+#   h_rho(u) = (1 + k u / rho)^(-rho), with h_Inf(u) = exp(-k u)
+#   Xdot(u) = V h_rho(u) - ell h_rho(u)^gamma, z ~ U(0, A), static
 #
-# The state does not leak (that is BAwL). Clearance is constant at gamma = 0,
-# fades more slowly than the drive at each interior clearance exponent, and
-# co-decays with the drive at gamma = 1. Weak launch strengths can therefore
-# miss the threshold permanently. For gamma < 1 this also creates a finite
-# right endpoint T_max; co-decay retains omissions but has no finite endpoint.
+# The state does not leak (that is BAwL).  The fixed options are rho in
+# {1, 2, 4, Inf} and gamma in {0, 1/2, 2/3, 3/4, 1}; neither is estimated.
 #
 # Numerical kernels in src/model_BAwD.h are shared by the wrappers and
 # sampled likelihood.  Launch codes must match the C++ constants and adapter
@@ -23,10 +20,9 @@
          stop("Unknown BAwD drift_distribution: ", drift_distribution))
 }
 # Fixed clearance exponents gamma used by the kernels and constructor. Each is
-# a distinct model: the frozen-mass factor at saturation is 1-(ell/w)^r with
-# r = 1/(1-gamma), so gamma = 0,1/2,2/3,3/4,1 give r = 1,2,3,4,Inf. gamma is
-# the clearance decay exponent; r is a derived quantity, never a constructor
-# option (see BAwD() docs).
+# a distinct model. For finite rho and gamma < 1, the frozen-mass exponent is
+# alpha = (rho - 1) / (rho * (1 - gamma)); rho = 1 is the logarithmic limit.
+# rho = Inf retains the exponential member with alpha = 1 / (1 - gamma).
 .bawd_gamma_values <- c(0, 0.5, 2 / 3, 0.75, 1)
 .bawd_check_gamma <- function(gamma) {
   if (length(gamma) != 1L || !is.finite(gamma))
@@ -45,6 +41,26 @@
   ]
 }
 
+.bawd_rho_values <- c(1, 2, 4, Inf)
+.bawd_check_rho <- function(rho) {
+  if (length(rho) != 1L || is.na(rho) ||
+      (!is.infinite(rho) && !is.finite(rho)) ||
+      (is.infinite(rho) && rho < 0)) {
+    stop("BAwD rho must be one of 1, 2, 4, Inf; got ",
+         paste(rho, collapse = ", "))
+  }
+  if (is.infinite(rho)) return(Inf)
+  hit <- which(abs(rho - c(1, 2, 4)) < 1e-12)
+  if (length(hit) != 1L)
+    stop("BAwD rho must be one of 1, 2, 4, Inf; got ",
+         paste(rho, collapse = ", "))
+  c(1, 2, 4)[hit]
+}
+.bawd_rho_suffix <- function(rho) {
+  rho <- .bawd_check_rho(rho)
+  if (!is.finite(rho)) "" else paste0("_RHO", rho)
+}
+
 
 .bawd_par_names <- function(launch) {
   if (launch == 1L) c("mu", "sigma") else c("v", "sv")
@@ -58,8 +74,10 @@
   need
 }
 
-dBAwD <- function(rt, pars, launch = 1L, posdrift = TRUE, gamma = 0) {
+dBAwD <- function(rt, pars, launch = 1L, posdrift = TRUE, gamma = 0,
+                  rho = Inf) {
   gamma <- .bawd_check_gamma(gamma)
+  rho <- .bawd_check_rho(rho)
   nm <- .bawd_check_cols(pars, launch)
   dt <- rt - pars[, "t0"]
   ok <- (rt > 0) & (dt > 0) & is.finite(dt) & (pars[, "b"] >= pars[, "A"])
@@ -70,13 +88,15 @@ dBAwD <- function(rt, pars, launch = 1L, posdrift = TRUE, gamma = 0) {
                      p1 = pars[ok, nm[1]], p2 = pars[ok, nm[2]],
                      k = pars[ok, "k"], ell = pars[ok, "ell"],
                      launch = as.integer(launch), posdrift = posdrift,
-                     gamma = gamma)
+                     gamma = gamma, rho = rho)
   }
   out
 }
 
-pBAwD <- function(rt, pars, launch = 1L, posdrift = TRUE, gamma = 0) {
+pBAwD <- function(rt, pars, launch = 1L, posdrift = TRUE, gamma = 0,
+                  rho = Inf) {
   gamma <- .bawd_check_gamma(gamma)
+  rho <- .bawd_check_rho(rho)
   nm <- .bawd_check_cols(pars, launch)
   dt <- rt - pars[, "t0"]
   # rt = Inf is deliberately kept: the CDF there is F_max (the complement of the
@@ -89,7 +109,7 @@ pBAwD <- function(rt, pars, launch = 1L, posdrift = TRUE, gamma = 0) {
                      p1 = pars[ok, nm[1]], p2 = pars[ok, nm[2]],
                      k = pars[ok, "k"], ell = pars[ok, "ell"],
                      launch = as.integer(launch), posdrift = posdrift,
-                     gamma = gamma)
+                     gamma = gamma, rho = rho)
   }
   out
 }
@@ -134,14 +154,63 @@ pBAwDp <- function(rt, pars, launch = 1L, posdrift = TRUE) {
 }
 
 # First (rising-limb) crossing of distance d, or Inf if the peak falls short.
-# Mirrors bawd_hit_time_r() in src/model_rng.h: Newton from the LBA-limit time,
-# which lies below the root because q(u) <= u and the trajectory is concave and
-# increasing up to its peak.
 # Mirrors bawd_hit_time_r() in src/model_rng.h.
-.bawd_hit_time <- function(V, d, k, ell, gamma = 0) {
+.bawd_hit_time <- function(V, d, k, ell, gamma = 0, rho = Inf) {
   gamma <- .bawd_check_gamma(gamma)
+  rho <- .bawd_check_rho(rho)
   if (!isTRUE(d > 0)) return(0)
   if (is.na(V) || !isTRUE(V > 0)) return(Inf)
+  if (is.finite(rho)) {
+    if (k <= 1e-10) return(if (V > ell) d / (V - ell) else Inf)
+    if (ell <= 1e-12) {
+      if (abs(rho - 1) <= 1e-12)
+        return(expm1(k * d / V) / k)
+      S <- k * d * (rho - 1) / (V * rho)
+      if (!isTRUE(S < 1)) return(Inf)
+      return(rho * ((1 - S)^(-1 / (rho - 1)) - 1) / k)
+    }
+    if (gamma >= 1 - 1e-12) {
+      if (!isTRUE(V > ell)) return(Inf)
+      if (abs(rho - 1) <= 1e-12)
+        return(expm1(k * d / (V - ell)) / k)
+      S <- k * d * (rho - 1) / ((V - ell) * rho)
+      if (!isTRUE(S < 1)) return(Inf)
+      return(rho * ((1 - S)^(-1 / (rho - 1)) - 1) / k)
+    }
+    if (!isTRUE(V > ell)) return(Inf)
+    pdiv <- function(c, L) {
+      y <- c * L
+      L * if (abs(y) < 1e-8) 1 + y * (0.5 + y / 6) else expm1(y) / y
+    }
+    kq <- function(x) {
+      L <- log1p(x / rho)
+      rho * pdiv(1 - rho, L)
+    }
+    kr <- function(x) {
+      if (gamma <= 1e-12) return(x)
+      L <- log1p(x / rho)
+      rho * pdiv(1 - rho * gamma, L)
+    }
+    x_p <- rho * expm1(log(V / ell) / (rho * (1 - gamma)))
+    if (V * kq(x_p) - ell * kr(x_p) < k * d) return(Inf)
+    x <- k * d / (V - ell)
+    if (!isTRUE(x > 0) || !is.finite(x)) x <- 1e-12
+    lo <- 0
+    hi <- x_p
+    for (it in seq_len(100)) {
+      f <- V * kq(x) - ell * kr(x) - k * d
+      if (f > 0) hi <- x else lo <- x
+      L <- log1p(x / rho)
+      h <- exp(-rho * L)
+      fp <- V * h - ell * h^gamma
+      xn <- if (fp > 0) x - f / fp else (lo + hi) / 2
+      if (!isTRUE(xn > lo) || !isTRUE(xn < hi) || !is.finite(xn))
+        xn <- (lo + hi) / 2
+      if (abs(xn - x) <= 1e-13 * max(1, xn)) return(xn / k)
+      x <- xn
+    }
+    return(x / k)
+  }
   qf <- function(u) if (k <= 1e-10) u else -expm1(-k * u) / k
   cf <- function(u) {
     if (k <= 1e-10 || gamma <= 1e-12) u
@@ -181,8 +250,9 @@ pBAwDp <- function(rt, pars, launch = 1L, posdrift = TRUE) {
 # options(emc2.cpp_rfun = FALSE).  An all-Inf trial column is the package's
 # omission convention (R = NA, rt = Inf), which make_data() already handles.
 rBAwD <- function(lR, pars, ok = rep(TRUE, length(lR)), launch = 1L,
-                  posdrift = TRUE, gamma = 0) {
+                  posdrift = TRUE, gamma = 0, rho = Inf) {
   gamma <- .bawd_check_gamma(gamma)
+  rho <- .bawd_check_rho(rho)
   nm <- .bawd_check_cols(pars, launch)
   nr <- length(levels(lR))
   bad <- rep(NA, length(lR) / nr)
@@ -202,7 +272,7 @@ rBAwD <- function(lR, pars, ok = rep(TRUE, length(lR)), launch = 1L,
     }
     z <- p[, "A"] * runif(nrow(p))
     hit <- mapply(.bawd_hit_time, V, p[, "b"] - z, p[, "k"], p[, "ell"],
-                  MoreArgs = list(gamma = gamma))
+                  MoreArgs = list(gamma = gamma, rho = rho))
     hit[!is.finite(hit) | hit < 0] <- Inf
     dt[idx] <- hit
   }
@@ -286,43 +356,30 @@ rBAwDp <- function(lR, pars, ok = rep(TRUE, length(lR)), launch = 1L,
 }
 #' The Ballistic Accumulator with Drive Decay (BAwD)
 #'
-#' A race model in which each accumulator is driven by a transient signal
-#' opposed by fading clearance \verb{ell exp(-gamma k t)}. The fixed clearance
-#' decay exponent `gamma` can be `0`, `1/2`, `2/3`, `3/4`, or `1`.
+#' A race model in which each accumulator is driven by a power-law transient
+#' signal and opposed by clearance with the same base kernel:
+#' \verb{h_rho(u) = (1 + k u / rho)^(-rho)}, with the exponential limit
+#' \verb{h_Inf(u) = exp(-k u)}. The fixed kernel option `rho` is one of
+#' `1`, `2`, `4`, or `Inf`.
 #'
 #' @details
-#' `gamma` is the clearance decay exponent, not the frozen-mass factor's
-#' exponent. For `0 <= gamma < 1`, the frozen mass is
-#' \verb{1 - (ell / w)^r} with the derived exponent
-#' \verb{r = 1 / (1 - gamma)}. Thus `gamma = 0, 1/2, 2/3, 3/4` give
-#' `r = 1, 2, 3, 4`; `gamma = 1` is the co-decay limit represented by
-#' `r = Inf`, but it has no finite saturation wall. `r` is never a
-#' constructor option; it is fully determined by `gamma`.
+#' The fixed clearance exponent `gamma` can be `0`, `1/2`, `2/3`, `3/4`, or
+#' `1`. For `gamma < 1` and finite `rho > 1`, the frozen-mass exponent is
+#' \verb{alpha = (rho - 1) / (rho (1 - gamma))}; `rho = 1` is its logarithmic
+#' limit. The `rho = Inf` member retains the exponential kernel and today's
+#' model names.
 #'
-#' For `gamma > 0`, the trajectory is
-#' \verb{X(u) = z + V(1 - exp(-k u))/k -
-#' ell(1 - exp(-gamma k u))/(gamma k)},
-#' with the `gamma = 0` limit
-#' \verb{X(u) = z + V(1 - exp(-k u))/k - ell u}.
-#' The required launch by time `u` is
-#' \verb{V^*(u,z) = [k(b-z) + ell(1-exp(-gamma k u))/gamma] /
-#' [1-exp(-k u)]}
-#' for `gamma > 0`, with the corresponding `k ell u` term at `gamma = 0`.
-#' For `gamma < 1`, saturation uses `w = ell exp((1-gamma) k u)` and
-#' \verb{|dz/dw| = k^{-1}[1 - (ell/w)^r]}, where `r = 1/(1-gamma)`.
-#' At `gamma = 1`, \verb{X(u) = z + (V-ell)(1-exp(-k u))/k}; the eventual-hit
-#' condition is `V > ell + k(b - z)`, so responses can be arbitrarily late.
+#' The trajectory is
+#' \verb{X(u) = z + V Q_rho(u) - ell R_rho(u)}, where
+#' \verb{Q_rho(u) = integral_0^u h_rho(s) ds} and
+#' \verb{R_rho(u) = integral_0^u h_rho(s)^gamma ds}.
+#' For `gamma = 1`, \verb{Xdot = (V - ell) h_rho}; there is no finite endpoint.
+#' For `gamma < 1`, weak launch strengths can miss the threshold permanently
+#' and a finite `T_max` occurs when `k > 0` and `ell > 0`.
 #'
-#' The start point is static and weak drive can produce an omission.
-#' For `gamma < 1`, `T_max` is finite when `k > 0` and `ell > 0`; the
-#' `gamma = 1` endpoint (co-decay) retains omissions but has no finite
-#' endpoint. The five regimes are fixed constructor options, not estimated
-#' parameters, so all variants have the same number of free parameters
-#' (`gamma` never appears in `p_types`).
-#'
-#' Default values are used for all parameters that are not explicitly listed in
-#' the `formula` argument of `design()`. They can also be accessed with
-#' `BAwD()$p_types`.
+#' The start point is static and weak drive can produce an omission. The
+#' fixed `rho` and `gamma` choices are model options, never estimated
+#' parameters, so they do not appear in `p_types`.
 #'
 #' With `drift_distribution = "lognormal"` (the default) `log V ~ N(mu, sigma^2)`.
 #'
@@ -348,6 +405,9 @@ rBAwDp <- function(lR, pars, ok = rep(TRUE, length(lR)), launch = 1L,
 #'   `3/4`, or `1`. A model option, never an estimated parameter; the
 #'   corresponding suffix appended to the compiled model name is `""`,
 #'   `"_GAM12"`, `"_GAM23"`, `"_GAM34"`, and `"_GAM100"` respectively.
+#' @param rho Fixed base-kernel shape: `1`, `2`, `4`, or `Inf` (default).
+#'   `Inf` is the exponential kernel and has no rho suffix; finite values
+#'   append `"_RHO1"`, `"_RHO2"`, or `"_RHO4"` after the gamma suffix.
 #' @return A model list defining the BAwD race model.
 #' @examples
 #' ADmat <- matrix(c(-1/2, 1/2), ncol = 1, dimnames = list(NULL, "d"))
@@ -360,9 +420,10 @@ rBAwDp <- function(lR, pars, ok = rep(TRUE, length(lR)), launch = 1L,
 #'                       contrasts = list(mu = list(lM = ADmat)))
 #' @export
 BAwD <- function(drift_distribution = c("lognormal", "normal"),
-                 posdrift = TRUE, gamma = 0) {
+                 posdrift = TRUE, gamma = 0, rho = Inf) {
   drift_distribution <- match.arg(drift_distribution)
   gamma <- .bawd_check_gamma(gamma)
+  rho <- .bawd_check_rho(rho)
 
   launch <- .bawd_launch_code(drift_distribution)
   lognormal <- (launch == 1L)
@@ -402,12 +463,13 @@ BAwD <- function(drift_distribution = c("lognormal", "normal"),
   # launch, and "BAwD_LOGN" deliberately contains no "IO".
   c_name <- paste0("BAwD", if (lognormal) "_LOGN"
                            else if (!posdrift) "IO" else "",
-                   .bawd_gamma_suffix(gamma))
+                   .bawd_gamma_suffix(gamma), .bawd_rho_suffix(rho))
   list(
     type = "RACE",
     c_name = c_name,
     drift_distribution = drift_distribution,
     gamma = gamma,
+    rho = rho,
     p_types = p_types,
     p_types_canonical = setdiff(names(p_types), .nuisance_par_names),
     transform = list(func = transform),
@@ -415,17 +477,19 @@ BAwD <- function(drift_distribution = c("lognormal", "normal"),
     Ttransform = function(pars, dadm) {
       b <- pars[, "B"] + pars[, "A"]
       Tmax <- bawd_tmax_vec(pars[, "A"], b, pars[, "k"], pars[, "ell"],
-                            gamma = gamma)
+                            gamma = gamma, rho = rho)
       cbind(pars, b = b, Tmax = Tmax, rt_max = pars[, "t0"] + Tmax)
     },
     rfun = function(data, pars) {
       .rfun_BAwD(data$lR, pars, ok = attr(pars, "ok"), launch = launch,
-                 posdrift = posdrift, gamma = gamma)
+                 posdrift = posdrift, gamma = gamma, rho = rho)
     },
     dfun = function(rt, pars) dBAwD(rt, pars, launch = launch,
-                                    posdrift = posdrift, gamma = gamma),
+                                    posdrift = posdrift, gamma = gamma,
+                                    rho = rho),
     pfun = function(rt, pars) pBAwD(rt, pars, launch = launch,
-                                    posdrift = posdrift, gamma = gamma),
+                                    posdrift = posdrift, gamma = gamma,
+                                    rho = rho),
     log_likelihood = function(pars, dadm, model, min_ll = log(1e-10)) {
       stop("BAwD: the likelihood is implemented in the compiled race path; ",
            "the R likelihood route is not supported.")

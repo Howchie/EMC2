@@ -354,8 +354,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // dbawd
-NumericVector dbawd(NumericVector t, NumericVector A, NumericVector b, NumericVector p1, NumericVector p2, NumericVector k, NumericVector ell, int launch, bool posdrift, bool log_out, double gamma);
-RcppExport SEXP _EMC2_dbawd(SEXP tSEXP, SEXP ASEXP, SEXP bSEXP, SEXP p1SEXP, SEXP p2SEXP, SEXP kSEXP, SEXP ellSEXP, SEXP launchSEXP, SEXP posdriftSEXP, SEXP log_outSEXP, SEXP gammaSEXP) {
+NumericVector dbawd(NumericVector t, NumericVector A, NumericVector b, NumericVector p1, NumericVector p2, NumericVector k, NumericVector ell, int launch, bool posdrift, bool log_out, double gamma, double rho);
+RcppExport SEXP _EMC2_dbawd(SEXP tSEXP, SEXP ASEXP, SEXP bSEXP, SEXP p1SEXP, SEXP p2SEXP, SEXP kSEXP, SEXP ellSEXP, SEXP launchSEXP, SEXP posdriftSEXP, SEXP log_outSEXP, SEXP gammaSEXP, SEXP rhoSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -370,13 +370,14 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< bool >::type posdrift(posdriftSEXP);
     Rcpp::traits::input_parameter< bool >::type log_out(log_outSEXP);
     Rcpp::traits::input_parameter< double >::type gamma(gammaSEXP);
-    rcpp_result_gen = Rcpp::wrap(dbawd(t, A, b, p1, p2, k, ell, launch, posdrift, log_out, gamma));
+    Rcpp::traits::input_parameter< double >::type rho(rhoSEXP);
+    rcpp_result_gen = Rcpp::wrap(dbawd(t, A, b, p1, p2, k, ell, launch, posdrift, log_out, gamma, rho));
     return rcpp_result_gen;
 END_RCPP
 }
 // pbawd
-NumericVector pbawd(NumericVector t, NumericVector A, NumericVector b, NumericVector p1, NumericVector p2, NumericVector k, NumericVector ell, int launch, bool posdrift, bool log_out, double gamma);
-RcppExport SEXP _EMC2_pbawd(SEXP tSEXP, SEXP ASEXP, SEXP bSEXP, SEXP p1SEXP, SEXP p2SEXP, SEXP kSEXP, SEXP ellSEXP, SEXP launchSEXP, SEXP posdriftSEXP, SEXP log_outSEXP, SEXP gammaSEXP) {
+NumericVector pbawd(NumericVector t, NumericVector A, NumericVector b, NumericVector p1, NumericVector p2, NumericVector k, NumericVector ell, int launch, bool posdrift, bool log_out, double gamma, double rho);
+RcppExport SEXP _EMC2_pbawd(SEXP tSEXP, SEXP ASEXP, SEXP bSEXP, SEXP p1SEXP, SEXP p2SEXP, SEXP kSEXP, SEXP ellSEXP, SEXP launchSEXP, SEXP posdriftSEXP, SEXP log_outSEXP, SEXP gammaSEXP, SEXP rhoSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -391,13 +392,14 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< bool >::type posdrift(posdriftSEXP);
     Rcpp::traits::input_parameter< bool >::type log_out(log_outSEXP);
     Rcpp::traits::input_parameter< double >::type gamma(gammaSEXP);
-    rcpp_result_gen = Rcpp::wrap(pbawd(t, A, b, p1, p2, k, ell, launch, posdrift, log_out, gamma));
+    Rcpp::traits::input_parameter< double >::type rho(rhoSEXP);
+    rcpp_result_gen = Rcpp::wrap(pbawd(t, A, b, p1, p2, k, ell, launch, posdrift, log_out, gamma, rho));
     return rcpp_result_gen;
 END_RCPP
 }
 // dbawd_norm
-double dbawd_norm(double t, double A, double b, double p1, double p2, double k, double ell, int launch, bool posdrift, bool log_out, double gamma);
-RcppExport SEXP _EMC2_dbawd_norm(SEXP tSEXP, SEXP ASEXP, SEXP bSEXP, SEXP p1SEXP, SEXP p2SEXP, SEXP kSEXP, SEXP ellSEXP, SEXP launchSEXP, SEXP posdriftSEXP, SEXP log_outSEXP, SEXP gammaSEXP) {
+double dbawd_norm(double t, double A, double b, double p1, double p2, double k, double ell, int launch, bool posdrift, bool log_out, double gamma, double rho);
+RcppExport SEXP _EMC2_dbawd_norm(SEXP tSEXP, SEXP ASEXP, SEXP bSEXP, SEXP p1SEXP, SEXP p2SEXP, SEXP kSEXP, SEXP ellSEXP, SEXP launchSEXP, SEXP posdriftSEXP, SEXP log_outSEXP, SEXP gammaSEXP, SEXP rhoSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -412,13 +414,14 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< bool >::type posdrift(posdriftSEXP);
     Rcpp::traits::input_parameter< bool >::type log_out(log_outSEXP);
     Rcpp::traits::input_parameter< double >::type gamma(gammaSEXP);
-    rcpp_result_gen = Rcpp::wrap(dbawd_norm(t, A, b, p1, p2, k, ell, launch, posdrift, log_out, gamma));
+    Rcpp::traits::input_parameter< double >::type rho(rhoSEXP);
+    rcpp_result_gen = Rcpp::wrap(dbawd_norm(t, A, b, p1, p2, k, ell, launch, posdrift, log_out, gamma, rho));
     return rcpp_result_gen;
 END_RCPP
 }
 // pbawd_norm
-double pbawd_norm(double t, double A, double b, double p1, double p2, double k, double ell, int launch, bool posdrift, bool log_out, double gamma);
-RcppExport SEXP _EMC2_pbawd_norm(SEXP tSEXP, SEXP ASEXP, SEXP bSEXP, SEXP p1SEXP, SEXP p2SEXP, SEXP kSEXP, SEXP ellSEXP, SEXP launchSEXP, SEXP posdriftSEXP, SEXP log_outSEXP, SEXP gammaSEXP) {
+double pbawd_norm(double t, double A, double b, double p1, double p2, double k, double ell, int launch, bool posdrift, bool log_out, double gamma, double rho);
+RcppExport SEXP _EMC2_pbawd_norm(SEXP tSEXP, SEXP ASEXP, SEXP bSEXP, SEXP p1SEXP, SEXP p2SEXP, SEXP kSEXP, SEXP ellSEXP, SEXP launchSEXP, SEXP posdriftSEXP, SEXP log_outSEXP, SEXP gammaSEXP, SEXP rhoSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -433,13 +436,14 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< bool >::type posdrift(posdriftSEXP);
     Rcpp::traits::input_parameter< bool >::type log_out(log_outSEXP);
     Rcpp::traits::input_parameter< double >::type gamma(gammaSEXP);
-    rcpp_result_gen = Rcpp::wrap(pbawd_norm(t, A, b, p1, p2, k, ell, launch, posdrift, log_out, gamma));
+    Rcpp::traits::input_parameter< double >::type rho(rhoSEXP);
+    rcpp_result_gen = Rcpp::wrap(pbawd_norm(t, A, b, p1, p2, k, ell, launch, posdrift, log_out, gamma, rho));
     return rcpp_result_gen;
 END_RCPP
 }
 // bawd_tmax
-double bawd_tmax(double A, double b, double k, double ell, double gamma);
-RcppExport SEXP _EMC2_bawd_tmax(SEXP ASEXP, SEXP bSEXP, SEXP kSEXP, SEXP ellSEXP, SEXP gammaSEXP) {
+double bawd_tmax(double A, double b, double k, double ell, double gamma, double rho);
+RcppExport SEXP _EMC2_bawd_tmax(SEXP ASEXP, SEXP bSEXP, SEXP kSEXP, SEXP ellSEXP, SEXP gammaSEXP, SEXP rhoSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -448,13 +452,14 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< double >::type k(kSEXP);
     Rcpp::traits::input_parameter< double >::type ell(ellSEXP);
     Rcpp::traits::input_parameter< double >::type gamma(gammaSEXP);
-    rcpp_result_gen = Rcpp::wrap(bawd_tmax(A, b, k, ell, gamma));
+    Rcpp::traits::input_parameter< double >::type rho(rhoSEXP);
+    rcpp_result_gen = Rcpp::wrap(bawd_tmax(A, b, k, ell, gamma, rho));
     return rcpp_result_gen;
 END_RCPP
 }
 // bawd_tmax_vec
-NumericVector bawd_tmax_vec(NumericVector A, NumericVector b, NumericVector k, NumericVector ell, NumericVector gamma);
-RcppExport SEXP _EMC2_bawd_tmax_vec(SEXP ASEXP, SEXP bSEXP, SEXP kSEXP, SEXP ellSEXP, SEXP gammaSEXP) {
+NumericVector bawd_tmax_vec(NumericVector A, NumericVector b, NumericVector k, NumericVector ell, NumericVector gamma, NumericVector rho);
+RcppExport SEXP _EMC2_bawd_tmax_vec(SEXP ASEXP, SEXP bSEXP, SEXP kSEXP, SEXP ellSEXP, SEXP gammaSEXP, SEXP rhoSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -463,7 +468,8 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< NumericVector >::type k(kSEXP);
     Rcpp::traits::input_parameter< NumericVector >::type ell(ellSEXP);
     Rcpp::traits::input_parameter< NumericVector >::type gamma(gammaSEXP);
-    rcpp_result_gen = Rcpp::wrap(bawd_tmax_vec(A, b, k, ell, gamma));
+    Rcpp::traits::input_parameter< NumericVector >::type rho(rhoSEXP);
+    rcpp_result_gen = Rcpp::wrap(bawd_tmax_vec(A, b, k, ell, gamma, rho));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -491,6 +497,20 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< double >::type sigma(sigmaSEXP);
     Rcpp::traits::input_parameter< double >::type m(mSEXP);
     rcpp_result_gen = Rcpp::wrap(lognormal_power_stoploss_log(v, mu, sigma, m));
+    return rcpp_result_gen;
+END_RCPP
+}
+// lognormal_logratio_stoploss_log
+double lognormal_logratio_stoploss_log(double v, double mu, double sigma, double log_ell);
+RcppExport SEXP _EMC2_lognormal_logratio_stoploss_log(SEXP vSEXP, SEXP muSEXP, SEXP sigmaSEXP, SEXP log_ellSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< double >::type v(vSEXP);
+    Rcpp::traits::input_parameter< double >::type mu(muSEXP);
+    Rcpp::traits::input_parameter< double >::type sigma(sigmaSEXP);
+    Rcpp::traits::input_parameter< double >::type log_ell(log_ellSEXP);
+    rcpp_result_gen = Rcpp::wrap(lognormal_logratio_stoploss_log(v, mu, sigma, log_ell));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -2171,8 +2191,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // rbawd_cpp
-Rcpp::List rbawd_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels, Rcpp::LogicalVector ok, int launch, bool posdrift, double gamma);
-RcppExport SEXP _EMC2_rbawd_cpp(SEXP parsSEXP, SEXP lR_levelsSEXP, SEXP okSEXP, SEXP launchSEXP, SEXP posdriftSEXP, SEXP gammaSEXP) {
+Rcpp::List rbawd_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels, Rcpp::LogicalVector ok, int launch, bool posdrift, double gamma, double rho);
+RcppExport SEXP _EMC2_rbawd_cpp(SEXP parsSEXP, SEXP lR_levelsSEXP, SEXP okSEXP, SEXP launchSEXP, SEXP posdriftSEXP, SEXP gammaSEXP, SEXP rhoSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -2182,7 +2202,8 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< int >::type launch(launchSEXP);
     Rcpp::traits::input_parameter< bool >::type posdrift(posdriftSEXP);
     Rcpp::traits::input_parameter< double >::type gamma(gammaSEXP);
-    rcpp_result_gen = Rcpp::wrap(rbawd_cpp(pars, lR_levels, ok, launch, posdrift, gamma));
+    Rcpp::traits::input_parameter< double >::type rho(rhoSEXP);
+    rcpp_result_gen = Rcpp::wrap(rbawd_cpp(pars, lR_levels, ok, launch, posdrift, gamma, rho));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -3283,14 +3304,15 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_gomp_pdf_cdf_vec", (DL_FUNC) &_EMC2_gomp_pdf_cdf_vec, 15},
     {"_EMC2_calculate_subject_means", (DL_FUNC) &_EMC2_calculate_subject_means, 2},
     {"_EMC2_draw_alpha_from_design", (DL_FUNC) &_EMC2_draw_alpha_from_design, 3},
-    {"_EMC2_dbawd", (DL_FUNC) &_EMC2_dbawd, 11},
-    {"_EMC2_pbawd", (DL_FUNC) &_EMC2_pbawd, 11},
-    {"_EMC2_dbawd_norm", (DL_FUNC) &_EMC2_dbawd_norm, 11},
-    {"_EMC2_pbawd_norm", (DL_FUNC) &_EMC2_pbawd_norm, 11},
-    {"_EMC2_bawd_tmax", (DL_FUNC) &_EMC2_bawd_tmax, 5},
-    {"_EMC2_bawd_tmax_vec", (DL_FUNC) &_EMC2_bawd_tmax_vec, 5},
+    {"_EMC2_dbawd", (DL_FUNC) &_EMC2_dbawd, 12},
+    {"_EMC2_pbawd", (DL_FUNC) &_EMC2_pbawd, 12},
+    {"_EMC2_dbawd_norm", (DL_FUNC) &_EMC2_dbawd_norm, 12},
+    {"_EMC2_pbawd_norm", (DL_FUNC) &_EMC2_pbawd_norm, 12},
+    {"_EMC2_bawd_tmax", (DL_FUNC) &_EMC2_bawd_tmax, 6},
+    {"_EMC2_bawd_tmax_vec", (DL_FUNC) &_EMC2_bawd_tmax_vec, 6},
     {"_EMC2_lognormal_stoploss_log", (DL_FUNC) &_EMC2_lognormal_stoploss_log, 3},
     {"_EMC2_lognormal_power_stoploss_log", (DL_FUNC) &_EMC2_lognormal_power_stoploss_log, 4},
+    {"_EMC2_lognormal_logratio_stoploss_log", (DL_FUNC) &_EMC2_lognormal_logratio_stoploss_log, 4},
     {"_EMC2_bm_fht_pdf_vec_grid", (DL_FUNC) &_EMC2_bm_fht_pdf_vec_grid, 10},
     {"_EMC2_bm_fht_pdf_vec_grid_chunked", (DL_FUNC) &_EMC2_bm_fht_pdf_vec_grid_chunked, 15},
     {"_EMC2_bm_fht_pdf_cdf_vec_grid_chunked", (DL_FUNC) &_EMC2_bm_fht_pdf_cdf_vec_grid_chunked, 14},
@@ -3379,7 +3401,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_rrdm_cpp", (DL_FUNC) &_EMC2_rrdm_cpp, 3},
     {"_EMC2_rbawl_cpp", (DL_FUNC) &_EMC2_rbawl_cpp, 8},
     {"_EMC2_rbawl_corr_cpp", (DL_FUNC) &_EMC2_rbawl_corr_cpp, 7},
-    {"_EMC2_rbawd_cpp", (DL_FUNC) &_EMC2_rbawd_cpp, 6},
+    {"_EMC2_rbawd_cpp", (DL_FUNC) &_EMC2_rbawd_cpp, 7},
     {"_EMC2_rbawdp_cpp", (DL_FUNC) &_EMC2_rbawdp_cpp, 5},
     {"_EMC2_rfrq_cpp", (DL_FUNC) &_EMC2_rfrq_cpp, 3},
     {"_EMC2_rrdmswtn_cpp", (DL_FUNC) &_EMC2_rrdmswtn_cpp, 6},

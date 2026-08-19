@@ -73,28 +73,28 @@ draw_alpha_from_design <- function(group_designs, mu, var) {
     .Call(`_EMC2_draw_alpha_from_design`, group_designs, mu, var)
 }
 
-dbawd <- function(t, A, b, p1, p2, k, ell, launch = 1L, posdrift = TRUE, log_out = FALSE, gamma = 0.0) {
-    .Call(`_EMC2_dbawd`, t, A, b, p1, p2, k, ell, launch, posdrift, log_out, gamma)
+dbawd <- function(t, A, b, p1, p2, k, ell, launch = 1L, posdrift = TRUE, log_out = FALSE, gamma = 0.0, rho = 0.0) {
+    .Call(`_EMC2_dbawd`, t, A, b, p1, p2, k, ell, launch, posdrift, log_out, gamma, rho)
 }
 
-pbawd <- function(t, A, b, p1, p2, k, ell, launch = 1L, posdrift = TRUE, log_out = FALSE, gamma = 0.0) {
-    .Call(`_EMC2_pbawd`, t, A, b, p1, p2, k, ell, launch, posdrift, log_out, gamma)
+pbawd <- function(t, A, b, p1, p2, k, ell, launch = 1L, posdrift = TRUE, log_out = FALSE, gamma = 0.0, rho = 0.0) {
+    .Call(`_EMC2_pbawd`, t, A, b, p1, p2, k, ell, launch, posdrift, log_out, gamma, rho)
 }
 
-dbawd_norm <- function(t, A, b, p1, p2, k, ell, launch = 1L, posdrift = TRUE, log_out = FALSE, gamma = 0.0) {
-    .Call(`_EMC2_dbawd_norm`, t, A, b, p1, p2, k, ell, launch, posdrift, log_out, gamma)
+dbawd_norm <- function(t, A, b, p1, p2, k, ell, launch = 1L, posdrift = TRUE, log_out = FALSE, gamma = 0.0, rho = 0.0) {
+    .Call(`_EMC2_dbawd_norm`, t, A, b, p1, p2, k, ell, launch, posdrift, log_out, gamma, rho)
 }
 
-pbawd_norm <- function(t, A, b, p1, p2, k, ell, launch = 1L, posdrift = TRUE, log_out = FALSE, gamma = 0.0) {
-    .Call(`_EMC2_pbawd_norm`, t, A, b, p1, p2, k, ell, launch, posdrift, log_out, gamma)
+pbawd_norm <- function(t, A, b, p1, p2, k, ell, launch = 1L, posdrift = TRUE, log_out = FALSE, gamma = 0.0, rho = 0.0) {
+    .Call(`_EMC2_pbawd_norm`, t, A, b, p1, p2, k, ell, launch, posdrift, log_out, gamma, rho)
 }
 
-bawd_tmax <- function(A, b, k, ell, gamma = 0.0) {
-    .Call(`_EMC2_bawd_tmax`, A, b, k, ell, gamma)
+bawd_tmax <- function(A, b, k, ell, gamma = 0.0, rho = 0.0) {
+    .Call(`_EMC2_bawd_tmax`, A, b, k, ell, gamma, rho)
 }
 
-bawd_tmax_vec <- function(A, b, k, ell, gamma = 0.0) {
-    .Call(`_EMC2_bawd_tmax_vec`, A, b, k, ell, gamma)
+bawd_tmax_vec <- function(A, b, k, ell, gamma = 0.0, rho = 0.0) {
+    .Call(`_EMC2_bawd_tmax_vec`, A, b, k, ell, gamma, rho)
 }
 
 lognormal_stoploss_log <- function(v, mu, sigma) {
@@ -103,6 +103,10 @@ lognormal_stoploss_log <- function(v, mu, sigma) {
 
 lognormal_power_stoploss_log <- function(v, mu, sigma, m) {
     .Call(`_EMC2_lognormal_power_stoploss_log`, v, mu, sigma, m)
+}
+
+lognormal_logratio_stoploss_log <- function(v, mu, sigma, log_ell) {
+    .Call(`_EMC2_lognormal_logratio_stoploss_log`, v, mu, sigma, log_ell)
 }
 
 bm_fht_pdf_vec_grid <- function(t, mu, sigma, z0, b0, binf, tau, pow, steps_fineness, min_steps) {
@@ -457,8 +461,8 @@ rbawl_corr_cpp <- function(pars, lR_levels, ok, posdrift, erlang, guess, global)
     .Call(`_EMC2_rbawl_corr_cpp`, pars, lR_levels, ok, posdrift, erlang, guess, global)
 }
 
-rbawd_cpp <- function(pars, lR_levels, ok, launch, posdrift, gamma = 0.0) {
-    .Call(`_EMC2_rbawd_cpp`, pars, lR_levels, ok, launch, posdrift, gamma)
+rbawd_cpp <- function(pars, lR_levels, ok, launch, posdrift, gamma = 0.0, rho = 0.0) {
+    .Call(`_EMC2_rbawd_cpp`, pars, lR_levels, ok, launch, posdrift, gamma, rho)
 }
 
 rbawdp_cpp <- function(pars, lR_levels, ok, launch, posdrift) {

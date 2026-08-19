@@ -392,6 +392,28 @@ inline double mills_ratio_std(double z) {
 //
 // C is the antiderivative of the lognormal survivor: C'(v) = -P(V >= v), which
 // is why BAwD's start-point and frozen-mass integrals both reduce to it.
+inline double log_mills_gap(double x, double sigma) {
+  const double y = x - sigma;
+  const double r_y = mills_ratio_std(y);   // valid for y of either sign
+  const double r_x = mills_ratio_std(x);
+  const double d = r_y - r_x;              // > 0: R is strictly decreasing
+  if (d > 1e-12 * r_y) {
+    return std::log(d);
+  }
+  // Retained fraction below 1e-12 means sigma/x < 1e-12, i.e. x is enormous.
+  // R(z) = 1/z - 1/z^3 + 3/z^5 - ... differenced symbolically:
+  //   R(y) - R(x) = sigma/(x y) - sigma (x^2 + x y + y^2)/(x^3 y^3) + ...
+  // whose relative error is O(1/x^2) and therefore negligible wherever this
+  // branch can be reached.
+  if (!(x > 0.0) || !(y > 0.0)) return R_NegInf;
+  const double t1 = sigma / (x * y);
+  const double t2 = sigma * (x * x + x * y + y * y) /
+                    (x * x * x * y * y * y);
+  const double series = t1 - t2;
+  if (!(series > 0.0)) return R_NegInf;
+  return std::log(series);
+}
+
 inline double log_lognormal_stoploss(double v, double mu, double sigma) {
   if (!(sigma > 0.0)) return R_NegInf;
   const double log_M = mu + 0.5 * sigma * sigma;
@@ -403,27 +425,10 @@ inline double log_lognormal_stoploss(double v, double mu, double sigma) {
     return log_diff_exp(log_M + pnorm_log_direct(x - sigma, false),
                         std::log(v) + pnorm_log_direct(x, false));
   }
-  const double y = x - sigma;
-  const double r_y = mills_ratio_std(y);   // valid for y of either sign
-  const double r_x = mills_ratio_std(x);
-  const double d = r_y - r_x;              // > 0: R is strictly decreasing
-  if (d > 1e-12 * r_y) {
-    return std::log(v) + log_phi_std(x) + std::log(d);
-  }
-  // Retained fraction below 1e-12 means sigma/x < 1e-12, i.e. x is enormous.
-  // R(z) = 1/z - 1/z^3 + 3/z^5 - ... differenced symbolically:
-  //   R(y) - R(x) = sigma/(x y) - sigma (x^2 + x y + y^2)/(x^3 y^3) + ...
-  // whose relative error is O(1/x^2) and therefore negligible wherever this
-  // branch can be reached.
-  const double t1 = sigma / (x * y);
-  const double t2 = sigma * (x * x + x * y + y * y) /
-                    (x * x * x * y * y * y);
-  const double series = t1 - t2;
-  if (!(series > 0.0)) return R_NegInf;
-  return std::log(v) + log_phi_std(x) + std::log(series);
+  return std::log(v) + log_phi_std(x) + log_mills_gap(x, sigma);
 }
 // log Lambda_m(v) = log integral_v^infinity w^(-(m+1)) P(V >= w) dw
-// for log V ~ N(mu, sigma^2).  For m > 0, m Lambda_m(v) =
+// for m > 0, m Lambda_m(v) =
 // v^(-m) phi(x) [R(x) - R(x + m sigma)], with x = (log v - mu)/sigma.
 // The Mills-ratio difference is evaluated directly until its retained
 // fraction is too small, then differenced symbolically to avoid tail loss.
@@ -431,30 +436,52 @@ inline double log_lognormal_power_stoploss(double v, double mu, double sigma,
                                            double m) {
   if (!(sigma > 0.0) || !(v > 0.0)) return R_NegInf;
   const double x = (std::log(v) - mu) / sigma;
-  if (!(m > 0.0)) {
+  if (std::fabs(m) <= 1e-14) {
     return std::log(sigma) + log_normal_q_antiderivative_abs(x);
   }
   const double a = m * sigma;
   if (x <= 0.0) {
-    return log_diff_exp(
-        -m * std::log(v) + pnorm_log_direct(x, false),
-        -m * mu + 0.5 * a * a + pnorm_log_direct(x + a, false)) -
-           std::log(m);
+    const double first = -m * std::log(v) + pnorm_log_direct(x, false);
+    const double second = -m * mu + 0.5 * a * a +
+      pnorm_log_direct(x + a, false);
+    const double gap = (m > 0.0)
+      ? log_diff_exp(first, second)
+      : log_diff_exp(second, first);
+    return gap - std::log(std::fabs(m));
   }
   const double y = x + a;
   const double r_x = mills_ratio_std(x);
-  const double d = r_x - mills_ratio_std(y);
-  if (d > 1e-12 * r_x) {
+  const double r_y = mills_ratio_std(y);
+  const double d = (m > 0.0) ? r_x - r_y : r_y - r_x;
+  if (d > 1e-12 * std::fmax(r_x, r_y)) {
     return -m * std::log(v) + log_phi_std(x) + std::log(d) -
-           std::log(m);
+           std::log(std::fabs(m));
   }
-  const double t1 = a / (x * y);
-  const double t2 = a * (x * x + x * y + y * y) /
+  const double aa = std::fabs(a);
+  const double t1 = aa / (x * y);
+  const double t2 = aa * (x * x + x * y + y * y) /
                     (x * x * x * y * y * y);
   const double series = t1 - t2;
   if (!(series > 0.0)) return R_NegInf;
   return -m * std::log(v) + log_phi_std(x) + std::log(series) -
-         std::log(m);
+         std::log(std::fabs(m));
+}
+
+inline double log_lognormal_logratio_stoploss(double v, double mu,
+                                              double sigma, double log_ell) {
+  if (!(sigma > 0.0) || !(v > 0.0)) return R_NegInf;
+  const double x = (std::log(v) - mu) / sigma;
+  const double y = x - sigma;
+  const double lambda = std::log(v) - log_ell;
+  const double gap = log_mills_gap(x, sigma);
+  if (gap == R_NegInf) return R_NegInf;
+  const signed_log t1 = make_signed_log(
+    std::log(std::fabs(lambda - 1.0)) + gap,
+    lambda >= 1.0 ? 1 : -1);
+  const signed_log t2 = make_signed_log(
+    std::log(sigma) + log_normal_q_antiderivative_abs(y) - log_phi_std(y), 1);
+  const auto br = signed_log_add(t1, t2);
+  return (br.sign <= 0) ? R_NegInf : std::log(v) + log_phi_std(x) + br.log_abs;
 }
 
 

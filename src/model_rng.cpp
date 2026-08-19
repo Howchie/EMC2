@@ -505,7 +505,7 @@ Rcpp::List rbawl_corr_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_lev
 // [[Rcpp::export]]
 Rcpp::List rbawd_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
                      Rcpp::LogicalVector ok, int launch, bool posdrift,
-                     double gamma = 0.0) {
+                     double gamma = 0.0, double rho = 0.0) {
   const int n_acc = lR_levels.size();
   const int n_rows = pars.nrow();
   if (n_acc <= 0 || n_rows <= 0 || n_rows % n_acc != 0)
@@ -539,7 +539,7 @@ Rcpp::List rbawd_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
       : rtnorm_lower_r(pars(r, ip1), pars(r, ip2), posdrift ? 0.0 : R_NegInf);
     const double z = pars(r, iA) * R::unif_rand();
     const double u = bawd_hit_time_r(V, pars(r, ib) - z, pars(r, ik),
-                                     pars(r, iell), gamma);
+                                     pars(r, iell), gamma, rho);
     dt[r] = (R_FINITE(u) && u >= 0.0) ? u : R_PosInf;
   }
 

@@ -81,14 +81,17 @@
 # model's c_name suffix, or the simulator and the likelihood describe different
 # models (see R/model_BAwD.R).
 .rfun_BAwD <- function(lR, pars, ok = rep(TRUE, length(lR)), launch = 1L,
-                       posdrift = TRUE, gamma = 0) {
+                       posdrift = TRUE, gamma = 0, rho = Inf) {
   gamma <- .bawd_check_gamma(gamma)
+  rho <- .bawd_check_rho(rho)
   if (.use_cpp_rfun()) {
-    res <- rbawd_cpp(pars, levels(lR), ok, as.integer(launch), posdrift, gamma)
+    res <- rbawd_cpp(pars, levels(lR), ok, as.integer(launch), posdrift, gamma,
+                     rho)
     out <- .rfun_cpp_pack(res, levels(lR), length(lR) / length(levels(lR)))
     return(.apply_timed_guess_winner(out, levels(lR)))
   }
-  rBAwD(lR, pars, ok = ok, launch = launch, posdrift = posdrift, gamma = gamma)
+  rBAwD(lR, pars, ok = ok, launch = launch, posdrift = posdrift, gamma = gamma,
+        rho = rho)
 }
 
 .rfun_BAwDp <- function(lR, pars, ok = rep(TRUE, length(lR)), launch = 1L,

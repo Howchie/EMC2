@@ -7,7 +7,8 @@
 BAwD(
   drift_distribution = c("lognormal", "normal"),
   posdrift = TRUE,
-  gamma = 0
+  gamma = 0,
+  rho = Inf
 )
 }
 \arguments{
@@ -22,49 +23,39 @@ name. Only meaningful for normal launches.}
 \code{3/4}, or \code{1}. A model option, never an estimated parameter; the
 corresponding suffix appended to the compiled model name is \code{""},
 \code{"_GAM12"}, \code{"_GAM23"}, \code{"_GAM34"}, and \code{"_GAM100"} respectively.}
+
+\item{rho}{Fixed base-kernel shape: \code{1}, \code{2}, \code{4}, or \code{Inf} (default).
+\code{Inf} is the exponential kernel and has no rho suffix; finite values
+append \code{"_RHO1"}, \code{"_RHO2"}, or \code{"_RHO4"} after the gamma suffix.}
 }
 \value{
 A model list defining the BAwD race model.
 }
 \description{
-A race model in which each accumulator is driven by a transient signal
-opposed by fading clearance \verb{ell exp(-gamma k t)}. The fixed clearance
-decay exponent \code{gamma} can be \code{0}, \code{1/2}, \code{2/3}, \code{3/4}, or \code{1}.
+A race model in which each accumulator is driven by a power-law transient
+signal and opposed by clearance with the same base kernel:
+\verb{h_rho(u) = (1 + k u / rho)^(-rho)}, with the exponential limit
+\verb{h_Inf(u) = exp(-k u)}. The fixed kernel option \code{rho} is one of
+\code{1}, \code{2}, \code{4}, or \code{Inf}.
 }
 \details{
-\code{gamma} is the clearance decay exponent, not the frozen-mass factor's
-exponent. For \code{0 <= gamma < 1}, the frozen mass is
-\verb{1 - (ell / w)^r} with the derived exponent
-\verb{r = 1 / (1 - gamma)}. Thus \code{gamma = 0, 1/2, 2/3, 3/4} give
-\code{r = 1, 2, 3, 4}; \code{gamma = 1} is the co-decay limit represented by
-\code{r = Inf}, but it has no finite saturation wall. \code{r} is never a
-constructor option; it is fully determined by \code{gamma}.
+The fixed clearance exponent \code{gamma} can be \code{0}, \code{1/2}, \code{2/3}, \code{3/4}, or
+\code{1}. For \code{gamma < 1} and finite \code{rho > 1}, the frozen-mass exponent is
+\verb{alpha = (rho - 1) / (rho (1 - gamma))}; \code{rho = 1} is its logarithmic
+limit. The \code{rho = Inf} member retains the exponential kernel and today's
+model names.
 
-For \code{gamma > 0}, the trajectory is
-\verb{X(u) = z + V(1 - exp(-k u))/k -
-ell(1 - exp(-gamma k u))/(gamma k)}, with the \code{gamma = 0} limit
-\verb{X(u) = z + V(1 - exp(-k u))/k - ell u}.
-The required launch by time \code{u} is
-\verb{V^*(u,z) = [k(b-z) + ell(1-exp(-gamma k u))/gamma] /
-[1-exp(-k u)]}
-for \code{gamma > 0}, with the corresponding \code{k ell u} term at
-\code{gamma = 0}. For \code{gamma < 1}, saturation uses
-\code{w = ell exp((1-gamma) k u)} and
-\verb{|dz/dw| = k^{-1}[1 - (ell/w)^r]}, where
-\code{r = 1/(1-gamma)}. At \code{gamma = 1},
-\verb{X(u) = z + (V-ell)(1-exp(-k u))/k}; the eventual-hit condition is
-\code{V > ell + k(b-z)}, so responses can be arbitrarily late.
+The trajectory is
+\verb{X(u) = z + V Q_rho(u) - ell R_rho(u)}, where
+\verb{Q_rho(u) = integral_0^u h_rho(s) ds} and
+\verb{R_rho(u) = integral_0^u h_rho(s)^gamma ds}.
+For \code{gamma = 1}, \verb{Xdot = (V - ell) h_rho}; there is no finite endpoint.
+For \code{gamma < 1}, weak launch strengths can miss the threshold permanently
+and a finite \code{T_max} occurs when \code{k > 0} and \code{ell > 0}.
 
-The start point is static and weak drive can produce an omission.
-For \code{gamma < 1}, \code{T_max} is finite when \code{k > 0} and \code{ell > 0}; the
-\code{gamma = 1} endpoint (co-decay) retains omissions but has no finite
-endpoint. The five regimes are fixed constructor options, not estimated
-parameters, so all variants have the same number of free parameters
-(\code{gamma} never appears in \code{p_types}).
-
-Default values are used for all parameters that are not explicitly listed in
-the \code{formula} argument of \code{design()}. They can also be accessed with
-\code{BAwD()$p_types}.
+The start point is static and weak drive can produce an omission. The
+fixed \code{rho} and \code{gamma} choices are model options, never estimated
+parameters, so they do not appear in \code{p_types}.
 
 With \code{drift_distribution = "lognormal"} (the default) \verb{log V ~ N(mu, sigma^2)}.\tabular{llllll}{
    \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Mapping} \tab \strong{Interpretation} \cr

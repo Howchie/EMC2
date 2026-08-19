@@ -2,19 +2,17 @@
 #define EMC2_MODEL_BAWD_H
 
 // ---------------------------------------------------------------------------
-// BAwD: ballistic accumulator with exponentially fading clearance.
+// BAwD: ballistic accumulator with a power-law base decay.
 //
-//   dX/du = V exp(-k u) - ell exp(-gamma k u),  z ~ U(0, A)
-//   X(u) = z + V q(u) - ell c_gamma(u),         b = B + A
+//   h_rho(u) = (1 + k u / rho)^(-rho), h_Inf(u) = exp(-k u)
+//   dX/du = V h_rho(u) - ell h_rho(u)^gamma, z ~ U(0, A)
+//   X(u) = z + V Q_rho(u) - ell R_rho(u),         b = B + A
 //
-// where q(u) = (1 - exp(-k u))/k and, for gamma > 0,
-// c_gamma(u) = (1 - exp(-gamma k u))/(gamma k).  At gamma = 0 the
-// clearance term is ell u.  The fixed gamma options are 0, 1/2, 2/3,
-// 3/4, and 1; gamma is a model option, not an estimated parameter.
-//
-// For gamma < 1 and k > 0 and ell > 0, trajectories have a finite peak and
-// a hard right endpoint T_max.  At gamma = 1, drive and clearance co-decay:
-// X(u) = z + (V - ell) q(u), so there is no finite endpoint although weak
+// The fixed rho options are 1, 2, 4, and Inf; the fixed gamma options are
+// 0, 1/2, 2/3, 3/4, and 1.  Neither is an estimated parameter.  For gamma < 1
+// and k > 0 and ell > 0, finite-rho trajectories have a finite peak and a
+// hard right endpoint T_max.  At gamma = 1, drive and clearance co-decay:
+// X(u) = z + (V - ell) Q_rho(u), so there is no finite endpoint although weak
 // launches still produce intrinsic omissions.
 //
 // Normal and lognormal launch strengths share this geometry.  The selected
@@ -24,6 +22,7 @@
 // ---------------------------------------------------------------------------
 
 #include <cmath>
+#include "bawd_kernel.h"
 #include "model_LBA.h"
 #include "gl_quad.h"
 
@@ -91,17 +90,21 @@ inline double bawd_newton_y(double c) {
 // Row geometry: everything that depends on (A, b, k, ell) but not on u or on
 // the launch distribution.  Two Newton solves per row, never per quadrature
 // node, so the truncation and censoring paths that evaluate the CDF at several
-// times for one row reuse them.
 struct BawdGeom {
   bool ok = false;
   bool k_zero = false;
   bool ell_zero = false;
+  bool rho_inf = true;
+  bool rho_one = false;
   double gamma = 0.0;
   bool gamma_zero = true;
   bool gamma_one = false;
   double omg = 1.0;
-  double frozen_m = 0.0;  // r - 1 in the lognormal negative-moment term
-  double frozen_r = 1.0;  // r = 1/(1 - gamma), for gamma < 1
+  double rho = R_PosInf;
+  double m_shape = R_PosInf;
+  double kq_inf = 1.0;
+  double frozen_m = 0.0;      // alpha - 1 in the lognormal frozen term
+  double frozen_alpha = 1.0;  // exponent alpha in the frozen Jacobian
   double b = 0.0, A = 0.0, k = 0.0, ell = 0.0;
   double y_A = 0.0;
   double y_0 = 0.0;
@@ -111,8 +114,42 @@ struct BawdGeom {
 };
 inline double bawd_critical_launch(const BawdGeom& g, double s);
 
+inline double bawd_log_psi_prime(const BawdGeom& g, double x) {
+  if (!g.rho_inf)
+    return bawd_pk_log_psi_prime(g.rho, g.gamma,
+                                 bawd_pk_log_tau(g.rho, x));
+  return std::log(g.omg) - g.gamma * x + std::log(std::expm1(x));
+}
+
+inline double bawd_log_h(const BawdGeom& g, double x) {
+  return g.rho_inf ? -x : -g.rho * bawd_pk_log_tau(g.rho, x);
+}
+
+inline double bawd_log_wrel(const BawdGeom& g, double x) {
+  return g.rho_inf ? g.omg * x
+                   : bawd_pk_log_wrel(g.rho, g.gamma,
+                                       bawd_pk_log_tau(g.rho, x));
+}
+
+inline double bawd_kq(const BawdGeom& g, double x) {
+  return g.rho_inf
+    ? -std::expm1(-x)
+    : bawd_pk_kq(g.rho, bawd_pk_log_tau(g.rho, x));
+}
+
+inline double bawd_kr(const BawdGeom& g, double x) {
+  if (g.rho_inf) {
+    if (g.gamma_one) return -std::expm1(-x);
+    if (g.gamma_zero) return x;
+    return -std::expm1(-g.gamma * x) / g.gamma;
+  }
+  return bawd_pk_kr(g.rho, g.gamma, bawd_pk_log_tau(g.rho, x));
+}
+
 
 inline double bawd_psi(double s, const BawdGeom& g) {
+  if (!g.rho_inf)
+    return bawd_pk_psi(g.rho, g.gamma, bawd_pk_log_tau(g.rho, s));
   if (g.gamma_zero) return bawd_em1my(s);
   if (s < 1e-4) {
     const double x = s;
@@ -126,6 +163,7 @@ inline double bawd_psi(double s, const BawdGeom& g) {
 }
 
 inline double bawd_newton_s(double c, const BawdGeom& g) {
+  if (!g.rho_inf) return bawd_pk_newton_x(g.rho, g.gamma, c);
   if (g.gamma_zero) return bawd_newton_y(c);
   if (!(c > 0.0)) return 0.0;
   if (!emc2_isfinite(c)) return R_PosInf;
@@ -144,20 +182,42 @@ inline double bawd_newton_s(double c, const BawdGeom& g) {
   return s;
 }
 
+
 inline BawdGeom bawd_geometry(double A, double b, double k, double ell,
-                              double gamma) {
+                              double gamma, double rho = R_PosInf) {
   BawdGeom g;
   if (!emc2_isfinite(A) || !emc2_isfinite(b) || !emc2_isfinite(k) ||
       !emc2_isfinite(ell) || !emc2_isfinite(gamma))
     return g;
   if (!(b > 0.0) || !(A >= 0.0) || !(b >= A) || !(k >= 0.0) ||
       !(ell >= 0.0) || gamma < 0.0 || gamma > 1.0) return g;
+  if (ISNAN(rho)) return g;
+  g.rho_inf = (rho == 0.0) || (rho > 0.0 && !R_FINITE(rho));
+  if (!g.rho_inf) {
+    if (!(rho >= 1.0)) return g;
+    g.rho = rho;
+    g.rho_one = std::fabs(rho - 1.0) <= 1e-12;
+    g.m_shape = rho * (1.0 - gamma);
+    g.kq_inf = g.rho_one ? R_PosInf : rho / (rho - 1.0);
+  } else {
+    g.rho = R_PosInf;
+    g.m_shape = R_PosInf;
+    g.kq_inf = 1.0;
+  }
   g.ok = true; g.b = b; g.A = A; g.k = k; g.ell = ell; g.gamma = gamma;
   g.gamma_zero = gamma <= BAWD_GAMMA_EPS;
   g.gamma_one = gamma >= 1.0 - BAWD_GAMMA_EPS;
   g.omg = 1.0 - gamma;
-  g.frozen_m = g.gamma_one ? R_PosInf : gamma / g.omg;
-  g.frozen_r = g.gamma_one ? R_PosInf : 1.0 / g.omg;
+  if (g.gamma_one) {
+    g.frozen_alpha = R_PosInf;
+    g.frozen_m = R_PosInf;
+  } else if (g.rho_inf) {
+    g.frozen_alpha = 1.0 / g.omg;
+    g.frozen_m = g.gamma / g.omg;
+  } else {
+    g.frozen_alpha = (rho - 1.0) / (rho * g.omg);
+    g.frozen_m = g.frozen_alpha - 1.0;
+  }
   g.k_zero = (k <= BAWD_K_EPS);
   g.ell_zero = (ell <= BAWD_ELL_EPS);
   if (g.k_zero || g.ell_zero || g.gamma_one) return g;
@@ -165,10 +225,12 @@ inline BawdGeom bawd_geometry(double A, double b, double k, double ell,
   g.y_A = (b > A) ? bawd_newton_s(k * (b - A) / ell, g) : 0.0;
   g.T_max = g.y_0 / k;
   g.T_sat_A = g.y_A / k;
-  g.V_c0 = g.gamma_zero
-    ? k * b + ell * (1.0 + g.y_0)
-    : ell * (1.0 + bawd_psi(g.y_0, g) -
-             (g.omg / g.gamma) * std::expm1(-g.gamma * g.y_0));
+  g.V_c0 = !g.rho_inf
+    ? bawd_critical_launch(g, g.y_0)
+    : (g.gamma_zero
+       ? k * b + ell * (1.0 + g.y_0)
+       : ell * (1.0 + bawd_psi(g.y_0, g) -
+                (g.omg / g.gamma) * std::expm1(-g.gamma * g.y_0)));
   return g;
 }
 // Critical launch at saturation: w(s) = ell exp((1 - gamma)s).  The
@@ -176,6 +238,8 @@ inline BawdGeom bawd_geometry(double A, double b, double k, double ell,
 // separate expm1(s) - s branch.
 
 inline double bawd_critical_launch(const BawdGeom& g, double s) {
+  if (!g.rho_inf)
+    return g.ell * std::exp(bawd_log_wrel(g, s));
   if (g.gamma_zero)
     return g.ell * (bawd_em1my(s) + 1.0 + s);
   return g.ell * (1.0 + bawd_psi(s, g) -
@@ -214,7 +278,22 @@ inline BawdAtU bawd_at_u(const BawdGeom& g, double u) {
   s.ok = true;
   const bool inf_u = (u == R_PosInf);
 
-  if (g.k_zero) {
+  if (!g.rho_inf) {
+    if (g.k_zero) {
+      s.q = u;
+      s.E = 1.0;
+      s.log_E = 0.0;
+    } else if (inf_u) {
+      s.q = g.kq_inf / g.k;
+      s.E = 0.0;
+      s.log_E = R_NegInf;
+    } else {
+      const double L = bawd_pk_log_tau(g.rho, g.k * u);
+      s.log_E = -g.rho * L;
+      s.E = std::exp(s.log_E);
+      s.q = bawd_pk_kq(g.rho, L) / g.k;
+    }
+  } else if (g.k_zero) {
     s.q = u;
     s.E = 1.0;
     s.log_E = 0.0;
@@ -239,6 +318,11 @@ inline BawdAtU bawd_at_u(const BawdGeom& g, double u) {
     s.E_g = 0.0; s.log_E_g = R_NegInf;
     s.E_rel = g.gamma_one ? 1.0 : 0.0;
     s.log_E_rel = g.gamma_one ? 0.0 : R_NegInf;
+  } else if (!g.rho_inf) {
+    s.log_E_g = g.gamma * s.log_E;
+    s.E_g = std::exp(s.log_E_g);
+    s.log_E_rel = g.omg * s.log_E;
+    s.E_rel = std::exp(s.log_E_rel);
   } else {
     s.log_E_g = -g.gamma * g.k * u;
     s.E_g = std::exp(s.log_E_g);
@@ -264,8 +348,14 @@ inline BawdAtU bawd_at_u(const BawdGeom& g, double u) {
     s.s_lo = g.y_A;
     s.s_hi = inf_u ? g.y_0 : std::fmin(ku, g.y_0);
   }
-
-  if (s.saturated) {
+  if (!g.rho_inf && g.gamma_one) {
+    s.w_hi = g.b / s.q + g.ell;
+    s.w_lo = (g.b - s.Z) / s.q + g.ell;
+  } else if (!g.rho_inf && !g.k_zero && !s.saturated) {
+    const double ellu = g.ell_zero ? 0.0 : g.ell * bawd_kr(g, g.k * u) / g.k;
+    s.w_hi = (g.b + ellu) / s.q;
+    s.w_lo = (g.b - s.Z + ellu) / s.q;
+  } else if (s.saturated) {
     s.w_hi = g.V_c0;
     s.w_lo = g.V_c0;
   } else if (g.k_zero) {
@@ -349,7 +439,17 @@ inline double bawd_log_gl_split(const LogFun& log_f, double a, double b,
 
 inline double bawd_log_frozen_normal(const BawdGeom& g, double s_lo, double s_hi,
                                      double v, double sv) {
-  if (!(s_hi > s_lo) || !(sv > 0.0)) return R_NegInf;
+  if (!g.rho_inf) {
+    if (!(s_hi > s_lo) || !(sv > 0.0)) return R_NegInf;
+    const auto lf = [&](double x) -> double {
+      return bawd_log_psi_prime(g, x) +
+        pnorm_log_direct((v - bawd_critical_launch(g, x)) / sv, true);
+    };
+    const double mid = (v > 0.0)
+      ? bawd_pk_peak_x(g.rho, g.gamma, std::log(v / g.ell)) : s_lo;
+    return bawd_log_gl_split(lf, s_lo, s_hi, mid, BAWD_GL_NODES) +
+      std::log(g.ell) - std::log(g.k);
+  }
   const auto lf = [&](double s) -> double {
     const double e1 = std::expm1(s);
     if (!(e1 > 0.0)) return R_NegInf;
@@ -364,6 +464,18 @@ inline double bawd_log_frozen_normal(const BawdGeom& g, double s_lo, double s_hi
 
 inline double bawd_log_frozen_logn_quad(const BawdGeom& g, double s_lo,
                                         double s_hi, double mu, double sigma) {
+  if (!g.rho_inf) {
+    if (!(s_hi > s_lo) || !(sigma > 0.0)) return R_NegInf;
+    const double log_ell = std::log(g.ell);
+    const auto lf = [&](double x) -> double {
+      return bawd_log_psi_prime(g, x) +
+        pnorm_log_direct((log_ell + bawd_log_wrel(g, x) - mu) / sigma,
+                         false);
+    };
+    const double mid = bawd_pk_peak_x(g.rho, g.gamma, mu - log_ell);
+    return bawd_log_gl_split(lf, s_lo, s_hi, mid, BAWD_GL_NODES) +
+      std::log(g.ell) - std::log(g.k);
+  }
   if (!(s_hi > s_lo) || !(sigma > 0.0)) return R_NegInf;
   const double x_ell = (std::log(g.ell) - mu) / sigma;
   const auto lf = [&](double s) -> double {
@@ -390,7 +502,48 @@ inline double bawd_log_frozen_logn_quad(const BawdGeom& g, double s_lo,
 // w = ell, so the implementation falls back to the positive s-integral.
 inline double bawd_log_frozen_logn(const BawdGeom& g, double s_lo, double s_hi,
                                    double mu, double sigma) {
-  if (!(s_hi > s_lo) || !(sigma > 0.0)) return R_NegInf;
+  if (!g.rho_inf) {
+    if (!(s_hi > s_lo) || !(sigma > 0.0)) return R_NegInf;
+    const double w_a = bawd_critical_launch(g, s_lo);
+    const double w_b = bawd_critical_launch(g, s_hi);
+    if (!(w_b > w_a) || !emc2_isfinite(w_b))
+      return bawd_log_frozen_logn_quad(g, s_lo, s_hi, mu, sigma);
+    const double log_ell = std::log(g.ell);
+    if (g.rho_one) {
+      const double ta = log_lognormal_logratio_stoploss(
+        w_a, mu, sigma, log_ell);
+      const double tb = log_lognormal_logratio_stoploss(
+        w_b, mu, sigma, log_ell);
+      const double gap = ta - tb;
+      if (gap > BAWD_MIN_LOG_GAP) {
+        const double td = log_diff_exp(ta, tb);
+        if (emc2_isfinite(td))
+          return -std::log(g.k) - std::log1p(-g.gamma) + td;
+      }
+      return bawd_log_frozen_logn_quad(g, s_lo, s_hi, mu, sigma);
+    }
+    const double lc_a = log_lognormal_stoploss(w_a, mu, sigma);
+    const double lc_b = log_lognormal_stoploss(w_b, mu, sigma);
+    if (lc_a - lc_b > BAWD_MIN_LOG_GAP) {
+      const double L0 = log_diff_exp(lc_a, lc_b);
+      const double lam_a = log_lognormal_power_stoploss(
+        w_a, mu, sigma, g.frozen_m);
+      const double lam_b = log_lognormal_power_stoploss(
+        w_b, mu, sigma, g.frozen_m);
+      const double L1 = g.frozen_alpha * log_ell +
+        log_diff_exp(lam_a, lam_b);
+      if (emc2_isfinite(L0)) {
+        const double d = L1 - L0;
+        if (d < 0.0 && -std::expm1(d) > 1e-6)
+          return std::log(g.rho) - std::log(g.k) -
+            std::log(g.rho - 1.0) + L0 + log1m_exp(d);
+        if (!(L1 > R_NegInf))
+          return std::log(g.rho) - std::log(g.k) -
+            std::log(g.rho - 1.0) + L0;
+      }
+    }
+    return bawd_log_frozen_logn_quad(g, s_lo, s_hi, mu, sigma);
+  }
   const double w_a = bawd_critical_launch(g, s_lo);
   const double w_b = bawd_critical_launch(g, s_hi);
   if (!(w_b > w_a) || !emc2_isfinite(w_b))
@@ -419,7 +572,7 @@ inline double bawd_log_frozen_logn(const BawdGeom& g, double s_lo, double s_hi,
         w_a, mu, sigma, g.frozen_m);
       const double lam_b = log_lognormal_power_stoploss(
         w_b, mu, sigma, g.frozen_m);
-      const double L1 = g.frozen_r * std::log(g.ell) +
+      const double L1 = g.frozen_alpha * std::log(g.ell) +
         log_diff_exp(lam_a, lam_b);
       if (emc2_isfinite(L0)) {
         const double d = L1 - L0;
@@ -910,8 +1063,9 @@ inline bool bawd_natural_pdf_logn(double u, const BawdGeom& g, double mu,
 
 inline bool ba_natural_cdf_bawd(double u, double A, double b, double p1, double p2,
                                 double k, double ell, int launch, bool posdrift,
-                                double gamma, double denom_floor, int accept_mode, double &cdf) {
-  const BawdGeom g = bawd_geometry(A, b, k, ell, gamma);
+                                double gamma, double rho, double denom_floor,
+                                int accept_mode, double &cdf) {
+  const BawdGeom g = bawd_geometry(A, b, k, ell, gamma, rho);
   if (launch == BAWD_LAUNCH_LOGNORMAL)
     return bawd_natural_cdf_logn(u, g, p1, p2, accept_mode, cdf);
   return bawd_natural_cdf_normal(u, g, p1, p2, posdrift, denom_floor, accept_mode, cdf);
@@ -919,8 +1073,9 @@ inline bool ba_natural_cdf_bawd(double u, double A, double b, double p1, double 
 
 inline bool ba_natural_pdf_bawd(double u, double A, double b, double p1, double p2,
                                 double k, double ell, int launch, bool posdrift,
-                                double gamma, double denom_floor, int accept_mode, double &pdf) {
-  const BawdGeom g = bawd_geometry(A, b, k, ell, gamma);
+                                double gamma, double rho, double denom_floor,
+                                int accept_mode, double &pdf) {
+  const BawdGeom g = bawd_geometry(A, b, k, ell, gamma, rho);
   if (launch == BAWD_LAUNCH_LOGNORMAL)
     return bawd_natural_pdf_logn(u, g, p1, p2, accept_mode, pdf);
   return bawd_natural_pdf_normal(u, g, p1, p2, posdrift, denom_floor, accept_mode, pdf);
@@ -930,11 +1085,11 @@ inline bool ba_natural_pdf_bawd(double u, double A, double b, double p1, double 
 // Dispatch and output wrappers.  `p1`/`p2` are (v, sv) for the normal launch
 // and (mu, sigma) for the lognormal one; they occupy the same kernel columns.
 // --------------------------------------------------------------------------
-
 inline double bawd_log_cdf(double u, double A, double b, double p1, double p2,
                            double k, double ell, int launch, bool posdrift,
-                           double gamma, double denom_floor = BAWD_DENOM_FLOOR) {
-  const BawdGeom g = bawd_geometry(A, b, k, ell, gamma);
+                           double gamma, double rho,
+                           double denom_floor = BAWD_DENOM_FLOOR) {
+  const BawdGeom g = bawd_geometry(A, b, k, ell, gamma, rho);
   if (launch == BAWD_LAUNCH_LOGNORMAL)
     return log_bawd_cdf_logn(u, g, p1, p2);
   return log_bawd_cdf_normal(u, g, p1, p2, posdrift, denom_floor);
@@ -942,8 +1097,9 @@ inline double bawd_log_cdf(double u, double A, double b, double p1, double p2,
 
 inline double bawd_log_pdf(double u, double A, double b, double p1, double p2,
                            double k, double ell, int launch, bool posdrift,
-                           double gamma, double denom_floor = BAWD_DENOM_FLOOR) {
-  const BawdGeom g = bawd_geometry(A, b, k, ell, gamma);
+                           double gamma, double rho,
+                           double denom_floor = BAWD_DENOM_FLOOR) {
+  const BawdGeom g = bawd_geometry(A, b, k, ell, gamma, rho);
   if (launch == BAWD_LAUNCH_LOGNORMAL)
     return log_bawd_pdf_logn(u, g, p1, p2);
   return log_bawd_pdf_normal(u, g, p1, p2, posdrift, denom_floor);
@@ -951,27 +1107,29 @@ inline double bawd_log_pdf(double u, double A, double b, double p1, double p2,
 
 inline double bawd_cdf_norm(double t, double A, double b, double p1, double p2,
                             double k, double ell, int launch, bool posdrift,
-                            bool log_out, double gamma,
+                            bool log_out, double gamma, double rho,
                             double denom_floor = BAWD_DENOM_FLOOR) {
   double cdf;
   if (ba_natural_cdf_bawd(t, A, b, p1, p2, k, ell, launch, posdrift, gamma,
-                           denom_floor, BA_ACCEPT_STRICT, cdf))
+                           rho, denom_floor, BA_ACCEPT_STRICT, cdf))
     return log_out ? std::log(cdf) : cdf;
   return return_from_log(
-    bawd_log_cdf(t, A, b, p1, p2, k, ell, launch, posdrift, gamma, denom_floor),
+    bawd_log_cdf(t, A, b, p1, p2, k, ell, launch, posdrift, gamma, rho,
+                 denom_floor),
     log_out);
 }
 
 inline double bawd_pdf_norm(double t, double A, double b, double p1, double p2,
                             double k, double ell, int launch, bool posdrift,
-                            bool log_out, double gamma,
+                            bool log_out, double gamma, double rho,
                             double denom_floor = BAWD_DENOM_FLOOR) {
   double pdf;
   if (ba_natural_pdf_bawd(t, A, b, p1, p2, k, ell, launch, posdrift, gamma,
-                           denom_floor, BA_ACCEPT_STRICT, pdf))
+                           rho, denom_floor, BA_ACCEPT_STRICT, pdf))
     return log_out ? std::log(pdf) : pdf;
   return return_from_log(
-    bawd_log_pdf(t, A, b, p1, p2, k, ell, launch, posdrift, gamma, denom_floor),
+    bawd_log_pdf(t, A, b, p1, p2, k, ell, launch, posdrift, gamma, rho,
+                 denom_floor),
     log_out);
 }
 
@@ -979,12 +1137,14 @@ inline double bawd_pdf_norm(double t, double A, double b, double p1, double p2,
 // tolerate tail saturation: truncation normalisers and GSL integrands.
 inline double bawd_cdf_scalar_natural(double t, double A, double b, double p1,
                                       double p2, double k, double ell,
-                                      int launch, bool posdrift, double gamma) {
+                                      int launch, bool posdrift, double gamma,
+                                      double rho) {
   double cdf;
   if (ba_natural_cdf_bawd(t, A, b, p1, p2, k, ell, launch, posdrift, gamma,
-                           BAWD_DENOM_FLOOR, BA_ACCEPT_CLAMP, cdf))
+                           rho, BAWD_DENOM_FLOOR, BA_ACCEPT_CLAMP, cdf))
     return cdf;
-  const double lp = bawd_log_cdf(t, A, b, p1, p2, k, ell, launch, posdrift, gamma);
+  const double lp = bawd_log_cdf(t, A, b, p1, p2, k, ell, launch, posdrift,
+                                 gamma, rho);
   if (!(lp > R_NegInf)) return 0.0;
   const double out = std::exp(lp);
   return (out > 1.0) ? 1.0 : out;
@@ -992,12 +1152,14 @@ inline double bawd_cdf_scalar_natural(double t, double A, double b, double p1,
 
 inline double bawd_pdf_scalar_natural(double t, double A, double b, double p1,
                                       double p2, double k, double ell,
-                                      int launch, bool posdrift, double gamma) {
+                                      int launch, bool posdrift, double gamma,
+                                      double rho) {
   double pdf;
   if (ba_natural_pdf_bawd(t, A, b, p1, p2, k, ell, launch, posdrift, gamma,
-                           BAWD_DENOM_FLOOR, BA_ACCEPT_CLAMP, pdf))
+                           rho, BAWD_DENOM_FLOOR, BA_ACCEPT_CLAMP, pdf))
     return pdf;
-  const double lp = bawd_log_pdf(t, A, b, p1, p2, k, ell, launch, posdrift, gamma);
+  const double lp = bawd_log_pdf(t, A, b, p1, p2, k, ell, launch, posdrift,
+                                 gamma, rho);
   return (lp > R_NegInf) ? std::exp(lp) : 0.0;
 }
 
@@ -1013,7 +1175,8 @@ inline double bawd_pdf_scalar_natural(double t, double A, double b, double p1,
 NumericVector dbawd(NumericVector t, NumericVector A, NumericVector b,
                     NumericVector p1, NumericVector p2, NumericVector k,
                     NumericVector ell, int launch = 1, bool posdrift = true,
-                    bool log_out = false, double gamma = 0.0) {
+                    bool log_out = false, double gamma = 0.0,
+                    double rho = 0.0) {
   const int n = t.size();
   NumericVector out(n);
   auto pick = [](const NumericVector& x, int i) -> double {
@@ -1022,7 +1185,7 @@ NumericVector dbawd(NumericVector t, NumericVector A, NumericVector b,
   for (int i = 0; i < n; ++i)
     out[i] = bawd_pdf_norm(t[i], pick(A, i), pick(b, i), pick(p1, i),
                            pick(p2, i), pick(k, i), pick(ell, i), launch,
-                           posdrift, log_out, gamma);
+                           posdrift, log_out, gamma, rho);
   return out;
 }
 
@@ -1030,7 +1193,8 @@ NumericVector dbawd(NumericVector t, NumericVector A, NumericVector b,
 NumericVector pbawd(NumericVector t, NumericVector A, NumericVector b,
                     NumericVector p1, NumericVector p2, NumericVector k,
                     NumericVector ell, int launch = 1, bool posdrift = true,
-                    bool log_out = false, double gamma = 0.0) {
+                    bool log_out = false, double gamma = 0.0,
+                    double rho = 0.0) {
   const int n = t.size();
   NumericVector out(n);
   auto pick = [](const NumericVector& x, int i) -> double {
@@ -1039,22 +1203,26 @@ NumericVector pbawd(NumericVector t, NumericVector A, NumericVector b,
   for (int i = 0; i < n; ++i)
     out[i] = bawd_cdf_norm(t[i], pick(A, i), pick(b, i), pick(p1, i),
                            pick(p2, i), pick(k, i), pick(ell, i), launch,
-                           posdrift, log_out, gamma);
+                           posdrift, log_out, gamma, rho);
   return out;
 }
 
 // [[Rcpp::export]]
 double dbawd_norm(double t, double A, double b, double p1, double p2, double k,
                   double ell, int launch = 1, bool posdrift = true,
-                  bool log_out = false, double gamma = 0.0) {
-  return bawd_pdf_norm(t, A, b, p1, p2, k, ell, launch, posdrift, log_out, gamma);
+                  bool log_out = false, double gamma = 0.0,
+                  double rho = 0.0) {
+  return bawd_pdf_norm(t, A, b, p1, p2, k, ell, launch, posdrift, log_out,
+                       gamma, rho);
 }
 
 // [[Rcpp::export]]
 double pbawd_norm(double t, double A, double b, double p1, double p2, double k,
                   double ell, int launch = 1, bool posdrift = true,
-                  bool log_out = false, double gamma = 0.0) {
-  return bawd_cdf_norm(t, A, b, p1, p2, k, ell, launch, posdrift, log_out, gamma);
+                  bool log_out = false, double gamma = 0.0,
+                  double rho = 0.0) {
+  return bawd_cdf_norm(t, A, b, p1, p2, k, ell, launch, posdrift, log_out,
+                       gamma, rho);
 }
 
 // Right endpoint of the supported decision-time window (Inf when ell = 0 or
@@ -1062,8 +1230,9 @@ double pbawd_norm(double t, double A, double b, double p1, double p2, double k,
 // the support constraint are both stated in terms of it, and a test that
 // recomputed it in R would not be testing the same quantity.
 // [[Rcpp::export]]
-double bawd_tmax(double A, double b, double k, double ell, double gamma = 0.0) {
-  const BawdGeom g = bawd_geometry(A, b, k, ell, gamma);
+double bawd_tmax(double A, double b, double k, double ell, double gamma = 0.0,
+                 double rho = 0.0) {
+  const BawdGeom g = bawd_geometry(A, b, k, ell, gamma, rho);
   return g.ok ? g.T_max : NA_REAL;
 }
 
@@ -1072,7 +1241,8 @@ double bawd_tmax(double A, double b, double k, double ell, double gamma = 0.0) {
 // follows A and the rest recycle, as in dbawd/pbawd above.
 // [[Rcpp::export]]
 NumericVector bawd_tmax_vec(NumericVector A, NumericVector b, NumericVector k,
-                            NumericVector ell, NumericVector gamma = 0.0) {
+                            NumericVector ell, NumericVector gamma = 0.0,
+                            NumericVector rho = 0.0) {
   const int n = A.size();
   NumericVector out(n);
   auto pick = [](const NumericVector& x, int i) -> double {
@@ -1080,7 +1250,7 @@ NumericVector bawd_tmax_vec(NumericVector A, NumericVector b, NumericVector k,
   };
   for (int i = 0; i < n; ++i) {
     const BawdGeom g = bawd_geometry(A[i], pick(b, i), pick(k, i),
-                                     pick(ell, i), pick(gamma, i));
+                                     pick(ell, i), pick(gamma, i), pick(rho, i));
     out[i] = g.ok ? g.T_max : NA_REAL;
   }
   return out;
@@ -1098,6 +1268,13 @@ double lognormal_stoploss_log(double v, double mu, double sigma) {
 // [[Rcpp::export]]
 double lognormal_power_stoploss_log(double v, double mu, double sigma, double m) {
   return log_lognormal_power_stoploss(v, mu, sigma, m);
+}
+
+// log int_v^Inf log(w / ell) P(V >= w) dw.
+// [[Rcpp::export]]
+double lognormal_logratio_stoploss_log(double v, double mu, double sigma,
+                                       double log_ell) {
+  return log_lognormal_logratio_stoploss(v, mu, sigma, log_ell);
 }
 
 

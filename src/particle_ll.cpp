@@ -792,13 +792,20 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
     out.col_spec = bawd_logn ? emc2col::bawd_logn::spec() : emc2col::bawd::spec();
     out.ctx.t0_index = emc2col::bawd::t0;
     out.ctx.bawd_launch = bawd_logn ? BAWD_LAUNCH_LOGNORMAL : BAWD_LAUNCH_NORMAL;
-    // Fixed clearance exponent for Xdot = V exp(-k u) - ell exp(-gamma k u).
-    // Constant clearance emits no suffix, preserving existing BAwD routing.
+    // Fixed clearance exponent and base-kernel shape parsed from c_name.
+    // Constant clearance and the exponential kernel emit no suffixes,
+    // preserving existing BAwD routing.
     out.ctx.bawd_gamma =
       (type_std.find("_GAM100") != std::string::npos) ? 1.0 :
       ((type_std.find("_GAM34") != std::string::npos) ? 0.75 :
        ((type_std.find("_GAM23") != std::string::npos) ? (2.0 / 3.0) :
         ((type_std.find("_GAM12") != std::string::npos) ? 0.5 : 0.0)));
+    // Fixed power-decay kernel parameter parsed from the c_name suffix.
+    // Default (no suffix) is R_PosInf (exponential kernel).
+    out.ctx.bawd_rho =
+      (type_std.find("_RHO1") != std::string::npos) ? 1.0 :
+      ((type_std.find("_RHO2") != std::string::npos) ? 2.0 :
+       ((type_std.find("_RHO4") != std::string::npos) ? 4.0 : R_PosInf));
     // Always defective: weak launch strengths can miss the threshold in every
     // regime; co-decay removes the finite wall but not the omission mass.
     out.ctx.defective_upper_tail = true;

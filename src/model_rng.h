@@ -20,6 +20,7 @@
 #include <cmath>
 #include <limits>
 #include "wald_functions.h"  // pnorm_std
+#include "bawd_kernel.h"     // finite-rho scalar arithmetic, shared with the likelihood
 
 // One-sided truncated normal N(mu, sd) on [lo, Inf). lo == R_NegInf means
 // "no truncation" (plain rnorm). Uses inverse-CDF for modest truncation and
@@ -113,19 +114,13 @@ inline double rerlang_clock_r(double lambda, int shape, double omega) {
   return R::rgamma((double)use_shape, 1.0 / rate);
 }
 
-// BAwD first passage: solve  V q(u) - ell c_gamma(u) = d, where
-// q(u) = (1 - e^{-k u})/k and c_gamma(u) is the integrated fading
-// clearance.  We solve for the FIRST (rising-limb) crossing of d = b - z.
+// BAwD first passage: solve V q_rho(u) - ell c_{rho,gamma}(u) = d, where
+// q_rho and c_{rho,gamma} integrate the selected base kernel.  We solve for
+// the FIRST (rising-limb) crossing of d = b - z.
 //
-// For gamma < 1 the trajectory peaks at
-// u_p = log(V/ell) / ((1-gamma) k), with height
-// V q(u_p) - ell c_gamma(u_p); a launch strength that cannot reach d by
-// then never will, which is the model's intrinsic omission mechanism
-// (returns +Inf).  On (0, u_p] the trajectory is concave and increasing,
-// so Newton started at the LBA-limit time d/(V - ell) -- which lies below
-// the root because c_gamma(u) >= q(u) and q(u) <= u -- steps up
-// monotonically and cannot overshoot.  The gamma = 1 case has no peak and
-// admits a direct inversion.
+// The rho = Inf branch below retains the historical exponential arithmetic.
+// Finite rho uses the shared scalar kernel and its closed-form gamma = 1
+// inversion, with bracketed Newton on the rising limb for gamma < 1.
 inline double bawd_qf_r(double u, double k) {
   if (k <= 1e-10) return u;
   return -std::expm1(-k * u) / k;
@@ -138,35 +133,107 @@ inline double bawd_cf_r(double u, double k, double gamma) {
 }
 
 inline double bawd_hit_time_r(double V, double d, double k, double ell,
-                              double gamma) {
+                              double gamma, double rho) {
   if (!(d > 0.0)) return 0.0;                 // start already at threshold
   if (ISNAN(V) || !(V > 0.0)) return R_PosInf;
-  if (k <= 1e-10) {                           // exact LBA limit, drift V - ell
-    return (V > ell) ? d / (V - ell) : R_PosInf;
-  }
-  if (ell <= 1e-12) {                         // exact BAwL/leak-free inversion
-    const double x = 1.0 - k * d / V;
-    return (x > 0.0) ? -std::log(x) / k : R_PosInf;
-  }
-  if (gamma >= 1.0 - 1e-12) {
-    if (!(V > ell)) return R_PosInf;
-    const double x = 1.0 - k * d / (V - ell);
-    return (x > 0.0) ? -std::log(x) / k : R_PosInf;
-  }
-  if (!(V > ell)) return R_PosInf;
-  const double u_p = (gamma <= 1e-12)
-    ? std::log(V / ell) / k
-    : std::log(V / ell) / ((1.0 - gamma) * k);
-  if (V * bawd_qf_r(u_p, k) - ell * bawd_cf_r(u_p, k, gamma) < d)
-    return R_PosInf;
 
+  // FFI sentinel: rho == 0.0 (the compileAttributes-safe default) or a
+  // positive Inf both select the exponential kernel -- see bawd_geometry()
+  // in model_BAwD.h for the identical test.  Everything below this branch
+  // is the pre-existing exponential body, untouched (R1: no shared
+  // arithmetic with the finite-rho kernel).
+  const bool rho_inf = (rho == 0.0) || (rho > 0.0 && !R_FINITE(rho));
+  if (rho_inf) {
+    if (k <= 1e-10) {                           // exact LBA limit, drift V - ell
+      return (V > ell) ? d / (V - ell) : R_PosInf;
+    }
+    if (ell <= 1e-12) {                         // exact BAwL/leak-free inversion
+      const double x = 1.0 - k * d / V;
+      return (x > 0.0) ? -std::log(x) / k : R_PosInf;
+    }
+    if (gamma >= 1.0 - 1e-12) {
+      if (!(V > ell)) return R_PosInf;
+      const double x = 1.0 - k * d / (V - ell);
+      return (x > 0.0) ? -std::log(x) / k : R_PosInf;
+    }
+    if (!(V > ell)) return R_PosInf;
+    const double u_p = (gamma <= 1e-12)
+      ? std::log(V / ell) / k
+      : std::log(V / ell) / ((1.0 - gamma) * k);
+    if (V * bawd_qf_r(u_p, k) - ell * bawd_cf_r(u_p, k, gamma) < d)
+      return R_PosInf;
+
+    double u = d / (V - ell);
+    if (!(u > 0.0) || !R_FINITE(u)) u = 1e-12;
+    for (int it = 0; it < 100; ++it) {
+      const double f = V * bawd_qf_r(u, k) -
+        ell * bawd_cf_r(u, k, gamma) - d;
+      const double fp = V * std::exp(-k * u) -
+        ell * std::exp(-gamma * k * u);
+      if (!(fp > 0.0)) break;                   // at the peak: root is u_p
+      double un = u - f / fp;
+      if (!(un > 0.0)) un = 0.5 * u;
+      if (un > u_p) un = u_p;
+      const bool done = std::fabs(un - u) <= 1e-13 * std::fmax(1.0, un);
+      u = un;
+      if (done) break;
+    }
+    return u;
+  }
+
+  // Finite rho >= 1 (bawd_geometry already rejects rho in (-Inf, 1) and
+  // NaN before this is reached from the likelihood side; guard here too
+  // since the simulator can be called directly).
+  if (!(rho >= 1.0)) return R_PosInf;
+  const bool rho_one = std::fabs(rho - 1.0) <= 1e-12;
+  if (k <= 1e-10)
+    return (V > ell) ? d / (V - ell) : R_PosInf;
+
+  if (ell <= 1e-12) {
+    // With no clearance the finite-rho clock is V*kQ(x)/k.  Its
+    // rho=1 member is unbounded; rho>1 has a finite total clock.
+    if (rho_one) {
+      return std::expm1(k * d / V) / k;
+    }
+    const double S = k * d * (rho - 1.0) / (V * rho);
+    if (!(S < 1.0)) return R_PosInf;
+    const double x = rho * (std::pow(1.0 - S,
+                                      -1.0 / (rho - 1.0)) - 1.0);
+    return x / k;
+  }
+
+  if (gamma >= 1.0 - 1e-12) {
+    // Closed-form inversion of (V - ell) * kQ_rho(x) = k * d; no root-find.
+    if (!(V > ell)) return R_PosInf;
+    if (rho_one) {                              // kQ(x) = log(1 + x), unbounded
+      const double x = std::expm1(k * d / (V - ell));
+      return x / k;
+    }
+    const double S = k * d * (rho - 1.0) / ((V - ell) * rho);
+    if (!(S < 1.0)) return R_PosInf;            // omission: never reaches d
+    const double x = rho * (std::pow(1.0 - S, -1.0 / (rho - 1.0)) - 1.0);
+    return x / k;
+  }
+
+  // gamma < 1: same omission-then-Newton shape as the exponential branch
+  // above, but the peak and the trajectory both route through the shared
+  // finite-rho kernel (bawd_kernel.h) instead of the exponential formulas.
+  if (!(V > ell)) return R_PosInf;
+  const double x_p = bawd_pk_peak_x(rho, gamma, std::log(V / ell));
+  const double L_p = bawd_pk_log_tau(rho, x_p);
+  const double height =
+    (V * bawd_pk_kq(rho, L_p) - ell * bawd_pk_kr(rho, gamma, L_p)) / k;
+  if (height < d) return R_PosInf;
+
+  const double u_p = x_p / k;
   double u = d / (V - ell);
   if (!(u > 0.0) || !R_FINITE(u)) u = 1e-12;
   for (int it = 0; it < 100; ++it) {
-    const double f = V * bawd_qf_r(u, k) -
-      ell * bawd_cf_r(u, k, gamma) - d;
-    const double fp = V * std::exp(-k * u) -
-      ell * std::exp(-gamma * k * u);
+    const double L = bawd_pk_log_tau(rho, k * u);
+    const double f = V * bawd_pk_kq(rho, L) / k -
+      ell * bawd_pk_kr(rho, gamma, L) / k - d;
+    const double fp = V * std::exp(-rho * L) -
+      ell * std::exp(-rho * gamma * L);
     if (!(fp > 0.0)) break;                   // at the peak: root is u_p
     double un = u - f / fp;
     if (!(un > 0.0)) un = 0.5 * u;
