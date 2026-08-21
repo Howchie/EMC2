@@ -765,6 +765,18 @@ rrou_cpp <- function(pars, lR_levels, ok, kind_sexp = NULL, dt = 1e-3, t_max = 3
     .Call(`_EMC2_rrou_cpp`, pars, lR_levels, ok, kind_sexp, dt, t_max, par_kind)
 }
 
+droup_cpp <- function(rt, v_S, v_T, tau_S, tau_T, k, B, A, t0, s, nx = 384L, dt_target = 2e-3, grade = 8.0, tgrade = 32.0, bkind = 0L, Binf = as.numeric( c()), tau = as.numeric( c()), pw = as.numeric( c())) {
+    .Call(`_EMC2_droup_cpp`, rt, v_S, v_T, tau_S, tau_T, k, B, A, t0, s, nx, dt_target, grade, tgrade, bkind, Binf, tau, pw)
+}
+
+rroup_cpp <- function(pars, lR_levels, ok, kind_sexp = NULL, dt = 1e-3, t_max = 30.0) {
+    .Call(`_EMC2_rroup_cpp`, pars, lR_levels, ok, kind_sexp, dt, t_max)
+}
+
+rroup_hit_times_cpp <- function(v_S, v_T, tau_S, tau_T, k, B, A, s, dt = 1e-3, t_max = 30.0, bkind = 0L, Binf = as.numeric( c()), tau = as.numeric( c()), pw = as.numeric( c())) {
+    .Call(`_EMC2_rroup_hit_times_cpp`, v_S, v_T, tau_S, tau_T, k, B, A, s, dt, t_max, bkind, Binf, tau, pw)
+}
+
 emc_clone_sample_store <- function(source) {
     .Call(`_EMC2_emc_clone_sample_store`, source)
 }

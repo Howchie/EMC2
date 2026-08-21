@@ -141,6 +141,7 @@ struct FPE_Grid {
 // ---------------------------------------------------------------------------
 struct Key {
   double v = 0.0, k = 0.0, b = 0.0, A = 0.0;
+  double v_T = 0.0, tau_S = 0.0, tau_T = 0.0;
 
   // ROU uses a state-rescaled OU (sigma == 1, linear state).  Gompertz uses
   // the same OU march after Y = log(X), but must keep the physical diffusion
@@ -149,10 +150,10 @@ struct Key {
   // machinery without pretending that a log-space uniform start is uniform.
   double sigma = 1.0;
   double zlo = 0.0, zhi = 0.0;
-  int model_kind = 0;              // 0 = ROU, 1 = Gompertz
+  int model_kind = 0;              // 0 = ROU, 1 = Gompertz, 2 = ROUp
   bool log_state = false;
 
-  // Boundary.  For FPE_BND_FIXED the shape fields are forced to zero by
+  // Boundary.  For FPE_BND_FIXED the shape vectors are forced to zero by
   // rou_key(), so every fixed-bound row compares equal on them and a model that
   // never collapses behaves exactly as it did before collapse existed.
   int bkind = fpe::FPE_BND_FIXED;
@@ -160,13 +161,16 @@ struct Key {
 
   bool operator==(const Key& o) const {
     return v == o.v && k == o.k && b == o.b && A == o.A &&
+           v_T == o.v_T && tau_S == o.tau_S && tau_T == o.tau_T &&
            sigma == o.sigma && zlo == o.zlo && zhi == o.zhi &&
            model_kind == o.model_kind && log_state == o.log_state &&
            bkind == o.bkind && binf == o.binf && tau == o.tau && pw == o.pw;
   }
   bool finite() const {
     return std::isfinite(v) && std::isfinite(k) && std::isfinite(b) &&
-           std::isfinite(A) && std::isfinite(sigma) && std::isfinite(zlo) &&
+           std::isfinite(A) && std::isfinite(v_T) && std::isfinite(tau_S) &&
+           std::isfinite(tau_T) &&
+           std::isfinite(sigma) && std::isfinite(zlo) &&
            std::isfinite(zhi) && std::isfinite(binf) && std::isfinite(tau) &&
            std::isfinite(pw);
   }
@@ -182,6 +186,9 @@ struct KeyHash {
     mix(key.k);
     mix(key.b);
     mix(key.A);
+    mix(key.v_T);
+    mix(key.tau_S);
+    mix(key.tau_T);
     mix(key.sigma);
     mix(key.zlo);
     mix(key.zhi);
@@ -319,6 +326,45 @@ inline bool rou_key(double v, double k, double B, double A, double s,
         (!(bs.pw > 0.0) || !std::isfinite(bs.pw))) return false;
   }
   return out.finite() && out.b > 0.0 && out.v > 0.0;
+}
+
+inline bool roup_key(double v_S, double v_T, double tau_S, double tau_T, double k, double B, double A, double s,
+                     const BndSpec& bs, Key& out) {
+  if (!(s > 0.0) || !std::isfinite(s)) return false;
+  const double inv_s = 1.0 / s;
+  out.v = v_S * inv_s; // repurpose v as v_S
+  out.v_T = v_T * inv_s;
+  out.tau_S = tau_S;
+  out.tau_T = tau_T;
+  out.k = (k > 0.0 && std::isfinite(k)) ? k : 0.0;
+  out.sigma = 1.0;
+  out.zlo = 0.0;
+  out.model_kind = 2; // ROUp
+  out.log_state = false;
+  const double AA = (A > 0.0 && std::isfinite(A)) ? A * inv_s : 0.0;
+  out.A = AA;
+  out.b = B * inv_s + AA;                  // b = B + A, both already scaled
+
+  // Boundary
+  out.bkind = bs.kind;
+  if (bs.kind == fpe::FPE_BND_FIXED) {
+    out.binf = 0.0; out.tau = 0.0; out.pw = 0.0;   // canonical, so keys compare
+  } else {
+    if (!(bs.Binf >= 0.0) || !std::isfinite(bs.Binf) ||
+        !(bs.tau > 0.0) || !std::isfinite(bs.tau)) return false;
+    out.binf = bs.Binf * inv_s;
+    out.tau = bs.tau;
+    out.pw = (bs.kind == fpe::FPE_BND_WEIBULL) ? bs.pw : 0.0;
+    if (bs.kind == fpe::FPE_BND_WEIBULL &&
+        (!(bs.pw > 0.0) || !std::isfinite(bs.pw))) return false;
+  }
+  return out.finite() && out.b > 0.0;
+}
+
+// Fixed-boundary overload for ROUp.
+inline bool roup_key(double v_S, double v_T, double tau_S, double tau_T, double k, double B, double A, double s, Key& out) {
+  static const BndSpec fixed;
+  return roup_key(v_S, v_T, tau_S, tau_T, k, B, A, s, fixed, out);
 }
 
 // Fixed-boundary overload -- the common case, and every pre-collapse call site.
@@ -482,6 +528,40 @@ inline void rou_solve(const Key& p, double t_max, const FPE_Grid& gr, Entry& out
   out.grid_idx.build(out.t);
 }
 
+inline void roup_solve(const Key& p, double t_max, const FPE_Grid& gr, Entry& out) {
+  fpe::FPE_ModelPulseOU m;
+  m.v_S = p.v;
+  m.v_T = p.v_T;
+  m.tau_S = p.tau_S;
+  m.tau_T = p.tau_T;
+  m.lambda = p.k;
+  m.sigma = p.sigma;
+  m.bnd.set_kind(p.bkind, p.b,
+                 (p.bkind == fpe::FPE_BND_FIXED) ? p.b : p.binf,
+                 p.tau, p.pw, p.log_state);
+  const double zlo = p.log_state ? p.zlo : 0.0;
+  const double zhi = p.log_state ? p.zhi : p.A;
+  double v_min = std::min(0.0, std::min(p.v, p.v + p.v_T)); 
+  m.xlo = fpe::fpe_x_lo_ou(zlo, v_min, p.k, p.sigma, t_max);
+
+  const fpe::FPE_Result r =
+      fpe::fpe_run(m, zlo, zhi, t_max, gr.nx, gr.nt_for(t_max), gr.grade,
+                   gr.tgrade);
+
+  const size_t n = r.t.size();
+  out.key = p;
+  out.t_max = t_max;
+  out.complete_grid = true;
+  out.t = r.t;
+  out.log_pdf.resize(n);
+  out.log_S.resize(n);
+  for (size_t i = 0; i < n; ++i) {
+    out.log_pdf[i] = safe_log(r.pdf[i]);
+    out.log_S[i] = safe_log(r.surv[i]);
+  }
+  out.grid_idx.build(out.t);
+}
+
 // Find the entry for `p` covering at least t_need, solving or extending as
 // required.  Returns an INDEX, not a pointer: solving can reallocate `e`.
 inline int cache_get(SolveCache& C, const Key& p, double t_need) {
@@ -491,23 +571,22 @@ inline int cache_get(SolveCache& C, const Key& p, double t_need) {
     const size_t i = static_cast<size_t>(it->second);
     if (C.e[i].complete_grid && C.e[i].t_max >= t_need)
       return it->second;
-    // Extend in place.  dt is pinned by FPE_Grid, so the values on the shared
-    // part of the horizon move only at the discretisation-error level. Sparse
-    // raw-batch entries also come through here: arbitrary scalar censoring or
-    // truncation queries require the normal full interpolation grid.
     const double solve_to = std::max(t_need, C.e[i].t_max);
-    rou_solve(p, solve_to, C.grid, C.e[i]);
+    if (p.model_kind == 2) roup_solve(p, solve_to, C.grid, C.e[i]);
+    else rou_solve(p, solve_to, C.grid, C.e[i]);
     return it->second;
   }
   if (C.n_entries < C.e.size()) {
     const size_t idx = C.n_entries++;
-    rou_solve(p, t_need, C.grid, C.e[idx]);
+    if (p.model_kind == 2) roup_solve(p, t_need, C.grid, C.e[idx]);
+    else rou_solve(p, t_need, C.grid, C.e[idx]);
     C.index[p] = static_cast<int>(idx);
     return static_cast<int>(idx);
   } else {
     C.e.push_back(Entry());
     const size_t idx = C.n_entries++;
-    rou_solve(p, t_need, C.grid, C.e[idx]);
+    if (p.model_kind == 2) roup_solve(p, t_need, C.grid, C.e[idx]);
+    else rou_solve(p, t_need, C.grid, C.e[idx]);
     C.index[p] = static_cast<int>(idx);
     return static_cast<int>(idx);
   }
@@ -1181,9 +1260,20 @@ inline void cache_get_batch(SolveCache& C, const std::vector<Key>& keys,
 
   if (missing_keys.empty()) return;
 
+  std::vector<size_t> standard_keys;
+  for (size_t k_idx : missing_keys) {
+    if (keys[k_idx].model_kind == 0) {
+      standard_keys.push_back(k_idx);
+    } else {
+      out_cache_indices[k_idx] = cache_get(C, keys[k_idx], horizons[k_idx]);
+    }
+  }
+
+  if (standard_keys.empty()) return;
+
   // Similar horizons finish after a similar number of lane-local actions, which
   // minimises padded work after the shorter lanes have completed.
-  std::stable_sort(missing_keys.begin(), missing_keys.end(),
+  std::stable_sort(standard_keys.begin(), standard_keys.end(),
                    [&](size_t a, size_t b) {
                      return horizons[a] < horizons[b];
                    });
@@ -1193,9 +1283,9 @@ inline void cache_get_batch(SolveCache& C, const std::vector<Key>& keys,
   fpe::FPE_Mesh mesh;
   mesh.build(C.grid.nx, C.grid.grade);
 
-  for (size_t b = 0; b < missing_keys.size(); b += OU_BATCH_LANES) {
+  for (size_t b = 0; b < standard_keys.size(); b += OU_BATCH_LANES) {
     const size_t chunk_size =
-        std::min(OU_BATCH_LANES, missing_keys.size() - b);
+        std::min(OU_BATCH_LANES, standard_keys.size() - b);
     std::vector<fpe::FPE_ModelOU> models(chunk_size);
     std::vector<std::vector<double>> q0_vec(chunk_size);
     std::vector<double> t0_vec(chunk_size);
@@ -1207,7 +1297,7 @@ inline void cache_get_batch(SolveCache& C, const std::vector<Key>& keys,
     size_t num_chunk_steps = 0;
 
     for (size_t l = 0; l < chunk_size; ++l) {
-      const size_t k_idx = missing_keys[b + l];
+      const size_t k_idx = standard_keys[b + l];
       const Key& p = keys[k_idx];
 
       models[l].v = p.v;
@@ -1253,7 +1343,7 @@ inline void cache_get_batch(SolveCache& C, const std::vector<Key>& keys,
       }
 
       for (size_t l = 0; l < chunk_size; ++l) {
-        const size_t k_idx = missing_keys[b + l];
+        const size_t k_idx = standard_keys[b + l];
         const Key& p = keys[k_idx];
 
         Entry entry;
@@ -1299,7 +1389,7 @@ inline void cache_get_batch(SolveCache& C, const std::vector<Key>& keys,
       }
     } else {
       for (size_t l = 0; l < chunk_size; ++l) {
-        const size_t k_idx = missing_keys[b + l];
+        const size_t k_idx = standard_keys[b + l];
         out_cache_indices[k_idx] = cache_get(C, keys[k_idx], horizons[k_idx]);
       }
     }

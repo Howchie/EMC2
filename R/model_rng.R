@@ -64,6 +64,22 @@
   .rfun_ROU_R(lR, pars, ok = ok, kind = kind, par = par)
 }
 
+.rfun_ROUp <- function(lR, pars, ok = rep(TRUE, nrow(pars)), kind = NULL,
+                       par = "rate") {
+  if (.use_cpp_rfun()) {
+    res <- rroup_cpp(
+      pars, levels(lR), ok, kind,
+      dt = getOption("emc2.roup_sim_dt", 1e-3),
+      t_max = getOption("emc2.roup_sim_tmax", 30)
+    )
+    out <- .rfun_cpp_pack(
+      res, levels(lR), length(lR) / length(levels(lR))
+    )
+    return(.apply_timed_guess_winner(out, levels(lR)))
+  }
+  .rfun_ROUp_R(lR, pars, ok = ok, kind = kind, par = par)
+}
+
 
 
 .rfun_BAwL <- function(lR, pars, ok = rep(TRUE, length(lR)), posdrift = TRUE,

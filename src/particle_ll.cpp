@@ -632,6 +632,25 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
       out.ctx.fpe_cache->bnd_kind = fpe::FPE_BND_LINEAR_MULTIPLICATIVE;
     else if (type_std.find("_BLIN_ADD") != std::string::npos)
       out.ctx.fpe_cache->bnd_kind = fpe::FPE_BND_LINEAR_ADDITIVE;
+  } else if (type_std.find("ROUp") != std::string::npos) {
+    out.pdf1_ptr       = &droup_scalar;
+    out.cdf1_ptr       = &proup_scalar;
+    out.model_dfun_raw = &droup_raw;
+    out.model_pfun_raw = &proup_raw;
+    out.logS_at_t_ptr  = &roup_logS_at_t;
+    out.ctx.defective_upper_tail = out.ctx.is_global_kill;
+    out.ctx.fpe_cache  = std::make_shared<fperace::SolveCache>();
+    roup_configure_cache(*out.ctx.fpe_cache);
+    out.col_spec       = emc2col::roup::spec();
+    out.ctx.t0_index   = emc2col::roup::t0;
+    if (type_std.find("_BWEIB") != std::string::npos)
+      out.ctx.fpe_cache->bnd_kind = fpe::FPE_BND_WEIBULL;
+    else if (type_std.find("_BEXP") != std::string::npos)
+      out.ctx.fpe_cache->bnd_kind = fpe::FPE_BND_EXPONENTIAL;
+    else if (type_std.find("_BLIN_MULT") != std::string::npos)
+      out.ctx.fpe_cache->bnd_kind = fpe::FPE_BND_LINEAR_MULTIPLICATIVE;
+    else if (type_std.find("_BLIN_ADD") != std::string::npos)
+      out.ctx.fpe_cache->bnd_kind = fpe::FPE_BND_LINEAR_ADDITIVE;
   } else if (type_std.find("ROU") != std::string::npos) {
     // Ordered FIRST deliberately.  Dispatch here is by substring, so a key that
     // is a substring of a later one must be tested first; "ROU" collides with

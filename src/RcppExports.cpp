@@ -3416,6 +3416,74 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// droup_cpp
+Rcpp::List droup_cpp(NumericVector rt, NumericVector v_S, NumericVector v_T, NumericVector tau_S, NumericVector tau_T, NumericVector k, NumericVector B, NumericVector A, NumericVector t0, NumericVector s, int nx, double dt_target, double grade, double tgrade, int bkind, NumericVector Binf, NumericVector tau, NumericVector pw);
+RcppExport SEXP _EMC2_droup_cpp(SEXP rtSEXP, SEXP v_SSEXP, SEXP v_TSEXP, SEXP tau_SSEXP, SEXP tau_TSEXP, SEXP kSEXP, SEXP BSEXP, SEXP ASEXP, SEXP t0SEXP, SEXP sSEXP, SEXP nxSEXP, SEXP dt_targetSEXP, SEXP gradeSEXP, SEXP tgradeSEXP, SEXP bkindSEXP, SEXP BinfSEXP, SEXP tauSEXP, SEXP pwSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type rt(rtSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type v_S(v_SSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type v_T(v_TSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type tau_S(tau_SSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type tau_T(tau_TSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type k(kSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type B(BSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type A(ASEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type t0(t0SEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type s(sSEXP);
+    Rcpp::traits::input_parameter< int >::type nx(nxSEXP);
+    Rcpp::traits::input_parameter< double >::type dt_target(dt_targetSEXP);
+    Rcpp::traits::input_parameter< double >::type grade(gradeSEXP);
+    Rcpp::traits::input_parameter< double >::type tgrade(tgradeSEXP);
+    Rcpp::traits::input_parameter< int >::type bkind(bkindSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type Binf(BinfSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type tau(tauSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type pw(pwSEXP);
+    rcpp_result_gen = Rcpp::wrap(droup_cpp(rt, v_S, v_T, tau_S, tau_T, k, B, A, t0, s, nx, dt_target, grade, tgrade, bkind, Binf, tau, pw));
+    return rcpp_result_gen;
+END_RCPP
+}
+// rroup_cpp
+Rcpp::List rroup_cpp(NumericMatrix pars, CharacterVector lR_levels, LogicalVector ok, SEXP kind_sexp, double dt, double t_max);
+RcppExport SEXP _EMC2_rroup_cpp(SEXP parsSEXP, SEXP lR_levelsSEXP, SEXP okSEXP, SEXP kind_sexpSEXP, SEXP dtSEXP, SEXP t_maxSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericMatrix >::type pars(parsSEXP);
+    Rcpp::traits::input_parameter< CharacterVector >::type lR_levels(lR_levelsSEXP);
+    Rcpp::traits::input_parameter< LogicalVector >::type ok(okSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type kind_sexp(kind_sexpSEXP);
+    Rcpp::traits::input_parameter< double >::type dt(dtSEXP);
+    Rcpp::traits::input_parameter< double >::type t_max(t_maxSEXP);
+    rcpp_result_gen = Rcpp::wrap(rroup_cpp(pars, lR_levels, ok, kind_sexp, dt, t_max));
+    return rcpp_result_gen;
+END_RCPP
+}
+// rroup_hit_times_cpp
+NumericVector rroup_hit_times_cpp(NumericVector v_S, NumericVector v_T, NumericVector tau_S, NumericVector tau_T, NumericVector k, NumericVector B, NumericVector A, NumericVector s, double dt, double t_max, int bkind, NumericVector Binf, NumericVector tau, NumericVector pw);
+RcppExport SEXP _EMC2_rroup_hit_times_cpp(SEXP v_SSEXP, SEXP v_TSEXP, SEXP tau_SSEXP, SEXP tau_TSEXP, SEXP kSEXP, SEXP BSEXP, SEXP ASEXP, SEXP sSEXP, SEXP dtSEXP, SEXP t_maxSEXP, SEXP bkindSEXP, SEXP BinfSEXP, SEXP tauSEXP, SEXP pwSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type v_S(v_SSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type v_T(v_TSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type tau_S(tau_SSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type tau_T(tau_TSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type k(kSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type B(BSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type A(ASEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type s(sSEXP);
+    Rcpp::traits::input_parameter< double >::type dt(dtSEXP);
+    Rcpp::traits::input_parameter< double >::type t_max(t_maxSEXP);
+    Rcpp::traits::input_parameter< int >::type bkind(bkindSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type Binf(BinfSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type tau(tauSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type pw(pwSEXP);
+    rcpp_result_gen = Rcpp::wrap(rroup_hit_times_cpp(v_S, v_T, tau_S, tau_T, k, B, A, s, dt, t_max, bkind, Binf, tau, pw));
+    return rcpp_result_gen;
+END_RCPP
+}
 // emc_clone_sample_store
 Rcpp::List emc_clone_sample_store(Rcpp::List source);
 RcppExport SEXP _EMC2_emc_clone_sample_store(SEXP sourceSEXP) {
@@ -3767,6 +3835,9 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_drou_cpp", (DL_FUNC) &_EMC2_drou_cpp, 15},
     {"_EMC2_rrou_hit_times_cpp", (DL_FUNC) &_EMC2_rrou_hit_times_cpp, 11},
     {"_EMC2_rrou_cpp", (DL_FUNC) &_EMC2_rrou_cpp, 7},
+    {"_EMC2_droup_cpp", (DL_FUNC) &_EMC2_droup_cpp, 18},
+    {"_EMC2_rroup_cpp", (DL_FUNC) &_EMC2_rroup_cpp, 6},
+    {"_EMC2_rroup_hit_times_cpp", (DL_FUNC) &_EMC2_rroup_hit_times_cpp, 14},
     {"_EMC2_emc_clone_sample_store", (DL_FUNC) &_EMC2_emc_clone_sample_store, 1},
     {"_EMC2_emc_set_last_slice", (DL_FUNC) &_EMC2_emc_set_last_slice, 3},
     {"_EMC2_emc_set_particle_slice", (DL_FUNC) &_EMC2_emc_set_particle_slice, 5},

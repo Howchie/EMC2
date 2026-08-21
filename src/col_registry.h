@@ -281,6 +281,15 @@ namespace rou_eq {
   }
 }
 
+// R/model_ROUp.R — ROUp, racing Ornstein-Uhlenbeck with Smith (1995) pulse drift.
+namespace roup {
+  enum : int { v_S = 0, v_T, tau_S, tau_T, k, B, A, t0, s, N_REQ, Binf = N_REQ, tau, pw };
+  inline ColSpec spec() {
+    static const char* n[] = {"v_S", "v_T", "tau_S", "tau_T", "k", "B", "A", "t0", "s"};
+    return {n, N_REQ, "ROUp"};
+  }
+}
+
 // R/model_GOM.R — Gompertz growth-process race.  The process is solved after
 // Y = log(X), but alpha, beta and K remain on the physical Gompertz scale and
 // A is the physical start-point range [1, 1 + A].

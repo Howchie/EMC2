@@ -400,6 +400,44 @@ inline double fpe_x_lo_ou(double z_min, double v, double lambda,
   return lo_mean - FPE_NSD * sigma * std::sqrt(var);
 }
 
+// ---------------------------------------------------------------------------
+// Pulse-based drift model: Smith 1995
+// ---------------------------------------------------------------------------
+struct FPE_ModelPulseOU {
+  static constexpr bool lower_absorbing = false;
+  static constexpr bool symmetric_mesh  = false;
+
+  double v_S = 0.0;
+  double v_T = 0.0;
+  double tau_S = 1.0;
+  double tau_T = 1.0;
+  double lambda = 1.0;
+  double sigma = 1.0;
+  double xlo = -1.0;
+  FPE_Boundary bnd;
+
+  double x_lo(double /*t*/) const { return xlo; }
+  double x_hi(double t) const { return bnd.a(t); }
+  double B() const { return sigma; }
+  double drift(double x, double t) const {
+    double mu_S = v_S * (tau_S > FPE_EPS ? (1.0 - std::exp(-t / tau_S)) : 1.0);
+    double mu_T = v_T * (tau_T > FPE_EPS ? (t / tau_T) * std::exp(-t / tau_T) : 0.0);
+    return mu_S + mu_T - lambda * x;
+  }
+  double length(double t) const { return bnd.a(t) - xlo; }
+  double length_prime(double t) const { return bnd.a_prime(t); }
+  bool static_op() const { return false; } // Time varying operator
+
+  void atil_affine(double t, double L, double Lp, double& a0, double& a1) const {
+    double mu_S = v_S * (tau_S > FPE_EPS ? (1.0 - std::exp(-t / tau_S)) : 1.0);
+    double mu_T = v_T * (tau_T > FPE_EPS ? (t / tau_T) * std::exp(-t / tau_T) : 0.0);
+    double v_t = mu_S + mu_T;
+    a0 = (v_t - lambda * xlo) / L;
+    a1 = (-lambda * L - Lp) / L;
+  }
+};
+
+
 // Number of mesh cells the seeding Gaussian's sd should span.  Smaller => the
 // solver takes over sooner => less reliance on the frozen-coefficient formula.
 constexpr double FPE_SEED_CELLS = 4.0;
