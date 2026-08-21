@@ -10,32 +10,36 @@ REXG()
 A model list compatible with \code{design()}.
 }
 \description{
-Race model in which each accumulator has an ex-Gaussian finish-time
-distribution. For accumulator \code{i},
-\code{T_i = mu_i + G_i + E_i}, with
+Race model in which each accumulator has a zero-truncated ex-Gaussian
+process-time distribution. For accumulator \code{i}, let
+\code{X*_i = mu_i + G_i + E_i}, with
 \code{G_i ~ Normal(0, sigma_i^2)} and
-\code{E_i ~ Exponential(rate = 1 / tau_i)}. Equivalently, \code{mu} is the Gaussian
-location, \code{sigma} is the Gaussian SD, and \code{tau} is the mean of the
-exponential tail. The observed response is the accumulator with the
-smallest finish time.
+\code{E_i ~ Exponential(rate = 1 / tau_i)}. The process time is
+\code{X_i = X*_i | X*_i > 0}, and the finish time is
+\code{T_i = t0_i + X_i}, where \code{t0_i} is nonnegative. The observed
+response is the accumulator with the smallest finish time.
 }
 \details{
 \tabular{lllll}{
    \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Interpretation} \cr
-   \emph{mu} \tab log \tab [0, Inf] \tab log(.4) \tab Location of the Gaussian component. The current bounds restrict this location to be nonnegative. \cr
-   \emph{sigma} \tab log \tab [0, Inf] \tab log(.05) \tab SD of the Gaussian component. \cr
-   \emph{tau} \tab log \tab [0, Inf] \tab log(.1) \tab Mean of the exponential component; its rate is \code{1 / tau}. \cr
+   \emph{mu} \tab log \tab [0, Inf] \tab log(.4) \tab Location of the underlying Gaussian component. \cr
+   \emph{sigma} \tab log \tab [0, Inf] \tab log(.05) \tab SD of the underlying Gaussian component. \cr
+   \emph{tau} \tab log \tab [0, Inf] \tab log(.1) \tab Mean of the underlying exponential component; its rate is \code{1 / tau}. \cr
+   \emph{t0} \tab log \tab [0, Inf] \tab log(0) \tab Additive non-decision-time shift. \cr
    \emph{pContaminant} \tab probit \tab [0, 1] \tab qnorm(0) \tab Optional \emph{omission} contaminant probability: mass at \code{rt = Inf} only, handled by the data pipeline \cr
    \emph{pGuess} \tab probit \tab [0, 1] \tab qnorm(0) \tab Optional uniform \emph{guess} (outlier) probability, mixed into observed RT densities over the guess window \cr
 }
 
 
-The ex-Gaussian distribution has support on the real line. Its mean is
-\code{mu + tau} and its variance is \code{sigma^2 + tau^2}; these are descriptive
-distributional summaries rather than separate model parameters. Unlike the
-stop-signal ex-Gaussian models \code{\link[=SSEXG]{SSEXG()}} and \code{\link[=SSRDEX]{SSRDEX()}}, \code{REXG()} does not
-apply a lower truncation bound. The \code{pContaminant} parameter is generic
-nuisance infrastructure and is not part of the ex-Gaussian distribution.
+The underlying, untruncated ex-Gaussian component has mean \code{mu + tau}
+and variance \code{sigma^2 + tau^2}; these summaries describe \code{X*}, not
+the zero-truncated process time \code{X} or the shifted finish time \code{T}.
+\code{REXG()} conditions the process time on \code{X* > 0}, so the finish-time
+support is \code{rt > t0}. For \code{rt <= t0}, the density and CDF are zero
+and the survivor is one. Above \code{t0}, the density, CDF, and survivor
+include the normalizer \code{1 - F_EXG(0)}. The \code{pContaminant} parameter
+is generic nuisance infrastructure and is not part of the ex-Gaussian
+distribution.
 EMC2 creates one accumulator per response level in \code{R} and evaluates the
 race likelihood from the accumulator density and survivor functions.
 }

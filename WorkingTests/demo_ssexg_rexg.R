@@ -21,6 +21,7 @@ design_EXG <- design(
 )
 
 pexg1 <- log(c(mu = .5, sigma = .1, tau = .2))
+pexg1_rexg <- c(pexg1, t0 = log(0))
 
 dat <- make_data(
   pexg1,
@@ -59,12 +60,12 @@ recovery(exgC,true_pars = pexg1)
 design_REXG <- design(
   factors = list(subjects = 1, S = 1),
   Rlevels = 1,
-  formula = list(mu ~ 1, sigma ~ 1, tau ~ 1),
+  formula = list(mu ~ 1, sigma ~ 1, tau ~ 1, t0 ~ 1),
   model = REXG
 )
 
 dat_race <- make_data(
-  pexg1,
+  pexg1_rexg,
   design_REXG,
   n_trials = N_TRIALS,
   rt_resolution = RT_RESOLUTION
@@ -76,7 +77,7 @@ rexg <- make_emc(dat_race, design_REXG, type = "single")
 rexg <- fit(rexg)
 cat("\nUncensored REXG fit:\n")
 print(credint(rexg, map = TRUE))
-recovery(rexg,true_pars = pexg1)
+recovery(rexg,true_pars = pexg1_rexg)
 
 # Fit against the SSEXG-generated data to show equivalence
 
@@ -84,7 +85,7 @@ rexg2 <- make_emc(dat, design_REXG, type = "single")
 rexg2 <- fit(rexg2)
 cat("\nUncensored REXG fit:\n")
 print(credint(rexg2, map = TRUE))
-recovery(rexg2,true_pars = pexg1)
+recovery(rexg2,true_pars = pexg1_rexg)
 
 datC_race <- make_missing(
   dat_race,
@@ -101,7 +102,7 @@ rexgC <- make_emc(datC_race, design_REXG, type = "single")
 rexgC <- fit(rexgC)
 cat("\nCensored REXG fit:\n")
 print(credint(rexgC, map = TRUE))
-recovery(rexgC,true_pars = pexg1)
+recovery(rexgC,true_pars = pexg1_rexg)
 
 # Fit against the SSEXG-generated data with UC/LC to show equivalence
 
@@ -109,4 +110,4 @@ rexgC2 <- make_emc(datC, design_REXG, type = "single")
 rexgC2 <- fit(rexgC2)
 cat("\nCensored REXG fit:\n")
 print(credint(rexgC2, map = TRUE))
-recovery(rexgC2,true_pars = pexg1)
+recovery(rexgC2,true_pars = pexg1_rexg)

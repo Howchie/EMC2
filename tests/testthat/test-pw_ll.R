@@ -73,3 +73,4 @@ test_that("pw_ll extraction with DDM (already trial-wise)", {
   agg_ll <- EMC2:::calc_ll_manager(proposals, emc[[1]]$data[[1]], emc[[1]]$model)
   expect_equal(colSums(emc[[1]]$samples$pw_ll), as.numeric(agg_ll), tolerance = 1e-10)
 })
+

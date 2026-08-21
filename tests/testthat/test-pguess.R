@@ -104,7 +104,7 @@ test_that("the compiled mixture matches the reference on every trial kind", {
   # Finite RTs plus a +Inf omission, a -Inf left-censored trial and an NA.
   des <- design(
     factors = list(subjects = 1, S = 1), Rlevels = 1,
-    formula = list(mu ~ 1, sigma ~ 1, tau ~ 1, pContaminant ~ 1, pGuess ~ 1),
+    formula = list(mu ~ 1, sigma ~ 1, tau ~ 1, t0 ~ 1, pContaminant ~ 1, pGuess ~ 1),
     functions = list(lI = lI_single), model = REXG)
   dat <- data.frame(
     subjects = factor(1), S = factor(1), R = factor(1, levels = 1),
@@ -119,7 +119,7 @@ test_that("the compiled mixture matches the reference on every trial kind", {
   expect_identical(n_resp, 1L)
   log_g <- -log(n_resp * diff(gw))
 
-  base_p <- c(mu = log(0.35), sigma = log(0.12), tau = log(0.18))
+  base_p <- c(mu = log(0.35), sigma = log(0.12), tau = log(0.18), t0 = log(0))
   pC <- 0.08; pG <- 0.15
 
   # Process-only per-trial log-likelihoods.
@@ -248,7 +248,7 @@ test_that("expand and compressed branches agree with pGuess active", {
   # summation branches must produce the same total.
   des <- design(
     factors = list(subjects = 1, S = 1), Rlevels = 1,
-    formula = list(mu ~ 1, sigma ~ 1, tau ~ 1, pContaminant ~ 1, pGuess ~ 1),
+    formula = list(mu ~ 1, sigma ~ 1, tau ~ 1, t0 ~ 1, pContaminant ~ 1, pGuess ~ 1),
     functions = list(lI = lI_single), model = REXG)
   dat <- data.frame(
     subjects = factor(1), S = factor(1), R = factor(1, levels = 1),
@@ -256,7 +256,7 @@ test_that("expand and compressed branches agree with pGuess active", {
     LT = 0.20, LC = 0.35, UC = Inf, UT = Inf)
   dadm <- EMC2:::design_model(dat, des, compress = FALSE, rt_resolution = NULL)
   model <- attr(dadm, "model")()
-  p <- c(mu = log(0.35), sigma = log(0.12), tau = log(0.18),
+  p <- c(mu = log(0.35), sigma = log(0.12), tau = log(0.18), t0 = log(0),
          pContaminant = qnorm(0.05), pGuess = qnorm(0.2))
 
   expect_true(length(attr(dadm, "expand")) > 0)

@@ -76,8 +76,16 @@
 -   The ROU equilibrium parameterization now expresses `theta = v / k` and
     `chi = s * sqrt(tk)` in physical units. Threshold effects in `B` therefore
     remain identifiable when `theta` and `chi` are shared across conditions.
+-   Joint and trend samplers now align component metadata with the sampled
+    parameter names before building proposal covariance blocks. This prevents
+    preburn failures caused by logical component indices whose length differed
+    from the group covariance dimension.
 
 ## New features
+-   REXG now conditions each ex-Gaussian process time on being strictly
+    positive before adding its accumulator-specific `t0` shift. R and C++
+    densities, CDFs, survivors, and simulation now agree on the support
+    `rt > t0` and include the zero-truncation normalizer.
 
 -   `RDMSWTNcorr()` and `RDMSWTN_TTcorr()` gain `correlate`, which selects what
     `rho` actually correlates. The default `"times"` is the existing Gaussian

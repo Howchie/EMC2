@@ -208,7 +208,7 @@ test_that("REXG raw survivor keeps its tail after CDF saturation", {
   dat$subjects <- droplevels(dat$subjects)
   design_rexg <- design(
     data = dat, model = REXG, matchfun = matchfun,
-    formula = list(mu ~ lM, sigma ~ 1, tau ~ 1),
+    formula = list(mu ~ lM, sigma ~ 1, tau ~ 1, t0 ~ 1),
     functions = list(lI = lI_fun)
   )
   emc <- make_emc(dat, design_rexg, type = "single", n_chains = 1, compress = FALSE)
@@ -230,8 +230,8 @@ test_that("REXG raw survivor keeps its tail after CDF saturation", {
   }
   # Ordinary parameters and an extreme mu contrast (loser far in its tail).
   for (mu_d in c(0.2, 5)) {
-    # trailing 0s: the pContaminant / pGuess nuisance columns
-    p <- c(0.4, mu_d, log(0.05), log(0.1), 0)
+    # trailing 0s: t0 and the pContaminant nuisance column
+    p <- c(0.4, mu_d, log(0.05), log(0.1), log(0), 0)
     ll <- ll_for(p)
     expect_true(is.finite(ll))
   }

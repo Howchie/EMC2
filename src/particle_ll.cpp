@@ -876,8 +876,8 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
     out.model_dfun_raw = &drexg_raw;
     out.model_pfun_raw = &prexg_raw;
     out.logS_at_t_ptr = &rexg_logS_at_t;
-    out.col_spec     = emc2col::rexg::spec();
-    out.ctx.t0_index = -1;
+    out.col_spec = emc2col::rexg::spec();
+    out.ctx.t0_index = emc2col::rexg::t0;
   } else if (type_std.find("LNR") != std::string::npos) {
     out.pdf1_ptr = &dlnr_scalar;
     out.cdf1_ptr = &plnr_scalar;
@@ -5644,8 +5644,8 @@ double integrate_for_kth_winner_rowmajor_cpp(
   // declare convergence before it ever resolves the peak further right --
   // silently returning a value ~1% low at isolated parameter values (which the
   // trial counts of a compressed dadm then amplify into tens of nats).  Clipping
-  // to t0 removes the dead zone entirely, and is strictly cheaper.  t0_index is
-  // -1 for models whose t0 is not a pure shift (e.g. REXG), which skips this.
+  // to t0 removes the dead zone entirely, and is strictly cheaper.  t0_index
+  // is -1 only for models whose t0 is not a pure additive shift.
   {
     const ContextForRaceModels* rctx =
       static_cast<const ContextForRaceModels*>(model_specific_context);

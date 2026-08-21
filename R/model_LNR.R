@@ -249,29 +249,31 @@ PCOUNTER <- function() {
 
 #' The Ex-Gaussian Race Model
 #'
-#' Race model in which each accumulator has an ex-Gaussian finish-time
-#' distribution. For accumulator `i`,
-#' `T_i = mu_i + G_i + E_i`, with
-#' `G_i ~ Normal(0, sigma_i^2)` and
-#' `E_i ~ Exponential(rate = 1 / tau_i)`. Equivalently, `mu` is the Gaussian
-#' location, `sigma` is the Gaussian SD, and `tau` is the mean of the
-#' exponential tail. The observed response is the accumulator with the
-#' smallest finish time.
+#' Race model in which each accumulator has a zero-truncated ex-Gaussian
+#' process-time distribution. For accumulator `i`, let
+#' `X*_i = mu_i + G_i + E_i`, with `G_i ~ Normal(0, sigma_i^2)` and
+#' `E_i ~ Exponential(rate = 1 / tau_i)`. The process time is
+#' `X_i = X*_i | X*_i > 0`, and the finish time is `T_i = t0_i + X_i`,
+#' where `t0_i` is nonnegative. The observed response is the accumulator
+#' with the smallest finish time.
 #'
 #' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Interpretation** |
 #' |---|---|---|---|---|
-#' | *mu* | log | \[0, Inf\] | log(.4) | Location of the Gaussian component. The current bounds restrict this location to be nonnegative. |
-#' | *sigma* | log | \[0, Inf\] | log(.05) | SD of the Gaussian component. |
-#' | *tau* | log | \[0, Inf\] | log(.1) | Mean of the exponential component; its rate is `1 / tau`. |
+#' | *mu* | log | \[0, Inf\] | log(.4) | Location of the underlying Gaussian component. |
+#' | *sigma* | log | \[0, Inf\] | log(.05) | SD of the underlying Gaussian component. |
+#' | *tau* | log | \[0, Inf\] | log(.1) | Mean of the underlying exponential component; its rate is `1 / tau`. |
+#' | *t0* | log | \[0, Inf\] | log(0) | Additive non-decision-time shift. |
 #' | *pContaminant* | probit | \[0, 1\] | qnorm(0) | Optional *omission* contaminant probability: mass at `rt = Inf` only, handled by the data pipeline |
 #' | *pGuess* | probit | \[0, 1\] | qnorm(0) | Optional uniform *guess* (outlier) probability, mixed into observed RT densities over the guess window |
 #'
-#' The ex-Gaussian distribution has support on the real line. Its mean is
-#' `mu + tau` and its variance is `sigma^2 + tau^2`; these are descriptive
-#' distributional summaries rather than separate model parameters. Unlike the
-#' stop-signal ex-Gaussian models [SSEXG()] and [SSRDEX()], `REXG()` does not
-#' apply a lower truncation bound. The `pContaminant` parameter is generic
-#' nuisance infrastructure and is not part of the ex-Gaussian distribution.
+#' The underlying, untruncated ex-Gaussian component has mean `mu + tau` and
+#' variance `sigma^2 + tau^2`; these summaries describe `X*`, not the
+#' zero-truncated process time `X` or the shifted finish time `T`.
+#' `REXG()` conditions the process time on `X* > 0`, so the finish-time
+#' support is `rt > t0`. For `rt <= t0`, the density and CDF are zero and the
+#' survivor is one. Above `t0`, the density, CDF, and survivor include the
+#' normalizer `1 - F_EXG(0)`. The `pContaminant` parameter is generic nuisance
+#' infrastructure and is not part of the ex-Gaussian distribution.
 #' EMC2 creates one accumulator per response level in `R` and evaluates the
 #' race likelihood from the accumulator density and survivor functions.
 #'
@@ -280,67 +282,82 @@ PCOUNTER <- function() {
 REXG <- function() {
   dREXG <- function(rt, pars) {
     out <- numeric(length(rt))
-    ok <- is.finite(rt) & pars[, "sigma"] > 0 & pars[, "tau"] > 0
+    t0 <- pars[, "t0"]
+    ok <- is.finite(rt) & pars[, "sigma"] > 0 & pars[, "tau"] > 0 &
+      is.finite(t0) & t0 >= 0
     ok[is.na(ok)] <- FALSE
-    out[ok] <- dexGaussian(rt[ok], pars[ok, c("mu", "sigma", "tau"), drop = FALSE])
+    if (any(ok)) {
+      pars_ok <- cbind(pars[ok, c("mu", "sigma", "tau"), drop = FALSE], exg_lb = 0)
+      out[ok] <- dtexGaussian(rt[ok] - t0[ok], pars_ok)
+    }
     out
   }
-
   pREXG <- function(rt, pars) {
     out <- numeric(length(rt))
-    ok <- is.finite(rt) & pars[, "sigma"] > 0 & pars[, "tau"] > 0
-    ok[is.na(ok)] <- FALSE
-    out[ok] <- pexGaussian(rt[ok], pars[ok, c("mu", "sigma", "tau"), drop = FALSE])
-    out[rt == Inf] <- 1
+    t0 <- pars[, "t0"]
+    valid <- pars[, "sigma"] > 0 & pars[, "tau"] > 0 &
+      is.finite(t0) & t0 >= 0
+    valid[is.na(valid)] <- FALSE
+    ok <- is.finite(rt) & valid
+    if (any(ok)) {
+      pars_ok <- cbind(pars[ok, c("mu", "sigma", "tau"), drop = FALSE], exg_lb = 0)
+      out[ok] <- ptexGaussian(rt[ok] - t0[ok], pars_ok)
+    }
+    out[is.infinite(rt) & rt > 0 & valid] <- 1
     out
   }
-
-  rREXG <- function(lR, pars, p_types = c("mu", "sigma", "tau"),
+  rREXG <- function(lR, pars, p_types = c("mu", "sigma", "tau", "t0"),
                     ok = rep(TRUE, dim(pars)[1])) {
-    if (!all(p_types %in% dimnames(pars)[[2]])) {
+    if (!all(p_types %in% dimnames(pars)[[2]]))
       stop("pars must have columns ", paste(p_types, collapse = " "))
-    }
-    nr <- length(levels(lR))
-    dt <- matrix(Inf, ncol = nrow(pars) / nr, nrow = nr)
+    if (is.null(ok)) ok <- rep(TRUE, nrow(pars))
+    if (length(ok) != nrow(pars))
+      stop("ok must have one value per row of pars")
+    ok <- as.logical(ok)
+    ok[is.na(ok)] <- FALSE
     idx_ok <- which(ok)
-    pars <- pars[idx_ok, , drop = FALSE]
-    mu <- pars[, "mu"]
-    sigma <- pars[, "sigma"]
-    tau <- pars[, "tau"]
-    ok_draw <- is.finite(mu) & is.finite(sigma) & is.finite(tau) & sigma > 0 & tau > 0
+    nr <- length(levels(lR))
+    n_tri <- nrow(pars) / nr
+    dt <- matrix(Inf, nrow = nr, ncol = n_tri)
+    pars_ok <- pars[idx_ok, , drop = FALSE]
+    mu_ok <- pars_ok[, "mu"]; sigma_ok <- pars_ok[, "sigma"]; tau_ok <- pars_ok[, "tau"]
+    t0_ok <- pars_ok[, "t0"]
+    ok_draw <- is.finite(mu_ok) & is.finite(sigma_ok) & is.finite(tau_ok) &
+      is.finite(t0_ok) & sigma_ok > 0 & tau_ok > 0 & t0_ok >= 0
     if (any(ok_draw)) {
-      dt[idx_ok[ok_draw]] <-
-        stats::rnorm(sum(ok_draw), mean = mu[ok_draw], sd = sigma[ok_draw]) +
-        stats::rexp(sum(ok_draw), rate = 1 / tau[ok_draw])
+      dt[idx_ok[ok_draw]] <- rtexG(
+        sum(ok_draw), mu = mu_ok[ok_draw], sigma = sigma_ok[ok_draw],
+        tau = tau_ok[ok_draw], lb = rep(0, sum(ok_draw))
+      )
     }
-    R <- max.col(-t(dt), ties.method = "first")
-    pick <- cbind(R, seq_len(ncol(dt)))
-    rt <- dt[pick]
+    t0 <- matrix(0, nrow = nr, ncol = n_tri)
+    t0[idx_ok[ok_draw]] <- t0_ok[ok_draw]
+    finish <- dt + t0
+    R <- apply(finish, 2, which.min)
+    pick <- cbind(R, seq_len(n_tri))
+    rt <- finish[pick]
     R <- factor(levels(lR)[R], levels = levels(lR))
     out <- cbind.data.frame(R = R, rt = rt)
     .apply_timed_guess_winner(out, levels(lR))
   }
-
   list(
-    type = "RACE",
-    c_name = "REXG",
-    p_types = c(mu = log(.4), sigma = log(.05), tau = log(.1), pContaminant = qnorm(0),
-                pGuess = qnorm(0)),
-    p_types_canonical = c("mu", "sigma", "tau"),
-    transform = list(func = c(mu = "exp", sigma = "exp", tau = "exp",
+    type = "RACE", c_name = "REXG",
+    p_types = c(mu = log(.4), sigma = log(.05), tau = log(.1), t0 = log(0),
+                pContaminant = qnorm(0), pGuess = qnorm(0)),
+    p_types_canonical = c("mu", "sigma", "tau", "t0"),
+    transform = list(func = c(mu = "exp", sigma = "exp", tau = "exp", t0 = "exp",
                               pContaminant = "pnorm", pGuess = "pnorm")),
     bound = list(
-      minmax = cbind(mu = c(0, Inf), sigma = c(1e-6, Inf),
-                     tau = c(1e-6, Inf), pContaminant = c(0.001, 0.999),
+      minmax = cbind(mu = c(0, Inf), sigma = c(1e-6, Inf), tau = c(1e-6, Inf),
+                     t0 = c(0, Inf), pContaminant = c(0.001, 0.999),
                      pGuess = c(0.001, 0.999)),
-      exception = c(pContaminant = 0, pGuess = 0)
+      exception = c(t0 = 0, pContaminant = 0, pGuess = 0)
     ),
     Ttransform = function(pars, dadm) pars,
     rfun = function(data = NULL, pars) rREXG(data$lR, pars, ok = attr(pars, "ok")),
     dfun = function(rt, pars) dREXG(rt, pars),
     pfun = function(rt, pars) pREXG(rt, pars),
-    log_likelihood = function(pars, dadm, model, min_ll = log(1e-10)) {
+    log_likelihood = function(pars, dadm, model, min_ll = log(1e-10))
       log_likelihood_race_missing(pars = pars, dadm = dadm, model = model, min_ll = min_ll)
-    }
   )
 }

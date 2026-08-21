@@ -832,6 +832,9 @@ make_emc <- function(data,design,model=NULL,
   compress[no_bin] <- FALSE
 
   dadm_list <- vector(mode="list",length=length(data))
+  dadm_names <- names(design)
+  if (is.null(dadm_names)) dadm_names <- as.character(seq_along(dadm_list))
+  names(dadm_list) <- dadm_names
   if (is.null(rt_resolution)) {
     rt_resolution <- rep(list(NULL), length(data))
   } else {
@@ -963,29 +966,56 @@ check_duplicate_designs <- function(out){
   return(out)
 }
 
-extractDadms <- function(dadms, names = NULL){
-  if(is.null(names)) names <- 1:length(dadms)
+extractDadms <- function(dadms, names = NULL, par_names = NULL){
+  if(is.null(names)) {
+    names <- base::names(dadms)
+    if (is.null(names)) names <- 1:length(dadms)
+  }
   N_models <- length(dadms)
-  pars <- attr(dadms[[1]], "sampled_p_names")
+  sampled_names <- attr(dadms[[1]], "sampled_p_names")
   prior <- attr(dadms[[1]], "prior")
   subjects <- unique(factor(sapply(dadms, FUN = function(x) levels(x$subjects))))
   dadm_list <- dm_list(dadms[[1]])
-  components <- rep(1, length(pars))
-  if(N_models > 1){
+  if (N_models == 1) {
+    components <- setNames(rep.int(1L, length(sampled_names)), sampled_names)
+  } else {
     total_dadm_list <- vector("list", length = N_models)
     k <- 1
-    pars <- paste(names[1], pars, sep = "|")
+    model_pars <- paste(names[1], sampled_names, sep = "|")
     dadm_list[as.character(which(!subjects %in% unique(dadms[[1]]$subjects)))] <- NA
     total_dadm_list[[1]] <- dadm_list
+    components <- setNames(rep.int(1L, length(model_pars)), model_pars)
     for(dadm in dadms[-1]){
       k <- k + 1
       tmp_list <- vector("list", length = length(subjects))
       tmp_list[as.numeric(unique(dadm$subjects))] <- dm_list(dadm)
       total_dadm_list[[k]] <- tmp_list
       curr_pars <- attr(dadm, "sampled_p_names")
-      components <- c(components, rep(k, length(curr_pars)))
+      model_pars <- paste(names[k], curr_pars, sep = "|")
+      components <- c(components,
+                      setNames(rep.int(as.integer(k), length(model_pars)), model_pars))
     }
     dadm_list <- do.call(mapply, c(list, total_dadm_list, SIMPLIFY = F))
+  }
+  if (!is.null(par_names)) {
+    source_names <- base::names(components)
+    if (is.null(source_names)) {
+      stop("Parameter bookkeeping error: component metadata has no parameter names")
+    }
+    aligned <- components[match(par_names, source_names)]
+    missing <- is.na(aligned)
+    if (any(missing)) {
+      model_idx <- if (N_models == 1L) {
+        rep.int(1L, sum(missing))
+      } else {
+        match(sub("\\|.*$", "", par_names[missing]), names)
+      }
+      if (anyNA(model_idx)) {
+        stop("Parameter bookkeeping error: cannot assign components to sampled parameters")
+      }
+      aligned[missing] <- model_idx
+    }
+    components <- setNames(as.integer(aligned), par_names)
   }
   attr(dadm_list, "components") <- components
   attr(dadm_list, "shared_ll_idx") <- components

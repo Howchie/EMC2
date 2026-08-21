@@ -42,6 +42,7 @@ test_that("compare supports subject-level pointwise aggregation for LOO", {
   expect_false(isTRUE(all.equal(out_trial$LOO, out_subject$LOO)))
 })
 
+
 test_that("savage-dickey", {
   expect_snapshot(
     round(hypothesis(samples_LNR, parameter = "m", do_plot = F, H0 = -1), 2))

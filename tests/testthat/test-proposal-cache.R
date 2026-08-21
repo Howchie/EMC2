@@ -100,6 +100,40 @@ test_that("cached subject factorisations match direct factorisation", {
   expect_identical(gcache$ref, chains_var)
 })
 
+test_that("sampling component metadata is aligned by parameter name", {
+  target <- c("a", "b", "c")
+  named <- c(b = 2L, a = 1L, c = 2L)
+
+  expect_equal(
+    EMC2:::.align_sampling_index(named, target, "components"),
+    c(a = 1L, b = 2L, c = 2L)
+  )
+  expect_equal(
+    EMC2:::.align_sampling_index(
+      c(a = 1L, b = 3L, c = 3L), target, "components", remap = TRUE
+    ),
+    c(a = 1L, b = 2L, c = 2L)
+  )
+  expect_equal(
+    EMC2:::.align_sampling_index(
+      c(a = 1L, b = 3L, c = 3L), target, "shared_ll_idx", remap = FALSE
+    ),
+    c(a = 1L, b = 3L, c = 3L)
+  )
+  expect_error(
+    EMC2:::.align_sampling_index(c(a = 0L, b = 1L, c = 1L), target, "components"),
+    "positive integer-like"
+  )
+  expect_error(
+    EMC2:::.align_sampling_index(c(a = 1L, extra = 2L, c = 2L), target, "components"),
+    "Parameter bookkeeping error"
+  )
+  expect_error(
+    EMC2:::.align_sampling_index(c(1L, 2L), target, "components"),
+    "Parameter bookkeeping error"
+  )
+})
+
 test_that("compressed designs give bit-identical likelihoods to expanded ones", {
   # calc_ll_manager now hands the C++ mapper compressed design matrices plus
   # their "expand" attribute instead of materialising full-length copies.

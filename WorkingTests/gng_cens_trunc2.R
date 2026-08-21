@@ -3,15 +3,15 @@
 # Also exploring the "marginalize" option which integrates across the uncertainty of t0.
 rm(list=ls())
 
-for (lib in c("EMC2","EMC2ct")) {
+for (lib in c("EMC2ct","EMC2")) {
   library(lib,character.only = TRUE)
   set.seed(123)
   ## Test 1 - Shared base drift, match x S, threshold by S, single t0. 
   designRDM <- design(
-    factors=list(subjects=1,S=c("go","no-go")),Rlevels=c("go","no-go"),
+    factors=list(subjects=1,S=c("go","nogo")),Rlevels=c("go","nogo"),
     matchfun=function(d) as.numeric(d$S)==as.numeric(d$lR),
     functions=list(match=function(d) ifelse(d$lM==TRUE,.5,-.5)),
-    model=RDM,TC = list(UC=3),
+    model=RDM,
     formula=list(v~match:S,A~1,B~lR,t0~1,s~lM),
     constants = c(s=log(1),A=log(0))
   )

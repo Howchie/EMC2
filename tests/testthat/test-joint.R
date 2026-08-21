@@ -14,3 +14,12 @@ set.seed(123)
 test_that("joint", {
   expect_snapshot(init_chains(joint, particles = 10, cores_for_chains = 1)[[1]]$samples)
 })
+
+test_that("joint preburn preserves named component metadata", {
+  fitted <- run_emc(
+    joint, stage = "preburn", stop_criteria = list(iter = 1),
+    cores_for_chains = 1, cores_per_chain = 1, particle_factor = 1,
+    verbose = FALSE, verboseProgress = FALSE
+  )
+  expect_gt(chain_n(fitted)[1, "preburn"], 0)
+})

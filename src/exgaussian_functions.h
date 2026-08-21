@@ -326,11 +326,19 @@ inline double ptexg_scalar(double x, const double* par, void* /*ctx*/) {
 }
 
 inline double dexg_scalar(double x, const double* par, void* /*ctx*/) {
-  return dexg(x, par[0], par[1], par[2], false);
+  const double t0 = par[3];
+  if (!R_FINITE(t0) || t0 < 0.0) return 0.0;
+  const double tt = x - t0;
+  if (tt <= 0.0) return 0.0;
+  return dtexg(tt, par[0], par[1], par[2], 0.0, R_PosInf, false);
 }
 
 inline double pexg_scalar(double x, const double* par, void* /*ctx*/) {
-  return pexg(x, par[0], par[1], par[2], true, false);
+  const double t0 = par[3];
+  if (!R_FINITE(t0) || t0 < 0.0) return 0.0;
+  const double tt = x - t0;
+  if (tt <= 0.0) return 0.0;
+  return ptexg(tt, par[0], par[1], par[2], 0.0, R_PosInf, true, false);
 }
 
 #endif

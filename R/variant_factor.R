@@ -245,10 +245,14 @@ gibbs_step_factor <- function(sampler, alpha){
                             rate = prior$bp + colSums(eta^2)/2), n_factors)
 
   var <- lambda %*% solve(psi_inv) %*% t(lambda) + diag(1/diag(sig_err_inv))
-  lambda <- lambda %*% matrix(diag(sqrt(1/diag(psi_inv)), n_factors), nrow = n_factors)
+  # lambda is the working (parameter-expanded) matrix that the Gibbs step samples
+  # and that carries the Lambda_mat constraints; lambda_scaled folds the factor
+  # scales in for reporting. Only the working matrix may be fed back to the next
+  # iteration -- rescaling it repeatedly drives the fixed entries to zero.
+  lambda_scaled <- lambda %*% matrix(diag(sqrt(1/diag(psi_inv)), n_factors), nrow = n_factors)
 
   return(list(tmu = mu, tvar = var, lambda_untransf = lambda,
-              lambda = lambda, eta = eta,
+              lambda = lambda_scaled, eta = eta,
               sig_err_inv = diag(sig_err_inv), psi_inv = diag(psi_inv), alpha = t(alpha)))
 }
 

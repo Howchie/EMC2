@@ -11,13 +11,13 @@ lI_single <- function(d) factor(rep(1, nrow(d)), levels = 1)
 design_rexg_pc <- design(
   factors = list(subjects = 1, S = 1),
   Rlevels = 1,
-  formula = list(mu ~ 1, sigma ~ 1, tau ~ 1, pContaminant ~ 1),
+  formula = list(mu ~ 1, sigma ~ 1, tau ~ 1, t0 ~ 1, pContaminant ~ 1),
   functions = list(lI = lI_single),
   model = REXG
 )
 
 # pContaminant is pnorm-transformed: qnorm(0.05) -> pC = 0.05.
-p <- c(mu = log(0.35), sigma = log(0.12), tau = log(0.18),
+p <- c(mu = log(0.35), sigma = log(0.12), tau = log(0.18), t0 = log(0),
        pContaminant = qnorm(0.05))
 p_mat <- matrix(p, nrow = 1, dimnames = list(NULL, names(p)))
 

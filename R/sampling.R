@@ -198,9 +198,15 @@ pmwgs <- function(dadm, type, pars = NULL, prior = NULL,
   # NOT tagged onto the dadm: downstream consumers (predict / make_data / IC)
   # read the reconstructed t0 like any other parameter and must never integrate.
   marginalise <- resolve_marginalise_prior(marginalise, prior)
-  dadm <- extractDadms(dadm)
+  dadm <- extractDadms(dadm, par_names = pars)
 
   dadm_list <-dadm$dadm_list
+  components <- .align_sampling_index(attr(dadm_list, "components"), pars,
+                                       "components", remap = TRUE)
+  shared_ll_idx <- .align_sampling_index(attr(dadm_list, "shared_ll_idx"), pars,
+                                         "shared_ll_idx", remap = FALSE)
+  attr(dadm_list, "components") <- components
+  attr(dadm_list, "shared_ll_idx") <- shared_ll_idx
   # Storage for the samples.
   subjects <- sort(as.numeric(unique(dadm$subjects)))
   if(!is.null(nuisance) & !is.numeric(nuisance)) nuisance <- which(pars %in% nuisance)
@@ -460,6 +466,47 @@ check_sampling_settings <- function(pm_settings, stage, n_pars, particles){
   return(pm_settings)
 }
 
+.align_sampling_index <- function(index, par_names, label, remap = FALSE) {
+  n_pars <- length(par_names)
+  if (is.null(index)) return(NULL)
+  index_names <- names(index)
+  if (!is.null(index_names) && length(index_names)) {
+    if (anyDuplicated(index_names) || anyDuplicated(par_names)) {
+      stop("Parameter bookkeeping error: duplicate names in ", label,
+           " or pmwgs$par_names")
+    }
+    missing <- setdiff(par_names, index_names)
+    extra <- setdiff(index_names, par_names)
+    if (length(missing) || length(extra)) {
+      stop("Parameter bookkeeping error: named ", label,
+           " does not match pmwgs$par_names")
+    }
+    index <- index[match(par_names, index_names)]
+  } else if (length(index) != n_pars) {
+    stop("Parameter bookkeeping error: ", label, " has length ",
+         length(index), " but pmwgs$par_names has length ", n_pars)
+  }
+  if (length(index) != n_pars) {
+    stop("Parameter bookkeeping error: aligned ", label,
+         " does not have covariance dimension ", n_pars)
+  }
+  labels <- as.numeric(index)
+  if (anyNA(index) || any(!is.finite(labels)) ||
+      any(labels != as.integer(labels)) || any(labels < 1L)) {
+    stop("Parameter bookkeeping error: ", label,
+         " must contain positive integer-like component labels")
+  }
+  out <- if (isTRUE(remap)) {
+    match(as.integer(labels), unique(as.integer(labels)))
+  } else {
+    as.integer(labels)
+  }
+  names(out) <- par_names
+  out
+}
+
+
+
 run_stage <- function(pmwgs,
                       stage,
                       iter = 1000,
@@ -474,8 +521,25 @@ run_stage <- function(pmwgs,
   # Set necessary local variables
   # Set stable (fixed) new_sample argument for this run
   n_pars <- pmwgs$n_pars
-  tune$components <- attr(pmwgs$data, "components")
-  tune$shared_ll_idx <- attr(pmwgs$data, "shared_ll_idx")
+  par_names <- pmwgs$par_names
+  if (is.null(par_names)) {
+    alpha_dimnames <- dimnames(pmwgs$samples$alpha)
+    par_names <- if (is.null(alpha_dimnames)) NULL else alpha_dimnames[[1L]]
+  }
+  if (is.null(par_names) || length(par_names) != n_pars) {
+    stop("Parameter bookkeeping error: pmwgs$par_names does not match covariance dimension")
+  }
+  if (is.null(tune)) tune <- list()
+  components <- attr(pmwgs$data, "components")
+  shared_ll_idx <- attr(pmwgs$data, "shared_ll_idx")
+  if (is.null(components)) components <- rep.int(1L, n_pars)
+  components <- .align_sampling_index(components, par_names,
+                                      "components", remap = TRUE)
+  if (is.null(shared_ll_idx)) shared_ll_idx <- components
+  shared_ll_idx <- .align_sampling_index(shared_ll_idx, par_names,
+                                         "shared_ll_idx", remap = FALSE)
+  tune$components <- components
+  tune$shared_ll_idx <- shared_ll_idx
 
   pm_settings <- attr(pmwgs$samples, "pm_settings")
   # Intialize sampling tuning settings
@@ -504,7 +568,7 @@ run_stage <- function(pmwgs,
 
   # chains_var / eff_var are fixed for the whole block, so factorise them once
   # per subject here rather than once per subject per iteration.
-  marginal_idx_blk <- .marginal_par_idx(pmwgs$par_names, marginalise = pmwgs$marginalise)
+  marginal_idx_blk <- .marginal_par_idx(par_names, marginalise = pmwgs$marginalise)
   if (length(marginal_idx_blk) != length(tune$components)) {
     marginal_idx_blk <- rep(FALSE, length(tune$components))
   }

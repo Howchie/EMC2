@@ -73,9 +73,9 @@ namespace pcounter {
 
 // R/model_LNR.R — REXG
 namespace rexg {
-  enum : int { mu = 0, sigma, tau, N_REQ };
+  enum : int { mu = 0, sigma, tau, t0, N_REQ };
   inline ColSpec spec() {
-    static const char* n[] = {"mu", "sigma", "tau"};
+    static const char* n[] = {"mu", "sigma", "tau", "t0"};
     return {n, N_REQ, "REXG"};
   }
 }

@@ -39,6 +39,20 @@ test_that("trend", {
   expect_snapshot(init_chains(LNR2cov, particles = 3, cores_per_chain = 1)[[1]]$samples)
 })
 
+test_that("trend preburn uses aligned component metadata", {
+  withr::local_seed(123)
+  initialized <- init_chains(
+    LNR2cov, particles = 3, cores_per_chain = 1, cores_for_chains = 1
+  )
+  fitted <- run_emc(
+    initialized, stage = "preburn", stop_criteria = list(iter = 1),
+    cores_for_chains = 1, cores_per_chain = 1, particle_factor = 1,
+    verbose = FALSE, verboseProgress = FALSE
+  )
+  expect_true(isTRUE(fitted[[1]]$init))
+  expect_gt(chain_n(fitted)[1, "preburn"], 0)
+})
+
 trend_2types <- make_trend(par_names = c("m", "m_lMd"),
                            cov_names = list(c("covariate1", "covariate2"), "covariate1"),
                            kernels = c("exp_incr", "pow_decr"))
