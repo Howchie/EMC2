@@ -549,6 +549,109 @@ Rcpp::List rbawd_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
   return pack_result(res.R, res.rt, res.omitted, has_isTime, isTime);
 }
 
+// BAwF simulator.  pars columns: b, A, t0, k plus the launch pair, named
+// (v, sv) for launch = 0 (truncated normal) and (mu, sigma) for launch = 1
+// (lognormal).  There is no clearance column: the fading rate k is the only
+// dynamic parameter.  `launch` must be the value BAwF() derived from its
+// drift_distribution argument -- the same one that reaches the likelihood as
+// ctx->bawd_launch -- or simulation and estimation describe different models.
+// Matches R's rBAwF (R/model_BAwF.R).
+// [[Rcpp::export]]
+Rcpp::List rbawf_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
+                     Rcpp::LogicalVector ok, int launch, bool posdrift,
+                     double rho = 0.0) {
+  const int n_acc = lR_levels.size();
+  const int n_rows = pars.nrow();
+  if (n_acc <= 0 || n_rows <= 0 || n_rows % n_acc != 0)
+    Rcpp::stop("rbawf_cpp: invalid accumulator/parameter dimensions.");
+  if (ok.size() != n_rows) Rcpp::stop("rbawf_cpp: ok has the wrong length.");
+  const int n_trials = n_rows / n_acc;
+  const auto ci = col_index_map(pars);
+  const bool logn = (launch == 1);
+  if (logn && !(ci.count("mu") && ci.count("sigma")))
+    Rcpp::stop("rbawf_cpp: the lognormal launch requires columns 'mu' and 'sigma'.");
+  if (!logn && !(ci.count("v") && ci.count("sv")))
+    Rcpp::stop("rbawf_cpp: the normal launch requires columns 'v' and 'sv'.");
+  // Lookup is by NAME, not by position: `b` is required, and passing `B`
+  // instead used to fail as an unhandled std::map::at ("_Map_base::at").
+  for (const char* nm : {"b", "A", "t0", "k"})
+    if (!ci.count(nm)) Rcpp::stop("rbawf_cpp: missing parameter column '%s'.", nm);
+  const int ip1 = logn ? ci.at("mu") : ci.at("v");
+  const int ip2 = logn ? ci.at("sigma") : ci.at("sv");
+  const int ib = ci.at("b"), iA = ci.at("A"), it0 = ci.at("t0"),
+            ik = ci.at("k");
+
+  std::vector<double> dt(n_rows, R_PosInf);
+  std::vector<double> t0col(n_rows);
+  std::vector<int> ok_row(n_rows);
+  for (int r = 0; r < n_rows; ++r) {
+    t0col[r] = pars(r, it0);
+    ok_row[r] = ok[r] ? 1 : 0;
+    if (!ok[r]) continue;
+    const double V = logn
+      ? std::exp(pars(r, ip1) + pars(r, ip2) * R::norm_rand())
+      : rtnorm_lower_r(pars(r, ip1), pars(r, ip2), posdrift ? 0.0 : R_NegInf);
+    const double z = pars(r, iA) * R::unif_rand();
+    // b and z are passed separately: the fading multiplies the start point.
+    const double u = bawf_hit_time_r(V, pars(r, ib), z, pars(r, ik), rho);
+    dt[r] = (R_FINITE(u) && u >= 0.0) ? u : R_PosInf;
+  }
+
+  RaceOut res = resolve_race(dt, n_acc, n_trials, &t0col, &ok_row);
+  std::vector<int> isTime;
+  const bool has_isTime = resolve_time_level(res.R, isTime, lR_levels);
+  return pack_result(res.R, res.rt, res.omitted, has_isTime, isTime);
+}
+
+// BAwR simulator.  The launch pair is (v, sv) for launch = 0 and (mu, sigma)
+// for launch = 1.  Decay is in physical time only, so the crossing needs the
+// distance b - z rather than b and z separately (contrast rbawf_cpp).
+// [[Rcpp::export]]
+Rcpp::List rbawr_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
+                     Rcpp::LogicalVector ok, int launch, bool posdrift) {
+  const int n_acc = lR_levels.size();
+  const int n_rows = pars.nrow();
+  if (n_acc <= 0 || n_rows <= 0 || n_rows % n_acc != 0)
+    Rcpp::stop("rbawr_cpp: invalid accumulator/parameter dimensions.");
+  if (ok.size() != n_rows) Rcpp::stop("rbawr_cpp: ok has the wrong length.");
+  const int n_trials = n_rows / n_acc;
+  const auto ci = col_index_map(pars);
+  const bool logn = (launch == 1);
+  if (logn && !(ci.count("mu") && ci.count("sigma")))
+    Rcpp::stop("rbawr_cpp: the lognormal launch requires columns 'mu' and 'sigma'.");
+  if (!logn && !(ci.count("v") && ci.count("sv")))
+    Rcpp::stop("rbawr_cpp: the normal launch requires columns 'v' and 'sv'.");
+  // Lookup is by NAME, not by position: `b` is required, and passing `B`
+  // instead used to fail as an unhandled std::map::at ("_Map_base::at").
+  for (const char* nm : {"b", "A", "t0", "kappa", "p"})
+    if (!ci.count(nm)) Rcpp::stop("rbawr_cpp: missing parameter column '%s'.", nm);
+  const int ip1 = logn ? ci.at("mu") : ci.at("v");
+  const int ip2 = logn ? ci.at("sigma") : ci.at("sv");
+  const int ib = ci.at("b"), iA = ci.at("A"), it0 = ci.at("t0"),
+            ika = ci.at("kappa"), ipw = ci.at("p");
+
+  std::vector<double> dt(n_rows, R_PosInf);
+  std::vector<double> t0col(n_rows);
+  std::vector<int> ok_row(n_rows);
+  for (int r = 0; r < n_rows; ++r) {
+    t0col[r] = pars(r, it0);
+    ok_row[r] = ok[r] ? 1 : 0;
+    if (!ok[r]) continue;
+    const double V = logn
+      ? std::exp(pars(r, ip1) + pars(r, ip2) * R::norm_rand())
+      : rtnorm_lower_r(pars(r, ip1), pars(r, ip2), posdrift ? 0.0 : R_NegInf);
+    const double z = pars(r, iA) * R::unif_rand();
+    const double u = bawr_hit_time_r(V, pars(r, ib) - z, pars(r, ika),
+                                     pars(r, ipw));
+    dt[r] = (R_FINITE(u) && u >= 0.0) ? u : R_PosInf;
+  }
+
+  RaceOut res = resolve_race(dt, n_acc, n_trials, &t0col, &ok_row);
+  std::vector<int> isTime;
+  const bool has_isTime = resolve_time_level(res.R, isTime, lR_levels);
+  return pack_result(res.R, res.rt, res.omitted, has_isTime, isTime);
+}
+
 // BAwDp simulator.  The launch pair is (v, sv) for launch = 0 and
 // (mu, sigma) for launch = 1.  The internal clock is monotone until its
 // universal freeze time; the sampled LBA crossing is inverted on that clock.

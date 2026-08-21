@@ -1094,5 +1094,9 @@ NumericVector plba(NumericVector t,
 // Included last so every constant it references is already defined; like this
 // file it may be included by exactly one translation unit.
 #include "model_BAwD.h"
+// BAwF (global fading) reuses BAwD's log quadrature and power-kernel log
+// helpers, so it follows it.
+#include "model_BAwF.h"
+#include "model_BAwR.h"
 
 #endif

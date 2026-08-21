@@ -94,6 +94,27 @@
         rho = rho)
 }
 
+.rfun_BAwF <- function(lR, pars, ok = rep(TRUE, length(lR)), launch = 1L,
+                       posdrift = TRUE, rho = Inf) {
+  rho <- .bawf_check_rho(rho)
+  if (.use_cpp_rfun()) {
+    res <- rbawf_cpp(pars, levels(lR), ok, as.integer(launch), posdrift, rho)
+    out <- .rfun_cpp_pack(res, levels(lR), length(lR) / length(levels(lR)))
+    return(.apply_timed_guess_winner(out, levels(lR)))
+  }
+  rBAwF(lR, pars, ok = ok, launch = launch, posdrift = posdrift, rho = rho)
+}
+
+.rfun_BAwR <- function(lR, pars, ok = rep(TRUE, length(lR)), launch = 1L,
+                       posdrift = TRUE) {
+  if (.use_cpp_rfun()) {
+    res <- rbawr_cpp(pars, levels(lR), ok, as.integer(launch), posdrift)
+    out <- .rfun_cpp_pack(res, levels(lR), length(lR) / length(levels(lR)))
+    return(.apply_timed_guess_winner(out, levels(lR)))
+  }
+  rBAwR(lR, pars, ok = ok, launch = launch, posdrift = posdrift)
+}
+
 .rfun_BAwDp <- function(lR, pars, ok = rep(TRUE, length(lR)), launch = 1L,
                         posdrift = TRUE) {
   if (.use_cpp_rfun()) {

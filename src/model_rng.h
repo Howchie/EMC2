@@ -132,6 +132,98 @@ inline double bawd_cf_r(double u, double k, double gamma) {
   return -std::expm1(-gamma * k * u) / (gamma * k);
 }
 
+// BAwF first-passage time: the smallest u > 0 with h_rho(u)[z + V u] = b, i.e.
+// the smallest root of F(x) = b H_rho(x) - z - V x / k in the phase x = k u.
+//
+// Unlike every other ballistic model here, this one is NOT a function of the
+// distance b - z alone: the fading multiplies the start point too, so b and z
+// enter separately.
+//
+// F is convex (H'' > 0) with F(0) = b - z > 0, and the first crossing can only
+// occur at or before the tangency phase x_sat(z) <= x_max.  So a crossing
+// exists if and only if F(x_max) <= 0, and the bracket [0, x_max] both decides
+// existence and contains the root -- which is also why no time beyond
+// T_max = x_max / k is ever returned.  Keeping the bracket at x_max (<= 2)
+// rather than at the unconstrained minimiser avoids overflowing H for large V.
+inline double bawf_hit_time_r(double V, double b, double z, double k,
+                              double rho) {
+  if (!(b > z)) return 0.0;                   // start already at threshold
+  if (ISNAN(V) || !(V > 0.0)) return R_PosInf;
+  if (k <= 1e-10) return (b - z) / V;         // exact LBA limit
+  const bool rho_inf = (rho == 0.0) || (rho > 0.0 && !R_FINITE(rho));
+  if (!rho_inf && !(rho > 1.0)) return R_PosInf;
+  const double x_max = rho_inf ? 1.0 : rho / (rho - 1.0);
+  const double VK = V / k;
+  auto Fx = [&](double x) {
+    const double H = rho_inf ? std::exp(x)
+                             : std::exp(rho * std::log1p(x / rho));
+    return b * H - z - VK * x;
+  };
+  auto Fp = [&](double x) {
+    const double Hp = rho_inf ? std::exp(x)
+                              : std::exp((rho - 1.0) * std::log1p(x / rho));
+    return b * Hp - VK;
+  };
+  if (Fx(x_max) > 0.0) return R_PosInf;       // peak never reaches threshold
+  double lo = 0.0, hi = x_max, x = 0.5 * x_max;
+  for (int it = 0; it < 100; ++it) {
+    const double f = Fx(x);
+    if (f > 0.0) lo = x; else hi = x;
+    const double d1 = Fp(x);
+    double xn = (d1 < 0.0 && R_FINITE(d1)) ? x - f / d1 : 0.5 * (lo + hi);
+    if (!(xn > lo) || !(xn < hi) || !R_FINITE(xn)) xn = 0.5 * (lo + hi);
+    const bool done = std::fabs(xn - x) <= 1e-14 * std::fmax(1.0, xn);
+    x = xn;
+    if (done) break;
+  }
+  return x / k;
+}
+
+// BAwR first-passage time: the smallest u > 0 with
+// G(u) = V u - kappa u^(p+1)/(p+1) equal to the distance d = b - z.
+//
+// Unlike BAwF (where the fading multiplies the start point) the decay here is
+// a pure function of elapsed time, so the crossing depends on b and z only
+// through their difference and this takes `d` like the rest of the family.
+//
+// G rises from 0, peaks at the trajectory peak u_peak = (V/kappa)^(1/p), and
+// falls thereafter, so the first crossing is in [0, u_peak] and exists if and
+// only if G(u_peak) >= d.  That maximum is closed form:
+//
+//   G(u_peak) = u_peak V p / (p + 1),
+//
+// because kappa u_peak^p = V by construction.  G is strictly increasing and
+// concave on the bracket, so a bracketed Newton is unconditionally safe.
+inline double bawr_hit_time_r(double V, double d, double kappa, double pw) {
+  if (!(d > 0.0)) return 0.0;                 // start already at threshold
+  if (ISNAN(V) || !(V > 0.0)) return R_PosInf;
+  if (!(pw > 0.0)) return R_PosInf;           // p = 0 is not in the family
+  if (kappa <= 1e-10) return d / V;           // exact LBA limit
+  const double u_peak = std::exp((std::log(V) - std::log(kappa)) / pw);
+  // An unrepresentable peak means the decay is negligible over any reachable
+  // time; the trajectory is a straight line there, which is the LBA answer.
+  if (!R_FINITE(u_peak) || !(u_peak > 0.0)) return d / V;
+  if (u_peak * V * pw / (pw + 1.0) < d) return R_PosInf;  // never reaches b
+  auto Gx = [&](double u) {
+    return V * u - kappa * std::exp((pw + 1.0) * std::log(u)) / (pw + 1.0);
+  };
+  auto Gp = [&](double u) {
+    return V - kappa * std::exp(pw * std::log(u));
+  };
+  double lo = 0.0, hi = u_peak, u = 0.5 * u_peak;
+  for (int it = 0; it < 100; ++it) {
+    const double f = Gx(u) - d;
+    if (f < 0.0) lo = u; else hi = u;
+    const double d1 = Gp(u);
+    double un = (d1 > 0.0 && R_FINITE(d1)) ? u - f / d1 : 0.5 * (lo + hi);
+    if (!(un > lo) || !(un < hi) || !R_FINITE(un)) un = 0.5 * (lo + hi);
+    const bool done = std::fabs(un - u) <= 1e-14 * std::fmax(1.0, un);
+    u = un;
+    if (done) break;
+  }
+  return u;
+}
+
 inline double bawd_hit_time_r(double V, double d, double k, double ell,
                               double gamma, double rho) {
   if (!(d > 0.0)) return 0.0;                 // start already at threshold

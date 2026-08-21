@@ -759,6 +759,63 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
     // h = I_p(alpha, beta), and 1 - h of the mass sits at t = +Inf.  There is
     // no parameter setting that removes this, so the flag is unconditional.
     out.ctx.defective_upper_tail = true;
+  } else if (type_std.find("BAwF") != std::string::npos) {
+    // Global fading of the whole evidence trace: X(u) = h_rho(u)[z + V u].
+    // "BAwF" contains and is contained by none of the other c_names, so its
+    // position here is free; it sits with the other ballistic families.
+    out.pdf1_ptr       = &dbawf_scalar;
+    out.cdf1_ptr       = &pbawf_scalar;
+    out.model_dfun_raw = &dbawf_raw;
+    out.model_pfun_raw = &pbawf_raw;
+    out.logS_at_t_ptr  = &bawf_logS_at_t;
+    const bool bawf_logn = (type_std.find("_LOGN") != std::string::npos);
+    out.col_spec = bawf_logn ? emc2col::bawf_logn::spec()
+                             : emc2col::bawf::spec();
+    out.ctx.t0_index = emc2col::bawf::t0;
+    // Shared with BAwD; see bawf_launch_of() in utils.h.
+    out.ctx.bawd_launch = bawf_logn ? BAWF_LAUNCH_LOGNORMAL
+                                    : BAWF_LAUNCH_NORMAL;
+    // Fixed fading-kernel shape from the c_name suffix; no suffix is the
+    // exponential member.  rho = 1 has no finite endpoint and BAwF() refuses
+    // it, so it emits no suffix here.
+    out.ctx.bawd_rho =
+      (type_std.find("_RHO2") != std::string::npos) ? 2.0 :
+      ((type_std.find("_RHO4") != std::string::npos) ? 4.0 : R_PosInf);
+    // Always defective: launches below V_c(z) never reach the threshold, and
+    // no parameter setting removes that mass.
+    out.ctx.defective_upper_tail = true;
+    // posdrift is meaningless for the lognormal launch (V > 0 by
+    // construction); BAwF() refuses posdrift = FALSE there rather than
+    // silently ignoring it.
+    if (!bawf_logn && type_std.find("IO") != std::string::npos) {
+      out.ctx.use_posdrift = false;
+    }
+  } else if (type_std.find("BAwR") != std::string::npos) {
+    // Ramping clearance: dX/du = V - kappa u^p.  "BAwR"
+    // neither contains nor is contained by any other c_name, so its position
+    // here is free; it sits with the other ballistic families.
+    out.pdf1_ptr       = &dbawr_scalar;
+    out.cdf1_ptr       = &pbawr_scalar;
+    out.model_dfun_raw = &dbawr_raw;
+    out.model_pfun_raw = &pbawr_raw;
+    out.logS_at_t_ptr  = &bawr_logS_at_t;
+    const bool bawr_logn = (type_std.find("_LOGN") != std::string::npos);
+    out.col_spec = bawr_logn ? emc2col::bawr_logn::spec()
+                             : emc2col::bawr::spec();
+    out.ctx.t0_index = emc2col::bawr::t0;
+    // Shared with BAwD; see bawr_launch_of() in utils.h.  There is no rho:
+    // the decay shape is the sampled exponent, not a fixed kernel index.
+    out.ctx.bawd_launch = bawr_logn ? BAWR_LAUNCH_LOGNORMAL
+                                    : BAWR_LAUNCH_NORMAL;
+    // Always defective: launches below V_c(z) never reach the threshold, and
+    // no parameter setting removes that mass.
+    out.ctx.defective_upper_tail = true;
+    // posdrift is meaningless for the lognormal launch (V > 0 by
+    // construction); BAwR() refuses posdrift = FALSE there rather than
+    // silently ignoring it.
+    if (!bawr_logn && type_std.find("IO") != std::string::npos) {
+      out.ctx.use_posdrift = false;
+    }
   } else if (type_std.find("BAwDp") != std::string::npos) {
     // BAwDp must precede the generic BAwD branch because its name contains the
     // string "BAwD".  It is an LBA evaluated at the closed-form internal clock
@@ -789,7 +846,6 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
     // The two launch distributions share column POSITIONS and differ only in
     // the names validate_col_prefix() enforces, so t0_index is common.
     const bool bawd_logn = (type_std.find("_LOGN") != std::string::npos);
-    out.col_spec = bawd_logn ? emc2col::bawd_logn::spec() : emc2col::bawd::spec();
     out.ctx.t0_index = emc2col::bawd::t0;
     out.ctx.bawd_launch = bawd_logn ? BAWD_LAUNCH_LOGNORMAL : BAWD_LAUNCH_NORMAL;
     // Fixed clearance exponent and base-kernel shape parsed from c_name.
@@ -800,6 +856,15 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
       ((type_std.find("_GAM34") != std::string::npos) ? 0.75 :
        ((type_std.find("_GAM23") != std::string::npos) ? (2.0 / 3.0) :
         ((type_std.find("_GAM12") != std::string::npos) ? 0.5 : 0.0)));
+    // Slot 6 is the endpoint T_max wherever the trace has a finite maximum,
+    // and the clearance rate ell at gamma = 1 where it does not.  The R
+    // constructor names the p_type from the same predicate, so the two agree
+    // by construction; getting it wrong would be caught here by
+    // validate_col_prefix() rather than silently misread.
+    const bool bawd_tmax = bawd_uses_tmax(out.ctx.bawd_gamma);
+    out.col_spec = bawd_logn
+      ? (bawd_tmax ? emc2col::bawd_logn::spec() : emc2col::bawd_logn::spec_ell())
+      : (bawd_tmax ? emc2col::bawd::spec() : emc2col::bawd::spec_ell());
     // Fixed power-decay kernel parameter parsed from the c_name suffix.
     // Default (no suffix) is R_PosInf (exponential kernel).
     out.ctx.bawd_rho =
