@@ -792,11 +792,16 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
     out.model_pfun_raw = &pbtawl_mix_raw;
     out.logS_at_t_ptr  = &btawl_mix_logS_at_t;
     const bool btawl_logn = (type_std.find("_LOGN") != std::string::npos);
-    out.col_spec = btawl_logn ? emc2col::btawl_mix_logn::spec()
-                              : emc2col::btawl_mix::spec();
+    const bool btawl_rate = (type_std.find("_RATE") != std::string::npos);
+    out.col_spec = btawl_logn
+      ? (btawl_rate ? emc2col::btawl_mix_logn::spec_rate()
+                    : emc2col::btawl_mix_logn::spec())
+      : (btawl_rate ? emc2col::btawl_mix::spec_rate()
+                    : emc2col::btawl_mix::spec());
     out.ctx.t0_index = emc2col::btawl_mix::t0;
     out.ctx.btawl_launch = btawl_logn ? BTAWL_LAUNCH_LOGNORMAL
                                       : BTAWL_LAUNCH_NORMAL;
+    out.ctx.btawl_ttrans_chart = !btawl_rate;
     out.ctx.defective_upper_tail = true;
     if (!btawl_logn && type_std.find("_IO") != std::string::npos)
       out.ctx.use_posdrift = false;
@@ -810,11 +815,16 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
     out.model_pfun_raw = &pbtawl_raw;
     out.logS_at_t_ptr  = &btawl_logS_at_t;
     const bool btawl_logn = (type_std.find("_LOGN") != std::string::npos);
-    out.col_spec = btawl_logn ? emc2col::btawl_logn::spec()
-                              : emc2col::btawl::spec();
+    const bool btawl_rate = (type_std.find("_RATE") != std::string::npos);
+    out.col_spec = btawl_logn
+      ? (btawl_rate ? emc2col::btawl_logn::spec_rate()
+                    : emc2col::btawl_logn::spec())
+      : (btawl_rate ? emc2col::btawl::spec_rate()
+                    : emc2col::btawl::spec());
     out.ctx.t0_index = emc2col::btawl::t0;
     out.ctx.btawl_launch = btawl_logn ? BTAWL_LAUNCH_LOGNORMAL
                                       : BTAWL_LAUNCH_NORMAL;
+    out.ctx.btawl_ttrans_chart = !btawl_rate;
     out.ctx.defective_upper_tail = true;
     if (!btawl_logn && type_std.find("_IO") != std::string::npos)
       out.ctx.use_posdrift = false;

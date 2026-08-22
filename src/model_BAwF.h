@@ -411,6 +411,95 @@ inline double log_bawf_cdf_logn(double u, const BawfGeom& g, double mu,
   return std::fmin(out, 0.0);
 }
 
+// Log survivor: the same start-point integral as the CDF, with the launch
+// survivor replaced by the launch CDF.  This is deliberately independent of
+// log1m_exp(log_cdf), which saturates as soon as the CDF rounds to one.
+inline double bawf_log_frozen_surv_quad(const BawfGeom& g, double s_lo,
+                                        double s_hi, double p1, double p2,
+                                        bool logn, bool posdrift) {
+  if (!(s_hi > s_lo) || !(p2 > 0.0)) return R_NegInf;
+  const double log_kb = std::log(g.k) + std::log(g.b);
+  const auto lf = [&](double s) -> double {
+    if (!(s > 0.0)) return R_NegInf;
+    const double log_jac = std::log(s) + bawf_log_Hpp(g, s) + std::log(g.b);
+    const double log_cdf = logn
+      ? pnorm_log_direct((log_kb + bawf_log_Hp(g, s) - p1) / p2, true)
+      : (posdrift
+           ? log_normal_cdf_positive_raw(bawf_critical_launch(g, s), p1, p2)
+           : pnorm_log_direct((bawf_critical_launch(g, s) - p1) / p2, true));
+    return log_jac + log_cdf;
+  };
+  const double mid = logn
+    ? bawf_s_of_logratio(g, p1 - log_kb)
+    : ((p1 > 0.0) ? bawf_s_of_logratio(g, std::log(p1) - log_kb) : s_lo);
+  return bawd_log_gl_split(lf, s_lo, s_hi, mid, BAWD_GL_NODES);
+}
+
+inline double bawf_log_frozen_surv_normal(const BawfGeom& g, double s_lo,
+                                          double s_hi, double v, double sv,
+                                          bool posdrift) {
+  return bawf_log_frozen_surv_quad(g, s_lo, s_hi, v, sv, false, posdrift);
+}
+
+inline double bawf_log_frozen_surv_logn(const BawfGeom& g, double s_lo,
+                                        double s_hi, double mu, double sigma) {
+  return bawf_log_frozen_surv_quad(g, s_lo, s_hi, mu, sigma, true, false);
+}
+
+inline double log_bawf_surv_normal(double u, const BawfGeom& g, double v,
+                                    double sv, bool posdrift,
+                                    double denom_floor) {
+  if (!g.ok || !(sv > 0.0) || !(u > 0.0)) return R_NegInf;
+  const BawfAtU s = bawf_at_u(g, u);
+  if (!s.ok) return R_NegInf;
+  const double log_denom = log_positive_normalizer(v, sv, posdrift, denom_floor);
+  if (u == R_PosInf && g.k_zero)
+    return std::fmin(log_normal_cdf_positive(s.w_hi, v, sv, posdrift,
+                                             denom_floor), 0.0);
+  if (g.A <= BAWF_A_EPS)
+    return std::fmin(log_normal_cdf_positive(s.w_hi, v, sv, posdrift,
+                                             denom_floor), 0.0);
+  double log_live = R_NegInf;
+  if (s.Z > 0.0) {
+    const double lo = (s.w_lo - v) / sv;
+    const double hi = (s.w_hi - v) / sv;
+    const double li = log_normal_phi_integral_positive_raw(lo, hi, v, sv,
+                                                            posdrift);
+    if (li > R_NegInf) log_live = li + std::log(sv) + std::log(s.q);
+  }
+  const double log_frozen = s.partial
+    ? bawf_log_frozen_surv_normal(g, s.s_lo, s.s_hi, v, sv, posdrift)
+    : R_NegInf;
+  const double out = log_sum_exp(log_live, log_frozen) - std::log(g.A) - log_denom;
+  return ISNAN(out) ? R_NegInf : std::fmin(out, 0.0);
+}
+
+inline double log_bawf_surv_logn(double u, const BawfGeom& g, double mu,
+                                  double sigma) {
+  if (!g.ok || !(sigma > 0.0) || !(u > 0.0)) return R_NegInf;
+  const BawfAtU s = bawf_at_u(g, u);
+  if (!s.ok) return R_NegInf;
+  const auto log_g = [&](double w) {
+    return (w > 0.0 && emc2_isfinite(w))
+      ? pnorm_log_direct((std::log(w) - mu) / sigma, true) : R_NegInf;
+  };
+  if (u == R_PosInf && g.k_zero) return std::fmin(log_g(s.w_hi), 0.0);
+  if (g.A <= BAWF_A_EPS) return std::fmin(log_g(s.w_hi), 0.0);
+  double log_live = R_NegInf;
+  if (s.Z > 0.0) {
+    const double pa = log_lognormal_put(s.w_hi, mu, sigma);
+    const double pb = log_lognormal_put(s.w_lo, mu, sigma);
+    if (pa - pb > BAWF_MIN_LOG_GAP)
+      log_live = std::log(s.q) + log_diff_exp(pa, pb);
+    if (!(log_live > R_NegInf))
+      log_live = std::log(s.Z) + log_g(0.5 * (s.w_hi + s.w_lo));
+  }
+  const double log_frozen = s.partial
+    ? bawf_log_frozen_surv_logn(g, s.s_lo, s.s_hi, mu, sigma) : R_NegInf;
+  const double out = log_sum_exp(log_live, log_frozen) - std::log(g.A);
+  return ISNAN(out) ? R_NegInf : std::fmin(out, 0.0);
+}
+
 // --------------------------------------------------------------------------
 // log PDF
 //
@@ -806,6 +895,14 @@ inline double bawf_log_cdf(double u, double A, double b, double p1, double p2,
   const BawfGeom g = bawf_geometry(A, b, k, rho);
   if (launch == BAWF_LAUNCH_LOGNORMAL) return log_bawf_cdf_logn(u, g, p1, p2);
   return log_bawf_cdf_normal(u, g, p1, p2, posdrift, denom_floor);
+}
+
+inline double bawf_log_surv(double u, double A, double b, double p1, double p2,
+                            double k, int launch, bool posdrift, double rho,
+                            double denom_floor = BAWF_DENOM_FLOOR) {
+  const BawfGeom g = bawf_geometry(A, b, k, rho);
+  if (launch == BAWF_LAUNCH_LOGNORMAL) return log_bawf_surv_logn(u, g, p1, p2);
+  return log_bawf_surv_normal(u, g, p1, p2, posdrift, denom_floor);
 }
 
 inline double bawf_log_pdf(double u, double A, double b, double p1, double p2,

@@ -70,6 +70,49 @@ inline double log_positive_normalizer(double v, double sv, bool posdrift,
   return (log_denom < log_floor) ? log_floor : log_denom;
 }
 
+// Log CDF of an unnormalised positive normal launch.  The lower-tail term at
+// V = 0 is essential: dividing Phi((w-v)/sv) by Phi(v/sv) alone is the CDF of
+// an *untruncated* normal with a rescaled mass, not the CDF conditional on V>0.
+// Keeping this subtraction in log space is what makes the survivor paths
+// correct for ordinary positive-drift fits as well as for far tails.
+inline double log_normal_cdf_positive_raw(double w, double v, double sv) {
+  if (!(sv > 0.0) || !(w > 0.0)) return R_NegInf;
+  if (!emc2_isfinite(w)) return pnorm_log_direct(v / sv, true);
+  const double lhi = pnorm_log_direct((w - v) / sv, true);
+  const double llo = pnorm_log_direct(-v / sv, true);
+  return log_diff_exp(lhi, llo);
+}
+
+inline double log_normal_cdf_positive(double w, double v, double sv,
+                                      bool posdrift, double denom_floor) {
+  if (!posdrift) {
+    if (!(sv > 0.0) || ISNAN(w)) return R_NegInf;
+    return pnorm_log_direct((w - v) / sv, true);
+  }
+  const double raw = log_normal_cdf_positive_raw(w, v, sv);
+  return (raw > R_NegInf)
+    ? raw - log_positive_normalizer(v, sv, true, denom_floor) : R_NegInf;
+}
+
+// Log integral of the same positive-normal CDF over a standardized interval.
+// The direct difference is well conditioned in the central region; when both
+// terms coincide at floating-point precision, the midpoint CDF gives the
+// correct narrow-interval limit and avoids manufacturing a zero survivor.
+inline double log_normal_phi_integral_positive_raw(double lo, double hi,
+                                                   double v, double sv,
+                                                   bool posdrift) {
+  if (!(hi > lo)) return R_NegInf;
+  if (!posdrift) return log_normal_phi_integral(lo, hi);
+  const double base = pnorm_log_direct(-v / sv, true);
+  const double integral = log_normal_phi_integral(lo, hi);
+  const double sub = std::log(hi - lo) + base;
+  const double out = log_diff_exp(integral, sub);
+  if (out > R_NegInf) return out;
+  const double mid = 0.5 * (lo + hi);
+  const double point = log_diff_exp(pnorm_log_direct(mid, true), base);
+  return point > R_NegInf ? std::log(hi - lo) + point : R_NegInf;
+}
+
 // Natural formulas are much cheaper, but are only used while their normal
 // endpoints are central and the relevant subtraction is well-conditioned.
 // The log-space branches remain authoritative for tails and cancellation.
@@ -459,6 +502,43 @@ inline BawlLaunchGeom bawl_launch_geom(double t, double A, double b, double k) {
   return g;
 }
 
+// Direct launch-CDF integral for the BAwL survivor.  Unlike complementing the
+// CDF, this remains accurate when all start points have essentially crossed.
+inline double log_bawl_surv_normal(double t, double A, double b, double v,
+                                   double sv, double k, bool posdrift,
+                                   double denom_floor) {
+  if (!(t > 0.0) || !(sv > 0.0)) return R_NegInf;
+  const BawlLaunchGeom g = bawl_launch_geom(t, A, b, k);
+  if (!g.ok) return R_NegInf;
+  const double log_denom = log_positive_normalizer(v, sv, posdrift, denom_floor);
+  if (g.frozen || A <= BAWL_A_EPS || !(g.width > 0.0)) {
+    const double w = g.frozen ? k * b : g.w_hi;
+    return std::fmin(log_normal_cdf_positive(w, v, sv, posdrift, denom_floor), 0.0);
+  }
+  const double li = log_normal_phi_integral_positive_raw(
+    (g.w_lo - v) / sv, (g.w_hi - v) / sv, v, sv, posdrift);
+  if (!(li > R_NegInf)) return R_NegInf;
+  const double out = g.log_s - std::log(A) + std::log(sv) + li - log_denom;
+  return std::fmin(out, 0.0);
+}
+
+inline double log_bawl_surv_logn(double t, double A, double b, double mu,
+                                 double sigma, double k) {
+  if (!(t > 0.0) || !(sigma > 0.0)) return R_NegInf;
+  const BawlLaunchGeom g = bawl_launch_geom(t, A, b, k);
+  if (!g.ok) return R_NegInf;
+  if (g.frozen || A <= BAWL_A_EPS || !(g.width > 0.0)) {
+    const double w = g.frozen ? k * b : g.w_hi;
+    return std::fmin(pnorm_log_direct((std::log(w) - mu) / sigma, true), 0.0);
+  }
+  const double pa = log_lognormal_put(g.w_hi, mu, sigma);
+  const double pb = log_lognormal_put(g.w_lo, mu, sigma);
+  if (!(pa - pb > BAWL_LOG_MIN_SPAN))
+    return pnorm_log_direct((std::log(0.5 * (g.w_hi + g.w_lo)) - mu) / sigma, true);
+  const double out = g.log_s - std::log(A) + log_diff_exp(pa, pb);
+  return std::fmin(out, 0.0);
+}
+
 // log P(V >= w) for the lognormal launch.
 inline double bawl_logn_log_surv(double w, double mu, double sigma) {
   if (!(w > 0.0)) return 0.0;
@@ -687,6 +767,14 @@ inline double log_ba_cdf_launch(double t, double A, double b, double p1,
   if (launch == BAWL_LAUNCH_LOGNORMAL)
     return log_bawl_cdf_logn(t, A, b, p1, p2, k);
   return log_ba_cdf(t, A, b, p1, p2, k, posdrift, denom_floor);
+}
+
+inline double log_ba_surv_launch(double t, double A, double b, double p1,
+                                 double p2, double k, bool posdrift,
+                                 double denom_floor, int launch) {
+  if (launch == BAWL_LAUNCH_LOGNORMAL)
+    return log_bawl_surv_logn(t, A, b, p1, p2, k);
+  return log_bawl_surv_normal(t, A, b, p1, p2, k, posdrift, denom_floor);
 }
 
 inline double log_ba_pdf_launch(double t, double A, double b, double p1,

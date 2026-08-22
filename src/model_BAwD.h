@@ -712,6 +712,116 @@ inline double log_bawd_cdf_logn(double u, const BawdGeom& g, double mu,
   return std::fmin(out, 0.0);
 }
 
+// Cancellation-free log survivor.  It mirrors the CDF integral but evaluates
+// the launch CDF directly, including the frozen-start contribution.
+inline double bawd_log_frozen_surv_normal(const BawdGeom& g, double s_lo,
+                                          double s_hi, double v, double sv,
+                                          bool posdrift, double denom_floor) {
+  if (!(s_hi > s_lo) || !(sv > 0.0)) return R_NegInf;
+  (void)denom_floor;
+  const auto log_launch_cdf = [&](double w) -> double {
+    return posdrift
+      ? log_normal_cdf_positive_raw(w, v, sv)
+      : pnorm_log_direct((w - v) / sv, true);
+  };
+  if (!g.rho_inf) {
+    const auto lf = [&](double x) -> double {
+      return bawd_log_psi_prime(g, x) +
+        log_launch_cdf(bawd_critical_launch(g, x));
+    };
+    const double mid = (v > 0.0 && g.ell > 0.0)
+      ? bawd_pk_peak_x(g.rho, g.gamma, std::log(v / g.ell)) : s_lo;
+    return bawd_log_gl_split(lf, s_lo, s_hi, mid, BAWD_GL_NODES) +
+      std::log(g.ell) - std::log(g.k);
+  }
+  const auto lf = [&](double s) -> double {
+    const double e1 = std::expm1(s);
+    if (!(e1 > 0.0)) return R_NegInf;
+    return std::log(e1) - g.gamma * s +
+      log_launch_cdf(bawd_critical_launch(g, s));
+  };
+  const double mid = (v > 0.0) ? std::log(v / g.ell) / g.omg : s_lo;
+  return bawd_log_gl_split(lf, s_lo, s_hi, mid, BAWD_GL_NODES) +
+    std::log1p(-g.gamma) + std::log(g.ell) - std::log(g.k);
+}
+
+inline double bawd_log_frozen_surv_logn(const BawdGeom& g, double s_lo,
+                                        double s_hi, double mu, double sigma) {
+  if (!(s_hi > s_lo) || !(sigma > 0.0)) return R_NegInf;
+  if (!g.rho_inf) {
+    const double log_ell = std::log(g.ell);
+    const auto lf = [&](double x) -> double {
+      return bawd_log_psi_prime(g, x) +
+        pnorm_log_direct((log_ell + bawd_log_wrel(g, x) - mu) / sigma, true);
+    };
+    const double mid = bawd_pk_peak_x(g.rho, g.gamma, mu - log_ell);
+    return bawd_log_gl_split(lf, s_lo, s_hi, mid, BAWD_GL_NODES) +
+      std::log(g.ell) - std::log(g.k);
+  }
+  const double x_ell = (std::log(g.ell) - mu) / sigma;
+  const auto lf = [&](double s) -> double {
+    const double e1 = std::expm1(s);
+    if (!(e1 > 0.0)) return R_NegInf;
+    return std::log(e1) - g.gamma * s +
+      pnorm_log_direct(x_ell + g.omg * s / sigma, true);
+  };
+  const double mid = -sigma * x_ell / g.omg;
+  return bawd_log_gl_split(lf, s_lo, s_hi, mid, BAWD_GL_NODES) +
+    std::log1p(-g.gamma) + std::log(g.ell) - std::log(g.k);
+}
+
+inline double log_bawd_surv_normal(double u, const BawdGeom& g, double v,
+                                   double sv, bool posdrift,
+                                   double denom_floor) {
+  if (!g.ok || !(sv > 0.0) || !(u > 0.0)) return R_NegInf;
+  const BawdAtU s = bawd_at_u(g, u);
+  if (!s.ok) return R_NegInf;
+  const double log_denom = log_positive_normalizer(v, sv, posdrift, denom_floor);
+  if (u == R_PosInf && g.k_zero)
+    return std::fmin(log_normal_cdf_positive(s.w_hi, v, sv, posdrift,
+                                             denom_floor), 0.0);
+  if (g.A <= BAWD_A_EPS)
+    return std::fmin(log_normal_cdf_positive(s.w_hi, v, sv, posdrift,
+                                             denom_floor), 0.0);
+  double log_live = R_NegInf;
+  if (s.Z > 0.0) {
+    const double li = log_normal_phi_integral_positive_raw(
+      (s.w_lo - v) / sv, (s.w_hi - v) / sv, v, sv, posdrift);
+    if (li > R_NegInf) log_live = li + std::log(sv) + std::log(s.q);
+  }
+  const double log_frozen = (s.partial && !g.gamma_one)
+    ? bawd_log_frozen_surv_normal(g, s.s_lo, s.s_hi, v, sv, posdrift,
+                                  denom_floor) : R_NegInf;
+  const double out = log_sum_exp(log_live, log_frozen) - std::log(g.A);
+  return ISNAN(out) ? R_NegInf : std::fmin(out - log_denom, 0.0);
+}
+
+inline double log_bawd_surv_logn(double u, const BawdGeom& g, double mu,
+                                 double sigma) {
+  if (!g.ok || !(sigma > 0.0) || !(u > 0.0)) return R_NegInf;
+  const BawdAtU s = bawd_at_u(g, u);
+  if (!s.ok) return R_NegInf;
+  const auto log_g = [&](double w) {
+    return (w > 0.0 && emc2_isfinite(w))
+      ? pnorm_log_direct((std::log(w) - mu) / sigma, true) : R_NegInf;
+  };
+  if (u == R_PosInf && g.k_zero) return std::fmin(log_g(s.w_hi), 0.0);
+  if (g.A <= BAWD_A_EPS) return std::fmin(log_g(s.w_hi), 0.0);
+  double log_live = R_NegInf;
+  if (s.Z > 0.0) {
+    const double pa = log_lognormal_put(s.w_hi, mu, sigma);
+    const double pb = log_lognormal_put(s.w_lo, mu, sigma);
+    if (pa - pb > BAWD_MIN_LOG_GAP)
+      log_live = std::log(s.q) + log_diff_exp(pa, pb);
+    if (!(log_live > R_NegInf))
+      log_live = std::log(s.Z) + log_g(0.5 * (s.w_hi + s.w_lo));
+  }
+  const double log_frozen = (s.partial && !g.gamma_one)
+    ? bawd_log_frozen_surv_logn(g, s.s_lo, s.s_hi, mu, sigma) : R_NegInf;
+  const double out = log_sum_exp(log_live, log_frozen) - std::log(g.A);
+  return ISNAN(out) ? R_NegInf : std::fmin(out, 0.0);
+}
+
 // --------------------------------------------------------------------------
 // log PDF
 // --------------------------------------------------------------------------
@@ -1137,6 +1247,15 @@ inline double bawd_log_cdf(double u, double A, double b, double p1, double p2,
   if (launch == BAWD_LAUNCH_LOGNORMAL)
     return log_bawd_cdf_logn(u, g, p1, p2);
   return log_bawd_cdf_normal(u, g, p1, p2, posdrift, denom_floor);
+}
+
+inline double bawd_log_surv(double u, double A, double b, double p1, double p2,
+                            double k, double ell, int launch, bool posdrift,
+                            double gamma, double rho,
+                            double denom_floor = BAWD_DENOM_FLOOR) {
+  const BawdGeom g = bawd_geometry(A, b, k, ell, gamma, rho);
+  if (launch == BAWD_LAUNCH_LOGNORMAL) return log_bawd_surv_logn(u, g, p1, p2);
+  return log_bawd_surv_normal(u, g, p1, p2, posdrift, denom_floor);
 }
 
 inline double bawd_log_pdf(double u, double A, double b, double p1, double p2,

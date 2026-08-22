@@ -73,7 +73,7 @@ constexpr int BAWR_LAUNCH_LOGNORMAL = BAWD_LAUNCH_LOGNORMAL;
 // Geometry (launch-distribution free)
 // --------------------------------------------------------------------------
 
-struct BawpGeom {
+struct BawrGeom {
   bool ok = false;
   bool kappa_zero = false;    // exact LBA limit: no decay, no endpoint
   double b = 0.0, A = 0.0, kappa = 0.0, pw = 1.0;
@@ -86,7 +86,7 @@ struct BawpGeom {
 // u_sat(z) = [(p+1)(b-z) / (kappa p)]^(1/(p+1)), in logs so that the
 // exponentiation is a single exp() rather than a pow() of a ratio of
 // possibly very different magnitudes.
-inline double bawr_sat_time(const BawpGeom& g, double b_minus_z) {
+inline double bawr_sat_time(const BawrGeom& g, double b_minus_z) {
   if (!(b_minus_z > 0.0)) return 0.0;
   const double log_u = (std::log1p(g.pw) + std::log(b_minus_z) -
                         g.log_kappa - std::log(g.pw)) / (g.pw + 1.0);
@@ -94,17 +94,17 @@ inline double bawr_sat_time(const BawpGeom& g, double b_minus_z) {
 }
 
 // V_c(s) = kappa s^p, the launch strength exactly tangent at saturation time s.
-inline double bawr_log_critical_launch(const BawpGeom& g, double s) {
+inline double bawr_log_critical_launch(const BawrGeom& g, double s) {
   if (!(s > 0.0)) return R_NegInf;
   return g.log_kappa + g.pw * std::log(s);
 }
-inline double bawr_critical_launch(const BawpGeom& g, double s) {
+inline double bawr_critical_launch(const BawrGeom& g, double s) {
   const double l = bawr_log_critical_launch(g, s);
   return (l > R_NegInf) ? std::exp(l) : 0.0;
 }
 
-inline BawpGeom bawr_geometry(double A, double b, double kappa, double pw) {
-  BawpGeom g;
+inline BawrGeom bawr_geometry(double A, double b, double kappa, double pw) {
+  BawrGeom g;
   if (!emc2_isfinite(A) || !emc2_isfinite(b) || !emc2_isfinite(kappa) ||
       !emc2_isfinite(pw)) return g;
   if (!(b > 0.0) || !(A >= 0.0) || !(b >= A) || !(kappa >= 0.0)) return g;
@@ -128,10 +128,22 @@ inline BawpGeom bawr_geometry(double A, double b, double kappa, double pw) {
   return g;
 }
 
+// Inverse endpoint chart.  Tmax is a free positive coordinate for every
+// b > 0 and p > 0; the only finite endpoint case omitted here is the exact
+// LBA limit, represented by Tmax = Inf and kappa = 0.
+inline double bawr_kappa_from_tmax(double b, double pw, double Tmax) {
+  if (ISNAN(b) || ISNAN(pw) || ISNAN(Tmax)) return R_NaN;
+  if (!(b > 0.0) || !(pw > 0.0) || !(Tmax > 0.0)) return R_NaN;
+  if (Tmax == R_PosInf) return 0.0;
+  const double log_k = std::log(b) + std::log1p(pw) - std::log(pw) -
+    (pw + 1.0) * std::log(Tmax);
+  return emc2_isfinite(log_k) ? std::exp(log_k) : R_NaN;
+}
+
 // Per-time quantities.  `Z` splits the start-point range into the live part
 // [0, Z] and the already-saturated (frozen) part (Z, A]; start points ABOVE Z
 // are the frozen ones because u_sat(z) decreases in z.
-struct BawpAtU {
+struct BawrAtU {
   bool ok = false;
   bool saturated = false;   // u >= T_max: Z = 0, only frozen mass remains
   bool partial = false;     // Z < A: a frozen contribution exists
@@ -144,8 +156,8 @@ struct BawpAtU {
   double s_hi = 0.0;        // coordinates
 };
 
-inline BawpAtU bawr_at_u(const BawpGeom& g, double u) {
-  BawpAtU s;
+inline BawrAtU bawr_at_u(const BawrGeom& g, double u) {
+  BawrAtU s;
   if (!g.ok || !(u > 0.0) || ISNAN(u)) return s;
   s.ok = true;
   const bool inf_u = (u == R_PosInf);
@@ -215,7 +227,7 @@ inline BawpAtU bawr_at_u(const BawpGeom& g, double u) {
 // launch always uses.
 // --------------------------------------------------------------------------
 
-inline double bawr_log_frozen_quad(const BawpGeom& g, double s_lo, double s_hi,
+inline double bawr_log_frozen_quad(const BawrGeom& g, double s_lo, double s_hi,
                                    double p1, double p2, bool logn,
                                    bool posdrift) {
   if (!(s_hi > s_lo) || !(p2 > 0.0)) return R_NegInf;
@@ -239,12 +251,12 @@ inline double bawr_log_frozen_quad(const BawpGeom& g, double s_lo, double s_hi,
   return bawd_log_gl_split(lf, s_lo, s_hi, mid, BAWD_GL_NODES);
 }
 
-inline double bawr_log_frozen_normal(const BawpGeom& g, double s_lo,
+inline double bawr_log_frozen_normal(const BawrGeom& g, double s_lo,
                                      double s_hi, double v, double sv) {
   return bawr_log_frozen_quad(g, s_lo, s_hi, v, sv, false, true);
 }
 
-inline double bawr_log_frozen_logn(const BawpGeom& g, double s_lo, double s_hi,
+inline double bawr_log_frozen_logn(const BawrGeom& g, double s_lo, double s_hi,
                                    double mu, double sigma) {
   if (!(s_hi > s_lo) || !(sigma > 0.0)) return R_NegInf;
   const double w_a = bawr_critical_launch(g, s_lo);
@@ -274,11 +286,11 @@ inline double bawr_log_frozen_logn(const BawpGeom& g, double s_lo, double s_hi,
 // same "affine in z" reduction BAwD, BAwF and the LBA use.
 // --------------------------------------------------------------------------
 
-inline double log_bawr_cdf_normal(double u, const BawpGeom& g, double v,
+inline double log_bawr_cdf_normal(double u, const BawrGeom& g, double v,
                                   double sv, bool posdrift,
                                   double denom_floor) {
   if (!g.ok || !(sv > 0.0) || !(u > 0.0)) return R_NegInf;
-  const BawpAtU s = bawr_at_u(g, u);
+  const BawrAtU s = bawr_at_u(g, u);
   if (!s.ok) return R_NegInf;
   const double log_denom = log_positive_normalizer(v, sv, posdrift, denom_floor);
 
@@ -312,10 +324,10 @@ inline double log_bawr_cdf_normal(double u, const BawpGeom& g, double v,
   return std::fmin(out, 0.0);
 }
 
-inline double log_bawr_cdf_logn(double u, const BawpGeom& g, double mu,
+inline double log_bawr_cdf_logn(double u, const BawrGeom& g, double mu,
                                 double sigma) {
   if (!g.ok || !(sigma > 0.0) || !(u > 0.0)) return R_NegInf;
-  const BawpAtU s = bawr_at_u(g, u);
+  const BawrAtU s = bawr_at_u(g, u);
   if (!s.ok) return R_NegInf;
   const auto log_gbar = [&](double w) -> double {
     if (!(w > 0.0)) return 0.0;
@@ -346,6 +358,89 @@ inline double log_bawr_cdf_logn(double u, const BawpGeom& g, double mu,
   return std::fmin(out, 0.0);
 }
 
+inline double bawr_log_frozen_surv_quad(const BawrGeom& g, double s_lo,
+                                        double s_hi, double p1, double p2,
+                                        bool logn, bool posdrift) {
+  if (!(s_hi > s_lo) || !(p2 > 0.0)) return R_NegInf;
+  const auto lf = [&](double s) -> double {
+    if (!(s > 0.0)) return R_NegInf;
+    const double log_vc = bawr_log_critical_launch(g, s);
+    const double log_jac = g.log_kappa + std::log(g.pw) + g.pw * std::log(s);
+    const double log_cdf = logn
+      ? pnorm_log_direct((log_vc - p1) / p2, true)
+      : (posdrift
+           ? log_normal_cdf_positive_raw(std::exp(log_vc), p1, p2)
+           : pnorm_log_direct((std::exp(log_vc) - p1) / p2, true));
+    return log_jac + log_cdf;
+  };
+  const double log_ref = logn ? p1 : ((p1 > 0.0) ? std::log(p1) : R_NegInf);
+  const double mid = (log_ref > R_NegInf)
+    ? std::exp((log_ref - g.log_kappa) / g.pw) : s_lo;
+  return bawd_log_gl_split(lf, s_lo, s_hi, mid, BAWD_GL_NODES);
+}
+
+inline double bawr_log_frozen_surv_normal(const BawrGeom& g, double s_lo,
+                                          double s_hi, double v, double sv,
+                                          bool posdrift) {
+  return bawr_log_frozen_surv_quad(g, s_lo, s_hi, v, sv, false, posdrift);
+}
+inline double bawr_log_frozen_surv_logn(const BawrGeom& g, double s_lo,
+                                        double s_hi, double mu, double sigma) {
+  return bawr_log_frozen_surv_quad(g, s_lo, s_hi, mu, sigma, true, false);
+}
+
+inline double log_bawr_surv_normal(double u, const BawrGeom& g, double v,
+                                    double sv, bool posdrift,
+                                    double denom_floor) {
+  if (!g.ok || !(sv > 0.0) || !(u > 0.0)) return R_NegInf;
+  const BawrAtU s = bawr_at_u(g, u);
+  if (!s.ok) return R_NegInf;
+  const double log_denom = log_positive_normalizer(v, sv, posdrift, denom_floor);
+  if (u == R_PosInf && g.kappa_zero)
+    return std::fmin(log_normal_cdf_positive(s.w_hi, v, sv, posdrift,
+                                             denom_floor), 0.0);
+  if (g.A <= BAWR_A_EPS)
+    return std::fmin(log_normal_cdf_positive(s.w_hi, v, sv, posdrift,
+                                             denom_floor), 0.0);
+  double log_live = R_NegInf;
+  if (s.Z > 0.0) {
+    const double li = log_normal_phi_integral_positive_raw(
+      (s.w_lo - v) / sv, (s.w_hi - v) / sv, v, sv, posdrift);
+    if (li > R_NegInf) log_live = li + std::log(sv) + std::log(s.q);
+  }
+  const double log_frozen = s.partial
+    ? bawr_log_frozen_surv_normal(g, s.s_lo, s.s_hi, v, sv, posdrift)
+    : R_NegInf;
+  const double out = log_sum_exp(log_live, log_frozen) - std::log(g.A) - log_denom;
+  return ISNAN(out) ? R_NegInf : std::fmin(out, 0.0);
+}
+
+inline double log_bawr_surv_logn(double u, const BawrGeom& g, double mu,
+                                  double sigma) {
+  if (!g.ok || !(sigma > 0.0) || !(u > 0.0)) return R_NegInf;
+  const BawrAtU s = bawr_at_u(g, u);
+  if (!s.ok) return R_NegInf;
+  const auto log_g = [&](double w) {
+    return (w > 0.0 && emc2_isfinite(w))
+      ? pnorm_log_direct((std::log(w) - mu) / sigma, true) : R_NegInf;
+  };
+  if (u == R_PosInf && g.kappa_zero) return std::fmin(log_g(s.w_hi), 0.0);
+  if (g.A <= BAWR_A_EPS) return std::fmin(log_g(s.w_hi), 0.0);
+  double log_live = R_NegInf;
+  if (s.Z > 0.0) {
+    const double pa = log_lognormal_put(s.w_hi, mu, sigma);
+    const double pb = log_lognormal_put(s.w_lo, mu, sigma);
+    if (pa - pb > BAWR_MIN_LOG_GAP)
+      log_live = std::log(s.q) + log_diff_exp(pa, pb);
+    if (!(log_live > R_NegInf))
+      log_live = std::log(s.Z) + log_g(0.5 * (s.w_hi + s.w_lo));
+  }
+  const double log_frozen = s.partial
+    ? bawr_log_frozen_surv_logn(g, s.s_lo, s.s_hi, mu, sigma) : R_NegInf;
+  const double out = log_sum_exp(log_live, log_frozen) - std::log(g.A);
+  return ISNAN(out) ? R_NegInf : std::fmin(out, 0.0);
+}
+
 // --------------------------------------------------------------------------
 // log PDF
 //
@@ -358,11 +453,11 @@ inline double log_bawr_cdf_logn(double u, const BawpGeom& g, double mu,
 // factor) -- the same generic endpoint order as BAwD and BAwF.
 // --------------------------------------------------------------------------
 
-inline double log_bawr_pdf_normal(double u, const BawpGeom& g, double v,
+inline double log_bawr_pdf_normal(double u, const BawrGeom& g, double v,
                                   double sv, bool posdrift,
                                   double denom_floor) {
   if (!g.ok || !(sv > 0.0) || !(u > 0.0) || u == R_PosInf) return R_NegInf;
-  const BawpAtU s = bawr_at_u(g, u);
+  const BawrAtU s = bawr_at_u(g, u);
   if (!s.ok || s.saturated) return R_NegInf;
   const double log_denom = log_positive_normalizer(v, sv, posdrift, denom_floor);
 
@@ -410,10 +505,10 @@ inline double log_bawr_pdf_normal(double u, const BawpGeom& g, double v,
     dnormP(0.5 * (cl + ch), 0.0, 1.0, true) + log_scale;
 }
 
-inline double log_bawr_pdf_logn(double u, const BawpGeom& g, double mu,
+inline double log_bawr_pdf_logn(double u, const BawrGeom& g, double mu,
                                 double sigma) {
   if (!g.ok || !(sigma > 0.0) || !(u > 0.0) || u == R_PosInf) return R_NegInf;
-  const BawpAtU s = bawr_at_u(g, u);
+  const BawrAtU s = bawr_at_u(g, u);
   if (!s.ok || s.saturated) return R_NegInf;
 
   if (g.A <= BAWR_A_EPS) {
@@ -458,7 +553,7 @@ inline double log_bawr_pdf_logn(double u, const BawpGeom& g, double mu,
 // BAwD and BAwF: a false return means "use the log path".
 // --------------------------------------------------------------------------
 
-inline bool bawr_natural_cdf_normal(double u, const BawpGeom& g, double v,
+inline bool bawr_natural_cdf_normal(double u, const BawrGeom& g, double v,
                                     double sv, bool posdrift,
                                     double denom_floor, int accept_mode,
                                     double &cdf) {
@@ -471,7 +566,7 @@ inline bool bawr_natural_cdf_normal(double u, const BawpGeom& g, double v,
   };
 
   if (!g.ok || !(sv > 0.0) || !(u > 0.0)) { cdf = 0.0; return lenient; }
-  const BawpAtU s = bawr_at_u(g, u);
+  const BawrAtU s = bawr_at_u(g, u);
   if (!s.ok || !emc2_isfinite(s.w_hi) || !emc2_isfinite(s.w_lo) ||
       !(s.q > 0.0)) { cdf = 0.0; return lenient; }
 
@@ -525,7 +620,7 @@ inline bool bawr_natural_cdf_normal(double u, const BawpGeom& g, double v,
   return accept(cdf);
 }
 
-inline bool bawr_natural_cdf_logn(double u, const BawpGeom& g, double mu,
+inline bool bawr_natural_cdf_logn(double u, const BawrGeom& g, double mu,
                                   double sigma, int accept_mode, double &cdf) {
   const bool lenient = accept_mode != BA_ACCEPT_STRICT;
   const auto accept = [accept_mode](double &p) {
@@ -536,7 +631,7 @@ inline bool bawr_natural_cdf_logn(double u, const BawpGeom& g, double mu,
   };
 
   if (!g.ok || !(sigma > 0.0) || !(u > 0.0)) { cdf = 0.0; return lenient; }
-  const BawpAtU s = bawr_at_u(g, u);
+  const BawrAtU s = bawr_at_u(g, u);
   if (!s.ok || !emc2_isfinite(s.w_hi) || !emc2_isfinite(s.w_lo) ||
       !(s.w_hi > 0.0) || !(s.w_lo > 0.0)) { cdf = 0.0; return lenient; }
 
@@ -581,7 +676,7 @@ inline bool bawr_natural_cdf_logn(double u, const BawpGeom& g, double mu,
   return accept(cdf);
 }
 
-inline bool bawr_natural_pdf_normal(double u, const BawpGeom& g, double v,
+inline bool bawr_natural_pdf_normal(double u, const BawrGeom& g, double v,
                                     double sv, bool posdrift,
                                     double denom_floor, int accept_mode,
                                     double &pdf) {
@@ -590,7 +685,7 @@ inline bool bawr_natural_pdf_normal(double u, const BawpGeom& g, double v,
     pdf = 0.0;
     return lenient;
   }
-  const BawpAtU s = bawr_at_u(g, u);
+  const BawrAtU s = bawr_at_u(g, u);
   if (!s.ok || !emc2_isfinite(s.w_hi) || !emc2_isfinite(s.w_lo) ||
       !(s.q > 0.0)) { pdf = 0.0; return lenient; }
   if (s.saturated) { pdf = 0.0; return true; }
@@ -650,14 +745,14 @@ inline bool bawr_natural_pdf_normal(double u, const BawpGeom& g, double v,
   return true;
 }
 
-inline bool bawr_natural_pdf_logn(double u, const BawpGeom& g, double mu,
+inline bool bawr_natural_pdf_logn(double u, const BawrGeom& g, double mu,
                                   double sigma, int accept_mode, double &pdf) {
   const bool lenient = accept_mode != BA_ACCEPT_STRICT;
   if (!g.ok || !(sigma > 0.0) || !(u > 0.0) || u == R_PosInf) {
     pdf = 0.0;
     return lenient;
   }
-  const BawpAtU s = bawr_at_u(g, u);
+  const BawrAtU s = bawr_at_u(g, u);
   if (!s.ok || !emc2_isfinite(s.w_hi) || !emc2_isfinite(s.w_lo) ||
       !(s.w_hi > 0.0) || !(s.w_lo > 0.0)) { pdf = 0.0; return lenient; }
   if (s.saturated) { pdf = 0.0; return true; }
@@ -713,7 +808,7 @@ inline bool ba_natural_cdf_bawr(double u, double A, double b, double p1,
                                 double p2, double kappa, double pw, int launch,
                                 bool posdrift, double denom_floor,
                                 int accept_mode, double &cdf) {
-  const BawpGeom g = bawr_geometry(A, b, kappa, pw);
+  const BawrGeom g = bawr_geometry(A, b, kappa, pw);
   if (launch == BAWR_LAUNCH_LOGNORMAL)
     return bawr_natural_cdf_logn(u, g, p1, p2, accept_mode, cdf);
   return bawr_natural_cdf_normal(u, g, p1, p2, posdrift, denom_floor,
@@ -724,7 +819,7 @@ inline bool ba_natural_pdf_bawr(double u, double A, double b, double p1,
                                 double p2, double kappa, double pw, int launch,
                                 bool posdrift, double denom_floor,
                                 int accept_mode, double &pdf) {
-  const BawpGeom g = bawr_geometry(A, b, kappa, pw);
+  const BawrGeom g = bawr_geometry(A, b, kappa, pw);
   if (launch == BAWR_LAUNCH_LOGNORMAL)
     return bawr_natural_pdf_logn(u, g, p1, p2, accept_mode, pdf);
   return bawr_natural_pdf_normal(u, g, p1, p2, posdrift, denom_floor,
@@ -738,15 +833,23 @@ inline bool ba_natural_pdf_bawr(double u, double A, double b, double p1,
 inline double bawr_log_cdf(double u, double A, double b, double p1, double p2,
                            double kappa, double pw, int launch, bool posdrift,
                            double denom_floor = BAWR_DENOM_FLOOR) {
-  const BawpGeom g = bawr_geometry(A, b, kappa, pw);
+  const BawrGeom g = bawr_geometry(A, b, kappa, pw);
   if (launch == BAWR_LAUNCH_LOGNORMAL) return log_bawr_cdf_logn(u, g, p1, p2);
   return log_bawr_cdf_normal(u, g, p1, p2, posdrift, denom_floor);
+}
+
+inline double bawr_log_surv(double u, double A, double b, double p1, double p2,
+                            double kappa, double pw, int launch, bool posdrift,
+                            double denom_floor = BAWR_DENOM_FLOOR) {
+  const BawrGeom g = bawr_geometry(A, b, kappa, pw);
+  if (launch == BAWR_LAUNCH_LOGNORMAL) return log_bawr_surv_logn(u, g, p1, p2);
+  return log_bawr_surv_normal(u, g, p1, p2, posdrift, denom_floor);
 }
 
 inline double bawr_log_pdf(double u, double A, double b, double p1, double p2,
                            double kappa, double pw, int launch, bool posdrift,
                            double denom_floor = BAWR_DENOM_FLOOR) {
-  const BawpGeom g = bawr_geometry(A, b, kappa, pw);
+  const BawrGeom g = bawr_geometry(A, b, kappa, pw);
   if (launch == BAWR_LAUNCH_LOGNORMAL) return log_bawr_pdf_logn(u, g, p1, p2);
   return log_bawr_pdf_normal(u, g, p1, p2, posdrift, denom_floor);
 }
@@ -867,7 +970,7 @@ double pbawr_norm(double t, double A, double b, double p1, double p2,
 // likelihood uses.
 // [[Rcpp::export]]
 double bawr_tmax(double A, double b, double kappa, double pw) {
-  const BawpGeom g = bawr_geometry(A, b, kappa, pw);
+  const BawrGeom g = bawr_geometry(A, b, kappa, pw);
   return g.ok ? g.T_max : NA_REAL;
 }
 
@@ -886,10 +989,23 @@ NumericVector bawr_tmax_vec(NumericVector A, NumericVector b,
     return x.size() == 1 ? x[0] : x[i];
   };
   for (int i = 0; i < n; ++i) {
-    const BawpGeom g = bawr_geometry(pick(A, i), pick(b, i), pick(kappa, i),
+    const BawrGeom g = bawr_geometry(pick(A, i), pick(b, i), pick(kappa, i),
                                      pick(pw, i));
     out[i] = g.ok ? g.T_max : NA_REAL;
   }
+  return out;
+}
+
+// [[Rcpp::export]]
+NumericVector bawr_kappa_vec(NumericVector Tmax, NumericVector b,
+                             NumericVector pw) {
+  const int n = std::max(Tmax.size(), std::max(b.size(), pw.size()));
+  NumericVector out(n);
+  auto pick = [](const NumericVector& x, int i) {
+    return x.size() == 1 ? x[0] : x[i];
+  };
+  for (int i = 0; i < n; ++i)
+    out[i] = bawr_kappa_from_tmax(pick(b, i), pick(pw, i), pick(Tmax, i));
   return out;
 }
 
@@ -907,7 +1023,7 @@ NumericVector bawr_vcrit_vec(NumericVector A, NumericVector b,
     return x.size() == 1 ? x[0] : x[i];
   };
   for (int i = 0; i < n; ++i) {
-    const BawpGeom g = bawr_geometry(pick(A, i), pick(b, i), pick(kappa, i),
+    const BawrGeom g = bawr_geometry(pick(A, i), pick(b, i), pick(kappa, i),
                                      pick(pw, i));
     out[i] = g.ok ? g.V_c0 : NA_REAL;
   }

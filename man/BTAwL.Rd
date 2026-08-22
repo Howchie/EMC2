@@ -12,13 +12,15 @@ sustained and transient channels, with mixture weight \code{pi}.
 }
 \usage{
 BTAwL(posdrift = TRUE, drift_distribution = c("normal", "lognormal"),
-      mixture = FALSE)
+      mixture = FALSE, chart = c("endpoint", "rate"))
 
 BTAwL_mixed(posdrift = TRUE,
-            drift_distribution = c("normal", "lognormal"))
+            drift_distribution = c("normal", "lognormal"),
+            chart = c("endpoint", "rate"))
 
 BTAwLMix(posdrift = TRUE,
-         drift_distribution = c("normal", "lognormal"))
+         drift_distribution = c("normal", "lognormal"),
+         chart = c("endpoint", "rate"))
 }
 \arguments{
 \item{posdrift}{Logical; truncate normal launch strengths below zero.}
@@ -26,6 +28,10 @@ BTAwLMix(posdrift = TRUE,
 \code{"lognormal"}.}
 \item{mixture}{If \code{TRUE}, \code{"shared"}, or \code{"mixed"}, return
 the shared-strength sustained/transient extension.}
+
+\item{chart}{Clearance chart. \code{"endpoint"} samples the observable hard
+transient endpoint \code{Ttrans}; \code{"rate"} samples the intrinsic time
+constant \code{tau}.}
 }
 \details{
 The transient-only model solves

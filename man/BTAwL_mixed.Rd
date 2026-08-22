@@ -4,12 +4,17 @@
 \alias{BTAwL_mixed}
 \title{Shared-strength sustained/transient BTAwL}
 \usage{
-BTAwL_mixed(posdrift = TRUE, drift_distribution = c("normal", "lognormal"))
+BTAwL_mixed(posdrift = TRUE, drift_distribution = c("normal", "lognormal"),
+            chart = c("endpoint", "rate"))
 }
 \arguments{
 \item{posdrift}{Logical. For a normal launch, truncate \code{V} below zero.}
 
 \item{drift_distribution}{Either \code{"normal"} or \code{"lognormal"}.}
+
+\item{chart}{Clearance chart. \code{"endpoint"} samples the transient
+endpoint \code{Ttrans}; \code{"rate"} samples the transient time constant
+\code{tau_t}.}
 }
 \value{
 A shared-strength BTAwL race-model specification.

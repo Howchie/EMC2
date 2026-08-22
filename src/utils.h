@@ -107,8 +107,7 @@ struct ContextForRaceModels {
     // Per-particle switch: disable kill bookkeeping when lambda is zero
     bool kill_active = true;
 
-    // Raw race kernels historically floor log probabilities to min_ll.  Timed
-    // race mixtures need unfloored components before the final log_sum_exp.
+    // Timed race mixtures need unfloored components before the final log_sum_exp.
     bool floor_raw_log_lik = true;
 
     // When false, adapters ignore lambda_k (for global kill races).
@@ -133,7 +132,19 @@ struct ContextForRaceModels {
     // BTAwL launch-strength distribution.  This is kept separate from the
     // BAwD field because both models can be selected by one process and their
     // adapters may coexist in diagnostics/tests.
-    int btawl_launch = BTAWL_LAUNCH_LOGNORMAL;
+    int btawl_launch = BTAWL_LAUNCH_NORMAL;
+    // BTAwL clearance chart: false samples the intrinsic time constant tau;
+    // true samples the observable transient endpoint Ttrans and back-solves
+    // tau before entering the shared geometry.
+    bool btawl_ttrans_chart = false;
+    static constexpr int btawl_tau_cache_size = 4;
+    mutable double btawl_tau_cache_k[btawl_tau_cache_size] =
+      {R_NaN, R_NaN, R_NaN, R_NaN};
+    mutable double btawl_tau_cache_clear[btawl_tau_cache_size] =
+      {R_NaN, R_NaN, R_NaN, R_NaN};
+    mutable double btawl_tau_cache_value[btawl_tau_cache_size] =
+      {R_NaN, R_NaN, R_NaN, R_NaN};
+    mutable int btawl_tau_cache_next = 0;
 
     // Fixed BAwD clearance-fade exponent parsed from the c_name suffix.
     // Allowed values are mirrored in R/model_BAwD.R.
@@ -1069,7 +1080,14 @@ inline void ppcounter_raw(const double* rt, const double* const* cols, int n_row
     double lf, ls, lF;
     pcounter_log_eval(rt[i] - t0[i], nu[i], sv[i], ga[i], kk[i], om[i],
                       lf, ls, lF);
-    out[i] = raw_log_value(ls, min_ll, floor_raw);
+    // Log-survivors are NOT floored at min_ll: a loser accumulator legitimately
+    // carries large negative log-survival, and clamping it flattens the
+    // likelihood surface out in the tails (and would disagree with
+    // pcounter_logS_at_t, which sums the unfloored value for truncation).
+    // Only an exactly-zero survivor falls back to raw_log_zero, as in
+    // prdm_raw / plnr_raw / prexg_raw.
+    out[i] = R_FINITE(ls) ? std::fmin(ls, 0.0)
+                          : raw_log_zero(min_ll, floor_raw);
   }
 }
 
@@ -1380,25 +1398,23 @@ inline void pbawl_raw(const double* rt, const double* const* cols, int n_rows,
         continue;
       }
       if (tt == R_PosInf) {
-        const double cdf_inf = pd ? 1.0 : pnorm_std(v_[i] / sv_[i], true, false);
-        if (cdf_inf >= 1.0) out[i] = raw_log_zero(min_ll, floor_raw);
-        else out[i] = R_FINITE(cdf_inf) ? std::log1p(-cdf_inf) : 0.0;
+        const double ls = log_ba_surv_launch(tt, A_[i], B_[i] + A_[i],
+                                             v_[i], sv_[i], 0.0, pd,
+                                             LBA_DENOM_FLOOR, lau);
+        out[i] = (ls > R_NegInf && emc2_isfinite(ls))
+          ? ls : raw_log_zero(min_ll, floor_raw);
         continue;
       }
       const double b_i = B_[i] + A_[i];
       double cdf = 0.0;
       if (ba_natural_cdf(tt, A_[i], b_i, v_[i], sv_[i], 0.0, pd,
                          LBA_DENOM_FLOOR, BA_ACCEPT_RAW, cdf)) {
-        // Acceptance guarantees cdf in [0, 1 - 1e-8).
         out[i] = (cdf > 0.0) ? std::log1p(-cdf) : 0.0;
       } else {
-        const double log_cdf = log_ba_cdf(tt, A_[i], b_i, v_[i], sv_[i],
-                                          0.0, pd, LBA_DENOM_FLOOR);
-        if (log_cdf >= 0.0) {
-          out[i] = raw_log_zero(min_ll, floor_raw);
-        } else {
-          out[i] = R_FINITE(log_cdf) ? log1m_exp(log_cdf) : 0.0;
-        }
+        const double ls = log_ba_surv_launch(tt, A_[i], b_i, v_[i], sv_[i],
+                                             0.0, pd, LBA_DENOM_FLOOR, lau);
+        out[i] = (ls > R_NegInf && emc2_isfinite(ls))
+          ? ls : raw_log_zero(min_ll, floor_raw);
       }
     }
     return;
@@ -1430,11 +1446,11 @@ inline void pbawl_raw(const double* rt, const double* const* cols, int n_rows,
                                 pd, BAWL_DENOM_FLOOR, BA_ACCEPT_RAW, cdf, lau)) {
         out[i] = (cdf > 0.0) ? std::log1p(-cdf) : 0.0;
       } else {
-        const double log_cdf = log_ba_cdf_launch(tt, A_[i], B_[i] + A_[i], v_[i],
-                                                 sv_[i], kval, pd,
-                                                 BAWL_DENOM_FLOOR, lau);
-        if (log_cdf >= 0.0) out[i] = raw_log_zero(min_ll, floor_raw);
-        else out[i] = R_FINITE(log_cdf) ? log1m_exp(log_cdf) : 0.0;
+        const double ls = log_ba_surv_launch(tt, A_[i], B_[i] + A_[i], v_[i],
+                                             sv_[i], kval, pd,
+                                             BAWL_DENOM_FLOOR, lau);
+        out[i] = (ls > R_NegInf && emc2_isfinite(ls))
+          ? ls : raw_log_zero(min_ll, floor_raw);
       }
       continue;
     }
@@ -1479,21 +1495,23 @@ inline void bawl_logS_at_t(double t, const double* const* cols,
       if (ctx && ctx->bawl_k_fixed_zero && ctx->bawl_clocks_fixed_off) {
         if (tt <= 0.0) continue;
         if (tt == R_PosInf) {
-          const double cdf_inf = pd ? 1.0 : pnorm_std(v_[r] / sv_[r], true, false);
-          if (cdf_inf >= 1.0) { bad = true; break; }
-          logS += std::log1p(-cdf_inf);
+          const double ls = log_ba_surv_launch(tt, A_[r], B_[r] + A_[r],
+                                               v_[r], sv_[r], 0.0, pd,
+                                               LBA_DENOM_FLOOR, lau);
+          if (!(ls > R_NegInf)) { bad = true; break; }
+          logS += ls;
           continue;
         }
         double cdf = 0.0;
         if (ba_natural_cdf(tt, A_[r], B_[r] + A_[r], v_[r], sv_[r], 0.0, pd,
                            LBA_DENOM_FLOOR, BA_ACCEPT_RAW, cdf)) {
           if (cdf > 0.0) logS += std::log1p(-cdf);
-          continue;
+        } else {
+          const double ls = log_ba_surv_launch(tt, A_[r], B_[r] + A_[r], v_[r],
+                                               sv_[r], 0.0, pd, LBA_DENOM_FLOOR, lau);
+          if (!(ls > R_NegInf)) { bad = true; break; }
+          logS += ls;
         }
-        const double log_cdf = log_ba_cdf(tt, A_[r], B_[r] + A_[r], v_[r],
-                                          sv_[r], 0.0, pd, LBA_DENOM_FLOOR);
-        if (log_cdf >= 0.0) { bad = true; break; }
-        if (R_FINITE(log_cdf)) logS += log1m_exp(log_cdf);
         continue;
       }
       const double kval = (ctx && ctx->bawl_k_fixed_zero) ? 0.0 : k_[r];
@@ -1517,6 +1535,20 @@ inline void bawl_logS_at_t(double t, const double* const* cols,
         if (!R_FINITE(log_cdf)) continue;
         if (log_cdf >= 0.0) { bad = true; break; }
         logS += log1m_exp(log_cdf);
+        continue;
+      }
+      if (!erl) {
+        double cdf = 0.0;
+        if (ba_natural_cdf_launch(tt, A_[r], B_[r] + A_[r], v_[r], sv_[r], kval,
+                                  pd, BAWL_DENOM_FLOOR, BA_ACCEPT_RAW, cdf, lau)) {
+          if (cdf > 0.0) logS += std::log1p(-cdf);
+        } else {
+          const double ls = log_ba_surv_launch(tt, A_[r], B_[r] + A_[r], v_[r],
+                                               sv_[r], kval, pd,
+                                               BAWL_DENOM_FLOOR, lau);
+          if (!(ls > R_NegInf) || ISNAN(ls)) { bad = true; break; }
+          logS += ls;
+        }
         continue;
       }
       // Both EAM and erlang contribute; pass raw t and t0_r.
@@ -1661,23 +1693,56 @@ inline void pbawd_raw(const double* rt, const double* const* cols, int n_rows,
     const double b_i = B_[i] + A_[i];
     const double ell_i = tmax_chart
       ? bawd_ell_from_tmax(b_i, k_[i], clear_[i], gamma, rho) : clear_[i];
-    const double log_cdf = bawd_log_cdf(tt, A_[i], b_i, p1_[i],
-                                        p2_[i], k_[i], ell_i, launch, pd,
-                                        gamma, rho);
-    if (!R_FINITE(log_cdf)) { out[i] = 0.0; continue; }
-    if (log_cdf >= 0.0) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
-    out[i] = log1m_exp(log_cdf);
+    double cdf = 0.0;
+    if (ba_natural_cdf_bawd(tt, A_[i], b_i, p1_[i], p2_[i], k_[i], ell_i,
+                            launch, pd, gamma, rho, BAWD_DENOM_FLOOR,
+                            BA_ACCEPT_RAW, cdf)) {
+      out[i] = (cdf > 0.0) ? std::log1p(-cdf) : 0.0;
+    } else {
+      const double log_s = bawd_log_surv(tt, A_[i], b_i, p1_[i], p2_[i],
+                                         k_[i], ell_i, launch, pd, gamma, rho,
+                                         BAWD_DENOM_FLOOR);
+      out[i] = (log_s > R_NegInf && emc2_isfinite(log_s))
+        ? log_s : raw_log_zero(min_ll, floor_raw);
+    }
   }
 }
 
 // ============================================================
 // BTAwL (Ballistic Transient Accumulator with Leak) adapters
 // Column layout: p1=0 (v | mu), p2=1 (sv | sigma), B=2, A=3,
-// t0=4, k=5, tau=6.  There are no timer columns.
+// t0=4, k=5, and slot 6 is tau on the rate chart or Ttrans on the endpoint
+// chart.  There are no timer columns.
 // ============================================================
 
 inline int btawl_launch_of(const ContextForRaceModels* ctx) {
-  return ctx ? ctx->btawl_launch : BTAWL_LAUNCH_LOGNORMAL;
+  return ctx ? ctx->btawl_launch : BTAWL_LAUNCH_NORMAL;
+}
+
+inline bool btawl_uses_ttrans(const ContextForRaceModels* ctx) {
+  return ctx && ctx->btawl_ttrans_chart;
+}
+
+inline double btawl_tau_of(const ContextForRaceModels* ctx, double clear,
+                           double k) {
+  if (!btawl_uses_ttrans(ctx)) return clear;
+  if (ctx != nullptr) {
+    for (int j = 0; j < ContextForRaceModels::btawl_tau_cache_size; ++j) {
+      if (ctx->btawl_tau_cache_k[j] == k &&
+          ctx->btawl_tau_cache_clear[j] == clear)
+        return ctx->btawl_tau_cache_value[j];
+    }
+  }
+  const double tau = btawl_tau_from_ttrans(k, clear);
+  if (ctx != nullptr) {
+    const int j = ctx->btawl_tau_cache_next;
+    ctx->btawl_tau_cache_k[j] = k;
+    ctx->btawl_tau_cache_clear[j] = clear;
+    ctx->btawl_tau_cache_value[j] = tau;
+    ctx->btawl_tau_cache_next =
+      (j + 1) % ContextForRaceModels::btawl_tau_cache_size;
+  }
+  return tau;
 }
 
 inline double dbtawl_scalar(double t, const double* par, void* ctx_) {
@@ -1686,9 +1751,17 @@ inline double dbtawl_scalar(double t, const double* par, void* ctx_) {
   const double tt = t - par[emc2col::btawl::t0];
   if (!(t > 0.0) || !(tt > 0.0)) return 0.0;
   const double b = par[emc2col::btawl::B] + par[emc2col::btawl::A];
+  if (btawl_uses_ttrans(ctx))
+    return btawl_pdf_chart(tt, par[emc2col::btawl::A], b,
+                           par[emc2col::btawl::v], par[emc2col::btawl::sv],
+                           par[emc2col::btawl::k], par[emc2col::btawl::clear],
+                           btawl_launch_of(ctx), ctx ? ctx->use_posdrift : true, true,
+                           btawl_tau_of(ctx, par[emc2col::btawl::clear],
+                                        par[emc2col::btawl::k]));
   return btawl_pdf(tt, par[emc2col::btawl::A], b,
                    par[emc2col::btawl::v], par[emc2col::btawl::sv],
-                   par[emc2col::btawl::k], par[emc2col::btawl::tau],
+                   par[emc2col::btawl::k],
+                   btawl_tau_of(ctx, par[emc2col::btawl::clear], par[emc2col::btawl::k]),
                    btawl_launch_of(ctx), ctx ? ctx->use_posdrift : true);
 }
 
@@ -1698,9 +1771,17 @@ inline double pbtawl_scalar(double t, const double* par, void* ctx_) {
   const double tt = t - par[emc2col::btawl::t0];
   if (!(t > 0.0) || !(tt > 0.0)) return 0.0;
   const double b = par[emc2col::btawl::B] + par[emc2col::btawl::A];
+  if (btawl_uses_ttrans(ctx))
+    return btawl_cdf_chart(tt, par[emc2col::btawl::A], b,
+                           par[emc2col::btawl::v], par[emc2col::btawl::sv],
+                           par[emc2col::btawl::k], par[emc2col::btawl::clear],
+                           btawl_launch_of(ctx), ctx ? ctx->use_posdrift : true, true,
+                           btawl_tau_of(ctx, par[emc2col::btawl::clear],
+                                        par[emc2col::btawl::k]));
   return btawl_cdf(tt, par[emc2col::btawl::A], b,
                    par[emc2col::btawl::v], par[emc2col::btawl::sv],
-                   par[emc2col::btawl::k], par[emc2col::btawl::tau],
+                   par[emc2col::btawl::k],
+                   btawl_tau_of(ctx, par[emc2col::btawl::clear], par[emc2col::btawl::k]),
                    btawl_launch_of(ctx), ctx ? ctx->use_posdrift : true);
 }
 
@@ -1717,7 +1798,7 @@ inline void dbtawl_raw(const double* rt, const double* const* cols, int n_rows,
   const double* A = cols[emc2col::btawl::A];
   const double* t0 = cols[emc2col::btawl::t0];
   const double* k = cols[emc2col::btawl::k];
-  const double* tau = cols[emc2col::btawl::tau];
+  const double* clear = cols[emc2col::btawl::clear];
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
     if (!isok[i] || R_IsNA(p1[i])) {
@@ -1727,8 +1808,10 @@ inline void dbtawl_raw(const double* rt, const double* const* cols, int n_rows,
     if (!(rt[i] > 0.0) || !(tt > 0.0)) {
       out[i] = raw_log_zero(min_ll, floor_raw); continue;
     }
-    const double lp = btawl_pdf_log(tt, A[i], B[i] + A[i], p1[i], p2[i],
-                                    k[i], tau[i], launch, pd);
+    const double lp = btawl_uses_ttrans(ctx)
+      ? btawl_log_pdf_chart(tt, A[i], B[i] + A[i], p1[i], p2[i], k[i], clear[i],
+                            launch, pd, true, btawl_tau_of(ctx, clear[i], k[i]))
+      : btawl_pdf_log(tt, A[i], B[i] + A[i], p1[i], p2[i], k[i], clear[i], launch, pd);
     out[i] = (lp > R_NegInf && emc2_isfinite(lp))
       ? raw_log_value(lp, min_ll, floor_raw)
       : raw_log_zero(min_ll, floor_raw);
@@ -1748,16 +1831,26 @@ inline void pbtawl_raw(const double* rt, const double* const* cols, int n_rows,
   const double* A = cols[emc2col::btawl::A];
   const double* t0 = cols[emc2col::btawl::t0];
   const double* k = cols[emc2col::btawl::k];
-  const double* tau = cols[emc2col::btawl::tau];
+  const double* clear = cols[emc2col::btawl::clear];
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
     if (!isok[i] || R_IsNA(p1[i])) { out[i] = 0.0; continue; }
     const double tt = rt[i] - t0[i];
     if (!(rt[i] > 0.0) || !(tt > 0.0)) { out[i] = 0.0; continue; }
-    const double lc = btawl_cdf_log(tt, A[i], B[i] + A[i], p1[i], p2[i],
-                                    k[i], tau[i], launch, pd);
-    if (!(lc < 0.0)) out[i] = raw_log_zero(min_ll, floor_raw);
-    else out[i] = log1m_exp(lc);
+    const double tau = btawl_tau_of(ctx, clear[i], k[i]);
+    const BtawlGeom g = btawl_uses_ttrans(ctx)
+      ? btawl_geometry_from_ttrans(A[i], B[i] + A[i], k[i], clear[i], tau)
+      : btawl_geometry(A[i], B[i] + A[i], k[i], tau);
+    double cdf = 0.0;
+    if (btawl_natural_cdf_from_geom(tt, g, p1[i], p2[i], launch, pd, cdf)) {
+      out[i] = (cdf > 0.0) ? std::log1p(-cdf) : 0.0;
+    } else {
+      const double ls = launch == BTAWL_LAUNCH_LOGNORMAL
+        ? log_btawl_surv_logn(tt, g, p1[i], p2[i])
+        : log_btawl_surv_normal(tt, g, p1[i], p2[i], pd);
+      out[i] = (ls > R_NegInf && emc2_isfinite(ls))
+        ? ls : raw_log_zero(min_ll, floor_raw);
+    }
   }
 }
 
@@ -1774,7 +1867,7 @@ inline void btawl_logS_at_t(double t, const double* const* cols,
   const double* A = cols[emc2col::btawl::A];
   const double* t0 = cols[emc2col::btawl::t0];
   const double* k = cols[emc2col::btawl::k];
-  const double* tau = cols[emc2col::btawl::tau];
+  const double* clear = cols[emc2col::btawl::clear];
   for (int j = 0; j < n_unique_trials; ++j) {
     if (!trunc_mask[j]) continue;
     double ls = 0.0;
@@ -1784,10 +1877,12 @@ inline void btawl_logS_at_t(double t, const double* const* cols,
       if (r >= n_rows_total || !isok_all[r] || R_IsNA(p1[r])) { bad = true; break; }
       const double tt = t - t0[r];
       if (!(tt > 0.0)) continue;
-      const double lc = btawl_cdf_log(tt, A[r], B[r] + A[r], p1[r], p2[r],
-                                      k[r], tau[r], launch, pd);
-      if (!(lc < 0.0)) { bad = true; break; }
-      ls += log1m_exp(lc);
+      const double lsr = btawl_uses_ttrans(ctx)
+        ? btawl_log_surv_chart(tt, A[r], B[r] + A[r], p1[r], p2[r], k[r], clear[r],
+                              launch, pd, true, btawl_tau_of(ctx, clear[r], k[r]))
+        : btawl_log_surv(tt, A[r], B[r] + A[r], p1[r], p2[r], k[r], clear[r], launch, pd);
+      if (!(lsr > R_NegInf) || ISNAN(lsr)) { bad = true; break; }
+      ls += lsr;
     }
     logS_out[j] = bad ? R_NegInf : ls;
   }
@@ -1803,7 +1898,7 @@ inline double dbtawl_mix_scalar(double t, const double* par, void* ctx_) {
   return btawl_mix_pdf(tt, par[emc2col::btawl_mix::A], b,
                        par[emc2col::btawl_mix::v], par[emc2col::btawl_mix::sv],
                        par[emc2col::btawl_mix::k], par[emc2col::btawl_mix::tau_s],
-                       par[emc2col::btawl_mix::tau_t], par[emc2col::btawl_mix::pi],
+                       btawl_tau_of(ctx, par[emc2col::btawl_mix::clear], par[emc2col::btawl_mix::k]), par[emc2col::btawl_mix::pi],
                        btawl_launch_of(ctx), ctx ? ctx->use_posdrift : true);
 }
 
@@ -1816,7 +1911,7 @@ inline double pbtawl_mix_scalar(double t, const double* par, void* ctx_) {
   return btawl_mix_cdf(tt, par[emc2col::btawl_mix::A], b,
                        par[emc2col::btawl_mix::v], par[emc2col::btawl_mix::sv],
                        par[emc2col::btawl_mix::k], par[emc2col::btawl_mix::tau_s],
-                       par[emc2col::btawl_mix::tau_t], par[emc2col::btawl_mix::pi],
+                       btawl_tau_of(ctx, par[emc2col::btawl_mix::clear], par[emc2col::btawl_mix::k]), par[emc2col::btawl_mix::pi],
                        btawl_launch_of(ctx), ctx ? ctx->use_posdrift : true);
 }
 
@@ -1833,7 +1928,7 @@ inline void dbtawl_mix_raw(const double* rt, const double* const* cols, int n_ro
   const double* t0 = cols[emc2col::btawl_mix::t0];
   const double* k = cols[emc2col::btawl_mix::k];
   const double* ts = cols[emc2col::btawl_mix::tau_s];
-  const double* tt = cols[emc2col::btawl_mix::tau_t];
+  const double* tt_clear = cols[emc2col::btawl_mix::clear];
   const double* pi = cols[emc2col::btawl_mix::pi];
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
@@ -1841,7 +1936,7 @@ inline void dbtawl_mix_raw(const double* rt, const double* const* cols, int n_ro
     const double u = rt[i] - t0[i];
     if (!(rt[i] > 0.0) || !(u > 0.0)) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
     const double lp = btawl_mix_pdf_log(u, A[i], B[i] + A[i], p1[i], p2[i], k[i],
-                                        ts[i], tt[i], pi[i], launch, pd);
+                                        ts[i], btawl_tau_of(ctx, tt_clear[i], k[i]), pi[i], launch, pd);
     out[i] = (lp > R_NegInf && emc2_isfinite(lp))
       ? raw_log_value(lp, min_ll, floor_raw) : raw_log_zero(min_ll, floor_raw);
   }
@@ -1860,17 +1955,24 @@ inline void pbtawl_mix_raw(const double* rt, const double* const* cols, int n_ro
   const double* t0 = cols[emc2col::btawl_mix::t0];
   const double* k = cols[emc2col::btawl_mix::k];
   const double* ts = cols[emc2col::btawl_mix::tau_s];
-  const double* tt = cols[emc2col::btawl_mix::tau_t];
+  const double* tt_clear = cols[emc2col::btawl_mix::clear];
   const double* pi = cols[emc2col::btawl_mix::pi];
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
     if (!isok[i] || R_IsNA(p1[i])) { out[i] = 0.0; continue; }
     const double u = rt[i] - t0[i];
     if (!(rt[i] > 0.0) || !(u > 0.0)) { out[i] = 0.0; continue; }
-    const double lc = btawl_mix_cdf_log(u, A[i], B[i] + A[i], p1[i], p2[i], k[i],
-                                        ts[i], tt[i], pi[i], launch, pd);
-    if (!(lc < 0.0)) out[i] = raw_log_zero(min_ll, floor_raw);
-    else out[i] = log1m_exp(lc);
+    const double tau_t = btawl_tau_of(ctx, tt_clear[i], k[i]);
+    const double cdf = btawl_mix_cdf(u, A[i], B[i] + A[i], p1[i], p2[i], k[i],
+                                     ts[i], tau_t, pi[i], launch, pd);
+    if (emc2_isfinite(cdf) && cdf >= 0.0 && cdf < 1.0 - 1e-8) {
+      out[i] = (cdf > 0.0) ? std::log1p(-cdf) : 0.0;
+    } else {
+      const double ls = btawl_mix_log_surv(u, A[i], B[i] + A[i], p1[i], p2[i], k[i],
+                                           ts[i], tau_t, pi[i], launch, pd);
+      out[i] = (ls > R_NegInf && emc2_isfinite(ls))
+        ? ls : raw_log_zero(min_ll, floor_raw);
+    }
   }
 }
 
@@ -1887,7 +1989,7 @@ inline void btawl_mix_logS_at_t(double t, const double* const* cols,
   const double* t0 = cols[emc2col::btawl_mix::t0];
   const double* k = cols[emc2col::btawl_mix::k];
   const double* ts = cols[emc2col::btawl_mix::tau_s];
-  const double* tt = cols[emc2col::btawl_mix::tau_t];
+  const double* tt_clear = cols[emc2col::btawl_mix::clear];
   const double* pi = cols[emc2col::btawl_mix::pi];
   for (int j = 0; j < n_unique_trials; ++j) {
     if (!trunc_mask[j]) continue;
@@ -1896,10 +1998,11 @@ inline void btawl_mix_logS_at_t(double t, const double* const* cols,
       const int r = j * n_lR + kk;
       if (r >= n_rows_total || !isok_all[r] || R_IsNA(p1[r])) { bad = true; break; }
       const double u = t - t0[r]; if (!(u > 0.0)) continue;
-      const double lc = btawl_mix_cdf_log(u, A[r], B[r] + A[r], p1[r], p2[r], k[r],
-                                          ts[r], tt[r], pi[r], launch, pd);
-      if (!(lc < 0.0)) { bad = true; break; }
-      ls += log1m_exp(lc);
+      const double lsr = btawl_mix_log_surv(u, A[r], B[r] + A[r], p1[r], p2[r], k[r],
+                                            ts[r], btawl_tau_of(ctx, tt_clear[r], k[r]),
+                                            pi[r], launch, pd);
+      if (!(lsr > R_NegInf) || ISNAN(lsr)) { bad = true; break; }
+      ls += lsr;
     }
     out[j] = bad ? R_NegInf : ls;
   }
@@ -1994,11 +2097,16 @@ inline void pbawf_raw(const double* rt, const double* const* cols, int n_rows,
     if (R_IsNA(p1_[i]) || !isok[i]) { out[i] = 0.0; continue; }
     const double tt = rt[i] - t0_[i];
     if (tt <= 0.0 || rt[i] <= 0.0) { out[i] = 0.0; continue; }
-    const double log_cdf = bawf_log_cdf(tt, A_[i], B_[i] + A_[i], p1_[i],
-                                        p2_[i], k_[i], launch, pd, rho);
-    if (!R_FINITE(log_cdf)) { out[i] = 0.0; continue; }
-    if (log_cdf >= 0.0) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
-    out[i] = log1m_exp(log_cdf);
+    double cdf = 0.0;
+    if (ba_natural_cdf_bawf(tt, A_[i], B_[i] + A_[i], p1_[i], p2_[i], k_[i],
+                            launch, pd, rho, BAWF_DENOM_FLOOR, BA_ACCEPT_RAW, cdf)) {
+      out[i] = (cdf > 0.0) ? std::log1p(-cdf) : 0.0;
+    } else {
+      const double ls = bawf_log_surv(tt, A_[i], B_[i] + A_[i], p1_[i], p2_[i],
+                                      k_[i], launch, pd, rho, BAWF_DENOM_FLOOR);
+      out[i] = (ls > R_NegInf && emc2_isfinite(ls))
+        ? ls : raw_log_zero(min_ll, floor_raw);
+    }
   }
 }
 
@@ -2026,10 +2134,16 @@ inline void bawf_logS_at_t(double t, const double* const* cols,
       if (!isok_all[r] || R_IsNA(p1_[r])) { bad = true; break; }
       const double tt = t - t0_[r];
       if (tt <= 0.0) continue;  // not started: survivor one
-      const double log_cdf = bawf_log_cdf(tt, A_[r], B_[r] + A_[r], p1_[r],
-                                          p2_[r], k_[r], launch, pd, rho);
-      if (log_cdf >= 0.0) { bad = true; break; }
-      if (R_FINITE(log_cdf)) logS += log1m_exp(log_cdf);
+      double cdf = 0.0;
+      if (ba_natural_cdf_bawf(tt, A_[r], B_[r] + A_[r], p1_[r], p2_[r], k_[r],
+                              launch, pd, rho, BAWF_DENOM_FLOOR, BA_ACCEPT_RAW, cdf)) {
+        if (cdf > 0.0) logS += std::log1p(-cdf);
+      } else {
+        const double ls = bawf_log_surv(tt, A_[r], B_[r] + A_[r], p1_[r], p2_[r],
+                                        k_[r], launch, pd, rho, BAWF_DENOM_FLOOR);
+        if (!(ls > R_NegInf) || ISNAN(ls)) { bad = true; break; }
+        logS += ls;
+      }
     }
     logS_out[j] = bad ? R_NegInf : logS;
   }
@@ -2043,6 +2157,13 @@ inline int bawr_launch_of(const ContextForRaceModels* ctx) {
   return ctx ? ctx->bawd_launch : BAWR_LAUNCH_LOGNORMAL;
 }
 
+// BAwR always uses the endpoint chart: the sampled clearance slot is Tmax,
+// while the mechanistic kernel continues to receive kappa.  Funnel every read
+// through this inverse so scalar, raw, and truncation paths cannot disagree.
+inline double bawr_clear_to_kappa(double clear, double b, double pw) {
+  return bawr_kappa_from_tmax(b, pw, clear);
+}
+
 inline double dbawr_scalar(double t, const double* par, void* ctx_) {
   auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
   if (R_IsNA(par[emc2col::bawr::v])) return 0.0;
@@ -2052,7 +2173,9 @@ inline double dbawr_scalar(double t, const double* par, void* ctx_) {
     tt, par[emc2col::bawr::A],
     par[emc2col::bawr::B] + par[emc2col::bawr::A],
     par[emc2col::bawr::v], par[emc2col::bawr::sv],
-    par[emc2col::bawr::kappa], par[emc2col::bawr::p],
+    bawr_clear_to_kappa(par[emc2col::bawr::clear],
+                        par[emc2col::bawr::B] + par[emc2col::bawr::A],
+                        par[emc2col::bawr::p]), par[emc2col::bawr::p],
     bawr_launch_of(ctx), ctx ? ctx->use_posdrift : true);
 }
 
@@ -2066,7 +2189,9 @@ inline double pbawr_scalar(double t, const double* par, void* ctx_) {
     tt, par[emc2col::bawr::A],
     par[emc2col::bawr::B] + par[emc2col::bawr::A],
     par[emc2col::bawr::v], par[emc2col::bawr::sv],
-    par[emc2col::bawr::kappa], par[emc2col::bawr::p],
+    bawr_clear_to_kappa(par[emc2col::bawr::clear],
+                        par[emc2col::bawr::B] + par[emc2col::bawr::A],
+                        par[emc2col::bawr::p]), par[emc2col::bawr::p],
     bawr_launch_of(ctx), ctx ? ctx->use_posdrift : true);
 }
 
@@ -2082,7 +2207,7 @@ inline void dbawr_raw(const double* rt, const double* const* cols, int n_rows,
   const double* B_  = cols[emc2col::bawr::B];
   const double* A_  = cols[emc2col::bawr::A];
   const double* t0_ = cols[emc2col::bawr::t0];
-  const double* ka_ = cols[emc2col::bawr::kappa];
+  const double* clear_ = cols[emc2col::bawr::clear];
   const double* pw_ = cols[emc2col::bawr::p];
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
@@ -2096,7 +2221,7 @@ inline void dbawr_raw(const double* rt, const double* const* cols, int n_rows,
       continue;
     }
     const double log_pdf = bawr_log_pdf(tt, A_[i], B_[i] + A_[i], p1_[i],
-                                        p2_[i], ka_[i], pw_[i], launch, pd);
+                                        p2_[i], bawr_clear_to_kappa(clear_[i], B_[i] + A_[i], pw_[i]), pw_[i], launch, pd);
     out[i] = (log_pdf > R_NegInf && emc2_isfinite(log_pdf))
       ? raw_log_value(log_pdf, min_ll, floor_raw)
       : raw_log_zero(min_ll, floor_raw);
@@ -2115,18 +2240,24 @@ inline void pbawr_raw(const double* rt, const double* const* cols, int n_rows,
   const double* B_  = cols[emc2col::bawr::B];
   const double* A_  = cols[emc2col::bawr::A];
   const double* t0_ = cols[emc2col::bawr::t0];
-  const double* ka_ = cols[emc2col::bawr::kappa];
+  const double* clear_ = cols[emc2col::bawr::clear];
   const double* pw_ = cols[emc2col::bawr::p];
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
     if (R_IsNA(p1_[i]) || !isok[i]) { out[i] = 0.0; continue; }
     const double tt = rt[i] - t0_[i];
     if (tt <= 0.0 || rt[i] <= 0.0) { out[i] = 0.0; continue; }
-    const double log_cdf = bawr_log_cdf(tt, A_[i], B_[i] + A_[i], p1_[i],
-                                        p2_[i], ka_[i], pw_[i], launch, pd);
-    if (!R_FINITE(log_cdf)) { out[i] = 0.0; continue; }
-    if (log_cdf >= 0.0) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
-    out[i] = log1m_exp(log_cdf);
+    const double kap = bawr_clear_to_kappa(clear_[i], B_[i] + A_[i], pw_[i]);
+    double cdf = 0.0;
+    if (ba_natural_cdf_bawr(tt, A_[i], B_[i] + A_[i], p1_[i], p2_[i], kap, pw_[i],
+                            launch, pd, BAWR_DENOM_FLOOR, BA_ACCEPT_RAW, cdf)) {
+      out[i] = (cdf > 0.0) ? std::log1p(-cdf) : 0.0;
+    } else {
+      const double ls = bawr_log_surv(tt, A_[i], B_[i] + A_[i], p1_[i], p2_[i],
+                                      kap, pw_[i], launch, pd, BAWR_DENOM_FLOOR);
+      out[i] = (ls > R_NegInf && emc2_isfinite(ls))
+        ? ls : raw_log_zero(min_ll, floor_raw);
+    }
   }
 }
 
@@ -2142,7 +2273,7 @@ inline void bawr_logS_at_t(double t, const double* const* cols,
   const double* B_  = cols[emc2col::bawr::B];
   const double* A_  = cols[emc2col::bawr::A];
   const double* t0_ = cols[emc2col::bawr::t0];
-  const double* ka_ = cols[emc2col::bawr::kappa];
+  const double* clear_ = cols[emc2col::bawr::clear];
   const double* pw_ = cols[emc2col::bawr::p];
   for (int j = 0; j < n_unique_trials; ++j) {
     if (!trunc_mask[j]) continue;
@@ -2154,10 +2285,17 @@ inline void bawr_logS_at_t(double t, const double* const* cols,
       if (!isok_all[r] || R_IsNA(p1_[r])) { bad = true; break; }
       const double tt = t - t0_[r];
       if (tt <= 0.0) continue;  // not started: survivor one
-      const double log_cdf = bawr_log_cdf(tt, A_[r], B_[r] + A_[r], p1_[r],
-                                          p2_[r], ka_[r], pw_[r], launch, pd);
-      if (log_cdf >= 0.0) { bad = true; break; }
-      if (R_FINITE(log_cdf)) logS += log1m_exp(log_cdf);
+      const double kap = bawr_clear_to_kappa(clear_[r], B_[r] + A_[r], pw_[r]);
+      double cdf = 0.0;
+      if (ba_natural_cdf_bawr(tt, A_[r], B_[r] + A_[r], p1_[r], p2_[r], kap, pw_[r],
+                              launch, pd, BAWR_DENOM_FLOOR, BA_ACCEPT_RAW, cdf)) {
+        if (cdf > 0.0) logS += std::log1p(-cdf);
+      } else {
+        const double ls = bawr_log_surv(tt, A_[r], B_[r] + A_[r], p1_[r], p2_[r],
+                                        kap, pw_[r], launch, pd, BAWR_DENOM_FLOOR);
+        if (!(ls > R_NegInf) || ISNAN(ls)) { bad = true; break; }
+        logS += ls;
+      }
     }
     logS_out[j] = bad ? R_NegInf : logS;
   }
@@ -2194,11 +2332,18 @@ inline void bawd_logS_at_t(double t, const double* const* cols,
       const double b_r = B_[r] + A_[r];
       const double ell_r = tmax_chart
         ? bawd_ell_from_tmax(b_r, k_[r], clear_[r], gamma, rho) : clear_[r];
-      const double log_cdf = bawd_log_cdf(tt, A_[r], b_r, p1_[r],
-                                          p2_[r], k_[r], ell_r, launch, pd,
-                                          gamma, rho);
-      if (log_cdf >= 0.0) { bad = true; break; }
-      if (R_FINITE(log_cdf)) logS += log1m_exp(log_cdf);
+      double cdf = 0.0;
+      if (ba_natural_cdf_bawd(tt, A_[r], b_r, p1_[r], p2_[r], k_[r], ell_r,
+                              launch, pd, gamma, rho, BAWD_DENOM_FLOOR,
+                              BA_ACCEPT_RAW, cdf)) {
+        if (cdf > 0.0) logS += std::log1p(-cdf);
+      } else {
+        const double log_s = bawd_log_surv(tt, A_[r], b_r, p1_[r], p2_[r],
+                                           k_[r], ell_r, launch, pd, gamma, rho,
+                                           BAWD_DENOM_FLOOR);
+        if (!(log_s > R_NegInf) || ISNAN(log_s)) { bad = true; break; }
+        logS += log_s;
+      }
     }
     logS_out[j] = bad ? R_NegInf : logS;
   }
@@ -2345,10 +2490,17 @@ inline void pbawdp_raw(const double* rt, const double* const* cols, int n_rows,
     if (!isok[i] || rt[i] <= 0.0 || !(tt > 0.0)) { out[i] = 0.0; continue; }
     const BawDpClock g = bawdp_clock(tt, k[i], lam[i]);
     if (!g.ok) { out[i] = 0.0; continue; }
-    const double lp = log_ba_cdf_launch(g.m, A[i], B[i] + A[i], p1[i], p2[i],
-                                        0.0, pd, BAWL_DENOM_FLOOR, launch);
-    if (!R_FINITE(lp)) { out[i] = 0.0; continue; }
-    out[i] = (lp >= 0.0) ? raw_log_zero(min_ll, floor_raw) : log1m_exp(lp);
+    const double b_i = B[i] + A[i];
+    double cdf = 0.0;
+    if (ba_natural_cdf_launch(g.m, A[i], b_i, p1[i], p2[i], 0.0, pd,
+                              BAWL_DENOM_FLOOR, BA_ACCEPT_RAW, cdf, launch)) {
+      out[i] = (cdf > 0.0) ? std::log1p(-cdf) : 0.0;
+    } else {
+      const double ls = log_ba_surv_launch(g.m, A[i], b_i, p1[i], p2[i],
+                                           0.0, pd, BAWL_DENOM_FLOOR, launch);
+      out[i] = (ls > R_NegInf && emc2_isfinite(ls))
+        ? ls : raw_log_zero(min_ll, floor_raw);
+    }
   }
 }
 
@@ -2370,13 +2522,20 @@ inline void bawdp_logS_at_t(double t, const double* const* cols,
       const BawDpClock g = bawdp_clock(tt, cols[emc2col::bawdp::k][r],
                                        cols[emc2col::bawdp::lambda][r]);
       if (!g.ok) { bad = true; break; }
-      const double lp = log_ba_cdf_launch(
-        g.m, cols[emc2col::bawdp::A][r],
-        cols[emc2col::bawdp::B][r] + cols[emc2col::bawdp::A][r],
-        cols[emc2col::bawdp::v][r], cols[emc2col::bawdp::sv][r], 0.0, pd,
-        BAWL_DENOM_FLOOR, launch);
-      if (lp >= 0.0) { bad = true; break; }
-      if (R_FINITE(lp)) logS += log1m_exp(lp);
+      const double b_r = cols[emc2col::bawdp::B][r] + cols[emc2col::bawdp::A][r];
+      double cdf = 0.0;
+      if (ba_natural_cdf_launch(g.m, cols[emc2col::bawdp::A][r], b_r,
+                                cols[emc2col::bawdp::v][r], cols[emc2col::bawdp::sv][r],
+                                0.0, pd, BAWL_DENOM_FLOOR, BA_ACCEPT_RAW, cdf, launch)) {
+        if (cdf > 0.0) logS += std::log1p(-cdf);
+      } else {
+        const double ls = log_ba_surv_launch(
+          g.m, cols[emc2col::bawdp::A][r], b_r,
+          cols[emc2col::bawdp::v][r], cols[emc2col::bawdp::sv][r], 0.0, pd,
+          BAWL_DENOM_FLOOR, launch);
+        if (!(ls > R_NegInf)) { bad = true; break; }
+        logS += ls;
+      }
     }
     logS_out[j] = bad ? R_NegInf : logS;
   }

@@ -19,11 +19,18 @@
 }
 
 .btawl_check_cols <- function(pars, launch) {
-  need <- c(.btawl_par_names(launch), "b", "A", "t0", "k", "tau")
+  clear <- if ("Ttrans" %in% colnames(pars)) "Ttrans" else "tau"
+  need <- c(.btawl_par_names(launch), "b", "A", "t0", "k", clear)
   missing <- setdiff(need, colnames(pars))
   if (length(missing))
     stop("BTAwL requires parameter columns ", paste(missing, collapse = ", "))
   need
+}
+
+.btawl_tau_col <- function(pars) {
+  if ("Ttrans" %in% colnames(pars))
+    btawl_tau_vec(pars[, "k"], pars[, "Ttrans"])
+  else pars[, "tau"]
 }
 
 dBTAwL <- function(rt, pars, launch = 0L, posdrift = TRUE) {
@@ -33,9 +40,10 @@ dBTAwL <- function(rt, pars, launch = 0L, posdrift = TRUE) {
   ok[is.na(ok)] <- FALSE
   out <- numeric(length(dt))
   if (any(ok)) {
+    tau <- .btawl_tau_col(pars)
     out[ok] <- dbtawl(dt[ok], A = pars[ok, "A"], b = pars[ok, "b"],
                       p1 = pars[ok, nm[1]], p2 = pars[ok, nm[2]],
-                      k = pars[ok, "k"], tau = pars[ok, "tau"],
+                      k = pars[ok, "k"], tau = tau[ok],
                       launch = as.integer(launch), posdrift = posdrift)
   }
   out
@@ -50,20 +58,28 @@ pBTAwL <- function(rt, pars, launch = 0L, posdrift = TRUE) {
   ok[is.na(ok)] <- FALSE
   out <- numeric(length(dt))
   if (any(ok)) {
+    tau <- .btawl_tau_col(pars)
     out[ok] <- pbtawl(dt[ok], A = pars[ok, "A"], b = pars[ok, "b"],
                       p1 = pars[ok, nm[1]], p2 = pars[ok, nm[2]],
-                      k = pars[ok, "k"], tau = pars[ok, "tau"],
+                      k = pars[ok, "k"], tau = tau[ok],
                       launch = as.integer(launch), posdrift = posdrift)
   }
   out
 }
 
 .btawl_mix_check_cols <- function(pars, launch) {
-  need <- c(.btawl_par_names(launch), "b", "A", "t0", "k", "tau_s", "tau_t", "pi")
+  clear <- if ("Ttrans" %in% colnames(pars)) "Ttrans" else "tau_t"
+  need <- c(.btawl_par_names(launch), "b", "A", "t0", "k", "tau_s", clear, "pi")
   missing <- setdiff(need, colnames(pars))
   if (length(missing))
     stop("BTAwL mixed requires parameter columns ", paste(missing, collapse = ", "))
   need
+}
+
+.btawl_mix_tau_t_col <- function(pars) {
+  if ("Ttrans" %in% colnames(pars))
+    btawl_tau_vec(pars[, "k"], pars[, "Ttrans"])
+  else pars[, "tau_t"]
 }
 
 dBTAwLMix <- function(rt, pars, launch = 0L, posdrift = TRUE) {
@@ -73,10 +89,11 @@ dBTAwLMix <- function(rt, pars, launch = 0L, posdrift = TRUE) {
   ok[is.na(ok)] <- FALSE
   out <- numeric(length(dt))
   if (any(ok)) {
+    tau_t <- .btawl_mix_tau_t_col(pars)
     out[ok] <- dbtawlmix(dt[ok], A = pars[ok, "A"], b = pars[ok, "b"],
                          p1 = pars[ok, nm[1]], p2 = pars[ok, nm[2]],
                          k = pars[ok, "k"], tau_s = pars[ok, "tau_s"],
-                         tau_t = pars[ok, "tau_t"], pi = pars[ok, "pi"],
+                         tau_t = tau_t[ok], pi = pars[ok, "pi"],
                          launch = as.integer(launch), posdrift = posdrift)
   }
   out
@@ -89,10 +106,11 @@ pBTAwLMix <- function(rt, pars, launch = 0L, posdrift = TRUE) {
   ok[is.na(ok)] <- FALSE
   out <- numeric(length(dt))
   if (any(ok)) {
+    tau_t <- .btawl_mix_tau_t_col(pars)
     out[ok] <- pbtawlmix(dt[ok], A = pars[ok, "A"], b = pars[ok, "b"],
                          p1 = pars[ok, nm[1]], p2 = pars[ok, nm[2]],
                          k = pars[ok, "k"], tau_s = pars[ok, "tau_s"],
-                         tau_t = pars[ok, "tau_t"], pi = pars[ok, "pi"],
+                         tau_t = tau_t[ok], pi = pars[ok, "pi"],
                          launch = as.integer(launch), posdrift = posdrift)
   }
   out
@@ -132,13 +150,7 @@ pBTAwLMix <- function(rt, pars, launch = 0L, posdrift = TRUE) {
 }
 
 .btawl_tmax <- function(k, tau) {
-  if (!is.finite(k) || !is.finite(tau) || k <= 1e-10 || tau <= 0) return(Inf)
-  hp <- function(t) (t / tau) * exp(-t / tau) - k * .btawl_h(t, k, tau)
-  hi <- 2 * max(tau, 1 / k)
-  while (isTRUE(hp(hi) > 0) && hi < 1e12 * max(tau, 1 / k)) hi <- 2 * hi
-  if (!isTRUE(hp(hi) <= 0)) return(Inf)
-  lo <- max(.Machine$double.eps * max(1, hi), 1e-12 * min(tau, 1 / k))
-  uniroot(hp, c(lo, hi), tol = 1e-12)$root
+  btawl_tmax_vec(k, tau)[1L]
 }
 
 .btawl_hit_time <- function(V, z, b, k, tau,
@@ -167,10 +179,11 @@ rBTAwL <- function(lR, pars, ok = rep(TRUE, length(lR)),
                    p_types = NULL, posdrift = TRUE, .drifts = NULL,
                    launch = 0L, mixed = FALSE) {
   nm <- if (mixed) {
-    need <- c(.btawl_par_names(launch), "b", "A", "t0", "k", "tau_s", "tau_t", "pi")
+    clear <- if ("Ttrans" %in% colnames(pars)) "Ttrans" else "tau_t"
+    need <- c(.btawl_par_names(launch), "b", "A", "t0", "k", "tau_s", clear, "pi")
     miss <- setdiff(need, colnames(pars))
     if (length(miss)) stop("BTAwL mixed requires parameter columns ", paste(miss, collapse = ", "))
-    c(.btawl_par_names(launch), "b", "A", "t0", "k", "tau_s", "tau_t", "pi")
+    c(.btawl_par_names(launch), "b", "A", "t0", "k", "tau_s", clear, "pi")
   } else .btawl_check_cols(pars, launch)
   nr <- length(levels(lR))
   if (nr <= 0 || nrow(pars) %% nr)
@@ -180,14 +193,15 @@ rBTAwL <- function(lR, pars, ok = rep(TRUE, length(lR)),
     # The simulator receives the transformed lower-case threshold `b`; the
     # constructor also carries the pre-transform `B` column, but it is not
     # part of the ballistic kernel contract.
-    p_types <- if (mixed) c(nm, "b", "A", "t0", "k", "tau_s", "tau_t", "pi") else
-      c(nm, "b", "A", "t0", "k", "tau")
+    p_types <- c(nm, "b", "A", "t0", "k")
   }
   if (!all(p_types %in% colnames(pars)))
     stop("pars must have columns ", paste(p_types, collapse = " "))
   pars_all <- pars
   pars <- pars[ok, , drop = FALSE]
   ok_idx <- which(ok)
+  tau_all <- if (mixed) NULL else .btawl_tau_col(pars_all)
+  tau_t_all <- if (mixed) .btawl_mix_tau_t_col(pars_all) else NULL
   if (is.null(.drifts)) {
     V <- if (launch == 1L) rlnorm(nrow(pars), pars[, nm[1]], pars[, nm[2]]) else
       if (posdrift) msm::rtnorm(nrow(pars), mean = pars[, nm[1]], sd = pars[, nm[2]], lower = 0) else
@@ -205,10 +219,11 @@ rBTAwL <- function(lR, pars, ok = rep(TRUE, length(lR)),
     z <- pars[j, "A"] * runif(1)
     if (mixed) {
       dt[tr, trial] <- .btawl_hit_time(V[j], z, pars[j, "b"], pars[j, "k"],
-                                        pars[j, "tau_t"], pars[j, "tau_s"],
-                                        pars[j, "tau_t"], pars[j, "pi"])
+                                        tau_t_all[ok_idx[j]], pars[j, "tau_s"],
+                                        tau_t_all[ok_idx[j]], pars[j, "pi"])
     } else {
-      dt[tr, trial] <- .btawl_hit_time(V[j], z, pars[j, "b"], pars[j, "k"], pars[j, "tau"])
+      dt[tr, trial] <- .btawl_hit_time(V[j], z, pars[j, "b"], pars[j, "k"],
+                                       tau_all[ok_idx[j]])
     }
     dt[tr, trial] <- dt[tr, trial] + pars[j, "t0"]
   }
@@ -242,20 +257,27 @@ rBTAwLMix <- function(lR, pars, ok = rep(TRUE, length(lR)),
 #' @param posdrift Logical. For a normal launch, truncate `V` below zero.
 #' @param drift_distribution Either `"normal"` (`V ~ N(v, sv^2)`) or
 #'   `"lognormal"` (`log V ~ N(mu, sigma^2)`).
+#' @param mixture If `TRUE`, `"shared"`, or `"mixed"`, return the shared-strength
+#'   sustained/transient extension.
+#' @param chart Either `"endpoint"` (sample `Ttrans`) or `"rate"` (sample `tau`).
 #' @return A BTAwL race-model specification.
 #' @export
 BTAwL <- function(posdrift = TRUE,
                   drift_distribution = c("normal", "lognormal"),
-                  mixture = FALSE) {
+                  mixture = FALSE,
+                  chart = c("endpoint", "rate")) {
+  chart <- match.arg(chart)
   if (isTRUE(mixture) || identical(mixture, "shared") || identical(mixture, "mixed"))
     return(BTAwL_mixed(posdrift = posdrift,
-                       drift_distribution = drift_distribution))
+                       drift_distribution = drift_distribution,
+                       chart = chart))
   drift_distribution <- match.arg(drift_distribution)
   launch <- .btawl_launch_code(drift_distribution)
   lognormal <- launch == 1L
   if (lognormal && !isTRUE(posdrift))
     stop("BTAwL: posdrift only applies to drift_distribution = \"normal\".")
   base_name <- paste0("BTAwL", if (lognormal) "_LOGN" else "",
+                      if (chart == "rate") "_RATE" else "",
                       if (!lognormal && !posdrift) "_IO" else "")
   if (lognormal) {
     p_types <- c(mu = 0, sigma = log(1))
@@ -266,13 +288,16 @@ BTAwL <- function(posdrift = TRUE,
     transform <- c(v = "identity", sv = "exp")
     minmax <- cbind(v = c(-Inf, Inf), sv = c(1e-4, Inf))
   }
+  clear_name <- if (chart == "endpoint") "Ttrans" else "tau"
   p_types <- c(p_types, B = log(1), A = log(0), t0 = log(0),
-               k = log(0), tau = log(1))
+               k = log(0), setNames(log(1), clear_name))
   transform <- c(transform, B = "exp", A = "exp", t0 = "exp",
-                 k = "exp", tau = "exp")
+                 k = "exp", setNames("exp", clear_name))
   minmax <- cbind(minmax, B = c(1e-4, Inf), A = c(1e-4, Inf),
-                  t0 = c(0.05, Inf), k = c(0, Inf), tau = c(1e-4, Inf))
-  exception <- c(A = 0, k = 0)
+                  t0 = c(0.05, Inf), k = c(1e-4, Inf))
+  minmax <- cbind(minmax, c(1e-4, Inf))
+  colnames(minmax)[ncol(minmax)] <- clear_name
+  exception <- if (chart == "endpoint") c(A = 0) else c(A = 0, k = 0)
   launch_pars <- .btawl_par_names(launch)
   .nuis <- add_nuisance_pars(p_types, transform, minmax, exception)
   p_types <- .nuis$p_types; transform <- .nuis$transform
@@ -282,14 +307,21 @@ BTAwL <- function(posdrift = TRUE,
     c_name = base_name,
     drift_distribution = drift_distribution,
     p_types = p_types,
-    p_types_canonical = c(launch_pars, "B", "A", "t0", "k", "tau"),
+    p_types_canonical = setdiff(names(p_types), .nuisance_par_names),
     transform = list(func = transform),
     bound = list(minmax = minmax, exception = exception),
     Ttransform = function(pars, dadm) {
-      lead <- c(launch_pars, "B", "A", "t0", "k", "tau")
+      lead <- c(launch_pars, "B", "A", "t0", "k", clear_name)
       extra <- pars[, setdiff(colnames(pars), lead), drop = FALSE]
-      cbind(pars[, lead, drop = FALSE], extra,
-            b = pars[, "B"] + pars[, "A"])
+      b <- pars[, "B"] + pars[, "A"]
+      tau <- if (chart == "endpoint") btawl_tau_vec(pars[, "k"], pars[, "Ttrans"])
+             else pars[, "tau"]
+      Tmax <- btawl_tmax_vec(pars[, "k"], tau)
+      Vcrit <- btawl_vcrit_vec(pars[, "k"], tau, b)
+      out <- cbind(pars[, lead, drop = FALSE], extra, b = b, tau = tau,
+                   Tmax = Tmax, rt_max = pars[, "t0"] + Tmax, Vcrit = Vcrit)
+      if (chart == "endpoint") out[, "Ttrans"] <- Tmax
+      out
     },
     rfun = function(data, pars)
       rBTAwL(data$lR, pars, ok = attr(pars, "ok"),
@@ -298,9 +330,10 @@ BTAwL <- function(posdrift = TRUE,
       dBTAwL(rt, pars, launch = launch, posdrift = posdrift),
     pfun = function(rt, pars)
       pBTAwL(rt, pars, launch = launch, posdrift = posdrift),
-    log_likelihood = function(pars, dadm, model, min_ll = log(1e-10))
-      log_likelihood_race_missing(pars = pars, dadm = dadm,
-                                   model = model, min_ll = min_ll)
+    log_likelihood = function(pars, dadm, model, min_ll = log(1e-10)) {
+      stop("BTAwL: the likelihood is implemented in the compiled race path; ",
+           "the R likelihood route is not supported.")
+    }
   )
 }
 
@@ -309,15 +342,19 @@ BTAwL <- function(posdrift = TRUE,
 #' This is the nested two-channel extension of [BTAwL()].  One trialwise
 #' launch strength multiplies both Smith channels:
 #' `V_S = pi * V`, `V_T = (1 - pi) * V`.  `pi = 0` is exactly the transient-only
-#' BTAwL kernel (with `tau_t` playing the old `tau` role), so the original model
-#' is a literal submodel rather than a limiting approximation.
+#' BTAwL kernel (with `tau_t` as its transient time constant), so the
+#' transient-only model is a literal submodel rather than a limiting
+#' approximation.
 #'
 #' @param posdrift Logical. For a normal launch, truncate `V` below zero.
 #' @param drift_distribution Either `"normal"` or `"lognormal"`.
+#' @param chart Either `"endpoint"` (sample `Ttrans`) or `"rate"` (sample `tau_t`).
 #' @return A shared-strength BTAwL race-model specification.
 #' @export
 BTAwL_mixed <- function(posdrift = TRUE,
-                        drift_distribution = c("normal", "lognormal")) {
+                        drift_distribution = c("normal", "lognormal"),
+                        chart = c("endpoint", "rate")) {
+  chart <- match.arg(chart)
   drift_distribution <- match.arg(drift_distribution)
   launch <- .btawl_launch_code(drift_distribution)
   lognormal <- launch == 1L
@@ -332,16 +369,20 @@ BTAwL_mixed <- function(posdrift = TRUE,
     transform <- c(v = "identity", sv = "exp")
     minmax <- cbind(v = c(-Inf, Inf), sv = c(1e-4, Inf))
   }
+  clear_name <- if (chart == "endpoint") "Ttrans" else "tau_t"
   p_types <- c(p_types, B = log(1), A = log(0), t0 = log(0), k = log(0),
-               tau_s = log(1), tau_t = log(1), pi = qnorm(.5))
+               tau_s = log(1), setNames(log(1), clear_name), pi = qnorm(.5))
   transform <- c(transform, B = "exp", A = "exp", t0 = "exp", k = "exp",
-                 tau_s = "exp", tau_t = "exp", pi = "pnorm")
+                 tau_s = "exp", setNames("exp", clear_name), pi = "pnorm")
   minmax <- cbind(minmax, B = c(1e-4, Inf), A = c(1e-4, Inf),
-                  t0 = c(0.05, Inf), k = c(0, Inf),
-                  tau_s = c(1e-4, Inf), tau_t = c(1e-4, Inf), pi = c(0, 1))
+                  t0 = c(0.05, Inf), k = if (chart == "endpoint") c(1e-4, Inf) else c(0, Inf),
+                  tau_s = c(1e-4, Inf))
+  minmax <- cbind(minmax, c(1e-4, Inf))
+  colnames(minmax)[ncol(minmax)] <- clear_name
+  minmax <- cbind(minmax, pi = c(0, 1))
   # pi = 0 is deliberately an exception so the nested transient-only member
   # is reachable exactly on the natural scale (and can be used as a constant).
-  exception <- c(A = 0, k = 0, pi = 0)
+  exception <- if (chart == "endpoint") c(A = 0, pi = 0) else c(A = 0, k = 0, pi = 0)
   launch_pars <- .btawl_par_names(launch)
   .nuis <- add_nuisance_pars(p_types, transform, minmax, exception)
   p_types <- .nuis$p_types; transform <- .nuis$transform
@@ -349,18 +390,33 @@ BTAwL_mixed <- function(posdrift = TRUE,
   list(
     type = "RACE",
     c_name = paste0("BTAwL_MIX", if (lognormal) "_LOGN" else "",
+                    if (chart == "rate") "_RATE" else "",
                     if (!lognormal && !posdrift) "_IO" else ""),
     drift_distribution = drift_distribution,
     shared_strength = TRUE,
     p_types = p_types,
-    p_types_canonical = c(launch_pars, "B", "A", "t0", "k", "tau_s", "tau_t", "pi"),
+    p_types_canonical = setdiff(names(p_types), .nuisance_par_names),
     transform = list(func = transform),
     bound = list(minmax = minmax, exception = exception),
     Ttransform = function(pars, dadm) {
-      lead <- c(launch_pars, "B", "A", "t0", "k", "tau_s", "tau_t", "pi")
+      lead <- c(launch_pars, "B", "A", "t0", "k", "tau_s", clear_name, "pi")
       extra <- pars[, setdiff(colnames(pars), lead), drop = FALSE]
-      cbind(pars[, lead, drop = FALSE], extra,
-            b = pars[, "B"] + pars[, "A"])
+      b <- pars[, "B"] + pars[, "A"]
+      tau_t <- if (chart == "endpoint") btawl_tau_vec(pars[, "k"], pars[, "Ttrans"])
+               else pars[, "tau_t"]
+      pure_transient <- pars[, "pi"] <= 1e-14
+      pure_transient[is.na(pure_transient)] <- FALSE
+      Tmax <- btawl_tmax_vec(pars[, "k"], tau_t)
+      Vcrit <- btawl_vcrit_vec(pars[, "k"], tau_t, b)
+      # A sustained component removes the transient hard endpoint.  Keep the
+      # transient channel's sampled clearance in the parameter columns, but
+      # only expose Tmax/rt_max/Vcrit as endpoint diagnostics for pi = 0.
+      Tmax[!pure_transient] <- Inf
+      Vcrit[!pure_transient] <- Inf
+      out <- cbind(pars[, lead, drop = FALSE], extra, b = b, tau_t = tau_t,
+                   Tmax = Tmax, rt_max = pars[, "t0"] + Tmax, Vcrit = Vcrit)
+      if (chart == "endpoint") out[pure_transient, "Ttrans"] <- Tmax[pure_transient]
+      out
     },
     rfun = function(data, pars)
       rBTAwLMix(data$lR, pars, ok = attr(pars, "ok"),
@@ -369,9 +425,10 @@ BTAwL_mixed <- function(posdrift = TRUE,
       dBTAwLMix(rt, pars, launch = launch, posdrift = posdrift),
     pfun = function(rt, pars)
       pBTAwLMix(rt, pars, launch = launch, posdrift = posdrift),
-    log_likelihood = function(pars, dadm, model, min_ll = log(1e-10))
-      log_likelihood_race_missing(pars = pars, dadm = dadm,
-                                   model = model, min_ll = min_ll)
+    log_likelihood = function(pars, dadm, model, min_ll = log(1e-10)) {
+      stop("BTAwL_mixed: the likelihood is implemented in the compiled race path; ",
+           "the R likelihood route is not supported.")
+    }
   )
 }
 

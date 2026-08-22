@@ -165,6 +165,10 @@ bawr_tmax_vec <- function(A, b, kappa, pw) {
     .Call(`_EMC2_bawr_tmax_vec`, A, b, kappa, pw)
 }
 
+bawr_kappa_vec <- function(Tmax, b, pw) {
+    .Call(`_EMC2_bawr_kappa_vec`, Tmax, b, pw)
+}
+
 bawr_vcrit_vec <- function(A, b, kappa, pw) {
     .Call(`_EMC2_bawr_vcrit_vec`, A, b, kappa, pw)
 }
@@ -217,6 +221,14 @@ pbtawl <- function(t, A, b, p1, p2, k, tau, launch = 1L, posdrift = TRUE, log_ou
     .Call(`_EMC2_pbtawl`, t, A, b, p1, p2, k, tau, launch, posdrift, log_out)
 }
 
+btawl_log_surv_vec <- function(t, A, b, p1, p2, k, tau, launch = 1L, posdrift = TRUE) {
+    .Call(`_EMC2_btawl_log_surv_vec`, t, A, b, p1, p2, k, tau, launch, posdrift)
+}
+
+btawl_mix_log_surv_vec <- function(t, A, b, p1, p2, k, tau_s, tau_t, pi, launch = 1L, posdrift = TRUE) {
+    .Call(`_EMC2_btawl_mix_log_surv_vec`, t, A, b, p1, p2, k, tau_s, tau_t, pi, launch, posdrift)
+}
+
 dbtawlmix <- function(t, A, b, p1, p2, k, tau_s, tau_t, pi, launch = 1L, posdrift = TRUE, log_out = FALSE) {
     .Call(`_EMC2_dbtawlmix`, t, A, b, p1, p2, k, tau_s, tau_t, pi, launch, posdrift, log_out)
 }
@@ -227,6 +239,14 @@ pbtawlmix <- function(t, A, b, p1, p2, k, tau_s, tau_t, pi, launch = 1L, posdrif
 
 btawl_tmax_vec <- function(k, tau) {
     .Call(`_EMC2_btawl_tmax_vec`, k, tau)
+}
+
+btawl_tau_vec <- function(k, Ttrans) {
+    .Call(`_EMC2_btawl_tau_vec`, k, Ttrans)
+}
+
+btawl_vcrit_vec <- function(k, tau, b) {
+    .Call(`_EMC2_btawl_vcrit_vec`, k, tau, b)
 }
 
 dfrq <- function(t, alpha, beta, h, tau, delta = as.numeric( c(0.0)), log_out = FALSE) {

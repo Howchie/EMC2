@@ -164,17 +164,17 @@ namespace bawf_logn {
 // (coefficient and exponent) rather than one rate, and `kappa` has different
 // units from BAwF's `k`.
 namespace bawr {
-  enum : int { v = 0, sv, B, A, t0, kappa, p, N_REQ };
+  enum : int { v = 0, sv, B, A, t0, clear, p, N_REQ };
   inline ColSpec spec() {
-    static const char* n[] = {"v", "sv", "B", "A", "t0", "kappa", "p"};
+    static const char* n[] = {"v", "sv", "B", "A", "t0", "Tmax", "p"};
     return {n, N_REQ, "BAwR"};
   }
 }
 namespace bawr_logn {
   // Same positions as bawr: mu occupies v's slot and sigma occupies sv's.
-  enum : int { mu = 0, sigma, B, A, t0, kappa, p, N_REQ };
+  enum : int { mu = 0, sigma, B, A, t0, clear, p, N_REQ };
   inline ColSpec spec() {
-    static const char* n[] = {"mu", "sigma", "B", "A", "t0", "kappa", "p"};
+    static const char* n[] = {"mu", "sigma", "B", "A", "t0", "Tmax", "p"};
     return {n, N_REQ, "BAwR_LOGN"};
   }
 }
@@ -183,31 +183,51 @@ namespace bawr_logn {
 // other ballistic launch models, the first two positions are either (v, sv)
 // or (mu, sigma); only the names differ for the lognormal member.
 namespace btawl {
-  enum : int { v = 0, sv, B, A, t0, k, tau, N_REQ };
+  enum : int { v = 0, sv, B, A, t0, k, clear, N_REQ };
   inline ColSpec spec() {
-    static const char* n[] = {"v", "sv", "B", "A", "t0", "k", "tau"};
+    static const char* n[] = {"v", "sv", "B", "A", "t0", "k", "Ttrans"};
     return {n, N_REQ, "BTAwL"};
+  }
+  inline ColSpec spec_rate() {
+    static const char* n[] = {"v", "sv", "B", "A", "t0", "k", "tau"};
+    return {n, N_REQ, "BTAwL_RATE"};
   }
 }
 namespace btawl_logn {
-  enum : int { mu = 0, sigma, B, A, t0, k, tau, N_REQ };
+  enum : int { mu = 0, sigma, B, A, t0, k, clear, N_REQ };
   inline ColSpec spec() {
-    static const char* n[] = {"mu", "sigma", "B", "A", "t0", "k", "tau"};
+    static const char* n[] = {"mu", "sigma", "B", "A", "t0", "k", "Ttrans"};
     return {n, N_REQ, "BTAwL_LOGN"};
+  }
+  inline ColSpec spec_rate() {
+    static const char* n[] = {"mu", "sigma", "B", "A", "t0", "k", "tau"};
+    return {n, N_REQ, "BTAwL_LOGN_RATE"};
   }
 }
 namespace btawl_mix {
-  enum : int { v = 0, sv, B, A, t0, k, tau_s, tau_t, pi, N_REQ };
+  // tau_t aliases the shared endpoint-chart slot `clear`; pi must remain the
+  // next enumerator so the nine-column mixed contract stays positional.
+  enum : int { v = 0, sv, B, A, t0, k, tau_s, clear, tau_t = clear, pi, N_REQ };
   inline ColSpec spec() {
-    static const char* n[] = {"v", "sv", "B", "A", "t0", "k", "tau_s", "tau_t", "pi"};
+    static const char* n[] = {"v", "sv", "B", "A", "t0", "k", "tau_s", "Ttrans", "pi"};
     return {n, N_REQ, "BTAwL_MIX"};
+  }
+  inline ColSpec spec_rate() {
+    static const char* n[] = {"v", "sv", "B", "A", "t0", "k", "tau_s", "tau_t", "pi"};
+    return {n, N_REQ, "BTAwL_MIX_RATE"};
   }
 }
 namespace btawl_mix_logn {
-  enum : int { mu = 0, sigma, B, A, t0, k, tau_s, tau_t, pi, N_REQ };
+  // tau_t aliases the shared endpoint-chart slot `clear`; pi must remain the
+  // next enumerator so the nine-column mixed contract stays positional.
+  enum : int { mu = 0, sigma, B, A, t0, k, tau_s, clear, tau_t = clear, pi, N_REQ };
   inline ColSpec spec() {
-    static const char* n[] = {"mu", "sigma", "B", "A", "t0", "k", "tau_s", "tau_t", "pi"};
+    static const char* n[] = {"mu", "sigma", "B", "A", "t0", "k", "tau_s", "Ttrans", "pi"};
     return {n, N_REQ, "BTAwL_MIX_LOGN"};
+  }
+  inline ColSpec spec_rate() {
+    static const char* n[] = {"mu", "sigma", "B", "A", "t0", "k", "tau_s", "tau_t", "pi"};
+    return {n, N_REQ, "BTAwL_MIX_LOGN_RATE"};
   }
 }
 

@@ -427,6 +427,21 @@ inline double log_lognormal_stoploss(double v, double mu, double sigma) {
   }
   return std::log(v) + log_phi_std(x) + log_mills_gap(x, sigma);
 }
+
+// Lognormal put primitive: int_0^v Phi((log w - mu)/sigma) dw, i.e. the
+// integral of the launch CDF rather than its survivor.  Keeping this primitive
+// in log space avoids the cancellation in 1 - stoploss/mean that would defeat
+// the survivor-tail path.
+inline double log_lognormal_put(double v, double mu, double sigma) {
+  if (!(sigma > 0.0) || !(v > 0.0)) return R_NegInf;
+  const double x = (std::log(v) - mu) / sigma;
+  const double a = std::log(v) + pnorm_log_direct(x, true);
+  const double b = mu + 0.5 * sigma * sigma +
+    pnorm_log_direct(x - sigma, true);
+  if (!(a > b)) return R_NegInf;
+  const double d = b - a;
+  return a + log1m_exp(d);
+}
 // log Lambda_m(v) = log integral_v^infinity w^(-(m+1)) P(V >= w) dw
 // for m > 0, m Lambda_m(v) =
 // v^(-m) phi(x) [R(x) - R(x + m sigma)], with x = (log v - mu)/sigma.

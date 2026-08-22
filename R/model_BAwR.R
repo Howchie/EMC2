@@ -20,12 +20,11 @@
 # a strong launch peaks later -- at u = (V/kappa)^(1/p) -- so strong sensory
 # representations keep supporting accumulation while weak ones expire.
 #
-# The hard right endpoint is T_max = [(p+1) b / (kappa p)]^(1/(p+1)).  Unlike
-# BAwF's it DEPENDS ON b: decay in physical time knows nothing about the
-# threshold, so a more cautious accumulator simply gets longer before the drive
-# expires.  That is the deliberate trade -- B stays a pure caution parameter
-# and kappa a caution-free property of the stimulus representation, at the cost
-# of the b-free endpoint.
+# The public chart samples the hard right endpoint `Tmax`; the mechanistic
+# coefficient is then derived as `kappa = b (p + 1) / (p Tmax^(p + 1))`.
+# This keeps the endpoint explicit while preserving the same ramping kernel in
+# the compiled simulator and likelihood paths. `Tmax = Inf` is the exact LBA
+# limit (`kappa = 0`).
 #
 # Numerical kernels live in src/model_BAwR.h and are shared by the wrappers and
 # the sampled likelihood.  Launch codes must match the BAWR_LAUNCH_* constants
@@ -182,8 +181,8 @@ rBAwR <- function(lR, pars, ok = rep(TRUE, length(lR)), launch = 1L,
 #' expiring quickly while strong ones keep supporting accumulation. `p = 1` is
 #' the linear-decay member, where trajectories are parabolas.
 #'
-#' The hard right endpoint is
-#' \verb{T_max = [(p + 1) b / (kappa p)]^(1/(p + 1))} and the omission boundary
+#' The hard right endpoint is sampled directly as `Tmax`; the mechanistic rate
+#' is derived as `kappa = b (p + 1) / (p Tmax^(p + 1))`. The omission boundary
 #' at the lowest start point is \verb{V_c(0) = kappa T_max^p}. Note that unlike
 #' [BAwF] the endpoint here **does** depend on `b`: decay in physical time knows
 #' nothing about the threshold, so raising caution simply buys more time before
@@ -196,9 +195,10 @@ rBAwR <- function(lR, pars, ok = rep(TRUE, length(lR)), launch = 1L,
 #' vanishes quadratically at `T_max`, as in BAwD and BAwF; a point start gives
 #' linear shutdown. `kappa = 0` is the exact LBA limit.
 #'
-#' There is no parameter fixing the evidence scale: \verb{(V, b, A, kappa)}
-#' scale jointly with `T_max` and `p` invariant, so one of `mu` (or `v`), `B`
-#' or `A` must be pinned -- see the example.
+#' Because the rate is derived from the endpoint, fixing a constant `kappa` is
+#' no longer an available scale constraint. Pin an intercept of `mu` (or `v`),
+#' `B`, or `A` instead; the joint `(V, b, A, kappa)` rescaling leaves the shape
+#' invariant.
 #'
 #' With `drift_distribution = "lognormal"` (the default) `log V ~ N(mu, sigma^2)`.
 #'
@@ -209,7 +209,7 @@ rBAwR <- function(lR, pars, ok = rep(TRUE, length(lR)), launch = 1L,
 #' | *B* | log | \[0, Inf\] | log(1) | *b* = *B* + *A* | Threshold distance. |
 #' | *A* | log | \[0, Inf\] | log(0) | | Start-point range. |
 #' | *t0* | log | \[0, Inf\] | log(0) | | Non-decision time. |
-#' | *kappa* | log | \[0, Inf\] | log(0) | | Drive-decay coefficient. |
+#' | *Tmax* | log | \[0, Inf\] | log(1) | | Hard endpoint (the rate is derived). |
 #' | *p* | log | \[0, Inf\] | log(1) | | Drive-decay exponent. |
 #'
 #' With `drift_distribution = "normal"`, `mu` and `sigma` are replaced by
@@ -228,7 +228,7 @@ rBAwR <- function(lR, pars, ok = rep(TRUE, length(lR)), launch = 1L,
 #' # member.  mu is pinned because nothing else anchors the evidence scale.
 #' design_BAwR <- design(data = forstmann, model = BAwR, matchfun = matchfun,
 #'                       formula = list(mu ~ lM, sigma ~ 1, B ~ E, A ~ 1,
-#'                                      t0 ~ 1, kappa ~ 1, p ~ 1),
+#'                                      t0 ~ 1, Tmax ~ 1, p ~ 1),
 #'                       contrasts = list(mu = list(lM = ADmat)),
 #'                       constants = c(mu = 0, p = log(1)))
 #' @export
@@ -255,16 +255,13 @@ BAwR <- function(drift_distribution = c("lognormal", "normal"),
   # As for BAwF there is no clearance parameter to leave out of the formula, so
   # the evidence scale must be fixed by pinning one of mu (v), B or A.
   p_types <- c(p_types, "B" = log(1), "A" = log(0), "t0" = log(0),
-               "kappa" = log(0), "p" = log(1))
-  transform <- c(transform, B = "exp", A = "exp", t0 = "exp", kappa = "exp",
+               "Tmax" = log(1), "p" = log(1))
+  transform <- c(transform, B = "exp", A = "exp", t0 = "exp", Tmax = "exp",
                  p = "exp")
   minmax <- cbind(minmax, A = c(1e-4, Inf), B = c(1e-4, Inf),
-                  t0 = c(0.05, Inf), kappa = c(1e-4, Inf), p = c(1e-3, Inf))
-  # kappa = 0 is the exact LBA limit and must stay reachable, so it is a bound
-  # exception rather than clamped.  p has no such limit: p = 0 would make the
-  # drive lose a constant, degenerating to an LBA with a shifted launch and an
-  # infinite T_max, so its lower bound is enforced.
-  exception <- c(A = 0, kappa = 0)
+                  t0 = c(0.05, Inf), Tmax = c(1e-4, Inf), p = c(1e-3, Inf))
+  # Tmax = Inf is the exact LBA limit; p = 0 remains outside this family.
+  exception <- c(A = 0, Tmax = Inf)
 
   # pContaminant (omission) and pGuess (uniform outlier); see add_nuisance_pars().
   .nuis <- add_nuisance_pars(p_types, transform, minmax, exception)
@@ -286,14 +283,16 @@ BAwR <- function(drift_distribution = c("lognormal", "normal"),
     bound = list(minmax = minmax, exception = exception),
     Ttransform = function(pars, dadm) {
       b <- pars[, "B"] + pars[, "A"]
-      # Both derived diagnostics are computed by the same kernel the likelihood
-      # uses.  Tmax is reported because it is not a sampled quantity here (it
-      # is a function of kappa, p AND b), and Vcrit because it sets the
-      # omission rate.
-      Tmax <- bawr_tmax_vec(pars[, "A"], b, pars[, "kappa"], pars[, "p"])
-      Vcrit <- bawr_vcrit_vec(pars[, "A"], b, pars[, "kappa"], pars[, "p"])
-      cbind(pars, b = b, Tmax = Tmax, rt_max = pars[, "t0"] + Tmax,
-            Vcrit = Vcrit)
+      # The sampled endpoint is converted to the mechanistic rate consumed by
+      # the simulator and kernels.  Recompute the realised endpoint from that
+      # rate so the reported chart coordinate remains internally consistent.
+      kappa <- bawr_kappa_vec(pars[, "Tmax"], b, pars[, "p"])
+      Tmax <- bawr_tmax_vec(pars[, "A"], b, kappa, pars[, "p"])
+      Vcrit <- bawr_vcrit_vec(pars[, "A"], b, kappa, pars[, "p"])
+      out <- cbind(pars, b = b, kappa = kappa,
+                   rt_max = pars[, "t0"] + Tmax, Vcrit = Vcrit)
+      out[, "Tmax"] <- Tmax
+      out
     },
     rfun = function(data, pars) {
       .rfun_BAwR(data$lR, pars, ok = attr(pars, "ok"), launch = launch,

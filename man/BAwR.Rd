@@ -38,8 +38,8 @@ strong launch stays productive longer -- its trajectory peaks at
 expiring quickly while strong ones keep supporting accumulation. \code{p = 1} is
 the linear-decay member, where trajectories are parabolas.
 
-The hard right endpoint is
-\verb{T_max = [(p + 1) b / (kappa p)]^(1/(p + 1))} and the omission boundary
+The hard right endpoint is sampled directly as \code{Tmax}; the mechanistic
+rate is derived by \verb{kappa = b (p + 1) / (p Tmax^(p + 1))}.  The omission boundary
 at the lowest start point is \verb{V_c(0) = kappa T_max^p}. Note that unlike
 \link{BAwF} the endpoint here \strong{does} depend on \code{b}: decay in physical time knows
 nothing about the threshold, so raising caution simply buys more time before
@@ -52,9 +52,10 @@ survivor integral over the already-saturated ones). With \code{A > 0} the densit
 vanishes quadratically at \code{T_max}, as in BAwD and BAwF; a point start gives
 linear shutdown. \code{kappa = 0} is the exact LBA limit.
 
-There is no parameter fixing the evidence scale: \verb{(V, b, A, kappa)}
-scale jointly with \code{T_max} and \code{p} invariant, so one of \code{mu} (or \code{v}), \code{B}
-or \code{A} must be pinned -- see the example.
+The endpoint chart replaces the mechanistic \code{kappa}, so fixing a constant
+rate is no longer an available scale constraint.  The joint rescaling of
+\verb{(V, b, A, kappa)} with \code{Tmax} and \code{p} leaves the shape invariant;
+pin an intercept of \code{mu} (or \code{v}), \code{B}, or \code{A} instead.
 
 With \code{drift_distribution = "lognormal"} (the default) \verb{log V ~ N(mu, sigma^2)}.\tabular{llllll}{
    \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Mapping} \tab \strong{Interpretation} \cr
@@ -63,7 +64,7 @@ With \code{drift_distribution = "lognormal"} (the default) \verb{log V ~ N(mu, s
    \emph{B} \tab log \tab [0, Inf] \tab log(1) \tab \emph{b} = \emph{B} + \emph{A} \tab Threshold distance. \cr
    \emph{A} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Start-point range. \cr
    \emph{t0} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Non-decision time. \cr
-   \emph{kappa} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Drive-decay coefficient. \cr
+   \emph{Tmax} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Hard endpoint (the rate is derived). \cr
    \emph{p} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Drive-decay exponent. \cr
 }
 
@@ -78,7 +79,7 @@ matchfun <- function(d) d$S == d$lM
 # member.  mu is pinned because nothing else anchors the evidence scale.
 design_BAwR <- design(data = forstmann, model = BAwR, matchfun = matchfun,
                       formula = list(mu ~ lM, sigma ~ 1, B ~ E, A ~ 1,
-                                     t0 ~ 1, kappa ~ 1, p ~ 1),
+                                     t0 ~ 1, Tmax ~ 1, p ~ 1),
                       contrasts = list(mu = list(lM = ADmat)),
                       constants = c(mu = 0, p = log(1)))
 }

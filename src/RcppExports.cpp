@@ -759,6 +759,19 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// bawr_kappa_vec
+NumericVector bawr_kappa_vec(NumericVector Tmax, NumericVector b, NumericVector pw);
+RcppExport SEXP _EMC2_bawr_kappa_vec(SEXP TmaxSEXP, SEXP bSEXP, SEXP pwSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type Tmax(TmaxSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type b(bSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type pw(pwSEXP);
+    rcpp_result_gen = Rcpp::wrap(bawr_kappa_vec(Tmax, b, pw));
+    return rcpp_result_gen;
+END_RCPP
+}
 // bawr_vcrit_vec
 NumericVector bawr_vcrit_vec(NumericVector A, NumericVector b, NumericVector kappa, NumericVector pw);
 RcppExport SEXP _EMC2_bawr_vcrit_vec(SEXP ASEXP, SEXP bSEXP, SEXP kappaSEXP, SEXP pwSEXP) {
@@ -1034,6 +1047,46 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// btawl_log_surv_vec
+NumericVector btawl_log_surv_vec(NumericVector t, NumericVector A, NumericVector b, NumericVector p1, NumericVector p2, NumericVector k, NumericVector tau, int launch, bool posdrift);
+RcppExport SEXP _EMC2_btawl_log_surv_vec(SEXP tSEXP, SEXP ASEXP, SEXP bSEXP, SEXP p1SEXP, SEXP p2SEXP, SEXP kSEXP, SEXP tauSEXP, SEXP launchSEXP, SEXP posdriftSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type t(tSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type A(ASEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type b(bSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type p1(p1SEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type p2(p2SEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type k(kSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type tau(tauSEXP);
+    Rcpp::traits::input_parameter< int >::type launch(launchSEXP);
+    Rcpp::traits::input_parameter< bool >::type posdrift(posdriftSEXP);
+    rcpp_result_gen = Rcpp::wrap(btawl_log_surv_vec(t, A, b, p1, p2, k, tau, launch, posdrift));
+    return rcpp_result_gen;
+END_RCPP
+}
+// btawl_mix_log_surv_vec
+NumericVector btawl_mix_log_surv_vec(NumericVector t, NumericVector A, NumericVector b, NumericVector p1, NumericVector p2, NumericVector k, NumericVector tau_s, NumericVector tau_t, NumericVector pi, int launch, bool posdrift);
+RcppExport SEXP _EMC2_btawl_mix_log_surv_vec(SEXP tSEXP, SEXP ASEXP, SEXP bSEXP, SEXP p1SEXP, SEXP p2SEXP, SEXP kSEXP, SEXP tau_sSEXP, SEXP tau_tSEXP, SEXP piSEXP, SEXP launchSEXP, SEXP posdriftSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type t(tSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type A(ASEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type b(bSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type p1(p1SEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type p2(p2SEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type k(kSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type tau_s(tau_sSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type tau_t(tau_tSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type pi(piSEXP);
+    Rcpp::traits::input_parameter< int >::type launch(launchSEXP);
+    Rcpp::traits::input_parameter< bool >::type posdrift(posdriftSEXP);
+    rcpp_result_gen = Rcpp::wrap(btawl_mix_log_surv_vec(t, A, b, p1, p2, k, tau_s, tau_t, pi, launch, posdrift));
+    return rcpp_result_gen;
+END_RCPP
+}
 // dbtawlmix
 NumericVector dbtawlmix(NumericVector t, NumericVector A, NumericVector b, NumericVector p1, NumericVector p2, NumericVector k, NumericVector tau_s, NumericVector tau_t, NumericVector pi, int launch, bool posdrift, bool log_out);
 RcppExport SEXP _EMC2_dbtawlmix(SEXP tSEXP, SEXP ASEXP, SEXP bSEXP, SEXP p1SEXP, SEXP p2SEXP, SEXP kSEXP, SEXP tau_sSEXP, SEXP tau_tSEXP, SEXP piSEXP, SEXP launchSEXP, SEXP posdriftSEXP, SEXP log_outSEXP) {
@@ -1087,6 +1140,31 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< NumericVector >::type k(kSEXP);
     Rcpp::traits::input_parameter< NumericVector >::type tau(tauSEXP);
     rcpp_result_gen = Rcpp::wrap(btawl_tmax_vec(k, tau));
+    return rcpp_result_gen;
+END_RCPP
+}
+// btawl_tau_vec
+NumericVector btawl_tau_vec(NumericVector k, NumericVector Ttrans);
+RcppExport SEXP _EMC2_btawl_tau_vec(SEXP kSEXP, SEXP TtransSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type k(kSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type Ttrans(TtransSEXP);
+    rcpp_result_gen = Rcpp::wrap(btawl_tau_vec(k, Ttrans));
+    return rcpp_result_gen;
+END_RCPP
+}
+// btawl_vcrit_vec
+NumericVector btawl_vcrit_vec(NumericVector k, NumericVector tau, NumericVector b);
+RcppExport SEXP _EMC2_btawl_vcrit_vec(SEXP kSEXP, SEXP tauSEXP, SEXP bSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type k(kSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type tau(tauSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type b(bSEXP);
+    rcpp_result_gen = Rcpp::wrap(btawl_vcrit_vec(k, tau, b));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -3784,6 +3862,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_pbawr_norm", (DL_FUNC) &_EMC2_pbawr_norm, 10},
     {"_EMC2_bawr_tmax", (DL_FUNC) &_EMC2_bawr_tmax, 4},
     {"_EMC2_bawr_tmax_vec", (DL_FUNC) &_EMC2_bawr_tmax_vec, 4},
+    {"_EMC2_bawr_kappa_vec", (DL_FUNC) &_EMC2_bawr_kappa_vec, 3},
     {"_EMC2_bawr_vcrit_vec", (DL_FUNC) &_EMC2_bawr_vcrit_vec, 4},
     {"_EMC2_bm_fht_pdf_vec_grid", (DL_FUNC) &_EMC2_bm_fht_pdf_vec_grid, 10},
     {"_EMC2_bm_fht_pdf_vec_grid_chunked", (DL_FUNC) &_EMC2_bm_fht_pdf_vec_grid_chunked, 15},
@@ -3797,9 +3876,13 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_simulate_gbm_hit_times_bb", (DL_FUNC) &_EMC2_simulate_gbm_hit_times_bb, 15},
     {"_EMC2_dbtawl", (DL_FUNC) &_EMC2_dbtawl, 10},
     {"_EMC2_pbtawl", (DL_FUNC) &_EMC2_pbtawl, 10},
+    {"_EMC2_btawl_log_surv_vec", (DL_FUNC) &_EMC2_btawl_log_surv_vec, 9},
+    {"_EMC2_btawl_mix_log_surv_vec", (DL_FUNC) &_EMC2_btawl_mix_log_surv_vec, 11},
     {"_EMC2_dbtawlmix", (DL_FUNC) &_EMC2_dbtawlmix, 12},
     {"_EMC2_pbtawlmix", (DL_FUNC) &_EMC2_pbtawlmix, 12},
     {"_EMC2_btawl_tmax_vec", (DL_FUNC) &_EMC2_btawl_tmax_vec, 2},
+    {"_EMC2_btawl_tau_vec", (DL_FUNC) &_EMC2_btawl_tau_vec, 2},
+    {"_EMC2_btawl_vcrit_vec", (DL_FUNC) &_EMC2_btawl_vcrit_vec, 3},
     {"_EMC2_dfrq", (DL_FUNC) &_EMC2_dfrq, 7},
     {"_EMC2_pfrq", (DL_FUNC) &_EMC2_pfrq, 8},
     {"_EMC2_frq_rate", (DL_FUNC) &_EMC2_frq_rate, 5},
