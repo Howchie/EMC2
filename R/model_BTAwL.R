@@ -153,26 +153,41 @@ pBTAwLMix <- function(rt, pars, launch = 0L, posdrift = TRUE) {
   btawl_tmax_vec(k, tau)[1L]
 }
 
-.btawl_hit_time <- function(V, z, b, k, tau,
-                            tau_s = tau, tau_t = tau, pi = 0) {
+.btawl_hit_time_transient <- function(V, z, b, k, tau) {
   if (!is.finite(V) || V <= 0 || !is.finite(z) || z >= b) return(if (z >= b) 0 else Inf)
-  H <- function(t) .btawl_hmix(t, k, tau_s, tau_t, pi)
-  X <- function(t) z * exp(-k * t) + V * H(t)
+  X <- function(t) z * exp(-k * t) + V * .btawl_h(t, k, tau)
   if (k <= 1e-10) {
-    if (V <= 0 || (pi <= 1e-12 && z + V * tau_t < b)) return(Inf)
-    hi <- max(tau_s, tau_t, 1)
-    while (X(hi) < b && hi < 1e12 * max(tau_s, tau_t, 1)) hi <- 2 * hi
-    return(if (X(hi) < b) Inf else uniroot(function(t) X(t) - b,
-                                             c(0, hi), tol = 1e-11)$root)
+    if (z + V * tau < b) return(Inf)
+    hi <- max(tau, 1)
+    while (X(hi) < b && hi < 1e12 * max(tau, 1)) hi <- 2 * hi
+    return(if (X(hi) < b) Inf else uniroot(function(t) X(t) - b, c(0, hi), tol = 1e-11)$root)
   }
-  tm <- .btawl_tmax_mix(k, tau_s, tau_t, pi)
+  tm <- .btawl_tmax(k, tau)
   if (is.finite(tm)) {
     if (X(tm) < b) return(Inf)
     return(uniroot(function(t) X(t) - b, c(0, tm), tol = 1e-11)$root)
   }
-  hi <- max(tau_s, tau_t, 1 / k)
-  while (X(hi) < b && hi < 1e12 * max(tau_s, tau_t, 1 / k)) hi <- 2 * hi
+  hi <- max(tau, 1 / k)
+  while (X(hi) < b && hi < 1e12 * max(tau, 1 / k)) hi <- 2 * hi
   if (X(hi) < b) Inf else uniroot(function(t) X(t) - b, c(0, hi), tol = 1e-11)$root
+}
+
+.btawl_hit_time_sustained <- function(V, z, b, k, tau_s) {
+  if (!is.finite(V) || V <= 0 || !is.finite(z) || z >= b) return(if (z >= b) 0 else Inf)
+  X <- function(t) z * exp(-k * t) + V * .btawl_hs(t, k, tau_s)
+  if (k > 1e-10 && V <= k * b) return(Inf)
+  hi <- max(tau_s, if (k > 1e-10) 1 / k else 1)
+  while (X(hi) < b && hi < 1e12 * max(tau_s, 1)) hi <- 2 * hi
+  if (X(hi) < b) Inf else uniroot(function(t) X(t) - b, c(0, hi), tol = 1e-11)$root
+}
+
+.btawl_hit_time <- function(V, z, b, k, tau,
+                            tau_s = tau, tau_t = tau, pi = 0) {
+  if (pi <= 1e-14) return(.btawl_hit_time_transient(V, z, b, k, tau_t))
+  if (pi >= 1 - 1e-14) return(.btawl_hit_time_sustained(V, z, b, k, tau_s))
+  t_T <- .btawl_hit_time_transient(V * (1 - pi), z, b, k, tau_t)
+  t_S <- .btawl_hit_time_sustained(V * pi, z, b, k, tau_s)
+  min(t_T, t_S)
 }
 
 rBTAwL <- function(lR, pars, ok = rep(TRUE, length(lR)),
@@ -216,14 +231,54 @@ rBTAwL <- function(lR, pars, ok = rep(TRUE, length(lR)),
     row <- ok_idx[j]
     tr <- ((row - 1L) %% nr) + 1L
     trial <- ((row - 1L) %/% nr) + 1L
-    z <- pars[j, "A"] * runif(1)
     if (mixed) {
-      dt[tr, trial] <- .btawl_hit_time(V[j], z, pars[j, "b"], pars[j, "k"],
-                                        tau_t_all[ok_idx[j]], pars[j, "tau_s"],
-                                        tau_t_all[ok_idx[j]], pars[j, "pi"])
+      pi_val <- pars[j, "pi"]
+      if (pi_val <= 1e-14) {
+        z <- pars[j, "A"] * runif(1)
+        dt[tr, trial] <- .btawl_hit_time_transient(V[j], z, pars[j, "b"], pars[j, "k"],
+                                                  tau_t_all[ok_idx[j]])
+      } else if (pi_val >= 1 - 1e-14) {
+        z <- pars[j, "A"] * runif(1)
+        dt[tr, trial] <- .btawl_hit_time_sustained(V[j], z, pars[j, "b"], pars[j, "k"],
+                                                  pars[j, "tau_s"])
+      } else {
+        z_T <- pars[j, "A"] * runif(1)
+        z_S <- pars[j, "A"] * runif(1)
+        if (!is.null(.drifts)) {
+          V_S <- V[j] * pi_val
+          V_T <- V[j] * (1 - pi_val)
+        } else {
+          if (launch == 1L) {
+            p1_T <- pars[j, nm[1]] + log(1 - pi_val)
+            p1_S <- pars[j, nm[1]] + log(pi_val)
+            p2_T <- pars[j, nm[2]]
+            p2_S <- pars[j, nm[2]]
+            V_T <- rlnorm(1, p1_T, p2_T)
+            V_S <- rlnorm(1, p1_S, p2_S)
+          } else {
+            p1_T <- pars[j, nm[1]] * (1 - pi_val)
+            p1_S <- pars[j, nm[1]] * pi_val
+            p2_T <- pars[j, nm[2]] * (1 - pi_val)
+            p2_S <- pars[j, nm[2]] * pi_val
+            if (posdrift) {
+              V_T <- msm::rtnorm(1, mean = p1_T, sd = p2_T, lower = 0)
+              V_S <- msm::rtnorm(1, mean = p1_S, sd = p2_S, lower = 0)
+            } else {
+              V_T <- rnorm(1, p1_T, p2_T)
+              V_S <- rnorm(1, p1_S, p2_S)
+            }
+          }
+        }
+        t_T <- .btawl_hit_time_transient(V_T, z_T, pars[j, "b"], pars[j, "k"],
+                                         tau_t_all[ok_idx[j]])
+        t_S <- .btawl_hit_time_sustained(V_S, z_S, pars[j, "b"], pars[j, "k"],
+                                         pars[j, "tau_s"])
+        dt[tr, trial] <- min(t_T, t_S)
+      }
     } else {
-      dt[tr, trial] <- .btawl_hit_time(V[j], z, pars[j, "b"], pars[j, "k"],
-                                       tau_all[ok_idx[j]])
+      z <- pars[j, "A"] * runif(1)
+      dt[tr, trial] <- .btawl_hit_time_transient(V[j], z, pars[j, "b"], pars[j, "k"],
+                                                tau_all[ok_idx[j]])
     }
     dt[tr, trial] <- dt[tr, trial] + pars[j, "t0"]
   }
@@ -337,14 +392,14 @@ BTAwL <- function(posdrift = TRUE,
   )
 }
 
-#' Shared-strength sustained/transient BTAwL
+#' Shared-strength sustained/transient BTAwL (within-accumulator race)
 #'
-#' This is the nested two-channel extension of [BTAwL()].  One trialwise
-#' launch strength multiplies both Smith channels:
-#' `V_S = pi * V`, `V_T = (1 - pi) * V`.  `pi = 0` is exactly the transient-only
-#' BTAwL kernel (with `tau_t` as its transient time constant), so the
-#' transient-only model is a literal submodel rather than a limiting
-#' approximation.
+#' This is the two-channel extension of [BTAwL()]. The transient and steady-state
+#' processes act as independent sub-racers toward the threshold `b`. The
+#' launch strengths for the sustained and transient channels are independent draws
+#' parameterized by `pi` scaling the location and scale parameters.
+#' `pi = 0` recovers the transient-only BTAwL kernel exactly, while `pi = 1`
+#' recovers the pure sustained leaky accumulator.
 #'
 #' @param posdrift Logical. For a normal launch, truncate `V` below zero.
 #' @param drift_distribution Either `"normal"` or `"lognormal"`.

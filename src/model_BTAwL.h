@@ -734,15 +734,9 @@ inline double btawl_log_pdf_chart(double t, double A, double b, double p1,
 // ---------------------------------------------------------------------------
 // Shared-strength sustained + transient extension.
 // ---------------------------------------------------------------------------
-
-struct BtawlMixGeom {
-  bool ok = false;
-  double A = 0.0, b = 0.0, k = 0.0, tau_s = 0.0, tau_t = 0.0, pi = 0.0;
-  double t_peak = R_PosInf;
-  double h_peak = 0.0;
-  double h_inf = R_PosInf;
-  bool finite_peak = false;
-};
+// ---------------------------------------------------------------------------
+// Shared-strength sustained + transient extension.
+// ---------------------------------------------------------------------------
 
 inline double btawl_hs(double t, double k, double tau) {
   if (!(tau > 0.0) || t <= 0.0) return 0.0;
@@ -753,120 +747,72 @@ inline double btawl_hs(double t, double k, double tau) {
   const double y = d * t;
   double ratio;
   if (std::fabs(y) < 1e-4) {
-    // (exp(y) - 1) / d, written as t * expm1(y) / y.
     ratio = t * (1.0 + y * (0.5 + y * (1.0 / 6.0 + y / 24.0)));
   } else {
-    // The direct two-exponential form avoids overflow when d*t is large and
-    // positive, while the series branch above handles cancellation at d = 0.
-    return (1.0 - std::exp(-k * t)) / k -
-      (std::exp(-t / tau) - std::exp(-k * t)) / d;
+    return (1.0 - std::exp(-k * t)) / k - (std::exp(-t / tau) - std::exp(-k * t)) / d;
   }
   return (1.0 - std::exp(-k * t)) / k - std::exp(-k * t) * ratio;
 }
 
-inline double btawl_hmix(double t, double k, double tau_s, double tau_t,
-                         double pi) {
-  return pi * btawl_hs(t, k, tau_s) + (1.0 - pi) * btawl_h(t, k, tau_t);
+inline double btawl_hs_p(double t, double k, double tau) {
+  return (1.0 - std::exp(-t / tau)) - k * btawl_hs(t, k, tau);
 }
 
-inline double btawl_hmix_p(double t, double k, double tau_s, double tau_t,
-                           double pi) {
-  return pi * (1.0 - std::exp(-t / tau_s)) +
-    (1.0 - pi) * btawl_g(t, tau_t) - k * btawl_hmix(t, k, tau_s, tau_t, pi);
-}
-
-inline double btawl_mix_peak(double k, double tau_s, double tau_t, double pi) {
-  if (!(k > BTAWL_K_EPS) || !(tau_s > 0.0) || !(tau_t > 0.0) || !(pi >= 0.0))
-    return R_PosInf;
-  double hi = 2.0 * std::fmax(std::fmax(tau_s, tau_t), 1.0 / k);
-  if (!(btawl_hmix_p(hi, k, tau_s, tau_t, pi) < 0.0)) return R_PosInf;
-  double lo = 0.0;
-  for (int i = 0; i < 100; ++i) {
-    const double mid = 0.5 * (lo + hi);
-    if (btawl_hmix_p(mid, k, tau_s, tau_t, pi) > 0.0) lo = mid; else hi = mid;
-  }
-  return 0.5 * (lo + hi);
-}
-
-inline BtawlMixGeom btawl_mix_geometry(double A, double b, double k,
-                                       double tau_s, double tau_t, double pi) {
-  BtawlMixGeom g;
-  if (!emc2_isfinite(A) || !emc2_isfinite(b) || !emc2_isfinite(k) ||
-      !emc2_isfinite(tau_s) || !emc2_isfinite(tau_t) || !emc2_isfinite(pi) ||
-      !(A >= 0.0) || !(b > 0.0) || !(b >= A) || !(k >= 0.0) ||
-      !(tau_s > 0.0) || !(tau_t > 0.0) || !(pi >= 0.0) || !(pi <= 1.0)) return g;
-  g.ok = true; g.A = A; g.b = b; g.k = k; g.tau_s = tau_s; g.tau_t = tau_t; g.pi = pi;
-  g.h_inf = k <= BTAWL_K_EPS ? (pi > 0.0 ? R_PosInf : tau_t) : pi / k;
-  g.t_peak = btawl_mix_peak(k, tau_s, tau_t, pi);
-  g.finite_peak = emc2_isfinite(g.t_peak);
-  g.h_peak = g.finite_peak ? btawl_hmix(g.t_peak, k, tau_s, tau_t, pi) :
-    (g.h_inf == R_PosInf ? 0.0 : g.h_inf);
-  return g;
-}
-
-inline double btawl_mix_vstar(double t, double z, const BtawlMixGeom& g) {
-  const double h = btawl_hmix(t, g.k, g.tau_s, g.tau_t, g.pi);
-  if (!(h > 0.0)) return R_PosInf;
-  return (g.b - z * std::exp(-g.k * t)) / h;
-}
-
-inline double btawl_mix_d(double t, double z, const BtawlMixGeom& g) {
-  const double h = btawl_hmix(t, g.k, g.tau_s, g.tau_t, g.pi);
-  const double hp = btawl_hmix_p(t, g.k, g.tau_s, g.tau_t, g.pi);
-  const double input = g.pi * (1.0 - std::exp(-t / g.tau_s)) +
-    (1.0 - g.pi) * btawl_g(t, g.tau_t);
-  return z * std::exp(-g.k * t) * input - g.b * hp;
-}
-
-// Closed-form start-point averages on a wholly live mixed limb.  The
-// required launch is affine in z here, so the same normal/lognormal
-// primitives used by the transient kernel apply with H replaced by H_mix.
-inline double btawl_mix_live_cdf(double t, double zlo, double zhi,
-                                 const BtawlMixGeom& g, double p1, double p2,
-                                 int launch, bool posdrift) {
-  if (!(zhi > zlo) || !(p2 > 0.0)) return 0.0;
+inline double btawl_sustained_cdf(double t, double A, double b, double p1, double p2,
+                                  double k, double tau_s, int launch, bool posdrift) {
+  if (!(p2 > 0.0)) return 0.0;
   if (t == R_PosInf) {
-    const double w = (g.k <= BTAWL_K_EPS) ? 0.0 : (g.k * g.b);
-    return (zhi - zlo) * btawl_surv(w, p1, p2, launch, posdrift);
+    const double w = (k <= BTAWL_K_EPS) ? 0.0 : (k * b);
+    return btawl_surv(w, p1, p2, launch, posdrift);
   }
-  const double h = btawl_hmix(t, g.k, g.tau_s, g.tau_t, g.pi);
-  const double E = std::exp(-g.k * t);
+  const double h = btawl_hs(t, k, tau_s);
+  if (!(h > 0.0)) return 0.0;
+  const double E = std::exp(-k * t);
   const double q = E / h;
-  if (!(h > 0.0) || !(q > 0.0) || !emc2_isfinite(q)) return 0.0;
-  const double a = g.b / h;
-  const double whi = a - q * zlo;
-  const double wlo = a - q * zhi;
+  if (!(q > 0.0) || !emc2_isfinite(q)) return 0.0;
+  
+  if (A <= BTAWL_A_EPS) return btawl_surv(b / h, p1, p2, launch, posdrift);
+  
+  const double a = b / h;
+  const double whi = a;
+  const double wlo = a - q * A;
   if (!(wlo > 0.0) || !(whi >= wlo)) return 0.0;
+  
   if (launch == BTAWL_LAUNCH_LOGNORMAL) {
     double s_lo = 0.0, s_hi = 0.0;
     const double val = (lognormal_stoploss_nat(wlo, p1, p2, s_lo) -
                         lognormal_stoploss_nat(whi, p1, p2, s_hi));
-    return (val >= 0.0 && emc2_isfinite(val)) ? val / q : 0.0;
+    return (val >= 0.0 && emc2_isfinite(val)) ? (val / q) / A : 0.0;
   }
+  
   const double c = (p1 - a) / p2;
   const double m = q / p2;
-  if (!(m > 1e-14)) return btawl_surv(0.5 * (wlo + whi), p1, p2,
-                                      launch, posdrift) * (zhi - zlo);
+  if (!(m > 1e-14)) return btawl_surv(0.5 * (wlo + whi), p1, p2, launch, posdrift);
   const double den = btawl_normal_denom(p1, p2, posdrift);
-  const double val = (btawl_J(c + m * zhi) - btawl_J(c + m * zlo)) /
-    m / den;
-  return (val >= 0.0 && emc2_isfinite(val)) ? val : 0.0;
+  const double val = (btawl_J(c + m * A) - btawl_J(c)) / m / den;
+  return (val >= 0.0 && emc2_isfinite(val)) ? val / A : 0.0;
 }
 
-inline double btawl_mix_live_pdf(double t, double zlo, double zhi,
-                                 const BtawlMixGeom& g, double p1, double p2,
-                                 int launch, bool posdrift) {
-  if (!(zhi > zlo) || !(p2 > 0.0) || !(g.A > 0.0)) return 0.0;
-  const double h = btawl_hmix(t, g.k, g.tau_s, g.tau_t, g.pi);
-  const double hp = btawl_hmix_p(t, g.k, g.tau_s, g.tau_t, g.pi);
+inline double btawl_sustained_pdf(double t, double A, double b, double p1, double p2,
+                                  double k, double tau_s, int launch, bool posdrift) {
+  if (!(p2 > 0.0) || !(t > 0.0) || t == R_PosInf) return 0.0;
+  const double h = btawl_hs(t, k, tau_s);
+  const double hp = btawl_hs_p(t, k, tau_s);
   if (!(h > 0.0) || !(hp > 0.0)) return 0.0;
-  const double E = std::exp(-g.k * t);
+  
+  if (A <= BTAWL_A_EPS) {
+     const double v = b / h;
+     return btawl_pdf_v(v, p1, p2, launch, posdrift) * (b * hp / (h * h));
+  }
+  
+  const double E = std::exp(-k * t);
   const double q = E / h;
-  const double w_hi = btawl_mix_vstar(t, zlo, g);
-  const double w_lo = btawl_mix_vstar(t, zhi, g);
-  const double d0 = g.b * hp / (h * h);
-  const double d1 = E * (g.k * h + hp) / (h * h);
-  const double c0 = d0 - d1 * (g.b / h) / q;
+  const double w_hi = b / h;
+  const double w_lo = (b - A * E) / h;
+  
+  const double d0 = b * hp / (h * h);
+  const double d1 = E * (k * h + hp) / (h * h);
+  const double c0 = d0 - d1 * (b / h) / q;
   const double c1 = d1 / q;
   double mass = 0.0, first = 0.0;
   if (launch == BTAWL_LAUNCH_LOGNORMAL) {
@@ -874,8 +820,7 @@ inline double btawl_mix_live_pdf(double t, double zlo, double zhi,
     const double x1 = (std::log(w_hi) - p1) / p2;
     mass = pnorm_std(x1, true, false) - pnorm_std(x0, true, false);
     const double M = std::exp(p1 + 0.5 * p2 * p2);
-    first = M * (pnorm_std(x1 - p2, true, false) -
-                 pnorm_std(x0 - p2, true, false));
+    first = M * (pnorm_std(x1 - p2, true, false) - pnorm_std(x0 - p2, true, false));
   } else {
     const double x0 = (w_lo - p1) / p2;
     const double x1 = (w_hi - p1) / p2;
@@ -884,170 +829,53 @@ inline double btawl_mix_live_pdf(double t, double zlo, double zhi,
     first = (p1 * (pnorm_std(x1, true, false) - pnorm_std(x0, true, false)) +
              p2 * (dnormP(x0) - dnormP(x1))) / den;
   }
-  const double out = (c0 * mass + c1 * first) / (g.A * q);
+  const double out = (c0 * mass + c1 * first) / (A * q);
   return (out > 0.0 && emc2_isfinite(out)) ? out : 0.0;
-}
-
-inline bool btawl_mix_all_live(double t, const BtawlMixGeom& g) {
-  if (t == R_PosInf || !(t > 0.0)) return false;
-  if (g.pi >= 1.0 - 1e-14) return true;
-  if (!(g.finite_peak && t <= g.t_peak)) return false;
-  // d(t,z) is increasing in z.  It is therefore enough to check the upper
-  // endpoint, but it can turn positive and negative again before the mixed
-  // H peak.  A short time scan rules out that prior local minimum without
-  // paying for the full per-z history search.
-  for (int j = 1; j <= 8; ++j) {
-    const double tj = t * static_cast<double>(j) / 8.0;
-    if (!(btawl_mix_d(tj, g.A, g) < 0.0)) return false;
-  }
-  return true;
-}
-
-// Minimum of V*(u,z) over the available history.  The derivative has at most
-// two sign changes for the positive sustained/transient mixture.  We bracket
-// all negative-to-positive changes on a logarithmic time scale, so an
-// overshooting transient and the later sustained asymptote are both retained.
-inline double btawl_mix_min_v(double t, double z, const BtawlMixGeom& g) {
-  const double scale = std::fmax(std::fmax(g.tau_s, g.tau_t),
-                                 g.k > BTAWL_K_EPS ? 1.0 / g.k : g.tau_t);
-  double hi = t;
-  if (!(hi > 0.0) || hi == R_PosInf)
-    hi = g.finite_peak ? std::fmax(g.t_peak * 16.0, scale * 16.0) : scale * 1e4;
-  hi = std::fmax(hi, scale * 1e-8);
-  const double lo = hi * 1e-10;
-  double best = btawl_mix_vstar(hi, z, g);
-  const double h_inf = g.h_inf;
-  if (t == R_PosInf && h_inf > 0.0 && emc2_isfinite(h_inf))
-    best = std::fmin(best, g.b / h_inf);
-  else if (t == R_PosInf && h_inf == R_PosInf)
-    best = 0.0;
-  double prev_t = lo;
-  double prev_d = btawl_mix_d(prev_t, z, g);
-  // A compact logarithmic bracket catches both the transient and sustained
-  // minima with bounded work.
-  const int n = 24;
-  for (int i = 1; i <= n; ++i) {
-    const double frac = static_cast<double>(i) / n;
-    const double cur_t = lo * std::pow(hi / lo, frac);
-    const double cur_d = btawl_mix_d(cur_t, z, g);
-    if (prev_d < 0.0 && cur_d >= 0.0) {
-      double a = prev_t, b = cur_t;
-      for (int it = 0; it < 48; ++it) {
-        const double m = 0.5 * (a + b);
-        if (btawl_mix_d(m, z, g) < 0.0) a = m; else b = m;
-      }
-      best = std::fmin(best, btawl_mix_vstar(0.5 * (a + b), z, g));
-    }
-    prev_t = cur_t; prev_d = cur_d;
-    best = std::fmin(best, btawl_mix_vstar(cur_t, z, g));
-  }
-  if (t < R_PosInf) best = std::fmin(best, btawl_mix_vstar(t, z, g));
-  return best;
-}
-
-struct BtawlMixIntCtx { const BtawlMixGeom* g; double t, p1, p2; int launch; bool posdrift; };
-inline double btawl_mix_cdf_integrand(double z, void* ptr) {
-  const BtawlMixIntCtx& c = *static_cast<BtawlMixIntCtx*>(ptr);
-  return btawl_surv(btawl_mix_min_v(c.t, z, *c.g), c.p1, c.p2,
-                    c.launch, c.posdrift);
-}
-
-inline double btawl_mix_pdf_integrand(double z, void* ptr) {
-  const BtawlMixIntCtx& c = *static_cast<BtawlMixIntCtx*>(ptr);
-  const BtawlMixGeom& g = *c.g;
-  if (!(c.t > 0.0) || c.t == R_PosInf) return 0.0;
-  const double d = btawl_mix_d(c.t, z, g);
-  if (!(d < 0.0)) return 0.0;
-  // A descending limb contributes density only once it has become the
-  // running minimum of V*(u,z).  This matters when a strong transient
-  // overshoots the later sustained asymptote: the interval between the two
-  // minima is frozen, not live.
-  const double t_prev = c.t * (1.0 - 1e-8);
-  if (t_prev > 0.0 && btawl_mix_vstar(c.t, z, g) >
-      btawl_mix_min_v(t_prev, z, g) * (1.0 + 1e-7)) return 0.0;
-  const double h = btawl_hmix(c.t, g.k, g.tau_s, g.tau_t, g.pi);
-  const double hp = btawl_hmix_p(c.t, g.k, g.tau_s, g.tau_t, g.pi);
-  const double E = std::exp(-g.k * c.t);
-  const double vp = (z * g.k * E * h - (g.b - z * E) * hp) / (h * h);
-  return btawl_pdf_v(btawl_mix_vstar(c.t, z, g), c.p1, c.p2,
-                     c.launch, c.posdrift) * (-vp);
-}
-
-inline double btawl_mix_integrate(double (*fn)(double, void*), double A,
-                                  BtawlMixIntCtx& ctx) {
-  if (!(A > 0.0)) return 0.0;
-  gsl_function F; F.function = fn; F.params = &ctx;
-  static thread_local GslWorkspacePtr ws(nullptr, &gsl_integration_workspace_free);
-  gsl_integration_workspace* w = ensure_gsl_workspace(ws);
-  double out = 0.0, err = 0.0;
-  gsl_error_handler_t* old = gsl_set_error_handler_off();
-  const int status = gsl_integration_qags(&F, 0.0, A, 1e-8, 1e-6, 256, w, &out, &err);
-  gsl_set_error_handler(old);
-  return (status == GSL_SUCCESS && emc2_isfinite(out)) ? std::fmax(0.0, out) : 0.0;
 }
 
 inline double btawl_mix_cdf(double t, double A, double b, double p1, double p2,
                             double k, double tau_s, double tau_t, double pi,
                             int launch, bool posdrift) {
-  // Exact nesting: route pi = 0 through the original transient-only kernel,
-  // preserving every last bit of its closed-form evaluation.
-  if (pi <= 1e-14)
-    return btawl_cdf(t, A, b, p1, p2, k, tau_t, launch, posdrift);
-  const BtawlMixGeom g = btawl_mix_geometry(A, b, k, tau_s, tau_t, pi);
-  if (!g.ok || !(p2 > 0.0) || !(t > 0.0)) return 0.0;
-  if (A <= BTAWL_A_EPS) {
-    // With both channels present, H_mix can overshoot its sustained
-    // asymptote.  First passage is governed by the minimum required launch
-    // over the whole history, not by b/H_mix(t) on a later declining limb.
-    const double vreq = btawl_mix_min_v(t, 0.0, g);
-    return btawl_surv(vreq, p1, p2, launch, posdrift);
+  if (pi <= 1e-14) return btawl_cdf(t, A, b, p1, p2, k, tau_t, launch, posdrift);
+  if (pi >= 1.0 - 1e-14) return btawl_sustained_cdf(t, A, b, p1, p2, k, tau_s, launch, posdrift);
+  
+  double p1_S = p1, p2_S = p2;
+  double p1_T = p1, p2_T = p2;
+  if (launch == BTAWL_LAUNCH_LOGNORMAL) {
+    p1_S += std::log(pi);
+    p1_T += std::log(1.0 - pi);
+  } else {
+    p1_S *= pi;      p2_S *= pi;
+    p1_T *= (1.0 - pi); p2_T *= (1.0 - pi);
   }
-  // For a pure sustained channel h_s is monotone, so use the affine-start
-  // average directly over the whole time axis.
-  if (pi >= 1.0 - 1e-14)
-    return std::fmin(std::fmax(
-      btawl_mix_live_cdf(t, 0.0, A, g, p1, p2, launch, posdrift) / A,
-      0.0), 1.0);
-  if (btawl_mix_all_live(t, g)) {
-    const double live = btawl_mix_live_cdf(t, 0.0, A, g, p1, p2,
-                                           launch, posdrift) / A;
-    // The closed form is cancellation-free in the ordinary range, but its
-    // difference of launch primitives eventually loses relative precision in
-    // the extreme lower tail.  Keep the adaptive reference for that tail.
-    if (live > 1e-10) return live;
-  }
-  BtawlMixIntCtx ctx{&g, t, p1, p2, launch, posdrift};
-  return std::fmin(1.0, btawl_mix_integrate(&btawl_mix_cdf_integrand, A, ctx) / A);
+  
+  const double F_T = btawl_cdf(t, A, b, p1_T, p2_T, k, tau_t, launch, posdrift);
+  const double F_S = btawl_sustained_cdf(t, A, b, p1_S, p2_S, k, tau_s, launch, posdrift);
+  return 1.0 - (1.0 - F_T) * (1.0 - F_S);
 }
 
 inline double btawl_mix_pdf(double t, double A, double b, double p1, double p2,
                             double k, double tau_s, double tau_t, double pi,
                             int launch, bool posdrift) {
-  if (pi <= 1e-14)
-    return btawl_pdf(t, A, b, p1, p2, k, tau_t, launch, posdrift);
-  const BtawlMixGeom g = btawl_mix_geometry(A, b, k, tau_s, tau_t, pi);
-  if (!g.ok || !(p2 > 0.0) || !(t > 0.0) || t == R_PosInf) return 0.0;
-  if (A <= BTAWL_A_EPS) {
-    const double h = btawl_hmix(t, k, tau_s, tau_t, pi);
-    const double hp = btawl_hmix_p(t, k, tau_s, tau_t, pi);
-    if (!(h > 0.0) || !(hp > 0.0)) return 0.0;
-    // A mixture can in principle have a transient peak followed by a dip and
-    // a later sustained rise.  Only a rising limb that is still the running
-    // minimum of V*(u, 0) contributes first-passage density.
-    const double t_prev = t * (1.0 - 1e-8);
-    if (t_prev > 0.0 && btawl_mix_vstar(t, 0.0, g) >
-        btawl_mix_min_v(t_prev, 0.0, g) * (1.0 + 1e-7)) return 0.0;
-    return btawl_pdf_v(b / h, p1, p2, launch, posdrift) * b * hp / (h * h);
+  if (pi <= 1e-14) return btawl_pdf(t, A, b, p1, p2, k, tau_t, launch, posdrift);
+  if (pi >= 1.0 - 1e-14) return btawl_sustained_pdf(t, A, b, p1, p2, k, tau_s, launch, posdrift);
+  
+  double p1_S = p1, p2_S = p2;
+  double p1_T = p1, p2_T = p2;
+  if (launch == BTAWL_LAUNCH_LOGNORMAL) {
+    p1_S += std::log(pi);
+    p1_T += std::log(1.0 - pi);
+  } else {
+    p1_S *= pi;      p2_S *= pi;
+    p1_T *= (1.0 - pi); p2_T *= (1.0 - pi);
   }
-  if (pi >= 1.0 - 1e-14)
-    return btawl_mix_live_pdf(t, 0.0, A, g, p1, p2, launch, posdrift) / A;
-  if (btawl_mix_all_live(t, g)) {
-    const double live = btawl_mix_live_pdf(t, 0.0, A, g, p1, p2,
-                                           launch, posdrift);
-    if (live > 1e-10) return live;
-  }
-  BtawlMixIntCtx ctx{&g, t, p1, p2, launch, posdrift};
-  return btawl_mix_integrate(&btawl_mix_pdf_integrand, A, ctx) / A;
+  
+  const double F_T = btawl_cdf(t, A, b, p1_T, p2_T, k, tau_t, launch, posdrift);
+  const double F_S = btawl_sustained_cdf(t, A, b, p1_S, p2_S, k, tau_s, launch, posdrift);
+  const double f_T = btawl_pdf(t, A, b, p1_T, p2_T, k, tau_t, launch, posdrift);
+  const double f_S = btawl_sustained_pdf(t, A, b, p1_S, p2_S, k, tau_s, launch, posdrift);
+  
+  return f_T * (1.0 - F_S) + f_S * (1.0 - F_T);
 }
 
 inline double btawl_mix_cdf_log(double t, double A, double b, double p1, double p2,
@@ -1057,23 +885,73 @@ inline double btawl_mix_cdf_log(double t, double A, double b, double p1, double 
   return p > 0.0 ? std::log(p) : R_NegInf;
 }
 
-// Direct log survivor for the shared-strength mixture.  The CDF integrates a
-// launch survivor over start points; the survivor is the complementary launch
-// CDF at the same running-minimum launch requirement.  Evaluating that CDF in
-// log space avoids losing all tail mass when the transient and sustained
-// channels jointly make response by t nearly certain.
-inline double btawl_launch_logcdf(double v, double p1, double p2,
-                                  int launch, bool posdrift) {
-  if (!(v > 0.0) || !(p2 > 0.0)) return R_NegInf;
-  if (launch == BTAWL_LAUNCH_LOGNORMAL)
-    return pnorm_log_direct((std::log(v) - p1) / p2, true);
-  const double lp = pnorm_log_direct((v - p1) / p2, true);
-  if (!posdrift) return lp;
-  const double ltr = pnorm_log_direct(-p1 / p2, true);
-  const double ld = log_diff_exp(lp, ltr);
-  return (ld > R_NegInf) ? ld - log_positive_normalizer(p1, p2, true,
-                                                         BTAWL_DENOM_FLOOR)
-                         : R_NegInf;
+inline double btawl_mix_pdf_log(double t, double A, double b, double p1, double p2,
+                                double k, double tau_s, double tau_t, double pi,
+                                int launch, bool posdrift) {
+  const double p = btawl_mix_pdf(t, A, b, p1, p2, k, tau_s, tau_t, pi, launch, posdrift);
+  return p > 0.0 ? std::log(p) : R_NegInf;
+}
+
+inline double btawl_sustained_log_surv(double t, double A, double b, double p1, double p2,
+                                       double k, double tau_s, int launch, bool posdrift) {
+  if (!emc2_isfinite(b) || !(p2 > 0.0) || !(t > 0.0)) return R_NegInf;
+  if (t == R_PosInf) {
+    const double w = (k <= BTAWL_K_EPS) ? 0.0 : (k * b);
+    if (!(w > 0.0)) return R_NegInf;
+    if (launch == BTAWL_LAUNCH_LOGNORMAL)
+      return pnorm_log_direct((std::log(w) - p1) / p2, true);
+    const double l = log_normal_cdf_positive_raw(w, p1, p2);
+    return (launch == BTAWL_LAUNCH_NORMAL && posdrift)
+      ? l - log_positive_normalizer(p1, p2, true, BTAWL_DENOM_FLOOR) : l;
+  }
+  const double h = btawl_hs(t, k, tau_s);
+  if (!(h > 0.0)) return 0.0;
+  const double E = std::exp(-k * t);
+  const double q = E / h;
+  if (!(q > 0.0) || !emc2_isfinite(q)) {
+    const double w = b / h;
+    if (launch == BTAWL_LAUNCH_LOGNORMAL)
+      return pnorm_log_direct((std::log(w) - p1) / p2, true);
+    const double l = log_normal_cdf_positive_raw(w, p1, p2);
+    return (launch == BTAWL_LAUNCH_NORMAL && posdrift)
+      ? l - log_positive_normalizer(p1, p2, true, BTAWL_DENOM_FLOOR) : l;
+  }
+  if (A <= BTAWL_A_EPS) {
+    const double w = b / h;
+    if (!(w > 0.0)) return R_NegInf;
+    const double l = launch == BTAWL_LAUNCH_LOGNORMAL
+      ? pnorm_log_direct((std::log(w) - p1) / p2, true)
+      : log_normal_cdf_positive_raw(w, p1, p2);
+    return (launch == BTAWL_LAUNCH_NORMAL && posdrift)
+      ? l - log_positive_normalizer(p1, p2, true, BTAWL_DENOM_FLOOR) : l;
+  }
+  const double a = b / h;
+  const double whi = a;
+  const double wlo = a - q * A;
+  if (!(wlo > 0.0) || !(whi >= wlo)) return R_NegInf;
+  
+  double li = R_NegInf;
+  if (launch == BTAWL_LAUNCH_LOGNORMAL) {
+    const double pa = log_lognormal_put(whi, p1, p2);
+    const double pb = log_lognormal_put(wlo, p1, p2);
+    if (pa - pb > 1e-10) li = log_diff_exp(pa, pb) - std::log(q);
+  } else {
+    const double lo = (wlo - p1) / p2;
+    const double hi = (whi - p1) / p2;
+    const double x = log_normal_phi_integral_positive_raw(lo, hi, p1, p2, posdrift);
+    if (x > R_NegInf) li = x + std::log(p2) - std::log(q);
+  }
+  if (!(li > R_NegInf)) {
+    const double wm = 0.5 * (whi + wlo);
+    const double lm = launch == BTAWL_LAUNCH_LOGNORMAL
+      ? pnorm_log_direct((std::log(wm) - p1) / p2, true)
+      : log_normal_cdf_positive_raw(wm, p1, p2);
+    li = std::log(A) + lm;
+  }
+  double out = li - std::log(A);
+  if (launch == BTAWL_LAUNCH_NORMAL && posdrift)
+    out -= log_positive_normalizer(p1, p2, true, BTAWL_DENOM_FLOOR);
+  return ISNAN(out) ? R_NegInf : std::fmin(out, 0.0);
 }
 
 inline double btawl_mix_log_surv(double t, double A, double b, double p1,
@@ -1082,50 +960,25 @@ inline double btawl_mix_log_surv(double t, double A, double b, double p1,
                                  bool posdrift) {
   if (pi <= 1e-14)
     return btawl_log_surv(t, A, b, p1, p2, k, tau_t, launch, posdrift);
-  const BtawlMixGeom g = btawl_mix_geometry(A, b, k, tau_s, tau_t, pi);
-  if (!g.ok || !(p2 > 0.0) || !(t > 0.0)) return R_NegInf;
-  if (A <= BTAWL_A_EPS) {
-    return btawl_launch_logcdf(btawl_mix_min_v(t, 0.0, g), p1, p2,
-                               launch, posdrift);
+  if (pi >= 1.0 - 1e-14)
+    return btawl_sustained_log_surv(t, A, b, p1, p2, k, tau_s, launch, posdrift);
+  
+  double p1_S = p1, p2_S = p2;
+  double p1_T = p1, p2_T = p2;
+  if (launch == BTAWL_LAUNCH_LOGNORMAL) {
+    p1_S += std::log(pi);
+    p1_T += std::log(1.0 - pi);
+  } else {
+    p1_S *= pi;      p2_S *= pi;
+    p1_T *= (1.0 - pi); p2_T *= (1.0 - pi);
   }
-  if (btawl_mix_all_live(t, g)) {
-    const double h = btawl_hmix(t, g.k, g.tau_s, g.tau_t, g.pi);
-    const double E = std::exp(-g.k * t);
-    const double q = E / h;
-    if (!(h > 0.0) || !(q > 0.0) || !emc2_isfinite(q)) return R_NegInf;
-    const double a = g.b / h;
-    const double whi = a;
-    const double wlo = a - q * g.A;
-    if (!(wlo > 0.0) || !(whi >= wlo)) return R_NegInf;
-    if (launch == BTAWL_LAUNCH_LOGNORMAL) {
-      const double pa = log_lognormal_put(whi, p1, p2);
-      const double pb = log_lognormal_put(wlo, p1, p2);
-      const double li = log_diff_exp(pa, pb);
-      if (li > R_NegInf && whi > wlo)
-        return li - std::log(whi - wlo);
-      return pnorm_log_direct((std::log(0.5 * (wlo + whi)) - p1) / p2, true);
-    }
-    const double log_denom = posdrift ?
-      log_positive_normalizer(p1, p2, true, BTAWL_DENOM_FLOOR) : 0.0;
-    const double li = log_normal_phi_integral_positive_raw(
-      (wlo - p1) / p2, (whi - p1) / p2, p1, p2, posdrift);
-    if (li > R_NegInf && whi > wlo)
-      return li + std::log(p2) - std::log(whi - wlo) - log_denom;
-    return log_normal_cdf_positive_raw(0.5 * (wlo + whi), p1, p2) -
-      log_denom;
-  }
-  const double cdf = btawl_mix_cdf(t, A, b, p1, p2, k, tau_s, tau_t, pi,
-                                   launch, posdrift);
-  return (cdf < 1.0 && cdf >= 0.0) ? std::log1p(-cdf) : R_NegInf;
+  
+  const double ls_T = btawl_log_surv(t, A, b, p1_T, p2_T, k, tau_t, launch, posdrift);
+  const double ls_S = btawl_sustained_log_surv(t, A, b, p1_S, p2_S, k, tau_s, launch, posdrift);
+  
+  if (!(ls_T > R_NegInf) || !(ls_S > R_NegInf)) return R_NegInf;
+  return ls_T + ls_S;
 }
-
-inline double btawl_mix_pdf_log(double t, double A, double b, double p1, double p2,
-                                double k, double tau_s, double tau_t, double pi,
-                                int launch, bool posdrift) {
-  const double p = btawl_mix_pdf(t, A, b, p1, p2, k, tau_s, tau_t, pi, launch, posdrift);
-  return p > 0.0 ? std::log(p) : R_NegInf;
-}
-
 // [[Rcpp::export]]
 NumericVector dbtawl(NumericVector t, NumericVector A, NumericVector b,
                      NumericVector p1, NumericVector p2, NumericVector k,

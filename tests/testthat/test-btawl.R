@@ -600,23 +600,70 @@ test_that("pi = 1 handles the sustained-only member", {
   expect_gt(EMC2:::dBTAwLMix(10, p[5, ]), 0)
 })
 
-test_that("mixed CDF keeps the transient running minimum on a later decline", {
-  tt <- c(0.2, 0.3, 0.5, 1)
-  p <- btawl_mix_rows(length(tt), pi = 0.01, k = 0.5)
-  p[, "b"] <- 0.01
-  p[, "tau_s"] <- 1
-  p[, "tau_t"] <- 0.05
-  cdf <- EMC2:::pBTAwLMix(tt, p)
-  expect_true(all(diff(cdf) >= -1e-12))
-  expect_equal(cdf[3], cdf[4], tolerance = 1e-10)
-})
-
 test_that("the no-leak sustained limit is retained", {
   tt <- c(1, 2, 5, Inf)
   p <- btawl_mix_rows(length(tt), pi = 1, k = 0)
   cdf <- EMC2:::pBTAwLMix(tt, p)
   expect_true(all(diff(cdf) >= -1e-12))
   expect_equal(cdf[length(cdf)], 1, tolerance = 1e-12)
+})
+
+test_that("within-accumulator race CDF and PDF match pure member composition", {
+  tt <- c(0.2, 0.5, 1.0, 1.8, 2.5)
+  for (launch in 0:1) {
+    for (pi_val in c(0.2, 0.5, 0.8)) {
+      p_mix <- btawl_mix_rows(length(tt), launch = launch, pi = pi_val, k = 0.8)
+      p_mix$tau_s <- 1.5; p_mix$tau_t <- 0.6
+      
+      # Transient member parameters
+      p_T <- p_mix
+      p_T$tau <- p_mix$tau_t
+      if (launch == 1L) {
+        p_T$mu <- p_mix$mu + log(1 - pi_val)
+      } else {
+        p_T$v <- p_mix$v * (1 - pi_val)
+        p_T$sv <- p_mix$sv * (1 - pi_val)
+      }
+      
+      # Sustained member parameters
+      p_S <- p_mix
+      p_S$pi <- 1
+      if (launch == 1L) {
+        p_S$mu <- p_mix$mu + log(pi_val)
+      } else {
+        p_S$v <- p_mix$v * pi_val
+        p_S$sv <- p_mix$sv * pi_val
+      }
+      
+      F_T <- EMC2:::pBTAwL(tt, p_T, launch = launch)
+      f_T <- EMC2:::dBTAwL(tt, p_T, launch = launch)
+      F_S <- EMC2:::pBTAwLMix(tt, p_S, launch = launch)
+      f_S <- EMC2:::dBTAwLMix(tt, p_S, launch = launch)
+      
+      F_expected <- 1 - (1 - F_T) * (1 - F_S)
+      f_expected <- f_T * (1 - F_S) + f_S * (1 - F_T)
+      
+      F_got <- EMC2:::pBTAwLMix(tt, p_mix, launch = launch)
+      f_got <- EMC2:::dBTAwLMix(tt, p_mix, launch = launch)
+      
+      expect_equal(F_got, F_expected, tolerance = 1e-12)
+      expect_equal(f_got, f_expected, tolerance = 1e-12)
+    }
+  }
+})
+
+test_that("integrate(dBTAwLMix) matches pBTAwLMix for within-accumulator race", {
+  for (launch in 0:1) {
+    p_mix <- btawl_mix_rows(1, launch = launch, pi = 0.4, k = 0.5)
+    p_mix$tau_s <- 1.2; p_mix$tau_t <- 0.7
+    for (t_eval in c(0.5, 1.2, 2.0)) {
+      I <- stats::integrate(function(x) {
+        p_eval <- p_mix[rep(1, length(x)), ]
+        EMC2:::dBTAwLMix(x, p_eval, launch = launch)
+      }, 1e-8, t_eval, rel.tol = 1e-8)$value
+      expect_equal(I, EMC2:::pBTAwLMix(t_eval, p_mix, launch = launch), tolerance = 1e-6)
+    }
+  }
 })
 
 # ---------------------------------------------------------------------------
