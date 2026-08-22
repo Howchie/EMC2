@@ -994,6 +994,102 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// dbtawl
+NumericVector dbtawl(NumericVector t, NumericVector A, NumericVector b, NumericVector p1, NumericVector p2, NumericVector k, NumericVector tau, int launch, bool posdrift, bool log_out);
+RcppExport SEXP _EMC2_dbtawl(SEXP tSEXP, SEXP ASEXP, SEXP bSEXP, SEXP p1SEXP, SEXP p2SEXP, SEXP kSEXP, SEXP tauSEXP, SEXP launchSEXP, SEXP posdriftSEXP, SEXP log_outSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type t(tSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type A(ASEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type b(bSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type p1(p1SEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type p2(p2SEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type k(kSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type tau(tauSEXP);
+    Rcpp::traits::input_parameter< int >::type launch(launchSEXP);
+    Rcpp::traits::input_parameter< bool >::type posdrift(posdriftSEXP);
+    Rcpp::traits::input_parameter< bool >::type log_out(log_outSEXP);
+    rcpp_result_gen = Rcpp::wrap(dbtawl(t, A, b, p1, p2, k, tau, launch, posdrift, log_out));
+    return rcpp_result_gen;
+END_RCPP
+}
+// pbtawl
+NumericVector pbtawl(NumericVector t, NumericVector A, NumericVector b, NumericVector p1, NumericVector p2, NumericVector k, NumericVector tau, int launch, bool posdrift, bool log_out);
+RcppExport SEXP _EMC2_pbtawl(SEXP tSEXP, SEXP ASEXP, SEXP bSEXP, SEXP p1SEXP, SEXP p2SEXP, SEXP kSEXP, SEXP tauSEXP, SEXP launchSEXP, SEXP posdriftSEXP, SEXP log_outSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type t(tSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type A(ASEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type b(bSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type p1(p1SEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type p2(p2SEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type k(kSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type tau(tauSEXP);
+    Rcpp::traits::input_parameter< int >::type launch(launchSEXP);
+    Rcpp::traits::input_parameter< bool >::type posdrift(posdriftSEXP);
+    Rcpp::traits::input_parameter< bool >::type log_out(log_outSEXP);
+    rcpp_result_gen = Rcpp::wrap(pbtawl(t, A, b, p1, p2, k, tau, launch, posdrift, log_out));
+    return rcpp_result_gen;
+END_RCPP
+}
+// dbtawlmix
+NumericVector dbtawlmix(NumericVector t, NumericVector A, NumericVector b, NumericVector p1, NumericVector p2, NumericVector k, NumericVector tau_s, NumericVector tau_t, NumericVector pi, int launch, bool posdrift, bool log_out);
+RcppExport SEXP _EMC2_dbtawlmix(SEXP tSEXP, SEXP ASEXP, SEXP bSEXP, SEXP p1SEXP, SEXP p2SEXP, SEXP kSEXP, SEXP tau_sSEXP, SEXP tau_tSEXP, SEXP piSEXP, SEXP launchSEXP, SEXP posdriftSEXP, SEXP log_outSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type t(tSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type A(ASEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type b(bSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type p1(p1SEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type p2(p2SEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type k(kSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type tau_s(tau_sSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type tau_t(tau_tSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type pi(piSEXP);
+    Rcpp::traits::input_parameter< int >::type launch(launchSEXP);
+    Rcpp::traits::input_parameter< bool >::type posdrift(posdriftSEXP);
+    Rcpp::traits::input_parameter< bool >::type log_out(log_outSEXP);
+    rcpp_result_gen = Rcpp::wrap(dbtawlmix(t, A, b, p1, p2, k, tau_s, tau_t, pi, launch, posdrift, log_out));
+    return rcpp_result_gen;
+END_RCPP
+}
+// pbtawlmix
+NumericVector pbtawlmix(NumericVector t, NumericVector A, NumericVector b, NumericVector p1, NumericVector p2, NumericVector k, NumericVector tau_s, NumericVector tau_t, NumericVector pi, int launch, bool posdrift, bool log_out);
+RcppExport SEXP _EMC2_pbtawlmix(SEXP tSEXP, SEXP ASEXP, SEXP bSEXP, SEXP p1SEXP, SEXP p2SEXP, SEXP kSEXP, SEXP tau_sSEXP, SEXP tau_tSEXP, SEXP piSEXP, SEXP launchSEXP, SEXP posdriftSEXP, SEXP log_outSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type t(tSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type A(ASEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type b(bSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type p1(p1SEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type p2(p2SEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type k(kSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type tau_s(tau_sSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type tau_t(tau_tSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type pi(piSEXP);
+    Rcpp::traits::input_parameter< int >::type launch(launchSEXP);
+    Rcpp::traits::input_parameter< bool >::type posdrift(posdriftSEXP);
+    Rcpp::traits::input_parameter< bool >::type log_out(log_outSEXP);
+    rcpp_result_gen = Rcpp::wrap(pbtawlmix(t, A, b, p1, p2, k, tau_s, tau_t, pi, launch, posdrift, log_out));
+    return rcpp_result_gen;
+END_RCPP
+}
+// btawl_tmax_vec
+NumericVector btawl_tmax_vec(NumericVector k, NumericVector tau);
+RcppExport SEXP _EMC2_btawl_tmax_vec(SEXP kSEXP, SEXP tauSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type k(kSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type tau(tauSEXP);
+    rcpp_result_gen = Rcpp::wrap(btawl_tmax_vec(k, tau));
+    return rcpp_result_gen;
+END_RCPP
+}
 // dfrq
 NumericVector dfrq(NumericVector t, NumericVector alpha, NumericVector beta, NumericVector h, NumericVector tau, NumericVector delta, bool log_out);
 RcppExport SEXP _EMC2_dfrq(SEXP tSEXP, SEXP alphaSEXP, SEXP betaSEXP, SEXP hSEXP, SEXP tauSEXP, SEXP deltaSEXP, SEXP log_outSEXP) {
@@ -3696,6 +3792,11 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_simulate_bm_hit_times", (DL_FUNC) &_EMC2_simulate_bm_hit_times, 10},
     {"_EMC2_simulate_bm_hit_times_bb", (DL_FUNC) &_EMC2_simulate_bm_hit_times_bb, 14},
     {"_EMC2_simulate_gbm_hit_times_bb", (DL_FUNC) &_EMC2_simulate_gbm_hit_times_bb, 15},
+    {"_EMC2_dbtawl", (DL_FUNC) &_EMC2_dbtawl, 10},
+    {"_EMC2_pbtawl", (DL_FUNC) &_EMC2_pbtawl, 10},
+    {"_EMC2_dbtawlmix", (DL_FUNC) &_EMC2_dbtawlmix, 12},
+    {"_EMC2_pbtawlmix", (DL_FUNC) &_EMC2_pbtawlmix, 12},
+    {"_EMC2_btawl_tmax_vec", (DL_FUNC) &_EMC2_btawl_tmax_vec, 2},
     {"_EMC2_dfrq", (DL_FUNC) &_EMC2_dfrq, 7},
     {"_EMC2_pfrq", (DL_FUNC) &_EMC2_pfrq, 8},
     {"_EMC2_frq_rate", (DL_FUNC) &_EMC2_frq_rate, 5},

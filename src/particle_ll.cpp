@@ -778,6 +778,39 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
     // h = I_p(alpha, beta), and 1 - h of the mass sits at t = +Inf.  There is
     // no parameter setting that removes this, so the flag is unconditional.
     out.ctx.defective_upper_tail = true;
+  } else if (type_std.find("BTAwL_MIX") != std::string::npos) {
+    out.pdf1_ptr       = &dbtawl_mix_scalar;
+    out.cdf1_ptr       = &pbtawl_mix_scalar;
+    out.model_dfun_raw = &dbtawl_mix_raw;
+    out.model_pfun_raw = &pbtawl_mix_raw;
+    out.logS_at_t_ptr  = &btawl_mix_logS_at_t;
+    const bool btawl_logn = (type_std.find("_LOGN") != std::string::npos);
+    out.col_spec = btawl_logn ? emc2col::btawl_mix_logn::spec()
+                              : emc2col::btawl_mix::spec();
+    out.ctx.t0_index = emc2col::btawl_mix::t0;
+    out.ctx.btawl_launch = btawl_logn ? BTAWL_LAUNCH_LOGNORMAL
+                                      : BTAWL_LAUNCH_NORMAL;
+    out.ctx.defective_upper_tail = true;
+    if (!btawl_logn && type_std.find("_IO") != std::string::npos)
+      out.ctx.use_posdrift = false;
+  } else if (type_std.find("BTAwL") != std::string::npos) {
+    // Ballistic transient accumulator with leak:
+    // dX/du = V (u/tau) exp(-u/tau) - k X.  The kernel is analytic on the
+    // live branch and uses only a one-dimensional saturated-start integral.
+    out.pdf1_ptr       = &dbtawl_scalar;
+    out.cdf1_ptr       = &pbtawl_scalar;
+    out.model_dfun_raw = &dbtawl_raw;
+    out.model_pfun_raw = &pbtawl_raw;
+    out.logS_at_t_ptr  = &btawl_logS_at_t;
+    const bool btawl_logn = (type_std.find("_LOGN") != std::string::npos);
+    out.col_spec = btawl_logn ? emc2col::btawl_logn::spec()
+                              : emc2col::btawl::spec();
+    out.ctx.t0_index = emc2col::btawl::t0;
+    out.ctx.btawl_launch = btawl_logn ? BTAWL_LAUNCH_LOGNORMAL
+                                      : BTAWL_LAUNCH_NORMAL;
+    out.ctx.defective_upper_tail = true;
+    if (!btawl_logn && type_std.find("_IO") != std::string::npos)
+      out.ctx.use_posdrift = false;
   } else if (type_std.find("BAwF") != std::string::npos) {
     // Global fading of the whole evidence trace: X(u) = h_rho(u)[z + V u].
     // "BAwF" contains and is contained by none of the other c_names, so its

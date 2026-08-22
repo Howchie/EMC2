@@ -130,6 +130,11 @@ struct ContextForRaceModels {
     // argument of the exported dbawd/pbawd.
     int bawd_launch = BAWD_LAUNCH_LOGNORMAL;
 
+    // BTAwL launch-strength distribution.  This is kept separate from the
+    // BAwD field because both models can be selected by one process and their
+    // adapters may coexist in diagnostics/tests.
+    int btawl_launch = BTAWL_LAUNCH_LOGNORMAL;
+
     // Fixed BAwD clearance-fade exponent parsed from the c_name suffix.
     // Allowed values are mirrored in R/model_BAwD.R.
     double bawd_gamma = 0.0;
@@ -1662,6 +1667,241 @@ inline void pbawd_raw(const double* rt, const double* const* cols, int n_rows,
     if (!R_FINITE(log_cdf)) { out[i] = 0.0; continue; }
     if (log_cdf >= 0.0) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
     out[i] = log1m_exp(log_cdf);
+  }
+}
+
+// ============================================================
+// BTAwL (Ballistic Transient Accumulator with Leak) adapters
+// Column layout: p1=0 (v | mu), p2=1 (sv | sigma), B=2, A=3,
+// t0=4, k=5, tau=6.  There are no timer columns.
+// ============================================================
+
+inline int btawl_launch_of(const ContextForRaceModels* ctx) {
+  return ctx ? ctx->btawl_launch : BTAWL_LAUNCH_LOGNORMAL;
+}
+
+inline double dbtawl_scalar(double t, const double* par, void* ctx_) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  if (R_IsNA(par[emc2col::btawl::v])) return 0.0;
+  const double tt = t - par[emc2col::btawl::t0];
+  if (!(t > 0.0) || !(tt > 0.0)) return 0.0;
+  const double b = par[emc2col::btawl::B] + par[emc2col::btawl::A];
+  return btawl_pdf(tt, par[emc2col::btawl::A], b,
+                   par[emc2col::btawl::v], par[emc2col::btawl::sv],
+                   par[emc2col::btawl::k], par[emc2col::btawl::tau],
+                   btawl_launch_of(ctx), ctx ? ctx->use_posdrift : true);
+}
+
+inline double pbtawl_scalar(double t, const double* par, void* ctx_) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  if (R_IsNA(par[emc2col::btawl::v])) return 0.0;
+  const double tt = t - par[emc2col::btawl::t0];
+  if (!(t > 0.0) || !(tt > 0.0)) return 0.0;
+  const double b = par[emc2col::btawl::B] + par[emc2col::btawl::A];
+  return btawl_cdf(tt, par[emc2col::btawl::A], b,
+                   par[emc2col::btawl::v], par[emc2col::btawl::sv],
+                   par[emc2col::btawl::k], par[emc2col::btawl::tau],
+                   btawl_launch_of(ctx), ctx ? ctx->use_posdrift : true);
+}
+
+inline void dbtawl_raw(const double* rt, const double* const* cols, int n_rows,
+                       const int* mask, const int* isok, double* out,
+                       double min_ll, void* ctx_) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  const bool floor_raw = raw_floor_log_lik(ctx_);
+  const int launch = btawl_launch_of(ctx);
+  const bool pd = ctx ? ctx->use_posdrift : true;
+  const double* p1 = cols[emc2col::btawl::v];
+  const double* p2 = cols[emc2col::btawl::sv];
+  const double* B = cols[emc2col::btawl::B];
+  const double* A = cols[emc2col::btawl::A];
+  const double* t0 = cols[emc2col::btawl::t0];
+  const double* k = cols[emc2col::btawl::k];
+  const double* tau = cols[emc2col::btawl::tau];
+  for (int i = 0; i < n_rows; ++i) {
+    if (!mask[i]) continue;
+    if (!isok[i] || R_IsNA(p1[i])) {
+      out[i] = raw_log_zero(min_ll, floor_raw); continue;
+    }
+    const double tt = rt[i] - t0[i];
+    if (!(rt[i] > 0.0) || !(tt > 0.0)) {
+      out[i] = raw_log_zero(min_ll, floor_raw); continue;
+    }
+    const double lp = btawl_pdf_log(tt, A[i], B[i] + A[i], p1[i], p2[i],
+                                    k[i], tau[i], launch, pd);
+    out[i] = (lp > R_NegInf && emc2_isfinite(lp))
+      ? raw_log_value(lp, min_ll, floor_raw)
+      : raw_log_zero(min_ll, floor_raw);
+  }
+}
+
+inline void pbtawl_raw(const double* rt, const double* const* cols, int n_rows,
+                       const int* mask, const int* isok, double* out,
+                       double min_ll, void* ctx_) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  const bool floor_raw = raw_floor_log_lik(ctx_);
+  const int launch = btawl_launch_of(ctx);
+  const bool pd = ctx ? ctx->use_posdrift : true;
+  const double* p1 = cols[emc2col::btawl::v];
+  const double* p2 = cols[emc2col::btawl::sv];
+  const double* B = cols[emc2col::btawl::B];
+  const double* A = cols[emc2col::btawl::A];
+  const double* t0 = cols[emc2col::btawl::t0];
+  const double* k = cols[emc2col::btawl::k];
+  const double* tau = cols[emc2col::btawl::tau];
+  for (int i = 0; i < n_rows; ++i) {
+    if (!mask[i]) continue;
+    if (!isok[i] || R_IsNA(p1[i])) { out[i] = 0.0; continue; }
+    const double tt = rt[i] - t0[i];
+    if (!(rt[i] > 0.0) || !(tt > 0.0)) { out[i] = 0.0; continue; }
+    const double lc = btawl_cdf_log(tt, A[i], B[i] + A[i], p1[i], p2[i],
+                                    k[i], tau[i], launch, pd);
+    if (!(lc < 0.0)) out[i] = raw_log_zero(min_ll, floor_raw);
+    else out[i] = log1m_exp(lc);
+  }
+}
+
+inline void btawl_logS_at_t(double t, const double* const* cols,
+                            int n_rows_total, int n_lR, int /*n_par*/,
+                            const int* trunc_mask, int n_unique_trials,
+                            const int* isok_all, void* ctx_, double* logS_out) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  const int launch = btawl_launch_of(ctx);
+  const bool pd = ctx ? ctx->use_posdrift : true;
+  const double* p1 = cols[emc2col::btawl::v];
+  const double* p2 = cols[emc2col::btawl::sv];
+  const double* B = cols[emc2col::btawl::B];
+  const double* A = cols[emc2col::btawl::A];
+  const double* t0 = cols[emc2col::btawl::t0];
+  const double* k = cols[emc2col::btawl::k];
+  const double* tau = cols[emc2col::btawl::tau];
+  for (int j = 0; j < n_unique_trials; ++j) {
+    if (!trunc_mask[j]) continue;
+    double ls = 0.0;
+    bool bad = false;
+    for (int kk = 0; kk < n_lR; ++kk) {
+      const int r = j * n_lR + kk;
+      if (r >= n_rows_total || !isok_all[r] || R_IsNA(p1[r])) { bad = true; break; }
+      const double tt = t - t0[r];
+      if (!(tt > 0.0)) continue;
+      const double lc = btawl_cdf_log(tt, A[r], B[r] + A[r], p1[r], p2[r],
+                                      k[r], tau[r], launch, pd);
+      if (!(lc < 0.0)) { bad = true; break; }
+      ls += log1m_exp(lc);
+    }
+    logS_out[j] = bad ? R_NegInf : ls;
+  }
+}
+
+// BTAwL shared-strength sustained/transient mixture.
+inline double dbtawl_mix_scalar(double t, const double* par, void* ctx_) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  if (R_IsNA(par[emc2col::btawl_mix::v])) return 0.0;
+  const double tt = t - par[emc2col::btawl_mix::t0];
+  if (!(t > 0.0) || !(tt > 0.0)) return 0.0;
+  const double b = par[emc2col::btawl_mix::B] + par[emc2col::btawl_mix::A];
+  return btawl_mix_pdf(tt, par[emc2col::btawl_mix::A], b,
+                       par[emc2col::btawl_mix::v], par[emc2col::btawl_mix::sv],
+                       par[emc2col::btawl_mix::k], par[emc2col::btawl_mix::tau_s],
+                       par[emc2col::btawl_mix::tau_t], par[emc2col::btawl_mix::pi],
+                       btawl_launch_of(ctx), ctx ? ctx->use_posdrift : true);
+}
+
+inline double pbtawl_mix_scalar(double t, const double* par, void* ctx_) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  if (R_IsNA(par[emc2col::btawl_mix::v])) return 0.0;
+  const double tt = t - par[emc2col::btawl_mix::t0];
+  if (!(t > 0.0) || !(tt > 0.0)) return 0.0;
+  const double b = par[emc2col::btawl_mix::B] + par[emc2col::btawl_mix::A];
+  return btawl_mix_cdf(tt, par[emc2col::btawl_mix::A], b,
+                       par[emc2col::btawl_mix::v], par[emc2col::btawl_mix::sv],
+                       par[emc2col::btawl_mix::k], par[emc2col::btawl_mix::tau_s],
+                       par[emc2col::btawl_mix::tau_t], par[emc2col::btawl_mix::pi],
+                       btawl_launch_of(ctx), ctx ? ctx->use_posdrift : true);
+}
+
+inline void dbtawl_mix_raw(const double* rt, const double* const* cols, int n_rows,
+                           const int* mask, const int* isok, double* out,
+                           double min_ll, void* ctx_) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  const bool floor_raw = raw_floor_log_lik(ctx_);
+  const int launch = btawl_launch_of(ctx); const bool pd = ctx ? ctx->use_posdrift : true;
+  const double* p1 = cols[emc2col::btawl_mix::v];
+  const double* p2 = cols[emc2col::btawl_mix::sv];
+  const double* B = cols[emc2col::btawl_mix::B];
+  const double* A = cols[emc2col::btawl_mix::A];
+  const double* t0 = cols[emc2col::btawl_mix::t0];
+  const double* k = cols[emc2col::btawl_mix::k];
+  const double* ts = cols[emc2col::btawl_mix::tau_s];
+  const double* tt = cols[emc2col::btawl_mix::tau_t];
+  const double* pi = cols[emc2col::btawl_mix::pi];
+  for (int i = 0; i < n_rows; ++i) {
+    if (!mask[i]) continue;
+    if (!isok[i] || R_IsNA(p1[i])) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
+    const double u = rt[i] - t0[i];
+    if (!(rt[i] > 0.0) || !(u > 0.0)) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
+    const double lp = btawl_mix_pdf_log(u, A[i], B[i] + A[i], p1[i], p2[i], k[i],
+                                        ts[i], tt[i], pi[i], launch, pd);
+    out[i] = (lp > R_NegInf && emc2_isfinite(lp))
+      ? raw_log_value(lp, min_ll, floor_raw) : raw_log_zero(min_ll, floor_raw);
+  }
+}
+
+inline void pbtawl_mix_raw(const double* rt, const double* const* cols, int n_rows,
+                           const int* mask, const int* isok, double* out,
+                           double min_ll, void* ctx_) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  const bool floor_raw = raw_floor_log_lik(ctx_);
+  const int launch = btawl_launch_of(ctx); const bool pd = ctx ? ctx->use_posdrift : true;
+  const double* p1 = cols[emc2col::btawl_mix::v];
+  const double* p2 = cols[emc2col::btawl_mix::sv];
+  const double* B = cols[emc2col::btawl_mix::B];
+  const double* A = cols[emc2col::btawl_mix::A];
+  const double* t0 = cols[emc2col::btawl_mix::t0];
+  const double* k = cols[emc2col::btawl_mix::k];
+  const double* ts = cols[emc2col::btawl_mix::tau_s];
+  const double* tt = cols[emc2col::btawl_mix::tau_t];
+  const double* pi = cols[emc2col::btawl_mix::pi];
+  for (int i = 0; i < n_rows; ++i) {
+    if (!mask[i]) continue;
+    if (!isok[i] || R_IsNA(p1[i])) { out[i] = 0.0; continue; }
+    const double u = rt[i] - t0[i];
+    if (!(rt[i] > 0.0) || !(u > 0.0)) { out[i] = 0.0; continue; }
+    const double lc = btawl_mix_cdf_log(u, A[i], B[i] + A[i], p1[i], p2[i], k[i],
+                                        ts[i], tt[i], pi[i], launch, pd);
+    if (!(lc < 0.0)) out[i] = raw_log_zero(min_ll, floor_raw);
+    else out[i] = log1m_exp(lc);
+  }
+}
+
+inline void btawl_mix_logS_at_t(double t, const double* const* cols,
+                                int n_rows_total, int n_lR, int /*n_par*/,
+                                const int* trunc_mask, int n_unique_trials,
+                                const int* isok_all, void* ctx_, double* out) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  const int launch = btawl_launch_of(ctx); const bool pd = ctx ? ctx->use_posdrift : true;
+  const double* p1 = cols[emc2col::btawl_mix::v];
+  const double* p2 = cols[emc2col::btawl_mix::sv];
+  const double* B = cols[emc2col::btawl_mix::B];
+  const double* A = cols[emc2col::btawl_mix::A];
+  const double* t0 = cols[emc2col::btawl_mix::t0];
+  const double* k = cols[emc2col::btawl_mix::k];
+  const double* ts = cols[emc2col::btawl_mix::tau_s];
+  const double* tt = cols[emc2col::btawl_mix::tau_t];
+  const double* pi = cols[emc2col::btawl_mix::pi];
+  for (int j = 0; j < n_unique_trials; ++j) {
+    if (!trunc_mask[j]) continue;
+    double ls = 0.0; bool bad = false;
+    for (int kk = 0; kk < n_lR; ++kk) {
+      const int r = j * n_lR + kk;
+      if (r >= n_rows_total || !isok_all[r] || R_IsNA(p1[r])) { bad = true; break; }
+      const double u = t - t0[r]; if (!(u > 0.0)) continue;
+      const double lc = btawl_mix_cdf_log(u, A[r], B[r] + A[r], p1[r], p2[r], k[r],
+                                          ts[r], tt[r], pi[r], launch, pd);
+      if (!(lc < 0.0)) { bad = true; break; }
+      ls += log1m_exp(lc);
+    }
+    out[j] = bad ? R_NegInf : ls;
   }
 }
 

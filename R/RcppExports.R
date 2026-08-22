@@ -209,6 +209,26 @@ simulate_gbm_hit_times_bb <- function(n, mu, sigma, z0, b0, binf, tau = 1.0, pow
     .Call(`_EMC2_simulate_gbm_hit_times_bb`, n, mu, sigma, z0, b0, binf, tau, pow, dt, t_max, start_floor, p_tol, eps_curv, adapt_factor, adaptive)
 }
 
+dbtawl <- function(t, A, b, p1, p2, k, tau, launch = 1L, posdrift = TRUE, log_out = FALSE) {
+    .Call(`_EMC2_dbtawl`, t, A, b, p1, p2, k, tau, launch, posdrift, log_out)
+}
+
+pbtawl <- function(t, A, b, p1, p2, k, tau, launch = 1L, posdrift = TRUE, log_out = FALSE) {
+    .Call(`_EMC2_pbtawl`, t, A, b, p1, p2, k, tau, launch, posdrift, log_out)
+}
+
+dbtawlmix <- function(t, A, b, p1, p2, k, tau_s, tau_t, pi, launch = 1L, posdrift = TRUE, log_out = FALSE) {
+    .Call(`_EMC2_dbtawlmix`, t, A, b, p1, p2, k, tau_s, tau_t, pi, launch, posdrift, log_out)
+}
+
+pbtawlmix <- function(t, A, b, p1, p2, k, tau_s, tau_t, pi, launch = 1L, posdrift = TRUE, log_out = FALSE) {
+    .Call(`_EMC2_pbtawlmix`, t, A, b, p1, p2, k, tau_s, tau_t, pi, launch, posdrift, log_out)
+}
+
+btawl_tmax_vec <- function(k, tau) {
+    .Call(`_EMC2_btawl_tmax_vec`, k, tau)
+}
+
 dfrq <- function(t, alpha, beta, h, tau, delta = as.numeric( c(0.0)), log_out = FALSE) {
     .Call(`_EMC2_dfrq`, t, alpha, beta, h, tau, delta, log_out)
 }

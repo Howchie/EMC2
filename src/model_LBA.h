@@ -1098,5 +1098,6 @@ NumericVector plba(NumericVector t,
 // helpers, so it follows it.
 #include "model_BAwF.h"
 #include "model_BAwR.h"
+#include "model_BTAwL.h"
 
 #endif

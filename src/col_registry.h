@@ -179,6 +179,38 @@ namespace bawr_logn {
   }
 }
 
+// R/model_BTAwL.R — BTAwL (transient pulse with state leak).  As with the
+// other ballistic launch models, the first two positions are either (v, sv)
+// or (mu, sigma); only the names differ for the lognormal member.
+namespace btawl {
+  enum : int { v = 0, sv, B, A, t0, k, tau, N_REQ };
+  inline ColSpec spec() {
+    static const char* n[] = {"v", "sv", "B", "A", "t0", "k", "tau"};
+    return {n, N_REQ, "BTAwL"};
+  }
+}
+namespace btawl_logn {
+  enum : int { mu = 0, sigma, B, A, t0, k, tau, N_REQ };
+  inline ColSpec spec() {
+    static const char* n[] = {"mu", "sigma", "B", "A", "t0", "k", "tau"};
+    return {n, N_REQ, "BTAwL_LOGN"};
+  }
+}
+namespace btawl_mix {
+  enum : int { v = 0, sv, B, A, t0, k, tau_s, tau_t, pi, N_REQ };
+  inline ColSpec spec() {
+    static const char* n[] = {"v", "sv", "B", "A", "t0", "k", "tau_s", "tau_t", "pi"};
+    return {n, N_REQ, "BTAwL_MIX"};
+  }
+}
+namespace btawl_mix_logn {
+  enum : int { mu = 0, sigma, B, A, t0, k, tau_s, tau_t, pi, N_REQ };
+  inline ColSpec spec() {
+    static const char* n[] = {"mu", "sigma", "B", "A", "t0", "k", "tau_s", "tau_t", "pi"};
+    return {n, N_REQ, "BTAwL_MIX_LOGN"};
+  }
+}
+
 // R/model_BAwD.R — BAwDp (proportional-clearance drive clock).  As with BAwL,
 // the launch pair occupies the first two positions; only the names differ for
 // the lognormal launch.  `lambda` is the dimensionless clearance fraction.
