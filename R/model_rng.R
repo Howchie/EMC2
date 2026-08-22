@@ -70,7 +70,8 @@
     res <- rroup_cpp(
       pars, levels(lR), ok, kind,
       dt = getOption("emc2.roup_sim_dt", 1e-3),
-      t_max = getOption("emc2.roup_sim_tmax", 30)
+      t_max = getOption("emc2.roup_sim_tmax", 30),
+      par_kind = .ROUp_PAR[[par]]
     )
     out <- .rfun_cpp_pack(
       res, levels(lR), length(lR) / length(levels(lR))

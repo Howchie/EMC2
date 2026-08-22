@@ -26,19 +26,20 @@
 .ROUp_SUFFIX <- c(fixed = "", weibull = "_BWEIB", exponential = "_BEXP",
                  linear_additive = "_BLIN_ADD", linear_multiplicative = "_BLIN_MULT")
 
-# Parameterisation codes, matching fperace::ROUp_PAR_* in src/fpe_race.h, and the
-# c_name infix that tells the C++ adapter which one is in play. The infix comes
-# before the boundary suffix, so ROUpCURV_BEXP is a curvature-parameterised model
-# with an exponentially collapsing bound.
-.ROUp_PAR <- c(rate = 0L, curvature = 1L, equilibrium = 2L)
-.ROUp_PAR_INFIX <- c(rate = "", curvature = "CURV", equilibrium = "EQ")
+# Parameterisation codes, matching fperace::ROUP_PAR_* in src/fpe_race.h, and the
+# c_name infix that tells the C++ adapter which transient chart is in play. The
+# infix comes before the boundary suffix, so ROUpAREA_BEXP is the area chart with
+# an exponentially collapsing bound.
+.ROUp_PAR <- c(rate = 0L, area = 1L)
+.ROUp_PAR_INFIX <- c(rate = "", area = "AREA")
 
-# The three columns each parameterisation puts in place of (v, k, s).
-.ROUp_PAR_COLS <- list(rate = c("v", "k", "s"),
-                      curvature = c("tstar", "k", "s"),
-                      equilibrium = c("tk", "theta", "chi"))
+# The transient columns supplied by each chart. The sustained channel (v_S,
+# tau_S) remains present in both charts.
+.ROUp_PAR_COLS <- list(rate = c("v_T", "tau_T"),
+                      area = c("E_T", "tau_T"))
 
 .roup_cols <- function(pars, par = "rate") {
+  par <- match.arg(par, names(.ROUp_PAR))
   n <- nrow(pars)
   cn <- dimnames(pars)[[2]]
   bkind <- if (!("Binf" %in% cn) || !("tau" %in% cn)) .ROUp_BND[["fixed"]]
@@ -47,7 +48,7 @@
   B <- pars[, "B"]
   A <- if ("A" %in% cn) pars[, "A"] else rep(0, n)
   v_S <- pars[, "v_S"]
-  v_T <- pars[, "v_T"]
+  v_T <- pars[, if (par == "area") "E_T" else "v_T"]
   tau_S <- pars[, "tau_S"]
   tau_T <- pars[, "tau_T"]
   k <- if ("k" %in% cn) pars[, "k"] else rep(0, n)
@@ -97,7 +98,7 @@
   }
   out <- droup_cpp(rt, p$v_S, p$v_T, p$tau_S, p$tau_T, p$k, p$B, p$A, p$t0, p$s,
                    as.integer(g$nx), g$dt_target, g$grade, g$tgrade,
-                   p$bkind, p$Binf, p$tau, p$pw)
+                   p$bkind, p$Binf, p$tau, p$pw, .ROUp_PAR[[par]])
   if (any(bad)) {
     out$pdf[bad] <- 0
     out$cdf[bad] <- ifelse(!bad_par[bad] & rt_pos_inf[bad], 1, 0)
@@ -128,7 +129,8 @@ rROUp <- function(lR, pars, ok = rep(TRUE, nrow(pars)), kind = NULL,
                                      p$s[ok2], dt, t_max, p$bkind,
                                      if (p$bkind == 0L) numeric(0) else p$Binf[ok2],
                                      if (p$bkind == 0L) numeric(0) else p$tau[ok2],
-                                     if (length(p$pw)) p$pw[ok2] else numeric(0))
+                                     if (length(p$pw)) p$pw[ok2] else numeric(0),
+                                     .ROUp_PAR[[par]])
   }
   bad_col <- apply(dt_mat, 2, function(x) all(is.infinite(x)))
   R <- max.col(-t(dt_mat), ties.method = "first")
@@ -210,9 +212,12 @@ rROUp <- function(lR, pars, ok = rep(TRUE, nrow(pars)), kind = NULL,
   if (any(ok2)) {
     idx <- which(ok2)
     hits <- numeric(length(idx))
+    v_T_rate <- if (par == "area") {
+      ifelse(is.finite(p$tau_T) & p$tau_T > 0, p$v_T / p$tau_T, 0)
+    } else p$v_T
     for (j in seq_along(idx)) {
       i <- idx[j]
-      hits[j] <- .sim_one(p$v_S[i], p$v_T[i], p$tau_S[i], p$tau_T[i],
+      hits[j] <- .sim_one(p$v_S[i], v_T_rate[i], p$tau_S[i], p$tau_T[i],
                           p$k[i], p$B[i], p$A[i], p$s[i], p$bkind,
                           if (length(p$Binf) >= i) p$Binf[i] else 0,
                           if (length(p$tau) >= i) p$tau[i] else 0,
@@ -243,6 +248,8 @@ rROUp <- function(lR, pars, ok = rep(TRUE, nrow(pars)), kind = NULL,
 #' \deqn{dX = (\mu(t) - k X) dt + s dW,\quad X(0) \sim U(0, A),}
 #' absorbed at \eqn{b = B + A}, where the instantaneous drift rate \eqn{\mu(t)} is:
 #' \deqn{\mu(t) = \mu_S(t) + \mu_T(t) = v_S (1 - e^{-t/\tau_S}) + v_T \left(\frac{t}{\tau_T}\right) e^{-t/\tau_T}.}
+#' In the `area` parameterisation, `v_T` is replaced by \eqn{E_T/\tau_T},
+#' where \eqn{E_T = v_T\tau_T} is the integrated transient evidence.
 #'
 #' @details
 #'
@@ -253,6 +260,7 @@ rROUp <- function(lR, pars, ok = rep(TRUE, nrow(pars)), kind = NULL,
 #' |-----------|-----------|---------------|-----------|------------------|---------------------------------------------------------------|
 #' | *v_S*     | log       | \[0, Inf\]      | log(1)    |                  | Sustained channel asymptotic drift rate                        |
 #' | *v_T*     | log       | \[0, Inf\]      | log(1)    |                  | Transient channel peak drift rate factor                       |
+#' | *E_T*     | log       | \[0, Inf\]      | log(1)    |                  | Integrated transient evidence (`area` only)                     |
 #' | *tau_S*   | log       | \[0, Inf\]      | log(1)    |                  | Time constant of sustained low-pass filter                     |
 #' | *tau_T*   | log       | \[0, Inf\]      | log(1)    |                  | Time constant of transient band-pass filter (peak at \eqn{\tau_T}) |
 #' | *k*       | log       | \[0, Inf\]      | log(0)    |                  | Leak rate in units of 1/time; *k* = 0 is the Wiener race       |
@@ -265,9 +273,10 @@ rROUp <- function(lR, pars, ok = rep(TRUE, nrow(pars)), kind = NULL,
 #'
 #' # Scale identification
 #'
-#' Scaling the state shows the dynamics depend only on
-#' \eqn{(v_S/s, v_T/s, k, B/s, A/s)} — quantities relative to *s*. Fix `s` (usually
-#' `constants = c(s = log(1))`).
+#' Scaling the state shows the rate chart depends only on
+#' \eqn{(v_S/s, v_T/s, k, B/s, A/s)} — quantities relative to *s*. In the `area`
+#' chart, the corresponding transient coordinate is \eqn{E_T/s}; \eqn{\tau_T}
+#' is unchanged. Fix `s` (usually `constants = c(s = log(1))`).
 #'
 #' Response-time compression is disabled for this model because the solver
 #' evaluates the continuous-time density directly; binning would add flooring
@@ -297,8 +306,10 @@ rROUp <- function(lR, pars, ok = rep(TRUE, nrow(pars)), kind = NULL,
 #'   `Binf` is measured from zero, so the boundary may collapse into the
 #'   start-point range. Setting `Binf = B + A` gives the fixed-boundary model.
 #'
-#' @param parameterization Character; parameterisation type. Currently `"rate"`
-#'   is supported.
+#' @param parameterization Character; transient parameterisation type. `"rate"`
+#'   uses `(v_T, tau_T)`. `"area"` uses `(E_T, tau_T)`, where
+#'   `E_T = v_T * tau_T`; the sustained `(v_S, tau_S)` channel is retained in
+#'   both charts.
 #'
 #' @return A list defining the cognitive model
 #' @examples
@@ -314,7 +325,7 @@ rROUp <- function(lR, pars, ok = rep(TRUE, nrow(pars)), kind = NULL,
 
 ROUp <- function(boundary_collapse = c("fixed", "exponential", "linear_additive",
                                       "linear_multiplicative", "weibull"),
-                parameterization = c("rate", "curvature", "equilibrium")) {
+                parameterization = c("rate", "area")) {
   boundary_collapse <- match.arg(boundary_collapse)
   parameterization <- match.arg(parameterization)
   kind <- boundary_collapse
@@ -331,8 +342,21 @@ ROUp <- function(boundary_collapse = c("fixed", "exponential", "linear_additive"
                     k = c(0, Inf), B = c(0, Inf),
                     A = c(1e-4, Inf), t0 = c(0.05, Inf), s = c(0, Inf))
     exception <- c(A = 0, v_S = 0, v_T = 0, tau_S = 0, tau_T = 0, k = 0)
+  } else if (par == "area") {
+    p_types <- c("v_S" = log(1), "E_T" = log(1), "tau_S" = log(1), "tau_T" = log(1),
+                 "k" = log(0), "B" = log(1), "A" = log(0),
+                 "t0" = log(0), "s" = log(1))
+    transform <- c(v_S = "exp", E_T = "exp", tau_S = "exp", tau_T = "exp",
+                   k = "exp", B = "exp", A = "exp", t0 = "exp", s = "exp")
+    minmax <- cbind(v_S = c(1e-3, Inf), E_T = c(1e-3, Inf),
+                    tau_S = c(1e-3, Inf), tau_T = c(1e-3, Inf),
+                    k = c(0, Inf), B = c(0, Inf),
+                    A = c(1e-4, Inf), t0 = c(0.05, Inf), s = c(0, Inf))
+    # tau_T remains strictly positive in this chart: E_T/tau_T is undefined
+    # at a zero time constant, even when E_T is fixed at its zero exception.
+    exception <- c(A = 0, v_S = 0, E_T = 0, tau_S = 0, k = 0)
   } else {
-    stop("ROUp only supports the 'rate' parameterization.")
+    stop("ROUp parameterization must be 'rate' or 'area'.")
   }
 
   # Collapsing forms append only the columns they use. Binf is measured from

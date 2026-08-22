@@ -641,8 +641,15 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
     out.ctx.defective_upper_tail = out.ctx.is_global_kill;
     out.ctx.fpe_cache  = std::make_shared<fperace::SolveCache>();
     roup_configure_cache(*out.ctx.fpe_cache);
-    out.col_spec       = emc2col::roup::spec();
-    out.ctx.t0_index   = emc2col::roup::t0;
+    if (type_std.find("ROUpAREA") != std::string::npos) {
+      out.ctx.fpe_cache->par_kind = fperace::ROUP_PAR_AREA;
+      out.col_spec       = emc2col::roup_area::spec();
+      out.ctx.t0_index   = emc2col::roup_area::t0;
+    } else {
+      out.ctx.fpe_cache->par_kind = fperace::ROUP_PAR_RATE;
+      out.col_spec       = emc2col::roup::spec();
+      out.ctx.t0_index   = emc2col::roup::t0;
+    }
     if (type_std.find("_BWEIB") != std::string::npos)
       out.ctx.fpe_cache->bnd_kind = fpe::FPE_BND_WEIBULL;
     else if (type_std.find("_BEXP") != std::string::npos)

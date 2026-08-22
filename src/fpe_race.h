@@ -240,6 +240,14 @@ enum : int {
   ROU_PAR_EQUILIBRIUM = 2
 };
 
+// ROUp keeps the sustained channel in the same (v_S, tau_S) coordinates in
+// every chart. Its transient alternative replaces v_T by E_T = v_T * tau_T;
+// the solver and cache continue to use the canonical rate v_T.
+enum : int {
+  ROUP_PAR_RATE = 0,
+  ROUP_PAR_AREA = 1
+};
+
 // (p1, p2, p3) are the parameterisation's own three columns, in p_types order.
 // Unrepresentable input becomes NaN rather than a silently substituted value,
 // so rou_key()'s finiteness test rejects the row exactly as it does for a bad
@@ -359,6 +367,29 @@ inline bool roup_key(double v_S, double v_T, double tau_S, double tau_T, double 
         (!(bs.pw > 0.0) || !std::isfinite(bs.pw))) return false;
   }
   return out.finite() && out.b > 0.0;
+}
+
+inline bool roup_transient_to_rate(int par_kind, double transient, double tau_T,
+                                   double& v_T) {
+  if (!std::isfinite(transient) || !std::isfinite(tau_T)) return false;
+  if (par_kind == ROUP_PAR_RATE) {
+    v_T = transient;
+    return true;
+  }
+  if (par_kind != ROUP_PAR_AREA || !(tau_T > 0.0)) return false;
+  v_T = transient / tau_T;
+  return std::isfinite(v_T);
+}
+
+// Map a raw ROUp chart to the canonical pulse-rate chart before state scaling
+// and key construction. Keeping this map next to roup_key makes the sampled
+// likelihood, scalar censoring path, and R-facing vector path share one algebra.
+inline bool roup_key_par(int par_kind, double v_S, double transient,
+                         double tau_S, double tau_T, double k, double B,
+                         double A, double s, const BndSpec& bs, Key& out) {
+  double v_T = 0.0;
+  if (!roup_transient_to_rate(par_kind, transient, tau_T, v_T)) return false;
+  return roup_key(v_S, v_T, tau_S, tau_T, k, B, A, s, bs, out);
 }
 
 // Fixed-boundary overload for ROUp.

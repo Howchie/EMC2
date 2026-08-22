@@ -459,16 +459,20 @@ Rcpp::List droup_cpp(NumericVector rt, NumericVector v_S, NumericVector v_T,
                      double tgrade = 32.0, int bkind = 0,
                      NumericVector Binf = NumericVector::create(),
                      NumericVector tau = NumericVector::create(),
-                     NumericVector pw = NumericVector::create()) {
+                     NumericVector pw = NumericVector::create(),
+                     int par_kind = 0) {
   const int n = rt.size();
   if (v_S.size() != n || v_T.size() != n || tau_S.size() != n || tau_T.size() != n ||
       k.size() != n || B.size() != n || A.size() != n || t0.size() != n || s.size() != n) {
     stop("droup_cpp: all parameter vectors must match length(rt).");
   }
+  if (par_kind != fperace::ROUP_PAR_RATE && par_kind != fperace::ROUP_PAR_AREA)
+    stop("droup_cpp: unknown ROUp parameterization code.");
   check_bnd_lengths(bkind, Binf, tau, pw, n, "droup_cpp");
 
   NumericVector pdf(n, 0.0), cdf(n, 0.0);
   fperace::SolveCache C;
+  C.par_kind = par_kind;
   C.grid = rou_grid(nx, dt_target, grade, tgrade);
   SEXP sparse = Rf_GetOption1(Rf_install("emc2.rou_sparse_output"));
   if (sparse != R_NilValue && Rf_length(sparse) > 0) {
@@ -485,8 +489,9 @@ Rcpp::List droup_cpp(NumericVector rt, NumericVector v_S, NumericVector v_T,
     const double tt = rt[i] - t0[i];
     if (!R_finite(tt) || tt <= 0.0) continue;
     fperace::Key p;
-    if (!fperace::roup_key(v_S[i], v_T[i], tau_S[i], tau_T[i], k[i], B[i], A[i], s[i],
-                           rou_bnd_at(bkind, Binf, tau, pw, i), p)) continue;
+    if (!fperace::roup_key_par(par_kind, v_S[i], v_T[i], tau_S[i], tau_T[i],
+                               k[i], B[i], A[i], s[i],
+                               rou_bnd_at(bkind, Binf, tau, pw, i), p)) continue;
     int g = -1;
     for (size_t j = 0; j < keys.size(); ++j) {
       if (keys[j] == p) { g = static_cast<int>(j); break; }
@@ -529,7 +534,8 @@ Rcpp::List droup_cpp(NumericVector rt, NumericVector v_S, NumericVector v_T,
 
 // [[Rcpp::export]]
 Rcpp::List rroup_cpp(NumericMatrix pars, CharacterVector lR_levels, LogicalVector ok,
-                     SEXP kind_sexp = R_NilValue, double dt = 1e-3, double t_max = 30.0) {
+                     SEXP kind_sexp = R_NilValue, double dt = 1e-3, double t_max = 30.0,
+                     int par_kind = 0) {
   const int n_acc = lR_levels.size();
   const int n_rows = pars.nrow();
   if (n_acc <= 0 || n_rows % n_acc != 0) {
@@ -541,16 +547,19 @@ Rcpp::List rroup_cpp(NumericMatrix pars, CharacterVector lR_levels, LogicalVecto
   if (!(dt > 0.0) || !R_finite(dt) || !(t_max > 0.0) || !R_finite(t_max)) {
     stop("rroup_cpp: dt and t_max must be finite and positive.");
   }
+  if (par_kind != fperace::ROUP_PAR_RATE && par_kind != fperace::ROUP_PAR_AREA)
+    stop("rroup_cpp: unknown ROUp parameterization code.");
   const int n_trials = n_rows / n_acc;
 
   CharacterVector col_names = colnames(pars);
-  int iv_S = -1, iv_T = -1, itau_S = -1, itau_T = -1;
+  int iv_S = -1, iv_T = -1, iE_T = -1, itau_S = -1, itau_T = -1;
   int ik = -1, is = -1, iB = -1, iA = -1, it0 = -1;
   int iBinf = -1, itau = -1, ipw = -1;
   for (int j = 0; j < col_names.size(); ++j) {
     std::string nm = Rcpp::as<std::string>(col_names[j]);
     if (nm == "v_S") iv_S = j;
     else if (nm == "v_T") iv_T = j;
+    else if (nm == "E_T") iE_T = j;
     else if (nm == "tau_S") itau_S = j;
     else if (nm == "tau_T") itau_T = j;
     else if (nm == "k") ik = j;
@@ -562,8 +571,9 @@ Rcpp::List rroup_cpp(NumericMatrix pars, CharacterVector lR_levels, LogicalVecto
     else if (nm == "tau") itau = j;
     else if (nm == "pw") ipw = j;
   }
-  if (iv_S < 0 || iv_T < 0 || itau_S < 0 || itau_T < 0 || iB < 0 || it0 < 0) {
-    stop("rroup_cpp: pars matrix must contain v_S, v_T, tau_S, tau_T, B, t0 columns.");
+  const int iTransient = (par_kind == fperace::ROUP_PAR_AREA) ? iE_T : iv_T;
+  if (iv_S < 0 || iTransient < 0 || itau_S < 0 || itau_T < 0 || iB < 0 || it0 < 0) {
+    stop("rroup_cpp: pars matrix must contain v_S, v_T/E_T, tau_S, tau_T, B, t0 columns.");
   }
 
   int bkind = fpe::FPE_BND_FIXED;
@@ -602,9 +612,11 @@ Rcpp::List rroup_cpp(NumericMatrix pars, CharacterVector lR_levels, LogicalVecto
       if (!R_finite(BB)) continue;
       double AA = (iA >= 0 && R_finite(pars(r, iA)) && pars(r, iA) > 0.0) ? pars(r, iA) : 0.0;
       double vvS = pars(r, iv_S);
-      double vvT = pars(r, iv_T);
+      double transient = pars(r, iTransient);
       double ttauS = pars(r, itau_S);
       double ttauT = pars(r, itau_T);
+      double vvT = 0.0;
+      if (!fperace::roup_transient_to_rate(par_kind, transient, ttauT, vvT)) continue;
       double kk = (ik >= 0 && R_finite(pars(r, ik)) && pars(r, ik) > 0.0) ? pars(r, ik) : 0.0;
       double ss = (is >= 0 && R_finite(pars(r, is)) && pars(r, is) > 0.0) ? pars(r, is) : 1.0;
       double tt0 = R_finite(pars(r, it0)) ? pars(r, it0) : 0.0;
@@ -715,13 +727,16 @@ NumericVector rroup_hit_times_cpp(NumericVector v_S, NumericVector v_T,
                                  int bkind = 0,
                                  NumericVector Binf = NumericVector::create(),
                                  NumericVector tau = NumericVector::create(),
-                                 NumericVector pw = NumericVector::create()) {
+                                 NumericVector pw = NumericVector::create(),
+                                 int par_kind = 0) {
   const int n = v_S.size();
   if (v_T.size() != n || tau_S.size() != n || tau_T.size() != n ||
       k.size() != n || B.size() != n || A.size() != n || s.size() != n) {
     stop("rroup_hit_times_cpp: all parameter vectors must be the same length.");
   }
   if (!(dt > 0.0) || !(t_max > 0.0)) stop("rroup_hit_times_cpp: dt and t_max must be positive.");
+  if (par_kind != fperace::ROUP_PAR_RATE && par_kind != fperace::ROUP_PAR_AREA)
+    stop("rroup_hit_times_cpp: unknown ROUp parameterization code.");
   check_bnd_lengths(bkind, Binf, tau, pw, n, "rroup_hit_times_cpp");
 
   NumericVector out(n, R_PosInf);
@@ -733,6 +748,8 @@ NumericVector rroup_hit_times_cpp(NumericVector v_S, NumericVector v_T,
     if (!R_finite(v_S[i]) || !R_finite(v_T[i]) || !R_finite(B[i]) || !R_finite(s[i]) || s[i] <= 0.0) {
       continue;
     }
+    double vT_rate = 0.0;
+    if (!fperace::roup_transient_to_rate(par_kind, v_T[i], tau_T[i], vT_rate)) continue;
     const double kk = (R_finite(k[i]) && k[i] > 0.0) ? k[i] : 0.0;
     const double AA = (R_finite(A[i]) && A[i] > 0.0) ? A[i] : 0.0;
     fpe::FPE_Boundary bnd;
@@ -761,7 +778,7 @@ NumericVector rroup_hit_times_cpp(NumericVector v_S, NumericVector v_T,
     while (t < t_max) {
       double tm = t + 0.5 * dt;
       double mu_S = v_S[i] * (tau_S[i] > 1e-12 ? (1.0 - std::exp(-tm / tau_S[i])) : 1.0);
-      double mu_T = v_T[i] * (tau_T[i] > 1e-12 ? (tm / tau_T[i]) * std::exp(-tm / tau_T[i]) : 0.0);
+      double mu_T = vT_rate * (tau_T[i] > 1e-12 ? (tm / tau_T[i]) * std::exp(-tm / tau_T[i]) : 0.0);
       double d_step = (mu_S + mu_T) * drift_gain;
       
       double X1 = X * phi + d_step + sd_val * rnorm();

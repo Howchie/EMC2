@@ -9,7 +9,9 @@
 //   dX_i = (mu_i(t) - k_i X_i) dt + s_i dW_i,  X_i(0) ~ U(0, A_i),
 //   accumulator i finishes when X_i reaches b_i = B_i + A_i.
 //
-// Column order per src/col_registry.h: v_S, v_T, tau_S, tau_T, k, B, A, t0, s.
+// Column order per src/col_registry.h: v_S, v_T/E_T, tau_S, tau_T, k, B, A,
+// t0, s. The area chart supplies E_T = v_T * tau_T and is mapped to v_T before
+// the FPE solve.
 // Optional collapse columns: Binf, tau, pw.
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -64,6 +66,25 @@ inline fperace::BndSpec roup_bnd_par(int kind, const double* par) {
   return bs;
 }
 
+struct RoupColIdx {
+  int v_S, transient, tau_S, tau_T, k, B, A, t0, s;
+};
+
+inline RoupColIdx roup_col_idx(int par_kind) {
+  if (par_kind == fperace::ROUP_PAR_AREA) {
+    return {emc2col::roup_area::v_S, emc2col::roup_area::E_T,
+            emc2col::roup_area::tau_S, emc2col::roup_area::tau_T,
+            emc2col::roup_area::k, emc2col::roup_area::B,
+            emc2col::roup_area::A, emc2col::roup_area::t0,
+            emc2col::roup_area::s};
+  }
+  return {emc2col::roup::v_S, emc2col::roup::v_T,
+          emc2col::roup::tau_S, emc2col::roup::tau_T,
+          emc2col::roup::k, emc2col::roup::B,
+          emc2col::roup::A, emc2col::roup::t0,
+          emc2col::roup::s};
+}
+
 inline fperace::SolveCache* roup_cache(void* ctx_) {
   auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
   if (ctx == nullptr) return nullptr;
@@ -81,15 +102,16 @@ inline void roup_prepare_rows(fperace::SolveCache& C, const double* rt,
     return;
   }
 
-  const double* v_S_   = cols[emc2col::roup::v_S];
-  const double* v_T_   = cols[emc2col::roup::v_T];
-  const double* tau_S_ = cols[emc2col::roup::tau_S];
-  const double* tau_T_ = cols[emc2col::roup::tau_T];
-  const double* k_     = cols[emc2col::roup::k];
-  const double* B_     = cols[emc2col::roup::B];
-  const double* A_     = cols[emc2col::roup::A];
-  const double* t0_    = cols[emc2col::roup::t0];
-  const double* s_     = cols[emc2col::roup::s];
+  const RoupColIdx ci = roup_col_idx(C.par_kind);
+  const double* v_S_   = cols[ci.v_S];
+  const double* transient_ = cols[ci.transient];
+  const double* tau_S_ = cols[ci.tau_S];
+  const double* tau_T_ = cols[ci.tau_T];
+  const double* k_     = cols[ci.k];
+  const double* B_     = cols[ci.B];
+  const double* A_     = cols[ci.A];
+  const double* t0_    = cols[ci.t0];
+  const double* s_     = cols[ci.s];
 
   C.row_group.assign(n_rows, -1);
 
@@ -104,8 +126,9 @@ inline void roup_prepare_rows(fperace::SolveCache& C, const double* rt,
     const double tt = rt[i] - t0_[i];
     if (!(tt > 0.0) || !emc2_isfinite(tt)) continue;
     fperace::Key p;
-    if (!fperace::roup_key(v_S_[i], v_T_[i], tau_S_[i], tau_T_[i], k_[i], B_[i], A_[i], s_[i],
-                           roup_bnd_row(C.bnd_kind, cols, i), p)) continue;
+    if (!fperace::roup_key_par(C.par_kind, v_S_[i], transient_[i], tau_S_[i],
+                               tau_T_[i], k_[i], B_[i], A_[i], s_[i],
+                               roup_bnd_row(C.bnd_kind, cols, i), p)) continue;
 
     int g = -1;
     for (size_t j = 0; j < keys.size(); ++j) {
@@ -152,7 +175,7 @@ inline void droup_raw(const double* rt, const double* const* cols, int n_rows,
   }
   roup_prepare_rows(*C, rt, cols, n_rows, isok);
 
-  const double* t0_ = cols[emc2col::roup::t0];
+  const double* t0_ = cols[roup_col_idx(C->par_kind).t0];
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
     const int g = C->row_group[i];
@@ -173,7 +196,7 @@ inline void proup_raw(const double* rt, const double* const* cols, int n_rows,
   }
   roup_prepare_rows(*C, rt, cols, n_rows, isok);
 
-  const double* t0_ = cols[emc2col::roup::t0];
+  const double* t0_ = cols[roup_col_idx(C->par_kind).t0];
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
     const int g = C->row_group[i];
@@ -191,15 +214,16 @@ inline void roup_logS_at_t(double t, const double* const* cols,
                            const int* trunc_mask, int n_unique_trials,
                            const int* isok_all, void* ctx_, double* logS_out) {
   fperace::SolveCache* C = roup_cache(ctx_);
-  const double* v_S_   = cols[emc2col::roup::v_S];
-  const double* v_T_   = cols[emc2col::roup::v_T];
-  const double* tau_S_ = cols[emc2col::roup::tau_S];
-  const double* tau_T_ = cols[emc2col::roup::tau_T];
-  const double* k_     = cols[emc2col::roup::k];
-  const double* B_     = cols[emc2col::roup::B];
-  const double* A_     = cols[emc2col::roup::A];
-  const double* t0_    = cols[emc2col::roup::t0];
-  const double* s_     = cols[emc2col::roup::s];
+  const RoupColIdx ci = roup_col_idx(C->par_kind);
+  const double* v_S_   = cols[ci.v_S];
+  const double* transient_ = cols[ci.transient];
+  const double* tau_S_ = cols[ci.tau_S];
+  const double* tau_T_ = cols[ci.tau_T];
+  const double* k_     = cols[ci.k];
+  const double* B_     = cols[ci.B];
+  const double* A_     = cols[ci.A];
+  const double* t0_    = cols[ci.t0];
+  const double* s_     = cols[ci.s];
 
   for (int j = 0; j < n_unique_trials; ++j) {
     if (!trunc_mask[j]) continue;
@@ -213,8 +237,9 @@ inline void roup_logS_at_t(double t, const double* const* cols,
       const double tt = t - t0_[r];
       if (!(tt > 0.0)) continue;
       fperace::Key p;
-      if (!fperace::roup_key(v_S_[r], v_T_[r], tau_S_[r], tau_T_[r], k_[r], B_[r],
-                             A_[r], s_[r], roup_bnd_row(C->bnd_kind, cols, r), p)) {
+      if (!fperace::roup_key_par(C->par_kind, v_S_[r], transient_[r], tau_S_[r],
+                                 tau_T_[r], k_[r], B_[r], A_[r], s_[r],
+                                 roup_bnd_row(C->bnd_kind, cols, r), p)) {
         bad = true; break;
       }
       const int g = fperace::cache_get(*C, p, tt);
@@ -233,15 +258,15 @@ inline double roup_scalar_horizon(double tt) {
 inline double droup_scalar(double t, const double* par, void* ctx_) {
   fperace::SolveCache* C = roup_cache(ctx_);
   if (C == nullptr) return 0.0;
-  if (R_IsNA(par[emc2col::roup::v_S])) return 0.0;
-  const double tt = t - par[emc2col::roup::t0];
+  const RoupColIdx ci = roup_col_idx(C->par_kind);
+  if (R_IsNA(par[ci.v_S])) return 0.0;
+  const double tt = t - par[ci.t0];
   if (!(tt > 0.0)) return 0.0;
   fperace::Key p;
-  if (!fperace::roup_key(par[emc2col::roup::v_S], par[emc2col::roup::v_T],
-                         par[emc2col::roup::tau_S], par[emc2col::roup::tau_T],
-                         par[emc2col::roup::k], par[emc2col::roup::B],
-                         par[emc2col::roup::A], par[emc2col::roup::s],
-                         roup_bnd_par(C->bnd_kind, par), p)) return 0.0;
+  if (!fperace::roup_key_par(C->par_kind, par[ci.v_S], par[ci.transient],
+                             par[ci.tau_S], par[ci.tau_T], par[ci.k],
+                             par[ci.B], par[ci.A], par[ci.s],
+                             roup_bnd_par(C->bnd_kind, par), p)) return 0.0;
   const int g = fperace::cache_get(*C, p, roup_scalar_horizon(tt));
   const double lp = fperace::entry_log_pdf(C->e[g], tt);
   return (lp <= fperace::LOG_FLOOR) ? 0.0 : std::exp(lp);
@@ -250,15 +275,15 @@ inline double droup_scalar(double t, const double* par, void* ctx_) {
 inline double proup_scalar(double t, const double* par, void* ctx_) {
   fperace::SolveCache* C = roup_cache(ctx_);
   if (C == nullptr) return 0.0;
-  if (R_IsNA(par[emc2col::roup::v_S])) return 0.0;
-  const double tt = t - par[emc2col::roup::t0];
+  const RoupColIdx ci = roup_col_idx(C->par_kind);
+  if (R_IsNA(par[ci.v_S])) return 0.0;
+  const double tt = t - par[ci.t0];
   if (!(tt > 0.0)) return 0.0;
   fperace::Key p;
-  if (!fperace::roup_key(par[emc2col::roup::v_S], par[emc2col::roup::v_T],
-                         par[emc2col::roup::tau_S], par[emc2col::roup::tau_T],
-                         par[emc2col::roup::k], par[emc2col::roup::B],
-                         par[emc2col::roup::A], par[emc2col::roup::s],
-                         roup_bnd_par(C->bnd_kind, par), p)) return 0.0;
+  if (!fperace::roup_key_par(C->par_kind, par[ci.v_S], par[ci.transient],
+                             par[ci.tau_S], par[ci.tau_T], par[ci.k],
+                             par[ci.B], par[ci.A], par[ci.s],
+                             roup_bnd_par(C->bnd_kind, par), p)) return 0.0;
   const int g = fperace::cache_get(*C, p, roup_scalar_horizon(tt));
   const double lS = fperace::entry_log_S(C->e[g], tt);
   if (lS >= 0.0) return 0.0;

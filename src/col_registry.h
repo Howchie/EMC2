@@ -322,6 +322,17 @@ namespace roup {
   }
 }
 
+// R/model_ROUp.R parameterization = "area": E_T replaces v_T while the
+// sustained channel and all boundary columns retain the rate-chart positions.
+namespace roup_area {
+  enum : int { v_S = 0, E_T, tau_S, tau_T, k, B, A, t0, s, N_REQ,
+               Binf = N_REQ, tau, pw };
+  inline ColSpec spec() {
+    static const char* n[] = {"v_S", "E_T", "tau_S", "tau_T", "k", "B", "A", "t0", "s"};
+    return {n, N_REQ, "ROUpAREA"};
+  }
+}
+
 // R/model_GOM.R — Gompertz growth-process race.  The process is solved after
 // Y = log(X), but alpha, beta and K remain on the physical Gompertz scale and
 // A is the physical start-point range [1, 1 + A].

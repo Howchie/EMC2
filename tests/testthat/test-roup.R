@@ -32,6 +32,25 @@ test_that("s is scaled out exactly in ROUp", {
   expect_identical(EMC2:::pROUp(tq, p1), EMC2:::pROUp(tq, p2))
 })
 
+test_that("the ROUp area chart is equivalent to the rate chart", {
+  rate <- roup_pars(tq, v_S = 1.5, v_T = 2.0, tau_S = 0.5, tau_T = 0.2,
+                    k = 0.5, B = 1.0, A = 0.5, s = 1.0)
+  area <- cbind(v_S = rate[, "v_S"], E_T = rate[, "v_T"] * rate[, "tau_T"],
+                tau_S = rate[, "tau_S"], tau_T = rate[, "tau_T"],
+                k = rate[, "k"], B = rate[, "B"], A = rate[, "A"],
+                t0 = rate[, "t0"], s = rate[, "s"])
+
+  expect_equal(EMC2:::dROUp(tq, rate), EMC2:::dROUp(tq, area, par = "area"),
+               tolerance = 1e-9)
+  expect_equal(EMC2:::pROUp(tq, rate), EMC2:::pROUp(tq, area, par = "area"),
+               tolerance = 1e-9)
+
+  m <- EMC2:::ROUp(parameterization = "area")
+  expect_identical(m$c_name, "ROUpAREA")
+  expect_true(all(c("v_S", "E_T", "tau_S", "tau_T") %in% names(m$p_types)))
+  expect_false("v_T" %in% names(m$p_types))
+})
+
 test_that("one solve serves every row sharing a parameter tuple in ROUp", {
   n <- 300
   t_seq <- seq(0.1, 2.0, length.out = n)
@@ -90,6 +109,59 @@ test_that("C++ particle likelihood matches R-side likelihood on fixed and collap
     ll_cpp_c <- calc_ll_manager(props_c, dadm = dadm_c, model = design_c$model)
     expect_equal(ll_r_c, as.numeric(ll_cpp_c), tolerance = 1e-10)
   }
+})
+
+test_that("C++ particle likelihood matches the R-side area-chart likelihood", {
+  data <- data.frame(
+    subjects = factor(rep(1, 10)),
+    trials = 1:10,
+    S = factor(rep("r1", 10), levels = c("r1", "r2")),
+    R = factor(rep("r1", 10), levels = c("r1", "r2")),
+    rt = rep(0.6, 10)
+  )
+  matchfun <- function(d) d$S == d$lR
+  design_a <- design(data = data,
+                     model = function() ROUp(parameterization = "area"),
+                     matchfun = matchfun,
+                     formula = list(v_S ~ 1, E_T ~ 1, tau_S ~ 1, tau_T ~ 1,
+                                    k ~ 1, B ~ 1, A ~ 1, t0 ~ 1),
+                     constants = c(s = log(1), A = log(0)))
+  p_vec <- sampled_pars(design_a)
+  p_vec[] <- c(log(1.5), log(0.5), log(0.3), log(0.1), log(0.5), log(1.0), log(0.2))
+  dadm <- design_model(data, design_a)
+  props <- matrix(p_vec, nrow = 1, dimnames = list(NULL, names(p_vec)))
+
+  ll_r <- calc_ll_R(p_vec, design_a$model(), dadm)
+  ll_cpp <- calc_ll_manager(props, dadm = dadm, model = design_a$model)
+  expect_equal(ll_r, as.numeric(ll_cpp), tolerance = 1e-10)
+})
+
+test_that("the area chart composes with collapsing boundaries", {
+  data <- data.frame(
+    subjects = factor(rep(1, 6)),
+    trials = 1:6,
+    S = factor(rep("r1", 6), levels = c("r1", "r2")),
+    R = factor(rep("r1", 6), levels = c("r1", "r2")),
+    rt = rep(0.6, 6)
+  )
+  matchfun <- function(d) d$S == d$lR
+  design_a <- design(data = data,
+                     model = function() ROUp(boundary_collapse = "exponential",
+                                              parameterization = "area"),
+                     matchfun = matchfun,
+                     formula = list(v_S ~ 1, E_T ~ 1, tau_S ~ 1, tau_T ~ 1,
+                                    k ~ 1, B ~ 1, A ~ 1, t0 ~ 1,
+                                    Binf ~ 1, tau ~ 1),
+                     constants = c(s = log(1), A = log(0)))
+  p_vec <- sampled_pars(design_a)
+  p_vec[] <- c(log(1.5), log(0.5), log(0.3), log(0.1), log(0.5), log(1.0),
+               log(0.2), log(0.4), log(0.8))
+  dadm <- design_model(data, design_a)
+  props <- matrix(p_vec, nrow = 1, dimnames = list(NULL, names(p_vec)))
+
+  ll_r <- calc_ll_R(p_vec, design_a$model(), dadm)
+  ll_cpp <- calc_ll_manager(props, dadm = dadm, model = design_a$model)
+  expect_equal(ll_r, as.numeric(ll_cpp), tolerance = 1e-10)
 })
 
 test_that("make_data works with ROUp designs", {
