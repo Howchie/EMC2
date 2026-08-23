@@ -11,6 +11,7 @@
 #include "composite_functions.h"
 #include "trend.h"
 #include "utils.h"
+#include "model_PCOUNTER.h"
 #include "wald_functions.h"
 #include "gsl_utils.h"
 #include "ParamTable.h"
@@ -40,70 +41,6 @@
 #include <cstdint>
 
 using namespace Rcpp;
-
-static inline void pcounter_check_len(const NumericVector& x, int n,
-                                      const char* nm) {
-  if (x.size() != 1 && x.size() != n)
-    Rcpp::stop("PCOUNTER: `%s` must be length 1 or length %d, not %d.",
-               nm, n, static_cast<int>(x.size()));
-}
-
-static inline double pcounter_pick(const NumericVector& x, int i) {
-  return x.size() == 1 ? x[0] : x[i];
-}
-
-
-// R-facing scalar-vector wrappers use exactly the same kernel as the compiled
-// race path.  Keeping these here removes the former hand-maintained R mirror.
-// [[Rcpp::export]]
-NumericVector dpcounter(NumericVector t, NumericVector nu, NumericVector sv,
-                        NumericVector gamma, NumericVector k,
-                        NumericVector omega, NumericVector t0,
-                        bool log_out = false) {
-  const int n = t.size();
-  pcounter_check_len(nu, n, "nu"); pcounter_check_len(sv, n, "sv");
-  pcounter_check_len(gamma, n, "gamma"); pcounter_check_len(k, n, "k");
-  pcounter_check_len(omega, n, "omega"); pcounter_check_len(t0, n, "t0");
-  NumericVector out(n);
-  for (int i = 0; i < n; ++i) {
-    const double t0i = pcounter_pick(t0, i);
-    double lf = R_NegInf, ls = 0.0, lF = R_NegInf;
-    if (R_FINITE(t0i)) {
-      pcounter_log_eval(
-        t[i] - t0i, pcounter_pick(nu, i), pcounter_pick(sv, i),
-        pcounter_pick(gamma, i), pcounter_pick(k, i), pcounter_pick(omega, i),
-        lf, ls, lF);
-    }
-    out[i] = log_out ? lf : (R_FINITE(lf) ? std::exp(lf) : 0.0);
-  }
-  return out;
-}
-
-// [[Rcpp::export]]
-NumericVector ppcounter(NumericVector t, NumericVector nu, NumericVector sv,
-                        NumericVector gamma, NumericVector k,
-                        NumericVector omega, NumericVector t0,
-                        bool lower_tail = true, bool log_out = false) {
-  const int n = t.size();
-  pcounter_check_len(nu, n, "nu"); pcounter_check_len(sv, n, "sv");
-  pcounter_check_len(gamma, n, "gamma"); pcounter_check_len(k, n, "k");
-  pcounter_check_len(omega, n, "omega"); pcounter_check_len(t0, n, "t0");
-  NumericVector out(n);
-  for (int i = 0; i < n; ++i) {
-    const double t0i = pcounter_pick(t0, i);
-    double lf = R_NegInf, ls = 0.0, lF = R_NegInf;
-    if (R_FINITE(t0i)) {
-      pcounter_log_eval(
-        t[i] - t0i, pcounter_pick(nu, i), pcounter_pick(sv, i),
-        pcounter_pick(gamma, i), pcounter_pick(k, i), pcounter_pick(omega, i),
-        lf, ls, lF);
-    }
-    const double lp = lower_tail ? lF : ls;
-    out[i] = log_out ? lp : (lp == 0.0 ? 1.0 :
-                              (R_FINITE(lp) ? std::exp(lp) : 0.0));
-  }
-  return out;
-}
 
 // Count accumulators in [start, start+n) that are neither the time accumulator
 // nor the nogo accumulator.  Used to determine the number of guessable responses
