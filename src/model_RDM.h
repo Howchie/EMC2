@@ -14,6 +14,15 @@
 #include "gaussian.h"
 #include "gl_quad.h"
 using namespace Rcpp;
+// Exported definitions carry the Rcpp defaults in model_RDM.cpp.  Suppress
+// defaults while that translation unit parses this public declaration block so
+// its attributed declarations can own the defaults without a duplicate.
+#ifdef RDM_NO_DEFAULT_ARGUMENTS
+#define RDM_DEFAULT_ARGUMENT(value)
+#else
+#define RDM_DEFAULT_ARGUMENT(value) = value
+#endif
+
 
 static constexpr double RDM_Q_EPSILON = 1e-8;
 
@@ -296,10 +305,10 @@ inline double log_wald_posdrift_hit_normalizer(bool posdrift, double mu, double 
   return eta * (b - x_hi) + log_expm1_ratio(eta * span);
 }
 
-double pwald(double t, double mu, double b, double A, double sigma,
-             double t0, double lambda_g, double lambda_k, bool log_out,
-             int kill_shape, bool guess, bool posdrift,
-             double erlang_omega);
+double pwald(double t, double mu, double b, double A RDM_DEFAULT_ARGUMENT(0.0), double sigma RDM_DEFAULT_ARGUMENT(1.0),
+             double t0 RDM_DEFAULT_ARGUMENT(0.0), double lambda_g RDM_DEFAULT_ARGUMENT(0.0), double lambda_k RDM_DEFAULT_ARGUMENT(0.0), bool log_out RDM_DEFAULT_ARGUMENT(false),
+             int kill_shape RDM_DEFAULT_ARGUMENT(1), bool guess RDM_DEFAULT_ARGUMENT(false), bool posdrift RDM_DEFAULT_ARGUMENT(true),
+             double erlang_omega RDM_DEFAULT_ARGUMENT(1.0));
 
 inline double mix_erlang12(double log_e1, double log_e2, double omega, bool log_out) {
   const double w = std::fmax(0.0, std::fmin(1.0, omega));
@@ -319,10 +328,10 @@ inline double log_surv_from_log_cdf(double log_cdf) {
   return log1m_exp(log_cdf);
 }
 
-double dwald(double t, double mu, double b, double A, double sigma,
-             double t0, double lambda_g, double lambda_k, bool log_out,
-             int kill_shape, bool guess, bool posdrift,
-             double erlang_omega);
+double dwald(double t, double mu, double b, double A RDM_DEFAULT_ARGUMENT(0.0), double sigma RDM_DEFAULT_ARGUMENT(1.0),
+             double t0 RDM_DEFAULT_ARGUMENT(0.0), double lambda_g RDM_DEFAULT_ARGUMENT(0.0), double lambda_k RDM_DEFAULT_ARGUMENT(0.0), bool log_out RDM_DEFAULT_ARGUMENT(false),
+             int kill_shape RDM_DEFAULT_ARGUMENT(1), bool guess RDM_DEFAULT_ARGUMENT(false), bool posdrift RDM_DEFAULT_ARGUMENT(true),
+             double erlang_omega RDM_DEFAULT_ARGUMENT(1.0));
 
 
 
@@ -339,11 +348,11 @@ double dwald(double t, double mu, double b, double A, double sigma,
 // --------------------------------------------------------------------------
 double pgbm(double t, double mu, double b, double A, double sigma,
             double t0, double lambda_g, double lambda_k, bool log_out,
-            int kill_shape, bool guess, double erlang_omega = 1.0);
+            int kill_shape, bool guess, double erlang_omega RDM_DEFAULT_ARGUMENT(1.0));
 
-double dgbm(double t, double mu, double b, double A, double sigma,
-            double t0, double lambda_g, double lambda_k, bool log_out,
-            int kill_shape, bool guess, double erlang_omega);
+double dgbm(double t, double mu, double b, double A RDM_DEFAULT_ARGUMENT(0.0), double sigma RDM_DEFAULT_ARGUMENT(1.0),
+            double t0 RDM_DEFAULT_ARGUMENT(0.0), double lambda_g RDM_DEFAULT_ARGUMENT(0.0), double lambda_k RDM_DEFAULT_ARGUMENT(0.0), bool log_out RDM_DEFAULT_ARGUMENT(false),
+            int kill_shape RDM_DEFAULT_ARGUMENT(1), bool guess RDM_DEFAULT_ARGUMENT(false), double erlang_omega RDM_DEFAULT_ARGUMENT(1.0));
 
 
 // --------------------------------------------------------------------------
@@ -415,10 +424,10 @@ inline double dswtn_core(double t_adj, double mu_drift, double threshold,
                          double log_norm, bool log_out, int kill_shape = 1, bool guess = false,
                          bool posdrift = true);
 
-double pswtn(double t, double mu_drift, double threshold, double s,
-             double t0, double sv, double lambda_g, double lambda_k,
-             bool log_out, int kill_shape, bool guess, bool posdrift,
-             double erlang_omega);
+double pswtn(double t, double mu_drift, double threshold, double s RDM_DEFAULT_ARGUMENT(1.0),
+             double t0 RDM_DEFAULT_ARGUMENT(0.0), double sv RDM_DEFAULT_ARGUMENT(0.0), double lambda_g RDM_DEFAULT_ARGUMENT(0.0), double lambda_k RDM_DEFAULT_ARGUMENT(0.0),
+             bool log_out RDM_DEFAULT_ARGUMENT(false), int kill_shape RDM_DEFAULT_ARGUMENT(1), bool guess RDM_DEFAULT_ARGUMENT(false), bool posdrift RDM_DEFAULT_ARGUMENT(true),
+             double erlang_omega RDM_DEFAULT_ARGUMENT(1.0));
 
 inline double dswtn_positive_drift_quad(double t, double mu_drift, double threshold,
                                         double s, double t0, double sv,
@@ -883,17 +892,17 @@ inline double prdmswtn_positive_drift_quad(double t, double mu_drift, double b, 
 }
 
 double drdmswtn(double t, double mu_drift, double b, double A,
-                double s, double t0, double sv,
-                double lambda_g, double lambda_k,
-                int n_gauss_nodes, bool log_out,
-                int kill_shape, bool guess, bool posdrift,
-                double erlang_omega);
+                double s RDM_DEFAULT_ARGUMENT(1.0), double t0 RDM_DEFAULT_ARGUMENT(0.0), double sv RDM_DEFAULT_ARGUMENT(0.0),
+                double lambda_g RDM_DEFAULT_ARGUMENT(0.0), double lambda_k RDM_DEFAULT_ARGUMENT(0.0),
+                int n_gauss_nodes RDM_DEFAULT_ARGUMENT(20), bool log_out RDM_DEFAULT_ARGUMENT(false),
+                int kill_shape RDM_DEFAULT_ARGUMENT(1), bool guess RDM_DEFAULT_ARGUMENT(false), bool posdrift RDM_DEFAULT_ARGUMENT(true),
+                double erlang_omega RDM_DEFAULT_ARGUMENT(1.0));
 double prdmswtn(double t, double mu_drift, double b, double A,
-                double s, double t0, double sv,
-                double lambda_g, double lambda_k,
-                int n_gauss_nodes, bool log_out,
-                int kill_shape, bool guess, bool posdrift,
-                double erlang_omega);
+                double s RDM_DEFAULT_ARGUMENT(1.0), double t0 RDM_DEFAULT_ARGUMENT(0.0), double sv RDM_DEFAULT_ARGUMENT(0.0),
+                double lambda_g RDM_DEFAULT_ARGUMENT(0.0), double lambda_k RDM_DEFAULT_ARGUMENT(0.0),
+                int n_gauss_nodes RDM_DEFAULT_ARGUMENT(20), bool log_out RDM_DEFAULT_ARGUMENT(false),
+                int kill_shape RDM_DEFAULT_ARGUMENT(1), bool guess RDM_DEFAULT_ARGUMENT(false), bool posdrift RDM_DEFAULT_ARGUMENT(true),
+                double erlang_omega RDM_DEFAULT_ARGUMENT(1.0));
 
 template <typename DensityFn>
 inline double integrate_density_gl20_finite(double t_upper, DensityFn&& density_fn) {
@@ -1805,14 +1814,16 @@ inline double rdmswtn_tt_q(double x, double tau) {
 
 
 double drdmswtn_tt(double t, double mu_drift, double b, double A,
-                   double s, double t0, double sv, double tau,
-                   bool log_out, bool posdrift);
+                   double s RDM_DEFAULT_ARGUMENT(1.0), double t0 RDM_DEFAULT_ARGUMENT(0.0), double sv RDM_DEFAULT_ARGUMENT(0.0), double tau RDM_DEFAULT_ARGUMENT(1.0),
+                   bool log_out RDM_DEFAULT_ARGUMENT(false), bool posdrift RDM_DEFAULT_ARGUMENT(true));
 
 double prdmswtn_tt(double t, double mu_drift, double b, double A,
-                   double s, double t0, double sv, double tau,
-                   bool log_out, bool posdrift);
+                   double s RDM_DEFAULT_ARGUMENT(1.0), double t0 RDM_DEFAULT_ARGUMENT(0.0), double sv RDM_DEFAULT_ARGUMENT(0.0), double tau RDM_DEFAULT_ARGUMENT(1.0),
+                   bool log_out RDM_DEFAULT_ARGUMENT(false), bool posdrift RDM_DEFAULT_ARGUMENT(true));
 
 
+
+#undef RDM_DEFAULT_ARGUMENT
 
 
 

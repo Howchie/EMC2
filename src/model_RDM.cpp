@@ -1,3 +1,6 @@
+// Suppress header defaults in this TU; attributed declarations below own them.
+#define RDM_NO_DEFAULT_ARGUMENTS
+
 // [[Rcpp::export]]
 double pwald(double t, double mu, double b, double A = 0.0, double sigma = 1.0,
              double t0 = 0.0, double lambda_g = 0.0, double lambda_k = 0.0, bool log_out = false,
@@ -8,7 +11,11 @@ double dwald(double t, double mu, double b, double A = 0.0, double sigma = 1.0,
              double t0 = 0.0, double lambda_g = 0.0, double lambda_k = 0.0, bool log_out = false,
              int kill_shape = 1, bool guess = false, bool posdrift = true,
              double erlang_omega = 1.0);
+double pgbm(double t, double mu, double b, double A, double sigma,
+            double t0, double lambda_g, double lambda_k, bool log_out,
+            int kill_shape, bool guess, double erlang_omega = 1.0);
 #include "model_RDM.h"
+
 double dwald(double t, double mu, double b, double A, double sigma,
              double t0, double lambda_g, double lambda_k, bool log_out,
              int kill_shape, bool guess, bool posdrift,
