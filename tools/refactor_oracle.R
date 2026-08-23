@@ -523,13 +523,17 @@ compare_nodes <- function(old, new, case_label, path, mode, abs_tol, rel_tol, di
 }
 
 metadata_for_compare <- function(metadata) {
-  # Paths and library search paths are expected to differ between isolated
-  # old/new subprocesses; all compiler/profile/platform/source fields remain
-  # part of the compatibility contract.
+  # Isolated old/new builds intentionally have different source revisions and
+  # R package build timestamps.  Keep those fields in every artifact for
+  # provenance, but compare the stable execution/build contract here.
   out <- metadata
+  out$source_revision <- NULL
   if (!is.null(out$package)) {
     out$package$path <- NULL
     out$package$library_path <- NULL
+  }
+  if (!is.null(out$compiler)) {
+    out$compiler$package_built <- NULL
   }
   if (!is.null(out$R)) {
     out$R$R_LIBS <- NULL
