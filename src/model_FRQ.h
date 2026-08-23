@@ -510,4 +510,19 @@ struct FrqMemo {
   }
 };
 
+// Race adapters used by the particle likelihood dispatch.  Definitions live
+// in model_FRQ.cpp so this header remains safe for model_rng.cpp.
+double dfrq_scalar(double t, const double* par, void* /*ctx_*/);
+double pfrq_scalar(double t, const double* par, void* /*ctx_*/);
+void dfrq_raw(const double* rt, const double* const* cols, int n_rows,
+              const int* mask, const int* isok,
+              double* out, double min_ll, void* ctx_);
+void pfrq_raw(const double* rt, const double* const* cols, int n_rows,
+              const int* mask, const int* isok,
+              double* out, double min_ll, void* ctx_);
+void frq_logS_at_t(double t, const double* const* cols,
+                   int /*n_rows_total*/, int n_lR, int /*n_par*/,
+                   const int* trunc_mask, int n_unique_trials,
+                   const int* isok_all, void* /*ctx_*/, double* logS_out);
+
 #endif  // EMC2_MODEL_FRQ_H
