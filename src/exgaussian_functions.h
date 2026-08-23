@@ -13,7 +13,7 @@ using namespace Rcpp;
 const double SIG_TAU_EPS = 1e-12;
 
 // probability density function of ex-Gaussian distribution
-double dexg(
+inline double dexg(
     const double x,
     const double mu = 5.,
     const double sigma = 1.,
@@ -89,7 +89,7 @@ inline double pexg_log_upper(double q, double mu, double sigma, double tau) {
 }
 
 // cumulative distribution function of ex-Gaussian distribution
-double pexg(
+inline double pexg(
     const double q,
     const double mu = 5.,
     const double sigma = 1.,
@@ -155,7 +155,7 @@ double pexg(
 }
 
 // probability density function of truncated ex-Gaussian distribution
-double dtexg(
+inline double dtexg(
     const double x,
     const double mu = 5.,
     const double sigma = 1.,
@@ -210,7 +210,7 @@ double dtexg(
 }
 
 // cumulative distribution function of truncated ex-Gaussian distribution
-double ptexg(
+inline double ptexg(
     const double q,
     const double mu = 5.,
     const double sigma = 1.,
