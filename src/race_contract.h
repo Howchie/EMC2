@@ -208,6 +208,23 @@ struct ContextForRaceModels {
     }
 };
 
+// Shared raw-log helpers used by the batch raw kernels across race models.
+// Kept here (next to ContextForRaceModels) so both the analytic kernels in
+// utils.h and the LNR kernels in model_lnr.cpp can share one definition.
+inline bool raw_floor_log_lik(void* ctx_) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  return ctx == nullptr || ctx->floor_raw_log_lik;
+}
+
+inline double raw_log_zero(double min_ll, bool floor_raw) {
+  return floor_raw ? min_ll : R_NegInf;
+}
+
+inline double raw_log_value(double log_x, double min_ll, bool floor_raw) {
+  if (!R_FINITE(log_x)) return raw_log_zero(min_ll, floor_raw);
+  return floor_raw ? ((log_x > min_ll) ? log_x : min_ll) : log_x;
+}
+
 // ---------------------------------------------------------------------------
 // Two-boundary (DDM-shaped) models.
 //

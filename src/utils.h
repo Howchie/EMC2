@@ -19,11 +19,6 @@
 
 using namespace Rcpp;
 
-inline bool raw_floor_log_lik(void* ctx_) {
-  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
-  return ctx == nullptr || ctx->floor_raw_log_lik;
-}
-
 inline double erlang_omega_for_shape(int kill_shape, const double* par = nullptr,
                                      int omega_index = -1) {
   if (kill_shape <= 1) return 1.0;
@@ -43,15 +38,6 @@ inline double erlang_omega_for_shape(int kill_shape, const double* par = nullptr
 inline double erlang_lambda_from_mean(double mean, int kill_shape) {
   if (!(mean > 0.0) || !emc2_isfinite(mean)) return 0.0;
   return ((kill_shape == 2) ? 2.0 : 1.0) / mean;
-}
-
-inline double raw_log_zero(double min_ll, bool floor_raw) {
-  return floor_raw ? min_ll : R_NegInf;
-}
-
-inline double raw_log_value(double log_x, double min_ll, bool floor_raw) {
-  if (!R_FINITE(log_x)) return raw_log_zero(min_ll, floor_raw);
-  return floor_raw ? ((log_x > min_ll) ? log_x : min_ll) : log_x;
 }
 
 // Included here, not at the top: the ROU kernels need ContextForRaceModels and
@@ -168,28 +154,6 @@ inline double prdmgbm_scalar(double t, const double* par, void* ctx_) {
               t0_val,
               dispatch.lambda_g, dispatch.lambda_k,
               false, ks, dispatch.guess, omega);
-}
-
-inline double dlnr_scalar(double t, const double* par, void* /*ctx_*/) {
-  const double m  = par[0];
-  const double s  = par[1];
-  const double t0 = par[2];
-
-  if (R_IsNA(m)) return 0.0;
-  const double tt = t - t0;
-  if (tt <= 0.0) return 0.0;
-  return dlnorm_std(tt, m, s, false);
-}
-
-inline double plnr_scalar(double t, const double* par, void* /*ctx_*/) {
-  const double m  = par[0];
-  const double s  = par[1];
-  const double t0 = par[2];
-
-  if (R_IsNA(m)) return 0.0;
-  const double tt = t - t0;
-  if (tt <= 0.0) return 0.0;
-  return plnorm_std(tt, m, s, true, false);
 }
 
 // Column order per src/col_registry.h.
@@ -426,67 +390,6 @@ inline void rdmgbm_logS_at_t(double t, const double* const* cols,
       if (!R_FINITE(log_cdf)) { bad = true; break; }
       if (log_cdf >= 0.0) { bad = true; break; }
       logS += log1m_exp(log_cdf);
-    }
-    logS_out[j] = bad ? R_NegInf : logS;
-  }
-}
-
-// Column order per src/col_registry.h.
-inline void dlnr_raw(const double* rt, const double* const* cols, int n_rows,
-                     const int* mask, const int* isok,
-                     double* out, double min_ll, void* ctx_) {
-  const bool floor_raw = raw_floor_log_lik(ctx_);
-  const double* m_  = cols[emc2col::lnr::m];
-  const double* s_  = cols[emc2col::lnr::s];
-  const double* t0_ = cols[emc2col::lnr::t0];
-  for (int i = 0; i < n_rows; ++i) {
-    if (!mask[i]) continue;
-    if (R_IsNA(m_[i]) || !isok[i]) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
-    const double tt = rt[i] - t0_[i];
-    if (tt <= 0.0) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
-    // Direct log density: no natural round trip, so far-tail log values stay
-    // finite instead of collapsing to min_ll once exp() underflows.
-    out[i] = raw_log_value(dlnorm_std(tt, m_[i], s_[i], true), min_ll, floor_raw);
-  }
-}
-
-inline void plnr_raw(const double* rt, const double* const* cols, int n_rows,
-                     const int* mask, const int* isok,
-                     double* out, double min_ll, void* /*ctx_*/) {
-  const double* m_  = cols[emc2col::lnr::m];
-  const double* s_  = cols[emc2col::lnr::s];
-  const double* t0_ = cols[emc2col::lnr::t0];
-  for (int i = 0; i < n_rows; ++i) {
-    if (!mask[i]) continue;
-    if (R_IsNA(m_[i]) || !isok[i]) { out[i] = 0.0; continue; }
-    const double tt = rt[i] - t0_[i];
-    if (tt <= 0.0) { out[i] = 0.0; continue; }
-    const double logS = lnorm_log_surv_std(tt, m_[i], s_[i]);
-    if (!R_FINITE(logS)) { out[i] = 0.0; continue; }
-    out[i] = logS;
-  }
-}
-
-inline void lnr_logS_at_t(double t, const double* const* cols,
-                            int n_rows_total, int n_lR, int /*n_par*/,
-                            const int* trunc_mask, int n_unique_trials,
-                            const int* isok_all, void* /*ctx_*/, double* logS_out) {
-  const double* m_  = cols[emc2col::lnr::m];
-  const double* s_  = cols[emc2col::lnr::s];
-  const double* t0_ = cols[emc2col::lnr::t0];
-  for (int j = 0; j < n_unique_trials; ++j) {
-    if (!trunc_mask[j]) continue;
-    const int start = j * n_lR;
-    double logS = 0.0;
-    bool bad = false;
-    for (int k = 0; k < n_lR && !bad; ++k) {
-      const int r = start + k;
-      if (!isok_all[r] || R_IsNA(m_[r])) { bad = true; break; }
-      const double tt = t - t0_[r];
-      if (tt <= 0.0) continue;
-      const double logSk = lnorm_log_surv_std(tt, m_[r], s_[r]);
-      if (!R_FINITE(logSk)) { bad = true; break; }
-      logS += logSk;
     }
     logS_out[j] = bad ? R_NegInf : logS;
   }
