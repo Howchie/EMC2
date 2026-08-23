@@ -48,3 +48,4 @@ src/symbols.rds
 # the one that happened to exist first.
 /.Rlib_*/
 /.bench_*
+src/Makevars.profile

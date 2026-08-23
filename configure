@@ -1,0 +1,291 @@
+#!/bin/sh
+# configure — build-profile scaffolding for EMC2 (hand-written; not autoconf).
+#
+# Generates src/Makevars from src/Makevars.in using the compiler selected by R.
+# The default profile reproduces the historical src/Makevars flags exactly and
+# keeps OpenMP/SIMD disabled. Named profiles are opt-in only: no silent default
+# switch is performed here.
+#
+# Usage:
+#   R CMD INSTALL .
+#   R CMD INSTALL --configure-args="--with-build-profile=compatibility" .
+#   ./configure --help
+#
+# Selectors:
+#   --with-build-profile=NAME   legacy (default) | compatibility | performance
+#                               | diagnostic. May also be set via the
+#                               EMC2_BUILD_PROFILE environment variable.
+#   --enable-openmp             Enable OpenMP only if the probe succeeds
+#                               (off by default; never on without an opt-in).
+#   --enable-openmp-simd        Enable `#pragma omp simd` via -fopenmp-simd
+#                               only if the probe succeeds (off by default).
+#   --help, -h                  Show this help.
+
+set -u
+umask 022
+
+# ---------------------------------------------------------------------------
+# Resolve R's compiler. R CMD config is authoritative for the selected
+# toolchain, so the probes and generated flags track R's compiler exactly.
+# ---------------------------------------------------------------------------
+if ! command -v R >/dev/null 2>&1; then
+  echo "configure: error: 'R' not found on PATH" >&2
+  exit 1
+fi
+
+CXX_FULL="$(R CMD config CXX 2>/dev/null)" || {
+  echo "configure: error: could not determine C++ compiler (R CMD config CXX failed)" >&2
+  exit 1
+}
+CXX_BIN="${CXX_FULL%% *}"
+case "$CXX_FULL" in
+  *" "*) CXX_STD="${CXX_FULL#* }" ;;
+  *) CXX_STD="" ;;
+esac
+R_CXXFLAGS="$(R CMD config CXXFLAGS 2>/dev/null)"
+
+# ---------------------------------------------------------------------------
+# Defaults and selector resolution.
+# ---------------------------------------------------------------------------
+ENV_PROFILE="${EMC2_BUILD_PROFILE:-}"
+CLI_PROFILE=""
+ENABLE_OPENMP=no
+ENABLE_OPENMP_SIMD=no
+
+for arg in "$@"; do
+  case "$arg" in
+    --help|-h)
+      cat <<EOF
+
+configure options for EMC2:
+
+  --with-build-profile=NAME   Select the build profile (default: legacy):
+                                legacy         exact historical flags
+                                compatibility  conservative, R default -O2
+                                performance    opt-in -O3 -march=native
+                                diagnostic     performance + optimisation reports
+                              May also be set via EMC2_BUILD_PROFILE.
+
+  --enable-openmp             Add OpenMP compile/link flags only when the
+                              probe succeeds (off by default).
+  --enable-openmp-simd        Add -fopenmp-simd only when the probe succeeds
+                              (off by default; enables #pragma omp simd
+                              without linking an OpenMP runtime).
+
+  --help, -h                  Show this help message and exit.
+
+Examples:
+  R CMD INSTALL .
+  R CMD INSTALL --configure-args="--with-build-profile=compatibility" .
+  R CMD INSTALL --configure-args="--with-build-profile=diagnostic" .
+
+The default (legacy) reproduces the pre-refactor build flags and does not
+enable OpenMP. Profiles other than legacy are opt-in.
+EOF
+      exit 0
+      ;;
+    --with-build-profile=*)
+      CLI_PROFILE="${arg#*=}"
+      ;;
+    --enable-openmp)
+      ENABLE_OPENMP=yes
+      ;;
+    --enable-openmp-simd)
+      ENABLE_OPENMP_SIMD=yes
+      ;;
+    --disable-openmp)
+      ENABLE_OPENMP=no
+      ;;
+    --disable-openmp-simd)
+      ENABLE_OPENMP_SIMD=no
+      ;;
+    *)
+      echo "configure: warning: unrecognised option '$arg' (ignored)" >&2
+      ;;
+  esac
+done
+
+# An explicit CLI value overrides the environment; if both are present and
+# disagree that is a conflict and configure fails rather than guessing.
+BUILD_PROFILE=""
+if [ -n "$CLI_PROFILE" ] && [ -n "$ENV_PROFILE" ] && [ "$CLI_PROFILE" != "$ENV_PROFILE" ]; then
+  echo "configure: error: conflicting build profile: --with-build-profile=$CLI_PROFILE vs EMC2_BUILD_PROFILE=$ENV_PROFILE" >&2
+  exit 1
+fi
+if [ -n "$CLI_PROFILE" ]; then
+  BUILD_PROFILE="$CLI_PROFILE"
+elif [ -n "$ENV_PROFILE" ]; then
+  BUILD_PROFILE="$ENV_PROFILE"
+else
+  BUILD_PROFILE="legacy"
+fi
+
+case "$BUILD_PROFILE" in
+  legacy|compatibility|performance|diagnostic) ;;
+  *)
+    echo "configure: error: invalid --with-build-profile '$BUILD_PROFILE' (expected legacy, compatibility, performance, or diagnostic)" >&2
+    exit 1
+    ;;
+esac
+
+# ---------------------------------------------------------------------------
+# Compiler-specific optimisation/vectorisation report flags for the diagnostic
+# profile. GCC and Clang differ; anything else falls back to the GCC spelling.
+# ---------------------------------------------------------------------------
+case "$CXX_BIN" in
+  *clang*|*Clang*)
+    DIAG_CXXFLAGS="-Rpass=loop-vectorize -Rpass-missed=loop-vectorize -Rpass-analysis=loop-vectorize"
+    ;;
+  *)
+    DIAG_CXXFLAGS="-fopt-info-vec-optimized -fopt-info-vec-missed"
+    ;;
+esac
+
+# ---------------------------------------------------------------------------
+# Collision-safe temporary directory; cleaned on success and failure.
+# ---------------------------------------------------------------------------
+workdir="$(mktemp -d "${TMPDIR:-/tmp}/emc2-config.XXXXXX")" || {
+  echo "configure: error: could not create temporary directory" >&2
+  exit 1
+}
+trap 'rm -rf "$workdir"' 0
+
+# ---------------------------------------------------------------------------
+# OpenMP / OpenMP-SIMD probes (metadata + opt-in only). Both use R's own
+# compiler and flags. The results are recorded in the summary and only become
+# part of the build when the corresponding --enable-* opt-in is given.
+# ---------------------------------------------------------------------------
+OMP_CXXFLAGS=""
+OMP_LIBS=""
+OMP_STATUS="unavailable"
+SIMD_CXXFLAGS=""
+SIMD_STATUS="unavailable"
+
+probe_omp() {
+  cat > "$workdir/omp_probe.cpp" <<'EOF'
+#include <omp.h>
+int main(void) {
+  int n = 0;
+#pragma omp parallel
+  { n = omp_get_num_threads(); }
+  return n > 0 ? 0 : 1;
+}
+EOF
+  case "$(uname 2>/dev/null || echo unknown)" in
+    Darwin)
+      # AppleClang needs libomp and -Xclang -fopenmp (Homebrew/MacPorts layout).
+      for prefix in /opt/homebrew /usr/local; do
+        if [ -d "${prefix}/opt/libomp" ] && \
+           "$CXX_BIN" $CXX_STD $R_CXXFLAGS -Xclang -fopenmp \
+             -I"${prefix}/opt/libomp/include" -L"${prefix}/opt/libomp/lib" -lomp \
+             "$workdir/omp_probe.cpp" -o "$workdir/omp_probe" 2>/dev/null; then
+          OMP_CXXFLAGS="-Xclang -fopenmp -I${prefix}/opt/libomp/include"
+          OMP_LIBS="-L${prefix}/opt/libomp/lib -lomp"
+          return 0
+        fi
+      done
+      return 1
+      ;;
+    *)
+      if "$CXX_BIN" $CXX_STD $R_CXXFLAGS -fopenmp \
+           "$workdir/omp_probe.cpp" -o "$workdir/omp_probe" 2>/dev/null; then
+        OMP_CXXFLAGS="-fopenmp"
+        OMP_LIBS="-fopenmp"
+        return 0
+      fi
+      return 1
+      ;;
+  esac
+}
+
+probe_simd() {
+  cat > "$workdir/simd_probe.cpp" <<'EOF'
+int main(void) {
+  int a[4] = {1, 2, 3, 4};
+  int s = 0;
+#pragma omp simd reduction(+:s)
+  for (int i = 0; i < 4; ++i) s += a[i];
+  return s == 10 ? 0 : 1;
+}
+EOF
+  if "$CXX_BIN" $CXX_STD $R_CXXFLAGS -fopenmp-simd \
+       "$workdir/simd_probe.cpp" -o "$workdir/simd_probe" 2>/dev/null; then
+    SIMD_CXXFLAGS="-fopenmp-simd"
+    return 0
+  fi
+  return 1
+}
+
+if probe_omp; then
+  OMP_STATUS="available"
+else
+  OMP_STATUS="unavailable"
+fi
+if probe_simd; then
+  SIMD_STATUS="available"
+else
+  SIMD_STATUS="unavailable"
+fi
+
+# Keep OpenMP/SIMD out of the default output. Flags are emitted only when the
+# matching opt-in was requested AND its probe succeeded; otherwise they stay
+# empty so the generated Makevars is byte-for-byte equivalent on those lines.
+if [ "$ENABLE_OPENMP" = "yes" ] && [ -n "$OMP_CXXFLAGS" ]; then
+  :
+elif [ "$ENABLE_OPENMP" = "yes" ]; then
+  echo "configure: warning: --enable-openmp requested but the OpenMP probe failed; building without OpenMP" >&2
+  OMP_CXXFLAGS=""
+  OMP_LIBS=""
+else
+  OMP_CXXFLAGS=""
+  OMP_LIBS=""
+fi
+
+if [ "$ENABLE_OPENMP_SIMD" = "yes" ] && [ -n "$SIMD_CXXFLAGS" ]; then
+  :
+elif [ "$ENABLE_OPENMP_SIMD" = "yes" ]; then
+  echo "configure: warning: --enable-openmp-simd requested but the SIMD probe failed" >&2
+  SIMD_CXXFLAGS=""
+else
+  SIMD_CXXFLAGS=""
+fi
+
+# ---------------------------------------------------------------------------
+# Summary.
+# ---------------------------------------------------------------------------
+CONFIG_META="profile=${BUILD_PROFILE} openmp=${OMP_STATUS} openmp-simd=${SIMD_STATUS}"
+echo "configure: EMC2 build configuration"
+echo "  build profile : $BUILD_PROFILE"
+echo "  compiler      : $CXX_FULL"
+echo "  R CXXFLAGS    : $R_CXXFLAGS"
+echo "  OpenMP        : $OMP_STATUS"
+echo "  OpenMP SIMD   : $SIMD_STATUS"
+
+# ---------------------------------------------------------------------------
+# Generate src/Makevars from src/Makevars.in (atomic: temp file then mv, so a
+# failed substitution never leaves a truncated src/Makevars behind).
+# ---------------------------------------------------------------------------
+if [ ! -f src/Makevars.in ]; then
+  echo "configure: error: src/Makevars.in not found" >&2
+  exit 1
+fi
+
+sed \
+  -e "s|@BUILD_PROFILE@|${BUILD_PROFILE}|g" \
+  -e "s|@DIAG_CXXFLAGS@|${DIAG_CXXFLAGS}|g" \
+  -e "s|@OMP_CXXFLAGS@|${OMP_CXXFLAGS}|g" \
+  -e "s|@OMP_LIBS@|${OMP_LIBS}|g" \
+  -e "s|@SIMD_CXXFLAGS@|${SIMD_CXXFLAGS}|g" \
+  -e "s|@CONFIG_META@|${CONFIG_META}|g" \
+  src/Makevars.in > "$workdir/Makevars" || {
+    echo "configure: error: failed to generate src/Makevars from src/Makevars.in" >&2
+    exit 1
+  }
+
+mv -f "$workdir/Makevars" src/Makevars || {
+  echo "configure: error: failed to write src/Makevars" >&2
+  exit 1
+}
+
+echo "configure: src/Makevars written (profile=${BUILD_PROFILE})"
+exit 0

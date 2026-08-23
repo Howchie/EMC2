@@ -1,7 +1,29 @@
+# Build profile: defaults to legacy (exact historical flags). configure.win
+# writes src/Makevars.profile to override this when --with-build-profile or
+# EMC2_BUILD_PROFILE selects a named profile; the fragment is absent when
+# configure is skipped, so this file still yields the legacy build on its own.
+BUILD_PROFILE ?= legacy
+-include Makevars.profile
+
 PKG_CXXFLAGS += -std=gnu++17 -Wfatal-errors -fmax-errors=1 -ftemplate-backtrace-limit=5
+
 # -fno-finite-math-only is REQUIRED: -ffast-math would otherwise assume no NaN/Inf
 # and break the ±Inf/NaN censoring comparisons (NA_REAL is a NaN). See src/Makevars.
-override CXXFLAGS += -O3 -march=native -ffast-math -fno-finite-math-only -fno-math-errno -DUSE_FAST_PNORM
+ifeq ($(BUILD_PROFILE),legacy)
+  override CXXFLAGS += -O3 -march=native -ffast-math -fno-finite-math-only -fno-math-errno -DUSE_FAST_PNORM
+else ifeq ($(BUILD_PROFILE),compatibility)
+  # Conservative: R's default -O2, no -march=native, no -ffast-math.
+  # USE_FAST_PNORM stays enabled via PKG_CPPFLAGS below.
+else ifeq ($(BUILD_PROFILE),performance)
+  override CXXFLAGS += -O3 -march=native -ffast-math -fno-finite-math-only -fno-math-errno -DUSE_FAST_PNORM
+else ifeq ($(BUILD_PROFILE),diagnostic)
+  override CXXFLAGS += -O3 -march=native -ffast-math -fno-finite-math-only -fno-math-errno -DUSE_FAST_PNORM
+  # Rtools uses GCC; optimisation/vectorisation reports use the GCC spelling.
+  PKG_CXXFLAGS += -fopt-info-vec-optimized -fopt-info-vec-missed
+else
+  $(error EMC2: unknown build profile '$(BUILD_PROFILE)' (expected legacy, compatibility, performance, or diagnostic))
+endif
+
 PKG_CPPFLAGS = $(RCPP_ARMA_CXXFLAGS) -I../inst/include -Igsl_bundled -Wfatal-errors -fmax-errors=1 -DRCPP_NO_R_HEADERS_CHECK -DARMA_DONT_PRINT_FAST_MATH_WARNING -DUSE_FAST_PNORM -DR_NO_REMAP
 # GSL integration is compiled in via gsl_bundled.c — no system GSL needed
 PKG_LIBS = $(LAPACK_LIBS) $(BLAS_LIBS) $(FLIBS)

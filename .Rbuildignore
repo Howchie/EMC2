@@ -18,3 +18,4 @@
 ^\.Rtmp(/|$)
 ^\.git
 ^\.pytest_cache
+^src/Makevars\.profile$

@@ -30,15 +30,15 @@
 # never part of the default output.
 #
 # Generated configuration:
-#   profile=legacy openmp=available openmp-simd=available
+#   @CONFIG_META@
 # =============================================================================
 
-BUILD_PROFILE = legacy
+BUILD_PROFILE = @BUILD_PROFILE@
 
 # --- C++ language standard and baseline diagnostics (every profile) ----------
 # -std=gnu++17 must appear after R's CXX (which embeds -std=gnu++20 on recent R)
 # so that C++17 remains the effective standard, matching the historical build.
-PKG_CXXFLAGS += -std=gnu++17 -Wfatal-errors -ftemplate-backtrace-limit=5  
+PKG_CXXFLAGS += -std=gnu++17 -Wfatal-errors -ftemplate-backtrace-limit=5 @OMP_CXXFLAGS@ @SIMD_CXXFLAGS@
 
 # USE_FAST_PNORM selects the fast standard-normal CDF approximation used by the
 # Wald/RDM kernels. It is the current default and stays enabled in every profile
@@ -57,7 +57,7 @@ else ifeq ($(BUILD_PROFILE),performance)
   override CXXFLAGS += -O3 -march=native -ffast-math -fno-finite-math-only -fno-math-errno $(USE_FAST_PNORM_FLAG)
 else ifeq ($(BUILD_PROFILE),diagnostic)
   override CXXFLAGS += -O3 -march=native -ffast-math -fno-finite-math-only -fno-math-errno $(USE_FAST_PNORM_FLAG)
-  PKG_CXXFLAGS += -fopt-info-vec-optimized -fopt-info-vec-missed
+  PKG_CXXFLAGS += @DIAG_CXXFLAGS@
 else
   $(error EMC2: unknown build profile '$(BUILD_PROFILE)' (expected legacy, compatibility, performance, or diagnostic))
 endif
@@ -70,4 +70,4 @@ PKG_CPPFLAGS += -I../inst/include $(RCPP_ARMA_CXXFLAGS) -Wfatal-errors -Igsl_bun
 
 # --- Link libraries -----------------------------------------------------------
 # GSL is compiled in via gsl_bundled.c, so no -lgsl/-lgslcblas is required.
-PKG_LIBS +=  $(RCPP_ARMA_LIBS)
+PKG_LIBS += @OMP_LIBS@ $(RCPP_ARMA_LIBS)
