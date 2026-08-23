@@ -1,5 +1,6 @@
 #include "utility_functions.h"
 #include "model_lnr.h"
+#include "model_EXG.h"
 #include "model_LBA.h"
 #include "model_RDM.h"
 #include "model_DDM.h"
