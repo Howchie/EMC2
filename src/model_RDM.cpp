@@ -15,6 +15,8 @@ double pgbm(double t, double mu, double b, double A, double sigma,
             double t0, double lambda_g, double lambda_k, bool log_out,
             int kill_shape, bool guess, double erlang_omega = 1.0);
 #include "model_RDM.h"
+#undef RDM_NO_DEFAULT_ARGUMENTS
+
 
 double dwald(double t, double mu, double b, double A, double sigma,
              double t0, double lambda_g, double lambda_k, bool log_out,
