@@ -1,4 +1,5 @@
 #include "model_BAwR.h"
+#include <algorithm>
 
 double bawr_sat_time(const BawrGeom& g, double b_minus_z) {
   if (!(b_minus_z > 0.0)) return 0.0;
@@ -747,4 +748,127 @@ double bawr_pdf_scalar_natural(double t, double A, double b, double p1,
     return pdf;
   const double lp = bawr_log_pdf(t, A, b, p1, p2, kappa, pw, launch, posdrift);
   return (lp > R_NegInf) ? std::exp(lp) : 0.0;
+}
+// --------------------------------------------------------------------------
+// R-callable entry points.  As for BAwD and BAwF these bypass
+// ContextForRaceModels, so the launch distribution MUST be passed explicitly;
+// R/model_BAwR.R derives both this argument and the c_name suffix from one
+// `drift_distribution` value so dfun/pfun cannot silently disagree with the
+// sampled likelihood.
+// --------------------------------------------------------------------------
+
+// [[Rcpp::export]]
+NumericVector dbawr(NumericVector t, NumericVector A, NumericVector b,
+                    NumericVector p1, NumericVector p2, NumericVector kappa,
+                    NumericVector pw, int launch = 1, bool posdrift = true,
+                    bool log_out = false) {
+  const int n = t.size();
+  NumericVector out(n);
+  auto pick = [](const NumericVector& x, int i) -> double {
+    return x.size() == 1 ? x[0] : x[i];
+  };
+  for (int i = 0; i < n; ++i)
+    out[i] = bawr_pdf_norm(t[i], pick(A, i), pick(b, i), pick(p1, i),
+                           pick(p2, i), pick(kappa, i), pick(pw, i), launch,
+                           posdrift, log_out);
+  return out;
+}
+
+// [[Rcpp::export]]
+NumericVector pbawr(NumericVector t, NumericVector A, NumericVector b,
+                    NumericVector p1, NumericVector p2, NumericVector kappa,
+                    NumericVector pw, int launch = 1, bool posdrift = true,
+                    bool log_out = false) {
+  const int n = t.size();
+  NumericVector out(n);
+  auto pick = [](const NumericVector& x, int i) -> double {
+    return x.size() == 1 ? x[0] : x[i];
+  };
+  for (int i = 0; i < n; ++i)
+    out[i] = bawr_cdf_norm(t[i], pick(A, i), pick(b, i), pick(p1, i),
+                           pick(p2, i), pick(kappa, i), pick(pw, i), launch,
+                           posdrift, log_out);
+  return out;
+}
+
+// [[Rcpp::export]]
+double dbawr_norm(double t, double A, double b, double p1, double p2,
+                  double kappa, double pw, int launch = 1,
+                  bool posdrift = true, bool log_out = false) {
+  return bawr_pdf_norm(t, A, b, p1, p2, kappa, pw, launch, posdrift, log_out);
+}
+
+// [[Rcpp::export]]
+double pbawr_norm(double t, double A, double b, double p1, double p2,
+                  double kappa, double pw, int launch = 1,
+                  bool posdrift = true, bool log_out = false) {
+  return bawr_cdf_norm(t, A, b, p1, p2, kappa, pw, launch, posdrift, log_out);
+}
+
+// Right endpoint of the supported decision-time window,
+// T_max = [(p+1) b / (kappa p)]^(1/(p+1)); Inf only at kappa = 0.  Unlike
+// BAwF's it DOES depend on b, which is the substantive difference between the
+// two models, so it is exported and reported by Ttransform: a test or a
+// summary that recomputed it in R would not be testing the same code the
+// likelihood uses.
+// [[Rcpp::export]]
+double bawr_tmax(double A, double b, double kappa, double pw) {
+  const BawrGeom g = bawr_geometry(A, b, kappa, pw);
+  return g.ok ? g.T_max : NA_REAL;
+}
+
+// Vectorised bawr_tmax for the R Ttransform, which derives T_max per
+// accumulator row; a per-row .Call would dominate mapped_pars()/make_data().
+// [[Rcpp::export]]
+NumericVector bawr_tmax_vec(NumericVector A, NumericVector b,
+                            NumericVector kappa, NumericVector pw) {
+  // Sized by the LONGEST argument, not by A: Ttransform passes full columns,
+  // but a scalar A with vector b (a caution sweep) would otherwise silently
+  // return a single value.
+  const int n = std::max(std::max(A.size(), b.size()),
+                         std::max(kappa.size(), pw.size()));
+  NumericVector out(n);
+  auto pick = [](const NumericVector& x, int i) -> double {
+    return x.size() == 1 ? x[0] : x[i];
+  };
+  for (int i = 0; i < n; ++i) {
+    const BawrGeom g = bawr_geometry(pick(A, i), pick(b, i), pick(kappa, i),
+                                     pick(pw, i));
+    out[i] = g.ok ? g.T_max : NA_REAL;
+  }
+  return out;
+}
+
+// [[Rcpp::export]]
+NumericVector bawr_kappa_vec(NumericVector Tmax, NumericVector b,
+                             NumericVector pw) {
+  const int n = std::max(Tmax.size(), std::max(b.size(), pw.size()));
+  NumericVector out(n);
+  auto pick = [](const NumericVector& x, int i) {
+    return x.size() == 1 ? x[0] : x[i];
+  };
+  for (int i = 0; i < n; ++i)
+    out[i] = bawr_kappa_from_tmax(pick(b, i), pick(pw, i), pick(Tmax, i));
+  return out;
+}
+
+// The critical launch strength at the lowest start point,
+// V_c(0) = kappa T_max^p.  Launches below it never reach the threshold, so
+// this is the observable that sets the omission rate.
+// [[Rcpp::export]]
+NumericVector bawr_vcrit_vec(NumericVector A, NumericVector b,
+                             NumericVector kappa, NumericVector pw) {
+  // Sized by the longest argument; see bawr_tmax_vec().
+  const int n = std::max(std::max(A.size(), b.size()),
+                         std::max(kappa.size(), pw.size()));
+  NumericVector out(n);
+  auto pick = [](const NumericVector& x, int i) -> double {
+    return x.size() == 1 ? x[0] : x[i];
+  };
+  for (int i = 0; i < n; ++i) {
+    const BawrGeom g = bawr_geometry(pick(A, i), pick(b, i), pick(kappa, i),
+                                     pick(pw, i));
+    out[i] = g.ok ? g.V_c0 : NA_REAL;
+  }
+  return out;
 }

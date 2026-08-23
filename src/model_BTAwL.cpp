@@ -930,3 +930,133 @@ double btawl_local_race_log_surv(double t, double A, double b, double p1,
   if (!(ls_T > R_NegInf) || !(ls_S > R_NegInf)) return R_NegInf;
   return ls_T + ls_S;
 }
+// [[Rcpp::export]]
+NumericVector dbtawl_transient(NumericVector t, NumericVector A, NumericVector b,
+                     NumericVector p1, NumericVector p2, NumericVector k,
+                     NumericVector tau, int launch = 1,
+                     bool posdrift = true, bool log_out = false) {
+  const int n = t.size(); NumericVector out(n);
+  auto pick = [](const NumericVector& x, int i) { return x.size() == 1 ? x[0] : x[i]; };
+  for (int i = 0; i < n; ++i) {
+    const double lp = btawl_pdf_log(t[i], pick(A,i), pick(b,i), pick(p1,i),
+                                    pick(p2,i), pick(k,i), pick(tau,i), launch, posdrift);
+    out[i] = log_out ? lp : (lp > R_NegInf ? std::exp(lp) : 0.0);
+  }
+  return out;
+}
+
+// [[Rcpp::export]]
+NumericVector pbtawl_transient(NumericVector t, NumericVector A, NumericVector b,
+                     NumericVector p1, NumericVector p2, NumericVector k,
+                     NumericVector tau, int launch = 1,
+                     bool posdrift = true, bool log_out = false) {
+  const int n = t.size(); NumericVector out(n);
+  auto pick = [](const NumericVector& x, int i) { return x.size() == 1 ? x[0] : x[i]; };
+  for (int i = 0; i < n; ++i) {
+    const double lp = btawl_cdf_log(t[i], pick(A,i), pick(b,i), pick(p1,i),
+                                    pick(p2,i), pick(k,i), pick(tau,i), launch, posdrift);
+    out[i] = log_out ? lp : (lp > R_NegInf ? std::exp(lp) : 0.0);
+  }
+  return out;
+}
+
+// [[Rcpp::export]]
+NumericVector btawl_transient_log_surv_vec(NumericVector t, NumericVector A,
+                                 NumericVector b, NumericVector p1,
+                                 NumericVector p2, NumericVector k,
+                                 NumericVector tau, int launch = 1,
+                                 bool posdrift = true) {
+  const int n = std::max({t.size(), A.size(), b.size(), p1.size(), p2.size(),
+                          k.size(), tau.size()});
+  NumericVector out(n);
+  auto pick = [](const NumericVector& x, int i) { return x.size() == 1 ? x[0] : x[i]; };
+  for (int i = 0; i < n; ++i)
+    out[i] = btawl_log_surv(pick(t, i), pick(A, i), pick(b, i), pick(p1, i),
+                            pick(p2, i), pick(k, i), pick(tau, i), launch,
+                            posdrift);
+  return out;
+}
+
+// [[Rcpp::export]]
+NumericVector btawl_local_race_log_surv_vec(NumericVector t, NumericVector A,
+                                     NumericVector b, NumericVector p1,
+                                     NumericVector p2, NumericVector k,
+                                     NumericVector tau_s, NumericVector tau_t,
+                                     NumericVector pi, int launch = 1,
+                                     bool posdrift = true) {
+  const int n = std::max({t.size(), A.size(), b.size(), p1.size(), p2.size(),
+                          k.size(), tau_s.size(), tau_t.size(), pi.size()});
+  NumericVector out(n);
+  auto pick = [](const NumericVector& x, int i) { return x.size() == 1 ? x[0] : x[i]; };
+  for (int i = 0; i < n; ++i)
+    out[i] = btawl_local_race_log_surv(pick(t, i), pick(A, i), pick(b, i), pick(p1, i),
+                                pick(p2, i), pick(k, i), pick(tau_s, i),
+                                pick(tau_t, i), pick(pi, i), launch, posdrift);
+  return out;
+}
+
+// [[Rcpp::export]]
+NumericVector dbtawl_local_race(NumericVector t, NumericVector A, NumericVector b,
+                        NumericVector p1, NumericVector p2, NumericVector k,
+                        NumericVector tau_s, NumericVector tau_t,
+                        NumericVector pi, int launch = 1,
+                        bool posdrift = true, bool log_out = false) {
+  const int n = t.size(); NumericVector out(n);
+  auto pick = [](const NumericVector& x, int i) { return x.size() == 1 ? x[0] : x[i]; };
+  for (int i = 0; i < n; ++i) {
+    const double lp = btawl_local_race_pdf_log(t[i], pick(A,i), pick(b,i), pick(p1,i), pick(p2,i),
+                                        pick(k,i), pick(tau_s,i), pick(tau_t,i), pick(pi,i),
+                                        launch, posdrift);
+    out[i] = log_out ? lp : (lp > R_NegInf ? std::exp(lp) : 0.0);
+  }
+  return out;
+}
+
+// [[Rcpp::export]]
+NumericVector pbtawl_local_race(NumericVector t, NumericVector A, NumericVector b,
+                        NumericVector p1, NumericVector p2, NumericVector k,
+                        NumericVector tau_s, NumericVector tau_t,
+                        NumericVector pi, int launch = 1,
+                        bool posdrift = true, bool log_out = false) {
+  const int n = t.size(); NumericVector out(n);
+  auto pick = [](const NumericVector& x, int i) { return x.size() == 1 ? x[0] : x[i]; };
+  for (int i = 0; i < n; ++i) {
+    const double lp = btawl_local_race_cdf_log(t[i], pick(A,i), pick(b,i), pick(p1,i), pick(p2,i),
+                                        pick(k,i), pick(tau_s,i), pick(tau_t,i), pick(pi,i),
+                                        launch, posdrift);
+    out[i] = log_out ? lp : (lp > R_NegInf ? std::exp(lp) : 0.0);
+  }
+  return out;
+}
+
+// [[Rcpp::export]]
+NumericVector btawl_tmax_vec(NumericVector k, NumericVector tau) {
+  const int n = std::max(k.size(), tau.size()); NumericVector out(n);
+  for (int i = 0; i < n; ++i) out[i] = btawl_tmax(k.size() == 1 ? k[0] : k[i],
+                                                   tau.size() == 1 ? tau[0] : tau[i]);
+  return out;
+}
+
+// [[Rcpp::export]]
+NumericVector btawl_tau_vec(NumericVector k, NumericVector Ttrans) {
+  const int n = std::max(k.size(), Ttrans.size()); NumericVector out(n);
+  for (int i = 0; i < n; ++i)
+    out[i] = btawl_tau_from_ttrans(k.size() == 1 ? k[0] : k[i],
+                                   Ttrans.size() == 1 ? Ttrans[0] : Ttrans[i]);
+  return out;
+}
+
+// [[Rcpp::export]]
+NumericVector btawl_vcrit_vec(NumericVector k, NumericVector tau,
+                              NumericVector b) {
+  const int n = std::max({k.size(), tau.size(), b.size()}); NumericVector out(n);
+  for (int i = 0; i < n; ++i) {
+    const double ki = k.size() == 1 ? k[0] : k[i];
+    const double ti = tau.size() == 1 ? tau[0] : tau[i];
+    const double bi = b.size() == 1 ? b[0] : b[i];
+    const double tm = btawl_tmax(ki, ti);
+    const double h = btawl_h(tm, ki, ti);
+    out[i] = (h > 0.0 && emc2_isfinite(h)) ? bi / h : R_PosInf;
+  }
+  return out;
+}
