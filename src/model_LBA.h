@@ -1049,15 +1049,5 @@ inline double pkilledleakyba_norm(double t, double v, double b, double A,
 
 
 
-// BAwD (ballistic accumulator with drive decay) reuses the guard constants and
-// normalizer helpers above and lives in its own header for readability.
-// Included last so every constant it references is already defined; like this
-// file it may be included by exactly one translation unit.
-#include "model_BAwD.h"
-// BAwF (global fading) reuses BAwD's log quadrature and power-kernel log
-// helpers, so it follows it.
-#include "model_BAwF.h"
-#include "model_BAwR.h"
-#include "model_BTAwL.h"
 
 #endif

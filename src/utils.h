@@ -15,6 +15,10 @@
 #include "utility_functions.h"
 #include "model_RDM.h"
 #include "model_LBA.h"
+#include "model_BAwD.h"
+#include "model_BAwF.h"
+#include "model_BAwR.h"
+#include "model_BTAwL.h"
 #include "race_contract.h"
 
 using namespace Rcpp;
