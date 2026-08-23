@@ -1,5 +1,4 @@
-# BTAwL: ballistic Smith transient drive with state leak, and its shared-
-# strength sustained/transient extension.
+# BTAwL: ballistic Smith transient/sustained local race with state leak.
 #
 # dX/du = V (u/tau) exp(-u/tau) - k X, b = B + A, z ~ U(0, A).
 #
@@ -128,12 +127,12 @@ ref_fp_btawl <- function(V, z, b, k, tau) {
 
 d_btawl <- function(t, A, b, p1, p2, k, tau, launch = 1L, posdrift = TRUE,
                     log_out = FALSE) {
-  EMC2:::dbtawl(t, A, b, p1, p2, k, tau, launch = as.integer(launch),
+  EMC2:::dbtawl_transient(t, A, b, p1, p2, k, tau, launch = as.integer(launch),
                 posdrift = posdrift, log_out = log_out)
 }
 p_btawl <- function(t, A, b, p1, p2, k, tau, launch = 1L, posdrift = TRUE,
                     log_out = FALSE) {
-  EMC2:::pbtawl(t, A, b, p1, p2, k, tau, launch = as.integer(launch),
+  EMC2:::pbtawl_transient(t, A, b, p1, p2, k, tau, launch = as.integer(launch),
                 posdrift = posdrift, log_out = log_out)
 }
 
@@ -149,7 +148,7 @@ btawl_rows <- function(n, launch = 0L, A = 0.3, k = 0.5) {
   }
 }
 
-btawl_mix_rows <- function(n, launch = 0L, pi = 0.5, k = 0.5) {
+btawl_local_race_rows <- function(n, launch = 0L, pi = 0.5, k = 0.5) {
   p <- btawl_rows(n, launch = launch, k = k)
   p$tau_s <- 2
   p$tau_t <- 1
@@ -182,7 +181,7 @@ test_that("the stiff transient window remains finite and monotone", {
   expect_equal(tm, 1.05263, tolerance = 2e-4)
   p <- btawl_rows(5, k = k, A = 0.3)
   tt <- tm * c(0.95, 0.99, 0.999, 1, 1.1)
-  cdf <- EMC2:::pBTAwL(tt, p)
+  cdf <- EMC2:::pBTAwLTransient(tt, p)
   expect_true(all(is.finite(cdf)))
   expect_true(all(diff(cdf) >= -1e-10))
   expect_equal(cdf[4], cdf[5], tolerance = 1e-12)
@@ -325,11 +324,11 @@ test_that("the CDF is monotone and density non-negative across seams", {
 
 test_that("log survivors stay finite, monotone, and below the raw floor", {
   tt <- c(0.25, 0.5, 1, 1.5, 1.9, 1.99, 2)
-  ls_n <- EMC2:::btawl_log_surv_vec(
+  ls_n <- EMC2:::btawl_transient_log_surv_vec(
     tt, A = 0.4, b = 1.3, p1 = 10, p2 = 0.5, k = 1, tau = 1,
     launch = 0L
   )
-  ls_l <- EMC2:::btawl_log_surv_vec(
+  ls_l <- EMC2:::btawl_transient_log_surv_vec(
     tt, A = 0.4, b = 1.3, p1 = 4, p2 = 0.2, k = 1, tau = 1,
     launch = 1L
   )
@@ -354,7 +353,7 @@ test_that("log survivors match the direct start-point launch-CDF integral", {
   )
   tt <- c(1.5, 1.9, 1.99, 2)
   for (cs in cases) {
-    got <- EMC2:::btawl_log_surv_vec(
+    got <- EMC2:::btawl_transient_log_surv_vec(
       tt, A = 0.4, b = 1.3, p1 = cs$p1, p2 = cs$p2, k = 1, tau = 1,
       launch = cs$launch
     )
@@ -365,11 +364,11 @@ test_that("log survivors match the direct start-point launch-CDF integral", {
   }
 })
 
-test_that("mixed all-live survivors survive interval collapse", {
+test_that("local-race all-live survivors survive interval collapse", {
   for (launch in 0:1) {
     p1 <- if (launch == 0L) 20 else 7
     p2 <- 0.2
-    got <- EMC2:::btawl_mix_log_surv_vec(
+    got <- EMC2:::btawl_local_race_log_surv_vec(
       c(50, 100), A = 0.4, b = 1.3, p1 = p1, p2 = p2, k = 1,
       tau_s = 1, tau_t = 1, pi = 1, launch = launch
     )
@@ -397,30 +396,20 @@ test_that("boundary parameters produce no NaN", {
 # 6. Constructors & Charts
 # ---------------------------------------------------------------------------
 
-test_that("constructors expose transient and shared-strength charts", {
+test_that("constructors expose full local-race and pure-process charts", {
   endpoint <- BTAwL(drift_distribution = "normal", chart = "endpoint")
   rate <- BTAwL(drift_distribution = "normal", chart = "rate")
   expect_equal(endpoint$c_name, "BTAwL")
   expect_equal(rate$c_name, "BTAwL_RATE")
   expect_true("Ttrans" %in% names(endpoint$p_types))
-  expect_true("tau" %in% names(rate$p_types))
-  expect_equal(endpoint$bound$exception["A"], c(A = 0))
-  expect_equal(rate$bound$exception[c("A", "k")], c(A = 0, k = 0))
-
-  mix_ep <- BTAwL_mixed(chart = "endpoint")
-  mix_rt <- BTAwL_mixed(chart = "rate")
-  expect_equal(mix_ep$c_name, "BTAwL_MIX")
-  expect_equal(mix_rt$c_name, "BTAwL_MIX_RATE")
-  mix_ep_ln <- BTAwL_mixed(drift_distribution = "lognormal", chart = "endpoint")
-  mix_rt_ln <- BTAwL_mixed(drift_distribution = "lognormal", chart = "rate")
-  expect_equal(mix_ep_ln$c_name, "BTAwL_MIX_LOGN")
-  expect_equal(mix_rt_ln$c_name, "BTAwL_MIX_LOGN_RATE")
-  expect_true(all(c("tau_s", "Ttrans", "pi") %in% mix_ep$p_types_canonical))
-  expect_true(all(c("tau_s", "tau_t", "pi") %in% mix_rt$p_types_canonical))
+  expect_true(all(c("tau_s", "Ttrans", "pi") %in% endpoint$p_types_canonical))
+  expect_true(all(c("tau_s", "tau_t", "pi") %in% rate$p_types_canonical))
+  expect_equal(BTAwLTransient()$c_name, "BTAwL_TRANSIENT")
+  expect_equal(BTAwLSustained()$c_name, "BTAwL_SUSTAINED")
 })
 
 test_that("Ttransform reports b, tau, Tmax, rt_max and Vcrit", {
-  m <- BTAwL(drift_distribution = "normal", chart = "endpoint")
+  m <- BTAwLTransient(drift_distribution = "normal", chart = "endpoint")
   pars <- cbind(v = c(2, 2), sv = c(0.5, 0.5), B = c(0.8, 1.6),
                 A = c(0.3, 0.3), t0 = c(0.15, 0.15), k = c(1, 1),
                 Ttrans = c(2, 2))
@@ -430,15 +419,22 @@ test_that("Ttransform reports b, tau, Tmax, rt_max and Vcrit", {
   expect_equal(out[, "Tmax"], pars[, "Ttrans"])
   expect_equal(out[, "rt_max"], pars[, "t0"] + out[, "Tmax"])
   expect_equal(out[, "Vcrit"], EMC2:::btawl_vcrit_vec(pars[, "k"], out[, "tau"], out[, "b"]))
+
+  rate <- BTAwL(drift_distribution = "normal", chart = "rate")
+  rate_pars <- cbind(v = 2, sv = 0.5, B = 0.8, A = 0.3, t0 = 0.15,
+                     k = 1, tau_s = 1.2, tau_t = 0.7, pi = 0.4)
+  rate_out <- rate$Ttransform(rate_pars, NULL)
+  expect_equal(sum(colnames(rate_out) == "tau_t"), 1L)
+  expect_equal(unname(rate_out[, "tau_t"]), unname(rate_pars[, "tau_t"]))
 })
 
 test_that("dfun/pfun use the same launch distribution as c_name", {
   pars <- cbind(mu = 1, sigma = 0.5, v = 1, sv = 0.5, b = 1.3, A = 0.3,
                 t0 = 0.15, k = 1.0, tau = 1.0)
   rt <- 0.5
-  expect_equal(BTAwL(drift_distribution = "lognormal", chart = "rate")$dfun(rt, pars),
+  expect_equal(BTAwLTransient(drift_distribution = "lognormal", chart = "rate")$dfun(rt, pars),
                d_btawl(rt - 0.15, 0.3, 1.3, 1, 0.5, 1.0, 1.0, launch = 1L))
-  expect_equal(BTAwL(drift_distribution = "normal", chart = "rate")$dfun(rt, pars),
+  expect_equal(BTAwLTransient(drift_distribution = "normal", chart = "rate")$dfun(rt, pars),
                d_btawl(rt - 0.15, 0.3, 1.3, 1, 0.5, 1.0, 1.0, launch = 0L))
 })
 
@@ -518,9 +514,9 @@ test_that("the compiled race likelihood matches the R reference", {
   p <- c(mu = 0.5, sigma = log(0.5), v = 2.5, sv = log(1), B = log(0.8),
          A = log(0.3), t0 = log(0.15), k = log(1), Ttrans = log(2))
   fx <- list(
-    ln = suppressMessages(btawl_mk(function() BTAwL(drift_distribution = "lognormal"),
+    ln = suppressMessages(btawl_mk(function() BTAwLTransient(drift_distribution = "lognormal"),
       list(mu ~ 1, sigma ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1, Ttrans ~ 1), NULL, dat)),
-    no = suppressMessages(btawl_mk(function() BTAwL(drift_distribution = "normal"),
+    no = suppressMessages(btawl_mk(function() BTAwLTransient(drift_distribution = "normal"),
       list(v ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1, Ttrans ~ 1), c(sv = log(1)), dat)))
   for (which in c("ln", "no")) {
     launch <- if (which == "ln") 1L else 0L
@@ -536,11 +532,11 @@ test_that("the compiled race likelihood matches the R reference", {
 test_that("a p_types reordering is caught by the column contract", {
   skip_on_cran()
   dat <- btawl_dat()
-  fx <- suppressMessages(btawl_mk(function() BTAwL(drift_distribution = "lognormal"),
+  fx <- suppressMessages(btawl_mk(function() BTAwLTransient(drift_distribution = "lognormal"),
     list(mu ~ 1, sigma ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1, Ttrans ~ 1), NULL, dat))
   p <- c(mu = 0.5, sigma = log(0.5), B = log(0.8), A = log(0.3),
          t0 = log(0.15), k = log(1), Ttrans = log(2))
-  swapped <- names(BTAwL(drift_distribution = "lognormal")$p_types)
+  swapped <- names(BTAwLTransient(drift_distribution = "lognormal")$p_types)
   swapped[1:2] <- swapped[2:1]
   expect_error(btawl_ll(fx, p[names(sampled_pars(fx$des))],
                         p_types_override = swapped),
@@ -552,7 +548,7 @@ test_that("omissions past t0 + T_max stay well posed", {
   dat <- btawl_dat(80)
   dat$rt[1:8] <- Inf
   dat$R[1:8] <- NA
-  fx <- suppressMessages(btawl_mk(function() BTAwL(drift_distribution = "lognormal"),
+  fx <- suppressMessages(btawl_mk(function() BTAwLTransient(drift_distribution = "lognormal"),
     list(mu ~ 1, sigma ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1, Ttrans ~ 1), NULL, dat))
   p <- c(mu = 0.5, sigma = log(0.5), B = log(0.8), A = log(0.3),
          t0 = log(0.15), k = log(1), Ttrans = log(2))
@@ -565,45 +561,45 @@ test_that("omissions past t0 + T_max stay well posed", {
   # Beyond endpoint floored
   dat2 <- dat
   dat2$rt[1:8] <- 0.15 + 2 + 5
-  fx2 <- suppressMessages(btawl_mk(function() BTAwL(drift_distribution = "lognormal"),
+  fx2 <- suppressMessages(btawl_mk(function() BTAwLTransient(drift_distribution = "lognormal"),
     list(mu ~ 1, sigma ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1, Ttrans ~ 1), NULL, dat2))
   expect_true(is.finite(btawl_ll(fx2, p[names(sampled_pars(fx2$des))])))
 })
 
 # ---------------------------------------------------------------------------
-# 8. Mixture Model Invariants
+# 8. Local-race invariants
 # ---------------------------------------------------------------------------
 
-test_that("the shared-strength mixture is exactly transient BTAwL at pi = 0", {
+test_that("the local race is exactly transient BTAwL at pi = 0", {
   tt <- c(0.5, 1, 1.5, 2, 2.5, 3, Inf)
   for (launch in 0:1) {
     p0 <- btawl_rows(length(tt), launch = launch)
-    pm <- btawl_mix_rows(length(tt), launch = launch, pi = 0)
+    pm <- btawl_local_race_rows(length(tt), launch = launch, pi = 0)
     expect_equal(
-      EMC2:::pBTAwLMix(tt, pm, launch = launch),
-      EMC2:::pBTAwL(tt, p0, launch = launch), tolerance = 1e-12
+      EMC2:::pBTAwL(tt, pm, launch = launch),
+      EMC2:::pBTAwLTransient(tt, p0, launch = launch), tolerance = 1e-12
     )
     expect_equal(
-      EMC2:::dBTAwLMix(tt, pm, launch = launch),
-      EMC2:::dBTAwL(tt, p0, launch = launch), tolerance = 1e-12
+      EMC2:::dBTAwL(tt, pm, launch = launch),
+      EMC2:::dBTAwLTransient(tt, p0, launch = launch), tolerance = 1e-12
     )
   }
 })
 
 test_that("pi = 1 handles the sustained-only member", {
   tt <- c(1, 2, 3, 5, 10, 20, Inf)
-  p <- btawl_mix_rows(length(tt), pi = 1)
-  cdf <- EMC2:::pBTAwLMix(tt, p)
+  p <- btawl_local_race_rows(length(tt), pi = 1)
+  cdf <- EMC2:::pBTAwL(tt, p)
   expect_true(all(diff(cdf) >= -1e-10))
   expect_gt(cdf[6], cdf[5])
   expect_gt(cdf[7], cdf[6])
-  expect_gt(EMC2:::dBTAwLMix(10, p[5, ]), 0)
+  expect_gt(EMC2:::dBTAwL(10, p[5, ]), 0)
 })
 
 test_that("the no-leak sustained limit is retained", {
   tt <- c(1, 2, 5, Inf)
-  p <- btawl_mix_rows(length(tt), pi = 1, k = 0)
-  cdf <- EMC2:::pBTAwLMix(tt, p)
+  p <- btawl_local_race_rows(length(tt), pi = 1, k = 0)
+  cdf <- EMC2:::pBTAwL(tt, p)
   expect_true(all(diff(cdf) >= -1e-12))
   expect_equal(cdf[length(cdf)], 1, tolerance = 1e-12)
 })
@@ -612,39 +608,39 @@ test_that("within-accumulator race CDF and PDF match pure member composition", {
   tt <- c(0.2, 0.5, 1.0, 1.8, 2.5)
   for (launch in 0:1) {
     for (pi_val in c(0.2, 0.5, 0.8)) {
-      p_mix <- btawl_mix_rows(length(tt), launch = launch, pi = pi_val, k = 0.8)
-      p_mix$tau_s <- 1.5; p_mix$tau_t <- 0.6
+      p_local <- btawl_local_race_rows(length(tt), launch = launch, pi = pi_val, k = 0.8)
+      p_local$tau_s <- 1.5; p_local$tau_t <- 0.6
       
       # Transient member parameters
-      p_T <- p_mix
-      p_T$tau <- p_mix$tau_t
+      p_T <- p_local
+      p_T$tau <- p_local$tau_t
       if (launch == 1L) {
-        p_T$mu <- p_mix$mu + log(1 - pi_val)
+        p_T$mu <- p_local$mu + log(1 - pi_val)
       } else {
-        p_T$v <- p_mix$v * (1 - pi_val)
-        p_T$sv <- p_mix$sv * (1 - pi_val)
+        p_T$v <- p_local$v * (1 - pi_val)
+        p_T$sv <- p_local$sv * (1 - pi_val)
       }
       
       # Sustained member parameters
-      p_S <- p_mix
+      p_S <- p_local
       p_S$pi <- 1
       if (launch == 1L) {
-        p_S$mu <- p_mix$mu + log(pi_val)
+        p_S$mu <- p_local$mu + log(pi_val)
       } else {
-        p_S$v <- p_mix$v * pi_val
-        p_S$sv <- p_mix$sv * pi_val
+        p_S$v <- p_local$v * pi_val
+        p_S$sv <- p_local$sv * pi_val
       }
       
-      F_T <- EMC2:::pBTAwL(tt, p_T, launch = launch)
-      f_T <- EMC2:::dBTAwL(tt, p_T, launch = launch)
-      F_S <- EMC2:::pBTAwLMix(tt, p_S, launch = launch)
-      f_S <- EMC2:::dBTAwLMix(tt, p_S, launch = launch)
+      F_T <- EMC2:::pBTAwLTransient(tt, p_T, launch = launch)
+      f_T <- EMC2:::dBTAwLTransient(tt, p_T, launch = launch)
+      F_S <- EMC2:::pBTAwL(tt, p_S, launch = launch)
+      f_S <- EMC2:::dBTAwL(tt, p_S, launch = launch)
       
       F_expected <- 1 - (1 - F_T) * (1 - F_S)
       f_expected <- f_T * (1 - F_S) + f_S * (1 - F_T)
       
-      F_got <- EMC2:::pBTAwLMix(tt, p_mix, launch = launch)
-      f_got <- EMC2:::dBTAwLMix(tt, p_mix, launch = launch)
+      F_got <- EMC2:::pBTAwL(tt, p_local, launch = launch)
+      f_got <- EMC2:::dBTAwL(tt, p_local, launch = launch)
       
       expect_equal(F_got, F_expected, tolerance = 1e-12)
       expect_equal(f_got, f_expected, tolerance = 1e-12)
@@ -652,16 +648,16 @@ test_that("within-accumulator race CDF and PDF match pure member composition", {
   }
 })
 
-test_that("integrate(dBTAwLMix) matches pBTAwLMix for within-accumulator race", {
+test_that("integrate(dBTAwL) matches pBTAwL for within-accumulator race", {
   for (launch in 0:1) {
-    p_mix <- btawl_mix_rows(1, launch = launch, pi = 0.4, k = 0.5)
-    p_mix$tau_s <- 1.2; p_mix$tau_t <- 0.7
+    p_local <- btawl_local_race_rows(1, launch = launch, pi = 0.4, k = 0.5)
+    p_local$tau_s <- 1.2; p_local$tau_t <- 0.7
     for (t_eval in c(0.5, 1.2, 2.0)) {
       I <- stats::integrate(function(x) {
-        p_eval <- p_mix[rep(1, length(x)), ]
-        EMC2:::dBTAwLMix(x, p_eval, launch = launch)
+        p_eval <- p_local[rep(1, length(x)), ]
+        EMC2:::dBTAwL(x, p_eval, launch = launch)
       }, 1e-8, t_eval, rel.tol = 1e-8)$value
-      expect_equal(I, EMC2:::pBTAwLMix(t_eval, p_mix, launch = launch), tolerance = 1e-6)
+      expect_equal(I, EMC2:::pBTAwL(t_eval, p_local, launch = launch), tolerance = 1e-6)
     }
   }
 })
@@ -676,16 +672,26 @@ test_that("BTAwL simulators select a winner per trial", {
   pars <- data.frame(v = rep(3, 8), sv = rep(0.05, 8),
                      B = rep(1, 8), A = rep(0.2, 8), t0 = rep(0.1, 8),
                      k = rep(0.5, 8), tau = rep(1, 8), b = rep(1.2, 8))
-  out <- EMC2:::rBTAwL(lR, pars)
+  out <- EMC2:::rBTAwLTransient(lR, pars)
   expect_equal(nrow(out), 4)
   expect_true(all(is.finite(out$rt)))
+
+  local_pars <- data.frame(
+    v = rep(3, 8), sv = rep(0.2, 8), B = rep(1, 8), A = rep(0.2, 8),
+    t0 = rep(0.1, 8), k = rep(0.5, 8), tau_s = rep(1.2, 8),
+    tau_t = rep(0.7, 8), pi = rep(0.4, 8), b = rep(1.2, 8)
+  )
+  local_out <- EMC2:::rBTAwL(lR, local_pars)
+  expect_equal(nrow(local_out), 4)
+  expect_true(all(is.finite(local_out$rt)))
+  expect_true(all(!is.na(local_out$R)))
 })
 
-test_that("make_data produces omissions the design can be fit back through", {
+test_that("the transient design produces omissions that can be fit back through", {
   skip_on_cran()
   dat <- btawl_dat(40)
   des <- suppressMessages(design(
-    data = dat, model = BTAwL, matchfun = function(d) d$S == d$lR,
+    data = dat, model = BTAwLTransient, matchfun = function(d) d$S == d$lR,
     formula = list(v ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1, Ttrans ~ 1),
     constants = c(sv = log(1))))
   p <- c(v = 2.5, B = log(0.8), A = log(0.3), t0 = log(0.15),

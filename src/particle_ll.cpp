@@ -785,20 +785,37 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
     // h = I_p(alpha, beta), and 1 - h of the mass sits at t = +Inf.  There is
     // no parameter setting that removes this, so the flag is unconditional.
     out.ctx.defective_upper_tail = true;
-  } else if (type_std.find("BTAwL_MIX") != std::string::npos) {
-    out.pdf1_ptr       = &dbtawl_mix_scalar;
-    out.cdf1_ptr       = &pbtawl_mix_scalar;
-    out.model_dfun_raw = &dbtawl_mix_raw;
-    out.model_pfun_raw = &pbtawl_mix_raw;
-    out.logS_at_t_ptr  = &btawl_mix_logS_at_t;
+  } else if (type_std.find("BTAwL_SUSTAINED") != std::string::npos) {
+    out.pdf1_ptr       = &dbtawl_sustained_scalar;
+    out.cdf1_ptr       = &pbtawl_sustained_scalar;
+    out.model_dfun_raw = &dbtawl_sustained_raw;
+    out.model_pfun_raw = &pbtawl_sustained_raw;
+    out.logS_at_t_ptr  = &btawl_sustained_logS_at_t;
+    const bool btawl_logn = (type_std.find("_LOGN") != std::string::npos);
+    out.col_spec = btawl_logn
+      ? emc2col::btawl_sustained_logn::spec()
+      : emc2col::btawl_sustained::spec();
+    out.ctx.t0_index = emc2col::btawl_sustained::t0;
+    out.ctx.btawl_launch = btawl_logn ? BTAWL_LAUNCH_LOGNORMAL
+                                      : BTAWL_LAUNCH_NORMAL;
+    out.ctx.btawl_ttrans_chart = false;
+    out.ctx.defective_upper_tail = true;
+    if (!btawl_logn && type_std.find("_IO") != std::string::npos)
+      out.ctx.use_posdrift = false;
+  } else if (type_std.find("BTAwL_TRANSIENT") != std::string::npos) {
+    out.pdf1_ptr       = &dbtawl_transient_scalar;
+    out.cdf1_ptr       = &pbtawl_transient_scalar;
+    out.model_dfun_raw = &dbtawl_transient_raw;
+    out.model_pfun_raw = &pbtawl_transient_raw;
+    out.logS_at_t_ptr  = &btawl_transient_logS_at_t;
     const bool btawl_logn = (type_std.find("_LOGN") != std::string::npos);
     const bool btawl_rate = (type_std.find("_RATE") != std::string::npos);
     out.col_spec = btawl_logn
-      ? (btawl_rate ? emc2col::btawl_mix_logn::spec_rate()
-                    : emc2col::btawl_mix_logn::spec())
-      : (btawl_rate ? emc2col::btawl_mix::spec_rate()
-                    : emc2col::btawl_mix::spec());
-    out.ctx.t0_index = emc2col::btawl_mix::t0;
+      ? (btawl_rate ? emc2col::btawl_transient_logn::spec_rate()
+                    : emc2col::btawl_transient_logn::spec())
+      : (btawl_rate ? emc2col::btawl_transient::spec_rate()
+                    : emc2col::btawl_transient::spec());
+    out.ctx.t0_index = emc2col::btawl_transient::t0;
     out.ctx.btawl_launch = btawl_logn ? BTAWL_LAUNCH_LOGNORMAL
                                       : BTAWL_LAUNCH_NORMAL;
     out.ctx.btawl_ttrans_chart = !btawl_rate;
@@ -806,22 +823,19 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
     if (!btawl_logn && type_std.find("_IO") != std::string::npos)
       out.ctx.use_posdrift = false;
   } else if (type_std.find("BTAwL") != std::string::npos) {
-    // Ballistic transient accumulator with leak:
-    // dX/du = V (u/tau) exp(-u/tau) - k X.  The kernel is analytic on the
-    // live branch and uses only a one-dimensional saturated-start integral.
-    out.pdf1_ptr       = &dbtawl_scalar;
-    out.cdf1_ptr       = &pbtawl_scalar;
-    out.model_dfun_raw = &dbtawl_raw;
-    out.model_pfun_raw = &pbtawl_raw;
-    out.logS_at_t_ptr  = &btawl_logS_at_t;
+    out.pdf1_ptr       = &dbtawl_local_race_scalar;
+    out.cdf1_ptr       = &pbtawl_local_race_scalar;
+    out.model_dfun_raw = &dbtawl_local_race_raw;
+    out.model_pfun_raw = &pbtawl_local_race_raw;
+    out.logS_at_t_ptr  = &btawl_local_race_logS_at_t;
     const bool btawl_logn = (type_std.find("_LOGN") != std::string::npos);
     const bool btawl_rate = (type_std.find("_RATE") != std::string::npos);
     out.col_spec = btawl_logn
-      ? (btawl_rate ? emc2col::btawl_logn::spec_rate()
-                    : emc2col::btawl_logn::spec())
-      : (btawl_rate ? emc2col::btawl::spec_rate()
-                    : emc2col::btawl::spec());
-    out.ctx.t0_index = emc2col::btawl::t0;
+      ? (btawl_rate ? emc2col::btawl_local_race_logn::spec_rate()
+                    : emc2col::btawl_local_race_logn::spec())
+      : (btawl_rate ? emc2col::btawl_local_race::spec_rate()
+                    : emc2col::btawl_local_race::spec());
+    out.ctx.t0_index = emc2col::btawl_local_race::t0;
     out.ctx.btawl_launch = btawl_logn ? BTAWL_LAUNCH_LOGNORMAL
                                       : BTAWL_LAUNCH_NORMAL;
     out.ctx.btawl_ttrans_chart = !btawl_rate;

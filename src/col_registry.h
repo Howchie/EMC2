@@ -179,10 +179,9 @@ namespace bawr_logn {
   }
 }
 
-// R/model_BTAwL.R — BTAwL (transient pulse with state leak).  As with the
-// other ballistic launch models, the first two positions are either (v, sv)
-// or (mu, sigma); only the names differ for the lognormal member.
-namespace btawl {
+// R/model_BTAwL.R — BTAwL pure transient member. As with the other ballistic
+// launch models, the first two positions are either (v, sv) or (mu, sigma).
+namespace btawl_transient {
   enum : int { v = 0, sv, B, A, t0, k, clear, N_REQ };
   inline ColSpec spec() {
     static const char* n[] = {"v", "sv", "B", "A", "t0", "k", "Ttrans"};
@@ -193,7 +192,7 @@ namespace btawl {
     return {n, N_REQ, "BTAwL_RATE"};
   }
 }
-namespace btawl_logn {
+namespace btawl_transient_logn {
   enum : int { mu = 0, sigma, B, A, t0, k, clear, N_REQ };
   inline ColSpec spec() {
     static const char* n[] = {"mu", "sigma", "B", "A", "t0", "k", "Ttrans"};
@@ -204,30 +203,47 @@ namespace btawl_logn {
     return {n, N_REQ, "BTAwL_LOGN_RATE"};
   }
 }
-namespace btawl_mix {
-  // tau_t aliases the shared endpoint-chart slot `clear`; pi must remain the
-  // next enumerator so the nine-column mixed contract stays positional.
+namespace btawl_local_race {
+  // Full BTAwL local-race contract. tau_t aliases the endpoint-chart slot
+  // `clear`; pi remains the final position.
   enum : int { v = 0, sv, B, A, t0, k, tau_s, clear, tau_t = clear, pi, N_REQ };
   inline ColSpec spec() {
     static const char* n[] = {"v", "sv", "B", "A", "t0", "k", "tau_s", "Ttrans", "pi"};
-    return {n, N_REQ, "BTAwL_MIX"};
+    return {n, N_REQ, "BTAwL"};
   }
   inline ColSpec spec_rate() {
     static const char* n[] = {"v", "sv", "B", "A", "t0", "k", "tau_s", "tau_t", "pi"};
-    return {n, N_REQ, "BTAwL_MIX_RATE"};
+    return {n, N_REQ, "BTAwL_RATE"};
   }
 }
-namespace btawl_mix_logn {
-  // tau_t aliases the shared endpoint-chart slot `clear`; pi must remain the
-  // next enumerator so the nine-column mixed contract stays positional.
+namespace btawl_local_race_logn {
+  // Full BTAwL local-race contract. tau_t aliases the endpoint-chart slot
+  // `clear`; pi remains the final position.
   enum : int { mu = 0, sigma, B, A, t0, k, tau_s, clear, tau_t = clear, pi, N_REQ };
   inline ColSpec spec() {
     static const char* n[] = {"mu", "sigma", "B", "A", "t0", "k", "tau_s", "Ttrans", "pi"};
-    return {n, N_REQ, "BTAwL_MIX_LOGN"};
+    return {n, N_REQ, "BTAwL_LOGN"};
   }
   inline ColSpec spec_rate() {
     static const char* n[] = {"mu", "sigma", "B", "A", "t0", "k", "tau_s", "tau_t", "pi"};
-    return {n, N_REQ, "BTAwL_MIX_LOGN_RATE"};
+    return {n, N_REQ, "BTAwL_LOGN_RATE"};
+  }
+}
+
+// Pure sustained BTAwL wrapper.  The full BTAwL local race uses the nine-column
+// contract above; this seven-column contract is only for the pi = 1 wrapper.
+namespace btawl_sustained {
+  enum : int { v = 0, sv, B, A, t0, k, tau_s, N_REQ };
+  inline ColSpec spec() {
+    static const char* n[] = {"v", "sv", "B", "A", "t0", "k", "tau_s"};
+    return {n, N_REQ, "BTAwL_SUSTAINED"};
+  }
+}
+namespace btawl_sustained_logn {
+  enum : int { mu = 0, sigma, B, A, t0, k, tau_s, N_REQ };
+  inline ColSpec spec() {
+    static const char* n[] = {"mu", "sigma", "B", "A", "t0", "k", "tau_s"};
+    return {n, N_REQ, "BTAwL_SUSTAINED_LOGN"};
   }
 }
 

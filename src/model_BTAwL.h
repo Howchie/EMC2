@@ -1,11 +1,14 @@
 #ifndef EMC2_MODEL_BTAWL_H
 #define EMC2_MODEL_BTAWL_H
 
-// BTAwL: ballistic transient accumulator with leak.
+// BTAwL: ballistic transient/sustained local race with leak.
 //
-//   dX/du = V (u/tau) exp(-u/tau) - k X,  X(0) = z, z ~ U(0,A)
+//   transient: dX_T/du = V_T (u/tau_t) exp(-u/tau_t) - k X_T
+//   sustained: dX_S/du = V_S (1 - exp(-u/tau_s)) - k X_S
+//   X_T(0) = z_T, X_S(0) = z_S, z_T and z_S independently ~ U(0,A)
 //
-// The transient response is affine in the launch point and the required
+// The transient and sustained members are raced locally. The transient
+// response is affine in the launch point and the required
 // launch V*(u,z) is therefore affine in z on the live part of the CDF.  The
 // live start-point average is evaluated in closed form (normal and lognormal
 // launches).  The already-saturated start region is a one-dimensional
@@ -732,10 +735,7 @@ inline double btawl_log_pdf_chart(double t, double A, double b, double p1,
 }
 
 // ---------------------------------------------------------------------------
-// Shared-strength sustained + transient extension.
-// ---------------------------------------------------------------------------
-// ---------------------------------------------------------------------------
-// Shared-strength sustained + transient extension.
+// Sustained + transient local-race extension.
 // ---------------------------------------------------------------------------
 
 inline double btawl_hs(double t, double k, double tau) {
@@ -833,7 +833,7 @@ inline double btawl_sustained_pdf(double t, double A, double b, double p1, doubl
   return (out > 0.0 && emc2_isfinite(out)) ? out : 0.0;
 }
 
-inline double btawl_mix_cdf(double t, double A, double b, double p1, double p2,
+inline double btawl_local_race_cdf(double t, double A, double b, double p1, double p2,
                             double k, double tau_s, double tau_t, double pi,
                             int launch, bool posdrift) {
   if (pi <= 1e-14) return btawl_cdf(t, A, b, p1, p2, k, tau_t, launch, posdrift);
@@ -854,7 +854,7 @@ inline double btawl_mix_cdf(double t, double A, double b, double p1, double p2,
   return 1.0 - (1.0 - F_T) * (1.0 - F_S);
 }
 
-inline double btawl_mix_pdf(double t, double A, double b, double p1, double p2,
+inline double btawl_local_race_pdf(double t, double A, double b, double p1, double p2,
                             double k, double tau_s, double tau_t, double pi,
                             int launch, bool posdrift) {
   if (pi <= 1e-14) return btawl_pdf(t, A, b, p1, p2, k, tau_t, launch, posdrift);
@@ -878,17 +878,17 @@ inline double btawl_mix_pdf(double t, double A, double b, double p1, double p2,
   return f_T * (1.0 - F_S) + f_S * (1.0 - F_T);
 }
 
-inline double btawl_mix_cdf_log(double t, double A, double b, double p1, double p2,
+inline double btawl_local_race_cdf_log(double t, double A, double b, double p1, double p2,
                                 double k, double tau_s, double tau_t, double pi,
                                 int launch, bool posdrift) {
-  const double p = btawl_mix_cdf(t, A, b, p1, p2, k, tau_s, tau_t, pi, launch, posdrift);
+  const double p = btawl_local_race_cdf(t, A, b, p1, p2, k, tau_s, tau_t, pi, launch, posdrift);
   return p > 0.0 ? std::log(p) : R_NegInf;
 }
 
-inline double btawl_mix_pdf_log(double t, double A, double b, double p1, double p2,
+inline double btawl_local_race_pdf_log(double t, double A, double b, double p1, double p2,
                                 double k, double tau_s, double tau_t, double pi,
                                 int launch, bool posdrift) {
-  const double p = btawl_mix_pdf(t, A, b, p1, p2, k, tau_s, tau_t, pi, launch, posdrift);
+  const double p = btawl_local_race_pdf(t, A, b, p1, p2, k, tau_s, tau_t, pi, launch, posdrift);
   return p > 0.0 ? std::log(p) : R_NegInf;
 }
 
@@ -954,7 +954,7 @@ inline double btawl_sustained_log_surv(double t, double A, double b, double p1, 
   return ISNAN(out) ? R_NegInf : std::fmin(out, 0.0);
 }
 
-inline double btawl_mix_log_surv(double t, double A, double b, double p1,
+inline double btawl_local_race_log_surv(double t, double A, double b, double p1,
                                  double p2, double k, double tau_s,
                                  double tau_t, double pi, int launch,
                                  bool posdrift) {
@@ -980,7 +980,7 @@ inline double btawl_mix_log_surv(double t, double A, double b, double p1,
   return ls_T + ls_S;
 }
 // [[Rcpp::export]]
-NumericVector dbtawl(NumericVector t, NumericVector A, NumericVector b,
+NumericVector dbtawl_transient(NumericVector t, NumericVector A, NumericVector b,
                      NumericVector p1, NumericVector p2, NumericVector k,
                      NumericVector tau, int launch = 1,
                      bool posdrift = true, bool log_out = false) {
@@ -995,7 +995,7 @@ NumericVector dbtawl(NumericVector t, NumericVector A, NumericVector b,
 }
 
 // [[Rcpp::export]]
-NumericVector pbtawl(NumericVector t, NumericVector A, NumericVector b,
+NumericVector pbtawl_transient(NumericVector t, NumericVector A, NumericVector b,
                      NumericVector p1, NumericVector p2, NumericVector k,
                      NumericVector tau, int launch = 1,
                      bool posdrift = true, bool log_out = false) {
@@ -1010,7 +1010,7 @@ NumericVector pbtawl(NumericVector t, NumericVector A, NumericVector b,
 }
 
 // [[Rcpp::export]]
-NumericVector btawl_log_surv_vec(NumericVector t, NumericVector A,
+NumericVector btawl_transient_log_surv_vec(NumericVector t, NumericVector A,
                                  NumericVector b, NumericVector p1,
                                  NumericVector p2, NumericVector k,
                                  NumericVector tau, int launch = 1,
@@ -1027,7 +1027,7 @@ NumericVector btawl_log_surv_vec(NumericVector t, NumericVector A,
 }
 
 // [[Rcpp::export]]
-NumericVector btawl_mix_log_surv_vec(NumericVector t, NumericVector A,
+NumericVector btawl_local_race_log_surv_vec(NumericVector t, NumericVector A,
                                      NumericVector b, NumericVector p1,
                                      NumericVector p2, NumericVector k,
                                      NumericVector tau_s, NumericVector tau_t,
@@ -1038,14 +1038,14 @@ NumericVector btawl_mix_log_surv_vec(NumericVector t, NumericVector A,
   NumericVector out(n);
   auto pick = [](const NumericVector& x, int i) { return x.size() == 1 ? x[0] : x[i]; };
   for (int i = 0; i < n; ++i)
-    out[i] = btawl_mix_log_surv(pick(t, i), pick(A, i), pick(b, i), pick(p1, i),
+    out[i] = btawl_local_race_log_surv(pick(t, i), pick(A, i), pick(b, i), pick(p1, i),
                                 pick(p2, i), pick(k, i), pick(tau_s, i),
                                 pick(tau_t, i), pick(pi, i), launch, posdrift);
   return out;
 }
 
 // [[Rcpp::export]]
-NumericVector dbtawlmix(NumericVector t, NumericVector A, NumericVector b,
+NumericVector dbtawl_local_race(NumericVector t, NumericVector A, NumericVector b,
                         NumericVector p1, NumericVector p2, NumericVector k,
                         NumericVector tau_s, NumericVector tau_t,
                         NumericVector pi, int launch = 1,
@@ -1053,7 +1053,7 @@ NumericVector dbtawlmix(NumericVector t, NumericVector A, NumericVector b,
   const int n = t.size(); NumericVector out(n);
   auto pick = [](const NumericVector& x, int i) { return x.size() == 1 ? x[0] : x[i]; };
   for (int i = 0; i < n; ++i) {
-    const double lp = btawl_mix_pdf_log(t[i], pick(A,i), pick(b,i), pick(p1,i), pick(p2,i),
+    const double lp = btawl_local_race_pdf_log(t[i], pick(A,i), pick(b,i), pick(p1,i), pick(p2,i),
                                         pick(k,i), pick(tau_s,i), pick(tau_t,i), pick(pi,i),
                                         launch, posdrift);
     out[i] = log_out ? lp : (lp > R_NegInf ? std::exp(lp) : 0.0);
@@ -1062,7 +1062,7 @@ NumericVector dbtawlmix(NumericVector t, NumericVector A, NumericVector b,
 }
 
 // [[Rcpp::export]]
-NumericVector pbtawlmix(NumericVector t, NumericVector A, NumericVector b,
+NumericVector pbtawl_local_race(NumericVector t, NumericVector A, NumericVector b,
                         NumericVector p1, NumericVector p2, NumericVector k,
                         NumericVector tau_s, NumericVector tau_t,
                         NumericVector pi, int launch = 1,
@@ -1070,7 +1070,7 @@ NumericVector pbtawlmix(NumericVector t, NumericVector A, NumericVector b,
   const int n = t.size(); NumericVector out(n);
   auto pick = [](const NumericVector& x, int i) { return x.size() == 1 ? x[0] : x[i]; };
   for (int i = 0; i < n; ++i) {
-    const double lp = btawl_mix_cdf_log(t[i], pick(A,i), pick(b,i), pick(p1,i), pick(p2,i),
+    const double lp = btawl_local_race_cdf_log(t[i], pick(A,i), pick(b,i), pick(p1,i), pick(p2,i),
                                         pick(k,i), pick(tau_s,i), pick(tau_t,i), pick(pi,i),
                                         launch, posdrift);
     out[i] = log_out ? lp : (lp > R_NegInf ? std::exp(lp) : 0.0);

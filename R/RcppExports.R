@@ -213,28 +213,28 @@ simulate_gbm_hit_times_bb <- function(n, mu, sigma, z0, b0, binf, tau = 1.0, pow
     .Call(`_EMC2_simulate_gbm_hit_times_bb`, n, mu, sigma, z0, b0, binf, tau, pow, dt, t_max, start_floor, p_tol, eps_curv, adapt_factor, adaptive)
 }
 
-dbtawl <- function(t, A, b, p1, p2, k, tau, launch = 1L, posdrift = TRUE, log_out = FALSE) {
-    .Call(`_EMC2_dbtawl`, t, A, b, p1, p2, k, tau, launch, posdrift, log_out)
+dbtawl_transient <- function(t, A, b, p1, p2, k, tau, launch = 1L, posdrift = TRUE, log_out = FALSE) {
+    .Call(`_EMC2_dbtawl_transient`, t, A, b, p1, p2, k, tau, launch, posdrift, log_out)
 }
 
-pbtawl <- function(t, A, b, p1, p2, k, tau, launch = 1L, posdrift = TRUE, log_out = FALSE) {
-    .Call(`_EMC2_pbtawl`, t, A, b, p1, p2, k, tau, launch, posdrift, log_out)
+pbtawl_transient <- function(t, A, b, p1, p2, k, tau, launch = 1L, posdrift = TRUE, log_out = FALSE) {
+    .Call(`_EMC2_pbtawl_transient`, t, A, b, p1, p2, k, tau, launch, posdrift, log_out)
 }
 
-btawl_log_surv_vec <- function(t, A, b, p1, p2, k, tau, launch = 1L, posdrift = TRUE) {
-    .Call(`_EMC2_btawl_log_surv_vec`, t, A, b, p1, p2, k, tau, launch, posdrift)
+btawl_transient_log_surv_vec <- function(t, A, b, p1, p2, k, tau, launch = 1L, posdrift = TRUE) {
+    .Call(`_EMC2_btawl_transient_log_surv_vec`, t, A, b, p1, p2, k, tau, launch, posdrift)
 }
 
-btawl_mix_log_surv_vec <- function(t, A, b, p1, p2, k, tau_s, tau_t, pi, launch = 1L, posdrift = TRUE) {
-    .Call(`_EMC2_btawl_mix_log_surv_vec`, t, A, b, p1, p2, k, tau_s, tau_t, pi, launch, posdrift)
+btawl_local_race_log_surv_vec <- function(t, A, b, p1, p2, k, tau_s, tau_t, pi, launch = 1L, posdrift = TRUE) {
+    .Call(`_EMC2_btawl_local_race_log_surv_vec`, t, A, b, p1, p2, k, tau_s, tau_t, pi, launch, posdrift)
 }
 
-dbtawlmix <- function(t, A, b, p1, p2, k, tau_s, tau_t, pi, launch = 1L, posdrift = TRUE, log_out = FALSE) {
-    .Call(`_EMC2_dbtawlmix`, t, A, b, p1, p2, k, tau_s, tau_t, pi, launch, posdrift, log_out)
+dbtawl_local_race <- function(t, A, b, p1, p2, k, tau_s, tau_t, pi, launch = 1L, posdrift = TRUE, log_out = FALSE) {
+    .Call(`_EMC2_dbtawl_local_race`, t, A, b, p1, p2, k, tau_s, tau_t, pi, launch, posdrift, log_out)
 }
 
-pbtawlmix <- function(t, A, b, p1, p2, k, tau_s, tau_t, pi, launch = 1L, posdrift = TRUE, log_out = FALSE) {
-    .Call(`_EMC2_pbtawlmix`, t, A, b, p1, p2, k, tau_s, tau_t, pi, launch, posdrift, log_out)
+pbtawl_local_race <- function(t, A, b, p1, p2, k, tau_s, tau_t, pi, launch = 1L, posdrift = TRUE, log_out = FALSE) {
+    .Call(`_EMC2_pbtawl_local_race`, t, A, b, p1, p2, k, tau_s, tau_t, pi, launch, posdrift, log_out)
 }
 
 btawl_tmax_vec <- function(k, tau) {
