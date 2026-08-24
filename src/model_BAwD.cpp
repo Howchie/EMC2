@@ -1,5 +1,8 @@
 #include "model_BAwD.h"
 #include <cmath>
+#include "race_contract.h"
+#include "utility_functions.h"
+#include "col_registry.h"
 
 // --------------------------------------------------------------------------
 // BAwD analytic core (kept out of the header so downstream family headers
@@ -1212,4 +1215,198 @@ double lognormal_power_stoploss_log(double v, double mu, double sigma, double m)
 double lognormal_logratio_stoploss_log(double v, double mu, double sigma,
                                        double log_ell) {
   return log_lognormal_logratio_stoploss(v, mu, sigma, log_ell);
+}
+
+// ============================================================
+// BAwD (Ballistic Accumulator with drive Decay) adapters
+// Column layout: p1=0 (v | mu), p2=1 (sv | sigma), B=2, A=3, t0=4, k=5, ell=6.
+// There are no clocks and no optional columns, so every row reads the same
+// seven values; ctx->bawd_launch selects the launch distribution.
+//
+// The upper tail is ALWAYS defective (never-finish mass exists whenever
+// ell > 0 or the drift can fall short), and the CDF is exactly flat past
+// t0 + T_max.  pfun_raw returns the log-SURVIVOR, per the race kernel
+// contract, so the flat tail arrives as a constant log(1 - F_max) rather than
+// as a clamped zero.
+// ============================================================
+
+namespace {
+int bawd_launch_of(const ContextForRaceModels* ctx) {
+  return ctx ? ctx->bawd_launch : BAWD_LAUNCH_LOGNORMAL;
+}
+double bawd_gamma_of(const ContextForRaceModels* ctx) {
+  return ctx ? ctx->bawd_gamma : 0.0;
+}
+double bawd_rho_of(const ContextForRaceModels* ctx) {
+  return ctx ? ctx->bawd_rho : R_PosInf;
+}
+
+// Slot `clear` holds T_max under the endpoint chart and ell at gamma = 1; the
+// kernels below all take ell, so every column read goes through this.
+double bawd_clear_to_ell(const ContextForRaceModels* ctx, double clear,
+                                double b, double k) {
+  const double gamma = bawd_gamma_of(ctx);
+  if (!bawd_uses_tmax(gamma)) return clear;
+  return bawd_ell_from_tmax(b, k, clear, gamma, bawd_rho_of(ctx));
+}
+}  // namespace
+
+double dbawd_scalar(double t, const double* par, void* ctx_) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  if (R_IsNA(par[emc2col::bawd::v])) return 0.0;
+  const double tt = t - par[emc2col::bawd::t0];
+  if (t <= 0.0 || tt <= 0.0) return 0.0;
+  const double b = par[emc2col::bawd::B] + par[emc2col::bawd::A];
+  return bawd_pdf_scalar_natural(
+    tt, par[emc2col::bawd::A], b,
+    par[emc2col::bawd::v], par[emc2col::bawd::sv],
+    par[emc2col::bawd::k],
+    bawd_clear_to_ell(ctx, par[emc2col::bawd::clear], b,
+                      par[emc2col::bawd::k]),
+    bawd_launch_of(ctx), ctx ? ctx->use_posdrift : true,
+    bawd_gamma_of(ctx), bawd_rho_of(ctx));
+}
+
+double pbawd_scalar(double t, const double* par, void* ctx_) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  if (R_IsNA(par[emc2col::bawd::v])) return 0.0;
+  const double tt = t - par[emc2col::bawd::t0];
+  if (t <= 0.0 || tt <= 0.0) return 0.0;
+  // tt == Inf is handled inside the kernel and returns F_max, not 1.
+  const double b = par[emc2col::bawd::B] + par[emc2col::bawd::A];
+  return bawd_cdf_scalar_natural(
+    tt, par[emc2col::bawd::A], b,
+    par[emc2col::bawd::v], par[emc2col::bawd::sv],
+    par[emc2col::bawd::k],
+    bawd_clear_to_ell(ctx, par[emc2col::bawd::clear], b,
+                      par[emc2col::bawd::k]),
+    bawd_launch_of(ctx), ctx ? ctx->use_posdrift : true,
+    bawd_gamma_of(ctx), bawd_rho_of(ctx));
+}
+
+void dbawd_raw(const double* rt, const double* const* cols, int n_rows,
+                      const int* mask, const int* isok,
+                      double* out, double min_ll, void* ctx_) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  const bool floor_raw = raw_floor_log_lik(ctx_);
+  const bool pd = ctx ? ctx->use_posdrift : true;
+  const int launch = bawd_launch_of(ctx);
+  const double gamma = bawd_gamma_of(ctx);
+  const double rho = bawd_rho_of(ctx);
+  const double* p1_ = cols[emc2col::bawd::v];
+  const double* p2_ = cols[emc2col::bawd::sv];
+  const double* B_  = cols[emc2col::bawd::B];
+  const double* A_  = cols[emc2col::bawd::A];
+  const double* t0_ = cols[emc2col::bawd::t0];
+  const double* k_  = cols[emc2col::bawd::k];
+  const double* clear_ = cols[emc2col::bawd::clear];
+  const bool tmax_chart = bawd_uses_tmax(gamma);
+  for (int i = 0; i < n_rows; ++i) {
+    if (!mask[i]) continue;
+    if (R_IsNA(p1_[i]) || !isok[i]) {
+      out[i] = raw_log_zero(min_ll, floor_raw);
+      continue;
+    }
+    const double tt = rt[i] - t0_[i];
+    if (tt <= 0.0 || rt[i] <= 0.0) {
+      out[i] = raw_log_zero(min_ll, floor_raw);
+      continue;
+    }
+    const double b_i = B_[i] + A_[i];
+    const double ell_i = tmax_chart
+      ? bawd_ell_from_tmax(b_i, k_[i], clear_[i], gamma, rho) : clear_[i];
+    const double log_pdf = bawd_log_pdf(tt, A_[i], b_i, p1_[i],
+                                        p2_[i], k_[i], ell_i, launch, pd,
+                                        gamma, rho);
+    out[i] = (log_pdf > R_NegInf && emc2_isfinite(log_pdf))
+      ? raw_log_value(log_pdf, min_ll, floor_raw)
+      : raw_log_zero(min_ll, floor_raw);
+  }
+}
+
+void pbawd_raw(const double* rt, const double* const* cols, int n_rows,
+                      const int* mask, const int* isok,
+                      double* out, double min_ll, void* ctx_) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  const bool floor_raw = raw_floor_log_lik(ctx_);
+  const bool pd = ctx ? ctx->use_posdrift : true;
+  const int launch = bawd_launch_of(ctx);
+  const double gamma = bawd_gamma_of(ctx);
+  const double rho = bawd_rho_of(ctx);
+  const double* p1_ = cols[emc2col::bawd::v];
+  const double* p2_ = cols[emc2col::bawd::sv];
+  const double* B_  = cols[emc2col::bawd::B];
+  const double* A_  = cols[emc2col::bawd::A];
+  const double* t0_ = cols[emc2col::bawd::t0];
+  const double* k_  = cols[emc2col::bawd::k];
+  const double* clear_ = cols[emc2col::bawd::clear];
+  const bool tmax_chart = bawd_uses_tmax(gamma);
+  for (int i = 0; i < n_rows; ++i) {
+    if (!mask[i]) continue;
+    if (R_IsNA(p1_[i]) || !isok[i]) { out[i] = 0.0; continue; }
+    const double tt = rt[i] - t0_[i];
+    if (tt <= 0.0 || rt[i] <= 0.0) { out[i] = 0.0; continue; }
+    const double b_i = B_[i] + A_[i];
+    const double ell_i = tmax_chart
+      ? bawd_ell_from_tmax(b_i, k_[i], clear_[i], gamma, rho) : clear_[i];
+    double cdf = 0.0;
+    if (ba_natural_cdf_bawd(tt, A_[i], b_i, p1_[i], p2_[i], k_[i], ell_i,
+                            launch, pd, gamma, rho, BAWD_DENOM_FLOOR,
+                            BA_ACCEPT_RAW, cdf)) {
+      out[i] = (cdf > 0.0) ? std::log1p(-cdf) : 0.0;
+    } else {
+      const double log_s = bawd_log_surv(tt, A_[i], b_i, p1_[i], p2_[i],
+                                         k_[i], ell_i, launch, pd, gamma, rho,
+                                         BAWD_DENOM_FLOOR);
+      out[i] = (log_s > R_NegInf && emc2_isfinite(log_s))
+        ? log_s : raw_log_zero(min_ll, floor_raw);
+    }
+  }
+}
+
+void bawd_logS_at_t(double t, const double* const* cols,
+                           int n_rows_total, int n_lR, int /*n_par*/,
+                           const int* trunc_mask, int n_unique_trials,
+                           const int* isok_all, void* ctx_, double* logS_out) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  const bool pd = ctx ? ctx->use_posdrift : true;
+  const int launch = bawd_launch_of(ctx);
+  const double gamma = bawd_gamma_of(ctx);
+  const double rho = bawd_rho_of(ctx);
+  const double* p1_ = cols[emc2col::bawd::v];
+  const double* p2_ = cols[emc2col::bawd::sv];
+  const double* B_  = cols[emc2col::bawd::B];
+  const double* A_  = cols[emc2col::bawd::A];
+  const double* t0_ = cols[emc2col::bawd::t0];
+  const double* k_  = cols[emc2col::bawd::k];
+  const double* clear_ = cols[emc2col::bawd::clear];
+  const bool tmax_chart = bawd_uses_tmax(gamma);
+  for (int j = 0; j < n_unique_trials; ++j) {
+    if (!trunc_mask[j]) continue;
+    const int start = j * n_lR;
+    double logS = 0.0;
+    bool bad = false;
+    for (int kk = 0; kk < n_lR && !bad; ++kk) {
+      const int r = start + kk;
+      if (!isok_all[r] || R_IsNA(p1_[r])) { bad = true; break; }
+      const double tt = t - t0_[r];
+      if (tt <= 0.0) continue;  // not started: survivor one
+      const double b_r = B_[r] + A_[r];
+      const double ell_r = tmax_chart
+        ? bawd_ell_from_tmax(b_r, k_[r], clear_[r], gamma, rho) : clear_[r];
+      double cdf = 0.0;
+      if (ba_natural_cdf_bawd(tt, A_[r], b_r, p1_[r], p2_[r], k_[r], ell_r,
+                              launch, pd, gamma, rho, BAWD_DENOM_FLOOR,
+                              BA_ACCEPT_RAW, cdf)) {
+        if (cdf > 0.0) logS += std::log1p(-cdf);
+      } else {
+        const double log_s = bawd_log_surv(tt, A_[r], b_r, p1_[r], p2_[r],
+                                           k_[r], ell_r, launch, pd, gamma, rho,
+                                           BAWD_DENOM_FLOOR);
+        if (!(log_s > R_NegInf) || ISNAN(log_s)) { bad = true; break; }
+        logS += log_s;
+      }
+    }
+    logS_out[j] = bad ? R_NegInf : logS;
+  }
 }

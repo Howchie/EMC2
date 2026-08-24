@@ -226,4 +226,20 @@ double bawd_pdf_scalar_natural(double t, double A, double b, double p1,
                                double p2, double k, double ell, int launch,
                                bool posdrift, double gamma, double rho);
 
+// BAwD race-model adapter entry points.
+// Definitions live in model_BAwD.cpp so utils.h remains a
+// declaration-only integration point for these adapters.
+double dbawd_scalar(double t, const double* par, void* ctx_);
+double pbawd_scalar(double t, const double* par, void* ctx_);
+void dbawd_raw(const double* rt, const double* const* cols, int n_rows,
+               const int* mask, const int* isok,
+               double* out, double min_ll, void* ctx_);
+void pbawd_raw(const double* rt, const double* const* cols, int n_rows,
+               const int* mask, const int* isok,
+               double* out, double min_ll, void* ctx_);
+void bawd_logS_at_t(double t, const double* const* cols,
+                    int n_rows_total, int n_lR, int n_par,
+                    const int* trunc_mask, int n_unique_trials,
+                    const int* isok_all, void* ctx_, double* logS_out);
+
 #endif  // EMC2_MODEL_BAWD_H
