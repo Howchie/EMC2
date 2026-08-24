@@ -41,6 +41,7 @@
 #endif
 #include "fpe_models.h"
 
+
 namespace fperace {
 
 #if defined(__AVX512F__) && defined(__FMA__)
@@ -148,6 +149,9 @@ struct Key {
   // and the physical-start interval because A is defined on the X scale.
   // Keeping these fields on the cache key lets both models share the cache
   // machinery without pretending that a log-space uniform start is uniform.
+  // ROUp channel mask: bit 0 sustained, bit 1 transient.  Other model kinds
+  // leave the default value untouched.
+  unsigned char roup_active = 3;
   double sigma = 1.0;
   double zlo = 0.0, zhi = 0.0;
   int model_kind = 0;              // 0 = ROU, 1 = Gompertz, 2 = ROUp
@@ -164,6 +168,7 @@ struct Key {
            v_T == o.v_T && tau_S == o.tau_S && tau_T == o.tau_T &&
            sigma == o.sigma && zlo == o.zlo && zhi == o.zhi &&
            model_kind == o.model_kind && log_state == o.log_state &&
+           roup_active == o.roup_active &&
            bkind == o.bkind && binf == o.binf && tau == o.tau && pw == o.pw;
   }
   bool finite() const {
@@ -190,6 +195,7 @@ struct KeyHash {
     mix(key.tau_S);
     mix(key.tau_T);
     mix(key.sigma);
+    mix(static_cast<double>(key.roup_active));
     mix(key.zlo);
     mix(key.zhi);
     mix(static_cast<double>(key.model_kind));
@@ -309,6 +315,7 @@ inline bool rou_key(double v, double k, double B, double A, double s,
   out.zlo = 0.0;
   out.model_kind = 0;
   out.log_state = false;
+  out.roup_active = 3;
   const double AA = (A > 0.0 && std::isfinite(A)) ? A * inv_s : 0.0;
   out.A = AA;
   out.b = B * inv_s + AA;                  // b = B + A, both already scaled
@@ -339,16 +346,27 @@ inline bool rou_key(double v, double k, double B, double A, double s,
 inline bool roup_key(double v_S, double v_T, double tau_S, double tau_T, double k, double B, double A, double s,
                      const BndSpec& bs, Key& out) {
   if (!(s > 0.0) || !std::isfinite(s)) return false;
+  if (!std::isfinite(v_S) || !std::isfinite(v_T) || v_S < 0.0 || v_T < 0.0)
+    return false;
+  const bool active_S = v_S > fpe::ROUP_DRIFT_EPS;
+  const bool active_T = v_T > fpe::ROUP_DRIFT_EPS;
+  if (!active_S && !active_T) return false;
+  if (active_S && (!(tau_S > 0.0) || !std::isfinite(tau_S))) return false;
+  if (active_T && (!(tau_T > 0.0) || !std::isfinite(tau_T))) return false;
   const double inv_s = 1.0 / s;
-  out.v = v_S * inv_s; // repurpose v as v_S
-  out.v_T = v_T * inv_s;
-  out.tau_S = tau_S;
-  out.tau_T = tau_T;
+  out.v = active_S ? v_S * inv_s : 0.0; // repurpose v as v_S
+  out.v_T = active_T ? v_T * inv_s : 0.0;
+  // Disabled channels are canonicalised so their time constants cannot split
+  // cache entries or affect a solve.
+  out.tau_S = active_S ? tau_S : 0.0;
+  out.tau_T = active_T ? tau_T : 0.0;
   out.k = (k > 0.0 && std::isfinite(k)) ? k : 0.0;
   out.sigma = 1.0;
   out.zlo = 0.0;
   out.model_kind = 2; // ROUp
   out.log_state = false;
+  out.roup_active = static_cast<unsigned char>((active_S ? 1 : 0) |
+                                               (active_T ? 2 : 0));
   const double AA = (A > 0.0 && std::isfinite(A)) ? A * inv_s : 0.0;
   out.A = AA;
   out.b = B * inv_s + AA;                  // b = B + A, both already scaled
@@ -371,12 +389,17 @@ inline bool roup_key(double v_S, double v_T, double tau_S, double tau_T, double 
 
 inline bool roup_transient_to_rate(int par_kind, double transient, double tau_T,
                                    double& v_T) {
-  if (!std::isfinite(transient) || !std::isfinite(tau_T)) return false;
+  if (!std::isfinite(transient) || transient < 0.0) return false;
   if (par_kind == ROUP_PAR_RATE) {
     v_T = transient;
     return true;
   }
-  if (par_kind != ROUP_PAR_AREA || !(tau_T > 0.0)) return false;
+  if (par_kind != ROUP_PAR_AREA) return false;
+  if (transient <= fpe::ROUP_DRIFT_EPS) {
+    v_T = 0.0;
+    return true;
+  }
+  if (!(tau_T > 0.0) || !std::isfinite(tau_T)) return false;
   v_T = transient / tau_T;
   return std::isfinite(v_T);
 }
@@ -493,11 +516,16 @@ struct SolveCache {
   // Parameterisation, likewise set once.  It selects which columns the kernels
   // read and how they map onto (v, k, s); the solve itself is unaffected.
   int par_kind = ROU_PAR_RATE;
+  // ROUp's independent-channel variant keeps two row-to-entry maps while
+  // sharing the generic solve entries and exact-key index.
+  bool roup_local = false;
   bool sparse_raw_output = true;
   bool prepared = false;
   size_t n_entries = 0;
   std::vector<Entry> e;
   std::vector<int> row_group;   // scratch: row -> index into e, or -1
+  std::vector<int> row_group_s; // local ROUp sustained entry, or -1
+  std::vector<int> row_group_t; // local ROUp transient entry, or -1
   std::unordered_map<Key, int, KeyHash> index;
 
   // Cleared once per particle.  Keys are exact, so a stale entry could never be
@@ -516,6 +544,8 @@ struct SolveCache {
     }
     n_entries = 0;
     row_group.clear();
+    row_group_s.clear();
+    row_group_t.clear();
     index.clear();
   }
 };
@@ -563,6 +593,8 @@ inline void roup_solve(const Key& p, double t_max, const FPE_Grid& gr, Entry& ou
   fpe::FPE_ModelPulseOU m;
   m.v_S = p.v;
   m.v_T = p.v_T;
+  m.active_S = (p.roup_active & 1u) != 0u;
+  m.active_T = (p.roup_active & 2u) != 0u;
   m.tau_S = p.tau_S;
   m.tau_T = p.tau_T;
   m.lambda = p.k;

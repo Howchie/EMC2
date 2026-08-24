@@ -32,6 +32,8 @@
 # an exponentially collapsing bound.
 .ROUp_PAR <- c(rate = 0L, area = 1L)
 .ROUp_PAR_INFIX <- c(rate = "", area = "AREA")
+.ROUp_POOLING <- c(coactive = 0L, local_race = 1L)
+.ROUP_DRIFT_EPS <- 1e-10
 
 # The transient columns supplied by each chart. The sustained channel (v_S,
 # tau_S) remains present in both charts.
@@ -80,7 +82,8 @@
   p
 }
 
-.roup_pdf_cdf <- function(rt, pars, kind = NULL, par = "rate") {
+.roup_pdf_cdf <- function(rt, pars, kind = NULL, par = "rate", pooling = "coactive") {
+  pooling <- match.arg(pooling, names(.ROUp_POOLING))
   p <- .roup_with_kind(.roup_cols(pars, par), kind)
   g <- .roup_grid()
   bad_par <- !is.finite(p$v_S) | !is.finite(p$t0)
@@ -98,7 +101,8 @@
   }
   out <- droup_cpp(rt, p$v_S, p$v_T, p$tau_S, p$tau_T, p$k, p$B, p$A, p$t0, p$s,
                    as.integer(g$nx), g$dt_target, g$grade, g$tgrade,
-                   p$bkind, p$Binf, p$tau, p$pw, .ROUp_PAR[[par]])
+                   p$bkind, p$Binf, p$tau, p$pw, .ROUp_PAR[[par]],
+                   .ROUp_POOLING[[pooling]])
   if (any(bad)) {
     out$pdf[bad] <- 0
     out$cdf[bad] <- ifelse(!bad_par[bad] & rt_pos_inf[bad], 1, 0)
@@ -106,16 +110,18 @@
   out
 }
 
-dROUp <- function(rt, pars, kind = NULL, par = "rate")
-  .roup_pdf_cdf(rt, pars, kind, par)$pdf
+dROUp <- function(rt, pars, kind = NULL, par = "rate", pooling = "coactive")
+  .roup_pdf_cdf(rt, pars, kind, par, pooling)$pdf
 
-pROUp <- function(rt, pars, kind = NULL, par = "rate")
-  .roup_pdf_cdf(rt, pars, kind, par)$cdf
+pROUp <- function(rt, pars, kind = NULL, par = "rate", pooling = "coactive")
+  .roup_pdf_cdf(rt, pars, kind, par, pooling)$cdf
 
 rROUp <- function(lR, pars, ok = rep(TRUE, nrow(pars)), kind = NULL,
                  par = "rate",
                  dt = getOption("emc2.roup_sim_dt", 1e-3),
-                 t_max = getOption("emc2.roup_sim_tmax", 30)) {
+                 t_max = getOption("emc2.roup_sim_tmax", 30),
+                 pooling = "coactive") {
+  pooling <- match.arg(pooling, names(.ROUp_POOLING))
   p <- .roup_with_kind(.roup_cols(pars, par), kind)
   nr <- length(levels(lR))
   bad <- rep(NA, length(lR) / nr)
@@ -130,7 +136,7 @@ rROUp <- function(lR, pars, ok = rep(TRUE, nrow(pars)), kind = NULL,
                                      if (p$bkind == 0L) numeric(0) else p$Binf[ok2],
                                      if (p$bkind == 0L) numeric(0) else p$tau[ok2],
                                      if (length(p$pw)) p$pw[ok2] else numeric(0),
-                                     .ROUp_PAR[[par]])
+                                     .ROUp_PAR[[par]], .ROUp_POOLING[[pooling]])
   }
   bad_col <- apply(dt_mat, 2, function(x) all(is.infinite(x)))
   R <- max.col(-t(dt_mat), ties.method = "first")
@@ -149,7 +155,9 @@ rROUp <- function(lR, pars, ok = rep(TRUE, nrow(pars)), kind = NULL,
 .rfun_ROUp_R <- function(lR, pars, ok = rep(TRUE, nrow(pars)), kind = NULL,
                         par = "rate",
                         dt = getOption("emc2.roup_sim_dt", 1e-3),
-                        t_max = getOption("emc2.roup_sim_tmax", 30)) {
+                        t_max = getOption("emc2.roup_sim_tmax", 30),
+                        pooling = "coactive") {
+  pooling <- match.arg(pooling, names(.ROUp_POOLING))
   p <- .roup_with_kind(.roup_cols(pars, par), kind)
   nr <- length(levels(lR))
   bad <- rep(NA, length(lR) / nr)
@@ -161,7 +169,14 @@ rROUp <- function(lR, pars, ok = rep(TRUE, nrow(pars)), kind = NULL,
 
   # Step single OU trajectory in R for trial i
   .sim_one <- function(v_S, v_T, tau_S, tau_T, k, B, A, s, bkind, Binf, tau, pw) {
-    if (!is.finite(v_S) || !is.finite(v_T) || !is.finite(B) || !is.finite(s) || s <= 0) return(Inf)
+    eps <- .ROUP_DRIFT_EPS
+    if (!is.finite(v_S) || !is.finite(v_T) || v_S < 0 || v_T < 0 ||
+        !is.finite(B) || !is.finite(s) || s <= 0) return(Inf)
+    active_s <- v_S > eps
+    active_t <- v_T > eps
+    if (!active_s && !active_t) return(Inf)
+    if ((active_s && (!is.finite(tau_S) || tau_S <= 0)) ||
+        (active_t && (!is.finite(tau_T) || tau_T <= 0))) return(Inf)
     kk <- if (is.finite(k) && k > 0) k else 0
     AA <- if (is.finite(A) && A > 0) A else 0
     X <- if (AA > 0) runif(1, 0, AA) else 0
@@ -189,8 +204,8 @@ rROUp <- function(lR, pars, ok = rep(TRUE, nrow(pars)), kind = NULL,
     t <- 0
     while (t < t_max) {
       tm <- t + 0.5 * dt
-      mu_S <- v_S * ifelse(tau_S > 1e-12, 1 - exp(-tm / tau_S), 1)
-      mu_T <- v_T * ifelse(tau_T > 1e-12, (tm / tau_T) * exp(-tm / tau_T), 0)
+      mu_S <- if (active_s) v_S * (1 - exp(-tm / tau_S)) else 0
+      mu_T <- if (active_t) v_T * (tm / tau_T) * exp(-tm / tau_T) else 0
       d_step <- (mu_S + mu_T) * drift_gain
 
       X1 <- X * phi + d_step + sd_val * rnorm(1)
@@ -217,11 +232,22 @@ rROUp <- function(lR, pars, ok = rep(TRUE, nrow(pars)), kind = NULL,
     } else p$v_T
     for (j in seq_along(idx)) {
       i <- idx[j]
-      hits[j] <- .sim_one(p$v_S[i], v_T_rate[i], p$tau_S[i], p$tau_T[i],
-                          p$k[i], p$B[i], p$A[i], p$s[i], p$bkind,
-                          if (length(p$Binf) >= i) p$Binf[i] else 0,
-                          if (length(p$tau) >= i) p$tau[i] else 0,
-                          if (length(p$pw) >= i) p$pw[i] else 0)
+      bi <- if (length(p$Binf) >= i) p$Binf[i] else 0
+      ti <- if (length(p$tau) >= i) p$tau[i] else 0
+      pi <- if (length(p$pw) >= i) p$pw[i] else 0
+      if (pooling == "local_race" && p$v_S[i] > .ROUP_DRIFT_EPS &&
+          v_T_rate[i] > .ROUP_DRIFT_EPS) {
+        hits[j] <- min(
+          .sim_one(p$v_S[i], 0, p$tau_S[i], 1, p$k[i], p$B[i], p$A[i],
+                  p$s[i], p$bkind, bi, ti, pi),
+          .sim_one(0, v_T_rate[i], 1, p$tau_T[i], p$k[i], p$B[i], p$A[i],
+                  p$s[i], p$bkind, bi, ti, pi)
+        )
+      } else {
+        hits[j] <- .sim_one(p$v_S[i], v_T_rate[i], p$tau_S[i], p$tau_T[i],
+                            p$k[i], p$B[i], p$A[i], p$s[i], p$bkind,
+                            bi, ti, pi)
+      }
     }
     dt_mat[ok2] <- hits
   }
@@ -311,6 +337,10 @@ rROUp <- function(lR, pars, ok = rep(TRUE, nrow(pars)), kind = NULL,
 #'   `E_T = v_T * tau_T`; the sustained `(v_S, tau_S)` channel is retained in
 #'   both charts.
 #'
+#' @param pooling Character; `"coactive"` (the default) pools sustained and
+#'   transient drift in one accumulator, while `"local_race"` races independent
+#'   sustained-only and transient-only accumulators inside each marginal kernel.
+#'
 #' @return A list defining the cognitive model
 #' @examples
 #' # A 2-choice pulse-drift race model
@@ -325,9 +355,11 @@ rROUp <- function(lR, pars, ok = rep(TRUE, nrow(pars)), kind = NULL,
 
 ROUp <- function(boundary_collapse = c("fixed", "exponential", "linear_additive",
                                       "linear_multiplicative", "weibull"),
-                parameterization = c("rate", "area")) {
+                parameterization = c("rate", "area"),
+                pooling = c("coactive", "local_race")) {
   boundary_collapse <- match.arg(boundary_collapse)
   parameterization <- match.arg(parameterization)
+  pooling <- match.arg(pooling)
   kind <- boundary_collapse
   par <- parameterization
 
@@ -382,7 +414,9 @@ ROUp <- function(boundary_collapse = c("fixed", "exponential", "linear_additive"
 
   list(
     type = "RACE",
-    c_name = paste0("ROUp", .ROUp_PAR_INFIX[[par]], .ROUp_SUFFIX[[kind]]),
+    c_name = paste0("ROUp", .ROUp_PAR_INFIX[[par]],
+                    if (pooling == "local_race") "_LOCAL_RACE" else "",
+                    .ROUp_SUFFIX[[kind]]),
     # The density is evaluated by a cached Fokker--Planck solve.
     compress_ok = FALSE,
     p_types = p_types,
@@ -395,13 +429,12 @@ ROUp <- function(boundary_collapse = c("fixed", "exponential", "linear_additive"
       pars <- cbind(pars, b = pars[, "B"] + pars[, "A"])
       pars
     },
-    # Random function for racing accumulators
     rfun = function(data = NULL, pars) .rfun_ROUp(data$lR, pars, ok = attr(pars, "ok"),
-                                                 kind = kind, par = par),
+                                                 kind = kind, par = par, pooling = pooling),
     # Density function (PDF) for single accumulator
-    dfun = function(rt, pars) dROUp(rt, pars, kind = kind, par = par),
+    dfun = function(rt, pars) dROUp(rt, pars, kind = kind, par = par, pooling = pooling),
     # Probability function (CDF) for single accumulator
-    pfun = function(rt, pars) pROUp(rt, pars, kind = kind, par = par),
+    pfun = function(rt, pars) pROUp(rt, pars, kind = kind, par = par, pooling = pooling),
     # Race likelihood combining pfun and dfun
     log_likelihood = function(pars, dadm, model, min_ll = log(1e-10)) {
       log_likelihood_race_missing(pars = pars, dadm = dadm, model = model, min_ll = min_ll)

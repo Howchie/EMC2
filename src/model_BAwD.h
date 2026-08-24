@@ -153,9 +153,6 @@ double bawd_kr(const BawdGeom& g, double x);
 double bawd_psi(double s, const BawdGeom& g);
 double bawd_newton_s(double c, const BawdGeom& g);
 bool bawd_shape_flags(BawdGeom& g, double gamma, double rho);
-double bawd_ell_from_tmax(double b, double k, double Tmax,
-                          double gamma, double rho = R_PosInf);
-bool bawd_uses_tmax(double gamma);
 BawdGeom bawd_geometry(double A, double b, double k, double ell,
                        double gamma, double rho = R_PosInf);
 double bawd_critical_launch(const BawdGeom& g, double s);

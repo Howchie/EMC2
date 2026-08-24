@@ -158,10 +158,6 @@ struct ContextForRaceModels {
     double bawd_gamma = 0.0;
     double bawd_rho = R_PosInf;
 
-    // BAwD's identified chart: the raw columns are (y0, T_max, A, delta,
-    // sigma, t0) and the adapters map them to the ordinary lognormal BAwD
-    // coordinates before evaluating the same closed-form kernel.
-
     // BAwL launch-strength distribution, on the same convention: 0 = normal
     // (v, sv), 1 = lognormal (mu, sigma).  Set from the "_LOGN" c_name suffix.
     // The default is Gaussian BAwL; LBA is always normal.

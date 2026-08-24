@@ -19,7 +19,7 @@ This is a **code-structure and build refactor only**. It must not change the num
 
 ### Must remain unchanged
 
-1. **All current models and variants remain supported.** This includes, at minimum, the analytic race families, BAwL/BAwD/BAwF/BAwDp variants, FRQ, RDM/GBM/RDMSWTN/timed and correlated variants, LNR/REXG/PCOUNTER, RLF, GOM, ROU, BOU, DDM, MRI/fMRI, stop-signal models, softmax/ordered paths, Volterra diffusion models, contaminant/guess/timer/capacity variants, and current solver-backed architectures.
+1. **All current models and variants remain supported.** This includes, at minimum, the analytic race families, BAwL/BAwD/BAwF/BAwDp/BAwR/BTAwL variants, FRQ, RDM/GBM/RDMSWTN/timed and correlated variants, LNR/REXG/PCOUNTER, RLF, GOM, ROU/ROUp, BOU, DDM, MRI/fMRI, SDT/hUVSD, stop-signal models, SOFTMAX/ordered/multinomial paths, Volterra diffusion models, contaminant/guess/timer/capacity variants, and current solver-backed architectures.
 2. **All current solver implementations remain available.** Do not replace or remove FPE, Volterra, RLF, quadrature, GSL/hcubature, Gaussian/BVN, or related numerical paths merely because the reference package organizes them differently.
 3. The existing R-facing interfaces and generated registration must remain compatible, including `calc_ll_oo`, `calc_ll_oo_pw`, marginal-likelihood entry points, parameter wrappers, model RNG entry points, counters, probes, and other current `[[Rcpp::export]]` functions.
 4. Current parameter names, parameter ordering, column registries, model-name suffix dispatch, bounds, transforms, censoring/truncation fields, trial expansion/compression, and data attributes remain compatible.
@@ -42,10 +42,10 @@ This is a **code-structure and build refactor only**. It must not change the num
 
 The current package has several high-cost compilation dependencies:
 
-- `src/particle_ll.cpp` is approximately 12,000 lines / 531 KB and includes essentially every model and utility header near the top (`src/particle_ll.cpp:1-21`). It contains the parameter pipeline, adapters, likelihood implementations, marginalization, raw kernels, probes, counters, and many Rcpp exports.
+- `src/particle_ll.cpp` is approximately 12,210 lines / 538 KB and includes essentially every model and utility header near the top (`src/particle_ll.cpp:1-21`). It contains the parameter pipeline, adapters, likelihood implementations, marginalization, raw kernels, probes, counters, and many Rcpp exports.
 - Large model headers contain substantial implementation bodies and exported wrappers, including `src/model_RDM.h`, `src/model_LBA.h`, `src/model_RLF.h`, `src/model_BAwD.h`, `src/model_BAwF.h`, `src/model_BM_Volterra.h`, `src/model_OU_Volterra.h`, and the stop-signal headers.
-- `src/utils.h` is approximately 2,700 lines / 118 KB and itself includes model and solver headers (`src/utils.h:1-18`), making it a broad recompilation hub. It also owns shared function-pointer types and large context structures (`src/utils.h:21-223` and later sections).
-- `src/RcppExports.cpp` is approximately 3,600 lines / 221 KB, consistent with many exports being discovered from implementation-heavy files and headers.
+- `src/utils.h` is approximately 3,370 lines / 151 KB and itself includes model and solver headers (`src/utils.h:1-18`), making it a broad recompilation hub. It also owns shared function-pointer types and large context structures (`src/utils.h:21-223` and later sections).
+- `src/RcppExports.cpp` is approximately 4,045 lines / 246 KB, consistent with many exports being discovered from implementation-heavy files and headers.
 - `src/col_registry.h` already provides a useful single source of truth for required parameter-column order and variant-specific optional columns (`src/col_registry.h:7-15`, `25-306`). It should become an explicit contract at the model-dispatch boundary rather than being duplicated.
 - Current `src/Makevars`, `src/Makevars.win`, and `src/Makevars.ucrt` force aggressive flags. The main Makevars uses `-O3 -march=native -ffast-math -fno-finite-math-only -fno-math-errno -DUSE_FAST_PNORM` (`src/Makevars:5-25`); the Windows variants repeat the forced optimization profile.
 - `-fno-finite-math-only` is intentionally present because `NA_REAL`/NaN and infinities participate in censoring decisions. Any flag change must preserve those comparisons.
@@ -94,6 +94,14 @@ The target should have these boundaries:
 7. **Parallel execution layer:** thread-local mutable state and explicit deterministic aggregation.
 8. **Build configuration:** generated, platform-aware flags with conservative defaults and measured opt-in performance profiles.
 
+### Cross-cutting design rules (apply to every phase)
+
+- Build an immutable, package-native `DataView`/`TrialLayout` once at the R boundary. It owns copied primitive buffers and index maps needed by kernels, including compression and covariate expansion metadata. No `SEXP`, `Rcpp::Vector`, `Rcpp::Function`, R option lookup, or R allocator call may occur in a worker region. Any worker `ParamTable`/matrix view must be fully constructed before entering the region or backed by detached primitive storage. Keep R objects alive until the view and all results are destroyed.
+- Keep Rcpp and C++ standard-library types at the FFI boundary. Internal adapters, scratch, caches, and kernels should use explicit C++17-compatible span-like views/pointers/vectors and ownership-bearing context objects. `Rcpp::XPtr` handles and custom trend/kernel function pointers retain their current finalizers and are invoked only in their currently safe (serial) context unless a documented callback contract is added.
+- Make ownership and mutability visible in every context: immutable per-call data, per-particle parameter state, thread-local scratch, shared read-only solver grids, and shared caches with a defined lock/eviction policy. Do not rely on header-local `static` state to provide a cache or counter; moving a function between translation units must not silently change the number of cache instances.
+- Preserve reduction order wherever the observable contract requires it. Avoid unordered-container iteration in output-producing paths; give registry entries, model suffix resolution, quadrature nodes, compressed rows, and particle/trial reductions stable ordering. A deterministic tree or fixed chunk order is required before a parallel reduction can replace a serial one.
+- Keep non-trivial definitions out of headers. A header may contain declarations, templates, or small `inline`/`constexpr` scalar cores with no mutable global state. Every header must be independently includable; include cycles, accidental transitive dependencies, duplicate non-`inline` definitions, and Rcpp attributes in implementation-heavy headers are refactor blockers.
+
 ## 5. Implementation phases
 
 ### Phase 0 — Freeze the observable contract before editing
@@ -102,18 +110,37 @@ Create a machine-readable inventory and baseline artifacts before moving code:
 
 - enumerate every current Rcpp export and registered symbol from `src/RcppExports.cpp`/`R/RcppExports.R`;
 - enumerate every model constructor, `c_name`, suffix, optional parameter, solver route, and fallback route from `R/model_*.R`, `src/col_registry.h`, and the current dispatch code;
-- document the exact order of `resolve_race_model_adapter` and its specialized-before-generic cases (currently RLF, GOM/GOMP, ROU variants, RDMSWTN_TT, RDMSWTN, GBM, FRQ, BAwF, BAwDp, BAwD, BAwL, LBA, RDM, REXG, LNR, and PCOUNTER, with GNG suffix handling), then turn that order into dispatch tests;
+- document the exact order of `resolve_race_model_adapter` and its specialized-before-generic cases (currently RLF, GOM/GOMP, ROU/ROUp variants, RDMSWTN_TT, RDMSWTN, GBM, FRQ, BAwF, BAwR, BTAwL, BAwDp, BAwD, BAwL, LBA, RDM, REXG, LNR, and PCOUNTER, with GNG, IO, LogicalRules, timer, and correlation suffix handling), then turn that order into dispatch tests. Also inventory non-race dispatchers for DDM/BOU, SDT/hUVSD, SOFTMAX, ordered/multinomial, MRI/fMRI, and stop-signal paths;
 - record the current `calc_ll_oo`, `calc_ll_oo_pw`, marginalization, parameter-wrapper, direct-kernel, RNG, counter, and probe contracts;
 - capture representative expected outputs using fixed parameter matrices and fixed data fixtures;
 - include ordinary, compressed, censored, truncated, missing/`NA`, infinite-RT, defective-tail, contaminant, guess, timer, logical-rules, correlated, stop-signal, MRI, FPE, RLF, and Volterra cases;
 - include explicit RT-code fixtures for `rt = -Inf`, `rt = +Inf`, `rt = NA`, finite RTs, and every combination of current `LT`, `UT`, `LC`, and `UC`; do not encode these cases through a new `missingness` column;
 - preserve the existing `expect_snapshot(calc_lls(...))` checks in `tests/testthat/test-likelihoods.R` (for example lines 72-108 and 221-236) and the textual golden values in `tests/testthat/_snaps/likelihoods.md`; these are five-decimal display snapshots with no tolerance parameter;
 - add a separate full-precision golden-value RDS harness for old-versus-refactored comparisons, storing inputs, outputs, dimensions, names, attributes, model/variant labels, compiler flags, and platform metadata. The RDS harness is the numerical differential oracle; it must not be replaced by rounded text snapshots;
+- run the old and refactored packages from isolated library directories/subprocesses (never two builds of the same DLL in one R session), and record the source revision plus generated build-profile metadata in every RDS result so a comparison cannot accidentally mix artifacts;
 - decide now that `_snaps/likelihoods.md` is **not regenerated for this behavior-preserving refactor**. A snapshot diff is a failure to investigate. Regeneration is allowed only for an explicitly approved numerical-contract change outside this refactor, with its rationale and new baseline reviewed separately;
 - record current clean-install and incremental rebuild times, compiler flags, object sizes, and whether OpenMP is available;
 - record whether existing outputs are bit-for-bit stable across repeated runs and thread counts. Do not assume this; measure it.
 
 **Gate:** no source extraction begins until the inventory and baseline are reviewable. The baseline becomes the differential oracle for every subsequent phase.
+
+### Phase 0A — Add the cross-language, FFI, and runtime-state inventory
+
+The source tree is not the complete interface description. Before extraction, add a machine-readable manifest (checked into the refactor work area or emitted by a reproducible script) with one record for every R model constructor and every direct C++ entry point. The manifest must be generated from both sides and compared, rather than maintained by hand:
+
+- enumerate every `R/model_*.R` constructor, including `BAwR`, `BTAwL`, `ROUp`, `BOU`, `SDT`/`hUVSD`, `SOFTMAX`, ordered/multinomial, and all `LogicalRules`, `GNG`, `_IO`, `_LOGN`, timer, kill, guess, correlation, boundary, and solver suffixes;
+- for constructors whose arguments generate a family (`RDMGBM`, `RDMSWTN`/`RDMSWTN_TT`, `ROU`/`ROUp`, `BOU`, BAwD/F/R, BTAwL, and stop-signal options), enumerate every supported legal argument combination or record an explicit equivalence class and representative for each generated `c_name`;
+- evaluate each constructor's metadata in a clean R session and record `c_name`, `type`, `p_types`, `p_types_canonical`, optional/nuisance columns, transforms, bounds, `compress_ok`, `rt_resolution`, correlation type, and the R likelihood/simulator route;
+- parse `src/col_registry.h` and the C++ dispatcher to record required-column order, optional-column order, context flags, solver/fallback routes, and specialized-before-generic precedence; fail the manifest check when an R model has no C++ route or a C++ route has no R model (unless explicitly classified as a standalone public helper);
+- include all `Rcpp::export` functions, generated registration entries, `NAMESPACE` registration/imports, `Rcpp::XPtr` constructors/finalizers, custom-trend callbacks, custom-kernel pointers, runtime-compiled `Rcpp::sourceCpp` users, and any direct `.Call` users. Record the compiler/visibility/include contract exposed to those extensions. Moving an export from a header to a `.cpp` must not alter its symbol, default arguments, ownership, or error behavior;
+- inventory every use of R API state from C++ (`Rcpp::Function`, R options, `Rcpp::RNGScope`/`R::r*`, `Rf_*`, callbacks, warnings, `Rcpp::stop`, and `R_CheckUserInterrupt`/`R_ToplevelExec`), every mutable `static`/`thread_local` object, GSL error-handler mutation, solver/quadrature cache, counter, and probe. Classify each as immutable-after-setup, thread-local, lock-protected, serial-only, or requiring a redesigned ownership boundary;
+- treat GSL's process-global error-handler API as a separate hazard: establish one package-level policy for disabling/restoring handlers, never mutate it concurrently, and test error recovery after a failed quadrature/solver call;
+- record the complete current data layout as a `DataView` contract: `lR`, `R`/`winner`, `rt`, `LT`, `UT`, `LC`, `UC`, `expand`/compression maps, covariate maps, accumulator count, trial count, row order, names, and attributes. Include hybrid/missing accumulator cells and data with unequal or partial trial blocks. The refactor must not infer a one-row-per-accumulator layout from the reference package;
+- document the exception and error contract: exact error class/message where tests depend on it, warning timing, GSL failure behavior, and which failures can occur after a worker region begins. Worker code must never throw through an OpenMP region or call R; it must capture the first failure and rethrow on the R-owning thread with the established error contract.
+
+The manifest is a compatibility artifact, not merely a planning note. Regenerate it after each dispatcher or export change and include its diff in the family gate.
+
+**Gate:** the manifest covers every current `R/model_*.R` file and direct export, has no unresolved schema/dispatch/FFI entries, and identifies all code that is forbidden from an OpenMP worker region.
 
 ### Phase 1 — Define internal contracts without changing R behavior
 
@@ -127,6 +154,9 @@ Introduce or formalize internal interfaces modeled on the useful parts of the re
 - explicit solver-cache ownership and lifecycle contracts for FPE, RLF, and Volterra implementations;
 - context types that separate immutable per-call metadata from mutable per-particle state;
 - a dispatcher mapping that preserves the current substring precedence and suffix behavior exactly, including collisions such as specialized model names containing generic names.
+- a `DataView`/`TrialLayout` contract that preserves compressed and expanded row maps, covariate maps, partial accumulator blocks, output names/attributes, and the current `lR`/`R`/`winner` conventions without importing the reference package's data model;
+- an explicit FFI policy for custom likelihoods, `Rcpp::XPtr` parameter tables, registered trend kernels, R callbacks, and model RNG. These paths must be marked serial-only unless their callback and allocator semantics are independently made thread-safe;
+- an error-propagation policy for adapter and solver failures. Rcpp exceptions, warnings, and R API calls stay on the owning thread; worker failures are represented as status objects and rethrown after the parallel region.
 
 The interfaces must accept current `ParamTable`/column layouts and current data semantics. They must not require a `missingness` field.
 
@@ -147,9 +177,11 @@ Refactor shared infrastructure before moving model bodies:
    Current-package censoring/truncation semantics should be isolated as a separate concern only if that reduces coupling; do not copy the reference `CensorSpec`/`TruncSpec` data model or add a `missingness` field.
 2. Keep `src/col_registry.h` as the authoritative column contract, but move nontrivial implementation out of the header where possible.
 3. Move `ParamTable` implementation and parameter mapping hot paths into `.cpp` files while retaining only small, performance-critical inline operations.
-4. Isolate `transform_utils`, `TrendEngine`, kernels, quadrature, Gaussian/BVN helpers, and data-independent shared-state builders into independent TUs.
+4. Isolate `transform_utils`, `TrendEngine`, kernels, quadrature, Gaussian/BVN helpers, NaN/Inf-safe predicates, and data-independent shared-state builders into independent TUs. A reference-style `math_utils`/`pnorm_utils` or `nan_check` layer is acceptable only when it preserves the current `R_FINITE`/`ISNAN` semantics and legacy-compatible pnorm mode.
 5. Use forward declarations and narrow includes. Eliminate the current pattern where one umbrella header causes every model to compile into `particle_ll.cpp`.
 6. Preserve current `ParamTable` mapping order, NA/Inf handling, design masks, trend premap/pretransform/posttransform stages, invariant-column optimization, and materialization order.
+7. Establish an include/definition policy before extraction: every new header must compile in a standalone include test; every non-template function or mutable object has one owning `.cpp`; exported wrappers are not left in implementation-heavy headers; and `inline`/`static` changes are reviewed for ODR, cache-cardinality, and counter-reset effects. Keep Rcpp attribute/plugin directives in deliberately chosen `.cpp` files so `compileAttributes()` still discovers exactly one declaration for each export.
+8. Separate cache interfaces from cache storage. For GSL workspaces, Gaussian/quadrature tables, FPE/RLF/ROU/GOM solve caches, and debug counters, specify whether state is per-call, per-thread, or process-shared, how it is reset, its memory bound, and its synchronization. A cache hit must not depend on unordered iteration or on a model header being included in a particular translation unit.
 
 **Gate:** a change to one shared feature rebuilds only its intended object set plus dependent objects; all baseline likelihood and wrapper comparisons remain unchanged.
 
@@ -160,11 +192,11 @@ Perform mechanical extraction in small, reviewable groups. Move existing functio
 Recommended order:
 
 1. **Low-risk analytic race exemplars:** LNR, LBA/LBAIO, RDM, and ex-Gaussian/REXG. Use the reference's gather-compute-scatter pattern and contiguous scratch buffers.
-2. **Shared ballistic families:** BAwL, BAwL lognormal/correlated/timer variants, BAwD, BAwD lognormal/gamma/rho variants, BAwDp, and BAwF. Centralize shared geometry only where the existing formulas are demonstrably identical; do not change model-specific parameter interpretation.
+2. **Shared ballistic families:** BAwL, BAwL lognormal/correlated/timer variants, BAwD, BAwD lognormal/gamma/rho variants, BAwDp, BAwF, BAwR, and BTAwL transient/sustained variants. Centralize shared geometry only where the existing formulas are demonstrably identical; do not change model-specific parameter interpretation or suffix-selected column layouts.
 3. **Counter and finite-reservoir families:** PCOUNTER, FRQ, RDMGBM, RDMSWTN, RDMSWTN_TT, Erlang timer/guess/kill variants, and correlated-time/drift routes.
-4. **Specialized race/PDE families:** RLF, ROU parameterizations and boundary forms, GOM, and related FPE caches.
+4. **Specialized race/PDE families:** RLF, ROU and ROUp parameterizations/boundary forms, GOM/GOMP, and related FPE caches.
 5. **Two-boundary and diffusion families:** DDM, BOU, BM/OU Volterra, and their fallback/solver entry points.
-6. **Stop-signal and other non-race paths:** SSEXG, SSRDEX, SDT/hUVSD, SOFTMAX, MRI/fMRI, and any ordered or multinomial paths.
+6. **Stop-signal and other non-race paths:** SSEXG, SSRDEX, SDT/hUVSD, SOFTMAX, MRI/fMRI, and any ordered or multinomial paths. Preserve their distinct data schemas and do not force them through a race adapter merely to reduce the number of interfaces.
 7. **RNG modules:** preserve `model_rng.cpp/.h` as a separate boundary; split only where it reduces coupling, retaining exact RNG call order and output packing.
 
 Each model family should expose declarations in a small header and implementations in a `.cpp`. Direct Rcpp-exported scalar/vector helpers currently embedded in model headers should move to their family `.cpp` or a dedicated wrapper `.cpp`, with no signature changes.
@@ -177,6 +209,8 @@ Each model family should expose declarations in a small header and implementatio
 - no new allocation occurs in the hot loop unless the old path allocated there;
 - direct model wrappers and likelihood outputs match the Phase 0 oracle;
 - only the intended model objects rebuild after a model-source edit.
+- any R API, callback, RNG, cache, counter, and solver ownership assumptions are recorded in the manifest and remain within the permitted execution context;
+- moving an attribute-marked wrapper out of a header produces one definition, one generated registration entry, and no change to default-argument behavior.
 
 ### Phase 4 — Replace the monolithic orchestration with a thin dispatcher
 
@@ -188,7 +222,11 @@ After the model modules are independently compilable:
 - make the current `calc_ll_oo`, `calc_ll_oo_pw`, marginalization, and parameter-wrapper paths share setup code without changing their output contracts;
 - retain a compatibility/reference path until differential tests pass for each migrated family;
 - move counters, probes, and debug exports out of the orchestrator unless they genuinely belong to its public boundary;
-- ensure the orchestrator never depends on model implementation headers beyond the adapter declarations.
+- ensure the orchestrator never depends on model implementation headers beyond the adapter declarations;
+- build the immutable `DataView`/`TrialLayout` and all data-only masks once, then hand only primitive/read-only views plus thread-local mutable contexts to workers. Preserve row order, compression expansion, covariate maps, names, attributes, and sentinel values when assembling the output;
+- keep custom R callbacks, `Rcpp::Function`, R option lookups, `Rcpp::XPtr` mutation, and R RNG calls on a serial/owning-thread route. If a future parallel route needs them, introduce a separate callback/seed contract rather than calling them opportunistically from a worker;
+- represent worker errors as a status/error record, stop launching additional work, join the region, and rethrow with the established Rcpp error class/message. No exception may escape through an OpenMP runtime and no worker may call `Rcpp::stop`, `warning`, allocation, or `Rprintf`;
+- preserve current user-interrupt behavior (`R_CheckUserInterrupt`/`R_ToplevelExec`) by polling on the R-owning thread and using a cancellation flag for workers. Do not call R's interrupt machinery from an OpenMP worker.
 
 The dispatcher may replace a long substring chain with a registry or explicit ordered resolver, but the old precedence must be encoded and tested. A cleaner dispatch table must not silently reinterpret a current `c_name`.
 
@@ -200,18 +238,21 @@ Treat parallelism as a separate, measured change after serial modularization is 
 
 1. **Record the current state before activation:** the repository currently has no OpenMP compile/link flags or OpenMP runtime references, so its `#pragma omp ...` sites are ignored by the compiler. Capture a serial baseline with the existing flags and confirm that adding OpenMP is not bundled silently with source modularization.
 2. **Compile-time/runtime detection:** add a configure-driven OpenMP compile test with a serial fallback when OpenMP is unavailable, while initially emitting an OpenMP-disabled build. Keep platform handling for Linux, macOS, Windows, and UCRT explicit.
-3. **Gate activation separately:** after serial modularization passes the golden-value harness, build an otherwise identical OpenMP-enabled variant with `-fopenmp` (or the platform-specific equivalent). Differential-test it before allowing any current `simd` or future `parallel for` directive to execute. In particular, test every existing reduction site and confirm whether output must be bitwise identical, deterministically reduced, or serial-only.
-4. **Safe parallel scope:** prefer parallelizing independent particles or independent contiguous work units after all R API and shared setup work is complete. Do not call R/Rcpp allocation or non-thread-safe R math from worker regions.
-5. **Thread-local state:** each worker must own or rebind its `ParamTable`, scratch buffers, censor/truncation workspaces, solver-cache mutable state, and model contexts. Immutable shared data may be read-only.
-6. **Nested parallelism:** avoid nested OpenMP regions and coordinate with existing R-level worker pools so the package does not oversubscribe CPUs.
-7. **SIMD versus parallel:** classify every current SIMD loop as one of:
+3. **Separate SIMD from threading:** test a SIMD-only profile (`-fopenmp-simd` or the compiler equivalent) separately from full OpenMP. Do not link an OpenMP runtime merely to enable `#pragma omp simd`, and do not assume that enabling SIMD directives makes a reduction numerically interchangeable with the legacy compiler-vectorized loop.
+4. **Gate activation separately:** after serial modularization passes the golden-value harness, build an otherwise identical OpenMP-enabled variant with `-fopenmp` (or the platform-specific equivalent). Differential-test it before allowing any current `simd` or future `parallel for` directive to execute. In particular, test every existing reduction site and confirm whether output must be bitwise identical, deterministically reduced, or serial-only.
+5. **Safe parallel scope:** prefer parallelizing independent particles or independent contiguous work units after all R API and shared setup work is complete. Do not call R/Rcpp allocation or non-thread-safe R math from worker regions.
+6. **Thread-local state:** each worker must own or rebind its `ParamTable`, scratch buffers, censor/truncation workspaces, solver-cache mutable state, and model contexts. Immutable shared data may be read-only.
+7. **Nested parallelism:** avoid nested OpenMP regions and coordinate with existing R-level worker pools and BLAS/Armadillo thread settings so the package does not oversubscribe CPUs. Record the effective thread budget and test the package with single-threaded BLAS as well as the default BLAS configuration.
+8. **RNG and callback boundary:** `model_rng.cpp` and any Volterra/OU simulator that calls `R::r*` or enters R must remain on the serial R-owned path by default. Preserve `RNGScope`, `RNGkind`, draw order, omission encoding, and output packing. Do not call R's RNG or an `Rcpp::Function` from an OpenMP worker. A separately designed counter-based/per-particle stream may be evaluated later, but it is a new stochastic contract and cannot silently become the default.
+9. **Mutable observability state:** counters, probes, debug print budgets, and process-level options must retain current reset and visibility semantics. Make them serial-only, thread-local with deterministic merge, or lock/atomic-protected as appropriate; test repeated calls and parallel calls for both values and reset behavior.
+10. **SIMD versus parallel:** classify every current SIMD loop as one of:
    - retain SIMD because it is a local contiguous vector operation;
    - promote to `#pragma omp parallel for` or an equivalent parallel region because iterations are independent and work is sufficiently large;
    - use a fixed-chunk parallel implementation with deterministic combination because it is a reduction;
    - leave serial because branchiness, small size, solver state, or numerical ordering makes parallelism unsafe.
-8. **Reduction contract:** never use an unordered floating-point reduction where output preservation requires a stable sum. Use fixed-order chunk accumulation, a deterministic tree, or retain the original reduction path. Test likelihood sums separately from per-trial kernel values.
-9. **Directive policy:** use valid OpenMP syntax (`#pragma omp parallel`, `#pragma omp for`, `#pragma omp parallel for`, and `#pragma omp simd` as appropriate). Do not interpret “parallel” as a textual replacement for “simd.”
-10. **Thread-count verification:** compare one-thread, multi-thread, repeated, and OpenMP-disabled results. Verify no races with sanitizers or race-detection tooling where supported.
+11. **Reduction contract:** never use an unordered floating-point reduction where output preservation requires a stable sum. Use fixed-order chunk accumulation, a deterministic tree, or retain the original reduction path. Test likelihood sums separately from per-trial kernel values.
+12. **Directive policy:** use valid OpenMP syntax (`#pragma omp parallel`, `#pragma omp for`, `#pragma omp parallel for`, and `#pragma omp simd` as appropriate). Do not interpret “parallel” as a textual replacement for “simd.”
+13. **Thread-count verification:** compare one-thread, multi-thread, repeated, and OpenMP-disabled results. Verify no races with sanitizers or race-detection tooling where supported, and exercise cancellation/interruption while a large call is in flight.
 
 **Gate:** parallel execution is opt-in or conservatively defaulted only after speedup, determinism, and numerical-equivalence evidence exists for each path. Unsupported paths fall back to the proven serial implementation.
 
@@ -228,10 +269,14 @@ Required steps:
    - **compatibility/default:** conservative optimization and no architecture-specific assumptions;
    - **performance:** opt-in native/vectorization settings;
    - **diagnostic:** compiler vectorization and optimization reports.
+   Define one canonical selector (for example `--with-build-profile=` plus documented environment overrides), reject conflicting profile/flag combinations, and record the resolved profile in generated build metadata so a benchmark can be reproduced.
 5. Stage removal of `-ffast-math`, `-march=native`, and `-fno-math-errno` independently. Do not remove them as a single unverified change.
 6. Replace `USE_FAST_PNORM` only through a compatibility-tested configuration mechanism. A reference `PNORM_MODE=1` implementation must not become the default unless its output is proven equivalent to the current path for all affected likelihoods. If exact equivalence is impossible, retain a legacy-compatible mode as the default and document alternate modes as explicitly non-default.
 7. Preserve correct NaN/Inf comparisons. If any fast-math profile remains available, retain the equivalent of `-fno-finite-math-only` and test censoring paths specifically.
 8. Add build provenance reporting only if it does not alter public behavior; report effective pnorm mode, OpenMP availability, fast-math/native profile, and compiler flags for diagnosis.
+9. Add and test the complete generated-build lifecycle: POSIX `configure`, Windows/UCRT `configure.win` (including a no-configure fallback), `src/Makevars.in`, any generated configuration header, and `cleanup` rules. Configure must use the compiler selected by R, quote user flags, use a collision-safe temporary directory, clean probes on success/failure, and never assume that a POSIX shell or `/tmp` is available on Windows. Keep generated files distinguishable from hand-edited sources, define their `.Rbuildignore`/source-tarball treatment, and ensure source installs, binary installs, and `R CMD SHLIB` all use the same profile semantics.
+10. Keep C and C++ compilation separate. Bundled GSL C sources must not accidentally inherit C++-only flags or C++17 requirements; preserve `PKG_CFLAGS`, include paths, BLAS/LAPACK/RcppArmadillo linkage, `R_NO_REMAP`, and platform-specific library ordering while changing `CXXFLAGS`.
+11. Add a build-profile compatibility note to `Agents.MD`, `NEWS.md`, and package/build documentation before changing the default. The current contributor guidance says the aggressive flags are required; until that guidance is updated and the profile matrix passes, retain a named legacy profile and do not silently reinterpret it as the conservative default.
 
 **Flag acceptance matrix:** build and compare at least the current legacy profile, conservative default profile, OpenMP-disabled profile, OpenMP-enabled profile, and opt-in performance profile on supported toolchains. Differences must be explained by the profile and must not affect the default numerical contract.
 
@@ -245,6 +290,8 @@ After all exports have moved to appropriate implementation files:
 - update only generated artifacts required by the moved export locations;
 - remove duplicate wrappers and obsolete forward declarations after all callers are migrated;
 - keep direct probes, counters, model RNG, custom trend, group-design, and parameter-table interfaces available exactly as before.
+- run attribute generation from the package root in a clean tree and diff `R/RcppExports.R`, `src/RcppExports.cpp`, `NAMESPACE`, and any generated documentation. Verify that registration remains enabled, no wrapper is compiled twice, no header-only export disappeared from the scanner, and no new R-visible symbol was introduced accidentally;
+- test `Rcpp::XPtr` finalizers, custom trend registration, `register_kernel`/custom function pointers, and direct `.Call` users across unload/reload and garbage-collection boundaries. A source split must not leave an external pointer referring to a destroyed TU-local object or change symbol visibility.
 
 **Gate:** an export inventory diff shows no unintended additions, deletions, renames, signature changes, or registration changes.
 
@@ -258,9 +305,14 @@ Measure the refactor rather than relying on source appearance:
 - number and aggregate size of rebuilt objects;
 - package load time and shared-library size;
 - likelihood throughput by model family and by serial/multi-threaded path;
+- end-to-end representative fits (`init_chains`/`run_emc`, particle adaptation, marginalisation, and the existing R worker-pool configurations), not only isolated kernel calls; report wall time per iteration and effective samples per unit time where the fixture is stable;
 - allocations in representative hot loops;
 - solver-cache hit/miss behavior;
 - vectorization and OpenMP reports for selected kernels.
+
+Use a reproducible benchmark harness with checked-in fixtures and record compiler, R version, platform, CPU model, thread environment, profile, warm-up policy, allocation counters, and at least three timed repetitions (report median and spread). Measure both cold clean builds and targeted rebuilds with the same `-j` setting; do not claim a compile-time win from a different machine, cache state, or job count. Add a debug validation matrix with AddressSanitizer/UndefinedBehaviorSanitizer where supported and ThreadSanitizer for OpenMP-enabled paths; sanitizer failures, data races, invalid lifetime, and leaked worker errors are release blockers even when numerical outputs happen to match.
+
+Agree on quantitative acceptance thresholds before implementation and keep them fixed for the comparison (a useful starting point is at least a 20% clean-build wall-time reduction, a model-only edit rebuilding no more than 25% of the prior object set, and no more than a 5% median likelihood-throughput regression in the conservative profile). If a threshold is missed, record whether the cause is unavoidable numerical safety, a cache/lifetime trade-off, or an avoidable dependency and resolve the latter before completion.
 
 The refactor is successful only if it materially reduces clean and incremental build cost without regressing representative likelihood throughput. A slower path is acceptable only when required for numerical correctness and documented with evidence; avoidable regressions must be fixed before completion.
 
@@ -284,12 +336,15 @@ The existing `expect_snapshot` checks are an exact textual compatibility gate, n
 ### API and dispatch tests
 
 - compare the complete export inventory;
+- compare the generated cross-language model/schema manifest, including every current `R/model_*.R` constructor and every suffix-selected route;
 - instantiate every current R model constructor and variant;
 - verify every `c_name` suffix and dispatch precedence;
 - verify required/optional column diagnostics and parameter ordering;
 - verify unsupported combinations continue to fail with the same class of error;
 - verify current data schemas remain accepted and no `missingness` column is required or injected;
-- verify output dimensions, names, attributes, and sentinel values.
+- verify compressed, expanded, covariate-mapped, and partial/hybrid trial layouts through the `DataView`/`TrialLayout` boundary;
+- verify output dimensions, names, attributes, and sentinel values;
+- verify `Rcpp::XPtr` finalizers, custom trend/kernel callbacks, R option lookups, Rcpp exceptions/warnings, and direct `.Call` callers after source movement.
 
 ### Parallelism and build tests
 
@@ -297,39 +352,104 @@ The existing `expect_snapshot` checks are an exact textual compatibility gate, n
 - one and multiple worker threads;
 - repeated calls with identical inputs;
 - nested R worker-pool scenarios;
+- R RNG and simulator paths under repeated seeds, `RNGkind`, and OpenMP-disabled/enabled builds; R RNG calls and R callbacks must remain on the documented serial path;
+- counters, probes, cache reset behavior, and error propagation when a worker fails;
+- representative end-to-end fitting fixtures with `cores_per_chain`, `cores_for_chains`, marginalisation, and worker-pool settings used in production;
 - Linux/GCC, macOS/Clang where available, Windows/UCRT where available;
 - conservative and opt-in performance flag profiles;
 - clean and targeted incremental rebuild measurements.
 
 Run the repository's focused tests after each family migration, then the complete package test suite and package-check workflow only after all phases are integrated.
 
-## 7. Delivery and rollback strategy
+## 7. Recommended commit stack
 
-Implement in small commits with one architectural boundary per commit:
+The commits below are intentionally organized around reusable interfaces and shared data, not around individual files. A declaration, its owning implementation, focused tests, and required generated metadata travel together. Every commit must build, pass the relevant gate, and be independently revertible. Do not create declaration-only, implementation-only, test-only, or generated-only commits unless the generated change is the mechanical result of the same source change.
 
-1. baseline/inventory and test fixtures;
-2. internal contracts and include cleanup;
-3. shared infrastructure extraction;
-4. one model-family extraction at a time;
-5. dispatcher/orchestrator migration;
-6. parallel execution changes;
-7. build/configuration changes;
-8. generated export refresh and cleanup;
-9. performance and portability tuning.
+### Commit rules for the whole stack
 
-Each commit must have a focused differential check and a clear rollback point. Do not delete the old implementation path until the replacement has passed its model-family gate. Once the final path is proven, remove obsolete duplicate implementations, compatibility-only dead code, stale comments, and broad umbrella includes; do not leave permanent shims or alternate semantics.
+- Start each commit from the preceding green state; avoid drive-by formatting or formula cleanup.
+- Introduce a shared primitive exactly once in the earliest commit that can own it. Later model commits consume that primitive rather than growing local copies or compatibility wrappers.
+- Keep one compatibility implementation path while a family is being migrated, selected behind an internal adapter/compile switch if necessary. Do not maintain two formula implementations or two data-semantic paths.
+- When an exported function moves, move its declaration, definition, attribute, registration regeneration, and direct-wrapper test in the same commit. Run a final clean `compileAttributes()` pass after the last move.
+- Keep the legacy compiler profile and serial execution available until the complete serial differential matrix passes. OpenMP, fast-math removal, native tuning, and default-profile changes are separate commits.
+- Record the commit's changed object set, focused tests, numerical diff, and build-time delta in the refactor log. A commit that changes a shared header must list every dependent object deliberately rebuilt.
+
+The earlier phases remain the design and verification requirements; this stack is the implementation order: Phase 0/0A maps to C0, Phase 1–2 to C2–C5, Phase 3 to C6–C10, Phase 4 to C11–C12, Phase 5 to C13, Phase 6 to C1 and C14–C16, and Phase 7–8 to C6–C17 plus the final release gate.
+
+### Commit sequence
+
+| Commit | Scope and shared outcome | Depends on | Required gate before continuing |
+|---|---|---|---|
+| **C0 — Freeze baseline and create the oracle** | Add the cross-language model/schema/export manifest, isolated old-versus-new RDS harness, fixed data fixtures, snapshot policy, build-time/throughput benchmark fixtures, and source/profile provenance. No production behavior changes. | None | Inventory has no unresolved model, suffix, export, FFI, data-layout, or runtime-state entries; baseline package tests and benchmark runs are archived. |
+| **C1 — Add build/profile scaffolding without changing defaults** | Add `configure`, `configure.win`, `src/Makevars.in`, generated configuration metadata, cleanup/source-tarball rules, legacy/compatibility/performance/diagnostic profile selectors, compiler/OpenMP/SIMD probes, and optional build-info reporting. Keep the current legacy flags and OpenMP-disabled serial behavior as the default. | C0 | Clean install, `R CMD SHLIB`, Windows/UCRT fallback, generated-file cleanup, and C/C++ flag separation work; C0 outputs are unchanged under the legacy profile. |
+| **C2 — Establish the narrow type, ownership, and include layer** | Add C++17-compatible view types (`DataView`/`TrialLayout`), stable model metadata/registry contracts, `RaceSpec`/`RaceSetup` declarations, scratch/workspace ownership, error/status records, cache-key interfaces, and standalone-header/include tests. Keep definitions minimal and do not move formulas yet. | C1 | Every new header compiles independently; no duplicate definitions or transitive model includes are introduced; a no-op package build produces the C0 oracle. |
+| **C3 — Extract the parameter and trend pipeline once** | Move `ParamTable`, transform/bounds, `TrendEngine`, custom-trend interface, design masks, materialization, and invariant-column planning into their owning translation units. Preserve mapping order, compressed design expansion, NA/Inf handling, trend stages, XPtr lifetime, and interrupt/error behavior. | C2 | Parameter-wrapper, trend, map, compressed-design, custom-trend, and `get_pars` tests match C0; touching this code rebuilds only the pipeline dependents. |
+| **C4 — Build the shared likelihood execution substrate** | Implement the immutable `DataView`/`TrialLayout` builder, current censor/truncation semantics, deterministic aggregation/output shaping, `RaceScratch`, raw adapter function-pointer boundaries, contaminant/guess/timer primitives, common drift/correlation/capacity helpers, and thread/ownership-neutral per-call setup. This is the single shared home for data-only masks and reusable scratch. | C2, C3 | All current RT/censor/truncation/omission/missing/compression fixtures match C0; no reference `missingness` convention appears; no per-particle R allocation or duplicate common helper remains. |
+| **C5 — Extract shared numerical and solver substrate** | Move NaN/Inf-safe predicates, pnorm modes, log-space utilities, quadrature/Gaussian/BVN helpers, GSL wrappers, kernel math, solver-cache lifecycle, and FPE/Volterra cache interfaces into narrow TUs. Keep legacy numerical branches and discretizations unchanged; separate cache storage from model adapters. | C2, C4 | Direct numerical helper tests, cache reset/error recovery, sanitizer checks, and full-precision comparisons pass under the legacy profile; cache ownership/cardinality is documented. |
+| **C6 — Migrate low-risk analytic race families** | Extract LNR, REXG, LBA/LBAIO, and ordinary RDM into `.h`/`.cpp` pairs using the shared race substrate. Move their direct Rcpp wrappers with each family, retain raw/fallback/survivor paths, and register exact column contracts in the common registry. | C4, C5 | Direct density/CDF/survivor wrappers, finite/censored/truncated likelihoods, dispatch precedence, snapshots, RDS oracle, and targeted rebuild measurements pass for these families. |
+| **C7 — Migrate shared ballistic families as one geometry layer** | Extract BAwL, BAwD, BAwF, BAwR, and BTAwL together with shared launch distributions, geometry, decay/fade, log quadrature, and family-specific composition over the common timer/correlation primitives. Keep model-specific parameter meanings and suffix layouts in family adapters; do not fork shared geometry into per-model copies. | C4, C5, C6 | All BAwL/D/F/R/BTAwL variants, launch modes, timers, correlations, fallbacks, and direct wrappers match C0; shared geometry has one implementation and allocation behavior is no worse. |
+| **C8 — Migrate finite-clock, counter, and correlated race routes** | Extract PCOUNTER, FRQ, RDMGBM, RDMSWTN, RDMSWTN_TT, Erlang guess/kill/timer variants, logical-rules capacity paths, and correlated time/drift routes. Reuse the clock, drift-factor, contaminant, and deterministic reduction modules from C4/C7. | C4, C5, C7 | Every generated constructor/suffix and unsupported combination is tested; RNG simulators remain serial and distributionally compatible; correlated and logical-rule numerical fixtures pass. |
+| **C9 — Migrate FPE-backed race families** | Extract RLF, ROU, ROUp, GOM/GOMP, and their FPE/grid/Toeplitz/solve-cache routes. Share solver interfaces and cache lifecycle from C5 while retaining each model's parameterization, boundary form, interpolation, and fallback behavior. | C4, C5 | RLF/ROU/ROUp/GOM direct wrappers, solver/fallback paths, cache hit/miss behavior, boundary cases, and full-precision likelihood comparisons pass. |
+| **C10 — Migrate two-boundary, Volterra, and non-race families** | Extract DDM, BOU, BM/OU Volterra, MRI/fMRI, SSEXG/SSRDEX, SDT/hUVSD, SOFTMAX, ordered/multinomial, and any remaining specialized paths. Preserve their distinct data contracts; do not force non-race models through the race adapter. Keep model RNG in its separate serial boundary. | C4, C5 (can be developed independently of C9) | All remaining model/solver/wrapper inventory entries are reachable; direct and likelihood tests, RDS comparisons, R RNG behavior, and specialized data-schema tests pass. |
+| **C11 — Activate the thin dispatcher and orchestrator** | Replace the formula-heavy `particle_ll.cpp` path with the shared pipeline, immutable data view, ordered adapter registry, per-call metadata resolution, thread-neutral particle control, deterministic output assembly, and compatibility routing. Remove model implementation includes from the orchestrator. | C6–C10 | The orchestrator contains no model formulas; all routes resolve through one registry; complete serial package tests, export/dispatch manifests, snapshots, and RDS oracle match C0. |
+| **C12 — Consolidate serial efficiency and remove accidental coupling** | With all families on the new path, profile allocations, cache reuse, inline boundaries, include dependencies, object rebuilds, and reduction order. Remove temporary shims and duplicate helpers, coalesce shared scratch/cache setup, and fix avoidable regressions before enabling threads. | C11 | Clean and targeted rebuild thresholds are met or have documented causes; conservative serial fitting throughput is within the agreed limit; no compatibility-only duplicate path remains except the explicitly retained legacy profile. |
+| **C13 — Enable SIMD-only and OpenMP execution as separate opt-ins** | Add SIMD-only flags where supported, then thread-level particle/work-unit parallelism, thread-local contexts, deterministic reductions, cancellation, worker error capture, BLAS/thread-budget coordination, and OpenMP-disabled fallback. Keep R/RNG/callback/interrupt operations on the owning thread. | C12 | OpenMP present/absent, one/many threads, nested R worker pools, repeated calls, interruption, sanitizer/race, counters, caches, and full numerical differential tests pass. |
+| **C14 — Remove global fast-math from the default** | Make removal of `-ffast-math`/`-fno-math-errno` from the default a standalone, reversible profile change. Retain the legacy and performance profiles unchanged; preserve `-fno-finite-math-only` semantics and the current pnorm mode. | C13 | NaN/Inf/censoring snapshots, full-precision oracle, end-to-end fitting benchmark, and flag acceptance matrix pass with no unexplained regression. |
+| **C15 — Remove native architecture assumptions from the default** | Make removal of `-march=native` from the default a separate profile change. Keep native/vectorization opt-in and verify that the conservative path still meets fitting-speed targets. | C14 | Cross-platform builds, direct-kernel and end-to-end throughput comparisons, and clean/incremental build measurements pass. |
+| **C16 — Finalize optimization/pnorm defaults and provenance** | Choose the tested default optimization level and pnorm mode (retaining the legacy-compatible mode when equivalence is not proven), update generated build-info metadata, and document the profile contract. No unrelated source restructuring belongs here. | C15 | Complete profile matrix, numerical oracle, reproducible build-info output, and `Agents.MD`/`NEWS.md` review pass. |
+| **C17 — Regenerate package integration and remove obsolete coupling** | Run a clean final `compileAttributes()`, regenerate `RcppExports`/`NAMESPACE`/documentation, update source-tarball and cleanup rules, remove the monolithic/duplicate path and stale includes, and run the complete package-check/release matrix. | C16 | End-to-end fitting benchmarks, `R CMD check`, source/binary installs, generated-export diff, sanitizer/portability matrix, and final ownership/inventory audit pass. |
+
+### Shared-component ownership map
+
+| Shared component | Single owning commit | Consumers |
+|---|---|---|
+| `DataView`/`TrialLayout`, compression maps, row/attribute preservation | C2 declaration, C4 implementation | Orchestrator, censor/truncation, every model adapter, worker setup |
+| `ParamTable`, transforms, bounds, trends, custom-kernel pointers | C3 | Orchestrator, all model adapters, parameter wrappers |
+| `RaceSpec`, `RaceSetup`, `RaceScratch`, raw adapter signatures | C2 declaration, C4 implementation | Analytic, ballistic, counter, and FPE race families |
+| Censor/truncation, contaminant/guess/timer, drift/correlation/capacity primitives | C4 | All race families and logical-rule routes |
+| NaN/Inf checks, pnorm modes, log-space math, quadrature/Gaussian/BVN helpers | C5 | All analytic and solver kernels; build profiles |
+| Solver/cache lifecycle and deterministic cache keys | C5 | RLF/ROU/ROUp/GOM, DDM/BOU, Volterra |
+| Ballistic geometry and launch/decay composition | C7 | BAwL/D/F/R, BTAwL, LBA-compatible fast paths |
+| Erlang/timer/correlation composition | C4 | BAwL family, RDMGBM/RDMSWTN/timed routes |
+| Ordered adapter registry and output aggregation | C2 declaration, C11 activation | Every model family and R-facing likelihood entry point |
+| Thread-local context, error capture, cancellation, thread budget | C2 declaration, C13 implementation | Orchestrator and all eligible parallel paths |
+
+The ownership map is a guard against duplicate “temporary” helpers. If two families appear to need the same primitive, move that primitive backward to the earliest common commit rather than copying it forward.
+
+### End-product efficiency invariants
+
+The final tree should make the efficient path the natural path, rather than relying on contributor discipline or profile-specific luck:
+
+- **Compile-time:** leaf kernel TUs include contracts, math, and their own family headers only; the orchestrator never includes formula-heavy headers; high-fan-out headers contain declarations and small inline cores only; each shared primitive has one implementation and one owner.
+- **Setup-time:** data-only parsing, compression expansion, column lookup, model suffix resolution, trend-plan filtering, masks, solver-grid construction, and scratch reservation happen once per call or data set—not once per particle or trial.
+- **Hot-loop:** particle kernels operate on detached contiguous buffers and cached integer indices; no `SEXP`/Rcpp construction, string lookup, dynamic allocation, R callback, or substring dispatch occurs in the trial loop; raw fast paths and fallback paths share the same adapter contract.
+- **Cache/state:** immutable grids are shared read-only, mutable solver/scratch state is thread-local, cache keys are stable and bounded, and cache resets cannot depend on translation-unit inclusion order.
+- **Numerics:** SIMD and threading are selected from measured loop classifications; reductions have an explicit order; fast-math/native/pnorm choices are named profiles; the conservative default is reproducible and preserves NaN/Inf semantics.
+- **Concurrency:** the package honors the outer R worker-pool budget, BLAS thread settings, cancellation, and serial-only R/RNG/callback boundaries without oversubscription or hidden global state.
+- **Maintenance:** the manifest, ownership map, standalone-header checks, export diff, and targeted rebuild benchmark make architectural regressions visible before they become another monolithic dependency.
+
+### Rollback and merge policy
+
+Each commit has one primary rollback point: revert the family migration while retaining the already-tested shared substrate. Do not revert a shared header independently of its owning implementation. Keep generated files and manifest updates in the same commit as their source changes so `git bisect`, incremental-build measurements, and package installation remain meaningful. Delete the old implementation only in C12/C17 after the family gates and full serial oracle have passed; never leave a permanent alternate semantic path.
 
 ## 8. Definition of done
 
 The refactor is complete only when:
 
+- the recommended commit stack is green from C0 through C17, each commit remains buildable/revertible, and the shared-component ownership map has no duplicated primitive or permanent compatibility shim;
 - every current model, solver, variant, wrapper, data convention, and likelihood route remains available;
+- the cross-language manifest covers every current model constructor, suffix, direct export, callback, and solver/fallback route with no unresolved entries;
 - the Rcpp export and dispatch inventories are unchanged except for intentional internal file placement;
 - default likelihood outputs match the frozen baseline under the full numerical matrix;
 - no reference-only `missingness` convention has entered the package;
+- no R API, R RNG, callback, or unsafe exception path is reachable from an OpenMP worker; mutable caches, counters, probes, and external-pointer lifetimes have explicit ownership and reset semantics;
 - parallel paths are race-free, have explicit ownership, and preserve the numerical contract;
 - conservative builds no longer require forced native/fast-math flags, while measured opt-in profiles remain available where useful;
+- configure, Windows/UCRT fallback, generated Makevars/config headers, cleanup, and C/C++ flag separation work in source and binary installation workflows;
 - clean and incremental builds show a material improvement attributable to reduced translation-unit coupling;
 - representative runtime benchmarks show preserved or improved performance;
 - supported platforms have a tested OpenMP-disabled fallback;
 - the final source tree has narrow headers, independent implementation units, a thin orchestrator, and no obsolete monolithic or duplicate path.
+
+## Final note from user
+- The package should, ideally, compile the most optimised build available for a given user. We should not be expecting users to know or specify compile flags; SIMD, march=native etc. should all be used *when they are available* we should not have a default build that is much slower just for safety. Identify the optimal implementation that provides users with the fastest package their system can have.

@@ -87,6 +87,12 @@ RaceModelAdapter resolve_race_model_adapter(const std::string& type_std,
     out.ctx.defective_upper_tail = out.ctx.is_global_kill;
     out.ctx.fpe_cache  = std::make_shared<fperace::SolveCache>();
     roup_configure_cache(*out.ctx.fpe_cache);
+    // Local-race pooling suffix (ROUp(pooling = "local_race")): each marginal
+    // kernel races its sustained-only and transient-only subraces
+    // independently; the default coactive pooling shares one race.  The cache
+    // flag carries the choice from the c_name to the FPE worker.
+    out.ctx.fpe_cache->roup_local =
+      (type_std.find("_LOCAL_RACE") != std::string::npos);
     if (type_std.find("ROUpAREA") != std::string::npos) {
       out.ctx.fpe_cache->par_kind = fperace::ROUP_PAR_AREA;
       out.col_spec       = emc2col::roup_area::spec();
@@ -385,15 +391,10 @@ RaceModelAdapter resolve_race_model_adapter(const std::string& type_std,
       ((type_std.find("_GAM34") != std::string::npos) ? 0.75 :
        ((type_std.find("_GAM23") != std::string::npos) ? (2.0 / 3.0) :
         ((type_std.find("_GAM12") != std::string::npos) ? 0.5 : 0.0)));
-    // Slot 6 is the endpoint T_max wherever the trace has a finite maximum,
-    // and the clearance rate ell at gamma = 1 where it does not.  The R
-    // constructor names the p_type from the same predicate, so the two agree
-    // by construction; getting it wrong would be caught here by
-    // validate_col_prefix() rather than silently misread.
-    const bool bawd_tmax = bawd_uses_tmax(out.ctx.bawd_gamma);
-    out.col_spec = bawd_logn
-      ? (bawd_tmax ? emc2col::bawd_logn::spec() : emc2col::bawd_logn::spec_ell())
-      : (bawd_tmax ? emc2col::bawd::spec() : emc2col::bawd::spec_ell());
+    // Slot 6 samples the clearance rate `ell` for every gamma/rho option; the
+    // endpoint is derived on the R side and never stored in a design column.
+    out.col_spec = bawd_logn ? emc2col::bawd_logn::spec()
+                             : emc2col::bawd::spec();
     // Fixed power-decay kernel parameter parsed from the c_name suffix.
     // Default (no suffix) is R_PosInf (exponential kernel).
     out.ctx.bawd_rho =

@@ -316,10 +316,10 @@ test_that("the compiled adapter routes fixed gamma regimes correctly", {
 
   # Lognormal launch, gamma = 1/2.
   fx_ln <- bawd_gamma_ll_fixture(function() BAwD(gamma = 0.5),
-    list(mu ~ 1, sigma ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1, Tmax ~ 1), NULL)
+    list(mu ~ 1, sigma ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1, ell ~ 1), NULL)
   p_ln <- c(mu = 0.9, sigma = log(0.6), B = log(0.8), A = log(0.3),
             t0 = log(0.15), k = log(0.8),
-            Tmax = log(1.1))[names(sampled_pars(fx_ln$des))]
+            ell = log(0.5))[names(sampled_pars(fx_ln$des))]
   ll_gam <- bawd_gamma_ll(fx_ln, p_ln)
   expect_true(is.finite(ll_gam))
 
@@ -332,7 +332,7 @@ test_that("the compiled adapter routes fixed gamma regimes correctly", {
   # likelihood -- this is what pins the c_name -> ctx.bawd_gamma hop; equal
   # values would mean the suffix never reached the adapter.
   fx0 <- bawd_gamma_ll_fixture(BAwD,
-    list(mu ~ 1, sigma ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1, Tmax ~ 1), NULL)
+    list(mu ~ 1, sigma ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1, ell ~ 1), NULL)
   ll0 <- bawd_gamma_ll(fx0, p_ln)
   expect_true(is.finite(ll0))
   expect_gt(abs(ll_gam - ll0), 1e-3)
@@ -340,7 +340,7 @@ test_that("the compiled adapter routes fixed gamma regimes correctly", {
 
   # Lognormal launch, gamma = 2/3 (the newly added interior regime).
   fx_23 <- bawd_gamma_ll_fixture(function() BAwD(gamma = 2 / 3),
-    list(mu ~ 1, sigma ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1, Tmax ~ 1), NULL)
+    list(mu ~ 1, sigma ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1, ell ~ 1), NULL)
   p_23 <- p_ln
   ll_23 <- bawd_gamma_ll(fx_23, p_23)
   expect_true(is.finite(ll_23))
@@ -354,12 +354,12 @@ test_that("the compiled adapter routes fixed gamma regimes correctly", {
   # Normal launch, gamma = 3/4.
   fx_no <- bawd_gamma_ll_fixture(
     function() BAwD("normal", gamma = 0.75),
-    list(v ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1, Tmax ~ 1), c(sv = log(1)))
-  # The endpoint that reproduces the ell = 0.5 regime this test was written
-  # for; a shorter window floors most trials at min_ll and the loose numeric
-  # reference below then has nothing left to compare against.
+    list(v ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1, ell ~ 1), c(sv = log(1)))
+  # Use the ell = 0.5 regime this test was written for; a shorter window
+  # floors most trials at min_ll and the loose numeric reference below then
+  # has nothing left to compare against.
   p_no <- c(v = 3, B = log(0.8), A = log(0.3), t0 = log(0.15), k = log(0.8),
-            Tmax = log(5.627807))[names(sampled_pars(fx_no$des))]
+            ell = log(0.5))[names(sampled_pars(fx_no$des))]
   ll_no <- bawd_gamma_ll(fx_no, p_no)
   expect_true(is.finite(ll_no))
   dadm_no <- fx_no$emc[[1]]$data[[1]]
@@ -385,11 +385,11 @@ test_that("make_data with gamma one-half produces omissions and finite fits", {
   des <- suppressMessages(design(
     data = dat, model = function() BAwD(gamma = 0.5), matchfun = matchfun,
     formula = list(mu ~ lM, sigma ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1,
-                   Tmax ~ 1),
+                   ell ~ 1),
     contrasts = list(mu = list(lM = ADmat))))
   p <- c(mu = 1.2, mu_lMd = 0.8, sigma = log(0.5), B = log(0.7),
          A = log(0.3), t0 = log(0.15), k = log(0.7),
-         Tmax = log(1.0))[names(sampled_pars(des))]
+         ell = log(1.0))[names(sampled_pars(des))]
 
   sim <- make_data(p, design = des, n_trials = 60)
   expect_true(any(is.infinite(sim$rt)))
