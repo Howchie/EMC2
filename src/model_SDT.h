@@ -1,7 +1,7 @@
 #ifndef EMC2_MODEL_SDT_H
 #define EMC2_MODEL_SDT_H
 
-#include <Rcpp.h>
+#include <RcppArmadillo.h>
 #include "wald_functions.h"
 #include <algorithm>
 #include <cmath>
@@ -42,5 +42,12 @@ inline double log_likelihood_huvsd_single(double d, double c, double sd,
   
   return std::max(log_p, min_ll);
 }
+
+// Per-data-frame driver; defined in src/model_SDT.cpp. The default null
+// trial_ll_out pointer keeps the historical two-arg-fewer callsites valid.
+double c_log_likelihood_huvsd(Rcpp::NumericMatrix pars, Rcpp::DataFrame data,
+                              const int n_trials, Rcpp::IntegerVector expand,
+                              double min_ll, Rcpp::LogicalVector is_ok,
+                              Rcpp::NumericVector* trial_ll_out = nullptr);
 
 #endif
