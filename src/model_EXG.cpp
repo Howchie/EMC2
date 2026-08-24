@@ -87,3 +87,19 @@ void rexg_logS_at_t(double t, const double* const* cols,
     logS_out[j] = bad ? R_NegInf : logS;
   }
 }
+
+double dexg_scalar(double x, const double* par, void* /*ctx*/) {
+  const double t0 = par[3];
+  if (!R_FINITE(t0) || t0 < 0.0) return 0.0;
+  const double tt = x - t0;
+  if (tt <= 0.0) return 0.0;
+  return dtexg(tt, par[0], par[1], par[2], 0.0, R_PosInf, false);
+}
+
+double pexg_scalar(double x, const double* par, void* /*ctx*/) {
+  const double t0 = par[3];
+  if (!R_FINITE(t0) || t0 < 0.0) return 0.0;
+  const double tt = x - t0;
+  if (tt <= 0.0) return 0.0;
+  return ptexg(tt, par[0], par[1], par[2], 0.0, R_PosInf, true, false);
+}
