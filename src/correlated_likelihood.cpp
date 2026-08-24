@@ -44,7 +44,7 @@ double c_log_likelihood_race(
     Rcpp::NumericVector* trial_ll_out = nullptr,
     bool apply_truncation_correction = true);
 
-// Defined in particle_ll.cpp; used for the generic conditional truncation
+// Defined in race_integrands.cpp; used for the generic conditional truncation
 // fallback when a node has a variable-accumulator or global-kill race.
 double get_trunc_normaliser_rowmajor_cpp(
     const double* pars_rowmajor, const int* isok_int, RacePdf1Fun pdf1,

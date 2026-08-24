@@ -25,19 +25,7 @@ constexpr int kBawlLaunchNormal = 0;    // BAWL_LAUNCH_NORMAL
 }
 
 
-// Function pointer types for race model PDF/CDF adapters
-typedef Rcpp::NumericVector (*RacePdfFun)(Rcpp::NumericVector rt,
-                                          Rcpp::NumericMatrix pars,
-                                          Rcpp::LogicalVector winner,
-                                          Rcpp::LogicalVector is_ok,
-                                          void* model_specific_context);
-typedef Rcpp::NumericVector (*RaceCdfFun)(Rcpp::NumericVector rt,
-                                          Rcpp::NumericMatrix pars,
-                                          Rcpp::LogicalVector winner,
-                                          Rcpp::LogicalVector is_ok,
-                                          void* model_specific_context);
-
-// Scalar (single-RT / single-accumulator) helpers for GSL integration
+// Scalar function pointer types for race model PDF/CDF adapters used by GSL
 typedef double (*RacePdf1Fun)(double rt, const double* par, void* model_specific_context);
 typedef double (*RaceCdf1Fun)(double rt, const double* par, void* model_specific_context);
 
@@ -52,15 +40,6 @@ typedef void (*RaceLogSAtTFun)(double t, const double* const* cols,
                                const int* trunc_mask, int n_unique_trials,
                                const int* isok_all, void* ctx_, double* logS_out);
 
-struct gsl_race_params {
-  const Rcpp::NumericMatrix* p_trial;
-  Rcpp::LogicalVector winner;
-  Rcpp::LogicalVector isok;
-  RacePdfFun model_dfun;
-  RaceCdfFun model_pfun;
-  int n_lR;
-  void* model_specific_context;
-};
 
 struct gsl_race_params_scalar {
   const double* pars;   // row-major, length n_lR * n_par

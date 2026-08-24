@@ -49,13 +49,6 @@ double log_survivor_rowmajor(double t,
                              RaceCdf1Fun cdf1,
                              void* ctx);
 
-double log_cdf_rowmajor(double t,
-                        const double* pars_rowmajor,
-                        const int* isok_int,
-                        int n_lR,
-                        int n_par,
-                        RaceCdf1Fun cdf1,
-                        void* ctx);
 
 double log_min_density_rowmajor(double t,
                                 const double* pars_rowmajor,

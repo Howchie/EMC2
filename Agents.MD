@@ -77,7 +77,7 @@ New raw-buffer functions must follow this convention. Never pass a row-major cop
 
 The central race-model likelihood (`c_log_likelihood_race`) supports two function-pointer interfaces:
 
-- **`RaceCdfFun` / `RacePdf1Fun`**: the original Rcpp-vector interface, used for censored and truncated trials where the per-trial logic is complex.
+- **`RacePdf1Fun` / `RaceCdf1Fun`**: scalar function pointers serve censored/truncated trials and GSL integration; **`RaceRawFun`** raw-buffer pair is the uncensored/untruncated fast path; **`RaceLogSAtTFun`** batches log-survivors for truncation normalisation (see `src/race_contract.h`).
 - **`RaceRawFun`**: a raw-buffer interface introduced for the all-finite, no-truncation fast path. Signature:
 
 ```cpp

@@ -417,24 +417,8 @@ ss_texg_stop_success_value <- function(SSD, pars, method = "integrate", upper = 
     .Call(`_EMC2_ss_texg_stop_success_value`, SSD, pars, method, upper, n_nodes, k_sigma, k_tau, max_subdiv, abs_tol, rel_tol)
 }
 
-pEXG_RDEX <- function(q, mu = 5., sigma = 1., tau = 1., lower_tail = TRUE, log_p = FALSE) {
-    .Call(`_EMC2_pEXG_RDEX`, q, mu, sigma, tau, lower_tail, log_p)
-}
-
-dEXG_RDEX <- function(x, mu = 5., sigma = 1., tau = 1., log_d = FALSE) {
-    .Call(`_EMC2_dEXG_RDEX`, x, mu, sigma, tau, log_d)
-}
-
-dWald_RDEX_old <- function(t, v, B, A, t0) {
-    .Call(`_EMC2_dWald_RDEX_old`, t, v, B, A, t0)
-}
-
 dWald_RDEX <- function(t, v, B, A, t0, s) {
     .Call(`_EMC2_dWald_RDEX`, t, v, B, A, t0, s)
-}
-
-pWald_RDEX_old <- function(t, v, B, A, t0) {
-    .Call(`_EMC2_pWald_RDEX_old`, t, v, B, A, t0)
 }
 
 pWald_RDEX <- function(t, v, B, A, t0, s) {
@@ -449,16 +433,8 @@ dTEXG_RDEX <- function(x, mu = 5., sigma = 1., tau = 1., lb = .05, log_d = FALSE
     .Call(`_EMC2_dTEXG_RDEX`, x, mu, sigma, tau, lb, log_d)
 }
 
-dRDEXrace_old <- function(dt, mu, sigma, tau, v, B, A, t0, exgWinner = TRUE) {
-    .Call(`_EMC2_dRDEXrace_old`, dt, mu, sigma, tau, v, B, A, t0, exgWinner)
-}
-
 dRDEXrace <- function(dt, mu, sigma, tau, lb, v, B, A, t0, s, exgWinner = TRUE) {
     .Call(`_EMC2_dRDEXrace`, dt, mu, sigma, tau, lb, v, B, A, t0, s, exgWinner)
-}
-
-stopfn_rdex_old <- function(t, n_acc, mu, sigma, tau, v, B, A, t0, SSD) {
-    .Call(`_EMC2_stopfn_rdex_old`, t, n_acc, mu, sigma, tau, v, B, A, t0, SSD)
 }
 
 stopfn_rdex <- function(t, n_acc, mu, sigma, tau, lb, v, B, A, t0, s, SSD) {
@@ -739,10 +715,6 @@ emc_set_particle_slice <- function(alpha, subj_ll, proposals, j, n_pars) {
 
 emc_copy_sample_prefix <- function(target, source) {
     invisible(.Call(`_EMC2_emc_copy_sample_prefix`, target, source))
-}
-
-test <- function() {
-    .Call(`_EMC2_test`)
 }
 
 run_trend_rcpp <- function(data, trend, param, trend_pars, pars_full, return_kernel = FALSE) {

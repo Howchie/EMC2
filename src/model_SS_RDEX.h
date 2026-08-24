@@ -227,104 +227,9 @@ static inline double ss_rdex_stop_success_lpdf(
 // OLD STUFF BELOW, KEPT FOR TESTING R CODE
 // ----------------------------------------------------------------------------
 
-// [[Rcpp::export]]
-NumericVector pEXG_RDEX(NumericVector q,
-                        double mu = 5., double sigma = 1., double tau = 1.,
-                        bool lower_tail = true, bool log_p = false) {
-  int n = q.size();
-  if (tau <= 0 || sigma <= 0) {
-    NumericVector cdf(n, NA_REAL);
-    return cdf;
-  }
-  
-  NumericVector cdf(n);
-  if (sigma < 1e-4){
-    for (int i = 0; i < n; i++){
-      cdf[i] = R::pexp(q[i] - mu, tau, lower_tail, log_p);
-    }
-    return cdf;
-  }
-  
-  for (int i = 0; i < n; i++){
-    if (!traits::is_infinite<REALSXP>(q[i])){
-      if (tau > .05 * sigma){
-        double z_i = q[i] - mu - (sigma * sigma) / tau;
-        double mu_term = mu + (sigma * sigma / tau);
-        cdf[i] = pnorm_std((q[i] - mu) / sigma) - std::exp(pnorm_std(z_i / sigma, true, true) + (mu_term * mu_term - mu * mu - 2. * q[i] * (sigma * sigma / tau)) / (2. * sigma * sigma));
-      } else {
-        cdf[i] = pnorm_std((q[i] - mu) / sigma);
-      }
-    } else {
-      if (q[i] < 0) {
-        cdf[i] = 0.;
-      } else {
-        cdf[i] = 1.;
-      }
-    }
-  }
-  if (!lower_tail){
-    for(int i = 0; i < n; i++){
-      cdf[i] = 1. - cdf[i];
-    }
-  }
-  if (log_p){
-    for(int i = 0; i < n; i++){
-      cdf[i] = std::log(cdf[i]);
-    }
-  }
-  return cdf;
-}
-
-// [[Rcpp::export]]
-NumericVector dEXG_RDEX(NumericVector x,
-                        double mu = 5., double sigma = 1., double tau = 1.,
-                        bool log_d = false) {
-  int n = x.size();
-  if (tau <= 0 || sigma <= 0) {
-    NumericVector pdf(n, NA_REAL);
-    return pdf;
-  }
-  
-  NumericVector pdf(n);
-  if (sigma < 1e-4){
-    for (int i = 0; i < n; i++){
-      pdf[i] = R::dexp(x[i] - mu, tau, log_d);
-    }
-    return pdf;
-  }
-  
-  for (int i = 0; i < n; i++){
-    if (tau > .05 * sigma){
-      double z_i = x[i] - mu - (sigma * sigma) / tau;
-      pdf[i] = - std::log(tau) - (z_i + (sigma * sigma)/(2. * tau)) / tau + pnorm_std(z_i / sigma, true, true);
-    } else {
-      pdf[i] = R::dnorm(x[i], mu, sigma, true);
-    }
-  }
-  if (!log_d){
-    for(int i = 0; i < n; i++){
-      pdf[i] = std::exp(pdf[i]);
-    }
-  }
-  return pdf;
-}
 
 
-// [[Rcpp::export]]
-NumericVector dWald_RDEX_old(NumericVector t, double v,
-                             double B, double A, double t0){
-  int n = t.size();
-  NumericVector pdf(n);
-  for (int i = 0; i < n; i++){
-    t[i] = t[i] - t0;
-    if (t[i] <= 0){
-      pdf[i] = 0.;
-    } else {
-      pdf[i] = digt_impl(t[i], B + .5 * A, v, .5 * A);
-    }
-  }
-  return pdf;
-}
+
 
 // [[Rcpp::export]]
 NumericVector dWald_RDEX(
@@ -344,21 +249,6 @@ NumericVector dWald_RDEX(
 }
 
 
-// [[Rcpp::export]]
-NumericVector pWald_RDEX_old(NumericVector t, double v,
-                             double B, double A, double t0){
-  int n = t.size();
-  NumericVector cdf(n);
-  for (int i = 0; i < n; i++){
-    t[i] = t[i] - t0;
-    if (t[i] <= 0){
-      cdf[i] = 0.;
-    } else {
-      cdf[i] = pigt_impl(t[i], B + .5 * A, v, .5 * A);
-    }
-  }
-  return cdf;
-}
 
 // [[Rcpp::export]]
 NumericVector pWald_RDEX(
@@ -414,25 +304,6 @@ NumericVector dTEXG_RDEX(
 
 
 
-// [[Rcpp::export]]
-NumericVector dRDEXrace_old(NumericMatrix dt,
-                            double mu, double sigma, double tau,
-                            NumericVector v, NumericVector B, NumericVector A,
-                            NumericVector t0, bool exgWinner = true){
-  int n = v.size();
-  NumericVector out(dt.ncol());
-  if (exgWinner){
-    out = dEXG_RDEX(dt(0, _), mu, sigma, tau, false);
-    out = out * (1. - pWald_RDEX_old(dt(1, _), v[0], B[0], A[0], t0[0]));
-  } else {
-    out = dWald_RDEX_old(dt(0, _), v[0], B[0], A[0], t0[0]);
-    out = out * (1. - pEXG_RDEX(dt(1, _), mu, sigma, tau));
-  }
-  for (int i = 1; i < n; i++){
-    out = out * (1. - pWald_RDEX_old(dt(i + 1, _), v[i], B[i], A[i], t0[i]));
-  }
-  return out;
-}
 
 // [[Rcpp::export]]
 NumericVector dRDEXrace(
@@ -457,17 +328,6 @@ NumericVector dRDEXrace(
 }
 
 
-// [[Rcpp::export]]
-NumericVector stopfn_rdex_old(NumericVector t, int n_acc,
-                              double mu, double sigma, double tau,
-                              NumericVector v, NumericVector B, NumericVector A,
-                              NumericVector t0, double SSD){
-  NumericVector tmp( (n_acc + 1) * t.size());
-  tmp = rep_each(t, n_acc + 1) + SSD;
-  NumericMatrix dt(n_acc + 1, t.size(), tmp.begin());
-  dt(0, _) = dt(0, _) - SSD;
-  return dRDEXrace_old(dt, mu, sigma, tau, v, B, A, t0);
-}
 
 // [[Rcpp::export]]
 NumericVector stopfn_rdex(

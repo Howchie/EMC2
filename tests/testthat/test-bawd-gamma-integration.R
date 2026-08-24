@@ -17,9 +17,9 @@
 # CDF is then a single numerical integral over the launch-strength
 # distribution (no change of variables, no H-function). This was checked
 # against test-bawd.R's trusted gamma = 0 closed forms during development
-# (max abs difference ~3e-11 over the same parameter sets test-bawd.R uses)
-# and is used here unmodified at gamma > 0, where the same threshold argument
-# holds verbatim. The density is the numerical derivative of that CDF.
+# (max abs difference ~3e-11) and is used unmodified at gamma > 0, where the
+# same threshold argument holds verbatim. The density below is an exact
+# integral of the model definition, not a numerical derivative of F.
 
 # ---------------------------------------------------------------------------
 # Independent reference: CDF via a single integral over the launch strength
@@ -88,22 +88,60 @@ gi_ref_F_logn <- function(u, mu, sigma, b, A, k, ell, gamma) {
   integrate(f, 0, Inf, rel.tol = 1e-8)$value
 }
 
-# Central-difference derivative of the CDF, Richardson-extrapolated. The
-# integral defining F() is only accurate to ~1e-9 in absolute terms (the
-# integrand has a kink where a start point crosses into/out of saturation),
-# so an overly small h amplifies that noise; h on the order of 1e-3 with
-# Richardson extrapolation was checked against the compiled kernel at
-# gamma = 0 during development and matches to 7+ significant digits.
+# Exact hit-time densities.  Differentiating the integrated CDF numerically
+# is hopeless at gamma > 0: F() carries ~1e-9 absolute noise (the integrand
+# has a kink where a start point crosses into/out of saturation) and central
+# differences amplify that by ~1/h, biasing f by ~5e-4 relative even under
+# Richardson extrapolation -- enough to break a 1e-4 total-LL comparison.
+# Instead the model definition itself is differentiated: below the trajectory
+# peak (u_peak(V) = log(V/ell)/((1-gamma)k)) the required start point moves
+# at dz_eff/du = ell e^{-gamma k u} - V e^{-k u}, so
+#
+#   f(u) = int (V e^{-k u} - ell e^{-gamma k u}) launch(V) dV / A,
+#
+# restricted to launches with 0 < z_eff < A and u < u_peak, i.e.
+#   max((b - A + ell c_gamma)/q, ell e^{(1-gamma) k u}) < V < (b + ell c_gamma)/q.
+# That is a smooth integral of the launch density alone: no finite
+# differences, and no closed-form algebra shared with the kernel under test.
+# Verified against 40-digit mpmath evaluation of the same integral (agreement
+# with the compiled kernel to <=2e-14 across gamma in {0, .25, .5, 2/3, .75}
+# launch x {normal, lognormal} grids).  The point-start (A <= 0) case has no
+# window to integrate; nothing here exercises it, so it keeps the old
+# numerical derivative of the CDF.
 gi_fd <- function(Ffun, u, h = 1e-3) {
   h <- min(h, u / 4)
   d1 <- (Ffun(u + h) - Ffun(u - h)) / (2 * h)
   d2 <- (Ffun(u + h / 2) - Ffun(u - h / 2)) / h
   (4 * d2 - d1) / 3
 }
-gi_ref_f_normal <- function(u, v, sv, b, A, k, ell, gamma, posdrift = TRUE)
-  gi_fd(function(uu) gi_ref_F_normal(uu, v, sv, b, A, k, ell, gamma, posdrift), u)
-gi_ref_f_logn <- function(u, mu, sigma, b, A, k, ell, gamma)
-  gi_fd(function(uu) gi_ref_F_logn(uu, mu, sigma, b, A, k, ell, gamma), u)
+gi_density_region <- function(u, b, A, k, ell, gamma) {
+  q <- gi_ref_q(u, k)
+  cg <- gi_ref_cgamma(u, k, gamma)
+  v_hi <- (b + ell * cg) / q
+  v_lo <- max((b - A + ell * cg) / q,
+              if (gamma < 1 - 1e-12 && k > 1e-12) ell * exp((1 - gamma) * k * u) else 0)
+  c(v_lo, v_hi)
+}
+gi_ref_f_logn <- function(u, mu, sigma, b, A, k, ell, gamma) {
+  if (!isTRUE(u > 0)) return(0)
+  if (A <= 0)
+    return(gi_fd(function(uu) gi_ref_F_logn(uu, mu, sigma, b, A, k, ell, gamma), u))
+  rng <- gi_density_region(u, b, A, k, ell, gamma)
+  if (!(rng[2] > rng[1])) return(0)
+  g <- function(V) (V * exp(-k * u) - ell * exp(-gamma * k * u)) * dlnorm(V, mu, sigma)
+  integrate(g, rng[1], rng[2], rel.tol = 1e-10)$value / A
+}
+gi_ref_f_normal <- function(u, v, sv, b, A, k, ell, gamma, posdrift = TRUE) {
+  if (!isTRUE(u > 0)) return(0)
+  if (A <= 0)
+    return(gi_fd(function(uu) gi_ref_F_normal(uu, v, sv, b, A, k, ell, gamma, posdrift), u))
+  rng <- gi_density_region(u, b, A, k, ell, gamma)
+  denom <- if (posdrift) pnorm(v / sv) else 1
+  lower <- if (posdrift) max(rng[1], 0) else rng[1]
+  if (!(rng[2] > lower)) return(0)
+  g <- function(V) (V * exp(-k * u) - ell * exp(-gamma * k * u)) * dnorm(V, v, sv)
+  integrate(g, lower, rng[2], rel.tol = 1e-10)$value / (A * denom)
+}
 
 # Independent first-passage oracle (root-finding, not Newton) for the
 # per-draw simulator check: root of X(u) = d on the rising limb.

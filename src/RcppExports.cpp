@@ -1894,52 +1894,6 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
-// pEXG_RDEX
-NumericVector pEXG_RDEX(NumericVector q, double mu, double sigma, double tau, bool lower_tail, bool log_p);
-RcppExport SEXP _EMC2_pEXG_RDEX(SEXP qSEXP, SEXP muSEXP, SEXP sigmaSEXP, SEXP tauSEXP, SEXP lower_tailSEXP, SEXP log_pSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< NumericVector >::type q(qSEXP);
-    Rcpp::traits::input_parameter< double >::type mu(muSEXP);
-    Rcpp::traits::input_parameter< double >::type sigma(sigmaSEXP);
-    Rcpp::traits::input_parameter< double >::type tau(tauSEXP);
-    Rcpp::traits::input_parameter< bool >::type lower_tail(lower_tailSEXP);
-    Rcpp::traits::input_parameter< bool >::type log_p(log_pSEXP);
-    rcpp_result_gen = Rcpp::wrap(pEXG_RDEX(q, mu, sigma, tau, lower_tail, log_p));
-    return rcpp_result_gen;
-END_RCPP
-}
-// dEXG_RDEX
-NumericVector dEXG_RDEX(NumericVector x, double mu, double sigma, double tau, bool log_d);
-RcppExport SEXP _EMC2_dEXG_RDEX(SEXP xSEXP, SEXP muSEXP, SEXP sigmaSEXP, SEXP tauSEXP, SEXP log_dSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< NumericVector >::type x(xSEXP);
-    Rcpp::traits::input_parameter< double >::type mu(muSEXP);
-    Rcpp::traits::input_parameter< double >::type sigma(sigmaSEXP);
-    Rcpp::traits::input_parameter< double >::type tau(tauSEXP);
-    Rcpp::traits::input_parameter< bool >::type log_d(log_dSEXP);
-    rcpp_result_gen = Rcpp::wrap(dEXG_RDEX(x, mu, sigma, tau, log_d));
-    return rcpp_result_gen;
-END_RCPP
-}
-// dWald_RDEX_old
-NumericVector dWald_RDEX_old(NumericVector t, double v, double B, double A, double t0);
-RcppExport SEXP _EMC2_dWald_RDEX_old(SEXP tSEXP, SEXP vSEXP, SEXP BSEXP, SEXP ASEXP, SEXP t0SEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< NumericVector >::type t(tSEXP);
-    Rcpp::traits::input_parameter< double >::type v(vSEXP);
-    Rcpp::traits::input_parameter< double >::type B(BSEXP);
-    Rcpp::traits::input_parameter< double >::type A(ASEXP);
-    Rcpp::traits::input_parameter< double >::type t0(t0SEXP);
-    rcpp_result_gen = Rcpp::wrap(dWald_RDEX_old(t, v, B, A, t0));
-    return rcpp_result_gen;
-END_RCPP
-}
 // dWald_RDEX
 NumericVector dWald_RDEX(NumericVector t, double v, double B, double A, double t0, double s);
 RcppExport SEXP _EMC2_dWald_RDEX(SEXP tSEXP, SEXP vSEXP, SEXP BSEXP, SEXP ASEXP, SEXP t0SEXP, SEXP sSEXP) {
@@ -1953,21 +1907,6 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< double >::type t0(t0SEXP);
     Rcpp::traits::input_parameter< double >::type s(sSEXP);
     rcpp_result_gen = Rcpp::wrap(dWald_RDEX(t, v, B, A, t0, s));
-    return rcpp_result_gen;
-END_RCPP
-}
-// pWald_RDEX_old
-NumericVector pWald_RDEX_old(NumericVector t, double v, double B, double A, double t0);
-RcppExport SEXP _EMC2_pWald_RDEX_old(SEXP tSEXP, SEXP vSEXP, SEXP BSEXP, SEXP ASEXP, SEXP t0SEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< NumericVector >::type t(tSEXP);
-    Rcpp::traits::input_parameter< double >::type v(vSEXP);
-    Rcpp::traits::input_parameter< double >::type B(BSEXP);
-    Rcpp::traits::input_parameter< double >::type A(ASEXP);
-    Rcpp::traits::input_parameter< double >::type t0(t0SEXP);
-    rcpp_result_gen = Rcpp::wrap(pWald_RDEX_old(t, v, B, A, t0));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -2020,25 +1959,6 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
-// dRDEXrace_old
-NumericVector dRDEXrace_old(NumericMatrix dt, double mu, double sigma, double tau, NumericVector v, NumericVector B, NumericVector A, NumericVector t0, bool exgWinner);
-RcppExport SEXP _EMC2_dRDEXrace_old(SEXP dtSEXP, SEXP muSEXP, SEXP sigmaSEXP, SEXP tauSEXP, SEXP vSEXP, SEXP BSEXP, SEXP ASEXP, SEXP t0SEXP, SEXP exgWinnerSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< NumericMatrix >::type dt(dtSEXP);
-    Rcpp::traits::input_parameter< double >::type mu(muSEXP);
-    Rcpp::traits::input_parameter< double >::type sigma(sigmaSEXP);
-    Rcpp::traits::input_parameter< double >::type tau(tauSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type v(vSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type B(BSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type A(ASEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type t0(t0SEXP);
-    Rcpp::traits::input_parameter< bool >::type exgWinner(exgWinnerSEXP);
-    rcpp_result_gen = Rcpp::wrap(dRDEXrace_old(dt, mu, sigma, tau, v, B, A, t0, exgWinner));
-    return rcpp_result_gen;
-END_RCPP
-}
 // dRDEXrace
 NumericVector dRDEXrace(NumericMatrix dt, double mu, double sigma, double tau, double lb, NumericVector v, NumericVector B, NumericVector A, NumericVector t0, NumericVector s, bool exgWinner);
 RcppExport SEXP _EMC2_dRDEXrace(SEXP dtSEXP, SEXP muSEXP, SEXP sigmaSEXP, SEXP tauSEXP, SEXP lbSEXP, SEXP vSEXP, SEXP BSEXP, SEXP ASEXP, SEXP t0SEXP, SEXP sSEXP, SEXP exgWinnerSEXP) {
@@ -2057,26 +1977,6 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< NumericVector >::type s(sSEXP);
     Rcpp::traits::input_parameter< bool >::type exgWinner(exgWinnerSEXP);
     rcpp_result_gen = Rcpp::wrap(dRDEXrace(dt, mu, sigma, tau, lb, v, B, A, t0, s, exgWinner));
-    return rcpp_result_gen;
-END_RCPP
-}
-// stopfn_rdex_old
-NumericVector stopfn_rdex_old(NumericVector t, int n_acc, double mu, double sigma, double tau, NumericVector v, NumericVector B, NumericVector A, NumericVector t0, double SSD);
-RcppExport SEXP _EMC2_stopfn_rdex_old(SEXP tSEXP, SEXP n_accSEXP, SEXP muSEXP, SEXP sigmaSEXP, SEXP tauSEXP, SEXP vSEXP, SEXP BSEXP, SEXP ASEXP, SEXP t0SEXP, SEXP SSDSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< NumericVector >::type t(tSEXP);
-    Rcpp::traits::input_parameter< int >::type n_acc(n_accSEXP);
-    Rcpp::traits::input_parameter< double >::type mu(muSEXP);
-    Rcpp::traits::input_parameter< double >::type sigma(sigmaSEXP);
-    Rcpp::traits::input_parameter< double >::type tau(tauSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type v(vSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type B(BSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type A(ASEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type t0(t0SEXP);
-    Rcpp::traits::input_parameter< double >::type SSD(SSDSEXP);
-    rcpp_result_gen = Rcpp::wrap(stopfn_rdex_old(t, n_acc, mu, sigma, tau, v, B, A, t0, SSD));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -3209,16 +3109,6 @@ BEGIN_RCPP
     return R_NilValue;
 END_RCPP
 }
-// test
-int test();
-RcppExport SEXP _EMC2_test() {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    rcpp_result_gen = Rcpp::wrap(test());
-    return rcpp_result_gen;
-END_RCPP
-}
 // run_trend_rcpp
 NumericVector run_trend_rcpp(DataFrame data, List trend, NumericVector param, NumericMatrix trend_pars, NumericMatrix pars_full, bool return_kernel);
 RcppExport SEXP _EMC2_run_trend_rcpp(SEXP dataSEXP, SEXP trendSEXP, SEXP paramSEXP, SEXP trend_parsSEXP, SEXP pars_fullSEXP, SEXP return_kernelSEXP) {
@@ -3371,17 +3261,11 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_emc2_get_stop_method", (DL_FUNC) &_EMC2_emc2_get_stop_method, 0},
     {"_EMC2_ss_texg_stop_success_auto_branch", (DL_FUNC) &_EMC2_ss_texg_stop_success_auto_branch, 3},
     {"_EMC2_ss_texg_stop_success_value", (DL_FUNC) &_EMC2_ss_texg_stop_success_value, 10},
-    {"_EMC2_pEXG_RDEX", (DL_FUNC) &_EMC2_pEXG_RDEX, 6},
-    {"_EMC2_dEXG_RDEX", (DL_FUNC) &_EMC2_dEXG_RDEX, 5},
-    {"_EMC2_dWald_RDEX_old", (DL_FUNC) &_EMC2_dWald_RDEX_old, 5},
     {"_EMC2_dWald_RDEX", (DL_FUNC) &_EMC2_dWald_RDEX, 6},
-    {"_EMC2_pWald_RDEX_old", (DL_FUNC) &_EMC2_pWald_RDEX_old, 5},
     {"_EMC2_pWald_RDEX", (DL_FUNC) &_EMC2_pWald_RDEX, 6},
     {"_EMC2_pTEXG_RDEX", (DL_FUNC) &_EMC2_pTEXG_RDEX, 7},
     {"_EMC2_dTEXG_RDEX", (DL_FUNC) &_EMC2_dTEXG_RDEX, 6},
-    {"_EMC2_dRDEXrace_old", (DL_FUNC) &_EMC2_dRDEXrace_old, 9},
     {"_EMC2_dRDEXrace", (DL_FUNC) &_EMC2_dRDEXrace, 11},
-    {"_EMC2_stopfn_rdex_old", (DL_FUNC) &_EMC2_stopfn_rdex_old, 10},
     {"_EMC2_stopfn_rdex", (DL_FUNC) &_EMC2_stopfn_rdex, 12},
     {"_EMC2_ss_rdex_stop_success_value", (DL_FUNC) &_EMC2_ss_rdex_stop_success_value, 10},
     {"_EMC2_logicalrules_capacity_finish_cpp", (DL_FUNC) &_EMC2_logicalrules_capacity_finish_cpp, 4},
@@ -3452,7 +3336,6 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_emc_set_last_slice", (DL_FUNC) &_EMC2_emc_set_last_slice, 3},
     {"_EMC2_emc_set_particle_slice", (DL_FUNC) &_EMC2_emc_set_particle_slice, 5},
     {"_EMC2_emc_copy_sample_prefix", (DL_FUNC) &_EMC2_emc_copy_sample_prefix, 2},
-    {"_EMC2_test", (DL_FUNC) &_EMC2_test, 0},
     {"_EMC2_run_trend_rcpp", (DL_FUNC) &_EMC2_run_trend_rcpp, 6},
     {"_EMC2_pigt", (DL_FUNC) &_EMC2_pigt, 5},
     {"_EMC2_digt", (DL_FUNC) &_EMC2_digt, 5},

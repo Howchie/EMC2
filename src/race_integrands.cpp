@@ -220,42 +220,6 @@ double log_survivor_rowmajor(double t,
   return logS;
 }
 
-double log_cdf_rowmajor(double t,
-                               const double* pars_rowmajor,
-                               const int* isok_int,
-                               int n_lR,
-                               int n_par,
-                               RaceCdf1Fun cdf1,
-                               void* ctx) {
-  if (t == R_PosInf) {
-      auto* race_ctx = static_cast<ContextForRaceModels*>(ctx);
-      if (race_ctx && race_ctx->defective_upper_tail) {
-          double logC = 0.0;
-          for (int k = 0; k < n_lR; ++k) {
-            if (!isok_int[k]) return R_NegInf;
-            const double* par_k = pars_rowmajor + static_cast<size_t>(k) * n_par;
-            double cdf_inf = cdf1(R_PosInf, par_k, ctx);
-            cdf_inf = clamp_cdf01_race(cdf_inf);
-            const double ll = std::log(cdf_inf);
-            if (!emc2_isfinite(ll)) return R_NegInf;
-            logC += ll;
-          }
-          return logC;
-     }
-    return 0.0;
-  }
-  double logC = 0.0;
-  for (int k = 0; k < n_lR; ++k) {
-    if (!isok_int[k]) return R_NegInf;
-    const double* par_k = pars_rowmajor + static_cast<size_t>(k) * n_par;
-    double cdf = cdf1(t, par_k, ctx);
-    cdf = clamp_cdf01_race(cdf);
-    const double ll = std::log(cdf);
-    if (!emc2_isfinite(ll)) return R_NegInf;
-    logC += ll;
-  }
-  return logC;
-}
 
 double log_min_density_rowmajor(double t,
                                        const double* pars_rowmajor,
