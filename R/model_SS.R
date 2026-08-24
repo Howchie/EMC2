@@ -481,7 +481,7 @@ rSSexGaussian <- function(data,pars,ok=rep(TRUE,dim(pars)[1]))
     dts <- dt[,stair,drop=F]
 
     # Set all accumulators finishing times to Inf where fastest accumulator > UC
-    cens <- apply(dts[-1,,drop=FALSE],2,min) > UC
+    cens <- matrixStats::colMins(dts[-1,,drop=FALSE]) > UC
     dts[-1,cens] <- Inf
 
     # Non-staircase trials
@@ -889,7 +889,7 @@ rSShybrid <- function(data,pars,ok=rep(TRUE,dim(pars)[1]))
     dts <- dt[,stair,drop=F]
 
     # Set all accumulators finishing times to Inf where fastest accumulator > UC
-    cens <- apply(dts[-1,,drop=FALSE],2,min) > UC
+    cens <- matrixStats::colMins(dts[-1,,drop=FALSE]) > UC
     dts[-1,cens] <- Inf
 
     # Non-staircase trials

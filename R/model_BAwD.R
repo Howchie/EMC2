@@ -278,7 +278,7 @@ rBAwD <- function(lR, pars, ok = rep(TRUE, length(lR)), launch = 1L,
   }
   dt <- dt + matrix(t0, nrow = nr)
 
-  bad_col <- apply(dt, 2, function(x) all(is.infinite(x)))
+  bad_col <- colSums(!is.infinite(dt)) == 0L
   R <- apply(dt, 2, which.min)
   pick <- cbind(R, seq_len(ncol(dt)))
   rt <- dt[pick]
@@ -342,7 +342,7 @@ rBAwDp <- function(lR, pars, ok = rep(TRUE, length(lR)), launch = 1L,
     hit[!is.finite(hit) | hit < 0] <- Inf
     dt[idx] <- hit + p[, "t0"]
   }
-  bad_col <- apply(dt, 2, function(x) all(is.infinite(x)))
+  bad_col <- colSums(!is.infinite(dt)) == 0L
   R <- apply(dt, 2, which.min)
   pick <- cbind(R, seq_len(ncol(dt)))
   rt <- dt[pick]

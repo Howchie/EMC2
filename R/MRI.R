@@ -89,7 +89,7 @@ reshape_events <- function(events, event_types, duration = 0.001, modulation = N
   # First check if only 1 numeric entry is present
   if(length(duration) == 1 && !is.list(duration)){
     duration <- rep(duration, length(event_types))
-    duration <- lapply(duration, function(x) return(x)) # and make it into a list
+    duration <- as.list(duration) # and make it into a list
   } else if(is.list(duration) & any(names(duration) %in% event_types)){
     duration_tmp <- replicate(length(event_types), list(0.001)) # Fill in the default spike function
     for(i in 1:length(event_types)){
@@ -102,7 +102,7 @@ reshape_events <- function(events, event_types, duration = 0.001, modulation = N
     stop("Length of duration must be 1 or equal to the number of event_types")
   }
   if(!is.list(duration)){
-    duration <- lapply(duration, function(x) return(x))
+    duration <- as.list(duration)
   }
   out <- list()
   for(i in 1:length(event_types)){
@@ -305,12 +305,7 @@ convolve_design_matrix <- function(timeseries, events, factors = NULL, contrasts
   if(scale){
     full_dm <- as.matrix(do.call(rbind, all_dms))
     maxs <- matrixStats::colMaxs(full_dm)
-    all_dms <- lapply(all_dms, function(x){
-      for(i in 1:ncol(x)){
-        x[,i] <- x[,i]/maxs[i]
-      }
-      return(x)
-    })
+    all_dms <- lapply(all_dms, sweep, 2, maxs, '/')
   }
   return(all_dms)
 }
@@ -1282,6 +1277,6 @@ make_data_fMRI <- function(parameters, model, data, design, ...){
 }
 
 add_design_fMRI_predict <- function(design, emc){
-  design$fMRI_design <- lapply(emc[[1]]$data, function(x) return(attr(x,"designs")))
+  design$fMRI_design <- lapply(emc[[1]]$data, attr, "designs")
   return(design)
 }

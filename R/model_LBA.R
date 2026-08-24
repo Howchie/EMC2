@@ -521,7 +521,7 @@ rBAwL <- function(lR, pars, ok = rep(TRUE, length(lR)),
     is_killed <- tk_global < apply(dt, 2, min)
     if (any(is_killed)) dt[, is_killed] <- Inf
   }
-  bad_col <- apply(dt, 2, function(x) all(is.infinite(x)))
+  bad_col <- colSums(!is.infinite(dt)) == 0L
   R   <- apply(dt, 2, which.min)
   pick <- cbind(R, 1:dim(dt)[2])
   rt   <- dt[pick]

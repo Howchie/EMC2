@@ -333,7 +333,7 @@ REXG <- function() {
     t0 <- matrix(0, nrow = nr, ncol = n_tri)
     t0[idx_ok[ok_draw]] <- t0_ok[ok_draw]
     finish <- dt + t0
-    R <- apply(finish, 2, which.min)
+    R <- max.col(-t(finish), ties.method = "first")
     pick <- cbind(R, seq_len(n_tri))
     rt <- finish[pick]
     R <- factor(levels(lR)[R], levels = levels(lR))

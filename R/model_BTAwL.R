@@ -242,7 +242,7 @@ rBTAwLTransient <- function(lR, pars, ok = rep(TRUE, length(lR)),
                                                tau_all[ok_idx[j]])
     dt[tr, trial] <- dt[tr, trial] + pars[j, "t0"]
   }
-  bad <- apply(dt, 2, function(x) all(!is.finite(x)))
+  bad <- colSums(is.finite(dt)) == 0L
   # Each column is one trial and each row one racer; transpose before
   # max.col so the winning racer is selected independently per trial.
   win <- max.col(-t(dt), ties.method = "first")
@@ -313,7 +313,7 @@ rBTAwL <- function(lR, pars, ok = rep(TRUE, length(lR)),
                                      pars[j, "tau_s"])
     dt[tr, trial] <- min(t_T, t_S) + pars[j, "t0"]
   }
-  bad <- apply(dt, 2, function(x) all(!is.finite(x)))
+  bad <- colSums(is.finite(dt)) == 0L
   win <- max.col(-t(dt), ties.method = "first")
   rt <- dt[cbind(win, seq_len(n_trials))]
   R <- factor(levels(lR)[win], levels = levels(lR))
@@ -347,7 +347,7 @@ rBTAwLSustained <- function(lR, pars, ok = rep(TRUE, length(lR)),
     dt[tr, trial] <- .btawl_hit_time_sustained(V[j], z, pars[j, "b"], pars[j, "k"],
                                                pars[j, "tau_s"]) + pars[j, "t0"]
   }
-  bad <- apply(dt, 2, function(x) all(!is.finite(x)))
+  bad <- colSums(is.finite(dt)) == 0L
   win <- max.col(-t(dt), ties.method = "first")
   rt <- dt[cbind(win, seq_len(n_trials))]
   R <- factor(levels(lR)[win], levels = levels(lR))
