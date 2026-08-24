@@ -280,4 +280,21 @@ double bawf_pdf_scalar_natural(double t, double A, double b, double p1,
                                       bool posdrift, double rho);
 
 
+
+// --------------------------------------------------------------------------
+// Race-adapter entry points, shared with particle_ll.cpp's pointer dispatch.
+// Bodies live in model_BAwF.cpp.
+// --------------------------------------------------------------------------
+double dbawf_scalar(double t, const double* par, void* ctx_);
+double pbawf_scalar(double t, const double* par, void* ctx_);
+void dbawf_raw(const double* rt, const double* const* cols, int n_rows,
+               const int* mask, const int* isok,
+               double* out, double min_ll, void* ctx_);
+void pbawf_raw(const double* rt, const double* const* cols, int n_rows,
+               const int* mask, const int* isok,
+               double* out, double min_ll, void* ctx_);
+void bawf_logS_at_t(double t, const double* const* cols,
+                    int n_rows_total, int n_lR, int n_par,
+                    const int* trunc_mask, int n_unique_trials,
+                    const int* isok_all, void* ctx_, double* logS_out);
 #endif  // EMC2_MODEL_BAWF_H

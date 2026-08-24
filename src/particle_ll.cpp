@@ -793,7 +793,7 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
     out.col_spec = bawf_logn ? emc2col::bawf_logn::spec()
                              : emc2col::bawf::spec();
     out.ctx.t0_index = emc2col::bawf::t0;
-    // Shared with BAwD; see bawf_launch_of() in utils.h.
+    // Shared with BAwD; see bawf_launch_of() in model_BAwF.cpp.
     out.ctx.bawd_launch = bawf_logn ? BAWF_LAUNCH_LOGNORMAL
                                     : BAWF_LAUNCH_NORMAL;
     // Fixed fading-kernel shape from the c_name suffix; no suffix is the
@@ -824,7 +824,7 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
     out.col_spec = bawr_logn ? emc2col::bawr_logn::spec()
                              : emc2col::bawr::spec();
     out.ctx.t0_index = emc2col::bawr::t0;
-    // Shared with BAwD; see bawr_launch_of() in utils.h.  There is no rho:
+    // Shared with BAwD; see bawr_launch_of() in model_BAwR.cpp.  There is no rho:
     // the decay shape is the sampled exponent, not a fixed kernel index.
     out.ctx.bawd_launch = bawr_logn ? BAWR_LAUNCH_LOGNORMAL
                                     : BAWR_LAUNCH_NORMAL;

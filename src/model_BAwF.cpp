@@ -1,4 +1,7 @@
 #include "model_BAwF.h"
+#include "race_contract.h"
+#include "utility_functions.h"
+#include "col_registry.h"
 
 double bawf_log_H(const BawfGeom& g, double x) {
   return g.rho_inf ? x : g.rho * bawd_pk_log_tau(g.rho, x);
@@ -903,4 +906,153 @@ NumericVector bawf_vcrit_vec(NumericVector A, NumericVector b, NumericVector k,
     out[i] = g.ok ? g.V_c0 : NA_REAL;
   }
   return out;
+}
+
+// --------------------------------------------------------------------------
+// Race adapters: scalar, raw, and truncation kernels routed through
+// particle_ll.cpp's function pointers.  Moved from utils.h.
+// --------------------------------------------------------------------------
+namespace {
+
+// BAwF shares BAwD's launch and rho context fields: the two models never
+// coexist in one adapter, and duplicating the fields would create a second
+// place for the "0 = normal, 1 = lognormal" contract to drift.
+int bawf_launch_of(const ContextForRaceModels* ctx) {
+  return ctx ? ctx->bawd_launch : BAWF_LAUNCH_LOGNORMAL;
+}
+double bawf_rho_of(const ContextForRaceModels* ctx) {
+  return ctx ? ctx->bawd_rho : R_PosInf;
+}
+
+}  // namespace
+
+double dbawf_scalar(double t, const double* par, void* ctx_) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  if (R_IsNA(par[emc2col::bawf::v])) return 0.0;
+  const double tt = t - par[emc2col::bawf::t0];
+  if (t <= 0.0 || tt <= 0.0) return 0.0;
+  return bawf_pdf_scalar_natural(
+    tt, par[emc2col::bawf::A],
+    par[emc2col::bawf::B] + par[emc2col::bawf::A],
+    par[emc2col::bawf::v], par[emc2col::bawf::sv],
+    par[emc2col::bawf::k],
+    bawf_launch_of(ctx), ctx ? ctx->use_posdrift : true, bawf_rho_of(ctx));
+}
+
+double pbawf_scalar(double t, const double* par, void* ctx_) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  if (R_IsNA(par[emc2col::bawf::v])) return 0.0;
+  const double tt = t - par[emc2col::bawf::t0];
+  if (t <= 0.0 || tt <= 0.0) return 0.0;
+  // tt == Inf is handled inside the kernel and returns F_max, not 1.
+  return bawf_cdf_scalar_natural(
+    tt, par[emc2col::bawf::A],
+    par[emc2col::bawf::B] + par[emc2col::bawf::A],
+    par[emc2col::bawf::v], par[emc2col::bawf::sv],
+    par[emc2col::bawf::k],
+    bawf_launch_of(ctx), ctx ? ctx->use_posdrift : true, bawf_rho_of(ctx));
+}
+
+void dbawf_raw(const double* rt, const double* const* cols, int n_rows,
+               const int* mask, const int* isok,
+               double* out, double min_ll, void* ctx_) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  const bool floor_raw = raw_floor_log_lik(ctx_);
+  const bool pd = ctx ? ctx->use_posdrift : true;
+  const int launch = bawf_launch_of(ctx);
+  const double rho = bawf_rho_of(ctx);
+  const double* p1_ = cols[emc2col::bawf::v];
+  const double* p2_ = cols[emc2col::bawf::sv];
+  const double* B_  = cols[emc2col::bawf::B];
+  const double* A_  = cols[emc2col::bawf::A];
+  const double* t0_ = cols[emc2col::bawf::t0];
+  const double* k_  = cols[emc2col::bawf::k];
+  for (int i = 0; i < n_rows; ++i) {
+    if (!mask[i]) continue;
+    if (R_IsNA(p1_[i]) || !isok[i]) {
+      out[i] = raw_log_zero(min_ll, floor_raw);
+      continue;
+    }
+    const double tt = rt[i] - t0_[i];
+    if (tt <= 0.0 || rt[i] <= 0.0) {
+      out[i] = raw_log_zero(min_ll, floor_raw);
+      continue;
+    }
+    const double log_pdf = bawf_log_pdf(tt, A_[i], B_[i] + A_[i], p1_[i],
+                                        p2_[i], k_[i], launch, pd, rho);
+    out[i] = (log_pdf > R_NegInf && emc2_isfinite(log_pdf))
+      ? raw_log_value(log_pdf, min_ll, floor_raw)
+      : raw_log_zero(min_ll, floor_raw);
+  }
+}
+
+void pbawf_raw(const double* rt, const double* const* cols, int n_rows,
+               const int* mask, const int* isok,
+               double* out, double min_ll, void* ctx_) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  const bool floor_raw = raw_floor_log_lik(ctx_);
+  const bool pd = ctx ? ctx->use_posdrift : true;
+  const int launch = bawf_launch_of(ctx);
+  const double rho = bawf_rho_of(ctx);
+  const double* p1_ = cols[emc2col::bawf::v];
+  const double* p2_ = cols[emc2col::bawf::sv];
+  const double* B_  = cols[emc2col::bawf::B];
+  const double* A_  = cols[emc2col::bawf::A];
+  const double* t0_ = cols[emc2col::bawf::t0];
+  const double* k_  = cols[emc2col::bawf::k];
+  for (int i = 0; i < n_rows; ++i) {
+    if (!mask[i]) continue;
+    if (R_IsNA(p1_[i]) || !isok[i]) { out[i] = 0.0; continue; }
+    const double tt = rt[i] - t0_[i];
+    if (tt <= 0.0 || rt[i] <= 0.0) { out[i] = 0.0; continue; }
+    double cdf = 0.0;
+    if (ba_natural_cdf_bawf(tt, A_[i], B_[i] + A_[i], p1_[i], p2_[i], k_[i],
+                            launch, pd, rho, BAWF_DENOM_FLOOR, BA_ACCEPT_RAW, cdf)) {
+      out[i] = (cdf > 0.0) ? std::log1p(-cdf) : 0.0;
+    } else {
+      const double ls = bawf_log_surv(tt, A_[i], B_[i] + A_[i], p1_[i], p2_[i],
+                                      k_[i], launch, pd, rho, BAWF_DENOM_FLOOR);
+      out[i] = (ls > R_NegInf && emc2_isfinite(ls))
+        ? ls : raw_log_zero(min_ll, floor_raw);
+    }
+  }
+}
+
+void bawf_logS_at_t(double t, const double* const* cols,
+                    int n_rows_total, int n_lR, int /*n_par*/,
+                    const int* trunc_mask, int n_unique_trials,
+                    const int* isok_all, void* ctx_, double* logS_out) {
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  const bool pd = ctx ? ctx->use_posdrift : true;
+  const int launch = bawf_launch_of(ctx);
+  const double rho = bawf_rho_of(ctx);
+  const double* p1_ = cols[emc2col::bawf::v];
+  const double* p2_ = cols[emc2col::bawf::sv];
+  const double* B_  = cols[emc2col::bawf::B];
+  const double* A_  = cols[emc2col::bawf::A];
+  const double* t0_ = cols[emc2col::bawf::t0];
+  const double* k_  = cols[emc2col::bawf::k];
+  for (int j = 0; j < n_unique_trials; ++j) {
+    if (!trunc_mask[j]) continue;
+    const int start = j * n_lR;
+    double logS = 0.0;
+    bool bad = false;
+    for (int kk = 0; kk < n_lR && !bad; ++kk) {
+      const int r = start + kk;
+      if (!isok_all[r] || R_IsNA(p1_[r])) { bad = true; break; }
+      const double tt = t - t0_[r];
+      if (tt <= 0.0) continue;  // not started: survivor one
+      double cdf = 0.0;
+      if (ba_natural_cdf_bawf(tt, A_[r], B_[r] + A_[r], p1_[r], p2_[r], k_[r],
+                              launch, pd, rho, BAWF_DENOM_FLOOR, BA_ACCEPT_RAW, cdf)) {
+        if (cdf > 0.0) logS += std::log1p(-cdf);
+      } else {
+        const double ls = bawf_log_surv(tt, A_[r], B_[r] + A_[r], p1_[r], p2_[r],
+                                        k_[r], launch, pd, rho, BAWF_DENOM_FLOOR);
+        if (!(ls > R_NegInf) || ISNAN(ls)) { bad = true; break; }
+        logS += ls;
+      }
+    }
+    logS_out[j] = bad ? R_NegInf : logS;
+  }
 }

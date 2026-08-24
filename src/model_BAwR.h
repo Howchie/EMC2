@@ -267,4 +267,21 @@ double bawr_pdf_scalar_natural(double t, double A, double b, double p1,
                                       int launch, bool posdrift);
 
 
+
+// --------------------------------------------------------------------------
+// Race-adapter entry points, shared with particle_ll.cpp's pointer dispatch.
+// Bodies live in model_BAwR.cpp.
+// --------------------------------------------------------------------------
+double dbawr_scalar(double t, const double* par, void* ctx_);
+double pbawr_scalar(double t, const double* par, void* ctx_);
+void dbawr_raw(const double* rt, const double* const* cols, int n_rows,
+               const int* mask, const int* isok,
+               double* out, double min_ll, void* ctx_);
+void pbawr_raw(const double* rt, const double* const* cols, int n_rows,
+               const int* mask, const int* isok,
+               double* out, double min_ll, void* ctx_);
+void bawr_logS_at_t(double t, const double* const* cols,
+                    int n_rows_total, int n_lR, int n_par,
+                    const int* trunc_mask, int n_unique_trials,
+                    const int* isok_all, void* ctx_, double* logS_out);
 #endif  // EMC2_MODEL_BAWR_H
