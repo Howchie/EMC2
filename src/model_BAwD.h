@@ -24,7 +24,7 @@
 #include <cmath>
 #include "bawd_kernel.h"
 #include "model_LBA.h"
-#include "gl_quad.h"
+#include "quad_templates.h"
 
 constexpr double BAWD_K_EPS = 1e-10;
 constexpr double BAWD_A_EPS = 1e-10;
@@ -42,9 +42,6 @@ constexpr double BAWD_LOG_BRACKET_MIN = BAWL_LOG_BRACKET_MIN;
 // BAwD reuses BAwL's normalizer floor so that the ell = 0, A = 0 member
 // reproduces pleakyba() exactly rather than to within a floor difference.
 constexpr double BAWD_DENOM_FLOOR = BAWL_DENOM_FLOOR;
-
-constexpr int BAWD_GL_NODES = 24;      // per panel, frozen integral
-constexpr int BAWD_GL_MAX_NODES = 64;
 
 // Launch-strength distribution selector (ContextForRaceModels::bawd_launch and
 // the `launch` argument of the exported d/p functions -- keep them in sync).
@@ -100,45 +97,6 @@ struct BawdAtU {
   double s_lo = 0.0;        // frozen-integral exponent limits (y coordinates)
   double s_hi = 0.0;
 };
-
-// --------------------------------------------------------------------------
-// Shared Gauss-Legendre quadrature templates.  BAwF/BAwR/BTAwL include these
-// definitions directly; the non-template BAwD core is implemented in
-// model_BAwD.cpp.
-// --------------------------------------------------------------------------
-template <typename LogFun>
-inline double bawd_log_gl(const LogFun& log_f, double a, double b, int n) {
-  if (!(b > a) || !emc2_isfinite(a) || !emc2_isfinite(b)) return R_NegInf;
-  if (n > BAWD_GL_MAX_NODES) n = BAWD_GL_MAX_NODES;
-  const GLRule& r = gl_get_rule(n);
-  const double c1 = 0.5 * (b - a), c2 = 0.5 * (b + a);
-  double terms[BAWD_GL_MAX_NODES];
-  double best = R_NegInf;
-  for (int i = 0; i < n; ++i) {
-    const double lf = log_f(c1 * r.x[i] + c2);
-    terms[i] = (r.w[i] > 0.0 && lf > R_NegInf && !ISNAN(lf))
-      ? (std::log(r.w[i]) + lf) : R_NegInf;
-    if (terms[i] > best) best = terms[i];
-  }
-  if (!(best > R_NegInf)) return R_NegInf;
-  double acc = 0.0;
-  for (int i = 0; i < n; ++i)
-    if (terms[i] > R_NegInf) acc += std::exp(terms[i] - best);
-  return std::log(c1) + best + std::log(acc);
-}
-
-// Two panels split at `mid` when it lies strictly inside; the split point is
-// where the integrand's normal factor turns over, which is where a single
-// fixed rule is least accurate.
-template <typename LogFun>
-inline double bawd_log_gl_split(const LogFun& log_f, double a, double b,
-                                double mid, int n) {
-  if (mid > a && mid < b) {
-    return log_sum_exp(bawd_log_gl(log_f, a, mid, n),
-                       bawd_log_gl(log_f, mid, b, n));
-  }
-  return bawd_log_gl(log_f, a, b, n);
-}
 
 // BAwD analytic core declarations.  Defaults are part of the public C++ API.
 double bawd_em1my(double y);

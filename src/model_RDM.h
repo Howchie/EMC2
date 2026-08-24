@@ -13,6 +13,7 @@
 #include "composite_functions.h"
 #include "gaussian.h"
 #include "gl_quad.h"
+#include "quad_templates.h"
 using namespace Rcpp;
 // Exported definitions carry the Rcpp defaults in model_RDM.cpp.  Suppress
 // defaults while that translation unit parses this public declaration block so
@@ -25,9 +26,6 @@ using namespace Rcpp;
 
 
 static constexpr double RDM_Q_EPSILON = 1e-8;
-
-template <typename DensityFn>
-inline double integrate_density_gl20_finite(double t_upper, DensityFn&& density_fn);
 
 // --------------------------------------------------------------------------
 // Analytic helpers for SPV + Erlang-2 killed Wald CDF
@@ -471,38 +469,6 @@ inline double norm_cdf_2d_stable(double x, double y, double rho) {
   return norm_cdf_2d_hybrid(x, y, rho);
 }
 
-// Log-space counterpart of integrate_positive_drift_quad below: accumulates
-// log(w_j) + log_kernel(drift_j) with log_sum_exp, so node under/overflow in
-// the natural accumulation cannot zero out a representable mixture.  Only
-// entered after the natural quadrature has been rejected; log_out remains a
-// pure output-scale choice at the call sites.
-template <typename LogKernelFn>
-inline double integrate_positive_drift_quad_log(double mu_drift, double sv,
-                                                LogKernelFn&& log_kernel_fn,
-                                                int n_gauss_nodes = 20) {
-  if (!(sv > 1e-10) || !emc2_isfinite(sv)) {
-    return log_kernel_fn(mu_drift);
-  }
-
-  const double lower_p_raw = pnorm_std(-mu_drift / sv, true, false);
-  const double upper_p = std::nextafter(1.0, 0.0);
-  const double lower_p = std::fmax(0.0, std::fmin(lower_p_raw, upper_p));
-  const double width = upper_p - lower_p;
-  if (!(width > 0.0)) return R_NegInf;
-
-  const int n_nodes = std::max(1, n_gauss_nodes);
-  const GLRule& gl = gl_get_rule(n_nodes);
-  double log_acc = R_NegInf;
-  for (int j = 0; j < n_nodes; ++j) {
-    if (!(gl.w[j] > 0.0)) continue;
-    const double p = lower_p + 0.5 * width * (gl.x[j] + 1.0);
-    const double drift = mu_drift + sv * R::qnorm(p, 0.0, 1.0, true, false);
-    const double lk = log_kernel_fn(drift);
-    if (lk == R_NegInf || ISNAN(lk)) continue;
-    log_acc = log_sum_exp(log_acc, std::log(gl.w[j]) + lk);
-  }
-  return log_acc - M_LN2;
-}
 
 inline double positive_trunc_swtn_cdf_k0(double t, double mu_drift,
                                          double threshold, double s,
@@ -587,36 +553,6 @@ inline double positive_trunc_swtn_density_k0(double t, double mu_drift,
 
   if (ISNAN(log_pdf) || log_pdf == R_NegInf) return log_out ? R_NegInf : 0.0;
   return log_out ? log_pdf : std::exp(log_pdf);
-}
-
-template <typename KernelFn>
-inline double integrate_positive_drift_quad(double mu_drift, double sv,
-                                            KernelFn&& kernel_fn,
-                                            int n_gauss_nodes = 20) {
-  if (!(sv > 1e-10) || !emc2_isfinite(sv)) {
-    return kernel_fn(mu_drift);
-  }
-
-  const double lower_p_raw = pnorm_std(-mu_drift / sv, true, false);
-  const double upper_p = std::nextafter(1.0, 0.0);
-  const double lower_p = std::fmax(0.0, std::fmin(lower_p_raw, upper_p));
-  const double width = upper_p - lower_p;
-  if (!(width > 0.0)) return 0.0;
-
-  const int n_nodes = std::max(1, n_gauss_nodes);
-  const GLRule& gl = gl_get_rule(n_nodes);
-  const std::vector<double>& nodes = gl.x;
-  const std::vector<double>& weights = gl.w;
-
-  double acc = 0.0;
-  for (int j = 0; j < n_nodes; ++j) {
-    const double p = lower_p + 0.5 * width * (nodes[j] + 1.0);
-    const double drift = mu_drift + sv * R::qnorm(p, 0.0, 1.0, true, false);
-    acc += weights[j] * kernel_fn(drift);
-  }
-
-  const double result = 0.5 * acc;
-  return emc2_isfinite(result) ? result : 0.0;
 }
 
 inline double dswtn_positive_drift_quad(double t, double mu_drift, double threshold,
@@ -903,132 +839,6 @@ double prdmswtn(double t, double mu_drift, double b, double A,
                 int n_gauss_nodes RDM_DEFAULT_ARGUMENT(20), bool log_out RDM_DEFAULT_ARGUMENT(false),
                 int kill_shape RDM_DEFAULT_ARGUMENT(1), bool guess RDM_DEFAULT_ARGUMENT(false), bool posdrift RDM_DEFAULT_ARGUMENT(true),
                 double erlang_omega RDM_DEFAULT_ARGUMENT(1.0));
-
-template <typename DensityFn>
-inline double integrate_density_gl20_finite(double t_upper, DensityFn&& density_fn) {
-  if (!(t_upper > 0.0)) return 0.0;
-  const GLRule& gl = gl_get_rule(20);
-  const std::vector<double>& nodes = gl.x;
-  const std::vector<double>& weights = gl.w;
-  double acc = 0.0;
-  for (int j = 0; j < static_cast<int>(nodes.size()); ++j) {
-    const double u = 0.5 * t_upper * (nodes[j] + 1.0);
-    acc += weights[j] * density_fn(u);
-  }
-  return 0.5 * t_upper * acc;
-}
-
-template <typename DensityFn>
-inline double integrate_density_gl20_infinite(double rate_scale, DensityFn&& density_fn) {
-  const double scale = std::fmax(rate_scale, 1e-8);
-  const GLRule& gl = gl_get_rule(20);
-  const std::vector<double>& nodes = gl.x;
-  const std::vector<double>& weights = gl.w;
-  double acc = 0.0;
-  for (int j = 0; j < static_cast<int>(nodes.size()); ++j) {
-    const double q = 0.5 * (nodes[j] + 1.0);
-    const double qq = std::fmin(1.0 - 1e-12, std::fmax(1e-15, q));
-    const double t = -std::log1p(-qq) / scale;
-    const double jac = 1.0 / (scale * (1.0 - qq));
-    acc += weights[j] * density_fn(t) * jac;
-  }
-  return 0.5 * acc;
-}
-
-template <typename DensityFn>
-inline double integrate_density_adaptive_finite(double t_upper, DensityFn&& density_fn) {
-  if (!(t_upper > 0.0)) return 0.0;
-
-  using Fn = std::decay_t<DensityFn>;
-  Fn fn = std::forward<DensityFn>(density_fn);
-  struct Adapter {
-    const Fn* fn;
-  } adapter{&fn};
-
-  gsl_function F;
-  F.function = +[](double x, void* p) -> double {
-    const auto* adapter_ptr = static_cast<const Adapter*>(p);
-    return (*(adapter_ptr->fn))(x);
-  };
-  F.params = &adapter;
-
-  GslIntegrationControls ctl = default_gsl_controls();
-  ctl.try_qng_first_finite = true;
-  ctl.qag_key = GSL_INTEG_GAUSS21;
-  ctl.rel_tol = 1e-6;
-
-  static thread_local GslWorkspacePtr ws(nullptr, &gsl_integration_workspace_free);
-  gsl_integration_workspace* workspace = ensure_gsl_workspace(ws, ctl.retry_limit);
-
-  double result = 0.0;
-  double err = 0.0;
-  int status = GSL_EFAILED;
-  gsl_error_handler_t* old_handler = gsl_set_error_handler_off();
-
-  size_t neval = 0;
-  status = gsl_integration_qng(&F, 0.0, t_upper, ctl.abs_tol, ctl.rel_tol,
-                               &result, &err, &neval);
-  if (status != GSL_SUCCESS || !emc2_isfinite(result)) {
-    status = gsl_integration_qag(&F, 0.0, t_upper,
-                                 ctl.abs_tol, ctl.rel_tol,
-                                 ctl.limit, ctl.qag_key,
-                                 workspace, &result, &err);
-  }
-  if (status != GSL_SUCCESS || !emc2_isfinite(result)) {
-    status = gsl_integration_qags(&F, 0.0, t_upper,
-                                  ctl.retry_abs_tol, ctl.retry_rel_tol,
-                                  ctl.retry_limit, workspace, &result, &err);
-  }
-
-  gsl_set_error_handler(old_handler);
-  if (status != GSL_SUCCESS || !emc2_isfinite(result) || result < 0.0) {
-    return integrate_density_gl20_finite(t_upper, fn);
-  }
-  return result;
-}
-
-template <typename DensityFn>
-inline double integrate_density_adaptive_infinite(double rate_scale, DensityFn&& density_fn) {
-  using Fn = std::decay_t<DensityFn>;
-  Fn fn = std::forward<DensityFn>(density_fn);
-  struct Adapter {
-    const Fn* fn;
-  } adapter{&fn};
-
-  gsl_function F;
-  F.function = +[](double x, void* p) -> double {
-    const auto* adapter_ptr = static_cast<const Adapter*>(p);
-    return (*(adapter_ptr->fn))(x);
-  };
-  F.params = &adapter;
-
-  GslIntegrationControls ctl = default_gsl_controls();
-  ctl.rel_tol = 1e-6;
-  if (rate_scale > 1e-8 && emc2_isfinite(rate_scale)) {
-    ctl.abs_tol = std::min(ctl.abs_tol, 1e-10 / rate_scale);
-  }
-
-  static thread_local GslWorkspacePtr ws(nullptr, &gsl_integration_workspace_free);
-  gsl_integration_workspace* workspace = ensure_gsl_workspace(ws, ctl.retry_limit);
-
-  double result = 0.0;
-  double err = 0.0;
-  int status = GSL_EFAILED;
-  gsl_error_handler_t* old_handler = gsl_set_error_handler_off();
-
-  status = gsl_integration_qagiu(&F, 0.0, ctl.abs_tol, ctl.rel_tol,
-                                 ctl.limit, workspace, &result, &err);
-  if (status != GSL_SUCCESS || !emc2_isfinite(result)) {
-    status = gsl_integration_qagiu(&F, 0.0, ctl.retry_abs_tol, ctl.retry_rel_tol,
-                                   ctl.retry_limit, workspace, &result, &err);
-  }
-
-  gsl_set_error_handler(old_handler);
-  if (status != GSL_SUCCESS || !emc2_isfinite(result) || result < 0.0) {
-    return integrate_density_gl20_infinite(rate_scale, fn);
-  }
-  return result;
-}
 
 inline double local_combo_response_pdf(double t, double f_decision, double F_decision,
                                        double lambda_g, double lambda_k,
