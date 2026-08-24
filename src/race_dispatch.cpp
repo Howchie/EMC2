@@ -6,6 +6,8 @@
 #include "col_registry.h"
 #include "fpe_race.h"
 #include "fpe_models.h"
+#include "model_FRQ.h"
+#include "model_PCOUNTER.h"
 #include <cmath>
 #include <memory>
 #include <string>

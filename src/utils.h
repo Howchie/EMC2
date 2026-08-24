@@ -38,11 +38,9 @@ using namespace Rcpp;
 #include "model_RLF_kernels.h"
 // Likewise: the BOU primitives need ContextForDDMModels defined above.
 #include "model_BOU.h"
-// FRQ carries Rcpp export entry points and is included by the implementation
-// translation units that own the relevant dispatch paths.  Keep this include
-// here until the remaining FRQ ownership cleanup is complete.
-#include "model_FRQ.h"
-#include "model_PCOUNTER.h"
+// FRQ and PCOUNTER are included directly by the race-dispatch translation unit
+// that owns their model adapter wiring; keep this umbrella focused on shared
+// declarations and helpers.
 
 
 // Helper to safely get a column from a DataFrame with a default value if missing
