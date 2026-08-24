@@ -169,9 +169,6 @@ bawr_tmax_vec <- function(A, b, kappa, pw) {
     .Call(`_EMC2_bawr_tmax_vec`, A, b, kappa, pw)
 }
 
-bawr_kappa_vec <- function(Tmax, b, pw) {
-    .Call(`_EMC2_bawr_kappa_vec`, Tmax, b, pw)
-}
 
 bawr_vcrit_vec <- function(A, b, kappa, pw) {
     .Call(`_EMC2_bawr_vcrit_vec`, A, b, kappa, pw)

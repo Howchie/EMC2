@@ -302,14 +302,13 @@ test_that("BAwR() exposes the documented parameters and c_name", {
   m <- BAwR()
   expect_equal(m$c_name, "BAwR_LOGN")
   expect_equal(m$p_types_canonical,
-               c("mu", "sigma", "B", "A", "t0", "Tmax", "p"))
+               c("mu", "sigma", "B", "A", "t0", "kappa", "p"))
   expect_equal(BAwR("normal")$c_name, "BAwR")
   expect_equal(BAwR("normal", posdrift = FALSE)$c_name, "BAwRIO")
   expect_equal(BAwR("normal")$p_types_canonical,
-               c("v", "sv", "B", "A", "t0", "Tmax", "p"))
-  # Tmax = Inf is the kappa = 0 LBA limit; p = 0 must not be reachable.
-  expect_true("Tmax" %in% names(m$bound$exception))
-  expect_false("kappa" %in% names(m$bound$exception))
+               c("v", "sv", "B", "A", "t0", "kappa", "p"))
+  # kappa = 0 must stay reachable (it is the LBA limit); p = 0 must not.
+  expect_true("kappa" %in% names(m$bound$exception))
   expect_false("p" %in% names(m$bound$exception))
   expect_error(BAwR("lognormal", posdrift = FALSE), "posdrift only applies")
 })
@@ -317,19 +316,20 @@ test_that("BAwR() exposes the documented parameters and c_name", {
 test_that("Ttransform reports b, Tmax, rt_max and Vcrit", {
   m <- BAwR()
   pars <- cbind(mu = c(1, 1), sigma = c(0.5, 0.5), B = c(0.9, 3.6),
-                A = c(0.3, 0.3), t0 = c(0.15, 0.15), Tmax = c(1.2, 1.2),
+                A = c(0.3, 0.3), t0 = c(0.15, 0.15), kappa = c(1.1, 1.1),
                 p = c(1, 1))
   out <- m$Ttransform(pars, NULL)
   expect_equal(out[, "b"], pars[, "B"] + pars[, "A"])
-  expect_equal(out[, "kappa"],
-               EMC2:::bawr_kappa_vec(pars[, "Tmax"], out[, "b"], pars[, "p"]))
-  expect_equal(out[, "Tmax"], pars[, "Tmax"])
+  expect_equal(out[, "Tmax"],
+               EMC2:::bawr_tmax_vec(pars[, "A"], out[, "b"], pars[, "kappa"],
+                                    pars[, "p"]))
   expect_equal(out[, "rt_max"], pars[, "t0"] + out[, "Tmax"])
   expect_equal(out[, "Vcrit"],
-               EMC2:::bawr_vcrit_vec(pars[, "A"], out[, "b"], out[, "kappa"],
+               EMC2:::bawr_vcrit_vec(pars[, "A"], out[, "b"], pars[, "kappa"],
                                      pars[, "p"]))
-  # With the endpoint chart held fixed, increasing b raises the derived rate.
-  expect_gt(out[2, "kappa"], out[1, "kappa"])
+  # Quadrupling B multiplies b by ~4 and hence Tmax by 2 at p = 1: caution
+  # buys time here, unlike in BAwF.
+  expect_gt(out[2, "Tmax"], out[1, "Tmax"])
 })
 
 # ---------------------------------------------------------------------------
@@ -400,9 +400,9 @@ bawr_dat <- function(n = 60) {
   dat[seq_len(n), ]
 }
 
-bawr_form <- list(mu ~ 1, sigma ~ 1, B ~ 1, A ~ 1, t0 ~ 1, Tmax ~ 1, p ~ 1)
+bawr_form <- list(mu ~ 1, sigma ~ 1, B ~ 1, A ~ 1, t0 ~ 1, kappa ~ 1, p ~ 1)
 bawr_p <- c(mu = 0.9, sigma = log(0.6), B = log(0.8), A = log(0.3),
-            t0 = log(0.15), Tmax = log(sqrt(2.75)), p = log(1))
+            t0 = log(0.15), kappa = log(0.8), p = log(1))
 
 test_that("the compiled race likelihood matches the R reference", {
   skip_on_cran()
@@ -411,7 +411,7 @@ test_that("the compiled race likelihood matches the R reference", {
   fx <- list(
     ln = suppressMessages(bawr_mk(BAwR, bawr_form, NULL, dat)),
     no = suppressMessages(bawr_mk(function() BAwR("normal"),
-      list(v ~ 1, B ~ 1, A ~ 1, t0 ~ 1, Tmax ~ 1, p ~ 1), c(sv = log(1)),
+      list(v ~ 1, B ~ 1, A ~ 1, t0 ~ 1, kappa ~ 1, p ~ 1), c(sv = log(1)),
       dat)))
   for (which in c("ln", "no")) {
     launch <- if (which == "ln") 1L else 0L
@@ -439,7 +439,7 @@ test_that("a non-unit p survives the whole compiled path", {
   expect_equal(got, ref_race_ll_bawr(dadm, pars, 1L), tolerance = 1e-6)
 })
 
-test_that("the compiled BAwR likelihood reproduces the LBA at Tmax = Inf", {
+test_that("the compiled BAwR likelihood reproduces the LBA at kappa = 0", {
   # A second, independent route to the kappa = 0 oracle: two models, two
   # adapter branches, two column layouts, one answer.  This is what catches a
   # wiring error the kernel tests cannot see (wrong column order, wrong
@@ -450,7 +450,7 @@ test_that("the compiled BAwR likelihood reproduces the LBA at Tmax = Inf", {
                                  c(sv = log(1)), dat))
   fp <- suppressMessages(bawr_mk(function() BAwR("normal"),
                                  list(v ~ 1, B ~ 1, A ~ 1, t0 ~ 1),
-                                 c(sv = log(1), Tmax = log(Inf), p = log(1)),
+                                 c(sv = log(1), kappa = log(0), p = log(1)),
                                  dat))
   pv <- c(v = 3, B = log(0.9), A = log(0.3), t0 = log(0.15))
   l_lba <- bawr_ll(fl, pv[names(sampled_pars(fl$des))])
@@ -468,10 +468,10 @@ test_that("a p_types reordering is caught by the column contract", {
   expect_error(bawr_ll(fx, bawr_p[names(sampled_pars(fx$des))],
                        p_types_override = swapped),
                "BAwR_LOGN kernels expect parameter column")
-  # Tmax and p must not be interchangeable either: they are adjacent, share a
+  # kappa and p must not be interchangeable either: they are adjacent, share a
   # log transform, and swapping them would otherwise fit silently.
   swapped2 <- names(BAwR()$p_types)
-  i <- match(c("Tmax", "p"), swapped2)
+  i <- match(c("kappa", "p"), swapped2)
   swapped2[i] <- swapped2[rev(i)]
   expect_error(bawr_ll(fx, bawr_p[names(sampled_pars(fx$des))],
                        p_types_override = swapped2),

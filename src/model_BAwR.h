@@ -94,10 +94,6 @@ double bawr_critical_launch(const BawrGeom& g, double s);
 
 BawrGeom bawr_geometry(double A, double b, double kappa, double pw);
 
-// Inverse endpoint chart.  Tmax is a free positive coordinate for every
-// b > 0 and p > 0; the only finite endpoint case omitted here is the exact
-// LBA limit, represented by Tmax = Inf and kappa = 0.
-double bawr_kappa_from_tmax(double b, double pw, double Tmax);
 
 // Per-time quantities.  `Z` splits the start-point range into the live part
 // [0, Z] and the already-saturated (frozen) part (Z, A]; start points ABOVE Z

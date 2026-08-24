@@ -149,17 +149,17 @@ namespace bawf_logn {
 // (coefficient and exponent) rather than one rate, and `kappa` has different
 // units from BAwF's `k`.
 namespace bawr {
-  enum : int { v = 0, sv, B, A, t0, clear, p, N_REQ };
+  enum : int { v = 0, sv, B, A, t0, kappa, p, N_REQ };
   inline ColSpec spec() {
-    static const char* n[] = {"v", "sv", "B", "A", "t0", "Tmax", "p"};
+    static const char* n[] = {"v", "sv", "B", "A", "t0", "kappa", "p"};
     return {n, N_REQ, "BAwR"};
   }
 }
 namespace bawr_logn {
   // Same positions as bawr: mu occupies v's slot and sigma occupies sv's.
-  enum : int { mu = 0, sigma, B, A, t0, clear, p, N_REQ };
+  enum : int { mu = 0, sigma, B, A, t0, kappa, p, N_REQ };
   inline ColSpec spec() {
-    static const char* n[] = {"mu", "sigma", "B", "A", "t0", "Tmax", "p"};
+    static const char* n[] = {"mu", "sigma", "B", "A", "t0", "kappa", "p"};
     return {n, N_REQ, "BAwR_LOGN"};
   }
 }

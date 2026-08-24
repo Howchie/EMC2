@@ -45,14 +45,6 @@ BawrGeom bawr_geometry(double A, double b, double kappa, double pw) {
   return g;
 }
 
-double bawr_kappa_from_tmax(double b, double pw, double Tmax) {
-  if (ISNAN(b) || ISNAN(pw) || ISNAN(Tmax)) return R_NaN;
-  if (!(b > 0.0) || !(pw > 0.0) || !(Tmax > 0.0)) return R_NaN;
-  if (Tmax == R_PosInf) return 0.0;
-  const double log_k = std::log(b) + std::log1p(pw) - std::log(pw) -
-    (pw + 1.0) * std::log(Tmax);
-  return emc2_isfinite(log_k) ? std::exp(log_k) : R_NaN;
-}
 
 BawrAtU bawr_at_u(const BawrGeom& g, double u) {
   BawrAtU s;
@@ -842,18 +834,6 @@ NumericVector bawr_tmax_vec(NumericVector A, NumericVector b,
   return out;
 }
 
-// [[Rcpp::export]]
-NumericVector bawr_kappa_vec(NumericVector Tmax, NumericVector b,
-                             NumericVector pw) {
-  const int n = std::max(Tmax.size(), std::max(b.size(), pw.size()));
-  NumericVector out(n);
-  auto pick = [](const NumericVector& x, int i) {
-    return x.size() == 1 ? x[0] : x[i];
-  };
-  for (int i = 0; i < n; ++i)
-    out[i] = bawr_kappa_from_tmax(pick(b, i), pick(pw, i), pick(Tmax, i));
-  return out;
-}
 
 // The critical launch strength at the lowest start point,
 // V_c(0) = kappa T_max^p.  Launches below it never reach the threshold, so
@@ -890,12 +870,6 @@ int bawr_launch_of(const ContextForRaceModels* ctx) {
   return ctx ? ctx->bawd_launch : BAWR_LAUNCH_LOGNORMAL;
 }
 
-// BAwR always uses the endpoint chart: the sampled clearance slot is Tmax,
-// while the mechanistic kernel continues to receive kappa.  Funnel every read
-// through this inverse so scalar, raw, and truncation paths cannot disagree.
-double bawr_clear_to_kappa(double clear, double b, double pw) {
-  return bawr_kappa_from_tmax(b, pw, clear);
-}
 
 }  // namespace
 
@@ -908,9 +882,7 @@ double dbawr_scalar(double t, const double* par, void* ctx_) {
     tt, par[emc2col::bawr::A],
     par[emc2col::bawr::B] + par[emc2col::bawr::A],
     par[emc2col::bawr::v], par[emc2col::bawr::sv],
-    bawr_clear_to_kappa(par[emc2col::bawr::clear],
-                        par[emc2col::bawr::B] + par[emc2col::bawr::A],
-                        par[emc2col::bawr::p]), par[emc2col::bawr::p],
+    par[emc2col::bawr::kappa], par[emc2col::bawr::p],
     bawr_launch_of(ctx), ctx ? ctx->use_posdrift : true);
 }
 
@@ -924,9 +896,7 @@ double pbawr_scalar(double t, const double* par, void* ctx_) {
     tt, par[emc2col::bawr::A],
     par[emc2col::bawr::B] + par[emc2col::bawr::A],
     par[emc2col::bawr::v], par[emc2col::bawr::sv],
-    bawr_clear_to_kappa(par[emc2col::bawr::clear],
-                        par[emc2col::bawr::B] + par[emc2col::bawr::A],
-                        par[emc2col::bawr::p]), par[emc2col::bawr::p],
+    par[emc2col::bawr::kappa], par[emc2col::bawr::p],
     bawr_launch_of(ctx), ctx ? ctx->use_posdrift : true);
 }
 
@@ -942,7 +912,7 @@ void dbawr_raw(const double* rt, const double* const* cols, int n_rows,
   const double* B_  = cols[emc2col::bawr::B];
   const double* A_  = cols[emc2col::bawr::A];
   const double* t0_ = cols[emc2col::bawr::t0];
-  const double* clear_ = cols[emc2col::bawr::clear];
+  const double* kappa_ = cols[emc2col::bawr::kappa];
   const double* pw_ = cols[emc2col::bawr::p];
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
@@ -956,7 +926,7 @@ void dbawr_raw(const double* rt, const double* const* cols, int n_rows,
       continue;
     }
     const double log_pdf = bawr_log_pdf(tt, A_[i], B_[i] + A_[i], p1_[i],
-                                        p2_[i], bawr_clear_to_kappa(clear_[i], B_[i] + A_[i], pw_[i]), pw_[i], launch, pd);
+                                        p2_[i], kappa_[i], pw_[i], launch, pd);
     out[i] = (log_pdf > R_NegInf && emc2_isfinite(log_pdf))
       ? raw_log_value(log_pdf, min_ll, floor_raw)
       : raw_log_zero(min_ll, floor_raw);
@@ -975,14 +945,14 @@ void pbawr_raw(const double* rt, const double* const* cols, int n_rows,
   const double* B_  = cols[emc2col::bawr::B];
   const double* A_  = cols[emc2col::bawr::A];
   const double* t0_ = cols[emc2col::bawr::t0];
-  const double* clear_ = cols[emc2col::bawr::clear];
+  const double* kappa_ = cols[emc2col::bawr::kappa];
   const double* pw_ = cols[emc2col::bawr::p];
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
     if (R_IsNA(p1_[i]) || !isok[i]) { out[i] = 0.0; continue; }
     const double tt = rt[i] - t0_[i];
     if (tt <= 0.0 || rt[i] <= 0.0) { out[i] = 0.0; continue; }
-    const double kap = bawr_clear_to_kappa(clear_[i], B_[i] + A_[i], pw_[i]);
+    const double kap = kappa_[i];
     double cdf = 0.0;
     if (ba_natural_cdf_bawr(tt, A_[i], B_[i] + A_[i], p1_[i], p2_[i], kap, pw_[i],
                             launch, pd, BAWR_DENOM_FLOOR, BA_ACCEPT_RAW, cdf)) {
@@ -1008,7 +978,7 @@ void bawr_logS_at_t(double t, const double* const* cols,
   const double* B_  = cols[emc2col::bawr::B];
   const double* A_  = cols[emc2col::bawr::A];
   const double* t0_ = cols[emc2col::bawr::t0];
-  const double* clear_ = cols[emc2col::bawr::clear];
+  const double* kappa_ = cols[emc2col::bawr::kappa];
   const double* pw_ = cols[emc2col::bawr::p];
   for (int j = 0; j < n_unique_trials; ++j) {
     if (!trunc_mask[j]) continue;
@@ -1020,7 +990,7 @@ void bawr_logS_at_t(double t, const double* const* cols,
       if (!isok_all[r] || R_IsNA(p1_[r])) { bad = true; break; }
       const double tt = t - t0_[r];
       if (tt <= 0.0) continue;  // not started: survivor one
-      const double kap = bawr_clear_to_kappa(clear_[r], B_[r] + A_[r], pw_[r]);
+      const double kap = kappa_[r];
       double cdf = 0.0;
       if (ba_natural_cdf_bawr(tt, A_[r], B_[r] + A_[r], p1_[r], p2_[r], kap, pw_[r],
                               launch, pd, BAWR_DENOM_FLOOR, BA_ACCEPT_RAW, cdf)) {
