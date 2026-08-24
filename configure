@@ -2,9 +2,10 @@
 # configure — build-profile scaffolding for EMC2 (hand-written; not autoconf).
 #
 # Generates src/Makevars from src/Makevars.in using the compiler selected by R.
-# The default profile reproduces the historical src/Makevars flags exactly and
-# keeps OpenMP/SIMD disabled. Named profiles are opt-in only: no silent default
-# switch is performed here.
+# The default profile keeps the historical optimisation flags; full OpenMP
+# stays off unless opted into, while -fopenmp-simd is probed and enabled
+# automatically when supported (--disable-openmp-simd opts out). Named profiles
+# remain opt-in only: no silent profile switch happens.
 #
 # Usage:
 #   R CMD INSTALL .
@@ -18,7 +19,10 @@
 #   --enable-openmp             Enable OpenMP only if the probe succeeds
 #                               (off by default; never on without an opt-in).
 #   --enable-openmp-simd        Enable `#pragma omp simd` via -fopenmp-simd
-#                               only if the probe succeeds (off by default).
+#                               (on by default whenever the probe succeeds);
+#                               requests it explicitly and warns if the probe
+#                               fails.
+#   --disable-openmp-simd       Force -fopenmp-simd off even if supported.
 #   --help, -h                  Show this help.
 
 set -u
@@ -50,7 +54,7 @@ R_CXXFLAGS="$(R CMD config CXXFLAGS 2>/dev/null)"
 ENV_PROFILE="${EMC2_BUILD_PROFILE:-}"
 CLI_PROFILE=""
 ENABLE_OPENMP=no
-ENABLE_OPENMP_SIMD=no
+ENABLE_OPENMP_SIMD=auto
 
 for arg in "$@"; do
   case "$arg" in
@@ -68,9 +72,11 @@ configure options for EMC2:
 
   --enable-openmp             Add OpenMP compile/link flags only when the
                               probe succeeds (off by default).
-  --enable-openmp-simd        Add -fopenmp-simd only when the probe succeeds
-                              (off by default; enables #pragma omp simd
-                              without linking an OpenMP runtime).
+  --enable-openmp-simd        Add -fopenmp-simd, enabling #pragma omp simd
+                              without linking an OpenMP runtime. On by default
+                              whenever the probe succeeds; passing this
+                              requests it explicitly and warns if unsupported.
+  --disable-openmp-simd       Never add -fopenmp-simd, even if supported.
 
   --help, -h                  Show this help message and exit.
 
@@ -79,8 +85,10 @@ Examples:
   R CMD INSTALL --configure-args="--with-build-profile=compatibility" .
   R CMD INSTALL --configure-args="--with-build-profile=diagnostic" .
 
-The default (legacy) reproduces the pre-refactor build flags and does not
-enable OpenMP. Profiles other than legacy are opt-in.
+The default (legacy) reproduces the pre-refactor optimisation flags and does
+not enable OpenMP threading. -fopenmp-simd is added automatically when the
+compiler supports it unless --disable-openmp-simd is given. Profiles other
+than legacy are opt-in.
 EOF
       exit 0
       ;;
@@ -150,16 +158,17 @@ workdir="$(mktemp -d "${TMPDIR:-/tmp}/emc2-config.XXXXXX")" || {
 }
 trap 'rm -rf "$workdir"' 0
 
-# ---------------------------------------------------------------------------
-# OpenMP / OpenMP-SIMD probes (metadata + opt-in only). Both use R's own
-# compiler and flags. The results are recorded in the summary and only become
-# part of the build when the corresponding --enable-* opt-in is given.
-# ---------------------------------------------------------------------------
+# OpenMP / OpenMP-SIMD probes use R's own compiler and flags. Full OpenMP
+# remains opt-in; SIMD is enabled automatically when its probe succeeds unless
+# explicitly disabled. The results are recorded in the summary and Makevars
+# metadata.
 OMP_CXXFLAGS=""
 OMP_LIBS=""
 OMP_STATUS="unavailable"
 SIMD_CXXFLAGS=""
 SIMD_STATUS="unavailable"
+SIMD_STATE="off"
+SIMD_DETAIL="off (probe failed)"
 
 probe_omp() {
   cat > "$workdir/omp_probe.cpp" <<'EOF'
@@ -227,8 +236,8 @@ else
   SIMD_STATUS="unavailable"
 fi
 
-# Keep OpenMP/SIMD out of the default output. Flags are emitted only when the
-# matching opt-in was requested AND its probe succeeded; otherwise they stay
+# Keep full OpenMP out of the default output: its flags are emitted only when
+# --enable-openmp was requested AND its probe succeeded; otherwise they stay
 # empty so the generated Makevars is byte-for-byte equivalent on those lines.
 if [ "$ENABLE_OPENMP" = "yes" ] && [ -n "$OMP_CXXFLAGS" ]; then
   :
@@ -241,25 +250,40 @@ else
   OMP_LIBS=""
 fi
 
-if [ "$ENABLE_OPENMP_SIMD" = "yes" ] && [ -n "$SIMD_CXXFLAGS" ]; then
-  :
+# Capability-driven SIMD default: -fopenmp-simd is emitted whenever the probe
+# succeeded, without requiring any flag. An explicit --disable-openmp-simd
+# always forces it off; --enable-openmp-simd requests it and warns when the
+# probe fails.
+if [ "$ENABLE_OPENMP_SIMD" = "no" ]; then
+  SIMD_CXXFLAGS=""
+  SIMD_STATE="off"
+  SIMD_DETAIL="off (--disable-openmp-simd)"
+elif [ "$SIMD_STATUS" = "available" ]; then
+  SIMD_STATE="on"
+  SIMD_DETAIL="on ($SIMD_CXXFLAGS)"
 elif [ "$ENABLE_OPENMP_SIMD" = "yes" ]; then
-  echo "configure: warning: --enable-openmp-simd requested but the SIMD probe failed" >&2
+  echo "configure: warning: --enable-openmp-simd requested but the SIMD probe failed; building without -fopenmp-simd" >&2
   SIMD_CXXFLAGS=""
+  SIMD_STATE="off"
+  SIMD_DETAIL="off (requested, probe failed)"
 else
+  echo "configure: note: compiler does not support -fopenmp-simd; building without SIMD pragma enablement" >&2
   SIMD_CXXFLAGS=""
+  SIMD_STATE="off"
+  SIMD_DETAIL="off (probe failed)"
 fi
 
 # ---------------------------------------------------------------------------
-# Summary.
+# Summary. Metadata records the probe outcome separately from whether the
+# SIMD flag was actually emitted.
 # ---------------------------------------------------------------------------
-CONFIG_META="profile=${BUILD_PROFILE} openmp=${OMP_STATUS} openmp-simd=${SIMD_STATUS}"
+CONFIG_META="profile=${BUILD_PROFILE} openmp=${OMP_STATUS} openmp-simd-probe=${SIMD_STATUS} openmp-simd=${SIMD_STATE}"
 echo "configure: EMC2 build configuration"
 echo "  build profile : $BUILD_PROFILE"
 echo "  compiler      : $CXX_FULL"
 echo "  R CXXFLAGS    : $R_CXXFLAGS"
-echo "  OpenMP        : $OMP_STATUS"
-echo "  OpenMP SIMD   : $SIMD_STATUS"
+echo "  OpenMP        : $OMP_STATUS (compile/link flags only via --enable-openmp)"
+echo "  OpenMP SIMD   : $SIMD_DETAIL"
 
 # ---------------------------------------------------------------------------
 # Generate src/Makevars from src/Makevars.in (atomic: temp file then mv, so a

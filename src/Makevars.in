@@ -7,11 +7,12 @@
 # Build profiles — select with `./configure --with-build-profile=NAME`, or set
 # the EMC2_BUILD_PROFILE environment variable:
 #
-#   legacy         Exact historical flags (DEFAULT). -O3 -march=native
-#                  -ffast-math -fno-finite-math-only -fno-math-errno and
-#                  USE_FAST_PNORM. Reproduces the pre-refactor src/Makevars;
-#                  OpenMP/SIMD stay disabled. This is the current default and
-#                  is NOT silently reinterpreted here.
+#   legacy         Exact historical optimisation flags (DEFAULT). -O3
+#                  -march=native -ffast-math -fno-finite-math-only
+#                  -fno-math-errno and USE_FAST_PNORM. Reproduces the
+#                  pre-refactor src/Makevars optimisation flags; full OpenMP
+#                  stays off. This is the current default and is NOT silently
+#                  reinterpreted here.
 #
 #   compatibility  Conservative: R's default -O2, no -march=native, no
 #                  -ffast-math, no -fno-math-errno. USE_FAST_PNORM and the
@@ -25,9 +26,14 @@
 #   diagnostic     performance flags plus compiler optimization/vectorization
 #                  reports (GCC -fopt-info-* / Clang -Rpass=*).
 #
-# OpenMP / OpenMP-SIMD are probed by configure and recorded as metadata only.
-# They are strictly opt-in (--enable-openmp / --enable-openmp-simd) and are
-# never part of the default output.
+# OpenMP-SIMD is probed by configure and -fopenmp-simd is added automatically
+# whenever the compiler supports it; --disable-openmp-simd forces it off and
+# --enable-openmp-simd requests it explicitly (warning if unsupported). Full
+# OpenMP stays strictly opt-in (--enable-openmp) and independent of SIMD.
+#
+# Generated configuration records the probe outcome and whether the SIMD flag
+# was actually enabled:
+#   openmp-simd-probe = available | unavailable   openmp-simd = on | off
 #
 # Generated configuration:
 #   @CONFIG_META@

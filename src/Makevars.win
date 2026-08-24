@@ -1,11 +1,13 @@
-# Build profile: defaults to legacy (exact historical flags). configure.win
-# writes src/Makevars.profile to override this when --with-build-profile or
-# EMC2_BUILD_PROFILE selects a named profile; the fragment is absent when
-# configure is skipped, so this file still yields the legacy build on its own.
+# Build profile: defaults to legacy (exact historical optimisation flags).
+# configure.win writes src/Makevars.profile carrying BUILD_PROFILE and, when
+# its -fopenmp-simd probe succeeded and SIMD was not disabled, also
+# SIMD_CXXFLAGS; the fragment is absent when configure is skipped, so this
+# file still yields the plain legacy build on its own.
 BUILD_PROFILE ?= legacy
+SIMD_CXXFLAGS ?=
 -include Makevars.profile
 
-PKG_CXXFLAGS += -std=gnu++17 -Wfatal-errors -fmax-errors=1 -ftemplate-backtrace-limit=5
+PKG_CXXFLAGS += -std=gnu++17 -Wfatal-errors -fmax-errors=1 -ftemplate-backtrace-limit=5 $(SIMD_CXXFLAGS)
 
 # -fno-finite-math-only is REQUIRED: -ffast-math would otherwise assume no NaN/Inf
 # and break the ±Inf/NaN censoring comparisons (NA_REAL is a NaN). See src/Makevars.
