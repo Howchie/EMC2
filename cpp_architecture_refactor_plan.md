@@ -450,6 +450,56 @@ The refactor is complete only when:
 - representative runtime benchmarks show preserved or improved performance;
 - supported platforms have a tested OpenMP-disabled fallback;
 - the final source tree has narrow headers, independent implementation units, a thin orchestrator, and no obsolete monolithic or duplicate path.
+### Measured refactor record (2026-08-24)
+
+The independently buildable implementation commits are:
+
+| step | commit |
+|---|---|
+| Step 1 — remove `[[gnu::flatten]]` | `44537c05` |
+| Step 2 — delete the dead Volterra cluster | `a6d8a3d4` |
+| Step 3 — strip gratuitous RcppArmadillo includes | `d91c793f` |
+| Step 4 — extract shared callable quadrature templates | `98fff9f2` |
+
+The measured dominant compile-time change remains Step 1: the whole-tree parallel
+compile changed from **135.64 s / 651.88 s user CPU** to **32.85 s / 220.67 s
+user CPU**, and `R CMD INSTALL --preclean` changed from **192.58 s** to
+**54.95 s**.  The final Step 4 tree installed in **46.56 s** with `MAKEFLAGS=-j8`
+under the legacy `-O3 -march=native -ffast-math -fno-finite-math-only
+-fno-math-errno -DUSE_FAST_PNORM` profile; this is not attributed as a
+compile-time improvement from Steps 2–4.
+
+Step 4 verification on the final tree:
+
+- `utility_functions.h`, `quad_templates.h`, `model_RDM.h`, and `model_BAwD.h`
+  each passed an independent C++17 standalone-header syntax check.
+- The exact numerical oracle matched the Step 3 capture in **10/10 cases**
+  (`abs_tol=0`, `rel_tol=0`).
+- The 12-scenario BAwL/correlation benchmark retained these likelihood values:
+  `plain_lba_2=-45864`, `corr_lba_2_rho50=-45683`,
+  `corr_lba_2_rho80=-48901`, `corr_lba_2_rho95=-52625`,
+  `corr_lba_2_rho08_unrestricted=-51617`,
+  `corr_lba_2_rho08_near_t0=-166115`, `leak_bawl_2_rho08=-58970`,
+  `plain_bawl_pm_race23=-56320`, `corr_lba_pm_race23_rho08=-49727`,
+  `leak_bawl_pm_race23_rho08=-58350`,
+  `forced_gh_3loaded_rho08=-51860`, and
+  `forced_generic_clock_rho08=-33236`.  All route, node, and quadrature
+  counters matched the Step 3 capture exactly.
+- `tools/generate_compat_inventory.py --check` passed with no registration or
+  model-file coverage changes.
+- The complete non-CRAN matrix ran all **91** test files.  Its **48**
+  failure/error locations were exactly the recorded baseline set:
+  `test-bawd-gamma-integration.R` (2), `test-compare.R` (3),
+  `test-group-ic.R` (1), `test-ll-data-cache.R` (4), `test-map.R` (1),
+  `test-recover_sbc.R` (1), `test-roup.R` (4),
+  `test-sampling-rejection.R` (3), `test-stop_success_gl.R` (10),
+  `test-trend.R` (10), `test-variant_funs.R` (7), and
+  `test-wald-logspace.R` (2).  No new failure or error location was introduced.
+
+Final verification environment: EMC2 **3.4.0**; R **4.6.1**;
+`R CMD config CXX17` = `g++`; compiler **g++ 11.4.0**; Linux
+`5.15.0-185-generic` x86_64; CPU **AMD EPYC-Genoa Processor**;
+`OMP_NUM_THREADS=1`; `OPENBLAS_NUM_THREADS=1`.
 
 ## Final note from user
 - The package should, ideally, compile the most optimised build available for a given user. We should not be expecting users to know or specify compile flags; SIMD, march=native etc. should all be used *when they are available* we should not have a default build that is much slower just for safety. Identify the optimal implementation that provides users with the fastest package their system can have.
