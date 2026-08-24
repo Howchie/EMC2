@@ -12,6 +12,12 @@ using namespace Rcpp;
 #include "col_registry.h"
 #include <cstdlib> // getenv
 
+// The two legacy vectorised wrappers below carry external (non-inline)
+// definitions and have no remaining callers.  A translation unit that only
+// needs the _raw kernels (likelihood_ddm.cpp) defines
+// EMC2_MODEL_DDM_NO_LEGACY_WRAPPERS to opt out, so this header stays
+// includable from more than one TU while the definitions keep a single owner.
+#ifndef EMC2_MODEL_DDM_NO_LEGACY_WRAPPERS
 NumericVector d_DDM_Wien(NumericVector rts, IntegerVector Rs, NumericMatrix pars, LogicalVector is_ok){
   int Epsflag = 1;
   double eps = 5e-3;
@@ -49,6 +55,7 @@ NumericVector d_DDM_Wien(NumericVector rts, IntegerVector Rs, NumericMatrix pars
   }
   return(out);
 }
+#endif // EMC2_MODEL_DDM_NO_LEGACY_WRAPPERS
 
 inline void d_DDM_Wien_raw(const double* rts, const int* Rs,
                            const double* const* cols, int n_rows,
@@ -187,6 +194,7 @@ inline void p_DDM_Wien_raw(const double* rts, const int* Rs,
   }
 }
 
+#ifndef EMC2_MODEL_DDM_NO_LEGACY_WRAPPERS
 NumericVector p_DDM_Wien(NumericVector rts, IntegerVector Rs, NumericMatrix pars, LogicalVector is_ok){
   static int ddm_debug_prints_left = 20; // shared across calls; keep noise bounded
   const bool ddm_debug = (std::getenv("EMC2_DEBUG_DDM") != nullptr);
@@ -247,6 +255,7 @@ NumericVector p_DDM_Wien(NumericVector rts, IntegerVector Rs, NumericMatrix pars
   }
   return(out);
 }
+#endif // EMC2_MODEL_DDM_NO_LEGACY_WRAPPERS
 
 
 #endif
