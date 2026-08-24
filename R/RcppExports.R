@@ -113,6 +113,14 @@ lognormal_logratio_stoploss_log <- function(v, mu, sigma, log_ell) {
     .Call(`_EMC2_lognormal_logratio_stoploss_log`, v, mu, sigma, log_ell)
 }
 
+dbawdp <- function(t, A, b, p1, p2, k, lambda, launch = 1L, posdrift = TRUE, log_out = FALSE) {
+    .Call(`_EMC2_dbawdp`, t, A, b, p1, p2, k, lambda, launch, posdrift, log_out)
+}
+
+pbawdp <- function(t, A, b, p1, p2, k, lambda, launch = 1L, posdrift = TRUE, log_out = FALSE) {
+    .Call(`_EMC2_pbawdp`, t, A, b, p1, p2, k, lambda, launch, posdrift, log_out)
+}
+
 dbawf <- function(t, A, b, p1, p2, k, launch = 1L, posdrift = TRUE, log_out = FALSE, rho = 0.0) {
     .Call(`_EMC2_dbawf`, t, A, b, p1, p2, k, launch, posdrift, log_out, rho)
 }
@@ -351,6 +359,14 @@ simulate_ou_hit_times_bb <- function(n, lambda, theta, sigma, z0, b0, binf, tau 
 
 simulate_gompertz_hit_times_bb <- function(n, alpha, beta, z0, k0, kinf, tau = 1.0, pow = 1.0, dt = 1e-3, t_max = 10.0, start_floor = 1e-3, p_tol = 1e-9, eps_curv = 0.1, adapt_factor = 32.0, adaptive = TRUE) {
     .Call(`_EMC2_simulate_gompertz_hit_times_bb`, n, alpha, beta, z0, k0, kinf, tau, pow, dt, t_max, start_floor, p_tol, eps_curv, adapt_factor, adaptive)
+}
+
+dpcounter <- function(t, nu, sv, gamma, k, omega, t0, log_out = FALSE) {
+    .Call(`_EMC2_dpcounter`, t, nu, sv, gamma, k, omega, t0, log_out)
+}
+
+ppcounter <- function(t, nu, sv, gamma, k, omega, t0, lower_tail = TRUE, log_out = FALSE) {
+    .Call(`_EMC2_ppcounter`, t, nu, sv, gamma, k, omega, t0, lower_tail, log_out)
 }
 
 pwald <- function(t, mu, b, A = 0.0, sigma = 1.0, t0 = 0.0, lambda_g = 0.0, lambda_k = 0.0, log_out = FALSE, kill_shape = 1L, guess = FALSE, posdrift = TRUE, erlang_omega = 1.0) {
@@ -701,14 +717,6 @@ TrendEngine_apply_posttransform_bases <- function(param_table_ptr, trend_engine_
     invisible(.Call(`_EMC2_TrendEngine_apply_posttransform_bases`, param_table_ptr, trend_engine_ptr))
 }
 
-dpcounter <- function(t, nu, sv, gamma, k, omega, t0, log_out = FALSE) {
-    .Call(`_EMC2_dpcounter`, t, nu, sv, gamma, k, omega, t0, log_out)
-}
-
-ppcounter <- function(t, nu, sv, gamma, k, omega, t0, lower_tail = TRUE, log_out = FALSE) {
-    .Call(`_EMC2_ppcounter`, t, nu, sv, gamma, k, omega, t0, lower_tail, log_out)
-}
-
 calc_ll_oo_marginal_nodes <- function(particle_matrix, data, constants, designs, type, bounds, transforms, pretransforms, p_types, min_ll, marginalise, trend = NULL) {
     .Call(`_EMC2_calc_ll_oo_marginal_nodes`, particle_matrix, data, constants, designs, type, bounds, transforms, pretransforms, p_types, min_ll, marginalise, trend)
 }
@@ -835,14 +843,6 @@ emc_copy_sample_prefix <- function(target, source) {
 
 run_trend_rcpp <- function(data, trend, param, trend_pars, pars_full, return_kernel = FALSE) {
     .Call(`_EMC2_run_trend_rcpp`, data, trend, param, trend_pars, pars_full, return_kernel)
-}
-
-dbawdp <- function(t, A, b, p1, p2, k, lambda, launch = 1L, posdrift = TRUE, log_out = FALSE) {
-    .Call(`_EMC2_dbawdp`, t, A, b, p1, p2, k, lambda, launch, posdrift, log_out)
-}
-
-pbawdp <- function(t, A, b, p1, p2, k, lambda, launch = 1L, posdrift = TRUE, log_out = FALSE) {
-    .Call(`_EMC2_pbawdp`, t, A, b, p1, p2, k, lambda, launch, posdrift, log_out)
 }
 
 ou_debug_set <- function(enabled = TRUE, level = 1L) {
