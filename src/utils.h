@@ -135,10 +135,6 @@ struct ContextForRaceModels {
     double bawd_gamma = 0.0;
     double bawd_rho = R_PosInf;
 
-    // BAwD's identified chart: the raw columns are (y0, T_max, A, delta,
-    // sigma, t0) and the adapters map them to the ordinary lognormal BAwD
-    // coordinates before evaluating the same closed-form kernel.
-
     // BAwL launch-strength distribution, on the same convention: 0 = normal
     // (v, sv), 1 = lognormal (mu, sigma).  Set from the "_LOGN" c_name suffix.
     // The default is the historical Gaussian BAwL; LBA is always normal.
@@ -1549,15 +1545,6 @@ inline double bawd_rho_of(const ContextForRaceModels* ctx) {
   return ctx ? ctx->bawd_rho : R_PosInf;
 }
 
-// Slot `clear` holds T_max under the endpoint chart and ell at gamma = 1; the
-// kernels below all take ell, so every column read goes through this.
-inline double bawd_clear_to_ell(const ContextForRaceModels* ctx, double clear,
-                                double b, double k) {
-  const double gamma = bawd_gamma_of(ctx);
-  if (!bawd_uses_tmax(gamma)) return clear;
-  return bawd_ell_from_tmax(b, k, clear, gamma, bawd_rho_of(ctx));
-}
-
 inline double dbawd_scalar(double t, const double* par, void* ctx_) {
   auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
   if (R_IsNA(par[emc2col::bawd::v])) return 0.0;
@@ -1568,8 +1555,7 @@ inline double dbawd_scalar(double t, const double* par, void* ctx_) {
     tt, par[emc2col::bawd::A], b,
     par[emc2col::bawd::v], par[emc2col::bawd::sv],
     par[emc2col::bawd::k],
-    bawd_clear_to_ell(ctx, par[emc2col::bawd::clear], b,
-                      par[emc2col::bawd::k]),
+    par[emc2col::bawd::ell],
     bawd_launch_of(ctx), ctx ? ctx->use_posdrift : true,
     bawd_gamma_of(ctx), bawd_rho_of(ctx));
 }
@@ -1585,8 +1571,7 @@ inline double pbawd_scalar(double t, const double* par, void* ctx_) {
     tt, par[emc2col::bawd::A], b,
     par[emc2col::bawd::v], par[emc2col::bawd::sv],
     par[emc2col::bawd::k],
-    bawd_clear_to_ell(ctx, par[emc2col::bawd::clear], b,
-                      par[emc2col::bawd::k]),
+    par[emc2col::bawd::ell],
     bawd_launch_of(ctx), ctx ? ctx->use_posdrift : true,
     bawd_gamma_of(ctx), bawd_rho_of(ctx));
 }
@@ -1606,8 +1591,7 @@ inline void dbawd_raw(const double* rt, const double* const* cols, int n_rows,
   const double* A_  = cols[emc2col::bawd::A];
   const double* t0_ = cols[emc2col::bawd::t0];
   const double* k_  = cols[emc2col::bawd::k];
-  const double* clear_ = cols[emc2col::bawd::clear];
-  const bool tmax_chart = bawd_uses_tmax(gamma);
+  const double* ell_ = cols[emc2col::bawd::ell];
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
     if (R_IsNA(p1_[i]) || !isok[i]) {
@@ -1620,10 +1604,8 @@ inline void dbawd_raw(const double* rt, const double* const* cols, int n_rows,
       continue;
     }
     const double b_i = B_[i] + A_[i];
-    const double ell_i = tmax_chart
-      ? bawd_ell_from_tmax(b_i, k_[i], clear_[i], gamma, rho) : clear_[i];
     const double log_pdf = bawd_log_pdf(tt, A_[i], b_i, p1_[i],
-                                        p2_[i], k_[i], ell_i, launch, pd,
+                                        p2_[i], k_[i], ell_[i], launch, pd,
                                         gamma, rho);
     out[i] = (log_pdf > R_NegInf && emc2_isfinite(log_pdf))
       ? raw_log_value(log_pdf, min_ll, floor_raw)
@@ -1646,18 +1628,15 @@ inline void pbawd_raw(const double* rt, const double* const* cols, int n_rows,
   const double* A_  = cols[emc2col::bawd::A];
   const double* t0_ = cols[emc2col::bawd::t0];
   const double* k_  = cols[emc2col::bawd::k];
-  const double* clear_ = cols[emc2col::bawd::clear];
-  const bool tmax_chart = bawd_uses_tmax(gamma);
+  const double* ell_ = cols[emc2col::bawd::ell];
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
     if (R_IsNA(p1_[i]) || !isok[i]) { out[i] = 0.0; continue; }
     const double tt = rt[i] - t0_[i];
     if (tt <= 0.0 || rt[i] <= 0.0) { out[i] = 0.0; continue; }
     const double b_i = B_[i] + A_[i];
-    const double ell_i = tmax_chart
-      ? bawd_ell_from_tmax(b_i, k_[i], clear_[i], gamma, rho) : clear_[i];
     const double log_cdf = bawd_log_cdf(tt, A_[i], b_i, p1_[i],
-                                        p2_[i], k_[i], ell_i, launch, pd,
+                                        p2_[i], k_[i], ell_[i], launch, pd,
                                         gamma, rho);
     if (!R_FINITE(log_cdf)) { out[i] = 0.0; continue; }
     if (log_cdf >= 0.0) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
@@ -1939,8 +1918,7 @@ inline void bawd_logS_at_t(double t, const double* const* cols,
   const double* A_  = cols[emc2col::bawd::A];
   const double* t0_ = cols[emc2col::bawd::t0];
   const double* k_  = cols[emc2col::bawd::k];
-  const double* clear_ = cols[emc2col::bawd::clear];
-  const bool tmax_chart = bawd_uses_tmax(gamma);
+  const double* ell_ = cols[emc2col::bawd::ell];
   for (int j = 0; j < n_unique_trials; ++j) {
     if (!trunc_mask[j]) continue;
     const int start = j * n_lR;
@@ -1952,10 +1930,8 @@ inline void bawd_logS_at_t(double t, const double* const* cols,
       const double tt = t - t0_[r];
       if (tt <= 0.0) continue;  // not started: survivor one
       const double b_r = B_[r] + A_[r];
-      const double ell_r = tmax_chart
-        ? bawd_ell_from_tmax(b_r, k_[r], clear_[r], gamma, rho) : clear_[r];
       const double log_cdf = bawd_log_cdf(tt, A_[r], b_r, p1_[r],
-                                          p2_[r], k_[r], ell_r, launch, pd,
+                                          p2_[r], k_[r], ell_[r], launch, pd,
                                           gamma, rho);
       if (log_cdf >= 0.0) { bad = true; break; }
       if (R_FINITE(log_cdf)) logS += log1m_exp(log_cdf);

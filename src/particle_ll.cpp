@@ -641,6 +641,7 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
     out.ctx.defective_upper_tail = out.ctx.is_global_kill;
     out.ctx.fpe_cache  = std::make_shared<fperace::SolveCache>();
     roup_configure_cache(*out.ctx.fpe_cache);
+    out.ctx.fpe_cache->roup_local = (type_std.find("_LOCAL_RACE") != std::string::npos);
     out.col_spec       = emc2col::roup::spec();
     out.ctx.t0_index   = emc2col::roup::t0;
     if (type_std.find("_BWEIB") != std::string::npos)
@@ -875,15 +876,9 @@ static inline RaceModelAdapter resolve_race_model_adapter(const std::string& typ
       ((type_std.find("_GAM34") != std::string::npos) ? 0.75 :
        ((type_std.find("_GAM23") != std::string::npos) ? (2.0 / 3.0) :
         ((type_std.find("_GAM12") != std::string::npos) ? 0.5 : 0.0)));
-    // Slot 6 is the endpoint T_max wherever the trace has a finite maximum,
-    // and the clearance rate ell at gamma = 1 where it does not.  The R
-    // constructor names the p_type from the same predicate, so the two agree
-    // by construction; getting it wrong would be caught here by
-    // validate_col_prefix() rather than silently misread.
-    const bool bawd_tmax = bawd_uses_tmax(out.ctx.bawd_gamma);
-    out.col_spec = bawd_logn
-      ? (bawd_tmax ? emc2col::bawd_logn::spec() : emc2col::bawd_logn::spec_ell())
-      : (bawd_tmax ? emc2col::bawd::spec() : emc2col::bawd::spec_ell());
+    // Slot 6 is the clearance rate ell for every BAwD regime.
+    out.col_spec = bawd_logn ? emc2col::bawd_logn::spec()
+                             : emc2col::bawd::spec();
     // Fixed power-decay kernel parameter parsed from the c_name suffix.
     // Default (no suffix) is R_PosInf (exponential kernel).
     out.ctx.bawd_rho =

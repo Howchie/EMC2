@@ -97,10 +97,6 @@ bawd_tmax_vec <- function(A, b, k, ell, gamma = 0.0, rho = 0.0) {
     .Call(`_EMC2_bawd_tmax_vec`, A, b, k, ell, gamma, rho)
 }
 
-bawd_ell_vec <- function(Tmax, b, k, gamma = 0.0, rho = 0.0) {
-    .Call(`_EMC2_bawd_ell_vec`, Tmax, b, k, gamma, rho)
-}
-
 lognormal_stoploss_log <- function(v, mu, sigma) {
     .Call(`_EMC2_lognormal_stoploss_log`, v, mu, sigma)
 }
@@ -765,16 +761,16 @@ rrou_cpp <- function(pars, lR_levels, ok, kind_sexp = NULL, dt = 1e-3, t_max = 3
     .Call(`_EMC2_rrou_cpp`, pars, lR_levels, ok, kind_sexp, dt, t_max, par_kind)
 }
 
-droup_cpp <- function(rt, v_S, v_T, tau_S, tau_T, k, B, A, t0, s, nx = 384L, dt_target = 2e-3, grade = 8.0, tgrade = 32.0, bkind = 0L, Binf = as.numeric( c()), tau = as.numeric( c()), pw = as.numeric( c())) {
-    .Call(`_EMC2_droup_cpp`, rt, v_S, v_T, tau_S, tau_T, k, B, A, t0, s, nx, dt_target, grade, tgrade, bkind, Binf, tau, pw)
+droup_cpp <- function(rt, v_S, v_T, tau_S, tau_T, k, B, A, t0, s, nx = 384L, dt_target = 2e-3, grade = 8.0, tgrade = 32.0, bkind = 0L, Binf = as.numeric( c()), tau = as.numeric( c()), pw = as.numeric( c()), pooling = 0L) {
+    .Call(`_EMC2_droup_cpp`, rt, v_S, v_T, tau_S, tau_T, k, B, A, t0, s, nx, dt_target, grade, tgrade, bkind, Binf, tau, pw, pooling)
 }
 
-rroup_cpp <- function(pars, lR_levels, ok, kind_sexp = NULL, dt = 1e-3, t_max = 30.0) {
-    .Call(`_EMC2_rroup_cpp`, pars, lR_levels, ok, kind_sexp, dt, t_max)
+rroup_cpp <- function(pars, lR_levels, ok, kind_sexp = NULL, dt = 1e-3, t_max = 30.0, pooling = 0L) {
+    .Call(`_EMC2_rroup_cpp`, pars, lR_levels, ok, kind_sexp, dt, t_max, pooling)
 }
 
-rroup_hit_times_cpp <- function(v_S, v_T, tau_S, tau_T, k, B, A, s, dt = 1e-3, t_max = 30.0, bkind = 0L, Binf = as.numeric( c()), tau = as.numeric( c()), pw = as.numeric( c())) {
-    .Call(`_EMC2_rroup_hit_times_cpp`, v_S, v_T, tau_S, tau_T, k, B, A, s, dt, t_max, bkind, Binf, tau, pw)
+rroup_hit_times_cpp <- function(v_S, v_T, tau_S, tau_T, k, B, A, s, dt = 1e-3, t_max = 30.0, bkind = 0L, Binf = as.numeric( c()), tau = as.numeric( c()), pw = as.numeric( c()), pooling = 0L) {
+    .Call(`_EMC2_rroup_hit_times_cpp`, v_S, v_T, tau_S, tau_T, k, B, A, s, dt, t_max, bkind, Binf, tau, pw, pooling)
 }
 
 emc_clone_sample_store <- function(source) {
@@ -820,4 +816,3 @@ pigt <- function(t, k = 1, l = 1, a = .1, threshold = 1e-10) {
 digt <- function(t, k = 1., l = 1., a = .1, threshold = 1e-10) {
     .Call(`_EMC2_digt`, t, k, l, a, threshold)
 }
-

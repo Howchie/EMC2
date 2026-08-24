@@ -520,14 +520,8 @@ test_that("the constructor wires drift_distribution consistently", {
   # The kernel column contract is positional; these ARE the orders in
   # src/col_registry.h and a reordering here must fail loudly there.
   expect_identical(m_ln$p_types_canonical,
-                   c("mu", "sigma", "B", "A", "t0", "k", "Tmax"))
-  expect_identical(m_no$p_types_canonical,
-                   c("v", "sv", "B", "A", "t0", "k", "Tmax"))
-  # gamma = 1 co-decays, so the trace has no finite maximum and slot 6 stays
-  # the clearance RATE.  The C++ side picks spec_ell() from the same predicate.
-  expect_identical(BAwD(gamma = 1)$p_types_canonical,
                    c("mu", "sigma", "B", "A", "t0", "k", "ell"))
-  expect_identical(BAwD("normal", gamma = 1)$p_types_canonical,
+  expect_identical(m_no$p_types_canonical,
                    c("v", "sv", "B", "A", "t0", "k", "ell"))
   # "BAwD_LOGN" must not trip the IO substring test in the adapter.
   expect_false(grepl("IO", m_ln$c_name))
@@ -629,16 +623,14 @@ bawd_ll_fixture <- function() {
   }
   list(
     dat = dat,
-    # `ell` is derived from the sampled endpoint, so it can no longer be
-    # pinned at 1 to fix the evidence scale; B's intercept is the anchor.
     ln = suppressMessages(mk(BAwD,
-      list(mu ~ 1, sigma ~ 1, A ~ 1, t0 ~ 1, k ~ 1, Tmax ~ 1),
-      c(B = log(0.8)))),
+      list(mu ~ 1, sigma ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1),
+      c(ell = log(1)))),
     no = suppressMessages(mk(function() BAwD("normal"),
-      list(v ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1, Tmax ~ 1),
+      list(v ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1, ell ~ 1),
       c(sv = log(1)))),
     p = c(mu = 0.9, sigma = log(0.6), v = 3, B = log(0.8), A = log(0.3),
-          t0 = log(0.15), k = log(0.8), Tmax = log(1.2))
+          t0 = log(0.15), k = log(0.8), ell = log(0.5))
   )
 }
 
@@ -696,7 +688,7 @@ test_that("the compiled BAwD likelihood reproduces BAwL at ell = 0, A = 0", {
                               mK = log(1))))
   fd <- suppressMessages(mk(function() BAwD("normal"),
                             list(v ~ 1, B ~ 1, t0 ~ 1, k ~ 1),
-                            c(sv = log(1), A = log(0), Tmax = Inf)))
+                            c(sv = log(1), A = log(0), ell = log(0))))
   pv <- c(v = 3, B = log(0.9), t0 = log(0.15), k = log(0.8))
   l_bawl <- bawd_ll(fb, pv[names(sampled_pars(fb$des))])
   l_bawd <- bawd_ll(fd, pv[names(sampled_pars(fd$des))])
@@ -729,16 +721,13 @@ test_that("omissions, truncation and censoring beyond T_max stay well posed", {
   dat$R[1:8] <- NA
   des <- suppressMessages(design(
     data = dat, model = BAwD, matchfun = matchfun,
-    formula = list(mu ~ 1, sigma ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1,
-                   Tmax ~ 1)))
+    formula = list(mu ~ 1, sigma ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1),
+    constants = c(ell = log(1))))
   p <- c(mu = 0.9, sigma = log(0.6), B = log(0.8), A = log(0.3),
-         t0 = log(0.15), k = log(0.8), Tmax = log(0.9))[names(sampled_pars(des))]
+         t0 = log(0.15), k = log(0.8))[names(sampled_pars(des))]
 
-  # The endpoint is now sampled outright, so read it rather than solve for it.
-  tmax <- exp(p[["Tmax"]])
-  expect_equal(EMC2:::bawd_tmax(0.3, 1.1, 0.8,
-                                EMC2:::bawd_ell_vec(tmax, 1.1, 0.8)), tmax,
-               tolerance = 1e-10)
+  tmax <- EMC2:::bawd_tmax(0.3, 1.1, 0.8, 1)
+  expect_true(is.finite(tmax))
 
   base <- suppressMessages(make_emc(dat, des, type = "single", n_chains = 1,
                                     compress = FALSE, rt_resolution = NULL))
@@ -764,7 +753,8 @@ test_that("omissions, truncation and censoring beyond T_max stay well posed", {
   des_pc <- suppressMessages(design(
     data = dat, model = BAwD, matchfun = matchfun,
     formula = list(mu ~ 1, sigma ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1,
-                   Tmax ~ 1, pContaminant ~ 1)))
+                   pContaminant ~ 1),
+    constants = c(ell = log(1))))
   dat_fin <- dat[9:nrow(dat), ]     # drop the omissions
   e_fin <- suppressMessages(make_emc(dat_fin, des, type = "single",
                                      n_chains = 1, compress = FALSE,
@@ -795,14 +785,13 @@ test_that("a finite response beyond t0 + T_max floors cleanly", {
   dat <- dat[seq_len(30), ]
   des <- suppressMessages(design(
     data = dat, model = BAwD, matchfun = matchfun,
-    formula = list(mu ~ 1, sigma ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1,
-                   Tmax ~ 1)))
-  # A tiny endpoint makes the supported window very short, so every observed rt
-  # is past it.  Assert that premise rather than assuming it.
+    formula = list(mu ~ 1, sigma ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1),
+    constants = c(ell = log(1))))
+  # A large k makes the supported window very short, so every observed rt is
+  # past it.  Assert that premise rather than assuming it.
   p <- c(mu = 0.9, sigma = log(0.6), B = log(0.8), A = log(0.3),
-         t0 = log(0.15), k = log(200),
-         Tmax = log(0.005))[names(sampled_pars(des))]
-  expect_true(all(dat$rt > 0.15 + exp(p[["Tmax"]])))
+         t0 = log(0.15), k = log(200))[names(sampled_pars(des))]
+  expect_true(all(dat$rt > 0.15 + EMC2:::bawd_tmax(0.3, 1.1, 200, 1)))
   e <- suppressMessages(make_emc(dat, des, type = "single", n_chains = 1,
                                  compress = FALSE, rt_resolution = NULL))
   ll <- bawd_ll(list(emc = e), p)
@@ -855,12 +844,10 @@ test_that("make_data produces omissions the design can be fit back through", {
   ADmat <- matrix(c(-1 / 2, 1 / 2), ncol = 1, dimnames = list(NULL, "d"))
   des <- suppressMessages(design(
     data = dat, model = BAwD, matchfun = matchfun,
-    formula = list(mu ~ lM, sigma ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1,
-                   Tmax ~ 1),
-    contrasts = list(mu = list(lM = ADmat))))
+    formula = list(mu ~ lM, sigma ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1),
+    contrasts = list(mu = list(lM = ADmat)), constants = c(ell = log(1))))
   p <- c(mu = 1.2, mu_lMd = 0.8, sigma = log(0.5), B = log(0.7),
-         A = log(0.3), t0 = log(0.15), k = log(0.7),
-         Tmax = log(1.0))[names(sampled_pars(des))]
+         A = log(0.3), t0 = log(0.15), k = log(0.7))[names(sampled_pars(des))]
   sim <- make_data(p, design = des, n_trials = 60)
   expect_true(any(is.infinite(sim$rt)))            # intrinsic omissions
   expect_true(all(is.na(sim$R[is.infinite(sim$rt)])))
@@ -999,4 +986,3 @@ test_that("BAwDp k = 0 is the LBA limit and preserves constructor bounds", {
   expect_equal(mean(sim_r_k0$R == "left"), mean(sim_cpp_k0$R == "left"), tolerance = 0.03)
   expect_equal(median(sim_r_k0$rt), median(sim_cpp_k0$rt), tolerance = 0.05)
 })
-

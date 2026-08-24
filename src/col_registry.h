@@ -105,34 +105,19 @@ namespace bawl_logn {
 // the POSITIONS are deliberately identical and every kernel indexes them
 // through the same enum; the spec selected in resolve_race_model_adapter() only
 // changes what validate_col_prefix() insists the R p_types are called.
-//
-// Slot 6 is the clearance chart.  For gamma < 1 the sampler moves the endpoint
-// T_max and the kernel back-solves the clearance rate ell from it
-// (bawd_ell_from_tmax); at gamma = 1 the trace has no finite maximum, so that
-// member samples ell directly and uses the *_ELL specs below.  The POSITION is
-// the same either way, and bawd_uses_tmax() is the single predicate deciding
-// which name applies.
 namespace bawd {
-  enum : int { v = 0, sv, B, A, t0, k, clear, N_REQ };
+  enum : int { v = 0, sv, B, A, t0, k, ell, N_REQ };
   inline ColSpec spec() {
-    static const char* n[] = {"v", "sv", "B", "A", "t0", "k", "Tmax"};
-    return {n, N_REQ, "BAwD"};
-  }
-  inline ColSpec spec_ell() {
     static const char* n[] = {"v", "sv", "B", "A", "t0", "k", "ell"};
-    return {n, N_REQ, "BAwD_ELL"};
+    return {n, N_REQ, "BAwD"};
   }
 }
 namespace bawd_logn {
   // Same positions as bawd: mu occupies v's slot and sigma occupies sv's.
-  enum : int { mu = 0, sigma, B, A, t0, k, clear, N_REQ };
+  enum : int { mu = 0, sigma, B, A, t0, k, ell, N_REQ };
   inline ColSpec spec() {
-    static const char* n[] = {"mu", "sigma", "B", "A", "t0", "k", "Tmax"};
-    return {n, N_REQ, "BAwD_LOGN"};
-  }
-  inline ColSpec spec_ell() {
     static const char* n[] = {"mu", "sigma", "B", "A", "t0", "k", "ell"};
-    return {n, N_REQ, "BAwD_LOGN_ELL"};
+    return {n, N_REQ, "BAwD_LOGN"};
   }
 }
 

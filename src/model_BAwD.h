@@ -183,17 +183,18 @@ inline double bawd_newton_s(double c, const BawdGeom& g) {
 }
 
 
-// Everything in the geometry that depends only on the fixed model options
-// (gamma, rho) and not on the sampled row.  Factored out of bawd_geometry()
-// so that bawd_ell_from_tmax() can evaluate Theta without building a full
-// geometry (which would need the ell it is trying to compute).  Returns false
-// if the options are outside their permitted sets.
-inline bool bawd_shape_flags(BawdGeom& g, double gamma, double rho) {
-  if (!emc2_isfinite(gamma) || gamma < 0.0 || gamma > 1.0) return false;
-  if (ISNAN(rho)) return false;
+inline BawdGeom bawd_geometry(double A, double b, double k, double ell,
+                              double gamma, double rho = R_PosInf) {
+  BawdGeom g;
+  if (!emc2_isfinite(A) || !emc2_isfinite(b) || !emc2_isfinite(k) ||
+      !emc2_isfinite(ell) || !emc2_isfinite(gamma))
+    return g;
+  if (!(b > 0.0) || !(A >= 0.0) || !(b >= A) || !(k >= 0.0) ||
+      !(ell >= 0.0) || gamma < 0.0 || gamma > 1.0) return g;
+  if (ISNAN(rho)) return g;
   g.rho_inf = (rho == 0.0) || (rho > 0.0 && !R_FINITE(rho));
   if (!g.rho_inf) {
-    if (!(rho >= 1.0)) return false;
+    if (!(rho >= 1.0)) return g;
     g.rho = rho;
     g.rho_one = std::fabs(rho - 1.0) <= 1e-12;
     g.m_shape = rho * (1.0 - gamma);
@@ -203,7 +204,7 @@ inline bool bawd_shape_flags(BawdGeom& g, double gamma, double rho) {
     g.m_shape = R_PosInf;
     g.kq_inf = 1.0;
   }
-  g.gamma = gamma;
+  g.ok = true; g.b = b; g.A = A; g.k = k; g.ell = ell; g.gamma = gamma;
   g.gamma_zero = gamma <= BAWD_GAMMA_EPS;
   g.gamma_one = gamma >= 1.0 - BAWD_GAMMA_EPS;
   g.omg = 1.0 - gamma;
@@ -217,51 +218,6 @@ inline bool bawd_shape_flags(BawdGeom& g, double gamma, double rho) {
     g.frozen_alpha = (rho - 1.0) / (rho * g.omg);
     g.frozen_m = g.frozen_alpha - 1.0;
   }
-  return true;
-}
-
-// The sampler works in the endpoint chart: it moves T_max and the clearance
-// rate follows.  Saturation at the lowest start point solves
-// Theta_{rho,gamma}(k T_max) = k b / ell (this is what the y_0 Newton solve
-// below inverts), and bawd_psi() evaluates Theta in the forward direction in
-// closed form, so the inverse map costs one evaluation and no root find.
-//
-// Two boundaries are inert rather than degenerate:
-//   T_max = Inf : ell = 0, the no-clearance model, whose support is unbounded.
-//   k = 0       : ell = 0.  The trace is linear for every ell, so it has no
-//                 finite maximum and the endpoint carries no information about
-//                 clearance; the resulting drift offset is absorbed by mu.
-// gamma = 1 has no finite endpoint at all and keeps sampling ell directly --
-// see bawd_uses_tmax().
-inline double bawd_ell_from_tmax(double b, double k, double Tmax,
-                                 double gamma, double rho = R_PosInf) {
-  if (ISNAN(b) || ISNAN(k) || ISNAN(Tmax)) return R_NaN;
-  if (!(b > 0.0) || !(k > BAWD_K_EPS) || !(Tmax > 0.0) ||
-      !emc2_isfinite(Tmax)) return 0.0;
-  BawdGeom g;
-  if (!bawd_shape_flags(g, gamma, rho) || g.gamma_one) return 0.0;
-  const double theta = bawd_psi(k * Tmax, g);
-  if (!(theta > 0.0) || !emc2_isfinite(theta)) return 0.0;
-  return k * b / theta;
-}
-
-// Whether a model option set uses the endpoint chart.  Both the ColSpec choice
-// in resolve_race_model_adapter() and the column read in utils.h derive the
-// chart from gamma through this one predicate, so they cannot disagree.
-inline bool bawd_uses_tmax(double gamma) {
-  return gamma < 1.0 - BAWD_GAMMA_EPS;
-}
-
-inline BawdGeom bawd_geometry(double A, double b, double k, double ell,
-                              double gamma, double rho = R_PosInf) {
-  BawdGeom g;
-  if (!emc2_isfinite(A) || !emc2_isfinite(b) || !emc2_isfinite(k) ||
-      !emc2_isfinite(ell))
-    return g;
-  if (!(b > 0.0) || !(A >= 0.0) || !(b >= A) || !(k >= 0.0) ||
-      !(ell >= 0.0)) return g;
-  if (!bawd_shape_flags(g, gamma, rho)) return g;
-  g.ok = true; g.b = b; g.A = A; g.k = k; g.ell = ell;
   g.k_zero = (k <= BAWD_K_EPS);
   g.ell_zero = (ell <= BAWD_ELL_EPS);
   if (g.k_zero || g.ell_zero || g.gamma_one) return g;
@@ -1297,25 +1253,6 @@ NumericVector bawd_tmax_vec(NumericVector A, NumericVector b, NumericVector k,
                                      pick(ell, i), pick(gamma, i), pick(rho, i));
     out[i] = g.ok ? g.T_max : NA_REAL;
   }
-  return out;
-}
-
-// Inverse of bawd_tmax_vec: the clearance rate implied by a sampled endpoint.
-// The R Ttransform reports `ell` alongside `Tmax` so that the wrappers, the
-// simulator and mapped_pars() all keep seeing the mechanistic parameter, and
-// so that a fit in either chart can be read in the other.  Length follows
-// Tmax; the rest recycle.
-// [[Rcpp::export]]
-NumericVector bawd_ell_vec(NumericVector Tmax, NumericVector b, NumericVector k,
-                           NumericVector gamma = 0.0, NumericVector rho = 0.0) {
-  const int n = Tmax.size();
-  NumericVector out(n);
-  auto pick = [](const NumericVector& x, int i) -> double {
-    return x.size() == 1 ? x[0] : x[i];
-  };
-  for (int i = 0; i < n; ++i)
-    out[i] = bawd_ell_from_tmax(pick(b, i), pick(k, i), Tmax[i],
-                                pick(gamma, i), pick(rho, i));
   return out;
 }
 

@@ -284,10 +284,10 @@ test_that("finite rho reaches the sampled likelihood adapter", {
     data = dat, model = function() EMC2::BAwD(gamma = .5, rho = 2),
     matchfun = matchfun,
     formula = list(mu ~ 1, sigma ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1,
-                   Tmax ~ 1)))
+                   ell ~ 1)))
   p <- c(mu = .9, sigma = log(.6), B = log(.8), A = log(.3),
          t0 = log(.15), k = log(.8),
-         Tmax = log(1.1))[names(EMC2::sampled_pars(des))]
+         ell = log(0.5))[names(EMC2::sampled_pars(des))]
   set.seed(20260821)
   sim <- EMC2::make_data(p, design = des, n_trials = 12)
   e <- suppressMessages(EMC2::make_emc(sim, des, type = "single", n_chains = 1))
