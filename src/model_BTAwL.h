@@ -222,4 +222,45 @@ double btawl_local_race_log_surv(double t, double A, double b, double p1,
                                  double tau_t, double pi, int launch,
                                  bool posdrift);
 
+// BTAwL adapter entry points used by particle_ll.cpp.
+double dbtawl_transient_scalar(double t, const double* par, void* ctx_);
+double pbtawl_transient_scalar(double t, const double* par, void* ctx_);
+void dbtawl_transient_raw(const double* rt, const double* const* cols,
+                          int n_rows, const int* mask, const int* isok,
+                          double* out, double min_ll, void* ctx_);
+void pbtawl_transient_raw(const double* rt, const double* const* cols,
+                          int n_rows, const int* mask, const int* isok,
+                          double* out, double min_ll, void* ctx_);
+void btawl_transient_logS_at_t(double t, const double* const* cols,
+                               int n_rows_total, int n_lR, int n_par,
+                               const int* trunc_mask, int n_unique_trials,
+                               const int* isok_all, void* ctx_,
+                               double* logS_out);
+
+double dbtawl_local_race_scalar(double t, const double* par, void* ctx_);
+double pbtawl_local_race_scalar(double t, const double* par, void* ctx_);
+void dbtawl_local_race_raw(const double* rt, const double* const* cols,
+                           int n_rows, const int* mask, const int* isok,
+                           double* out, double min_ll, void* ctx_);
+void pbtawl_local_race_raw(const double* rt, const double* const* cols,
+                           int n_rows, const int* mask, const int* isok,
+                           double* out, double min_ll, void* ctx_);
+void btawl_local_race_logS_at_t(double t, const double* const* cols,
+                                int n_rows_total, int n_lR, int n_par,
+                                const int* trunc_mask, int n_unique_trials,
+                                const int* isok_all, void* ctx_, double* out);
+
+double dbtawl_sustained_scalar(double t, const double* par, void* ctx_);
+double pbtawl_sustained_scalar(double t, const double* par, void* ctx_);
+void dbtawl_sustained_raw(const double* rt, const double* const* cols,
+                          int n_rows, const int* mask, const int* isok,
+                          double* out, double min_ll, void* ctx_);
+void pbtawl_sustained_raw(const double* rt, const double* const* cols,
+                          int n_rows, const int* mask, const int* isok,
+                          double* out, double min_ll, void* ctx_);
+void btawl_sustained_logS_at_t(double t, const double* const* cols,
+                               int n_rows_total, int n_lR, int n_par,
+                               const int* trunc_mask, int n_unique_trials,
+                               const int* isok_all, void* ctx_, double* out);
+
 #endif
