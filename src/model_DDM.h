@@ -1,7 +1,7 @@
 #ifndef DDM_wien
 #define DDM_wien
 
-#include <RcppArmadillo.h>
+#include <Rcpp.h>
 using namespace Rcpp;
 #include "utility_functions.h"
 #include "pdf_fncs.h"

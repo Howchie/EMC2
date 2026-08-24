@@ -1,4 +1,4 @@
-#include <RcppArmadillo.h>
+#include <Rcpp.h>
 #include "model_GBM.h"
 #include "model_RDM.h"
 #include "timer_helpers.h"

@@ -1,4 +1,4 @@
-#include <RcppArmadillo.h>
+#include <Rcpp.h>
 #include "model_BAwL.h"
 #include "model_LBA.h"
 #include "race_contract.h"

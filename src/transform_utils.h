@@ -1,7 +1,7 @@
 #ifndef EMC2_TRANSFORM_UTILS_H
 #define EMC2_TRANSFORM_UTILS_H
 
-#include <RcppArmadillo.h>
+#include <Rcpp.h>
 #include <unordered_set>
 #include "ParamTable.h"
 #include "utility_types.h"

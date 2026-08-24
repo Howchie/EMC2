@@ -8,7 +8,7 @@
 // TU (which owns model_LBA.h/model_RDM.h) to avoid duplicate-symbol issues
 // with those headers' non-inline [[Rcpp::export]] functions.
 
-#include <RcppArmadillo.h>
+#include <Rcpp.h>
 #include <string>
 #include <unordered_map>
 #include <vector>

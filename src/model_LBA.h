@@ -3,7 +3,7 @@
 
 // Shared LBA/BAwL model kernels and inline helpers.  Rcpp-exported wrappers
 // are defined in model_LBA.cpp.
-#include <RcppArmadillo.h>
+#include <Rcpp.h>
 #include "utility_functions.h"
 #include "wald_functions.h"  // pnorm_std() — fast normal CDF under USE_FAST_PNORM
 #include "composite_functions.h"  // clamp_pos, safe_log

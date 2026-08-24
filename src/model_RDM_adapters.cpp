@@ -1,4 +1,4 @@
-#include <RcppArmadillo.h>
+#include <Rcpp.h>
 #include "model_RDM_adapters.h"
 #include "wald_functions.h"
 #include "race_contract.h"

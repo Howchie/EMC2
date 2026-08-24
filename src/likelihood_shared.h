@@ -27,7 +27,7 @@
 // standard containers/types).
 // ---------------------------------------------------------------------------
 
-#include <RcppArmadillo.h>
+#include <Rcpp.h>
 
 // Included first because composite_functions.h (via contaminant_mixture.h)
 // consumes its emc2_isfinite fast-math predicates; this keeps the header

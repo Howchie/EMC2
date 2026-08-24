@@ -1,7 +1,7 @@
 #ifndef EMC2_MODEL_SS_ADAPTERS_H
 #define EMC2_MODEL_SS_ADAPTERS_H
 
-#include <RcppArmadillo.h>
+#include <Rcpp.h>
 #include <cstdint>
 #include <string>
 #include <vector>

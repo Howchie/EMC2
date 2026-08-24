@@ -1,7 +1,7 @@
 #ifndef EMC2_MODEL_SDT_H
 #define EMC2_MODEL_SDT_H
 
-#include <RcppArmadillo.h>
+#include <Rcpp.h>
 #include "wald_functions.h"
 #include <algorithm>
 #include <cmath>

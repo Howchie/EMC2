@@ -1,7 +1,9 @@
 #ifndef utils_h
 #define utils_h
 
-#include <RcppArmadillo.h>
+#include "fpe_race.h"
+#include "fpe_bou.h"
+#include <Rcpp.h>
 #include "exgaussian_functions.h"
 #include <vector>
 #include <string>
@@ -9,8 +11,6 @@
 #include <unordered_map>
 #include <limits>
 #include "col_registry.h"
-#include "fpe_race.h"
-#include "fpe_bou.h"
 #include "model_RLF.h"
 #include "utility_functions.h"
 #include "model_RDM.h"

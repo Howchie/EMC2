@@ -1,7 +1,7 @@
 #ifndef lnr_h
 #define lnr_h
 
-#include <RcppArmadillo.h>
+#include <Rcpp.h>
 #include "utility_functions.h"
 #include "lnr_functions.h"
 

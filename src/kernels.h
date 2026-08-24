@@ -2,7 +2,7 @@
 #include <memory>
 #include <array>
 #include <vector>
-#include <RcppArmadillo.h>
+#include <Rcpp.h>
 #include "EMC2/userfun.hpp"
 
 // View

@@ -19,10 +19,10 @@
 //   * st0 is Uniform(t0, t0+st0), the lower-edge form
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-#include <RcppArmadillo.h>
+#include "fpe_bou.h"
+#include <Rcpp.h>
 #include <cmath>
 #include "col_registry.h"
-#include "fpe_bou.h"
 
 namespace bou {
 

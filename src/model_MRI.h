@@ -1,7 +1,7 @@
 #ifndef mri_H
 #define mri_H
 
-#include <RcppArmadillo.h>
+#include <Rcpp.h>
 #include <cmath>
 
 // Definitions live in src/model_MRI.cpp. Default min_ll arguments are declared

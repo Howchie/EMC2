@@ -1,4 +1,4 @@
-#include <RcppArmadillo.h>
+#include <Rcpp.h>
 #include "model_RDMSWTN.h"
 #include "model_RDM.h"
 #include "wald_functions.h"

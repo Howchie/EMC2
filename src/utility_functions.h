@@ -1,7 +1,7 @@
 #ifndef utility_h
 #define utility_h
 
-#include <RcppArmadillo.h>
+#include <Rcpp.h>
 #include <unordered_set>
 #include <unordered_map>
 #include <vector>

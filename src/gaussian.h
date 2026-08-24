@@ -1,7 +1,7 @@
 #ifndef gaussian_h
 #define gaussian_h
 
-#include <RcppArmadillo.h>
+#include <Rcpp.h>
 #include <algorithm>
 #include <limits>
 #include <vector>

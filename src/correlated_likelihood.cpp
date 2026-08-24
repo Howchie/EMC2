@@ -1,3 +1,4 @@
+#include "gh_quad.h"
 #include "utility_functions.h"
 #include "race_contract.h"
 #include "correlated_likelihood.h"

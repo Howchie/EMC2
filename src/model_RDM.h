@@ -5,7 +5,7 @@
 // wrappers are defined in model_RDM.cpp.
 #define _USE_MATH_DEFINES
 #include <cmath>
-#include <RcppArmadillo.h>
+#include <Rcpp.h>
 #include "gsl_utils.h"
 #include <gsl/gsl_integration.h>
 #include <gsl/gsl_errno.h>

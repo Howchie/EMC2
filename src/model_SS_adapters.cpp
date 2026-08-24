@@ -1,3 +1,4 @@
+#include "gh_quad.h"
 #include "model_SS_adapters.h"
 #include "utility_functions.h"
 #include "race_contract.h"
@@ -8,7 +9,7 @@
 #include "model_SS_EXG.h"
 #include "model_SS_RDEX.h"
 #include "gsl_utils.h"
-#include <RcppArmadillo.h>
+#include <Rcpp.h>
 #include <cmath>
 #include <cstdint>
 #include <cstring>

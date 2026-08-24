@@ -1,3 +1,4 @@
+#include "gh_quad.h"
 #include "utility_functions.h"
 #include "race_dispatch.h"
 #include "utils.h"

@@ -3,7 +3,7 @@
 
 #include <cmath>
 #include <vector>
-#include <RcppArmadillo.h>
+#include <Rcpp.h>
 #include "utility_functions.h"
 #include "wald_functions.h"
 #include "exgaussian_functions.h"
