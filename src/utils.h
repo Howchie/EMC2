@@ -38,9 +38,9 @@ using namespace Rcpp;
 #include "model_RLF_kernels.h"
 // Likewise: the BOU primitives need ContextForDDMModels defined above.
 #include "model_BOU.h"
-// FRQ needs nothing from this file -- it is pure Rmath -- but it carries
-// [[Rcpp::export]] entry points, so it must be seen by exactly one translation
-// unit and this header is included by exactly one (particle_ll.cpp).
+// FRQ carries Rcpp export entry points and is included by the implementation
+// translation units that own the relevant dispatch paths.  Keep this include
+// here until the remaining FRQ ownership cleanup is complete.
 #include "model_FRQ.h"
 #include "model_PCOUNTER.h"
 
