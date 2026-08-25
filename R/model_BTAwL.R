@@ -543,6 +543,33 @@ rBTAwLSustained <- function(lR, pars, ok = rep(TRUE, length(lR)),
 #' scale both location and spread, while lognormal launches shift the log
 #' location and retain the common log spread.
 #'
+#' The model uses the following parameter matrix.  `B` is the distance from the
+#' upper end of the start-point range to the threshold, so the kernel receives
+#' `b = B + A`.
+#'
+#' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Mapping** | **Interpretation** |
+#' |---|---|---|---|---|---|
+#' | *mu* | identity | \[-Inf, Inf\] | 0 | | Mean of log launch strength for a lognormal launch. |
+#' | *sigma* | log | \[0, Inf\] | log(1) | | SD of log launch strength for a lognormal launch. |
+#' | *B* | log | \[0, Inf\] | log(1) | *b* = *B* + *A* | Distance from the upper start-point range to the threshold. |
+#' | *A* | log | \[0, Inf\] | log(0) | | Start-point range. |
+#' | *t0* | log | \[0, Inf\] | log(0) | | Non-decision time. |
+#' | *k* | log | \[0, Inf\] | log(0) | | Leak rate. |
+#' | *tau_s* | log | \[0, Inf\] | log(1) | | Sustained-drive time constant. |
+#' | *Ttrans* | log | \[0, Inf\] | log(1) | | Transient-drive endpoint parameter. |
+#' | *pi* | probit | \[0, 1\] | qnorm(.5) | | Probability allocated to the sustained process. |
+#'
+#' With `drift_distribution = "normal"`, `mu` and `sigma` are replaced by `v`
+#' and `sv`; the launch is truncated positive when `posdrift = TRUE`.
+#' `pContaminant` and `pGuess` are optional nuisance parameters appended by the
+#' data pipeline.
+#'
+#' The evidence scale is not intrinsic: multiplying the launch strength,
+#' threshold distance, and start-point range by the same positive constant
+#' leaves response times unchanged.  Fix one scale parameter (normally `sv` for
+#' a normal launch, or one intercept among `mu`, `B`, and `A` for a lognormal
+#' launch) when specifying a design.
+#'
 #' @param posdrift Logical. For a normal launch, truncate `V` below zero.
 #' @param drift_distribution Either `"normal"` (`V ~ N(v, sv^2)`) or
 #'   `"lognormal"` (`log V ~ N(mu, sigma^2)`).
@@ -556,6 +583,24 @@ BTAwL <- function(posdrift = TRUE,
   .btawl_constructor("full", posdrift, drift_distribution, chart)
 
 #' Pure transient BTAwL wrapper.
+#'
+#' The transient wrapper uses the following parameter matrix:
+#'
+#' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Mapping** | **Interpretation** |
+#' |---|---|---|---|---|---|
+#' | *mu* | identity | \[-Inf, Inf\] | 0 | | Mean of log launch strength. |
+#' | *sigma* | log | \[0, Inf\] | log(1) | | SD of log launch strength. |
+#' | *B* | log | \[0, Inf\] | log(1) | *b* = *B* + *A* | Distance from the upper start-point range to the threshold. |
+#' | *A* | log | \[0, Inf\] | log(0) | | Start-point range. |
+#' | *t0* | log | \[0, Inf\] | log(0) | | Non-decision time. |
+#' | *k* | log | \[0, Inf\] | log(0) | | Leak rate. |
+#' | *Ttrans* | log | \[0, Inf\] | log(1) | | Transient-drive endpoint parameter. |
+#'
+#' With `drift_distribution = "normal"`, `mu` and `sigma` are replaced by `v`
+#' and `sv`; the launch is truncated positive when `posdrift = TRUE`.
+#' `pContaminant` and `pGuess` are optional nuisance parameters appended by the
+#' data pipeline.
+#'
 #' @param posdrift Logical. For a normal launch, truncate `V` below zero.
 #' @param drift_distribution Either `"normal"` or `"lognormal"`.
 #' @param chart Either `"endpoint"` or `"rate"`.
@@ -567,6 +612,24 @@ BTAwLTransient <- function(posdrift = TRUE,
   .btawl_constructor("transient", posdrift, drift_distribution, chart)
 
 #' Pure sustained BTAwL wrapper.
+#'
+#' The sustained wrapper uses the following parameter matrix:
+#'
+#' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Mapping** | **Interpretation** |
+#' |---|---|---|---|---|---|
+#' | *mu* | identity | \[-Inf, Inf\] | 0 | | Mean of log launch strength. |
+#' | *sigma* | log | \[0, Inf\] | log(1) | | SD of log launch strength. |
+#' | *B* | log | \[0, Inf\] | log(1) | *b* = *B* + *A* | Distance from the upper start-point range to the threshold. |
+#' | *A* | log | \[0, Inf\] | log(0) | | Start-point range. |
+#' | *t0* | log | \[0, Inf\] | log(0) | | Non-decision time. |
+#' | *k* | log | \[0, Inf\] | log(0) | | Leak rate. |
+#' | *tau_s* | log | \[0, Inf\] | log(1) | | Sustained-drive time constant. |
+#'
+#' With `drift_distribution = "normal"`, `mu` and `sigma` are replaced by `v`
+#' and `sv`; the launch is truncated positive when `posdrift = TRUE`.
+#' `pContaminant` and `pGuess` are optional nuisance parameters appended by the
+#' data pipeline.
+#'
 #' @param posdrift Logical. For a normal launch, truncate `V` below zero.
 #' @param drift_distribution Either `"normal"` or `"lognormal"`.
 #' @return A sustained-only BTAwL race-model specification.

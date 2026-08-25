@@ -1095,7 +1095,9 @@ SSModelAdapter resolve_ss_adapter(const std::string& type_std) {
   a.go_lccdf_ptr     = is_exg ? texg_go_lccdf          : rdex_go_lccdf;
   a.stop_logsurv_ptr = is_exg ? stop_logsurv_texg_fn   : stop_logsurv_rdex_fn;
   a.stop_success_ptr = is_exg ? ss_texg_stop_success_lpdf_live : ss_rdex_stop_success_lpdf_live;
-  a.idx_tf           = is_exg ? emc2col::ss_texg::tf : emc2col::ss_rdex::tf;
-  a.idx_gf           = is_exg ? emc2col::ss_texg::gf : emc2col::ss_rdex::gf;
+  a.idx_tf           = is_exg ? static_cast<int>(emc2col::ss_texg::tf)
+                              : static_cast<int>(emc2col::ss_rdex::tf);
+  a.idx_gf           = is_exg ? static_cast<int>(emc2col::ss_texg::gf)
+                              : static_cast<int>(emc2col::ss_rdex::gf);
   return a;
 }

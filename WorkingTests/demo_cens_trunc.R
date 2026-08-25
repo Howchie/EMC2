@@ -29,18 +29,18 @@ run_lba_demo <- function(p_contaminant = 0, estimate_contaminant = FALSE,
                          label = NULL, posdrift=TRUE) {
 
   matchfun <- function(d) as.numeric(d$S) == as.numeric(d$lR)
-
+ 
   # Base 2-choice design; lM is automatically constructed from matchfun.
   designLBA <- design(
     factors = list(subjects = 1, S = c("left", "right")),
     Rlevels = c("left", "right"),
     matchfun = matchfun,
-    model = LBA(posdrift=posdrift), 
+    model = LBA, 
     formula = c(
       list(B ~ 1, v ~ lM, A ~ 1, t0 ~ 1, sv ~ 1),
       if (estimate_contaminant) list(pContaminant ~ 1) else list()
     ),
-    constants = c(A = log(0.5))
+    constants = c(sv = log(1))
   )
 
   # Set simulation parameters (on the transformed scale expected by p_types)
@@ -110,8 +110,8 @@ run_lba_demo <- function(p_contaminant = 0, estimate_contaminant = FALSE,
   library(parallel)
   par(mfrow=layout)
 
-  rtct <- system.time({rtc <- profile_plot_test(dat, designLBA, p_vector, n_cores = cores_for_chains, range=range,
-  layout = NULL, use_c = TRUE,  figure_title = paste("C++:", label), natural=natural)})
+  # rtct <- system.time({rtc <- profile_plot_test(dat, designLBA, p_vector, n_cores = cores_for_chains, range=range,
+  # layout = NULL, use_c = TRUE,  figure_title = paste("C++:", label), natural=natural)})
 
   if (isTRUE(RUN_FITS)) {
     emc <- make_emc(dat, designLBA, type = "single")
@@ -119,14 +119,11 @@ run_lba_demo <- function(p_contaminant = 0, estimate_contaminant = FALSE,
       sample = list(
         iter = 1000,
         max_gd = 1.10,
-        max_flat_loc = 0.5,
-        flat_selection = c("alpha", "subj_ll"),
-        flat_p1 = 1/3,
-        flat_p2 = 1/3,
+        
         max_sample_iter = 5000
       ),cores_per_chain=cores_per_chain, cores_for_chains = cores_for_chains), max_tries=30)
     post_predict <- predict(emc, n_post = 50)
-    plot_pars(emc, post_predict = post_predict, true_pars = p_vector)
+    #plot_pars(emc, post_predict = post_predict, true_pars = p_vector)
     return(invisible(list(data = dat, design = designLBA, true_pars = p_vector,emc=emc,pp=post_predict)))
   }
 
@@ -135,13 +132,21 @@ run_lba_demo <- function(p_contaminant = 0, estimate_contaminant = FALSE,
 
 RNGkind("L'Ecuyer-CMRG")
 set.seed(42)
-
-res_no_cens_trunc <- run_lba_demo(
+# post-refactor
+# user  system elapsed 
+# 113.672  16.050  49.535 
+# pre-refactor
+# user  system elapsed 
+# 119.912  10.537  52.469
+# stevens build (most of the loss is from the R-only make_data for predict)
+# user  system elapsed 
+# 141.572   8.790  65.298 
+system.time({res_no_cens_trunc <- run_lba_demo(
   p_contaminant = 0,
   estimate_contaminant = FALSE,
   n_trials = 10000,
   label = "no_cens_trunc"
-)
+)})
 
 if (RUN_FITS) print(recovery(res_no_cens_trunc$emc, true_pars = res_no_cens_trunc$true_pars))
 if (RUN_FITS) plot_cdf(res_no_cens_trunc$dat, post_predict=res_no_cens_trunc$pp, functions=list(Correct=Cfun), defective_factor = "Correct", factors="S")
@@ -170,6 +175,9 @@ res_lc <- run_lba_demo(
   label = "lc"
 )
 if (RUN_FITS) print(recovery(res_lc$emc, true_pars = res_lc$true_pars))
+if (RUN_FITS) plot_cdf(res_lc$dat, post_predict=res_lc$pp, functions=list(Correct=Cfun), defective_factor = "Correct", factors="S")
+if (RUN_FITS) plot_stat(res_lc$dat, post_predict=res_lc$pp, factors="S", stat_name = "MeanCorrect",
+                        stat_fun = function(d){mean(d$Correct, na.rm = TRUE)}, functions=list(Correct=Cfun))
 
 # both
 res_cens <- run_lba_demo(
