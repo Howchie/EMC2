@@ -102,14 +102,13 @@ Rcpp::LogicalVector c_do_bound_pt(const ParamTable& pt,
     const int col_idx   = bs.col_idx;
     const double min_v  = bs.min_val;
     const double max_v  = bs.max_val;
-    const bool has_exc  = bs.has_exception;
-    const double exc_val= bs.exception_val;
+    const int n_exc     = bs.n_exception;
 
     for (int i = 0; i < nrows; ++i) {
       const double val = base(i, col_idx);
       bool ok = (val > min_v && val < max_v);
-      if (!ok && has_exc) {
-        ok = (val == exc_val);
+      for (int e = 0; !ok && e < n_exc; ++e) {
+        ok = (val == bs.exception_val[e]);
       }
       if (result[i] && !ok) {
         result[i] = false;
@@ -140,14 +139,13 @@ Rcpp::LogicalVector c_do_bound_pt_from(const ParamTable& pt,
     const int col_idx    = bs.col_idx;
     const double min_v   = bs.min_val;
     const double max_v   = bs.max_val;
-    const bool has_exc   = bs.has_exception;
-    const double exc_val = bs.exception_val;
+    const int n_exc      = bs.n_exception;
 
     for (int i = 0; i < nrows; ++i) {
       if (!result[i]) continue;
       const double val = base(i, col_idx);
       bool ok = (val > min_v && val < max_v);
-      if (!ok && has_exc) ok = (val == exc_val);
+      for (int e = 0; !ok && e < n_exc; ++e) ok = (val == bs.exception_val[e]);
       if (!ok) result[i] = false;
     }
   }
@@ -248,12 +246,14 @@ std::vector<BoundSpec> make_bound_specs_pt(Rcpp::NumericMatrix minmax,
     bound.containsElementNamed("exception") &&
     !Rf_isNull(bound["exception"]);
 
-  std::unordered_map<string, double> exceptionMap;
+  // Names may repeat: each repeat adds another permitted value for that
+  // parameter, so accumulate rather than overwrite.
+  std::unordered_map<string, std::vector<double> > exceptionMap;
   if (has_exception) {
     NumericVector except_vec = bound["exception"];
     CharacterVector except_names = except_vec.names();
     for (int i = 0; i < except_vec.size(); ++i) {
-      exceptionMap[ as<string>(except_names[i]) ] = except_vec[i];
+      exceptionMap[ as<string>(except_names[i]) ].push_back(except_vec[i]);
     }
   }
 
@@ -269,13 +269,14 @@ std::vector<BoundSpec> make_bound_specs_pt(Rcpp::NumericMatrix minmax,
     s.min_val = minmax(0, j);
     s.max_val = minmax(1, j);
 
+    s.n_exception = 0;
     auto it = exceptionMap.find(var_name);
     if (it != exceptionMap.end()) {
-      s.has_exception = true;
-      s.exception_val = it->second;
-    } else {
-      s.has_exception = false;
-      s.exception_val = NA_REAL;
+      if ((int)it->second.size() > EMC2_BOUND_MAX_EXCEPTIONS)
+        Rcpp::stop("bound$exception declares more than %d permitted values for %s",
+                   EMC2_BOUND_MAX_EXCEPTIONS, var_name.c_str());
+      s.n_exception = (int)it->second.size();
+      for (int e = 0; e < s.n_exception; ++e) s.exception_val[e] = it->second[e];
     }
     specs[j] = s;
   }

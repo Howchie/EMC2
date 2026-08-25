@@ -19,15 +19,30 @@ do_pre_transform <- function(p_vector, transform)
 
 
 # This form used in random number generation
+# `bound$exception` is a named numeric vector of values a parameter may take
+# even when they fall outside its [min,max] interval.  A name may repeat, in
+# which case each repeat adds another permitted value: BTAwL's `pi` allows both
+# 0 (pure transient race) and 1 (pure sustained race).  Returns, for each
+# exception name present in `rows`, the elementwise "matches some permitted
+# value" test over the transposed parameter matrix.
+exception_hits <- function(tpars, exception, rows) {
+  nms <- intersect(unique(names(exception)), rows)
+  stats::setNames(lapply(nms, function(nm) {
+    vals <- unname(exception[names(exception) == nm])
+    Reduce(`|`, lapply(vals, function(v) tpars[nm, ] == v))
+  }), nms)
+}
+
 do_bound <- function(pars,bound, lR = NULL) {
   bound$minmax <- bound$minmax[, colnames(bound$minmax) %in% colnames(pars), drop = FALSE]
   if (!is.null(bound$exception))
     bound$exception <- bound$exception[names(bound$exception) %in% colnames(pars)]
   tpars <- t(pars[,colnames(bound$minmax),drop=FALSE])
   ok <- tpars > bound$minmax[1,] & tpars < bound$minmax[2,]
-  if (!is.null(bound$exception)) ok[names(bound$exception),] <-
-    ok[names(bound$exception),] |
-    (tpars[names(bound$exception),] == bound$exception)
+  if (!is.null(bound$exception)) {
+    hits <- exception_hits(tpars, bound$exception, rownames(ok))
+    for (nm in names(hits)) ok[nm,] <- ok[nm,] | hits[[nm]]
+  }
   bound <- colSums(ok) == nrow(ok)
   if(!is.null(lR)){
     lvl <- length(unique(lR))
@@ -49,9 +64,11 @@ fix_bound <- function(pars,bound, lR = NULL,fix=FALSE) {
   if (!is.null(bound$exception)) {
     # Restrict exception bounds to parameters present in pars.
     bound$exception <- bound$exception[names(bound$exception) %in% colnames(pars)]
-    exception <- tpars[names(bound$exception),] == bound$exception
-    oklo[names(bound$exception),] <- oklo[names(bound$exception),] | exception
-    okhi[names(bound$exception),] <- okhi[names(bound$exception),] | exception
+    hits <- exception_hits(tpars, bound$exception, rownames(oklo))
+    for (nm in names(hits)) {
+      oklo[nm,] <- oklo[nm,] | hits[[nm]]
+      okhi[nm,] <- okhi[nm,] | hits[[nm]]
+    }
   }
   bounds <- colSums(oklo&okhi) == nrow(oklo)
 
@@ -213,6 +230,8 @@ fill_transform <- function(transform, model, p_vector,
   return(out)
 }
 
+# `bound$exception` entries may repeat a name to declare several permitted
+# values for one parameter; see `exception_hits`.
 fill_bound <- function(bound, model) {
   filled_bound <- model()$bound
   if (!is.null(bound)) {
@@ -242,9 +261,11 @@ fill_bound <- function(bound, model) {
     if (!is.null(bound$exception)) {
       fe <- filled_bound$exception
       be <- bound$exception
-      # override or append: user values win
-      fe[names(be)] <- be
-      filled_bound$exception <- fe
+      # Override or append: user values win.  A name may carry several
+      # permitted values, so drop every default entry for an overridden name
+      # rather than assigning by name (which would keep only the last value).
+      fe <- fe[!(names(fe) %in% names(be))]
+      filled_bound$exception <- c(fe, be)
     }
 
     filled_bound

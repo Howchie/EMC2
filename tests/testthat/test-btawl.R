@@ -709,3 +709,73 @@ test_that("the transient design produces omissions that can be fit back through"
                                    compress = FALSE, rt_resolution = NULL))
   expect_true(is.finite(btawl_ll(list(emc = emc, des = des), p)))
 })
+
+# ---------------------------------------------------------------------------
+# Nested submodels reachable from the full kernel
+# ---------------------------------------------------------------------------
+
+test_that("pi is permitted on both endpoints", {
+  for (chart in c("rate", "endpoint")) {
+    exc <- BTAwL(chart = chart)$bound$exception
+    expect_equal(sort(unname(exc[names(exc) == "pi"])), c(0, 1))
+    # The bound machinery must accept both endpoints, and nothing between them
+    # that would otherwise be excluded by the strict [0,1] test.
+    mm <- BTAwL(chart = chart)$bound$minmax
+    expect_equal(unname(mm[, "pi"]), c(0, 1))
+  }
+})
+
+test_that("bound exceptions admit several permitted values per parameter", {
+  bound <- list(minmax = cbind(x = c(0, 1), y = c(0, 1)),
+                exception = c(x = 0, x = 1, y = 0))
+  pars <- cbind(x = c(0, 1, 0.5, 2), y = c(0, 0, 0, 0))
+  expect_equal(unname(EMC2:::do_bound(pars, bound)),
+               c(TRUE, TRUE, TRUE, FALSE))
+  # y permits only 0, so 1 must still be rejected on the strict upper test.
+  pars2 <- cbind(x = c(0.5, 0.5), y = c(0, 1))
+  expect_equal(unname(EMC2:::do_bound(pars2, bound)), c(TRUE, FALSE))
+})
+
+test_that("pi = 0 and pi = 1 reproduce the dedicated wrappers exactly", {
+  skip_on_cran()
+  dat <- btawl_dat()
+  vals <- c(mu = 0.5, sigma = log(0.5), B = log(0.8), A = log(0.3),
+            t0 = log(0.15), k = log(1), tau = log(0.6), tau_t = log(0.6),
+            tau_s = log(0.6), pi = qnorm(0.5))
+  ll_of <- function(model, form, consts) {
+    fx <- btawl_mk(model, form, consts, dat)
+    p <- vals[names(sampled_pars(fx$des))]
+    btawl_ll(fx, p)
+  }
+  full <- list(mu ~ 1, B ~ 1, A ~ 1, sigma ~ 1, t0 ~ 1, k ~ 1, tau_t ~ 1,
+               tau_s ~ 1, pi ~ 1)
+
+  # Pure transient: pi = 0, tau_s inert.
+  expect_equal(
+    ll_of(BTAwL(chart = "rate"), full, c(pi = qnorm(0), tau_s = log(1))),
+    ll_of(BTAwLTransient(chart = "rate"),
+          list(mu ~ 1, B ~ 1, A ~ 1, sigma ~ 1, t0 ~ 1, k ~ 1, tau ~ 1),
+          NULL))
+
+  # Pure sustained: pi = 1, tau_t inert.
+  expect_equal(
+    ll_of(BTAwL(chart = "rate"), full, c(pi = qnorm(1), tau_t = log(1))),
+    ll_of(BTAwLSustained(chart = "rate"),
+          list(mu ~ 1, B ~ 1, A ~ 1, sigma ~ 1, t0 ~ 1, k ~ 1, tau_s ~ 1),
+          NULL))
+})
+
+test_that("an inert time constant really is inert at a pinned pi", {
+  # This is what makes the nesting safe: at pi = 0 the sustained clearance
+  # cannot affect the likelihood, so pinning it at any legal value is a free
+  # choice rather than an assumption.
+  for (ts in c(log(.2), log(1), log(5))) {
+    m <- BTAwL(chart = "rate")
+    pars <- cbind(mu = log(6), sigma = .5, b = 1.4, A = .4, t0 = .2, k = 2,
+                  tau_t = .6, tau_s = exp(ts), pi = 0)
+    expect_equal(m$dfun(0.5, pars),
+                 dBTAwLTransient(0.5, cbind(mu = log(6), sigma = .5, b = 1.4,
+                                            A = .4, t0 = .2, k = 2, tau = .6),
+                                 launch = 1L))
+  }
+})

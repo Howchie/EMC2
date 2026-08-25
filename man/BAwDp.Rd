@@ -35,4 +35,21 @@ keeps \code{z} static and scales the whole temporal drive profile by \code{V}.
 A favourable start point consequently changes the omission probability.
 All PDF/CDF evaluations use closed-form LBA primitives; no quadrature is
 used.
+
+With \code{drift_distribution = "lognormal"} (the default) \verb{log V ~ N(mu, sigma^2)}.\tabular{llllll}{
+   \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Mapping} \tab \strong{Interpretation} \cr
+   \emph{mu} \tab identity \tab [-Inf, Inf] \tab 0 \tab  \tab Mean of the log launch strength. \cr
+   \emph{sigma} \tab log \tab [0, Inf] \tab log(1) \tab  \tab SD of log launch strength. \cr
+   \emph{B} \tab log \tab [0, Inf] \tab log(1) \tab \emph{b} = \emph{B} + \emph{A} \tab Threshold distance. \cr
+   \emph{A} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Start-point range. \cr
+   \emph{t0} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Non-decision time. \cr
+   \emph{k} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Drive-decay rate. \cr
+   \emph{lambda} \tab probit \tab [0, 1] \tab qnorm(.5) \tab  \tab Proportional clearance fraction. \cr
+}
+
+
+With \code{drift_distribution = "normal"}, \code{mu} and \code{sigma} are replaced by
+\code{v} and \code{sv}; the launch is truncated positive when \code{posdrift = TRUE}.
+The generic \code{pContaminant} and \code{pGuess} nuisance parameters are appended by
+the data pipeline when requested.
 }

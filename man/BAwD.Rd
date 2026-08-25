@@ -42,8 +42,7 @@ signal and opposed by clearance with the same base kernel:
 The fixed clearance exponent \code{gamma} can be \code{0}, \code{1/2}, \code{2/3}, \code{3/4}, or
 \code{1}. For \code{gamma < 1} and finite \code{rho > 1}, the frozen-mass exponent is
 \verb{alpha = (rho - 1) / (rho (1 - gamma))}; \code{rho = 1} is its logarithmic
-limit. The \code{rho = Inf} member retains the exponential kernel and today's
-model names.
+limit. The \code{rho = Inf} member retains the exponential kernel.
 
 The trajectory is
 \verb{X(u) = z + V Q_rho(u) - ell R_rho(u)}, where
@@ -56,8 +55,8 @@ and a finite \code{T_max} occurs when \code{k > 0} and \code{ell > 0}.
 The start point is static and weak drive can produce an omission. The
 fixed \code{rho} and \code{gamma} choices are model options, never estimated
 parameters, so they do not appear in \code{p_types}.
-With \code{drift_distribution = "lognormal"} (the default) \verb{log V ~ N(mu, sigma^2)}.
-\tabular{llllll}{
+
+With \code{drift_distribution = "lognormal"} (the default) \verb{log V ~ N(mu, sigma^2)}.\tabular{llllll}{
    \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Mapping} \tab \strong{Interpretation} \cr
    \emph{mu} \tab identity \tab [-Inf, Inf] \tab 0 \tab  \tab Mean of the log launch strength. \cr
    \emph{sigma} \tab log \tab [0, Inf] \tab log(1) \tab  \tab SD of log launch strength. \cr
@@ -68,14 +67,13 @@ With \code{drift_distribution = "lognormal"} (the default) \verb{log V ~ N(mu, s
    \emph{ell} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Clearance rate. \cr
 }
 
+
 With \code{drift_distribution = "normal"}, \code{mu} and \code{sigma} are replaced by
 \code{v} and \code{sv}; the launch is truncated positive when \code{posdrift = TRUE}.
 
-The trial-dependent transform derives \code{Tmax} from \code{A}, \code{b},
-\code{k}, and \code{ell}, and also reports \code{rt_max} after adding
-\code{t0}.
+The trial-dependent transform derives \code{Tmax} from \code{A}, \code{b}, \code{k}, and
+\code{ell}, and also reports \code{rt_max} after adding \code{t0}.
 }
-
 \examples{
 ADmat <- matrix(c(-1/2, 1/2), ncol = 1, dimnames = list(NULL, "d"))
 matchfun <- function(d) d$S == d$lR

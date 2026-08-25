@@ -172,6 +172,21 @@ LNR <- function() {
 #' relaxation, while PCOUNTER supplies trialwise input variation,
 #' self-excitation, and geometric threshold variation.
 #'
+#' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Mapping** | **Interpretation** |
+#' |---|---|---|---|---|---|
+#' | *nu* | log | \[0, Inf\] | log(10) | | Mean trialwise input/event rate. |
+#' | *sv* | log | \[0, Inf\] | log(0) | | SD of the trialwise input-rate draw. |
+#' | *gamma* | log | \[0, Inf\] | log(0) | | Self-excitation increment per accumulated event. |
+#' | *k* | log | \[0, Inf\] | log(3) | *K* = 2 + floor(*k* + 0.5) | Threshold offset determining the baseline event count. |
+#' | *omega* | log | \[0, Inf\] | log(0) | | Mean geometric excess above the baseline threshold. |
+#' | *t0* | log | \[0, Inf\] | log(0) | | Non-decision time. |
+#' | *pContaminant* | probit | \[0, 1\] | qnorm(0) | | Optional omission contaminant probability. |
+#' | *pGuess* | probit | \[0, 1\] | qnorm(0) | | Optional uniform outlier probability. |
+#'
+#' `k` is sampled continuously but converted to the integer threshold shown in
+#' the mapping column. Exact zero values of `sv`, `gamma`, `omega`, and `k`
+#' select the corresponding nested boundary models.
+#'
 #' @return A model list compatible with `design()`.
 #' @export
 PCOUNTER <- function() {

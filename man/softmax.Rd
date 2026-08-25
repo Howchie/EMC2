@@ -27,15 +27,12 @@ response time is modeled; \code{rt} must be \code{NA} in the input data.
 }
 \section{Parameters}{
 
-The softmax model uses the following parameters:
-
-\describe{
-\item{\code{x}}{A continuous latent Q-value or score for each response
-option. Unbounded.}
-
-\item{\code{beta}}{Inverse temperature (precision) parameter. Must be
-non-negative. Larger values produce more deterministic choice.}
+The softmax model uses the following parameter matrix:\tabular{lllll}{
+   \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Interpretation} \cr
+   \emph{x} \tab identity \tab [-Inf, Inf] \tab 0 \tab Continuous latent score for each response option. \cr
+   \emph{beta} \tab log \tab [0, Inf] \tab log(1) \tab Inverse temperature; larger values make choices more deterministic. \cr
 }
+
 
 Returned sampled data consist of a response factor \code{R} and an
 \code{rt} column always set to \code{NA}.

@@ -440,12 +440,13 @@ inline std::vector<BoundSpec> make_bound_specs(NumericMatrix minmax,
 
   // 2) Build a map from param-name -> exception value
   bool has_exception = bound.containsElementNamed("exception") && !Rf_isNull(bound["exception"]);
-  std::unordered_map<std::string, double> exceptionMap;
+  // Repeated names accumulate: one parameter may permit several exact values.
+  std::unordered_map<std::string, std::vector<double> > exceptionMap;
   if (has_exception) {
     NumericVector except_vec = bound["exception"];
     CharacterVector except_names = except_vec.names();
     for (int i = 0; i < (int)except_vec.size(); i++) {
-      exceptionMap[ Rcpp::as<std::string>(except_names[i])] = except_vec[i];
+      exceptionMap[ Rcpp::as<std::string>(except_names[i])].push_back(except_vec[i]);
     }
   }
 
@@ -461,13 +462,14 @@ inline std::vector<BoundSpec> make_bound_specs(NumericMatrix minmax,
     s.min_val     = minmax(0, j);
     s.max_val     = minmax(1, j);
 
+    s.n_exception = 0;
     auto it = exceptionMap.find(var_name);
     if (it != exceptionMap.end()) {
-      s.has_exception = true;
-      s.exception_val = it->second;
-    } else {
-      s.has_exception = false;
-      s.exception_val = NA_REAL;  // or 0
+      if ((int)it->second.size() > EMC2_BOUND_MAX_EXCEPTIONS)
+        Rcpp::stop("bound$exception declares more than %d permitted values for %s",
+                   EMC2_BOUND_MAX_EXCEPTIONS, var_name.c_str());
+      s.n_exception = (int)it->second.size();
+      for (int e = 0; e < s.n_exception; e++) s.exception_val[e] = it->second[e];
     }
     specs[j] = s;
   }
@@ -562,16 +564,15 @@ inline LogicalVector c_do_bound(NumericMatrix pars,
     int col_idx   = bs.col_idx;
     double min_v  = bs.min_val;
     double max_v  = bs.max_val;
-    bool has_exc  = bs.has_exception;
-    double exc_val= bs.exception_val;
+    int n_exc     = bs.n_exception;
 
     // Check each row
     for (int i = 0; i < nrows; i++) {
       double val = pars(i, col_idx);
       bool ok = (val > min_v && val < max_v);
-      if (!ok && has_exc) {
-        // If out of range, see if exception matches
-        ok = (val == exc_val);
+      // If out of range, see if any permitted exception value matches
+      for (int e = 0; !ok && e < n_exc; e++) {
+        ok = (val == bs.exception_val[e]);
       }
       // Merge with existing result (like result = result & ok_col)
       if (result[i] && !ok) {

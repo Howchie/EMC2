@@ -92,15 +92,12 @@ rSOFTMAX <- function(lR,pars,p_types=c("x","beta"))
 #' response time is modeled; \code{rt} must be \code{NA} in the input data.
 #'
 #' @section Parameters:
-#' The softmax model uses the following parameters:
+#' The softmax model uses the following parameter matrix:
 #'
-#' \describe{
-#'   \item{\code{x}}{A continuous latent Q-value or score for each response
-#'        option. Unbounded.}
-#'
-#'   \item{\code{beta}}{Inverse temperature (precision) parameter. Must be
-#'        non-negative. Larger values produce more deterministic choice.}
-#' }
+#' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Interpretation** |
+#' |---|---|---|---|---|
+#' | *x* | identity | \[-Inf, Inf\] | 0 | Continuous latent score for each response option. |
+#' | *beta* | log | \[0, Inf\] | log(1) | Inverse temperature; larger values make choices more deterministic. |
 #'
 #' Returned sampled data consist of a response factor \code{R} and an
 #' \code{rt} column always set to \code{NA}.

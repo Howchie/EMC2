@@ -142,6 +142,22 @@ pGOM <- function(rt, pars, kind = NULL)
 #' by the cached OU Fokker--Planck solver after the exact `Y = log(X)` reduction.
 #' The physical start range is retained when seeding the log-space solver.
 #'
+#' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Mapping** | **Interpretation** |
+#' |---|---|---|---|---|---|
+#' | *alpha* | log | \[0, Inf\] | log(1) | | Gompertz growth-rate parameter. |
+#' | *beta* | log | \[0, Inf\] | log(1) | | Multiplicative diffusion scale. |
+#' | *K* | log | \[0, Inf\] | log(5) | | Carrying capacity of the Gompertz process. |
+#' | *B* | log | \[0, Inf\] | log(1) | *b* = 1 + *B* + *A* | Distance from the baseline start level to the response boundary. |
+#' | *A* | log | \[0, Inf\] | log(0) | | Start-point range above the baseline level 1. |
+#' | *t0* | log | \[0, Inf\] | log(0) | | Non-decision time. |
+#' | *Binf* | log | \[0, Inf\] | log(1.5) | | Asymptotic boundary value; used for non-fixed boundary collapse. |
+#' | *tau* | log | \[0, Inf\] | log(1) | | Boundary-collapse time scale; used for non-fixed collapse. |
+#' | *pw* | log | \[0, Inf\] | log(1) | | Weibull boundary-collapse exponent; used only for `boundary_collapse = "weibull"`. |
+#'
+#' `Binf` and `tau` are included for every non-fixed boundary-collapse form;
+#' `pw` is included only for the Weibull form. The generic `pContaminant` and
+#' `pGuess` nuisance parameters are appended by the data pipeline when requested.
+#'
 #' @param boundary_collapse Character; one of `"fixed"`, `"exponential"`,
 #'   `"linear_additive"`, `"linear_multiplicative"`, or `"weibull"`.
 #' @return A list defining an EMC2 race model.

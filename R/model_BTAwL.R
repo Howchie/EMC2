@@ -359,8 +359,8 @@ rBTAwLSustained <- function(lR, pars, ok = rep(TRUE, length(lR)),
 
 .btawl_constructor <- function(mode = c("full", "transient", "sustained"),
                                posdrift = TRUE,
-                               drift_distribution = c("normal", "lognormal"),
-                               chart = c("endpoint", "rate")) {
+                               drift_distribution = c("lognormal","normal"),
+                               chart = c("rate","endpoint")) {
   mode <- match.arg(mode)
   chart <- match.arg(chart)
   drift_distribution <- match.arg(drift_distribution)
@@ -482,7 +482,12 @@ rBTAwLSustained <- function(lR, pars, ok = rep(TRUE, length(lR)),
                   tau_s = c(1e-4, Inf))
   minmax <- cbind(minmax, c(1e-4, Inf), pi = c(0, 1))
   colnames(minmax)[ncol(minmax) - 1L] <- clear_name
-  exception <- if (chart == "endpoint") c(A = 0, pi = 0) else c(A = 0, k = 0, pi = 0)
+  # `pi` is permitted to sit on either endpoint so the two nested submodels are
+  # reachable from the full kernel: pi = 0 is a pure transient race (tau_s is
+  # then inert) and pi = 1 a pure sustained one (tau_t is inert).  The compiled
+  # kernel dispatches both exactly, so each matches its dedicated wrapper.
+  exception <- if (chart == "endpoint") c(A = 0, pi = 0, pi = 1) else
+    c(A = 0, k = 0, pi = 0, pi = 1)
   .nuis <- add_nuisance_pars(p_types, transform, minmax, exception)
   p_types <- .nuis$p_types; transform <- .nuis$transform
   minmax <- .nuis$minmax; exception <- .nuis$exception
@@ -556,7 +561,7 @@ rBTAwLSustained <- function(lR, pars, ok = rep(TRUE, length(lR)),
 #' | *t0* | log | \[0, Inf\] | log(0) | | Non-decision time. |
 #' | *k* | log | \[0, Inf\] | log(0) | | Leak rate. |
 #' | *tau_s* | log | \[0, Inf\] | log(1) | | Sustained-drive time constant. |
-#' | *Ttrans* | log | \[0, Inf\] | log(1) | | Transient-drive endpoint parameter. |
+#' | *tau_t* | log | \[0, Inf\] | log(1) | | Transient-drive time constant. |
 #' | *pi* | probit | \[0, 1\] | qnorm(.5) | | Probability allocated to the sustained process. |
 #'
 #' With `drift_distribution = "normal"`, `mu` and `sigma` are replaced by `v`
@@ -568,7 +573,38 @@ rBTAwLSustained <- function(lR, pars, ok = rep(TRUE, length(lR)),
 #' threshold distance, and start-point range by the same positive constant
 #' leaves response times unchanged.  Fix one scale parameter (normally `sv` for
 #' a normal launch, or one intercept among `mu`, `B`, and `A` for a lognormal
-#' launch) when specifying a design.
+#' launch) when specifying a design.  Anchoring on a `B` intercept is usually
+#' better conditioned than anchoring on `mu`, which tends to drive `B` onto its
+#' lower bound.
+#'
+#' # Nested submodels
+#'
+#' Both single-channel models are reachable from the full kernel by pinning
+#' `pi`, so a nested model comparison needs no change of `model`:
+#'
+#' \describe{
+#'   \item{`pi = qnorm(0)`}{Pure transient race, identical to
+#'     [BTAwLTransient()].}
+#'   \item{`pi = qnorm(1)`}{Pure sustained race, identical to
+#'     [BTAwLSustained()].}
+#' }
+#'
+#' At a pinned `pi` the other channel's time constant no longer enters the
+#' likelihood, so it must be supplied as a constant --- left free it would
+#' sample against a flat likelihood and never converge.  Any value inside its
+#' bounds gives exactly the same fit; `log(1)` is the conventional choice:
+#'
+#' ```
+#' # pure transient                       # pure sustained
+#' constants = c(pi = qnorm(0),           constants = c(pi = qnorm(1),
+#'               tau_s = log(1))                        tau_t = log(1))
+#' ```
+#'
+#' Do not instead try to switch a channel off with `tau_s = log(0)` or
+#' `tau_t = log(0)`.  Both are outside the bounds, and neither means what it
+#' looks like: as `tau_s` falls to zero the sustained drive becomes a *step* at
+#' full strength (the fastest sustained input, not the absence of one), while a
+#' vanishing `tau_t` delivers zero total transient impulse.  `pi` is the switch.
 #'
 #' @param posdrift Logical. For a normal launch, truncate `V` below zero.
 #' @param drift_distribution Either `"normal"` (`V ~ N(v, sv^2)`) or
@@ -576,10 +612,11 @@ rBTAwLSustained <- function(lR, pars, ok = rep(TRUE, length(lR)),
 #' @param chart Either `"endpoint"` (sample `Ttrans`) or `"rate"` (sample
 #'   `tau_t`).
 #' @return A BTAwL race-model specification.
+#' @seealso [BTAwLTransient()], [BTAwLSustained()]
 #' @export
 BTAwL <- function(posdrift = TRUE,
-                  drift_distribution = c("normal", "lognormal"),
-                  chart = c("endpoint", "rate"))
+                  drift_distribution = c("lognormal","normal"),
+                  chart = c("rate","endpoint"))
   .btawl_constructor("full", posdrift, drift_distribution, chart)
 
 #' Pure transient BTAwL wrapper.
@@ -594,7 +631,7 @@ BTAwL <- function(posdrift = TRUE,
 #' | *A* | log | \[0, Inf\] | log(0) | | Start-point range. |
 #' | *t0* | log | \[0, Inf\] | log(0) | | Non-decision time. |
 #' | *k* | log | \[0, Inf\] | log(0) | | Leak rate. |
-#' | *Ttrans* | log | \[0, Inf\] | log(1) | | Transient-drive endpoint parameter. |
+#' | *tau_t* | log | \[0, Inf\] | log(1) | | Transient-drive time constant. |
 #'
 #' With `drift_distribution = "normal"`, `mu` and `sigma` are replaced by `v`
 #' and `sv`; the launch is truncated positive when `posdrift = TRUE`.
@@ -607,8 +644,8 @@ BTAwL <- function(posdrift = TRUE,
 #' @return A transient-only BTAwL race-model specification.
 #' @export
 BTAwLTransient <- function(posdrift = TRUE,
-                           drift_distribution = c("normal", "lognormal"),
-                           chart = c("endpoint", "rate"))
+                           drift_distribution = c("lognormal","normal"),
+                           chart = c("rate","endpoint"))
   .btawl_constructor("transient", posdrift, drift_distribution, chart)
 
 #' Pure sustained BTAwL wrapper.
@@ -632,8 +669,10 @@ BTAwLTransient <- function(posdrift = TRUE,
 #'
 #' @param posdrift Logical. For a normal launch, truncate `V` below zero.
 #' @param drift_distribution Either `"normal"` or `"lognormal"`.
+#' @param chart Either `"endpoint"` or `"rate"`.
 #' @return A sustained-only BTAwL race-model specification.
 #' @export
 BTAwLSustained <- function(posdrift = TRUE,
-                           drift_distribution = c("normal", "lognormal"))
-  .btawl_constructor("sustained", posdrift, drift_distribution, chart = "rate")
+                           drift_distribution = c("lognormal","normal"),
+                           chart = c("rate","endpoint"))
+  .btawl_constructor("sustained", posdrift, drift_distribution, chart)

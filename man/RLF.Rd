@@ -48,5 +48,15 @@ likelihood evaluates the density \emph{at} the floored time and
 \code{rt_resolution = NULL}; nothing needs to be passed for this.
 
 Set \code{emc2.rlf_adaptive = TRUE} to enable the slower refinement checks used
-by the standalone validation solver.
+by the standalone validation solver.\tabular{llllll}{
+   \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Mapping} \tab \strong{Interpretation} \cr
+   \emph{v} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Mean drift rate. \cr
+   \emph{B} \tab log \tab [0, Inf] \tab log(1) \tab \emph{b} = \emph{B} + \emph{A} \tab Distance from the upper start-point range to the threshold. \cr
+   \emph{A} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Start-point range. \cr
+   \emph{t0} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Non-decision time. \cr
+   \emph{s} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Symmetric stable-noise scale. \cr
+   \emph{alpha} \tab probit \tab [1, 2] \tab qnorm(.7) \tab  \tab Symmetric stable-law index; 2 is the diffusion limit. \cr
+   \emph{pContaminant} \tab probit \tab [0, 1] \tab qnorm(0) \tab  \tab Optional omission contaminant probability. \cr
+   \emph{pGuess} \tab probit \tab [0, 1] \tab qnorm(0) \tab  \tab Optional uniform outlier probability. \cr
+}
 }

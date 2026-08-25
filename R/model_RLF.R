@@ -130,6 +130,17 @@ rRLF <- function(lR, pars, ok = rep(TRUE, nrow(pars)),
 #' Set `emc2.rlf_adaptive = TRUE` to enable the slower refinement checks used
 #' by the standalone validation solver.
 #'
+#' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Mapping** | **Interpretation** |
+#' |---|---|---|---|---|---|
+#' | *v* | log | \[0, Inf\] | log(1) | | Mean drift rate. |
+#' | *B* | log | \[0, Inf\] | log(1) | *b* = *B* + *A* | Distance from the upper start-point range to the threshold. |
+#' | *A* | log | \[0, Inf\] | log(0) | | Start-point range. |
+#' | *t0* | log | \[0, Inf\] | log(0) | | Non-decision time. |
+#' | *s* | log | \[0, Inf\] | log(1) | | Symmetric stable-noise scale. |
+#' | *alpha* | probit | \[1, 2\] | qnorm(.7) | | Symmetric stable-law index; 2 is the diffusion limit. |
+#' | *pContaminant* | probit | \[0, 1\] | qnorm(0) | | Optional omission contaminant probability. |
+#' | *pGuess* | probit | \[0, 1\] | qnorm(0) | | Optional uniform outlier probability. |
+#'
 #' @return A list defining an EMC2 race model.
 #' @export
 RLF <- function() {

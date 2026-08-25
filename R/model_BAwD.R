@@ -366,8 +366,7 @@ rBAwDp <- function(lR, pars, ok = rep(TRUE, length(lR)), launch = 1L,
 #' The fixed clearance exponent `gamma` can be `0`, `1/2`, `2/3`, `3/4`, or
 #' `1`. For `gamma < 1` and finite `rho > 1`, the frozen-mass exponent is
 #' \verb{alpha = (rho - 1) / (rho (1 - gamma))}; `rho = 1` is its logarithmic
-#' limit. The `rho = Inf` member retains the exponential kernel and today's
-#' model names.
+#' limit. The `rho = Inf` member retains the exponential kernel.
 #'
 #' The trajectory is
 #' \verb{X(u) = z + V Q_rho(u) - ell R_rho(u)}, where
@@ -519,6 +518,23 @@ BAwD <- function(drift_distribution = c("lognormal", "normal"),
 #' A favourable start point consequently changes the omission probability.
 #' All PDF/CDF evaluations use closed-form LBA primitives; no quadrature is
 #' used.
+#'
+#' With `drift_distribution = "lognormal"` (the default) `log V ~ N(mu, sigma^2)`.
+#'
+#' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Mapping** | **Interpretation** |
+#' |---|---|---|---|---|---|
+#' | *mu* | identity | \[-Inf, Inf\] | 0 | | Mean of the log launch strength. |
+#' | *sigma* | log | \[0, Inf\] | log(1) | | SD of log launch strength. |
+#' | *B* | log | \[0, Inf\] | log(1) | *b* = *B* + *A* | Threshold distance. |
+#' | *A* | log | \[0, Inf\] | log(0) | | Start-point range. |
+#' | *t0* | log | \[0, Inf\] | log(0) | | Non-decision time. |
+#' | *k* | log | \[0, Inf\] | log(1) | | Drive-decay rate. |
+#' | *lambda* | probit | \[0, 1\] | qnorm(.5) | | Proportional clearance fraction. |
+#'
+#' With `drift_distribution = "normal"`, `mu` and `sigma` are replaced by
+#' `v` and `sv`; the launch is truncated positive when `posdrift = TRUE`.
+#' The generic `pContaminant` and `pGuess` nuisance parameters are appended by
+#' the data pipeline when requested.
 #'
 #' @param drift_distribution Distribution of the launch strength: `"lognormal"`
 #'   (default), or `"normal"`.
