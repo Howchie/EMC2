@@ -995,6 +995,7 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
       // this is about bounding memory, not about correctness.
       if (adapter.ctx.fpe_cache) adapter.ctx.fpe_cache->new_particle();
       if (adapter.ctx.rlf_cache) adapter.ctx.rlf_cache->new_particle();
+      btawl_cache_new_particle(&adapter.ctx);
       if (use_raw_fast_path) {
         // Fill per-particle isok buffer
         for (int j = 0; j < n_trials; ++j) isok_int_fp[j] = is_ok[j] ? 1 : 0;
@@ -1362,6 +1363,7 @@ NumericMatrix calc_ll_oo_pw(NumericMatrix particle_matrix, DataFrame data, Numer
       is_ok = lr_all(is_ok, n_lR);
       if (adapter.ctx.fpe_cache) adapter.ctx.fpe_cache->new_particle();
       if (adapter.ctx.rlf_cache) adapter.ctx.rlf_cache->new_particle();
+      btawl_cache_new_particle(&adapter.ctx);
       NumericVector row_vec(n_out_race);
       if (adapter.ctx.corr_drift_active) {
         c_log_likelihood_corr_drift(

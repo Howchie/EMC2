@@ -132,6 +132,71 @@ BtawlGeom btawl_geometry_from_ttrans(double A, double b, double k,
   return g;
 }
 
+BtawlGeom btawl_geometry_cached(ContextForRaceModels* ctx, bool endpoint,
+                                double A, double b, double k, double clear,
+                                double tau) {
+  if (ctx != nullptr) {
+    if (!ctx->btawl_cache)
+      ctx->btawl_cache = std::make_shared<btawl::SolveCache>();
+    btawl::SolveCache& cache = *ctx->btawl_cache;
+    for (const btawl::SolveCacheEntry& entry : cache.geometry) {
+      if (entry.endpoint == endpoint && entry.A == A && entry.b == b &&
+          entry.k == k && entry.clear == clear && entry.tau == tau)
+        return entry.geom;
+    }
+    const BtawlGeom geom = endpoint
+      ? btawl_geometry_from_ttrans(A, b, k, clear, tau)
+      : btawl_geometry(A, b, k, tau);
+    if (cache.geometry.size() >= btawl::SolveCache::max_entries)
+      cache.geometry.erase(cache.geometry.begin());
+    btawl::SolveCacheEntry entry;
+    entry.endpoint = endpoint;
+    entry.A = A; entry.b = b; entry.k = k; entry.clear = clear; entry.tau = tau;
+    entry.geom = geom;
+    cache.geometry.push_back(entry);
+    return geom;
+  }
+  return endpoint ? btawl_geometry_from_ttrans(A, b, k, clear, tau)
+                  : btawl_geometry(A, b, k, tau);
+}
+
+void btawl_cache_new_particle(ContextForRaceModels* ctx) {
+  if (ctx != nullptr && ctx->btawl_cache)
+    ctx->btawl_cache->new_particle();
+}
+
+double btawl_log_surv_cached(ContextForRaceModels* ctx, double t,
+                             const BtawlGeom& g, double clear,
+                             double p1, double p2, int launch,
+                             bool posdrift) {
+  const auto evaluate = [&]() {
+    return launch == BTAWL_LAUNCH_LOGNORMAL
+      ? log_btawl_surv_logn(t, g, p1, p2)
+      : log_btawl_surv_normal(t, g, p1, p2, posdrift);
+  };
+  if (ctx == nullptr || !emc2_isfinite(g.t_max) || !(t >= g.t_max))
+    return evaluate();
+  if (!ctx->btawl_cache)
+    ctx->btawl_cache = std::make_shared<btawl::SolveCache>();
+  btawl::SolveCache& cache = *ctx->btawl_cache;
+  for (const btawl::PlateauCacheEntry& entry : cache.plateau_survivors) {
+    if (entry.A == g.A && entry.b == g.b && entry.k == g.k &&
+        entry.clear == clear && entry.tau == g.tau && entry.p1 == p1 &&
+        entry.p2 == p2 && entry.launch == launch &&
+        entry.posdrift == posdrift)
+      return entry.value;
+  }
+  const double value = evaluate();
+  if (cache.plateau_survivors.size() >= btawl::SolveCache::max_entries)
+    cache.plateau_survivors.erase(cache.plateau_survivors.begin());
+  btawl::PlateauCacheEntry entry;
+  entry.A = g.A; entry.b = g.b; entry.k = g.k; entry.clear = clear;
+  entry.tau = g.tau; entry.p1 = p1; entry.p2 = p2; entry.value = value;
+  entry.launch = launch; entry.posdrift = posdrift;
+  cache.plateau_survivors.push_back(entry);
+  return value;
+}
+
 double btawl_vstar(double t, double z, const BtawlGeom& g) {
   const double h = btawl_h(t, g.k, g.tau);
   if (!(h > 0.0)) return R_PosInf;
@@ -166,13 +231,14 @@ double btawl_tangent_time(double z, const BtawlGeom& g) {
   if (!(z > 0.0)) return g.t_max;
   if (z >= g.b) return 0.0;
   double lo = 0.0, hi = g.t_max;
-  for (int i = 0; i < 90; ++i) {
+  const double tol = 2e-14 * std::fmax(1.0, std::fabs(g.t_max));
+  for (int i = 0; i < 80; ++i) {
     const double mid = 0.5 * (lo + hi);
-    const double h = btawl_h(mid, g.k, g.tau);
     const double hp = btawl_hp(mid, g.k, g.tau);
     const double d = z * std::exp(-g.k * mid) * btawl_g(mid, g.tau) -
       g.b * hp;
     if (d < 0.0) lo = mid; else hi = mid;
+    if (hi - lo <= tol) break;
   }
   return 0.5 * (lo + hi);
 }
@@ -297,10 +363,73 @@ double btawl_live_pdf(double t, double zlo, double zhi,
   return (out > 0.0 && emc2_isfinite(out)) ? out : 0.0;
 }
 
+namespace {
+
+// Fast natural-space evaluation of the reparameterized frozen integral.  The
+// change of variables is s = tangency time and the launch threshold is
+// evaluated as vc(s) = k*b/g(s); the Jacobian is the analytic -z'(s).  An
+// embedded 8/16-point check certifies the cheap rule.  If the two rules do
+// not agree, the caller falls back to the existing log-space 24-point rule,
+// so this is an optimization only on numerically smooth, resolved panels.
+bool btawl_frozen_natural(bool survivor, double t, const BtawlGeom& g,
+                          double p1, double p2, int launch, bool posdrift,
+                          double& value) {
+  value = 0.0;
+  if (g.k_zero || !(p2 > 0.0)) return false;
+  const double s_lo = g.s_lo;
+  const double s_hi = std::fmin(std::fmax(t, s_lo), g.t_max);
+  if (!(s_hi > s_lo)) return true;
+
+  const auto nf = [&](double s) -> double {
+    const double zp = btawl_tangent_z_prime(s, g);
+    const double gg = btawl_g(s, g.tau);
+    const double vc = (gg > 0.0) ? g.k * g.b / gg : R_PosInf;
+    if (!(zp < 0.0) || !(vc > 0.0) || !emc2_isfinite(vc)) return 0.0;
+    double prob = 0.0;
+    if (launch == BTAWL_LAUNCH_LOGNORMAL) {
+      const double x = (std::log(vc) - p1) / p2;
+      prob = pnorm_std(survivor ? x : -x, true, false);
+    } else if (survivor) {
+      if (posdrift) {
+        const double lp = log_normal_cdf_positive_raw(vc, p1, p2);
+        prob = (lp > R_NegInf) ? std::exp(lp) : 0.0;
+      } else {
+        prob = pnorm_std((vc - p1) / p2, true, false);
+      }
+    } else {
+      prob = pnorm_std((p1 - vc) / p2, true, false);
+    }
+    const double out = -zp * prob;
+    return emc2_isfinite(out) && out >= 0.0 ? out : 0.0;
+  };
+
+  const double target = launch == BTAWL_LAUNCH_LOGNORMAL
+    ? std::exp(p1) : p1;
+  const double split = btawl_frozen_split(g, s_lo, s_hi, target);
+  const double coarse = bawd_nat_gl_split(nf, s_lo, s_hi, split, 8);
+  if (!(coarse >= 0.0) || !emc2_isfinite(coarse)) return false;
+  const double fine = bawd_nat_gl_split(nf, s_lo, s_hi, split, 16);
+  if (!(fine >= 0.0) || !emc2_isfinite(fine)) return false;
+  const double scale = std::fmax(fine, 1e-300);
+  if (std::fabs(fine - coarse) > 2e-10 * scale) return false;
+  value = fine;
+  if (launch == BTAWL_LAUNCH_NORMAL && posdrift) {
+    const double den = btawl_normal_denom(p1, p2, true);
+    if (!(den > 0.0) || !emc2_isfinite(den)) return false;
+    value /= den;
+  }
+  return emc2_isfinite(value) && value >= 0.0;
+}
+
+} // namespace
+
 double btawl_frozen_cdf(double t, double zlo, double zhi,
                                const BtawlGeom& g, double p1, double p2,
                                int launch, bool posdrift) {
   if (!(zhi > zlo) || g.k_zero) return 0.0;
+  double fast = 0.0;
+  if (btawl_frozen_natural(false, t, g, p1, p2, launch, posdrift, fast))
+    return fast;
   // Integrate in tangency time rather than repeatedly solving for the
   // tangency point at every quadrature node.  `btawl_log_frozen` uses the
   // closed Jacobian dz/ds and the same log-Gauss--Kronrod splitter as the
@@ -330,11 +459,21 @@ double btawl_frozen_split(const BtawlGeom& g, double s_lo, double s_hi,
   if (target_g >= g_lo) return desc_lo;
   if (target_g <= g_hi) return desc_hi;
   double lo = desc_lo, hi = desc_hi;
+  const double tol = 2e-14 * std::fmax(1.0, std::fabs(desc_hi));
+  double x = 0.5 * (lo + hi);
   for (int i = 0; i < 64; ++i) {
-    const double mid = 0.5 * (lo + hi);
-    if (btawl_g(mid, g.tau) > target_g) lo = mid; else hi = mid;
+    const double gx = btawl_g(x, g.tau);
+    if (gx > target_g) lo = x; else hi = x;
+    if (hi - lo <= tol || std::fabs(gx - target_g) <=
+        2e-14 * std::fmax(1.0, target_g)) break;
+    const double gp = gx * (1.0 / x - 1.0 / g.tau);
+    double xn = (emc2_isfinite(gp) && gp < 0.0)
+      ? x - (gx - target_g) / gp : 0.5 * (lo + hi);
+    if (!(xn > lo) || !(xn < hi) || !emc2_isfinite(xn))
+      xn = 0.5 * (lo + hi);
+    x = xn;
   }
-  return 0.5 * (lo + hi);
+  return x;
 }
 
 double btawl_log_frozen(bool survivor, double t, const BtawlGeom& g,
@@ -580,11 +719,96 @@ bool btawl_natural_pdf_accepted(double t, const BtawlGeom& g,
   if (std::fabs(x0 - shift) > BAWL_NATURAL_Z_MAX ||
       std::fabs(x1 - shift) > BAWL_NATURAL_Z_MAX)
     return false;
-  const double mass = pnorm_std(x1, true, false) - pnorm_std(x0, true, false);
-  return mass > BAWL_NATURAL_REL_TOL *
-    std::fmax(1.0, std::fabs(pnorm_std(x1, true, false)) +
-                     std::fabs(pnorm_std(x0, true, false)));
+  const double cdf_hi = pnorm_std(x1, true, false);
+  const double cdf_lo = pnorm_std(x0, true, false);
+  const double mass = cdf_hi - cdf_lo;
+  const bool mass_ok = mass > BAWL_NATURAL_REL_TOL *
+    std::fmax(1.0, std::fabs(cdf_hi) + std::fabs(cdf_lo));
+  if (!mass_ok) return false;
+  // The density also uses the first launch moment.  Check its retained
+  // fraction separately; a well-resolved probability interval can still
+  // lose the density when p1*mass nearly cancels the endpoint-phi term.
+  if (launch == BTAWL_LAUNCH_LOGNORMAL) {
+    const double M = std::exp(p1 + 0.5 * p2 * p2);
+    const double m_hi = pnorm_std(x1 - p2, true, false);
+    const double m_lo = pnorm_std(x0 - p2, true, false);
+    const double first = M * (m_hi - m_lo);
+    return first > BAWL_NATURAL_REL_TOL *
+      std::fmax(1.0, std::fabs(M * m_hi) + std::fabs(M * m_lo));
+  }
+  const double lead = p1 * mass;
+  const double corr = p2 * (dnormP(x0) - dnormP(x1));
+  const double first = lead + corr;
+  return first > BAWL_NATURAL_REL_TOL *
+    std::fmax(1.0, std::fabs(lead) + std::fabs(corr));
 }
+
+namespace {
+
+// Exact log-space live-density moment evaluation. The live integrand is
+// affine in w = V*(t,z), so its start-point integral only needs the launch
+// mass and first moment over [w_lo, w_hi]. Signed-log assembly preserves the
+// positive result when the first-moment terms nearly cancel; unresolved cases
+// still fall through to the legacy z quadrature below.
+double btawl_log_live_pdf_stable(double t, const BtawlGeom& g,
+                                 double p1, double p2, int launch,
+                                 bool posdrift) {
+  if (g.A <= BTAWL_A_EPS || !(p2 > 0.0)) return R_NegInf;
+  const double zcut = g.k_zero ? g.A :
+    std::fmin(std::fmax(btawl_z_t(t, g), 0.0), g.A);
+  if (!(zcut > 0.0)) return R_NegInf;
+  const double h = btawl_h(t, g.k, g.tau);
+  const double E = g.k_zero ? 1.0 : std::exp(-g.k * t);
+  const double q = E / h;
+  if (!(h > 0.0) || !(q > 0.0) || !emc2_isfinite(q)) return R_NegInf;
+  const double whi = g.b / h;
+  const double wlo = (zcut < g.A && t < g.t_max)
+    ? g.k * g.b / btawl_g(t, g.tau) : whi - q * zcut;
+  if (!(whi > wlo) || !(wlo > 0.0) || !emc2_isfinite(wlo)) return R_NegInf;
+
+  const double hp = btawl_hp(t, g.k, g.tau);
+  const double d0 = g.b * hp / (h * h);
+  const double d1 = E * (g.k * h + hp) / (h * h);
+  const double c0 = d0 - d1 * (g.b / h) / q;
+  const double c1 = d1 / q;
+  if (!(c1 > 0.0) || !emc2_isfinite(c0) || !emc2_isfinite(c1))
+    return R_NegInf;
+
+  const double x0 = launch == BTAWL_LAUNCH_LOGNORMAL
+    ? (std::log(wlo) - p1) / p2 : (wlo - p1) / p2;
+  const double x1 = launch == BTAWL_LAUNCH_LOGNORMAL
+    ? (std::log(whi) - p1) / p2 : (whi - p1) / p2;
+  if (!(x1 > x0) || !emc2_isfinite(x0) || !emc2_isfinite(x1))
+    return R_NegInf;
+
+  const double lm0 = log_normal_interval(x0, x1);
+  if (!(lm0 > R_NegInf)) return R_NegInf;
+  const signed_log mass = make_signed_log(lm0, 1);
+  signed_log first{R_NegInf, 0};
+  if (launch == BTAWL_LAUNCH_LOGNORMAL) {
+    const double lm1 = p1 + 0.5 * p2 * p2 +
+      log_normal_interval(x0 - p2, x1 - p2);
+    first = make_signed_log(lm1, 1);
+  } else {
+    const signed_log lead = signed_log_product(p1, lm0);
+    const signed_log phi_diff = signed_log_sub(
+      make_signed_log(dnormP(x0, 0.0, 1.0, true), 1),
+      make_signed_log(dnormP(x1, 0.0, 1.0, true), 1));
+    signed_log tail = signed_log_product(p2, phi_diff.log_abs);
+    tail.sign = phi_diff.sign == 0 ? 0 : tail.sign * phi_diff.sign;
+    first = signed_log_add(lead, tail);
+  }
+  const signed_log affine = signed_log_add(
+    signed_log_product(c0, mass.log_abs),
+    signed_log_product(c1 * static_cast<double>(first.sign), first.log_abs));
+  if (affine.sign <= 0 || !(affine.log_abs > R_NegInf)) return R_NegInf;
+  const double log_den = (launch == BTAWL_LAUNCH_NORMAL && posdrift)
+    ? log_positive_normalizer(p1, p2, true, BTAWL_DENOM_FLOOR) : 0.0;
+  const double out = affine.log_abs - std::log(g.A) - std::log(q) - log_den;
+  return emc2_isfinite(out) ? out : R_NegInf;
+}
+
+} // namespace
 
 double btawl_log_pdf_from_geom(double t, const BtawlGeom& g, double p1,
                                       double p2, int launch, bool posdrift) {
@@ -602,6 +826,9 @@ double btawl_log_pdf_from_geom(double t, const BtawlGeom& g, double p1,
     return btawl_log_launch_pdf(w, p1, p2, launch, posdrift) +
       std::log(g.b) + std::log(hp) - 2.0 * std::log(h);
   }
+  const double stable = btawl_log_live_pdf_stable(t, g, p1, p2,
+                                                   launch, posdrift);
+  if (stable > R_NegInf) return stable;
   const double zcut = g.k_zero ? g.A :
     std::fmin(std::fmax(btawl_z_t(t, g), 0.0), g.A);
   if (!(zcut > 0.0)) return R_NegInf;
@@ -1033,10 +1260,11 @@ void dbtawl_transient_raw(const double* rt, const double* const* cols, int n_row
     if (!(rt[i] > 0.0) || !(tt > 0.0)) {
       out[i] = raw_log_zero(min_ll, floor_raw); continue;
     }
-    const double lp = btawl_uses_ttrans(ctx)
-      ? btawl_log_pdf_chart(tt, A[i], B[i] + A[i], p1[i], p2[i], k[i], clear[i],
-                            launch, pd, true, btawl_tau_of(ctx, clear[i], k[i]))
-      : btawl_pdf_log(tt, A[i], B[i] + A[i], p1[i], p2[i], k[i], clear[i], launch, pd);
+    const double tau = btawl_tau_of(ctx, clear[i], k[i]);
+    const BtawlGeom g = btawl_geometry_cached(ctx, btawl_uses_ttrans(ctx),
+                                              A[i], B[i] + A[i], k[i],
+                                              clear[i], tau);
+    const double lp = btawl_log_pdf_from_geom(tt, g, p1[i], p2[i], launch, pd);
     out[i] = (lp > R_NegInf && emc2_isfinite(lp))
       ? raw_log_value(lp, min_ll, floor_raw)
       : raw_log_zero(min_ll, floor_raw);
@@ -1063,16 +1291,22 @@ void pbtawl_transient_raw(const double* rt, const double* const* cols, int n_row
     const double tt = rt[i] - t0[i];
     if (!(rt[i] > 0.0) || !(tt > 0.0)) { out[i] = 0.0; continue; }
     const double tau = btawl_tau_of(ctx, clear[i], k[i]);
-    const BtawlGeom g = btawl_uses_ttrans(ctx)
-      ? btawl_geometry_from_ttrans(A[i], B[i] + A[i], k[i], clear[i], tau)
-      : btawl_geometry(A[i], B[i] + A[i], k[i], tau);
+    const BtawlGeom g = btawl_geometry_cached(ctx, btawl_uses_ttrans(ctx),
+                                              A[i], B[i] + A[i], k[i],
+                                              clear[i], tau);
+    if (emc2_isfinite(g.t_max) && tt >= g.t_max) {
+      const double ls = btawl_log_surv_cached(ctx, tt, g, clear[i], p1[i],
+                                              p2[i], launch, pd);
+      out[i] = (ls > R_NegInf && emc2_isfinite(ls))
+        ? ls : raw_log_zero(min_ll, floor_raw);
+      continue;
+    }
     double cdf = 0.0;
     if (btawl_natural_cdf_from_geom(tt, g, p1[i], p2[i], launch, pd, cdf)) {
       out[i] = (cdf > 0.0) ? std::log1p(-cdf) : 0.0;
     } else {
-      const double ls = launch == BTAWL_LAUNCH_LOGNORMAL
-        ? log_btawl_surv_logn(tt, g, p1[i], p2[i])
-        : log_btawl_surv_normal(tt, g, p1[i], p2[i], pd);
+      const double ls = btawl_log_surv_cached(ctx, tt, g, clear[i], p1[i],
+                                              p2[i], launch, pd);
       out[i] = (ls > R_NegInf && emc2_isfinite(ls))
         ? ls : raw_log_zero(min_ll, floor_raw);
     }
@@ -1102,10 +1336,12 @@ void btawl_transient_logS_at_t(double t, const double* const* cols,
       if (r >= n_rows_total || !isok_all[r] || R_IsNA(p1[r])) { bad = true; break; }
       const double tt = t - t0[r];
       if (!(tt > 0.0)) continue;
-      const double lsr = btawl_uses_ttrans(ctx)
-        ? btawl_log_surv_chart(tt, A[r], B[r] + A[r], p1[r], p2[r], k[r], clear[r],
-                              launch, pd, true, btawl_tau_of(ctx, clear[r], k[r]))
-        : btawl_log_surv(tt, A[r], B[r] + A[r], p1[r], p2[r], k[r], clear[r], launch, pd);
+      const double tau = btawl_tau_of(ctx, clear[r], k[r]);
+      const BtawlGeom g = btawl_geometry_cached(ctx, btawl_uses_ttrans(ctx),
+                                                A[r], B[r] + A[r], k[r],
+                                                clear[r], tau);
+      const double lsr = btawl_log_surv_cached(ctx, tt, g, clear[r], p1[r],
+                                               p2[r], launch, pd);
       if (!(lsr > R_NegInf) || ISNAN(lsr)) { bad = true; break; }
       ls += lsr;
     }
@@ -1120,10 +1356,21 @@ double dbtawl_local_race_scalar(double t, const double* par, void* ctx_) {
   const double tt = t - par[emc2col::btawl_local_race::t0];
   if (!(t > 0.0) || !(tt > 0.0)) return 0.0;
   const double b = par[emc2col::btawl_local_race::B] + par[emc2col::btawl_local_race::A];
+  const double tau_t = btawl_tau_of(ctx, par[emc2col::btawl_local_race::clear],
+                                    par[emc2col::btawl_local_race::k]);
+  if (par[emc2col::btawl_local_race::pi] <= 1e-14) {
+    const BtawlGeom g = btawl_geometry_cached(
+      ctx, btawl_uses_ttrans(ctx), par[emc2col::btawl_local_race::A], b,
+      par[emc2col::btawl_local_race::k], par[emc2col::btawl_local_race::clear],
+      tau_t);
+    return btawl_pdf_from_geom(tt, g, par[emc2col::btawl_local_race::v],
+                               par[emc2col::btawl_local_race::sv],
+                               btawl_launch_of(ctx), ctx ? ctx->use_posdrift : true);
+  }
   return btawl_local_race_pdf(tt, par[emc2col::btawl_local_race::A], b,
                        par[emc2col::btawl_local_race::v], par[emc2col::btawl_local_race::sv],
                        par[emc2col::btawl_local_race::k], par[emc2col::btawl_local_race::tau_s],
-                       btawl_tau_of(ctx, par[emc2col::btawl_local_race::clear], par[emc2col::btawl_local_race::k]), par[emc2col::btawl_local_race::pi],
+                       tau_t, par[emc2col::btawl_local_race::pi],
                        btawl_launch_of(ctx), ctx ? ctx->use_posdrift : true);
 }
 
@@ -1133,10 +1380,21 @@ double pbtawl_local_race_scalar(double t, const double* par, void* ctx_) {
   const double tt = t - par[emc2col::btawl_local_race::t0];
   if (!(t > 0.0) || !(tt > 0.0)) return 0.0;
   const double b = par[emc2col::btawl_local_race::B] + par[emc2col::btawl_local_race::A];
+  const double tau_t = btawl_tau_of(ctx, par[emc2col::btawl_local_race::clear],
+                                    par[emc2col::btawl_local_race::k]);
+  if (par[emc2col::btawl_local_race::pi] <= 1e-14) {
+    const BtawlGeom g = btawl_geometry_cached(
+      ctx, btawl_uses_ttrans(ctx), par[emc2col::btawl_local_race::A], b,
+      par[emc2col::btawl_local_race::k], par[emc2col::btawl_local_race::clear],
+      tau_t);
+    return btawl_cdf_from_geom(tt, g, par[emc2col::btawl_local_race::v],
+                               par[emc2col::btawl_local_race::sv],
+                               btawl_launch_of(ctx), ctx ? ctx->use_posdrift : true);
+  }
   return btawl_local_race_cdf(tt, par[emc2col::btawl_local_race::A], b,
                        par[emc2col::btawl_local_race::v], par[emc2col::btawl_local_race::sv],
                        par[emc2col::btawl_local_race::k], par[emc2col::btawl_local_race::tau_s],
-                       btawl_tau_of(ctx, par[emc2col::btawl_local_race::clear], par[emc2col::btawl_local_race::k]), par[emc2col::btawl_local_race::pi],
+                       tau_t, par[emc2col::btawl_local_race::pi],
                        btawl_launch_of(ctx), ctx ? ctx->use_posdrift : true);
 }
 
@@ -1160,8 +1418,17 @@ void dbtawl_local_race_raw(const double* rt, const double* const* cols, int n_ro
     if (!isok[i] || R_IsNA(p1[i])) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
     const double u = rt[i] - t0[i];
     if (!(rt[i] > 0.0) || !(u > 0.0)) { out[i] = raw_log_zero(min_ll, floor_raw); continue; }
-    const double lp = btawl_local_race_pdf_log(u, A[i], B[i] + A[i], p1[i], p2[i], k[i],
-                                        ts[i], btawl_tau_of(ctx, tt_clear[i], k[i]), pi[i], launch, pd);
+    const double tau_t = btawl_tau_of(ctx, tt_clear[i], k[i]);
+    double lp = R_NegInf;
+    if (pi[i] <= 1e-14) {
+      const BtawlGeom g = btawl_geometry_cached(ctx, btawl_uses_ttrans(ctx),
+                                                A[i], B[i] + A[i], k[i],
+                                                tt_clear[i], tau_t);
+      lp = btawl_log_pdf_from_geom(u, g, p1[i], p2[i], launch, pd);
+    } else {
+      lp = btawl_local_race_pdf_log(u, A[i], B[i] + A[i], p1[i], p2[i], k[i],
+                                    ts[i], tau_t, pi[i], launch, pd);
+    }
     out[i] = (lp > R_NegInf && emc2_isfinite(lp))
       ? raw_log_value(lp, min_ll, floor_raw) : raw_log_zero(min_ll, floor_raw);
   }
@@ -1188,13 +1455,37 @@ void pbtawl_local_race_raw(const double* rt, const double* const* cols, int n_ro
     const double u = rt[i] - t0[i];
     if (!(rt[i] > 0.0) || !(u > 0.0)) { out[i] = 0.0; continue; }
     const double tau_t = btawl_tau_of(ctx, tt_clear[i], k[i]);
-    const double cdf = btawl_local_race_cdf(u, A[i], B[i] + A[i], p1[i], p2[i], k[i],
-                                     ts[i], tau_t, pi[i], launch, pd);
-    if (emc2_isfinite(cdf) && cdf >= 0.0 && cdf < 1.0 - 1e-8) {
+    double cdf = 0.0;
+    bool cdf_ready = false;
+    if (pi[i] <= 1e-14) {
+      const BtawlGeom g = btawl_geometry_cached(ctx, btawl_uses_ttrans(ctx),
+                                                A[i], B[i] + A[i], k[i],
+                                                tt_clear[i], tau_t);
+      if (emc2_isfinite(g.t_max) && u >= g.t_max) {
+        const double ls = btawl_log_surv_cached(ctx, u, g, tt_clear[i],
+                                                p1[i], p2[i], launch, pd);
+        out[i] = (ls > R_NegInf && emc2_isfinite(ls))
+          ? ls : raw_log_zero(min_ll, floor_raw);
+        continue;
+      }
+      cdf_ready = btawl_natural_cdf_from_geom(u, g, p1[i], p2[i], launch, pd, cdf);
+      if (!cdf_ready) {
+        const double ls = btawl_log_surv_cached(ctx, u, g, tt_clear[i],
+                                                p1[i], p2[i], launch, pd);
+        out[i] = (ls > R_NegInf && emc2_isfinite(ls))
+          ? ls : raw_log_zero(min_ll, floor_raw);
+        continue;
+      }
+    } else {
+      cdf = btawl_local_race_cdf(u, A[i], B[i] + A[i], p1[i], p2[i], k[i],
+                                 ts[i], tau_t, pi[i], launch, pd);
+      cdf_ready = true;
+    }
+    if (cdf_ready && emc2_isfinite(cdf) && cdf >= 0.0 && cdf < 1.0 - 1e-8) {
       out[i] = (cdf > 0.0) ? std::log1p(-cdf) : 0.0;
     } else {
       const double ls = btawl_local_race_log_surv(u, A[i], B[i] + A[i], p1[i], p2[i], k[i],
-                                           ts[i], tau_t, pi[i], launch, pd);
+                                                  ts[i], tau_t, pi[i], launch, pd);
       out[i] = (ls > R_NegInf && emc2_isfinite(ls))
         ? ls : raw_log_zero(min_ll, floor_raw);
     }
@@ -1223,9 +1514,18 @@ void btawl_local_race_logS_at_t(double t, const double* const* cols,
       const int r = j * n_lR + kk;
       if (r >= n_rows_total || !isok_all[r] || R_IsNA(p1[r])) { bad = true; break; }
       const double u = t - t0[r]; if (!(u > 0.0)) continue;
-      const double lsr = btawl_local_race_log_surv(u, A[r], B[r] + A[r], p1[r], p2[r], k[r],
-                                            ts[r], btawl_tau_of(ctx, tt_clear[r], k[r]),
-                                            pi[r], launch, pd);
+      const double tau_t = btawl_tau_of(ctx, tt_clear[r], k[r]);
+      double lsr = R_NegInf;
+      if (pi[r] <= 1e-14) {
+        const BtawlGeom g = btawl_geometry_cached(ctx, btawl_uses_ttrans(ctx),
+                                                  A[r], B[r] + A[r], k[r],
+                                                  tt_clear[r], tau_t);
+        lsr = btawl_log_surv_cached(ctx, u, g, tt_clear[r], p1[r], p2[r],
+                                    launch, pd);
+      } else {
+        lsr = btawl_local_race_log_surv(u, A[r], B[r] + A[r], p1[r], p2[r], k[r],
+                                        ts[r], tau_t, pi[r], launch, pd);
+      }
       if (!(lsr > R_NegInf) || ISNAN(lsr)) { bad = true; break; }
       ls += lsr;
     }
@@ -1363,10 +1663,13 @@ NumericVector dbtawl_transient(NumericVector t, NumericVector A, NumericVector b
                      NumericVector tau, int launch = 1,
                      bool posdrift = true, bool log_out = false) {
   const int n = t.size(); NumericVector out(n);
+  ContextForRaceModels cache_ctx;
   auto pick = [](const NumericVector& x, int i) { return x.size() == 1 ? x[0] : x[i]; };
   for (int i = 0; i < n; ++i) {
-    const double lp = btawl_pdf_log(t[i], pick(A,i), pick(b,i), pick(p1,i),
-                                    pick(p2,i), pick(k,i), pick(tau,i), launch, posdrift);
+    const double Ai = pick(A, i), bi = pick(b, i), ki = pick(k, i), ti = pick(tau, i);
+    const BtawlGeom g = btawl_geometry_cached(&cache_ctx, false, Ai, bi, ki, ti, ti);
+    const double lp = btawl_log_pdf_from_geom(t[i], g, pick(p1,i), pick(p2,i),
+                                              launch, posdrift);
     out[i] = log_out ? lp : (lp > R_NegInf ? std::exp(lp) : 0.0);
   }
   return out;
@@ -1378,10 +1681,14 @@ NumericVector pbtawl_transient(NumericVector t, NumericVector A, NumericVector b
                      NumericVector tau, int launch = 1,
                      bool posdrift = true, bool log_out = false) {
   const int n = t.size(); NumericVector out(n);
+  ContextForRaceModels cache_ctx;
   auto pick = [](const NumericVector& x, int i) { return x.size() == 1 ? x[0] : x[i]; };
   for (int i = 0; i < n; ++i) {
-    const double lp = btawl_cdf_log(t[i], pick(A,i), pick(b,i), pick(p1,i),
-                                    pick(p2,i), pick(k,i), pick(tau,i), launch, posdrift);
+    const double Ai = pick(A, i), bi = pick(b, i), ki = pick(k, i), ti = pick(tau, i);
+    const BtawlGeom g = btawl_geometry_cached(&cache_ctx, false, Ai, bi, ki, ti, ti);
+    const double lp = launch == BTAWL_LAUNCH_LOGNORMAL
+      ? log_btawl_cdf_logn(t[i], g, pick(p1,i), pick(p2,i))
+      : log_btawl_cdf_normal(t[i], g, pick(p1,i), pick(p2,i), posdrift);
     out[i] = log_out ? lp : (lp > R_NegInf ? std::exp(lp) : 0.0);
   }
   return out;
@@ -1396,11 +1703,14 @@ NumericVector btawl_transient_log_surv_vec(NumericVector t, NumericVector A,
   const int n = std::max({t.size(), A.size(), b.size(), p1.size(), p2.size(),
                           k.size(), tau.size()});
   NumericVector out(n);
+  ContextForRaceModels cache_ctx;
   auto pick = [](const NumericVector& x, int i) { return x.size() == 1 ? x[0] : x[i]; };
-  for (int i = 0; i < n; ++i)
-    out[i] = btawl_log_surv(pick(t, i), pick(A, i), pick(b, i), pick(p1, i),
-                            pick(p2, i), pick(k, i), pick(tau, i), launch,
-                            posdrift);
+  for (int i = 0; i < n; ++i) {
+    const double Ai = pick(A, i), bi = pick(b, i), ki = pick(k, i), ti = pick(tau, i);
+    const BtawlGeom g = btawl_geometry_cached(&cache_ctx, false, Ai, bi, ki, ti, ti);
+    out[i] = btawl_log_surv_cached(&cache_ctx, pick(t, i), g, ti,
+                                   pick(p1, i), pick(p2, i), launch, posdrift);
+  }
   return out;
 }
 

@@ -408,8 +408,9 @@ test_that("constructors expose full local-race and pure-process charts", {
   expect_true("Ttrans" %in% names(endpoint$p_types))
   expect_true(all(c("tau_s", "Ttrans", "pi") %in% endpoint$p_types_canonical))
   expect_true(all(c("tau_s", "tau_t", "pi") %in% rate$p_types_canonical))
-  expect_equal(BTAwLTransient()$c_name, "BTAwL_TRANSIENT")
-  expect_equal(BTAwLSustained()$c_name, "BTAwL_SUSTAINED")
+  # The public defaults are the lognormal/rate chart.
+  expect_equal(BTAwLTransient()$c_name, "BTAwL_TRANSIENT_LOGN_RATE")
+  expect_equal(BTAwLSustained()$c_name, "BTAwL_SUSTAINED_LOGN")
 })
 
 test_that("Ttransform reports b, tau, Tmax, rt_max and Vcrit", {
@@ -518,9 +519,11 @@ test_that("the compiled race likelihood matches the R reference", {
   p <- c(mu = 0.5, sigma = log(0.5), v = 2.5, sv = log(1), B = log(0.8),
          A = log(0.3), t0 = log(0.15), k = log(1), Ttrans = log(2))
   fx <- list(
-    ln = suppressMessages(btawl_mk(function() BTAwLTransient(drift_distribution = "lognormal"),
+    ln = suppressMessages(btawl_mk(function() BTAwLTransient(
+      drift_distribution = "lognormal", chart = "endpoint"),
       list(mu ~ 1, sigma ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1, Ttrans ~ 1), NULL, dat)),
-    no = suppressMessages(btawl_mk(function() BTAwLTransient(drift_distribution = "normal"),
+    no = suppressMessages(btawl_mk(function() BTAwLTransient(
+      drift_distribution = "normal", chart = "endpoint"),
       list(v ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1, Ttrans ~ 1), c(sv = log(1)), dat)))
   for (which in c("ln", "no")) {
     launch <- if (which == "ln") 1L else 0L
@@ -536,11 +539,13 @@ test_that("the compiled race likelihood matches the R reference", {
 test_that("a p_types reordering is caught by the column contract", {
   skip_on_cran()
   dat <- btawl_dat()
-  fx <- suppressMessages(btawl_mk(function() BTAwLTransient(drift_distribution = "lognormal"),
+  fx <- suppressMessages(btawl_mk(function() BTAwLTransient(
+    drift_distribution = "lognormal", chart = "endpoint"),
     list(mu ~ 1, sigma ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1, Ttrans ~ 1), NULL, dat))
   p <- c(mu = 0.5, sigma = log(0.5), B = log(0.8), A = log(0.3),
          t0 = log(0.15), k = log(1), Ttrans = log(2))
-  swapped <- names(BTAwLTransient(drift_distribution = "lognormal")$p_types)
+  swapped <- names(BTAwLTransient(drift_distribution = "lognormal",
+                                 chart = "endpoint")$p_types)
   swapped[1:2] <- swapped[2:1]
   expect_error(btawl_ll(fx, p[names(sampled_pars(fx$des))],
                         p_types_override = swapped),
@@ -552,7 +557,8 @@ test_that("omissions past t0 + T_max stay well posed", {
   dat <- btawl_dat(80)
   dat$rt[1:8] <- Inf
   dat$R[1:8] <- NA
-  fx <- suppressMessages(btawl_mk(function() BTAwLTransient(drift_distribution = "lognormal"),
+  fx <- suppressMessages(btawl_mk(function() BTAwLTransient(
+    drift_distribution = "lognormal", chart = "endpoint"),
     list(mu ~ 1, sigma ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1, Ttrans ~ 1), NULL, dat))
   p <- c(mu = 0.5, sigma = log(0.5), B = log(0.8), A = log(0.3),
          t0 = log(0.15), k = log(1), Ttrans = log(2))
@@ -565,7 +571,8 @@ test_that("omissions past t0 + T_max stay well posed", {
   # Beyond endpoint floored
   dat2 <- dat
   dat2$rt[1:8] <- 0.15 + 2 + 5
-  fx2 <- suppressMessages(btawl_mk(function() BTAwLTransient(drift_distribution = "lognormal"),
+  fx2 <- suppressMessages(btawl_mk(function() BTAwLTransient(
+    drift_distribution = "lognormal", chart = "endpoint"),
     list(mu ~ 1, sigma ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1, Ttrans ~ 1), NULL, dat2))
   expect_true(is.finite(btawl_ll(fx2, p[names(sampled_pars(fx2$des))])))
 })
@@ -695,7 +702,9 @@ test_that("the transient design produces omissions that can be fit back through"
   skip_on_cran()
   dat <- btawl_dat(40)
   des <- suppressMessages(design(
-    data = dat, model = BTAwLTransient, matchfun = function(d) d$S == d$lR,
+    data = dat,
+    model = function() BTAwLTransient(drift_distribution = "normal", chart = "endpoint"),
+    matchfun = function(d) d$S == d$lR,
     formula = list(v ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1, Ttrans ~ 1),
     constants = c(sv = log(1))))
   p <- c(v = 2.5, B = log(0.8), A = log(0.3), t0 = log(0.15),

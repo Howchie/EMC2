@@ -241,4 +241,32 @@ inline double bawd_log_gl_split(const LogFun& log_f, double a, double b,
   return bawd_log_gl(log_f, a, b, n);
 }
 
+// Natural-space companion used by kernels that can certify that the
+// integrand is resolved.  Keeping this beside the log rule makes the
+// BTAwL fast path use the same cached GL rules and panel convention as the
+// exact fallback; callers remain responsible for checking the result and
+// falling back to bawd_log_gl_split when cancellation or underflow is seen.
+template <typename Fun>
+inline double bawd_nat_gl(const Fun& f, double a, double b, int n) {
+  if (!(b > a) || !emc2_isfinite(a) || !emc2_isfinite(b)) return 0.0;
+  if (n > BAWD_GL_MAX_NODES) n = BAWD_GL_MAX_NODES;
+  const GLRule& r = gl_get_rule(n);
+  const double c1 = 0.5 * (b - a), c2 = 0.5 * (b + a);
+  double acc = 0.0;
+  for (int i = 0; i < n; ++i) {
+    const double value = f(c1 * r.x[i] + c2);
+    if (value > 0.0 && emc2_isfinite(value)) acc += r.w[i] * value;
+  }
+  const double out = c1 * acc;
+  return emc2_isfinite(out) && out >= 0.0 ? out : 0.0;
+}
+
+template <typename Fun>
+inline double bawd_nat_gl_split(const Fun& f, double a, double b,
+                                double mid, int n) {
+  if (mid > a && mid < b)
+    return bawd_nat_gl(f, a, mid, n) + bawd_nat_gl(f, mid, b, n);
+  return bawd_nat_gl(f, a, b, n);
+}
+
 #endif  // EMC2_QUAD_TEMPLATES_H

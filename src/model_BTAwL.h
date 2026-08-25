@@ -21,6 +21,7 @@
 #include <functional>
 #include <algorithm>
 #include <limits>
+#include <vector>
 #include "model_BAwD.h"
 
 // Keep BTAwL's launch selector and numerical thresholds identical to BAwL.
@@ -41,6 +42,52 @@ struct BtawlGeom {
   // the same monotone equation for every evaluation.
   double s_lo = R_PosInf;
 };
+
+// Per-particle cache for the likelihood-local BTAwL geometry.  The cache is
+// deliberately keyed by the exact floating-point inputs: this is a reuse
+// cache for replicated race rows, not an approximation.  It is held through
+// ContextForRaceModels as a shared_ptr so the raw and dense likelihood paths
+// see the same entries.
+namespace btawl {
+struct SolveCacheEntry {
+  bool endpoint = false;
+  double A = R_NaN, b = R_NaN, k = R_NaN, clear = R_NaN, tau = R_NaN;
+  BtawlGeom geom;
+};
+
+struct PlateauCacheEntry {
+  double A = R_NaN, b = R_NaN, k = R_NaN, clear = R_NaN, tau = R_NaN;
+  double p1 = R_NaN, p2 = R_NaN, value = R_NaN;
+  int launch = -1;
+  bool posdrift = false;
+};
+
+struct SolveCache {
+  static constexpr std::size_t max_entries = 128;
+  std::vector<SolveCacheEntry> geometry;
+  std::vector<PlateauCacheEntry> plateau_survivors;
+
+  void new_particle() { geometry.clear(); plateau_survivors.clear(); }
+};
+} // namespace btawl
+
+struct ContextForRaceModels;
+
+// Obtain geometry from the likelihood-local exact-key cache.  `endpoint`
+// selects the Ttrans chart; in the tau chart `clear == tau` and `tau` is
+// ignored for the key beyond documenting the solved parameter.
+BtawlGeom btawl_geometry_cached(ContextForRaceModels* ctx, bool endpoint,
+                                double A, double b, double k, double clear,
+                                double tau);
+
+double btawl_log_surv_cached(ContextForRaceModels* ctx, double t,
+                             const BtawlGeom& g, double clear,
+                             double p1, double p2, int launch,
+                             bool posdrift);
+
+// Reset the cache at the start of each particle.  This is a no-op until the
+// first BTAwL row creates the lazy cache object.
+void btawl_cache_new_particle(ContextForRaceModels* ctx);
 
 double btawl_h(double t, double k, double tau);
 

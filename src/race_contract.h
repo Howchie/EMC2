@@ -15,6 +15,9 @@ struct SolveCache;
 namespace rlf {
 struct SolveCache;
 }
+namespace btawl {
+struct SolveCache;
+}
 
 // Launch selectors mirror the model-specific BAW* constants without making
 // this contract header depend on model implementation headers.
@@ -123,7 +126,11 @@ struct ContextForRaceModels {
     // true samples the observable transient endpoint Ttrans and back-solves
     // tau before entering the shared geometry.
     bool btawl_ttrans_chart = false;
-    static constexpr int btawl_tau_cache_size = 4;
+    // A particle can contain many replicated accumulators with distinct
+    // endpoint-chart (k, Ttrans) pairs.  Keep enough exact entries to avoid
+    // repeatedly re-solving the same inverse while remaining tiny compared
+    // with the parameter matrix.
+    static constexpr int btawl_tau_cache_size = 16;
     mutable double btawl_tau_cache_k[btawl_tau_cache_size] =
       {R_NaN, R_NaN, R_NaN, R_NaN};
     mutable double btawl_tau_cache_clear[btawl_tau_cache_size] =
@@ -131,6 +138,10 @@ struct ContextForRaceModels {
     mutable double btawl_tau_cache_value[btawl_tau_cache_size] =
       {R_NaN, R_NaN, R_NaN, R_NaN};
     mutable int btawl_tau_cache_next = 0;
+    // Geometry/tangency cache for replicated BTAwL likelihood rows.  The
+    // concrete type lives in model_BTAwL.h; keeping it behind shared_ptr here
+    // avoids coupling the common race contract to the analytic implementation.
+    std::shared_ptr<btawl::SolveCache> btawl_cache;
 
     // Fixed BAwD clearance-fade exponent parsed from the c_name suffix.
     // Allowed values are mirrored in R/model_BAwD.R.
