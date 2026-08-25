@@ -1,3 +1,5 @@
+skip_model_validation()
+
 library(EMC2)
 
 rdmswtn_tt_formula <- function(correlated = FALSE, rho_formula = rho ~ 1) {

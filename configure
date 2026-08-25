@@ -2,10 +2,13 @@
 # configure — build-profile scaffolding for EMC2 (hand-written; not autoconf).
 #
 # Generates src/Makevars from src/Makevars.in using the compiler selected by R.
-# The default profile keeps the historical optimisation flags; full OpenMP
+# The default profile keeps the historical optimisation levels; full OpenMP
 # stays off unless opted into, while -fopenmp-simd is probed and enabled
-# automatically when supported (--disable-openmp-simd opts out). Named profiles
-# remain opt-in only: no silent profile switch happens.
+# automatically when supported (--disable-openmp-simd opts out). On Linux
+# x86_64 configure additionally probes the CPU and picks the best supported
+# -march=<level>, falling back to -march=native, so the default build gets the
+# fastest code the running compiler can target without any user flags. Named
+# profiles remain opt-in only: no silent profile switch happens.
 #
 # Usage:
 #   R CMD INSTALL .
@@ -22,7 +25,9 @@
 #                               (on by default whenever the probe succeeds);
 #                               requests it explicitly and warns if the probe
 #                               fails.
-#   --disable-openmp-simd       Force -fopenmp-simd off even if supported.
+#   --disable-parallel-build  Disable automatic parallel compilation.
+#   --with-make-jobs=N        Force N compile jobs; may also be set via
+#                               EMC2_MAKE_JOBS.
 #   --help, -h                  Show this help.
 
 set -u
@@ -48,11 +53,29 @@ case "$CXX_FULL" in
 esac
 R_CXXFLAGS="$(R CMD config CXXFLAGS 2>/dev/null)"
 
+# The C compiler is probed separately: $(MARCH_CXXFLAGS) is consumed by both
+# override CXXFLAGS and override CFLAGS, so an explicit level may only be
+# emitted when BOTH drivers accept it. A mixed-age toolchain (newer g++ than
+# gcc) would otherwise break the bundled GSL sources with "bad value for
+# -march" while the C++ half builds fine.
+CC_FULL="$(R CMD config CC 2>/dev/null)" || CC_FULL=""
+CC_BIN="${CC_FULL%% *}"
+R_CFLAGS="$(R CMD config CFLAGS 2>/dev/null)"
+
 # ---------------------------------------------------------------------------
 # Defaults and selector resolution.
 # ---------------------------------------------------------------------------
 ENV_PROFILE="${EMC2_BUILD_PROFILE:-}"
 CLI_PROFILE=""
+ENV_MAKE_JOBS="${EMC2_MAKE_JOBS-}"
+if [ "${EMC2_MAKE_JOBS+x}" = x ]; then
+  ENV_MAKE_JOBS_SET=yes
+else
+  ENV_MAKE_JOBS_SET=no
+fi
+CLI_MAKE_JOBS=""
+CLI_MAKE_JOBS_SET=no
+DISABLE_PARALLEL_BUILD=no
 ENABLE_OPENMP=no
 ENABLE_OPENMP_SIMD=auto
 
@@ -64,9 +87,10 @@ for arg in "$@"; do
 configure options for EMC2:
 
   --with-build-profile=NAME   Select the build profile (default: legacy):
-                                legacy         exact historical flags
+                                legacy         historical -O3/-ffast-math
+                                               levels; -march chosen by probing
                                 compatibility  conservative, R default -O2
-                                performance    opt-in -O3 -march=native
+                                performance    opt-in -O3 with probed -march
                                 diagnostic     performance + optimisation reports
                               May also be set via EMC2_BUILD_PROFILE.
 
@@ -78,6 +102,10 @@ configure options for EMC2:
                               requests it explicitly and warns if unsupported.
   --disable-openmp-simd       Never add -fopenmp-simd, even if supported.
 
+  --disable-parallel-build    Disable automatic parallel compilation.
+  --with-make-jobs=N          Force exactly N compile jobs (positive integer);
+                              may also be set via EMC2_MAKE_JOBS.
+
   --help, -h                  Show this help message and exit.
 
 Examples:
@@ -85,15 +113,20 @@ Examples:
   R CMD INSTALL --configure-args="--with-build-profile=compatibility" .
   R CMD INSTALL --configure-args="--with-build-profile=diagnostic" .
 
-The default (legacy) reproduces the pre-refactor optimisation flags and does
-not enable OpenMP threading. -fopenmp-simd is added automatically when the
-compiler supports it unless --disable-openmp-simd is given. Profiles other
-than legacy are opt-in.
+The default (legacy) keeps the pre-refactor optimisation levels (-O3,
+-ffast-math) but its -march is now selected by configure probing and falls
+back to -march=native; it does not enable OpenMP threading. -fopenmp-simd is
+added automatically when the compiler supports it unless --disable-openmp-simd
+is given. Profiles other than legacy are opt-in.
 EOF
       exit 0
       ;;
     --with-build-profile=*)
       CLI_PROFILE="${arg#*=}"
+      ;;
+    --with-make-jobs=*)
+      CLI_MAKE_JOBS="${arg#*=}"
+      CLI_MAKE_JOBS_SET=yes
       ;;
     --enable-openmp)
       ENABLE_OPENMP=yes
@@ -106,6 +139,9 @@ EOF
       ;;
     --disable-openmp-simd)
       ENABLE_OPENMP_SIMD=no
+      ;;
+    --disable-parallel-build)
+      DISABLE_PARALLEL_BUILD=yes
       ;;
     *)
       echo "configure: warning: unrecognised option '$arg' (ignored)" >&2
@@ -137,6 +173,364 @@ case "$BUILD_PROFILE" in
 esac
 
 # ---------------------------------------------------------------------------
+# Parallel compilation job selection.
+#
+# Use the process CPU affinity before falling back to nproc --all or
+# getconf. Intersect that count with finite cgroup CPU quotas, then cap by
+# MemAvailable at approximately one GiB per compiler process. The generated
+# Makevars fragment re-checks live MAKEFLAGS so explicit caller parallelism
+# and parent jobservers always take precedence.
+# ---------------------------------------------------------------------------
+count_allowed_cpus() {
+  allowed_list=$1
+  allowed_count=0
+  saved_ifs=$IFS
+  IFS=,
+  for allowed_range in $allowed_list; do
+    case "$allowed_range" in
+      *-*)
+        allowed_start=${allowed_range%%-*}
+        allowed_end=${allowed_range#*-}
+        case "$allowed_start:$allowed_end" in
+          *[!0-9:]*|:*|*:) continue ;;
+        esac
+        if [ "$allowed_end" -ge "$allowed_start" ]; then
+          allowed_count=$((allowed_count + allowed_end - allowed_start + 1))
+        fi
+        ;;
+      '')
+        ;;
+      *[!0-9]*)
+        ;;
+      *)
+        allowed_count=$((allowed_count + 1))
+        ;;
+    esac
+  done
+  IFS=$saved_ifs
+  echo "$allowed_count"
+}
+validate_make_jobs() {
+  val_jobs=$1
+  case "$val_jobs" in
+    ''|*[!0-9]*)
+      echo "configure: error: invalid make job count '$val_jobs' (expected a positive integer)" >&2
+      exit 1
+      ;;
+  esac
+  case "$val_jobs" in
+    *[1-9]*)
+      ;;
+    *)
+      echo "configure: error: invalid make job count '$val_jobs' (expected a positive integer)" >&2
+      exit 1
+      ;;
+  esac
+}
+
+cpu_cores=""
+cpu_allowed_list=""
+if [ -r /proc/self/status ]; then
+  cpu_status_line=""
+  while IFS= read -r cpu_status_line || [ -n "$cpu_status_line" ]; do
+    case "$cpu_status_line" in
+      Cpus_allowed_list:*)
+        cpu_allowed_list="${cpu_status_line#*:}"
+        cpu_allowed_list="${cpu_allowed_list#"${cpu_allowed_list%%[![:space:]]*}"}"
+        cpu_allowed_list="${cpu_allowed_list%%[[:space:]]*}"
+        break
+        ;;
+    esac
+  done < /proc/self/status
+  if [ -n "$cpu_allowed_list" ]; then
+    cpu_cores="$(count_allowed_cpus "$cpu_allowed_list")"
+  fi
+fi
+
+case "$cpu_cores" in
+  ''|*[!0-9]*|0) cpu_cores="" ;;
+esac
+if [ -z "$cpu_cores" ] && command -v nproc >/dev/null 2>&1; then
+  cpu_cores="$(nproc --all 2>/dev/null)" || cpu_cores=""
+  case "$cpu_cores" in
+    ''|*[!0-9]*|0) cpu_cores="" ;;
+  esac
+fi
+if [ -z "$cpu_cores" ] && command -v getconf >/dev/null 2>&1; then
+  cpu_cores="$(getconf _NPROCESSORS_ONLN 2>/dev/null)" || cpu_cores=""
+  case "$cpu_cores" in
+    ''|*[!0-9]*|0) cpu_cores="" ;;
+  esac
+fi
+case "$cpu_cores" in
+  ''|*[!0-9]*|0) cpu_cores=1 ;;
+esac
+
+cgroup_v2_path=""
+cgroup_v1_path=""
+if [ -r /proc/self/cgroup ]; then
+  cgroup_proc_line=""
+  while IFS= read -r cgroup_proc_line || [ -n "$cgroup_proc_line" ]; do
+    case "$cgroup_proc_line" in
+      0::*)
+        if [ -z "$cgroup_v2_path" ]; then
+          cgroup_v2_path="${cgroup_proc_line#0::}"
+        fi
+        ;;
+      *:*)
+        cgroup_rest="${cgroup_proc_line#*:}"
+        cgroup_controllers="${cgroup_rest%%:*}"
+        cgroup_entry_path="${cgroup_rest#*:}"
+        case ",$cgroup_controllers," in
+          *,cpu,*|*,cpuacct,*)
+            if [ -z "$cgroup_v1_path" ]; then
+              cgroup_v1_path="$cgroup_entry_path"
+            fi
+            ;;
+        esac
+        ;;
+    esac
+  done < /proc/self/cgroup
+fi
+
+cgroup_v2_mount=""
+cgroup_v1_mount=""
+if [ -r /proc/mounts ]; then
+  mount_dev=""
+  mount_mp=""
+  mount_fstype=""
+  mount_opts=""
+  rest=""
+  while read -r mount_dev mount_mp mount_fstype mount_opts rest || [ -n "$mount_dev" ]; do
+    case "$mount_fstype" in
+      cgroup2)
+        if [ -z "$cgroup_v2_mount" ] && [ -n "$mount_mp" ] && [ -d "$mount_mp" ]; then
+          cgroup_v2_mount="$mount_mp"
+        fi
+        ;;
+      cgroup)
+        case ",$mount_opts," in
+          *,cpu,*|*,cpuacct,*)
+            if [ -z "$cgroup_v1_mount" ] && [ -n "$mount_mp" ] && [ -d "$mount_mp" ]; then
+              cgroup_v1_mount="$mount_mp"
+            fi
+            ;;
+        esac
+        ;;
+    esac
+  done < /proc/mounts
+fi
+
+if [ -z "$cgroup_v2_mount" ]; then
+  if [ -d /sys/fs/cgroup ] && [ ! -d /sys/fs/cgroup/cpu ]; then
+    cgroup_v2_mount="/sys/fs/cgroup"
+  elif [ -d /sys/fs/cgroup/unified ]; then
+    cgroup_v2_mount="/sys/fs/cgroup/unified"
+  fi
+fi
+if [ -z "$cgroup_v1_mount" ]; then
+  for candidate in /sys/fs/cgroup/cpu,cpuacct /sys/fs/cgroup/cpu /sys/fs/cgroup/cpuacct; do
+    if [ -d "$candidate" ]; then
+      cgroup_v1_mount="$candidate"
+      break
+    fi
+  done
+fi
+
+cgroup_quota_jobs=""
+
+# Probe cgroup v2 hierarchy (from process cgroup path up to mount root)
+if [ -n "$cgroup_v2_mount" ] && [ -d "$cgroup_v2_mount" ]; then
+  cg2_rel="${cgroup_v2_path:-/}"
+  case "$cg2_rel" in
+    /*) ;;
+    *) cg2_rel="/$cg2_rel" ;;
+  esac
+  cg2_rel="${cg2_rel%/}"
+  curr_cg_dir="$cgroup_v2_mount$cg2_rel"
+
+  while :; do
+    if [ -r "$curr_cg_dir/cpu.max" ]; then
+      cg_max=""
+      cg_period=""
+      read cg_max cg_period < "$curr_cg_dir/cpu.max" 2>/dev/null || :
+      case "$cg_max" in
+        max|''|*[!0-9]*)
+          ;;
+        *)
+          case "$cg_period" in
+            ''|*[!0-9]*|0)
+              ;;
+            *)
+              cg_jobs=$((cg_max / cg_period))
+              if [ "$cg_jobs" -lt 1 ] && [ "$cg_max" -gt 0 ]; then
+                cg_jobs=1
+              fi
+              if [ -z "$cgroup_quota_jobs" ] || [ "$cg_jobs" -lt "$cgroup_quota_jobs" ]; then
+                cgroup_quota_jobs="$cg_jobs"
+              fi
+              ;;
+          esac
+          ;;
+      esac
+    fi
+
+    if [ "$curr_cg_dir" = "$cgroup_v2_mount" ] || [ -z "$curr_cg_dir" ]; then
+      break
+    fi
+    parent_cg_dir="${curr_cg_dir%/*}"
+    case "$parent_cg_dir" in
+      "$cgroup_v2_mount"/*|"$cgroup_v2_mount")
+        curr_cg_dir="$parent_cg_dir"
+        ;;
+      *)
+        curr_cg_dir="$cgroup_v2_mount"
+        ;;
+    esac
+  done
+fi
+
+# Probe cgroup v1 hierarchy (from process cgroup path up to mount root)
+if [ -n "$cgroup_v1_mount" ] && [ -d "$cgroup_v1_mount" ]; then
+  cg1_rel="${cgroup_v1_path:-/}"
+  case "$cg1_rel" in
+    /*) ;;
+    *) cg1_rel="/$cg1_rel" ;;
+  esac
+  cg1_rel="${cg1_rel%/}"
+  curr_cg_dir="$cgroup_v1_mount$cg1_rel"
+
+  while :; do
+    if [ -r "$curr_cg_dir/cpu.cfs_quota_us" ] && [ -r "$curr_cg_dir/cpu.cfs_period_us" ]; then
+      cg_quota=""
+      cg_period=""
+      read cg_quota < "$curr_cg_dir/cpu.cfs_quota_us" 2>/dev/null || :
+      read cg_period < "$curr_cg_dir/cpu.cfs_period_us" 2>/dev/null || :
+      case "$cg_quota" in
+        -1|''|*[!0-9]*)
+          ;;
+        *)
+          case "$cg_period" in
+            ''|*[!0-9]*|0)
+              ;;
+            *)
+              cg_jobs=$((cg_quota / cg_period))
+              if [ "$cg_jobs" -lt 1 ] && [ "$cg_quota" -gt 0 ]; then
+                cg_jobs=1
+              fi
+              if [ -z "$cgroup_quota_jobs" ] || [ "$cg_jobs" -lt "$cgroup_quota_jobs" ]; then
+                cgroup_quota_jobs="$cg_jobs"
+              fi
+              ;;
+          esac
+          ;;
+      esac
+    fi
+
+    if [ "$curr_cg_dir" = "$cgroup_v1_mount" ] || [ -z "$curr_cg_dir" ]; then
+      break
+    fi
+    parent_cg_dir="${curr_cg_dir%/*}"
+    case "$parent_cg_dir" in
+      "$cgroup_v1_mount"/*|"$cgroup_v1_mount")
+        curr_cg_dir="$parent_cg_dir"
+        ;;
+      *)
+        curr_cg_dir="$cgroup_v1_mount"
+        ;;
+    esac
+  done
+fi
+
+if [ -n "$cgroup_quota_jobs" ] && [ "$cgroup_quota_jobs" -lt "$cpu_cores" ]; then
+  cpu_cores=$cgroup_quota_jobs
+fi
+case "$cpu_cores" in
+  ''|*[!0-9]*|0) cpu_cores=1 ;;
+esac
+
+ram_jobs="$cpu_cores"
+mem_available_kb=""
+if [ -r /proc/meminfo ]; then
+  meminfo_line=""
+  while IFS= read -r meminfo_line || [ -n "$meminfo_line" ]; do
+    case "$meminfo_line" in
+      MemAvailable:*)
+        mem_available_kb="${meminfo_line#*:}"
+        mem_available_kb="${mem_available_kb#"${mem_available_kb%%[![:space:]]*}"}"
+        mem_available_kb="${mem_available_kb%%[[:space:]]*}"
+        break
+        ;;
+    esac
+  done < /proc/meminfo
+  case "$mem_available_kb" in
+    ''|*[!0-9]*)
+      ;;
+    *)
+      ram_jobs=$((mem_available_kb / 1048576))
+      [ "$ram_jobs" -ge 1 ] || ram_jobs=1
+      ;;
+  esac
+fi
+auto_jobs="$cpu_cores"
+if [ "$ram_jobs" -lt "$auto_jobs" ]; then
+  auto_jobs="$ram_jobs"
+fi
+[ "$auto_jobs" -ge 1 ] || auto_jobs=1
+
+MAKE_JOBS=0
+parallel_build_detail=""
+# Validate every supplied source before applying disable or conflict branches
+if [ "$CLI_MAKE_JOBS_SET" = yes ]; then
+  validate_make_jobs "$CLI_MAKE_JOBS"
+fi
+if [ "$ENV_MAKE_JOBS_SET" = yes ]; then
+  validate_make_jobs "$ENV_MAKE_JOBS"
+fi
+
+if [ "$CLI_MAKE_JOBS_SET" = yes ] && [ "$ENV_MAKE_JOBS_SET" = yes ] &&
+   [ "$CLI_MAKE_JOBS" != "$ENV_MAKE_JOBS" ]; then
+  echo "configure: error: conflicting make jobs: --with-make-jobs=$CLI_MAKE_JOBS vs EMC2_MAKE_JOBS=$ENV_MAKE_JOBS" >&2
+  exit 1
+fi
+
+forced_jobs=""
+forced_origin=""
+forced_jobs_set=no
+if [ "$CLI_MAKE_JOBS_SET" = yes ]; then
+  forced_jobs="$CLI_MAKE_JOBS"
+  forced_origin="--with-make-jobs"
+  forced_jobs_set=yes
+elif [ "$ENV_MAKE_JOBS_SET" = yes ]; then
+  forced_jobs="$ENV_MAKE_JOBS"
+  forced_origin="EMC2_MAKE_JOBS"
+  forced_jobs_set=yes
+fi
+
+if [ "$DISABLE_PARALLEL_BUILD" = yes ]; then
+  parallel_build_detail="disabled (--disable-parallel-build)"
+elif [ "$forced_jobs_set" = yes ]; then
+  MAKE_JOBS="$forced_jobs"
+  parallel_build_detail="-j$MAKE_JOBS (forced via $forced_origin)"
+else
+  MAKE_JOBS="$auto_jobs"
+  if [ "$MAKE_JOBS" -le 1 ]; then
+    MAKE_JOBS=0
+    if [ "$cpu_cores" -le 1 ]; then
+      parallel_build_detail="disabled (only 1 usable core detected)"
+    elif [ "$ram_jobs" -le 1 ]; then
+      parallel_build_detail="disabled (RAM cap allows only 1 job)"
+    else
+      parallel_build_detail="disabled (auto-detection selected 1 job)"
+    fi
+  elif [ "$ram_jobs" -lt "$cpu_cores" ]; then
+    parallel_build_detail="-j$MAKE_JOBS ($MAKE_JOBS of $cpu_cores usable cores; RAM-capped)"
+  else
+    parallel_build_detail="-j$MAKE_JOBS ($MAKE_JOBS of $cpu_cores usable cores; auto)"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
 # Compiler-specific optimisation/vectorisation report flags for the diagnostic
 # profile. GCC and Clang differ; anything else falls back to the GCC spelling.
 # ---------------------------------------------------------------------------
@@ -157,6 +551,193 @@ workdir="$(mktemp -d "${TMPDIR:-/tmp}/emc2-config.XXXXXX")" || {
   exit 1
 }
 trap 'rm -rf "$workdir"' 0
+
+# ---------------------------------------------------------------------------
+# Capability-gated -march selection (Linux x86_64 only).
+#
+# -march=native is resolved from the compiler's built-in CPU table, which on
+# older compilers silently degrades for newer CPUs (e.g. GCC 11 maps AMD
+# EPYC Genoa to znver3). On Linux x86_64 we therefore ask the compiler what
+# -march=native actually resolves to and compare that against the CPU's
+# advertised capabilities, preferring the newest supported -march=<level>
+# that outranks it and still compiles a trivial probe program. Native is
+# trusted whenever its resolution is missing or unrecognised (generic,
+# bdver*, ...) — overriding an unknown target is unsound in both
+# directions. Every other platform keeps plain -march=native; if even that
+# fails to compile, no -march flag is emitted at all.
+# ---------------------------------------------------------------------------
+MARCH_CXXFLAGS="-march=native"
+march_meta="native (default)"
+
+have_cpu_flag() {
+  # have_cpu_flag NAME — true when NAME appears among $EMC2_CPU_FLAGS.
+  for cpu_flag in $EMC2_CPU_FLAGS; do
+    [ "$cpu_flag" = "$1" ] && return 0
+  done
+  return 1
+}
+
+march_rank() {
+  # march_rank LEVEL — print the ordering rank of an -march target name;
+  # also serves as the recogniser: rank 0 means unrecognised (generic,
+  # native, bdver*, unknown, ...), which must never be outranked.
+  case "$1" in
+    znver5) echo 5 ;;
+    znver4) echo 4 ;;
+    znver3) echo 3 ;;
+    znver2) echo 2 ;;
+    znver1) echo 1 ;;
+    *)      echo 0 ;;
+  esac
+}
+
+march_compiles() {
+  # march_compiles FLAG... — true when R's compiler accepts FLAG... for the
+  # trivial probe program.
+  "$CXX_BIN" $CXX_STD $R_CXXFLAGS "$@" \
+    "$workdir/march_probe.cpp" -o "$workdir/march_probe" 2>/dev/null
+}
+
+march_compiles_c() {
+  # march_compiles_c FLAG... — true when R's C compiler accepts FLAG... for
+  # the trivial probe program (same -march table as its cc1 backend).
+  [ -n "$CC_BIN" ] || return 1
+  "$CC_BIN" $R_CFLAGS "$@" \
+    "$workdir/march_probe.c" -o "$workdir/march_probe_c" 2>/dev/null
+}
+
+if [ "$(uname -s 2>/dev/null)" = "Linux" ] && [ "$(uname -m 2>/dev/null)" = "x86_64" ]; then
+  # Parse vendor_id and the flags line out of the FIRST processor block of
+  # /proc/cpuinfo (the blank line ends the block).
+  EMC2_CPU_VENDOR=""
+  EMC2_CPU_FLAGS=""
+  if [ -r /proc/cpuinfo ]; then
+    march_block=0
+    while IFS= read -r march_ci_line || [ -n "$march_ci_line" ]; do
+      case "$march_ci_line" in
+        "")
+          if [ "$march_block" -eq 1 ]; then
+            break
+          fi
+          continue
+          ;;
+      esac
+      case "$march_ci_line" in
+        vendor_id*:*)
+          EMC2_CPU_VENDOR=$(echo ${march_ci_line#*:})
+          march_block=1
+          ;;
+        flags*:*)
+          EMC2_CPU_FLAGS=$(echo ${march_ci_line#*:})
+          march_block=1
+          ;;
+      esac
+      if [ -n "$EMC2_CPU_VENDOR" ] && [ -n "$EMC2_CPU_FLAGS" ]; then
+        break
+      fi
+    done < /proc/cpuinfo
+  fi
+
+  # Candidate ladder for AMD, newest first (gated on advertised CPU
+  # capabilities). Other vendors get an empty ladder and fall through to
+  # -march=native unchanged.
+  march_ladder=""
+  if [ "$EMC2_CPU_VENDOR" = "AuthenticAMD" ]; then
+    if have_cpu_flag avx512f && have_cpu_flag vaes && have_cpu_flag gfni; then
+      march_ladder="znver4"
+    fi
+    if have_cpu_flag avx2 && have_cpu_flag fma; then
+      march_ladder="$march_ladder znver3"
+    fi
+    # znver2/znver1 need the full Zen2 ISA floor (AVX2 + BMI2 + FMA): a
+    # bare-SSE4.2 gate would license AVX2/BMI2 codegen on Bulldozer-family
+    # CPUs that cannot execute it.
+    if have_cpu_flag avx2 && have_cpu_flag bmi2 && have_cpu_flag fma; then
+      march_ladder="$march_ladder znver2"
+    fi
+    if have_cpu_flag avx2 && have_cpu_flag bmi2 && have_cpu_flag fma; then
+      march_ladder="$march_ladder znver1"
+    fi
+  fi
+
+  cat > "$workdir/march_probe.cpp" <<'EOF'
+int main(void) {
+  return 0;
+}
+EOF
+  cat > "$workdir/march_probe.c" <<'EOF'
+int main(void) {
+  return 0;
+}
+EOF
+
+  # Ask the compiler what -march=native resolves to. Only lines of the form
+  # "<whitespace>-march=<whitespace>value" carry the resolved setting; prose
+  # elsewhere in the help output must not match. Rank 0 (unparseable
+  # output, or generic/bdver*/unknown targets) means native is trusted and
+  # the ladder is skipped entirely.
+  march_resolved=""
+  march_native_help="$("$CXX_BIN" $CXX_STD -march=native -Q --help=target 2>/dev/null | grep -- '-march=')" || march_native_help=""
+  if [ -n "$march_native_help" ]; then
+    while IFS= read -r march_help_line; do
+      # Strip leading whitespace first, then require -march= to open the
+      # line: prose such as "Known valid arguments for -march= option:"
+      # must not be mistaken for the resolved setting.
+      march_val="${march_help_line#"${march_help_line%%[![:space:]]*}"}"
+      case "$march_val" in
+        -march=*) ;;
+        *) continue ;;
+      esac
+      march_val=$(echo ${march_val#-march=})
+      if [ -n "$march_val" ]; then
+        march_resolved="$march_val"
+      fi
+    done <<EOF
+$march_native_help
+EOF
+  fi
+  march_native_rank=$(march_rank "$march_resolved")
+
+  march_winner=""
+  march_outrank=0
+  # Trust -march=native unless we positively recognise what it resolved to
+  # (a recognised znver level); only then may an outranking candidate win.
+  if [ -n "$march_ladder" ] && [ "$march_native_rank" -gt 0 ]; then
+    march_best="${march_ladder%% *}"
+    if [ "$(march_rank "$march_best")" -gt "$march_native_rank" ]; then
+      march_outrank=1
+    fi
+    for march_cand in $march_ladder; do
+      [ "$(march_rank "$march_cand")" -gt "$march_native_rank" ] || continue
+      if march_compiles "-march=$march_cand" && march_compiles_c "-march=$march_cand"; then
+        march_winner="$march_cand"
+        break
+      fi
+    done
+  fi
+
+  if [ -n "$march_winner" ]; then
+    MARCH_CXXFLAGS="-march=$march_winner"
+    march_meta="$march_winner (native resolves to ${march_resolved:-unknown})"
+    echo "configure: note: CPU supports $march_best but -march=native resolves to ${march_resolved:-unknown}; using -march=$march_winner" >&2
+  elif march_compiles "-march=native" && march_compiles_c "-march=native"; then
+    MARCH_CXXFLAGS="-march=native"
+    if [ "$march_outrank" -eq 1 ]; then
+      march_meta="native (compiler rejected $march_best)"
+      echo "configure: note: CPU supports $march_best but -march=native resolves to ${march_resolved:-unknown}; keeping -march=native" >&2
+    elif [ "$march_native_rank" -eq 0 ] && [ -n "$march_resolved" ]; then
+      march_meta="native (unrecognised resolution '$march_resolved'; trusted)"
+    elif [ "$march_native_rank" -eq 0 ]; then
+      march_meta="native (resolution unknown; trusted)"
+    else
+      march_meta="native (default)"
+    fi
+  else
+    MARCH_CXXFLAGS=""
+    march_meta="none (a compiler rejected -march=native)"
+    echo "configure: note: at least one of R's C/C++ compilers failed to compile the -march=native probe; building without a -march flag" >&2
+  fi
+fi
 
 # OpenMP / OpenMP-SIMD probes use R's own compiler and flags. Full OpenMP
 # remains opt-in; SIMD is enabled automatically when its probe succeeds unless
@@ -277,13 +858,21 @@ fi
 # Summary. Metadata records the probe outcome separately from whether the
 # SIMD flag was actually emitted.
 # ---------------------------------------------------------------------------
-CONFIG_META="profile=${BUILD_PROFILE} openmp=${OMP_STATUS} openmp-simd-probe=${SIMD_STATUS} openmp-simd=${SIMD_STATE}"
+MARCH_TARGET="native"
+case "$MARCH_CXXFLAGS" in
+  "")            MARCH_TARGET="none" ;;
+  -march=native) MARCH_TARGET="native" ;;
+  -march=*)      MARCH_TARGET="${MARCH_CXXFLAGS#-march=}" ;;
+esac
+CONFIG_META="profile=${BUILD_PROFILE} march=${MARCH_TARGET} openmp=${OMP_STATUS} openmp-simd-probe=${SIMD_STATUS} openmp-simd=${SIMD_STATE} make-jobs=${MAKE_JOBS}"
 echo "configure: EMC2 build configuration"
 echo "  build profile : $BUILD_PROFILE"
+echo "  march         : $march_meta"
 echo "  compiler      : $CXX_FULL"
 echo "  R CXXFLAGS    : $R_CXXFLAGS"
 echo "  OpenMP        : $OMP_STATUS (compile/link flags only via --enable-openmp)"
 echo "  OpenMP SIMD   : $SIMD_DETAIL"
+echo "  parallel build : $parallel_build_detail"
 
 # ---------------------------------------------------------------------------
 # Generate src/Makevars from src/Makevars.in (atomic: temp file then mv, so a
@@ -297,9 +886,11 @@ fi
 sed \
   -e "s|@BUILD_PROFILE@|${BUILD_PROFILE}|g" \
   -e "s|@DIAG_CXXFLAGS@|${DIAG_CXXFLAGS}|g" \
+  -e "s|@MARCH_CXXFLAGS@|${MARCH_CXXFLAGS}|g" \
   -e "s|@OMP_CXXFLAGS@|${OMP_CXXFLAGS}|g" \
   -e "s|@OMP_LIBS@|${OMP_LIBS}|g" \
   -e "s|@SIMD_CXXFLAGS@|${SIMD_CXXFLAGS}|g" \
+  -e "s|@MAKE_JOBS@|${MAKE_JOBS}|g" \
   -e "s|@CONFIG_META@|${CONFIG_META}|g" \
   src/Makevars.in > "$workdir/Makevars" || {
     echo "configure: error: failed to generate src/Makevars from src/Makevars.in" >&2

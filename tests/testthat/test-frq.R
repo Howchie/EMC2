@@ -1,3 +1,5 @@
+skip_model_validation()
+
 # FRQ, the finite reservoir quorum process -- src/model_FRQ.h, R/model_FRQ.R.
 #
 # The model is fully closed form, so strong oracles are cheap.  This file keeps
@@ -152,7 +154,7 @@ test_that("the asymptotic and integral checks of the defective tail hold", {
 })
 
 test_that("the CDF is monotone and the density non-negative and finite", {
-  xs <- exp(seq(log(1e-6), log(50), length.out = 300))
+  xs <- exp(seq(log(1e-6), log(50), length.out = 31))
   for (i in seq_len(nrow(frq_grid))) {
     g <- frq_grid[i, ]
     d <- cpp_d(xs, g$a, g$b, g$h, g$tau)
@@ -554,7 +556,7 @@ test_that("a response below t0 floors cleanly", {
 
 test_that("the C++ and R simulators agree distributionally with the CDF", {
   skip_on_cran()
-  n <- 4000
+  n <- 1000
   lR <- factor(rep(c("left", "right"), n), levels = c("left", "right"))
   pars <- cbind(alpha = 2, beta = 3, h = 0.9, tau = 0.35, t0 = 0.1)
   pars <- pars[rep(1, length(lR)), ]

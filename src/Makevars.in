@@ -7,12 +7,11 @@
 # Build profiles — select with `./configure --with-build-profile=NAME`, or set
 # the EMC2_BUILD_PROFILE environment variable:
 #
-#   legacy         Exact historical optimisation flags (DEFAULT). -O3
-#                  -march=native -ffast-math -fno-finite-math-only
-#                  -fno-math-errno and USE_FAST_PNORM. Reproduces the
-#                  pre-refactor src/Makevars optimisation flags; full OpenMP
-#                  stays off. This is the current default and is NOT silently
-#                  reinterpreted here.
+#   legacy         Historical optimisation levels (DEFAULT): -O3 with the
+#                  best -march selected by configure probing (falls back to
+#                  -march=native), -ffast-math -fno-finite-math-only
+#                  -fno-math-errno and USE_FAST_PNORM. Matches the
+#                  pre-refactor optimisation levels; full OpenMP stays off.
 #
 #   compatibility  Conservative: R's default -O2, no -march=native, no
 #                  -ffast-math, no -fno-math-errno. USE_FAST_PNORM and the
@@ -20,26 +19,49 @@
 #                  future default once the profile matrix is proven; it is
 #                  opt-in in this slice.
 #
-#   performance    Opt-in native/vectorization: -O3 -march=native -ffast-math
+#   performance    Opt-in native/vectorization: -O3 with the configure-probed
+#                  -march (falls back to -march=native), -ffast-math
 #                  -fno-finite-math-only -fno-math-errno, USE_FAST_PNORM.
 #
-#   diagnostic     performance flags plus compiler optimization/vectorization
-#                  reports (GCC -fopt-info-* / Clang -Rpass=*).
+#   diagnostic     performance profile flags plus compiler optimization/
+#                  vectorization reports (GCC -fopt-info-* / Clang -Rpass=*).
+#
+# Windows builds (src/Makevars.win via configure.win) are unaffected and keep
+# the literal -march=native flag; only this Unix Makevars.in path uses the
+# configure-probed value.
 #
 # OpenMP-SIMD is probed by configure and -fopenmp-simd is added automatically
 # whenever the compiler supports it; --disable-openmp-simd forces it off and
 # --enable-openmp-simd requests it explicitly (warning if unsupported). Full
 # OpenMP stays strictly opt-in (--enable-openmp) and independent of SIMD.
 #
-# Generated configuration records the probe outcome and whether the SIMD flag
-# was actually enabled:
+# Generated configuration records the probe outcome, the selected -march
+# target, whether the SIMD flag was actually enabled, and make job count:
+#   march = best probed -march level | native | none
 #   openmp-simd-probe = available | unavailable   openmp-simd = on | off
+#   make-jobs = configured MAKE_JOBS integer (0 disables injection)
 #
 # Generated configuration:
 #   @CONFIG_META@
 # =============================================================================
 
+# --- Parallel compilation (configure-selected job count) --------------------
+# Configure chooses a safe default from CPU affinity, cgroup quotas, and
+# MemAvailable. This standalone block remains profile-independent. Re-check
+# live MAKEFLAGS so caller-supplied -j/--jobs and parent GNU Make jobservers
+# always take precedence over the package default.
+MAKE_JOBS := @MAKE_JOBS@
+ifneq ($(MAKE_JOBS),0)
+ifeq ($(strip $(filter -j% --jobs% --jobserver-auth=% --jobserver-fds=%,$(MAKEFLAGS))),)
+MAKEFLAGS += -j$(MAKE_JOBS)
+endif
+endif
+
 BUILD_PROFILE = @BUILD_PROFILE@
+
+# Best -march target selected by configure probing (see configure); falls back
+# to -march=native, or is empty when even -march=native fails the probe.
+MARCH_CXXFLAGS = @MARCH_CXXFLAGS@
 
 # --- C++ language standard and baseline diagnostics (every profile) ----------
 # -std=gnu++17 must appear after R's CXX (which embeds -std=gnu++20 on recent R)
@@ -56,16 +78,30 @@ USE_FAST_PNORM_FLAG = -DUSE_FAST_PNORM
 # win over an -O3 placed in PKG_CXXFLAGS. Profiles that require -O3 therefore
 # append via `override CXXFLAGS +=` so their -O3 lands after R's default -O2.
 ifeq ($(BUILD_PROFILE),legacy)
-  override CXXFLAGS += -O3 -march=native -ffast-math -fno-finite-math-only -fno-math-errno $(USE_FAST_PNORM_FLAG)
+  override CXXFLAGS += -O3 $(MARCH_CXXFLAGS) -ffast-math -fno-finite-math-only -fno-math-errno $(USE_FAST_PNORM_FLAG)
 else ifeq ($(BUILD_PROFILE),compatibility)
   PKG_CXXFLAGS += $(USE_FAST_PNORM_FLAG)
 else ifeq ($(BUILD_PROFILE),performance)
-  override CXXFLAGS += -O3 -march=native -ffast-math -fno-finite-math-only -fno-math-errno $(USE_FAST_PNORM_FLAG)
+  override CXXFLAGS += -O3 $(MARCH_CXXFLAGS) -ffast-math -fno-finite-math-only -fno-math-errno $(USE_FAST_PNORM_FLAG)
 else ifeq ($(BUILD_PROFILE),diagnostic)
-  override CXXFLAGS += -O3 -march=native -ffast-math -fno-finite-math-only -fno-math-errno $(USE_FAST_PNORM_FLAG)
+  override CXXFLAGS += -O3 $(MARCH_CXXFLAGS) -ffast-math -fno-finite-math-only -fno-math-errno $(USE_FAST_PNORM_FLAG)
   PKG_CXXFLAGS += @DIAG_CXXFLAGS@
 else
   $(error EMC2: unknown build profile '$(BUILD_PROFILE)' (expected legacy, compatibility, performance, or diagnostic))
+endif
+
+# --- Profile-selected C optimization flags (bundled GSL sources) -------------
+# gsl_bundled*.c (QAG/QAGS/QAGIU adaptive integration on the race-kernel paths)
+# otherwise compiles at R's stock -O2 with no -march in every profile. Mirror
+# the C++ optimisation level and march, but deliberately NOT the -ffast-math
+# family: vendored GSL assumes IEEE semantics and its convergence/error paths
+# rely on finite-math checks that -ffinite-math-only would elide.
+ifeq ($(BUILD_PROFILE),legacy)
+  override CFLAGS += -O3 $(MARCH_CXXFLAGS)
+else ifeq ($(BUILD_PROFILE),performance)
+  override CFLAGS += -O3 $(MARCH_CXXFLAGS)
+else ifeq ($(BUILD_PROFILE),diagnostic)
+  override CFLAGS += -O3 $(MARCH_CXXFLAGS)
 endif
 
 # --- Preprocessor flags: headers, RcppArmadillo, bundled GSL -----------------

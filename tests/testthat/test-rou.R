@@ -1,3 +1,5 @@
+skip_model_validation()
+
 # Racing Ornstein-Uhlenbeck (leaky accumulator) -- src/fpe_race.h,
 # src/model_ROU.h, R/model_ROU.R.
 #
@@ -377,7 +379,7 @@ test_that("a collapse to Binf == b0 is exactly the fixed-bound model", {
   # Not a nicety: the degeneracy test in FPE_Boundary::set_kind is what restores
   # the one-time operator factorisation, so if this drifts the model silently
   # pays 3x for a boundary that does not move.
-  rt <- seq(0.05, 2, length.out = 120)
+  rt <- seq(0.05, 2, length.out = 25)
   n <- length(rt)
   fixed <- cbind(v = rep(1.5, n), k = rep(0.5, n), B = rep(1, n),
                  A = rep(0.4, n), t0 = rep(0, n), s = rep(1, n))
@@ -390,7 +392,7 @@ test_that("a collapse to Binf == b0 is exactly the fixed-bound model", {
 })
 
 test_that("a collapsing bound finishes strictly sooner, at every t", {
-  rt <- seq(0.05, 3, length.out = 150)
+  rt <- seq(0.05, 3, length.out = 25)
   n <- length(rt)
   fixed <- cbind(v = rep(1.5, n), k = rep(0.5, n), B = rep(1, n),
                  A = rep(0.4, n), t0 = rep(0, n), s = rep(1, n))

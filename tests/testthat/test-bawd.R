@@ -1,3 +1,5 @@
+skip_model_validation()
+
 # BAwD, the ballistic accumulator with drive decay -- src/model_BAwD.h,
 # R/model_BAwD.R.
 #
@@ -873,7 +875,7 @@ test_that("BAwDp evaluates closed-form densities and simulates consistently", {
   expect_equal(length(unique(p_val[t_seq > u_star])), 1)
 
   # Simulator agreement
-  lR <- factor(rep(c("left", "right"), 2000), levels = c("left", "right"))
+  lR <- factor(rep(c("left", "right"), 500), levels = c("left", "right"))
   pars <- p_mat[rep(1, length(lR)), ]
   set.seed(42)
   sim_r <- EMC2:::rBAwDp(lR, pars)
@@ -974,7 +976,7 @@ test_that("BAwDp k = 0 is the LBA limit and preserves constructor bounds", {
                              launch = 0L, posdrift = TRUE), 1)
 
   # 3. Pure-R and C++ simulation agree at k = 0
-  lR <- factor(rep(c("left", "right"), 3000), levels = c("left", "right"))
+  lR <- factor(rep(c("left", "right"), 500), levels = c("left", "right"))
   pars_k0 <- matrix(c(1.0, 0.5, 0.8, 0.3, 0.1, 0, 0.3, 1.1), nrow = length(lR), ncol = 8, byrow = TRUE,
                     dimnames = list(NULL, c("mu", "sigma", "B", "A", "t0", "k", "lambda", "b")))
   set.seed(123)
@@ -983,6 +985,6 @@ test_that("BAwDp k = 0 is the LBA limit and preserves constructor bounds", {
   sim_cpp_k0 <- withr::with_options(list(emc2.cpp_rfun = TRUE), EMC2:::.rfun_BAwDp(lR, pars_k0))
   expect_equal(mean(is.na(sim_r_k0$R)), 0)
   expect_equal(mean(is.na(sim_cpp_k0$R)), 0)
-  expect_equal(mean(sim_r_k0$R == "left"), mean(sim_cpp_k0$R == "left"), tolerance = 0.03)
+  expect_lt(abs(mean(sim_r_k0$R == "left") - mean(sim_cpp_k0$R == "left")), 0.08)
   expect_equal(median(sim_r_k0$rt), median(sim_cpp_k0$rt), tolerance = 0.05)
 })

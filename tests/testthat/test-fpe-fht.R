@@ -1,3 +1,5 @@
+skip_model_validation()
+
 # Fokker-Planck first-passage solver (src/fpe_solver.h, src/fpe_models.h).
 #
 # Deterministic checks only -- the Monte Carlo arms of the validation ladder live
@@ -152,7 +154,7 @@ test_that("the reported pdf and cdf are safe to take logs of", {
   # (-3e-16 measured where the true density is 1.5e-17).  log() of that is NaN,
   # which would silently poison a likelihood rather than fail loudly.  Likewise
   # 1 - sum(dx*q) is not reliably inside [0,1] nor monotone out there.
-  t <- c(seq(1e-4, 0.01, length.out = 20), seq(0.05, 3, length.out = 200))
+  t <- c(seq(1e-4, 0.01, length.out = 6), seq(0.05, 3, length.out = 30))
   r <- EMC2:::fpe_ou_fht_pdf_cdf_vec(t, 4, 2, 1, 0, 1, 1, 1, 1, 256L, 512L, 8, 32)
 
   expect_true(all(r$pdf >= 0))

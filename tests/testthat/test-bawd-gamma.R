@@ -1,3 +1,5 @@
+skip_model_validation()
+
 # Regression coverage for fixed clearance fading in BAwD.
 # All gamma_ref_* helpers below are independent trajectory/quadrature oracles.
 

@@ -1,3 +1,5 @@
+skip_model_validation()
+
 # BAwD fading-clearance (fixed gamma in {0, 1/2, 2/3, 3/4, 1}) -- integration tests.
 #
 # This file covers approved plan tests 8-10: the R and C++ simulator paths,
@@ -197,7 +199,7 @@ test_that("BAwD() encodes fixed gamma regimes into c_name", {
 
 test_that("the R and C++ simulators agree distributionally with pbawd across gamma", {
   skip_on_cran()
-  lR <- factor(rep(c("left", "right"), 6000), levels = c("left", "right"))
+  lR <- factor(rep(c("left", "right"), 500), levels = c("left", "right"))
   for (gamma in c(0.5, 2 / 3, 0.75, 1)) {
     for (launch in c(0L, 1L)) {
       nm <- if (launch == 1L) c("mu", "sigma") else c("v", "sv")

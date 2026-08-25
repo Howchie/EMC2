@@ -1,16 +1,10 @@
-# EMC2 Performance Philosophy
+## 1. EMC2 Philosophy
 
 This document captures the optimisation philosophy that guides ongoing development of EMC2. It is intended for contributors (human or AI) who are adding new code, refactoring existing code, or reviewing changes. The overarching constraint is absolute: **speed can never change results**. Vectorising a call that produces an identical result is good; changing user-facing semantics or model behaviour is not acceptable.
 
----
+We also strive for leanness - when changing the behavior of a function or model, do not preserve any backward compatability by default, unless specifically instructed to do so. 
 
-## 1. The Golden Rule
-
-Every optimisation must be semantics-preserving. Before shipping any performance change:
-
-- Confirm numerical output is identical (or within documented floating-point tolerance) against the previous path.
-- Run the full test suite. Snapshot tests in `tests/testthat/_snaps/` are the ground truth for likelihood values — regenerate them only when a deliberate numerical change is made, and document why.
-- Never alter the public API of a model or a likelihood function in the name of performance. Inputs, outputs, and parameter names seen by users must remain stable.
+Code comments should be minimalist, focused on describing the specific functionality, never documenting the development history or reasoning for why certain choices were made. This is particular true for user-facing roxygen comments - do not use comments as a train of thought or changelog under any circumstances.
 
 ---
 
@@ -21,11 +15,12 @@ Every optimisation must be semantics-preserving. Before shipping any performance
 `src/Makevars` (and `Makevars.win`) set the following flags, which must be kept:
 
 ```makefile
-override CXXFLAGS += -O3 -march=native -ffast-math -fno-math-errno -Igsl_bundled -DUSE_FAST_PNORM -DR_NO_REMAP
+override CXXFLAGS += -O3 $(MARCH_CXXFLAGS) -ffast-math -fno-math-errno -Igsl_bundled -DUSE_FAST_PNORM -DR_NO_REMAP
 ```
 
 - **`-O3`**: full inlining, loop unrolling, and auto-vectorisation. R's default `-O2` is insufficient for tight likelihood loops.
-- **`-march=native`**: enables AVX2/SSE4 SIMD on the build machine. Column-major data layouts and `#pragma omp simd` loops are written to exploit this.
+- **`$(MARCH_CXXFLAGS)`**: the best `-march` target for this machine, selected by `./configure` probing (Linux x86_64). It emits `-march=<level>` when the compiler's `-march=native` resolution is a recognised but stale level (e.g. GCC 11 maps AMD EPYC Genoa to znver3), and otherwise falls back to `-march=native`. Column-major data layouts and `#pragma omp simd` loops are written to exploit SIMD.
+- **Parallel compilation**: `src/Makevars` self-injects a safe `-jN` into `MAKEFLAGS` unless the caller already supplied parallelism, so `R CMD INSTALL .` gets parallel compilation without manually exporting `MAKEFLAGS=-jN`.
 - **`-ffast-math`**: allows the compiler to reorder and contract floating-point operations, enabling auto-vectorisation of FP loops. This is safe here because MCMC log-likelihood differences matter; per-sample ULP precision does not.
 - **`-DUSE_FAST_PNORM`**: activates the Hart rational-approximation normal CDF in `pnorm_std()` (see §3).
 - **`-DR_NO_REMAP`**: required for build on some machines, ensures R plays nicely with C++.
@@ -61,7 +56,7 @@ Use `std::log1p` and `std::expm1` wherever the argument is near zero. In particu
 
 ### 3.3 Log-space arithmetic
 
-Compute likelihoods in log-space end-to-end. Avoid materialising intermediate probabilities only to immediately take their log. Where possible, use functions that return the log directly (e.g. `dlnorm_std(..., true)` for the log-PDF) instead of computing the linear value and then calling `std::log`.
+Compute likelihoods in log-space where there is a genuine risk of cancellation. Avoid materialising intermediate probabilities only to immediately take their log; but when safe, use probability space math for speed and divert to log-space only in dangerous parameter regions.
 
 ---
 

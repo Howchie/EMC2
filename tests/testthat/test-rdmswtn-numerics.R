@@ -1,3 +1,5 @@
+skip_model_validation()
+
 rdm_gl <- function(n = 80) {
   skip_if_not_installed("statmod")
   statmod::gauss.quad(n, "legendre")

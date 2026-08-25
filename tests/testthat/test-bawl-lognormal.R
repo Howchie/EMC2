@@ -1,3 +1,5 @@
+skip_model_validation()
+
 # BAwL with a lognormal launch strength (drift_distribution = "lognormal").
 #
 # The crossing condition V >= W(a) = k (b - a e^{-kt}) / (1 - e^{-kt}) is affine

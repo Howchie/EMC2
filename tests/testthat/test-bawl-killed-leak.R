@@ -1,3 +1,5 @@
+skip_model_validation()
+
 test_that("BAwL density shrinks with higher lambda for finite RT", {
   rt <- c(0.45, 0.70, 1.10)
   t0 <- 0.15

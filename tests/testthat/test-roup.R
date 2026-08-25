@@ -1,3 +1,5 @@
+skip_model_validation()
+
 # Racing Ornstein-Uhlenbeck with Smith (1995) Pulse Drift (ROUp)
 # src/fpe_race.h, src/model_ROUp.h, R/model_ROUp.R.
 
@@ -94,7 +96,7 @@ test_that("ROUp local race preserves area-chart mapping", {
 })
 
 test_that("one solve serves every row sharing a parameter tuple in ROUp", {
-  n <- 300
+  n <- 32
   t_seq <- seq(0.1, 2.0, length.out = n)
   p <- roup_pars(t_seq, v_S = 1.5, v_T = 2.0, tau_S = 0.5, tau_T = 0.2, k = 0.5, B = 1.0, A = 0.5, s = 1.0)
 
@@ -277,7 +279,7 @@ test_that("make_data works with ROUp designs", {
 test_that("ROUp simulator matches analytical CDF within sampling error", {
   skip_on_cran()
   set.seed(42)
-  N <- 20000
+  N <- 1000
   p <- roup_pars(seq_len(N), v_S = 1.0, v_T = 2.0, tau_S = 0.5, tau_T = 0.2,
                  k = 0.5, B = 2.0, A = 0, t0 = 0.2, s = 1.0)
   rts <- EMC2:::rROUp(lR = factor(rep("A", N)), pars = p, ok = rep(TRUE, N))

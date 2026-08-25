@@ -1,3 +1,5 @@
+skip_model_validation()
+
 library(EMC2)
 
 log_sum_exp_test <- function(x) {

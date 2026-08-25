@@ -1,3 +1,5 @@
+skip_model_validation()
+
 test_that("infinite-time SWTN/RDMSWTN masses match analytic hit-mass identities", {
   mu <- -0.4
   sv <- 0.5

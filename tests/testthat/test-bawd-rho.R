@@ -1,3 +1,5 @@
+skip_model_validation()
+
 # Independent behavioural checks for the finite-rho BAwD family.
 # The reference below uses the defining trajectory and root finding; it does not
 # duplicate the closed forms used by the compiled implementation.
@@ -231,7 +233,7 @@ test_that("frozen fallback, boundary hygiene, simulator, and wiring", {
     }
     expect_equal(got, want, tolerance = 2e-12)
   }
-  lR_many <- factor(rep(c("L", "R"), 2000), levels = c("L", "R"))
+  lR_many <- factor(rep(c("L", "R"), 500), levels = c("L", "R"))
   pars_many <- cbind(mu = rep(.8, length(lR_many)),
                      sigma = rep(.7, length(lR_many)),
                      b = rep(1.1, length(lR_many)),

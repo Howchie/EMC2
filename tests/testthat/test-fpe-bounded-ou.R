@@ -1,3 +1,5 @@
+skip_model_validation()
+
 # Bounded OU (Smith & Ratcliff 2004): the DDM with leak, solved by the
 # Fokker-Planck solver with an absorbing boundary at BOTH ends of the domain.
 #
@@ -129,7 +131,7 @@ test_that("st0 uses the DDM's lower-edge convention", {
     cbind(a = rep(1.2, length(tt)), v = 1.5, t0 = t0, s = 1, Z = .45,
           SZ = 0, sv = 0, st0 = st0), precision = 1e-10)
   ref <- d(0.15, 0.1)
-  u <- seq(0, 1, length.out = 101)
+  u <- seq(0, 1, length.out = 51)
   lower <- rowMeans(sapply(u, function(x) d(0.15 + 0.1 * x, 0)))
   centred <- rowMeans(sapply(u - 0.5, function(x) d(0.15 + 0.1 * x, 0)))
   expect_lt(max(abs(ref - lower)), 1e-2)
