@@ -120,7 +120,7 @@ rRDM <- function(lR, pars, p_types=c("v", "B", "A", "t0"), ok=rep(TRUE, dim(pars
   t0 <- pars[, "t0"]
   pars <- pars[ok, ]
   dt[ok] <- rWald(sum(ok), B = pars[, "B"], v = pars[, "v"], A = pars[, "A"])
-  bad_col <- apply(dt, 2, function(x) all(is.infinite(x)))
+  bad_col <- colSums(!is.infinite(dt)) == 0L
   R <- max.col(-t(dt), ties.method = "first")
   pick <- cbind(R, 1:dim(dt)[2])
   rt <- matrix(t0, nrow = nr)[pick] + dt[pick]
@@ -454,7 +454,7 @@ rRDMGBM <- function(lR, pars, p_types = c("v", "b", "A", "t0", "s", "lambda_g", 
     }
   }
 
-  bad_col <- apply(dt, 2, function(x) all(is.infinite(x)))
+  bad_col <- colSums(!is.infinite(dt)) == 0L
   R <- apply(dt, 2, which.min)
   pick <- cbind(R, 1:dim(dt)[2])
   rt <- dt[pick]
@@ -1680,7 +1680,7 @@ rRDMSWTN <- function(lR, pars, p_types = c("v", "b", "A", "t0", "sv", "lambda_g"
     }
   }
 
-  bad_col <- apply(dt, 2, function(x) all(is.infinite(x)))
+  bad_col <- colSums(!is.infinite(dt)) == 0L
   R <- apply(dt, 2, which.min)
   pick <- cbind(R, 1:dim(dt)[2])
   rt <- dt[pick]
@@ -1779,8 +1779,8 @@ rRDMSWTN_corr <- function(lR, pars, ok = rep(TRUE, nrow(pars)),
                                posdrift = posdrift)
   }
   dt <- matrix(finish, nrow = nr)
-  bad <- apply(dt, 2L, function(x) all(is.infinite(x)))
-  response <- apply(dt, 2L, which.min)
+  bad <- colSums(!is.infinite(dt)) == 0L
+  response <- max.col(-t(dt), ties.method = "first")
   pick <- cbind(response, seq_len(n_trials))
   out <- data.frame(
     R = factor(levels(lR)[response], levels = levels(lR)),

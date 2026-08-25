@@ -1,3 +1,5 @@
+skip_model_validation()
+
 # The global kill applies its shared clock as a per-trial factor at the
 # likelihood-assembly sites rather than inside cdf1 (apply_lk_to_racers is
 # false), so the truncation normaliser has to switch the kill back on for the

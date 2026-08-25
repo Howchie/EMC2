@@ -76,7 +76,7 @@ rRLF <- function(lR, pars, ok = rep(TRUE, nrow(pars)),
     )
   }
 
-  all_infinite <- apply(finish, 2L, function(x) all(is.infinite(x)))
+  all_infinite <- colSums(!is.infinite(finish)) == 0L
   winner <- max.col(-t(finish), ties.method = "first")
   pick <- cbind(winner, seq_len(ncol(finish)))
   rt <- matrix(pars[, "t0"], nrow = n_accumulators)[pick] + finish[pick]

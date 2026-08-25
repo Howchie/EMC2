@@ -130,7 +130,7 @@ pGOM <- function(rt, pars, kind = NULL)
   pick <- cbind(win, seq_len(n_trials))
   out$R <- factor(levels(lR)[win], levels = levels(lR))
   out$rt <- matrix(pars[, "t0"], nr, n_trials)[pick] + hits[pick]
-  bad <- apply(hits, 2, function(x) all(!is.finite(x)))
+  bad <- colSums(is.finite(hits)) == 0L
   out$R[bad] <- NA; out$rt[bad] <- Inf
   .apply_timed_guess_winner(out, levels(lR))
 }

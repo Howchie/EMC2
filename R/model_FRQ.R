@@ -126,8 +126,8 @@ rFRQ <- function(lR, pars, ok = rep(TRUE, length(lR))) {
   t0_safe[!is.finite(t0_safe)] <- 0
   dt <- dt + matrix(t0_safe, nrow = nr)
 
-  bad_col <- apply(dt, 2, function(x) all(is.infinite(x)))
-  R <- apply(dt, 2, which.min)
+  bad_col <- colSums(!is.infinite(dt)) == 0L
+  R <- max.col(-t(dt), ties.method = "first")
   pick <- cbind(R, seq_len(ncol(dt)))
   rt <- dt[pick]
   R <- factor(levels(lR)[R], levels = levels(lR))

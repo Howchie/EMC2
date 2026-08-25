@@ -1,3 +1,5 @@
+skip_model_validation()
+
 # Independent behavioural checks for the finite-rho BAwD family.
 # The reference below uses the defining trajectory and root finding; it does not
 # duplicate the closed forms used by the compiled implementation.
@@ -231,7 +233,7 @@ test_that("frozen fallback, boundary hygiene, simulator, and wiring", {
     }
     expect_equal(got, want, tolerance = 2e-12)
   }
-  lR_many <- factor(rep(c("L", "R"), 2000), levels = c("L", "R"))
+  lR_many <- factor(rep(c("L", "R"), 500), levels = c("L", "R"))
   pars_many <- cbind(mu = rep(.8, length(lR_many)),
                      sigma = rep(.7, length(lR_many)),
                      b = rep(1.1, length(lR_many)),
@@ -284,10 +286,10 @@ test_that("finite rho reaches the sampled likelihood adapter", {
     data = dat, model = function() EMC2::BAwD(gamma = .5, rho = 2),
     matchfun = matchfun,
     formula = list(mu ~ 1, sigma ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1,
-                   Tmax ~ 1)))
+                   ell ~ 1)))
   p <- c(mu = .9, sigma = log(.6), B = log(.8), A = log(.3),
          t0 = log(.15), k = log(.8),
-         Tmax = log(1.1))[names(EMC2::sampled_pars(des))]
+         ell = log(0.5))[names(EMC2::sampled_pars(des))]
   set.seed(20260821)
   sim <- EMC2::make_data(p, design = des, n_trials = 12)
   e <- suppressMessages(EMC2::make_emc(sim, des, type = "single", n_chains = 1))

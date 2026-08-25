@@ -1,0 +1,215 @@
+#!/bin/sh
+# configure.win — Windows/UCRT configure entry point for EMC2.
+#
+# On Windows, R compiles from src/Makevars.win (Rtools 4.0) or src/Makevars.ucrt
+# (UCRT toolchain), not src/Makevars. Those static files default to the legacy
+# profile and `-include src/Makevars.profile`. This script resolves the
+# --with-build-profile / EMC2_BUILD_PROFILE selector, writes that small profile
+# fragment, and still generates src/Makevars from src/Makevars.in as the fallback
+# for a plain R CMD SHLIB in src/.
+#
+# OpenMP-SIMD follows the capability-driven default of the POSIX configure:
+# -fopenmp-simd is probed with R's selected C++ compiler and enabled
+# automatically when supported; --disable-openmp-simd forces it off and
+# --enable-openmp-simd requests it explicitly (warning when the probe fails).
+# Full OpenMP is deliberately NOT probed or linked here and stays off. The
+# script does not assume /tmp or mktemp exist.
+#
+# Usage:
+#   R CMD INSTALL --configure-args="--with-build-profile=compatibility" .
+#   R CMD INSTALL --configure-args="--disable-openmp-simd" .
+#   ./configure.win --help
+
+set -u
+
+ENV_PROFILE="${EMC2_BUILD_PROFILE:-}"
+CLI_PROFILE=""
+ENABLE_OPENMP_SIMD=auto
+
+for arg in "$@"; do
+  case "$arg" in
+    --help|-h)
+      cat <<EOF
+
+configure.win options for EMC2:
+
+  --with-build-profile=NAME   Select the build profile (default: legacy):
+                                legacy         exact historical flags
+                                compatibility  conservative, R default -O2
+                                performance    opt-in -O3 -march=native
+                                diagnostic     performance + optimisation reports
+                              May also be set via EMC2_BUILD_PROFILE.
+
+  OpenMP-SIMD                 -fopenmp-simd (which enables #pragma omp simd
+                              without linking an OpenMP runtime) is probed with
+                              R's selected C++ compiler and enabled
+                              automatically when supported:
+    --enable-openmp-simd        request it; warns if the probe fails
+    --disable-openmp-simd       force it off even if supported
+                              Full OpenMP threading is not probed or linked on
+                              Windows and stays off; --enable-openmp is accepted
+                              but ignored with a warning.
+
+  --help, -h                  Show this help message and exit.
+
+This writes src/Makevars.profile, which src/Makevars.win and src/Makevars.ucrt
+include, so the selected profile governs the actual build; when the SIMD probe
+succeeds the fragment also carries SIMD_CXXFLAGS. src/Makevars is still
+generated as the fallback used when those platform files are absent (for
+example a plain R CMD SHLIB in src/).
+EOF
+      exit 0
+      ;;
+    --with-build-profile=*)
+      CLI_PROFILE="${arg#*=}"
+      ;;
+    --enable-openmp-simd)
+      ENABLE_OPENMP_SIMD=yes
+      ;;
+    --disable-openmp-simd)
+      ENABLE_OPENMP_SIMD=no
+      ;;
+    --enable-openmp)
+      echo "configure.win: warning: --enable-openmp is not supported on Windows; full OpenMP stays off" >&2
+      ;;
+    --disable-openmp)
+      ;; # already the only behaviour on Windows: OpenMP stays off
+    *)
+      echo "configure.win: warning: unrecognised option '$arg' (ignored)" >&2
+      ;;
+  esac
+done
+
+# An explicit CLI value overrides the environment; conflicting values fail.
+BUILD_PROFILE=""
+if [ -n "$CLI_PROFILE" ] && [ -n "$ENV_PROFILE" ] && [ "$CLI_PROFILE" != "$ENV_PROFILE" ]; then
+  echo "configure.win: error: conflicting build profile: --with-build-profile=$CLI_PROFILE vs EMC2_BUILD_PROFILE=$ENV_PROFILE" >&2
+  exit 1
+fi
+if [ -n "$CLI_PROFILE" ]; then
+  BUILD_PROFILE="$CLI_PROFILE"
+elif [ -n "$ENV_PROFILE" ]; then
+  BUILD_PROFILE="$ENV_PROFILE"
+else
+  BUILD_PROFILE="legacy"
+fi
+
+case "$BUILD_PROFILE" in
+  legacy|compatibility|performance|diagnostic) ;;
+  *)
+    echo "configure.win: error: invalid --with-build-profile '$BUILD_PROFILE' (expected legacy, compatibility, performance, or diagnostic)" >&2
+    exit 1
+    ;;
+esac
+
+if [ ! -f src/Makevars.in ]; then
+  echo "configure.win: error: src/Makevars.in not found" >&2
+  exit 1
+fi
+
+# Placeholders kept in sync with the template. Rtools uses GCC spellings for
+# optimisation reports; full OpenMP is not probed here and stays off.
+DIAG_CXXFLAGS="-fopt-info-vec-optimized -fopt-info-vec-missed"
+OMP_CXXFLAGS=""
+OMP_LIBS=""
+SIMD_CXXFLAGS=""
+SIMD_STATUS="unavailable"
+SIMD_STATE="off"
+
+# Write to PID-suffixed temp files in the package root, then move into place,
+# so a failed substitution never leaves truncated output behind. No /tmp or
+# mktemp. The SIMD probe reuses the Makevars.tmp* naming so `cleanup` removes
+# any leftover.
+tmpfile="src/Makevars.tmp$$"
+proftmp="src/Makevars.profile.tmp$$"
+simd_src="src/Makevars.tmp$$.cpp"
+simd_out="src/Makevars.tmp$$.out"
+trap 'rm -f "$tmpfile" "$proftmp" "$simd_src" "$simd_out"' 0
+
+# ---------------------------------------------------------------------------
+# OpenMP-SIMD probe. Uses the compiler R itself selects (R CMD config), so the
+# probe tracks the actual build toolchain. Any failure — missing compiler,
+# unsupported flag, restricted environment — degrades to probe=unavailable
+# with SIMD left off; support is never claimed without evidence.
+# ---------------------------------------------------------------------------
+CXX_FULL=""
+CXX_BIN=""
+CXX_STD=""
+R_CXXFLAGS=""
+if command -v R >/dev/null 2>&1; then
+  CXX_FULL="$(R CMD config CXX 2>/dev/null)" || CXX_FULL=""
+  case "$CXX_FULL" in
+    *" "*) CXX_BIN="${CXX_FULL%% *}"; CXX_STD="${CXX_FULL#* }" ;;
+    *) CXX_BIN="$CXX_FULL" ;;
+  esac
+  R_CXXFLAGS="$(R CMD config CXXFLAGS 2>/dev/null)" || R_CXXFLAGS=""
+else
+  echo "configure.win: note: 'R' not found on PATH; skipping the OpenMP-SIMD probe" >&2
+fi
+
+cat > "$simd_src" <<'EOF'
+int main(void) {
+  int a[4] = {1, 2, 3, 4};
+  int s = 0;
+#pragma omp simd reduction(+:s)
+  for (int i = 0; i < 4; ++i) s += a[i];
+  return s == 10 ? 0 : 1;
+}
+EOF
+
+if [ -n "$CXX_BIN" ] && \
+   "$CXX_BIN" $CXX_STD $R_CXXFLAGS -fopenmp-simd "$simd_src" -o "$simd_out" 2>/dev/null; then
+  SIMD_STATUS="available"
+fi
+
+# Capability-driven default: emit -fopenmp-simd whenever the probe succeeded;
+# an explicit --disable-openmp-simd always wins; --enable-openmp-simd requests
+# it and warns when it cannot be honoured.
+if [ "$ENABLE_OPENMP_SIMD" = "no" ]; then
+  SIMD_STATE="off"
+elif [ "$SIMD_STATUS" = "available" ]; then
+  SIMD_CXXFLAGS="-fopenmp-simd"
+  SIMD_STATE="on"
+elif [ "$ENABLE_OPENMP_SIMD" = "yes" ]; then
+  echo "configure.win: warning: --enable-openmp-simd requested but the SIMD probe failed; building without -fopenmp-simd" >&2
+fi
+
+CONFIG_META="profile=${BUILD_PROFILE} openmp=not-probed openmp-simd-probe=${SIMD_STATUS} openmp-simd=${SIMD_STATE}"
+
+sed \
+  -e "s|@BUILD_PROFILE@|${BUILD_PROFILE}|g" \
+  -e "s|@DIAG_CXXFLAGS@|${DIAG_CXXFLAGS}|g" \
+  -e "s|@OMP_CXXFLAGS@|${OMP_CXXFLAGS}|g" \
+  -e "s|@OMP_LIBS@|${OMP_LIBS}|g" \
+  -e "s|@SIMD_CXXFLAGS@|${SIMD_CXXFLAGS}|g" \
+  -e "s|@CONFIG_META@|${CONFIG_META}|g" \
+  src/Makevars.in > "$tmpfile" || {
+    echo "configure.win: error: failed to generate src/Makevars from src/Makevars.in" >&2
+    exit 1
+  }
+
+mv -f "$tmpfile" src/Makevars || {
+  echo "configure.win: error: failed to write src/Makevars" >&2
+  exit 1
+}
+
+# Write the build-profile fragment that src/Makevars.win / src/Makevars.ucrt
+# -include. BUILD_PROFILE governs the flag matrix in those static files;
+# SIMD_CXXFLAGS appears only when the probe succeeded and was not disabled, so
+# a skipped configure still yields the plain legacy build.
+{
+  printf 'BUILD_PROFILE = %s\n' "$BUILD_PROFILE"
+  if [ "$SIMD_STATE" = "on" ]; then
+    printf 'SIMD_CXXFLAGS = %s\n' "$SIMD_CXXFLAGS"
+  fi
+} > "$proftmp" || {
+  echo "configure.win: error: failed to write build-profile fragment" >&2
+  exit 1
+}
+mv -f "$proftmp" src/Makevars.profile || {
+  echo "configure.win: error: failed to write src/Makevars.profile" >&2
+  exit 1
+}
+
+echo "configure.win: src/Makevars written (profile=${BUILD_PROFILE} openmp-simd=${SIMD_STATE})"
+exit 0

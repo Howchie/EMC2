@@ -278,7 +278,7 @@ rBAwD <- function(lR, pars, ok = rep(TRUE, length(lR)), launch = 1L,
   }
   dt <- dt + matrix(t0, nrow = nr)
 
-  bad_col <- apply(dt, 2, function(x) all(is.infinite(x)))
+  bad_col <- colSums(!is.infinite(dt)) == 0L
   R <- apply(dt, 2, which.min)
   pick <- cbind(R, seq_len(ncol(dt)))
   rt <- dt[pick]
@@ -342,7 +342,7 @@ rBAwDp <- function(lR, pars, ok = rep(TRUE, length(lR)), launch = 1L,
     hit[!is.finite(hit) | hit < 0] <- Inf
     dt[idx] <- hit + p[, "t0"]
   }
-  bad_col <- apply(dt, 2, function(x) all(is.infinite(x)))
+  bad_col <- colSums(!is.infinite(dt)) == 0L
   R <- apply(dt, 2, which.min)
   pick <- cbind(R, seq_len(ncol(dt)))
   rt <- dt[pick]
@@ -381,25 +381,6 @@ rBAwDp <- function(lR, pars, ok = rep(TRUE, length(lR)), launch = 1L,
 #' fixed `rho` and `gamma` choices are model options, never estimated
 #' parameters, so they do not appear in `p_types`.
 #'
-#' @section The endpoint chart:
-#' Clearance is sampled as the endpoint `Tmax` rather than as the rate `ell`.
-#' The two are one-to-one for `gamma < 1` and `k > 0`, because saturation at
-#' the lowest start point solves \verb{Theta(k Tmax) = k b / ell} in closed
-#' form, so the kernel back-solves `ell` from `Tmax` with no root find and the
-#' likelihood is the same function either way. The reason to sample the
-#' endpoint is conditioning: the likelihood has a long ridge running along
-#' `ell` and across `Tmax`, so the endpoint chart puts the well-determined
-#' coordinate on a sampled axis. `Ttransform` reports the derived `ell`
-#' alongside `Tmax` and `rt_max`, so a fit can always be read in either chart.
-#'
-#' Because `ell` is now derived it can no longer be held at `1` to fix the
-#' evidence scale, and the gauge \verb{(V, b, A, ell) -> c (V, b, A, ell)} is
-#' exact with `Tmax` and `k` invariant. Pin an intercept of `mu` (or `v`), `B`
-#' or `A` instead, as `BAwF` and `BAwR` already require; see the example.
-#'
-#' `gamma = 1` is the exception. Drive and clearance co-decay there, the trace
-#' has no finite maximum, and the model keeps sampling `ell` directly.
-#'
 #' With `drift_distribution = "lognormal"` (the default) `log V ~ N(mu, sigma^2)`.
 #'
 #' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Mapping** | **Interpretation** |
@@ -410,13 +391,13 @@ rBAwDp <- function(lR, pars, ok = rep(TRUE, length(lR)), launch = 1L,
 #' | *A* | log | \[0, Inf\] | log(0) | | Start-point range. |
 #' | *t0* | log | \[0, Inf\] | log(0) | | Non-decision time. |
 #' | *k* | log | \[0, Inf\] | log(0) | | Drive-decay rate. |
-#' | *Tmax* | log | \[0, Inf\] | Inf | *ell* back-solved | Right endpoint of the decision-time window. |
-#'
-#' At `gamma = 1` the last row is instead *ell*, log transform, default
-#' `log(1)`, the clearance rate.
+#' | *ell* | log | \[0, Inf\] | log(1) | | Clearance rate. |
 #'
 #' With `drift_distribution = "normal"`, `mu` and `sigma` are replaced by
 #' `v` and `sv`; the launch is truncated positive when `posdrift = TRUE`.
+#'
+#' The trial-dependent transform derives `Tmax` from `A`, `b`, `k`, and
+#' `ell`, and also reports `rt_max` after adding `t0`.
 #'
 #' @param drift_distribution Distribution of trialwise launch strength:
 #'   `"lognormal"` (default) or `"normal"`.
@@ -434,16 +415,12 @@ rBAwDp <- function(lR, pars, ok = rep(TRUE, length(lR)), launch = 1L,
 #' @examples
 #' ADmat <- matrix(c(-1/2, 1/2), ncol = 1, dimnames = list(NULL, "d"))
 #' matchfun <- function(d) d$S == d$lR
-#' # B's intercept is pinned to fix the evidence scale, leaving B's E effects
-#' # free so caution can still vary with the emphasis manipulation.
-#' Emat <- matrix(c(0, 1, 0, 0, 0, 1), ncol = 2,
-#'                dimnames = list(NULL, c("a", "s")))
+#' # ell is left out of the formula, so it stays at its default of 1 and fixes
+#' # the evidence scale for the lognormal launch.
 #' design_BAwD <- design(data = forstmann, model = BAwD, matchfun = matchfun,
 #'                       formula = list(mu ~ lM, sigma ~ 1, B ~ E, A ~ 1,
-#'                                      t0 ~ 1, k ~ 1, Tmax ~ 1),
-#'                       contrasts = list(mu = list(lM = ADmat),
-#'                                        B = list(E = Emat)),
-#'                       constants = c(B = log(1)))
+#'                                      t0 ~ 1, k ~ 1),
+#'                       contrasts = list(mu = list(lM = ADmat)))
 #' @export
 BAwD <- function(drift_distribution = c("lognormal", "normal"),
                  posdrift = TRUE, gamma = 0, rho = Inf) {
@@ -467,30 +444,17 @@ BAwD <- function(drift_distribution = c("lognormal", "normal"),
     transform <- c(v = "identity", sv = "exp")
     minmax <- cbind(v = c(-Inf, Inf), sv = c(1e-4, Inf))
   }
-  # Slot 6 is the clearance chart.  Wherever the trace has a finite maximum the
-  # sampler moves the endpoint `Tmax` and the kernel back-solves the clearance
-  # rate from it; the ridge in (B, k, ell) runs along `ell` and across `Tmax`,
-  # so the endpoint chart puts the well-determined coordinate on a sampled axis.
-  # At gamma = 1 drive and clearance co-decay and there is no finite endpoint to
-  # sample, so that member keeps `ell`.  bawd_uses_tmax() in src/model_BAwD.h is
-  # the matching predicate on the C++ side and picks the same ColSpec.
-  use_tmax <- gamma < 1 - 1e-12
-  clear <- if (use_tmax) "Tmax" else "ell"
+  # ell defaults to log(1): leaving it out of the formula fixes the evidence
+  # scale, which is the recommended convention for the lognormal launch.
   p_types <- c(p_types, "B" = log(1), "A" = log(0), "t0" = log(0),
-               "k" = log(0))
-  p_types[[clear]] <- if (use_tmax) Inf else log(1)
-  transform <- c(transform, B = "exp", A = "exp", t0 = "exp", k = "exp")
-  transform[[clear]] <- "exp"
+               "k" = log(0), "ell" = log(1))
+  transform <- c(transform, B = "exp", A = "exp", t0 = "exp", k = "exp",
+                 ell = "exp")
   minmax <- cbind(minmax, A = c(1e-4, Inf), B = c(1e-4, Inf),
-                  t0 = c(0.05, Inf), k = c(1e-4, Inf))
-  minmax <- cbind(minmax, c(1e-4, Inf))
-  colnames(minmax)[ncol(minmax)] <- clear
-  # k = 0 is the LBA limit and must stay exactly reachable, so it is a bound
-  # exception rather than clamped.  The inert clearance value is ell = 0 in the
-  # rate chart and Tmax = Inf in the endpoint chart; both give the no-clearance
-  # model whose support is unbounded.
-  exception <- c(A = 0, k = 0)
-  exception[[clear]] <- if (use_tmax) Inf else 0
+                  t0 = c(0.05, Inf), k = c(1e-4, Inf), ell = c(1e-4, Inf))
+  # ell = 0 (the static-start BAwL limit) and k = 0 (the LBA limit) must stay
+  # exactly reachable, so both are bound exceptions rather than clamped.
+  exception <- c(A = 0, k = 0, ell = 0)
 
   # pContaminant (omission) and pGuess (uniform outlier); see add_nuisance_pars().
   .nuis <- add_nuisance_pars(p_types, transform, minmax, exception)
@@ -515,25 +479,9 @@ BAwD <- function(drift_distribution = c("lognormal", "normal"),
     bound = list(minmax = minmax, exception = exception),
     Ttransform = function(pars, dadm) {
       b <- pars[, "B"] + pars[, "A"]
-      # Report whichever chart was not sampled, so that dBAwD/pBAwD/rBAwD and
-      # mapped_pars() always see both the endpoint and the mechanistic
-      # clearance rate however the model was parameterised.
-      if (use_tmax) {
-        ell <- bawd_ell_vec(pars[, "Tmax"], b, pars[, "k"], gamma = gamma,
-                            rho = rho)
-        pars <- cbind(pars, ell = ell)
-      } else {
-        ell <- pars[, "ell"]
-      }
-      # Recomputed rather than copied through: in the inert corners (k = 0, or
-      # a clearance rate that rounds to zero) the trace is linear and the
-      # realised endpoint is Inf whatever was sampled.  Recomputing keeps
-      # Tmax, rt_max and ell mutually consistent, and costs nothing in the
-      # ordinary case where it returns the sampled value.
-      Tmax <- bawd_tmax_vec(pars[, "A"], b, pars[, "k"], ell,
+      Tmax <- bawd_tmax_vec(pars[, "A"], b, pars[, "k"], pars[, "ell"],
                             gamma = gamma, rho = rho)
-      if (use_tmax) pars[, "Tmax"] <- Tmax else pars <- cbind(pars, Tmax = Tmax)
-      cbind(pars, b = b, rt_max = pars[, "t0"] + Tmax)
+      cbind(pars, b = b, Tmax = Tmax, rt_max = pars[, "t0"] + Tmax)
     },
     rfun = function(data, pars) {
       .rfun_BAwD(data$lR, pars, ok = attr(pars, "ok"), launch = launch,

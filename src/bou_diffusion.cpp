@@ -14,9 +14,9 @@
 
 // RcppArmadillo, not Rcpp: fpe_bou.h pulls in gh_quad.h, which includes
 // RcppArmadillo.h, and that header refuses to be reached after plain Rcpp.h.
-#include <RcppArmadillo.h>
 #include "fpe_race.h"
 #include "fpe_bou.h"
+#include <Rcpp.h>
 
 using namespace Rcpp;
 

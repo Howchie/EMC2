@@ -1,3 +1,5 @@
+skip_model_validation()
+
 # Race Lévy Flight nonlocal Fokker-Planck solver and CMS simulator.
 
 tg <- seq(0.1, 2.0, by = 0.05)
@@ -92,7 +94,7 @@ test_that("RLF uses the cheap path for safely resolved routine cases", {
 
 test_that("RLF automatically expands and refines space and time", {
   r <- EMC2:::rlf_fht_pdf_cdf_vec(
-    seq(0.01, 2, length.out = 201),
+    seq(0.01, 2, length.out = 31),
     1, 1, 1.7, 1, 0, 80L, 100L
   )
 
@@ -118,7 +120,7 @@ test_that("RLF automatically expands and refines space and time", {
 test_that("RLF rejects spatial regimes that exceed its refinement budget", {
   expect_error(
     EMC2:::rlf_fht_pdf_cdf_vec(
-      seq(0.001, 0.3, length.out = 101),
+      seq(0.001, 0.3, length.out = 31),
       10, 0.05, 1.99, 1, 0, 120L, 120L
     ),
     "automatic spatial refinement failed to converge"

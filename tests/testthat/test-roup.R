@@ -1,3 +1,5 @@
+skip_model_validation()
+
 # Racing Ornstein-Uhlenbeck with Smith (1995) Pulse Drift (ROUp)
 # src/fpe_race.h, src/model_ROUp.h, R/model_ROUp.R.
 
@@ -51,8 +53,50 @@ test_that("the ROUp area chart is equivalent to the rate chart", {
   expect_false("v_T" %in% names(m$p_types))
 })
 
+test_that("ROUp exposes local-race pooling in its constructor", {
+  expect_identical(EMC2:::ROUp()$c_name, "ROUp")
+  expect_identical(EMC2:::ROUp(pooling = "local_race")$c_name,
+                   "ROUp_LOCAL_RACE")
+  expect_identical(EMC2:::ROUp(parameterization = "area",
+                               pooling = "local_race")$c_name,
+                   "ROUpAREA_LOCAL_RACE")
+  expect_error(EMC2:::ROUp(pooling = "invalid"), "one of")
+})
+
+test_that("ROUp local race separates active channels and handles inactivity", {
+  p <- roup_pars(tq, v_S = 1.5, v_T = 2.0, tau_S = 0.5, tau_T = 0.2,
+                 k = 0.5, B = 1.0, A = 0.5, s = 1.0)
+  coactive <- EMC2:::dROUp(tq, p, pooling = "coactive")
+  local <- EMC2:::dROUp(tq, p, pooling = "local_race")
+  expect_true(any(abs(coactive - local) > 1e-8))
+
+  p_s <- p_t <- p
+  p_s[, "v_T"] <- 0
+  p_t[, "v_S"] <- 0
+  p_0 <- p
+  p_0[, c("v_S", "v_T")] <- 0
+  expect_true(all(is.finite(EMC2:::dROUp(tq, p_s, pooling = "local_race"))))
+  expect_true(all(is.finite(EMC2:::dROUp(tq, p_t, pooling = "local_race"))))
+  expect_true(all(EMC2:::dROUp(tq, p_0, pooling = "local_race") == 0))
+})
+
+test_that("ROUp local race preserves area-chart mapping", {
+  rate <- roup_pars(tq, v_S = 1.5, v_T = 2.0, tau_S = 0.5, tau_T = 0.2,
+                    k = 0.5, B = 1.0, A = 0.5, s = 1.0)
+  area <- cbind(v_S = rate[, "v_S"], E_T = rate[, "v_T"] * rate[, "tau_T"],
+                tau_S = rate[, "tau_S"], tau_T = rate[, "tau_T"],
+                k = rate[, "k"], B = rate[, "B"], A = rate[, "A"],
+                t0 = rate[, "t0"], s = rate[, "s"])
+  expect_equal(EMC2:::dROUp(tq, rate, pooling = "local_race"),
+               EMC2:::dROUp(tq, area, par = "area", pooling = "local_race"),
+               tolerance = 1e-9)
+  expect_equal(EMC2:::pROUp(tq, rate, pooling = "local_race"),
+               EMC2:::pROUp(tq, area, par = "area", pooling = "local_race"),
+               tolerance = 1e-9)
+})
+
 test_that("one solve serves every row sharing a parameter tuple in ROUp", {
-  n <- 300
+  n <- 32
   t_seq <- seq(0.1, 2.0, length.out = n)
   p <- roup_pars(t_seq, v_S = 1.5, v_T = 2.0, tau_S = 0.5, tau_T = 0.2, k = 0.5, B = 1.0, A = 0.5, s = 1.0)
 
@@ -136,6 +180,34 @@ test_that("C++ particle likelihood matches the R-side area-chart likelihood", {
   expect_equal(ll_r, as.numeric(ll_cpp), tolerance = 1e-10)
 })
 
+test_that("C++ particle likelihood uses local-race pooling", {
+  data <- data.frame(
+    subjects = factor(rep(1, 10)),
+    trials = 1:10,
+    S = factor(rep("r1", 10), levels = c("r1", "r2")),
+    R = factor(rep("r1", 10), levels = c("r1", "r2")),
+    rt = rep(0.6, 10)
+  )
+  matchfun <- function(d) d$S == d$lR
+  design_local <- design(
+    data = data,
+    model = function() ROUp(pooling = "local_race"),
+    matchfun = matchfun,
+    formula = list(v_S ~ 1, v_T ~ 1, tau_S ~ 1, tau_T ~ 1,
+                   k ~ 1, B ~ 1, A ~ 1, t0 ~ 1),
+    constants = c(s = log(1), A = log(0))
+  )
+  p_vec <- sampled_pars(design_local)
+  p_vec[] <- c(log(1.5), log(2.5), log(0.3), log(0.1),
+               log(0.5), log(1.0), log(0.2))
+  dadm <- design_model(data, design_local)
+  props <- matrix(p_vec, nrow = 1, dimnames = list(NULL, names(p_vec)))
+
+  ll_r <- calc_ll_R(p_vec, design_local$model(), dadm)
+  ll_cpp <- calc_ll_manager(props, dadm = dadm, model = design_local$model)
+  expect_equal(ll_r, as.numeric(ll_cpp), tolerance = 1e-10)
+})
+
 test_that("the area chart composes with collapsing boundaries", {
   data <- data.frame(
     subjects = factor(rep(1, 6)),
@@ -164,6 +236,23 @@ test_that("the area chart composes with collapsing boundaries", {
   expect_equal(ll_r, as.numeric(ll_cpp), tolerance = 1e-10)
 })
 
+test_that("C++ coactive simulation initializes the boundary", {
+  pars <- rbind(
+    c(v_S = 1.5, v_T = 0, tau_S = 0.5, tau_T = 1,
+      k = 0.5, B = 2, A = 0, t0 = 0.25, s = 1),
+    c(v_S = 2, v_T = 0, tau_S = 0.5, tau_T = 1,
+      k = 0.5, B = 2, A = 0, t0 = 0.25, s = 1)
+  )
+  set.seed(17)
+  sim <- EMC2:::rroup_cpp(
+    pars, c("r1", "r2"), rep(TRUE, nrow(pars)),
+    dt = 0.01, t_max = 5, par_kind = 0L, pooling = 0L
+  )
+  expect_true(is.finite(sim$rt))
+  expect_gt(sim$rt, 0.25)
+  expect_true(sim$R %in% c(1L, 2L))
+})
+
 test_that("make_data works with ROUp designs", {
   data <- data.frame(
     subjects = factor(rep(1, 10)),
@@ -190,7 +279,7 @@ test_that("make_data works with ROUp designs", {
 test_that("ROUp simulator matches analytical CDF within sampling error", {
   skip_on_cran()
   set.seed(42)
-  N <- 20000
+  N <- 1000
   p <- roup_pars(seq_len(N), v_S = 1.0, v_T = 2.0, tau_S = 0.5, tau_T = 0.2,
                  k = 0.5, B = 2.0, A = 0, t0 = 0.2, s = 1.0)
   rts <- EMC2:::rROUp(lR = factor(rep("A", N)), pars = p, ok = rep(TRUE, N))

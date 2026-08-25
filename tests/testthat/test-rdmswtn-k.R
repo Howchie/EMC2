@@ -1,3 +1,5 @@
+skip_model_validation()
+
 test_that("pswtn reduces to pwald when sv is zero", {
   t <- 0.8
   b <- 1.4

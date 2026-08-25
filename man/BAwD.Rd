@@ -56,28 +56,8 @@ and a finite \code{T_max} occurs when \code{k > 0} and \code{ell > 0}.
 The start point is static and weak drive can produce an omission. The
 fixed \code{rho} and \code{gamma} choices are model options, never estimated
 parameters, so they do not appear in \code{p_types}.
-}
-\section{The endpoint chart}{
-
-Clearance is sampled as the endpoint \code{Tmax} rather than as the rate \code{ell}.
-The two are one-to-one for \code{gamma < 1} and \code{k > 0}, because saturation at
-the lowest start point solves \verb{Theta(k Tmax) = k b / ell} in closed
-form, so the kernel back-solves \code{ell} from \code{Tmax} with no root find and the
-likelihood is the same function either way. The reason to sample the
-endpoint is conditioning: the likelihood has a long ridge running along
-\code{ell} and across \code{Tmax}, so the endpoint chart puts the well-determined
-coordinate on a sampled axis. \code{Ttransform} reports the derived \code{ell}
-alongside \code{Tmax} and \code{rt_max}, so a fit can always be read in either chart.
-
-Because \code{ell} is now derived it can no longer be held at \code{1} to fix the
-evidence scale, and the gauge \verb{(V, b, A, ell) -> c (V, b, A, ell)} is
-exact with \code{Tmax} and \code{k} invariant. Pin an intercept of \code{mu} (or \code{v}), \code{B}
-or \code{A} instead, as \code{BAwF} and \code{BAwR} already require; see the example.
-
-\code{gamma = 1} is the exception. Drive and clearance co-decay there, the trace
-has no finite maximum, and the model keeps sampling \code{ell} directly.
-
-With \code{drift_distribution = "lognormal"} (the default) \verb{log V ~ N(mu, sigma^2)}.\tabular{llllll}{
+With \code{drift_distribution = "lognormal"} (the default) \verb{log V ~ N(mu, sigma^2)}.
+\tabular{llllll}{
    \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Mapping} \tab \strong{Interpretation} \cr
    \emph{mu} \tab identity \tab [-Inf, Inf] \tab 0 \tab  \tab Mean of the log launch strength. \cr
    \emph{sigma} \tab log \tab [0, Inf] \tab log(1) \tab  \tab SD of log launch strength. \cr
@@ -85,28 +65,24 @@ With \code{drift_distribution = "lognormal"} (the default) \verb{log V ~ N(mu, s
    \emph{A} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Start-point range. \cr
    \emph{t0} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Non-decision time. \cr
    \emph{k} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Drive-decay rate. \cr
-   \emph{Tmax} \tab log \tab [0, Inf] \tab Inf \tab \emph{ell} back-solved \tab Right endpoint of the decision-time window. \cr
+   \emph{ell} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Clearance rate. \cr
 }
-
-
-At \code{gamma = 1} the last row is instead \emph{ell}, log transform, default
-\code{log(1)}, the clearance rate.
 
 With \code{drift_distribution = "normal"}, \code{mu} and \code{sigma} are replaced by
 \code{v} and \code{sv}; the launch is truncated positive when \code{posdrift = TRUE}.
+
+The trial-dependent transform derives \code{Tmax} from \code{A}, \code{b},
+\code{k}, and \code{ell}, and also reports \code{rt_max} after adding
+\code{t0}.
 }
 
 \examples{
 ADmat <- matrix(c(-1/2, 1/2), ncol = 1, dimnames = list(NULL, "d"))
 matchfun <- function(d) d$S == d$lR
-# B's intercept is pinned to fix the evidence scale, leaving B's E effects
-# free so caution can still vary with the emphasis manipulation.
-Emat <- matrix(c(0, 1, 0, 0, 0, 1), ncol = 2,
-               dimnames = list(NULL, c("a", "s")))
+# ell is left out of the formula, so it stays at its default of 1 and fixes
+# the evidence scale for the lognormal launch.
 design_BAwD <- design(data = forstmann, model = BAwD, matchfun = matchfun,
                       formula = list(mu ~ lM, sigma ~ 1, B ~ E, A ~ 1,
-                                     t0 ~ 1, k ~ 1, Tmax ~ 1),
-                      contrasts = list(mu = list(lM = ADmat),
-                                       B = list(E = Emat)),
-                      constants = c(B = log(1)))
+                                     t0 ~ 1, k ~ 1),
+                      contrasts = list(mu = list(lM = ADmat)))
 }

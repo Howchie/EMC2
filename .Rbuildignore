@@ -10,11 +10,10 @@
 ^CLAUDE\.md$
 ^CLAUDE_TASK\.md$
 ^[^/]+\.RData$
-^column_refactor_plan\.md$
-^RLF_optimization_plan\.md$
 ^run_benchmark\.R$
 ^tmp_cache(/|$)
 \.ipynb_checkpoints
 ^\.Rtmp(/|$)
 ^\.git
 ^\.pytest_cache
+^src/Makevars\.profile$

@@ -1,4 +1,4 @@
-#include <RcppArmadillo.h>
+#include <Rcpp.h>
 #include <unordered_set>
 #include "utility_functions.h"
 #include "utility_types.h"

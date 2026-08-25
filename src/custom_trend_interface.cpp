@@ -1,4 +1,4 @@
-#include <RcppArmadillo.h>
+#include <Rcpp.h>
 #include "EMC2/userfun.hpp"
 
 // [[Rcpp::export]]

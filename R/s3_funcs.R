@@ -491,7 +491,50 @@ fit.emc <- function(emc, stage = NULL, iter = 1000, stop_criteria = NULL,
     if (verbose) message("Calculating pointwise log-likelihoods...")
     emc <- add_pw_ll(emc, cores_for_chains = cores_for_chains)
   }
-  if (verbose) print(Sys.time()-start_time)
+  if (verbose) {
+    final_progress <- check_progress(
+      emc = emc,
+      stage = "sample",
+      iter = stop_criteria[["sample"]][["iter"]],
+      stop_criteria = stop_criteria[["sample"]],
+      max_tries = max_tries,
+      step_size = step_size,
+      n_cores = cores_per_chain * cores_for_chains,
+      verbose = FALSE,
+      progress = NULL,
+      n_blocks = dots$n_blocks,
+      rhat_version = rhat_version,
+      truncate_gd = FALSE
+    )
+
+    gd_values <- final_progress$gd
+    gd_final <- ""
+    if (length(gd_values) > 0L) {
+      if (!is.null(stop_criteria[["sample"]]$mean_gd)) {
+        gd_final <- paste0(gd_final, sprintf(" | Mean Rhat=%.3f", mean(gd_values)))
+      }
+      if (!is.null(stop_criteria[["sample"]]$max_gd)) {
+        gd_final <- paste0(gd_final, sprintf(" | Max Rhat=%.3f", max(gd_values)))
+      }
+    }
+
+    ess_message <- ""
+    if (length(final_progress$curr_min_es) > 0L) {
+      ess_message <- paste0(" | min ESS=", round(final_progress$curr_min_es))
+    }
+
+    flat_message <- ""
+    if (length(final_progress$flat_max) > 0L) {
+      flat_message <- paste0(" | flat=", round(final_progress$flat_max, 3))
+    }
+
+    final_iters <- chain_n(emc)[1, "sample"]
+    message(sprintf(
+      "Sampling stopped | iters=%d%s%s%s | Total duration: %s",
+      final_iters, gd_final, ess_message, flat_message,
+      format_duration(Sys.time() - start_time)
+    ))
+  }
   return(emc)
 }
 

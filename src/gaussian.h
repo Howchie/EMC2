@@ -1,7 +1,7 @@
 #ifndef gaussian_h
 #define gaussian_h
 
-#include <RcppArmadillo.h>
+#include <Rcpp.h>
 #include <algorithm>
 #include <limits>
 #include <vector>
@@ -605,7 +605,6 @@ inline double norm_cdf_2d_vfast(double x1, double x2, double rho)
   }
 } 
 
-[[gnu::flatten]]
 inline double norm_ucdf_2d(double x1, double x2, double rho)
 {
   const int low_rho_order = 6;

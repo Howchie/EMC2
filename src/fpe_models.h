@@ -51,6 +51,7 @@ namespace fpe {
 #ifndef FPE_EPS
 #define FPE_EPS 1e-12
 #endif
+constexpr double ROUP_DRIFT_EPS = 1e-10;
 
 // ---------------------------------------------------------------------------
 // Collapsing boundary -- a self-contained module.
@@ -412,6 +413,8 @@ struct FPE_ModelPulseOU {
   double tau_S = 1.0;
   double tau_T = 1.0;
   double lambda = 1.0;
+  bool active_S = true;
+  bool active_T = true;
   double sigma = 1.0;
   double xlo = -1.0;
   FPE_Boundary bnd;
@@ -420,17 +423,24 @@ struct FPE_ModelPulseOU {
   double x_hi(double t) const { return bnd.a(t); }
   double B() const { return sigma; }
   double drift(double x, double t) const {
-    double mu_S = v_S * (tau_S > FPE_EPS ? (1.0 - std::exp(-t / tau_S)) : 1.0);
-    double mu_T = v_T * (tau_T > FPE_EPS ? (t / tau_T) * std::exp(-t / tau_T) : 0.0);
+    double mu_S = active_S
+      ? v_S * (tau_S > FPE_EPS ? (1.0 - std::exp(-t / tau_S)) : 1.0)
+      : 0.0;
+    double mu_T = active_T
+      ? v_T * (tau_T > FPE_EPS ? (t / tau_T) * std::exp(-t / tau_T) : 0.0)
+      : 0.0;
     return mu_S + mu_T - lambda * x;
   }
   double length(double t) const { return bnd.a(t) - xlo; }
   double length_prime(double t) const { return bnd.a_prime(t); }
   bool static_op() const { return false; } // Time varying operator
-
   void atil_affine(double t, double L, double Lp, double& a0, double& a1) const {
-    double mu_S = v_S * (tau_S > FPE_EPS ? (1.0 - std::exp(-t / tau_S)) : 1.0);
-    double mu_T = v_T * (tau_T > FPE_EPS ? (t / tau_T) * std::exp(-t / tau_T) : 0.0);
+    double mu_S = active_S
+      ? v_S * (tau_S > FPE_EPS ? (1.0 - std::exp(-t / tau_S)) : 1.0)
+      : 0.0;
+    double mu_T = active_T
+      ? v_T * (tau_T > FPE_EPS ? (t / tau_T) * std::exp(-t / tau_T) : 0.0)
+      : 0.0;
     double v_t = mu_S + mu_T;
     a0 = (v_t - lambda * xlo) / L;
     a1 = (-lambda * L - Lp) / L;

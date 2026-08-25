@@ -106,14 +106,14 @@
   var1 <- emc[[1]]$samples$theta_var
   p_n <- dim(var1)[1]
   idx_ut <- which(upper.tri(matrix(NA_real_, p_n, p_n), diag = TRUE), arr.ind = TRUE)
+  idx_ut_linear <- idx_ut[, 1L] + (idx_ut[, 2L] - 1L) * p_n
   k_n <- nrow(idx_ut)
   out <- array(NA_real_, dim = c(c_n, iter_n, k_n))
   for (i in seq_len(c_n)) {
     idx <- tail(idx_list[[i]], iter_n)
     var_i <- emc[[i]]$samples$theta_var[, , idx, drop = FALSE]
-    for (k in seq_len(k_n)) {
-      out[i, , k] <- var_i[idx_ut[k, 1], idx_ut[k, 2], ]
-    }
+    dim(var_i) <- c(p_n * p_n, iter_n)
+    out[i, , ] <- t(var_i[idx_ut_linear, , drop = FALSE])
   }
   mat <- matrix(out, ncol = k_n)
   p_names <- dimnames(var1)[[1]]

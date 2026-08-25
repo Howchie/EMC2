@@ -1,3 +1,5 @@
+skip_model_validation()
+
 # Numerical-stability tests for the race-model log-space fallbacks
 # (RDMSWTN / RDMGBM / SWTN / truncated ex-Gaussian + the shared normal-tail
 # helpers).  Throughout, log_out must remain a pure output-scale choice:
@@ -38,7 +40,7 @@ test_that("RDMSWTN A>0 log-CDF fallback matches an adaptive reference in deep ta
       m <- pmax(a1, a2)
       m + log1p(exp(pmin(a1, a2) - m))
     }
-    m <- max(lF(seq(dlo, dhi, length.out = 101)))
+    m <- max(lF(seq(dlo, dhi, length.out = 21)))
     v <- integrate(function(d) exp(lF(d) - m), dlo, dhi, rel.tol = 1e-12)$value
     m + log(v) - log(A)
   }

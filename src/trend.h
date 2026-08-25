@@ -3,7 +3,7 @@
 
 #include "utility_functions.h"
 #include "EMC2/userfun.hpp"
-#include <RcppArmadillo.h>
+#include <Rcpp.h>
 #include <unordered_map>
 using namespace Rcpp;
 

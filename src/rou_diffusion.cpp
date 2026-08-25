@@ -51,6 +51,56 @@ void check_bnd_lengths(int bkind, const NumericVector& Binf,
   }
 }
 
+inline double roup_logaddexp_local(double a, double b) {
+  if (a <= fperace::LOG_FLOOR) return b;
+  if (b <= fperace::LOG_FLOOR) return a;
+  const double hi = std::max(a, b);
+  return hi + std::log1p(std::exp(std::min(a, b) - hi));
+}
+
+inline bool roup_local_keys_cpp(int par_kind, double v_S, double transient,
+                                double tau_S, double tau_T, double k, double B,
+                                double A, double s, const fperace::BndSpec& bs,
+                                fperace::Key& ks, fperace::Key& kt,
+                                bool& hs, bool& ht) {
+  double v_T = 0.0;
+  if (!R_finite(transient) || transient < 0.0) return false;
+  if (transient > fpe::ROUP_DRIFT_EPS &&
+      !fperace::roup_transient_to_rate(par_kind, transient, tau_T, v_T))
+    return false;
+  if (!R_finite(v_S) || v_S < 0.0) return false;
+  hs = v_S > fpe::ROUP_DRIFT_EPS;
+  ht = v_T > fpe::ROUP_DRIFT_EPS;
+  if (!hs && !ht) return false;
+  if (hs && !fperace::roup_key(v_S, 0.0, tau_S, 0.0,
+                               k, B, A, s, bs, ks))
+    return false;
+  if (ht && !fperace::roup_key(0.0, v_T, 0.0, tau_T,
+                               k, B, A, s, bs, kt))
+    return false;
+  if (!hs) ks = kt;
+  if (!ht) kt = ks;
+  return true;
+}
+
+inline int roup_group_cpp(const fperace::Key& p, double tt,
+                          std::vector<fperace::Key>& keys,
+                          std::vector<double>& horizon,
+                          std::vector<std::vector<double>>& query_times) {
+  int g = -1;
+  for (size_t j = 0; j < keys.size(); ++j) {
+    if (keys[j] == p) { g = static_cast<int>(j); break; }
+  }
+  if (g < 0) {
+    keys.push_back(p);
+    horizon.push_back(tt);
+    query_times.push_back(std::vector<double>(1, tt));
+    return static_cast<int>(keys.size() - 1);
+  }
+  horizon[g] = std::max(horizon[g], tt);
+  query_times[g].push_back(tt);
+  return g;
+}
 } // anonymous namespace
 
 // ---------------------------------------------------------------------------
@@ -460,7 +510,7 @@ Rcpp::List droup_cpp(NumericVector rt, NumericVector v_S, NumericVector v_T,
                      NumericVector Binf = NumericVector::create(),
                      NumericVector tau = NumericVector::create(),
                      NumericVector pw = NumericVector::create(),
-                     int par_kind = 0) {
+                     int par_kind = 0, int pooling = 0) {
   const int n = rt.size();
   if (v_S.size() != n || v_T.size() != n || tau_S.size() != n || tau_T.size() != n ||
       k.size() != n || B.size() != n || A.size() != n || t0.size() != n || s.size() != n) {
@@ -468,11 +518,20 @@ Rcpp::List droup_cpp(NumericVector rt, NumericVector v_S, NumericVector v_T,
   }
   if (par_kind != fperace::ROUP_PAR_RATE && par_kind != fperace::ROUP_PAR_AREA)
     stop("droup_cpp: unknown ROUp parameterization code.");
+  if (pooling != 0 && pooling != 1)
+    stop("droup_cpp: pooling must be 0 (coactive) or 1 (local_race).");
   check_bnd_lengths(bkind, Binf, tau, pw, n, "droup_cpp");
+  for (int i = 0; i < n; ++i) {
+    if (R_finite(v_S[i]) && v_S[i] < 0.0)
+      stop("droup_cpp: negative sustained drift is invalid.");
+    if (R_finite(v_T[i]) && v_T[i] < 0.0)
+      stop("droup_cpp: negative transient drift is invalid.");
+  }
 
   NumericVector pdf(n, 0.0), cdf(n, 0.0);
   fperace::SolveCache C;
   C.par_kind = par_kind;
+  C.roup_local = pooling == 1;
   C.grid = rou_grid(nx, dt_target, grade, tgrade);
   SEXP sparse = Rf_GetOption1(Rf_install("emc2.rou_sparse_output"));
   if (sparse != R_NilValue && Rf_length(sparse) > 0) {
@@ -480,62 +539,136 @@ Rcpp::List droup_cpp(NumericVector rt, NumericVector v_S, NumericVector v_T,
     if (enabled != NA_LOGICAL) C.sparse_raw_output = enabled;
   }
 
-  // Pass 1: group and find each group's max horizon.
-  std::vector<fperace::Key> keys;
-  std::vector<double> horizon;
-  std::vector<std::vector<double>> query_times;
-  std::vector<int> grp(n, -1);
+  std::vector<fperace::Key> keys, keys_s, keys_t;
+  std::vector<double> horizon, horizon_s, horizon_t;
+  std::vector<std::vector<double>> query_times, query_s, query_t;
+  std::vector<int> grp(n, -1), grp_s(n, -1), grp_t(n, -1);
   for (int i = 0; i < n; ++i) {
     const double tt = rt[i] - t0[i];
     if (!R_finite(tt) || tt <= 0.0) continue;
-    fperace::Key p;
-    if (!fperace::roup_key_par(par_kind, v_S[i], v_T[i], tau_S[i], tau_T[i],
-                               k[i], B[i], A[i], s[i],
-                               rou_bnd_at(bkind, Binf, tau, pw, i), p)) continue;
-    int g = -1;
-    for (size_t j = 0; j < keys.size(); ++j) {
-      if (keys[j] == p) { g = static_cast<int>(j); break; }
-    }
-    if (g < 0) {
-      keys.push_back(p);
-      horizon.push_back(tt);
-      query_times.push_back(std::vector<double>(1, tt));
-      g = static_cast<int>(keys.size()) - 1;
+    const fperace::BndSpec bs = rou_bnd_at(bkind, Binf, tau, pw, i);
+    if (pooling == 1) {
+      fperace::Key ks, kt; bool hs = false, ht = false;
+      if (!roup_local_keys_cpp(par_kind, v_S[i], v_T[i], tau_S[i], tau_T[i],
+                               k[i], B[i], A[i], s[i], bs, ks, kt, hs, ht))
+        continue;
+      if (hs) grp_s[i] = roup_group_cpp(ks, tt, keys_s, horizon_s, query_s);
+      if (ht) grp_t[i] = roup_group_cpp(kt, tt, keys_t, horizon_t, query_t);
     } else {
-      if (tt > horizon[g]) horizon[g] = tt;
-      query_times[g].push_back(tt);
+      fperace::Key p;
+      if (!fperace::roup_key_par(par_kind, v_S[i], v_T[i], tau_S[i], tau_T[i],
+                                 k[i], B[i], A[i], s[i], bs, p))
+        continue;
+      grp[i] = roup_group_cpp(p, tt, keys, horizon, query_times);
     }
-    grp[i] = g;
+  }
+  for (auto* qv : {&query_times, &query_s, &query_t}) {
+    for (auto& times : *qv) {
+      std::sort(times.begin(), times.end());
+      times.erase(std::unique(times.begin(), times.end()), times.end());
+    }
   }
 
-  for (auto& times : query_times) {
-    std::sort(times.begin(), times.end());
-    times.erase(std::unique(times.begin(), times.end()), times.end());
+  std::vector<int> idx, idx_s, idx_t;
+  if (pooling == 1) {
+    fperace::cache_get_batch(C, keys_s, horizon_s, idx_s,
+                             C.sparse_raw_output ? &query_s : nullptr);
+    fperace::cache_get_batch(C, keys_t, horizon_t, idx_t,
+                             C.sparse_raw_output ? &query_t : nullptr);
+  } else {
+    fperace::cache_get_batch(C, keys, horizon, idx,
+                             C.sparse_raw_output ? &query_times : nullptr);
   }
 
-  // Pass 2: solve keys to max required horizon.
-  std::vector<int> idx;
-  fperace::cache_get_batch(
-      C, keys, horizon, idx,
-      C.sparse_raw_output ? &query_times : nullptr);
-
-  // Pass 3: interpolate.
   for (int i = 0; i < n; ++i) {
-    if (grp[i] < 0) continue;
-    const fperace::Entry& en = C.e[idx[grp[i]]];
     const double tt = rt[i] - t0[i];
-    const double lp = fperace::entry_log_pdf(en, tt);
+    double lp = fperace::LOG_FLOOR, lS = 0.0;
+    if (pooling == 1) {
+      const bool hs = grp_s[i] >= 0, ht = grp_t[i] >= 0;
+      if (!hs && !ht) continue;
+      const double lss = hs ? fperace::entry_log_S(C.e[idx_s[grp_s[i]]], tt) : 0.0;
+      const double lst = ht ? fperace::entry_log_S(C.e[idx_t[grp_t[i]]], tt) : 0.0;
+      lS = lss + lst;
+      if (hs && ht) {
+        lp = roup_logaddexp_local(
+          fperace::entry_log_pdf(C.e[idx_s[grp_s[i]]], tt) + lst,
+          fperace::entry_log_pdf(C.e[idx_t[grp_t[i]]], tt) + lss);
+      } else {
+        lp = hs ? fperace::entry_log_pdf(C.e[idx_s[grp_s[i]]], tt)
+                : fperace::entry_log_pdf(C.e[idx_t[grp_t[i]]], tt);
+      }
+    } else {
+      if (grp[i] < 0) continue;
+      const fperace::Entry& en = C.e[idx[grp[i]]];
+      lp = fperace::entry_log_pdf(en, tt);
+      lS = fperace::entry_log_S(en, tt);
+    }
     pdf[i] = (lp <= fperace::LOG_FLOOR) ? 0.0 : std::exp(lp);
-    const double lS = fperace::entry_log_S(en, tt);
-    cdf[i] = (lS >= 0.0) ? 0.0 : ((lS <= fperace::LOG_FLOOR) ? 1.0 : -std::expm1(lS));
+    cdf[i] = (lS >= 0.0) ? 0.0 :
+      ((lS <= fperace::LOG_FLOOR) ? 1.0 : -std::expm1(lS));
   }
-  return Rcpp::List::create(_["pdf"] = pdf, _["cdf"] = cdf, _["n_solves"] = static_cast<int>(C.e.size()));
+  return Rcpp::List::create(_["pdf"] = pdf, _["cdf"] = cdf,
+                            _["n_solves"] = static_cast<int>(C.e.size()));
+}
+
+// Simulate one pulse trajectory. Local ROUp calls this once per active
+// channel, giving each channel its own start point and noise stream.
+double simulate_roup_channel_cpp(double vS, double vT, double tauS, double tauT,
+                                 double kk, double BB, double AA, double ss,
+                                 double dt, double t_max, int bkind,
+                                 double Binf, double tau, double pw) {
+  if (!R_finite(vS) || !R_finite(vT) || vS < 0.0 || vT < 0.0 ||
+      !R_finite(BB) || !R_finite(ss) || ss <= 0.0)
+    return R_PosInf;
+  const bool as = vS > fpe::ROUP_DRIFT_EPS;
+  const bool at = vT > fpe::ROUP_DRIFT_EPS;
+  if (!as && !at) return R_PosInf;
+  if ((as && (!(tauS > 0.0) || !R_finite(tauS))) ||
+      (at && (!(tauT > 0.0) || !R_finite(tauT))))
+    return R_PosInf;
+  AA = (R_finite(AA) && AA > 0.0) ? AA : 0.0;
+  fpe::FPE_Boundary bnd;
+  if (bkind == fpe::FPE_BND_FIXED)
+    bnd.set_kind(fpe::FPE_BND_FIXED, BB + AA, BB + AA, 0.0, 0.0, false);
+  else
+    bnd.set_kind(bkind, BB + AA, Binf, tau,
+                 (bkind == fpe::FPE_BND_WEIBULL) ? pw : 0.0, false);
+  double X = (AA > 0.0) ? AA * ::unif_rand() : 0.0;
+  double b = bnd.b(0.0);
+  if (X >= b) return 0.0;
+  kk = (R_finite(kk) && kk > 0.0) ? kk : 0.0;
+  const double phi = std::exp(-kk * dt);
+  const double m1 = -std::expm1(-kk * dt);
+  const double m2 = -std::expm1(-2.0 * kk * dt);
+  const double drift_gain = (kk > 1e-10) ? (m1 / kk) : dt;
+  const double var_val = (kk > 1e-10) ? (ss * ss * m2 / (2.0 * kk))
+                                      : (ss * ss * dt);
+  const double sd_val = std::sqrt(std::max(var_val, 0.0));
+  const double inv_2var_bb = 2.0 / (ss * ss * dt);
+  for (double t = 0.0; t < t_max; t += dt) {
+    const double tm = t + 0.5 * dt;
+    const double muS = as ? vS * (1.0 - std::exp(-tm / tauS)) : 0.0;
+    const double muT = at ? vT * (tm / tauT) * std::exp(-tm / tauT) : 0.0;
+    const double X1 = X * phi + (muS + muT) * drift_gain +
+                      sd_val * ::norm_rand();
+    const double b1 = (bkind == fpe::FPE_BND_FIXED) ? b : bnd.b(t + dt);
+    if (X1 >= b1) {
+      const double d0 = b - X, d1 = b1 - X1;
+      const double frac = d0 / std::max(d0 - d1, 1e-300);
+      return t + std::min(std::max(frac, 0.0), 1.0) * dt;
+    }
+    const double pc = std::exp(-(b - X) * (b1 - X1) * inv_2var_bb);
+    if (::unif_rand() < pc) return t + ::unif_rand() * dt;
+    X = X1;
+    b = b1;
+  }
+  return R_PosInf;
 }
 
 // [[Rcpp::export]]
 Rcpp::List rroup_cpp(NumericMatrix pars, CharacterVector lR_levels, LogicalVector ok,
                      SEXP kind_sexp = R_NilValue, double dt = 1e-3, double t_max = 30.0,
-                     int par_kind = 0) {
+                     int par_kind = 0, int pooling = 0) {
   const int n_acc = lR_levels.size();
   const int n_rows = pars.nrow();
   if (n_acc <= 0 || n_rows % n_acc != 0) {
@@ -549,6 +682,8 @@ Rcpp::List rroup_cpp(NumericMatrix pars, CharacterVector lR_levels, LogicalVecto
   }
   if (par_kind != fperace::ROUP_PAR_RATE && par_kind != fperace::ROUP_PAR_AREA)
     stop("rroup_cpp: unknown ROUp parameterization code.");
+  if (pooling != 0 && pooling != 1)
+    stop("rroup_cpp: pooling must be 0 (coactive) or 1 (local_race).");
   const int n_trials = n_rows / n_acc;
 
   CharacterVector col_names = colnames(pars);
@@ -600,6 +735,60 @@ Rcpp::List rroup_cpp(NumericMatrix pars, CharacterVector lR_levels, LogicalVecto
   for (int j = 0; j < n_trials; ++j) {
     double win_rt = R_PosInf;
     int winner = -1;
+    if (pooling == 1) {
+      for (int a = 0; a < n_acc; ++a) {
+        const int r = j * n_acc + a;
+        if (!ok[r]) continue;
+        const double BB = pars(r, iB);
+        if (!R_finite(BB)) continue;
+        const double AA = (iA >= 0 && R_finite(pars(r, iA)) && pars(r, iA) > 0.0)
+          ? pars(r, iA) : 0.0;
+        const double vvS = pars(r, iv_S);
+        const double transient = pars(r, iTransient);
+        const double ttauS = pars(r, itau_S);
+        const double ttauT = pars(r, itau_T);
+        double vvT = 0.0;
+        if (!R_finite(transient) || transient < 0.0) continue;
+        if (transient > fpe::ROUP_DRIFT_EPS &&
+            !fperace::roup_transient_to_rate(par_kind, transient, ttauT, vvT))
+          continue;
+        if (R_finite(vvS) && vvS < 0.0)
+          stop("rroup_cpp: negative sustained drift is invalid.");
+        if (R_finite(vvT) && vvT < 0.0)
+          stop("rroup_cpp: negative transient drift is invalid.");
+        const double kk = (ik >= 0 && R_finite(pars(r, ik)) && pars(r, ik) > 0.0)
+          ? pars(r, ik) : 0.0;
+        const double ss = (is >= 0 && R_finite(pars(r, is)) && pars(r, is) > 0.0)
+          ? pars(r, is) : 1.0;
+        const double tt0 = R_finite(pars(r, it0)) ? pars(r, it0) : 0.0;
+        const double bi = iBinf >= 0 ? pars(r, iBinf) : 0.5;
+        const double tv = itau >= 0 ? pars(r, itau) : 1.0;
+        const double pv = ipw >= 0 ? pars(r, ipw) : 1.0;
+        double hit = R_PosInf;
+        if (vvS > fpe::ROUP_DRIFT_EPS && vvT > fpe::ROUP_DRIFT_EPS) {
+          const double hs = simulate_roup_channel_cpp(
+            vvS, 0.0, ttauS, 1.0, kk, BB, AA, ss, dt, t_max,
+            bkind, bi, tv, pv);
+          const double ht = simulate_roup_channel_cpp(
+            0.0, vvT, 1.0, ttauT, kk, BB, AA, ss, dt, t_max,
+            bkind, bi, tv, pv);
+          hit = std::min(hs, ht);
+        } else {
+          hit = simulate_roup_channel_cpp(
+            vvS, vvT, ttauS, ttauT, kk, BB, AA, ss, dt, t_max,
+            bkind, bi, tv, pv);
+        }
+        if (R_finite(hit) && hit + tt0 < win_rt) {
+          win_rt = hit + tt0;
+          winner = a + 1;
+        }
+      }
+      if (winner > 0) {
+        R_out[j] = winner;
+        rt_out[j] = win_rt;
+      }
+      continue;
+    }
     std::fill(active.begin(), active.end(), 0);
 
     double min_t0 = R_PosInf;
@@ -616,7 +805,23 @@ Rcpp::List rroup_cpp(NumericMatrix pars, CharacterVector lR_levels, LogicalVecto
       double ttauS = pars(r, itau_S);
       double ttauT = pars(r, itau_T);
       double vvT = 0.0;
-      if (!fperace::roup_transient_to_rate(par_kind, transient, ttauT, vvT)) continue;
+      if (!R_finite(transient) || transient < 0.0) continue;
+      if (transient > fpe::ROUP_DRIFT_EPS &&
+          !fperace::roup_transient_to_rate(par_kind, transient, ttauT, vvT))
+        continue;
+      if (R_finite(vvS) && vvS < 0.0)
+        stop("rroup_cpp: negative sustained drift is invalid.");
+      if (R_finite(vvT) && vvT < 0.0)
+        stop("rroup_cpp: negative transient drift is invalid.");
+      if (R_finite(vvS) && R_finite(vvT) &&
+          vvS <= fpe::ROUP_DRIFT_EPS && vvT <= fpe::ROUP_DRIFT_EPS)
+        stop("rroup_cpp: both pulse channels are disabled.");
+      if (R_finite(vvS) && vvS > fpe::ROUP_DRIFT_EPS &&
+          (!(ttauS > 0.0) || !R_finite(ttauS)))
+        stop("rroup_cpp: active sustained channel needs a finite positive tau_S.");
+      if (R_finite(vvT) && vvT > fpe::ROUP_DRIFT_EPS &&
+          (!(ttauT > 0.0) || !R_finite(ttauT)))
+        stop("rroup_cpp: active transient channel needs a finite positive tau_T.");
       double kk = (ik >= 0 && R_finite(pars(r, ik)) && pars(r, ik) > 0.0) ? pars(r, ik) : 0.0;
       double ss = (is >= 0 && R_finite(pars(r, is)) && pars(r, is) > 0.0) ? pars(r, is) : 1.0;
       double tt0 = R_finite(pars(r, it0)) ? pars(r, it0) : 0.0;
@@ -728,7 +933,7 @@ NumericVector rroup_hit_times_cpp(NumericVector v_S, NumericVector v_T,
                                  NumericVector Binf = NumericVector::create(),
                                  NumericVector tau = NumericVector::create(),
                                  NumericVector pw = NumericVector::create(),
-                                 int par_kind = 0) {
+                                 int par_kind = 0, int pooling = 0) {
   const int n = v_S.size();
   if (v_T.size() != n || tau_S.size() != n || tau_T.size() != n ||
       k.size() != n || B.size() != n || A.size() != n || s.size() != n) {
@@ -737,6 +942,8 @@ NumericVector rroup_hit_times_cpp(NumericVector v_S, NumericVector v_T,
   if (!(dt > 0.0) || !(t_max > 0.0)) stop("rroup_hit_times_cpp: dt and t_max must be positive.");
   if (par_kind != fperace::ROUP_PAR_RATE && par_kind != fperace::ROUP_PAR_AREA)
     stop("rroup_hit_times_cpp: unknown ROUp parameterization code.");
+  if (pooling != 0 && pooling != 1)
+    stop("rroup_hit_times_cpp: pooling must be 0 (coactive) or 1 (local_race).");
   check_bnd_lengths(bkind, Binf, tau, pw, n, "rroup_hit_times_cpp");
 
   NumericVector out(n, R_PosInf);
@@ -745,6 +952,33 @@ NumericVector rroup_hit_times_cpp(NumericVector v_S, NumericVector v_T,
 
   Rcpp::RNGScope scope;
   for (int i = 0; i < n; ++i) {
+    if (pooling == 1) {
+      if (!R_finite(B[i]) || !R_finite(s[i]) || s[i] <= 0.0) continue;
+      double vT_rate = 0.0;
+      if (!R_finite(v_T[i]) || v_T[i] < 0.0) continue;
+      if (v_T[i] > fpe::ROUP_DRIFT_EPS &&
+          !fperace::roup_transient_to_rate(par_kind, v_T[i], tau_T[i], vT_rate))
+        continue;
+      const double kk = (R_finite(k[i]) && k[i] > 0.0) ? k[i] : 0.0;
+      const double AA = (R_finite(A[i]) && A[i] > 0.0) ? A[i] : 0.0;
+      const double bi = bkind == fpe::FPE_BND_FIXED ? 0.0 : Binf[i];
+      const double tv = bkind == fpe::FPE_BND_FIXED ? 0.0 : tau[i];
+      const double pv = bkind == fpe::FPE_BND_WEIBULL ? pw[i] : 0.0;
+      if (v_S[i] > fpe::ROUP_DRIFT_EPS && vT_rate > fpe::ROUP_DRIFT_EPS) {
+        const double hs = simulate_roup_channel_cpp(
+          v_S[i], 0.0, tau_S[i], 1.0, kk, B[i], AA, s[i],
+          dt, t_max, bkind, bi, tv, pv);
+        const double ht = simulate_roup_channel_cpp(
+          0.0, vT_rate, 1.0, tau_T[i], kk, B[i], AA, s[i],
+          dt, t_max, bkind, bi, tv, pv);
+        out[i] = std::min(hs, ht);
+      } else {
+        out[i] = simulate_roup_channel_cpp(
+          v_S[i], vT_rate, tau_S[i], tau_T[i], kk, B[i], AA, s[i],
+          dt, t_max, bkind, bi, tv, pv);
+      }
+      continue;
+    }
     if (!R_finite(v_S[i]) || !R_finite(v_T[i]) || !R_finite(B[i]) || !R_finite(s[i]) || s[i] <= 0.0) {
       continue;
     }

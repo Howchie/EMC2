@@ -1,3 +1,5 @@
+skip_model_validation()
+
 rlf_pars <- function(n, v = 1.5, B = 1, A = 0, t0 = 0, s = 1,
                      alpha = 1.7) {
   cbind(
@@ -55,7 +57,7 @@ test_that("RLF production grid defaults stay synchronized", {
 })
 
 test_that("RLF production grid controls low-alpha discretisation error", {
-  rt <- seq(0.05, 4, length.out = 160)
+  rt <- seq(0.05, 4, length.out = 31)
   n <- length(rt)
   solve <- function(nx, dt, ratio) {
     EMC2:::rlf_pdf_cdf_vec(

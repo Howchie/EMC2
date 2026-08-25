@@ -1,4 +1,4 @@
-#include <RcppArmadillo.h>
+#include <Rcpp.h>
 // #include <RcppArmadillo.h>
 #include "ParamTable.h"
 #include "TrendEngine.h"   // contains TrendEngine definition

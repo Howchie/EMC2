@@ -181,6 +181,44 @@ run_emc <- function(emc, stage, stop_criteria,
       save(emc, file = fileName)
       emc <- restore_duplicates(emc)
     }
+    elapsed <- Sys.time() - t0
+    if (verbose) {
+      gd_values <- progress$gd
+      gd_message <- ""
+      if (length(gd_values) > 0L) {
+        if (!is.null(stop_criteria$mean_gd)) {
+          gd_message <- paste0(gd_message, " | Mean Rhat=", round(mean(gd_values), 3))
+        }
+        if (!is.null(stop_criteria$max_gd)) {
+          gd_message <- paste0(gd_message, " | Max Rhat=", round(max(gd_values), 3))
+        }
+      }
+      ess_message <- ""
+      if (stage == "sample" && length(progress$curr_min_es) > 0L) {
+        ess_message <- paste0(" | min ESS=", round(progress$curr_min_es))
+      }
+      flat_message <- ""
+      if (length(progress$flat_max) > 0L) {
+        flat_message <- paste0(" | flat=", round(progress$flat_max, 3))
+      }
+      current_iters <- progress$total_iters_stage
+      target_iters <- iter
+      rem <- estimate_remaining_total_time(
+        stage = stage,
+        tries_done = progress$trys,
+        elapsed_dt = elapsed,
+        max_tries = max_tries,
+        current_iters = current_iters,
+        target_iters = target_iters,
+        step_size = progress$step_size
+      )
+      message(sprintf("[%s | try=%d | iters=%d%s%s%s] Duration: %s - ETA: %s-%s",
+                      stage, progress$trys, progress$total_iters_stage,
+                      gd_message, ess_message, flat_message,
+                      format_duration(elapsed),
+                      format_duration(rem$min_time),
+                      format_duration(rem$max_time)))
+    }
   }
   emc <- strip_duplicates(emc)
   class(emc) <- "emc"
@@ -235,7 +273,7 @@ add_proposals <- function(emc, stage, n_cores, n_blocks){
 
 check_progress <- function (emc, stage, iter, stop_criteria,
                             max_tries, step_size, n_cores, verbose, progress = NULL,
-                            n_blocks, rhat_version = "old")
+                            n_blocks, rhat_version = "old", truncate_gd = TRUE)
 {
   min_es <- stop_criteria$min_es
   if(is.null(min_es)) min_es <- 0
@@ -249,12 +287,21 @@ check_progress <- function (emc, stage, iter, stop_criteria,
   else {
     iters_total <- progress$iters_total + step_size
     trys <- progress$trys + 1
-    if (verbose)
-      message(trys, ": Iterations ", stage, " = ", total_iters_stage)
   }
-  gd <- check_gd(emc, stage, stop_criteria[["max_gd"]], stop_criteria[["mean_gd"]], trys, verbose,
-                 iter = total_iters_stage, selection, omit_mpsrf = stop_criteria[["omit_mpsrf"]],
-                 n_blocks, rhat_version = rhat_version)
+  gd <- check_gd(
+    emc = emc,
+    stage = stage,
+    max_gd = stop_criteria[["max_gd"]],
+    mean_gd = stop_criteria[["mean_gd"]],
+    trys = trys,
+    verbose = FALSE,
+    iter = total_iters_stage,
+    selection = selection,
+    omit_mpsrf = stop_criteria[["omit_mpsrf"]],
+    n_blocks = n_blocks,
+    rhat_version = rhat_version,
+    truncate = truncate_gd
+  )
   iter_done <- ifelse(is.null(iter) || length(iter) == 0, TRUE, total_iters_stage >= iter)
   if (min_es == 0) {
     es_done <- TRUE
@@ -265,8 +312,6 @@ check_progress <- function (emc, stage, iter, stop_criteria,
       curr_min_es <- min(c(ess_summary(emc, selection = select,
                                                 stage = stage, stat_only = TRUE), curr_min_es))
     }
-    if (verbose)
-      message("Smallest effective size = ", round(curr_min_es))
     es_done <- ifelse(!emc[[1]]$init, FALSE, curr_min_es >
                         min_es)
   }
@@ -297,7 +342,6 @@ check_progress <- function (emc, stage, iter, stop_criteria,
       stage = "sample"
     )
     flat_done <- flat_out$flat_done
-    if (verbose) message("Max flat drift = ", round(flat_out$max_flat, 3))
   }
 
   done <- (es_done & iter_done & gd$gd_done & adapted & flat_done) | (trys_done & iter_done)
@@ -333,11 +377,15 @@ check_progress <- function (emc, stage, iter, stop_criteria,
   out_emc[[1]]$convergence_log <- c(out_emc[[1]]$convergence_log, list(log_entry))
 
   return(list(emc = out_emc, done = done, step_size = step_size,
-              trys = trys, n_blocks = gd$n_blocks))
+              trys = trys, n_blocks = gd$n_blocks, gd = gd$gd,
+              total_iters_stage = total_iters_stage,
+              curr_min_es = if (min_es > 0 && total_iters_stage != 0) curr_min_es else NULL,
+              flat_max = if (!is.null(flat_out)) flat_out$max_flat else NULL))
 }
 
 check_gd <- function(emc, stage, max_gd, mean_gd, omit_mpsrf, trys, verbose,
-                     selection, iter, n_blocks = 1, rhat_version = "old")
+                     selection, iter, n_blocks = 1, rhat_version = "old",
+                     truncate = TRUE)
 {
   get_gds <- function(emc, omit_mpsrf, selection, stage, rhat_version) {
     gd_out <- c()
@@ -373,7 +421,7 @@ check_gd <- function(emc, stage, max_gd, mean_gd, omit_mpsrf, trys, verbose,
   }
 
   ok_gd <- ok_mean_gd & ok_max_gd
-  if(!ok_gd) {
+  if (!ok_gd && truncate) {
     n_remove <- round(chain_n(emc)[,stage][1]/3)
     samplers_short <- subset.emc(emc, filter=n_remove,stage=stage, keep_stages = TRUE)
     if (is(samplers_short,"try-error")){

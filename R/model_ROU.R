@@ -146,7 +146,7 @@ rROU <- function(lR, pars, ok = rep(TRUE, nrow(pars)), kind = NULL,
                                      if (p$bkind == 0L) numeric(0) else p$tau[ok2],
                                      if (length(p$pw)) p$pw[ok2] else numeric(0))
   }
-  bad_col <- apply(dt_mat, 2, function(x) all(is.infinite(x)))
+  bad_col <- colSums(!is.infinite(dt_mat)) == 0L
   R <- max.col(-t(dt_mat), ties.method = "first")
   pick <- cbind(R, seq_len(ncol(dt_mat)))
   rt <- matrix(p$t0, nrow = nr)[pick] + dt_mat[pick]
@@ -231,7 +231,7 @@ rROU <- function(lR, pars, ok = rep(TRUE, nrow(pars)), kind = NULL,
     dt_mat[ok2] <- hits
   }
 
-  bad_col <- apply(dt_mat, 2, function(x) all(is.infinite(x)))
+  bad_col <- colSums(!is.infinite(dt_mat)) == 0L
   R <- max.col(-t(dt_mat), ties.method = "first")
   pick <- cbind(R, seq_len(ncol(dt_mat)))
   rt <- matrix(p$t0, nrow = nr)[pick] + dt_mat[pick]

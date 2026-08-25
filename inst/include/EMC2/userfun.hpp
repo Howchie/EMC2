@@ -1,5 +1,5 @@
 #pragma once
-#include <RcppArmadillo.h>
+#include <Rcpp.h>
 
 // Signature for a custom trend kernel mapping function provided by the user.
 // The function receives:
