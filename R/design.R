@@ -733,7 +733,7 @@ design_model_custom_ll <- function(data, design, model){
 #' interval-mass machinery from the likelihood.
 #'
 #' @param dadm A design-augmented data model (or any data frame carrying the
-#'   `LT`/`LC`/`UT`/`UC` bounds as columns or attributes).
+#'   `LT`/`LC`/`UT`/`UC` bounds as columns).
 #' @param TC Optional truncation/censoring list; `TC$guess_window` or
 #'   `TC$w_outlier` override the derived window.
 #' @param verbose Whether to report the resolved window and the implied HDDM
@@ -743,7 +743,7 @@ design_model_custom_ll <- function(data, design, model){
 #' @keywords internal
 resolve_guess_window <- function(dadm, TC = NULL, verbose = FALSE) {
   bound <- function(nm, default) {
-    v <- if (nm %in% colnames(dadm)) dadm[[nm]] else attr(dadm, nm)
+    v <- if (nm %in% colnames(dadm)) dadm[[nm]] else NULL
     if (is.null(v) || length(v) == 0) default else v
   }
 
@@ -829,10 +829,10 @@ compress_dadm <- function(da,designs,Fcov,Ffun)
     # out keeps only unique rows in terms of all parameters design matrices
     # R, lR and rt (at given resolution) from full data set
   {
-  if("LT"%in%colnames(da)) LT=da$LT else{LT <- attr(da,"LT")}; if (is.null(LT)) LT <- 0
-  if("UT"%in%colnames(da)) UT=da$UT else{UT <- attr(da,"UT")}; if (is.null(UT)) UT <- Inf
-  if("LC"%in%colnames(da)) LC=da$LC else{LC <- attr(da,"LC")}; if (is.null(LC)) LC <- 0
-  if("UC"%in%colnames(da)) UC=da$UC else{UC <- attr(da,"UC")}; if (is.null(UC)) UC <- Inf
+  LT <- if ("LT" %in% colnames(da)) da$LT else 0
+  UT <- if ("UT" %in% colnames(da)) da$UT else Inf
+  LC <- if ("LC" %in% colnames(da)) da$LC else 0
+  UC <- if ("UC" %in% colnames(da)) da$UC else Inf
     nacc <- length(unique(da$lR))
     # Covariate maps are part of the trial design just like the ordinary
     # covariate columns.  Normalise them before building the contraction key so
@@ -988,9 +988,9 @@ rt_check_function <- function(data){
       stop("Lower censor must not be less than lower truncation")
   }
   if (any(data$rt[!is.na(data$rt)]==-Inf) & !("LC"%in%colnames(data)))
-    stop("Data must have an LC attribute if any rt = -Inf")
+    stop("Data must have an LC column if any rt = -Inf")
   if (any(data$rt[!is.na(data$rt)]==Inf) & !("UC"%in%colnames(data)))
-    stop("Data must have an UC attribute if any rt = Inf")
+    stop("Data must have a UC column if any rt = Inf")
   if ("UC"%in%colnames(data) & "LC"%in%colnames(data)) {
     DC <- data$UC - data$LC
     if (!is.null(DC)) {
@@ -1445,10 +1445,10 @@ dm_list <- function(dadm)
       x
     })
 
-  if("LT"%in%colnames(dadm))LT=dadm$LT else{LT <- attr(dadm,"LT")}; if (is.null(LT)) LT <- 0
-  if("UT"%in%colnames(dadm))UT=dadm$UT else{UT <- attr(dadm,"UT")}; if (is.null(UT)) UT <- Inf
-  if("LC"%in%colnames(dadm))LC=dadm$LC else{LC <- attr(dadm,"LC")}; if (is.null(LC)) LC <- 0
-  if("UC"%in%colnames(dadm))UC=dadm$UC else{UC <- attr(dadm,"UC")}; if (is.null(UC)) UC <- Inf
+  LT <- if ("LT" %in% colnames(dadm)) dadm$LT else 0
+  UT <- if ("UT" %in% colnames(dadm)) dadm$UT else Inf
+  LC <- if ("LC" %in% colnames(dadm)) dadm$LC else 0
+  UC <- if ("UC" %in% colnames(dadm)) dadm$UC else Inf
   if(length(LT)==1) {dadm$LT = rep(LT,nrow(dadm))}
   else{dadm$LT=LT}
   if(length(UT)==1) {dadm$UT = rep(UT,nrow(dadm))}

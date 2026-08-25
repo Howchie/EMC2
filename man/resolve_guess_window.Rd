@@ -8,7 +8,7 @@ resolve_guess_window(dadm, TC = NULL, verbose = FALSE)
 }
 \arguments{
 \item{dadm}{A design-augmented data model (or any data frame carrying the
-\code{LT}/\code{LC}/\code{UT}/\code{UC} bounds as columns or attributes).}
+\code{LT}/\code{LC}/\code{UT}/\code{UC} bounds as columns).}
 
 \item{TC}{Optional truncation/censoring list; \code{TC$guess_window} or
 \code{TC$w_outlier} override the derived window.}
