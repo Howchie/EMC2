@@ -98,6 +98,89 @@ add_nuisance_pars <- function(p_types, transform, minmax, exception = NULL,
   list(p_types = p_types, transform = transform, minmax = minmax,
        exception = exception)
 }
+# Name of the operational-time warp parameter (Math/ballistic-time.md).  Like
+# the nuisance parameters this is a *trailing* p_type kept out of
+# p_types_canonical: eta = 0 is the exact parent model, so a design that never
+# mentions it is unchanged and should not be warned about.
+.time_warp_par_name <- "eta"
+
+# Append the operational-time warp parameter to a ballistic model's parameter
+# machinery.  Call this immediately BEFORE add_nuisance_pars() so the column
+# order stays <model parameters>, eta, pContaminant, pGuess.  The kernels
+# resolve eta by name, so the position is cosmetic.
+add_time_warp_par <- function(p_types, transform, minmax, exception = NULL) {
+  nm <- .time_warp_par_name
+  if (!(nm %in% names(p_types))) {
+    p_types[[nm]] <- 0
+    transform[[nm]] <- "identity"
+    # Unbounded, like v/mu/delta.  eta lives on the whole real line and the
+    # numerics are total there; EMC2 bounds encode support, never numerical
+    # convenience.
+    minmax <- cbind(minmax, c(-Inf, Inf))
+    colnames(minmax)[ncol(minmax)] <- nm
+  }
+  list(p_types = p_types, transform = transform, minmax = minmax,
+       exception = exception)
+}
+
+# --- the warp itself, vectorised; this mirrors emc2tw:: in src/time_warp.h.
+# eta == 0 short-circuits to the identity so that a design carrying a constant
+# eta = 0 reproduces the parent model bit for bit.
+.tw_active <- function(eta) (!is.na(eta) & eta != 0) | is.nan(eta)
+
+.tw_fwd <- function(u, eta) {                       # s = c_eta(u)
+  eta <- rep_len(eta, length(u))
+  out <- u
+  act <- .tw_active(eta) & !is.na(u) & is.finite(u) & u > 0
+  if (!any(act)) return(out)
+  om <- exp(eta[act])
+  nan_eta <- is.nan(eta[act])
+  l1p <- log1p(u[act])
+  x <- om * l1p
+  s <- ifelse(om < 1e-12, l1p, expm1(x) / om)   # omega -> 0 limit
+  s[nan_eta] <- NaN
+  s[(!nan_eta & !is.finite(om)) | x > 709] <- Inf
+  out[act] <- s
+  out
+}
+
+.tw_log_jac <- function(u, eta) {                 # log c'_eta(u)
+  eta <- rep_len(eta, length(u))
+  out <- numeric(length(u))
+  act <- .tw_active(eta) & !is.na(u) & is.finite(u) & u > 0
+  out[act] <- (exp(eta[act]) - 1) * log1p(u[act])
+  out
+}
+
+.tw_jac <- function(u, eta) exp(.tw_log_jac(u, eta))
+
+.tw_inv <- function(s, eta) {                     # u = c_eta^{-1}(s)
+  eta <- rep_len(eta, length(s))
+  out <- s
+  act <- .tw_active(eta) & !is.na(s) & is.finite(s) & s > 0
+  if (!any(act)) return(out)
+  om <- exp(eta[act])
+  ss <- s[act]
+  os <- om * ss
+  # log1p(om*s), with the overflow-safe log(om) + log(s) fallback.
+  y <- ifelse(is.finite(os), log1p(os), log(om) + log(ss)) / om
+  nan_eta <- is.nan(om)
+  u <- ifelse(om < 1e-12, expm1(pmin(ss, 709)), expm1(y)) # omega -> 0 limit
+  u[nan_eta] <- NaN
+  u[!is.finite(om) & !nan_eta] <- 0              # omega -> Inf; NaN propagates
+  u[is.finite(om) & y > 709] <- Inf
+  u[om < 1e-12 & ss > 709] <- Inf
+  out[act] <- u
+  out
+}
+
+# eta column of a mapped-parameter matrix; zeros when the model has no warp.
+.tw_eta <- function(pars) {
+  if (!is.null(colnames(pars)) && .time_warp_par_name %in% colnames(pars))
+    pars[, .time_warp_par_name]
+  else rep(0, NROW(pars))
+}
+
 
 .apply_timed_guess_winner <- function(out, lR_levels) {
   if (is.null(out$R) || !("time" %in% lR_levels)) return(out)

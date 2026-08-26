@@ -9,6 +9,7 @@
 #include "model_FRQ.h"
 #include "model_BTAwL.h"
 #include "ddm_functions_inline.h"
+#include "time_warp.h"
 
 using namespace Rcpp;
 
@@ -355,6 +356,7 @@ Rcpp::List rlba_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
   const int n_trials = n_rows / n_acc;
   const auto ci = col_index_map(pars);
   const int iv = ci.at("v"), isv = ci.at("sv"), ib = ci.at("b"), iA = ci.at("A"), it0 = ci.at("t0");
+  const int ieta = ci.count("eta") ? ci.at("eta") : -1;
 
   std::vector<double> dt(n_rows, R_PosInf);
   std::vector<double> t0col(n_rows);
@@ -367,7 +369,8 @@ Rcpp::List rlba_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
     const double drift = rtnorm_lower_r(pars(r, iv), pars(r, isv), lo);
     const double u = R::unif_rand();
     const double d = (pars(r, ib) - pars(r, iA) * u) / drift;
-    dt[r] = (d < 0.0) ? R_PosInf : d;
+    dt[r] = (d < 0.0) ? R_PosInf :
+      emc2tw::inv(d, ieta >= 0 ? pars(r, ieta) : 0.0);
   }
 
   RaceOut res = resolve_race(dt, n_acc, n_trials, &t0col, &ok_row);
@@ -571,6 +574,7 @@ static Rcpp::List rbawl_cpp_impl(Rcpp::NumericMatrix pars, Rcpp::CharacterVector
             isv = ci.at(weib ? "scale" : (logn ? "sigma" : "sv")),
             ib = ci.at("b"), iA = ci.at("A"), it0 = ci.at("t0"),
             ik = ci.at("k"), ilg = ci.at("lambda_g"), ilk = ci.at("lambda_k");
+  const int ieta = ci.count("eta") ? ci.at("eta") : -1;
   const int idelta = split ? ci.at("delta") : -1;
   const int iomega = ci.count("omega") ? ci.at("omega") : -1;
   const double eps = 1e-10;
@@ -630,7 +634,7 @@ static Rcpp::List rbawl_cpp_impl(Rcpp::NumericMatrix pars, Rcpp::CharacterVector
       d = R_PosInf;
     }
     if (d < 0.0) d = R_PosInf;
-    dt[r] = d + pars(r, it0);
+    dt[r] = emc2tw::inv(d, ieta >= 0 ? pars(r, ieta) : 0.0) + pars(r, it0);
   }
 
   if (guess || !global) {
@@ -735,6 +739,7 @@ Rcpp::List rbta_wl_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels
   const int ib = has_b ? ci.at("b") : ci.at("B");
   const int itau_s = ci.count("tau_s") ? ci.at("tau_s") : -1;
   const int ipi = ci.count("pi") ? ci.at("pi") : -1;
+  const int ieta = ci.count("eta") ? ci.at("eta") : -1;
 
   auto draw_launch = [&](double p1, double p2, double delta) {
     if (weib) return R::rweibull(p1, p2);
@@ -763,7 +768,9 @@ Rcpp::List rbta_wl_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels
       const double z = A * R::unif_rand();
       const double tau = btawl_tau_for_row(pars, ci, r);
       const double hit = btawl_hit_time_transient_cpp(V, z, b, k, tau);
-      dt[static_cast<size_t>(r)] = R_FINITE(hit) ? hit + t0 : R_PosInf;
+      dt[static_cast<size_t>(r)] =
+        R_FINITE(hit) ? emc2tw::inv(hit, ieta >= 0 ? pars(r, ieta) : 0.0) + t0
+                      : R_PosInf;
       continue;
     }
 
@@ -772,7 +779,9 @@ Rcpp::List rbta_wl_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels
       const double z = A * R::unif_rand();
       const double hit = btawl_hit_time_sustained_cpp(
         V, z, b, k, pars(r, itau_s));
-      dt[static_cast<size_t>(r)] = R_FINITE(hit) ? hit + t0 : R_PosInf;
+      dt[static_cast<size_t>(r)] =
+        R_FINITE(hit) ? emc2tw::inv(hit, ieta >= 0 ? pars(r, ieta) : 0.0) + t0
+                      : R_PosInf;
       continue;
     }
 
@@ -812,7 +821,9 @@ Rcpp::List rbta_wl_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels
     const double t_T = btawl_hit_time_transient_cpp(V_T, z_T, b, k, tau_t);
     const double t_S = btawl_hit_time_sustained_cpp(V_S, z_S, b, k, pars(r, itau_s));
     const double hit = std::fmin(t_T, t_S);
-    dt[static_cast<size_t>(r)] = R_FINITE(hit) ? hit + t0 : R_PosInf;
+    dt[static_cast<size_t>(r)] =
+      R_FINITE(hit) ? emc2tw::inv(hit, ieta >= 0 ? pars(r, ieta) : 0.0) + t0
+                    : R_PosInf;
   }
 
   RaceOut res = resolve_race(dt, n_acc, n_trials, nullptr, &ok_row);
@@ -888,6 +899,7 @@ Rcpp::List rbawd_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
   const int idelta = split ? ci.at("delta") : -1;
   const int ib = ci.at("b"), iA = ci.at("A"), it0 = ci.at("t0"),
             ik = ci.at("k"), iell = ci.at("ell");
+  const int ieta = ci.count("eta") ? ci.at("eta") : -1;
 
   std::vector<double> dt(n_rows, R_PosInf);
   std::vector<double> t0col(n_rows);
@@ -906,7 +918,9 @@ Rcpp::List rbawd_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
     const double z = pars(r, iA) * R::unif_rand();
     const double u = bawd_hit_time_r(V, pars(r, ib) - z, pars(r, ik),
                                      pars(r, iell), gamma, rho);
-    dt[r] = (R_FINITE(u) && u >= 0.0) ? u : R_PosInf;
+    dt[r] = (R_FINITE(u) && u >= 0.0)
+      ? emc2tw::inv(u, ieta >= 0 ? pars(r, ieta) : 0.0)
+      : R_PosInf;
   }
 
   RaceOut res = resolve_race(dt, n_acc, n_trials, &t0col, &ok_row);
@@ -954,6 +968,7 @@ Rcpp::List rbawf_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
   const int idelta = split ? ci.at("delta") : -1;
   const int ib = ci.at("b"), iA = ci.at("A"), it0 = ci.at("t0"),
             ik = ci.at("k");
+  const int ieta = ci.count("eta") ? ci.at("eta") : -1;
 
   std::vector<double> dt(n_rows, R_PosInf);
   std::vector<double> t0col(n_rows);
@@ -972,7 +987,9 @@ Rcpp::List rbawf_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
     const double z = pars(r, iA) * R::unif_rand();
     // b and z are passed separately: the fading multiplies the start point.
     const double u = bawf_hit_time_r(V, pars(r, ib), z, pars(r, ik), rho);
-    dt[r] = (R_FINITE(u) && u >= 0.0) ? u : R_PosInf;
+    dt[r] = (R_FINITE(u) && u >= 0.0)
+      ? emc2tw::inv(u, ieta >= 0 ? pars(r, ieta) : 0.0)
+      : R_PosInf;
   }
 
   RaceOut res = resolve_race(dt, n_acc, n_trials, &t0col, &ok_row);
@@ -1015,6 +1032,7 @@ Rcpp::List rbawr_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
   const int idelta = split ? ci.at("delta") : -1;
   const int ib = ci.at("b"), iA = ci.at("A"), it0 = ci.at("t0"),
             ika = ci.at("kappa"), ipw = ci.at("p");
+  const int ieta = ci.count("eta") ? ci.at("eta") : -1;
 
   std::vector<double> dt(n_rows, R_PosInf);
   std::vector<double> t0col(n_rows);
@@ -1033,7 +1051,9 @@ Rcpp::List rbawr_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
     const double z = pars(r, iA) * R::unif_rand();
     const double u = bawr_hit_time_r(V, pars(r, ib) - z, pars(r, ika),
                                      pars(r, ipw));
-    dt[r] = (R_FINITE(u) && u >= 0.0) ? u : R_PosInf;
+    dt[r] = (R_FINITE(u) && u >= 0.0)
+      ? emc2tw::inv(u, ieta >= 0 ? pars(r, ieta) : 0.0)
+      : R_PosInf;
   }
 
   RaceOut res = resolve_race(dt, n_acc, n_trials, &t0col, &ok_row);
@@ -1073,6 +1093,7 @@ Rcpp::List rbawdp_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
   const int idelta = split ? ci.at("delta") : -1;
   const int ib = ci.at("b"), iA = ci.at("A"), it0 = ci.at("t0");
   const int ik = ci.at("k"), ilambda = ci.at("lambda");
+  const int ieta = ci.count("eta") ? ci.at("eta") : -1;
 
   std::vector<double> dt(n_rows, R_PosInf);
   std::vector<double> t0col(n_rows);
@@ -1091,7 +1112,9 @@ Rcpp::List rbawdp_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
     const double z = pars(r, iA) * R::unif_rand();
     const double u = bawdp_hit_time_r(V, pars(r, ib) - z, pars(r, ik),
                                       pars(r, ilambda));
-    dt[r] = (R_FINITE(u) && u >= 0.0) ? u : R_PosInf;
+    dt[r] = (R_FINITE(u) && u >= 0.0)
+      ? emc2tw::inv(u, ieta >= 0 ? pars(r, ieta) : 0.0)
+      : R_PosInf;
   }
 
   RaceOut res = resolve_race(dt, n_acc, n_trials, &t0col, &ok_row);

@@ -3,6 +3,14 @@
 
 -   **Breaking:** BTAwL no longer accepts `chart = "endpoint"`; sample
     `tau`/`tau_t` directly.
+-   **New:** Ballistic models now expose a trailing `eta` parameter on the
+    unbounded identity scale (default `0`), excluded from `p_types_canonical`.
+    For the supported LBA, clock-free uncorrelated BAwL, BAwD/BAwDp, BAwF,
+    BAwR, and BTAwL constructors, `eta` warps operational accumulation time;
+    `eta = 0` is the exact parent model. The CDF/survivor are composed in
+    operational time, densities include the time-warp Jacobian, `t0` remains
+    additive, and simulation applies the inverse warp. BAwL clock/correlated
+    variants, logical-rules, and non-ballistic models reject `eta`.
 
 ## Performance
 

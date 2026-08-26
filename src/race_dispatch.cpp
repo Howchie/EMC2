@@ -261,6 +261,7 @@ RaceModelAdapter resolve_race_model_adapter(const std::string& type_std,
     out.ctx.defective_upper_tail = true;
     if (!btawl_logn && type_std.find("_IO") != std::string::npos)
       out.ctx.use_posdrift = false;
+    out.ctx.tw.supported = true;   // operational-time warp (Math/ballistic-time.md)
   } else if (type_std.find("BTAwL_TRANSIENT") != std::string::npos) {
     out.pdf1_ptr       = &dbtawl_transient_scalar;
     out.cdf1_ptr       = &pbtawl_transient_scalar;
@@ -284,6 +285,7 @@ RaceModelAdapter resolve_race_model_adapter(const std::string& type_std,
     out.ctx.defective_upper_tail = true;
     if (!btawl_logn && type_std.find("_IO") != std::string::npos)
       out.ctx.use_posdrift = false;
+    out.ctx.tw.supported = true;   // operational-time warp (Math/ballistic-time.md)
   } else if (type_std.find("BTAwL") != std::string::npos) {
     out.pdf1_ptr       = &dbtawl_local_race_scalar;
     out.cdf1_ptr       = &pbtawl_local_race_scalar;
@@ -307,6 +309,7 @@ RaceModelAdapter resolve_race_model_adapter(const std::string& type_std,
     out.ctx.defective_upper_tail = true;
     if (!btawl_logn && type_std.find("_IO") != std::string::npos)
       out.ctx.use_posdrift = false;
+    out.ctx.tw.supported = true;   // operational-time warp (Math/ballistic-time.md)
   } else if (type_std.find("BAwF") != std::string::npos) {
     // Global fading of the whole evidence trace: X(u) = h_rho(u)[z + V u].
     // "BAwF" contains and is contained by none of the other c_names, so its
@@ -345,6 +348,7 @@ RaceModelAdapter resolve_race_model_adapter(const std::string& type_std,
     if (!bawf_logn && !bawf_weib && type_std.find("IO") != std::string::npos) {
       out.ctx.use_posdrift = false;
     }
+    out.ctx.tw.supported = true;   // operational-time warp (Math/ballistic-time.md)
   } else if (type_std.find("BAwR") != std::string::npos) {
     // Ramping clearance: dX/du = V - kappa u^p.  "BAwR"
     // neither contains nor is contained by any other c_name, so its position
@@ -378,6 +382,7 @@ RaceModelAdapter resolve_race_model_adapter(const std::string& type_std,
     if (!bawr_logn && !bawr_weib && type_std.find("IO") != std::string::npos) {
       out.ctx.use_posdrift = false;
     }
+    out.ctx.tw.supported = true;   // operational-time warp (Math/ballistic-time.md)
   } else if (type_std.find("BAwDp") != std::string::npos) {
     // BAwDp must precede the generic BAwD branch because its name contains the
     // string "BAwD".  It is an LBA evaluated at the closed-form internal clock
@@ -403,6 +408,7 @@ RaceModelAdapter resolve_race_model_adapter(const std::string& type_std,
     out.ctx.defective_upper_tail = true;
     if (!bawdp_logn && !bawdp_weib && type_std.find("IO") != std::string::npos)
       out.ctx.use_posdrift = false;
+    out.ctx.tw.supported = true;   // operational-time warp (Math/ballistic-time.md)
   } else if (type_std.find("BAwD") != std::string::npos) {
     // Dispatch is by substring, and "BAwD" is a substring of nothing here and
     // contains neither "BAwL" nor "LBA", so placement relative to those is
@@ -451,6 +457,7 @@ RaceModelAdapter resolve_race_model_adapter(const std::string& type_std,
     if (!bawd_logn && !bawd_weib && type_std.find("IO") != std::string::npos) {
       out.ctx.use_posdrift = false;
     }
+    out.ctx.tw.supported = true;   // operational-time warp (Math/ballistic-time.md)
   } else if (type_std.find("BAwL") != std::string::npos) {
     out.pdf1_ptr       = &dbawl_scalar;
     out.cdf1_ptr       = &pbawl_scalar;
@@ -494,6 +501,11 @@ RaceModelAdapter resolve_race_model_adapter(const std::string& type_std,
     }
     if (type_std.find("_E2") != std::string::npos) out.ctx.kill_shape = 2;
     if (type_std.find("_EMIX") != std::string::npos) out.ctx.kill_shape = 3;
+    // The Erlang kill/guess clocks run on RAW time and the correlated path has
+    // its own inlined kernels, so neither composes with the operational-time
+    // warp yet.  The R constructor already withholds `eta` from those variants;
+    // this is the defensive half of the same contract.
+    out.ctx.tw.supported = !out.ctx.kill_active && !out.ctx.corr_drift_active;
   } else if (type_std.find("LBA") != std::string::npos) {
     // Standard LBA is the exact k=0, no-clock member of the shared BAwL
     // family.  Keep the five-column LBA contract and force the optional BAwL
@@ -512,6 +524,9 @@ RaceModelAdapter resolve_race_model_adapter(const std::string& type_std,
       out.ctx.use_posdrift = false;
       out.ctx.defective_upper_tail = true;
     }
+    // LogicalRulesLBA shares the "LBA" substring but has a separate compiled
+    // time bookkeeping path; keep eta explicitly unsupported there.
+    out.ctx.tw.supported = (type_std.find("LogicalRules") == std::string::npos);
   } else if (type_std.find("RDM") != std::string::npos) {
     out.pdf1_ptr = &drdm_scalar;
     out.cdf1_ptr = &prdm_scalar;

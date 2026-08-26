@@ -5,11 +5,20 @@
   ok <- (dt>0) & (pars[,"b"] >= pars[,"A"])
   ok[is.na(ok) | !is.finite(dt)] <- FALSE
   out <- numeric(length(dt))
-  # dlba is the k = 0 BAwL member evaluated with the LBA normalizer floor,
-  # so this R path matches the C++ likelihood kernels exactly.
-  out[ok] <- dlba(t = dt[ok], A = pars[ok,"A"], b = pars[ok,"b"],
-                  v = pars[ok,"v"], sv = pars[ok,"sv"],
-                  posdrift = posdrift)
+  if (any(ok)) {
+    eta <- .tw_eta(pars)
+    idx <- which(ok)
+    s <- dt[idx]
+    active <- .tw_active(eta[idx])
+    if (any(active))
+      s[active] <- .tw_fwd(s[active], eta[idx][active])
+    val <- dlba(t = s, A = pars[idx,"A"], b = pars[idx,"b"],
+                v = pars[idx,"v"], sv = pars[idx,"sv"],
+                posdrift = posdrift)
+    if (any(active))
+      val[active] <- val[active] * .tw_jac(dt[idx][active], eta[idx][active])
+    out[idx] <- val
+  }
   out
 }
 
@@ -18,11 +27,19 @@
 {
   dt <- rt - pars[,"t0"]
   ok <- (dt>0) & (pars[,"b"] >= pars[,"A"])
-  ok[is.na(ok) | !is.finite(dt)] <- FALSE
+  ok[is.na(ok)] <- FALSE
   out <- numeric(length(dt))
-  out[ok] <- plba(t = dt[ok], A = pars[ok,"A"], b = pars[ok,"b"],
-                  v = pars[ok,"v"], sv = pars[ok,"sv"],
-                  posdrift = posdrift)
+  if (any(ok)) {
+    eta <- .tw_eta(pars)
+    idx <- which(ok)
+    s <- dt[idx]
+    active <- .tw_active(eta[idx])
+    if (any(active))
+      s[active] <- .tw_fwd(s[active], eta[idx][active])
+    out[idx] <- plba(t = s, A = pars[idx,"A"], b = pars[idx,"b"],
+                     v = pars[idx,"v"], sv = pars[idx,"sv"],
+                     posdrift = posdrift)
+  }
   is_inf <- is.infinite(rt) & rt > 0 & (pars[,"b"] >= pars[,"A"])
   is_inf[is.na(is_inf)] <- FALSE
   if (any(is_inf)) {
@@ -45,12 +62,14 @@
   nr <- length(levels(lR))
   dt <- matrix(Inf,nrow=nr,ncol=nrow(pars)/nr)
   t0 <- pars[,"t0"]
+  eta <- .tw_eta(pars)
   pars <- pars[ok,]
   if (!all(p_types %in% dimnames(pars)[[2]]))
     stop("pars must have columns ",paste(p_types,collapse = " "))
   dt[ok] <- (pars[,"b"]-pars[,"A"]*runif(dim(pars)[1]))/
     msm::rtnorm(dim(pars)[1],pars[,"v"],pars[,"sv"],ifelse(posdrift,0,-Inf))
-  dt[dt<0] <- Inf
+  dt <- .tw_inv(dt, eta)
+  dt[!is.finite(dt) | dt<0] <- Inf
   bad <- colSums(is.infinite(dt)) == nrow(dt)
   R <- max.col(-t(dt), ties.method='first')
   pick <- cbind(R,1:dim(dt)[2])
@@ -93,6 +112,7 @@ rLBA <- function(lR, pars, p_types = c("v", "sv", "b", "A", "t0"),
 #' | *B*       | log       | \[0, Inf\]    | log(1)    | *b* = *B*+*A*              | Distance from *A* to *b* (response threshold)                                       |
 #' | *t0*      | log       | \[0, Inf\]    | log(0)    |                            | Non-decision time                                         |
 #' | *sv*      | log       | \[0, Inf\]    | log(1)    |                            | Between-trial variation in evidence-accumulation rate                      |
+#' | *eta*     | identity  | \[-Inf, Inf\] | 0         |                            | Operational-time warp parameter.                                   |
 #'
 #'
 #' All core LBA parameters are estimated on the log scale, except for the drift
@@ -101,6 +121,21 @@ rLBA <- function(lR, pars, p_types = c("v", "sv", "b", "A", "t0"),
 #' omission and uniform-outlier probabilities, respectively.
 #'
 #' Conventionally, `sv` is fixed to 1 to satisfy scaling constraints.
+#'
+#' **Operational-time warp.** `eta` is a trailing free parameter (identity
+#' transform, default `0`, unbounded on the natural scale) and is excluded from
+#' `p_types_canonical`. For physical accumulation time `u = rt - t0`, let
+#' `omega = exp(eta)` and `s = ((1 + u)^omega - 1) / omega`. The CDF and
+#' survivor are the parent CDF/survivor evaluated at `s`; the density is the
+#' parent density times the Jacobian `c_eta'(u) = (1 + u)^(omega - 1)`.
+#' Simulation maps a parent internal finish `s` back with
+#' `u = (1 + omega * s)^(1 / omega) - 1` and returns `rt = t0 + u`, so `t0`
+#' remains additive. `eta = 0` is the exact identity warp.
+#'
+#' For BAwL, this contract applies only to the clock-free, uncorrelated
+#' constructor (`erlang_type = "none"`, `correlated = FALSE`). BAwL clock or
+#' correlated variants, `LogicalRulesLBA`, and all non-ballistic models reject
+#' `eta`.
 #'
 #' The *b* = *B* + *A* parameterization ensures that the response threshold is always higher than the between trial variation in start point of the drift rate.
 #'
@@ -155,10 +190,16 @@ LBA <- function(posdrift=TRUE){
     # parameter vector; if represented on the transformed scale, their off
     # value would be log(0) = -Inf.
     # p_vector transform, sets sv as a scaling parameter
-    p_types=c("v" = 1,"sv" = log(1),"B" = log(1),"A" = log(0),"t0" = log(0), "pContaminant"=qnorm(0), "pGuess"=qnorm(0)),
+    p_types=c("v" = 1,"sv" = log(1),"B" = log(1),"A" = log(0),"t0" = log(0),
+              "eta" = 0, "pContaminant"=qnorm(0), "pGuess"=qnorm(0)),
     p_types_canonical = c("v", "sv", "B", "A", "t0"),
-    transform=list(func=c(v = "identity",sv = "exp", B = "exp", A = "exp",t0 = "exp",pContaminant="pnorm",pGuess="pnorm")),
-    bound=list(minmax=cbind(v=c(-Inf,Inf),sv = c(1e-4, Inf), A=c(1e-4,Inf),B=c(1e-4,Inf),t0=c(0.05,Inf),pContaminant=c(0.001,0.999),pGuess=c(0.001,0.999)),
+    transform=list(func=c(v = "identity",sv = "exp", B = "exp", A = "exp",
+                          t0 = "exp", eta = "identity",
+                          pContaminant="pnorm",pGuess="pnorm")),
+    bound=list(minmax=cbind(v=c(-Inf,Inf),sv = c(1e-4, Inf),
+                            A=c(1e-4,Inf),B=c(1e-4,Inf),t0=c(0.05,Inf),
+                            eta=c(-Inf,Inf),pContaminant=c(0.001,0.999),
+                            pGuess=c(0.001,0.999)),
                exception=c(A=0,pContaminant=0,pGuess=0)),
     # Transform to natural scale
     # Trial dependent parameter transform
@@ -245,6 +286,11 @@ LBA <- function(posdrift=TRUE){
 #' `A` and `B` rows within a trial. In positive-drift mode, the active target
 #' draws are conditioned jointly to be positive.
 #' The optional fitting parameter `pContaminant` is the omission probability.
+#'
+#' The logical-rules constructor is intentionally outside the operational-time
+#' warp: `LogicalRulesLBA` rejects `eta` because its compiled likelihood has a
+#' separate time bookkeeping path. All non-ballistic models likewise reject
+#' `eta`.
 #'
 #' The likelihood is implemented in the compiled logical-rules fast path. The
 #' R `dfun` and `pfun` entries retain the single-accumulator LBA functions for
@@ -341,16 +387,28 @@ dBAwL <- function(rt, pars, posdrift = TRUE, erlang = 1L, guess = FALSE,
   ok[is.na(ok) | !is.finite(dt)] <- FALSE
   out <- numeric(length(dt))
   if (any(ok)) {
-    out[ok] <- dkilledleakyba(
-      t = rt[ok], v = pars[ok, nm[1]], b = pars[ok, "b"], A = pars[ok, "A"],
-      sv = pars[ok, nm[2]], t0 = pars[ok, "t0"], k = pars[ok, "k"],
-      lambda_g = pars[ok, "lambda_g"], lambda_k = pars[ok, "lambda_k"],
+    idx <- which(ok)
+    eta <- .tw_eta(pars)
+    active <- .tw_active(eta[idx]) & !erl[idx] &
+      is.finite(dt[idx]) & dt[idx] > 0
+    active[is.na(active)] <- FALSE
+    kernel_t <- rt[idx]
+    if (any(active))
+      kernel_t[active] <- pars[idx, "t0"][active] +
+        .tw_fwd(dt[idx][active], eta[idx][active])
+    val <- dkilledleakyba(
+      t = kernel_t, v = pars[idx, nm[1]], b = pars[idx, "b"], A = pars[idx, "A"],
+      sv = pars[idx, nm[2]], t0 = pars[idx, "t0"], k = pars[idx, "k"],
+      lambda_g = pars[idx, "lambda_g"], lambda_k = pars[idx, "lambda_k"],
       posdrift = posdrift, log_out = FALSE,
       kill_shape = as.integer(erlang), guess = guess,
-      erlang_omega = .rdmswtn_erlang_omega(pars[ok, , drop = FALSE], erlang),
+      erlang_omega = .rdmswtn_erlang_omega(pars[idx, , drop = FALSE], erlang),
       launch = as.integer(launch),
-      delta = if (launch == 2L) pars[ok, "delta"] else 0
+      delta = if (launch == 2L) pars[idx, "delta"] else 0
     )
+    if (any(active))
+      val[active] <- val[active] * .tw_jac(dt[idx][active], eta[idx][active])
+    out[idx] <- val
   }
   out
 }
@@ -367,15 +425,24 @@ pBAwL <- function(rt, pars, posdrift = TRUE, erlang = 1L, guess = FALSE,
   ok[is.na(ok)] <- FALSE
   out <- numeric(length(dt))
   if (any(ok)) {
-    out[ok] <- pkilledleakyba(
-      t = rt[ok], v = pars[ok, nm[1]], b = pars[ok, "b"], A = pars[ok, "A"],
-      sv = pars[ok, nm[2]], t0 = pars[ok, "t0"], k = pars[ok, "k"],
-      lambda_g = pars[ok, "lambda_g"], lambda_k = pars[ok, "lambda_k"],
+    idx <- which(ok)
+    eta <- .tw_eta(pars)
+    active <- .tw_active(eta[idx]) & !erl[idx] &
+      is.finite(dt[idx]) & dt[idx] > 0
+    active[is.na(active)] <- FALSE
+    kernel_t <- rt[idx]
+    if (any(active))
+      kernel_t[active] <- pars[idx, "t0"][active] +
+        .tw_fwd(dt[idx][active], eta[idx][active])
+    out[idx] <- pkilledleakyba(
+      t = kernel_t, v = pars[idx, nm[1]], b = pars[idx, "b"], A = pars[idx, "A"],
+      sv = pars[idx, nm[2]], t0 = pars[idx, "t0"], k = pars[idx, "k"],
+      lambda_g = pars[idx, "lambda_g"], lambda_k = pars[idx, "lambda_k"],
       posdrift = posdrift, log_out = FALSE,
       kill_shape = as.integer(erlang), guess = guess,
-      erlang_omega = .rdmswtn_erlang_omega(pars[ok, , drop = FALSE], erlang),
+      erlang_omega = .rdmswtn_erlang_omega(pars[idx, , drop = FALSE], erlang),
       launch = as.integer(launch),
-      delta = if (launch == 2L) pars[ok, "delta"] else 0
+      delta = if (launch == 2L) pars[idx, "delta"] else 0
     )
   }
   out
@@ -460,6 +527,10 @@ rBAwL <- function(lR, pars, ok = rep(TRUE, length(lR)),
     dt[ok_idx[big_k]] <- (-1 / pars[big_k, "k"]) * log(ratio)
   }
   dt[dt < 0] <- Inf
+  # Convert operational accumulation hits back to physical accumulation time
+  # before putting the non-decision time back on the raw-time axis.
+  dt <- .tw_inv(dt, .tw_eta(pars_all))
+  dt[!is.finite(dt) | dt < 0] <- Inf
   # Put EAM on the same raw-time axis as Erlang clocks.
   dt <- dt + matrix(t0, nrow = nr)
 
@@ -617,7 +688,23 @@ rBAwL_corr <- function(lR, pars, ok = rep(TRUE, nrow(pars)),
 #' | *A* | log | \[0, Inf\] | log(0) | | Start-point range. |
 #' | *t0* | log | \[0, Inf\] | log(0) | | Non-decision time. |
 #' | *k* | log | \[0, Inf\] | log(0) | | Leak rate; `k = 0` is the LBA limit. |
+#' | *eta* | identity | \[-Inf, Inf\] | 0 | | Operational-time warp parameter. |
 #'
+#'
+#' **Operational-time warp.** `eta` is a trailing free parameter (identity
+#' transform, default `0`, unbounded on the natural scale) and is excluded from
+#' `p_types_canonical`. For physical accumulation time `u = rt - t0`, let
+#' `omega = exp(eta)` and `s = ((1 + u)^omega - 1) / omega`. The CDF and
+#' survivor are the parent CDF/survivor evaluated at `s`; the density is the
+#' parent density times the Jacobian `c_eta'(u) = (1 + u)^(omega - 1)`.
+#' Simulation maps a parent internal finish `s` back with
+#' `u = (1 + omega * s)^(1 / omega) - 1` and returns `rt = t0 + u`, so `t0`
+#' remains additive. `eta = 0` is the exact identity warp.
+#'
+#' For BAwL, this contract applies only to the clock-free, uncorrelated
+#' constructor (`erlang_type = "none"`, `correlated = FALSE`). BAwL clock or
+#' correlated variants, `LogicalRulesLBA`, and all non-ballistic models reject
+#' `eta`.
 #' With `drift_distribution = "lognormal"`, `v` and `sv` are replaced by `mu`
 #' (identity, default 0) and `sigma` (log, default `log(1)`), giving
 #' `log V ~ N(mu, sigma^2)`.  With `"splitlognormal"`, `mu` is the exact
@@ -686,6 +773,11 @@ rBAwL_corr <- function(lR, pars, ok = rep(TRUE, nrow(pars)),
 #' simulator jointly conditions the active drift vector on all active drifts
 #' being positive, so `rho` refers to the underlying untruncated Gaussian
 #' draws, not to their marginally truncated correlation.
+#'
+#' The operational-time warp is not available when BAwL uses clocks or the
+#' correlated-drift path; those variants reject `eta`. The clock-free,
+#' uncorrelated BAwL constructor supports the trailing `eta` contract described
+#' above.
 #'
 #' @param posdrift Logical. If `TRUE` (default), drift rates are truncated at
 #'   zero; if `FALSE`, they are sampled from the untruncated normal.
@@ -801,6 +893,14 @@ BAwL <- function(posdrift = TRUE, erlang_shape = 1L,
   }
 
   # pContaminant (omission) and pGuess (uniform outlier); see add_nuisance_pars().
+  # The Erlang clocks run on raw time and the correlated path has its own
+  # kernels, so neither composes with the warp yet; withholding eta from
+  # p_types makes eta ~ 1 fail in design() rather than silently doing nothing.
+  if (erlang_type == "none" && !correlated) {
+    .tw <- add_time_warp_par(p_types, transform, minmax, exception)
+    p_types <- .tw$p_types; transform <- .tw$transform
+    minmax <- .tw$minmax; exception <- .tw$exception
+  }
   .nuis <- add_nuisance_pars(p_types, transform, minmax, exception)
   p_types <- .nuis$p_types; transform <- .nuis$transform
   minmax <- .nuis$minmax; exception <- .nuis$exception
@@ -940,6 +1040,11 @@ BAwL <- function(posdrift = TRUE, erlang_shape = 1L,
 #' `A`, `t0`, and `k`. Optional fitting parameters are `pContaminant`, the
 #' omission probability, and `pGuess`, the uniform-outlier probability; `rho`
 #' is the optional correlation parameter.
+#'
+#' The operational-time warp is intentionally unsupported for `BAwLcorr`;
+#' this correlated variant rejects `eta`. Clock-enabled BAwL variants likewise
+#' reject `eta`; use the clock-free, uncorrelated [BAwL()] constructor for the
+#' documented warp contract.
 #'
 #' @param posdrift Logical. If `TRUE` (default), drift rates are jointly
 #'   conditioned to be positive; if `FALSE`, use untruncated normal drifts.

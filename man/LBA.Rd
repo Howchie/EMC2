@@ -26,6 +26,7 @@ argument of \code{design()}.They can also be accessed with \code{LBA()$p_types}.
    \emph{B} \tab log \tab [0, Inf] \tab log(1) \tab \emph{b} = \emph{B}+\emph{A} \tab Distance from \emph{A} to \emph{b} (response threshold) \cr
    \emph{t0} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Non-decision time \cr
    \emph{sv} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Between-trial variation in evidence-accumulation rate \cr
+   \emph{eta} \tab identity \tab [-Inf, Inf] \tab 0 \tab  \tab Operational-time warp parameter. \cr
 }
 
 
@@ -35,6 +36,21 @@ rate which is estimated on the real line. Optional fitting parameters
 omission and uniform-outlier probabilities, respectively.
 
 Conventionally, \code{sv} is fixed to 1 to satisfy scaling constraints.
+
+\strong{Operational-time warp.} \code{eta} is a trailing free parameter (identity
+transform, default \code{0}, unbounded on the natural scale) and is excluded from
+\code{p_types_canonical}. For physical accumulation time \code{u = rt - t0}, let
+\code{omega = exp(eta)} and \code{s = ((1 + u)^omega - 1) / omega}. The CDF and
+survivor are the parent CDF/survivor evaluated at \code{s}; the density is the
+parent density times the Jacobian \verb{c_eta'(u) = (1 + u)^(omega - 1)}.
+Simulation maps a parent internal finish \code{s} back with
+\code{u = (1 + omega * s)^(1 / omega) - 1} and returns \code{rt = t0 + u}, so \code{t0}
+remains additive. \code{eta = 0} is the exact identity warp.
+
+For BAwL, this contract applies only to the clock-free, uncorrelated
+constructor (\code{erlang_type = "none"}, \code{correlated = FALSE}). BAwL clock or
+correlated variants, \code{LogicalRulesLBA}, and all non-ballistic models reject
+\code{eta}.
 
 The \emph{b} = \emph{B} + \emph{A} parameterization ensures that the response threshold is always higher than the between trial variation in start point of the drift rate.
 

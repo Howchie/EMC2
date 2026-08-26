@@ -14,6 +14,10 @@
 // variants, and kernels must gate every dereference of them on the
 // corresponding context flag (kill_active, kill_shape == 3, pc_col >= 0, ...).
 
+// `eta` (the operational-time warp of Math/ballistic-time.md) is deliberately
+// NOT in any enum here: it is resolved BY NAME in configure_time_warp_context()
+// (src/time_warp.cpp), like `rho`, so that adding it to a model's p_types needs
+// no new ColSpec and cannot shift any positional index.
 namespace emc2col {
 
 // Column contracts use separate enum types to keep each model's layout

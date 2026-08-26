@@ -1,6 +1,7 @@
 #include "gh_quad.h"
 #include "utility_functions.h"
 #include "race_dispatch.h"
+#include "time_warp.h"
 #include "model_lnr.h"
 #include "model_EXG.h"
 #include "model_LBA.h"
@@ -786,6 +787,7 @@ NumericVector calc_ll_oo(NumericMatrix particle_matrix, DataFrame data, NumericV
     }
     configure_corr_drift_context(adapter, keep_names, "calc_ll_oo");
     configure_rdmswtn_corr_context(adapter, keep_names, "calc_ll_oo");
+    configure_time_warp_context(adapter, keep_names, "calc_ll_oo");
     if (is_logicalrules && adapter.ctx.rdmswtn_correlated) {
       Rcpp::stop("calc_ll_oo: correlated RDMSWTN logical-rule races are not supported.");
     }
@@ -1262,6 +1264,7 @@ NumericMatrix calc_ll_oo_pw(NumericMatrix particle_matrix, DataFrame data, Numer
     }
     configure_corr_drift_context(adapter, keep_names, "calc_ll_oo_pw");
     configure_rdmswtn_corr_context(adapter, keep_names, "calc_ll_oo_pw");
+    configure_time_warp_context(adapter, keep_names, "calc_ll_oo_pw");
     if (is_logicalrules && adapter.ctx.rdmswtn_correlated) {
       Rcpp::stop("calc_ll_oo_pw: correlated RDMSWTN logical-rule races are not supported.");
     }

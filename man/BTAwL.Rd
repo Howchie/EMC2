@@ -44,6 +44,7 @@ upper end of the start-point range to the threshold, so the kernel receives
    \emph{tau_s} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Sustained-drive time constant. \cr
    \emph{tau_t} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Transient-drive time constant. \cr
    \emph{pi} \tab probit \tab [0, 1] \tab qnorm(.5) \tab  \tab Probability allocated to the sustained process. \cr
+   \emph{eta} \tab identity \tab [-Inf, Inf] \tab 0 \tab  \tab Operational-time warp parameter. \cr
 }
 
 
@@ -60,6 +61,21 @@ for the local race, \code{pi} multiplies the scale of the sustained channel and
 \code{1 - pi} multiplies the scale of the transient channel.
 Optional fitting parameters: \code{pContaminant} is the omission probability and
 \code{pGuess} is the uniform-outlier probability.
+
+\strong{Operational-time warp.} \code{eta} is a trailing free parameter (identity
+transform, default \code{0}, unbounded on the natural scale) and is excluded from
+\code{p_types_canonical}. For physical accumulation time \code{u = rt - t0}, let
+\code{omega = exp(eta)} and \code{s = ((1 + u)^omega - 1) / omega}. The CDF and
+survivor are the parent CDF/survivor evaluated at \code{s}; the density is the
+parent density times the Jacobian \verb{c_eta'(u) = (1 + u)^(omega - 1)}.
+Simulation maps a parent internal finish \code{s} back with
+\code{u = (1 + omega * s)^(1 / omega) - 1} and returns \code{rt = t0 + u}, so \code{t0}
+remains additive. \code{eta = 0} is the exact identity warp.
+
+For BAwL, this contract applies only to the clock-free, uncorrelated
+constructor (\code{erlang_type = "none"}, \code{correlated = FALSE}). BAwL clock or
+correlated variants, \code{LogicalRulesLBA}, and all non-ballistic models reject
+\code{eta}.
 
 The evidence scale is not intrinsic: multiplying the launch strength,
 threshold distance, and start-point range by the same positive constant

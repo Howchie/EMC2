@@ -81,7 +81,22 @@ typedef void (*RaceLogSAtTFun)(double t, const double* const* cols,
                                int n_rows_total, int n_lR, int n_par,
                                const int* trunc_mask, int n_unique_trials,
                                const int* isok_all, void* ctx_, double* logS_out);
-
+// Operational-time warp (Math/ballistic-time.md).  The warp is installed as a
+// generic outer layer over a ballistic model's five adapter entry points:
+// configure_time_warp_context() moves the model's own pointers into base_*
+// here and replaces the adapter's with the tw_* wrappers in time_warp.h.  The
+// kernels themselves are untouched -- they keep reading tt = rt - t0 and are
+// simply handed s = c_eta(tt) instead of tt.
+struct TimeWarpPlan {
+  int eta_index = -1;                       // keep_names position of `eta`; -1 = absent
+  bool supported = false;                   // set true only by ballistic dispatch branches
+  RacePdf1Fun     base_pdf1  = nullptr;
+  RaceCdf1Fun     base_cdf1  = nullptr;
+  RaceRawFun      base_d_raw = nullptr;
+  RaceRawFun      base_p_raw = nullptr;
+  RaceLogSAtTFun  base_logS  = nullptr;
+  bool installed() const { return eta_index >= 0 && base_pdf1 != nullptr; }
+};
 
 struct gsl_race_params_scalar {
   const double* pars;   // row-major, length n_lR * n_par
@@ -112,6 +127,7 @@ struct ContextForRaceModels {
     bool use_posdrift = true;
     bool gng = false;
     int t0_index = -1;
+    TimeWarpPlan tw;
     // Column indices for the Erlang timer mean parameters (mG, mK) in the raw
     // particle parameter matrix that calc_ll_oo passes to the C++ likelihood.
     // These store the user-visible means, NOT rates.  Call erlang_lambda_from_mean()

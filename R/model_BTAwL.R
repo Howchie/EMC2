@@ -27,16 +27,19 @@
 dBTAwLTransient <- function(rt, pars, launch = 0L, posdrift = TRUE) {
   nm <- .btawl_check_cols(pars, launch)
   dt <- rt - pars[, "t0"]
+  eta <- .tw_eta(pars)
   ok <- (rt > 0) & (dt > 0) & is.finite(dt) & (pars[, "b"] >= pars[, "A"])
   ok[is.na(ok)] <- FALSE
   out <- numeric(length(dt))
   if (any(ok)) {
     tau <- .btawl_tau_col(pars)
-    out[ok] <- dbtawl_transient(dt[ok], A = pars[ok, "A"], b = pars[ok, "b"],
+    s <- .tw_fwd(dt[ok], eta[ok])
+    out[ok] <- dbtawl_transient(s, A = pars[ok, "A"], b = pars[ok, "b"],
                       p1 = pars[ok, nm[1]], p2 = pars[ok, nm[2]],
                       k = pars[ok, "k"], tau = tau[ok],
                       launch = as.integer(launch), posdrift = posdrift,
-                      delta = if (launch == 2L) pars[ok, "delta"] else 0)
+                      delta = if (launch == 2L) pars[ok, "delta"] else 0) *
+      .tw_jac(dt[ok], eta[ok])
   }
   out
 }
@@ -44,6 +47,7 @@ dBTAwLTransient <- function(rt, pars, launch = 0L, posdrift = TRUE) {
 pBTAwLTransient <- function(rt, pars, launch = 0L, posdrift = TRUE) {
   nm <- .btawl_check_cols(pars, launch)
   dt <- rt - pars[, "t0"]
+  eta <- .tw_eta(pars)
   # rt = Inf is deliberately retained: pBTAwLTransient(Inf) is the eventual response
   # probability, not one, because weak launches can fail to hit.
   ok <- (rt > 0) & (dt > 0) & (pars[, "b"] >= pars[, "A"])
@@ -51,7 +55,8 @@ pBTAwLTransient <- function(rt, pars, launch = 0L, posdrift = TRUE) {
   out <- numeric(length(dt))
   if (any(ok)) {
     tau <- .btawl_tau_col(pars)
-    out[ok] <- pbtawl_transient(dt[ok], A = pars[ok, "A"], b = pars[ok, "b"],
+    s <- .tw_fwd(dt[ok], eta[ok])
+    out[ok] <- pbtawl_transient(s, A = pars[ok, "A"], b = pars[ok, "b"],
                       p1 = pars[ok, nm[1]], p2 = pars[ok, nm[2]],
                       k = pars[ok, "k"], tau = tau[ok],
                       launch = as.integer(launch), posdrift = posdrift,
@@ -75,17 +80,20 @@ pBTAwLTransient <- function(rt, pars, launch = 0L, posdrift = TRUE) {
 dBTAwL <- function(rt, pars, launch = 0L, posdrift = TRUE) {
   nm <- .btawl_local_race_check_cols(pars, launch)
   dt <- rt - pars[, "t0"]
+  eta <- .tw_eta(pars)
   ok <- (rt > 0) & (dt > 0) & is.finite(dt) & (pars[, "b"] >= pars[, "A"])
   ok[is.na(ok)] <- FALSE
   out <- numeric(length(dt))
   if (any(ok)) {
     tau_t <- .btawl_local_race_tau_t_col(pars)
-    out[ok] <- dbtawl_local_race(dt[ok], A = pars[ok, "A"], b = pars[ok, "b"],
+    s <- .tw_fwd(dt[ok], eta[ok])
+    out[ok] <- dbtawl_local_race(s, A = pars[ok, "A"], b = pars[ok, "b"],
                          p1 = pars[ok, nm[1]], p2 = pars[ok, nm[2]],
                          k = pars[ok, "k"], tau_s = pars[ok, "tau_s"],
                          tau_t = tau_t[ok], pi = pars[ok, "pi"],
                          launch = as.integer(launch), posdrift = posdrift,
-                         delta = if (launch == 2L) pars[ok, "delta"] else 0)
+                         delta = if (launch == 2L) pars[ok, "delta"] else 0) *
+      .tw_jac(dt[ok], eta[ok])
   }
   out
 }
@@ -93,12 +101,14 @@ dBTAwL <- function(rt, pars, launch = 0L, posdrift = TRUE) {
 pBTAwL <- function(rt, pars, launch = 0L, posdrift = TRUE) {
   nm <- .btawl_local_race_check_cols(pars, launch)
   dt <- rt - pars[, "t0"]
+  eta <- .tw_eta(pars)
   ok <- (rt > 0) & (dt > 0) & (pars[, "b"] >= pars[, "A"])
   ok[is.na(ok)] <- FALSE
   out <- numeric(length(dt))
   if (any(ok)) {
     tau_t <- .btawl_local_race_tau_t_col(pars)
-    out[ok] <- pbtawl_local_race(dt[ok], A = pars[ok, "A"], b = pars[ok, "b"],
+    s <- .tw_fwd(dt[ok], eta[ok])
+    out[ok] <- pbtawl_local_race(s, A = pars[ok, "A"], b = pars[ok, "b"],
                          p1 = pars[ok, nm[1]], p2 = pars[ok, nm[2]],
                          k = pars[ok, "k"], tau_s = pars[ok, "tau_s"],
                          tau_t = tau_t[ok], pi = pars[ok, "pi"],
@@ -119,6 +129,7 @@ pBTAwL <- function(rt, pars, launch = 0L, posdrift = TRUE) {
 dBTAwLSustained <- function(rt, pars, launch = 0L, posdrift = TRUE) {
   nm <- .btawl_sustained_check_cols(pars, launch)
   dt <- rt - pars[, "t0"]
+  eta <- .tw_eta(pars)
   ok <- (rt > 0) & (dt > 0) & is.finite(dt) & (pars[, "b"] >= pars[, "A"])
   ok[is.na(ok)] <- FALSE
   out <- numeric(length(dt))
@@ -126,12 +137,14 @@ dBTAwLSustained <- function(rt, pars, launch = 0L, posdrift = TRUE) {
     # The transient clearance and pi are inert at the sustained boundary;
     # using the full kernel here keeps the R reference exactly aligned with
     # the compiled sustained adapter.
-    out[ok] <- dbtawl_local_race(dt[ok], A = pars[ok, "A"], b = pars[ok, "b"],
+    s <- .tw_fwd(dt[ok], eta[ok])
+    out[ok] <- dbtawl_local_race(s, A = pars[ok, "A"], b = pars[ok, "b"],
                          p1 = pars[ok, nm[1]], p2 = pars[ok, nm[2]],
                          k = pars[ok, "k"], tau_s = pars[ok, "tau_s"],
                          tau_t = pars[ok, "tau_s"], pi = 1,
                          launch = as.integer(launch), posdrift = posdrift,
-                         delta = if (launch == 2L) pars[ok, "delta"] else 0)
+                         delta = if (launch == 2L) pars[ok, "delta"] else 0) *
+      .tw_jac(dt[ok], eta[ok])
   }
   out
 }
@@ -139,11 +152,13 @@ dBTAwLSustained <- function(rt, pars, launch = 0L, posdrift = TRUE) {
 pBTAwLSustained <- function(rt, pars, launch = 0L, posdrift = TRUE) {
   nm <- .btawl_sustained_check_cols(pars, launch)
   dt <- rt - pars[, "t0"]
+  eta <- .tw_eta(pars)
   ok <- (rt > 0) & (dt > 0) & (pars[, "b"] >= pars[, "A"])
   ok[is.na(ok)] <- FALSE
   out <- numeric(length(dt))
   if (any(ok)) {
-    out[ok] <- pbtawl_local_race(dt[ok], A = pars[ok, "A"], b = pars[ok, "b"],
+    s <- .tw_fwd(dt[ok], eta[ok])
+    out[ok] <- pbtawl_local_race(s, A = pars[ok, "A"], b = pars[ok, "b"],
                          p1 = pars[ok, nm[1]], p2 = pars[ok, nm[2]],
                          k = pars[ok, "k"], tau_s = pars[ok, "tau_s"],
                          tau_t = pars[ok, "tau_s"], pi = 1,
@@ -222,6 +237,7 @@ pBTAwLSustained <- function(rt, pars, launch = 0L, posdrift = TRUE) {
   pars <- pars[ok, , drop = FALSE]
   ok_idx <- which(ok)
   tau_all <- .btawl_tau_col(pars_all)
+  eta_all <- .tw_eta(pars_all)
   V <- if (launch == 3L) {
     rweibull(nrow(pars), pars[, nm[1]], pars[, nm[2]])
   } else if (launch == 1L) {
@@ -239,9 +255,10 @@ pBTAwLSustained <- function(rt, pars, launch = 0L, posdrift = TRUE) {
     tr <- ((row - 1L) %% nr) + 1L
     trial <- ((row - 1L) %/% nr) + 1L
     z <- pars[j, "A"] * runif(1)
-    dt[tr, trial] <- .btawl_hit_time_transient(V[j], z, pars[j, "b"], pars[j, "k"],
-                                               tau_all[ok_idx[j]])
-    dt[tr, trial] <- dt[tr, trial] + pars[j, "t0"]
+    hit <- .btawl_hit_time_transient(V[j], z, pars[j, "b"], pars[j, "k"],
+                                     tau_all[ok_idx[j]])
+    hit <- .tw_inv(hit, eta_all[ok_idx[j]])
+    dt[tr, trial] <- hit + pars[j, "t0"]
   }
   bad <- colSums(is.finite(dt)) == 0L
   # Each column is one trial and each row one racer; transpose before
@@ -271,6 +288,7 @@ pBTAwLSustained <- function(rt, pars, launch = 0L, posdrift = TRUE) {
   pars <- pars[ok, , drop = FALSE]
   ok_idx <- which(ok)
   tau_t_all <- .btawl_local_race_tau_t_col(pars_all)
+  eta_all <- .tw_eta(pars_all)
   dt <- matrix(Inf, nr, n_trials)
   draw_launch <- function(p1, p2, delta = 0) {
     if (launch == 3L) return(rweibull(1, p1, p2))
@@ -324,7 +342,8 @@ pBTAwLSustained <- function(rt, pars, launch = 0L, posdrift = TRUE) {
                                      tau_t_all[ok_idx[j]])
     t_S <- .btawl_hit_time_sustained(V_S, z_S, pars[j, "b"], pars[j, "k"],
                                      pars[j, "tau_s"])
-    dt[tr, trial] <- min(t_T, t_S) + pars[j, "t0"]
+    hit <- .tw_inv(min(t_T, t_S), eta_all[ok_idx[j]])
+    dt[tr, trial] <- hit + pars[j, "t0"]
   }
   bad <- colSums(is.finite(dt)) == 0L
   win <- max.col(-t(dt), ties.method = "first")
@@ -348,6 +367,7 @@ pBTAwLSustained <- function(rt, pars, launch = 0L, posdrift = TRUE) {
     stop("pars must have columns ", paste(p_types, collapse = " "))
   pars <- pars[ok, , drop = FALSE]
   ok_idx <- which(ok)
+  eta_vec <- .tw_eta(pars)
   V <- if (launch == 3L) {
     rweibull(nrow(pars), pars[, nm[1]], pars[, nm[2]])
   } else if (launch == 1L) {
@@ -365,8 +385,10 @@ pBTAwLSustained <- function(rt, pars, launch = 0L, posdrift = TRUE) {
     tr <- ((row - 1L) %% nr) + 1L
     trial <- ((row - 1L) %/% nr) + 1L
     z <- pars[j, "A"] * runif(1)
-    dt[tr, trial] <- .btawl_hit_time_sustained(V[j], z, pars[j, "b"], pars[j, "k"],
-                                               pars[j, "tau_s"]) + pars[j, "t0"]
+    hit <- .btawl_hit_time_sustained(V[j], z, pars[j, "b"], pars[j, "k"],
+                                     pars[j, "tau_s"])
+    hit <- .tw_inv(hit, eta_vec[j])
+    dt[tr, trial] <- hit + pars[j, "t0"]
   }
   bad <- colSums(is.finite(dt)) == 0L
   win <- max.col(-t(dt), ties.method = "first")
@@ -421,13 +443,17 @@ pBTAwLSustained <- function(rt, pars, launch = 0L, posdrift = TRUE) {
     c_name <- paste0("BTAwL_TRANSIENT", if (weibull) "_WEIB" else if (lognormal) "_LOGN" else "",
                      if (splitlognormal) "_SPLIT" else "", "_RATE",
                      if (!lognormal && !posdrift) "_IO" else "")
+    .tw <- add_time_warp_par(p_types, transform, minmax, exception)
+    p_types <- .tw$p_types; transform <- .tw$transform
+    minmax <- .tw$minmax; exception <- .tw$exception
     .nuis <- add_nuisance_pars(p_types, transform, minmax, exception)
     p_types <- .nuis$p_types; transform <- .nuis$transform
     minmax <- .nuis$minmax; exception <- .nuis$exception
     return(list(
       type = "RACE", c_name = c_name, drift_distribution = drift_distribution,
       p_types = p_types,
-      p_types_canonical = setdiff(names(p_types), .nuisance_par_names),
+      p_types_canonical = setdiff(names(p_types),
+                                  c(.time_warp_par_name, .nuisance_par_names)),
       transform = list(func = transform),
       bound = list(minmax = minmax, exception = exception),
       Ttransform = function(pars, dadm) {
@@ -435,7 +461,8 @@ pBTAwLSustained <- function(rt, pars, launch = 0L, posdrift = TRUE) {
         extra <- pars[, setdiff(colnames(pars), lead), drop = FALSE]
         b <- pars[, "B"] + pars[, "A"]
         tau <- pars[, "tau"]
-        Tmax <- btawl_tmax_vec(pars[, "k"], tau)
+        Tmax_op <- btawl_tmax_vec(pars[, "k"], tau)
+        Tmax <- .tw_inv(Tmax_op, .tw_eta(pars))
         Vcrit <- btawl_vcrit_vec(pars[, "k"], tau, b)
         out <- cbind(pars[, lead, drop = FALSE], extra, b = b,
                      Tmax = Tmax, rt_max = pars[, "t0"] + Tmax, Vcrit = Vcrit)
@@ -467,13 +494,17 @@ pBTAwLSustained <- function(rt, pars, launch = 0L, posdrift = TRUE) {
     c_name <- paste0("BTAwL_SUSTAINED", if (weibull) "_WEIB" else if (lognormal) "_LOGN" else "",
                      if (splitlognormal) "_SPLIT" else "",
                      if (!lognormal && !posdrift) "_IO" else "")
+    .tw <- add_time_warp_par(p_types, transform, minmax, exception)
+    p_types <- .tw$p_types; transform <- .tw$transform
+    minmax <- .tw$minmax; exception <- .tw$exception
     .nuis <- add_nuisance_pars(p_types, transform, minmax, exception)
     p_types <- .nuis$p_types; transform <- .nuis$transform
     minmax <- .nuis$minmax; exception <- .nuis$exception
     return(list(
       type = "RACE", c_name = c_name, drift_distribution = drift_distribution,
       p_types = p_types,
-      p_types_canonical = setdiff(names(p_types), .nuisance_par_names),
+      p_types_canonical = setdiff(names(p_types),
+                                  c(.time_warp_par_name, .nuisance_par_names)),
       transform = list(func = transform),
       bound = list(minmax = minmax, exception = exception),
       Ttransform = function(pars, dadm) {
@@ -510,6 +541,9 @@ pBTAwLSustained <- function(rt, pars, launch = 0L, posdrift = TRUE) {
   # then inert) and pi = 1 a pure sustained one (tau_t is inert).  The compiled
   # kernel dispatches both exactly, so each matches its dedicated wrapper.
   exception <- c(A = 0, k = 0, pi = 0, pi = 1)
+  .tw <- add_time_warp_par(p_types, transform, minmax, exception)
+  p_types <- .tw$p_types; transform <- .tw$transform
+  minmax <- .tw$minmax; exception <- .tw$exception
   .nuis <- add_nuisance_pars(p_types, transform, minmax, exception)
   p_types <- .nuis$p_types; transform <- .nuis$transform
   minmax <- .nuis$minmax; exception <- .nuis$exception
@@ -520,7 +554,8 @@ pBTAwLSustained <- function(rt, pars, launch = 0L, posdrift = TRUE) {
                     if (!lognormal && !posdrift) "_IO" else ""),
     drift_distribution = drift_distribution,
     p_types = p_types,
-    p_types_canonical = setdiff(names(p_types), .nuisance_par_names),
+    p_types_canonical = setdiff(names(p_types),
+                                c(.time_warp_par_name, .nuisance_par_names)),
     transform = list(func = transform),
     bound = list(minmax = minmax, exception = exception),
     Ttransform = function(pars, dadm) {
@@ -530,7 +565,8 @@ pBTAwLSustained <- function(rt, pars, launch = 0L, posdrift = TRUE) {
       tau_t <- pars[, "tau_t"]
       pure_transient <- pars[, "pi"] <= 1e-14
       pure_transient[is.na(pure_transient)] <- FALSE
-      Tmax <- btawl_tmax_vec(pars[, "k"], tau_t)
+      Tmax_op <- btawl_tmax_vec(pars[, "k"], tau_t)
+      Tmax <- .tw_inv(Tmax_op, .tw_eta(pars))
       Vcrit <- btawl_vcrit_vec(pars[, "k"], tau_t, b)
       # A sustained component removes the transient hard endpoint.  Keep the
       # transient channel's sampled clearance in the parameter columns, but
@@ -583,6 +619,7 @@ pBTAwLSustained <- function(rt, pars, launch = 0L, posdrift = TRUE) {
 #' | *tau_s* | log | \[0, Inf\] | log(1) | | Sustained-drive time constant. |
 #' | *tau_t* | log | \[0, Inf\] | log(1) | | Transient-drive time constant. |
 #' | *pi* | probit | \[0, 1\] | qnorm(.5) | | Probability allocated to the sustained process. |
+#' | *eta* | identity | \[-Inf, Inf\] | 0 | | Operational-time warp parameter. |
 #'
 #' With `drift_distribution = "normal"`, `mu` and `sigma` are replaced by `v`
 #' and `sv`; the launch is truncated positive when `posdrift = TRUE`.
@@ -597,6 +634,21 @@ pBTAwLSustained <- function(rt, pars, launch = 0L, posdrift = TRUE) {
 #' `1 - pi` multiplies the scale of the transient channel.
 #' Optional fitting parameters: `pContaminant` is the omission probability and
 #' `pGuess` is the uniform-outlier probability.
+#'
+#' **Operational-time warp.** `eta` is a trailing free parameter (identity
+#' transform, default `0`, unbounded on the natural scale) and is excluded from
+#' `p_types_canonical`. For physical accumulation time `u = rt - t0`, let
+#' `omega = exp(eta)` and `s = ((1 + u)^omega - 1) / omega`. The CDF and
+#' survivor are the parent CDF/survivor evaluated at `s`; the density is the
+#' parent density times the Jacobian `c_eta'(u) = (1 + u)^(omega - 1)`.
+#' Simulation maps a parent internal finish `s` back with
+#' `u = (1 + omega * s)^(1 / omega) - 1` and returns `rt = t0 + u`, so `t0`
+#' remains additive. `eta = 0` is the exact identity warp.
+#'
+#' For BAwL, this contract applies only to the clock-free, uncorrelated
+#' constructor (`erlang_type = "none"`, `correlated = FALSE`). BAwL clock or
+#' correlated variants, `LogicalRulesLBA`, and all non-ballistic models reject
+#' `eta`.
 #'
 #' The evidence scale is not intrinsic: multiplying the launch strength,
 #' threshold distance, and start-point range by the same positive constant
@@ -665,6 +717,7 @@ BTAwL <- function(posdrift = TRUE,
 #' | *t0* | log | \[0, Inf\] | log(0) | | Non-decision time. |
 #' | *k* | log | \[0, Inf\] | log(0) | | Leak rate. |
 #' | *tau* | log | \[0, Inf\] | log(1) | | Transient time constant. |
+#' | *eta* | identity | \[-Inf, Inf\] | 0 | | Operational-time warp parameter. |
 #'
 #' With `drift_distribution = "normal"`, `mu` and `sigma` are replaced by `v`
 #' and `sv`; the launch is truncated positive when `posdrift = TRUE`.
@@ -678,6 +731,21 @@ BTAwL <- function(posdrift = TRUE,
 #' instead of the lognormal launch rows.
 #' Optional fitting parameters: `pContaminant` is the omission probability and
 #' `pGuess` is the uniform-outlier probability.
+#'
+#' **Operational-time warp.** `eta` is a trailing free parameter (identity
+#' transform, default `0`, unbounded on the natural scale) and is excluded from
+#' `p_types_canonical`. For physical accumulation time `u = rt - t0`, let
+#' `omega = exp(eta)` and `s = ((1 + u)^omega - 1) / omega`. The CDF and
+#' survivor are the parent CDF/survivor evaluated at `s`; the density is the
+#' parent density times the Jacobian `c_eta'(u) = (1 + u)^(omega - 1)`.
+#' Simulation maps a parent internal finish `s` back with
+#' `u = (1 + omega * s)^(1 / omega) - 1` and returns `rt = t0 + u`, so `t0`
+#' remains additive. `eta = 0` is the exact identity warp.
+#'
+#' For BAwL, this contract applies only to the clock-free, uncorrelated
+#' constructor (`erlang_type = "none"`, `correlated = FALSE`). BAwL clock or
+#' correlated variants, `LogicalRulesLBA`, and all non-ballistic models reject
+#' `eta`.
 #'
 #' @param posdrift Logical. For a normal launch, truncate `V` below zero.
 #' @param drift_distribution Either `"normal"`, `"lognormal"`, or
@@ -706,6 +774,7 @@ BTAwLTransient <- function(posdrift = TRUE,
 #' | *t0* | log | \[0, Inf\] | log(0) | | Non-decision time. |
 #' | *k* | log | \[0, Inf\] | log(0) | | Leak rate. |
 #' | *tau_s* | log | \[0, Inf\] | log(1) | | Sustained-drive time constant. |
+#' | *eta* | identity | \[-Inf, Inf\] | 0 | | Operational-time warp parameter. |
 #'
 #' With `drift_distribution = "normal"`, `mu` and `sigma` are replaced by `v`
 #' and `sv`; the launch is truncated positive when `posdrift = TRUE`.
@@ -719,6 +788,21 @@ BTAwLTransient <- function(posdrift = TRUE,
 #' instead of the lognormal launch rows.
 #' Optional fitting parameters: `pContaminant` is the omission probability and
 #' `pGuess` is the uniform-outlier probability.
+#'
+#' **Operational-time warp.** `eta` is a trailing free parameter (identity
+#' transform, default `0`, unbounded on the natural scale) and is excluded from
+#' `p_types_canonical`. For physical accumulation time `u = rt - t0`, let
+#' `omega = exp(eta)` and `s = ((1 + u)^omega - 1) / omega`. The CDF and
+#' survivor are the parent CDF/survivor evaluated at `s`; the density is the
+#' parent density times the Jacobian `c_eta'(u) = (1 + u)^(omega - 1)`.
+#' Simulation maps a parent internal finish `s` back with
+#' `u = (1 + omega * s)^(1 / omega) - 1` and returns `rt = t0 + u`, so `t0`
+#' remains additive. `eta = 0` is the exact identity warp.
+#'
+#' For BAwL, this contract applies only to the clock-free, uncorrelated
+#' constructor (`erlang_type = "none"`, `correlated = FALSE`). BAwL clock or
+#' correlated variants, `LogicalRulesLBA`, and all non-ballistic models reject
+#' `eta`.
 #'
 #' @param posdrift Logical. For a normal launch, truncate `V` below zero.
 #' @param drift_distribution Either `"normal"`, `"lognormal"`, or

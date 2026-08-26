@@ -114,16 +114,18 @@ dBAwD <- function(rt, pars, launch = 1L, posdrift = TRUE, gamma = 0,
   rho <- .bawd_check_rho(rho)
   nm <- .bawd_check_cols(pars, launch)
   dt <- rt - pars[, "t0"]
+  eta <- .tw_eta(pars)
   ok <- (rt > 0) & (dt > 0) & is.finite(dt) & (pars[, "b"] >= pars[, "A"])
   ok[is.na(ok)] <- FALSE
   out <- numeric(length(dt))
   if (any(ok)) {
-    out[ok] <- dbawd(t = dt[ok], A = pars[ok, "A"], b = pars[ok, "b"],
+    s <- .tw_fwd(dt[ok], eta[ok])
+    out[ok] <- dbawd(t = s, A = pars[ok, "A"], b = pars[ok, "b"],
                      p1 = pars[ok, nm[1]], p2 = pars[ok, nm[2]],
                      delta = if (launch == 2L) pars[ok, "delta"] else 0,
                      k = pars[ok, "k"], ell = pars[ok, "ell"],
                      launch = as.integer(launch), posdrift = posdrift,
-                     gamma = gamma, rho = rho)
+                     gamma = gamma, rho = rho) * .tw_jac(dt[ok], eta[ok])
   }
   out
 }
@@ -134,13 +136,15 @@ pBAwD <- function(rt, pars, launch = 1L, posdrift = TRUE, gamma = 0,
   rho <- .bawd_check_rho(rho)
   nm <- .bawd_check_cols(pars, launch)
   dt <- rt - pars[, "t0"]
+  eta <- .tw_eta(pars)
   # rt = Inf is deliberately kept: the CDF there is F_max (the complement of the
   # never-finish mass), not one.  The compiled kernel returns the frozen branch.
   ok <- (rt > 0) & (dt > 0) & (pars[, "b"] >= pars[, "A"])
   ok[is.na(ok)] <- FALSE
   out <- numeric(length(dt))
   if (any(ok)) {
-    out[ok] <- pbawd(t = dt[ok], A = pars[ok, "A"], b = pars[ok, "b"],
+    s <- .tw_fwd(dt[ok], eta[ok])
+    out[ok] <- pbawd(t = s, A = pars[ok, "A"], b = pars[ok, "b"],
                      p1 = pars[ok, nm[1]], p2 = pars[ok, nm[2]],
                      delta = if (launch == 2L) pars[ok, "delta"] else 0,
                      k = pars[ok, "k"], ell = pars[ok, "ell"],
@@ -162,15 +166,18 @@ pBAwD <- function(rt, pars, launch = 1L, posdrift = TRUE, gamma = 0,
 dBAwDp <- function(rt, pars, launch = 1L, posdrift = TRUE) {
   nm <- .bawdp_check_cols(pars, launch)
   dt <- rt - pars[, "t0"]
+  eta <- .tw_eta(pars)
   ok <- (rt > 0) & (dt > 0) & is.finite(dt) & (pars[, "b"] >= pars[, "A"])
   ok[is.na(ok)] <- FALSE
   out <- numeric(length(dt))
   if (any(ok)) {
-    out[ok] <- dbawdp(t = dt[ok], A = pars[ok, "A"], b = pars[ok, "b"],
+    s <- .tw_fwd(dt[ok], eta[ok])
+    out[ok] <- dbawdp(t = s, A = pars[ok, "A"], b = pars[ok, "b"],
                       p1 = pars[ok, nm[1]], p2 = pars[ok, nm[2]],
                       delta = if (launch == 2L) pars[ok, "delta"] else 0,
                       k = pars[ok, "k"], lambda = pars[ok, "lambda"],
-                      launch = as.integer(launch), posdrift = posdrift)
+                      launch = as.integer(launch), posdrift = posdrift) *
+      .tw_jac(dt[ok], eta[ok])
   }
   out
 }
@@ -178,11 +185,13 @@ dBAwDp <- function(rt, pars, launch = 1L, posdrift = TRUE) {
 pBAwDp <- function(rt, pars, launch = 1L, posdrift = TRUE) {
   nm <- .bawdp_check_cols(pars, launch)
   dt <- rt - pars[, "t0"]
+  eta <- .tw_eta(pars)
   ok <- (rt > 0) & (dt > 0) & (pars[, "b"] >= pars[, "A"])
   ok[is.na(ok)] <- FALSE
   out <- numeric(length(dt))
   if (any(ok)) {
-    out[ok] <- pbawdp(t = dt[ok], A = pars[ok, "A"], b = pars[ok, "b"],
+    s <- .tw_fwd(dt[ok], eta[ok])
+    out[ok] <- pbawdp(t = s, A = pars[ok, "A"], b = pars[ok, "b"],
                       p1 = pars[ok, nm[1]], p2 = pars[ok, nm[2]],
                       delta = if (launch == 2L) pars[ok, "delta"] else 0,
                       k = pars[ok, "k"], lambda = pars[ok, "lambda"],
@@ -315,6 +324,7 @@ rBAwD <- function(lR, pars, ok = rep(TRUE, length(lR)), launch = 1L,
     z <- p[, "A"] * runif(nrow(p))
     hit <- mapply(.bawd_hit_time, V, p[, "b"] - z, p[, "k"], p[, "ell"],
                   MoreArgs = list(gamma = gamma, rho = rho))
+    hit <- .tw_inv(hit, .tw_eta(p))
     hit[!is.finite(hit) | hit < 0] <- Inf
     dt[idx] <- hit
   }
@@ -389,6 +399,7 @@ rBAwDp <- function(lR, pars, ok = rep(TRUE, length(lR)), launch = 1L,
     }
     z <- p[, "A"] * runif(nrow(p))
     hit <- mapply(.bawdp_hit_time, V, p[, "b"] - z, p[, "k"], p[, "lambda"])
+    hit <- .tw_inv(hit, .tw_eta(p))
     hit[!is.finite(hit) | hit < 0] <- Inf
     dt[idx] <- hit + p[, "t0"]
   }
@@ -453,6 +464,7 @@ rBAwDp <- function(lR, pars, ok = rep(TRUE, length(lR)), launch = 1L,
 #' | *t0* | log | \[0, Inf\] | log(0) | | Non-decision time. |
 #' | *k* | log | \[0, Inf\] | log(0) | | Drive-decay rate. |
 #' | *ell* | log | \[0, Inf\] | log(1) | | Clearance rate. |
+#' | *eta* | identity | \[-Inf, Inf\] | 0 | | Operational-time warp parameter. |
 #'
 #' The trial-dependent transform derives `Tmax` from `A`, `b`, `k`, and
 #' `ell`, and also reports `rt_max` after adding `t0`.
@@ -464,6 +476,21 @@ rBAwDp <- function(lR, pars, ok = rep(TRUE, length(lR)), launch = 1L,
 #' (default `0`).
 #' For `drift_distribution = "weibull"`, use positive `shape` and `scale`
 #' (both use log/exp transforms).
+#'
+#' **Operational-time warp.** `eta` is a trailing free parameter (identity
+#' transform, default `0`, unbounded on the natural scale) and is excluded from
+#' `p_types_canonical`. For physical accumulation time `u = rt - t0`, let
+#' `omega = exp(eta)` and `s = ((1 + u)^omega - 1) / omega`. The CDF and
+#' survivor are the parent CDF/survivor evaluated at `s`; the density is the
+#' parent density times the Jacobian `c_eta'(u) = (1 + u)^(omega - 1)`.
+#' Simulation maps a parent internal finish `s` back with
+#' `u = (1 + omega * s)^(1 / omega) - 1` and returns `rt = t0 + u`, so `t0`
+#' remains additive. `eta = 0` is the exact identity warp.
+#'
+#' For BAwL, this contract applies only to the clock-free, uncorrelated
+#' constructor (`erlang_type = "none"`, `correlated = FALSE`). BAwL clock or
+#' correlated variants, `LogicalRulesLBA`, and all non-ballistic models reject
+#' `eta`.
 #'
 #' @param drift_distribution Distribution of trialwise launch strength:
 #'   `"lognormal"` (default), `"splitlognormal"`, `"weibull"`, or `"normal"`.
@@ -531,6 +558,10 @@ BAwD <- function(drift_distribution = c("lognormal", "normal", "splitlognormal",
   exception <- c(A = 0, k = 0, ell = 0)
 
   # pContaminant (omission) and pGuess (uniform outlier); see add_nuisance_pars().
+  # Operational-time warp; eta = 0 is exactly this model.
+  .tw <- add_time_warp_par(p_types, transform, minmax, exception)
+  p_types <- .tw$p_types; transform <- .tw$transform
+  minmax <- .tw$minmax; exception <- .tw$exception
   .nuis <- add_nuisance_pars(p_types, transform, minmax, exception)
   p_types <- .nuis$p_types; transform <- .nuis$transform
   minmax <- .nuis$minmax; exception <- .nuis$exception
@@ -549,13 +580,15 @@ BAwD <- function(drift_distribution = c("lognormal", "normal", "splitlognormal",
     gamma = gamma,
     rho = rho,
     p_types = p_types,
-    p_types_canonical = setdiff(names(p_types), .nuisance_par_names),
+    p_types_canonical = setdiff(names(p_types),
+                                c(.time_warp_par_name, .nuisance_par_names)),
     transform = list(func = transform),
     bound = list(minmax = minmax, exception = exception),
     Ttransform = function(pars, dadm) {
       b <- pars[, "B"] + pars[, "A"]
-      Tmax <- bawd_tmax_vec(pars[, "A"], b, pars[, "k"], pars[, "ell"],
-                            gamma = gamma, rho = rho)
+      Tmax_op <- bawd_tmax_vec(pars[, "A"], b, pars[, "k"], pars[, "ell"],
+                               gamma = gamma, rho = rho)
+      Tmax <- .tw_inv(Tmax_op, .tw_eta(pars))
       cbind(pars, b = b, Tmax = Tmax, rt_max = pars[, "t0"] + Tmax)
     },
     rfun = function(data, pars) {
@@ -615,6 +648,7 @@ BAwD <- function(drift_distribution = c("lognormal", "normal", "splitlognormal",
 #' | *t0* | log | \[0, Inf\] | log(0) | | Non-decision time. |
 #' | *k* | log | \[0, Inf\] | log(1) | | Drive-decay rate. |
 #' | *lambda* | probit | \[0, 1\] | qnorm(.5) | | Proportional clearance fraction. |
+#' | *eta* | identity | \[-Inf, Inf\] | 0 | | Operational-time warp parameter. |
 #'
 #' For `drift_distribution = "normal"`, use `v` and `sv` instead of the
 #' lognormal launch rows; the normal launch is truncated at zero by default.
@@ -624,6 +658,21 @@ BAwD <- function(drift_distribution = c("lognormal", "normal", "splitlognormal",
 #' the lognormal launch rows.
 #' Optional fitting parameters: `pContaminant` is the omission probability and
 #' `pGuess` is the uniform-outlier probability.
+#'
+#' **Operational-time warp.** `eta` is a trailing free parameter (identity
+#' transform, default `0`, unbounded on the natural scale) and is excluded from
+#' `p_types_canonical`. For physical accumulation time `u = rt - t0`, let
+#' `omega = exp(eta)` and `s = ((1 + u)^omega - 1) / omega`. The CDF and
+#' survivor are the parent CDF/survivor evaluated at `s`; the density is the
+#' parent density times the Jacobian `c_eta'(u) = (1 + u)^(omega - 1)`.
+#' Simulation maps a parent internal finish `s` back with
+#' `u = (1 + omega * s)^(1 / omega) - 1` and returns `rt = t0 + u`, so `t0`
+#' remains additive. `eta = 0` is the exact identity warp.
+#'
+#' For BAwL, this contract applies only to the clock-free, uncorrelated
+#' constructor (`erlang_type = "none"`, `correlated = FALSE`). BAwL clock or
+#' correlated variants, `LogicalRulesLBA`, and all non-ballistic models reject
+#' `eta`.
 #' @param drift_distribution Distribution of the launch strength:
 #'   `"lognormal"` (default), `"splitlognormal"`, `"weibull"`, or `"normal"`.
 #' @param posdrift Logical; truncate the normal launch at zero when `TRUE`.
@@ -671,6 +720,9 @@ BAwDp <- function(drift_distribution = c("lognormal", "normal", "splitlognormal"
   # standard LBA limit (with effective drift scaled by 1 - lambda), while
   # lambda = 0 gives the pure drive-decay model with unbounded support.
   exception <- c(A = 0, k = 0, lambda = 0)
+  .tw <- add_time_warp_par(p_types, transform, minmax, exception)
+  p_types <- .tw$p_types; transform <- .tw$transform
+  minmax <- .tw$minmax; exception <- .tw$exception
   .nuis <- add_nuisance_pars(p_types, transform, minmax, exception)
   p_types <- .nuis$p_types; transform <- .nuis$transform
   minmax <- .nuis$minmax; exception <- .nuis$exception
@@ -684,7 +736,8 @@ BAwDp <- function(drift_distribution = c("lognormal", "normal", "splitlognormal"
                     if (splitlognormal) "_SPLIT" else ""),
     drift_distribution = drift_distribution,
     p_types = p_types,
-    p_types_canonical = setdiff(names(p_types), .nuisance_par_names),
+    p_types_canonical = setdiff(names(p_types),
+                                c(.time_warp_par_name, .nuisance_par_names)),
     transform = list(func = transform),
     bound = list(minmax = minmax, exception = exception),
     Ttransform = function(pars, dadm) {
@@ -693,8 +746,9 @@ BAwDp <- function(drift_distribution = c("lognormal", "normal", "splitlognormal"
       lambda <- pars[, "lambda"]
       finite_mask <- (k > 0) & (lambda > 0) & (lambda < 1)
       finite_mask[is.na(finite_mask)] <- FALSE
-      Tmax <- rep(Inf, nrow(pars))
-      Tmax[finite_mask] <- -log(lambda[finite_mask]) / k[finite_mask]
+      Tmax_op <- rep(Inf, nrow(pars))
+      Tmax_op[finite_mask] <- -log(lambda[finite_mask]) / k[finite_mask]
+      Tmax <- .tw_inv(Tmax_op, .tw_eta(pars))
       cbind(pars, b = b, Tmax = Tmax, rt_max = pars[, "t0"] + Tmax)
     },
     rfun = function(data, pars) {

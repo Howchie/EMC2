@@ -36,6 +36,7 @@ The transient wrapper uses the following parameter matrix:
    \emph{t0} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Non-decision time. \cr
    \emph{k} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Leak rate. \cr
    \emph{tau} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Transient time constant. \cr
+   \emph{eta} \tab identity \tab [-Inf, Inf] \tab 0 \tab  \tab Operational-time warp parameter. \cr
 }
 
 
@@ -51,4 +52,19 @@ With \code{drift_distribution = "weibull"}, use positive \code{shape} and \code{
 instead of the lognormal launch rows.
 Optional fitting parameters: \code{pContaminant} is the omission probability and
 \code{pGuess} is the uniform-outlier probability.
+
+\strong{Operational-time warp.} \code{eta} is a trailing free parameter (identity
+transform, default \code{0}, unbounded on the natural scale) and is excluded from
+\code{p_types_canonical}. For physical accumulation time \code{u = rt - t0}, let
+\code{omega = exp(eta)} and \code{s = ((1 + u)^omega - 1) / omega}. The CDF and
+survivor are the parent CDF/survivor evaluated at \code{s}; the density is the
+parent density times the Jacobian \verb{c_eta'(u) = (1 + u)^(omega - 1)}.
+Simulation maps a parent internal finish \code{s} back with
+\code{u = (1 + omega * s)^(1 / omega) - 1} and returns \code{rt = t0 + u}, so \code{t0}
+remains additive. \code{eta = 0} is the exact identity warp.
+
+For BAwL, this contract applies only to the clock-free, uncorrelated
+constructor (\code{erlang_type = "none"}, \code{correlated = FALSE}). BAwL clock or
+correlated variants, \code{LogicalRulesLBA}, and all non-ballistic models reject
+\code{eta}.
 }

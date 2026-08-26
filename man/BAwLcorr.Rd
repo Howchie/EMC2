@@ -53,6 +53,8 @@ truncated correlation is therefore not equal to \code{rho} in general.\tabular{l
    \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Mapping} \tab \strong{Interpretation} \cr
    \emph{v} \tab identity \tab [-Inf, Inf] \tab 1 \tab  \tab Mean normal launch strength. \cr
    \emph{sv} \tab log \tab [0, Inf] \tab log(1) \tab  \tab SD of normal launch strength. \cr
+   \emph{shape} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Weibull shape (Weibull launch only). \cr
+   \emph{scale} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Weibull scale (Weibull launch only). \cr
    \emph{B} \tab log \tab [0, Inf] \tab log(1) \tab \emph{b} = \emph{B} + \emph{A} \tab Distance from the upper start-point range to the threshold. \cr
    \emph{A} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Start-point range. \cr
    \emph{t0} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Non-decision time. \cr
@@ -64,4 +66,9 @@ All BAwL parameters are described in \code{\link[=BAwL]{BAwL()}}, including \cod
 \code{A}, \code{t0}, and \code{k}. Optional fitting parameters are \code{pContaminant}, the
 omission probability, and \code{pGuess}, the uniform-outlier probability; \code{rho}
 is the optional correlation parameter.
+
+The operational-time warp is intentionally unsupported for \code{BAwLcorr};
+this correlated variant rejects \code{eta}. Clock-enabled BAwL variants likewise
+reject \code{eta}; use the clock-free, uncorrelated \code{\link[=BAwL]{BAwL()}} constructor for the
+documented warp contract.
 }

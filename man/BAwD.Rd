@@ -60,7 +60,10 @@ split-normal density with left and right widths
 \verb{sigma_R = sigma exp(-delta/2)}.  Here \code{delta} is an unbounded real
 log-width ratio and \code{mu} is the median of \code{Y}; the split point \code{c} is derived
 from these parameters so that \code{P(Y <= mu) = 1/2} exactly.  Setting \code{delta = 0}
-reduces exactly to the ordinary lognormal launch.\tabular{llllll}{
+reduces exactly to the ordinary lognormal launch.
+With \code{drift_distribution = "weibull"}, \code{V ~ Weibull(shape, scale)} on the
+positive launch scale. The Weibull BAwD likelihood is closed form, including
+its finite-\code{Tmax} frozen branch.\tabular{llllll}{
    \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Mapping} \tab \strong{Interpretation} \cr
    \emph{mu} \tab identity \tab [-Inf, Inf] \tab 0 \tab  \tab Median log launch location. \cr
    \emph{sigma} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Geometric-mean width of log launch. \cr
@@ -71,6 +74,7 @@ reduces exactly to the ordinary lognormal launch.\tabular{llllll}{
    \emph{t0} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Non-decision time. \cr
    \emph{k} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Drive-decay rate. \cr
    \emph{ell} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Clearance rate. \cr
+   \emph{eta} \tab identity \tab [-Inf, Inf] \tab 0 \tab  \tab Operational-time warp parameter. \cr
 }
 
 
@@ -82,8 +86,23 @@ For \code{drift_distribution = "normal"}, use the \code{v} and \code{sv} rows in
 \code{mu} and \code{sigma}; the normal launch is truncated at zero by default. The
 split-lognormal option adds the optional identity-scale \code{delta} parameter
 (default \code{0}).
-For \code{drift_distribution = "weibull"}, use positive \code{shape} and
-\code{scale}; the Weibull BAwD likelihood is closed form.
+For \code{drift_distribution = "weibull"}, use positive \code{shape} and \code{scale}
+(both use log/exp transforms).
+
+\strong{Operational-time warp.} \code{eta} is a trailing free parameter (identity
+transform, default \code{0}, unbounded on the natural scale) and is excluded from
+\code{p_types_canonical}. For physical accumulation time \code{u = rt - t0}, let
+\code{omega = exp(eta)} and \code{s = ((1 + u)^omega - 1) / omega}. The CDF and
+survivor are the parent CDF/survivor evaluated at \code{s}; the density is the
+parent density times the Jacobian \verb{c_eta'(u) = (1 + u)^(omega - 1)}.
+Simulation maps a parent internal finish \code{s} back with
+\code{u = (1 + omega * s)^(1 / omega) - 1} and returns \code{rt = t0 + u}, so \code{t0}
+remains additive. \code{eta = 0} is the exact identity warp.
+
+For BAwL, this contract applies only to the clock-free, uncorrelated
+constructor (\code{erlang_type = "none"}, \code{correlated = FALSE}). BAwL clock or
+correlated variants, \code{LogicalRulesLBA}, and all non-ballistic models reject
+\code{eta}.
 }
 \examples{
 ADmat <- matrix(c(-1/2, 1/2), ncol = 1, dimnames = list(NULL, "d"))

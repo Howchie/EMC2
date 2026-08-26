@@ -85,6 +85,11 @@ logical-rules likelihood exactly. \code{kappa} and \code{tau} must be shared by 
 draws are conditioned jointly to be positive.
 The optional fitting parameter \code{pContaminant} is the omission probability.
 
+The logical-rules constructor is intentionally outside the operational-time
+warp: \code{LogicalRulesLBA} rejects \code{eta} because its compiled likelihood has a
+separate time bookkeeping path. All non-ballistic models likewise reject
+\code{eta}.
+
 The likelihood is implemented in the compiled logical-rules fast path. The
 R \code{dfun} and \code{pfun} entries retain the single-accumulator LBA functions for
 model integration and diagnostics, but the model-level R likelihood is not

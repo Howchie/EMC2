@@ -44,7 +44,9 @@ With \code{drift_distribution = "splitlognormal"}, \verb{Y = log V} is continuou
 split normal with \verb{sigma_L = sigma exp(delta/2)} and
 \verb{sigma_R = sigma exp(-delta/2)}; \code{mu} is its exact median and \code{delta}
 is an unbounded log-width ratio.  The derived split point is chosen so that
-\code{P(Y <= mu) = 1/2}.  \code{delta = 0} is exactly the ordinary lognormal launch.\tabular{llllll}{
+\code{P(Y <= mu) = 1/2}.  \code{delta = 0} is exactly the ordinary lognormal launch.
+With \code{drift_distribution = "weibull"}, \code{V ~ Weibull(shape, scale)}; the
+closed-form BAwDp likelihood uses positive \code{shape} and \code{scale} directly.\tabular{llllll}{
    \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Mapping} \tab \strong{Interpretation} \cr
    \emph{mu} \tab identity \tab [-Inf, Inf] \tab 0 \tab  \tab Median log launch location. \cr
    \emph{sigma} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Geometric-mean log width. \cr
@@ -55,6 +57,7 @@ is an unbounded log-width ratio.  The derived split point is chosen so that
    \emph{t0} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Non-decision time. \cr
    \emph{k} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Drive-decay rate. \cr
    \emph{lambda} \tab probit \tab [0, 1] \tab qnorm(.5) \tab  \tab Proportional clearance fraction. \cr
+   \emph{eta} \tab identity \tab [-Inf, Inf] \tab 0 \tab  \tab Operational-time warp parameter. \cr
 }
 
 
@@ -62,8 +65,23 @@ For \code{drift_distribution = "normal"}, use \code{v} and \code{sv} instead of 
 lognormal launch rows; the normal launch is truncated at zero by default.
 The split-lognormal option adds the optional identity-scale \code{delta} parameter
 (default \code{0}).
-For \code{drift_distribution = "weibull"}, use positive \code{shape} and
-\code{scale}; BAwDp remains closed form.
+For \code{drift_distribution = "weibull"}, use \code{shape} and \code{scale} instead of
+the lognormal launch rows.
 Optional fitting parameters: \code{pContaminant} is the omission probability and
 \code{pGuess} is the uniform-outlier probability.
+
+\strong{Operational-time warp.} \code{eta} is a trailing free parameter (identity
+transform, default \code{0}, unbounded on the natural scale) and is excluded from
+\code{p_types_canonical}. For physical accumulation time \code{u = rt - t0}, let
+\code{omega = exp(eta)} and \code{s = ((1 + u)^omega - 1) / omega}. The CDF and
+survivor are the parent CDF/survivor evaluated at \code{s}; the density is the
+parent density times the Jacobian \verb{c_eta'(u) = (1 + u)^(omega - 1)}.
+Simulation maps a parent internal finish \code{s} back with
+\code{u = (1 + omega * s)^(1 / omega) - 1} and returns \code{rt = t0 + u}, so \code{t0}
+remains additive. \code{eta = 0} is the exact identity warp.
+
+For BAwL, this contract applies only to the clock-free, uncorrelated
+constructor (\code{erlang_type = "none"}, \code{correlated = FALSE}). BAwL clock or
+correlated variants, \code{LogicalRulesLBA}, and all non-ballistic models reject
+\code{eta}.
 }

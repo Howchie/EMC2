@@ -49,15 +49,18 @@
 dBAwR <- function(rt, pars, launch = 1L, posdrift = TRUE) {
   nm <- .bawr_check_cols(pars, launch)
   dt <- rt - pars[, "t0"]
+  eta <- .tw_eta(pars)
   ok <- (rt > 0) & (dt > 0) & is.finite(dt) & (pars[, "b"] >= pars[, "A"])
   ok[is.na(ok)] <- FALSE
   out <- numeric(length(dt))
   if (any(ok)) {
-    out[ok] <- dbawr(t = dt[ok], A = pars[ok, "A"], b = pars[ok, "b"],
+    s <- .tw_fwd(dt[ok], eta[ok])
+    out[ok] <- dbawr(t = s, A = pars[ok, "A"], b = pars[ok, "b"],
                      p1 = pars[ok, nm[1]], p2 = pars[ok, nm[2]],
                      kappa = pars[ok, "kappa"], pw = pars[ok, "p"],
                      launch = as.integer(launch), posdrift = posdrift,
-                     delta = if (launch == 2L) pars[ok, "delta"] else 0)
+                     delta = if (launch == 2L) pars[ok, "delta"] else 0) *
+      .tw_jac(dt[ok], eta[ok])
   }
   out
 }
@@ -65,6 +68,7 @@ dBAwR <- function(rt, pars, launch = 1L, posdrift = TRUE) {
 pBAwR <- function(rt, pars, launch = 1L, posdrift = TRUE) {
   nm <- .bawr_check_cols(pars, launch)
   dt <- rt - pars[, "t0"]
+  eta <- .tw_eta(pars)
   # rt = Inf is deliberately kept: the CDF there is F_max (the complement of
   # the never-finish mass), not one.  The compiled kernel returns the frozen
   # branch.
@@ -72,7 +76,8 @@ pBAwR <- function(rt, pars, launch = 1L, posdrift = TRUE) {
   ok[is.na(ok)] <- FALSE
   out <- numeric(length(dt))
   if (any(ok)) {
-    out[ok] <- pbawr(t = dt[ok], A = pars[ok, "A"], b = pars[ok, "b"],
+    s <- .tw_fwd(dt[ok], eta[ok])
+    out[ok] <- pbawr(t = s, A = pars[ok, "A"], b = pars[ok, "b"],
                      p1 = pars[ok, nm[1]], p2 = pars[ok, nm[2]],
                      kappa = pars[ok, "kappa"], pw = pars[ok, "p"],
                      launch = as.integer(launch), posdrift = posdrift,
@@ -141,6 +146,7 @@ rBAwR <- function(lR, pars, ok = rep(TRUE, length(lR)), launch = 1L,
     }
     z <- p[, "A"] * runif(nrow(p))
     hit <- mapply(.bawr_hit_time, V, p[, "b"] - z, p[, "kappa"], p[, "p"])
+    hit <- .tw_inv(hit, .tw_eta(p))
     hit[!is.finite(hit) | hit < 0] <- Inf
     dt[idx] <- hit
   }
@@ -221,6 +227,7 @@ rBAwR <- function(lR, pars, ok = rep(TRUE, length(lR)), launch = 1L,
 #' | *t0* | log | \[0, Inf\] | log(0) | | Non-decision time. |
 #' | *kappa* | log | \[0, Inf\] | log(0) | | Drive-decay coefficient. |
 #' | *p* | log | \[0, Inf\] | log(1) | | Drive-decay exponent. |
+#' | *eta* | identity | \[-Inf, Inf\] | 0 | | Operational-time warp parameter. |
 #'
 #' For `drift_distribution = "normal"`, use `v` and `sv` instead of the
 #' lognormal launch rows; the normal launch is truncated at zero by default.
@@ -230,6 +237,21 @@ rBAwR <- function(lR, pars, ok = rep(TRUE, length(lR)), launch = 1L,
 #' the lognormal launch rows.
 #' Optional fitting parameters: `pContaminant` is the omission probability and
 #' `pGuess` is the uniform-outlier probability.
+#'
+#' **Operational-time warp.** `eta` is a trailing free parameter (identity
+#' transform, default `0`, unbounded on the natural scale) and is excluded from
+#' `p_types_canonical`. For physical accumulation time `u = rt - t0`, let
+#' `omega = exp(eta)` and `s = ((1 + u)^omega - 1) / omega`. The CDF and
+#' survivor are the parent CDF/survivor evaluated at `s`; the density is the
+#' parent density times the Jacobian `c_eta'(u) = (1 + u)^(omega - 1)`.
+#' Simulation maps a parent internal finish `s` back with
+#' `u = (1 + omega * s)^(1 / omega) - 1` and returns `rt = t0 + u`, so `t0`
+#' remains additive. `eta = 0` is the exact identity warp.
+#'
+#' For BAwL, this contract applies only to the clock-free, uncorrelated
+#' constructor (`erlang_type = "none"`, `correlated = FALSE`). BAwL clock or
+#' correlated variants, `LogicalRulesLBA`, and all non-ballistic models reject
+#' `eta`.
 #'
 #' @param drift_distribution Distribution of trialwise launch strength:
 #'   `"lognormal"` (default), `"splitlognormal"`, `"weibull"`, or `"normal"`.
@@ -292,6 +314,9 @@ BAwR <- function(drift_distribution = c("lognormal", "normal", "splitlognormal",
   # infinite T_max, so its lower bound is enforced.
   exception <- c(A = 0, kappa = 0)
   # pContaminant (omission) and pGuess (uniform outlier); see add_nuisance_pars().
+  .tw <- add_time_warp_par(p_types, transform, minmax, exception)
+  p_types <- .tw$p_types; transform <- .tw$transform
+  minmax <- .tw$minmax; exception <- .tw$exception
   .nuis <- add_nuisance_pars(p_types, transform, minmax, exception)
   p_types <- .nuis$p_types; transform <- .nuis$transform
   minmax <- .nuis$minmax; exception <- .nuis$exception
@@ -305,7 +330,8 @@ BAwR <- function(drift_distribution = c("lognormal", "normal", "splitlognormal",
     c_name = c_name,
     drift_distribution = drift_distribution,
     p_types = p_types,
-    p_types_canonical = setdiff(names(p_types), .nuisance_par_names),
+    p_types_canonical = setdiff(names(p_types),
+                                c(.time_warp_par_name, .nuisance_par_names)),
     transform = list(func = transform),
     bound = list(minmax = minmax, exception = exception),
     Ttransform = function(pars, dadm) {
@@ -314,7 +340,8 @@ BAwR <- function(drift_distribution = c("lognormal", "normal", "splitlognormal",
       # uses. Tmax is reported because it is not a sampled quantity here (it
       # is a function of kappa, p AND b), and Vcrit because it sets the
       # omission rate.
-      Tmax <- bawr_tmax_vec(pars[, "A"], b, pars[, "kappa"], pars[, "p"])
+      Tmax_op <- bawr_tmax_vec(pars[, "A"], b, pars[, "kappa"], pars[, "p"])
+      Tmax <- .tw_inv(Tmax_op, .tw_eta(pars))
       Vcrit <- bawr_vcrit_vec(pars[, "A"], b, pars[, "kappa"], pars[, "p"])
       cbind(pars, b = b, Tmax = Tmax, rt_max = pars[, "t0"] + Tmax,
             Vcrit = Vcrit)

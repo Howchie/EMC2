@@ -28,12 +28,12 @@ Only available for \code{drift_distribution = "normal"}.}
 
 \item{drift_distribution}{Distribution of the trialwise launch strength:
 \code{"normal"} (the default) for \code{V ~ N(v, sv^2)}, \code{"lognormal"} for
-\verb{log V ~ N(mu, sigma^2)}, \code{"splitlognormal"} for a continuous
+\verb{log V ~ N(mu, sigma^2)}, or \code{"splitlognormal"} for a continuous
 split-normal \verb{log V} with widths
 \code{sigma_L = sigma * exp(delta/2)} and \code{sigma_R = sigma * exp(-delta/2)}.
 In the split variant \code{mu} is the exact median and \code{delta} is unbounded;
-\code{delta = 0} is exactly the lognormal launch, or \code{"weibull"} for
-\verb{V ~ Weibull(shape, scale)}.}
+\code{delta = 0} is exactly the lognormal launch. \code{"weibull"} uses
+\code{V ~ Weibull(shape, scale)} on the positive launch scale.}
 }
 \value{
 A model list defining the BAwL race model.
@@ -64,15 +64,28 @@ scale before trial-dependent transforms are applied.\tabular{llllll}{
    \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Mapping} \tab \strong{Interpretation} \cr
    \emph{v} \tab identity \tab [-Inf, Inf] \tab 1 \tab  \tab Mean evidence-accumulation rate. \cr
    \emph{sv} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Between-trial SD of the drift rate; conventionally fixed to 1 for scale identification. \cr
-   \emph{shape} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Weibull shape (Weibull launch only). \cr
-   \emph{scale} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Weibull scale (Weibull launch only). \cr
    \emph{B} \tab log \tab [0, Inf] \tab log(1) \tab \emph{b} = \emph{B} + \emph{A} \tab Distance from the upper start-point range to the threshold. \cr
    \emph{A} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Start-point range. \cr
    \emph{t0} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Non-decision time. \cr
    \emph{k} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Leak rate; \code{k = 0} is the LBA limit. \cr
+   \emph{eta} \tab identity \tab [-Inf, Inf] \tab 0 \tab  \tab Operational-time warp parameter. \cr
 }
 
 
+\strong{Operational-time warp.} \code{eta} is a trailing free parameter (identity
+transform, default \code{0}, unbounded on the natural scale) and is excluded from
+\code{p_types_canonical}. For physical accumulation time \code{u = rt - t0}, let
+\code{omega = exp(eta)} and \code{s = ((1 + u)^omega - 1) / omega}. The CDF and
+survivor are the parent CDF/survivor evaluated at \code{s}; the density is the
+parent density times the Jacobian \verb{c_eta'(u) = (1 + u)^(omega - 1)}.
+Simulation maps a parent internal finish \code{s} back with
+\code{u = (1 + omega * s)^(1 / omega) - 1} and returns \code{rt = t0 + u}, so \code{t0}
+remains additive. \code{eta = 0} is the exact identity warp.
+
+For BAwL, this contract applies only to the clock-free, uncorrelated
+constructor (\code{erlang_type = "none"}, \code{correlated = FALSE}). BAwL clock or
+correlated variants, \code{LogicalRulesLBA}, and all non-ballistic models reject
+\code{eta}.
 With \code{drift_distribution = "lognormal"}, \code{v} and \code{sv} are replaced by \code{mu}
 (identity, default 0) and \code{sigma} (log, default \code{log(1)}), giving
 \verb{log V ~ N(mu, sigma^2)}.  With \code{"splitlognormal"}, \code{mu} is the exact
@@ -84,9 +97,9 @@ reduces exactly to the lognormal launch.  Both lognormal launches are
 positive by construction, so \code{posdrift} does not apply.  The \code{correlated}
 one-factor path — which decomposes the \emph{Gaussian} drift vector — is not
 available for either lognormal variant.
-With \code{drift_distribution = "weibull"}, \verb{V ~ Weibull(shape, scale)}
-uses positive \code{shape} and \code{scale}; the correlated Gaussian path is
-not available for this launch either.
+With \code{drift_distribution = "weibull"}, \code{V ~ Weibull(shape, scale)} with
+positive shape and scale. Weibull launches are also incompatible with the
+Gaussian \code{correlated} path.
 
 \strong{Fixing the evidence scale.} The evidence axis is defined only up to a
 scale: \verb{(V, b, A) -> (cV, cb, cA)} leaves every crossing time unchanged, so
@@ -141,6 +154,11 @@ independent racers to be assigned \code{rho = 0}. The positive-drift correlated
 simulator jointly conditions the active drift vector on all active drifts
 being positive, so \code{rho} refers to the underlying untruncated Gaussian
 draws, not to their marginally truncated correlation.
+
+The operational-time warp is not available when BAwL uses clocks or the
+correlated-drift path; those variants reject \code{eta}. The clock-free,
+uncorrelated BAwL constructor supports the trailing \code{eta} contract described
+above.
 }
 \examples{
 # A lognormal-launch BAwL. mu's intercept is fixed to identify the evidence

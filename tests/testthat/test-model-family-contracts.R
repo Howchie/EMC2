@@ -37,6 +37,26 @@ test_that("model constructors expose one stable race-model contract", {
   expect_match(BAwD()$c_name, "^BAwD")
   expect_match(BAwR()$c_name, "^BAwR")
   expect_match(BTAwLTransient()$c_name, "^BTAwL")
+
+  # eta is an optional trailing parameter: its zero default preserves existing
+  # designs, while omitting it from the canonical set keeps that default silent.
+  ballistic <- list(
+    LBA = LBA(),
+    BAwL = BAwL(),
+    BAwD = BAwD(),
+    BAwDp = BAwDp(),
+    BAwF = BAwF(),
+    BAwR = BAwR(),
+    BTAwL = BTAwL(),
+    BTAwLTransient = BTAwLTransient(),
+    BTAwLSustained = BTAwLSustained()
+  )
+  expect_true(all(vapply(ballistic, function(m) "eta" %in% names(m$p_types),
+                         logical(1))))
+  expect_true(all(vapply(ballistic, function(m) identical(unname(m$p_types[["eta"]]), 0),
+                         logical(1))))
+  expect_true(all(vapply(ballistic, function(m) !"eta" %in% m$p_types_canonical,
+                         logical(1))))
 })
 
 test_that("representative model kernels preserve the CDF/PDF contract", {
