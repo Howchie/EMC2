@@ -7,7 +7,8 @@
 ROUp(
   boundary_collapse = c("fixed", "exponential", "linear_additive",
     "linear_multiplicative", "weibull"),
-  parameterization = c("rate", "area")
+  parameterization = c("rate", "area"),
+  pooling = c("coactive", "local_race")
 )
 }
 \arguments{
@@ -31,6 +32,10 @@ start-point range. Setting \code{Binf = B + A} gives the fixed-boundary model.}
 uses \verb{(v_T, tau_T)}. \code{"area"} uses \verb{(E_T, tau_T)}, where
 \code{E_T = v_T * tau_T}; the sustained \verb{(v_S, tau_S)} channel is retained in
 both charts.}
+
+\item{pooling}{Character; \code{"coactive"} (the default) pools sustained and
+transient drift in one accumulator, while \code{"local_race"} races independent
+sustained-only and transient-only accumulators inside each marginal kernel.}
 }
 \value{
 A list defining the cognitive model
@@ -59,9 +64,16 @@ argument of \code{design()}. They can also be accessed with \code{ROUp()$p_types
    \emph{B} \tab log \tab [0, Inf] \tab log(1) \tab \emph{b} = \emph{B} + \emph{A} \tab Distance from \emph{A} to \emph{b} (response threshold) \cr
    \emph{t0} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Non-decision time \cr
    \emph{s} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Within-trial standard deviation of the diffusion \cr
-   \emph{pContaminant} \tab probit \tab [0, 1] \tab qnorm(0) \tab  \tab Optional \emph{omission} contaminant probability: mass at \code{rt = Inf} only, handled by the data pipeline \cr
-   \emph{pGuess} \tab probit \tab [0, 1] \tab qnorm(0) \tab  \tab Optional uniform \emph{guess} (outlier) probability, mixed into observed RT densities over the guess window \cr
 }
+
+
+Optional fitting parameters: \code{pContaminant} is the omission probability and
+\code{pGuess} is the uniform-outlier probability.
+
+For a non-fixed \code{boundary_collapse}, the optional \code{Binf} and \code{tau} parameters
+use log/exp transforms with defaults \code{log(0.5)} and \code{log(1)}; the Weibull
+form additionally uses \code{pw} with the same log/exp transform and default
+\code{log(1)}. These parameters describe the selected collapsing-boundary form.
 }
 \section{Scale identification}{
 Scaling the state shows the rate chart depends only on

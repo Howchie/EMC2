@@ -33,11 +33,6 @@ The model's user-facing parameters are:\tabular{llllll}{
    \emph{A} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Start-point range above 1. \cr
    \emph{t0} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Non-decision time. \cr
    \emph{s} \tab log \tab [0, Inf] \tab log(1) \tab  \tab GBM diffusion SD. \cr
-   \emph{mG} \tab log \tab [0, Inf] \tab log(1) \tab \emph{lambda_g} = \emph{q} / \emph{mG} \tab Mean of the optional guess clock. \cr
-   \emph{mK} \tab log \tab [0, Inf] \tab log(1) \tab \emph{lambda_k} = \emph{q} / \emph{mK} \tab Mean of the optional kill clock. \cr
-   \emph{omega} \tab probit \tab [0, 1] \tab qnorm(.5) \tab  \tab Erlang-1 mixture weight in mixed mode. \cr
-   \emph{pContaminant} \tab probit \tab [0, 1] \tab qnorm(0) \tab  \tab Optional \emph{omission} contaminant probability: mass at \code{rt = Inf} only, handled by the data pipeline \cr
-   \emph{pGuess} \tab probit \tab [0, 1] \tab qnorm(0) \tab  \tab Optional uniform \emph{guess} (outlier) probability, mixed into observed RT densities over the guess window \cr
 }
 
 
@@ -46,6 +41,11 @@ The internal \code{lambda_g} and \code{lambda_k} columns are created by the
 formula. Here \code{q = 1} for Erlang-1 and \code{q = 2} for Erlang-2. In mixed mode,
 each clock is Erlang-1 with probability \code{omega} and Erlang-2 otherwise,
 with the same mean \code{mG} or \code{mK} in either component.
+The optional clock means \code{mG} and \code{mK} use log/exp transforms with default
+\code{log(1)} when their clocks are active; mixed mode additionally uses optional
+\code{omega} on the probit scale with default \code{qnorm(.5)}. Optional fitting
+parameters are \code{pContaminant}, the omission probability,
+and \code{pGuess}, the uniform-outlier probability.
 
 \code{erlang_type = "none"} gives the ordinary GBM race. \code{"local_kill"} adds an
 independent kill clock to each accumulator, \code{"global_kill"} adds one kill

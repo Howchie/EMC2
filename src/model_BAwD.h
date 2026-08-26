@@ -47,7 +47,7 @@ constexpr double BAWD_DENOM_FLOOR = BAWL_DENOM_FLOOR;
 // the `launch` argument of the exported d/p functions -- keep them in sync).
 constexpr int BAWD_LAUNCH_NORMAL = 0;
 constexpr int BAWD_LAUNCH_LOGNORMAL = 1;
-
+constexpr int BAWD_LAUNCH_SPLITLOGNORMAL = 2;
 // --------------------------------------------------------------------------
 // Geometry (launch-distribution free)
 // --------------------------------------------------------------------------
@@ -119,67 +119,70 @@ BawdAtU bawd_at_u(const BawdGeom& g, double u);
 double bawd_log_frozen_normal(const BawdGeom& g, double s_lo, double s_hi,
                               double v, double sv);
 double bawd_log_frozen_logn_quad(const BawdGeom& g, double s_lo, double s_hi,
-                                 double mu, double sigma);
+                                 double mu, double sigma, double delta = 0.0);
 double bawd_log_frozen_logn(const BawdGeom& g, double s_lo, double s_hi,
-                            double mu, double sigma);
-double log_bawd_cdf_normal(double u, const BawdGeom& g, double v, double sv,
-                           bool posdrift, double denom_floor);
-double log_bawd_cdf_logn(double u, const BawdGeom& g, double mu, double sigma);
+                            double mu, double sigma, double delta = 0.0);
+double log_bawd_cdf_logn(double u, const BawdGeom& g, double mu, double sigma,
+                         double delta = 0.0);
 double bawd_log_frozen_surv_normal(const BawdGeom& g, double s_lo, double s_hi,
                                    double v, double sv, bool posdrift,
                                    double denom_floor);
 double bawd_log_frozen_surv_logn(const BawdGeom& g, double s_lo, double s_hi,
-                                 double mu, double sigma);
+                                 double mu, double sigma, double delta = 0.0);
 double log_bawd_surv_normal(double u, const BawdGeom& g, double v, double sv,
                             bool posdrift, double denom_floor);
-double log_bawd_surv_logn(double u, const BawdGeom& g, double mu, double sigma);
+double log_bawd_surv_logn(double u, const BawdGeom& g, double mu, double sigma,
+                          double delta = 0.0);
 double log_bawd_pdf_normal(double u, const BawdGeom& g, double v, double sv,
                            bool posdrift, double denom_floor);
-double log_bawd_pdf_logn(double u, const BawdGeom& g, double mu, double sigma);
+double log_bawd_pdf_logn(double u, const BawdGeom& g, double mu, double sigma,
+                         double delta = 0.0);
 bool bawd_natural_cdf_normal(double u, const BawdGeom& g, double v, double sv,
                              bool posdrift, double denom_floor, int accept_mode,
                              double &cdf);
 bool bawd_natural_cdf_logn(double u, const BawdGeom& g, double mu, double sigma,
-                           int accept_mode, double &cdf);
+                           int accept_mode, double &cdf, double delta = 0.0);
 bool bawd_natural_pdf_normal(double u, const BawdGeom& g, double v, double sv,
                              bool posdrift, double denom_floor, int accept_mode,
                              double &pdf);
 bool bawd_natural_pdf_logn(double u, const BawdGeom& g, double mu, double sigma,
-                           int accept_mode, double &pdf);
+                           int accept_mode, double &pdf, double delta = 0.0);
 bool ba_natural_cdf_bawd(double u, double A, double b, double p1, double p2,
                          double k, double ell, int launch, bool posdrift,
                          double gamma, double rho, double denom_floor,
-                         int accept_mode, double &cdf);
+                         int accept_mode, double &cdf, double delta = 0.0);
 bool ba_natural_pdf_bawd(double u, double A, double b, double p1, double p2,
                          double k, double ell, int launch, bool posdrift,
                          double gamma, double rho, double denom_floor,
-                         int accept_mode, double &pdf);
+                         int accept_mode, double &pdf, double delta = 0.0);
 double bawd_log_cdf(double u, double A, double b, double p1, double p2,
                     double k, double ell, int launch, bool posdrift,
-                    double gamma, double rho,
-                    double denom_floor = BAWD_DENOM_FLOOR);
+                    double gamma, double rho, double denom_floor = BAWD_DENOM_FLOOR,
+                    double delta = 0.0);
 double bawd_log_surv(double u, double A, double b, double p1, double p2,
                      double k, double ell, int launch, bool posdrift,
-                     double gamma, double rho,
-                     double denom_floor = BAWD_DENOM_FLOOR);
+                     double gamma, double rho, double denom_floor = BAWD_DENOM_FLOOR,
+                     double delta = 0.0);
 double bawd_log_pdf(double u, double A, double b, double p1, double p2,
                     double k, double ell, int launch, bool posdrift,
-                    double gamma, double rho,
-                    double denom_floor = BAWD_DENOM_FLOOR);
+                    double gamma, double rho, double denom_floor = BAWD_DENOM_FLOOR,
+                    double delta = 0.0);
 double bawd_cdf_norm(double t, double A, double b, double p1, double p2,
                      double k, double ell, int launch, bool posdrift,
                      bool log_out, double gamma, double rho,
-                     double denom_floor = BAWD_DENOM_FLOOR);
+                     double denom_floor = BAWD_DENOM_FLOOR, double delta = 0.0);
 double bawd_pdf_norm(double t, double A, double b, double p1, double p2,
                      double k, double ell, int launch, bool posdrift,
                      bool log_out, double gamma, double rho,
-                     double denom_floor = BAWD_DENOM_FLOOR);
+                     double denom_floor = BAWD_DENOM_FLOOR, double delta = 0.0);
 double bawd_cdf_scalar_natural(double t, double A, double b, double p1,
                                double p2, double k, double ell, int launch,
-                               bool posdrift, double gamma, double rho);
+                               bool posdrift, double gamma, double rho,
+                               double delta = 0.0);
 double bawd_pdf_scalar_natural(double t, double A, double b, double p1,
                                double p2, double k, double ell, int launch,
-                               bool posdrift, double gamma, double rho);
+                               bool posdrift, double gamma, double rho,
+                               double delta = 0.0);
 
 // BAwD race-model adapter entry points.
 // Definitions live in model_BAwD.cpp so utils.h remains a

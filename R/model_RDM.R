@@ -145,20 +145,18 @@ rRDM <- function(lR, pars, p_types=c("v", "B", "A", "t0"), ok=rep(TRUE, dim(pars
 #' Default values are used for all parameters that are not explicitly listed in the `formula`
 #' argument of `design()`.They can also be accessed with `RDM()$p_types`.
 #'
-#' | **Parameter** | **Transform** | **Natural scale** | **Default**   | **Mapping**          | **Interpretation**                                                |
-#' |-----------|-----------|---------------|-----------|------------------|---------------------------------------------------------------|
+#' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Mapping** | **Interpretation** |
+#' |---|---|---|---|---|---|
 #' | *v*       | log       | \[0, Inf\]      | log(1)    |                  | Evidence-accumulation rate (drift rate)                        |
 #' | *A*       | log       | \[0, Inf\]      | log(0)    |                  | Between-trial variation (range) in start point                 |
 #' | *B*       | log       | \[0, Inf\]      | log(1)    | *b* = *B* + *A*      | Distance from *A* to *b* (response threshold)                  |
 #' | *t0*      | log       | \[0, Inf\]      | log(0)    |                  | Non-decision time                                             |
 #' | *s*       | log       | \[0, Inf\]      | log(1)    |                  | Within-trial standard deviation of drift rate                 |
-#' | *pContaminant* | probit | \[0, 1\] | qnorm(0) | | Optional *omission* contaminant probability: mass at `rt = Inf` only, handled by the data pipeline |
-#' | *pGuess* | probit | \[0, 1\] | qnorm(0) | | Optional uniform *guess* (outlier) probability, mixed into observed RT densities over the guess window |
 #'
 #'
-#' The core RDM parameters are estimated on the log scale. `pContaminant` is
-#' estimated on the probit scale and is generic nuisance infrastructure rather
-#' than an accumulator parameter.
+#' The RDM parameters are estimated on the log scale. Optional fitting
+#' parameters are `pContaminant`, the omission probability, and `pGuess`, the
+#' uniform-outlier probability.
 #'
 #' The parameterization *b* = *B* + *A* ensures that the response threshold is
 #' always higher than the between trial variation in start point.
@@ -563,17 +561,17 @@ rSWTN <- function(n, b, v, A, sv, s = 1, k = 0, erlang = 1L, erlang_omega = 1,
 #' | *A* | log | \[0, Inf\] | log(0) | | Start-point range above 1. |
 #' | *t0* | log | \[0, Inf\] | log(0) | | Non-decision time. |
 #' | *s* | log | \[0, Inf\] | log(1) | | GBM diffusion SD. |
-#' | *mG* | log | \[0, Inf\] | log(1) | *lambda_g* = *q* / *mG* | Mean of the optional guess clock. |
-#' | *mK* | log | \[0, Inf\] | log(1) | *lambda_k* = *q* / *mK* | Mean of the optional kill clock. |
-#' | *omega* | probit | \[0, 1\] | qnorm(.5) | | Erlang-1 mixture weight in mixed mode. |
-#' | *pContaminant* | probit | \[0, 1\] | qnorm(0) | | Optional *omission* contaminant probability: mass at `rt = Inf` only, handled by the data pipeline |
-#' | *pGuess* | probit | \[0, 1\] | qnorm(0) | | Optional uniform *guess* (outlier) probability, mixed into observed RT densities over the guess window |
 #'
 #' The internal `lambda_g` and `lambda_k` columns are created by the
 #' `Ttransform`; they are rates, not parameters to include in a design
 #' formula. Here `q = 1` for Erlang-1 and `q = 2` for Erlang-2. In mixed mode,
 #' each clock is Erlang-1 with probability `omega` and Erlang-2 otherwise,
 #' with the same mean `mG` or `mK` in either component.
+#' The optional clock means `mG` and `mK` use log/exp transforms with default
+#' `log(1)` when their clocks are active; mixed mode additionally uses optional
+#' `omega` on the probit scale with default `qnorm(.5)`. Optional fitting
+#' parameters are `pContaminant`, the omission probability,
+#' and `pGuess`, the uniform-outlier probability.
 #'
 #' `erlang_type = "none"` gives the ordinary GBM race. `"local_kill"` adds an
 #' independent kill clock to each accumulator, `"global_kill"` adds one kill
@@ -734,12 +732,6 @@ RDMGBM <- function(erlang_shape = 1L, erlang_type = "none") {
 #' | *t0* | log | \[0, Inf\] | log(0) | | Non-decision time. |
 #' | *s* | log | \[0, Inf\] | log(1) | | Within-trial diffusion SD; conventionally fixed to 1 for scale identification. |
 #' | *sv* | log | \[0, Inf\] | log(0) | | Between-trial SD of the drift rate. |
-#' | *mG* | log | \[0, Inf\] | log(1) | *lambda_g* = *q* / *mG* | Mean of the optional guess clock. |
-#' | *mK* | log | \[0, Inf\] | log(1) | *lambda_k* = *q* / *mK* | Mean of the optional kill clock. |
-#' | *omega* | probit | \[0, 1\] | qnorm(.5) | | Erlang-1 mixture weight in mixed mode. |
-#' | *pContaminant* | probit | \[0, 1\] | qnorm(0) | | Optional *omission* contaminant probability: mass at `rt = Inf` only, handled by the data pipeline |
-#' | *pGuess* | probit | \[0, 1\] | qnorm(0) | | Optional uniform *guess* (outlier) probability, mixed into observed RT densities over the guess window |
-#' | *rho* | scaled probit | \[-1, 1\] | qnorm(.5) | | Gaussian-copula correlation between the two participating finishing times; only when `correlated = TRUE`. |
 #'
 #' `erlang_shape = 1` uses exponential clocks and `erlang_shape = 2` uses
 #' Erlang-2 clocks. In `erlang_shape = "mixed"`, each clock is Erlang-1 with
@@ -752,6 +744,11 @@ RDMGBM <- function(erlang_shape = 1L, erlang_type = "none") {
 #' `"local_kill_guess"`. A global kill clock is shared across accumulators and
 #' therefore requires the kill parameter to be constant within a trial. Mixed
 #' Erlang mode is currently restricted to local clock configurations.
+#' The optional clock means `mG` and `mK` use log/exp transforms with default
+#' `log(1)` when their clocks are active; mixed mode additionally uses optional
+#' `omega` on the probit scale with default `qnorm(.5)`. Generic
+#' Optional fitting parameters are `pContaminant`, the omission probability,
+#' and `pGuess`, the uniform-outlier probability.
 #'
 #' Setting `sv = 0` reduces the model to the standard RDM parameterization;
 #' setting both `sv = 0` and `A = 0` gives a point Wald accumulator (apart from
@@ -767,10 +764,9 @@ RDMGBM <- function(erlang_shape = 1L, erlang_type = "none") {
 #' As a race model, RDMSWTN has one accumulator per response option. EMC2
 #' constructs the latent accumulator factor `lR` from `R`, and the race
 #' likelihood combines one winning density with the survivor probabilities of
-#' all other accumulators. The optional `pContaminant` and `pGuess` parameters
-#' are generic nuisance infrastructure and are not part of the SWTN
-#' distribution: `pContaminant` is an *omission* rate contributing mass only at
-#' `rt = Inf`, `pGuess` a uniform *outlier* density mixed into observed RTs.
+#' all other accumulators. Optional fitting parameters are `pContaminant`, an
+#' *omission* probability contributing mass only at `rt = Inf`, and `pGuess`, a
+#' uniform *outlier* probability mixed into observed RTs.
 #' Both are proportions among *retained* trials, being applied after truncation
 #' renormalisation.
 #'
@@ -1116,6 +1112,21 @@ RDMSWTN <- function(erlang_shape = 1L, erlang_type = "none", posdrift = TRUE,
 #' are correlated, as in [BAwLcorr()]. See [RDMSWTN()] for the participation
 #' design and the interpretation of `rho` under each.
 #'
+#' Optional fitting parameters are `pContaminant`, the omission probability,
+#' `pGuess`, the uniform-outlier probability, and `rho`, the correlation
+#' parameter. Optional clock means `mG` and `mK` use log/exp transforms with
+#' default `log(1)` when active; mixed mode additionally uses `omega` on the
+#' probit scale with default `qnorm(.5)`.
+#'
+#' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Mapping** | **Interpretation** |
+#' |---|---|---|---|---|---|
+#' | *v* | exp (identity for `posdrift = FALSE`) | \[0, Inf\] (\[-Inf, Inf\] for IO) | log(1) (1 for IO) | | Mean drift rate. |
+#' | *B* | exp | \[0, Inf\] | log(1) | *b* = *B* + *A* | Baseline distance to threshold. |
+#' | *A* | exp | \[0, Inf\] | log(0) | | Start-point range. |
+#' | *t0* | exp | \[0, Inf\] | log(0) | | Non-decision time. |
+#' | *s* | exp | \[0, Inf\] | log(1) | | Within-trial diffusion SD. |
+#' | *sv* | exp | \[0, Inf\] | log(0) | | Between-trial drift SD. |
+#'
 #' @param erlang_shape Retained for constructor compatibility. Only the
 #'   no-clock model is currently supported.
 #' @param erlang_type Must be `"none"`.
@@ -1151,13 +1162,23 @@ RDMSWTNcorr <- function(erlang_shape = 1L, erlang_type = "none",
 #' `log(1)` for `v`, `B`, `s`, and `tau`, and the boundary value `log(0)` for
 #' `A`, `t0`, and `sv`. The drift, start-point variability, diffusion scale,
 #' and `b = B + A` convention are otherwise identical to [RDMSWTN()].
-#' The optional `pContaminant` (omission) and `pGuess` (uniform outlier)
-#' parameters are handled by the generic data pipeline. With
+#' Optional fitting parameters are `pContaminant`, the omission probability,
+#' and `pGuess`, the uniform-outlier probability. With
 #' `correlated = TRUE`, `rho` follows the same contract as [RDMSWTN()]:
 #' `correlate = "times"` couples exactly two active finishing-time marginals
 #' with a Gaussian copula (and under `posdrift = FALSE` additionally requires
 #' `sv = 0` on the correlated rows), while `correlate = "drifts"` correlates
 #' the between-trial drift draws and requires `sv > 0`.
+#'
+#' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Mapping** | **Interpretation** |
+#' |---|---|---|---|---|---|
+#' | *v* | exp (identity for `posdrift = FALSE`) | \[0, Inf\] (\[-Inf, Inf\] for IO) | log(1) (1 for IO) | | Mean between-trial drift rate. |
+#' | *B* | exp | \[0, Inf\] | log(1) | *b* = *B* + *A* | Baseline distance to the threshold. |
+#' | *A* | exp | \[0, Inf\] | log(0) | | Start-point/distance range. |
+#' | *t0* | exp | \[0, Inf\] | log(0) | | Non-decision time. |
+#' | *s* | exp | \[0, Inf\] | log(1) | | Within-trial diffusion SD. |
+#' | *sv* | exp | \[0, Inf\] | log(0) | | Between-trial SD of drift rate. |
+#' | *tau* | exp | \[0, Inf\] | log(1) | | Width of the finite decision-time support. |
 #'
 #' @param posdrift Logical. If `TRUE` (default), truncate the between-trial
 #'   normal drift distribution below at zero. If `FALSE`, allow unrestricted
@@ -1255,6 +1276,20 @@ RDMSWTN_TT <- function(posdrift = TRUE, correlated = FALSE,
 #' Correlated Time-Changed RDMSWTN Race
 #'
 #' Convenience constructor for `RDMSWTN_TT(correlated = TRUE)`.
+#'
+#' Optional fitting parameters are `pContaminant`, the omission probability,
+#' `pGuess`, the uniform-outlier probability, and `rho`, the correlation
+#' parameter.
+#'
+#' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Mapping** | **Interpretation** |
+#' |---|---|---|---|---|---|
+#' | *v* | exp (identity for `posdrift = FALSE`) | \[0, Inf\] (\[-Inf, Inf\] for IO) | log(1) (1 for IO) | | Mean drift rate. |
+#' | *B* | exp | \[0, Inf\] | log(1) | *b* = *B* + *A* | Baseline distance to threshold. |
+#' | *A* | exp | \[0, Inf\] | log(0) | | Start-point range. |
+#' | *t0* | exp | \[0, Inf\] | log(0) | | Non-decision time. |
+#' | *s* | exp | \[0, Inf\] | log(1) | | Within-trial diffusion SD. |
+#' | *sv* | exp | \[0, Inf\] | log(0) | | Between-trial drift SD. |
+#' | *tau* | exp | \[0, Inf\] | log(1) | | Width of the finite decision-time support. |
 #'
 #' @param posdrift Logical. Active nonzero `rho` is supported for both
 #'   settings. With `correlate = "times"`, `posdrift = FALSE` additionally
@@ -1449,6 +1484,21 @@ rRDMSWTN_TT_corr <- function(lR, pars, ok = rep(TRUE, nrow(pars)),
 #' Logical rules use accumulator roles `A`, `B`, `n_A`, and `n_B` and the
 #' `LogicalRule` data column. Supported rules are `OR`, `AND`, `XOR`, `ID`,
 #' `OR_DETECTION_ANALYTIC`, and `OR_DETECTION_GNG`.
+#'
+#' Optional clock means `mG` and `mK` use log/exp transforms with default
+#' `log(1)` when active; mixed mode additionally uses `omega` on the probit
+#' scale with default `qnorm(.5)`. Optional fitting parameters are
+#' `pContaminant`, the omission probability, and `pGuess`, the uniform-outlier
+#' probability.
+#'
+#' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Mapping** | **Interpretation** |
+#' |---|---|---|---|---|---|
+#' | *v* | exp (identity for `posdrift = FALSE`) | \[0, Inf\] (\[-Inf, Inf\] for IO) | log(1) (1 for IO) | | Mean drift rate. |
+#' | *B* | exp | \[0, Inf\] | log(1) | *b* = *B* + *A* | Baseline distance to threshold. |
+#' | *A* | exp | \[0, Inf\] | log(0) | | Start-point range. |
+#' | *t0* | exp | \[0, Inf\] | log(0) | | Non-decision time. |
+#' | *s* | exp | \[0, Inf\] | log(1) | | Within-trial diffusion SD. |
+#' | *sv* | exp | \[0, Inf\] | log(0) | | Between-trial drift SD. |
 #'
 #' @param erlang_shape Integer `1` for exponential clocks, `2` for Erlang-2,
 #'   or `"mixed"` for the Erlang-1/Erlang-2 mixture.

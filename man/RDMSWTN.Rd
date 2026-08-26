@@ -54,12 +54,6 @@ The model parameters are:\tabular{llllll}{
    \emph{t0} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Non-decision time. \cr
    \emph{s} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Within-trial diffusion SD; conventionally fixed to 1 for scale identification. \cr
    \emph{sv} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Between-trial SD of the drift rate. \cr
-   \emph{mG} \tab log \tab [0, Inf] \tab log(1) \tab \emph{lambda_g} = \emph{q} / \emph{mG} \tab Mean of the optional guess clock. \cr
-   \emph{mK} \tab log \tab [0, Inf] \tab log(1) \tab \emph{lambda_k} = \emph{q} / \emph{mK} \tab Mean of the optional kill clock. \cr
-   \emph{omega} \tab probit \tab [0, 1] \tab qnorm(.5) \tab  \tab Erlang-1 mixture weight in mixed mode. \cr
-   \emph{pContaminant} \tab probit \tab [0, 1] \tab qnorm(0) \tab  \tab Optional \emph{omission} contaminant probability: mass at \code{rt = Inf} only, handled by the data pipeline \cr
-   \emph{pGuess} \tab probit \tab [0, 1] \tab qnorm(0) \tab  \tab Optional uniform \emph{guess} (outlier) probability, mixed into observed RT densities over the guess window \cr
-   \emph{rho} \tab scaled probit \tab [-1, 1] \tab qnorm(.5) \tab  \tab Gaussian-copula correlation between the two participating finishing times; only when \code{correlated = TRUE}. \cr
 }
 
 
@@ -74,6 +68,11 @@ kill, local guess, or local kill plus local guess, using the same values
 \code{"local_kill_guess"}. A global kill clock is shared across accumulators and
 therefore requires the kill parameter to be constant within a trial. Mixed
 Erlang mode is currently restricted to local clock configurations.
+The optional clock means \code{mG} and \code{mK} use log/exp transforms with default
+\code{log(1)} when their clocks are active; mixed mode additionally uses optional
+\code{omega} on the probit scale with default \code{qnorm(.5)}. Generic
+Optional fitting parameters are \code{pContaminant}, the omission probability,
+and \code{pGuess}, the uniform-outlier probability.
 
 Setting \code{sv = 0} reduces the model to the standard RDM parameterization;
 setting both \code{sv = 0} and \code{A = 0} gives a point Wald accumulator (apart from
@@ -89,10 +88,9 @@ distribution is truncated at zero, \code{v} is sampled on the log scale
 As a race model, RDMSWTN has one accumulator per response option. EMC2
 constructs the latent accumulator factor \code{lR} from \code{R}, and the race
 likelihood combines one winning density with the survivor probabilities of
-all other accumulators. The optional \code{pContaminant} and \code{pGuess} parameters
-are generic nuisance infrastructure and are not part of the SWTN
-distribution: \code{pContaminant} is an \emph{omission} rate contributing mass only at
-\code{rt = Inf}, \code{pGuess} a uniform \emph{outlier} density mixed into observed RTs.
+all other accumulators. Optional fitting parameters are \code{pContaminant}, an
+\emph{omission} probability contributing mass only at \code{rt = Inf}, and \code{pGuess}, a
+uniform \emph{outlier} probability mixed into observed RTs.
 Both are proportions among \emph{retained} trials, being applied after truncation
 renormalisation.
 

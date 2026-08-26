@@ -68,12 +68,9 @@ reaches the threshold \code{b = B + A}. With \code{posdrift = TRUE}, the drift d
 is a positive normal draw; with \code{posdrift = FALSE}, the untruncated normal
 is used and negative-drift accumulators can produce intrinsic omissions.
 All of the parameters above are trial-dependent after the design formulas
-have been evaluated. The capacity extension adds the following parameters:\tabular{lllll}{
-   \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Interpretation} \cr
-   \emph{kappa} \tab identity \tab [-Inf, Inf] \tab 0 \tab Additive mean capacity shift shared by both active targets in an \code{AB} trial. \cr
-   \emph{tau} \tab log \tab [0, Inf] \tab log(0) \tab Between-trial SD of the shared additive drift shift in an \code{AB} trial. \cr
-}
-
+have been evaluated. The optional capacity extension adds \code{kappa} on the
+identity scale (default \code{0}) and \code{tau} on the log scale (default \code{log(0)}).
+They are active when \code{capacity = TRUE}.
 
 With \code{capacity = TRUE}, an \code{AB} trial receives one latent \code{Z ~ N(0, 1)} and
 the target drift draws are
@@ -86,6 +83,7 @@ accumulators do not load on the factor. Capacity has no effect on
 logical-rules likelihood exactly. \code{kappa} and \code{tau} must be shared by the
 \code{A} and \code{B} rows within a trial. In positive-drift mode, the active target
 draws are conditioned jointly to be positive.
+The optional fitting parameter \code{pContaminant} is the omission probability.
 
 The likelihood is implemented in the compiled logical-rules fast path. The
 R \code{dfun} and \code{pfun} entries retain the single-accumulator LBA functions for

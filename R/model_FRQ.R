@@ -169,9 +169,6 @@ rFRQ <- function(lR, pars, ok = rep(TRUE, length(lR))) {
 #' | *h* | probit | \[0, 1\] | qnorm(0.95) | | Probability that the accumulator ever responds |
 #' | *tau* | log | \[0, Inf\] | log(0.5) | | Median decision time on the trials where it does respond |
 #' | *t0* | log | \[0, Inf\] | log(0) | | Non-decision time |
-#' | *delta* | log | \[0, 6\] | log(0) | | Between-trial variability in threshold; 0 (the default) turns it off |
-#' | *pContaminant* | probit | \[0, 1\] | qnorm(0) | | Optional *omission* contaminant probability: mass at `rt = Inf` only, handled by the data pipeline |
-#' | *pGuess* | probit | \[0, 1\] | qnorm(0) | | Optional uniform *guess* (outlier) probability, mixed into observed RT densities over the guess window |
 #'
 #' The sampled parameters are not the generative ones. `alpha` and `beta` are
 #' the quorum size `K` and the spare capacity `N - K + 1`, treated as
@@ -220,10 +217,10 @@ rFRQ <- function(lR, pars, ok = rep(TRUE, length(lR))) {
 #' probability `prod(1 - h)` over accumulators, so an appreciable failure rate
 #' per accumulator is compatible with very few observed omissions: two
 #' accumulators at `h = 0.98` give a race-level omission rate of 0.0004.
-#' `pContaminant` is offered for consistency with the other models but is
-#' redundant here unless an omission mechanism *outside* the decision process
-#' is wanted. With a single accumulator and `beta` fixed at 1 the two are not
-#' identified at all.
+#' Optional fitting parameters are `pContaminant`, the omission probability,
+#' and `pGuess`, the uniform-outlier probability. The optional
+#' threshold-variability `delta` parameter is log/exp transformed with default
+#' `log(0)`.
 #'
 #' Because the FRQ is a race model, it has one accumulator per response
 #' option. EMC2 automatically constructs a factor representing the

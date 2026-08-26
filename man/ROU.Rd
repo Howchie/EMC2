@@ -56,9 +56,16 @@ argument of \code{design()}. They can also be accessed with \code{ROU()$p_types}
    \emph{B} \tab log \tab [0, Inf] \tab log(1) \tab \emph{b} = \emph{B} + \emph{A} \tab Distance from \emph{A} to \emph{b} (response threshold) \cr
    \emph{t0} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Non-decision time \cr
    \emph{s} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Within-trial standard deviation of the diffusion \cr
-   \emph{pContaminant} \tab probit \tab [0, 1] \tab qnorm(0) \tab  \tab Optional \emph{omission} contaminant probability: mass at \code{rt = Inf} only, handled by the data pipeline \cr
-   \emph{pGuess} \tab probit \tab [0, 1] \tab qnorm(0) \tab  \tab Optional uniform \emph{guess} (outlier) probability, mixed into observed RT densities over the guess window \cr
 }
+
+
+Optional fitting parameters: \code{pContaminant} is the omission probability and
+\code{pGuess} is the uniform-outlier probability.
+
+For a non-fixed \code{boundary_collapse}, the optional \code{Binf} and \code{tau} parameters
+use log/exp transforms with defaults \code{log(0.5)} and \code{log(1)}; the Weibull
+form additionally uses \code{pw} with the same log/exp transform and default
+\code{log(1)}. These parameters describe the selected collapsing-boundary form.
 }
 \section{Parameterizations}{
 \code{parameterization} changes which three parameters stand in for
@@ -70,11 +77,11 @@ to all three.
 
 \code{"curvature"} replaces them with \eqn{(t_\star, k, s)}. \code{tstar} is the
 reference crossing time of the deterministic path from \eqn{x = 0} to
-\eqn{b = B + A}; \code{k} and \code{s} retain their physical units:\tabular{lllll}{
-   \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Interpretation} \cr
-   \emph{tstar} \tab log \tab [0, Inf] \tab log(1) \tab Time at which the deterministic mean path reaches \emph{b} \cr
-   \emph{k} \tab log \tab [0, Inf] \tab log(0) \tab Physical leak rate; \emph{k} = 0 is the Wiener race \cr
-   \emph{s} \tab log \tab [0, Inf] \tab log(1) \tab Diffusion standard deviation \cr
+\eqn{b = B + A}; \code{k} and \code{s} retain their physical units:\tabular{llllll}{
+   \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Mapping} \tab \strong{Interpretation} \cr
+   \emph{tstar} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Time at which the deterministic mean path reaches \emph{b}. \cr
+   \emph{k} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Physical leak rate; \emph{k} = 0 is the Wiener race. \cr
+   \emph{s} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Diffusion standard deviation. \cr
 }
 
 
@@ -82,11 +89,11 @@ The map is \eqn{v = bk/(1-e^{-k t_\star})}, with the smooth limit
 \eqn{v = b/t_\star} at \emph{k} = 0. This is a deterministic-crossing chart, so
 \code{tstar ~ condition}, \code{k ~ 1}, and \code{s ~ 1} have their literal meanings.
 
-\code{"equilibrium"} replaces them with \eqn{(t_k, \theta, \chi)}:\tabular{lllll}{
-   \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Interpretation} \cr
-   \emph{tk} \tab log \tab [0.001, Inf] \tab log(1) \tab Leak time constant \eqn{t_k = 1/k} (the boundary-collapse time constant keeps the name \emph{tau}) \cr
-   \emph{theta} \tab log \tab [0.001, 20] \tab log(1) \tab Physical OU equilibrium, \eqn{v/k} \cr
-   \emph{chi} \tab log \tab [0.001, 10] \tab log(1) \tab Physical noise over one relaxation, \eqn{s\sqrt{t_k}} \cr
+\code{"equilibrium"} replaces them with \eqn{(t_k, \theta, \chi)}:\tabular{llllll}{
+   \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Mapping} \tab \strong{Interpretation} \cr
+   \emph{tk} \tab log \tab [0.001, Inf] \tab log(1) \tab  \tab Leak time constant \eqn{t_k = 1/k}. \cr
+   \emph{theta} \tab log \tab [0.001, 20] \tab log(1) \tab  \tab Physical OU equilibrium, \eqn{v/k}. \cr
+   \emph{chi} \tab log \tab [0.001, 10] \tab log(1) \tab  \tab Physical noise over one relaxation, \eqn{s\sqrt{t_k}}. \cr
 }
 
 

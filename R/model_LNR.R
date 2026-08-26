@@ -47,13 +47,11 @@ rLNR <- function(lR,pars,p_types=c("m","s","t0"),ok=rep(TRUE,dim(pars)[1])){
 #' Default values are used for all parameters that are not explicitly listed in the `formula`
 #' argument of `design()`.They can also be accessed with `LNR()$p_types`.
 #'
-#' | **Parameter** | **Transform** | **Natural scale** | **Default**   | **Mapping**                    | **Interpretation**            |
-#'  |-----------|-----------|---------------|-----------|----------------------------|---------------------------|
-#'  | *m*       | identity  | \[-Inf, Inf\]   | 1         |                            | Meanlog of the lognormal decision-time distribution |
-#'  | *s*       | log       | \[0, Inf\]      | log(1)    |                            | SDlog of the lognormal decision-time distribution |
-#'  | *t0*      | log       | \[0, Inf\]      | log(0)    |                            | Additive non-decision-time shift |
-#'  | *pContaminant* | probit | \[0, 1\] | qnorm(0) | | Optional *omission* contaminant probability: mass at `rt = Inf` only, handled by the data pipeline |
-#'  | *pGuess* | probit | \[0, 1\] | qnorm(0) | | Optional uniform *guess* (outlier) probability, mixed into observed RT densities over the guess window |
+#' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Mapping** | **Interpretation** |
+#' |---|---|---|---|---|---|
+#' | *m* | identity | \[-Inf, Inf\] | 1 | | Meanlog of the lognormal decision-time distribution. |
+#' | *s* | log | \[0, Inf\] | log(1) | | SDlog of the lognormal decision-time distribution. |
+#' | *t0* | log | \[0, Inf\] | log(0) | | Additive non-decision-time shift. |
 #'
 #' Conditional on an accumulator's parameters, its decision time is
 #' `T = t0 + Y`, where `log(Y) ~ Normal(m, s^2)`. Thus `m` and `s` are the
@@ -76,11 +74,10 @@ rLNR <- function(lR,pars,p_types=c("m","s","t0"),ok=rep(TRUE,dim(pars)[1])){
 #' the rate of accumulation (see the example below).
 #'
 #' All model parameters are trial-dependent after the design formulas are
-#' evaluated. `pContaminant` and `pGuess` are generic nuisance parameters and
-#' are not part of the lognormal race distribution itself: `pContaminant` is a
-#' Bernoulli *omission* rate that puts mass only at `rt = Inf`, while `pGuess`
-#' mixes a uniform outlier density into observed RTs. Both are proportions among
-#' *retained* trials -- they are applied after truncation renormalisation.
+#' evaluated. Optional fitting parameters are `pContaminant`, a Bernoulli
+#' *omission* probability that puts mass only at `rt = Inf`, and `pGuess`, a
+#' uniform-outlier probability mixed into observed RTs. Both are proportions
+#' among *retained* trials and are applied after truncation renormalisation.
 #'
 #' Rouder, J. N., Province, J. M., Morey, R. D., Gomez, P., & Heathcote, A. (2015).
 #' The lognormal race: A cognitive-process model of choice and latency with
@@ -180,12 +177,12 @@ LNR <- function() {
 #' | *k* | log | \[0, Inf\] | log(3) | *K* = 2 + floor(*k* + 0.5) | Threshold offset determining the baseline event count. |
 #' | *omega* | log | \[0, Inf\] | log(0) | | Mean geometric excess above the baseline threshold. |
 #' | *t0* | log | \[0, Inf\] | log(0) | | Non-decision time. |
-#' | *pContaminant* | probit | \[0, 1\] | qnorm(0) | | Optional omission contaminant probability. |
-#' | *pGuess* | probit | \[0, 1\] | qnorm(0) | | Optional uniform outlier probability. |
 #'
 #' `k` is sampled continuously but converted to the integer threshold shown in
 #' the mapping column. Exact zero values of `sv`, `gamma`, `omega`, and `k`
 #' select the corresponding nested boundary models.
+#' Optional fitting parameters: `pContaminant` is the omission probability and
+#' `pGuess` is the uniform-outlier probability.
 #'
 #' @return A model list compatible with `design()`.
 #' @export
@@ -272,14 +269,12 @@ PCOUNTER <- function() {
 #' where `t0_i` is nonnegative. The observed response is the accumulator
 #' with the smallest finish time.
 #'
-#' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Interpretation** |
-#' |---|---|---|---|---|
-#' | *mu* | log | \[0, Inf\] | log(.4) | Location of the underlying Gaussian component. |
-#' | *sigma* | log | \[0, Inf\] | log(.05) | SD of the underlying Gaussian component. |
-#' | *tau* | log | \[0, Inf\] | log(.1) | Mean of the underlying exponential component; its rate is `1 / tau`. |
-#' | *t0* | log | \[0, Inf\] | log(0) | Additive non-decision-time shift. |
-#' | *pContaminant* | probit | \[0, 1\] | qnorm(0) | Optional *omission* contaminant probability: mass at `rt = Inf` only, handled by the data pipeline |
-#' | *pGuess* | probit | \[0, 1\] | qnorm(0) | Optional uniform *guess* (outlier) probability, mixed into observed RT densities over the guess window |
+#' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Mapping** | **Interpretation** |
+#' |---|---|---|---|---|---|
+#' | *mu* | log | \[0, Inf\] | log(.4) | | Location of the underlying Gaussian component. |
+#' | *sigma* | log | \[0, Inf\] | log(.05) | | SD of the underlying Gaussian component. |
+#' | *tau* | log | \[0, Inf\] | log(.1) | | Mean of the underlying exponential component; its rate is `1 / tau`. |
+#' | *t0* | log | \[0, Inf\] | log(0) | | Additive non-decision-time shift. |
 #'
 #' The underlying, untruncated ex-Gaussian component has mean `mu + tau` and
 #' variance `sigma^2 + tau^2`; these summaries describe `X*`, not the
@@ -287,8 +282,9 @@ PCOUNTER <- function() {
 #' `REXG()` conditions the process time on `X* > 0`, so the finish-time
 #' support is `rt > t0`. For `rt <= t0`, the density and CDF are zero and the
 #' survivor is one. Above `t0`, the density, CDF, and survivor include the
-#' normalizer `1 - F_EXG(0)`. The `pContaminant` parameter is generic nuisance
-#' infrastructure and is not part of the ex-Gaussian distribution.
+#' normalizer `1 - F_EXG(0)`. Optional fitting parameters are
+#' `pContaminant`, the omission probability, and `pGuess`, the uniform-outlier
+#' probability.
 #' EMC2 creates one accumulator per response level in `R` and evaluates the
 #' race likelihood from the accumulator density and survivor functions.
 #'

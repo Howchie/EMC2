@@ -18,7 +18,7 @@ Model files are almost exclusively used in \code{design()}.
 Default values are used for all parameters that are not explicitly listed in the \code{formula}
 argument of \code{design()}.They can also be accessed with \code{DDM()$p_types}.\tabular{llllll}{
    \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Mapping} \tab \strong{Interpretation} \cr
-   \emph{v} \tab - \tab [-Inf, Inf] \tab 1 \tab  \tab Mean evidence-accumulation rate (drift rate) \cr
+   \emph{v} \tab identity \tab [-Inf, Inf] \tab 1 \tab  \tab Mean evidence-accumulation rate (drift rate) \cr
    \emph{a} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Boundary separation \cr
    \emph{t0} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Non-decision time \cr
    \emph{s} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Within-trial standard deviation of drift rate \cr
@@ -36,6 +36,9 @@ scale because they represent proportions between 0 and 1; the
 \code{sz} used by the diffusion kernel.
 
 \code{Z} is estimated as the ratio of bias to one boundary where 0.5 means no bias.
+
+Optional fitting parameters: \code{pContaminant} is the omission probability and
+\code{pGuess} is the uniform-outlier probability.
 
 Conventionally, \code{s} is fixed to 1 to satisfy scaling constraints.
 

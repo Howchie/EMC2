@@ -62,7 +62,7 @@ constexpr double BAWF_DENOM_FLOOR = BAWD_DENOM_FLOOR;
 // definition of "0 = truncated normal, 1 = lognormal" for both models.
 constexpr int BAWF_LAUNCH_NORMAL = BAWD_LAUNCH_NORMAL;
 constexpr int BAWF_LAUNCH_LOGNORMAL = BAWD_LAUNCH_LOGNORMAL;
-
+constexpr int BAWF_LAUNCH_SPLITLOGNORMAL = BAWD_LAUNCH_SPLITLOGNORMAL;
 // --------------------------------------------------------------------------
 // Geometry (launch-distribution free)
 // --------------------------------------------------------------------------
@@ -154,7 +154,8 @@ double bawf_log_frozen_normal(const BawfGeom& g, double s_lo,
                                      double s_hi, double v, double sv);
 
 double bawf_log_frozen_logn(const BawfGeom& g, double s_lo, double s_hi,
-                                   double mu, double sigma);
+                                   double mu, double sigma,
+                                   double delta = 0.0);
 
 // --------------------------------------------------------------------------
 // log CDF
@@ -170,7 +171,7 @@ double log_bawf_cdf_normal(double u, const BawfGeom& g, double v,
                                   double denom_floor);
 
 double log_bawf_cdf_logn(double u, const BawfGeom& g, double mu,
-                                double sigma);
+                                double sigma, double delta = 0.0);
 
 // Log survivor: the same start-point integral as the CDF, with the launch
 // survivor replaced by the launch CDF.  This is deliberately independent of
@@ -184,14 +185,15 @@ double bawf_log_frozen_surv_normal(const BawfGeom& g, double s_lo,
                                           bool posdrift);
 
 double bawf_log_frozen_surv_logn(const BawfGeom& g, double s_lo,
-                                        double s_hi, double mu, double sigma);
+                                        double s_hi, double mu, double sigma,
+                                        double delta = 0.0);
 
 double log_bawf_surv_normal(double u, const BawfGeom& g, double v,
                                     double sv, bool posdrift,
                                     double denom_floor);
 
 double log_bawf_surv_logn(double u, const BawfGeom& g, double mu,
-                                  double sigma);
+                                  double sigma, double delta = 0.0);
 
 // --------------------------------------------------------------------------
 // log PDF
@@ -210,7 +212,7 @@ double log_bawf_pdf_normal(double u, const BawfGeom& g, double v,
                                   double denom_floor);
 
 double log_bawf_pdf_logn(double u, const BawfGeom& g, double mu,
-                                double sigma);
+                                double sigma, double delta = 0.0);
 
 // --------------------------------------------------------------------------
 // Guarded natural-space CDF & PDF evaluators for BAwF.  Same acceptance
@@ -223,25 +225,25 @@ bool bawf_natural_cdf_normal(double u, const BawfGeom& g, double v,
                                     double &cdf);
 
 bool bawf_natural_cdf_logn(double u, const BawfGeom& g, double mu,
-                                  double sigma, int accept_mode, double &cdf);
+                                  double sigma, int accept_mode, double &cdf,
+                                  double delta = 0.0);
 
 bool bawf_natural_pdf_normal(double u, const BawfGeom& g, double v,
                                     double sv, bool posdrift,
                                     double denom_floor, int accept_mode,
                                     double &pdf);
 
-bool bawf_natural_pdf_logn(double u, const BawfGeom& g, double mu,
-                                  double sigma, int accept_mode, double &pdf);
-
 bool ba_natural_cdf_bawf(double u, double A, double b, double p1,
                                 double p2, double k, int launch, bool posdrift,
                                 double rho, double denom_floor,
-                                int accept_mode, double &cdf);
+                                int accept_mode, double &cdf,
+                                double delta = 0.0);
 
 bool ba_natural_pdf_bawf(double u, double A, double b, double p1,
                                 double p2, double k, int launch, bool posdrift,
                                 double rho, double denom_floor,
-                                int accept_mode, double &pdf);
+                                int accept_mode, double &pdf,
+                                double delta = 0.0);
 
 // --------------------------------------------------------------------------
 // Dispatch and output wrappers.  `p1`/`p2` are (v, sv) for the normal launch
@@ -249,35 +251,42 @@ bool ba_natural_pdf_bawf(double u, double A, double b, double p1,
 // --------------------------------------------------------------------------
 double bawf_log_cdf(double u, double A, double b, double p1, double p2,
                            double k, int launch, bool posdrift, double rho,
-                           double denom_floor = BAWF_DENOM_FLOOR);
+                           double denom_floor = BAWF_DENOM_FLOOR,
+                           double delta = 0.0);
 
 double bawf_log_surv(double u, double A, double b, double p1, double p2,
                             double k, int launch, bool posdrift, double rho,
-                            double denom_floor = BAWF_DENOM_FLOOR);
+                            double denom_floor = BAWF_DENOM_FLOOR,
+                            double delta = 0.0);
 
 double bawf_log_pdf(double u, double A, double b, double p1, double p2,
                            double k, int launch, bool posdrift, double rho,
-                           double denom_floor = BAWF_DENOM_FLOOR);
+                           double denom_floor = BAWF_DENOM_FLOOR,
+                           double delta = 0.0);
 
 double bawf_cdf_norm(double t, double A, double b, double p1, double p2,
                             double k, int launch, bool posdrift, bool log_out,
                             double rho,
-                            double denom_floor = BAWF_DENOM_FLOOR);
+                            double denom_floor = BAWF_DENOM_FLOOR,
+                            double delta = 0.0);
 
 double bawf_pdf_norm(double t, double A, double b, double p1, double p2,
                             double k, int launch, bool posdrift, bool log_out,
                             double rho,
-                            double denom_floor = BAWF_DENOM_FLOOR);
+                            double denom_floor = BAWF_DENOM_FLOOR,
+                            double delta = 0.0);
 
 // Natural-scale scalar evaluators for consumers that clamp to [0, 1] and
 // tolerate tail saturation: truncation normalisers and GSL integrands.
 double bawf_cdf_scalar_natural(double t, double A, double b, double p1,
                                       double p2, double k, int launch,
-                                      bool posdrift, double rho);
+                                      bool posdrift, double rho,
+                                      double delta = 0.0);
 
 double bawf_pdf_scalar_natural(double t, double A, double b, double p1,
                                       double p2, double k, int launch,
-                                      bool posdrift, double rho);
+                                      bool posdrift, double rho,
+                                      double delta = 0.0);
 
 
 

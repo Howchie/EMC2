@@ -359,3 +359,21 @@ add_nuisance_pars <- function(p_types, transform, minmax, exception = NULL,
 #   out <- which(da[,cname]==typei)
 #   c(out,rep(NA,maxn-length(out)))
 # }
+
+# ============================================================================
+# Shared Ballistic Accumulator (BA) Launch Helpers
+# ============================================================================
+
+.ba_launch_code <- function(drift_distribution, caller = "Model") {
+  switch(drift_distribution,
+         normal = 0L,
+         lognormal = 1L,
+         splitlognormal = 2L,
+         stop("Unknown ", caller, " drift_distribution: ", drift_distribution))
+}
+
+.ba_par_names <- function(launch) {
+  if (launch == 1L) c("mu", "sigma")
+  else if (launch == 2L) c("mu", "sigma", "delta")
+  else c("v", "sv")
+}

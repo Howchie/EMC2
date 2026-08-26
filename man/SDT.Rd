@@ -17,11 +17,11 @@ criterion \code{threshold}: the first response level is selected below the
 criterion and the second response level above it.
 }
 \details{
-\tabular{lllll}{
-   \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Interpretation} \cr
-   \emph{mean} \tab identity \tab [-Inf, Inf] \tab 0 \tab Mean of the Gaussian latent variable. \cr
-   \emph{sd} \tab log \tab [0, Inf] \tab log(1) \tab Gaussian SD. \cr
-   \emph{threshold} \tab identity \tab [-Inf, Inf] \tab 0 \tab Response criterion; for binary responses, the cutoff between the two response levels. \cr
+\tabular{llllll}{
+   \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Mapping} \tab \strong{Interpretation} \cr
+   \emph{mean} \tab identity \tab [-Inf, Inf] \tab 0 \tab  \tab Mean of the Gaussian latent variable. \cr
+   \emph{sd} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Gaussian SD. \cr
+   \emph{threshold} \tab identity \tab [-Inf, Inf] \tab 0 \tab  \tab Response criterion; for binary responses, the cutoff between the two response levels. \cr
 }
 
 

@@ -20,3 +20,17 @@ A model list compatible with \code{\link[=design]{design()}}.
 \description{
 Convenience constructor for \code{RDMSWTN_TT(correlated = TRUE)}.
 }
+\details{
+Optional fitting parameters are \code{pContaminant}, the omission probability,
+\code{pGuess}, the uniform-outlier probability, and \code{rho}, the correlation
+parameter.\tabular{llllll}{
+   \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Mapping} \tab \strong{Interpretation} \cr
+   \emph{v} \tab exp (identity for \code{posdrift = FALSE}) \tab [0, Inf] ([-Inf, Inf] for IO) \tab log(1) (1 for IO) \tab  \tab Mean drift rate. \cr
+   \emph{B} \tab exp \tab [0, Inf] \tab log(1) \tab \emph{b} = \emph{B} + \emph{A} \tab Baseline distance to threshold. \cr
+   \emph{A} \tab exp \tab [0, Inf] \tab log(0) \tab  \tab Start-point range. \cr
+   \emph{t0} \tab exp \tab [0, Inf] \tab log(0) \tab  \tab Non-decision time. \cr
+   \emph{s} \tab exp \tab [0, Inf] \tab log(1) \tab  \tab Within-trial diffusion SD. \cr
+   \emph{sv} \tab exp \tab [0, Inf] \tab log(0) \tab  \tab Between-trial drift SD. \cr
+   \emph{tau} \tab exp \tab [0, Inf] \tab log(1) \tab  \tab Width of the finite decision-time support. \cr
+}
+}

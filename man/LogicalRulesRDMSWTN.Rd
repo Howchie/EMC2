@@ -30,4 +30,18 @@ RDMSWTN parameter and clock contract.
 Logical rules use accumulator roles \code{A}, \code{B}, \code{n_A}, and \code{n_B} and the
 \code{LogicalRule} data column. Supported rules are \code{OR}, \code{AND}, \code{XOR}, \code{ID},
 \code{OR_DETECTION_ANALYTIC}, and \code{OR_DETECTION_GNG}.
+
+Optional clock means \code{mG} and \code{mK} use log/exp transforms with default
+\code{log(1)} when active; mixed mode additionally uses \code{omega} on the probit
+scale with default \code{qnorm(.5)}. Optional fitting parameters are
+\code{pContaminant}, the omission probability, and \code{pGuess}, the uniform-outlier
+probability.\tabular{llllll}{
+   \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Mapping} \tab \strong{Interpretation} \cr
+   \emph{v} \tab exp (identity for \code{posdrift = FALSE}) \tab [0, Inf] ([-Inf, Inf] for IO) \tab log(1) (1 for IO) \tab  \tab Mean drift rate. \cr
+   \emph{B} \tab exp \tab [0, Inf] \tab log(1) \tab \emph{b} = \emph{B} + \emph{A} \tab Baseline distance to threshold. \cr
+   \emph{A} \tab exp \tab [0, Inf] \tab log(0) \tab  \tab Start-point range. \cr
+   \emph{t0} \tab exp \tab [0, Inf] \tab log(0) \tab  \tab Non-decision time. \cr
+   \emph{s} \tab exp \tab [0, Inf] \tab log(1) \tab  \tab Within-trial diffusion SD. \cr
+   \emph{sv} \tab exp \tab [0, Inf] \tab log(0) \tab  \tab Between-trial drift SD. \cr
+}
 }

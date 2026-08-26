@@ -182,45 +182,40 @@ struct RLF_DenseLU {
 struct RLF_DenseInverse {
   int n = 0;
   std::vector<double> value;
+  // LAPACK factorisation scratch is retained across graded-time
+  // blocks.  The dimensions are unchanged within one fixed-grid solve, so
+  // repeated inversions only refill the existing buffers.
+  std::vector<int> pivot;
+  std::vector<double> workspace;
+  // `A` is row-major, so LAPACK sees its bytes as A^T.  Inverting that
+  // transpose in place leaves the column-major bytes of (A^T)^-1, which are
+  // exactly the row-major bytes of A^-1.  Keep that layout so the existing
+  // DGEMV-transpose convention remains unchanged.
 
-  bool build(int n_, const std::vector<double>& A) {
+  bool build(int n_, std::vector<double>& A) {
     n = n_;
     const int nn = n;
     const int lda = nn;
     int info = 0;
-    std::vector<double> column_major(static_cast<size_t>(n) * n);
-    for (int row = 0; row < n; ++row) {
-      for (int col = 0; col < n; ++col) {
-        column_major[static_cast<size_t>(col) * n + row] =
-          A[static_cast<size_t>(row) * n + col];
-      }
-    }
-    std::vector<int> pivot(n);
+    value.swap(A);
+    pivot.resize(n);
     F77_CALL(dgetrf)(
-      &nn, &nn, column_major.data(), &lda, pivot.data(), &info);
+      &nn, &nn, value.data(), &lda, pivot.data(), &info);
     if (info != 0) return false;
 
     double workspace_query = 0.0;
     const int query_size = -1;
     F77_CALL(dgetri)(
-      &nn, column_major.data(), &lda, pivot.data(),
+      &nn, value.data(), &lda, pivot.data(),
       &workspace_query, &query_size, &info);
     if (info != 0) return false;
     const int workspace_size = std::max(
       nn, static_cast<int>(workspace_query));
-    std::vector<double> workspace(workspace_size);
+    workspace.resize(workspace_size);
     F77_CALL(dgetri)(
-      &nn, column_major.data(), &lda, pivot.data(),
+      &nn, value.data(), &lda, pivot.data(),
       workspace.data(), &workspace_size, &info);
     if (info != 0) return false;
-
-    value.resize(static_cast<size_t>(n) * n);
-    for (int row = 0; row < n; ++row) {
-      for (int col = 0; col < n; ++col) {
-        value[static_cast<size_t>(row) * n + col] =
-          column_major[static_cast<size_t>(col) * n + row];
-      }
-    }
     return true;
   }
 
@@ -384,6 +379,11 @@ inline double positive_log_interpolate(double x0, double x1, double w) {
 struct RLF_Operator {
   int n = 0;
   std::vector<double> L;
+  // Matrix-free callers keep only the Toeplitz first column/row and the
+  // state-dependent diagonal. Dense callers leave these empty.
+  std::vector<double> toeplitz_col;
+  std::vector<double> toeplitz_row;
+  std::vector<double> toeplitz_diag;
   std::vector<double> upper_kill;
   std::vector<double> lower_censor;
   double max_exit_rate = 0.0;
@@ -415,16 +415,24 @@ inline bool rlf_force_centred_drift = false;
 // independently, which nx alone cannot do because the cap grows with it.
 inline double rlf_width_scale = 1.0;
 
-inline RLF_Operator build_rlf_operator(const RLF_Model& m, int n, double h) {
+inline RLF_Operator build_rlf_operator(
+    const RLF_Model& m, int n, double h, bool materialize_L = true) {
   RLF_Operator op;
   op.n = n;
-  op.L.assign(static_cast<size_t>(n) * n, 0.0);
+  if (materialize_L) {
+    op.L.assign(static_cast<size_t>(n) * n, 0.0);
+  } else {
+    op.toeplitz_col.assign(n, 0.0);
+    op.toeplitz_row.assign(n, 0.0);
+    op.toeplitz_diag.assign(n, 0.0);
+  }
   op.upper_kill.assign(n, 0.0);
   op.lower_censor.assign(n, 0.0);
 
   const auto c = compute_centred_weights(m.alpha, n + 1);
   const double scale =
     0.5 * std::pow(m.sigma, m.alpha) / std::pow(h, m.alpha);
+
 
   // q[d] is the transition rate between grid points d cells apart.
   // All q[d>0] are non-negative for 1 < alpha <= 2.
@@ -442,9 +450,18 @@ inline RLF_Operator build_rlf_operator(const RLF_Model& m, int n, double h) {
     partial += c[k];
   }
 
-  for (int i = 0; i < n; ++i) {
-    for (int j = 0; j < n; ++j) {
-      op.L[static_cast<size_t>(i) * n + j] = q[std::abs(i - j)];
+  if (!materialize_L) {
+    op.toeplitz_col[0] = q[0];
+    op.toeplitz_row[0] = q[0];
+    for (int d = 1; d < n; ++d) {
+      op.toeplitz_col[d] = q[d];
+      op.toeplitz_row[d] = q[d];
+    }
+  } else {
+    for (int i = 0; i < n; ++i) {
+      for (int j = 0; j < n; ++j) {
+        op.L[static_cast<size_t>(i) * n + j] = q[std::abs(i - j)];
+      }
     }
   }
 
@@ -456,36 +473,15 @@ inline RLF_Operator build_rlf_operator(const RLF_Model& m, int n, double h) {
     const double upper = tail[n - j];
     op.lower_censor[j] = lower;
     op.upper_kill[j] = upper;
-    op.L[static_cast<size_t>(j) * n + j] += lower;
+    if (materialize_L) {
+      op.L[static_cast<size_t>(j) * n + j] += lower;
+    } else {
+      op.toeplitz_diag[j] = q[0] + lower;
+    }
   }
-
   // Positive-drift transport, by exponential fitting of the nearest-neighbour
-  // pair (Il'in / Scharfetter-Gummel).  Only |i-j| = 1 changes, so the operator
-  // stays Toeplitz-plus-diagonal and the drift is uniform in j.
-  //
-  // A nearest-neighbour rate q[1] on spacing h is the diffusion D = q[1] h^2,
-  // giving the cell Peclet number Pe = v h / D = v / (h q[1]).  Fitting the
-  // constant-coefficient flux F = v p - D p' exactly on the grid gives
-  //
-  //   a+ = (v/h) / (1 - exp(-Pe)),   a- = (v/h) / (exp(Pe) - 1),
-  //
-  // with a+ - a- = v/h exactly, so the drift is transported without loss.  Both
-  // rates are non-negative at every Pe, so L stays an M-matrix unconditionally.
-  // The scheme interpolates the two branches this replaces: as Pe -> 0 it is the
-  // centred pair q[1] +- v/(2h), and as Pe -> infinity it is donor-cell upwind.
-  //
-  // The gate it replaces (centred while q[1] >= v/(2h), i.e. Pe <= 2, else
-  // upwind) was not a rare fallback.  Written out, the condition is
-  // sigma^alpha |c_1(alpha)| h^(1-alpha) >= v, whose h exponent vanishes as
-  // alpha -> 1, leaving the grid-independent limit 0.424 sigma / v.  Below about
-  // alpha = 1.25 (about 1.5 when v = 2 sigma) it failed at every nx, so the
-  // solver was silently first order there with no way to refine out of it: the
-  // numerical diffusion v h / 2 made the process too diffusive, the CDF ran ~5%
-  // above Monte Carlo at alpha = 1.1, and the resulting too-light tail biased
-  // alpha-hat downwards.  Forcing the centred pair instead is not an option --
-  // it produces material negative density at alpha = 1.1 for any nt -- whereas
-  // fitting adds only the artificial diffusion positivity actually requires,
-  // D (Pe/2 coth(Pe/2) - 1) against upwind's D Pe/2.
+  // pair (Il'in / Scharfetter-Gummel).  Only |i-j| = 1 changes, so the
+  // operator stays Toeplitz-plus-diagonal and the drift is uniform in j.
   const double adv = m.v / h;
   const double half_adv = 0.5 * adv;
   double delta_up = half_adv;    // a+ - q[1]
@@ -511,30 +507,65 @@ inline RLF_Operator build_rlf_operator(const RLF_Model& m, int n, double h) {
   for (int j = 0; j < n; ++j) {
     double outflow = delta_up;
     if (j + 1 < n) {
-      op.L[static_cast<size_t>(j + 1) * n + j] += delta_up;
+      if (materialize_L) {
+        op.L[static_cast<size_t>(j + 1) * n + j] += delta_up;
+      } else if (j == 0) {
+        // The fitted pair is translation invariant, so the compact form only
+        // needs the |i-j| = 1 entries once.
+        op.toeplitz_col[1] += delta_up;
+      }
     } else {
       // The cell above the last one is past the barrier: killed, not moved.
       op.upper_kill[j] += delta_up;
     }
     if (j > 0) {
-      op.L[static_cast<size_t>(j - 1) * n + j] += delta_down;
+      if (materialize_L) {
+        op.L[static_cast<size_t>(j - 1) * n + j] += delta_down;
+      } else if (j == 1) {
+        op.toeplitz_row[1] += delta_down;
+      }
       outflow += delta_down;
     }
     // At j = 0 the downward face is the truncated lower edge, whose rate is
     // censored back out anyway, so only the upward change leaves the diagonal.
-    op.L[static_cast<size_t>(j) * n + j] -= outflow;
+    if (materialize_L) {
+      op.L[static_cast<size_t>(j) * n + j] -= outflow;
+    } else {
+      op.toeplitz_diag[j] -= outflow;
+    }
   }
 
-  for (int j = 0; j < n; ++j) {
-    const double exit = -op.L[static_cast<size_t>(j) * n + j];
-    op.max_exit_rate = std::max(op.max_exit_rate, exit);
+  if (materialize_L) {
+    for (int j = 0; j < n; ++j) {
+      const double exit = -op.L[static_cast<size_t>(j) * n + j];
+      op.max_exit_rate = std::max(op.max_exit_rate, exit);
 
-    double col_sum = op.upper_kill[j];
-    for (int i = 0; i < n; ++i) {
-      col_sum += op.L[static_cast<size_t>(i) * n + j];
+      double col_sum = op.upper_kill[j];
+      for (int i = 0; i < n; ++i) {
+        col_sum += op.L[static_cast<size_t>(i) * n + j];
+      }
+      op.conservation_error =
+        std::max(op.conservation_error, std::abs(col_sum));
     }
-    op.conservation_error =
-      std::max(op.conservation_error, std::abs(col_sum));
+  } else {
+    // Compact diagnostics: the jump part's column sum is q summed over the
+    // reachable off-diagonal band plus the diagonal, which prefix sums of q
+    // give in O(1) per column, and the drift terms cancel in every column --
+    // only the boundary kill at the last cell survives.  Same values as the
+    // dense loop, without ever forming L.
+    std::vector<double> q_prefix(n, 0.0);
+    for (int d = 1; d < n; ++d) q_prefix[d] = q_prefix[d - 1] + q[d];
+    for (int j = 0; j < n; ++j) {
+      const double exit = -op.toeplitz_diag[j];
+      op.max_exit_rate = std::max(op.max_exit_rate, exit);
+
+      double col_sum = op.upper_kill[j] + op.toeplitz_diag[j] +
+        q_prefix[j] + q_prefix[n - 1 - j];
+      if (j + 1 < n) col_sum += delta_up;
+      if (j > 0) col_sum += delta_down;
+      op.conservation_error =
+        std::max(op.conservation_error, std::abs(col_sum));
+    }
   }
   return op;
 }
@@ -589,17 +620,32 @@ inline double rlf_apply_startup(RLF_TimeSchedule& schedule, double t_max) {
   return RLF_TRBDF2_IMPLICIT * schedule.dt[0];
 }
 
-inline std::vector<double> rlf_trbdf2_lhs(const RLF_Operator& op, double dt) {
+// The lhs buffer is reused across graded-time blocks: the dimensions are
+// fixed for the whole solve, so resize() only refills existing storage.
+inline void rlf_trbdf2_lhs(const RLF_Operator& op, double dt,
+                           std::vector<double>& lhs) {
   const int n = op.n;
   const double c = RLF_TRBDF2_IMPLICIT * dt;
-  std::vector<double> lhs(static_cast<size_t>(n) * n);
-  for (int i = 0; i < n; ++i) {
-    for (int j = 0; j < n; ++j) {
-      const size_t ij = static_cast<size_t>(i) * n + j;
-      lhs[ij] = (i == j ? 1.0 : 0.0) - c * op.L[ij];
+  lhs.resize(static_cast<size_t>(n) * n);
+  if (!op.L.empty()) {
+    for (int i = 0; i < n; ++i) {
+      for (int j = 0; j < n; ++j) {
+        const size_t ij = static_cast<size_t>(i) * n + j;
+        lhs[ij] = (i == j ? 1.0 : 0.0) - c * op.L[ij];
+      }
+    }
+  } else {
+    for (int i = 0; i < n; ++i) {
+      double* __restrict row_ptr = &lhs[static_cast<size_t>(i) * n];
+      for (int j = 0; j < i; ++j) {
+        row_ptr[j] = -c * op.toeplitz_col[i - j];
+      }
+      row_ptr[i] = 1.0 - c * op.toeplitz_diag[i];
+      for (int j = i + 1; j < n; ++j) {
+        row_ptr[j] = -c * op.toeplitz_row[j - i];
+      }
     }
   }
-  return lhs;
 }
 
 // Collapse both stages into one dense matrix so a step is a single matvec.
@@ -609,16 +655,13 @@ inline std::vector<double> rlf_trbdf2_lhs(const RLF_Operator& op, double dt) {
 // order, i.e. exactly minv * minv when read back row-major.
 inline std::vector<double> rlf_trbdf2_step_matrix(
     const std::vector<double>& minv, int n) {
-  std::vector<double> step(static_cast<size_t>(n) * n, 0.0);
+  std::vector<double> step = minv;
   const char no_transpose = 'N';
   const double alpha = 2.0 * RLF_TRBDF2_A;
-  const double beta = 0.0;
+  const double beta = -(RLF_TRBDF2_A + RLF_TRBDF2_B);
   F77_CALL(dgemm)(&no_transpose, &no_transpose, &n, &n, &n, &alpha,
                   minv.data(), &n, minv.data(), &n, &beta, step.data(), &n,
                   1, 1);
-  const double linear = RLF_TRBDF2_A + RLF_TRBDF2_B;
-  const size_t total = static_cast<size_t>(n) * n;
-  for (size_t ij = 0; ij < total; ++ij) step[ij] -= linear * minv[ij];
   return step;
 }
 
@@ -627,13 +670,29 @@ inline void apply_shifted(const RLF_Operator& op, double c,
                           std::vector<double>& out) {
   const int n = op.n;
   out.resize(n);
-  for (int i = 0; i < n; ++i) {
-    double value = p[i];
-    const double* __restrict row = &op.L[static_cast<size_t>(i) * n];
-    for (int j = 0; j < n; ++j) value += c * row[j] * p[j];
-    out[i] = value;
+  if (!op.L.empty()) {
+    for (int i = 0; i < n; ++i) {
+      double value = p[i];
+      const double* __restrict row = &op.L[static_cast<size_t>(i) * n];
+      for (int j = 0; j < n; ++j) value += c * row[j] * p[j];
+      out[i] = value;
+    }
+  } else {
+    for (int i = 0; i < n; ++i) {
+      double value = p[i];
+      double row_sum = 0.0;
+      for (int j = 0; j < i; ++j) {
+        row_sum += op.toeplitz_col[i - j] * p[j];
+      }
+      row_sum += op.toeplitz_diag[i] * p[i];
+      for (int j = i + 1; j < n; ++j) {
+        row_sum += op.toeplitz_row[j - i] * p[j];
+      }
+      out[i] = value + c * row_sum;
+    }
   }
 }
+
 
 inline double weighted_rate(const std::vector<double>& rate,
                             const std::vector<double>& p, double h) {
@@ -783,19 +842,37 @@ constexpr double RLF_MATRIX_FREE_TOL = 1e-12;
 inline RLF_Result rlf_solve_fixed_grid(
     const RLF_Model& m, double t_max, int M, int Nt, double lower_extent,
     double tgrade = 1.0, bool explicit_inverse = true,
-    const std::vector<double>* query_times = nullptr) {
+    const std::vector<double>* query_times = nullptr,
+    const RLF_TimeSchedule* schedule_override = nullptr,
+    RLF_TimeSchedule* schedule_used = nullptr) {
   const double x_lo = -lower_extent;
   const double h = (m.b0 - x_lo) / M;
   const int n = M - 1;
 
-  const RLF_Operator op = build_rlf_operator(m, n, h);
+  // The matrix-free decision only depends on n, so it is taken before the
+  // operator build and the dense n*n generator is skipped entirely when the
+  // stages will be solved iteratively from the compact Toeplitz form.
+  const bool matrix_free = n >= RLF_MATRIX_FREE_MIN_N;
+  const bool materialize_dense_L = !matrix_free && !explicit_inverse;
+  const RLF_Operator op = build_rlf_operator(m, n, h, materialize_dense_L);
 
   // TR-BDF2 keeps its trapezoidal sub-stage positivity preserving while
   // I + (gamma/2) dt L is entrywise non-negative.  This is the only remaining
   // constraint linking dt to the grid, and it is nearly twice as permissive as
   // the Crank-Nicolson one it replaces.
-  RLF_TimeSchedule schedule = rlf_stable_time_schedule(
-    t_max, Nt, op.max_exit_rate, RLF_TRBDF2_SAFE, tgrade);
+  RLF_TimeSchedule schedule;
+  if (schedule_override != nullptr) {
+    // A pinned pair member copies its partner's pre-startup schedule instead
+    // of re-deriving one from this grid's exit rate; rlf_apply_startup then
+    // rescales the copy exactly as it would a self-computed schedule.
+    schedule = *schedule_override;
+  } else {
+    schedule = rlf_stable_time_schedule(
+      t_max, Nt, op.max_exit_rate, RLF_TRBDF2_SAFE, tgrade);
+  }
+  // Report the base schedule before startup rescaling, so callers can hand
+  // the same pre-startup schedule to a partner solve.
+  if (schedule_used != nullptr) *schedule_used = schedule;
   const double startup_step = rlf_apply_startup(schedule, t_max);
   const int n_steps = schedule.n_steps() + RLF_STARTUP_STEPS;
   RLF_DenseLU lu;
@@ -809,7 +886,6 @@ inline RLF_Result rlf_solve_fixed_grid(
   // matrix-free instead: O(n log n) per BiCGSTAB iteration, and the Strang
   // circulant preconditioner holds the iteration count at four to six
   // independently of n and alpha, so the cubic term disappears.
-  const bool matrix_free = n >= RLF_MATRIX_FREE_MIN_N;
   rlf::RLF_ToeplitzSystem mf;
   if (matrix_free) explicit_inverse = false;
 
@@ -901,7 +977,9 @@ inline RLF_Result rlf_solve_fixed_grid(
       if (backward_euler) {
         solve(p.data(), next);
       } else {
-        apply_shifted(op, RLF_TRBDF2_IMPLICIT * step, p, rhs);
+        // (I + c L) p = 2 p - (I - c L) p, applied with one compact FFT matvec.
+        rlf::rlf_toeplitz_apply_shifted(
+          mf, p.data(), rhs.data());
         solve(rhs.data(), stage);
         for (int i = 0; i < n; ++i) {
           rhs[i] = RLF_TRBDF2_A * stage[i] - RLF_TRBDF2_B * p[i];
@@ -978,16 +1056,20 @@ inline RLF_Result rlf_solve_fixed_grid(
     }
   };
 
+  // One lhs buffer is reused across the graded-time blocks: the dimensions
+  // are fixed for the whole solve, so only its contents are refilled.
+  std::vector<double> lhs;
   // Build the left-hand side once per graded-time block.  Both TR-BDF2 stages
   // use I - (gamma/2) dt L, and with the explicit inverse available the two
   // stages collapse into one dense matvec per step.
   auto update_lhs_and_factor = [&](double step, int block_steps) {
     if (matrix_free) {
-      mf = rlf::rlf_build_toeplitz_system(op.L, n,
-                                          RLF_TRBDF2_IMPLICIT * step);
+      mf = rlf::rlf_build_toeplitz_system(
+        op.toeplitz_col.data(), op.toeplitz_row.data(),
+        op.toeplitz_diag.data(), n, RLF_TRBDF2_IMPLICIT * step);
       return;
     }
-    std::vector<double> lhs = rlf_trbdf2_lhs(op, step);
+    rlf_trbdf2_lhs(op, step, lhs);
     if (explicit_inverse) {
       if (!inverse.build(n, lhs)) {
         throw std::runtime_error(
@@ -1117,7 +1199,9 @@ inline RLF_Result rlf_solve(const RLF_Model& m, double t_max,
                             double tgrade = 1.0,
                             bool explicit_inverse = true,
                             const std::vector<double>* query_times = nullptr,
-                            double lower_extent_override = -1.0) {
+                            double lower_extent_override = -1.0,
+                            const RLF_TimeSchedule* schedule_override = nullptr,
+                            RLF_TimeSchedule* schedule_used = nullptr) {
   if (!(m.v > 0.0)) {
     throw std::invalid_argument("rlf_solve: v must be positive.");
   }
@@ -1171,8 +1255,13 @@ inline RLF_Result rlf_solve(const RLF_Model& m, double t_max,
     int steps = Nt;
     for (int attempt = 0; attempt < 4; ++attempt) {
       try {
-        return rlf_solve_fixed_grid(m, t_max, M_use, steps, extent_use,
-                                    tgrade, explicit_inverse, queries);
+        // The pinned schedule is trusted only on the first attempt: if it
+        // proves unstable for this member's operator, later attempts compute
+        // and refine their own stable schedule as an unpinned solve would.
+        return rlf_solve_fixed_grid(
+          m, t_max, M_use, steps, extent_use, tgrade, explicit_inverse,
+          queries, attempt == 0 ? schedule_override : nullptr,
+          schedule_used);
       } catch (const std::runtime_error&) {
         // Refining past the stability ceiling would spend the budget the
         // ceiling exists to bound, so stop retrying once it is reached.
@@ -1432,11 +1521,34 @@ struct SolveCache {
   std::vector<int> row_group;
   size_t solve_count = 0;
 
+  // Reuse guard for rlf_prepare_rows.  Repeated raw calls inside one
+  // particle (d, p, then time-only variants at new GL nodes) rebuild the
+  // identical grouping; when this state matches the incoming rows exactly the
+  // regrouping and cache lookup are skipped.  Pointer identity alone is not
+  // sufficient -- callers reuse the same column arrays and mutate their
+  // contents -- so an exact value snapshot of every grouping input is kept
+  // alongside the pointers (about 7 doubles plus one flag integer per row,
+  // which is small next to one cached march).
+  bool rows_prepared = false;
+  int prepared_n_rows = -1;
+  const double* prepared_rt = nullptr;
+  const int* prepared_isok = nullptr;
+  std::vector<const double*> prepared_cols;
+  std::vector<double> prepared_values;
+  std::vector<int> prepared_isok_values;
+
   void new_particle() {
     entries.clear();
     index.clear();
     row_group.clear();
     solve_count = 0;
+    rows_prepared = false;
+    prepared_n_rows = -1;
+    prepared_rt = nullptr;
+    prepared_isok = nullptr;
+    prepared_cols.clear();
+    prepared_values.clear();
+    prepared_isok_values.clear();
   }
 };
 
@@ -1583,21 +1695,41 @@ inline void rlf_cache_solve(const Key& key, double t_max, const Grid& grid,
 
   if (grid.richardson && !grid.adaptive && nx_fine > nx) {
     const double extent = rlf_lower_extent(model, t_max, nx);
+    RLF_TimeSchedule fine_schedule;
     const RLF_Result fine = rlf_solve(
       model, t_max, nx_fine, nt, false, grid.tgrade, grid.explicit_inverse,
-      query_times, extent);
-    // The two solves march their own time schedules -- the stable step
-    // depends on the operator's exit rate, which changes with h -- so on the
-    // complete-grid path they would land on different time bases and could
-    // not be combined.  Handing the coarse solve the fine grid's own times
-    // puts them back on a common base, so sparse and complete output stay
-    // exactly equivalent rather than differing by whether extrapolation ran.
-    const RLF_Result coarse = rlf_solve(
+      query_times, extent, nullptr, &fine_schedule);
+    // Both members share one pre-startup schedule: the fine solve reports
+    // the base schedule it stabilised against its own operator, and the
+    // coarse solve copies it rather than deriving a coarser-grid schedule
+    // whose different exit rate would shift the coarse time base by a
+    // non-common-mode amount that Richardson extrapolation amplifies.  On
+    // the complete path neither solve receives query times, so the coarse
+    // result stays full-grid yet lands on exactly the fine solve's times;
+    // on the sparse path both are sampled at the requested queries.  If the
+    // pinned schedule is unstable for the coarse operator, its retries fall
+    // back to their own stable schedules and rlf_extrapolate declines to
+    // blend off-common-base results; on the complete path that triggers a
+    // one-shot compatibility re-solve of the coarse member at the fine time
+    // base (same extent, unpinned) before falling back to fine.
+    RLF_Result coarse = rlf_solve(
       model, t_max, nx, nt, false, grid.tgrade, grid.explicit_inverse,
-      query_times != nullptr ? query_times : &fine.t, extent);
+      query_times, extent, &fine_schedule);
     RLF_Result blended;
-    const bool ok = rlf_extrapolate(
+    bool ok = rlf_extrapolate(
       coarse, fine, static_cast<double>(nx_fine) / nx, blended);
+    if (!ok && query_times == nullptr) {
+      // The pinned schedule was unstable for the coarse operator, so its
+      // retries used their own stable schedule and left the coarse time base
+      // off the fine solve's times.  Re-solve the coarse member once at the
+      // fine time base, same extent and unpinned so it can use its own
+      // stable schedule, then retry the blend before falling back to fine.
+      coarse = rlf_solve(
+        model, t_max, nx, nt, false, grid.tgrade, grid.explicit_inverse,
+        &fine.t, extent, nullptr);
+      ok = rlf_extrapolate(
+        coarse, fine, static_cast<double>(nx_fine) / nx, blended);
+    }
     rlf_store_result(key, t_max, ok ? blended : fine,
                      query_times == nullptr, out);
     return;
@@ -1643,7 +1775,7 @@ inline BatchLane rlf_build_batch_lane(
   const int n = M - 1;
   const double x_lo = -lower_extent;
   lane.h = (lane.model.b0 - x_lo) / M;
-  lane.op = build_rlf_operator(lane.model, n, lane.h);
+  lane.op = build_rlf_operator(lane.model, n, lane.h, false);
   rlf_initial_density(lane.model, x_lo, lane.h, n, lane.initial);
 
   RLF_TimeSchedule schedule = rlf_stable_time_schedule(
@@ -1651,9 +1783,12 @@ inline BatchLane rlf_build_batch_lane(
     grid.tgrade);
   const double startup_step = rlf_apply_startup(schedule, t_max);
   lane.step_matrix.resize(schedule.dt.size());
+  // One lhs buffer and one LAPACK scratch set are reused across the blocks;
+  // only the per-block step matrices are retained.
+  std::vector<double> lhs;
+  RLF_DenseInverse inverse;
   for (size_t block = 0; block < schedule.dt.size(); ++block) {
-    std::vector<double> lhs = rlf_trbdf2_lhs(lane.op, schedule.dt[block]);
-    RLF_DenseInverse inverse;
+    rlf_trbdf2_lhs(lane.op, schedule.dt[block], lhs);
     if (!inverse.build(n, lhs)) {
       throw std::runtime_error(
         "rlf_solve: batched inversion of the nonlocal operator failed.");
@@ -1922,6 +2057,12 @@ inline int cache_get(SolveCache& cache, const Key& key, double t_need) {
   if (found != cache.index.end()) {
     Entry& entry = cache.entries[found->second];
     if (entry.complete_grid && entry.t_max >= t_need) return found->second;
+    // Sparse entries are never returned by the scalar path: their output is
+    // defined only at the prepared query times and cache_get has no query list
+    // to validate against.  A longer horizon also needs a re-solve.  In either
+    // case re-solve once onto a complete grid covering max(t_need, entry.t_max),
+    // so later arbitrary queries interpolate instead of each triggering a fresh
+    // solve.
     Entry replacement;
     try {
       rlf_cache_solve(key, std::max(t_need, entry.t_max), cache.grid, nullptr,
@@ -1953,6 +2094,14 @@ inline void cache_get_batch(
     const std::vector<std::vector<double>>* query_times = nullptr) {
   const size_t n = keys.size();
   out_indices.assign(n, -1);
+  // Two kinds of work are separated here.  A key with no cached entry is
+  // fresh and goes through the (possibly SIMD-batched, sparse) chunked path
+  // below.  A key whose entry exists but cannot answer this request -- sparse
+  // output missing one of the requested query times, or a horizon beyond the
+  // stored march -- is upgraded once to a complete grid covering
+  // max(old t_max, t_need); replacing it with another sparse solve would
+  // re-march on every later query set instead of converging after one.
+  std::vector<size_t> upgrades;
   std::vector<size_t> missing;
   for (size_t i = 0; i < n; ++i) {
     double t_need = horizons[i];
@@ -1967,8 +2116,29 @@ inline void cache_get_batch(
         out_indices[i] = found->second;
         continue;
       }
+      upgrades.push_back(i);
+      continue;
     }
     missing.push_back(i);
+  }
+
+  // Upgrades run through the scalar solver with nullptr queries so the
+  // replacement is a complete grid; the old entry is kept when unresolvable,
+  // and only this request's rows are floored.
+  for (size_t i : upgrades) {
+    double t_need = horizons[i];
+    if (!(t_need > 0.0)) t_need = 1e-3;
+    const int slot = cache.index[keys[i]];
+    Entry replacement;
+    try {
+      rlf_cache_solve(keys[i], std::max(t_need, cache.entries[slot].t_max),
+                      cache.grid, nullptr, replacement);
+    } catch (const std::exception&) {
+      continue;  // keep the previous entry; rows stay floored at -1
+    }
+    cache.entries[slot] = std::move(replacement);
+    ++cache.solve_count;
+    out_indices[i] = slot;
   }
 
   std::stable_sort(missing.begin(), missing.end(),

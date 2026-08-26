@@ -23,14 +23,12 @@ argument of \code{design()}.They can also be accessed with \code{RDM()$p_types}.
    \emph{B} \tab log \tab [0, Inf] \tab log(1) \tab \emph{b} = \emph{B} + \emph{A} \tab Distance from \emph{A} to \emph{b} (response threshold) \cr
    \emph{t0} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Non-decision time \cr
    \emph{s} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Within-trial standard deviation of drift rate \cr
-   \emph{pContaminant} \tab probit \tab [0, 1] \tab qnorm(0) \tab  \tab Optional \emph{omission} contaminant probability: mass at \code{rt = Inf} only, handled by the data pipeline \cr
-   \emph{pGuess} \tab probit \tab [0, 1] \tab qnorm(0) \tab  \tab Optional uniform \emph{guess} (outlier) probability, mixed into observed RT densities over the guess window \cr
 }
 
 
-The core RDM parameters are estimated on the log scale. \code{pContaminant} is
-estimated on the probit scale and is generic nuisance infrastructure rather
-than an accumulator parameter.
+The RDM parameters are estimated on the log scale. Optional fitting
+parameters are \code{pContaminant}, the omission probability, and \code{pGuess}, the
+uniform-outlier probability.
 
 The parameterization \emph{b} = \emph{B} + \emph{A} ensures that the response threshold is
 always higher than the between trial variation in start point.

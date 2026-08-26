@@ -49,9 +49,19 @@ With \code{posdrift = TRUE}, BAwLcorr conditions the joint correlated Gaussian
 drift vector on all active drifts being positive. Thus \code{rho} is the
 correlation of the underlying untruncated Gaussian, while the marginal
 drift draws retain standard positive-drift BAwL semantics. The marginal
-truncated correlation is therefore not equal to \code{rho} in general.
+truncated correlation is therefore not equal to \code{rho} in general.\tabular{llllll}{
+   \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Mapping} \tab \strong{Interpretation} \cr
+   \emph{v} \tab identity \tab [-Inf, Inf] \tab 1 \tab  \tab Mean normal launch strength. \cr
+   \emph{sv} \tab log \tab [0, Inf] \tab log(1) \tab  \tab SD of normal launch strength. \cr
+   \emph{B} \tab log \tab [0, Inf] \tab log(1) \tab \emph{b} = \emph{B} + \emph{A} \tab Distance from the upper start-point range to the threshold. \cr
+   \emph{A} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Start-point range. \cr
+   \emph{t0} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Non-decision time. \cr
+   \emph{k} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Leak rate. \cr
+}
+
 
 All BAwL parameters are described in \code{\link[=BAwL]{BAwL()}}, including \code{v}, \code{sv}, \code{B},
-\code{A}, \code{t0}, \code{k}, \code{mG}, \code{mK}, \code{omega}, and \code{pContaminant}. This constructor
-always sets \code{correlated = TRUE} internally.
+\code{A}, \code{t0}, and \code{k}. Optional fitting parameters are \code{pContaminant}, the
+omission probability, and \code{pGuess}, the uniform-outlier probability; \code{rho}
+is the optional correlation parameter.
 }

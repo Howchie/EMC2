@@ -10,18 +10,11 @@
 # the BAwD/BAwL race-model contract so it can be used directly from design().
 # ============================================================================
 
-.btawl_launch_code <- function(drift_distribution) {
-  switch(drift_distribution, normal = 0L, lognormal = 1L,
-         stop("Unknown BTAwL drift_distribution: ", drift_distribution))
-}
 
-.btawl_par_names <- function(launch) {
-  if (launch == 1L) c("mu", "sigma") else c("v", "sv")
-}
 
 .btawl_check_cols <- function(pars, launch) {
   clear <- if ("Ttrans" %in% colnames(pars)) "Ttrans" else "tau"
-  need <- c(.btawl_par_names(launch), "b", "A", "t0", "k", clear)
+  need <- c(.ba_par_names(launch), "b", "A", "t0", "k", clear)
   missing <- setdiff(need, colnames(pars))
   if (length(missing))
     stop("BTAwL requires parameter columns ", paste(missing, collapse = ", "))
@@ -45,7 +38,8 @@ dBTAwLTransient <- function(rt, pars, launch = 0L, posdrift = TRUE) {
     out[ok] <- dbtawl_transient(dt[ok], A = pars[ok, "A"], b = pars[ok, "b"],
                       p1 = pars[ok, nm[1]], p2 = pars[ok, nm[2]],
                       k = pars[ok, "k"], tau = tau[ok],
-                      launch = as.integer(launch), posdrift = posdrift)
+                      launch = as.integer(launch), posdrift = posdrift,
+                      delta = if (launch == 2L) pars[ok, "delta"] else 0)
   }
   out
 }
@@ -63,14 +57,15 @@ pBTAwLTransient <- function(rt, pars, launch = 0L, posdrift = TRUE) {
     out[ok] <- pbtawl_transient(dt[ok], A = pars[ok, "A"], b = pars[ok, "b"],
                       p1 = pars[ok, nm[1]], p2 = pars[ok, nm[2]],
                       k = pars[ok, "k"], tau = tau[ok],
-                      launch = as.integer(launch), posdrift = posdrift)
+                      launch = as.integer(launch), posdrift = posdrift,
+                      delta = if (launch == 2L) pars[ok, "delta"] else 0)
   }
   out
 }
 
 .btawl_local_race_check_cols <- function(pars, launch) {
   clear <- if ("Ttrans" %in% colnames(pars)) "Ttrans" else "tau_t"
-  need <- c(.btawl_par_names(launch), "b", "A", "t0", "k", "tau_s", clear, "pi")
+  need <- c(.ba_par_names(launch), "b", "A", "t0", "k", "tau_s", clear, "pi")
   missing <- setdiff(need, colnames(pars))
   if (length(missing))
     stop("BTAwL requires parameter columns ", paste(missing, collapse = ", "))
@@ -95,7 +90,8 @@ dBTAwL <- function(rt, pars, launch = 0L, posdrift = TRUE) {
                          p1 = pars[ok, nm[1]], p2 = pars[ok, nm[2]],
                          k = pars[ok, "k"], tau_s = pars[ok, "tau_s"],
                          tau_t = tau_t[ok], pi = pars[ok, "pi"],
-                         launch = as.integer(launch), posdrift = posdrift)
+                         launch = as.integer(launch), posdrift = posdrift,
+                         delta = if (launch == 2L) pars[ok, "delta"] else 0)
   }
   out
 }
@@ -112,13 +108,14 @@ pBTAwL <- function(rt, pars, launch = 0L, posdrift = TRUE) {
                          p1 = pars[ok, nm[1]], p2 = pars[ok, nm[2]],
                          k = pars[ok, "k"], tau_s = pars[ok, "tau_s"],
                          tau_t = tau_t[ok], pi = pars[ok, "pi"],
-                         launch = as.integer(launch), posdrift = posdrift)
+                         launch = as.integer(launch), posdrift = posdrift,
+                         delta = if (launch == 2L) pars[ok, "delta"] else 0)
   }
   out
 }
 
 .btawl_sustained_check_cols <- function(pars, launch) {
-  need <- c(.btawl_par_names(launch), "b", "A", "t0", "k", "tau_s")
+  need <- c(.ba_par_names(launch), "b", "A", "t0", "k", "tau_s")
   missing <- setdiff(need, colnames(pars))
   if (length(missing))
     stop("BTAwLSustained requires parameter columns ", paste(missing, collapse = ", "))
@@ -139,7 +136,8 @@ dBTAwLSustained <- function(rt, pars, launch = 0L, posdrift = TRUE) {
                          p1 = pars[ok, nm[1]], p2 = pars[ok, nm[2]],
                          k = pars[ok, "k"], tau_s = pars[ok, "tau_s"],
                          tau_t = pars[ok, "tau_s"], pi = 1,
-                         launch = as.integer(launch), posdrift = posdrift)
+                         launch = as.integer(launch), posdrift = posdrift,
+                         delta = if (launch == 2L) pars[ok, "delta"] else 0)
   }
   out
 }
@@ -155,7 +153,8 @@ pBTAwLSustained <- function(rt, pars, launch = 0L, posdrift = TRUE) {
                          p1 = pars[ok, nm[1]], p2 = pars[ok, nm[2]],
                          k = pars[ok, "k"], tau_s = pars[ok, "tau_s"],
                          tau_t = pars[ok, "tau_s"], pi = 1,
-                         launch = as.integer(launch), posdrift = posdrift)
+                         launch = as.integer(launch), posdrift = posdrift,
+                         delta = if (launch == 2L) pars[ok, "delta"] else 0)
   }
   out
 }
@@ -229,9 +228,15 @@ rBTAwLTransient <- function(lR, pars, ok = rep(TRUE, length(lR)),
   pars <- pars[ok, , drop = FALSE]
   ok_idx <- which(ok)
   tau_all <- .btawl_tau_col(pars_all)
-  V <- if (launch == 1L) rlnorm(nrow(pars), pars[, nm[1]], pars[, nm[2]]) else
-    if (posdrift) msm::rtnorm(nrow(pars), mean = pars[, nm[1]], sd = pars[, nm[2]], lower = 0) else
-      rnorm(nrow(pars), pars[, nm[1]], pars[, nm[2]])
+  V <- if (launch == 1L) {
+    rlnorm(nrow(pars), pars[, nm[1]], pars[, nm[2]])
+  } else if (launch == 2L) {
+    .bawd_split_rlnorm(pars[, "mu"], pars[, "sigma"], pars[, "delta"])
+  } else if (posdrift) {
+    msm::rtnorm(nrow(pars), mean = pars[, nm[1]], sd = pars[, nm[2]], lower = 0)
+  } else {
+    rnorm(nrow(pars), pars[, nm[1]], pars[, nm[2]])
+  }
   dt <- matrix(Inf, nr, n_trials)
   for (j in seq_len(nrow(pars))) {
     row <- ok_idx[j]
@@ -271,8 +276,9 @@ rBTAwL <- function(lR, pars, ok = rep(TRUE, length(lR)),
   ok_idx <- which(ok)
   tau_t_all <- .btawl_local_race_tau_t_col(pars_all)
   dt <- matrix(Inf, nr, n_trials)
-  draw_launch <- function(p1, p2) {
+  draw_launch <- function(p1, p2, delta = 0) {
     if (launch == 1L) return(rlnorm(1, p1, p2))
+    if (launch == 2L) return(.bawd_split_rlnorm(p1, p2, delta))
     if (posdrift) msm::rtnorm(1, mean = p1, sd = p2, lower = 0) else
       rnorm(1, p1, p2)
   }
@@ -284,14 +290,18 @@ rBTAwL <- function(lR, pars, ok = rep(TRUE, length(lR)),
     # The likelihood integrates independent channel launches.  The simulator
     # therefore draws them independently from the same constrained scaling:
     # lognormal locations shift by log(pi), while normal locations and scales
-    # are both scaled by pi.
+    # are both scaled by pi; split widths are unchanged by this shift.
     if (pi_val <= 1e-14) {
       p1_T <- pars[j, nm[1]]; p2_T <- pars[j, nm[2]]
-      V_T <- draw_launch(p1_T, p2_T); V_S <- 0
+      V_T <- draw_launch(p1_T, p2_T,
+                         if (launch == 2L) pars[j, "delta"] else 0)
+      V_S <- 0
     } else if (pi_val >= 1 - 1e-14) {
       p1_S <- pars[j, nm[1]]; p2_S <- pars[j, nm[2]]
-      V_T <- 0; V_S <- draw_launch(p1_S, p2_S)
-    } else if (launch == 1L) {
+      V_T <- 0
+      V_S <- draw_launch(p1_S, p2_S,
+                         if (launch == 2L) pars[j, "delta"] else 0)
+    } else if (launch == 1L || launch == 2L) {
       p1_T <- pars[j, nm[1]] + log1p(-pi_val)
       p1_S <- pars[j, nm[1]] + log(pi_val)
       p2_T <- p2_S <- pars[j, nm[2]]
@@ -304,8 +314,10 @@ rBTAwL <- function(lR, pars, ok = rep(TRUE, length(lR)),
     z_T <- pars[j, "A"] * runif(1)
     z_S <- pars[j, "A"] * runif(1)
     if (pi_val > 1e-14 && pi_val < 1 - 1e-14) {
-      V_T <- draw_launch(p1_T, p2_T)
-      V_S <- draw_launch(p1_S, p2_S)
+      V_T <- draw_launch(p1_T, p2_T,
+                         if (launch == 2L) pars[j, "delta"] else 0)
+      V_S <- draw_launch(p1_S, p2_S,
+                         if (launch == 2L) pars[j, "delta"] else 0)
     }
     t_T <- .btawl_hit_time_transient(V_T, z_T, pars[j, "b"], pars[j, "k"],
                                      tau_t_all[ok_idx[j]])
@@ -335,9 +347,15 @@ rBTAwLSustained <- function(lR, pars, ok = rep(TRUE, length(lR)),
     stop("pars must have columns ", paste(p_types, collapse = " "))
   pars <- pars[ok, , drop = FALSE]
   ok_idx <- which(ok)
-  V <- if (launch == 1L) rlnorm(nrow(pars), pars[, nm[1]], pars[, nm[2]]) else
-    if (posdrift) msm::rtnorm(nrow(pars), mean = pars[, nm[1]], sd = pars[, nm[2]], lower = 0) else
-      rnorm(nrow(pars), pars[, nm[1]], pars[, nm[2]])
+  V <- if (launch == 1L) {
+    rlnorm(nrow(pars), pars[, nm[1]], pars[, nm[2]])
+  } else if (launch == 2L) {
+    .bawd_split_rlnorm(pars[, "mu"], pars[, "sigma"], pars[, "delta"])
+  } else if (posdrift) {
+    msm::rtnorm(nrow(pars), mean = pars[, nm[1]], sd = pars[, nm[2]], lower = 0)
+  } else {
+    rnorm(nrow(pars), pars[, nm[1]], pars[, nm[2]])
+  }
   dt <- matrix(Inf, nr, n_trials)
   for (j in seq_len(nrow(pars))) {
     row <- ok_idx[j]
@@ -359,25 +377,32 @@ rBTAwLSustained <- function(lR, pars, ok = rep(TRUE, length(lR)),
 
 .btawl_constructor <- function(mode = c("full", "transient", "sustained"),
                                posdrift = TRUE,
-                               drift_distribution = c("lognormal","normal"),
+                               drift_distribution = c("lognormal", "normal",
+                                                       "splitlognormal"),
                                chart = c("rate","endpoint")) {
   mode <- match.arg(mode)
   chart <- match.arg(chart)
   drift_distribution <- match.arg(drift_distribution)
-  launch <- .btawl_launch_code(drift_distribution)
-  lognormal <- launch == 1L
+  launch <- .ba_launch_code(drift_distribution, "BTAwL")
+  lognormal <- launch %in% c(1L, 2L)
+  splitlognormal <- launch == 2L
   if (lognormal && !isTRUE(posdrift))
     stop("BTAwL: posdrift only applies to drift_distribution = \"normal\".")
   if (lognormal) {
     p_types <- c(mu = 0, sigma = log(1))
     transform <- c(mu = "identity", sigma = "exp")
     minmax <- cbind(mu = c(-Inf, Inf), sigma = c(1e-4, Inf))
+    if (splitlognormal) {
+      p_types <- c(p_types, delta = 0)
+      transform <- c(transform, delta = "identity")
+      minmax <- cbind(minmax, delta = c(-Inf, Inf))
+    }
   } else {
     p_types <- c(v = 1, sv = log(1))
     transform <- c(v = "identity", sv = "exp")
     minmax <- cbind(v = c(-Inf, Inf), sv = c(1e-4, Inf))
   }
-  launch_pars <- .btawl_par_names(launch)
+  launch_pars <- .ba_par_names(launch)
   if (mode == "transient") {
     clear_name <- if (chart == "endpoint") "Ttrans" else "tau"
     p_types <- c(p_types, B = log(1), A = log(0), t0 = log(0),
@@ -390,6 +415,7 @@ rBTAwLSustained <- function(lR, pars, ok = rep(TRUE, length(lR)),
     colnames(minmax)[ncol(minmax)] <- clear_name
     exception <- if (chart == "endpoint") c(A = 0) else c(A = 0, k = 0)
     c_name <- paste0("BTAwL_TRANSIENT", if (lognormal) "_LOGN" else "",
+                     if (splitlognormal) "_SPLIT" else "",
                      if (chart == "rate") "_RATE" else "",
                      if (!lognormal && !posdrift) "_IO" else "")
     .nuis <- add_nuisance_pars(p_types, transform, minmax, exception)
@@ -442,6 +468,7 @@ rBTAwLSustained <- function(lR, pars, ok = rep(TRUE, length(lR)),
                     t0 = c(0.05, Inf), k = c(0, Inf), tau_s = c(1e-4, Inf))
     exception <- c(A = 0, k = 0)
     c_name <- paste0("BTAwL_SUSTAINED", if (lognormal) "_LOGN" else "",
+                     if (splitlognormal) "_SPLIT" else "",
                      if (!lognormal && !posdrift) "_IO" else "")
     .nuis <- add_nuisance_pars(p_types, transform, minmax, exception)
     p_types <- .nuis$p_types; transform <- .nuis$transform
@@ -494,6 +521,7 @@ rBTAwLSustained <- function(lR, pars, ok = rep(TRUE, length(lR)),
   list(
     type = "RACE",
     c_name = paste0("BTAwL", if (lognormal) "_LOGN" else "",
+                    if (splitlognormal) "_SPLIT" else "",
                     if (chart == "rate") "_RATE" else "",
                     if (!lognormal && !posdrift) "_IO" else ""),
     drift_distribution = drift_distribution,
@@ -554,20 +582,29 @@ rBTAwLSustained <- function(lR, pars, ok = rep(TRUE, length(lR)),
 #'
 #' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Mapping** | **Interpretation** |
 #' |---|---|---|---|---|---|
-#' | *mu* | identity | \[-Inf, Inf\] | 0 | | Mean of log launch strength for a lognormal launch. |
-#' | *sigma* | log | \[0, Inf\] | log(1) | | SD of log launch strength for a lognormal launch. |
+#' | *mu* | identity | \[-Inf, Inf\] | 0 | | Median log launch location for a lognormal launch. |
+#' | *sigma* | log | \[0, Inf\] | log(1) | | Geometric-mean log width. |
+#' | *v* | identity | \[-Inf, Inf\] | 1 | | Mean normal launch strength (normal launch only). |
+#' | *sv* | log | \[0, Inf\] | log(1) | | SD of normal launch strength (normal launch only). |
 #' | *B* | log | \[0, Inf\] | log(1) | *b* = *B* + *A* | Distance from the upper start-point range to the threshold. |
 #' | *A* | log | \[0, Inf\] | log(0) | | Start-point range. |
 #' | *t0* | log | \[0, Inf\] | log(0) | | Non-decision time. |
 #' | *k* | log | \[0, Inf\] | log(0) | | Leak rate. |
 #' | *tau_s* | log | \[0, Inf\] | log(1) | | Sustained-drive time constant. |
 #' | *tau_t* | log | \[0, Inf\] | log(1) | | Transient-drive time constant. |
+#' | *Ttrans* | log | \[0, Inf\] | log(1) | | Transient endpoint parameter (endpoint chart; replaces `tau_t`). |
 #' | *pi* | probit | \[0, 1\] | qnorm(.5) | | Probability allocated to the sustained process. |
 #'
 #' With `drift_distribution = "normal"`, `mu` and `sigma` are replaced by `v`
 #' and `sv`; the launch is truncated positive when `posdrift = TRUE`.
-#' `pContaminant` and `pGuess` are optional nuisance parameters appended by the
-#' data pipeline.
+#' With `"splitlognormal"`, `log V` is continuous split normal with
+#' `sigma_L = sigma * exp(delta/2)` and `sigma_R = sigma * exp(-delta/2)`;
+#' `mu` is the exact median, the split point is derived from that condition,
+#' and `delta` is unbounded.  `delta = 0` reduces exactly to lognormal.
+#' The split-lognormal option adds the optional identity-scale `delta` parameter
+#' (default `0`).
+#' Optional fitting parameters: `pContaminant` is the omission probability and
+#' `pGuess` is the uniform-outlier probability.
 #'
 #' The evidence scale is not intrinsic: multiplying the launch strength,
 #' threshold distance, and start-point range by the same positive constant
@@ -607,15 +644,15 @@ rBTAwLSustained <- function(lR, pars, ok = rep(TRUE, length(lR)),
 #' vanishing `tau_t` delivers zero total transient impulse.  `pi` is the switch.
 #'
 #' @param posdrift Logical. For a normal launch, truncate `V` below zero.
-#' @param drift_distribution Either `"normal"` (`V ~ N(v, sv^2)`) or
-#'   `"lognormal"` (`log V ~ N(mu, sigma^2)`).
+#' @param drift_distribution Either `"normal"`, `"lognormal"`, or
+#'   `"splitlognormal"` (continuous median-parameterised split-lognormal).
 #' @param chart Either `"endpoint"` (sample `Ttrans`) or `"rate"` (sample
 #'   `tau_t`).
 #' @return A BTAwL race-model specification.
 #' @seealso [BTAwLTransient()], [BTAwLSustained()]
 #' @export
 BTAwL <- function(posdrift = TRUE,
-                  drift_distribution = c("lognormal","normal"),
+                  drift_distribution = c("lognormal", "normal", "splitlognormal"),
                   chart = c("rate","endpoint"))
   .btawl_constructor("full", posdrift, drift_distribution, chart)
 
@@ -625,37 +662,49 @@ BTAwL <- function(posdrift = TRUE,
 #'
 #' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Mapping** | **Interpretation** |
 #' |---|---|---|---|---|---|
-#' | *mu* | identity | \[-Inf, Inf\] | 0 | | Mean of log launch strength. |
-#' | *sigma* | log | \[0, Inf\] | log(1) | | SD of log launch strength. |
+#' | *mu* | identity | \[-Inf, Inf\] | 0 | | Median log launch location. |
+#' | *sigma* | log | \[0, Inf\] | log(1) | | Geometric-mean log width. |
+#' | *v* | identity | \[-Inf, Inf\] | 1 | | Mean normal launch strength (normal launch only). |
+#' | *sv* | log | \[0, Inf\] | log(1) | | SD of normal launch strength (normal launch only). |
 #' | *B* | log | \[0, Inf\] | log(1) | *b* = *B* + *A* | Distance from the upper start-point range to the threshold. |
 #' | *A* | log | \[0, Inf\] | log(0) | | Start-point range. |
 #' | *t0* | log | \[0, Inf\] | log(0) | | Non-decision time. |
 #' | *k* | log | \[0, Inf\] | log(0) | | Leak rate. |
-#' | *tau_t* | log | \[0, Inf\] | log(1) | | Transient-drive time constant. |
+#' | *tau* | log | \[0, Inf\] | log(1) | | Transient time constant (rate chart). |
+#' | *Ttrans* | log | \[0, Inf\] | log(1) | | Transient endpoint parameter (endpoint chart; replaces `tau`). |
 #'
 #' With `drift_distribution = "normal"`, `mu` and `sigma` are replaced by `v`
 #' and `sv`; the launch is truncated positive when `posdrift = TRUE`.
-#' `pContaminant` and `pGuess` are optional nuisance parameters appended by the
-#' data pipeline.
+#' With `"splitlognormal"`, `log V` is continuous split normal with
+#' `sigma_L = sigma * exp(delta/2)` and `sigma_R = sigma * exp(-delta/2)`;
+#' `mu` is the exact median and `delta` is unbounded.  The split point is
+#' derived from the median condition, and `delta = 0` is exactly lognormal.
+#' The split-lognormal option adds the optional identity-scale `delta` parameter
+#' (default `0`).
+#' Optional fitting parameters: `pContaminant` is the omission probability and
+#' `pGuess` is the uniform-outlier probability.
 #'
 #' @param posdrift Logical. For a normal launch, truncate `V` below zero.
-#' @param drift_distribution Either `"normal"` or `"lognormal"`.
+#' @param drift_distribution Either `"normal"`, `"lognormal"`, or
+#'   `"splitlognormal"` (continuous median-parameterised split-lognormal).
 #' @param chart Either `"endpoint"` or `"rate"`.
 #' @return A transient-only BTAwL race-model specification.
 #' @export
 BTAwLTransient <- function(posdrift = TRUE,
-                           drift_distribution = c("lognormal","normal"),
+                           drift_distribution = c("lognormal", "normal",
+                                                   "splitlognormal"),
                            chart = c("rate","endpoint"))
   .btawl_constructor("transient", posdrift, drift_distribution, chart)
-
 #' Pure sustained BTAwL wrapper.
 #'
 #' The sustained wrapper uses the following parameter matrix:
 #'
 #' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Mapping** | **Interpretation** |
 #' |---|---|---|---|---|---|
-#' | *mu* | identity | \[-Inf, Inf\] | 0 | | Mean of log launch strength. |
-#' | *sigma* | log | \[0, Inf\] | log(1) | | SD of log launch strength. |
+#' | *mu* | identity | \[-Inf, Inf\] | 0 | | Median log launch location. |
+#' | *sigma* | log | \[0, Inf\] | log(1) | | Geometric-mean log width. |
+#' | *v* | identity | \[-Inf, Inf\] | 1 | | Mean normal launch strength (normal launch only). |
+#' | *sv* | log | \[0, Inf\] | log(1) | | SD of normal launch strength (normal launch only). |
 #' | *B* | log | \[0, Inf\] | log(1) | *b* = *B* + *A* | Distance from the upper start-point range to the threshold. |
 #' | *A* | log | \[0, Inf\] | log(0) | | Start-point range. |
 #' | *t0* | log | \[0, Inf\] | log(0) | | Non-decision time. |
@@ -664,15 +713,23 @@ BTAwLTransient <- function(posdrift = TRUE,
 #'
 #' With `drift_distribution = "normal"`, `mu` and `sigma` are replaced by `v`
 #' and `sv`; the launch is truncated positive when `posdrift = TRUE`.
-#' `pContaminant` and `pGuess` are optional nuisance parameters appended by the
-#' data pipeline.
+#' With `"splitlognormal"`, `log V` is continuous split normal with
+#' `sigma_L = sigma * exp(delta/2)` and `sigma_R = sigma * exp(-delta/2)`;
+#' `mu` is the exact median and `delta` is unbounded.  The split point is
+#' derived from the median condition, and `delta = 0` is exactly lognormal.
+#' The split-lognormal option adds the optional identity-scale `delta` parameter
+#' (default `0`).
+#' Optional fitting parameters: `pContaminant` is the omission probability and
+#' `pGuess` is the uniform-outlier probability.
 #'
 #' @param posdrift Logical. For a normal launch, truncate `V` below zero.
-#' @param drift_distribution Either `"normal"` or `"lognormal"`.
+#' @param drift_distribution Either `"normal"`, `"lognormal"`, or
+#'   `"splitlognormal"` (continuous median-parameterised split-lognormal).
 #' @param chart Either `"endpoint"` or `"rate"`.
 #' @return A sustained-only BTAwL race-model specification.
 #' @export
 BTAwLSustained <- function(posdrift = TRUE,
-                           drift_distribution = c("lognormal","normal"),
+                           drift_distribution = c("lognormal", "normal",
+                                                   "splitlognormal"),
                            chart = c("rate","endpoint"))
   .btawl_constructor("sustained", posdrift, drift_distribution, chart)

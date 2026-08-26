@@ -58,16 +58,45 @@ struct RLF_Twiddles {
 };
 
 inline const RLF_Twiddles& rlf_twiddles(size_t n, bool inverse) {
-  // Two cache slots, one per direction; a solve alternates forward/inverse at
-  // a single size, so this never thrashes.
-  static thread_local size_t cached_n[2] = {0, 0};
-  static thread_local RLF_Twiddles cache[2];
+  // Multi-size cache indexed by log2(n) for power-of-two transforms; avoids
+  // thrashing when alternating between sys.m and sys.mp within a solve.
   const int slot = inverse ? 1 : 0;
-  RLF_Twiddles& tw = cache[slot];
-  if (cached_n[slot] == n) return tw;
+  constexpr size_t MAX_LVL = 30;
+  static thread_local RLF_Twiddles cache[2][MAX_LVL + 1];
 
-  // Stage `len` contributes len/2 factors, so the table holds
-  // 1 + 2 + ... + n/2 = n - 1 entries laid out back to back.
+  if (n < 2) {
+    static const RLF_Twiddles empty_tw;
+    return empty_tw;
+  }
+
+  size_t lvl = 0;
+  while ((static_cast<size_t>(1) << lvl) < n && lvl < MAX_LVL) ++lvl;
+
+  if (lvl > MAX_LVL || (static_cast<size_t>(1) << lvl) != n) {
+    static thread_local RLF_Twiddles fallback_cache[2];
+    static thread_local size_t fallback_n[2] = {0, 0};
+    RLF_Twiddles& tw = fallback_cache[slot];
+    if (fallback_n[slot] == n) return tw;
+    tw.re.resize(n);
+    tw.im.resize(n);
+    for (size_t len = 2, base = 0; len <= n; len <<= 1) {
+      const size_t half = len / 2;
+      const double theta =
+        (inverse ? 2.0 : -2.0) * M_PI / static_cast<double>(len);
+      for (size_t k = 0; k < half; ++k) {
+        const double ang = theta * static_cast<double>(k);
+        tw.re[base + k] = std::cos(ang);
+        tw.im[base + k] = std::sin(ang);
+      }
+      base += half;
+    }
+    fallback_n[slot] = n;
+    return tw;
+  }
+
+  RLF_Twiddles& tw = cache[slot][lvl];
+  if (!tw.re.empty()) return tw;
+
   tw.re.resize(n);
   tw.im.resize(n);
   for (size_t len = 2, base = 0; len <= n; len <<= 1) {
@@ -81,9 +110,9 @@ inline const RLF_Twiddles& rlf_twiddles(size_t n, bool inverse) {
     }
     base += half;
   }
-  cached_n[slot] = n;
   return tw;
 }
+
 
 inline void rlf_fft(std::vector<rlf_cplx>& a, bool inverse) {
   const size_t n = a.size();
@@ -155,11 +184,88 @@ struct RLF_ToeplitzSystem {
   std::vector<rlf_cplx> eig;        // FFT of the embedded first column
   std::vector<double> diag;         // diagonal of M
   std::vector<rlf_cplx> pre_eig;    // Strang preconditioner eigenvalues
+  std::vector<rlf_cplx> inv_pre_eig;// Precomputed Strang preconditioner inverse eigenvalues
   mutable std::vector<rlf_cplx> work;
   mutable std::vector<rlf_cplx> pwork;
+  mutable std::vector<double> krylov;// Reusable scratch for 8 Krylov vectors in solve
 };
 
-// Build M = I - theta*dt*L directly from the dense generator.  Only the first
+// Build M = I - theta*dt*L from compact first-column, first-row, and diagonal data.
+inline RLF_ToeplitzSystem rlf_build_toeplitz_system(
+    const double* col0, const double* row0, const double* diag,
+    int n, double theta_dt) {
+  RLF_ToeplitzSystem sys;
+  sys.n = n;
+  sys.m = rlf_next_pow2(static_cast<size_t>(2 * n));
+
+  // Row 0 (columns > 0) gives the super-diagonals; column 0 (rows > 0) gives
+  // the sub-diagonals. Entry (0,0) is excluded from both -- it carries the
+  // sealed-face correction, which belongs to the diagonal.
+  std::vector<rlf_cplx> col(sys.m, rlf_cplx(0.0, 0.0));
+  for (int k = 1; k < n; ++k) {
+    const double sub = -theta_dt * col0[k];
+    const double sup = -theta_dt * row0[k];
+    col[static_cast<size_t>(k)] = sub;
+    col[sys.m - static_cast<size_t>(k)] = sup;
+  }
+  sys.eig = col;
+  rlf_fft(sys.eig, false);
+
+  sys.diag.resize(n);
+  double mean_diag = 0.0;
+  for (int j = 0; j < n; ++j) {
+    const double d = 1.0 - theta_dt * diag[j];
+    sys.diag[j] = d;
+    mean_diag += d;
+  }
+  mean_diag /= static_cast<double>(n);
+
+  sys.mp = rlf_next_pow2(static_cast<size_t>(n));
+  std::vector<rlf_cplx> pre(sys.mp, rlf_cplx(0.0, 0.0));
+  pre[0] = mean_diag;
+  // Stop short of mp/2 so the sub- and super-diagonal folds cannot land on
+  // the same slot and overwrite each other.
+  const int half = static_cast<int>((sys.mp - 1) / 2);
+  const int reach = std::min(half, n - 1);
+  for (int k = 1; k <= reach; ++k) {
+    const double sub = -theta_dt * col0[k];
+    const double sup = -theta_dt * row0[k];
+    pre[static_cast<size_t>(k)] = sub;
+    pre[sys.mp - static_cast<size_t>(k)] = sup;
+  }
+  sys.pre_eig = pre;
+  rlf_fft(sys.pre_eig, false);
+
+  sys.inv_pre_eig.resize(sys.mp);
+  for (size_t k = 0; k < sys.mp; ++k) {
+    const rlf_cplx lam = sys.pre_eig[k];
+    if (std::abs(lam) > 1e-13) {
+      sys.inv_pre_eig[k] = 1.0 / lam;
+    } else {
+      sys.inv_pre_eig[k] = rlf_cplx(1.0, 0.0);
+    }
+  }
+
+  sys.work.assign(sys.m, rlf_cplx(0.0, 0.0));
+  sys.pwork.assign(sys.mp, rlf_cplx(0.0, 0.0));
+  sys.krylov.assign(8 * static_cast<size_t>(n), 0.0);
+  return sys;
+}
+
+inline RLF_ToeplitzSystem rlf_build_toeplitz_system(
+    const std::vector<double>& col0, const std::vector<double>& row0,
+    const std::vector<double>& diag, int n, double theta_dt) {
+  return rlf_build_toeplitz_system(col0.data(), row0.data(), diag.data(), n, theta_dt);
+}
+
+inline RLF_ToeplitzSystem rlf_build_toeplitz_system(
+    const std::vector<double>& col0, const std::vector<double>& row0,
+    const std::vector<double>& diag, double theta_dt) {
+  return rlf_build_toeplitz_system(col0.data(), row0.data(), diag.data(),
+                                  static_cast<int>(diag.size()), theta_dt);
+}
+
+// Build M = I - theta*dt*L directly from the dense generator. Only the first
 // row and first column are read, so this is O(n) rather than O(n^2): the
 // interior of L is redundant once translation invariance is known.
 inline RLF_ToeplitzSystem rlf_build_toeplitz_system(
@@ -169,7 +275,7 @@ inline RLF_ToeplitzSystem rlf_build_toeplitz_system(
   sys.m = rlf_next_pow2(static_cast<size_t>(2 * n));
 
   // Row 0 (columns > 0) gives the super-diagonals; column 0 (rows > 0) gives
-  // the sub-diagonals.  Entry (0,0) is excluded from both -- it carries the
+  // the sub-diagonals. Entry (0,0) is excluded from both -- it carries the
   // sealed-face correction, which belongs to the diagonal.
   std::vector<rlf_cplx> col(sys.m, rlf_cplx(0.0, 0.0));
   for (int k = 1; k < n; ++k) {
@@ -182,20 +288,12 @@ inline RLF_ToeplitzSystem rlf_build_toeplitz_system(
   rlf_fft(sys.eig, false);
 
   sys.diag.resize(n);
-  for (int j = 0; j < n; ++j) {
-    sys.diag[j] = 1.0 - theta_dt * L[static_cast<size_t>(j) * n + j];
-  }
-
-  // Strang preconditioner.  Building it at the true size n would need an
-  // arbitrary-length DFT, and Bluestein costs three padded transforms per
-  // call against the matvec's one -- the preconditioner would dominate the
-  // solve it is meant to accelerate.  Instead it is built at the next power
-  // of two and applied to the zero-padded residual.  A preconditioner only
-  // has to approximate M^-1, and the jump weights decay, so folding at N
-  // rather than n clusters the spectrum just as well while keeping every
-  // transform radix-2.
   double mean_diag = 0.0;
-  for (int j = 0; j < n; ++j) mean_diag += sys.diag[j];
+  for (int j = 0; j < n; ++j) {
+    const double d = 1.0 - theta_dt * L[static_cast<size_t>(j) * n + j];
+    sys.diag[j] = d;
+    mean_diag += d;
+  }
   mean_diag /= static_cast<double>(n);
 
   sys.mp = rlf_next_pow2(static_cast<size_t>(n));
@@ -214,10 +312,22 @@ inline RLF_ToeplitzSystem rlf_build_toeplitz_system(
   sys.pre_eig = pre;
   rlf_fft(sys.pre_eig, false);
 
+  sys.inv_pre_eig.resize(sys.mp);
+  for (size_t k = 0; k < sys.mp; ++k) {
+    const rlf_cplx lam = sys.pre_eig[k];
+    if (std::abs(lam) > 1e-13) {
+      sys.inv_pre_eig[k] = 1.0 / lam;
+    } else {
+      sys.inv_pre_eig[k] = rlf_cplx(1.0, 0.0);
+    }
+  }
+
   sys.work.assign(sys.m, rlf_cplx(0.0, 0.0));
   sys.pwork.assign(sys.mp, rlf_cplx(0.0, 0.0));
+  sys.krylov.assign(8 * static_cast<size_t>(n), 0.0);
   return sys;
 }
+
 
 // y = M x
 inline void rlf_toeplitz_apply(const RLF_ToeplitzSystem& sys,
@@ -265,15 +375,67 @@ inline void rlf_toeplitz_precondition(const RLF_ToeplitzSystem& sys,
   for (int i = 0; i < n; ++i) sys.pwork[static_cast<size_t>(i)] = r[i];
 
   rlf_fft(sys.pwork, false);
-  for (size_t k = 0; k < sys.mp; ++k) {
-    const rlf_cplx lam = sys.pre_eig[k];
-    // A near-singular mode would amplify noise rather than precondition; the
-    // preconditioner only has to be approximate, so such modes pass through.
-    if (std::abs(lam) > 1e-13) sys.pwork[k] /= lam;
+  {
+    double* __restrict pw = reinterpret_cast<double*>(sys.pwork.data());
+    const double* __restrict pe =
+      reinterpret_cast<const double*>(sys.inv_pre_eig.data());
+    const size_t total = sys.mp;
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC ivdep
+#endif
+    for (size_t k = 0; k < total; ++k) {
+      const double ar = pw[2 * k], ai = pw[2 * k + 1];
+      const double br = pe[2 * k], bi = pe[2 * k + 1];
+      pw[2 * k] = ar * br - ai * bi;
+      pw[2 * k + 1] = ar * bi + ai * br;
+    }
   }
   rlf_fft(sys.pwork, true);
 
-  for (int i = 0; i < n; ++i) z[i] = sys.pwork[static_cast<size_t>(i)].real();
+  {
+    const double* __restrict pw =
+      reinterpret_cast<const double*>(sys.pwork.data());
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC ivdep
+#endif
+    for (int i = 0; i < n; ++i) z[i] = pw[2 * i];
+  }
+}
+
+// y = (2I - M) x = x + theta*dt*L x
+inline void rlf_toeplitz_apply_shifted(const RLF_ToeplitzSystem& sys,
+                                       const double* x, double* y) {
+  const int n = sys.n;
+  std::fill(sys.work.begin(), sys.work.end(), rlf_cplx(0.0, 0.0));
+  for (int i = 0; i < n; ++i) sys.work[static_cast<size_t>(i)] = x[i];
+
+  rlf_fft(sys.work, false);
+  {
+    double* __restrict w = reinterpret_cast<double*>(sys.work.data());
+    const double* __restrict e =
+      reinterpret_cast<const double*>(sys.eig.data());
+    const size_t total = sys.m;
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC ivdep
+#endif
+    for (size_t k = 0; k < total; ++k) {
+      const double ar = w[2 * k], ai = w[2 * k + 1];
+      const double br = e[2 * k], bi = e[2 * k + 1];
+      w[2 * k] = ar * br - ai * bi;
+      w[2 * k + 1] = ar * bi + ai * br;
+    }
+  }
+  rlf_fft(sys.work, true);
+
+  {
+    const double* __restrict w =
+      reinterpret_cast<const double*>(sys.work.data());
+    const double* __restrict d = sys.diag.data();
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC ivdep
+#endif
+    for (int i = 0; i < n; ++i) y[i] = (2.0 - d[i]) * x[i] - w[2 * i];
+  }
 }
 
 // Preconditioned BiCGSTAB.  Returns the iteration count, or -1 if the
@@ -286,15 +448,17 @@ inline int rlf_toeplitz_solve(const RLF_ToeplitzSystem& sys,
   // -ffast-math plus ivdep lets them fold into SIMD lanes rather than running
   // as serial accumulations.
   const int n = sys.n;
-  std::vector<double> rv(n), r0v_(n), pv(n), vv(n), sv(n), tv(n), phv(n), shv(n);
-  double* __restrict r = rv.data();
-  double* __restrict r0 = r0v_.data();
-  double* __restrict p = pv.data();
-  double* __restrict v = vv.data();
-  double* __restrict s = sv.data();
-  double* __restrict t = tv.data();
-  double* __restrict ph = phv.data();
-  double* __restrict sh = shv.data();
+  if (sys.krylov.size() < static_cast<size_t>(8 * n)) {
+    sys.krylov.resize(static_cast<size_t>(8 * n));
+  }
+  double* __restrict r = sys.krylov.data();
+  double* __restrict r0 = r + n;
+  double* __restrict p = r0 + n;
+  double* __restrict v = p + n;
+  double* __restrict s = v + n;
+  double* __restrict t = s + n;
+  double* __restrict ph = t + n;
+  double* __restrict sh = ph + n;
 
   rlf_toeplitz_apply(sys, x, v);
   double bnorm = 0.0;

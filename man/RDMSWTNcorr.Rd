@@ -35,3 +35,18 @@ copula; with \code{correlate = "drifts"} it is the between-trial drift draws tha
 are correlated, as in \code{\link[=BAwLcorr]{BAwLcorr()}}. See \code{\link[=RDMSWTN]{RDMSWTN()}} for the participation
 design and the interpretation of \code{rho} under each.
 }
+\details{
+Optional fitting parameters are \code{pContaminant}, the omission probability,
+\code{pGuess}, the uniform-outlier probability, and \code{rho}, the correlation
+parameter. Optional clock means \code{mG} and \code{mK} use log/exp transforms with
+default \code{log(1)} when active; mixed mode additionally uses \code{omega} on the
+probit scale with default \code{qnorm(.5)}.\tabular{llllll}{
+   \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Mapping} \tab \strong{Interpretation} \cr
+   \emph{v} \tab exp (identity for \code{posdrift = FALSE}) \tab [0, Inf] ([-Inf, Inf] for IO) \tab log(1) (1 for IO) \tab  \tab Mean drift rate. \cr
+   \emph{B} \tab exp \tab [0, Inf] \tab log(1) \tab \emph{b} = \emph{B} + \emph{A} \tab Baseline distance to threshold. \cr
+   \emph{A} \tab exp \tab [0, Inf] \tab log(0) \tab  \tab Start-point range. \cr
+   \emph{t0} \tab exp \tab [0, Inf] \tab log(0) \tab  \tab Non-decision time. \cr
+   \emph{s} \tab exp \tab [0, Inf] \tab log(1) \tab  \tab Within-trial diffusion SD. \cr
+   \emph{sv} \tab exp \tab [0, Inf] \tab log(0) \tab  \tab Between-trial drift SD. \cr
+}
+}

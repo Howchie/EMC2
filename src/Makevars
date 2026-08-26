@@ -113,3 +113,15 @@ PKG_CPPFLAGS += -I../inst/include $(RCPP_ARMA_CXXFLAGS) -Wfatal-errors -Igsl_bun
 # --- Link libraries -----------------------------------------------------------
 # GSL is compiled in via gsl_bundled.c, so no -lgsl/-lgslcblas is required.
 PKG_LIBS +=  $(RCPP_ARMA_LIBS)
+
+# --- gfortran runtime search path ---------------------------------------------
+# R's FLIBS (-lgfortran -lm -lquadmath) reaches the link through RcppArmadillo.
+# On images whose default C++ compiler has no matching Fortran frontend (e.g.
+# g++-13 without gfortran-13), -lgfortran fails to resolve even though the
+# ABI-compatible libgfortran.so.5 runtime is present. Fall back to the directory
+# reported by the installed gfortran; this is a no-op where that directory is
+# already searched, and adds nothing when gfortran itself is absent.
+GFORTRAN_LIBDIR := $(shell gfortran -print-file-name=libgfortran.so 2>/dev/null)
+ifneq ($(wildcard $(GFORTRAN_LIBDIR)),)
+PKG_LIBS += -L$(dir $(GFORTRAN_LIBDIR))
+endif

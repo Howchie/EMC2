@@ -23,13 +23,17 @@
 #include <limits>
 #include <vector>
 #include "model_BAwD.h"
+#include "col_registry.h"
 
-// Keep BTAwL's launch selector and numerical thresholds identical to BAwL.
+// Keep BTAwL's launch selector and numerical thresholds identical to BAwL / BAwD.
 constexpr int BTAWL_LAUNCH_NORMAL = BAWL_LAUNCH_NORMAL;
 constexpr int BTAWL_LAUNCH_LOGNORMAL = BAWL_LAUNCH_LOGNORMAL;
+constexpr int BTAWL_LAUNCH_SPLITLOGNORMAL = BAWD_LAUNCH_SPLITLOGNORMAL;
 constexpr double BTAWL_K_EPS = BAWL_K_EPS;
 constexpr double BTAWL_A_EPS = BAWL_A_EPS;
 constexpr double BTAWL_DENOM_FLOOR = BAWL_DENOM_FLOOR;
+
+
 
 struct BtawlGeom {
   bool ok = false;
@@ -60,6 +64,7 @@ struct PlateauCacheEntry {
   double p1 = R_NaN, p2 = R_NaN, value = R_NaN;
   int launch = -1;
   bool posdrift = false;
+  double delta = 0.0;
 };
 
 struct SolveCache {
@@ -83,7 +88,7 @@ BtawlGeom btawl_geometry_cached(ContextForRaceModels* ctx, bool endpoint,
 double btawl_log_surv_cached(ContextForRaceModels* ctx, double t,
                              const BtawlGeom& g, double clear,
                              double p1, double p2, int launch,
-                             bool posdrift);
+                             bool posdrift, double delta = 0.0);
 
 // Reset the cache at the start of each particle.  This is a no-op until the
 // first BTAwL row creates the lazy cache object.
@@ -130,28 +135,28 @@ double btawl_tangent_z_prime(double t, const BtawlGeom& g);
 double btawl_normal_denom(double v, double sv, bool posdrift);
 
 double btawl_surv(double w, double p1, double p2, int launch,
-                         bool posdrift);
+                         bool posdrift, double delta = 0.0);
 
 double btawl_pdf_v(double w, double p1, double p2, int launch,
-                          bool posdrift);
+                          bool posdrift, double delta = 0.0);
 
 double btawl_J(double x);
 
 double btawl_live_cdf(double t, double zlo, double zhi,
                              const BtawlGeom& g, double p1, double p2,
-                             int launch, bool posdrift);
+                             int launch, bool posdrift, double delta = 0.0);
 
 double btawl_live_pdf(double t, double zlo, double zhi,
                              const BtawlGeom& g, double p1, double p2,
-                             int launch, bool posdrift);
+                             int launch, bool posdrift, double delta = 0.0);
 
 double btawl_log_frozen(bool survivor, double t, const BtawlGeom& g,
                                double p1, double p2,
-                               int launch, bool posdrift);
+                               int launch, bool posdrift, double delta = 0.0);
 
 double btawl_frozen_cdf(double t, double zlo, double zhi,
                                const BtawlGeom& g, double p1, double p2,
-                               int launch, bool posdrift);
+                               int launch, bool posdrift, double delta = 0.0);
 
 // Launch-density turnover on the descending branch of g(s) = (s/tau)e^{-s/tau}.
 // The frozen quadrature is concentrated near this point in the stiff endpoint
@@ -161,75 +166,90 @@ double btawl_frozen_split(const BtawlGeom& g, double s_lo, double s_hi,
 
 double btawl_log_live(bool survivor, double t, double zlo, double zhi,
                              const BtawlGeom& g, double p1, double p2,
-                             int launch, bool posdrift);
+                             int launch, bool posdrift, double delta = 0.0);
 
 double btawl_log_eval(bool survivor, double t, const BtawlGeom& g,
-                             double p1, double p2, int launch, bool posdrift);
+                             double p1, double p2, int launch, bool posdrift,
+                             double delta = 0.0);
 
 double log_btawl_cdf_normal(double t, const BtawlGeom& g, double v,
                                    double sv, bool posdrift);
 double log_btawl_cdf_logn(double t, const BtawlGeom& g, double mu,
-                                 double sigma);
+                                 double sigma, double delta = 0.0);
 double log_btawl_surv_normal(double t, const BtawlGeom& g, double v,
                                     double sv, bool posdrift);
 double log_btawl_surv_logn(double t, const BtawlGeom& g, double mu,
-                                  double sigma);
+                                  double sigma, double delta = 0.0);
 
 double btawl_cdf(double t, double A, double b, double p1, double p2,
-                        double k, double tau, int launch, bool posdrift);
+                        double k, double tau, int launch, bool posdrift,
+                        double delta = 0.0);
 
 double btawl_pdf(double t, double A, double b, double p1, double p2,
-                        double k, double tau, int launch, bool posdrift);
+                        double k, double tau, int launch, bool posdrift,
+                        double delta = 0.0);
 
 double btawl_cdf_from_geom(double t, const BtawlGeom& g, double p1,
-                                  double p2, int launch, bool posdrift);
+                                  double p2, int launch, bool posdrift,
+                                  double delta = 0.0);
 
 bool btawl_natural_cdf_from_geom(double t, const BtawlGeom& g,
                                         double p1, double p2, int launch,
-                                        bool posdrift, double& cdf);
+                                        bool posdrift, double& cdf,
+                                        double delta = 0.0);
 
 double btawl_pdf_from_geom(double t, const BtawlGeom& g, double p1,
-                                  double p2, int launch, bool posdrift);
+                                  double p2, int launch, bool posdrift,
+                                  double delta = 0.0);
 
 double btawl_log_launch_pdf(double w, double p1, double p2, int launch,
-                                   bool posdrift);
+                                   bool posdrift, double delta = 0.0);
 
 bool btawl_natural_pdf_accepted(double t, const BtawlGeom& g,
                                         double p1, double p2, int launch,
-                                        bool posdrift, double p_nat);
+                                        bool posdrift, double p_nat,
+                                        double delta = 0.0);
 
 double btawl_log_pdf_from_geom(double t, const BtawlGeom& g, double p1,
-                                      double p2, int launch, bool posdrift);
+                                      double p2, int launch, bool posdrift,
+                                      double delta = 0.0);
 
 double btawl_log_cdf(double t, double A, double b, double p1, double p2,
-                            double k, double tau, int launch, bool posdrift);
+                            double k, double tau, int launch, bool posdrift,
+                            double delta = 0.0);
 double btawl_log_surv(double t, double A, double b, double p1, double p2,
-                             double k, double tau, int launch, bool posdrift);
+                             double k, double tau, int launch, bool posdrift,
+                             double delta = 0.0);
 double btawl_log_pdf(double t, double A, double b, double p1, double p2,
-                            double k, double tau, int launch, bool posdrift);
+                            double k, double tau, int launch, bool posdrift,
+                            double delta = 0.0);
 double btawl_cdf_log(double t, double A, double b, double p1, double p2,
-                            double k, double tau, int launch, bool posdrift);
+                            double k, double tau, int launch, bool posdrift,
+                            double delta = 0.0);
 double btawl_pdf_log(double t, double A, double b, double p1, double p2,
-                            double k, double tau, int launch, bool posdrift);
+                            double k, double tau, int launch, bool posdrift,
+                            double delta = 0.0);
 
 double btawl_cdf_chart(double t, double A, double b, double p1,
                               double p2, double k, double clear, int launch,
                               bool posdrift, bool endpoint_chart,
-                              double tau_hint = R_NaN);
+                              double tau_hint = R_NaN, double delta = 0.0);
 double btawl_pdf_chart(double t, double A, double b, double p1,
                               double p2, double k, double clear, int launch,
                               bool posdrift, bool endpoint_chart,
-                              double tau_hint = R_NaN);
+                              double tau_hint = R_NaN, double delta = 0.0);
 double btawl_log_surv_chart(double t, double A, double b, double p1,
                                    double p2, double k, double clear,
                                    int launch, bool posdrift,
                                    bool endpoint_chart,
-                                   double tau_hint = R_NaN);
+                                   double tau_hint = R_NaN,
+                                   double delta = 0.0);
 double btawl_log_pdf_chart(double t, double A, double b, double p1,
                                   double p2, double k, double clear,
                                   int launch, bool posdrift,
                                   bool endpoint_chart,
-                                  double tau_hint = R_NaN);
+                                  double tau_hint = R_NaN,
+                                  double delta = 0.0);
 
 // ---------------------------------------------------------------------------
 // Sustained + transient local-race extension.
@@ -240,34 +260,37 @@ double btawl_hs(double t, double k, double tau);
 double btawl_hs_p(double t, double k, double tau);
 
 double btawl_sustained_cdf(double t, double A, double b, double p1, double p2,
-                                  double k, double tau_s, int launch, bool posdrift);
+                                  double k, double tau_s, int launch, bool posdrift,
+                                  double delta = 0.0);
 
 double btawl_sustained_pdf(double t, double A, double b, double p1, double p2,
-                                  double k, double tau_s, int launch, bool posdrift);
+                                  double k, double tau_s, int launch, bool posdrift,
+                                  double delta = 0.0);
 
 double btawl_local_race_cdf(double t, double A, double b, double p1, double p2,
                             double k, double tau_s, double tau_t, double pi,
-                            int launch, bool posdrift);
+                            int launch, bool posdrift, double delta = 0.0);
 
 double btawl_local_race_pdf(double t, double A, double b, double p1, double p2,
                             double k, double tau_s, double tau_t, double pi,
-                            int launch, bool posdrift);
+                            int launch, bool posdrift, double delta = 0.0);
 
 double btawl_local_race_cdf_log(double t, double A, double b, double p1, double p2,
                                 double k, double tau_s, double tau_t, double pi,
-                                int launch, bool posdrift);
+                                int launch, bool posdrift, double delta = 0.0);
 
 double btawl_local_race_pdf_log(double t, double A, double b, double p1, double p2,
                                 double k, double tau_s, double tau_t, double pi,
-                                int launch, bool posdrift);
+                                int launch, bool posdrift, double delta = 0.0);
 
 double btawl_sustained_log_surv(double t, double A, double b, double p1, double p2,
-                                       double k, double tau_s, int launch, bool posdrift);
+                                       double k, double tau_s, int launch, bool posdrift,
+                                       double delta = 0.0);
 
 double btawl_local_race_log_surv(double t, double A, double b, double p1,
                                  double p2, double k, double tau_s,
                                  double tau_t, double pi, int launch,
-                                 bool posdrift);
+                                 bool posdrift, double delta = 0.0);
 
 // BTAwL adapter entry points used by particle_ll.cpp.
 double dbtawl_transient_scalar(double t, const double* par, void* ctx_);

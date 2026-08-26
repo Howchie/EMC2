@@ -94,10 +94,10 @@ rSOFTMAX <- function(lR,pars,p_types=c("x","beta"))
 #' @section Parameters:
 #' The softmax model uses the following parameter matrix:
 #'
-#' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Interpretation** |
-#' |---|---|---|---|---|
-#' | *x* | identity | \[-Inf, Inf\] | 0 | Continuous latent score for each response option. |
-#' | *beta* | log | \[0, Inf\] | log(1) | Inverse temperature; larger values make choices more deterministic. |
+#' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Mapping** | **Interpretation** |
+#' |---|---|---|---|---|---|
+#' | *x* | identity | \[-Inf, Inf\] | 0 | | Continuous latent score for each response option. |
+#' | *beta* | log | \[0, Inf\] | log(1) | | Inverse temperature; larger values make choices more deterministic. |
 #'
 #' Returned sampled data consist of a response factor \code{R} and an
 #' \code{rt} column always set to \code{NA}.

@@ -21,20 +21,18 @@ Model files are almost exclusively used in \code{design()}.
 Default values are used for all parameters that are not explicitly listed in the \code{formula}
 argument of \code{design()}.They can also be accessed with \code{LBA()$p_types}.\tabular{llllll}{
    \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Mapping} \tab \strong{Interpretation} \cr
-   \emph{v} \tab - \tab [-Inf, Inf] \tab 1 \tab  \tab Mean evidence-accumulation rate \cr
+   \emph{v} \tab identity \tab [-Inf, Inf] \tab 1 \tab  \tab Mean evidence-accumulation rate \cr
    \emph{A} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Between-trial variation (range) in start point \cr
    \emph{B} \tab log \tab [0, Inf] \tab log(1) \tab \emph{b} = \emph{B}+\emph{A} \tab Distance from \emph{A} to \emph{b} (response threshold) \cr
    \emph{t0} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Non-decision time \cr
    \emph{sv} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Between-trial variation in evidence-accumulation rate \cr
-   \emph{pContaminant} \tab probit \tab [0, 1] \tab qnorm(0) \tab  \tab Optional \emph{omission} contaminant probability: mass at \code{rt = Inf} only, handled by the data pipeline \cr
-   \emph{pGuess} \tab probit \tab [0, 1] \tab qnorm(0) \tab  \tab Optional uniform \emph{guess} (outlier) probability, mixed into observed RT densities over the guess window \cr
 }
 
 
 All core LBA parameters are estimated on the log scale, except for the drift
-rate which is estimated on the real line. \code{pContaminant} is estimated on the
-probit scale and is generic nuisance infrastructure rather than an LBA
-accumulator parameter.
+rate which is estimated on the real line. Optional fitting parameters
+\code{pContaminant} and \code{pGuess} are estimated on the probit scale; they are the
+omission and uniform-outlier probabilities, respectively.
 
 Conventionally, \code{sv} is fixed to 1 to satisfy scaling constraints.
 

@@ -5,7 +5,7 @@
 \title{The Ballistic Accumulator with Drive Decay (BAwD)}
 \usage{
 BAwD(
-  drift_distribution = c("lognormal", "normal"),
+  drift_distribution = c("lognormal", "normal", "splitlognormal"),
   posdrift = TRUE,
   gamma = 0,
   rho = Inf
@@ -13,16 +13,13 @@ BAwD(
 }
 \arguments{
 \item{drift_distribution}{Distribution of trialwise launch strength:
-\code{"lognormal"} (default) or \code{"normal"}.}
+\code{"lognormal"} (default), \code{"splitlognormal"}, or \code{"normal"}.}
 
 \item{posdrift}{Logical. If \code{TRUE} (default), truncate normal launch
 strengths to be positive; if \code{FALSE}, append \code{IO} to the compiled model
 name. Only meaningful for normal launches.}
 
-\item{gamma}{Fixed clearance decay exponent: \code{0} (default), \code{1/2}, \code{2/3},
-\code{3/4}, or \code{1}. A model option, never an estimated parameter; the
-corresponding suffix appended to the compiled model name is \code{""},
-\code{"_GAM12"}, \code{"_GAM23"}, \code{"_GAM34"}, and \code{"_GAM100"} respectively.}
+\item{gamma}{Fixed clearance exponent: \code{0}, \code{1/2}, \code{2/3}, \code{3/4}, or \code{1}.}
 
 \item{rho}{Fixed base-kernel shape: \code{1}, \code{2}, \code{4}, or \code{Inf} (default).
 \code{Inf} is the exponential kernel and has no rho suffix; finite values
@@ -56,10 +53,17 @@ The start point is static and weak drive can produce an omission. The
 fixed \code{rho} and \code{gamma} choices are model options, never estimated
 parameters, so they do not appear in \code{p_types}.
 
-With \code{drift_distribution = "lognormal"} (the default) \verb{log V ~ N(mu, sigma^2)}.\tabular{llllll}{
+With \code{drift_distribution = "lognormal"} (the default) \verb{log V ~ N(mu, sigma^2)}.
+With \code{drift_distribution = "splitlognormal"}, \verb{Y = log V} has the continuous
+split-normal density with left and right widths
+\verb{sigma_L = sigma exp(delta/2)} and
+\verb{sigma_R = sigma exp(-delta/2)}.  Here \code{delta} is an unbounded real
+log-width ratio and \code{mu} is the median of \code{Y}; the split point \code{c} is derived
+from these parameters so that \code{P(Y <= mu) = 1/2} exactly.  Setting \code{delta = 0}
+reduces exactly to the ordinary lognormal launch.\tabular{llllll}{
    \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Mapping} \tab \strong{Interpretation} \cr
-   \emph{mu} \tab identity \tab [-Inf, Inf] \tab 0 \tab  \tab Mean of the log launch strength. \cr
-   \emph{sigma} \tab log \tab [0, Inf] \tab log(1) \tab  \tab SD of log launch strength. \cr
+   \emph{mu} \tab identity \tab [-Inf, Inf] \tab 0 \tab  \tab Median log launch location. \cr
+   \emph{sigma} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Geometric-mean width of log launch. \cr
    \emph{B} \tab log \tab [0, Inf] \tab log(1) \tab \emph{b} = \emph{B} + \emph{A} \tab Threshold distance. \cr
    \emph{A} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Start-point range. \cr
    \emph{t0} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Non-decision time. \cr
@@ -68,11 +72,14 @@ With \code{drift_distribution = "lognormal"} (the default) \verb{log V ~ N(mu, s
 }
 
 
-With \code{drift_distribution = "normal"}, \code{mu} and \code{sigma} are replaced by
-\code{v} and \code{sv}; the launch is truncated positive when \code{posdrift = TRUE}.
-
 The trial-dependent transform derives \code{Tmax} from \code{A}, \code{b}, \code{k}, and
 \code{ell}, and also reports \code{rt_max} after adding \code{t0}.
+Optional fitting parameters: \code{pContaminant} is the omission probability and
+\code{pGuess} is the uniform-outlier probability.
+For \code{drift_distribution = "normal"}, use the \code{v} and \code{sv} rows instead of
+\code{mu} and \code{sigma}; the normal launch is truncated at zero by default. The
+split-lognormal option adds the optional identity-scale \code{delta} parameter
+(default \code{0}).
 }
 \examples{
 ADmat <- matrix(c(-1/2, 1/2), ncol = 1, dimnames = list(NULL, "d"))

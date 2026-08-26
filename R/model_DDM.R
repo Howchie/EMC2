@@ -76,9 +76,9 @@ pDDM <- function(rt,R,pars,precision=5e-3)
 #' Default values are used for all parameters that are not explicitly listed in the `formula`
 #' argument of `design()`.They can also be accessed with `DDM()$p_types`.
 #'
-#' | **Parameter** | **Transform** | **Natural scale** | **Default**   | **Mapping**                    | **Interpretation**                                            |
-#' |-----------|-----------|---------------|-----------|----------------------------|-----------------------------------------------------------|
-#' | *v*       | -         | \[-Inf, Inf\]     | 1         |                            | Mean evidence-accumulation rate (drift rate)              |
+#' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Mapping** | **Interpretation** |
+#' |---|---|---|---|---|---|
+#' | *v*       | identity  | \[-Inf, Inf\]     | 1         |                            | Mean evidence-accumulation rate (drift rate)              |
 #' | *a*       | log       | \[0, Inf\]        | log(1)    |                            | Boundary separation                                       |
 #' | *t0*      | log       | \[0, Inf\]        | log(0)    |                            | Non-decision time                                         |
 #' | *s*       | log       | \[0, Inf\]        | log(1)    |                            | Within-trial standard deviation of drift rate            |
@@ -94,6 +94,9 @@ pDDM <- function(rt,R,pars,precision=5e-3)
 #' `sz` used by the diffusion kernel.
 #'
 #' `Z` is estimated as the ratio of bias to one boundary where 0.5 means no bias.
+#'
+#' Optional fitting parameters: `pContaminant` is the omission probability and
+#' `pGuess` is the uniform-outlier probability.
 #'
 #' Conventionally, `s` is fixed to 1 to satisfy scaling constraints.
 #'
@@ -164,16 +167,16 @@ DDM <- function(){
 #' not reaching the go boundary before `TIMEOUT`,
 #' `1 - P(RT <= TIMEOUT | Rgo)`, for trials recorded as nogo.
 #'
-#' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Interpretation** |
-#' |---|---|---|---|---|
-#' | *v* | identity | \[-Inf, Inf\] | 1 | Mean drift rate. |
-#' | *a* | log | \[0, Inf\] | log(1) | Boundary separation. |
-#' | *t0* | log | \[0, Inf\] | log(0) | Non-decision time. |
-#' | *s* | log | \[0, Inf\] | log(1) | Within-trial diffusion scale; conventionally fixed to 1. |
-#' | *Z* | probit | \[0, 1\] | qnorm(.5) | Relative starting point; .5 is unbiased. |
-#' | *SZ* | probit | \[0, 1\] | qnorm(0) | Relative between-trial starting-point range. |
-#' | *sv* | log | \[0, Inf\] | log(0) | Between-trial SD of drift rate. |
-#' | *st0* | log | \[0, Inf\] | log(0) | Between-trial range of non-decision time. |
+#' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Mapping** | **Interpretation** |
+#' |---|---|---|---|---|---|
+#' | *v* | identity | \[-Inf, Inf\] | 1 | | Mean drift rate. |
+#' | *a* | log | \[0, Inf\] | log(1) | | Boundary separation. |
+#' | *t0* | log | \[0, Inf\] | log(0) | | Non-decision time. |
+#' | *s* | log | \[0, Inf\] | log(1) | | Within-trial diffusion scale; conventionally fixed to 1. |
+#' | *Z* | probit | \[0, 1\] | qnorm(.5) | | Relative starting point; .5 is unbiased. |
+#' | *SZ* | probit | \[0, 1\] | qnorm(0) | | Relative between-trial starting-point range. |
+#' | *sv* | log | \[0, Inf\] | log(0) | | Between-trial SD of drift rate. |
+#' | *st0* | log | \[0, Inf\] | log(0) | | Between-trial range of non-decision time. |
 #'
 #' The internal DDM parameters are `z = Z * a` and
 #' `sz = 2 * SZ * min(Z, 1 - Z) * a`. The `Rnogo` function must return the
@@ -181,6 +184,8 @@ DDM <- function(){
 #' corresponding go level. Both functions, together with `TIMEOUT`, are
 #' supplied through the `functions` argument of [design()]. Their outputs must
 #' have the same response-factor levels as the data.
+#' As in [DDM()], optional fitting parameters are `pContaminant`, the omission
+#' probability, and `pGuess`, the uniform-outlier probability.
 #'
 #' The model used is described in the following paper, with the addition of
 #' modeling the TIMEOUT (which is considered but not used in this paper).

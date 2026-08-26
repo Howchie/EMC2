@@ -22,16 +22,16 @@ The DDM parameterization is the same as \code{\link[=DDM]{DDM()}}, with one addi
 trial-dependent parameter matrix: \code{TIMEOUT} and the numeric code of \code{Rnogo}
 are copied from the augmented data. The likelihood uses the probability of
 not reaching the go boundary before \code{TIMEOUT},
-\code{1 - P(RT <= TIMEOUT | Rgo)}, for trials recorded as nogo.\tabular{lllll}{
-   \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Interpretation} \cr
-   \emph{v} \tab identity \tab [-Inf, Inf] \tab 1 \tab Mean drift rate. \cr
-   \emph{a} \tab log \tab [0, Inf] \tab log(1) \tab Boundary separation. \cr
-   \emph{t0} \tab log \tab [0, Inf] \tab log(0) \tab Non-decision time. \cr
-   \emph{s} \tab log \tab [0, Inf] \tab log(1) \tab Within-trial diffusion scale; conventionally fixed to 1. \cr
-   \emph{Z} \tab probit \tab [0, 1] \tab qnorm(.5) \tab Relative starting point; .5 is unbiased. \cr
-   \emph{SZ} \tab probit \tab [0, 1] \tab qnorm(0) \tab Relative between-trial starting-point range. \cr
-   \emph{sv} \tab log \tab [0, Inf] \tab log(0) \tab Between-trial SD of drift rate. \cr
-   \emph{st0} \tab log \tab [0, Inf] \tab log(0) \tab Between-trial range of non-decision time. \cr
+\code{1 - P(RT <= TIMEOUT | Rgo)}, for trials recorded as nogo.\tabular{llllll}{
+   \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Mapping} \tab \strong{Interpretation} \cr
+   \emph{v} \tab identity \tab [-Inf, Inf] \tab 1 \tab  \tab Mean drift rate. \cr
+   \emph{a} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Boundary separation. \cr
+   \emph{t0} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Non-decision time. \cr
+   \emph{s} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Within-trial diffusion scale; conventionally fixed to 1. \cr
+   \emph{Z} \tab probit \tab [0, 1] \tab qnorm(.5) \tab  \tab Relative starting point; .5 is unbiased. \cr
+   \emph{SZ} \tab probit \tab [0, 1] \tab qnorm(0) \tab  \tab Relative between-trial starting-point range. \cr
+   \emph{sv} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Between-trial SD of drift rate. \cr
+   \emph{st0} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Between-trial range of non-decision time. \cr
 }
 
 
@@ -41,6 +41,8 @@ response-factor level that denotes withholding, and \code{Rgo} must return the
 corresponding go level. Both functions, together with \code{TIMEOUT}, are
 supplied through the \code{functions} argument of \code{\link[=design]{design()}}. Their outputs must
 have the same response-factor levels as the data.
+As in \code{\link[=DDM]{DDM()}}, optional fitting parameters are \code{pContaminant}, the omission
+probability, and \code{pGuess}, the uniform-outlier probability.
 
 The model used is described in the following paper, with the addition of
 modeling the TIMEOUT (which is considered but not used in this paper).

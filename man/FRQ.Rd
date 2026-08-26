@@ -32,9 +32,6 @@ the \code{formula} argument of \code{design()}. They can also be accessed with
    \emph{h} \tab probit \tab [0, 1] \tab qnorm(0.95) \tab  \tab Probability that the accumulator ever responds \cr
    \emph{tau} \tab log \tab [0, Inf] \tab log(0.5) \tab  \tab Median decision time on the trials where it does respond \cr
    \emph{t0} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Non-decision time \cr
-   \emph{delta} \tab log \tab [0, 6] \tab log(0) \tab  \tab Between-trial variability in threshold; 0 (the default) turns it off \cr
-   \emph{pContaminant} \tab probit \tab [0, 1] \tab qnorm(0) \tab  \tab Optional \emph{omission} contaminant probability: mass at \code{rt = Inf} only, handled by the data pipeline \cr
-   \emph{pGuess} \tab probit \tab [0, 1] \tab qnorm(0) \tab  \tab Optional uniform \emph{guess} (outlier) probability, mixed into observed RT densities over the guess window \cr
 }
 
 
@@ -85,10 +82,10 @@ A race produces an omission only when every accumulator in it fails, with
 probability \code{prod(1 - h)} over accumulators, so an appreciable failure rate
 per accumulator is compatible with very few observed omissions: two
 accumulators at \code{h = 0.98} give a race-level omission rate of 0.0004.
-\code{pContaminant} is offered for consistency with the other models but is
-redundant here unless an omission mechanism \emph{outside} the decision process
-is wanted. With a single accumulator and \code{beta} fixed at 1 the two are not
-identified at all.
+Optional fitting parameters are \code{pContaminant}, the omission probability,
+and \code{pGuess}, the uniform-outlier probability. The optional
+threshold-variability \code{delta} parameter is log/exp transformed with default
+\code{log(0)}.
 
 Because the FRQ is a race model, it has one accumulator per response
 option. EMC2 automatically constructs a factor representing the

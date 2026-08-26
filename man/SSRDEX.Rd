@@ -41,7 +41,7 @@ argument of \code{design()}.They can also be accessed with \code{SSRDEX()$p_type
    \emph{tauS} \tab log \tab [0, Inf] \tab log(.05) \tab  \tab Mean (inverse rate) of exponential component of ex-Gaussian stop finish time distribution \cr
    \emph{tf} \tab probit \tab [0, 1] \tab qnorm(0) \tab  \tab Attentional lapse rate for stop process ("trigger failure") \cr
    \emph{gf} \tab probit \tab [0, 1] \tab qnorm(0) \tab  \tab Attentional lapse rate for go process ("go failure") \cr
-   \emph{exgS_lb} \tab - \tab [-Inf, Inf] \tab .05 \tab  \tab Lower bound of ex-Gaussian stop finish time distribution \cr
+   \emph{exgS_lb} \tab identity \tab [-Inf, Inf] \tab .05 \tab  \tab Lower bound of ex-Gaussian stop finish time distribution. \cr
 }
 
 

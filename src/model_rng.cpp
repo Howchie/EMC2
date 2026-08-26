@@ -41,6 +41,21 @@ std::unordered_map<std::string, int> col_index_map(const Rcpp::NumericMatrix& pa
   return m;
 }
 
+// Draw V from the continuous split-lognormal launch (launch == 2).  At
+// delta == 0 this deliberately keeps the exact rlnorm path so the split
+// variant reproduces the ordinary lognormal simulator when its extra
+// parameter is zero.  Distributionally matches R's .bawd_split_rlnorm
+// (R/model_BAwD.R:46-62).
+inline double rsplit_lognormal_r(double mu, double sigma, double delta) {
+  if (delta == 0.0) return std::exp(mu + sigma * R::norm_rand());
+  split_lognormal_shape h;
+  if (!split_lognormal_shape_params(mu, sigma, delta, h)) return R_NaN;
+  const bool left = R::unif_rand() < h.a;
+  const double z = std::fabs(R::norm_rand());
+  const double y = left ? h.c - z * h.sL : h.c + z * h.sR;
+  return std::exp(y);
+}
+
 }  // namespace
 
 // Shared-capacity LogicalRules simulator.  This is the C++ counterpart of
@@ -347,10 +362,14 @@ static Rcpp::List rbawl_cpp_impl(Rcpp::NumericMatrix pars, Rcpp::CharacterVector
   const auto ci = col_index_map(pars);
   // The lognormal launch strength keeps BAwD's naming convention: (mu, sigma)
   // occupy the (v, sv) slots and every downstream step is identical.
-  const bool logn = (launch == 1);
+  const bool logn = (launch == 1 || launch == 2);
+  const bool split = (launch == 2);
+  if (split && !ci.count("delta"))
+    Rcpp::stop("rbawl_cpp: the split-lognormal launch requires a 'delta' column.");
   const int iv = ci.at(logn ? "mu" : "v"), isv = ci.at(logn ? "sigma" : "sv"),
             ib = ci.at("b"), iA = ci.at("A"), it0 = ci.at("t0"),
             ik = ci.at("k"), ilg = ci.at("lambda_g"), ilk = ci.at("lambda_k");
+  const int idelta = split ? ci.at("delta") : -1;
   const int iomega = ci.count("omega") ? ci.at("omega") : -1;
   const double eps = 1e-10;
 
@@ -384,8 +403,9 @@ static Rcpp::List rbawl_cpp_impl(Rcpp::NumericMatrix pars, Rcpp::CharacterVector
     const double lo = posdrift ? 0.0 : R_NegInf;
     const double drift = drift_override
       ? (*drift_override)[static_cast<size_t>(r)]
-      : (logn ? R::rlnorm(pars(r, iv), pars(r, isv))
-              : rtnorm_lower_r(pars(r, iv), pars(r, isv), lo));
+      : (split ? rsplit_lognormal_r(pars(r, iv), pars(r, isv), pars(r, idelta))
+               : (logn ? R::rlnorm(pars(r, iv), pars(r, isv))
+                       : rtnorm_lower_r(pars(r, iv), pars(r, isv), lo)));
     // A lognormal launch strength is positive by construction.
     if (!logn && posdrift && !(drift > 0.0)) {
       dt[r] = R_PosInf;
@@ -513,9 +533,12 @@ Rcpp::List rbawd_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
   if (ok.size() != n_rows) Rcpp::stop("rbawd_cpp: ok has the wrong length.");
   const int n_trials = n_rows / n_acc;
   const auto ci = col_index_map(pars);
-  const bool logn = (launch == 1);
+  const bool logn = (launch == 1 || launch == 2);
+  const bool split = (launch == 2);
   if (logn && !(ci.count("mu") && ci.count("sigma")))
     Rcpp::stop("rbawd_cpp: the lognormal launch requires columns 'mu' and 'sigma'.");
+  if (split && !ci.count("delta"))
+    Rcpp::stop("rbawd_cpp: the split-lognormal launch requires a 'delta' column.");
   if (!logn && !(ci.count("v") && ci.count("sv")))
     Rcpp::stop("rbawd_cpp: the normal launch requires columns 'v' and 'sv'.");
   // Lookup is by NAME, not by position: `b` is required, and passing `B`
@@ -524,6 +547,7 @@ Rcpp::List rbawd_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
     if (!ci.count(nm)) Rcpp::stop("rbawd_cpp: missing parameter column '%s'.", nm);
   const int ip1 = logn ? ci.at("mu") : ci.at("v");
   const int ip2 = logn ? ci.at("sigma") : ci.at("sv");
+  const int idelta = split ? ci.at("delta") : -1;
   const int ib = ci.at("b"), iA = ci.at("A"), it0 = ci.at("t0"),
             ik = ci.at("k"), iell = ci.at("ell");
 
@@ -534,9 +558,11 @@ Rcpp::List rbawd_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
     t0col[r] = pars(r, it0);
     ok_row[r] = ok[r] ? 1 : 0;
     if (!ok[r]) continue;
-    const double V = logn
-      ? std::exp(pars(r, ip1) + pars(r, ip2) * R::norm_rand())
-      : rtnorm_lower_r(pars(r, ip1), pars(r, ip2), posdrift ? 0.0 : R_NegInf);
+    const double V = split
+      ? rsplit_lognormal_r(pars(r, ip1), pars(r, ip2), pars(r, idelta))
+      : (logn
+          ? std::exp(pars(r, ip1) + pars(r, ip2) * R::norm_rand())
+          : rtnorm_lower_r(pars(r, ip1), pars(r, ip2), posdrift ? 0.0 : R_NegInf));
     const double z = pars(r, iA) * R::unif_rand();
     const double u = bawd_hit_time_r(V, pars(r, ib) - z, pars(r, ik),
                                      pars(r, iell), gamma, rho);
@@ -567,9 +593,12 @@ Rcpp::List rbawf_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
   if (ok.size() != n_rows) Rcpp::stop("rbawf_cpp: ok has the wrong length.");
   const int n_trials = n_rows / n_acc;
   const auto ci = col_index_map(pars);
-  const bool logn = (launch == 1);
+  const bool logn = (launch == 1 || launch == 2);
+  const bool split = (launch == 2);
   if (logn && !(ci.count("mu") && ci.count("sigma")))
     Rcpp::stop("rbawf_cpp: the lognormal launch requires columns 'mu' and 'sigma'.");
+  if (split && !ci.count("delta"))
+    Rcpp::stop("rbawf_cpp: the split-lognormal launch requires a 'delta' column.");
   if (!logn && !(ci.count("v") && ci.count("sv")))
     Rcpp::stop("rbawf_cpp: the normal launch requires columns 'v' and 'sv'.");
   // Lookup is by NAME, not by position: `b` is required, and passing `B`
@@ -578,6 +607,7 @@ Rcpp::List rbawf_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
     if (!ci.count(nm)) Rcpp::stop("rbawf_cpp: missing parameter column '%s'.", nm);
   const int ip1 = logn ? ci.at("mu") : ci.at("v");
   const int ip2 = logn ? ci.at("sigma") : ci.at("sv");
+  const int idelta = split ? ci.at("delta") : -1;
   const int ib = ci.at("b"), iA = ci.at("A"), it0 = ci.at("t0"),
             ik = ci.at("k");
 
@@ -588,9 +618,11 @@ Rcpp::List rbawf_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
     t0col[r] = pars(r, it0);
     ok_row[r] = ok[r] ? 1 : 0;
     if (!ok[r]) continue;
-    const double V = logn
-      ? std::exp(pars(r, ip1) + pars(r, ip2) * R::norm_rand())
-      : rtnorm_lower_r(pars(r, ip1), pars(r, ip2), posdrift ? 0.0 : R_NegInf);
+    const double V = split
+      ? rsplit_lognormal_r(pars(r, ip1), pars(r, ip2), pars(r, idelta))
+      : (logn
+          ? std::exp(pars(r, ip1) + pars(r, ip2) * R::norm_rand())
+          : rtnorm_lower_r(pars(r, ip1), pars(r, ip2), posdrift ? 0.0 : R_NegInf));
     const double z = pars(r, iA) * R::unif_rand();
     // b and z are passed separately: the fading multiplies the start point.
     const double u = bawf_hit_time_r(V, pars(r, ib), z, pars(r, ik), rho);
@@ -616,9 +648,12 @@ Rcpp::List rbawr_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
   if (ok.size() != n_rows) Rcpp::stop("rbawr_cpp: ok has the wrong length.");
   const int n_trials = n_rows / n_acc;
   const auto ci = col_index_map(pars);
-  const bool logn = (launch == 1);
+  const bool logn = (launch == 1 || launch == 2);
+  const bool split = (launch == 2);
   if (logn && !(ci.count("mu") && ci.count("sigma")))
     Rcpp::stop("rbawr_cpp: the lognormal launch requires columns 'mu' and 'sigma'.");
+  if (split && !ci.count("delta"))
+    Rcpp::stop("rbawr_cpp: the split-lognormal launch requires a 'delta' column.");
   if (!logn && !(ci.count("v") && ci.count("sv")))
     Rcpp::stop("rbawr_cpp: the normal launch requires columns 'v' and 'sv'.");
   // Lookup is by NAME, not by position: `b` is required, and passing `B`
@@ -627,6 +662,7 @@ Rcpp::List rbawr_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
     if (!ci.count(nm)) Rcpp::stop("rbawr_cpp: missing parameter column '%s'.", nm);
   const int ip1 = logn ? ci.at("mu") : ci.at("v");
   const int ip2 = logn ? ci.at("sigma") : ci.at("sv");
+  const int idelta = split ? ci.at("delta") : -1;
   const int ib = ci.at("b"), iA = ci.at("A"), it0 = ci.at("t0"),
             ika = ci.at("kappa"), ipw = ci.at("p");
 
@@ -637,9 +673,11 @@ Rcpp::List rbawr_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
     t0col[r] = pars(r, it0);
     ok_row[r] = ok[r] ? 1 : 0;
     if (!ok[r]) continue;
-    const double V = logn
-      ? std::exp(pars(r, ip1) + pars(r, ip2) * R::norm_rand())
-      : rtnorm_lower_r(pars(r, ip1), pars(r, ip2), posdrift ? 0.0 : R_NegInf);
+    const double V = split
+      ? rsplit_lognormal_r(pars(r, ip1), pars(r, ip2), pars(r, idelta))
+      : (logn
+          ? std::exp(pars(r, ip1) + pars(r, ip2) * R::norm_rand())
+          : rtnorm_lower_r(pars(r, ip1), pars(r, ip2), posdrift ? 0.0 : R_NegInf));
     const double z = pars(r, iA) * R::unif_rand();
     const double u = bawr_hit_time_r(V, pars(r, ib) - z, pars(r, ika),
                                      pars(r, ipw));
@@ -665,15 +703,19 @@ Rcpp::List rbawdp_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
   if (ok.size() != n_rows) Rcpp::stop("rbawdp_cpp: ok has the wrong length.");
   const int n_trials = n_rows / n_acc;
   const auto ci = col_index_map(pars);
-  const bool logn = (launch == 1);
+  const bool logn = (launch == 1 || launch == 2);
+  const bool split = (launch == 2);
   if (logn && !(ci.count("mu") && ci.count("sigma")))
     Rcpp::stop("rbawdp_cpp: the lognormal launch requires columns 'mu' and 'sigma'.");
+  if (split && !ci.count("delta"))
+    Rcpp::stop("rbawdp_cpp: the split-lognormal launch requires a 'delta' column.");
   if (!logn && !(ci.count("v") && ci.count("sv")))
     Rcpp::stop("rbawdp_cpp: the normal launch requires columns 'v' and 'sv'.");
   for (const char* nm : {"b", "A", "t0", "k", "lambda"})
     if (!ci.count(nm)) Rcpp::stop("rbawdp_cpp: missing parameter column '%s'.", nm);
   const int ip1 = logn ? ci.at("mu") : ci.at("v");
   const int ip2 = logn ? ci.at("sigma") : ci.at("sv");
+  const int idelta = split ? ci.at("delta") : -1;
   const int ib = ci.at("b"), iA = ci.at("A"), it0 = ci.at("t0");
   const int ik = ci.at("k"), ilambda = ci.at("lambda");
 
@@ -684,9 +726,11 @@ Rcpp::List rbawdp_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
     t0col[r] = pars(r, it0);
     ok_row[r] = ok[r] ? 1 : 0;
     if (!ok[r]) continue;
-    const double V = logn
-      ? std::exp(pars(r, ip1) + pars(r, ip2) * R::norm_rand())
-      : rtnorm_lower_r(pars(r, ip1), pars(r, ip2), posdrift ? 0.0 : R_NegInf);
+    const double V = split
+      ? rsplit_lognormal_r(pars(r, ip1), pars(r, ip2), pars(r, idelta))
+      : (logn
+          ? std::exp(pars(r, ip1) + pars(r, ip2) * R::norm_rand())
+          : rtnorm_lower_r(pars(r, ip1), pars(r, ip2), posdrift ? 0.0 : R_NegInf));
     const double z = pars(r, iA) * R::unif_rand();
     const double u = bawdp_hit_time_r(V, pars(r, ib) - z, pars(r, ik),
                                       pars(r, ilambda));

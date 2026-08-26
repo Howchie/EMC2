@@ -4,14 +4,17 @@
 \alias{BAwDp}
 \title{The Ballistic Accumulator with a Proportional-Clearance Drive (BAwDp)}
 \usage{
-BAwDp(drift_distribution = c("lognormal", "normal"), posdrift = TRUE)
+BAwDp(
+  drift_distribution = c("lognormal", "normal", "splitlognormal"),
+  posdrift = TRUE
+)
 }
 \arguments{
-\item{drift_distribution}{Distribution of the launch strength: \code{"lognormal"}
-(default), or \code{"normal"}.}
+\item{drift_distribution}{Distribution of the launch strength:
+\code{"lognormal"} (default), \code{"splitlognormal"}, or \code{"normal"}.}
 
 \item{posdrift}{Logical; truncate the normal launch at zero when \code{TRUE}.
-It has no effect for the lognormal launch.}
+It has no effect for the positive lognormal and split-lognormal launches.}
 }
 \value{
 A model list defining the BAwDp race model.
@@ -36,10 +39,15 @@ A favourable start point consequently changes the omission probability.
 All PDF/CDF evaluations use closed-form LBA primitives; no quadrature is
 used.
 
-With \code{drift_distribution = "lognormal"} (the default) \verb{log V ~ N(mu, sigma^2)}.\tabular{llllll}{
+With \code{drift_distribution = "lognormal"} (the default) \verb{log V ~ N(mu, sigma^2)}.
+With \code{drift_distribution = "splitlognormal"}, \verb{Y = log V} is continuous
+split normal with \verb{sigma_L = sigma exp(delta/2)} and
+\verb{sigma_R = sigma exp(-delta/2)}; \code{mu} is its exact median and \code{delta}
+is an unbounded log-width ratio.  The derived split point is chosen so that
+\code{P(Y <= mu) = 1/2}.  \code{delta = 0} is exactly the ordinary lognormal launch.\tabular{llllll}{
    \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Mapping} \tab \strong{Interpretation} \cr
-   \emph{mu} \tab identity \tab [-Inf, Inf] \tab 0 \tab  \tab Mean of the log launch strength. \cr
-   \emph{sigma} \tab log \tab [0, Inf] \tab log(1) \tab  \tab SD of log launch strength. \cr
+   \emph{mu} \tab identity \tab [-Inf, Inf] \tab 0 \tab  \tab Median log launch location. \cr
+   \emph{sigma} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Geometric-mean log width. \cr
    \emph{B} \tab log \tab [0, Inf] \tab log(1) \tab \emph{b} = \emph{B} + \emph{A} \tab Threshold distance. \cr
    \emph{A} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Start-point range. \cr
    \emph{t0} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Non-decision time. \cr
@@ -48,8 +56,10 @@ With \code{drift_distribution = "lognormal"} (the default) \verb{log V ~ N(mu, s
 }
 
 
-With \code{drift_distribution = "normal"}, \code{mu} and \code{sigma} are replaced by
-\code{v} and \code{sv}; the launch is truncated positive when \code{posdrift = TRUE}.
-The generic \code{pContaminant} and \code{pGuess} nuisance parameters are appended by
-the data pipeline when requested.
+For \code{drift_distribution = "normal"}, use \code{v} and \code{sv} instead of the
+lognormal launch rows; the normal launch is truncated at zero by default.
+The split-lognormal option adds the optional identity-scale \code{delta} parameter
+(default \code{0}).
+Optional fitting parameters: \code{pContaminant} is the omission probability and
+\code{pGuess} is the uniform-outlier probability.
 }

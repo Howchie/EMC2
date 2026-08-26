@@ -41,11 +41,20 @@ These seven parameters use exponential transforms. Their defaults are
 \code{log(1)} for \code{v}, \code{B}, \code{s}, and \code{tau}, and the boundary value \code{log(0)} for
 \code{A}, \code{t0}, and \code{sv}. The drift, start-point variability, diffusion scale,
 and \code{b = B + A} convention are otherwise identical to \code{\link[=RDMSWTN]{RDMSWTN()}}.
-The optional \code{pContaminant} (omission) and \code{pGuess} (uniform outlier)
-parameters are handled by the generic data pipeline. With
+Optional fitting parameters are \code{pContaminant}, the omission probability,
+and \code{pGuess}, the uniform-outlier probability. With
 \code{correlated = TRUE}, \code{rho} follows the same contract as \code{\link[=RDMSWTN]{RDMSWTN()}}:
 \code{correlate = "times"} couples exactly two active finishing-time marginals
 with a Gaussian copula (and under \code{posdrift = FALSE} additionally requires
 \code{sv = 0} on the correlated rows), while \code{correlate = "drifts"} correlates
-the between-trial drift draws and requires \code{sv > 0}.
+the between-trial drift draws and requires \code{sv > 0}.\tabular{llllll}{
+   \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Mapping} \tab \strong{Interpretation} \cr
+   \emph{v} \tab exp (identity for \code{posdrift = FALSE}) \tab [0, Inf] ([-Inf, Inf] for IO) \tab log(1) (1 for IO) \tab  \tab Mean between-trial drift rate. \cr
+   \emph{B} \tab exp \tab [0, Inf] \tab log(1) \tab \emph{b} = \emph{B} + \emph{A} \tab Baseline distance to the threshold. \cr
+   \emph{A} \tab exp \tab [0, Inf] \tab log(0) \tab  \tab Start-point/distance range. \cr
+   \emph{t0} \tab exp \tab [0, Inf] \tab log(0) \tab  \tab Non-decision time. \cr
+   \emph{s} \tab exp \tab [0, Inf] \tab log(1) \tab  \tab Within-trial diffusion SD. \cr
+   \emph{sv} \tab exp \tab [0, Inf] \tab log(0) \tab  \tab Between-trial SD of drift rate. \cr
+   \emph{tau} \tab exp \tab [0, Inf] \tab log(1) \tab  \tab Width of the finite decision-time support. \cr
+}
 }

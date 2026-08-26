@@ -86,21 +86,19 @@ rLBA <- function(lR, pars, p_types = c("v", "sv", "b", "A", "t0"),
 #' Default values are used for all parameters that are not explicitly listed in the `formula`
 #' argument of `design()`.They can also be accessed with `LBA()$p_types`.
 #'
-#' | **Parameter** | **Transform** | **Natural scale** | **Default**   | **Mapping**                    | **Interpretation**                                            |
-#' |-----------|-----------|---------------|-----------|----------------------------|-----------------------------------------------------------|
-#' | *v*       | -         | \[-Inf, Inf\] | 1         |                            | Mean evidence-accumulation rate                                              |
+#' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Mapping** | **Interpretation** |
+#' |---|---|---|---|---|---|
+#' | *v*       | identity  | \[-Inf, Inf\] | 1         |                            | Mean evidence-accumulation rate                                              |
 #' | *A*       | log       | \[0, Inf\]    | log(0)    |                            | Between-trial variation (range) in start point                     |
 #' | *B*       | log       | \[0, Inf\]    | log(1)    | *b* = *B*+*A*              | Distance from *A* to *b* (response threshold)                                       |
 #' | *t0*      | log       | \[0, Inf\]    | log(0)    |                            | Non-decision time                                         |
 #' | *sv*      | log       | \[0, Inf\]    | log(1)    |                            | Between-trial variation in evidence-accumulation rate                      |
-#' | *pContaminant* | probit | \[0, 1\] | qnorm(0) | | Optional *omission* contaminant probability: mass at `rt = Inf` only, handled by the data pipeline |
-#' | *pGuess* | probit | \[0, 1\] | qnorm(0) | | Optional uniform *guess* (outlier) probability, mixed into observed RT densities over the guess window |
 #'
 #'
 #' All core LBA parameters are estimated on the log scale, except for the drift
-#' rate which is estimated on the real line. `pContaminant` is estimated on the
-#' probit scale and is generic nuisance infrastructure rather than an LBA
-#' accumulator parameter.
+#' rate which is estimated on the real line. Optional fitting parameters
+#' `pContaminant` and `pGuess` are estimated on the probit scale; they are the
+#' omission and uniform-outlier probabilities, respectively.
 #'
 #' Conventionally, `sv` is fixed to 1 to satisfy scaling constraints.
 #'
@@ -231,12 +229,9 @@ LBA <- function(posdrift=TRUE){
 #' is a positive normal draw; with `posdrift = FALSE`, the untruncated normal
 #' is used and negative-drift accumulators can produce intrinsic omissions.
 #' All of the parameters above are trial-dependent after the design formulas
-#' have been evaluated. The capacity extension adds the following parameters:
-#'
-#' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Interpretation** |
-#' |---|---|---|---|---|
-#' | *kappa* | identity | \[-Inf, Inf\] | 0 | Additive mean capacity shift shared by both active targets in an `AB` trial. |
-#' | *tau* | log | \[0, Inf\] | log(0) | Between-trial SD of the shared additive drift shift in an `AB` trial. |
+#' have been evaluated. The optional capacity extension adds `kappa` on the
+#' identity scale (default `0`) and `tau` on the log scale (default `log(0)`).
+#' They are active when `capacity = TRUE`.
 #'
 #' With `capacity = TRUE`, an `AB` trial receives one latent `Z ~ N(0, 1)` and
 #' the target drift draws are
@@ -249,6 +244,7 @@ LBA <- function(posdrift=TRUE){
 #' logical-rules likelihood exactly. `kappa` and `tau` must be shared by the
 #' `A` and `B` rows within a trial. In positive-drift mode, the active target
 #' draws are conditioned jointly to be positive.
+#' The optional fitting parameter `pContaminant` is the omission probability.
 #'
 #' The likelihood is implemented in the compiled logical-rules fast path. The
 #' R `dfun` and `pfun` entries retain the single-accumulator LBA functions for
@@ -315,21 +311,17 @@ LogicalRulesLBA <- function(posdrift = TRUE, fast_path=TRUE, capacity = FALSE){
 #### BAwL (Ballistic Accumulator with Leak) ----
 
 # 0 = normal launch strength (v, sv); 1 = lognormal launch strength
-# (mu, sigma).  Must match BAWL_LAUNCH_* in src/model_LBA.h, the `launch`
-# argument of the compiled kernels, and the value the adapter derives from the
-# "_LOGN" c_name suffix.  Deliberately the same convention as BAwD.
-.bawl_launch_code <- function(drift_distribution) {
-  switch(drift_distribution, lognormal = 1L, normal = 0L,
-         stop("Unknown BAwL drift_distribution: ", drift_distribution))
-}
+# (mu, sigma); 2 = median-parameterised continuous split-lognormal launch
+# (mu, sigma, delta).  Must match BAWL_LAUNCH_* in src/model_LBA.h, the
+# `launch` argument of the compiled kernels, and the value the adapter derives
+# from the `_LOGN`/`_SPLIT` c_name suffix.  Deliberately the same convention as
+# BAwD.
 
-# The two launch pairs occupy the same kernel columns, so only the names differ.
-.bawl_par_names <- function(launch) {
-  if (launch == 1L) c("mu", "sigma") else c("v", "sv")
-}
+# The launch pair occupies the same leading kernel columns; split-lognormal
+# adds delta immediately after (mu, sigma).
 
 .bawl_check_cols <- function(pars, launch) {
-  need <- .bawl_par_names(launch)
+  need <- .ba_par_names(launch)
   missing <- setdiff(need, colnames(pars))
   if (length(missing))
     stop("BAwL requires parameter columns ", paste(missing, collapse = ", "))
@@ -355,7 +347,8 @@ dBAwL <- function(rt, pars, posdrift = TRUE, erlang = 1L, guess = FALSE,
       posdrift = posdrift, log_out = FALSE,
       kill_shape = as.integer(erlang), guess = guess,
       erlang_omega = .rdmswtn_erlang_omega(pars[ok, , drop = FALSE], erlang),
-      launch = as.integer(launch)
+      launch = as.integer(launch),
+      delta = if (launch == 2L) pars[ok, "delta"] else 0
     )
   }
   out
@@ -380,7 +373,8 @@ pBAwL <- function(rt, pars, posdrift = TRUE, erlang = 1L, guess = FALSE,
       posdrift = posdrift, log_out = FALSE,
       kill_shape = as.integer(erlang), guess = guess,
       erlang_omega = .rdmswtn_erlang_omega(pars[ok, , drop = FALSE], erlang),
-      launch = as.integer(launch)
+      launch = as.integer(launch),
+      delta = if (launch == 2L) pars[ok, "delta"] else 0
     )
   }
   out
@@ -438,6 +432,8 @@ rBAwL <- function(lR, pars, ok = rep(TRUE, length(lR)),
     # never applies to it.
     drifts <- if (launch == 1L) {
       rlnorm(nrow(pars), pars[, nm[1]], pars[, nm[2]])
+    } else if (launch == 2L) {
+      .bawd_split_rlnorm(pars[, "mu"], pars[, "sigma"], pars[, "delta"])
     } else {
       msm::rtnorm(nrow(pars), mean = pars[, nm[1]], sd = pars[, nm[2]], lower = lower)
     }
@@ -618,21 +614,18 @@ rBAwL_corr <- function(lR, pars, ok = rep(TRUE, nrow(pars)),
 #' | *A* | log | \[0, Inf\] | log(0) | | Start-point range. |
 #' | *t0* | log | \[0, Inf\] | log(0) | | Non-decision time. |
 #' | *k* | log | \[0, Inf\] | log(0) | | Leak rate; `k = 0` is the LBA limit. |
-#' | *mG* | log | \[0, Inf\] | log(1) | *lambda_g* = *q* / *mG* | Mean of the optional guess clock. |
-#' | *mK* | log | \[0, Inf\] | log(1) | *lambda_k* = *q* / *mK* | Mean of the optional kill clock. |
-#' | *omega* | probit | \[0, 1\] | qnorm(.5) | | Probability of the Erlang-1 component in mixed mode. |
-#' | *pContaminant* | probit | \[0, 1\] | qnorm(0) | | Optional *omission* contaminant probability: mass at `rt = Inf` only, handled by the data pipeline |
-#' | *pGuess* | probit | \[0, 1\] | qnorm(0) | | Optional uniform *guess* (outlier) probability, mixed into observed RT densities over the guess window |
-#' | *rho* | scaled probit | \[-1, 1\] | qnorm(.5) | | Direct cell-level correlation of the underlying Gaussian drifts; only when `correlated = TRUE`. |
 #'
 #' With `drift_distribution = "lognormal"`, `v` and `sv` are replaced by `mu`
 #' (identity, default 0) and `sigma` (log, default `log(1)`), giving
-#' `log V ~ N(mu, sigma^2)`; every other parameter is unchanged. The lognormal
-#' launch strength is positive by construction, so `posdrift` does not apply to
-#' it, and the `correlated` one-factor path — which decomposes the *Gaussian*
-#' drift vector — is not available. This variant exists so that the drift
-#' distribution can be held constant when BAwL is compared against models
-#' parameterized with a lognormal launch, such as [BAwD()].
+#' `log V ~ N(mu, sigma^2)`.  With `"splitlognormal"`, `mu` is the exact
+#' median of `log V`, `delta` is an unbounded real parameter, and the
+#' continuous split-normal widths are
+#' `sigma_L = sigma * exp(delta/2)` and `sigma_R = sigma * exp(-delta/2)`;
+#' the split point is derived from the median condition.  `delta = 0`
+#' reduces exactly to the lognormal launch.  Both lognormal launches are
+#' positive by construction, so `posdrift` does not apply.  The `correlated`
+#' one-factor path — which decomposes the *Gaussian* drift vector — is not
+#' available for either lognormal variant.
 #'
 #' **Fixing the evidence scale.** The evidence axis is defined only up to a
 #' scale: `(V, b, A) -> (cV, cb, cA)` leaves every crossing time unchanged, so
@@ -656,6 +649,11 @@ rBAwL_corr <- function(lR, pars, ok = rep(TRUE, nrow(pars)),
 #' The internal rates `lambda_g` and `lambda_k` are generated by the
 #' `Ttransform`; they are not user-facing model parameters and should not be
 #' put in a `design()` formula.
+#' The optional clock means `mG` and `mK` use log/exp transforms with default
+#' `log(1)` when their corresponding clocks are active; mixed mode additionally
+#' uses optional `omega` on the probit scale with default `qnorm(.5)`. Optional
+#' fitting parameters are `pContaminant`, the omission probability,
+#' and `pGuess`, the uniform-outlier probability.
 #'
 #' `erlang_type` selects which clocks are active. `"none"` has no clocks;
 #' `"local_kill"` adds an independent kill clock to each accumulator;
@@ -693,10 +691,12 @@ rBAwL_corr <- function(lR, pars, ok = rep(TRUE, nrow(pars)),
 #'   `rho` and use the correlated BAwL race simulator and likelihood path.
 #'   Only available for `drift_distribution = "normal"`.
 #' @param drift_distribution Distribution of the trialwise launch strength:
-#'   `"normal"` (the default) for `V ~ N(v, sv^2)`, or `"lognormal"` for
-#'   `log V ~ N(mu, sigma^2)`. The lognormal variant is incompatible with
-#'   `posdrift = FALSE` and with `correlated = TRUE`; see Details for the
-#'   scale-identification convention it requires.
+#'   `"normal"` (the default) for `V ~ N(v, sv^2)`, `"lognormal"` for
+#'   `log V ~ N(mu, sigma^2)`, or `"splitlognormal"` for a continuous
+#'   split-normal `log V` with widths
+#'   `sigma_L = sigma * exp(delta/2)` and `sigma_R = sigma * exp(-delta/2)`.
+#'   In the split variant `mu` is the exact median and `delta` is unbounded;
+#'   `delta = 0` is exactly the lognormal launch.
 #' @return A model list defining the BAwL race model.
 #' @examples
 #' # A lognormal-launch BAwL. mu's intercept is fixed to identify the evidence
@@ -714,11 +714,12 @@ rBAwL_corr <- function(lR, pars, ok = rep(TRUE, nrow(pars)),
 BAwL <- function(posdrift = TRUE, erlang_shape = 1L,
                  erlang_type = c("none", "local_kill", "global_kill", "local_guess", "local_kill_guess"),
                  correlated = FALSE,
-                 drift_distribution = c("normal", "lognormal")) {
+                 drift_distribution = c("normal", "lognormal", "splitlognormal")) {
   erlang_type <- match.arg(erlang_type)
   drift_distribution <- match.arg(drift_distribution)
-  launch <- .bawl_launch_code(drift_distribution)
-  lognormal <- (launch == 1L)
+  launch <- .ba_launch_code(drift_distribution, "BAwL")
+  lognormal <- launch %in% c(1L, 2L)
+  splitlognormal <- launch == 2L
   if (lognormal && !isTRUE(posdrift)) {
     stop("BAwL: posdrift only applies to drift_distribution = \"normal\"; a ",
          "lognormal launch strength is positive by construction.")
@@ -736,10 +737,10 @@ BAwL <- function(posdrift = TRUE, erlang_shape = 1L,
   has_guess <- erlang_type %in% c("local_guess", "local_kill_guess")
   has_kill  <- erlang_type %in% c("local_kill", "global_kill", "local_kill_guess")
 
-  # "_LOGN" (not "_LN": resolve_race_model_adapter dispatches by substring and
-  # "LNR" is an existing key), and never together with the "IO" suffix.
+  # "_SPLIT" follows "_LOGN"; neither lognormal variant is combined with IO.
   base_name <- paste0(ifelse(posdrift, "BAwL", "BAwLIO"),
                     if (lognormal) "_LOGN" else "",
+                    if (splitlognormal) "_SPLIT" else "",
                     if (erlang_mixed) "_EMIX" else if (erlang_shape_cpp >= 2L) "_E2" else "")
   type_suffix <- if (erlang_type == "local_guess") "_LOCAL_GUESS"
                     else if (erlang_type == "local_kill_guess") "_LOCAL_KILL_GUESS"
@@ -748,12 +749,15 @@ BAwL <- function(posdrift = TRUE, erlang_shape = 1L,
                     else ""
 
   # The launch pair occupies the leading two kernel columns either way; only
-  # the names, defaults, and transforms differ (mu is a log-scale location, so
-  # it is unbounded and untransformed, exactly as in BAwD).
   if (lognormal) {
     p_types <- c("mu" = 0, "sigma" = log(1))
     transform <- c(mu = "identity", sigma = "exp")
     minmax <- cbind(mu = c(-Inf, Inf), sigma = c(1e-4, Inf))
+    if (splitlognormal) {
+      p_types <- c(p_types, delta = 0)
+      transform <- c(transform, delta = "identity")
+      minmax <- cbind(minmax, delta = c(-Inf, Inf))
+    }
   } else {
     p_types <- c("v" = 1, "sv" = log(1))
     transform <- c(v = "identity", sv = "exp")
@@ -765,7 +769,7 @@ BAwL <- function(posdrift = TRUE, erlang_shape = 1L,
   minmax <- cbind(minmax, A  = c(1e-4, Inf), B  = c(1e-4, Inf),
                      t0 = c(0.05, Inf), k  = c(1e-4, Inf))
   exception <- c(A = 0, k = 0)
-  launch_pars <- .bawl_par_names(launch)
+  launch_pars <- .ba_par_names(launch)
   
   p_types <- c(p_types, mG = log(1))
   transform <- c(transform, mG = "exp")
@@ -909,9 +913,19 @@ BAwL <- function(posdrift = TRUE, erlang_shape = 1L,
 #' drift draws retain standard positive-drift BAwL semantics. The marginal
 #' truncated correlation is therefore not equal to `rho` in general.
 #'
+#' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Mapping** | **Interpretation** |
+#' |---|---|---|---|---|---|
+#' | *v* | identity | \[-Inf, Inf\] | 1 | | Mean normal launch strength. |
+#' | *sv* | log | \[0, Inf\] | log(1) | | SD of normal launch strength. |
+#' | *B* | log | \[0, Inf\] | log(1) | *b* = *B* + *A* | Distance from the upper start-point range to the threshold. |
+#' | *A* | log | \[0, Inf\] | log(0) | | Start-point range. |
+#' | *t0* | log | \[0, Inf\] | log(0) | | Non-decision time. |
+#' | *k* | log | \[0, Inf\] | log(0) | | Leak rate. |
+#'
 #' All BAwL parameters are described in [BAwL()], including `v`, `sv`, `B`,
-#' `A`, `t0`, `k`, `mG`, `mK`, `omega`, and `pContaminant`. This constructor
-#' always sets `correlated = TRUE` internally.
+#' `A`, `t0`, and `k`. Optional fitting parameters are `pContaminant`, the
+#' omission probability, and `pGuess`, the uniform-outlier probability; `rho`
+#' is the optional correlation parameter.
 #'
 #' @param posdrift Logical. If `TRUE` (default), drift rates are jointly
 #'   conditioned to be positive; if `FALSE`, use untruncated normal drifts.

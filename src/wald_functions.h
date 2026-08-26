@@ -426,6 +426,270 @@ inline double log_lognormal_logratio_stoploss(double v, double mu,
 }
 
 
+inline double dlnorm_std(double x, double meanlog, double sdlog, bool log_p = false);
+inline double lnorm_log_surv_std(double x, double meanlog, double sdlog);
+// --------------------------------------------------------------------------
+// Continuous split-lognormal launch primitives.  Let Y = log(V) have split
+// point c and widths sL,sR, with a=sL/(sL+sR).  Each side is a half-normal
+// piece with total mass 2a and 2(1-a).  The location parameter mu is the
+// median; c is solved from the closed-form median equations below.
+// --------------------------------------------------------------------------
+struct split_lognormal_shape {
+  double c = 0.0;
+  double sL = 0.0;
+  double sR = 0.0;
+  double a = 0.5;
+};
+
+inline bool split_lognormal_shape_params(double mu, double sigma, double delta,
+                                         split_lognormal_shape& h) {
+  if (!(sigma > 0.0) || !emc2_isfinite(mu) || !emc2_isfinite(delta))
+    return false;
+  if (delta == 0.0) {
+    h.c = mu; h.sL = sigma; h.sR = sigma; h.a = 0.5;
+    return true;
+  }
+  h.sL = sigma * std::exp(0.5 * delta);
+  h.sR = sigma * std::exp(-0.5 * delta);
+  if (!(h.sL > 0.0) || !(h.sR > 0.0) ||
+      !emc2_isfinite(h.sL) || !emc2_isfinite(h.sR)) return false;
+  h.a = 1.0 / (1.0 + std::exp(-delta));
+  if (delta > 0.0)
+    h.c = mu - h.sL * R::qnorm(1.0 / (4.0 * h.a), 0.0, 1.0, true, false);
+  else
+    h.c = mu - h.sR * R::qnorm((3.0 * h.sR - h.sL) /
+                               (4.0 * h.sR), 0.0, 1.0, true, false);
+  return emc2_isfinite(h.c);
+}
+
+inline double split_lognormal_log_side_tail(double x, double r,
+                                            const split_lognormal_shape& h,
+                                            bool left) {
+  const double s = left ? h.sL : h.sR;
+  const double mass = left ? h.a : (1.0 - h.a);
+  const double base = std::log(2.0 * mass) + r * h.c + 0.5 * r * r * s * s;
+  if (left) {
+    if (!(x < h.c)) return R_NegInf;
+    const double lo = (x - h.c - r * s * s) / s;
+    const double hi = -r * s;
+    return base + log_normal_interval(lo, hi);
+  }
+  const double lo = (x > h.c) ? (x - h.c - r * s * s) / s : -r * s;
+  return base + log_normal_upper_tail(lo);
+}
+
+inline double split_lognormal_log_side_lower(double x, double r,
+                                             const split_lognormal_shape& h,
+                                             bool left) {
+  const double s = left ? h.sL : h.sR;
+  const double mass = left ? h.a : (1.0 - h.a);
+  const double base = std::log(2.0 * mass) + r * h.c + 0.5 * r * r * s * s;
+  if (left) {
+    if (!(x < h.c))
+      return base + pnorm_log_direct(-r * s, true);
+    return base + pnorm_log_direct((x - h.c - r * s * s) / s, true);
+  }
+  if (!(x > h.c)) return R_NegInf;
+  return base + log_normal_interval(
+    -r * s, (x - h.c - r * s * s) / s);
+}
+
+inline double split_lognormal_log_moment_tail(double v, const split_lognormal_shape& h, double r) {
+  const double lpL = split_lognormal_log_side_tail(std::log(v), r, h, true);
+  const double lpR = split_lognormal_log_side_tail(std::log(v), r, h, false);
+  return log_sum_exp(lpL, lpR);
+}
+
+inline double split_lognormal_log_moment_tail(double v, double mu,
+                                              double sigma, double delta,
+                                              double r) {
+  split_lognormal_shape h;
+  if (!split_lognormal_shape_params(mu, sigma, delta, h)) return R_NegInf;
+  return split_lognormal_log_moment_tail(v, h, r);
+}
+
+inline double log_split_lognormal_survivor(double v, const split_lognormal_shape& h) {
+  if (!(v > 0.0)) return 0.0;
+  return split_lognormal_log_moment_tail(v, h, 0.0);
+}
+
+inline double log_split_lognormal_survivor(double v, double mu, double sigma,
+                                           double delta) {
+  if (delta == 0.0) return lnorm_log_surv_std(v, mu, sigma);
+  if (!(v > 0.0)) return 0.0;
+  return split_lognormal_log_moment_tail(v, mu, sigma, delta, 0.0);
+}
+
+inline double log_split_lognormal_first_partial_moment(double v, const split_lognormal_shape& h) {
+  return split_lognormal_log_moment_tail(v, h, 1.0);
+}
+
+inline double log_split_lognormal_first_partial_moment(double v, double mu,
+                                                       double sigma,
+                                                       double delta) {
+  if (delta == 0.0) {
+    if (!(v > 0.0)) return mu + 0.5 * sigma * sigma;
+    const double x = (std::log(v) - mu) / sigma;
+    return mu + 0.5 * sigma * sigma +
+      pnorm_log_direct(x - sigma, false);
+  }
+  return split_lognormal_log_moment_tail(v, mu, sigma, delta, 1.0);
+}
+
+inline double split_lognormal_log_total_moment(const split_lognormal_shape& h, double r) {
+  return split_lognormal_log_moment_tail(0.0, h, r);
+}
+
+inline double split_lognormal_log_total_moment(double mu, double sigma,
+                                               double delta, double r) {
+  return split_lognormal_log_moment_tail(0.0, mu, sigma, delta, r);
+}
+
+inline double split_lognormal_log_stoploss_side(double x, double v,
+                                                const split_lognormal_shape& h,
+                                                bool left) {
+  const double lm = split_lognormal_log_side_tail(x, 1.0, h, left);
+  const double lp = split_lognormal_log_side_tail(x, 0.0, h, left);
+  if (!(lm > R_NegInf) || !(lp > R_NegInf)) return R_NegInf;
+  const signed_log out = signed_log_sub(
+    make_signed_log(lm, 1), make_signed_log(std::log(v) + lp, 1));
+  return out.sign > 0 ? out.log_abs : R_NegInf;
+}
+inline double log_split_lognormal_stoploss(double v, const split_lognormal_shape& h) {
+  const double lm = split_lognormal_log_total_moment(h, 1.0);
+  if (!(v > 0.0)) {
+    if (v == 0.0) return lm;
+    return log_sum_exp(lm, std::log(-v));
+  }
+  const double x = std::log(v);
+  double ll = R_NegInf;
+  if (x > h.c) {
+    const double z = (x - h.c) / h.sR;
+    const double r1 = mills_ratio_std(z - h.sR);
+    const double r0 = mills_ratio_std(z);
+    const double gap = r1 - r0;
+    if (gap > 1e-12 * r1)
+      ll = std::log(2.0 * (1.0 - h.a)) + std::log(v) +
+        log_phi_std(z) + std::log(gap);
+  }
+  if (!(ll > R_NegInf))
+    ll = log_sum_exp(split_lognormal_log_stoploss_side(x, v, h, true),
+                     split_lognormal_log_stoploss_side(x, v, h, false));
+  return ll;
+}
+
+inline double log_split_lognormal_stoploss(double v, double mu, double sigma,
+                                           double delta) {
+  if (delta == 0.0) return log_lognormal_stoploss(v, mu, sigma);
+  if (!(sigma > 0.0)) return R_NegInf;
+  split_lognormal_shape h;
+  if (!split_lognormal_shape_params(mu, sigma, delta, h)) return R_NegInf;
+  return log_split_lognormal_stoploss(v, h);
+}
+
+inline double log_split_lognormal_put(double v, const split_lognormal_shape& h) {
+  const double x = std::log(v);
+  auto side_put = [&](bool left) {
+    const double lp = split_lognormal_log_side_lower(x, 0.0, h, left);
+    const double lm = split_lognormal_log_side_lower(x, 1.0, h, left);
+    if (!(lp > R_NegInf) || !(lm > R_NegInf)) return R_NegInf;
+    const signed_log out = signed_log_sub(
+      make_signed_log(std::log(v) + lp, 1), make_signed_log(lm, 1));
+    return out.sign > 0 ? out.log_abs : R_NegInf;
+  };
+  return log_sum_exp(side_put(true), side_put(false));
+}
+
+inline double log_split_lognormal_put(double v, double mu, double sigma,
+                                      double delta) {
+  if (delta == 0.0) return log_lognormal_put(v, mu, sigma);
+  if (!(sigma > 0.0) || !(v > 0.0)) return R_NegInf;
+  split_lognormal_shape h;
+  if (!split_lognormal_shape_params(mu, sigma, delta, h)) return R_NegInf;
+  return log_split_lognormal_put(v, h);
+}
+
+inline double log_split_lognormal_power_stoploss(double v, const split_lognormal_shape& h, double m) {
+  if (std::fabs(m) <= 1e-14) {
+    const double x = std::log(v);
+    auto yside = [&](bool left) {
+      const double s = left ? h.sL : h.sR;
+      const double mass = left ? h.a : (1.0 - h.a);
+      const double z = (x - h.c) / s;
+      if (left) {
+        const double p = pnorm_std(0.0, false, false) -
+          pnorm_std(z, false, false);
+        const double q = dnormP(z) - dnormP(0.0);
+        const double val = (h.c - x) * p + s * q;
+        return val > 0.0 ? std::log(2.0 * mass * val) : R_NegInf;
+      }
+      const double zz = (x > h.c) ? z : 0.0;
+      const double p = pnorm_std(zz, false, false);
+      const double q = dnormP(zz);
+      const double val = (h.c - x) * p + s * q;
+      return val > 0.0 ? std::log(2.0 * mass * val) : R_NegInf;
+    };
+    return log_sum_exp(yside(true), yside(false));
+  }
+  const double lm = split_lognormal_log_moment_tail(v, h, -m);
+  const double ls = log_split_lognormal_survivor(v, h);
+  const signed_log out = (m > 0.0)
+    ? signed_log_sub(make_signed_log(std::log(v) * (-m) + ls, 1),
+                     make_signed_log(lm, 1))
+    : signed_log_sub(make_signed_log(lm, 1),
+                     make_signed_log(std::log(v) * (-m) + ls, 1));
+  return out.sign > 0 ? out.log_abs - std::log(std::fabs(m)) : R_NegInf;
+}
+
+inline double log_split_lognormal_power_stoploss(double v, double mu,
+                                                 double sigma, double delta,
+                                                 double m) {
+  if (delta == 0.0) return log_lognormal_power_stoploss(v, mu, sigma, m);
+  if (!(sigma > 0.0) || !(v > 0.0)) return R_NegInf;
+  split_lognormal_shape h;
+  if (!split_lognormal_shape_params(mu, sigma, delta, h)) return R_NegInf;
+  return log_split_lognormal_power_stoploss(v, h, m);
+}
+
+inline double log_split_lognormal_density(double v, const split_lognormal_shape& h) {
+  if (!(v > 0.0)) return R_NegInf;
+  const double x = std::log(v);
+  const double s = (x <= h.c) ? h.sL : h.sR;
+  const double mass = (x <= h.c) ? h.a : (1.0 - h.a);
+  return std::log(2.0 * mass) - std::log(s) - std::log(v) -
+    0.5 * (x - h.c) * (x - h.c) / (s * s) - LOG_SQRT_2PI;
+}
+
+inline double log_split_lognormal_density(double v, double mu, double sigma,
+                                          double delta) {
+  if (delta == 0.0) return dlnorm_std(v, mu, sigma, true);
+  if (!(v > 0.0)) return R_NegInf;
+  split_lognormal_shape h;
+  if (!split_lognormal_shape_params(mu, sigma, delta, h)) return R_NegInf;
+  return log_split_lognormal_density(v, h);
+}
+inline double log_split_lognormal_cdf(double v, const split_lognormal_shape& h) {
+  if (!(v > 0.0)) return R_NegInf;
+  const double x = std::log(v);
+  if (x <= h.c) {
+    const double z = (x - h.c) / h.sL;
+    return std::fmin(std::log(2.0 * h.a) + pnorm_log_direct(z, true), 0.0);
+  }
+  const double z = (x - h.c) / h.sR;
+  const double lp = std::log(2.0 * (1.0 - h.a)) + pnorm_log_direct(z, false);
+  return (lp > R_NegInf) ? log1p_exp(std::log(2.0 * h.a - 1.0) - lp) + lp : R_NegInf;
+}
+
+inline double log_split_lognormal_cdf(double v, double mu, double sigma,
+                                      double delta) {
+  if (delta == 0.0) return pnorm_log_direct((std::log(v) - mu) / sigma, true);
+  if (!(v > 0.0)) return R_NegInf;
+  split_lognormal_shape h;
+  if (!split_lognormal_shape_params(mu, sigma, delta, h)) return R_NegInf;
+  return log_split_lognormal_cdf(v, h);
+}
+
+
 // Shared acceptance constants for the guarded natural race kernels.
 // A natural probability difference is rejected once it retains less than
 // EMC2_NAT_REL_CANCEL of its largest term; a natural CDF consumed as
@@ -451,7 +715,7 @@ inline double plnorm_std(double x, double meanlog, double sdlog,
 }
 
 inline double dlnorm_std(double x, double meanlog, double sdlog,
-                         bool log_p = false) {
+                         bool log_p) {
   if (x <= 0.0) return log_p ? R_NegInf : 0.0;
   if (!emc2_isfinite(sdlog) || !(sdlog > 0.0)) {
     return R::dlnorm(x, meanlog, sdlog, log_p);

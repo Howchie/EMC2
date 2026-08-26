@@ -150,13 +150,13 @@ pGOM <- function(rt, pars, kind = NULL)
 #' | *B* | log | \[0, Inf\] | log(1) | *b* = 1 + *B* + *A* | Distance from the baseline start level to the response boundary. |
 #' | *A* | log | \[0, Inf\] | log(0) | | Start-point range above the baseline level 1. |
 #' | *t0* | log | \[0, Inf\] | log(0) | | Non-decision time. |
-#' | *Binf* | log | \[0, Inf\] | log(1.5) | | Asymptotic boundary value; used for non-fixed boundary collapse. |
-#' | *tau* | log | \[0, Inf\] | log(1) | | Boundary-collapse time scale; used for non-fixed collapse. |
-#' | *pw* | log | \[0, Inf\] | log(1) | | Weibull boundary-collapse exponent; used only for `boundary_collapse = "weibull"`. |
 #'
-#' `Binf` and `tau` are included for every non-fixed boundary-collapse form;
-#' `pw` is included only for the Weibull form. The generic `pContaminant` and
-#' `pGuess` nuisance parameters are appended by the data pipeline when requested.
+#' `Binf` and `tau` are optional non-fixed-boundary parameters, sampled on the
+#' log scale with defaults `log(1.5)` and `log(1)`. The Weibull form additionally
+#' uses optional `pw`, also log-transformed with default `log(1)`. These parameters
+#' describe the selected collapsing-boundary form.
+#' Optional fitting parameters: `pContaminant` is the omission probability and
+#' `pGuess` is the uniform-outlier probability.
 #'
 #' @param boundary_collapse Character; one of `"fixed"`, `"exponential"`,
 #'   `"linear_additive"`, `"linear_multiplicative"`, or `"weibull"`.

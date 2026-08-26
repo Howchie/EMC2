@@ -27,11 +27,11 @@ The latent distributions are
 A yes response is generated when \code{X > c}, so
 \code{P(yes | noise) = Phi(-d / 2 - c)} and
 \code{P(yes | signal) = Phi((d / 2 - c) / sd)}. Here \code{d} and \code{c} are estimated
-on the identity scale and \code{sd} is estimated on the log scale.\tabular{lllll}{
-   \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Interpretation} \cr
-   \emph{d} \tab identity \tab [-Inf, Inf] \tab 0 \tab Distance between signal and noise means. \cr
-   \emph{c} \tab identity \tab [-Inf, Inf] \tab 0 \tab Criterion relative to the midpoint of the two means. \cr
-   \emph{sd} \tab log \tab [0, Inf] \tab log(1) \tab Signal-distribution SD; noise SD is fixed at 1. \cr
+on the identity scale and \code{sd} is estimated on the log scale.\tabular{llllll}{
+   \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Mapping} \tab \strong{Interpretation} \cr
+   \emph{d} \tab identity \tab [-Inf, Inf] \tab 0 \tab  \tab Distance between signal and noise means. \cr
+   \emph{c} \tab identity \tab [-Inf, Inf] \tab 0 \tab  \tab Criterion relative to the midpoint of the two means. \cr
+   \emph{sd} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Signal-distribution SD; noise SD is fixed at 1. \cr
 }
 
 

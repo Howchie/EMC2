@@ -637,8 +637,8 @@ pstopTEXG <- function(
 #' Default values are used for all parameters that are not explicitly listed in the `formula`
 #' argument of `design()`.They can also be accessed with `SSEXG()$p_types`.
 #'
-#' | **Parameter** | **Transform** | **Natural scale** | **Default**   | **Mapping**                    | **Interpretation**                                            |
-#' |-----------|-----------|---------------|-----------|----------------------------|-----------------------------------------------------------|
+#' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Mapping** | **Interpretation** |
+#' |---|---|---|---|---|---|
 #' | *mu*       | log         | \[0, Inf\]     | log(.4)         |                            | Mean of Gaussian component of ex-Gaussian go finish time distribution              |
 #' | *sigma*       | log       | \[0, Inf\]        | log(.05)    |                            | Standard deviation of Gaussian component of ex-Gaussian go finish time distribution                                        |
 #' | *tau*      | log       | \[0, Inf\]        | log(.1)    |                            | Mean (inverse rate) of exponential component of ex-Gaussian go finish time distribution                                          |
@@ -647,8 +647,8 @@ pstopTEXG <- function(
 #' | *tauS*      | log    | \[0, Inf\]        | log(.05)  |  | Mean (inverse rate) of exponential component of ex-Gaussian stop finish time distribution       |
 #' | *tf*      | probit       | \[0, 1\]        | qnorm(0)    |                            | Attentional lapse rate for stop process ("trigger failure")           |
 #' | *gf*     | probit       | \[0, 1\]        | qnorm(0)    |                            | Attentional lapse rate for go process ("go failure")    |
-#' | *exg_lb*      | -       | \[-Inf, Inf\]        | .05    |                            | Lower bound of ex-Gaussian go finish time distribution           |
-#' | *exgS_lb*     | -       | \[-Inf, Inf\]        | .05    |                            | Lower bound of ex-Gaussian stop finish time distribution    |
+#' | *exg_lb* | identity | \[-Inf, Inf\] | .05 | | Lower bound of ex-Gaussian go finish time distribution. |
+#' | *exgS_lb* | identity | \[-Inf, Inf\] | .05 | | Lower bound of ex-Gaussian stop finish time distribution. |
 #'
 #' Because the ex-Gaussian stop signal model is a race model, it has one accumulator per response option.
 #' EMC2 automatically constructs a factor representing the accumulators `lR` (i.e., the
@@ -1029,8 +1029,8 @@ pstopHybrid <- function(
 #' Default values are used for all parameters that are not explicitly listed in the `formula`
 #' argument of `design()`.They can also be accessed with `SSRDEX()$p_types`.
 #'
-#' | **Parameter** | **Transform** | **Natural scale** | **Default**   | **Mapping**                    | **Interpretation**                                            |
-#' |-----------|-----------|---------------|-----------|----------------------------|-----------------------------------------------------------|
+#' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Mapping** | **Interpretation** |
+#' |---|---|---|---|---|---|
 #' | *v*       | log       | \[0, Inf\]      | log(1)    |                  | Evidence-accumulation rate (drift rate) of the go process                       |
 #' | *A*       | log       | \[0, Inf\]      | log(0)    |                  | Between-trial variation (range) in start point of the go process                |
 #' | *B*       | log       | \[0, Inf\]      | log(1)    | *b* = *B* + *A*      | Distance from *A* to *b* (response threshold) of the go process                  |
@@ -1041,7 +1041,7 @@ pstopHybrid <- function(
 #' | *tauS*      | log    | \[0, Inf\]        | log(.05)  |  | Mean (inverse rate) of exponential component of ex-Gaussian stop finish time distribution       |
 #' | *tf*      | probit       | \[0, 1\]        | qnorm(0)    |                            | Attentional lapse rate for stop process ("trigger failure")           |
 #' | *gf*     | probit       | \[0, 1\]        | qnorm(0)    |                            | Attentional lapse rate for go process ("go failure")    |
-#' | *exgS_lb*     | -       | \[-Inf, Inf\]        | .05    |                            | Lower bound of ex-Gaussian stop finish time distribution    |
+#' | *exgS_lb* | identity | \[-Inf, Inf\] | .05 | | Lower bound of ex-Gaussian stop finish time distribution. |
 #'
 #' All parameters are estimated on the log scale, with the exception of `tf` and `gf` which are estimated on the probit scale, and `exgS_lb` which is estimated on the natural scale.
 #'

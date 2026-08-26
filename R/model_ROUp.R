@@ -282,8 +282,8 @@ rROUp <- function(lR, pars, ok = rep(TRUE, nrow(pars)), kind = NULL,
 #' Default values are used for all parameters that are not explicitly listed in the `formula`
 #' argument of `design()`. They can also be accessed with `ROUp()$p_types`.
 #'
-#' | **Parameter** | **Transform** | **Natural scale** | **Default**   | **Mapping**          | **Interpretation**                                                |
-#' |-----------|-----------|---------------|-----------|------------------|---------------------------------------------------------------|
+#' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Mapping** | **Interpretation** |
+#' |---|---|---|---|---|---|
 #' | *v_S*     | log       | \[0, Inf\]      | log(1)    |                  | Sustained channel asymptotic drift rate                        |
 #' | *v_T*     | log       | \[0, Inf\]      | log(1)    |                  | Transient channel peak drift rate factor                       |
 #' | *E_T*     | log       | \[0, Inf\]      | log(1)    |                  | Integrated transient evidence (`area` only)                     |
@@ -294,8 +294,14 @@ rROUp <- function(lR, pars, ok = rep(TRUE, nrow(pars)), kind = NULL,
 #' | *B*       | log       | \[0, Inf\]      | log(1)    | *b* = *B* + *A*      | Distance from *A* to *b* (response threshold)                  |
 #' | *t0*      | log       | \[0, Inf\]      | log(0)    |                  | Non-decision time                                             |
 #' | *s*       | log       | \[0, Inf\]      | log(1)    |                  | Within-trial standard deviation of the diffusion              |
-#' | *pContaminant* | probit | \[0, 1\] | qnorm(0) | | Optional *omission* contaminant probability: mass at `rt = Inf` only, handled by the data pipeline |
-#' | *pGuess* | probit | \[0, 1\] | qnorm(0) | | Optional uniform *guess* (outlier) probability, mixed into observed RT densities over the guess window |
+#'
+#' Optional fitting parameters: `pContaminant` is the omission probability and
+#' `pGuess` is the uniform-outlier probability.
+#'
+#' For a non-fixed `boundary_collapse`, the optional `Binf` and `tau` parameters
+#' use log/exp transforms with defaults `log(0.5)` and `log(1)`; the Weibull
+#' form additionally uses `pw` with the same log/exp transform and default
+#' `log(1)`. These parameters describe the selected collapsing-boundary form.
 #'
 #' # Scale identification
 #'

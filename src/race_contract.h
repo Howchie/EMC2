@@ -23,6 +23,7 @@ struct SolveCache;
 // this contract header depend on model implementation headers.
 namespace emc2race_contract {
 constexpr int kBawdLaunchLognormal = 1;  // BAWD_LAUNCH_LOGNORMAL
+constexpr int kBawdLaunchSplitLognormal = 2;
 constexpr int kBtawlLaunchNormal = 0;   // BTAWL_LAUNCH_NORMAL
 constexpr int kBawlLaunchNormal = 0;    // BAWL_LAUNCH_NORMAL
 }

@@ -12,13 +12,50 @@
 # suffixes.
 # ============================================================================
 
-# 0 = truncated normal launch (v, sv); 1 = lognormal launch (mu, sigma).
-# Must match BAWD_LAUNCH_* in src/model_BAwD.h and the value the adapter puts
-# in ctx->bawd_launch from the "_LOGN" c_name suffix.
-.bawd_launch_code <- function(drift_distribution) {
-  switch(drift_distribution, lognormal = 1L, normal = 0L,
-         stop("Unknown BAwD drift_distribution: ", drift_distribution))
+# 0 = truncated normal launch (v, sv); 1 = lognormal launch (mu, sigma);
+# 2 = median-parameterised continuous split-lognormal launch (mu, sigma,
+# delta).  Must match BAWD_LAUNCH_* in src/model_BAwD.h and the values the
+# adapter puts in ctx->bawd_launch from the c_name suffix.
+
+# Split-normal geometry in log V.  The two half-normal widths have geometric
+# mean sigma and log width ratio delta.  The split point c is chosen so that
+# mu, rather than c, is the exact median.  Keeping the delta == 0 branch
+# explicit preserves the ordinary lognormal path bit-for-bit.
+.bawd_split_params <- function(mu, sigma, delta) {
+  sigma_L <- sigma * exp(delta / 2)
+  sigma_R <- sigma * exp(-delta / 2)
+  a <- plogis(delta)
+  c <- mu
+  left <- delta > 0
+  right <- delta < 0
+  if (any(left)) c[left] <- mu[left] - sigma_L[left] *
+    qnorm(1 / (4 * a[left]))
+  if (any(right)) c[right] <- mu[right] - sigma_R[right] *
+    qnorm(0.75 - 0.25 * exp(delta[right]))
+  list(c = c, sigma_L = sigma_L, sigma_R = sigma_R, a = a)
 }
+
+# Draw V from the continuous split-lognormal.  At delta == 0 this deliberately
+# calls rlnorm(), so the split variant has exactly the ordinary lognormal
+# simulator when its extra parameter is zero.
+.bawd_split_rlnorm <- function(mu, sigma, delta) {
+  n <- max(length(mu), length(sigma), length(delta))
+  mu <- rep_len(mu, n); sigma <- rep_len(sigma, n); delta <- rep_len(delta, n)
+  out <- numeric(n)
+  zero <- delta == 0
+  if (any(zero)) out[zero] <- rlnorm(sum(zero), mu[zero], sigma[zero])
+  nz <- !zero
+  if (any(nz)) {
+    sp <- .bawd_split_params(mu[nz], sigma[nz], delta[nz])
+    left <- runif(sum(nz)) < sp$a
+    z <- abs(rnorm(sum(nz)))
+    y <- sp$c + z * sp$sigma_R
+    y[left] <- sp$c[left] - z[left] * sp$sigma_L[left]
+    out[nz] <- exp(y)
+  }
+  out
+}
+
 # Fixed clearance exponents gamma used by the kernels and constructor. Each is
 # a distinct model. For finite rho and gamma < 1, the frozen-mass exponent is
 # alpha = (rho - 1) / (rho * (1 - gamma)); rho = 1 is the logarithmic limit.
@@ -62,12 +99,9 @@
 }
 
 
-.bawd_par_names <- function(launch) {
-  if (launch == 1L) c("mu", "sigma") else c("v", "sv")
-}
 
 .bawd_check_cols <- function(pars, launch) {
-  need <- c(.bawd_par_names(launch), "b", "A", "t0", "k", "ell")
+  need <- c(.ba_par_names(launch), "b", "A", "t0", "k", "ell")
   missing <- setdiff(need, colnames(pars))
   if (length(missing))
     stop("BAwD requires parameter columns ", paste(missing, collapse = ", "))
@@ -86,6 +120,7 @@ dBAwD <- function(rt, pars, launch = 1L, posdrift = TRUE, gamma = 0,
   if (any(ok)) {
     out[ok] <- dbawd(t = dt[ok], A = pars[ok, "A"], b = pars[ok, "b"],
                      p1 = pars[ok, nm[1]], p2 = pars[ok, nm[2]],
+                     delta = if (launch == 2L) pars[ok, "delta"] else 0,
                      k = pars[ok, "k"], ell = pars[ok, "ell"],
                      launch = as.integer(launch), posdrift = posdrift,
                      gamma = gamma, rho = rho)
@@ -107,6 +142,7 @@ pBAwD <- function(rt, pars, launch = 1L, posdrift = TRUE, gamma = 0,
   if (any(ok)) {
     out[ok] <- pbawd(t = dt[ok], A = pars[ok, "A"], b = pars[ok, "b"],
                      p1 = pars[ok, nm[1]], p2 = pars[ok, nm[2]],
+                     delta = if (launch == 2L) pars[ok, "delta"] else 0,
                      k = pars[ok, "k"], ell = pars[ok, "ell"],
                      launch = as.integer(launch), posdrift = posdrift,
                      gamma = gamma, rho = rho)
@@ -116,7 +152,7 @@ pBAwD <- function(rt, pars, launch = 1L, posdrift = TRUE, gamma = 0,
 
 
 .bawdp_check_cols <- function(pars, launch) {
-  need <- c(.bawl_par_names(launch), "b", "A", "t0", "k", "lambda")
+  need <- c(.ba_par_names(launch), "b", "A", "t0", "k", "lambda")
   missing <- setdiff(need, colnames(pars))
   if (length(missing))
     stop("BAwDp requires parameter columns ", paste(missing, collapse = ", "))
@@ -132,6 +168,7 @@ dBAwDp <- function(rt, pars, launch = 1L, posdrift = TRUE) {
   if (any(ok)) {
     out[ok] <- dbawdp(t = dt[ok], A = pars[ok, "A"], b = pars[ok, "b"],
                       p1 = pars[ok, nm[1]], p2 = pars[ok, nm[2]],
+                      delta = if (launch == 2L) pars[ok, "delta"] else 0,
                       k = pars[ok, "k"], lambda = pars[ok, "lambda"],
                       launch = as.integer(launch), posdrift = posdrift)
   }
@@ -147,6 +184,7 @@ pBAwDp <- function(rt, pars, launch = 1L, posdrift = TRUE) {
   if (any(ok)) {
     out[ok] <- pbawdp(t = dt[ok], A = pars[ok, "A"], b = pars[ok, "b"],
                       p1 = pars[ok, nm[1]], p2 = pars[ok, nm[2]],
+                      delta = if (launch == 2L) pars[ok, "delta"] else 0,
                       k = pars[ok, "k"], lambda = pars[ok, "lambda"],
                       launch = as.integer(launch), posdrift = posdrift)
   }
@@ -266,6 +304,8 @@ rBAwD <- function(lR, pars, ok = rep(TRUE, length(lR)), launch = 1L,
     p <- pars[idx, , drop = FALSE]
     V <- if (launch == 1L) {
       rlnorm(nrow(p), p[, "mu"], p[, "sigma"])
+    } else if (launch == 2L) {
+      .bawd_split_rlnorm(p[, "mu"], p[, "sigma"], p[, "delta"])
     } else {
       msm::rtnorm(nrow(p), p[, "v"], p[, "sv"],
                   lower = if (posdrift) 0 else -Inf)
@@ -335,8 +375,14 @@ rBAwDp <- function(lR, pars, ok = rep(TRUE, length(lR)), launch = 1L,
   idx <- which(ok)
   if (length(idx)) {
     p <- pars[idx, , drop = FALSE]
-    V <- if (launch == 1L) rlnorm(nrow(p), p[, nm[1]], p[, nm[2]]) else
-      msm::rtnorm(nrow(p), p[, nm[1]], p[, nm[2]], lower = if (posdrift) 0 else -Inf)
+    V <- if (launch == 1L) {
+      rlnorm(nrow(p), p[, nm[1]], p[, nm[2]])
+    } else if (launch == 2L) {
+      .bawd_split_rlnorm(p[, "mu"], p[, "sigma"], p[, "delta"])
+    } else {
+      msm::rtnorm(nrow(p), p[, nm[1]], p[, nm[2]],
+                  lower = if (posdrift) 0 else -Inf)
+    }
     z <- p[, "A"] * runif(nrow(p))
     hit <- mapply(.bawdp_hit_time, V, p[, "b"] - z, p[, "k"], p[, "lambda"])
     hit[!is.finite(hit) | hit < 0] <- Inf
@@ -381,32 +427,39 @@ rBAwDp <- function(lR, pars, ok = rep(TRUE, length(lR)), launch = 1L,
 #' parameters, so they do not appear in `p_types`.
 #'
 #' With `drift_distribution = "lognormal"` (the default) `log V ~ N(mu, sigma^2)`.
+#' With `drift_distribution = "splitlognormal"`, `Y = log V` has the continuous
+#' split-normal density with left and right widths
+#' \verb{sigma_L = sigma exp(delta/2)} and
+#' \verb{sigma_R = sigma exp(-delta/2)}.  Here `delta` is an unbounded real
+#' log-width ratio and `mu` is the median of `Y`; the split point `c` is derived
+#' from these parameters so that `P(Y <= mu) = 1/2` exactly.  Setting `delta = 0`
+#' reduces exactly to the ordinary lognormal launch.
 #'
 #' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Mapping** | **Interpretation** |
 #' |---|---|---|---|---|---|
-#' | *mu* | identity | \[-Inf, Inf\] | 0 | | Mean of the log launch strength. |
-#' | *sigma* | log | \[0, Inf\] | log(1) | | SD of log launch strength. |
+#' | *mu* | identity | \[-Inf, Inf\] | 0 | | Median log launch location. |
+#' | *sigma* | log | \[0, Inf\] | log(1) | | Geometric-mean width of log launch. |
 #' | *B* | log | \[0, Inf\] | log(1) | *b* = *B* + *A* | Threshold distance. |
 #' | *A* | log | \[0, Inf\] | log(0) | | Start-point range. |
 #' | *t0* | log | \[0, Inf\] | log(0) | | Non-decision time. |
 #' | *k* | log | \[0, Inf\] | log(0) | | Drive-decay rate. |
 #' | *ell* | log | \[0, Inf\] | log(1) | | Clearance rate. |
 #'
-#' With `drift_distribution = "normal"`, `mu` and `sigma` are replaced by
-#' `v` and `sv`; the launch is truncated positive when `posdrift = TRUE`.
-#'
 #' The trial-dependent transform derives `Tmax` from `A`, `b`, `k`, and
 #' `ell`, and also reports `rt_max` after adding `t0`.
+#' Optional fitting parameters: `pContaminant` is the omission probability and
+#' `pGuess` is the uniform-outlier probability.
+#' For `drift_distribution = "normal"`, use the `v` and `sv` rows instead of
+#' `mu` and `sigma`; the normal launch is truncated at zero by default. The
+#' split-lognormal option adds the optional identity-scale `delta` parameter
+#' (default `0`).
 #'
 #' @param drift_distribution Distribution of trialwise launch strength:
-#'   `"lognormal"` (default) or `"normal"`.
+#'   `"lognormal"` (default), `"splitlognormal"`, or `"normal"`.
 #' @param posdrift Logical. If `TRUE` (default), truncate normal launch
 #'   strengths to be positive; if `FALSE`, append `IO` to the compiled model
 #'   name. Only meaningful for normal launches.
-#' @param gamma Fixed clearance decay exponent: `0` (default), `1/2`, `2/3`,
-#'   `3/4`, or `1`. A model option, never an estimated parameter; the
-#'   corresponding suffix appended to the compiled model name is `""`,
-#'   `"_GAM12"`, `"_GAM23"`, `"_GAM34"`, and `"_GAM100"` respectively.
+#' @param gamma Fixed clearance exponent: `0`, `1/2`, `2/3`, `3/4`, or `1`.
 #' @param rho Fixed base-kernel shape: `1`, `2`, `4`, or `Inf` (default).
 #'   `Inf` is the exponential kernel and has no rho suffix; finite values
 #'   append `"_RHO1"`, `"_RHO2"`, or `"_RHO4"` after the gamma suffix.
@@ -421,14 +474,15 @@ rBAwDp <- function(lR, pars, ok = rep(TRUE, length(lR)), launch = 1L,
 #'                                      t0 ~ 1, k ~ 1),
 #'                       contrasts = list(mu = list(lM = ADmat)))
 #' @export
-BAwD <- function(drift_distribution = c("lognormal", "normal"),
+BAwD <- function(drift_distribution = c("lognormal", "normal", "splitlognormal"),
                  posdrift = TRUE, gamma = 0, rho = Inf) {
   drift_distribution <- match.arg(drift_distribution)
   gamma <- .bawd_check_gamma(gamma)
   rho <- .bawd_check_rho(rho)
 
-  launch <- .bawd_launch_code(drift_distribution)
-  lognormal <- (launch == 1L)
+  launch <- .ba_launch_code(drift_distribution, "BAwD")
+  lognormal <- launch %in% c(1L, 2L)
+  splitlognormal <- launch == 2L
   if (lognormal && !isTRUE(posdrift)) {
     stop("BAwD: posdrift only applies to drift_distribution = \"normal\"; a ",
          "lognormal launch strength is positive by construction.")
@@ -438,6 +492,11 @@ BAwD <- function(drift_distribution = c("lognormal", "normal"),
     p_types <- c("mu" = 0, "sigma" = log(1))
     transform <- c(mu = "identity", sigma = "exp")
     minmax <- cbind(mu = c(-Inf, Inf), sigma = c(1e-4, Inf))
+    if (splitlognormal) {
+      p_types <- c(p_types, "delta" = 0)
+      transform <- c(transform, delta = "identity")
+      minmax <- cbind(minmax, delta = c(-Inf, Inf))
+    }
   } else {
     p_types <- c("v" = 1, "sv" = log(1))
     transform <- c(v = "identity", sv = "exp")
@@ -460,11 +519,11 @@ BAwD <- function(drift_distribution = c("lognormal", "normal"),
   p_types <- .nuis$p_types; transform <- .nuis$transform
   minmax <- .nuis$minmax; exception <- .nuis$exception
 
-  # "_LOGN" (not "_LN": resolve_race_model_adapter dispatches by substring and
-  # "LNR" is an existing key).  The IO suffix is only reachable for the normal
-  # launch, and "BAwD_LOGN" deliberately contains no "IO".
+  # "_SPLIT" follows "_LOGN"; the IO suffix is only reachable for normal
+  # launches, and neither lognormal name contains the substring "IO".
   c_name <- paste0("BAwD", if (lognormal) "_LOGN"
                            else if (!posdrift) "IO" else "",
+                   if (splitlognormal) "_SPLIT" else "",
                    .bawd_gamma_suffix(gamma), .bawd_rho_suffix(rho))
   list(
     type = "RACE",
@@ -520,33 +579,40 @@ BAwD <- function(drift_distribution = c("lognormal", "normal"),
 #' used.
 #'
 #' With `drift_distribution = "lognormal"` (the default) `log V ~ N(mu, sigma^2)`.
+#' With `drift_distribution = "splitlognormal"`, `Y = log V` is continuous
+#' split normal with \verb{sigma_L = sigma exp(delta/2)} and
+#' \verb{sigma_R = sigma exp(-delta/2)}; `mu` is its exact median and `delta`
+#' is an unbounded log-width ratio.  The derived split point is chosen so that
+#' `P(Y <= mu) = 1/2`.  `delta = 0` is exactly the ordinary lognormal launch.
 #'
 #' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Mapping** | **Interpretation** |
 #' |---|---|---|---|---|---|
-#' | *mu* | identity | \[-Inf, Inf\] | 0 | | Mean of the log launch strength. |
-#' | *sigma* | log | \[0, Inf\] | log(1) | | SD of log launch strength. |
+#' | *mu* | identity | \[-Inf, Inf\] | 0 | | Median log launch location. |
+#' | *sigma* | log | \[0, Inf\] | log(1) | | Geometric-mean log width. |
 #' | *B* | log | \[0, Inf\] | log(1) | *b* = *B* + *A* | Threshold distance. |
 #' | *A* | log | \[0, Inf\] | log(0) | | Start-point range. |
 #' | *t0* | log | \[0, Inf\] | log(0) | | Non-decision time. |
 #' | *k* | log | \[0, Inf\] | log(1) | | Drive-decay rate. |
 #' | *lambda* | probit | \[0, 1\] | qnorm(.5) | | Proportional clearance fraction. |
 #'
-#' With `drift_distribution = "normal"`, `mu` and `sigma` are replaced by
-#' `v` and `sv`; the launch is truncated positive when `posdrift = TRUE`.
-#' The generic `pContaminant` and `pGuess` nuisance parameters are appended by
-#' the data pipeline when requested.
-#'
-#' @param drift_distribution Distribution of the launch strength: `"lognormal"`
-#'   (default), or `"normal"`.
+#' For `drift_distribution = "normal"`, use `v` and `sv` instead of the
+#' lognormal launch rows; the normal launch is truncated at zero by default.
+#' The split-lognormal option adds the optional identity-scale `delta` parameter
+#' (default `0`).
+#' Optional fitting parameters: `pContaminant` is the omission probability and
+#' `pGuess` is the uniform-outlier probability.
+#' @param drift_distribution Distribution of the launch strength:
+#'   `"lognormal"` (default), `"splitlognormal"`, or `"normal"`.
 #' @param posdrift Logical; truncate the normal launch at zero when `TRUE`.
-#'   It has no effect for the lognormal launch.
+#'   It has no effect for the positive lognormal and split-lognormal launches.
 #' @return A model list defining the BAwDp race model.
 #' @export
-BAwDp <- function(drift_distribution = c("lognormal", "normal"),
+BAwDp <- function(drift_distribution = c("lognormal", "normal", "splitlognormal"),
                   posdrift = TRUE) {
   drift_distribution <- match.arg(drift_distribution)
-  launch <- .bawl_launch_code(drift_distribution)
-  lognormal <- launch == 1L
+  launch <- .ba_launch_code(drift_distribution, "BAwD")
+  lognormal <- launch %in% c(1L, 2L)
+  splitlognormal <- launch == 2L
   if (lognormal && !isTRUE(posdrift)) {
     stop("BAwDp: posdrift only applies to drift_distribution = \"normal\"; a ",
          "lognormal launch strength is positive by construction.")
@@ -556,6 +622,11 @@ BAwDp <- function(drift_distribution = c("lognormal", "normal"),
     p_types <- c(mu = 0, sigma = log(1))
     transform <- c(mu = "identity", sigma = "exp")
     minmax <- cbind(mu = c(-Inf, Inf), sigma = c(1e-4, Inf))
+    if (splitlognormal) {
+      p_types <- c(p_types, delta = 0)
+      transform <- c(transform, delta = "identity")
+      minmax <- cbind(minmax, delta = c(-Inf, Inf))
+    }
   } else {
     p_types <- c(v = 1, sv = log(1))
     transform <- c(v = "identity", sv = "exp")
@@ -576,11 +647,12 @@ BAwDp <- function(drift_distribution = c("lognormal", "normal"),
   p_types <- .nuis$p_types; transform <- .nuis$transform
   minmax <- .nuis$minmax; exception <- .nuis$exception
 
-  launch_pars <- .bawl_par_names(launch)
+  launch_pars <- .ba_par_names(launch)
   list(
     type = "RACE",
     c_name = paste0("BAwDp", if (lognormal) "_LOGN"
-                              else if (!posdrift) "IO" else ""),
+                              else if (!posdrift) "IO" else "",
+                    if (splitlognormal) "_SPLIT" else ""),
     drift_distribution = drift_distribution,
     p_types = p_types,
     p_types_canonical = setdiff(names(p_types), .nuisance_par_names),

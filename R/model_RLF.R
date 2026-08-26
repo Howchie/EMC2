@@ -138,8 +138,9 @@ rRLF <- function(lR, pars, ok = rep(TRUE, nrow(pars)),
 #' | *t0* | log | \[0, Inf\] | log(0) | | Non-decision time. |
 #' | *s* | log | \[0, Inf\] | log(1) | | Symmetric stable-noise scale. |
 #' | *alpha* | probit | \[1, 2\] | qnorm(.7) | | Symmetric stable-law index; 2 is the diffusion limit. |
-#' | *pContaminant* | probit | \[0, 1\] | qnorm(0) | | Optional omission contaminant probability. |
-#' | *pGuess* | probit | \[0, 1\] | qnorm(0) | | Optional uniform outlier probability. |
+#'
+#' Optional fitting parameters: `pContaminant` is the omission probability and
+#' `pGuess` is the uniform-outlier probability.
 #'
 #' @return A list defining an EMC2 race model.
 #' @export

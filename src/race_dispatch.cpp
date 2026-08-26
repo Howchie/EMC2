@@ -244,13 +244,17 @@ RaceModelAdapter resolve_race_model_adapter(const std::string& type_std,
     out.model_dfun_raw = &dbtawl_sustained_raw;
     out.model_pfun_raw = &pbtawl_sustained_raw;
     out.logS_at_t_ptr  = &btawl_sustained_logS_at_t;
+    const bool btawl_split = (type_std.find("_SPLIT") != std::string::npos);
     const bool btawl_logn = (type_std.find("_LOGN") != std::string::npos);
-    out.col_spec = btawl_logn
-      ? emc2col::btawl_sustained_logn::spec()
-      : emc2col::btawl_sustained::spec();
-    out.ctx.t0_index = emc2col::btawl_sustained::t0;
-    out.ctx.btawl_launch = btawl_logn ? BTAWL_LAUNCH_LOGNORMAL
-                                      : BTAWL_LAUNCH_NORMAL;
+    out.col_spec = btawl_split
+      ? emc2col::btawlsplit_sustained::spec()
+      : (btawl_logn ? emc2col::btawl_sustained_logn::spec()
+                    : emc2col::btawl_sustained::spec());
+    out.ctx.t0_index = btawl_split ? int(emc2col::btawlsplit_sustained::t0)
+                                   : int(emc2col::btawl_sustained::t0);
+    out.ctx.btawl_launch = btawl_split ? BTAWL_LAUNCH_SPLITLOGNORMAL
+                         : (btawl_logn ? BTAWL_LAUNCH_LOGNORMAL
+                                       : BTAWL_LAUNCH_NORMAL);
     out.ctx.btawl_ttrans_chart = false;
     out.ctx.defective_upper_tail = true;
     if (!btawl_logn && type_std.find("_IO") != std::string::npos)
@@ -261,16 +265,22 @@ RaceModelAdapter resolve_race_model_adapter(const std::string& type_std,
     out.model_dfun_raw = &dbtawl_transient_raw;
     out.model_pfun_raw = &pbtawl_transient_raw;
     out.logS_at_t_ptr  = &btawl_transient_logS_at_t;
+    const bool btawl_split = (type_std.find("_SPLIT") != std::string::npos);
     const bool btawl_logn = (type_std.find("_LOGN") != std::string::npos);
     const bool btawl_rate = (type_std.find("_RATE") != std::string::npos);
-    out.col_spec = btawl_logn
-      ? (btawl_rate ? emc2col::btawl_transient_logn::spec_rate()
-                    : emc2col::btawl_transient_logn::spec())
-      : (btawl_rate ? emc2col::btawl_transient::spec_rate()
-                    : emc2col::btawl_transient::spec());
-    out.ctx.t0_index = emc2col::btawl_transient::t0;
-    out.ctx.btawl_launch = btawl_logn ? BTAWL_LAUNCH_LOGNORMAL
-                                      : BTAWL_LAUNCH_NORMAL;
+    out.col_spec = btawl_split
+      ? (btawl_rate ? emc2col::btawlsplit_transient::spec_rate()
+                    : emc2col::btawlsplit_transient::spec())
+      : (btawl_logn
+          ? (btawl_rate ? emc2col::btawl_transient_logn::spec_rate()
+                        : emc2col::btawl_transient_logn::spec())
+          : (btawl_rate ? emc2col::btawl_transient::spec_rate()
+                        : emc2col::btawl_transient::spec()));
+    out.ctx.t0_index = btawl_split ? int(emc2col::btawlsplit_transient::t0)
+                                   : int(emc2col::btawl_transient::t0);
+    out.ctx.btawl_launch = btawl_split ? BTAWL_LAUNCH_SPLITLOGNORMAL
+                         : (btawl_logn ? BTAWL_LAUNCH_LOGNORMAL
+                                       : BTAWL_LAUNCH_NORMAL);
     out.ctx.btawl_ttrans_chart = !btawl_rate;
     out.ctx.defective_upper_tail = true;
     if (!btawl_logn && type_std.find("_IO") != std::string::npos)
@@ -281,16 +291,22 @@ RaceModelAdapter resolve_race_model_adapter(const std::string& type_std,
     out.model_dfun_raw = &dbtawl_local_race_raw;
     out.model_pfun_raw = &pbtawl_local_race_raw;
     out.logS_at_t_ptr  = &btawl_local_race_logS_at_t;
+    const bool btawl_split = (type_std.find("_SPLIT") != std::string::npos);
     const bool btawl_logn = (type_std.find("_LOGN") != std::string::npos);
     const bool btawl_rate = (type_std.find("_RATE") != std::string::npos);
-    out.col_spec = btawl_logn
-      ? (btawl_rate ? emc2col::btawl_local_race_logn::spec_rate()
-                    : emc2col::btawl_local_race_logn::spec())
-      : (btawl_rate ? emc2col::btawl_local_race::spec_rate()
-                    : emc2col::btawl_local_race::spec());
-    out.ctx.t0_index = emc2col::btawl_local_race::t0;
-    out.ctx.btawl_launch = btawl_logn ? BTAWL_LAUNCH_LOGNORMAL
-                                      : BTAWL_LAUNCH_NORMAL;
+    out.col_spec = btawl_split
+      ? (btawl_rate ? emc2col::btawlsplit_local_race::spec_rate()
+                    : emc2col::btawlsplit_local_race::spec())
+      : (btawl_logn
+          ? (btawl_rate ? emc2col::btawl_local_race_logn::spec_rate()
+                        : emc2col::btawl_local_race_logn::spec())
+          : (btawl_rate ? emc2col::btawl_local_race::spec_rate()
+                        : emc2col::btawl_local_race::spec()));
+    out.ctx.t0_index = btawl_split ? int(emc2col::btawlsplit_local_race::t0)
+                                   : int(emc2col::btawl_local_race::t0);
+    out.ctx.btawl_launch = btawl_split ? BTAWL_LAUNCH_SPLITLOGNORMAL
+                         : (btawl_logn ? BTAWL_LAUNCH_LOGNORMAL
+                                       : BTAWL_LAUNCH_NORMAL);
     out.ctx.btawl_ttrans_chart = !btawl_rate;
     out.ctx.defective_upper_tail = true;
     if (!btawl_logn && type_std.find("_IO") != std::string::npos)
@@ -304,13 +320,17 @@ RaceModelAdapter resolve_race_model_adapter(const std::string& type_std,
     out.model_dfun_raw = &dbawf_raw;
     out.model_pfun_raw = &pbawf_raw;
     out.logS_at_t_ptr  = &bawf_logS_at_t;
+    const bool bawf_split = (type_std.find("_SPLIT") != std::string::npos);
     const bool bawf_logn = (type_std.find("_LOGN") != std::string::npos);
-    out.col_spec = bawf_logn ? emc2col::bawf_logn::spec()
-                             : emc2col::bawf::spec();
-    out.ctx.t0_index = emc2col::bawf::t0;
+    out.col_spec = bawf_split ? emc2col::bawfsplit::spec()
+                  : (bawf_logn ? emc2col::bawf_logn::spec()
+                               : emc2col::bawf::spec());
+    out.ctx.t0_index = bawf_split ? int(emc2col::bawfsplit::t0)
+                                  : int(emc2col::bawf::t0);
     // Shared with BAwD; see bawf_launch_of() in model_BAwF.cpp.
-    out.ctx.bawd_launch = bawf_logn ? BAWF_LAUNCH_LOGNORMAL
-                                    : BAWF_LAUNCH_NORMAL;
+    out.ctx.bawd_launch = bawf_split ? BAWF_LAUNCH_SPLITLOGNORMAL
+                        : (bawf_logn ? BAWF_LAUNCH_LOGNORMAL
+                                     : BAWF_LAUNCH_NORMAL);
     // Fixed fading-kernel shape from the c_name suffix; no suffix is the
     // exponential member.  rho = 1 has no finite endpoint and BAwF() refuses
     // it, so it emits no suffix here.
@@ -335,14 +355,18 @@ RaceModelAdapter resolve_race_model_adapter(const std::string& type_std,
     out.model_dfun_raw = &dbawr_raw;
     out.model_pfun_raw = &pbawr_raw;
     out.logS_at_t_ptr  = &bawr_logS_at_t;
+    const bool bawr_split = (type_std.find("_SPLIT") != std::string::npos);
     const bool bawr_logn = (type_std.find("_LOGN") != std::string::npos);
-    out.col_spec = bawr_logn ? emc2col::bawr_logn::spec()
-                             : emc2col::bawr::spec();
-    out.ctx.t0_index = emc2col::bawr::t0;
+    out.col_spec = bawr_split ? emc2col::bawrsplit::spec()
+                  : (bawr_logn ? emc2col::bawr_logn::spec()
+                               : emc2col::bawr::spec());
+    out.ctx.t0_index = bawr_split ? int(emc2col::bawrsplit::t0)
+                                  : int(emc2col::bawr::t0);
     // Shared with BAwD; see bawr_launch_of() in model_BAwR.cpp.  There is no rho:
     // the decay shape is the sampled exponent, not a fixed kernel index.
-    out.ctx.bawd_launch = bawr_logn ? BAWR_LAUNCH_LOGNORMAL
-                                    : BAWR_LAUNCH_NORMAL;
+    out.ctx.bawd_launch = bawr_split ? BAWR_LAUNCH_SPLITLOGNORMAL
+                        : (bawr_logn ? BAWR_LAUNCH_LOGNORMAL
+                                     : BAWR_LAUNCH_NORMAL);
     // Always defective: launches below V_c(z) never reach the threshold, and
     // no parameter setting removes that mass.
     out.ctx.defective_upper_tail = true;
@@ -361,12 +385,16 @@ RaceModelAdapter resolve_race_model_adapter(const std::string& type_std,
     out.model_dfun_raw = &dbawdp_raw;
     out.model_pfun_raw = &pbawdp_raw;
     out.logS_at_t_ptr  = &bawdp_logS_at_t;
+    const bool bawdp_split = (type_std.find("_SPLIT") != std::string::npos);
     const bool bawdp_logn = (type_std.find("_LOGN") != std::string::npos);
-    out.col_spec = bawdp_logn ? emc2col::bawdp_logn::spec()
-                              : emc2col::bawdp::spec();
-    out.ctx.t0_index = emc2col::bawdp::t0;
-    out.ctx.bawl_launch = bawdp_logn ? BAWL_LAUNCH_LOGNORMAL
-                                     : BAWL_LAUNCH_NORMAL;
+    out.col_spec = bawdp_split ? emc2col::bawdpsplit::spec()
+                  : (bawdp_logn ? emc2col::bawdp_logn::spec()
+                                : emc2col::bawdp::spec());
+    out.ctx.t0_index = bawdp_split ? int(emc2col::bawdpsplit::t0)
+                                   : int(emc2col::bawdp::t0);
+    out.ctx.bawl_launch = bawdp_split ? BAWL_LAUNCH_SPLITLOGNORMAL
+                        : (bawdp_logn ? BAWL_LAUNCH_LOGNORMAL
+                                      : BAWL_LAUNCH_NORMAL);
     out.ctx.defective_upper_tail = true;
     if (!bawdp_logn && type_std.find("IO") != std::string::npos)
       out.ctx.use_posdrift = false;
@@ -379,11 +407,14 @@ RaceModelAdapter resolve_race_model_adapter(const std::string& type_std,
     out.model_dfun_raw = &dbawd_raw;
     out.model_pfun_raw = &pbawd_raw;
     out.logS_at_t_ptr  = &bawd_logS_at_t;
-    // The two launch distributions share column POSITIONS and differ only in
-    // the names validate_col_prefix() enforces, so t0_index is common.
+    // Normal and lognormal launches share column POSITIONS; split-lognormal
+    // inserts delta immediately after sigma, shifting the rest by one.
+    const bool bawd_split = (type_std.find("_SPLIT") != std::string::npos);
     const bool bawd_logn = (type_std.find("_LOGN") != std::string::npos);
-    out.ctx.t0_index = emc2col::bawd::t0;
-    out.ctx.bawd_launch = bawd_logn ? BAWD_LAUNCH_LOGNORMAL : BAWD_LAUNCH_NORMAL;
+    out.ctx.t0_index = bawd_split ? int(emc2col::bawdsplit::t0) : int(emc2col::bawd::t0);
+    out.ctx.bawd_launch = bawd_split ? BAWD_LAUNCH_SPLITLOGNORMAL
+                        : (bawd_logn ? BAWD_LAUNCH_LOGNORMAL
+                                     : BAWD_LAUNCH_NORMAL);
     // Fixed clearance exponent and base-kernel shape parsed from c_name.
     // Constant clearance and the exponential kernel emit no suffixes,
     // preserving existing BAwD routing.
@@ -394,8 +425,9 @@ RaceModelAdapter resolve_race_model_adapter(const std::string& type_std,
         ((type_std.find("_GAM12") != std::string::npos) ? 0.5 : 0.0)));
     // Slot 6 samples the clearance rate `ell` for every gamma/rho option; the
     // endpoint is derived on the R side and never stored in a design column.
-    out.col_spec = bawd_logn ? emc2col::bawd_logn::spec()
-                             : emc2col::bawd::spec();
+    out.col_spec = bawd_split ? emc2col::bawdsplit::spec()
+                  : (bawd_logn ? emc2col::bawd_logn::spec()
+                               : emc2col::bawd::spec());
     // Fixed power-decay kernel parameter parsed from the c_name suffix.
     // Default (no suffix) is R_PosInf (exponential kernel).
     out.ctx.bawd_rho =
@@ -417,15 +449,21 @@ RaceModelAdapter resolve_race_model_adapter(const std::string& type_std,
     out.model_pfun_raw = &pbawl_raw;
     out.logS_at_t_ptr  = &bawl_logS_at_t;
     // The lognormal launch shares every column POSITION with the Gaussian one
-    // (mu/sigma occupy v/sv), so only the spec's names and this flag differ.
+    // (mu/sigma occupy v/sv); split-lognormal inserts delta after sigma, so
+    // the spec, the launch flag, and the shifted indices all differ.
+    const bool bawl_split = (type_std.find("_SPLIT") != std::string::npos);
     const bool bawl_logn = (type_std.find("_LOGN") != std::string::npos);
-    out.col_spec       = bawl_logn ? emc2col::bawl_logn::spec()
-                                   : emc2col::bawl::spec();
-    out.ctx.t0_index   = emc2col::bawl::t0;
-    out.ctx.mean_g_index = emc2col::bawl::mG;
-    out.ctx.mean_k_index = emc2col::bawl::mK;
-    out.ctx.erlang_omega_index = (out.ctx.kill_shape == 3) ? emc2col::bawl::omega : -1;
-    out.ctx.bawl_launch = bawl_logn ? BAWL_LAUNCH_LOGNORMAL : BAWL_LAUNCH_NORMAL;
+    out.col_spec       = bawl_split ? emc2col::bawlsplit::spec()
+                        : (bawl_logn ? emc2col::bawl_logn::spec()
+                                     : emc2col::bawl::spec());
+    out.ctx.t0_index   = bawl_split ? int(emc2col::bawlsplit::t0) : int(emc2col::bawl::t0);
+    out.ctx.mean_g_index = bawl_split ? int(emc2col::bawlsplit::mG) : int(emc2col::bawl::mG);
+    out.ctx.mean_k_index = bawl_split ? int(emc2col::bawlsplit::mK) : int(emc2col::bawl::mK);
+    out.ctx.erlang_omega_index = (out.ctx.kill_shape == 3)
+      ? (bawl_split ? int(emc2col::bawlsplit::omega) : int(emc2col::bawl::omega)) : -1;
+    out.ctx.bawl_launch = bawl_split ? BAWL_LAUNCH_SPLITLOGNORMAL
+                        : (bawl_logn ? BAWL_LAUNCH_LOGNORMAL
+                                     : BAWL_LAUNCH_NORMAL);
     // The correlated-drift path is a one-factor decomposition of the *Gaussian*
     // drift vector, so it is not reachable with a lognormal launch; BAwL()
     // rejects that combination rather than silently ignoring one of them.

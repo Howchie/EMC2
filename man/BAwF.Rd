@@ -4,11 +4,15 @@
 \alias{BAwF}
 \title{The Ballistic Accumulator with Global Fading (BAwF)}
 \usage{
-BAwF(drift_distribution = c("lognormal", "normal"), posdrift = TRUE, rho = Inf)
+BAwF(
+  drift_distribution = c("lognormal", "normal", "splitlognormal"),
+  posdrift = TRUE,
+  rho = Inf
+)
 }
 \arguments{
 \item{drift_distribution}{Distribution of trialwise launch strength:
-\code{"lognormal"} (default) or \code{"normal"}.}
+\code{"lognormal"} (default), \code{"splitlognormal"}, or \code{"normal"}.}
 
 \item{posdrift}{Logical. If \code{TRUE} (default), truncate normal launch
 strengths to be positive; if \code{FALSE}, append \code{IO} to the compiled model
@@ -56,10 +60,16 @@ linear shutdown. \code{k = 0} is the exact LBA limit.
 \code{rho} is a model option, never an estimated parameter, so it does not
 appear in \code{p_types}. \code{rho = 1} is refused: it has no finite endpoint.
 
-With \code{drift_distribution = "lognormal"} (the default) \verb{log V ~ N(mu, sigma^2)}.\tabular{llllll}{
+With \code{drift_distribution = "lognormal"} (the default) \verb{log V ~ N(mu, sigma^2)}.
+With \code{"splitlognormal"}, \verb{log V} is continuous split normal with
+\code{sigma_L = sigma * exp(delta/2)} and \code{sigma_R = sigma * exp(-delta/2)};
+\code{mu} is the exact median, the split point is derived from that condition,
+and \code{delta} is unbounded.  \code{delta = 0} reduces exactly to lognormal.\tabular{llllll}{
    \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Mapping} \tab \strong{Interpretation} \cr
-   \emph{mu} \tab identity \tab [-Inf, Inf] \tab 0 \tab  \tab Mean of the log launch strength. \cr
-   \emph{sigma} \tab log \tab [0, Inf] \tab log(1) \tab  \tab SD of log launch strength. \cr
+   \emph{mu} \tab identity \tab [-Inf, Inf] \tab 0 \tab  \tab Median/mean log launch location. \cr
+   \emph{sigma} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Geometric-mean log width. \cr
+   \emph{v} \tab identity \tab [-Inf, Inf] \tab 1 \tab  \tab Mean normal launch strength (normal launch only). \cr
+   \emph{sv} \tab log \tab [0, Inf] \tab log(1) \tab  \tab SD of normal launch strength (normal launch only). \cr
    \emph{B} \tab log \tab [0, Inf] \tab log(1) \tab \emph{b} = \emph{B} + \emph{A} \tab Threshold distance. \cr
    \emph{A} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Start-point range. \cr
    \emph{t0} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Non-decision time. \cr
@@ -67,8 +77,12 @@ With \code{drift_distribution = "lognormal"} (the default) \verb{log V ~ N(mu, s
 }
 
 
-With \code{drift_distribution = "normal"}, \code{mu} and \code{sigma} are replaced by
-\code{v} and \code{sv}; the launch is truncated positive when \code{posdrift = TRUE}.
+For \code{drift_distribution = "normal"}, use \code{v} and \code{sv} instead of the
+lognormal launch rows; the normal launch is truncated at zero by default.
+The split-lognormal option adds the optional identity-scale \code{delta} parameter
+(default \code{0}).
+Optional fitting parameters: \code{pContaminant} is the omission probability and
+\code{pGuess} is the uniform-outlier probability.
 }
 \examples{
 ADmat <- matrix(c(-1/2, 1/2), ncol = 1, dimnames = list(NULL, "d"))

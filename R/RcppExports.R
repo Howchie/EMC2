@@ -85,20 +85,12 @@ calc_ll_oo_marginal_nodes <- function(particle_matrix, data, constants, designs,
     .Call(`_EMC2_calc_ll_oo_marginal_nodes`, particle_matrix, data, constants, designs, type, bounds, transforms, pretransforms, p_types, min_ll, marginalise, trend)
 }
 
-dbawd <- function(t, A, b, p1, p2, k, ell, launch = 1L, posdrift = TRUE, log_out = FALSE, gamma = 0.0, rho = 0.0) {
-    .Call(`_EMC2_dbawd`, t, A, b, p1, p2, k, ell, launch, posdrift, log_out, gamma, rho)
+dbawd <- function(t, A, b, p1, p2, k, ell, launch = 1L, posdrift = TRUE, log_out = FALSE, gamma = 0.0, rho = 0.0, delta = 0.0) {
+    .Call(`_EMC2_dbawd`, t, A, b, p1, p2, k, ell, launch, posdrift, log_out, gamma, rho, delta)
 }
 
-pbawd <- function(t, A, b, p1, p2, k, ell, launch = 1L, posdrift = TRUE, log_out = FALSE, gamma = 0.0, rho = 0.0) {
-    .Call(`_EMC2_pbawd`, t, A, b, p1, p2, k, ell, launch, posdrift, log_out, gamma, rho)
-}
-
-dbawd_norm <- function(t, A, b, p1, p2, k, ell, launch = 1L, posdrift = TRUE, log_out = FALSE, gamma = 0.0, rho = 0.0) {
-    .Call(`_EMC2_dbawd_norm`, t, A, b, p1, p2, k, ell, launch, posdrift, log_out, gamma, rho)
-}
-
-pbawd_norm <- function(t, A, b, p1, p2, k, ell, launch = 1L, posdrift = TRUE, log_out = FALSE, gamma = 0.0, rho = 0.0) {
-    .Call(`_EMC2_pbawd_norm`, t, A, b, p1, p2, k, ell, launch, posdrift, log_out, gamma, rho)
+pbawd <- function(t, A, b, p1, p2, k, ell, launch = 1L, posdrift = TRUE, log_out = FALSE, gamma = 0.0, rho = 0.0, delta = 0.0) {
+    .Call(`_EMC2_pbawd`, t, A, b, p1, p2, k, ell, launch, posdrift, log_out, gamma, rho, delta)
 }
 
 bawd_tmax <- function(A, b, k, ell, gamma = 0.0, rho = 0.0) {
@@ -121,28 +113,28 @@ lognormal_logratio_stoploss_log <- function(v, mu, sigma, log_ell) {
     .Call(`_EMC2_lognormal_logratio_stoploss_log`, v, mu, sigma, log_ell)
 }
 
-dbawdp <- function(t, A, b, p1, p2, k, lambda, launch = 1L, posdrift = TRUE, log_out = FALSE) {
-    .Call(`_EMC2_dbawdp`, t, A, b, p1, p2, k, lambda, launch, posdrift, log_out)
+dbawdp <- function(t, A, b, p1, p2, k, lambda, launch = 1L, posdrift = TRUE, log_out = FALSE, delta = 0.0) {
+    .Call(`_EMC2_dbawdp`, t, A, b, p1, p2, k, lambda, launch, posdrift, log_out, delta)
 }
 
-pbawdp <- function(t, A, b, p1, p2, k, lambda, launch = 1L, posdrift = TRUE, log_out = FALSE) {
-    .Call(`_EMC2_pbawdp`, t, A, b, p1, p2, k, lambda, launch, posdrift, log_out)
+pbawdp <- function(t, A, b, p1, p2, k, lambda, launch = 1L, posdrift = TRUE, log_out = FALSE, delta = 0.0) {
+    .Call(`_EMC2_pbawdp`, t, A, b, p1, p2, k, lambda, launch, posdrift, log_out, delta)
 }
 
-dbawf <- function(t, A, b, p1, p2, k, launch = 1L, posdrift = TRUE, log_out = FALSE, rho = 0.0) {
-    .Call(`_EMC2_dbawf`, t, A, b, p1, p2, k, launch, posdrift, log_out, rho)
+dbawf <- function(t, A, b, p1, p2, k, launch = 1L, posdrift = TRUE, log_out = FALSE, rho = 0.0, delta = 0.0) {
+    .Call(`_EMC2_dbawf`, t, A, b, p1, p2, k, launch, posdrift, log_out, rho, delta)
 }
 
-pbawf <- function(t, A, b, p1, p2, k, launch = 1L, posdrift = TRUE, log_out = FALSE, rho = 0.0) {
-    .Call(`_EMC2_pbawf`, t, A, b, p1, p2, k, launch, posdrift, log_out, rho)
+pbawf <- function(t, A, b, p1, p2, k, launch = 1L, posdrift = TRUE, log_out = FALSE, rho = 0.0, delta = 0.0) {
+    .Call(`_EMC2_pbawf`, t, A, b, p1, p2, k, launch, posdrift, log_out, rho, delta)
 }
 
-dbawf_norm <- function(t, A, b, p1, p2, k, launch = 1L, posdrift = TRUE, log_out = FALSE, rho = 0.0) {
-    .Call(`_EMC2_dbawf_norm`, t, A, b, p1, p2, k, launch, posdrift, log_out, rho)
+dbawf_norm <- function(t, A, b, p1, p2, k, launch = 1L, posdrift = TRUE, log_out = FALSE, rho = 0.0, delta = 0.0) {
+    .Call(`_EMC2_dbawf_norm`, t, A, b, p1, p2, k, launch, posdrift, log_out, rho, delta)
 }
 
-pbawf_norm <- function(t, A, b, p1, p2, k, launch = 1L, posdrift = TRUE, log_out = FALSE, rho = 0.0) {
-    .Call(`_EMC2_pbawf_norm`, t, A, b, p1, p2, k, launch, posdrift, log_out, rho)
+pbawf_norm <- function(t, A, b, p1, p2, k, launch = 1L, posdrift = TRUE, log_out = FALSE, rho = 0.0, delta = 0.0) {
+    .Call(`_EMC2_pbawf_norm`, t, A, b, p1, p2, k, launch, posdrift, log_out, rho, delta)
 }
 
 bawf_tmax <- function(A, b, k, rho = 0.0) {
@@ -157,20 +149,20 @@ bawf_vcrit_vec <- function(A, b, k, rho = 0.0) {
     .Call(`_EMC2_bawf_vcrit_vec`, A, b, k, rho)
 }
 
-dbawr <- function(t, A, b, p1, p2, kappa, pw, launch = 1L, posdrift = TRUE, log_out = FALSE) {
-    .Call(`_EMC2_dbawr`, t, A, b, p1, p2, kappa, pw, launch, posdrift, log_out)
+dbawr <- function(t, A, b, p1, p2, kappa, pw, launch = 1L, posdrift = TRUE, log_out = FALSE, delta = 0.0) {
+    .Call(`_EMC2_dbawr`, t, A, b, p1, p2, kappa, pw, launch, posdrift, log_out, delta)
 }
 
-pbawr <- function(t, A, b, p1, p2, kappa, pw, launch = 1L, posdrift = TRUE, log_out = FALSE) {
-    .Call(`_EMC2_pbawr`, t, A, b, p1, p2, kappa, pw, launch, posdrift, log_out)
+pbawr <- function(t, A, b, p1, p2, kappa, pw, launch = 1L, posdrift = TRUE, log_out = FALSE, delta = 0.0) {
+    .Call(`_EMC2_pbawr`, t, A, b, p1, p2, kappa, pw, launch, posdrift, log_out, delta)
 }
 
-dbawr_norm <- function(t, A, b, p1, p2, kappa, pw, launch = 1L, posdrift = TRUE, log_out = FALSE) {
-    .Call(`_EMC2_dbawr_norm`, t, A, b, p1, p2, kappa, pw, launch, posdrift, log_out)
+dbawr_norm <- function(t, A, b, p1, p2, kappa, pw, launch = 1L, posdrift = TRUE, log_out = FALSE, delta = 0.0) {
+    .Call(`_EMC2_dbawr_norm`, t, A, b, p1, p2, kappa, pw, launch, posdrift, log_out, delta)
 }
 
-pbawr_norm <- function(t, A, b, p1, p2, kappa, pw, launch = 1L, posdrift = TRUE, log_out = FALSE) {
-    .Call(`_EMC2_pbawr_norm`, t, A, b, p1, p2, kappa, pw, launch, posdrift, log_out)
+pbawr_norm <- function(t, A, b, p1, p2, kappa, pw, launch = 1L, posdrift = TRUE, log_out = FALSE, delta = 0.0) {
+    .Call(`_EMC2_pbawr_norm`, t, A, b, p1, p2, kappa, pw, launch, posdrift, log_out, delta)
 }
 
 bawr_tmax <- function(A, b, kappa, pw) {
@@ -185,28 +177,28 @@ bawr_vcrit_vec <- function(A, b, kappa, pw) {
     .Call(`_EMC2_bawr_vcrit_vec`, A, b, kappa, pw)
 }
 
-dbtawl_transient <- function(t, A, b, p1, p2, k, tau, launch = 1L, posdrift = TRUE, log_out = FALSE) {
-    .Call(`_EMC2_dbtawl_transient`, t, A, b, p1, p2, k, tau, launch, posdrift, log_out)
+dbtawl_transient <- function(t, A, b, p1, p2, k, tau, launch = 1L, posdrift = TRUE, log_out = FALSE, delta = 0.0) {
+    .Call(`_EMC2_dbtawl_transient`, t, A, b, p1, p2, k, tau, launch, posdrift, log_out, delta)
 }
 
-pbtawl_transient <- function(t, A, b, p1, p2, k, tau, launch = 1L, posdrift = TRUE, log_out = FALSE) {
-    .Call(`_EMC2_pbtawl_transient`, t, A, b, p1, p2, k, tau, launch, posdrift, log_out)
+pbtawl_transient <- function(t, A, b, p1, p2, k, tau, launch = 1L, posdrift = TRUE, log_out = FALSE, delta = 0.0) {
+    .Call(`_EMC2_pbtawl_transient`, t, A, b, p1, p2, k, tau, launch, posdrift, log_out, delta)
 }
 
-btawl_transient_log_surv_vec <- function(t, A, b, p1, p2, k, tau, launch = 1L, posdrift = TRUE) {
-    .Call(`_EMC2_btawl_transient_log_surv_vec`, t, A, b, p1, p2, k, tau, launch, posdrift)
+btawl_transient_log_surv_vec <- function(t, A, b, p1, p2, k, tau, launch = 1L, posdrift = TRUE, delta = 0.0) {
+    .Call(`_EMC2_btawl_transient_log_surv_vec`, t, A, b, p1, p2, k, tau, launch, posdrift, delta)
 }
 
-btawl_local_race_log_surv_vec <- function(t, A, b, p1, p2, k, tau_s, tau_t, pi, launch = 1L, posdrift = TRUE) {
-    .Call(`_EMC2_btawl_local_race_log_surv_vec`, t, A, b, p1, p2, k, tau_s, tau_t, pi, launch, posdrift)
+btawl_local_race_log_surv_vec <- function(t, A, b, p1, p2, k, tau_s, tau_t, pi, launch = 1L, posdrift = TRUE, delta = 0.0) {
+    .Call(`_EMC2_btawl_local_race_log_surv_vec`, t, A, b, p1, p2, k, tau_s, tau_t, pi, launch, posdrift, delta)
 }
 
-dbtawl_local_race <- function(t, A, b, p1, p2, k, tau_s, tau_t, pi, launch = 1L, posdrift = TRUE, log_out = FALSE) {
-    .Call(`_EMC2_dbtawl_local_race`, t, A, b, p1, p2, k, tau_s, tau_t, pi, launch, posdrift, log_out)
+dbtawl_local_race <- function(t, A, b, p1, p2, k, tau_s, tau_t, pi, launch = 1L, posdrift = TRUE, log_out = FALSE, delta = 0.0) {
+    .Call(`_EMC2_dbtawl_local_race`, t, A, b, p1, p2, k, tau_s, tau_t, pi, launch, posdrift, log_out, delta)
 }
 
-pbtawl_local_race <- function(t, A, b, p1, p2, k, tau_s, tau_t, pi, launch = 1L, posdrift = TRUE, log_out = FALSE) {
-    .Call(`_EMC2_pbtawl_local_race`, t, A, b, p1, p2, k, tau_s, tau_t, pi, launch, posdrift, log_out)
+pbtawl_local_race <- function(t, A, b, p1, p2, k, tau_s, tau_t, pi, launch = 1L, posdrift = TRUE, log_out = FALSE, delta = 0.0) {
+    .Call(`_EMC2_pbtawl_local_race`, t, A, b, p1, p2, k, tau_s, tau_t, pi, launch, posdrift, log_out, delta)
 }
 
 btawl_tmax_vec <- function(k, tau) {
@@ -241,28 +233,28 @@ frq_h_inv_r <- function(y, delta) {
     .Call(`_EMC2_frq_h_inv_r`, y, delta)
 }
 
-pleakyba_norm <- function(t, A, b, v, sv, k, posdrift = TRUE, log_out = FALSE, launch = 0L) {
-    .Call(`_EMC2_pleakyba_norm`, t, A, b, v, sv, k, posdrift, log_out, launch)
+pleakyba_norm <- function(t, A, b, v, sv, k, posdrift = TRUE, log_out = FALSE, launch = 0L, delta = 0.0) {
+    .Call(`_EMC2_pleakyba_norm`, t, A, b, v, sv, k, posdrift, log_out, launch, delta)
 }
 
-dleakyba_norm <- function(t, A, b, v, sv, k, posdrift = TRUE, log_out = FALSE, launch = 0L) {
-    .Call(`_EMC2_dleakyba_norm`, t, A, b, v, sv, k, posdrift, log_out, launch)
+dleakyba_norm <- function(t, A, b, v, sv, k, posdrift = TRUE, log_out = FALSE, launch = 0L, delta = 0.0) {
+    .Call(`_EMC2_dleakyba_norm`, t, A, b, v, sv, k, posdrift, log_out, launch, delta)
 }
 
-dkilledleakyba <- function(t, v, b, A, sv, t0, k, lambda_g, lambda_k, posdrift = TRUE, log_out = FALSE, kill_shape = 1L, guess = FALSE, erlang_omega = 1.0, launch = 0L) {
-    .Call(`_EMC2_dkilledleakyba`, t, v, b, A, sv, t0, k, lambda_g, lambda_k, posdrift, log_out, kill_shape, guess, erlang_omega, launch)
+dkilledleakyba <- function(t, v, b, A, sv, t0, k, lambda_g, lambda_k, posdrift = TRUE, log_out = FALSE, kill_shape = 1L, guess = FALSE, erlang_omega = 1.0, launch = 0L, delta = 0.0) {
+    .Call(`_EMC2_dkilledleakyba`, t, v, b, A, sv, t0, k, lambda_g, lambda_k, posdrift, log_out, kill_shape, guess, erlang_omega, launch, delta)
 }
 
-pkilledleakyba <- function(t, v, b, A, sv, t0, k, lambda_g, lambda_k, posdrift = TRUE, log_out = FALSE, kill_shape = 1L, guess = FALSE, erlang_omega = 1.0, launch = 0L) {
-    .Call(`_EMC2_pkilledleakyba`, t, v, b, A, sv, t0, k, lambda_g, lambda_k, posdrift, log_out, kill_shape, guess, erlang_omega, launch)
+pkilledleakyba <- function(t, v, b, A, sv, t0, k, lambda_g, lambda_k, posdrift = TRUE, log_out = FALSE, kill_shape = 1L, guess = FALSE, erlang_omega = 1.0, launch = 0L, delta = 0.0) {
+    .Call(`_EMC2_pkilledleakyba`, t, v, b, A, sv, t0, k, lambda_g, lambda_k, posdrift, log_out, kill_shape, guess, erlang_omega, launch, delta)
 }
 
-dleakyba <- function(t, A, b, v, sv, k, posdrift = TRUE, launch = 0L) {
-    .Call(`_EMC2_dleakyba`, t, A, b, v, sv, k, posdrift, launch)
+dleakyba <- function(t, A, b, v, sv, k, posdrift = TRUE, launch = 0L, delta = 0.0) {
+    .Call(`_EMC2_dleakyba`, t, A, b, v, sv, k, posdrift, launch, delta)
 }
 
-pleakyba <- function(t, A, b, v, sv, k, posdrift = TRUE, launch = 0L) {
-    .Call(`_EMC2_pleakyba`, t, A, b, v, sv, k, posdrift, launch)
+pleakyba <- function(t, A, b, v, sv, k, posdrift = TRUE, launch = 0L, delta = 0.0) {
+    .Call(`_EMC2_pleakyba`, t, A, b, v, sv, k, posdrift, launch, delta)
 }
 
 dlba <- function(t, A, b, v, sv, posdrift = TRUE, log_out = FALSE) {

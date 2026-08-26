@@ -66,9 +66,43 @@ inline rlf::SolveCache* rlf_cache(void* context) {
   return ctx->rlf_cache.get();
 }
 
+// Exact match test for the prepared-row reuse guard.  Pointer identity gives
+// a fast reject; the value snapshot decides.  logicalrules reuses the same rt
+// array and column pointer set across GL nodes while mutating their contents,
+// so equal pointers do not imply equal rows.
+inline bool rlf_prepared_rows_match(
+    const rlf::SolveCache& cache, const double* rt,
+    const double* const* cols, int n_rows, const int* isok) {
+  if (!cache.rows_prepared || cache.prepared_n_rows != n_rows) return false;
+  if (cache.prepared_rt != rt || cache.prepared_isok != isok) return false;
+  if (static_cast<int>(cache.prepared_cols.size()) != emc2col::rlf::N_REQ) {
+    return false;
+  }
+  for (int j = 0; j < emc2col::rlf::N_REQ; ++j) {
+    if (cache.prepared_cols[j] != cols[j]) return false;
+  }
+  size_t k = 0;
+  for (int i = 0; i < n_rows; ++i) {
+    // Snapshot layout: rt followed by the six grouping columns per row.
+    if (cache.prepared_values[k++] != rt[i]) return false;
+    if (cache.prepared_values[k++] != cols[emc2col::rlf::v][i]) return false;
+    if (cache.prepared_values[k++] != cols[emc2col::rlf::B][i]) return false;
+    if (cache.prepared_values[k++] != cols[emc2col::rlf::A][i]) return false;
+    if (cache.prepared_values[k++] != cols[emc2col::rlf::t0][i]) return false;
+    if (cache.prepared_values[k++] != cols[emc2col::rlf::s][i]) return false;
+    if (cache.prepared_values[k++] != cols[emc2col::rlf::alpha][i]) {
+      return false;
+    }
+    if (cache.prepared_isok_values[i] != isok[i]) return false;
+  }
+  return true;
+}
+
 inline void rlf_prepare_rows(rlf::SolveCache& cache, const double* rt,
                              const double* const* cols, int n_rows,
                              const int* isok) {
+  if (rlf_prepared_rows_match(cache, rt, cols, n_rows, isok)) return;
+
   const double* v = cols[emc2col::rlf::v];
   const double* B = cols[emc2col::rlf::B];
   const double* A = cols[emc2col::rlf::A];
@@ -82,6 +116,9 @@ inline void rlf_prepare_rows(rlf::SolveCache& cache, const double* rt,
   std::vector<std::vector<double>> query_times;
   std::vector<int> row_key(n_rows, -1);
   std::unordered_map<rlf::Key, int, rlf::KeyHash> groups;
+  // Sparse output is what makes per-row query times necessary; dense output
+  // hands nullptr to the cache and never needs this buffer built.
+  const bool sparse_output = cache.grid.sparse_output;
 
   for (int i = 0; i < n_rows; ++i) {
     if (!isok[i] || R_IsNA(v[i])) continue;
@@ -101,11 +138,11 @@ inline void rlf_prepare_rows(rlf::SolveCache& cache, const double* rt,
       groups.emplace(key, group);
       keys.push_back(key);
       horizons.push_back(tt);
-      query_times.push_back(std::vector<double>(1, tt));
+      if (sparse_output) query_times.push_back(std::vector<double>(1, tt));
     } else {
       group = found->second;
       horizons[group] = std::max(horizons[group], tt);
-      query_times[group].push_back(tt);
+      if (sparse_output) query_times[group].push_back(tt);
     }
     row_key[i] = group;
   }
@@ -118,9 +155,30 @@ inline void rlf_prepare_rows(rlf::SolveCache& cache, const double* rt,
   std::vector<int> cache_index;
   rlf::cache_get_batch(
     cache, keys, horizons, cache_index,
-    cache.grid.sparse_output ? &query_times : nullptr);
+    sparse_output ? &query_times : nullptr);
   for (int i = 0; i < n_rows; ++i) {
     if (row_key[i] >= 0) cache.row_group[i] = cache_index[row_key[i]];
+  }
+
+  // Record the guard state only after the grouping and cache fill completed,
+  // so a failure can never leave rows marked prepared against stale data.
+  cache.rows_prepared = true;
+  cache.prepared_n_rows = n_rows;
+  cache.prepared_rt = rt;
+  cache.prepared_isok = isok;
+  cache.prepared_cols.assign(cols, cols + emc2col::rlf::N_REQ);
+  cache.prepared_values.resize(static_cast<size_t>(n_rows) * 7);
+  cache.prepared_isok_values.resize(n_rows);
+  size_t k = 0;
+  for (int i = 0; i < n_rows; ++i) {
+    cache.prepared_values[k++] = rt[i];
+    cache.prepared_values[k++] = v[i];
+    cache.prepared_values[k++] = B[i];
+    cache.prepared_values[k++] = A[i];
+    cache.prepared_values[k++] = t0[i];
+    cache.prepared_values[k++] = s[i];
+    cache.prepared_values[k++] = alpha[i];
+    cache.prepared_isok_values[i] = isok[i];
   }
 }
 

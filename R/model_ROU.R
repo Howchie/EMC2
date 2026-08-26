@@ -258,16 +258,22 @@ rROU <- function(lR, pars, ok = rep(TRUE, nrow(pars)), kind = NULL,
 #' Default values are used for all parameters that are not explicitly listed in the `formula`
 #' argument of `design()`. They can also be accessed with `ROU()$p_types`.
 #'
-#' | **Parameter** | **Transform** | **Natural scale** | **Default**   | **Mapping**          | **Interpretation**                                                |
-#' |-----------|-----------|---------------|-----------|------------------|---------------------------------------------------------------|
+#' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Mapping** | **Interpretation** |
+#' |---|---|---|---|---|---|
 #' | *v*       | log       | \[0, Inf\]      | log(1)    |                  | Accumulation rate (stimulus input)                             |
 #' | *k*       | log       | \[0, Inf\]      | log(0)    |                  | Leak, a rate in units of 1/time (**not** divided by *s*); *k* = 0 is the Wiener race (RDM) |
 #' | *A*       | log       | \[0, Inf\]      | log(0)    |                  | Between-trial variation (range) in start point                 |
 #' | *B*       | log       | \[0, Inf\]      | log(1)    | *b* = *B* + *A*      | Distance from *A* to *b* (response threshold)                  |
 #' | *t0*      | log       | \[0, Inf\]      | log(0)    |                  | Non-decision time                                             |
 #' | *s*       | log       | \[0, Inf\]      | log(1)    |                  | Within-trial standard deviation of the diffusion              |
-#' | *pContaminant* | probit | \[0, 1\] | qnorm(0) | | Optional *omission* contaminant probability: mass at `rt = Inf` only, handled by the data pipeline |
-#' | *pGuess* | probit | \[0, 1\] | qnorm(0) | | Optional uniform *guess* (outlier) probability, mixed into observed RT densities over the guess window |
+#'
+#' Optional fitting parameters: `pContaminant` is the omission probability and
+#' `pGuess` is the uniform-outlier probability.
+#'
+#' For a non-fixed `boundary_collapse`, the optional `Binf` and `tau` parameters
+#' use log/exp transforms with defaults `log(0.5)` and `log(1)`; the Weibull
+#' form additionally uses `pw` with the same log/exp transform and default
+#' `log(1)`. These parameters describe the selected collapsing-boundary form.
 #'
 #' # Parameterizations
 #'
@@ -282,11 +288,11 @@ rROU <- function(lR, pars, ok = rep(TRUE, nrow(pars)), kind = NULL,
 #' reference crossing time of the deterministic path from \eqn{x = 0} to
 #' \eqn{b = B + A}; `k` and `s` retain their physical units:
 #'
-#' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Interpretation** |
-#' |-----------|-----------|---------------|-----------|------------------------------------|
-#' | *tstar*   | log       | \[0, Inf\]    | log(1)    | Time at which the deterministic mean path reaches *b* |
-#' | *k*       | log       | \[0, Inf\]    | log(0)    | Physical leak rate; *k* = 0 is the Wiener race |
-#' | *s*       | log       | \[0, Inf\]    | log(1)    | Diffusion standard deviation |
+#' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Mapping** | **Interpretation** |
+#' |---|---|---|---|---|---|
+#' | *tstar* | log | \[0, Inf\] | log(1) | | Time at which the deterministic mean path reaches *b*. |
+#' | *k* | log | \[0, Inf\] | log(0) | | Physical leak rate; *k* = 0 is the Wiener race. |
+#' | *s* | log | \[0, Inf\] | log(1) | | Diffusion standard deviation. |
 #'
 #' The map is \eqn{v = bk/(1-e^{-k t_\star})}, with the smooth limit
 #' \eqn{v = b/t_\star} at *k* = 0. This is a deterministic-crossing chart, so
@@ -294,11 +300,11 @@ rROU <- function(lR, pars, ok = rep(TRUE, nrow(pars)), kind = NULL,
 #'
 #' `"equilibrium"` replaces them with \eqn{(t_k, \theta, \chi)}:
 #'
-#' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Interpretation** |
-#' |-----------|-----------|---------------|-----------|------------------------------------|
-#' | *tk*      | log       | \[0.001, Inf\]  | log(1)    | Leak time constant \eqn{t_k = 1/k} (the boundary-collapse time constant keeps the name *tau*) |
-#' | *theta*   | log       | \[0.001, 20\]   | log(1)    | Physical OU equilibrium, \eqn{v/k} |
-#' | *chi*     | log       | \[0.001, 10\]   | log(1)    | Physical noise over one relaxation, \eqn{s\sqrt{t_k}} |
+#' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Mapping** | **Interpretation** |
+#' |---|---|---|---|---|---|
+#' | *tk* | log | \[0.001, Inf\] | log(1) | | Leak time constant \eqn{t_k = 1/k}. |
+#' | *theta* | log | \[0.001, 20\] | log(1) | | Physical OU equilibrium, \eqn{v/k}. |
+#' | *chi* | log | \[0.001, 10\] | log(1) | | Physical noise over one relaxation, \eqn{s\sqrt{t_k}}. |
 #'
 #' The map is \eqn{k = 1/t_k}, \eqn{v = \theta/t_k}, and
 #' \eqn{s = \chi/\sqrt{t_k}}. Thus the equilibrium is below the upper boundary

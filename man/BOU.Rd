@@ -49,7 +49,7 @@ Default values are used for all parameters that are not explicitly listed in
 the \code{formula} argument of \code{design()}. They can also be accessed with
 \code{BOU()$p_types}.\tabular{llllll}{
    \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Mapping} \tab \strong{Interpretation} \cr
-   \emph{v} \tab - \tab [-Inf, Inf] \tab 1 \tab  \tab Mean evidence-accumulation rate (drift rate) \cr
+   \emph{v} \tab identity \tab [-Inf, Inf] \tab 1 \tab  \tab Mean evidence-accumulation rate (drift rate). \cr
    \emph{a} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Boundary separation \cr
    \emph{beta} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Leak: decay toward the starting point. 0 gives the DDM \cr
    \emph{t0} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Non-decision time \cr
@@ -61,14 +61,13 @@ the \code{formula} argument of \code{design()}. They can also be accessed with
 }
 
 
-When \code{boundary_collapse} is not \code{"fixed"} two further parameters appear,
-\code{aInf} and \code{tau} (plus \code{pw} for \code{"weibull"}):\tabular{lllll}{
-   \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Interpretation} \cr
-   \emph{aInf} \tab log \tab [0, Inf] \tab log(0.5) \tab Asymptotic separation, in the same units as \emph{a} \cr
-   \emph{tau} \tab log \tab [0, Inf] \tab log(1) \tab Time scale of the collapse \cr
-   \emph{pw} \tab log \tab [0, Inf] \tab log(1) \tab Shape exponent (Weibull only) \cr
-}
+Optional fitting parameters: \code{pContaminant} is the omission probability and
+\code{pGuess} is the uniform-outlier probability.
 
+When \code{boundary_collapse} is not \code{"fixed"}, the optional boundary parameters
+\code{aInf} and \code{tau} are sampled on the log scale with defaults \code{log(0.5)} and
+\code{log(1)}; the Weibull form also adds \code{pw} on the log scale with default
+\code{log(1)}. These parameters describe the selected collapsing-boundary form.
 
 The parameterisation is \code{\link[=DDM]{DDM()}}'s with \code{beta} added, so a DDM design converts
 to this model by adding \code{beta ~ 1}, and \code{beta} fixed to 0 recovers the DDM.

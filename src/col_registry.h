@@ -99,6 +99,13 @@ namespace bawl_logn {
     return {n, N_REQ, "BAwL_LOGN"};
   }
 }
+namespace bawlsplit {
+  enum : int { mu = 0, sigma, delta, B, A, t0, k, N_REQ, mG = N_REQ, mK, omega };
+  inline ColSpec spec() {
+    static const char* n[] = {"mu", "sigma", "delta", "B", "A", "t0", "k"};
+    return {n, N_REQ, "BAwL_LOGN_SPLIT"};
+  }
+}
 
 // R/model_BAwD.R — BAwD (ballistic accumulator with drive decay).  The two
 // launch distributions differ only in the names of the first two columns, so
@@ -118,6 +125,13 @@ namespace bawd_logn {
   inline ColSpec spec() {
     static const char* n[] = {"mu", "sigma", "B", "A", "t0", "k", "ell"};
     return {n, N_REQ, "BAwD_LOGN"};
+  }
+}
+namespace bawdsplit {
+  enum : int { mu = 0, sigma, delta, B, A, t0, k, ell, N_REQ };
+  inline ColSpec spec() {
+    static const char* n[] = {"mu", "sigma", "delta", "B", "A", "t0", "k", "ell"};
+    return {n, N_REQ, "BAwD_LOGN_SPLIT"};
   }
 }
 
@@ -142,6 +156,13 @@ namespace bawf_logn {
     return {n, N_REQ, "BAwF_LOGN"};
   }
 }
+namespace bawfsplit {
+  enum : int { mu = 0, sigma, delta, B, A, t0, k, N_REQ };
+  inline ColSpec spec() {
+    static const char* n[] = {"mu", "sigma", "delta", "B", "A", "t0", "k"};
+    return {n, N_REQ, "BAwF_LOGN_SPLIT"};
+  }
+}
 
 // R/model_BAwR.R — BAwR (ramping clearance, dX/du = V - kappa u^p).  The "R"
 // is for the RAMP: the clearance rate kappa u^p grows with elapsed time.
@@ -161,6 +182,13 @@ namespace bawr_logn {
   inline ColSpec spec() {
     static const char* n[] = {"mu", "sigma", "B", "A", "t0", "kappa", "p"};
     return {n, N_REQ, "BAwR_LOGN"};
+  }
+}
+namespace bawrsplit {
+  enum : int { mu = 0, sigma, delta, B, A, t0, kappa, p, N_REQ };
+  inline ColSpec spec() {
+    static const char* n[] = {"mu", "sigma", "delta", "B", "A", "t0", "kappa", "p"};
+    return {n, N_REQ, "BAwR_LOGN_SPLIT"};
   }
 }
 
@@ -188,6 +216,19 @@ namespace btawl_transient_logn {
     return {n, N_REQ, "BTAwL_LOGN_RATE"};
   }
 }
+namespace btawlsplit_transient {
+  enum : int { mu = 0, sigma, delta, B, A, t0, k, clear, N_REQ };
+  inline ColSpec spec() {
+    static const char* n[] = {"mu", "sigma", "delta", "B", "A", "t0", "k", "Ttrans"};
+    return {n, N_REQ, "BTAwL_LOGN_SPLIT"};
+  }
+  inline ColSpec spec_rate() {
+    static const char* n[] = {"mu", "sigma", "delta", "B", "A", "t0", "k", "tau"};
+    return {n, N_REQ, "BTAwL_LOGN_SPLIT_RATE"};
+  }
+}
+namespace btawl_transient_split = btawlsplit_transient;
+
 namespace btawl_local_race {
   // Full BTAwL local-race contract. tau_t aliases the endpoint-chart slot
   // `clear`; pi remains the final position.
@@ -214,6 +255,19 @@ namespace btawl_local_race_logn {
     return {n, N_REQ, "BTAwL_LOGN_RATE"};
   }
 }
+namespace btawlsplit_local_race {
+  // Full BTAwL local-race contract with split lognormal launch.
+  enum : int { mu = 0, sigma, delta, B, A, t0, k, tau_s, clear, tau_t = clear, pi, N_REQ };
+  inline ColSpec spec() {
+    static const char* n[] = {"mu", "sigma", "delta", "B", "A", "t0", "k", "tau_s", "Ttrans", "pi"};
+    return {n, N_REQ, "BTAwL_LOGN_SPLIT"};
+  }
+  inline ColSpec spec_rate() {
+    static const char* n[] = {"mu", "sigma", "delta", "B", "A", "t0", "k", "tau_s", "tau_t", "pi"};
+    return {n, N_REQ, "BTAwL_LOGN_SPLIT_RATE"};
+  }
+}
+namespace btawl_local_race_split = btawlsplit_local_race;
 
 // Pure sustained BTAwL wrapper.  The full BTAwL local race uses the nine-column
 // contract above; this seven-column contract is only for the pi = 1 wrapper.
@@ -231,6 +285,14 @@ namespace btawl_sustained_logn {
     return {n, N_REQ, "BTAwL_SUSTAINED_LOGN"};
   }
 }
+namespace btawlsplit_sustained {
+  enum : int { mu = 0, sigma, delta, B, A, t0, k, tau_s, N_REQ };
+  inline ColSpec spec() {
+    static const char* n[] = {"mu", "sigma", "delta", "B", "A", "t0", "k", "tau_s"};
+    return {n, N_REQ, "BTAwL_SUSTAINED_LOGN_SPLIT"};
+  }
+}
+namespace btawl_sustained_split = btawlsplit_sustained;
 
 // R/model_BAwD.R — BAwDp (proportional-clearance drive clock).  As with BAwL,
 // the launch pair occupies the first two positions; only the names differ for
@@ -247,6 +309,13 @@ namespace bawdp_logn {
   inline ColSpec spec() {
     static const char* n[] = {"mu", "sigma", "B", "A", "t0", "k", "lambda"};
     return {n, N_REQ, "BAwDp_LOGN"};
+  }
+}
+namespace bawdpsplit {
+  enum : int { mu = 0, sigma, delta, B, A, t0, k, lambda, N_REQ };
+  inline ColSpec spec() {
+    static const char* n[] = {"mu", "sigma", "delta", "B", "A", "t0", "k", "lambda"};
+    return {n, N_REQ, "BAwDp_LOGN_SPLIT"};
   }
 }
 

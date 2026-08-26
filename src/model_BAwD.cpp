@@ -300,14 +300,20 @@ double bawd_log_frozen_normal(const BawdGeom& g, double s_lo, double s_hi,
 }
 
 double bawd_log_frozen_logn_quad(const BawdGeom& g, double s_lo,
-                                        double s_hi, double mu, double sigma) {
+                                        double s_hi, double mu, double sigma,
+                                        double delta) {
+  split_lognormal_shape h;
+  if (delta != 0.0 && !split_lognormal_shape_params(mu, sigma, delta, h))
+    return R_NegInf;
   if (!g.rho_inf) {
     if (!(s_hi > s_lo) || !(sigma > 0.0)) return R_NegInf;
     const double log_ell = std::log(g.ell);
     const auto lf = [&](double x) -> double {
       return bawd_log_psi_prime(g, x) +
-        pnorm_log_direct((log_ell + bawd_log_wrel(g, x) - mu) / sigma,
-                         false);
+        (delta == 0.0
+          ? pnorm_log_direct((log_ell + bawd_log_wrel(g, x) - mu) / sigma, false)
+          : log_split_lognormal_survivor(
+              g.ell * std::exp(bawd_log_wrel(g, x)), h));
     };
     const double mid = bawd_pk_peak_x(g.rho, g.gamma, mu - log_ell);
     return bawd_log_gl_split(lf, s_lo, s_hi, mid, BAWD_GL_NODES) +
@@ -318,9 +324,11 @@ double bawd_log_frozen_logn_quad(const BawdGeom& g, double s_lo,
   const auto lf = [&](double s) -> double {
     const double e1 = std::expm1(s);
     if (!(e1 > 0.0)) return R_NegInf;
-    // P(V >= ell e^((1-gamma)s)) = Q(x_ell + (1-gamma)s/sigma).
     return std::log(e1) - g.gamma * s +
-      pnorm_log_direct(x_ell + g.omg * s / sigma, false);
+      (delta == 0.0
+        ? pnorm_log_direct(x_ell + g.omg * s / sigma, false)
+        : log_split_lognormal_survivor(
+            g.ell * std::exp(g.omg * s), h));
   };
   const double mid = -sigma * x_ell / g.omg;
   return bawd_log_gl_split(lf, s_lo, s_hi, mid, BAWD_GL_NODES) +
@@ -328,37 +336,33 @@ double bawd_log_frozen_logn_quad(const BawdGeom& g, double s_lo,
 }
 
 double bawd_log_frozen_logn(const BawdGeom& g, double s_lo, double s_hi,
-                                   double mu, double sigma) {
+                                   double mu, double sigma, double delta) {
+  if (delta != 0.0)
+    return bawd_log_frozen_logn_quad(g, s_lo, s_hi, mu, sigma, delta);
   if (!g.rho_inf) {
     if (!(s_hi > s_lo) || !(sigma > 0.0)) return R_NegInf;
     const double w_a = bawd_critical_launch(g, s_lo);
     const double w_b = bawd_critical_launch(g, s_hi);
     if (!(w_b > w_a) || !emc2_isfinite(w_b))
-      return bawd_log_frozen_logn_quad(g, s_lo, s_hi, mu, sigma);
+      return bawd_log_frozen_logn_quad(g, s_lo, s_hi, mu, sigma, 0.0);
     const double log_ell = std::log(g.ell);
     if (g.rho_one) {
-      const double ta = log_lognormal_logratio_stoploss(
-        w_a, mu, sigma, log_ell);
-      const double tb = log_lognormal_logratio_stoploss(
-        w_b, mu, sigma, log_ell);
-      const double gap = ta - tb;
-      if (gap > BAWD_MIN_LOG_GAP) {
+      const double ta = log_lognormal_logratio_stoploss(w_a, mu, sigma, log_ell);
+      const double tb = log_lognormal_logratio_stoploss(w_b, mu, sigma, log_ell);
+      if (ta - tb > BAWD_MIN_LOG_GAP) {
         const double td = log_diff_exp(ta, tb);
         if (emc2_isfinite(td))
           return -std::log(g.k) - std::log1p(-g.gamma) + td;
       }
-      return bawd_log_frozen_logn_quad(g, s_lo, s_hi, mu, sigma);
+      return bawd_log_frozen_logn_quad(g, s_lo, s_hi, mu, sigma, 0.0);
     }
     const double lc_a = log_lognormal_stoploss(w_a, mu, sigma);
     const double lc_b = log_lognormal_stoploss(w_b, mu, sigma);
     if (lc_a - lc_b > BAWD_MIN_LOG_GAP) {
       const double L0 = log_diff_exp(lc_a, lc_b);
-      const double lam_a = log_lognormal_power_stoploss(
-        w_a, mu, sigma, g.frozen_m);
-      const double lam_b = log_lognormal_power_stoploss(
-        w_b, mu, sigma, g.frozen_m);
-      const double L1 = g.frozen_alpha * log_ell +
-        log_diff_exp(lam_a, lam_b);
+      const double lam_a = log_lognormal_power_stoploss(w_a, mu, sigma, g.frozen_m);
+      const double lam_b = log_lognormal_power_stoploss(w_b, mu, sigma, g.frozen_m);
+      const double L1 = g.frozen_alpha * log_ell + log_diff_exp(lam_a, lam_b);
       if (emc2_isfinite(L0)) {
         const double d = L1 - L0;
         if (d < 0.0 && -std::expm1(d) > 1e-6)
@@ -369,13 +373,12 @@ double bawd_log_frozen_logn(const BawdGeom& g, double s_lo, double s_hi,
             std::log(g.rho - 1.0) + L0;
       }
     }
-    return bawd_log_frozen_logn_quad(g, s_lo, s_hi, mu, sigma);
+    return bawd_log_frozen_logn_quad(g, s_lo, s_hi, mu, sigma, 0.0);
   }
   const double w_a = bawd_critical_launch(g, s_lo);
   const double w_b = bawd_critical_launch(g, s_hi);
   if (!(w_b > w_a) || !emc2_isfinite(w_b))
-    return bawd_log_frozen_logn_quad(g, s_lo, s_hi, mu, sigma);
-
+    return bawd_log_frozen_logn_quad(g, s_lo, s_hi, mu, sigma, 0.0);
   const double lc_a = log_lognormal_stoploss(w_a, mu, sigma);
   const double lc_b = log_lognormal_stoploss(w_b, mu, sigma);
   if (lc_a - lc_b > BAWD_MIN_LOG_GAP) {
@@ -387,30 +390,25 @@ double bawd_log_frozen_logn(const BawdGeom& g, double s_lo, double s_hi,
         log_normal_q_interval(x_a, x_b);
       if (!ISNAN(L0) && emc2_isfinite(L0)) {
         const double d = L1 - L0;
-        // The two frozen primitives have lost relative precision.
         if (d < 0.0 && -std::expm1(d) > 1e-6)
           return L0 + log1m_exp(d) - std::log(g.k);
-        if (!(L1 > R_NegInf))  // ell I_{-1} underflowed: I_0 stands alone
-          return L0 - std::log(g.k);
+        if (!(L1 > R_NegInf)) return L0 - std::log(g.k);
       }
     } else {
       const double L0 = log_diff_exp(lc_a, lc_b);
-      const double lam_a = log_lognormal_power_stoploss(
-        w_a, mu, sigma, g.frozen_m);
-      const double lam_b = log_lognormal_power_stoploss(
-        w_b, mu, sigma, g.frozen_m);
+      const double lam_a = log_lognormal_power_stoploss(w_a, mu, sigma, g.frozen_m);
+      const double lam_b = log_lognormal_power_stoploss(w_b, mu, sigma, g.frozen_m);
       const double L1 = g.frozen_alpha * std::log(g.ell) +
         log_diff_exp(lam_a, lam_b);
       if (emc2_isfinite(L0)) {
         const double d = L1 - L0;
         if (d < 0.0 && -std::expm1(d) > 1e-6)
           return L0 + log1m_exp(d) - std::log(g.k);
-        if (!(L1 > R_NegInf))
-          return L0 - std::log(g.k);
+        if (!(L1 > R_NegInf)) return L0 - std::log(g.k);
       }
     }
   }
-  return bawd_log_frozen_logn_quad(g, s_lo, s_hi, mu, sigma);
+  return bawd_log_frozen_logn_quad(g, s_lo, s_hi, mu, sigma, 0.0);
 }
 
 double log_bawd_cdf_normal(double u, const BawdGeom& g, double v,
@@ -454,37 +452,35 @@ double log_bawd_cdf_normal(double u, const BawdGeom& g, double v,
 }
 
 double log_bawd_cdf_logn(double u, const BawdGeom& g, double mu,
-                                double sigma) {
+                                double sigma, double delta) {
   if (!g.ok || !(sigma > 0.0) || !(u > 0.0)) return R_NegInf;
   const BawdAtU s = bawd_at_u(g, u);
   if (!s.ok) return R_NegInf;
   const auto log_gbar = [&](double w) -> double {
     if (!(w > 0.0)) return 0.0;
     if (!emc2_isfinite(w)) return R_NegInf;
-    return pnorm_log_direct((mu - std::log(w)) / sigma, true);
+    return delta == 0.0
+      ? pnorm_log_direct((mu - std::log(w)) / sigma, true)
+      : log_split_lognormal_survivor(w, mu, sigma, delta);
   };
-
   if (g.A <= BAWD_A_EPS) return std::fmin(log_gbar(s.w_hi), 0.0);
-
   double log_live = R_NegInf;
   if (s.Z > 0.0) {
-    // int_0^Z Gbar(V*(u,z)) dz = q [C(w_lo) - C(w_hi)], C the stop-loss price.
-    const double lc_lo = log_lognormal_stoploss(s.w_lo, mu, sigma);
-    const double lc_hi = log_lognormal_stoploss(s.w_hi, mu, sigma);
+    const double lc_lo = delta == 0.0
+      ? log_lognormal_stoploss(s.w_lo, mu, sigma)
+      : log_split_lognormal_stoploss(s.w_lo, mu, sigma, delta);
+    const double lc_hi = delta == 0.0
+      ? log_lognormal_stoploss(s.w_hi, mu, sigma)
+      : log_split_lognormal_stoploss(s.w_hi, mu, sigma, delta);
     if (lc_lo - lc_hi > BAWD_MIN_LOG_GAP) {
       const double ld = log_diff_exp(lc_lo, lc_hi);
       log_live = ISNAN(ld) ? R_NegInf : std::log(s.q) + ld;
     }
-    if (!(log_live > R_NegInf)) {
-      // Interval too narrow (or cancelled) for an endpoint difference; the
-      // midpoint limit is then accurate to the square of its width.
+    if (!(log_live > R_NegInf))
       log_live = std::log(s.Z) + log_gbar(0.5 * (s.w_lo + s.w_hi));
-    }
   }
-
   const double log_frozen = s.partial
-    ? bawd_log_frozen_logn(g, s.s_lo, s.s_hi, mu, sigma) : R_NegInf;
-
+    ? bawd_log_frozen_logn(g, s.s_lo, s.s_hi, mu, sigma, delta) : R_NegInf;
   const double out = log_sum_exp(log_live, log_frozen) - std::log(g.A);
   if (ISNAN(out)) return R_NegInf;
   return std::fmin(out, 0.0);
@@ -522,13 +518,17 @@ double bawd_log_frozen_surv_normal(const BawdGeom& g, double s_lo,
 }
 
 double bawd_log_frozen_surv_logn(const BawdGeom& g, double s_lo,
-                                        double s_hi, double mu, double sigma) {
+                                        double s_hi, double mu, double sigma,
+                                        double delta) {
   if (!(s_hi > s_lo) || !(sigma > 0.0)) return R_NegInf;
   if (!g.rho_inf) {
     const double log_ell = std::log(g.ell);
     const auto lf = [&](double x) -> double {
+      const double w = g.ell * std::exp(bawd_log_wrel(g, x));
       return bawd_log_psi_prime(g, x) +
-        pnorm_log_direct((log_ell + bawd_log_wrel(g, x) - mu) / sigma, true);
+        (delta == 0.0
+          ? pnorm_log_direct((std::log(w) - mu) / sigma, true)
+          : log_split_lognormal_cdf(w, mu, sigma, delta));
     };
     const double mid = bawd_pk_peak_x(g.rho, g.gamma, mu - log_ell);
     return bawd_log_gl_split(lf, s_lo, s_hi, mid, BAWD_GL_NODES) +
@@ -538,8 +538,11 @@ double bawd_log_frozen_surv_logn(const BawdGeom& g, double s_lo,
   const auto lf = [&](double s) -> double {
     const double e1 = std::expm1(s);
     if (!(e1 > 0.0)) return R_NegInf;
+    const double w = g.ell * std::exp(g.omg * s);
     return std::log(e1) - g.gamma * s +
-      pnorm_log_direct(x_ell + g.omg * s / sigma, true);
+      (delta == 0.0
+        ? pnorm_log_direct(x_ell + g.omg * s / sigma, true)
+        : log_split_lognormal_cdf(w, mu, sigma, delta));
   };
   const double mid = -sigma * x_ell / g.omg;
   return bawd_log_gl_split(lf, s_lo, s_hi, mid, BAWD_GL_NODES) +
@@ -571,29 +574,36 @@ double log_bawd_surv_normal(double u, const BawdGeom& g, double v,
   const double out = log_sum_exp(log_live, log_frozen) - std::log(g.A);
   return ISNAN(out) ? R_NegInf : std::fmin(out - log_denom, 0.0);
 }
-
 double log_bawd_surv_logn(double u, const BawdGeom& g, double mu,
-                                 double sigma) {
+                                 double sigma, double delta) {
   if (!g.ok || !(sigma > 0.0) || !(u > 0.0)) return R_NegInf;
   const BawdAtU s = bawd_at_u(g, u);
   if (!s.ok) return R_NegInf;
   const auto log_g = [&](double w) {
     return (w > 0.0 && emc2_isfinite(w))
-      ? pnorm_log_direct((std::log(w) - mu) / sigma, true) : R_NegInf;
+      ? (delta == 0.0
+         ? pnorm_log_direct((std::log(w) - mu) / sigma, true)
+         : log_split_lognormal_cdf(w, mu, sigma, delta))
+      : R_NegInf;
   };
   if (u == R_PosInf && g.k_zero) return std::fmin(log_g(s.w_hi), 0.0);
   if (g.A <= BAWD_A_EPS) return std::fmin(log_g(s.w_hi), 0.0);
   double log_live = R_NegInf;
   if (s.Z > 0.0) {
-    const double pa = log_lognormal_put(s.w_hi, mu, sigma);
-    const double pb = log_lognormal_put(s.w_lo, mu, sigma);
+    const double pa = delta == 0.0
+      ? log_lognormal_put(s.w_hi, mu, sigma)
+      : log_split_lognormal_put(s.w_hi, mu, sigma, delta);
+    const double pb = delta == 0.0
+      ? log_lognormal_put(s.w_lo, mu, sigma)
+      : log_split_lognormal_put(s.w_lo, mu, sigma, delta);
     if (pa - pb > BAWD_MIN_LOG_GAP)
       log_live = std::log(s.q) + log_diff_exp(pa, pb);
     if (!(log_live > R_NegInf))
       log_live = std::log(s.Z) + log_g(0.5 * (s.w_hi + s.w_lo));
   }
   const double log_frozen = (s.partial && !g.gamma_one)
-    ? bawd_log_frozen_surv_logn(g, s.s_lo, s.s_hi, mu, sigma) : R_NegInf;
+    ? bawd_log_frozen_surv_logn(g, s.s_lo, s.s_hi, mu, sigma, delta)
+    : R_NegInf;
   const double out = log_sum_exp(log_live, log_frozen) - std::log(g.A);
   return ISNAN(out) ? R_NegInf : std::fmin(out, 0.0);
 }
@@ -653,7 +663,42 @@ double log_bawd_pdf_normal(double u, const BawdGeom& g, double v,
 }
 
 double log_bawd_pdf_logn(double u, const BawdGeom& g, double mu,
-                                double sigma) {
+                                double sigma, double delta) {
+  if (delta != 0.0) {
+    if (!g.ok || !(sigma > 0.0) || !(u > 0.0) || u == R_PosInf) return R_NegInf;
+    const BawdAtU s = bawd_at_u(g, u);
+    if (!s.ok || s.saturated) return R_NegInf;
+    const double log_wgt = g.gamma_zero
+      ? (g.ell_zero ? std::log(s.w_hi) + s.log_E
+                     : ((s.w_hi * s.E - g.ell) > 0.0
+                        ? std::log(s.w_hi * s.E - g.ell) : R_NegInf))
+      : (g.ell_zero ? std::log(s.w_hi) + s.log_E
+                     : ((s.w_hi * s.E_rel - g.ell) > 0.0
+                        ? s.log_E_g + std::log(s.w_hi * s.E_rel - g.ell)
+                        : R_NegInf));
+    if (g.A <= BAWD_A_EPS)
+      return log_split_lognormal_density(s.w_hi, mu, sigma, delta) +
+        log_wgt - std::log(s.q);
+    if (!(log_wgt > R_NegInf)) return R_NegInf;
+    const double ls_lo = log_split_lognormal_survivor(s.w_lo, mu, sigma, delta);
+    const double ls_hi = log_split_lognormal_survivor(s.w_hi, mu, sigma, delta);
+    const double lm_lo = log_split_lognormal_first_partial_moment(
+      s.w_lo, mu, sigma, delta);
+    const double lm_hi = log_split_lognormal_first_partial_moment(
+      s.w_hi, mu, sigma, delta);
+    const double lp = log_diff_exp(ls_lo, ls_hi);
+    const double lm = log_diff_exp(lm_lo, lm_hi);
+    const signed_log t1 = make_signed_log(s.log_E_rel + lm, 1);
+    const signed_log t2 = signed_log_product(g.ell, lp);
+    const signed_log br = signed_log_sub(t1, t2);
+    if (br.sign > 0 && !ISNAN(br.log_abs))
+      return br.log_abs + s.log_E_g - std::log(g.A);
+    const double wm = 0.5 * (s.w_hi + s.w_lo);
+    return (s.E_g * (wm * s.E_rel - g.ell) > 0.0)
+      ? std::log(s.E_g * (wm * s.E_rel - g.ell)) +
+        std::log(s.Z) + log_split_lognormal_density(wm, mu, sigma, delta) -
+        std::log(g.A) : R_NegInf;
+  }
   if (!g.ok || !(sigma > 0.0) || !(u > 0.0) || u == R_PosInf) return R_NegInf;
   const BawdAtU s = bawd_at_u(g, u);
   if (!s.ok || s.saturated) return R_NegInf;
@@ -776,7 +821,8 @@ bool bawd_natural_cdf_normal(double u, const BawdGeom& g, double v,
 }
 
 bool bawd_natural_cdf_logn(double u, const BawdGeom& g, double mu,
-                                  double sigma, int accept_mode, double &cdf) {
+                                  double sigma, int accept_mode, double &cdf,
+                                  double delta) {
   const bool lenient = accept_mode != BA_ACCEPT_STRICT;
   const auto accept = [accept_mode](double &p) {
     if (accept_mode == BA_ACCEPT_STRICT) return natural_cdf_safe(p);
@@ -784,6 +830,13 @@ bool bawd_natural_cdf_logn(double u, const BawdGeom& g, double mu,
     if (p > 1.0) p = 1.0;
     return true;
   };
+  if (delta != 0.0) {
+    const double lp = log_bawd_cdf_logn(u, g, mu, sigma, delta);
+    cdf = (lp > R_NegInf) ? std::exp(lp) : 0.0;
+    if (!R_FINITE(cdf)) return false;
+    if (cdf <= 0.0) return lenient;
+    return accept(cdf);
+  }
 
   if (!g.ok || !(sigma > 0.0) || !(u > 0.0)) {
     cdf = 0.0;
@@ -819,7 +872,8 @@ bool bawd_natural_cdf_logn(double u, const BawdGeom& g, double mu,
 
     double frozen_part = 0.0;
     if (s.partial) {
-      const double log_frozen = bawd_log_frozen_logn(g, s.s_lo, s.s_hi, mu, sigma);
+      const double log_frozen = bawd_log_frozen_logn(
+        g, s.s_lo, s.s_hi, mu, sigma, delta);
       if (log_frozen > R_NegInf) {
         frozen_part = std::exp(log_frozen);
       }
@@ -918,8 +972,16 @@ bool bawd_natural_pdf_normal(double u, const BawdGeom& g, double v,
 }
 
 bool bawd_natural_pdf_logn(double u, const BawdGeom& g, double mu,
-                                 double sigma, int accept_mode, double &pdf) {
+                                 double sigma, int accept_mode, double &pdf,
+                                 double delta) {
   const bool lenient = accept_mode != BA_ACCEPT_STRICT;
+  if (delta != 0.0) {
+    const double lp = log_bawd_pdf_logn(u, g, mu, sigma, delta);
+    pdf = (lp > R_NegInf) ? std::exp(lp) : 0.0;
+    if (!R_FINITE(pdf)) return false;
+    if (pdf <= 0.0 && !lenient) return false;
+    return true;
+  }
   if (!g.ok || !(sigma > 0.0) || !(u > 0.0) || u == R_PosInf) {
     pdf = 0.0;
     return lenient;
@@ -987,90 +1049,89 @@ bool bawd_natural_pdf_logn(double u, const BawdGeom& g, double mu,
 bool ba_natural_cdf_bawd(double u, double A, double b, double p1, double p2,
                                 double k, double ell, int launch, bool posdrift,
                                 double gamma, double rho, double denom_floor,
-                                int accept_mode, double &cdf) {
+                                int accept_mode, double &cdf, double delta) {
   const BawdGeom g = bawd_geometry(A, b, k, ell, gamma, rho);
-  if (launch == BAWD_LAUNCH_LOGNORMAL)
-    return bawd_natural_cdf_logn(u, g, p1, p2, accept_mode, cdf);
+  if (launch == BAWD_LAUNCH_LOGNORMAL || launch == BAWD_LAUNCH_SPLITLOGNORMAL)
+    return bawd_natural_cdf_logn(u, g, p1, p2, accept_mode, cdf, delta);
   return bawd_natural_cdf_normal(u, g, p1, p2, posdrift, denom_floor, accept_mode, cdf);
 }
 
 bool ba_natural_pdf_bawd(double u, double A, double b, double p1, double p2,
                                 double k, double ell, int launch, bool posdrift,
                                 double gamma, double rho, double denom_floor,
-                                int accept_mode, double &pdf) {
+                                int accept_mode, double &pdf, double delta) {
   const BawdGeom g = bawd_geometry(A, b, k, ell, gamma, rho);
-  if (launch == BAWD_LAUNCH_LOGNORMAL)
-    return bawd_natural_pdf_logn(u, g, p1, p2, accept_mode, pdf);
+  if (launch == BAWD_LAUNCH_LOGNORMAL || launch == BAWD_LAUNCH_SPLITLOGNORMAL)
+    return bawd_natural_pdf_logn(u, g, p1, p2, accept_mode, pdf, delta);
   return bawd_natural_pdf_normal(u, g, p1, p2, posdrift, denom_floor, accept_mode, pdf);
 }
 
 double bawd_log_cdf(double u, double A, double b, double p1, double p2,
                            double k, double ell, int launch, bool posdrift,
-                           double gamma, double rho,
-                           double denom_floor ) {
+                           double gamma, double rho, double denom_floor,
+                           double delta) {
   const BawdGeom g = bawd_geometry(A, b, k, ell, gamma, rho);
-  if (launch == BAWD_LAUNCH_LOGNORMAL)
-    return log_bawd_cdf_logn(u, g, p1, p2);
+  if (launch == BAWD_LAUNCH_LOGNORMAL || launch == BAWD_LAUNCH_SPLITLOGNORMAL)
+    return log_bawd_cdf_logn(u, g, p1, p2, delta);
   return log_bawd_cdf_normal(u, g, p1, p2, posdrift, denom_floor);
 }
 
 double bawd_log_surv(double u, double A, double b, double p1, double p2,
                             double k, double ell, int launch, bool posdrift,
-                            double gamma, double rho,
-                            double denom_floor ) {
+                            double gamma, double rho, double denom_floor,
+                            double delta) {
   const BawdGeom g = bawd_geometry(A, b, k, ell, gamma, rho);
-  if (launch == BAWD_LAUNCH_LOGNORMAL) return log_bawd_surv_logn(u, g, p1, p2);
+  if (launch == BAWD_LAUNCH_LOGNORMAL || launch == BAWD_LAUNCH_SPLITLOGNORMAL)
+    return log_bawd_surv_logn(u, g, p1, p2, delta);
   return log_bawd_surv_normal(u, g, p1, p2, posdrift, denom_floor);
 }
 
 double bawd_log_pdf(double u, double A, double b, double p1, double p2,
                            double k, double ell, int launch, bool posdrift,
-                           double gamma, double rho,
-                           double denom_floor ) {
+                           double gamma, double rho, double denom_floor,
+                           double delta) {
   const BawdGeom g = bawd_geometry(A, b, k, ell, gamma, rho);
-  if (launch == BAWD_LAUNCH_LOGNORMAL)
-    return log_bawd_pdf_logn(u, g, p1, p2);
+  if (launch == BAWD_LAUNCH_LOGNORMAL || launch == BAWD_LAUNCH_SPLITLOGNORMAL)
+    return log_bawd_pdf_logn(u, g, p1, p2, delta);
   return log_bawd_pdf_normal(u, g, p1, p2, posdrift, denom_floor);
 }
 
 double bawd_cdf_norm(double t, double A, double b, double p1, double p2,
                             double k, double ell, int launch, bool posdrift,
                             bool log_out, double gamma, double rho,
-                            double denom_floor ) {
+                            double denom_floor, double delta) {
   double cdf;
   if (ba_natural_cdf_bawd(t, A, b, p1, p2, k, ell, launch, posdrift, gamma,
-                           rho, denom_floor, BA_ACCEPT_STRICT, cdf))
+                           rho, denom_floor, BA_ACCEPT_STRICT, cdf, delta))
     return log_out ? std::log(cdf) : cdf;
   return return_from_log(
     bawd_log_cdf(t, A, b, p1, p2, k, ell, launch, posdrift, gamma, rho,
-                 denom_floor),
-    log_out);
+                 denom_floor, delta), log_out);
 }
 
 double bawd_pdf_norm(double t, double A, double b, double p1, double p2,
                             double k, double ell, int launch, bool posdrift,
                             bool log_out, double gamma, double rho,
-                            double denom_floor ) {
+                            double denom_floor, double delta) {
   double pdf;
   if (ba_natural_pdf_bawd(t, A, b, p1, p2, k, ell, launch, posdrift, gamma,
-                           rho, denom_floor, BA_ACCEPT_STRICT, pdf))
+                           rho, denom_floor, BA_ACCEPT_STRICT, pdf, delta))
     return log_out ? std::log(pdf) : pdf;
   return return_from_log(
     bawd_log_pdf(t, A, b, p1, p2, k, ell, launch, posdrift, gamma, rho,
-                 denom_floor),
-    log_out);
+                 denom_floor, delta), log_out);
 }
 
 double bawd_cdf_scalar_natural(double t, double A, double b, double p1,
                                       double p2, double k, double ell,
                                       int launch, bool posdrift, double gamma,
-                                      double rho) {
+                                      double rho, double delta) {
   double cdf;
   if (ba_natural_cdf_bawd(t, A, b, p1, p2, k, ell, launch, posdrift, gamma,
-                           rho, BAWD_DENOM_FLOOR, BA_ACCEPT_CLAMP, cdf))
+                           rho, BAWD_DENOM_FLOOR, BA_ACCEPT_CLAMP, cdf, delta))
     return cdf;
   const double lp = bawd_log_cdf(t, A, b, p1, p2, k, ell, launch, posdrift,
-                                 gamma, rho);
+                                 gamma, rho, BAWD_DENOM_FLOOR, delta);
   if (!(lp > R_NegInf)) return 0.0;
   const double out = std::exp(lp);
   return (out > 1.0) ? 1.0 : out;
@@ -1079,13 +1140,13 @@ double bawd_cdf_scalar_natural(double t, double A, double b, double p1,
 double bawd_pdf_scalar_natural(double t, double A, double b, double p1,
                                       double p2, double k, double ell,
                                       int launch, bool posdrift, double gamma,
-                                      double rho) {
+                                      double rho, double delta) {
   double pdf;
   if (ba_natural_pdf_bawd(t, A, b, p1, p2, k, ell, launch, posdrift, gamma,
-                           rho, BAWD_DENOM_FLOOR, BA_ACCEPT_CLAMP, pdf))
+                           rho, BAWD_DENOM_FLOOR, BA_ACCEPT_CLAMP, pdf, delta))
     return pdf;
   const double lp = bawd_log_pdf(t, A, b, p1, p2, k, ell, launch, posdrift,
-                                 gamma, rho);
+                                 gamma, rho, BAWD_DENOM_FLOOR, delta);
   return (lp > R_NegInf) ? std::exp(lp) : 0.0;
 }
 
@@ -1098,7 +1159,7 @@ NumericVector dbawd(NumericVector t, NumericVector A, NumericVector b,
                     NumericVector p1, NumericVector p2, NumericVector k,
                     NumericVector ell, int launch = 1, bool posdrift = true,
                     bool log_out = false, double gamma = 0.0,
-                    double rho = 0.0) {
+                    double rho = 0.0, double delta = 0.0) {
   const int n = t.size();
   NumericVector out(n);
   auto pick = [](const NumericVector& x, int i) -> double {
@@ -1107,7 +1168,8 @@ NumericVector dbawd(NumericVector t, NumericVector A, NumericVector b,
   for (int i = 0; i < n; ++i)
     out[i] = bawd_pdf_norm(t[i], pick(A, i), pick(b, i), pick(p1, i),
                            pick(p2, i), pick(k, i), pick(ell, i), launch,
-                           posdrift, log_out, gamma, rho);
+                           posdrift, log_out, gamma, rho, BAWD_DENOM_FLOOR,
+                           delta);
   return out;
 }
 
@@ -1116,7 +1178,7 @@ NumericVector pbawd(NumericVector t, NumericVector A, NumericVector b,
                     NumericVector p1, NumericVector p2, NumericVector k,
                     NumericVector ell, int launch = 1, bool posdrift = true,
                     bool log_out = false, double gamma = 0.0,
-                    double rho = 0.0) {
+                    double rho = 0.0, double delta = 0.0) {
   const int n = t.size();
   NumericVector out(n);
   auto pick = [](const NumericVector& x, int i) -> double {
@@ -1125,26 +1187,24 @@ NumericVector pbawd(NumericVector t, NumericVector A, NumericVector b,
   for (int i = 0; i < n; ++i)
     out[i] = bawd_cdf_norm(t[i], pick(A, i), pick(b, i), pick(p1, i),
                            pick(p2, i), pick(k, i), pick(ell, i), launch,
-                           posdrift, log_out, gamma, rho);
+                           posdrift, log_out, gamma, rho, BAWD_DENOM_FLOOR,
+                           delta);
   return out;
 }
 
-// [[Rcpp::export]]
 double dbawd_norm(double t, double A, double b, double p1, double p2, double k,
                   double ell, int launch = 1, bool posdrift = true,
                   bool log_out = false, double gamma = 0.0,
-                  double rho = 0.0) {
+                  double rho = 0.0, double delta = 0.0) {
   return bawd_pdf_norm(t, A, b, p1, p2, k, ell, launch, posdrift, log_out,
-                       gamma, rho);
+                       gamma, rho, BAWD_DENOM_FLOOR, delta);
 }
-
-// [[Rcpp::export]]
 double pbawd_norm(double t, double A, double b, double p1, double p2, double k,
                   double ell, int launch = 1, bool posdrift = true,
                   bool log_out = false, double gamma = 0.0,
-                  double rho = 0.0) {
+                  double rho = 0.0, double delta = 0.0) {
   return bawd_cdf_norm(t, A, b, p1, p2, k, ell, launch, posdrift, log_out,
-                       gamma, rho);
+                       gamma, rho, BAWD_DENOM_FLOOR, delta);
 }
 
 // [[Rcpp::export]]
@@ -1187,19 +1247,6 @@ double lognormal_logratio_stoploss_log(double v, double mu, double sigma,
   return log_lognormal_logratio_stoploss(v, mu, sigma, log_ell);
 }
 
-// ============================================================
-// BAwD (Ballistic Accumulator with drive Decay) adapters
-// Column layout: p1=0 (v | mu), p2=1 (sv | sigma), B=2, A=3, t0=4, k=5, ell=6.
-// There are no clocks and no optional columns, so every row reads the same
-// seven values; ctx->bawd_launch selects the launch distribution.
-//
-// The upper tail is ALWAYS defective (never-finish mass exists whenever
-// ell > 0 or the drift can fall short), and the CDF is exactly flat past
-// t0 + T_max.  pfun_raw returns the log-SURVIVOR, per the race kernel
-// contract, so the flat tail arrives as a constant log(1 - F_max) rather than
-// as a clamped zero.
-// ============================================================
-
 namespace {
 int bawd_launch_of(const ContextForRaceModels* ctx) {
   return ctx ? ctx->bawd_launch : BAWD_LAUNCH_LOGNORMAL;
@@ -1210,35 +1257,47 @@ double bawd_gamma_of(const ContextForRaceModels* ctx) {
 double bawd_rho_of(const ContextForRaceModels* ctx) {
   return ctx ? ctx->bawd_rho : R_PosInf;
 }
-}  // namespace
+}
 
 double dbawd_scalar(double t, const double* par, void* ctx_) {
   auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
-  if (R_IsNA(par[emc2col::bawd::v])) return 0.0;
-  const double tt = t - par[emc2col::bawd::t0];
+  const int launch = bawd_launch_of(ctx);
+  const bool split = launch == BAWD_LAUNCH_SPLITLOGNORMAL;
+  const int iv = split ? emc2col::bawdsplit::mu : emc2col::bawd::v;
+  const int isv = split ? emc2col::bawdsplit::sigma : emc2col::bawd::sv;
+  const int iB = split ? emc2col::bawdsplit::B : emc2col::bawd::B;
+  const int iA = split ? emc2col::bawdsplit::A : emc2col::bawd::A;
+  const int it0 = split ? emc2col::bawdsplit::t0 : emc2col::bawd::t0;
+  const int ik = split ? emc2col::bawdsplit::k : emc2col::bawd::k;
+  const int ie = split ? emc2col::bawdsplit::ell : emc2col::bawd::ell;
+  if (R_IsNA(par[iv])) return 0.0;
+  const double tt = t - par[it0];
   if (t <= 0.0 || tt <= 0.0) return 0.0;
-  const double b = par[emc2col::bawd::B] + par[emc2col::bawd::A];
-  return bawd_pdf_scalar_natural(
-    tt, par[emc2col::bawd::A], b,
-    par[emc2col::bawd::v], par[emc2col::bawd::sv],
-    par[emc2col::bawd::k], par[emc2col::bawd::ell],
-    bawd_launch_of(ctx), ctx ? ctx->use_posdrift : true,
-    bawd_gamma_of(ctx), bawd_rho_of(ctx));
+  const double b = par[iB] + par[iA];
+  const double delta = split ? par[emc2col::bawdsplit::delta] : 0.0;
+  return bawd_pdf_scalar_natural(tt, par[iA], b, par[iv], par[isv],
+    par[ik], par[ie], launch, ctx ? ctx->use_posdrift : true,
+    bawd_gamma_of(ctx), bawd_rho_of(ctx), delta);
 }
-
 double pbawd_scalar(double t, const double* par, void* ctx_) {
   auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
-  if (R_IsNA(par[emc2col::bawd::v])) return 0.0;
-  const double tt = t - par[emc2col::bawd::t0];
+  const int launch = bawd_launch_of(ctx);
+  const bool split = launch == BAWD_LAUNCH_SPLITLOGNORMAL;
+  const int iv = split ? emc2col::bawdsplit::mu : emc2col::bawd::v;
+  const int isv = split ? emc2col::bawdsplit::sigma : emc2col::bawd::sv;
+  const int iB = split ? emc2col::bawdsplit::B : emc2col::bawd::B;
+  const int iA = split ? emc2col::bawdsplit::A : emc2col::bawd::A;
+  const int it0 = split ? emc2col::bawdsplit::t0 : emc2col::bawd::t0;
+  const int ik = split ? emc2col::bawdsplit::k : emc2col::bawd::k;
+  const int ie = split ? emc2col::bawdsplit::ell : emc2col::bawd::ell;
+  if (R_IsNA(par[iv])) return 0.0;
+  const double tt = t - par[it0];
   if (t <= 0.0 || tt <= 0.0) return 0.0;
-  // tt == Inf is handled inside the kernel and returns F_max, not 1.
-  const double b = par[emc2col::bawd::B] + par[emc2col::bawd::A];
-  return bawd_cdf_scalar_natural(
-    tt, par[emc2col::bawd::A], b,
-    par[emc2col::bawd::v], par[emc2col::bawd::sv],
-    par[emc2col::bawd::k], par[emc2col::bawd::ell],
-    bawd_launch_of(ctx), ctx ? ctx->use_posdrift : true,
-    bawd_gamma_of(ctx), bawd_rho_of(ctx));
+  const double b = par[iB] + par[iA];
+  const double delta = split ? par[emc2col::bawdsplit::delta] : 0.0;
+  return bawd_cdf_scalar_natural(tt, par[iA], b, par[iv], par[isv],
+    par[ik], par[ie], launch, ctx ? ctx->use_posdrift : true,
+    bawd_gamma_of(ctx), bawd_rho_of(ctx), delta);
 }
 
 void dbawd_raw(const double* rt, const double* const* cols, int n_rows,
@@ -1250,13 +1309,16 @@ void dbawd_raw(const double* rt, const double* const* cols, int n_rows,
   const int launch = bawd_launch_of(ctx);
   const double gamma = bawd_gamma_of(ctx);
   const double rho = bawd_rho_of(ctx);
-  const double* p1_ = cols[emc2col::bawd::v];
-  const double* p2_ = cols[emc2col::bawd::sv];
-  const double* B_  = cols[emc2col::bawd::B];
-  const double* A_  = cols[emc2col::bawd::A];
-  const double* t0_ = cols[emc2col::bawd::t0];
-  const double* k_  = cols[emc2col::bawd::k];
-  const double* ell_ = cols[emc2col::bawd::ell];
+  const bool split = launch == BAWD_LAUNCH_SPLITLOGNORMAL;
+  const double* p1_ = cols[split ? emc2col::bawdsplit::mu : emc2col::bawd::v];
+  const double* p2_ = cols[split ? emc2col::bawdsplit::sigma : emc2col::bawd::sv];
+  const double* B_  = cols[split ? emc2col::bawdsplit::B : emc2col::bawd::B];
+  const double* A_  = cols[split ? emc2col::bawdsplit::A : emc2col::bawd::A];
+  const double* t0_ = cols[split ? emc2col::bawdsplit::t0 : emc2col::bawd::t0];
+  const double* k_  = cols[split ? emc2col::bawdsplit::k : emc2col::bawd::k];
+  const double* ell_ = cols[split ? emc2col::bawdsplit::ell : emc2col::bawd::ell];
+  const double* delta_ = (launch == BAWD_LAUNCH_SPLITLOGNORMAL)
+    ? cols[emc2col::bawdsplit::delta] : nullptr;
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
     if (R_IsNA(p1_[i]) || !isok[i]) {
@@ -1269,9 +1331,10 @@ void dbawd_raw(const double* rt, const double* const* cols, int n_rows,
       continue;
     }
     const double b_i = B_[i] + A_[i];
-    const double log_pdf = bawd_log_pdf(tt, A_[i], b_i, p1_[i],
-                                        p2_[i], k_[i], ell_[i], launch, pd,
-                                        gamma, rho);
+    const double log_pdf = bawd_log_pdf(
+      tt, A_[i], b_i, p1_[i], p2_[i], k_[i], ell_[i], launch, pd,
+      gamma, rho, BAWD_DENOM_FLOOR,
+      delta_ ? delta_[i] : 0.0);
     out[i] = (log_pdf > R_NegInf && emc2_isfinite(log_pdf))
       ? raw_log_value(log_pdf, min_ll, floor_raw)
       : raw_log_zero(min_ll, floor_raw);
@@ -1287,13 +1350,16 @@ void pbawd_raw(const double* rt, const double* const* cols, int n_rows,
   const int launch = bawd_launch_of(ctx);
   const double gamma = bawd_gamma_of(ctx);
   const double rho = bawd_rho_of(ctx);
-  const double* p1_ = cols[emc2col::bawd::v];
-  const double* p2_ = cols[emc2col::bawd::sv];
-  const double* B_  = cols[emc2col::bawd::B];
-  const double* A_  = cols[emc2col::bawd::A];
-  const double* t0_ = cols[emc2col::bawd::t0];
-  const double* k_  = cols[emc2col::bawd::k];
-  const double* ell_ = cols[emc2col::bawd::ell];
+  const bool split = launch == BAWD_LAUNCH_SPLITLOGNORMAL;
+  const double* p1_ = cols[split ? emc2col::bawdsplit::mu : emc2col::bawd::v];
+  const double* p2_ = cols[split ? emc2col::bawdsplit::sigma : emc2col::bawd::sv];
+  const double* B_  = cols[split ? emc2col::bawdsplit::B : emc2col::bawd::B];
+  const double* A_  = cols[split ? emc2col::bawdsplit::A : emc2col::bawd::A];
+  const double* t0_ = cols[split ? emc2col::bawdsplit::t0 : emc2col::bawd::t0];
+  const double* k_  = cols[split ? emc2col::bawdsplit::k : emc2col::bawd::k];
+  const double* ell_ = cols[split ? emc2col::bawdsplit::ell : emc2col::bawd::ell];
+  const double* delta_ = (launch == BAWD_LAUNCH_SPLITLOGNORMAL)
+    ? cols[emc2col::bawdsplit::delta] : nullptr;
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
     if (R_IsNA(p1_[i]) || !isok[i]) { out[i] = 0.0; continue; }
@@ -1303,12 +1369,12 @@ void pbawd_raw(const double* rt, const double* const* cols, int n_rows,
     double cdf = 0.0;
     if (ba_natural_cdf_bawd(tt, A_[i], b_i, p1_[i], p2_[i], k_[i], ell_[i],
                             launch, pd, gamma, rho, BAWD_DENOM_FLOOR,
-                            BA_ACCEPT_RAW, cdf)) {
+                            BA_ACCEPT_RAW, cdf, delta_ ? delta_[i] : 0.0)) {
       out[i] = (cdf > 0.0) ? std::log1p(-cdf) : 0.0;
     } else {
-      const double log_s = bawd_log_surv(tt, A_[i], b_i, p1_[i], p2_[i],
-                                         k_[i], ell_[i], launch, pd, gamma, rho,
-                                         BAWD_DENOM_FLOOR);
+      const double log_s = bawd_log_surv(
+        tt, A_[i], b_i, p1_[i], p2_[i], k_[i], ell_[i], launch, pd,
+        gamma, rho, BAWD_DENOM_FLOOR, delta_ ? delta_[i] : 0.0);
       out[i] = (log_s > R_NegInf && emc2_isfinite(log_s))
         ? log_s : raw_log_zero(min_ll, floor_raw);
     }
@@ -1324,13 +1390,15 @@ void bawd_logS_at_t(double t, const double* const* cols,
   const int launch = bawd_launch_of(ctx);
   const double gamma = bawd_gamma_of(ctx);
   const double rho = bawd_rho_of(ctx);
-  const double* p1_ = cols[emc2col::bawd::v];
-  const double* p2_ = cols[emc2col::bawd::sv];
-  const double* B_  = cols[emc2col::bawd::B];
-  const double* A_  = cols[emc2col::bawd::A];
-  const double* t0_ = cols[emc2col::bawd::t0];
-  const double* k_  = cols[emc2col::bawd::k];
-  const double* ell_ = cols[emc2col::bawd::ell];
+  const bool split = launch == BAWD_LAUNCH_SPLITLOGNORMAL;
+  const double* p1_ = cols[split ? emc2col::bawdsplit::mu : emc2col::bawd::v];
+  const double* p2_ = cols[split ? emc2col::bawdsplit::sigma : emc2col::bawd::sv];
+  const double* delta_ = split ? cols[emc2col::bawdsplit::delta] : nullptr;
+  const double* B_  = cols[split ? emc2col::bawdsplit::B : emc2col::bawd::B];
+  const double* A_  = cols[split ? emc2col::bawdsplit::A : emc2col::bawd::A];
+  const double* t0_ = cols[split ? emc2col::bawdsplit::t0 : emc2col::bawd::t0];
+  const double* k_  = cols[split ? emc2col::bawdsplit::k : emc2col::bawd::k];
+  const double* ell_ = cols[split ? emc2col::bawdsplit::ell : emc2col::bawd::ell];
   for (int j = 0; j < n_unique_trials; ++j) {
     if (!trunc_mask[j]) continue;
     const int start = j * n_lR;
@@ -1340,17 +1408,17 @@ void bawd_logS_at_t(double t, const double* const* cols,
       const int r = start + kk;
       if (!isok_all[r] || R_IsNA(p1_[r])) { bad = true; break; }
       const double tt = t - t0_[r];
-      if (tt <= 0.0) continue;  // not started: survivor one
+      if (tt <= 0.0) continue;
       const double b_r = B_[r] + A_[r];
       double cdf = 0.0;
       if (ba_natural_cdf_bawd(tt, A_[r], b_r, p1_[r], p2_[r], k_[r], ell_[r],
                               launch, pd, gamma, rho, BAWD_DENOM_FLOOR,
-                              BA_ACCEPT_RAW, cdf)) {
+                              BA_ACCEPT_RAW, cdf, delta_ ? delta_[r] : 0.0)) {
         if (cdf > 0.0) logS += std::log1p(-cdf);
       } else {
-        const double log_s = bawd_log_surv(tt, A_[r], b_r, p1_[r], p2_[r],
-                                           k_[r], ell_[r], launch, pd, gamma, rho,
-                                           BAWD_DENOM_FLOOR);
+        const double log_s = bawd_log_surv(
+          tt, A_[r], b_r, p1_[r], p2_[r], k_[r], ell_[r], launch, pd,
+          gamma, rho, BAWD_DENOM_FLOOR, delta_ ? delta_[r] : 0.0);
         if (!(log_s > R_NegInf) || ISNAN(log_s)) { bad = true; break; }
         logS += log_s;
       }
@@ -1424,32 +1492,46 @@ inline BawDpClock bawdp_clock(double u, double k, double lambda) {
 double dbawdp_scalar(double t, const double* par, void* ctx_) {
   auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
   const int launch = ctx ? ctx->bawl_launch : BAWL_LAUNCH_LOGNORMAL;
-  const double tt = t - par[emc2col::bawdp::t0];
+  const bool split = launch == BAWL_LAUNCH_SPLITLOGNORMAL;
+  const int iv = split ? emc2col::bawdpsplit::mu : emc2col::bawdp::v;
+  const int isv = split ? emc2col::bawdpsplit::sigma : emc2col::bawdp::sv;
+  const int iB = split ? emc2col::bawdpsplit::B : emc2col::bawdp::B;
+  const int iA = split ? emc2col::bawdpsplit::A : emc2col::bawdp::A;
+  const int it0 = split ? emc2col::bawdpsplit::t0 : emc2col::bawdp::t0;
+  const int ik = split ? emc2col::bawdpsplit::k : emc2col::bawdp::k;
+  const int ilam = split ? emc2col::bawdpsplit::lambda : emc2col::bawdp::lambda;
+  const int idelta = split ? emc2col::bawdpsplit::delta : -1;
+  const double tt = t - par[it0];
   if (t <= 0.0 || !(tt > 0.0)) return 0.0;
-  const BawDpClock g = bawdp_clock(tt, par[emc2col::bawdp::k],
-                                   par[emc2col::bawdp::lambda]);
+  const BawDpClock g = bawdp_clock(tt, par[ik], par[ilam]);
   if (!g.ok || g.frozen) return 0.0;
-  const double lp = log_ba_pdf_launch(g.m, par[emc2col::bawdp::A],
-                                      par[emc2col::bawdp::B] + par[emc2col::bawdp::A],
-                                      par[emc2col::bawdp::v], par[emc2col::bawdp::sv],
-                                      0.0, ctx ? ctx->use_posdrift : true,
-                                      BAWL_DENOM_FLOOR, launch);
+  const double lp = log_ba_pdf_launch(
+    g.m, par[iA], par[iB] + par[iA], par[iv], par[isv], 0.0,
+    ctx ? ctx->use_posdrift : true, BAWL_DENOM_FLOOR, launch,
+    split ? par[idelta] : 0.0);
   return (lp > R_NegInf && emc2_isfinite(lp)) ? std::exp(lp + std::log(g.dm)) : 0.0;
 }
 
 double pbawdp_scalar(double t, const double* par, void* ctx_) {
   auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
   const int launch = ctx ? ctx->bawl_launch : BAWL_LAUNCH_LOGNORMAL;
-  const double tt = t - par[emc2col::bawdp::t0];
+  const bool split = launch == BAWL_LAUNCH_SPLITLOGNORMAL;
+  const int iv = split ? emc2col::bawdpsplit::mu : emc2col::bawdp::v;
+  const int isv = split ? emc2col::bawdpsplit::sigma : emc2col::bawdp::sv;
+  const int iB = split ? emc2col::bawdpsplit::B : emc2col::bawdp::B;
+  const int iA = split ? emc2col::bawdpsplit::A : emc2col::bawdp::A;
+  const int it0 = split ? emc2col::bawdpsplit::t0 : emc2col::bawdp::t0;
+  const int ik = split ? emc2col::bawdpsplit::k : emc2col::bawdp::k;
+  const int ilam = split ? emc2col::bawdpsplit::lambda : emc2col::bawdp::lambda;
+  const int idelta = split ? emc2col::bawdpsplit::delta : -1;
+  const double tt = t - par[it0];
   if (t <= 0.0 || !(tt > 0.0)) return 0.0;
-  const BawDpClock g = bawdp_clock(tt, par[emc2col::bawdp::k],
-                                   par[emc2col::bawdp::lambda]);
+  const BawDpClock g = bawdp_clock(tt, par[ik], par[ilam]);
   if (!g.ok) return 0.0;
-  const double lp = log_ba_cdf_launch(g.m, par[emc2col::bawdp::A],
-                                      par[emc2col::bawdp::B] + par[emc2col::bawdp::A],
-                                      par[emc2col::bawdp::v], par[emc2col::bawdp::sv],
-                                      0.0, ctx ? ctx->use_posdrift : true,
-                                      BAWL_DENOM_FLOOR, launch);
+  const double lp = log_ba_cdf_launch(
+    g.m, par[iA], par[iB] + par[iA], par[iv], par[isv], 0.0,
+    ctx ? ctx->use_posdrift : true, BAWL_DENOM_FLOOR, launch,
+    split ? par[idelta] : 0.0);
   return (lp > R_NegInf) ? std::fmin(std::exp(lp), 1.0) : 0.0;
 }
 
@@ -1460,13 +1542,23 @@ void dbawdp_raw(const double* rt, const double* const* cols, int n_rows,
   const bool floor_raw = raw_floor_log_lik(ctx);
   const bool pd = ctx ? ctx->use_posdrift : true;
   const int launch = ctx ? ctx->bawl_launch : BAWL_LAUNCH_LOGNORMAL;
-  const double* p1 = cols[emc2col::bawdp::v];
-  const double* p2 = cols[emc2col::bawdp::sv];
-  const double* B = cols[emc2col::bawdp::B];
-  const double* A = cols[emc2col::bawdp::A];
-  const double* t0 = cols[emc2col::bawdp::t0];
-  const double* k = cols[emc2col::bawdp::k];
-  const double* lam = cols[emc2col::bawdp::lambda];
+  const bool split = launch == BAWL_LAUNCH_SPLITLOGNORMAL;
+  const int iv = split ? emc2col::bawdpsplit::mu : emc2col::bawdp::v;
+  const int isv = split ? emc2col::bawdpsplit::sigma : emc2col::bawdp::sv;
+  const int iB = split ? emc2col::bawdpsplit::B : emc2col::bawdp::B;
+  const int iA = split ? emc2col::bawdpsplit::A : emc2col::bawdp::A;
+  const int it0 = split ? emc2col::bawdpsplit::t0 : emc2col::bawdp::t0;
+  const int ik = split ? emc2col::bawdpsplit::k : emc2col::bawdp::k;
+  const int ilam = split ? emc2col::bawdpsplit::lambda : emc2col::bawdp::lambda;
+  const int idelta = split ? emc2col::bawdpsplit::delta : -1;
+  const double* p1 = cols[iv];
+  const double* p2 = cols[isv];
+  const double* B = cols[iB];
+  const double* A = cols[iA];
+  const double* t0 = cols[it0];
+  const double* k = cols[ik];
+  const double* lam = cols[ilam];
+  const double* delta = split ? cols[idelta] : nullptr;
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
     const double tt = rt[i] - t0[i];
@@ -1474,8 +1566,9 @@ void dbawdp_raw(const double* rt, const double* const* cols, int n_rows,
     if (!isok[i] || rt[i] <= 0.0 || !(tt > 0.0) || !g.ok || g.frozen) {
       out[i] = raw_log_zero(min_ll, floor_raw); continue;
     }
-    const double lp = log_ba_pdf_launch(g.m, A[i], B[i] + A[i], p1[i], p2[i],
-                                        0.0, pd, BAWL_DENOM_FLOOR, launch);
+    const double lp = log_ba_pdf_launch(
+      g.m, A[i], B[i] + A[i], p1[i], p2[i], 0.0, pd, BAWL_DENOM_FLOOR,
+      launch, delta ? delta[i] : 0.0);
     const double out_lp = (lp > R_NegInf && emc2_isfinite(lp))
       ? lp + std::log(g.dm) : R_NegInf;
     out[i] = (out_lp > R_NegInf && emc2_isfinite(out_lp))
@@ -1488,15 +1581,25 @@ void pbawdp_raw(const double* rt, const double* const* cols, int n_rows,
                 double min_ll, void* ctx_) {
   auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
   const bool floor_raw = raw_floor_log_lik(ctx);
-  const bool pd = ctx ? ctx->use_posdrift : true;
+  const double pd = ctx ? ctx->use_posdrift : true;
   const int launch = ctx ? ctx->bawl_launch : BAWL_LAUNCH_LOGNORMAL;
-  const double* p1 = cols[emc2col::bawdp::v];
-  const double* p2 = cols[emc2col::bawdp::sv];
-  const double* B = cols[emc2col::bawdp::B];
-  const double* A = cols[emc2col::bawdp::A];
-  const double* t0 = cols[emc2col::bawdp::t0];
-  const double* k = cols[emc2col::bawdp::k];
-  const double* lam = cols[emc2col::bawdp::lambda];
+  const bool split = launch == BAWL_LAUNCH_SPLITLOGNORMAL;
+  const int iv = split ? emc2col::bawdpsplit::mu : emc2col::bawdp::v;
+  const int isv = split ? emc2col::bawdpsplit::sigma : emc2col::bawdp::sv;
+  const int iB = split ? emc2col::bawdpsplit::B : emc2col::bawdp::B;
+  const int iA = split ? emc2col::bawdpsplit::A : emc2col::bawdp::A;
+  const int it0 = split ? emc2col::bawdpsplit::t0 : emc2col::bawdp::t0;
+  const int ik = split ? emc2col::bawdpsplit::k : emc2col::bawdp::k;
+  const int ilam = split ? emc2col::bawdpsplit::lambda : emc2col::bawdp::lambda;
+  const int idelta = split ? emc2col::bawdpsplit::delta : -1;
+  const double* p1 = cols[iv];
+  const double* p2 = cols[isv];
+  const double* B = cols[iB];
+  const double* A = cols[iA];
+  const double* t0 = cols[it0];
+  const double* k = cols[ik];
+  const double* lam = cols[ilam];
+  const double* delta = split ? cols[idelta] : nullptr;
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
     const double tt = rt[i] - t0[i];
@@ -1505,12 +1608,15 @@ void pbawdp_raw(const double* rt, const double* const* cols, int n_rows,
     if (!g.ok) { out[i] = 0.0; continue; }
     const double b_i = B[i] + A[i];
     double cdf = 0.0;
-    if (ba_natural_cdf_launch(g.m, A[i], b_i, p1[i], p2[i], 0.0, pd,
-                              BAWL_DENOM_FLOOR, BA_ACCEPT_RAW, cdf, launch)) {
+    if (ba_natural_cdf_launch(
+          g.m, A[i], b_i, p1[i], p2[i], 0.0, pd,
+          BAWL_DENOM_FLOOR, BA_ACCEPT_RAW, cdf, launch,
+          delta ? delta[i] : 0.0)) {
       out[i] = (cdf > 0.0) ? std::log1p(-cdf) : 0.0;
     } else {
-      const double ls = log_ba_surv_launch(g.m, A[i], b_i, p1[i], p2[i],
-                                           0.0, pd, BAWL_DENOM_FLOOR, launch);
+      const double ls = log_ba_surv_launch(
+        g.m, A[i], b_i, p1[i], p2[i], 0.0, pd, BAWL_DENOM_FLOOR, launch,
+        delta ? delta[i] : 0.0);
       out[i] = (ls > R_NegInf && emc2_isfinite(ls))
         ? ls : raw_log_zero(min_ll, floor_raw);
     }
@@ -1524,28 +1630,36 @@ void bawdp_logS_at_t(double t, const double* const* cols,
   auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
   const bool pd = ctx ? ctx->use_posdrift : true;
   const int launch = ctx ? ctx->bawl_launch : BAWL_LAUNCH_LOGNORMAL;
+  const bool split = launch == BAWL_LAUNCH_SPLITLOGNORMAL;
+  const int iv = split ? emc2col::bawdpsplit::mu : emc2col::bawdp::v;
+  const int isv = split ? emc2col::bawdpsplit::sigma : emc2col::bawdp::sv;
+  const int iB = split ? emc2col::bawdpsplit::B : emc2col::bawdp::B;
+  const int iA = split ? emc2col::bawdpsplit::A : emc2col::bawdp::A;
+  const int it0 = split ? emc2col::bawdpsplit::t0 : emc2col::bawdp::t0;
+  const int ik = split ? emc2col::bawdpsplit::k : emc2col::bawdp::k;
+  const int ilam = split ? emc2col::bawdpsplit::lambda : emc2col::bawdp::lambda;
+  const int idelta = split ? emc2col::bawdpsplit::delta : -1;
   for (int j = 0; j < n_unique_trials; ++j) {
     if (!trunc_mask[j]) continue;
     double logS = 0.0; bool bad = false;
     for (int a = 0; a < n_lR && !bad; ++a) {
       const int r = j * n_lR + a;
       if (!isok_all[r]) { bad = true; break; }
-      const double tt = t - cols[emc2col::bawdp::t0][r];
+      const double tt = t - cols[it0][r];
       if (!(tt > 0.0)) continue;
-      const BawDpClock g = bawdp_clock(tt, cols[emc2col::bawdp::k][r],
-                                       cols[emc2col::bawdp::lambda][r]);
+      const BawDpClock g = bawdp_clock(tt, cols[ik][r], cols[ilam][r]);
       if (!g.ok) { bad = true; break; }
-      const double b_r = cols[emc2col::bawdp::B][r] + cols[emc2col::bawdp::A][r];
+      const double b_r = cols[iB][r] + cols[iA][r];
+      const double delta_r = split ? cols[idelta][r] : 0.0;
       double cdf = 0.0;
-      if (ba_natural_cdf_launch(g.m, cols[emc2col::bawdp::A][r], b_r,
-                                cols[emc2col::bawdp::v][r], cols[emc2col::bawdp::sv][r],
-                                0.0, pd, BAWL_DENOM_FLOOR, BA_ACCEPT_RAW, cdf, launch)) {
+      if (ba_natural_cdf_launch(
+            g.m, cols[iA][r], b_r, cols[iv][r], cols[isv][r], 0.0, pd,
+            BAWL_DENOM_FLOOR, BA_ACCEPT_RAW, cdf, launch, delta_r)) {
         if (cdf > 0.0) logS += std::log1p(-cdf);
       } else {
         const double ls = log_ba_surv_launch(
-          g.m, cols[emc2col::bawdp::A][r], b_r,
-          cols[emc2col::bawdp::v][r], cols[emc2col::bawdp::sv][r], 0.0, pd,
-          BAWL_DENOM_FLOOR, launch);
+          g.m, cols[iA][r], b_r, cols[iv][r], cols[isv][r], 0.0, pd,
+          BAWL_DENOM_FLOOR, launch, delta_r);
         if (!(ls > R_NegInf)) { bad = true; break; }
         logS += ls;
       }
@@ -1553,16 +1667,14 @@ void bawdp_logS_at_t(double t, const double* const* cols,
     logS_out[j] = bad ? R_NegInf : logS;
   }
 }
-
 namespace {
-
 inline double bawdp_pdf_norm(double t, double A, double b, double p1, double p2,
                              double k, double lambda, int launch, bool posdrift,
-                             bool log_out) {
+                             bool log_out, double delta = 0.0) {
   const BawDpClock g = bawdp_clock(t, k, lambda);
   if (!g.ok || g.frozen) return log_out ? R_NegInf : 0.0;
-  const double lp = log_ba_pdf_launch(g.m, A, b, p1, p2, 0.0, posdrift,
-                                      BAWL_DENOM_FLOOR, launch);
+  const double lp = log_ba_pdf_launch(
+    g.m, A, b, p1, p2, 0.0, posdrift, BAWL_DENOM_FLOOR, launch, delta);
   if (!(lp > R_NegInf) || !emc2_isfinite(lp)) return log_out ? R_NegInf : 0.0;
   const double out = lp + std::log(g.dm);
   return log_out ? out : std::exp(out);
@@ -1570,11 +1682,11 @@ inline double bawdp_pdf_norm(double t, double A, double b, double p1, double p2,
 
 inline double bawdp_cdf_norm(double t, double A, double b, double p1, double p2,
                              double k, double lambda, int launch, bool posdrift,
-                             bool log_out) {
+                             bool log_out, double delta = 0.0) {
   const BawDpClock g = bawdp_clock(t, k, lambda);
   if (!g.ok) return log_out ? R_NegInf : 0.0;
-  const double lp = log_ba_cdf_launch(g.m, A, b, p1, p2, 0.0, posdrift,
-                                      BAWL_DENOM_FLOOR, launch);
+  const double lp = log_ba_cdf_launch(
+    g.m, A, b, p1, p2, 0.0, posdrift, BAWL_DENOM_FLOOR, launch, delta);
   if (log_out) return lp;
   return (lp > R_NegInf) ? std::fmin(std::exp(lp), 1.0) : 0.0;
 }
@@ -1585,16 +1697,16 @@ inline double bawdp_cdf_norm(double t, double A, double b, double p1, double p2,
 NumericVector dbawdp(NumericVector t, NumericVector A, NumericVector b,
                      NumericVector p1, NumericVector p2, NumericVector k,
                      NumericVector lambda, int launch = 1, bool posdrift = true,
-                     bool log_out = false) {
+                     bool log_out = false, NumericVector delta = 0.0) {
   const int n = t.size();
   NumericVector out(n);
   auto pick = [](const NumericVector& x, int i) -> double {
     return x.size() == 1 ? x[0] : x[i];
   };
   for (int i = 0; i < n; ++i)
-    out[i] = bawdp_pdf_norm(t[i], pick(A, i), pick(b, i), pick(p1, i),
-                            pick(p2, i), pick(k, i), pick(lambda, i),
-                            launch, posdrift, log_out);
+    out[i] = bawdp_pdf_norm(
+      t[i], pick(A, i), pick(b, i), pick(p1, i), pick(p2, i), pick(k, i),
+      pick(lambda, i), launch, posdrift, log_out, pick(delta, i));
   return out;
 }
 
@@ -1602,15 +1714,15 @@ NumericVector dbawdp(NumericVector t, NumericVector A, NumericVector b,
 NumericVector pbawdp(NumericVector t, NumericVector A, NumericVector b,
                      NumericVector p1, NumericVector p2, NumericVector k,
                      NumericVector lambda, int launch = 1, bool posdrift = true,
-                     bool log_out = false) {
+                     bool log_out = false, NumericVector delta = 0.0) {
   const int n = t.size();
   NumericVector out(n);
   auto pick = [](const NumericVector& x, int i) -> double {
     return x.size() == 1 ? x[0] : x[i];
   };
   for (int i = 0; i < n; ++i)
-    out[i] = bawdp_cdf_norm(t[i], pick(A, i), pick(b, i), pick(p1, i),
-                            pick(p2, i), pick(k, i), pick(lambda, i),
-                            launch, posdrift, log_out);
+    out[i] = bawdp_cdf_norm(
+      t[i], pick(A, i), pick(b, i), pick(p1, i), pick(p2, i), pick(k, i),
+      pick(lambda, i), launch, posdrift, log_out, pick(delta, i));
   return out;
 }

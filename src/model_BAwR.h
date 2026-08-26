@@ -65,10 +65,11 @@ constexpr double BAWR_LOG_BRACKET_MIN = BAWD_LOG_BRACKET_MIN;
 constexpr double BAWR_DENOM_FLOOR = BAWD_DENOM_FLOOR;
 
 // The launch selector is BAwD's, as for BAwF: one definition of
-// "0 = truncated normal, 1 = lognormal" across the ballistic family.
+// "0 = truncated normal, 1 = lognormal, 2 = continuous split-lognormal"
+// across the ballistic family.
 constexpr int BAWR_LAUNCH_NORMAL = BAWD_LAUNCH_NORMAL;
 constexpr int BAWR_LAUNCH_LOGNORMAL = BAWD_LAUNCH_LOGNORMAL;
-
+constexpr int BAWR_LAUNCH_SPLITLOGNORMAL = BAWD_LAUNCH_SPLITLOGNORMAL;
 // --------------------------------------------------------------------------
 // Geometry (launch-distribution free)
 // --------------------------------------------------------------------------
@@ -134,13 +135,13 @@ BawrAtU bawr_at_u(const BawrGeom& g, double u);
 
 double bawr_log_frozen_quad(const BawrGeom& g, double s_lo, double s_hi,
                                    double p1, double p2, bool logn,
-                                   bool posdrift);
+                                   bool posdrift, double delta);
 
 double bawr_log_frozen_normal(const BawrGeom& g, double s_lo,
                                      double s_hi, double v, double sv);
 
 double bawr_log_frozen_logn(const BawrGeom& g, double s_lo, double s_hi,
-                                   double mu, double sigma);
+                                   double mu, double sigma, double delta = 0.0);
 
 // --------------------------------------------------------------------------
 // log CDF
@@ -156,25 +157,26 @@ double log_bawr_cdf_normal(double u, const BawrGeom& g, double v,
                                   double denom_floor);
 
 double log_bawr_cdf_logn(double u, const BawrGeom& g, double mu,
-                                double sigma);
+                                double sigma, double delta = 0.0);
 
 double bawr_log_frozen_surv_quad(const BawrGeom& g, double s_lo,
                                         double s_hi, double p1, double p2,
-                                        bool logn, bool posdrift);
+                                        bool logn, bool posdrift, double delta);
 
 double bawr_log_frozen_surv_normal(const BawrGeom& g, double s_lo,
                                           double s_hi, double v, double sv,
                                           bool posdrift);
 
 double bawr_log_frozen_surv_logn(const BawrGeom& g, double s_lo,
-                                        double s_hi, double mu, double sigma);
+                                        double s_hi, double mu, double sigma,
+                                        double delta = 0.0);
 
 double log_bawr_surv_normal(double u, const BawrGeom& g, double v,
                                     double sv, bool posdrift,
                                     double denom_floor);
 
 double log_bawr_surv_logn(double u, const BawrGeom& g, double mu,
-                                  double sigma);
+                                  double sigma, double delta = 0.0);
 
 // --------------------------------------------------------------------------
 // log PDF
@@ -193,7 +195,7 @@ double log_bawr_pdf_normal(double u, const BawrGeom& g, double v,
                                   double denom_floor);
 
 double log_bawr_pdf_logn(double u, const BawrGeom& g, double mu,
-                                double sigma);
+                                double sigma, double delta = 0.0);
 
 // --------------------------------------------------------------------------
 // Guarded natural-space CDF & PDF evaluators.  Same acceptance contract as
@@ -206,7 +208,8 @@ bool bawr_natural_cdf_normal(double u, const BawrGeom& g, double v,
                                     double &cdf);
 
 bool bawr_natural_cdf_logn(double u, const BawrGeom& g, double mu,
-                                  double sigma, int accept_mode, double &cdf);
+                                  double sigma, int accept_mode, double &cdf,
+                                  double delta = 0.0);
 
 bool bawr_natural_pdf_normal(double u, const BawrGeom& g, double v,
                                     double sv, bool posdrift,
@@ -214,53 +217,64 @@ bool bawr_natural_pdf_normal(double u, const BawrGeom& g, double v,
                                     double &pdf);
 
 bool bawr_natural_pdf_logn(double u, const BawrGeom& g, double mu,
-                                  double sigma, int accept_mode, double &pdf);
+                                  double sigma, int accept_mode, double &pdf,
+                                  double delta = 0.0);
 
 bool ba_natural_cdf_bawr(double u, double A, double b, double p1,
                                 double p2, double kappa, double pw, int launch,
                                 bool posdrift, double denom_floor,
-                                int accept_mode, double &cdf);
+                                int accept_mode, double &cdf, double delta = 0.0);
 
 bool ba_natural_pdf_bawr(double u, double A, double b, double p1,
                                 double p2, double kappa, double pw, int launch,
                                 bool posdrift, double denom_floor,
-                                int accept_mode, double &pdf);
+                                int accept_mode, double &pdf, double delta = 0.0);
 
 // --------------------------------------------------------------------------
 // Dispatch and output wrappers.  `p1`/`p2` are (v, sv) for the normal launch
 // and (mu, sigma) for the lognormal one; they occupy the same kernel columns.
+// The trailing `delta` selects the continuous split-lognormal launch
+// (BAWR_LAUNCH_SPLITLOGNORMAL); delta = 0 reduces every path to the plain
+// lognormal numbers exactly.
 // --------------------------------------------------------------------------
 double bawr_log_cdf(double u, double A, double b, double p1, double p2,
                            double kappa, double pw, int launch, bool posdrift,
-                           double denom_floor = BAWR_DENOM_FLOOR);
+                           double denom_floor = BAWR_DENOM_FLOOR,
+                           double delta = 0.0);
 
 double bawr_log_surv(double u, double A, double b, double p1, double p2,
                             double kappa, double pw, int launch, bool posdrift,
-                            double denom_floor = BAWR_DENOM_FLOOR);
+                            double denom_floor = BAWR_DENOM_FLOOR,
+                            double delta = 0.0);
 
 double bawr_log_pdf(double u, double A, double b, double p1, double p2,
                            double kappa, double pw, int launch, bool posdrift,
-                           double denom_floor = BAWR_DENOM_FLOOR);
+                           double denom_floor = BAWR_DENOM_FLOOR,
+                           double delta = 0.0);
 
 double bawr_cdf_norm(double t, double A, double b, double p1, double p2,
                             double kappa, double pw, int launch, bool posdrift,
                             bool log_out,
-                            double denom_floor = BAWR_DENOM_FLOOR);
+                            double denom_floor = BAWR_DENOM_FLOOR,
+                            double delta = 0.0);
 
 double bawr_pdf_norm(double t, double A, double b, double p1, double p2,
                             double kappa, double pw, int launch, bool posdrift,
                             bool log_out,
-                            double denom_floor = BAWR_DENOM_FLOOR);
+                            double denom_floor = BAWR_DENOM_FLOOR,
+                            double delta = 0.0);
 
 // Natural-scale scalar evaluators for consumers that clamp to [0, 1] and
 // tolerate tail saturation: truncation normalisers and GSL integrands.
 double bawr_cdf_scalar_natural(double t, double A, double b, double p1,
                                       double p2, double kappa, double pw,
-                                      int launch, bool posdrift);
+                                      int launch, bool posdrift,
+                                      double delta = 0.0);
 
 double bawr_pdf_scalar_natural(double t, double A, double b, double p1,
                                       double p2, double kappa, double pw,
-                                      int launch, bool posdrift);
+                                      int launch, bool posdrift,
+                                      double delta = 0.0);
 
 
 

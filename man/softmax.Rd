@@ -27,10 +27,10 @@ response time is modeled; \code{rt} must be \code{NA} in the input data.
 }
 \section{Parameters}{
 
-The softmax model uses the following parameter matrix:\tabular{lllll}{
-   \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Interpretation} \cr
-   \emph{x} \tab identity \tab [-Inf, Inf] \tab 0 \tab Continuous latent score for each response option. \cr
-   \emph{beta} \tab log \tab [0, Inf] \tab log(1) \tab Inverse temperature; larger values make choices more deterministic. \cr
+The softmax model uses the following parameter matrix:\tabular{llllll}{
+   \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Mapping} \tab \strong{Interpretation} \cr
+   \emph{x} \tab identity \tab [-Inf, Inf] \tab 0 \tab  \tab Continuous latent score for each response option. \cr
+   \emph{beta} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Inverse temperature; larger values make choices more deterministic. \cr
 }
 
 

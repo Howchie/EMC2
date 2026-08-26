@@ -36,11 +36,11 @@ rPROBIT <- function(lR,pars,p_types=c("mean","sd","threshold"),lt=-Inf)
 #' criterion `threshold`: the first response level is selected below the
 #' criterion and the second response level above it.
 #'
-#' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Interpretation** |
-#' |---|---|---|---|---|
-#' | *mean* | identity | \[-Inf, Inf\] | 0 | Mean of the Gaussian latent variable. |
-#' | *sd* | log | \[0, Inf\] | log(1) | Gaussian SD. |
-#' | *threshold* | identity | \[-Inf, Inf\] | 0 | Response criterion; for binary responses, the cutoff between the two response levels. |
+#' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Mapping** | **Interpretation** |
+#' |---|---|---|---|---|---|
+#' | *mean* | identity | \[-Inf, Inf\] | 0 | | Mean of the Gaussian latent variable. |
+#' | *sd* | log | \[0, Inf\] | log(1) | | Gaussian SD. |
+#' | *threshold* | identity | \[-Inf, Inf\] | 0 | | Response criterion; for binary responses, the cutoff between the two response levels. |
 #'
 #' The model is invariant to a common location and scale transformation, so in
 #' one condition two parameters must be fixed for identification, conventionally
@@ -111,11 +111,11 @@ SDT <- function(){
 #' `P(yes | signal) = Phi((d / 2 - c) / sd)`. Here `d` and `c` are estimated
 #' on the identity scale and `sd` is estimated on the log scale.
 #'
-#' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Interpretation** |
-#' |---|---|---|---|---|
-#' | *d* | identity | \[-Inf, Inf\] | 0 | Distance between signal and noise means. |
-#' | *c* | identity | \[-Inf, Inf\] | 0 | Criterion relative to the midpoint of the two means. |
-#' | *sd* | log | \[0, Inf\] | log(1) | Signal-distribution SD; noise SD is fixed at 1. |
+#' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Mapping** | **Interpretation** |
+#' |---|---|---|---|---|---|
+#' | *d* | identity | \[-Inf, Inf\] | 0 | | Distance between signal and noise means. |
+#' | *c* | identity | \[-Inf, Inf\] | 0 | | Criterion relative to the midpoint of the two means. |
+#' | *sd* | log | \[0, Inf\] | log(1) | | Signal-distribution SD; noise SD is fixed at 1. |
 #'
 #' The model is hierarchical in the sense that the same subject-level
 #' parameter vector can be used across signal/noise conditions; it does not

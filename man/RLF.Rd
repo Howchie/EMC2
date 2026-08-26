@@ -56,7 +56,9 @@ by the standalone validation solver.\tabular{llllll}{
    \emph{t0} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Non-decision time. \cr
    \emph{s} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Symmetric stable-noise scale. \cr
    \emph{alpha} \tab probit \tab [1, 2] \tab qnorm(.7) \tab  \tab Symmetric stable-law index; 2 is the diffusion limit. \cr
-   \emph{pContaminant} \tab probit \tab [0, 1] \tab qnorm(0) \tab  \tab Optional omission contaminant probability. \cr
-   \emph{pGuess} \tab probit \tab [0, 1] \tab qnorm(0) \tab  \tab Optional uniform outlier probability. \cr
 }
+
+
+Optional fitting parameters: \code{pContaminant} is the omission probability and
+\code{pGuess} is the uniform-outlier probability.
 }

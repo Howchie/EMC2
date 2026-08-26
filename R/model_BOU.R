@@ -133,7 +133,7 @@ rBOU <- function(R, pars, ok = rep(TRUE, length(R)), dt = 1e-4, t_max = 30,
 #'
 #' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Mapping** | **Interpretation** |
 #' |---|---|---|---|---|---|
-#' | *v* | - | \[-Inf, Inf\] | 1 | | Mean evidence-accumulation rate (drift rate) |
+#' | *v* | identity | \[-Inf, Inf\] | 1 | | Mean evidence-accumulation rate (drift rate). |
 #' | *a* | log | \[0, Inf\] | log(1) | | Boundary separation |
 #' | *beta* | log | \[0, Inf\] | log(0) | | Leak: decay toward the starting point. 0 gives the DDM |
 #' | *t0* | log | \[0, Inf\] | log(0) | | Non-decision time |
@@ -143,14 +143,13 @@ rBOU <- function(R, pars, ok = rep(TRUE, length(R)), dt = 1e-4, t_max = 30,
 #' | *sv* | log | \[0, Inf\] | log(0) | | Between-trial standard deviation of drift rate |
 #' | *st0* | log | \[0, Inf\] | log(0) | | Between-trial variation (range) in non-decision time |
 #'
-#' When `boundary_collapse` is not `"fixed"` two further parameters appear,
-#' `aInf` and `tau` (plus `pw` for `"weibull"`):
+#' Optional fitting parameters: `pContaminant` is the omission probability and
+#' `pGuess` is the uniform-outlier probability.
 #'
-#' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Interpretation** |
-#' |---|---|---|---|---|
-#' | *aInf* | log | \[0, Inf\] | log(0.5) | Asymptotic separation, in the same units as *a* |
-#' | *tau* | log | \[0, Inf\] | log(1) | Time scale of the collapse |
-#' | *pw* | log | \[0, Inf\] | log(1) | Shape exponent (Weibull only) |
+#' When `boundary_collapse` is not `"fixed"`, the optional boundary parameters
+#' `aInf` and `tau` are sampled on the log scale with defaults `log(0.5)` and
+#' `log(1)`; the Weibull form also adds `pw` on the log scale with default
+#' `log(1)`. These parameters describe the selected collapsing-boundary form.
 #'
 #' The parameterisation is [DDM()]'s with `beta` added, so a DDM design converts
 #' to this model by adding `beta ~ 1`, and `beta` fixed to 0 recovers the DDM.
