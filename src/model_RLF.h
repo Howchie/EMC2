@@ -20,10 +20,8 @@
 // fpe_solver.h.  This backend nevertheless follows the same architecture:
 //   * no Rcpp/model-dispatch knowledge in the numerical core;
 //   * a time-invariant operator inverted once for each distinct time step;
-//   * PDF from upper-boundary probability flux and CDF from surviving mass;
-//   * an independent flux/mass mismatch convergence diagnostic.
-// Likelihood evaluation adds dimensionless parameter caching, sparse query-time
-// output, and 4/8-lane SIMD batches around this numerical core.
+// Likelihood evaluation adds dimensionless parameter caching, sparse
+// query-time output and a shared solve cache around this numerical core.
 //
 // Discretisation
 // --------------
@@ -31,12 +29,15 @@
 // (not the first-order shifted Grünwald-Letnikov stencil) and the drift uses
 // centred finite-volume faces (not donor-cell upwinding, whose v*h/2 numerical
 // diffusion and v*p_n boundary flux dominated every other error source).
-// Time is TR-BDF2, which is second order and L-stable, so the step size is set
-// by accuracy rather than by a positivity limit dt ~ h^alpha; without that
-// coupling, refining the grid costs O(n^2) per step instead of O(n^4) overall.
-// A backward-Euler startup phase -- free, because backward Euler over
-// tau = (gamma/2) dt reuses the TR-BDF2 factorisation -- damps the point-mass
-// initial condition.
+//
+// Time is not discretised at all.  The semi-discrete problem dp/dt = L p is
+// autonomous and only three linear functionals of p are ever needed (the exit
+// flux, the surviving mass and the censored lower-edge rate), so the solution
+// is obtained as exp(t L) p0 by shift-invert Arnoldi: a Krylov basis is built
+// on (I - gamma L)^-1, the projected generator is eigendecomposed, and every
+// output quantity comes out as a closed-form sum of m complex exponentials,
+// evaluable at any t in O(m), with m chosen per solve by convergence.  This replaced a TR-BDF2 march;
+// see the note above rlf_build_modes for why, and for the measurements.
 //
 // Spatial truncation
 // ------------------
@@ -62,25 +63,27 @@
 #include <vector>
 #include <R_ext/RS.h>
 
-#include "rlf_toeplitz.h"
-#if defined(__x86_64__) || defined(_M_X64) || defined(__AVX2__)
-#include <immintrin.h>
-#endif
-
 // R_ext/Lapack.h declares the entire LAPACK surface and clashes noisily with
 // RcppArmadillo's declarations when this header is used by particle_ll.cpp.
-// The RLF inverse only needs these two routines.
+// The propagator only needs these five routines.
 extern "C" {
 void F77_NAME(dgetrf)(const int*, const int*, double*, const int*, int*, int*);
-void F77_NAME(dgetri)(const int*, double*, const int*, const int*, double*,
-                      const int*, int*);
+void F77_NAME(dgetrs)(const char*, const int*, const int*, const double*,
+                      const int*, const int*, double*, const int*, int*,
+                      size_t);
 void F77_NAME(dgemv)(const char*, const int*, const int*, const double*,
                      const double*, const int*, const double*, const int*,
                      const double*, double*, const int*, size_t);
-void F77_NAME(dgemm)(const char*, const char*, const int*, const int*,
-                     const int*, const double*, const double*, const int*,
-                     const double*, const int*, const double*, double*,
-                     const int*, size_t, size_t);
+void F77_NAME(dhseqr)(const char*, const char*, const int*, const int*,
+                      const int*, double*, const int*, double*, double*,
+                      double*, const int*, double*, const int*, int*,
+                      size_t, size_t);
+void F77_NAME(dgecon)(const char*, const int*, const double*, const int*,
+                      const double*, double*, double*, int*, int*, size_t);
+void F77_NAME(dtrevc)(const char*, const char*, const int*, const int*,
+                      const double*, const int*, double*, const int*, double*,
+                      const int*, const int*, int*, double*, int*,
+                      size_t, size_t);
 }
 
 namespace rlf {
@@ -92,221 +95,37 @@ namespace rlf {
 #define M_PI 3.14159265358979323846
 #endif
 
-// Dense propagators are stored row-major.  BLAS sees the same bytes as the
-// column-major transpose, so DGEMV with trans='T' computes the desired
-// matrix-vector product without copying.  Keeping this in one helper also
-// gives vendor BLAS implementations the whole operation instead of relying on
-// the compiler to rediscover a tuned GEMV inside every time step.
-inline void rlf_dense_matvec(const std::vector<double>& matrix,
-                             const std::vector<double>& x,
-                             std::vector<double>& out, int n) {
-  out.resize(n);
-  const char transpose = 'T';
-  const int increment = 1;
-  const double one = 1.0;
-  const double zero = 0.0;
-  F77_CALL(dgemv)(
-    &transpose, &n, &n, &one, matrix.data(), &n, x.data(), &increment,
-    &zero, out.data(), &increment, 1);
-}
-
-// ---------------------------------------------------------------------------
-// Dense LU factorisation with partial pivoting.
-// ---------------------------------------------------------------------------
-struct RLF_DenseLU {
+// The shifted operator is assembled row-major, which BLAS reads as the
+// column-major transpose.  Factoring those bytes therefore gives the LU of
+// A^T, and solving with trans = 'T' recovers A x = b.  Only the factorisation
+// is formed: the explicit inverse costs 4/3 n^3 more than DGETRF alone and
+// only pays for itself past roughly n solves, while shift-invert Arnoldi needs
+// only around 24 of them (measured at n = 199: DGETRF 0.215 ms against
+// DGETRF+DGETRI 0.870 ms, and 24 DGETRS 0.187 ms against 24 DGEMV 0.084 ms).
+struct RLF_ShiftedLU {
   int n = 0;
-  std::vector<double> LU;
-  std::vector<int> pvt;
-
-  bool factor(int n_, const std::vector<double>& A) {
-    n = n_;
-    LU = A;
-    pvt.resize(n);
-    for (int i = 0; i < n; ++i) pvt[i] = i;
-
-    for (int k = 0; k < n; ++k) {
-      int max_i = k;
-      double max_val = std::abs(LU[k * n + k]);
-      for (int i = k + 1; i < n; ++i) {
-        const double val = std::abs(LU[i * n + k]);
-        if (val > max_val) {
-          max_val = val;
-          max_i = i;
-        }
-      }
-      if (!(max_val > 1e-15)) return false;
-
-      if (max_i != k) {
-        std::swap(pvt[k], pvt[max_i]);
-        for (int j = 0; j < n; ++j) {
-          std::swap(LU[k * n + j], LU[max_i * n + j]);
-        }
-      }
-
-      const double inv_pivot = 1.0 / LU[k * n + k];
-      for (int i = k + 1; i < n; ++i) {
-        const double mult = LU[i * n + k] * inv_pivot;
-        LU[i * n + k] = mult;
-        const double* __restrict lu_k = &LU[k * n + k + 1];
-        double* __restrict lu_i = &LU[i * n + k + 1];
-        const int len = n - (k + 1);
-        for (int j = 0; j < len; ++j) {
-          lu_i[j] -= mult * lu_k[j];
-        }
-      }
-    }
-    return true;
-  }
-
-  void solve(const double* __restrict b, double* __restrict x,
-             double* __restrict y) const {
-    for (int i = 0; i < n; ++i) {
-      double sum = b[pvt[i]];
-      const double* __restrict lu_i = &LU[i * n];
-      for (int j = 0; j < i; ++j) sum -= lu_i[j] * y[j];
-      y[i] = sum;
-    }
-    for (int i = n - 1; i >= 0; --i) {
-      double sum = y[i];
-      const double* __restrict lu_i = &LU[i * n];
-      for (int j = i + 1; j < n; ++j) sum -= lu_i[j] * x[j];
-      x[i] = sum / lu_i[i];
-    }
-  }
-};
-
-// Explicit inverse of the stationary Crank-Nicolson left-hand side.  A dense
-// triangular solve and a dense matrix-vector product have the same O(n^2)
-// operation count, but the latter has no loop-carried dependency and therefore
-// vectorises well.  The inverse is formed once per distinct time-step block.
-struct RLF_DenseInverse {
-  int n = 0;
-  std::vector<double> value;
-  // LAPACK factorisation scratch is retained across graded-time
-  // blocks.  The dimensions are unchanged within one fixed-grid solve, so
-  // repeated inversions only refill the existing buffers.
+  std::vector<double> lu;
   std::vector<int> pivot;
-  std::vector<double> workspace;
-  // `A` is row-major, so LAPACK sees its bytes as A^T.  Inverting that
-  // transpose in place leaves the column-major bytes of (A^T)^-1, which are
-  // exactly the row-major bytes of A^-1.  Keep that layout so the existing
-  // DGEMV-transpose convention remains unchanged.
 
-  bool build(int n_, std::vector<double>& A) {
+  bool factor(int n_, std::vector<double>& A) {
     n = n_;
-    const int nn = n;
-    const int lda = nn;
-    int info = 0;
-    value.swap(A);
+    lu.swap(A);
     pivot.resize(n);
-    F77_CALL(dgetrf)(
-      &nn, &nn, value.data(), &lda, pivot.data(), &info);
-    if (info != 0) return false;
-
-    double workspace_query = 0.0;
-    const int query_size = -1;
-    F77_CALL(dgetri)(
-      &nn, value.data(), &lda, pivot.data(),
-      &workspace_query, &query_size, &info);
-    if (info != 0) return false;
-    const int workspace_size = std::max(
-      nn, static_cast<int>(workspace_query));
-    workspace.resize(workspace_size);
-    F77_CALL(dgetri)(
-      &nn, value.data(), &lda, pivot.data(),
-      workspace.data(), &workspace_size, &info);
-    if (info != 0) return false;
-    return true;
+    int info = 0;
+    F77_CALL(dgetrf)(&n, &n, lu.data(), &n, pivot.data(), &info);
+    return info == 0;
   }
 
-  void multiply(const std::vector<double>& x,
-                std::vector<double>& out) const {
-    rlf_dense_matvec(value, x, out, n);
+  // In-place solve of A x = b.
+  bool solve(double* b) const {
+    const char transpose = 'T';
+    const int one = 1;
+    int info = 0;
+    F77_CALL(dgetrs)(
+      &transpose, &n, &one, lu.data(), &n, pivot.data(), b, &n, &info, 1);
+    return info == 0;
   }
 };
-
-struct RLF_TimeSchedule {
-  std::vector<double> dt;
-  std::vector<int> steps;
-
-  int n_steps() const {
-    int out = 0;
-    for (int n : steps) out += n;
-    return out;
-  }
-};
-
-// Piecewise-constant time grading, matching the schedule used by the local FPE
-// backend.  Keeping dt constant within a block amortises the O(n^3) inverse
-// setup, while doubling it between blocks concentrates resolution near t = 0.
-inline RLF_TimeSchedule rlf_time_schedule(double T, int nt, double tgrade) {
-  RLF_TimeSchedule s;
-  const int n_steps = std::max(nt, 1);
-  if (!(tgrade > 1.0 + 1e-9) || n_steps < 4) {
-    s.dt.push_back(T / n_steps);
-    s.steps.push_back(n_steps);
-    return s;
-  }
-
-  int n_blk = 1 + static_cast<int>(
-    std::floor(std::log(tgrade) / std::log(2.0) + 1e-9));
-  n_blk = std::max(1, std::min(n_blk, n_steps / 2));
-  const int per = std::max(2, n_steps / n_blk);
-  const double dt0 =
-    T / (per * (std::ldexp(1.0, n_blk) - 1.0));
-  s.dt.reserve(n_blk);
-  s.steps.reserve(n_blk);
-  for (int b = 0; b < n_blk; ++b) {
-    s.dt.push_back(std::ldexp(dt0, b));
-    s.steps.push_back(per);
-  }
-  return s;
-}
-
-// Ceiling on the stability-driven step budget.  The budget below is set by the
-// operator's exit rate, which scales as h^-alpha, and h is parameter dependent
-// (rlf_lower_extent sizes the domain per parameter set) even though nx is not.
-// A drift large enough to make the lower tail unreachable collapses the domain
-// onto b0, and with it h, so the budget diverges: at alpha within 1e-8 of 2 and
-// v/b ~ 6e6 a single solve wants ~1e9 steps.  INT_MAX is no protection -- that
-// is hours of marching inside one likelihood evaluation, which presents as a
-// silently wedged sampler rather than as an error.  Converged solves at the
-// shipped defaults use 95 to ~2000 steps, so this leaves two orders of
-// magnitude of headroom and still bails in well under a second.  Throwing hands
-// the decision to the caller: from a likelihood, safe_new_particle rejects the
-// particle, which is the right answer for a region this degenerate anyway.
-inline int rlf_max_time_steps = 100000;
-
-inline RLF_TimeSchedule rlf_stable_time_schedule(
-    double t_max, int Nt, double max_exit_rate, double safe_cn,
-    double tgrade) {
-  const double step_ceiling =
-    static_cast<double>(std::max(1, rlf_max_time_steps));
-  const double nt_required =
-    std::ceil(t_max * max_exit_rate / safe_cn);
-  if (!(nt_required <= step_ceiling)) {
-    throw std::invalid_argument(
-      "rlf_solve: parameters require too many stable time steps.");
-  }
-  int step_budget = std::max(
-    Nt, std::max(1, static_cast<int>(nt_required)));
-  RLF_TimeSchedule schedule =
-    rlf_time_schedule(t_max, step_budget, tgrade);
-  for (int guard = 0; guard < 8; ++guard) {
-    const double max_dt =
-      *std::max_element(schedule.dt.begin(), schedule.dt.end());
-    const double ratio = max_dt * max_exit_rate / safe_cn;
-    if (!(ratio > 1.0 + 1e-12)) break;
-    const double grown = std::ceil(step_budget * ratio * 1.01);
-    if (!(grown <= step_ceiling)) {
-      throw std::invalid_argument(
-        "rlf_solve: graded schedule requires too many stable time steps.");
-    }
-    step_budget = std::max(step_budget + 1, static_cast<int>(grown));
-    schedule = rlf_time_schedule(t_max, step_budget, tgrade);
-  }
-  return schedule;
-}
 
 
 // Fractional centred-difference weights,
@@ -342,6 +161,7 @@ struct RLF_Result {
   double flux_mass_mismatch = 0.0;
   double lower_boundary_pressure = 0.0;
   double operator_conservation_error = 0.0;
+  // Deepest negative excursion of the density, as a fraction of its peak.
   double min_density = 0.0;
   double domain_pdf_error = std::numeric_limits<double>::quiet_NaN();
   double domain_cdf_error = std::numeric_limits<double>::quiet_NaN();
@@ -350,7 +170,12 @@ struct RLF_Result {
   double x_lo = 0.0;
   double dx = 0.0;
   int nx_used = 0;
-  int nt_used = 0;
+  int krylov_dim = 0;
+  // 1-norm condition estimate of the reduced eigenbasis at the accepted
+  // dimension, and the largest shift-and-invert residual over the probe times.
+  // Diagnostics: see rlf_reduce_modes.
+  double eigen_condition = 1.0;
+  double krylov_residual = 0.0;
   int domain_refinements = 0;
   int spatial_refinements = 0;
   bool refinement_checked = false;
@@ -378,14 +203,20 @@ inline double positive_log_interpolate(double x0, double x1, double w) {
 
 struct RLF_Operator {
   int n = 0;
-  std::vector<double> L;
-  // Matrix-free callers keep only the Toeplitz first column/row and the
-  // state-dependent diagonal. Dense callers leave these empty.
+  // The generator is Toeplitz apart from its diagonal: every state-dependent
+  // term (the censoring rate added back at the lower edge and the sealed
+  // advective face at x_lo) lives there.  Only this compact form is kept; the
+  // dense n x n generator is never assembled.
   std::vector<double> toeplitz_col;
   std::vector<double> toeplitz_row;
   std::vector<double> toeplitz_diag;
   std::vector<double> upper_kill;
   std::vector<double> lower_censor;
+  // Graded form.  When `dense` is non-empty the mesh is nonuniform, the
+  // generator has no Toeplitz structure left to exploit, and `width` carries
+  // the per-cell quadrature weights that a single h stood in for.
+  std::vector<double> dense;
+  std::vector<double> width;
   double max_exit_rate = 0.0;
   double conservation_error = 0.0;
   bool upwind_drift = false;
@@ -416,16 +247,12 @@ inline bool rlf_force_centred_drift = false;
 inline double rlf_width_scale = 1.0;
 
 inline RLF_Operator build_rlf_operator(
-    const RLF_Model& m, int n, double h, bool materialize_L = true) {
+    const RLF_Model& m, int n, double h) {
   RLF_Operator op;
   op.n = n;
-  if (materialize_L) {
-    op.L.assign(static_cast<size_t>(n) * n, 0.0);
-  } else {
-    op.toeplitz_col.assign(n, 0.0);
-    op.toeplitz_row.assign(n, 0.0);
-    op.toeplitz_diag.assign(n, 0.0);
-  }
+  op.toeplitz_col.assign(n, 0.0);
+  op.toeplitz_row.assign(n, 0.0);
+  op.toeplitz_diag.assign(n, 0.0);
   op.upper_kill.assign(n, 0.0);
   op.lower_censor.assign(n, 0.0);
 
@@ -450,19 +277,9 @@ inline RLF_Operator build_rlf_operator(
     partial += c[k];
   }
 
-  if (!materialize_L) {
-    op.toeplitz_col[0] = q[0];
-    op.toeplitz_row[0] = q[0];
-    for (int d = 1; d < n; ++d) {
-      op.toeplitz_col[d] = q[d];
-      op.toeplitz_row[d] = q[d];
-    }
-  } else {
-    for (int i = 0; i < n; ++i) {
-      for (int j = 0; j < n; ++j) {
-        op.L[static_cast<size_t>(i) * n + j] = q[std::abs(i - j)];
-      }
-    }
+  for (int d = 0; d < n; ++d) {
+    op.toeplitz_col[d] = q[d];
+    op.toeplitz_row[d] = q[d];
   }
 
   // Column j is a source state.  Omitted targets above the barrier are killed
@@ -473,11 +290,7 @@ inline RLF_Operator build_rlf_operator(
     const double upper = tail[n - j];
     op.lower_censor[j] = lower;
     op.upper_kill[j] = upper;
-    if (materialize_L) {
-      op.L[static_cast<size_t>(j) * n + j] += lower;
-    } else {
-      op.toeplitz_diag[j] = q[0] + lower;
-    }
+    op.toeplitz_diag[j] = q[0] + lower;
   }
   // Positive-drift transport, by exponential fitting of the nearest-neighbour
   // pair (Il'in / Scharfetter-Gummel).  Only |i-j| = 1 changes, so the
@@ -507,200 +320,451 @@ inline RLF_Operator build_rlf_operator(
   for (int j = 0; j < n; ++j) {
     double outflow = delta_up;
     if (j + 1 < n) {
-      if (materialize_L) {
-        op.L[static_cast<size_t>(j + 1) * n + j] += delta_up;
-      } else if (j == 0) {
-        // The fitted pair is translation invariant, so the compact form only
-        // needs the |i-j| = 1 entries once.
-        op.toeplitz_col[1] += delta_up;
-      }
+      // The fitted pair is translation invariant, so the compact form only
+      // needs the |i-j| = 1 entries once.
+      if (j == 0) op.toeplitz_col[1] += delta_up;
     } else {
       // The cell above the last one is past the barrier: killed, not moved.
       op.upper_kill[j] += delta_up;
     }
     if (j > 0) {
-      if (materialize_L) {
-        op.L[static_cast<size_t>(j - 1) * n + j] += delta_down;
-      } else if (j == 1) {
-        op.toeplitz_row[1] += delta_down;
-      }
+      if (j == 1) op.toeplitz_row[1] += delta_down;
       outflow += delta_down;
     }
     // At j = 0 the downward face is the truncated lower edge, whose rate is
     // censored back out anyway, so only the upward change leaves the diagonal.
-    if (materialize_L) {
-      op.L[static_cast<size_t>(j) * n + j] -= outflow;
-    } else {
-      op.toeplitz_diag[j] -= outflow;
-    }
+    op.toeplitz_diag[j] -= outflow;
   }
 
-  if (materialize_L) {
-    for (int j = 0; j < n; ++j) {
-      const double exit = -op.L[static_cast<size_t>(j) * n + j];
-      op.max_exit_rate = std::max(op.max_exit_rate, exit);
+  // The jump part's column sum is q summed over the reachable off-diagonal
+  // band plus the diagonal, which prefix sums of q give in O(1) per column,
+  // and the drift terms cancel in every column -- only the boundary kill at
+  // the last cell survives.  So the conservation diagnostic costs O(n)
+  // without L ever being formed.
+  std::vector<double> q_prefix(n, 0.0);
+  for (int d = 1; d < n; ++d) q_prefix[d] = q_prefix[d - 1] + q[d];
+  for (int j = 0; j < n; ++j) {
+    const double exit = -op.toeplitz_diag[j];
+    op.max_exit_rate = std::max(op.max_exit_rate, exit);
 
-      double col_sum = op.upper_kill[j];
-      for (int i = 0; i < n; ++i) {
-        col_sum += op.L[static_cast<size_t>(i) * n + j];
-      }
-      op.conservation_error =
-        std::max(op.conservation_error, std::abs(col_sum));
-    }
-  } else {
-    // Compact diagnostics: the jump part's column sum is q summed over the
-    // reachable off-diagonal band plus the diagonal, which prefix sums of q
-    // give in O(1) per column, and the drift terms cancel in every column --
-    // only the boundary kill at the last cell survives.  Same values as the
-    // dense loop, without ever forming L.
-    std::vector<double> q_prefix(n, 0.0);
-    for (int d = 1; d < n; ++d) q_prefix[d] = q_prefix[d - 1] + q[d];
-    for (int j = 0; j < n; ++j) {
-      const double exit = -op.toeplitz_diag[j];
-      op.max_exit_rate = std::max(op.max_exit_rate, exit);
-
-      double col_sum = op.upper_kill[j] + op.toeplitz_diag[j] +
-        q_prefix[j] + q_prefix[n - 1 - j];
-      if (j + 1 < n) col_sum += delta_up;
-      if (j > 0) col_sum += delta_down;
-      op.conservation_error =
-        std::max(op.conservation_error, std::abs(col_sum));
-    }
+    double col_sum = op.upper_kill[j] + op.toeplitz_diag[j] +
+      q_prefix[j] + q_prefix[n - 1 - j];
+    if (j + 1 < n) col_sum += delta_up;
+    if (j > 0) col_sum += delta_down;
+    op.conservation_error =
+      std::max(op.conservation_error, std::abs(col_sum));
   }
   return op;
 }
 
+
 // ---------------------------------------------------------------------------
-// TR-BDF2 time integration.
+// Graded mesh.
 //
-// gamma = 2 - sqrt(2) is the classical choice for which the trapezoidal and
-// BDF2 stages share the implicit matrix M = I - (gamma/2) dt L, so one
-// factorisation serves both.  With u* the trapezoidal stage value,
+// The uniform grid ties two unrelated requirements to one number.  The mesh is
+// h = (b0 + L)/nx, so the depth L that keeps the lower tail on the domain is
+// bought out of the resolution at the absorbing edge, and rlf_lower_extent has
+// to settle that trade.  It settles it on absolute CDF error, which is the
+// wrong currency for the survivor: log S is relative, and at long horizons S
+// is e^-10 or smaller, so a truncation that is invisible in the CDF is worth
+// ten nats in the likelihood.  Measured against a wide converged reference the
+// shipped default is out by 0.68 nats in log S from truncation alone at a mesh
+// where halving h is worth 0.014 -- the depth, not the mesh, is what limits
+// the solver.
 //
-//   u*   = (2 M^-1 - I) u_n,
-//   u_n1 = M^-1 (a u* - b u_n),   a = 1/(gamma(2-gamma)), b = a - 1,
+// Grading breaks the tie.  The stable tail only has to be represented, not
+// resolved: it is smooth and slowly varying, so cells that grow geometrically
+// downward cover a hundred units in twenty-five cells, while the core keeps
+// the fine mesh the boundary layer needs.
 //
-// hence u_n1 = T u_n with T = 2a M^-1 M^-1 - (a+b) M^-1.  The scheme is second
-// order and L-stable, so stiff modes are damped instead of ringing.
-// Crank-Nicolson (which this replaces) is only A-stable and needed both a
-// Rannacher startup and dt <= 1.8/max_exit_rate ~ h^alpha to stay positive,
-// which coupled the step count to the grid and made refinement cost O(n^4).
-constexpr double RLF_TRBDF2_GAMMA = 0.5857864376269049;      // 2 - sqrt(2)
-constexpr double RLF_TRBDF2_IMPLICIT = 0.2928932188134524;   // gamma/2
-constexpr double RLF_TRBDF2_A = 1.2071067811865475;          // 1/(g(2-g))
-constexpr double RLF_TRBDF2_B = 0.2071067811865475;          // a - 1
+// Faces run from x_lo up to b0.  The core is uniform over the top
+// `core_width`; below it widths grow by `ratio` per cell until x_lo is
+// reached.  The last coarse cell is stretched rather than split so that the
+// bottom face lands exactly on x_lo.
+struct RLF_Mesh {
+  std::vector<double> face;   // n + 1 ascending faces, face[0] = x_lo
+  std::vector<double> node;   // n cell centres
+  std::vector<double> width;  // n cell widths
+  int n = 0;
+  // Cells [uniform_from, n) all have width `uniform_h`.  Face separations
+  // inside that block depend only on the index difference, which is what keeps
+  // the kernel table's largest block Toeplitz.
+  int uniform_from = 0;
+  double uniform_h = 0.0;
+};
 
-// I + (gamma/2) dt L stays entrywise non-negative below dt*max_exit_rate =
-// 2/gamma, which is what makes the trapezoidal sub-stage positivity
-// preserving.  Enforcing that outright would put dt ~ h^alpha and drive the
-// refinement cost back to O(n^4), so the schedule instead damps the singular
-// initial data with the backward-Euler startup below and keeps only a loose
-// guard against genuinely pathological steps.
-constexpr double RLF_TRBDF2_SAFE = 32.0 / RLF_TRBDF2_GAMMA;
+inline RLF_Mesh rlf_build_mesh(double x_lo, double b0, double core_width,
+                               int n_core, double ratio,
+                               int n_edge = 0, double edge_ratio = 1.0) {
+  RLF_Mesh mesh;
+  const double span = b0 - x_lo;
+  const double core = std::min(std::max(core_width, 0.0), span);
+  const int nc = std::max(1, n_core);
+  const double h = core > 0.0 ? core / nc : span / nc;
 
-// Backward Euler over tau = (gamma/2) dt uses exactly the TR-BDF2 matrix
-// I - (gamma/2) dt L, so a Rannacher-style damping phase costs no extra
-// factorisation.  Backward Euler is unconditionally positive on this
-// M-matrix generator, which is what tames the point-mass initial condition
-// before the (much cheaper) full steps take over.
-constexpr int RLF_STARTUP_STEPS = 7;
-
-// Rescale a schedule so that RLF_STARTUP_STEPS startup steps of
-// tau = (gamma/2) dt[0] plus the scheduled full steps land exactly on t_max.
-inline double rlf_apply_startup(RLF_TimeSchedule& schedule, double t_max) {
-  if (schedule.dt.empty()) return 0.0;
-  double total = 0.0;
-  for (size_t b = 0; b < schedule.dt.size(); ++b) {
-    total += schedule.dt[b] * schedule.steps[b];
-  }
-  const double startup_share =
-    RLF_STARTUP_STEPS * RLF_TRBDF2_IMPLICIT * schedule.dt[0];
-  const double factor = t_max / (total + startup_share);
-  for (double& dt : schedule.dt) dt *= factor;
-  return RLF_TRBDF2_IMPLICIT * schedule.dt[0];
-}
-
-// The lhs buffer is reused across graded-time blocks: the dimensions are
-// fixed for the whole solve, so resize() only refills existing storage.
-inline void rlf_trbdf2_lhs(const RLF_Operator& op, double dt,
-                           std::vector<double>& lhs) {
-  const int n = op.n;
-  const double c = RLF_TRBDF2_IMPLICIT * dt;
-  lhs.resize(static_cast<size_t>(n) * n);
-  if (!op.L.empty()) {
-    for (int i = 0; i < n; ++i) {
-      for (int j = 0; j < n; ++j) {
-        const size_t ij = static_cast<size_t>(i) * n + j;
-        lhs[ij] = (i == j ? 1.0 : 0.0) - c * op.L[ij];
+  std::vector<double> widths;
+  widths.reserve(nc + 64);
+  // Coarse cells first, from x_lo upward, so the geometric run is built from
+  // its wide end and the stretch lands on the cell nearest x_lo.
+  double remaining = span - core;
+  if (remaining > 1e-12 * span) {
+    std::vector<double> coarse;
+    double w = h * ratio;
+    double covered = 0.0;
+    for (int guard = 0; guard < 4096 && covered + w < remaining; ++guard) {
+      coarse.push_back(w);
+      covered += w;
+      w *= ratio;
+    }
+    // Absorb what is left into one final cell rather than leaving a sliver.
+    const double last = remaining - covered;
+    if (last > 0.0) {
+      if (!coarse.empty() && last < 0.5 * coarse.back()) {
+        coarse.back() += last;
+      } else {
+        coarse.push_back(last);
       }
     }
-  } else {
-    for (int i = 0; i < n; ++i) {
-      double* __restrict row_ptr = &lhs[static_cast<size_t>(i) * n];
-      for (int j = 0; j < i; ++j) {
-        row_ptr[j] = -c * op.toeplitz_col[i - j];
-      }
-      row_ptr[i] = 1.0 - c * op.toeplitz_diag[i];
-      for (int j = i + 1; j < n; ++j) {
-        row_ptr[j] = -c * op.toeplitz_row[j - i];
-      }
+    for (auto it = coarse.rbegin(); it != coarse.rend(); ++it) {
+      widths.push_back(*it);
     }
   }
+  for (int i = 0; i < nc; ++i) widths.push_back(h);
+
+  // Geometric refinement into the absorbing edge.  The killed density vanishes
+  // like (b0 - x)^(alpha/2), an algebraic singularity that no uniform mesh
+  // resolves at any affordable width, so the top `n_edge` core cells are
+  // replaced by the same number of cells covering the same span but shrinking
+  // toward b0.  Geometric refinement against an algebraic singularity buys
+  // accuracy exponentially in the cell count, which is why a handful of cells
+  // is enough.
+  if (n_edge > 1 && edge_ratio > 1.0 &&
+      static_cast<int>(widths.size()) >= n_edge) {
+    double span = 0.0;
+    for (int k = 0; k < n_edge; ++k) span += widths[widths.size() - 1 - k];
+    widths.resize(widths.size() - n_edge);
+    // Widths w, w/r, w/r^2, ... summing to span, appended largest first.
+    double total = 0.0, term = 1.0;
+    for (int k = 0; k < n_edge; ++k) { total += term; term /= edge_ratio; }
+    double w = span / total;
+    for (int k = 0; k < n_edge; ++k) { widths.push_back(w); w /= edge_ratio; }
+  }
+
+  mesh.n = static_cast<int>(widths.size());
+  mesh.uniform_from = mesh.n;
+  mesh.uniform_h = h;
+  while (mesh.uniform_from > 0 &&
+         std::abs(widths[mesh.uniform_from - 1] - h) <= 1e-12 * h) {
+    --mesh.uniform_from;
+  }
+  mesh.width = widths;
+  mesh.face.assign(mesh.n + 1, 0.0);
+  mesh.face[0] = x_lo;
+  for (int i = 0; i < mesh.n; ++i) mesh.face[i + 1] = mesh.face[i] + widths[i];
+  mesh.face[mesh.n] = b0;  // exact, against accumulated rounding
+  mesh.node.assign(mesh.n, 0.0);
+  for (int i = 0; i < mesh.n; ++i) {
+    mesh.node[i] = 0.5 * (mesh.face[i] + mesh.face[i + 1]);
+  }
+  return mesh;
 }
 
-// Collapse both stages into one dense matrix so a step is a single matvec.
+// Bernoulli function t / (e^t - 1), the exponential-fitting weight.
+inline double rlf_bernoulli(double t) {
+  if (t > 700.0) return 0.0;
+  if (t < -700.0) return -t;
+  if (std::abs(t) < 1e-8) return 1.0 - 0.5 * t;
+  return t / std::expm1(t);
+}
+
+// Graded generator.
 //
-// The buffers are row-major, so asking BLAS (which is column-major) for
-// minv * minv on the same storage returns (minv * minv)^T in column-major
-// order, i.e. exactly minv * minv when read back row-major.
-inline std::vector<double> rlf_trbdf2_step_matrix(
-    const std::vector<double>& minv, int n) {
-  std::vector<double> step = minv;
-  const char no_transpose = 'N';
-  const double alpha = 2.0 * RLF_TRBDF2_A;
-  const double beta = -(RLF_TRBDF2_A + RLF_TRBDF2_B);
-  F77_CALL(dgemm)(&no_transpose, &no_transpose, &n, &n, &n, &alpha,
-                  minv.data(), &n, minv.data(), &n, &beta, step.data(), &n,
-                  1, 1);
-  return step;
-}
+// The Levy measure is nu(z) = c_alpha |z|^(-1-alpha).  Writing Phi for its
+// second antiderivative, Phi(u) = |u|^(1-alpha) / (alpha (alpha-1)), the total
+// jump rate between two disjoint intervals is a second difference of Phi at
+// the four face separations, so one table of Phi over face pairs supplies
+// every entry with three additions.  That table is the only transcendental
+// work in the assembly and it is symmetric, so it costs n^2/2 powers.
+//
+// Cells one apart cannot be treated this way -- the double integral diverges
+// for alpha > 1, which is the whole supported range, and is exactly why a
+// naive jump-chain discretisation is unavailable on a nonuniform mesh.  What
+// diverges is the short-jump part, and short jumps are a diffusion: the net
+// rate at which a linear density is carried across the shared face by jumps
+// between the two cells is
+//
+//   D = c_alpha \int_{C_i} \int_{C_j} |x - y|^(-alpha),
+//
+// in closed form again, and this is used as the diffusivity of a
+// Scharfetter-Gummel face flux.  There is no cutoff parameter anywhere: the
+// split is by cell adjacency, and each side is integrated exactly over its own
+// region.  At alpha = 2 the far kernel vanishes identically (c_alpha carries
+// sin(pi alpha / 2)) and D tends to sigma^2 / 2, so the diffusion limit is
+// reached continuously rather than by a special case.
+//
+// Both parts are exactly conservative -- the jump matrix by the symmetry of
+// Omega, the face fluxes by telescoping -- and both have non-negative
+// off-diagonals, so the generator stays an M-matrix and exp(tL) stays
+// positive.
+inline RLF_Operator build_rlf_operator_graded(const RLF_Model& m,
+                                              const RLF_Mesh& mesh) {
+  const int n = mesh.n;
+  RLF_Operator op;
+  op.n = n;
+  op.width = mesh.width;
+  op.dense.assign(static_cast<size_t>(n) * n, 0.0);
+  op.upper_kill.assign(n, 0.0);
+  op.lower_censor.assign(n, 0.0);
 
-inline void apply_shifted(const RLF_Operator& op, double c,
-                          const std::vector<double>& p,
-                          std::vector<double>& out) {
-  const int n = op.n;
-  out.resize(n);
-  if (!op.L.empty()) {
-    for (int i = 0; i < n; ++i) {
-      double value = p[i];
-      const double* __restrict row = &op.L[static_cast<size_t>(i) * n];
-      for (int j = 0; j < n; ++j) value += c * row[j] * p[j];
-      out[i] = value;
-    }
-  } else {
-    for (int i = 0; i < n; ++i) {
-      double value = p[i];
-      double row_sum = 0.0;
-      for (int j = 0; j < i; ++j) {
-        row_sum += op.toeplitz_col[i - j] * p[j];
-      }
-      row_sum += op.toeplitz_diag[i] * p[i];
-      for (int j = i + 1; j < n; ++j) {
-        row_sum += op.toeplitz_row[j - i] * p[j];
-      }
-      out[i] = value + c * row_sum;
+  const double alpha = m.alpha;
+  const double eps = 2.0 - alpha;
+  const double c_alpha = 0.5 * std::pow(m.sigma, alpha) *
+    std::tgamma(1.0 + alpha) * std::sin(M_PI * alpha * 0.5) / M_PI;
+  // c_alpha / (2 - alpha), taken through the removable zero at alpha = 2 so
+  // that the near-field diffusivity reaches sigma^2 / 2 rather than 0/0.
+  const double sinc = std::abs(eps) < 1e-9
+    ? 1.0 - (M_PI * eps * 0.5) * (M_PI * eps * 0.5) / 6.0
+    : std::sin(M_PI * eps * 0.5) / (M_PI * eps * 0.5);
+  const double c_over_eps =
+    0.5 * std::pow(m.sigma, alpha) * std::tgamma(1.0 + alpha) * 0.5 * sinc;
+
+  const double phi_scale = 1.0 / (alpha * (alpha - 1.0));
+  auto phi = [&](double u) {
+    return phi_scale * std::pow(std::abs(u), 1.0 - alpha);
+  };
+  // Third antiderivative, odd, carrying its (2 - alpha) pole outside so that
+  // the pairing with c_alpha stays finite in the diffusion limit.  It is the
+  // second one multiplied by the separation, so it costs no extra power.
+  auto chi = [&](double u) { return phi(u) * u; };
+
+  // Phi and Chi over every face pair, built once.  These tables are the only
+  // transcendental work in the assembly; everything downstream is additions.
+  //
+  // The powers are the expensive part, and most of them are avoidable: the
+  // core of the mesh is uniform, so inside that block a face separation
+  // depends only on the index difference and one vector of n_core values fills
+  // an n_core^2 block.  Only the graded tail, which is short by construction,
+  // needs a power per pair.
+  const int nf = n + 1;
+  const int u0 = mesh.uniform_from;
+  std::vector<double> band(nf, 0.0);
+  for (int k = 1; k < nf - u0; ++k) band[k] = phi(k * mesh.uniform_h);
+  std::vector<double> G(static_cast<size_t>(nf) * nf, 0.0);
+  std::vector<double> Xt(static_cast<size_t>(nf) * nf, 0.0);
+  for (int p = 0; p < nf; ++p) {
+    for (int q = p + 1; q < nf; ++q) {
+      const double d = mesh.face[q] - mesh.face[p];
+      const double gv = (p >= u0) ? band[q - p] : phi(d);
+      const double xv = gv * d;
+      G[static_cast<size_t>(p) * nf + q] = gv;
+      G[static_cast<size_t>(q) * nf + p] = gv;
+      Xt[static_cast<size_t>(p) * nf + q] = -xv;  // Chi(f_p - f_q), odd
+      Xt[static_cast<size_t>(q) * nf + p] = xv;
     }
   }
+  auto Gv = [&](int p, int q) { return G[static_cast<size_t>(p) * nf + q]; };
+  auto Xv = [&](int p, int q) { return Xt[static_cast<size_t>(p) * nf + q]; };
+
+  // Piecewise-linear reconstruction inside each cell.
+  //
+  // A cell-constant density makes every kernel integral exact for the
+  // representation but leaves the scheme first order, and measurably so: the
+  // error runs as (2 - alpha) h, vanishing in the diffusion limit where the
+  // far kernel vanishes with c_alpha and growing as the tail gets heavier.
+  // What it misses is the first moment of the density inside the source cell,
+  // which the kernel weights asymmetrically because it is falling steeply
+  // across the cell.  Carrying a slope fixes the order, and the moment
+  // integral it needs is the same closed form one antiderivative further on.
+  //
+  // s_j = sl_lo[j] p_{j-1} + sl_mid[j] p_j + sl_hi[j] p_{j+1}, one-sided at
+  // the two ends.
+  std::vector<double> sl_lo(n, 0.0), sl_mid(n, 0.0), sl_hi(n, 0.0);
+  for (int j = 0; j < n; ++j) {
+    if (n < 2) break;
+    if (j == 0) {
+      const double g = mesh.node[1] - mesh.node[0];
+      sl_mid[0] = -1.0 / g; sl_hi[0] = 1.0 / g;
+    } else if (j == n - 1) {
+      const double g = mesh.node[n - 1] - mesh.node[n - 2];
+      sl_lo[j] = -1.0 / g; sl_mid[j] = 1.0 / g;
+    } else {
+      const double g = mesh.node[j + 1] - mesh.node[j - 1];
+      sl_lo[j] = -1.0 / g; sl_hi[j] = 1.0 / g;
+    }
+  }
+
+  double* __restrict L = op.dense.data();
+  auto at = [&](int i, int j) -> double& {
+    return L[static_cast<size_t>(i) * n + j];
+  };
+
+  // --- far field: every pair of cells at least one cell apart
+  //
+  // Omega is the total jump rate between the two cells, a second difference of
+  // Phi at the four face separations.  Mu is the same integral weighted by the
+  // signed offset of the source point from its cell centre, which is what the
+  // slope multiplies; it is one antiderivative further on and reuses the same
+  // two tables.  Both are exact, so the only approximation left is that the
+  // density is linear across a cell.
+  auto scatter = [&](int i, int j, double coef) {
+    if (coef == 0.0) return;
+    if (sl_lo[j] != 0.0) at(i, j - 1) += coef * sl_lo[j];
+    if (sl_mid[j] != 0.0) at(i, j) += coef * sl_mid[j];
+    if (sl_hi[j] != 0.0) at(i, j + 1) += coef * sl_hi[j];
+  };
+  // The loss term is the same moment with the two cells' roles swapped, so it
+  // needs no second evaluation: summing mu over targets for a fixed source is
+  // exactly the quantity each row subtracts from itself.
+  std::vector<double> source_moment(n, 0.0);
+  for (int i = 0; i < n; ++i) {
+    const double inv_w = 1.0 / mesh.width[i];
+    double outflow = 0.0;
+    for (int j = 0; j < n; ++j) {
+      if (std::abs(i - j) < 2) continue;
+      const double g00 = Gv(i, j), g01 = Gv(i, j + 1);
+      const double g10 = Gv(i + 1, j), g11 = Gv(i + 1, j + 1);
+      double omega = c_alpha * ((g10 + g01) - (g11 + g00));
+      if (!(omega > 0.0)) omega = 0.0;  // rounding in the far tail only
+      at(i, j) += omega * inv_w;
+      outflow += omega * inv_w;
+
+      const double mu =
+        -0.5 * mesh.width[j] * c_alpha * ((g10 - g00) + (g11 - g01)) +
+        c_over_eps *
+          ((Xv(i + 1, j) + Xv(i, j + 1)) - (Xv(i + 1, j + 1) + Xv(i, j)));
+      scatter(i, j, mu * inv_w);
+      source_moment[j] += mu;
+    }
+    at(i, i) -= outflow;
+  }
+  for (int i = 0; i < n; ++i) {
+    scatter(i, i, -source_moment[i] / mesh.width[i]);
+  }
+
+  // --- adjacent faces: near-field diffusivity plus drift, by exponential
+  //     fitting.  Face k sits between cells k-1 and k.
+  auto near_diffusivity = [&](double wa, double wb) {
+    // c_alpha \int\int |x-y|^{-alpha} over the two adjacent cells, written so
+    // that the (2-alpha) zero cancels analytically.
+    const double bracket =
+      std::pow(wa + wb, eps) - std::pow(wa, eps) - std::pow(wb, eps);
+    return c_over_eps * bracket / (1.0 - alpha);
+  };
+
+  for (int k = 1; k < n; ++k) {
+    const int i = k - 1, j = k;
+    const double D = near_diffusivity(mesh.width[i], mesh.width[j]);
+    const double g = mesh.node[j] - mesh.node[i];
+    const double T = D / g;
+    double up, down;
+    if (T > 0.0) {
+      const double pe = m.v * g / D;
+      up = T * rlf_bernoulli(-pe);    // i -> j
+      down = T * rlf_bernoulli(pe);   // j -> i
+    } else {
+      // No near-field diffusion to fit against; pure upwind transport.
+      up = m.v / g;
+      down = 0.0;
+    }
+    at(i, i) -= up / mesh.width[i];
+    at(i, j) += down / mesh.width[i];
+    at(j, j) -= down / mesh.width[j];
+    at(j, i) += up / mesh.width[j];
+  }
+
+  // --- absorbing edge at b0
+  //
+  // The cell below the barrier loses mass two ways: across the face itself,
+  // and by jumping clear over the first ghost cell.  Giving the ghost a real
+  // width is what keeps the second term finite -- integrated from b0 it would
+  // diverge, because a source arbitrarily close to the barrier is killed by
+  // arbitrarily short jumps.  Every lower cell is at least two cells from the
+  // killing region, so its jump kill is the plain closed form.
+  {
+    const int top = n - 1;
+    const double w_top = mesh.width[top];
+    const double D = near_diffusivity(w_top, w_top);
+    // The barrier is the face, not the ghost cell's centre.  The linear
+    // reconstruction that vanishes at b0 has gradient p_top / (w_top / 2), so
+    // the conductance distance is half a cell -- using the centre-to-centre
+    // distance instead puts the absorbing boundary at b0 + w_top / 2 and costs
+    // a clean order of accuracy at every alpha, the diffusion limit included.
+    const double g = 0.5 * w_top;
+    double out_rate;
+    if (D > 0.0) {
+      const double pe = m.v * g / D;
+      out_rate = (D / g) * rlf_bernoulli(-pe);
+    } else {
+      out_rate = m.v / g;
+    }
+    const double face_kill = out_rate / w_top;
+    at(top, top) -= face_kill;
+    op.upper_kill[top] += face_kill;
+
+    const double b = mesh.face[n];
+    const double ghost = b + w_top;
+    for (int j = 0; j < n; ++j) {
+      const double lo = mesh.face[j], hi = mesh.face[j + 1];
+      const double target = (j == top) ? ghost : b;
+      const double inv_w = 1.0 / mesh.width[j];
+      double omega = c_alpha * (phi(target - hi) - phi(target - lo));
+      if (!(omega > 0.0)) omega = 0.0;
+      at(j, j) -= omega * inv_w;
+      op.upper_kill[j] += omega * inv_w;
+      // First moment over the source cell, the killing counterpart of mu.
+      const double mu = 0.5 * mesh.width[j] * c_alpha *
+          (phi(target - lo) + phi(target - hi)) +
+        c_over_eps * (chi(target - hi) - chi(target - lo));
+      if (sl_lo[j] != 0.0) {
+        at(j, j - 1) -= mu * sl_lo[j] * inv_w;
+        op.upper_kill[j - 1] += mu * sl_lo[j] / mesh.width[j - 1];
+      }
+      if (sl_mid[j] != 0.0) {
+        at(j, j) -= mu * sl_mid[j] * inv_w;
+        op.upper_kill[j] += mu * sl_mid[j] * inv_w;
+      }
+      if (sl_hi[j] != 0.0) {
+        at(j, j + 1) -= mu * sl_hi[j] * inv_w;
+        op.upper_kill[j + 1] += mu * sl_hi[j] / mesh.width[j + 1];
+      }
+    }
+  }
+
+  // --- censored edge at x_lo
+  //
+  // Mass that would leave the bottom of the domain is not removed: those paths
+  // are misrepresented by the truncation either way, and suppressing the exit
+  // is the closure that keeps the survivor from decaying for a reason the
+  // model does not have.  So nothing is subtracted here and the rate is only
+  // recorded, as the pressure diagnostic that says whether the domain is deep
+  // enough.
+  {
+    const double a = mesh.face[0];
+    const double ghost = a - mesh.width[0];
+    for (int j = 0; j < n; ++j) {
+      const double lo = mesh.face[j], hi = mesh.face[j + 1];
+      const double target = (j == 0) ? ghost : a;
+      double omega = c_alpha * (phi(lo - target) - phi(hi - target));
+      if (!(omega > 0.0)) omega = 0.0;
+      op.lower_censor[j] = omega / mesh.width[j];
+    }
+  }
+
+  for (int j = 0; j < n; ++j) {
+    op.max_exit_rate = std::max(op.max_exit_rate, -at(j, j));
+  }
+  // Conservation: mass leaves only through the barrier, so the width-weighted
+  // column sums must equal minus the kill rate.
+  for (int j = 0; j < n; ++j) {
+    double col = 0.0;
+    for (int i = 0; i < n; ++i) col += mesh.width[i] * at(i, j);
+    op.conservation_error = std::max(
+      op.conservation_error,
+      std::abs(col / mesh.width[j] + op.upper_kill[j]));
+  }
+  return op;
 }
 
-
-inline double weighted_rate(const std::vector<double>& rate,
-                            const std::vector<double>& p, double h) {
-  double out = 0.0;
-  const int n = static_cast<int>(p.size());
-  for (int j = 0; j < n; ++j) out += rate[j] * p[j];
-  return h * out;
-}
 
 inline double density_mass(const std::vector<double>& p, double h) {
   double mass = 0.0;
@@ -819,300 +883,959 @@ inline double rlf_lower_extent(const RLF_Model& m, double t_max, int nx) {
   return std::max(m.b0, std::min(hi, widest));
 }
 
-// Grid size past which the stages are solved matrix-free rather than by
-// forming the explicit inverse.
+// Mesh for a parameter point, sized by one budget: the number of core cells.
 //
-// Set by measurement, not by flop count: the dense path is O(n^3) against
-// O(iters * n log n), but it spends those flops inside OpenBLAS at tens of
-// GFLOPS while the transforms here are hand-rolled and memory bound, which
-// pushes the crossover far above where the asymptotics alone would put it.
-// Measured against the dense path on identical grids (alpha = 1.5, 200
-// queries): 0.12x at nx = 512, 0.28x at 1024, 0.81x at 2048, 1.32x at 3072
-// and 1.74x at 4096, with the two paths agreeing to ~1e-11.  So this only
-// pays for the refined grids that heavy tails need, and would be a large
-// pessimisation at the shipped defaults.
-constexpr int RLF_MATRIX_FREE_MIN_N = 2560;
-// Tight enough that the Krylov residual is far below the discretisation error
-// it is embedded in, so the march is not polluted by solver tolerance.
-constexpr double RLF_MATRIX_FREE_TOL = 1e-12;
+// Grading decouples the two numbers rlf_lower_extent had to trade off, so both
+// can now be set on their own terms.  The depth is generous -- sixty stable
+// widths, where the uniform grid could afford six -- because reaching it costs
+// a logarithmic number of cells rather than a proportional one, and because
+// log S at a long horizon is a relative quantity that a shallow domain gets
+// wrong by nats.  The core covers the barrier and the few widths below it that
+// carry the mass; below that the cells grow by 45% each, which measurement puts
+// at the flat part of the accuracy-cost curve (1.15 costs cells for nothing,
+// 1.7 starts to bite).
+inline double rlf_mesh_ratio = 1.45;
+inline double rlf_mesh_extent_widths = 60.0;
+inline double rlf_mesh_core_widths = 2.0;
+
+inline RLF_Mesh rlf_auto_mesh(const RLF_Model& m, double t_max, int n_core) {
+  const double spread =
+    std::max(m.b0, m.sigma * std::pow(0.5 * t_max, 1.0 / m.alpha));
+  const double extent = rlf_mesh_extent_widths * spread;
+  const double core =
+    std::min(extent, m.b0 + rlf_mesh_core_widths * spread);
+  return rlf_build_mesh(-extent, m.b0, core, std::max(n_core, 20),
+                        rlf_mesh_ratio);
+}
+
+// ---------------------------------------------------------------------------
+// Shift-invert Krylov propagator.
+//
+// dp/dt = L p is autonomous, L is a fixed matrix over the whole horizon, and
+// the likelihood only ever reads three linear functionals of p.  A time march
+// is therefore doing far more work than the problem needs: it propagates all n
+// state components through hundreds of steps to recover three scalars per
+// query time, and it pays an O(n^3) setup per distinct step size to make each
+// of those steps cheap.
+//
+// Arnoldi on B = (I - gamma L)^-1 instead gives B V_m = V_m H_m + h v e_m^T,
+// from which the projected generator is L_m = (I - H_m^-1)/gamma.  Its
+// eigendecomposition turns every functional into a closed-form sum of m
+// complex exponentials, so the whole curve is available at once and any query
+// time costs O(m).  The shift is what makes this work at this size: it maps
+// the eigenvalues nearest zero -- exactly the modes that survive to the times
+// the likelihood asks about -- to the outside of B's spectrum, so convergence
+// is governed by the resolved dynamics rather than by ||L|| t.  A polynomial
+// Krylov space is not competitive here for the same reason a time march is
+// not: it needs m ~ ||L|| t.
+//
+// Measured against a converged (nt = 20000) TR-BDF2 march on the identical
+// grid, as max relative PDF error over the central mass:
+//
+//                          m = 16    m = 24    m = 32
+//   alpha 1.5, nx 160      1.4e-3    2.2e-4    6.6e-6
+//   alpha 1.1, nx 160      5.7e-3    1.1e-3    3.6e-6
+//   alpha 1.8, nx 160      2.4e-3    9.1e-5    2.0e-5
+//   alpha 2.0, nx 160      1.3e-3    2.1e-4    2.0e-4     (||L|| t = 9021)
+//   alpha 1.3, nx 320      2.7e-2    4.9e-3    1.1e-4
+//
+// Convergence is flat in stiffness and in the horizon, which a march is not:
+// at m = 24 the error is two orders of magnitude below the ~5e-3 spatial
+// discretisation floor the extrapolated pair leaves behind.  End to end
+// against the march it replaced this is 2.4x to 4.9x faster, with the largest
+// gains at long horizons and refined grids, and it is also more accurate,
+// because the O(dt^2) time error is gone rather than merely small.
+// ---------------------------------------------------------------------------
+
+// Arnoldi dimension: where the search starts, how it grows, where it stops,
+// and the log-scale movement below which it is called converged.  Ordinary
+// points finish at the minimum; the maximum is only reached in the heavy-tail,
+// fast-drift, fine-grid corner.  See rlf_build_modes for the calibration.
+inline int RLF_KRYLOV_MIN = 20;
+inline int RLF_KRYLOV_STEP = 6;
+inline int RLF_KRYLOV_MAX = 64;
+inline double RLF_KRYLOV_TOL = 1e-5;
+// Density, as a fraction of the peak, below which the flux convergence test
+// stops being relative.  Four decades covers the range that carries data.
+inline double RLF_KRYLOV_FLOOR = 1e-4;
+// Shift-and-invert residual, and condition estimate of the reduced
+// eigenbasis, past which a solve is not allowed to skip the refinement checks.
+// Both are diagnostics rather than stopping rules; see rlf_reduce_modes for
+// what each one measures and rlf_build_modes for why neither replaces the
+// observable convergence test.
+inline double RLF_KRYLOV_RESID = 1e-4;
+inline double RLF_KRYLOV_CONDITION = 1e10;
+// Shift, as a fraction of the horizon.  The Krylov space resolves eigenvalues
+// of size ~1/gamma, so this trades the fast modes that carry the leading edge
+// against the slow ones that carry the tail.  It is calibrated rather than
+// argued: sweeping it against a converged reference over alpha, v, b, the
+// horizon and the grid puts the optimum in a broad basin around 0.02, and the
+// conventional t_max/10 sits far enough up the fast-mode side of that basin to
+// cost two orders of magnitude of accuracy at no saving.
+inline double RLF_KRYLOV_SHIFT = 0.02;
+// Dimension the last solve settled on.  Diagnostic only; the Richardson pair
+// leaves the second member's value here.
+inline int rlf_last_krylov_dim = 0;
+
+// A curve reconstructed from the projected eigendecomposition.
+//
+//   f(t) = sum_j exp(re_j t) [a_j cos(im_j t) - b_j sin(im_j t)]
+//
+// DGEEV returns conjugate pairs adjacently with the eigenvector's real part in
+// the first column and its imaginary part in the second.  The first member of
+// a pair carries im > 0 and holds the whole (already real) contribution; the
+// second carries im < 0 and is skipped.  Real modes have im == 0 and b == 0.
+struct RLF_Curve {
+  std::vector<double> a, b;
+
+  double at(const std::vector<double>& re, const std::vector<double>& im,
+            double t) const {
+    double out = 0.0;
+    const size_t m = a.size();
+    for (size_t j = 0; j < m; ++j) {
+      if (im[j] < 0.0) continue;
+      const double growth = std::exp(re[j] * t);
+      if (im[j] == 0.0) {
+        out += a[j] * growth;
+      } else {
+        const double phase = im[j] * t;
+        out += growth *
+          (a[j] * std::cos(phase) - b[j] * std::sin(phase));
+      }
+    }
+    return out;
+  }
+};
+
+struct RLF_Modes {
+  int m = 0;
+  std::vector<double> re, im;
+  RLF_Curve flux;      // probability flux through the absorbing boundary
+  RLF_Curve surv;      // surviving mass
+  RLF_Curve censor;    // rate at which the censored lower edge is pressed
+  // Modal form of  beta (h_{m+1,m}/gamma) e_m^T H_m^{-1} exp(t L_m) e_1, whose
+  // magnitude is the norm of the shift-and-invert residual.
+  RLF_Curve defect;
+  // 1-norm condition estimate of the (column-normalised) reduced eigenvector
+  // matrix.  The projected generator is nonnormal, so the modal expansion can
+  // in principle be a cancelling sum of huge terms; this is what would say so.
+  double eigen_condition = 1.0;
+  // beta * V and the modal coefficients of the reduced state, kept so the
+  // density itself can be reconstructed for the positivity diagnostic.
+  std::vector<double> basis;       // n x m, column major
+  std::vector<double> state_a, state_b;   // m x m, column major
+  int n = 0;
+
+  // Every output time needs the flux, the survivor and the integrated flux,
+  // and each of those is the same sum over the same modes with the same
+  // exp/cos/sin envelope.  Building the envelope once per time and reducing
+  // each curve against it turns four transcendental sweeps into one, which is
+  // what the many-distinct-response-time case is made of.
+  void envelope_at(double t, std::vector<double>& weight) const {
+    weight.assign(static_cast<size_t>(2 * m), 0.0);
+    for (int j = 0; j < m; ++j) {
+      if (im[j] < 0.0) continue;
+      const double growth = std::exp(re[j] * t);
+      if (im[j] == 0.0) {
+        weight[2 * j] = growth;
+      } else {
+        const double phase = im[j] * t;
+        weight[2 * j] = growth * std::cos(phase);
+        weight[2 * j + 1] = -growth * std::sin(phase);
+      }
+    }
+  }
+
+  // Reduce one curve against an envelope built by envelope_at.  Matches
+  // RLF_Curve::at, which forms a * cos - b * sin.
+  static double reduce(const RLF_Curve& curve,
+                       const std::vector<double>& weight) {
+    double out = 0.0;
+    const size_t count = curve.a.size();
+    for (size_t j = 0; j < count; ++j) {
+      out += curve.a[j] * weight[2 * j] + curve.b[j] * weight[2 * j + 1];
+    }
+    return out;
+  }
+
+  double flux_at(double t) const { return flux.at(re, im, t); }
+  double surv_at(double t) const { return surv.at(re, im, t); }
+  double censor_at(double t) const { return censor.at(re, im, t); }
+  // 2-norm of the shift-and-invert residual  p_m'(t) - L p_m(t)  at time t.
+  // See rlf_reduce_modes for how the curve is built.
+  double residual_at(double t) const {
+    return std::abs(defect.at(re, im, t));
+  }
+
+  // Exact antiderivative of a modal curve, as a curve plus the constant that
+  // makes it vanish at t = 0:  int_0^t sum_j c_j e^{lam_j s} ds
+  //   = sum_j (c_j / lam_j) e^{lam_j t} - sum_j c_j / lam_j.
+  RLF_Curve integrate(const RLF_Curve& curve, double& constant) const {
+    RLF_Curve out;
+    out.a.assign(m, 0.0);
+    out.b.assign(m, 0.0);
+    constant = 0.0;
+    for (int j = 0; j < m; ++j) {
+      if (im[j] < 0.0) continue;
+      if (im[j] == 0.0) {
+        if (!(std::abs(re[j]) > 0.0)) continue;
+        out.a[j] = curve.a[j] / re[j];
+      } else {
+        // (a + i b) / (re + i im)
+        const double d = re[j] * re[j] + im[j] * im[j];
+        if (!(d > 0.0)) continue;
+        out.a[j] = (curve.a[j] * re[j] + curve.b[j] * im[j]) / d;
+        out.b[j] = (curve.b[j] * re[j] - curve.a[j] * im[j]) / d;
+      }
+      constant -= out.a[j];
+    }
+    return out;
+  }
+
+  // Smallest and largest cell of the reconstructed density at time t.  exp(t L)
+  // is entrywise non-negative because L is an M-matrix generator, so anything
+  // materially below zero here is Krylov truncation rather than a genuine
+  // property of the discretisation -- which is exactly what makes it a useful
+  // check.  The peak is returned alongside so the undershoot can be reported
+  // as a fraction of it: the density scales like 1/h, so an absolute floor on
+  // the trough would tighten itself every time the grid is refined.
+  void density_extremes_at(double t, double& lowest, double& highest) const {
+    if (basis.empty()) return;
+    std::vector<double> y(m, 0.0);
+    for (int j = 0; j < m; ++j) {
+      if (im[j] < 0.0) continue;
+      const double growth = std::exp(re[j] * t);
+      const double* first = &state_a[static_cast<size_t>(j) * m];
+      if (im[j] == 0.0) {
+        for (int i = 0; i < m; ++i) y[i] += growth * first[i];
+      } else {
+        const double phase = im[j] * t;
+        const double c = std::cos(phase), s = std::sin(phase);
+        const double* second = &state_b[static_cast<size_t>(j) * m];
+        for (int i = 0; i < m; ++i) {
+          y[i] += growth * (first[i] * c - second[i] * s);
+        }
+      }
+    }
+    for (int i = 0; i < n; ++i) {
+      double value = 0.0;
+      for (int j = 0; j < m; ++j) {
+        value += basis[static_cast<size_t>(j) * n + i] * y[j];
+      }
+      lowest = std::min(lowest, value);
+      highest = std::max(highest, value);
+    }
+  }
+};
+
+// Reusable scratch for one solve.  The Richardson pair changes n between its
+// two members, so these only avoid reallocation within a member, but the
+// buffers are small next to the factorisation they feed.
+struct RLF_KrylovWork {
+  std::vector<double> shifted, basis, hessenberg, vector, projection;
+  std::vector<double> reduced, eigvec, coefficient, lapack;
+  // H_m is consumed by the Schur factorisation, but the residual estimate
+  // needs it afterwards, so it is kept.
+  std::vector<double> hess_copy, residual_row;
+  std::vector<int> pivot, iwork;
+};
+
+// Assemble I - gamma L directly from the compact operator.  L itself is never
+// formed: it is Toeplitz apart from its diagonal, and the only consumer is
+// this matrix.
+inline void rlf_shifted_operator(const RLF_Operator& op, double gamma,
+                                 std::vector<double>& out) {
+  const int n = op.n;
+  out.resize(static_cast<size_t>(n) * n);
+  if (!op.dense.empty()) {
+    const double* __restrict src = op.dense.data();
+    for (int i = 0; i < n; ++i) {
+      double* __restrict row = &out[static_cast<size_t>(i) * n];
+      const double* __restrict from = &src[static_cast<size_t>(i) * n];
+      for (int j = 0; j < n; ++j) row[j] = -gamma * from[j];
+      row[i] += 1.0;
+    }
+    return;
+  }
+  for (int i = 0; i < n; ++i) {
+    double* __restrict row = &out[static_cast<size_t>(i) * n];
+    for (int j = 0; j < i; ++j) row[j] = -gamma * op.toeplitz_col[i - j];
+    row[i] = 1.0 - gamma * op.toeplitz_diag[i];
+    for (int j = i + 1; j < n; ++j) row[j] = -gamma * op.toeplitz_row[j - i];
+  }
+}
+
+// Project one rate vector onto the Krylov basis.
+inline void rlf_project_rate(const std::vector<double>& rate,
+                             const std::vector<double>& basis, int n, int m,
+                             double scale, std::vector<double>& out) {
+  out.assign(m, 0.0);
+  for (int k = 0; k < m; ++k) {
+    const double* column = &basis[static_cast<size_t>(k) * n];
+    double sum = 0.0;
+    for (int i = 0; i < n; ++i) sum += rate[i] * column[i];
+    out[k] = sum * scale;
+  }
+}
+
+// Extend the Arnoldi basis on B = (I - gamma L)^-1 from `from` vectors to
+// `to`, with one reorthogonalisation pass.  Returns the number of vectors
+// actually built, which is smaller than `to` only on a lucky breakdown (an
+// invariant subspace, where the remaining modes are already exact).
+inline int rlf_arnoldi_extend(const RLF_ShiftedLU& lu, int n, int stride,
+                              int from, int to, RLF_KrylovWork& work) {
+  const char transpose = 'T', no_transpose = 'N';
+  const int one = 1;
+  const double d_one = 1.0, d_minus = -1.0, d_zero = 0.0;
+  for (int k = from; k < to; ++k) {
+    const double* source = &work.basis[static_cast<size_t>(k) * n];
+    std::copy(source, source + n, work.vector.begin());
+    if (!lu.solve(work.vector.data())) {
+      throw std::runtime_error("rlf_solve: shifted solve failed.");
+    }
+    const int done = k + 1;
+    for (int pass = 0; pass < 2; ++pass) {
+      F77_CALL(dgemv)(
+        &transpose, &n, &done, &d_one, work.basis.data(), &n,
+        work.vector.data(), &one, &d_zero, work.projection.data(), &one, 1);
+      F77_CALL(dgemv)(
+        &no_transpose, &n, &done, &d_minus, work.basis.data(), &n,
+        work.projection.data(), &one, &d_one, work.vector.data(), &one, 1);
+      for (int i = 0; i < done; ++i) {
+        work.hessenberg[static_cast<size_t>(k) * stride + i] +=
+          work.projection[i];
+      }
+    }
+    double norm = 0.0;
+    for (double value : work.vector) norm += value * value;
+    norm = std::sqrt(norm);
+    work.hessenberg[static_cast<size_t>(k) * stride + k + 1] = norm;
+    if (!(norm > 1e-13)) return k + 1;
+    double* target = &work.basis[static_cast<size_t>(k + 1) * n];
+    for (int i = 0; i < n; ++i) target[i] = work.vector[i] / norm;
+  }
+  return to;
+}
+
+// Turn the leading m x m block of the Hessenberg matrix into modal curves for
+// the three output functionals.  Everything here is O(m^3) or smaller, so it
+// can be repeated at several m against one factorisation and one basis.
+inline void rlf_reduce_modes(const RLF_Operator& op, double h, double gamma,
+                             double beta, int n, int m, int stride,
+                             RLF_KrylovWork& work, RLF_Modes& modes) {
+  const int one = 1;
+  // --- eigendecomposition, taken on H_m rather than on the reduced generator
+  //
+  // L_m = (I - H_m^-1) / gamma is a function of H_m, so the two have the same
+  // eigenvectors and their eigenvalues are related by lam = (1 - 1/mu)/gamma.
+  // Working on H_m directly is worth doing twice over: it drops the explicit
+  // inversion entirely, and H_m is already upper Hessenberg, so DHSEQR and
+  // DTREVC can be called on it without the Hessenberg reduction that DGEEV
+  // would spend most of its time on.  This is the largest single cost in the
+  // solve after the shifted factorisation, and the search visits it once per
+  // rung.
+  work.reduced.assign(static_cast<size_t>(m) * m, 0.0);
+  for (int j = 0; j < m; ++j) {
+    const int rows = std::min(j + 2, m);
+    for (int i = 0; i < rows; ++i) {
+      work.reduced[static_cast<size_t>(j) * m + i] =
+        work.hessenberg[static_cast<size_t>(j) * stride + i];
+    }
+  }
+  work.hess_copy = work.reduced;
+  const double h_next = work.hessenberg[static_cast<size_t>(m - 1) * stride + m];
+
+  modes.m = m;
+  modes.n = n;
+  modes.re.assign(m, 0.0);
+  modes.im.assign(m, 0.0);
+  work.eigvec.resize(static_cast<size_t>(m) * m);
+  int info = 0;
+  {
+    const char schur = 'S', identity = 'I';
+    int lwork = -1;
+    double wanted = 0.0;
+    F77_CALL(dhseqr)(
+      &schur, &identity, &m, &one, &m, work.reduced.data(), &m,
+      modes.re.data(), modes.im.data(), work.eigvec.data(), &m, &wanted,
+      &lwork, &info, 1, 1);
+    lwork = info == 0 ? static_cast<int>(wanted) : 0;
+    if (lwork < m) lwork = std::max(m, 1);
+    if (static_cast<size_t>(lwork) > work.lapack.size()) {
+      work.lapack.resize(lwork);
+    }
+    F77_CALL(dhseqr)(
+      &schur, &identity, &m, &one, &m, work.reduced.data(), &m,
+      modes.re.data(), modes.im.data(), work.eigvec.data(), &m,
+      work.lapack.data(), &lwork, &info, 1, 1);
+    if (info != 0) {
+      throw std::runtime_error("rlf_solve: Schur factorisation failed.");
+    }
+  }
+  {
+    // HOWMNY = 'B' back-transforms with the Schur vectors already in eigvec,
+    // giving eigenvectors of H_m -- and so of the reduced generator.  DTREVC
+    // does not normalise the way DGEEV does, which does not matter here: the
+    // modal coefficients come from solving against this same basis, so any
+    // per-column scaling cancels.
+    const char right = 'R', back = 'B';
+    int found = 0;
+    work.lapack.resize(std::max<size_t>(work.lapack.size(), 3 * m));
+    F77_CALL(dtrevc)(
+      &right, &back, nullptr, &m, work.reduced.data(), &m, nullptr, &one,
+      work.eigvec.data(), &m, &m, &found, work.lapack.data(), &info, 1, 1);
+    if (info != 0) {
+      throw std::runtime_error("rlf_solve: eigenvector computation failed.");
+    }
+  }
+  // DTREVC leaves the columns unscaled.  Scaling each mode to unit length --
+  // jointly over a conjugate pair, so the pair convention survives -- costs
+  // nothing, cancels out of every downstream formula, and is within a factor
+  // sqrt(m) of the diagonal scaling that minimises the condition number of the
+  // eigenbasis.  Without it the condition estimate below measures DTREVC's
+  // arbitrary normalisation rather than the conditioning of the expansion.
+  for (int j = 0; j < m; ) {
+    const int width = (modes.im[j] > 0.0) ? 2 : 1;
+    double norm = 0.0;
+    for (int c = 0; c < width; ++c) {
+      const double* column = &work.eigvec[static_cast<size_t>(j + c) * m];
+      for (int i = 0; i < m; ++i) norm += column[i] * column[i];
+    }
+    norm = std::sqrt(norm);
+    if (norm > 0.0) {
+      const double scale = 1.0 / norm;
+      for (int c = 0; c < width; ++c) {
+        double* column = &work.eigvec[static_cast<size_t>(j + c) * m];
+        for (int i = 0; i < m; ++i) column[i] *= scale;
+      }
+    }
+    j += width;
+  }
+  // mu -> lam = (1 - 1/mu) / gamma.  1/mu = conj(mu)/|mu|^2, so the imaginary
+  // part keeps its sign and DHSEQR's convention of putting the positive member
+  // of a conjugate pair first carries over unchanged.
+  for (int j = 0; j < m; ++j) {
+    const double a = modes.re[j], b = modes.im[j];
+    const double d = a * a + b * b;
+    if (!(d > 0.0)) {
+      throw std::runtime_error("rlf_solve: projected operator is singular.");
+    }
+    modes.re[j] = (1.0 - a / d) / gamma;
+    modes.im[j] = (b / d) / gamma;
+  }
+
+  // Modal coefficients of the reduced state: solve VR c = e_1.  For a
+  // conjugate pair DGEEV's real eigenvector columns are [Re v, Im v], and the
+  // complex coefficient of v is (c_j - i c_{j+1}); the pair then contributes
+  // one real part rather than twice one.
+  work.coefficient.assign(m, 0.0);
+  work.coefficient[0] = 1.0;
+  work.pivot.resize(m);
+  std::vector<double> factored = work.eigvec;
+  double eigen_norm = 0.0;
+  for (int j = 0; j < m; ++j) {
+    double column_sum = 0.0;
+    for (int i = 0; i < m; ++i) {
+      column_sum += std::abs(work.eigvec[static_cast<size_t>(j) * m + i]);
+    }
+    eigen_norm = std::max(eigen_norm, column_sum);
+  }
+  F77_CALL(dgetrf)(&m, &m, factored.data(), &m, work.pivot.data(), &info);
+  if (info != 0) {
+    throw std::runtime_error("rlf_solve: reduced eigenbasis is singular.");
+  }
+  {
+    // O(m^2) on a factorisation that is already paid for.  A blown-up estimate
+    // means the modal expansion is a cancelling sum, which is a different
+    // failure from an under-resolved Krylov space and is not fixed by more
+    // vectors -- see rlf_build_modes.
+    const char one_norm = '1';
+    double reciprocal = 0.0;
+    work.lapack.resize(std::max<size_t>(work.lapack.size(), 4 * m));
+    work.iwork.resize(m);
+    int cond_info = 0;
+    F77_CALL(dgecon)(
+      &one_norm, &m, factored.data(), &m, &eigen_norm, &reciprocal,
+      work.lapack.data(), work.iwork.data(), &cond_info, 1);
+    modes.eigen_condition =
+      (cond_info == 0 && reciprocal > 0.0) ? 1.0 / reciprocal : HUGE_VAL;
+  }
+  {
+    const char none = 'N';
+    F77_CALL(dgetrs)(
+      &none, &m, &one, factored.data(), &m, work.pivot.data(),
+      work.coefficient.data(), &m, &info, 1);
+  }
+
+  // --- turn each rate functional into a modal curve
+  auto modal_curve = [&](const std::vector<double>& projected,
+                         RLF_Curve& curve) {
+    curve.a.assign(m, 0.0);
+    curve.b.assign(m, 0.0);
+    for (int j = 0; j < m; ++j) {
+      if (modes.im[j] < 0.0) continue;
+      const double* column = &work.eigvec[static_cast<size_t>(j) * m];
+      double first = 0.0;
+      for (int k = 0; k < m; ++k) first += projected[k] * column[k];
+      if (modes.im[j] == 0.0) {
+        curve.a[j] = first * work.coefficient[j];
+        continue;
+      }
+      const double* next = &work.eigvec[static_cast<size_t>(j + 1) * m];
+      double second = 0.0;
+      for (int k = 0; k < m; ++k) second += projected[k] * next[k];
+      // (first + i second) * (c_j - i c_{j+1})
+      curve.a[j] = first * work.coefficient[j] +
+                   second * work.coefficient[j + 1];
+      curve.b[j] = second * work.coefficient[j] -
+                   first * work.coefficient[j + 1];
+    }
+  };
+  auto make_curve = [&](const std::vector<double>& rate, double scale,
+                        RLF_Curve& curve) {
+    std::vector<double> projected;
+    rlf_project_rate(rate, work.basis, n, m, scale * beta, projected);
+    modal_curve(projected, curve);
+  };
+  // Cell quadrature weights.  On a uniform mesh every cell is h wide and the
+  // two functionals below reduce to the old scalar scaling.
+  std::vector<double> cell_weight;
+  if (op.width.empty()) cell_weight.assign(n, h); else cell_weight = op.width;
+  std::vector<double> weighted(n);
+  for (int i = 0; i < n; ++i) weighted[i] = op.upper_kill[i] * cell_weight[i];
+  make_curve(weighted, 1.0, modes.flux);
+  make_curve(cell_weight, 1.0, modes.surv);
+
+  // --- shift-and-invert residual, as a modal curve
+  //
+  // For the shift-and-invert Arnoldi approximation p_m(t) = beta V_m y_m(t),
+  // y_m(t) = exp(t L_m) e_1, the defect against the equation being solved is
+  //
+  //   p_m'(t) - L p_m(t)
+  //     = -beta (h_{m+1,m} / gamma) v_{m+1} (e_m^T H_m^{-1} y_m(t)),
+  //
+  // and since v_{m+1} has unit length the norm of that is the scalar in
+  // brackets.  e_m^T H_m^{-1} is one transposed solve against the Hessenberg
+  // matrix, and w^T y_m(t) is then a sum over the same modes as every other
+  // output, so the whole thing costs O(m^2) once and O(m) per evaluation.
+  //
+  // This is what makes a single rung self-testing: without it the search can
+  // only detect convergence by finding that two successive rungs agree, which
+  // means the cheapest possible outcome is two eigensolves rather than one.
+  {
+    work.residual_row.assign(m, 0.0);
+    work.residual_row[m - 1] = 1.0;
+    work.pivot.resize(m);
+    F77_CALL(dgetrf)(&m, &m, work.hess_copy.data(), &m, work.pivot.data(),
+                     &info);
+    if (info == 0) {
+      const char transposed = 'T';
+      F77_CALL(dgetrs)(
+        &transposed, &m, &one, work.hess_copy.data(), &m, work.pivot.data(),
+        work.residual_row.data(), &m, &info, 1);
+    }
+    if (info != 0) {
+      // No usable estimate; leave the curve empty so residual_at reads zero
+      // and the observable two-rung test governs on its own.
+      modes.defect.a.clear();
+      modes.defect.b.clear();
+    } else {
+      const double scale = beta * std::abs(h_next) / gamma;
+      for (double& value : work.residual_row) value *= scale;
+      modal_curve(work.residual_row, modes.defect);
+    }
+  }
+}
+
+// Everything that is read once per solve rather than once per rung: the
+// censored-edge curve and the modal form of the state.  Runs off the
+// eigendecomposition the last rlf_reduce_modes left in `work`, so settling on
+// a dimension costs no second eigensolve.
+inline void rlf_materialize_modes(const RLF_Operator& op, double h,
+                                  double beta, int n, int m,
+                                  RLF_KrylovWork& work, RLF_Modes& modes) {
+  {
+    std::vector<double> projected;
+    std::vector<double> weighted(n);
+    for (int i = 0; i < n; ++i) {
+      weighted[i] = op.lower_censor[i] *
+        (op.width.empty() ? h : op.width[i]);
+    }
+    rlf_project_rate(weighted, work.basis, n, m, beta, projected);
+    modes.censor.a.assign(m, 0.0);
+    modes.censor.b.assign(m, 0.0);
+    for (int j = 0; j < m; ++j) {
+      if (modes.im[j] < 0.0) continue;
+      const double* column = &work.eigvec[static_cast<size_t>(j) * m];
+      double first = 0.0;
+      for (int k = 0; k < m; ++k) first += projected[k] * column[k];
+      if (modes.im[j] == 0.0) {
+        modes.censor.a[j] = first * work.coefficient[j];
+        continue;
+      }
+      const double* next = &work.eigvec[static_cast<size_t>(j + 1) * m];
+      double second = 0.0;
+      for (int k = 0; k < m; ++k) second += projected[k] * next[k];
+      modes.censor.a[j] = first * work.coefficient[j] +
+                          second * work.coefficient[j + 1];
+      modes.censor.b[j] = second * work.coefficient[j] -
+                          first * work.coefficient[j + 1];
+    }
+  }
+
+  // --- keep enough to reconstruct the density for the positivity diagnostic
+  modes.basis.assign(static_cast<size_t>(m) * n, 0.0);
+  for (int j = 0; j < m; ++j) {
+    const double* column = &work.basis[static_cast<size_t>(j) * n];
+    double* target = &modes.basis[static_cast<size_t>(j) * n];
+    for (int i = 0; i < n; ++i) target[i] = beta * column[i];
+  }
+  modes.state_a.assign(static_cast<size_t>(m) * m, 0.0);
+  modes.state_b.assign(static_cast<size_t>(m) * m, 0.0);
+  for (int j = 0; j < m; ++j) {
+    if (modes.im[j] < 0.0) continue;
+    const double* column = &work.eigvec[static_cast<size_t>(j) * m];
+    double* first = &modes.state_a[static_cast<size_t>(j) * m];
+    if (modes.im[j] == 0.0) {
+      for (int i = 0; i < m; ++i) first[i] = column[i] * work.coefficient[j];
+      continue;
+    }
+    const double* next = &work.eigvec[static_cast<size_t>(j + 1) * m];
+    double* second = &modes.state_b[static_cast<size_t>(j) * m];
+    const double cr = work.coefficient[j], ci = -work.coefficient[j + 1];
+    for (int i = 0; i < m; ++i) {
+      first[i] = column[i] * cr - next[i] * ci;
+      second[i] = column[i] * ci + next[i] * cr;
+    }
+  }
+}
+
+// Build the propagator for one grid, growing the Krylov space until the two
+// functionals the likelihood actually reads stop moving.
+//
+// A fixed dimension cannot serve this model.  The Krylov space has to resolve
+// the decay rates that matter over [0, t_max], and how many of those there are
+// depends on the parameters: a heavy tail with a fast drift on a fine grid
+// needs roughly twice the dimension of an ordinary point, and using the larger
+// value everywhere would pay for the worst case on every solve.  Measured
+// against a converged reference, a fixed 28 leaves errors of 0.3 nats at
+// alpha = 1.13, v = 4.2, nx = 320 -- in the body of the distribution, not the
+// tail -- while ordinary points are converged by 24.
+//
+// The convergence test is on log f(t) and log S(t) rather than on a residual
+// bound, because those are the quantities that reach the likelihood, and it is
+// deliberately taken in logs so that a Krylov-truncation sign error (which
+// exp(tL) cannot produce, L being an M-matrix generator) reads as a large
+// discrepancy and buys more vectors instead of being floored away.
+//
+// The shift-and-invert residual (rlf_reduce_modes) is a genuine single-rung
+// error certificate and was tried as the stopping rule, on the reasoning that
+// a rung able to retire itself would save the extra rung that "agrees with its
+// predecessor" costs.  Measured over the parameter net it does not pay.  It is
+// a norm on the density defect, so it is blind to the currency the survivor is
+// judged in: |d log S| = |dS|/S, and S reaches e^-30 inside the horizon.  Set
+// loose enough to fire early it costs three orders of magnitude of accuracy in
+// log S (9.9e-2 against 1.2e-6); set tight enough to be safe it fires at a
+// dimension the observable test would have reached anyway, and mean m moves
+// from 33.3 to 33.2.  Coarser ladders leaning on it are slower still, since
+// the search has to climb through the intermediate rungs regardless and the
+// only saving available was ever the last comparison.  It is kept as a
+// diagnostic, where it does separate a truncated subspace from a spatial
+// problem, and not as a stopping rule.
+//
+// The tolerance is tight relative to the discretisation error it sits under
+// because rlf_cache_solve extrapolates two grids as 5 f - 4 c: the projection
+// errors of the two members are independent, so the combination amplifies them
+// by around two orders of magnitude, where it holds the spatial error common
+// and cancels it.
+//
+// `m_fixed`, when positive, skips the search entirely and takes a single rung
+// at that dimension.  It is used for the second member of a Richardson pair:
+// the first member has already established, by the observable test, that the
+// dimension resolves the horizon, and the two grids differ by 25% in n on the
+// same domain, so they see the same spectrum.  The pair is solved fine member
+// first for exactly this reason -- the finer grid is the one that can need
+// more vectors, so the reused dimension is an upper bound rather than a
+// guess.
+inline RLF_Modes rlf_build_modes(const RLF_Operator& op, double h,
+                                 const std::vector<double>& p0, double t_max,
+                                 RLF_KrylovWork& work, int m_fixed = 0) {
+  const int n = op.n;
+  const int m_cap = std::min(RLF_KRYLOV_MAX, n);
+  if (!(m_cap > 1)) {
+    throw std::runtime_error("rlf_solve: grid too small for the propagator.");
+  }
+  const double gamma = RLF_KRYLOV_SHIFT * t_max;
+
+  rlf_shifted_operator(op, gamma, work.shifted);
+  RLF_ShiftedLU lu;
+  if (!lu.factor(n, work.shifted)) {
+    throw std::runtime_error(
+      "rlf_solve: factorisation of the shifted nonlocal operator failed.");
+  }
+
+  const int stride = m_cap + 1;
+  work.basis.assign(static_cast<size_t>(n) * stride, 0.0);
+  work.hessenberg.assign(static_cast<size_t>(stride) * stride, 0.0);
+  double beta = 0.0;
+  for (double value : p0) beta += value * value;
+  beta = std::sqrt(beta);
+  if (!(beta > 0.0)) {
+    throw std::runtime_error("rlf_solve: start distribution missed the grid.");
+  }
+  for (int i = 0; i < n; ++i) work.basis[i] = p0[i] / beta;
+  work.vector.resize(n);
+  work.projection.resize(stride);
+
+  // Probe times: geometric, so the fast transient and the tail both count.
+  constexpr int RLF_KRYLOV_PROBES = 12;
+  double probe[RLF_KRYLOV_PROBES];
+  for (int k = 0; k < RLF_KRYLOV_PROBES; ++k) {
+    probe[k] = t_max * std::pow(2.0, (k - (RLF_KRYLOV_PROBES - 1)) * 0.5);
+  }
+  double previous[2 * RLF_KRYLOV_PROBES];
+  bool have_previous = false;
+
+  RLF_Modes modes;
+  int built = 0;
+  const bool single_rung = m_fixed > 0;
+  int m = single_rung
+    ? std::min(m_fixed, m_cap)
+    : std::min(RLF_KRYLOV_MIN, m_cap);
+  while (true) {
+    const int grown = rlf_arnoldi_extend(lu, n, stride, built, m, work);
+    const bool invariant = grown < m;
+    built = grown;
+    m = grown;
+    rlf_reduce_modes(op, h, gamma, beta, n, m, stride, work, modes);
+
+    // The two functionals are judged in different currencies, because they
+    // reach the likelihood in different ways.
+    //
+    // The exit flux is judged relatively, but against a denominator floored at
+    // a fixed fraction of the peak.  A pure relative test on log f chases the
+    // deep tail to full precision, and the deep tail is where the modal
+    // reconstruction is cancellation noise -- at alpha = 2 the earliest probe
+    // can carry a flux nine orders below the peak, and comparing logs there
+    // never settles, so the search runs to the cap on a curve that converged
+    // twenty vectors earlier.  A pure absolute test has the opposite fault: it
+    // under-resolves the leading edge, which carries only a per cent or so of
+    // the peak density but is what fixes t0 and the drift.  The floor keeps
+    // the test relative across the four decades of density that carry the
+    // data, and absolute below that.
+    //
+    // The survivor is judged relatively, since log S is what the omission and
+    // truncation paths read, and unlike the flux it decays smoothly and never
+    // collapses into noise.
+    double flux_value[RLF_KRYLOV_PROBES], surv_value[RLF_KRYLOV_PROBES];
+    double flux_peak = 0.0;
+    for (int k = 0; k < RLF_KRYLOV_PROBES; ++k) {
+      flux_value[k] = modes.flux_at(probe[k]);
+      surv_value[k] = modes.surv_at(probe[k]);
+      flux_peak = std::max(flux_peak, std::abs(flux_value[k]));
+    }
+    const double flux_floor = std::max(flux_peak * RLF_KRYLOV_FLOOR, 1e-300);
+    double moved = 0.0;
+    for (int k = 0; k < RLF_KRYLOV_PROBES; ++k) {
+      const double log_surv = std::log(std::max(surv_value[k], 1e-12));
+      if (have_previous) {
+        const double denominator =
+          std::max(std::abs(flux_value[k]), flux_floor);
+        moved = std::max(
+          moved, std::abs(flux_value[k] - previous[2 * k]) / denominator);
+        moved = std::max(moved, std::abs(log_surv - previous[2 * k + 1]));
+      }
+      previous[2 * k] = flux_value[k];
+      previous[2 * k + 1] = log_surv;
+    }
+
+    // An invariant subspace is exact, and the cap is the point past which more
+    // vectors cost more than the spatial error they are chasing.  The tolerance is
+// on the movement between successive rungs, which overstates the error at the
+// rung finally accepted: measured over a random parameter net, 1e-5 here
+// leaves 9e-6 after extrapolation, against a spatial error of about 1e-2.
+    if (invariant || m >= m_cap || single_rung) break;
+    if (have_previous && moved < RLF_KRYLOV_TOL) break;
+    have_previous = true;
+    m = std::min(m + RLF_KRYLOV_STEP, m_cap);
+  }
+  rlf_materialize_modes(op, h, beta, n, m, work, modes);
+  rlf_last_krylov_dim = m;
+  return modes;
+}
 
 // One fixed-domain/fixed-grid solve.  `M` is the number of intervals and the
-// M-1 interior nodes are x_lo+h, ..., b0-h.  The public solver below owns all
-// validation and convergence refinement.
+// M-1 interior nodes are x_lo+h, ..., b0-h.  `n_out` sets the resolution of
+// the returned time grid when no query times are supplied; it no longer has
+// anything to do with how the equation is solved.  The public solver below
+// owns all validation and convergence refinement.
+// Everything downstream of the discretisation: propagate, then read the three
+// functionals the likelihood wants.  Shared by the uniform and graded meshes,
+// which differ only in how `op` and `p` were built.
+inline RLF_Result rlf_propagate(
+    const RLF_Operator& op, double h, const std::vector<double>& p,
+    double t_max, int n_out, const std::vector<double>* query_times,
+    RLF_KrylovWork* scratch, int m_fixed) {
+  const int n = op.n;
+  RLF_KrylovWork local;
+  RLF_Modes modes = rlf_build_modes(
+    op, h, p, t_max, scratch != nullptr ? *scratch : local, m_fixed);
+
+  RLF_Result res;
+  res.dx = h;
+  res.krylov_dim = modes.m;
+  res.eigen_condition = modes.eigen_condition;
+  // Largest shift-and-invert residual over a geometric sweep of the horizon.
+  // Unlike the mass mismatch, which only sees the component of the Krylov
+  // error that breaks the flux/survivor relation, this sees the whole defect,
+  // so the two together separate a truncated subspace from a spatial problem.
+  {
+    constexpr int RLF_RESIDUAL_PROBES = 10;
+    for (int k = 1; k <= RLF_RESIDUAL_PROBES; ++k) {
+      res.krylov_residual = std::max(
+        res.krylov_residual,
+        modes.residual_at(t_max * std::pow(2.0, k - RLF_RESIDUAL_PROBES)));
+    }
+  }
+  res.operator_conservation_error = op.conservation_error;
+
+  // Exact antiderivative of the exit flux, for the flux/mass consistency
+  // check and for the censored lower-edge pressure.
+  double flux_offset = 0.0, censor_offset = 0.0;
+  const RLF_Curve cumulative_flux = modes.integrate(modes.flux, flux_offset);
+  const RLF_Curve cumulative_censor =
+    modes.integrate(modes.censor, censor_offset);
+  res.lower_boundary_pressure =
+    cumulative_censor.at(modes.re, modes.im, t_max) + censor_offset;
+
+  // Output times: the requested queries, or a uniform grid over [0, t_max].
+  std::vector<double> times;
+  if (query_times != nullptr) {
+    times = *query_times;
+    std::sort(times.begin(), times.end());
+    times.erase(std::unique(times.begin(), times.end()), times.end());
+  } else {
+    const int levels = std::max(n_out, 1);
+    times.reserve(levels + 1);
+    for (int k = 0; k <= levels; ++k) {
+      times.push_back(t_max * static_cast<double>(k) / levels);
+    }
+  }
+
+  const size_t count = times.size();
+  res.t = times;
+  res.pdf.resize(count);
+  res.cdf.resize(count);
+  res.surv.resize(count);
+  double survivor_prev = 1.0;
+  std::vector<double> weight;
+  for (size_t i = 0; i < count; ++i) {
+    const double time = times[i];
+    if (!(time > 0.0)) {
+      res.pdf[i] = time < 0.0 ? 0.0 : std::max(0.0, modes.flux_at(0.0));
+      res.surv[i] = 1.0;
+      res.cdf[i] = 0.0;
+      continue;
+    }
+    modes.envelope_at(time, weight);
+    res.pdf[i] = std::max(0.0, RLF_Modes::reduce(modes.flux, weight));
+    const double raw_survivor = RLF_Modes::reduce(modes.surv, weight);
+    // The modal survivor is monotone to Krylov accuracy; clamping keeps a
+    // downstream log/interpolation from ever seeing it drift the other way.
+    double survivor =
+      std::min(survivor_prev, std::min(1.0, std::max(0.0, raw_survivor)));
+    survivor_prev = survivor;
+    res.surv[i] = survivor;
+    res.cdf[i] = 1.0 - survivor;
+    const double integrated =
+      RLF_Modes::reduce(cumulative_flux, weight) + flux_offset;
+    res.flux_mass_mismatch = std::max(
+      res.flux_mass_mismatch,
+      std::abs((1.0 - raw_survivor) - integrated));
+  }
+
+  // Positivity probe, reported as the deepest trough as a fraction of the
+  // tallest peak.  exp(t L) is entrywise non-negative because L is an M-matrix
+  // generator, so this measures Krylov truncation rather than a property of
+  // the discretisation; a handful of geometrically spaced times covers the
+  // transient and the tail for a few tens of microseconds.
+  constexpr int RLF_DENSITY_PROBES = 8;
+  double lowest = 0.0, highest = 0.0;
+  for (int k = 1; k <= RLF_DENSITY_PROBES; ++k) {
+    const double time =
+      t_max * std::pow(2.0, k - RLF_DENSITY_PROBES);
+    modes.density_extremes_at(time, lowest, highest);
+  }
+  res.min_density = highest > 0.0 ? lowest / highest : 0.0;
+  return res;
+}
+
 inline RLF_Result rlf_solve_fixed_grid(
-    const RLF_Model& m, double t_max, int M, int Nt, double lower_extent,
-    double tgrade = 1.0, bool explicit_inverse = true,
+    const RLF_Model& m, double t_max, int M, int n_out, double lower_extent,
     const std::vector<double>* query_times = nullptr,
-    const RLF_TimeSchedule* schedule_override = nullptr,
-    RLF_TimeSchedule* schedule_used = nullptr) {
+    RLF_KrylovWork* scratch = nullptr, int m_fixed = 0) {
   const double x_lo = -lower_extent;
   const double h = (m.b0 - x_lo) / M;
   const int n = M - 1;
-
-  // The matrix-free decision only depends on n, so it is taken before the
-  // operator build and the dense n*n generator is skipped entirely when the
-  // stages will be solved iteratively from the compact Toeplitz form.
-  const bool matrix_free = n >= RLF_MATRIX_FREE_MIN_N;
-  const bool materialize_dense_L = !matrix_free && !explicit_inverse;
-  const RLF_Operator op = build_rlf_operator(m, n, h, materialize_dense_L);
-
-  // TR-BDF2 keeps its trapezoidal sub-stage positivity preserving while
-  // I + (gamma/2) dt L is entrywise non-negative.  This is the only remaining
-  // constraint linking dt to the grid, and it is nearly twice as permissive as
-  // the Crank-Nicolson one it replaces.
-  RLF_TimeSchedule schedule;
-  if (schedule_override != nullptr) {
-    // A pinned pair member copies its partner's pre-startup schedule instead
-    // of re-deriving one from this grid's exit rate; rlf_apply_startup then
-    // rescales the copy exactly as it would a self-computed schedule.
-    schedule = *schedule_override;
-  } else {
-    schedule = rlf_stable_time_schedule(
-      t_max, Nt, op.max_exit_rate, RLF_TRBDF2_SAFE, tgrade);
-  }
-  // Report the base schedule before startup rescaling, so callers can hand
-  // the same pre-startup schedule to a partner solve.
-  if (schedule_used != nullptr) *schedule_used = schedule;
-  const double startup_step = rlf_apply_startup(schedule, t_max);
-  const int n_steps = schedule.n_steps() + RLF_STARTUP_STEPS;
-  RLF_DenseLU lu;
-  RLF_DenseInverse inverse;
-  std::vector<double> step_matrix;
-  bool use_collapsed_step = true;
-
-  // Forming the explicit inverse and the TR-BDF2 step matrix costs O(n^3) and
-  // dominates everything else once the grid is refined, which is exactly what
-  // heavy tails ask for.  Past the crossover the stages are solved
-  // matrix-free instead: O(n log n) per BiCGSTAB iteration, and the Strang
-  // circulant preconditioner holds the iteration count at four to six
-  // independently of n and alpha, so the cubic term disappears.
-  rlf::RLF_ToeplitzSystem mf;
-  if (matrix_free) explicit_inverse = false;
-
+  const RLF_Operator op = build_rlf_operator(m, n, h);
   std::vector<double> p;
   rlf_initial_density(m, x_lo, h, n, p);
-
-  RLF_Result res;
+  RLF_Result res = rlf_propagate(
+    op, h, p, t_max, n_out, query_times, scratch, m_fixed);
   res.x_lo = x_lo;
-  res.dx = h;
   res.nx_used = M;
-  res.nt_used = n_steps;
-  res.operator_conservation_error = op.conservation_error;
-  res.min_density = density_min(p);
+  return res;
+}
 
-  const int n_levels = 1 + n_steps;
-  res.t.reserve(n_levels);
-  res.pdf.reserve(n_levels);
-  res.cdf.reserve(n_levels);
-  res.surv.reserve(n_levels);
-
-  double time = 0.0;
-  double flux_prev = weighted_rate(op.upper_kill, p, h);
-  double lower_prev = weighted_rate(op.lower_censor, p, h);
-  double cdf_flux = 0.0;
-  double lower_pressure = 0.0;
-  double survivor_prev = 1.0;
-  double cdf_prev = 0.0;
-
-  const bool sparse = query_times != nullptr;
-  size_t query_pos = 0;
-  std::vector<double> sorted_queries;
-  if (sparse) {
-    sorted_queries = *query_times;
-    std::sort(sorted_queries.begin(), sorted_queries.end());
-    sorted_queries.erase(
-      std::unique(sorted_queries.begin(), sorted_queries.end()),
-      sorted_queries.end());
-    while (query_pos < sorted_queries.size() &&
-           sorted_queries[query_pos] <= 0.0) {
-      res.t.push_back(sorted_queries[query_pos]);
-      res.pdf.push_back(0.0);
-      res.cdf.push_back(0.0);
-      res.surv.push_back(1.0);
-      ++query_pos;
+// Start distribution on a graded mesh: the uniform-[0, A] mass, or the point
+// mass at zero split linearly between the two cells straddling it so that the
+// start point is not silently snapped to a cell centre.
+inline void rlf_initial_density_mesh(const RLF_Model& m, const RLF_Mesh& mesh,
+                                     std::vector<double>& p) {
+  const int n = mesh.n;
+  p.assign(n, 0.0);
+  if (m.z0 > 0.0) {
+    double mass = 0.0;
+    for (int i = 0; i < n; ++i) {
+      const double overlap =
+        std::min(mesh.face[i + 1], m.z0) - std::max(mesh.face[i], 0.0);
+      if (overlap > 0.0) {
+        p[i] = overlap / (m.z0 * mesh.width[i]);
+        mass += overlap / m.z0;
+      }
     }
+    if (!(mass > 0.0)) {
+      throw std::runtime_error("rlf_solve: start distribution missed the grid.");
+    }
+    for (int i = 0; i < n; ++i) p[i] /= mass;
+    return;
+  }
+  int i = static_cast<int>(
+    std::lower_bound(mesh.node.begin(), mesh.node.end(), 0.0) -
+    mesh.node.begin());
+  if (i <= 0) {
+    p[0] = 1.0 / mesh.width[0];
+  } else if (i >= n) {
+    p[n - 1] = 1.0 / mesh.width[n - 1];
   } else {
-    res.t.push_back(time);
-    res.pdf.push_back(flux_prev);
-    res.cdf.push_back(0.0);
-    res.surv.push_back(1.0);
+    const double w =
+      (0.0 - mesh.node[i - 1]) / (mesh.node[i] - mesh.node[i - 1]);
+    p[i - 1] = (1.0 - w) / mesh.width[i - 1];
+    p[i] = w / mesh.width[i];
   }
+}
 
-  std::vector<double> rhs(n, 0.0), next(n, 0.0), work(n, 0.0),
-    stage(n, 0.0);
-
-  auto record_step = [&](double step, bool backward_euler) {
-    const double old_time = time;
-    const double old_flux = flux_prev;
-    const double old_survivor = survivor_prev;
-    if (explicit_inverse) {
-      if (backward_euler) {
-        rlf_dense_matvec(inverse.value, p, next, n);
-      } else if (use_collapsed_step) {
-        rlf_dense_matvec(step_matrix, p, next, n);
-      } else {
-        // The collapsed TR--BDF2 propagator is
-        //   2a M^-2 - (a+b) M^-1.
-        // For a short block, two GEMVs are cheaper than forming M^-2 with a
-        // GEMM.  This is algebraically identical to the precomputed path.
-        rlf_dense_matvec(inverse.value, p, stage, n);
-        rlf_dense_matvec(inverse.value, stage, next, n);
-        for (int i = 0; i < n; ++i) {
-          next[i] =
-            2.0 * RLF_TRBDF2_A * next[i] -
-            (RLF_TRBDF2_A + RLF_TRBDF2_B) * stage[i];
-        }
-      }
-    } else if (matrix_free) {
-      // Warm-starting from the current density costs nothing and saves an
-      // iteration or two, since consecutive steps differ by O(dt).
-      auto solve = [&](const double* b, std::vector<double>& out) {
-        out = p;
-        if (rlf::rlf_toeplitz_solve(mf, b, out.data(),
-                                    RLF_MATRIX_FREE_TOL) < 0) {
-          throw std::runtime_error(
-            "rlf_solve: matrix-free stage solve did not converge.");
-        }
-      };
-      if (backward_euler) {
-        solve(p.data(), next);
-      } else {
-        // (I + c L) p = 2 p - (I - c L) p, applied with one compact FFT matvec.
-        rlf::rlf_toeplitz_apply_shifted(
-          mf, p.data(), rhs.data());
-        solve(rhs.data(), stage);
-        for (int i = 0; i < n; ++i) {
-          rhs[i] = RLF_TRBDF2_A * stage[i] - RLF_TRBDF2_B * p[i];
-        }
-        solve(rhs.data(), next);
-      }
-    } else if (backward_euler) {
-      lu.solve(p.data(), next.data(), work.data());
-    } else {
-      // Trapezoidal stage over gamma*step, then the BDF2 stage; both share the
-      // factorisation of I - (gamma/2) step L.
-      apply_shifted(op, RLF_TRBDF2_IMPLICIT * step, p, rhs);
-      lu.solve(rhs.data(), stage.data(), work.data());
-      for (int i = 0; i < n; ++i) {
-        rhs[i] = RLF_TRBDF2_A * stage[i] - RLF_TRBDF2_B * p[i];
-      }
-      lu.solve(rhs.data(), next.data(), work.data());
-    }
-
-    p.swap(next);
-    time += step;
-
-    const double min_p = density_min(p);
-    res.min_density = std::min(res.min_density, min_p);
-    if (min_p < -1e-8 / h) {
-      throw std::runtime_error(
-        "rlf_solve: material negative density; increase nt or nx.");
-    }
-
-    const double flux = weighted_rate(op.upper_kill, p, h);
-    const double lower = weighted_rate(op.lower_censor, p, h);
-    cdf_flux += 0.5 * step * (flux_prev + flux);
-    lower_pressure += 0.5 * step * (lower_prev + lower);
-    flux_prev = flux;
-    lower_prev = lower;
-
-    const double mass_raw = density_mass(p, h);
-    double survivor = std::min(1.0, std::max(0.0, mass_raw));
-    if (survivor > survivor_prev) survivor = survivor_prev;
-    survivor_prev = survivor;
-    double cdf_mass = std::min(1.0, std::max(0.0, 1.0 - mass_raw));
-    if (cdf_mass < cdf_prev) cdf_mass = cdf_prev;
-    cdf_prev = cdf_mass;
-    // Trapezoidal integration of the exit flux and the surviving mass agree
-    // only to the order of the time discretisation: TR-BDF2 advances mass with
-    // its own stage quadrature (weights 0.354, 0.354, 0.293 on t_n, the stage
-    // time and t_n+1), which the endpoint trapezoid does not reproduce.  The
-    // residual is therefore an O(dt^2) convergence diagnostic rather than the
-    // exact identity the Crank-Nicolson march produced.
-    res.flux_mass_mismatch =
-      std::max(res.flux_mass_mismatch,
-               std::abs((1.0 - mass_raw) - cdf_flux));
-
-    if (sparse) {
-      while (query_pos < sorted_queries.size() &&
-             sorted_queries[query_pos] <= time) {
-        const double tq = sorted_queries[query_pos];
-        const double w = (tq - old_time) / (time - old_time);
-        const double qpdf =
-          positive_log_interpolate(old_flux, flux, w);
-        const double qsurv =
-          positive_log_interpolate(old_survivor, survivor, w);
-        res.t.push_back(tq);
-        res.pdf.push_back(std::max(0.0, qpdf));
-        res.surv.push_back(std::min(1.0, std::max(0.0, qsurv)));
-        res.cdf.push_back(1.0 - res.surv.back());
-        ++query_pos;
-      }
-    } else {
-      res.t.push_back(time);
-      res.pdf.push_back(flux);
-      res.cdf.push_back(cdf_mass);
-      res.surv.push_back(survivor);
-    }
-  };
-
-  // One lhs buffer is reused across the graded-time blocks: the dimensions
-  // are fixed for the whole solve, so only its contents are refilled.
-  std::vector<double> lhs;
-  // Build the left-hand side once per graded-time block.  Both TR-BDF2 stages
-  // use I - (gamma/2) dt L, and with the explicit inverse available the two
-  // stages collapse into one dense matvec per step.
-  auto update_lhs_and_factor = [&](double step, int block_steps) {
-    if (matrix_free) {
-      mf = rlf::rlf_build_toeplitz_system(
-        op.toeplitz_col.data(), op.toeplitz_row.data(),
-        op.toeplitz_diag.data(), n, RLF_TRBDF2_IMPLICIT * step);
-      return;
-    }
-    rlf_trbdf2_lhs(op, step, lhs);
-    if (explicit_inverse) {
-      if (!inverse.build(n, lhs)) {
-        throw std::runtime_error(
-          "rlf_solve: inversion of the nonlocal operator failed.");
-      }
-      // One GEMM plus one GEMV per step crosses two GEMVs per step at roughly
-      // half the matrix dimension on the supported BLAS backends.
-      use_collapsed_step = 2 * block_steps >= n;
-      if (use_collapsed_step) {
-        step_matrix = rlf_trbdf2_step_matrix(inverse.value, n);
-      } else {
-        step_matrix.clear();
-      }
-    } else if (!lu.factor(n, lhs)) {
-      throw std::runtime_error(
-        "rlf_solve: factorization of the nonlocal operator failed.");
-    }
-  };
-
-  for (size_t b = 0; b < schedule.dt.size(); ++b) {
-    const double dt_b = schedule.dt[b];
-    update_lhs_and_factor(dt_b, schedule.steps[b]);
-    if (b == 0) {
-      for (int k = 0; k < RLF_STARTUP_STEPS; ++k) {
-        record_step(startup_step, true);
-      }
-    }
-    for (int k = 0; k < schedule.steps[b]; ++k) record_step(dt_b, false);
-  }
-
-  if (sparse && !sorted_queries.empty()) {
-    // The schedule reaches t_max analytically; floating accumulation can finish
-    // a few ulps below it.  Match the full-grid endpoint clamp for such queries.
-    while (query_pos < sorted_queries.size()) {
-      res.t.push_back(sorted_queries[query_pos]);
-      res.pdf.push_back(std::max(0.0, flux_prev));
-      res.surv.push_back(survivor_prev);
-      res.cdf.push_back(1.0 - survivor_prev);
-      ++query_pos;
-    }
-  }
-
-  res.lower_boundary_pressure = lower_pressure;
+inline RLF_Result rlf_solve_graded(
+    const RLF_Model& m, double t_max, const RLF_Mesh& mesh, int n_out,
+    const std::vector<double>* query_times = nullptr,
+    RLF_KrylovWork* scratch = nullptr, int m_fixed = 0) {
+  const RLF_Operator op = build_rlf_operator_graded(m, mesh);
+  std::vector<double> p;
+  rlf_initial_density_mesh(m, mesh, p);
+  RLF_Result res = rlf_propagate(
+    op, mesh.width.back(), p, t_max, n_out, query_times, scratch, m_fixed);
+  res.x_lo = mesh.face.front();
+  res.nx_used = mesh.n;
   return res;
 }
 
@@ -1176,10 +1899,21 @@ inline bool rlf_fast_path_safe(const RLF_Model& m, double t_max,
   // is the designed operating point, not a warning sign.
   constexpr double RLF_FAST_PRESSURE_TOL = 0.01;
   constexpr double RLF_FAST_DX_SCALE_TOL = 0.10;
+  // Relative, because min_density now is: the Krylov reconstruction leaves a
+  // trough a few parts in 10^7 of the peak, which is not a resolution problem
+  // and must not send an ordinary solve down the refinement path.
+  constexpr double RLF_FAST_UNDERSHOOT_TOL = -1e-5;
   constexpr int RLF_FAST_MIN_INTERVALS = 160;
   if (M < RLF_FAST_MIN_INTERVALS) return false;
   if (!(base.lower_boundary_pressure <= RLF_FAST_PRESSURE_TOL)) return false;
-  if (base.min_density < -1e-10 / base.dx) return false;
+  if (base.min_density < RLF_FAST_UNDERSHOOT_TOL) return false;
+  // Two independent statements about the propagator itself: the defect against
+  // the equation, and whether the modal expansion that evaluates it is a
+  // cancelling sum.  Neither is a stopping rule for the Krylov search -- see
+  // rlf_build_modes -- but either being out of range is a reason to make a
+  // solve prove itself by refinement rather than waving it through.
+  if (base.krylov_residual > RLF_KRYLOV_RESID) return false;
+  if (!(base.eigen_condition < RLF_KRYLOV_CONDITION)) return false;
   if (base.flux_mass_mismatch > 1e-3) return false;
   if (base.operator_conservation_error > 1e-10) return false;
 
@@ -1195,13 +1929,11 @@ inline bool rlf_fast_path_safe(const RLF_Model& m, double t_max,
 // requested resolutions: Nt may grow for CN positivity, while M may grow first
 // to verify lower-domain truncation and then to verify spatial discretization.
 inline RLF_Result rlf_solve(const RLF_Model& m, double t_max,
-                            int M = 200, int Nt = 400, bool adaptive = true,
-                            double tgrade = 1.0,
-                            bool explicit_inverse = true,
+                            int M = 200, int n_out = 400, bool adaptive = true,
                             const std::vector<double>* query_times = nullptr,
                             double lower_extent_override = -1.0,
-                            const RLF_TimeSchedule* schedule_override = nullptr,
-                            RLF_TimeSchedule* schedule_used = nullptr) {
+                            RLF_KrylovWork* scratch = nullptr,
+                            int m_fixed = 0) {
   if (!(m.v > 0.0)) {
     throw std::invalid_argument("rlf_solve: v must be positive.");
   }
@@ -1222,7 +1954,7 @@ inline RLF_Result rlf_solve(const RLF_Model& m, double t_max,
   }
 
   M = std::max(M, 30);
-  Nt = std::max(Nt, 50);
+  n_out = std::max(n_out, 50);
 
   constexpr double RLF_DOMAIN_FACTOR = 1.5;
   constexpr double RLF_GRID_FACTOR = 1.5;
@@ -1247,35 +1979,14 @@ inline RLF_Result rlf_solve(const RLF_Model& m, double t_max,
       ? std::numeric_limits<int>::max()
       : std::max(1200, 4 * M);
 
-  // A step that produces materially negative density is recoverable: the
-  // schedule is refined and the march retried.  Throwing straight out of a
-  // likelihood evaluation would abort a whole sampling run.
-  auto solve_with_retry = [&](int M_use, double extent_use,
-                              const std::vector<double>* queries) {
-    int steps = Nt;
-    for (int attempt = 0; attempt < 4; ++attempt) {
-      try {
-        // The pinned schedule is trusted only on the first attempt: if it
-        // proves unstable for this member's operator, later attempts compute
-        // and refine their own stable schedule as an unpinned solve would.
-        return rlf_solve_fixed_grid(
-          m, t_max, M_use, steps, extent_use, tgrade, explicit_inverse,
-          queries, attempt == 0 ? schedule_override : nullptr,
-          schedule_used);
-      } catch (const std::runtime_error&) {
-        // Refining past the stability ceiling would spend the budget the
-        // ceiling exists to bound, so stop retrying once it is reached.
-        const int ceiling = std::max(1, rlf_max_time_steps);
-        if (attempt == 3 || steps >= ceiling) throw;
-        steps = std::min(steps * 4, ceiling);
-      }
-    }
-    throw std::runtime_error("rlf_solve: unreachable retry state.");
+  auto solve = [&](int M_use, double extent_use,
+                   const std::vector<double>* queries) {
+    return rlf_solve_fixed_grid(
+      m, t_max, M_use, n_out, extent_use, queries, scratch, m_fixed);
   };
 
   RLF_Result accepted =
-    solve_with_retry(intervals, lower_extent,
-                     adaptive ? nullptr : query_times);
+    solve(intervals, lower_extent, adaptive ? nullptr : query_times);
   const double initial_h = accepted.dx;
 
   // Most routine parameter points are comfortably inside the initial
@@ -1298,7 +2009,7 @@ inline RLF_Result rlf_solve(const RLF_Model& m, double t_max,
     if (expanded_intervals > max_intervals) break;
 
     RLF_Result candidate =
-      solve_with_retry(expanded_intervals, expanded_extent, nullptr);
+      solve(expanded_intervals, expanded_extent, nullptr);
     const RLF_Comparison error =
       compare_rlf_results(accepted, candidate, t_max);
     candidate.domain_pdf_error = error.pdf;
@@ -1332,7 +2043,7 @@ inline RLF_Result rlf_solve(const RLF_Model& m, double t_max,
     const int refined_intervals = static_cast<int>(proposed);
 
     RLF_Result candidate =
-      solve_with_retry(refined_intervals, lower_extent, nullptr);
+      solve(refined_intervals, lower_extent, nullptr);
     const RLF_Comparison error =
       compare_rlf_results(accepted, candidate, t_max);
     candidate.domain_pdf_error = accepted.domain_pdf_error;
@@ -1479,29 +2190,33 @@ inline bool rlf_key(double v, double sigma, double alpha, double B, double A,
 // option rather than a function of alpha: varying resolution with alpha adds
 // parameter-dependent discretization bias and roughness to the likelihood.
 struct Grid {
-  int nx = 160;
+  // Core cells of the graded mesh; the tail below the core is sized
+  // logarithmically on top of this.  See rlf_auto_mesh.
+  int nx = 70;
+  // Spacing of the returned time grid on the complete-grid path, where later
+  // arbitrary queries are answered by interpolation.  It is not a time step:
+  // the propagator carries no time discretisation, so this only trades
+  // interpolation error
+  // against the size of a cache entry.  The sparse path ignores it and
+  // evaluates the modal form at the requested times directly.
   double dt_target = 1.6e-2;
-  int nt_min = 50;
-  int nt_max = 20000;
-  double tgrade = 1.0;
+  int samples_min = 50;
+  int samples_max = 20000;
   bool adaptive = false;
-  bool explicit_inverse = true;
   bool sparse_output = true;
   // Solve long-horizon rows separately from the bulk; see rlf_horizon_bucket.
   bool horizon_split = true;
   // Pair each solve with a finer one and Richardson-extrapolate; see
   // rlf_cache_solve.
   bool richardson = true;
-  double richardson_ratio = 1.25;
-  // SIMD batching is optional; keep it disabled unless explicitly requested.
-  bool simd_batch = false;
+  double richardson_ratio = 1.4;
 
-  int nt_for(double t_max) const {
+  int samples_for(double t_max) const {
     const double wanted =
       std::ceil(t_max / std::max(dt_target, 1e-8));
-    const int bounded = wanted < static_cast<double>(nt_max)
-      ? static_cast<int>(wanted) : nt_max;
-    return std::max(nt_min, bounded);
+    const int bounded = wanted < static_cast<double>(samples_max)
+      ? static_cast<int>(wanted) : samples_max;
+    return std::max(samples_min, bounded);
   }
 };
 
@@ -1516,6 +2231,9 @@ struct Entry {
 
 struct SolveCache {
   Grid grid;
+  // Krylov scratch, held here so the O(n^2) shifted operator and the Arnoldi
+  // basis are allocated once per cache rather than once per solve.
+  RLF_KrylovWork scratch;
   std::vector<Entry> entries;
   std::unordered_map<Key, int, KeyHash> index;
   std::vector<int> row_group;
@@ -1551,43 +2269,6 @@ struct SolveCache {
     prepared_isok_values.clear();
   }
 };
-
-#if defined(__AVX512F__) && defined(__FMA__)
-constexpr size_t RLF_BATCH_LANES = 8;
-template <size_t LANES> struct RLFSimd;
-template <> struct RLFSimd<8> {
-  using Vec = __m512d;
-  static inline Vec zero() { return _mm512_setzero_pd(); }
-  static inline Vec load(const double* x) { return _mm512_loadu_pd(x); }
-  static inline void store(double* x, Vec v) { _mm512_storeu_pd(x, v); }
-  static inline Vec fmadd(Vec a, Vec b, Vec c) {
-    return _mm512_fmadd_pd(a, b, c);
-  }
-};
-template <> struct RLFSimd<4> {
-  using Vec = __m256d;
-  static inline Vec zero() { return _mm256_setzero_pd(); }
-  static inline Vec load(const double* x) { return _mm256_loadu_pd(x); }
-  static inline void store(double* x, Vec v) { _mm256_storeu_pd(x, v); }
-  static inline Vec fmadd(Vec a, Vec b, Vec c) {
-    return _mm256_fmadd_pd(a, b, c);
-  }
-};
-#elif defined(__AVX2__) && defined(__FMA__)
-constexpr size_t RLF_BATCH_LANES = 4;
-template <size_t LANES> struct RLFSimd;
-template <> struct RLFSimd<4> {
-  using Vec = __m256d;
-  static inline Vec zero() { return _mm256_setzero_pd(); }
-  static inline Vec load(const double* x) { return _mm256_loadu_pd(x); }
-  static inline void store(double* x, Vec v) { _mm256_storeu_pd(x, v); }
-  static inline Vec fmadd(Vec a, Vec b, Vec c) {
-    return _mm256_fmadd_pd(a, b, c);
-  }
-};
-#else
-constexpr size_t RLF_BATCH_LANES = 4;
-#endif
 
 inline void rlf_store_result(const Key& key, double t_max,
                              const RLF_Result& result, bool complete_grid,
@@ -1635,6 +2316,13 @@ inline void rlf_store_result(const Key& key, double t_max,
 // for 3.6x the time, and it improves every cell of the grid.  Refining
 // instead is far worse value -- raw nx = 288 costs 2.3x the pair and is still
 // 1.7x less accurate.
+// Convergence order at the absorbing edge, 1 + alpha/2 rounded to a single
+// number over the supported range.  Using the exact alpha-dependent exponent
+// was measured and is not better: it improves the median and costs the tail.
+inline double RLF_EDGE_ORDER = 1.5;
+
+// `ratio` is the effective error ratio between the two members, r^q for a
+// scheme of order q -- not the mesh ratio itself.
 inline bool rlf_extrapolate(const RLF_Result& coarse, const RLF_Result& fine,
                             double ratio, RLF_Result& out) {
   const size_t n = fine.t.size();
@@ -1680,7 +2368,7 @@ inline bool rlf_extrapolate(const RLF_Result& coarse, const RLF_Result& fine,
 
 inline void rlf_cache_solve(const Key& key, double t_max, const Grid& grid,
                             const std::vector<double>* query_times,
-                            Entry& out) {
+                            Entry& out, RLF_KrylovWork* scratch = nullptr) {
   RLF_Model model;
   model.v = key.v;
   model.sigma = 1.0;
@@ -1689,346 +2377,56 @@ inline void rlf_cache_solve(const Key& key, double t_max, const Grid& grid,
   model.z0 = key.A;
 
   const int nx = std::max(grid.nx, 30);
-  const int nt = grid.nt_for(t_max);
+  const int samples = grid.samples_for(t_max);
   const int nx_fine =
     static_cast<int>(std::lround(nx * grid.richardson_ratio));
 
-  if (grid.richardson && !grid.adaptive && nx_fine > nx) {
-    const double extent = rlf_lower_extent(model, t_max, nx);
-    RLF_TimeSchedule fine_schedule;
-    const RLF_Result fine = rlf_solve(
-      model, t_max, nx_fine, nt, false, grid.tgrade, grid.explicit_inverse,
-      query_times, extent, nullptr, &fine_schedule);
-    // Both members share one pre-startup schedule: the fine solve reports
-    // the base schedule it stabilised against its own operator, and the
-    // coarse solve copies it rather than deriving a coarser-grid schedule
-    // whose different exit rate would shift the coarse time base by a
-    // non-common-mode amount that Richardson extrapolation amplifies.  On
-    // the complete path neither solve receives query times, so the coarse
-    // result stays full-grid yet lands on exactly the fine solve's times;
-    // on the sparse path both are sampled at the requested queries.  If the
-    // pinned schedule is unstable for the coarse operator, its retries fall
-    // back to their own stable schedules and rlf_extrapolate declines to
-    // blend off-common-base results; on the complete path that triggers a
-    // one-shot compatibility re-solve of the coarse member at the fine time
-    // base (same extent, unpinned) before falling back to fine.
-    RLF_Result coarse = rlf_solve(
-      model, t_max, nx, nt, false, grid.tgrade, grid.explicit_inverse,
-      query_times, extent, &fine_schedule);
+  if (grid.adaptive) {
+    // Validation path: the uniform grid with its self-checking domain and
+    // resolution refinement, kept so the graded solver has something
+    // independent to be measured against.
+    const RLF_Result result = rlf_solve(
+      model, t_max, nx, samples, true, query_times, -1.0, scratch);
+    rlf_store_result(key, t_max, result, query_times == nullptr, out);
+    return;
+  }
+
+  if (grid.richardson && nx_fine > nx) {
+    // What is left after grading is the absorbing edge.  The killed density
+    // vanishes like (b0 - x)^(alpha/2), an algebraic singularity, and the
+    // measured order of the scheme is 1 + alpha/2 rather than 2 because of it.
+    // Refining into the edge does not help -- the profile is scale free, so a
+    // geometric mesh meets the same relative closure error at every level, and
+    // it costs accuracy elsewhere by making the widths vary.  Extrapolating
+    // does help, and the exponent is known, so the pair is combined at
+    // r^1.5 rather than at r.  Measured over the parameter net that is worth
+    // roughly a factor of three in the ninetieth-percentile error for a factor
+    // of 1.5 in cost, which is the better half of the frontier.
+    //
+    // The two members share the domain and the tail grading and differ only in
+    // the core cell count, so their meshes are nested in the sense the
+    // combination needs, and the fine member is solved first so that the
+    // coarse one can reuse its Krylov dimension without re-climbing.
+    const RLF_Mesh fine_mesh = rlf_auto_mesh(model, t_max, nx_fine);
+    const RLF_Mesh coarse_mesh = rlf_auto_mesh(model, t_max, nx);
+    const RLF_Result fine = rlf_solve_graded(
+      model, t_max, fine_mesh, samples, query_times, scratch);
+    const RLF_Result coarse = rlf_solve_graded(
+      model, t_max, coarse_mesh, samples, query_times, scratch,
+      fine.krylov_dim);
     RLF_Result blended;
-    bool ok = rlf_extrapolate(
-      coarse, fine, static_cast<double>(nx_fine) / nx, blended);
-    if (!ok && query_times == nullptr) {
-      // The pinned schedule was unstable for the coarse operator, so its
-      // retries used their own stable schedule and left the coarse time base
-      // off the fine solve's times.  Re-solve the coarse member once at the
-      // fine time base, same extent and unpinned so it can use its own
-      // stable schedule, then retry the blend before falling back to fine.
-      coarse = rlf_solve(
-        model, t_max, nx, nt, false, grid.tgrade, grid.explicit_inverse,
-        &fine.t, extent, nullptr);
-      ok = rlf_extrapolate(
-        coarse, fine, static_cast<double>(nx_fine) / nx, blended);
-    }
+    const double ratio = static_cast<double>(fine_mesh.n) / coarse_mesh.n;
+    const bool ok = rlf_extrapolate(
+      coarse, fine, std::pow(ratio, RLF_EDGE_ORDER), blended);
     rlf_store_result(key, t_max, ok ? blended : fine,
                      query_times == nullptr, out);
     return;
   }
 
-  const RLF_Result result = rlf_solve(
-    model, t_max, nx, nt, grid.adaptive,
-    grid.tgrade, grid.explicit_inverse, query_times);
+  const RLF_Mesh mesh = rlf_auto_mesh(model, t_max, nx);
+  const RLF_Result result =
+    rlf_solve_graded(model, t_max, mesh, samples, query_times, scratch);
   rlf_store_result(key, t_max, result, query_times == nullptr, out);
-}
-
-struct BatchAction {
-  double step = 0.0;
-  size_t block = 0;
-  bool backward_euler = false;
-};
-
-struct BatchLane {
-  RLF_Model model;
-  RLF_Operator op;
-  double h = 0.0;
-  std::vector<double> initial;
-  std::vector<std::vector<double>> step_matrix;
-  std::vector<double> startup_matrix;
-  std::vector<BatchAction> actions;
-  std::vector<double> queries;
-  RLF_Result result;
-};
-
-inline BatchLane rlf_build_batch_lane(
-    const Key& key, double t_max, const Grid& grid,
-    const std::vector<double>* query_times) {
-  BatchLane lane;
-  lane.model.v = key.v;
-  lane.model.sigma = 1.0;
-  lane.model.alpha = key.alpha;
-  lane.model.b0 = key.b;
-  lane.model.z0 = key.A;
-
-  const double lower_extent =
-    rlf_lower_extent(lane.model, t_max, std::max(grid.nx, 30));
-  const int M = std::max(grid.nx, 30);
-  const int n = M - 1;
-  const double x_lo = -lower_extent;
-  lane.h = (lane.model.b0 - x_lo) / M;
-  lane.op = build_rlf_operator(lane.model, n, lane.h, false);
-  rlf_initial_density(lane.model, x_lo, lane.h, n, lane.initial);
-
-  RLF_TimeSchedule schedule = rlf_stable_time_schedule(
-    t_max, grid.nt_for(t_max), lane.op.max_exit_rate, RLF_TRBDF2_SAFE,
-    grid.tgrade);
-  const double startup_step = rlf_apply_startup(schedule, t_max);
-  lane.step_matrix.resize(schedule.dt.size());
-  // One lhs buffer and one LAPACK scratch set are reused across the blocks;
-  // only the per-block step matrices are retained.
-  std::vector<double> lhs;
-  RLF_DenseInverse inverse;
-  for (size_t block = 0; block < schedule.dt.size(); ++block) {
-    rlf_trbdf2_lhs(lane.op, schedule.dt[block], lhs);
-    if (!inverse.build(n, lhs)) {
-      throw std::runtime_error(
-        "rlf_solve: batched inversion of the nonlocal operator failed.");
-    }
-    if (block == 0) lane.startup_matrix = inverse.value;
-    lane.step_matrix[block] = rlf_trbdf2_step_matrix(inverse.value, n);
-  }
-
-  for (int step = 0; step < RLF_STARTUP_STEPS; ++step) {
-    lane.actions.push_back({startup_step, 0, true});
-  }
-  for (size_t block = 0; block < schedule.dt.size(); ++block) {
-    for (int step = 0; step < schedule.steps[block]; ++step) {
-      lane.actions.push_back({schedule.dt[block], block, false});
-    }
-  }
-
-  if (query_times != nullptr) {
-    lane.queries = *query_times;
-    std::sort(lane.queries.begin(), lane.queries.end());
-    lane.queries.erase(
-      std::unique(lane.queries.begin(), lane.queries.end()),
-      lane.queries.end());
-    lane.result.t.reserve(lane.queries.size());
-    lane.result.pdf.reserve(lane.queries.size());
-    lane.result.cdf.reserve(lane.queries.size());
-    lane.result.surv.reserve(lane.queries.size());
-  } else {
-    lane.result.t.reserve(lane.actions.size() + 1);
-    lane.result.pdf.reserve(lane.actions.size() + 1);
-    lane.result.cdf.reserve(lane.actions.size() + 1);
-    lane.result.surv.reserve(lane.actions.size() + 1);
-  }
-  return lane;
-}
-
-template <size_t LANES>
-inline std::vector<RLF_Result> rlf_solve_batch_lanes(
-    const std::vector<Key>& keys, const std::vector<double>& horizons,
-    const Grid& grid,
-    const std::vector<std::vector<double>>* query_times = nullptr) {
-  const size_t num_lanes = keys.size();
-  std::vector<BatchLane> lanes;
-  lanes.reserve(num_lanes);
-  size_t max_actions = 0;
-  for (size_t lane = 0; lane < num_lanes; ++lane) {
-    lanes.push_back(rlf_build_batch_lane(
-      keys[lane], horizons[lane], grid,
-      query_times == nullptr ? nullptr : &(*query_times)[lane]));
-    max_actions = std::max(max_actions, lanes.back().actions.size());
-  }
-
-  const int n = std::max(grid.nx, 30) - 1;
-  std::vector<double> state(static_cast<size_t>(n) * LANES, 0.0);
-  std::vector<double> next(static_cast<size_t>(n) * LANES, 0.0);
-  std::vector<double> matrix(
-    static_cast<size_t>(n) * n * LANES, 0.0);
-  const std::vector<double>* selected[LANES] = {};
-  const std::vector<double>* previous_selected[LANES] = {};
-  double time[LANES] = {};
-  double pdf[LANES] = {};
-  double survivor[LANES] = {};
-  size_t query_pos[LANES] = {};
-
-  for (size_t lane = 0; lane < LANES; ++lane) {
-    survivor[lane] = 1.0;
-    if (lane >= num_lanes) continue;
-    for (int i = 0; i < n; ++i) {
-      state[static_cast<size_t>(i) * LANES + lane] =
-        lanes[lane].initial[i];
-    }
-    pdf[lane] = weighted_rate(
-      lanes[lane].op.upper_kill, lanes[lane].initial, lanes[lane].h);
-    if (query_times == nullptr) {
-      lanes[lane].result.t.push_back(0.0);
-      lanes[lane].result.pdf.push_back(pdf[lane]);
-      lanes[lane].result.cdf.push_back(0.0);
-      lanes[lane].result.surv.push_back(1.0);
-    } else {
-      while (query_pos[lane] < lanes[lane].queries.size() &&
-             lanes[lane].queries[query_pos[lane]] <= 0.0) {
-        lanes[lane].result.t.push_back(
-          lanes[lane].queries[query_pos[lane]]);
-        lanes[lane].result.pdf.push_back(0.0);
-        lanes[lane].result.cdf.push_back(0.0);
-        lanes[lane].result.surv.push_back(1.0);
-        ++query_pos[lane];
-      }
-    }
-  }
-
-  for (size_t action_index = 0;
-       action_index < max_actions; ++action_index) {
-    bool matrix_changed = false;
-    bool active[LANES] = {};
-    for (size_t lane = 0; lane < LANES; ++lane) {
-      active[lane] =
-        lane < num_lanes && action_index < lanes[lane].actions.size();
-      if (active[lane]) {
-        const BatchAction& action = lanes[lane].actions[action_index];
-        selected[lane] = action.backward_euler
-          ? &lanes[lane].startup_matrix
-          : &lanes[lane].step_matrix[action.block];
-      } else {
-        selected[lane] = nullptr;
-      }
-      if (selected[lane] != previous_selected[lane]) matrix_changed = true;
-    }
-
-    if (matrix_changed) {
-      for (int i = 0; i < n; ++i) {
-        for (int j = 0; j < n; ++j) {
-          const size_t ij = static_cast<size_t>(i) * n + j;
-          const size_t base = ij * LANES;
-          for (size_t lane = 0; lane < LANES; ++lane) {
-            matrix[base + lane] = selected[lane] == nullptr
-              ? (i == j ? 1.0 : 0.0)
-              : (*selected[lane])[ij];
-          }
-        }
-      }
-      for (size_t lane = 0; lane < LANES; ++lane) {
-        previous_selected[lane] = selected[lane];
-      }
-    }
-
-    for (int i = 0; i < n; ++i) {
-#if (defined(__AVX512F__) || defined(__AVX2__)) && defined(__FMA__)
-      using Simd = RLFSimd<LANES>;
-      using Vec = typename Simd::Vec;
-      Vec sum = Simd::zero();
-      for (int j = 0; j < n; ++j) {
-        const Vec coefficient = Simd::load(
-          &matrix[(static_cast<size_t>(i) * n + j) * LANES]);
-        const Vec value = Simd::load(
-          &state[static_cast<size_t>(j) * LANES]);
-        sum = Simd::fmadd(coefficient, value, sum);
-      }
-      Simd::store(&next[static_cast<size_t>(i) * LANES], sum);
-#else
-      for (size_t lane = 0; lane < LANES; ++lane) {
-        double sum = 0.0;
-        for (int j = 0; j < n; ++j) {
-          sum += matrix[
-            (static_cast<size_t>(i) * n + j) * LANES + lane] *
-            state[static_cast<size_t>(j) * LANES + lane];
-        }
-        next[static_cast<size_t>(i) * LANES + lane] = sum;
-      }
-#endif
-    }
-    state.swap(next);
-
-    for (size_t lane = 0; lane < num_lanes; ++lane) {
-      if (!active[lane]) continue;
-      const BatchAction& action = lanes[lane].actions[action_index];
-      const double old_time = time[lane];
-      const double old_pdf = pdf[lane];
-      const double old_survivor = survivor[lane];
-      time[lane] += action.step;
-
-      double mass = 0.0;
-      double flux = 0.0;
-      double min_density = std::numeric_limits<double>::infinity();
-      for (int i = 0; i < n; ++i) {
-        const double value =
-          state[static_cast<size_t>(i) * LANES + lane];
-        mass += value;
-        flux += lanes[lane].op.upper_kill[i] * value;
-        min_density = std::min(min_density, value);
-      }
-      if (min_density < -1e-8 / lanes[lane].h) {
-        throw std::runtime_error(
-          "rlf_solve: material negative density in SIMD batch.");
-      }
-      mass *= lanes[lane].h;
-      flux *= lanes[lane].h;
-      if (!(flux > 0.0)) flux = 0.0;
-      survivor[lane] =
-        std::min(old_survivor, std::min(1.0, std::max(0.0, mass)));
-      pdf[lane] = flux;
-
-      if (query_times == nullptr) {
-        lanes[lane].result.t.push_back(time[lane]);
-        lanes[lane].result.pdf.push_back(pdf[lane]);
-        lanes[lane].result.surv.push_back(survivor[lane]);
-        lanes[lane].result.cdf.push_back(1.0 - survivor[lane]);
-      } else {
-        while (query_pos[lane] < lanes[lane].queries.size() &&
-               lanes[lane].queries[query_pos[lane]] <= time[lane]) {
-          const double query = lanes[lane].queries[query_pos[lane]];
-          const double w =
-            (query - old_time) / (time[lane] - old_time);
-          const double query_pdf =
-            positive_log_interpolate(old_pdf, pdf[lane], w);
-          const double query_survivor = positive_log_interpolate(
-            old_survivor, survivor[lane], w);
-          lanes[lane].result.t.push_back(query);
-          lanes[lane].result.pdf.push_back(std::max(0.0, query_pdf));
-          lanes[lane].result.surv.push_back(
-            std::min(1.0, std::max(0.0, query_survivor)));
-          lanes[lane].result.cdf.push_back(
-            1.0 - lanes[lane].result.surv.back());
-          ++query_pos[lane];
-        }
-      }
-    }
-  }
-
-  std::vector<RLF_Result> results(num_lanes);
-  for (size_t lane = 0; lane < num_lanes; ++lane) {
-    while (query_times != nullptr &&
-           query_pos[lane] < lanes[lane].queries.size()) {
-      lanes[lane].result.t.push_back(
-        lanes[lane].queries[query_pos[lane]]);
-      lanes[lane].result.pdf.push_back(pdf[lane]);
-      lanes[lane].result.surv.push_back(survivor[lane]);
-      lanes[lane].result.cdf.push_back(1.0 - survivor[lane]);
-      ++query_pos[lane];
-    }
-    results[lane] = std::move(lanes[lane].result);
-  }
-  return results;
-}
-
-inline std::vector<RLF_Result> rlf_solve_batch(
-    const std::vector<Key>& keys, const std::vector<double>& horizons,
-    const Grid& grid,
-    const std::vector<std::vector<double>>* query_times = nullptr) {
-#if defined(__AVX512F__) && defined(__FMA__)
-  if (keys.size() <= 4) {
-    return rlf_solve_batch_lanes<4>(
-      keys, horizons, grid, query_times);
-  }
-  return rlf_solve_batch_lanes<8>(
-    keys, horizons, grid, query_times);
-#else
-  return rlf_solve_batch_lanes<4>(
-    keys, horizons, grid, query_times);
-#endif
 }
 
 inline bool entry_has_queries(const Entry& entry,
@@ -2066,7 +2464,7 @@ inline int cache_get(SolveCache& cache, const Key& key, double t_need) {
     Entry replacement;
     try {
       rlf_cache_solve(key, std::max(t_need, entry.t_max), cache.grid, nullptr,
-                      replacement);
+                      replacement, &cache.scratch);
     } catch (const std::exception&) {
       return -1;
     }
@@ -2077,7 +2475,7 @@ inline int cache_get(SolveCache& cache, const Key& key, double t_need) {
 
   Entry fresh;
   try {
-    rlf_cache_solve(key, t_need, cache.grid, nullptr, fresh);
+    rlf_cache_solve(key, t_need, cache.grid, nullptr, fresh, &cache.scratch);
   } catch (const std::exception&) {
     return -1;
   }
@@ -2095,12 +2493,11 @@ inline void cache_get_batch(
   const size_t n = keys.size();
   out_indices.assign(n, -1);
   // Two kinds of work are separated here.  A key with no cached entry is
-  // fresh and goes through the (possibly SIMD-batched, sparse) chunked path
-  // below.  A key whose entry exists but cannot answer this request -- sparse
-  // output missing one of the requested query times, or a horizon beyond the
-  // stored march -- is upgraded once to a complete grid covering
-  // max(old t_max, t_need); replacing it with another sparse solve would
-  // re-march on every later query set instead of converging after one.
+  // solved directly.  A key whose entry exists but cannot answer this
+  // request -- sparse output missing one of the requested query times, or a
+  // horizon beyond the stored solve -- is upgraded once to a complete grid
+  // covering max(old t_max, t_need); replacing it with another sparse solve
+  // would re-solve on every later query set instead of converging after one.
   std::vector<size_t> upgrades;
   std::vector<size_t> missing;
   for (size_t i = 0; i < n; ++i) {
@@ -2122,9 +2519,9 @@ inline void cache_get_batch(
     missing.push_back(i);
   }
 
-  // Upgrades run through the scalar solver with nullptr queries so the
-  // replacement is a complete grid; the old entry is kept when unresolvable,
-  // and only this request's rows are floored.
+  // Upgrades run with nullptr queries so the replacement is a complete grid;
+  // the old entry is kept when unresolvable, and only this request's rows are
+  // floored.
   for (size_t i : upgrades) {
     double t_need = horizons[i];
     if (!(t_need > 0.0)) t_need = 1e-3;
@@ -2132,7 +2529,7 @@ inline void cache_get_batch(
     Entry replacement;
     try {
       rlf_cache_solve(keys[i], std::max(t_need, cache.entries[slot].t_max),
-                      cache.grid, nullptr, replacement);
+                      cache.grid, nullptr, replacement, &cache.scratch);
     } catch (const std::exception&) {
       continue;  // keep the previous entry; rows stay floored at -1
     }
@@ -2141,78 +2538,30 @@ inline void cache_get_batch(
     out_indices[i] = slot;
   }
 
-  std::stable_sort(missing.begin(), missing.end(),
-    [&](size_t a, size_t b) { return horizons[a] < horizons[b]; });
-  for (size_t start = 0; start < missing.size();
-       start += RLF_BATCH_LANES) {
-    const size_t count =
-      std::min(RLF_BATCH_LANES, missing.size() - start);
-    std::vector<Key> chunk_keys(count);
-    std::vector<double> chunk_horizons(count);
-    std::vector<std::vector<double>> chunk_queries;
-    if (query_times != nullptr) chunk_queries.resize(count);
-    for (size_t lane = 0; lane < count; ++lane) {
-      const size_t source = missing[start + lane];
-      chunk_keys[lane] = keys[source];
-      chunk_horizons[lane] = horizons[source];
-      if (query_times != nullptr) {
-        chunk_queries[lane] = (*query_times)[source];
-      }
+  for (size_t source : missing) {
+    const std::vector<double>* queries =
+      query_times == nullptr ? nullptr : &(*query_times)[source];
+    Entry replacement;
+    try {
+      rlf_cache_solve(keys[source], horizons[source], cache.grid, queries,
+                      replacement, &cache.scratch);
+    } catch (const std::exception&) {
+      // Unresolvable parameter point: leave it uncached and unindexed and
+      // report -1, so only this key's rows are floored.  See cache_get().
+      out_indices[source] = -1;
+      continue;
     }
+    ++cache.solve_count;
 
-    std::vector<RLF_Result> batch_results;
-    // The lane march builds its own operator and domain and so cannot be
-    // paired with a second resolution; extrapolation wins the conflict, since
-    // it changes the answer while the lane path only changes the cost.
-    const bool use_batch =
-      count > 1 && !cache.grid.adaptive && !cache.grid.richardson &&
-      cache.grid.explicit_inverse && cache.grid.simd_batch &&
-      cache.grid.nx <= 128;
-    bool batched = use_batch;
-    if (batched) {
-      try {
-        batch_results = rlf_solve_batch(
-          chunk_keys, chunk_horizons, cache.grid,
-          query_times == nullptr ? nullptr : &chunk_queries);
-      } catch (const std::runtime_error&) {
-        // One bad lane fails the whole SIMD march; retry those keys through
-        // the scalar path, which can refine its own time grid.
-        batched = false;
-      }
-    }
-
-    for (size_t lane = 0; lane < count; ++lane) {
-      const size_t source = missing[start + lane];
-      Entry replacement;
-      if (batched) {
-        rlf_store_result(
-          keys[source], horizons[source], batch_results[lane],
-          query_times == nullptr, replacement);
-      } else {
-        const std::vector<double>* queries =
-          query_times == nullptr ? nullptr : &(*query_times)[source];
-        try {
-          rlf_cache_solve(
-            keys[source], horizons[source], cache.grid, queries, replacement);
-        } catch (const std::exception&) {
-          // Unresolvable parameter point: leave it uncached and unindexed and
-          // report -1, so only this key's rows are floored.  See cache_get().
-          out_indices[source] = -1;
-          continue;
-        }
-      }
-      ++cache.solve_count;
-
-      const auto found = cache.index.find(keys[source]);
-      if (found != cache.index.end()) {
-        cache.entries[found->second] = std::move(replacement);
-        out_indices[source] = found->second;
-      } else {
-        const int idx = static_cast<int>(cache.entries.size());
-        cache.entries.push_back(std::move(replacement));
-        cache.index.emplace(keys[source], idx);
-        out_indices[source] = idx;
-      }
+    const auto found = cache.index.find(keys[source]);
+    if (found != cache.index.end()) {
+      cache.entries[found->second] = std::move(replacement);
+      out_indices[source] = found->second;
+    } else {
+      const int idx = static_cast<int>(cache.entries.size());
+      cache.entries.push_back(std::move(replacement));
+      cache.index.emplace(keys[source], idx);
+      out_indices[source] = idx;
     }
   }
 }

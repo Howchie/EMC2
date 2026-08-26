@@ -2,21 +2,19 @@
 
 .rlf_grid <- function() {
   list(
-    nx = getOption("emc2.rlf_nx", 160L),
+    # Core cells of the graded mesh, not a uniform grid size; see
+    # rlf_auto_mesh in src/model_RLF.h.
+    nx = getOption("emc2.rlf_nx", 70L),
+    # Output-grid spacing, not a time step; see Grid::dt_target in
+    # src/model_RLF.h.
     dt_target = getOption("emc2.rlf_dt", 1.6e-2),
-    tgrade = getOption("emc2.rlf_tgrade", getOption("emc2.fpe_tgrade", 1)),
     adaptive = isTRUE(getOption("emc2.rlf_adaptive", FALSE)),
-    explicit_inverse = isTRUE(
-      getOption("emc2.rlf_explicit_inverse", TRUE)
-    ),
     sparse_output = isTRUE(getOption("emc2.rlf_sparse_output", TRUE)),
-    # Off by default: see the note on Grid::simd_batch in src/model_RLF.h.
-    simd_batch = isTRUE(getOption("emc2.rlf_simd_batch", FALSE)),
     horizon_split = isTRUE(getOption("emc2.rlf_horizon_split", TRUE)),
-    # Pair each solve with one at 1.25x the resolution and extrapolate; see
-    # rlf_cache_solve in src/model_RLF.h.
+    # Pair each solve with one at 1.4x the core resolution and extrapolate at
+    # the absorbing edge's order; see rlf_cache_solve in src/model_RLF.h.
     richardson = isTRUE(getOption("emc2.rlf_richardson", TRUE)),
-    richardson_ratio = getOption("emc2.rlf_richardson_ratio", 1.25)
+    richardson_ratio = getOption("emc2.rlf_richardson_ratio", 1.4)
   )
 }
 
@@ -47,9 +45,8 @@
   grid <- .rlf_grid()
   rlf_pdf_cdf_vec(
     rt, p$v, p$B, p$A, p$t0, p$s, p$alpha,
-    as.integer(grid$nx), grid$dt_target, grid$tgrade,
-    grid$adaptive, grid$explicit_inverse, grid$sparse_output,
-    grid$simd_batch, grid$horizon_split, grid$richardson,
+    as.integer(grid$nx), grid$dt_target, grid$adaptive,
+    grid$sparse_output, grid$horizon_split, grid$richardson,
     grid$richardson_ratio
   )
 }
@@ -100,17 +97,29 @@ rRLF <- function(lR, pars, ok = rep(TRUE, nrow(pars)),
 #'
 #' The first-passage density is evaluated by a cached nonlocal
 #' Fokker--Planck solver. Rows that share `(v/s, (B+A)/s, A/s, alpha)` share one
-#' numerical march; `t0` only shifts response times and is not part of the
+#' numerical solve; `t0` only shifts response times and is not part of the
 #' cache key.
 #'
+#' The spatial mesh is graded: uniform over the barrier and the few noise
+#' widths below it, then coarsening geometrically down a domain sixty widths
+#' deep. A uniform grid cannot do both at once, because its spacing is the
+#' domain divided by the point count, and the lower tail has to be represented
+#' rather than resolved. The depth matters more than it looks: the survivor is
+#' read in logs, and truncating the domain where the visit probability is
+#' merely small costs whole nats of \eqn{\log S} at long horizons.
+#'
 #' Numerical resolution is controlled with R options. `emc2.rlf_nx` is the
-#' number of spatial intervals in the coarse grid (default 160).
-#' `emc2.rlf_richardson` enables Richardson extrapolation by combining the
-#' coarse grid with a fine grid whose size is set by
-#' `emc2.rlf_richardson_ratio` (default 1.25, giving 160 and 200 intervals).
-#' `emc2.rlf_dt` sets the target time step (default 0.016), and
-#' `emc2.rlf_tgrade` controls time-grid grading (default 1). Keep these options
-#' fixed throughout a fit. Lower values of \eqn{\alpha} generally require more
+#' number of cells in the uniform core (default 70); the graded tail below it
+#' adds a further twenty or so, growing logarithmically with the domain rather
+#' than in proportion to it. `emc2.rlf_richardson` enables Richardson
+#' extrapolation by combining that mesh with one whose core is
+#' `emc2.rlf_richardson_ratio` times finer (default 1.4), extrapolated at the
+#' order set by the absorbing edge, where the killed density vanishes like
+#' \eqn{(b-x)^{\alpha/2}} and limits the scheme.
+#' The propagator carries no time discretisation, so there is no time step to
+#' set; `emc2.rlf_dt` (default 0.016) only sets the spacing of the cached output
+#' grid from which arbitrary later response times are interpolated. Keep these
+#' options fixed throughout a fit. Lower values of \eqn{\alpha} generally require more
 #' spatial resolution; increase `emc2.rlf_nx` when fitting especially
 #' heavy-tailed data or when numerical accuracy in \eqn{\alpha} is critical.
 #'
@@ -119,16 +128,19 @@ rRLF <- function(lR, pars, ok = rep(TRUE, nrow(pars)),
 #' coarsen the solver output for the rest of the data.
 #'
 #' Response times are never binned for this model. Because the likelihood is a
-#' grid solve cached per parameter tuple, the cost is the time march out to
-#' `max(rt)` and the individual response times only select readout points along
-#' a march already paid for, so `rt_resolution` saves no computation while the
+#' grid solve cached per parameter tuple, the cost is one solve per parameter
+#' tuple and the individual response times only select readout points from a
+#' solve already paid for, so `rt_resolution` saves no computation while the
 #' likelihood evaluates the density *at* the floored time and
 #' \eqn{\hat{\alpha}} absorbs the mismatch. `RLF()` therefore declares
 #' `compress_ok = FALSE` and `make_emc` forces `compress = FALSE` and
 #' `rt_resolution = NULL`; nothing needs to be passed for this.
 #'
-#' Set `emc2.rlf_adaptive = TRUE` to enable the slower refinement checks used
-#' by the standalone validation solver.
+#' Set `emc2.rlf_adaptive = TRUE` to fall back to the uniform-grid solver with
+#' its self-checking domain and resolution refinement. That path is kept as an
+#' independent reference for the graded solver, not as a faster or more
+#' accurate alternative: it is roughly two orders of magnitude slower at
+#' matched accuracy.
 #'
 #' | **Parameter** | **Transform** | **Natural scale** | **Default** | **Mapping** | **Interpretation** |
 #' |---|---|---|---|---|---|

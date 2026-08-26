@@ -20,17 +20,29 @@ the racing diffusion model.
 \details{
 The first-passage density is evaluated by a cached nonlocal
 Fokker--Planck solver. Rows that share \verb{(v/s, (B+A)/s, A/s, alpha)} share one
-numerical march; \code{t0} only shifts response times and is not part of the
+numerical solve; \code{t0} only shifts response times and is not part of the
 cache key.
 
+The spatial mesh is graded: uniform over the barrier and the few noise
+widths below it, then coarsening geometrically down a domain sixty widths
+deep. A uniform grid cannot do both at once, because its spacing is the
+domain divided by the point count, and the lower tail has to be represented
+rather than resolved. The depth matters more than it looks: the survivor is
+read in logs, and truncating the domain where the visit probability is
+merely small costs whole nats of \eqn{\log S} at long horizons.
+
 Numerical resolution is controlled with R options. \code{emc2.rlf_nx} is the
-number of spatial intervals in the coarse grid (default 160).
-\code{emc2.rlf_richardson} enables Richardson extrapolation by combining the
-coarse grid with a fine grid whose size is set by
-\code{emc2.rlf_richardson_ratio} (default 1.25, giving 160 and 200 intervals).
-\code{emc2.rlf_dt} sets the target time step (default 0.016), and
-\code{emc2.rlf_tgrade} controls time-grid grading (default 1). Keep these options
-fixed throughout a fit. Lower values of \eqn{\alpha} generally require more
+number of cells in the uniform core (default 70); the graded tail below it
+adds a further twenty or so, growing logarithmically with the domain rather
+than in proportion to it. \code{emc2.rlf_richardson} enables Richardson
+extrapolation by combining that mesh with one whose core is
+\code{emc2.rlf_richardson_ratio} times finer (default 1.4), extrapolated at the
+order set by the absorbing edge, where the killed density vanishes like
+\eqn{(b-x)^{\alpha/2}} and limits the scheme.
+The propagator carries no time discretisation, so there is no time step to
+set; \code{emc2.rlf_dt} (default 0.016) only sets the spacing of the cached output
+grid from which arbitrary later response times are interpolated. Keep these
+options fixed throughout a fit. Lower values of \eqn{\alpha} generally require more
 spatial resolution; increase \code{emc2.rlf_nx} when fitting especially
 heavy-tailed data or when numerical accuracy in \eqn{\alpha} is critical.
 
@@ -39,16 +51,19 @@ response-time horizons so that a small number of long observations do not
 coarsen the solver output for the rest of the data.
 
 Response times are never binned for this model. Because the likelihood is a
-grid solve cached per parameter tuple, the cost is the time march out to
-\code{max(rt)} and the individual response times only select readout points along
-a march already paid for, so \code{rt_resolution} saves no computation while the
+grid solve cached per parameter tuple, the cost is one solve per parameter
+tuple and the individual response times only select readout points from a
+solve already paid for, so \code{rt_resolution} saves no computation while the
 likelihood evaluates the density \emph{at} the floored time and
 \eqn{\hat{\alpha}} absorbs the mismatch. \code{RLF()} therefore declares
 \code{compress_ok = FALSE} and \code{make_emc} forces \code{compress = FALSE} and
 \code{rt_resolution = NULL}; nothing needs to be passed for this.
 
-Set \code{emc2.rlf_adaptive = TRUE} to enable the slower refinement checks used
-by the standalone validation solver.\tabular{llllll}{
+Set \code{emc2.rlf_adaptive = TRUE} to fall back to the uniform-grid solver with
+its self-checking domain and resolution refinement. That path is kept as an
+independent reference for the graded solver, not as a faster or more
+accurate alternative: it is roughly two orders of magnitude slower at
+matched accuracy.\tabular{llllll}{
    \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Mapping} \tab \strong{Interpretation} \cr
    \emph{v} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Mean drift rate. \cr
    \emph{B} \tab log \tab [0, Inf] \tab log(1) \tab \emph{b} = \emph{B} + \emph{A} \tab Distance from the upper start-point range to the threshold. \cr

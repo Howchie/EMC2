@@ -2836,8 +2836,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // rlf_fht_pdf_cdf_vec
-Rcpp::List rlf_fht_pdf_cdf_vec(NumericVector t, double v, double sigma, double alpha, double b0, double z0, int nx, int nt, bool adaptive, double lower_extent);
-RcppExport SEXP _EMC2_rlf_fht_pdf_cdf_vec(SEXP tSEXP, SEXP vSEXP, SEXP sigmaSEXP, SEXP alphaSEXP, SEXP b0SEXP, SEXP z0SEXP, SEXP nxSEXP, SEXP ntSEXP, SEXP adaptiveSEXP, SEXP lower_extentSEXP) {
+Rcpp::List rlf_fht_pdf_cdf_vec(NumericVector t, double v, double sigma, double alpha, double b0, double z0, int nx, int n_out, bool adaptive, double lower_extent);
+RcppExport SEXP _EMC2_rlf_fht_pdf_cdf_vec(SEXP tSEXP, SEXP vSEXP, SEXP sigmaSEXP, SEXP alphaSEXP, SEXP b0SEXP, SEXP z0SEXP, SEXP nxSEXP, SEXP n_outSEXP, SEXP adaptiveSEXP, SEXP lower_extentSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -2848,16 +2848,16 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< double >::type b0(b0SEXP);
     Rcpp::traits::input_parameter< double >::type z0(z0SEXP);
     Rcpp::traits::input_parameter< int >::type nx(nxSEXP);
-    Rcpp::traits::input_parameter< int >::type nt(ntSEXP);
+    Rcpp::traits::input_parameter< int >::type n_out(n_outSEXP);
     Rcpp::traits::input_parameter< bool >::type adaptive(adaptiveSEXP);
     Rcpp::traits::input_parameter< double >::type lower_extent(lower_extentSEXP);
-    rcpp_result_gen = Rcpp::wrap(rlf_fht_pdf_cdf_vec(t, v, sigma, alpha, b0, z0, nx, nt, adaptive, lower_extent));
+    rcpp_result_gen = Rcpp::wrap(rlf_fht_pdf_cdf_vec(t, v, sigma, alpha, b0, z0, nx, n_out, adaptive, lower_extent));
     return rcpp_result_gen;
 END_RCPP
 }
 // rlf_pdf_cdf_vec
-Rcpp::List rlf_pdf_cdf_vec(NumericVector rt, NumericVector v, NumericVector B, NumericVector A, NumericVector t0, NumericVector s, NumericVector alpha, int nx, double dt_target, double tgrade, bool adaptive, bool explicit_inverse, bool sparse_output, bool simd_batch, bool horizon_split, bool richardson, double richardson_ratio);
-RcppExport SEXP _EMC2_rlf_pdf_cdf_vec(SEXP rtSEXP, SEXP vSEXP, SEXP BSEXP, SEXP ASEXP, SEXP t0SEXP, SEXP sSEXP, SEXP alphaSEXP, SEXP nxSEXP, SEXP dt_targetSEXP, SEXP tgradeSEXP, SEXP adaptiveSEXP, SEXP explicit_inverseSEXP, SEXP sparse_outputSEXP, SEXP simd_batchSEXP, SEXP horizon_splitSEXP, SEXP richardsonSEXP, SEXP richardson_ratioSEXP) {
+Rcpp::List rlf_pdf_cdf_vec(NumericVector rt, NumericVector v, NumericVector B, NumericVector A, NumericVector t0, NumericVector s, NumericVector alpha, int nx, double dt_target, bool adaptive, bool sparse_output, bool horizon_split, bool richardson, double richardson_ratio);
+RcppExport SEXP _EMC2_rlf_pdf_cdf_vec(SEXP rtSEXP, SEXP vSEXP, SEXP BSEXP, SEXP ASEXP, SEXP t0SEXP, SEXP sSEXP, SEXP alphaSEXP, SEXP nxSEXP, SEXP dt_targetSEXP, SEXP adaptiveSEXP, SEXP sparse_outputSEXP, SEXP horizon_splitSEXP, SEXP richardsonSEXP, SEXP richardson_ratioSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -2870,15 +2870,12 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< NumericVector >::type alpha(alphaSEXP);
     Rcpp::traits::input_parameter< int >::type nx(nxSEXP);
     Rcpp::traits::input_parameter< double >::type dt_target(dt_targetSEXP);
-    Rcpp::traits::input_parameter< double >::type tgrade(tgradeSEXP);
     Rcpp::traits::input_parameter< bool >::type adaptive(adaptiveSEXP);
-    Rcpp::traits::input_parameter< bool >::type explicit_inverse(explicit_inverseSEXP);
     Rcpp::traits::input_parameter< bool >::type sparse_output(sparse_outputSEXP);
-    Rcpp::traits::input_parameter< bool >::type simd_batch(simd_batchSEXP);
     Rcpp::traits::input_parameter< bool >::type horizon_split(horizon_splitSEXP);
     Rcpp::traits::input_parameter< bool >::type richardson(richardsonSEXP);
     Rcpp::traits::input_parameter< double >::type richardson_ratio(richardson_ratioSEXP);
-    rcpp_result_gen = Rcpp::wrap(rlf_pdf_cdf_vec(rt, v, B, A, t0, s, alpha, nx, dt_target, tgrade, adaptive, explicit_inverse, sparse_output, simd_batch, horizon_split, richardson, richardson_ratio));
+    rcpp_result_gen = Rcpp::wrap(rlf_pdf_cdf_vec(rt, v, B, A, t0, s, alpha, nx, dt_target, adaptive, sparse_output, horizon_split, richardson, richardson_ratio));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -3378,7 +3375,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_bawl_prepared_endpoints_probe", (DL_FUNC) &_EMC2_bawl_prepared_endpoints_probe, 10},
     {"_EMC2_gl_rule_nodes_weights", (DL_FUNC) &_EMC2_gl_rule_nodes_weights, 1},
     {"_EMC2_rlf_fht_pdf_cdf_vec", (DL_FUNC) &_EMC2_rlf_fht_pdf_cdf_vec, 10},
-    {"_EMC2_rlf_pdf_cdf_vec", (DL_FUNC) &_EMC2_rlf_pdf_cdf_vec, 17},
+    {"_EMC2_rlf_pdf_cdf_vec", (DL_FUNC) &_EMC2_rlf_pdf_cdf_vec, 14},
     {"_EMC2_simulate_rlf_hit_times_cpp", (DL_FUNC) &_EMC2_simulate_rlf_hit_times_cpp, 9},
     {"_EMC2_rlf_hit_times_vec", (DL_FUNC) &_EMC2_rlf_hit_times_vec, 7},
     {"_EMC2_rou_to_rate_vec", (DL_FUNC) &_EMC2_rou_to_rate_vec, 6},

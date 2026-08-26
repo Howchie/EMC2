@@ -19,7 +19,7 @@ test_that("RLF cache keys exclude t0 and scale out s", {
   out <- EMC2:::rlf_pdf_cdf_vec(
     rt, 1.5 * scale, 1 * scale, 0.2 * scale,
     rep(c(0, 0.05), length.out = n), scale, rep(1.7, n),
-    50L, 0.02, 1, FALSE, TRUE, TRUE, TRUE
+    50L, 0.02, FALSE, TRUE, TRUE
   )
   expect_identical(out$n_keys, 1L)
   expect_identical(out$n_solves, 1L)
@@ -30,7 +30,7 @@ test_that("RLF cache keys exclude t0 and scale out s", {
   two <- EMC2:::rlf_pdf_cdf_vec(
     rt, 1.5 * scale, 1 * scale, 0.2 * scale,
     rep(0, n), scale, alpha,
-    50L, 0.02, 1, FALSE, TRUE, TRUE, TRUE
+    50L, 0.02, FALSE, TRUE, TRUE
   )
   expect_identical(two$n_keys, 2L)
   expect_identical(two$n_solves, 2L)
@@ -44,16 +44,18 @@ test_that("RLF production grid defaults stay synchronized", {
     emc2.rlf_richardson_ratio = NULL
   ))
   grid <- EMC2:::.rlf_grid()
-  expect_identical(grid$nx, 160L)
+  expect_identical(grid$nx, 70L)
   expect_identical(grid$dt_target, 1.6e-2)
   expect_true(grid$richardson)
-  expect_identical(grid$richardson_ratio, 1.25)
+  expect_identical(grid$richardson_ratio, 1.4)
 
   direct <- formals(EMC2:::rlf_pdf_cdf_vec)
-  expect_identical(direct$nx, 160L)
+  expect_identical(direct$nx, 70L)
   expect_identical(direct$dt_target, 1.6e-2)
-  expect_false(eval(direct$simd_batch))
-  expect_identical(direct$richardson_ratio, 1.25)
+  expect_true(eval(direct$sparse_output))
+  expect_true(eval(direct$richardson))
+  expect_false(eval(direct$adaptive))
+  expect_identical(direct$richardson_ratio, 1.4)
 })
 
 test_that("RLF production grid controls low-alpha discretisation error", {
@@ -63,7 +65,7 @@ test_that("RLF production grid controls low-alpha discretisation error", {
     EMC2:::rlf_pdf_cdf_vec(
       rt, rep(1.5, n), rep(1.2, n), rep(0.2, n), rep(0, n),
       rep(1, n), rep(1.1, n),
-      nx, dt, 1, FALSE, TRUE, TRUE, FALSE,
+      nx, dt, FALSE, TRUE,
       horizon_split = TRUE, richardson = TRUE,
       richardson_ratio = ratio
     )
@@ -86,7 +88,7 @@ test_that("RLF production grid controls low-alpha discretisation error", {
   )
 })
 
-test_that("RLF sparse, inverse, and SIMD paths reproduce their references", {
+test_that("RLF sparse and complete-grid output agree", {
   rt <- c(0.08, 0.17, 0.29, 0.44, 0.63, 0.86, 1.13, 1.5)
   v <- seq(1, 2.4, length.out = 8)
   B <- rep(c(0.9, 1.1), 4)
@@ -94,66 +96,43 @@ test_that("RLF sparse, inverse, and SIMD paths reproduce their references", {
   t0 <- rep(c(0, 0.03), 4)
   s <- rep(1, 8)
   alpha <- seq(1.3, 2, length.out = 8)
-  call <- function(inverse = TRUE, sparse = TRUE, simd = TRUE) {
+  call <- function(sparse) {
     EMC2:::rlf_pdf_cdf_vec(
       rt, v, B, A, t0, s, alpha,
-      60L, 0.02, 1, FALSE, inverse, sparse, simd,
+      60L, 0.02, FALSE, sparse,
       horizon_split = TRUE, richardson = FALSE
     )
   }
 
-  batched <- call()
-  serial <- call(simd = FALSE)
-  full <- call(sparse = FALSE)
-  expect_equal(batched$pdf, serial$pdf, tolerance = 1e-13)
-  expect_equal(batched$cdf, serial$cdf, tolerance = 1e-13)
-  expect_equal(batched$pdf, full$pdf, tolerance = 1e-13)
-  expect_equal(batched$cdf, full$cdf, tolerance = 1e-13)
-
-  inverse <- EMC2:::rlf_pdf_cdf_vec(
-    rt[4], v[4], B[4], A[4], t0[4], s[4], alpha[4],
-    60L, 0.02, 1, FALSE, TRUE, TRUE, FALSE,
-    horizon_split = TRUE, richardson = FALSE
-  )
-  triangular <- EMC2:::rlf_pdf_cdf_vec(
-    rt[4], v[4], B[4], A[4], t0[4], s[4], alpha[4],
-    60L, 0.02, 1, FALSE, FALSE, TRUE, FALSE,
-    horizon_split = TRUE, richardson = FALSE
-  )
-  expect_equal(inverse$pdf, triangular$pdf, tolerance = 1e-12)
-  expect_equal(inverse$cdf, triangular$cdf, tolerance = 1e-12)
-
-  # At high nx and a short horizon the inverse backend applies M^-1 twice
-  # instead of paying to form the collapsed propagator.  It is the same
-  # TR--BDF2 update and must retain reference-path agreement.
-  short_inverse <- EMC2:::rlf_pdf_cdf_vec(
-    0.3, 1.4, 1.1, 0.2, 0, 1, 1.3,
-    200L, 0.02, 1, FALSE, TRUE, TRUE, FALSE,
-    horizon_split = TRUE, richardson = FALSE
-  )
-  short_triangular <- EMC2:::rlf_pdf_cdf_vec(
-    0.3, 1.4, 1.1, 0.2, 0, 1, 1.3,
-    200L, 0.02, 1, FALSE, FALSE, TRUE, FALSE,
-    horizon_split = TRUE, richardson = FALSE
-  )
-  expect_equal(short_inverse$pdf, short_triangular$pdf, tolerance = 1e-12)
-  expect_equal(short_inverse$cdf, short_triangular$cdf, tolerance = 1e-12)
+  # Sparse output evaluates the modal curves exactly at the requested times;
+  # the complete grid samples them on a uniform grid and interpolates, so the
+  # two agree only to the resolution of that grid.
+  sparse <- call(TRUE)
+  full <- call(FALSE)
+  expect_true(all(is.finite(sparse$pdf)))
+  expect_true(all(sparse$pdf >= 0))
+  expect_true(all(sparse$cdf >= 0 & sparse$cdf <= 1))
+  expect_equal(sparse$cdf, full$cdf, tolerance = 5e-3)
+  expect_equal(sparse$pdf, full$pdf, tolerance = 5e-2)
 })
 
-test_that("RLF graded time schedules agree with the uniform schedule", {
+test_that("RLF sparse output does not depend on the output-grid spacing", {
+  # dt_target sets the spacing of the cached curve, not a time step: with the
+  # query times supplied it is not consulted at all, and the answer must be
+  # bit-for-bit independent of it.
   rt <- seq(0.1, 1.5, length.out = 16)
-  call <- function(tgrade) {
+  call <- function(dt) {
     EMC2:::rlf_pdf_cdf_vec(
       rt, rep(1.5, 16), rep(1, 16), rep(0.2, 16),
       rep(0, 16), rep(1, 16), rep(1.7, 16),
-      60L, 0.02, tgrade, FALSE, TRUE, TRUE, TRUE
+      60L, dt, FALSE, TRUE, TRUE
     )
   }
-  uniform <- call(1)
-  graded <- call(4)
-  expect_identical(graded$n_solves, 1L)
-  expect_lt(max(abs(graded$pdf - uniform$pdf)), 0.015)
-  expect_lt(max(abs(graded$cdf - uniform$cdf)), 0.002)
+  coarse <- call(0.08)
+  fine <- call(0.005)
+  expect_identical(coarse$n_solves, 1L)
+  expect_equal(coarse$pdf, fine$pdf, tolerance = 1e-14)
+  expect_equal(coarse$cdf, fine$cdf, tolerance = 1e-14)
 })
 
 test_that("RLF alpha = 2 approaches the independent RDM oracle", {
@@ -162,7 +141,7 @@ test_that("RLF alpha = 2 approaches the independent RDM oracle", {
   levy <- EMC2:::rlf_pdf_cdf_vec(
     rt, pars[, "v"], pars[, "B"], pars[, "A"], pars[, "t0"],
     pars[, "s"], pars[, "alpha"],
-    200L, 0.005, 1, FALSE, TRUE, TRUE, TRUE
+    200L, 0.005, FALSE, TRUE, TRUE
   )
   rdm <- pars[, c("v", "B", "A", "t0", "s"), drop = FALSE]
   expect_lt(max(abs(levy$pdf - EMC2:::dRDM(rt, rdm))), 3e-3)
@@ -172,8 +151,7 @@ test_that("RLF alpha = 2 approaches the independent RDM oracle", {
 test_that("RLF model transforms alpha and reaches the C++ race likelihood", {
   withr::local_options(list(
     emc2.rlf_nx = 40L,
-    emc2.rlf_dt = 0.02,
-    emc2.rlf_tgrade = 1
+    emc2.rlf_dt = 0.02
   ))
   matchfun <- function(d) d$S == d$lR
   dat <- forstmann[

@@ -1,9 +1,9 @@
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 // Race Lévy Flight (RLF) model entry points: Rcpp interface.
 //
-// Solves the nonlocal Fokker-Planck equation for the RLF model using a
-// fixed-boundary, pre-factorised Rannacher/Crank-Nicolson backend.  Also
-// provides the Chambers-Mallows-Stuck (CMS) path simulator.
+// Solves the nonlocal Fokker-Planck equation for the RLF model with a
+// fixed-boundary shift-invert Krylov propagator.  Also provides the
+// Chambers-Mallows-Stuck (CMS) path simulator.
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 #include <Rcpp.h>
@@ -36,7 +36,9 @@ Rcpp::List rlf_package(const rlf::RLF_Result& r, const NumericVector& t) {
     _["x_lo"] = r.x_lo,
     _["dx"] = r.dx,
     _["nx_used"] = r.nx_used,
-    _["nt_used"] = r.nt_used,
+    _["krylov_dim"] = r.krylov_dim,
+    _["eigen_condition"] = r.eigen_condition,
+    _["krylov_residual"] = r.krylov_residual,
     _["domain_refinements"] = r.domain_refinements,
     _["spatial_refinements"] = r.spatial_refinements,
     _["refinement_checked"] = r.refinement_checked,
@@ -79,7 +81,7 @@ void rlf_sync_force_centred() {
 // [[Rcpp::export]]
 Rcpp::List rlf_fht_pdf_cdf_vec(NumericVector t, double v, double sigma,
                                double alpha, double b0, double z0 = 0.0,
-                               int nx = 200, int nt = 400,
+                               int nx = 200, int n_out = 400,
                                bool adaptive = true,
                                double lower_extent = NA_REAL) {
   if (!R_FINITE(v) || v <= 0.0)
@@ -93,7 +95,7 @@ Rcpp::List rlf_fht_pdf_cdf_vec(NumericVector t, double v, double sigma,
   if (!R_FINITE(z0) || z0 < 0.0 || z0 >= b0)
     stop("rlf_fht_pdf_cdf_vec: z0 must be finite and in [0, b0).");
   if (nx < 30) stop("rlf_fht_pdf_cdf_vec: nx must be at least 30.");
-  if (nt < 50) stop("rlf_fht_pdf_cdf_vec: nt must be at least 50.");
+  if (n_out < 50) stop("rlf_fht_pdf_cdf_vec: n_out must be at least 50.");
 
   const double t_max = rlf_t_max(t);
   rlf_sync_force_centred();
@@ -108,7 +110,7 @@ Rcpp::List rlf_fht_pdf_cdf_vec(NumericVector t, double v, double sigma,
   const double extent =
     (R_finite(lower_extent) && lower_extent > 0.0) ? lower_extent : -1.0;
   return rlf_package(
-    rlf::rlf_solve(m, t_max, nx, nt, adaptive, 1.0, true, nullptr, extent), t);
+    rlf::rlf_solve(m, t_max, nx, n_out, adaptive, nullptr, extent), t);
 }
 
 // ---------------------------------------------------------------------------
@@ -118,17 +120,16 @@ Rcpp::List rlf_fht_pdf_cdf_vec(NumericVector t, double v, double sigma,
 // [[Rcpp::export]]
 Rcpp::List rlf_pdf_cdf_vec(
     NumericVector rt, NumericVector v, NumericVector B, NumericVector A,
-    NumericVector t0, NumericVector s, NumericVector alpha, int nx = 160,
-    double dt_target = 1.6e-2, double tgrade = 1.0, bool adaptive = false,
-    bool explicit_inverse = true, bool sparse_output = true,
-    bool simd_batch = false, bool horizon_split = true,
-    bool richardson = true, double richardson_ratio = 1.25) {
+    NumericVector t0, NumericVector s, NumericVector alpha, int nx = 70,
+    double dt_target = 1.6e-2, bool adaptive = false,
+    bool sparse_output = true, bool horizon_split = true,
+    bool richardson = true, double richardson_ratio = 1.4) {
   const int n = rt.size();
   if (v.size() != n || B.size() != n || A.size() != n ||
       t0.size() != n || s.size() != n || alpha.size() != n) {
     stop("rlf_pdf_cdf_vec: all parameter vectors must match length(rt).");
   }
-  if (nx < 30 || !(dt_target > 0.0) || !(tgrade >= 1.0)) {
+  if (nx < 30 || !(dt_target > 0.0)) {
     stop("rlf_pdf_cdf_vec: invalid grid configuration.");
   }
 
@@ -138,11 +139,8 @@ Rcpp::List rlf_pdf_cdf_vec(
   rlf::SolveCache cache;
   cache.grid.nx = nx;
   cache.grid.dt_target = dt_target;
-  cache.grid.tgrade = tgrade;
   cache.grid.adaptive = adaptive;
-  cache.grid.explicit_inverse = explicit_inverse;
   cache.grid.sparse_output = sparse_output;
-  cache.grid.simd_batch = simd_batch;
   cache.grid.horizon_split = horizon_split;
   cache.grid.richardson = richardson;
   cache.grid.richardson_ratio = richardson_ratio;

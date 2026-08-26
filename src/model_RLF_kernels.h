@@ -29,31 +29,21 @@ inline void rlf_configure_grid(rlf::Grid& grid) {
 
   double nx = grid.nx;
   double dt = grid.dt_target;
-  double tgrade = grid.tgrade;
   option_number("emc2.rlf_nx", "emc2.fpe_nx", nx, 30.0);
   option_number("emc2.rlf_dt", "emc2.fpe_dt", dt, 1e-8);
-  option_number("emc2.rlf_tgrade", "emc2.fpe_tgrade", tgrade, 1.0);
   grid.nx = static_cast<int>(nx);
   grid.dt_target = dt;
-  grid.tgrade = tgrade;
-  grid.nt_max = std::max(
-    grid.nt_max, static_cast<int>(std::ceil(10.0 / grid.dt_target)));
+  grid.samples_max = std::max(
+    grid.samples_max, static_cast<int>(std::ceil(10.0 / grid.dt_target)));
   option_logical("emc2.rlf_adaptive", grid.adaptive);
-  option_logical("emc2.rlf_explicit_inverse", grid.explicit_inverse);
   option_logical("emc2.rlf_sparse_output", grid.sparse_output);
-  option_logical("emc2.rlf_simd_batch", grid.simd_batch);
   option_logical("emc2.rlf_horizon_split", grid.horizon_split);
   option_logical("emc2.rlf_richardson", grid.richardson);
   option_number("emc2.rlf_richardson_ratio", nullptr,
                 grid.richardson_ratio, 1.125);
   // Global rather than a Grid field: build_rlf_operator sees only RLF_Model.
-  // Written once here on the main thread, read-only from the worker marches.
+  // Written once here on the main thread, read-only from the worker solves.
   option_logical("emc2.rlf_force_centred", rlf::rlf_force_centred_drift);
-  // Same reason: rlf_stable_time_schedule is reached from rlf_solve_fixed_grid,
-  // which is handed resolutions rather than the Grid.
-  double nt_cap = rlf::rlf_max_time_steps;
-  option_number("emc2.rlf_nt_cap", nullptr, nt_cap, 1000.0);
-  rlf::rlf_max_time_steps = static_cast<int>(nt_cap);
 }
 
 inline rlf::SolveCache* rlf_cache(void* context) {
