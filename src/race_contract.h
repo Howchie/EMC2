@@ -162,22 +162,6 @@ struct ContextForRaceModels {
     // BAwD field because both models can be selected by one process and their
     // adapters may coexist in diagnostics/tests.
     int btawl_launch = emc2race_contract::kBtawlLaunchNormal;
-    // BTAwL clearance chart: false samples the intrinsic time constant tau;
-    // true samples the observable transient endpoint Ttrans and back-solves
-    // tau before entering the shared geometry.
-    bool btawl_ttrans_chart = false;
-    // A particle can contain many replicated accumulators with distinct
-    // endpoint-chart (k, Ttrans) pairs.  Keep enough exact entries to avoid
-    // repeatedly re-solving the same inverse while remaining tiny compared
-    // with the parameter matrix.
-    static constexpr int btawl_tau_cache_size = 16;
-    mutable double btawl_tau_cache_k[btawl_tau_cache_size] =
-      {R_NaN, R_NaN, R_NaN, R_NaN};
-    mutable double btawl_tau_cache_clear[btawl_tau_cache_size] =
-      {R_NaN, R_NaN, R_NaN, R_NaN};
-    mutable double btawl_tau_cache_value[btawl_tau_cache_size] =
-      {R_NaN, R_NaN, R_NaN, R_NaN};
-    mutable int btawl_tau_cache_next = 0;
     // Geometry/tangency cache for replicated BTAwL likelihood rows.  The
     // concrete type lives in model_BTAwL.h; keeping it behind shared_ptr here
     // avoids coupling the common race contract to the analytic implementation.

@@ -171,7 +171,7 @@ testthat::test_that("split launch wrappers accept row-wise delta vectors", {
                              launch = 2, delta = delta), n)
 
   pars <- data.frame(mu = mu, sigma = sigma, delta = delta, b = b, A = A,
-                     t0 = rep(0.1, n), k = k, Ttrans = rep(1, n),
+                     t0 = rep(0.1, n), k = k, tau = rep(1, n),
                      tau_s = rep(1, n), tau_t = rep(1, n), pi = rep(0.5, n))
   expect_length(EMC2:::pBTAwLTransient(t, pars, launch = 2), n)
   expect_length(EMC2:::pBTAwL(t, pars, launch = 2), n)

@@ -6,18 +6,15 @@
 \usage{
 BTAwLTransient(
   posdrift = TRUE,
-  drift_distribution = c("lognormal", "normal", "splitlognormal", "weibull"),
-  chart = c("rate", "endpoint")
+  drift_distribution = c("lognormal", "normal", "splitlognormal", "weibull")
 )
 }
 \arguments{
 \item{posdrift}{Logical. For a normal launch, truncate \code{V} below zero.}
 
-\item{drift_distribution}{Either \code{"normal"}, \code{"lognormal"},
+\item{drift_distribution}{Either \code{"normal"}, \code{"lognormal"}, or
 \code{"splitlognormal"} (continuous median-parameterised split-lognormal), or
-\code{"weibull"} (\verb{V ~ Weibull(shape, scale)}).}
-
-\item{chart}{Either \code{"endpoint"} or \code{"rate"}.}
+\code{"weibull"} (\code{V ~ Weibull(shape, scale)}).}
 }
 \value{
 A transient-only BTAwL race-model specification.
@@ -38,8 +35,7 @@ The transient wrapper uses the following parameter matrix:
    \emph{A} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Start-point range. \cr
    \emph{t0} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Non-decision time. \cr
    \emph{k} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Leak rate. \cr
-   \emph{tau} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Transient time constant (rate chart). \cr
-   \emph{Ttrans} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Transient endpoint parameter (endpoint chart; replaces \code{tau}). \cr
+   \emph{tau} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Transient time constant. \cr
 }
 
 
@@ -51,8 +47,8 @@ With \code{"splitlognormal"}, \verb{log V} is continuous split normal with
 derived from the median condition, and \code{delta = 0} is exactly lognormal.
 The split-lognormal option adds the optional identity-scale \code{delta} parameter
 (default \code{0}).
-With \code{drift_distribution = "weibull"}, use positive \code{shape} and
-\code{scale} instead of the lognormal launch rows.
+With \code{drift_distribution = "weibull"}, use positive \code{shape} and \code{scale}
+instead of the lognormal launch rows.
 Optional fitting parameters: \code{pContaminant} is the omission probability and
 \code{pGuess} is the uniform-outlier probability.
 }

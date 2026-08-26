@@ -92,14 +92,13 @@
 }
 
 .rfun_BTAwL <- function(lR, pars, ok = rep(TRUE, length(lR)), posdrift = TRUE,
-                        launch = 0L, mode = c("full", "transient", "sustained"),
-                        endpoint_chart = FALSE) {
+                        launch = 0L, mode = c("full", "transient", "sustained")) {
   mode <- match.arg(mode)
   if (.use_cpp_rfun()) {
     mode_code <- switch(mode, transient = 0L, sustained = 1L, full = 2L)
     pars_cpp <- if (is.data.frame(pars)) as.matrix(pars) else pars
     res <- rbta_wl_cpp(pars_cpp, levels(lR), ok, mode_code, posdrift,
-                       as.integer(launch), isTRUE(endpoint_chart))
+                       as.integer(launch))
     return(.rfun_cpp_pack(res, levels(lR), length(lR) / length(levels(lR))))
   }
   switch(mode,
@@ -113,19 +112,19 @@
 rBTAwLTransient <- function(lR, pars, ok = rep(TRUE, length(lR)),
                             p_types = NULL, posdrift = TRUE, launch = 0L) {
   .rfun_BTAwL(lR, pars, ok = ok, posdrift = posdrift, launch = launch,
-              mode = "transient", endpoint_chart = "Ttrans" %in% colnames(pars))
+              mode = "transient")
 }
 
 rBTAwLSustained <- function(lR, pars, ok = rep(TRUE, length(lR)),
                              p_types = NULL, posdrift = TRUE, launch = 0L) {
   .rfun_BTAwL(lR, pars, ok = ok, posdrift = posdrift, launch = launch,
-              mode = "sustained", endpoint_chart = FALSE)
+              mode = "sustained")
 }
 
 rBTAwL <- function(lR, pars, ok = rep(TRUE, length(lR)),
                    p_types = NULL, posdrift = TRUE, launch = 0L) {
   .rfun_BTAwL(lR, pars, ok = ok, posdrift = posdrift, launch = launch,
-              mode = "full", endpoint_chart = "Ttrans" %in% colnames(pars))
+              mode = "full")
 }
 
 # `launch` must come from the same .bawd_launch_code() call that produced the

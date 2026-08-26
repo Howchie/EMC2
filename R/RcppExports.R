@@ -213,10 +213,6 @@ btawl_tmax_vec <- function(k, tau) {
     .Call(`_EMC2_btawl_tmax_vec`, k, tau)
 }
 
-btawl_tau_vec <- function(k, Ttrans) {
-    .Call(`_EMC2_btawl_tau_vec`, k, Ttrans)
-}
-
 btawl_vcrit_vec <- function(k, tau, b) {
     .Call(`_EMC2_btawl_vcrit_vec`, k, tau, b)
 }
@@ -465,8 +461,8 @@ rbawl_cpp <- function(pars, lR_levels, ok, posdrift, erlang, guess, global, laun
     .Call(`_EMC2_rbawl_cpp`, pars, lR_levels, ok, posdrift, erlang, guess, global, launch)
 }
 
-rbta_wl_cpp <- function(pars, lR_levels, ok, mode, posdrift, launch, endpoint_chart = FALSE) {
-    .Call(`_EMC2_rbta_wl_cpp`, pars, lR_levels, ok, mode, posdrift, launch, endpoint_chart)
+rbta_wl_cpp <- function(pars, lR_levels, ok, mode, posdrift, launch) {
+    .Call(`_EMC2_rbta_wl_cpp`, pars, lR_levels, ok, mode, posdrift, launch)
 }
 
 rbawl_corr_cpp <- function(pars, lR_levels, ok, posdrift, erlang, guess, global) {

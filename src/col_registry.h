@@ -231,45 +231,29 @@ namespace bawrsplit {
 // R/model_BTAwL.R — BTAwL pure transient member. As with the other ballistic
 // launch models, the first two positions are either (v, sv) or (mu, sigma).
 namespace btawl_transient {
-  enum : int { v = 0, sv, B, A, t0, k, clear, N_REQ };
+  enum : int { v = 0, sv, B, A, t0, k, tau, N_REQ };
   inline ColSpec spec() {
-    static const char* n[] = {"v", "sv", "B", "A", "t0", "k", "Ttrans"};
-    return {n, N_REQ, "BTAwL"};
-  }
-  inline ColSpec spec_rate() {
     static const char* n[] = {"v", "sv", "B", "A", "t0", "k", "tau"};
     return {n, N_REQ, "BTAwL_RATE"};
   }
 }
 namespace btawl_transient_logn {
-  enum : int { mu = 0, sigma, B, A, t0, k, clear, N_REQ };
+  enum : int { mu = 0, sigma, B, A, t0, k, tau, N_REQ };
   inline ColSpec spec() {
-    static const char* n[] = {"mu", "sigma", "B", "A", "t0", "k", "Ttrans"};
-    return {n, N_REQ, "BTAwL_LOGN"};
-  }
-  inline ColSpec spec_rate() {
     static const char* n[] = {"mu", "sigma", "B", "A", "t0", "k", "tau"};
     return {n, N_REQ, "BTAwL_LOGN_RATE"};
   }
 }
 namespace btawl_transient_weib {
-  enum : int { shape = 0, scale, B, A, t0, k, clear, N_REQ };
+  enum : int { shape = 0, scale, B, A, t0, k, tau, N_REQ };
   inline ColSpec spec() {
-    static const char* n[] = {"shape", "scale", "B", "A", "t0", "k", "Ttrans"};
-    return {n, N_REQ, "BTAwL_WEIB"};
-  }
-  inline ColSpec spec_rate() {
     static const char* n[] = {"shape", "scale", "B", "A", "t0", "k", "tau"};
     return {n, N_REQ, "BTAwL_WEIB_RATE"};
   }
 }
 namespace btawlsplit_transient {
-  enum : int { mu = 0, sigma, delta, B, A, t0, k, clear, N_REQ };
+  enum : int { mu = 0, sigma, delta, B, A, t0, k, tau, N_REQ };
   inline ColSpec spec() {
-    static const char* n[] = {"mu", "sigma", "delta", "B", "A", "t0", "k", "Ttrans"};
-    return {n, N_REQ, "BTAwL_LOGN_SPLIT"};
-  }
-  inline ColSpec spec_rate() {
     static const char* n[] = {"mu", "sigma", "delta", "B", "A", "t0", "k", "tau"};
     return {n, N_REQ, "BTAwL_LOGN_SPLIT_RATE"};
   }
@@ -277,50 +261,32 @@ namespace btawlsplit_transient {
 namespace btawl_transient_split = btawlsplit_transient;
 
 namespace btawl_local_race {
-  // Full BTAwL local-race contract. tau_t aliases the endpoint-chart slot
-  // `clear`; pi remains the final position.
-  enum : int { v = 0, sv, B, A, t0, k, tau_s, clear, tau_t = clear, pi, N_REQ };
+  // Full BTAwL local-race contract. pi remains the final position.
+  enum : int { v = 0, sv, B, A, t0, k, tau_s, tau_t, pi, N_REQ };
   inline ColSpec spec() {
-    static const char* n[] = {"v", "sv", "B", "A", "t0", "k", "tau_s", "Ttrans", "pi"};
-    return {n, N_REQ, "BTAwL"};
-  }
-  inline ColSpec spec_rate() {
     static const char* n[] = {"v", "sv", "B", "A", "t0", "k", "tau_s", "tau_t", "pi"};
     return {n, N_REQ, "BTAwL_RATE"};
   }
 }
 namespace btawl_local_race_logn {
-  // Full BTAwL local-race contract. tau_t aliases the endpoint-chart slot
-  // `clear`; pi remains the final position.
-  enum : int { mu = 0, sigma, B, A, t0, k, tau_s, clear, tau_t = clear, pi, N_REQ };
+  // Full BTAwL local-race contract. pi remains the final position.
+  enum : int { mu = 0, sigma, B, A, t0, k, tau_s, tau_t, pi, N_REQ };
   inline ColSpec spec() {
-    static const char* n[] = {"mu", "sigma", "B", "A", "t0", "k", "tau_s", "Ttrans", "pi"};
-    return {n, N_REQ, "BTAwL_LOGN"};
-  }
-  inline ColSpec spec_rate() {
     static const char* n[] = {"mu", "sigma", "B", "A", "t0", "k", "tau_s", "tau_t", "pi"};
     return {n, N_REQ, "BTAwL_LOGN_RATE"};
   }
 }
 namespace btawl_local_race_weib {
-  enum : int { shape = 0, scale, B, A, t0, k, tau_s, clear, tau_t = clear, pi, N_REQ };
+  enum : int { shape = 0, scale, B, A, t0, k, tau_s, tau_t, pi, N_REQ };
   inline ColSpec spec() {
-    static const char* n[] = {"shape", "scale", "B", "A", "t0", "k", "tau_s", "Ttrans", "pi"};
-    return {n, N_REQ, "BTAwL_WEIB"};
-  }
-  inline ColSpec spec_rate() {
     static const char* n[] = {"shape", "scale", "B", "A", "t0", "k", "tau_s", "tau_t", "pi"};
     return {n, N_REQ, "BTAwL_WEIB_RATE"};
   }
 }
 namespace btawlsplit_local_race {
   // Full BTAwL local-race contract with split lognormal launch.
-  enum : int { mu = 0, sigma, delta, B, A, t0, k, tau_s, clear, tau_t = clear, pi, N_REQ };
+  enum : int { mu = 0, sigma, delta, B, A, t0, k, tau_s, tau_t, pi, N_REQ };
   inline ColSpec spec() {
-    static const char* n[] = {"mu", "sigma", "delta", "B", "A", "t0", "k", "tau_s", "Ttrans", "pi"};
-    return {n, N_REQ, "BTAwL_LOGN_SPLIT"};
-  }
-  inline ColSpec spec_rate() {
     static const char* n[] = {"mu", "sigma", "delta", "B", "A", "t0", "k", "tau_s", "tau_t", "pi"};
     return {n, N_REQ, "BTAwL_LOGN_SPLIT_RATE"};
   }

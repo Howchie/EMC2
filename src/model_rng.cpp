@@ -336,17 +336,9 @@ inline double btawl_hit_time_sustained_cpp(double V, double z, double b,
 
 inline double btawl_tau_for_row(const Rcpp::NumericMatrix& pars,
                                 const std::unordered_map<std::string, int>& ci,
-                                int row, bool prefer_ttrans) {
-  if (prefer_ttrans && ci.count("Ttrans")) {
-    const double Ttrans = pars(row, ci.at("Ttrans"));
-    if (ci.count("tau")) return pars(row, ci.at("tau"));
-    if (ci.count("tau_t")) return pars(row, ci.at("tau_t"));
-    return btawl_tau_from_ttrans(pars(row, ci.at("k")), Ttrans);
-  }
+                                int row) {
   if (ci.count("tau")) return pars(row, ci.at("tau"));
   if (ci.count("tau_t")) return pars(row, ci.at("tau_t"));
-  if (ci.count("Ttrans"))
-    return btawl_tau_from_ttrans(pars(row, ci.at("k")), pars(row, ci.at("Ttrans")));
   return R_NaN;
 }
 
@@ -703,7 +695,7 @@ Rcpp::List rbawl_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
 // [[Rcpp::export]]
 Rcpp::List rbta_wl_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
                        Rcpp::LogicalVector ok, int mode, bool posdrift,
-                       int launch, bool endpoint_chart = false) {
+                       int launch) {
   const int n_acc = lR_levels.size();
   const int n_rows = pars.nrow();
   if (n_acc <= 0 || n_rows <= 0 || n_rows % n_acc != 0)
@@ -769,7 +761,7 @@ Rcpp::List rbta_wl_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels
     if (mode == 0) {
       const double V = draw_launch(pars(r, ip1), pars(r, ip2), delta);
       const double z = A * R::unif_rand();
-      const double tau = btawl_tau_for_row(pars, ci, r, endpoint_chart);
+      const double tau = btawl_tau_for_row(pars, ci, r);
       const double hit = btawl_hit_time_transient_cpp(V, z, b, k, tau);
       dt[static_cast<size_t>(r)] = R_FINITE(hit) ? hit + t0 : R_PosInf;
       continue;
@@ -816,7 +808,7 @@ Rcpp::List rbta_wl_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels
       V_S = draw_launch(p1_S, p2_S, delta);
     }
 
-    const double tau_t = btawl_tau_for_row(pars, ci, r, endpoint_chart);
+    const double tau_t = btawl_tau_for_row(pars, ci, r);
     const double t_T = btawl_hit_time_transient_cpp(V_T, z_T, b, k, tau_t);
     const double t_S = btawl_hit_time_sustained_cpp(V_S, z_S, b, k, pars(r, itau_s));
     const double hit = std::fmin(t_T, t_S);

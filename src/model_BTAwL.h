@@ -55,8 +55,7 @@ struct BtawlGeom {
 // see the same entries.
 namespace btawl {
 struct SolveCacheEntry {
-  bool endpoint = false;
-  double A = R_NaN, b = R_NaN, k = R_NaN, clear = R_NaN, tau = R_NaN;
+  double A = R_NaN, b = R_NaN, k = R_NaN, tau = R_NaN;
   BtawlGeom geom;
 };
 
@@ -79,13 +78,9 @@ struct SolveCache {
 
 struct ContextForRaceModels;
 
-// Obtain geometry from the likelihood-local exact-key cache.  `endpoint`
-// selects the Ttrans chart; in the tau chart `clear == tau` and `tau` is
-// ignored for the key beyond documenting the solved parameter.
-BtawlGeom btawl_geometry_cached(ContextForRaceModels* ctx, bool endpoint,
-                                double A, double b, double k, double clear,
-                                double tau);
-
+// Obtain geometry from the likelihood-local exact-key cache.
+BtawlGeom btawl_geometry_cached(ContextForRaceModels* ctx,
+                                double A, double b, double k, double tau);
 double btawl_log_surv_cached(ContextForRaceModels* ctx, double t,
                              const BtawlGeom& g, double clear,
                              double p1, double p2, int launch,
@@ -105,20 +100,9 @@ double btawl_tmax(double k, double tau);
 
 double btawl_tangent_time(double z, const BtawlGeom& g);
 
-// Invert the endpoint chart Ttrans = T_max(k, tau).  The endpoint is strictly
-// increasing in tau; the bracket (0, Ttrans) is guaranteed by the transient
-// geometry, so a safeguarded bisection is sufficient and has no branch
-// ambiguity in the stiff k*tau regime.
-double btawl_tau_from_ttrans(double k, double Ttrans);
 
 BtawlGeom btawl_geometry(double A, double b, double k, double tau);
 
-// Endpoint-chart geometry: the R-side transform has already solved
-// Ttrans = T_max(k, tau).  Reuse that solved value instead of running the
-// forward endpoint root finder on every density/CDF evaluation.
-BtawlGeom btawl_geometry_from_ttrans(double A, double b, double k,
-                                            double Ttrans,
-                                            double tau_hint = R_NaN);
 
 double btawl_vstar(double t, double z, const BtawlGeom& g);
 
@@ -232,26 +216,6 @@ double btawl_pdf_log(double t, double A, double b, double p1, double p2,
                             double k, double tau, int launch, bool posdrift,
                             double delta = 0.0);
 
-double btawl_cdf_chart(double t, double A, double b, double p1,
-                              double p2, double k, double clear, int launch,
-                              bool posdrift, bool endpoint_chart,
-                              double tau_hint = R_NaN, double delta = 0.0);
-double btawl_pdf_chart(double t, double A, double b, double p1,
-                              double p2, double k, double clear, int launch,
-                              bool posdrift, bool endpoint_chart,
-                              double tau_hint = R_NaN, double delta = 0.0);
-double btawl_log_surv_chart(double t, double A, double b, double p1,
-                                   double p2, double k, double clear,
-                                   int launch, bool posdrift,
-                                   bool endpoint_chart,
-                                   double tau_hint = R_NaN,
-                                   double delta = 0.0);
-double btawl_log_pdf_chart(double t, double A, double b, double p1,
-                                  double p2, double k, double clear,
-                                  int launch, bool posdrift,
-                                  bool endpoint_chart,
-                                  double tau_hint = R_NaN,
-                                  double delta = 0.0);
 
 // ---------------------------------------------------------------------------
 // Sustained + transient local-race extension.

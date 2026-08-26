@@ -6,19 +6,15 @@
 \usage{
 BTAwL(
   posdrift = TRUE,
-  drift_distribution = c("lognormal", "normal", "splitlognormal", "weibull"),
-  chart = c("rate", "endpoint")
+  drift_distribution = c("lognormal", "normal", "splitlognormal", "weibull")
 )
 }
 \arguments{
 \item{posdrift}{Logical. For a normal launch, truncate \code{V} below zero.}
 
-\item{drift_distribution}{Either \code{"normal"}, \code{"lognormal"},
+\item{drift_distribution}{Either \code{"normal"}, \code{"lognormal"}, or
 \code{"splitlognormal"} (continuous median-parameterised split-lognormal), or
-\code{"weibull"} (\verb{V ~ Weibull(shape, scale)}).}
-
-\item{chart}{Either \code{"endpoint"} (sample \code{Ttrans}) or \code{"rate"} (sample
-\code{tau_t}).}
+\code{"weibull"} (\code{V ~ Weibull(shape, scale)}).}
 }
 \value{
 A BTAwL race-model specification.
@@ -27,9 +23,8 @@ A BTAwL race-model specification.
 The full BTAwL model is a local race between independent sustained and
 transient processes.  \code{pi} allocates one base launch distribution between
 those processes; it is not a shared trialwise launch draw.  Normal launches
-scale both location and spread, while lognormal launches shift the log
-location and retain the common log spread; Weibull launches use
-\verb{V ~ Weibull(shape, scale)}.
+scale both location and spread, lognormal launches shift the log location,
+and Weibull launches use \code{V ~ Weibull(shape, scale)}.
 }
 \details{
 The model uses the following parameter matrix.  \code{B} is the distance from the
@@ -48,7 +43,6 @@ upper end of the start-point range to the threshold, so the kernel receives
    \emph{k} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Leak rate. \cr
    \emph{tau_s} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Sustained-drive time constant. \cr
    \emph{tau_t} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Transient-drive time constant. \cr
-   \emph{Ttrans} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Transient endpoint parameter (endpoint chart; replaces \code{tau_t}). \cr
    \emph{pi} \tab probit \tab [0, 1] \tab qnorm(.5) \tab  \tab Probability allocated to the sustained process. \cr
 }
 
@@ -61,9 +55,9 @@ With \code{"splitlognormal"}, \verb{log V} is continuous split normal with
 and \code{delta} is unbounded.  \code{delta = 0} reduces exactly to lognormal.
 The split-lognormal option adds the optional identity-scale \code{delta} parameter
 (default \code{0}).
-With \code{drift_distribution = "weibull"}, \code{shape} and \code{scale} are
-positive; in the local race \code{pi} scales the sustained and transient
-launches separately.
+With \code{drift_distribution = "weibull"}, \code{shape} and \code{scale} are positive;
+for the local race, \code{pi} multiplies the scale of the sustained channel and
+\code{1 - pi} multiplies the scale of the transient channel.
 Optional fitting parameters: \code{pContaminant} is the omission probability and
 \code{pGuess} is the uniform-outlier probability.
 
@@ -96,11 +90,13 @@ constants = c(pi = qnorm(0),           constants = c(pi = qnorm(1),
               tau_s = log(1))                        tau_t = log(1))
 }\if{html}{\out{</div>}}
 
-Do not instead try to switch a channel off with \code{tau_s = log(0)} or
-\code{tau_t = log(0)}.  Both are outside the bounds, and neither means what it
-looks like: as \code{tau_s} falls to zero the sustained drive becomes a \emph{step} at
-full strength (the fastest sustained input, not the absence of one), while a
-vanishing \code{tau_t} delivers zero total transient impulse.  \code{pi} is the switch.
+\code{tau_s} and \code{tau_t} are the direct transient/sustained rate parameters;
+there is no endpoint parameterisation to switch between.  Do not try to
+switch a channel off with \code{tau_s = log(0)} or \code{tau_t = log(0)}.  Both are
+outside the bounds, and neither means what it looks like: as \code{tau_s} falls
+to zero the sustained drive becomes a \emph{step} at full strength (the fastest
+sustained input, not the absence of one), while a vanishing \code{tau_t}
+delivers zero total transient impulse.  \code{pi} is the switch.
 }
 
 \seealso{

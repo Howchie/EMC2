@@ -258,7 +258,6 @@ RaceModelAdapter resolve_race_model_adapter(const std::string& type_std,
                          : (btawl_weib ? BTAWL_LAUNCH_WEIBULL
                                        : (btawl_logn ? BTAWL_LAUNCH_LOGNORMAL
                                                      : BTAWL_LAUNCH_NORMAL));
-    out.ctx.btawl_ttrans_chart = false;
     out.ctx.defective_upper_tail = true;
     if (!btawl_logn && type_std.find("_IO") != std::string::npos)
       out.ctx.use_posdrift = false;
@@ -271,25 +270,17 @@ RaceModelAdapter resolve_race_model_adapter(const std::string& type_std,
     const bool btawl_split = (type_std.find("_SPLIT") != std::string::npos);
     const bool btawl_logn = (type_std.find("_LOGN") != std::string::npos);
     const bool btawl_weib = (type_std.find("_WEIB") != std::string::npos);
-    const bool btawl_rate = (type_std.find("_RATE") != std::string::npos);
     out.col_spec = btawl_split
-      ? (btawl_rate ? emc2col::btawlsplit_transient::spec_rate()
-                    : emc2col::btawlsplit_transient::spec())
-      : (btawl_weib
-          ? (btawl_rate ? emc2col::btawl_transient_weib::spec_rate()
-                        : emc2col::btawl_transient_weib::spec())
-          : (btawl_logn
-          ? (btawl_rate ? emc2col::btawl_transient_logn::spec_rate()
-                        : emc2col::btawl_transient_logn::spec())
-          : (btawl_rate ? emc2col::btawl_transient::spec_rate()
-                        : emc2col::btawl_transient::spec())));
+      ? emc2col::btawlsplit_transient::spec()
+      : (btawl_weib ? emc2col::btawl_transient_weib::spec()
+                    : (btawl_logn ? emc2col::btawl_transient_logn::spec()
+                                  : emc2col::btawl_transient::spec()));
     out.ctx.t0_index = btawl_split ? int(emc2col::btawlsplit_transient::t0)
                                    : int(emc2col::btawl_transient::t0);
     out.ctx.btawl_launch = btawl_split ? BTAWL_LAUNCH_SPLITLOGNORMAL
                          : (btawl_weib ? BTAWL_LAUNCH_WEIBULL
                                        : (btawl_logn ? BTAWL_LAUNCH_LOGNORMAL
                                                      : BTAWL_LAUNCH_NORMAL));
-    out.ctx.btawl_ttrans_chart = !btawl_rate;
     out.ctx.defective_upper_tail = true;
     if (!btawl_logn && type_std.find("_IO") != std::string::npos)
       out.ctx.use_posdrift = false;
@@ -302,25 +293,17 @@ RaceModelAdapter resolve_race_model_adapter(const std::string& type_std,
     const bool btawl_split = (type_std.find("_SPLIT") != std::string::npos);
     const bool btawl_logn = (type_std.find("_LOGN") != std::string::npos);
     const bool btawl_weib = (type_std.find("_WEIB") != std::string::npos);
-    const bool btawl_rate = (type_std.find("_RATE") != std::string::npos);
     out.col_spec = btawl_split
-      ? (btawl_rate ? emc2col::btawlsplit_local_race::spec_rate()
-                    : emc2col::btawlsplit_local_race::spec())
-      : (btawl_weib
-          ? (btawl_rate ? emc2col::btawl_local_race_weib::spec_rate()
-                        : emc2col::btawl_local_race_weib::spec())
-          : (btawl_logn
-          ? (btawl_rate ? emc2col::btawl_local_race_logn::spec_rate()
-                        : emc2col::btawl_local_race_logn::spec())
-          : (btawl_rate ? emc2col::btawl_local_race::spec_rate()
-                        : emc2col::btawl_local_race::spec())));
+      ? emc2col::btawlsplit_local_race::spec()
+      : (btawl_weib ? emc2col::btawl_local_race_weib::spec()
+                    : (btawl_logn ? emc2col::btawl_local_race_logn::spec()
+                                  : emc2col::btawl_local_race::spec()));
     out.ctx.t0_index = btawl_split ? int(emc2col::btawlsplit_local_race::t0)
                                    : int(emc2col::btawl_local_race::t0);
     out.ctx.btawl_launch = btawl_split ? BTAWL_LAUNCH_SPLITLOGNORMAL
                          : (btawl_weib ? BTAWL_LAUNCH_WEIBULL
                                        : (btawl_logn ? BTAWL_LAUNCH_LOGNORMAL
                                                      : BTAWL_LAUNCH_NORMAL));
-    out.ctx.btawl_ttrans_chart = !btawl_rate;
     out.ctx.defective_upper_tail = true;
     if (!btawl_logn && type_std.find("_IO") != std::string::npos)
       out.ctx.use_posdrift = false;

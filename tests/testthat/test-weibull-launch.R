@@ -56,16 +56,14 @@ test_that("all Weibull ballistic simulators use the compiled default path", {
                 pars = cbind(make_common(), kappa = .2, p = 1.4),
                 args = list(launch = 3L)),
     BTAwLTransient = list(fun = EMC2:::.rfun_BTAwL,
-                          pars = cbind(make_common(), Ttrans = 2),
-                          args = list(launch = 3L, mode = "transient",
-                                      endpoint_chart = TRUE)),
+                          pars = cbind(make_common(), tau = 2),
+                          args = list(launch = 3L, mode = "transient")),
     BTAwLSustained = list(fun = EMC2:::.rfun_BTAwL,
                           pars = cbind(make_common(), tau_s = .9),
-                          args = list(launch = 3L, mode = "sustained",
-                                      endpoint_chart = FALSE)),
+                          args = list(launch = 3L, mode = "sustained")),
     BTAwL = list(fun = EMC2:::.rfun_BTAwL,
                  pars = cbind(make_common(), tau_s = .9, tau_t = .8, pi = .4),
-                 args = list(launch = 3L, mode = "full", endpoint_chart = FALSE))
+                 args = list(launch = 3L, mode = "full"))
   )
 
   withr::with_options(list(emc2.cpp_rfun = TRUE), {
@@ -115,4 +113,18 @@ test_that("Weibull CDF/PDF kernels are finite and monotone across ballistic fami
     expect_true(all(x >= 0 & x <= 1))
     expect_true(all(diff(x) >= -1e-8))
   }
+})
+
+test_that("Weibull kernels handle extreme time limits gracefully", {
+  skip_model_validation()
+  tt_ext <- c(1e-12, 1e12, Inf)
+  p_bawl <- EMC2:::pleakyba(tt_ext, .5, 2, 2, 3, .2, TRUE, 3L)
+  expect_equal(p_bawl[1], 0)
+  expect_true(is.finite(p_bawl[2]) && p_bawl[2] > 0 && p_bawl[2] <= 1)
+  expect_equal(p_bawl[2], p_bawl[3], tolerance = 1e-10)
+
+  p_bawd <- EMC2:::pbawd(tt_ext, .5, 2, 2, 3, .2, .7, 3L, TRUE, FALSE, 0, Inf)
+  expect_equal(p_bawd[1], 0)
+  expect_true(is.finite(p_bawd[2]) && p_bawd[2] > 0 && p_bawd[2] <= 1)
+  expect_equal(p_bawd[2], p_bawd[3], tolerance = 1e-10)
 })

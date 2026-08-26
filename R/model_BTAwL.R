@@ -13,8 +13,7 @@
 
 
 .btawl_check_cols <- function(pars, launch) {
-  clear <- if ("Ttrans" %in% colnames(pars)) "Ttrans" else "tau"
-  need <- c(.ba_par_names(launch), "b", "A", "t0", "k", clear)
+  need <- c(.ba_par_names(launch), "b", "A", "t0", "k", "tau")
   missing <- setdiff(need, colnames(pars))
   if (length(missing))
     stop("BTAwL requires parameter columns ", paste(missing, collapse = ", "))
@@ -22,9 +21,7 @@
 }
 
 .btawl_tau_col <- function(pars) {
-  if ("Ttrans" %in% colnames(pars))
-    btawl_tau_vec(pars[, "k"], pars[, "Ttrans"])
-  else pars[, "tau"]
+  pars[, "tau"]
 }
 
 dBTAwLTransient <- function(rt, pars, launch = 0L, posdrift = TRUE) {
@@ -64,8 +61,7 @@ pBTAwLTransient <- function(rt, pars, launch = 0L, posdrift = TRUE) {
 }
 
 .btawl_local_race_check_cols <- function(pars, launch) {
-  clear <- if ("Ttrans" %in% colnames(pars)) "Ttrans" else "tau_t"
-  need <- c(.ba_par_names(launch), "b", "A", "t0", "k", "tau_s", clear, "pi")
+  need <- c(.ba_par_names(launch), "b", "A", "t0", "k", "tau_s", "tau_t", "pi")
   missing <- setdiff(need, colnames(pars))
   if (length(missing))
     stop("BTAwL requires parameter columns ", paste(missing, collapse = ", "))
@@ -73,9 +69,7 @@ pBTAwLTransient <- function(rt, pars, launch = 0L, posdrift = TRUE) {
 }
 
 .btawl_local_race_tau_t_col <- function(pars) {
-  if ("Ttrans" %in% colnames(pars))
-    btawl_tau_vec(pars[, "k"], pars[, "Ttrans"])
-  else pars[, "tau_t"]
+  pars[, "tau_t"]
 }
 
 dBTAwL <- function(rt, pars, launch = 0L, posdrift = TRUE) {
@@ -387,10 +381,8 @@ pBTAwLSustained <- function(rt, pars, launch = 0L, posdrift = TRUE) {
 .btawl_constructor <- function(mode = c("full", "transient", "sustained"),
                                posdrift = TRUE,
                                drift_distribution = c("lognormal", "normal",
-                                                       "splitlognormal", "weibull"),
-                               chart = c("rate","endpoint")) {
+                                                       "splitlognormal", "weibull")) {
   mode <- match.arg(mode)
-  chart <- match.arg(chart)
   drift_distribution <- match.arg(drift_distribution)
   launch <- .ba_launch_code(drift_distribution, "BTAwL")
   lognormal <- launch %in% c(1L, 2L)
@@ -418,19 +410,16 @@ pBTAwLSustained <- function(rt, pars, launch = 0L, posdrift = TRUE) {
   }
   launch_pars <- .ba_par_names(launch)
   if (mode == "transient") {
-    clear_name <- if (chart == "endpoint") "Ttrans" else "tau"
     p_types <- c(p_types, B = log(1), A = log(0), t0 = log(0),
-                 k = log(0), setNames(log(1), clear_name))
+                 k = log(0), tau = log(1))
     transform <- c(transform, B = "exp", A = "exp", t0 = "exp",
-                   k = "exp", setNames("exp", clear_name))
+                   k = "exp", tau = "exp")
     minmax <- cbind(minmax, B = c(1e-4, Inf), A = c(1e-4, Inf),
                     t0 = c(0.05, Inf), k = c(1e-4, Inf),
-                    c(1e-4, Inf))
-    colnames(minmax)[ncol(minmax)] <- clear_name
-    exception <- if (chart == "endpoint") c(A = 0) else c(A = 0, k = 0)
+                    tau = c(1e-4, Inf))
+    exception <- c(A = 0, k = 0)
     c_name <- paste0("BTAwL_TRANSIENT", if (weibull) "_WEIB" else if (lognormal) "_LOGN" else "",
-                     if (splitlognormal) "_SPLIT" else "",
-                     if (chart == "rate") "_RATE" else "",
+                     if (splitlognormal) "_SPLIT" else "", "_RATE",
                      if (!lognormal && !posdrift) "_IO" else "")
     .nuis <- add_nuisance_pars(p_types, transform, minmax, exception)
     p_types <- .nuis$p_types; transform <- .nuis$transform
@@ -442,27 +431,20 @@ pBTAwLSustained <- function(rt, pars, launch = 0L, posdrift = TRUE) {
       transform = list(func = transform),
       bound = list(minmax = minmax, exception = exception),
       Ttransform = function(pars, dadm) {
-        lead <- c(launch_pars, "B", "A", "t0", "k", clear_name)
+        lead <- c(launch_pars, "B", "A", "t0", "k", "tau")
         extra <- pars[, setdiff(colnames(pars), lead), drop = FALSE]
         b <- pars[, "B"] + pars[, "A"]
-        tau <- if (chart == "endpoint") btawl_tau_vec(pars[, "k"], pars[, "Ttrans"])
-               else pars[, "tau"]
+        tau <- pars[, "tau"]
         Tmax <- btawl_tmax_vec(pars[, "k"], tau)
         Vcrit <- btawl_vcrit_vec(pars[, "k"], tau, b)
-        if (chart == "endpoint") {
-          out <- cbind(pars[, lead, drop = FALSE], extra, b = b, tau = tau,
-                       Tmax = Tmax, rt_max = pars[, "t0"] + Tmax, Vcrit = Vcrit)
-          out[, "Ttrans"] <- Tmax
-        } else {
-          out <- cbind(pars[, lead, drop = FALSE], extra, b = b,
-                       Tmax = Tmax, rt_max = pars[, "t0"] + Tmax, Vcrit = Vcrit)
-        }
+        out <- cbind(pars[, lead, drop = FALSE], extra, b = b,
+                     Tmax = Tmax, rt_max = pars[, "t0"] + Tmax, Vcrit = Vcrit)
         out
       },
       rfun = function(data, pars)
         .rfun_BTAwL(data$lR, pars, ok = attr(pars, "ok"),
                     posdrift = posdrift, launch = launch,
-                    mode = "transient", endpoint_chart = chart == "endpoint"),
+                    mode = "transient"),
       dfun = function(rt, pars)
         dBTAwLTransient(rt, pars, launch = launch, posdrift = posdrift),
       pfun = function(rt, pars)
@@ -503,7 +485,7 @@ pBTAwLSustained <- function(rt, pars, launch = 0L, posdrift = TRUE) {
       rfun = function(data, pars)
         .rfun_BTAwL(data$lR, pars, ok = attr(pars, "ok"),
                     posdrift = posdrift, launch = launch,
-                    mode = "sustained", endpoint_chart = FALSE),
+                    mode = "sustained"),
       dfun = function(rt, pars)
         dBTAwLSustained(rt, pars, launch = launch, posdrift = posdrift),
       pfun = function(rt, pars)
@@ -515,30 +497,26 @@ pBTAwLSustained <- function(rt, pars, launch = 0L, posdrift = TRUE) {
     ))
   }
 
-  clear_name <- if (chart == "endpoint") "Ttrans" else "tau_t"
   p_types <- c(p_types, B = log(1), A = log(0), t0 = log(0), k = log(0),
-               tau_s = log(1), setNames(log(1), clear_name), pi = qnorm(.5))
+               tau_s = log(1), tau_t = log(1), pi = qnorm(.5))
   transform <- c(transform, B = "exp", A = "exp", t0 = "exp", k = "exp",
-                 tau_s = "exp", setNames("exp", clear_name), pi = "pnorm")
+                 tau_s = "exp", tau_t = "exp", pi = "pnorm")
   minmax <- cbind(minmax, B = c(1e-4, Inf), A = c(1e-4, Inf),
-                  t0 = c(0.05, Inf), k = if (chart == "endpoint") c(1e-4, Inf) else c(0, Inf),
+                  t0 = c(0.05, Inf), k = c(0, Inf),
                   tau_s = c(1e-4, Inf))
-  minmax <- cbind(minmax, c(1e-4, Inf), pi = c(0, 1))
-  colnames(minmax)[ncol(minmax) - 1L] <- clear_name
+  minmax <- cbind(minmax, tau_t = c(1e-4, Inf), pi = c(0, 1))
   # `pi` is permitted to sit on either endpoint so the two nested submodels are
   # reachable from the full kernel: pi = 0 is a pure transient race (tau_s is
   # then inert) and pi = 1 a pure sustained one (tau_t is inert).  The compiled
   # kernel dispatches both exactly, so each matches its dedicated wrapper.
-  exception <- if (chart == "endpoint") c(A = 0, pi = 0, pi = 1) else
-    c(A = 0, k = 0, pi = 0, pi = 1)
+  exception <- c(A = 0, k = 0, pi = 0, pi = 1)
   .nuis <- add_nuisance_pars(p_types, transform, minmax, exception)
   p_types <- .nuis$p_types; transform <- .nuis$transform
   minmax <- .nuis$minmax; exception <- .nuis$exception
   list(
     type = "RACE",
     c_name = paste0("BTAwL", if (weibull) "_WEIB" else if (lognormal) "_LOGN" else "",
-                    if (splitlognormal) "_SPLIT" else "",
-                    if (chart == "rate") "_RATE" else "",
+                    if (splitlognormal) "_SPLIT" else "", "_RATE",
                     if (!lognormal && !posdrift) "_IO" else ""),
     drift_distribution = drift_distribution,
     p_types = p_types,
@@ -546,11 +524,10 @@ pBTAwLSustained <- function(rt, pars, launch = 0L, posdrift = TRUE) {
     transform = list(func = transform),
     bound = list(minmax = minmax, exception = exception),
     Ttransform = function(pars, dadm) {
-      lead <- c(launch_pars, "B", "A", "t0", "k", "tau_s", clear_name, "pi")
+      lead <- c(launch_pars, "B", "A", "t0", "k", "tau_s", "tau_t", "pi")
       extra <- pars[, setdiff(colnames(pars), lead), drop = FALSE]
       b <- pars[, "B"] + pars[, "A"]
-      tau_t <- if (chart == "endpoint") btawl_tau_vec(pars[, "k"], pars[, "Ttrans"])
-               else pars[, "tau_t"]
+      tau_t <- pars[, "tau_t"]
       pure_transient <- pars[, "pi"] <= 1e-14
       pure_transient[is.na(pure_transient)] <- FALSE
       Tmax <- btawl_tmax_vec(pars[, "k"], tau_t)
@@ -560,20 +537,14 @@ pBTAwLSustained <- function(rt, pars, launch = 0L, posdrift = TRUE) {
       # only expose Tmax/rt_max/Vcrit as endpoint diagnostics for pi = 0.
       Tmax[!pure_transient] <- Inf
       Vcrit[!pure_transient] <- Inf
-      if (chart == "endpoint") {
-        out <- cbind(pars[, lead, drop = FALSE], extra, b = b, tau_t = tau_t,
-                     Tmax = Tmax, rt_max = pars[, "t0"] + Tmax, Vcrit = Vcrit)
-        out[pure_transient, "Ttrans"] <- Tmax[pure_transient]
-      } else {
-        out <- cbind(pars[, lead, drop = FALSE], extra, b = b,
-                     Tmax = Tmax, rt_max = pars[, "t0"] + Tmax, Vcrit = Vcrit)
-      }
+      out <- cbind(pars[, lead, drop = FALSE], extra, b = b,
+                   Tmax = Tmax, rt_max = pars[, "t0"] + Tmax, Vcrit = Vcrit)
       out
     },
     rfun = function(data, pars)
       .rfun_BTAwL(data$lR, pars, ok = attr(pars, "ok"),
                   posdrift = posdrift, launch = launch,
-                  mode = "full", endpoint_chart = chart == "endpoint"),
+                  mode = "full"),
     dfun = function(rt, pars)
       dBTAwL(rt, pars, launch = launch, posdrift = posdrift),
     pfun = function(rt, pars)
@@ -611,7 +582,6 @@ pBTAwLSustained <- function(rt, pars, launch = 0L, posdrift = TRUE) {
 #' | *k* | log | \[0, Inf\] | log(0) | | Leak rate. |
 #' | *tau_s* | log | \[0, Inf\] | log(1) | | Sustained-drive time constant. |
 #' | *tau_t* | log | \[0, Inf\] | log(1) | | Transient-drive time constant. |
-#' | *Ttrans* | log | \[0, Inf\] | log(1) | | Transient endpoint parameter (endpoint chart; replaces `tau_t`). |
 #' | *pi* | probit | \[0, 1\] | qnorm(.5) | | Probability allocated to the sustained process. |
 #'
 #' With `drift_distribution = "normal"`, `mu` and `sigma` are replaced by `v`
@@ -659,25 +629,24 @@ pBTAwLSustained <- function(rt, pars, launch = 0L, posdrift = TRUE) {
 #'               tau_s = log(1))                        tau_t = log(1))
 #' ```
 #'
-#' Do not instead try to switch a channel off with `tau_s = log(0)` or
-#' `tau_t = log(0)`.  Both are outside the bounds, and neither means what it
-#' looks like: as `tau_s` falls to zero the sustained drive becomes a *step* at
-#' full strength (the fastest sustained input, not the absence of one), while a
-#' vanishing `tau_t` delivers zero total transient impulse.  `pi` is the switch.
+#' `tau_s` and `tau_t` are the direct transient/sustained rate parameters;
+#' there is no endpoint parameterisation to switch between.  Do not try to
+#' switch a channel off with `tau_s = log(0)` or `tau_t = log(0)`.  Both are
+#' outside the bounds, and neither means what it looks like: as `tau_s` falls
+#' to zero the sustained drive becomes a *step* at full strength (the fastest
+#' sustained input, not the absence of one), while a vanishing `tau_t`
+#' delivers zero total transient impulse.  `pi` is the switch.
 #'
 #' @param posdrift Logical. For a normal launch, truncate `V` below zero.
 #' @param drift_distribution Either `"normal"`, `"lognormal"`, or
 #'   `"splitlognormal"` (continuous median-parameterised split-lognormal), or
 #'   `"weibull"` (`V ~ Weibull(shape, scale)`).
-#' @param chart Either `"endpoint"` (sample `Ttrans`) or `"rate"` (sample
-#'   `tau_t`).
 #' @return A BTAwL race-model specification.
 #' @seealso [BTAwLTransient()], [BTAwLSustained()]
 #' @export
 BTAwL <- function(posdrift = TRUE,
-                  drift_distribution = c("lognormal", "normal", "splitlognormal", "weibull"),
-                  chart = c("rate","endpoint"))
-  .btawl_constructor("full", posdrift, drift_distribution, chart)
+                  drift_distribution = c("lognormal", "normal", "splitlognormal", "weibull"))
+  .btawl_constructor("full", posdrift, drift_distribution)
 
 #' Pure transient BTAwL wrapper.
 #'
@@ -695,8 +664,7 @@ BTAwL <- function(posdrift = TRUE,
 #' | *A* | log | \[0, Inf\] | log(0) | | Start-point range. |
 #' | *t0* | log | \[0, Inf\] | log(0) | | Non-decision time. |
 #' | *k* | log | \[0, Inf\] | log(0) | | Leak rate. |
-#' | *tau* | log | \[0, Inf\] | log(1) | | Transient time constant (rate chart). |
-#' | *Ttrans* | log | \[0, Inf\] | log(1) | | Transient endpoint parameter (endpoint chart; replaces `tau`). |
+#' | *tau* | log | \[0, Inf\] | log(1) | | Transient time constant. |
 #'
 #' With `drift_distribution = "normal"`, `mu` and `sigma` are replaced by `v`
 #' and `sv`; the launch is truncated positive when `posdrift = TRUE`.
@@ -715,14 +683,12 @@ BTAwL <- function(posdrift = TRUE,
 #' @param drift_distribution Either `"normal"`, `"lognormal"`, or
 #'   `"splitlognormal"` (continuous median-parameterised split-lognormal), or
 #'   `"weibull"` (`V ~ Weibull(shape, scale)`).
-#' @param chart Either `"endpoint"` or `"rate"`.
 #' @return A transient-only BTAwL race-model specification.
 #' @export
 BTAwLTransient <- function(posdrift = TRUE,
                            drift_distribution = c("lognormal", "normal",
-                                                   "splitlognormal", "weibull"),
-                           chart = c("rate","endpoint"))
-  .btawl_constructor("transient", posdrift, drift_distribution, chart)
+                                                   "splitlognormal", "weibull"))
+  .btawl_constructor("transient", posdrift, drift_distribution)
 #' Pure sustained BTAwL wrapper.
 #'
 #' The sustained wrapper uses the following parameter matrix:
@@ -758,11 +724,9 @@ BTAwLTransient <- function(posdrift = TRUE,
 #' @param drift_distribution Either `"normal"`, `"lognormal"`, or
 #'   `"splitlognormal"` (continuous median-parameterised split-lognormal), or
 #'   `"weibull"` (`V ~ Weibull(shape, scale)`).
-#' @param chart Either `"endpoint"` or `"rate"`.
 #' @return A sustained-only BTAwL race-model specification.
 #' @export
 BTAwLSustained <- function(posdrift = TRUE,
                            drift_distribution = c("lognormal", "normal",
-                                                   "splitlognormal", "weibull"),
-                           chart = c("rate","endpoint"))
-  .btawl_constructor("sustained", posdrift, drift_distribution, chart)
+                                                   "splitlognormal", "weibull"))
+  .btawl_constructor("sustained", posdrift, drift_distribution)

@@ -1,4 +1,8 @@
 # EMC2 3.4.0
+## Development
+
+-   **Breaking:** BTAwL no longer accepts `chart = "endpoint"`; sample
+    `tau`/`tau_t` directly.
 
 ## Performance
 

@@ -203,7 +203,7 @@ test_that("BTAwL cpp simulator covers transient, sustained and local-race launch
       mode_pars <- mode_pars_list[[mode + 1L]]
       set.seed(100 + 10 * launch + mode)
       out <- EMC2:::rbta_wl_cpp(as.matrix(mode_pars), levels(lR), ok,
-                                mode, TRUE, launch, FALSE)
+                                mode, TRUE, launch)
       expect_equal(length(out$R), n_btawl)
       expect_equal(length(out$rt), n_btawl)
       expect_true(any(is.finite(out$rt)))
@@ -211,11 +211,11 @@ test_that("BTAwL cpp simulator covers transient, sustained and local-race launch
     }
   }
 
-  pars_endpoint <- cbind(v = rep(3, length(lR)), sv = 0.35, b = 1.2, A = 0.2,
-                          t0 = 0.1, k = 0.5, Ttrans = 2.0)
+  pars_tau <- cbind(v = rep(3, length(lR)), sv = 0.35, b = 1.2, A = 0.2,
+                    t0 = 0.1, k = 0.5, tau = 2.0)
   set.seed(901)
-  endpoint <- EMC2:::rbta_wl_cpp(pars_endpoint, levels(lR), ok, 0L, TRUE, 0L, TRUE)
-  expect_true(any(is.finite(endpoint$rt)))
+  tau_out <- EMC2:::rbta_wl_cpp(pars_tau, levels(lR), ok, 0L, TRUE, 0L)
+  expect_true(any(is.finite(tau_out$rt)))
 })
 
 test_that("BTAwL constructors dispatch their default rfun to C++", {
@@ -226,13 +226,13 @@ test_that("BTAwL constructors dispatch their default rfun to C++", {
 
   lR <- factor(rep(c("left", "right"), 80), levels = c("left", "right"))
   cases <- list(
-    BTAwLTransient(drift_distribution = "normal", chart = "endpoint"),
+    BTAwLTransient(drift_distribution = "normal"),
     BTAwLSustained(drift_distribution = "normal"),
-    BTAwL(drift_distribution = "normal", chart = "rate")
+    BTAwL(drift_distribution = "normal")
   )
   raw <- list(
     cbind(v = rep(c(3, 2.5), 80), sv = .35, B = 1.0, A = .2,
-          t0 = .1, k = .5, Ttrans = 2),
+          t0 = .1, k = .5, tau = 2),
     cbind(v = rep(c(3, 2.5), 80), sv = .35, B = 1.0, A = .2,
           t0 = .1, k = .5, tau_s = .9),
     cbind(v = rep(c(3, 2.5), 80), sv = .35, B = 1.0, A = .2,
@@ -276,7 +276,7 @@ test_that("BTAwL C++ draws match the R reference distributions", {
     r <- case$ref(lR, case$pars, ok = ok, posdrift = TRUE, launch = 0L)
     set.seed(2000 + case$mode)
     cpp <- EMC2:::rbta_wl_cpp(case$pars, levels(lR), ok, case$mode,
-                              TRUE, 0L, FALSE)
+                              TRUE, 0L)
     prop_close(mean(is.na(r$R)), mean(is.na(cpp$R)))
     prop_close(mean(r$R == "left", na.rm = TRUE),
                mean(cpp$R == 1, na.rm = TRUE))

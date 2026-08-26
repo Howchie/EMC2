@@ -995,18 +995,6 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
-// btawl_tau_vec
-NumericVector btawl_tau_vec(NumericVector k, NumericVector Ttrans);
-RcppExport SEXP _EMC2_btawl_tau_vec(SEXP kSEXP, SEXP TtransSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< NumericVector >::type k(kSEXP);
-    Rcpp::traits::input_parameter< NumericVector >::type Ttrans(TtransSEXP);
-    rcpp_result_gen = Rcpp::wrap(btawl_tau_vec(k, Ttrans));
-    return rcpp_result_gen;
-END_RCPP
-}
 // btawl_vcrit_vec
 NumericVector btawl_vcrit_vec(NumericVector k, NumericVector tau, NumericVector b);
 RcppExport SEXP _EMC2_btawl_vcrit_vec(SEXP kSEXP, SEXP tauSEXP, SEXP bSEXP) {
@@ -2121,8 +2109,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // rbta_wl_cpp
-Rcpp::List rbta_wl_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels, Rcpp::LogicalVector ok, int mode, bool posdrift, int launch, bool endpoint_chart);
-RcppExport SEXP _EMC2_rbta_wl_cpp(SEXP parsSEXP, SEXP lR_levelsSEXP, SEXP okSEXP, SEXP modeSEXP, SEXP posdriftSEXP, SEXP launchSEXP, SEXP endpoint_chartSEXP) {
+Rcpp::List rbta_wl_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels, Rcpp::LogicalVector ok, int mode, bool posdrift, int launch);
+RcppExport SEXP _EMC2_rbta_wl_cpp(SEXP parsSEXP, SEXP lR_levelsSEXP, SEXP okSEXP, SEXP modeSEXP, SEXP posdriftSEXP, SEXP launchSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -2132,8 +2120,7 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< int >::type mode(modeSEXP);
     Rcpp::traits::input_parameter< bool >::type posdrift(posdriftSEXP);
     Rcpp::traits::input_parameter< int >::type launch(launchSEXP);
-    Rcpp::traits::input_parameter< bool >::type endpoint_chart(endpoint_chartSEXP);
-    rcpp_result_gen = Rcpp::wrap(rbta_wl_cpp(pars, lR_levels, ok, mode, posdrift, launch, endpoint_chart));
+    rcpp_result_gen = Rcpp::wrap(rbta_wl_cpp(pars, lR_levels, ok, mode, posdrift, launch));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -3263,7 +3250,6 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_dbtawl_local_race", (DL_FUNC) &_EMC2_dbtawl_local_race, 13},
     {"_EMC2_pbtawl_local_race", (DL_FUNC) &_EMC2_pbtawl_local_race, 13},
     {"_EMC2_btawl_tmax_vec", (DL_FUNC) &_EMC2_btawl_tmax_vec, 2},
-    {"_EMC2_btawl_tau_vec", (DL_FUNC) &_EMC2_btawl_tau_vec, 2},
     {"_EMC2_btawl_vcrit_vec", (DL_FUNC) &_EMC2_btawl_vcrit_vec, 3},
     {"_EMC2_dfrq", (DL_FUNC) &_EMC2_dfrq, 7},
     {"_EMC2_pfrq", (DL_FUNC) &_EMC2_pfrq, 8},
@@ -3326,7 +3312,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_rrdm_cpp", (DL_FUNC) &_EMC2_rrdm_cpp, 3},
     {"_EMC2_rddm_cpp", (DL_FUNC) &_EMC2_rddm_cpp, 3},
     {"_EMC2_rbawl_cpp", (DL_FUNC) &_EMC2_rbawl_cpp, 8},
-    {"_EMC2_rbta_wl_cpp", (DL_FUNC) &_EMC2_rbta_wl_cpp, 7},
+    {"_EMC2_rbta_wl_cpp", (DL_FUNC) &_EMC2_rbta_wl_cpp, 6},
     {"_EMC2_rbawl_corr_cpp", (DL_FUNC) &_EMC2_rbawl_corr_cpp, 7},
     {"_EMC2_rbawd_cpp", (DL_FUNC) &_EMC2_rbawd_cpp, 7},
     {"_EMC2_rbawf_cpp", (DL_FUNC) &_EMC2_rbawf_cpp, 6},

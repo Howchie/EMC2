@@ -162,12 +162,11 @@ btawl_local_race_rows <- function(n, launch = 0L, pi = 0.5, k = 0.5) {
 # 1. Geometry & Charts
 # ---------------------------------------------------------------------------
 
-test_that("T_max = 2*tau at k*tau = 1 identity and roundtrips with tau solver", {
+test_that("T_max = 2*tau at k*tau = 1 identity", {
   tau <- c(0.05, 0.2, 0.5, 1, 2)
   k <- 1 / tau
   tm <- EMC2:::btawl_tmax_vec(k, tau)
   expect_equal(tm, 2 * tau, tolerance = 2e-12)
-  expect_equal(EMC2:::btawl_tau_vec(k, tm), tau, tolerance = 2e-10)
   expect_true(is.infinite(EMC2:::btawl_tmax_vec(0, 1)[1L]))
 })
 
@@ -448,32 +447,29 @@ test_that("boundary parameters produce no NaN", {
 # 6. Constructors & Charts
 # ---------------------------------------------------------------------------
 
-test_that("constructors expose full local-race and pure-process charts", {
-  endpoint <- BTAwL(drift_distribution = "normal", chart = "endpoint")
-  rate <- BTAwL(drift_distribution = "normal", chart = "rate")
-  expect_equal(endpoint$c_name, "BTAwL")
+test_that("constructors expose full local-race and pure-process rate charts", {
+  rate <- BTAwL(drift_distribution = "normal")
   expect_equal(rate$c_name, "BTAwL_RATE")
-  expect_true("Ttrans" %in% names(endpoint$p_types))
-  expect_true(all(c("tau_s", "Ttrans", "pi") %in% endpoint$p_types_canonical))
   expect_true(all(c("tau_s", "tau_t", "pi") %in% rate$p_types_canonical))
+  # The endpoint chart has been removed; requesting it must error.
+  expect_error(BTAwL(chart = "endpoint"))
   # The public defaults are the lognormal/rate chart.
   expect_equal(BTAwLTransient()$c_name, "BTAwL_TRANSIENT_LOGN_RATE")
   expect_equal(BTAwLSustained()$c_name, "BTAwL_SUSTAINED_LOGN")
 })
 
 test_that("Ttransform reports b, tau, Tmax, rt_max and Vcrit", {
-  m <- BTAwLTransient(drift_distribution = "normal", chart = "endpoint")
+  m <- BTAwLTransient(drift_distribution = "normal")
   pars <- cbind(v = c(2, 2), sv = c(0.5, 0.5), B = c(0.8, 1.6),
                 A = c(0.3, 0.3), t0 = c(0.15, 0.15), k = c(1, 1),
-                Ttrans = c(2, 2))
+                tau = c(2, 2))
   out <- m$Ttransform(pars, NULL)
   expect_equal(out[, "b"], pars[, "B"] + pars[, "A"])
-  expect_equal(out[, "tau"], EMC2:::btawl_tau_vec(pars[, "k"], pars[, "Ttrans"]), tolerance = 1e-10)
-  expect_equal(out[, "Tmax"], pars[, "Ttrans"])
+  expect_equal(out[, "Tmax"], EMC2:::btawl_tmax_vec(pars[, "k"], pars[, "tau"]))
   expect_equal(out[, "rt_max"], pars[, "t0"] + out[, "Tmax"])
-  expect_equal(out[, "Vcrit"], EMC2:::btawl_vcrit_vec(pars[, "k"], out[, "tau"], out[, "b"]))
+  expect_equal(out[, "Vcrit"], EMC2:::btawl_vcrit_vec(pars[, "k"], pars[, "tau"], out[, "b"]))
 
-  rate <- BTAwL(drift_distribution = "normal", chart = "rate")
+  rate <- BTAwL(drift_distribution = "normal")
   rate_pars <- cbind(v = 2, sv = 0.5, B = 0.8, A = 0.3, t0 = 0.15,
                      k = 1, tau_s = 1.2, tau_t = 0.7, pi = 0.4)
   rate_out <- rate$Ttransform(rate_pars, NULL)
@@ -485,11 +481,12 @@ test_that("dfun/pfun use the same launch distribution as c_name", {
   pars <- cbind(mu = 1, sigma = 0.5, v = 1, sv = 0.5, b = 1.3, A = 0.3,
                 t0 = 0.15, k = 1.0, tau = 1.0)
   rt <- 0.5
-  expect_equal(BTAwLTransient(drift_distribution = "lognormal", chart = "rate")$dfun(rt, pars),
+  expect_equal(BTAwLTransient(drift_distribution = "lognormal")$dfun(rt, pars),
                d_btawl(rt - 0.15, 0.3, 1.3, 1, 0.5, 1.0, 1.0, launch = 1L))
-  expect_equal(BTAwLTransient(drift_distribution = "normal", chart = "rate")$dfun(rt, pars),
+  expect_equal(BTAwLTransient(drift_distribution = "normal")$dfun(rt, pars),
                d_btawl(rt - 0.15, 0.3, 1.3, 1, 0.5, 1.0, 1.0, launch = 0L))
 })
+
 
 # ---------------------------------------------------------------------------
 # 7. Compiled Race Likelihood
@@ -497,9 +494,7 @@ test_that("dfun/pfun use the same launch distribution as c_name", {
 
 ref_race_ll_btawl <- function(dadm, pars, launch, min_ll = log(1e-10)) {
   nm <- if (launch == 1L) c("mu", "sigma") else c("v", "sv")
-  clear_col <- if ("Ttrans" %in% colnames(pars)) "Ttrans" else "tau"
-  tau_vals <- if ("Ttrans" %in% colnames(pars))
-    EMC2:::btawl_tau_vec(pars[, "k"], pars[, "Ttrans"]) else pars[, "tau"]
+  tau_vals <- pars[, "tau"]
   Fu <- function(i, u) {
     if (!isTRUE(u > 0)) return(0)
     ref_F_btawl(u, pars[i, nm[1]], pars[i, nm[2]], pars[i, "b"], pars[i, "A"],
@@ -565,14 +560,14 @@ test_that("the compiled race likelihood matches the R reference", {
   skip_on_cran()
   dat <- btawl_dat()
   p <- c(mu = 0.5, sigma = log(0.5), v = 2.5, sv = log(1), B = log(0.8),
-         A = log(0.3), t0 = log(0.15), k = log(1), Ttrans = log(2))
+         A = log(0.3), t0 = log(0.15), k = log(1), tau = log(2))
   fx <- list(
     ln = suppressMessages(btawl_mk(function() BTAwLTransient(
-      drift_distribution = "lognormal", chart = "endpoint"),
-      list(mu ~ 1, sigma ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1, Ttrans ~ 1), NULL, dat)),
+      drift_distribution = "lognormal"),
+      list(mu ~ 1, sigma ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1, tau ~ 1), NULL, dat)),
     no = suppressMessages(btawl_mk(function() BTAwLTransient(
-      drift_distribution = "normal", chart = "endpoint"),
-      list(v ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1, Ttrans ~ 1), c(sv = log(1)), dat)))
+      drift_distribution = "normal"),
+      list(v ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1, tau ~ 1), c(sv = log(1)), dat)))
   for (which in c("ln", "no")) {
     launch <- if (which == "ln") 1L else 0L
     pp <- p[names(sampled_pars(fx[[which]]$des))]
@@ -588,12 +583,11 @@ test_that("a p_types reordering is caught by the column contract", {
   skip_on_cran()
   dat <- btawl_dat()
   fx <- suppressMessages(btawl_mk(function() BTAwLTransient(
-    drift_distribution = "lognormal", chart = "endpoint"),
-    list(mu ~ 1, sigma ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1, Ttrans ~ 1), NULL, dat))
+    drift_distribution = "lognormal"),
+    list(mu ~ 1, sigma ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1, tau ~ 1), NULL, dat))
   p <- c(mu = 0.5, sigma = log(0.5), B = log(0.8), A = log(0.3),
-         t0 = log(0.15), k = log(1), Ttrans = log(2))
-  swapped <- names(BTAwLTransient(drift_distribution = "lognormal",
-                                 chart = "endpoint")$p_types)
+         t0 = log(0.15), k = log(1), tau = log(2))
+  swapped <- names(BTAwLTransient(drift_distribution = "lognormal")$p_types)
   swapped[1:2] <- swapped[2:1]
   expect_error(btawl_ll(fx, p[names(sampled_pars(fx$des))],
                         p_types_override = swapped),
@@ -606,10 +600,10 @@ test_that("omissions past t0 + T_max stay well posed", {
   dat$rt[1:8] <- Inf
   dat$R[1:8] <- NA
   fx <- suppressMessages(btawl_mk(function() BTAwLTransient(
-    drift_distribution = "lognormal", chart = "endpoint"),
-    list(mu ~ 1, sigma ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1, Ttrans ~ 1), NULL, dat))
+    drift_distribution = "lognormal"),
+    list(mu ~ 1, sigma ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1, tau ~ 1), NULL, dat))
   p <- c(mu = 0.5, sigma = log(0.5), B = log(0.8), A = log(0.3),
-         t0 = log(0.15), k = log(1), Ttrans = log(2))
+         t0 = log(0.15), k = log(1), tau = log(2))
   got <- btawl_ll(fx, p[names(sampled_pars(fx$des))])
   expect_true(is.finite(got))
   dadm <- fx$emc[[1]]$data[[1]]
@@ -620,8 +614,8 @@ test_that("omissions past t0 + T_max stay well posed", {
   dat2 <- dat
   dat2$rt[1:8] <- 0.15 + 2 + 5
   fx2 <- suppressMessages(btawl_mk(function() BTAwLTransient(
-    drift_distribution = "lognormal", chart = "endpoint"),
-    list(mu ~ 1, sigma ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1, Ttrans ~ 1), NULL, dat2))
+    drift_distribution = "lognormal"),
+    list(mu ~ 1, sigma ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1, tau ~ 1), NULL, dat2))
   expect_true(is.finite(btawl_ll(fx2, p[names(sampled_pars(fx2$des))])))
 })
 
@@ -767,12 +761,12 @@ test_that("the transient design produces omissions that can be fit back through"
   dat <- btawl_dat(40)
   des <- suppressMessages(design(
     data = dat,
-    model = function() BTAwLTransient(drift_distribution = "normal", chart = "endpoint"),
+    model = function() BTAwLTransient(drift_distribution = "normal"),
     matchfun = function(d) d$S == d$lR,
-    formula = list(v ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1, Ttrans ~ 1),
+    formula = list(v ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1, tau ~ 1),
     constants = c(sv = log(1))))
   p <- c(v = 2.5, B = log(0.8), A = log(0.3), t0 = log(0.15),
-         k = log(1), Ttrans = log(2))
+         k = log(1), tau = log(2))
   set.seed(3)
   sim <- make_data(p, design = des, n_trials = 60)
   expect_true(any(is.infinite(sim$rt)))  # intrinsic omissions
@@ -788,14 +782,12 @@ test_that("the transient design produces omissions that can be fit back through"
 # ---------------------------------------------------------------------------
 
 test_that("pi is permitted on both endpoints", {
-  for (chart in c("rate", "endpoint")) {
-    exc <- BTAwL(chart = chart)$bound$exception
-    expect_equal(sort(unname(exc[names(exc) == "pi"])), c(0, 1))
-    # The bound machinery must accept both endpoints, and nothing between them
-    # that would otherwise be excluded by the strict [0,1] test.
-    mm <- BTAwL(chart = chart)$bound$minmax
-    expect_equal(unname(mm[, "pi"]), c(0, 1))
-  }
+  exc <- BTAwL()$bound$exception
+  expect_equal(sort(unname(exc[names(exc) == "pi"])), c(0, 1))
+  # The bound machinery must accept both endpoints, and nothing between them
+  # that would otherwise be excluded by the strict [0,1] test.
+  mm <- BTAwL()$bound$minmax
+  expect_equal(unname(mm[, "pi"]), c(0, 1))
 })
 
 test_that("bound exceptions admit several permitted values per parameter", {
@@ -825,15 +817,15 @@ test_that("pi = 0 and pi = 1 reproduce the dedicated wrappers exactly", {
 
   # Pure transient: pi = 0, tau_s inert.
   expect_equal(
-    ll_of(BTAwL(chart = "rate"), full, c(pi = qnorm(0), tau_s = log(1))),
-    ll_of(BTAwLTransient(chart = "rate"),
+    ll_of(BTAwL(), full, c(pi = qnorm(0), tau_s = log(1))),
+    ll_of(BTAwLTransient(),
           list(mu ~ 1, B ~ 1, A ~ 1, sigma ~ 1, t0 ~ 1, k ~ 1, tau ~ 1),
           NULL))
 
   # Pure sustained: pi = 1, tau_t inert.
   expect_equal(
-    ll_of(BTAwL(chart = "rate"), full, c(pi = qnorm(1), tau_t = log(1))),
-    ll_of(BTAwLSustained(chart = "rate"),
+    ll_of(BTAwL(), full, c(pi = qnorm(1), tau_t = log(1))),
+    ll_of(BTAwLSustained(),
           list(mu ~ 1, B ~ 1, A ~ 1, sigma ~ 1, t0 ~ 1, k ~ 1, tau_s ~ 1),
           NULL))
 })
@@ -843,7 +835,7 @@ test_that("an inert time constant really is inert at a pinned pi", {
   # cannot affect the likelihood, so pinning it at any legal value is a free
   # choice rather than an assumption.
   for (ts in c(log(.2), log(1), log(5))) {
-    m <- BTAwL(chart = "rate")
+    m <- BTAwL()
     pars <- cbind(mu = log(6), sigma = .5, b = 1.4, A = .4, t0 = .2, k = 2,
                   tau_t = .6, tau_s = exp(ts), pi = 0)
     expect_equal(m$dfun(0.5, pars),
