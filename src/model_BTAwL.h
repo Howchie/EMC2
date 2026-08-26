@@ -124,10 +124,7 @@ double btawl_vstar(double t, double z, const BtawlGeom& g);
 // Derivative of V*(t,z).  It is negative on the live/rising limb.
 double btawl_vstar_prime(double t, double z, const BtawlGeom& g);
 
-// Start point at which the tangency time equals t.  Gamma starts at one,
-// rises to its maximum at u = tau, and then decreases to zero at t_max.  The
-// clamp below is therefore load-bearing: Gamma is not globally monotone, and
-// a Newton solve seeded from that assumption can select the wrong branch.
+// Start point at which the required launch V*(t, z) is tangent at t.
 double btawl_z_t(double t, const BtawlGeom& g);
 
 double btawl_tangent_z_prime(double t, const BtawlGeom& g);
@@ -266,6 +263,11 @@ double btawl_sustained_cdf(double t, double A, double b, double p1, double p2,
 double btawl_sustained_pdf(double t, double A, double b, double p1, double p2,
                                   double k, double tau_s, int launch, bool posdrift,
                                   double delta = 0.0);
+
+double btawl_sustained_log_pdf(double t, double A, double b, double p1,
+                               double p2, double k, double tau_s,
+                               int launch, bool posdrift,
+                               double delta = 0.0);
 
 double btawl_local_race_cdf(double t, double A, double b, double p1, double p2,
                             double k, double tau_s, double tau_t, double pi,

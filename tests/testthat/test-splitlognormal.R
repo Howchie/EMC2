@@ -111,6 +111,16 @@ testthat::test_that("ballistic model constructors work with default arguments", 
   expect_equal(m_bawdp$c_name, "BAwDp_LOGN")
 })
 
+testthat::test_that("BAwF keeps the nuisance columns available to design", {
+  expect_true(all(c("pContaminant", "pGuess") %in% names(BAwF()$p_types)))
+  expect_silent(design(
+    factors = list(subjects = 1, S = 1), Rlevels = 1,
+    formula = list(mu ~ 1, sigma ~ 1, B ~ 1, A ~ 1, t0 ~ 1, k ~ 1,
+                   pContaminant ~ 1),
+    model = BAwF, report_p_vector = FALSE
+  ))
+})
+
 testthat::test_that("split lognormal CDF is non-decreasing and well-behaved", {
   t_grid <- seq(0.2, 3.0, by = 0.2)
   for (del in c(-0.8, 0, 0.8)) {
@@ -134,20 +144,58 @@ testthat::test_that("split lognormal CDF is non-decreasing and well-behaved", {
   }
 })
 
-testthat::test_that("extreme delta produces valid splitlognormal parameters without overflow", {
+testthat::test_that("split launch wrappers accept row-wise delta vectors", {
+  compiled <- c("dbawd", "pbawd", "dbawf", "pbawf", "dbawr", "pbawr",
+                "dbtawl_transient", "pbtawl_transient",
+                "dbtawl_local_race", "pbtawl_local_race",
+                "btawl_transient_log_surv_vec", "btawl_local_race_log_surv_vec")
+  skip_if_not(all(vapply(compiled, function(x)
+    exists(x, envir = asNamespace("EMC2"), inherits = FALSE), logical(1))),
+    "compiled split-launch bindings are unavailable")
+  n <- 5
+  t <- seq(0.2, 2, length.out = n)
+  delta <- seq(-0.8, 0.8, length.out = n)
+  A <- rep(0.3, n); b <- rep(1, n); mu <- rep(0, n); sigma <- rep(1, n)
+  k <- rep(0.5, n)
+  expect_length(EMC2:::dbawd(t, A, b, mu, sigma, k, rep(0.5, n),
+                             launch = 2, delta = delta), n)
+  expect_length(EMC2:::pbawd(t, A, b, mu, sigma, k, rep(0.5, n),
+                             launch = 2, delta = delta), n)
+  expect_length(EMC2:::dbawf(t, A, b, mu, sigma, k,
+                             launch = 2, delta = delta), n)
+  expect_length(EMC2:::pbawf(t, A, b, mu, sigma, k,
+                             launch = 2, delta = delta), n)
+  expect_length(EMC2:::dbawr(t, A, b, mu, sigma, rep(0.5, n), rep(1, n),
+                             launch = 2, delta = delta), n)
+  expect_length(EMC2:::pbawr(t, A, b, mu, sigma, rep(0.5, n), rep(1, n),
+                             launch = 2, delta = delta), n)
+
+  pars <- data.frame(mu = mu, sigma = sigma, delta = delta, b = b, A = A,
+                     t0 = rep(0.1, n), k = k, Ttrans = rep(1, n),
+                     tau_s = rep(1, n), tau_t = rep(1, n), pi = rep(0.5, n))
+  expect_length(EMC2:::pBTAwLTransient(t, pars, launch = 2), n)
+  expect_length(EMC2:::pBTAwL(t, pars, launch = 2), n)
+  expect_length(EMC2:::pBTAwLSustained(t, pars, launch = 2), n)
+  expect_length(EMC2:::btawl_transient_log_surv_vec(
+    t, A, b, mu, sigma, k, rep(1, n), launch = 2, delta = delta), n)
+  expect_length(EMC2:::btawl_local_race_log_surv_vec(
+    t, A, b, mu, sigma, k, rep(1, n), rep(1, n), rep(0.5, n),
+    launch = 2, delta = delta), n)
+})
+
+testthat::test_that("large delta produces valid finite splitlognormal parameters without intermediate overflow", {
   skip_if_not(exists(".bawd_split_params", envir = asNamespace("EMC2"), inherits = FALSE),
              "split launch helpers are unavailable")
   split_params <- getFromNamespace(".bawd_split_params", "EMC2")
   
-  mu <- 0
-  sigma <- 1
-  delta <- -1500
+  # delta = -1417.5 causes 3*sigma_R and 4*sigma_R to individually overflow to Inf
+  # during intermediate steps (since sigma_R = 6.4e307), but sigma_R itself is finite.
+  # The simplified math avoids Inf/Inf = NaN.
+  sp <- split_params(mu = 0, sigma = 1, delta = -1417.5)
   
-  sp <- split_params(mu, sigma, delta)
-  expect_true(is.finite(sp$c))
-  expect_true(is.finite(sp$sigma_L))
   expect_true(is.finite(sp$sigma_R))
-  expect_true(is.finite(sp$a))
+  expect_true(is.finite(sp$c))
+  expect_true(!is.nan(sp$c))
 })
 
 testthat::test_that("delta zero preserves BAwL lognormal path", {

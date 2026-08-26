@@ -139,7 +139,7 @@ DDM <- function(){
       pars
     },
     # Random function
-    rfun=function(data=NULL,pars) rDDM(data$R,pars, attr(pars, "ok")),
+    rfun=function(data=NULL,pars) .rfun_DDM(data$R, pars, attr(pars, "ok")),
     # Density function (PDF)
     dfun=function(rt,R,pars) dDDM(rt,R,pars),
     # Probability function (CDF)
@@ -203,8 +203,9 @@ DDM <- function(){
 #' Rnogo=function(d)factor(rep("no",nrow(d)),levels=c("no","yes"))
 #' Rgo=function(d)factor(rep("yes",nrow(d)),levels=c("no","yes")))
 #'
-#' See the help for DDM for further details. At present this model is not fully
-#' implemented in C, so is a little slower to use than the DDM, but not greatly.
+#' See the help for DDM for further details. The default simulator uses the
+#' compiled bounded-Diffusion kernel; set `options(emc2.cpp_rfun = FALSE)` to
+#' use the reference R sampler.
 #'
 #' @return A model list with all the necessary functions to sample
 #' @examples
@@ -244,7 +245,7 @@ DDMGNG <- function(){
     },
     # Random function
     rfun=function(data,pars) {
-      out <- rDDM(data$R,pars, attr(pars, "ok"))
+      out <- .rfun_DDM(data$R, pars, attr(pars, "ok"))
       out$rt[out$rt>pars[,"TIMEOUT"]] <- Inf
       out$rt[as.numeric(out$R)==pars[,"Rnogo"]] <- Inf
       out$R[is.infinite(out$rt)] <- NA

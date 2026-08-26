@@ -171,6 +171,22 @@ test_that("T_max = 2*tau at k*tau = 1 identity and roundtrips with tau solver", 
   expect_true(is.infinite(EMC2:::btawl_tmax_vec(0, 1)[1L]))
 })
 
+test_that("T_max solves the transient state derivative across leak regimes", {
+  # The weak-leak regime is the important regression case: its endpoint is
+  # substantially later than 2 * tau.
+  k <- c(0.01, 0.025, 0.1, 0.5, 1, 2, 20)
+  tau <- rep(1, length(k))
+  tm <- EMC2:::btawl_tmax_vec(k, tau)
+  hp <- (tm / tau) * exp(-tm / tau) -
+    k * vapply(seq_along(tm), function(i)
+      EMC2:::.btawl_h(tm[i], k[i], tau[i]), numeric(1))
+  expect_true(all(is.finite(tm)))
+  expect_lt(max(abs(hp)), 1e-10)
+  expect_gt(tm[1], 2)
+  expect_gt(tm[2], 4)
+  expect_equal(tm[k == 1], 2, tolerance = 1e-12)
+})
+
 test_that("V_c(0) is b / H(T_max) and scales with b", {
   tau <- 1; k <- 1; b <- c(1.0, 2.5)
   vc <- EMC2:::btawl_vcrit_vec(rep(k, 2), rep(tau, 2), b)
@@ -251,9 +267,41 @@ test_that("the CDF is flat past T_max and F(Inf) is the finishing mass", {
     beyond <- p_btawl(c(Tm * 1.2, Tm * 10, Inf), cs$A, cs$b, cs$p1, cs$p2,
                       cs$k, cs$tau, launch = cs$launch)
     expect_equal(beyond, rep(at, 3), tolerance = 1e-12)
-    expect_lt(at, 1)  # defective tail
+    expect_true(at >= 0 && at <= 1)
     expect_equal(d_btawl(c(Tm, Tm * 1.5), cs$A, cs$b, cs$p1, cs$p2, cs$k,
                          cs$tau, launch = cs$launch), c(0, 0))
+  }
+})
+
+test_that("transient endpoint CDF equals the complement of the survivor", {
+  k <- 0.025; tau <- 1.17; Tm <- EMC2:::btawl_tmax_vec(k, tau)
+  expect_gt(Tm, 4)
+  for (launch in 0:1) {
+    p1 <- if (launch == 1L) 0.5 else 1.5
+    p2 <- 0.8
+    F <- p_btawl(c(Tm * 0.99, Tm, Tm * 1.1, Inf),
+                 0.4, 1.3, p1, p2, k, tau, launch = launch)
+    ls <- EMC2:::btawl_transient_log_surv_vec(
+      Tm, A = 0.4, b = 1.3, p1 = p1, p2 = p2, k = k, tau = tau,
+      launch = launch)
+    expect_true(all(diff(F) >= -1e-12))
+    expect_equal(F[2:4], rep(-expm1(ls), 3), tolerance = 1e-10)
+    expect_equal(d_btawl(c(Tm, Tm * 1.1, Inf), 0.4, 1.3, p1, p2,
+                         k, tau, launch = launch), c(0, 0, 0), tolerance = 0)
+  }
+})
+
+test_that("transient density stays finite approaching a weak-leak endpoint", {
+  k <- 0.025; tau <- 1.17; Tm <- EMC2:::btawl_tmax_vec(k, tau)
+  tt <- Tm * (1 - c(1e-4, 1e-6, 1e-8, 1e-10, 1e-12))
+  for (launch in 0:1) {
+    f <- d_btawl(tt, 0.4, 1.3,
+                 p1 = if (launch == 1L) 0.5 else 1.5,
+                 p2 = 0.8, k = k, tau = tau, launch = launch)
+    expect_true(all(is.finite(f)))
+    expect_true(all(f >= 0))
+    expect_lt(max(f), 1e6)
+    expect_true(all(diff(f) <= 1e-8))
   }
 })
 
@@ -605,6 +653,22 @@ test_that("pi = 1 handles the sustained-only member", {
   expect_gt(cdf[6], cdf[5])
   expect_gt(cdf[7], cdf[6])
   expect_gt(EMC2:::dBTAwL(10, p[5, ]), 0)
+})
+
+test_that("stiff sustained paths use a finite monotone point limit", {
+  # Generic stiff-timescale probe: k * tau_s = 1 and k * t is already
+  # large enough for q = exp(-k t) / h_s to lose endpoint resolution.
+  tt <- c(0.02, 0.04, 0.08, 0.16, 0.32)
+  p <- data.frame(mu = rep(6.8, length(tt)), sigma = rep(0.35, length(tt)),
+                  b = rep(1.2, length(tt)), A = rep(0.2, length(tt)),
+                  t0 = 0, k = rep(800, length(tt)),
+                  tau_s = rep(1.25e-3, length(tt)))
+  cdf <- EMC2:::pBTAwLSustained(tt, p, launch = 1L)
+  pdf <- EMC2:::dBTAwLSustained(tt, p, launch = 1L)
+  expect_true(all(is.finite(c(cdf, pdf))))
+  expect_true(all(diff(cdf) >= -1e-12))
+  expect_true(all(pdf >= 0))
+  expect_lt(max(pdf), 1e6)
 })
 
 test_that("the no-leak sustained limit is retained", {

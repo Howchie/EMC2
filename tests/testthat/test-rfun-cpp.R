@@ -176,6 +176,114 @@ test_that("BAwL cpp kernel matches R rBAwL: k -> 0 reduces to LBA formula", {
   expect_true(ks_ok(cpp_bawl$rt[cpp_bawl$R == 1], cpp_lba$rt[cpp_lba$R == 1]))
 })
 
+test_that("BTAwL cpp simulator covers transient, sustained and local-race launches", {
+  skip_on_cran()
+  n_btawl <- 1200L
+  lR <- factor(rep(c("left", "right"), n_btawl), levels = c("left", "right"))
+  ok <- rep(TRUE, length(lR))
+
+  for (launch in 0:2) {
+    launch_cols <- if (launch == 0L) {
+      cbind(v = rep(c(3.0, 2.5), n_btawl), sv = 0.35)
+    } else if (launch == 1L) {
+      cbind(mu = rep(c(log(3.0), log(2.5)), n_btawl), sigma = 0.25)
+    } else {
+      cbind(mu = rep(c(log(3.0), log(2.5)), n_btawl), sigma = 0.25,
+            delta = 0.4)
+    }
+    pars_t <- cbind(launch_cols, b = 1.2, A = 0.2, t0 = 0.1, k = 0.5,
+                    tau = 0.8)
+    pars_s <- cbind(launch_cols, b = 1.2, A = 0.2, t0 = 0.1, k = 0.5,
+                    tau_s = 0.9)
+    pars_f <- cbind(launch_cols, b = 1.2, A = 0.2, t0 = 0.1, k = 0.5,
+                    tau_s = 0.9, tau_t = 0.8, pi = 0.4)
+
+    mode_pars_list <- list(pars_t, pars_s, pars_f)
+    for (mode in 0:2) {
+      mode_pars <- mode_pars_list[[mode + 1L]]
+      set.seed(100 + 10 * launch + mode)
+      out <- EMC2:::rbta_wl_cpp(as.matrix(mode_pars), levels(lR), ok,
+                                mode, TRUE, launch, FALSE)
+      expect_equal(length(out$R), n_btawl)
+      expect_equal(length(out$rt), n_btawl)
+      expect_true(any(is.finite(out$rt)))
+      expect_true(all(is.na(out$R) == is.infinite(out$rt)))
+    }
+  }
+
+  pars_endpoint <- cbind(v = rep(3, length(lR)), sv = 0.35, b = 1.2, A = 0.2,
+                          t0 = 0.1, k = 0.5, Ttrans = 2.0)
+  set.seed(901)
+  endpoint <- EMC2:::rbta_wl_cpp(pars_endpoint, levels(lR), ok, 0L, TRUE, 0L, TRUE)
+  expect_true(any(is.finite(endpoint$rt)))
+})
+
+test_that("BTAwL constructors dispatch their default rfun to C++", {
+  skip_on_cran()
+  old_opt <- getOption("emc2.cpp_rfun")
+  on.exit(options(emc2.cpp_rfun = old_opt), add = TRUE)
+  options(emc2.cpp_rfun = TRUE)
+
+  lR <- factor(rep(c("left", "right"), 80), levels = c("left", "right"))
+  cases <- list(
+    BTAwLTransient(drift_distribution = "normal", chart = "endpoint"),
+    BTAwLSustained(drift_distribution = "normal"),
+    BTAwL(drift_distribution = "normal", chart = "rate")
+  )
+  raw <- list(
+    cbind(v = rep(c(3, 2.5), 80), sv = .35, B = 1.0, A = .2,
+          t0 = .1, k = .5, Ttrans = 2),
+    cbind(v = rep(c(3, 2.5), 80), sv = .35, B = 1.0, A = .2,
+          t0 = .1, k = .5, tau_s = .9),
+    cbind(v = rep(c(3, 2.5), 80), sv = .35, B = 1.0, A = .2,
+          t0 = .1, k = .5, tau_s = .9, tau_t = .8, pi = .4)
+  )
+
+  for (i in seq_along(cases)) {
+    pars <- cases[[i]]$Ttransform(raw[[i]], NULL)
+    attr(pars, "ok") <- rep(TRUE, nrow(pars))
+    out <- cases[[i]]$rfun(list(lR = lR), pars)
+    expect_equal(nrow(out), 80L)
+    expect_equal(length(out$R), length(out$rt))
+    expect_true(all(is.na(out$R) == is.infinite(out$rt)))
+  }
+
+  pars <- cases[[3]]$Ttransform(raw[[3]], NULL)
+  out <- EMC2:::rBTAwL(lR, pars, ok = rep(TRUE, nrow(pars)), launch = 0L)
+  expect_equal(nrow(out), 80L)
+})
+
+test_that("BTAwL C++ draws match the R reference distributions", {
+  skip_on_cran()
+  n_btawl <- 3000L
+  lR <- factor(rep(c("left", "right"), n_btawl), levels = c("left", "right"))
+  ok <- rep(TRUE, length(lR))
+  cases <- list(
+    list(mode = 0L, ref = EMC2:::.rBTAwLTransient_R,
+         pars = cbind(v = rep(c(5, 4), n_btawl), sv = .35, b = 1.2,
+                      A = .2, t0 = .1, k = .5, tau = .8)),
+    list(mode = 1L, ref = EMC2:::.rBTAwLSustained_R,
+         pars = cbind(v = rep(c(5, 4), n_btawl), sv = .35, b = 1.2,
+                      A = .2, t0 = .1, k = .5, tau_s = .9)),
+    list(mode = 2L, ref = EMC2:::.rBTAwL_R,
+         pars = cbind(v = rep(c(5, 4), n_btawl), sv = .35, b = 1.2,
+                      A = .2, t0 = .1, k = .5, tau_s = .9,
+                      tau_t = .8, pi = .4))
+  )
+
+  for (case in cases) {
+    set.seed(1000 + case$mode)
+    r <- case$ref(lR, case$pars, ok = ok, posdrift = TRUE, launch = 0L)
+    set.seed(2000 + case$mode)
+    cpp <- EMC2:::rbta_wl_cpp(case$pars, levels(lR), ok, case$mode,
+                              TRUE, 0L, FALSE)
+    prop_close(mean(is.na(r$R)), mean(is.na(cpp$R)))
+    prop_close(mean(r$R == "left", na.rm = TRUE),
+               mean(cpp$R == 1, na.rm = TRUE))
+    expect_true(ks_ok(r$rt[r$R == "left"], cpp$rt[cpp$R == 1]))
+  }
+})
+
 test_that("RDMSWTN cpp kernel matches R rRDMSWTN: none", {
   skip_on_cran()
   lR <- factor(rep(c("left", "right"), n), levels = c("left", "right"))

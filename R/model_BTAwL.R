@@ -209,8 +209,8 @@ pBTAwLSustained <- function(rt, pars, launch = 0L, posdrift = TRUE) {
   if (X(hi) < b) Inf else uniroot(function(t) X(t) - b, c(0, hi), tol = 1e-11)$root
 }
 
-rBTAwLTransient <- function(lR, pars, ok = rep(TRUE, length(lR)),
-                            p_types = NULL, posdrift = TRUE, launch = 0L) {
+.rBTAwLTransient_R <- function(lR, pars, ok = rep(TRUE, length(lR)),
+                               p_types = NULL, posdrift = TRUE, launch = 0L) {
   nm <- .btawl_check_cols(pars, launch)
   nr <- length(levels(lR))
   if (nr <= 0 || nrow(pars) %% nr)
@@ -260,8 +260,8 @@ rBTAwLTransient <- function(lR, pars, ok = rep(TRUE, length(lR)),
   data.frame(R = R, rt = rt)
 }
 
-rBTAwL <- function(lR, pars, ok = rep(TRUE, length(lR)),
-                   p_types = NULL, posdrift = TRUE, launch = 0L) {
+.rBTAwL_R <- function(lR, pars, ok = rep(TRUE, length(lR)),
+                      p_types = NULL, posdrift = TRUE, launch = 0L) {
   nm <- .btawl_local_race_check_cols(pars, launch)
   nr <- length(levels(lR))
   if (nr <= 0 || nrow(pars) %% nr)
@@ -335,8 +335,8 @@ rBTAwL <- function(lR, pars, ok = rep(TRUE, length(lR)),
   data.frame(R = R, rt = rt)
 }
 
-rBTAwLSustained <- function(lR, pars, ok = rep(TRUE, length(lR)),
-                             p_types = NULL, posdrift = TRUE, launch = 0L) {
+.rBTAwLSustained_R <- function(lR, pars, ok = rep(TRUE, length(lR)),
+                               p_types = NULL, posdrift = TRUE, launch = 0L) {
   nm <- .btawl_sustained_check_cols(pars, launch)
   nr <- length(levels(lR))
   if (nr <= 0 || nrow(pars) %% nr)
@@ -446,8 +446,9 @@ rBTAwLSustained <- function(lR, pars, ok = rep(TRUE, length(lR)),
         out
       },
       rfun = function(data, pars)
-        rBTAwLTransient(data$lR, pars, ok = attr(pars, "ok"),
-                        posdrift = posdrift, launch = launch),
+        .rfun_BTAwL(data$lR, pars, ok = attr(pars, "ok"),
+                    posdrift = posdrift, launch = launch,
+                    mode = "transient", endpoint_chart = chart == "endpoint"),
       dfun = function(rt, pars)
         dBTAwLTransient(rt, pars, launch = launch, posdrift = posdrift),
       pfun = function(rt, pars)
@@ -486,8 +487,9 @@ rBTAwLSustained <- function(lR, pars, ok = rep(TRUE, length(lR)),
         cbind(pars[, lead, drop = FALSE], extra, b = b)
       },
       rfun = function(data, pars)
-        rBTAwLSustained(data$lR, pars, ok = attr(pars, "ok"),
-                        posdrift = posdrift, launch = launch),
+        .rfun_BTAwL(data$lR, pars, ok = attr(pars, "ok"),
+                    posdrift = posdrift, launch = launch,
+                    mode = "sustained", endpoint_chart = FALSE),
       dfun = function(rt, pars)
         dBTAwLSustained(rt, pars, launch = launch, posdrift = posdrift),
       pfun = function(rt, pars)
@@ -555,8 +557,9 @@ rBTAwLSustained <- function(lR, pars, ok = rep(TRUE, length(lR)),
       out
     },
     rfun = function(data, pars)
-      rBTAwL(data$lR, pars, ok = attr(pars, "ok"),
-             posdrift = posdrift, launch = launch),
+      .rfun_BTAwL(data$lR, pars, ok = attr(pars, "ok"),
+                  posdrift = posdrift, launch = launch,
+                  mode = "full", endpoint_chart = chart == "endpoint"),
     dfun = function(rt, pars)
       dBTAwL(rt, pars, launch = launch, posdrift = posdrift),
     pfun = function(rt, pars)

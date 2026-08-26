@@ -1159,7 +1159,7 @@ NumericVector dbawd(NumericVector t, NumericVector A, NumericVector b,
                     NumericVector p1, NumericVector p2, NumericVector k,
                     NumericVector ell, int launch = 1, bool posdrift = true,
                     bool log_out = false, double gamma = 0.0,
-                    double rho = 0.0, double delta = 0.0) {
+                    double rho = 0.0, NumericVector delta = 0.0) {
   const int n = t.size();
   NumericVector out(n);
   auto pick = [](const NumericVector& x, int i) -> double {
@@ -1169,7 +1169,7 @@ NumericVector dbawd(NumericVector t, NumericVector A, NumericVector b,
     out[i] = bawd_pdf_norm(t[i], pick(A, i), pick(b, i), pick(p1, i),
                            pick(p2, i), pick(k, i), pick(ell, i), launch,
                            posdrift, log_out, gamma, rho, BAWD_DENOM_FLOOR,
-                           delta);
+                           pick(delta, i));
   return out;
 }
 
@@ -1178,7 +1178,7 @@ NumericVector pbawd(NumericVector t, NumericVector A, NumericVector b,
                     NumericVector p1, NumericVector p2, NumericVector k,
                     NumericVector ell, int launch = 1, bool posdrift = true,
                     bool log_out = false, double gamma = 0.0,
-                    double rho = 0.0, double delta = 0.0) {
+                    double rho = 0.0, NumericVector delta = 0.0) {
   const int n = t.size();
   NumericVector out(n);
   auto pick = [](const NumericVector& x, int i) -> double {
@@ -1188,10 +1188,11 @@ NumericVector pbawd(NumericVector t, NumericVector A, NumericVector b,
     out[i] = bawd_cdf_norm(t[i], pick(A, i), pick(b, i), pick(p1, i),
                            pick(p2, i), pick(k, i), pick(ell, i), launch,
                            posdrift, log_out, gamma, rho, BAWD_DENOM_FLOOR,
-                           delta);
+                           pick(delta, i));
   return out;
 }
 
+// [[Rcpp::export]]
 double dbawd_norm(double t, double A, double b, double p1, double p2, double k,
                   double ell, int launch = 1, bool posdrift = true,
                   bool log_out = false, double gamma = 0.0,
@@ -1199,6 +1200,7 @@ double dbawd_norm(double t, double A, double b, double p1, double p2, double k,
   return bawd_pdf_norm(t, A, b, p1, p2, k, ell, launch, posdrift, log_out,
                        gamma, rho, BAWD_DENOM_FLOOR, delta);
 }
+// [[Rcpp::export]]
 double pbawd_norm(double t, double A, double b, double p1, double p2, double k,
                   double ell, int launch = 1, bool posdrift = true,
                   bool log_out = false, double gamma = 0.0,
@@ -1263,13 +1265,13 @@ double dbawd_scalar(double t, const double* par, void* ctx_) {
   auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
   const int launch = bawd_launch_of(ctx);
   const bool split = launch == BAWD_LAUNCH_SPLITLOGNORMAL;
-  const int iv = split ? emc2col::bawdsplit::mu : emc2col::bawd::v;
-  const int isv = split ? emc2col::bawdsplit::sigma : emc2col::bawd::sv;
-  const int iB = split ? emc2col::bawdsplit::B : emc2col::bawd::B;
-  const int iA = split ? emc2col::bawdsplit::A : emc2col::bawd::A;
-  const int it0 = split ? emc2col::bawdsplit::t0 : emc2col::bawd::t0;
-  const int ik = split ? emc2col::bawdsplit::k : emc2col::bawd::k;
-  const int ie = split ? emc2col::bawdsplit::ell : emc2col::bawd::ell;
+  const int iv = emc2col::select_index(split, emc2col::bawdsplit::mu, emc2col::bawd::v);
+  const int isv = emc2col::select_index(split, emc2col::bawdsplit::sigma, emc2col::bawd::sv);
+  const int iB = emc2col::select_index(split, emc2col::bawdsplit::B, emc2col::bawd::B);
+  const int iA = emc2col::select_index(split, emc2col::bawdsplit::A, emc2col::bawd::A);
+  const int it0 = emc2col::select_index(split, emc2col::bawdsplit::t0, emc2col::bawd::t0);
+  const int ik = emc2col::select_index(split, emc2col::bawdsplit::k, emc2col::bawd::k);
+  const int ie = emc2col::select_index(split, emc2col::bawdsplit::ell, emc2col::bawd::ell);
   if (R_IsNA(par[iv])) return 0.0;
   const double tt = t - par[it0];
   if (t <= 0.0 || tt <= 0.0) return 0.0;
@@ -1283,13 +1285,13 @@ double pbawd_scalar(double t, const double* par, void* ctx_) {
   auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
   const int launch = bawd_launch_of(ctx);
   const bool split = launch == BAWD_LAUNCH_SPLITLOGNORMAL;
-  const int iv = split ? emc2col::bawdsplit::mu : emc2col::bawd::v;
-  const int isv = split ? emc2col::bawdsplit::sigma : emc2col::bawd::sv;
-  const int iB = split ? emc2col::bawdsplit::B : emc2col::bawd::B;
-  const int iA = split ? emc2col::bawdsplit::A : emc2col::bawd::A;
-  const int it0 = split ? emc2col::bawdsplit::t0 : emc2col::bawd::t0;
-  const int ik = split ? emc2col::bawdsplit::k : emc2col::bawd::k;
-  const int ie = split ? emc2col::bawdsplit::ell : emc2col::bawd::ell;
+  const int iv = emc2col::select_index(split, emc2col::bawdsplit::mu, emc2col::bawd::v);
+  const int isv = emc2col::select_index(split, emc2col::bawdsplit::sigma, emc2col::bawd::sv);
+  const int iB = emc2col::select_index(split, emc2col::bawdsplit::B, emc2col::bawd::B);
+  const int iA = emc2col::select_index(split, emc2col::bawdsplit::A, emc2col::bawd::A);
+  const int it0 = emc2col::select_index(split, emc2col::bawdsplit::t0, emc2col::bawd::t0);
+  const int ik = emc2col::select_index(split, emc2col::bawdsplit::k, emc2col::bawd::k);
+  const int ie = emc2col::select_index(split, emc2col::bawdsplit::ell, emc2col::bawd::ell);
   if (R_IsNA(par[iv])) return 0.0;
   const double tt = t - par[it0];
   if (t <= 0.0 || tt <= 0.0) return 0.0;
@@ -1310,13 +1312,13 @@ void dbawd_raw(const double* rt, const double* const* cols, int n_rows,
   const double gamma = bawd_gamma_of(ctx);
   const double rho = bawd_rho_of(ctx);
   const bool split = launch == BAWD_LAUNCH_SPLITLOGNORMAL;
-  const double* p1_ = cols[split ? emc2col::bawdsplit::mu : emc2col::bawd::v];
-  const double* p2_ = cols[split ? emc2col::bawdsplit::sigma : emc2col::bawd::sv];
-  const double* B_  = cols[split ? emc2col::bawdsplit::B : emc2col::bawd::B];
-  const double* A_  = cols[split ? emc2col::bawdsplit::A : emc2col::bawd::A];
-  const double* t0_ = cols[split ? emc2col::bawdsplit::t0 : emc2col::bawd::t0];
-  const double* k_  = cols[split ? emc2col::bawdsplit::k : emc2col::bawd::k];
-  const double* ell_ = cols[split ? emc2col::bawdsplit::ell : emc2col::bawd::ell];
+  const double* p1_ = cols[emc2col::select_index(split, emc2col::bawdsplit::mu, emc2col::bawd::v)];
+  const double* p2_ = cols[emc2col::select_index(split, emc2col::bawdsplit::sigma, emc2col::bawd::sv)];
+  const double* B_  = cols[emc2col::select_index(split, emc2col::bawdsplit::B, emc2col::bawd::B)];
+  const double* A_  = cols[emc2col::select_index(split, emc2col::bawdsplit::A, emc2col::bawd::A)];
+  const double* t0_ = cols[emc2col::select_index(split, emc2col::bawdsplit::t0, emc2col::bawd::t0)];
+  const double* k_  = cols[emc2col::select_index(split, emc2col::bawdsplit::k, emc2col::bawd::k)];
+  const double* ell_ = cols[emc2col::select_index(split, emc2col::bawdsplit::ell, emc2col::bawd::ell)];
   const double* delta_ = (launch == BAWD_LAUNCH_SPLITLOGNORMAL)
     ? cols[emc2col::bawdsplit::delta] : nullptr;
   for (int i = 0; i < n_rows; ++i) {
@@ -1351,13 +1353,13 @@ void pbawd_raw(const double* rt, const double* const* cols, int n_rows,
   const double gamma = bawd_gamma_of(ctx);
   const double rho = bawd_rho_of(ctx);
   const bool split = launch == BAWD_LAUNCH_SPLITLOGNORMAL;
-  const double* p1_ = cols[split ? emc2col::bawdsplit::mu : emc2col::bawd::v];
-  const double* p2_ = cols[split ? emc2col::bawdsplit::sigma : emc2col::bawd::sv];
-  const double* B_  = cols[split ? emc2col::bawdsplit::B : emc2col::bawd::B];
-  const double* A_  = cols[split ? emc2col::bawdsplit::A : emc2col::bawd::A];
-  const double* t0_ = cols[split ? emc2col::bawdsplit::t0 : emc2col::bawd::t0];
-  const double* k_  = cols[split ? emc2col::bawdsplit::k : emc2col::bawd::k];
-  const double* ell_ = cols[split ? emc2col::bawdsplit::ell : emc2col::bawd::ell];
+  const double* p1_ = cols[emc2col::select_index(split, emc2col::bawdsplit::mu, emc2col::bawd::v)];
+  const double* p2_ = cols[emc2col::select_index(split, emc2col::bawdsplit::sigma, emc2col::bawd::sv)];
+  const double* B_  = cols[emc2col::select_index(split, emc2col::bawdsplit::B, emc2col::bawd::B)];
+  const double* A_  = cols[emc2col::select_index(split, emc2col::bawdsplit::A, emc2col::bawd::A)];
+  const double* t0_ = cols[emc2col::select_index(split, emc2col::bawdsplit::t0, emc2col::bawd::t0)];
+  const double* k_  = cols[emc2col::select_index(split, emc2col::bawdsplit::k, emc2col::bawd::k)];
+  const double* ell_ = cols[emc2col::select_index(split, emc2col::bawdsplit::ell, emc2col::bawd::ell)];
   const double* delta_ = (launch == BAWD_LAUNCH_SPLITLOGNORMAL)
     ? cols[emc2col::bawdsplit::delta] : nullptr;
   for (int i = 0; i < n_rows; ++i) {
@@ -1391,14 +1393,14 @@ void bawd_logS_at_t(double t, const double* const* cols,
   const double gamma = bawd_gamma_of(ctx);
   const double rho = bawd_rho_of(ctx);
   const bool split = launch == BAWD_LAUNCH_SPLITLOGNORMAL;
-  const double* p1_ = cols[split ? emc2col::bawdsplit::mu : emc2col::bawd::v];
-  const double* p2_ = cols[split ? emc2col::bawdsplit::sigma : emc2col::bawd::sv];
+  const double* p1_ = cols[emc2col::select_index(split, emc2col::bawdsplit::mu, emc2col::bawd::v)];
+  const double* p2_ = cols[emc2col::select_index(split, emc2col::bawdsplit::sigma, emc2col::bawd::sv)];
   const double* delta_ = split ? cols[emc2col::bawdsplit::delta] : nullptr;
-  const double* B_  = cols[split ? emc2col::bawdsplit::B : emc2col::bawd::B];
-  const double* A_  = cols[split ? emc2col::bawdsplit::A : emc2col::bawd::A];
-  const double* t0_ = cols[split ? emc2col::bawdsplit::t0 : emc2col::bawd::t0];
-  const double* k_  = cols[split ? emc2col::bawdsplit::k : emc2col::bawd::k];
-  const double* ell_ = cols[split ? emc2col::bawdsplit::ell : emc2col::bawd::ell];
+  const double* B_  = cols[emc2col::select_index(split, emc2col::bawdsplit::B, emc2col::bawd::B)];
+  const double* A_  = cols[emc2col::select_index(split, emc2col::bawdsplit::A, emc2col::bawd::A)];
+  const double* t0_ = cols[emc2col::select_index(split, emc2col::bawdsplit::t0, emc2col::bawd::t0)];
+  const double* k_  = cols[emc2col::select_index(split, emc2col::bawdsplit::k, emc2col::bawd::k)];
+  const double* ell_ = cols[emc2col::select_index(split, emc2col::bawdsplit::ell, emc2col::bawd::ell)];
   for (int j = 0; j < n_unique_trials; ++j) {
     if (!trunc_mask[j]) continue;
     const int start = j * n_lR;
@@ -1493,13 +1495,13 @@ double dbawdp_scalar(double t, const double* par, void* ctx_) {
   auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
   const int launch = ctx ? ctx->bawl_launch : BAWL_LAUNCH_LOGNORMAL;
   const bool split = launch == BAWL_LAUNCH_SPLITLOGNORMAL;
-  const int iv = split ? emc2col::bawdpsplit::mu : emc2col::bawdp::v;
-  const int isv = split ? emc2col::bawdpsplit::sigma : emc2col::bawdp::sv;
-  const int iB = split ? emc2col::bawdpsplit::B : emc2col::bawdp::B;
-  const int iA = split ? emc2col::bawdpsplit::A : emc2col::bawdp::A;
-  const int it0 = split ? emc2col::bawdpsplit::t0 : emc2col::bawdp::t0;
-  const int ik = split ? emc2col::bawdpsplit::k : emc2col::bawdp::k;
-  const int ilam = split ? emc2col::bawdpsplit::lambda : emc2col::bawdp::lambda;
+  const int iv = emc2col::select_index(split, emc2col::bawdpsplit::mu, emc2col::bawdp::v);
+  const int isv = emc2col::select_index(split, emc2col::bawdpsplit::sigma, emc2col::bawdp::sv);
+  const int iB = emc2col::select_index(split, emc2col::bawdpsplit::B, emc2col::bawdp::B);
+  const int iA = emc2col::select_index(split, emc2col::bawdpsplit::A, emc2col::bawdp::A);
+  const int it0 = emc2col::select_index(split, emc2col::bawdpsplit::t0, emc2col::bawdp::t0);
+  const int ik = emc2col::select_index(split, emc2col::bawdpsplit::k, emc2col::bawdp::k);
+  const int ilam = emc2col::select_index(split, emc2col::bawdpsplit::lambda, emc2col::bawdp::lambda);
   const int idelta = split ? emc2col::bawdpsplit::delta : -1;
   const double tt = t - par[it0];
   if (t <= 0.0 || !(tt > 0.0)) return 0.0;
@@ -1516,13 +1518,13 @@ double pbawdp_scalar(double t, const double* par, void* ctx_) {
   auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
   const int launch = ctx ? ctx->bawl_launch : BAWL_LAUNCH_LOGNORMAL;
   const bool split = launch == BAWL_LAUNCH_SPLITLOGNORMAL;
-  const int iv = split ? emc2col::bawdpsplit::mu : emc2col::bawdp::v;
-  const int isv = split ? emc2col::bawdpsplit::sigma : emc2col::bawdp::sv;
-  const int iB = split ? emc2col::bawdpsplit::B : emc2col::bawdp::B;
-  const int iA = split ? emc2col::bawdpsplit::A : emc2col::bawdp::A;
-  const int it0 = split ? emc2col::bawdpsplit::t0 : emc2col::bawdp::t0;
-  const int ik = split ? emc2col::bawdpsplit::k : emc2col::bawdp::k;
-  const int ilam = split ? emc2col::bawdpsplit::lambda : emc2col::bawdp::lambda;
+  const int iv = emc2col::select_index(split, emc2col::bawdpsplit::mu, emc2col::bawdp::v);
+  const int isv = emc2col::select_index(split, emc2col::bawdpsplit::sigma, emc2col::bawdp::sv);
+  const int iB = emc2col::select_index(split, emc2col::bawdpsplit::B, emc2col::bawdp::B);
+  const int iA = emc2col::select_index(split, emc2col::bawdpsplit::A, emc2col::bawdp::A);
+  const int it0 = emc2col::select_index(split, emc2col::bawdpsplit::t0, emc2col::bawdp::t0);
+  const int ik = emc2col::select_index(split, emc2col::bawdpsplit::k, emc2col::bawdp::k);
+  const int ilam = emc2col::select_index(split, emc2col::bawdpsplit::lambda, emc2col::bawdp::lambda);
   const int idelta = split ? emc2col::bawdpsplit::delta : -1;
   const double tt = t - par[it0];
   if (t <= 0.0 || !(tt > 0.0)) return 0.0;
@@ -1543,13 +1545,13 @@ void dbawdp_raw(const double* rt, const double* const* cols, int n_rows,
   const bool pd = ctx ? ctx->use_posdrift : true;
   const int launch = ctx ? ctx->bawl_launch : BAWL_LAUNCH_LOGNORMAL;
   const bool split = launch == BAWL_LAUNCH_SPLITLOGNORMAL;
-  const int iv = split ? emc2col::bawdpsplit::mu : emc2col::bawdp::v;
-  const int isv = split ? emc2col::bawdpsplit::sigma : emc2col::bawdp::sv;
-  const int iB = split ? emc2col::bawdpsplit::B : emc2col::bawdp::B;
-  const int iA = split ? emc2col::bawdpsplit::A : emc2col::bawdp::A;
-  const int it0 = split ? emc2col::bawdpsplit::t0 : emc2col::bawdp::t0;
-  const int ik = split ? emc2col::bawdpsplit::k : emc2col::bawdp::k;
-  const int ilam = split ? emc2col::bawdpsplit::lambda : emc2col::bawdp::lambda;
+  const int iv = emc2col::select_index(split, emc2col::bawdpsplit::mu, emc2col::bawdp::v);
+  const int isv = emc2col::select_index(split, emc2col::bawdpsplit::sigma, emc2col::bawdp::sv);
+  const int iB = emc2col::select_index(split, emc2col::bawdpsplit::B, emc2col::bawdp::B);
+  const int iA = emc2col::select_index(split, emc2col::bawdpsplit::A, emc2col::bawdp::A);
+  const int it0 = emc2col::select_index(split, emc2col::bawdpsplit::t0, emc2col::bawdp::t0);
+  const int ik = emc2col::select_index(split, emc2col::bawdpsplit::k, emc2col::bawdp::k);
+  const int ilam = emc2col::select_index(split, emc2col::bawdpsplit::lambda, emc2col::bawdp::lambda);
   const int idelta = split ? emc2col::bawdpsplit::delta : -1;
   const double* p1 = cols[iv];
   const double* p2 = cols[isv];
@@ -1584,13 +1586,13 @@ void pbawdp_raw(const double* rt, const double* const* cols, int n_rows,
   const double pd = ctx ? ctx->use_posdrift : true;
   const int launch = ctx ? ctx->bawl_launch : BAWL_LAUNCH_LOGNORMAL;
   const bool split = launch == BAWL_LAUNCH_SPLITLOGNORMAL;
-  const int iv = split ? emc2col::bawdpsplit::mu : emc2col::bawdp::v;
-  const int isv = split ? emc2col::bawdpsplit::sigma : emc2col::bawdp::sv;
-  const int iB = split ? emc2col::bawdpsplit::B : emc2col::bawdp::B;
-  const int iA = split ? emc2col::bawdpsplit::A : emc2col::bawdp::A;
-  const int it0 = split ? emc2col::bawdpsplit::t0 : emc2col::bawdp::t0;
-  const int ik = split ? emc2col::bawdpsplit::k : emc2col::bawdp::k;
-  const int ilam = split ? emc2col::bawdpsplit::lambda : emc2col::bawdp::lambda;
+  const int iv = emc2col::select_index(split, emc2col::bawdpsplit::mu, emc2col::bawdp::v);
+  const int isv = emc2col::select_index(split, emc2col::bawdpsplit::sigma, emc2col::bawdp::sv);
+  const int iB = emc2col::select_index(split, emc2col::bawdpsplit::B, emc2col::bawdp::B);
+  const int iA = emc2col::select_index(split, emc2col::bawdpsplit::A, emc2col::bawdp::A);
+  const int it0 = emc2col::select_index(split, emc2col::bawdpsplit::t0, emc2col::bawdp::t0);
+  const int ik = emc2col::select_index(split, emc2col::bawdpsplit::k, emc2col::bawdp::k);
+  const int ilam = emc2col::select_index(split, emc2col::bawdpsplit::lambda, emc2col::bawdp::lambda);
   const int idelta = split ? emc2col::bawdpsplit::delta : -1;
   const double* p1 = cols[iv];
   const double* p2 = cols[isv];
@@ -1631,13 +1633,13 @@ void bawdp_logS_at_t(double t, const double* const* cols,
   const bool pd = ctx ? ctx->use_posdrift : true;
   const int launch = ctx ? ctx->bawl_launch : BAWL_LAUNCH_LOGNORMAL;
   const bool split = launch == BAWL_LAUNCH_SPLITLOGNORMAL;
-  const int iv = split ? emc2col::bawdpsplit::mu : emc2col::bawdp::v;
-  const int isv = split ? emc2col::bawdpsplit::sigma : emc2col::bawdp::sv;
-  const int iB = split ? emc2col::bawdpsplit::B : emc2col::bawdp::B;
-  const int iA = split ? emc2col::bawdpsplit::A : emc2col::bawdp::A;
-  const int it0 = split ? emc2col::bawdpsplit::t0 : emc2col::bawdp::t0;
-  const int ik = split ? emc2col::bawdpsplit::k : emc2col::bawdp::k;
-  const int ilam = split ? emc2col::bawdpsplit::lambda : emc2col::bawdp::lambda;
+  const int iv = emc2col::select_index(split, emc2col::bawdpsplit::mu, emc2col::bawdp::v);
+  const int isv = emc2col::select_index(split, emc2col::bawdpsplit::sigma, emc2col::bawdp::sv);
+  const int iB = emc2col::select_index(split, emc2col::bawdpsplit::B, emc2col::bawdp::B);
+  const int iA = emc2col::select_index(split, emc2col::bawdpsplit::A, emc2col::bawdp::A);
+  const int it0 = emc2col::select_index(split, emc2col::bawdpsplit::t0, emc2col::bawdp::t0);
+  const int ik = emc2col::select_index(split, emc2col::bawdpsplit::k, emc2col::bawdp::k);
+  const int ilam = emc2col::select_index(split, emc2col::bawdpsplit::lambda, emc2col::bawdp::lambda);
   const int idelta = split ? emc2col::bawdpsplit::delta : -1;
   for (int j = 0; j < n_unique_trials; ++j) {
     if (!trunc_mask[j]) continue;

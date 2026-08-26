@@ -1,5 +1,0 @@
-#!/bin/sh
-# Remove generated build-profile state and local compiler artefacts.
-# This is intentionally limited to files produced by configure or R builds.
-rm -f src/Makevars.profile src/Makevars.tmp* src/Makevars.profile.tmp*
-rm -f src/*.o src/*.so src/*.dll src/symbols.rds

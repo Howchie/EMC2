@@ -395,7 +395,7 @@ BEGIN_RCPP
 END_RCPP
 }
 // dbawd
-NumericVector dbawd(NumericVector t, NumericVector A, NumericVector b, NumericVector p1, NumericVector p2, NumericVector k, NumericVector ell, int launch, bool posdrift, bool log_out, double gamma, double rho, double delta);
+NumericVector dbawd(NumericVector t, NumericVector A, NumericVector b, NumericVector p1, NumericVector p2, NumericVector k, NumericVector ell, int launch, bool posdrift, bool log_out, double gamma, double rho, NumericVector delta);
 RcppExport SEXP _EMC2_dbawd(SEXP tSEXP, SEXP ASEXP, SEXP bSEXP, SEXP p1SEXP, SEXP p2SEXP, SEXP kSEXP, SEXP ellSEXP, SEXP launchSEXP, SEXP posdriftSEXP, SEXP log_outSEXP, SEXP gammaSEXP, SEXP rhoSEXP, SEXP deltaSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
@@ -412,13 +412,13 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< bool >::type log_out(log_outSEXP);
     Rcpp::traits::input_parameter< double >::type gamma(gammaSEXP);
     Rcpp::traits::input_parameter< double >::type rho(rhoSEXP);
-    Rcpp::traits::input_parameter< double >::type delta(deltaSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type delta(deltaSEXP);
     rcpp_result_gen = Rcpp::wrap(dbawd(t, A, b, p1, p2, k, ell, launch, posdrift, log_out, gamma, rho, delta));
     return rcpp_result_gen;
 END_RCPP
 }
 // pbawd
-NumericVector pbawd(NumericVector t, NumericVector A, NumericVector b, NumericVector p1, NumericVector p2, NumericVector k, NumericVector ell, int launch, bool posdrift, bool log_out, double gamma, double rho, double delta);
+NumericVector pbawd(NumericVector t, NumericVector A, NumericVector b, NumericVector p1, NumericVector p2, NumericVector k, NumericVector ell, int launch, bool posdrift, bool log_out, double gamma, double rho, NumericVector delta);
 RcppExport SEXP _EMC2_pbawd(SEXP tSEXP, SEXP ASEXP, SEXP bSEXP, SEXP p1SEXP, SEXP p2SEXP, SEXP kSEXP, SEXP ellSEXP, SEXP launchSEXP, SEXP posdriftSEXP, SEXP log_outSEXP, SEXP gammaSEXP, SEXP rhoSEXP, SEXP deltaSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
@@ -435,8 +435,54 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< bool >::type log_out(log_outSEXP);
     Rcpp::traits::input_parameter< double >::type gamma(gammaSEXP);
     Rcpp::traits::input_parameter< double >::type rho(rhoSEXP);
-    Rcpp::traits::input_parameter< double >::type delta(deltaSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type delta(deltaSEXP);
     rcpp_result_gen = Rcpp::wrap(pbawd(t, A, b, p1, p2, k, ell, launch, posdrift, log_out, gamma, rho, delta));
+    return rcpp_result_gen;
+END_RCPP
+}
+// dbawd_norm
+double dbawd_norm(double t, double A, double b, double p1, double p2, double k, double ell, int launch, bool posdrift, bool log_out, double gamma, double rho, double delta);
+RcppExport SEXP _EMC2_dbawd_norm(SEXP tSEXP, SEXP ASEXP, SEXP bSEXP, SEXP p1SEXP, SEXP p2SEXP, SEXP kSEXP, SEXP ellSEXP, SEXP launchSEXP, SEXP posdriftSEXP, SEXP log_outSEXP, SEXP gammaSEXP, SEXP rhoSEXP, SEXP deltaSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< double >::type t(tSEXP);
+    Rcpp::traits::input_parameter< double >::type A(ASEXP);
+    Rcpp::traits::input_parameter< double >::type b(bSEXP);
+    Rcpp::traits::input_parameter< double >::type p1(p1SEXP);
+    Rcpp::traits::input_parameter< double >::type p2(p2SEXP);
+    Rcpp::traits::input_parameter< double >::type k(kSEXP);
+    Rcpp::traits::input_parameter< double >::type ell(ellSEXP);
+    Rcpp::traits::input_parameter< int >::type launch(launchSEXP);
+    Rcpp::traits::input_parameter< bool >::type posdrift(posdriftSEXP);
+    Rcpp::traits::input_parameter< bool >::type log_out(log_outSEXP);
+    Rcpp::traits::input_parameter< double >::type gamma(gammaSEXP);
+    Rcpp::traits::input_parameter< double >::type rho(rhoSEXP);
+    Rcpp::traits::input_parameter< double >::type delta(deltaSEXP);
+    rcpp_result_gen = Rcpp::wrap(dbawd_norm(t, A, b, p1, p2, k, ell, launch, posdrift, log_out, gamma, rho, delta));
+    return rcpp_result_gen;
+END_RCPP
+}
+// pbawd_norm
+double pbawd_norm(double t, double A, double b, double p1, double p2, double k, double ell, int launch, bool posdrift, bool log_out, double gamma, double rho, double delta);
+RcppExport SEXP _EMC2_pbawd_norm(SEXP tSEXP, SEXP ASEXP, SEXP bSEXP, SEXP p1SEXP, SEXP p2SEXP, SEXP kSEXP, SEXP ellSEXP, SEXP launchSEXP, SEXP posdriftSEXP, SEXP log_outSEXP, SEXP gammaSEXP, SEXP rhoSEXP, SEXP deltaSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< double >::type t(tSEXP);
+    Rcpp::traits::input_parameter< double >::type A(ASEXP);
+    Rcpp::traits::input_parameter< double >::type b(bSEXP);
+    Rcpp::traits::input_parameter< double >::type p1(p1SEXP);
+    Rcpp::traits::input_parameter< double >::type p2(p2SEXP);
+    Rcpp::traits::input_parameter< double >::type k(kSEXP);
+    Rcpp::traits::input_parameter< double >::type ell(ellSEXP);
+    Rcpp::traits::input_parameter< int >::type launch(launchSEXP);
+    Rcpp::traits::input_parameter< bool >::type posdrift(posdriftSEXP);
+    Rcpp::traits::input_parameter< bool >::type log_out(log_outSEXP);
+    Rcpp::traits::input_parameter< double >::type gamma(gammaSEXP);
+    Rcpp::traits::input_parameter< double >::type rho(rhoSEXP);
+    Rcpp::traits::input_parameter< double >::type delta(deltaSEXP);
+    rcpp_result_gen = Rcpp::wrap(pbawd_norm(t, A, b, p1, p2, k, ell, launch, posdrift, log_out, gamma, rho, delta));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -556,7 +602,7 @@ BEGIN_RCPP
 END_RCPP
 }
 // dbawf
-NumericVector dbawf(NumericVector t, NumericVector A, NumericVector b, NumericVector p1, NumericVector p2, NumericVector k, int launch, bool posdrift, bool log_out, double rho, double delta);
+NumericVector dbawf(NumericVector t, NumericVector A, NumericVector b, NumericVector p1, NumericVector p2, NumericVector k, int launch, bool posdrift, bool log_out, double rho, NumericVector delta);
 RcppExport SEXP _EMC2_dbawf(SEXP tSEXP, SEXP ASEXP, SEXP bSEXP, SEXP p1SEXP, SEXP p2SEXP, SEXP kSEXP, SEXP launchSEXP, SEXP posdriftSEXP, SEXP log_outSEXP, SEXP rhoSEXP, SEXP deltaSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
@@ -571,13 +617,13 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< bool >::type posdrift(posdriftSEXP);
     Rcpp::traits::input_parameter< bool >::type log_out(log_outSEXP);
     Rcpp::traits::input_parameter< double >::type rho(rhoSEXP);
-    Rcpp::traits::input_parameter< double >::type delta(deltaSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type delta(deltaSEXP);
     rcpp_result_gen = Rcpp::wrap(dbawf(t, A, b, p1, p2, k, launch, posdrift, log_out, rho, delta));
     return rcpp_result_gen;
 END_RCPP
 }
 // pbawf
-NumericVector pbawf(NumericVector t, NumericVector A, NumericVector b, NumericVector p1, NumericVector p2, NumericVector k, int launch, bool posdrift, bool log_out, double rho, double delta);
+NumericVector pbawf(NumericVector t, NumericVector A, NumericVector b, NumericVector p1, NumericVector p2, NumericVector k, int launch, bool posdrift, bool log_out, double rho, NumericVector delta);
 RcppExport SEXP _EMC2_pbawf(SEXP tSEXP, SEXP ASEXP, SEXP bSEXP, SEXP p1SEXP, SEXP p2SEXP, SEXP kSEXP, SEXP launchSEXP, SEXP posdriftSEXP, SEXP log_outSEXP, SEXP rhoSEXP, SEXP deltaSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
@@ -592,7 +638,7 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< bool >::type posdrift(posdriftSEXP);
     Rcpp::traits::input_parameter< bool >::type log_out(log_outSEXP);
     Rcpp::traits::input_parameter< double >::type rho(rhoSEXP);
-    Rcpp::traits::input_parameter< double >::type delta(deltaSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type delta(deltaSEXP);
     rcpp_result_gen = Rcpp::wrap(pbawf(t, A, b, p1, p2, k, launch, posdrift, log_out, rho, delta));
     return rcpp_result_gen;
 END_RCPP
@@ -682,7 +728,7 @@ BEGIN_RCPP
 END_RCPP
 }
 // dbawr
-NumericVector dbawr(NumericVector t, NumericVector A, NumericVector b, NumericVector p1, NumericVector p2, NumericVector kappa, NumericVector pw, int launch, bool posdrift, bool log_out, double delta);
+NumericVector dbawr(NumericVector t, NumericVector A, NumericVector b, NumericVector p1, NumericVector p2, NumericVector kappa, NumericVector pw, int launch, bool posdrift, bool log_out, NumericVector delta);
 RcppExport SEXP _EMC2_dbawr(SEXP tSEXP, SEXP ASEXP, SEXP bSEXP, SEXP p1SEXP, SEXP p2SEXP, SEXP kappaSEXP, SEXP pwSEXP, SEXP launchSEXP, SEXP posdriftSEXP, SEXP log_outSEXP, SEXP deltaSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
@@ -697,13 +743,13 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< int >::type launch(launchSEXP);
     Rcpp::traits::input_parameter< bool >::type posdrift(posdriftSEXP);
     Rcpp::traits::input_parameter< bool >::type log_out(log_outSEXP);
-    Rcpp::traits::input_parameter< double >::type delta(deltaSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type delta(deltaSEXP);
     rcpp_result_gen = Rcpp::wrap(dbawr(t, A, b, p1, p2, kappa, pw, launch, posdrift, log_out, delta));
     return rcpp_result_gen;
 END_RCPP
 }
 // pbawr
-NumericVector pbawr(NumericVector t, NumericVector A, NumericVector b, NumericVector p1, NumericVector p2, NumericVector kappa, NumericVector pw, int launch, bool posdrift, bool log_out, double delta);
+NumericVector pbawr(NumericVector t, NumericVector A, NumericVector b, NumericVector p1, NumericVector p2, NumericVector kappa, NumericVector pw, int launch, bool posdrift, bool log_out, NumericVector delta);
 RcppExport SEXP _EMC2_pbawr(SEXP tSEXP, SEXP ASEXP, SEXP bSEXP, SEXP p1SEXP, SEXP p2SEXP, SEXP kappaSEXP, SEXP pwSEXP, SEXP launchSEXP, SEXP posdriftSEXP, SEXP log_outSEXP, SEXP deltaSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
@@ -718,7 +764,7 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< int >::type launch(launchSEXP);
     Rcpp::traits::input_parameter< bool >::type posdrift(posdriftSEXP);
     Rcpp::traits::input_parameter< bool >::type log_out(log_outSEXP);
-    Rcpp::traits::input_parameter< double >::type delta(deltaSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type delta(deltaSEXP);
     rcpp_result_gen = Rcpp::wrap(pbawr(t, A, b, p1, p2, kappa, pw, launch, posdrift, log_out, delta));
     return rcpp_result_gen;
 END_RCPP
@@ -808,7 +854,7 @@ BEGIN_RCPP
 END_RCPP
 }
 // dbtawl_transient
-NumericVector dbtawl_transient(NumericVector t, NumericVector A, NumericVector b, NumericVector p1, NumericVector p2, NumericVector k, NumericVector tau, int launch, bool posdrift, bool log_out, double delta);
+NumericVector dbtawl_transient(NumericVector t, NumericVector A, NumericVector b, NumericVector p1, NumericVector p2, NumericVector k, NumericVector tau, int launch, bool posdrift, bool log_out, NumericVector delta);
 RcppExport SEXP _EMC2_dbtawl_transient(SEXP tSEXP, SEXP ASEXP, SEXP bSEXP, SEXP p1SEXP, SEXP p2SEXP, SEXP kSEXP, SEXP tauSEXP, SEXP launchSEXP, SEXP posdriftSEXP, SEXP log_outSEXP, SEXP deltaSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
@@ -823,13 +869,13 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< int >::type launch(launchSEXP);
     Rcpp::traits::input_parameter< bool >::type posdrift(posdriftSEXP);
     Rcpp::traits::input_parameter< bool >::type log_out(log_outSEXP);
-    Rcpp::traits::input_parameter< double >::type delta(deltaSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type delta(deltaSEXP);
     rcpp_result_gen = Rcpp::wrap(dbtawl_transient(t, A, b, p1, p2, k, tau, launch, posdrift, log_out, delta));
     return rcpp_result_gen;
 END_RCPP
 }
 // pbtawl_transient
-NumericVector pbtawl_transient(NumericVector t, NumericVector A, NumericVector b, NumericVector p1, NumericVector p2, NumericVector k, NumericVector tau, int launch, bool posdrift, bool log_out, double delta);
+NumericVector pbtawl_transient(NumericVector t, NumericVector A, NumericVector b, NumericVector p1, NumericVector p2, NumericVector k, NumericVector tau, int launch, bool posdrift, bool log_out, NumericVector delta);
 RcppExport SEXP _EMC2_pbtawl_transient(SEXP tSEXP, SEXP ASEXP, SEXP bSEXP, SEXP p1SEXP, SEXP p2SEXP, SEXP kSEXP, SEXP tauSEXP, SEXP launchSEXP, SEXP posdriftSEXP, SEXP log_outSEXP, SEXP deltaSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
@@ -844,13 +890,13 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< int >::type launch(launchSEXP);
     Rcpp::traits::input_parameter< bool >::type posdrift(posdriftSEXP);
     Rcpp::traits::input_parameter< bool >::type log_out(log_outSEXP);
-    Rcpp::traits::input_parameter< double >::type delta(deltaSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type delta(deltaSEXP);
     rcpp_result_gen = Rcpp::wrap(pbtawl_transient(t, A, b, p1, p2, k, tau, launch, posdrift, log_out, delta));
     return rcpp_result_gen;
 END_RCPP
 }
 // btawl_transient_log_surv_vec
-NumericVector btawl_transient_log_surv_vec(NumericVector t, NumericVector A, NumericVector b, NumericVector p1, NumericVector p2, NumericVector k, NumericVector tau, int launch, bool posdrift, double delta);
+NumericVector btawl_transient_log_surv_vec(NumericVector t, NumericVector A, NumericVector b, NumericVector p1, NumericVector p2, NumericVector k, NumericVector tau, int launch, bool posdrift, NumericVector delta);
 RcppExport SEXP _EMC2_btawl_transient_log_surv_vec(SEXP tSEXP, SEXP ASEXP, SEXP bSEXP, SEXP p1SEXP, SEXP p2SEXP, SEXP kSEXP, SEXP tauSEXP, SEXP launchSEXP, SEXP posdriftSEXP, SEXP deltaSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
@@ -864,13 +910,13 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< NumericVector >::type tau(tauSEXP);
     Rcpp::traits::input_parameter< int >::type launch(launchSEXP);
     Rcpp::traits::input_parameter< bool >::type posdrift(posdriftSEXP);
-    Rcpp::traits::input_parameter< double >::type delta(deltaSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type delta(deltaSEXP);
     rcpp_result_gen = Rcpp::wrap(btawl_transient_log_surv_vec(t, A, b, p1, p2, k, tau, launch, posdrift, delta));
     return rcpp_result_gen;
 END_RCPP
 }
 // btawl_local_race_log_surv_vec
-NumericVector btawl_local_race_log_surv_vec(NumericVector t, NumericVector A, NumericVector b, NumericVector p1, NumericVector p2, NumericVector k, NumericVector tau_s, NumericVector tau_t, NumericVector pi, int launch, bool posdrift, double delta);
+NumericVector btawl_local_race_log_surv_vec(NumericVector t, NumericVector A, NumericVector b, NumericVector p1, NumericVector p2, NumericVector k, NumericVector tau_s, NumericVector tau_t, NumericVector pi, int launch, bool posdrift, NumericVector delta);
 RcppExport SEXP _EMC2_btawl_local_race_log_surv_vec(SEXP tSEXP, SEXP ASEXP, SEXP bSEXP, SEXP p1SEXP, SEXP p2SEXP, SEXP kSEXP, SEXP tau_sSEXP, SEXP tau_tSEXP, SEXP piSEXP, SEXP launchSEXP, SEXP posdriftSEXP, SEXP deltaSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
@@ -886,13 +932,13 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< NumericVector >::type pi(piSEXP);
     Rcpp::traits::input_parameter< int >::type launch(launchSEXP);
     Rcpp::traits::input_parameter< bool >::type posdrift(posdriftSEXP);
-    Rcpp::traits::input_parameter< double >::type delta(deltaSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type delta(deltaSEXP);
     rcpp_result_gen = Rcpp::wrap(btawl_local_race_log_surv_vec(t, A, b, p1, p2, k, tau_s, tau_t, pi, launch, posdrift, delta));
     return rcpp_result_gen;
 END_RCPP
 }
 // dbtawl_local_race
-NumericVector dbtawl_local_race(NumericVector t, NumericVector A, NumericVector b, NumericVector p1, NumericVector p2, NumericVector k, NumericVector tau_s, NumericVector tau_t, NumericVector pi, int launch, bool posdrift, bool log_out, double delta);
+NumericVector dbtawl_local_race(NumericVector t, NumericVector A, NumericVector b, NumericVector p1, NumericVector p2, NumericVector k, NumericVector tau_s, NumericVector tau_t, NumericVector pi, int launch, bool posdrift, bool log_out, NumericVector delta);
 RcppExport SEXP _EMC2_dbtawl_local_race(SEXP tSEXP, SEXP ASEXP, SEXP bSEXP, SEXP p1SEXP, SEXP p2SEXP, SEXP kSEXP, SEXP tau_sSEXP, SEXP tau_tSEXP, SEXP piSEXP, SEXP launchSEXP, SEXP posdriftSEXP, SEXP log_outSEXP, SEXP deltaSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
@@ -909,13 +955,13 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< int >::type launch(launchSEXP);
     Rcpp::traits::input_parameter< bool >::type posdrift(posdriftSEXP);
     Rcpp::traits::input_parameter< bool >::type log_out(log_outSEXP);
-    Rcpp::traits::input_parameter< double >::type delta(deltaSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type delta(deltaSEXP);
     rcpp_result_gen = Rcpp::wrap(dbtawl_local_race(t, A, b, p1, p2, k, tau_s, tau_t, pi, launch, posdrift, log_out, delta));
     return rcpp_result_gen;
 END_RCPP
 }
 // pbtawl_local_race
-NumericVector pbtawl_local_race(NumericVector t, NumericVector A, NumericVector b, NumericVector p1, NumericVector p2, NumericVector k, NumericVector tau_s, NumericVector tau_t, NumericVector pi, int launch, bool posdrift, bool log_out, double delta);
+NumericVector pbtawl_local_race(NumericVector t, NumericVector A, NumericVector b, NumericVector p1, NumericVector p2, NumericVector k, NumericVector tau_s, NumericVector tau_t, NumericVector pi, int launch, bool posdrift, bool log_out, NumericVector delta);
 RcppExport SEXP _EMC2_pbtawl_local_race(SEXP tSEXP, SEXP ASEXP, SEXP bSEXP, SEXP p1SEXP, SEXP p2SEXP, SEXP kSEXP, SEXP tau_sSEXP, SEXP tau_tSEXP, SEXP piSEXP, SEXP launchSEXP, SEXP posdriftSEXP, SEXP log_outSEXP, SEXP deltaSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
@@ -932,7 +978,7 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< int >::type launch(launchSEXP);
     Rcpp::traits::input_parameter< bool >::type posdrift(posdriftSEXP);
     Rcpp::traits::input_parameter< bool >::type log_out(log_outSEXP);
-    Rcpp::traits::input_parameter< double >::type delta(deltaSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type delta(deltaSEXP);
     rcpp_result_gen = Rcpp::wrap(pbtawl_local_race(t, A, b, p1, p2, k, tau_s, tau_t, pi, launch, posdrift, log_out, delta));
     return rcpp_result_gen;
 END_RCPP
@@ -2043,6 +2089,19 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// rddm_cpp
+Rcpp::List rddm_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector response_levels, Rcpp::LogicalVector ok);
+RcppExport SEXP _EMC2_rddm_cpp(SEXP parsSEXP, SEXP response_levelsSEXP, SEXP okSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< Rcpp::NumericMatrix >::type pars(parsSEXP);
+    Rcpp::traits::input_parameter< Rcpp::CharacterVector >::type response_levels(response_levelsSEXP);
+    Rcpp::traits::input_parameter< Rcpp::LogicalVector >::type ok(okSEXP);
+    rcpp_result_gen = Rcpp::wrap(rddm_cpp(pars, response_levels, ok));
+    return rcpp_result_gen;
+END_RCPP
+}
 // rbawl_cpp
 Rcpp::List rbawl_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels, Rcpp::LogicalVector ok, bool posdrift, int erlang, bool guess, bool global, int launch);
 RcppExport SEXP _EMC2_rbawl_cpp(SEXP parsSEXP, SEXP lR_levelsSEXP, SEXP okSEXP, SEXP posdriftSEXP, SEXP erlangSEXP, SEXP guessSEXP, SEXP globalSEXP, SEXP launchSEXP) {
@@ -2058,6 +2117,23 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< bool >::type global(globalSEXP);
     Rcpp::traits::input_parameter< int >::type launch(launchSEXP);
     rcpp_result_gen = Rcpp::wrap(rbawl_cpp(pars, lR_levels, ok, posdrift, erlang, guess, global, launch));
+    return rcpp_result_gen;
+END_RCPP
+}
+// rbta_wl_cpp
+Rcpp::List rbta_wl_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels, Rcpp::LogicalVector ok, int mode, bool posdrift, int launch, bool endpoint_chart);
+RcppExport SEXP _EMC2_rbta_wl_cpp(SEXP parsSEXP, SEXP lR_levelsSEXP, SEXP okSEXP, SEXP modeSEXP, SEXP posdriftSEXP, SEXP launchSEXP, SEXP endpoint_chartSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< Rcpp::NumericMatrix >::type pars(parsSEXP);
+    Rcpp::traits::input_parameter< Rcpp::CharacterVector >::type lR_levels(lR_levelsSEXP);
+    Rcpp::traits::input_parameter< Rcpp::LogicalVector >::type ok(okSEXP);
+    Rcpp::traits::input_parameter< int >::type mode(modeSEXP);
+    Rcpp::traits::input_parameter< bool >::type posdrift(posdriftSEXP);
+    Rcpp::traits::input_parameter< int >::type launch(launchSEXP);
+    Rcpp::traits::input_parameter< bool >::type endpoint_chart(endpoint_chartSEXP);
+    rcpp_result_gen = Rcpp::wrap(rbta_wl_cpp(pars, lR_levels, ok, mode, posdrift, launch, endpoint_chart));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -3160,6 +3236,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_calc_ll_oo_marginal_nodes", (DL_FUNC) &_EMC2_calc_ll_oo_marginal_nodes, 12},
     {"_EMC2_dbawd", (DL_FUNC) &_EMC2_dbawd, 13},
     {"_EMC2_pbawd", (DL_FUNC) &_EMC2_pbawd, 13},
+    {"_EMC2_dbawd_norm", (DL_FUNC) &_EMC2_dbawd_norm, 13},
+    {"_EMC2_pbawd_norm", (DL_FUNC) &_EMC2_pbawd_norm, 13},
     {"_EMC2_bawd_tmax", (DL_FUNC) &_EMC2_bawd_tmax, 6},
     {"_EMC2_bawd_tmax_vec", (DL_FUNC) &_EMC2_bawd_tmax_vec, 6},
     {"_EMC2_lognormal_stoploss_log", (DL_FUNC) &_EMC2_lognormal_stoploss_log, 3},
@@ -3249,7 +3327,9 @@ static const R_CallMethodDef CallEntries[] = {
     {"_EMC2_logicalrules_capacity_finish_cpp", (DL_FUNC) &_EMC2_logicalrules_capacity_finish_cpp, 4},
     {"_EMC2_rlba_cpp", (DL_FUNC) &_EMC2_rlba_cpp, 4},
     {"_EMC2_rrdm_cpp", (DL_FUNC) &_EMC2_rrdm_cpp, 3},
+    {"_EMC2_rddm_cpp", (DL_FUNC) &_EMC2_rddm_cpp, 3},
     {"_EMC2_rbawl_cpp", (DL_FUNC) &_EMC2_rbawl_cpp, 8},
+    {"_EMC2_rbta_wl_cpp", (DL_FUNC) &_EMC2_rbta_wl_cpp, 7},
     {"_EMC2_rbawl_corr_cpp", (DL_FUNC) &_EMC2_rbawl_corr_cpp, 7},
     {"_EMC2_rbawd_cpp", (DL_FUNC) &_EMC2_rbawd_cpp, 7},
     {"_EMC2_rbawf_cpp", (DL_FUNC) &_EMC2_rbawf_cpp, 6},

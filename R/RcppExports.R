@@ -93,6 +93,14 @@ pbawd <- function(t, A, b, p1, p2, k, ell, launch = 1L, posdrift = TRUE, log_out
     .Call(`_EMC2_pbawd`, t, A, b, p1, p2, k, ell, launch, posdrift, log_out, gamma, rho, delta)
 }
 
+dbawd_norm <- function(t, A, b, p1, p2, k, ell, launch = 1L, posdrift = TRUE, log_out = FALSE, gamma = 0.0, rho = 0.0, delta = 0.0) {
+    .Call(`_EMC2_dbawd_norm`, t, A, b, p1, p2, k, ell, launch, posdrift, log_out, gamma, rho, delta)
+}
+
+pbawd_norm <- function(t, A, b, p1, p2, k, ell, launch = 1L, posdrift = TRUE, log_out = FALSE, gamma = 0.0, rho = 0.0, delta = 0.0) {
+    .Call(`_EMC2_pbawd_norm`, t, A, b, p1, p2, k, ell, launch, posdrift, log_out, gamma, rho, delta)
+}
+
 bawd_tmax <- function(A, b, k, ell, gamma = 0.0, rho = 0.0) {
     .Call(`_EMC2_bawd_tmax`, A, b, k, ell, gamma, rho)
 }
@@ -449,8 +457,16 @@ rrdm_cpp <- function(pars, lR_levels, ok) {
     .Call(`_EMC2_rrdm_cpp`, pars, lR_levels, ok)
 }
 
+rddm_cpp <- function(pars, response_levels, ok) {
+    .Call(`_EMC2_rddm_cpp`, pars, response_levels, ok)
+}
+
 rbawl_cpp <- function(pars, lR_levels, ok, posdrift, erlang, guess, global, launch = 0L) {
     .Call(`_EMC2_rbawl_cpp`, pars, lR_levels, ok, posdrift, erlang, guess, global, launch)
+}
+
+rbta_wl_cpp <- function(pars, lR_levels, ok, mode, posdrift, launch, endpoint_chart = FALSE) {
+    .Call(`_EMC2_rbta_wl_cpp`, pars, lR_levels, ok, mode, posdrift, launch, endpoint_chart)
 }
 
 rbawl_corr_cpp <- function(pars, lR_levels, ok, posdrift, erlang, guess, global) {

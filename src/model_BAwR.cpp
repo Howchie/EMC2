@@ -831,7 +831,7 @@ double bawr_pdf_scalar_natural(double t, double A, double b, double p1,
 NumericVector dbawr(NumericVector t, NumericVector A, NumericVector b,
                     NumericVector p1, NumericVector p2, NumericVector kappa,
                     NumericVector pw, int launch = 1, bool posdrift = true,
-                    bool log_out = false, double delta = 0.0) {
+                    bool log_out = false, NumericVector delta = 0.0) {
   const int n = t.size();
   NumericVector out(n);
   auto pick = [](const NumericVector& x, int i) -> double {
@@ -840,7 +840,7 @@ NumericVector dbawr(NumericVector t, NumericVector A, NumericVector b,
   for (int i = 0; i < n; ++i)
     out[i] = bawr_pdf_norm(t[i], pick(A, i), pick(b, i), pick(p1, i),
                            pick(p2, i), pick(kappa, i), pick(pw, i), launch,
-                           posdrift, log_out, BAWR_DENOM_FLOOR, delta);
+                           posdrift, log_out, BAWR_DENOM_FLOOR, pick(delta, i));
   return out;
 }
 
@@ -848,7 +848,7 @@ NumericVector dbawr(NumericVector t, NumericVector A, NumericVector b,
 NumericVector pbawr(NumericVector t, NumericVector A, NumericVector b,
                     NumericVector p1, NumericVector p2, NumericVector kappa,
                     NumericVector pw, int launch = 1, bool posdrift = true,
-                    bool log_out = false, double delta = 0.0) {
+                    bool log_out = false, NumericVector delta = 0.0) {
   const int n = t.size();
   NumericVector out(n);
   auto pick = [](const NumericVector& x, int i) -> double {
@@ -857,7 +857,7 @@ NumericVector pbawr(NumericVector t, NumericVector A, NumericVector b,
   for (int i = 0; i < n; ++i)
     out[i] = bawr_cdf_norm(t[i], pick(A, i), pick(b, i), pick(p1, i),
                            pick(p2, i), pick(kappa, i), pick(pw, i), launch,
-                           posdrift, log_out, BAWR_DENOM_FLOOR, delta);
+                           posdrift, log_out, BAWR_DENOM_FLOOR, pick(delta, i));
   return out;
 }
 
@@ -957,13 +957,13 @@ double dbawr_scalar(double t, const double* par, void* ctx_) {
   auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
   const int launch = bawr_launch_of(ctx);
   const bool split = launch == BAWR_LAUNCH_SPLITLOGNORMAL;
-  const int iv = split ? emc2col::bawrsplit::mu : emc2col::bawr::v;
-  const int isv = split ? emc2col::bawrsplit::sigma : emc2col::bawr::sv;
-  const int iB = split ? emc2col::bawrsplit::B : emc2col::bawr::B;
-  const int iA = split ? emc2col::bawrsplit::A : emc2col::bawr::A;
-  const int it0 = split ? emc2col::bawrsplit::t0 : emc2col::bawr::t0;
-  const int ikap = split ? emc2col::bawrsplit::kappa : emc2col::bawr::kappa;
-  const int ipw = split ? emc2col::bawrsplit::p : emc2col::bawr::p;
+  const int iv = emc2col::select_index(split, emc2col::bawrsplit::mu, emc2col::bawr::v);
+  const int isv = emc2col::select_index(split, emc2col::bawrsplit::sigma, emc2col::bawr::sv);
+  const int iB = emc2col::select_index(split, emc2col::bawrsplit::B, emc2col::bawr::B);
+  const int iA = emc2col::select_index(split, emc2col::bawrsplit::A, emc2col::bawr::A);
+  const int it0 = emc2col::select_index(split, emc2col::bawrsplit::t0, emc2col::bawr::t0);
+  const int ikap = emc2col::select_index(split, emc2col::bawrsplit::kappa, emc2col::bawr::kappa);
+  const int ipw = emc2col::select_index(split, emc2col::bawrsplit::p, emc2col::bawr::p);
   if (R_IsNA(par[iv])) return 0.0;
   const double tt = t - par[it0];
   if (t <= 0.0 || tt <= 0.0) return 0.0;
@@ -978,13 +978,13 @@ double pbawr_scalar(double t, const double* par, void* ctx_) {
   auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
   const int launch = bawr_launch_of(ctx);
   const bool split = launch == BAWR_LAUNCH_SPLITLOGNORMAL;
-  const int iv = split ? emc2col::bawrsplit::mu : emc2col::bawr::v;
-  const int isv = split ? emc2col::bawrsplit::sigma : emc2col::bawr::sv;
-  const int iB = split ? emc2col::bawrsplit::B : emc2col::bawr::B;
-  const int iA = split ? emc2col::bawrsplit::A : emc2col::bawr::A;
-  const int it0 = split ? emc2col::bawrsplit::t0 : emc2col::bawr::t0;
-  const int ikap = split ? emc2col::bawrsplit::kappa : emc2col::bawr::kappa;
-  const int ipw = split ? emc2col::bawrsplit::p : emc2col::bawr::p;
+  const int iv = emc2col::select_index(split, emc2col::bawrsplit::mu, emc2col::bawr::v);
+  const int isv = emc2col::select_index(split, emc2col::bawrsplit::sigma, emc2col::bawr::sv);
+  const int iB = emc2col::select_index(split, emc2col::bawrsplit::B, emc2col::bawr::B);
+  const int iA = emc2col::select_index(split, emc2col::bawrsplit::A, emc2col::bawr::A);
+  const int it0 = emc2col::select_index(split, emc2col::bawrsplit::t0, emc2col::bawr::t0);
+  const int ikap = emc2col::select_index(split, emc2col::bawrsplit::kappa, emc2col::bawr::kappa);
+  const int ipw = emc2col::select_index(split, emc2col::bawrsplit::p, emc2col::bawr::p);
   if (R_IsNA(par[iv])) return 0.0;
   const double tt = t - par[it0];
   if (t <= 0.0 || tt <= 0.0) return 0.0;
@@ -1004,15 +1004,15 @@ void dbawr_raw(const double* rt, const double* const* cols, int n_rows,
   const bool pd = ctx ? ctx->use_posdrift : true;
   const int launch = bawr_launch_of(ctx);
   const bool split = launch == BAWR_LAUNCH_SPLITLOGNORMAL;
-  const double* p1_ = cols[split ? emc2col::bawrsplit::mu : emc2col::bawr::v];
+  const double* p1_ = cols[emc2col::select_index(split, emc2col::bawrsplit::mu, emc2col::bawr::v)];
   const double* p2_ =
-    cols[split ? emc2col::bawrsplit::sigma : emc2col::bawr::sv];
-  const double* B_ = cols[split ? emc2col::bawrsplit::B : emc2col::bawr::B];
-  const double* A_ = cols[split ? emc2col::bawrsplit::A : emc2col::bawr::A];
-  const double* t0_ = cols[split ? emc2col::bawrsplit::t0 : emc2col::bawr::t0];
+    cols[emc2col::select_index(split, emc2col::bawrsplit::sigma, emc2col::bawr::sv)];
+  const double* B_ = cols[emc2col::select_index(split, emc2col::bawrsplit::B, emc2col::bawr::B)];
+  const double* A_ = cols[emc2col::select_index(split, emc2col::bawrsplit::A, emc2col::bawr::A)];
+  const double* t0_ = cols[emc2col::select_index(split, emc2col::bawrsplit::t0, emc2col::bawr::t0)];
   const double* kap_ =
-    cols[split ? emc2col::bawrsplit::kappa : emc2col::bawr::kappa];
-  const double* pw_ = cols[split ? emc2col::bawrsplit::p : emc2col::bawr::p];
+    cols[emc2col::select_index(split, emc2col::bawrsplit::kappa, emc2col::bawr::kappa)];
+  const double* pw_ = cols[emc2col::select_index(split, emc2col::bawrsplit::p, emc2col::bawr::p)];
   const double* delta_ = split ? cols[emc2col::bawrsplit::delta] : nullptr;
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
@@ -1042,15 +1042,15 @@ void pbawr_raw(const double* rt, const double* const* cols, int n_rows,
   const bool pd = ctx ? ctx->use_posdrift : true;
   const int launch = bawr_launch_of(ctx);
   const bool split = launch == BAWR_LAUNCH_SPLITLOGNORMAL;
-  const double* p1_ = cols[split ? emc2col::bawrsplit::mu : emc2col::bawr::v];
+  const double* p1_ = cols[emc2col::select_index(split, emc2col::bawrsplit::mu, emc2col::bawr::v)];
   const double* p2_ =
-    cols[split ? emc2col::bawrsplit::sigma : emc2col::bawr::sv];
-  const double* B_ = cols[split ? emc2col::bawrsplit::B : emc2col::bawr::B];
-  const double* A_ = cols[split ? emc2col::bawrsplit::A : emc2col::bawr::A];
-  const double* t0_ = cols[split ? emc2col::bawrsplit::t0 : emc2col::bawr::t0];
+    cols[emc2col::select_index(split, emc2col::bawrsplit::sigma, emc2col::bawr::sv)];
+  const double* B_ = cols[emc2col::select_index(split, emc2col::bawrsplit::B, emc2col::bawr::B)];
+  const double* A_ = cols[emc2col::select_index(split, emc2col::bawrsplit::A, emc2col::bawr::A)];
+  const double* t0_ = cols[emc2col::select_index(split, emc2col::bawrsplit::t0, emc2col::bawr::t0)];
   const double* kap_ =
-    cols[split ? emc2col::bawrsplit::kappa : emc2col::bawr::kappa];
-  const double* pw_ = cols[split ? emc2col::bawrsplit::p : emc2col::bawr::p];
+    cols[emc2col::select_index(split, emc2col::bawrsplit::kappa, emc2col::bawr::kappa)];
+  const double* pw_ = cols[emc2col::select_index(split, emc2col::bawrsplit::p, emc2col::bawr::p)];
   const double* delta_ = split ? cols[emc2col::bawrsplit::delta] : nullptr;
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
@@ -1081,15 +1081,15 @@ void bawr_logS_at_t(double t, const double* const* cols,
   const bool pd = ctx ? ctx->use_posdrift : true;
   const int launch = bawr_launch_of(ctx);
   const bool split = launch == BAWR_LAUNCH_SPLITLOGNORMAL;
-  const double* p1_ = cols[split ? emc2col::bawrsplit::mu : emc2col::bawr::v];
+  const double* p1_ = cols[emc2col::select_index(split, emc2col::bawrsplit::mu, emc2col::bawr::v)];
   const double* p2_ =
-    cols[split ? emc2col::bawrsplit::sigma : emc2col::bawr::sv];
-  const double* B_ = cols[split ? emc2col::bawrsplit::B : emc2col::bawr::B];
-  const double* A_ = cols[split ? emc2col::bawrsplit::A : emc2col::bawr::A];
-  const double* t0_ = cols[split ? emc2col::bawrsplit::t0 : emc2col::bawr::t0];
+    cols[emc2col::select_index(split, emc2col::bawrsplit::sigma, emc2col::bawr::sv)];
+  const double* B_ = cols[emc2col::select_index(split, emc2col::bawrsplit::B, emc2col::bawr::B)];
+  const double* A_ = cols[emc2col::select_index(split, emc2col::bawrsplit::A, emc2col::bawr::A)];
+  const double* t0_ = cols[emc2col::select_index(split, emc2col::bawrsplit::t0, emc2col::bawr::t0)];
   const double* kap_ =
-    cols[split ? emc2col::bawrsplit::kappa : emc2col::bawr::kappa];
-  const double* pw_ = cols[split ? emc2col::bawrsplit::p : emc2col::bawr::p];
+    cols[emc2col::select_index(split, emc2col::bawrsplit::kappa, emc2col::bawr::kappa)];
+  const double* pw_ = cols[emc2col::select_index(split, emc2col::bawrsplit::p, emc2col::bawr::p)];
   const double* delta_ = split ? cols[emc2col::bawrsplit::delta] : nullptr;
   for (int j = 0; j < n_unique_trials; ++j) {
     if (!trunc_mask[j]) continue;

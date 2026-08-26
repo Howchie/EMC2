@@ -676,13 +676,26 @@ inline double log_split_lognormal_cdf(double v, const split_lognormal_shape& h) 
     return std::fmin(std::log(2.0 * h.a) + pnorm_log_direct(z, true), 0.0);
   }
   const double z = (x - h.c) / h.sR;
-  const double lp = std::log(2.0 * (1.0 - h.a)) + pnorm_log_direct(z, false);
-  return (lp > R_NegInf) ? log1p_exp(std::log(2.0 * h.a - 1.0) - lp) + lp : R_NegInf;
+  // F(x) = 2(1-a) Phi(z) + (2a - 1) on the right side.  The constant
+  // term is negative when a < 1/2, so it must be subtracted rather than
+  // passed to log(); using Q(z) here also makes the result decrease with x.
+  const double lp = std::log(2.0 * (1.0 - h.a)) + pnorm_log_direct(z, true);
+  if (!(lp > R_NegInf)) return R_NegInf;
+  if (h.a >= 0.5) {
+    const double lconst = std::log(2.0 * h.a - 1.0);
+    return std::fmin((lconst > R_NegInf) ? log_sum_exp(lp, lconst) : lp, 0.0);
+  }
+  const double lconst = std::log1p(-2.0 * h.a);
+  const double out = log_diff_exp(lp, lconst);
+  return (out > R_NegInf) ? std::fmin(out, 0.0) : R_NegInf;
 }
 
 inline double log_split_lognormal_cdf(double v, double mu, double sigma,
                                       double delta) {
-  if (delta == 0.0) return pnorm_log_direct((std::log(v) - mu) / sigma, true);
+  if (delta == 0.0) {
+    if (!(v > 0.0) || !(sigma > 0.0)) return R_NegInf;
+    return pnorm_log_direct((std::log(v) - mu) / sigma, true);
+  }
   if (!(v > 0.0)) return R_NegInf;
   split_lognormal_shape h;
   if (!split_lognormal_shape_params(mu, sigma, delta, h)) return R_NegInf;

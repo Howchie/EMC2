@@ -98,7 +98,8 @@ calc_functions <- function(functions, input){
 
 prep_data_plot <- function(input, post_predict, prior_predict, to_plot, limits,
                            factors = NULL, defective_factor = NULL, subject = NULL,
-                           n_cores, n_post, functions, remove_na = TRUE)
+                           n_cores, n_post, functions, remove_na = TRUE,
+                           user_xlim = NULL)
 {
   if (!is.data.frame(input) && !inherits(input, "emc") && !is.null(post_predict) &&
       length(input) != length(post_predict)) {
@@ -217,17 +218,13 @@ prep_data_plot <- function(input, post_predict, prior_predict, to_plot, limits,
       }
     }
   }
-  if (is.null(xlim) || !all(is.finite(xlim))) xlim <- c(0, 1) # Default fallback
+  if (is.numeric(user_xlim) && length(user_xlim) == 2L &&
+      all(is.finite(user_xlim))) {
+    xlim <- sort(user_xlim)
+  } else if (is.null(xlim) || !all(is.finite(xlim))) {
+    xlim <- c(0, 1) # Default fallback
+  }
 
-  datasets <- lapply(datasets, function(x) {
-    if (remove_na) {
-      keep <- x$rt > xlim[1] & x$rt < xlim[2]
-    } else {
-      keep <- is.na(x$rt) | is.infinite(x$rt) | (x$rt > xlim[1] & x$rt < xlim[2])
-    }
-    x <- x[keep, , drop = FALSE]
-    return(x)
-  })
 
   return(list(datasets = datasets, sources = sources, xlim = xlim))
 }
@@ -485,12 +482,18 @@ compute_def_dens <- function(dat, defective_factor, dargs, from = NULL, to = NUL
   by_deflev <- split(dat, factor(dat[[defective_factor]], levels = defective_levels), drop = FALSE)
   ctx    <- detect_context_cols(dat, defective_factor)
   out    <- list()
-  n_grid <- if (is.null(dargs$n)) 512L else as.integer(dargs$n[1])
+  n_grid <- 512L
+  zero_x <- if (length(from) == 1L && length(to) == 1L &&
+                all(is.finite(c(from, to))) && from < to) {
+    seq(from, to, length.out = n_grid)
+  } else {
+    seq(0, 1, length.out = n_grid)
+  }
   for (lev in names(by_deflev)) {
     subdat    <- by_deflev[[lev]]
     rt_finite <- subdat$rt[is.finite(subdat$rt)]
     if (length(rt_finite) < 2) {
-      out[[lev]] <- rep(0, n_grid)
+      out[[lev]] <- list(x = zero_x, y = rep(0, n_grid))
       next
     }
     if (length(ctx) == 0L) {
@@ -502,9 +505,12 @@ compute_def_dens <- function(dat, defective_factor, dargs, from = NULL, to = NUL
       p_finite  <- if ("p_finite_rt" %in% names(subdat)) subdat$p_finite_rt[1L] else 1.0
     }
     p_lev <- nrow(subdat) / n_context * p_finite
-    dd <- do.call(density, c(list(x = rt_finite, from = from, to = to),
-                             fix_dots(dargs, density.default, consider_dots = FALSE)))
-    out[[lev]] <- dd$y * p_lev
+    dd <- do.call(density, c(
+      list(x = rt_finite, from = from, to = to, n = n_grid),
+      fix_dots(dargs, density.default, exclude = c("from", "to", "n"),
+               consider_dots = FALSE)
+    ))
+    out[[lev]] <- list(x = dd$x, y = dd$y * p_lev)
   }
   out
 }
@@ -520,6 +526,8 @@ compute_def_dens <- function(dat, defective_factor, dargs, from = NULL, to = NUL
 #' Optionally, posterior/prior predictive densities can be overlaid.
 #'
 #' @inheritParams plot_cdf
+#' A finite `xlim` supplied via `...` sets the display window only; it does not
+#' truncate density estimation.
 #' @examples
 #' # Plot defective densities for each subject and the factor combination in the design:
 #' plot_density(forstmann)
@@ -539,19 +547,31 @@ plot_density <- function(input, post_predict = NULL, prior_predict = NULL,
                          remove_na = TRUE,
                          legendpos = c("topright", "top"),
                          posterior_args = list(), prior_args = list(), ...) {
+  dots <- list(...)
   # 1) prep_data_plot
   check <- prep_data_plot(input, post_predict, prior_predict, to_plot, use_lim,
                           factors, defective_factor, subject, n_cores, n_post, functions,
-                          remove_na = remove_na)
+                          remove_na = remove_na, user_xlim = dots$xlim)
   data_sources <- check$datasets
   sources <- check$sources
   xlim <- check$xlim
 
+  # Density estimation uses all rows as kernel centers while evaluating over
+  # the display window with a small amount of padding.
+  density_span <- diff(xlim)
+  density_pad <- 0.05 * density_span
+  if (!is.finite(density_pad) || density_pad <= 0) density_pad <- 0.05
+  density_from <- xlim[1] - density_pad
+  density_to <- xlim[2] + density_pad
+
   # Basic definitions
-  dots <- add_defaults(list(...), col = c("black",  "#A9A9A9", "#666666"))
+  if (is.numeric(dots$xlim) && length(dots$xlim) == 2L &&
+      all(is.finite(dots$xlim))) {
+    dots$xlim <- sort(dots$xlim)
+  }
+  dots <- add_defaults(dots, col = c("black",  "#A9A9A9", "#666666"))
   posterior_args <- add_defaults(posterior_args, col = c("darkgreen",  "#0000FF", "#008B8B"))
   prior_args <- add_defaults(prior_args, col = c("red", "#800080", "#CC00FF"))
-
   data <- data_sources[[which(sources == "data")[1]]]
   defective_levels <- if (!is.null(data)) levels(factor(data[[defective_factor]])) else character(0)
   dots$defective_levels <- defective_levels
@@ -587,7 +607,8 @@ plot_density <- function(input, post_predict = NULL, prior_predict = NULL,
       dens_list[[src_name]] <- lapply(splitted, function(dg) {
         postn_splits <- split(dg, dg$postn)
         lapply(postn_splits, function(dsub) {
-          compute_def_dens(dsub, defective_factor, dargs, from = check$xlim[1]-0.05, to = check$xlim[2] + 0.05)
+          compute_def_dens(dsub, defective_factor, dargs,
+                           from = density_from, to = density_to)
         })
       })
 
@@ -597,7 +618,7 @@ plot_density <- function(input, post_predict = NULL, prior_predict = NULL,
         out <- list()
         for (lev in defective_levels) {
           # gather each postn's vector of y for this level => cbind
-          mat_y <- do.call(cbind, lapply(d_list_of_lists, function(ll) ll[[lev]]))
+          mat_y <- do.call(cbind, lapply(d_list_of_lists, function(ll) ll[[lev]]$y))
           # compute row-wise quantile
           # mat_y is 512 x #postn
           if (!is.null(mat_y)) {
@@ -611,26 +632,48 @@ plot_density <- function(input, post_predict = NULL, prior_predict = NULL,
         out
       })
 
-      # if we use this source for y-lim
-      if (src_type %in% use_lim) {
-        # find max of upper quantile
-        all_vals <- unlist(lapply(dens_quants_list[[src_name]], function(lv) {
-          sapply(lv, function(m) if (!is.null(m)) max(m, na.rm = TRUE) else 0)
-        }))
-        y_max <- max(y_max, all_vals)
-      }
-
     } else {
       dargs <- dots
       splitted <- split(src_data, src_data$group_key)
-      dens_list[[src_name]] <- lapply(splitted, compute_def_dens, defective_factor, dargs, from = check$xlim[1]-0.05, to = check$xlim[2] + 0.05)
-
-      if (src_type %in% use_lim) {
-        # find max
-        out_max <- max(unlist(dens_list[[src_name]]), na.rm = TRUE)
-        y_max <- max(y_max, out_max)
-      }
+      dens_list[[src_name]] <- lapply(
+        splitted, compute_def_dens, defective_factor, dargs,
+        from = density_from, to = density_to
+      )
     }
+  }
+
+  # Compute the global y-limit from only the portion of each selected curve
+  # that is visible in the display window.
+  visible_max <- function(x, y) {
+    keep <- is.finite(x) & x >= xlim[1] & x <= xlim[2] & is.finite(y)
+    if (any(keep)) max(y[keep]) else 0
+  }
+  for (k in seq_along(data_sources)) {
+    if (!(sources[k] %in% use_lim)) next
+    src_name <- names(sources)[k]
+    if ("postn" %in% names(data_sources[[k]])) {
+      all_vals <- unlist(lapply(names(dens_quants_list[[src_name]]), function(group_key) {
+        d_list_of_lists <- dens_list[[src_name]][[group_key]]
+        x_grid <- NULL
+        for (draw in d_list_of_lists) {
+          if (length(draw) > 0L && !is.null(draw[[1L]])) {
+            x_grid <- draw[[1L]]$x
+            break
+          }
+        }
+        if (is.null(x_grid)) return(numeric(0))
+        lapply(dens_quants_list[[src_name]][[group_key]], function(m) {
+          if (is.null(m)) return(0)
+          visible_max(x_grid, apply(m, 2L, max, na.rm = TRUE))
+        })
+      }), use.names = FALSE)
+    } else {
+      all_vals <- unlist(lapply(dens_list[[src_name]], function(curves) {
+        vapply(curves, function(curve) visible_max(curve$x, curve$y),
+               numeric(1))
+      }), use.names = FALSE)
+    }
+    if (length(all_vals) > 0L) y_max <- max(y_max, all_vals, na.rm = TRUE)
   }
 
   # 3) Second big loop: plotting
@@ -651,14 +694,9 @@ plot_density <- function(input, post_predict = NULL, prior_predict = NULL,
   } else {
     par(mfrow = layout)
   }
+  if (!is.finite(y_max) || y_max <= 0) y_max <- 1
   ylim_global <- c(0, y_max)
 
-  # Construct an x-grid from the density range for each data source.
-
-  # function to retrieve the from/to arguments
-  get_range_args <- function(dargs) {
-    c(dargs$from, dargs$to)
-  }
   for (group_key in unique_group_keys) {
     tmp_dots <- dots
     tmp_posterior_args <- posterior_args
@@ -670,7 +708,6 @@ plot_density <- function(input, post_predict = NULL, prior_predict = NULL,
     do.call(plot, c(list(NA), plot_args))
     legend_map <- c()
     lwd_map <- numeric()
-    x_grid <- seq(xlim[1], xlim[2], length.out = 512)
 
     for (k in 1:length(data_sources)) {
       src_type <- sources[k]
@@ -690,16 +727,16 @@ plot_density <- function(input, post_predict = NULL, prior_predict = NULL,
       lwd_map[src_name] <- ifelse(is.null(src_args$lwd), 1, src_args$lwd)
       # if no postn => single dataset
       if (!("postn" %in% colnames(src_data))) {
-        # dens_list[[src_name]][[group_key]] => list of defective_levels => vector of length=512
+        # dens_list[[src_name]][[group_key]] => list of defective levels
         cur_dens <- dens_list[[src_name]][[group_key]]
         if (!is.null(cur_dens)) {
           for (i in seq_along(defective_levels)) {
             lev <- defective_levels[i]
-            yvals <- cur_dens[[lev]]
-            if (!is.null(yvals)) {
+            curve <- cur_dens[[lev]]
+            if (!is.null(curve)) {
               lines_args <- add_defaults(src_args, lty = line_types[i])
               lines_args <- fix_dots_plot(lines_args)
-              do.call(lines, c(list(x = x_grid, y = yvals), lines_args))
+              do.call(lines, c(list(x = curve$x, y = curve$y), lines_args))
             }
           }
         }
@@ -714,6 +751,15 @@ plot_density <- function(input, post_predict = NULL, prior_predict = NULL,
               # m => matrix of size length(quantiles) x 512
               idx_med <- which(quantiles == 0.5)[1]
               y_med   <- m[idx_med,]
+              x_grid <- NULL
+              draw_curves <- dens_list[[src_name]][[group_key]]
+              for (draw in draw_curves) {
+                if (!is.null(draw[[lev]])) {
+                  x_grid <- draw[[lev]]$x
+                  break
+                }
+              }
+              if (is.null(x_grid)) next
 
               # polygons first
               n_bands <- length(quants) %/% 2
@@ -820,7 +866,7 @@ detect_context_cols <- function(data, defective_factor,
 ###############################################################################
 get_def_cdf <- function(x, defective_factor, dots)
 {
-  probs      <- seq(0.01, 0.99, by = 0.01)
+  probs      <- c(seq(0.01, 0.99, by = 0.01), 1)
   resp       <- x[[defective_factor]]
   resp_levels <- unique(resp[!is.na(resp)])
   ctx        <- detect_context_cols(x, defective_factor)
@@ -868,7 +914,9 @@ get_def_cdf <- function(x, defective_factor, dots)
 #' @param n_post Number of posterior draws to simulate if needed for predictives.
 #' @param layout Numeric vector used in `par(mfrow=...)`; use `NA` for auto-layout.
 #' @param to_plot Character vector: any of `"data"`, `"posterior"`, `"prior"`.
-#' @param use_lim Character vector controlling which source(s) define `xlim`.
+#' @param use_lim Character vector controlling which source(s) define the quantile-derived
+#'   `xlim` when no finite numeric `xlim` is supplied via `...`. A supplied `xlim` sets
+#'   the display window only and does not truncate CDF estimation.
 #' @param remove_na Logical; if `TRUE` (default), remove non-finite RT rows before
 #'   computing summaries. Set to `FALSE` to retain `NA`/`Inf` RT rows in denominators.
 #' @param legendpos Character vector controlling the positions of the legends
@@ -905,6 +953,7 @@ plot_cdf <- function(input,
                      prior_args = list(),
                      add_percentiles=c(10,50,90),
                      ...) {
+  dots <- list(...)
 
   # 1) prep_data_plot
   if (!is.null(add_percentiles)) {
@@ -913,13 +962,17 @@ plot_cdf <- function(input,
   }
   check <- prep_data_plot(input, post_predict, prior_predict, to_plot, use_lim,
                           factors, defective_factor, subject, n_cores, n_post,
-                          functions, remove_na = remove_na)
+                          functions, remove_na = remove_na, user_xlim = dots$xlim)
   data_sources <- check$datasets
   sources <- check$sources
   xlim <- check$xlim
 
   # Basic definitions
-  dots <- add_defaults(list(...), col = c("black",  "#A9A9A9", "#666666"))
+  if (is.numeric(dots$xlim) && length(dots$xlim) == 2L &&
+      all(is.finite(dots$xlim))) {
+    dots$xlim <- sort(dots$xlim)
+  }
+  dots <- add_defaults(dots, col = c("black",  "#A9A9A9", "#666666"))
   posterior_args <- add_defaults(posterior_args, col = c("darkgreen",  "#0000FF", "#008B8B"))
   prior_args <- add_defaults(prior_args, col = c("red", "#800080", "#CC00FF"))
 
@@ -979,7 +1032,7 @@ plot_cdf <- function(input,
               break
             }
           }
-          n_prob <- if (is.null(first_mat)) 99L else nrow(first_mat)
+          n_prob <- if (is.null(first_mat)) 100L else nrow(first_mat)
           # gather all x and y columns across draws
           # Missing levels in some postn draws are represented as NA columns and ignored by na.rm=TRUE.
           x_cols <- lapply(postn_list, function(lst) {

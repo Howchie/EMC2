@@ -1,18 +1,4 @@
-#### C++ rfun dispatch (rfun_port_plan.md) ----
-#
-# Thin R-side wrappers around the C++ simulation kernels (src/model_rng.cpp)
-# for LBA/LBAIO/logical-rules race models, BAwL, RDM and RDMSWTN. Each wrapper falls
-# back to the pure-R reference rfun (.lba_rfun/rBAwL/rRDM/rRDMSWTN) when the
-# `emc2.cpp_rfun` option is turned off. The kernels are distributionally,
-# not stream-, equivalent to the R rfuns -- set.seed()-reproduced simulated
-# datasets will differ trial-by-trial between the two paths.
-
-# The R reference rfuns size their output data.frame by length(lR)/n_acc but
-# do their internal race computation over nrow(pars)/n_acc trials; when a
-# caller passes fewer pars rows than lR (only ever exercised by hand-built
-# test inputs, not by make_data()/RACE_rfun), R's `out$R <- ...` data.frame
-# column assignment silently recycles the shorter result to fill the longer
-# column. Replicate that here so the C++ path matches for such inputs.
+#### C++ rfun dispatch ----
 .rfun_cpp_pack <- function(res, lR_levels, n_trials_target) {
   n <- length(res$R)
   if (n_trials_target != n) {
@@ -45,6 +31,15 @@
     return(.rfun_cpp_pack(res, levels(lR), length(lR) / length(levels(lR))))
   }
   rRDM(lR, pars, ok = ok)
+}
+
+.rfun_DDM <- function(R, pars, ok = rep(TRUE, nrow(pars))) {
+  if (is.null(ok)) ok <- rep(TRUE, nrow(pars))
+  if (.use_cpp_rfun()) {
+    res <- rddm_cpp(pars, levels(R), ok)
+    return(.rfun_cpp_pack(res, levels(R), length(R)))
+  }
+  rDDM(R, pars, ok = ok)
 }
 
 .rfun_ROU <- function(lR, pars, ok = rep(TRUE, nrow(pars)), kind = NULL,
@@ -94,6 +89,43 @@
   }
   rBAwL(lR, pars, ok = ok, posdrift = posdrift, erlang = erlang, guess = guess,
         global = global, launch = launch)
+}
+
+.rfun_BTAwL <- function(lR, pars, ok = rep(TRUE, length(lR)), posdrift = TRUE,
+                        launch = 0L, mode = c("full", "transient", "sustained"),
+                        endpoint_chart = FALSE) {
+  mode <- match.arg(mode)
+  if (.use_cpp_rfun()) {
+    mode_code <- switch(mode, transient = 0L, sustained = 1L, full = 2L)
+    pars_cpp <- if (is.data.frame(pars)) as.matrix(pars) else pars
+    res <- rbta_wl_cpp(pars_cpp, levels(lR), ok, mode_code, posdrift,
+                       as.integer(launch), isTRUE(endpoint_chart))
+    return(.rfun_cpp_pack(res, levels(lR), length(lR) / length(levels(lR))))
+  }
+  switch(mode,
+         transient = .rBTAwLTransient_R(lR, pars, ok = ok, posdrift = posdrift,
+                                        launch = launch),
+         sustained = .rBTAwLSustained_R(lR, pars, ok = ok, posdrift = posdrift,
+                                        launch = launch),
+         full = .rBTAwL_R(lR, pars, ok = ok, posdrift = posdrift, launch = launch))
+}
+
+rBTAwLTransient <- function(lR, pars, ok = rep(TRUE, length(lR)),
+                            p_types = NULL, posdrift = TRUE, launch = 0L) {
+  .rfun_BTAwL(lR, pars, ok = ok, posdrift = posdrift, launch = launch,
+              mode = "transient", endpoint_chart = "Ttrans" %in% colnames(pars))
+}
+
+rBTAwLSustained <- function(lR, pars, ok = rep(TRUE, length(lR)),
+                             p_types = NULL, posdrift = TRUE, launch = 0L) {
+  .rfun_BTAwL(lR, pars, ok = ok, posdrift = posdrift, launch = launch,
+              mode = "sustained", endpoint_chart = FALSE)
+}
+
+rBTAwL <- function(lR, pars, ok = rep(TRUE, length(lR)),
+                   p_types = NULL, posdrift = TRUE, launch = 0L) {
+  .rfun_BTAwL(lR, pars, ok = ok, posdrift = posdrift, launch = launch,
+              mode = "full", endpoint_chart = "Ttrans" %in% colnames(pars))
 }
 
 # `launch` must come from the same .bawd_launch_code() call that produced the

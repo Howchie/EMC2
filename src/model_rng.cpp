@@ -1,12 +1,4 @@
-// C++ simulation kernels for posterior prediction, one entry point per race
-// family (LBA, BAwL, RDM, RDMSWTN). See rfun_port_plan.md for the design and
-// R/model_LBA.R (.lba_rfun, rBAwL) / R/model_RDM.R (rRDM, rWald, rSWTN, rRDMSWTN)
-// for the reference semantics these kernels replicate distributionally.
-//
-// This is the sole translation unit including model_rng.h's RNG primitives
-// combined with Rcpp container types; kept separate from particle_ll.cpp's
-// TU (which owns model_LBA.h/model_RDM.h) to avoid duplicate-symbol issues
-// with those headers' non-inline [[Rcpp::export]] functions.
+// Compiled posterior-prediction simulators.
 
 #include <Rcpp.h>
 #include <string>
@@ -14,10 +6,9 @@
 #include <vector>
 #include "model_rng.h"
 #include "drift_factor.h"
-// FRQ's (h, tau) -> (p, lambda) inversion.  Included rather than duplicated so
-// the simulator and the likelihood cannot describe different models; the header
-// is export-free precisely so it can be shared across translation units.
 #include "model_FRQ.h"
+#include "model_BTAwL.h"
+#include "ddm_functions_inline.h"
 
 using namespace Rcpp;
 
@@ -58,15 +49,6 @@ inline double rsplit_lognormal_r(double mu, double sigma, double delta) {
 
 }  // namespace
 
-// Shared-capacity LogicalRules simulator.  This is the C++ counterpart of
-// .lr_capacity_finish_times() in R/make_data.R.  The shared additive drift
-// shift loads only on the A/B target pair in an AB stimulus condition; every
-// other accumulator keeps its ordinary independent LBA drift draw.
-//
-// The return value is a matrix of accumulator finishing times, with one row
-// per trial and one column per lR level.  Logical-rule assembly is deliberately
-// left to the R caller so the ordinary and detection rule paths retain the
-// same response/tie/time-racer semantics.
 // [[Rcpp::export]]
 Rcpp::NumericMatrix logicalrules_capacity_finish_cpp(
     Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
@@ -282,6 +264,92 @@ Rcpp::List pack_result(const std::vector<int>& R, const std::vector<double>& rt,
                             Rcpp::Named("isTime") = itv);
 }
 
+template <typename F>
+inline double btawl_bisect_root(F&& f, double hi) {
+  if (!(hi > 0.0) || !R_FINITE(hi)) return R_PosInf;
+  double lo = 0.0;
+  for (int it = 0; it < 100; ++it) {
+    const double mid = 0.5 * (lo + hi);
+    const double fm = f(mid);
+    if (ISNAN(fm)) return R_PosInf;
+    if (fm >= 0.0) hi = mid; else lo = mid;
+    if (hi - lo <= 1e-11) break;
+  }
+  return 0.5 * (lo + hi);
+}
+
+inline double btawl_transient_state(double t, double V, double z,
+                                    double k, double tau) {
+  return z * std::exp(-k * t) + V * btawl_h(t, k, tau);
+}
+
+inline double btawl_sustained_state(double t, double V, double z,
+                                    double k, double tau) {
+  return z * std::exp(-k * t) + V * btawl_hs(t, k, tau);
+}
+
+inline double btawl_hit_time_transient_cpp(double V, double z, double b,
+                                           double k, double tau) {
+  if (!R_FINITE(V) || V <= 0.0 || !R_FINITE(z) || !(tau > 0.0) ||
+      !R_FINITE(b) || !R_FINITE(k) || k < 0.0)
+    return (R_FINITE(z) && R_FINITE(b) && z >= b) ? 0.0 : R_PosInf;
+  if (z >= b) return 0.0;
+
+  auto state_minus_b = [&](double t) {
+    return btawl_transient_state(t, V, z, k, tau) - b;
+  };
+
+  if (k <= BTAWL_K_EPS) {
+    double hi = std::fmax(tau, 1.0);
+    const double cap = 1e12 * std::fmax(tau, 1.0);
+    for (int it = 0; it < 200 && state_minus_b(hi) < 0.0 && hi < cap; ++it)
+      hi = std::fmin(2.0 * hi, cap);
+    if (state_minus_b(hi) < 0.0) return R_PosInf;
+    return btawl_bisect_root(state_minus_b, hi);
+  }
+
+  const double tm = btawl_tmax(k, tau);
+  if (!(tm > 0.0) || !R_FINITE(tm) || state_minus_b(tm) < 0.0)
+    return R_PosInf;
+  return btawl_bisect_root(state_minus_b, tm);
+}
+
+inline double btawl_hit_time_sustained_cpp(double V, double z, double b,
+                                           double k, double tau_s) {
+  if (!R_FINITE(V) || V <= 0.0 || !R_FINITE(z) || !(tau_s > 0.0) ||
+      !R_FINITE(b) || !R_FINITE(k) || k < 0.0)
+    return (R_FINITE(z) && R_FINITE(b) && z >= b) ? 0.0 : R_PosInf;
+  if (z >= b) return 0.0;
+  if (k > BTAWL_K_EPS && V <= k * b) return R_PosInf;
+
+  auto state_minus_b = [&](double t) {
+    return btawl_sustained_state(t, V, z, k, tau_s) - b;
+  };
+  double hi = std::fmax(tau_s, (k > BTAWL_K_EPS) ? 1.0 / k : 1.0);
+  if (!R_FINITE(hi) || !(hi > 0.0)) return R_PosInf;
+  const double cap = 1e12 * std::fmax(tau_s, 1.0);
+  for (int it = 0; it < 200 && state_minus_b(hi) < 0.0 && hi < cap; ++it)
+    hi = std::fmin(2.0 * hi, cap);
+  if (state_minus_b(hi) < 0.0) return R_PosInf;
+  return btawl_bisect_root(state_minus_b, hi);
+}
+
+inline double btawl_tau_for_row(const Rcpp::NumericMatrix& pars,
+                                const std::unordered_map<std::string, int>& ci,
+                                int row, bool prefer_ttrans) {
+  if (prefer_ttrans && ci.count("Ttrans")) {
+    const double Ttrans = pars(row, ci.at("Ttrans"));
+    if (ci.count("tau")) return pars(row, ci.at("tau"));
+    if (ci.count("tau_t")) return pars(row, ci.at("tau_t"));
+    return btawl_tau_from_ttrans(pars(row, ci.at("k")), Ttrans);
+  }
+  if (ci.count("tau")) return pars(row, ci.at("tau"));
+  if (ci.count("tau_t")) return pars(row, ci.at("tau_t"));
+  if (ci.count("Ttrans"))
+    return btawl_tau_from_ttrans(pars(row, ci.at("k")), pars(row, ci.at("Ttrans")));
+  return R_NaN;
+}
+
 }  // namespace
 
 // pars columns: v, sv, b, A, t0. lR_levels/ok/pars rows are trial-major,
@@ -347,6 +415,146 @@ Rcpp::List rrdm_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
   std::vector<int> isTime;
   const bool has_isTime = resolve_time_level(res.R, isTime, lR_levels);
   return pack_result(res.R, res.rt, res.omitted, has_isTime, isTime);
+}
+
+namespace {
+
+// Invert the defective lower-boundary CDF of a fixed-parameter bounded Wiener
+// process. The upper boundary is obtained by reflecting drift and start point.
+double ddm_wiener_quantile(double probability, double a, double v, double w) {
+  if (!(probability > 0.0) || !(a > 0.0) || !(w > 0.0) || !(w < 1.0)) {
+    return 0.0;
+  }
+
+  const double log_target = std::log(probability);
+  double hi = std::fmax(1.0, a * a);
+  if (std::fabs(v) > 1e-10) {
+    hi = std::fmax(hi, 4.0 * a / std::fabs(v));
+  }
+
+  bool bracketed = false;
+  for (int i = 0; i < 120; ++i) {
+    const double log_cdf = pwiener_inline(hi, a, v, w, 5e-3, 0, 1);
+    if (R_FINITE(log_cdf) && log_cdf >= log_target) {
+      bracketed = true;
+      break;
+    }
+    if (!(hi < 1e12)) break;
+    hi *= 2.0;
+  }
+  if (!bracketed) return R_PosInf;
+
+  double lo = 0.0;
+  for (int i = 0; i < 70; ++i) {
+    const double mid = 0.5 * (lo + hi);
+    const double log_cdf = pwiener_inline(mid, a, v, w, 5e-3, 0, 1);
+    if (R_FINITE(log_cdf) && log_cdf >= log_target) hi = mid;
+    else lo = mid;
+    if (hi - lo <= 1e-10 * std::fmax(1.0, hi)) break;
+  }
+  return 0.5 * (lo + hi);
+}
+
+double ddm_wiener_finish(double a, double v, double w, int& response) {
+  if (!(a > 0.0) || !(w > 0.0) || !(w < 1.0) || !R_FINITE(v)) {
+    return R_PosInf;
+  }
+
+  double p_lower = std::exp(ddm_logP(0, a, v, w));
+  if (!R_FINITE(p_lower)) p_lower = (v < 0.0) ? 1.0 : 0.0;
+  p_lower = std::fmin(1.0, std::fmax(0.0, p_lower));
+
+  const bool lower = R::unif_rand() < p_lower;
+  response = lower ? 1 : 2;
+  const double p_response = lower ? p_lower : (1.0 - p_lower);
+  if (!(p_response > 0.0)) return R_PosInf;
+
+  double u = R::unif_rand();
+  u = std::fmin(std::fmax(u, 1e-15), 1.0 - 1e-15);
+  double target = u * p_response;
+  const double endpoint_v = lower ? v : -v;
+  const double endpoint_w = lower ? w : 1.0 - w;
+  const double endpoint_p = std::exp(ddm_logP(0, a, endpoint_v, endpoint_w));
+  if (R_FINITE(endpoint_p) && target >= endpoint_p) {
+    target = std::nextafter(endpoint_p, 0.0);
+  }
+  return ddm_wiener_quantile(target, a, endpoint_v, endpoint_w);
+}
+
+}  // namespace
+
+// Single-process bounded DDM simulator. `pars` is the trial-wise matrix after
+// DDM::Ttransform(), so Z and SZ are on their natural relative scales.
+// [[Rcpp::export]]
+Rcpp::List rddm_cpp(Rcpp::NumericMatrix pars,
+                    Rcpp::CharacterVector response_levels,
+                    Rcpp::LogicalVector ok) {
+  if (response_levels.size() != 2) {
+    Rcpp::stop("rddm_cpp: the DDM requires exactly two response levels.");
+  }
+  const int n_rows = pars.nrow();
+  if (n_rows <= 0 || ok.size() != n_rows) {
+    Rcpp::stop("rddm_cpp: invalid parameter or ok dimensions.");
+  }
+
+  const auto ci = col_index_map(pars);
+  const int iv = ci.at("v");
+  const int ia = ci.at("a");
+  const int isv = ci.at("sv");
+  const int it0 = ci.at("t0");
+  const int ist0 = ci.at("st0");
+  const int is = ci.at("s");
+  const int iZ = ci.at("Z");
+  const int iSZ = ci.at("SZ");
+
+  std::vector<int> response(static_cast<size_t>(n_rows), 0);
+  std::vector<double> rt(static_cast<size_t>(n_rows), NA_REAL);
+  std::vector<int> omitted(static_cast<size_t>(n_rows), 0);
+
+  for (int i = 0; i < n_rows; ++i) {
+    if (!ok[i]) continue;
+
+    const double a = pars(i, ia);
+    const double s = pars(i, is);
+    const double sv = pars(i, isv);
+    const double st0 = pars(i, ist0);
+    const double Z = pars(i, iZ);
+    const double SZ = pars(i, iSZ);
+    const double t0_base = pars(i, it0);
+    if (!R_FINITE(pars(i, iv)) || !R_FINITE(a) || !R_FINITE(s) ||
+        !R_FINITE(sv) || !R_FINITE(st0) || !R_FINITE(t0_base) ||
+        !R_FINITE(Z) || !R_FINITE(SZ) || !(a > 0.0) || !(s > 0.0) ||
+        sv < 0.0 || st0 < 0.0 ||
+        !(Z > 0.0) || !(Z < 1.0) || SZ < 0.0 ||
+        !(Z - 0.5 * SZ > 0.0) || !(Z + 0.5 * SZ < 1.0)) {
+      omitted[static_cast<size_t>(i)] = 1;
+      continue;
+    }
+
+    const double v = (sv > 0.0) ?
+      (pars(i, iv) + sv * R::norm_rand()) / s : pars(i, iv) / s;
+    const double w = (SZ > 0.0) ?
+      Z + SZ * (R::unif_rand() - 0.5) : Z;
+    int boundary = 0;
+    const double fpt = ddm_wiener_finish(a / s, v, w, boundary);
+    if (!R_FINITE(fpt)) {
+      omitted[static_cast<size_t>(i)] = 1;
+      continue;
+    }
+
+    response[static_cast<size_t>(i)] = boundary;
+    const double t0 = t0_base +
+      ((st0 > 0.0) ? st0 * R::unif_rand() : 0.0);
+    const double finish = t0 + fpt;
+    if (!R_FINITE(finish)) {
+      response[static_cast<size_t>(i)] = 0;
+      omitted[static_cast<size_t>(i)] = 1;
+      continue;
+    }
+    rt[static_cast<size_t>(i)] = finish;
+  }
+
+  return pack_result(response, rt, omitted, false, std::vector<int>());
 }
 
 // Shared BAwL simulator.  The optional drift_override is supplied by the
@@ -487,6 +695,131 @@ Rcpp::List rbawl_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
                      bool global, int launch = 0) {
   return rbawl_cpp_impl(pars, lR_levels, ok, posdrift, erlang, guess, global, nullptr,
                         launch);
+}
+
+// [[Rcpp::export]]
+Rcpp::List rbta_wl_cpp(Rcpp::NumericMatrix pars, Rcpp::CharacterVector lR_levels,
+                       Rcpp::LogicalVector ok, int mode, bool posdrift,
+                       int launch, bool endpoint_chart = false) {
+  const int n_acc = lR_levels.size();
+  const int n_rows = pars.nrow();
+  if (n_acc <= 0 || n_rows <= 0 || n_rows % n_acc != 0)
+    Rcpp::stop("rbta_wl_cpp: invalid accumulator/parameter dimensions.");
+  if (ok.size() != n_rows)
+    Rcpp::stop("rbta_wl_cpp: ok has the wrong length.");
+  if (mode < 0 || mode > 2)
+    Rcpp::stop("rbta_wl_cpp: mode must be 0 (transient), 1 (sustained), or 2 (full).");
+  if (launch < BTAWL_LAUNCH_NORMAL || launch > BTAWL_LAUNCH_SPLITLOGNORMAL)
+    Rcpp::stop("rbta_wl_cpp: launch must be 0 (normal), 1 (lognormal), or 2 (split-lognormal).");
+
+  const int n_trials = n_rows / n_acc;
+  const auto ci = col_index_map(pars);
+  const bool logn = (launch == BTAWL_LAUNCH_LOGNORMAL ||
+                     launch == BTAWL_LAUNCH_SPLITLOGNORMAL);
+  const bool split = (launch == BTAWL_LAUNCH_SPLITLOGNORMAL);
+  const char* p1_name = logn ? "mu" : "v";
+  const char* p2_name = logn ? "sigma" : "sv";
+  if (!ci.count(p1_name) || !ci.count(p2_name))
+    Rcpp::stop("rbta_wl_cpp: missing launch columns '%s' and/or '%s'.", p1_name, p2_name);
+  if (split && !ci.count("delta"))
+    Rcpp::stop("rbta_wl_cpp: the split-lognormal launch requires a 'delta' column.");
+  for (const char* nm : {"A", "t0", "k"})
+    if (!ci.count(nm)) Rcpp::stop("rbta_wl_cpp: missing parameter column '%s'.", nm);
+  if (!ci.count("b") && !ci.count("B"))
+    Rcpp::stop("rbta_wl_cpp: missing threshold column 'b' (or upper-bound column 'B').");
+  if (mode == 1 || mode == 2)
+    if (!ci.count("tau_s")) Rcpp::stop("rbta_wl_cpp: sustained mode requires 'tau_s'.");
+  if (mode == 2 && !ci.count("pi"))
+    Rcpp::stop("rbta_wl_cpp: full local-race mode requires 'pi'.");
+
+  const int ip1 = ci.at(p1_name), ip2 = ci.at(p2_name);
+  const int idelta = split ? ci.at("delta") : -1;
+  const int iA = ci.at("A"), it0 = ci.at("t0"), ik = ci.at("k");
+  const bool has_b = ci.count("b") != 0;
+  const int ib = has_b ? ci.at("b") : ci.at("B");
+  const int itau_s = ci.count("tau_s") ? ci.at("tau_s") : -1;
+  const int ipi = ci.count("pi") ? ci.at("pi") : -1;
+
+  auto draw_launch = [&](double p1, double p2, double delta) {
+    if (launch == BTAWL_LAUNCH_LOGNORMAL)
+      return R::rlnorm(p1, p2);
+    if (launch == BTAWL_LAUNCH_SPLITLOGNORMAL)
+      return rsplit_lognormal_r(p1, p2, delta);
+    return rtnorm_lower_r(p1, p2, posdrift ? 0.0 : R_NegInf);
+  };
+
+  std::vector<double> dt(static_cast<size_t>(n_rows), R_PosInf);
+  std::vector<int> ok_row(static_cast<size_t>(n_rows), 0);
+  for (int r = 0; r < n_rows; ++r) ok_row[static_cast<size_t>(r)] = (ok[r] == TRUE) ? 1 : 0;
+
+  for (int r = 0; r < n_rows; ++r) {
+    if (!ok_row[static_cast<size_t>(r)]) continue;
+    const double A = pars(r, iA);
+    const double b = pars(r, ib) + (has_b ? 0.0 : A);
+    const double k = pars(r, ik);
+    const double t0 = pars(r, it0);
+    const double delta = split ? pars(r, idelta) : 0.0;
+    if (!R_FINITE(A) || !R_FINITE(b) || !R_FINITE(k) || k < 0.0 || !R_FINITE(t0)) continue;
+
+    if (mode == 0) {
+      const double V = draw_launch(pars(r, ip1), pars(r, ip2), delta);
+      const double z = A * R::unif_rand();
+      const double tau = btawl_tau_for_row(pars, ci, r, endpoint_chart);
+      const double hit = btawl_hit_time_transient_cpp(V, z, b, k, tau);
+      dt[static_cast<size_t>(r)] = R_FINITE(hit) ? hit + t0 : R_PosInf;
+      continue;
+    }
+
+    if (mode == 1) {
+      const double V = draw_launch(pars(r, ip1), pars(r, ip2), delta);
+      const double z = A * R::unif_rand();
+      const double hit = btawl_hit_time_sustained_cpp(
+        V, z, b, k, pars(r, itau_s));
+      dt[static_cast<size_t>(r)] = R_FINITE(hit) ? hit + t0 : R_PosInf;
+      continue;
+    }
+
+    const double pi = pars(r, ipi);
+    if (!R_FINITE(pi)) continue;
+    double V_T = 0.0, V_S = 0.0;
+    double p1_T = 0.0, p2_T = 0.0, p1_S = 0.0, p2_S = 0.0;
+    if (pi <= 1e-14) {
+      p1_T = pars(r, ip1); p2_T = pars(r, ip2);
+      V_T = draw_launch(p1_T, p2_T, delta);
+    } else if (pi >= 1.0 - 1e-14) {
+      p1_S = pars(r, ip1); p2_S = pars(r, ip2);
+      V_S = draw_launch(p1_S, p2_S, delta);
+    } else if (logn) {
+      p1_T = pars(r, ip1) + std::log1p(-pi);
+      p1_S = pars(r, ip1) + std::log(pi);
+      p2_T = p2_S = pars(r, ip2);
+    } else {
+      p1_T = pars(r, ip1) * (1.0 - pi);
+      p1_S = pars(r, ip1) * pi;
+      p2_T = pars(r, ip2) * (1.0 - pi);
+      p2_S = pars(r, ip2) * pi;
+    }
+
+    const double z_T = A * R::unif_rand();
+    const double z_S = A * R::unif_rand();
+    if (pi > 1e-14 && pi < 1.0 - 1e-14) {
+      V_T = draw_launch(p1_T, p2_T, delta);
+      V_S = draw_launch(p1_S, p2_S, delta);
+    }
+
+    const double tau_t = btawl_tau_for_row(pars, ci, r, endpoint_chart);
+    const double t_T = btawl_hit_time_transient_cpp(V_T, z_T, b, k, tau_t);
+    const double t_S = btawl_hit_time_sustained_cpp(V_S, z_S, b, k, pars(r, itau_s));
+    const double hit = std::fmin(t_T, t_S);
+    dt[static_cast<size_t>(r)] = R_FINITE(hit) ? hit + t0 : R_PosInf;
+  }
+
+  RaceOut res = resolve_race(dt, n_acc, n_trials, nullptr, &ok_row);
+  for (int tr = 0; tr < n_trials; ++tr)
+    if (!ok_row[static_cast<size_t>(tr * n_acc)]) res.omitted[static_cast<size_t>(tr)] = 1;
+  std::vector<int> isTime;
+  const bool has_isTime = resolve_time_level(res.R, isTime, lR_levels);
+  return pack_result(res.R, res.rt, res.omitted, has_isTime, isTime);
 }
 
 // Correlated BAwL simulator.  The low-level entry point receives signed

@@ -298,6 +298,10 @@ BAwF <- function(drift_distribution = c("lognormal", "normal", "splitlognormal")
   # k = 0 is the exact LBA limit and must stay reachable, so it is a bound
   # exception rather than clamped.
   exception <- c(A = 0, k = 0)
+  # pContaminant (omission) and pGuess (uniform outlier); see add_nuisance_pars().
+  .nuis <- add_nuisance_pars(p_types, transform, minmax, exception)
+  p_types <- .nuis$p_types; transform <- .nuis$transform
+  minmax <- .nuis$minmax; exception <- .nuis$exception
   # "_SPLIT" follows "_LOGN"; neither lognormal name contains "IO".
   c_name <- paste0("BAwF", if (lognormal) "_LOGN"
                            else if (!posdrift) "IO" else "",

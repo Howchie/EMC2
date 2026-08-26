@@ -16,6 +16,14 @@
 
 namespace emc2col {
 
+// Column contracts use separate enum types to keep each model's layout
+// explicit.  Convert only at the selection boundary when a kernel supports
+// both the legacy and split layouts; this avoids -Wenum-compare diagnostics.
+template <typename T, typename U>
+constexpr int select_index(bool condition, T when_true, U when_false) noexcept {
+  return condition ? static_cast<int>(when_true) : static_cast<int>(when_false);
+}
+
 struct ColSpec {
   const char* const* names;  // required column names, in kernel order
   int n_required;
