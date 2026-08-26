@@ -21,7 +21,8 @@ compare(
   print_summary = TRUE,
   digits = 0,
   digits_p = 3,
-  ...
+  ...,
+  loo = NULL
 )
 }
 \arguments{
@@ -43,6 +44,9 @@ via the \code{loo} package. Requires computing per-trial log-likelihoods across 
 
 \item{LOO}{Boolean, defaults to \code{FALSE}. Include PSIS-LOO computed via the \code{loo} package.
 Uses the same pointwise log-likelihood matrix as WAIC and is typically slower.}
+
+\item{loo}{Lowercase alias for \code{LOO}, accepted for compatibility with code
+using the package name of the underlying \code{loo} package.}
 
 \item{pointwise}{Character string, one of \code{"trial"} or \code{"subject"}, controlling
 the unit of prediction for WAIC/LOO in pooled hierarchical comparisons.

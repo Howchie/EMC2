@@ -18,6 +18,15 @@ test_that("compare can opt into LOO without WAIC or Bayes factors", {
 
   expect_true(all(c("LOO", "wLOO", "DIC", "wDIC", "BPIC", "wBPIC") %in% names(out)))
   expect_false(any(c("WAIC", "wWAIC", "MD", "wMD") %in% names(out)))
+
+  out_lower <- compare(
+    list(samples_LNR),
+    WAIC = FALSE,
+    loo = TRUE,
+    BayesFactor = FALSE,
+    print_summary = FALSE
+  )
+  expect_equal(out_lower$LOO, out$LOO)
 })
 
 test_that("compare supports subject-level pointwise aggregation for LOO", {

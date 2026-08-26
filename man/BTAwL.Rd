@@ -6,15 +6,16 @@
 \usage{
 BTAwL(
   posdrift = TRUE,
-  drift_distribution = c("lognormal", "normal", "splitlognormal"),
+  drift_distribution = c("lognormal", "normal", "splitlognormal", "weibull"),
   chart = c("rate", "endpoint")
 )
 }
 \arguments{
 \item{posdrift}{Logical. For a normal launch, truncate \code{V} below zero.}
 
-\item{drift_distribution}{Either \code{"normal"}, \code{"lognormal"}, or
-\code{"splitlognormal"} (continuous median-parameterised split-lognormal).}
+\item{drift_distribution}{Either \code{"normal"}, \code{"lognormal"},
+\code{"splitlognormal"} (continuous median-parameterised split-lognormal), or
+\code{"weibull"} (\verb{V ~ Weibull(shape, scale)}).}
 
 \item{chart}{Either \code{"endpoint"} (sample \code{Ttrans}) or \code{"rate"} (sample
 \code{tau_t}).}
@@ -27,7 +28,8 @@ The full BTAwL model is a local race between independent sustained and
 transient processes.  \code{pi} allocates one base launch distribution between
 those processes; it is not a shared trialwise launch draw.  Normal launches
 scale both location and spread, while lognormal launches shift the log
-location and retain the common log spread.
+location and retain the common log spread; Weibull launches use
+\verb{V ~ Weibull(shape, scale)}.
 }
 \details{
 The model uses the following parameter matrix.  \code{B} is the distance from the
@@ -36,6 +38,8 @@ upper end of the start-point range to the threshold, so the kernel receives
    \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Mapping} \tab \strong{Interpretation} \cr
    \emph{mu} \tab identity \tab [-Inf, Inf] \tab 0 \tab  \tab Median log launch location for a lognormal launch. \cr
    \emph{sigma} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Geometric-mean log width. \cr
+   \emph{shape} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Weibull shape (Weibull launch only). \cr
+   \emph{scale} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Weibull scale (Weibull launch only). \cr
    \emph{v} \tab identity \tab [-Inf, Inf] \tab 1 \tab  \tab Mean normal launch strength (normal launch only). \cr
    \emph{sv} \tab log \tab [0, Inf] \tab log(1) \tab  \tab SD of normal launch strength (normal launch only). \cr
    \emph{B} \tab log \tab [0, Inf] \tab log(1) \tab \emph{b} = \emph{B} + \emph{A} \tab Distance from the upper start-point range to the threshold. \cr
@@ -57,6 +61,9 @@ With \code{"splitlognormal"}, \verb{log V} is continuous split normal with
 and \code{delta} is unbounded.  \code{delta = 0} reduces exactly to lognormal.
 The split-lognormal option adds the optional identity-scale \code{delta} parameter
 (default \code{0}).
+With \code{drift_distribution = "weibull"}, \code{shape} and \code{scale} are
+positive; in the local race \code{pi} scales the sustained and transient
+launches separately.
 Optional fitting parameters: \code{pContaminant} is the omission probability and
 \code{pGuess} is the uniform-outlier probability.
 

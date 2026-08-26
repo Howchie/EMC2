@@ -107,6 +107,13 @@ namespace bawl_logn {
     return {n, N_REQ, "BAwL_LOGN"};
   }
 }
+namespace bawl_weib {
+  enum : int { shape = 0, scale, B, A, t0, k, N_REQ, mG = N_REQ, mK, omega };
+  inline ColSpec spec() {
+    static const char* n[] = {"shape", "scale", "B", "A", "t0", "k"};
+    return {n, N_REQ, "BAwL_WEIB"};
+  }
+}
 namespace bawlsplit {
   enum : int { mu = 0, sigma, delta, B, A, t0, k, N_REQ, mG = N_REQ, mK, omega };
   inline ColSpec spec() {
@@ -133,6 +140,13 @@ namespace bawd_logn {
   inline ColSpec spec() {
     static const char* n[] = {"mu", "sigma", "B", "A", "t0", "k", "ell"};
     return {n, N_REQ, "BAwD_LOGN"};
+  }
+}
+namespace bawd_weib {
+  enum : int { shape = 0, scale, B, A, t0, k, ell, N_REQ };
+  inline ColSpec spec() {
+    static const char* n[] = {"shape", "scale", "B", "A", "t0", "k", "ell"};
+    return {n, N_REQ, "BAwD_WEIB"};
   }
 }
 namespace bawdsplit {
@@ -164,6 +178,13 @@ namespace bawf_logn {
     return {n, N_REQ, "BAwF_LOGN"};
   }
 }
+namespace bawf_weib {
+  enum : int { shape = 0, scale, B, A, t0, k, N_REQ };
+  inline ColSpec spec() {
+    static const char* n[] = {"shape", "scale", "B", "A", "t0", "k"};
+    return {n, N_REQ, "BAwF_WEIB"};
+  }
+}
 namespace bawfsplit {
   enum : int { mu = 0, sigma, delta, B, A, t0, k, N_REQ };
   inline ColSpec spec() {
@@ -190,6 +211,13 @@ namespace bawr_logn {
   inline ColSpec spec() {
     static const char* n[] = {"mu", "sigma", "B", "A", "t0", "kappa", "p"};
     return {n, N_REQ, "BAwR_LOGN"};
+  }
+}
+namespace bawr_weib {
+  enum : int { shape = 0, scale, B, A, t0, kappa, p, N_REQ };
+  inline ColSpec spec() {
+    static const char* n[] = {"shape", "scale", "B", "A", "t0", "kappa", "p"};
+    return {n, N_REQ, "BAwR_WEIB"};
   }
 }
 namespace bawrsplit {
@@ -222,6 +250,17 @@ namespace btawl_transient_logn {
   inline ColSpec spec_rate() {
     static const char* n[] = {"mu", "sigma", "B", "A", "t0", "k", "tau"};
     return {n, N_REQ, "BTAwL_LOGN_RATE"};
+  }
+}
+namespace btawl_transient_weib {
+  enum : int { shape = 0, scale, B, A, t0, k, clear, N_REQ };
+  inline ColSpec spec() {
+    static const char* n[] = {"shape", "scale", "B", "A", "t0", "k", "Ttrans"};
+    return {n, N_REQ, "BTAwL_WEIB"};
+  }
+  inline ColSpec spec_rate() {
+    static const char* n[] = {"shape", "scale", "B", "A", "t0", "k", "tau"};
+    return {n, N_REQ, "BTAwL_WEIB_RATE"};
   }
 }
 namespace btawlsplit_transient {
@@ -263,6 +302,17 @@ namespace btawl_local_race_logn {
     return {n, N_REQ, "BTAwL_LOGN_RATE"};
   }
 }
+namespace btawl_local_race_weib {
+  enum : int { shape = 0, scale, B, A, t0, k, tau_s, clear, tau_t = clear, pi, N_REQ };
+  inline ColSpec spec() {
+    static const char* n[] = {"shape", "scale", "B", "A", "t0", "k", "tau_s", "Ttrans", "pi"};
+    return {n, N_REQ, "BTAwL_WEIB"};
+  }
+  inline ColSpec spec_rate() {
+    static const char* n[] = {"shape", "scale", "B", "A", "t0", "k", "tau_s", "tau_t", "pi"};
+    return {n, N_REQ, "BTAwL_WEIB_RATE"};
+  }
+}
 namespace btawlsplit_local_race {
   // Full BTAwL local-race contract with split lognormal launch.
   enum : int { mu = 0, sigma, delta, B, A, t0, k, tau_s, clear, tau_t = clear, pi, N_REQ };
@@ -293,6 +343,13 @@ namespace btawl_sustained_logn {
     return {n, N_REQ, "BTAwL_SUSTAINED_LOGN"};
   }
 }
+namespace btawl_sustained_weib {
+  enum : int { shape = 0, scale, B, A, t0, k, tau_s, N_REQ };
+  inline ColSpec spec() {
+    static const char* n[] = {"shape", "scale", "B", "A", "t0", "k", "tau_s"};
+    return {n, N_REQ, "BTAwL_SUSTAINED_WEIB"};
+  }
+}
 namespace btawlsplit_sustained {
   enum : int { mu = 0, sigma, delta, B, A, t0, k, tau_s, N_REQ };
   inline ColSpec spec() {
@@ -317,6 +374,13 @@ namespace bawdp_logn {
   inline ColSpec spec() {
     static const char* n[] = {"mu", "sigma", "B", "A", "t0", "k", "lambda"};
     return {n, N_REQ, "BAwDp_LOGN"};
+  }
+}
+namespace bawdp_weib {
+  enum : int { shape = 0, scale, B, A, t0, k, lambda, N_REQ };
+  inline ColSpec spec() {
+    static const char* n[] = {"shape", "scale", "B", "A", "t0", "k", "lambda"};
+    return {n, N_REQ, "BAwDp_WEIB"};
   }
 }
 namespace bawdpsplit {

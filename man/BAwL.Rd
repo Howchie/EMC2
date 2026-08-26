@@ -9,7 +9,7 @@ BAwL(
   erlang_shape = 1L,
   erlang_type = c("none", "local_kill", "global_kill", "local_guess", "local_kill_guess"),
   correlated = FALSE,
-  drift_distribution = c("normal", "lognormal", "splitlognormal")
+  drift_distribution = c("normal", "lognormal", "splitlognormal", "weibull")
 )
 }
 \arguments{
@@ -28,11 +28,12 @@ Only available for \code{drift_distribution = "normal"}.}
 
 \item{drift_distribution}{Distribution of the trialwise launch strength:
 \code{"normal"} (the default) for \code{V ~ N(v, sv^2)}, \code{"lognormal"} for
-\verb{log V ~ N(mu, sigma^2)}, or \code{"splitlognormal"} for a continuous
+\verb{log V ~ N(mu, sigma^2)}, \code{"splitlognormal"} for a continuous
 split-normal \verb{log V} with widths
 \code{sigma_L = sigma * exp(delta/2)} and \code{sigma_R = sigma * exp(-delta/2)}.
 In the split variant \code{mu} is the exact median and \code{delta} is unbounded;
-\code{delta = 0} is exactly the lognormal launch.}
+\code{delta = 0} is exactly the lognormal launch, or \code{"weibull"} for
+\verb{V ~ Weibull(shape, scale)}.}
 }
 \value{
 A model list defining the BAwL race model.
@@ -63,6 +64,8 @@ scale before trial-dependent transforms are applied.\tabular{llllll}{
    \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Mapping} \tab \strong{Interpretation} \cr
    \emph{v} \tab identity \tab [-Inf, Inf] \tab 1 \tab  \tab Mean evidence-accumulation rate. \cr
    \emph{sv} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Between-trial SD of the drift rate; conventionally fixed to 1 for scale identification. \cr
+   \emph{shape} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Weibull shape (Weibull launch only). \cr
+   \emph{scale} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Weibull scale (Weibull launch only). \cr
    \emph{B} \tab log \tab [0, Inf] \tab log(1) \tab \emph{b} = \emph{B} + \emph{A} \tab Distance from the upper start-point range to the threshold. \cr
    \emph{A} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Start-point range. \cr
    \emph{t0} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Non-decision time. \cr
@@ -81,6 +84,9 @@ reduces exactly to the lognormal launch.  Both lognormal launches are
 positive by construction, so \code{posdrift} does not apply.  The \code{correlated}
 one-factor path — which decomposes the \emph{Gaussian} drift vector — is not
 available for either lognormal variant.
+With \code{drift_distribution = "weibull"}, \verb{V ~ Weibull(shape, scale)}
+uses positive \code{shape} and \code{scale}; the correlated Gaussian path is
+not available for this launch either.
 
 \strong{Fixing the evidence scale.} The evidence axis is defined only up to a
 scale: \verb{(V, b, A) -> (cV, cb, cA)} leaves every crossing time unchanged, so

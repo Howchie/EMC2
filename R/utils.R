@@ -369,11 +369,13 @@ add_nuisance_pars <- function(p_types, transform, minmax, exception = NULL,
          normal = 0L,
          lognormal = 1L,
          splitlognormal = 2L,
+         weibull = 3L,
          stop("Unknown ", caller, " drift_distribution: ", drift_distribution))
 }
 
 .ba_par_names <- function(launch) {
   if (launch == 1L) c("mu", "sigma")
   else if (launch == 2L) c("mu", "sigma", "delta")
+  else if (launch == 3L) c("shape", "scale")
   else c("v", "sv")
 }

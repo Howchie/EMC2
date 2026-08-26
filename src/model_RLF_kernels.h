@@ -90,7 +90,8 @@ inline bool rlf_prepared_rows_match(
 
 inline void rlf_prepare_rows(rlf::SolveCache& cache, const double* rt,
                              const double* const* cols, int n_rows,
-                             const int* isok) {
+                             const int* isok,
+                             const EndpointQueryPlan* endpoint_queries = nullptr) {
   if (rlf_prepared_rows_match(cache, rt, cols, n_rows, isok)) return;
 
   const double* v = cols[emc2col::rlf::v];
@@ -114,12 +115,18 @@ inline void rlf_prepare_rows(rlf::SolveCache& cache, const double* rt,
     if (!isok[i] || R_IsNA(v[i])) continue;
     const double tt = rt[i] - t0[i];
     if (!(tt > 0.0) || !emc2_isfinite(tt)) continue;
+    double row_horizon = tt;
+    if (endpoint_queries != nullptr) {
+      endpoint_queries->for_each_shifted(i, t0[i], [&](double query) {
+        row_horizon = std::max(row_horizon, query);
+      });
+    }
     rlf::Key key;
     if (!rlf::rlf_key(v[i], s[i], alpha[i], B[i], A[i], key)) continue;
     // Bucket on this row's own horizon, so the group a row lands in is the one
     // whose domain was sized for it.
     if (cache.grid.horizon_split) {
-      key.bucket = rlf::rlf_horizon_bucket(key, tt);
+      key.bucket = rlf::rlf_horizon_bucket(key, row_horizon);
     }
     const auto found = groups.find(key);
     int group = -1;
@@ -127,12 +134,26 @@ inline void rlf_prepare_rows(rlf::SolveCache& cache, const double* rt,
       group = static_cast<int>(keys.size());
       groups.emplace(key, group);
       keys.push_back(key);
-      horizons.push_back(tt);
-      if (sparse_output) query_times.push_back(std::vector<double>(1, tt));
+      horizons.push_back(row_horizon);
+      if (sparse_output) {
+        query_times.push_back(std::vector<double>(1, tt));
+        if (endpoint_queries != nullptr) {
+          endpoint_queries->for_each_shifted(i, t0[i], [&](double query) {
+            query_times.back().push_back(query);
+          });
+        }
+      }
     } else {
       group = found->second;
-      horizons[group] = std::max(horizons[group], tt);
-      if (sparse_output) query_times[group].push_back(tt);
+      horizons[group] = std::max(horizons[group], row_horizon);
+      if (sparse_output) {
+        query_times[group].push_back(tt);
+        if (endpoint_queries != nullptr) {
+          endpoint_queries->for_each_shifted(i, t0[i], [&](double query) {
+            query_times[group].push_back(query);
+          });
+        }
+      }
     }
     row_key[i] = group;
   }

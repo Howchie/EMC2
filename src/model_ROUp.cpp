@@ -14,7 +14,9 @@ void droup_raw(const double* rt, const double* const* cols, int n_rows,
     }
     return;
   }
-  roup_prepare_rows(*C, rt, cols, n_rows, isok);
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  roup_prepare_rows(*C, rt, cols, n_rows, isok,
+                    ctx != nullptr ? ctx->endpoint_queries : nullptr);
 
   const double* t0_ = cols[roup_col_idx(C->par_kind).t0];
   if (C->roup_local) {
@@ -49,7 +51,9 @@ void proup_raw(const double* rt, const double* const* cols, int n_rows,
     for (int i = 0; i < n_rows; ++i) if (mask[i]) out[i] = 0.0;
     return;
   }
-  roup_prepare_rows(*C, rt, cols, n_rows, isok);
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  roup_prepare_rows(*C, rt, cols, n_rows, isok,
+                    ctx != nullptr ? ctx->endpoint_queries : nullptr);
 
   const double* t0_ = cols[roup_col_idx(C->par_kind).t0];
   if (C->roup_local) {
@@ -115,8 +119,8 @@ void roup_logS_at_t(double t, const double* const* cols,
           bad = true;
           break;
         }
-        const int gs = hs ? fperace::cache_get(*C, ks, tt) : -1;
-        const int gt = ht ? fperace::cache_get(*C, kt, tt) : -1;
+        const int gs = hs ? fperace::cache_get(*C, ks, tt, tt) : -1;
+        const int gt = ht ? fperace::cache_get(*C, kt, tt, tt) : -1;
         double lp = 0.0, lS = 0.0;
         roup_local_eval(*C, std::max(gs, 0), std::max(gt, 0),
                         hs, ht, tt, lp, lS);
@@ -133,7 +137,7 @@ void roup_logS_at_t(double t, const double* const* cols,
                                  roup_bnd_row(C->bnd_kind, cols, r), p)) {
         bad = true; break;
       }
-      const int g = fperace::cache_get(*C, p, tt);
+      const int g = fperace::cache_get(*C, p, tt, tt);
       const double lS = fperace::entry_log_S(C->e[g], tt);
       if (lS <= fperace::LOG_FLOOR) { bad = true; break; }
       if (lS < 0.0) logS += lS;
@@ -156,8 +160,8 @@ double droup_scalar(double t, const double* par, void* ctx_) {
                          par[ci.B], par[ci.A], par[ci.s],
                          roup_bnd_par(C->bnd_kind, par),
                          ks, kt, hs, ht)) return 0.0;
-    const int gs = hs ? fperace::cache_get(*C, ks, roup_scalar_horizon(tt)) : -1;
-    const int gt = ht ? fperace::cache_get(*C, kt, roup_scalar_horizon(tt)) : -1;
+    const int gs = hs ? fperace::cache_get(*C, ks, roup_scalar_horizon(tt), tt) : -1;
+    const int gt = ht ? fperace::cache_get(*C, kt, roup_scalar_horizon(tt), tt) : -1;
     double lp = 0.0, lS = 0.0;
     roup_local_eval(*C, std::max(gs, 0), std::max(gt, 0),
                     hs, ht, tt, lp, lS);
@@ -168,7 +172,7 @@ double droup_scalar(double t, const double* par, void* ctx_) {
                              par[ci.tau_S], par[ci.tau_T], par[ci.k],
                              par[ci.B], par[ci.A], par[ci.s],
                              roup_bnd_par(C->bnd_kind, par), p)) return 0.0;
-  const int g = fperace::cache_get(*C, p, roup_scalar_horizon(tt));
+  const int g = fperace::cache_get(*C, p, roup_scalar_horizon(tt), tt);
   const double lp = fperace::entry_log_pdf(C->e[g], tt);
   return (lp <= fperace::LOG_FLOOR) ? 0.0 : std::exp(lp);
 }
@@ -187,8 +191,8 @@ double proup_scalar(double t, const double* par, void* ctx_) {
                          par[ci.B], par[ci.A], par[ci.s],
                          roup_bnd_par(C->bnd_kind, par),
                          ks, kt, hs, ht)) return 0.0;
-    const int gs = hs ? fperace::cache_get(*C, ks, roup_scalar_horizon(tt)) : -1;
-    const int gt = ht ? fperace::cache_get(*C, kt, roup_scalar_horizon(tt)) : -1;
+    const int gs = hs ? fperace::cache_get(*C, ks, roup_scalar_horizon(tt), tt) : -1;
+    const int gt = ht ? fperace::cache_get(*C, kt, roup_scalar_horizon(tt), tt) : -1;
     double lp = 0.0, lS = 0.0;
     roup_local_eval(*C, std::max(gs, 0), std::max(gt, 0),
                     hs, ht, tt, lp, lS);
@@ -201,7 +205,7 @@ double proup_scalar(double t, const double* par, void* ctx_) {
                              par[ci.tau_S], par[ci.tau_T], par[ci.k],
                              par[ci.B], par[ci.A], par[ci.s],
                              roup_bnd_par(C->bnd_kind, par), p)) return 0.0;
-  const int g = fperace::cache_get(*C, p, roup_scalar_horizon(tt));
+  const int g = fperace::cache_get(*C, p, roup_scalar_horizon(tt), tt);
   const double lS = fperace::entry_log_S(C->e[g], tt);
   if (lS >= 0.0) return 0.0;
   if (lS <= fperace::LOG_FLOOR) return 1.0;

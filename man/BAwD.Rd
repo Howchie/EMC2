@@ -5,7 +5,7 @@
 \title{The Ballistic Accumulator with Drive Decay (BAwD)}
 \usage{
 BAwD(
-  drift_distribution = c("lognormal", "normal", "splitlognormal"),
+  drift_distribution = c("lognormal", "normal", "splitlognormal", "weibull"),
   posdrift = TRUE,
   gamma = 0,
   rho = Inf
@@ -13,7 +13,7 @@ BAwD(
 }
 \arguments{
 \item{drift_distribution}{Distribution of trialwise launch strength:
-\code{"lognormal"} (default), \code{"splitlognormal"}, or \code{"normal"}.}
+\code{"lognormal"} (default), \code{"splitlognormal"}, \code{"weibull"}, or \code{"normal"}.}
 
 \item{posdrift}{Logical. If \code{TRUE} (default), truncate normal launch
 strengths to be positive; if \code{FALSE}, append \code{IO} to the compiled model
@@ -64,6 +64,8 @@ reduces exactly to the ordinary lognormal launch.\tabular{llllll}{
    \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Mapping} \tab \strong{Interpretation} \cr
    \emph{mu} \tab identity \tab [-Inf, Inf] \tab 0 \tab  \tab Median log launch location. \cr
    \emph{sigma} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Geometric-mean width of log launch. \cr
+   \emph{shape} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Weibull shape (Weibull launch only). \cr
+   \emph{scale} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Weibull scale (Weibull launch only). \cr
    \emph{B} \tab log \tab [0, Inf] \tab log(1) \tab \emph{b} = \emph{B} + \emph{A} \tab Threshold distance. \cr
    \emph{A} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Start-point range. \cr
    \emph{t0} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Non-decision time. \cr
@@ -80,6 +82,8 @@ For \code{drift_distribution = "normal"}, use the \code{v} and \code{sv} rows in
 \code{mu} and \code{sigma}; the normal launch is truncated at zero by default. The
 split-lognormal option adds the optional identity-scale \code{delta} parameter
 (default \code{0}).
+For \code{drift_distribution = "weibull"}, use positive \code{shape} and
+\code{scale}; the Weibull BAwD likelihood is closed form.
 }
 \examples{
 ADmat <- matrix(c(-1/2, 1/2), ncol = 1, dimnames = list(NULL, "d"))

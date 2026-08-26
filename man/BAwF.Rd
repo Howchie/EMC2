@@ -5,14 +5,14 @@
 \title{The Ballistic Accumulator with Global Fading (BAwF)}
 \usage{
 BAwF(
-  drift_distribution = c("lognormal", "normal", "splitlognormal"),
+  drift_distribution = c("lognormal", "normal", "splitlognormal", "weibull"),
   posdrift = TRUE,
   rho = Inf
 )
 }
 \arguments{
 \item{drift_distribution}{Distribution of trialwise launch strength:
-\code{"lognormal"} (default), \code{"splitlognormal"}, or \code{"normal"}.}
+\code{"lognormal"} (default), \code{"splitlognormal"}, \code{"weibull"}, or \code{"normal"}.}
 
 \item{posdrift}{Logical. If \code{TRUE} (default), truncate normal launch
 strengths to be positive; if \code{FALSE}, append \code{IO} to the compiled model
@@ -68,6 +68,8 @@ and \code{delta} is unbounded.  \code{delta = 0} reduces exactly to lognormal.\t
    \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Mapping} \tab \strong{Interpretation} \cr
    \emph{mu} \tab identity \tab [-Inf, Inf] \tab 0 \tab  \tab Median/mean log launch location. \cr
    \emph{sigma} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Geometric-mean log width. \cr
+   \emph{shape} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Weibull shape (Weibull launch only). \cr
+   \emph{scale} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Weibull scale (Weibull launch only). \cr
    \emph{v} \tab identity \tab [-Inf, Inf] \tab 1 \tab  \tab Mean normal launch strength (normal launch only). \cr
    \emph{sv} \tab log \tab [0, Inf] \tab log(1) \tab  \tab SD of normal launch strength (normal launch only). \cr
    \emph{B} \tab log \tab [0, Inf] \tab log(1) \tab \emph{b} = \emph{B} + \emph{A} \tab Threshold distance. \cr
@@ -81,6 +83,8 @@ For \code{drift_distribution = "normal"}, use \code{v} and \code{sv} instead of 
 lognormal launch rows; the normal launch is truncated at zero by default.
 The split-lognormal option adds the optional identity-scale \code{delta} parameter
 (default \code{0}).
+For \code{drift_distribution = "weibull"}, use positive \code{shape} and
+\code{scale}; the BAwF likelihood remains closed form.
 Optional fitting parameters: \code{pContaminant} is the omission probability and
 \code{pGuess} is the uniform-outlier probability.
 }

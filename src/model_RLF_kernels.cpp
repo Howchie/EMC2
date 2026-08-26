@@ -15,7 +15,9 @@ void drlf_raw(const double* rt, const double* const* cols, int n_rows,
     }
     return;
   }
-  rlf_prepare_rows(*cache, rt, cols, n_rows, isok);
+  auto* ctx = static_cast<ContextForRaceModels*>(context);
+  rlf_prepare_rows(*cache, rt, cols, n_rows, isok,
+                   ctx != nullptr ? ctx->endpoint_queries : nullptr);
   const double* t0 = cols[emc2col::rlf::t0];
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
@@ -39,7 +41,9 @@ void prlf_raw(const double* rt, const double* const* cols, int n_rows,
     for (int i = 0; i < n_rows; ++i) if (mask[i]) out[i] = 0.0;
     return;
   }
-  rlf_prepare_rows(*cache, rt, cols, n_rows, isok);
+  auto* ctx = static_cast<ContextForRaceModels*>(context);
+  rlf_prepare_rows(*cache, rt, cols, n_rows, isok,
+                   ctx != nullptr ? ctx->endpoint_queries : nullptr);
   const double* t0 = cols[emc2col::rlf::t0];
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
@@ -63,7 +67,7 @@ double drlf_scalar(double time, const double* par, void* context) {
   const double horizon = rlf_scalar_horizon(tt);
   rlf::Key key;
   if (!rlf_key_from_par(par, horizon, cache->grid, key)) return 0.0;
-  const int group = rlf::cache_get(*cache, key, horizon);
+  const int group = rlf::cache_get(*cache, key, horizon, tt);
   if (group < 0) return 0.0;  // no usable solve; treated as zero density
   const double log_pdf =
     rlf::entry_log_pdf(cache->entries[group], tt);
@@ -79,7 +83,7 @@ double prlf_scalar(double time, const double* par, void* context) {
   const double horizon = rlf_scalar_horizon(tt);
   rlf::Key key;
   if (!rlf_key_from_par(par, horizon, cache->grid, key)) return 0.0;
-  const int group = rlf::cache_get(*cache, key, horizon);
+  const int group = rlf::cache_get(*cache, key, horizon, tt);
   if (group < 0) return 0.0;  // no usable solve; treated as zero CDF
   const double log_survivor =
     rlf::entry_log_S(cache->entries[group], tt);
@@ -123,7 +127,7 @@ void rlf_logS_at_t(double time, const double* const* cols,
       if (cache->grid.horizon_split) {
         key.bucket = rlf::rlf_horizon_bucket(key, tt);
       }
-      const int group = rlf::cache_get(*cache, key, tt);
+      const int group = rlf::cache_get(*cache, key, tt, tt);
       if (group < 0) {
         // No usable solve for this accumulator: the truncation normaliser for
         // the trial is undefined, so flag it the same way a bad key is.

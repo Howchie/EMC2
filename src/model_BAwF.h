@@ -38,7 +38,7 @@
 // rho = 1 has no finite endpoint (V* decreases monotonically to k b) and is a
 // qualitatively different member; BAwF() admits only rho > 1.
 //
-// Normal and lognormal launch strengths share this geometry.  The selected
+// Normal, lognormal, and Weibull launch strengths share this geometry. The selected
 // launch distribution is supplied by ContextForRaceModels::bawd_launch, which
 // BAwF shares with BAwD (the two never coexist in one adapter).
 //
@@ -59,10 +59,11 @@ constexpr double BAWF_LOG_BRACKET_MIN = BAWD_LOG_BRACKET_MIN;
 constexpr double BAWF_DENOM_FLOOR = BAWD_DENOM_FLOOR;
 
 // The launch selector is BAwD's: identical meaning, and sharing it keeps one
-// definition of "0 = truncated normal, 1 = lognormal" for both models.
+// definition of "0 = truncated normal, 1 = lognormal, 3 = Weibull" for both models.
 constexpr int BAWF_LAUNCH_NORMAL = BAWD_LAUNCH_NORMAL;
 constexpr int BAWF_LAUNCH_LOGNORMAL = BAWD_LAUNCH_LOGNORMAL;
 constexpr int BAWF_LAUNCH_SPLITLOGNORMAL = BAWD_LAUNCH_SPLITLOGNORMAL;
+constexpr int BAWF_LAUNCH_WEIBULL = BAWD_LAUNCH_WEIBULL;
 // --------------------------------------------------------------------------
 // Geometry (launch-distribution free)
 // --------------------------------------------------------------------------
@@ -156,6 +157,8 @@ double bawf_log_frozen_normal(const BawfGeom& g, double s_lo,
 double bawf_log_frozen_logn(const BawfGeom& g, double s_lo, double s_hi,
                                    double mu, double sigma,
                                    double delta = 0.0);
+double bawf_log_frozen_weib(const BawfGeom& g, double s_lo, double s_hi,
+                                   double shape, double scale);
 
 // --------------------------------------------------------------------------
 // log CDF

@@ -14,7 +14,9 @@ void drou_raw(const double* rt, const double* const* cols, int n_rows,
     }
     return;
   }
-  rou_prepare_rows(*C, rt, cols, n_rows, isok);
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  rou_prepare_rows(*C, rt, cols, n_rows, isok,
+                   ctx != nullptr ? ctx->endpoint_queries : nullptr);
 
   // The solve is in the rescaled state Y = X/s, whose first-passage time is the
   // SAME random variable, so the density in t needs no Jacobian -- exactly as
@@ -38,7 +40,9 @@ void prou_raw(const double* rt, const double* const* cols, int n_rows,
     for (int i = 0; i < n_rows; ++i) if (mask[i]) out[i] = 0.0;
     return;
   }
-  rou_prepare_rows(*C, rt, cols, n_rows, isok);
+  auto* ctx = static_cast<ContextForRaceModels*>(ctx_);
+  rou_prepare_rows(*C, rt, cols, n_rows, isok,
+                   ctx != nullptr ? ctx->endpoint_queries : nullptr);
 
   const double* t0_ = cols[rou_col_idx(C->par_kind).t0];
   for (int i = 0; i < n_rows; ++i) {
@@ -84,7 +88,7 @@ void rou_logS_at_t(double t, const double* const* cols,
                                 A_[r], rou_bnd_row(C->bnd_kind, cols, r), p)) {
         bad = true; break;
       }
-      const int g = fperace::cache_get(*C, p, tt);
+      const int g = fperace::cache_get(*C, p, tt, tt);
       const double lS = fperace::entry_log_S(C->e[g], tt);
       if (lS <= fperace::LOG_FLOOR) { bad = true; break; }
       if (lS < 0.0) logS += lS;
@@ -104,7 +108,7 @@ double drou_scalar(double t, const double* par, void* ctx_) {
   if (!fperace::rou_key_par(C->par_kind, par[ci.p1], par[ci.p2], par[ci.p3],
                             par[ci.B], par[ci.A],
                             rou_bnd_par(C->bnd_kind, par), p)) return 0.0;
-  const int g = fperace::cache_get(*C, p, rou_scalar_horizon(tt));
+  const int g = fperace::cache_get(*C, p, rou_scalar_horizon(tt), tt);
   const double lp = fperace::entry_log_pdf(C->e[g], tt);
   return (lp <= fperace::LOG_FLOOR) ? 0.0 : std::exp(lp);
 }
@@ -120,7 +124,7 @@ double prou_scalar(double t, const double* par, void* ctx_) {
   if (!fperace::rou_key_par(C->par_kind, par[ci.p1], par[ci.p2], par[ci.p3],
                             par[ci.B], par[ci.A],
                             rou_bnd_par(C->bnd_kind, par), p)) return 0.0;
-  const int g = fperace::cache_get(*C, p, rou_scalar_horizon(tt));
+  const int g = fperace::cache_get(*C, p, rou_scalar_horizon(tt), tt);
   const double lS = fperace::entry_log_S(C->e[g], tt);
   if (lS >= 0.0) return 0.0;
   if (lS <= fperace::LOG_FLOOR) return 1.0;

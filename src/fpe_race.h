@@ -36,6 +36,7 @@
 #include <limits>
 #include <stdexcept>
 #include <unordered_map>
+#include <R_ext/Arith.h>
 #if defined(__x86_64__) || defined(_M_X64) || defined(__AVX2__)
 #include <immintrin.h>
 #endif
@@ -627,11 +628,19 @@ inline void roup_solve(const Key& p, double t_max, const FPE_Grid& gr, Entry& ou
 
 // Find the entry for `p` covering at least t_need, solving or extending as
 // required.  Returns an INDEX, not a pointer: solving can reallocate `e`.
-inline int cache_get(SolveCache& C, const Key& p, double t_need) {
+inline bool entry_has_query(const Entry& entry, double query_time) {
+  if (!std::isfinite(query_time) || !(query_time > 0.0)) return false;
+  if (entry.complete_grid) return entry.t_max >= query_time;
+  return std::binary_search(entry.t.begin(), entry.t.end(), query_time);
+}
+
+inline int cache_get(SolveCache& C, const Key& p, double t_need,
+                     double query_time = R_NaN) {
   if (!(t_need > 0.0)) t_need = 1e-3;
   auto it = C.index.find(p);
   if (it != C.index.end()) {
     const size_t i = static_cast<size_t>(it->second);
+    if (entry_has_query(C.e[i], query_time)) return it->second;
     if (C.e[i].complete_grid && C.e[i].t_max >= t_need)
       return it->second;
     const double solve_to = std::max(t_need, C.e[i].t_max);

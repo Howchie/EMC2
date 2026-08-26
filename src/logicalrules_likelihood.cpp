@@ -1846,6 +1846,17 @@ double c_log_likelihood_logicalrules(
     return static_cast<double>(n_out) * min_ll;
   }
 
+  const EndpointQueryPlan* previous_endpoint_queries =
+    model_ctx->endpoint_queries;
+  EndpointQueryPlan endpoint_plan;
+  endpoint_plan.LT = shared.LT_unique.data();
+  endpoint_plan.UT = shared.UT_unique.data();
+  endpoint_plan.LC = shared.LC_unique.data();
+  endpoint_plan.UC = shared.UC_unique.data();
+  endpoint_plan.n_rows = n_trials;
+  endpoint_plan.group_size = n_acc;
+  model_ctx->endpoint_queries = &endpoint_plan;
+
   std::vector<double>& logf_all = scratch.logf_all;
   std::vector<double>& logS_all = scratch.logS_all;
   std::vector<int>& all_mask = scratch.all_mask;
@@ -2714,6 +2725,7 @@ double c_log_likelihood_logicalrules(
       sum_ll += val;
     }
   }
+  model_ctx->endpoint_queries = previous_endpoint_queries;
   return sum_ll;
 }
 

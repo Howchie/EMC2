@@ -304,6 +304,17 @@ double c_log_likelihood_DDM_pt(const double* const* cols,
   }
 
   // 2. Comprehensive Path: Handles truncation, censoring, and non-finite RTs
+  const EndpointQueryPlan* previous_endpoint_queries =
+    kctx != nullptr ? kctx->endpoint_queries : nullptr;
+  EndpointQueryPlan endpoint_plan;
+  if (kctx != nullptr && shared != nullptr) {
+    endpoint_plan.LT = shared->LT_vec.begin();
+    endpoint_plan.UT = shared->UT_vec.begin();
+    endpoint_plan.LC = shared->LC_vec.begin();
+    endpoint_plan.UC = shared->UC_vec.begin();
+    endpoint_plan.n_rows = n_trials;
+    kctx->endpoint_queries = &endpoint_plan;
+  }
   const double* LT = shared->LT_vec.begin();
   const double* UT = shared->UT_vec.begin();
   
@@ -612,6 +623,8 @@ double c_log_likelihood_DDM_pt(const double* const* cols,
       total_ll += v;
     }
   }
+  if (kctx != nullptr && shared != nullptr)
+    kctx->endpoint_queries = previous_endpoint_queries;
   return total_ll;
 }
 

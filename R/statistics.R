@@ -14,6 +14,8 @@
 #' via the `loo` package. Requires computing per-trial log-likelihoods across all posterior samples.
 #' @param LOO Boolean, defaults to `FALSE`. Include PSIS-LOO computed via the `loo` package.
 #' Uses the same pointwise log-likelihood matrix as WAIC and is typically slower.
+#' @param loo Lowercase alias for `LOO`, accepted for compatibility with code
+#' using the package name of the underlying `loo` package.
 #' @param pointwise Character string, one of `"trial"` or `"subject"`, controlling
 #' the unit of prediction for WAIC/LOO in pooled hierarchical comparisons.
 #' `"trial"` (default) treats each trial as one pointwise unit. `"subject"` computes
@@ -66,10 +68,18 @@
 #' @export
 
 compare <- function(sList,stage="sample",filter=NULL,use_best_fit=TRUE,
-                        BayesFactor = TRUE, WAIC = TRUE, LOO = FALSE, pointwise = c("trial", "subject"),
+                        BayesFactor = TRUE, WAIC = TRUE, LOO = FALSE,
+                        pointwise = c("trial", "subject"),
                         K = 200, cores_for_loo = 1, cores_for_props = 4, cores_per_prop = 1, both_splits = FALSE,
-                        print_summary=TRUE,digits=0,digits_p=3, ...) {
+                        print_summary=TRUE,digits=0,digits_p=3, ..., loo = NULL) {
   if(is(sList, "emc")) sList <- list(sList)
+  if (!is.null(loo)) {
+    if (!is.logical(loo) || length(loo) != 1L || is.na(loo))
+      stop("`loo` must be a single TRUE/FALSE value; use `LOO` for the canonical spelling.")
+    if (!identical(LOO, FALSE) && !identical(LOO, loo))
+      stop("Conflicting values supplied for `LOO` and its lowercase alias `loo`.")
+    LOO <- loo
+  }
   pointwise <- match.arg(pointwise)
   getp <- function(IC) {
     IC <- -(IC - min(IC))/2
@@ -101,7 +111,8 @@ compare <- function(sList,stage="sample",filter=NULL,use_best_fit=TRUE,
         } else if (pointwise == "trial") {
           .ll_matrix_pooled(sList[[i]], stage=stage, filter=sflist[[i]], cores=cores_for_loo)
         } else {
-          .marg_ll_matrix(sList[[i]], stage=stage, filter=sflist[[i]], K=K)
+          .marg_ll_matrix(sList[[i]], stage=stage, filter=sflist[[i]], K=K,
+                          cores=cores_for_loo)
         }
         pw_ll_list[[i]] <- ll_mat
         if(WAIC) WAICs[i] <- waic_from_ll(ll_mat)

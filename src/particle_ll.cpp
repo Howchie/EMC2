@@ -1751,6 +1751,17 @@ double c_log_likelihood_race(
   double lower_for_trial = 0;
   double upper_for_trial = R_PosInf;
   ContextForRaceModels* ctx = static_cast<ContextForRaceModels*>(model_context_for_funcs);
+  const EndpointQueryPlan* previous_endpoint_queries =
+    ctx != nullptr ? ctx->endpoint_queries : nullptr;
+  EndpointQueryPlan endpoint_plan;
+  if (ctx != nullptr && may_need_ct) {
+    endpoint_plan.LT = LT.begin();
+    endpoint_plan.UT = UT.begin();
+    endpoint_plan.LC = LC.begin();
+    endpoint_plan.UC = UC.begin();
+    endpoint_plan.n_rows = n_trials;
+    ctx->endpoint_queries = &endpoint_plan;
+  }
   int time_code = ctx->time_code;
   int nogo_code = ctx->nogo_code;
   // Use pre-resolved codes from shared state when available.
@@ -2739,6 +2750,8 @@ apply_trial_trunc:
     }
   }
   
+  if (ctx != nullptr && may_need_ct)
+    ctx->endpoint_queries = previous_endpoint_queries;
   return total_ll;
 }
 

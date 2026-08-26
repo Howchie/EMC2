@@ -80,7 +80,7 @@ void F77_NAME(dhseqr)(const char*, const char*, const int*, const int*,
                       size_t, size_t);
 void F77_NAME(dgecon)(const char*, const int*, const double*, const int*,
                       const double*, double*, double*, int*, int*, size_t);
-void F77_NAME(dtrevc)(const char*, const char*, const int*, const int*,
+void F77_NAME(dtrevc)(const char*, const char*, int*, const int*,
                       const double*, const int*, double*, const int*, double*,
                       const int*, const int*, int*, double*, int*,
                       size_t, size_t);
@@ -2449,18 +2449,34 @@ inline bool entry_has_queries(const Entry& entry,
 // enough to abort the fit.  Callers floor the affected rows instead, which
 // rejects the particle.  Solving into a temporary keeps a failed refinement
 // from leaving a half-written entry behind.
-inline int cache_get(SolveCache& cache, const Key& key, double t_need) {
+inline bool entry_has_query(const Entry& entry, double query_time) {
+  if (!std::isfinite(query_time) || !(query_time > 0.0)) return false;
+  if (entry.complete_grid) return entry.t_max >= query_time;
+  return std::binary_search(entry.t.begin(), entry.t.end(), query_time);
+}
+
+inline bool same_parameter_key(const Key& a, const Key& b) {
+  return a.v == b.v && a.alpha == b.alpha && a.b == b.b && a.A == b.A;
+}
+
+inline int cache_get(SolveCache& cache, const Key& key, double t_need,
+                     double query_time = R_NaN) {
   if (!(t_need > 0.0)) t_need = 1e-3;
+  if (std::isfinite(query_time) && query_time > 0.0) {
+    for (size_t i = 0; i < cache.entries.size(); ++i) {
+      if (same_parameter_key(cache.entries[i].key, key) &&
+          entry_has_query(cache.entries[i], query_time)) {
+        return static_cast<int>(i);
+      }
+    }
+  }
   const auto found = cache.index.find(key);
   if (found != cache.index.end()) {
     Entry& entry = cache.entries[found->second];
+    if (entry_has_query(entry, query_time)) return found->second;
     if (entry.complete_grid && entry.t_max >= t_need) return found->second;
-    // Sparse entries are never returned by the scalar path: their output is
-    // defined only at the prepared query times and cache_get has no query list
-    // to validate against.  A longer horizon also needs a re-solve.  In either
-    // case re-solve once onto a complete grid covering max(t_need, entry.t_max),
-    // so later arbitrary queries interpolate instead of each triggering a fresh
-    // solve.
+    // Sparse entries answer exact prepared queries. Otherwise upgrade once to a
+    // complete grid covering max(t_need, entry.t_max).
     Entry replacement;
     try {
       rlf_cache_solve(key, std::max(t_need, entry.t_max), cache.grid, nullptr,

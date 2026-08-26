@@ -204,6 +204,8 @@ double btawl_log_surv_cached(ContextForRaceModels* ctx, double t,
                              double p1, double p2, int launch,
                              bool posdrift, double delta) {
   const auto evaluate = [&]() {
+    if (launch == BTAWL_LAUNCH_WEIBULL)
+      return btawl_log_eval(true, t, g, p1, p2, BTAWL_LAUNCH_WEIBULL, false, 0.0);
     return (launch == BTAWL_LAUNCH_LOGNORMAL || launch == BTAWL_LAUNCH_SPLITLOGNORMAL)
       ? (launch == BTAWL_LAUNCH_SPLITLOGNORMAL
            ? btawl_log_eval(true, t, g, p1, p2, BTAWL_LAUNCH_SPLITLOGNORMAL, false, delta)
@@ -287,7 +289,7 @@ double btawl_normal_denom(double v, double sv, bool posdrift) {
 double btawl_surv(double w, double p1, double p2, int launch,
                   bool posdrift, double delta) {
   if (!(w > 0.0)) {
-    if (launch == BTAWL_LAUNCH_LOGNORMAL || launch == BTAWL_LAUNCH_SPLITLOGNORMAL) return 1.0;
+    if (launch == BTAWL_LAUNCH_LOGNORMAL || launch == BTAWL_LAUNCH_SPLITLOGNORMAL || launch == BTAWL_LAUNCH_WEIBULL) return 1.0;
     return pnorm_std(p1 / p2, true, false) /
       btawl_normal_denom(p1, p2, posdrift);
   }
@@ -298,6 +300,10 @@ double btawl_surv(double w, double p1, double p2, int launch,
       return (ls > R_NegInf) ? std::exp(ls) : 0.0;
     }
     return pnorm_std((p1 - std::log(w)) / p2, true, false);
+  }
+  if (launch == BTAWL_LAUNCH_WEIBULL) {
+    const double ls = log_weibull_survivor(w, p1, p2);
+    return (ls > R_NegInf) ? std::exp(ls) : 0.0;
   }
   const double d = btawl_normal_denom(p1, p2, posdrift);
   return pnorm_std((p1 - w) / p2, true, false) / d;
@@ -312,6 +318,10 @@ double btawl_pdf_v(double w, double p1, double p2, int launch,
       return (lp > R_NegInf) ? std::exp(lp) : 0.0;
     }
     return dlnorm_std(w, p1, p2, false);
+  }
+  if (launch == BTAWL_LAUNCH_WEIBULL) {
+    const double lp = log_weibull_density(w, p1, p2);
+    return (lp > R_NegInf) ? std::exp(lp) : 0.0;
   }
   return dnormP(w, p1, p2, false) / btawl_normal_denom(p1, p2, posdrift);
 }
@@ -350,6 +360,19 @@ double btawl_live_cdf(double t, double zlo, double zhi,
     const double chi = lognormal_stoploss_nat(wlo, p1, p2, sc2);
     const double val = (clo - chi) / q;
     if (val >= 0.0 && emc2_isfinite(val)) return val;
+    return btawl_surv(btawl_vstar(t, 0.5 * (zlo + zhi), g), p1, p2,
+                      launch, posdrift, delta) * (zhi - zlo);
+  }
+  if (launch == BTAWL_LAUNCH_WEIBULL) {
+    const double whi = a - q * zhi;
+    const double wlo = a - q * zlo;
+    const double c_hi = log_weibull_stoploss(whi, p1, p2);
+    const double c_lo = log_weibull_stoploss(wlo, p1, p2);
+    if (c_lo > c_hi) {
+      const double ld = log_diff_exp(c_lo, c_hi);
+      const double val = std::exp(ld - std::log(q));
+      if (val >= 0.0 && emc2_isfinite(val)) return val;
+    }
     return btawl_surv(btawl_vstar(t, 0.5 * (zlo + zhi), g), p1, p2,
                       launch, posdrift, delta) * (zhi - zlo);
   }
@@ -404,6 +427,11 @@ double btawl_live_pdf(double t, double zlo, double zhi,
       first = M * (pnorm_std(x1 - p2, true, false) -
                    pnorm_std(x0 - p2, true, false));
     }
+  } else if (launch == BTAWL_LAUNCH_WEIBULL) {
+    const double lm = log_weibull_mass_interval(w_lo, w_hi, p1, p2);
+    const double l1 = log_weibull_first_interval(w_lo, w_hi, p1, p2);
+    mass = lm > R_NegInf ? std::exp(lm) : 0.0;
+    first = l1 > R_NegInf ? std::exp(l1) : 0.0;
   } else {
     const double x0 = (w_lo - p1) / p2;
     const double x1 = (w_hi - p1) / p2;
@@ -475,7 +503,10 @@ double btawl_log_frozen(bool survivor, double t, const BtawlGeom& g,
     const double gg = btawl_g(s, g.tau);
     const double vc = (gg > 0.0) ? g.k * g.b / gg : R_PosInf;
     if (!(zp < 0.0) || !(vc > 0.0) || !emc2_isfinite(vc)) return R_NegInf;
-    const double lp = (launch == BTAWL_LAUNCH_LOGNORMAL || launch == BTAWL_LAUNCH_SPLITLOGNORMAL)
+    const double lp = (launch == BTAWL_LAUNCH_WEIBULL)
+      ? (survivor ? log_weibull_cdf(vc, p1, p2)
+                  : log_weibull_survivor(vc, p1, p2))
+      : (launch == BTAWL_LAUNCH_LOGNORMAL || launch == BTAWL_LAUNCH_SPLITLOGNORMAL)
       ? (launch == BTAWL_LAUNCH_SPLITLOGNORMAL
            ? (survivor
                 ? (delta == 0.0 ? pnorm_log_direct((std::log(vc) - p1) / p2, true) : log_split_lognormal_cdf(vc, h))
@@ -493,6 +524,8 @@ double btawl_log_frozen(bool survivor, double t, const BtawlGeom& g,
     target = std::exp(p1);
   } else if (launch == BTAWL_LAUNCH_SPLITLOGNORMAL) {
     target = (delta == 0.0) ? std::exp(p1) : std::exp(h.c);
+  } else if (launch == BTAWL_LAUNCH_WEIBULL) {
+    target = p2;
   }
   
   const double split = btawl_frozen_split(g, s_lo, s_hi, target);
@@ -524,6 +557,12 @@ double btawl_log_live(bool survivor, double t, double zlo, double zhi,
       : (survivor ? log_lognormal_put(w_lo, p1, p2)
                   : log_lognormal_stoploss(w_hi, p1, p2));
     if (pa - pb > 1e-10) li = log_diff_exp(pa, pb) - std::log(q);
+  } else if (launch == BTAWL_LAUNCH_WEIBULL) {
+    const double pa = survivor ? log_weibull_put(w_hi, p1, p2)
+                               : log_weibull_stoploss(w_lo, p1, p2);
+    const double pb = survivor ? log_weibull_put(w_lo, p1, p2)
+                               : log_weibull_stoploss(w_hi, p1, p2);
+    if (pa - pb > 1e-10) li = log_diff_exp(pa, pb) - std::log(q);
   } else {
     const double lo = survivor ? (w_lo - p1) / p2 : (p1 - w_hi) / p2;
     const double hi = survivor ? (w_hi - p1) / p2 : (p1 - w_lo) / p2;
@@ -534,7 +573,9 @@ double btawl_log_live(bool survivor, double t, double zlo, double zhi,
   }
   if (!(li > R_NegInf)) {
     const double wm = 0.5 * (w_hi + w_lo);
-    const double lm = (launch == BTAWL_LAUNCH_LOGNORMAL || launch == BTAWL_LAUNCH_SPLITLOGNORMAL)
+    const double lm = (launch == BTAWL_LAUNCH_WEIBULL)
+      ? (survivor ? log_weibull_cdf(wm, p1, p2) : log_weibull_survivor(wm, p1, p2))
+      : (launch == BTAWL_LAUNCH_LOGNORMAL || launch == BTAWL_LAUNCH_SPLITLOGNORMAL)
       ? (launch == BTAWL_LAUNCH_SPLITLOGNORMAL
            ? (survivor ? log_split_lognormal_cdf(wm, p1, p2, delta)
                        : log_split_lognormal_survivor(wm, p1, p2, delta))
@@ -566,7 +607,10 @@ double btawl_log_eval(bool survivor, double t, const BtawlGeom& g,
   if (g.A <= BTAWL_A_EPS) {
     const double w = (u == R_PosInf) ? g.b / g.h_max : btawl_vstar(u, 0.0, g);
     if (!(w > 0.0)) return R_NegInf;
-    const double l = (launch == BTAWL_LAUNCH_LOGNORMAL || launch == BTAWL_LAUNCH_SPLITLOGNORMAL)
+    const double l = (launch == BTAWL_LAUNCH_WEIBULL)
+      ? (survivor ? log_weibull_survivor(w, p1, p2)
+                  : log_weibull_cdf(w, p1, p2))
+      : (launch == BTAWL_LAUNCH_LOGNORMAL || launch == BTAWL_LAUNCH_SPLITLOGNORMAL)
       ? (launch == BTAWL_LAUNCH_SPLITLOGNORMAL
            ? (survivor ? log_split_lognormal_cdf(w, p1, p2, delta)
                        : log_split_lognormal_survivor(w, p1, p2, delta))
@@ -600,6 +644,12 @@ double log_btawl_cdf_logn(double t, const BtawlGeom& g, double mu,
                         false, delta);
 }
 
+double log_btawl_cdf_weib(double t, const BtawlGeom& g, double shape,
+                          double scale) {
+  return btawl_log_eval(false, t, g, shape, scale,
+                        BTAWL_LAUNCH_WEIBULL, false, 0.0);
+}
+
 double log_btawl_surv_normal(double t, const BtawlGeom& g, double v,
                              double sv, bool posdrift) {
   return btawl_log_eval(true, t, g, v, sv, BTAWL_LAUNCH_NORMAL, posdrift);
@@ -610,6 +660,12 @@ double log_btawl_surv_logn(double t, const BtawlGeom& g, double mu,
   return btawl_log_eval(true, t, g, mu, sigma,
                         delta == 0.0 ? BTAWL_LAUNCH_LOGNORMAL : BTAWL_LAUNCH_SPLITLOGNORMAL,
                         false, delta);
+}
+
+double log_btawl_surv_weib(double t, const BtawlGeom& g, double shape,
+                           double scale) {
+  return btawl_log_eval(true, t, g, shape, scale,
+                        BTAWL_LAUNCH_WEIBULL, false, 0.0);
 }
 
 double btawl_cdf(double t, double A, double b, double p1, double p2,
@@ -679,7 +735,8 @@ bool btawl_natural_cdf_from_geom(double t, const BtawlGeom& g,
                                  double p1, double p2, int launch,
                                  bool posdrift, double& cdf,
                                  double delta) {
-  if (launch == BTAWL_LAUNCH_SPLITLOGNORMAL && delta != 0.0)
+  if (launch == BTAWL_LAUNCH_WEIBULL ||
+      (launch == BTAWL_LAUNCH_SPLITLOGNORMAL && delta != 0.0))
     return false;
   if (!g.ok || !(p2 > 0.0) || !(t > 0.0)) return false;
   if (!g.k_zero && t >= g.t_max) {
@@ -733,6 +790,8 @@ double btawl_log_launch_pdf(double w, double p1, double p2, int launch,
       return log_split_lognormal_density(w, p1, p2, delta);
     return dlnorm_std(w, p1, p2, true);
   }
+  if (launch == BTAWL_LAUNCH_WEIBULL)
+    return log_weibull_density(w, p1, p2);
   const double ld = dnormP((w - p1) / p2, 0.0, 1.0, true) - std::log(p2);
   return posdrift ? ld - log_positive_normalizer(p1, p2, true,
                                                  BTAWL_DENOM_FLOOR) : ld;
@@ -743,7 +802,8 @@ bool btawl_natural_pdf_accepted(double t, const BtawlGeom& g,
                                 bool posdrift, double p_nat,
                                 double delta) {
   (void)posdrift;
-  if (launch == BTAWL_LAUNCH_SPLITLOGNORMAL && delta != 0.0)
+  if (launch == BTAWL_LAUNCH_WEIBULL ||
+      (launch == BTAWL_LAUNCH_SPLITLOGNORMAL && delta != 0.0))
     return false;
   if (!(p_nat > 0.0) || !emc2_isfinite(p_nat)) return false;
   if (g.A <= BTAWL_A_EPS) {
@@ -835,6 +895,12 @@ double btawl_log_live_pdf_stable(double t, const BtawlGeom& g,
     mass = signed_log_sub(make_signed_log(ls_lo, 1), make_signed_log(ls_hi, 1));
     first = signed_log_sub(make_signed_log(lm_lo, 1), make_signed_log(lm_hi, 1));
     if (mass.sign <= 0 || !(mass.log_abs > R_NegInf)) return R_NegInf;
+  } else if (launch == BTAWL_LAUNCH_WEIBULL) {
+    const double lm = log_weibull_mass_interval(wlo, whi, p1, p2);
+    const double l1 = log_weibull_first_interval(wlo, whi, p1, p2);
+    if (!(lm > R_NegInf) || !(l1 > R_NegInf)) return R_NegInf;
+    mass = make_signed_log(lm, 1);
+    first = make_signed_log(l1, 1);
   } else {
     const double x0 = (launch == BTAWL_LAUNCH_LOGNORMAL || launch == BTAWL_LAUNCH_SPLITLOGNORMAL)
       ? (std::log(wlo) - p1) / p2 : (wlo - p1) / p2;
@@ -910,6 +976,8 @@ double btawl_log_cdf(double t, double A, double b, double p1, double p2,
                      double k, double tau, int launch, bool posdrift,
                      double delta) {
   const BtawlGeom g = btawl_geometry(A, b, k, tau);
+  if (launch == BTAWL_LAUNCH_WEIBULL)
+    return log_btawl_cdf_weib(t, g, p1, p2);
   return (launch == BTAWL_LAUNCH_LOGNORMAL || launch == BTAWL_LAUNCH_SPLITLOGNORMAL)
     ? log_btawl_cdf_logn(t, g, p1, p2, delta)
     : log_btawl_cdf_normal(t, g, p1, p2, posdrift);
@@ -919,6 +987,8 @@ double btawl_log_surv(double t, double A, double b, double p1, double p2,
                       double k, double tau, int launch, bool posdrift,
                       double delta) {
   const BtawlGeom g = btawl_geometry(A, b, k, tau);
+  if (launch == BTAWL_LAUNCH_WEIBULL)
+    return log_btawl_surv_weib(t, g, p1, p2);
   return (launch == BTAWL_LAUNCH_LOGNORMAL || launch == BTAWL_LAUNCH_SPLITLOGNORMAL)
     ? log_btawl_surv_logn(t, g, p1, p2, delta)
     : log_btawl_surv_normal(t, g, p1, p2, posdrift);
@@ -972,6 +1042,8 @@ double btawl_log_surv_chart(double t, double A, double b, double p1,
   const BtawlGeom g = endpoint_chart
     ? btawl_geometry_from_ttrans(A, b, k, clear, tau_hint)
     : btawl_geometry(A, b, k, clear);
+  if (launch == BTAWL_LAUNCH_WEIBULL)
+    return log_btawl_surv_weib(t, g, p1, p2);
   return (launch == BTAWL_LAUNCH_LOGNORMAL || launch == BTAWL_LAUNCH_SPLITLOGNORMAL)
     ? log_btawl_surv_logn(t, g, p1, p2, delta)
     : log_btawl_surv_normal(t, g, p1, p2, posdrift);
@@ -1032,12 +1104,21 @@ namespace {
 // below machine resolution, evaluating endpoint differences is both slower
 // and less accurate than taking the analytic point-limit at w = b/h.
 constexpr double BTAWL_SUSTAINED_REL_WIDTH = 1e-10;
+constexpr double BTAWL_SUSTAINED_WEIB_REL_WIDTH = 1e-8;
 
 inline bool btawl_sustained_interval_collapsed(double a, double q, double A) {
   if (!(q > 0.0) || !emc2_isfinite(q) || !(A > 0.0)) return true;
   const double width = q * A;
   return !emc2_isfinite(width) || width <=
     BTAWL_SUSTAINED_REL_WIDTH * std::fmax(1.0, std::fabs(a));
+}
+
+inline bool btawl_sustained_weib_interval_collapsed(double a, double q,
+                                                    double A) {
+  if (!(q > 0.0) || !emc2_isfinite(q) || !(A > 0.0)) return true;
+  const double width = q * A;
+  return !emc2_isfinite(width) || width <=
+    BTAWL_SUSTAINED_WEIB_REL_WIDTH * std::fmax(1.0, std::fabs(a));
 }
 
 inline double btawl_sustained_point_log_pdf(double a, double d0,
@@ -1051,6 +1132,8 @@ inline double btawl_sustained_point_log_pdf(double a, double d0,
     lp = (launch == BTAWL_LAUNCH_SPLITLOGNORMAL)
       ? log_split_lognormal_density(a, p1, p2, delta)
       : dlnorm_std(a, p1, p2, true);
+  } else if (launch == BTAWL_LAUNCH_WEIBULL) {
+    lp = log_weibull_density(a, p1, p2);
   } else {
     lp = dnormP(a, p1, p2, true) -
       ((posdrift) ? log_positive_normalizer(p1, p2, true, BTAWL_DENOM_FLOOR) : 0.0);
@@ -1071,6 +1154,14 @@ double btawl_sustained_cdf(double t, double A, double b, double p1, double p2,
                            double k, double tau_s, int launch, bool posdrift,
                            double delta) {
   if (!(p2 > 0.0)) return 0.0;
+  // The Weibull launch uses the log survivor complement to avoid cancellation
+  // near its upper plateau.  Keep legacy normal/lognormal arithmetic intact.
+  if (launch == BTAWL_LAUNCH_WEIBULL) {
+    const double lsurv = btawl_sustained_log_surv(t, A, b, p1, p2, k, tau_s,
+                                                  launch, posdrift, delta);
+    if (lsurv < 0.0 && emc2_isfinite(lsurv))
+      return std::fmin(std::fmax(-std::expm1(lsurv), 0.0), 1.0);
+  }
   if (t == R_PosInf) {
     const double w = (k <= BTAWL_K_EPS) ? 0.0 : (k * b);
     return btawl_surv(w, p1, p2, launch, posdrift, delta);
@@ -1097,6 +1188,10 @@ double btawl_sustained_cdf(double t, double A, double b, double p1, double p2,
     const double chi = (launch == BTAWL_LAUNCH_SPLITLOGNORMAL)
       ? log_split_lognormal_stoploss(whi, p1, p2, delta)
       : log_lognormal_stoploss(whi, p1, p2);
+    if (clo > chi) log_num = log_diff_exp(clo, chi);
+  } else if (launch == BTAWL_LAUNCH_WEIBULL) {
+    const double clo = log_weibull_stoploss(wlo, p1, p2);
+    const double chi = log_weibull_stoploss(whi, p1, p2);
     if (clo > chi) log_num = log_diff_exp(clo, chi);
   } else {
     const double c = (p1 - a) / p2;
@@ -1165,6 +1260,9 @@ double btawl_sustained_log_pdf(double t, double A, double b, double p1,
       log_first = p1 + 0.5 * p2 * p2 +
         log_normal_interval(x0 - p2, x1 - p2);
     }
+  } else if (launch == BTAWL_LAUNCH_WEIBULL) {
+    log_mass = log_weibull_mass_interval(w_lo, w_hi, p1, p2);
+    log_first = log_weibull_first_interval(w_lo, w_hi, p1, p2);
   } else {
     const double x0 = (w_lo - p1) / p2;
     const double x1 = (w_hi - p1) / p2;
@@ -1219,6 +1317,10 @@ double btawl_local_race_cdf(double t, double A, double b, double p1, double p2,
   if (launch == BTAWL_LAUNCH_LOGNORMAL || launch == BTAWL_LAUNCH_SPLITLOGNORMAL) {
     p1_S += std::log(pi);
     p1_T += std::log(1.0 - pi);
+  } else if (launch == BTAWL_LAUNCH_WEIBULL) {
+    p1_S = p1_T = p1;
+    p2_S = p2 * pi;
+    p2_T = p2 * (1.0 - pi);
   } else {
     p1_S *= pi;         p2_S *= pi;
     p1_T *= (1.0 - pi); p2_T *= (1.0 - pi);
@@ -1241,6 +1343,10 @@ double btawl_local_race_pdf(double t, double A, double b, double p1, double p2,
   if (launch == BTAWL_LAUNCH_LOGNORMAL || launch == BTAWL_LAUNCH_SPLITLOGNORMAL) {
     p1_S += std::log(pi);
     p1_T += std::log(1.0 - pi);
+  } else if (launch == BTAWL_LAUNCH_WEIBULL) {
+    p1_S = p1_T = p1;
+    p2_S = p2 * pi;
+    p2_T = p2 * (1.0 - pi);
   } else {
     p1_S *= pi;         p2_S *= pi;
     p1_T *= (1.0 - pi); p2_T *= (1.0 - pi);
@@ -1277,13 +1383,23 @@ double btawl_sustained_log_surv(double t, double A, double b, double p1, double 
   if (!emc2_isfinite(b) || !(p2 > 0.0) || !(t > 0.0)) return R_NegInf;
   if (t == R_PosInf) {
     const double w = (k <= BTAWL_K_EPS) ? 0.0 : (k * b);
-    if (!(w > 0.0)) return R_NegInf;
+    if (!(w > 0.0)) {
+      if (launch == BTAWL_LAUNCH_WEIBULL ||
+          launch == BTAWL_LAUNCH_LOGNORMAL ||
+          launch == BTAWL_LAUNCH_SPLITLOGNORMAL)
+        return 0.0;
+      return posdrift ? 0.0 : pnorm_log_direct(p1 / p2, true);
+    }
+    if (launch == BTAWL_LAUNCH_WEIBULL)
+      return log_weibull_cdf(w, p1, p2);
     if (launch == BTAWL_LAUNCH_LOGNORMAL || launch == BTAWL_LAUNCH_SPLITLOGNORMAL) {
       if (launch == BTAWL_LAUNCH_SPLITLOGNORMAL)
         return log_split_lognormal_cdf(w, p1, p2, delta);
       return pnorm_log_direct((std::log(w) - p1) / p2, true);
     }
-    const double l = log_normal_cdf_positive_raw(w, p1, p2);
+    const double l = launch == BTAWL_LAUNCH_WEIBULL
+      ? log_weibull_cdf(w, p1, p2)
+      : log_normal_cdf_positive_raw(w, p1, p2);
     return (launch == BTAWL_LAUNCH_NORMAL && posdrift)
       ? l - log_positive_normalizer(p1, p2, true, BTAWL_DENOM_FLOOR) : l;
   }
@@ -1293,19 +1409,28 @@ double btawl_sustained_log_surv(double t, double A, double b, double p1, double 
   const double q = E / h;
   if (!(q > 0.0) || !emc2_isfinite(q)) {
     const double w = b / h;
+    if (launch == BTAWL_LAUNCH_WEIBULL)
+      return log_weibull_cdf(w, p1, p2);
     if (launch == BTAWL_LAUNCH_LOGNORMAL || launch == BTAWL_LAUNCH_SPLITLOGNORMAL) {
       if (launch == BTAWL_LAUNCH_SPLITLOGNORMAL)
         return log_split_lognormal_cdf(w, p1, p2, delta);
       return pnorm_log_direct((std::log(w) - p1) / p2, true);
     }
-    const double l = log_normal_cdf_positive_raw(w, p1, p2);
+    const double l = launch == BTAWL_LAUNCH_WEIBULL
+      ? log_weibull_cdf(w, p1, p2)
+      : log_normal_cdf_positive_raw(w, p1, p2);
     return (launch == BTAWL_LAUNCH_NORMAL && posdrift)
       ? l - log_positive_normalizer(p1, p2, true, BTAWL_DENOM_FLOOR) : l;
   }
-  if (A <= BTAWL_A_EPS) {
+  const double a = b / h;
+  if (A <= BTAWL_A_EPS ||
+      (launch == BTAWL_LAUNCH_WEIBULL &&
+       btawl_sustained_weib_interval_collapsed(a, q, A))) {
     const double w = b / h;
     if (!(w > 0.0)) return R_NegInf;
-    const double l = (launch == BTAWL_LAUNCH_LOGNORMAL || launch == BTAWL_LAUNCH_SPLITLOGNORMAL)
+    const double l = (launch == BTAWL_LAUNCH_WEIBULL)
+      ? log_weibull_cdf(w, p1, p2)
+      : (launch == BTAWL_LAUNCH_LOGNORMAL || launch == BTAWL_LAUNCH_SPLITLOGNORMAL)
       ? (launch == BTAWL_LAUNCH_SPLITLOGNORMAL
            ? log_split_lognormal_cdf(w, p1, p2, delta)
            : pnorm_log_direct((std::log(w) - p1) / p2, true))
@@ -1313,7 +1438,6 @@ double btawl_sustained_log_surv(double t, double A, double b, double p1, double 
     return (launch == BTAWL_LAUNCH_NORMAL && posdrift)
       ? l - log_positive_normalizer(p1, p2, true, BTAWL_DENOM_FLOOR) : l;
   }
-  const double a = b / h;
   const double whi = a;
   const double wlo = a - q * A;
   if (!(wlo > 0.0) || !(whi >= wlo)) return R_NegInf;
@@ -1327,6 +1451,10 @@ double btawl_sustained_log_surv(double t, double A, double b, double p1, double 
       ? log_split_lognormal_put(wlo, p1, p2, delta)
       : log_lognormal_put(wlo, p1, p2);
     if (pa - pb > 1e-10) li = log_diff_exp(pa, pb) - std::log(q);
+  } else if (launch == BTAWL_LAUNCH_WEIBULL) {
+    const double pa = log_weibull_put(whi, p1, p2);
+    const double pb = log_weibull_put(wlo, p1, p2);
+    if (pa - pb > 1e-10) li = log_diff_exp(pa, pb) - std::log(q);
   } else {
     const double lo = (wlo - p1) / p2;
     const double hi = (whi - p1) / p2;
@@ -1335,7 +1463,9 @@ double btawl_sustained_log_surv(double t, double A, double b, double p1, double 
   }
   if (!(li > R_NegInf)) {
     const double wm = 0.5 * (whi + wlo);
-    const double lm = (launch == BTAWL_LAUNCH_LOGNORMAL || launch == BTAWL_LAUNCH_SPLITLOGNORMAL)
+    const double lm = (launch == BTAWL_LAUNCH_WEIBULL)
+      ? log_weibull_cdf(wm, p1, p2)
+      : (launch == BTAWL_LAUNCH_LOGNORMAL || launch == BTAWL_LAUNCH_SPLITLOGNORMAL)
       ? (launch == BTAWL_LAUNCH_SPLITLOGNORMAL
            ? log_split_lognormal_cdf(wm, p1, p2, delta)
            : pnorm_log_direct((std::log(wm) - p1) / p2, true))
@@ -1362,6 +1492,10 @@ double btawl_local_race_log_surv(double t, double A, double b, double p1,
   if (launch == BTAWL_LAUNCH_LOGNORMAL || launch == BTAWL_LAUNCH_SPLITLOGNORMAL) {
     p1_S += std::log(pi);
     p1_T += std::log(1.0 - pi);
+  } else if (launch == BTAWL_LAUNCH_WEIBULL) {
+    p1_S = p1_T = p1;
+    p2_S = p2 * pi;
+    p2_T = p2 * (1.0 - pi);
   } else {
     p1_S *= pi;         p2_S *= pi;
     p1_T *= (1.0 - pi); p2_T *= (1.0 - pi);
@@ -1991,9 +2125,11 @@ NumericVector pbtawl_transient(NumericVector t, NumericVector A, NumericVector b
   for (int i = 0; i < n; ++i) {
     const double Ai = pick(A, i), bi = pick(b, i), ki = pick(k, i), ti = pick(tau, i);
     const BtawlGeom g = btawl_geometry_cached(&cache_ctx, false, Ai, bi, ki, ti, ti);
-    const double lp = (launch == BTAWL_LAUNCH_LOGNORMAL || launch == BTAWL_LAUNCH_SPLITLOGNORMAL)
+    const double lp = (launch == BTAWL_LAUNCH_WEIBULL)
+      ? log_btawl_cdf_weib(t[i], g, pick(p1,i), pick(p2,i))
+      : ((launch == BTAWL_LAUNCH_LOGNORMAL || launch == BTAWL_LAUNCH_SPLITLOGNORMAL)
       ? log_btawl_cdf_logn(t[i], g, pick(p1,i), pick(p2,i), pick(delta, i))
-      : log_btawl_cdf_normal(t[i], g, pick(p1,i), pick(p2,i), posdrift);
+      : log_btawl_cdf_normal(t[i], g, pick(p1,i), pick(p2,i), posdrift));
     out[i] = log_out ? lp : (lp > R_NegInf ? std::exp(lp) : 0.0);
   }
   return out;

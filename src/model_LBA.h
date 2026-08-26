@@ -24,6 +24,9 @@ constexpr double BAWL_A_EPS = 1e-10;
 constexpr double BAWL_NATURAL_Z_MAX = 7.5;
 constexpr double BAWL_NATURAL_MIN_SPAN = 1e-6;
 constexpr double BAWL_LOG_MIN_SPAN = 1e-8;
+// Weibull incomplete-gamma primitives lose relative digits sooner than the
+// normal/lognormal tails when their endpoints nearly coincide.
+constexpr double BAWL_WEIB_MIN_SPAN = 1e-6;
 constexpr double BAWL_NATURAL_REL_TOL = 1e-10;
 // Trust the signed-log PDF numerator only while it retains at least this
 // (log-scale) fraction of its largest term; past that, cancellation has
@@ -45,6 +48,7 @@ constexpr double BAWL_DENOM_FLOOR = 1e-300;
 constexpr int BAWL_LAUNCH_NORMAL = 0;
 constexpr int BAWL_LAUNCH_LOGNORMAL = 1;
 constexpr int BAWL_LAUNCH_SPLITLOGNORMAL = 2;
+constexpr int BAWL_LAUNCH_WEIBULL = 3;
 // Acceptance modes for the guarded natural-space evaluators.
 //   STRICT: value must stand on its own (feeds std::log directly).
 //   RAW:    underflow to 0 is fine (caller floors at min_ll), but near-1
@@ -546,6 +550,72 @@ inline double log_bawl_surv_logn(double t, double A, double b, double mu,
   return std::fmin(out, 0.0);
 }
 
+inline double log_bawl_surv_weib(double t, double A, double b, double shape,
+                                 double scale, double k);
+
+inline double log_bawl_cdf_weib(double t, double A, double b, double shape,
+                                double scale, double k) {
+  if (!(shape > 0.0) || !(scale > 0.0)) return R_NegInf;
+  const BawlLaunchGeom g = bawl_launch_geom(t, A, b, k);
+  if (!g.ok) return R_NegInf;
+  // Near one, compute the CDF as the complement of the stable survivor.
+  const double lsurv = log_bawl_surv_weib(t, A, b, shape, scale, k);
+  if (lsurv < 0.0 && emc2_isfinite(lsurv))
+    return std::log(-std::expm1(lsurv));
+  if (g.frozen || A <= BAWL_A_EPS || !(g.width > 0.0))
+    return std::fmin(log_weibull_survivor(g.frozen ? k * b : g.w_hi,
+                                          shape, scale), 0.0);
+  const double lc_lo = log_weibull_stoploss(g.w_lo, shape, scale);
+  const double lc_hi = log_weibull_stoploss(g.w_hi, shape, scale);
+  if (lc_lo - lc_hi > BAWL_WEIB_MIN_SPAN) {
+    const double ld = log_diff_exp(lc_lo, lc_hi);
+    if (ld > R_NegInf) return std::fmin(g.log_s - std::log(A) + ld, 0.0);
+  }
+  return std::fmin(log_weibull_survivor(0.5 * (g.w_lo + g.w_hi), shape, scale), 0.0);
+}
+
+inline double log_bawl_surv_weib(double t, double A, double b, double shape,
+                                 double scale, double k) {
+  if (!(shape > 0.0) || !(scale > 0.0)) return R_NegInf;
+  const BawlLaunchGeom g = bawl_launch_geom(t, A, b, k);
+  if (!g.ok) return R_NegInf;
+  if (g.frozen || A <= BAWL_A_EPS || !(g.width > 0.0))
+    return std::fmin(log_weibull_cdf(g.frozen ? k * b : g.w_hi, shape, scale), 0.0);
+  const double lp_hi = log_weibull_put(g.w_hi, shape, scale);
+  const double lp_lo = log_weibull_put(g.w_lo, shape, scale);
+  if (lp_hi - lp_lo > BAWL_WEIB_MIN_SPAN) {
+    const double ld = log_diff_exp(lp_hi, lp_lo);
+    if (ld > R_NegInf) return std::fmin(g.log_s - std::log(A) + ld, 0.0);
+  }
+  return std::fmin(log_weibull_cdf(0.5 * (g.w_lo + g.w_hi), shape, scale), 0.0);
+}
+
+inline double log_bawl_pdf_weib(double t, double A, double b, double shape,
+                                double scale, double k) {
+  if (!(shape > 0.0) || !(scale > 0.0) || t == R_PosInf) return R_NegInf;
+  const BawlLaunchGeom g = bawl_launch_geom(t, A, b, k);
+  if (!g.ok || g.frozen) return R_NegInf;
+  const double log_jac = bawl_geom_log_jacobian(g);
+  if (A <= BAWL_A_EPS || !(g.width > 0.0)) {
+    const double ld = log_weibull_density(g.w_hi, shape, scale);
+    return ld > R_NegInf ? log_jac + std::log(b) + ld : R_NegInf;
+  }
+  const double lm = log_weibull_mass_interval(g.w_lo, g.w_hi, shape, scale);
+  const double l1 = log_weibull_first_interval(g.w_lo, g.w_hi, shape, scale);
+  if (!(lm > R_NegInf) || !(l1 > R_NegInf)) {
+    const double ld = log_weibull_density(0.5 * (g.w_lo + g.w_hi), shape, scale);
+    return ld > R_NegInf ? log_jac + std::log(b - 0.5 * A) + ld : R_NegInf;
+  }
+  const signed_log br = (k > BAWL_K_EPS)
+    ? signed_log_sub(make_signed_log(l1, 1),
+                     make_signed_log(std::log(k * b) + lm, 1))
+    : make_signed_log(l1, 1);
+  if (br.sign > 0 && br.log_abs > R_NegInf)
+    return br.log_abs - std::log(A) - g.log_E;
+  const double ld = log_weibull_density(0.5 * (g.w_lo + g.w_hi), shape, scale);
+  return ld > R_NegInf ? log_jac + std::log(b - 0.5 * A) + ld : R_NegInf;
+}
+
 // log P(V >= w) for the lognormal launch.
 inline double bawl_logn_log_surv(double w, double mu, double sigma,
                                  double delta = 0.0) {
@@ -801,6 +871,7 @@ inline bool ba_natural_cdf_launch(double t, double A, double b, double p1,
   if (launch == BAWL_LAUNCH_LOGNORMAL ||
       launch == BAWL_LAUNCH_SPLITLOGNORMAL)
     return bawl_natural_cdf_logn(t, A, b, p1, p2, k, accept_mode, cdf, delta);
+  if (launch == BAWL_LAUNCH_WEIBULL) return false;
   return ba_natural_cdf(t, A, b, p1, p2, k, posdrift, denom_floor,
                         accept_mode, cdf);
 }
@@ -813,6 +884,7 @@ inline bool ba_natural_pdf_launch(double t, double A, double b, double p1,
   if (launch == BAWL_LAUNCH_LOGNORMAL ||
       launch == BAWL_LAUNCH_SPLITLOGNORMAL)
     return bawl_natural_pdf_logn(t, A, b, p1, p2, k, accept_mode, pdf, delta);
+  if (launch == BAWL_LAUNCH_WEIBULL) return false;
   return ba_natural_pdf(t, A, b, p1, p2, k, posdrift, denom_floor,
                         accept_mode, pdf);
 }
@@ -824,6 +896,8 @@ inline double log_ba_cdf_launch(double t, double A, double b, double p1,
   if (launch == BAWL_LAUNCH_LOGNORMAL ||
       launch == BAWL_LAUNCH_SPLITLOGNORMAL)
     return log_bawl_cdf_logn(t, A, b, p1, p2, k, delta);
+  if (launch == BAWL_LAUNCH_WEIBULL)
+    return log_bawl_cdf_weib(t, A, b, p1, p2, k);
   return log_ba_cdf(t, A, b, p1, p2, k, posdrift, denom_floor);
 }
 
@@ -834,6 +908,8 @@ inline double log_ba_surv_launch(double t, double A, double b, double p1,
   if (launch == BAWL_LAUNCH_LOGNORMAL ||
       launch == BAWL_LAUNCH_SPLITLOGNORMAL)
     return log_bawl_surv_logn(t, A, b, p1, p2, k, delta);
+  if (launch == BAWL_LAUNCH_WEIBULL)
+    return log_bawl_surv_weib(t, A, b, p1, p2, k);
   return log_bawl_surv_normal(t, A, b, p1, p2, k, posdrift, denom_floor);
 }
 
@@ -844,6 +920,8 @@ inline double log_ba_pdf_launch(double t, double A, double b, double p1,
   if (launch == BAWL_LAUNCH_LOGNORMAL ||
       launch == BAWL_LAUNCH_SPLITLOGNORMAL)
     return log_bawl_pdf_logn(t, A, b, p1, p2, k, delta);
+  if (launch == BAWL_LAUNCH_WEIBULL)
+    return log_bawl_pdf_weib(t, A, b, p1, p2, k);
   return log_ba_pdf(t, A, b, p1, p2, k, posdrift, denom_floor);
 }
 inline double bawl_cdf_norm(double t, double A, double b, double v,
@@ -860,7 +938,8 @@ inline double bawl_cdf_norm(double t, double A, double b, double v,
   // deadline and upper-tail handling.
   if (t == R_PosInf && std::fabs(k) <= BAWL_K_EPS &&
       (posdrift || launch == BAWL_LAUNCH_LOGNORMAL ||
-       launch == BAWL_LAUNCH_SPLITLOGNORMAL) && sv > 0.0 &&
+       launch == BAWL_LAUNCH_SPLITLOGNORMAL ||
+       launch == BAWL_LAUNCH_WEIBULL) && sv > 0.0 &&
       A >= 0.0 && b >= A && b > 0.0)
     return log_out ? 0.0 : 1.0;
 

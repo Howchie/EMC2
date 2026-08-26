@@ -312,7 +312,8 @@ LogicalRulesLBA <- function(posdrift = TRUE, fast_path=TRUE, capacity = FALSE){
 
 # 0 = normal launch strength (v, sv); 1 = lognormal launch strength
 # (mu, sigma); 2 = median-parameterised continuous split-lognormal launch
-# (mu, sigma, delta).  Must match BAWL_LAUNCH_* in src/model_LBA.h, the
+# (mu, sigma, delta); 3 = Weibull launch (shape, scale). Must match
+# BAWL_LAUNCH_* in src/model_LBA.h, the
 # `launch` argument of the compiled kernels, and the value the adapter derives
 # from the `_LOGN`/`_SPLIT` c_name suffix.  Deliberately the same convention as
 # BAwD.
@@ -430,7 +431,9 @@ rBAwL <- function(lR, pars, ok = rep(TRUE, length(lR)),
   if (is.null(.drifts)) {
     # A lognormal launch strength is positive by construction, so posdrift
     # never applies to it.
-    drifts <- if (launch == 1L) {
+    drifts <- if (launch == 3L) {
+      rweibull(nrow(pars), pars[, nm[1]], pars[, nm[2]])
+    } else if (launch == 1L) {
       rlnorm(nrow(pars), pars[, nm[1]], pars[, nm[2]])
     } else if (launch == 2L) {
       .bawd_split_rlnorm(pars[, "mu"], pars[, "sigma"], pars[, "delta"])
@@ -626,6 +629,9 @@ rBAwL_corr <- function(lR, pars, ok = rep(TRUE, nrow(pars)),
 #' positive by construction, so `posdrift` does not apply.  The `correlated`
 #' one-factor path — which decomposes the *Gaussian* drift vector — is not
 #' available for either lognormal variant.
+#' With `drift_distribution = "weibull"`, `V ~ Weibull(shape, scale)` with
+#' positive shape and scale. Weibull launches are also incompatible with the
+#' Gaussian `correlated` path.
 #'
 #' **Fixing the evidence scale.** The evidence axis is defined only up to a
 #' scale: `(V, b, A) -> (cV, cb, cA)` leaves every crossing time unchanged, so
@@ -696,7 +702,8 @@ rBAwL_corr <- function(lR, pars, ok = rep(TRUE, nrow(pars)),
 #'   split-normal `log V` with widths
 #'   `sigma_L = sigma * exp(delta/2)` and `sigma_R = sigma * exp(-delta/2)`.
 #'   In the split variant `mu` is the exact median and `delta` is unbounded;
-#'   `delta = 0` is exactly the lognormal launch.
+#'   `delta = 0` is exactly the lognormal launch. `"weibull"` uses
+#'   `V ~ Weibull(shape, scale)` on the positive launch scale.
 #' @return A model list defining the BAwL race model.
 #' @examples
 #' # A lognormal-launch BAwL. mu's intercept is fixed to identify the evidence
@@ -714,17 +721,18 @@ rBAwL_corr <- function(lR, pars, ok = rep(TRUE, nrow(pars)),
 BAwL <- function(posdrift = TRUE, erlang_shape = 1L,
                  erlang_type = c("none", "local_kill", "global_kill", "local_guess", "local_kill_guess"),
                  correlated = FALSE,
-                 drift_distribution = c("normal", "lognormal", "splitlognormal")) {
+                 drift_distribution = c("normal", "lognormal", "splitlognormal", "weibull")) {
   erlang_type <- match.arg(erlang_type)
   drift_distribution <- match.arg(drift_distribution)
   launch <- .ba_launch_code(drift_distribution, "BAwL")
   lognormal <- launch %in% c(1L, 2L)
+  weibull <- launch == 3L
   splitlognormal <- launch == 2L
-  if (lognormal && !isTRUE(posdrift)) {
+  if ((lognormal || weibull) && !isTRUE(posdrift)) {
     stop("BAwL: posdrift only applies to drift_distribution = \"normal\"; a ",
-         "lognormal launch strength is positive by construction.")
+         "lognormal and Weibull launch strengths are positive by construction.")
   }
-  if (lognormal && correlated) {
+  if ((lognormal || weibull) && correlated) {
     # The correlated path is a one-factor decomposition of the Gaussian drift
     # vector (drift_factor.h); a lognormal analogue is a different model, not
     # a swapped marginal, so refuse rather than silently ignore one of them.
@@ -739,7 +747,7 @@ BAwL <- function(posdrift = TRUE, erlang_shape = 1L,
 
   # "_SPLIT" follows "_LOGN"; neither lognormal variant is combined with IO.
   base_name <- paste0(ifelse(posdrift, "BAwL", "BAwLIO"),
-                    if (lognormal) "_LOGN" else "",
+                    if (weibull) "_WEIB" else if (lognormal) "_LOGN" else "",
                     if (splitlognormal) "_SPLIT" else "",
                     if (erlang_mixed) "_EMIX" else if (erlang_shape_cpp >= 2L) "_E2" else "")
   type_suffix <- if (erlang_type == "local_guess") "_LOCAL_GUESS"
@@ -749,7 +757,11 @@ BAwL <- function(posdrift = TRUE, erlang_shape = 1L,
                     else ""
 
   # The launch pair occupies the leading two kernel columns either way; only
-  if (lognormal) {
+  if (weibull) {
+    p_types <- c(shape = log(1), scale = log(1))
+    transform <- c(shape = "exp", scale = "exp")
+    minmax <- cbind(shape = c(1e-4, Inf), scale = c(1e-4, Inf))
+  } else if (lognormal) {
     p_types <- c("mu" = 0, "sigma" = log(1))
     transform <- c(mu = "identity", sigma = "exp")
     minmax <- cbind(mu = c(-Inf, Inf), sigma = c(1e-4, Inf))
@@ -917,6 +929,8 @@ BAwL <- function(posdrift = TRUE, erlang_shape = 1L,
 #' |---|---|---|---|---|---|
 #' | *v* | identity | \[-Inf, Inf\] | 1 | | Mean normal launch strength. |
 #' | *sv* | log | \[0, Inf\] | log(1) | | SD of normal launch strength. |
+#' | *shape* | log | \[0, Inf\] | log(1) | | Weibull shape (Weibull launch only). |
+#' | *scale* | log | \[0, Inf\] | log(1) | | Weibull scale (Weibull launch only). |
 #' | *B* | log | \[0, Inf\] | log(1) | *b* = *B* + *A* | Distance from the upper start-point range to the threshold. |
 #' | *A* | log | \[0, Inf\] | log(0) | | Start-point range. |
 #' | *t0* | log | \[0, Inf\] | log(0) | | Non-decision time. |

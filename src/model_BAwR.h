@@ -38,7 +38,7 @@
 // caution-free property of the stimulus representation; T_max is derived and
 // reported by the R-side Ttransform.
 //
-// Both branches of the likelihood are closed form.  V* is affine in z, so the
+// All launch branches are closed form. V* is affine in z, so the
 // live branch is the usual stop-loss reduction, and the density is
 //
 //   A f(u) = int_{w_lo}^{w_hi} (w - kappa u^p) g(w) dw
@@ -47,8 +47,9 @@
 // place of k b H'(k u), which is why this header reuses that machinery rather
 // than restating it.  The frozen branch has |dz/dw| = kappa^(-1/p) w^(1/p), a
 // positive-power survivor integral: closed for the lognormal launch at any p
-// via log_lognormal_power_stoploss() with m = -(p+1)/p, and evaluated by the
-// shared positive-integrand quadrature for the normal launch.
+// via log_lognormal_power_stoploss() (or its Weibull counterpart) with
+// m = -(p+1)/p, and evaluated by shared positive-integrand quadrature for the
+// normal launch.
 //
 // Included by model_LBA.h after model_BAwF.h; reuses bawd_log_gl_split() and
 // wald_functions.h's lognormal stop-loss primitives.
@@ -65,11 +66,13 @@ constexpr double BAWR_LOG_BRACKET_MIN = BAWD_LOG_BRACKET_MIN;
 constexpr double BAWR_DENOM_FLOOR = BAWD_DENOM_FLOOR;
 
 // The launch selector is BAwD's, as for BAwF: one definition of
-// "0 = truncated normal, 1 = lognormal, 2 = continuous split-lognormal"
+// "0 = truncated normal, 1 = lognormal, 2 = continuous split-lognormal,
+// 3 = Weibull"
 // across the ballistic family.
 constexpr int BAWR_LAUNCH_NORMAL = BAWD_LAUNCH_NORMAL;
 constexpr int BAWR_LAUNCH_LOGNORMAL = BAWD_LAUNCH_LOGNORMAL;
 constexpr int BAWR_LAUNCH_SPLITLOGNORMAL = BAWD_LAUNCH_SPLITLOGNORMAL;
+constexpr int BAWR_LAUNCH_WEIBULL = BAWD_LAUNCH_WEIBULL;
 // --------------------------------------------------------------------------
 // Geometry (launch-distribution free)
 // --------------------------------------------------------------------------
@@ -142,6 +145,8 @@ double bawr_log_frozen_normal(const BawrGeom& g, double s_lo,
 
 double bawr_log_frozen_logn(const BawrGeom& g, double s_lo, double s_hi,
                                    double mu, double sigma, double delta = 0.0);
+double bawr_log_frozen_weib(const BawrGeom& g, double s_lo, double s_hi,
+                                   double shape, double scale);
 
 // --------------------------------------------------------------------------
 // log CDF

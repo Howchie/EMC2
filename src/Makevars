@@ -42,7 +42,7 @@
 #   make-jobs = configured MAKE_JOBS integer (0 disables injection)
 #
 # Generated configuration:
-#   profile=legacy march=native openmp=available openmp-simd-probe=available openmp-simd=on make-jobs=29
+#   profile=legacy march=native openmp=available openmp-simd-probe=available openmp-simd=on make-jobs=32
 # =============================================================================
 
 # --- Parallel compilation (configure-selected job count) --------------------
@@ -50,7 +50,7 @@
 # MemAvailable. This standalone block remains profile-independent. Re-check
 # live MAKEFLAGS so caller-supplied -j/--jobs and parent GNU Make jobservers
 # always take precedence over the package default.
-MAKE_JOBS := 29
+MAKE_JOBS := 32
 ifneq ($(MAKE_JOBS),0)
 ifeq ($(strip $(filter -j% --jobs% --jobserver-auth=% --jobserver-fds=%,$(MAKEFLAGS))),)
 MAKEFLAGS += -j$(MAKE_JOBS)

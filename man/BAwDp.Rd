@@ -5,13 +5,13 @@
 \title{The Ballistic Accumulator with a Proportional-Clearance Drive (BAwDp)}
 \usage{
 BAwDp(
-  drift_distribution = c("lognormal", "normal", "splitlognormal"),
+  drift_distribution = c("lognormal", "normal", "splitlognormal", "weibull"),
   posdrift = TRUE
 )
 }
 \arguments{
 \item{drift_distribution}{Distribution of the launch strength:
-\code{"lognormal"} (default), \code{"splitlognormal"}, or \code{"normal"}.}
+\code{"lognormal"} (default), \code{"splitlognormal"}, \code{"weibull"}, or \code{"normal"}.}
 
 \item{posdrift}{Logical; truncate the normal launch at zero when \code{TRUE}.
 It has no effect for the positive lognormal and split-lognormal launches.}
@@ -48,6 +48,8 @@ is an unbounded log-width ratio.  The derived split point is chosen so that
    \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Mapping} \tab \strong{Interpretation} \cr
    \emph{mu} \tab identity \tab [-Inf, Inf] \tab 0 \tab  \tab Median log launch location. \cr
    \emph{sigma} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Geometric-mean log width. \cr
+   \emph{shape} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Weibull shape (Weibull launch only). \cr
+   \emph{scale} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Weibull scale (Weibull launch only). \cr
    \emph{B} \tab log \tab [0, Inf] \tab log(1) \tab \emph{b} = \emph{B} + \emph{A} \tab Threshold distance. \cr
    \emph{A} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Start-point range. \cr
    \emph{t0} \tab log \tab [0, Inf] \tab log(0) \tab  \tab Non-decision time. \cr
@@ -60,6 +62,8 @@ For \code{drift_distribution = "normal"}, use \code{v} and \code{sv} instead of 
 lognormal launch rows; the normal launch is truncated at zero by default.
 The split-lognormal option adds the optional identity-scale \code{delta} parameter
 (default \code{0}).
+For \code{drift_distribution = "weibull"}, use positive \code{shape} and
+\code{scale}; BAwDp remains closed form.
 Optional fitting parameters: \code{pContaminant} is the omission probability and
 \code{pGuess} is the uniform-outlier probability.
 }

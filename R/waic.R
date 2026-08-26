@@ -86,7 +86,8 @@ waic_warnings <- function() {
 # Falls back to conditional subject sums for single-level (no group) models.
 #
 # Returns [n_iter x n_subjects].
-.marg_ll_matrix <- function(emc, stage = "sample", filter = 0, K = 200) {
+.marg_ll_matrix <- function(emc, stage = "sample", filter = 0, K = 200,
+                            cores = 1) {
   theta_mu  <- get_pars(emc, selection = "mu",    stage = stage, filter = filter,
                         merge_chains = TRUE, return_mcmc = FALSE)
   theta_var <- get_pars(emc, selection = "Sigma", stage = stage, filter = filter,
@@ -94,7 +95,8 @@ waic_warnings <- function() {
 
   if (is.null(theta_mu) || is.null(theta_var)) {
     # Single-level model: marginalisation isn't possible; sum conditional LLs.
-    ll_mat    <- .ll_matrix_pooled(emc, stage = stage, filter = filter)
+    ll_mat    <- .ll_matrix_pooled(emc, stage = stage, filter = filter,
+                                   cores = cores)
     subjects  <- names(emc[[1]]$data)
     trial_counts <- sapply(emc[[1]]$data[subjects], nrow)
     cum_trials   <- c(0, cumsum(trial_counts))
@@ -114,22 +116,29 @@ waic_warnings <- function() {
   model     <- emc[[1]]$model
   log_K     <- log(K)
 
-  out <- matrix(NA_real_, nrow = n_iter, ncol = n_subj)
-  colnames(out) <- subjects
-
-  for (iter in seq_len(n_iter)) {
-    props <- tryCatch(
+  # Draw the proposal sets once so serial and parallel execution use the same
+  # Monte Carlo draws.  The likelihood work is independent across subjects.
+  proposals <- lapply(seq_len(n_iter), function(iter) {
+    tryCatch(
       MASS::mvrnorm(K, theta_mu[, iter], theta_var[,, iter]),
       error = function(e) NULL
     )
-    if (is.null(props)) next   # non-PD Sigma; leave row NA
+  })
 
-    for (s in seq_along(subjects)) {
-      ll_mat <- calc_ll_pw(props, data_list[[subjects[s]]], model)  # [K x n_trials]
-      subj_lls <- rowSums(ll_mat)                                    # [K]
-      out[iter, s] <- matrixStats::logSumExp(subj_lls) - log_K
-    }
+  subject_ll <- function(s) {
+    vapply(seq_len(n_iter), function(iter) {
+      props <- proposals[[iter]]
+      if (is.null(props)) return(NA_real_)
+      ll_mat <- calc_ll_pw(props, data_list[[subjects[s]]], model)
+      subj_lls <- rowSums(ll_mat)
+      matrixStats::logSumExp(subj_lls) - log_K
+    }, numeric(1))
   }
+
+  n_cores <- max(1L, min(as.integer(cores), n_subj))
+  out <- do.call(cbind, auto_mclapply(seq_along(subjects), subject_ll,
+                                      mc.cores = n_cores))
+  colnames(out) <- subjects
   out
 }
 
@@ -156,7 +165,7 @@ waic_pooled <- function(emc, stage = "sample", filter = 0,
   ll_all <- if (pointwise == "trial")
     .ll_matrix_pooled(emc, stage = stage, filter = filter, cores = cores)
   else
-    .marg_ll_matrix(emc, stage = stage, filter = filter, K = K)
+    .marg_ll_matrix(emc, stage = stage, filter = filter, K = K, cores = cores)
   waic_from_ll(ll_all)
 }
 
@@ -173,6 +182,6 @@ loo_pooled <- function(emc, stage = "sample", filter = 0,
   ll_all <- if (pointwise == "trial")
     .ll_matrix_pooled(emc, stage = stage, filter = filter, cores = cores)
   else
-    .marg_ll_matrix(emc, stage = stage, filter = filter, K = K)
+    .marg_ll_matrix(emc, stage = stage, filter = filter, K = K, cores = cores)
   loo_from_ll(ll_all, cores = cores)
 }

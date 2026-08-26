@@ -15,7 +15,7 @@
 // X(u) = z + (V - ell) Q_rho(u), so there is no finite endpoint although weak
 // launches still produce intrinsic omissions.
 //
-// Normal and lognormal launch strengths share this geometry.  The selected
+// Normal, lognormal, and Weibull launch strengths share this geometry. The selected
 // launch distribution is supplied by ContextForRaceModels::bawd_launch.
 //
 // This header is included by particle_ll.cpp directly and through utils.h.
@@ -48,6 +48,7 @@ constexpr double BAWD_DENOM_FLOOR = BAWL_DENOM_FLOOR;
 constexpr int BAWD_LAUNCH_NORMAL = 0;
 constexpr int BAWD_LAUNCH_LOGNORMAL = 1;
 constexpr int BAWD_LAUNCH_SPLITLOGNORMAL = 2;
+constexpr int BAWD_LAUNCH_WEIBULL = 3;
 // --------------------------------------------------------------------------
 // Geometry (launch-distribution free)
 // --------------------------------------------------------------------------
@@ -122,6 +123,8 @@ double bawd_log_frozen_logn_quad(const BawdGeom& g, double s_lo, double s_hi,
                                  double mu, double sigma, double delta = 0.0);
 double bawd_log_frozen_logn(const BawdGeom& g, double s_lo, double s_hi,
                             double mu, double sigma, double delta = 0.0);
+double bawd_log_frozen_weib(const BawdGeom& g, double s_lo, double s_hi,
+                            double shape, double scale);
 double log_bawd_cdf_logn(double u, const BawdGeom& g, double mu, double sigma,
                          double delta = 0.0);
 double bawd_log_frozen_surv_normal(const BawdGeom& g, double s_lo, double s_hi,
@@ -137,6 +140,9 @@ double log_bawd_pdf_normal(double u, const BawdGeom& g, double v, double sv,
                            bool posdrift, double denom_floor);
 double log_bawd_pdf_logn(double u, const BawdGeom& g, double mu, double sigma,
                          double delta = 0.0);
+double log_bawd_cdf_weib(double u, const BawdGeom& g, double shape, double scale);
+double log_bawd_surv_weib(double u, const BawdGeom& g, double shape, double scale);
+double log_bawd_pdf_weib(double u, const BawdGeom& g, double shape, double scale);
 bool bawd_natural_cdf_normal(double u, const BawdGeom& g, double v, double sv,
                              bool posdrift, double denom_floor, int accept_mode,
                              double &cdf);

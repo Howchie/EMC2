@@ -6,15 +6,16 @@
 \usage{
 BTAwLSustained(
   posdrift = TRUE,
-  drift_distribution = c("lognormal", "normal", "splitlognormal"),
+  drift_distribution = c("lognormal", "normal", "splitlognormal", "weibull"),
   chart = c("rate", "endpoint")
 )
 }
 \arguments{
 \item{posdrift}{Logical. For a normal launch, truncate \code{V} below zero.}
 
-\item{drift_distribution}{Either \code{"normal"}, \code{"lognormal"}, or
-\code{"splitlognormal"} (continuous median-parameterised split-lognormal).}
+\item{drift_distribution}{Either \code{"normal"}, \code{"lognormal"},
+\code{"splitlognormal"} (continuous median-parameterised split-lognormal), or
+\code{"weibull"} (\verb{V ~ Weibull(shape, scale)}).}
 
 \item{chart}{Either \code{"endpoint"} or \code{"rate"}.}
 }
@@ -29,6 +30,8 @@ The sustained wrapper uses the following parameter matrix:
    \strong{Parameter} \tab \strong{Transform} \tab \strong{Natural scale} \tab \strong{Default} \tab \strong{Mapping} \tab \strong{Interpretation} \cr
    \emph{mu} \tab identity \tab [-Inf, Inf] \tab 0 \tab  \tab Median log launch location. \cr
    \emph{sigma} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Geometric-mean log width. \cr
+   \emph{shape} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Weibull shape (Weibull launch only). \cr
+   \emph{scale} \tab log \tab [0, Inf] \tab log(1) \tab  \tab Weibull scale (Weibull launch only). \cr
    \emph{v} \tab identity \tab [-Inf, Inf] \tab 1 \tab  \tab Mean normal launch strength (normal launch only). \cr
    \emph{sv} \tab log \tab [0, Inf] \tab log(1) \tab  \tab SD of normal launch strength (normal launch only). \cr
    \emph{B} \tab log \tab [0, Inf] \tab log(1) \tab \emph{b} = \emph{B} + \emph{A} \tab Distance from the upper start-point range to the threshold. \cr
@@ -47,6 +50,8 @@ With \code{"splitlognormal"}, \verb{log V} is continuous split normal with
 derived from the median condition, and \code{delta = 0} is exactly lognormal.
 The split-lognormal option adds the optional identity-scale \code{delta} parameter
 (default \code{0}).
+With \code{drift_distribution = "weibull"}, use positive \code{shape} and
+\code{scale} instead of the lognormal launch rows.
 Optional fitting parameters: \code{pContaminant} is the omission probability and
 \code{pGuess} is the uniform-outlier probability.
 }

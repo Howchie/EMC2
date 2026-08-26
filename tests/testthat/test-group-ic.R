@@ -55,4 +55,9 @@ test_that("compare() returns finite DIC/BPIC for a group_design fit", {
   cmp <- compare(list(m = emc), BayesFactor = FALSE, print_summary = FALSE)
   expect_true(all(is.finite(cmp$DIC)))
   expect_true(all(is.finite(cmp$BPIC)))
+
+  cmp_loo <- compare(list(m = emc), BayesFactor = FALSE, WAIC = FALSE,
+                     LOO = TRUE, pointwise = "subject", K = 2,
+                     cores_for_loo = 2, print_summary = FALSE)
+  expect_true(all(is.finite(cmp_loo$LOO)))
 })

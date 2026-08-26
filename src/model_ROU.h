@@ -142,7 +142,8 @@ inline fperace::SolveCache* rou_cache(void* ctx_) {
 // ---------------------------------------------------------------------------
 inline void rou_prepare_rows(fperace::SolveCache& C, const double* rt,
                              const double* const* cols, int n_rows,
-                             const int* isok) {
+                             const int* isok,
+                             const EndpointQueryPlan* endpoint_queries = nullptr) {
   if (C.prepared && C.row_group.size() == static_cast<size_t>(n_rows)) {
     return;
   }
@@ -187,14 +188,25 @@ inline void rou_prepare_rows(fperace::SolveCache& C, const double* rt,
     row_key_idx[i] = g;
   }
 
+  if (endpoint_queries != nullptr) {
+    for (int i = 0; i < n_rows; ++i) {
+      const int g = row_key_idx[i];
+      if (g < 0) continue;
+      endpoint_queries->for_each_shifted(i, t0_[i], [&](double query) {
+        query_times[static_cast<size_t>(g)].push_back(query);
+        horizon[static_cast<size_t>(g)] =
+          std::max(horizon[static_cast<size_t>(g)], query);
+      });
+    }
+  }
+
   for (auto& times : query_times) {
     std::sort(times.begin(), times.end());
     times.erase(std::unique(times.begin(), times.end()), times.end());
   }
 
   // Pass 2: solve keys in adaptive-width SIMD batches to max required horizon,
-  // retaining only the finite-time values used by the raw likelihood. Scalar
-  // censoring/truncation calls upgrade a sparse entry to a full grid on demand.
+  // retaining raw and planned endpoint values in sparse entries.
   std::vector<int> to_cache(keys.size(), -1);
   fperace::cache_get_batch(
       C, keys, horizon, to_cache,

@@ -411,6 +411,68 @@ double bawd_log_frozen_logn(const BawdGeom& g, double s_lo, double s_hi,
   return bawd_log_frozen_logn_quad(g, s_lo, s_hi, mu, sigma, 0.0);
 }
 
+double bawd_log_frozen_weib_quad(const BawdGeom& g, double s_lo, double s_hi,
+                                 double shape, double scale, bool survivor) {
+  if (!(s_hi > s_lo) || !weibull_valid(shape, scale)) return R_NegInf;
+  const auto lf = [&](double x) -> double {
+    const double w = bawd_critical_launch(g, x);
+    const double lp = survivor ? log_weibull_survivor(w, shape, scale)
+                               : log_weibull_cdf(w, shape, scale);
+    if (!(lp > R_NegInf)) return R_NegInf;
+    if (!g.rho_inf)
+      return bawd_log_psi_prime(g, x) + lp;
+    const double e1 = std::expm1(x);
+    return (e1 > 0.0) ? std::log(e1) - g.gamma * x + lp : R_NegInf;
+  };
+  const double mid = (scale > 0.0 && g.ell > 0.0)
+    ? std::log(scale / g.ell) : s_lo;
+  const double out = bawd_log_gl_split(lf, s_lo, s_hi, mid, BAWD_GL_NODES);
+  return out + (g.rho_inf ? std::log1p(-g.gamma) : 0.0) +
+    std::log(g.ell) - std::log(g.k);
+}
+
+double bawd_log_frozen_weib(const BawdGeom& g, double s_lo, double s_hi,
+                            double shape, double scale) {
+  if (!(s_hi > s_lo) || !weibull_valid(shape, scale)) return R_NegInf;
+  const double wa = bawd_critical_launch(g, s_lo);
+  const double wb = bawd_critical_launch(g, s_hi);
+  if (!(wb > wa) || !emc2_isfinite(wb) || !(g.k > 0.0) || !(g.ell > 0.0))
+    return bawd_log_frozen_weib_quad(g, s_lo, s_hi, shape, scale, true);
+  const double log_ell = std::log(g.ell);
+  if (g.rho_one) {
+    const double ta = log_weibull_logratio_stoploss(wa, shape, scale, log_ell);
+    const double tb = log_weibull_logratio_stoploss(wb, shape, scale, log_ell);
+    if (ta - tb > BAWD_MIN_LOG_GAP) {
+      const double td = log_diff_exp(ta, tb);
+      if (td > R_NegInf)
+        return -std::log(g.k) - std::log1p(-g.gamma) + td;
+    }
+    return bawd_log_frozen_weib_quad(g, s_lo, s_hi, shape, scale, true);
+  }
+  const double lca = log_weibull_stoploss(wa, shape, scale);
+  const double lcb = log_weibull_stoploss(wb, shape, scale);
+  if (lca - lcb > BAWD_MIN_LOG_GAP) {
+    const double L0 = log_diff_exp(lca, lcb);
+    const double la = log_weibull_power_stoploss(wa, shape, scale, g.frozen_m);
+    const double lb = log_weibull_power_stoploss(wb, shape, scale, g.frozen_m);
+    const double dl = (la - lb > BAWD_MIN_LOG_GAP) ? log_diff_exp(la, lb) : R_NegInf;
+    const double L1 = g.frozen_alpha * log_ell + dl;
+    if (L0 > R_NegInf) {
+      const double d = L1 - L0;
+      if (d < 0.0 && -std::expm1(d) > 1e-6)
+        return (g.rho_inf
+          ? -std::log(g.k)
+          : std::log(g.rho) - std::log(g.k) - std::log(g.rho - 1.0)) +
+          L0 + log1m_exp(d);
+      if (!(L1 > R_NegInf))
+        return (g.rho_inf
+          ? -std::log(g.k)
+          : std::log(g.rho) - std::log(g.k) - std::log(g.rho - 1.0)) + L0;
+    }
+  }
+  return bawd_log_frozen_weib_quad(g, s_lo, s_hi, shape, scale, true);
+}
+
 double log_bawd_cdf_normal(double u, const BawdGeom& g, double v,
                                   double sv, bool posdrift,
                                   double denom_floor) {
@@ -484,6 +546,29 @@ double log_bawd_cdf_logn(double u, const BawdGeom& g, double mu,
   const double out = log_sum_exp(log_live, log_frozen) - std::log(g.A);
   if (ISNAN(out)) return R_NegInf;
   return std::fmin(out, 0.0);
+}
+
+double log_bawd_cdf_weib(double u, const BawdGeom& g, double shape,
+                         double scale) {
+  if (!g.ok || !weibull_valid(shape, scale) || !(u > 0.0)) return R_NegInf;
+  const BawdAtU s = bawd_at_u(g, u);
+  if (!s.ok) return R_NegInf;
+  // Avoid cancellation when the CDF is close to one.
+  const double lsurv = log_bawd_surv_weib(u, g, shape, scale);
+  if (lsurv < 0.0 && emc2_isfinite(lsurv))
+    return std::log(-std::expm1(lsurv));
+  const auto lg = [&](double w) { return log_weibull_survivor(w, shape, scale); };
+  if (g.A <= BAWD_A_EPS) return std::fmin(lg(s.w_hi), 0.0);
+  double live = R_NegInf;
+  if (s.Z > 0.0) {
+    const double a = log_weibull_stoploss(s.w_lo, shape, scale);
+    const double b = log_weibull_stoploss(s.w_hi, shape, scale);
+    if (a - b > BAWD_MIN_LOG_GAP) live = std::log(s.q) + log_diff_exp(a, b);
+    if (!(live > R_NegInf)) live = std::log(s.Z) + lg(0.5 * (s.w_lo + s.w_hi));
+  }
+  const double frozen = s.partial ? bawd_log_frozen_weib(g, s.s_lo, s.s_hi, shape, scale) : R_NegInf;
+  const double out = log_sum_exp(live, frozen) - std::log(g.A);
+  return ISNAN(out) ? R_NegInf : std::fmin(out, 0.0);
 }
 
 double bawd_log_frozen_surv_normal(const BawdGeom& g, double s_lo,
@@ -605,6 +690,32 @@ double log_bawd_surv_logn(double u, const BawdGeom& g, double mu,
     ? bawd_log_frozen_surv_logn(g, s.s_lo, s.s_hi, mu, sigma, delta)
     : R_NegInf;
   const double out = log_sum_exp(log_live, log_frozen) - std::log(g.A);
+  return ISNAN(out) ? R_NegInf : std::fmin(out, 0.0);
+}
+
+double bawd_log_frozen_surv_weib(const BawdGeom& g, double s_lo, double s_hi,
+                                 double shape, double scale) {
+  return bawd_log_frozen_weib_quad(g, s_lo, s_hi, shape, scale, false);
+}
+
+double log_bawd_surv_weib(double u, const BawdGeom& g, double shape,
+                          double scale) {
+  if (!g.ok || !weibull_valid(shape, scale) || !(u > 0.0)) return R_NegInf;
+  const BawdAtU s = bawd_at_u(g, u);
+  if (!s.ok) return R_NegInf;
+  const auto lg = [&](double w) { return log_weibull_cdf(w, shape, scale); };
+  if (u == R_PosInf && g.k_zero) return std::fmin(lg(s.w_hi), 0.0);
+  if (g.A <= BAWD_A_EPS) return std::fmin(lg(s.w_hi), 0.0);
+  double live = R_NegInf;
+  if (s.Z > 0.0) {
+    const double a = log_weibull_put(s.w_hi, shape, scale);
+    const double b = log_weibull_put(s.w_lo, shape, scale);
+    if (a - b > BAWD_MIN_LOG_GAP) live = std::log(s.q) + log_diff_exp(a, b);
+    if (!(live > R_NegInf)) live = std::log(s.Z) + lg(0.5 * (s.w_hi + s.w_lo));
+  }
+  const double frozen = (s.partial && !g.gamma_one)
+    ? bawd_log_frozen_surv_weib(g, s.s_lo, s.s_hi, shape, scale) : R_NegInf;
+  const double out = log_sum_exp(live, frozen) - std::log(g.A);
   return ISNAN(out) ? R_NegInf : std::fmin(out, 0.0);
 }
 
@@ -745,6 +856,27 @@ double log_bawd_pdf_logn(double u, const BawdGeom& g, double mu,
     return std::log(wgt) + log_prob + log_scale;
   return std::log(s.Z) + std::log(wgt) + dlnorm_std(w_mid, mu, sigma, true) -
     std::log(s.q) + log_scale;
+}
+
+double log_bawd_pdf_weib(double u, const BawdGeom& g, double shape,
+                         double scale) {
+  if (!g.ok || !weibull_valid(shape, scale) || !(u > 0.0) || u == R_PosInf) return R_NegInf;
+  const BawdAtU s = bawd_at_u(g, u);
+  if (!s.ok || s.saturated) return R_NegInf;
+  if (g.A <= BAWD_A_EPS) {
+    const double wgt = g.ell_zero ? s.E_g * (s.w_hi * s.E_rel)
+      : s.E_g * (s.w_hi * s.E_rel - g.ell);
+    const double ld = log_weibull_density(s.w_hi, shape, scale);
+    return (wgt > 0.0 && ld > R_NegInf) ? ld + std::log(wgt) - std::log(s.q) : R_NegInf;
+  }
+  const double lm = log_weibull_mass_interval(s.w_lo, s.w_hi, shape, scale);
+  const double l1 = log_weibull_first_interval(s.w_lo, s.w_hi, shape, scale);
+  if (!(lm > R_NegInf) || !(l1 > R_NegInf)) return R_NegInf;
+  const signed_log t1 = signed_log_product(s.E_rel, l1);
+  const signed_log t2 = signed_log_product(g.ell, lm);
+  const signed_log br = signed_log_sub(t1, t2);
+  if (br.sign <= 0) return R_NegInf;
+  return br.log_abs + s.log_E_g - std::log(g.A);
 }
 
 bool bawd_natural_cdf_normal(double u, const BawdGeom& g, double v,
@@ -1051,6 +1183,7 @@ bool ba_natural_cdf_bawd(double u, double A, double b, double p1, double p2,
                                 double gamma, double rho, double denom_floor,
                                 int accept_mode, double &cdf, double delta) {
   const BawdGeom g = bawd_geometry(A, b, k, ell, gamma, rho);
+  if (launch == BAWD_LAUNCH_WEIBULL) return false;
   if (launch == BAWD_LAUNCH_LOGNORMAL || launch == BAWD_LAUNCH_SPLITLOGNORMAL)
     return bawd_natural_cdf_logn(u, g, p1, p2, accept_mode, cdf, delta);
   return bawd_natural_cdf_normal(u, g, p1, p2, posdrift, denom_floor, accept_mode, cdf);
@@ -1061,6 +1194,7 @@ bool ba_natural_pdf_bawd(double u, double A, double b, double p1, double p2,
                                 double gamma, double rho, double denom_floor,
                                 int accept_mode, double &pdf, double delta) {
   const BawdGeom g = bawd_geometry(A, b, k, ell, gamma, rho);
+  if (launch == BAWD_LAUNCH_WEIBULL) return false;
   if (launch == BAWD_LAUNCH_LOGNORMAL || launch == BAWD_LAUNCH_SPLITLOGNORMAL)
     return bawd_natural_pdf_logn(u, g, p1, p2, accept_mode, pdf, delta);
   return bawd_natural_pdf_normal(u, g, p1, p2, posdrift, denom_floor, accept_mode, pdf);
@@ -1071,6 +1205,8 @@ double bawd_log_cdf(double u, double A, double b, double p1, double p2,
                            double gamma, double rho, double denom_floor,
                            double delta) {
   const BawdGeom g = bawd_geometry(A, b, k, ell, gamma, rho);
+  if (launch == BAWD_LAUNCH_WEIBULL)
+    return log_bawd_cdf_weib(u, g, p1, p2);
   if (launch == BAWD_LAUNCH_LOGNORMAL || launch == BAWD_LAUNCH_SPLITLOGNORMAL)
     return log_bawd_cdf_logn(u, g, p1, p2, delta);
   return log_bawd_cdf_normal(u, g, p1, p2, posdrift, denom_floor);
@@ -1081,6 +1217,8 @@ double bawd_log_surv(double u, double A, double b, double p1, double p2,
                             double gamma, double rho, double denom_floor,
                             double delta) {
   const BawdGeom g = bawd_geometry(A, b, k, ell, gamma, rho);
+  if (launch == BAWD_LAUNCH_WEIBULL)
+    return log_bawd_surv_weib(u, g, p1, p2);
   if (launch == BAWD_LAUNCH_LOGNORMAL || launch == BAWD_LAUNCH_SPLITLOGNORMAL)
     return log_bawd_surv_logn(u, g, p1, p2, delta);
   return log_bawd_surv_normal(u, g, p1, p2, posdrift, denom_floor);
@@ -1091,6 +1229,8 @@ double bawd_log_pdf(double u, double A, double b, double p1, double p2,
                            double gamma, double rho, double denom_floor,
                            double delta) {
   const BawdGeom g = bawd_geometry(A, b, k, ell, gamma, rho);
+  if (launch == BAWD_LAUNCH_WEIBULL)
+    return log_bawd_pdf_weib(u, g, p1, p2);
   if (launch == BAWD_LAUNCH_LOGNORMAL || launch == BAWD_LAUNCH_SPLITLOGNORMAL)
     return log_bawd_pdf_logn(u, g, p1, p2, delta);
   return log_bawd_pdf_normal(u, g, p1, p2, posdrift, denom_floor);

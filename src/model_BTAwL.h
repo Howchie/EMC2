@@ -10,11 +10,11 @@
 // The transient and sustained members are raced locally. The transient
 // response is affine in the launch point and the required
 // launch V*(u,z) is therefore affine in z on the live part of the CDF.  The
-// live start-point average is evaluated in closed form (normal and lognormal
-// launches).  The already-saturated start region is a one-dimensional
+// live start-point average is evaluated in closed form (normal, lognormal, and
+// Weibull launches). The already-saturated start region is a one-dimensional
 // quadrature in tangency time; there is no grid or PDE solve.
 //
-// This header is included by model_LBA.h, after the shared normal/lognormal
+// This header is included by model_LBA.h, after the shared launch
 // primitives and the GSL helpers have been declared.
 
 #include <cmath>
@@ -29,6 +29,7 @@
 constexpr int BTAWL_LAUNCH_NORMAL = BAWL_LAUNCH_NORMAL;
 constexpr int BTAWL_LAUNCH_LOGNORMAL = BAWL_LAUNCH_LOGNORMAL;
 constexpr int BTAWL_LAUNCH_SPLITLOGNORMAL = BAWD_LAUNCH_SPLITLOGNORMAL;
+constexpr int BTAWL_LAUNCH_WEIBULL = BAWD_LAUNCH_WEIBULL;
 constexpr double BTAWL_K_EPS = BAWL_K_EPS;
 constexpr double BTAWL_A_EPS = BAWL_A_EPS;
 constexpr double BTAWL_DENOM_FLOOR = BAWL_DENOM_FLOOR;
@@ -173,10 +174,14 @@ double log_btawl_cdf_normal(double t, const BtawlGeom& g, double v,
                                    double sv, bool posdrift);
 double log_btawl_cdf_logn(double t, const BtawlGeom& g, double mu,
                                  double sigma, double delta = 0.0);
+double log_btawl_cdf_weib(double t, const BtawlGeom& g, double shape,
+                                  double scale);
 double log_btawl_surv_normal(double t, const BtawlGeom& g, double v,
                                     double sv, bool posdrift);
 double log_btawl_surv_logn(double t, const BtawlGeom& g, double mu,
                                   double sigma, double delta = 0.0);
+double log_btawl_surv_weib(double t, const BtawlGeom& g, double shape,
+                                   double scale);
 
 double btawl_cdf(double t, double A, double b, double p1, double p2,
                         double k, double tau, int launch, bool posdrift,

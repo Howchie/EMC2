@@ -151,7 +151,8 @@ inline fperace::SolveCache* roup_cache(void* ctx_) {
 
 inline void roup_prepare_rows(fperace::SolveCache& C, const double* rt,
                               const double* const* cols, int n_rows,
-                              const int* isok) {
+                              const int* isok,
+                              const EndpointQueryPlan* endpoint_queries = nullptr) {
   if (C.prepared && (C.roup_local
       ? C.row_group_s.size() == static_cast<size_t>(n_rows)
       : C.row_group.size() == static_cast<size_t>(n_rows))) {
@@ -203,6 +204,22 @@ inline void roup_prepare_rows(fperace::SolveCache& C, const double* rt,
                            ks, kt, hs, ht)) continue;
       if (hs) row_s[i] = add_key(ks, tt, keys_s, horizon_s, query_s);
       if (ht) row_t[i] = add_key(kt, tt, keys_t, horizon_t, query_t);
+    }
+    if (endpoint_queries != nullptr) {
+      for (int i = 0; i < n_rows; ++i) {
+        endpoint_queries->for_each_shifted(i, t0_[i], [&](double query) {
+          if (row_s[i] >= 0) {
+            query_s[static_cast<size_t>(row_s[i])].push_back(query);
+            horizon_s[static_cast<size_t>(row_s[i])] =
+              std::max(horizon_s[static_cast<size_t>(row_s[i])], query);
+          }
+          if (row_t[i] >= 0) {
+            query_t[static_cast<size_t>(row_t[i])].push_back(query);
+            horizon_t[static_cast<size_t>(row_t[i])] =
+              std::max(horizon_t[static_cast<size_t>(row_t[i])], query);
+          }
+        });
+      }
     }
     for (auto& q : query_s) {
       std::sort(q.begin(), q.end());
@@ -257,6 +274,18 @@ inline void roup_prepare_rows(fperace::SolveCache& C, const double* rt,
       query_times[g].push_back(tt);
     }
     row_key_idx[i] = g;
+  }
+
+  if (endpoint_queries != nullptr) {
+    for (int i = 0; i < n_rows; ++i) {
+      const int g = row_key_idx[i];
+      if (g < 0) continue;
+      endpoint_queries->for_each_shifted(i, t0_[i], [&](double query) {
+        query_times[static_cast<size_t>(g)].push_back(query);
+        horizon[static_cast<size_t>(g)] =
+          std::max(horizon[static_cast<size_t>(g)], query);
+      });
+    }
   }
 
   for (auto& times : query_times) {

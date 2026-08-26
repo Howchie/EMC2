@@ -2,6 +2,8 @@
 #define EMC2_RACE_CONTRACT_H
 
 #include <Rcpp.h>
+#include <algorithm>
+#include <cmath>
 #include <memory>
 
 #include "col_registry.h"
@@ -19,11 +21,47 @@ namespace btawl {
 struct SolveCache;
 }
 
+// Finite data-time queries that a PDE-backed likelihood may request after its
+// raw RT pass.  The model adapters convert these absolute times to their
+// shifted solver coordinates.
+struct EndpointQueryPlan {
+  const double* LT = nullptr;
+  const double* UT = nullptr;
+  const double* LC = nullptr;
+  const double* UC = nullptr;
+  int n_rows = 0;
+  int group_size = 1;
+
+  template <typename F>
+  inline void for_each_finite(int i, F&& f) const {
+    if (i < 0 || i >= n_rows) return;
+    const int j = i / std::max(group_size, 1);
+    const double values[4] = {
+      LT != nullptr ? LT[j] : R_PosInf,
+      UT != nullptr ? UT[j] : R_PosInf,
+      LC != nullptr ? LC[j] : R_PosInf,
+      UC != nullptr ? UC[j] : R_PosInf
+    };
+    for (double value : values) {
+      if (std::isfinite(value)) f(value);
+    }
+  }
+
+  template <typename F>
+  inline void for_each_shifted(int i, double t0, F&& f) const {
+    for_each_finite(i, [&](double value) {
+      const double query = value - t0;
+      if (query > 0.0 && std::isfinite(query)) f(query);
+    });
+  }
+};
+
 // Launch selectors mirror the model-specific BAW* constants without making
 // this contract header depend on model implementation headers.
 namespace emc2race_contract {
 constexpr int kBawdLaunchLognormal = 1;  // BAWD_LAUNCH_LOGNORMAL
 constexpr int kBawdLaunchSplitLognormal = 2;
+constexpr int kBawdLaunchWeibull = 3;
 constexpr int kBtawlLaunchNormal = 0;   // BTAWL_LAUNCH_NORMAL
 constexpr int kBawlLaunchNormal = 0;    // BAWL_LAUNCH_NORMAL
 }
@@ -69,6 +107,7 @@ double log_race_integrand_scalar(double t, const gsl_race_params_scalar* P);
 // Context object for race models, holding metadata and switches.
 // --------------------------------------------------------------------------
 struct ContextForRaceModels {
+    const EndpointQueryPlan* endpoint_queries = nullptr;
     double min_lik_for_pdf = 1e-10;
     bool use_posdrift = true;
     bool gng = false;
@@ -229,6 +268,7 @@ inline double raw_log_value(double log_x, double min_ll, bool floor_raw) {
 // race evaluator.
 // ---------------------------------------------------------------------------
 struct ContextForDDMModels {
+  const EndpointQueryPlan* endpoint_queries = nullptr;
   // PDE-backed two-boundary models amortise one Fokker-Planck march over every
   // trial sharing a parameter tuple.  Null for the analytic Wiener DDM, which
   // allocates nothing.  Cleared once per particle; see fpebou::SolveCache.

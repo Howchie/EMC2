@@ -71,7 +71,8 @@ inline Row bou_row(const double* const* cols, int i, int bnd_kind) {
 // rather than shrinking the horizon and invalidating them.
 inline void bou_set_horizon(fpebou::SolveCache& C, const double* rts,
                             const double* const* cols, int n_rows,
-                            const int* mask, const int* is_ok) {
+                            const int* mask, const int* is_ok,
+                            const EndpointQueryPlan* endpoint_queries = nullptr) {
   double h = C.t_horizon;
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i] || !is_ok[i]) continue;
@@ -81,6 +82,18 @@ inline void bou_set_horizon(fpebou::SolveCache& C, const double* rts,
     const double td = t - (cols[emc2col::bou::t0][i] -
                            0.5 * std::max(0.0, st0));
     if (td > h) h = td;
+  }
+  if (endpoint_queries != nullptr) {
+    for (int i = 0; i < n_rows; ++i) {
+      if (!is_ok[i]) continue;
+      const double st0 = cols[emc2col::bou::st0][i];
+      const double shift = cols[emc2col::bou::t0][i] -
+        0.5 * std::max(0.0, st0);
+      endpoint_queries->for_each_finite(i, [&](double endpoint) {
+        const double td = endpoint - shift;
+        if (td > h) h = td;
+      });
+    }
   }
   C.t_horizon = std::max(h * 1.02, 1e-3);
 }
@@ -95,7 +108,8 @@ inline void bou_eval(const double* rts, const int* Rs,
     return;
   }
   fpebou::SolveCache& C = *ctx->bou_cache;
-  bou_set_horizon(C, rts, cols, n_rows, mask, is_ok);
+  bou_set_horizon(C, rts, cols, n_rows, mask, is_ok,
+                  ctx->endpoint_queries);
 
   for (int i = 0; i < n_rows; ++i) {
     if (!mask[i]) continue;
