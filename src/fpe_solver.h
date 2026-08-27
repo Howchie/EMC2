@@ -250,6 +250,23 @@ struct FPE_Op {
   }
 };
 
+// Strided view used by lane-batched marches. It lets build_op write a stencil
+// directly into the solver's structure-of-arrays buffers instead of building a
+// temporary AoS operator and copying three M-vectors every time step.
+struct FPE_OpView {
+  struct Array {
+    double* ptr = nullptr;
+    size_t stride = 1;
+    double& operator[](size_t i) { return ptr[i * stride]; }
+    const double& operator[](size_t i) const { return ptr[i * stride]; }
+  } sub, diag, sup;
+  double D = 0.0;
+
+  FPE_OpView(double* sub_, double* diag_, double* sup_, size_t stride_)
+      : sub{sub_, stride_}, diag{diag_, stride_}, sup{sup_, stride_} {}
+  void resize(int /*M*/) {}
+};
+
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 // Build L at time t.
 //
@@ -277,8 +294,9 @@ struct FPE_Op {
 // A graded mesh breaks the arithmetic progression (the face spacing varies), so
 // it pays one exp() per face.  That is the price of the grading and it is a good
 // trade -- see the log.
-template <class Model>
-inline void build_op(const Model& m, double t, const FPE_Mesh& g, FPE_Op& op) {
+template <class Model, class OpStorage>
+inline void build_op(const Model& m, double t, const FPE_Mesh& g,
+                     OpStorage& op) {
   const int M      = g.M;
   const double Lb  = m.length(t);       // a(t) - x_lo
   const double Lp  = m.length_prime(t);

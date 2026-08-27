@@ -4,6 +4,15 @@ Source specification: `Math/ballistic-time.md`.
 Target branch: `playground` (worktree `/data/work/EMC2_dev_oo`).
 Status: **not started**. Everything below is design; no code has been written.
 
+Two changes, in two commits:
+
+1. **Stage 1** removes `BTAwL(chart = "endpoint")`, a non-default option that
+   samples the transient endpoint `Ttrans` and back-solves the kernel's `tau`
+   from it. It is a prerequisite, not a side quest: an endpoint that is both
+   *sampled* and *fed back into a kernel* is the one thing that does not survive
+   contact with a time warp cleanly.
+2. **Stages 2–7** add the warp itself.
+
 This document is written so that an implementer who has not read the codebase
 can execute it end to end. Read sections 1–4 before touching anything: they
 contain the decisions that make the rest a mechanical exercise.
@@ -63,10 +72,10 @@ precede `BAwD`, `BTAwL_SUSTAINED`/`BTAwL_TRANSIENT` must precede `BTAwL`), so
 add lines inside existing branches — never reorder them.
 
 All launch distributions (`normal`, `lognormal`, `splitlognormal`, `weibull`),
-all `IO` (`posdrift = FALSE`) variants, all fixed-kernel suffixes
-(`_RHO1/2/4`, `_GAM12/23/34/100`), and both BTAwL charts (`rate`, `endpoint`)
-are covered automatically, because the warp is installed on the resolved
-adapter's function pointers rather than inside any kernel.
+all `IO` (`posdrift = FALSE`) variants, and all fixed-kernel suffixes
+(`_RHO1/2/4`, `_GAM12/23/34/100`) are covered automatically, because the warp is
+installed on the resolved adapter's function pointers rather than inside any
+kernel. BTAwL has one chart after stage 1.
 
 ### 2.2 Out of scope for this change (and why)
 
@@ -107,8 +116,12 @@ fails naturally with "eta ... not found in model p_types".
 
 * Every closed form. The warp adds no integral (spec §13).
 * The intrinsic defect: `F_eta(Inf) = F_0(Inf)` for every `eta` (spec §3).
-* Critical launches `V_crit`, saturation launches, and the *operational*
-  endpoint `T_max`. Only the *physical* endpoint `rt_max` moves.
+* Critical launches `V_crit` and saturation launches (spec §17: intrinsic
+  critical launches are never transformed).
+* The endpoint's value **on the operational clock** — the kernel formulas for
+  `T_max` are untouched. Its value in physical time moves, so the reported
+  `Tmax`/`rt_max` pair is expressed in physical accumulation time throughout
+  (see 3c); they remain one quantity, related by `rt_max = t0 + Tmax`.
 * Bit-identical parent behaviour at `eta = 0`. This is a hard requirement, not
   an aspiration — see 4.1.
 
@@ -221,19 +234,28 @@ into the density, where the existing `emc2_isfinite` guards floor it.
 
 ### 4.2 Reference implementation (C++)
 
+`eta` is unbounded (4.3), so every helper must be total on the whole real line.
+The limits are all well defined and are coded explicitly rather than left to
+overflow:
+
+| limit | `c_eta(u)`, `u > 0` | `log c'_eta(u)` | `c_eta^{-1}(s)`, `s > 0` |
+|---|---|---|---|
+| `eta -> -Inf` (`omega -> 0`) | `log1p(u)` | `-log1p(u)` | `expm1(s)` |
+| `eta -> +Inf` (`omega -> Inf`) | `+Inf` | `+Inf` | `0` |
+
 ```cpp
 namespace emc2tw {
 
 // s = c_eta(u) = ((1+u)^omega - 1)/omega,  omega = exp(eta)
 inline double fwd(double u, double eta) {
-  if (eta == 0.0) return u;                 // exact parent
-  if (!(u > 0.0)) return u;                 // u <= 0 and NaN pass through
-  if (!R_FINITE(u)) return u;               // c(+Inf) = +Inf for every omega > 0
-  const double l1p   = std::log1p(u);
+  if (eta == 0.0) return u;                  // exact parent, bitwise
+  if (!(u > 0.0)) return u;                  // u <= 0 and NaN pass through
+  if (!R_FINITE(u)) return u;                // c(+Inf) = +Inf for every omega > 0
   const double omega = std::exp(eta);
-  if (omega < 1e-12) return l1p;            // omega -> 0 limit: c(u) -> log1p(u)
-  const double x = omega * l1p;
-  if (x > 709.0) return R_PosInf;           // overflow guard
+  if (!R_FINITE(omega)) return R_PosInf;     // omega -> Inf
+  if (omega < 1e-12) return std::log1p(u);   // omega -> 0
+  const double x = omega * std::log1p(u);
+  if (x > 709.0) return R_PosInf;            // (1+u)^omega overflows; s is +Inf
   return std::expm1(x) / omega;
 }
 
@@ -241,7 +263,9 @@ inline double fwd(double u, double eta) {
 inline double log_jac(double u, double eta) {
   if (eta == 0.0) return 0.0;
   if (!(u > 0.0) || !R_FINITE(u)) return 0.0;
-  return (std::exp(eta) - 1.0) * std::log1p(u);
+  const double omega = std::exp(eta);
+  if (!R_FINITE(omega)) return R_PosInf;
+  return (omega - 1.0) * std::log1p(u);
 }
 
 // u = c_eta^{-1}(s) = (1 + omega s)^{1/omega} - 1
@@ -250,8 +274,13 @@ inline double inv(double s, double eta) {
   if (!(s > 0.0)) return s;
   if (!R_FINITE(s)) return s;
   const double omega = std::exp(eta);
-  if (omega < 1e-12) return std::expm1(s);  // omega -> 0 limit: c^{-1}(s) -> e^s - 1
-  const double y = std::log1p(omega * s) / omega;
+  if (!R_FINITE(omega)) return 0.0;          // omega -> Inf: every finite s maps to 0
+  if (omega < 1e-12) return (s > 709.0) ? R_PosInf : std::expm1(s);
+  const double os = omega * s;
+  // log1p(omega*s) with an overflow-safe fallback: when omega*s overflows,
+  // log1p(omega*s) == log(omega) + log(s) to well past double precision.
+  const double y = (R_FINITE(os) ? std::log1p(os)
+                                 : (std::log(omega) + std::log(s))) / omega;
   if (y > 709.0) return R_PosInf;
   return std::expm1(y);
 }
@@ -262,21 +291,54 @@ inline double inv(double s, double eta) {
 Never write `pow(1 + u, omega)` or `pow(1 + omega*s, 1/omega)` anywhere. The
 `log1p`/`expm1` forms above are the only permitted spellings (spec §14).
 
-### 4.3 Bounds on `eta`
+**Composing a `+Inf` Jacobian with a `-Inf` log density.** At extreme positive
+`eta`, `fwd` returns `+Inf`, so the base density is exactly zero
+(`log f_0 = -Inf`) while `log_jac` is `+Inf`. Their sum is `NaN`. That is the
+correct region — `f_eta(u) -> 0` there for every model in the family, because
+`f_0` decays faster in `s` than `(1+u)^(omega-1)` grows — so:
 
-`minmax = c(-5, 5)`, i.e. `omega` in `(0.0067, 148)`. Rationale: `omega = 148`
-already makes `(1+u)^(omega-1)` ~1e150 at `u = 1 s`, and `eta` beyond ±5 is not
-identifiable from RT data — the bound exists to keep the overflow guards in 4.2
-unreachable in practice, not to express a belief. No `exception` entry; `0` is
-interior. Default prior is EMC2's generic `N(0, 1)` on the identity scale,
-which puts `omega` in roughly `(0.37, 2.7)` at ±1 sd — a sensible default.
+* `tw_pdf1` returns `0.0` as soon as the base density is not strictly positive
+  and finite, *before* the Jacobian is applied, and additionally returns `0.0`
+  when `log_jac` is not finite;
+* `tw_d_raw` relies on `raw_log_value`, which already maps any non-finite input
+  (including `NaN`) to `raw_log_zero(min_ll, floor_raw)`.
+
+Both are backstops for a region the sampler will never visit; code them anyway
+and say so in a comment, because an unbounded parameter means "never" is not
+enforced anywhere.
+
+### 4.3 Bounds on `eta`: there are none
+
+`minmax = c(-Inf, Inf)`, no `exception` entry.
+
+EMC2 does not use `bound$minmax` as a numerical safety net anywhere else. Every
+existing bound encodes the parameter's *support*, usually with a small epsilon
+to keep a kernel off a degenerate endpoint: `sv`/`sigma`/`A`/`B`/`kappa` get
+`c(1e-4, Inf)` because they are positive; `rho` gets `c(-.99, .99)` because a
+correlation lives in `[-1, 1]` and the endpoints give a zero conditional SD;
+`pi`/`pContaminant`/`pGuess` are probabilities. The unbounded identity-scale
+parameters — `v`, `mu`, and BAwD/BAwF/BAwR/BTAwL's split-lognormal skew `delta`
+— all get `c(-Inf, Inf)`. `eta` is exactly that kind of parameter: the spec
+states `eta in R`, and `delta` is its closest structural analogue.
+
+So the numerical safety lives in the guards of 4.2, where it belongs, not in an
+invented bound. Everything below is finite and correct for every `double eta`,
+including `+-Inf`. The likelihood goes flat long before the guards engage, which
+is what actually keeps the sampler in range — the same thing that keeps `v` and
+`delta` in range today.
+
+Default prior is EMC2's generic `N(0, 1)` on the identity scale, which puts
+`omega` in roughly `(0.37, 2.7)` at +-1 sd. That is a reasonable default and it
+is where the informativeness belongs.
 
 ---
 
 ## 5. Work plan
 
-Do the stages in order. Stages 1–2 are independently testable; do not start
-stage 3 before stage 1 compiles.
+Do the stages in order. Stage 1 is an independent, separately committable
+refactor and must land and pass before any warp code is written; stages 2 and 3
+are then independently testable, and stage 4 should not start before stage 2
+compiles.
 
 ### Stage 0 — Baseline (do this first, it takes 10 minutes and saves hours)
 
@@ -307,9 +369,157 @@ end.
 
 ---
 
-### Stage 1 — C++ likelihood core
+### Stage 1 — Remove the BTAwL endpoint chart
 
-#### 1a. `src/race_contract.h` — add the plan struct and one context member
+**Why this is here, and why first.** `BTAwL(chart = "endpoint")` *samples*
+`Ttrans`, the transient endpoint, and back-solves the kernel's `tau` from it.
+Under the warp that sampled quantity necessarily sits on the operational clock
+while `Tmax`/`rt_max` report physical time, and `Ttransform`'s
+`out[, "Ttrans"] <- Tmax` echo would have to carry the *unwarped* value while
+its neighbours carry warped ones. Removing the chart deletes that entire class
+of confusion before it can be introduced, and it deletes four
+`ContextForRaceModels` members and a memoisation cache on the way out. Do it
+first, verify it on its own, commit it on its own.
+
+`chart = "rate"` — sampling `tau`/`tau_t` directly — is already the default for
+all three constructors, so this removes a non-default option.
+
+**c_name compatibility.** Counter-intuitively it is the *rate* chart that emits
+the `_RATE` suffix and the endpoint chart that emits none. **Keep emitting
+`_RATE` unconditionally**: every existing BTAwL fit already has it, so its
+stored `c_name` and `p_types` keep validating unchanged. An old endpoint-chart
+fit will fail loudly in `validate_col_prefix` ("expects parameter column 7 to be
+'tau' but got 'Ttrans'"), which is the correct outcome for a removed feature.
+
+#### 1a. `src/col_registry.h`
+
+In each of the eight namespaces `btawl_transient`, `btawl_transient_logn`,
+`btawl_transient_weib`, `btawlsplit_transient`, `btawl_local_race`,
+`btawl_local_race_logn`, `btawl_local_race_weib`, `btawlsplit_local_race`
+(lines ~233–327): delete the `Ttrans` `spec()` and rename `spec_rate()` to
+`spec()`, leaving one spec per namespace like every other model in the file. In
+the transient enums rename the member `clear` to `tau`; in the local-race enums
+drop the `tau_t = clear` alias and make `tau_t` a plain enumerator.
+
+#### 1b. `src/race_contract.h`
+
+Delete `btawl_ttrans_chart`, `btawl_tau_cache_size`, `btawl_tau_cache_k`,
+`btawl_tau_cache_clear`, `btawl_tau_cache_value`, `btawl_tau_cache_next`
+(lines ~162–180). They exist only to memoise the `Ttrans -> tau` inverse. The
+geometry cache `btawl_cache` stays.
+
+#### 1c. `src/model_BTAwL.h` / `src/model_BTAwL.cpp`
+
+Delete `btawl_tau_from_ttrans` (`.cpp:113`), `btawl_geometry_from_ttrans`
+(`.cpp:154`), the exported `btawl_tau_vec` (`.cpp:2226`), and
+`btawl_uses_ttrans` / `btawl_tau_of` (`.cpp:1521-1543`); drop the tau-cache half
+of `btawl_cache_new_particle`. Drop the `bool endpoint` parameter from
+`btawl_geometry_cached` (`.h:85`, `.cpp:172`) and the `bool endpoint_chart`
+parameter from the four wrappers at `.cpp:1018-1057`.
+
+At every call site replace `btawl_tau_of(ctx, par[iclear], par[ik])` with the
+`tau` column directly and `btawl_geometry_cached(ctx, btawl_uses_ttrans(ctx),
+...)` with `btawl_geometry_cached(ctx, ...)`. There are about a dozen, between
+`.cpp:1560` and `.cpp:1935`; `grep -n 'btawl_tau_of\|btawl_uses_ttrans'` finds
+them all.
+
+Keep `btawl_tmax` and `btawl_tmax_vec`: those are the *forward* endpoint
+diagnostic and are still reported by `Ttransform`.
+
+#### 1d. `src/race_dispatch.cpp`
+
+In the three BTAwL branches (lines 241, 265, 296): delete the `btawl_rate`
+local, delete both `out.ctx.btawl_ttrans_chart = ...` assignments, and collapse
+the `spec_rate()`/`spec()` ternaries to the single remaining `spec()`.
+
+#### 1e. `src/model_rng.cpp`
+
+Delete `btawl_tau_for_row`'s `Ttrans` branches (`:337-350`); it reduces to
+`pars(row, ci.at("tau"))` (transient) or `ci.at("tau_t")` (full race), so
+consider inlining it away. Drop the `endpoint_chart` parameter from
+`rbta_wl_cpp` (`:706`) and from its two call sites (`:772`, `:819`).
+
+#### 1f. Regenerate the Rcpp bindings
+
+`btawl_tau_vec` is gone and `rbta_wl_cpp` lost an argument, so unlike the warp
+work this stage **does** need:
+
+```r
+Rscript -e 'Rcpp::compileAttributes(".")'
+```
+
+Check `git diff src/RcppExports.cpp R/RcppExports.R`: the only changes should be
+the removed `_EMC2_btawl_tau_vec` registration and `rbta_wl_cpp`'s arity going
+from 7 to 6.
+
+#### 1g. `R/model_BTAwL.R`
+
+* `.btawl_constructor()` (`:391`): drop the `chart` argument. `clear_name`
+  becomes `"tau"` (transient) / `"tau_t"` (full race); `exception` becomes the
+  unconditional `c(A = 0, k = 0)` and `c(A = 0, k = 0, pi = 0, pi = 1)`; the
+  `minmax` entry for `k` becomes the unconditional `c(0, Inf)`; the `"_RATE"`
+  suffix becomes unconditional; in both `Ttransform`s delete the
+  `chart == "endpoint"` branch and the `out[, "Ttrans"] <- ...` echo
+  (`:452-456`, `:563-567`).
+* `.btawl_check_cols` (`:15`) and `.btawl_tau_col` (`:24`, and the local-race
+  pair at `:66-78`): delete the `"Ttrans" %in% colnames(pars)` branches;
+  `.btawl_tau_col` collapses to `pars[, "tau"]` / `pars[, "tau_t"]`.
+* `BTAwL()` (`:679`), `BTAwLTransient()` (`:724`), `BTAwLSustained()` (`:767`):
+  drop the `chart` argument. `BTAwLSustained` never used it — the sustained
+  channel has no transient endpoint — so that is a dead argument going away
+  regardless.
+
+#### 1h. `R/model_rng.R`
+
+Drop `endpoint_chart` from `.rfun_BTAwL()` (`:94-102`) and the
+`"Ttrans" %in% colnames(pars)` detection in `rBTAwLTransient` (`:116`) and
+`rBTAwL` (`:128`).
+
+#### 1i. Documentation
+
+Delete the `@param chart` block from all three constructors and any `Ttrans`
+row from their parameter tables. Add a `NEWS.md` bullet recording the removal
+and pointing users at `tau` / `tau_t`.
+
+#### 1j. Tests
+
+`tests/testthat/test-btawl.R` has ten `test_that` blocks touching the chart
+(`grep -n 'chart\|Ttrans' tests/testthat/test-btawl.R`). Most use it only as a
+vehicle for testing something else — convert `chart = "endpoint"` plus
+`Ttrans ~ 1` to the default plus `tau ~ 1` (or `tau_t ~ 1` for the full race),
+keeping what they actually assert. Three need real attention:
+
+* `:451` "constructors expose full local-race and pure-process charts" — reduce
+  to the single chart, and add `expect_error(BTAwL(chart = "endpoint"))` so the
+  removal is pinned.
+* `:464` "Ttransform reports b, tau, Tmax, rt_max and Vcrit" — drop the
+  endpoint-chart half, keep the rate-chart assertions.
+* `:791` "pi is permitted on both endpoints" — drop the `for (chart in ...)`
+  loop.
+
+Also `tests/testthat/test-weibull-launch.R:58-61`: the `BTAwLTransient` case
+passes `Ttrans = 2` with `endpoint_chart = TRUE`. Replace with a `tau` value and
+drop the argument; the case only checks that a Weibull launch simulates, so the
+particular endpoint does not matter.
+
+#### 1k. Build and prove stage 1
+
+```bash
+rm -f src/*.o src/EMC2.so
+R CMD INSTALL --preclean --no-multiarch --library="$R_LIBS_TW" .
+R_LIBS_USER="$R_LIBS_TW" Rscript -e 'testthat::test_local(reporter="summary")' | tail -40
+```
+
+Rate-chart BTAwL likelihoods and simulator draws must be unchanged from
+`/tmp/tw_baseline.txt`; the only diffs should be the endpoint-chart tests you
+rewrote. **Commit this separately from the warp work** — it removes a
+user-visible option and deserves its own reviewable diff.
+
+---
+
+### Stage 2 — C++ likelihood core
+
+#### 2a. `src/race_contract.h` — add the plan struct and one context member
 
 Insert immediately after the `RaceLogSAtTFun` typedef (currently ~line 80,
 after the recent `EndpointQueryPlan` addition):
@@ -339,7 +549,7 @@ Add to `ContextForRaceModels`, next to `t0_index`:
     TimeWarpPlan tw;
 ```
 
-#### 1b. New file `src/time_warp.h`
+#### 2b. New file `src/time_warp.h`
 
 ```cpp
 #ifndef EMC2_TIME_WARP_H
@@ -379,7 +589,7 @@ void configure_time_warp_context(RaceModelAdapter& adapter,
 #endif  // EMC2_TIME_WARP_H
 ```
 
-#### 1c. New file `src/time_warp.cpp`
+#### 2c. New file `src/time_warp.cpp`
 
 `configure_time_warp_context`:
 
@@ -564,7 +774,7 @@ Only copy `cols[j]` for `j < n_par`; reading past `n_par` in the source is
 undefined (`race_endpoint_prepare_groups` sizes `compact_col_ptrs` at exactly
 `n_par`, `src/race_integrands.cpp:99`).
 
-#### 1d. `src/race_dispatch.cpp` — mark the nine supported branches
+#### 2d. `src/race_dispatch.cpp` — mark the nine supported branches
 
 Add exactly one line inside each of the branches listed in 2.1:
 
@@ -586,13 +796,13 @@ Place it *after* `kill_active` and `corr_drift_active` are set. The `LBA` branch
 (line ~514) is unconditional (`bawl_clocks_fixed_zero`/`_off` are always true
 there).
 
-#### 1e. `src/race_dispatch.h` — nothing
+#### 2e. `src/race_dispatch.h` — nothing
 
 `configure_time_warp_context` is declared in `time_warp.h`, which includes
 `race_dispatch.h`. Keep it that way so `race_dispatch.cpp` does not need to know
 about the wrappers.
 
-#### 1f. `src/particle_ll.cpp` — two call sites
+#### 2f. `src/particle_ll.cpp` — two call sites
 
 After each existing `configure_rdmswtn_corr_context(...)` call, add:
 
@@ -612,7 +822,7 @@ at `src/particle_ll.cpp:1264` (in `calc_ll_oo_pw`). Add
 **Order matters**: it must run *after* the dispatch branch has set `t0_index`
 and `tw.supported`, and after `validate_col_prefix`.
 
-#### 1g. `src/col_registry.h` — a comment only
+#### 2g. `src/col_registry.h` — a comment only
 
 Add, near the top with the other contract notes:
 
@@ -623,7 +833,7 @@ Add, near the top with the other contract notes:
 // no new ColSpec and cannot shift any positional index.
 ```
 
-#### 1h. Build and prove stage 1
+#### 2h. Build and prove stage 2
 
 ```bash
 rm -f src/*.o src/EMC2.so
@@ -632,12 +842,12 @@ R_LIBS_USER="$R_LIBS_TW" Rscript -e 'testthat::test_local(reporter="summary")' |
 ```
 
 At this point **no R model exposes `eta`**, so the wrappers are never installed
-and the full suite must match `/tmp/tw_baseline.txt` exactly. If it does not,
+and the full suite must match the stage 1 result exactly. If it does not,
 you have an ABI/rebuild problem (see the Stage 0 trap), not a logic problem.
 
 ---
 
-### Stage 2 — C++ simulators (`src/model_rng.cpp`)
+### Stage 3 — C++ simulators (`src/model_rng.cpp`)
 
 Spec §16: simulate the parent's operational finishing time `S`, then return
 `U = c_eta^{-1}(S)`. Do this **per accumulator, before the race is resolved and
@@ -685,9 +895,9 @@ spec §16 step 2 and it needs no extra branch.
 
 ---
 
-### Stage 3 — R parameter machinery
+### Stage 4 — R parameter machinery
 
-#### 3a. `R/utils.R` — shared helpers
+#### 4a. `R/utils.R` — shared helpers
 
 Add next to `add_nuisance_pars` (~line 88):
 
@@ -707,9 +917,10 @@ add_time_warp_par <- function(p_types, transform, minmax, exception = NULL) {
   if (!(nm %in% names(p_types))) {
     p_types[[nm]] <- 0
     transform[[nm]] <- "identity"
-    # +-5 keeps omega = exp(eta) inside (0.007, 148): wide enough that the bound
-    # never binds on real data, tight enough that (1+u)^(omega-1) cannot overflow.
-    minmax <- cbind(minmax, c(-5, 5))
+    # Unbounded, like v/mu/delta.  eta lives on the whole real line and the
+    # numerics are total there (see .tw_fwd/.tw_inv and src/time_warp.h); EMC2
+    # bounds encode support, never numerical convenience.
+    minmax <- cbind(minmax, c(-Inf, Inf))
     colnames(minmax)[ncol(minmax)] <- nm
   }
   list(p_types = p_types, transform = transform, minmax = minmax,
@@ -727,8 +938,8 @@ add_time_warp_par <- function(p_types, transform, minmax, exception = NULL) {
   act <- .tw_active(eta) & !is.na(u) & is.finite(u) & u > 0
   if (!any(act)) return(out)
   om <- exp(eta[act]); l1p <- log1p(u[act]); x <- om * l1p
-  s <- ifelse(om < 1e-12, l1p, expm1(x) / om)
-  s[x > 709] <- Inf
+  s <- ifelse(om < 1e-12, l1p, expm1(x) / om)   # omega -> 0 limit
+  s[!is.finite(om) | x > 709] <- Inf            # omega -> Inf, and overflow
   out[act] <- s
   out
 }
@@ -748,10 +959,14 @@ add_time_warp_par <- function(p_types, transform, minmax, exception = NULL) {
   out <- s
   act <- .tw_active(eta) & !is.na(s) & is.finite(s) & s > 0
   if (!any(act)) return(out)
-  om <- exp(eta[act])
-  y <- log1p(om * s[act]) / om
-  u <- ifelse(om < 1e-12, expm1(s[act]), expm1(y))
-  u[y > 709] <- Inf
+  om <- exp(eta[act]); ss <- s[act]
+  os <- om * ss
+  # log1p(om*s), with the overflow-safe log(om) + log(s) fallback.
+  y <- ifelse(is.finite(os), log1p(os), log(om) + log(ss)) / om
+  u <- ifelse(om < 1e-12, expm1(pmin(ss, 709)), expm1(y))   # omega -> 0 limit
+  u[!is.finite(om)] <- 0                                    # omega -> Inf limit
+  u[is.finite(om) & y > 709] <- Inf
+  u[om < 1e-12 & ss > 709] <- Inf
   out[act] <- u
   out
 }
@@ -764,7 +979,7 @@ add_time_warp_par <- function(p_types, transform, minmax, exception = NULL) {
 }
 ```
 
-#### 3b. Model constructors — add the parameter
+#### 4b. Model constructors — add the parameter
 
 Anchors (verify with
 `grep -n 'add_nuisance_pars\|p_types_canonical' R/model_*.R`):
@@ -833,7 +1048,7 @@ three literals so that `eta` lands before `pContaminant`:
                               pContaminant = "pnorm", pGuess = "pnorm")),
     bound = list(minmax = cbind(v = c(-Inf, Inf), sv = c(1e-4, Inf),
                                 A = c(1e-4, Inf), B = c(1e-4, Inf),
-                                t0 = c(0.05, Inf), eta = c(-5, 5),
+                                t0 = c(0.05, Inf), eta = c(-Inf, Inf),
                                 pContaminant = c(0.001, 0.999),
                                 pGuess = c(0.001, 0.999)),
                  exception = c(A = 0, pContaminant = 0, pGuess = 0)),
@@ -841,46 +1056,57 @@ three literals so that `eta` lands before `pContaminant`:
 
 Do **not** touch `LBA_LogicalRules` (`R/model_LBA.R:265`).
 
-#### 3c. `Ttransform` — warp the reported physical endpoint
+#### 4c. `Ttransform` — warp the endpoint itself, not the RT ceiling
 
-Every finite-endpoint model reports `Tmax` (operational) and
-`rt_max` (physical). Under the warp only the second moves. In
-`R/model_BAwD.R` (BAwD ~line 548, BAwDp ~line 677), `R/model_BAwF.R` (~327),
-`R/model_BAwR.R` (~310), and the three `R/model_BTAwL.R` branches
-(~444, ~497, ~548), change
+There is exactly **one** endpoint, and it must be reported in exactly one set of
+units. `rt_max` is `t0 + Tmax` and stays that way; what the warp changes is what
+`Tmax` *is*.
+
+In the parent model `Tmax` is the accumulation-time endpoint, and accumulation
+time is physical time minus `t0`, so `Tmax` and `rt_max` are one quantity in two
+coordinates. With `eta` free, the kernel formulas
+(`bawr_tmax_vec`, `bawf_tmax_vec`, `bawd_tmax_vec`, `btawl_tmax_vec`,
+`-log(lambda)/k` for BAwDp) return the endpoint in **operational** time, which is
+no longer the same coordinate as `rt - t0`. The conversion is
+`c_eta^{-1}`, and it belongs at the point where the operational value first
+becomes a reported quantity:
 
 ```r
+      Tmax_op <- bawr_tmax_vec(pars[, "A"], b, pars[, "kappa"], pars[, "p"])
+      # The kernel's endpoint formula is in OPERATIONAL time; report it in the
+      # same units as the data (spec §17: the endpoint's operational value is
+      # invariant, its physical value is not).
+      Tmax <- .tw_inv(Tmax_op, .tw_eta(pars))
       cbind(pars, b = b, Tmax = Tmax, rt_max = pars[, "t0"] + Tmax, ...)
 ```
 
-to
-
-```r
-      # Tmax is the OPERATIONAL endpoint and is invariant under the warp
-      # (spec §17); only the physical ceiling moves.
-      cbind(pars, b = b, Tmax = Tmax,
-            rt_max = pars[, "t0"] + .tw_inv(Tmax, .tw_eta(pars)), ...)
-```
+The `rt_max = pars[, "t0"] + Tmax` line is therefore **unchanged** in all seven
+`Ttransform`s; the only edit is the `.tw_inv` on the line above. `Tmax`,
+`rt_max`, and the data all stay in one coordinate system, and at `eta = 0`
+`.tw_inv` is the identity so nothing moves.
 
 `.tw_inv(Inf, eta) == Inf`, so the no-endpoint cases (BAwD `gamma = 1`, BAwR
-`kappa = 0`, BTAwL with a sustained channel, BAwDp `lambda = 0`) are unchanged.
+`kappa = 0`, BAwDp `lambda = 0`, BTAwL with a sustained channel) are unchanged.
 
-**BTAwL `chart = "endpoint"` note.** That chart *samples* `Ttrans` and
-back-solves `tau`, so `Ttrans` is by construction the **operational** transient
-endpoint once `eta` is free, and `rt_max` is the physical one. The existing
-`out[, "Ttrans"] <- Tmax` assignment stays as is. This must be documented (5e)
-because it changes the interpretability claim that chart was built for.
+Sites: `R/model_BAwD.R:557` (BAwD) and `:697` (BAwDp), `R/model_BAwF.R:340`,
+`R/model_BAwR.R:317`, `R/model_BTAwL.R:450` and `:556`.
+
+Stage 1 removed the one place this could have gone wrong: BTAwL's endpoint
+chart echoed a derived endpoint back into a *sampled* `Ttrans` column that the
+simulator re-read, so that column would have had to stay unwarped while its
+neighbours moved. With the chart gone there is no such column and no exception —
+`Tmax` is derived everywhere, in one coordinate system.
 
 ---
 
-### Stage 4 — R reference paths
+### Stage 5 — R reference paths
 
 These are not the sampled likelihood (the compiled race path is authoritative;
 `log_likelihood()` for BAwD/BAwF/BAwR/BTAwL deliberately `stop()`s), but they
 are the documented single-accumulator wrappers and the `emc2.cpp_rfun = FALSE`
 reference simulators, and tests use both.
 
-#### 4a. `dXXX` / `pXXX` wrappers
+#### 5a. `dXXX` / `pXXX` wrappers
 
 Sixteen functions, all with the same shape:
 
@@ -908,7 +1134,7 @@ kernels. Keeping the warp in R means `Rcpp::compileAttributes()` never has to
 run for this change, and `EMC2:::dbawr()` keeps its meaning as "the parent
 kernel at operational time `s`", which the tests rely on as an oracle.
 
-#### 4b. R fallback simulators
+#### 5b. R fallback simulators
 
 `rBAwD`, `rBAwDp` (`R/model_BAwD.R:290,369`), `rBAwF` (`R/model_BAwF.R:140`),
 `rBAwR` (`R/model_BAwR.R:118`), `rBAwL` (`R/model_LBA.R:383`), `.lba_rfun`
@@ -928,19 +1154,19 @@ Same idea in the others; make sure it lands **before** `t0` is added.
 
 ---
 
-### Stage 5 — Documentation
+### Stage 6 — Documentation
 
-#### 5a. Parameter tables
+#### 6a. Parameter tables
 
 Add one row to the roxygen parameter table of every constructor that gained
 `eta` (`LBA`, `BAwL`, `BAwD`, `BAwDp`, `BAwF`, `BAwR`, `BTAwL`,
 `BTAwLTransient`, `BTAwLSustained`):
 
 ```
-#' | *eta* | identity | \[-5, 5\] | 0 | | Operational-time warp; `0` is ordinary time. |
+#' | *eta* | identity | \[-Inf, Inf\] | 0 | | Operational-time warp; `0` is ordinary time. |
 ```
 
-#### 5b. Shared `@details` paragraph (paste into each of the nine)
+#### 6b. Shared `@details` paragraph (paste into each of the nine)
 
 ```
 #' Every ballistic model in EMC2 accepts an optional operational-time warp
@@ -963,29 +1189,31 @@ Add one row to the roxygen parameter table of every constructor that gained
 #' `eta` is intended as a subject-level parameter shared by every accumulator
 #' and condition (`eta ~ 1`). Per-accumulator warps are expressible but change
 #' which accumulator wins a given latent race, which is not the mechanism this
-#' parameter represents. See `Math/ballistic-time.md`.
+#' parameter represents. `eta` and the launch-spread parameter (`sv` or `sigma`)
+#' both control right skew, so expect them to trade off; with few trials one of
+#' the two is usually best fixed. See `Math/ballistic-time.md`.
 ```
 
-#### 5c. `@param` note where the warp is withheld
+#### 6c. `@param` note where the warp is withheld
 
 In `BAwL()`'s `@param erlang_type` and `@param correlated`, add: "Clock and
 correlated variants do not support the operational-time warp `eta`."
 
-#### 5d. `NEWS.md`
+#### 6d. `NEWS.md`
 
 One bullet under the current development heading.
 
-#### 5e. `Math/ballistic-time.md`
+#### 6e. `Math/ballistic-time.md`
 
 Append an "Implementation status" section recording: what was implemented,
-the three carve-outs of 2.2, the operational-vs-physical reading of `Tmax`,
-`Ttrans` and `rt_max`, and the fact that BAwDp's Jacobian composes as
-`m'(c(u)) c'(u)`. Also fix the two typos in the source spec while you are
+the three carve-outs of 2.2, the fact that reported `Tmax`/`rt_max` are in
+physical accumulation time (the kernel endpoint formulas remain operational),
+and the fact that BAwDp's Jacobian composes as `m'(c(u)) c'(u)`. Also fix the two typos in the source spec while you are
 there: §11 writes `c_\eta'((u)` (doubled paren), and §11's `\eta_j(s)` channel
 gains collide notationally with the warp parameter `\eta` — rename the gains to
 `g_j(s)` in that section.
 
-#### 5f. Regenerate `man/`
+#### 6f. Regenerate `man/`
 
 ```bash
 Rscript -e 'roxygen2::roxygenise(".")'
@@ -994,7 +1222,7 @@ git status --short man/
 
 ---
 
-### Stage 6 — Tests
+### Stage 7 — Tests
 
 New file `tests/testthat/test-time-warp.R`. Start it with
 `skip_model_validation()` only for the slow Monte-Carlo blocks — the fast
@@ -1044,8 +1272,10 @@ Required tests, keyed to spec §19:
    `eta in {-2, -0.5, 0.5, 2}`, every model with `defective_upper_tail`.
 6. **Endpoint mapping.** For BAwD (`gamma < 1`), BAwDp (`0 < lambda < 1`),
    BAwF, BAwR, BTAwL-transient: `F_eta` is flat and `f_eta == 0` for
-   `u > .tw_inv(Tmax, eta)`, and *not* flat just below it. Also check that
-   `Ttransform`'s `rt_max` equals `t0 + .tw_inv(Tmax, eta)`.
+   `u > Tmax`, and *not* flat just below it, where `Tmax` is the value
+   `Ttransform` reports. Also assert the identity the reporting must preserve:
+   `rt_max == t0 + Tmax` exactly, for every `eta`; and that `Tmax` equals
+   `.tw_inv(<kernel endpoint formula>, eta)`.
 7. **Simulation recovery.** Simulate ~2e4 trials from each model with
    `eta = -0.7` and `eta = +0.7` (default C++ simulator, per `AGENTS.md`), then
    KS-compare the empirical accumulation-time CDF against `F_0(c_eta(u))`.
@@ -1095,8 +1325,10 @@ density Jacobian; the third column is the mechanism-specific consequence.
 | BTAwL | `X_j = z_j e^{-k c(u)} + V_j H_j(c(u))`, `j in {T, S}` | **One warp shared by both channels** — this is mandatory (spec §11/§12); the Jacobian appears once in the local-race density, never twice. |
 
 Invariant across all of them, and worth asserting in tests:
-`F_eta(Inf) = F_0(Inf)`, `V_crit` unchanged, `Tmax` (operational) unchanged,
-`rt_max` (physical) `= t0 + c^{-1}(Tmax)`.
+`F_eta(Inf) = F_0(Inf)` and `V_crit` unchanged. The endpoint is unchanged **on
+the operational clock**; `Ttransform` reports it in physical accumulation time,
+so `Tmax = c^{-1}(<kernel endpoint>)` and `rt_max = t0 + Tmax` — one quantity,
+one coordinate system, exactly as before the warp existed.
 
 ---
 
@@ -1109,7 +1341,7 @@ Invariant across all of them, and worth asserting in tests:
 2. **`eta == 0` must short-circuit.** `expm1(log1p(u)) != u` bitwise. Without
    the short-circuit, every existing test that compares log-likelihoods to
    stored values starts failing by ~1e-16 per trial, which compounds.
-3. **Jacobian before flooring.** See `tw_d_raw` in 1c. Adding `log_jac` to an
+3. **Jacobian before flooring.** See `tw_d_raw` in 2c. Adding `log_jac` to an
    already-floored `min_ll` is wrong; toggle `floor_raw_log_lik` instead.
 4. **`t0` conventions differ between simulators.** `rlba_cpp`/`rbawd_cpp`/
    `rbawf_cpp`/`rbawr_cpp`/`rbawdp_cpp` store bare accumulation time in `dt`
@@ -1129,12 +1361,16 @@ Invariant across all of them, and worth asserting in tests:
    `eta` is part of the dedup key automatically, so grouping stays correct.
 7. **Do not copy pointers past `n_par`.** Padding slots must be `nullptr`, not
    copies of out-of-range source entries.
-8. **BTAwL `Ttrans` changes meaning.** With `eta` free it is the *operational*
-   transient endpoint. Say so in the docs; a user who chose that chart for
-   interpretability deserves to know.
-9. **`Tmax` vs `rt_max`.** Only `rt_max` warps. Warping `Tmax` too would
-   double-apply the transform wherever `Tmax` feeds a kernel (BTAwL's endpoint
-   chart back-solves `tau` from it).
+8. **Do stage 1 before stage 2, and rebuild in between.** Stage 1 *removes*
+   members from `ContextForRaceModels` and stage 2 *adds* one; either alone is a
+   struct-layout change across ~20 translation units with no header dependency
+   tracking to catch it.
+9. **Warp the endpoint exactly once, at the reporting boundary.** `Tmax` and
+   `rt_max` are one quantity in one coordinate system — `rt_max = t0 + Tmax`
+   must stay literally true — so apply `.tw_inv` to the kernel's endpoint
+   formula and leave the `rt_max` line alone. Never warp an endpoint that is fed
+   back into a kernel; after stage 1 no such path exists, and none should be
+   reintroduced.
 10. **`eta` collides with a sampler-internal name.** `variant_factor.R`,
     `variant_SEM.R`, and `variant_infnt_factor.R` store factor scores in
     `sampler$samples$eta`. That is a different list slot from `samples$alpha`,
@@ -1153,15 +1389,34 @@ Invariant across all of them, and worth asserting in tests:
 
 ## 8. Acceptance criteria
 
+**Stage 1 (separate commit)**
+
+- [ ] `Rcpp::compileAttributes()` diff is exactly the removed
+      `_EMC2_btawl_tau_vec` registration and `rbta_wl_cpp` 7 -> 6 args.
+- [ ] `grep -rn 'Ttrans\|ttrans_chart\|btawl_tau_vec\|endpoint_chart\|chart' src/ R/`
+      returns nothing outside unrelated `Ttransform` matches.
+- [ ] `BTAwL(chart = "endpoint")` errors; `BTAwL()` still produces a c_name
+      containing `_RATE`.
+- [ ] Rate-chart BTAwL log-likelihoods and fixed-seed `make_data()` output are
+      `identical()` to the pre-stage-1 build's.
+- [ ] Full suite matches `/tmp/tw_baseline.txt` apart from the endpoint-chart
+      tests that were rewritten.
+
+**Stages 2–7**
+
 - [ ] `rm -f src/*.o && R CMD INSTALL` succeeds with no new warnings.
-- [ ] Full `testthat::test_local()` output is identical to
-      `/tmp/tw_baseline.txt` except for the new `test-time-warp.R` block.
+- [ ] Full `testthat::test_local()` output is identical to the stage 1 result
+      except for the new `test-time-warp.R` block.
 - [ ] For all nine models: log-likelihood with `eta` constant `0` is
       `identical()` to the pre-change build's log-likelihood on the same data
       and parameters.
 - [ ] For all nine models: `make_data()` under a fixed seed with `eta = 0` is
       `identical()` to the pre-change build's output.
 - [ ] `test-time-warp.R` items 1–10 pass.
+- [ ] `.tw_fwd`, `.tw_inv`, `.tw_log_jac` and their `emc2tw::` counterparts
+      return finite, non-`NaN` values at `eta = c(-Inf, -700, -50, 0, 50, 700,
+      Inf)` crossed with `u = c(0, 1e-8, 1, 1e6, Inf)`, and agree with each
+      other to 1e-12 wherever both are finite.
 - [ ] `WorkingTests/time_warp_recovery.R` recovers `eta` within its 95% CI for
       both models.
 - [ ] `roxygen2::roxygenise()` run and `man/` committed.
@@ -1171,7 +1426,20 @@ Invariant across all of them, and worth asserting in tests:
 
 ## 9. Files touched (checklist)
 
-**New**
+**Stage 1 — endpoint-chart removal (commit separately)**
+- `src/col_registry.h` — eight `btawl_*` namespaces: one `spec()` each
+- `src/race_contract.h` — drop `btawl_ttrans_chart` + the four tau-cache members
+- `src/model_BTAwL.h` / `.cpp` — drop the `Ttrans` inverse, geometry overload,
+  `btawl_tau_vec`, `btawl_uses_ttrans`, `btawl_tau_of`, and two bool parameters
+- `src/race_dispatch.cpp` — three BTAwL branches
+- `src/model_rng.cpp` — `btawl_tau_for_row`, `rbta_wl_cpp` arity
+- `src/RcppExports.cpp`, `R/RcppExports.R` — regenerated
+- `R/model_BTAwL.R` — `.btawl_constructor` and the three public constructors
+- `R/model_rng.R` — `.rfun_BTAwL`, `rBTAwLTransient`, `rBTAwL`
+- `tests/testthat/test-btawl.R`, `tests/testthat/test-weibull-launch.R`
+- `man/BTAwL.Rd`, `man/BTAwLTransient.Rd`, `man/BTAwLSustained.Rd`, `NEWS.md`
+
+**Stages 2–7, new files**
 - `src/time_warp.h`
 - `src/time_warp.cpp`
 - `tests/testthat/test-time-warp.R`
@@ -1200,7 +1468,7 @@ Invariant across all of them, and worth asserting in tests:
 **Docs**
 - `man/*.Rd` (regenerated), `NEWS.md`, `Math/ballistic-time.md`
 
-**Not touched, deliberately**
+**Not touched by the warp stages, deliberately**
 - `src/model_BAwD.cpp`, `src/model_BAwF.cpp`, `src/model_BAwR.cpp`,
   `src/model_BAwL.cpp`, `src/model_BTAwL.cpp`, `src/model_LBA.h`,
   `src/correlated_likelihood.cpp`, `src/logicalrules_likelihood.cpp`,

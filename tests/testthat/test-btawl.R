@@ -591,7 +591,7 @@ test_that("a p_types reordering is caught by the column contract", {
   swapped[1:2] <- swapped[2:1]
   expect_error(btawl_ll(fx, p[names(sampled_pars(fx$des))],
                         p_types_override = swapped),
-               "BTAwL_LOGN kernels expect parameter column")
+               "BTAwL_LOGN_RATE kernels expect parameter column")
 })
 
 test_that("omissions past t0 + T_max stay well posed", {
@@ -771,7 +771,7 @@ test_that("the transient design produces omissions that can be fit back through"
   sim <- make_data(p, design = des, n_trials = 60)
   expect_true(any(is.infinite(sim$rt)))  # intrinsic omissions
   fin <- is.finite(sim$rt)
-  expect_true(all(sim$rt[fin] <= 0.15 + 2 + 1e-8))
+  expect_true(all(sim$rt[fin] <= 0.15 + btawl_tmax(1, 2) + 1e-8))
   emc <- suppressMessages(make_emc(sim, des, type = "single", n_chains = 1,
                                    compress = FALSE, rt_resolution = NULL))
   expect_true(is.finite(btawl_ll(list(emc = emc, des = des), p)))
@@ -839,8 +839,8 @@ test_that("an inert time constant really is inert at a pinned pi", {
     pars <- cbind(mu = log(6), sigma = .5, b = 1.4, A = .4, t0 = .2, k = 2,
                   tau_t = .6, tau_s = exp(ts), pi = 0)
     expect_equal(m$dfun(0.5, pars),
-                 dBTAwLTransient(0.5, cbind(mu = log(6), sigma = .5, b = 1.4,
-                                            A = .4, t0 = .2, k = 2, tau = .6),
-                                 launch = 1L))
+                 EMC2:::dBTAwLTransient(0.5, cbind(mu = log(6), sigma = .5, b = 1.4,
+                                             A = .4, t0 = .2, k = 2, tau = .6),
+                                  launch = 1L))
   }
 })

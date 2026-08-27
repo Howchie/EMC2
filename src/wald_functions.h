@@ -549,12 +549,16 @@ inline double log_weibull_put(double v, double shape, double scale) {
   if (!weibull_valid(shape, scale) || !(v > 0.0)) return R_NegInf;
   const double log_mean = std::log(scale) - std::log(shape) +
     R::lgammafn(1.0 / shape);
-  // The put primitive converges to E[V] at the upper endpoint.  Handling
-  // +Inf explicitly avoids forming log(v) - log_mean, which would otherwise
-  // return +Inf instead of the finite mean.
-  if (v == R_PosInf) return log_mean;
+  // The put primitive is E[(v - V)_+], so it grows as v - E[V] in the
+  // upper tail.  Handle the endpoint before forming log(v) - log_mean.
+  if (v == R_PosInf) return R_PosInf;
   const double lz = weibull_log_z(v, shape, scale);
-  if (!(lz < R_PosInf)) return log_mean;
+  if (lz == R_PosInf || lz >= 700.0) {
+    const double log_v = std::log(v);
+    return (log_v > log_mean)
+      ? log_v + log1m_exp(log_mean - log_v)
+      : log_v;
+  }
   if (lz < -36.0)
     return std::log(scale) + (1.0 + 1.0 / shape) * lz - std::log(shape + 1.0);
   const double z = std::exp(lz);

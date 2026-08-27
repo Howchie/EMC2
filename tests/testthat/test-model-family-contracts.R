@@ -127,6 +127,34 @@ test_that("OU, Levy, and RDMSWTN wrappers preserve finite monotone outputs", {
   expect_equal(pRDMSWTN(Inf, rdmswtn[1, , drop = FALSE]), 1, tolerance = 1e-8)
 })
 
+test_that("ROUp batched pulse solves agree with scalar solves", {
+  n <- 8L
+  rt <- seq(.15, 1.8, length.out = n)
+  pars <- data.frame(
+    v_S = seq(.6, 1.3, length.out = n),
+    v_T = seq(.2, .9, length.out = n),
+    tau_S = seq(.2, .9, length.out = n),
+    tau_T = seq(.15, .7, length.out = n),
+    k = .35, B = .8, A = .2, t0 = 0, s = 1
+  )
+  for (sparse in c(FALSE, TRUE)) {
+    withr::with_options(list(emc2.rou_sparse_output = sparse), {
+      batched <- EMC2:::droup_cpp(
+        rt, pars$v_S, pars$v_T, pars$tau_S, pars$tau_T, pars$k,
+        pars$B, pars$A, pars$t0, pars$s, nx = 64L, dt_target = .02
+      )
+      scalar <- vapply(seq_len(n), function(i) {
+        EMC2:::droup_cpp(
+          rt[i], pars$v_S[i], pars$v_T[i], pars$tau_S[i], pars$tau_T[i],
+          pars$k[i], pars$B[i], pars$A[i], pars$t0[i], pars$s[i],
+          nx = 64L, dt_target = .02
+        )$pdf
+      }, numeric(1))
+      expect_equal(batched$pdf, scalar, tolerance = 1e-9)
+    })
+  }
+})
+
 test_that("ballistic decay limits retain the LBA route", {
   times <- c(.1, .3, .7, 1.2)
   lba_p <- EMC2:::plba(times, .3, 1.2, 1, .5, posdrift = FALSE)
